@@ -13932,55 +13932,40 @@ class LazyTorchTensor(gguf.LazyBase):
     def meta_with_dtype_and_shape(cls, dtype: torch.dtype, shape: tuple[int, ...]) -> Tensor:
         return torch.empty(size=shape, dtype=dtype, device="meta")
 
-    @classmethod
-    def from_safetensors_slice(cls, st_slice: Any) -> Tensor:
-        dtype = cls._dtype_str_map[st_slice.get_dtype()]
-        shape: tuple[int, ...] = tuple(st_slice.get_shape())
-        lazy = cls(meta=cls.meta_with_dtype_and_shape(dtype, shape), args=(st_slice,), func=lambda s: s[...] if len(s.get_shape()) == 0 else s[:])
-        return cast(torch.Tensor, lazy)
+import torch
 
-    @classmethod
-    def from_local_tensor(cls, t: gguf.utility.LocalTensor) -> Tensor:
-        def load_tensor(tensor: gguf.utility.LocalTensor) -> Tensor:
-            def byteswap_tensor(tensor: np.ndarray, dtype: type) -> np.ndarray:
-                if sys.byteorder == 'big':
-                    # switch data back to big endian
-                    tensor = tensor.view(dtype).byteswap(inplace=False)
-                return tensor
-            dtype = cls._dtype_str_map[tensor.dtype]
-            numpy_dtype = cls._dtype_byteswap_map[dtype]
-            return torch.from_numpy(byteswap_tensor(tensor.mmap_bytes(), numpy_dtype)).view(dtype).reshape(tensor.shape)
-        dtype = cls._dtype_str_map[t.dtype]
-        shape = t.shape
-        lazy = cls(meta=cls.meta_with_dtype_and_shape(dtype, shape), args=(t,), func=lambda r: load_tensor(r))
-        return cast(torch.Tensor, lazy)
+if 'NO_LOCAL_GGUF' not in os.environ:
+    sys.path.insert(1, str(Path(__file__).parent / 'gguf-py'))
+import gguf
 
-    @classmethod
-    def from_remote_tensor(cls, remote_tensor: gguf.utility.RemoteTensor):
-        def byteswap_tensor(tensor: np.ndarray, dtype: type) -> np.ndarray:
-            if sys.byteorder == 'big':
-                # switch data back to big endian
-                tensor = tensor.view(dtype).byteswap(inplace=False)
-            return tensor
-        dtype = cls._dtype_str_map[remote_tensor.dtype]
-        numpy_dtype = cls._dtype_byteswap_map[dtype]
-        shape = remote_tensor.shape
-        meta = cls.meta_with_dtype_and_shape(dtype, shape)
-        lazy = cls(meta=meta, args=(remote_tensor,), func=lambda r: torch.from_numpy(byteswap_tensor(np.frombuffer(r.data(), dtype=numpy_dtype), numpy_dtype)).view(dtype).reshape(shape))
-        return cast(torch.Tensor, lazy)
+from conversion import (
+    ModelBase,
+    ModelType,
+    get_model_architecture,
+    get_model_class,
+    logger,
+    print_registered_models,
+    _mistral_common_installed,
+    _mistral_import_error_msg,
+)
 
-    @classmethod
-    def __torch_function__(cls, func, types, args=(), kwargs=None):
-        del types  # unused
 
-        if kwargs is None:
-            kwargs = {}
+def split_str_to_n_bytes(split_str: str) -> int:
+    if split_str.endswith("K"):
+        n = int(split_str[:-1]) * 1000
+    elif split_str.endswith("M"):
+        n = int(split_str[:-1]) * 1000 * 1000
+    elif split_str.endswith("G"):
+        n = int(split_str[:-1]) * 1000 * 1000 * 1000
+    elif split_str.isnumeric():
+        n = int(split_str)
+    else:
+        raise ValueError(f"Invalid split size: {split_str}, must be a number, optionally followed by K, M, or G")
 
-        if func is torch.Tensor.numpy:
-            assert len(args)
-            return args[0].numpy()
+    if n < 0:
+        raise ValueError(f"Invalid split size: {split_str}, must be positive")
 
-        return cls._wrap_fn(func)(*args, **kwargs)
+    return n
 
 
 def parse_args() -> argparse.Namespace:
@@ -14085,58 +14070,12 @@ def parse_args() -> argparse.Namespace:
     return args
 
 
-def split_str_to_n_bytes(split_str: str) -> int:
-    if split_str.endswith("K"):
-        n = int(split_str[:-1]) * 1000
-    elif split_str.endswith("M"):
-        n = int(split_str[:-1]) * 1000 * 1000
-    elif split_str.endswith("G"):
-        n = int(split_str[:-1]) * 1000 * 1000 * 1000
-    elif split_str.isnumeric():
-        n = int(split_str)
-    else:
-        raise ValueError(f"Invalid split size: {split_str}, must be a number, optionally followed by K, M, or G")
-
-    if n < 0:
-        raise ValueError(f"Invalid split size: {split_str}, must be positive")
-
-    return n
-
-
-def get_model_architecture(hparams: dict[str, Any], model_type: ModelType) -> str:
-    # TODO @ngxson : this won't work correctly if the model has both audio & vision encoders
-    # maybe we should fallback to text model's arch in that case, since not many models have both
-    text_config = hparams.get("text_config", {})
-    vision_config = hparams.get("vision_config", {})
-    arch = None
-    if (arches := hparams.get("architectures")) is not None and len(arches) > 0:
-        arch = arches[0]
-    elif "ssm_cfg" in hparams:
-        # For non-hf Mamba and Mamba2 models
-        arch = hparams["ssm_cfg"].get("layer", "Mamba") + "ForCausalLM"
-
-    # Step3-VL keeps text config under text_config but uses a custom top-level architecture.
-    # For text conversion we route to a dedicated text-only class.
-    # TODO: refactor this later to avoid adding exception here
-    if model_type == ModelType.TEXT and arch in ("StepVLForConditionalGeneration", "Sarashina2VisionForCausalLM"):
-        return arch
-
-    # if "architectures" is found in the sub-config, use that instead
-    if model_type == ModelType.TEXT and text_config.get("architectures") is not None:
-        arch = text_config["architectures"][0]
-    elif model_type == ModelType.MMPROJ and vision_config.get("architectures") is not None:
-        arch = vision_config["architectures"][0]
-    if arch is None:
-        raise ValueError("Failed to detect model architecture")
-    return arch
-
-
 def main() -> None:
     args = parse_args()
 
     if args.print_supported_models:
         logger.error("Supported models:")
-        ModelBase.print_registered_models()
+        print_registered_models()
         sys.exit(0)
 
     if args.verbose:
@@ -14202,16 +14141,19 @@ def main() -> None:
             model_architecture = get_model_architecture(hparams, model_type)
             logger.info(f"Model architecture: {model_architecture}")
             try:
-                model_class = ModelBase.from_model_architecture(model_architecture, model_type=model_type)
+                model_class = get_model_class(model_architecture, mmproj=(model_type == ModelType.MMPROJ))
             except NotImplementedError:
                 logger.error(f"Model {model_architecture} is not supported")
                 sys.exit(1)
         elif args.mmproj:
             assert hparams.get("vision_encoder") is not None, "This model does not support multimodal"
+            from conversion.pixtral import PixtralModel
             model_class = PixtralModel
         elif "moe" in hparams:
+            from conversion.mistral import MistralMoeModel
             model_class = MistralMoeModel
         else:
+            from conversion.mistral import MistralModel
             model_class = MistralModel
 
         model_instance = model_class(dir_model, output_type, fname_out,

@@ -58,14 +58,45 @@ jobs:
           name: llama-cpp-android-arm64-snapdragon
           path: pkg-snapdragon/llama.cpp
 
+  linux-iot-snapdragon:
+    runs-on: ubuntu-latest
+    container:
+      image: 'ghcr.io/snapdragon-toolchain/arm64-linux:v0.1'
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Clone
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          lfs: false
+
+      - name: Build Llama.CPP for Snapdragon Linux IoT
+        id: build_llama_cpp_snapdragon_linux
+        run: |
+          cp docs/backend/snapdragon/CMakeUserPresets.json .
+          cmake --preset arm64-linux-snapdragon-release -B build-snapdragon -DGGML_OPENCL=ON
+          cmake --build build-snapdragon -j $(nproc)
+          cmake --install build-snapdragon --prefix pkg-snapdragon/llama.cpp
+
+      - name: Upload Llama.CPP Snapdragon Linux IoT Build Artifact
+        if: ${{ always() && steps.build_llama_cpp_snapdragon_linux.outcome == 'success' }}
+        uses: actions/upload-artifact@v6
+        with:
+          name: llama-cpp-linux-arm64-snapdragon
+          path: pkg-snapdragon/llama.cpp
+
   test-snapdragon-qdc:
-    name: Test on QDC Android Device (${{ matrix.device }})
-    needs: [android-ndk-snapdragon]
-    runs-on: ubuntu-slim
+    name: Test on QDC Device (${{ matrix.device }})
+    needs: [android-ndk-snapdragon, linux-iot-snapdragon]
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
-        device: [SM8750, SM8650, SM8850]
+        device: [SM8750, SM8850, QCS9075M]
 
     steps:
       - name: Checkout
@@ -74,11 +105,11 @@ jobs:
       - name: Download build artifact
         uses: actions/download-artifact@v7
         with:
-          name: llama-cpp-android-arm64-snapdragon
+          name: ${{ startsWith(matrix.device, 'QCS') && 'llama-cpp-linux-arm64-snapdragon' || 'llama-cpp-android-arm64-snapdragon' }}
           path: pkg-snapdragon/llama.cpp
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.x'
           cache: pip
@@ -107,7 +138,8 @@ jobs:
               --test       all \
               --pkg-dir    pkg-snapdragon/llama.cpp \
               --model-url  "https://huggingface.co/bartowski/Llama-3.2-1B-Instruct-GGUF/resolve/main/Llama-3.2-1B-Instruct-Q4_0.gguf" \
-              --device     ${{ matrix.device }}
+              --device     ${{ matrix.device }} \
+              ${{ startsWith(matrix.device, 'QCS') && '--retries 2 --retry-delay 300' || '' }}
         env:
           QDC_API_KEY: ${{ secrets.QDC_API_KEY }}
 

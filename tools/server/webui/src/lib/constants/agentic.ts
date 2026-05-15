@@ -4,9 +4,6 @@ export const ATTACHMENT_SAVED_REGEX = /\[Attachment saved: ([^\]]+)\]/;
 
 export const NEWLINE_SEPARATOR = '\n';
 
-export const LLM_ERROR_BLOCK_START = '\n\n```\nUpstream LLM error:\n';
-export const LLM_ERROR_BLOCK_END = '\n```\n';
-
 export const DEFAULT_AGENTIC_CONFIG: AgenticConfig = {
 	enabled: true,
 	maxTurns: 100,
