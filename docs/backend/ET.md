@@ -20,19 +20,15 @@ limitations:
 
 - Only limited set of operations is supported (check [../ops.md](../ops.md)
   and [../ops/ET.csv](../ops/ET.csv)).
-- Only `q8_0` (and partially `fp16`) quantization is supported.
+- Only `q8_0`, `q4_0` (and partially `fp16`, `q4_K`) quantization is supported.
 - Only one llama.cpp instance can use device at the same time (current firmware
   limitation).
-- It is SLOW (compute kernels are very naive, sometimes not even parallel).
-- Backend code has overly exhaustive logging (will be removed eventually).
-- Incorrect reporting of free memory (show all of it as free).
-- Numerous bugs.
 
 As a result of the above, only select models can run fully on ET-SOC
 (you can actually run any model llama.cpp supports, but some/most operations
 will likely fallback to CPU backend).
 
-Fully supported models (`q8_0` quantization):
+Fully supported models:
 - Qwen3 models (without MoE), e.g.
   [ggml-org/Qwen3-0.6B-GGUF:q8_0](https://huggingface.co/ggml-org/Qwen3-0.6B-GGUF/blob/main/Qwen3-0.6B-Q8_0.gguf) or
   [ggml-org/Qwen3-14B-GGUF:q8_0](https://huggingface.co/ggml-org/Qwen3-14B-GGUF/blob/main/Qwen3-14B-Q8_0.gguf).
@@ -41,9 +37,6 @@ Fully supported models (`q8_0` quantization):
 - SmolLM2, e.g.
   [unsloth/SmolLM2-135M-Instruct-GGUF:q8_0](https://huggingface.co/unsloth/SmolLM2-135M-Instruct-GGUF/blob/main/SmolLM2-135M-Instruct-Q8_0.gguf)
 - Llama3.1 model family.
-
-So far we are at the milestone "one can easily write llama.cpp backend for
-ET-SOC".
 
 
 ## Build
@@ -110,17 +103,6 @@ docker run \
     ...
 ```
 
-> [!NOTE]
-> You may want to disable flash attention with:
-> ```sh
-> export LLAMA_ARG_FLASH_ATTN=off # or cli argument --flash-attn off
-> ```
-> Llama.cpp sets flash attention to "auto" by default and tries to detect if it's
-> supported by the backend. When autodetection fails to find support (it's not
-> supported in ET), KV tensors are left in transposed configuration which results
-> in considerable slowdown.
-
-
 ## Develop
 
 Compute kernels are developed within `ggml/src/ggml-et/et-kernels` folder.
@@ -130,21 +112,6 @@ standard lib or any other dependencies. All the yummy parts are written
 in inline assembler.
 
 Most kernels are very naive with lots of low hanging fruits left:
-- some are single threaded (on a manycore chip!)
-- some could use SIMD extensions
-- memory access is not really cache aware (or using scratchpad)
-- chip has tensor extensions that aren't used yet
-- no operation uses temporary buffers
-- there are no attempts at tiling (MUL_MAT family of operations)
-
-Basically, there are at least 2-3 orders of magnitude performance
-laying on the table.
-
-Individual compute kernels can be used (tested) without rebuilding
-ggml or llama.cpp - while by default compiled kernels are embedded
-into ggml source code at build time, they can also be loaded at runtime
-if `GGML_ET_KERNELS_PATH` is set. You just build the kernel (using provided cmake config)
-and put resulting elf under the aforementioned path.
 
 > [!IMPORTANT]
 > Several assembly instructions emmited by the compiler are not implemented
@@ -189,16 +156,20 @@ You can enable ET-SOC runtime level ET-SOC profiling by setting environment
 variable `GGML_ET_PROFILE` to a path. Profiling/tracing results will be written
 to `GGML_ET_PROFILE/et_runtime_trace.json` and `GGML_ET_PROFILE/kernel_map` on exit.
 
+### Uberkernel
+
+Basically poorman's device dispatch/kernel fusion. The ET SDK has a non-trivial op-to-op gap. `Uberkernel` (name taken from the original Esperanto AI's compiler)
+dispatches multiple already existing kernel implementations with device side synchronization. Due to the processor's design, there is no natural memory visibility
+horizon between sub-kernel invocations. This makes uberkernel much more difficult to develop and debug. Currently Uberkerel is hidden begind the
+`GGML_ET_UBERKERNEL` environment variable and is disabled by default. Setting it to 1 enables it and provides significant performance improvements but is only
+validated for the LLaMA 3.2 model family.
 
 ## Roadmap
 
-While advancing the ET backend from proof-of-concept to production-ready status,
-development efforts will focus on the following areas:
+As of writing the documentation the ET backend is capable of running most models and smaller ones at usable speed given the low power profile of the processor. We'd
+address the following capabilities in the future:
 
-- Optimize compute kernels
-- More operations
-- More quants
-- Async buffer ops
-- Async compute ops
-- Graph optimization
-- Improve debugging
+* Enable uberkernel for all models
+* More oprtator support
+* Convolution to support TTS models
+* Enable more quantization format support
