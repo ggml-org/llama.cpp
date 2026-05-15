@@ -6508,9 +6508,9 @@ class ZayaModel(TextModel):
         elif "conv_qk.0" in name and name.endswith(".weight"):
             # PyTorch: [n_qk, 1, kernel] (depthwise) -> ggml: {kernel, n_qk}
             data_torch = data_torch.squeeze(1).contiguous()
-            yield self.format_tensor_name(gguf.MODEL_TENSOR.CCA_CONV_DW, bid), data_torch
+            yield self.format_tensor_name(gguf.MODEL_TENSOR.SSM_CONV1D, bid), data_torch
         elif "conv_qk.0" in name and name.endswith(".bias"):
-            yield self.format_tensor_name(gguf.MODEL_TENSOR.CCA_CONV_DW_B, bid, suffix=".bias"), data_torch
+            yield self.format_tensor_name(gguf.MODEL_TENSOR.SSM_CONV1D, bid, suffix=".bias"), data_torch
         elif "conv_qk.1" in name and name.endswith(".weight"):
             # PyTorch: [n_qk, in_ch_per_group, kernel] -> ggml: {kernel, in_ch_per_group, n_qk}
             yield self.format_tensor_name(gguf.MODEL_TENSOR.CCA_CONV_GRP, bid), data_torch

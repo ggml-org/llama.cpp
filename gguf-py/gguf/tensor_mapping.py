@@ -800,6 +800,7 @@ class TensorNameMap:
             "model.layers.{bid}.mamba.conv1d",         # jamba falcon-h1 granite-hybrid
             "model.layers.layers.{bid}.mixer.conv1d",  # plamo2
             "model.layers.{bid}.linear_attn.conv1d",   # qwen3next
+            "model.layers.{bid}.self_attn.conv_qk.0",  # zaya
         ),
 
         MODEL_TENSOR.SSM_X: (

@@ -611,9 +611,7 @@ class MODEL_TENSOR(IntEnum):
     SSM_BETA             = auto() # Kimi Linear qwen3.5
     SSM_G_A              = auto() # Kimi Linear
     SSM_G_B              = auto() # Kimi Linear
-    CCA_CONV_DW          = auto() # Zaya
     CCA_CONV_GRP         = auto() # Zaya
-    CCA_CONV_DW_B        = auto() # Zaya: conv_qk.0.bias
     CCA_QK_NORM          = auto() # Zaya (weightless - unit RMSNorm)
     CCA_K_SCALE          = auto() # Zaya
     CCA_VAL_PROJ1        = auto() # Zaya: CCA value projection stream 1
@@ -1150,8 +1148,6 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.SSM_BETA:                  "blk.{bid}.ssm_beta",             # Kimi Linear qwen3.5
     MODEL_TENSOR.SSM_G_A:                   "blk.{bid}.ssm_g_a",              # Kimi Linear
     MODEL_TENSOR.SSM_G_B:                   "blk.{bid}.ssm_g_b",              # Kimi Linear
-    MODEL_TENSOR.CCA_CONV_DW:               "blk.{bid}.cca_conv_dw",          # Zaya
-    MODEL_TENSOR.CCA_CONV_DW_B:             "blk.{bid}.cca_conv_dw_b",        # Zaya
     MODEL_TENSOR.CCA_CONV_GRP:              "blk.{bid}.cca_conv_grp",         # Zaya
     MODEL_TENSOR.CCA_QK_NORM:               "blk.{bid}.cca_qk_norm",          # Zaya
     MODEL_TENSOR.CCA_K_SCALE:               "blk.{bid}.cca_k_scale",          # Zaya
@@ -4052,8 +4048,7 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.ATTN_Q,
         MODEL_TENSOR.ATTN_K,
         MODEL_TENSOR.ATTN_OUT,
-        MODEL_TENSOR.CCA_CONV_DW,
-        MODEL_TENSOR.CCA_CONV_DW_B,
+        MODEL_TENSOR.SSM_CONV1D,
         MODEL_TENSOR.CCA_CONV_GRP,
         MODEL_TENSOR.CCA_QK_NORM,
         MODEL_TENSOR.CCA_K_SCALE,
