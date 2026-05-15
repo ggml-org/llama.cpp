@@ -8,7 +8,7 @@ if TYPE_CHECKING:
 from .base import ModelBase, gguf
 
 from .llama import LlamaModel
-from .qwen_vl import Qwen2VLVisionModel
+from .qwenvl import Qwen2VLVisionModel
 
 
 @ModelBase.register("Sarashina2VisionForCausalLM")

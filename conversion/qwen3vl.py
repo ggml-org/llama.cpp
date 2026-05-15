@@ -10,7 +10,7 @@ if TYPE_CHECKING:
 from .base import MmprojModel, ModelBase, gguf, logger
 
 from .qwen import Qwen3Model, Qwen3MoeModel
-from .qwen_vl import Qwen25AudioModel
+from .qwenvl import Qwen25AudioModel
 
 
 @ModelBase.register("Qwen3VLForConditionalGeneration", "Qwen3VLMoeForConditionalGeneration", "Qwen3_5ForConditionalGeneration", "Qwen3_5MoeForConditionalGeneration")
