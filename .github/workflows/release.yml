@@ -25,7 +25,7 @@ jobs:
     strategy:
       matrix:
         include:
-          - ROCM_VERSION: "7.12.0"
+          - ROCM_VERSION: "7.13.0"
             gpu_targets: "gfx906;gfx908;gfx90a;gfx942;gfx950;gfx1100;gfx1101;gfx1102;gfx1150;gfx1151;gfx1152;gfx1200;gfx1201"
             build: x64
 
@@ -178,7 +178,7 @@ jobs:
     strategy:
       matrix:
         include:
-          - ROCM_VERSION: "7.12.0"
+          - ROCM_VERSION: "7.13.0"
             gpu_targets: "gfx906;gfx908;gfx90a;gfx942;gfx950;gfx1100;gfx1101;gfx1102;gfx1150;gfx1151;gfx1200;gfx1201"
             build: x64
 
