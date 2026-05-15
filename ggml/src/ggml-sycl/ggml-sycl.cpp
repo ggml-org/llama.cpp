@@ -115,7 +115,9 @@ static ggml_sycl_device_info ggml_sycl_init() {
         info.max_work_group_sizes[i] = prop.get_max_work_group_size();
         info.devices[i].max_wg_per_cu = info.max_work_group_sizes[i] / prop.get_max_compute_units();
         info.devices[i].hw_info = get_device_hw_info(&device);
-        // Skip non-GPU: a CPU in the enumeration may disable L0 for all the GPUs
+
+        // Only check GPU devices; CPU devices use OpenCL and would otherwise
+        // disable Level Zero for the GPUs on systems without ONEAPI_DEVICE_SELECTOR set.
         if (device.is_gpu() && device.default_queue().get_backend() != sycl::backend::ext_oneapi_level_zero) {
             info.ext_oneapi_level_zero = false;
         }
