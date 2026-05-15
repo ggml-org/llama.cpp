@@ -1069,13 +1069,13 @@ void llama_model_base::load_hparams(llama_model_loader & ml) {
     // If multi-valued (Granite4 Vision), the elements are themselves index
     // values into the entries in inp_embed
     std::fill(hparams.deepstack_layers_arr.begin(), hparams.deepstack_layers_arr.end(), -1.0f);
-    uint32_t _n_deepstack_layers = 0;
-    ml.get_key(LLM_KV_NUM_DEEPSTACK_LAYERS, _n_deepstack_layers, false);
-    if (_n_deepstack_layers > 0) {
-        for (int32_t i = 0; i < _n_deepstack_layers; ++i) {
+    try {
+        uint32_t n_deepstack_layers = 0;
+        ml.get_key(LLM_KV_NUM_DEEPSTACK_LAYERS, n_deepstack_layers, false);
+        for (int32_t i = 0; i < (int32_t)n_deepstack_layers; ++i) {
             hparams.deepstack_layers_arr[i] = i + 1;
         }
-    } else {
+    } catch (const std::runtime_error &) {
         ml.get_arr(LLM_KV_NUM_DEEPSTACK_LAYERS, hparams.deepstack_layers_arr, false);
     }
 
