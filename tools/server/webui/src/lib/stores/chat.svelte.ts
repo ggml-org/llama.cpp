@@ -814,7 +814,7 @@ class ChatStore {
 					);
 				}
 			},
-			onError: (error: Error) => {
+			onError: async (error: Error) => {
 				this.setStreamingActive(false);
 				if (isAbortError(error)) {
 					cleanupStreamingState();
@@ -826,13 +826,10 @@ class ChatStore {
 					return;
 				}
 				console.error('Streaming error:', error);
+				// keep whatever was streamed so far, the message stays in memory and in DB
+				await this.savePartialResponseIfNeeded(convId);
 				cleanupStreamingState();
 				this.clearPendingMessage(convId);
-				const idx = conversationsStore.findMessageIndex(assistantMessage.id);
-				if (idx !== -1) {
-					const failedMessage = conversationsStore.removeMessageAtIndex(idx);
-					if (failedMessage) DatabaseService.deleteMessage(failedMessage.id).catch(console.error);
-				}
 				const contextInfo = (
 					error as Error & { contextInfo?: { n_prompt_tokens: number; n_ctx: number } }
 				).contextInfo;
@@ -1389,9 +1386,17 @@ class ChatStore {
 						}
 
 						console.error('Continue generation error:', error);
-						conversationsStore.updateMessageAtIndex(idx, { content: originalContent });
-
-						await DatabaseService.updateMessage(msg.id, { content: originalContent });
+						// keep whatever was appended so far, the message stays in memory and in DB
+						await DatabaseService.updateMessage(msg.id, {
+							content: originalContent + appendedContent,
+							reasoningContent: originalReasoning + appendedReasoning || undefined,
+							timestamp: Date.now()
+						});
+						conversationsStore.updateMessageAtIndex(idx, {
+							content: originalContent + appendedContent,
+							reasoningContent: originalReasoning + appendedReasoning || undefined,
+							timestamp: Date.now()
+						});
 
 						this.setChatLoading(msg.convId, false);
 						this.clearChatStreaming(msg.convId);
