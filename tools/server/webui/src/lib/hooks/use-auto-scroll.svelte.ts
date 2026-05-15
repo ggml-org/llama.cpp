@@ -17,7 +17,6 @@ export class AutoScrollController {
 	private _userScrolledUp = $state(false);
 	private _lastScrollTop = $state(0);
 	private _scrollInterval: ReturnType<typeof setInterval> | undefined;
-	private _scrollTimeout: ReturnType<typeof setTimeout> | undefined;
 	private _container: HTMLElement | undefined;
 	private _disabled: boolean;
 	private _mutationObserver: MutationObserver | null = null;
@@ -51,6 +50,7 @@ export class AutoScrollController {
 	 * Updates the disabled state.
 	 */
 	setDisabled(disabled: boolean): void {
+		if (this._disabled === disabled) return;
 		this._disabled = disabled;
 		if (disabled) {
 			this._autoScrollEnabled = false;
@@ -79,17 +79,6 @@ export class AutoScrollController {
 			this._userScrolledUp = false;
 			this._autoScrollEnabled = true;
 		}
-
-		if (this._scrollTimeout) {
-			clearTimeout(this._scrollTimeout);
-		}
-
-		this._scrollTimeout = setTimeout(() => {
-			if (isAtBottom) {
-				this._userScrolledUp = false;
-				this._autoScrollEnabled = true;
-			}
-		}, AUTO_SCROLL_INTERVAL);
 
 		this._lastScrollTop = scrollTop;
 	}
@@ -157,11 +146,6 @@ export class AutoScrollController {
 	destroy(): void {
 		this.stopInterval();
 		this._doStopObserving();
-
-		if (this._scrollTimeout) {
-			clearTimeout(this._scrollTimeout);
-			this._scrollTimeout = undefined;
-		}
 	}
 
 	/**

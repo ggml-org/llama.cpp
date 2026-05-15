@@ -30,12 +30,7 @@ import { ToolSource, ToolPermissionDecision } from '$lib/enums';
 import { SvelteMap } from 'svelte/reactivity';
 import { ToolsService } from '$lib/services/tools.service';
 import { isAbortError } from '$lib/utils';
-import {
-	DEFAULT_AGENTIC_CONFIG,
-	NEWLINE_SEPARATOR,
-	LLM_ERROR_BLOCK_START,
-	LLM_ERROR_BLOCK_END
-} from '$lib/constants';
+import { DEFAULT_AGENTIC_CONFIG, NEWLINE_SEPARATOR } from '$lib/constants';
 import {
 	IMAGE_MIME_TO_EXTENSION,
 	DATA_URI_BASE64_REGEX,
@@ -640,10 +635,9 @@ class AgenticStore {
 					return;
 				}
 				const normalizedError = error instanceof Error ? error : new Error('LLM stream error');
-				// Save error as content in the current turn
-				onChunk?.(`${LLM_ERROR_BLOCK_START}${normalizedError.message}${LLM_ERROR_BLOCK_END}`);
+				// preserve partial output as is, the outer error dialog informs the user separately
 				await onAssistantTurnComplete?.(
-					turnContent + `${LLM_ERROR_BLOCK_START}${normalizedError.message}${LLM_ERROR_BLOCK_END}`,
+					turnContent,
 					turnReasoningContent || undefined,
 					this.buildFinalTimings(capturedTimings, agenticTimings),
 					undefined

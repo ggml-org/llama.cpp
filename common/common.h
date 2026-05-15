@@ -605,7 +605,11 @@ struct common_params {
     std::map<std::string, std::string> default_template_kwargs;
 
     // webui configs
-    bool webui = true;
+#ifdef LLAMA_WEBUI_DEFAULT_ENABLED
+    bool webui = LLAMA_WEBUI_DEFAULT_ENABLED != 0;
+#else
+    bool webui = true; // default to enabled when not set
+#endif
     bool webui_mcp_proxy = false;
     std::string webui_config_json;
 
@@ -686,6 +690,7 @@ struct common_params {
 // initializes the logging system and prints info about the build
 void common_init();
 
+void common_params_print_info(const common_params & params);
 std::string common_params_get_system_info(const common_params & params);
 
 bool parse_cpu_range(const std::string & range, bool(&boolmask)[GGML_MAX_N_THREADS]);

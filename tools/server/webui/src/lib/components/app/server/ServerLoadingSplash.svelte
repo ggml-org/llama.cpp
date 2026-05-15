@@ -8,8 +8,7 @@
 		message?: string;
 	}
 
-	let { class: className = '', message = 'Initializing connection to llama.cpp server...' }: Props =
-		$props();
+	let { class: className = '', message = 'Initializing connection to server...' }: Props = $props();
 </script>
 
 <div class="flex h-full items-center justify-center {className}">
