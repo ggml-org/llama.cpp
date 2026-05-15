@@ -69,9 +69,9 @@ void llama_model_zaya::load_arch_tensors(llama_model_loader &) {
             layer.wk = create_tensor(tn(LLM_TENSOR_ATTN_K, "weight", i), {n_embd, n_embd_k}, 0);
 
             layer.cca_val_proj1 = create_tensor(tn(LLM_TENSOR_CCA_VAL_PROJ1, "weight", i),
-                {n_embd, n_embd_head}, 0);
+                {n_embd, n_embd_k / 2}, 0);
             layer.cca_val_proj2 = create_tensor(tn(LLM_TENSOR_CCA_VAL_PROJ2, "weight", i),
-                {n_embd, n_embd_head}, 0);
+                {n_embd, n_embd_k / 2}, 0);
 
             layer.wo = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_embd_q, n_embd}, 0);
 
