@@ -1943,17 +1943,17 @@ class TensorNameMap:
             "model.layerwise_projectors.{bid}.query", # Granite4 Vision
             "model.spatial_projectors.{bid}.query",   # Granite4 Vision
         ),
-        MODEL_TENSOR.V_MULTI_PROJ_NORM: (
-            "model.layerwise_projectors.{bid}.norm", # Granite4 Vision
-            "model.spatial_projectors.{bid}.norm",   # Granite4 Vision
-        ),
         MODEL_TENSOR.V_MULTI_PROJ_LINEAR: (
             "model.layerwise_projectors.{bid}.out_linear", # Granite4 Vision
             "model.spatial_projectors.{bid}.out_linear",   # Granite4 Vision
         ),
-        MODEL_TENSOR.V_MULTI_PROJ_QF_LAYERNORM: (
+        MODEL_TENSOR.V_MULTI_PROJ_NORM: (
             "model.layerwise_projectors.{bid}.qformer.layernorm", # Granite4 Vision
             "model.spatial_projectors.{bid}.qformer.layernorm",   # Granite4 Vision
+        ),
+        MODEL_TENSOR.V_MULTI_PROJ_POST_NORM: (
+            "model.layerwise_projectors.{bid}.norm", # Granite4 Vision
+            "model.spatial_projectors.{bid}.norm",   # Granite4 Vision
         ),
 
         # For these tensors, bid => proj-id

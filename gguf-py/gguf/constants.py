@@ -835,11 +835,11 @@ class MODEL_TENSOR(IntEnum):
     V_QF_FFN_NORM        = auto()
     V_PROJ_NORM          = auto()
     # multi-projector (bid => projector id) - Granite4 vision
-    V_MULTI_PROJ_IMG_POS      = auto()
-    V_MULTI_PROJ_QUERY        = auto()
-    V_MULTI_PROJ_NORM         = auto()
-    V_MULTI_PROJ_LINEAR       = auto()
-    V_MULTI_PROJ_QF_LAYERNORM = auto()
+    V_MULTI_PROJ_IMG_POS   = auto()
+    V_MULTI_PROJ_QUERY     = auto()
+    V_MULTI_PROJ_NORM      = auto()
+    V_MULTI_PROJ_LINEAR    = auto()
+    V_MULTI_PROJ_POST_NORM = auto()
 
     # audio (mtmd)
     A_ENC_EMBD_POS        = auto()
@@ -1372,11 +1372,11 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.V_QF_FFN_DOWN:             "v.proj_blk.{bid}.ffn_down",
     MODEL_TENSOR.V_QF_FFN_NORM:             "v.proj_blk.{bid}.ffn_norm",
     # multi-projector (bid => projector ID)
-    MODEL_TENSOR.V_MULTI_PROJ_IMG_POS:      "v.proj_blk.{bid}.img_pos",
-    MODEL_TENSOR.V_MULTI_PROJ_QUERY:        "v.proj_blk.{bid}.query",
-    MODEL_TENSOR.V_MULTI_PROJ_NORM:         "v.proj_blk.{bid}.norm",
-    MODEL_TENSOR.V_MULTI_PROJ_LINEAR:       "v.proj_blk.{bid}.linear",
-    MODEL_TENSOR.V_MULTI_PROJ_QF_LAYERNORM: "v.proj_blk.{bid}.qf.layernorm",
+    MODEL_TENSOR.V_MULTI_PROJ_IMG_POS:   "v.proj_blk.{bid}.img_pos",
+    MODEL_TENSOR.V_MULTI_PROJ_QUERY:     "v.proj_blk.{bid}.query",
+    MODEL_TENSOR.V_MULTI_PROJ_NORM:      "v.proj_blk.{bid}.norm",
+    MODEL_TENSOR.V_MULTI_PROJ_LINEAR:    "v.proj_blk.{bid}.linear",
+    MODEL_TENSOR.V_MULTI_PROJ_POST_NORM: "v.proj_blk.{bid}.post_norm",
 
     # audio (mtmd)
     # note: all audio tensor names must use prefix "a." or "mm.a."
@@ -1576,9 +1576,9 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.V_QF_PROJ_NORM,
         MODEL_TENSOR.V_MULTI_PROJ_IMG_POS,
         MODEL_TENSOR.V_MULTI_PROJ_QUERY,
-        MODEL_TENSOR.V_MULTI_PROJ_NORM,
         MODEL_TENSOR.V_MULTI_PROJ_LINEAR,
-        MODEL_TENSOR.V_MULTI_PROJ_QF_LAYERNORM,
+        MODEL_TENSOR.V_MULTI_PROJ_NORM,
+        MODEL_TENSOR.V_MULTI_PROJ_POST_NORM,
         # audio
         MODEL_TENSOR.A_ENC_EMBD_POS,
         MODEL_TENSOR.A_ENC_EMBD_NORM,
