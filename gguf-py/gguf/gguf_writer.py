@@ -1241,9 +1241,6 @@ class GGUFWriter:
         """
         self.add_array(Keys.ClipVision.WA_LAYER_INDEXES, layers)
 
-    def add_vision_is_deepstack_layers(self, layers: Sequence[bool]) -> None:
-        self.add_array(Keys.ClipVision.IS_DEEPSTACK_LAYERS, layers)
-
     def add_vision_wa_pattern_mode(self, modes: Sequence[int]) -> None:
         self.add_array(Keys.ClipVision.WA_PATTERN_MODE, modes)
 
