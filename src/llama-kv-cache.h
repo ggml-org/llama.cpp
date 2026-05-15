@@ -95,6 +95,7 @@ public:
 
     llama_kv_cache(
             const llama_model & model,
+            const llama_hparams & hparams,
                     ggml_type   type_k,
                     ggml_type   type_v,
                          bool   v_trans,

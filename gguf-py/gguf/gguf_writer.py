@@ -868,6 +868,18 @@ class GGUFWriter:
     def add_nextn_predict_layers(self, count: int) -> None:
         self.add_uint32(Keys.LLM.NEXTN_PREDICT_LAYERS.format(arch=self.arch), count)
 
+    def add_hash_layer_count(self, count: int) -> None:
+        self.add_uint32(Keys.LLM.HASH_LAYER_COUNT.format(arch=self.arch), count)
+
+    def add_hyper_connection_count(self, count: int) -> None:
+        self.add_uint32(Keys.LLM.HYPER_CONNECTION_COUNT.format(arch=self.arch), count)
+
+    def add_hyper_connection_sinkhorn_iters(self, count: int) -> None:
+        self.add_uint32(Keys.LLM.HYPER_CONNECTION_SINKHORN_ITERS.format(arch=self.arch), count)
+
+    def add_hyper_connection_eps(self, value: float) -> None:
+        self.add_float32(Keys.LLM.HYPER_CONNECTION_EPS.format(arch=self.arch), value)
+
     def add_swin_norm(self, value: bool) -> None:
         self.add_bool(Keys.LLM.SWIN_NORM.format(arch=self.arch), value)
 
@@ -951,6 +963,18 @@ class GGUFWriter:
 
     def add_attn_temperature_scale(self, value: float) -> None:
         self.add_float32(Keys.Attention.TEMPERATURE_SCALE.format(arch=self.arch), value)
+
+    def add_attention_compress_ratios(self, values: Sequence[int]) -> None:
+        self.add_array(Keys.Attention.COMPRESS_RATIOS.format(arch=self.arch), values)
+
+    def add_attention_compress_rope_freq_base(self, value: float) -> None:
+        self.add_float32(Keys.Attention.COMPRESS_ROPE_FREQ_BASE.format(arch=self.arch), value)
+
+    def add_attention_output_lora_rank(self, value: int) -> None:
+        self.add_uint32(Keys.Attention.OUTPUT_LORA_RANK.format(arch=self.arch), value)
+
+    def add_attention_output_group_count(self, value: int) -> None:
+        self.add_uint32(Keys.Attention.OUTPUT_GROUP_COUNT.format(arch=self.arch), value)
 
     def add_pooling_type(self, value: PoolingType) -> None:
         self.add_uint32(Keys.LLM.POOLING_TYPE.format(arch=self.arch), value.value)
