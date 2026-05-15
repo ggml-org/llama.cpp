@@ -99,7 +99,7 @@ void llama_model_zaya::load_arch_tensors(llama_model_loader &) {
                 {n_ff_exp}, 0);
             layer.zaya_router_norm   = create_tensor(tn(LLM_TENSOR_FFN_NORM, "weight", i),
                 {n_ff_exp}, 0);
-            layer.zaya_router_mlp0   = create_tensor(tn(LLM_TENSOR_ZAYA_ROUTER_MLP0, "weight", i),
+            layer.zaya_router_mlp0   = create_tensor(tn(LLM_TENSOR_FFN_GATE, "weight", i),
                 {n_ff_exp, n_ff_exp}, 0);
             layer.zaya_router_mlp0_b = create_tensor(tn(LLM_TENSOR_ZAYA_ROUTER_MLP0_B, "bias", i),
                 {n_ff_exp}, 0);

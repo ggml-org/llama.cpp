@@ -567,6 +567,7 @@ class TensorNameMap:
             "model.transformer.blocks.{bid}.ff_proj",         # llada
             "layers.{bid}.mlp.gate_proj",                     # qwen3-embedding
             "model.layers.{bid}.mlp.language_mlp.gate_proj",  # cogvlm
+            "model.layers.{bid}.self_attn.router_mlp.0",      # zaya
         ),
 
         MODEL_TENSOR.FFN_GATE_EXP: (
