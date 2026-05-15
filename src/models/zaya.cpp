@@ -39,9 +39,9 @@ void llama_model_zaya::load_arch_tensors(llama_model_loader &) {
     }
 
     zaya_res_scale_hs    = create_tensor(tn(LLM_TENSOR_RES_SCALE_HS_FINAL,    "weight"), {n_embd}, TENSOR_NOT_REQUIRED);
-    zaya_res_scale_hs_b  = create_tensor(tn(LLM_TENSOR_RES_SCALE_HS_B_FINAL,  "bias"),   {n_embd}, TENSOR_NOT_REQUIRED);
+    zaya_res_scale_hs_b  = create_tensor(tn(LLM_TENSOR_RES_SCALE_HS_FINAL,    "bias"),   {n_embd}, TENSOR_NOT_REQUIRED);
     zaya_res_scale_res   = create_tensor(tn(LLM_TENSOR_RES_SCALE_RES_FINAL,   "weight"), {n_embd}, TENSOR_NOT_REQUIRED);
-    zaya_res_scale_res_b = create_tensor(tn(LLM_TENSOR_RES_SCALE_RES_B_FINAL, "bias"),   {n_embd}, TENSOR_NOT_REQUIRED);
+    zaya_res_scale_res_b = create_tensor(tn(LLM_TENSOR_RES_SCALE_RES_FINAL,   "bias"),   {n_embd}, TENSOR_NOT_REQUIRED);
 
     const int64_t n_embd_head = hparams.n_embd_head_k();
     const int64_t d_conv      = hparams.ssm_d_conv;
@@ -86,9 +86,9 @@ void llama_model_zaya::load_arch_tensors(llama_model_loader &) {
 
         // Residual scaling
         layer.res_scale_hs   = create_tensor(tn(LLM_TENSOR_RES_SCALE_HS, "weight", i), {n_embd}, 0);
-        layer.res_scale_hs_b = create_tensor(tn(LLM_TENSOR_RES_SCALE_HS_B, "bias", i), {n_embd}, 0);
+        layer.res_scale_hs_b = create_tensor(tn(LLM_TENSOR_RES_SCALE_HS, "bias", i), {n_embd}, TENSOR_NOT_REQUIRED);
         layer.res_scale_res  = create_tensor(tn(LLM_TENSOR_RES_SCALE_RES, "weight", i), {n_embd}, TENSOR_NOT_REQUIRED);
-        layer.res_scale_res_b = create_tensor(tn(LLM_TENSOR_RES_SCALE_RES_B, "bias", i), {n_embd}, TENSOR_NOT_REQUIRED);
+        layer.res_scale_res_b = create_tensor(tn(LLM_TENSOR_RES_SCALE_RES, "bias", i), {n_embd}, TENSOR_NOT_REQUIRED);
 
         // MoE layers (odd indices)
         if (i % 2 == 1) {
