@@ -691,18 +691,33 @@ float16_t dequantFuncIQ4_NL(const in decodeBufIQ4_NL bl, const in uint blockCoor
 #endif
 
 #if defined(DATA_A_MXFP4)
+#ifdef A_TYPE_REPACKED
+layout(buffer_reference, std430, buffer_reference_align = 16) buffer decodeBufMXFP4 {
+   uint16_t qs[8];
+};
+#else
 layout(buffer_reference, std430, buffer_reference_align = 2) buffer decodeBufMXFP4 {
    block_mxfp4 block;
 };
+#endif
 
 float16_t dequantFuncMXFP4(const in decodeBufMXFP4 bl, const in uint blockCoords[2], const in uint coordInBlock[2])
 {
-    const float d = e8m0_to_fp32(bl.block.e);
     const uint idx = coordInBlock[1];
+#ifdef A_TYPE_REPACKED
+    const uint ib = pos_a + blockCoords[0] * (p.stride_a / QUANT_K) + blockCoords[1];
+    const float d = e8m0_to_fp32(data_a_scales[p.deltas_offset + ib]);
+    const uint iqs = idx & 0xF;
+    const uint shift = (idx & 0x10) >> 2;
+    uint32_t qs = uint32_t(bl.qs[(iqs & 0xE) >> 1]);
+    qs >>= ((iqs & 1) * 8 + shift);
+#else
+    const float d = e8m0_to_fp32(bl.block.e);
     const uint iqs = idx & 0xF;
     const uint shift = (idx & 0x10) >> 2;
     uint32_t qs = bl.block.qs[iqs];
     qs >>= shift;
+#endif
     qs &= 0xF;
     float16_t ret = float16_t(kvalues_mxfp4[qs] * d * 0.5);
     return ret;

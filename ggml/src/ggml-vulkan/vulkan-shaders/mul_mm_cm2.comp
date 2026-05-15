@@ -68,9 +68,10 @@ layout (push_constant) uniform parameter
 
 
 #ifdef A_TYPE_REPACKED
-struct block_q4_0_quants { uint16_t qs[8]; };
-layout (binding = 0) readonly buffer A {block_q4_0_quants data_a[];};
+struct block_repacked_quants { uint16_t qs[8]; };
+layout (binding = 0) readonly buffer A {block_repacked_quants data_a[];};
 layout (binding = 0) readonly buffer A_DELTAS {float16_t data_a_deltas[];};
+layout (binding = 0) readonly buffer A_SCALES {uint8_t data_a_scales[];};
 #else
 layout (binding = 0) readonly buffer A {A_TYPE data_a[];};
 #endif

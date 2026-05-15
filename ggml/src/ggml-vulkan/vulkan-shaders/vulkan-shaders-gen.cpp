@@ -565,7 +565,7 @@ void matmul_shaders(bool fp16, MatMulIdType matmul_id_type, bool coopmat, bool c
         }
 
         std::map<std::string, std::string> mm_base_dict = base_dict;
-        if (tname == "q4_0") {
+        if (tname == "q4_0" || tname == "mxfp4") {
             mm_base_dict["A_TYPE_REPACKED"] = "1";
         }
 
@@ -671,7 +671,7 @@ void process_shaders() {
 
     for (const auto& tname : type_names) {
         std::map<std::string, std::string> mmv_base_dict = base_dict;
-        if (tname == "q4_0") {
+        if (tname == "q4_0" || tname == "mxfp4") {
             mmv_base_dict["A_TYPE_REPACKED"] = "1";
         }
 

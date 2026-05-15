@@ -22,7 +22,11 @@ FLOAT_TYPEV2 get_dm(uint ib) {
 
 #if defined(DATA_A_MXFP4)
 FLOAT_TYPE get_dm(uint ib) {
+#if defined(A_TYPE_REPACKED)
+    return FLOAT_TYPE(e8m0_to_fp32(uint8_t(data_a_quants[p.deltas_offset + ib])));
+#else
     return FLOAT_TYPE(e8m0_to_fp32(data_a[ib].e));
+#endif
 }
 #endif
 
@@ -123,10 +127,14 @@ FLOAT_TYPE mul_q8_1(const int32_t q_sum, const float da, const vec2 dsb, const i
 #if defined(DATA_A_MXFP4)
 // 1-byte loads for mxfp4 blocks (17 bytes)
 i32vec2 repack(uint ib, uint iqs) {
+#if defined(A_TYPE_REPACKED)
+    const uint32_t qs = data_a_quants32[ib * 4 + iqs];
+#else
     const uint32_t qs = pack32(u8vec4(data_a[ib].qs[iqs * 4    ],
                                       data_a[ib].qs[iqs * 4 + 1],
                                       data_a[ib].qs[iqs * 4 + 2],
                                       data_a[ib].qs[iqs * 4 + 3]));
+#endif
 
     const u8vec4 i_a0 = unpack8( qs       & 0x0F0F0F0F);
     const u8vec4 i_a1 = unpack8((qs >> 4) & 0x0F0F0F0F);

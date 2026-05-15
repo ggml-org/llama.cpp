@@ -500,9 +500,15 @@ void load_a_to_shmem(const uint pos_a, const uint row, const uint col, const uin
             const uint ib = idx / 8;
             const uint iqs = (idx & 0x07) * 2;
 
+#if defined(A_TYPE_REPACKED)
+            const float d = e8m0_to_fp32(uint8_t(data_a_quants[p.deltas_offset + ib])) * 0.5;
+            const uint vui = uint(data_a_quants[ib * 16 + iqs]);
+            const uint vui2 = uint(data_a_quants[ib * 16 + iqs + 1]);
+#else
             const float d = e8m0_to_fp32(data_a[ib].e) * 0.5;
             const uint vui = uint(data_a[ib].qs[iqs]);
             const uint vui2 = uint(data_a[ib].qs[iqs+1]);
+#endif
 
             buf_a[buf_idx    ] = FLOAT_TYPEV2(kvalues_mxfp4[vui  & 0xF] * d,
                                               kvalues_mxfp4[vui2 & 0xF] * d);
