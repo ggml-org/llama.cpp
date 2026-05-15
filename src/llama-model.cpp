@@ -2044,7 +2044,8 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                                 hparams.n_swa,
                                 hparams.swa_type,
                                 nullptr,
-                                nullptr);
+                                nullptr,
+                                cparams.kv_mmap_path);
                     }
                 }
             }

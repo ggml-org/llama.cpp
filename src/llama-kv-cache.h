@@ -106,9 +106,10 @@ public:
                      uint32_t   n_swa,
                llama_swa_type   swa_type,
         const layer_filter_cb & filter,
-        const  layer_reuse_cb & reuse);
+         const layer_reuse_cb & reuse,
+                   const char * mmap_path = nullptr);
 
-    ~llama_kv_cache() = default;
+    ~llama_kv_cache();
 
     //
     // llama_memory_i
@@ -255,6 +256,12 @@ private:
 
     // ggml contexts for the KV cache along with the allocated backend buffers:
     std::vector<std::pair<ggml_context_ptr, ggml_backend_buffer_ptr>> ctxs_bufs;
+
+    // mmap-backed persistent KV cache (only active when kv_mmap_fd >= 0)
+    void *      kv_mmap_base = nullptr;
+    size_t      kv_mmap_size = 0;
+    int         kv_mmap_fd   = -1;
+    std::string kv_mmap_path;
 
     // the current index from where we start searching for a free slot in the ring buffer of KV cells (see find_slot())
     // note: this is not part of the KV state and it's only used to speed-up the find_slot() method

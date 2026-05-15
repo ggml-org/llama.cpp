@@ -40,6 +40,8 @@ struct llama_cparams {
     bool kv_unified;
     bool pipeline_parallel;
 
+    const char * kv_mmap_path = nullptr; // mmap-backed KV cache file path
+
     enum llama_pooling_type pooling_type;
 
     ggml_backend_sched_eval_callback cb_eval;
