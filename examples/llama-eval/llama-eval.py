@@ -470,9 +470,9 @@ class EvalState:
 <title>{self.dataset_type.upper()} Eval</title>
 <style>
         body {{ font-family: system-ui, sans-serif; margin: 0; padding: 16px; background: #fff; color: #222; }}
-        .bar {{ padding: 8px 0; font-size: 14px; color: #555; font-family: 'SF Mono', 'Menlo', 'Consolas', monospace; }}
-        .bar span {{ margin-right: 20px; }}
-        .bar b {{ color: #222; }}
+        .bar {{ padding: 8px 0; font-size: 13px; color: #555; font-family: 'SF Mono', 'Menlo', 'Consolas', monospace; display: grid; grid-template-columns: auto 1fr auto 1fr; gap: 2px 12px; align-items: baseline; }}
+        .bar .label {{ color: #888; }}
+        .bar .value {{ color: #222; }}
         table {{ width: 100%; border-collapse: collapse; font-size: 13px; font-family: 'SF Mono', 'Menlo', 'Consolas', monospace; }}
         th {{ text-align: left; padding: 6px 8px; border-bottom: 2px solid #ccc; font-weight: 600; }}
         td {{ padding: 4px 8px; border-bottom: 1px solid #eee; vertical-align: top; }}
@@ -505,13 +505,13 @@ class EvalState:
 </head>
 <body>
     <div class="bar">
-        <span><b>{self.dataset_type.upper()}</b></span>
-        <span>Model: {self.model_name or 'N/A'}</span>
-        <span>Accuracy: <b>{accuracy:.1f}%</b> [{ci_lower*100:.1f}%, {ci_upper*100:.1f}%]</span>
-        <span>Correct: <span class="correct">{n_correct}</span> / {len(completed)}</span>
-        <span>Pending: {n_pending}</span>
-        <span>Time: {self.total_time:.1f}s</span>
-        <span>Sampling: {sampling_str}</span>
+        <div class="label">Dataset</div><div class="value"><b>{self.dataset_type.upper()}</b></div>
+        <div class="label">Model</div><div class="value"><b>{self.model_name or 'N/A'}</b></div>
+        <div class="label">Accuracy</div><div class="value"><b>{accuracy:.1f}%</b> [{ci_lower*100:.1f}%, {ci_upper*100:.1f}%]</div>
+        <div class="label">Correct</div><div class="value"><span class="correct">{n_correct}</span> / {len(completed)}</div>
+        <div class="label">Pending</div><div class="value">{n_pending}</div>
+        <div class="label">Time</div><div class="value">{self.total_time:.1f}s</div>
+        <div class="label">Sampling</div><div class="value">{sampling_str}</div>
     </div>
     <div class="tabs">
         <button class="tab-btn active" data-tab="detailed" onclick="switchTab(this)">Detailed</button>
