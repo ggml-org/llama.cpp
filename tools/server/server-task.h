@@ -90,7 +90,8 @@ struct task_params {
     json format_logit_bias(const std::vector<llama_logit_bias> & logit_bias) const;
     json to_json(bool only_metrics = false) const;
 
-    int32_t checkpoint_before_last_user_token = -1;
+    // number of prompt tokens before the latest user message
+    int32_t checkpoint_before_last_user_n_tokens = -1;
 };
 
 // struct for tracking the state of a task (e.g., for streaming)
@@ -206,6 +207,7 @@ struct server_task {
 
     static task_params params_from_json_cmpl(
         const llama_vocab * vocab,
+        const server_tokens & tokens,
         const common_params & params_base,
         const int n_ctx_slot,
         const std::vector<llama_logit_bias> & logit_bias_eog,
