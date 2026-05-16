@@ -176,7 +176,7 @@ llama_model_qwen3next::graph::graph(const llama_model & model, const llm_graph_p
     res->t_embd = cur;
 
     // LM head
-    cur = build_lora_mm(model.output, cur);
+    cur = build_lora_mm(model.output, cur, model.output_s);
 
     cb(cur, "result_output", -1);
     res->t_logits = cur;
@@ -378,8 +378,6 @@ ggml_tensor * llama_model_qwen3next::graph::build_layer_attn_linear(
     const int64_t head_v_dim   = d_inner / num_v_heads;
     const int64_t n_seq_tokens = ubatch.n_seq_tokens;
 
-    const auto kv_head = mctx_cur->get_head();
-
     GGML_ASSERT(n_seqs != 0);
     GGML_ASSERT(ubatch.equal_seqs());
     GGML_ASSERT(ubatch.n_tokens == n_seq_tokens * n_seqs);
@@ -429,41 +427,14 @@ ggml_tensor * llama_model_qwen3next::graph::build_layer_attn_linear(
     beta = ggml_reshape_4d(ctx0, beta, 1, num_v_heads, n_seq_tokens, n_seqs);
     gate = ggml_reshape_4d(ctx0, gate, 1, num_v_heads, n_seq_tokens, n_seqs);
 
-    // Get convolution states from cache
     ggml_tensor * conv_states_all = mctx_cur->get_r_l(il);
     ggml_tensor * ssm_states_all  = mctx_cur->get_s_l(il);
 
-    // Build the convolution states tensor
-    ggml_tensor * conv_states = build_rs(inp, conv_states_all, hparams.n_embd_r(), n_seqs);
-    cb(conv_states, "conv_states", il);
-
-    // Calculate convolution kernel size
     ggml_tensor * conv_kernel      = model.layers[il].ssm_conv1d;
     const int64_t conv_kernel_size = conv_kernel->ne[0];
     const int64_t conv_channels    = d_inner + 2 * hparams.ssm_n_group * hparams.ssm_d_state;
 
-    conv_states = ggml_reshape_3d(ctx0, conv_states, conv_kernel_size - 1, conv_channels, n_seqs);
-    cb(conv_states, "conv_states_reshaped", il);
-
-    qkv_mixed = ggml_transpose(ctx0, qkv_mixed);
-    cb(qkv_mixed, "qkv_mixed_transposed", il);
-
-    ggml_tensor * conv_input = ggml_concat(ctx0, conv_states, qkv_mixed, 0);
-    cb(conv_input, "conv_input", il);
-
-    // Update convolution state cache
-    // Extract the last (conv_kernel_size - 1) states from conv_input
-    ggml_tensor * last_conv_states =
-        ggml_view_3d(ctx0, conv_input, conv_kernel_size - 1, conv_channels, n_seqs, conv_input->nb[1],
-                     conv_input->nb[2], (conv_input->ne[0] - conv_states->ne[0]) * ggml_element_size(conv_input));
-    cb(last_conv_states, "last_conv_states", il);
-
-    ggml_tensor * state_update_target =
-        ggml_view_2d(ctx0, conv_states_all, (conv_kernel_size - 1) * conv_channels, n_seqs, conv_states_all->nb[1],
-                     kv_head * (conv_kernel_size - 1) * conv_channels * ggml_element_size(conv_states_all));
-    cb(state_update_target, "state_update_target", il);
-
-    ggml_build_forward_expand(gf, ggml_cpy(ctx0, last_conv_states, state_update_target));
+    ggml_tensor * conv_input = build_conv_state(inp, conv_states_all, qkv_mixed, conv_kernel_size, conv_channels, il);
 
     ggml_tensor * state = build_rs(inp, ssm_states_all, hparams.n_embd_s(), n_seqs);
     state = ggml_reshape_4d(ctx0, state, head_v_dim, head_v_dim, num_v_heads, n_seqs);
@@ -540,18 +511,7 @@ ggml_tensor * llama_model_qwen3next::graph::build_layer_attn_linear(
     cb(k_conv, "k_conv_predelta", il);
     cb(v_conv, "v_conv_predelta", il);
 
-    auto attn_out = build_delta_net(q_conv, k_conv, v_conv, gate, beta, state, il);
-
-    ggml_tensor * output    = attn_out.first;
-    ggml_tensor * new_state = attn_out.second;
-    cb(output, "attn_output", il);
-    cb(new_state, "new_state", il);
-
-    // Update the recurrent states
-    ggml_build_forward_expand(gf,
-            ggml_cpy(ctx0, new_state,
-                ggml_view_2d(ctx0, ssm_states_all, hparams.n_embd_s(), n_seqs, ssm_states_all->nb[1],
-                    kv_head * hparams.n_embd_s() * ggml_element_size(ssm_states_all))));
+    ggml_tensor * output = build_recurrent_attn(inp, ssm_states_all, q_conv, k_conv, v_conv, gate, beta, state, il);
 
     // z: [head_dim, n_heads, n_tokens, n_seqs] -> [n_heads * n_tokens * n_seqs, head_dim]
     ggml_tensor * z_2d = ggml_reshape_4d(ctx0, z, head_v_dim, num_v_heads, n_seq_tokens, n_seqs);

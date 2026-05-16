@@ -13,6 +13,7 @@
 #include <string_view>
 #include <vector>
 #include <map>
+#include <algorithm>
 
 #if defined(_WIN32) && !defined(_WIN32_WINNT)
 #define _WIN32_WINNT 0x0A00
@@ -159,6 +160,7 @@ enum common_speculative_type {
     COMMON_SPECULATIVE_TYPE_NONE,          // no speculative decoding
     COMMON_SPECULATIVE_TYPE_DRAFT_SIMPLE,  // standalone draft model speculative decoding
     COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3,  // Eagle3 speculative decoding
+    COMMON_SPECULATIVE_TYPE_DRAFT_MTP,     // Multi-token prediction
     COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE,  // simple self-speculative decoding based on n-grams
     COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K,   // self-speculative decoding with n-gram keys only
     COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V, // self-speculative decoding with n-gram keys and 4 m-gram values
@@ -301,7 +303,7 @@ struct common_params_speculative_draft {
     int32_t n_min = 0;  // minimum number of draft tokens to use for speculative decoding
 
     float p_split = 0.1f;  // speculative decoding split probability
-    float p_min   = 0.75f; // minimum speculative decoding probability (greedy)
+    float p_min   = 0.75f; // minimum speculative decoding probability (greedy) // TODO: change default to 0.0f
 
     common_params_model mparams;
 
@@ -354,6 +356,14 @@ struct common_params_speculative {
 
     bool has_dft() const {
         return !draft.mparams.path.empty() || !draft.mparams.hf_repo.empty();
+    }
+
+    uint32_t need_n_rs_seq() const {
+        bool needs_rs_seq = std::any_of(types.begin(), types.end(), [&](auto t) {
+            return t == COMMON_SPECULATIVE_TYPE_DRAFT_MTP;
+        });
+
+        return needs_rs_seq ? draft.n_max : 0u;
     }
 };
 
@@ -604,14 +614,22 @@ struct common_params {
 
     std::map<std::string, std::string> default_template_kwargs;
 
-    // webui configs
-#ifdef LLAMA_WEBUI_DEFAULT_ENABLED
-    bool webui = LLAMA_WEBUI_DEFAULT_ENABLED != 0;
+    // UI configs
+#ifdef LLAMA_UI_DEFAULT_ENABLED
+    bool ui = LLAMA_UI_DEFAULT_ENABLED != 0;
+#elif defined(LLAMA_WEBUI_DEFAULT_ENABLED)
+    bool ui = LLAMA_WEBUI_DEFAULT_ENABLED != 0;
 #else
-    bool webui = true; // default to enabled when not set
+    bool ui = true; // default to enabled when not set
 #endif
+
+    // Deprecated: use ui, ui_mcp_proxy, ui_config_json instead
+    bool webui = ui;
     bool webui_mcp_proxy = false;
     std::string webui_config_json;
+
+    bool ui_mcp_proxy = false;
+    std::string ui_config_json;
 
     // "advanced" endpoints are disabled by default for better security
     bool endpoint_slots   = true;
@@ -876,15 +894,20 @@ std::string common_get_model_endpoint();
 //
 
 enum common_context_seq_rm_type {
-    COMMON_CONTEXT_SEQ_RM_TYPE_NO   = 0, // seq_rm not supported (e.g. no memory module)
-    COMMON_CONTEXT_SEQ_RM_TYPE_PART = 1, // can seq_rm partial sequences
-    COMMON_CONTEXT_SEQ_RM_TYPE_FULL = 2, // can seq_rm full sequences only
+    COMMON_CONTEXT_SEQ_RM_TYPE_NO           = 0, // seq_rm not supported (e.g. no memory module)
+    COMMON_CONTEXT_SEQ_RM_TYPE_PART         = 1, // can seq_rm partial sequences
+    COMMON_CONTEXT_SEQ_RM_TYPE_FULL         = 2, // can seq_rm full sequences only
+    COMMON_CONTEXT_SEQ_RM_TYPE_RS = 3, // can seq_rm partial sequences, bounded by n_rs_seq
 };
 
 // check if the llama_context can remove sequences
 // note: clears the memory of the context
 common_context_seq_rm_type common_context_can_seq_rm(llama_context * ctx);
 
+// aborts execution on failure
+void common_context_seq_rm (llama_context * ctx, llama_seq_id seq_id, llama_pos p0, llama_pos p1);
+void common_context_seq_add(llama_context * ctx, llama_seq_id seq_id, llama_pos p0, llama_pos p1, llama_pos delta);
+void common_context_seq_cp (llama_context * ctx, llama_seq_id seq_id_src, llama_seq_id seq_id_dst, llama_pos p0, llama_pos p1);
 
 //
 // Batch utils
@@ -1066,4 +1089,7 @@ struct common_prompt_checkpoint {
             llama_context * ctx,
             llama_seq_id seq_id,
             llama_state_seq_flags flags) const;
+
+    void clear_tgt();
+    void clear_dft();
 };
