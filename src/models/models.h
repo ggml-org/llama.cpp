@@ -424,6 +424,16 @@ struct llm_build_mimo2_iswa : public llm_graph_context {
     llm_build_mimo2_iswa(const llama_model & model, const llm_graph_params & params);
 };
 
+template <bool is_enc>
+struct llm_build_mimo_v2_asr : public llm_graph_context {
+    llm_build_mimo_v2_asr(const llama_model & model, const llm_graph_params & params);
+private:
+    ggml_tensor* build_audio_mask(ggml_tensor* text_ids_groups);
+    ggml_tensor* build_input_audio_encoder(ggml_tensor* audio_ids_cont, ggml_tensor* audio_mask);
+
+    const llama_model & model;
+};
+
 struct llm_build_minicpm3 : public llm_graph_context {
     llm_build_minicpm3(const llama_model & model, const llm_graph_params & params);
 };

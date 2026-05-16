@@ -9381,6 +9381,60 @@ class MimoV2Model(TextModel):
                 raise ValueError(f"Unprocessed experts: {experts}")
 
 
+@ModelBase.register("MiMoV2ASRForCausalLM")
+class MiMoV2AsrModel(TextModel):
+    model_arch = gguf.MODEL_ARCH.MIMO_V2_ASR 
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+
+        audio_config = self.hparams.get("audio_config", self.hparams)
+        audio_channels = self.hparams["audio_channels"]
+        
+        self.gguf_writer.add_audio_rvq_codebook_count(audio_channels)
+
+        # MiMoV2ASR utilizes discrete audio encoding, processes abnormal '-' symbols, and performs integration.
+        v_size = self.hparams["speech_vocab_size"]
+        vocab_size_arr = [int(x) for x in v_size.split("-")] if isinstance(v_size, str) and "-" in v_size else [int(v_size)] * audio_channels
+        self.gguf_writer.add_audio_rvq_vocab_sizes(vocab_size_arr)
+
+        self.gguf_writer.add_uint32("mimo.text_empty_idx", 151667)
+        self.gguf_writer.add_uint32("mimo.encoder_block_count", self.hparams["input_local_layers"])
+        self.gguf_writer.add_uint32("mimo.encoder_embedding_length", self.hparams["input_local_dim"])
+        self.gguf_writer.add_uint32("mimo.encoder_head_count", audio_config["input_local_attn_heads"])
+        self.gguf_writer.add_uint32("mimo.encoder_feed_forward_length", audio_config["input_local_intermediate_size"])
+        self.gguf_writer.add_uint32("mimo.group_size", self.hparams["group_size"])
+        self.gguf_writer.add_bool("mimo.input_full_attention", self.hparams["input_full_attention"])
+
+        z_idx = self.hparams["speech_zeroemb_idx"]
+        zeroemb_idx_arr = [int(x) for x in z_idx.split("-")] if isinstance(z_idx, str) and "-" in z_idx else [int(z_idx)] * audio_channels
+        self.gguf_writer.add_array("mimo.speech_zeroemb_idx", zeroemb_idx_arr)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        # MiMoV2ASR also has a back-end audio encoder
+        # but the authors currently only use the front-end ASR, so it is discarded here to reduce the GGUF file size.
+        if name.startswith("local_transformer.") or \
+           name.startswith("local_transformer_lm_heads.") or \
+           name.startswith("hidden_states_downcast."):
+            return  
+        
+        if name == "model.embed_tokens.weight":
+            data_torch[151667] = 0.0
+
+        # Zero out the blank tokens of the 8 audio channels in advance.
+        if name.startswith("speech_embeddings.") and name.endswith(".weight"):
+            import re
+            match = re.search(r"speech_embeddings\.(\d+)\.weight", name)
+            if match:
+                channel_idx = int(match.group(1))
+                z_idx = self.hparams["speech_zeroemb_idx"]
+                zero_arr = [int(x) for x in z_idx.split("-")] if isinstance(z_idx, str) and "-" in z_idx else [int(z_idx)] * self.hparams["audio_channels"]
+                empty_val = zero_arr[channel_idx]
+                data_torch[empty_val] = 0.0
+        
+        yield from super().modify_tensors(data_torch, name, bid)
+
+
 @ModelBase.register("Step3p5ForCausalLM")
 class Step35Model(TextModel):
     model_arch = gguf.MODEL_ARCH.STEP35

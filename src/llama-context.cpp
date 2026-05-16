@@ -1336,6 +1336,14 @@ int llama_context::encode(const llama_batch & batch_inp) {
                     GGML_ASSERT(embd.data != nullptr);
                     const uint32_t n_embd_out = hparams.n_embd_out();
 
+                    // hacky solution
+                    if (model.arch == LLM_ARCH_MIMO_V2_ASR) {
+                        GGML_ASSERT(t_embd->ne[1]*n_embd_out <= (int64_t) embd.size);
+                        ggml_backend_tensor_get_async(backend_embd, t_embd, embd.data, 0, t_embd->ne[1]*n_embd_out*sizeof(float));
+                        n_outputs = t_embd->ne[1];
+                        break;
+                    }
+
                     GGML_ASSERT(n_tokens*n_embd_out <= (int64_t) embd.size);
                     ggml_backend_tensor_get_async(backend_embd, t_embd, embd.data, 0, n_tokens*n_embd_out*sizeof(float));
                 } break;

@@ -2965,6 +2965,22 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                     default: type = LLM_TYPE_UNKNOWN;
                 }
             } break;
+        case LLM_ARCH_MIMO_V2_ASR:
+            {
+                ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
+                ml.get_key(LLM_KV_RVQ_CODEBOOK_COUNT, hparams.rvq_codebook_count, false);
+                ml.get_key_or_arr(LLM_KV_RVQ_VOCAB_SIZES, hparams.rvq_vocab_sizes, hparams.rvq_codebook_count, false);
+                ml.get_key(LLM_KV_MIMO_GROUP_SIZE, hparams.mimo_group_size, false);
+                ml.get_key(LLM_KV_MIMO_INPUT_FULL_ATTENTION, hparams.mimo_input_full_attention, false);
+                ml.get_key_or_arr(LLM_KV_MIMO_SPEECH_ZEROEMB_IDX, hparams.mimo_speech_zeroemb_idx, hparams.rvq_codebook_count, false);
+                ml.get_key(LLM_KV_MIMO_ENCODER_BLOCK_COUNT,         hparams.n_audio_layer, false);
+                ml.get_key(LLM_KV_MIMO_ENCODER_EMBEDDING_LENGTH,    hparams.n_embd_audio,  false);
+                ml.get_key(LLM_KV_MIMO_ENCODER_FEED_FORWARD_LENGTH, hparams.n_ff_audio,    false);
+                ml.get_key(LLM_KV_MIMO_ENCODER_HEAD_COUNT,          hparams.n_head_audio,  false);
+                ml.get_key(LLM_KV_MIMO_TEXT_EMPTY_IDX, hparams.mimo_text_empty_idx, false);
+                
+                type = LLM_TYPE_UNKNOWN; 
+            } break;
         default: throw std::runtime_error("unsupported model architecture: " + arch_name());
     }
 
@@ -7783,6 +7799,68 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                         layer.ffn_up   = create_tensor(tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd,   n_ff}, 0);
                     }
                 } break;
+            case LLM_ARCH_MIMO_V2_ASR:
+            {
+                const int64_t n_embd_audio = hparams.n_embd_audio; 
+                const int64_t n_ff_audio   = hparams.n_ff_audio;   
+                const int     n_audio_layer= hparams.n_audio_layer;
+
+                // global tensors
+                tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, 0);
+                output_norm = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd}, 0);
+                output      = create_tensor(tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_vocab}, TENSOR_NOT_REQUIRED);
+
+                if (output == NULL) {
+                    output = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, TENSOR_DUPLICATED);
+                }
+
+                // MiMo2ASR-specific discrete audio tensors
+                for (int i = 0; i < hparams.rvq_codebook_count; ++i) {
+                    const int64_t v_size = hparams.rvq_vocab_sizes[i];
+                    create_tensor(tn(LLM_TENSOR_A_MIMO_SPEECH_EMBD, "weight", i), {n_embd_audio, v_size}, 0); 
+                }
+                
+                const int64_t downcast_in  = n_embd_audio * hparams.mimo_group_size;
+                const int64_t downcast_out = n_embd;
+                create_tensor(tn(LLM_TENSOR_A_MIMO_SPEECH_DOWNCAST, "weight"), {downcast_in, downcast_out}, 0); 
+
+                // Directly apply Qwen2 backbone (28 -> 36)
+                for (int i = 0; i < n_layer; ++i) {
+                    auto & layer = layers[i];
+                    layer.attn_norm = create_tensor(tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd}, 0);
+                    create_tensor_qkv(layer, i, n_embd, n_embd, n_embd_gqa, n_embd_gqa, 0);
+                    layer.wo = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_embd, n_embd}, 0);
+                    layer.ffn_norm = create_tensor(tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd}, 0);
+                    layer.ffn_gate = create_tensor(tn(LLM_TENSOR_FFN_GATE, "weight", i), {n_embd,   n_ff}, 0);
+                    layer.ffn_down = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "weight", i), {  n_ff, n_embd}, 0);
+                    layer.ffn_up   = create_tensor(tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd,   n_ff}, 0);
+                }
+
+                for (int i = 0; i < n_audio_layer; ++i) { // 
+                    auto & layer = layers[i];
+
+                    layer.attn_norm_enc = create_tensor(tn(LLM_TENSOR_ENC_ATTN_NORM, "weight", i), {n_embd_audio}, 0);
+
+                    layer.wq_enc = create_tensor(tn(LLM_TENSOR_ENC_ATTN_Q, "weight", i), {n_embd_audio, n_embd_audio}, 0);
+                    layer.bq_enc = create_tensor(tn(LLM_TENSOR_ENC_ATTN_Q, "bias", i),   {n_embd_audio}, 0);
+                    
+                    layer.wk_enc = create_tensor(tn(LLM_TENSOR_ENC_ATTN_K, "weight", i), {n_embd_audio, n_embd_audio}, 0);
+                    layer.bk_enc = create_tensor(tn(LLM_TENSOR_ENC_ATTN_K, "bias", i),   {n_embd_audio}, 0);
+                    
+                    layer.wv_enc = create_tensor(tn(LLM_TENSOR_ENC_ATTN_V, "weight", i), {n_embd_audio, n_embd_audio}, 0);
+                    layer.bv_enc = create_tensor(tn(LLM_TENSOR_ENC_ATTN_V, "bias", i),   {n_embd_audio}, 0);
+                    
+                    layer.wo_enc = create_tensor(tn(LLM_TENSOR_ENC_ATTN_OUT, "weight", i), {n_embd_audio, n_embd_audio}, 0);
+                    
+                    layer.ffn_norm_enc = create_tensor(tn(LLM_TENSOR_ENC_FFN_NORM, "weight", i), {n_embd_audio}, 0);
+                    layer.ffn_gate_enc = create_tensor(tn(LLM_TENSOR_ENC_FFN_GATE, "weight", i), {n_embd_audio, n_ff_audio}, 0);
+                    layer.ffn_down_enc = create_tensor(tn(LLM_TENSOR_ENC_FFN_DOWN, "weight", i), {n_ff_audio, n_embd_audio}, 0);
+                    layer.ffn_up_enc   = create_tensor(tn(LLM_TENSOR_ENC_FFN_UP,   "weight", i), {n_embd_audio, n_ff_audio}, 0);
+                }
+                
+                output_norm_enc = create_tensor(tn(LLM_TENSOR_ENC_OUTPUT_NORM, "weight"), {n_embd_audio}, 0);
+
+            } break;
             default:
                 throw std::runtime_error("unknown architecture");
         }
@@ -9067,6 +9145,20 @@ ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
             {
                 llm = std::make_unique<llm_build_step35_iswa>(*this, params);
             } break;
+        case LLM_ARCH_MIMO_V2_ASR:
+            {
+                switch (params.gtype) {
+                    case LLM_GRAPH_TYPE_ENCODER:
+                        llm = std::make_unique<llm_build_mimo_v2_asr<true>>(*this, params);
+                        break;
+                    case LLM_GRAPH_TYPE_DEFAULT:
+                    case LLM_GRAPH_TYPE_DECODER:
+                        llm = std::make_unique<llm_build_mimo_v2_asr<false>>(*this, params);
+                        break;
+                    default:
+                        GGML_ABORT("invalid graph type");
+                };
+            } break;
         default:
             GGML_ABORT("fatal error");
     }
@@ -9319,6 +9411,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_QWEN3NEXT:
         case LLM_ARCH_MIMO2:
         case LLM_ARCH_STEP35:
+        case LLM_ARCH_MIMO_V2_ASR:
             return LLAMA_ROPE_TYPE_NEOX;
 
         case LLM_ARCH_QWEN2VL:

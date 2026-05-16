@@ -1179,22 +1179,27 @@ class TensorNameMap:
 
         MODEL_TENSOR.ENC_ATTN_NORM: (
             "encoder.block.{bid}.layer.0.layer_norm", # t5
+            "input_local_transformer.layers.{bid}.input_layernorm", # mimo2asr
         ),
 
         MODEL_TENSOR.ENC_ATTN_Q: (
             "encoder.block.{bid}.layer.0.SelfAttention.q", # t5
+            "input_local_transformer.layers.{bid}.self_attn.q_proj", # mimo2asr
         ),
 
         MODEL_TENSOR.ENC_ATTN_K: (
             "encoder.block.{bid}.layer.0.SelfAttention.k", # t5
+            "input_local_transformer.layers.{bid}.self_attn.k_proj", # mimo2asr
         ),
 
         MODEL_TENSOR.ENC_ATTN_V: (
             "encoder.block.{bid}.layer.0.SelfAttention.v", # t5
+            "input_local_transformer.layers.{bid}.self_attn.v_proj", # mimo2asr
         ),
 
         MODEL_TENSOR.ENC_ATTN_OUT: (
             "encoder.block.{bid}.layer.0.SelfAttention.o", # t5
+            "input_local_transformer.layers.{bid}.self_attn.o_proj", # mimo2asr
         ),
 
         MODEL_TENSOR.ENC_ATTN_REL_B: (
@@ -1203,19 +1208,23 @@ class TensorNameMap:
 
         MODEL_TENSOR.ENC_FFN_NORM: (
             "encoder.block.{bid}.layer.1.layer_norm", # t5
+            "input_local_transformer.layers.{bid}.post_attention_layernorm", # mimo2asr
         ),
 
         MODEL_TENSOR.ENC_FFN_GATE: (
             "encoder.block.{bid}.layer.1.DenseReluDense.wi_0", # flan-t5
+            "input_local_transformer.layers.{bid}.mlp.gate_proj", # mimo2asr
         ),
 
         MODEL_TENSOR.ENC_FFN_UP: (
             "encoder.block.{bid}.layer.1.DenseReluDense.wi",   # t5
             "encoder.block.{bid}.layer.1.DenseReluDense.wi_1", # flan-t5
+            "input_local_transformer.layers.{bid}.mlp.up_proj", # mimo2asr
         ),
 
         MODEL_TENSOR.ENC_FFN_DOWN: (
             "encoder.block.{bid}.layer.1.DenseReluDense.wo", # t5
+            "input_local_transformer.layers.{bid}.mlp.down_proj", # mimo2asr
         ),
 
         MODEL_TENSOR.VISEXP_UP: (
@@ -1259,6 +1268,7 @@ class TensorNameMap:
         MODEL_TENSOR.ENC_OUTPUT_NORM: (
             "encoder.final_layer_norm", # t5
             "layer_norm",               # neobert
+            "input_local_transformer.norm", # mimo2asr
         ),
 
         MODEL_TENSOR.CLS: (
@@ -1990,7 +2000,8 @@ class TensorNameMap:
             "conformer.layers.{bid}.feed_forward1.ffw_layer_1", # gemma4
         ),
 
-        MODEL_TENSOR.A_ENC_FFN_GATE: (),
+        MODEL_TENSOR.A_ENC_FFN_GATE: (
+        ),
 
         MODEL_TENSOR.A_ENC_FFN_DOWN: (
             "audio_tower.layers.{bid}.fc2", # ultravox
@@ -2112,6 +2123,14 @@ class TensorNameMap:
         ),
         MODEL_TENSOR.A_MM_SOFT_EMB_NORM: (
             "model.embed_audio.soft_embedding_norm", # gemma3n
+        ),
+
+        MODEL_TENSOR.A_MIMO_SPEECH_EMBD: (
+            "speech_embeddings.{bid}", # mimo2asr
+        ),
+
+        MODEL_TENSOR.A_MIMO_SPEECH_DOWNCAST: (
+            "speech_group_downcast", # mimo2asr
         ),
 
         # NextN/MTP tensors

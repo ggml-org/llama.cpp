@@ -1272,6 +1272,12 @@ class GGUFWriter:
     def add_xielu_eps(self, values: Sequence[float]):
         self.add_array(Keys.xIELU.EPS, values)
 
+    def add_audio_rvq_codebook_count(self, count: int) -> None:
+        self.add_uint32(Keys.AudioRVQ.CODEBOOK_COUNT, count)
+
+    def add_audio_rvq_vocab_sizes(self, sizes: Sequence[int]) -> None:
+        self.add_array(Keys.AudioRVQ.VOCAB_SIZES, sizes)
+
     # diffusion models
 
     def add_diffusion_shift_logits(self, value: bool) -> None:

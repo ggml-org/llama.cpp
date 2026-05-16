@@ -227,6 +227,19 @@ struct llama_hparams {
     std::array<float, LLAMA_MAX_LAYERS> swiglu_clamp_exp; // clamping for expert FFN
     std::array<float, LLAMA_MAX_LAYERS> swiglu_clamp_shexp; // shared expert
 
+    // RVQ Discrete Audio Token
+    uint32_t rvq_codebook_count = 0;
+    std::array<uint32_t, LLAMA_MAX_LAYERS> rvq_vocab_sizes = {0};
+    // MiMoV2ASR
+    uint32_t mimo_group_size           = 0;
+    bool     mimo_input_full_attention = true;
+    std::array<uint32_t, LLAMA_MAX_LAYERS> mimo_speech_zeroemb_idx = {0};
+    uint32_t n_embd_audio  = 0;
+    uint32_t n_ff_audio    = 0;
+    uint32_t n_audio_layer = 0;
+    uint32_t n_head_audio  = 0;
+    uint32_t mimo_text_empty_idx = 0;
+
     // this value n_pattern means that every nth layer is dense (i.e. non-SWA)
     // dense_first means whether the pattern is start with a dense layer
     // note that if n_pattern == 0, all layers are SWA

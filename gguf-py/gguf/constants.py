@@ -356,6 +356,10 @@ class Keys:
         BETA                = "xielu.beta"
         EPS                 = "xielu.eps"
 
+    class AudioRVQ:
+        CODEBOOK_COUNT = "audio.rvq.codebook_count"
+        VOCAB_SIZES    = "audio.rvq.vocab_sizes"
+
 
 #
 # recommended mapping of model tensor names for storage in gguf
@@ -496,6 +500,7 @@ class MODEL_ARCH(IntEnum):
     LLAMA_EMBED      = auto()
     MAINCODER        = auto()
     KIMI_LINEAR      = auto()
+    MIMO_V2_ASR      = auto()
 
 
 class VISION_PROJECTOR_TYPE(IntEnum):
@@ -837,6 +842,8 @@ class MODEL_TENSOR(IntEnum):
     A_MM_INP_PROJ         = auto() # gemma3n
     A_PER_DIM_K_SCALE     = auto() # gemma4
     A_PER_DIM_SCALE       = auto() # gemma4
+    A_MIMO_SPEECH_EMBD    = auto() # mimo2asr
+    A_MIMO_SPEECH_DOWNCAST= auto() # mimo2asr
     # nextn/mtp
     NEXTN_EH_PROJ        = auto()
     NEXTN_EMBED_TOKENS   = auto()
@@ -983,6 +990,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.LLAMA_EMBED:      "llama-embed",
     MODEL_ARCH.MAINCODER:        "maincoder",
     MODEL_ARCH.KIMI_LINEAR:      "kimi-linear",
+    MODEL_ARCH.MIMO_V2_ASR:      "mimo_v2_asr",
 }
 
 VISION_PROJECTOR_TYPE_NAMES: dict[VISION_PROJECTOR_TYPE, str] = {
@@ -1323,6 +1331,8 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.A_MM_HARD_EMB_NORM:        "mm.a.hard_emb_norm",         # gemma3n
     MODEL_TENSOR.A_PER_DIM_K_SCALE:         "a.blk.{bid}.per_dim_k_scale", # gemma4
     MODEL_TENSOR.A_PER_DIM_SCALE:           "a.blk.{bid}.per_dim_scale",   # gemma4
+    MODEL_TENSOR.A_MIMO_SPEECH_EMBD:        "a.mimo_speech_embd.{bid}", # mimo2asr
+    MODEL_TENSOR.A_MIMO_SPEECH_DOWNCAST:    "a.mimo_speech_downcast",   # mimo2asr
     # lfm2 audio
     MODEL_TENSOR.A_ENC_NORM_CONV:           "a.blk.{bid}.norm_conv",
     MODEL_TENSOR.A_ENC_LINEAR_POS:          "a.blk.{bid}.linear_pos",
@@ -3896,6 +3906,33 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_DOWN_SHEXP,
         MODEL_TENSOR.FFN_UP_SHEXP,
     ],
+    MODEL_ARCH.MIMO_V2_ASR: [
+        MODEL_TENSOR.TOKEN_EMBD, # Reuse the Qwen2
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.ROPE_FREQS,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_Q,
+        MODEL_TENSOR.ATTN_K,
+        MODEL_TENSOR.ATTN_V,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.FFN_NORM,
+        MODEL_TENSOR.FFN_GATE,
+        MODEL_TENSOR.FFN_DOWN,
+        MODEL_TENSOR.FFN_UP,
+        MODEL_TENSOR.ENC_ATTN_NORM, # MiMo-exclusive extensions
+        MODEL_TENSOR.ENC_ATTN_Q,
+        MODEL_TENSOR.ENC_ATTN_K,
+        MODEL_TENSOR.ENC_ATTN_V,
+        MODEL_TENSOR.ENC_ATTN_OUT,
+        MODEL_TENSOR.ENC_FFN_NORM,
+        MODEL_TENSOR.ENC_FFN_GATE,
+        MODEL_TENSOR.ENC_FFN_UP,
+        MODEL_TENSOR.ENC_FFN_DOWN,
+        MODEL_TENSOR.ENC_OUTPUT_NORM,
+        MODEL_TENSOR.A_MIMO_SPEECH_DOWNCAST,      
+        MODEL_TENSOR.A_MIMO_SPEECH_EMBD,
+    ],
     # TODO
 }
 
@@ -3959,6 +3996,7 @@ MODEL_TENSOR_SKIP: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.ROPE_FREQS,
         MODEL_TENSOR.ATTN_ROT_EMBD,
     ],
+    
 }
 
 #

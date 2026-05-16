@@ -133,6 +133,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
     { LLM_ARCH_LLAMA_EMBED,      "llama-embed"      },
     { LLM_ARCH_MAINCODER,        "maincoder"        },
     { LLM_ARCH_KIMI_LINEAR,      "kimi-linear"      },
+    { LLM_ARCH_MIMO_V2_ASR,     "mimo_v2_asr"       },
     { LLM_ARCH_UNKNOWN,          "(unknown)"        },
 };
 
@@ -333,6 +334,18 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
     { LLM_KV_XIELU_ALPHA_P,         "xielu.alpha_p"         },
     { LLM_KV_XIELU_BETA,            "xielu.beta"            },
     { LLM_KV_XIELU_EPS,             "xielu.eps"             },
+
+    { LLM_KV_RVQ_CODEBOOK_COUNT,            "audio.rvq.codebook_count" },
+    { LLM_KV_RVQ_VOCAB_SIZES,               "audio.rvq.vocab_sizes"    },
+
+    { LLM_KV_MIMO_ENCODER_BLOCK_COUNT,          "mimo.encoder_block_count" },
+    { LLM_KV_MIMO_ENCODER_EMBEDDING_LENGTH,     "mimo.encoder_embedding_length" },
+    { LLM_KV_MIMO_ENCODER_HEAD_COUNT,           "mimo.encoder_head_count" },
+    { LLM_KV_MIMO_ENCODER_FEED_FORWARD_LENGTH,  "mimo.encoder_feed_forward_length" },
+    { LLM_KV_MIMO_GROUP_SIZE,                   "mimo.group_size"           },
+    { LLM_KV_MIMO_INPUT_FULL_ATTENTION,         "mimo.input_full_attention" },
+    { LLM_KV_MIMO_SPEECH_ZEROEMB_IDX,           "mimo.speech_zeroemb_idx"   },
+    { LLM_KV_MIMO_TEXT_EMPTY_IDX,               "mimo.text_empty_idx" },
 
     // deprecated
     { LLM_KV_TOKENIZER_PREFIX_ID, "tokenizer.ggml.prefix_token_id" },
@@ -547,6 +560,8 @@ static const std::map<llm_tensor, const char *> LLM_TENSOR_NAMES = {
     { LLM_TENSOR_INDEXER_PROJ,                           "blk.%d.indexer.proj" },
     { LLM_TENSOR_INDEXER_ATTN_K,                         "blk.%d.indexer.attn_k" },
     { LLM_TENSOR_INDEXER_ATTN_Q_B,                       "blk.%d.indexer.attn_q_b" },
+    { LLM_TENSOR_A_MIMO_SPEECH_EMBD,                     "a.mimo_speech_embd.%d" },
+    { LLM_TENSOR_A_MIMO_SPEECH_DOWNCAST,                 "a.mimo_speech_downcast" },
 };
 
 // declare information about the model weight tensors:
@@ -767,6 +782,9 @@ static const std::map<llm_tensor, llm_tensor_info> LLM_TENSOR_INFOS = {
     // Nemotron 3 Super
     {LLM_TENSOR_FFN_LATENT_DOWN,            {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
     {LLM_TENSOR_FFN_LATENT_UP,              {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
+    // MIMO_V2_ASR
+    {LLM_TENSOR_A_MIMO_SPEECH_EMBD,        { LLM_TENSOR_LAYER_REPEATING, GGML_OP_GET_ROWS }},
+    {LLM_TENSOR_A_MIMO_SPEECH_DOWNCAST,    { LLM_TENSOR_LAYER_INPUT,     GGML_OP_MUL_MAT }},
 };
 
 LLM_KV::LLM_KV(llm_arch arch, const char * suffix) : arch(arch), suffix(suffix) {}
