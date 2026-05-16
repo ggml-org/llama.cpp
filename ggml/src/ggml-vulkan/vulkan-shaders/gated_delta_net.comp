@@ -31,6 +31,7 @@ layout(push_constant) uniform Parameters {
     uint sb1, sb2, sb3;
     uint neq1, rq3;
     float scale;
+    uint K;
 };
 
 layout(binding = 0) readonly  buffer QBuf     { FLOAT_TYPE data_q[];     };
@@ -101,12 +102,20 @@ void main() {
     const uint iq3 = seq_id / rq3;
 
     const uint state_size = S_V * S_V;
-    const uint state_base = (seq_id * H + head_id) * state_size;
+    // input state layout (D, K, n_seqs): per-seq stride is K*H*D; we read slot 0.
+    const uint state_in_base       = (seq_id * K * H + head_id) * state_size;
+    // output state layout per slot: same per-(seq,head) offset as the single-slot case.
+    const uint state_out_base      = (seq_id * H + head_id) * state_size;
+    const uint state_size_per_snap = state_size * H * n_seqs;
 
     FLOAT_TYPE s_shard[ROWS_PER_LANE];
     [[unroll]] for (uint r = 0; r < ROWS_PER_LANE; r++) {
-        s_shard[r] = FLOAT_TYPE(data_state[state_base + col * S_V + r * LANES_PER_COLUMN + lane]);
+        s_shard[r] = FLOAT_TYPE(data_state[state_in_base + col * S_V + r * LANES_PER_COLUMN + lane]);
     }
+
+    // snapshot slot mapping: target_slot = t - shift. When n_tokens < K, only the last
+    // n_tokens slots are written; earlier slots are left untouched (caller-owned).
+    const int shift = int(n_tokens) - int(K);
 
     uint attn_off = (seq_id * n_tokens * H + head_id) * S_V;
 
@@ -161,9 +170,21 @@ void main() {
         }
 
         attn_off += S_V * H;
+
+        if (K > 1u) {
+            const int target_slot = int(t) - shift;
+            if (target_slot >= 0 && target_slot < int(K)) {
+                const uint slot_base = s_off + uint(target_slot) * state_size_per_snap + state_out_base;
+                [[unroll]] for (uint r = 0; r < ROWS_PER_LANE; r++) {
+                    data_dst[slot_base + col * S_V + r * LANES_PER_COLUMN + lane] = s_shard[r];
+                }
+            }
+        }
     }
 
-    [[unroll]] for (uint r = 0; r < ROWS_PER_LANE; r++) {
-        data_dst[s_off + state_base + col * S_V + r * LANES_PER_COLUMN + lane] = s_shard[r];
+    if (K == 1u) {
+        [[unroll]] for (uint r = 0; r < ROWS_PER_LANE; r++) {
+            data_dst[s_off + state_out_base + col * S_V + r * LANES_PER_COLUMN + lane] = s_shard[r];
+        }
     }
 }

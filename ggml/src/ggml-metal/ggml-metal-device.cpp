@@ -590,6 +590,8 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_gated_delta_net(
     const int ne20 = op->src[2]->ne[0]; // S_v
     const int ne21 = op->src[2]->ne[1]; // H
     const int ne30 = op->src[3]->ne[0]; // G
+    // state is src[5], 3D (S_v*S_v*H, K, n_seqs); K is the snapshot slot count.
+    const int K = op->src[5]->ne[1];
 
     const int nsg = op->src[2]->ne[0]/32;
 
@@ -598,7 +600,7 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_gated_delta_net(
     GGML_ASSERT(ne20 % 32 == 0);
 
     snprintf(base, 256, "kernel_gated_delta_net_%s_%d", ggml_type_name(op->src[0]->type), nsg);
-    snprintf(name, 256, "%s_ne20=%d_ne30=%d", base, ne20, ne30);
+    snprintf(name, 256, "%s_ne20=%d_ne30=%d_K=%d", base, ne20, ne30, K);
 
     ggml_metal_pipeline_with_params res = ggml_metal_library_get_pipeline(lib, name);
     if (!res.pipeline) {
@@ -606,6 +608,7 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_gated_delta_net(
 
         ggml_metal_cv_set_int16(cv, ne20, FC_GATED_DELTA_NET + 0);
         ggml_metal_cv_set_int16(cv, ne30, FC_GATED_DELTA_NET + 1);
+        ggml_metal_cv_set_int16(cv, K,    FC_GATED_DELTA_NET + 2);
 
         res = ggml_metal_library_compile_pipeline(lib, base, name, cv);
 

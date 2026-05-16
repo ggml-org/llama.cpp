@@ -7,6 +7,7 @@
 #include "log.h"
 #include "llama.h"
 #include "sampling.h"
+#include "speculative.h"
 #include "unicode.h"
 
 #include <algorithm>
@@ -1247,6 +1248,29 @@ common_init_result::common_init_result(common_params & params) :
         cparams.n_samplers = pimpl->samplers_seq_config.size();
     }
 
+    // [TAG_RS_STATE_ROLLBACK_SUPPORT]
+    // TODO: ngram speculative methods require checkpointing in addition to partial RS rollback
+    //       currently this is not supported. so we disable the partial rollback
+    if (cparams.n_rs_seq > 0 && (llama_model_is_recurrent(model) || llama_model_is_hybrid(model))) {
+        auto & types = params.speculative.types;
+
+        for (int i = 0; i < (int) types.size(); i++) {
+            if (types[i] == COMMON_SPECULATIVE_TYPE_NONE) {
+                continue;
+            }
+            if (types[i] == COMMON_SPECULATIVE_TYPE_DRAFT_MTP) {
+                continue;
+            }
+
+            cparams.n_rs_seq = 0;
+
+            LOG_WRN("%s: recurrent state rollback is not compatible with '%s' - disabling rollback support\n", __func__,
+                    common_speculative_type_to_str(types[i]).c_str());
+
+            break;
+        }
+    }
+
     llama_context * lctx = llama_init_from_model(model, cparams);
     if (lctx == NULL) {
         LOG_ERR("%s: failed to create context with model '%s'\n", __func__, params.model.path.c_str());
@@ -1435,6 +1459,12 @@ common_context_seq_rm_type common_context_can_seq_rm(llama_context * ctx) {
         goto done;
     }
 
+    if (llama_n_rs_seq(ctx) > 0) {
+        LOG_INF("%s: the context supports bounded partial sequence removal\n", __func__);
+        res = COMMON_CONTEXT_SEQ_RM_TYPE_RS;
+        goto done;
+    }
+
     // try to remove the last tokens
     if (!llama_memory_seq_rm(mem, 0, 1, -1)) {
         LOG_TRC("%s: the context does not support partial sequence removal\n", __func__);
@@ -1447,6 +1477,23 @@ done:
     llama_synchronize(ctx);
 
     return res;
+}
+
+void common_context_seq_rm(llama_context * ctx, llama_seq_id seq_id, llama_pos p0, llama_pos p1) {
+    auto * mem = llama_get_memory(ctx);
+    if (!llama_memory_seq_rm(mem, seq_id, p0, p1)) {
+        GGML_ABORT("%s", string_format("failed to remove sequence %d with p0=%d, p1=%d\n", seq_id, p0, p1).c_str());
+    }
+}
+
+void common_context_seq_cp(llama_context * ctx, llama_seq_id seq_id_src, llama_seq_id seq_id_dst, llama_pos p0, llama_pos p1) {
+    auto * mem = llama_get_memory(ctx);
+    llama_memory_seq_cp(mem, seq_id_src, seq_id_dst, p0, p1);
+}
+
+void common_context_seq_add(llama_context * ctx, llama_seq_id seq_id, llama_pos p0, llama_pos p1, llama_pos delta) {
+    auto * mem = llama_get_memory(ctx);
+    llama_memory_seq_add(mem, seq_id, p0, p1, delta);
 }
 
 void common_set_adapter_lora(struct llama_context * ctx, std::vector<common_adapter_lora_info> & lora) {
@@ -1505,6 +1552,7 @@ struct llama_context_params common_context_params_to_llama(const common_params &
 
     cparams.n_ctx             = params.n_ctx;
     cparams.n_seq_max         = params.n_parallel;
+    cparams.n_rs_seq          = params.speculative.need_n_rs_seq();
     cparams.n_batch           = params.n_batch;
     cparams.n_ubatch          = params.n_ubatch;
     cparams.n_threads         = params.cpuparams.n_threads;
@@ -2073,4 +2121,12 @@ void common_prompt_checkpoint::load_dft(
     if (n != data_dft.size()) {
         GGML_ABORT("checkpoint size mismatch: expected %zu, got %zu\n", data_dft.size(), n);
     }
+}
+
+void common_prompt_checkpoint::clear_tgt() {
+    data_tgt.clear();
+}
+
+void common_prompt_checkpoint::clear_dft() {
+    data_dft.clear();
 }

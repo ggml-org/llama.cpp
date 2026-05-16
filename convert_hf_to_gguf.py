@@ -118,6 +118,14 @@ def parse_args() -> argparse.Namespace:
         help="(Experimental) Export multimodal projector (mmproj) for vision models. This will only work on some vision models. A prefix 'mmproj-' will be added to the output file name.",
     )
     parser.add_argument(
+        "--mtp", action="store_true",
+        help="(Experimental) Export only the multi-token prediction (MTP) head as a separate GGUF, suitable for use as a speculative draft. Output file name will get a '-MTP' suffix.",
+    )
+    parser.add_argument(
+        "--no-mtp", action="store_true",
+        help="(Experimental) Exclude the multi-token prediction (MTP) head from the converted GGUF. Pair with --mtp on a second run to publish trunk and MTP as two files. Note: the split form duplicates embeddings, so the bundled default is more space-efficient overall.",
+    )
+    parser.add_argument(
         "--mistral-format", action="store_true",
         help="Whether the model is stored following the Mistral format.",
     )
@@ -232,6 +240,20 @@ def main() -> None:
         else:
             from conversion.mistral import MistralModel
             model_class = MistralModel
+
+        if args.mtp and args.no_mtp:
+            logger.error("--mtp and --no-mtp are mutually exclusive")
+            sys.exit(1)
+
+        if args.mtp or args.no_mtp:
+            from conversion.qwen import _Qwen35MtpMixin
+            if not issubclass(model_class, _Qwen35MtpMixin):
+                logger.error("--mtp / --no-mtp are only supported for Qwen3.5/3.6 text variants today")
+                sys.exit(1)
+            if args.no_mtp:
+                model_class.no_mtp = True
+            if args.mtp:
+                model_class.mtp_only = True
 
         model_instance = model_class(dir_model, output_type, fname_out,
                                      is_big_endian=args.bigendian, use_temp_file=args.use_temp_file,
