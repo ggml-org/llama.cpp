@@ -499,7 +499,7 @@ static void common_params_fit_impl(
     };
 
     // The meta backend cannot run graphs where part of a layer lives on CPU and the rest on the meta device.
-    // Restrict tensor mode to whole-layer CPU offload via n_gpu_layers only, 
+    // Restrict tensor mode to whole-layer CPU offload via n_gpu_layers only,
     // skipping the MoE-specific partial-layer overflow patterns.
     const bool moe_partial_offload_ok = hp_nex > 0 && mparams->split_mode != LLAMA_SPLIT_MODE_TENSOR;
 
