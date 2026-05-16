@@ -57,17 +57,22 @@ Although OpenVINO supports a wide range of [Intel hardware](https://docs.openvin
 
 ## Validated Models
 
-The following models have been validated for functionality on Intel® Core™ Ultra Series 1 and Series 2:
+The following models were validated on Intel® Core™ Ultra Series 2. While our testing was limited, the OpenVINO backend is expected to work across a broad range of [Intel hardware](https://docs.openvino.ai/2026/about-openvino/release-notes-openvino/system-requirements.html).
+- Use `GGML_OPENVINO_STATEFUL_EXECUTION=1` when using GPU device.
+- `-fa 1` is required when running llama-bench with the OpenVINO backend.
+- Additional model support, quantization formats and validations are work in progress.
 
-- [Llama-3.2-1B-Instruct-GGUF](https://huggingface.co/unsloth/Llama-3.2-1B-Instruct-GGUF/)
-- [Llama-3.1-8B-Instruct](https://huggingface.co/bartowski/Meta-Llama-3.1-8B-Instruct-GGUF)
-- [microsoft/Phi-3-mini-4k-instruct-gguf](https://huggingface.co/microsoft/Phi-3-mini-4k-instruct-gguf)
-- [Qwen/Qwen2.5-1.5B-Instruct-GGUF](https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF)
-- [Qwen/Qwen3-8B](https://huggingface.co/Qwen/Qwen3-8B-GGUF)
-- [openbmb/MiniCPM-1B-sft-bf16](https://huggingface.co/openbmb/MiniCPM-S-1B-sft-gguf)
-- [tencent/Hunyuan-7B-Instruct](https://huggingface.co/bartowski/tencent_Hunyuan-7B-Instruct-GGUF)
-- [mistralai/Mistral-7B-Instruct-v0.3](https://huggingface.co/bartowski/Mistral-7B-Instruct-v0.3-GGUF)
-- [bartowski/DeepSeek-R1-Distill-Llama-8B-GGUF](https://huggingface.co/bartowski/DeepSeek-R1-Distill-Llama-8B-GGUF)
+| Model  | Validated   | Known Issues  |
+| :------| :---------- | :-------------|
+| [Llama-3.2-1B-Instruct](https://huggingface.co/unsloth/Llama-3.2-1B-Instruct-GGUF/) | `FP16`, `Q8_0`, `Q4_0`, `Q4_1`, `Q4_K_M` on CPU/GPU/NPU | — |
+| [Meta-Llama-3.1-8B-Instruct](https://huggingface.co/bartowski/Meta-Llama-3.1-8B-Instruct-GGUF) | `Q8_0`, `Q4_K_M` on CPU/GPU/NPU | `Q4_0_8_8`, `Q4_0_4_8`, `Q4_0_4_4` fail |
+| [Phi-3-mini-4k-instruct](https://huggingface.co/microsoft/Phi-3-mini-4k-instruct-gguf) | `FP16`, `Q4` on CPU/NPU | GPU unsupported for `FP16` and `Q4` (`llama-cli`, `llama-bench`) |
+| [Qwen2.5-1.5B-Instruct](https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF) | `FP16`, `Q8_0`, `Q4_0`, `Q4_1`, `Q4_K_M` on CPU/GPU/NPU | — |
+| [Qwen3-8B-Instruct](https://huggingface.co/Qwen/Qwen3-8B-GGUF) | `FP16`, `Q8_0`, `Q4_0`, `Q4_1`, `Q4_K_M` on CPU/NPU; GPU works via `llama-bench` | GPU `llama-cli` unsupported for all quantizations |
+| [MiniCPM-V-2_6-GGUF](https://huggingface.co/openbmb/MiniCPM-V-2_6-gguf) | `Q4_0` on CPU/GPU/NPU | — |
+| [DeepSeek-R1-Distill-Llama-8B](https://huggingface.co/bartowski/DeepSeek-R1-Distill-Llama-8B-GGUF) | `Q8_0`, `Q4_0`, `Q4_1`, `Q4_K_M` on CPU/GPU/NPU | — |
+| [Hunyuan-7B-Instruct](https://huggingface.co/bartowski/tencent_Hunyuan-7B-Instruct-GGUF) | CPU: `Q8_0`, `Q4_0`, `Q4_1`, `Q4_K_M`; GPU: `Q8_0`, `Q4_0`, `Q4_1`; NPU (`llama-bench` only): `Q4_0`, `Q4_1`, `Q4_K_M` | GPU `Q4_K_M` unsupported; NPU `llama-cli` unsupported |
+| [Mistral-7B-Instruct-v0.3](https://huggingface.co/bartowski/Mistral-7B-Instruct-v0.3-GGUF/) | CPU/GPU: `Q8_0`, `Q4_K_M`; NPU: `Q8_0`, `Q4_K_M` (via `llama-bench`) | NPU `llama-cli` unsupported for `Q8_0`, `Q4_K_M` |
 
 ## Build Instructions
 
