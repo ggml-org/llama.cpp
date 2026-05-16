@@ -119,18 +119,22 @@
 		{#if hasPromptStats || isLive}
 			<Tooltip.Root>
 				<Tooltip.Trigger>
-					<button
-						type="button"
-						class="inline-flex h-5 w-5 items-center justify-center rounded-sm transition-colors {activeView ===
-						ChatMessageStatsView.READING
-							? 'bg-background text-foreground shadow-sm'
-							: 'hover:text-foreground'}"
-						onclick={() => (activeView = ChatMessageStatsView.READING)}
-					>
-						<BookOpenText class="h-3 w-3" />
+					<!-- prevent another nested button element -->
+					{#snippet child({ props })}
+						<button
+							{...props}
+							type="button"
+							class="inline-flex h-5 w-5 items-center justify-center rounded-sm transition-colors {activeView ===
+							ChatMessageStatsView.READING
+								? 'bg-background text-foreground shadow-sm'
+								: 'hover:text-foreground'}"
+							onclick={() => (activeView = ChatMessageStatsView.READING)}
+						>
+							<BookOpenText class="h-3 w-3" />
 
-						<span class="sr-only">Reading</span>
-					</button>
+							<span class="sr-only">Reading</span>
+						</button>
+					{/snippet}
 				</Tooltip.Trigger>
 
 				<Tooltip.Content>
@@ -140,21 +144,25 @@
 		{/if}
 		<Tooltip.Root>
 			<Tooltip.Trigger>
-				<button
-					type="button"
-					class="inline-flex h-5 w-5 items-center justify-center rounded-sm transition-colors {activeView ===
-					ChatMessageStatsView.GENERATION
-						? 'bg-background text-foreground shadow-sm'
-						: isGenerationDisabled
-							? 'cursor-not-allowed opacity-40'
-							: 'hover:text-foreground'}"
-					onclick={() => !isGenerationDisabled && (activeView = ChatMessageStatsView.GENERATION)}
-					disabled={isGenerationDisabled}
-				>
-					<Sparkles class="h-3 w-3" />
+				<!-- prevent another nested button element -->
+				{#snippet child({ props })}
+					<button
+						{...props}
+						type="button"
+						class="inline-flex h-5 w-5 items-center justify-center rounded-sm transition-colors {activeView ===
+						ChatMessageStatsView.GENERATION
+							? 'bg-background text-foreground shadow-sm'
+							: isGenerationDisabled
+								? 'cursor-not-allowed opacity-40'
+								: 'hover:text-foreground'}"
+						onclick={() => !isGenerationDisabled && (activeView = ChatMessageStatsView.GENERATION)}
+						disabled={isGenerationDisabled}
+					>
+						<Sparkles class="h-3 w-3" />
 
-					<span class="sr-only">Generation</span>
-				</button>
+						<span class="sr-only">Generation</span>
+					</button>
+				{/snippet}
 			</Tooltip.Trigger>
 
 			<Tooltip.Content>
@@ -169,18 +177,22 @@
 		{#if hasAgenticStats}
 			<Tooltip.Root>
 				<Tooltip.Trigger>
-					<button
-						type="button"
-						class="inline-flex h-5 w-5 items-center justify-center rounded-sm transition-colors {activeView ===
-						ChatMessageStatsView.TOOLS
-							? 'bg-background text-foreground shadow-sm'
-							: 'hover:text-foreground'}"
-						onclick={() => (activeView = ChatMessageStatsView.TOOLS)}
-					>
-						<Wrench class="h-3 w-3" />
+					<!-- prevent another nested button element -->
+					{#snippet child({ props })}
+						<button
+							{...props}
+							type="button"
+							class="inline-flex h-5 w-5 items-center justify-center rounded-sm transition-colors {activeView ===
+							ChatMessageStatsView.TOOLS
+								? 'bg-background text-foreground shadow-sm'
+								: 'hover:text-foreground'}"
+							onclick={() => (activeView = ChatMessageStatsView.TOOLS)}
+						>
+							<Wrench class="h-3 w-3" />
 
-						<span class="sr-only">Tools</span>
-					</button>
+							<span class="sr-only">Tools</span>
+						</button>
+					{/snippet}
 				</Tooltip.Trigger>
 
 				<Tooltip.Content>
@@ -191,18 +203,22 @@
 			{#if !hideSummary}
 				<Tooltip.Root>
 					<Tooltip.Trigger>
-						<button
-							type="button"
-							class="inline-flex h-5 w-5 items-center justify-center rounded-sm transition-colors {activeView ===
-							ChatMessageStatsView.SUMMARY
-								? 'bg-background text-foreground shadow-sm'
-								: 'hover:text-foreground'}"
-							onclick={() => (activeView = ChatMessageStatsView.SUMMARY)}
-						>
-							<Layers class="h-3 w-3" />
+						<!-- prevent another nested button element -->
+						{#snippet child({ props })}
+							<button
+								{...props}
+								type="button"
+								class="inline-flex h-5 w-5 items-center justify-center rounded-sm transition-colors {activeView ===
+								ChatMessageStatsView.SUMMARY
+									? 'bg-background text-foreground shadow-sm'
+									: 'hover:text-foreground'}"
+								onclick={() => (activeView = ChatMessageStatsView.SUMMARY)}
+							>
+								<Layers class="h-3 w-3" />
 
-							<span class="sr-only">Summary</span>
-						</button>
+								<span class="sr-only">Summary</span>
+							</button>
+						{/snippet}
 					</Tooltip.Trigger>
 
 					<Tooltip.Content>
