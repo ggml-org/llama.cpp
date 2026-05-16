@@ -605,10 +605,22 @@ struct common_params {
 
     std::map<std::string, std::string> default_template_kwargs;
 
-    // webui configs
-    bool webui = true;
+    // UI configs
+#ifdef LLAMA_UI_DEFAULT_ENABLED
+    bool ui = LLAMA_UI_DEFAULT_ENABLED != 0;
+#elif defined(LLAMA_WEBUI_DEFAULT_ENABLED)
+    bool ui = LLAMA_WEBUI_DEFAULT_ENABLED != 0;
+#else
+    bool ui = true; // default to enabled when not set
+#endif
+
+    // Deprecated: use ui, ui_mcp_proxy, ui_config_json instead
+    bool webui = ui;
     bool webui_mcp_proxy = false;
     std::string webui_config_json;
+
+    bool ui_mcp_proxy = false;
+    std::string ui_config_json;
 
     // "advanced" endpoints are disabled by default for better security
     bool endpoint_slots   = true;
@@ -687,6 +699,7 @@ struct common_params {
 // initializes the logging system and prints info about the build
 void common_init();
 
+void common_params_print_info(const common_params & params);
 std::string common_params_get_system_info(const common_params & params);
 
 bool parse_cpu_range(const std::string & range, bool(&boolmask)[GGML_MAX_N_THREADS]);

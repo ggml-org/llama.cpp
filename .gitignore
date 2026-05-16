@@ -92,12 +92,12 @@
 !/examples/sycl/*.bat
 !/examples/sycl/*.sh
 
-# Server Web UI temporary files
+# Server Web UI temporary files (+ legacy directory)
 
 /tools/server/webui/node_modules
 /tools/server/webui/dist
-# we no longer use gz for index.html
-/tools/server/public/index.html.gz
+/tools/ui/node_modules
+/tools/ui/dist
 
 # Python
 
