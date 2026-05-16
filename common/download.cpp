@@ -975,7 +975,7 @@ std::vector<common_cached_model_info> common_list_cached_models() {
         auto split = get_gguf_split_info(f.path);
         if (split.index != 1 || split.tag.empty() ||
             split.prefix.find("mmproj") != std::string::npos ||
-            split.prefix.find("MTP")    != std::string::npos) {
+            split.prefix.find("mtp-")   != std::string::npos) {
             continue;
         }
         if (seen.insert(f.repo_id + ":" + split.tag).second) {
