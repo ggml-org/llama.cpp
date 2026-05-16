@@ -70,5 +70,5 @@ adb $adbserial $adbhost shell " \
       ./$branch/bin/llama-completion --no-mmap -m $basedir/../gguf/$model \
          --poll 1000 -t 6 --cpu-mask 0xfc --cpu-strict 1                  \
          --ctx-size 8192 --ubatch-size 256 -fa on                         \
-         -ngl 99 -no-cnv --device $device $cli_opts $@                    \
+         -ngl 99 --device $device $cli_opts $@                    \
 "

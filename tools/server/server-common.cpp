@@ -1040,6 +1040,10 @@ json oaicompat_chat_params_parse(
     inputs.use_jinja             = opt.use_jinja;
     inputs.parallel_tool_calls   = json_value(body, "parallel_tool_calls", caps["supports_parallel_tool_calls"]);
     inputs.add_generation_prompt = json_value(body, "add_generation_prompt", true);
+    const bool continue_final_message = json_value(body, "continue_final_message", false);
+    if (continue_final_message && inputs.add_generation_prompt) {
+        throw std::invalid_argument("Cannot set both add_generation_prompt and continue_final_message to true.");
+    }
     inputs.reasoning_format      = opt.reasoning_format;
     if (body.contains("reasoning_format")) {
         inputs.reasoning_format = common_reasoning_format_from_name(body.at("reasoning_format").get<std::string>());
@@ -1071,7 +1075,10 @@ json oaicompat_chat_params_parse(
 
     // if the assistant message appears at the end of list, we do not add end-of-turn token
     // for ex. this can be useful to modify the reasoning process in reasoning models
-    bool prefill_assistant_message = !inputs.messages.empty() && inputs.messages.back().role == "assistant" && opt.prefill_assistant;
+    // continue_final_message is the explicit opt in alias from the vLLM/transformers API,
+    // equivalent to the prefill_assistant heuristic
+    bool prefill_assistant_message = !inputs.messages.empty() && inputs.messages.back().role == "assistant"
+        && (continue_final_message || opt.prefill_assistant);
     common_chat_msg last_message;
     if (prefill_assistant_message) {
         last_message = inputs.messages.back();
@@ -1082,11 +1089,12 @@ json oaicompat_chat_params_parse(
             throw std::invalid_argument("Cannot have 2 or more assistant messages at the end of the list.");
         }
 
-        /* TODO: test this properly */
-        inputs.reasoning_format = COMMON_REASONING_FORMAT_NONE;
-
-        if ( inputs.enable_thinking ) {
-            throw std::invalid_argument("Assistant response prefill is incompatible with enable_thinking.");
+        // reject reasoning prefill on channel based templates that do not expose explicit thinking tags
+        if (!last_message.reasoning_content.empty() && inputs.enable_thinking) {
+            auto probe_params = common_chat_templates_apply(opt.tmpls.get(), inputs);
+            if (probe_params.supports_thinking && probe_params.thinking_end_tag.empty()) {
+                throw std::invalid_argument("Assistant prefill with reasoning_content is not supported yet for this template.");
+            }
         }
 
         inputs.add_generation_prompt = true;
@@ -1098,6 +1106,42 @@ json oaicompat_chat_params_parse(
 
     /* Append assistant prefilled message */
     if (prefill_assistant_message) {
+        const bool thinking_active = chat_params.supports_thinking && !chat_params.thinking_end_tag.empty();
+        const bool has_reasoning   = !last_message.reasoning_content.empty();
+        const bool has_content     = !last_message.content.empty() || !last_message.content_parts.empty();
+        const bool mid_reasoning   = has_reasoning && !has_content;
+
+        // some templates inject thinking_start in generation_prompt, others let the model emit it
+        const bool gp_has_think = thinking_active
+            && chat_params.generation_prompt.find(chat_params.thinking_start_tag) != std::string::npos;
+
+        // open the thinking block when reasoning is present and the template did not inject it
+        if (has_reasoning) {
+            if (thinking_active && !gp_has_think) {
+                chat_params.prompt += chat_params.thinking_start_tag;
+            }
+            chat_params.prompt += last_message.reasoning_content;
+        }
+
+        if (thinking_active) {
+            if (mid_reasoning) {
+                // model continues inside the thinking block, keep generation_prompt open on think
+                if (!gp_has_think) {
+                    chat_params.generation_prompt += chat_params.thinking_start_tag;
+                }
+            } else {
+                // close thinking block when reasoning is followed by content, or when the template forced it open
+                if (has_reasoning || gp_has_think) {
+                    chat_params.prompt += chat_params.thinking_end_tag;
+                }
+                // strip thinking_start from generation_prompt so the parser routes model output as content
+                auto pos = chat_params.generation_prompt.rfind(chat_params.thinking_start_tag);
+                if (pos != std::string::npos) {
+                    chat_params.generation_prompt = chat_params.generation_prompt.substr(0, pos);
+                }
+            }
+        }
+
         if (!last_message.content_parts.empty()) {
             for (auto & p : last_message.content_parts) {
                 chat_params.prompt += p.text;

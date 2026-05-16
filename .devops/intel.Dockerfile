@@ -5,8 +5,15 @@ ARG ONEAPI_VERSION=2025.3.3-0-devel-ubuntu24.04
 FROM intel/deep-learning-essentials:$ONEAPI_VERSION AS build
 
 ARG GGML_SYCL_F16=OFF
+ARG LEVEL_ZERO_VERSION=1.28.2
+ARG LEVEL_ZERO_UBUNTU_VERSION=u24.04
 RUN apt-get update && \
-    apt-get install -y git libssl-dev
+    apt-get install -y git libssl-dev wget ca-certificates && \
+    cd /tmp && \
+    wget -q "https://github.com/oneapi-src/level-zero/releases/download/v${LEVEL_ZERO_VERSION}/level-zero_${LEVEL_ZERO_VERSION}%2B${LEVEL_ZERO_UBUNTU_VERSION}_amd64.deb" -O level-zero.deb && \
+    wget -q "https://github.com/oneapi-src/level-zero/releases/download/v${LEVEL_ZERO_VERSION}/level-zero-devel_${LEVEL_ZERO_VERSION}%2B${LEVEL_ZERO_UBUNTU_VERSION}_amd64.deb" -O level-zero-devel.deb && \
+    apt-get -o Dpkg::Options::="--force-overwrite" install -y ./level-zero.deb ./level-zero-devel.deb && \
+    rm -f /tmp/level-zero.deb /tmp/level-zero-devel.deb
 
 WORKDIR /app
 
@@ -33,11 +40,11 @@ RUN mkdir -p /app/full \
 
 FROM intel/deep-learning-essentials:$ONEAPI_VERSION AS base
 
-ARG IGC_VERSION=v2.32.7
-ARG IGC_VERSION_FULL=2_2.32.7+21184
-ARG COMPUTE_RUNTIME_VERSION=26.14.37833.4
-ARG COMPUTE_RUNTIME_VERSION_FULL=26.14.37833.4-0
-ARG IGDGMM_VERSION=22.9.0
+ARG IGC_VERSION=v2.20.5
+ARG IGC_VERSION_FULL=2_2.20.5+19972
+ARG COMPUTE_RUNTIME_VERSION=25.40.35563.10
+ARG COMPUTE_RUNTIME_VERSION_FULL=25.40.35563.10-0
+ARG IGDGMM_VERSION=22.8.2
 RUN mkdir /tmp/neo/ && cd /tmp/neo/ \
   && wget https://github.com/intel/intel-graphics-compiler/releases/download/$IGC_VERSION/intel-igc-core-${IGC_VERSION_FULL}_amd64.deb \
   && wget https://github.com/intel/intel-graphics-compiler/releases/download/$IGC_VERSION/intel-igc-opencl-${IGC_VERSION_FULL}_amd64.deb \
@@ -109,4 +116,3 @@ WORKDIR /app
 HEALTHCHECK CMD [ "curl", "-f", "http://localhost:8080/health" ]
 
 ENTRYPOINT [ "/app/llama-server" ]
-

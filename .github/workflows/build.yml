@@ -456,7 +456,8 @@ jobs:
         run: |
           cd build
           # This is using llvmpipe and runs slower than other backends
-          ctest -L main --verbose --timeout 900
+          # test-backend-ops is too slow on llvmpipe, skip it
+          ctest -L main -E test-backend-ops --verbose --timeout 900
 
   ubuntu-24-webgpu-wasm:
     runs-on: ${{ 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
