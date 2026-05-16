@@ -11,6 +11,7 @@
 	import { PwaMetaTags, PwaRefreshAlert } from '$lib/components/pwa';
 	import { pwaAssetsHead } from 'virtual:pwa-assets/head';
 
+	import { chatStore } from '$lib/stores/chat.svelte';
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { isRouterMode, serverStore } from '$lib/stores/server.svelte';
@@ -154,6 +155,18 @@
 
 	onMount(() => {
 		updateFavicon();
+		// global snapshot of backend running streams. populates the sidebar spinners so the user
+		// sees at a glance every conv that has a live inference, even ones not yet opened. snapshot
+		// only, no polling: refresh happens on mount and on visibilitychange via the effect below
+		void chatStore.syncRemoteRunningStreams();
+
+		if (typeof document === 'undefined') return;
+		const onVisibility = () => {
+			if (document.visibilityState !== 'visible') return;
+			void chatStore.syncRemoteRunningStreams();
+		};
+		document.addEventListener('visibilitychange', onVisibility);
+		return () => document.removeEventListener('visibilitychange', onVisibility);
 	});
 
 	$effect(() => {

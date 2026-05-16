@@ -512,3 +512,17 @@ export interface ApiRouterModelsUnloadResponse {
 	success: boolean;
 	error?: string;
 }
+
+/**
+ * Entry returned by GET /v1/streams (optional conversation_id query filter). One entry per
+ * live or recently completed background streaming session, keyed by its conversation_id.
+ * The WebUI uses this at mount and on visibilitychange to populate sidebar spinners and to
+ * reattach to an ongoing inference for the active conversation.
+ */
+export interface ApiStreamSession {
+	conversation_id: string;
+	is_done: boolean;
+	total_bytes: number;
+	started_at: number;
+	completed_at: number;
+}

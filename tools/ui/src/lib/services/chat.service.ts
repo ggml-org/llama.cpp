@@ -2,6 +2,11 @@ import { getJsonHeaders } from '$lib/utils/api-headers';
 import { formatAttachmentText } from '$lib/utils/formatters';
 import { isAbortError } from '$lib/utils/abort';
 import {
+	saveStreamState,
+	clearStreamState,
+	resumeStream
+} from '$lib/services/stream-resume.service';
+import {
 	ATTACHMENT_LABEL_PDF_FILE,
 	ATTACHMENT_LABEL_MCP_PROMPT,
 	ATTACHMENT_LABEL_MCP_RESOURCE,
@@ -31,7 +36,8 @@ import type {
 import type {
 	AudioInputFormat,
 	DatabaseMessageExtraMcpPrompt,
-	DatabaseMessageExtraMcpResource
+	DatabaseMessageExtraMcpResource,
+	StreamConnectionState
 } from '$lib/types';
 import { modelsStore } from '$lib/stores/models.svelte';
 import { settingsStore } from '../stores/settings.svelte';
@@ -128,6 +134,7 @@ export class ChatService {
 			onChunk,
 			onComplete,
 			onError,
+			onConnectionState,
 			onReasoningChunk,
 			onToolCallChunk,
 			onModel,
@@ -312,9 +319,18 @@ export class ChatService {
 		}
 
 		try {
+			const headers: Record<string, string> = { ...getJsonHeaders() };
+			if (stream) {
+				headers['X-Stream-Resume'] = '1';
+			}
+			// tag the request with the conversation id so the server can later list live or recently completed
+			// sessions for that conversation, this is what powers discoverActiveStream on tab reopen
+			if (conversationId) {
+				headers['X-Conversation-Id'] = conversationId;
+			}
 			const response = await fetch(API_CHAT.COMPLETIONS, {
 				method: 'POST',
-				headers: getJsonHeaders(),
+				headers,
 				body: JSON.stringify(requestBody),
 				signal
 			});
@@ -341,7 +357,8 @@ export class ChatService {
 					onCompletionId,
 					onTimings,
 					conversationId,
-					signal
+					signal,
+					onConnectionState
 				);
 
 				return;
@@ -473,6 +490,15 @@ export class ChatService {
 	 * @param excludeReasoning - Whether to strip reasoning content (should match excludeReasoningFromContext setting)
 	 * @param signal - Optional AbortSignal to cancel the pre-encode request
 	 */
+	static async cancelServerStream(conversationId: string): Promise<void> {
+		if (!conversationId) return;
+		try {
+			await fetch(`./v1/stream/${encodeURIComponent(conversationId)}`, { method: 'DELETE' });
+		} catch (e) {
+			console.warn('cancelServerStream failed:', e);
+		}
+	}
+
 	static async preEncode(
 		messages: ApiChatMessageData[] | (DatabaseMessage & { extra?: DatabaseMessageExtra[] })[],
 		model?: string | null,
@@ -557,7 +583,7 @@ export class ChatService {
 	 * @returns {Promise<void>} Promise that resolves when streaming is complete
 	 * @throws {Error} if the stream cannot be read or parsed
 	 */
-	private static async handleStreamResponse(
+	static async handleStreamResponse(
 		response: Response,
 		onChunk?: (chunk: string) => void,
 		onComplete?: (
@@ -573,15 +599,33 @@ export class ChatService {
 		onCompletionId?: (id: string) => void,
 		onTimings?: (timings?: ChatMessageTimings, promptProgress?: ChatMessagePromptProgress) => void,
 		conversationId?: string,
-		abortSignal?: AbortSignal
+		abortSignal?: AbortSignal,
+		onConnectionState?: (state: StreamConnectionState) => void
 	): Promise<void> {
-		const reader = response.body?.getReader();
+		let reader = response.body?.getReader();
 
 		if (!reader) {
 			throw new Error('No response body');
 		}
 
-		const decoder = new TextDecoder();
+		// bytesParsed is the absolute server side buffer offset of the next byte to parse
+		// segmentStartOffset is the absolute offset where the current reader started, reset on resume
+		// segmentBytesRead is wire bytes read by the current reader
+		let bytesParsed = 0;
+		let segmentStartOffset = 0;
+		let segmentBytesRead = 0;
+		let lastByteAt = Date.now();
+		// each resume must produce at least one byte to be retried again
+		// if a resume returns 200 but yields nothing, we abandon
+		// since the session has a bounded size, the total number of retries is bounded by construction
+		let madeProgress = true;
+		const encoder = new TextEncoder();
+		if (conversationId) {
+			saveStreamState(conversationId, 0);
+		}
+		onConnectionState?.('streaming');
+
+		let decoder = new TextDecoder();
 		let aggregatedContent = '';
 		let fullReasoningContent = '';
 		let aggregatedToolCalls: ApiChatCompletionToolCall[] = [];
@@ -633,90 +677,167 @@ export class ChatService {
 			}
 		};
 
+		const onVisibilityChange = () => {
+			if (typeof document === 'undefined') return;
+			if (document.visibilityState !== 'visible') return;
+			if (streamFinished) return;
+			if (!conversationId) return;
+			// the bytes have been quiet for too long, the OS likely killed the socket
+			// kicking the reader unblocks reader.read with done=true so the outer loop can resume
+			if (Date.now() - lastByteAt > 300) {
+				reader!.cancel().catch(() => {});
+			}
+		};
+		if (typeof document !== 'undefined') {
+			document.addEventListener('visibilitychange', onVisibilityChange);
+		}
+
 		try {
 			let chunk = '';
+			// outer loop drives the resume cycle, swaps reader on premature end of stream
 			while (true) {
-				if (abortSignal?.aborted) break;
-
-				const { done, value } = await reader.read();
-				if (done) break;
-
-				if (abortSignal?.aborted) break;
-
-				chunk += decoder.decode(value, { stream: true });
-				const lines = chunk.split(SSE_LINE_SEPARATOR);
-				chunk = lines.pop() || '';
-
-				for (const line of lines) {
+				while (true) {
 					if (abortSignal?.aborted) break;
 
-					if (line.startsWith(SSE_DATA_PREFIX)) {
-						const data = line.slice(SSE_DATA_PREFIX.length).trim();
-						if (data === SSE_DONE_MARKER) {
-							streamFinished = true;
+					const { done, value } = await reader.read();
+					if (done) break;
 
-							continue;
-						}
+					if (abortSignal?.aborted) break;
 
-						try {
-							const parsed: ApiChatCompletionStreamChunk = JSON.parse(data);
-							const choice = parsed.choices?.[0];
-							const content = choice?.delta?.content;
-							const reasoningContent = choice?.delta?.reasoning_content;
-							const toolCalls = choice?.delta?.tool_calls;
-							const timings = parsed.timings;
-							const promptProgress = parsed.prompt_progress;
-
-							const chunkModel = ChatService.extractModelName(parsed);
-							if (chunkModel && !modelEmitted) {
-								modelEmitted = true;
-								onModel?.(chunkModel);
-							}
-
-							if (parsed.id && !idEmitted) {
-								idEmitted = true;
-								onCompletionId?.(parsed.id);
-							}
-
-							if (promptProgress) {
-								ChatService.notifyTimings(undefined, promptProgress, onTimings);
-							}
-
-							if (timings) {
-								ChatService.notifyTimings(timings, promptProgress, onTimings);
-								lastTimings = timings;
-							}
-
-							if (content) {
-								finalizeOpenToolCallBatch();
-								aggregatedContent += content;
-								if (!abortSignal?.aborted) {
-									onChunk?.(content);
-								}
-							}
-
-							if (reasoningContent) {
-								finalizeOpenToolCallBatch();
-								fullReasoningContent += reasoningContent;
-								if (!abortSignal?.aborted) {
-									onReasoningChunk?.(reasoningContent);
-								}
-							}
-
-							processToolCallDelta(toolCalls);
-						} catch (e) {
-							console.error('Error parsing JSON chunk:', e);
+					if (value && value.byteLength > 0) {
+						segmentBytesRead += value.byteLength;
+						lastByteAt = Date.now();
+						if (!madeProgress) {
+							madeProgress = true;
+							onConnectionState?.('streaming');
 						}
 					}
+
+					chunk += decoder.decode(value, { stream: true });
+					const lines = chunk.split(SSE_LINE_SEPARATOR);
+					chunk = lines.pop() || '';
+
+					// the persisted offset must point right after the last fully parsed line,
+					// the trailing `chunk` is partial bytes still waiting for a newline
+					if (conversationId) {
+						const tailBytes = encoder.encode(chunk).byteLength;
+						bytesParsed = segmentStartOffset + segmentBytesRead - tailBytes;
+						saveStreamState(conversationId, bytesParsed);
+					}
+
+					for (const line of lines) {
+						if (abortSignal?.aborted) break;
+
+						if (line.startsWith(SSE_DATA_PREFIX)) {
+							const data = line.slice(SSE_DATA_PREFIX.length).trim();
+							if (data === SSE_DONE_MARKER) {
+								streamFinished = true;
+
+								continue;
+							}
+
+							try {
+								const parsed: ApiChatCompletionStreamChunk = JSON.parse(data);
+								const choice = parsed.choices?.[0];
+								const content = choice?.delta?.content;
+								const reasoningContent = choice?.delta?.reasoning_content;
+								const toolCalls = choice?.delta?.tool_calls;
+								const timings = parsed.timings;
+								const promptProgress = parsed.prompt_progress;
+
+								const chunkModel = ChatService.extractModelName(parsed);
+								if (chunkModel && !modelEmitted) {
+									modelEmitted = true;
+									onModel?.(chunkModel);
+								}
+
+								if (parsed.id && !idEmitted) {
+									idEmitted = true;
+									onCompletionId?.(parsed.id);
+								}
+
+								if (promptProgress) {
+									ChatService.notifyTimings(undefined, promptProgress, onTimings);
+								}
+
+								if (timings) {
+									ChatService.notifyTimings(timings, promptProgress, onTimings);
+									lastTimings = timings;
+								}
+
+								if (content) {
+									finalizeOpenToolCallBatch();
+									aggregatedContent += content;
+									if (!abortSignal?.aborted) {
+										onChunk?.(content);
+									}
+								}
+
+								if (reasoningContent) {
+									finalizeOpenToolCallBatch();
+									fullReasoningContent += reasoningContent;
+									if (!abortSignal?.aborted) {
+										onReasoningChunk?.(reasoningContent);
+									}
+								}
+
+								processToolCallDelta(toolCalls);
+							} catch (e) {
+								console.error('Error parsing JSON chunk:', e);
+							}
+						}
+					}
+
+					if (abortSignal?.aborted) break;
+					if (streamFinished) break;
 				}
 
+				// inner reader done, decide whether to try a resume
 				if (abortSignal?.aborted) break;
+				if (streamFinished) break;
+				if (!conversationId) break;
+
+				if (!madeProgress) {
+					onConnectionState?.('lost');
+					onError?.(new Error('Stream resume produced no new bytes, giving up'));
+					break;
+				}
+
+				onConnectionState?.('resuming');
+				madeProgress = false;
+
+				// the server resends starting at bytesParsed, discard any partial line we held
+				// it will be retransmitted from a clean line boundary
+				const resumeResp = await resumeStream(conversationId, abortSignal).catch(() => null);
+				if (!resumeResp || resumeResp.status !== 200) {
+					onConnectionState?.('lost');
+					onError?.(new Error('Stream connection lost and could not be resumed'));
+					break;
+				}
+				const newReader = resumeResp.body?.getReader();
+				if (!newReader) break;
+
+				try {
+					reader.releaseLock();
+				} catch {
+					/* ignore */
+				}
+				reader = newReader;
+				decoder = new TextDecoder();
+				chunk = '';
+				segmentStartOffset = bytesParsed;
+				segmentBytesRead = 0;
+				lastByteAt = Date.now();
 			}
 
 			if (abortSignal?.aborted) return;
 
 			if (streamFinished) {
 				finalizeOpenToolCallBatch();
+
+				if (conversationId) {
+					clearStreamState(conversationId);
+				}
 
 				const finalToolCalls =
 					aggregatedToolCalls.length > 0 ? JSON.stringify(aggregatedToolCalls) : undefined;
@@ -735,7 +856,14 @@ export class ChatService {
 
 			throw err;
 		} finally {
-			reader.releaseLock();
+			if (typeof document !== 'undefined') {
+				document.removeEventListener('visibilitychange', onVisibilityChange);
+			}
+			try {
+				reader.releaseLock();
+			} catch {
+				/* ignore */
+			}
 		}
 	}
 

@@ -51,8 +51,19 @@ export function isAbortError(error: unknown): boolean {
 	if (error instanceof DOMException && error.name === 'AbortError') {
 		return true;
 	}
-	if (error instanceof Error && error.name === 'AbortError') {
-		return true;
+	if (error instanceof Error) {
+		if (error.name === 'AbortError') {
+			return true;
+		}
+		// browser specific patterns emitted when a fetch reader is interrupted by page
+		// unload, navigation, or transient network drop. these are functionally aborts,
+		// not actionable application errors, so they should not surface as red console logs
+		if (error instanceof TypeError) {
+			const msg = error.message ?? '';
+			if (/input stream/i.test(msg)) return true; // Firefox: stream cut at unload
+			if (/network connection was lost/i.test(msg)) return true; // Safari: transient network drop
+			if (/load failed/i.test(msg)) return true; // Safari: page navigation during fetch
+		}
 	}
 	return false;
 }

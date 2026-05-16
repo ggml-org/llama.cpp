@@ -11,9 +11,11 @@
  * @see ChatService in services/chat.service.ts for API operations
  */
 
-import { SvelteMap } from 'svelte/reactivity';
+import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 import { DatabaseService } from '$lib/services/database.service';
 import { ChatService } from '$lib/services/chat.service';
+import { selectActiveStream } from '$lib/services/stream-discovery.service';
+import { getStreamState, clearStreamState } from '$lib/services/stream-resume.service';
 import { conversationsStore } from '$lib/stores/conversations.svelte';
 import { config } from '$lib/stores/settings.svelte';
 import { agenticStore } from '$lib/stores/agentic.svelte';
@@ -49,8 +51,10 @@ import type {
 import type {
 	ApiChatMessageData,
 	ApiProcessingState,
+	ApiStreamSession,
 	DatabaseMessage,
-	DatabaseMessageExtra
+	DatabaseMessageExtra,
+	StreamConnectionState
 } from '$lib/types';
 import { ContinueIntentKind, ErrorDialogType, MessageRole, MessageType } from '$lib/enums';
 
@@ -65,9 +69,16 @@ class ChatStore {
 	isLoading = $state(false);
 	// true while the active conversation streams reasoning content but no visible content yet
 	isReasoning = $state(false);
+	// resumable stream connection state for the active conversation
+	// streaming -> bytes flowing normally, resuming -> waiting on /v1/stream/:id reconnect, lost -> unrecoverable
+	streamConnectionState = $state<StreamConnectionState>('streaming');
 	chatLoadingStates = new SvelteMap<string, boolean>();
 	chatReasoningStates = new SvelteMap<string, boolean>();
 	chatStreamingStates = new SvelteMap<string, { response: string; messageId: string }>();
+	// convs that the backend reports as having a running session, populated by the global sync
+	// at app mount and on visibilitychange. it does not overlap with chatLoadingStates which
+	// tracks inferences driven by this browser, both are unioned to feed the sidebar spinners
+	private remoteRunningConvs = new SvelteSet<string>();
 	private abortControllers = new SvelteMap<string, AbortController>();
 	private preEncodeAbortController: AbortController | null = null;
 	private processingStates = new SvelteMap<string, ApiProcessingState | null>();
@@ -98,6 +109,11 @@ class ChatStore {
 			this.chatLoadingStates.delete(convId);
 			if (convId === conversationsStore.activeConversation?.id) this.isLoading = false;
 			this.setChatReasoning(convId, false);
+			// the local pipe is the authoritative observer of session end: when it finishes (clean
+			// onComplete or explicit Stop), the backend session is finalized too, so we drop the
+			// sidebar hint for this conv right away instead of waiting for the next visibilitychange
+			// snapshot. without this the spinner ghosts until the user toggles the tab
+			this.remoteRunningConvs.delete(convId);
 		}
 	}
 
@@ -136,6 +152,248 @@ class ChatStore {
 				conversationsStore.updateMessageAtIndex(idx, { content: s.response });
 			}
 		}
+	}
+	/**
+	 * Server side stream discovery, split in three pieces:
+	 *
+	 * probeServerStream(convId) -> hits GET /v1/streams?conversation_id, returns the session to attach
+	 *   to or null. Pure read, no side effect, no UI lock. Safe to fire in parallel with anything.
+	 *
+	 * attachServerStream(convId) -> flips the spinner immediately, fetches the replay stream
+	 *   from byte 0, finds the assistant slot to splice into (creates a placeholder if the conv has
+	 *   no assistant message yet, for cross device or fresh local DB cases), and pipes the SSE bytes
+	 *   into the message via handleStreamResponse.
+	 *
+	 * discoverActiveStream(convId) -> probe + attach in one call. Used by callers that do not need
+	 *   to overlap the probe with other async work.
+	 *
+	 * The mount of the chat page in +page.svelte calls probeServerStream in parallel with
+	 * loadConversation, then attachServerStream once both have settled. This gives the earliest
+	 * possible time to spinner and avoids racing against an empty activeMessages array.
+	 */
+	async probeServerStream(convId: string): Promise<ApiStreamSession | null> {
+		if (!convId) return null;
+		let listResp: Response;
+		try {
+			listResp = await fetch(`./v1/streams?conversation_id=${encodeURIComponent(convId)}`);
+		} catch (e) {
+			console.warn('probeServerStream fetch failed:', e);
+			return null;
+		}
+		if (!listResp.ok) {
+			console.warn(`probeServerStream got HTTP ${listResp.status} for conv ${convId}`);
+			return null;
+		}
+		let sessions: ApiStreamSession[];
+		try {
+			sessions = (await listResp.json()) as ApiStreamSession[];
+		} catch (e) {
+			console.warn('probeServerStream JSON parse failed:', e);
+			return null;
+		}
+		return selectActiveStream(sessions);
+	}
+
+	async attachServerStream(convId: string): Promise<void> {
+		if (!convId) return;
+		if (this.chatStreamingStates.has(convId)) return;
+
+		// flip the spinner immediately, the user sees activity as soon as the conv becomes active
+		this.setChatLoading(convId, true);
+		this.setStreamingActive(true);
+		this.setActiveProcessingConversation(convId);
+
+		const unlock = () => {
+			this.setStreamingActive(false);
+			this.setChatLoading(convId, false);
+			this.clearChatStreaming(convId);
+		};
+
+		// fetch the replay stream from byte 0, rebuild the assistant message from scratch.
+		// the conv id is the only identifier we need, end to end
+		let response: Response;
+		try {
+			response = await fetch(`./v1/stream/${encodeURIComponent(convId)}?from=0`);
+		} catch (e) {
+			console.error('attachServerStream replay fetch failed:', e);
+			unlock();
+			return;
+		}
+		if (!response.ok) {
+			console.warn(`attachServerStream replay got HTTP ${response.status} for conv ${convId}`);
+			unlock();
+			return;
+		}
+
+		// locate the slot to splice into, create a placeholder assistant message if there is none
+		let messages = conversationsStore.activeMessages as DatabaseMessage[];
+		let targetIdx = this.findLastAssistantIdx(messages);
+		if (targetIdx === -1) {
+			const lastUserIdx = this.findLastUserIdx(messages);
+			if (lastUserIdx === -1) {
+				console.warn(
+					`attachServerStream: conv ${convId} has no user or assistant message, cannot splice`
+				);
+				unlock();
+				return;
+			}
+			try {
+				const placeholder = await DatabaseService.createMessageBranch(
+					{
+						convId,
+						role: MessageRole.ASSISTANT,
+						content: '',
+						type: MessageType.TEXT,
+						timestamp: Date.now(),
+						parent: messages[lastUserIdx].id,
+						children: [],
+						toolCalls: ''
+					} as Omit<DatabaseMessage, 'id'>,
+					messages[lastUserIdx].id
+				);
+				conversationsStore.addMessageToActive(placeholder);
+				messages = conversationsStore.activeMessages as DatabaseMessage[];
+				targetIdx = this.findLastAssistantIdx(messages);
+			} catch (e) {
+				console.error('attachServerStream placeholder creation failed:', e);
+				unlock();
+				return;
+			}
+		}
+		if (targetIdx === -1) {
+			unlock();
+			return;
+		}
+		const targetMessage = messages[targetIdx];
+		const targetMessageId = targetMessage.id;
+		// when the assistant slot already has content, the running session is a continue or
+		// another append flow and its buffer holds only the appended deltas. preserve the prefix
+		// and let the replay add to it. when the slot is empty the session buffer holds the whole
+		// message so we wipe and rebuild from byte 0
+		const existingContent = targetMessage.content ?? '';
+		const existingReasoning = targetMessage.reasoningContent ?? '';
+		const isAppendMode = existingContent.length > 0;
+		if (!isAppendMode) {
+			conversationsStore.updateMessageAtIndex(targetIdx, {
+				content: '',
+				reasoningContent: undefined
+			});
+		}
+
+		this.setChatStreaming(convId, existingContent, targetMessageId);
+		const abortController = this.getOrCreateAbortController(convId);
+
+		let streamedContent = '';
+		let streamedReasoningContent = '';
+
+		const cleanup = () => {
+			unlock();
+			this.setProcessingState(convId, null);
+		};
+
+		try {
+			await ChatService.handleStreamResponse(
+				response,
+				(chunk: string) => {
+					streamedContent += chunk;
+					const displayed = isAppendMode ? existingContent + streamedContent : streamedContent;
+					conversationsStore.updateMessageAtIndex(targetIdx, { content: displayed });
+					this.setChatStreaming(convId, displayed, targetMessageId);
+				},
+				async (
+					finalContent?: string,
+					reasoningContent?: string,
+					timings?: ChatMessageTimings,
+					toolCalls?: string
+				) => {
+					const streamed = streamedContent || finalContent || '';
+					const streamedR = streamedReasoningContent || reasoningContent || '';
+					const content = isAppendMode ? existingContent + streamed : streamed;
+					const reasoning = isAppendMode ? existingReasoning + streamedR : streamedR;
+					await DatabaseService.updateMessage(targetMessageId, {
+						content,
+						reasoningContent: reasoning || undefined,
+						toolCalls: toolCalls || '',
+						timings
+					});
+					conversationsStore.updateMessageAtIndex(targetIdx, {
+						content,
+						reasoningContent: reasoning || undefined,
+						timings
+					});
+					cleanup();
+				},
+				(err: Error) => {
+					console.error('attachServerStream pipe error:', err);
+					cleanup();
+				},
+				(chunk: string) => {
+					streamedReasoningContent += chunk;
+					const displayed = isAppendMode
+						? existingReasoning + streamedReasoningContent
+						: streamedReasoningContent;
+					conversationsStore.updateMessageAtIndex(targetIdx, {
+						reasoningContent: displayed
+					});
+				},
+				undefined,
+				undefined,
+				undefined,
+				convId,
+				abortController.signal,
+				(connState: StreamConnectionState) => {
+					if (convId === conversationsStore.activeConversation?.id) {
+						this.streamConnectionState = connState;
+					}
+				}
+			);
+		} catch (e) {
+			console.error('attachServerStream pipe crashed:', e);
+			cleanup();
+		}
+	}
+
+	async discoverActiveStream(convId: string): Promise<void> {
+		if (!convId) return;
+		if (this.chatStreamingStates.has(convId)) return;
+		if (this.chatLoadingStates.get(convId)) return;
+		// the sidebar spinner hint is consumed the moment we run the authoritative probe, so a
+		// finalized session no longer ghosts in the sidebar after navigation
+		this.remoteRunningConvs.delete(convId);
+
+		// primary path: ask the server which sessions exist for this conversation
+		const serverTarget = await this.probeServerStream(convId);
+		if (serverTarget) {
+			await this.attachServerStream(convId);
+			return;
+		}
+
+		// fallback: local state remembers an interrupted byte offset for this conv, the server may
+		// still have a live session matching that conv id (we just lost the bytes mid stream). try to
+		// attach with conv id only, the server probe inside attachServerStream tells us if it exists
+		const localState = getStreamState(convId);
+		if (!localState) {
+			return;
+		}
+		await this.attachServerStream(convId);
+		// if attachServerStream failed (session gone, TTL expired), clear the local state to avoid retrying forever
+		if (!this.chatStreamingStates.has(convId) && !this.chatLoadingStates.get(convId)) {
+			clearStreamState(convId);
+		}
+	}
+
+	private findLastAssistantIdx(messages: DatabaseMessage[]): number {
+		for (let i = messages.length - 1; i >= 0; i--) {
+			if (messages[i].role === MessageRole.ASSISTANT) return i;
+		}
+		return -1;
+	}
+
+	private findLastUserIdx(messages: DatabaseMessage[]): number {
+		for (let i = messages.length - 1; i >= 0; i--) {
+			if (messages[i].role === MessageRole.USER) return i;
+		}
+		return -1;
 	}
 
 	clearUIState(): void {
@@ -265,11 +523,50 @@ class ChatStore {
 	}
 
 	getAllLoadingChats(): string[] {
-		return Array.from(this.chatLoadingStates.keys());
+		// union of local (this browser is piping) and remote (backend reports a running session
+		// for this conv but no local pipe yet) sources. the sidebar shows one spinner per entry
+		const out = new SvelteSet<string>(this.chatLoadingStates.keys());
+		for (const id of this.remoteRunningConvs) {
+			out.add(id);
+		}
+		return Array.from(out);
 	}
 
 	getAllStreamingChats(): string[] {
 		return Array.from(this.chatStreamingStates.keys());
+	}
+
+	/**
+	 * Resync the remote running convs set from the backend. Called by the layout at mount and on
+	 * visibilitychange, no polling. A snapshot semantic: the set is replaced wholesale, stale entries
+	 * for sessions that finalized while the browser was elsewhere are dropped naturally.
+	 */
+	async syncRemoteRunningStreams(): Promise<void> {
+		let sessions: ApiStreamSession[];
+		try {
+			const resp = await fetch('./v1/streams');
+			if (!resp.ok) return;
+			const body = (await resp.json()) as unknown;
+			if (!Array.isArray(body)) return;
+			sessions = body as ApiStreamSession[];
+		} catch (e) {
+			console.warn('syncRemoteRunningStreams fetch failed:', e);
+			return;
+		}
+		const running = new SvelteSet<string>();
+		for (const s of sessions) {
+			if (s && !s.is_done && typeof s.conversation_id === 'string' && s.conversation_id) {
+				running.add(s.conversation_id);
+			}
+		}
+		for (const id of Array.from(this.remoteRunningConvs)) {
+			if (!running.has(id)) {
+				this.remoteRunningConvs.delete(id);
+			}
+		}
+		for (const id of running) {
+			this.remoteRunningConvs.add(id);
+		}
 	}
 
 	getChatStreamingPublic(convId: string): { response: string; messageId: string } | undefined {
@@ -922,6 +1219,11 @@ class ChatStore {
 				onModel: streamCallbacks.onModel,
 				onCompletionId: streamCallbacks.onCompletionId,
 				onTimings: streamCallbacks.onTimings,
+				onConnectionState: (state: StreamConnectionState) => {
+					if (convId === conversationsStore.activeConversation?.id) {
+						this.streamConnectionState = state;
+					}
+				},
 				onComplete: async (
 					finalContent?: string,
 					reasoningContent?: string,
@@ -979,6 +1281,10 @@ class ChatStore {
 	async stopGenerationForChat(convId: string): Promise<void> {
 		await this.savePartialResponseIfNeeded(convId);
 		this.setStreamingActive(false);
+		// tell the server to stop the generation, not just to drop the HTTP socket. without this
+		// the detached drain keeps producing tokens until eos or max_tokens. the conv id is the
+		// session identity so the DELETE call is straight
+		void ChatService.cancelServerStream(convId);
 		this.abortRequest(convId);
 		this.setChatLoading(convId, false);
 		this.clearChatStreaming(convId);
@@ -1403,6 +1709,11 @@ class ChatStore {
 				{
 					...this.getApiOptions(),
 					continueFinalMessage: true,
+					onConnectionState: (state: StreamConnectionState) => {
+						if (msg.convId === conversationsStore.activeConversation?.id) {
+							this.streamConnectionState = state;
+						}
+					},
 					onChunk: (chunk: string) => {
 						appendedContent += chunk;
 						hasReceivedContent = true;

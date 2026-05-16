@@ -184,6 +184,9 @@ int llama_server(int argc, char ** argv) {
         routes.post_lora_adapters          = models_routes->proxy_post;
         routes.get_slots                   = models_routes->proxy_get;
         routes.post_slots                  = models_routes->proxy_post;
+        routes.get_stream                  = models_routes->proxy_get_stream;
+        routes.get_streams                 = models_routes->proxy_get_streams;
+        routes.delete_stream               = models_routes->proxy_delete_stream;
 
         // custom routes for router
         routes.get_props                   = models_routes->get_router_props;
@@ -237,6 +240,15 @@ int llama_server(int argc, char ** argv) {
     // Save & load slots
     ctx_http.get ("/slots",                    ex_wrapper(routes.get_slots));
     ctx_http.post("/slots/:id_slot",           ex_wrapper(routes.post_slots));
+
+    // resumable streaming, the conversation_id is the session identity end to end:
+    // GET /v1/stream/<conv_id>?from=N replays SSE bytes for a session in progress or recently completed
+    ctx_http.get ("/v1/stream/:conv_id",       ex_wrapper(routes.get_stream));
+    // GET /v1/streams lists sessions, with optional conversation_id query to filter to one conv,
+    // without filter the WebUI uses it at mount and on visibilitychange to populate sidebar spinners
+    ctx_http.get ("/v1/streams",               ex_wrapper(routes.get_streams));
+    // DELETE /v1/stream/<conv_id> is the explicit user Stop, cancels the producer and evicts, idempotent
+    ctx_http.del_("/v1/stream/:conv_id",       ex_wrapper(routes.delete_stream));
 
     // Google Cloud Platform (Vertex AI) compat
     ctx_http.register_gcp_compat();
