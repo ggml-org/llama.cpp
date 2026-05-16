@@ -243,8 +243,7 @@ jobs:
             -DCMAKE_HIP_COMPILER="${env:HIP_PATH}\lib\llvm\bin\clang.exe" `
             -DHIP_PATH="${env:HIP_PATH}" `
             -DGGML_HIP_ROCWMMA_FATTN=ON `
-            -DAMDGPU_TARGETS="${{ matrix.gpu_targets }}" `
-            -DGPU_TARGETS="${{ matrix.gpu_targets }}"
+            -DAMDGPU_TARGETS="${{ matrix.gpu_targets }}"
           cmake --build . --config Release --parallel ${env:NUMBER_OF_PROCESSORS}
 
       - name: Verify HIP backend was built
