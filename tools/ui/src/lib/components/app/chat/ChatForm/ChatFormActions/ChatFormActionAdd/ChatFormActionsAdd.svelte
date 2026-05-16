@@ -60,9 +60,5 @@
 		{onMcpResourcesClick}
 		{onMcpSettingsClick}
 		{onSystemPromptClick}
-	>
-		{#snippet trigger()}
-			<ChatFormActionAddButton {disabled} />
-		{/snippet}
-	</ChatFormActionAddDropdown>
+	/>
 {/if}
