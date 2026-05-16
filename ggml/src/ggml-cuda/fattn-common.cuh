@@ -391,6 +391,18 @@ static __device__ __forceinline__ void dequantize_V_q4_0(const void * __restrict
             ((half2 *) dst)[l0/2] = d * make_half2(q8[l0 + 0], q8[l0 + 1]);
         }
     } else
+#else // FP16_AVAILABLE
+    // Software-FP16 fallback: compute in float, pack via __floats2half2_rn (RTNE).
+    // Required because the half-precision V-dequant template is instantiated <half, 4>
+    // for the full CC matrix (50/61/70/...), but FP16_AVAILABLE is undefined for CC < 600.
+    if constexpr (std::is_same_v<T, half>) {
+        const float d = __half2float(x[ib].d);
+
+#pragma unroll
+        for (int l0 = 0; l0 < ne; l0 += 2) {
+            ((half2 *) dst)[l0/2] = __floats2half2_rn(d * q8[l0 + 0], d * q8[l0 + 1]);
+        }
+    } else
 #endif // FP16_AVAILABLE
     if constexpr (std::is_same_v<T, float>) {
         const float d = x[ib].d;
@@ -429,6 +441,16 @@ static __device__ __forceinline__ void dequantize_V_q4_1(const void * __restrict
 #pragma unroll
         for (int l0 = 0; l0 < ne; l0 += 2) {
             ((half2 *) dst)[l0/2] = d * make_half2(q8[l0 + 0], q8[l0 + 1]) + m;
+        }
+    } else
+#else // FP16_AVAILABLE
+    // Software-FP16 fallback: see dequantize_V_q4_0 for the rationale.
+    if constexpr (std::is_same_v<T, half>) {
+        const float2 dm = __half22float2(x[ib].dm);
+
+#pragma unroll
+        for (int l0 = 0; l0 < ne; l0 += 2) {
+            ((half2 *) dst)[l0/2] = __floats2half2_rn(dm.x * q8[l0 + 0] + dm.y, dm.x * q8[l0 + 1] + dm.y);
         }
     } else
 #endif // FP16_AVAILABLE
@@ -481,6 +503,16 @@ static __device__ __forceinline__ void dequantize_V_q5_0(const void * __restrict
             ((half2 *) dst)[l0/2] = d * make_half2(q8[l0 + 0], q8[l0 + 1]);
         }
     } else
+#else // FP16_AVAILABLE
+    // Software-FP16 fallback: see dequantize_V_q4_0 for the rationale.
+    if constexpr (std::is_same_v<T, half>) {
+        const float d = __half2float(x[ib].d);
+
+#pragma unroll
+        for (int l0 = 0; l0 < ne; l0 += 2) {
+            ((half2 *) dst)[l0/2] = __floats2half2_rn(d * q8[l0 + 0], d * q8[l0 + 1]);
+        }
+    } else
 #endif // FP16_AVAILABLE
     if constexpr (std::is_same_v<T, float>) {
         const float d = x[ib].d;
@@ -531,6 +563,16 @@ static __device__ __forceinline__ void dequantize_V_q5_1(const void * __restrict
             ((half2 *) dst)[l0/2] = d * make_half2(q8[l0 + 0], q8[l0 + 1]) + m;
         }
     } else
+#else // FP16_AVAILABLE
+    // Software-FP16 fallback: see dequantize_V_q4_0 for the rationale.
+    if constexpr (std::is_same_v<T, half>) {
+        const float2 dm = __half22float2(x[ib].dm);
+
+#pragma unroll
+        for (int l0 = 0; l0 < ne; l0 += 2) {
+            ((half2 *) dst)[l0/2] = __floats2half2_rn(dm.x * q8[l0 + 0] + dm.y, dm.x * q8[l0 + 1] + dm.y);
+        }
+    } else
 #endif // FP16_AVAILABLE
     if constexpr (std::is_same_v<T, float>) {
         const float2 dm = __half22float2(x[ib].dm);
@@ -562,6 +604,16 @@ static __device__ __forceinline__ void dequantize_V_q8_0(const void * __restrict
 #pragma unroll
         for (int l0 = 0; l0 < ne; l0 += 2) {
             ((half2 *) dst)[l0/2] = d * make_half2(qs[l0 + 0], qs[l0 + 1]);
+        }
+    } else
+#else // FP16_AVAILABLE
+    // Software-FP16 fallback: see dequantize_V_q4_0 for the rationale.
+    if constexpr (std::is_same<T, half>::value) {
+        const float d = __half2float(x[ib].d);
+
+#pragma unroll
+        for (int l0 = 0; l0 < ne; l0 += 2) {
+            ((half2 *) dst)[l0/2] = __floats2half2_rn(d * qs[l0 + 0], d * qs[l0 + 1]);
         }
     } else
 #endif // FP16_AVAILABLE

@@ -23,6 +23,11 @@
 #include "ggml-cuda/cumsum.cuh"
 #include "ggml-cuda/diagmask.cuh"
 #include "ggml-cuda/diag.cuh"
+#include "ggml-cuda/dsv4-fp8-kv-quantize.cuh"
+#include "ggml-cuda/dsv4-hc-expand.cuh"
+#include "ggml-cuda/dsv4-hc-split-sinkhorn.cuh"
+#include "ggml-cuda/dsv4-hc-weighted-sum.cuh"
+#include "ggml-cuda/dsv4-rope-tail.cuh"
 #include "ggml-cuda/fattn.cuh"
 #include "ggml-cuda/getrows.cuh"
 #include "ggml-cuda/im2col.cuh"
@@ -2777,7 +2782,52 @@ static void ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
         nb1, nb2, nb3, stream);
 }
 
+// ---------- DSV4 debug logging (env-gated, set GGML_DSV4_DEBUG=1 to enable) ----------
+static bool dsv4_debug_enabled() {
+    static const bool enabled = (getenv("GGML_DSV4_DEBUG") != nullptr);
+    return enabled;
+}
+
+static const char * dsv4_op_short(enum ggml_op op) {
+    switch (op) {
+        case GGML_OP_DSV4_ROPE_TAIL:         return "DSV4_ROPE_TAIL";
+        case GGML_OP_DSV4_HC_SPLIT_SINKHORN: return "DSV4_HC_SPLIT_SINKHORN";
+        case GGML_OP_DSV4_HC_WEIGHTED_SUM:   return "DSV4_HC_WEIGHTED_SUM";
+        case GGML_OP_DSV4_HC_EXPAND:         return "DSV4_HC_EXPAND";
+        case GGML_OP_DSV4_FP8_KV_QUANTIZE:   return "DSV4_FP8_KV_QUANTIZE";
+        default:                              return nullptr;
+    }
+}
+
+static bool dsv4_op_is_v4(enum ggml_op op) {
+    return dsv4_op_short(op) != nullptr;
+}
+
+static void dsv4_log_op_entry(int device, const struct ggml_tensor * dst) {
+    if (!dsv4_debug_enabled() || !dsv4_op_is_v4(dst->op)) return;
+    fprintf(stderr, "[DSV4_DEBUG] dev=%d op=%s dst=%s(%s) shape=[%lld,%lld,%lld,%lld]\n",
+            device, dsv4_op_short(dst->op),
+            dst->name, ggml_type_name(dst->type),
+            (long long) dst->ne[0], (long long) dst->ne[1],
+            (long long) dst->ne[2], (long long) dst->ne[3]);
+    for (int i = 0; i < GGML_MAX_SRC; i++) {
+        if (!dst->src[i]) continue;
+        const char * buft_name = "(null-buf)";
+        int is_split = 0;
+        if (dst->src[i]->buffer) {
+            buft_name = ggml_backend_buft_name(dst->src[i]->buffer->buft);
+            is_split  = ggml_backend_buft_is_cuda_split(dst->src[i]->buffer->buft) ? 1 : 0;
+        }
+        fprintf(stderr, "[DSV4_DEBUG]   src[%d]=%s(%s) buft=%s split=%d data=%p extra=%p\n",
+                i, dst->src[i]->name, ggml_type_name(dst->src[i]->type),
+                buft_name, is_split, dst->src[i]->data, (void *) dst->src[i]->extra);
+    }
+    fflush(stderr);
+}
+// ---------- end DSV4 debug ----------
+
 static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct ggml_tensor * dst) {
+    dsv4_log_op_entry(ctx.device, dst);
     switch (dst->op) {
         case GGML_OP_ARGMAX:
             ggml_cuda_argmax(ctx, dst);
@@ -3020,6 +3070,9 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
         case GGML_OP_ROPE_BACK:
             ggml_cuda_op_rope_back(ctx, dst);
             break;
+        case GGML_OP_DSV4_ROPE_TAIL:
+            ggml_cuda_op_dsv4_rope_tail(ctx, dst);
+            break;
         case GGML_OP_ROLL:
             ggml_cuda_op_roll(ctx, dst);
             break;
@@ -3089,6 +3142,12 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
         case GGML_OP_RWKV_WKV7:
             ggml_cuda_op_rwkv_wkv7(ctx, dst);
             break;
+        case GGML_OP_DSV4_HC_EXPAND:
+            ggml_cuda_op_dsv4_hc_expand(ctx, dst);
+            break;
+        case GGML_OP_DSV4_FP8_KV_QUANTIZE:
+            ggml_cuda_op_dsv4_fp8_kv_quantize(ctx, dst);
+            break;
         case GGML_OP_CROSS_ENTROPY_LOSS_BACK:
             ggml_cuda_cross_entropy_loss_back(ctx, dst);
             break;
@@ -3103,6 +3162,12 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
             break;
         case GGML_OP_FILL:
             ggml_cuda_op_fill(ctx, dst);
+            break;
+        case GGML_OP_DSV4_HC_SPLIT_SINKHORN:
+            ggml_cuda_op_dsv4_hc_split_sinkhorn(ctx, dst);
+            break;
+        case GGML_OP_DSV4_HC_WEIGHTED_SUM:
+            ggml_cuda_op_dsv4_hc_weighted_sum(ctx, dst);
             break;
         default:
             return false;
@@ -3208,7 +3273,30 @@ static bool ggml_backend_cuda_cpy_tensor_async(ggml_backend_t backend_src, ggml_
 #ifdef GGML_CUDA_NO_PEER_COPY
             return false;
 #else
+            if (dsv4_debug_enabled()) {
+                fprintf(stderr, "[DSV4_DEBUG] peer-copy: src_dev=%d dst_dev=%d bytes=%zu "
+                                "src=%s(%s,op=%s,buft=%s) dst=%s(%s,op=%s,buft=%s) src_ptr=%p dst_ptr=%p\n",
+                        cuda_ctx_src->device, cuda_ctx_dst->device, ggml_nbytes(dst),
+                        src->name, ggml_type_name(src->type), ggml_op_name(src->op),
+                        src->buffer ? ggml_backend_buft_name(src->buffer->buft) : "?",
+                        dst->name, ggml_type_name(dst->type), ggml_op_name(dst->op),
+                        dst->buffer ? ggml_backend_buft_name(dst->buffer->buft) : "?",
+                        src->data, dst->data);
+                fflush(stderr);
+                // Force any deferred CUDA error to surface BEFORE the next op, so the log line
+                // immediately above truly identifies the failing copy (codex review nit #1).
+                cudaError_t pre_err = cudaGetLastError();
+                if (pre_err != cudaSuccess) {
+                    fprintf(stderr, "[DSV4_DEBUG] pre-copy stale error: %s\n", cudaGetErrorString(pre_err));
+                    fflush(stderr);
+                }
+            }
             CUDA_CHECK(cudaMemcpyPeerAsync(dst->data, cuda_ctx_dst->device, src->data, cuda_ctx_src->device, ggml_nbytes(dst), cuda_ctx_src->stream()));
+            if (dsv4_debug_enabled()) {
+                // Synchronous wait to force the async error (if any) to surface at the offending copy,
+                // not at some later API call. Heavy perturbation — only with GGML_DSV4_DEBUG=1.
+                CUDA_CHECK(cudaStreamSynchronize(cuda_ctx_src->stream()));
+            }
 #endif // GGML_CUDA_NO_PEER_COPY
         }
 
@@ -5034,8 +5122,17 @@ static ggml_backend_buffer_type_t ggml_backend_cuda_device_get_host_buffer_type(
 static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const ggml_tensor * op) {
     ggml_backend_cuda_device_context * dev_ctx = (ggml_backend_cuda_device_context *) dev->context;
 
-    // split buffers can only be used with GGML_OP_MUL_MAT
-    if (op->op != GGML_OP_MUL_MAT) {
+    // split buffers can only be used with GGML_OP_MUL_MAT and DeepSeek V4 custom ops.
+    // Without the DSV4 exception, multi-GPU scheduler rejects the V4 ops once their
+    // weight tensors land in cuda_split buffers and falls back to CPU — which then
+    // corrupts data via host<->device transfer mismatches and crashes during decode.
+    // Reported and root-caused by @DenisVASI9 on an 8x A100 40GB rig.
+    if (op->op != GGML_OP_MUL_MAT &&
+        op->op != GGML_OP_DSV4_HC_SPLIT_SINKHORN &&
+        op->op != GGML_OP_DSV4_HC_WEIGHTED_SUM &&
+        op->op != GGML_OP_DSV4_HC_EXPAND &&
+        op->op != GGML_OP_DSV4_FP8_KV_QUANTIZE &&
+        op->op != GGML_OP_DSV4_ROPE_TAIL) {
         for (int i = 0; i < GGML_MAX_SRC; i++) {
             if (op->src[i] && op->src[i]->buffer && ggml_backend_buft_is_cuda_split(op->src[i]->buffer->buft)) {
                 return false;
@@ -5047,6 +5144,30 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
     for (int i = 0; i < GGML_MAX_SRC; i++) {
         if (op->src[i] && op->src[i]->buffer && ggml_backend_buft_is_cuda(op->src[i]->buffer->buft)) {
             ggml_backend_cuda_buffer_type_context * buft_ctx = (ggml_backend_cuda_buffer_type_context *)op->src[i]->buffer->buft->context;
+            if (buft_ctx->device != dev_ctx->device) {
+                return false;
+            }
+        }
+    }
+
+    // Some ops write through a pre-allocated destination buffer (e.g. SET_ROWS
+    // into a KV cache). For those, the dst lives on a specific device — dispatching
+    // the op on a different device causes the CUDA kernel to write through a
+    // foreign-device pointer (dst->data), surfacing as cudaErrorIllegalAddress.
+    //
+    // SET_ROWS returns a view tensor (ggml_view_tensor(ctx, a)) so op->buffer is
+    // nullptr. We must walk the view chain to find the real buffer.
+    // Diagnosed via CUDA_LAUNCH_BLOCKING=1 + GGML_DSV4_DEBUG=1 on @DenisVASI9's
+    // 8x A100 rig: V4's dsv4_store_cache_rows emits SET_ROWS at layer-7 K-cache
+    // (on CUDA1) while sched dispatched on CUDA0 → illegal access.
+    {
+        const ggml_tensor * t = op;
+        while (t->view_src) {
+            t = t->view_src;
+        }
+        if (t->buffer && ggml_backend_buft_is_cuda(t->buffer->buft)) {
+            ggml_backend_cuda_buffer_type_context * buft_ctx =
+                (ggml_backend_cuda_buffer_type_context *) t->buffer->buft->context;
             if (buft_ctx->device != dev_ctx->device) {
                 return false;
             }
@@ -5358,6 +5479,23 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
         case GGML_OP_ROPE_BACK: {
             return op->src[0]->nb[0] == ggml_type_size(op->src[0]->type) && ggml_is_contiguous_2(op->src[0]);
         }
+        case GGML_OP_DSV4_ROPE_TAIL: {
+            // Only F32 in/out is supported on this kernel (matches Metal kargs).
+            if (op->src[0]->type != GGML_TYPE_F32 || op->type != GGML_TYPE_F32) {
+                return false;
+            }
+            // Kernel implements mode == NORMAL (0) and mode == NEOX (2);
+            // any other mode is rejected so the framework falls back to CPU
+            // rather than producing wrong output. ggml/src/ggml.c:6426 ASSERTs
+            // this constraint at op-construction time, but we re-check here
+            // for defense-in-depth.
+            const int32_t mode = ggml_get_op_params_i32(op, 1);
+            if (mode != GGML_ROPE_TYPE_NORMAL && mode != GGML_ROPE_TYPE_NEOX) {
+                return false;
+            }
+            // Same contiguity requirement as GGML_OP_ROPE.
+            return op->src[0]->nb[0] == ggml_type_size(op->src[0]->type) && ggml_is_contiguous_2(op->src[0]);
+        }
         case GGML_OP_IM2COL:
         case GGML_OP_IM2COL_3D:
         case GGML_OP_CONV_2D:
@@ -5393,6 +5531,12 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
         case GGML_OP_GATED_LINEAR_ATTN:
         case GGML_OP_RWKV_WKV7:
             return true;
+        case GGML_OP_DSV4_HC_EXPAND:
+            return op->type == GGML_TYPE_F32
+                && op->src[0]->type == GGML_TYPE_F32
+                && op->src[1]->type == GGML_TYPE_F32
+                && op->src[2]->type == GGML_TYPE_F32
+                && op->src[3]->type == GGML_TYPE_F32;
         case GGML_OP_GATED_DELTA_NET:
             //TODO: enable once MUSA compiler is solved https://github.com/ggml-org/llama.cpp/pull/19504#issuecomment-4018634327
 #ifdef GGML_USE_MUSA
@@ -5400,6 +5544,9 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
 #else
             return true;
 #endif // GGML_USE_MUSA
+        case GGML_OP_DSV4_FP8_KV_QUANTIZE:
+            return op->type == GGML_TYPE_F32
+                && op->src[0]->type == GGML_TYPE_F32;
         case GGML_OP_FLASH_ATTN_EXT:
             return ggml_cuda_flash_attn_ext_supported(dev_ctx->device, op);
         case GGML_OP_CROSS_ENTROPY_LOSS:
@@ -5412,6 +5559,15 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
         case GGML_OP_DIAG:
         case GGML_OP_SOLVE_TRI:
             return true;
+        case GGML_OP_DSV4_HC_SPLIT_SINKHORN:
+            return op->src[0]->type == GGML_TYPE_F32 &&
+                   op->src[1]->type == GGML_TYPE_F32 &&
+                   op->src[2]->type == GGML_TYPE_F32 &&
+                   op->type         == GGML_TYPE_F32;
+        case GGML_OP_DSV4_HC_WEIGHTED_SUM:
+            return op->type         == GGML_TYPE_F32
+                && op->src[0]->type == GGML_TYPE_F32
+                && op->src[1]->type == GGML_TYPE_F32;
 
         default:
             return false;
