@@ -470,10 +470,10 @@ class EvalState:
 <title>{self.dataset_type.upper()} Eval</title>
 <style>
         body {{ font-family: system-ui, sans-serif; margin: 0; padding: 16px; background: #fff; color: #222; }}
-        .bar {{ padding: 8px 0; font-size: 14px; color: #555; }}
+        .bar {{ padding: 8px 0; font-size: 14px; color: #555; font-family: 'SF Mono', 'Menlo', 'Consolas', monospace; }}
         .bar span {{ margin-right: 20px; }}
         .bar b {{ color: #222; }}
-        table {{ width: 100%; border-collapse: collapse; font-size: 13px; }}
+        table {{ width: 100%; border-collapse: collapse; font-size: 13px; font-family: 'SF Mono', 'Menlo', 'Consolas', monospace; }}
         th {{ text-align: left; padding: 6px 8px; border-bottom: 2px solid #ccc; font-weight: 600; }}
         td {{ padding: 4px 8px; border-bottom: 1px solid #eee; vertical-align: top; }}
         .task-row {{ cursor: pointer; }}
@@ -487,9 +487,7 @@ class EvalState:
         .details-content {{ padding: 8px 16px; background: #f6f8fa; font-size: 12px; }}
         .details-content b {{ color: #555; }}
         .details-content pre {{ background: #fff; border: 1px solid #e1e4e8; padding: 8px; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word; margin: 4px 0 8px; }}
-        .summary-section {{ margin: 16px 0; }}
-        .summary-section h2 {{ font-size: 15px; margin: 0 0 6px; color: #555; }}
-        .summary-table {{ margin-bottom: 16px; font-family: 'SF Mono', 'Menlo', 'Consolas', monospace; font-size: 13px; width: auto; }}
+        .summary-table {{ margin-bottom: 16px; font-size: 13px; width: 100%; }}
         .summary-row {{ background: #fafbfc; }}
         .summary-row:hover {{ background: #f5f5f5; }}
         .summary-table th {{ text-align: right; font-weight: 600; }}
@@ -497,6 +495,12 @@ class EvalState:
         .summary-table th[colspan] {{ text-align: center; }}
         .summary-table td {{ text-align: right; }}
         .summary-table td:first-child {{ text-align: left; }}
+        .tabs {{ display: flex; border-bottom: 2px solid #ddd; margin: 12px 0 0; }}
+        .tab-btn {{ padding: 6px 16px; border: none; background: none; font-size: 13px; cursor: pointer; color: #555; border-bottom: 2px solid transparent; margin-bottom: -2px; font-weight: 500; }}
+        .tab-btn:hover {{ color: #222; }}
+        .tab-btn.active {{ color: #222; border-bottom-color: #222; font-weight: 600; }}
+        .tab-content {{ display: none; }}
+        .tab-content.active {{ display: block; }}
 </style>
 </head>
 <body>
@@ -509,8 +513,30 @@ class EvalState:
         <span>Time: {self.total_time:.1f}s</span>
         <span>Sampling: {sampling_str}</span>
     </div>
-    <div class="summary-section">
-        <h2>Per-Problem Summary</h2>
+    <div class="tabs">
+        <button class="tab-btn active" data-tab="detailed" onclick="switchTab(this)">Detailed</button>
+        <button class="tab-btn" data-tab="summary" onclick="switchTab(this)">Summary</button>
+    </div>
+    <div id="tab-detailed" class="tab-content active">
+        <table>
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th></th>
+                    <th>Gold</th>
+                    <th>Answer</th>
+                    <th>Tokens</th>
+                    <th>T/s</th>
+                    <th>Gen s</th>
+                    <th>Server</th>
+                </tr>
+            </thead>
+            <tbody>
+                {rows_html}
+            </tbody>
+        </table>
+    </div>
+    <div id="tab-summary" class="tab-content">
         <table class="summary-table">
             <thead>
                 <tr>
@@ -535,25 +561,14 @@ class EvalState:
             </tbody>
         </table>
     </div>
-    <table>
-        <thead>
-            <tr>
-                <th>ID</th>
-                <th></th>
-                <th>Gold</th>
-                <th>Answer</th>
-                <th>Tokens</th>
-                <th>T/s</th>
-                <th>Gen s</th>
-                <th>Server</th>
-            </tr>
-        </thead>
-        <tbody>
-            {rows_html}
-        </tbody>
-    </table>
     <script>
         function toggleDetails(id) {{ document.getElementById('details-'+id).classList.toggle('open'); }}
+        function switchTab(btn) {{
+            document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+            document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+            btn.classList.add('active');
+            document.getElementById('tab-'+btn.dataset.tab).classList.add('active');
+        }}
     </script>
 </body>
 </html>"""
