@@ -106,6 +106,11 @@
 	onmouseover={handleMouseOver}
 	onmouseleave={handleMouseLeave}
 	onfocusin={handleMouseOver}
+	onfocusout={(e) => {
+		if (!e.currentTarget.contains(e.relatedTarget as Node | null)) {
+			handleMouseLeave();
+		}
+	}}
 >
 	<div
 		class="flex min-w-0 flex-1 items-center gap-2"
