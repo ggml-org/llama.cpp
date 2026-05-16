@@ -4,6 +4,7 @@
 
 #include "../src/llama-ext.h"
 
+#include <algorithm>
 #include <array>
 #include <cassert>
 #include <stdexcept>
@@ -196,6 +197,77 @@ static void common_params_fit_impl(
         }
     }
 
+    // In tensor split mode the meta device hides per-physical-GPU free memory; enumerate
+    // the underlying devices so we can weight tensor_split when uniform would OOM.
+    size_t n_phys = 0;
+    std::vector<int64_t> phys_free_mib;
+    bool auto_ts = false;
+    if (mparams->split_mode == LLAMA_SPLIT_MODE_TENSOR && nd == 1 && tensor_split &&
+            ggml_backend_dev_type(devs[0]) == GGML_BACKEND_DEVICE_TYPE_META) {
+        n_phys = ggml_backend_meta_dev_n_devs(devs[0]);
+        bool user_set_split = false;
+        if (n_phys > 1 && mparams->tensor_split) {
+            for (size_t i = 0; i < n_phys; i++) {
+                if (mparams->tensor_split[i] != 0.0f) {
+                    user_set_split = true;
+                    break;
+                }
+            }
+        }
+        if (n_phys > 1 && !user_set_split) {
+            phys_free_mib.resize(n_phys);
+            for (size_t i = 0; i < n_phys; i++) {
+                ggml_backend_dev_t phys = ggml_backend_meta_dev_simple_dev(devs[0], i);
+                size_t f = 0, t = 0;
+                ggml_backend_dev_memory(phys, &f, &t);
+                phys_free_mib[i] = int64_t(f / MiB);
+                LOG_TRC("%s:   - phys[%zu]: %s (%s), free=%6" PRId64 " MiB\n",
+                    __func__, i, ggml_backend_dev_name(phys), ggml_backend_dev_description(phys), phys_free_mib[i]);
+            }
+            auto_ts = true;
+
+            // nd == 1 collapses the per-device margin loop to margins[0]; sum the per-physical
+            // margins so the aggregate budget matches what -sm layer would reserve.
+            int64_t agg = 0;
+            for (size_t i = 0; i < n_phys; i++) {
+                agg += int64_t(margins_s[i]);
+            }
+            margins[0] = agg;
+        }
+    }
+
+    // Per-GPU usage is estimated from the meta-device aggregate as m_total / n_phys.
+    auto finalize_tensor_split = [&](int64_t m_total_mib) {
+        if (!auto_ts) {
+            return;
+        }
+        const int64_t per_phys_uniform = m_total_mib / int64_t(n_phys);
+        int64_t min_free = INT64_MAX;
+        size_t  tight    = 0;
+        for (size_t i = 0; i < n_phys; i++) {
+            const int64_t h = phys_free_mib[i];
+            if (h < min_free) {
+                min_free = h;
+                tight    = i;
+            }
+        }
+        if (per_phys_uniform <= min_free) {
+            LOG_TRC("%s: tensor split: uniform fits (need=%" PRId64 " <= free %" PRId64 " MiB on phys[%zu])\n",
+                __func__, per_phys_uniform, min_free, tight);
+            return;
+        }
+        LOG_TRC("%s: tensor split: uniform would OOM (need=%" PRId64 " > free %" PRId64 " MiB on phys[%zu]), weighting by free memory\n",
+            __func__, per_phys_uniform, min_free, tight);
+        bool any = false;
+        for (size_t i = 0; i < n_phys; i++) {
+            tensor_split[i] = float(phys_free_mib[i]);
+            any = any || phys_free_mib[i] > 0;
+        }
+        if (any) {
+            mparams->tensor_split = tensor_split;
+        }
+    };
+
     int64_t sum_free            = 0;
     int64_t sum_projected_free  = 0;
     int64_t sum_projected_used  = 0;
@@ -242,6 +314,7 @@ static void common_params_fit_impl(
             if (projected_free_per_device[0] >= margins[0]) {
                 LOG_TRC("%s: will leave %" PRId64 " >= %" PRId64 " MiB of free device memory, no changes needed\n",
                     __func__, projected_free_per_device[0]/MiB, margins[0]/MiB);
+                finalize_tensor_split(int64_t(dmds_full[0].mb.total() / MiB));
                 return;
             }
         } else {
@@ -321,6 +394,11 @@ static void common_params_fit_impl(
                             __func__, hp_nct, cparams->n_ctx, memory_reduction/MiB);
                         if (nd <= 1) {
                             LOG_TRC("%s: entire model can be fit by reducing context\n", __func__);
+                            if (auto_ts) {
+                                const dmds_t d = common_get_device_memory_data(
+                                    path_model, mparams, cparams, devs, hp_ngl, hp_nct, hp_nex, log_level);
+                                finalize_tensor_split(int64_t(d[0].mb.total() / MiB));
+                            }
                             return;
                         }
                         LOG_TRC("%s: entire model should be fit across devices by reducing context\n", __func__);
@@ -618,6 +696,7 @@ static void common_params_fit_impl(
     }
     if (!moe_partial_offload_ok || global_surplus_cpu_moe <= 0) {
         set_ngl_tensor_split_tbo(ngl_per_device, overflow_bufts, *mparams);
+        finalize_tensor_split(int64_t(mem[0] / MiB));
         return;
     }
 
