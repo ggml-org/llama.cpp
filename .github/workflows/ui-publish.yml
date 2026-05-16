@@ -13,8 +13,13 @@ on:
         required: true
 
 jobs:
+  build:
+    name: Build static output
+    uses: ./.github/workflows/ui-build.yml
+
   publish:
     name: Publish UI Static Output
+    needs: build
     runs-on: ubuntu-24.04-arm
 
     permissions:
