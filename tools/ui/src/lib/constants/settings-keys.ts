@@ -53,6 +53,7 @@ export const SETTINGS_KEYS = {
 	DRY_PENALTY_LAST_N: 'dry_penalty_last_n',
 	// MCP
 	MCP_SERVERS: 'mcpServers',
+	MCP_REQUEST_TIMEOUT_SECONDS: 'mcpRequestTimeoutSeconds',
 	AGENTIC_MAX_TURNS: 'agenticMaxTurns',
 	ALWAYS_SHOW_AGENTIC_TURNS: 'alwaysShowAgenticTurns',
 	AGENTIC_MAX_TOOL_PREVIEW_LINES: 'agenticMaxToolPreviewLines',

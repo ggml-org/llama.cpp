@@ -23,7 +23,8 @@ import type {
 	SettingsSectionEntry,
 	SettingsSection
 } from '$lib/types';
-import { CLI_FLAGS } from '$lib/constants';
+import { CLI_FLAGS, DEFAULT_MCP_CONFIG } from '$lib/constants';
+import McpLogo from '$lib/components/app/mcp/McpLogo.svelte';
 import { SETTINGS_KEYS } from './settings-keys';
 import { ROUTES, SETTINGS_SECTION_SLUGS } from './routes';
 import { TITLE_GENERATION } from './title-generation';
@@ -35,6 +36,7 @@ export const SETTINGS_SECTION_TITLES = {
 	PENALTIES: 'Penalties',
 	AGENTIC: 'Agentic',
 	TOOLS: 'Tools',
+	MCP: 'MCP',
 	IMPORT_EXPORT: 'Import/Export',
 	DEVELOPER: 'Developer'
 } as const;
@@ -657,6 +659,22 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				section: SETTINGS_SECTION_SLUGS.DEVELOPER
 			}
 		]
+	},
+	[SETTINGS_SECTION_SLUGS.MCP]: {
+		title: SETTINGS_SECTION_TITLES.MCP,
+		slug: SETTINGS_SECTION_SLUGS.MCP,
+		icon: McpLogo,
+		settings: [
+			{
+				key: SETTINGS_KEYS.MCP_REQUEST_TIMEOUT_SECONDS,
+				label: 'Request timeout (seconds)',
+				help: 'Default timeout for individual MCP tool calls. Can be overridden per server.',
+				defaultValue: DEFAULT_MCP_CONFIG.requestTimeoutSeconds,
+				type: SettingsFieldType.INPUT,
+				section: SETTINGS_SECTION_SLUGS.MCP,
+				isPositiveInteger: true
+			}
+		]
 	}
 } as const;
 
@@ -727,6 +745,7 @@ export const SETTINGS_CHAT_SECTIONS: SettingsSection[] = [
 			label: s.label,
 			type: s.type,
 			isExperimental: s.isExperimental,
+			isPositiveInteger: s.isPositiveInteger,
 			help: s.help,
 			options: s.options
 		}))

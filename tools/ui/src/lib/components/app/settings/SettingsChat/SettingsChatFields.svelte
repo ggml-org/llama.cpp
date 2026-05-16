@@ -79,6 +79,8 @@
 			<div class="relative w-full">
 				<Input
 					id={field.key}
+					type={field.isPositiveInteger ? 'number' : 'text'}
+					{...field.isPositiveInteger ? { min: '1', step: '1' } : {}}
 					value={currentValue}
 					oninput={(e) => {
 						// Update local config immediately for real-time badge feedback
