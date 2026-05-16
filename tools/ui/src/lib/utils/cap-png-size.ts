@@ -1,14 +1,15 @@
+import { MEGAPIXELS_TO_PIXELS } from '$lib/constants/image-size';
 import { MimeTypeImage } from '$lib/enums';
 
 /**
  * Converts a PNG base64 data URL to another PNG data URL with capped dimensions to reduce file size.
  * @param base64UrlPng - The PNG base64 data URL to convert
- * @param maxMegapixels - The maximum megapixels for the output PNG (default: 1.048576 MP for 1024x1024)
+ * @param maxMegapixels - The maximum image size in megapixels for the output PNG
  * @returns Promise resolving to PNG data URL
  */
 export function capPngDataURLSize(
 	base64UrlPng: string,
-	maxMegapixels: number = 1.048576
+	maxMegapixels: number
 ): Promise<string> {
 	return new Promise((resolve, reject) => {
 		try {
@@ -26,7 +27,7 @@ export function capPngDataURLSize(
 				const targetWidth = img.naturalWidth;
 				const targetHeight = img.naturalHeight;
 				const totalPixels = targetWidth * targetHeight;
-				const maxPixels = Math.floor(maxMegapixels * 1_000_000);
+				const maxPixels = Math.floor(maxMegapixels * MEGAPIXELS_TO_PIXELS);
 
 				if (maxPixels > 0 && totalPixels > maxPixels) {
 					const scaleFactor = Math.sqrt(maxPixels / totalPixels);
