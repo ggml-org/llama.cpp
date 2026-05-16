@@ -1,11 +1,14 @@
 <script lang="ts">
-	import type { Snippet } from 'svelte';
+	import { Plus } from '@lucide/svelte';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import * as Tooltip from '$lib/components/ui/tooltip';
+	import { buttonVariants } from '$lib/components/ui/button';
+	import { cn } from '$lib/components/ui/utils';
 	import {
 		ATTACHMENT_FILE_ITEMS,
 		ATTACHMENT_EXTRA_ITEMS,
 		ATTACHMENT_MCP_ITEMS,
+		ATTACHMENT_TOOLTIP_TEXT,
 		TOOLTIP_DELAY_DURATION
 	} from '$lib/constants';
 	import { AttachmentMenuItemId } from '$lib/enums';
@@ -28,7 +31,6 @@
 		onMcpPromptClick?: () => void;
 		onMcpSettingsClick?: () => void;
 		onMcpResourcesClick?: () => void;
-		trigger: Snippet<[{ disabled: boolean }]>;
 	}
 
 	let {
@@ -42,8 +44,7 @@
 		onSystemPromptClick,
 		onMcpPromptClick,
 		onMcpSettingsClick,
-		onMcpResourcesClick,
-		trigger
+		onMcpResourcesClick
 	}: Props = $props();
 
 	let dropdownOpen = $state(false);
@@ -69,9 +70,28 @@
 
 <div class="flex items-center gap-1 {className}">
 	<DropdownMenu.Root bind:open={dropdownOpen}>
-		<DropdownMenu.Trigger name="Attach files" {disabled}>
-			{@render trigger({ disabled })}
-		</DropdownMenu.Trigger>
+		<Tooltip.Root>
+			<Tooltip.Trigger>
+				{#snippet child({ props })}
+					<DropdownMenu.Trigger
+						{...props}
+						class={cn(
+							buttonVariants({ variant: 'secondary' }),
+							'file-upload-button h-8 w-8 cursor-pointer rounded-full p-0'
+						)}
+						{disabled}
+					>
+						<span class="sr-only">{ATTACHMENT_TOOLTIP_TEXT}</span>
+
+						<Plus class="h-4 w-4" />
+					</DropdownMenu.Trigger>
+				{/snippet}
+			</Tooltip.Trigger>
+
+			<Tooltip.Content>
+				<p>{ATTACHMENT_TOOLTIP_TEXT}</p>
+			</Tooltip.Content>
+		</Tooltip.Root>
 
 		<DropdownMenu.Content align="start" class="w-48">
 			{#each ATTACHMENT_FILE_ITEMS as item (item.id)}
@@ -87,15 +107,16 @@
 					</DropdownMenu.Item>
 				{:else if item.disabledTooltip}
 					<Tooltip.Root delayDuration={TOOLTIP_DELAY_DURATION}>
-						<Tooltip.Trigger class="w-full">
-							<DropdownMenu.Item
-								class="{item.class ?? ''} flex cursor-pointer items-center gap-2"
-								disabled
-							>
-								<item.icon class="h-4 w-4" />
+						<Tooltip.Trigger tabindex={-1}>
+							{#snippet child({ props })}
+								<div {...props} class="cursor-default">
+									<DropdownMenu.Item class="{item.class ?? ''} flex items-center gap-2" disabled>
+										<item.icon class="h-4 w-4" />
 
-								<span>{item.label}</span>
-							</DropdownMenu.Item>
+										<span>{item.label}</span>
+									</DropdownMenu.Item>
+								</div>
+							{/snippet}
 						</Tooltip.Trigger>
 
 						<Tooltip.Content side="right">
@@ -107,20 +128,23 @@
 
 			{#if !attachmentMenu.isItemEnabled('hasVisionModality')}
 				<Tooltip.Root delayDuration={TOOLTIP_DELAY_DURATION}>
-					<Tooltip.Trigger class="w-full">
-						<DropdownMenu.Item
-							class="flex cursor-pointer items-center gap-2"
-							onclick={attachmentMenu.callbacks.onFileUpload}
-						>
-							{@const pdfItem = ATTACHMENT_FILE_ITEMS.find(
-								(i) => i.id === AttachmentMenuItemId.PDF
-							)}
-							{#if pdfItem}
-								<pdfItem.icon class="h-4 w-4" />
+					<Tooltip.Trigger>
+						{#snippet child({ props })}
+							<DropdownMenu.Item
+								{...props}
+								class="flex cursor-pointer items-center gap-2"
+								onclick={attachmentMenu.callbacks.onFileUpload}
+							>
+								{@const pdfItem = ATTACHMENT_FILE_ITEMS.find(
+									(i) => i.id === AttachmentMenuItemId.PDF
+								)}
+								{#if pdfItem}
+									<pdfItem.icon class="h-4 w-4" />
 
-								<span>{pdfItem.label}</span>
-							{/if}
-						</DropdownMenu.Item>
+									<span>{pdfItem.label}</span>
+								{/if}
+							</DropdownMenu.Item>
+						{/snippet}
 					</Tooltip.Trigger>
 
 					<Tooltip.Content side="right">
@@ -134,15 +158,18 @@
 			{#each ATTACHMENT_EXTRA_ITEMS as item (item.id)}
 				{#if item.id === AttachmentMenuItemId.SYSTEM_MESSAGE}
 					<Tooltip.Root delayDuration={TOOLTIP_DELAY_DURATION}>
-						<Tooltip.Trigger class="w-full">
-							<DropdownMenu.Item
-								class="flex cursor-pointer items-center gap-2"
-								onclick={() => attachmentMenu.callbacks[item.action]()}
-							>
-								<item.icon class="h-4 w-4" />
+						<Tooltip.Trigger>
+							{#snippet child({ props })}
+								<DropdownMenu.Item
+									{...props}
+									class="flex cursor-pointer items-center gap-2"
+									onclick={() => attachmentMenu.callbacks[item.action]()}
+								>
+									<item.icon class="h-4 w-4" />
 
-								<span>{item.label}</span>
-							</DropdownMenu.Item>
+									<span>{item.label}</span>
+								</DropdownMenu.Item>
+							{/snippet}
 						</Tooltip.Trigger>
 
 						<Tooltip.Content side="right">
