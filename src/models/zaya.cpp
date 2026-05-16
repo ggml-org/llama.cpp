@@ -288,8 +288,8 @@ llama_model_zaya::graph::graph(const llama_model & model, const llm_graph_params
             ggml_build_forward_expand(gf, ggml_cpy(ctx0, last_hs, prev_hs_update_target));
 
             ggml_tensor * conv_dw = layer.cca_conv_dw;
-            if (conv_dw->type != GGML_TYPE_F32) {
-                conv_dw = ggml_cast(ctx0, conv_dw, GGML_TYPE_F32);
+            if (conv_dw->type != GGML_TYPE_F16) {
+                conv_dw = ggml_cast(ctx0, conv_dw, GGML_TYPE_F16);
             }
             conv_dw = ggml_reshape_3d(ctx0, conv_dw, conv_dw->ne[0], 1, n_qk);
             ggml_tensor * QK = ggml_conv_1d_dw(ctx0, conv_dw, conv_input, 1, 0, 1);
@@ -298,7 +298,11 @@ llama_model_zaya::graph::graph(const llama_model & model, const llm_graph_params
             }
             cb(QK, "QK_dw", il);
 
-            QK = ggml_conv_1d_grouped(ctx0, layer.cca_conv_grp, QK, 1, 0, 1, n_groups);
+            ggml_tensor * conv_grp = layer.cca_conv_grp;
+            if (conv_grp->type != GGML_TYPE_F16) {
+                conv_grp = ggml_cast(ctx0, conv_grp, GGML_TYPE_F16);
+            }
+            QK = ggml_conv_1d_grouped(ctx0, conv_grp, QK, 1, 0, 1, n_groups);
             QK = ggml_add(ctx0, QK, ggml_reshape_3d(ctx0, layer.cca_conv_grp_b, 1, n_qk, 1));
             cb(QK, "QK_grp", il);
 
