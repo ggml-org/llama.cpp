@@ -547,6 +547,8 @@ class _Qwen35MtpMixin:
     gguf_writer: gguf.GGUFWriter
     block_count: int
     tensor_map: gguf.TensorNameMap
+    no_mtp: bool
+    mtp_only: bool
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
