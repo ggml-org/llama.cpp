@@ -196,9 +196,9 @@ class Simulator:
         else:
             response_text = self._generate_wrong_answer(question)
 
-        comp_tokens = random.randint(30, 80)
-        t_gen_ms = random.uniform(500, 3000)
-        tps_gen = comp_tokens / (t_gen_ms / 1000)
+        comp_tokens = random.randint(10000, 60000)
+        tps_gen = random.uniform(90.0, 110.0)
+        t_gen_ms = comp_tokens / tps_gen * 1000
 
         return {
             "id": f"chatcmpl-{int(time.time())}",
