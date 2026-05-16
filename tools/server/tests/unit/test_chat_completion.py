@@ -158,11 +158,12 @@ def test_chat_template():
 
 @pytest.mark.parametrize("prefill,re_prefill", [
     ("Whill", "Whill"),
-    ([{"type": "text", "text": "Wh"}, {"type": "text", "text": "ill"}], "Whill"),
+    ([{"type": "text", "text": "Wh"}, {"type": "text", "text": "ill"}], "Wh\n\nill"),
 ])
 def test_chat_template_assistant_prefill(prefill, re_prefill):
     global server
-    server.chat_template = "llama3"
+    server.jinja = True
+    server.chat_template_file = "templates/llama3.jinja"
     server.debug = True  # to get the "__verbose" object in the response
     server.start()
     res = server.make_request("POST", "/chat/completions", data={
@@ -182,7 +183,8 @@ def test_chat_template_continue_final_message_vllm_compat():
     """continue_final_message is the vLLM/transformers explicit alias for the prefill_assistant heuristic.
     Both must produce the same prompt."""
     global server
-    server.chat_template = "llama3"
+    server.jinja = True
+    server.chat_template_file = "templates/llama3.jinja"
     server.debug = True
     server.start()
     res = server.make_request("POST", "/chat/completions", data={
