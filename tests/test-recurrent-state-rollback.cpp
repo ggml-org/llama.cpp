@@ -131,8 +131,55 @@ int main(int argc, char ** argv) {
         }
     }
 
+    // Repeat the load into a context that already has its own rollback state:
+    // groups 1..n_rs_seq hold a *different* prompt's history, and rs_idx[0] is
+    // non-zero at load time. The restore must wipe that state and still match.
+    llama_context * ctx_dirty = make_ctx(params, model);
+    if (ctx_dirty == nullptr) {
+        fprintf(stderr, "%s : failed to init dirty ctx\n", __func__);
+        return 1;
+    }
+
+    std::vector<llama_token> noise = tokens;
+    for (auto & t : noise) {
+        t = (t + 1) % n_vocab;
+        if (t < 0) {
+            t = 0;
+        }
+    }
+    if (!decode_tokens(ctx_dirty, noise, n_tokens)) {
+        fprintf(stderr, "%s : dirty prompt decode failed\n", __func__);
+        return 1;
+    }
+    if (!llama_memory_seq_rm(llama_get_memory(ctx_dirty), 0, last_pos, -1)) {
+        fprintf(stderr, "%s : dirty rollback failed\n", __func__);
+        return 1;
+    }
+
+    ckpt.load_tgt(ctx_dirty, 0, 0);
+
+    if (!decode_one(ctx_dirty, last_tok, last_pos)) {
+        fprintf(stderr, "%s : dirty replay failed\n", __func__);
+        return 1;
+    }
+
+    const float * logits_dirty = llama_get_logits_ith(ctx_dirty, 0);
+    if (logits_dirty == nullptr) {
+        fprintf(stderr, "%s : missing dirty logits\n", __func__);
+        return 1;
+    }
+
+    for (int i = 0; i < n_vocab; ++i) {
+        if (std::fabs(logits_src[i] - logits_dirty[i]) > eps) {
+            fprintf(stderr, "%s : dirty-ctx logits mismatch at token %d (%g != %g)\n",
+                    __func__, i, (double) logits_src[i], (double) logits_dirty[i]);
+            return 1;
+        }
+    }
+
     fprintf(stderr, "%s : recurrent rollback checkpoint restored successfully\n", __func__);
     llama_free(ctx_src);
     llama_free(ctx_dst);
+    llama_free(ctx_dirty);
     return 0;
 }
