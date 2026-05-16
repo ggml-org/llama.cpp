@@ -393,11 +393,12 @@ class EvalState:
             grader_log_str = self._escape_html(json.dumps(grader_log, indent=2))
             escaped_server = self._escape_html(server_name)
 
+            answer_class = status_class if status == "ok" else ""
             rows.append(f"""<tr class="task-row" onclick="toggleDetails('{task_id}')">
                 <td>{task_id}</td>
                 <td class="{status_class}">{status_text}</td>
                 <td>{self._escape_html(expected)}</td>
-                <td>{self._escape_html(answer)}</td>
+                <td class="{answer_class}">{self._escape_html(answer)}</td>
                 <td>{tokens_str}</td>
                 <td>{tps_str}</td>
                 <td>{t_gen_str}</td>
