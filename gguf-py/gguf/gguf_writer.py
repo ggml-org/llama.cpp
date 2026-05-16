@@ -943,6 +943,9 @@ class GGUFWriter:
     def add_attn_output_scale(self, value: float) -> None:
         self.add_float32(Keys.Attention.OUTPUT_SCALE.format(arch=self.arch), value)
 
+    def add_attn_value_scale(self, value: float) -> None:
+        self.add_float32(Keys.Attention.VALUE_SCALE.format(arch=self.arch), value)
+
     def add_attn_temperature_length(self, value: int) -> None:
         self.add_uint32(Keys.Attention.TEMPERATURE_LENGTH.format(arch=self.arch), value)
 
@@ -1148,6 +1151,9 @@ class GGUFWriter:
     def add_vision_head_count(self, value: int) -> None:
         self.add_uint32(Keys.ClipVision.Attention.HEAD_COUNT, value)
 
+    def add_vision_head_count_kv(self, value: int) -> None:
+        self.add_uint32(Keys.ClipVision.Attention.HEAD_COUNT_KV, value)
+
     def add_vision_attention_layernorm_eps(self, value: float) -> None:
         self.add_float32(Keys.ClipVision.Attention.LAYERNORM_EPS, value)
 
@@ -1219,6 +1225,9 @@ class GGUFWriter:
     def add_vision_is_deepstack_layers(self, layers: Sequence[bool]) -> None:
         self.add_array(Keys.ClipVision.IS_DEEPSTACK_LAYERS, layers)
 
+    def add_vision_wa_pattern_mode(self, modes: Sequence[int]) -> None:
+        self.add_array(Keys.ClipVision.WA_PATTERN_MODE, modes)
+
     def add_vision_window_size(self, value: int) -> None:
         self.add_uint32(Keys.ClipVision.WINDOW_SIZE, value)
 
@@ -1259,6 +1268,24 @@ class GGUFWriter:
 
     def add_audio_stack_factor(self, value: int) -> None:
         self.add_uint32(Keys.ClipAudio.Projector.STACK_FACTOR, value)
+
+    def add_audio_chunk_size(self, value: int) -> None:
+        self.add_uint32(Keys.ClipAudio.CHUNK_SIZE, value)
+
+    def add_audio_conv_kernel_size(self, value: int) -> None:
+        self.add_uint32(Keys.ClipAudio.CONV_KERNEL_SIZE, value)
+
+    def add_audio_max_pos_emb(self, value: int) -> None:
+        self.add_uint32(Keys.ClipAudio.MAX_POS_EMB, value)
+
+    def add_audio_projector_window_size(self, value: int) -> None:
+        self.add_uint32(Keys.ClipAudio.Projector.WINDOW_SIZE, value)
+
+    def add_audio_projector_downsample_rate(self, value: int) -> None:
+        self.add_uint32(Keys.ClipAudio.Projector.DOWNSAMPLE_RATE, value)
+
+    def add_audio_projector_head_count(self, value: int) -> None:
+        self.add_uint32(Keys.ClipAudio.Projector.HEAD_COUNT, value)
 
     def add_xielu_alpha_p(self, values: Sequence[float]):
         self.add_array(Keys.xIELU.ALPHA_P, values)
