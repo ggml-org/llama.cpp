@@ -172,6 +172,7 @@ Not in scope for this public fork:
 
 ## Credits
 
+- `ggml-org/llama.cpp` PR [#22673](https://github.com/ggml-org/llama.cpp/pull/22673) for the MTP (Multi-Token Prediction) speculative decoding implementation.
 - `TheTom/turboquant_plus` for public TurboQuant KV-cache engineering, benchmarking, and implementation notes:
   - https://github.com/TheTom/turboquant_plus
 - `flamme-demon/llama.cpp-hip-turboquant-tq3` for HIP/ROCm compatibility port of the TQ3 native kernels:
