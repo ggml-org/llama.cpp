@@ -420,7 +420,7 @@ void llama_context::sched_reserve() {
 
     const int64_t t_start_us = ggml_time_us();
 
-    const uint32_t n_seqs = cparams.n_seq_max;
+    const uint32_t n_seqs = model.arch == LLM_ARCH_DEEPSEEK4 ? 1 : cparams.n_seq_max;
     const uint32_t n_tokens = std::min(cparams.n_ctx, cparams.n_ubatch);
 
     const size_t max_nodes = this->graph_max_nodes(n_tokens);
@@ -594,6 +594,22 @@ void llama_context::sched_reserve() {
 
         n_splits_pp = ggml_backend_sched_get_n_splits(sched.get());
         n_nodes_pp  = ggml_graph_n_nodes(gf);
+    }
+
+    // DeepSeek V4 resumed-prompt chunks use the compressed-attention decode
+    // graph, which is larger than the position-zero prefill graph.
+    if (model.arch == LLM_ARCH_DEEPSEEK4 && n_tokens > 1) {
+        const llama_pos reserve_pos0 = std::min<llama_pos>(
+                cparams.n_ctx > n_tokens ? cparams.n_ctx - n_tokens : n_tokens,
+                std::max<uint32_t>(cparams.n_batch, 8u*n_tokens));
+        auto * gf = graph_reserve(n_tokens, n_seqs, n_tokens, mctx.get(),
+                model.hparams.no_alloc, nullptr, reserve_pos0);
+        if (!gf) {
+            throw std::runtime_error("failed to allocate DeepSeek V4 resumed pp buffers");
+        }
+
+        n_splits_pp = std::max(n_splits_pp, ggml_backend_sched_get_n_splits(sched.get()));
+        n_nodes_pp  = std::max(n_nodes_pp,  ggml_graph_n_nodes(gf));
     }
 
     // reserve with tg (token generation) graph to get the number of splits and nodes
@@ -2171,6 +2187,15 @@ uint32_t llama_context::graph_max_nodes(uint32_t n_tokens) const {
     if (model.arch == LLM_ARCH_QWEN3NEXT || model.arch == LLM_ARCH_KIMI_LINEAR || model.arch == LLM_ARCH_QWEN35 || model.arch == LLM_ARCH_QWEN35MOE) {
         return std::max<uint32_t>(n_tokens * 40, 32u * model.n_tensors());
     }
+    if (model.arch == LLM_ARCH_DEEPSEEK4) {
+        // DeepSeek V4 has a position-dependent compressed-attention decode path
+        // that creates many temporary tensor objects, especially when a long
+        // prompt is split into non-prefill ubatches. The visible graph node
+        // count is much smaller than the number of GGML objects allocated while
+        // building those graphs, so reserve a larger metadata arena than the
+        // generic tensor-count heuristic would provide.
+        return std::max<uint32_t>(524288u, n_tokens * 192 + 64u * model.n_tensors());
+    }
     uint32_t res = std::max<uint32_t>(1024u, 8u*model.n_tensors());
     for (const auto & lora : model.loras) {
         res += lora->get_n_nodes();
@@ -2183,7 +2208,7 @@ llm_graph_result * llama_context::get_gf_res_reserve() const {
 }
 
 ggml_cgraph * llama_context::graph_reserve(
-        uint32_t n_tokens, uint32_t n_seqs, uint32_t n_outputs, const llama_memory_context_i * mctx, bool split_only, size_t * sizes) {
+        uint32_t n_tokens, uint32_t n_seqs, uint32_t n_outputs, const llama_memory_context_i * mctx, bool split_only, size_t * sizes, llama_pos pos0) {
     LLAMA_LOG_DEBUG("%s: reserving a graph for ubatch with n_tokens = %4u, n_seqs = %2u, n_outputs = %4u\n", __func__, n_tokens, n_seqs, n_outputs);
     GGML_ASSERT(n_outputs >= 1);
 
@@ -2207,6 +2232,14 @@ ggml_cgraph * llama_context::graph_reserve(
 
     llama_batch_allocr balloc(model.hparams.n_pos_per_embd());
     llama_ubatch ubatch = balloc.ubatch_reserve(n_tokens/n_seqs, n_seqs);
+    if (pos0 != 0 && ubatch.pos != nullptr) {
+        for (uint32_t i = 0; i < ubatch.n_tokens; ++i) {
+            ubatch.pos[i*ubatch.n_pos] = pos0 + i;
+            for (uint32_t j = 1; j < ubatch.n_pos; ++j) {
+                ubatch.pos[i*ubatch.n_pos + j] = 0;
+            }
+        }
+    }
 
     // set one output token per sequence in order to activate all backend samplers
     std::vector<llama_seq_id> seq_ids(n_seqs);
@@ -3355,6 +3388,29 @@ llama_context * llama_init_from_model(
     if (params.flash_attn_type != LLAMA_FLASH_ATTN_TYPE_DISABLED && model->arch == LLM_ARCH_GROK) {
         LLAMA_LOG_WARN("%s: flash_attn is not compatible with Grok - forcing off\n", __func__);
         params.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_DISABLED;
+    }
+
+    // V4 (DeepSeek4) requires fp16 KV cache: V4's standard SWA K cache,
+    // compressed-attention K cache (cache.attn_k), and indexer K cache
+    // (cache.index_k) all share the same `type_k` and must agree in dtype
+    // because src/models/deepseek4.cpp concatenates the SWA K view with the
+    // compressed K view via ggml_concat (which asserts a->type == b->type).
+    // Furthermore, V4's K activations are post-fp8-quantized
+    // (ggml_dsv4_fp8_kv_quantize), and q8_0's single fp16 scale per 32-element
+    // block cannot faithfully reproduce fp8-quantized value distributions --
+    // pinning to q8_0 corrupts decode silently ("=" loops, "Mirror ..."
+    // garbage). Coerce here, before the SPLIT_MODE_TENSOR / FA / V-quant
+    // shared validations below and before the constructor's flash_attn check,
+    // so those validations see the effective fp16 types and won't reject V4
+    // requests with --cache-type-k|v q8_0. See
+    // docs/plans/v4-port-kv-q8-completion.md.
+    if (model->arch == LLM_ARCH_DEEPSEEK4) {
+        if (params.type_k != GGML_TYPE_F16 || params.type_v != GGML_TYPE_F16) {
+            LLAMA_LOG_WARN("DeepSeek4: forcing fp16 KV cache (--cache-type-k|v are ignored for V4 because compressed/indexer K caches require fp16; "
+                           "see docs/plans/v4-port-kv-q8-completion.md)\n");
+            params.type_k = GGML_TYPE_F16;
+            params.type_v = GGML_TYPE_F16;
+        }
     }
 
     if (model->split_mode() == LLAMA_SPLIT_MODE_TENSOR) {

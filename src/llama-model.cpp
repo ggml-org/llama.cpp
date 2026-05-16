@@ -170,6 +170,8 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
             return new llama_model_deepseek2(params);
         case LLM_ARCH_DEEPSEEK2OCR:
             return new llama_model_deepseek2ocr(params);
+        case LLM_ARCH_DEEPSEEK4:
+            return new llama_model_deepseek4(params);
         case LLM_ARCH_GLM_DSA:
             return new llama_model_glm_dsa(params);
         case LLM_ARCH_MISTRAL4:
@@ -777,6 +779,7 @@ const char * llm_type_name(llm_type type) {
         case LLM_TYPE_310B_A15B:     return "310B.A15B";
         case LLM_TYPE_355B_A32B:     return "355B.A32B";
         case LLM_TYPE_397B_A17B:     return "397B.A17B";
+        case LLM_TYPE_685B_A37B:     return "685B.A37B";
         case LLM_TYPE_744B_A40B:     return "744B.A40B";
         case LLM_TYPE_E2B:           return "E2B";
         case LLM_TYPE_E4B:           return "E4B";
@@ -1768,6 +1771,27 @@ void llama_model::print_info() const {
             LLAMA_LOG_INFO("%s: expert_gating_func    = %s\n",     __func__, llama_expert_gating_func_name((llama_expert_gating_func_type) hparams.expert_gating_func));
         }
 
+        if (arch == LLM_ARCH_DEEPSEEK4) {
+            LLAMA_LOG_INFO("%s: n_lora_q              = %d\n",     __func__, hparams.n_lora_q);
+            LLAMA_LOG_INFO("%s: n_lora_o              = %d\n",     __func__, hparams.n_lora_o);
+            LLAMA_LOG_INFO("%s: n_attn_out_groups     = %d\n",     __func__, hparams.n_attn_out_groups);
+            LLAMA_LOG_INFO("%s: n_ff_exp              = %d\n",     __func__, hparams.n_ff_exp);
+            LLAMA_LOG_INFO("%s: n_expert_shared       = %d\n",     __func__, hparams.n_expert_shared);
+            LLAMA_LOG_INFO("%s: n_swa                 = %d\n",     __func__, hparams.n_swa);
+            LLAMA_LOG_INFO("%s: compress_rope_freq_base = %.1f\n", __func__, hparams.compress_rope_freq_base);
+            LLAMA_LOG_INFO("%s: indexer_n_head        = %d\n",     __func__, hparams.indexer_n_head);
+            LLAMA_LOG_INFO("%s: indexer_head_size     = %d\n",     __func__, hparams.indexer_head_size);
+            LLAMA_LOG_INFO("%s: indexer_top_k         = %d\n",     __func__, hparams.indexer_top_k);
+            LLAMA_LOG_INFO("%s: n_hash_layers         = %d\n",     __func__, hparams.n_hash_layers);
+            LLAMA_LOG_INFO("%s: n_hc                  = %d\n",     __func__, hparams.n_hc);
+            LLAMA_LOG_INFO("%s: hc_sinkhorn_iters     = %d\n",     __func__, hparams.hc_sinkhorn_iters);
+            LLAMA_LOG_INFO("%s: hc_eps                = %.1e\n",   __func__, hparams.hc_eps);
+            LLAMA_LOG_INFO("%s: nextn_predict_layers  = %d\n",     __func__, hparams.nextn_predict_layers);
+            LLAMA_LOG_INFO("%s: expert_weights_scale  = %.1f\n",   __func__, hparams.expert_weights_scale);
+            LLAMA_LOG_INFO("%s: expert_weights_norm   = %d\n",     __func__, hparams.expert_weights_norm);
+            LLAMA_LOG_INFO("%s: expert_gating_func    = %s\n",     __func__, llama_expert_gating_func_name((llama_expert_gating_func_type) hparams.expert_gating_func));
+        }
+
         if (arch == LLM_ARCH_QWEN2MOE) {
             LLAMA_LOG_INFO("%s: n_ff_exp              = %d\n",     __func__, hparams.n_ff_exp);
             LLAMA_LOG_INFO("%s: n_ff_shexp            = %d\n",     __func__, hparams.n_ff_shexp);
@@ -1943,6 +1967,58 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
             {
                 res = nullptr;
             } break;
+        case LLM_ARCH_DEEPSEEK4:
+            {
+                llama_memory_i::layer_filter_cb filter_attn = [&](int32_t) {
+                    return true;
+                };
+                llama_memory_i::layer_filter_cb filter_recr = [&](int32_t il) {
+                    return hparams.attn_compress_ratio[il] != 0;
+                };
+
+                // V4's standard SWA K cache, compressed-attention K cache
+                // (cache.attn_k), and indexer K cache (cache.index_k) all
+                // share the same `type_k` and must agree in dtype because
+                // src/models/deepseek4.cpp concatenates the SWA K view with
+                // the compressed K view via ggml_concat (which asserts
+                // a->type == b->type). Furthermore, V4's K activations are
+                // post-fp8-quantized (ggml_dsv4_fp8_kv_quantize), and q8_0's
+                // single fp16 scale per 32-element block cannot faithfully
+                // reproduce fp8-quantized value distributions -- pinning to
+                // q8_0 corrupts decode silently ("=" loops, "Mirror ..."
+                // garbage). Force fp16 unconditionally for V4 KV caches.
+                //
+                // NOTE: the user-facing WARN and the params.type_k/type_v
+                // coercion already happen earlier in llama_init_from_model
+                // (src/llama-context.cpp), BEFORE the shared
+                // SPLIT_MODE_TENSOR / V-quant-requires-FA validations run,
+                // so users requesting q8_0 KV with V4 don't trip those
+                // checks. The fp16 pin here is a defense-in-depth safety
+                // net for any direct callers of create_memory() that
+                // bypass llama_init_from_model. See
+                // docs/plans/v4-port-kv-q8-completion.md.
+                ggml_type v4_type_k = GGML_TYPE_F16;
+                ggml_type v4_type_v = GGML_TYPE_F16;
+
+                res = new llama_memory_hybrid_iswa(
+                        /* model             */ *this,
+                        /* attn_type_k       */ v4_type_k,
+                        /* attn_type_v       */ v4_type_v,
+                        /* attn_v_trans      */ !cparams.flash_attn,
+                        /* attn_swa_full     */ params.swa_full,
+                        /* attn_kv_size      */ cparams.n_ctx_seq,
+                        /* attn_n_ubatch     */ cparams.n_ubatch,
+                        /* attn_n_pad        */ 1,
+                        /* recurrent_type_r  */ GGML_TYPE_F32,
+                        /* recurrent_type_s  */ GGML_TYPE_F32,
+                        /* recurrent_rs_size */ std::max((uint32_t) 1, cparams.n_seq_max),
+                        /* n_seq_max         */ cparams.n_seq_max,
+                        /* n_rs_seq          */ cparams.n_rs_seq,
+                        /* offload           */ cparams.offload_kqv,
+                        /* unified           */ cparams.kv_unified,
+                        /* filter_attn       */ std::move(filter_attn),
+                        /* filter_recr       */ std::move(filter_recr));
+            } break;
         // Models that need standard caching should rely on recurrent/hybrid
         // checks
         default:
@@ -2069,6 +2145,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
 
                         res = new llama_kv_cache(
                                 *this,
+                                hparams,
                                 params.type_k,
                                 params.type_v,
                                 !cparams.flash_attn,
@@ -2258,6 +2335,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_DEEPSEEK:
         case LLM_ARCH_DEEPSEEK2:
         case LLM_ARCH_DEEPSEEK2OCR:
+        case LLM_ARCH_DEEPSEEK4:
         case LLM_ARCH_PLM:
         case LLM_ARCH_CHATGLM:
         case LLM_ARCH_GRANITE:
