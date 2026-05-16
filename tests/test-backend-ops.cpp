@@ -4951,6 +4951,271 @@ struct test_rope : public test_case {
     }
 };
 
+// V4 partial-RoPE: leaves the non-RoPE prefix unchanged, applies RoPE to the tail.
+// Reference:    ggml/include/ggml.h (ggml_dsv4_rope_tail).
+// CPU fallback: ggml/src/ggml-cpu/ops.cpp (ggml_compute_forward_dsv4_rope_tail).
+// Constraints (ggml.c, ggml_dsv4_rope_tail): mode in {NORMAL, NEOX};
+// a->ne[2] == pos->ne[0]; n_dims > 0 && n_dims <= a->ne[0] && n_dims % 2 == 0;
+// if freq_factors, freq_factors->ne[0] >= n_dims/2.
+struct test_dsv4_rope_tail : public test_case {
+    const ggml_type type;
+    const std::array<int64_t, 4> ne_a;
+    int n_dims;
+    int mode;
+    int n_ctx;
+    float fs;       // freq_scale
+    float ef;       // ext_factor
+    float af;       // attn_factor
+    bool ff;        // use freq_factors
+    bool inverse;
+
+    std::string vars() override {
+        return VARS_TO_STR10(type, ne_a, n_dims, mode, n_ctx, fs, ef, af, ff, inverse);
+    }
+
+    test_dsv4_rope_tail(ggml_type type = GGML_TYPE_F32,
+            std::array<int64_t, 4> ne_a = {64, 8, 4, 1},
+            int n_dims = 32, int mode = GGML_ROPE_TYPE_NORMAL, int n_ctx = 128,
+            float fs = 1.0f, float ef = 0.0f, float af = 0.0f,
+            bool ff = false, bool inverse = false)
+        : type(type), ne_a(ne_a), n_dims(n_dims), mode(mode), n_ctx(n_ctx),
+          fs(fs), ef(ef), af(af), ff(ff), inverse(inverse) {}
+
+    // NMSE tolerance: 1e-5. Rationale: RoPE is trig + multiply, no
+    // accumulation. Matches test_rope's de-facto behavior on this backend pair.
+    double max_nmse_err() override {
+        return 1e-5;
+    }
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * a = ggml_new_tensor(ctx, type, 4, ne_a.data());
+        ggml_set_param(a);
+        ggml_set_name(a, "a");
+
+        // Constraint: a->ne[2] == pos->ne[0].
+        ggml_tensor * pos = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, ne_a[2]);
+        ggml_set_name(pos, "pos");
+
+        ggml_tensor * freq = nullptr;
+        if (ff) {
+            // Constraint: freq_factors->ne[0] >= n_dims/2.
+            freq = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, n_dims / 2);
+            ggml_set_name(freq, "freq");
+        }
+
+        ggml_tensor * out = ggml_dsv4_rope_tail(
+            ctx, a, pos, freq,
+            n_dims, mode, n_ctx,
+            10000.0f, fs, ef, af, 1.0f, 1.0f,
+            inverse);
+        ggml_set_name(out, "out");
+        return out;
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        // Match test_rope's pattern: positions are random within [0, n_ctx) so
+        // the test exercises a representative distribution of RoPE phases on
+        // every run, not just sequential 0..N-1.
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != nullptr; t = ggml_get_next_tensor(ctx, t)) {
+            if (t->type == GGML_TYPE_I32) {
+                std::vector<int> data(ggml_nelements(t));
+                for (size_t i = 0; i < data.size(); ++i) {
+                    data[i] = rand() % n_ctx;
+                }
+                ggml_backend_tensor_set(t, data.data(), 0, data.size() * sizeof(int));
+            } else {
+                init_tensor_uniform(t, -1.0f, 1.0f);
+            }
+        }
+    }
+};
+
+// V4 hyper-connection splitter with Sinkhorn normalization.
+// Reference:    ggml/include/ggml.h (ggml_dsv4_hc_split_sinkhorn).
+// CPU fallback: ggml/src/ggml-cpu/ops.cpp (ggml_compute_forward_dsv4_hc_split_sinkhorn).
+// Constraints (ggml.c, ggml_dsv4_hc_split_sinkhorn): mixes->ne[0] == (2 + n_hc) * n_hc;
+// mixes->ne[2] == 1; mixes->ne[3] == 1; nelements(scale) >= 3;
+// nelements(base) >= mixes->ne[0].
+struct test_dsv4_hc_split_sinkhorn : public test_case {
+    const int n_hc;
+    const int64_t n_rows;
+    const int sinkhorn_iters;
+    const float eps;
+
+    std::string vars() override {
+        return VARS_TO_STR4(n_hc, n_rows, sinkhorn_iters, eps);
+    }
+
+    test_dsv4_hc_split_sinkhorn(int n_hc = 4, int64_t n_rows = 16,
+                                int sinkhorn_iters = 4, float eps = 1e-6f)
+        : n_hc(n_hc), n_rows(n_rows), sinkhorn_iters(sinkhorn_iters), eps(eps) {}
+
+    // NMSE tolerance: 1e-3. Rationale: 4 iterations of normalization compound
+    // floating-point rounding; per-iteration eps division amplifies relative
+    // error on near-zero entries. Spec calls for "1e-3 rel"; NMSE 1e-3 is the
+    // matching budget.
+    double max_nmse_err() override {
+        return 1e-3;
+    }
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        // Hard constraint: mixes->ne[0] MUST equal (2 + n_hc) * n_hc.
+        const int64_t mix_dim = (int64_t)(2 + n_hc) * n_hc;
+
+        ggml_tensor * mixes = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, mix_dim, n_rows);
+        ggml_set_param(mixes);
+        ggml_set_name(mixes, "mixes");
+
+        // scale: nelements(scale) >= 3. Constructor uses scale as a 1D
+        // parameter buffer. Use a 1D tensor of size 3 (the minimum).
+        ggml_tensor * scale = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 3);
+        ggml_set_param(scale);
+        ggml_set_name(scale, "scale");
+
+        // base: nelements(base) >= mixes->ne[0]. Use a 1D tensor of size mix_dim.
+        ggml_tensor * base = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, mix_dim);
+        ggml_set_param(base);
+        ggml_set_name(base, "base");
+
+        ggml_tensor * out = ggml_dsv4_hc_split_sinkhorn(ctx, mixes, scale, base, n_hc, sinkhorn_iters, eps);
+        ggml_set_name(out, "out");
+        return out;
+    }
+};
+
+// V4 hyper-connection weighted-sum: out[embd, token] = sum_hc weights[hc, token] * x[embd, hc, token].
+// Reference:    ggml/include/ggml.h (ggml_dsv4_hc_weighted_sum).
+// CPU fallback: ggml/src/ggml-cpu/ops.cpp (ggml_compute_forward_dsv4_hc_weighted_sum).
+// Constraints (ggml.c, ggml_dsv4_hc_weighted_sum):
+//   x       shape {n_embd, n_hc, n_tokens, 1}
+//   weights shape {n_hc,   n_tokens, 1, 1}
+struct test_dsv4_hc_weighted_sum : public test_case {
+    const int64_t n_embd;
+    const int64_t n_hc;
+    const int64_t n_tokens;
+
+    std::string vars() override {
+        return VARS_TO_STR3(n_embd, n_hc, n_tokens);
+    }
+
+    test_dsv4_hc_weighted_sum(int64_t n_embd = 128, int64_t n_hc = 4, int64_t n_tokens = 16)
+        : n_embd(n_embd), n_hc(n_hc), n_tokens(n_tokens) {}
+
+    // NMSE tolerance: 1e-5. Rationale: weighted sum with n_hc<=16 terms;
+    // accumulation error is small; pure F32 multiply-add.
+    double max_nmse_err() override {
+        return 1e-5;
+    }
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * x = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, n_embd, n_hc, n_tokens);
+        ggml_set_param(x);
+        ggml_set_name(x, "x");
+
+        ggml_tensor * weights = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n_hc, n_tokens);
+        ggml_set_param(weights);
+        ggml_set_name(weights, "weights");
+
+        ggml_tensor * out = ggml_dsv4_hc_weighted_sum(ctx, x, weights);
+        ggml_set_name(out, "out");
+        return out;
+    }
+};
+
+// V4 hyper-connection expand: out[embd, hc, token] = post[hc, token] * block_out[embd, token]
+//                                                    + (comb[:, :, token]^T @ residual[:, :, token])[embd, hc].
+// Reference:    ggml/include/ggml.h (ggml_dsv4_hc_expand).
+// CPU fallback: ggml/src/ggml-cpu/ops.cpp (ggml_compute_forward_dsv4_hc_expand).
+// Constraints (ggml.c, ggml_dsv4_hc_expand):
+//   block_out shape {n_embd, n_tokens, 1, 1}    (2D, NOT 3D)
+//   residual  shape {n_embd, n_hc,    n_tokens, 1}
+//   post      shape {n_hc,   n_tokens, 1, 1}
+//   comb      shape {n_hc,   n_hc,    n_tokens, 1}
+struct test_dsv4_hc_expand : public test_case {
+    const int64_t n_embd;
+    const int64_t n_hc;
+    const int64_t n_tokens;
+
+    std::string vars() override {
+        return VARS_TO_STR3(n_embd, n_hc, n_tokens);
+    }
+
+    test_dsv4_hc_expand(int64_t n_embd = 128, int64_t n_hc = 4, int64_t n_tokens = 16)
+        : n_embd(n_embd), n_hc(n_hc), n_tokens(n_tokens) {}
+
+    // NMSE tolerance: 1e-5. Rationale: one matmul along n_hc (small) plus a
+    // pointwise scale; minimal accumulation noise in F32.
+    double max_nmse_err() override {
+        return 1e-5;
+    }
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        // block_out is 2D: {n_embd, n_tokens}. ne[2]==1, ne[3]==1.
+        ggml_tensor * block_out = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n_embd, n_tokens);
+        ggml_set_param(block_out);
+        ggml_set_name(block_out, "block_out");
+
+        ggml_tensor * residual = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, n_embd, n_hc, n_tokens);
+        ggml_set_param(residual);
+        ggml_set_name(residual, "residual");
+
+        ggml_tensor * post = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n_hc, n_tokens);
+        ggml_set_param(post);
+        ggml_set_name(post, "post");
+
+        ggml_tensor * comb = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, n_hc, n_hc, n_tokens);
+        ggml_set_param(comb);
+        ggml_set_name(comb, "comb");
+
+        ggml_tensor * out = ggml_dsv4_hc_expand(ctx, block_out, residual, post, comb);
+        ggml_set_name(out, "out");
+        return out;
+    }
+};
+
+// V4 FP8 KV-cache simulation: quantizes/dequantizes the non-RoPE prefix
+// in E4M3FN blocks, leaves the RoPE tail unchanged.
+// Reference:    ggml/include/ggml.h (ggml_dsv4_fp8_kv_quantize).
+// CPU fallback: ggml/src/ggml-cpu/ops.cpp (ggml_compute_forward_dsv4_fp8_kv_quantize).
+// Constraints (ggml.c, ggml_dsv4_fp8_kv_quantize): n_rot >= 0; a->ne[0] > n_rot;
+// (a->ne[0] - n_rot) % 64 == 0  (block size is 64 for the FP8 prefix).
+struct test_dsv4_fp8_kv_quantize : public test_case {
+    const std::array<int64_t, 4> ne_a;
+    const int n_rot;
+
+    std::string vars() override {
+        return VARS_TO_STR2(ne_a, n_rot);
+    }
+
+    test_dsv4_fp8_kv_quantize(std::array<int64_t, 4> ne_a = {192, 8, 4, 1},
+                              int n_rot = 64)
+        : ne_a(ne_a), n_rot(n_rot) {}
+
+    // NMSE tolerance: 1e-3. Rationale: FP8 e4m3 represents ~7 bits of mantissa;
+    // the quantize-dequantize round-trip's NMSE is dominated by representable
+    // precision, not by accumulation. The spec's "1e-3 abs (FP8 inherently
+    // lossy)" maps to NMSE 1e-3 because each sample's squared error is bounded
+    // by the FP8 ULP^2 at the local scale, normalized by signal power yields
+    // roughly the same order.
+    double max_nmse_err() override {
+        return 1e-3;
+    }
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        // Constraint check at construction time so test fails fast on a bad shape.
+        GGML_ASSERT(ne_a[0] > n_rot && "(ne_a[0] > n_rot) required");
+        GGML_ASSERT((ne_a[0] - n_rot) % 64 == 0 && "(ne_a[0]-n_rot) %% 64 == 0 required");
+
+        ggml_tensor * a = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne_a.data());
+        ggml_set_param(a);
+        ggml_set_name(a, "a");
+
+        ggml_tensor * out = ggml_dsv4_fp8_kv_quantize(ctx, a, n_rot);
+        ggml_set_name(out, "out");
+        return out;
+    }
+};
+
 // GGML_OP_POOL2D
 struct test_pool2d : public test_case {
     enum ggml_op_pool pool_type;
@@ -8706,6 +8971,53 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
             }
         }
     }
+
+    // V4-port: dsv4_rope_tail (partial-RoPE) test cases
+    for (bool inverse : {false, true}) {
+        for (bool ff : {false, true}) {
+            // F32, default shape
+            test_cases.emplace_back(new test_dsv4_rope_tail(
+                GGML_TYPE_F32, {64, 8, 4, 1}, 32, GGML_ROPE_TYPE_NORMAL, 128,
+                1.0f, 0.0f, 0.0f, ff, inverse));
+        }
+    }
+    // Edge: larger head_dim, NEOX mode (exercises the second supported mode path).
+    test_cases.emplace_back(new test_dsv4_rope_tail(
+        GGML_TYPE_F32, {128, 16, 8, 1}, 64, GGML_ROPE_TYPE_NEOX, 256,
+        1.0f, 0.0f, 0.0f, false, false));
+    // (F16 dtype variant intentionally NOT registered: the reference op path
+    //  for dsv4_rope_tail requires an F32 src0 on the backends that implement
+    //  it, so an F16 case would surface as NOT_SUPPORTED and silently pass
+    //  without exercising the op. F32-only here.)
+
+    // V4-port: dsv4_hc_split_sinkhorn test cases.
+    // For n_hc=4 -> mix_dim = (2+4)*4 = 24.
+    // For n_hc=8 -> mix_dim = (2+8)*8 = 80.
+    test_cases.emplace_back(new test_dsv4_hc_split_sinkhorn(4, 16, 4, 1e-6f));
+    test_cases.emplace_back(new test_dsv4_hc_split_sinkhorn(4, 32, 4, 1e-6f));
+    test_cases.emplace_back(new test_dsv4_hc_split_sinkhorn(4, 16, 8, 1e-6f));
+    test_cases.emplace_back(new test_dsv4_hc_split_sinkhorn(8, 16, 4, 1e-6f));
+
+    // V4-port: dsv4_hc_weighted_sum test cases (n_embd, n_hc, n_tokens).
+    test_cases.emplace_back(new test_dsv4_hc_weighted_sum(128, 4, 16));
+    test_cases.emplace_back(new test_dsv4_hc_weighted_sum(512, 4, 32));
+    test_cases.emplace_back(new test_dsv4_hc_weighted_sum(64,  8, 8));
+
+    // V4-port: dsv4_hc_expand test cases (n_embd, n_hc, n_tokens).
+    test_cases.emplace_back(new test_dsv4_hc_expand(128, 4, 16));
+    test_cases.emplace_back(new test_dsv4_hc_expand(512, 4, 32));
+    test_cases.emplace_back(new test_dsv4_hc_expand(64,  8, 8));
+
+    // V4-port: dsv4_fp8_kv_quantize test cases.
+    // Constraint: (ne_a[0] - n_rot) % 64 == 0. Valid examples:
+    //   ne_a[0]=128, n_rot=64   -> prefix=64  (1 block)
+    //   ne_a[0]=192, n_rot=64   -> prefix=128 (2 blocks)
+    //   ne_a[0]=256, n_rot=64   -> prefix=192 (3 blocks)
+    //   ne_a[0]=192, n_rot=128  -> prefix=64  (1 block)
+    test_cases.emplace_back(new test_dsv4_fp8_kv_quantize({128, 8, 4, 1}, 64));
+    test_cases.emplace_back(new test_dsv4_fp8_kv_quantize({192, 8, 4, 1}, 64));
+    test_cases.emplace_back(new test_dsv4_fp8_kv_quantize({256, 16, 8, 1}, 64));
+    test_cases.emplace_back(new test_dsv4_fp8_kv_quantize({192, 16, 8, 1}, 128));
 
     for (int v : { 0, 1, 2, 3 }) {
         for (int dim : { 0, 1, 2, 3, }) {

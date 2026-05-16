@@ -567,6 +567,11 @@ extern "C" {
         GGML_OP_RWKV_WKV7,
         GGML_OP_SOLVE_TRI,
         GGML_OP_GATED_DELTA_NET,
+        GGML_OP_DSV4_HC_SPLIT_SINKHORN,
+        GGML_OP_DSV4_HC_WEIGHTED_SUM,
+        GGML_OP_DSV4_HC_EXPAND,
+        GGML_OP_DSV4_FP8_KV_QUANTIZE,
+        GGML_OP_DSV4_ROPE_TAIL,
 
         GGML_OP_UNARY,
 
@@ -2554,6 +2559,61 @@ extern "C" {
             struct ggml_tensor  * g,
             struct ggml_tensor  * beta,
             struct ggml_tensor  * state);
+
+    // DeepSeek V4 hyperconnection helper.
+    // Splits [mix, tokens] into pre/post/comb regions and applies the
+    // Sinkhorn normalization used by the reference implementation.
+    GGML_API struct ggml_tensor * ggml_dsv4_hc_split_sinkhorn(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * mixes,
+            struct ggml_tensor  * scale,
+            struct ggml_tensor  * base,
+            int                   n_hc,
+            int                   sinkhorn_iters,
+            float                 eps);
+
+    // DeepSeek V4 hyperconnection weighted-sum helper.
+    // Computes sum_hc weights[hc, token] * x[embd, hc, token].
+    GGML_API struct ggml_tensor * ggml_dsv4_hc_weighted_sum(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * x,
+            struct ggml_tensor  * weights);
+
+    // DeepSeek V4 hyperconnection expand helper.
+    // Computes post * block_out + comb^T @ residual for each token.
+    GGML_API struct ggml_tensor * ggml_dsv4_hc_expand(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * block_out,
+            struct ggml_tensor  * residual,
+            struct ggml_tensor  * post,
+            struct ggml_tensor  * comb);
+
+    // DeepSeek V4 FP8 KV-cache simulation helper.
+    // Quantizes/dequantizes the non-RoPE prefix in E4M3FN blocks and leaves
+    // the RoPE tail unchanged, matching the reference inference path.
+    GGML_API struct ggml_tensor * ggml_dsv4_fp8_kv_quantize(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            int                   n_rot);
+
+    // DeepSeek V4 partial RoPE helper.
+    // Leaves the non-RoPE prefix unchanged and applies RoPE to the tail,
+    // matching ggml_concat(prefix, ggml_rope_ext(tail)).
+    GGML_API struct ggml_tensor * ggml_dsv4_rope_tail(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            struct ggml_tensor  * pos,
+            struct ggml_tensor  * freq_factors,
+            int                   n_dims,
+            int                   mode,
+            int                   n_ctx_orig,
+            float                 freq_base,
+            float                 freq_scale,
+            float                 ext_factor,
+            float                 attn_factor,
+            float                 beta_fast,
+            float                 beta_slow,
+            bool                  inverse);
 
     // custom operators
 
