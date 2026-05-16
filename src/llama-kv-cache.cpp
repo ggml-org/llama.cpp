@@ -90,9 +90,33 @@ llama_kv_cache::llama_kv_cache(
                  uint32_t   n_swa,
            llama_swa_type   swa_type,
     const layer_filter_cb & filter,
-    const  layer_reuse_cb & reuse) :
+    const  layer_reuse_cb & reuse,
+                 uint32_t   kv_size_max) :
     model(model), hparams(model.hparams), v_trans(v_trans),
     n_seq_max(n_seq_max), n_stream(unified ? 1 : n_seq_max), n_pad(n_pad), n_swa(n_swa), swa_type(swa_type) {
+
+    // save construction parameters for dynamic resize
+    saved_type_k     = type_k;
+    saved_type_v     = type_v;
+    saved_v_trans    = v_trans;
+    saved_offload    = offload;
+    saved_unified    = unified;
+    saved_n_seq_max  = n_seq_max;
+    saved_n_pad      = n_pad;
+    saved_n_swa      = n_swa;
+    saved_swa_type   = swa_type;
+    saved_filter     = filter;
+    saved_reuse      = reuse;
+    kv_size_max_val  = kv_size_max;
+
+    // dynamic resize: start with small initial size
+    if (kv_size_max > 0 && kv_size > 256) {
+        kv_size_cur = 256;
+        kv_size     = kv_size_cur;
+        LLAMA_LOG_INFO("%s: dynamic KV cache: start = %u cells, max = %u cells\n", __func__, kv_size_cur, kv_size_max);
+    } else {
+        kv_size_cur = kv_size;
+    }
 
     GGML_ASSERT(kv_size % n_pad == 0);
 
@@ -267,6 +291,8 @@ llama_kv_cache::llama_kv_cache(
 
         LLAMA_LOG_INFO("%s: %10s KV buffer size = %8.2f MiB\n", __func__, ggml_backend_buffer_name(buf), ggml_backend_buffer_get_size(buf)/1024.0/1024.0);
 
+        // Keep unwritten padding deterministic; dynamic mode still saves memory
+        // because the buffer starts small and only grows when needed.
         ggml_backend_buffer_clear(buf, 0);
         ctxs_bufs.emplace_back(std::move(ctx), buf);
     }
@@ -650,6 +676,12 @@ llama_memory_context_ptr llama_kv_cache::init_batch(
         }
 
         auto sinfos = prepare(ubatches);
+        while (sinfos.empty()) {
+            if (!try_resize()) {
+                break;
+            }
+            sinfos = prepare(ubatches);
+        }
         if (sinfos.empty()) {
             break;
         }
@@ -1124,6 +1156,105 @@ ggml_type llama_kv_cache::type_k() const {
 
 ggml_type llama_kv_cache::type_v() const {
     return layers[0].v->type;
+}
+
+bool llama_kv_cache::try_resize() {
+    if (kv_size_max_val == 0) {
+        return false;
+    }
+
+    // already at max capacity?
+    if (kv_size_cur >= kv_size_max_val) {
+        return false;
+    }
+
+    // calculate new size: double for small, +1GB equivalent for large
+    uint32_t new_size;
+    if (kv_size_cur < 4096) {
+        new_size = kv_size_cur * 2;
+    } else {
+        // estimate ~1GB growth based on per-cell memory
+        const size_t total = total_size();
+        const size_t per_cell = total / kv_size_cur;
+        const uint32_t cells_per_gb = (per_cell > 0) ? (uint32_t)(1024ULL * 1024 * 1024 / per_cell) : kv_size_cur;
+        new_size = kv_size_cur + std::max(cells_per_gb, 256u);
+    }
+
+    // clamp to max
+    new_size = std::min(new_size, kv_size_max_val);
+
+    if (new_size <= kv_size_cur) {
+        return false;
+    }
+
+    LLAMA_LOG_INFO("%s: resizing KV cache from %u to %u cells\n", __func__, kv_size_cur, new_size);
+
+    // ensure new_size is aligned to n_pad
+    new_size = ((new_size + n_pad - 1) / n_pad) * n_pad;
+
+    // create a temporary cache with the new size
+    // NOTE: pass kv_size_max=0 so the constructor does NOT apply
+    //       the dynamic start logic (which would shrink back to 256)
+    llama_kv_cache tmp(model, saved_type_k, saved_type_v, saved_v_trans, saved_offload, saved_unified, new_size,
+                       saved_n_seq_max, saved_n_pad, saved_n_swa, saved_swa_type, saved_filter, saved_reuse,
+                       /*kv_size_max=*/0);
+
+    // copy existing data
+    tmp.copy_from(*this);
+
+    // steal the internals from the new cache
+    ctxs_bufs = std::move(tmp.ctxs_bufs);
+    layers    = std::move(tmp.layers);
+    v_cells   = std::move(tmp.v_cells);
+    v_heads   = std::move(tmp.v_heads);
+
+    // resize v_cells to match new size
+    for (uint32_t s = 0; s < n_stream; ++s) {
+        v_cells[s].resize(new_size);
+    }
+
+    kv_size_cur = new_size;
+    was_resized = true;
+
+    return true;
+}
+
+void llama_kv_cache::copy_from(const llama_kv_cache & other) {
+    GGML_ASSERT(layers.size() == other.layers.size());
+
+    for (size_t il = 0; il < layers.size(); ++il) {
+        if (layers[il].k && other.layers[il].k) {
+            GGML_ASSERT(layers[il].k_stream.size() == other.layers[il].k_stream.size());
+            for (size_t s = 0; s < other.layers[il].k_stream.size(); ++s) {
+                const size_t n_bytes = ggml_nbytes(other.layers[il].k_stream[s]);
+                std::vector<uint8_t> staging(n_bytes);
+                ggml_backend_tensor_get(other.layers[il].k_stream[s], staging.data(), 0, n_bytes);
+                ggml_backend_tensor_set(layers[il].k_stream[s], staging.data(), 0, n_bytes);
+            }
+        }
+        if (layers[il].v && other.layers[il].v) {
+            GGML_ASSERT(layers[il].v_stream.size() == other.layers[il].v_stream.size());
+            for (size_t s = 0; s < other.layers[il].v_stream.size(); ++s) {
+                const size_t n_bytes = ggml_nbytes(other.layers[il].v_stream[s]);
+                std::vector<uint8_t> staging(n_bytes);
+                ggml_backend_tensor_get(other.layers[il].v_stream[s], staging.data(), 0, n_bytes);
+                ggml_backend_tensor_set(layers[il].v_stream[s], staging.data(), 0, n_bytes);
+            }
+        }
+    }
+
+    // copy cell metadata
+    for (uint32_t s = 0; s < n_stream && s < (uint32_t) other.v_cells.size(); ++s) {
+        v_cells[s] = other.v_cells[s];
+    }
+}
+
+bool llama_kv_cache::check_and_clear_resized() {
+    if (was_resized) {
+        was_resized = false;
+        return true;
+    }
+    return false;
 }
 
 uint32_t llama_kv_cache::get_n_kv(const slot_info & sinfo) const {

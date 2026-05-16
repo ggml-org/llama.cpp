@@ -106,7 +106,8 @@ public:
                      uint32_t   n_swa,
                llama_swa_type   swa_type,
         const layer_filter_cb & filter,
-        const  layer_reuse_cb & reuse);
+        const  layer_reuse_cb & reuse,
+                     uint32_t   kv_size_max = 0);
 
     ~llama_kv_cache() = default;
 
@@ -154,6 +155,11 @@ public:
 
     ggml_type type_k() const;
     ggml_type type_v() const;
+
+    // dynamic resize support
+    bool try_resize();
+    void copy_from(const llama_kv_cache & other);
+    bool check_and_clear_resized();
 
     //
     // graph_build API
@@ -269,6 +275,24 @@ private:
     stream_copy_info sc_info;
 
     std::vector<kv_layer> layers;
+
+    // dynamic resize state
+    uint32_t kv_size_cur     = 0;
+    uint32_t kv_size_max_val = 0;
+    bool     was_resized     = false;
+
+    // saved construction parameters (for resize)
+    ggml_type        saved_type_k    = GGML_TYPE_F16;
+    ggml_type        saved_type_v    = GGML_TYPE_F16;
+    bool             saved_v_trans   = true;
+    bool             saved_offload   = true;
+    bool             saved_unified   = false;
+    uint32_t         saved_n_seq_max = 1;
+    uint32_t         saved_n_pad     = 1;
+    uint32_t         saved_n_swa     = 0;
+    llama_swa_type   saved_swa_type  = LLAMA_SWA_TYPE_NONE;
+    layer_filter_cb  saved_filter    = nullptr;
+    layer_reuse_cb   saved_reuse     = nullptr;
 
     // model layer id -> KV cache layer id
     std::unordered_map<int32_t, int32_t> map_layer_ids;
