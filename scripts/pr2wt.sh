@@ -68,11 +68,19 @@ dir=$(basename $(pwd))
 git branch -D pr/$PR 2> /dev/null
 git worktree add -b pr/$PR ../$dir-pr-$PR pr/$PR/$head_ref 2> /dev/null
 
+og_path=$(pwd)
 wt_path=$(cd ../$dir-pr-$PR && pwd)
 
 echo "git worktree created in $wt_path"
 
 cd $wt_path
+
+# pi agent setup in the worktree
+if [[ -f "$og_path/.pi/SYSTEM.md" && ! -f ".pi/SYSTEM.md" ]]; then
+    mkdir -p .pi
+    ln -sfn "$og_path/.pi/SYSTEM.md" .pi/SYSTEM.md
+fi
+
 git branch --set-upstream-to=pr/$PR/$head_ref
 git pull   --ff-only || {
     echo "error: failed to pull pr/$PR"

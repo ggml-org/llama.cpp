@@ -43,7 +43,7 @@ static std::set<std::string> get_remote_preset_whitelist(const std::map<std::str
     for (const auto & it : key_to_opt) {
         const std::string & key = it.first;
         const common_arg & opt = it.second;
-        if (allowed_options.find(key) != allowed_options.end() || opt.is_sparam) {
+        if (allowed_options.find(key) != allowed_options.end() || opt.is_sampling) {
             allowed_keys.insert(key);
             // also add variant keys (args without leading dashes and env vars)
             for (const auto & arg : opt.get_args()) {
@@ -163,8 +163,13 @@ void common_preset::merge(const common_preset & other) {
     }
 }
 
-void common_preset::apply_to_params(common_params & params) const {
+void common_preset::apply_to_params(common_params & params, const std::set<std::string> & handled_keys) const {
     for (const auto & [opt, val] : options) {
+        if (!handled_keys.empty()) {
+            if (!opt.env || handled_keys.find(opt.env) == handled_keys.end()) {
+                continue;
+            }
+        }
         // apply each option to params
         if (opt.handler_string) {
             opt.handler_string(params, val);

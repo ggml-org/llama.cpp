@@ -2,5 +2,6 @@
 
 #include "../fattn-mma-f16.cuh"
 
+DECL_FATTN_MMA_F16_CASE(192, 128, 4, 16);
 DECL_FATTN_MMA_F16_CASE(576, 512, 4, 16);
 DECL_FATTN_MMA_F16_CASE(640, 512, 4, 16);

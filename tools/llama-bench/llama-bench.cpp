@@ -372,7 +372,7 @@ static const cmd_params cmd_params_defaults = {
     /* n_ubatch             */ { 512 },
     /* type_k               */ { GGML_TYPE_F16 },
     /* type_v               */ { GGML_TYPE_F16 },
-    /* n_threads            */ { cpu_get_num_math() },
+    /* n_threads            */ { common_cpu_get_num_math() },
     /* cpu_mask             */ { "0x0" },
     /* cpu_strict           */ { false },
     /* poll                 */ { 50 },
