@@ -1128,7 +1128,11 @@ struct test_case {
     }
 
     virtual double max_nmse_err(ggml_backend_t backend) {
-        GGML_UNUSED(backend);
+        ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(ggml_backend_get_device(backend));
+        // See https://github.com/ggml-org/llama.cpp/pull/22976 for explanation.
+        if (contains_f16 && strcmp(ggml_backend_reg_name(reg), "WebGPU") == 0) {
+            return std::max(max_nmse_err(), 1e-6);
+        }
         return max_nmse_err();
     }
 
@@ -1205,6 +1209,18 @@ struct test_case {
     std::vector<ggml_tensor *> sentinels;
 
     std::string current_op_name;
+    bool contains_f16 = false;
+
+    // Used by the WebGPU backend to relax error thresholds on ops on f16 tensors
+    void check_for_f16_tensor(ggml_context * ctx) {
+        contains_f16 = false;
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != nullptr; t = ggml_get_next_tensor(ctx, t)) {
+            if (t->type == GGML_TYPE_F16) {
+                contains_f16 = true;
+                break;
+            }
+        }
+    }
 
     void add_sentinel(ggml_context * ctx) {
         if (mode == MODE_PERF || mode == MODE_GRAD || mode == MODE_SUPPORT) {
@@ -1298,6 +1314,7 @@ struct test_case {
 
         ggml_tensor * out = build_graph(ctx);
         current_op_name   = op_desc(out);
+        check_for_f16_tensor(ctx);
 
         if (!matches_filter(out, op_names_filter)) {
             //printf("  %s: skipping\n", op_desc(out).c_str());
@@ -1973,9 +1990,19 @@ struct test_unary : public test_case {
     }
 
     void initialize_tensors(ggml_context * ctx) override {
+        float min = -150.f;
+        float max =  150.f;
+
+        // Keep FP16 exp/expm1 inputs in-range so all backends stay finite instead of
+        // disagreeing on whether overflow saturates to max-F16 or produces +inf.
+        if (type == GGML_TYPE_F16 && (op == GGML_UNARY_OP_EXP || op == GGML_UNARY_OP_EXPM1)) {
+            min = -10.f;
+            max =  10.f;
+        }
+
         for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
             // test extended range of values to check for NaNs in GELU
-            init_tensor_uniform(t, -150.f, 150.f);
+            init_tensor_uniform(t, min, max);
         }
     }
 
@@ -3556,6 +3583,73 @@ struct test_relu_sqr : public test_case {
     }
 };
 
+// SNAKE activation fusion: y = x + sin(a*x)^2 * inv_b
+// CUDA backend matches the naive 5-op chain (mul, sin, sqr, mul, add)
+// and dispatches a single fused kernel.
+struct test_snake_fuse : public test_case {
+    const ggml_type type;
+    const std::array<int64_t, 4> ne;   // [T, C, D2, D3]
+
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return "SNAKE_FUSE";
+    }
+
+    bool run_whole_graph() override { return true; }
+
+    double max_nmse_err() override {
+        // BF16 epsilon ~ 7.8e-3, F16 epsilon ~ 9.7e-4: relax tolerance to match
+        // the natural roundoff drift between the naive CPU chain and the fused
+        // CUDA kernel. F32 keeps the default tight bound.
+        switch (type) {
+            case GGML_TYPE_BF16: return 5e-3;
+            case GGML_TYPE_F16:  return 5e-5;
+            default:             return 1e-7;
+        }
+    }
+
+    std::string vars() override {
+        return VARS_TO_STR2(type, ne);
+    }
+
+    test_snake_fuse(ggml_type type = GGML_TYPE_F32,
+            std::array<int64_t, 4> ne = {256, 192, 1, 1})
+        : type(type), ne(ne) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * x = ggml_new_tensor_4d(ctx, type, ne[0], ne[1], ne[2], ne[3]);
+        ggml_set_name(x, "x");
+
+        ggml_tensor * a = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 1, ne[1]);
+        ggml_set_name(a, "a");
+
+        ggml_tensor * inv_b = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 1, ne[1]);
+        ggml_set_name(inv_b, "inv_b");
+
+        // exact 5-op chain that BigVGAN / Vocos frontends emit
+        ggml_tensor * ax     = ggml_mul(ctx, x, a);
+        ggml_tensor * sin_ax = ggml_sin(ctx, ax);
+        ggml_tensor * sin_sq = ggml_sqr(ctx, sin_ax);
+        ggml_tensor * scaled = ggml_mul(ctx, sin_sq, inv_b);
+        ggml_tensor * out    = ggml_add(ctx, x, scaled);
+        ggml_set_name(out, "out");
+
+        return out;
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        // x in [-pi, pi] to exercise sin periodicity, params in default [-1, 1]
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != nullptr; t = ggml_get_next_tensor(ctx, t)) {
+            const std::string name = ggml_get_name(t);
+            if (name == "x") {
+                init_tensor_uniform(t, -3.14159f, 3.14159f);
+            } else {
+                init_tensor_uniform(t);
+            }
+        }
+    }
+};
+
 // GGML_OP_SSM_CONV
 struct test_ssm_conv : public test_case {
     const ggml_type type;
@@ -3763,12 +3857,36 @@ struct test_gated_delta_net : public test_case {
             k = ggml_new_tensor_4d(ctx, type, head_size, head_count, n_seq_tokens, n_seqs);
             v = ggml_new_tensor_4d(ctx, type, head_size, head_count * v_repeat, n_seq_tokens, n_seqs);
         }
+        ggml_set_name(q, "q");
+        ggml_set_name(k, "k");
+        ggml_set_name(v, "v");
         const int64_t g_ne0 = kda ? head_size : 1;
         ggml_tensor * g     = ggml_new_tensor_4d(ctx, type, g_ne0, head_count * v_repeat, n_seq_tokens, n_seqs);
         ggml_tensor * beta  = ggml_new_tensor_4d(ctx, type, 1, head_count * v_repeat, n_seq_tokens, n_seqs);
         ggml_tensor * state = ggml_new_tensor_2d(ctx, type, head_size * v_repeat * head_size * head_count, n_seqs);
+        ggml_set_name(g,     "g");
+        ggml_set_name(beta,  "beta");
+        ggml_set_name(state, "state");
+        // q/k are L2-normalised in qwen35/kimi-linear before delta_net
+        q = ggml_l2_norm(ctx, q, 1e-6f);
+        k = ggml_l2_norm(ctx, k, 1e-6f);
         ggml_tensor * out   = ggml_gated_delta_net(ctx, q, k, v, g, beta, state);
         return out;
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != nullptr; t = ggml_get_next_tensor(ctx, t)) {
+            if (ggml_is_view_op(t->op)) { continue; }
+            if (strcmp(t->name, "g") == 0) {
+                init_tensor_uniform(t, -20.0f, -1e-4f);
+            } else if (strcmp(t->name, "beta") == 0) {
+                init_tensor_uniform(t, 0.0f, 1.0f);
+            } else if (strcmp(t->name, "v") == 0) {
+                init_tensor_uniform(t, -0.3f, 5.0f);
+            } else {
+                init_tensor_uniform(t);
+            }
+        }
     }
 };
 
@@ -7465,6 +7583,19 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         test_cases.emplace_back(new test_relu_sqr(type, { 5, 7, 11, 13 }));
     }
 
+    // SNAKE activation fusion: x + sin(a*x)^2 * inv_b
+    for (ggml_type type : { GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_BF16 }) {
+        test_cases.emplace_back(new test_snake_fuse(type, {   5,   7, 1, 1}));   // primes sub-block
+        test_cases.emplace_back(new test_snake_fuse(type, {  33,  32, 1, 1}));   // boundary
+        test_cases.emplace_back(new test_snake_fuse(type, {1025,  13, 1, 1}));   // large prime, grid-stride
+        test_cases.emplace_back(new test_snake_fuse(type, { 128,  16, 1, 1}));   // power-of-two
+        test_cases.emplace_back(new test_snake_fuse(type, { 256, 192, 1, 1}));   // BigVGAN-ish
+        // higher-rank shapes: matcher must reject fusion, fallback to naive chain
+        test_cases.emplace_back(new test_snake_fuse(type, {  64,  32, 2, 1}));   // ne[2] > 1
+        test_cases.emplace_back(new test_snake_fuse(type, {  64,  32, 1, 2}));   // ne[3] > 1
+        test_cases.emplace_back(new test_snake_fuse(type, {  64,  32, 2, 3}));   // ne[2] > 1 and ne[3] > 1
+    }
+
     // glu ops
     for (ggml_type type : {GGML_TYPE_F16, GGML_TYPE_F32}) {
         for (int v : {0, 1}) {
@@ -8206,6 +8337,18 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
             test_cases.emplace_back(new test_mul_mat(type_a, type_b, 16, 8, 256, {1536, 1}, {1, 1}));
         }
     }
+
+    // BF16 is absent from base_types: add the 3 standard non-contig permutations explicitly
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_BF16, GGML_TYPE_F32, 16,  1, 256, {2, 3}, {1, 1}, {0, 2, 1, 3}));
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_BF16, GGML_TYPE_F32, 16,  1, 256, {2, 3}, {1, 1}, {0, 1, 3, 2}));
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_BF16, GGML_TYPE_F32, 16,  1, 256, {2, 3}, {1, 1}, {0, 3, 2, 1}));
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_BF16, GGML_TYPE_F32, 16,  8, 256, {2, 3}, {1, 1}, {0, 2, 1, 3}));
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_BF16, GGML_TYPE_F32, 16,  8, 256, {2, 3}, {1, 1}, {0, 1, 3, 2}));
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_BF16, GGML_TYPE_F32, 16,  8, 256, {2, 3}, {1, 1}, {0, 3, 2, 1}));
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_BF16, GGML_TYPE_F32, 16, 16, 256, {2, 3}, {1, 1}, {0, 2, 1, 3}));
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_BF16, GGML_TYPE_F32, 16, 16, 256, {2, 3}, {1, 1}, {0, 1, 3, 2}));
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_BF16, GGML_TYPE_F32, 16, 16, 256, {2, 3}, {1, 1}, {0, 3, 2, 1}));
+
     for (ggml_type type_a : other_types) {
         for (ggml_type type_b : {GGML_TYPE_F32}) {
             if (ggml_blck_size(type_a) != 256) {
@@ -8359,6 +8502,12 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
                 }
             }
         }
+    }
+
+    // ne2 sweep to cover the cublasSgemmStridedBatched path (dps2 == 1, ne2 > 1)
+    for (int64_t ne2 : {1, 8, 16, 32}) {
+        test_cases.emplace_back(new test_out_prod(GGML_TYPE_F32, GGML_TYPE_F32,
+                                                  256, 16, 16, {ne2, 1}, {1, 1}));
     }
 
     // add_id
@@ -8755,8 +8904,10 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
                                 if (nh == 1 && hsk != 320 && hsk != 576) continue;
                                 for (int nr3 : { 1, 3, }) {
                                     if (hsk > 64 && nr3 > 1) continue; // skip broadcast for large head sizes
-                                    for (int nr2 : { 1, 4, 12, 20, 32 }) {
+                                    for (int nr2 : { 1, 4, 8, 12, 16, 20, 32 }) {
+                                        if (nr2 ==  8 && hsk != 192) continue;
                                         if (nr2 == 12 && hsk != 128) continue;
+                                        if (nr2 == 16 && hsk != 192) continue;
                                         if (nr2 == 20 && (nh != 1 || hsk != 576)) continue;
                                         if (nr2 == 32 && (nh != 1 || hsk != 320)) continue;
                                         //for (int kv : { 1, 17, 31, 33, 61, 113, 65, 127, 129, 130, 255, 260, 371, 380, 407, 512, 1024, }) {
@@ -8871,6 +9022,17 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 8, 32, 4, 2, 2, false, true));
     test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 4, 64, 4, 2, 1, true,  true));
     test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 4, 16, 4, 2, 1, true,  true));
+    // chunked path: multi-chunk and non-multiple-of-chunk-size (chunk_size=64 GDN, 16 KDA)
+    test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 4, 64,  64, 1));
+    test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 4, 64, 127, 1));
+    test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 4, 64, 256, 1));
+    test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 4, 64,  65, 1));
+    test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 4, 64, 100, 1));
+    test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 4, 64, 200, 1));
+    test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 4, 64, 127, 2));
+    test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 4, 64,  64, 1, 1, false, true));
+    test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 4, 64,  33, 1, 1, false, true));
+    test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 4, 64, 100, 1, 1, false, true));
 
 #if 0
     // these tests are disabled to save execution time, sbut they can be handy for debugging
@@ -8972,6 +9134,11 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
     test_cases.emplace_back(new test_pad_reflect_1d(GGML_TYPE_F32, {3000, 80, 4, 1}));
     test_cases.emplace_back(new test_pad_reflect_1d(GGML_TYPE_F32, {3000, 384, 1, 1}));
     test_cases.emplace_back(new test_pad_reflect_1d(GGML_TYPE_F32, {3000, 384, 4, 1}));
+
+    // SNAKE activation fusion at BigVGAN scale (T=7680 = 24 kHz x 320 ms, C=192)
+    test_cases.emplace_back(new test_snake_fuse(GGML_TYPE_F32,  {7680, 192, 1, 1}));
+    test_cases.emplace_back(new test_snake_fuse(GGML_TYPE_F16,  {7680, 192, 1, 1}));
+    test_cases.emplace_back(new test_snake_fuse(GGML_TYPE_BF16, {7680, 192, 1, 1}));
 
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F16, GGML_TYPE_F32, 16416, 1, 128, {8,  1}, {4, 1}, {0, 2, 1, 3}));
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F16, GGML_TYPE_F32, 128, 1, 16416, {8,  1}, {4, 1}, {0, 1, 2, 3}, 2*16416));
