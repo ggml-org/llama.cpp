@@ -127,10 +127,8 @@ struct cli_context {
             console::set_display(DISPLAY_TYPE_RESET);
         }
 
-        append_file_out(
-            "[Prompt]: " + messages.back()["content"].get<std::string>() + "\n\n",
-            chat_params.prompt
-        );
+        append_file_out("[Prompt]: " + messages.back()["content"].get<std::string>() + "\n\n", false);
+        append_file_out(chat_params.prompt, true);
 
         // wait for first result
         console::spinner::start();
@@ -162,24 +160,27 @@ struct cli_context {
                         if (is_thinking) {
                             console::log("\n[End thinking]\n\n");
                             console::set_display(DISPLAY_TYPE_RESET);
-                            append_file_out("\n\n", "</think>");
+                            append_file_out("\n\n", false);
+                            append_file_out("</think>", true);
                             is_thinking = false;
                         }
                         curr_content += diff.content_delta;
                         console::log("%s", diff.content_delta.c_str());
                         console::flush();
                         if (!content_started) {
-                            append_file_out("[Assistant]: ", "");
+                            append_file_out("[Assistant]: ", false);
                             content_started = true;
                         }
-                        append_file_out(diff.content_delta);
+                        append_file_out(diff.content_delta, false);
+                        append_file_out(diff.content_delta, true);
                     }
                     if (!diff.reasoning_content_delta.empty()) {
                         console::set_display(DISPLAY_TYPE_REASONING);
                         std::string reasoning_delta = diff.reasoning_content_delta;
                         if (!is_thinking) {
                             console::log("[Start thinking]\n");
-                            append_file_out("[Thinking]: ", "<think>");
+                            append_file_out("[Thinking]: ", false);
+                            append_file_out("<think>", true);
                             if (reasoning_delta == "<think>") {
                                 reasoning_delta = "";
                             }
@@ -187,14 +188,15 @@ struct cli_context {
                         is_thinking = true;
                         console::log("%s", reasoning_delta.c_str());
                         console::flush();
-                        append_file_out(reasoning_delta);
+                        append_file_out(reasoning_delta, false);
+                        append_file_out(reasoning_delta, true);
                     }
                 }
             }
             auto res_final = dynamic_cast<server_task_result_cmpl_final *>(result.get());
             if (res_final) {
                 out_timings = std::move(res_final->timings);
-                append_file_out("\n\n", "");
+                append_file_out("\n\n", false);
                 break;
             }
             result = rd.next(should_stop);
@@ -221,13 +223,11 @@ struct cli_context {
         }
     }
 
-    void append_file_out(const std::string & content, const std::optional<std::string> & special_content = std::nullopt) {
+    void append_file_out(const std::string & content, bool is_special_tokens = false) {
         if (!file_out.has_value()) {
             return;
         }
-        if (defaults.special_characters && special_content.has_value()) {
-            file_out.value() << special_content.value();
-        } else {
+        if ((defaults.special_characters && is_special_tokens) || (!defaults.special_characters && !is_special_tokens)) {
             file_out.value() << content;
         }
         file_out.value().flush();
