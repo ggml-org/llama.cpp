@@ -1,4 +1,4 @@
-import { Search, Settings, SquarePen } from '@lucide/svelte';
+import { Settings, Search, SquarePen, Package } from '@lucide/svelte';
 import McpLogo from '$lib/components/app/mcp/McpLogo.svelte';
 import type { Component } from 'svelte';
 import { ROUTES } from './routes';
@@ -24,6 +24,7 @@ export interface DesktopIconStripItem {
 
 export const SIDEBAR_ACTIONS_ITEMS: DesktopIconStripItem[] = [
 	{ icon: SquarePen, tooltip: 'New chat', route: ROUTES.NEW_CHAT, keys: ['shift', 'cmd', 'o'] },
+	{ icon: Package, tooltip: 'Models', route: ROUTES.MANAGE_MODELS },
 	{ icon: Search, tooltip: 'Search', keys: ['cmd', 'k'] },
 	{
 		icon: McpLogo,
