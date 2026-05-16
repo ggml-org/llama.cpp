@@ -3040,14 +3040,14 @@ int op_matmul(struct htp_ops_context * octx) {
                 .dst_nb2         = dst->nb[2],
                 .dst_nb3         = dst->nb[3],
             };
-            ret = hmx_mat_mul_f16_f32_batched(octx->ctx, &batch_params);
+            ret = hmx_matmul_f16_f32_batched(octx->ctx, &batch_params);
         } else {
-            ret = hmx_mat_mul_f16_f32(octx->ctx,
+            ret = hmx_matmul_f16_f32(octx->ctx,
                     (float*) dst->data, (float*) src1->data, (const __fp16 *) src0->data,
                     m_total, k, n, act_stride, wgt_stride);
         }
     } else {
-        ret = hmx_mat_mul_q_f32(octx->ctx, (float*) dst->data, (float*) src1->data, (const uint8_t *) src0->data,
+        ret = hmx_matmul_q_f32(octx->ctx, (float*) dst->data, (float*) src1->data, (const uint8_t *) src0->data,
                     m_total, k, n, (int) src0->type);
     }
 

@@ -880,7 +880,7 @@ static void core_mma_chunk_fp16(__fp16 *restrict c, const __fp16 *restrict a, co
     }
 }
 
-int hmx_mat_mul_q_f32(struct htp_context *ctx, float *restrict dst, const float *restrict activation,
+int hmx_matmul_q_f32(struct htp_context *ctx, float *restrict dst, const float *restrict activation,
                                      const uint8_t *restrict permuted_weight, int m, int k, int n,
                                      int weight_type) {
     if (k % 32 != 0 || n % 32 != 0) { return -1; }
@@ -1107,12 +1107,12 @@ static inline float *hmx_matmul_dst_batch_ptr(const hmx_matmul_f16_f32_batched_p
                       (size_t) dst_b3 * params->dst_nb3);
 }
 
-static int hmx_mat_mul_f16_f32_batched_legacy(struct htp_context *ctx,
+static int hmx_matmul_f16_f32_batched_legacy(struct htp_context *ctx,
                                                       const hmx_matmul_f16_f32_batched_params_t *params) {
     int ret = 0;
     for (int b3 = 0; b3 < params->ne13 && ret == 0; ++b3) {
         for (int b2 = 0; b2 < params->ne12 && ret == 0; ++b2) {
-            ret = hmx_mat_mul_f16_f32(ctx, hmx_matmul_dst_batch_ptr(params, b2, b3),
+            ret = hmx_matmul_f16_f32(ctx, hmx_matmul_dst_batch_ptr(params, b2, b3),
                                            hmx_matmul_activation_batch_ptr(params, b2, b3),
                                            hmx_matmul_weight_batch_ptr(params, b2, b3),
                                            params->m, params->k, params->n,
@@ -1122,7 +1122,7 @@ static int hmx_mat_mul_f16_f32_batched_legacy(struct htp_context *ctx,
     return ret;
 }
 
-int hmx_mat_mul_f16_f32_batched(struct htp_context *ctx, const hmx_matmul_f16_f32_batched_params_t *params) {
+int hmx_matmul_f16_f32_batched(struct htp_context *ctx, const hmx_matmul_f16_f32_batched_params_t *params) {
     if (!ctx || !params || !params->dst || !params->activation || !params->permuted_weight) { return -1; }
     if (!params->m || !params->k || !params->n) { return -1; }
     if (params->act_stride < params->k || params->weight_stride < params->k || params->dst_stride < params->n) { return -1; }
@@ -1140,7 +1140,7 @@ int hmx_mat_mul_f16_f32_batched(struct htp_context *ctx, const hmx_matmul_f16_f3
 
     if (group_size <= 1) {
         FARF(HIGH, "%s: no dim2 GQA reuse (group=%d), using legacy batched loop", __func__, group_size);
-        return hmx_mat_mul_f16_f32_batched_legacy(ctx, params);
+        return hmx_matmul_f16_f32_batched_legacy(ctx, params);
     }
 
     // Grouped path: reuse interleaved weight across all q_heads sharing a
@@ -1169,7 +1169,7 @@ int hmx_mat_mul_f16_f32_batched(struct htp_context *ctx, const hmx_matmul_f16_f3
                            /*m_block_cost=*/(size_t) params->n,
                            /*n_block_cost=*/(size_t) params->m, &m_chunk_n_rows, &n_chunk_n_cols, &vtcm_used) != 0) {
         FARF(HIGH, "%s: grouped path does not fit VTCM, falling back to legacy batched loop", __func__);
-        return hmx_mat_mul_f16_f32_batched_legacy(ctx, params);
+        return hmx_matmul_f16_f32_batched_legacy(ctx, params);
     }
 
     const size_t act_head_stride      = m_chunk_n_rows * (size_t) params->k;  // fp16 elements between heads
@@ -1191,7 +1191,7 @@ int hmx_mat_mul_f16_f32_batched(struct htp_context *ctx, const hmx_matmul_f16_f3
 
     if ((size_t) (vtcm_ptr - (uint8_t *) ctx->vtcm_base) > vtcm_budget) {
         FARF(HIGH, "%s: grouped layout overflowed VTCM, falling back to legacy batched loop", __func__);
-        return hmx_mat_mul_f16_f32_batched_legacy(ctx, params);
+        return hmx_matmul_f16_f32_batched_legacy(ctx, params);
     }
 
     hmx_init_column_scales(vtcm_scales, Q6_V_vsplat_R(0x3c00));  // scale: 1.0, bias: 0.0 in FP16
@@ -1319,7 +1319,7 @@ int hmx_mat_mul_f16_f32_batched(struct htp_context *ctx, const hmx_matmul_f16_f3
 
 //
 
-int hmx_mat_mul_f16_f32(struct htp_context *ctx, float *restrict dst, const float *restrict activation,
+int hmx_matmul_f16_f32(struct htp_context *ctx, float *restrict dst, const float *restrict activation,
                                 const __fp16 *restrict permuted_weight, int m, int k, int n,
                                 int act_stride, int weight_stride) {
     if (!dst || !activation || !permuted_weight || !m || !n || !k) { return -1; }

@@ -40,7 +40,7 @@ typedef struct {
 //             nb[1]/sizeof(float) for permuted tensors like attention Q).
 // weight_stride: weight row stride in elements (= k for compact weights, or
 //                nb[1]/sizeof(__fp16) for permuted KV-cache views used by QK).
-int hmx_mat_mul_f16_f32(struct htp_context *ctx,
+int hmx_matmul_f16_f32(struct htp_context *ctx,
                                 float *restrict dst,
                                 const float *activation,
                                 const __fp16 *permuted_weight,
@@ -50,10 +50,10 @@ int hmx_mat_mul_f16_f32(struct htp_context *ctx,
 
 // Batched F16 wrapper over hmx_mat_mul_f16_f32.
 // Batch semantics match ggml_mul_mat(): src0 broadcasts to src1 in dims 2/3.
-int hmx_mat_mul_f16_f32_batched(struct htp_context *ctx, const hmx_matmul_f16_f32_batched_params_t *params);
+int hmx_matmul_f16_f32_batched(struct htp_context *ctx, const hmx_matmul_f16_f32_batched_params_t *params);
 
 // HMX matrix multiplication — quantised weights (Q4_0/Q8_0/IQ4_NL/MXFP4)
-int hmx_mat_mul_q_f32(struct htp_context *ctx,
+int hmx_matmul_q_f32(struct htp_context *ctx,
                                       float *restrict dst,
                                       const float *activation,
                                       const uint8_t *permuted_weight,
