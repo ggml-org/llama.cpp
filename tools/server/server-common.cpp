@@ -718,7 +718,8 @@ server_tokens process_mtmd_prompt(mtmd_context * mctx, std::string prompt, std::
     for (auto & file : files) {
         mtmd::bitmap bmp(mtmd_helper_bitmap_init_from_buf(mctx, file.data(), file.size()));
         if (!bmp.ptr) {
-            throw std::runtime_error("Failed to load image or audio file");
+            SRV_WRN("internal: body did not decode as image/audio\n");
+            throw std::runtime_error("image fetch failed");
         }
         // calculate bitmap hash (for KV caching)
         std::string hash = fnv_hash(bmp.data(), bmp.n_bytes());
@@ -869,7 +870,8 @@ static void handle_media(
             data.insert(data.end(), res.second.begin(), res.second.end());
             out_files.push_back(data);
         } else {
-            throw std::runtime_error("Failed to download image");
+            SRV_WRN("internal: non-2xx response from upstream (status=%d)\n", res.first);
+            throw std::runtime_error("image fetch failed");
         }
 
     } else if (string_starts_with(url, "file://")) {

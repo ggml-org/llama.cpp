@@ -461,7 +461,10 @@ std::pair<long, std::vector<char>> common_remote_get_content(const std::string  
     );
 
     if (!res) {
-        throw std::runtime_error("error: cannot make GET request");
+        // Generic error string at the wire level to avoid forming a SSRF
+        // probing oracle distinguishing closed port / refused / DNS fail
+        // from other failure modes. Detail captured at the call site logs.
+        throw std::runtime_error("image fetch failed");
     }
 
     return { res->status, std::move(buf) };
