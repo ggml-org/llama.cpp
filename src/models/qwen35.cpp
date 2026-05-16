@@ -3,14 +3,35 @@
 
 void llama_model_qwen35::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS,       hparams.f_norm_rms_eps);
-    ml.get_key_or_arr(LLM_KV_ROPE_DIMENSION_SECTIONS,    hparams.rope_sections, 4, true);
+    if (!ml.get_key_or_arr(LLM_KV_ROPE_DIMENSION_SECTIONS, hparams.rope_sections, 4, false)) {
+        // Per-layer format (newer GGUF converters) → collapse to 4-section mrope
+        std::array<uint32_t, 512> per_layer_rope = {};
+        if (ml.get_key_or_arr(LLM_KV_ROPE_DIMENSION_SECTIONS, per_layer_rope, (uint32_t)hparams.n_layer, false)) {
+            uint32_t max_dim = 0;
+            for (uint32_t i = 0; i < hparams.n_layer; i++) {
+                max_dim = std::max(max_dim, per_layer_rope[i]);
+            }
+            hparams.rope_sections[0] = (int)max_dim;
+            hparams.rope_sections[1] = (int)max_dim;
+            hparams.rope_sections[2] = (int)max_dim;
+            hparams.rope_sections[3] = 0;
+        }
+    }
 
     // Load linear attention (gated delta net) parameters
-    ml.get_key(LLM_KV_SSM_CONV_KERNEL,    hparams.ssm_d_conv);
-    ml.get_key(LLM_KV_SSM_INNER_SIZE,     hparams.ssm_d_inner);
-    ml.get_key(LLM_KV_SSM_STATE_SIZE,     hparams.ssm_d_state);
-    ml.get_key(LLM_KV_SSM_TIME_STEP_RANK, hparams.ssm_dt_rank);
-    ml.get_key(LLM_KV_SSM_GROUP_COUNT,    hparams.ssm_n_group);
+    // Optional: newer GGUF converters store these elsewhere or omit them
+    ml.get_key(LLM_KV_SSM_CONV_KERNEL,    hparams.ssm_d_conv,    false);
+    ml.get_key(LLM_KV_SSM_INNER_SIZE,     hparams.ssm_d_inner,   false);
+    ml.get_key(LLM_KV_SSM_STATE_SIZE,     hparams.ssm_d_state,   false);
+    ml.get_key(LLM_KV_SSM_TIME_STEP_RANK, hparams.ssm_dt_rank,   false);
+    ml.get_key(LLM_KV_SSM_GROUP_COUNT,    hparams.ssm_n_group,   false);
+
+    // Sensible defaults for Qwen3.5 when SSM keys are absent (newer GGUF format)
+    if (hparams.ssm_d_conv == 0)  hparams.ssm_d_conv  = 4;
+    if (hparams.ssm_d_inner == 0) hparams.ssm_d_inner = 1536;
+    if (hparams.ssm_d_state == 0) hparams.ssm_d_state = 128;
+    if (hparams.ssm_dt_rank == 0) hparams.ssm_dt_rank = 64;
+    if (hparams.ssm_n_group == 0) hparams.ssm_n_group = 2;
 
     // NextN/MTP (Qwen3.5/3.6): extra decoder block appended beyond the main stack
     ml.get_key(LLM_KV_NEXTN_PREDICT_LAYERS, hparams.nextn_predict_layers, false);
