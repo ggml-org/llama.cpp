@@ -44,6 +44,7 @@ extern char **environ;
 #define CMD_ROUTER_TO_CHILD_EXIT  "cmd_router_to_child:exit"
 #define CMD_CHILD_TO_ROUTER_READY "cmd_child_to_router:ready" // also sent when waking up from sleep
 #define CMD_CHILD_TO_ROUTER_SLEEP "cmd_child_to_router:sleep"
+#define CMD_CHILD_TO_ROUTER_INFO  "cmd_child_to_router:info:" // followed by json string
 
 // address for child process, this is needed because router may run on 0.0.0.0
 // ref: https://github.com/ggml-org/llama.cpp/issues/17862
@@ -160,6 +161,30 @@ void server_model_meta::update_args(common_preset_context & ctx_preset, std::str
     args = preset.to_args(bin_path);
 }
 
+void server_model_meta::update_caps() {
+    try {
+        common_params params;
+        preset.apply_to_params(params, {
+            "LLAMA_ARG_MODEL",
+            "LLAMA_ARG_MODEL_URL",
+            "LLAMA_ARG_MMPROJ",
+            "LLAMA_ARG_MMPROJ_URL",
+            "LLAMA_ARG_HF_REPO",
+            "LLAMA_ARG_HF_REPO_FILE",
+        });
+        params.offline = true; // avoid any unwanted network call during capability detection
+        common_params_handle_models(params, LLAMA_EXAMPLE_SERVER);
+        if (params.mmproj.path.empty()) {
+            multimodal = { false, false };
+        } else {
+            multimodal = mtmd_get_cap_from_file(params.mmproj.path.c_str());
+        }
+    } catch (const std::exception & e) {
+        LOG_WRN("failed to initialize common_params for multimodal capability detection: %s\n", e.what());
+        multimodal = { false, false };
+    }
+}
+
 //
 // server_models
 //
@@ -235,6 +260,7 @@ void server_models::add_model(server_model_meta && meta) {
     }
 
     meta.update_args(ctx_preset, bin_path); // render args
+    meta.update_caps();
     std::string name = meta.name;
     mapping[name] = instance_t{
         /* subproc */ std::make_shared<subprocess_s>(),
@@ -345,8 +371,10 @@ void server_models::load_models() {
                 /* status       */ SERVER_MODEL_STATUS_UNLOADED,
                 /* last_used    */ 0,
                 /* args         */ std::vector<std::string>(),
+                /* loaded_info  */ {},
                 /* exit_code    */ 0,
                 /* stop_timeout */ DEFAULT_STOP_TIMEOUT,
+                /* multimodal   */ mtmd_caps{false, false},
             };
             add_model(std::move(meta));
         }
@@ -480,6 +508,7 @@ void server_models::load_models() {
 
             inst.meta.exit_code = 0; // clear failed state so the model can be reloaded
             inst.meta.update_args(ctx_preset, bin_path);
+            inst.meta.update_caps();
         }
 
         // add models that are new in this reload
@@ -495,8 +524,10 @@ void server_models::load_models() {
                     /* status       */ SERVER_MODEL_STATUS_UNLOADED,
                     /* last_used    */ 0,
                     /* args         */ std::vector<std::string>(),
+                    /* loaded_info  */ {},
                     /* exit_code    */ 0,
                     /* stop_timeout */ DEFAULT_STOP_TIMEOUT,
+                    /* multimodal   */ mtmd_caps{false, false},
                 };
                 add_model(std::move(meta));
                 newly_added.push_back(name);
@@ -718,10 +749,11 @@ void server_models::load(const std::string & name) {
 
     // prepare new instance info
     instance_t inst;
-    inst.meta           = meta;
-    inst.meta.port      = get_free_port();
-    inst.meta.status    = SERVER_MODEL_STATUS_LOADING;
-    inst.meta.last_used = ggml_time_ms();
+    inst.meta             = meta;
+    inst.meta.port        = get_free_port();
+    inst.meta.status      = SERVER_MODEL_STATUS_LOADING;
+    inst.meta.loaded_info = json{};
+    inst.meta.last_used   = ggml_time_ms();
 
     if (inst.meta.port <= 0) {
         throw std::runtime_error("failed to get a port number");
@@ -767,12 +799,14 @@ void server_models::load(const std::string & name) {
             // read stdout/stderr and forward to main server log
             // also handle status report from child process
             if (stdout_file) {
-                char buffer[4096];
+                char buffer[128 * 1024]; // large buffer for storing info
                 while (fgets(buffer, sizeof(buffer), stdout_file) != nullptr) {
                     LOG("[%5d] %s", port, buffer);
                     std::string str(buffer);
                     if (string_starts_with(buffer, CMD_CHILD_TO_ROUTER_READY)) {
                         this->update_status(name, SERVER_MODEL_STATUS_LOADED, 0);
+                    } else if (string_starts_with(buffer, CMD_CHILD_TO_ROUTER_INFO)) {
+                        this->update_loaded_info(name, str);
                     } else if (string_starts_with(buffer, CMD_CHILD_TO_ROUTER_SLEEP)) {
                         this->update_status(name, SERVER_MODEL_STATUS_SLEEPING, 0);
                     }
@@ -916,6 +950,29 @@ void server_models::update_status(const std::string & name, server_model_status 
     cv.notify_all();
 }
 
+void server_models::update_loaded_info(const std::string & name, std::string & raw_info) {
+    if (!string_starts_with(raw_info, CMD_CHILD_TO_ROUTER_INFO)) {
+        SRV_WRN("invalid loaded info format from child for model name=%s: %s\n", name.c_str(), raw_info.c_str());
+        return;
+    }
+
+    json info;
+    try {
+        info = json::parse(raw_info.substr(strlen(CMD_CHILD_TO_ROUTER_INFO)));
+    } catch (const std::exception & e) {
+        SRV_WRN("failed to parse loaded info from child for model name=%s: %s\n", name.c_str(), e.what());
+        return;
+    }
+
+    std::unique_lock<std::mutex> lk(mutex);
+    auto it = mapping.find(name);
+    if (it != mapping.end()) {
+        auto & meta = it->second.meta;
+        meta.loaded_info = info;
+    }
+    cv.notify_all();
+}
+
 void server_models::wait_until_loading_finished(const std::string & name) {
     std::unique_lock<std::mutex> lk(mutex);
     cv.wait(lk, [this, &name]() {
@@ -994,11 +1051,13 @@ bool server_models::is_child_server() {
     return router_port != nullptr;
 }
 
-std::thread server_models::setup_child_server(const std::function<void(int)> & shutdown_handler) {
+std::thread server_models::setup_child_server(const std::function<void(int)> & shutdown_handler, const json & model_info) {
     // send a notification to the router server that a model instance is ready
     common_log_pause(common_log_main());
     fflush(stdout);
     fprintf(stdout, "%s\n", CMD_CHILD_TO_ROUTER_READY);
+    fflush(stdout);
+    fprintf(stdout, "%s%s\n", CMD_CHILD_TO_ROUTER_INFO, safe_json_to_str(model_info).c_str());
     fflush(stdout);
     common_log_resume(common_log_main());
 
@@ -1093,14 +1152,17 @@ void server_models_routes::init_routes() {
                 {"role",          "router"},
                 {"max_instances", params.models_max},
                 {"models_autoload", params.models_autoload},
-                // this is a dummy response to make sure webui doesn't break
+                // this is a dummy response to make sure the UI doesn't break
                 {"model_alias", "llama-server"},
                 {"model_path",  "none"},
                 {"default_generation_settings", {
                     {"params", json{}},
                     {"n_ctx",  0},
                 }},
-                {"webui_settings", webui_settings},
+                // New key
+                {"ui_settings",     ui_settings},
+                // Deprecated: use ui_settings instead (kept for backward compat)
+                {"webui_settings",  webui_settings},
                 {"build_info",     std::string(llama_build_info())},
             });
             return res;
@@ -1176,16 +1238,41 @@ void server_models_routes::init_routes() {
                 status["exit_code"] = meta.exit_code;
                 status["failed"]    = true;
             }
-            models_json.push_back(json {
-                {"id",       meta.name},
-                {"aliases",  meta.aliases},
-                {"tags",     meta.tags},
-                {"object",   "model"},    // for OAI-compat
-                {"owned_by", "llamacpp"}, // for OAI-compat
-                {"created",  t},          // for OAI-compat
-                {"status",   status},
+
+            // pi coding agent multimodal compatibility
+            json input_modalities = json::array({"text"});
+            if (meta.multimodal.inp_vision) {
+                input_modalities.push_back("image");
+            }
+            if (meta.multimodal.inp_audio) {
+                input_modalities.push_back("audio");
+            }
+            json architecture {
+                {"input_modalities",  input_modalities},
+                {"output_modalities", json::array({"text"})},
+            };
+
+            json model_info = json {
+                {"id",           meta.name},
+                {"aliases",      meta.aliases},
+                {"tags",         meta.tags},
+                {"object",       "model"},    // for OAI-compat
+                {"owned_by",     "llamacpp"}, // for OAI-compat
+                {"created",      t},          // for OAI-compat
+                {"status",       status},
+                {"architecture", architecture},
                 // TODO: add other fields, may require reading GGUF metadata
-            });
+            };
+
+            // merge with loaded_info from the child process if available
+            if (meta.is_running()) {
+                for (auto it = meta.loaded_info.begin(); it != meta.loaded_info.end(); ++it) {
+                    if (!model_info.contains(it.key())) {
+                        model_info[it.key()] = it.value();
+                    }
+                }
+            }
+            models_json.push_back(model_info);
         }
         res_ok(res, {
             {"data", models_json},
