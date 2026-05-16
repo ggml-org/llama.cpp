@@ -15,7 +15,7 @@
 # ggml-org/llama-common     : ggerganov, aldehir, angt, danbev, ngxson, pwilkin
 # ggml-org/llama-mtmd       : ngxson
 # ggml-org/llama-server     : ggerganov, ngxson, allozaur, angt, ServeurpersoCom
-# ggml-org/llama-webui      : allozaur
+# ggml-org/llama-ui           : allozaur
 
 /.devops/*.Dockerfile                   @ngxson
 /.github/actions/                       @ggml-org/ci
@@ -107,7 +107,7 @@
 /tools/rpc/                             @ggml-org/ggml-rpc
 /tools/server/*                         @ggml-org/llama-server # no subdir
 /tools/server/tests/                    @ggml-org/llama-server
-/tools/server/webui/                    @ggml-org/llama-webui
+/tools/ui/                              @ggml-org/llama-ui
 /tools/tokenize/                        @ggerganov
 /tools/tts/                             @ggerganov
 /vendor/                                @ggerganov

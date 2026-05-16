@@ -104,6 +104,12 @@ set(GGML_OPENCL_KERNELS
     mul_mv_id_mxfp4_f32_flat
     gemm_moe_q4_0_f32_ns
     gemv_moe_q4_0_f32_ns
+    gemm_moe_q4_1_f32_ns
+    gemv_moe_q4_1_f32_ns
+    gemm_moe_q5_0_f32_ns
+    gemv_moe_q5_0_f32_ns
+    gemm_moe_q5_1_f32_ns
+    gemv_moe_q5_1_f32_ns
     gemm_moe_mxfp4_f32
     gemv_moe_mxfp4_f32
     gemm_moe_mxfp4_f32_ns
@@ -173,6 +179,10 @@ set(GGML_OPENCL_KERNELS
     flash_attn_f16
     flash_attn_f32
 )
+
+if (GGML_OPENCL_USE_ADRENO_KERNELS)
+    list(APPEND GGML_OPENCL_KERNELS gemm_xmem_f16_f32_os8)
+endif ()
 
 foreach (K ${GGML_OPENCL_KERNELS})
     ggml_opencl_add_kernel(${K})
