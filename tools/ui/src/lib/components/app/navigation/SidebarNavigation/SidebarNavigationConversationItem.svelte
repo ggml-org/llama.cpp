@@ -119,12 +119,16 @@
 		{#if depth > 0}
 			<Tooltip.Root>
 				<Tooltip.Trigger>
-					<a
-						href={RouterService.chat(conversation.forkedFromConversationId)}
-						class="flex shrink-0 items-center text-muted-foreground transition-colors hover:text-foreground"
-					>
-						<GitBranch class="h-3.5 w-3.5" />
-					</a>
+					<!-- prevent another nested button element -->
+					{#snippet child({ props })}
+						<a
+							{...props}
+							href={RouterService.chat(conversation.forkedFromConversationId)}
+							class="flex shrink-0 items-center text-muted-foreground transition-colors hover:text-foreground"
+						>
+							<GitBranch class="h-3.5 w-3.5" />
+						</a>
+					{/snippet}
 				</Tooltip.Trigger>
 
 				<Tooltip.Content>
