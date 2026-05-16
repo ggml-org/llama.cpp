@@ -708,7 +708,7 @@ struct common_params {
 // initializes the logging system and prints info about the build
 void common_init();
 
-void common_params_print_info(const common_params & params);
+void common_params_print_info(const common_params & params, bool print_devices = true);
 std::string common_params_get_system_info(const common_params & params);
 
 bool parse_cpu_range(const std::string & range, bool(&boolmask)[GGML_MAX_N_THREADS]);
