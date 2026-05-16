@@ -50,6 +50,8 @@ jobs:
     env:
       ONEAPI_ROOT: /opt/intel/oneapi/
       ONEAPI_INSTALLER_VERSION: "2025.3.3"
+      LEVEL_ZERO_VERSION: "1.28.2"
+      LEVEL_ZERO_UBUNTU_VERSION: "u24.04"
 
     continue-on-error: true
 
@@ -70,6 +72,14 @@ jobs:
           cd /tmp
           wget https://registrationcenter-download.intel.com/akdlm/IRC_NAS/56f7923a-adb8-43f3-8b02-2b60fcac8cab/intel-deep-learning-essentials-2025.3.3.16_offline.sh -O intel-deep-learning-essentials_offline.sh
           sudo bash intel-deep-learning-essentials_offline.sh -s -a --silent --eula accept
+
+      - name: Install Level Zero SDK
+        shell: bash
+        run: |
+          cd /tmp
+          wget -q "https://github.com/oneapi-src/level-zero/releases/download/v${LEVEL_ZERO_VERSION}/level-zero_${LEVEL_ZERO_VERSION}%2B${LEVEL_ZERO_UBUNTU_VERSION}_amd64.deb" -O level-zero.deb
+          wget -q "https://github.com/oneapi-src/level-zero/releases/download/v${LEVEL_ZERO_VERSION}/level-zero-devel_${LEVEL_ZERO_VERSION}%2B${LEVEL_ZERO_UBUNTU_VERSION}_amd64.deb" -O level-zero-devel.deb
+          sudo apt-get install -y ./level-zero.deb ./level-zero-devel.deb
 
       - name: Clone
         id: checkout
@@ -107,6 +117,7 @@ jobs:
     env:
       WINDOWS_BASEKIT_URL: https://registrationcenter-download.intel.com/akdlm/IRC_NAS/b60765d1-2b85-4e85-86b6-cb0e9563a699/intel-deep-learning-essentials-2025.3.3.18_offline.exe
       WINDOWS_DPCPP_MKL: intel.oneapi.win.cpp-dpcpp-common:intel.oneapi.win.mkl.devel:intel.oneapi.win.dnnl:intel.oneapi.win.tbb.devel
+      LEVEL_ZERO_SDK_URL: https://github.com/oneapi-src/level-zero/releases/download/v1.28.2/level-zero-win-sdk-1.28.2.zip
       ONEAPI_ROOT: "C:/Program Files (x86)/Intel/oneAPI"
       ONEAPI_INSTALLER_VERSION: "2025.3.3"
     steps:
@@ -126,6 +137,13 @@ jobs:
         if: steps.cache-sycl.outputs.cache-hit != 'true'
         run: |
           scripts/install-oneapi.bat $WINDOWS_BASEKIT_URL $WINDOWS_DPCPP_MKL
+
+      - name: Install Level Zero SDK
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri "${{ env.LEVEL_ZERO_SDK_URL }}" -OutFile "level-zero-win-sdk.zip"
+          Expand-Archive -Path "level-zero-win-sdk.zip" -DestinationPath "C:/level-zero-sdk" -Force
+          "LEVEL_ZERO_V1_SDK_PATH=C:/level-zero-sdk" | Out-File -FilePath $env:GITHUB_ENV -Append
 
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.21
