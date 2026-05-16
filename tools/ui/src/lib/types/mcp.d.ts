@@ -135,6 +135,8 @@ export interface MCPConnection {
 	protocolVersion?: string;
 	instructions?: string;
 	connectionTimeMs: number;
+	/** Configured timeout for individual requests (tool calls, etc.) in milliseconds */
+	requestTimeoutMs: number;
 }
 
 /**
