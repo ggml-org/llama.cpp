@@ -107,6 +107,11 @@ class ModelBase:
     disable_mistral_community_chat_template: bool = False
     sentence_transformers_dense_modules: bool = False
 
+    # MTP (multi-token prediction) export modes; set by main() before instantiation.
+    # Architectures opt in by overriding the handling (see _Qwen35MtpMixin).
+    mtp_only: bool = False
+    no_mtp: bool = False
+
     def __init__(self, dir_model: Path, ftype: gguf.LlamaFileType, fname_out: Path, *, is_big_endian: bool = False,
                  use_temp_file: bool = False, eager: bool = False,
                  metadata_override: Path | None = None, model_name: str | None = None,

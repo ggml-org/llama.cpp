@@ -548,9 +548,6 @@ class _Qwen35MtpMixin:
     block_count: int
     tensor_map: gguf.TensorNameMap
 
-    mtp_only: bool = False
-    no_mtp: bool = False
-
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.block_count = self.hparams["num_hidden_layers"]
