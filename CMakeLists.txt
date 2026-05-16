@@ -108,8 +108,23 @@ option(LLAMA_BUILD_TESTS            "llama: build tests"                        
 option(LLAMA_BUILD_TOOLS            "llama: build tools"                                                                            ${LLAMA_STANDALONE})
 option(LLAMA_BUILD_EXAMPLES         "llama: build examples"                                                                         ${LLAMA_STANDALONE})
 option(LLAMA_BUILD_SERVER           "llama: build server example"                                                                   ${LLAMA_STANDALONE})
-option(LLAMA_BUILD_WEBUI            "llama: build the embedded Web UI for server"                                                   ON)
-option(LLAMA_USE_PREBUILT_WEBUI     "llama: use prebuilt WebUI from HF Bucket when available (requires LLAMA_BUILD_WEBUI=ON)"       ON)
+# Deprecated: use LLAMA_BUILD_UI instead (kept for backward compat)
+option(LLAMA_BUILD_WEBUI            "llama: build the embedded Web UI for server (deprecated: use LLAMA_BUILD_UI)"                   ON)
+option(LLAMA_USE_PREBUILT_WEBUI     "llama: use prebuilt WebUI from HF Bucket when available (deprecated: use LLAMA_USE_PREBUILT_UI)" ON)
+
+# New option names
+option(LLAMA_BUILD_UI                "llama: build the embedded Web UI for server"                                                   ON)
+option(LLAMA_USE_PREBUILT_UI         "llama: use prebuilt UI from HF Bucket when available (requires LLAMA_BUILD_UI=ON)"             ON)
+
+# Backward compat: when old var is set but new one isn't, forward the value
+if(DEFINED LLAMA_BUILD_WEBUI AND NOT DEFINED LLAMA_BUILD_UI)
+    set(LLAMA_BUILD_UI ${LLAMA_BUILD_WEBUI})
+    message(DEPRECATION "LLAMA_BUILD_WEBUI is deprecated, use LLAMA_BUILD_UI instead")
+endif()
+if(DEFINED LLAMA_USE_PREBUILT_WEBUI AND NOT DEFINED LLAMA_USE_PREBUILT_UI)
+    set(LLAMA_USE_PREBUILT_UI ${LLAMA_USE_PREBUILT_WEBUI})
+    message(DEPRECATION "LLAMA_USE_PREBUILT_WEBUI is deprecated, use LLAMA_USE_PREBUILT_UI instead")
+endif()
 option(LLAMA_TOOLS_INSTALL          "llama: install tools"                                                                          ${LLAMA_TOOLS_INSTALL_DEFAULT})
 option(LLAMA_TESTS_INSTALL          "llama: install tests"                                                                          ON)
 

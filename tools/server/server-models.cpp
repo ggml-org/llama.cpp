@@ -1152,14 +1152,17 @@ void server_models_routes::init_routes() {
                 {"role",          "router"},
                 {"max_instances", params.models_max},
                 {"models_autoload", params.models_autoload},
-                // this is a dummy response to make sure webui doesn't break
+                // this is a dummy response to make sure the UI doesn't break
                 {"model_alias", "llama-server"},
                 {"model_path",  "none"},
                 {"default_generation_settings", {
                     {"params", json{}},
                     {"n_ctx",  0},
                 }},
-                {"webui_settings", webui_settings},
+                // New key
+                {"ui_settings",     ui_settings},
+                // Deprecated: use ui_settings instead (kept for backward compat)
+                {"webui_settings",  webui_settings},
                 {"build_info",     std::string(llama_build_info())},
             });
             return res;

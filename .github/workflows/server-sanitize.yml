@@ -67,6 +67,13 @@ jobs:
           fetch-depth: 0
           ref: ${{ github.event.inputs.sha || github.event.pull_request.head.sha || github.sha || github.head_ref || github.ref_name }}
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: "npm"
+          cache-dependency-path: "tools/ui/package-lock.json"
+
       - name: Build
         id: cmake_build
         run: |
