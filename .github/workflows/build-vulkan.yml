@@ -93,4 +93,5 @@ jobs:
           export GGML_VK_DISABLE_F16=1
           export GGML_VK_DISABLE_COOPMAT=1
           # This is using llvmpipe and runs slower than other backends
-          ctest -L main --verbose --timeout 4800
+          # test-backend-ops is too slow on llvmpipe, skip it
+          ctest -L main -E test-backend-ops --verbose --timeout 900

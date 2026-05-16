@@ -1,5 +1,7 @@
 #include "ggml-remoting.h"
 
+#include <mutex>
+
 static const char * ggml_backend_remoting_device_get_name(ggml_backend_dev_t dev) {
     virtgpu * gpu = DEV_TO_GPU(dev);
 
