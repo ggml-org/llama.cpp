@@ -1,0 +1,44 @@
+name: UI Build
+
+on:
+  workflow_call:
+
+jobs:
+  build:
+    name: Build static output
+    runs-on: ubuntu-slim
+    env:
+      BRANCH_NAME: ${{ github.head_ref || github.ref_name }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: "npm"
+          cache-dependency-path: "tools/ui/package-lock.json"
+
+      - name: Install dependencies
+        run: npm ci
+        working-directory: tools/ui
+
+      - name: Build application
+        run: npm run build
+        working-directory: tools/ui
+
+      - name: Generate checksums
+        run: |
+          cd build/tools/ui/dist
+          for f in *; do
+            sha256sum "$f" | awk '{print $1, $2}' >> checksums.txt
+          done
+
+      - name: Upload built UI
+        uses: actions/upload-artifact@v6
+        with:
+          name: ui-build
+          path: build/tools/ui/dist/
+          retention-days: 1

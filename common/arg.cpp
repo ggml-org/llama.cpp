@@ -2844,28 +2844,64 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.api_prefix = value;
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_API_PREFIX"));
+    // Deprecated: use --ui-config instead (kept for backward compat)
     add_opt(common_arg(
         {"--webui-config"}, "JSON",
-        "JSON that provides default WebUI settings (overrides WebUI defaults)",
+        "[DEPRECATED: use --ui-config] JSON that provides default WebUI settings (overrides WebUI defaults)",
         [](common_params & params, const std::string & value) {
+            params.ui_config_json = value;
             params.webui_config_json = value;
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_WEBUI_CONFIG"));
+
+    add_opt(common_arg(
+        {"--ui-config"}, "JSON",
+        "JSON that provides default UI settings (overrides UI defaults)",
+        [](common_params & params, const std::string & value) {
+            params.ui_config_json = value;
+            params.webui_config_json = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_UI_CONFIG"));
+
+    // Deprecated: use --ui-config-file instead (kept for backward compat)
     add_opt(common_arg(
         {"--webui-config-file"}, "PATH",
-        "JSON file that provides default WebUI settings (overrides WebUI defaults)",
+        "[DEPRECATED: use --ui-config-file] JSON file that provides default WebUI settings (overrides WebUI defaults)",
         [](common_params & params, const std::string & value) {
-            params.webui_config_json = read_file(value);
+            params.ui_config_json = read_file(value);
+            params.webui_config_json = params.ui_config_json;
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_WEBUI_CONFIG_FILE"));
+
+    add_opt(common_arg(
+        {"--ui-config-file"}, "PATH",
+        "JSON file that provides default UI settings (overrides UI defaults)",
+        [](common_params & params, const std::string & value) {
+            params.ui_config_json = read_file(value);
+            params.webui_config_json = params.ui_config_json;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_UI_CONFIG_FILE"));
+
+    // Deprecated: use --ui-mcp-proxy instead (kept for backward compat)
     add_opt(common_arg(
         {"--webui-mcp-proxy"},
         {"--no-webui-mcp-proxy"},
-        string_format("experimental: whether to enable MCP CORS proxy - do not enable in untrusted environments (default: %s)", params.webui_mcp_proxy ? "enabled" : "disabled"),
+        "[DEPRECATED: use --ui-mcp-proxy/--no-ui-mcp-proxy] experimental: whether to enable MCP CORS proxy",
         [](common_params & params, bool value) {
+            params.ui_mcp_proxy = value;
             params.webui_mcp_proxy = value;
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_WEBUI_MCP_PROXY"));
+
+    add_opt(common_arg(
+        {"--ui-mcp-proxy"},
+        {"--no-ui-mcp-proxy"},
+        "experimental: whether to enable MCP CORS proxy - do not enable in untrusted environments (default: disabled)",
+        [](common_params & params, bool value) {
+            params.ui_mcp_proxy = value;
+            params.webui_mcp_proxy = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_UI_MCP_PROXY"));
     add_opt(common_arg(
         {"--tools"}, "TOOL1,TOOL2,...",
         "experimental: whether to enable built-in tools for AI agents - do not enable in untrusted environments (default: no tools)\n"
@@ -2875,14 +2911,26 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.server_tools = parse_csv_row(value);
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_TOOLS"));
+    // Deprecated: use --ui/--no-ui instead (kept for backward compat)
     add_opt(common_arg(
         {"--webui"},
         {"--no-webui"},
-        string_format("whether to enable the Web UI (default: %s)", params.webui ? "enabled" : "disabled"),
+        "[DEPRECATED: use --ui/--no-ui] whether to enable the Web UI",
         [](common_params & params, bool value) {
+            params.ui = value;
             params.webui = value;
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_WEBUI"));
+
+    add_opt(common_arg(
+        {"--ui"},
+        {"--no-ui"},
+        string_format("whether to enable the Web UI (default: %s)", params.ui ? "enabled" : "disabled"),
+        [](common_params & params, bool value) {
+            params.ui = value;
+            params.webui = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_UI"));
     add_opt(common_arg(
         {"--embedding", "--embeddings"},
         string_format("restrict to only support embedding use case; use only with dedicated embedding models (default: %s)", params.embedding ? "enabled" : "disabled"),

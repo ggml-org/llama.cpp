@@ -54,12 +54,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  webui-build:
-    name: Build WebUI
-    uses: ./.github/workflows/webui-build.yml
-
   server:
-    needs: webui-build
     runs-on: ubuntu-latest
 
     name: server (${{ matrix.wf_name }})
@@ -98,11 +93,12 @@ jobs:
           fetch-depth: 0
           ref: ${{ github.event.inputs.sha || github.event.pull_request.head.sha || github.sha || github.head_ref || github.ref_name }}
 
-      - name: Download WebUI build artifact
-        uses: actions/download-artifact@v7
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
         with:
-          name: webui-build
-          path: tools/server/public/
+          node-version: "24"
+          cache: "npm"
+          cache-dependency-path: "tools/ui/package-lock.json"
 
       - name: Build
         id: cmake_build
@@ -136,7 +132,6 @@ jobs:
           SLOW_TESTS=1 pytest -v -x
 
   server-windows:
-    needs: webui-build
     runs-on: windows-2022
 
     steps:
@@ -147,11 +142,10 @@ jobs:
           fetch-depth: 0
           ref: ${{ github.event.inputs.sha || github.event.pull_request.head.sha || github.sha || github.head_ref || github.ref_name }}
 
-      - name: Download WebUI build artifact
-        uses: actions/download-artifact@v7
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
         with:
-          name: webui-build
-          path: tools/server/public/
+          node-version: "24"
 
       - name: Build
         id: cmake_build

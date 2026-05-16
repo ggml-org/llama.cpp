@@ -175,15 +175,22 @@ public:
 
 struct server_models_routes {
     common_params params;
-    json webui_settings = json::object();
+    json ui_settings = json::object();          // Primary: new name
+    json webui_settings = json::object();        // Deprecated: use ui_settings (kept for compat)
     server_models models;
     server_models_routes(const common_params & params, int argc, char ** argv)
             : params(params), models(params, argc, argv) {
-        if (!this->params.webui_config_json.empty()) {
+        // Support both new ui_config_json and deprecated webui_config_json
+        const std::string & cfg = !this->params.ui_config_json.empty()
+            ? this->params.ui_config_json
+            : this->params.webui_config_json;
+        if (!cfg.empty()) {
             try {
-                webui_settings = json::parse(this->params.webui_config_json);
+                json json_settings = json::parse(cfg);
+                ui_settings = json_settings;
+                webui_settings = json_settings;  // Deprecated: keep in sync
             } catch (const std::exception & e) {
-                LOG_ERR("%s: failed to parse webui config: %s\n", __func__, e.what());
+                LOG_ERR("%s: failed to parse UI config: %s\n", __func__, e.what());
                 throw;
             }
         }

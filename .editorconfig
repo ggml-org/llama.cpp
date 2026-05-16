@@ -45,7 +45,7 @@ insert_final_newline = unset
 trim_trailing_whitespace = unset
 insert_final_newline = unset
 
-[tools/server/webui/**]
+[tools/ui/**]
 indent_style = unset
 indent_size = unset
 end_of_line = unset
