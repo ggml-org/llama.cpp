@@ -179,7 +179,7 @@ llama_model_phi3::graph<iswa>::graph(const llama_model & model, const llm_graph_
     cb(cur, "result_norm", -1);
     res->t_embd = cur;
 
-    cur = build_lora_mm(model.output, cur);
+    cur = build_lora_mm(model.output, cur, model.output_s);
 
     if (model.output_b != nullptr) {
         cb(cur, "result_output_no_bias", -1);

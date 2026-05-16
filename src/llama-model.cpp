@@ -1394,10 +1394,23 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
                 layer.ssm_beta_in_s = create_tensor(tn(LLM_TENSOR_SSM_BETA, "input_scale", i), {1}, TENSOR_NOT_REQUIRED);
             }
         }
+        // output scales
+        if (output && output->type == GGML_TYPE_NVFP4) {
+            // weight scale
+            if (!output_s) {
+                output_s = create_tensor(tn(LLM_TENSOR_OUTPUT, "scale"), {1}, TENSOR_NOT_REQUIRED);
+            }
+            // input scale
+            if (!output_in_s) {
+                output_in_s = create_tensor(tn(LLM_TENSOR_OUTPUT, "input_scale"), {1}, TENSOR_NOT_REQUIRED);
+            }
+        }
     }
-
     ml.done_getting_tensors();
 
+    GGML_ASSERT(!(output && tok_embd &&
+            strcmp(output->name, tok_embd->name) == 0 &&
+            output->type == GGML_TYPE_NVFP4));
     // populate tensors_by_name
     for (auto & [_, ctx_ptr] : ml.ctx_map) {
         for (auto * cur = ggml_get_first_tensor(ctx_ptr.get()); cur != NULL; cur = ggml_get_next_tensor(ctx_ptr.get(), cur)) {
