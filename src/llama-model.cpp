@@ -1099,10 +1099,18 @@ void llama_model_base::load_hparams(llama_model_loader & ml) {
         // gpt-j n_rot = rotary_dim
 
         hparams.n_embd_head_k_full = hparams.n_embd / hparams.n_head();
-        ml.get_key(LLM_KV_ATTENTION_KEY_LENGTH, hparams.n_embd_head_k_full, false);
+        if (ml.get_key_or_arr(LLM_KV_ATTENTION_KEY_LENGTH, hparams.n_embd_head_k_full_arr, hparams.n_layer, false)) {
+            hparams.n_embd_head_k_full = hparams.n_embd_head_k_full_arr[0];
+        } else {
+            ml.get_key(LLM_KV_ATTENTION_KEY_LENGTH, hparams.n_embd_head_k_full, false);
+        }
 
         hparams.n_embd_head_v_full = hparams.n_embd / hparams.n_head();
-        ml.get_key(LLM_KV_ATTENTION_VALUE_LENGTH, hparams.n_embd_head_v_full, false);
+        if (ml.get_key_or_arr(LLM_KV_ATTENTION_VALUE_LENGTH, hparams.n_embd_head_v_full_arr, hparams.n_layer, false)) {
+            hparams.n_embd_head_v_full = hparams.n_embd_head_v_full_arr[0];
+        } else {
+            ml.get_key(LLM_KV_ATTENTION_VALUE_LENGTH, hparams.n_embd_head_v_full, false);
+        }
 
         // sanity check for n_rot (optional)
         hparams.n_rot_full = hparams.n_embd_head_k_full;

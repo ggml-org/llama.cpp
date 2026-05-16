@@ -53,6 +53,8 @@ struct llama_hparams {
     uint32_t n_embd_head_v_full; // dimension of values (d_v) aka n_embd_head
     uint32_t n_embd_head_k_swa;
     uint32_t n_embd_head_v_swa;
+    std::array<uint32_t, LLAMA_MAX_LAYERS> n_embd_head_k_full_arr;
+    std::array<uint32_t, LLAMA_MAX_LAYERS> n_embd_head_v_full_arr;
 
     // different RoPE dimensions for full_attention and SWA layers
     uint32_t n_rot_full;
