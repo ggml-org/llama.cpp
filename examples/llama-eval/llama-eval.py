@@ -149,6 +149,8 @@ class TaskState:
     t_gen_ms: Optional[float] = None
     reasoning_content: Optional[str] = None
     server_name: Optional[str] = None
+    chunk_idx: int = 0
+    problem_idx: int = 0
 
 
 class EvalState:
@@ -233,7 +235,9 @@ class EvalState:
         tps_gen: Optional[float] = None,
         t_gen_ms: Optional[float] = None,
         reasoning_content: Optional[str] = None,
-        server_name: Optional[str] = None
+        server_name: Optional[str] = None,
+        chunk_idx: int = 0,
+        problem_idx: int = 0,
     ):
         with self._lock:
             if "cases" not in self.task_states:
@@ -252,7 +256,9 @@ class EvalState:
                 "tps_gen": tps_gen,
                 "t_gen_ms": t_gen_ms,
                 "reasoning_content": reasoning_content,
-                "server_name": server_name
+                "server_name": server_name,
+                "chunk_idx": chunk_idx,
+                "problem_idx": problem_idx,
             }
 
             self.correct = sum(1 for c in self.task_states.get("cases", {}).values() if c.get("correct", False))
@@ -289,6 +295,9 @@ class EvalState:
             all_cases = {}
             for i, task_id in tasks_to_save:
                 question_text, prompt, expected = self.get_case(i)
+                # Extract chunk_idx from task_id for pending cases
+                _parts = task_id.rsplit("_", 2)
+                _chunk_idx = int(_parts[-2]) if len(_parts) >= 3 else 0
                 if task_id in self.task_states.get("cases", {}):
                     all_cases[task_id] = self.task_states["cases"][task_id]
                 else:
@@ -306,7 +315,9 @@ class EvalState:
                         "tps_gen": None,
                         "t_gen_ms": None,
                         "reasoning_content": None,
-                        "server_name": None
+                        "server_name": None,
+                        "chunk_idx": _chunk_idx,
+                        "problem_idx": i,
                     }
 
             ci_lower, ci_upper = self.accuracy_ci()
@@ -405,6 +416,53 @@ class EvalState:
 
         rows_html = "\n".join(rows)
 
+        # ---- per-problem summary table ----
+        problem_groups: Dict[int, List[Dict[str, Any]]] = {}
+        for _tid, _case in cases.items():
+            if _case.get("status") != "ok":
+                continue
+            _pidx = _case.get("problem_idx")
+            if _pidx is None:
+                _p_parts = _tid.rsplit("_", 2)
+                _pidx = int(_p_parts[-1]) if len(_p_parts) >= 3 else 0
+            problem_groups.setdefault(_pidx, []).append(_case)
+
+        summary_rows_html = ""
+        if problem_groups:
+            def _stat(v, fmt=".1f", avg_fmt=None):
+                if not v:
+                    return ("–", "–", "–")
+                af = fmt if avg_fmt is None else avg_fmt
+                return (f"{min(v):{fmt}}", f"{sum(v)/len(v):{af}}", f"{max(v):{fmt}}")
+
+            summary_data = []
+            for pidx, g in problem_groups.items():
+                runs = len(g)
+                n_ok = sum(1 for c in g if c.get("correct", False))
+                toks = [c["tokens"] for c in g if c.get("tokens") is not None]
+                tps = [c["tps_gen"] for c in g if c.get("tps_gen") is not None]
+                tg = [c["t_gen_ms"] / 1000 for c in g if c.get("t_gen_ms") is not None]
+                summary_data.append((
+                    pidx, runs, n_ok,
+                    _stat(toks, "d", ".0f"),
+                    _stat(tps),
+                    _stat(tg),
+                ))
+
+            summary_data.sort(key=lambda r: r[0])  # sort by problem index ascending
+
+            summary_rows_html = "\n".join(
+                f"""<tr class="summary-row">
+                    <td>{p:03d}</td>
+                    <td>{r}</td>
+                    <td>{n}/{r}</td>
+                    <td>{tk[0]}</td><td>{tk[1]}</td><td>{tk[2]}</td>
+                    <td>{tp[0]}</td><td>{tp[1]}</td><td>{tp[2]}</td>
+                    <td>{tg[0]}</td><td>{tg[1]}</td><td>{tg[2]}</td>
+                </tr>"""
+                for p, r, n, tk, tp, tg in summary_data
+            )
+
         html_content = f"""<!DOCTYPE html>
 <html>
 <head>
@@ -429,6 +487,16 @@ class EvalState:
         .details-content {{ padding: 8px 16px; background: #f6f8fa; font-size: 12px; }}
         .details-content b {{ color: #555; }}
         .details-content pre {{ background: #fff; border: 1px solid #e1e4e8; padding: 8px; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word; margin: 4px 0 8px; }}
+        .summary-section {{ margin: 16px 0; }}
+        .summary-section h2 {{ font-size: 15px; margin: 0 0 6px; color: #555; }}
+        .summary-table {{ margin-bottom: 16px; font-family: 'SF Mono', 'Menlo', 'Consolas', monospace; font-size: 13px; width: auto; }}
+        .summary-row {{ background: #fafbfc; }}
+        .summary-row:hover {{ background: #f5f5f5; }}
+        .summary-table th {{ text-align: right; font-weight: 600; }}
+        .summary-table th:first-child {{ text-align: left; }}
+        .summary-table th[colspan] {{ text-align: center; }}
+        .summary-table td {{ text-align: right; }}
+        .summary-table td:first-child {{ text-align: left; }}
 </style>
 </head>
 <body>
@@ -440,6 +508,32 @@ class EvalState:
         <span>Pending: {n_pending}</span>
         <span>Time: {self.total_time:.1f}s</span>
         <span>Sampling: {sampling_str}</span>
+    </div>
+    <div class="summary-section">
+        <h2>Per-Problem Summary</h2>
+        <table class="summary-table">
+            <thead>
+                <tr>
+                    <th>Problem</th>
+                    <th>Runs</th>
+                    <th>Correct</th>
+                    <th colspan="3">Tokens</th>
+                    <th colspan="3">T/s</th>
+                    <th colspan="3">Gen s</th>
+                </tr>
+                <tr>
+                    <th></th>
+                    <th></th>
+                    <th></th>
+                    <th>min</th><th>avg</th><th>max</th>
+                    <th>min</th><th>avg</th><th>max</th>
+                    <th>min</th><th>avg</th><th>max</th>
+                </tr>
+            </thead>
+            <tbody>
+                {summary_rows_html}
+            </tbody>
+        </table>
     </div>
     <table>
         <thead>
@@ -1062,12 +1156,19 @@ class Processor:
     ) -> TaskState:
         question_text, prompt, expected = eval_state.get_case(i)
 
+        # Extract chunk_idx from task_id: "{dataset_type}_{chunk_idx:03d}_{index:03d}"
+        _parts = task_id.rsplit("_", 2)
+        chunk_idx = int(_parts[-2]) if len(_parts) >= 3 else 0
+        problem_idx = i
+
         task_state = TaskState(
             task_id=task_id,
             prompt=prompt,
             expected=expected,
             question_text=question_text,
-            server_name=server_config.name
+            server_name=server_config.name,
+            chunk_idx=chunk_idx,
+            problem_idx=problem_idx,
         )
 
         try:
@@ -1085,7 +1186,8 @@ class Processor:
                 eval_state.add_result(
                     task_id, prompt, expected, result, None,
                     {"finish_reason": finish_reason}, False, task_state.status,
-                    tokens, tps_gen, t_gen_ms, reasoning_content, server_config.name
+                    tokens, tps_gen, t_gen_ms, reasoning_content, server_config.name,
+                    chunk_idx, problem_idx,
                 )
                 eval_state.dump()
                 return task_state
@@ -1108,7 +1210,8 @@ class Processor:
             eval_state.add_result(
                 task_id, prompt, expected, result, answer,
                 grader_log, is_correct, "ok",
-                tokens, tps_gen, t_gen_ms, reasoning_content, server_config.name
+                tokens, tps_gen, t_gen_ms, reasoning_content, server_config.name,
+                chunk_idx, problem_idx,
             )
 
             eval_state.dump()
