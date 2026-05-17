@@ -136,6 +136,7 @@ struct socket_t::impl {
     bool     use_rdma;
     sockfd_t fd;
     uint64_t negotiated_features = 0;
+    std::shared_ptr<void> shm_seg;
 };
 
 socket_t::impl::~impl() {
@@ -571,6 +572,14 @@ void socket_t::set_negotiated_features(uint64_t features) {
 
 uint64_t socket_t::get_negotiated_features() const {
     return pimpl->negotiated_features;
+}
+
+void socket_t::set_shm_segment(std::shared_ptr<void> seg) {
+    pimpl->shm_seg = std::move(seg);
+}
+
+void * socket_t::get_shm_segment_raw() const {
+    return pimpl->shm_seg.get();
 }
 
 bool socket_t::is_same_host() const {

@@ -10,6 +10,11 @@
 #include <optional>
 #include <string>
 #include <vector>
+#include <semaphore.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <sys/mman.h>
 #include <memory>
 #include <mutex>
 #include <unordered_map>
@@ -87,10 +92,131 @@ enum rpc_cmd {
     RPC_CMD_DEVICE_COUNT,
     RPC_CMD_GRAPH_RECOMPUTE,
     RPC_CMD_CAPS,
+    RPC_CMD_SHM_SETUP,
     RPC_CMD_COUNT,
 };
 
 static_assert(RPC_CMD_HELLO == 14, "RPC_CMD_HELLO must be always 14");
+
+#define GGML_RPC_SHM_MAGIC 0x534d4847504352ULL // "RCPGHMS"
+
+// ---- SHM transport segment lifecycle (phase 3b foundation) ----
+// Layout written at offset 0 of each segment. After this header the
+// segment holds two per-direction ring regions, but 3c lands the ring
+// itself; 3b only validates the header round-trip.
+struct rpc_shm_header {
+    uint64_t magic;       // = GGML_RPC_SHM_MAGIC
+    uint64_t version;     // = 1
+    uint64_t ring_size;   // per-direction ring size in bytes
+    uint64_t reserved[5]; // pad header to 64 bytes
+};
+static_assert(sizeof(rpc_shm_header) == 64, "rpc_shm_header must be 64 bytes");
+
+// A mapped SHM segment held by either side. The shared_ptr lives on
+// socket_t::impl when SHM was set up successfully; on destruction it
+// munmaps and (for the server side only) shm_unlinks the name so the
+// segment doesn't leak in /dev/shm.
+struct rpc_shm_segment {
+    int     fd        = -1;
+    void *  addr      = nullptr;
+    size_t  total_size = 0;
+    char    name[96]  = {0};
+    bool    owner    = false; // server (creator) sets this true
+
+    ~rpc_shm_segment() {
+        if (addr && addr != MAP_FAILED) {
+            munmap(addr, total_size);
+        }
+        if (fd >= 0) {
+            close(fd);
+        }
+        if (owner && name[0]) {
+            shm_unlink(name);
+        }
+    }
+};
+using rpc_shm_segment_ptr = std::shared_ptr<rpc_shm_segment>;
+
+// Total segment size = header + 2 * ring (c2s, s2c). 16 MiB rings by
+// default — large enough to absorb a full GRAPH_COMPUTE serialization
+// for typical models without blocking, small enough that the OS won't
+// flinch at allocating two of them.
+static constexpr size_t RPC_SHM_DEFAULT_RING = 16ull * 1024ull * 1024ull;
+static constexpr size_t RPC_SHM_HEADER_SIZE  = sizeof(rpc_shm_header);
+
+static size_t rpc_shm_total_size(size_t ring) {
+    return RPC_SHM_HEADER_SIZE + 2 * ring;
+}
+
+// Server-side: create + initialise. Returns null on failure (caller
+// falls back to TCP).
+static rpc_shm_segment_ptr rpc_shm_create(uint32_t client_pid, size_t ring) {
+    auto seg = std::make_shared<rpc_shm_segment>();
+    snprintf(seg->name, sizeof(seg->name),
+             "/ggml-rpc-shm-%d-%u", (int) getpid(), (unsigned) client_pid);
+
+    // Best-effort cleanup of a stale segment from a prior crashed run.
+    shm_unlink(seg->name);
+
+    seg->fd = shm_open(seg->name, O_CREAT | O_EXCL | O_RDWR, 0600);
+    if (seg->fd < 0) {
+        GGML_LOG_WARN("rpc-shm: shm_open(create) %s failed: %s\n",
+                      seg->name, strerror(errno));
+        return nullptr;
+    }
+    seg->total_size = rpc_shm_total_size(ring);
+    if (ftruncate(seg->fd, seg->total_size) != 0) {
+        GGML_LOG_WARN("rpc-shm: ftruncate failed: %s\n", strerror(errno));
+        return nullptr;
+    }
+    seg->addr = mmap(nullptr, seg->total_size, PROT_READ | PROT_WRITE,
+                     MAP_SHARED, seg->fd, 0);
+    if (seg->addr == MAP_FAILED) {
+        GGML_LOG_WARN("rpc-shm: mmap failed: %s\n", strerror(errno));
+        return nullptr;
+    }
+    seg->owner = true;
+
+    auto * hdr = reinterpret_cast<rpc_shm_header *>(seg->addr);
+    hdr->magic     = GGML_RPC_SHM_MAGIC;
+    hdr->version   = 1;
+    hdr->ring_size = ring;
+    for (auto & r : hdr->reserved) r = 0;
+    return seg;
+}
+
+// Client-side: open existing segment by name.
+static rpc_shm_segment_ptr rpc_shm_open(const char * name, size_t ring) {
+    auto seg = std::make_shared<rpc_shm_segment>();
+    snprintf(seg->name, sizeof(seg->name), "%s", name);
+    seg->fd = shm_open(seg->name, O_RDWR, 0600);
+    if (seg->fd < 0) {
+        GGML_LOG_WARN("rpc-shm: shm_open(client) %s failed: %s\n",
+                      seg->name, strerror(errno));
+        return nullptr;
+    }
+    seg->total_size = rpc_shm_total_size(ring);
+    seg->addr = mmap(nullptr, seg->total_size, PROT_READ | PROT_WRITE,
+                     MAP_SHARED, seg->fd, 0);
+    if (seg->addr == MAP_FAILED) {
+        GGML_LOG_WARN("rpc-shm: mmap(client) failed: %s\n", strerror(errno));
+        return nullptr;
+    }
+    seg->owner = false;
+
+    auto * hdr = reinterpret_cast<const rpc_shm_header *>(seg->addr);
+    if (hdr->magic != GGML_RPC_SHM_MAGIC) {
+        GGML_LOG_WARN("rpc-shm: bad magic 0x%016lx in %s\n",
+                      (unsigned long) hdr->magic, seg->name);
+        return nullptr;
+    }
+    if (hdr->ring_size != ring) {
+        GGML_LOG_WARN("rpc-shm: ring size mismatch %lu vs %lu in %s\n",
+                      (unsigned long) hdr->ring_size, (unsigned long) ring, seg->name);
+        return nullptr;
+    }
+    return seg;
+}
 
 // Try RPC_CMD_SET_TENSOR_HASH first when data size is larger than this threshold
 const size_t HASH_THRESHOLD = 10 * 1024 * 1024;
@@ -127,6 +253,27 @@ struct rpc_msg_caps_rsp {
     uint64_t server_features;
     uint64_t negotiated;
 };
+
+// SHM transport setup (phase 3b). Client sends client_pid + ring_size
+// hint; server allocates a POSIX SHM segment whose name is derived from
+// (server_pid, client_pid), writes a magic header, and returns the name
+// + actual ring size. status != 0 means the setup failed and the client
+// should keep using TCP for this connection (the SHM bit was a hint,
+// not a contract).
+struct rpc_msg_shm_setup_req {
+    uint32_t client_pid;
+    uint32_t reserved;
+    uint64_t ring_size_hint;   // requested per-direction ring size, in bytes
+};
+
+struct rpc_msg_shm_setup_rsp {
+    uint8_t  status;           // 0 = ok, 1 = server-side failure
+    uint8_t  padding[7];
+    uint64_t ring_size;        // actual per-direction ring size
+    uint64_t magic;            // = GGML_RPC_SHM_MAGIC, sanity check
+    char     name[96];         // POSIX SHM name (leading slash)
+};
+
 
 // Local feature bitmap advertised in the CAPS exchange. Bit 0 is
 // TRACE_CTX_V1 (W3C trace_id + parent_span_id prepended to every
@@ -361,6 +508,7 @@ static const char * rpc_cmd_name(enum rpc_cmd cmd) {
         case RPC_CMD_DEVICE_COUNT:      return "DEVICE_COUNT";
         case RPC_CMD_GRAPH_RECOMPUTE:   return "GRAPH_RECOMPUTE";
         case RPC_CMD_CAPS:              return "CAPS";
+        case RPC_CMD_SHM_SETUP:         return "SHM_SETUP";
         default:                        return "UNKNOWN";
     }
 }
@@ -476,6 +624,29 @@ static bool negotiate_hello(const std::shared_ptr<socket_t> & sock) {
             GGML_LOG_WARN("ggml-rpc: CAPS exchange failed; assuming no extensions\n");
         } else {
             sock->set_negotiated_features(caps_rsp.negotiated);
+            // If SHM was negotiated, set up the segment. On failure we
+            // clear the bit so the rest of the stack treats this link
+            // as TCP-only — fully transparent fallback.
+            if (caps_rsp.negotiated & GGML_RPC_FEATURE_SHM_V1) {
+                rpc_msg_shm_setup_req sreq = {};
+                sreq.client_pid     = (uint32_t) getpid();
+                sreq.ring_size_hint = RPC_SHM_DEFAULT_RING;
+                rpc_msg_shm_setup_rsp srsp = {};
+                bool shm_ok = send_rpc_cmd(sock, RPC_CMD_SHM_SETUP,
+                                           &sreq, sizeof(sreq),
+                                           &srsp, sizeof(srsp));
+                if (!shm_ok || srsp.status != 0 || srsp.magic != GGML_RPC_SHM_MAGIC) {
+                    GGML_LOG_WARN("ggml-rpc: SHM setup failed; falling back to TCP\n");
+                    sock->set_negotiated_features(caps_rsp.negotiated & ~GGML_RPC_FEATURE_SHM_V1);
+                } else {
+                    auto seg = rpc_shm_open(srsp.name, srsp.ring_size);
+                    if (!seg) {
+                        sock->set_negotiated_features(caps_rsp.negotiated & ~GGML_RPC_FEATURE_SHM_V1);
+                    } else {
+                        sock->set_shm_segment(seg);
+                    }
+                }
+            }
         }
     }
     return true;
@@ -1913,6 +2084,32 @@ static void rpc_serve_client(const std::vector<ggml_backend_t> & backends, const
                 }
                 sock->set_negotiated_features(response.negotiated);
                 if (!send_msg(sock, &response, sizeof(response))) {
+                    return;
+                }
+                break;
+            }
+            case RPC_CMD_SHM_SETUP: {
+                rpc_msg_shm_setup_req shm_req;
+                if (!recv_msg(sock, &shm_req, sizeof(shm_req))) {
+                    return;
+                }
+                rpc_msg_shm_setup_rsp shm_rsp{};
+                shm_rsp.status = 1;
+                shm_rsp.magic  = GGML_RPC_SHM_MAGIC;
+                if (sock->get_negotiated_features() & GGML_RPC_FEATURE_SHM_V1) {
+                    size_t ring = shm_req.ring_size_hint;
+                    if (ring == 0 || ring > 256ull * 1024 * 1024) {
+                        ring = RPC_SHM_DEFAULT_RING;
+                    }
+                    auto seg = rpc_shm_create(shm_req.client_pid, ring);
+                    if (seg) {
+                        shm_rsp.status    = 0;
+                        shm_rsp.ring_size = ring;
+                        snprintf(shm_rsp.name, sizeof(shm_rsp.name), "%s", seg->name);
+                        sock->set_shm_segment(seg);
+                    }
+                }
+                if (!send_msg(sock, &shm_rsp, sizeof(shm_rsp))) {
                     return;
                 }
                 break;
