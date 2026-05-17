@@ -617,8 +617,6 @@ struct common_params {
     // UI configs
 #ifdef LLAMA_UI_DEFAULT_ENABLED
     bool ui = LLAMA_UI_DEFAULT_ENABLED != 0;
-#elif defined(LLAMA_WEBUI_DEFAULT_ENABLED)
-    bool ui = LLAMA_WEBUI_DEFAULT_ENABLED != 0;
 #else
     bool ui = true; // default to enabled when not set
 #endif

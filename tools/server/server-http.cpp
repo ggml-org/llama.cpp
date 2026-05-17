@@ -231,11 +231,10 @@ bool server_http_context::init(const common_params & params) {
     };
 
     auto middleware_server_state = [this](const httplib::Request & req, httplib::Response & res) {
-        (void)req; // suppress unused parameter warning when LLAMA_BUILD_UI / LLAMA_BUILD_WEBUI is not defined
+        (void)req; // suppress unused parameter warning when LLAMA_BUILD_UI is not defined
         bool ready = is_ready.load();
         if (!ready) {
-// Support both old and new preprocessor defines
-#if defined(LLAMA_BUILD_UI) || defined(LLAMA_BUILD_WEBUI)
+#if defined(LLAMA_BUILD_UI)
             auto tmp = string_split<std::string>(req.path, '.');
             if (req.path == "/" || (tmp.size() > 0 && tmp.back() == "html")) {
                 res.status = 503;
@@ -313,8 +312,7 @@ bool server_http_context::init(const common_params & params) {
                 return 1;
             }
         } else {
-// Support both old and new preprocessor defines
-#if defined(LLAMA_BUILD_UI) || defined(LLAMA_BUILD_WEBUI)
+#if defined(LLAMA_BUILD_UI)
             // using embedded static index.html
             srv->Get(params.api_prefix + "/", [](const httplib::Request & /*req*/, httplib::Response & res) {
                 // COEP and COOP headers, required by pyodide (python interpreter)
