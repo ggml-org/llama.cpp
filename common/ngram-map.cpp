@@ -471,7 +471,7 @@ void common_ngram_map_draft(common_ngram_map & map,
         sum_occur += curr_occur;
     }
 
-    LOG_INF("%s: key_offset = %zu, max_occur = %d, sum_occur = %d, slot_max = %d [%zu/%d, %zu/%d, %zu/%d, %zu/%d]\n", __func__,
+    LOG_DBG("%s: key_offset = %zu, max_occur = %d, sum_occur = %d, slot_max = %d [%zu/%d, %zu/%d, %zu/%d, %zu/%d]\n", __func__,
             key_offset,
             max_occur, sum_occur, slot_max,
             curr_key.values[0].value_idx, curr_key.values[0].value_num,
@@ -482,7 +482,7 @@ void common_ngram_map_draft(common_ngram_map & map,
     // Print the tokens of the four values (if idx != 0), use LOG_INF
     for (int v = 0; v < COMMON_NGRAM_MAX_VALUES; ++v) {
         if (curr_key.values[v].value_idx != 0) {
-            LOG_INF("%s: value[%d] = %s\n", __func__, v, common_tokens_to_str(inp, curr_key.values[v].value_idx, m).c_str());
+            LOG_DBG("%s: value[%d] = %s\n", __func__, v, common_tokens_to_str(inp, curr_key.values[v].value_idx, m).c_str());
         }
     }
 
