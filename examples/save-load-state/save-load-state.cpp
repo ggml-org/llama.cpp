@@ -23,6 +23,30 @@ struct llama_batch_ptr {
     const llama_batch & get() const { return batch; }
 };
 
+static std::string generate_tokens(llama_context * ctx, llama_sampler * smpl, int & n_past, int32_t n_predict, llama_seq_id seq_id) {
+    std::string result;
+    llama_batch_ptr batch(1, 0, 1);
+
+    for (int i = 0; i < n_predict; i++) {
+        auto next_token     = llama_sampler_sample(smpl, ctx, -1);
+        auto next_token_str = common_token_to_piece(ctx, next_token);
+
+        LOG("%s", next_token_str.c_str());
+        result += next_token_str;
+
+        common_batch_clear(batch.get());
+        common_batch_add(batch.get(), next_token, n_past, {seq_id}, true);
+
+        if (llama_decode(ctx, batch.get())) {
+            LOG_ERR("\n%s: failed to evaluate\n", __func__);
+            return {};
+        }
+        n_past++;
+    }
+
+    return result;
+}
+
 // Phase 1: tokenize the prompt, decode all but the last token, save state to disk,
 // decode the last token, then generate n_predict tokens.
 static std::string run_baseline_generation(struct llama_model * model, const struct common_params & params) {
@@ -43,24 +67,9 @@ static std::string run_baseline_generation(struct llama_model * model, const str
     LOG("\n=== Phase 1: baseline generation ===\n");
     LOG("%s", params.prompt.c_str());
 
-    std::string result;
-    llama_batch_ptr batch(1, 0, 1);
-
-    for (int i = 0; i < params.n_predict; i++) {
-        auto next_token     = llama_sampler_sample(smpl.get(), ctx.get(), -1);
-        auto next_token_str = common_token_to_piece(ctx.get(), next_token);
-
-        LOG("%s", next_token_str.c_str());
-        result += next_token_str;
-
-        common_batch_clear(batch.get());
-        common_batch_add(batch.get(), next_token, n_past, {0}, true);
-
-        if (llama_decode(ctx.get(), batch.get())) {
-            LOG_ERR("\n%s: failed to evaluate\n", __func__);
-            return {};
-        }
-        n_past++;
+    auto result = generate_tokens(ctx.get(), smpl.get(), n_past, params.n_predict, 0);
+    if (result.empty()) {
+        return {};
     }
 
     LOG("\n");
@@ -102,24 +111,9 @@ static bool run_state_restore_generation(struct llama_model * model, const struc
     n_past++;
 
     // Generate tokens
-    std::string result;
-    llama_batch_ptr batch(1, 0, 1);
-
-    for (int i = 0; i < params.n_predict; i++) {
-        auto next_token     = llama_sampler_sample(smpl.get(), ctx.get(), -1);
-        auto next_token_str = common_token_to_piece(ctx.get(), next_token);
-
-        LOG("%s", next_token_str.c_str());
-        result += next_token_str;
-
-        common_batch_clear(batch.get());
-        common_batch_add(batch.get(), next_token, n_past, {0}, true);
-
-        if (llama_decode(ctx.get(), batch.get())) {
-            LOG_ERR("\n%s: failed to evaluate\n", __func__);
-            return false;
-        }
-        n_past++;
+    auto result = generate_tokens(ctx.get(), smpl.get(), n_past, params.n_predict, 0);
+    if (result.empty()) {
+        return false;
     }
 
     if (result != expected_result) {
@@ -188,24 +182,9 @@ static bool run_seq_migration_cpu_generation(struct llama_model * model, const s
     }
 
     // Generate tokens on seq 1
-    std::string result;
-    llama_batch_ptr batch(1, 0, 1);
-
-    for (int i = 0; i < params.n_predict; i++) {
-        auto next_token     = llama_sampler_sample(smpl.get(), ctx.get(), -1);
-        auto next_token_str = common_token_to_piece(ctx.get(), next_token);
-
-        LOG("%s", next_token_str.c_str());
-        result += next_token_str;
-
-        common_batch_clear(batch.get());
-        common_batch_add(batch.get(), next_token, n_past, {1}, true);
-
-        if (llama_decode(ctx.get(), batch.get())) {
-            LOG_ERR("\n%s: failed to evaluate\n", __func__);
-            return false;
-        }
-        n_past++;
+    auto result = generate_tokens(ctx.get(), smpl.get(), n_past, params.n_predict, 1);
+    if (result.empty()) {
+        return false;
     }
 
     if (result != expected_result) {
@@ -274,24 +253,9 @@ static bool run_seq_migration_ondevice_generation(struct llama_model * model, co
     }
 
     // Generate tokens on seq 1
-    std::string result;
-    llama_batch_ptr batch(1, 0, 1);
-
-    for (int i = 0; i < params.n_predict; i++) {
-        auto next_token     = llama_sampler_sample(smpl.get(), ctx.get(), -1);
-        auto next_token_str = common_token_to_piece(ctx.get(), next_token);
-
-        LOG("%s", next_token_str.c_str());
-        result += next_token_str;
-
-        common_batch_clear(batch.get());
-        common_batch_add(batch.get(), next_token, n_past, {1}, true);
-
-        if (llama_decode(ctx.get(), batch.get())) {
-            LOG_ERR("\n%s: failed to evaluate\n", __func__);
-            return false;
-        }
-        n_past++;
+    auto result = generate_tokens(ctx.get(), smpl.get(), n_past, params.n_predict, 1);
+    if (result.empty()) {
+        return false;
     }
 
     if (result != expected_result) {
