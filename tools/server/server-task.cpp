@@ -2071,6 +2071,12 @@ bool server_prompt_cache::load(server_prompt & prompt, const server_tokens & tok
             continue;
         }
 
+        // we need a cached prompt that will result in at least 1 token being evaluated
+        // this is to be compatible with recurrent models that cannot seq_rm the last token
+        if (it->tokens.size() == tokens_new.size()) {
+            continue;
+        }
+
         if (f_keep_best < f_keep_cur && sim_best < sim_cur) {
             f_keep_best = f_keep_cur;
             sim_best    = sim_cur;
