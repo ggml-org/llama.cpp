@@ -4527,7 +4527,7 @@ std::unique_ptr<server_res_generator> server_routes::handle_embeddings_impl(cons
         }
     }
 
-    int embd_normalize = 2; // default to Euclidean/L2 norm
+    int embd_normalize = params.embd_normalize;
     if (body.count("embd_normalize") != 0) {
         embd_normalize = body.at("embd_normalize");
         if (meta->pooling_type == LLAMA_POOLING_TYPE_NONE) {
