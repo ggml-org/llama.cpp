@@ -37,11 +37,12 @@
 static const uint64_t table_b2b_0[1 << 8] = { B8(00, 10) }; // ( b) << 4
 static const uint64_t table_b2b_1[1 << 8] = { B8(10, 00) }; // (!b) << 4
 
-#if defined(__ARM_FEATURE_DOTPROD)
+#if defined(__ARM_FEATURE_DOTPROD) || defined(__ARM_FEATURE_MATMUL_INT8)
 // Direct -1/+1 expansion for q1_0 dot products (DOTPROD path)
 static const uint64_t table_q1_signs[256] = { B8(ff, 01) };
-#else
-// Sign mask expansion for q1_0 dot products (baseline NEON path)
+#endif
+#if !defined(__ARM_FEATURE_DOTPROD)
+// Sign mask expansion for q1_0 dot products (plain NEON path)
 static const uint64_t table_q1_mask[256] = { B8(ff, 00) };
 #endif
 #endif
