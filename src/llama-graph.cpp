@@ -4,6 +4,9 @@
 #include "llama-model.h"
 #include "llama-batch.h"
 #include "llama-cparams.h"
+#include "llama-moe-file-source.h"
+#include "llama-moe-residency.h"
+#include "llama-moe-custom-op.h"
 
 #include "llama-kv-cache.h"
 #include "llama-kv-cache-iswa.h"
@@ -1459,13 +1462,6 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
     cb(selected_experts->src[0], "ffn_moe_argsort", il);
     cb(selected_experts, "ffn_moe_topk", il);
 
-    selected_experts = ggml_cont(ctx0, selected_experts);
-    cb(selected_experts, "ffn_moe_topk_ids", il);
-    ggml_set_output(selected_experts);
-    // if (trace_enabled) {
-    //     moe_trace_tensors.push_back(moe_trace_tensor{il, selected_experts, n_expert_used});
-    // }
-
     if (arch == LLM_ARCH_GROVEMOE && n_expert != hparams.n_expert) {
         // TODO: Use scalar div instead when/if implemented
         ggml_tensor * f_sel = ggml_cast(ctx0, selected_experts, GGML_TYPE_F32);
@@ -1521,9 +1517,90 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
     ggml_tensor * up = nullptr;
     ggml_tensor * experts = nullptr;
 
+    // ---- BEGIN moe_residency: on-demand expert caching via custom op ----
+    const bool moe_runtime_enabled = std::getenv("LLAMA_MOE_REMAP_IDS_RUNTIME") != nullptr;
+    const int  pool_layers_limit =
+        std::getenv("LLAMA_MOE_POOL_LAYERS") ? atoi(std::getenv("LLAMA_MOE_POOL_LAYERS")) : INT_MAX;
+    const bool moe_layer_enabled = moe_runtime_enabled && (il < pool_layers_limit) && (n_expert_used < n_expert);
+
+    int64_t n_slots = n_expert;
+    if (const char * env = std::getenv("LLAMA_MOE_N_SLOTS")) {
+        const int64_t v = atoll(env);
+        if (v > 0 && v <= n_expert) {
+            n_slots = v;
+        }
+    }
+
+    ggml_tensor * routing_ids = selected_experts;
+
+    ggml_tensor * gate_up_exps_src = gate_up_exps;
+    ggml_tensor * up_exps_src      = up_exps;
+    ggml_tensor * gate_exps_src    = gate_exps;
+    ggml_tensor * down_exps_src    = down_exps;
+
+    if (moe_layer_enabled) {
+        // Resolve Metal (non-CPU) backend for the pool, and the CPU backend for
+        // the custom op + selected_experts landing.
+        ggml_backend_t metal_be = nullptr;
+        ggml_backend_t cpu_be   = nullptr;
+        {
+            const int nb = ggml_backend_sched_get_n_backends(sched);
+            for (int i = 0; i < nb; ++i) {
+                ggml_backend_t bk = ggml_backend_sched_get_backend(sched, i);
+                if (ggml_backend_is_cpu(bk)) {
+                    cpu_be = bk;
+                } else if (!metal_be) {
+                    metal_be = bk;
+                }
+            }
+        }
+        GGML_ASSERT(cpu_be);
+        if (!metal_be) {
+            metal_be = cpu_be;  // single-backend fallback
+        }
+
+        // Build per-layer userdata. Slot pool created/reused per expert tensor.
+        moe_residency_layer_ud * ud = moe_residency_get_layer_ud(il);
+        ud->n_slots_used            = 0;
+
+        auto bind_pool = [&](ggml_tensor * orig) -> ggml_tensor * {
+            if (!orig) {
+                return nullptr;
+            }
+            const auto *         fi       = moe_file_source().lookup(orig->name);
+            const uint64_t       off      = fi ? fi->file_offset : 0;
+            const uint64_t       nbytes   = fi ? fi->nbytes : 0;
+            moe_residency_slot * s        = moe_residency().get_or_create(orig, n_slots, il, metal_be, off, nbytes);
+            ud->slots[ud->n_slots_used++] = s;
+            return s->pool;
+        };
+
+        gate_up_exps_src = bind_pool(gate_up_exps);
+        up_exps_src      = bind_pool(up_exps);
+        gate_exps_src    = bind_pool(gate_exps);
+        down_exps_src    = bind_pool(down_exps);
+
+        // ggml_top_k returns a non-contiguous view (row stride = n_expert*4, not
+        // n_expert_used*4). The custom op reads src->data as a flat i32 array, so
+        // we densify here. The cont copy also gets pinned to CPU so the scheduler
+        // lands it host-side before the op runs.
+        ggml_tensor * ids_cont = ggml_cont(ctx0, selected_experts);
+        cb(ids_cont, "ffn_moe_topk_ids", il);
+        ggml_backend_sched_set_tensor_backend(sched, ids_cont, cpu_be);
+
+        ggml_tensor * args[1] = { ids_cont };
+        routing_ids           = ggml_custom_4d(ctx0, GGML_TYPE_I32, ids_cont->ne[0], ids_cont->ne[1], 1, 1, args, 1,
+                                               moe_residency_custom_op,
+                                               /*n_tasks=*/1,
+                                               /*userdata=*/ud);
+        ggml_set_name(routing_ids, "moe_slot_ids");
+        cb(routing_ids, "ffn_moe_slot_ids", il);
+    }
+    // ---- END moe_residency ----
+
     if (gate_up_exps) {
         // merged gate_up path: one mul_mat_id, then split into gate and up views
-        ggml_tensor * gate_up = build_lora_mm_id(gate_up_exps, cur, selected_experts); // [n_ff*2, n_expert_used, n_tokens]
+        ggml_tensor * gate_up = build_lora_mm_id(gate_up_exps_src, cur, routing_ids);  // [n_ff*2, n_expert_used, n_tokens]
         cb(gate_up, "ffn_moe_gate_up", il);
 
         if (gate_up_exps_b) {
@@ -1547,7 +1624,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
         cb(up, "ffn_moe_up", il);
     } else {
         // separate gate and up path
-        up = build_lora_mm_id(up_exps, cur, selected_experts); // [n_ff, n_expert_used, n_tokens]
+        up = build_lora_mm_id(up_exps_src, cur, routing_ids);  // [n_ff, n_expert_used, n_tokens]
         cb(up, "ffn_moe_up", il);
 
         if (up_exps_b) {
@@ -1565,7 +1642,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
         }
 
         if (gate_exps) {
-            cur = build_lora_mm_id(gate_exps, cur, selected_experts); // [n_ff, n_expert_used, n_tokens]
+            cur = build_lora_mm_id(gate_exps_src, cur, routing_ids);  // [n_ff, n_expert_used, n_tokens]
             cb(cur, "ffn_moe_gate", il);
         } else {
             cur = up;
@@ -1655,7 +1732,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
             GGML_ABORT("fatal error");
     }
 
-    experts = build_lora_mm_id(down_exps, cur, selected_experts); // [n_embd, n_expert_used, n_tokens]
+    experts = build_lora_mm_id(down_exps_src, cur, routing_ids);  // [n_embd, n_expert_used, n_tokens]
     cb(experts, "ffn_moe_down", il);
 
     if (down_exps_b) {

@@ -7,6 +7,7 @@
 #include "llama-mmap.h"
 #include "llama-cparams.h"
 #include "llama-model-loader.h"
+#include "llama-moe-residency.h"
 
 #include "llama-kv-cache.h"
 #include "llama-kv-cache-iswa.h"
@@ -965,6 +966,8 @@ llama_model::~llama_model() {
     for (auto * lora : loras) {
         delete lora;
     }
+
+    moe_residency().clear();
 }
 
 void llama_model_base::load_stats(llama_model_loader & ml) {

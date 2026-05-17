@@ -1159,14 +1159,32 @@ struct ggml_tensor * llama_model_loader::create_tensor(
                 std::regex pattern(overrides->pattern);
                 if (std::regex_search(tensor_name, pattern)) {
                     if (overrides->buft == ggml_backend_cpu_buffer_type()) {
-                        // when overriding to a CPU buffer, consider the extra buffer types
-                        buft = select_weight_buft(hparams, t_meta, op, buft_list_cpu);
+                        // Skip repack/extra CPU bufts — they reorder quantized data and
+                        // are incompatible with non-CPU compute backends reading the same tensor.
+                        for (const auto & cur : *buft_list_cpu) {
+                            const char * name = ggml_backend_buft_name(cur.second);
+                            if (name && strstr(name, "REPACK")) {
+                                continue;
+                            }
+                            // mimic select_weight_buft op-support check
+                            if (!weight_buft_supported(hparams, t_meta, op, cur.second, cur.first)) {
+                                continue;
+                            }
+                            buft = cur.second;
+                            break;
+                        }
+                        if (!buft) {
+                            buft = select_weight_buft(hparams, t_meta, op, buft_list_cpu);  // fallback
+                        }
                         if (use_mmap) {
                             static std::once_flag once;
                             std::call_once(once, [] {
                                 LLAMA_LOG_WARN("llama_model_loader: tensor overrides to CPU are used with mmap enabled - consider using --no-mmap for better performance\n");
                             });
                         }
+                        fprintf(stderr, "override picked buft=%s for %s\n", ggml_backend_buft_name(buft),
+                                       tensor_name.c_str());
+
                     } else {
                         buft = overrides->buft;
                     }
