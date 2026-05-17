@@ -9,7 +9,7 @@ uint rope_a_coord(const uint i0, const uint i01, const uint i02, const uint i03,
     // Per-row offset in shared memory
     const uint ix = i0;
 #else
-    const uint ix = i03*p.nb03 + i02*p.nb02 + i01*p.nb01 + i0;
+    const uint ix = p.a_offset + i03*p.nb03 + i02*p.nb02 + i01*p.nb01 + i0;
 #endif
     return ix;
 }
@@ -48,6 +48,7 @@ void rope_norm(const uint i0, const uint i1, const uint i2, const uint i3, rope_
         idst = i1*p.nb11 + i0;
         idst += rope_data_i[i2].x * p.set_rows_stride;
     }
+    idst += p.d_offset;
 
     if (i0 >= p.n_dims) {
         rope_data_d[idst + 0] = ROPE_D_TYPE(rope_data_a[ix + 0]);
@@ -84,6 +85,7 @@ void rope_neox(const uint i0, const uint i1, const uint i2, const uint i3, rope_
         idst = i1*p.nb11 + i0/2;
         idst += rope_data_i[i2].x * p.set_rows_stride;
     }
+    idst += p.d_offset;
 
     if (i0 >= p.n_dims) {
         rope_data_d[idst + i0/2 + 0] = ROPE_D_TYPE(rope_data_a[ix + i0/2 + 0]);
@@ -121,6 +123,7 @@ void rope_multi(const uint i0, const uint i1, const uint i2, const uint i3, rope
         idst = i1*p.nb11 + i0/2;
         idst += rope_data_i[i2].x * p.set_rows_stride;
     }
+    idst += p.d_offset;
 
     if (i0 >= p.n_dims) {
         rope_data_d[idst + i0/2 + 0] = ROPE_D_TYPE(rope_data_a[ix + i0/2 + 0]);
@@ -176,7 +179,7 @@ void rope_vision(const uint i0, const uint i1, const uint i2, const uint i3, rop
         return;
     }
 
-    const uint idst = i0/2 + i1 * p.nb11 + i2 * p.nb12 + i3 * p.nb13;
+    const uint idst = p.d_offset + i0/2 + i1 * p.nb11 + i2 * p.nb12 + i3 * p.nb13;
     const uint ix = rope_a_coord(i0/2, i1, i2, i3, p);
 
     const int sect_dims = p.sections[0] + p.sections[1];
