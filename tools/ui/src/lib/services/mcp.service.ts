@@ -392,7 +392,7 @@ export class MCPService {
 
 			const url = new URL(config.url);
 
-			if (import.meta.env.DEV) {
+			if (import.meta.env.DEV && import.meta.env.VITE_DEBUG) {
 				console.log(`[MCPService] Creating WebSocket transport for ${url.href}`);
 			}
 
@@ -413,12 +413,12 @@ export class MCPService {
 			onLog
 		);
 
-		if (useProxy && import.meta.env.DEV) {
+		if (useProxy && import.meta.env.DEV && import.meta.env.VITE_DEBUG) {
 			console.log(`[MCPService] Using CORS proxy for ${config.url} -> ${url.href}`);
 		}
 
 		try {
-			if (import.meta.env.DEV) {
+			if (import.meta.env.DEV && import.meta.env.VITE_DEBUG) {
 				console.log(`[MCPService] Creating StreamableHTTP transport for ${url.href}`);
 			}
 
@@ -520,7 +520,7 @@ export class MCPService {
 			)
 		);
 
-		if (import.meta.env.DEV) {
+		if (import.meta.env.DEV && import.meta.env.VITE_DEBUG) {
 			console.log(`[MCPService][${serverName}] Creating transport...`);
 		}
 
@@ -658,7 +658,10 @@ export class MCPService {
 			this.createLog(MCPConnectionPhase.LISTING_TOOLS, 'Listing available tools...')
 		);
 
-		console.log(`[MCPService][${serverName}] Connected, listing tools...`);
+		if (import.meta.env.DEV && import.meta.env.VITE_DEBUG) {
+			console.log(`[MCPService][${serverName}] Connected, listing tools...`);
+		}
+
 		const tools = await this.listTools({
 			client,
 			transport,
@@ -680,10 +683,11 @@ export class MCPService {
 				`Connection established with ${tools.length} tools (${connectionTimeMs}ms)`
 			)
 		);
-
-		console.log(
-			`[MCPService][${serverName}] Initialization complete with ${tools.length} tools in ${connectionTimeMs}ms`
-		);
+		if (import.meta.env.DEV && import.meta.env.VITE_DEBUG) {
+			console.log(
+				`[MCPService][${serverName}] Initialization complete with ${tools.length} tools in ${connectionTimeMs}ms`
+			);
+		}
 
 		return {
 			client,
@@ -709,7 +713,10 @@ export class MCPService {
 	 * @param connection - The active MCP connection to close
 	 */
 	static async disconnect(connection: MCPConnection): Promise<void> {
-		console.log(`[MCPService][${connection.serverName}] Disconnecting...`);
+		if (import.meta.env.DEV && import.meta.env.VITE_DEBUG) {
+			console.log(`[MCPService][${connection.serverName}] Disconnecting...`);
+		}
+
 		try {
 			// Prevent reconnection on voluntary disconnect
 			if (connection.transport.onclose) {
@@ -1078,7 +1085,9 @@ export class MCPService {
 		try {
 			await connection.client.unsubscribeResource({ uri });
 
-			console.log(`[MCPService][${connection.serverName}] Unsubscribed from resource: ${uri}`);
+			if (import.meta.env.DEV && import.meta.env.VITE_DEBUG) {
+				console.log(`[MCPService][${connection.serverName}] Unsubscribed from resource: ${uri}`);
+			}
 		} catch (error) {
 			console.error(
 				`[MCPService][${connection.serverName}] Failed to unsubscribe from resource:`,
