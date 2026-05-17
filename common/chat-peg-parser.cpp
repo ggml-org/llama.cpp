@@ -358,35 +358,7 @@ void common_chat_peg_mapper::map(const common_peg_ast_node & node) {
             if (is_potential_container) {
                 value_content = normalize_container_value(value_content);
             }
-
-            // Try to parse as JSON value (number, bool, null, object, array)
-            try {
-                ordered_json parsed = ordered_json::parse(value_content);
-                if (parsed.is_string()) {
-                    // Don't add closing quote yet (added by arg_close) for monotonic streaming
-                    std::string escaped = parsed.dump();
-                    if (!escaped.empty() && escaped.back() == '"') {
-                        escaped.pop_back();
-                    }
-                    value_to_add          = escaped;
-                    closing_quote_pending = true;
-                } else {
-                    // Non-string values: use raw content to preserve whitespace for monotonicity
-                    value_to_add = value_content;
-                }
-            } catch (...) {
-                if (node.is_partial && is_potential_container) {
-                    // Partial container: pass through the already-normalized content
-                    value_to_add = value_content;
-                } else {
-                    // Not valid JSON - treat as string value
-                    if (!closing_quote_pending) {
-                        value_to_add          = "\"";
-                        closing_quote_pending = true;
-                    }
-                    value_to_add += escape_json_string_inner(value_content);
-                }
-            }
+            value_to_add += value_content;
         }
 
         args_target() += value_to_add;
