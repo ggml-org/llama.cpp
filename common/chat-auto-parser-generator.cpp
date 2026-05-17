@@ -43,11 +43,33 @@ common_chat_params peg_generator::generate_parser(const common_chat_template &  
                                                   const autoparser &              autoparser) {
     // Create the result structure
     common_chat_params data;
-    data.prompt           = common_chat_template_direct_apply(tmpl, inputs);
-    data.format           = COMMON_CHAT_FORMAT_PEG_NATIVE;
-    data.preserved_tokens = autoparser.preserved_tokens;
+    data.prompt            = common_chat_template_direct_apply(tmpl, inputs);
+    data.generation_prompt = common_chat_template_generation_prompt(tmpl, inputs);
+    data.format            = COMMON_CHAT_FORMAT_PEG_NATIVE;
+    data.preserved_tokens  = autoparser.preserved_tokens;
 
-    auto parser = autoparser.build_parser(inputs);
+    std::string parser_generation_prompt = data.generation_prompt;
+
+    if (inputs.continue_final_message != COMMON_CHAT_CONTINUATION_NONE && !inputs.continue_msg.empty()) {
+        // Build up generation prompt manually
+        const auto & msg = inputs.continue_msg;
+
+        if (!autoparser.reasoning.start.empty()) {
+            data.generation_prompt = data.generation_prompt.substr(0, data.generation_prompt.find(autoparser.reasoning.start));
+            data.generation_prompt += autoparser.reasoning.start + msg.reasoning_content;
+            if (inputs.continue_final_message == COMMON_CHAT_CONTINUATION_CONTENT) {
+                data.generation_prompt += autoparser.reasoning.end;
+            }
+        }
+
+        if (inputs.continue_final_message == COMMON_CHAT_CONTINUATION_CONTENT) {
+            data.generation_prompt += msg.render_content();
+        }
+
+        data.prompt += data.generation_prompt;
+    }
+
+    auto parser = autoparser.build_parser(inputs, parser_generation_prompt);
     data.parser = parser.save();
 
     // Build grammar if tools are present
@@ -87,7 +109,7 @@ common_chat_params peg_generator::generate_parser(const common_chat_template &  
     return data;
 }
 
-common_peg_arena autoparser::build_parser(const generation_params & inputs) const {
+common_peg_arena autoparser::build_parser(const generation_params & inputs, const std::string & generation_prompt) const {
     if (!analysis_complete) {
         throw std::invalid_argument("Cannot call build_parser on autoparser without performing analysis first, call analyze_template(...)");
     }
@@ -121,7 +143,7 @@ common_peg_arena autoparser::build_parser(const generation_params & inputs) cons
         } else {
             parser = content.build_parser(ctx);
         }
-        return pure_content ? p.prefix(inputs.generation_prompt, reasoning.start) + parser : p.prefix(inputs.generation_prompt, reasoning.start) << parser;
+        return pure_content ? p.prefix(generation_prompt, reasoning.start) + parser : p.prefix(generation_prompt, reasoning.start) << parser;
     });
 }
 

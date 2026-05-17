@@ -89,6 +89,8 @@ struct common_chat_msg {
 
     nlohmann::ordered_json to_json_oaicompat(bool concat_typed_text = false) const;
 
+    std::string render_content(const std::string & delimiter = "\n\n") const;
+
     bool empty() const {
         return content.empty() && content_parts.empty() && tool_calls.empty() && reasoning_content.empty() &&
                tool_name.empty() && tool_call_id.empty();
@@ -164,12 +166,22 @@ enum common_chat_format {
     COMMON_CHAT_FORMAT_COUNT,  // Not a format, just the # formats
 };
 
+
+// Continuation method provided via `continue_final_message`
+enum common_chat_continuation {
+    COMMON_CHAT_CONTINUATION_NONE,
+    COMMON_CHAT_CONTINUATION_AUTO,
+    COMMON_CHAT_CONTINUATION_REASONING,
+    COMMON_CHAT_CONTINUATION_CONTENT,
+};
+
 struct common_chat_templates_inputs {
     std::vector<common_chat_msg>          messages;
     std::string                           grammar;
     std::string                           json_schema;
-    bool                                  add_generation_prompt = true;
-    bool                                  use_jinja             = true;
+    bool                                  add_generation_prompt  = true;
+    common_chat_continuation              continue_final_message = COMMON_CHAT_CONTINUATION_NONE;
+    bool                                  use_jinja              = true;
     // Parameters below only supported when use_jinja is true
     std::vector<common_chat_tool>         tools;
     common_chat_tool_choice               tool_choice         = COMMON_CHAT_TOOL_CHOICE_AUTO;
@@ -207,6 +219,7 @@ struct common_chat_parser_params {
     bool                    reasoning_in_content = false;
     std::string             generation_prompt;
     bool                    parse_tool_calls     = true;
+    bool                    echo                 = false;  // Include assistant prefilled msg in output
     bool                    debug                = false;  // Enable debug output for PEG parser
     common_peg_arena        parser               = {};
     common_chat_parser_params() = default;
@@ -267,6 +280,8 @@ std::vector<common_chat_msg> common_chat_msgs_parse_oaicompat(const nlohmann::or
 
 std::vector<common_chat_tool> common_chat_tools_parse_oaicompat(const nlohmann::ordered_json & tools);
 
+common_chat_continuation common_chat_continuation_parse(const nlohmann::ordered_json & value);
+
 // DEPRECATED: only used in tests
 nlohmann::ordered_json common_chat_msgs_to_json_oaicompat(const std::vector<common_chat_msg> & msgs, bool concat_typed_text = false);
 
@@ -277,6 +292,10 @@ std::map<std::string, bool> common_chat_templates_get_caps(const common_chat_tem
 
 std::string common_chat_template_direct_apply(
     const common_chat_template & tmpl,
+    const autoparser::generation_params & inputs);
+
+std::string common_chat_template_generation_prompt(
+    const common_chat_template &          tmpl,
     const autoparser::generation_params & inputs);
 
 std::optional<common_chat_params> common_chat_try_specialized_template(

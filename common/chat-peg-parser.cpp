@@ -785,7 +785,7 @@ common_peg_parser common_chat_peg_builder::prefix(const std::string & s, const s
     if (delimiter.empty()) {
         return literal(s);
     }
-    return literal(s.substr(0, s.rfind(delimiter)));
+    return literal(s.substr(0, s.find(delimiter)));
 }
 
 common_peg_parser common_chat_peg_builder::optspace(const std::string & tag) {

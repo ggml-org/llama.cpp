@@ -144,6 +144,17 @@ json task_params::to_json(bool only_metrics) const {
 //
 // task_result_state
 //
+task_result_state::task_result_state(const common_chat_parser_params & chat_parser_params)
+    : chat_parser_params(chat_parser_params)
+    , oai_resp_id("resp_" + random_string())
+    , oai_resp_reasoning_id("rs_" + random_string())
+    , oai_resp_message_id("msg_" + random_string()) {
+    if (!chat_parser_params.echo) {
+        // initialize chat_msg to avoid emitting a delta containing the assistant prefill
+        chat_msg = common_chat_parse("", true, chat_parser_params);
+    }
+}
+
 common_chat_msg task_result_state::update_chat_msg(
         const std::string & text_added,
         bool is_partial,
@@ -421,6 +432,7 @@ task_params server_task::params_from_json_cmpl(
         if (data.contains("chat_parser")) {
             params.chat_parser_params.parser.load(data.at("chat_parser").get<std::string>());
         }
+        params.chat_parser_params.echo = json_value(data, "echo", false);
     }
 
     {

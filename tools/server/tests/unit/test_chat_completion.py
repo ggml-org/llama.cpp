@@ -158,11 +158,12 @@ def test_chat_template():
 
 @pytest.mark.parametrize("prefill,re_prefill", [
     ("Whill", "Whill"),
-    ([{"type": "text", "text": "Wh"}, {"type": "text", "text": "ill"}], "Whill"),
+    ([{"type": "text", "text": "Wh"}, {"type": "text", "text": "ill"}], "Wh\n\nill"),
 ])
 def test_chat_template_assistant_prefill(prefill, re_prefill):
     global server
-    server.chat_template = "llama3"
+    server.jinja = True
+    server.chat_template_file = "../../../models/templates/meta-llama-Llama-3.1-8B-Instruct.jinja"
     server.debug = True  # to get the "__verbose" object in the response
     server.start()
     res = server.make_request("POST", "/chat/completions", data={
@@ -175,14 +176,15 @@ def test_chat_template_assistant_prefill(prefill, re_prefill):
     })
     assert res.status_code == 200
     assert "__verbose" in res.body
-    assert res.body["__verbose"]["prompt"] == f"<s> <|start_header_id|>system<|end_header_id|>\n\nBook<|eot_id|><|start_header_id|>user<|end_header_id|>\n\nWhat is the best book<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n{re_prefill}"
+    assert res.body["__verbose"]["prompt"].endswith(f"<|start_header_id|>user<|end_header_id|>\n\nWhat is the best book<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n{re_prefill}")
 
 
 def test_chat_template_continue_final_message_vllm_compat():
     """continue_final_message is the vLLM/transformers explicit alias for the prefill_assistant heuristic.
     Both must produce the same prompt."""
     global server
-    server.chat_template = "llama3"
+    server.jinja = True
+    server.chat_template_file = "../../../models/templates/meta-llama-Llama-3.1-8B-Instruct.jinja"
     server.debug = True
     server.start()
     res = server.make_request("POST", "/chat/completions", data={
@@ -197,7 +199,7 @@ def test_chat_template_continue_final_message_vllm_compat():
     })
     assert res.status_code == 200
     assert "__verbose" in res.body
-    assert res.body["__verbose"]["prompt"] == "<s> <|start_header_id|>system<|end_header_id|>\n\nBook<|eot_id|><|start_header_id|>user<|end_header_id|>\n\nWhat is the best book<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\nWhill"
+    assert res.body["__verbose"]["prompt"].endswith("<|start_header_id|>user<|end_header_id|>\n\nWhat is the best book<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\nWhill")
 
 
 def test_chat_template_continue_final_message_mutual_exclusion():
