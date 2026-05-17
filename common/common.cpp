@@ -6,6 +6,7 @@
 #include "fit.h"
 #include "log.h"
 #include "llama.h"
+#include "../src/llama-ext.h" // staging API: attached MTP assistant loading
 #include "sampling.h"
 #include "speculative.h"
 #include "unicode.h"

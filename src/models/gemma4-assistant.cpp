@@ -20,13 +20,9 @@
 //   selects a small slice of the 262144-row LM head; logits outside the slice
 //   are masked to a small constant.
 //
-// IMPORTANT: this assistant cannot run with `llama_decode` alone — its K/V
-// inputs must come from a separate target-context decode step. The graph
-// declares those K/V tensors as inputs that an outer driver must populate
-// (e.g. the speculative-decoding loop). When the inputs are unset, decoding
-// produces undefined logits but does not crash; the graph itself is fully
-// wired so that a follow-up runtime patch can light it up without changing
-// the model format.
+// IMPORTANT: this assistant cannot run with `llama_decode` alone. It needs the
+// target context's last-layer K/V plus the previous target hidden state, so it
+// is driven by the attached-MTP speculative-decoding path.
 
 static llm_graph_params graph_params_for_gemma4_mtp(llm_graph_params p, const llama_model & mtp) {
     p.arch    = mtp.arch;
@@ -349,24 +345,14 @@ llama_model_gemma4_assistant::graph::graph(const llama_model & model, const llm_
         n_assist_centroids(model.hparams.n_assist_centroids),
         n_assist_centroid_top_k(model.hparams.n_assist_centroid_top_k),
         use_ordered_embeddings(model.hparams.use_ordered_embeddings) {
-    // The full forward pass requires the target backbone's last-layer K/V for
-    // every attention type (full + sliding). llama.cpp does not yet expose
-    // those values across `llama_context` instances, so the runtime
-    // integration is delivered as a follow-up: this PR adds the architecture
-    // (convert + load + metadata) so the official assistant checkpoints can be
-    // packaged as GGUF and inspected with `gguf-dump`, and so future work has
-    // a stable name to plug into.
-    //
-    // We deliberately abort here rather than producing silently wrong logits;
-    // a clear error keeps users from mistaking this for working speculative
-    // decoding before the runtime piece lands.
+    // Standalone assistant decoding cannot work because the graph needs the
+    // target backbone's last-layer K/V. The supported runtime path is the
+    // attached-MTP graph built from the compatible target model.
     GGML_UNUSED(model);
     GGML_ABORT(
         "gemma4-assistant: this model is the Multi-Token Prediction drafter "
         "and requires the target backbone's last-layer K/V to decode. "
-        "Runtime hookup is not yet wired in llama.cpp — load it with "
-        "`gguf-dump` for inspection or wait for the speculative-decoding "
-        "patch tracked alongside this PR.");
+        "Load it as an attached MTP assistant for a compatible target model.");
 }
 
 ggml_tensor * llama_model_gemma4_assistant::graph::build_masked_embedding_logits(ggml_tensor * hidden, ggml_tensor * lm_head_w) {
@@ -380,10 +366,8 @@ ggml_tensor * llama_model_gemma4_assistant::graph::build_masked_embedding_logits
     // 6. scatter selected_logits into [B, L, V] positions; everything else
     //    is filled with `min(selected_logits) - 1`.
     //
-    // Implementing the masked scatter cleanly in ggml requires `scatter_rows`
-    // which is not yet a graph-level op. The piece is parked here as a method
-    // on the graph so the runtime patch can swap in the implementation
-    // without touching the loader or the architecture metadata.
+    // Standalone assistant decoding is intentionally disabled; the attached
+    // MTP path implements masked logits in the target-driven graph.
     GGML_UNUSED(hidden);
     GGML_UNUSED(lm_head_w);
     GGML_ABORT("gemma4-assistant: build_masked_embedding_logits not yet implemented");

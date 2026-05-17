@@ -1312,6 +1312,10 @@ int32_t llama_context::decode_mtp(
         LLAMA_LOG_ERROR("%s: invalid arguments\n", __func__);
         return -2;
     }
+    if (seq_id < 0 || seq_id >= LLAMA_MAX_SEQ) {
+        LLAMA_LOG_ERROR("%s: invalid seq_id %d\n", __func__, seq_id);
+        return -2;
+    }
 
     auto * memory_iswa = dynamic_cast<llama_kv_cache_iswa *>(memory.get());
     if (!memory_iswa) {
@@ -4014,6 +4018,10 @@ int32_t llama_decode_mtp(
         llama_token * out_drafts,
         float * out_logits,
         float * out_h_prev_last) {
+    if (ctx == nullptr) {
+        LLAMA_LOG_ERROR("%s: context is NULL\n", __func__);
+        return -1;
+    }
     return ctx->decode_mtp(seq_id, attn_pos, last_token, h_prev, n_steps, out_drafts, out_logits, out_h_prev_last);
 }
 

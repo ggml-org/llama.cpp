@@ -9,6 +9,7 @@
 #include "build-info.h"
 #include "common.h"
 #include "llama.h"
+#include "../../src/llama-ext.h" // staging API: attached MTP assistant inspection
 #include "log.h"
 #include "sampling.h"
 #include "speculative.h"

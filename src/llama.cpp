@@ -4,6 +4,7 @@
 
 #include "llama-chat.h"
 #include "llama-context.h"
+#include "llama-ext.h"
 #include "llama-mmap.h"
 #include "llama-vocab.h"
 #include "llama-model-loader.h"
@@ -462,9 +463,10 @@ static bool llama_mtp_vocab_matches(const llama_model & tgt, const llama_model &
 
     const llama_vocab * vocab_tgt = llama_model_get_vocab(&tgt);
     const llama_vocab * vocab_aux = llama_model_get_vocab(&aux);
-    for (llama_token id = 0; id < tgt.vocab.n_tokens(); ++id) {
-        const char * t0 = llama_vocab_get_text(vocab_tgt, id);
-        const char * t1 = llama_vocab_get_text(vocab_aux, id);
+    for (uint32_t id = 0; id < tgt.vocab.n_tokens(); ++id) {
+        const llama_token token_id = (llama_token) id;
+        const char * t0 = llama_vocab_get_text(vocab_tgt, token_id);
+        const char * t1 = llama_vocab_get_text(vocab_aux, token_id);
         if (strcmp(t0 ? t0 : "", t1 ? t1 : "") != 0) {
             LLAMA_LOG_ERROR("%s: vocab text mismatch at token id %d\n", __func__, (int) id);
             return false;

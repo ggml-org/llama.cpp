@@ -497,16 +497,6 @@ extern "C" {
                                  size_t    n_paths,
               struct llama_model_params    params);
 
-    // Load an attached MTP assistant into a compatible target before creating the context.
-    LLAMA_API int llama_model_load_mtp_from_file(
-            struct llama_model * model,
-            const char * path_mtp,
-            struct llama_model_params params);
-
-    LLAMA_API const struct llama_model * llama_model_get_mtp_assistant(const struct llama_model * model);
-    LLAMA_API bool llama_model_has_mtp_assistant(const struct llama_model * model);
-    LLAMA_API uint32_t llama_model_mtp_n_embd_backbone(const struct llama_model * model);
-
     LLAMA_API void llama_model_save_to_file(
             const struct llama_model * model,
                         const char * path_model);
@@ -962,18 +952,6 @@ extern "C" {
     LLAMA_API int32_t llama_decode(
             struct llama_context * ctx,
               struct llama_batch   batch);
-
-    // Greedy draft using the target context KV and a loaded attached MTP assistant.
-    LLAMA_API int32_t llama_decode_mtp(
-            struct llama_context * ctx,
-            llama_seq_id seq_id,
-            llama_pos attn_pos,
-            llama_token last_token,
-            float * h_prev,
-            int32_t n_steps,
-            llama_token * out_drafts,
-            float * out_logits,
-            float * out_h_prev_last);
 
     // Set the number of threads used for decoding
     // n_threads is the number of threads used for generation (single token)
