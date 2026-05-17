@@ -550,7 +550,7 @@ static void repack_q4_0_q4x4x2(ggml_tensor * t, const void * data, size_t size) 
 
     size_t row_size    = ggml_row_size(t->type, t->ne[0]);
     size_t row_size_pd = ggml_row_size(t->type, hex_round_up(t->ne[0], QK_Q4_0x4x2));  // extra elements for the pad
-    size_t row_size_rp = row_size * 2;  // extra space for tmp pad (if any)
+    size_t row_size_rp = row_size_pd;  // scratch must hold one full padded tile (qblk_size/2 quants + scales)
 
     // Ensure we don't try to read more data than is available in the source buffer 'data'
     // or write more than the tensor can hold.
@@ -611,7 +611,7 @@ static void repack_q4x4x2_q4_0(void * data, const ggml_tensor * t, size_t size) 
 
     size_t row_size    = ggml_row_size(t->type, t->ne[0]);
     size_t row_size_pd = ggml_row_size(t->type, hex_round_up(t->ne[0], QK_Q4_0x4x2));  // extra elements for the pad
-    size_t row_size_rp = row_size * 2;  // extra space for tmp pad (if any)
+    size_t row_size_rp = row_size_pd;  // scratch must hold one full padded tile (qblk_size/2 quants + scales)
 
     // Ensure we don't try to copy more data than the tensor actually contains.
     const size_t total_tensor_size = (size_t)nrows * row_size;
@@ -1107,7 +1107,7 @@ static void repack_q8_0_q8x4x2(ggml_tensor * t, const void * data, size_t size) 
 
     size_t row_size    = ggml_row_size(t->type, t->ne[0]);
     size_t row_size_pd = ggml_row_size(t->type, hex_round_up(t->ne[0], QK_Q8_0x4x2));  // extra elements for the pad
-    size_t row_size_rp = row_size * 2;  // extra space for tmp pad (if any)
+    size_t row_size_rp = row_size_pd;  // scratch must hold one full padded tile (qblk_size quants + scales)
 
     // Ensure we don't try to read more data than is available in the source buffer 'data'
     // or write more than the tensor can hold.
@@ -1168,7 +1168,7 @@ static void repack_q8x4x2_q8_0(void * data, const ggml_tensor * t, size_t size) 
 
     size_t row_size    = ggml_row_size(t->type, t->ne[0]);
     size_t row_size_pd = ggml_row_size(t->type, hex_round_up(t->ne[0], QK_Q8_0x4x2));  // extra elements for the pad
-    size_t row_size_rp = row_size * 2;  // extra space for tmp pad (if any)
+    size_t row_size_rp = row_size_pd;  // scratch must hold one full padded tile (qblk_size quants + scales)
 
     // Ensure we don't try to copy more data than the tensor actually contains.
     const size_t total_tensor_size = (size_t)nrows * row_size;
@@ -1469,7 +1469,7 @@ static void repack_mxfp4_mxfp4x4x2(ggml_tensor * t, const void * data, size_t si
 
     size_t row_size    = ggml_row_size(t->type, t->ne[0]);
     size_t row_size_pd = ggml_row_size(t->type, hex_round_up(t->ne[0], QK_MXFP4x4x2));  // extra elements for the pad
-    size_t row_size_rp = row_size * 2;  // extra space for tmp pad (if any)
+    size_t row_size_rp = row_size_pd;  // scratch must hold one full padded tile (qblk_size/2 quants + scales)
 
     // Ensure we don't try to read more data than is available in the source buffer 'data'
     // or write more than the tensor can hold.
@@ -1530,7 +1530,7 @@ static void repack_mxfp4x4x2_mxfp4(void * data, const ggml_tensor * t, size_t si
 
     size_t row_size    = ggml_row_size(t->type, t->ne[0]);
     size_t row_size_pd = ggml_row_size(t->type, hex_round_up(t->ne[0], QK_MXFP4x4x2));  // extra elements for the pad
-    size_t row_size_rp = row_size * 2;  // extra space for tmp pad (if any)
+    size_t row_size_rp = row_size_pd;  // scratch must hold one full padded tile (qblk_size/2 quants + scales)
 
     // Ensure we don't try to copy more data than the tensor actually contains.
     const size_t total_tensor_size = (size_t)nrows * row_size;
