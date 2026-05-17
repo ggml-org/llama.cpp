@@ -13,11 +13,13 @@
 #include "llama-ext.h"
 #include "llama.h"
 
+#include <algorithm>
 #include <cinttypes>
 #include <cmath>
 #include <cstring>
 #include <limits>
 #include <stdexcept>
+#include <vector>
 
 //
 // llama_context
@@ -240,10 +242,24 @@ llama_context::llama_context(
 
     if (!hparams.vocab_only) {
         // GPU backends
-        for (const auto & dev : model.devices) {
-            ggml_backend_t backend = ggml_backend_dev_init(dev.dev, nullptr);
+        std::vector<ggml_backend_dev_t> backend_devs;
+        auto add_model_devices = [&](const llama_model & m) {
+            for (const auto & dev : m.devices) {
+                if (std::find(backend_devs.begin(), backend_devs.end(), dev.dev) == backend_devs.end()) {
+                    backend_devs.push_back(dev.dev);
+                }
+            }
+        };
+
+        add_model_devices(model);
+        if (model.mtp_assistant) {
+            add_model_devices(*model.mtp_assistant);
+        }
+
+        for (auto * dev : backend_devs) {
+            ggml_backend_t backend = ggml_backend_dev_init(dev, nullptr);
             if (backend == nullptr) {
-                throw std::runtime_error(format("failed to initialize %s backend", ggml_backend_dev_name(dev.dev)));
+                throw std::runtime_error(format("failed to initialize %s backend", ggml_backend_dev_name(dev)));
             }
             backends.emplace_back(backend);
         }
