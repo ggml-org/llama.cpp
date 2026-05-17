@@ -19,10 +19,8 @@ struct llama_batch_ptr {
     llama_batch_ptr(llama_batch_ptr &&) = default;
     llama_batch_ptr & operator=(llama_batch_ptr &&) = default;
 
-    llama_batch * get() { return &batch; }
-    const llama_batch * get() const { return &batch; }
-    llama_batch & operator*() { return batch; }
-    const llama_batch & operator*() const { return batch; }
+    llama_batch & get() { return batch; }
+    const llama_batch & get() const { return batch; }
 };
 
 // Phase 1: tokenize the prompt, decode all but the last token, save state to disk,
@@ -55,10 +53,10 @@ static std::string run_baseline_generation(struct llama_model * model, const str
         LOG("%s", next_token_str.c_str());
         result += next_token_str;
 
-        common_batch_clear(*batch);
-        common_batch_add(*batch, next_token, n_past, {0}, true);
+        common_batch_clear(batch.get());
+        common_batch_add(batch.get(), next_token, n_past, {0}, true);
 
-        if (llama_decode(ctx.get(), *batch)) {
+        if (llama_decode(ctx.get(), batch.get())) {
             LOG_ERR("\n%s: failed to evaluate\n", __func__);
             return {};
         }
@@ -114,10 +112,10 @@ static bool run_state_restore_generation(struct llama_model * model, const struc
         LOG("%s", next_token_str.c_str());
         result += next_token_str;
 
-        common_batch_clear(*batch);
-        common_batch_add(*batch, next_token, n_past, {0}, true);
+        common_batch_clear(batch.get());
+        common_batch_add(batch.get(), next_token, n_past, {0}, true);
 
-        if (llama_decode(ctx.get(), *batch)) {
+        if (llama_decode(ctx.get(), batch.get())) {
             LOG_ERR("\n%s: failed to evaluate\n", __func__);
             return false;
         }
@@ -200,10 +198,10 @@ static bool run_seq_migration_cpu_generation(struct llama_model * model, const s
         LOG("%s", next_token_str.c_str());
         result += next_token_str;
 
-        common_batch_clear(*batch);
-        common_batch_add(*batch, next_token, n_past, {1}, true);
+        common_batch_clear(batch.get());
+        common_batch_add(batch.get(), next_token, n_past, {1}, true);
 
-        if (llama_decode(ctx.get(), *batch)) {
+        if (llama_decode(ctx.get(), batch.get())) {
             LOG_ERR("\n%s: failed to evaluate\n", __func__);
             return false;
         }
@@ -286,10 +284,10 @@ static bool run_seq_migration_ondevice_generation(struct llama_model * model, co
         LOG("%s", next_token_str.c_str());
         result += next_token_str;
 
-        common_batch_clear(*batch);
-        common_batch_add(*batch, next_token, n_past, {1}, true);
+        common_batch_clear(batch.get());
+        common_batch_add(batch.get(), next_token, n_past, {1}, true);
 
-        if (llama_decode(ctx.get(), *batch)) {
+        if (llama_decode(ctx.get(), batch.get())) {
             LOG_ERR("\n%s: failed to evaluate\n", __func__);
             return false;
         }
