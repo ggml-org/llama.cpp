@@ -308,13 +308,15 @@ int main(int argc, char ** argv) {
 
     ggml_backend_load_all();
 
-    auto llama_init = common_init_from_params(params);
+    auto llama_init = common_init_from_params(params, true);
     auto * model = llama_init->model();
 
     if (model == nullptr) {
         LOG_ERR("%s: failed to init\n", __func__);
         return 1;
     }
+
+    GGML_ASSERT(llama_init->context() == nullptr);
 
     // Test 1: baseline (saves state to disk)
     auto result_baseline = test_baseline(model, params);
