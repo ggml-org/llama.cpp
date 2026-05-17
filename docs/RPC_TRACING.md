@@ -51,15 +51,38 @@ Every call to `send_rpc_cmd` produces one of two spans:
 
 | Span name | Attributes |
 |---|---|
-| `ggml.rpc.send`       | `rpc.cmd`, `rpc.input_bytes`, `rpc.has_response="false"` |
-| `ggml.rpc.send_recv`  | `rpc.cmd`, `rpc.input_bytes`, `rpc.expected_output_bytes`, `rpc.has_response="true"` |
+| `ggml.rpc.client.send`       | `rpc.cmd`, `rpc.input_bytes`, `rpc.has_response="false"` |
+| `ggml.rpc.client.send_recv`  | `rpc.cmd`, `rpc.input_bytes`, `rpc.expected_output_bytes`, `rpc.has_response="true"` |
 
 Failures (socket error, response-size mismatch, etc.) end the span with
 `StatusCode::kError` and a short description.
 
-`rpc.cmd` is the integer value of the `rpc_cmd` enum; the most useful values
-to filter on are `RPC_CMD_GRAPH_COMPUTE`, `RPC_CMD_SET_TENSOR`, and
-`RPC_CMD_GET_TENSOR`.
+Each span carries both:
+- `rpc.cmd` — the integer enum value (stable across versions)
+- `rpc.cmd_name` — the human-readable name (the more useful one for filtering)
+
+| Name             | Value | Hot path? |
+|---|---|---|
+| ALLOC_BUFFER     | 0  |    |
+| GET_ALIGNMENT    | 1  |    |
+| GET_MAX_SIZE     | 2  |    |
+| BUFFER_GET_BASE  | 3  |    |
+| FREE_BUFFER      | 4  |    |
+| BUFFER_CLEAR     | 5  |    |
+| SET_TENSOR       | 6  | yes |
+| SET_TENSOR_HASH  | 7  | yes |
+| GET_TENSOR       | 8  | yes |
+| COPY_TENSOR      | 9  |    |
+| GRAPH_COMPUTE    | 10 | yes (the big one) |
+| GET_DEVICE_MEMORY| 11 |    |
+| INIT_TENSOR      | 12 |    |
+| GET_ALLOC_SIZE   | 13 |    |
+| HELLO            | 14 | once at handshake |
+| DEVICE_COUNT     | 15 | once at init |
+| GRAPH_RECOMPUTE  | 16 | yes |
+
+Filter on `rpc.cmd_name = "GRAPH_COMPUTE"` to see only the heavy per-token
+RPCs.
 
 ## Compatibility
 

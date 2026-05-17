@@ -87,8 +87,8 @@ extern "C" void rpc_trace_shutdown(void) {
         return;
     }
     if (auto sdk_provider = std::dynamic_pointer_cast<sdktrace::TracerProvider>(g_provider)) {
-        sdk_provider->ForceFlush(std::chrono::milliseconds(5000));
-        sdk_provider->Shutdown(std::chrono::milliseconds(5000));
+        sdk_provider->ForceFlush(std::chrono::milliseconds(2000));
+        sdk_provider->Shutdown(std::chrono::milliseconds(2000));
     }
     std::shared_ptr<trace::TracerProvider> noop;
     trace::Provider::SetTracerProvider(noop);
@@ -109,7 +109,9 @@ extern "C" rpc_trace_span_t rpc_trace_span_begin(const char * name) {
     if (!t) {
         return nullptr;
     }
-    auto span = t->StartSpan(name);
+    trace::StartSpanOptions opts;
+    opts.kind = trace::SpanKind::kClient;
+    auto span = t->StartSpan(name, opts);
     if (!span) {
         return nullptr;
     }

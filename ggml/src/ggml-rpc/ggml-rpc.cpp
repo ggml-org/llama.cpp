@@ -281,18 +281,58 @@ static bool parse_endpoint(const std::string & endpoint, std::string & host, int
     return true;
 }
 
+// rpc_cmd enum -> name string, for span attributes. Keep in sync with the
+// enum rpc_cmd in this file's header section above.
+static const char * rpc_cmd_name(enum rpc_cmd cmd) {
+    switch (cmd) {
+        case RPC_CMD_ALLOC_BUFFER:      return "ALLOC_BUFFER";
+        case RPC_CMD_GET_ALIGNMENT:     return "GET_ALIGNMENT";
+        case RPC_CMD_GET_MAX_SIZE:      return "GET_MAX_SIZE";
+        case RPC_CMD_BUFFER_GET_BASE:   return "BUFFER_GET_BASE";
+        case RPC_CMD_FREE_BUFFER:       return "FREE_BUFFER";
+        case RPC_CMD_BUFFER_CLEAR:      return "BUFFER_CLEAR";
+        case RPC_CMD_SET_TENSOR:        return "SET_TENSOR";
+        case RPC_CMD_SET_TENSOR_HASH:   return "SET_TENSOR_HASH";
+        case RPC_CMD_GET_TENSOR:        return "GET_TENSOR";
+        case RPC_CMD_COPY_TENSOR:       return "COPY_TENSOR";
+        case RPC_CMD_GRAPH_COMPUTE:     return "GRAPH_COMPUTE";
+        case RPC_CMD_GET_DEVICE_MEMORY: return "GET_DEVICE_MEMORY";
+        case RPC_CMD_INIT_TENSOR:       return "INIT_TENSOR";
+        case RPC_CMD_GET_ALLOC_SIZE:    return "GET_ALLOC_SIZE";
+        case RPC_CMD_HELLO:             return "HELLO";
+        case RPC_CMD_DEVICE_COUNT:      return "DEVICE_COUNT";
+        case RPC_CMD_GRAPH_RECOMPUTE:   return "GRAPH_RECOMPUTE";
+        default:                        return "UNKNOWN";
+    }
+}
+
+// Private helper: send an RPC request without tracing. Used by both public
+// overloads of send_rpc_cmd so each "real" RPC emits exactly one span at the
+// outer call site (no double-emission when request/response form invokes
+// fire-and-forget internally).
+//
 // RPC request : | rpc_cmd (1 byte) | request_size (8 bytes) | request_data (request_size bytes) |
-// No response
+static bool send_rpc_request(socket_ptr sock, enum rpc_cmd cmd,
+                             const void * input, size_t input_size) {
+    uint8_t cmd_byte = cmd;
+    if (!sock->send_data(&cmd_byte, sizeof(cmd_byte))) {
+        return false;
+    }
+    if (!sock->send_data(&input_size, sizeof(input_size))) {
+        return false;
+    }
+    return sock->send_data(input, input_size);
+}
+
+// Public overload 1: fire-and-forget. No response expected.
 static bool send_rpc_cmd(socket_ptr sock, enum rpc_cmd cmd, const void * input, size_t input_size) {
-    rpc_trace_span_t span = RPC_TRACE_BEGIN("ggml.rpc.send");
+    rpc_trace_span_t span = RPC_TRACE_BEGIN("ggml.rpc.client.send");
     RPC_TRACE_INT(span, "rpc.cmd", (int64_t) cmd);
+    RPC_TRACE_STR(span, "rpc.cmd_name", rpc_cmd_name(cmd));
     RPC_TRACE_BYTES(span, "rpc.input_bytes", input_size);
     RPC_TRACE_STR(span, "rpc.has_response", "false");
 
-    uint8_t cmd_byte = cmd;
-    if (!sock->send_data(&cmd_byte, sizeof(cmd_byte)) ||
-        !sock->send_data(&input_size, sizeof(input_size)) ||
-        !sock->send_data(input, input_size)) {
+    if (!send_rpc_request(sock, cmd, input, input_size)) {
         RPC_TRACE_FAIL(span, "send_data failed");
         return false;
     }
@@ -300,16 +340,17 @@ static bool send_rpc_cmd(socket_ptr sock, enum rpc_cmd cmd, const void * input, 
     return true;
 }
 
-// RPC request : | rpc_cmd (1 byte) | request_size (8 bytes) | request_data (request_size bytes) |
+// Public overload 2: request/response.
 // RPC response: | response_size (8 bytes) | response_data (response_size bytes) |
 static bool send_rpc_cmd(socket_ptr sock, enum rpc_cmd cmd, const void * input, size_t input_size, void * output, size_t output_size) {
-    rpc_trace_span_t span = RPC_TRACE_BEGIN("ggml.rpc.send_recv");
+    rpc_trace_span_t span = RPC_TRACE_BEGIN("ggml.rpc.client.send_recv");
     RPC_TRACE_INT(span, "rpc.cmd", (int64_t) cmd);
+    RPC_TRACE_STR(span, "rpc.cmd_name", rpc_cmd_name(cmd));
     RPC_TRACE_BYTES(span, "rpc.input_bytes", input_size);
     RPC_TRACE_BYTES(span, "rpc.expected_output_bytes", output_size);
     RPC_TRACE_STR(span, "rpc.has_response", "true");
 
-    if (!send_rpc_cmd(sock, cmd, input, input_size)) {
+    if (!send_rpc_request(sock, cmd, input, input_size)) {
         RPC_TRACE_FAIL(span, "send phase failed");
         return false;
     }
