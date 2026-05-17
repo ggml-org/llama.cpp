@@ -774,6 +774,7 @@ struct ggml_backend_sched_split {
 struct ggml_backend_sched_moe_loaded {
     ggml_bitset_t * ids;
     size_t id_size;
+    uint64_t epoch;
     int64_t n_expert;
     size_t expert_size;
     const void * src_data;
@@ -817,6 +818,7 @@ struct ggml_backend_sched {
     int                 * hv_tensor_backend_ids; // [hash_set.size]
     struct ggml_tensor ** hv_tensor_copies;      // [hash_set.size][n_backends][n_copies]
     struct ggml_backend_sched_moe_loaded * hv_tensor_moe_loaded; // [hash_set.size][n_backends][n_copies]
+    uint64_t              moe_loaded_epoch;
 
     int * node_backend_ids; // [graph_size]
     int * leaf_backend_ids; // [graph_size]
@@ -1576,6 +1578,16 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
     GGML_ASSERT(sched);
     struct ggml_backend_sched_split * splits = sched->splits;
 
+    sched->moe_loaded_epoch++;
+    if (sched->moe_loaded_epoch == 0) {
+        const size_t tensor_copy_count = sched->hash_set.size * sched->n_backends * sched->n_copies;
+        for (size_t i = 0; i < tensor_copy_count; ++i) {
+            sched->hv_tensor_moe_loaded[i].epoch = 0;
+        }
+        sched->moe_loaded_epoch = 1;
+    }
+    const uint64_t moe_loaded_epoch = sched->moe_loaded_epoch;
+
     ggml_tensor * prev_ids_tensor = nullptr;
     std::vector<int32_t> ids;
     std::vector<ggml_bitset_t> used_ids;
@@ -1684,15 +1696,21 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                         loaded->ids = (ggml_bitset_t *) calloc(loaded_id_size, sizeof(ggml_bitset_t));
                         GGML_ASSERT(loaded->ids != nullptr);
                         loaded->id_size = loaded_id_size;
+                        loaded->epoch = 0;
                         loaded->n_expert = 0;
                         loaded->expert_size = 0;
                     }
 
                     ggml_bitset_t * loaded_ids = loaded->ids;
 
-                    if (loaded->n_expert != n_expert || loaded->expert_size != expert_size ||
+                    // Split input copies are temporary scheduler allocations. Their addresses can stay the
+                    // same while gallocr reuses the contents for another graph compute, so only trust the
+                    // resident-expert bitset within the current compute epoch.
+                    if (loaded->epoch != moe_loaded_epoch ||
+                        loaded->n_expert != n_expert || loaded->expert_size != expert_size ||
                         loaded->src_data != input_data || loaded->dst_data != input_cpy_data) {
                         memset(loaded_ids, 0, loaded_id_size * sizeof(ggml_bitset_t));
+                        loaded->epoch = moe_loaded_epoch;
                         loaded->n_expert = n_expert;
                         loaded->expert_size = expert_size;
                         loaded->src_data = input_data;
@@ -1939,7 +1957,7 @@ void ggml_backend_sched_reset(ggml_backend_sched_t sched) {
         memset(sched->hv_tensor_backend_ids, -1, sched->hash_set.size * sizeof(sched->hv_tensor_backend_ids[0]));
         const size_t tensor_copy_count = sched->hash_set.size * sched->n_backends * sched->n_copies;
         memset(sched->hv_tensor_copies,       0, tensor_copy_count * sizeof(struct ggml_tensor *));
-        // MoE resident-expert entries self-invalidate on src/dst/shape changes, so keep valid staged experts across resets.
+        // MoE resident-expert epochs invalidate staged contents at compute boundaries, so keep bitsets allocated across resets.
         sched->is_reset = true;
     }
     sched->is_alloc = false;
