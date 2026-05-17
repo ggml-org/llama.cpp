@@ -152,7 +152,8 @@ int main(int argc, char ** argv) {
     {
         llama_batch batch_prompt = llama_batch_init(inp.size() - 1, 0, 1);
         for (size_t i = 0; i + 1 < inp.size(); ++i) {
-            common_batch_add(batch_prompt, inp[i], i, { seq_id }, true);
+            const bool output = spec_mtp_attached || i + 2 == inp.size();
+            common_batch_add(batch_prompt, inp[i], i, { seq_id }, output);
         }
 
         llama_decode(ctx_tgt, batch_prompt);
