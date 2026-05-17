@@ -4851,6 +4851,21 @@ struct test_rope : public test_case {
 
             a = ggml_view_4d(ctx, a, ne_a[0], ne_a[1], ne_a[2], ne_a[3], a->nb[1], a->nb[2], a->nb[3], 0);
             ggml_set_name(a, "view_of_a");
+        } else if (v == 2) {
+            // second-half slice along dim 0 (mimics build_rope_2d in clip.cpp).
+            // The non-zero view offset (ne_a[0] * elem_size) often produces a
+            // non-aligned buffer offset, which exercises backends' alignment paths.
+            auto ne = ne_a; ne[0] *= 2;
+            a = ggml_new_tensor(ctx, type, 4, ne.data());
+            if (forward) {
+                ggml_set_param(a);
+            }
+            ggml_set_name(a, "a");
+
+            a = ggml_view_4d(ctx, a, ne_a[0], ne_a[1], ne_a[2], ne_a[3],
+                             a->nb[1], a->nb[2], a->nb[3],
+                             ne_a[0] * ggml_element_size(a));
+            ggml_set_name(a, "view_of_a");
         } else {
             a = ggml_new_tensor(ctx, type, 4, ne_a.data());
             if (forward) {
@@ -4913,8 +4928,6 @@ struct test_rope : public test_case {
             } else {
                 out = ggml_rope_ext_back(ctx, a, pos, freq, n_dims, mode, 0, 10000.0f, fs, ef, af, 1.0f, 1.0f);
             }
-
-            // TODO: add test with a non-contiguous view as input ; this case is needed for build_rope_2d in clip.cpp
         }
         ggml_set_name(out, "out");
 
@@ -8686,6 +8699,13 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
                                 }
 
                                 test_cases.emplace_back(new test_rope(type, { 64, 128, 2, 1},  64, GGML_ROPE_TYPE_NEOX, 512, fs, ef, af, ff, v, fw)); // neox (falcon 40B)
+                            }
+
+                            // build_rope_2d-style: ROPE on a non-contiguous view
+                            // that starts at a non-zero offset along dim 0
+                            // (e.g. gemma4v vision second-half view).
+                            for (int rmode : { GGML_ROPE_TYPE_NORMAL, GGML_ROPE_TYPE_NEOX, GGML_ROPE_TYPE_MROPE, GGML_ROPE_TYPE_IMROPE, GGML_ROPE_TYPE_VISION }) {
+                                test_cases.emplace_back(new test_rope(type, { 36, 16, 2457, 1}, 36, rmode, 512, fs, ef, af, ff, 2, fw));
                             }
                         }
 
