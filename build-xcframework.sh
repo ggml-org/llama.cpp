@@ -11,6 +11,8 @@ LLAMA_BUILD_EXAMPLES=OFF
 LLAMA_BUILD_TOOLS=OFF
 LLAMA_BUILD_TESTS=OFF
 LLAMA_BUILD_SERVER=OFF
+LLAMA_BUILD_MTMD=${LLAMA_BUILD_MTMD:-OFF}
+LLAMA_BUILD_PLATFORMS=${LLAMA_BUILD_PLATFORMS:-ios,macos,visionos,tvos}
 GGML_METAL=ON
 GGML_METAL_EMBED_LIBRARY=ON
 GGML_BLAS_DEFAULT=ON
@@ -33,6 +35,7 @@ COMMON_CMAKE_ARGS=(
     -DBUILD_SHARED_LIBS=${BUILD_SHARED_LIBS}
     -DLLAMA_BUILD_EXAMPLES=${LLAMA_BUILD_EXAMPLES}
     -DLLAMA_BUILD_TOOLS=${LLAMA_BUILD_TOOLS}
+    -DLLAMA_BUILD_MTMD=${LLAMA_BUILD_MTMD}
     -DLLAMA_BUILD_TESTS=${LLAMA_BUILD_TESTS}
     -DLLAMA_BUILD_SERVER=${LLAMA_BUILD_SERVER}
     -DGGML_METAL_EMBED_LIBRARY=${GGML_METAL_EMBED_LIBRARY}
@@ -63,6 +66,15 @@ MINOR_VERSION=$(echo $XCODE_VERSION | cut -d. -f2)
 echo "Detected Xcode version: $XCODE_VERSION"
 
 set -e
+
+if [[ "${LLAMA_BUILD_PLATFORMS}" == "all" ]]; then
+    LLAMA_BUILD_PLATFORMS="ios,macos,visionos,tvos"
+fi
+
+should_build_platform() {
+    local platform="$1"
+    [[ ",${LLAMA_BUILD_PLATFORMS}," == *",${platform},"* ]]
+}
 
 ## Clean up previous builds
 rm -rf build-apple
@@ -123,6 +135,13 @@ setup_framework_structure() {
     cp ggml/include/ggml-blas.h    ${header_path}
     cp ggml/include/gguf.h         ${header_path}
 
+    local mtmd_module_headers=""
+    if [[ "${LLAMA_BUILD_MTMD}" == "ON" ]]; then
+        cp tools/mtmd/mtmd.h        ${header_path}
+        cp tools/mtmd/mtmd-helper.h ${header_path}
+        mtmd_module_headers=$'    header "mtmd.h"\n    header "mtmd-helper.h"\n'
+    fi
+
     # Create module map (common for all platforms)
     cat > ${module_path}module.modulemap << EOF
 framework module llama {
@@ -134,6 +153,7 @@ framework module llama {
     header "ggml-cpu.h"
     header "ggml-blas.h"
     header "gguf.h"
+${mtmd_module_headers}
 
     link "c++"
     link framework "Accelerate"
@@ -251,6 +271,10 @@ combine_static_libraries() {
         "${base_dir}/${build_dir}/ggml/src/ggml-metal/${release_dir}/libggml-metal.a"
         "${base_dir}/${build_dir}/ggml/src/ggml-blas/${release_dir}/libggml-blas.a"
     )
+
+    if [[ "${LLAMA_BUILD_MTMD}" == "ON" ]]; then
+        libs+=("${base_dir}/${build_dir}/tools/mtmd/${release_dir}/libmtmd.a")
+    fi
 
     # Create temporary directory for processing
     local temp_dir="${base_dir}/${build_dir}/temp"
@@ -401,6 +425,25 @@ combine_static_libraries() {
     rm -rf "${temp_dir}"
 }
 
+build_release() {
+    local build_dir="$1"
+
+    if [[ "${LLAMA_BUILD_MTMD}" == "ON" ]]; then
+        cmake --build "${build_dir}" --config Release --target mtmd -- -quiet
+    else
+        cmake --build "${build_dir}" --config Release -- -quiet
+    fi
+}
+
+add_xcframework_slice() {
+    local build_dir="$1"
+    XCFRAMEWORK_ARGS+=(
+        -framework "$(pwd)/${build_dir}/framework/llama.framework"
+        -debug-symbols "$(pwd)/${build_dir}/dSYMs/llama.dSYM"
+    )
+}
+
+if should_build_platform "ios"; then
 echo "Building for iOS simulator..."
 cmake -B build-ios-sim -G Xcode \
     "${COMMON_CMAKE_ARGS[@]}" \
@@ -414,7 +457,7 @@ cmake -B build-ios-sim -G Xcode \
     -DCMAKE_CXX_FLAGS="${COMMON_CXX_FLAGS}" \
     -DLLAMA_OPENSSL=OFF \
     -S .
-cmake --build build-ios-sim --config Release -- -quiet
+build_release "build-ios-sim"
 
 echo "Building for iOS devices..."
 cmake -B build-ios-device -G Xcode \
@@ -428,8 +471,10 @@ cmake -B build-ios-device -G Xcode \
     -DCMAKE_CXX_FLAGS="${COMMON_CXX_FLAGS}" \
     -DLLAMA_OPENSSL=OFF \
     -S .
-cmake --build build-ios-device --config Release -- -quiet
+build_release "build-ios-device"
+fi
 
+if should_build_platform "macos"; then
 echo "Building for macOS..."
 cmake -B build-macos -G Xcode \
     "${COMMON_CMAKE_ARGS[@]}" \
@@ -439,8 +484,10 @@ cmake -B build-macos -G Xcode \
     -DCMAKE_CXX_FLAGS="${COMMON_CXX_FLAGS}" \
     -DLLAMA_OPENSSL=OFF \
     -S .
-cmake --build build-macos --config Release -- -quiet
+build_release "build-macos"
+fi
 
+if should_build_platform "visionos"; then
 echo "Building for visionOS..."
 cmake -B build-visionos -G Xcode \
     "${COMMON_CMAKE_ARGS[@]}" \
@@ -454,7 +501,7 @@ cmake -B build-visionos -G Xcode \
     -DLLAMA_OPENSSL=OFF \
     -DLLAMA_BUILD_SERVER=OFF \
     -S .
-cmake --build build-visionos --config Release -- -quiet
+build_release "build-visionos"
 
 echo "Building for visionOS simulator..."
 cmake -B build-visionos-sim -G Xcode \
@@ -469,8 +516,10 @@ cmake -B build-visionos-sim -G Xcode \
     -DLLAMA_OPENSSL=OFF \
     -DLLAMA_BUILD_SERVER=OFF \
     -S .
-cmake --build build-visionos-sim --config Release -- -quiet
+build_release "build-visionos-sim"
+fi
 
+if should_build_platform "tvos"; then
 # Add tvOS builds (might need the same u_int definitions as watchOS and visionOS)
 echo "Building for tvOS simulator..."
 cmake -B build-tvos-sim -G Xcode \
@@ -485,7 +534,7 @@ cmake -B build-tvos-sim -G Xcode \
     -DCMAKE_CXX_FLAGS="${COMMON_CXX_FLAGS}" \
     -DLLAMA_OPENSSL=OFF \
     -S .
-cmake --build build-tvos-sim --config Release -- -quiet
+build_release "build-tvos-sim"
 
 echo "Building for tvOS devices..."
 cmake -B build-tvos-device -G Xcode \
@@ -500,43 +549,67 @@ cmake -B build-tvos-device -G Xcode \
     -DCMAKE_CXX_FLAGS="${COMMON_CXX_FLAGS}" \
     -DLLAMA_OPENSSL=OFF \
     -S .
-cmake --build build-tvos-device --config Release -- -quiet
+build_release "build-tvos-device"
+fi
 
 # Setup frameworks and copy binaries and headers
 echo "Setting up framework structures..."
+if should_build_platform "ios"; then
 setup_framework_structure "build-ios-sim" ${IOS_MIN_OS_VERSION} "ios"
 setup_framework_structure "build-ios-device" ${IOS_MIN_OS_VERSION} "ios"
+fi
+if should_build_platform "macos"; then
 setup_framework_structure "build-macos" ${MACOS_MIN_OS_VERSION} "macos"
+fi
+if should_build_platform "visionos"; then
 setup_framework_structure "build-visionos" ${VISIONOS_MIN_OS_VERSION} "visionos"
 setup_framework_structure "build-visionos-sim" ${VISIONOS_MIN_OS_VERSION} "visionos"
+fi
+if should_build_platform "tvos"; then
 setup_framework_structure "build-tvos-sim" ${TVOS_MIN_OS_VERSION} "tvos"
 setup_framework_structure "build-tvos-device" ${TVOS_MIN_OS_VERSION} "tvos"
+fi
 
 # Create dynamic libraries from static libraries
 echo "Creating dynamic libraries from static libraries..."
+if should_build_platform "ios"; then
 combine_static_libraries "build-ios-sim" "Release-iphonesimulator" "ios" "true"
 combine_static_libraries "build-ios-device" "Release-iphoneos" "ios" "false"
+fi
+if should_build_platform "macos"; then
 combine_static_libraries "build-macos" "Release" "macos" "false"
+fi
+if should_build_platform "visionos"; then
 combine_static_libraries "build-visionos" "Release-xros" "visionos" "false"
 combine_static_libraries "build-visionos-sim" "Release-xrsimulator" "visionos" "true"
+fi
+if should_build_platform "tvos"; then
 combine_static_libraries "build-tvos-sim" "Release-appletvsimulator" "tvos" "true"
 combine_static_libraries "build-tvos-device" "Release-appletvos" "tvos" "false"
+fi
 
 # Create XCFramework with correct debug symbols paths
 echo "Creating XCFramework..."
+XCFRAMEWORK_ARGS=()
+if should_build_platform "ios"; then
+    add_xcframework_slice "build-ios-sim"
+    add_xcframework_slice "build-ios-device"
+fi
+if should_build_platform "macos"; then
+    add_xcframework_slice "build-macos"
+fi
+if should_build_platform "visionos"; then
+    add_xcframework_slice "build-visionos"
+    add_xcframework_slice "build-visionos-sim"
+fi
+if should_build_platform "tvos"; then
+    add_xcframework_slice "build-tvos-device"
+    add_xcframework_slice "build-tvos-sim"
+fi
+if [[ ${#XCFRAMEWORK_ARGS[@]} -eq 0 ]]; then
+    echo "Error: no platforms selected. Set LLAMA_BUILD_PLATFORMS to ios, macos, visionos, tvos, or all."
+    exit 1
+fi
 xcrun xcodebuild -create-xcframework \
-    -framework $(pwd)/build-ios-sim/framework/llama.framework \
-    -debug-symbols $(pwd)/build-ios-sim/dSYMs/llama.dSYM \
-    -framework $(pwd)/build-ios-device/framework/llama.framework \
-    -debug-symbols $(pwd)/build-ios-device/dSYMs/llama.dSYM \
-    -framework $(pwd)/build-macos/framework/llama.framework \
-    -debug-symbols $(pwd)/build-macos/dSYMs/llama.dSYM \
-    -framework $(pwd)/build-visionos/framework/llama.framework \
-    -debug-symbols $(pwd)/build-visionos/dSYMs/llama.dSYM \
-    -framework $(pwd)/build-visionos-sim/framework/llama.framework \
-    -debug-symbols $(pwd)/build-visionos-sim/dSYMs/llama.dSYM \
-    -framework $(pwd)/build-tvos-device/framework/llama.framework \
-    -debug-symbols $(pwd)/build-tvos-device/dSYMs/llama.dSYM \
-    -framework $(pwd)/build-tvos-sim/framework/llama.framework \
-    -debug-symbols $(pwd)/build-tvos-sim/dSYMs/llama.dSYM \
-    -output $(pwd)/build-apple/llama.xcframework
+    "${XCFRAMEWORK_ARGS[@]}" \
+    -output "$(pwd)/build-apple/llama.xcframework"

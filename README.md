@@ -575,6 +575,22 @@ let package = Package(
 The above example is using an intermediate build `b5046` of the library. This can be modified
 to use a different version by changing the URL and checksum.
 
+The generated XCFramework contains the base text inference API by default. To include
+the experimental `libmtmd` multimodal API and its public headers, build it with:
+
+```sh
+LLAMA_BUILD_MTMD=ON ./build-xcframework.sh
+```
+
+This enables Apple clients to use `mtmd.h` and `mtmd-helper.h` for image and audio
+inputs with multimodal models.
+
+To build only the iOS device and simulator slices, set:
+
+```sh
+LLAMA_BUILD_PLATFORMS=ios LLAMA_BUILD_MTMD=ON ./build-xcframework.sh
+```
+
 ## Completions
 Command-line completion is available for some environments.
 
