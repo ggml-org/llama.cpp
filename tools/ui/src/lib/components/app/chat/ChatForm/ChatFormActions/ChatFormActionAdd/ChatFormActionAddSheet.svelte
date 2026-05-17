@@ -19,6 +19,7 @@
 		class?: string;
 		disabled?: boolean;
 		hasAudioModality?: boolean;
+		hasVideoModality?: boolean;
 		hasVisionModality?: boolean;
 		hasMcpPromptsSupport?: boolean;
 		hasMcpResourcesSupport?: boolean;
@@ -34,6 +35,7 @@
 		disabled = false,
 		hasAudioModality = false,
 		hasVisionModality = false,
+		hasVideoModality = false,
 		hasMcpPromptsSupport = false,
 		hasMcpResourcesSupport = false,
 		onFileUpload,
@@ -49,6 +51,7 @@
 		() => ({
 			hasVisionModality,
 			hasAudioModality,
+			hasVideoModality,
 			hasMcpPromptsSupport,
 			hasMcpResourcesSupport
 		}),

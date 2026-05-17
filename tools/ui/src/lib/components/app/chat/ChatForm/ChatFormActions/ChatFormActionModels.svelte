@@ -11,6 +11,7 @@
 		disabled?: boolean;
 		forceForegroundText?: boolean;
 		hasAudioModality?: boolean;
+		hasVideoModality?: boolean;
 		hasVisionModality?: boolean;
 		hasModelSelected?: boolean;
 		isSelectedModelInCache?: boolean;
@@ -23,6 +24,7 @@
 		disabled = false,
 		forceForegroundText = false,
 		hasAudioModality = $bindable(false),
+		hasVideoModality = $bindable(false),
 		hasVisionModality = $bindable(false),
 		hasModelSelected = $bindable(false),
 		isSelectedModelInCache = $bindable(true),
@@ -93,6 +95,10 @@
 
 	$effect(() => {
 		hasAudioModality = activeModelId ? modelsStore.modelSupportsAudio(activeModelId) : false;
+	});
+
+	$effect(() => {
+		hasVideoModality = activeModelId ? modelsStore.modelSupportsVideo(activeModelId) : false;
 	});
 
 	$effect(() => {
