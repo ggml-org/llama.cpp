@@ -69,8 +69,8 @@ static std::string run_baseline_generation(struct llama_model * model, const str
 
 
 // Phase 2: create a new context, load state from file, replay the last prompt token,
-// then generate n_predict tokens.
-static std::string run_state_restore_generation(struct llama_model * model, const struct common_params & params) {
+// then generate n_predict tokens and compare against expected result.
+static bool run_state_restore_generation(struct llama_model * model, const struct common_params & params, const std::string & expected_result) {
     auto ctx = llama_context_ptr{llama_init_from_model(model, common_context_params_to_llama(params))};
 
     auto sparams = llama_sampler_chain_default_params();
@@ -87,7 +87,7 @@ static std::string run_state_restore_generation(struct llama_model * model, cons
 
     if (!llama_state_load_file(ctx.get(), params.out_file.data(), unused_sts.data(), unused_sts.size(), &n_token_count_out)) {
         LOG_ERR("\n%s: failed to load state\n", __func__);
-        return {};
+        return false;
     }
 
     LOG_TRC("%s: loaded state with %zu tokens\n", __func__, n_token_count_out);
@@ -95,7 +95,7 @@ static std::string run_state_restore_generation(struct llama_model * model, cons
     // Replay last token
     int n_past = (int) n_token_count_out;
     if (!common_replay_last_token(ctx.get(), tokens.back(), n_past)) {
-        return {};
+        return false;
     }
     n_past++;
 
@@ -115,18 +115,24 @@ static std::string run_state_restore_generation(struct llama_model * model, cons
 
         if (llama_decode(ctx.get(), *batch)) {
             LOG_ERR("\n%s: failed to evaluate\n", __func__);
-            return {};
+            return false;
         }
         n_past++;
     }
 
-    return result;
+    if (result != expected_result) {
+        LOG_ERR("\n%s: error: generation differs from expected\n", __func__);
+        return false;
+    }
+
+    LOG_TRC("\n%s: success\n", __func__);
+    return true;
 }
 
 
 // Phase 3: create a multi-seq context, load state, replay last token, migrate KV cache
 // from seq 0 to seq 1 via the CPU path, then generate n_predict tokens on seq 1.
-static std::string run_seq_migration_cpu_generation(struct llama_model * model, const struct common_params & params) {
+static bool run_seq_migration_cpu_generation(struct llama_model * model, const struct common_params & params, const std::string & expected_result) {
     auto params_ctx = common_context_params_to_llama(params);
     params_ctx.n_seq_max = 2;
     auto ctx = llama_context_ptr{llama_init_from_model(model, params_ctx)};
@@ -145,7 +151,7 @@ static std::string run_seq_migration_cpu_generation(struct llama_model * model, 
 
     if (!llama_state_load_file(ctx.get(), params.out_file.data(), unused_sts.data(), unused_sts.size(), &n_token_count_out)) {
         LOG_ERR("\n%s: failed to load state\n", __func__);
-        return {};
+        return false;
     }
 
     LOG_TRC("%s: loaded state with %zu tokens\n", __func__, n_token_count_out);
@@ -153,7 +159,7 @@ static std::string run_seq_migration_cpu_generation(struct llama_model * model, 
     // Replay last token
     int n_past = (int) n_token_count_out;
     if (!common_replay_last_token(ctx.get(), tokens.back(), n_past)) {
-        return {};
+        return false;
     }
     n_past++;
 
@@ -163,7 +169,7 @@ static std::string run_seq_migration_cpu_generation(struct llama_model * model, 
         const size_t ncopy = llama_state_seq_get_data(ctx.get(), seq_store.data(), seq_store.size(), 0);
         if (ncopy != seq_store.size()) {
             LOG_ERR("\n%s: seq copy data length %zd does not match expected length %zd\n", __func__, ncopy, seq_store.size());
-            return {};
+            return false;
         }
         LOG_TRC("%s: seq 0 copied, %zd bytes\n", __func__, ncopy);
 
@@ -173,7 +179,7 @@ static std::string run_seq_migration_cpu_generation(struct llama_model * model, 
         const size_t nset = llama_state_seq_set_data(ctx.get(), seq_store.data(), seq_store.size(), 1);
         if (nset != seq_store.size()) {
             LOG_ERR("\n%s: seq set data length %zd does not match expected length %zd\n", __func__, nset, seq_store.size());
-            return {};
+            return false;
         }
         LOG_TRC("%s: seq 1 restored, %zd bytes\n", __func__, nset);
     }
@@ -194,18 +200,24 @@ static std::string run_seq_migration_cpu_generation(struct llama_model * model, 
 
         if (llama_decode(ctx.get(), *batch)) {
             LOG_ERR("\n%s: failed to evaluate\n", __func__);
-            return {};
+            return false;
         }
         n_past++;
     }
 
-    return result;
+    if (result != expected_result) {
+        LOG_ERR("\n%s: error: generation differs from expected\n", __func__);
+        return false;
+    }
+
+    LOG_TRC("\n%s: success\n", __func__);
+    return true;
 }
 
 
 // Phase 4: create a multi-seq context, load state, replay last token, migrate KV cache
 // from seq 0 to seq 1 via the on-device path, then generate n_predict tokens on seq 1.
-static std::string run_seq_migration_ondevice_generation(struct llama_model * model, const struct common_params & params) {
+static bool run_seq_migration_ondevice_generation(struct llama_model * model, const struct common_params & params, const std::string & expected_result) {
     auto params_ctx = common_context_params_to_llama(params);
     params_ctx.n_seq_max = 2;
     auto ctx = llama_context_ptr{llama_init_from_model(model, params_ctx)};
@@ -224,7 +236,7 @@ static std::string run_seq_migration_ondevice_generation(struct llama_model * mo
 
     if (!llama_state_load_file(ctx.get(), params.out_file.data(), unused_sts.data(), unused_sts.size(), &n_token_count_out)) {
         LOG_ERR("\n%s: failed to load state\n", __func__);
-        return {};
+        return false;
     }
 
     LOG_TRC("%s: loaded state with %zu tokens\n", __func__, n_token_count_out);
@@ -232,7 +244,7 @@ static std::string run_seq_migration_ondevice_generation(struct llama_model * mo
     // Replay last token
     int n_past = (int) n_token_count_out;
     if (!common_replay_last_token(ctx.get(), tokens.back(), n_past)) {
-        return {};
+        return false;
     }
     n_past++;
 
@@ -242,7 +254,7 @@ static std::string run_seq_migration_ondevice_generation(struct llama_model * mo
         const size_t ncopy = llama_state_seq_get_data_ext(ctx.get(), seq_store.data(), seq_store.size(), 0, LLAMA_STATE_SEQ_FLAGS_ON_DEVICE);
         if (ncopy != seq_store.size()) {
             LOG_ERR("\n%s: seq copy data length %zd does not match expected length %zd\n", __func__, ncopy, seq_store.size());
-            return {};
+            return false;
         }
         LOG_TRC("%s: seq 0 copied, %zd bytes\n", __func__, ncopy);
 
@@ -252,7 +264,7 @@ static std::string run_seq_migration_ondevice_generation(struct llama_model * mo
         const size_t nset = llama_state_seq_set_data_ext(ctx.get(), seq_store.data(), seq_store.size(), 1, LLAMA_STATE_SEQ_FLAGS_ON_DEVICE);
         if (nset != seq_store.size()) {
             LOG_ERR("\n%s: seq set data length %zd does not match expected length %zd\n", __func__, nset, seq_store.size());
-            return {};
+            return false;
         }
         LOG_TRC("%s: seq 1 restored, %zd bytes\n", __func__, nset);
     }
@@ -273,12 +285,18 @@ static std::string run_seq_migration_ondevice_generation(struct llama_model * mo
 
         if (llama_decode(ctx.get(), *batch)) {
             LOG_ERR("\n%s: failed to evaluate\n", __func__);
-            return {};
+            return false;
         }
         n_past++;
     }
 
-    return result;
+    if (result != expected_result) {
+        LOG_ERR("\n%s: error: generation differs from expected\n", __func__);
+        return false;
+    }
+
+    LOG_TRC("\n%s: success\n", __func__);
+    return true;
 }
 
 
@@ -321,47 +339,22 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
-    LOG("\n\n");
-
     // Phase 2: full state restore from file
-    auto result_restore = run_state_restore_generation(model, params);
-    if (result_restore.empty()) {
+    if (!run_state_restore_generation(model, params, result_baseline)) {
         return 1;
     }
 
-    LOG("\n\n");
-
     // Phase 3: per-sequence KV migration (CPU path)
-    auto result_seq_migration_cpu = run_seq_migration_cpu_generation(model, params);
-    if (result_seq_migration_cpu.empty()) {
+    if (!run_seq_migration_cpu_generation(model, params, result_baseline)) {
         return 1;
     }
 
     // Phase 4: per-sequence KV migration (on-device path)
-    auto result_seq_migration_ondevice = run_seq_migration_ondevice_generation(model, params);
-    if (result_seq_migration_ondevice.empty()) {
+    if (!run_seq_migration_ondevice_generation(model, params, result_baseline)) {
         return 1;
     }
 
-    LOG("\n");
-
-    // Assertions
-    if (result_baseline != result_restore) {
-        LOG_ERR("\n%s: error: the 2 generations are different\n", __func__);
-        return 1;
-    }
-
-    if (result_baseline != result_seq_migration_cpu) {
-        LOG_ERR("\n%s: error: the seq restore generation is different\n", __func__);
-        return 1;
-    }
-
-    if (result_baseline != result_seq_migration_ondevice) {
-        LOG_ERR("\n%s: error: the seq restore generation is different\n", __func__);
-        return 1;
-    }
-
-    LOG_TRC("\n%s: success\n", __func__);
+    LOG_TRC("\n%s: all tests passed\n", __func__);
 
     return 0;
 }
