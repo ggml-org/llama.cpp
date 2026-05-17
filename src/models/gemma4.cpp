@@ -132,6 +132,10 @@ void llama_model_gemma4::load_arch_tensors(llama_model_loader &) {
 }
 
 std::unique_ptr<llm_graph_context> llama_model_gemma4::build_arch_graph(const llm_graph_params & params) const {
+    if (params.gtype == LLM_GRAPH_TYPE_DECODER_MTP) {
+        GGML_ASSERT(mtp_assistant && "Gemma 4 MTP requires llama_model_load_mtp_from_file()");
+        return std::make_unique<graph_mtp>(*this, *mtp_assistant, params);
+    }
     return std::make_unique<graph>(*this, params);
 }
 
@@ -371,6 +375,8 @@ llama_model_gemma4::graph::graph(const llama_model & model, const llm_graph_para
         inpL = cur;
     }
     cur = inpL;
+
+    res->t_h_pre_norm = cur;
 
     cur = build_norm(cur,
             model.output_norm, nullptr,

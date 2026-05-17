@@ -133,7 +133,18 @@ struct llama_context {
                 const llama_ubatch & ubatch,
                     llm_graph_type   gtype,
             llama_memory_context_i * mctx,
-                       ggml_status & ret);
+                       ggml_status & ret,
+                             bool   apply_mctx = true);
+
+    int32_t decode_mtp(
+            llama_seq_id seq_id,
+            llama_pos attn_pos,
+            llama_token last_token,
+            float * h_prev,
+            int32_t n_steps,
+            llama_token * out_drafts,
+            float * out_logits,
+            float * out_h_prev_last);
 
     int encode(const llama_batch & batch_inp);
     int decode(const llama_batch & batch_inp);

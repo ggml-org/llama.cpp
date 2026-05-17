@@ -695,6 +695,145 @@ struct common_speculative_state_draft_mtp : public common_speculative_impl {
     }
 };
 
+struct common_speculative_state_attached_mtp : public common_speculative_impl {
+    common_params_speculative_draft params;
+
+    int32_t n_embd = 0;
+
+    std::vector<std::vector<float>> pending_h;
+    std::vector<std::vector<float>> verify_h;
+    std::vector<int32_t> verify_h_rows;
+
+    std::vector<int32_t> i_batch_beg;
+    std::vector<int32_t> i_batch_end;
+
+    common_speculative_state_attached_mtp(const common_params_speculative & params, uint32_t n_seq)
+        : common_speculative_impl(COMMON_SPECULATIVE_TYPE_DRAFT_MTP, n_seq)
+        , params(params.draft) {
+        auto * ctx_tgt = this->params.ctx_tgt;
+        GGML_ASSERT(ctx_tgt && "attached MTP requires ctx_tgt");
+        GGML_ASSERT(llama_model_has_mtp_assistant(llama_get_model(ctx_tgt)) && "attached MTP assistant was not loaded");
+
+        n_embd = (int32_t) llama_model_mtp_n_embd_backbone(llama_get_model(ctx_tgt));
+        GGML_ASSERT(n_embd > 0);
+
+        llama_set_embeddings_pre_norm(ctx_tgt, true);
+
+        pending_h.assign(n_seq, std::vector<float>(n_embd, 0.0f));
+        verify_h.assign(n_seq, {});
+        verify_h_rows.assign(n_seq, 0);
+        i_batch_beg.assign(n_seq, -1);
+        i_batch_end.assign(n_seq, -1);
+    }
+
+    void begin(llama_seq_id /*seq_id*/, const llama_tokens & /*prompt*/) override {
+        // process() seeds pending_h from the target pre-norm hidden rows.
+    }
+
+    bool process(const llama_batch & batch_in) override {
+        if (batch_in.n_tokens <= 0 || batch_in.token == nullptr || batch_in.embd != nullptr) {
+            return true;
+        }
+
+        std::fill(i_batch_beg.begin(), i_batch_beg.end(), -1);
+        std::fill(i_batch_end.begin(), i_batch_end.end(), -1);
+
+        for (int k = 0; k < batch_in.n_tokens; ++k) {
+            GGML_ASSERT(batch_in.n_seq_id[k] == 1);
+            const llama_seq_id seq_id = batch_in.seq_id[k][0];
+            if (seq_id < 0 || seq_id >= (llama_seq_id) n_seq) {
+                continue;
+            }
+            i_batch_end[seq_id] = k;
+            if (i_batch_beg[seq_id] < 0) {
+                i_batch_beg[seq_id] = k;
+            }
+        }
+
+        auto * ctx_tgt = params.ctx_tgt;
+        const size_t row_bytes = (size_t) n_embd * sizeof(float);
+
+        for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
+            if (i_batch_end[seq_id] < 0) {
+                continue;
+            }
+
+            const int32_t n_rows = i_batch_end[seq_id] - i_batch_beg[seq_id] + 1;
+            verify_h_rows[seq_id] = n_rows;
+            verify_h[seq_id].resize((size_t) n_rows * n_embd);
+
+            for (int32_t i = 0; i < n_rows; ++i) {
+                const float * h = llama_get_embeddings_pre_norm_ith(ctx_tgt, i_batch_beg[seq_id] + i);
+                if (!h) {
+                    LOG_ERR("%s: missing target pre-norm hidden row\n", __func__);
+                    return false;
+                }
+                std::memcpy(verify_h[seq_id].data() + (size_t) i * n_embd, h, row_bytes);
+            }
+
+            std::memcpy(pending_h[seq_id].data(),
+                    verify_h[seq_id].data() + (size_t) (n_rows - 1) * n_embd, row_bytes);
+        }
+
+        return true;
+    }
+
+    void draft(common_speculative_draft_params_vec & dparams) override {
+        auto * ctx_tgt = params.ctx_tgt;
+
+        for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
+            auto & dp = dparams[seq_id];
+            if (!dp.drafting) {
+                continue;
+            }
+
+            auto & result = *dp.result;
+            result.clear();
+
+            const int32_t n_max = dp.n_max > 0 ? std::min(params.n_max, dp.n_max) : params.n_max;
+            if (n_max <= 0) {
+                continue;
+            }
+
+            std::vector<llama_token> drafts(n_max);
+            std::vector<float> h = pending_h[seq_id];
+
+            const int32_t rc = llama_decode_mtp(
+                    ctx_tgt, seq_id, dp.n_past - 1, dp.id_last,
+                    h.data(), n_max, drafts.data(), nullptr, nullptr);
+            if (rc != 0) {
+                LOG_WRN("%s: llama_decode_mtp returned %d\n", __func__, rc);
+                continue;
+            }
+
+            result.assign(drafts.begin(), drafts.end());
+            if (result.size() < (size_t) params.n_min) {
+                result.clear();
+            }
+        }
+    }
+
+    void accept(llama_seq_id seq_id, uint16_t n_accepted) override {
+        if (seq_id < 0 || seq_id >= (llama_seq_id) n_seq) {
+            return;
+        }
+
+        const int32_t n_rows = verify_h_rows[seq_id];
+        if (n_rows <= 0) {
+            return;
+        }
+
+        const int32_t i_h = std::min<int32_t>(n_accepted, n_rows - 1);
+        std::memcpy(pending_h[seq_id].data(),
+                verify_h[seq_id].data() + (size_t) i_h * n_embd,
+                (size_t) n_embd * sizeof(float));
+    }
+
+    bool need_embd() const override {
+        return true;
+    }
+};
+
 // state of self-speculation (simple implementation, not ngram-map)
 struct common_speculative_impl_ngram_simple : public common_speculative_impl {
     common_params_speculative_ngram_map params;
@@ -1224,7 +1363,10 @@ common_speculative * common_speculative_init(common_params_speculative & params,
 
         bool has_draft_simple = (enabled_configs & (1u << COMMON_SPECULATIVE_TYPE_DRAFT_SIMPLE));
         bool has_draft_eagle3 = false; // TODO PR-18039: if params.speculative.eagle3
-        bool has_mtp = (enabled_configs & (1u << COMMON_SPECULATIVE_TYPE_DRAFT_MTP)) && params.draft.ctx_dft != nullptr;
+        bool has_attached_mtp = params.draft.ctx_tgt &&
+            llama_model_has_mtp_assistant(llama_get_model(params.draft.ctx_tgt));
+        bool has_mtp = (enabled_configs & (1u << COMMON_SPECULATIVE_TYPE_DRAFT_MTP)) &&
+            (params.draft.ctx_dft != nullptr || has_attached_mtp);
 
         bool has_ngram_cache   = (enabled_configs & (1u << COMMON_SPECULATIVE_TYPE_NGRAM_CACHE));
         bool has_ngram_simple  = (enabled_configs & (1u << COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE));
@@ -1291,7 +1433,12 @@ common_speculative * common_speculative_init(common_params_speculative & params,
                 break;
             }
             case COMMON_SPECULATIVE_TYPE_DRAFT_MTP: {
-                impls.push_back(std::make_unique<common_speculative_state_draft_mtp>(config.params, n_seq));
+                if (config.params.draft.ctx_tgt &&
+                        llama_model_has_mtp_assistant(llama_get_model(config.params.draft.ctx_tgt))) {
+                    impls.push_back(std::make_unique<common_speculative_state_attached_mtp>(config.params, n_seq));
+                } else {
+                    impls.push_back(std::make_unique<common_speculative_state_draft_mtp>(config.params, n_seq));
+                }
                 break;
             }
             case COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE: {

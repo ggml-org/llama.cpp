@@ -751,7 +751,12 @@ private:
 
         add_bos_token = llama_vocab_get_add_bos(vocab);
 
-        if (params_base.speculative.has_dft()) {
+        const bool spec_mtp_attached = std::find(params_base.speculative.types.begin(),
+                                        params_base.speculative.types.end(),
+                                        COMMON_SPECULATIVE_TYPE_DRAFT_MTP) != params_base.speculative.types.end() &&
+                                      llama_model_has_mtp_assistant(model_tgt);
+
+        if (params_base.speculative.has_dft() && !spec_mtp_attached) {
             // TODO speculative: move to common/speculative.cpp?
             const auto & params_spec = params_base.speculative.draft;
 
@@ -798,6 +803,9 @@ private:
 
             params_base.speculative.draft.ctx_tgt = ctx_tgt;
             params_base.speculative.draft.ctx_dft = ctx_dft.get();
+        } else if (spec_mtp_attached) {
+            params_base.speculative.draft.ctx_tgt = ctx_tgt;
+            params_base.speculative.draft.ctx_dft = nullptr;
         } else if (std::find(params_base.speculative.types.begin(), params_base.speculative.types.end(),
                              COMMON_SPECULATIVE_TYPE_DRAFT_MTP) != params_base.speculative.types.end()) {
             SRV_INF("creating MTP draft context against the target model '%s'\n",

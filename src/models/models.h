@@ -796,6 +796,13 @@ struct llama_model_gemma4 : public llama_model_base {
         ggml_tensor * project_per_layer_inputs(ggml_tensor * inp_batch, ggml_tensor * inp_per_layer);
     };
 
+    struct graph_mtp : public llm_graph_context {
+        const llama_model & target;
+        const llama_model & mtp;
+
+        graph_mtp(const llama_model & target_model, const llama_model & mtp_model, const llm_graph_params & params);
+    };
+
     std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
 };
 

@@ -455,6 +455,13 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
 
     // If Turing tensor cores are available, use them:
     if (turing_mma_available(cc) && Q->ne[0] != 40 && Q->ne[0] != 72) {
+        // DKQ=512 MMA instances are only generated for GQA widths >= 4.
+        // Gemma 4 assistant MTP uses 4 query heads over 2 KV heads, so route
+        // that D512/GQA=2 shape to the tile FA kernel instead of aborting in
+        // the MMA dispatcher.
+        if (Q->ne[0] == 512 && gqa_ratio < 4) {
+            return BEST_FATTN_KERNEL_TILE;
+        }
         if (can_use_vector_kernel) {
             if (!ggml_is_quantized(K->type) && !ggml_is_quantized(V->type)) {
                 if (cc >= GGML_CUDA_CC_ADA_LOVELACE && Q->ne[1] == 1 && Q->ne[3] == 1 && !(gqa_ratio > 4 && K->ne[1] >= 8192)) {

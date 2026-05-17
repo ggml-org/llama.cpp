@@ -1,5 +1,7 @@
 #include "models.h"
 
+#include <cmath>
+
 // Gemma 4 Multi-Token Prediction (MTP) drafter ("assistant") model.
 //
 // Released: https://blog.google/innovation-and-ai/technology/developers-tools/multi-token-prediction-gemma-4/
@@ -25,6 +27,198 @@
 // produces undefined logits but does not crash; the graph itself is fully
 // wired so that a follow-up runtime patch can light it up without changing
 // the model format.
+
+static llm_graph_params graph_params_for_gemma4_mtp(llm_graph_params p, const llama_model & mtp) {
+    p.arch    = mtp.arch;
+    p.hparams = mtp.hparams;
+    p.gtype   = LLM_GRAPH_TYPE_DECODER_MTP;
+    return p;
+}
+
+static int32_t gemma4_mtp_kv_layer_last_matching(const llama_hparams & hparams, bool want_swa) {
+    int32_t best = -1;
+    for (int32_t il = 0; il < (int32_t) hparams.n_layer; ++il) {
+        if (hparams.is_swa((uint32_t) il) == want_swa) {
+            best = il;
+        }
+    }
+    return best;
+}
+
+llama_model_gemma4::graph_mtp::graph_mtp(
+        const llama_model & target_model,
+        const llama_model & mtp_model,
+        const llm_graph_params & params) :
+        llm_graph_context(graph_params_for_gemma4_mtp(params, mtp_model)),
+        target(target_model),
+        mtp(mtp_model) {
+    const int64_t n_embd_backbone = mtp.hparams.n_embd_backbone;
+    GGML_ASSERT(n_embd_backbone > 0);
+    GGML_ASSERT(mtp.assist_pre_proj && mtp.assist_post_proj);
+
+    ggml_tensor * inp_tok = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, 1);
+    ggml_set_input(inp_tok);
+    cb(inp_tok, "mtp_inp_last_token", -1);
+
+    ggml_tensor * inp_h = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_embd_backbone, 1);
+    ggml_set_input(inp_h);
+    cb(inp_h, "mtp_inp_h_prev", -1);
+
+    {
+        auto inp = std::make_unique<llm_graph_input_mtp>();
+        inp->inp_last_token = inp_tok;
+        inp->inp_h_prev     = inp_h;
+        res->add_input(std::move(inp));
+    }
+
+    ggml_tensor * inp_pos = build_inp_pos();
+    auto * inp_attn = build_attn_inp_kv_iswa();
+
+    ggml_tensor * tok_e = ggml_get_rows(ctx0, target.tok_embd, inp_tok);
+    cb(tok_e, "mtp_tgt_tok_embd", -1);
+    tok_e = ggml_scale(ctx0, tok_e, sqrtf((float) target.hparams.n_embd));
+    cb(tok_e, "mtp_tgt_tok_embd_scaled", -1);
+
+    ggml_tensor * cur = ggml_concat(ctx0, tok_e, inp_h, 0);
+    cb(cur, "mtp_concat", -1);
+
+    cur = build_lora_mm(mtp.assist_pre_proj, cur);
+    cb(cur, "mtp_pre_proj_out", -1);
+
+    ggml_build_forward_expand(gf, cur);
+
+    for (int il = 0; il < (int) hparams.n_layer; ++il) {
+        const int64_t n_embd_head = hparams.n_embd_head_k(il);
+        const int64_t n_head      = hparams.n_head(il);
+
+        ggml_tensor * inpL = cur;
+
+        cur = build_norm(inpL, mtp.layers[il].attn_norm, nullptr, LLM_NORM_RMS, il);
+        cb(cur, "attn_norm", il);
+
+        ggml_tensor * Qcur = build_lora_mm(mtp.layers[il].wq, cur, mtp.layers[il].wq_s);
+        cb(Qcur, "Qcur", il);
+
+        Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head, n_tokens);
+        Qcur = build_norm(Qcur, mtp.layers[il].attn_q_norm, nullptr, LLM_NORM_RMS, il);
+        cb(Qcur, "Qcur_normed", il);
+
+        ggml_tensor * freq_factors = hparams.is_swa(il) ? nullptr : mtp.layers[il].rope_freqs;
+        Qcur = ggml_rope_ext(ctx0, Qcur, inp_pos, freq_factors, hparams.n_rot(il), rope_type, n_ctx_orig,
+                mtp.get_rope_freq_base(cparams, il), mtp.get_rope_freq_scale(cparams, il),
+                ext_factor, attn_factor, beta_fast, beta_slow);
+        cb(Qcur, "Qcur_pos", il);
+
+        const bool read_swa = hparams.is_swa(il);
+        const int32_t il_kv = gemma4_mtp_kv_layer_last_matching(target.hparams, read_swa);
+        GGML_ASSERT(il_kv >= 0);
+
+        cur = build_attn_mtp(inp_attn, mtp.layers[il].wo, nullptr, mtp.layers[il].wo_s,
+                Qcur, nullptr, nullptr, nullptr, hparams.f_attention_scale, il, il_kv, read_swa);
+
+        cur = build_norm(cur, mtp.layers[il].attn_post_norm, nullptr, LLM_NORM_RMS, il);
+        cb(cur, "attn_post_norm", il);
+
+        ggml_tensor * attn_out = ggml_add(ctx0, cur, inpL);
+        cb(attn_out, "attn_out", il);
+
+        cur = build_norm(attn_out, mtp.layers[il].ffn_norm, nullptr, LLM_NORM_RMS, il);
+        cb(cur, "ffn_norm", il);
+
+        cur = build_ffn(cur,
+                mtp.layers[il].ffn_up,   nullptr, mtp.layers[il].ffn_up_s,
+                mtp.layers[il].ffn_gate, nullptr, mtp.layers[il].ffn_gate_s,
+                mtp.layers[il].ffn_down, nullptr, mtp.layers[il].ffn_down_s,
+                nullptr,
+                LLM_FFN_GELU, LLM_FFN_PAR, il);
+        cb(cur, "ffn_out", il);
+
+        cur = build_norm(cur, mtp.layers[il].ffn_post_norm, nullptr, LLM_NORM_RMS, il);
+        cb(cur, "ffn_post_norm", il);
+
+        cur = ggml_add(ctx0, cur, attn_out);
+
+        if (mtp.layers[il].out_scale) {
+            cur = ggml_mul(ctx0, cur, mtp.layers[il].out_scale);
+            cb(cur, "out_scaled", il);
+        }
+
+        cur = build_cvec(cur, il);
+        cb(cur, "l_out", il);
+    }
+
+    cur = build_norm(cur, mtp.output_norm, nullptr, LLM_NORM_RMS, -1);
+    cb(cur, "result_norm", -1);
+
+    ggml_tensor * h_inner = cur;
+    ggml_tensor * h_backbone = build_lora_mm(mtp.assist_post_proj, h_inner);
+    cb(h_backbone, "mtp_post_proj_out", -1);
+
+    const int64_t n_vocab = mtp.tok_embd->ne[1];
+    if (mtp.hparams.use_ordered_embeddings) {
+        GGML_ASSERT(mtp.assist_embed_centroids && mtp.assist_token_ordering);
+
+        const uint32_t n_c   = mtp.hparams.n_assist_centroids;
+        const uint32_t top_k = mtp.hparams.n_assist_centroid_top_k;
+        GGML_ASSERT(n_c > 0 && top_k > 0 && n_vocab % (int64_t) n_c == 0);
+
+        const int64_t vsc = n_vocab / (int64_t) n_c;
+
+        ggml_tensor * centroid_logits = build_lora_mm(mtp.assist_embed_centroids, h_inner);
+        cb(centroid_logits, "mtp_centroid_logits", -1);
+
+        ggml_tensor * topk_idx = ggml_top_k(ctx0, centroid_logits, (int) top_k);
+        cb(topk_idx, "mtp_centroid_topk_idx", -1);
+
+        ggml_tensor * ordering = ggml_view_2d(
+                ctx0, mtp.assist_token_ordering, vsc, (int64_t) n_c, ggml_row_size(GGML_TYPE_I32, vsc), 0);
+        cb(ordering, "mtp_token_ordering_view", -1);
+
+        ggml_tensor * sel_ids = ggml_get_rows(ctx0, ordering, topk_idx);
+        cb(sel_ids, "mtp_selected_token_ids", -1);
+
+        const int64_t n_sel = (int64_t) top_k * vsc;
+        ggml_tensor * flat_ids = ggml_reshape_1d(ctx0, sel_ids, n_sel);
+        cb(flat_ids, "mtp_selected_token_ids_flat", -1);
+
+        ggml_tensor * sel_emb = ggml_get_rows(ctx0, mtp.tok_embd, flat_ids);
+        cb(sel_emb, "mtp_selected_embd", -1);
+
+        ggml_tensor * sel_logits = build_lora_mm(sel_emb, h_inner);
+        cb(sel_logits, "mtp_selected_logits", -1);
+
+        ggml_tensor * logits_full = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_vocab, 1);
+        logits_full = ggml_fill_inplace(ctx0, logits_full, -1e30f);
+        cb(logits_full, "mtp_logits_masked_base", -1);
+
+        ggml_tensor * scatter_dst = ggml_cont_2d(ctx0, logits_full, 1, n_vocab);
+        ggml_tensor * scatter_src = ggml_cont_2d(ctx0, ggml_cast(ctx0, sel_logits, GGML_TYPE_F32), 1, n_sel);
+        cur = ggml_set_rows(ctx0, scatter_dst, scatter_src, flat_ids);
+        cur = ggml_reshape_2d(ctx0, cur, n_vocab, 1);
+        cb(cur, "mtp_logits_full", -1);
+    } else {
+        cur = build_lora_mm(mtp.tok_embd, h_inner);
+        cb(cur, "result_output_dense", -1);
+    }
+
+    if (hparams.f_final_logit_softcapping) {
+        cur = ggml_scale(ctx0, cur, 1.0f / hparams.f_final_logit_softcapping);
+        cur = ggml_tanh(ctx0, cur);
+        cur = ggml_scale(ctx0, cur, hparams.f_final_logit_softcapping);
+    }
+
+    cb(cur, "result_output", -1);
+
+    ggml_tensor * arg = ggml_argmax(ctx0, cur);
+    cb(arg, "result_argmax", -1);
+
+    res->t_logits = cur;
+    res->t_embd   = h_backbone;
+    res->t_argmax = arg;
+
+    ggml_build_forward_expand(gf, arg);
+    ggml_build_forward_expand(gf, h_backbone);
+}
 
 void llama_model_gemma4_assistant::load_arch_hparams(llama_model_loader & ml) {
     // Most Gemma 4 hparams apply: SWA pattern, dual head dim (full vs SWA),

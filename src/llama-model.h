@@ -562,6 +562,8 @@ struct llama_model {
     struct ggml_tensor * assist_embed_centroids  = nullptr; // [hidden, num_centroids]
     struct ggml_tensor * assist_token_ordering   = nullptr; // i32 [vocab_size]
 
+    std::unique_ptr<llama_model> mtp_assistant;
+
     std::vector<llama_layer> layers;
 
     //Dense linear projections for SentenceTransformers models like embeddinggemma
