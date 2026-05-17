@@ -838,7 +838,6 @@ static std::string common_chat_template_direct_apply_impl(
     if (inputs.add_eos && string_ends_with(result, tmpl.eos_token())) {
         result = result.substr(0, result.size() - tmpl.eos_token().size());
     }
-
     return result;
 }
 
@@ -2379,7 +2378,7 @@ static common_chat_params common_chat_templates_apply_jinja(const struct common_
         data.generation_prompt         = common_chat_template_generation_prompt_impl(tmpl, params);
         data.format                    = COMMON_CHAT_FORMAT_PEG_NATIVE;
         auto parser                    = build_chat_peg_parser([&data](common_chat_peg_builder &p) {
-            return p.prefix(data.generation_prompt) << p.content(p.rest());
+            return p.literal(data.generation_prompt) << p.content(p.rest());
         });
         data.parser                    = parser.save();
         return data;

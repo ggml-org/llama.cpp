@@ -58,9 +58,11 @@ common_chat_params peg_generator::generate_parser(const common_chat_template &  
             data.generation_prompt = data.generation_prompt.substr(0, data.generation_prompt.find(autoparser.reasoning.start));
             data.generation_prompt += autoparser.reasoning.start + msg.reasoning_content;
             if (inputs.continue_final_message == COMMON_CHAT_CONTINUATION_CONTENT) {
-                data.generation_prompt += autoparser.reasoning.end + msg.render_content();
+                data.generation_prompt += autoparser.reasoning.end;
             }
-        } else if (inputs.continue_final_message == COMMON_CHAT_CONTINUATION_CONTENT) {
+        }
+
+        if (inputs.continue_final_message == COMMON_CHAT_CONTINUATION_CONTENT) {
             data.generation_prompt += msg.render_content();
         }
 
