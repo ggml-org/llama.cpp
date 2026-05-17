@@ -11994,9 +11994,10 @@ static void ggml_vk_snake_dispatch_fused(ggml_backend_vk_context * ctx, vk_conte
 
     vk_pipeline pipeline = nullptr;
     switch (x->type) {
+        case GGML_TYPE_F32:  pipeline = ctx->device->pipeline_snake_f32;  break;
         case GGML_TYPE_F16:  pipeline = ctx->device->pipeline_snake_f16;  break;
         case GGML_TYPE_BF16: pipeline = ctx->device->pipeline_snake_bf16; break;
-        default:             pipeline = ctx->device->pipeline_snake_f32;  break;
+        default:             GGML_ABORT("unsupported type");
     }
     ggml_pipeline_request_descriptor_sets(ctx, pipeline, 1);
 
@@ -14547,14 +14548,15 @@ static bool ggml_vk_can_fuse_rope_set_rows(ggml_backend_vk_context * ctx, const 
 // the broadcast operands a and inv_b share a [1, C] layout.
 static bool ggml_vk_can_fuse_snake(ggml_backend_vk_context * ctx, const struct ggml_cgraph * cgraph, int node_idx) {
     GGML_UNUSED(ctx);
-    if (!ggml_can_fuse(cgraph, node_idx, { GGML_OP_MUL, GGML_OP_SIN, GGML_OP_SQR, GGML_OP_MUL, GGML_OP_ADD })) {
+    if (!ggml_can_fuse(cgraph, node_idx, snake_pattern)) {
         return false;
     }
 
-    const ggml_tensor * mul0 = cgraph->nodes[node_idx + 0];
-    const ggml_tensor * sqr  = cgraph->nodes[node_idx + 2];
-    const ggml_tensor * mul1 = cgraph->nodes[node_idx + 3];
-    const ggml_tensor * add  = cgraph->nodes[node_idx + 4];
+    const ggml_tensor * mul0     = cgraph->nodes[node_idx + 0];
+    const ggml_tensor * sin_node = cgraph->nodes[node_idx + 1];
+    const ggml_tensor * sqr      = cgraph->nodes[node_idx + 2];
+    const ggml_tensor * mul1     = cgraph->nodes[node_idx + 3];
+    const ggml_tensor * add      = cgraph->nodes[node_idx + 4];
 
     const ggml_tensor * x = ggml_are_same_shape(mul0, mul0->src[0]) ? mul0->src[0] : mul0->src[1];
     const ggml_tensor * a = (x == mul0->src[0]) ? mul0->src[1] : mul0->src[0];
@@ -14568,16 +14570,17 @@ static bool ggml_vk_can_fuse_snake(ggml_backend_vk_context * ctx, const struct g
     if (x->type != GGML_TYPE_F32 && x->type != GGML_TYPE_F16 && x->type != GGML_TYPE_BF16) {
         return false;
     }
-    // Shader uses a single A_TYPE / D_TYPE pipeline, so every operand and
-    // intermediate result must share x's type. Defensive against frontends
-    // that could mix precisions on the chain.
-    if (a->type     != x->type) return false;
-    if (inv_b->type != x->type) return false;
-    if (mul0->type  != x->type) return false;
-    if (sqr->type   != x->type) return false;
-    if (mul1->type  != x->type) return false;
-    if (add->type   != x->type) return false;
-    if (cgraph->nodes[node_idx + 1]->type != x->type) return false;
+    // Shader bindings: data_a is A_TYPE so it follows x's precision, while
+    // data_b and data_c are hardcoded float, so the broadcast operands must
+    // be F32 regardless of x's type.
+    if (a->type     != GGML_TYPE_F32) return false;
+    if (inv_b->type != GGML_TYPE_F32) return false;
+    // Chain intermediates and output share x's precision (single A_TYPE / D_TYPE pipeline).
+    if (mul0->type     != x->type) return false;
+    if (sin_node->type != x->type) return false;
+    if (sqr->type      != x->type) return false;
+    if (mul1->type     != x->type) return false;
+    if (add->type      != x->type) return false;
     if (!ggml_are_same_shape(a, inv_b)) {
         return false;
     }
@@ -14590,7 +14593,7 @@ static bool ggml_vk_can_fuse_snake(ggml_backend_vk_context * ctx, const struct g
     if (add->ne[2]   != 1 || add->ne[3]   != 1) return false;
     if (a->ne[2]     != 1 || a->ne[3]     != 1) return false;
     if (inv_b->ne[2] != 1 || inv_b->ne[3] != 1) return false;
-    // Shader uses idx = i0 + i1 * ne0 and reads data_a[i1] / data_inv_b[i1],
+    // Shader uses idx = i0 + i1 * ne0 and reads data_b[i1] / data_c[i1],
     // so every operand must be contiguous.
     if (!ggml_is_contiguous(x) || !ggml_is_contiguous(add) ||
         !ggml_is_contiguous(a) || !ggml_is_contiguous(inv_b)) {
