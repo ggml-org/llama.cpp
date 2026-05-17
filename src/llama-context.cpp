@@ -2017,7 +2017,7 @@ uint32_t llama_context::output_reserve(int32_t n_outputs) {
     embd_pre_norm.size = has_embd_pre_norm ? n_embd*n_outputs_max      : 0;
 
     if (has_embd_pre_norm && !cparams.embeddings_pre_norm_masked) {
-        // unmasked: pre-norm row exists for every token in the ubatch, not just
+        // unmasked: pre-norm row exists for every token in the batch, not just
         // those flagged via batch.logits[i] -> size by token count instead.
         embd_pre_norm.size = (size_t) n_embd * n_batch;
     }
