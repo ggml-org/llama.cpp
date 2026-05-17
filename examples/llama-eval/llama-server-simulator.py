@@ -113,7 +113,7 @@ class AimeDataset:
             # Find the part that's longest (likely the actual problem text)
             problem_parts = [p for p in parts if len(p.strip()) > 100]
             if problem_parts:
-                cleaned = max(problem_parts, key=len)
+                cleaned = max(problem_parts, key=lambda x: len(x))
 
         best_match = None
         best_distance = -1
