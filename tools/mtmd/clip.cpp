@@ -855,6 +855,7 @@ static ggml_cgraph * clip_image_build_graph(clip_ctx * ctx, const clip_image_f32
         case PROJECTOR_TYPE_LFM2:
         case PROJECTOR_TYPE_JANUS_PRO:
         case PROJECTOR_TYPE_PHI4:
+        case PROJECTOR_TYPE_PALIGEMMA:
             {
                 builder = std::make_unique<clip_graph_siglip>(ctx, img);
             } break;
@@ -1410,6 +1411,12 @@ struct clip_model_loader {
                         hparams.set_warmup_n_tokens(256); // avoid OOM on warmup
                     } break;
 
+                case PROJECTOR_TYPE_PALIGEMMA:
+                    {
+                        // PaliGemma feeds all patches directly to the LLM without pooling
+                        hparams.n_merge = 1;
+                    } break;
+
                 case PROJECTOR_TYPE_GEMMA3NV:
                     {
                         // Gemma3n uses MobileNetV5 which produces 256 tokens (16x16)
@@ -1844,6 +1851,7 @@ struct clip_model_loader {
                     || model.proj_type == PROJECTOR_TYPE_IDEFICS3
                     || model.proj_type == PROJECTOR_TYPE_MINICPMV
                     || model.proj_type == PROJECTOR_TYPE_MINICPMV4_6
+                    || model.proj_type == PROJECTOR_TYPE_PALIGEMMA
                 ) && layer.ff_up_w && layer.ff_down_w && layer.ff_down_w->ne[0] == hparams.n_embd;
             if (is_ffn_swapped) {
                 // swap up and down weights
@@ -2128,6 +2136,12 @@ struct clip_model_loader {
                     model.patch_norm_2_b = get_tensor(string_format(TN_PATCH_NORM, 2, "bias"));
                     model.patch_norm_3_w = get_tensor(string_format(TN_PATCH_NORM, 3, "weight")); // pos_norm
                     model.patch_norm_3_b = get_tensor(string_format(TN_PATCH_NORM, 3, "bias"));   // pos_norm
+                } break;
+            case PROJECTOR_TYPE_PALIGEMMA:
+                {
+                    // Single linear projection (no pooling, no norm): mm.0.weight / mm.0.bias
+                    model.mm_0_w = get_tensor(string_format(TN_LLAVA_PROJ, 0, "weight"));
+                    model.mm_0_b = get_tensor(string_format(TN_LLAVA_PROJ, 0, "bias"));
                 } break;
             case PROJECTOR_TYPE_GEMMA3NV:
                 {
@@ -3397,6 +3411,11 @@ int clip_n_output_tokens(const struct clip_ctx * ctx, struct clip_image_f32 * im
                 const int ds = ctx->model.hparams.audio_proj_downsample_rate;
                 n_patches = ((img->nx + ws - 1) / ws) * (ws / ds);
             } break;
+        case PROJECTOR_TYPE_PALIGEMMA:
+            {
+                // no pooling: all patches passed directly to the LLM
+                // n_patches stays as computed above (image_size/patch_size)^2
+            } break;
         default:
             GGML_ABORT("unsupported projector type");
     }
@@ -4041,6 +4060,7 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
         case PROJECTOR_TYPE_COGVLM:
         case PROJECTOR_TYPE_YASA2:
         case PROJECTOR_TYPE_GEMMA4UA:
+        case PROJECTOR_TYPE_PALIGEMMA:
             {
                 // do nothing
             } break;
@@ -4361,6 +4381,9 @@ int clip_n_mmproj_embd(const struct clip_ctx * ctx) {
         case PROJECTOR_TYPE_INTERNVL:
         case PROJECTOR_TYPE_NEMOTRON_V2_VL:
             return ctx->model.mm_3_w->ne[1];
+        case PROJECTOR_TYPE_PALIGEMMA:
+            // mm_0_w shape: [vision_hidden, text_hidden] in GGUF → ne[1] = text_hidden
+            return ctx->model.mm_0_w->ne[1];
         case PROJECTOR_TYPE_LLAMA4:
             return ctx->model.mm_model_proj->ne[1];
         case PROJECTOR_TYPE_QWEN2A:
