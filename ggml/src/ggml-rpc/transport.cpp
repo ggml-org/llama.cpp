@@ -572,6 +572,42 @@ static bool is_valid_fd(sockfd_t sockfd) {
 #endif
 }
 
+static bool set_socket_perf_options(sockfd_t sockfd) {
+    // Per-socket send/recv buffer requests. The kernel clamps to
+    // net.core.{rmem,wmem}_max; on Linux the ceiling is typically set high by
+    // the v12 §12.5 sysctl block. Failing to grow the buffer is not fatal —
+    // we still want TCP_NODELAY etc. applied — so log and continue.
+    int buf_size = 16 * 1024 * 1024;  // 16 MB request
+    if (setsockopt(sockfd, SOL_SOCKET, SO_RCVBUF, (char *)&buf_size, sizeof(buf_size)) != 0) {
+        GGML_LOG_DEBUG("ggml-rpc: SO_RCVBUF request failed (continuing)\n");
+    }
+    if (setsockopt(sockfd, SOL_SOCKET, SO_SNDBUF, (char *)&buf_size, sizeof(buf_size)) != 0) {
+        GGML_LOG_DEBUG("ggml-rpc: SO_SNDBUF request failed (continuing)\n");
+    }
+
+    // Detect dead peers. Default kernel probe intervals are fine; for faster
+    // detection a future commit will add an application-level heartbeat (see
+    // proposal §12.11.11).
+    int ka = 1;
+    if (setsockopt(sockfd, SOL_SOCKET, SO_KEEPALIVE, (char *)&ka, sizeof(ka)) != 0) {
+        GGML_LOG_DEBUG("ggml-rpc: SO_KEEPALIVE failed (continuing)\n");
+    }
+
+#if defined(__linux__) && defined(TCP_QUICKACK)
+    // Disable the default delayed-ACK timer (~40 ms). RPC traffic is
+    // request/response heavy; immediate ACKs avoid stalling the sender on
+    // ACK clocking. Linux flips QUICKACK off automatically per-packet; one
+    // setsockopt at connect time covers the warm-up phase, which is the
+    // common case for short-lived RPCs.
+    int qa = 1;
+    if (setsockopt(sockfd, IPPROTO_TCP, TCP_QUICKACK, (char *)&qa, sizeof(qa)) != 0) {
+        GGML_LOG_DEBUG("ggml-rpc: TCP_QUICKACK failed (continuing)\n");
+    }
+#endif
+
+    return true;
+}
+
 static bool set_no_delay(sockfd_t sockfd) {
     int flag = 1;
     // set TCP_NODELAY to disable Nagle's algorithm
@@ -594,6 +630,7 @@ socket_ptr socket_t::accept() {
         GGML_LOG_ERROR("Failed to set TCP_NODELAY\n");
         return nullptr;
     }
+    set_socket_perf_options(client_socket_fd);
     return socket_ptr(new socket_t(std::make_unique<impl>(client_socket_fd)));
 }
 
@@ -633,6 +670,7 @@ socket_ptr socket_t::connect(const char * host, int port) {
         GGML_LOG_ERROR("Failed to set TCP_NODELAY\n");
         return nullptr;
     }
+    set_socket_perf_options(sockfd);
     struct sockaddr_in addr;
     addr.sin_family = AF_INET;
     addr.sin_port = htons(port);
