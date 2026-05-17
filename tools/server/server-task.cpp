@@ -973,13 +973,18 @@ json server_task_result_cmpl_final::to_json_oaicompat_resp() {
     }
 
     for (const common_chat_tool_call & tool_call : oaicompat_msg.tool_calls) {
-        output.push_back(json {
+        auto [ns, tool_name] = server_chat_responses_split_tool_name(tool_call.name);
+        json fc_item = {
             {"type",      "function_call"},
             {"status",    "completed"},
             {"arguments", tool_call.arguments},
             {"call_id",   "fc_" + tool_call.id},
-            {"name",      tool_call.name},
-        });
+            {"name",      tool_name},
+        };
+        if (!ns.empty()) {
+            fc_item["namespace"] = ns;
+        }
+        output.push_back(std::move(fc_item));
     }
 
     std::time_t t = std::time(0);
@@ -1072,13 +1077,17 @@ json server_task_result_cmpl_final::to_json_oaicompat_resp_stream() {
     }
 
     for (const common_chat_tool_call & tool_call : oaicompat_msg.tool_calls) {
-        const json output_item = {
+        auto [ns, tool_name] = server_chat_responses_split_tool_name(tool_call.name);
+        json output_item = {
             {"type",      "function_call"},
             {"status",    "completed"},
             {"arguments", tool_call.arguments},
             {"call_id",   "fc_" + tool_call.id},
-            {"name",      tool_call.name}
+            {"name",      tool_name}
         };
+        if (!ns.empty()) {
+            output_item["namespace"] = ns;
+        }
         server_sent_events.push_back(json {
             {"event", "response.output_item.done"},
             {"data", json {
@@ -1649,17 +1658,22 @@ json server_task_result_cmpl_partial::to_json_oaicompat_resp() {
         }
 
         if (!diff.tool_call_delta.name.empty()) {
+            auto [ns, tool_name] = server_chat_responses_split_tool_name(diff.tool_call_delta.name);
+            json item = {
+                {"arguments", ""},
+                {"call_id",   "fc_" + diff.tool_call_delta.id},
+                {"name",      tool_name},
+                {"type",      "function_call"},
+                {"status",    "in_progress"},
+            };
+            if (!ns.empty()) {
+                item["namespace"] = ns;
+            }
             events.push_back(json {
                 {"event", "response.output_item.added"},
                 {"data", json {
                     {"type",  "response.output_item.added"},
-                    {"item", json {
-                        {"arguments", ""},
-                        {"call_id",   "fc_" + diff.tool_call_delta.id},
-                        {"name",      diff.tool_call_delta.name},
-                        {"type",      "function_call"},
-                        {"status",    "in_progress"},
-                    }},
+                    {"item",  item},
                 }},
             });
             oai_resp_fc_id = diff.tool_call_delta.id;
