@@ -46,7 +46,8 @@ llama_model_gemma::graph::graph(const llama_model & model, const llm_graph_param
 
     inpL = build_inp_embd(model.tok_embd);
 
-    inpL = ggml_scale(ctx0, inpL, sqrtf(n_embd));
+    // only scale token embeddings, not raw vector embeddings (e.g. visual tokens from mmproj)
+    inpL = ggml_scale(ctx0, inpL, ubatch.token ? sqrtf(n_embd) : 1.0f);
     cb(inpL, "inp_scaled", -1);
 
     // inp_pos - contains the positions
