@@ -16,6 +16,11 @@ struct socket_t {
     bool send_data(const void * data, size_t size);
     bool recv_data(void * data, size_t size);
 
+    // Wait up to timeout_seconds for the socket to become readable.
+    // Returns true if data is ready (recv_data will not block on the
+    // initial byte), false on timeout or socket error.
+    bool wait_readable(int timeout_seconds);
+
     socket_ptr accept();
 
     void get_caps(uint8_t * local_caps);

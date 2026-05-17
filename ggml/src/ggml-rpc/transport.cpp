@@ -621,6 +621,29 @@ static bool set_reuse_addr(sockfd_t sockfd) {
     return ret == 0;
 }
 
+bool socket_t::wait_readable(int timeout_seconds) {
+    sockfd_t fd = pimpl->fd;
+    if (!is_valid_fd(fd)) {
+        return false;
+    }
+#ifdef _WIN32
+    WSAPOLLFD pfd = {};
+    pfd.fd = fd;
+    pfd.events = POLLRDNORM;
+    int ret = WSAPoll(&pfd, 1, timeout_seconds * 1000);
+    return ret > 0 && (pfd.revents & (POLLRDNORM | POLLERR | POLLHUP)) != 0;
+#else
+    fd_set rfds;
+    FD_ZERO(&rfds);
+    FD_SET(fd, &rfds);
+    struct timeval tv;
+    tv.tv_sec = timeout_seconds;
+    tv.tv_usec = 0;
+    int ret = ::select((int)fd + 1, &rfds, nullptr, nullptr, &tv);
+    return ret > 0;
+#endif
+}
+
 socket_ptr socket_t::accept() {
     auto client_socket_fd = ::accept(pimpl->fd, NULL, NULL);
     if (!is_valid_fd(client_socket_fd)) {

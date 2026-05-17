@@ -21,6 +21,20 @@
 
 static const char * RPC_DEBUG = std::getenv("GGML_RPC_DEBUG");
 
+// Server-side idle deadman timeout (seconds). 0 = disabled (default).
+// When set, the rpc_serve_client loop will close the connection if no
+// command arrives within this many seconds. Pairs with systemds
+// Restart=always to free GPU memory held by a worker whose controller
+// has hung.
+static int rpc_deadman_seconds() {
+    static const int s = []() {
+        const char * v = std::getenv("GGML_RPC_DEADMAN_S");
+        if (!v || !*v) return 0;
+        try { return std::max(0, std::stoi(v)); } catch (...) { return 0; }
+    }();
+    return s;
+}
+
 #define LOG_DBG(...) \
     do { if (RPC_DEBUG) GGML_LOG_DEBUG(__VA_ARGS__); } while (0)
 
@@ -1512,7 +1526,12 @@ static void rpc_serve_client(const std::vector<ggml_backend_t> & backends, const
 
     // Activate transport upgrade using client's caps
     sock->update_caps(req.conn_caps);
+    const int deadman_s = rpc_deadman_seconds();
     while (true) {
+        if (deadman_s > 0 && !sock->wait_readable(deadman_s)) {
+            GGML_LOG_WARN("rpc deadman: no command for %ds, closing connection\n", deadman_s);
+            break;
+        }
         if (!sock->recv_data(&cmd, 1)) {
             break;
         }
