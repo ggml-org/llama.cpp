@@ -47,13 +47,13 @@ static std::string generate_tokens(llama_context * ctx, llama_sampler * smpl, in
     return result;
 }
 
-// Test 1: baseline generation
+// Test 1: baseline
 // - tokenize the prompt
 // - decode all but the last token
 // - save state to disk
 // - decode the last token
 // - generate n_predict tokens
-static std::string run_baseline_generation(struct llama_model * model, const struct common_params & params) {
+static std::string test_baseline(struct llama_model * model, const struct common_params & params) {
     auto ctx = llama_context_ptr{llama_init_from_model(model, common_context_params_to_llama(params))};
 
     auto sparams = llama_sampler_chain_default_params();
@@ -68,7 +68,7 @@ static std::string run_baseline_generation(struct llama_model * model, const str
         return {};
     }
 
-    LOG("\n=== Test 1: baseline generation ===\n");
+    LOG("\n=== Test 1: baseline ===\n");
     LOG("%s", params.prompt.c_str());
 
     auto result = generate_tokens(ctx.get(), smpl.get(), n_past, params.n_predict, 0);
@@ -82,12 +82,12 @@ static std::string run_baseline_generation(struct llama_model * model, const str
 }
 
 
-// Test 2: state restore
+// Test 2: state load
 // - create a new context
 // - load state from file
 // - replay the last prompt token
 // - generate n_predict tokens and compare against expected result
-static bool run_state_restore_generation(struct llama_model * model, const struct common_params & params, const std::string & expected_result) {
+static bool test_state_load(struct llama_model * model, const struct common_params & params, const std::string & expected_result) {
     auto ctx = llama_context_ptr{llama_init_from_model(model, common_context_params_to_llama(params))};
 
     auto sparams = llama_sampler_chain_default_params();
@@ -96,7 +96,7 @@ static bool run_state_restore_generation(struct llama_model * model, const struc
 
     auto tokens = common_tokenize(ctx.get(), params.prompt, true);
 
-    LOG("\n=== Test 2: state restore ===\n");
+    LOG("\n=== Test 2: state load ===\n");
     LOG("%s", params.prompt.c_str());
 
     // Load state from file
@@ -133,13 +133,13 @@ static bool run_state_restore_generation(struct llama_model * model, const struc
 }
 
 
-// Test 3: sequence migration (CPU)
+// Test 3: seq copy (host)
 // - create a multi-seq context
 // - load state from file
 // - replay the last prompt token
 // - migrate KV cache from seq 0 to seq 1 via the CPU path
 // - generate n_predict tokens on seq 1 and compare against expected result
-static bool run_seq_migration_cpu_generation(struct llama_model * model, const struct common_params & params, const std::string & expected_result) {
+static bool test_seq_cp_host(struct llama_model * model, const struct common_params & params, const std::string & expected_result) {
     auto params_ctx = common_context_params_to_llama(params);
     params_ctx.n_seq_max = 2;
     auto ctx = llama_context_ptr{llama_init_from_model(model, params_ctx)};
@@ -150,7 +150,7 @@ static bool run_seq_migration_cpu_generation(struct llama_model * model, const s
 
     auto tokens = common_tokenize(ctx.get(), params.prompt, true);
 
-    LOG("\n=== Test 3: seq migration (CPU) ===\n");
+    LOG("\n=== Test 3: seq copy (host) ===\n");
     LOG("%s", params.prompt.c_str());
 
     // Load state from file
@@ -208,13 +208,13 @@ static bool run_seq_migration_cpu_generation(struct llama_model * model, const s
 }
 
 
-// Test 4: sequence migration (on-device)
+// Test 4: seq copy (device)
 // - create a multi-seq context
 // - load state from file
 // - replay the last prompt token
 // - migrate KV cache from seq 0 to seq 1 via the on-device path
 // - generate n_predict tokens on seq 1 and compare against expected result
-static bool run_seq_migration_ondevice_generation(struct llama_model * model, const struct common_params & params, const std::string & expected_result) {
+static bool test_seq_cp_device(struct llama_model * model, const struct common_params & params, const std::string & expected_result) {
     auto params_ctx = common_context_params_to_llama(params);
     params_ctx.n_seq_max = 2;
     auto ctx = llama_context_ptr{llama_init_from_model(model, params_ctx)};
@@ -225,7 +225,7 @@ static bool run_seq_migration_ondevice_generation(struct llama_model * model, co
 
     auto tokens = common_tokenize(ctx.get(), params.prompt, true);
 
-    LOG("\n=== Test 4: seq migration (on-device) ===\n");
+    LOG("\n=== Test 4: seq copy (device) ===\n");
     LOG("%s", params.prompt.c_str());
 
     // Load state from file
@@ -316,24 +316,24 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
-    // Test 1: baseline generation (saves state to disk)
-    auto result_baseline = run_baseline_generation(model, params);
+    // Test 1: baseline (saves state to disk)
+    auto result_baseline = test_baseline(model, params);
     if (result_baseline.empty()) {
         return 1;
     }
 
-    // Test 2: full state restore from file
-    if (!run_state_restore_generation(model, params, result_baseline)) {
+    // Test 2: state load
+    if (!test_state_load(model, params, result_baseline)) {
         return 1;
     }
 
-    // Test 3: per-sequence KV migration (CPU path)
-    if (!run_seq_migration_cpu_generation(model, params, result_baseline)) {
+    // Test 3: seq copy (host)
+    if (!test_seq_cp_host(model, params, result_baseline)) {
         return 1;
     }
 
-    // Test 4: per-sequence KV migration (on-device path)
-    if (!run_seq_migration_ondevice_generation(model, params, result_baseline)) {
+    // Test 4: seq copy (device)
+    if (!test_seq_cp_device(model, params, result_baseline)) {
         return 1;
     }
 
