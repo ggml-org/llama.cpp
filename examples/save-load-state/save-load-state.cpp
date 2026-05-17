@@ -42,7 +42,8 @@ static std::string run_baseline_generation(struct llama_model * model, const str
         return {};
     }
 
-    LOG("\nfirst run: %s", params.prompt.c_str());
+    LOG("\n=== Phase 1: baseline generation ===\n");
+    LOG("%s", params.prompt.c_str());
 
     std::string result;
     llama_batch_ptr batch(1, 0, 1);
@@ -64,6 +65,8 @@ static std::string run_baseline_generation(struct llama_model * model, const str
         n_past++;
     }
 
+    LOG("\n");
+
     return result;
 }
 
@@ -79,7 +82,8 @@ static bool run_state_restore_generation(struct llama_model * model, const struc
 
     auto tokens = common_tokenize(ctx.get(), params.prompt, true);
 
-    LOG("\nsecond run: %s", params.prompt.c_str());
+    LOG("\n=== Phase 2: state restore ===\n");
+    LOG("%s", params.prompt.c_str());
 
     // Load state from file
     std::vector<llama_token> unused_sts(tokens.size());
@@ -125,7 +129,7 @@ static bool run_state_restore_generation(struct llama_model * model, const struc
         return false;
     }
 
-    LOG_TRC("\n%s: success\n", __func__);
+    LOG("\nPASS\n");
     return true;
 }
 
@@ -143,7 +147,8 @@ static bool run_seq_migration_cpu_generation(struct llama_model * model, const s
 
     auto tokens = common_tokenize(ctx.get(), params.prompt, true);
 
-    LOG("\nsingle seq run: %s", params.prompt.c_str());
+    LOG("\n=== Phase 3: seq migration (CPU) ===\n");
+    LOG("%s", params.prompt.c_str());
 
     // Load state from file
     std::vector<llama_token> unused_sts(tokens.size());
@@ -210,7 +215,7 @@ static bool run_seq_migration_cpu_generation(struct llama_model * model, const s
         return false;
     }
 
-    LOG_TRC("\n%s: success\n", __func__);
+    LOG("\nPASS\n");
     return true;
 }
 
@@ -228,7 +233,8 @@ static bool run_seq_migration_ondevice_generation(struct llama_model * model, co
 
     auto tokens = common_tokenize(ctx.get(), params.prompt, true);
 
-    LOG("\nsingle seq run: %s", params.prompt.c_str());
+    LOG("\n=== Phase 4: seq migration (on-device) ===\n");
+    LOG("%s", params.prompt.c_str());
 
     // Load state from file
     std::vector<llama_token> unused_sts(tokens.size());
@@ -295,7 +301,7 @@ static bool run_seq_migration_ondevice_generation(struct llama_model * model, co
         return false;
     }
 
-    LOG_TRC("\n%s: success\n", __func__);
+    LOG("\nPASS\n");
     return true;
 }
 
@@ -354,7 +360,7 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
-    LOG_TRC("\n%s: all tests passed\n", __func__);
+    LOG("\nAll tests passed.\n");
 
     return 0;
 }
