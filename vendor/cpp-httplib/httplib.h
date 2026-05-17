@@ -1726,6 +1726,7 @@ public:
 
   Server &set_websocket_max_missed_pongs(int count);
 
+  bool set_socket(socket_t sock) { svr_sock_ = sock; return true; }
   bool bind_to_port(const std::string &host, int port, int socket_flags = 0);
   int bind_to_any_port(const std::string &host, int socket_flags = 0);
   bool listen_after_bind();

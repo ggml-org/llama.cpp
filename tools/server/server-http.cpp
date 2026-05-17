@@ -343,7 +343,17 @@ bool server_http_context::start() {
     auto & srv = pimpl->srv;
     bool was_bound = false;
     bool is_sock = false;
-    if (string_ends_with(std::string(hostname), ".sock")) {
+
+    // systemd socket activation: use pre-bound socket if available
+    const char * listen_fds = std::getenv("LISTEN_FDS");
+    const char * listen_pid = std::getenv("LISTEN_PID");
+    if (listen_fds && listen_pid && atoi(listen_pid) == getpid() && atoi(listen_fds) >= 1) {
+        srv->set_socket(3); // SD_LISTEN_FDS_START
+        was_bound = true;
+        unsetenv("LISTEN_FDS");
+        unsetenv("LISTEN_PID");
+        SRV_INF("%s", "using systemd socket activation (fd 3)\n");
+    } else if (string_ends_with(std::string(hostname), ".sock")) {
         is_sock = true;
         SRV_INF("%s", "setting address family to AF_UNIX\n");
         srv->set_address_family(AF_UNIX);
