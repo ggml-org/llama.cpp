@@ -5262,6 +5262,10 @@ void ggml_gemm_q1_0_4x4_q8_0(int                        n,
 
             for (int l = 0; l < nb; l++) {
                 float32x4_t b_d = vcvt_f32_f16(vld1_f16((const float16_t *) b_ptr[l].d));
+                float32x4_t blockf_0 = vdupq_n_f32(0);
+                float32x4_t blockf_1 = vdupq_n_f32(0);
+                float32x4_t blockf_2 = vdupq_n_f32(0);
+                float32x4_t blockf_3 = vdupq_n_f32(0);
 
                 for (int k = 0; k < 4; ++k) {
                     const block_q8_0x4 * GGML_RESTRICT a_blk = a_ptr + 4 * l + k;
@@ -5283,11 +5287,16 @@ void ggml_gemm_q1_0_4x4_q8_0(int                        n,
                         sumi_3 = vdotq_laneq_s32(sumi_3, signs, a_tile, 3);
                     }
 
-                    sumf[0] = vmlaq_f32(sumf[0], vmulq_laneq_f32(b_d, a_d, 0), vcvtq_f32_s32(sumi_0));
-                    sumf[1] = vmlaq_f32(sumf[1], vmulq_laneq_f32(b_d, a_d, 1), vcvtq_f32_s32(sumi_1));
-                    sumf[2] = vmlaq_f32(sumf[2], vmulq_laneq_f32(b_d, a_d, 2), vcvtq_f32_s32(sumi_2));
-                    sumf[3] = vmlaq_f32(sumf[3], vmulq_laneq_f32(b_d, a_d, 3), vcvtq_f32_s32(sumi_3));
+                    blockf_0 = vfmaq_laneq_f32(blockf_0, vcvtq_f32_s32(sumi_0), a_d, 0);
+                    blockf_1 = vfmaq_laneq_f32(blockf_1, vcvtq_f32_s32(sumi_1), a_d, 1);
+                    blockf_2 = vfmaq_laneq_f32(blockf_2, vcvtq_f32_s32(sumi_2), a_d, 2);
+                    blockf_3 = vfmaq_laneq_f32(blockf_3, vcvtq_f32_s32(sumi_3), a_d, 3);
                 }
+
+                sumf[0] = vfmaq_f32(sumf[0], blockf_0, b_d);
+                sumf[1] = vfmaq_f32(sumf[1], blockf_1, b_d);
+                sumf[2] = vfmaq_f32(sumf[2], blockf_2, b_d);
+                sumf[3] = vfmaq_f32(sumf[3], blockf_3, b_d);
             }
 
             for (int m = 0; m < 4; m++) {
