@@ -3,6 +3,7 @@
 #include "ggml-backend-impl.h"
 #include "ggml-cpp.h"
 #include "transport.h"
+#include "rpc-trace.h"
 
 #include <array>
 #include <cinttypes>
@@ -283,35 +284,49 @@ static bool parse_endpoint(const std::string & endpoint, std::string & host, int
 // RPC request : | rpc_cmd (1 byte) | request_size (8 bytes) | request_data (request_size bytes) |
 // No response
 static bool send_rpc_cmd(socket_ptr sock, enum rpc_cmd cmd, const void * input, size_t input_size) {
+    rpc_trace_span_t span = RPC_TRACE_BEGIN("ggml.rpc.send");
+    RPC_TRACE_INT(span, "rpc.cmd", (int64_t) cmd);
+    RPC_TRACE_BYTES(span, "rpc.input_bytes", input_size);
+    RPC_TRACE_STR(span, "rpc.has_response", "false");
+
     uint8_t cmd_byte = cmd;
-    if (!sock->send_data(&cmd_byte, sizeof(cmd_byte))) {
+    if (!sock->send_data(&cmd_byte, sizeof(cmd_byte)) ||
+        !sock->send_data(&input_size, sizeof(input_size)) ||
+        !sock->send_data(input, input_size)) {
+        RPC_TRACE_FAIL(span, "send_data failed");
         return false;
     }
-    if (!sock->send_data(&input_size, sizeof(input_size))) {
-        return false;
-    }
-    if (!sock->send_data(input, input_size)) {
-        return false;
-    }
+    RPC_TRACE_END(span);
     return true;
 }
 
 // RPC request : | rpc_cmd (1 byte) | request_size (8 bytes) | request_data (request_size bytes) |
 // RPC response: | response_size (8 bytes) | response_data (response_size bytes) |
 static bool send_rpc_cmd(socket_ptr sock, enum rpc_cmd cmd, const void * input, size_t input_size, void * output, size_t output_size) {
+    rpc_trace_span_t span = RPC_TRACE_BEGIN("ggml.rpc.send_recv");
+    RPC_TRACE_INT(span, "rpc.cmd", (int64_t) cmd);
+    RPC_TRACE_BYTES(span, "rpc.input_bytes", input_size);
+    RPC_TRACE_BYTES(span, "rpc.expected_output_bytes", output_size);
+    RPC_TRACE_STR(span, "rpc.has_response", "true");
+
     if (!send_rpc_cmd(sock, cmd, input, input_size)) {
+        RPC_TRACE_FAIL(span, "send phase failed");
         return false;
     }
     uint64_t out_size;
     if (!sock->recv_data(&out_size, sizeof(out_size))) {
+        RPC_TRACE_FAIL(span, "recv size failed");
         return false;
     }
     if (out_size != output_size) {
+        RPC_TRACE_FAIL(span, "response size mismatch");
         return false;
     }
     if (!sock->recv_data(output, output_size)) {
+        RPC_TRACE_FAIL(span, "recv body failed");
         return false;
     }
+    RPC_TRACE_END(span);
     return true;
 }
 

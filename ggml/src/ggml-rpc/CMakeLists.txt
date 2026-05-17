@@ -3,7 +3,13 @@ message(STATUS "Using RPC backend")
 ggml_add_backend_library(ggml-rpc
                          ggml-rpc.cpp
                          transport.cpp
+                         rpc-trace.cpp
                         )
+
+# Expose rpc-trace.h so tools/rpc/rpc-server.cpp and any other consumer that
+# links against ggml-rpc can include it without copying.
+target_include_directories(ggml-rpc PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>)
 
 if (WIN32)
     target_link_libraries(ggml-rpc PRIVATE ws2_32)
@@ -30,4 +36,22 @@ if (GGML_RPC_RDMA)
     message(STATUS "  RDMA transport enabled (auto-detected)")
 else()
     message(STATUS "  RDMA transport disabled")
+endif()
+
+# OpenTelemetry tracing (off by default — opt-in for diagnostics).
+# When enabled, every RPC send/recv emits a span exported via OTLP/gRPC. See
+# docs/RPC_TRACING.md for usage. Requires opentelemetry-cpp (find_package).
+option(GGML_RPC_OPENTELEMETRY "ggml: emit OpenTelemetry spans from rpc-server" OFF)
+
+if (GGML_RPC_OPENTELEMETRY)
+    find_package(opentelemetry-cpp CONFIG REQUIRED)
+    target_compile_definitions(ggml-rpc PRIVATE GGML_RPC_OPENTELEMETRY)
+    target_link_libraries(ggml-rpc PRIVATE
+        opentelemetry-cpp::otlp_grpc_exporter
+        opentelemetry-cpp::trace
+        opentelemetry-cpp::resources
+    )
+    message(STATUS "  OpenTelemetry tracing enabled — spans -> $ENV{GGML_RPC_OTLP_ENDPOINT} (default http://localhost:4317)")
+else()
+    message(STATUS "  OpenTelemetry tracing disabled (set -DGGML_RPC_OPENTELEMETRY=ON to enable)")
 endif()

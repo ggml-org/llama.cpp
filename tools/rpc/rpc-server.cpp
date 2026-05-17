@@ -1,4 +1,5 @@
 #include "ggml-rpc.h"
+#include "rpc-trace.h"
 #ifdef _WIN32
 #  define NOMINMAX
 #  define DIRECTORY_SEPARATOR '\\'
@@ -288,6 +289,8 @@ static std::vector<ggml_backend_dev_t> get_devices(const rpc_server_params & par
 }
 
 int main(int argc, char * argv[]) {
+    RPC_TRACE_INIT();
+
     std::setlocale(LC_NUMERIC, "C");
 
     ggml_backend_load_all();
@@ -338,5 +341,6 @@ int main(int argc, char * argv[]) {
     }
 
     start_server_fn(endpoint.c_str(), cache_dir, params.n_threads, devices.size(), devices.data());
+        RPC_TRACE_SHUTDOWN();
     return 0;
 }
