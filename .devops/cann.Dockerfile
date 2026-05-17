@@ -73,13 +73,15 @@ FROM ${CANN_BASE_IMAGE} AS base
 ARG BUILD_DATE=N/A
 ARG APP_VERSION=N/A
 ARG APP_REVISION=N/A
+ARG IMAGE_URL=https://github.com/ggml-org/llama.cpp
+ARG IMAGE_SOURCE=https://github.com/ggml-org/llama.cpp
 LABEL org.opencontainers.image.created=$BUILD_DATE \
       org.opencontainers.image.version=$APP_VERSION \
       org.opencontainers.image.revision=$APP_REVISION \
       org.opencontainers.image.title="llama.cpp" \
       org.opencontainers.image.description="LLM inference in C/C++" \
-      org.opencontainers.image.url="https://github.com/ggml-org/llama.cpp" \
-      org.opencontainers.image.source="https://github.com/ggml-org/llama.cpp"
+      org.opencontainers.image.url=$IMAGE_URL \
+      org.opencontainers.image.source=$IMAGE_SOURCE
 
 # -- Install runtime dependencies --
 RUN yum install -y libgomp curl && \

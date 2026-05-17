@@ -224,6 +224,8 @@ jobs:
             BUILD_DATE=${{ steps.build_date.outputs.date }}
             APP_VERSION=${{ needs.create_tag.outputs.source_tag }}
             APP_REVISION=${{ steps.checkout.outputs.commit }}
+            IMAGE_URL=${{ github.server_url }}/${{ github.repository }}
+            IMAGE_SOURCE=${{ github.server_url }}/${{ github.repository }}
             ${{ matrix.config.ubuntu_version && format('UBUNTU_VERSION={0}', matrix.config.ubuntu_version) || '' }}
             ${{ matrix.config.cuda_version && format('CUDA_VERSION={0}', matrix.config.cuda_version) || '' }}
           annotations: |
@@ -232,8 +234,8 @@ jobs:
             manifest:org.opencontainers.image.revision=${{ steps.checkout.outputs.commit }}
             manifest:org.opencontainers.image.title=llama.cpp
             manifest:org.opencontainers.image.description=LLM inference in C/C++
-            manifest:org.opencontainers.image.url=https://github.com/ggml-org/llama.cpp
-            manifest:org.opencontainers.image.source=https://github.com/ggml-org/llama.cpp
+            manifest:org.opencontainers.image.url=${{ github.server_url }}/${{ github.repository }}
+            manifest:org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
           # using github experimental cache
           #cache-from: type=gha
           #cache-to: type=gha,mode=max
@@ -259,6 +261,8 @@ jobs:
             BUILD_DATE=${{ steps.build_date.outputs.date }}
             APP_VERSION=${{ needs.create_tag.outputs.source_tag }}
             APP_REVISION=${{ steps.checkout.outputs.commit }}
+            IMAGE_URL=${{ github.server_url }}/${{ github.repository }}
+            IMAGE_SOURCE=${{ github.server_url }}/${{ github.repository }}
             ${{ matrix.config.ubuntu_version && format('UBUNTU_VERSION={0}', matrix.config.ubuntu_version) || '' }}
             ${{ matrix.config.cuda_version && format('CUDA_VERSION={0}', matrix.config.cuda_version) || '' }}
           annotations: |
@@ -267,8 +271,8 @@ jobs:
             manifest:org.opencontainers.image.revision=${{ steps.checkout.outputs.commit }}
             manifest:org.opencontainers.image.title=llama.cpp
             manifest:org.opencontainers.image.description=LLM inference in C/C++
-            manifest:org.opencontainers.image.url=https://github.com/ggml-org/llama.cpp
-            manifest:org.opencontainers.image.source=https://github.com/ggml-org/llama.cpp
+            manifest:org.opencontainers.image.url=${{ github.server_url }}/${{ github.repository }}
+            manifest:org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
           # using github experimental cache
           #cache-from: type=gha
           #cache-to: type=gha,mode=max
@@ -294,6 +298,8 @@ jobs:
             BUILD_DATE=${{ steps.build_date.outputs.date }}
             APP_VERSION=${{ needs.create_tag.outputs.source_tag }}
             APP_REVISION=${{ steps.checkout.outputs.commit }}
+            IMAGE_URL=${{ github.server_url }}/${{ github.repository }}
+            IMAGE_SOURCE=${{ github.server_url }}/${{ github.repository }}
             ${{ matrix.config.ubuntu_version && format('UBUNTU_VERSION={0}', matrix.config.ubuntu_version) || '' }}
             ${{ matrix.config.cuda_version && format('CUDA_VERSION={0}', matrix.config.cuda_version) || '' }}
           annotations: |
@@ -302,8 +308,8 @@ jobs:
             manifest:org.opencontainers.image.revision=${{ steps.checkout.outputs.commit }}
             manifest:org.opencontainers.image.title=llama.cpp
             manifest:org.opencontainers.image.description=LLM inference in C/C++
-            manifest:org.opencontainers.image.url=https://github.com/ggml-org/llama.cpp
-            manifest:org.opencontainers.image.source=https://github.com/ggml-org/llama.cpp
+            manifest:org.opencontainers.image.url=${{ github.server_url }}/${{ github.repository }}
+            manifest:org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
           # using github experimental cache
           #cache-from: type=gha
           #cache-to: type=gha,mode=max
@@ -463,8 +469,8 @@ jobs:
                   --annotation "index:org.opencontainers.image.revision=${COMMIT_SHA}"
                   --annotation "index:org.opencontainers.image.title=llama.cpp"
                   --annotation "index:org.opencontainers.image.description=LLM inference in C/C++"
-                  --annotation "index:org.opencontainers.image.url=https://github.com/ggml-org/llama.cpp"
-                  --annotation "index:org.opencontainers.image.source=https://github.com/ggml-org/llama.cpp"
+                  --annotation "index:org.opencontainers.image.url=${{ github.server_url }}/${{ github.repository }}"
+                  --annotation "index:org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}"
               )
 
               echo "Creating ${merged_tag} from ${refs[*]}"
