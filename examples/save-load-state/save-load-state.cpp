@@ -9,7 +9,7 @@
 
 // Phase 1: tokenize the prompt, decode all but the last token, save state to disk,
 // decode the last token, then generate n_predict tokens.
-static std::string run_baseline_generation(struct llama_model * model, const struct common_params & params, std::string_view state_file) {
+static std::string run_baseline_generation(struct llama_model * model, const struct common_params & params) {
     auto * ctx = llama_init_from_model(model, common_context_params_to_llama(params));
 
     auto sparams = llama_sampler_chain_default_params();
@@ -19,7 +19,7 @@ static std::string run_baseline_generation(struct llama_model * model, const str
     auto tokens = common_tokenize(ctx, params.prompt, true);
 
     auto n_past = 0;
-    if (!common_prompt_batch_decode(ctx, tokens, n_past, params.n_batch, state_file, true)) {
+    if (!common_prompt_batch_decode(ctx, tokens, n_past, params.n_batch, params.out_file, true)) {
         fprintf(stderr, "%s : failed to decode prompt\n", __func__);
         llama_sampler_free(smpl);
         llama_free(ctx);
@@ -61,7 +61,7 @@ static std::string run_baseline_generation(struct llama_model * model, const str
 
 // Phase 2: create a new context, load state from file, replay the last prompt token,
 // then generate n_predict tokens.
-static std::string run_state_restore_generation(struct llama_model * model, const struct common_params & params, std::string_view state_file) {
+static std::string run_state_restore_generation(struct llama_model * model, const struct common_params & params) {
     auto * ctx = llama_init_from_model(model, common_context_params_to_llama(params));
 
     auto sparams = llama_sampler_chain_default_params();
@@ -76,7 +76,7 @@ static std::string run_state_restore_generation(struct llama_model * model, cons
     std::vector<llama_token> unused_sts(tokens.size());
     size_t n_token_count_out = 0;
 
-    if (!llama_state_load_file(ctx, state_file.data(), unused_sts.data(), unused_sts.size(), &n_token_count_out)) {
+    if (!llama_state_load_file(ctx, params.out_file.data(), unused_sts.data(), unused_sts.size(), &n_token_count_out)) {
         fprintf(stderr, "\n%s : failed to load state\n", __func__);
         llama_sampler_free(smpl);
         llama_free(ctx);
@@ -128,7 +128,7 @@ static std::string run_state_restore_generation(struct llama_model * model, cons
 
 // Phase 3: create a multi-seq context, load state, replay last token, migrate KV cache
 // from seq 0 to seq 1 via the CPU path, then generate n_predict tokens on seq 1.
-static std::string run_seq_migration_cpu_generation(struct llama_model * model, const struct common_params & params, std::string_view state_file) {
+static std::string run_seq_migration_cpu_generation(struct llama_model * model, const struct common_params & params) {
     auto params_ctx = common_context_params_to_llama(params);
     params_ctx.n_seq_max = 2;
     auto * ctx = llama_init_from_model(model, params_ctx);
@@ -145,7 +145,7 @@ static std::string run_seq_migration_cpu_generation(struct llama_model * model, 
     std::vector<llama_token> unused_sts(tokens.size());
     size_t n_token_count_out = 0;
 
-    if (!llama_state_load_file(ctx, state_file.data(), unused_sts.data(), unused_sts.size(), &n_token_count_out)) {
+    if (!llama_state_load_file(ctx, params.out_file.data(), unused_sts.data(), unused_sts.size(), &n_token_count_out)) {
         fprintf(stderr, "\n%s : failed to load state\n", __func__);
         llama_sampler_free(smpl);
         llama_free(ctx);
@@ -222,7 +222,7 @@ static std::string run_seq_migration_cpu_generation(struct llama_model * model, 
 
 // Phase 4: create a multi-seq context, load state, replay last token, migrate KV cache
 // from seq 0 to seq 1 via the on-device path, then generate n_predict tokens on seq 1.
-static std::string run_seq_migration_ondevice_generation(struct llama_model * model, const struct common_params & params, std::string_view state_file) {
+static std::string run_seq_migration_ondevice_generation(struct llama_model * model, const struct common_params & params) {
     auto params_ctx = common_context_params_to_llama(params);
     params_ctx.n_seq_max = 2;
     auto * ctx = llama_init_from_model(model, params_ctx);
@@ -239,7 +239,7 @@ static std::string run_seq_migration_ondevice_generation(struct llama_model * mo
     std::vector<llama_token> unused_sts(tokens.size());
     size_t n_token_count_out = 0;
 
-    if (!llama_state_load_file(ctx, state_file.data(), unused_sts.data(), unused_sts.size(), &n_token_count_out)) {
+    if (!llama_state_load_file(ctx, params.out_file.data(), unused_sts.data(), unused_sts.size(), &n_token_count_out)) {
         fprintf(stderr, "\n%s : failed to load state\n", __func__);
         llama_sampler_free(smpl);
         llama_free(ctx);
@@ -319,9 +319,8 @@ int main(int argc, char ** argv) {
 
     common_params params;
     params.prompt = "The quick brown fox";
+    params.out_file = "dump_state.bin";
     params.sampling.seed = 1234;
-
-    const std::string_view state_file = "dump_state.bin";
 
     common_init();
 
@@ -349,7 +348,7 @@ int main(int argc, char ** argv) {
     }
 
     // Phase 1: baseline generation (saves state to disk)
-    auto result_baseline = run_baseline_generation(model, params, state_file);
+    auto result_baseline = run_baseline_generation(model, params);
     if (result_baseline.empty()) {
         return 1;
     }
@@ -357,7 +356,7 @@ int main(int argc, char ** argv) {
     printf("\n\n");
 
     // Phase 2: full state restore from file
-    auto result_restore = run_state_restore_generation(model, params, state_file);
+    auto result_restore = run_state_restore_generation(model, params);
     if (result_restore.empty()) {
         return 1;
     }
@@ -365,13 +364,13 @@ int main(int argc, char ** argv) {
     printf("\n\n");
 
     // Phase 3: per-sequence KV migration (CPU path)
-    auto result_seq_migration_cpu = run_seq_migration_cpu_generation(model, params, state_file);
+    auto result_seq_migration_cpu = run_seq_migration_cpu_generation(model, params);
     if (result_seq_migration_cpu.empty()) {
         return 1;
     }
 
     // Phase 4: per-sequence KV migration (on-device path)
-    auto result_seq_migration_ondevice = run_seq_migration_ondevice_generation(model, params, state_file);
+    auto result_seq_migration_ondevice = run_seq_migration_ondevice_generation(model, params);
     if (result_seq_migration_ondevice.empty()) {
         return 1;
     }
