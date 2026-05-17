@@ -1101,6 +1101,21 @@ static common_chat_params common_chat_params_init_gemma4(const common_chat_templ
         "<|turn>",
     };
 
+    // Detect if the prompt ends with an unclosed <|channel> tag in the current model turn
+    bool is_resuming_thought = false;
+    size_t last_model_turn = data.prompt.rfind("<|turn>model");
+    size_t search_start = (last_model_turn != std::string::npos) ? last_model_turn : 0;
+
+    size_t last_channel_open = data.prompt.rfind("<|channel>");
+    size_t last_channel_close = data.prompt.rfind("<channel|>");
+    
+    // Only trigger prefill mode if the unclosed tag belongs to the assistant's active turn
+    if (last_channel_open != std::string::npos && last_channel_open >= search_start) {
+        if (last_channel_close == std::string::npos || last_channel_open > last_channel_close) {
+            is_resuming_thought = true;
+        }
+    }
+
     auto has_tools           = inputs.tools.is_array() && !inputs.tools.empty();
     auto has_response_format = !inputs.json_schema.is_null() && inputs.json_schema.is_object();
     auto include_grammar     = has_response_format || (has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE);
@@ -1109,6 +1124,11 @@ static common_chat_params common_chat_params_init_gemma4(const common_chat_templ
     auto parser = build_chat_peg_parser([&](common_chat_peg_builder & p) {
         auto start = p.rule("start", p.prefix(inputs.generation_prompt, "<|channel>"));
 
+        auto optional_thought_prefix = p.optional(p.literal("thought") + p.space());
+        auto resumed_thought = extract_reasoning 
+            ? p.rule("resumed-thought", optional_thought_prefix + p.reasoning(p.until_one_of({"<|channel>", "<channel|>"})) + p.literal("<channel|>"))
+            : p.rule("resumed-thought", p.content(optional_thought_prefix + p.until_one_of({"<|channel>", "<channel|>"}) + p.literal("<channel|>")));
+
         if (extract_reasoning) {
             p.rule("thought", p.literal("<|channel>thought") + p.space() + p.reasoning(p.until("<channel|>")) + p.literal("<channel|>"));
         } else {
@@ -1116,12 +1136,15 @@ static common_chat_params common_chat_params_init_gemma4(const common_chat_templ
         }
 
         auto consume_empty_channels = p.gbnf(p.zero_or_more(p.literal("<|channel>") + p.negate(p.literal("thought"))), "");
-        auto thought = (p.peek(p.literal("<|channel>")) + consume_empty_channels + p.ref("thought")) | p.negate(p.literal("<|channel>"));
+        auto thought = (p.peek(p.literal("<|channel>")) + consume_empty_channels + p.ref("thought")) | resumed_thought | p.negate(p.literal("<|channel>"));
 
         if (has_response_format) {
             auto response_format = p.literal("```json") <<
                 p.content(p.schema(p.json(), "response-format-schema", inputs.json_schema)) <<
                 p.literal("```");
+            if (is_resuming_thought) {
+                return start + resumed_thought + p.optional(thought) + response_format;
+            }
             return start + p.optional(thought) + response_format;
         }
 
@@ -1183,6 +1206,10 @@ static common_chat_params common_chat_params_init_gemma4(const common_chat_templ
             auto scan_to_toolcall = p.rule("scan-to-toolcall", p.until("<|tool_call>"));
             auto content = p.rule("content", p.content(p.until_one_of({"<|channel>", "<channel|>", "<|tool_call>"})));
             auto message = p.rule("message", thought + content);
+             if (is_resuming_thought) {
+                auto first_message = p.rule("first-message", resumed_thought + content);
+                return start + first_message + p.zero_or_more(message) + scan_to_toolcall + tool_call;
+            }
             return start + p.zero_or_more(message) + scan_to_toolcall + tool_call;
         }
 
@@ -1191,6 +1218,10 @@ static common_chat_params common_chat_params_init_gemma4(const common_chat_templ
         // then stop at the first unmatched <channel|> token.
         auto content = p.rule("content", p.content(p.until_one_of({"<|channel>", "<channel|>"})));
         auto message = p.rule("message", thought + content);
+        if (is_resuming_thought) {
+            auto first_message = p.rule("first-message", resumed_thought + content);
+            return start + first_message + p.zero_or_more(message);
+        }
         return start + p.one_or_more(message);
     });
 
