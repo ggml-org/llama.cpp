@@ -76,7 +76,18 @@ extern "C" int rpc_trace_init(void) {
     exporter_opts.endpoint = endpoint_env;
 
     auto exporter  = otlp::OtlpGrpcExporterFactory::Create(exporter_opts);
-    auto processor = sdktrace::BatchSpanProcessorFactory::Create(std::move(exporter), {});
+    // High-volume RPC workloads emit thousands of spans/sec; the default
+    // BSP queue (2048) and 5 s flush drop spans on the floor under load.
+    // Use a larger queue and tighter flush so per-RPC traces are captured
+    // faithfully. Overridable via env vars.
+    sdktrace::BatchSpanProcessorOptions bsp_opts;
+    bsp_opts.max_queue_size = 65536;
+    bsp_opts.max_export_batch_size = 4096;
+    bsp_opts.schedule_delay_millis = std::chrono::milliseconds(500);
+    if (const char * v = std::getenv("GGML_RPC_OTLP_QUEUE")) {
+        int parsed = std::atoi(v); if (parsed >= 1024) bsp_opts.max_queue_size = parsed;
+    }
+    auto processor = sdktrace::BatchSpanProcessorFactory::Create(std::move(exporter), bsp_opts);
 
     auto resource_attrs = resource::ResourceAttributes{
         {"service.name", std::string(env_or("GGML_RPC_OTLP_SERVICE", "ggml-rpc"))},
