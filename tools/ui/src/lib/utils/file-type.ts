@@ -1,5 +1,6 @@
 import {
 	AUDIO_FILE_TYPES,
+	VIDEO_FILE_TYPES,
 	IMAGE_FILE_TYPES,
 	PDF_FILE_TYPES,
 	TEXT_FILE_TYPES
@@ -12,6 +13,7 @@ import {
 	FileTypeCategory,
 	MimeTypeApplication,
 	MimeTypeAudio,
+	MimeTypeVideo,
 	MimeTypeImage,
 	MimeTypeText
 } from '$lib/enums';
@@ -34,6 +36,11 @@ export function getFileTypeCategory(mimeType: string): FileTypeCategory | null {
 		case MimeTypeAudio.WEBM:
 		case MimeTypeAudio.WEBM_OPUS:
 			return FileTypeCategory.AUDIO;
+
+		// Video
+		case MimeTypeVideo.MP4:
+		case MimeTypeVideo.OGG:
+			return FileTypeCategory.VIDEO;
 
 		// PDF
 		case MimeTypeApplication.PDF:
@@ -176,6 +183,12 @@ export function getFileTypeByExtension(filename: string): string | null {
 	for (const [key, type] of Object.entries(AUDIO_FILE_TYPES)) {
 		if ((type.extensions as readonly string[]).includes(extension)) {
 			return `${FileTypeCategory.AUDIO}:${key}`;
+		}
+	}
+
+	for (const [key, type] of Object.entries(VIDEO_FILE_TYPES)) {
+		if ((type.extensions as readonly string[]).includes(extension)) {
+			return `${FileTypeCategory.VIDEO}:${key}`;
 		}
 	}
 

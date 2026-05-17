@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Eye, Mic } from '@lucide/svelte';
+	import { Eye, Mic, Video } from '@lucide/svelte';
 	import { ModelModality } from '$lib/enums';
 
 	interface Props {
@@ -11,7 +11,7 @@
 </script>
 
 {#each modalities as modality (modality)}
-	{#if modality === ModelModality.VISION || modality === ModelModality.AUDIO}
+	{#if modality === ModelModality.VISION || modality === ModelModality.AUDIO || modality === ModelModality.VIDEO}
 		<span
 			class={[
 				'inline-flex items-center gap-1 rounded-md bg-muted px-2 py-1 text-xs font-medium',
@@ -21,7 +21,11 @@
 			{#if modality === ModelModality.VISION}
 				<Eye class="h-3 w-3" />
 
-				Vision
+				Vision (Image)
+			{:else if modality === ModelModality.VIDEO}
+				<Video class="h-3 w-3" />
+
+				Vision (Video)
 			{:else}
 				<Mic class="h-3 w-3" />
 

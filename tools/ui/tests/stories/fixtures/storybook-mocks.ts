@@ -15,7 +15,8 @@ export function mockServerProps(props: Partial<ApiLlamaCppServerProps>): void {
 		model_path: props.model_path || 'test-model',
 		modalities: {
 			vision: props.modalities?.vision ?? false,
-			audio: props.modalities?.audio ?? false
+			audio: props.modalities?.audio ?? false,
+			video: props.modalities?.video ?? false
 		},
 		...props
 	} as ApiLlamaCppServerProps;
@@ -26,11 +27,14 @@ export function mockServerProps(props: Partial<ApiLlamaCppServerProps>): void {
 	// Also mock modelsStore methods for modality checking
 	const vision = props.modalities?.vision ?? false;
 	const audio = props.modalities?.audio ?? false;
+	const video = props.modalities?.video ?? false;
 
 	// eslint-disable-next-line @typescript-eslint/no-explicit-any
 	(modelsStore as any).modelSupportsVision = () => vision;
 	// eslint-disable-next-line @typescript-eslint/no-explicit-any
 	(modelsStore as any).modelSupportsAudio = () => audio;
+	// eslint-disable-next-line @typescript-eslint/no-explicit-any
+	(modelsStore as any).modelSupportsVideo = () => video;
 
 	// Mock models list with a test model so activeModelId can be resolved
 	// eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -55,7 +59,8 @@ export function resetServerStore(): void {
 		model_path: '',
 		modalities: {
 			vision: false,
-			audio: false
+			audio: false,
+			video: false
 		}
 	} as ApiLlamaCppServerProps;
 	(serverStore as unknown as { error: string }).error = '';
@@ -76,6 +81,6 @@ export const mockConfigs = {
 		modalities: { vision: true, audio: true }
 	},
 	noModalities: {
-		modalities: { vision: false, audio: false }
+		modalities: { vision: false, audio: false, video: false }
 	}
 } as const;

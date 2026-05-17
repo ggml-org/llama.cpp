@@ -53,6 +53,15 @@ export const ATTACHMENT_FILE_ITEMS: AttachmentMenuItem[] = [
 		action: AttachmentAction.FILE_UPLOAD
 	},
 	{
+		id: AttachmentMenuItemId.VIDEO,
+		label: 'Video Files',
+		icon: FILE_TYPE_ICONS.video,
+		class: 'video-button',
+		enabledWhen: AttachmentItemEnabledWhen.HAS_VIDEO_MODALITY,
+		disabledTooltip: 'Video files processing requires a video model',
+		action: AttachmentAction.FILE_UPLOAD
+	},
+	{
 		id: AttachmentMenuItemId.TEXT,
 		label: 'Text Files',
 		icon: FILE_TYPE_ICONS.text,

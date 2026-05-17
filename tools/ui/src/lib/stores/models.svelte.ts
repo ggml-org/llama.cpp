@@ -148,7 +148,8 @@ class ModelsStore {
 		if (props?.modalities) {
 			return {
 				vision: props.modalities.vision ?? false,
-				audio: props.modalities.audio ?? false
+				audio: props.modalities.audio ?? false,
+				video: props.modalities.video ?? false
 			};
 		}
 
@@ -170,6 +171,13 @@ class ModelsStore {
 	}
 
 	/**
+	 * Check if a model supports video modality
+	 */
+	modelSupportsVideo(modelId: string): boolean {
+		return this.getModelModalities(modelId)?.video ?? false;
+	}
+
+	/**
 	 * Get model modalities as an array of ModelModality enum values
 	 */
 	getModelModalitiesArray(modelId: string): ModelModality[] {
@@ -180,6 +188,7 @@ class ModelsStore {
 
 		if (modalities.vision) result.push(ModelModality.VISION);
 		if (modalities.audio) result.push(ModelModality.AUDIO);
+		if (modalities.video) result.push(ModelModality.VIDEO);
 
 		return result;
 	}
@@ -316,7 +325,8 @@ class ModelsStore {
 			if (serverStore.isModelMode && this.models.length > 0 && serverProps?.modalities) {
 				const modalities: ModelModalities = {
 					vision: serverProps.modalities.vision ?? false,
-					audio: serverProps.modalities.audio ?? false
+					audio: serverProps.modalities.audio ?? false,
+					video: serverProps.modalities.video ?? false
 				};
 				this.modelPropsCache.set(this.models[0].model, serverProps);
 				this.models = this.models.map((model, index) =>
@@ -410,7 +420,8 @@ class ModelsStore {
 
 				const modalities: ModelModalities = {
 					vision: props.modalities.vision ?? false,
-					audio: props.modalities.audio ?? false
+					audio: props.modalities.audio ?? false,
+					video: props.modalities.video ?? false
 				};
 
 				return { ...model, modalities };
@@ -529,7 +540,8 @@ class ModelsStore {
 
 			const modalities: ModelModalities = {
 				vision: props.modalities.vision ?? false,
-				audio: props.modalities.audio ?? false
+				audio: props.modalities.audio ?? false,
+				video: props.modalities.video ?? false
 			};
 
 			this.models = this.models.map((model) =>

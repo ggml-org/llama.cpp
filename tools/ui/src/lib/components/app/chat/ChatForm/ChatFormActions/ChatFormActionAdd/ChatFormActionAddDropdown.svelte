@@ -23,6 +23,7 @@
 		class?: string;
 		disabled?: boolean;
 		hasAudioModality?: boolean;
+		hasVideoModality?: boolean;
 		hasVisionModality?: boolean;
 		hasMcpPromptsSupport?: boolean;
 		hasMcpResourcesSupport?: boolean;
@@ -37,6 +38,7 @@
 		class: className = '',
 		disabled = false,
 		hasAudioModality = false,
+		hasVideoModality = false,
 		hasVisionModality = false,
 		hasMcpPromptsSupport = false,
 		hasMcpResourcesSupport = false,
@@ -58,6 +60,7 @@
 		() => ({
 			hasVisionModality,
 			hasAudioModality,
+			hasVideoModality,
 			hasMcpPromptsSupport,
 			hasMcpResourcesSupport
 		}),

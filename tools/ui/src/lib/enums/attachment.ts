@@ -4,6 +4,7 @@
 export enum AttachmentType {
 	AUDIO = 'AUDIO',
 	IMAGE = 'IMAGE',
+	VIDEO = 'VIDEO',
 	MCP_PROMPT = 'MCP_PROMPT',
 	MCP_RESOURCE = 'MCP_RESOURCE',
 	PDF = 'PDF',
@@ -18,6 +19,7 @@ export enum AttachmentType {
 export enum AttachmentMenuItemId {
 	IMAGES = 'images',
 	AUDIO = 'audio',
+	VIDEO = 'video',
 	TEXT = 'text',
 	PDF = 'pdf',
 	SYSTEM_MESSAGE = 'system-message',
@@ -31,7 +33,8 @@ export enum AttachmentMenuItemId {
 export enum AttachmentItemEnabledWhen {
 	ALWAYS = 'always',
 	HAS_VISION_MODALITY = 'hasVisionModality',
-	HAS_AUDIO_MODALITY = 'hasAudioModality'
+	HAS_AUDIO_MODALITY = 'hasAudioModality',
+	HAS_VIDEO_MODALITY = 'hasVideoModality'
 }
 
 /**

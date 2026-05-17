@@ -1,10 +1,12 @@
 <script lang="ts">
-	import { X } from '@lucide/svelte';
+	import { X, Music, Video } from '@lucide/svelte';
 	import {
 		formatFileSize,
 		getFileTypeLabel,
 		getPreviewText,
 		isPdfFile,
+		isAudioFile,
+		isVideoFile,
 		isTextFile
 	} from '$lib/utils';
 	import { ActionIcon } from '$lib/components/app';
@@ -38,6 +40,8 @@
 	}: Props = $props();
 
 	let isPdf = $derived(isPdfFile(attachment, uploadedFile));
+	let isAudio = $derived(isAudioFile(attachment, uploadedFile));
+	let isVideo = $derived(isVideoFile(attachment, uploadedFile));
 	let isPdfWithContent = $derived(isPdf && !!textContent);
 
 	let isText = $derived(isTextFile(attachment, uploadedFile));
@@ -102,7 +106,13 @@
 	<div
 		class="flex h-8 w-8 items-center justify-center rounded bg-primary/10 text-xs font-medium text-primary"
 	>
-		{fileTypeLabel}
+		{#if isAudio}
+			<Music class="h-4 w-4 text-white/70" />
+		{:else if isVideo}
+			<Video class="h-4 w-4 text-white/70" />
+		{:else}
+			{fileTypeLabel}
+		{/if}
 	</div>
 {/snippet}
 

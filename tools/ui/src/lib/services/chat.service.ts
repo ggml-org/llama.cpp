@@ -884,6 +884,25 @@ export class ChatService {
 			});
 		}
 
+		const videoFiles = message.extra.filter(
+			(extra: DatabaseMessageExtra): extra is DatabaseMessageExtraVideoFile =>
+				extra.type === AttachmentType.VIDEO
+		);
+
+		for (const video of videoFiles) {
+			contentParts.push({
+				type: ContentPartType.INPUT_VIDEO,
+				input_video: {
+					data: video.base64Data,
+					format: video.mimeType.includes('mp4')
+						? 'mp4'
+						: video.mimeType.includes('ogg')
+							? 'ogg'
+							: 'auto'
+				}
+			});
+		}
+
 		const pdfFiles = message.extra.filter(
 			(extra: DatabaseMessageExtra): extra is DatabaseMessageExtraPdfFile =>
 				extra.type === AttachmentType.PDF

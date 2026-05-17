@@ -3,6 +3,7 @@ import type { ApiModelDataEntry, ApiModelDetails } from '$lib/types/api';
 export interface ModelModalities {
 	vision: boolean;
 	audio: boolean;
+	video: boolean;
 }
 
 export interface ModelOption {
@@ -35,4 +36,5 @@ export interface ParsedModelId {
 export interface ModalityCapabilities {
 	hasVision: boolean;
 	hasAudio: boolean;
+	hasVideo: boolean;
 }

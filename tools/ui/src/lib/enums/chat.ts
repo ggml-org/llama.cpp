@@ -39,7 +39,8 @@ export enum MessageType {
 export enum ContentPartType {
 	TEXT = 'text',
 	IMAGE_URL = 'image_url',
-	INPUT_AUDIO = 'input_audio'
+	INPUT_AUDIO = 'input_audio',
+	INPUT_VIDEO = 'input_video'
 }
 
 /**

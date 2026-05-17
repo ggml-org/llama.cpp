@@ -117,6 +117,10 @@ export async function processFilesToChatUploaded(
 				// Generate preview URL for audio files
 				const preview = await readFileAsDataURL(file);
 				results.push({ ...base, preview });
+			} else if (getFileTypeCategory(file.type) === FileTypeCategory.VIDEO) {
+				// Generate preview URL for video files
+				const preview = await readFileAsDataURL(file);
+				results.push({ ...base, preview });
 			} else {
 				// Fallback: treat unknown files as text
 				try {
