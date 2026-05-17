@@ -181,7 +181,7 @@ llama_model_hunyuan_vl::graph::graph(const llama_model & model, const llm_graph_
     cb(cur, "result_norm", -1);
     res->t_embd = cur;
     // lm_head
-    cur = build_lora_mm(model.output, cur);
+    cur = build_lora_mm(model.output, cur, model.output_s);
     cb(cur, "result_output", -1);
     res->t_logits = cur;
 

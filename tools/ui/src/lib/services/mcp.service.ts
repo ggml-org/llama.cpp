@@ -665,7 +665,9 @@ export class MCPService {
 			tools: [],
 			serverName,
 			transportType,
-			connectionTimeMs: 0
+			connectionTimeMs: 0,
+			requestTimeoutMs:
+				serverConfig.requestTimeoutMs ?? DEFAULT_MCP_CONFIG.requestTimeoutSeconds * 1000
 		});
 
 		const connectionTimeMs = Math.round(performance.now() - startTime);
@@ -694,7 +696,9 @@ export class MCPService {
 			clientCapabilities: effectiveCapabilities,
 			protocolVersion: DEFAULT_MCP_CONFIG.protocolVersion,
 			instructions,
-			connectionTimeMs
+			connectionTimeMs,
+			requestTimeoutMs:
+				serverConfig.requestTimeoutMs ?? DEFAULT_MCP_CONFIG.requestTimeoutSeconds * 1000
 		};
 	}
 
@@ -813,7 +817,7 @@ export class MCPService {
 			const result = await connection.client.callTool(
 				{ name: params.name, arguments: params.arguments },
 				undefined,
-				{ signal }
+				{ signal, timeout: connection.requestTimeoutMs }
 			);
 
 			return {

@@ -12,6 +12,7 @@
 		getAttachmentDisplayItems,
 		getLanguageFromFilename,
 		isAudioFile,
+		isVideoFile,
 		isImageFile,
 		isMcpPrompt,
 		isMcpResource,
@@ -29,6 +30,7 @@
 		textContent?: string;
 		isImage: boolean;
 		isAudio: boolean;
+		isVideo: boolean;
 	}
 
 	interface Props {
@@ -54,7 +56,8 @@
 				(item): PreviewItem => ({
 					...item,
 					isImage: isImageFile(item.attachment, item.uploadedFile),
-					isAudio: isAudioFile(item.attachment, item.uploadedFile)
+					isAudio: isAudioFile(item.attachment, item.uploadedFile),
+					isVideo: isVideoFile(item.attachment, item.uploadedFile)
 				})
 			)
 	);
@@ -102,6 +105,9 @@
 	let isAudio = $derived(
 		currentItem ? isAudioFile(currentItem.attachment, currentItem.uploadedFile) : false
 	);
+	let isVideo = $derived(
+		currentItem ? isVideoFile(currentItem.attachment, currentItem.uploadedFile) : false
+	);
 	let isImage = $derived(
 		currentItem ? isImageFile(currentItem.attachment, currentItem.uploadedFile) : false
 	);
@@ -148,6 +154,20 @@
 			: null
 	);
 
+	let videoSrc = $derived(
+		isVideo && currentItem
+			? (currentItem.uploadedFile?.preview ??
+					(currentItem.attachment &&
+					'mimeType' in currentItem.attachment &&
+					'base64Data' in currentItem.attachment
+						? createBase64DataUrl(
+								currentItem.attachment.mimeType,
+								currentItem.attachment.base64Data
+							)
+						: null))
+			: null
+	);
+
 	export function prev() {
 		currentIndex = currentIndex > 0 ? currentIndex - 1 : allItems.length - 1;
 	}
@@ -173,11 +193,13 @@
 					{currentItem}
 					{isImage}
 					{isAudio}
+					{isVideo}
 					{isPdf}
 					{isText}
 					{displayPreview}
 					{displayTextContent}
 					{audioSrc}
+					{videoSrc}
 					{language}
 					{hasVisionModality}
 					{activeModelId}

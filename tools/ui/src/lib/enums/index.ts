@@ -34,6 +34,7 @@ export {
 	UriPattern,
 	MimeTypeApplication,
 	MimeTypeAudio,
+	MimeTypeVideo,
 	MimeTypeImage,
 	MimeTypeText,
 	SpecialFileType

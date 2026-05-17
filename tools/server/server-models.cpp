@@ -798,9 +798,10 @@ void server_models::load(const std::string & name) {
         std::thread log_thread([&]() {
             // read stdout/stderr and forward to main server log
             // also handle status report from child process
+            std::vector<char> vec_buf(128 * 1024); // large buffer for storing info
+            char * buffer = vec_buf.data();
             if (stdout_file) {
-                char buffer[128 * 1024]; // large buffer for storing info
-                while (fgets(buffer, sizeof(buffer), stdout_file) != nullptr) {
+                while (fgets(buffer, vec_buf.size(), stdout_file) != nullptr) {
                     LOG("[%5d] %s", port, buffer);
                     std::string str(buffer);
                     if (string_starts_with(buffer, CMD_CHILD_TO_ROUTER_READY)) {
