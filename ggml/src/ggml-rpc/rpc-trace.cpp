@@ -58,13 +58,22 @@ extern "C" int rpc_trace_init(void) {
     if (g_initialised.load(std::memory_order_acquire)) {
         return 0;
     }
+    // Opt-in: tracing is OFF unless GGML_RPC_OTLP_ENDPOINT is explicitly set.
+    // This keeps non-RPC tools (plain llama-cli, llama-bench, ...) from
+    // spawning a BatchSpanProcessor thread and pointlessly attempting to
+    // connect to a non-existent collector at every startup.
+    const char * endpoint_env = std::getenv("GGML_RPC_OTLP_ENDPOINT");
+    if (!endpoint_env || !*endpoint_env) {
+        return 0;
+    }
+
     std::lock_guard<std::mutex> lock(g_init_mutex);
     if (g_initialised.load(std::memory_order_relaxed)) {
         return 0;
     }
 
     otlp::OtlpGrpcExporterOptions exporter_opts;
-    exporter_opts.endpoint = env_or("GGML_RPC_OTLP_ENDPOINT", "http://localhost:4317");
+    exporter_opts.endpoint = endpoint_env;
 
     auto exporter  = otlp::OtlpGrpcExporterFactory::Create(exporter_opts);
     auto processor = sdktrace::BatchSpanProcessorFactory::Create(std::move(exporter), {});
