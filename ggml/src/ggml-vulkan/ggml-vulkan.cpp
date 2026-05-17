@@ -2950,8 +2950,13 @@ static vk_fa_tuning_params get_fa_tuning_params_scalar(const vk_device& device, 
     vk_fa_tuning_params result{};
     result.path = FA_SCALAR;
 
-    if (device->vendor_id == VK_VENDOR_ID_INTEL) {
-        // Disable subgroup use due to performance issues when enforcing subgroup sizes
+    if (device->vendor_id == VK_VENDOR_ID_INTEL
+#ifdef __APPLE__
+        || (device->vendor_id == VK_VENDOR_ID_AMD && device->driver_id == vk::DriverId::eMoltenvk)
+#endif
+    ) {
+        // Disable subgroup use — Intel has performance issues with subgroup sizes,
+        // MoltenVK/AMD has broken subgroupShuffleXor (Metal translation bug)
         result.subgroup_size = 32;
         result.disable_subgroups = true;
     } else if (device->vendor_id == VK_VENDOR_ID_AMD && device->architecture != AMD_GCN) {
@@ -5240,22 +5245,21 @@ static vk_device ggml_vk_get_device(size_t idx) {
                                  (vk11_props.subgroupSupportedOperations & vk::SubgroupFeatureFlagBits::eBasic);
         device->subgroup_arithmetic = (vk11_props.subgroupSupportedStages & vk::ShaderStageFlagBits::eCompute) &&
                                       (vk11_props.subgroupSupportedOperations & vk::SubgroupFeatureFlagBits::eArithmetic);
+        device->subgroup_shuffle = (vk11_props.subgroupSupportedStages & vk::ShaderStageFlagBits::eCompute) &&
+                                   (vk11_props.subgroupSupportedOperations & vk::SubgroupFeatureFlagBits::eShuffle);
+        device->subgroup_clustered = (vk11_props.subgroupSupportedStages & vk::ShaderStageFlagBits::eCompute) &&
+                                     (vk11_props.subgroupSupportedOperations & vk::SubgroupFeatureFlagBits::eClustered);
+        device->subgroup_ballot = (vk11_props.subgroupSupportedStages & vk::ShaderStageFlagBits::eCompute) &&
+                                  (vk11_props.subgroupSupportedOperations & vk::SubgroupFeatureFlagBits::eBallot);
+        device->subgroup_vote = (vk11_props.subgroupSupportedStages & vk::ShaderStageFlagBits::eCompute) &&
+                                (vk11_props.subgroupSupportedOperations & vk::SubgroupFeatureFlagBits::eVote);
+
 #ifdef __APPLE__
         // Workaround for subgroup arithmetic failing on MoltenVK with AMD GPUs (issue 15846)
         if (device->vendor_id == VK_VENDOR_ID_AMD) {
             device->subgroup_arithmetic = false;
         }
 #endif
-        device->subgroup_shuffle = (vk11_props.subgroupSupportedStages & vk::ShaderStageFlagBits::eCompute) &&
-                                   (vk11_props.subgroupSupportedOperations & vk::SubgroupFeatureFlagBits::eShuffle);
-        device->subgroup_clustered = (vk11_props.subgroupSupportedStages & vk::ShaderStageFlagBits::eCompute) &&
-                                     (vk11_props.subgroupSupportedOperations & vk::SubgroupFeatureFlagBits::eClustered);
-
-        device->subgroup_ballot = (vk11_props.subgroupSupportedStages & vk::ShaderStageFlagBits::eCompute) &&
-                                  (vk11_props.subgroupSupportedOperations & vk::SubgroupFeatureFlagBits::eBallot);
-
-        device->subgroup_vote = (vk11_props.subgroupSupportedStages & vk::ShaderStageFlagBits::eCompute) &&
-                                (vk11_props.subgroupSupportedOperations & vk::SubgroupFeatureFlagBits::eVote);
 
         const bool force_disable_f16 = getenv("GGML_VK_DISABLE_F16") != nullptr;
 
