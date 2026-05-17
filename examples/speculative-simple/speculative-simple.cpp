@@ -3,6 +3,7 @@
 #include "sampling.h"
 #include "speculative.h"
 #include "log.h"
+#include "mtp.h"
 #include "llama.h"
 
 #include <clocale>
@@ -48,9 +49,13 @@ int main(int argc, char ** argv) {
     // load the draft model
     llama_model_ptr model_dft;
     llama_context_ptr ctx_dft;
+    const bool spec_mtp_attached = common_mtp_assistant_is_attached(model_tgt);
 
     // TODO: simplify this logic
-    {
+    if (spec_mtp_attached) {
+        params.speculative.draft.ctx_tgt = ctx_tgt;
+        params.speculative.draft.ctx_dft = nullptr;
+    } else {
         const auto & params_spec = params.speculative.draft;
 
         auto params_dft = params;
@@ -83,7 +88,7 @@ int main(int argc, char ** argv) {
 
     // check if the context supports partial sequence removal
     const bool use_ckpt_tgt = (common_context_can_seq_rm(ctx_tgt)       == COMMON_CONTEXT_SEQ_RM_TYPE_FULL);
-    const bool use_ckpt_dft = (common_context_can_seq_rm(ctx_dft.get()) == COMMON_CONTEXT_SEQ_RM_TYPE_FULL);
+    const bool use_ckpt_dft = ctx_dft && (common_context_can_seq_rm(ctx_dft.get()) == COMMON_CONTEXT_SEQ_RM_TYPE_FULL);
 
     if (use_ckpt_tgt) {
         LOG_INF("speculative decoding will use checkpoints (context does not support partial sequence removal)\n");
@@ -131,7 +136,9 @@ int main(int argc, char ** argv) {
 
     // eval the prompt
     llama_decode(ctx_tgt,       llama_batch_get_one(inp.data(), inp.size() - 1));
-    llama_decode(ctx_dft.get(), llama_batch_get_one(inp.data(), inp.size() - 1));
+    if (ctx_dft) {
+        llama_decode(ctx_dft.get(), llama_batch_get_one(inp.data(), inp.size() - 1));
+    }
 
     // note: keep the last token separate!
     llama_token id_last = inp.back();
@@ -200,7 +207,7 @@ int main(int argc, char ** argv) {
                 }
             }
 
-            {
+            if (ctx_dft) {
                 ckpt.load_dft(ctx_dft.get(), seq_id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY | LLAMA_STATE_SEQ_FLAGS_ON_DEVICE);
 
                 llama_memory_seq_rm(llama_get_memory(ctx_dft.get()), seq_id, ckpt.pos_max + 1, -1);
@@ -228,7 +235,7 @@ int main(int argc, char ** argv) {
         }
 
         // evaluate the same batch with the draft model
-        {
+        if (ctx_dft) {
             // TODO: extend to support MTP, Eagle, etc. See server code for reference
             llama_decode(ctx_dft.get(), batch_tgt);
         }
@@ -266,7 +273,7 @@ int main(int argc, char ** argv) {
                 llama_memory_seq_rm(llama_get_memory(ctx_tgt), seq_id, ckpt.pos_max + 1, -1);
             }
 
-            {
+            if (ctx_dft) {
                 ckpt.load_dft(ctx_dft.get(), seq_id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY | LLAMA_STATE_SEQ_FLAGS_ON_DEVICE);
 
                 llama_memory_seq_rm(llama_get_memory(ctx_dft.get()), seq_id, ckpt.pos_max + 1, -1);
@@ -320,8 +327,10 @@ int main(int argc, char ** argv) {
         {
             LOG_DBG("clear kv cache from any extra tokens, n_past = %d\n", n_past);
 
-            llama_memory_seq_rm(llama_get_memory(ctx_tgt),       seq_id, n_past, -1);
-            llama_memory_seq_rm(llama_get_memory(ctx_dft.get()), seq_id, n_past, -1);
+            llama_memory_seq_rm(llama_get_memory(ctx_tgt), seq_id, n_past, -1);
+            if (ctx_dft) {
+                llama_memory_seq_rm(llama_get_memory(ctx_dft.get()), seq_id, n_past, -1);
+            }
         }
 
         if ((params.n_predict >= 0 && n_predict > params.n_predict) || has_eos) {

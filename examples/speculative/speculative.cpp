@@ -2,6 +2,7 @@
 #include "common.h"
 #include "sampling.h"
 #include "log.h"
+#include "mtp.h"
 #include "llama.h"
 
 #include <algorithm>
@@ -78,6 +79,11 @@ int main(int argc, char ** argv) {
 
     model_tgt = llama_init_tgt->model();
     ctx_tgt   = llama_init_tgt->context();
+
+    if (common_mtp_assistant_is_attached(model_tgt)) {
+        LOG_ERR("%s: attached MTP assistants are not supported by this example; use llama-speculative-simple, llama-cli, or llama-server\n", __func__);
+        return 1;
+    }
 
     // load the draft model
     params.devices = params.speculative.draft.devices;

@@ -25,7 +25,6 @@
 // is driven by the attached-MTP speculative-decoding path.
 
 static llm_graph_params graph_params_for_gemma4_mtp(llm_graph_params p, const llama_model & mtp) {
-    p.arch    = mtp.arch;
     p.hparams = mtp.hparams;
     p.gtype   = LLM_GRAPH_TYPE_DECODER_MTP;
     return p;
