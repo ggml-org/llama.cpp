@@ -593,6 +593,22 @@ static bool set_socket_perf_options(sockfd_t sockfd) {
         GGML_LOG_DEBUG("ggml-rpc: SO_KEEPALIVE failed (continuing)\n");
     }
 
+#if defined(__linux__) && defined(TCP_KEEPIDLE) && defined(TCP_KEEPINTVL) && defined(TCP_KEEPCNT)
+    // Tighten the default Linux keepalive timing so a silently-dead peer
+    // is detected within ~90 seconds (60 idle + 3 × 10s probes) instead of
+    // the default ~2 hours. Configurable via GGML_RPC_KEEPALIVE_S to
+    // override the idle window.
+    int idle_s = 60;
+    if (const char * v = std::getenv("GGML_RPC_KEEPALIVE_S")) {
+        int parsed = std::atoi(v); if (parsed >= 10) idle_s = parsed;
+    }
+    int intvl_s = 10;
+    int cnt     = 3;
+    setsockopt(sockfd, IPPROTO_TCP, TCP_KEEPIDLE,  (char *)&idle_s,  sizeof(idle_s));
+    setsockopt(sockfd, IPPROTO_TCP, TCP_KEEPINTVL, (char *)&intvl_s, sizeof(intvl_s));
+    setsockopt(sockfd, IPPROTO_TCP, TCP_KEEPCNT,   (char *)&cnt,     sizeof(cnt));
+#endif
+
 #if defined(__linux__) && defined(TCP_QUICKACK)
     // Disable the default delayed-ACK timer (~40 ms). RPC traffic is
     // request/response heavy; immediate ACKs avoid stalling the sender on
