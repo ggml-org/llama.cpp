@@ -91,10 +91,10 @@ extern TURBO_IQ_IMPORT float g_innerq_scale_inv_host[INNERQ_MAX_CHANNELS];
 TURBO_IQ_IMPORT bool turbo_innerq_needs_tensor_update(void);
 TURBO_IQ_IMPORT void turbo_innerq_mark_tensor_updated(void);
 #else
-static bool  g_innerq_finalized = false;
-static float g_innerq_scale_inv_host[INNERQ_MAX_CHANNELS] = {};
-static bool turbo_innerq_needs_tensor_update(void) { return false; }
-static void turbo_innerq_mark_tensor_updated(void) {}
+[[maybe_unused]] static bool  g_innerq_finalized = false;
+[[maybe_unused]] static float g_innerq_scale_inv_host[INNERQ_MAX_CHANNELS] = {};
+[[maybe_unused]] static bool turbo_innerq_needs_tensor_update(void) { return false; }
+[[maybe_unused]] static void turbo_innerq_mark_tensor_updated(void) {}
 #endif
 
 //
@@ -2274,8 +2274,6 @@ void llama_kv_cache::state_write_data(llama_io_write_i & io, const cell_ranges_t
     // Iterate and write all the keys first, each row is a cell
     // Get whole range at a time
     for (const auto & layer : layers) {
-        const uint32_t il = layer.il;
-
         auto * k = layer.k_stream[cr.strm];
 
         // Use actual tensor width (may be padded for turbo types: e.g. 576→640)
@@ -2299,8 +2297,6 @@ void llama_kv_cache::state_write_data(llama_io_write_i & io, const cell_ranges_t
 
     if (!v_trans) {
         for (const auto & layer : layers) {
-            const uint32_t il = layer.il;
-
             auto * v = layer.v_stream[cr.strm];
             if (!v) {
                 continue;
