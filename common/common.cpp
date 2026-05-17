@@ -1189,10 +1189,7 @@ common_init_result::common_init_result(common_params & params) :
                                         COMMON_SPECULATIVE_TYPE_DRAFT_MTP) != params.speculative.types.end();
     if (spec_type_draft_mtp && !params.speculative.draft.mparams.path.empty()) {
         auto params_mtp = params;
-        params_mtp.devices      = params.speculative.draft.devices;
         params_mtp.model        = params.speculative.draft.mparams;
-        params_mtp.n_gpu_layers = params.speculative.draft.n_gpu_layers;
-        params_mtp.tensor_buft_overrides = params.speculative.draft.tensor_buft_overrides;
 
         auto mparams_mtp = common_model_params_to_llama(params_mtp);
         const int rc = common_mtp_assistant_load_from_file(model, params.speculative.draft.mparams.path.c_str(), mparams_mtp);

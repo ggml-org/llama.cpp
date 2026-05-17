@@ -701,8 +701,16 @@ struct common_speculative_state_attached_mtp : public common_speculative_impl {
     int32_t n_embd = 0;
 
     std::vector<std::vector<float>> pending_h;
+    std::vector<uint8_t> pending_h_ready;
+    std::vector<llama_pos> pending_pos;
+    std::vector<llama_token> pending_token;
+
     std::vector<std::vector<float>> verify_h;
+    std::vector<std::vector<llama_pos>> verify_pos;
+    std::vector<std::vector<llama_token>> verify_token;
     std::vector<int32_t> verify_h_rows;
+
+    std::vector<llama_tokens> seen_tokens;
 
     std::vector<int32_t> i_batch_beg;
     std::vector<int32_t> i_batch_end;
@@ -720,14 +728,34 @@ struct common_speculative_state_attached_mtp : public common_speculative_impl {
         common_mtp_set_embeddings_pre_norm(ctx_tgt, true);
 
         pending_h.assign(n_seq, std::vector<float>(n_embd, 0.0f));
+        pending_h_ready.assign(n_seq, false);
+        pending_pos.assign(n_seq, -1);
+        pending_token.assign(n_seq, LLAMA_TOKEN_NULL);
         verify_h.assign(n_seq, {});
+        verify_pos.assign(n_seq, {});
+        verify_token.assign(n_seq, {});
         verify_h_rows.assign(n_seq, 0);
+        seen_tokens.assign(n_seq, {});
         i_batch_beg.assign(n_seq, -1);
         i_batch_end.assign(n_seq, -1);
     }
 
-    void begin(llama_seq_id /*seq_id*/, const llama_tokens & /*prompt*/) override {
-        // process() seeds pending_h from the target pre-norm hidden rows.
+    void begin(llama_seq_id seq_id, const llama_tokens & prompt) override {
+        if (seq_id < 0 || seq_id >= (llama_seq_id) n_seq || prompt.empty()) {
+            return;
+        }
+
+        bool ready = pending_h_ready[seq_id] &&
+            pending_pos[seq_id] == (llama_pos) (prompt.size() - 1) &&
+            pending_token[seq_id] == prompt.back();
+
+        if (ready) {
+            const auto & seen = seen_tokens[seq_id];
+            ready = seen.size() >= prompt.size() &&
+                std::equal(prompt.begin(), prompt.end(), seen.begin());
+        }
+
+        pending_h_ready[seq_id] = ready;
     }
 
     bool process(const llama_batch & batch_in) override {
@@ -743,6 +771,14 @@ struct common_speculative_state_attached_mtp : public common_speculative_impl {
             const llama_seq_id seq_id = batch_in.seq_id[k][0];
             if (seq_id < 0 || seq_id >= (llama_seq_id) n_seq) {
                 continue;
+            }
+            const llama_pos pos = batch_in.pos[k];
+            if (pos >= 0) {
+                auto & seen = seen_tokens[seq_id];
+                if ((size_t) pos >= seen.size()) {
+                    seen.resize((size_t) pos + 1, LLAMA_TOKEN_NULL);
+                }
+                seen[pos] = batch_in.token[k];
             }
             i_batch_end[seq_id] = k;
             if (i_batch_beg[seq_id] < 0) {
@@ -761,18 +797,26 @@ struct common_speculative_state_attached_mtp : public common_speculative_impl {
             const int32_t n_rows = i_batch_end[seq_id] - i_batch_beg[seq_id] + 1;
             verify_h_rows[seq_id] = n_rows;
             verify_h[seq_id].resize((size_t) n_rows * n_embd);
+            verify_pos[seq_id].resize(n_rows);
+            verify_token[seq_id].resize(n_rows);
 
             for (int32_t i = 0; i < n_rows; ++i) {
-                const float * h = common_mtp_get_embeddings_pre_norm_ith(ctx_tgt, i_batch_beg[seq_id] + i);
+                const int32_t i_batch = i_batch_beg[seq_id] + i;
+                const float * h = common_mtp_get_embeddings_pre_norm_ith(ctx_tgt, i_batch);
                 if (!h) {
                     LOG_ERR("%s: missing target pre-norm hidden row\n", __func__);
                     return false;
                 }
                 std::memcpy(verify_h[seq_id].data() + (size_t) i * n_embd, h, row_bytes);
+                verify_pos[seq_id][i] = batch_in.pos[i_batch];
+                verify_token[seq_id][i] = batch_in.token[i_batch];
             }
 
             std::memcpy(pending_h[seq_id].data(),
                     verify_h[seq_id].data() + (size_t) (n_rows - 1) * n_embd, row_bytes);
+            pending_h_ready[seq_id] = true;
+            pending_pos[seq_id] = verify_pos[seq_id][n_rows - 1];
+            pending_token[seq_id] = verify_token[seq_id][n_rows - 1];
         }
 
         return true;
@@ -792,6 +836,10 @@ struct common_speculative_state_attached_mtp : public common_speculative_impl {
 
             const int32_t n_max = dp.n_max > 0 ? std::min(params.n_max, dp.n_max) : params.n_max;
             if (n_max <= 0) {
+                continue;
+            }
+            if (!pending_h_ready[seq_id] ||
+                    pending_pos[seq_id] != dp.n_past - 1) {
                 continue;
             }
 
@@ -827,6 +875,9 @@ struct common_speculative_state_attached_mtp : public common_speculative_impl {
         std::memcpy(pending_h[seq_id].data(),
                 verify_h[seq_id].data() + (size_t) i_h * n_embd,
                 (size_t) n_embd * sizeof(float));
+        pending_h_ready[seq_id] = true;
+        pending_pos[seq_id] = verify_pos[seq_id][i_h];
+        pending_token[seq_id] = verify_token[seq_id][i_h];
     }
 
     bool need_embd() const override {
@@ -1400,8 +1451,11 @@ common_speculative * common_speculative_init(common_params_speculative & params,
             if (!has_draft_model_path) {
                 LOG_WRN("%s: draft model is not specified - cannot use 'draft' type\n", __func__);
                 has_draft_simple = false;
+            } else if (params.draft.ctx_dft == nullptr) {
+                LOG_WRN("%s: draft context is not available - cannot use 'draft-simple' type\n", __func__);
+                has_draft_simple = false;
             }
-        } else if (has_draft_model_path && !has_mtp && !has_draft_eagle3) {
+        } else if (has_draft_model_path && params.draft.ctx_dft != nullptr && !has_mtp && !has_draft_eagle3) {
             LOG_WRN("%s: draft model is specified but 'draft' speculative type is not explicitly enabled - enabling it\n", __func__);
             has_draft_simple = true;
         }
@@ -1576,6 +1630,12 @@ void common_speculative_draft(common_speculative * spec) {
         if (n_drafting == 0) {
             return;
         }
+
+        for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) dparams.size(); ++seq_id) {
+            if (dparams[seq_id].drafting) {
+                spec->impl_last[seq_id] = nullptr;
+            }
+        }
     }
 
     for (auto & impl : spec->impls) {
@@ -1639,7 +1699,9 @@ void common_speculative_draft(common_speculative * spec) {
 void common_speculative_accept(common_speculative * spec, llama_seq_id seq_id, uint16_t n_accepted) {
     common_speculative_impl * impl = spec->impl_last[seq_id];
 
-    GGML_ASSERT(impl);
+    if (impl == nullptr) {
+        return;
+    }
 
     // TODO: currently only the implementation that generated the draft is used to accept it
     //       however, some implementations (such as MTP) need to also "see" the accepted tokens
