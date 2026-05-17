@@ -4852,7 +4852,15 @@ static void ggml_vk_load_shaders(vk_device& device) {
             {"gated_delta_net_f32_d64",     "gated_delta_net_f32_d64_kda"},
             {"gated_delta_net_f32_d128",    "gated_delta_net_f32_d128_kda"},
         };
-        const bool use_subgroup_reduce = device->subgroup_arithmetic;
+        bool use_subgroup_reduce = device->subgroup_arithmetic;
+#if defined(__APPLE__)
+        // MoltenVK/AMD: subgroup operations (subgroupAdd/subgroupClusteredAdd) produce
+        // incorrect results due to broken Metal translation of 64-wide subgroups.
+        // Fall back to shared memory reduction (reduce_add_shmem in the shader).
+        if (device->vendor_id == VK_VENDOR_ID_AMD && device->driver_id == vk::DriverId::eMoltenvk) {
+            use_subgroup_reduce = false;
+        }
+#endif
         for (uint32_t si = 0; si < 3; si++) {
             const uint32_t S_V = gdn_sizes[si];
             GGML_ASSERT(is_pow2(S_V));
