@@ -471,7 +471,7 @@ void common_ngram_map_draft(common_ngram_map & map,
         sum_occur += curr_occur;
     }
 
-    LOG_INF("%s: key_offset = %zu, max_occur = %d, sum_occur = %d, slot_max = %d [%zu/%d, %zu/%d, %zu/%d, %zu/%d]\n", __func__,
+    LOG_DBG("%s: key_offset = %zu, max_occur = %d, sum_occur = %d, slot_max = %d [%zu/%d, %zu/%d, %zu/%d, %zu/%d]\n", __func__,
             key_offset,
             max_occur, sum_occur, slot_max,
             curr_key.values[0].value_idx, curr_key.values[0].value_num,
