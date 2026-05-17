@@ -1513,8 +1513,8 @@ static void rpc_serve_client(const std::vector<ggml_backend_t> & backends, const
         return;
     }
 
-    if (hello_input_size != sizeof(rpc_msg_hello_req)) {
-        GGML_LOG_ERROR("HELLO request size mismatch (%zu vs %zu) — client needs upgrade to protocol v%d.x\n",
+    if (hello_input_size < sizeof(rpc_msg_hello_req)) {
+        GGML_LOG_ERROR("HELLO request too small (%zu vs %zu) — client needs upgrade to protocol v%d.x\n",
                        (size_t)hello_input_size, sizeof(rpc_msg_hello_req), RPC_PROTO_MAJOR_VERSION);
         return;
     }
@@ -1522,6 +1522,15 @@ static void rpc_serve_client(const std::vector<ggml_backend_t> & backends, const
     rpc_msg_hello_req req = {};
     if (!sock->recv_data(&req, sizeof(req))) {
         return;
+    }
+    // Forward compatibility: a newer client may send a larger HELLO with
+    // additional trailing fields we don't yet understand. Consume and
+    // discard the extra bytes so they don't corrupt the next command read.
+    if (hello_input_size > sizeof(rpc_msg_hello_req)) {
+        std::vector<uint8_t> discard(hello_input_size - sizeof(rpc_msg_hello_req));
+        if (!sock->recv_data(discard.data(), discard.size())) {
+            return;
+        }
     }
 
     rpc_msg_hello_rsp rsp = {};
