@@ -221,7 +221,7 @@ llama_model_zaya::graph::graph(const llama_model & model, const llm_graph_params
             ggml_tensor * cur_state_src = ggml_cont(ctx0, cur);
             ggml_tensor * cur_seq = ggml_reshape_3d(ctx0, cur_state_src, n_embd, n_seq_tokens, n_seqs);
 
-            ggml_tensor * hs_d = ggml_reshape_3d(ctx0, prev_hs, n_embd, 1, n_seqs);
+            ggml_tensor * hs_d = ggml_reshape_3d(ctx0, ggml_cont(ctx0, prev_hs), n_embd, 1, n_seqs);
             if (n_seq_tokens > 1) {
                 ggml_tensor * cur_shift = ggml_view_3d(ctx0, cur_seq, n_embd, n_seq_tokens - 1, n_seqs,
                         cur_seq->nb[1],
@@ -288,11 +288,13 @@ llama_model_zaya::graph::graph(const llama_model & model, const llm_graph_params
             ggml_build_forward_expand(gf, ggml_cpy(ctx0, last_hs, prev_hs_update_target));
 
             ggml_tensor * conv_dw = layer.cca_conv_dw;
-            if (conv_dw->type != GGML_TYPE_F16) {
-                conv_dw = ggml_cont(ctx0, ggml_cast(ctx0, conv_dw, GGML_TYPE_F16));
+            if (conv_dw->type != GGML_TYPE_F32) {
+                conv_dw = ggml_cont(ctx0, ggml_cast(ctx0, conv_dw, GGML_TYPE_F32));
             }
-            conv_dw = ggml_reshape_3d(ctx0, conv_dw, conv_dw->ne[0], 1, n_qk);
-            ggml_tensor * QK = ggml_conv_1d_dw(ctx0, conv_dw, conv_input, 1, 0, 1);
+            // conv_input is [L, n_qk, n_seqs], ssm_conv outputs [n_qk, n_tokens, n_seqs]
+            ggml_tensor * QK = ggml_ssm_conv(ctx0, conv_input, conv_dw);
+            // permute from [n_qk, n_tokens, n_seqs] to [n_tokens, n_qk, n_seqs]
+            QK = ggml_cont(ctx0, ggml_permute(ctx0, QK, 1, 0, 2, 3));
             if (layer.cca_conv_dw_b) {
                 QK = ggml_add(ctx0, QK, ggml_reshape_3d(ctx0, layer.cca_conv_dw_b, 1, n_qk, 1));
             }
@@ -307,6 +309,8 @@ llama_model_zaya::graph::graph(const llama_model & model, const llm_graph_params
             cb(QK, "QK_grp", il);
 
             QK = ggml_cont(ctx0, ggml_permute(ctx0, QK, 1, 0, 2, 3));
+            // QK is now [n_qk, n_seq_tokens, n_seqs]
+            // Flatten to 2D: [n_qk, n_tokens] where n_tokens = n_seq_tokens * n_seqs
             QK = ggml_reshape_2d(ctx0, QK, n_qk, n_tokens);
 
             ggml_tensor * Q_conv = ggml_view_2d(ctx0, QK, n_embd_q, n_tokens, QK->nb[1], 0);
