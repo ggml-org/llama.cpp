@@ -134,12 +134,6 @@ int main(int argc, char ** argv) {
     // target model sampling context
     common_sampler_ptr smpl(common_sampler_init(model_tgt, params.sampling));
 
-    // eval the prompt
-    llama_decode(ctx_tgt,       llama_batch_get_one(inp.data(), inp.size() - 1));
-    if (ctx_dft) {
-        llama_decode(ctx_dft.get(), llama_batch_get_one(inp.data(), inp.size() - 1));
-    }
-
     // note: keep the last token separate!
     llama_token id_last = inp.back();
 
@@ -152,7 +146,31 @@ int main(int argc, char ** argv) {
     // init the speculator
     const auto & params_spec = params.speculative;
 
-    struct common_speculative * spec = common_speculative_init(params.speculative, 1);
+    struct common_speculative * spec = spec_mtp_attached ? common_speculative_init(params.speculative, 1) : nullptr;
+
+    // eval the prompt
+    {
+        llama_batch batch_prompt = llama_batch_init(inp.size() - 1, 0, 1);
+        for (size_t i = 0; i + 1 < inp.size(); ++i) {
+            common_batch_add(batch_prompt, inp[i], i, { seq_id }, true);
+        }
+
+        llama_decode(ctx_tgt, batch_prompt);
+        if (spec_mtp_attached && !common_speculative_process(spec, batch_prompt)) {
+            LOG_ERR("%s: failed to process prompt batch for attached MTP\n", __func__);
+            llama_batch_free(batch_prompt);
+            return 1;
+        }
+        if (ctx_dft) {
+            llama_decode(ctx_dft.get(), batch_prompt);
+        }
+
+        llama_batch_free(batch_prompt);
+    }
+
+    if (!spec) {
+        spec = common_speculative_init(params.speculative, 1);
+    }
 
     common_speculative_begin(spec, seq_id, prompt_tgt);
 
@@ -232,6 +250,10 @@ int main(int argc, char ** argv) {
             //LOG_DBG("target batch: %s\n", string_from(ctx_tgt, batch_tgt).c_str());
 
             llama_decode(ctx_tgt, batch_tgt);
+            if (spec_mtp_attached && !common_speculative_process(spec, batch_tgt)) {
+                LOG_ERR("%s: failed to process verification batch for attached MTP\n", __func__);
+                return 1;
+            }
         }
 
         // evaluate the same batch with the draft model

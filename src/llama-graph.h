@@ -582,16 +582,18 @@ struct llm_graph_params {
     //   having the same topology allows us to reuse the graph in some cases
     bool allow_reuse(const llm_graph_params & other) const {
         // first check the ubatch
+        const bool can_reuse_inputs =
+            gtype == LLM_GRAPH_TYPE_DECODER_MTP && other.gtype == LLM_GRAPH_TYPE_DECODER_MTP ?
+                ubatch.token && other.ubatch.token && ubatch.embd && other.ubatch.embd :
+                ((!ubatch.token && !other.ubatch.token) || (!ubatch.embd && !other.ubatch.embd));
+
         bool can_reuse_ubatch =
             ubatch.equal_seqs() == other.ubatch.equal_seqs() &&
             ubatch.n_tokens     == other.ubatch.n_tokens &&
             ubatch.n_seq_tokens == other.ubatch.n_seq_tokens &&
             ubatch.n_seqs       == other.ubatch.n_seqs &&
             ubatch.n_seqs_unq   == other.ubatch.n_seqs_unq &&
-            (
-                (!ubatch.token && !other.ubatch.token) ||
-                (!ubatch.embd  && !other.ubatch.embd)
-            );
+            can_reuse_inputs;
 
         // when we split the batch using "equal_seqs" we have to verify that the participating sequences are the same
         //   the reason is because the set of attention streams would be different for different sequences
