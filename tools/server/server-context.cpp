@@ -4152,19 +4152,19 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
     std::string conversation_id;
     if (stream) {
         // request headers preserve the wire casing, the scan is case insensitive
+        static constexpr char   target[]   = "x-conversation-id";
+        static constexpr size_t target_len = sizeof(target) - 1;
         for (const auto & [hk, hv] : req.headers) {
-            if (hk.size() == 17) {
-                bool match = true;
-                static const char target[] = "x-conversation-id";
-                for (size_t i = 0; i < 17; ++i) {
-                    char c = hk[i];
-                    if (c >= 'A' && c <= 'Z') c = char(c + 32);
-                    if (c != target[i]) { match = false; break; }
-                }
-                if (match) {
-                    conversation_id = hv;
-                    break;
-                }
+            if (hk.size() != target_len) continue;
+            bool match = true;
+            for (size_t i = 0; i < target_len; ++i) {
+                char c = hk[i];
+                if (c >= 'A' && c <= 'Z') c = char(c + 32);
+                if (c != target[i]) { match = false; break; }
+            }
+            if (match) {
+                conversation_id = hv;
+                break;
             }
         }
     }

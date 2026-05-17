@@ -1285,16 +1285,17 @@ server_http_res_ptr server_models::proxy_request(const server_http_req & req, co
     // enforces the cross child invariant 'one session per convId', safe to call unconditionally
     // and cheap on loopback. ignored for any request without that header
     {
+        static constexpr char   target[]   = "x-conversation-id";
+        static constexpr size_t target_len = sizeof(target) - 1;
         std::string conv_id;
         for (const auto & [hk, hv] : req.headers) {
-            if (hk.size() == 17) {
-                std::string lower(hk);
-                std::transform(lower.begin(), lower.end(), lower.begin(),
-                    [](unsigned char c) { return (c >= 'A' && c <= 'Z') ? char(c + 32) : char(c); });
-                if (lower == "x-conversation-id") {
-                    conv_id = hv;
-                    break;
-                }
+            if (hk.size() != target_len) continue;
+            std::string lower(hk);
+            std::transform(lower.begin(), lower.end(), lower.begin(),
+                [](unsigned char c) { return (c >= 'A' && c <= 'Z') ? char(c + 32) : char(c); });
+            if (lower == target) {
+                conv_id = hv;
+                break;
             }
         }
         if (!conv_id.empty()) {
