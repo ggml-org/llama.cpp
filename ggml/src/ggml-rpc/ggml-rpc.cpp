@@ -42,7 +42,7 @@ static int rpc_deadman_seconds() {
 namespace fs = std::filesystem;
 
 // macro for nicer error messages on server crash
-#define RPC_STATUS_ASSERT(x) if (!(x)) GGML_ABORT("Remote RPC server crashed or returned malformed response")
+#define RPC_STATUS_ASSERT(x) do { if (!(x)) { GGML_ABORT("Remote RPC server crashed or returned malformed response (in %s at %s:%d)", __func__, __FILE__, __LINE__); } } while (0)
 
 // all RPC structures must be packed
 #pragma pack(push, 1)
