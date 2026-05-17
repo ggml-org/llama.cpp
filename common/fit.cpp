@@ -153,7 +153,8 @@ static std::vector<llama_device_memory_data> common_get_device_memory_data(
 static void common_params_fit_impl(
         const char * path_model, struct llama_model_params * mparams, struct llama_context_params * cparams,
         float * tensor_split, struct llama_model_tensor_buft_override * tensor_buft_overrides,
-        size_t * margins_s, uint32_t n_ctx_min, enum ggml_log_level log_level) {
+        size_t * margins_s, uint32_t n_ctx_min, enum ggml_log_level log_level, bool show_mem) {
+    const int probe_verbosity = show_mem ? LOG_LEVEL_INFO : LOG_LEVEL_TRACE;
     if (mparams->split_mode == LLAMA_SPLIT_MODE_TENSOR) {
         throw common_params_fit_exception("llama_params_fit is not implemented for SPLIT_MODE_TENSOR, abort");
     }
@@ -219,7 +220,8 @@ static void common_params_fit_impl(
         }
     } else {
         if (nd > 1) {
-            LOG_TRC("%s: projected memory use with initial parameters [MiB]:\n", __func__);
+            LOG_TMPL(GGML_LOG_LEVEL_INFO, probe_verbosity,
+                "%s: projected memory use with initial parameters [MiB]:\n", __func__);
         }
         for (size_t id = 0; id < nd; id++) {
             const llama_device_memory_data & dmd = dmds_full[id];
@@ -234,12 +236,14 @@ static void common_params_fit_impl(
             sum_projected_model += dmd.mb.model;
 
             if (nd > 1) {
-                LOG_TRC("%s:   - %s: %6" PRId64 " total, %6" PRId64 " used, %6" PRId64 " free vs. target of %6" PRId64 "\n",
+                LOG_TMPL(GGML_LOG_LEVEL_INFO, probe_verbosity,
+                    "%s:   - %s: %6" PRId64 " total, %6" PRId64 " used, %6" PRId64 " free vs. target of %6" PRId64 "\n",
                     __func__, dev_names[id].c_str(), dmd.total/MiB, projected_used/MiB, projected_free/MiB, margins[id]/MiB);
             }
         }
         assert(sum_free >= 0 && sum_projected_used >= 0);
-        LOG_TRC("%s: projected to use %" PRId64 " MiB of device memory vs. %" PRId64 " MiB of free device memory\n",
+        LOG_TMPL(GGML_LOG_LEVEL_INFO, probe_verbosity,
+            "%s: projected to use %" PRId64 " MiB of device memory vs. %" PRId64 " MiB of free device memory\n",
             __func__, sum_projected_used/MiB, sum_free/MiB);
         if (nd == 1) {
             if (projected_free_per_device[0] >= margins[0]) {
@@ -771,11 +775,12 @@ enum common_params_fit_status common_fit_params(
         llama_model_tensor_buft_override * tensor_buft_overrides,
         size_t * margins,
         uint32_t n_ctx_min,
-        ggml_log_level log_level) {
+        ggml_log_level log_level,
+        bool show_mem) {
     const int64_t t0_us = llama_time_us();
     common_params_fit_status status = COMMON_PARAMS_FIT_STATUS_SUCCESS;
     try {
-        common_params_fit_impl(path_model, mparams, cparams, tensor_split, tensor_buft_overrides, margins, n_ctx_min, log_level);
+        common_params_fit_impl(path_model, mparams, cparams, tensor_split, tensor_buft_overrides, margins, n_ctx_min, log_level, show_mem);
         LOG_TRC("%s: successfully fit params to free device memory\n", __func__);
     } catch (const common_params_fit_exception & e) {
         LOG_WRN("%s: failed to fit params to free device memory: %s\n", __func__, e.what());
