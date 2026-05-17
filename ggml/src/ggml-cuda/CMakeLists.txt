@@ -5,6 +5,11 @@ find_package(CUDAToolkit)
 if (CUDAToolkit_FOUND)
     message(STATUS "CUDA Toolkit found")
 
+    # CUDA 12.8–13.x / glibc >= 2.40: rsqrt noexcept mismatch
+    # Must run before enable_language(CUDA) to avoid configure-time failure
+    include(${CMAKE_CURRENT_LIST_DIR}/check-cuda-rsqrt-noexcept.cmake)
+    ggml_check_cuda_rsqrt_noexcept()
+
     if (NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
         # native == GPUs available at build time
         # 50     == Maxwell, lowest CUDA 12 standard
