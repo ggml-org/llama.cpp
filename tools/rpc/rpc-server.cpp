@@ -1,4 +1,5 @@
 #include "ggml-rpc.h"
+#include <csignal>
 #include "rpc-trace.h"
 #ifdef _WIN32
 #  define NOMINMAX
@@ -288,8 +289,26 @@ static std::vector<ggml_backend_dev_t> get_devices(const rpc_server_params & par
     return devices;
 }
 
+
+// Install signal handlers so SIGINT/SIGTERM flush traced spans before exit.
+// Without this, `kill <pid>` (default SIGTERM) bypasses atexit() entirely
+// and any unflushed BatchSpanProcessor queue is lost.
+static void rpc_signal_shutdown(int signum) {
+    rpc_trace_shutdown();
+    // Re-raise with default disposition so the kernel produces the expected
+    // exit status (e.g. 128 + SIGTERM).
+    std::signal(signum, SIG_DFL);
+    std::raise(signum);
+}
+
+static void install_rpc_signal_handlers() {
+    std::signal(SIGINT,  rpc_signal_shutdown);
+    std::signal(SIGTERM, rpc_signal_shutdown);
+}
+
 int main(int argc, char * argv[]) {
     RPC_TRACE_INIT();
+    install_rpc_signal_handlers();
 
     std::setlocale(LC_NUMERIC, "C");
 

@@ -66,3 +66,31 @@ void rpc_trace_span_end (rpc_trace_span_t span);
 #define RPC_TRACE_BYTES(s, k, v)        rpc_trace_set_bytes((s), (k), (v))
 #define RPC_TRACE_FAIL(s, msg)          rpc_trace_span_fail((s), (msg))
 #define RPC_TRACE_END(s)                rpc_trace_span_end((s))
+
+#ifdef __cplusplus
+// RAII span guard. Ends the span automatically on scope exit unless fail()
+// is called first. Use in C++ code paths with early returns where a manual
+// END is easy to miss.
+class rpc_trace_scope {
+public:
+    explicit rpc_trace_scope(const char * name) : span_(rpc_trace_span_begin(name)) {}
+    ~rpc_trace_scope() { end(); }
+    rpc_trace_scope(const rpc_trace_scope &)            = delete;
+    rpc_trace_scope & operator=(const rpc_trace_scope &) = delete;
+
+    rpc_trace_span_t handle() const { return span_; }
+    void set_int  (const char * k, long long v) { rpc_trace_set_int  (span_, k, v); }
+    void set_str  (const char * k, const char * v) { rpc_trace_set_str  (span_, k, v); }
+    void set_bytes(const char * k, unsigned long long v) { rpc_trace_set_bytes(span_, k, (unsigned long) v); }
+    void fail(const char * msg) {
+        if (!ended_) { rpc_trace_span_fail(span_, msg); ended_ = true; }
+    }
+    void end() {
+        if (!ended_) { rpc_trace_span_end(span_); ended_ = true; }
+    }
+private:
+    rpc_trace_span_t span_;
+    bool ended_ = false;
+};
+#endif // __cplusplus
+

@@ -1540,6 +1540,12 @@ static void rpc_serve_client(const std::vector<ggml_backend_t> & backends, const
             GGML_LOG_ERROR("Unknown command: %d\n", cmd);
             break;
         }
+        // RAII span guard — auto-ends on any scope exit including the early
+        // `return`s that the case bodies use on send/recv errors. set_int
+        // takes long long, the cmd is uint8_t so no narrowing concern.
+        rpc_trace_scope srv_span("ggml.rpc.server.dispatch");
+        srv_span.set_int("rpc.cmd", (long long) cmd);
+        srv_span.set_str("rpc.cmd_name", rpc_cmd_name((enum rpc_cmd) cmd));
         switch (cmd) {
             case RPC_CMD_HELLO: {
                 // HELLO command is handled above
