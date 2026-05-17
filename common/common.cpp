@@ -1201,6 +1201,7 @@ common_init_result::common_init_result(common_params & params) :
         } else if (rc != -2) {
             LOG_ERR("%s: failed to load attached MTP assistant '%s' (rc=%d)\n",
                     __func__, params.speculative.draft.mparams.path.c_str(), rc);
+            pimpl->model.reset();
             return;
         }
     }

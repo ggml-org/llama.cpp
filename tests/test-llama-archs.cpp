@@ -390,6 +390,9 @@ static bool arch_supported(const llm_arch arch) {
     if (arch == LLM_ARCH_GEMMA4) {
         return false; // FIXME @ngxson
     }
+    if (arch == LLM_ARCH_GEMMA4_ASSISTANT) {
+        return false; // MTP assistant requires an attached Gemma 4 target context.
+    }
     if (arch == LLM_ARCH_LLAMA_EMBED || arch == LLM_ARCH_GEMMA_EMBEDDING || arch == LLM_ARCH_T5ENCODER) {
         return false; // FIXME Embedding (?) models produce inconsistent results.
     }
