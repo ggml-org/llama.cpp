@@ -573,6 +573,36 @@ uint64_t socket_t::get_negotiated_features() const {
     return pimpl->negotiated_features;
 }
 
+bool socket_t::is_same_host() const {
+    // Loopback is the cheap-and-correct signal for "same host". On Linux
+    // a connection from a process on the same machine arrives over the
+    // lo interface unless the user explicitly bound to an external IP,
+    // in which case it's still routed locally but we can't tell the two
+    // halves of "same physical host" apart from a separate machine on the
+    // same subnet — be conservative and only return true for the
+    // unambiguous loopback case.
+    sockaddr_storage addr{};
+    socklen_t addr_len = sizeof(addr);
+    if (getpeername(pimpl->fd, reinterpret_cast<sockaddr *>(&addr), &addr_len) != 0) {
+        return false;
+    }
+    if (addr.ss_family == AF_INET) {
+        const auto * a = reinterpret_cast<const sockaddr_in *>(&addr);
+        // 127.0.0.0/8 (network byte order: high byte == 127)
+        return (ntohl(a->sin_addr.s_addr) >> 24) == 127;
+    }
+    if (addr.ss_family == AF_INET6) {
+        const auto * a = reinterpret_cast<const sockaddr_in6 *>(&addr);
+        // ::1
+        const uint8_t * b = a->sin6_addr.s6_addr;
+        for (int i = 0; i < 15; ++i) {
+            if (b[i] != 0) return false;
+        }
+        return b[15] == 1;
+    }
+    return false;
+}
+
 static bool is_valid_fd(sockfd_t sockfd) {
 #ifdef _WIN32
     return sockfd != INVALID_SOCKET;

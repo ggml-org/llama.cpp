@@ -113,6 +113,11 @@ struct rpc_msg_hello_rsp {
 // reserved for trace-context propagation; no feature actually uses any
 // bit yet — this commit lands the plumbing only.
 #define GGML_RPC_FEATURE_TRACE_CTX_V1 (1ull << 0)
+// Same-host shared-memory transport. Advertised by both peers only when
+// they are on the same machine (see socket_t::is_same_host). No wire
+// implication on its own — gating bit for the SHM data path landed in
+// follow-up commits.
+#define GGML_RPC_FEATURE_SHM_V1       (1ull << 1)
 
 struct rpc_msg_caps_req {
     uint64_t client_features;
@@ -126,7 +131,17 @@ struct rpc_msg_caps_rsp {
 // Local feature bitmap advertised in the CAPS exchange. Bit 0 is
 // TRACE_CTX_V1 (W3C trace_id + parent_span_id prepended to every
 // command frame); the bit is only honored if the peer also advertises it.
-static constexpr uint64_t RPC_LOCAL_FEATURES = GGML_RPC_FEATURE_TRACE_CTX_V1;
+// Per-connection local feature bitmap. Bits that depend on transport
+// properties (same-host vs cross-host, e.g. SHM) are added conditionally
+// here so we never advertise a feature we can't actually deliver on this
+// link.
+static uint64_t compute_local_features(const socket_ptr & sock) {
+    uint64_t feats = GGML_RPC_FEATURE_TRACE_CTX_V1;
+    if (sock && sock->is_same_host()) {
+        feats |= GGML_RPC_FEATURE_SHM_V1;
+    }
+    return feats;
+}
 
 struct rpc_msg_device_count_rsp {
     uint32_t device_count;
@@ -447,7 +462,7 @@ static bool negotiate_hello(const std::shared_ptr<socket_t> & sock) {
     // Post-HELLO capabilities exchange. Only attempt if the server speaks
     // at least minor v1; older servers never see this command.
     if (response.minor >= 1) {
-        rpc_msg_caps_req caps_req = { RPC_LOCAL_FEATURES };
+        rpc_msg_caps_req caps_req = { compute_local_features(sock) };
         rpc_msg_caps_rsp caps_rsp = {};
         if (!send_rpc_cmd(sock, RPC_CMD_CAPS, &caps_req, sizeof(caps_req),
                           &caps_rsp, sizeof(caps_rsp))) {
@@ -1825,8 +1840,11 @@ static void rpc_serve_client(const std::vector<ggml_backend_t> & backends, const
                     return;
                 }
                 rpc_msg_caps_rsp response;
-                response.server_features = RPC_LOCAL_FEATURES;
-                response.negotiated      = request.client_features & RPC_LOCAL_FEATURES;
+                {
+                    uint64_t local = compute_local_features(sock);
+                    response.server_features = local;
+                    response.negotiated      = request.client_features & local;
+                }
                 sock->set_negotiated_features(response.negotiated);
                 if (!send_msg(sock, &response, sizeof(response))) {
                     return;

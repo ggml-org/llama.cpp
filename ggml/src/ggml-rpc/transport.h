@@ -31,6 +31,11 @@ struct socket_t {
     void     set_negotiated_features(uint64_t features);
     uint64_t get_negotiated_features() const;
 
+    // True when the remote peer is on this machine (loopback). Used by the
+    // CAPS exchange to gate same-host-only features such as SHM transport.
+    // Cheap: a single getpeername() + IPv4/IPv6 prefix check.
+    bool is_same_host() const;
+
     static socket_ptr create_server(const char * host, int port);
     static socket_ptr connect(const char * host, int port);
 
