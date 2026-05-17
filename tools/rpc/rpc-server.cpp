@@ -189,6 +189,11 @@ static void print_usage(int /*argc*/, char ** argv, rpc_server_params params) {
     fprintf(stderr, "  -p, --port PORT                  port to bind to (default: %d)\n", params.port);
     fprintf(stderr, "  -c, --cache                      enable local file cache\n");
     fprintf(stderr, "\n");
+    fprintf(stderr, "environment variables:\n");
+    fprintf(stderr, "  GGML_RPC_DEADMAN_S     close connection if idle this many seconds (0=off, default 0)\n");
+    fprintf(stderr, "  GGML_RPC_OTLP_ENDPOINT OTLP/gRPC endpoint for trace span export (unset=tracing off)\n");
+    fprintf(stderr, "  GGML_RPC_OTLP_SERVICE  service.name attribute for traced spans (default ggml-rpc)\n");
+    fprintf(stderr, "\n");
 }
 
 static bool rpc_server_params_parse(int argc, char ** argv, rpc_server_params & params) {
@@ -309,6 +314,11 @@ static void install_rpc_signal_handlers() {
 int main(int argc, char * argv[]) {
     RPC_TRACE_INIT();
     install_rpc_signal_handlers();
+    if (const char * ep = std::getenv("GGML_RPC_OTLP_ENDPOINT"); ep && *ep) {
+        const char * svc = std::getenv("GGML_RPC_OTLP_SERVICE");
+        fprintf(stderr, "ggml-rpc: tracing enabled, exporting to %s (service %s)\n",
+                ep, svc && *svc ? svc : "ggml-rpc");
+    }
 
     std::setlocale(LC_NUMERIC, "C");
 
