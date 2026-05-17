@@ -1280,13 +1280,12 @@ server_http_res_ptr server_models::proxy_request(const server_http_req & req, co
         std::unique_lock<std::mutex> lk(mutex);
         mapping[name].meta.last_used = ggml_time_ms();
     }
-    // when the client opts in to resumable streaming (X-Stream-Resume: 1 + non empty
-    // X-Conversation-Id), fan out a DELETE on every other ready child to evict any prior
-    // session for this conv. enforces the cross child invariant 'one session per convId',
-    // safe to call unconditionally and cheap on loopback. ignored for any other request shape
+    // when the client opts in to resumable streaming via a non empty X-Conversation-Id,
+    // fan out a DELETE on every other ready child to evict any prior session for this conv.
+    // enforces the cross child invariant 'one session per convId', safe to call unconditionally
+    // and cheap on loopback. ignored for any request without that header
     {
         std::string conv_id;
-        bool        resume_opt_in = false;
         for (const auto & [hk, hv] : req.headers) {
             if (hk.size() == 17) {
                 std::string lower(hk);
@@ -1294,17 +1293,11 @@ server_http_res_ptr server_models::proxy_request(const server_http_req & req, co
                     [](unsigned char c) { return (c >= 'A' && c <= 'Z') ? char(c + 32) : char(c); });
                 if (lower == "x-conversation-id") {
                     conv_id = hv;
-                }
-            } else if (hk.size() == 15) {
-                std::string lower(hk);
-                std::transform(lower.begin(), lower.end(), lower.begin(),
-                    [](unsigned char c) { return (c >= 'A' && c <= 'Z') ? char(c + 32) : char(c); });
-                if (lower == "x-stream-resume" && hv == "1") {
-                    resume_opt_in = true;
+                    break;
                 }
             }
         }
-        if (resume_opt_in && !conv_id.empty()) {
+        if (!conv_id.empty()) {
             fan_out_delete_others_for_conv(*this, conv_id, name);
         }
     }

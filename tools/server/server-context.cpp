@@ -4145,29 +4145,15 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
     auto & rd = res->rd;
     auto & params = this->params;
 
-    // detect background streaming opt-in via X-Stream-Resume: 1 header.
-    // when set together with a non empty X-Conversation-Id, the generation survives HTTP disconnect
-    // and can be resumed via GET /v1/stream/<conv_id>. only meaningful for streaming requests,
-    // non stream OAI calls keep the standard flow
-    bool stream    = json_value(data, "stream", false);
-    bool resumable_hdr = false;
+    // resumable mode opt in: a non empty X-Conversation-Id on a streaming request enables it.
+    // the conv id is the session identity end to end (client localStorage, server map,
+    // /v1/stream/<conv_id> routes). non stream OAI calls keep the standard flow regardless
+    bool stream = json_value(data, "stream", false);
     std::string conversation_id;
     if (stream) {
         // request headers preserve the wire casing, the scan is case insensitive
-        // we capture two headers in a single pass: X-Stream-Resume and X-Conversation-Id
         for (const auto & [hk, hv] : req.headers) {
-            if (hk.size() == 15) {
-                bool match = true;
-                static const char target[] = "x-stream-resume";
-                for (size_t i = 0; i < 15; ++i) {
-                    char c = hk[i];
-                    if (c >= 'A' && c <= 'Z') c = char(c + 32);
-                    if (c != target[i]) { match = false; break; }
-                }
-                if (match && hv == "1") {
-                    resumable_hdr = true;
-                }
-            } else if (hk.size() == 17) {
+            if (hk.size() == 17) {
                 bool match = true;
                 static const char target[] = "x-conversation-id";
                 for (size_t i = 0; i < 17; ++i) {
@@ -4177,14 +4163,12 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
                 }
                 if (match) {
                     conversation_id = hv;
+                    break;
                 }
             }
         }
     }
-    // resumable mode requires both the opt in header and a conversation id, the conv id is the
-    // session identity end to end (client localStorage, server map, /v1/stream/<conv_id> routes).
-    // an opt in without conv id falls back silently to the regular non resumable streaming path
-    const bool resumable = resumable_hdr && !conversation_id.empty();
+    const bool resumable = !conversation_id.empty();
     std::unique_ptr<server_response_reader> drain_reader;
     server_response_reader * post_target = &rd;
     if (resumable) {

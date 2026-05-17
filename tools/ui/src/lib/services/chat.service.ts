@@ -320,12 +320,9 @@ export class ChatService {
 
 		try {
 			const headers: Record<string, string> = { ...getJsonHeaders() };
-			if (stream) {
-				headers['X-Stream-Resume'] = '1';
-			}
-			// tag the request with the conversation id so the server can later list live or recently completed
-			// sessions for that conversation, this is what powers discoverActiveStream on tab reopen
-			if (conversationId) {
+			// tag streaming requests with the conversation id, this single header is the opt in for the
+			// server side replay buffer and powers discoverActiveStream on tab reopen
+			if (stream && conversationId) {
 				headers['X-Conversation-Id'] = conversationId;
 			}
 			const response = await fetch(API_CHAT.COMPLETIONS, {
