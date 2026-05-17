@@ -4186,14 +4186,10 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
     // an opt in without conv id falls back silently to the regular non resumable streaming path
     const bool resumable = resumable_hdr && !conversation_id.empty();
     std::unique_ptr<server_response_reader> drain_reader;
-    stream_session_ptr session;
     server_response_reader * post_target = &rd;
     if (resumable) {
         drain_reader = std::make_unique<server_response_reader>(
             queue_tasks, queue_results, HTTP_POLLING_SECONDS);
-        // create_or_replace evicts and cancels any prior session on this conv,
-        // guaranteeing the invariant that at most one live session exists per conv
-        session = ctx_server.stream_sessions.create_or_replace(conversation_id);
         post_target = drain_reader.get();
     }
 
@@ -4268,6 +4264,15 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
     } catch (const std::exception & e) {
         res->error(format_error_response(e.what(), ERROR_TYPE_INVALID_REQUEST));
         return res;
+    }
+
+    // session creation comes after post_tasks succeeds, so a throw during parsing or task
+    // construction returns early without leaving an orphan in the manager map.
+    // create_or_replace evicts and cancels any prior session on this conv, the invariant
+    // 'one live session per conv' holds
+    stream_session_ptr session;
+    if (resumable) {
+        session = ctx_server.stream_sessions.create_or_replace(conversation_id);
     }
 
     if (!stream) {
