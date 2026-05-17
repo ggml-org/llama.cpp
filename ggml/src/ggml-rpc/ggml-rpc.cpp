@@ -257,6 +257,13 @@ struct ggml_backend_rpc_buffer_type_context {
     std::string name;
     size_t      alignment;
     size_t      max_size;
+    // Cache of GET_ALLOC_SIZE responses keyed by FNV-1a of the serialized
+    // request bytes. The serialized request is deterministic for a given
+    // tensor topology, so cache hits are correct. Protected by alloc_mu
+    // because get_alloc_size can be called from multiple framework threads
+    // during buffer initialization on some backends.
+    mutable std::mutex                       alloc_mu;
+    mutable std::unordered_map<uint64_t, uint64_t> alloc_size_cache;
 };
 
 struct ggml_backend_rpc_context {
@@ -745,11 +752,28 @@ static size_t ggml_backend_rpc_buffer_type_get_alloc_size(ggml_backend_buffer_ty
             request.srcs[i] = serialize_tensor(tensor->src[i]);
         }
 
-        // TODO: cache the alloc responses to avoid extra RPC calls?
+        // Cache responses keyed on FNV-1a of the serialized request. This is
+        // the request the framework would send anyway, so the hash is the same
+        // every call with the same tensor topology. Reduces RPC count on model
+        // load substantially for graphs with many quantized / MUL_MAT_ID /
+        // FLASH_ATTN_EXT tensors (which are the ops that go down this path).
+        const uint64_t cache_key = fnv_hash(reinterpret_cast<const uint8_t *>(&request), sizeof(request));
+        {
+            std::lock_guard<std::mutex> lock(buft_ctx->alloc_mu);
+            auto it = buft_ctx->alloc_size_cache.find(cache_key);
+            if (it != buft_ctx->alloc_size_cache.end()) {
+                return it->second;
+            }
+        }
+
         rpc_msg_get_alloc_size_rsp response;
         bool status = send_rpc_cmd(sock, RPC_CMD_GET_ALLOC_SIZE, &request, sizeof(request), &response, sizeof(response));
         RPC_STATUS_ASSERT(status);
 
+        {
+            std::lock_guard<std::mutex> lock(buft_ctx->alloc_mu);
+            buft_ctx->alloc_size_cache.emplace(cache_key, response.alloc_size);
+        }
         return response.alloc_size;
     }
 
@@ -780,6 +804,48 @@ static void ggml_backend_rpc_free(ggml_backend_t backend) {
 static void ggml_backend_rpc_synchronize(ggml_backend_t backend) {
     GGML_UNUSED(backend);
     // this is no-op because we don't have any async operations
+}
+
+// Async tensor upload hook. The wire behavior is identical to the
+// buffer-level ggml_backend_rpc_buffer_set_tensor (fire-and-forget RPC
+// over the same socket — the kernel will buffer multiple in-flight
+// SET_TENSOR frames). Plugging this into the backend interface lets the
+// ggml scheduler treat this backend as async-capable and pipeline
+// tensor sends behind other work, which it can't do when the field is
+// NULL. Subsequent ggml_backend_synchronize calls fall through to the
+// existing rpc_synchronize no-op since the socket itself provides FIFO
+// ordering across all sends to a given backend.
+static void ggml_backend_rpc_set_tensor_async(ggml_backend_t backend, ggml_tensor * tensor,
+                                              const void * data, size_t offset, size_t size) {
+    ggml_backend_rpc_context * rpc_ctx = (ggml_backend_rpc_context *)backend->context;
+    auto sock = get_socket(rpc_ctx->endpoint);
+
+    rpc_tensor t = serialize_tensor(tensor);
+    if (size > HASH_THRESHOLD) {
+        // For large transfers, prefer the hash-dedup path so the server
+        // can skip the bytes-on-the-wire when it already has the data.
+        // Falls back to the literal SET_TENSOR send if the hash misses.
+        rpc_msg_set_tensor_hash_req hreq{};
+        hreq.tensor = t;
+        hreq.offset = offset;
+        hreq.hash   = fnv_hash((const uint8_t *) data, size);
+        rpc_msg_set_tensor_hash_rsp hrsp{};
+        bool ok = send_rpc_cmd(sock, RPC_CMD_SET_TENSOR_HASH, &hreq, sizeof(hreq), &hrsp, sizeof(hrsp));
+        RPC_STATUS_ASSERT(ok);
+        if (hrsp.result) {
+            return; // server already has these bytes
+        }
+    }
+
+    // Header + payload concatenated into a single send so the server sees
+    // them as one frame.
+    std::vector<uint8_t> input(sizeof(rpc_tensor) + sizeof(offset) + size);
+    memcpy(input.data(),                                           &t,      sizeof(t));
+    memcpy(input.data() + sizeof(t),                               &offset, sizeof(offset));
+    memcpy(input.data() + sizeof(t) + sizeof(offset),              data,    size);
+
+    bool ok = send_rpc_cmd(sock, RPC_CMD_SET_TENSOR, input.data(), input.size());
+    RPC_STATUS_ASSERT(ok);
 }
 
 static void add_tensor(ggml_tensor * tensor, std::vector<rpc_tensor> & tensors, std::unordered_set<ggml_tensor*> & visited) {
@@ -849,7 +915,7 @@ static enum ggml_status ggml_backend_rpc_graph_compute(ggml_backend_t backend, g
 static ggml_backend_i ggml_backend_rpc_interface = {
     /* .get_name                = */ ggml_backend_rpc_name,
     /* .free                    = */ ggml_backend_rpc_free,
-    /* .set_tensor_async        = */ NULL,
+    /* .set_tensor_async        = */ ggml_backend_rpc_set_tensor_async,
     /* .get_tensor_async        = */ NULL,
     /* .set_tensor_2d_async     = */ NULL,
     /* .get_tensor_2d_async     = */ NULL,
