@@ -1,10 +1,10 @@
 #include "arg.h"
 #include "common.h"
+#include "log.h"
 #include "llama-cpp.h"
 
 #include <clocale>
 #include <vector>
-#include <cstdio>
 
 struct llama_batch_ptr {
     llama_batch batch;
@@ -38,11 +38,11 @@ static std::string run_baseline_generation(struct llama_model * model, const str
 
     auto n_past = 0;
     if (!common_prompt_batch_decode(ctx.get(), tokens, n_past, params.n_batch, params.out_file, true)) {
-        fprintf(stderr, "%s : failed to decode prompt\n", __func__);
+        LOG_ERR("%s: failed to decode prompt\n", __func__);
         return {};
     }
 
-    printf("\nfirst run: %s", params.prompt.c_str());
+    LOG("\nfirst run: %s", params.prompt.c_str());
 
     std::string result;
     llama_batch_ptr batch(1, 0, 1);
@@ -51,14 +51,14 @@ static std::string run_baseline_generation(struct llama_model * model, const str
         auto next_token     = llama_sampler_sample(smpl.get(), ctx.get(), -1);
         auto next_token_str = common_token_to_piece(ctx.get(), next_token);
 
-        printf("%s", next_token_str.c_str());
+        LOG("%s", next_token_str.c_str());
         result += next_token_str;
 
         common_batch_clear(*batch);
         common_batch_add(*batch, next_token, n_past, {0}, true);
 
         if (llama_decode(ctx.get(), *batch)) {
-            fprintf(stderr, "\n%s : failed to evaluate\n", __func__);
+            LOG_ERR("\n%s: failed to evaluate\n", __func__);
             return {};
         }
         n_past++;
@@ -79,18 +79,18 @@ static std::string run_state_restore_generation(struct llama_model * model, cons
 
     auto tokens = common_tokenize(ctx.get(), params.prompt, true);
 
-    printf("\nsecond run: %s", params.prompt.c_str());
+    LOG("\nsecond run: %s", params.prompt.c_str());
 
     // Load state from file
     std::vector<llama_token> unused_sts(tokens.size());
     size_t n_token_count_out = 0;
 
     if (!llama_state_load_file(ctx.get(), params.out_file.data(), unused_sts.data(), unused_sts.size(), &n_token_count_out)) {
-        fprintf(stderr, "\n%s : failed to load state\n", __func__);
+        LOG_ERR("\n%s: failed to load state\n", __func__);
         return {};
     }
 
-    fprintf(stderr, "%s : loaded state with %zu tokens\n", __func__, n_token_count_out);
+    LOG_TRC("%s: loaded state with %zu tokens\n", __func__, n_token_count_out);
 
     // Replay last token
     int n_past = (int) n_token_count_out;
@@ -107,14 +107,14 @@ static std::string run_state_restore_generation(struct llama_model * model, cons
         auto next_token     = llama_sampler_sample(smpl.get(), ctx.get(), -1);
         auto next_token_str = common_token_to_piece(ctx.get(), next_token);
 
-        printf("%s", next_token_str.c_str());
+        LOG("%s", next_token_str.c_str());
         result += next_token_str;
 
         common_batch_clear(*batch);
         common_batch_add(*batch, next_token, n_past, {0}, true);
 
         if (llama_decode(ctx.get(), *batch)) {
-            fprintf(stderr, "\n%s : failed to evaluate\n", __func__);
+            LOG_ERR("\n%s: failed to evaluate\n", __func__);
             return {};
         }
         n_past++;
@@ -137,18 +137,18 @@ static std::string run_seq_migration_cpu_generation(struct llama_model * model, 
 
     auto tokens = common_tokenize(ctx.get(), params.prompt, true);
 
-    printf("\nsingle seq run: %s", params.prompt.c_str());
+    LOG("\nsingle seq run: %s", params.prompt.c_str());
 
     // Load state from file
     std::vector<llama_token> unused_sts(tokens.size());
     size_t n_token_count_out = 0;
 
     if (!llama_state_load_file(ctx.get(), params.out_file.data(), unused_sts.data(), unused_sts.size(), &n_token_count_out)) {
-        fprintf(stderr, "\n%s : failed to load state\n", __func__);
+        LOG_ERR("\n%s: failed to load state\n", __func__);
         return {};
     }
 
-    fprintf(stderr, "%s : loaded state with %zu tokens\n", __func__, n_token_count_out);
+    LOG_TRC("%s: loaded state with %zu tokens\n", __func__, n_token_count_out);
 
     // Replay last token
     int n_past = (int) n_token_count_out;
@@ -162,20 +162,20 @@ static std::string run_seq_migration_cpu_generation(struct llama_model * model, 
         std::vector<uint8_t> seq_store(llama_state_seq_get_size(ctx.get(), 0));
         const size_t ncopy = llama_state_seq_get_data(ctx.get(), seq_store.data(), seq_store.size(), 0);
         if (ncopy != seq_store.size()) {
-            fprintf(stderr, "\n%s : seq copy data length %zd does not match expected length %zd\n", __func__, ncopy, seq_store.size());
+            LOG_ERR("\n%s: seq copy data length %zd does not match expected length %zd\n", __func__, ncopy, seq_store.size());
             return {};
         }
-        fprintf(stderr, "%s : seq 0 copied, %zd bytes\n", __func__, ncopy);
+        LOG_TRC("%s: seq 0 copied, %zd bytes\n", __func__, ncopy);
 
         llama_memory_clear(llama_get_memory(ctx.get()), true);
-        fprintf(stderr, "%s : kv cache cleared\n", __func__);
+        LOG_TRC("%s: kv cache cleared\n", __func__);
 
         const size_t nset = llama_state_seq_set_data(ctx.get(), seq_store.data(), seq_store.size(), 1);
         if (nset != seq_store.size()) {
-            fprintf(stderr, "\n%s : seq set data length %zd does not match expected length %zd\n", __func__, nset, seq_store.size());
+            LOG_ERR("\n%s: seq set data length %zd does not match expected length %zd\n", __func__, nset, seq_store.size());
             return {};
         }
-        fprintf(stderr, "%s : seq 1 restored, %zd bytes\n", __func__, nset);
+        LOG_TRC("%s: seq 1 restored, %zd bytes\n", __func__, nset);
     }
 
     // Generate tokens on seq 1
@@ -186,14 +186,14 @@ static std::string run_seq_migration_cpu_generation(struct llama_model * model, 
         auto next_token     = llama_sampler_sample(smpl.get(), ctx.get(), -1);
         auto next_token_str = common_token_to_piece(ctx.get(), next_token);
 
-        printf("%s", next_token_str.c_str());
+        LOG("%s", next_token_str.c_str());
         result += next_token_str;
 
         common_batch_clear(*batch);
         common_batch_add(*batch, next_token, n_past, {1}, true);
 
         if (llama_decode(ctx.get(), *batch)) {
-            fprintf(stderr, "\n%s : failed to evaluate\n", __func__);
+            LOG_ERR("\n%s: failed to evaluate\n", __func__);
             return {};
         }
         n_past++;
@@ -216,18 +216,18 @@ static std::string run_seq_migration_ondevice_generation(struct llama_model * mo
 
     auto tokens = common_tokenize(ctx.get(), params.prompt, true);
 
-    printf("\nsingle seq run: %s", params.prompt.c_str());
+    LOG("\nsingle seq run: %s", params.prompt.c_str());
 
     // Load state from file
     std::vector<llama_token> unused_sts(tokens.size());
     size_t n_token_count_out = 0;
 
     if (!llama_state_load_file(ctx.get(), params.out_file.data(), unused_sts.data(), unused_sts.size(), &n_token_count_out)) {
-        fprintf(stderr, "\n%s : failed to load state\n", __func__);
+        LOG_ERR("\n%s: failed to load state\n", __func__);
         return {};
     }
 
-    fprintf(stderr, "%s : loaded state with %zu tokens\n", __func__, n_token_count_out);
+    LOG_TRC("%s: loaded state with %zu tokens\n", __func__, n_token_count_out);
 
     // Replay last token
     int n_past = (int) n_token_count_out;
@@ -241,20 +241,20 @@ static std::string run_seq_migration_ondevice_generation(struct llama_model * mo
         std::vector<uint8_t> seq_store(llama_state_seq_get_size_ext(ctx.get(), 0, LLAMA_STATE_SEQ_FLAGS_ON_DEVICE));
         const size_t ncopy = llama_state_seq_get_data_ext(ctx.get(), seq_store.data(), seq_store.size(), 0, LLAMA_STATE_SEQ_FLAGS_ON_DEVICE);
         if (ncopy != seq_store.size()) {
-            fprintf(stderr, "\n%s : seq copy data length %zd does not match expected length %zd\n", __func__, ncopy, seq_store.size());
+            LOG_ERR("\n%s: seq copy data length %zd does not match expected length %zd\n", __func__, ncopy, seq_store.size());
             return {};
         }
-        fprintf(stderr, "%s : seq 0 copied, %zd bytes\n", __func__, ncopy);
+        LOG_TRC("%s: seq 0 copied, %zd bytes\n", __func__, ncopy);
 
         llama_memory_clear(llama_get_memory(ctx.get()), true);
-        fprintf(stderr, "%s : kv cache cleared\n", __func__);
+        LOG_TRC("%s: kv cache cleared\n", __func__);
 
         const size_t nset = llama_state_seq_set_data_ext(ctx.get(), seq_store.data(), seq_store.size(), 1, LLAMA_STATE_SEQ_FLAGS_ON_DEVICE);
         if (nset != seq_store.size()) {
-            fprintf(stderr, "\n%s : seq set data length %zd does not match expected length %zd\n", __func__, nset, seq_store.size());
+            LOG_ERR("\n%s: seq set data length %zd does not match expected length %zd\n", __func__, nset, seq_store.size());
             return {};
         }
-        fprintf(stderr, "%s : seq 1 restored, %zd bytes\n", __func__, nset);
+        LOG_TRC("%s: seq 1 restored, %zd bytes\n", __func__, nset);
     }
 
     // Generate tokens on seq 1
@@ -265,14 +265,14 @@ static std::string run_seq_migration_ondevice_generation(struct llama_model * mo
         auto next_token     = llama_sampler_sample(smpl.get(), ctx.get(), -1);
         auto next_token_str = common_token_to_piece(ctx.get(), next_token);
 
-        printf("%s", next_token_str.c_str());
+        LOG("%s", next_token_str.c_str());
         result += next_token_str;
 
         common_batch_clear(*batch);
         common_batch_add(*batch, next_token, n_past, {1}, true);
 
         if (llama_decode(ctx.get(), *batch)) {
-            fprintf(stderr, "\n%s : failed to evaluate\n", __func__);
+            LOG_ERR("\n%s: failed to evaluate\n", __func__);
             return {};
         }
         n_past++;
@@ -297,7 +297,7 @@ int main(int argc, char ** argv) {
     }
 
     if (params.n_parallel == 1) {
-        printf("%s: n_parallel == 1, enabling unified kv cache\n", __func__);
+        LOG_TRC("%s: n_parallel == 1, enabling unified kv cache\n", __func__);
         params.kv_unified = true;
     }
 
@@ -311,7 +311,7 @@ int main(int argc, char ** argv) {
     auto * model = llama_init->model();
 
     if (model == nullptr) {
-        fprintf(stderr, "%s : failed to init\n", __func__);
+        LOG_ERR("%s: failed to init\n", __func__);
         return 1;
     }
 
@@ -321,7 +321,7 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
-    printf("\n\n");
+    LOG("\n\n");
 
     // Phase 2: full state restore from file
     auto result_restore = run_state_restore_generation(model, params);
@@ -329,7 +329,7 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
-    printf("\n\n");
+    LOG("\n\n");
 
     // Phase 3: per-sequence KV migration (CPU path)
     auto result_seq_migration_cpu = run_seq_migration_cpu_generation(model, params);
@@ -343,25 +343,25 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
-    printf("\n");
+    LOG("\n");
 
     // Assertions
     if (result_baseline != result_restore) {
-        fprintf(stderr, "\n%s : error : the 2 generations are different\n", __func__);
+        LOG_ERR("\n%s: error: the 2 generations are different\n", __func__);
         return 1;
     }
 
     if (result_baseline != result_seq_migration_cpu) {
-        fprintf(stderr, "\n%s : error : the seq restore generation is different\n", __func__);
+        LOG_ERR("\n%s: error: the seq restore generation is different\n", __func__);
         return 1;
     }
 
     if (result_baseline != result_seq_migration_ondevice) {
-        fprintf(stderr, "\n%s : error : the seq restore generation is different\n", __func__);
+        LOG_ERR("\n%s: error: the seq restore generation is different\n", __func__);
         return 1;
     }
 
-    fprintf(stderr, "\n%s : success\n", __func__);
+    LOG_TRC("\n%s: success\n", __func__);
 
     return 0;
 }
