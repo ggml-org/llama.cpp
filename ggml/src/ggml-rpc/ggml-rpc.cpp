@@ -1490,7 +1490,15 @@ rpc_server::~rpc_server() {
 static void rpc_serve_client(const std::vector<ggml_backend_t> & backends, const char * cache_dir,
                              socket_ptr sock) {
     rpc_server server(backends, cache_dir);
+    const int deadman_s = rpc_deadman_seconds();
     uint8_t cmd;
+    // Pre-HELLO timeout: without it a client that connects but never
+    // sends HELLO parks an accept slot forever. Use the same deadman
+    // knob as the post-HELLO loop.
+    if (deadman_s > 0 && !sock->wait_readable(deadman_s)) {
+        GGML_LOG_WARN("rpc deadman: pre-HELLO idle %ds, closing connection\n", deadman_s);
+        return;
+    }
     if (!sock->recv_data(&cmd, 1)) {
         return;
     }
@@ -1526,7 +1534,6 @@ static void rpc_serve_client(const std::vector<ggml_backend_t> & backends, const
 
     // Activate transport upgrade using client's caps
     sock->update_caps(req.conn_caps);
-    const int deadman_s = rpc_deadman_seconds();
     while (true) {
         if (deadman_s > 0 && !sock->wait_readable(deadman_s)) {
             GGML_LOG_WARN("rpc deadman: no command for %ds, closing connection\n", deadman_s);
