@@ -384,6 +384,10 @@ struct ggml_backend_opencl_context {
     cl_device_id device;
     std::string device_name;
 
+    ggml_cl_version platform_version;
+    ggml_cl_version opencl_c_version;
+    bool kernels_loaded = false;
+
     std::string driver_version;
 
     GPU_FAMILY gpu_family;
@@ -775,6 +779,8 @@ struct ggml_backend_opencl_context {
 #endif // GGML_OPENCL_USE_ADRENO_KERNELS
 
     void free() {
+        clFinish(queue);
+
         ref_count--;
         if (ref_count == 0) {
 #ifdef GGML_OPENCL_PROFILING
@@ -787,6 +793,9 @@ struct ggml_backend_opencl_context {
 
 // All registered devices with a default device in the front.
 static std::vector<ggml_backend_device> g_ggml_backend_opencl_devices;
+// All device contexts associated with the devices above.
+// The devices live as long as the process, so do the contexts.
+static std::vector<std::unique_ptr<ggml_backend_opencl_device_context>> g_ggml_backend_opencl_dev_ctxs;
 
 inline std::string read_file(const std::string &path) {
   std::ifstream ifs(path);
@@ -830,12 +839,16 @@ static cl_program build_program_from_source(cl_context ctx, cl_device_id dev, co
     return p;
 }
 
-static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx, ggml_cl_version opencl_c_version) {
+static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx) {
+    if (backend_ctx->kernels_loaded) {
+        return;
+    }
+
     cl_int err;
 
     // compiler options for general kernels
     auto opencl_c_std =
-        std::string("CL") + std::to_string(opencl_c_version.major) + "." + std::to_string(opencl_c_version.minor);
+        std::string("CL") + std::to_string(backend_ctx->opencl_c_version.major) + "." + std::to_string(backend_ctx->opencl_c_version.minor);
     std::string compile_opts = std::string("-cl-std=") + opencl_c_std +
                                " -cl-mad-enable -cl-unsafe-math-optimizations"
                                " -cl-finite-math-only -cl-fast-relaxed-math";
@@ -3221,13 +3234,15 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx, ggml_cl_ve
     }
 #endif // GGML_OPENCL_USE_ADRENO_KERNELS
     GGML_LOG_CONT("\n");
+    backend_ctx->kernels_loaded = true;
 }
 
 // XXX static ggml_backend_opencl_context * ggml_cl2_init(ggml_backend_dev_t dev) {
 // XXX    static bool initialized = false;
 // XXX    static ggml_backend_opencl_context *backend_ctx = nullptr;
 
-static ggml_backend_opencl_context * ggml_cl2_init(ggml_backend_dev_t dev);
+static ggml_backend_opencl_context * ggml_cl_init(ggml_backend_dev_t dev);
+static bool ggml_opencl_is_device_supported(ggml_backend_dev_t dev);
 
 namespace /* anonymous */ {
 extern struct ggml_backend_device_i ggml_backend_opencl_device_i;
@@ -3440,13 +3455,13 @@ static std::vector<ggml_backend_device> ggml_opencl_probe_devices(ggml_backend_r
             /* .context = */ dev_ctx.get(),
         });
 
-        if (!ggml_cl2_init(&found_devices.back())) {
+        if (!ggml_opencl_is_device_supported(&found_devices.back())) {
             found_devices.pop_back();
-            GGML_LOG_INFO("ggml_opencl: drop unsupported device.\n");
+            GGML_LOG_WARN("ggml_opencl: drop unsupported device '%s'.\n", dev->name);
             continue;
         }
 
-        dev_ctx.release();
+        g_ggml_backend_opencl_dev_ctxs.push_back(std::move(dev_ctx));
     }
 
     if (found_devices.size()) {
@@ -3463,8 +3478,71 @@ static std::vector<ggml_backend_device> ggml_opencl_probe_devices(ggml_backend_r
     return found_devices;
 }
 
+// check if device should be accepted
+static bool ggml_opencl_is_device_supported(ggml_backend_dev_t dev) {
+    GGML_ASSERT(dev);
+    GGML_ASSERT(dev->context);
+
+    ggml_backend_opencl_device_context * dev_ctx = (ggml_backend_opencl_device_context *) dev->context;
+    GGML_ASSERT(dev_ctx->platform);
+    GGML_ASSERT(dev_ctx->device);
+
+    if (!strstr(dev_ctx->device_name.c_str(), "Adreno") &&
+        !strstr(dev_ctx->device_name.c_str(), "Qualcomm") &&
+        !strstr(dev_ctx->device_version.c_str(), "Adreno") &&
+        !strstr(dev_ctx->device_name.c_str(), "Intel")
+    ) {
+        GGML_LOG_ERROR("ggml_opencl: unsupported GPU '%s'.\n", dev_ctx->device_name.c_str());
+        return false;
+    }
+
+    ggml_cl_version platform_version = get_opencl_platform_version(dev_ctx->platform);
+
+    // Check device OpenCL version, OpenCL 2.0 or above is required
+    ggml_cl_version opencl_c_version = get_opencl_c_version(platform_version, dev_ctx->device);
+    if (opencl_c_version.major < 2) {
+        GGML_LOG_ERROR("ggml_opencl: OpenCL 2.0 or above is required\n");
+        return false;
+    }
+
+#ifdef GGML_OPENCL_USE_ADRENO_KERNELS
+    if (strstr(dev_ctx->device_name.c_str(), "Adreno") ||
+        strstr(dev_ctx->device_name.c_str(), "Qualcomm") ||
+        strstr(dev_ctx->device_version.c_str(), "Adreno")) {
+        GGML_LOG_ERROR("ggml_opencl: Adreno-specific kernels should not be enabled for non-Adreno GPUs; "
+            "run on an Adreno GPU or recompile with CMake option `-DGGML_OPENCL_USE_ADRENO_KERNELS=OFF`\n");
+        return false;
+    }
+#endif
+
+    size_t ext_str_size;
+    clGetDeviceInfo(dev_ctx->device, CL_DEVICE_EXTENSIONS, 0, NULL, &ext_str_size);
+
+    char *ext_buffer = (char *)alloca(ext_str_size + 1);
+    clGetDeviceInfo(dev_ctx->device, CL_DEVICE_EXTENSIONS, ext_str_size, ext_buffer, NULL);
+    ext_buffer[ext_str_size] = '\0';
+
+    // Check if ext_buffer contains cl_khr_fp16
+    bool fp16_support = strstr(ext_buffer, "cl_khr_fp16") != NULL;
+    if (!fp16_support) {
+        GGML_LOG_ERROR("ggml_opencl: device does not support FP16\n");
+        return false;
+    }
+
+    // If OpenCL 3.0 is supported, then check for cl_khr_subgroups, which becomes
+    // optional in OpenCL 3.0 (cl_khr_subgroup is mandatory in OpenCL 2.x)
+    if (opencl_c_version.major == 3 && strstr(ext_buffer, "cl_khr_subgroups") == NULL &&
+        strstr(ext_buffer, "cl_intel_subgroups") == NULL) {
+        GGML_LOG_ERROR("ggml_opencl: device does not support subgroups (cl_khr_subgroups or cl_intel_subgroups) "
+            "(note that subgroups is an optional feature in OpenCL 3.0)\n");
+        return false;
+    }
+
+    return true;
+}
+
 // Initialize device if it is supported (returns nullptr if it is not).
-static ggml_backend_opencl_context * ggml_cl2_init(ggml_backend_dev_t dev) {
+static ggml_backend_opencl_context * ggml_cl_init(ggml_backend_dev_t dev) {
     GGML_ASSERT(dev);
     GGML_ASSERT(dev->context);
 
@@ -3501,18 +3579,8 @@ static ggml_backend_opencl_context * ggml_cl2_init(ggml_backend_dev_t dev) {
     } else if (strstr(dev_ctx->device_name.c_str(), "Intel")) {
         backend_ctx->gpu_family = GPU_FAMILY::INTEL;
     } else {
-        GGML_LOG_ERROR("Unsupported GPU: %s\n", dev_ctx->device_name.c_str());
         backend_ctx->gpu_family = GPU_FAMILY::UNKNOWN;
-        return nullptr;
     }
-
-#ifdef GGML_OPENCL_USE_ADRENO_KERNELS
-    if (backend_ctx->gpu_family != GPU_FAMILY::ADRENO) {
-        GGML_LOG_ERROR("ggml_opencl: Adreno-specific kernels should not be enabled for non-Adreno GPUs; "
-            "run on an Adreno GPU or recompile with CMake option `-DGGML_OPENCL_USE_ADRENO_KERNELS=OFF`\n");
-        return nullptr;
-    }
-#endif
 
     // Populate backend device name
     backend_ctx->device_name = dev_ctx->device_name;
@@ -3521,13 +3589,10 @@ static ggml_backend_opencl_context * ggml_cl2_init(ggml_backend_dev_t dev) {
     cl_device_id device = backend_ctx->device;
 
     ggml_cl_version platform_version = get_opencl_platform_version(dev_ctx->platform);
-
-    // Check device OpenCL version, OpenCL 2.0 or above is required
     ggml_cl_version opencl_c_version = get_opencl_c_version(platform_version, device);
-    if (opencl_c_version.major < 2) {
-        GGML_LOG_ERROR("ggml_opencl: OpenCL 2.0 or above is required\n");
-        return nullptr;
-    }
+
+    backend_ctx->platform_version = platform_version;
+    backend_ctx->opencl_c_version = opencl_c_version;
 
     // Check driver version
     size_t driver_version_str_size;
@@ -3550,26 +3615,13 @@ static ggml_backend_opencl_context * ggml_cl2_init(ggml_backend_dev_t dev) {
     char *ext_buffer = (char *)alloca(ext_str_size + 1);
     clGetDeviceInfo(device, CL_DEVICE_EXTENSIONS, ext_str_size, ext_buffer, NULL);
     ext_buffer[ext_str_size] = '\0'; // ensure it is null terminated
+
     // Check if ext_buffer contains cl_khr_fp16
     backend_ctx->fp16_support = strstr(ext_buffer, "cl_khr_fp16") != NULL;
     GGML_LOG_INFO("ggml_opencl: device FP16 support: %s\n", backend_ctx->fp16_support ? "true" : "false");
+
     // check Adreno large buffer support
     backend_ctx->adreno_has_large_buffer = strstr(ext_buffer, "cl_qcom_large_buffer") != NULL;
-
-    // fp16 is required
-    if (!backend_ctx->fp16_support) {
-        GGML_LOG_ERROR("ggml_opencl: device does not support FP16\n");
-        return nullptr;
-    }
-
-    // If OpenCL 3.0 is supported, then check for cl_khr_subgroups, which becomes
-    // optional in OpenCL 3.0 (cl_khr_subgroup is mandatory in OpenCL 2.x)
-    if (opencl_c_version.major == 3 && strstr(ext_buffer, "cl_khr_subgroups") == NULL &&
-        strstr(ext_buffer, "cl_intel_subgroups") == NULL) {
-        GGML_LOG_ERROR("ggml_opencl: device does not support subgroups (cl_khr_subgroups or cl_intel_subgroups) "
-            "(note that subgroups is an optional feature in OpenCL 3.0)\n");
-        return nullptr;
-    }
 
     cl_uint base_align_in_bits;
     CL_CHECK(clGetDeviceInfo(device, CL_DEVICE_MEM_BASE_ADDR_ALIGN, sizeof(cl_uint), &base_align_in_bits, NULL));
@@ -3665,8 +3717,8 @@ static ggml_backend_opencl_context * ggml_cl2_init(ggml_backend_dev_t dev) {
 #endif
     CL_CHECK((backend_ctx->queue = clCreateCommandQueue(context, device, command_queue_props, &err), err));
 
-    // Load kernels
-    load_cl_kernels(backend_ctx.get(), opencl_c_version);
+    // delay kernel loading until the first buffer is created
+    // load_cl_kernels(backend_ctx.get());
 
 #ifdef GGML_OPENCL_USE_ADRENO_KERNELS
     // Allocate intermediate buffers and images
@@ -3711,19 +3763,6 @@ static ggml_backend_opencl_context * ggml_cl2_init(ggml_backend_dev_t dev) {
 static void ggml_cl2_free(ggml_backend_t backend) {
     ggml_backend_opencl_context * ctx = (ggml_backend_opencl_context *) backend->context;
     ctx->free();
-
-    // The CL context is shared by all backends, release it if all backends have been released
-    bool should_release_opencl = true;
-    for (auto device : g_ggml_backend_opencl_devices) {
-        ggml_backend_opencl_device_context * ctx_dev = (ggml_backend_opencl_device_context *) device.context;
-        if (ctx_dev->backend_ctx->ref_count > 0) {
-            should_release_opencl = false;
-        }
-    }
-
-    if (should_release_opencl) {
-        CL_CHECK(clReleaseContext(ctx->context));
-    }
 }
 
 #ifdef GGML_OPENCL_USE_ADRENO_KERNELS
@@ -4328,14 +4367,17 @@ static void ggml_backend_opencl_synchronize(ggml_backend_t backend) {
 // enqueued to it won't start until commands in the other devices have
 // completed.
 static void sync_with_other_backends(ggml_backend_opencl_context * backend_ctx) {
-    if (g_ggml_backend_opencl_devices.size() < 2)
-      return; // No other devices to synchronize with.
+    if (g_ggml_backend_opencl_devices.size() < 2) {
+        return; // No other devices to synchronize with.
+    }
 
     std::vector<cl_event> events;
     events.reserve(g_ggml_backend_opencl_devices.size());
 
     for (ggml_backend_device & backend_dev : g_ggml_backend_opencl_devices) {
-        auto * other_backend_ctx = ggml_cl2_init(&backend_dev);
+        ggml_backend_opencl_device_context * dev_ctx = (ggml_backend_opencl_device_context *) backend_dev.context;
+        auto * other_backend_ctx = dev_ctx->backend_ctx;
+
         if (backend_ctx != other_backend_ctx) {
             cl_event ev;
             CL_CHECK(clEnqueueMarkerWithWaitList(other_backend_ctx->queue, 0, nullptr, &ev));
@@ -4829,7 +4871,7 @@ static ggml_backend_i ggml_backend_opencl_i = {
 
 ggml_backend_t ggml_backend_opencl_init(void) {
     ggml_backend_dev_t dev = ggml_backend_reg_dev_get(ggml_backend_opencl_reg(), 0);
-    ggml_backend_opencl_context *backend_ctx = ggml_cl2_init(dev);
+    ggml_backend_opencl_context *backend_ctx = ggml_cl_init(dev);
 
     ggml_backend_t backend = new ggml_backend {
         /* .guid    = */ ggml_backend_opencl_guid(),
@@ -5208,14 +5250,12 @@ static void ggml_backend_opencl_buffer_free_buffer(ggml_backend_buffer_t buffer)
 }
 
 static void * ggml_backend_opencl_buffer_get_base(ggml_backend_buffer_t buffer) {
-    ggml_backend_opencl_context * backend_ctx = ggml_cl2_init(buffer->buft->device);
-    return (void *) (uintptr_t) backend_ctx->alignment;
+    ggml_backend_opencl_device_context * dev_ctx = (ggml_backend_opencl_device_context *) buffer->buft->device->context;
+    return (void *) (uintptr_t) dev_ctx->backend_ctx->alignment;
 }
 
 static enum ggml_status ggml_backend_opencl_buffer_init_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor) {
     ggml_backend_opencl_buffer_context * ctx = (ggml_backend_opencl_buffer_context *) buffer->context;
-
-    ggml_cl2_init(buffer->buft->device);
 
     if (tensor->view_src != nullptr) {
         GGML_ASSERT(tensor->view_src->buffer->buft == buffer->buft);
@@ -5256,7 +5296,8 @@ static enum ggml_status ggml_backend_opencl_buffer_init_tensor(ggml_backend_buff
 }
 
 static void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor, const void * data, size_t offset, size_t size) {
-    ggml_backend_opencl_context *backend_ctx = ggml_cl2_init(buffer->buft->device);
+    ggml_backend_opencl_device_context * dev_ctx = (ggml_backend_opencl_device_context *) buffer->buft->device->context;
+    ggml_backend_opencl_context * backend_ctx = dev_ctx->backend_ctx;
 
     cl_context context = backend_ctx->context;
     cl_command_queue queue = backend_ctx->queue;
@@ -6331,7 +6372,8 @@ static void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer, 
 static void ggml_backend_opencl_buffer_get_tensor(ggml_backend_buffer_t buffer, const ggml_tensor * tensor, void * data, size_t offset, size_t size) {
     GGML_ASSERT(tensor->extra);
 
-    ggml_backend_opencl_context *backend_ctx = ggml_cl2_init(buffer->buft->device);
+    ggml_backend_opencl_device_context * dev_ctx = (ggml_backend_opencl_device_context *) buffer->buft->device->context;
+    ggml_backend_opencl_context *backend_ctx = dev_ctx->backend_ctx;
 
     cl_context context = backend_ctx->context;
     cl_command_queue queue = backend_ctx->queue;
@@ -7070,8 +7112,9 @@ static void ggml_backend_opencl_buffer_get_tensor(ggml_backend_buffer_t buffer, 
 }
 
 static void ggml_backend_opencl_buffer_clear(ggml_backend_buffer_t buffer, uint8_t value) {
-    ggml_backend_dev_t dev = buffer->buft->device;
-    ggml_backend_opencl_context *backend_ctx = ggml_cl2_init(dev);
+    ggml_backend_opencl_device_context * dev_ctx = (ggml_backend_opencl_device_context *) buffer->buft->device->context;
+    ggml_backend_opencl_context * backend_ctx = dev_ctx->backend_ctx;
+
     cl_command_queue queue = backend_ctx->queue;
 
     ggml_backend_opencl_buffer_context * ctx = (ggml_backend_opencl_buffer_context *) buffer->context;
@@ -7111,7 +7154,8 @@ static const char * ggml_backend_opencl_buffer_type_get_name(ggml_backend_buffer
 }
 
 static ggml_backend_buffer_t ggml_backend_opencl_buffer_type_alloc_buffer(ggml_backend_buffer_type_t buffer_type, size_t size) {
-    ggml_backend_opencl_context *backend_ctx = ggml_cl2_init(buffer_type->device);
+    ggml_backend_opencl_context *backend_ctx = ggml_cl_init(buffer_type->device);
+    load_cl_kernels(backend_ctx);
 
     // clCreateBuffer returns -61 for size 0
     size = std::max(size, (size_t)1);
@@ -7134,15 +7178,15 @@ static ggml_backend_buffer_t ggml_backend_opencl_buffer_type_alloc_buffer(ggml_b
 }
 
 static size_t ggml_backend_opencl_buffer_type_get_alignment(ggml_backend_buffer_type_t buffer_type) {
-    ggml_backend_opencl_context * backend_ctx = ggml_cl2_init(buffer_type->device);
-    return backend_ctx->alignment;
+    ggml_backend_opencl_device_context * dev_ctx = (ggml_backend_opencl_device_context *) buffer_type->device->context;
+    return dev_ctx->backend_ctx->alignment;
 }
 
 static size_t ggml_backend_opencl_buffer_type_get_max_size(ggml_backend_buffer_type_t buffer_type) {
     static size_t max_size = -1;
     if (max_size == (size_t)-1) {
-        ggml_backend_opencl_context * backend_ctx = ggml_cl2_init(buffer_type->device);
-        max_size = backend_ctx->max_alloc_size;
+        ggml_backend_opencl_device_context * dev_ctx = (ggml_backend_opencl_device_context *) buffer_type->device->context;
+        max_size = dev_ctx->backend_ctx->max_alloc_size;
     }
     return max_size;
 }
@@ -7179,14 +7223,16 @@ static const char * ggml_backend_opencl_device_get_description(ggml_backend_dev_
 
 static void ggml_backend_opencl_device_get_memory(ggml_backend_dev_t dev, size_t * free, size_t * total) {
     ggml_backend_opencl_device_context * dev_ctx = (ggml_backend_opencl_device_context *) dev->context;
-    ggml_backend_opencl_context * backend_ctx = (ggml_backend_opencl_context *) dev_ctx->backend_ctx;
+
+    size_t global_mem_size = 0;
+    clGetDeviceInfo(dev_ctx->device, CL_DEVICE_GLOBAL_MEM_SIZE, sizeof(size_t), &global_mem_size, NULL);
 
     static const size_t opencl_extra_margin = 1024ull*1024ull*1024ull;
 
     // OpenCL does not provide reliable currently-free device memory.
     // Use total/global memory as a best-effort upper bound.
     // Improved safety: Reduce by a 1GiB extra margin for common --fit
-    *total = backend_ctx->global_mem_size;
+    *total = global_mem_size;
     *free  = *total > opencl_extra_margin ? *total - opencl_extra_margin : 0;
 }
 
@@ -7210,7 +7256,7 @@ static void ggml_backend_opencl_device_get_props(ggml_backend_dev_t dev, struct 
 }
 
 static ggml_backend_t ggml_backend_opencl_device_init(ggml_backend_dev_t dev, const char * params) {
-    ggml_backend_opencl_context * backend_ctx = ggml_cl2_init(dev);
+    ggml_backend_opencl_context * backend_ctx = ggml_cl_init(dev);
     // Getting a new reference to the backend, increase ref_count
     backend_ctx->ref_count++;
 
@@ -7247,6 +7293,7 @@ static ggml_backend_buffer_t ggml_backend_opencl_device_buffer_from_ptr(ggml_bac
 }
 
 static bool ggml_backend_opencl_device_supports_op(ggml_backend_dev_t dev, const struct ggml_tensor * op) {
+    ggml_cl_init(dev);
     return ggml_opencl_supports_op(dev, op);
 }
 
@@ -7259,8 +7306,8 @@ static bool ggml_backend_opencl_device_supports_buft(ggml_backend_dev_t dev, ggm
 
     // Check cl_context is the same. clEnqueue* commands may not use
     // buffers from another cl_context.
-    ggml_backend_opencl_context * backend_ctx0 = ggml_cl2_init(dev);
-    ggml_backend_opencl_context * backend_ctx1 = ggml_cl2_init(buft->device);
+    ggml_backend_opencl_context * backend_ctx0 = ggml_cl_init(dev);
+    ggml_backend_opencl_context * backend_ctx1 = ggml_cl_init(buft->device);
     return backend_ctx0->context == backend_ctx1->context;
 }
 
