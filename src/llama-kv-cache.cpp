@@ -65,7 +65,8 @@ static ggml_tensor * ggml_mul_mat_aux(
 
     ggml_tensor * res;
 
-    res = ggml_reshape_2d(ctx, cur, n, ggml_nelements(cur)/n);
+    GGML_ASSERT(cur->ne[0] % n == 0);
+    res = ggml_reshape_4d(ctx, cur, n, cur->ne[0]/n, cur->ne[1], cur->ne[2]*cur->ne[3]);
     res = ggml_mul_mat   (ctx, rot, res);
     ggml_mul_mat_set_hint(res, GGML_HINT_SRC0_IS_HADAMARD);
     res = ggml_reshape_4d(ctx, res, cur->ne[0], cur->ne[1], cur->ne[2], cur->ne[3]);
