@@ -560,6 +560,22 @@ export class MCPService {
 		);
 
 		const runtimeErrorHandler = (error: Error) => {
+			// Ignore errors that are expected when the SDK's transport is closed,
+			// or when connecting to servers that don't support SSE (stateless-only
+			// endpoints returning 405). The SDK wraps the original AbortError in
+			// a new Error with the message "SSE stream disconnected: AbortError",
+			// and also produces "Cannot cancel a stream locked by a reader".
+			// DOMException is thrown by the browser when aborting fetch requests.
+			const msg = error.message || String(error);
+			if (
+				error.name === 'AbortError' ||
+				error.name === 'DOMException' ||
+				msg.includes('SSE stream disconnected') ||
+				msg.includes('stream locked by a reader') ||
+				msg.includes('The operation was aborted')
+			) {
+				return;
+			}
 			console.error(`[MCPService][${serverName}] Protocol error after initialize:`, error);
 		};
 
@@ -718,7 +734,17 @@ export class MCPService {
 		}
 
 		try {
-			// Prevent reconnection on voluntary disconnect
+			// Terminate the session first for streamable-http transports to cleanly
+			// close streams, matching the inspector's disconnect flow.
+			if (connection.transport instanceof StreamableHTTPClientTransport) {
+				await connection.transport.terminateSession();
+			}
+
+			// Clear error handlers before closing to prevent noise from expected
+			// abort errors during shutdown. The inspector avoids this entirely
+			// by not setting onerror, but since we use it for protocol logging,
+			// we must clear it before disconnect.
+			connection.client.onerror = undefined;
 			if (connection.transport.onclose) {
 				connection.transport.onclose = undefined;
 			}
