@@ -168,7 +168,9 @@ class MCPStore {
 				enabled: Boolean((entry as { enabled?: unknown })?.enabled),
 				url,
 				name: (entry as { name?: string })?.name,
-				requestTimeoutSeconds: DEFAULT_MCP_CONFIG.requestTimeoutSeconds,
+				requestTimeoutSeconds:
+					(entry as { requestTimeoutSeconds?: number })?.requestTimeoutSeconds ??
+					DEFAULT_MCP_CONFIG.requestTimeoutSeconds,
 				headers: headers || undefined,
 				useProxy: Boolean((entry as { useProxy?: unknown })?.useProxy)
 			} satisfies MCPServerSettingsEntry;
@@ -554,7 +556,8 @@ class MCPStore {
 			url: serverData.url.trim(),
 			name: serverData.name,
 			headers: serverData.headers?.trim() || undefined,
-			requestTimeoutSeconds: DEFAULT_MCP_CONFIG.requestTimeoutSeconds,
+			requestTimeoutSeconds:
+				Number(config().mcpRequestTimeoutSeconds) || DEFAULT_MCP_CONFIG.requestTimeoutSeconds,
 			useProxy: serverData.useProxy
 		};
 		settingsStore.updateConfig(SETTINGS_KEYS.MCP_SERVERS, JSON.stringify([...servers, newServer]));

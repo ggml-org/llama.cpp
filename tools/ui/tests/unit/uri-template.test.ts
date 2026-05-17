@@ -107,6 +107,14 @@ describe('expandTemplate', () => {
 		expect(result).toBe('http://example.com?q=search%20term');
 	});
 
+	it('expands multiple query parameters', () => {
+		const result = expandTemplate('http://example.com{?q,sort}', {
+			q: 'search term',
+			sort: 'descending'
+		});
+		expect(result).toBe('http://example.com?q=search%20term&sort=descending');
+	});
+
 	it('keeps static parts unchanged', () => {
 		const result = expandTemplate('http://example.com/static', {});
 		expect(result).toBe('http://example.com/static');
