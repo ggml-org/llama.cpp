@@ -97,9 +97,16 @@ class MCPStore {
 	private activeFlowCount = 0;
 
 	constructor() {
-		if (browser) {
+		if (browser && this.#hasAnyServerWithProxy()) {
 			this.probeProxy();
 		}
+	}
+
+	/**
+	 * Check if any configured MCP server has CORS proxy enabled.
+	 */
+	#hasAnyServerWithProxy(): boolean {
+		return parseMcpServerSettings(config().mcpServers).some((s) => s.useProxy);
 	}
 
 	/**
