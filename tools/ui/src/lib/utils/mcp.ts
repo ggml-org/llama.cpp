@@ -49,7 +49,7 @@ export function detectMcpTransportFromUrl(url: string): MCPTransportType {
 
 /**
  * Parses MCP server settings from a JSON string or array.
- * requestTimeoutSeconds is not user-configurable in the UI, so we always use the default value.
+ * Preserves per-server requestTimeoutSeconds if stored, otherwise falls back to the global default.
  * @param rawServers - The raw servers to parse
  * @returns An empty array if the input is invalid.
  */
@@ -88,7 +88,9 @@ export function parseMcpServerSettings(rawServers: unknown): MCPServerSettingsEn
 			enabled: Boolean((entry as { enabled?: unknown })?.enabled),
 			url,
 			name: (entry as { name?: string })?.name,
-			requestTimeoutSeconds: DEFAULT_MCP_CONFIG.requestTimeoutSeconds,
+			requestTimeoutSeconds:
+				(entry as { requestTimeoutSeconds?: number })?.requestTimeoutSeconds ??
+				DEFAULT_MCP_CONFIG.requestTimeoutSeconds,
 			headers: headers || undefined,
 			useProxy: Boolean((entry as { useProxy?: unknown })?.useProxy)
 		} satisfies MCPServerSettingsEntry;
