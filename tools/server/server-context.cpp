@@ -19,6 +19,7 @@
 #include <cstddef>
 #include <cinttypes>
 #include <exception>
+#include <list>
 #include <memory>
 #include <filesystem>
 #include <utility>
@@ -647,6 +648,11 @@ private:
     // use server_context methods instead
 
     common_params params_base;
+    common_params params_orig;
+
+    bool ubatchboost_enabled        = false;
+    bool ubatchboost_runtime_active = false;
+    bool main_runtime_active        = false;
 
     // note: keep these alive - they determine the lifetime of the model, context, etc.
     common_init_result_ptr llama_init;
@@ -705,7 +711,91 @@ private:
 
         llama_batch_free(batch);
     }
+    void destroy_ubatchboost_runtime() {
+        spec.reset();
+        ctx_dft.reset();
+        model_dft.reset();
+        ctx_tgt_seq_rm_type = COMMON_CONTEXT_SEQ_RM_TYPE_NO;
+        ctx_dft_seq_rm_type = COMMON_CONTEXT_SEQ_RM_TYPE_NO;
 
+        destroy();
+        batch = {};
+    }
+    common_params make_ubatchboost_params(const common_params & orig_params) const {
+        common_params boost_params = orig_params;
+
+        boost_params.n_ubatch = orig_params.promptprocessing_ubatchboost_size;
+        boost_params.n_batch  = std::max(orig_params.n_batch, orig_params.promptprocessing_ubatchboost_size);
+
+        if (orig_params.promptprocessing_ubatchboost_gpu_layers != -3) {
+            boost_params.n_gpu_layers = orig_params.promptprocessing_ubatchboost_gpu_layers;
+            boost_params.fit_params = orig_params.promptprocessing_ubatchboost_gpu_layers == -1 && orig_params.fit_params;
+        }
+
+        if (orig_params.promptprocessing_ubatchboost_n_cpu_moe >= 0) {
+            auto first_terminator = std::find_if(
+                    boost_params.tensor_buft_overrides.begin(),
+                    boost_params.tensor_buft_overrides.end(),
+                    [](const llama_model_tensor_buft_override & override) {
+                        return override.pattern == nullptr;
+                    });
+            boost_params.tensor_buft_overrides.erase(first_terminator, boost_params.tensor_buft_overrides.end());
+            boost_params.tensor_buft_overrides.erase(
+                    std::remove_if(
+                        boost_params.tensor_buft_overrides.begin(),
+                        boost_params.tensor_buft_overrides.end(),
+                        [](const llama_model_tensor_buft_override & override) {
+                            if (override.pattern == nullptr) {
+                                return false;
+                            }
+
+                            const std::string pattern = override.pattern;
+                            return pattern == LLM_FFN_EXPS_REGEX ||
+                                (pattern.rfind("blk\\.", 0) == 0 && pattern.find(LLM_FFN_EXPS_REGEX) != std::string::npos);
+                        }),
+                    boost_params.tensor_buft_overrides.end());
+
+            static std::list<std::string> buft_overrides_ubatchboost_moe;
+            for (int i = 0; i < orig_params.promptprocessing_ubatchboost_n_cpu_moe; ++i) {
+                buft_overrides_ubatchboost_moe.push_back(llm_ffn_exps_block_regex(i));
+                boost_params.tensor_buft_overrides.push_back({
+                    buft_overrides_ubatchboost_moe.back().c_str(), ggml_backend_cpu_buffer_type()
+                });
+            }
+
+            const size_t ntbo = llama_max_tensor_buft_overrides();
+            while (boost_params.tensor_buft_overrides.size() < ntbo) {
+                boost_params.tensor_buft_overrides.push_back({nullptr, nullptr});
+            }
+        }
+
+        return boost_params;
+    }
+
+    bool is_ubatchboost_requested(const common_params & params) const {
+        return params.promptprocessing_ubatchboost_size > 0;
+    }
+
+    common_params make_main_runtime_reload_params() const {
+        common_params params = params_orig;
+        if (params_orig.tokengeneration_no_warmup) {
+            params.warmup = false;
+        }
+
+        return params;
+    }
+
+    void save_idle_prompt_state_for_runtime_reload() {
+        for (auto & slot : slots) {
+            if (slot.is_processing() || slot.prompt.n_tokens() == 0) {
+                continue;
+            }
+
+            if (prompt_cache) {
+                slot_save_and_clear(slot);
+            }
+        }
+    }
     void slot_save_and_clear(server_slot & slot) {
         if (slot.prompt.n_tokens() == 0) {
             return;
@@ -718,6 +808,11 @@ private:
     }
 
     void handle_sleeping_state(bool new_state) {
+        if (ubatchboost_enabled) {
+            handle_sleeping_state_ubatchboost(new_state);
+            return;
+        }
+
         GGML_ASSERT(sleeping != new_state);
         if (new_state) {
             SRV_INF("%s", "server is entering sleeping state\n");
@@ -730,10 +825,26 @@ private:
         }
         sleeping = new_state;
     }
-
+    void handle_sleeping_state_ubatchboost(bool new_state) {
+        GGML_ASSERT(sleeping != new_state);
+        if (new_state) {
+            SRV_INF("%s", "server is entering sleeping state\n");
+            destroy_ubatchboost_runtime();
+        } else {
+            SRV_INF("%s", "server is exiting sleeping state\n");
+            if (!load_model_ubatchboost(params_orig)) {
+                GGML_ABORT("failed to reload model after sleeping");
+            }
+        }
+        sleeping = new_state;
+    }
     // load the model and initialize llama_context
     // this may also be called to resume from sleeping state
     bool load_model(common_params & params) {
+        if (is_ubatchboost_requested(params)) {
+            return load_model_ubatchboost(params);
+        }
+
         bool is_resume = sleeping;
 
         SRV_INF("loading model '%s'\n", params.model.path.c_str());
@@ -1005,6 +1116,318 @@ private:
         return true;
     }
 
+    bool load_model_ubatchboost(common_params & params) {
+        params_orig = params;
+        ubatchboost_enabled = is_ubatchboost_requested(params_orig);
+
+        if (!ubatchboost_enabled) {
+            ubatchboost_runtime_active = false;
+            main_runtime_active = true;
+            return load_model_ubatchboost_internal(params, true);
+        }
+
+        if (!params_orig.mmproj.path.empty()) {
+            SRV_ERR("%s", "--promptprocessing-ubatchboost-size is not supported with multimodal models\n");
+            return false;
+        }
+
+        common_params boost_params = make_ubatchboost_params(params_orig);
+
+        ubatchboost_runtime_active = true;
+        main_runtime_active = false;
+
+        SRV_INF("prompt processing ubatch boost enabled: n_batch = %d, n_ubatch = %d, n_gpu_layers = %d, n_cpu_moe = %d\n",
+                boost_params.n_batch, boost_params.n_ubatch, boost_params.n_gpu_layers, params_orig.promptprocessing_ubatchboost_n_cpu_moe);
+
+        const bool ok = load_model_ubatchboost_internal(boost_params, true);
+        if (ok) {
+            params = params_orig;
+        }
+
+        return ok;
+    }
+
+    bool load_model_ubatchboost_internal(common_params & params, bool reset_slots) {
+        bool is_resume = sleeping;
+
+        SRV_INF("loading model '%s'\n", params.model.path.c_str());
+
+        params_base = params;
+
+        llama_init = common_init_from_params(params_base);
+
+        model_tgt = llama_init->model();
+        ctx_tgt   = llama_init->context();
+
+        if (model_tgt == nullptr) {
+            SRV_ERR("failed to load model, '%s'\n", params_base.model.path.c_str());
+            return false;
+        }
+
+        vocab = llama_model_get_vocab(model_tgt);
+
+        n_ctx = llama_n_ctx(ctx_tgt);
+
+        add_bos_token = llama_vocab_get_add_bos(vocab);
+
+        if (params_base.speculative.has_dft()) {
+            // TODO speculative: move to common/speculative.cpp?
+            const auto & params_spec = params_base.speculative.draft;
+
+            SRV_INF("loading draft model '%s'\n", params_spec.mparams.path.c_str());
+
+            auto params_dft = params_base;
+
+            params_dft.devices      = params_spec.devices;
+            params_dft.model        = params_spec.mparams;
+            params_dft.n_gpu_layers = params_spec.n_gpu_layers;
+            params_dft.cache_type_k = params_spec.cache_type_k;
+            params_dft.cache_type_v = params_spec.cache_type_v;
+
+            if (params_spec.cpuparams.n_threads > 0) {
+                params_dft.cpuparams.n_threads       = params_spec.cpuparams.n_threads;
+                params_dft.cpuparams_batch.n_threads = params_spec.cpuparams_batch.n_threads;
+            }
+
+            params_dft.tensor_buft_overrides = params_spec.tensor_buft_overrides;
+
+            auto mparams_dft = common_model_params_to_llama(params_dft);
+
+            model_dft.reset(llama_model_load_from_file(params_dft.model.path.c_str(), mparams_dft));
+            if (model_dft == nullptr) {
+                SRV_ERR("failed to load draft model, '%s'\n", params_dft.model.path.c_str());
+                return false;
+            }
+
+            auto cparams = common_context_params_to_llama(params_dft);
+
+            const bool spec_mtp = std::find(params_base.speculative.types.begin(),
+                                            params_base.speculative.types.end(),
+                                            COMMON_SPECULATIVE_TYPE_DRAFT_MTP) != params_base.speculative.types.end();
+            if (spec_mtp) {
+                cparams.ctx_type = LLAMA_CONTEXT_TYPE_MTP;
+            }
+
+            // note: for small models maybe we can set this to the maximum possible draft from all speculative types
+            //       the extra memory for small models is likely negligible?
+            cparams.n_rs_seq = 0;
+            ctx_dft.reset(llama_init_from_model(model_dft.get(), cparams));
+
+            ctx_dft_seq_rm_type = common_context_can_seq_rm(ctx_dft.get());
+
+            params_base.speculative.draft.ctx_tgt = ctx_tgt;
+            params_base.speculative.draft.ctx_dft = ctx_dft.get();
+        } else if (std::find(params_base.speculative.types.begin(), params_base.speculative.types.end(),
+                             COMMON_SPECULATIVE_TYPE_DRAFT_MTP) != params_base.speculative.types.end()) {
+            SRV_INF("creating MTP draft context against the target model '%s'\n",
+                    params_base.model.path.c_str());
+
+            auto cparams_mtp = common_context_params_to_llama(params_base);
+            cparams_mtp.ctx_type = LLAMA_CONTEXT_TYPE_MTP;
+            cparams_mtp.n_rs_seq = 0;
+
+            ctx_dft.reset(llama_init_from_model(model_tgt, cparams_mtp));
+            if (ctx_dft == nullptr) {
+                SRV_ERR("%s", "failed to create MTP context\n");
+                return false;
+            }
+
+            ctx_dft_seq_rm_type = common_context_can_seq_rm(ctx_dft.get());
+
+            params_base.speculative.draft.ctx_tgt = ctx_tgt;
+            params_base.speculative.draft.ctx_dft = ctx_dft.get();
+        }
+
+        std::string & mmproj_path = params_base.mmproj.path;
+        if (!mmproj_path.empty()) {
+            mtmd_context_params mparams = mtmd_context_params_default();
+
+            mparams.use_gpu          = params_base.mmproj_use_gpu;
+            mparams.print_timings    = false;
+            mparams.n_threads        = params_base.cpuparams.n_threads;
+            mparams.flash_attn_type  = params_base.flash_attn_type;
+            mparams.warmup           = params_base.warmup;
+            mparams.image_min_tokens = params_base.image_min_tokens;
+            mparams.image_max_tokens = params_base.image_max_tokens;
+            mparams.media_marker     = get_media_marker();
+
+            mctx = mtmd_init_from_file(mmproj_path.c_str(), model_tgt, mparams);
+            if (mctx == nullptr) {
+                SRV_ERR("failed to load multimodal model, '%s'\n", mmproj_path.c_str());
+                return false;
+            }
+            SRV_INF("loaded multimodal model, '%s'\n", mmproj_path.c_str());
+
+            if (params_base.ctx_shift) {
+                params_base.ctx_shift = false;
+                SRV_WRN("%s\n", "ctx_shift is not supported by multimodal, it will be disabled");
+            }
+
+            if (params_base.n_cache_reuse) {
+                params_base.n_cache_reuse = 0;
+                SRV_WRN("%s\n", "cache_reuse is not supported by multimodal, it will be disabled");
+            }
+        }
+
+        if (!llama_memory_can_shift(llama_get_memory(ctx_tgt))) {
+            if (params_base.ctx_shift) {
+                params_base.ctx_shift = false;
+                SRV_WRN("%s\n", "ctx_shift is not supported by this context, it will be disabled");
+            }
+
+            if (params_base.n_cache_reuse) {
+                params_base.n_cache_reuse = 0;
+                SRV_WRN("%s\n", "cache_reuse is not supported by this context, it will be disabled");
+            }
+        }
+
+        if (llama_model_n_swa(model_tgt) == 0) {
+            if (params_base.swa_full) {
+                params_base.swa_full = false;
+                SRV_WRN("%s\n", "swa_full is not supported by this model, it will be disabled");
+            }
+        }
+
+        n_swa = params_base.swa_full ? 0 : llama_model_n_swa(model_tgt);
+
+        // Necessary similarity of prompt for slot selection
+        slot_prompt_similarity = params_base.slot_prompt_similarity;
+
+        // setup slots
+        SRV_INF("initializing slots, n_slots = %d\n", params_base.n_parallel);
+
+        const int n_ctx_train = llama_model_n_ctx_train(model_tgt);
+
+        int n_ctx_slot = llama_n_ctx_seq(ctx_tgt);
+        if (n_ctx_slot > n_ctx_train) {
+            SRV_WRN("the slot context (%d) exceeds the training context of the model (%d) - capping\n", n_ctx_slot, n_ctx_train);
+            n_ctx_slot = n_ctx_train;
+        }
+
+        if (reset_slots) {
+            slots.clear();
+        } else if ((int) slots.size() != params_base.n_parallel) {
+            SRV_ERR("cannot reload runtime with n_slots = %zu, params.n_parallel = %d\n",
+                    slots.size(), params_base.n_parallel);
+            return false;
+        }
+
+        ctx_tgt_seq_rm_type = common_context_can_seq_rm(ctx_tgt);
+        if (ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_NO) {
+            SRV_WRN("%s", "speculative decoding not supported by this context\n");
+        }
+
+        if (ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_FULL) {
+            SRV_WRN("%s", "speculative decoding will use checkpoints\n");
+        }
+
+        // initialize slots
+        if (reset_slots) {
+            for (int i = 0; i < params_base.n_parallel; i++) {
+                slots.emplace_back();
+            }
+        }
+
+        // try speculative decoding
+        if (ctx_tgt_seq_rm_type != COMMON_CONTEXT_SEQ_RM_TYPE_NO) {
+            try {
+                spec.reset(common_speculative_init(params_base.speculative, params_base.n_parallel));
+            } catch (const std::exception & e) {
+                SRV_ERR("failed to initialize speculative decoding context: %s\n", e.what());
+            }
+        }
+
+        if (spec) {
+            SRV_INF("%s", "speculative decoding context initialized\n");
+        } else {
+            ctx_dft.reset();
+        }
+
+        for (int i = 0; i < params_base.n_parallel; i++) {
+            server_slot & slot = slots[i];
+
+            slot.id      = i;
+            slot.ctx_tgt = ctx_tgt;
+            slot.ctx_dft = ctx_dft.get();
+            slot.spec    = spec.get();
+            slot.n_ctx   = n_ctx_slot;
+
+            slot.mctx                   = mctx;
+            slot.prompt.tokens.has_mtmd = mctx != nullptr;
+
+            SLT_INF(slot, "new slot, n_ctx = %d\n", slot.n_ctx);
+
+            slot.callback_on_release = [this](int id_slot) {
+                queue_tasks.pop_deferred_task(id_slot);
+            };
+
+            if (reset_slots) {
+                slot.reset();
+            }
+        }
+
+        {
+            const char * LLAMA_TRACE = getenv("LLAMA_TRACE");
+            trace = LLAMA_TRACE ? atoi(LLAMA_TRACE) : 0;
+
+            if (trace) {
+                SRV_WRN("LLAMA_TRACE = %d\n", trace);
+            }
+        }
+
+        {
+            const char * LLAMA_SERVER_SLOTS_DEBUG = getenv("LLAMA_SERVER_SLOTS_DEBUG");
+            slots_debug = LLAMA_SERVER_SLOTS_DEBUG ? atoi(LLAMA_SERVER_SLOTS_DEBUG) : 0;
+
+            if (slots_debug) {
+                SRV_WRN("LLAMA_SERVER_SLOTS_DEBUG = %d\n", slots_debug);
+            }
+        }
+
+        // the update_slots() logic will always submit a maximum of n_batch or n_parallel tokens
+        // note that n_batch can be > n_ctx (e.g. for non-causal attention models such as BERT where the KV cache is not used)
+        {
+            const int32_t n_batch = llama_n_batch(ctx_tgt);
+            batch = llama_batch_init(std::max(n_batch, params_base.n_parallel), 0, 1);
+        }
+
+        if (params_base.cache_ram_mib != 0) {
+            if (params_base.cache_ram_mib < 0) {
+                SRV_INF("prompt cache is enabled, size limit: %s\n", "no limit");
+            } else {
+                SRV_INF("prompt cache is enabled, size limit: %d MiB\n", params_base.cache_ram_mib);
+            }
+            SRV_INF("%s", "use `--cache-ram 0` to disable the prompt cache\n");
+
+            prompt_cache = std::make_unique<server_prompt_cache>(params_base.cache_ram_mib, n_ctx);
+        } else {
+            SRV_INF("%s", "prompt cache is disabled - use `--cache-ram N` to enable it\n");
+        }
+        SRV_INF("%s", "for more info see https://github.com/ggml-org/llama.cpp/pull/16391\n");
+
+        if (!params_base.model_alias.empty()) {
+            // backward compat: use first alias as model name
+            model_name = *params_base.model_alias.begin();
+        } else if (!params_base.model.name.empty()) {
+            model_name = params_base.model.name;
+        } else {
+            // fallback: derive model name from file name
+            auto model_path = std::filesystem::path(params_base.model.path);
+            model_name = model_path.filename().string();
+        }
+
+        model_aliases = params_base.model_alias;
+        model_tags    = params_base.model_tags;
+
+        // propagate new defaults back to caller
+        params = params_base;
+
+        if (reset_slots && !is_resume) {
+            return init();
+        }
+
+        return true;
+    }
     // unlike load_model(), this is only called once during initialization
     bool init() {
         GGML_ASSERT(ctx_tgt   != nullptr);
@@ -1014,10 +1437,18 @@ private:
 
         // wiring up server queues
         queue_tasks.on_new_task([this](server_task && task) {
-            process_single_task(std::move(task));
+            if (ubatchboost_enabled) {
+                process_single_task_ubatchboost(std::move(task));
+            } else {
+                process_single_task(std::move(task));
+            }
         });
         queue_tasks.on_update_slots([this]() {
-            update_slots();
+            if (ubatchboost_enabled) {
+                update_slots_ubatchboost();
+            } else {
+                update_slots();
+            }
         });
         queue_tasks.on_sleeping_state([this](bool sleeping) {
             handle_sleeping_state(sleeping);
@@ -1255,6 +1686,316 @@ private:
             }
         }
         return output;
+    }
+
+    bool init_slot_sampler(server_slot & slot, const server_task & task, common_params_sampling & sampling) {
+        if (!task.need_sampling()) {
+            slot.smpl.reset();
+            llama_set_sampler(ctx_tgt, slot.id, nullptr);
+            return true;
+        }
+
+        try {
+            slot.smpl.reset(common_sampler_init(model_tgt, sampling));
+        } catch (std::exception & e) {
+            std::string err_msg = std::string("Failed to initialize samplers: ") + e.what();
+            send_error(task, err_msg, ERROR_TYPE_INVALID_REQUEST);
+            return false;
+        }
+
+        const bool need_pre_sample_logits = sampling.n_probs > 0 && !task.params.post_sampling_probs;
+
+        bool backend_sampling = true;
+
+        backend_sampling &= sampling.backend_sampling;
+
+        // TODO: speculative decoding requires multiple samples per batch - not supported yet
+        backend_sampling &= !(slot.can_speculate());
+
+        // TODO: getting pre sampling logits is not yet supported with backend sampling
+        backend_sampling &= !need_pre_sample_logits;
+
+        // TODO: tmp until backend sampling is fully implemented
+        if (backend_sampling) {
+            llama_set_sampler(ctx_tgt, slot.id, common_sampler_get(slot.smpl.get()));
+        } else {
+            llama_set_sampler(ctx_tgt, slot.id, nullptr);
+        }
+
+        SLT_TRC(slot, "sampler chain: %s\n", common_sampler_print(slot.smpl.get()).c_str());
+        SLT_TRC(slot, "sampler params: \n%s\n", sampling.print().c_str());
+
+        return true;
+    }
+
+    void refresh_slot_lora_after_runtime_reload(server_slot & slot) {
+        if (!slot.task) {
+            return;
+        }
+
+        std::vector<common_adapter_lora_info> refreshed;
+        if (!slot.task->params.lora.empty()) {
+            refreshed = construct_lora_list(slot.task->params.lora);
+        } else {
+            refreshed = params_base.lora_adapters;
+        }
+
+        for (size_t i = 0; i < refreshed.size() && i < slot.lora.size(); ++i) {
+            refreshed[i].scale = slot.lora[i].scale;
+        }
+
+        slot.lora = std::move(refreshed);
+    }
+
+    bool should_hold_last_prompt_token_for_main_runtime(const server_slot & slot) const {
+        if (!ubatchboost_enabled || !ubatchboost_runtime_active || main_runtime_active) {
+            return false;
+        }
+
+        if (!slot.task || !slot.task->need_sampling()) {
+            return false;
+        }
+
+        if (slot.task->is_parent() || slot.task->is_child()) {
+            return false;
+        }
+
+        if (slot.state != SLOT_STATE_STARTED && slot.state != SLOT_STATE_PROCESSING_PROMPT) {
+            return false;
+        }
+
+        const int remaining = slot.task->n_tokens() - slot.prompt.n_tokens();
+        return remaining <= 1;
+    }
+
+    bool ready_to_switch_ubatchboost_to_main_runtime() const {
+        if (!ubatchboost_enabled || !ubatchboost_runtime_active || main_runtime_active) {
+            return false;
+        }
+
+        bool found_boundary_slot = false;
+
+        for (const server_slot & slot : slots) {
+            if (!slot.is_processing()) {
+                continue;
+            }
+
+            if (!should_hold_last_prompt_token_for_main_runtime(slot)) {
+                return false;
+            }
+
+            found_boundary_slot = true;
+        }
+
+        return found_boundary_slot;
+    }
+
+    bool has_processing_slots_except(int id_slot) const {
+        for (const auto & slot : slots) {
+            if (slot.id != id_slot && slot.is_processing()) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    bool switch_main_to_ubatchboost_runtime_for_full_prompt_reprocess(server_slot & slot) {
+        if (!ubatchboost_enabled || ubatchboost_runtime_active || !main_runtime_active) {
+            return true;
+        }
+
+        if (!slot.task || !slot.task->need_sampling() || slot.task->is_parent() || slot.task->is_child()) {
+            return true;
+        }
+
+        if (batch.n_tokens != 0) {
+            SLT_WRN(slot, "%s", "full prompt re-processing is required, but a batch is already active; continuing in main runtime\n");
+            return true;
+        }
+
+        if (has_processing_slots_except(slot.id)) {
+            SLT_WRN(slot, "%s", "full prompt re-processing is required, but another slot is active; continuing in main runtime\n");
+            return true;
+        }
+
+        common_params boost_params = make_ubatchboost_params(params_orig);
+
+        save_idle_prompt_state_for_runtime_reload();
+        destroy_ubatchboost_runtime();
+
+        ubatchboost_runtime_active = true;
+        main_runtime_active = false;
+
+        if (!load_model_ubatchboost_internal(boost_params, false)) {
+            send_error(slot, "failed to load prompt processing ubatch boost runtime for full prompt re-processing", ERROR_TYPE_SERVER);
+            slot.release();
+            return false;
+        }
+
+        slot.prompt.tokens.clear();
+        slot.prompt.data = {};
+        slot.prompt.checkpoints.clear();
+        slot.spec_draft.clear();
+        slot.spec_i_batch.clear();
+        slot.spec_ckpt.clear();
+        slot.n_prompt_tokens_cache = 0;
+        slot.n_prompt_tokens_processed = 0;
+
+        return true;
+    }
+
+    bool batch_needs_speculative_process(const llama_batch & batch_view) const {
+        if (!spec) {
+            return false;
+        }
+
+        bool found_speculative_slot = false;
+
+        for (int32_t i = 0; i < batch_view.n_tokens; ++i) {
+            for (int32_t j = 0; j < batch_view.n_seq_id[i]; ++j) {
+                const llama_seq_id seq_id = batch_view.seq_id[i][j];
+                if (seq_id < 0 || seq_id >= (llama_seq_id) slots.size()) {
+                    continue;
+                }
+
+                const server_slot & slot = slots[seq_id];
+                if (!slot.is_processing()) {
+                    continue;
+                }
+
+                found_speculative_slot |= slot.can_speculate();
+            }
+        }
+
+        return found_speculative_slot;
+    }
+
+    void switch_ubatchboost_to_main_runtime() {
+        if (!ready_to_switch_ubatchboost_to_main_runtime()) {
+            return;
+        }
+
+        struct saved_slot_state {
+            int id_slot = -1;
+            int id_task = -1;
+            int64_t prompt_elapsed_us = 0;
+            std::vector<uint8_t> data_tgt;
+            std::vector<uint8_t> data_dft;
+        };
+
+        SRV_INF("%s", "prompt processing ubatch boost boundary reached, switching to main runtime\n");
+
+        llama_synchronize(ctx_tgt);
+        const int64_t t_boost_done = ggml_time_us();
+
+        std::vector<saved_slot_state> saved_slots;
+
+        for (server_slot & slot : slots) {
+            if (!should_hold_last_prompt_token_for_main_runtime(slot)) {
+                continue;
+            }
+
+            saved_slot_state saved;
+            saved.id_slot = slot.id;
+            saved.id_task = slot.task->id;
+            saved.prompt_elapsed_us = t_boost_done - slot.t_start_process_prompt;
+
+            const size_t state_size = llama_state_seq_get_size_ext(ctx_tgt, slot.id, LLAMA_STATE_SEQ_FLAGS_NONE);
+            saved.data_tgt.resize(state_size);
+
+            if (state_size > 0) {
+                const size_t written = llama_state_seq_get_data_ext(ctx_tgt, saved.data_tgt.data(), state_size, slot.id, LLAMA_STATE_SEQ_FLAGS_NONE);
+                if (written != state_size) {
+                    send_error(slot, "failed to save prompt state before main runtime reload", ERROR_TYPE_SERVER);
+                    slot.release();
+                    continue;
+                }
+            }
+
+            if (ctx_dft) {
+                const size_t state_size_dft = llama_state_seq_get_size_ext(ctx_dft.get(), slot.id, LLAMA_STATE_SEQ_FLAGS_NONE);
+                saved.data_dft.resize(state_size_dft);
+
+                if (state_size_dft > 0) {
+                    const size_t written = llama_state_seq_get_data_ext(ctx_dft.get(), saved.data_dft.data(), state_size_dft, slot.id, LLAMA_STATE_SEQ_FLAGS_NONE);
+                    if (written != state_size_dft) {
+                        send_error(slot, "failed to save draft prompt state before main runtime reload", ERROR_TYPE_SERVER);
+                        slot.release();
+                        continue;
+                    }
+                }
+            }
+
+            saved_slots.push_back(std::move(saved));
+        }
+
+        if (saved_slots.empty()) {
+            return;
+        }
+
+        common_params main_params_reload = make_main_runtime_reload_params();
+
+        save_idle_prompt_state_for_runtime_reload();
+        destroy_ubatchboost_runtime();
+
+        ubatchboost_runtime_active = false;
+        main_runtime_active = true;
+
+        if (!load_model_ubatchboost_internal(main_params_reload, false)) {
+            GGML_ABORT("failed to load main runtime after prompt processing ubatch boost\n");
+        }
+
+        const int64_t t_main_ready = ggml_time_us();
+
+        for (const saved_slot_state & saved : saved_slots) {
+            GGML_ASSERT(saved.id_slot >= 0 && saved.id_slot < (int) slots.size());
+            server_slot & slot = slots[saved.id_slot];
+
+            if (!slot.task || slot.task->id != saved.id_task || !slot.is_processing()) {
+                continue;
+            }
+
+            if (!saved.data_tgt.empty()) {
+                const size_t read = llama_state_seq_set_data_ext(ctx_tgt, saved.data_tgt.data(), saved.data_tgt.size(), slot.id, LLAMA_STATE_SEQ_FLAGS_NONE);
+                if (read != saved.data_tgt.size()) {
+                    send_error(slot, "failed to restore prompt state into main runtime", ERROR_TYPE_SERVER);
+                    slot.release();
+                    continue;
+                }
+            }
+
+            if (ctx_dft && !saved.data_dft.empty()) {
+                const size_t read = llama_state_seq_set_data_ext(ctx_dft.get(), saved.data_dft.data(), saved.data_dft.size(), slot.id, LLAMA_STATE_SEQ_FLAGS_NONE);
+                if (read != saved.data_dft.size()) {
+                    send_error(slot, "failed to restore draft prompt state into main runtime", ERROR_TYPE_SERVER);
+                    slot.release();
+                    continue;
+                }
+            }
+
+            slot.ctx_tgt = ctx_tgt;
+            slot.ctx_dft = ctx_dft.get();
+            slot.spec    = spec.get();
+            slot.mctx                   = mctx;
+            slot.prompt.tokens.has_mtmd = mctx != nullptr;
+            slot.prompt.data = {};
+
+            if (ctx_dft && slot.can_speculate() && saved.data_dft.empty()) {
+                send_error(slot, "failed to restore MTP draft state after prompt processing ubatch boost", ERROR_TYPE_SERVER);
+                slot.release();
+                continue;
+            }
+
+            refresh_slot_lora_after_runtime_reload(slot);
+            common_params_sampling sampling = slot.task->params.sampling;
+            if (!init_slot_sampler(slot, *slot.task, sampling)) {
+                slot.release();
+                continue;
+            }
+
+            slot.t_start_process_prompt = t_main_ready - saved.prompt_elapsed_us;
+        }
     }
 
     bool launch_slot_with_task(server_slot & slot, server_task && task) {
@@ -2169,7 +2910,14 @@ private:
                 } break;
         }
     }
+    void process_single_task_ubatchboost(server_task && task) {
+        const auto type = task.type;
+        process_single_task(std::move(task));
 
+        if (type == SERVER_TASK_TYPE_SET_LORA) {
+            params_orig.lora_adapters = params_base.lora_adapters;
+        }
+    }
     void update_slots() {
         // check if all slots are idle
         {
@@ -3298,6 +4046,1146 @@ private:
         SRV_DBG("%s", "run slots completed\n");
     }
 
+    void update_slots_ubatchboost() {
+        // check if all slots are idle
+        {
+            bool all_idle = true;
+
+            for (auto & slot : slots) {
+                if (slot.is_processing()) {
+                    all_idle = false;
+                    break;
+                }
+            }
+
+            if (all_idle) {
+                SRV_INF("%s", "all slots are idle\n");
+
+                return;
+            }
+        }
+
+        {
+            SRV_DBG("%s", "posting NEXT_RESPONSE\n");
+
+            server_task task(SERVER_TASK_TYPE_NEXT_RESPONSE);
+            task.id = queue_tasks.get_new_id();
+            queue_tasks.post(std::move(task));
+        }
+
+        switch_ubatchboost_to_main_runtime();
+
+        // apply context-shift if needed
+        // TODO: simplify and improve
+        for (server_slot & slot : slots) {
+            if (slot.state == SLOT_STATE_GENERATING && slot.prompt.n_tokens() + 1 >= slot.n_ctx) {
+                if (!params_base.ctx_shift) {
+                    // this check is redundant (for good)
+                    // we should never get here, because generation should already stopped in process_token()
+                    send_error(slot, "context shift is disabled", ERROR_TYPE_SERVER);
+                    slot.release();
+                    continue;
+                }
+
+                if (mctx) {
+                    // we should never reach this because params_base.ctx_shift is automatically disabled if mmproj is loaded
+                    // we don't support ctx_shift because an image chunk may contains multiple tokens
+                    GGML_ABORT("not supported by multimodal");
+                }
+
+                if (slot.task->is_parent() || slot.task->is_child()) {
+                    send_error(slot, "context shift cannot be used for shared prompt", ERROR_TYPE_SERVER);
+                    slot.release();
+                    continue;
+                }
+
+                // Shift context
+                int n_keep = slot.task->params.n_keep < 0 ? slot.task->n_tokens() : slot.task->params.n_keep;
+
+                if (add_bos_token) {
+                    n_keep += 1;
+                }
+
+                n_keep = std::min(slot.n_ctx - 4, n_keep);
+
+                const int n_left    = slot.prompt.n_tokens() - n_keep;
+                const int n_discard = slot.task->params.n_discard ? slot.task->params.n_discard : (n_left / 2);
+
+                SLT_WRN(slot, "slot context shift, n_keep = %d, n_left = %d, n_discard = %d\n", n_keep, n_left, n_discard);
+
+                common_context_seq_rm (ctx_tgt, slot.id, n_keep            , n_keep + n_discard);
+                common_context_seq_add(ctx_tgt, slot.id, n_keep + n_discard, slot.prompt.n_tokens(), -n_discard);
+
+                if (ctx_dft) {
+                    common_context_seq_rm (ctx_dft.get(), slot.id, n_keep            , n_keep + n_discard);
+                    common_context_seq_add(ctx_dft.get(), slot.id, n_keep + n_discard, slot.prompt.tokens.pos_next(), -n_discard);
+                }
+
+                // add generated tokens to cache
+                // ref: https://github.com/ggml-org/llama.cpp/pull/16818#discussion_r2473269481
+                {
+                    GGML_ASSERT(!slot.prompt.tokens.has_mtmd);
+
+                    llama_tokens new_tokens = slot.prompt.tokens.get_tokens(); // copy
+                    for (size_t i = n_keep + n_discard; i < new_tokens.size(); i++) {
+                        new_tokens[i - n_discard] = new_tokens[i];
+                    }
+
+                    new_tokens.resize(slot.prompt.tokens.size() - n_discard);
+
+                    slot.prompt.tokens.clear();
+                    slot.prompt.tokens.insert(new_tokens);
+                }
+
+                slot.truncated = true;
+            }
+        }
+
+        // start populating the batch for this iteration
+        common_batch_clear(batch);
+
+        // track if given slot can be batched with slots already in the batch
+        server_slot * slot_batched = nullptr;
+
+        std::vector<server_slot *> generating;
+        std::vector<server_slot *> drafting;
+
+        // determine which slots are generating and drafting
+        for (auto & slot : slots) {
+            if (slot.state != SLOT_STATE_GENERATING) {
+                continue;
+            }
+
+            // check if we can batch this slot with the previous one
+            if (!slot_batched) {
+                slot_batched = &slot;
+            } else if (!slot_batched->can_batch_with(slot)) {
+                continue;
+            }
+
+            generating.push_back(&slot);
+
+            if (slot.can_speculate()) {
+                common_speculative_get_draft_params(spec.get(), slot.id).drafting = false;
+
+                const bool use_ckpt_tgt = ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_FULL;
+                const bool use_ckpt_dft = ctx_dft_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_FULL;
+
+                const int n_draft_max = slot.get_n_draft_max();
+
+                if (n_draft_max > 0) {
+                    GGML_ASSERT(slot.can_speculate());
+
+                    if (!slot.spec_draft.empty()) {
+                        // we have a previous (partial) draft to reuse
+                        if (use_ckpt_tgt) {
+                            GGML_ASSERT(!slot.spec_ckpt.empty());
+                        }
+                    } else {
+                        GGML_ASSERT(slot.spec_i_batch.empty());
+
+                        slot.spec_ckpt.update_pos(
+                                slot.prompt.n_tokens(),
+                                llama_memory_seq_pos_min(llama_get_memory(ctx_tgt), slot.id),
+                                llama_memory_seq_pos_max(llama_get_memory(ctx_tgt), slot.id));
+
+                        if (use_ckpt_dft) {
+                            slot.spec_ckpt.update_dft(ctx_dft.get(), slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY | LLAMA_STATE_SEQ_FLAGS_ON_DEVICE);
+                        }
+
+                        slot.spec_prompt = slot.prompt.tokens.get_text_tokens();
+
+                        common_speculative_get_draft_params(spec.get(), slot.id) = {
+                            /* .drafting = */ true,
+                            /* .n_max    = */ n_draft_max,
+                            /* .n_past   = */ slot.prompt.n_tokens(),
+                            /* .id_last  = */ slot.sampled,
+                            /* .prompt   = */ &slot.spec_prompt,
+                            /* .result   = */ &slot.spec_draft,
+                        };
+
+                        drafting.push_back(&slot);
+                    }
+                }
+            }
+        }
+
+        // generate the actual drafts (if any)
+        {
+            common_speculative_draft(spec.get());
+        }
+
+        // make checkpoints if needed
+        for (auto * slot_ptr : drafting) {
+            auto & slot = *slot_ptr;
+
+            auto & draft = slot.spec_draft;
+            auto & ckpt  = slot.spec_ckpt;
+
+            slot.n_draft_total += draft.size();
+
+            // TODO: avoid restoring the draft context and re-evaluating the drafted tokens when not needed [TAG_SPEC_AVOID_DRAFT_REEVAL]
+            const bool use_ckpt_dft = ctx_dft_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_FULL;
+
+            if (ctx_dft) {
+                if (use_ckpt_dft) {
+                    ckpt.load_dft(ctx_dft.get(), slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY | LLAMA_STATE_SEQ_FLAGS_ON_DEVICE);
+                }
+
+                common_context_seq_rm(ctx_dft.get(), slot.id, ckpt.pos_max + 1, -1);
+            }
+
+            if (!draft.empty()) {
+                const bool use_ckpt_tgt =
+                    ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_FULL ||
+                   (ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_RS && draft.size() > llama_n_rs_seq(ctx_tgt));
+
+                const bool use_ckpt_dft =
+                   (ctx_dft_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_RS && draft.size() > llama_n_rs_seq(ctx_dft.get()));
+
+                if (use_ckpt_tgt) {
+                    //const int64_t t_start = ggml_time_us();
+
+                    ckpt.update_tgt(ctx_tgt, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY | LLAMA_STATE_SEQ_FLAGS_ON_DEVICE);
+
+                    //const int64_t t_total = ggml_time_us() - t_start;
+                    //printf("checkpoint total: %f ms\n", t_total / 1000.0);
+
+                    SLT_DBG(slot, "created speculative checkpoint (pos_min = %d, pos_max = %d, n_tokens = %d, size = %.3f MiB, draft = %.3f MiB)\n",
+                            ckpt.pos_min, ckpt.pos_max, slot.prompt.n_tokens(),
+                            (float) ckpt.size() / 1024 / 1024,
+                            (float) ckpt.data_dft.size() / 1024 / 1024);
+                }
+
+                if (use_ckpt_dft) {
+                    ckpt.update_dft(ctx_dft.get(), slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY | LLAMA_STATE_SEQ_FLAGS_ON_DEVICE);
+                }
+            }
+        }
+
+        // update the batch with the sampled/drafted tokens
+        for (auto * slot_ptr : generating) {
+            auto & slot = *slot_ptr;
+
+            slot.update_batch(batch);
+        }
+
+        // process in chunks of params.n_batch
+        int32_t n_batch  = llama_n_batch(ctx_tgt);
+        int32_t n_ubatch = llama_n_ubatch(ctx_tgt);
+
+        float  alora_scale       = -1.0f;
+        size_t alora_disabled_id = 0;
+
+        // next, batch any pending prompts without exceeding n_batch
+        if (params_base.cont_batching || batch.n_tokens == 0) {
+            for (auto & slot : slots) {
+                if (!slot.is_processing()) {
+                    continue;
+                }
+
+                // check if we can batch this slot with the previous one
+                if (slot_batched && !slot_batched->can_batch_with(slot)) {
+                    continue;
+                }
+
+                // check if this is a child slot
+                if (slot.state == SLOT_STATE_WAIT_OTHER) {
+                    SLT_DBG(slot, "%s", "waiting for parent slot to complete\n");
+                    continue;
+                }
+
+                // this slot still has a prompt to be processed
+                if (slot.state == SLOT_STATE_PROCESSING_PROMPT || slot.state == SLOT_STATE_STARTED) {
+                    const auto & input_tokens = slot.task->tokens;
+
+                    // used to determine the number of tokens added to the batch for the current slot
+                    const auto n_tokens_prev = batch.n_tokens;
+
+                    // TODO: maybe move branch to outside of this loop in the future
+                    if (slot.state == SLOT_STATE_STARTED) {
+                        slot.t_start_process_prompt = ggml_time_us();
+                        slot.t_start_generation = 0;
+
+                        slot.state = SLOT_STATE_PROCESSING_PROMPT;
+
+                        SLT_TRC(slot, "new prompt, n_ctx_slot = %d, n_keep = %d, task.n_tokens = %d\n",
+                                slot.n_ctx, slot.task->params.n_keep, slot.task->n_tokens());
+
+                        // print prompt tokens (for debugging)
+                        /*if (1) {
+                            // first 16 tokens (avoid flooding logs)
+                            for (int i = 0; i < std::min<int>(16, input_tokens.size()); i++) {
+                                SLT_DBG(slot, "prompt token %3d: %6d '%s'\n", i, input_tokens[i], common_token_to_piece(ctx_tgt, input_tokens[i]).c_str());
+                            }
+                        } else {
+                            // all
+                            for (int i = 0; i < (int) input_tokens.size(); i++) {
+                                SLT_DBG(slot, "prompt token %3d: %6d '%s'\n", i, input_tokens[i], common_token_to_piece(ctx_tgt, input_tokens[i]).c_str());
+                            }
+                        }*/
+
+                        // keep track how many tokens we can reuse from the previous state
+                        int n_past = 0;
+
+                        // empty prompt passed -> release the slot and send empty response
+                        if (input_tokens.empty()) {
+                            SLT_WRN(slot, "%s", "empty prompt - releasing slot\n");
+
+                            slot.print_timings();
+                            send_final_response(slot);
+                            slot.release();
+
+                            continue;
+                        }
+
+                        // TODO: support memory-less logits computation
+                        if (slot.task->need_logits() && !llama_get_memory(ctx_tgt)) {
+                            send_error(slot, "the current context does not logits computation. skipping", ERROR_TYPE_SERVER);
+                            slot.release();
+                            continue;
+                        }
+
+                        if (!slot.can_split()) {
+                            if (slot.task->n_tokens() > n_ubatch) {
+                                send_error(slot,
+                                           string_format(
+                                               "input (%d tokens) is too large to process. increase the physical batch "
+                                               "size (current batch size: %d)",
+                                               slot.task->n_tokens(), n_ubatch),
+                                           ERROR_TYPE_SERVER);
+                                slot.release();
+                                continue;
+                            }
+
+                            if (slot.task->n_tokens() > slot.n_ctx) {
+                                send_error(
+                                    slot,
+                                    string_format(
+                                        "input (%d tokens) is larger than the max context size (%d tokens). skipping",
+                                        slot.task->n_tokens(), slot.n_ctx),
+                                    ERROR_TYPE_EXCEED_CONTEXT_SIZE);
+                                slot.release();
+                                continue;
+                            }
+                        } else {
+                            if (slot.task->n_tokens() >= slot.n_ctx) {
+                                send_error(slot,
+                                           string_format("request (%d tokens) exceeds the available context size (%d "
+                                                         "tokens), try increasing it",
+                                                         slot.task->n_tokens(), slot.n_ctx),
+                                           ERROR_TYPE_EXCEED_CONTEXT_SIZE);
+                                slot.release();
+                                continue;
+                            }
+
+                            if (slot.task->params.cache_prompt) {
+                                // reuse any previously computed tokens that are common with the new prompt
+                                n_past = slot.prompt.tokens.get_common_prefix(input_tokens);
+
+                                // if there is an alora invoked, don't cache after the invocation start
+                                if (slot.alora_invocation_start > 0) {
+                                    SLT_DBG(slot, "only caching to alora invocation start (n_past = %d, alora_invocation_start = %d)\n", n_past, slot.alora_invocation_start);
+                                    n_past = std::min(n_past, slot.alora_invocation_start - 1);
+                                }
+
+                                const auto n_cache_reuse = slot.task->params.n_cache_reuse;
+
+                                const bool can_cache_reuse =
+                                    llama_memory_can_shift(llama_get_memory(ctx_tgt)) &&
+                                    !slot.prompt.tokens.has_mtmd;
+
+                                if (!can_cache_reuse && n_cache_reuse > 0) {
+                                    SLT_WRN(slot, "cache reuse is not supported - ignoring n_cache_reuse = %d\n", n_cache_reuse);
+                                }
+
+                                // reuse chunks from the cached prompt by shifting their KV cache in the new position
+                                if (can_cache_reuse && n_cache_reuse > 0) {
+                                    GGML_ASSERT(!slot.prompt.tokens.has_mtmd);
+
+                                    size_t head_c = n_past; // cache
+                                    size_t head_p = n_past; // current prompt
+
+                                    if (mctx) {
+                                        // we should never reach this
+                                        GGML_ABORT("not supported by multimodal");
+                                    }
+
+                                    SLT_DBG(slot, "trying to reuse chunks with size > %d, n_past = %d\n", n_cache_reuse, n_past);
+
+                                    while (head_c < slot.prompt.tokens.size() &&
+                                           head_p < input_tokens.size()) {
+
+                                        size_t n_match = 0;
+                                        while (head_c + n_match < slot.prompt.tokens.size() &&
+                                               head_p + n_match < input_tokens.size()       &&
+                                               slot.prompt.tokens[head_c + n_match] == input_tokens[head_p + n_match]) {
+                                            n_match++;
+                                        }
+
+                                        if (n_match >= (size_t) n_cache_reuse) {
+                                            SLT_TRC(slot, "reusing chunk with size %zu, shifting KV cache [%zu, %zu) -> [%zu, %zu)\n", n_match, head_c, head_c + n_match, head_p, head_p + n_match);
+                                            //for (size_t i = head_p; i < head_p + n_match; i++) {
+                                            //    SLT_DBG(slot, "cache token %3zu: %6d '%s'\n", i, prompt_tokens[i], common_token_to_piece(ctx_tgt, prompt_tokens[i]).c_str());
+                                            //}
+
+                                            const int64_t kv_shift = (int64_t) head_p - (int64_t) head_c;
+
+                                            common_context_seq_rm (ctx_tgt, slot.id, head_p, head_c);
+                                            common_context_seq_add(ctx_tgt, slot.id, head_c, head_c + n_match, kv_shift);
+
+                                            if (ctx_dft) {
+                                                common_context_seq_rm (ctx_dft.get(), slot.id, head_p, head_c);
+                                                common_context_seq_add(ctx_dft.get(), slot.id, head_c, head_c + n_match, kv_shift);
+                                            }
+
+                                            for (size_t i = 0; i < n_match; i++) {
+                                                slot.prompt.tokens.set_token(head_p + i, slot.prompt.tokens[head_c + i]);
+                                                n_past++;
+                                            }
+
+                                            head_c += n_match;
+                                            head_p += n_match;
+                                        } else {
+                                            head_c += 1;
+                                        }
+                                    }
+
+                                    SLT_DBG(slot, "after context reuse, new n_past = %d\n", n_past);
+                                }
+                            } else {
+                                // if we don't cache the prompt, we have to remove all previous tokens
+                                n_past = 0;
+                            }
+
+                            llama_pos pos_next = slot.prompt.tokens.pos_next(n_past);
+
+                            // the largest pos_min required for a checkpoint to be useful
+                            const auto pos_min_thold = std::max(0, pos_next - n_swa);
+
+                            if (n_past > 0 && n_past < slot.prompt.n_tokens()) {
+                                const auto pos_min = llama_memory_seq_pos_min(llama_get_memory(ctx_tgt), slot.id);
+                                if (pos_min == -1) {
+                                    SLT_ERR(slot, "n_past = %d, slot.prompt.tokens.size() = %d, seq_id = %d, pos_min = %d\n", n_past, (int) slot.prompt.tokens.size(), slot.id, pos_min);
+                                    GGML_ABORT("pos_min == -1, but n_past > 0 - should not happen: https://github.com/ggml-org/llama.cpp/pull/13833#discussion_r2116181237");
+                                }
+
+                                // when the prompt prefix does not match, print the tokens around the mismatch
+                                // this is useful for debugging prompt caching
+                                if (slots_debug) {
+                                    const int np0 = std::max<int>(n_past - 4, 0);
+                                    const int np1 = std::min<int>(n_past + 6, std::min(slot.prompt.tokens.size(), slot.task->tokens.size()));
+
+                                    std::stringstream ss0;
+                                    std::stringstream ss1;
+
+                                    std::stringstream st0;
+                                    std::stringstream st1;
+
+                                    ss0 << "old: ... ";
+                                    ss1 << "new: ... ";
+
+                                    for (int i = np0; i < np1; i++) {
+                                        if (i == n_past) {
+                                            ss0 << " | ";
+                                            ss1 << " | ";
+                                        }
+
+                                        {
+                                            const auto token = slot.prompt.tokens[i];
+                                            const auto piece = token != LLAMA_TOKEN_NULL ? common_token_to_piece(ctx_tgt, token) : "[mtmd]";
+                                            ss0 << piece;
+                                            st0 << std::setw(8) << token;
+                                        }
+
+                                        {
+                                            const auto token = slot.task->tokens[i];
+                                            const auto piece = token != LLAMA_TOKEN_NULL ? common_token_to_piece(ctx_tgt, token) : "[mtmd]";
+                                            ss1 << piece;
+                                            st1 << std::setw(8) << token;
+                                        }
+                                    }
+
+                                    SLT_WRN(slot, "%s\n", ss0.str().c_str());
+                                    SLT_WRN(slot, "%s\n", ss1.str().c_str());
+
+                                    SLT_WRN(slot, "%s\n", st0.str().c_str());
+                                    SLT_WRN(slot, "%s\n", st1.str().c_str());
+                                }
+
+                                if (pos_min >= pos_min_thold) {
+                                    SLT_WRN(slot, "n_past = %d, slot.prompt.tokens.size() = %d, seq_id = %d, pos_min = %d, n_swa = %d\n", n_past, (int) slot.prompt.tokens.size(), slot.id, pos_min, n_swa);
+
+                                    // search for a context checkpoint
+                                    const auto it = std::find_if(
+                                        slot.prompt.checkpoints.rbegin(),
+                                        slot.prompt.checkpoints.rend(),
+                                        [&, func_name = __func__](const auto & cur) {
+                                            // guarantee that a checkpoint will result in at least one token being processed [TAG_PROMPT_LOGITS]
+                                            LOG_INF("slot %12.*s: id %2d | task %d | Checking checkpoint with [%d, %d] against %d...\n", 12,
+                                                func_name, (slot).id, ((slot).task ? (slot).task->id : -1), cur.pos_min, cur.pos_max, pos_min_thold);
+                                            return cur.pos_min < pos_min_thold || cur.pos_min == 0;
+                                        }
+                                    );
+
+                                    bool do_reset = it == slot.prompt.checkpoints.rend();
+
+                                    if (!do_reset) {
+                                        // restore the context checkpoint
+
+                                        it->load_tgt(ctx_tgt,       slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+                                        it->load_dft(ctx_dft.get(), slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+
+                                        pos_next = std::min(pos_next, std::max(it->pos_min + 1, it->pos_max));
+                                        n_past   = std::min(slot.prompt.tokens.size_up_to_pos(pos_next), (size_t) it->n_tokens);
+                                        SLT_WRN(slot, "restored context checkpoint (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", n_past = %d, size = %.3f MiB)\n", it->pos_min, it->pos_max, it->n_tokens, n_past, (float) it->size() / 1024 / 1024);
+                                    }
+
+                                    if (do_reset) {
+                                        SLT_WRN(slot, "forcing full prompt re-processing due to lack of cache data (likely due to SWA or hybrid/recurrent memory, see %s)\n",
+                                                "https://github.com/ggml-org/llama.cpp/pull/13194#issuecomment-2868343055");
+                                        pos_next = 0;
+                                        n_past = 0;
+                                        if (!switch_main_to_ubatchboost_runtime_for_full_prompt_reprocess(slot)) {
+                                            continue;
+                                        }
+                                        n_batch  = llama_n_batch(ctx_tgt);
+                                        n_ubatch = llama_n_ubatch(ctx_tgt);
+                                    }
+                                }
+                            }
+
+                            {
+                                // erase any checkpoints with pos_max > pos_next
+                                for (auto it = slot.prompt.checkpoints.begin(); it != slot.prompt.checkpoints.end();) {
+                                    const auto & cur = *it;
+                                    if (cur.pos_max > pos_next) {
+                                        SLT_WRN(slot, "erased invalidated context checkpoint (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", n_swa = %d, pos_next = %d, size = %.3f MiB)\n", cur.pos_min, cur.pos_max, cur.n_tokens, n_swa, pos_next, (float) cur.size() / 1024 / 1024);
+                                        it = slot.prompt.checkpoints.erase(it);
+                                    } else {
+                                        ++it;
+                                    }
+                                }
+                            }
+                        }
+
+                        // [TAG_PROMPT_LOGITS]
+                        if (n_past == slot.task->n_tokens() && n_past > 0) {
+                            SLT_WRN(slot, "need to evaluate at least 1 token for each active slot (n_past = %d, task.n_tokens() = %d)\n", n_past, slot.task->n_tokens());
+                            n_past--;
+                            SLT_WRN(slot, "n_past was set to %d\n", n_past);
+                        }
+
+                        slot.n_prompt_tokens_cache = n_past;
+                        slot.n_prompt_tokens_processed = 0;
+
+                        slot.prompt.tokens.keep_first(n_past);
+
+                        // send initial 0% progress update if needed
+                        // this is to signal the client that the request has started processing
+                        if (slot.task->params.stream && slot.task->params.return_progress) {
+                            send_partial_response(slot, {}, true);
+                        }
+                    }
+
+                    if (!slot.can_split()) {
+                        // cannot fit the prompt in the current batch - will try next iter
+                        if (batch.n_tokens + slot.task->n_tokens() > n_batch) {
+                            continue;
+                        }
+                    }
+
+                    const int64_t t_current = ggml_time_us();
+                    slot.t_prompt_processing = (t_current - slot.t_start_process_prompt) / 1e3;
+                    if (!should_hold_last_prompt_token_for_main_runtime(slot)) {
+                        slot.print_timings_pp();
+                    }
+
+                    // truncate any tokens that are beyond n_past for this slot
+                    const llama_pos p0 = slot.prompt.tokens.pos_next();
+
+                    SLT_TRC(slot, "cached n_tokens = %d, memory_seq_rm [%d, end)\n", slot.prompt.n_tokens(), p0);
+
+                    common_context_seq_rm(ctx_tgt, slot.id, p0, -1);
+                    if (ctx_dft) {
+                        common_context_seq_rm(ctx_dft.get(), slot.id, p0, -1);
+                    }
+
+                    // If using an alora, there may be uncached tokens that come
+                    // before the invocation sequence. When this happens, the
+                    // tokens before the invocation sequence need to be
+                    // processed without the adapter in a separate batch, then
+                    // the adapter needs to be enabled for the remaining tokens.
+                    if (lora_all_alora(slot.lora) && slot.alora_invocation_start - 1 > slot.prompt.n_tokens()) {
+                        SLT_DBG(slot, "processing pre-alora tokens without the adapter (n_tokens = %d, alora_invocation_start = %d)\n", slot.prompt.n_tokens(), slot.alora_invocation_start);
+                        const auto & enabled_loras = lora_get_enabled_ids(slot.lora);
+                        GGML_ASSERT(enabled_loras.size() == 1);
+                        alora_scale = slot.lora[enabled_loras[0]].scale;
+                        slot.lora[enabled_loras[0]].scale = 0.0f;
+                        alora_disabled_id = enabled_loras[0];
+                    }
+
+                    bool do_checkpoint = params_base.n_ctx_checkpoints > 0;
+
+                    // make checkpoints only for completion tasks
+                    do_checkpoint = do_checkpoint && slot.task->type == SERVER_TASK_TYPE_COMPLETION;
+
+                    // make a checkpoint of the parts of the memory that cannot be rolled back.
+                    // checkpoints are created only if:
+                    // - the model does not support partial sequence removal
+                    // - the model uses SWA (and we are not using `swa_full`)
+                    // - the model supports partial sequence removal but only up to a fixed bound
+                    do_checkpoint = do_checkpoint && (
+                            ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_FULL ||
+                            ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_RS ||
+                            n_swa > 0);
+
+                    bool has_mtmd = false;
+
+                    // check if we should process the image
+                    while (slot.prompt.n_tokens() < slot.task->n_tokens() && input_tokens[slot.prompt.n_tokens()] == LLAMA_TOKEN_NULL) {
+                        // process the image
+                        size_t n_tokens_out = 0;
+                        int32_t res = input_tokens.process_chunk(ctx_tgt, mctx, slot.prompt.n_tokens(), slot.prompt.tokens.pos_next(), slot.id, n_tokens_out);
+                        if (res != 0) {
+                            SLT_ERR(slot, "failed to process image, res = %d\n", res);
+                            send_error(slot, "failed to process image", ERROR_TYPE_SERVER);
+                            slot.release();
+                            continue;
+                        }
+
+                        if (ctx_dft) {
+                            // TODO: in the future, figure out how to infuse target embeddings to the images
+                            //       for now, we skip this for simplicity
+                            //       maybe we simply need to call `common_speculative_process()` on the mtmd batches in the `process_chunk` above?
+                            res = input_tokens.process_chunk(ctx_dft.get(), mctx, slot.prompt.n_tokens(), slot.prompt.tokens.pos_next(), slot.id, n_tokens_out);
+                            if (res != 0) {
+                                GGML_ABORT("failed to process multi-modal data on draft context\n");
+                            }
+                        }
+
+                        slot.n_prompt_tokens_processed += n_tokens_out;
+
+                        // add the image chunk to cache
+                        {
+                            const auto & chunk = input_tokens.find_chunk(slot.prompt.n_tokens());
+                            slot.prompt.tokens.push_back(chunk.get()); // copy
+                        }
+
+                        has_mtmd = true;
+                    }
+
+                    // add prompt tokens for processing in the current batch
+                    while (slot.prompt.n_tokens() < slot.task->n_tokens() && batch.n_tokens < n_batch) {
+                        if (should_hold_last_prompt_token_for_main_runtime(slot)) {
+                            break;
+                        }
+
+                        // get next token to process
+                        llama_token cur_tok = input_tokens[slot.prompt.n_tokens()];
+                        if (cur_tok == LLAMA_TOKEN_NULL) {
+                            break; // end of text chunk
+                        }
+
+                        // if this is an alora request with pre-invocation
+                        // tokens that are not cached, we need to stop filling
+                        // this batch at those pre-invocation tokens.
+                        if (alora_scale > 0 && slot.prompt.n_tokens() == slot.alora_invocation_start - 1) {
+                            SLT_DBG(slot, "stop prompt batch filling at (n_tokens = %d, alora_invocation_start = %d)\n", slot.prompt.n_tokens(), slot.alora_invocation_start);
+                            break;
+                        }
+
+                        // embedding requires all tokens in the batch to be output;
+                        // MTP also wants logits at every prompt position so the
+                        // streaming hook can mirror t_h_pre_norm into ctx_dft.
+                        common_batch_add(batch,
+                            cur_tok,
+                            slot.prompt.tokens.pos_next(),
+                            { slot.id },
+                            slot.need_embd());
+                        slot.prompt.tokens.push_back(cur_tok);
+
+                        slot.n_prompt_tokens_processed++;
+
+                        // process the last few tokens of the prompt separately in order to allow for a checkpoint to be created.
+                        // create checkpoints that many tokens before the end of the prompt:
+                        //  - 4 + n_ubatch
+                        //  - 4
+                        // ref: https://github.com/ggml-org/llama.cpp/pull/20288
+                        if (do_checkpoint) {
+                            static const int checkpoint_offsets[] = {4 + n_ubatch, 4};
+
+                            bool should_break = false;
+                            for (int offset : checkpoint_offsets) {
+                                const int n_last = std::min(n_batch, offset);
+                                if (slot.task->n_tokens() == slot.prompt.n_tokens() + n_last) {
+                                    should_break = true;
+                                    break;
+                                }
+                            }
+                            if (should_break) {
+                                break;
+                            }
+                        }
+                    }
+
+                    // the number of tokens added to the batch for the current slot
+                    const auto n_tokens_cur = batch.n_tokens - n_tokens_prev;
+
+                    // entire prompt has been processed
+                    if (slot.prompt.n_tokens() == slot.task->n_tokens()) {
+                        slot.state = SLOT_STATE_DONE_PROMPT;
+
+                        GGML_ASSERT(batch.n_tokens > 0);
+
+                        // extract the logits only for the last token
+                        batch.logits[batch.n_tokens - 1] = true;
+
+                        slot.n_decoded = 0;
+                        slot.i_batch   = batch.n_tokens - 1;
+
+                        slot.init_sampler();
+                    } else {
+                        if (slot.task->n_tokens() < slot.prompt.n_tokens() + n_ubatch) {
+                            // near the end of the prompt
+                            do_checkpoint = do_checkpoint && true;
+                        } else {
+                            // only do non-end checkpoints if the "checkpoint every n tokens" option is set
+                            do_checkpoint = do_checkpoint && params_base.checkpoint_every_nt > 0;
+
+                            if (do_checkpoint) {
+                                llama_pos last_checkpoint = 0;
+                                if (!slot.prompt.checkpoints.empty()) {
+                                    last_checkpoint = slot.prompt.checkpoints.back().n_tokens;
+                                }
+
+                                do_checkpoint = do_checkpoint && slot.prompt.n_tokens() - batch.n_tokens - last_checkpoint >= params_base.checkpoint_every_nt;
+
+                                if (do_checkpoint) {
+                                    SLT_INF(slot, "%d tokens since last checkpoint at %d, creating new checkpoint during processing at position %d\n", params_base.checkpoint_every_nt, last_checkpoint, slot.prompt.n_tokens());
+                                }
+                            }
+                        }
+                    }
+
+                    const auto pos_min = llama_memory_seq_pos_min(llama_get_memory(ctx_tgt), slot.id);
+                    const auto pos_max = llama_memory_seq_pos_max(llama_get_memory(ctx_tgt), slot.id);
+
+                    // no need for empty or small checkpoints
+                    do_checkpoint = do_checkpoint && (pos_min >= 0 && slot.prompt.n_tokens() >= 64);
+
+                    // do not checkpoint after mtmd chunks
+                    do_checkpoint = do_checkpoint && !has_mtmd;
+
+                    // no need to create checkpoints that are too close together
+                    do_checkpoint = do_checkpoint && (slot.prompt.checkpoints.empty() || slot.prompt.n_tokens() - n_tokens_cur > slot.prompt.checkpoints.back().n_tokens + 64);
+                    SLT_DBG(slot, "main/do_checkpoint = %s, pos_min = %d, pos_max = %d\n", do_checkpoint ? "yes" : "no", pos_min, pos_max);
+
+                    // note: we create the checkpoint before calling llama_decode(), so the current batch is not
+                    //       yet processed and therefore it is not part of the checkpoint.
+                    if (do_checkpoint) {
+                        create_checkpoint(slot, n_tokens_cur, pos_min, pos_max);
+                    }
+                }
+
+                if (!slot_batched) {
+                    slot_batched = &slot;
+                }
+
+                if (batch.n_tokens >= n_batch) {
+                    break;
+                }
+            }
+        }
+
+        SRV_DBG("decoding batch, n_tokens = %d\n", batch.n_tokens);
+
+        auto accept_special_token = [&](server_slot & slot, llama_token token) {
+            return params_base.special ||
+                slot.task->params.sampling.preserved_tokens.find(token) != slot.task->params.sampling.preserved_tokens.end();
+        };
+
+        if (slot_batched) {
+            // apply lora, only need to do it once per batch
+            common_set_adapter_lora(ctx_tgt, slot_batched->lora);
+
+            // if the lora is temporarily disabled for an alora, re-enable it
+            // for next time
+            if (alora_scale > 0.0f) {
+                SRV_DBG("re-enabling alora with scale %f\n", alora_scale);
+                slot_batched->lora[alora_disabled_id].scale = alora_scale;
+            }
+
+            llama_set_embeddings(ctx_tgt, slot_batched->need_embd());
+        }
+
+        if (batch.n_tokens == 0) {
+            SRV_WRN("%s", "no tokens to decode\n");
+
+            if (++n_empty_consecutive > 3) {
+                GGML_ABORT("fatal error - please provide logs and repro in %s\n", "https://github.com/ggml-org/llama.cpp/pull/20277");
+            }
+        } else {
+            n_empty_consecutive = 0;
+        }
+
+        int32_t i_next = 0;
+
+        // process the created batch of tokens
+        for (int32_t i = 0; i < batch.n_tokens; i = i_next) {
+            const int32_t n_tokens = std::min(n_batch, batch.n_tokens - i);
+
+            llama_batch batch_view = {
+                n_tokens,
+                batch.token    + i,
+                nullptr,
+                batch.pos      + i,
+                batch.n_seq_id + i,
+                batch.seq_id   + i,
+                batch.logits   + i,
+            };
+
+            const int ret = llama_decode(ctx_tgt, batch_view);
+
+            metrics.on_decoded(slots);
+
+            if (ret != 0) {
+                {
+                    std::string err;
+
+                    if (n_batch == 1 && ret == 1) {
+                        // TODO: try to terminate only the largest active slot/sequence and continue with the rest
+                        //       need to remove the tokens from the current batch too
+                        err = "Context size has been exceeded.";
+                    }
+
+                    if (ret == -1) {
+                        err = "Invalid input batch.";
+                    }
+
+                    if (ret < -1) {
+                        // TODO: update slot state based on llama_memory_seq_pos_min() and llama_memory_seq_pos_max()
+                        err = "Compute error.";
+                    }
+
+                    // TODO: handle ret == 2 (abort) when we start aborting
+
+                    if (!err.empty()) {
+                        SRV_ERR("%s i = %d, n_batch = %d, ret = %d\n", err.c_str(), i, n_batch, ret);
+
+                        for (auto & slot : slots) {
+                            if (slot.is_processing()) {
+                                send_error(slot, err);
+                                slot.release();
+
+                                // note: it's complicated to keep track of how much of the current batch has been
+                                //       processed before the error occurred, so we simply clear the entire context
+                                slot.prompt_clear(false);
+                            }
+                        }
+
+                        break;
+                    }
+                }
+
+                // retry with half the batch size to try to find a free slot in the KV cache
+                if (!try_clear_idle_slots()) {
+                    n_batch /= 2;
+                }
+
+                SRV_WRN("failed to find free space in the KV cache, retrying with smaller batch size, i = %d, n_batch = %d, ret = %d\n", i, n_batch, ret);
+
+                continue; // continue loop of n_batch
+            }
+
+            // TODO: avoid restoring the draft context and re-evaluating the drafted tokens when not needed [TAG_SPEC_AVOID_DRAFT_REEVAL]
+            //       for now, always re-evaluate for simplicity
+            //       ref: https://github.com/ggml-org/llama.cpp/pull/22728#issuecomment-4400925384
+            //
+            // | spec type   | need re-eval |
+            // | ---         | ---          |
+            // | draft model | no           | because the draft model does not use embeddings from the target
+            // | MTP (std)   | yes          |
+            // | MTP Gemma4  | no           | because the KV cache is shared
+            // | Eagle3      | yes          |
+            // | DFlash      | yes          | https://github.com/ggml-org/llama.cpp/pull/22728#issuecomment-4405406982
+            //
+            // note: this logic is now moved in `common_speculative_process()`
+            //       keeping the sketch here until for a bit, until the logic is finalized
+            //
+            //if (ctx_dft) {
+            //    // TODO: update as needed for MTP, Eagle3, etc.
+            //    const bool need_tgt_embd = false;
+
+            //    if (need_tgt_embd) {
+            //        llama_synchronize(ctx_tgt);
+            //    }
+
+            //    // the logic here varies depending on the speculative decoding method
+            //    //  - some draft contexts require embeddings from the target context, others don't
+            //    //  - some draft contexts involve an encoder step to transform the target embeddings to draft embeddings
+            //    // TODO: extract this in a function ?
+            //    {
+            //        // TODO: hook the embeddings from the last target batch here
+            //        if (llama_model_has_encoder(model_dft.get())) {
+            //            //llama_encode(ctx_dft, ...);
+
+            //            GGML_ABORT("not implemented yet\n");
+            //        }
+
+            //        const int ret = llama_decode(ctx_dft.get(), batch_view);
+
+            //        if (ret != 0) {
+            //            SRV_ERR("failed to decode draft batch, ret = %d\n", ret);
+
+            //            // TODO: handle error
+            //            break;
+            //        }
+            //    }
+            //}
+            if ((!ubatchboost_enabled || batch_needs_speculative_process(batch_view)) && !common_speculative_process(spec.get(), batch_view)) {
+                SRV_ERR("%s", "failed to process speculative batch\n");
+
+                // TODO: handle error
+                break;
+            }
+
+            // move the head of the batch forward with the number of tokens we just processed
+            i_next = i + n_tokens;
+
+            // on successful decode, restore the original batch size
+            n_batch = llama_n_batch(ctx_tgt);
+
+            // handle `n_cmpl > 1` tasks - when the main prompt is processed, activate all child tasks too
+            for (auto & slot : slots) {
+                if (slot.state == SLOT_STATE_DONE_PROMPT && slot.task->is_parent()) {
+                    std::vector<server_slot *> children;
+                    for (auto & other : slots) {
+                        if (other.state == SLOT_STATE_WAIT_OTHER && slot.task->id == other.task->id_parent) {
+                            children.push_back(&other);
+                        }
+                    }
+
+                    // all children slots should already launched by launch_slots_with_parent_task()
+                    // copy state to the child slots
+                    for (auto & child : children) {
+                        SLT_INF(slot, " - copying state to child %d\n", child->id);
+
+                        GGML_ASSERT(child->state == SLOT_STATE_WAIT_OTHER);
+
+                        slot.copy_state_to(*child);
+                        child->state = SLOT_STATE_DONE_PROMPT;
+                    }
+                }
+            }
+
+            for (auto & slot : slots) {
+                // optionally send prompt processing progress
+                if (slot.state == SLOT_STATE_PROCESSING_PROMPT || slot.state == SLOT_STATE_DONE_PROMPT) {
+                    if (slot.task->params.stream && slot.task->params.return_progress) {
+                        send_partial_response(slot, {}, true);
+                    }
+                }
+
+                if (slot.i_batch < (int) i || slot.i_batch >= (int) (i + n_tokens)) {
+                    continue; // continue loop of slots
+                }
+
+                if (slot.state == SLOT_STATE_DONE_PROMPT) {
+                    if (slot.task->type == SERVER_TASK_TYPE_EMBEDDING) {
+                        // prompt evaluated for embedding
+                        send_embedding(slot, batch_view);
+                        slot.release();
+                        slot.i_batch = -1;
+                        continue; // continue loop of slots
+                    }
+
+                    if (slot.task->type == SERVER_TASK_TYPE_RERANK) {
+                        send_rerank(slot, batch_view);
+                        slot.release();
+                        slot.i_batch = -1;
+                        continue; // continue loop of slots
+                    }
+
+                    GGML_ASSERT(slot.task->need_sampling());
+
+                    // prompt evaluated for next-token prediction
+                    slot.state = SLOT_STATE_GENERATING;
+
+                    if (slot.can_speculate()) {
+                        common_speculative_begin(spec.get(), slot.id, slot.prompt.tokens.get_text_tokens());
+                    }
+                } else if (slot.state != SLOT_STATE_GENERATING) {
+                    continue; // continue loop of slots
+                }
+
+                if (slot.can_speculate() && !slot.spec_draft.empty()) {
+                    continue; // sample using speculative decoding
+                }
+
+                const int tok_idx = slot.i_batch - i;
+
+                llama_token id = common_sampler_sample(slot.smpl.get(), slot.ctx_tgt, tok_idx);
+
+                slot.i_batch = -1;
+
+                common_sampler_accept(slot.smpl.get(), id, true);
+
+                // here we have synchronized the llama_context (due to the sampling above), so we can do time measurement
+                const int64_t t_current = ggml_time_us();
+
+                slot.n_decoded += 1;
+
+                if (slot.n_decoded == 1) {
+                    slot.t_start_generation = t_current;
+                    slot.t_prompt_processing = (slot.t_start_generation - slot.t_start_process_prompt) / 1e3;
+                    metrics.on_prompt_eval(slot);
+                }
+
+                slot.t_token_generation = std::max<int64_t>(1, t_current - slot.t_start_generation) / 1e3;
+
+                completion_token_output result;
+                result.tok          = id;
+                result.text_to_send = common_token_to_piece(slot.ctx_tgt, result.tok, accept_special_token(slot, result.tok));
+                result.prob         = 1.0f; // TODO: set it here instead of doing inside populate_token_probs
+
+                if (slot.task->params.sampling.n_probs > 0) {
+                    populate_token_probs(slot, result, slot.task->params.post_sampling_probs, params_base.special, tok_idx);
+                }
+
+                if (!process_token(result, slot)) {
+                    // release slot because of stop condition
+                    slot.print_timings();
+                    send_final_response(slot);
+                    metrics.on_prediction(slot);
+                    slot.release();
+
+                    continue;
+                }
+
+                slot.print_timings_tg();
+            }
+
+            // speculative decoding - main model sample and accept
+            for (auto & slot : slots) {
+                if (slot.state != SLOT_STATE_GENERATING || !slot.can_speculate() || slot.spec_draft.empty()) {
+                    continue;
+                }
+
+                // save the original draft size
+                const size_t n_draft = slot.spec_draft.size();
+
+                GGML_ASSERT(n_draft > 0);
+
+                // verify and try to accept the draft
+                {
+                    // save the sampler sampler state in case we need to restore it
+                    common_sampler_ptr smpl_save(common_sampler_clone(slot.smpl.get()));
+
+                    GGML_ASSERT(slot.spec_i_batch.size() == n_draft + 1);
+                    auto accepted = common_sampler_sample_and_accept_n(slot.smpl.get(), slot.ctx_tgt, slot.spec_i_batch, slot.spec_draft);
+                    slot.spec_i_batch.clear();
+
+                    GGML_ASSERT(accepted.size() >= 1);
+
+                    const uint32_t n_rollback = slot.spec_draft.size() + 1 - accepted.size();
+
+                    const bool use_ckpt_tgt =
+                        ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_FULL ||
+                       (ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_RS && n_rollback > llama_n_rs_seq(ctx_tgt));
+
+                    // check for partial draft acceptance
+                    if (n_rollback > 0) {
+                        if (use_ckpt_tgt) {
+                            if (trace > 0) {
+                                SLT_INF(slot, "accepted %2zu/%2zu draft tokens (restore checkpoint)\n", accepted.size() - 1, slot.spec_draft.size());
+                            }
+
+                            // partial acceptance is not supported by the context -> truncate the draft and restore the state
+                            slot.spec_draft = std::move(accepted);
+
+                            const auto & ckpt = slot.spec_ckpt;
+
+                            SLT_DBG(slot, "restoring speculative checkpoint (pos_min = %d, pos_max = %d, size = %zu)\n", ckpt.pos_min, ckpt.pos_max, ckpt.size());
+
+                            {
+                                ckpt.load_tgt(slot.ctx_tgt, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY | LLAMA_STATE_SEQ_FLAGS_ON_DEVICE);
+
+                                common_context_seq_rm(slot.ctx_tgt, slot.id, ckpt.pos_max + 1, -1);
+                            }
+
+                            if (slot.ctx_dft) {
+                                ckpt.load_dft(slot.ctx_dft, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY | LLAMA_STATE_SEQ_FLAGS_ON_DEVICE);
+
+                                common_context_seq_rm(slot.ctx_dft, slot.id, ckpt.pos_max + 1, -1);
+                            }
+
+                            slot.prompt.tokens.keep_first(ckpt.n_tokens);
+                            slot.smpl = std::move(smpl_save);
+
+                            continue;
+                        }
+                    }
+
+                    if (trace > 0) {
+                        SLT_INF(slot, "accepted %2zu/%2zu draft tokens\n", accepted.size() - 1, n_draft);
+                    }
+
+                    common_speculative_accept(spec.get(), slot.id, accepted.size() - 1);
+
+                    slot.spec_draft = std::move(accepted);
+                }
+
+                const int64_t t_current = ggml_time_us();
+
+                const auto ids = std::move(slot.spec_draft);
+
+                slot.t_token_generation = std::max<int64_t>(1, t_current - slot.t_start_generation) / 1e3;
+
+                // update how many tokens out of those tested were accepted
+                slot.n_draft_accepted += ids.size() - 1;
+
+                // add accepted tokens to the prompt
+                slot.prompt.tokens.keep_first(slot.prompt.n_tokens() - n_draft);
+                slot.prompt.tokens.insert({ids.begin(), ids.end() - 1});
+
+                slot.sampled = ids.back(); // last accepted token
+                SLT_DBG(slot, "add accepted tokens: sampled=%d, ids.size=%zu, n_draft=%zu\n", slot.sampled, ids.size(), n_draft);
+
+                common_context_seq_rm(slot.ctx_tgt, slot.id, slot.prompt.tokens.pos_next(), -1);
+                if (slot.ctx_dft) {
+                    common_context_seq_rm(slot.ctx_dft, slot.id, slot.prompt.tokens.pos_next(), -1);
+                }
+
+                for (size_t i = 0; i < ids.size(); ++i) {
+                    completion_token_output result;
+
+                    result.tok          = ids[i];
+                    result.text_to_send = common_token_to_piece(slot.ctx_tgt, result.tok, accept_special_token(slot, result.tok));
+                    result.prob         = 1.0f; // set later
+
+                    // TODO: set result.probs
+
+                    slot.n_decoded += 1;
+
+                    if (!process_token(result, slot)) {
+                        slot.print_timings();
+                        send_final_response(slot);
+                        metrics.on_prediction(slot);
+                        slot.release();
+
+                        break;
+                    }
+                }
+
+                slot.print_timings_tg();
+
+                SLT_DBG(slot, "accepted %d/%d draft tokens, new n_tokens = %d\n", (int) ids.size() - 1, (int) n_draft, slot.prompt.n_tokens());
+            }
+        }
+
+        SRV_DBG("%s", "run slots completed\n");
+    }
     int get_slot_n_ctx() {
         return slots.back().n_ctx;
     }

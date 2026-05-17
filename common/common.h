@@ -425,6 +425,9 @@ struct common_params {
     int32_t n_ctx                 =     0; // context size, 0 == context the model was trained with
     int32_t n_batch               =  2048; // logical batch size for prompt processing (must be >=32 to use BLAS)
     int32_t n_ubatch              =   512; // physical batch size for prompt processing (must be >=32 to use BLAS)
+    int32_t promptprocessing_ubatchboost_size       =     0; // server-only prompt processing ubatch boost size, 0 = disabled
+    int32_t promptprocessing_ubatchboost_gpu_layers =    -3; // server-only prompt processing ubatch boost GPU layers, -3 = inherit
+    int32_t promptprocessing_ubatchboost_n_cpu_moe  =    -1; // server-only prompt processing ubatch boost MoE CPU layers, -1 = inherit
     int32_t n_keep                =     0; // number of tokens to keep from initial prompt
     int32_t n_chunks              =    -1; // max number of chunks to process (-1 = unlimited)
     int32_t n_parallel            =     1; // number of parallel sequences to decode
@@ -591,6 +594,7 @@ struct common_params {
     int32_t n_cache_reuse       = 0;     // min chunk size to reuse from the cache via KV shifting
     bool    cache_prompt        = true;  // whether to enable prompt caching
     bool    cache_idle_slots    = true;  // save and clear idle slots upon starting a new task
+    bool    tokengeneration_no_warmup                   = false; // skip warmup when loading main runtime for token generation
     int32_t n_ctx_checkpoints   = 32;    // max number of context checkpoints per slot
     int32_t checkpoint_every_nt = 8192;  // make a checkpoint every n tokens during prefill
     int32_t cache_ram_mib       = 8192;  // -1 = no limit, 0 - disable, 1 = 1 MiB, etc.

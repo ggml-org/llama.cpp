@@ -1310,6 +1310,23 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_UBATCH"));
     add_opt(common_arg(
+        {"--promptprocessing-ubatchboost-size"}, "N",
+        "server-only physical batch size for the prompt processing ubatch boost runtime; 0 disables ubatch boost mode",
+        [](common_params & params, int value) {
+            if (value < 0) {
+                throw std::invalid_argument("error: --promptprocessing-ubatchboost-size must be >= 0\n");
+            }
+            params.promptprocessing_ubatchboost_size = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_PROMPTPROCESSING_UBATCHBOOST_SIZE"));
+    add_opt(common_arg(
+        {"--tokengeneration-no-warmup"},
+        "server-only: skip warmup when loading the main runtime for token generation after ubatch boost prompt processing",
+        [](common_params & params) {
+            params.tokengeneration_no_warmup = true;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_TOKENGENERATION_NO_WARMUP"));
+    add_opt(common_arg(
         {"--keep"}, "N",
         string_format("number of tokens to keep from the initial prompt (default: %d, -1 = all)", params.n_keep),
         [](common_params & params, int value) {
@@ -2365,6 +2382,33 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             }
         }
     ).set_env("LLAMA_ARG_N_GPU_LAYERS"));
+    add_opt(common_arg(
+        {"--promptprocessing-ubatchboost-gpu-layers"}, "N",
+        "server-only GPU layers for the prompt processing ubatch boost runtime, either an exact number, 'auto', or 'all'; inherits --gpu-layers unless set",
+        [](common_params & params, const std::string & value) {
+            if (value == "auto") {
+                params.promptprocessing_ubatchboost_gpu_layers = -1;
+            } else if (value == "all") {
+                params.promptprocessing_ubatchboost_gpu_layers = -2;
+            } else {
+                params.promptprocessing_ubatchboost_gpu_layers = std::stoi(value);
+            }
+            if (!llama_supports_gpu_offload()) {
+                fprintf(stderr, "warning: no usable GPU found, --promptprocessing-ubatchboost-gpu-layers option will be ignored\n");
+                fprintf(stderr, "warning: one possible reason is that llama.cpp was compiled without GPU support\n");
+            }
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_PROMPTPROCESSING_UBATCHBOOST_GPU_LAYERS"));
+    add_opt(common_arg(
+        {"--promptprocessing-ubatchboost-n-cpu-moe"}, "N",
+        "server-only: place the MoE weights of the first N layers in the CPU for the prompt processing ubatch boost runtime",
+        [](common_params & params, int value) {
+            if (value < 0) {
+                throw std::invalid_argument("invalid value");
+            }
+            params.promptprocessing_ubatchboost_n_cpu_moe = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_PROMPTPROCESSING_UBATCHBOOST_N_CPU_MOE"));
     add_opt(common_arg(
         {"-sm", "--split-mode"}, "{none,layer,row,tensor}",
         "how to split the model across multiple GPUs, one of:\n"
