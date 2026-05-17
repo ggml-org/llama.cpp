@@ -84,6 +84,8 @@ add_library(${TARGET}
     llguidance.cpp
     log.cpp
     log.h
+    mtp.cpp
+    mtp.h
     ngram-cache.cpp
     ngram-cache.h
     ngram-map.cpp

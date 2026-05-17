@@ -3,8 +3,8 @@
 #include "common.h"
 #include "ggml.h"
 #include "llama.h"
-#include "../src/llama-ext.h" // staging API: llama_set_embeddings_pre_norm / llama_get_embeddings_pre_norm_ith (used by MTP)
 #include "log.h"
+#include "mtp.h"
 #include "ngram-cache.h"
 #include "ngram-map.h"
 #include "ngram-mod.h"
@@ -429,8 +429,8 @@ struct common_speculative_state_draft_mtp : public common_speculative_impl {
             s.reset(common_sampler_init(llama_get_model(ctx_dft), sparams));
         }
 
-        llama_set_embeddings_pre_norm(ctx_tgt, true);
-        llama_set_embeddings_pre_norm(ctx_dft, true);
+        common_mtp_set_embeddings_pre_norm(ctx_tgt, true);
+        common_mtp_set_embeddings_pre_norm(ctx_dft, true);
 
         pending_h.assign(n_seq, std::vector<float>(n_embd, 0.0f));
 
@@ -513,7 +513,7 @@ struct common_speculative_state_draft_mtp : public common_speculative_impl {
         //                                                       ^--- this is a problem
         // TODO:this is generally true, but would be nice to assert it
         {
-            const float * h_tgt = llama_get_embeddings_pre_norm(ctx_tgt);
+            const float * h_tgt = common_mtp_get_embeddings_pre_norm(ctx_tgt);
             std::memcpy(batch.embd + (size_t) 1 * n_embd, h_tgt, row_bytes * (n_tokens-1));
 
             //{
@@ -555,7 +555,7 @@ struct common_speculative_state_draft_mtp : public common_speculative_impl {
             verify_h[seq_id].resize((size_t) n_rows * n_embd);
 
             for (int32_t i = 0; i < n_rows; ++i) {
-                const float * h = llama_get_embeddings_pre_norm_ith(ctx_tgt, i_batch_beg[seq_id] + i);
+                const float * h = common_mtp_get_embeddings_pre_norm_ith(ctx_tgt, i_batch_beg[seq_id] + i);
                 std::memcpy(verify_h[seq_id].data() + (size_t) i * n_embd, h, row_bytes);
             }
 
@@ -616,7 +616,7 @@ struct common_speculative_state_draft_mtp : public common_speculative_impl {
                 auto * smpl = smpls[seq_id].get();
 
                 common_sampler_sample(smpl, ctx_dft, i_batch, true);
-                h_row = llama_get_embeddings_pre_norm_ith(ctx_dft, i_batch);
+                h_row = common_mtp_get_embeddings_pre_norm_ith(ctx_dft, i_batch);
                 ++i_batch;
 
                 const auto * cur_p = common_sampler_get_candidates(smpl, true);
@@ -712,12 +712,12 @@ struct common_speculative_state_attached_mtp : public common_speculative_impl {
         , params(params.draft) {
         auto * ctx_tgt = this->params.ctx_tgt;
         GGML_ASSERT(ctx_tgt && "attached MTP requires ctx_tgt");
-        GGML_ASSERT(llama_model_has_mtp_assistant(llama_get_model(ctx_tgt)) && "attached MTP assistant was not loaded");
+        GGML_ASSERT(common_mtp_assistant_is_attached(llama_get_model(ctx_tgt)) && "attached MTP assistant was not loaded");
 
-        n_embd = (int32_t) llama_model_mtp_n_embd_backbone(llama_get_model(ctx_tgt));
+        n_embd = (int32_t) common_mtp_assistant_n_embd_backbone(llama_get_model(ctx_tgt));
         GGML_ASSERT(n_embd > 0);
 
-        llama_set_embeddings_pre_norm(ctx_tgt, true);
+        common_mtp_set_embeddings_pre_norm(ctx_tgt, true);
 
         pending_h.assign(n_seq, std::vector<float>(n_embd, 0.0f));
         verify_h.assign(n_seq, {});
@@ -763,7 +763,7 @@ struct common_speculative_state_attached_mtp : public common_speculative_impl {
             verify_h[seq_id].resize((size_t) n_rows * n_embd);
 
             for (int32_t i = 0; i < n_rows; ++i) {
-                const float * h = llama_get_embeddings_pre_norm_ith(ctx_tgt, i_batch_beg[seq_id] + i);
+                const float * h = common_mtp_get_embeddings_pre_norm_ith(ctx_tgt, i_batch_beg[seq_id] + i);
                 if (!h) {
                     LOG_ERR("%s: missing target pre-norm hidden row\n", __func__);
                     return false;
@@ -798,11 +798,11 @@ struct common_speculative_state_attached_mtp : public common_speculative_impl {
             std::vector<llama_token> drafts(n_max);
             std::vector<float> h = pending_h[seq_id];
 
-            const int32_t rc = llama_decode_mtp(
+            const int32_t rc = common_mtp_decode(
                     ctx_tgt, seq_id, dp.n_past - 1, dp.id_last,
                     h.data(), n_max, drafts.data(), nullptr, nullptr);
             if (rc != 0) {
-                LOG_WRN("%s: llama_decode_mtp returned %d\n", __func__, rc);
+                LOG_WRN("%s: common_mtp_decode returned %d\n", __func__, rc);
                 continue;
             }
 
@@ -1364,7 +1364,7 @@ common_speculative * common_speculative_init(common_params_speculative & params,
         bool has_draft_simple = (enabled_configs & (1u << COMMON_SPECULATIVE_TYPE_DRAFT_SIMPLE));
         bool has_draft_eagle3 = false; // TODO PR-18039: if params.speculative.eagle3
         bool has_attached_mtp = params.draft.ctx_tgt &&
-            llama_model_has_mtp_assistant(llama_get_model(params.draft.ctx_tgt));
+            common_mtp_assistant_is_attached(llama_get_model(params.draft.ctx_tgt));
         bool has_mtp = (enabled_configs & (1u << COMMON_SPECULATIVE_TYPE_DRAFT_MTP)) &&
             (params.draft.ctx_dft != nullptr || has_attached_mtp);
 
@@ -1434,7 +1434,7 @@ common_speculative * common_speculative_init(common_params_speculative & params,
             }
             case COMMON_SPECULATIVE_TYPE_DRAFT_MTP: {
                 if (config.params.draft.ctx_tgt &&
-                        llama_model_has_mtp_assistant(llama_get_model(config.params.draft.ctx_tgt))) {
+                        common_mtp_assistant_is_attached(llama_get_model(config.params.draft.ctx_tgt))) {
                     impls.push_back(std::make_unique<common_speculative_state_attached_mtp>(config.params, n_seq));
                 } else {
                     impls.push_back(std::make_unique<common_speculative_state_draft_mtp>(config.params, n_seq));

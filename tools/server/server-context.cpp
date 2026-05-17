@@ -9,8 +9,8 @@
 #include "build-info.h"
 #include "common.h"
 #include "llama.h"
-#include "../../src/llama-ext.h" // staging API: attached MTP assistant inspection
 #include "log.h"
+#include "mtp.h"
 #include "sampling.h"
 #include "speculative.h"
 #include "mtmd.h"
@@ -755,7 +755,7 @@ private:
         const bool spec_mtp_attached = std::find(params_base.speculative.types.begin(),
                                         params_base.speculative.types.end(),
                                         COMMON_SPECULATIVE_TYPE_DRAFT_MTP) != params_base.speculative.types.end() &&
-                                      llama_model_has_mtp_assistant(model_tgt);
+                                      common_mtp_assistant_is_attached(model_tgt);
 
         if (params_base.speculative.has_dft() && !spec_mtp_attached) {
             // TODO speculative: move to common/speculative.cpp?

@@ -6,7 +6,7 @@
 #include "fit.h"
 #include "log.h"
 #include "llama.h"
-#include "../src/llama-ext.h" // staging API: attached MTP assistant loading
+#include "mtp.h"
 #include "sampling.h"
 #include "speculative.h"
 #include "unicode.h"
@@ -1195,7 +1195,7 @@ common_init_result::common_init_result(common_params & params) :
         params_mtp.tensor_buft_overrides = params.speculative.draft.tensor_buft_overrides;
 
         auto mparams_mtp = common_model_params_to_llama(params_mtp);
-        const int rc = llama_model_load_mtp_from_file(model, params.speculative.draft.mparams.path.c_str(), mparams_mtp);
+        const int rc = common_mtp_assistant_load_from_file(model, params.speculative.draft.mparams.path.c_str(), mparams_mtp);
         if (rc == 0) {
             LOG_INF("%s: loaded attached MTP assistant '%s'\n", __func__, params.speculative.draft.mparams.path.c_str());
         } else if (rc != -2) {
