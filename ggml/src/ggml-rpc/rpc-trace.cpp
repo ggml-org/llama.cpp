@@ -21,6 +21,7 @@
 #include <opentelemetry/sdk/resource/resource.h>
 #include <opentelemetry/sdk/trace/batch_span_processor_factory.h>
 #include <opentelemetry/sdk/trace/tracer_provider_factory.h>
+#include <opentelemetry/trace/default_span.h>
 #include <opentelemetry/trace/provider.h>
 #include <opentelemetry/trace/scope.h>
 
@@ -172,6 +173,62 @@ extern "C" void rpc_trace_span_end(rpc_trace_span_t span) {
 }
 
 
+
+extern "C" int rpc_trace_span_get_ids(rpc_trace_span_t span,
+                                      uint8_t trace_id[16],
+                                      uint8_t span_id[8]) {
+    // Zero-fill on every path so callers see a well-defined buffer even on
+    // failure — server-side will treat all-zero trace_id as "no parent".
+    for (int i = 0; i < 16; ++i) trace_id[i] = 0;
+    for (int i = 0; i < 8;  ++i) span_id[i]  = 0;
+    if (!span || !span->handle) {
+        return 0;
+    }
+    auto ctx = span->handle->GetContext();
+    if (!ctx.IsValid()) {
+        return 0;
+    }
+    ctx.trace_id().CopyBytesTo(opentelemetry::nostd::span<uint8_t, 16>(trace_id, 16));
+    ctx.span_id().CopyBytesTo (opentelemetry::nostd::span<uint8_t, 8> (span_id,  8));
+    return 1;
+}
+
+extern "C" rpc_trace_span_t rpc_trace_span_begin_with_parent(const char * name,
+                                                             const uint8_t trace_id[16],
+                                                             const uint8_t parent_span_id[8]) {
+    auto * t = tracer_or_null();
+    if (!t) {
+        return nullptr;
+    }
+    // All-zero trace_id means the client did not have an active span; fall
+    // back to a normal root span on the server.
+    bool nonzero = false;
+    for (int i = 0; i < 16; ++i) { if (trace_id[i]) { nonzero = true; break; } }
+    if (!nonzero) {
+        trace::StartSpanOptions opts;
+        opts.kind = trace::SpanKind::kServer;
+        auto span = t->StartSpan(name, opts);
+        if (!span) return nullptr;
+        return new rpc_trace_span(std::move(span));
+    }
+
+    trace::TraceId    tid (opentelemetry::nostd::span<const uint8_t, 16>(trace_id, 16));
+    trace::SpanId     pid (opentelemetry::nostd::span<const uint8_t, 8> (parent_span_id, 8));
+    trace::TraceFlags flags(trace::TraceFlags::kIsSampled);
+    trace::SpanContext parent_ctx(tid, pid, flags, /*is_remote=*/true);
+
+    auto parent_span = opentelemetry::nostd::shared_ptr<trace::Span>(new trace::DefaultSpan(parent_ctx));
+    auto current = opentelemetry::context::RuntimeContext::GetCurrent();
+    auto ctx_with_parent = trace::SetSpan(current, parent_span);
+
+    trace::StartSpanOptions opts;
+    opts.kind   = trace::SpanKind::kServer;
+    opts.parent = ctx_with_parent;
+    auto span = t->StartSpan(name, opts);
+    if (!span) return nullptr;
+    return new rpc_trace_span(std::move(span));
+}
+
 #else  // !GGML_RPC_OPENTELEMETRY -- no-op stubs so callers don't need the option.
 
 #include <cstddef>
@@ -185,5 +242,11 @@ extern "C" void rpc_trace_set_str  (rpc_trace_span_t, const char *, const char *
 extern "C" void rpc_trace_set_bytes(rpc_trace_span_t, const char *, size_t)       {}
 extern "C" void rpc_trace_span_fail(rpc_trace_span_t, const char *)               {}
 extern "C" void rpc_trace_span_end (rpc_trace_span_t)                             {}
+extern "C" int  rpc_trace_span_get_ids(rpc_trace_span_t, uint8_t t[16], uint8_t s[8]) {
+    for (int i = 0; i < 16; ++i) t[i] = 0;
+    for (int i = 0; i < 8;  ++i) s[i] = 0;
+    return 0;
+}
+extern "C" rpc_trace_span_t rpc_trace_span_begin_with_parent(const char *, const uint8_t[16], const uint8_t[8]) { return nullptr; }
 
 #endif // GGML_RPC_OPENTELEMETRY

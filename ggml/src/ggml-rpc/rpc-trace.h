@@ -52,6 +52,22 @@ void rpc_trace_span_fail(rpc_trace_span_t span, const char * msg);
 // End a successful span.
 void rpc_trace_span_end (rpc_trace_span_t span);
 
+// Extract the W3C trace_id (16 bytes) and span_id (8 bytes) from an
+// in-flight client span. Used to forward the context to the RPC server so
+// the server's spans become children of this one. Returns 1 on success,
+// 0 if span is null or invalid (in which case the buffers are zero-filled).
+int  rpc_trace_span_get_ids(rpc_trace_span_t span,
+                            uint8_t trace_id[16],
+                            uint8_t span_id[8]);
+
+// Start a span with an explicit *remote* parent built from the bytes the
+// client sent over the wire. Returns nullptr if tracing is disabled, or if
+// trace_id is all-zeros (invalid parent — caller should fall back to
+// rpc_trace_span_begin).
+rpc_trace_span_t rpc_trace_span_begin_with_parent(const char * name,
+                                                  const uint8_t trace_id[16],
+                                                  const uint8_t parent_span_id[8]);
+
 #ifdef __cplusplus
 }
 #endif
@@ -74,6 +90,10 @@ void rpc_trace_span_end (rpc_trace_span_t span);
 class rpc_trace_scope {
 public:
     explicit rpc_trace_scope(const char * name) : span_(rpc_trace_span_begin(name)) {}
+    // Construct a scope whose span is a child of a remote parent (server side,
+    // parent IDs received from the client over the wire).
+    rpc_trace_scope(const char * name, const uint8_t trace_id[16], const uint8_t parent_span_id[8])
+        : span_(rpc_trace_span_begin_with_parent(name, trace_id, parent_span_id)) {}
     ~rpc_trace_scope() { end(); }
     rpc_trace_scope(const rpc_trace_scope &)            = delete;
     rpc_trace_scope & operator=(const rpc_trace_scope &) = delete;

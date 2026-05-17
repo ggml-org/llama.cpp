@@ -95,10 +95,6 @@ static_assert(RPC_CMD_HELLO == 14, "RPC_CMD_HELLO must be always 14");
 // Try RPC_CMD_SET_TENSOR_HASH first when data size is larger than this threshold
 const size_t HASH_THRESHOLD = 10 * 1024 * 1024;
 
-// Local feature bitmap advertised in the CAPS exchange. Empty for now;
-// step 3 will set bit 0 once the trace-ctx wire format is in.
-static constexpr uint64_t RPC_LOCAL_FEATURES = 0;
-
 
 struct rpc_msg_hello_req {
     uint8_t conn_caps[RPC_CONN_CAPS_SIZE];
@@ -126,6 +122,11 @@ struct rpc_msg_caps_rsp {
     uint64_t server_features;
     uint64_t negotiated;
 };
+
+// Local feature bitmap advertised in the CAPS exchange. Bit 0 is
+// TRACE_CTX_V1 (W3C trace_id + parent_span_id prepended to every
+// command frame); the bit is only honored if the peer also advertises it.
+static constexpr uint64_t RPC_LOCAL_FEATURES = GGML_RPC_FEATURE_TRACE_CTX_V1;
 
 struct rpc_msg_device_count_rsp {
     uint32_t device_count;
@@ -349,10 +350,24 @@ static const char * rpc_cmd_name(enum rpc_cmd cmd) {
 //
 // RPC request : | rpc_cmd (1 byte) | request_size (8 bytes) | request_data (request_size bytes) |
 static bool send_rpc_request(socket_ptr sock, enum rpc_cmd cmd,
-                             const void * input, size_t input_size) {
+                             const void * input, size_t input_size,
+                             rpc_trace_span_t parent_span) {
     uint8_t cmd_byte = cmd;
     if (!sock->send_data(&cmd_byte, sizeof(cmd_byte))) {
         return false;
+    }
+    // Trace-context propagation. When the peer negotiated TRACE_CTX_V1 we
+    // prepend 24 bytes (W3C trace_id[16] + parent_span_id[8]) right after
+    // the cmd byte. If no parent_span is in flight the buffer is zeros and
+    // the server treats the lack of context as "start a root span".
+    if (sock->get_negotiated_features() & GGML_RPC_FEATURE_TRACE_CTX_V1) {
+        uint8_t trace_ctx[24] = {0};
+        if (parent_span) {
+            rpc_trace_span_get_ids(parent_span, trace_ctx, trace_ctx + 16);
+        }
+        if (!sock->send_data(trace_ctx, sizeof(trace_ctx))) {
+            return false;
+        }
     }
     if (!sock->send_data(&input_size, sizeof(input_size))) {
         return false;
@@ -368,7 +383,7 @@ static bool send_rpc_cmd(socket_ptr sock, enum rpc_cmd cmd, const void * input, 
     RPC_TRACE_BYTES(span, "rpc.input_bytes", input_size);
     RPC_TRACE_STR(span, "rpc.has_response", "false");
 
-    if (!send_rpc_request(sock, cmd, input, input_size)) {
+    if (!send_rpc_request(sock, cmd, input, input_size, span)) {
         RPC_TRACE_FAIL(span, "send_data failed");
         return false;
     }
@@ -386,7 +401,7 @@ static bool send_rpc_cmd(socket_ptr sock, enum rpc_cmd cmd, const void * input, 
     RPC_TRACE_BYTES(span, "rpc.expected_output_bytes", output_size);
     RPC_TRACE_STR(span, "rpc.has_response", "true");
 
-    if (!send_rpc_request(sock, cmd, input, input_size)) {
+    if (!send_rpc_request(sock, cmd, input, input_size, span)) {
         RPC_TRACE_FAIL(span, "send phase failed");
         return false;
     }
@@ -1591,10 +1606,20 @@ static void rpc_serve_client(const std::vector<ggml_backend_t> & backends, const
             GGML_LOG_ERROR("Unknown command: %d\n", cmd);
             break;
         }
+        // Trace-context propagation (TRACE_CTX_V1): pull the 24 bytes the
+        // client prepended after the cmd byte, then build a span whose
+        // parent is the client's in-flight send span. Old peers (minor v0)
+        // never negotiate the feature so we don't even peek the socket.
+        uint8_t trace_ctx[24] = {0};
+        if (sock->get_negotiated_features() & GGML_RPC_FEATURE_TRACE_CTX_V1) {
+            if (!sock->recv_data(trace_ctx, sizeof(trace_ctx))) {
+                break;
+            }
+        }
         // RAII span guard — auto-ends on any scope exit including the early
         // `return`s that the case bodies use on send/recv errors. set_int
         // takes long long, the cmd is uint8_t so no narrowing concern.
-        rpc_trace_scope srv_span("ggml.rpc.server.dispatch");
+        rpc_trace_scope srv_span("ggml.rpc.server.dispatch", trace_ctx, trace_ctx + 16);
         srv_span.set_int("rpc.cmd", (long long) cmd);
         srv_span.set_str("rpc.cmd_name", rpc_cmd_name((enum rpc_cmd) cmd));
         switch (cmd) {
