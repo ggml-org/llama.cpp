@@ -86,6 +86,7 @@ enum rpc_cmd {
     RPC_CMD_HELLO,
     RPC_CMD_DEVICE_COUNT,
     RPC_CMD_GRAPH_RECOMPUTE,
+    RPC_CMD_CAPS,
     RPC_CMD_COUNT,
 };
 
@@ -93,6 +94,11 @@ static_assert(RPC_CMD_HELLO == 14, "RPC_CMD_HELLO must be always 14");
 
 // Try RPC_CMD_SET_TENSOR_HASH first when data size is larger than this threshold
 const size_t HASH_THRESHOLD = 10 * 1024 * 1024;
+
+// Local feature bitmap advertised in the CAPS exchange. Empty for now;
+// step 3 will set bit 0 once the trace-ctx wire format is in.
+static constexpr uint64_t RPC_LOCAL_FEATURES = 0;
+
 
 struct rpc_msg_hello_req {
     uint8_t conn_caps[RPC_CONN_CAPS_SIZE];
@@ -104,6 +110,21 @@ struct rpc_msg_hello_rsp {
     uint8_t patch;
     uint8_t padding;
     uint8_t conn_caps[RPC_CONN_CAPS_SIZE];
+};
+
+// Post-HELLO capabilities negotiation (protocol minor >= 1). AND of
+// client and server feature bitmaps becomes the negotiated set. Bit 0
+// reserved for trace-context propagation; no feature actually uses any
+// bit yet — this commit lands the plumbing only.
+#define GGML_RPC_FEATURE_TRACE_CTX_V1 (1ull << 0)
+
+struct rpc_msg_caps_req {
+    uint64_t client_features;
+};
+
+struct rpc_msg_caps_rsp {
+    uint64_t server_features;
+    uint64_t negotiated;
 };
 
 struct rpc_msg_device_count_rsp {
@@ -316,6 +337,7 @@ static const char * rpc_cmd_name(enum rpc_cmd cmd) {
         case RPC_CMD_HELLO:             return "HELLO";
         case RPC_CMD_DEVICE_COUNT:      return "DEVICE_COUNT";
         case RPC_CMD_GRAPH_RECOMPUTE:   return "GRAPH_RECOMPUTE";
+        case RPC_CMD_CAPS:              return "CAPS";
         default:                        return "UNKNOWN";
     }
 }
@@ -406,6 +428,19 @@ static bool negotiate_hello(const std::shared_ptr<socket_t> & sock) {
     }
 
     sock->update_caps(response.conn_caps);
+
+    // Post-HELLO capabilities exchange. Only attempt if the server speaks
+    // at least minor v1; older servers never see this command.
+    if (response.minor >= 1) {
+        rpc_msg_caps_req caps_req = { RPC_LOCAL_FEATURES };
+        rpc_msg_caps_rsp caps_rsp = {};
+        if (!send_rpc_cmd(sock, RPC_CMD_CAPS, &caps_req, sizeof(caps_req),
+                          &caps_rsp, sizeof(caps_rsp))) {
+            GGML_LOG_WARN("ggml-rpc: CAPS exchange failed; assuming no extensions\n");
+        } else {
+            sock->set_negotiated_features(caps_rsp.negotiated);
+        }
+    }
     return true;
 }
 
@@ -1755,6 +1790,20 @@ static void rpc_serve_client(const std::vector<ggml_backend_t> & backends, const
                     return;
                 }
                 if (!server.graph_recompute(request)) {
+                    return;
+                }
+                break;
+            }
+            case RPC_CMD_CAPS: {
+                rpc_msg_caps_req request;
+                if (!recv_msg(sock, &request, sizeof(request))) {
+                    return;
+                }
+                rpc_msg_caps_rsp response;
+                response.server_features = RPC_LOCAL_FEATURES;
+                response.negotiated      = request.client_features & RPC_LOCAL_FEATURES;
+                sock->set_negotiated_features(response.negotiated);
+                if (!send_msg(sock, &response, sizeof(response))) {
                     return;
                 }
                 break;

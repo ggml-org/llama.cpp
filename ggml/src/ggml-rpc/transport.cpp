@@ -135,6 +135,7 @@ struct socket_t::impl {
 #endif // GGML_RPC_RDMA
     bool     use_rdma;
     sockfd_t fd;
+    uint64_t negotiated_features = 0;
 };
 
 socket_t::impl::~impl() {
@@ -562,6 +563,14 @@ void socket_t::get_caps(uint8_t * local_caps) {
 
 void socket_t::update_caps(const uint8_t * remote_caps) {
     return pimpl->update_caps(remote_caps);
+}
+
+void socket_t::set_negotiated_features(uint64_t features) {
+    pimpl->negotiated_features = features;
+}
+
+uint64_t socket_t::get_negotiated_features() const {
+    return pimpl->negotiated_features;
 }
 
 static bool is_valid_fd(sockfd_t sockfd) {
