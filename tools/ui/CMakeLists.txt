@@ -1,7 +1,5 @@
 set(TARGET llama-ui)
 
-option(LLAMA_BUILD_UI        "llama: build the embedded Web UI for server" ON)
-option(LLAMA_USE_PREBUILT_UI "llama: use prebuilt UI from HF Bucket when available (requires LLAMA_BUILD_UI=ON)" ON)
 set(LLAMA_UI_HF_BUCKET "llama-ui" CACHE STRING "Hugging Face bucket name for prebuilt UI assets")
 
 if(DEFINED LLAMA_BUILD_WEBUI)
