@@ -7,14 +7,6 @@ on:
         description: 'Commit SHA1 to build'
         required: false
         type: string
-  push:
-    branches:
-      - master
-    paths: [
-      '.github/workflows/ui-ci.yml',
-      'tools/ui/**.*',
-      'tools/server/tests/**.*'
-    ]
   pull_request:
     types: [opened, synchronize, reopened]
     paths: [
