@@ -719,6 +719,7 @@ static __global__ void flash_attn_stream_k_fixup_uniform(
     }
 
     dst += sequence*ne02*ne01*D + jt*ne02*(ncols1*D) + zt_Q*D + (j*ne02 + c)*D + tid;
+
     ggml_cuda_pdl_sync();
     // Load the partial result that needs a fixup
     float dst_val = *dst;

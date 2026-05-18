@@ -11,7 +11,7 @@ static __global__ void reduce_rows_f32(const float * __restrict__ x, float * __r
     float     temp[num_unroll];
     float     sum_temp[num_unroll] = { 0.0f };
 
-    ggml_cuda_pdl_sync(); // needs to guard data access (except pointer arithmetic) for x, dst.
+    ggml_cuda_pdl_sync();
     for (int i = col; i < ncols;) {
         for (int j = 0; j < num_unroll; ++j) {
             if (i < ncols) {

@@ -135,6 +135,7 @@ __global__ void __launch_bounds__(d_state, 1)
     const int seq_idx  = blockIdx.y;
 
     const int group_off = (head_idx / (n_head / n_group)) * d_state * sizeof(float);
+
     ggml_cuda_pdl_sync();
     // TODO: refactor strides to be in elements/floats instead of bytes to be cleaner and consistent with the rest of the codebase
     const float * s0_warp = (const float *) ((const char *) src0 + src6[seq_idx] * src0_nb3 + head_idx * src0_nb2 + head_off * d_state);

@@ -6,7 +6,6 @@ static __global__ void quantize_q8_1(
         const float * __restrict__ x, void * __restrict__ vy,
         const int64_t ne00, const int64_t s01, const int64_t s02, const int64_t s03,
         const int64_t ne0, const uint32_t ne1, const uint3 ne2) {
-    // aendk test, baseline is at 345.57 on maxq
     ggml_cuda_pdl_lc();
     const int64_t i0 = (int64_t)blockDim.x*blockIdx.x + threadIdx.x;
 

@@ -258,7 +258,7 @@ static __global__ void l2_norm_f32(
 
     float tmp = 0.0f; // partial sum for thread in warp
 
-    ggml_cuda_pdl_sync(); // needs to guard data access (except pointer arithmetic) for x, dst.
+    ggml_cuda_pdl_sync();
     for (int col = tid; col < ncols; col += block_size) {
         const float xi = x[col];
         tmp += xi * xi;

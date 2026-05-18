@@ -195,7 +195,7 @@ struct ggml_cuda_kernel_launch_params {
     ggml_cuda_kernel_launch_params(const dim3& block_nums_, const dim3& block_dims_, const size_t shmem_, const cudaStream_t stream_)
         : block_nums(block_nums_), block_dims(block_dims_), shmem(shmem_), stream(stream_) {}
 
-    // Some call sites pass integers instead of the required size_t. This 2nd constructor avoids -Wnarrowing warnings of this.
+    // Some call sites pass ints instead of the required size_t. This 2nd constructor casts int->size_t to avoid these -Wnarrowing warnings.
     ggml_cuda_kernel_launch_params(const dim3& block_nums_, const dim3& block_dims_, const int shmem_, const cudaStream_t stream_)
         : block_nums(block_nums_), block_dims(block_dims_), shmem((size_t)shmem_), stream(stream_) {}
 };

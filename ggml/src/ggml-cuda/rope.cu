@@ -149,7 +149,7 @@ static __global__ void rope_neox(const T *            x,
 
     int       idst = i0 / 2 + i1 * s1  + i2 * s2  + i3 * s3;
     const int ix   = i0 / 2 + i1 * s01 + i2 * s02 + i3 * s03;
-    ggml_cuda_pdl_sync(); // guards x, dst, pos, freq_factors, row_indices data access
+    ggml_cuda_pdl_sync();
 
     // Fusion optimization: ROPE + VIEW + SET_ROWS.
     // The rope output is viewed as a 1D tensor and offset based on a row index in row_indices.

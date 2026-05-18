@@ -13,6 +13,7 @@ static __global__ void ssm_conv_f32(const float * __restrict__ src0, const float
     const int tid  = threadIdx.x;
     const int bidx = blockIdx.x;
     const int bidy = blockIdx.y;
+
     const float * x_block = (const float *) ((const char *) src0 + bidx * src0_nb2 + bidy * split_d_inner * src0_nb1);
     const float * w_block = (const float *) ((const char *) src1 + bidy * split_d_inner * src1_nb1);
     float *       y_block = (float *) ((char *) dst + bidx * dst_nb2 + bidy * split_d_inner * dst_nb0);
@@ -24,7 +25,7 @@ static __global__ void ssm_conv_f32(const float * __restrict__ src0, const float
     float x[d_conv] = { 0.0f };
     float w[d_conv] = { 0.0f };
 
-    ggml_cuda_pdl_sync(); // needs to guard data access for src0, src1, dst.
+    ggml_cuda_pdl_sync();
 #pragma unroll
     for (size_t j = 0; j < d_conv; j++) {
         w[j] = w_block[tid * stride_w + j];

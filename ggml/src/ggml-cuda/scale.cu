@@ -7,7 +7,7 @@ static __global__ void scale_f32(const float * x, float * dst, const float scale
     int64_t tid = (int64_t)blockIdx.x * (int64_t)blockDim.x + (int64_t)threadIdx.x;
     int64_t stride = (int64_t)blockDim.x * (int64_t)gridDim.x;
 
-    ggml_cuda_pdl_sync(); // needs to guard data access for x, dst.
+    ggml_cuda_pdl_sync();
     for (int64_t i = tid; i < nelements; i += stride) {
         dst[i] = scale * x[i] + bias;
     }
