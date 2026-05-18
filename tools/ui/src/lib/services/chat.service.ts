@@ -1,6 +1,7 @@
 import { getJsonHeaders } from '$lib/utils/api-headers';
 import { formatAttachmentText } from '$lib/utils/formatters';
 import { isAbortError } from '$lib/utils/abort';
+import { streamIdentity } from '$lib/utils/stream-identity';
 import {
 	saveStreamState,
 	clearStreamState,
@@ -39,7 +40,7 @@ import type {
 	DatabaseMessageExtraMcpResource,
 	StreamConnectionState
 } from '$lib/types';
-import { modelsStore } from '$lib/stores/models.svelte';
+import { modelsStore, selectedModelName } from '$lib/stores/models.svelte';
 import { settingsStore } from '../stores/settings.svelte';
 import { capImageDataURLSize } from '../utils/cap-img-size';
 
@@ -321,9 +322,10 @@ export class ChatService {
 		try {
 			const headers: Record<string, string> = { ...getJsonHeaders() };
 			// tag streaming requests with the conversation id, this single header is the opt in for the
-			// server side replay buffer and powers discoverActiveStream on tab reopen
+			// server side replay buffer and powers discoverActiveStream on tab reopen. with an explicit
+			// model the ::model suffix lets the router skip the loopback probe
 			if (stream && conversationId) {
-				headers['X-Conversation-Id'] = conversationId;
+				headers['X-Conversation-Id'] = streamIdentity(conversationId, options.model);
 			}
 			const response = await fetch(API_CHAT.COMPLETIONS, {
 				method: 'POST',
@@ -487,10 +489,11 @@ export class ChatService {
 	 * @param excludeReasoning - Whether to strip reasoning content (should match excludeReasoningFromContext setting)
 	 * @param signal - Optional AbortSignal to cancel the pre-encode request
 	 */
-	static async cancelServerStream(conversationId: string): Promise<void> {
+	static async cancelServerStream(conversationId: string, model?: string | null): Promise<void> {
 		if (!conversationId) return;
 		try {
-			await fetch(`./v1/stream/${encodeURIComponent(conversationId)}`, { method: 'DELETE' });
+			const id = streamIdentity(conversationId, model);
+			await fetch(`./v1/stream/${encodeURIComponent(id)}`, { method: 'DELETE' });
 		} catch (e) {
 			console.warn('cancelServerStream failed:', e);
 		}
@@ -804,8 +807,13 @@ export class ChatService {
 				madeProgress = false;
 
 				// the server resends starting at bytesParsed, discard any partial line we held
-				// it will be retransmitted from a clean line boundary
-				const resumeResp = await resumeStream(conversationId, abortSignal).catch(() => null);
+				// it will be retransmitted from a clean line boundary. pass the active model name
+				// so the router routes the GET direct to the owning child, skips the loopback probe
+				const resumeResp = await resumeStream(
+					conversationId,
+					abortSignal,
+					selectedModelName()
+				).catch(() => null);
 				if (!resumeResp || resumeResp.status !== 200) {
 					onConnectionState?.('lost');
 					onError?.(new Error('Stream connection lost and could not be resumed'));

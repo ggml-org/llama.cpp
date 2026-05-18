@@ -7,6 +7,7 @@
 #include "download.h"
 
 #include <cpp-httplib/httplib.h> // TODO: remove this once we use HTTP client from download.h
+#include <optional>
 #include <sheredom/subprocess.h>
 
 #include <functional>
@@ -1263,11 +1264,6 @@ bool server_models::ensure_model_ready(const std::string & name) {
     return true;
 }
 
-// forward declarations for the file scope helpers used below, the bodies live further down
-// next to the other routes helpers to keep the proxy methods compact
-static void fan_out_delete_others_for_conv(
-        server_models & models, const std::string & conversation_id, const std::string & target_child);
-
 server_http_res_ptr server_models::proxy_request(const server_http_req & req, const std::string & method, const std::string & name, bool update_last_used) {
     auto meta = get_meta(name);
     if (!meta.has_value()) {
@@ -1279,28 +1275,6 @@ server_http_res_ptr server_models::proxy_request(const server_http_req & req, co
     if (update_last_used) {
         std::unique_lock<std::mutex> lk(mutex);
         mapping[name].meta.last_used = ggml_time_ms();
-    }
-    // when the client opts in to resumable streaming via a non empty X-Conversation-Id,
-    // fan out a DELETE on every other ready child to evict any prior session for this conv.
-    // enforces the cross child invariant 'one session per convId', safe to call unconditionally
-    // and cheap on loopback. ignored for any request without that header
-    {
-        static constexpr char   target[]   = "x-conversation-id";
-        static constexpr size_t target_len = sizeof(target) - 1;
-        std::string conv_id;
-        for (const auto & [hk, hv] : req.headers) {
-            if (hk.size() != target_len) continue;
-            std::string lower(hk);
-            std::transform(lower.begin(), lower.end(), lower.begin(),
-                [](unsigned char c) { return (c >= 'A' && c <= 'Z') ? char(c + 32) : char(c); });
-            if (lower == target) {
-                conv_id = hv;
-                break;
-            }
-        }
-        if (!conv_id.empty()) {
-            fan_out_delete_others_for_conv(*this, conv_id, name);
-        }
     }
     SRV_INF("proxying request to model %s on port %d\n", name.c_str(), meta->port);
     std::string proxy_path = req.path;
@@ -1320,9 +1294,6 @@ server_http_res_ptr server_models::proxy_request(const server_http_req & req, co
             base_params.timeout_read,
             base_params.timeout_write
             );
-    // session identity end to end is the X-Conversation-Id sent by the client, no extra opaque
-    // token to mangle here. the parent can later route GET /v1/stream/<conv_id> back to the right
-    // child by probing /v1/streams across childs
     return proxy;
 }
 
@@ -1569,80 +1540,6 @@ struct server_models_sse_client {
     }
 };
 
-// percent encode a single query string value, covers reserved chars without dragging in
-// httplib::detail. used by the stream routes to forward conversation_id to children
-static std::string encode_qs(const std::string & in) {
-    std::string out;
-    out.reserve(in.size() * 3);
-    for (unsigned char c : in) {
-        bool safe = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')
-                 || c == '-' || c == '_' || c == '.' || c == '~';
-        if (safe) {
-            out.push_back(char(c));
-        } else {
-            char buf[4];
-            std::snprintf(buf, sizeof(buf), "%%%02X", c);
-            out.append(buf, 3);
-        }
-    }
-    return out;
-}
-
-// scan every ready child for an active session on this conversation_id by fanning out a
-// short list query on the loopback, returns the meta of the first child whose array is
-// non empty. with the invariant 'one session per convId across all children' enforced by
-// the POST path, at most one child can match
-static std::optional<server_model_meta> find_child_for_conv(
-        server_models & models, const std::string & conversation_id) {
-    if (conversation_id.empty()) {
-        return std::nullopt;
-    }
-    std::string child_path = "/v1/streams?conversation_id=" + encode_qs(conversation_id);
-    for (auto & meta : models.get_all_meta()) {
-        if (!meta.is_ready()) {
-            continue;
-        }
-        httplib::Client cli(CHILD_ADDR, meta.port);
-        cli.set_connection_timeout(0, 250 * 1000);
-        cli.set_read_timeout(0, 250 * 1000);
-        cli.set_write_timeout(0, 250 * 1000);
-        auto resp = cli.Get(child_path.c_str());
-        if (!resp || resp->status != 200) {
-            continue;
-        }
-        try {
-            json arr = json::parse(resp->body);
-            if (arr.is_array() && !arr.empty()) {
-                return meta;
-            }
-        } catch (const std::exception &) {
-            continue;
-        }
-    }
-    return std::nullopt;
-}
-
-// fan out a DELETE on every ready child EXCEPT the one we are about to route the POST to,
-// so a model swap on the same conversation_id evicts the previous session cleanly. safe to
-// call unconditionally: a child without the session returns 204 and does nothing
-static void fan_out_delete_others_for_conv(
-        server_models & models, const std::string & conversation_id, const std::string & target_child) {
-    if (conversation_id.empty()) {
-        return;
-    }
-    std::string child_path = "/v1/stream/" + encode_qs(conversation_id);
-    for (auto & meta : models.get_all_meta()) {
-        if (!meta.is_ready() || meta.name == target_child) {
-            continue;
-        }
-        httplib::Client cli(CHILD_ADDR, meta.port);
-        cli.set_connection_timeout(0, 250 * 1000);
-        cli.set_read_timeout(0, 250 * 1000);
-        cli.set_write_timeout(0, 250 * 1000);
-        cli.Delete(child_path.c_str());
-    }
-}
-
 static void res_ok(std::unique_ptr<server_http_res> & res, const json & response_data) {
     res->status = 200;
     res->data = safe_json_to_str(response_data);
@@ -1685,6 +1582,73 @@ static bool is_autoload(const common_params & params, const server_http_req & re
     }
 }
 
+// percent encode a single query string or path component value. covers reserved chars without
+// dragging in httplib::detail. used by the resumable stream routes to forward conversation_id
+// to children safely
+static std::string encode_qs(const std::string & in) {
+    std::string out;
+    out.reserve(in.size() * 3);
+    for (unsigned char c : in) {
+        bool safe = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')
+                 || c == '-' || c == '_' || c == '.' || c == '~';
+        if (safe) {
+            out.push_back(char(c));
+        } else {
+            char buf[4];
+            std::snprintf(buf, sizeof(buf), "%%%02X", c);
+            out.append(buf, 3);
+        }
+    }
+    return out;
+}
+
+// extract the optional model suffix from a conversation_id. the WebUI encodes the active model
+// name after :: when the user has explicitly picked a model, so the router can route stream
+// lookups direct to the right child without probing every other one. returns empty when no
+// separator is present, in which case the caller falls back to probing or fan out
+static std::string extract_model_from_conv(const std::string & conv_id) {
+    static constexpr char   SEP[]    = "::";
+    static constexpr size_t SEP_LEN  = sizeof(SEP) - 1;
+    auto pos = conv_id.rfind(SEP);
+    if (pos == std::string::npos) {
+        return std::string();
+    }
+    return conv_id.substr(pos + SEP_LEN);
+}
+
+// loopback probe across every ready child, returns the meta of the first one that reports a
+// live or recently completed session for this conv. only called as a fallback when the conv
+// id carries no :: suffix
+static std::optional<server_model_meta> probe_child_for_conv(
+        server_models & models, const std::string & conversation_id) {
+    if (conversation_id.empty()) {
+        return std::nullopt;
+    }
+    std::string child_path = "/v1/streams?conversation_id=" + encode_qs(conversation_id);
+    for (auto & meta : models.get_all_meta()) {
+        if (!meta.is_ready()) {
+            continue;
+        }
+        httplib::Client cli(CHILD_ADDR, meta.port);
+        cli.set_connection_timeout(0, 250 * 1000);
+        cli.set_read_timeout(0, 250 * 1000);
+        cli.set_write_timeout(0, 250 * 1000);
+        auto resp = cli.Get(child_path.c_str());
+        if (!resp || resp->status != 200) {
+            continue;
+        }
+        try {
+            json arr = json::parse(resp->body);
+            if (arr.is_array() && !arr.empty()) {
+                return meta;
+            }
+        } catch (const std::exception &) {
+            continue;
+        }
+    }
+    return std::nullopt;
+}
+
 void server_models_routes::init_routes() {
     this->get_router_props = [this](const server_http_req & req) {
         std::string name = req.get_param("model");
@@ -1722,120 +1686,6 @@ void server_models_routes::init_routes() {
             return error_res;
         }
         return models.proxy_request(req, method, name, false);
-    };
-
-
-    this->proxy_get_stream = [this](const server_http_req & req) {
-        auto res = std::make_unique<server_http_res>();
-
-        // GET /v1/stream/<conv_id>?from=N. find the child that owns the session for this conv
-        // via the loopback probe in find_child_for_conv, then forward the SSE GET to it.
-        // returns 404 if no child currently has an alive or recently completed session
-        std::string conv_id = req.get_param("conv_id");
-        if (conv_id.empty()) {
-            res_err(res, format_error_response("Missing conversation id in path", ERROR_TYPE_INVALID_REQUEST));
-            return res;
-        }
-        auto owner = find_child_for_conv(models, conv_id);
-        if (!owner.has_value()) {
-            res_err(res, format_error_response("Stream not found or expired", ERROR_TYPE_NOT_FOUND));
-            return res;
-        }
-
-        std::string from = req.get_param("from");
-        std::string child_path = "/v1/stream/" + encode_qs(conv_id);
-        if (!from.empty()) {
-            child_path += "?from=" + from;
-        }
-        SRV_INF("proxying stream resume to model %s on port %d, path=%s\n",
-                owner->name.c_str(), owner->port, child_path.c_str());
-
-        auto proxy = std::make_unique<server_http_proxy>(
-                "GET",
-                "http",
-                CHILD_ADDR,
-                owner->port,
-                child_path,
-                req.headers,
-                req.body,
-                req.files,
-                req.should_stop,
-                params.timeout_read,
-                params.timeout_write);
-        return std::unique_ptr<server_http_res>(std::move(proxy));
-    };
-
-    this->proxy_get_streams = [this](const server_http_req & req) {
-        auto res = std::make_unique<server_http_res>();
-
-        // GET /v1/streams returns sessions as a JSON array. with conversation_id set the filter
-        // is forwarded to childs and at most one entry comes back, without it the WebUI uses the
-        // result at mount and on visibilitychange to populate the sidebar spinners across convs.
-        // sequential fan out on every ready child, fail soft on per child error, aggregate
-        std::string conversation_id = req.get_param("conversation_id");
-        std::string child_path = "/v1/streams";
-        if (!conversation_id.empty()) {
-            child_path += "?conversation_id=" + encode_qs(conversation_id);
-        }
-
-        json aggregated = json::array();
-        for (auto & meta : models.get_all_meta()) {
-            if (!meta.is_ready()) {
-                continue;
-            }
-            httplib::Client cli(CHILD_ADDR, meta.port);
-            cli.set_connection_timeout(0, 250 * 1000);
-            cli.set_read_timeout(0, 250 * 1000);
-            cli.set_write_timeout(0, 250 * 1000);
-            auto resp = cli.Get(child_path.c_str());
-            if (!resp || resp->status != 200) {
-                continue;
-            }
-            try {
-                json child_arr = json::parse(resp->body);
-                if (!child_arr.is_array()) {
-                    continue;
-                }
-                for (auto & entry : child_arr) {
-                    if (entry.is_object()) {
-                        aggregated.push_back(entry);
-                    }
-                }
-            } catch (const std::exception &) {
-                continue;
-            }
-        }
-        res_ok(res, aggregated);
-        return res;
-    };
-
-    this->proxy_delete_stream = [this](const server_http_req & req) {
-        auto res = std::make_unique<server_http_res>();
-
-        // DELETE /v1/stream/<conv_id> fans out to every ready child. each child runs an idempotent
-        // evict_and_cancel, returning 204 whether or not it actually owned a session for this conv.
-        // a Stop must feel instantaneous so timeouts are short, the child route is in memory
-        std::string conv_id = req.get_param("conv_id");
-        if (conv_id.empty()) {
-            res_err(res, format_error_response("Missing conversation id in path", ERROR_TYPE_INVALID_REQUEST));
-            return res;
-        }
-
-        std::string child_path = "/v1/stream/" + encode_qs(conv_id);
-        for (auto & meta : models.get_all_meta()) {
-            if (!meta.is_ready()) {
-                continue;
-            }
-            httplib::Client cli(CHILD_ADDR, meta.port);
-            cli.set_connection_timeout(0, 250 * 1000);
-            cli.set_read_timeout(0, 500 * 1000);
-            cli.set_write_timeout(0, 250 * 1000);
-            auto resp = cli.Delete(child_path.c_str());
-            (void) resp; // best effort, 404 and network errors are equivalent to no op
-        }
-        res->status = 204;
-        res->content_type = "application/json";
-        return res;
     };
 
     this->proxy_post = [this](const server_http_req & req) {
@@ -2045,6 +1895,135 @@ void server_models_routes::init_routes() {
         models.remove(name); // throws on error
 
         res_ok(res, {{"success", true}});
+        return res;
+    };
+
+    this->router_stream_get = [this](const server_http_req & req) {
+        // GET /v1/stream/<conv_id>?from=N. when the conv carries a ::model suffix, route
+        // straight to that child, otherwise loopback probe every ready child. returns 404
+        // when no child currently owns a session for this conv
+        auto res = std::make_unique<server_http_res>();
+        std::string conv_id = req.get_param("conv_id");
+        if (conv_id.empty()) {
+            res_err(res, format_error_response("Missing conversation id in path", ERROR_TYPE_INVALID_REQUEST));
+            return res;
+        }
+        std::optional<server_model_meta> owner;
+        std::string model_hint = extract_model_from_conv(conv_id);
+        if (!model_hint.empty()) {
+            auto direct = models.get_meta(model_hint);
+            if (direct.has_value() && direct->is_ready()) {
+                owner = direct;
+            }
+        }
+        if (!owner.has_value()) {
+            owner = probe_child_for_conv(models, conv_id);
+        }
+        if (!owner.has_value()) {
+            res_err(res, format_error_response("Stream not found or expired", ERROR_TYPE_NOT_FOUND));
+            return res;
+        }
+        std::string from = req.get_param("from");
+        std::string child_path = "/v1/stream/" + encode_qs(conv_id);
+        if (!from.empty()) {
+            child_path += "?from=" + from;
+        }
+        SRV_INF("proxying stream resume to model %s on port %d, path=%s\n",
+                owner->name.c_str(), owner->port, child_path.c_str());
+        auto proxy = std::make_unique<server_http_proxy>(
+                "GET",
+                "http",
+                CHILD_ADDR,
+                owner->port,
+                child_path,
+                req.headers,
+                req.body,
+                req.files,
+                req.should_stop,
+                params.timeout_read,
+                params.timeout_write);
+        return std::unique_ptr<server_http_res>(std::move(proxy));
+    };
+
+    this->router_streams_list = [this](const server_http_req & req) {
+        // GET /v1/streams aggregates sessions from every ready child. the WebUI mounts and
+        // visibilitychanges use this to drive the sidebar spinners across convs. when a
+        // conversation_id filter is set we still fan out because the matching session can live
+        // on any child, the filter just narrows the response set
+        auto res = std::make_unique<server_http_res>();
+        std::string conversation_id = req.get_param("conversation_id");
+        std::string child_path = "/v1/streams";
+        if (!conversation_id.empty()) {
+            child_path += "?conversation_id=" + encode_qs(conversation_id);
+        }
+        json aggregated = json::array();
+        for (auto & meta : models.get_all_meta()) {
+            if (!meta.is_ready()) {
+                continue;
+            }
+            httplib::Client cli(CHILD_ADDR, meta.port);
+            cli.set_connection_timeout(0, 250 * 1000);
+            cli.set_read_timeout(0, 250 * 1000);
+            cli.set_write_timeout(0, 250 * 1000);
+            auto resp = cli.Get(child_path.c_str());
+            if (!resp || resp->status != 200) {
+                continue;
+            }
+            try {
+                json child_arr = json::parse(resp->body);
+                if (!child_arr.is_array()) {
+                    continue;
+                }
+                for (auto & entry : child_arr) {
+                    if (entry.is_object()) {
+                        aggregated.push_back(entry);
+                    }
+                }
+            } catch (const std::exception &) {
+                continue;
+            }
+        }
+        res_ok(res, aggregated);
+        return res;
+    };
+
+    this->router_stream_delete = [this](const server_http_req & req) {
+        // DELETE /v1/stream/<conv_id>. with a ::model suffix we forward to that child only,
+        // otherwise fan out across every ready child. each child runs an idempotent
+        // evict_and_cancel so a child without the session returns 204 and does nothing
+        auto res = std::make_unique<server_http_res>();
+        std::string conv_id = req.get_param("conv_id");
+        if (conv_id.empty()) {
+            res_err(res, format_error_response("Missing conversation id in path", ERROR_TYPE_INVALID_REQUEST));
+            return res;
+        }
+        std::string child_path = "/v1/stream/" + encode_qs(conv_id);
+        std::string model_hint = extract_model_from_conv(conv_id);
+        auto delete_on = [&](int port) {
+            httplib::Client cli(CHILD_ADDR, port);
+            cli.set_connection_timeout(0, 250 * 1000);
+            cli.set_read_timeout(0, 500 * 1000);
+            cli.set_write_timeout(0, 250 * 1000);
+            auto resp = cli.Delete(child_path.c_str());
+            (void) resp; // best effort, 404 and network errors are equivalent to no op
+        };
+        if (!model_hint.empty()) {
+            auto direct = models.get_meta(model_hint);
+            if (direct.has_value() && direct->is_ready()) {
+                delete_on(direct->port);
+                res->status = 204;
+                res->content_type = "application/json";
+                return res;
+            }
+        }
+        for (auto & meta : models.get_all_meta()) {
+            if (!meta.is_ready()) {
+                continue;
+            }
+            delete_on(meta.port);
+        }
+        res->status = 204;
+        res->content_type = "application/json";
         return res;
     };
 }

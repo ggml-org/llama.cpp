@@ -261,9 +261,6 @@ struct server_models_routes {
     server_http_context::handler_t get_router_props;
     server_http_context::handler_t proxy_get;
     server_http_context::handler_t proxy_post;
-    server_http_context::handler_t proxy_get_stream;
-    server_http_context::handler_t proxy_get_streams;
-    server_http_context::handler_t proxy_delete_stream;
     server_http_context::handler_t get_router_models;
     server_http_context::handler_t post_router_models_load;
     server_http_context::handler_t post_router_models_unload;
@@ -271,6 +268,14 @@ struct server_models_routes {
     server_http_context::handler_t get_router_models_sse;
     server_http_context::handler_t post_router_models;
     server_http_context::handler_t del_router_models;
+
+    // router side handlers for the resumable streaming routes. each conversation_id may carry
+    // an optional ::model suffix to enable direct routing without probing every child. when
+    // the suffix is absent the get/delete paths fall back to a loopback probe and a fan out
+    // respectively, the list path always fans out and aggregates
+    server_http_context::handler_t router_stream_get;
+    server_http_context::handler_t router_streams_list;
+    server_http_context::handler_t router_stream_delete;
 };
 
 /**

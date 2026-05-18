@@ -2,6 +2,7 @@
 #include "server-http.h"
 #include "server-models.h"
 #include "server-cors-proxy.h"
+#include "server-stream.h"
 #include "server-tools.h"
 
 #include "arg.h"
@@ -81,6 +82,10 @@ int llama_server(int argc, char ** argv) {
     common_params params;
 
     common_init();
+
+    // start the stream session manager GC right after common init, before any HTTP route can
+    // touch it. lifecycle is symmetric, stop_gc() runs in clean_up() before backend free
+    g_stream_sessions.start_gc();
 
     if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_SERVER)) {
         return 1;
@@ -184,9 +189,6 @@ int llama_server(int argc, char ** argv) {
         routes.post_lora_adapters          = models_routes->proxy_post;
         routes.get_slots                   = models_routes->proxy_get;
         routes.post_slots                  = models_routes->proxy_post;
-        routes.get_stream                  = models_routes->proxy_get_stream;
-        routes.get_streams                 = models_routes->proxy_get_streams;
-        routes.delete_stream               = models_routes->proxy_delete_stream;
 
         // custom routes for router
         routes.get_props                   = models_routes->get_router_props;
@@ -241,14 +243,25 @@ int llama_server(int argc, char ** argv) {
     ctx_http.get ("/slots",                    ex_wrapper(routes.get_slots));
     ctx_http.post("/slots/:id_slot",           ex_wrapper(routes.post_slots));
 
-    // resumable streaming, the conversation_id is the session identity end to end:
-    // GET /v1/stream/<conv_id>?from=N replays SSE bytes for a session in progress or recently completed
-    ctx_http.get ("/v1/stream/:conv_id",       ex_wrapper(routes.get_stream));
-    // GET /v1/streams lists sessions, with optional conversation_id query to filter to one conv,
-    // without filter the WebUI uses it at mount and on visibilitychange to populate sidebar spinners
-    ctx_http.get ("/v1/streams",               ex_wrapper(routes.get_streams));
-    // DELETE /v1/stream/<conv_id> is the explicit user Stop, cancels the producer and evicts, idempotent
-    ctx_http.del_("/v1/stream/:conv_id",       ex_wrapper(routes.delete_stream));
+    // resumable streaming, the conversation_id is the session identity end to end. router and
+    // child wire different handlers under the same paths: a child binds the local g_stream_sessions
+    // backed factories, the router binds proxies that route via the optional ::model suffix
+    // (direct) or fall back to loopback probe and fan out (suffixless conv ids)
+    server_http_context::handler_t stream_get_h;
+    server_http_context::handler_t streams_list_h;
+    server_http_context::handler_t stream_delete_h;
+    if (is_router_server) {
+        stream_get_h    = models_routes->router_stream_get;
+        streams_list_h  = models_routes->router_streams_list;
+        stream_delete_h = models_routes->router_stream_delete;
+    } else {
+        stream_get_h    = make_stream_get_handler();
+        streams_list_h  = make_streams_list_handler();
+        stream_delete_h = make_stream_delete_handler();
+    }
+    ctx_http.get ("/v1/stream/:conv_id",       ex_wrapper(stream_get_h));
+    ctx_http.get ("/v1/streams",               ex_wrapper(streams_list_h));
+    ctx_http.del_("/v1/stream/:conv_id",       ex_wrapper(stream_delete_h));
 
     // Google Cloud Platform (Vertex AI) compat
     ctx_http.register_gcp_compat();
@@ -300,6 +313,9 @@ int llama_server(int argc, char ** argv) {
 
         clean_up = [&models_routes]() {
             SRV_INF("%s: cleaning up before exit...\n", __func__);
+            // stop the session GC first, this finalizes every live session and wakes any
+            // pending HTTP reader, the detached drains can then exit cleanly
+            g_stream_sessions.stop_gc();
             if (models_routes.has_value()) {
                 models_routes->stopping.store(true); // maybe redundant, but just to be safe
                 models_routes->models.unload_all();
@@ -326,6 +342,9 @@ int llama_server(int argc, char ** argv) {
         // setup clean up function, to be called before exit
         clean_up = [&ctx_http, &ctx_server]() {
             SRV_INF("%s: cleaning up before exit...\n", __func__);
+            // stop the session GC first, this finalizes every live session and wakes any
+            // pending HTTP reader, the detached drains can then exit cleanly
+            g_stream_sessions.stop_gc();
             ctx_http.stop();
             ctx_server.terminate();
             llama_backend_free();

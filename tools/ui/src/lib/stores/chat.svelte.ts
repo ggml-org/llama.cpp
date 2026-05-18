@@ -16,6 +16,7 @@ import { DatabaseService } from '$lib/services/database.service';
 import { ChatService } from '$lib/services/chat.service';
 import { selectActiveStream } from '$lib/services/stream-discovery.service';
 import { getStreamState, clearStreamState } from '$lib/services/stream-resume.service';
+import { streamIdentity } from '$lib/utils/stream-identity';
 import { conversationsStore } from '$lib/stores/conversations.svelte';
 import { config } from '$lib/stores/settings.svelte';
 import { agenticStore } from '$lib/stores/agentic.svelte';
@@ -194,7 +195,7 @@ class ChatStore {
 		return selectActiveStream(sessions);
 	}
 
-	async attachServerStream(convId: string): Promise<void> {
+	async attachServerStream(convId: string, streamId?: string): Promise<void> {
 		if (!convId) return;
 		if (this.chatStreamingStates.has(convId)) return;
 
@@ -210,10 +211,12 @@ class ChatStore {
 		};
 
 		// fetch the replay stream from byte 0, rebuild the assistant message from scratch.
-		// the conv id is the only identifier we need, end to end
+		// resolve the server side identity, fall back to streamIdentity when the caller does not
+		// pass a streamId. probeServerStream returns the full id (with ::model suffix when present)
+		const id = streamId || streamIdentity(convId, selectedModelName());
 		let response: Response;
 		try {
-			response = await fetch(`./v1/stream/${encodeURIComponent(convId)}?from=0`);
+			response = await fetch(`./v1/stream/${encodeURIComponent(id)}?from=0`);
 		} catch (e) {
 			console.error('attachServerStream replay fetch failed:', e);
 			unlock();
@@ -364,7 +367,9 @@ class ChatStore {
 		// primary path: ask the server which sessions exist for this conversation
 		const serverTarget = await this.probeServerStream(convId);
 		if (serverTarget) {
-			await this.attachServerStream(convId);
+			// pass the full server side identity (may carry a ::model suffix) so the GET routes
+			// straight to the owning session, no probe or fan out
+			await this.attachServerStream(convId, serverTarget.conversation_id);
 			return;
 		}
 
@@ -1284,7 +1289,7 @@ class ChatStore {
 		// tell the server to stop the generation, not just to drop the HTTP socket. without this
 		// the detached drain keeps producing tokens until eos or max_tokens. the conv id is the
 		// session identity so the DELETE call is straight
-		void ChatService.cancelServerStream(convId);
+		void ChatService.cancelServerStream(convId, selectedModelName());
 		this.abortRequest(convId);
 		this.setChatLoading(convId, false);
 		this.clearChatStreaming(convId);

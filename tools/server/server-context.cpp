@@ -865,7 +865,6 @@ public:
 
     server_queue    queue_tasks;
     server_response queue_results;
-    mutable stream_session_manager stream_sessions;
 
     // note: chat_params must not be refreshed upon existing sleeping state
     server_chat_params chat_params;
@@ -874,7 +873,6 @@ public:
 
     server_context_impl() {
         mtmd_helper_log_set(common_log_default_callback, nullptr);
-        stream_sessions.start_gc();
     }
 
     ~server_context_impl() {
@@ -3378,26 +3376,9 @@ private:
 
                     SLT_TRC(slot, "cached n_tokens = %d, memory_seq_rm [%d, end)\n", slot.prompt.n_tokens(), p0);
 
-                    // the startup probe in common_context_can_seq_rm only tests a 2 token tail removal
-                    // on seq 0, it cannot guarantee that every partial eviction will succeed at any
-                    // position on any live seq. on refusal by the memory backend we clear the whole
-                    // seq on both contexts and let update_slots reprefill from zero on this iteration
-                    auto * mem_tgt = llama_get_memory(ctx_tgt);
-                    bool partial_ok_tgt = llama_memory_seq_rm(mem_tgt, slot.id, p0, -1);
-                    bool partial_ok_dft = true;
+                    common_context_seq_rm(ctx_tgt, slot.id, p0, -1);
                     if (ctx_dft) {
-                        partial_ok_dft = llama_memory_seq_rm(llama_get_memory(ctx_dft.get()), slot.id, p0, -1);
-                    }
-                    if (!partial_ok_tgt || !partial_ok_dft) {
-                        SLT_WRN(slot, "partial KV eviction refused at p0=%d (tgt=%d, dft=%d), full clear of seq %d, reprefilling from zero\n",
-                                p0, partial_ok_tgt ? 1 : 0, partial_ok_dft ? 1 : 0, slot.id);
-                        llama_memory_seq_rm(mem_tgt, slot.id, -1, -1);
-                        if (ctx_dft) {
-                            llama_memory_seq_rm(llama_get_memory(ctx_dft.get()), slot.id, -1, -1);
-                        }
-                        slot.prompt.tokens.keep_first(0);
-                        slot.n_prompt_tokens_cache = 0;
-                        slot.n_prompt_tokens_processed = 0;
+                        common_context_seq_rm(ctx_dft.get(), slot.id, p0, -1);
                     }
 
                     // If using an alora, there may be uncached tokens that come
@@ -4063,72 +4044,6 @@ void server_context::set_state_callback(server_state_callback_t callback) {
 }
 
 //
-// runs in a detached thread, owns the reader and posts the tasks on it
-// pulls results, formats them as SSE bytes, appends to the session
-// reacts to server shutdown via the shared atomic from the manager
-static void spawn_stream_drain(
-        std::unique_ptr<server_response_reader> reader,
-        stream_session_ptr session,
-        task_response_type res_type,
-        std::shared_ptr<std::atomic<bool>> shutdown) {
-    std::thread([reader = std::move(reader),
-                 session,
-                 res_type,
-                 shutdown]() mutable {
-        SRV_INF("stream drain thread started for conv=%s\n", session->conversation_id.c_str());
-        // wire the user Stop hook, evict_and_cancel will call this and the reader cancels its queue tasks
-        session->set_stop_producer([raw = reader.get()] {
-            raw->stop();
-        });
-        auto should_stop = [shutdown] {
-            return shutdown->load(std::memory_order_relaxed);
-        };
-        auto fmt_ok = [res_type](const json & j) -> std::string {
-            if (res_type == TASK_RESPONSE_TYPE_ANTHROPIC) return format_anthropic_sse(j);
-            if (res_type == TASK_RESPONSE_TYPE_OAI_RESP)  return format_oai_resp_sse(j);
-            return format_oai_sse(j);
-        };
-        auto fmt_err = [res_type](const json & err) -> std::string {
-            if (res_type == TASK_RESPONSE_TYPE_ANTHROPIC) {
-                return format_anthropic_sse({{"event", "error"}, {"data", err}});
-            }
-            return format_oai_sse(json{{"error", err}});
-        };
-        try {
-            while (reader->has_next()) {
-                auto r = reader->next(should_stop);
-                if (!r) {
-                    break;
-                }
-                json j = r->to_json();
-                if (r->is_error()) {
-                    auto sse = fmt_err(j);
-                    session->append(sse.data(), sse.size());
-                    break;
-                }
-                auto sse = fmt_ok(j);
-                if (!session->append(sse.data(), sse.size())) {
-                    break;
-                }
-            }
-            // emit the OAI terminator for the formats that use it
-            if (res_type != TASK_RESPONSE_TYPE_NONE
-             && res_type != TASK_RESPONSE_TYPE_OAI_RESP
-             && res_type != TASK_RESPONSE_TYPE_ANTHROPIC) {
-                static constexpr char done_str[] = "data: [DONE]\n\n";
-                session->append(done_str, sizeof(done_str) - 1);
-            }
-        } catch (const std::exception & e) {
-            auto sse = fmt_err(format_error_response(e.what(), ERROR_TYPE_SERVER));
-            session->append(sse.data(), sse.size());
-        }
-        // unwire the stop hook before reader goes out of scope, no dangling captured raw ptr
-        session->set_stop_producer(nullptr);
-        session->finalize();
-        SRV_INF("stream drain thread finished for conv=%s bytes=%zu\n", session->conversation_id.c_str(), session->total_size());
-    }).detach();
-}
-
 // server_routes
 //
 
@@ -4144,38 +4059,6 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
     auto completion_id = gen_chatcmplid();
     auto & rd = res->rd;
     auto & params = this->params;
-
-    // resumable mode opt in: a non empty X-Conversation-Id on a streaming request enables it.
-    // the conv id is the session identity end to end (client localStorage, server map,
-    // /v1/stream/<conv_id> routes). non stream OAI calls keep the standard flow regardless
-    bool stream = json_value(data, "stream", false);
-    std::string conversation_id;
-    if (stream) {
-        // request headers preserve the wire casing, the scan is case insensitive
-        static constexpr char   target[]   = "x-conversation-id";
-        static constexpr size_t target_len = sizeof(target) - 1;
-        for (const auto & [hk, hv] : req.headers) {
-            if (hk.size() != target_len) continue;
-            bool match = true;
-            for (size_t i = 0; i < target_len; ++i) {
-                char c = hk[i];
-                if (c >= 'A' && c <= 'Z') c = char(c + 32);
-                if (c != target[i]) { match = false; break; }
-            }
-            if (match) {
-                conversation_id = hv;
-                break;
-            }
-        }
-    }
-    const bool resumable = !conversation_id.empty();
-    std::unique_ptr<server_response_reader> drain_reader;
-    server_response_reader * post_target = &rd;
-    if (resumable) {
-        drain_reader = std::make_unique<server_response_reader>(
-            queue_tasks, queue_results, HTTP_POLLING_SECONDS);
-        post_target = drain_reader.get();
-    }
 
     try {
         std::vector<server_task> tasks;
@@ -4244,19 +4127,34 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
             tasks.push_back(std::move(task));
         }
 
-        post_target->post_tasks(std::move(tasks));
+        rd.post_tasks(std::move(tasks));
     } catch (const std::exception & e) {
         res->error(format_error_response(e.what(), ERROR_TYPE_INVALID_REQUEST));
         return res;
     }
 
-    // session creation comes after post_tasks succeeds, so a throw during parsing or task
-    // construction returns early without leaving an orphan in the manager map.
-    // create_or_replace evicts and cancels any prior session on this conv, the invariant
-    // 'one live session per conv' holds
-    stream_session_ptr session;
-    if (resumable) {
-        session = ctx_server.stream_sessions.create_or_replace(conversation_id);
+    bool stream = json_value(data, "stream", false);
+
+    // resumable streaming opt in, a non empty X-Conversation-Id on a streaming request enables it.
+    // the conv id is the session identity end to end, client localStorage and server map share
+    // the same key. non stream and non opted in calls keep the standard flow unchanged
+    std::string conversation_id;
+    if (stream) {
+        static constexpr char   target[]   = "x-conversation-id";
+        static constexpr size_t target_len = sizeof(target) - 1;
+        for (const auto & [hk, hv] : req.headers) {
+            if (hk.size() != target_len) continue;
+            bool match = true;
+            for (size_t i = 0; i < target_len; ++i) {
+                char c = hk[i];
+                if (c >= 'A' && c <= 'Z') c = char(c + 32);
+                if (c != target[i]) { match = false; break; }
+            }
+            if (match) {
+                conversation_id = hv;
+                break;
+            }
+        }
     }
 
     if (!stream) {
@@ -4289,30 +4187,6 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
                 res->ok(arr);
             }
         }
-    } else if (resumable) {
-        // spawn the detached drain that pumps the response into the session buffer
-        spawn_stream_drain(
-            std::move(drain_reader),
-            session,
-            res_type,
-            ctx_server.stream_sessions.shutdown_flag());
-        // HTTP response reads from the session, decoupled from the producer
-        res->status = 200;
-        res->content_type = "text/event-stream";
-        auto offset_ptr      = std::make_shared<size_t>(0);
-        auto session_capture = session;
-        res->next = [session_capture, offset_ptr, &req](std::string & output) -> bool {
-            bool got_any = false;
-            session_capture->read_from(*offset_ptr,
-                [&](const char * d, size_t n) {
-                    output.append(d, n);
-                    *offset_ptr += n;
-                    got_any = true;
-                    return false; // exit read_from after the current available bytes
-                },
-                req.should_stop);
-            return got_any;
-        };
     } else {
         // in streaming mode, the first error must be treated as non-stream response
         // this is to match the OAI API behavior
@@ -4359,8 +4233,19 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
                 }
             };
 
+            // when a tee is attached the session must outlive the http socket. ignore the
+            // connection closed signal in that case, only an explicit DELETE through the
+            // session stop_producer hook (which calls rd.stop()) is allowed to abort the
+            // producer. without a tee the legacy flow stays bit identical
+            auto effective_should_stop = [res_this, &req]() -> bool {
+                if (res_this->tee) {
+                    return false;
+                }
+                return req.should_stop();
+            };
+
             try {
-                if (req.should_stop()) {
+                if (effective_should_stop()) {
                     SRV_DBG("%s", "stopping streaming due to should_stop condition\n");
                     return false; // should_stop condition met
                 }
@@ -4394,8 +4279,8 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
                 // receive subsequent results
                 bool timeout = false;
                 int64_t start_time = ggml_time_ms();
-                auto result = rd.next([&timeout, &req, &start_time, &params]() {
-                    if (req.should_stop()) {
+                auto result = rd.next([&timeout, &start_time, &params, &effective_should_stop]() {
+                    if (effective_should_stop()) {
                         return true; // should_stop condition met
                     } else if (params.sse_ping_interval > 0 && ggml_time_ms() - start_time > (int64_t)params.sse_ping_interval * 1000) {
                         timeout = true;
@@ -4413,7 +4298,7 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
 
                 if (result == nullptr) {
                     SRV_DBG("%s", "stopping streaming due to should_stop condition\n");
-                    GGML_ASSERT(req.should_stop());
+                    GGML_ASSERT(effective_should_stop());
                     return false; // should_stop condition met
                 }
 
@@ -4448,6 +4333,26 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
                 // terminate on exception
                 return false;
             }
+        };
+    }
+
+    // attach the resumable session, tee mirrors each SSE chunk into the ring buffer, on_stream_end
+    // finalizes it on either drain path (wire or detached), and the stop_producer hook lets the
+    // DELETE /v1/stream/<conv_id> route abort the underlying reader from anywhere. the http layer
+    // owns the keep alive after a client disconnect via its detached drain, server-context only
+    // declares the wiring here and never spawns a thread itself
+    if (!conversation_id.empty()) {
+        auto session = g_stream_sessions.create_or_replace(conversation_id);
+        session->set_stop_producer([res_this = res.get()] {
+            res_this->rd.stop();
+        });
+        res->tee = [session](const char * d, size_t n) {
+            session->append(d, n);
+        };
+        res->on_stream_end = [session] {
+            // detach the stop hook before the response goes out of scope, no dangling captured ptr
+            session->set_stop_producer(nullptr);
+            session->finalize();
         };
     }
 
@@ -5216,18 +5121,6 @@ void server_routes::init_routes() {
         res->ok(result->to_json());
         return res;
     };
-
-    this->get_stream = [this](const server_http_req & req) {
-        return handle_stream_get_impl(req);
-    };
-
-    this->get_streams = [this](const server_http_req & req) {
-        return handle_streams_list_impl(req);
-    };
-
-    this->delete_stream = [this](const server_http_req & req) {
-        return handle_stream_delete_impl(req);
-    };
 }
 
 json server_routes::get_model_info() const {
@@ -5496,104 +5389,5 @@ std::unique_ptr<server_res_generator> server_routes::handle_count_tokens(const l
         response["object"] = "response.input_tokens";
     }
     res->ok(response);
-    return res;
-}
-
-std::unique_ptr<server_res_generator> server_routes::handle_stream_get_impl(const server_http_req & req) {
-    auto res = create_response();
-
-    // GET /v1/stream/<conv_id>?from=N replays the SSE bytes for that conversation,
-    // blocks for more bytes when the session is still running, ends on finalize
-    std::string conv_id = req.get_param("conv_id");
-    if (conv_id.empty()) {
-        res->error(format_error_response("Missing conversation id in path", ERROR_TYPE_INVALID_REQUEST));
-        return res;
-    }
-    auto session = ctx_server.stream_sessions.get(conv_id);
-    if (!session) {
-        res->error(format_error_response("Stream not found or expired", ERROR_TYPE_NOT_FOUND));
-        return res;
-    }
-    size_t from = 0;
-    {
-        std::string from_str = req.get_param("from");
-        if (!from_str.empty()) {
-            try {
-                from = static_cast<size_t>(std::stoull(from_str));
-            } catch (const std::exception &) {
-                res->error(format_error_response("Invalid 'from' offset", ERROR_TYPE_INVALID_REQUEST));
-                return res;
-            }
-        }
-    }
-    if (from < session->dropped_prefix()) {
-        res->error(format_error_response("Stream offset lost, please restart", ERROR_TYPE_INVALID_REQUEST));
-        return res;
-    }
-    res->status = 200;
-    res->content_type = "text/event-stream";
-
-    auto offset_ptr      = std::make_shared<size_t>(from);
-    auto session_capture = session;
-    res->next = [session_capture, offset_ptr, &req](std::string & output) -> bool {
-        bool got_any = false;
-        session_capture->read_from(*offset_ptr,
-            [&](const char * d, size_t n) {
-                output.append(d, n);
-                *offset_ptr += n;
-                got_any = true;
-                return false;
-            },
-            req.should_stop);
-        return got_any;
-    };
-    return res;
-}
-
-std::unique_ptr<server_res_generator> server_routes::handle_streams_list_impl(const server_http_req & req) {
-    auto res = create_response();
-
-    // GET /v1/streams returns sessions as a JSON array.
-    // with conversation_id set: at most one entry for that conv (running or finalized).
-    // without conversation_id: every live or recently completed session known to this server,
-    // used by the WebUI at mount and on visibilitychange to populate the sidebar spinners
-    std::string conversation_id = req.get_param("conversation_id");
-    std::vector<stream_session_ptr> sessions;
-    if (conversation_id.empty()) {
-        sessions = ctx_server.stream_sessions.list_all();
-    } else {
-        auto s = ctx_server.stream_sessions.get(conversation_id);
-        if (s) {
-            sessions.push_back(s);
-        }
-    }
-    json arr = json::array();
-    for (auto & s : sessions) {
-        arr.push_back({
-            {"conversation_id", s->conversation_id},
-            {"is_done",         s->is_done()},
-            {"total_bytes",     s->total_size()},
-            {"started_at",      s->started_ts},
-            {"completed_at",    s->completed_at()},
-        });
-    }
-    res->ok(arr);
-    return res;
-}
-
-std::unique_ptr<server_res_generator> server_routes::handle_stream_delete_impl(const server_http_req & req) {
-    auto res = create_response();
-
-    // DELETE /v1/stream/<conv_id> cancels the producer side then evicts the buffer.
-    // idempotent: a session that already finalized or was never created simply returns 204
-    std::string conv_id = req.get_param("conv_id");
-    if (conv_id.empty()) {
-        res->error(format_error_response("Missing conversation id in path", ERROR_TYPE_INVALID_REQUEST));
-        return res;
-    }
-    SRV_INF("DELETE /v1/stream/%s -> evict_and_cancel\n", conv_id.c_str());
-    ctx_server.stream_sessions.evict_and_cancel(conv_id);
-    res->status = 204;
-    res->content_type = "application/json";
     return res;
 }

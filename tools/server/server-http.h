@@ -29,6 +29,17 @@ struct server_http_res {
         return next != nullptr;
     }
 
+    // optional, each chunk produced by next() is forwarded here before being written to the
+    // wire. on wire failure (peer gone), the http layer detaches a background drain that keeps
+    // invoking next() and forwarding to the tee until next() returns false. lets streams
+    // survive a client disconnect, the producer keeps writing into the tee even when nobody
+    // is listening on the original HTTP socket
+    std::function<void(const char *, size_t)> tee = nullptr;
+
+    // optional, called when the stream ends on either path (wire drained to false, or detached
+    // drain reached false). used by the tee owner to finalize its sink, idempotent expected
+    std::function<void()> on_stream_end = nullptr;
+
     virtual ~server_http_res() = default;
 };
 

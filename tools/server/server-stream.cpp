@@ -1,6 +1,9 @@
 #include "server-stream.h"
+#include "server-common.h"
+#include "server-http.h"
 
 #include <chrono>
+#include <memory>
 #include <utility>
 
 namespace {
@@ -281,4 +284,125 @@ void stream_session_manager::gc_loop() {
             s->finalize();
         }
     }
+}
+
+// process wide manager, lifecycle controlled by llama-server main() via start_gc/stop_gc
+stream_session_manager g_stream_sessions;
+
+// helper, builds the standard error response and assigns it to a brand new http_res
+static server_http_res_ptr make_error_response(int status, const std::string & message, error_type type) {
+    auto res = std::make_unique<server_http_res>();
+    json err = format_error_response(message, type);
+    res->status = json_value(err, "code", status);
+    res->content_type = "application/json; charset=utf-8";
+    res->data = safe_json_to_str({{"error", err}});
+    return res;
+}
+
+server_http_context::handler_t make_stream_get_handler() {
+    return [](const server_http_req & req) -> server_http_res_ptr {
+        // GET /v1/stream/<conv_id>?from=N replays the SSE bytes already buffered for the
+        // session, blocks for more bytes when the session is still running, returns when
+        // the session is finalized. the body is streamed back as text/event-stream so the
+        // browser EventSource can attach to it like a fresh request
+        std::string conv_id = req.get_param("conv_id");
+        if (conv_id.empty()) {
+            return make_error_response(400, "Missing conversation id in path", ERROR_TYPE_INVALID_REQUEST);
+        }
+        auto session = g_stream_sessions.get(conv_id);
+        if (!session) {
+            return make_error_response(404, "Stream not found or expired", ERROR_TYPE_NOT_FOUND);
+        }
+        size_t from = 0;
+        std::string from_str = req.get_param("from");
+        if (!from_str.empty()) {
+            try {
+                from = static_cast<size_t>(std::stoull(from_str));
+            } catch (const std::exception &) {
+                return make_error_response(400, "Invalid 'from' offset", ERROR_TYPE_INVALID_REQUEST);
+            }
+        }
+        if (from < session->dropped_prefix()) {
+            return make_error_response(400, "Stream offset lost, please restart", ERROR_TYPE_INVALID_REQUEST);
+        }
+        auto res = std::make_unique<server_http_res>();
+        res->status = 200;
+        res->content_type = "text/event-stream";
+        // the next closure reads from the ring buffer at the requested offset, blocks until
+        // bytes arrive or the session finalizes. exit each call after draining the available
+        // chunk so set_chunked_content_provider gets a chance to flush to the socket
+        auto offset_ptr      = std::make_shared<size_t>(from);
+        auto session_capture = session;
+        res->next = [session_capture, offset_ptr, &req](std::string & output) -> bool {
+            bool got_any = false;
+            session_capture->read_from(*offset_ptr,
+                [&](const char * d, size_t n) {
+                    output.append(d, n);
+                    *offset_ptr += n;
+                    got_any = true;
+                    return false;
+                },
+                req.should_stop);
+            return got_any;
+        };
+        return res;
+    };
+}
+
+server_http_context::handler_t make_streams_list_handler() {
+    return [](const server_http_req & req) -> server_http_res_ptr {
+        // GET /v1/streams returns sessions as a JSON array. with conversation_id set, every
+        // session whose key is exactly that id or starts with "<id>::" matches, so a single
+        // call returns every per model variant for a given conv. without conversation_id,
+        // every live or recently completed session known to this server, used by the WebUI
+        // at mount and on visibilitychange to populate the sidebar spinners
+        std::string conversation_id = req.get_param("conversation_id");
+        std::vector<stream_session_ptr> sessions;
+        if (conversation_id.empty()) {
+            sessions = g_stream_sessions.list_all();
+        } else {
+            const std::string with_sep = conversation_id + "::";
+            auto all = g_stream_sessions.list_all();
+            for (auto & s : all) {
+                if (s->conversation_id == conversation_id) {
+                    sessions.push_back(s);
+                } else if (s->conversation_id.compare(0, with_sep.size(), with_sep) == 0) {
+                    sessions.push_back(s);
+                }
+            }
+        }
+        json arr = json::array();
+        for (auto & s : sessions) {
+            arr.push_back({
+                {"conversation_id", s->conversation_id},
+                {"is_done",         s->is_done()},
+                {"total_bytes",     s->total_size()},
+                {"started_at",      s->started_ts},
+                {"completed_at",    s->completed_at()},
+            });
+        }
+        auto res = std::make_unique<server_http_res>();
+        res->status = 200;
+        res->content_type = "application/json; charset=utf-8";
+        res->data = safe_json_to_str(arr);
+        return res;
+    };
+}
+
+server_http_context::handler_t make_stream_delete_handler() {
+    return [](const server_http_req & req) -> server_http_res_ptr {
+        // DELETE /v1/stream/<conv_id> is the explicit user Stop, cancels the producer hook
+        // wired by handle_completions_impl and evicts the buffer. idempotent, a session that
+        // already finalized or was never created returns 204 either way
+        std::string conv_id = req.get_param("conv_id");
+        if (conv_id.empty()) {
+            return make_error_response(400, "Missing conversation id in path", ERROR_TYPE_INVALID_REQUEST);
+        }
+        SRV_INF("DELETE /v1/stream/%s -> evict_and_cancel\n", conv_id.c_str());
+        g_stream_sessions.evict_and_cancel(conv_id);
+        auto res = std::make_unique<server_http_res>();
+        res->status = 204;
+        res->content_type = "application/json";
+        return res;
+    };
 }

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "server-http.h"
+
 #include <atomic>
 #include <condition_variable>
 #include <cstddef>
@@ -117,3 +119,18 @@ private:
     std::condition_variable                             gc_wake_cv;
     std::shared_ptr<std::atomic<bool>>                  drain_shutdown;
 };
+
+// the process wide stream session manager. defined in server-stream.cpp so the symbol
+// resolves through the server-context static lib, both llama-server and llama-cli link it.
+// start_gc() and stop_gc() are called explicitly from llama-server main(), llama-cli never
+// touches it and leaves it idle. the destructor calls stop_gc() unconditionally so the
+// process exit path is safe whether or not the GC thread was started
+extern stream_session_manager g_stream_sessions;
+
+// route handler factories. each builds a server_http_context::handler_t that operates
+// directly on g_stream_sessions, server.cpp wires them under /v1/stream/* without going
+// through server-context's server_routes. keeps the resumable stream surface confined to
+// server-stream and server-http
+server_http_context::handler_t make_stream_get_handler();
+server_http_context::handler_t make_streams_list_handler();
+server_http_context::handler_t make_stream_delete_handler();

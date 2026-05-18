@@ -7,6 +7,8 @@
  * client localStorage, /v1/stream/<conv_id> routes), no extra opaque token.
  */
 
+import { streamIdentity } from '$lib/utils/stream-identity';
+
 interface ResumableStreamState {
 	bytesReceived: number;
 	updatedAt: number;
@@ -66,11 +68,13 @@ export function clearStreamState(conversationId: string): void {
  */
 export async function resumeStream(
 	conversationId: string,
-	signal?: AbortSignal
+	signal?: AbortSignal,
+	model?: string | null
 ): Promise<Response | null> {
 	if (!conversationId) return null;
 	const state = getStreamState(conversationId);
 	const from = state?.bytesReceived ?? 0;
-	const url = `./v1/stream/${encodeURIComponent(conversationId)}?from=${from}`;
+	const id = streamIdentity(conversationId, model);
+	const url = `./v1/stream/${encodeURIComponent(id)}?from=${from}`;
 	return await fetch(url, { method: 'GET', signal });
 }

@@ -499,22 +499,64 @@ static void process_handler_response(server_http_req_ptr && request, server_http
         // convert to shared_ptr as both chunked_content_provider() and on_complete() need to use it
         std::shared_ptr q_ptr = std::move(request);
         std::shared_ptr r_ptr = std::move(response);
-        const auto chunked_content_provider = [response = r_ptr](size_t, const httplib::DataSink & sink) -> bool {
+        // shared flag, flipped to true the moment the producer signals next() == false on the
+        // normal wire path. on_complete uses it to decide whether to spawn the detached drain.
+        // covers every disconnect timing httplib can observe: between two chunks (peer dead
+        // detected before content_provider is called), during a chunk (sink.write fails), or
+        // never (the producer drained cleanly). without this httplib bails the provider when
+        // the peer is gone, on_complete fires, the shared_ptr resets, the underlying reader
+        // is destroyed, and the backend stops mid generation
+        auto stream_done = std::make_shared<std::atomic<bool>>(false);
+
+        const auto chunked_content_provider = [response = r_ptr, stream_done](size_t, const httplib::DataSink & sink) -> bool {
             std::string chunk;
             const bool has_next = response->next(chunk);
             if (!chunk.empty()) {
+                // mirror to the tee first, the session must reflect the SSE stream regardless
+                // of whether the wire write succeeds for this chunk
+                if (response->tee) {
+                    response->tee(chunk.data(), chunk.size());
+                }
                 if (!sink.write(chunk.data(), chunk.size())) {
+                    // peer is gone mid chunk, on_complete will pick up the detached drain
                     return false;
                 }
                 SRV_DBG("http: streamed chunk: %s\n", chunk.c_str());
             }
             if (!has_next) {
+                stream_done->store(true, std::memory_order_release);
+                if (response->on_stream_end) {
+                    response->on_stream_end();
+                }
                 sink.done();
                 SRV_DBG("%s", "http: stream ended\n");
             }
             return has_next;
         };
-        const auto on_complete = [request = q_ptr, response = r_ptr](bool) mutable {
+        const auto on_complete = [request = q_ptr, response = r_ptr, stream_done](bool) mutable {
+            // if the producer is still running when httplib hands the response back, the peer
+            // is gone but the generation must keep going. detach a thread that pumps next()
+            // into the tee until done, then runs on_stream_end. capture by value keeps the
+            // response alive past the reset below, the detached thread holds its own reference
+            if (!stream_done->load(std::memory_order_acquire) && response->tee) {
+                auto resp_keep = response;
+                std::thread([resp_keep]() {
+                    std::string c;
+                    while (true) {
+                        c.clear();
+                        bool more = resp_keep->next(c);
+                        if (!c.empty() && resp_keep->tee) {
+                            resp_keep->tee(c.data(), c.size());
+                        }
+                        if (!more) {
+                            break;
+                        }
+                    }
+                    if (resp_keep->on_stream_end) {
+                        resp_keep->on_stream_end();
+                    }
+                }).detach();
+            }
             response.reset(); // trigger the destruction of the response object
             request.reset();  // trigger the destruction of the request object
         };
