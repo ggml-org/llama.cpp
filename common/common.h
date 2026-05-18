@@ -615,7 +615,7 @@ struct common_params {
     std::map<std::string, std::string> default_template_kwargs;
 
     // UI configs
-    bool ui = true; // overridden by --no-ui at runtime when no assets are embedded
+    bool ui = true;
 
     // Deprecated: use ui, ui_mcp_proxy, ui_config_json instead
     bool webui = ui;
