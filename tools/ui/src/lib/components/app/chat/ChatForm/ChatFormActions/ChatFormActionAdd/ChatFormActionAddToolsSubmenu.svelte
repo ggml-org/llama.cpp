@@ -132,6 +132,7 @@
 										<Checkbox
 											checked={toolsStore.isToolEnabled(tool.function.name)}
 											onCheckedChange={() => toolsStore.toggleTool(tool.function.name)}
+											onclick={(e) => e.stopPropagation()}
 											class="h-4 w-4 shrink-0"
 										/>
 
