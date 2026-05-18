@@ -48,6 +48,7 @@ struct stream_session {
         const std::function<bool()> & should_stop);
 
     bool    is_done() const;
+    bool    is_cancelled() const;   // true when cancel() has been invoked
     size_t  total_size() const;     // bytes that ever entered the session
     size_t  dropped_prefix() const; // bytes evicted from the front due to cap
     int64_t completed_at() const;   // 0 while alive, unix seconds after finalize
@@ -68,6 +69,7 @@ private:
     size_t                  prefix_dropped;
     size_t                  cap_bytes;
     std::atomic<bool>       done;
+    std::atomic<bool>       cancelled;
     std::atomic<int64_t>    completed_ts;
     std::function<void()>   stop_producer; // protected by mu
 };

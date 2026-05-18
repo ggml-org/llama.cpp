@@ -27,6 +27,7 @@ stream_session::stream_session(std::string conversation_id_, size_t max_bytes_)
     , prefix_dropped(0)
     , cap_bytes(max_bytes_)
     , done(false)
+    , cancelled(false)
     , completed_ts(0) {
     buffer.reserve(64 * 1024);
 }
@@ -127,6 +128,10 @@ void stream_session::set_stop_producer(std::function<void()> fn) {
 }
 
 void stream_session::cancel() {
+    // flip cancelled first so the producer-side stream_aware_should_stop can break out of the
+    // recv() wait even if remove_waiting_task_ids does not notify the condvar (the cancel task
+    // posted by rd.stop() will eventually notify, but we do not want to depend on that timing)
+    cancelled.store(true, std::memory_order_release);
     // copy the hook under the lock then invoke outside, the producer side may grab queue locks
     // and we do not want to hold our mu across that path
     std::function<void()> fn;
@@ -137,6 +142,10 @@ void stream_session::cancel() {
     if (fn) {
         fn();
     }
+}
+
+bool stream_session::is_cancelled() const {
+    return cancelled.load(std::memory_order_acquire);
 }
 
 stream_session_manager::stream_session_manager()
@@ -408,6 +417,35 @@ server_http_context::handler_t make_stream_delete_handler() {
     };
 }
 
+// per-response registry that lets stream_aware_should_stop look up the session attached to a
+// given http response, so it can react to is_cancelled() without depending on the upstream
+// cancel propagation (rd.stop() posts cancel tasks but does not notify the recv() condvar,
+// the recv() unblock only happens when the slot processes the cancel and posts a result, which
+// can take a while under load). entries are added by stream_session_attach_hooks and removed
+// by on_stream_end or by the destructor of the response, but since we only key by raw pointer
+// during the response lifetime that is enough
+static std::mutex                                              g_res_session_mu;
+static std::unordered_map<server_http_res *, std::weak_ptr<stream_session>> g_res_session_map;
+
+static void register_res_session(server_http_res * res, const stream_session_ptr & s) {
+    std::lock_guard<std::mutex> lock(g_res_session_mu);
+    g_res_session_map[res] = s;
+}
+
+static void unregister_res_session(server_http_res * res) {
+    std::lock_guard<std::mutex> lock(g_res_session_mu);
+    g_res_session_map.erase(res);
+}
+
+static stream_session_ptr lookup_res_session(server_http_res * res) {
+    std::lock_guard<std::mutex> lock(g_res_session_mu);
+    auto it = g_res_session_map.find(res);
+    if (it == g_res_session_map.end()) {
+        return nullptr;
+    }
+    return it->second.lock();
+}
+
 void stream_session_attach_hooks(server_http_res & res, server_response_reader & rd, const std::map<std::string, std::string> & headers) {
     // case insensitive scan for x-conversation-id. headers preserve the wire casing, an ASCII
     // tolower comparison is enough here, no locale machinery needed
@@ -431,6 +469,8 @@ void stream_session_attach_hooks(server_http_res & res, server_response_reader &
         return;
     }
     auto session = g_stream_sessions.create_or_replace(conversation_id);
+    // register the res to session mapping so stream_aware_should_stop can poll is_cancelled
+    register_res_session(&res, session);
     // stop_producer may outlive the response (eviction by a later POST on the same conv_id,
     // late DELETE). guard with a shared alive flag, flipped by on_stream_end before rd dies
     auto alive = std::make_shared<std::atomic<bool>>(true);
@@ -443,12 +483,14 @@ void stream_session_attach_hooks(server_http_res & res, server_response_reader &
     res.tee = [session](const char * d, size_t n) {
         session->append(d, n);
     };
-    res.on_stream_end = [session, alive] {
+    auto * res_ptr = &res;
+    res.on_stream_end = [session, alive, res_ptr] {
         // flip alive first so any concurrent cancel (eg. from a create_or_replace racing with
         // our natural end) skips the now invalid rd. then detach the stop hook and finalize
         alive->store(false, std::memory_order_release);
         session->set_stop_producer(nullptr);
         session->finalize();
+        unregister_res_session(res_ptr);
     };
 }
 
@@ -457,9 +499,14 @@ std::function<bool()> stream_aware_should_stop(server_http_res * res, std::funct
     // out of scope, the std::function copy keeps the underlying target alive
     return [res, fallback = std::move(fallback)]() -> bool {
         if (res->tee) {
-            // a tee is attached, the session must outlive the http socket. ignore the peer
-            // disconnect signal, only an explicit DELETE through the session stop_producer
-            // hook is allowed to abort the producer
+            // tee attached: the session is the owner now, the peer disconnect signal is ignored.
+            // an explicit cancel (DELETE or session eviction) flips session->is_cancelled, which
+            // we poll here so the producer side breaks out of recv() without waiting for the cancel
+            // task to be processed by a slot. without a tee the legacy req.should_stop is used
+            auto session = lookup_res_session(res);
+            if (session && session->is_cancelled()) {
+                return true;
+            }
             return false;
         }
         return fallback();
