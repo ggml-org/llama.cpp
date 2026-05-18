@@ -253,6 +253,11 @@ struct server_slot {
         return task->need_embd() || is_mtp();
     }
 
+    bool need_embd_pre_norm() const {
+        GGML_ASSERT(task);
+        return spec && common_speculative_need_embd_pre_norm(spec);
+    }
+
     // if the context does not have a memory module then all embeddings have to be computed within a single ubatch
     // also we cannot split if the pooling would require any past tokens
     // (MTP supports splitting — uses task->need_embd() not need_embd())
@@ -4495,7 +4500,7 @@ std::unique_ptr<server_res_generator> server_routes::handle_embeddings_impl(cons
         }
     }
 
-    int embd_normalize = 2; // default to Euclidean/L2 norm
+    int embd_normalize = params.embd_normalize;
     if (body.count("embd_normalize") != 0) {
         embd_normalize = body.at("embd_normalize");
         if (meta->pooling_type == LLAMA_POOLING_TYPE_NONE) {
