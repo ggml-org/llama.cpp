@@ -1568,5 +1568,7 @@ static __inline__ void ggml_cuda_kernel_launch(Kernel kernel, const ggml_cuda_ke
         return;
     }
 #endif //defined(GGML_CUDA_USE_PDL)
+
     kernel<<<launch_params.block_nums, launch_params.block_dims, launch_params.shmem, launch_params.stream>>>(std::forward<Args>(args)... );
+    CUDA_CHECK(cudaGetLastError());
 }
