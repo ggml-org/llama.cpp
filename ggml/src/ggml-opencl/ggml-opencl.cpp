@@ -375,6 +375,9 @@ struct ggml_backend_opencl_device_context {
     ggml_backend_buffer_type buffer_type;
 
     cl_context context = nullptr;
+
+    GPU_FAMILY     gpu_family = GPU_FAMILY::UNKNOWN;
+    ADRENO_GPU_GEN adreno_gen = ADRENO_GPU_GEN::ADRENO_UNKNOWN;
 };
 
 // backend context
@@ -3487,12 +3490,21 @@ static bool ggml_opencl_is_device_supported(ggml_backend_dev_t dev) {
     GGML_ASSERT(dev_ctx->platform);
     GGML_ASSERT(dev_ctx->device);
 
-    if (!strstr(dev_ctx->device_name.c_str(), "Adreno") &&
-        !strstr(dev_ctx->device_name.c_str(), "Qualcomm") &&
-        !strstr(dev_ctx->device_version.c_str(), "Adreno") &&
-        !strstr(dev_ctx->device_name.c_str(), "Intel")
-    ) {
+    if (strstr(dev_ctx->device_name.c_str(), "Adreno") ||
+        strstr(dev_ctx->device_name.c_str(), "Qualcomm") ||
+        strstr(dev_ctx->device_version.c_str(), "Adreno")) {
+        dev_ctx->gpu_family = GPU_FAMILY::ADRENO;
+
+        // Usually device version contains the detailed device name
+        dev_ctx->adreno_gen = get_adreno_gpu_gen(dev_ctx->device_version.c_str());
+        if (dev_ctx->adreno_gen == ADRENO_GPU_GEN::ADRENO_UNKNOWN) {
+            dev_ctx->adreno_gen = get_adreno_gpu_gen(dev_ctx->device_name.c_str());
+        }
+    } else if (strstr(dev_ctx->device_name.c_str(), "Intel")) {
+        dev_ctx->gpu_family = GPU_FAMILY::INTEL;
+    } else {
         GGML_LOG_ERROR("ggml_opencl: unsupported GPU '%s'.\n", dev_ctx->device_name.c_str());
+        dev_ctx->gpu_family = GPU_FAMILY::UNKNOWN;
         return false;
     }
 
@@ -3506,9 +3518,7 @@ static bool ggml_opencl_is_device_supported(ggml_backend_dev_t dev) {
     }
 
 #ifdef GGML_OPENCL_USE_ADRENO_KERNELS
-    if (strstr(dev_ctx->device_name.c_str(), "Adreno") ||
-        strstr(dev_ctx->device_name.c_str(), "Qualcomm") ||
-        strstr(dev_ctx->device_version.c_str(), "Adreno")) {
+    if (dev_ctx->gpu_family != GPU_FAMILY::ADRENO) {
         GGML_LOG_ERROR("ggml_opencl: Adreno-specific kernels should not be enabled for non-Adreno GPUs; "
             "run on an Adreno GPU or recompile with CMake option `-DGGML_OPENCL_USE_ADRENO_KERNELS=OFF`\n");
         return false;
@@ -3564,22 +3574,11 @@ static ggml_backend_opencl_context * ggml_cl_init(ggml_backend_dev_t dev) {
     // when the associated device is initialized
     backend_ctx->ref_count  = 0;
 
-    if (strstr(dev_ctx->device_name.c_str(), "Adreno") ||
-        strstr(dev_ctx->device_name.c_str(), "Qualcomm") ||
-        strstr(dev_ctx->device_version.c_str(), "Adreno")) {
-        backend_ctx->gpu_family = GPU_FAMILY::ADRENO;
-        // Usually device version contains the detailed device name
-        backend_ctx->adreno_gen = get_adreno_gpu_gen(dev_ctx->device_version.c_str());
-        if (backend_ctx->adreno_gen == ADRENO_GPU_GEN::ADRENO_UNKNOWN) {
-            backend_ctx->adreno_gen = get_adreno_gpu_gen(dev_ctx->device_name.c_str());
-        }
-
+    backend_ctx->gpu_family = dev_ctx->gpu_family;
+    backend_ctx->adreno_gen = dev_ctx->adreno_gen;
+    if (backend_ctx->gpu_family == GPU_FAMILY::ADRENO) {
         // Use wave size of 64 for all Adreno GPUs.
         backend_ctx->adreno_wave_size = 64;
-    } else if (strstr(dev_ctx->device_name.c_str(), "Intel")) {
-        backend_ctx->gpu_family = GPU_FAMILY::INTEL;
-    } else {
-        backend_ctx->gpu_family = GPU_FAMILY::UNKNOWN;
     }
 
     // Populate backend device name
