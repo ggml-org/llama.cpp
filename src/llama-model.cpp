@@ -287,6 +287,8 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
             return new llama_model_qwen35moe(params);
         case LLM_ARCH_MISTRAL3:
             return new llama_model_mistral3(params);
+        case LLM_ARCH_EAGLE3:
+            return new llama_model_eagle3(params);
         case LLM_ARCH_MIMO2:
             return new llama_model_mimo2(params);
         case LLM_ARCH_KIMI_LINEAR:
@@ -2406,6 +2408,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_ERNIE4_5:
         case LLM_ARCH_ERNIE4_5_MOE:
         case LLM_ARCH_MISTRAL3:
+        case LLM_ARCH_EAGLE3:
         case LLM_ARCH_MISTRAL4:
         case LLM_ARCH_LLAMA_EMBED:
         case LLM_ARCH_MAINCODER:
@@ -2694,4 +2697,25 @@ ggml_tensor * llama_model_get_tok_embd(const struct llama_model * model) {
 
 void llama_model_set_tok_embd(struct llama_model * model, ggml_tensor * tensor) {
     model->tok_embd = tensor;
+}
+
+ggml_tensor * llama_model_get_lm_head(const struct llama_model * model) {
+    return model->output;
+}
+
+void llama_model_set_lm_head(struct llama_model * model, ggml_tensor * tensor) {
+    model->output = tensor;
+}
+
+const int32_t * llama_model_target_extract_layers(const struct llama_model * model) {
+    const auto & v = model->target_extract_layers;
+    return v.empty() ? nullptr : v.data();
+}
+
+uint32_t llama_model_n_target_extract_layers(const struct llama_model * model) {
+    return (uint32_t) model->target_extract_layers.size();
+}
+
+uint32_t llama_model_target_hidden_size(const struct llama_model * model) {
+    return model->hparams.target_hidden_size;
 }

@@ -110,6 +110,24 @@ LLAMA_API llama_context * llama_get_ctx_other(struct llama_context * ctx);
 // set if the layer input embeddings should be outputed
 LLAMA_API void llama_set_output_layer_inp(struct llama_context * ctx, uint32_t layer_id, bool enable);
 
+// read back the input embeddings of the specified layer for the most recent ubatch
+// the layer must have been enabled via llama_set_output_layer_inp
+LLAMA_API float * llama_get_output_layer_inp(struct llama_context * ctx, uint32_t layer_id);
+
 LLAMA_API ggml_tensor * llama_model_get_tok_embd(const struct llama_model * model);
 LLAMA_API void          llama_model_set_tok_embd(      struct llama_model * model, ggml_tensor * tensor);
+
+LLAMA_API ggml_tensor * llama_model_get_lm_head(const struct llama_model * model);
+LLAMA_API void          llama_model_set_lm_head(      struct llama_model * model, ggml_tensor * tensor);
+
+//
+// eagle3/DFlash: consume target model extracted features
+//
+
+// returns pointer to the target-model layer indices
+LLAMA_API const int32_t * llama_model_target_extract_layers  (const struct llama_model * model);
+// returns the number of extracted layers from target model
+LLAMA_API uint32_t        llama_model_n_target_extract_layers(const struct llama_model * model);
+// returns the target model hidden size
+LLAMA_API uint32_t        llama_model_target_hidden_size     (const struct llama_model * model);
 

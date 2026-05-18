@@ -87,6 +87,7 @@ llama_context::llama_context(
 
     cparams.ctx_other = nullptr;
     cparams.output_layer_inp.resize(hparams.n_layer, false);
+    embd_layer_inp.resize(hparams.n_layer);
 
     // TODO: more generic
     if (model.arch == LLM_ARCH_GEMMA4_ASSISTANT) {
@@ -1277,6 +1278,13 @@ void llama_context::set_output_layer_inp(uint32_t layer_id, bool enable) {
     sched_need_reserve = true;
 }
 
+float * llama_context::get_output_layer_inp(uint32_t layer_id) {
+    if (layer_id >= embd_layer_inp.size() || embd_layer_inp[layer_id].empty()) {
+        return nullptr;
+    }
+    return embd_layer_inp[layer_id].data();
+}
+
 llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, llm_graph_type gtype, llama_memory_context_i * mctx, ggml_status & ret) {
     if (mctx && !mctx->apply()) {
         LLAMA_LOG_ERROR("%s: failed to apply memory context\n", __func__);
@@ -1361,7 +1369,10 @@ int llama_context::encode(const llama_batch & batch_inp) {
 
     const auto & hparams = model.hparams;
 
-    const int64_t n_embd  = hparams.n_embd_inp();
+    // eagle3/DFlash: features as encoder input, and non-draft paths fall back to model's input dim
+    const int64_t n_embd = (hparams.n_embd_target_features > 0 && batch_inp.embd)
+                             ? (int64_t) hparams.n_embd_target_features
+                             : hparams.n_embd_inp();
     const int64_t n_vocab = model.vocab.n_tokens();
 
     // note: during encode, we always pass the full sequence starting from pos = 0
@@ -1872,7 +1883,39 @@ int llama_context::decode(const llama_batch & batch_inp) {
             if (n_outputs) {
                 GGML_ASSERT( n_outputs_prev + n_outputs <= n_outputs_all);
                 GGML_ASSERT((n_outputs_prev + n_outputs)*n_vocab <= (int64_t) logits.size);
-                ggml_backend_tensor_get_async(backend_res, t_logits, logits_out, 0, n_outputs*n_vocab*sizeof(float));
+
+                // eagle3: Map draft vocab to target vocab
+                if (model.arch == LLM_ARCH_EAGLE3 && model.d2t) {
+                    static thread_local std::vector<int64_t> eagle3_d2t_map;
+                    static thread_local std::vector<float>   eagle3_draft_logits;
+
+                    const int64_t draft_vocab_size = t_logits->ne[0];
+                    const uint32_t last_idx = n_outputs - 1;
+
+                    if (eagle3_d2t_map.empty()) {
+                        eagle3_d2t_map.resize(model.d2t->ne[0]);
+                        ggml_backend_tensor_get(model.d2t, eagle3_d2t_map.data(), 0,
+                                                eagle3_d2t_map.size() * sizeof(int64_t));
+                    }
+
+                    eagle3_draft_logits.resize(draft_vocab_size);
+                    const size_t last_offset = last_idx * draft_vocab_size * sizeof(float);
+                    ggml_backend_tensor_get_async(backend_res, t_logits, eagle3_draft_logits.data(),
+                                                  last_offset, draft_vocab_size * sizeof(float));
+                    synchronize();
+
+                    float * last_logits_out = logits_out + last_idx * n_vocab;
+                    std::fill(last_logits_out, last_logits_out + n_vocab,
+                              -std::numeric_limits<float>::infinity());
+
+                    for (int64_t j = 0; j < draft_vocab_size; j++) {
+                        const int64_t target_id = j + eagle3_d2t_map[j];
+                        GGML_ASSERT(target_id >= 0 && target_id < n_vocab);
+                        last_logits_out[target_id] = eagle3_draft_logits[j];
+                    }
+                } else {
+                    ggml_backend_tensor_get_async(backend_res, t_logits, logits_out, 0, n_outputs*n_vocab*sizeof(float));
+                }
             }
         }
 
@@ -1935,6 +1978,8 @@ int llama_context::decode(const llama_batch & batch_inp) {
                     }
             }
         }
+
+        extract_layer_inputs(res);
 
         // extract nextn embeddings before
         // only meaningful in LLAMA_POOLING_TYPE_NONE (per-token); other pooling modes are ignored.
@@ -2172,6 +2217,23 @@ uint32_t llama_context::output_reserve(int32_t n_outputs) {
     GGML_ASSERT(n_outputs_max <= cparams.n_outputs_max);
 
     return n_outputs_max;
+}
+
+void llama_context::extract_layer_inputs(const llm_graph_result * res) {
+    for (uint32_t il = 0; il < cparams.output_layer_inp.size(); ++il) {
+        if (!cparams.output_layer_inp[il]) {
+            continue;
+        }
+        ggml_tensor * t = res->get_layer_inp((int) il);
+        if (!t) {
+            continue;
+        }
+        const size_t nbytes = ggml_nbytes(t);
+        embd_layer_inp[il].resize(nbytes / sizeof(float));
+        ggml_backend_t backend = ggml_backend_sched_get_tensor_backend(sched.get(), t);
+        GGML_ASSERT(backend != nullptr);
+        ggml_backend_tensor_get_async(backend, t, embd_layer_inp[il].data(), 0, nbytes);
+    }
 }
 
 void llama_context::output_reorder() {
@@ -4042,4 +4104,8 @@ llama_context * llama_get_ctx_other(struct llama_context * ctx) {
 
 void llama_set_output_layer_inp(struct llama_context * ctx, uint32_t layer_id, bool enable) {
     ctx->set_output_layer_inp(layer_id, enable);
+}
+
+float * llama_get_output_layer_inp(struct llama_context * ctx, uint32_t layer_id) {
+    return ctx->get_output_layer_inp(layer_id);
 }

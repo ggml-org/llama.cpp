@@ -27,6 +27,10 @@ common_speculative * common_speculative_init(common_params_speculative & params,
 
 void common_speculative_free(common_speculative * spec);
 
+// Optional setup hook to call once after loading the draft model but before creating its context.
+// Inherits any missing weights from the target model (e.g. tok_embd / lm_head from target model for eagle3 / dflash)
+void common_speculative_setup_draft_model(struct llama_model * model_dft, const struct llama_model * model_tgt);
+
 struct common_speculative_draft_params {
     // this flag is used to chain the drafts through all the available implementations
     // after the first successful draft from an implementation, we set it

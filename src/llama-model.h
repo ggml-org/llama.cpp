@@ -475,6 +475,9 @@ struct llama_layer {
     struct ggml_tensor * ffn_act_beta    = nullptr;
     struct ggml_tensor * ffn_act_eps     = nullptr;
 
+    // eagle3
+    struct ggml_tensor * eagle3_hidden_norm = nullptr;
+
     // Kimi Linear KDA (using ssm_ prefix for consistency)
     // Note: ssm_dt_b already exists above (mamba bias), reused for Kimi dt_bias
     struct ggml_tensor * ssm_q_conv = nullptr;
@@ -568,6 +571,13 @@ struct llama_model {
     struct ggml_tensor * per_layer_tok_embd   = nullptr;
     struct ggml_tensor * per_layer_model_proj = nullptr;
     struct ggml_tensor * per_layer_proj_norm  = nullptr;
+
+    // eagle3
+    struct ggml_tensor * fc  = nullptr;  // feature fusion layer
+    struct ggml_tensor * d2t = nullptr;  // draft to target vocabulary mapping
+
+    // unified vector to store target-model extracted layer ids in eagle3, dflash, etc.
+    std::vector<int32_t> target_extract_layers;
 
     std::vector<llama_layer> layers;
 

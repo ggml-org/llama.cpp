@@ -128,6 +128,9 @@ struct llama_context {
 
     void set_output_layer_inp(uint32_t layer_id, bool enable);
 
+    // read back the input embeddings of the specified layer
+    float * get_output_layer_inp(uint32_t layer_id);
+
     // process a single ubatch with a specific graph type
     // if memory_context is provided, it will be applied first to the context's memory
     // ret contains the status of the graph computation
@@ -227,6 +230,10 @@ private:
 
     // map the output row index `i` to batch index
     int64_t output_resolve_row(int32_t i) const;
+
+    // async-copy enabled layer-input tensors (per cparams.output_layer_inp) 
+    // from backend into host-side embd_layer_inp buffers
+    void extract_layer_inputs(const llm_graph_result * res);
 
     //
     // graph
@@ -355,6 +362,10 @@ private:
 
     // host buffer for the model output (logits and embeddings)
     ggml_backend_buffer_ptr buf_output;
+
+    // host buffer for output layer input embeddings, per layer
+    // populated when cparams.output_layer_inp[il] is true
+    std::vector<std::vector<float>> embd_layer_inp;
 
     // keep copies of the per-sequence memory on the device
     std::map<llama_seq_id, llama_memory_buffers> mem_storage;
