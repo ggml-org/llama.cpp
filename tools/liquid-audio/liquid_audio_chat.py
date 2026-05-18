@@ -59,20 +59,48 @@ class AudioPlayer:
         self.all_samples = []
         self.pyaudio = None
         self.stream = None
-        self.queue = Queue()
+        # Use bounded queue for backpressure (max ~1 second of buffered chunks if each chunk is small)
+        self.queue = Queue(maxsize=100)
         self.thread = None
         self.running = False
         self.started = False
+        self.chunk_size = 1024  # Standardized playback chunk size in frames
 
     def _playback_thread(self):
-        """Background thread that writes audio to the stream."""
-        while self.running or not self.queue.empty():
+        """Background thread that writes audio to the stream in uniform chunks."""
+        buffer = b""
+        bytes_per_chunk = self.chunk_size * 2  # 16-bit PCM = 2 bytes per sample
+
+        # Pre-buffer slightly before beginning playback
+        prebuffer_time = 0.05  # 50ms pre-buffer
+        target_prebuffer_bytes = int(self.sample_rate * prebuffer_time) * 2 if self.sample_rate else bytes_per_chunk
+
+        # Warm up buffer
+        while self.running and len(buffer) < target_prebuffer_bytes:
             try:
-                pcm_data = self.queue.get(timeout=0.1)
-                if self.stream:
-                    self.stream.write(pcm_data)
+                buffer += self.queue.get(timeout=0.05)
             except:
-                pass
+                # If we timeout during pre-buffering, it's fine, we will start anyway if no more chunks or timeout
+                break
+
+        while self.running or not self.queue.empty() or len(buffer) > 0:
+            # Fill buffer if needed
+            while len(buffer) < bytes_per_chunk and (self.running or not self.queue.empty()):
+                try:
+                    buffer += self.queue.get(timeout=0.05)
+                except:
+                    break  # Queue empty, play what we have
+
+            if len(buffer) >= bytes_per_chunk:
+                chunk_to_play = buffer[:bytes_per_chunk]
+                buffer = buffer[bytes_per_chunk:]
+                if self.stream:
+                    self.stream.write(chunk_to_play)
+            elif len(buffer) > 0 and not self.running and self.queue.empty():
+                # Play remaining if we're stopping
+                if self.stream:
+                    self.stream.write(buffer)
+                buffer = b""
 
     def start(self):
         """Prepare the audio player (stream starts on first samples)."""
@@ -91,13 +119,14 @@ class AudioPlayer:
                 channels=1,
                 rate=self.sample_rate,
                 output=True,
+                frames_per_buffer=self.chunk_size,
             )
         self.thread = threading.Thread(target=self._playback_thread, daemon=True)
         self.thread.start()
         self.started = True
 
     def add_samples(self, samples, sample_rate=None):
-        """Add samples to playback queue (non-blocking)."""
+        """Add samples to playback queue (non-blocking with backpressure)."""
         if sample_rate is not None and self.sample_rate is None:
             self.sample_rate = sample_rate
         self._start_stream()
