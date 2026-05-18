@@ -3759,7 +3759,7 @@ static ggml_backend_opencl_context * ggml_cl_init(ggml_backend_dev_t dev) {
     return dev_ctx->backend_ctx;
 }
 
-static void ggml_cl2_free(ggml_backend_t backend) {
+static void ggml_cl_free(ggml_backend_t backend) {
     ggml_backend_opencl_context * ctx = (ggml_backend_opencl_context *) backend->context;
     ctx->free();
 }
@@ -4327,7 +4327,7 @@ static const char * ggml_backend_opencl_name(ggml_backend_t backend) {
 }
 
 static void ggml_backend_opencl_free(ggml_backend_t backend) {
-    ggml_cl2_free(backend);
+    ggml_cl_free(backend);
 }
 
 static void ggml_backend_opencl_set_tensor_async(ggml_backend_t backend, ggml_tensor * tensor, const void * data, size_t offset, size_t size) {
