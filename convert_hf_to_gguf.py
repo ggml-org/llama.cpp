@@ -6473,7 +6473,9 @@ class ZayaModel(TextModel):
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
-        self.gguf_writer.add_vocab_size(self.hparams["vocab_size"])
+        # Use actual tokenizer vocab size if available, fallback to config vocab_size
+        vocab_size = self._tokenizer_vocab_size if self._tokenizer_vocab_size is not None else self.hparams["vocab_size"]
+        self.gguf_writer.add_vocab_size(vocab_size)
 
         # n_ff = ffn_hidden_size / 2 (SwiGLU halves the intermediate)
         n_ff = self.hparams.get("ffn_hidden_size", 4096) // 2
