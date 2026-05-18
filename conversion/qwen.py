@@ -600,11 +600,6 @@ class _Qwen35MtpMixin:
             if name.find("layers.") != -1:
                 assert bid is not None
                 name = name.replace(f"mtp.layers.{bid}", f"model.layers.{bid + n_layer}")
-                # Keep bid coherent with the remapped name so downstream MoE
-                # expert-stacking (Qwen2MoeModel) caches and reads at the same
-                # layer slot. Without this, self._experts[0] gets populated with
-                # layer-48 names, then the stacker builds layer-0 lookup keys
-                # and KeyErrors.
                 bid = bid + n_layer
             else:
                 remapper = {
