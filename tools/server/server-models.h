@@ -168,7 +168,7 @@ public:
 
     // notify the router server that a model instance is ready
     // return the monitoring thread (to be joined by the caller)
-    static std::thread setup_child_server(const std::function<void(int)> & shutdown_handler, const json & model_info);
+    static std::thread setup_child_server(const std::function<void(int)> & shutdown_handler);
 
     // notify the router server that the sleeping state has changed
     static void notify_router_sleeping_state(bool sleeping);
@@ -181,10 +181,7 @@ struct server_models_routes {
     server_models models;
     server_models_routes(const common_params & params, int argc, char ** argv)
             : params(params), models(params, argc, argv) {
-        // Support both new ui_config_json and deprecated webui_config_json
-        const std::string & cfg = !this->params.ui_config_json.empty()
-            ? this->params.ui_config_json
-            : this->params.webui_config_json;
+        const std::string & cfg = this->params.webui_config_json;
         if (!cfg.empty()) {
             try {
                 json json_settings = json::parse(cfg);
