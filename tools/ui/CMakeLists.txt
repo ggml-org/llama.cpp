@@ -50,7 +50,7 @@ add_custom_target(llama-ui-assets ALL
         "-DHF_ENABLED=${LLAMA_USE_PREBUILT_UI}"
         "-DBUILD_UI=${LLAMA_BUILD_UI}"
         -P "${PROJECT_SOURCE_DIR}/scripts/ui-assets.cmake"
-    COMMENT "Provisioning UI assets (npm build -> HF Bucket fallback)"
+    COMMENT "Provisioning UI assets"
     VERBATIM
 )
 
