@@ -14,6 +14,8 @@
 		<Video class="mx-auto mb-4 h-16 w-16 text-white/50" />
 
 		{#if videoSrc}
+			<!-- svelte-ignore a11y_media_has_caption -->
+			<!-- user uploaded attachment preview, captions cannot be authored for arbitrary content -->
 			<video controls class="mb-4 w-full" src={videoSrc}>
 				Your browser does not support the video element.
 			</video>
