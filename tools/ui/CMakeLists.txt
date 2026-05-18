@@ -2,6 +2,7 @@ set(TARGET llama-ui)
 
 set(LLAMA_UI_HF_BUCKET "llama-ui" CACHE STRING "Hugging Face bucket name for prebuilt UI assets")
 
+# Backward compat: forward old var to new one
 if(DEFINED LLAMA_BUILD_WEBUI)
     set(LLAMA_BUILD_UI ${LLAMA_BUILD_WEBUI})
     message(DEPRECATION "LLAMA_BUILD_WEBUI is deprecated, use LLAMA_BUILD_UI instead")
