@@ -161,7 +161,9 @@ llama_kv_cache::llama_kv_cache(
     const bool is_mla = hparams.is_mla();
 
     const auto is_turbo_kv_type = [](ggml_type type) {
-        return type == GGML_TYPE_TQ3_0;
+        return type == GGML_TYPE_TQ3_0 ||
+               type == GGML_TYPE_TURBO3_0 ||
+               type == GGML_TYPE_TURBO4_0;
     };
 
     const int adaptive_mode = []() {
@@ -234,7 +236,7 @@ llama_kv_cache::llama_kv_cache(
                 layer_type_k = GGML_TYPE_Q8_0;
                 layer_type_v = GGML_TYPE_Q8_0;
                 if (!warned_cpu_fallback) {
-                    LLAMA_LOG_WARN("%s: TQ3_0 KV cache falling back to q8_0 for CPU-bound layers (partial offload)\n", __func__);
+                    LLAMA_LOG_WARN("%s: turbo KV cache falling back to q8_0 for CPU-bound layers (partial offload)\n", __func__);
                     warned_cpu_fallback = true;
                 }
             }
