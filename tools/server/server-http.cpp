@@ -537,10 +537,12 @@ static void process_handler_response(server_http_req_ptr && request, server_http
             // if the producer is still running when httplib hands the response back, the peer
             // is gone but the generation must keep going. detach a thread that pumps next()
             // into the tee until done, then runs on_stream_end. capture by value keeps the
-            // response alive past the reset below, the detached thread holds its own reference
+            // response alive past the reset below, the request too since next() may reach
+            // into *request via &req
             if (!stream_done->load(std::memory_order_acquire) && response->tee) {
+                auto req_keep  = request;
                 auto resp_keep = response;
-                std::thread([resp_keep]() {
+                std::thread([req_keep, resp_keep]() {
                     std::string c;
                     while (true) {
                         c.clear();
@@ -555,6 +557,7 @@ static void process_handler_response(server_http_req_ptr && request, server_http
                     if (resp_keep->on_stream_end) {
                         resp_keep->on_stream_end();
                     }
+                    (void) req_keep; // keep the request alive until the drain is done
                 }).detach();
             }
             response.reset(); // trigger the destruction of the response object
