@@ -1,4 +1,4 @@
-import { getJsonHeaders } from '$lib/utils/api-headers';
+import { getAuthHeaders, getJsonHeaders } from '$lib/utils/api-headers';
 import { formatAttachmentText } from '$lib/utils/formatters';
 import { isAbortError } from '$lib/utils/abort';
 import { streamIdentity } from '$lib/utils/stream-identity';
@@ -357,7 +357,8 @@ export class ChatService {
 					onTimings,
 					conversationId,
 					signal,
-					onConnectionState
+					onConnectionState,
+					options.model
 				);
 
 				return;
@@ -493,7 +494,10 @@ export class ChatService {
 		if (!conversationId) return;
 		try {
 			const id = streamIdentity(conversationId, model);
-			await fetch(`./v1/stream/${encodeURIComponent(id)}`, { method: 'DELETE' });
+			await fetch(`./v1/stream/${encodeURIComponent(id)}`, {
+				method: 'DELETE',
+				headers: getAuthHeaders()
+			});
 		} catch (e) {
 			console.warn('cancelServerStream failed:', e);
 		}
@@ -600,7 +604,8 @@ export class ChatService {
 		onTimings?: (timings?: ChatMessageTimings, promptProgress?: ChatMessagePromptProgress) => void,
 		conversationId?: string,
 		abortSignal?: AbortSignal,
-		onConnectionState?: (state: StreamConnectionState) => void
+		onConnectionState?: (state: StreamConnectionState) => void,
+		streamModel?: string | null
 	): Promise<void> {
 		let reader = response.body?.getReader();
 
@@ -699,7 +704,23 @@ export class ChatService {
 				while (true) {
 					if (abortSignal?.aborted) break;
 
-					const { done, value } = await reader.read();
+					let done: boolean;
+					let value: Uint8Array | undefined;
+					try {
+						const r = await reader.read();
+						done = r.done;
+						value = r.value;
+					} catch (readErr) {
+						// reader.read() rejects with TypeError when the underlying connection drops
+						// instead of just resolving with done=true. treat it like done so the outer
+						// loop swaps reader via the resume path
+						if (isAbortError(readErr)) {
+							throw readErr;
+						}
+						console.warn('reader.read() rejected, treating as premature end:', readErr);
+						done = true;
+						value = undefined;
+					}
 					if (done) break;
 
 					if (abortSignal?.aborted) break;
@@ -807,12 +828,13 @@ export class ChatService {
 				madeProgress = false;
 
 				// the server resends starting at bytesParsed, discard any partial line we held
-				// it will be retransmitted from a clean line boundary. pass the active model name
-				// so the router routes the GET direct to the owning child, skips the loopback probe
+				// it will be retransmitted from a clean line boundary. reuse the model the POST was
+				// originally tagged with, the dropdown may have changed since but the server side
+				// identity is frozen at POST time
 				const resumeResp = await resumeStream(
 					conversationId,
 					abortSignal,
-					selectedModelName()
+					streamModel
 				).catch(() => null);
 				if (!resumeResp || resumeResp.status !== 200) {
 					onConnectionState?.('lost');

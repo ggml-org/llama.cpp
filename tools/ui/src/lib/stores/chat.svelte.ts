@@ -17,6 +17,7 @@ import { ChatService } from '$lib/services/chat.service';
 import { selectActiveStream } from '$lib/services/stream-discovery.service';
 import { getStreamState, clearStreamState } from '$lib/services/stream-resume.service';
 import { streamIdentity } from '$lib/utils/stream-identity';
+import { getAuthHeaders } from '$lib/utils/api-headers';
 import { conversationsStore } from '$lib/stores/conversations.svelte';
 import { config } from '$lib/stores/settings.svelte';
 import { agenticStore } from '$lib/stores/agentic.svelte';
@@ -75,7 +76,7 @@ class ChatStore {
 	streamConnectionState = $state<StreamConnectionState>('streaming');
 	chatLoadingStates = new SvelteMap<string, boolean>();
 	chatReasoningStates = new SvelteMap<string, boolean>();
-	chatStreamingStates = new SvelteMap<string, { response: string; messageId: string }>();
+	chatStreamingStates = new SvelteMap<string, { response: string; messageId: string; model?: string | null }>();
 	// convs that the backend reports as having a running session, populated by the global sync
 	// at app mount and on visibilitychange. it does not overlap with chatLoadingStates which
 	// tracks inferences driven by this browser, both are unioned to feed the sidebar spinners
@@ -135,9 +136,9 @@ class ChatStore {
 			if (convId === conversationsStore.activeConversation?.id) this.isReasoning = false;
 		}
 	}
-	private setChatStreaming(convId: string, response: string, messageId: string): void {
+	private setChatStreaming(convId: string, response: string, messageId: string, model?: string | null): void {
 		this.touchConversationState(convId);
-		this.chatStreamingStates.set(convId, { response, messageId });
+		this.chatStreamingStates.set(convId, { response, messageId, model: model ?? this.chatStreamingStates.get(convId)?.model });
 		if (convId === conversationsStore.activeConversation?.id) this.currentResponse = response;
 	}
 	private clearChatStreaming(convId: string): void {
@@ -184,7 +185,9 @@ class ChatStore {
 		if (!convId) return null;
 		let listResp: Response;
 		try {
-			listResp = await fetch(`./v1/streams?conversation_id=${encodeURIComponent(convId)}`);
+			listResp = await fetch(`./v1/streams?conversation_id=${encodeURIComponent(convId)}`, {
+				headers: getAuthHeaders()
+			});
 		} catch (e) {
 			console.warn('probeServerStream fetch failed:', e);
 			return null;
@@ -235,7 +238,9 @@ class ChatStore {
 		const id = streamId || streamIdentity(convId, selectedModelName());
 		let response: Response;
 		try {
-			response = await fetch(`./v1/stream/${encodeURIComponent(id)}?from=0`);
+			response = await fetch(`./v1/stream/${encodeURIComponent(id)}?from=0`, {
+				headers: getAuthHeaders()
+			});
 		} catch (e) {
 			console.error('attachServerStream replay fetch failed:', e);
 			unlock();
@@ -329,7 +334,12 @@ class ChatStore {
 			writeActive({ content: '', reasoningContent: undefined });
 		}
 
-		this.setChatStreaming(convId, existingContent, targetMessageId);
+		// extract the model suffix from the server side identity, the resume calls inside
+		// handleStreamResponse must reuse the model the session was originally tagged with,
+		// not the current dropdown selection which may have changed since
+		const sepIdx = id.indexOf('::');
+		const attachedModel: string | null = sepIdx === -1 ? null : id.slice(sepIdx + 2);
+		this.setChatStreaming(convId, existingContent, targetMessageId, attachedModel);
 		const abortController = this.getOrCreateAbortController(convId);
 
 		let streamedContent = '';
@@ -394,7 +404,8 @@ class ChatStore {
 					if (convId === conversationsStore.activeConversation?.id) {
 						this.streamConnectionState = connState;
 					}
-				}
+				},
+				attachedModel
 			);
 		} catch (e) {
 			console.error('attachServerStream pipe crashed:', e);
@@ -601,7 +612,7 @@ class ChatStore {
 	async syncRemoteRunningStreams(): Promise<void> {
 		let sessions: ApiStreamSession[];
 		try {
-			const resp = await fetch('./v1/streams');
+			const resp = await fetch('./v1/streams', { headers: getAuthHeaders() });
 			if (!resp.ok) return;
 			const body = (await resp.json()) as unknown;
 			if (!Array.isArray(body)) return;
@@ -1344,9 +1355,12 @@ class ChatStore {
 		await this.savePartialResponseIfNeeded(convId);
 		this.setStreamingActive(false);
 		// tell the server to stop the generation, not just to drop the HTTP socket. without this
-		// the detached drain keeps producing tokens until eos or max_tokens. the conv id is the
-		// session identity so the DELETE call is straight
-		void ChatService.cancelServerStream(convId, selectedModelName());
+		// the detached drain keeps producing tokens until eos or max_tokens. use the model captured
+		// when the session started rather than the current dropdown, the dropdown may have changed
+		// since and the server side identity (conv id plus ::model suffix) is frozen at POST time
+		const streamStateForStop = this.chatStreamingStates.get(convId);
+		const modelForStop = streamStateForStop?.model ?? selectedModelName();
+		void ChatService.cancelServerStream(convId, modelForStop);
 		this.abortRequest(convId);
 		this.setChatLoading(convId, false);
 		this.clearChatStreaming(convId);
