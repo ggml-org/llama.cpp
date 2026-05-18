@@ -3429,7 +3429,7 @@ static bool ggml_backend_hexagon_device_supports_op(ggml_backend_dev_t dev, cons
         case GGML_OP_SOLVE_TRI:
             supp = ggml_hexagon_supported_solve_tri(sess, op);
             break;
-            
+
         case GGML_OP_PAD:
             supp = ggml_hexagon_supported_pad(sess, op);
             break;

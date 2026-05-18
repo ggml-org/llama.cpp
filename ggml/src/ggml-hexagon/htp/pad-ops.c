@@ -61,59 +61,59 @@ static inline const uint8_t * pad_circ_src_row_ptr(const struct htp_tensor * src
 struct htp_pad_context {
     struct htp_ops_context * octx;
 
-    int32_t  lp0, rp0;   
-    int32_t  lp1, rp1;   
-    int32_t  lp2, rp2;   
-    int32_t  lp3, rp3;   
+    int32_t  lp0, rp0;
+    int32_t  lp1, rp1;
+    int32_t  lp2, rp2;
+    int32_t  lp3, rp3;
 
     uint32_t nrows_per_thread;
-    uint32_t total_dst_rows;  
+    uint32_t total_dst_rows;
 
     size_t   type_size;
 
     // Row sizes for DMA kernel (populated when VTCM is available)
-    size_t   src_row_size;          
-    size_t   src_row_size_aligned;  
-    size_t   dst_row_size;          
-    size_t   dst_row_size_aligned;  
+    size_t   src_row_size;
+    size_t   src_row_size_aligned;
+    size_t   dst_row_size;
+    size_t   dst_row_size_aligned;
 };
 
-#define htp_pad_preamble \
-    const struct htp_tensor * src = octx->src[0]; \
-    const struct htp_tensor * dst = octx->dst; \
-    \
-    const uint32_t ne00 = src->ne[0]; \
-    const uint32_t nb00 = src->nb[0]; \
-    \
-    const uint32_t ne0 = dst->ne[0]; \
-    const uint32_t ne1 = dst->ne[1]; \
-    const uint32_t ne2 = dst->ne[2]; \
-    const uint32_t ne3 = dst->ne[3]; \
-    \
-    const uint32_t nb1 = dst->nb[1]; \
-    const uint32_t nb2 = dst->nb[2]; \
-    const uint32_t nb3 = dst->nb[3]; \
-    \
+#define htp_pad_preamble                            \
+    const struct htp_tensor * src = octx->src[0];   \
+    const struct htp_tensor * dst = octx->dst;      \
+                                                    \
+    const uint32_t ne00 = src->ne[0];               \
+    const uint32_t nb00 = src->nb[0];               \
+                                                    \
+    const uint32_t ne0 = dst->ne[0];                \
+    const uint32_t ne1 = dst->ne[1];                \
+    const uint32_t ne2 = dst->ne[2];                \
+    const uint32_t ne3 = dst->ne[3];                \
+                                                    \
+    const uint32_t nb1 = dst->nb[1];                \
+    const uint32_t nb2 = dst->nb[2];                \
+    const uint32_t nb3 = dst->nb[3];                \
+                                                    \
     const int32_t lp0 = pctx->lp0, rp0 = pctx->rp0; \
     const int32_t lp1 = pctx->lp1, rp1 = pctx->rp1; \
     const int32_t lp2 = pctx->lp2, rp2 = pctx->rp2; \
     const int32_t lp3 = pctx->lp3, rp3 = pctx->rp3; \
-    \
-    const size_t type_size = pctx->type_size; \
-    \
-    const uint32_t row_start = pctx->nrows_per_thread * ith; \
+                                                    \
+    const size_t type_size = pctx->type_size;       \
+                                                    \
+    const uint32_t row_start = pctx->nrows_per_thread * ith;                                 \
     const uint32_t row_end   = MIN(row_start + pctx->nrows_per_thread, pctx->total_dst_rows);
 
 
-#define htp_pad_dma_preamble \
-    const size_t src_row_size         = pctx->src_row_size; \
+#define htp_pad_dma_preamble                                        \
+    const size_t src_row_size         = pctx->src_row_size;         \
     const size_t src_row_size_aligned = pctx->src_row_size_aligned; \
-    const size_t dst_row_size         = pctx->dst_row_size; \
+    const size_t dst_row_size         = pctx->dst_row_size;         \
     const size_t dst_row_size_aligned = pctx->dst_row_size_aligned; \
-    \
+                                                                    \
     uint8_t * src_spad_base = octx->src0_spad.data + ith * octx->src0_spad.size_per_thread; \
-    uint8_t * dst_spad_base = octx->dst_spad.data  + ith * octx->dst_spad.size_per_thread; \
-    \
+    uint8_t * dst_spad_base = octx->dst_spad.data  + ith * octx->dst_spad.size_per_thread;  \
+                                                                                            \
     dma_queue * dma = octx->ctx->dma[ith];
 
 // ---------------------------------------------------------------------------
@@ -542,3 +542,4 @@ int op_pad(struct htp_ops_context * octx) {
 
     return HTP_STATUS_OK;
 }
+
