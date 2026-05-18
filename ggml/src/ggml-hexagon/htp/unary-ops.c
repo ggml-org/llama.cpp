@@ -656,19 +656,16 @@ static int execute_op_unary_f32(struct htp_ops_context * octx) {
         case HTP_OP_UNARY_SOFTPLUS:
             op_type = "softplus-f32";
             break;
-<<<<<<< HEAD
         case HTP_OP_UNARY_TANH:
             op_type = "tanh-f32";
             break;
         case HTP_OP_L2_NORM:
             op_type = "l2norm-f32";
             break;
-=======
         case HTP_OP_TRI:
             op_type = "tri-f32";
             break;
 
->>>>>>> 24a31a61f (Hexagon: TRI HVX Kernel addition to ggml hexagon HTP ops and context)
         default:
             FARF(ERROR, "Unsupported unary Op %u\n", octx->op);
             return HTP_STATUS_NO_SUPPORT;
