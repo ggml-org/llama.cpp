@@ -80,6 +80,14 @@ class ChatStore {
 	// at app mount and on visibilitychange. it does not overlap with chatLoadingStates which
 	// tracks inferences driven by this browser, both are unioned to feed the sidebar spinners
 	private remoteRunningConvs = new SvelteSet<string>();
+	// per conv attach lifecycle, used to derive the global streaming flag without flipping it
+	// off when one conv finishes while another is still streaming. mirrors chatLoadingStates
+	// in scope but tracks the attach + tee replay path specifically
+	private attachingConvs = new SvelteSet<string>();
+	// in-flight discoverActiveStream guard, keyed by conv id. prevents a fast remount + visibility
+	// race from launching two concurrent attaches on the same conv (which would dup chunks into
+	// the same DB message)
+	private discoveringConvs = new SvelteSet<string>();
 	private abortControllers = new SvelteMap<string, AbortController>();
 	private preEncodeAbortController: AbortController | null = null;
 	private processingStates = new SvelteMap<string, ApiProcessingState | null>();
@@ -199,13 +207,24 @@ class ChatStore {
 		if (!convId) return;
 		if (this.chatStreamingStates.has(convId)) return;
 
-		// flip the spinner immediately, the user sees activity as soon as the conv becomes active
+		// flip the spinner immediately, the user sees activity as soon as the conv becomes active.
+		// the global isStreamingActive flag is derived from attachingConvs.size, so adding here
+		// turns it on, and removing in unlock only turns it off when this is the last attach
 		this.setChatLoading(convId, true);
+		this.attachingConvs.add(convId);
 		this.setStreamingActive(true);
-		this.setActiveProcessingConversation(convId);
+		// only set the active processing conv if we are looking at it, otherwise a background
+		// attach would steal the indicator from the conv the user is currently viewing
+		if (convId === conversationsStore.activeConversation?.id) {
+			this.setActiveProcessingConversation(convId);
+		}
 
 		const unlock = () => {
-			this.setStreamingActive(false);
+			this.attachingConvs.delete(convId);
+			// flip the global flag off only when no other conv is still attaching
+			if (this.attachingConvs.size === 0) {
+				this.setStreamingActive(false);
+			}
 			this.setChatLoading(convId, false);
 			this.clearChatStreaming(convId);
 		};
@@ -228,8 +247,22 @@ class ChatStore {
 			return;
 		}
 
-		// locate the slot to splice into, create a placeholder assistant message if there is none
-		let messages = conversationsStore.activeMessages as DatabaseMessage[];
+		// load the target conversation messages by id, not via the active store. when multiple
+		// attaches run in parallel the active store may reflect another conv and writing through
+		// its index mixes content across convs (CoT flicker, message bleed). by going through the
+		// DB we stay isolated, and only mirror into the active store when the attached conv is
+		// the one currently displayed
+		let messages: DatabaseMessage[];
+		try {
+			messages = await DatabaseService.getConversationMessages(convId);
+		} catch (e) {
+			console.error('attachServerStream load messages failed:', e);
+			unlock();
+			return;
+		}
+
+		// locate the slot to splice into, create a placeholder assistant message if there is none.
+		// we use the conv-scoped findLastAssistantIdx helpers, they only depend on the array
 		let targetIdx = this.findLastAssistantIdx(messages);
 		if (targetIdx === -1) {
 			const lastUserIdx = this.findLastUserIdx(messages);
@@ -254,9 +287,12 @@ class ChatStore {
 					} as Omit<DatabaseMessage, 'id'>,
 					messages[lastUserIdx].id
 				);
-				conversationsStore.addMessageToActive(placeholder);
-				messages = conversationsStore.activeMessages as DatabaseMessage[];
-				targetIdx = this.findLastAssistantIdx(messages);
+				messages = [...messages, placeholder];
+				targetIdx = messages.length - 1;
+				// only push into the active store when this conv is the one displayed right now
+				if (convId === conversationsStore.activeConversation?.id) {
+					conversationsStore.addMessageToActive(placeholder);
+				}
 			} catch (e) {
 				console.error('attachServerStream placeholder creation failed:', e);
 				unlock();
@@ -276,11 +312,21 @@ class ChatStore {
 		const existingContent = targetMessage.content ?? '';
 		const existingReasoning = targetMessage.reasoningContent ?? '';
 		const isAppendMode = existingContent.length > 0;
+
+		// helper: write to the active store only when the attached conv is currently displayed.
+		// the lookup by message id is robust to reordering of activeMessages, two parallel attaches
+		// can no longer step on each other's indices
+		const writeActive = (updates: Partial<DatabaseMessage>) => {
+			if (convId !== conversationsStore.activeConversation?.id) {
+				return;
+			}
+			const liveIdx = conversationsStore.findMessageIndex(targetMessageId);
+			if (liveIdx === -1) return;
+			conversationsStore.updateMessageAtIndex(liveIdx, updates);
+		};
+
 		if (!isAppendMode) {
-			conversationsStore.updateMessageAtIndex(targetIdx, {
-				content: '',
-				reasoningContent: undefined
-			});
+			writeActive({ content: '', reasoningContent: undefined });
 		}
 
 		this.setChatStreaming(convId, existingContent, targetMessageId);
@@ -300,7 +346,7 @@ class ChatStore {
 				(chunk: string) => {
 					streamedContent += chunk;
 					const displayed = isAppendMode ? existingContent + streamedContent : streamedContent;
-					conversationsStore.updateMessageAtIndex(targetIdx, { content: displayed });
+					writeActive({ content: displayed });
 					this.setChatStreaming(convId, displayed, targetMessageId);
 				},
 				async (
@@ -313,13 +359,15 @@ class ChatStore {
 					const streamedR = streamedReasoningContent || reasoningContent || '';
 					const content = isAppendMode ? existingContent + streamed : streamed;
 					const reasoning = isAppendMode ? existingReasoning + streamedR : streamedR;
+					// the DB write is the source of truth, mirror to the active store only when
+					// the conv is currently displayed
 					await DatabaseService.updateMessage(targetMessageId, {
 						content,
 						reasoningContent: reasoning || undefined,
 						toolCalls: toolCalls || '',
 						timings
 					});
-					conversationsStore.updateMessageAtIndex(targetIdx, {
+					writeActive({
 						content,
 						reasoningContent: reasoning || undefined,
 						timings
@@ -335,9 +383,7 @@ class ChatStore {
 					const displayed = isAppendMode
 						? existingReasoning + streamedReasoningContent
 						: streamedReasoningContent;
-					conversationsStore.updateMessageAtIndex(targetIdx, {
-						reasoningContent: displayed
-					});
+					writeActive({ reasoningContent: displayed });
 				},
 				undefined,
 				undefined,
@@ -360,30 +406,36 @@ class ChatStore {
 		if (!convId) return;
 		if (this.chatStreamingStates.has(convId)) return;
 		if (this.chatLoadingStates.get(convId)) return;
-		// the sidebar spinner hint is consumed the moment we run the authoritative probe, so a
-		// finalized session no longer ghosts in the sidebar after navigation
-		this.remoteRunningConvs.delete(convId);
+		// concurrency guard: another discover may already be running for this conv (typical race
+		// between mount and visibilitychange on tab switch). a second concurrent fetch on the same
+		// /v1/stream/<id> would duplicate every byte into the DB message, this guard bounces it
+		if (this.discoveringConvs.has(convId)) return;
+		this.discoveringConvs.add(convId);
 
-		// primary path: ask the server which sessions exist for this conversation
-		const serverTarget = await this.probeServerStream(convId);
-		if (serverTarget) {
-			// pass the full server side identity (may carry a ::model suffix) so the GET routes
-			// straight to the owning session, no probe or fan out
-			await this.attachServerStream(convId, serverTarget.conversation_id);
-			return;
-		}
+		try {
+			// primary path: ask the server which sessions exist for this conversation
+			const serverTarget = await this.probeServerStream(convId);
+			if (serverTarget) {
+				// pass the full server side identity (may carry a ::model suffix) so the GET routes
+				// straight to the owning session, no probe or fan out
+				await this.attachServerStream(convId, serverTarget.conversation_id);
+				return;
+			}
 
-		// fallback: local state remembers an interrupted byte offset for this conv, the server may
-		// still have a live session matching that conv id (we just lost the bytes mid stream). try to
-		// attach with conv id only, the server probe inside attachServerStream tells us if it exists
-		const localState = getStreamState(convId);
-		if (!localState) {
-			return;
-		}
-		await this.attachServerStream(convId);
-		// if attachServerStream failed (session gone, TTL expired), clear the local state to avoid retrying forever
-		if (!this.chatStreamingStates.has(convId) && !this.chatLoadingStates.get(convId)) {
-			clearStreamState(convId);
+			// fallback: local state remembers an interrupted byte offset for this conv, the server may
+			// still have a live session matching that conv id (we just lost the bytes mid stream). try to
+			// attach with conv id only, the server probe inside attachServerStream tells us if it exists
+			const localState = getStreamState(convId);
+			if (!localState) {
+				return;
+			}
+			await this.attachServerStream(convId);
+			// if attachServerStream failed (session gone, TTL expired), clear the local state to avoid retrying forever
+			if (!this.chatStreamingStates.has(convId) && !this.chatLoadingStates.get(convId)) {
+				clearStreamState(convId);
+			}
+		} finally {
+			this.discoveringConvs.delete(convId);
 		}
 	}
 
@@ -561,7 +613,12 @@ class ChatStore {
 		const running = new SvelteSet<string>();
 		for (const s of sessions) {
 			if (s && !s.is_done && typeof s.conversation_id === 'string' && s.conversation_id) {
-				running.add(s.conversation_id);
+				// strip the optional ::model suffix, the sidebar lookup is keyed by the bare conv id
+				// straight from the DB. without this the sidebar spinner never matches and stays off
+				// when the running session was started with an explicit model
+				const sepIdx = s.conversation_id.indexOf('::');
+				const bareId = sepIdx === -1 ? s.conversation_id : s.conversation_id.slice(0, sepIdx);
+				running.add(bareId);
 			}
 		}
 		for (const id of Array.from(this.remoteRunningConvs)) {
