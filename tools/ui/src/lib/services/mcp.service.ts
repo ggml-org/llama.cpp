@@ -392,7 +392,7 @@ export class MCPService {
 
 			const url = new URL(config.url);
 
-			if (import.meta.env.DEV) {
+			if (import.meta.env.DEV && import.meta.env.VITE_DEBUG) {
 				console.log(`[MCPService] Creating WebSocket transport for ${url.href}`);
 			}
 
@@ -413,12 +413,12 @@ export class MCPService {
 			onLog
 		);
 
-		if (useProxy && import.meta.env.DEV) {
+		if (useProxy && import.meta.env.DEV && import.meta.env.VITE_DEBUG) {
 			console.log(`[MCPService] Using CORS proxy for ${config.url} -> ${url.href}`);
 		}
 
 		try {
-			if (import.meta.env.DEV) {
+			if (import.meta.env.DEV && import.meta.env.VITE_DEBUG) {
 				console.log(`[MCPService] Creating StreamableHTTP transport for ${url.href}`);
 			}
 
@@ -520,7 +520,7 @@ export class MCPService {
 			)
 		);
 
-		if (import.meta.env.DEV) {
+		if (import.meta.env.DEV && import.meta.env.VITE_DEBUG) {
 			console.log(`[MCPService][${serverName}] Creating transport...`);
 		}
 
@@ -560,6 +560,22 @@ export class MCPService {
 		);
 
 		const runtimeErrorHandler = (error: Error) => {
+			// Ignore errors that are expected when the SDK's transport is closed,
+			// or when connecting to servers that don't support SSE (stateless-only
+			// endpoints returning 405). The SDK wraps the original AbortError in
+			// a new Error with the message "SSE stream disconnected: AbortError",
+			// and also produces "Cannot cancel a stream locked by a reader".
+			// DOMException is thrown by the browser when aborting fetch requests.
+			const msg = error.message || String(error);
+			if (
+				error.name === 'AbortError' ||
+				error instanceof DOMException ||
+				msg.includes('SSE stream disconnected') ||
+				msg.includes('stream locked by a reader') ||
+				msg.includes('The operation was aborted')
+			) {
+				return;
+			}
 			console.error(`[MCPService][${serverName}] Protocol error after initialize:`, error);
 		};
 
@@ -658,7 +674,10 @@ export class MCPService {
 			this.createLog(MCPConnectionPhase.LISTING_TOOLS, 'Listing available tools...')
 		);
 
-		console.log(`[MCPService][${serverName}] Connected, listing tools...`);
+		if (import.meta.env.DEV && import.meta.env.VITE_DEBUG) {
+			console.log(`[MCPService][${serverName}] Connected, listing tools...`);
+		}
+
 		const tools = await this.listTools({
 			client,
 			transport,
@@ -680,10 +699,11 @@ export class MCPService {
 				`Connection established with ${tools.length} tools (${connectionTimeMs}ms)`
 			)
 		);
-
-		console.log(
-			`[MCPService][${serverName}] Initialization complete with ${tools.length} tools in ${connectionTimeMs}ms`
-		);
+		if (import.meta.env.DEV && import.meta.env.VITE_DEBUG) {
+			console.log(
+				`[MCPService][${serverName}] Initialization complete with ${tools.length} tools in ${connectionTimeMs}ms`
+			);
+		}
 
 		return {
 			client,
@@ -709,9 +729,22 @@ export class MCPService {
 	 * @param connection - The active MCP connection to close
 	 */
 	static async disconnect(connection: MCPConnection): Promise<void> {
-		console.log(`[MCPService][${connection.serverName}] Disconnecting...`);
+		if (import.meta.env.DEV && import.meta.env.VITE_DEBUG) {
+			console.log(`[MCPService][${connection.serverName}] Disconnecting...`);
+		}
+
 		try {
-			// Prevent reconnection on voluntary disconnect
+			// Terminate the session first for streamable-http transports to cleanly
+			// close streams, matching the inspector's disconnect flow.
+			if (connection.transport instanceof StreamableHTTPClientTransport) {
+				await connection.transport.terminateSession();
+			}
+
+			// Clear error handlers before closing to prevent noise from expected
+			// abort errors during shutdown. The inspector avoids this entirely
+			// by not setting onerror, but since we use it for protocol logging,
+			// we must clear it before disconnect.
+			connection.client.onerror = undefined;
 			if (connection.transport.onclose) {
 				connection.transport.onclose = undefined;
 			}
@@ -1078,7 +1111,9 @@ export class MCPService {
 		try {
 			await connection.client.unsubscribeResource({ uri });
 
-			console.log(`[MCPService][${connection.serverName}] Unsubscribed from resource: ${uri}`);
+			if (import.meta.env.DEV && import.meta.env.VITE_DEBUG) {
+				console.log(`[MCPService][${connection.serverName}] Unsubscribed from resource: ${uri}`);
+			}
 		} catch (error) {
 			console.error(
 				`[MCPService][${connection.serverName}] Failed to unsubscribe from resource:`,

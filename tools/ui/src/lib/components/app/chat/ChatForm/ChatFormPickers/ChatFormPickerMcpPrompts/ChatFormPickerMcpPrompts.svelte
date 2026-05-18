@@ -162,7 +162,7 @@
 			return;
 		}
 
-		if (import.meta.env.DEV) {
+		if (import.meta.env.DEV && import.meta.env.VITE_DEBUG) {
 			console.log('[ChatFormPickerMcpPrompts] Fetching completions for:', {
 				serverName: selectedPrompt.serverName,
 				promptName: selectedPrompt.name,
@@ -181,7 +181,7 @@
 				value
 			);
 
-			if (import.meta.env.DEV) {
+			if (import.meta.env.DEV && import.meta.env.VITE_DEBUG) {
 				console.log('[ChatFormPickerMcpPrompts] Autocomplete result:', {
 					argName,
 					value,

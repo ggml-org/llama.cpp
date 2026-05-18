@@ -84,29 +84,34 @@
 	function checkApiKey() {
 		const apiKey = config().apiKey;
 
-		if (
-			(page.route.id === '/(chat)' || page.route.id === '/(chat)/chat/[id]') &&
-			page.status !== 401 &&
-			page.status !== 403
-		) {
-			const headers: Record<string, string> = {
-				'Content-Type': 'application/json'
-			};
-
-			if (apiKey && apiKey.trim() !== '') {
-				headers.Authorization = `Bearer ${apiKey.trim()}`;
-			}
-
-			fetch(`${base}/props`, { headers })
-				.then((response) => {
-					if (response.status === 401 || response.status === 403) {
-						window.location.reload();
-					}
-				})
-				.catch((e) => {
-					console.error('Error checking API key:', e);
-				});
+		// No API key configured — server doesn't require auth, no need to validate.
+		// This mirrors the early return in validateApiKey() to avoid redundant /props requests.
+		if (!apiKey || apiKey.trim() === '') {
+			return;
 		}
+
+		untrack(() => {
+			if (
+				(page.route.id === '/(chat)' || page.route.id === '/(chat)/chat/[id]') &&
+				page.status !== 401 &&
+				page.status !== 403
+			) {
+				const headers: Record<string, string> = {
+					'Content-Type': 'application/json',
+					Authorization: `Bearer ${apiKey.trim()}`
+				};
+
+				fetch(`${base}/props`, { headers })
+					.then((response) => {
+						if (response.status === 401 || response.status === 403) {
+							window.location.reload();
+						}
+					})
+					.catch((e) => {
+						console.error('Error checking API key:', e);
+					});
+			}
+		});
 	}
 
 	function handleTitleUpdateCancel() {

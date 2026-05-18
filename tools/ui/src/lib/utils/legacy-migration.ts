@@ -333,7 +333,8 @@ async function migrateConversation(convId: string): Promise<number> {
 export async function runLegacyMigration(): Promise<void> {
 	if (!isMigrationNeeded()) return;
 
-	console.log('[Migration] Starting legacy message format migration...');
+	if (import.meta.env.DEV && import.meta.env.VITE_DEBUG)
+		console.log('[Migration] Starting legacy message format migration...');
 
 	try {
 		const conversations = await DatabaseService.getAllConversations();
@@ -344,12 +345,14 @@ export async function runLegacyMigration(): Promise<void> {
 			totalMigrated += count;
 		}
 
-		if (totalMigrated > 0) {
-			console.log(
-				`[Migration] Migrated ${totalMigrated} messages across ${conversations.length} conversations`
-			);
-		} else {
-			console.log('[Migration] No legacy messages found, marking as done');
+		if (import.meta.env.DEV && import.meta.env.VITE_DEBUG) {
+			if (totalMigrated > 0) {
+				console.log(
+					`[Migration] Migrated ${totalMigrated} messages across ${conversations.length} conversations`
+				);
+			} else {
+				console.log('[Migration] No legacy messages found, marking as done');
+			}
 		}
 
 		markMigrationDone();

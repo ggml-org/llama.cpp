@@ -203,6 +203,7 @@ export interface ApiLlamaCppServerProps {
 	/** @deprecated Use {@link ui_settings} instead */
 	webui_settings?: Record<string, string | number | boolean>;
 	ui_settings?: Record<string, string | number | boolean>;
+	cors_proxy_enabled?: boolean;
 }
 
 export interface ApiChatCompletionRequest {
