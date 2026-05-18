@@ -99,6 +99,7 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
         n_ff   = 96;
         n_layer = 22; // hparams.n_layer_kv_from_start = 20 is hardcoded
     } else if (arch == LLM_ARCH_DEEPSEEK2
+            || arch == LLM_ARCH_DEEPSEEK32
             || arch == LLM_ARCH_GLM_DSA
             || arch == LLM_ARCH_KIMI_LINEAR
             || arch == LLM_ARCH_MISTRAL4) {
@@ -155,6 +156,7 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
 
     ms.add_kv(LLM_KV_ATTENTION_MAX_ALIBI_BIAS, 8.0f);
     if (arch == LLM_ARCH_DEEPSEEK2
+            || arch == LLM_ARCH_DEEPSEEK32
             || arch == LLM_ARCH_GLM_DSA
             || arch == LLM_ARCH_KIMI_LINEAR
             || arch == LLM_ARCH_MISTRAL4) {
@@ -331,6 +333,7 @@ static bool moe_mandatory(const llm_arch arch) {
         case LLM_ARCH_ARCTIC:
         case LLM_ARCH_DEEPSEEK:
         case LLM_ARCH_DEEPSEEK2:
+        case LLM_ARCH_DEEPSEEK32:
         case LLM_ARCH_GLM4_MOE:
         case LLM_ARCH_GLM_DSA:
         case LLM_ARCH_EXAONE_MOE:
