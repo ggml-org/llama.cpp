@@ -1168,62 +1168,6 @@ bool llama_context::set_adapter_cvec(
     return res;
 }
 
-static bool parse_moe_topk_layer(const char * name, int & layer_idx) {
-    static constexpr const char * prefix = "ffn_moe_topk_ids-";
-    const size_t                  n      = strlen(prefix);
-
-    if (strncmp(name, prefix, n) != 0) {
-        return false;
-    }
-
-    char *     end = nullptr;
-    const long v   = strtol(name + n, &end, 10);
-
-    if (end == name + n || *end != '\0' || v < 0 || v > UINT16_MAX) {
-        return false;
-    }
-
-    layer_idx = (int) v;
-    return true;
-}
-
-struct llama_moe_trace_rec_v1 {
-    uint32_t token_idx;
-    uint16_t layer_idx;
-    uint8_t  phase;  // 0 = prefill, 1 = decode
-    uint8_t  n_expert_used;
-    int16_t  expert_ids[8];
-};
-
-struct llama_moe_trace_state {
-    FILE *   file           = nullptr;
-    uint32_t next_token_idx = 0;
-};
-
-static llama_moe_trace_state g_moe_trace;
-
-static bool llama_moe_trace_enabled() {
-    return getenv("LLAMA_MOE_TRACE") != nullptr;
-}
-
-static FILE * llama_moe_trace_file() {
-    if (g_moe_trace.file != nullptr) {
-        return g_moe_trace.file;
-    }
-
-    const char * path = getenv("LLAMA_MOE_TRACE");
-    if (path == nullptr || path[0] == '\0') {
-        return nullptr;
-    }
-
-    g_moe_trace.file = fopen(path, "wb");
-    if (g_moe_trace.file == nullptr) {
-        fprintf(stderr, "MOE_TRACE failed to open trace file: %s\n", path);
-    }
-
-    return g_moe_trace.file;
-}
-
 llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, llm_graph_type gtype, llama_memory_context_i * mctx, ggml_status & ret) {
     if (mctx && !mctx->apply()) {
         LLAMA_LOG_ERROR("%s: failed to apply memory context\n", __func__);
@@ -1290,9 +1234,6 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
         ret = status;
         return nullptr;
     }
-
-    ggml_backend_sched_synchronize(sched.get());
-
 
     ret = GGML_STATUS_SUCCESS;
 
