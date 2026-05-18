@@ -191,8 +191,13 @@ struct ggml_cuda_kernel_launch_params {
     size_t shmem;
     cudaStream_t stream;
 
-    ggml_cuda_kernel_launch_params(const dim3& block_nums_, const dim3& block_dims_, size_t shmem_, cudaStream_t stream_)
+    // size_t shmem
+    ggml_cuda_kernel_launch_params(const dim3& block_nums_, const dim3& block_dims_, const size_t shmem_, const cudaStream_t stream_)
         : block_nums(block_nums_), block_dims(block_dims_), shmem(shmem_), stream(stream_) {}
+
+    // Some call sites pass integers instead of the required size_t. This 2nd constructor avoids -Wnarrowing warnings of this.
+    ggml_cuda_kernel_launch_params(const dim3& block_nums_, const dim3& block_dims_, const int shmem_, const cudaStream_t stream_)
+        : block_nums(block_nums_), block_dims(block_dims_), shmem((size_t)shmem_), stream(stream_) {}
 };
 
 #if defined(GGML_CUDA_USE_PDL)
