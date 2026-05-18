@@ -11,6 +11,11 @@ name: Publish Docker image
 
 on:
   workflow_dispatch: # allows manual triggering
+    inputs:
+      skip_s390x:
+        description: "Skip the s390x build target (useful for fast test runs that do not need the IBM Z runner)"
+        type: boolean
+        default: false
   schedule:
     # Rebuild daily rather than on every push because it is expensive
     - cron: '12 4 * * *'
@@ -64,6 +69,8 @@ jobs:
       - name: Generate build and merge matrices
         id: matrices
         shell: bash
+        env:
+          SKIP_S390X: ${{ inputs.skip_s390x || 'false' }}
         run: |
           set -euo pipefail
 
@@ -85,6 +92,11 @@ jobs:
             { "tag": "openvino", "dockerfile": ".devops/openvino.Dockerfile", "platforms": "linux/amd64", "full": true, "light": true, "server": true, "free_disk_space": false, "runs_on": "ubuntu-24.04" }
           ]
           JSON
+
+          if [ "${SKIP_S390X}" = "true" ]; then
+            jq 'map(select(.platforms != "linux/s390x"))' build-matrix.json > build-matrix.json.tmp
+            mv build-matrix.json.tmp build-matrix.json
+          fi
 
           BUILD_MATRIX="$(jq -c . build-matrix.json)"
           MERGE_MATRIX="$(jq -c '
