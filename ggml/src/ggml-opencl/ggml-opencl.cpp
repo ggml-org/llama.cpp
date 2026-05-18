@@ -3505,7 +3505,7 @@ static bool ggml_opencl_is_device_supported(ggml_backend_dev_t dev) {
     } else if (strstr(dev_ctx->device_name.c_str(), "Intel")) {
         dev_ctx->gpu_family = GPU_FAMILY::INTEL;
     } else {
-        GGML_LOG_ERROR("ggml_opencl: unsupported GPU '%s'.\n", dev_ctx->device_name.c_str());
+        GGML_LOG_WARN("ggml_opencl: unsupported GPU '%s'.\n", dev_ctx->device_name.c_str());
         dev_ctx->gpu_family = GPU_FAMILY::UNKNOWN;
         return false;
     }
@@ -3515,13 +3515,13 @@ static bool ggml_opencl_is_device_supported(ggml_backend_dev_t dev) {
     // Check device OpenCL version, OpenCL 2.0 or above is required
     ggml_cl_version opencl_c_version = get_opencl_c_version(platform_version, dev_ctx->device);
     if (opencl_c_version.major < 2) {
-        GGML_LOG_ERROR("ggml_opencl: OpenCL 2.0 or above is required\n");
+        GGML_LOG_WARN("ggml_opencl: OpenCL 2.0 or above is required\n");
         return false;
     }
 
 #ifdef GGML_OPENCL_USE_ADRENO_KERNELS
     if (dev_ctx->gpu_family != GPU_FAMILY::ADRENO) {
-        GGML_LOG_ERROR("ggml_opencl: Adreno-specific kernels should not be enabled for non-Adreno GPUs; "
+        GGML_LOG_WARN("ggml_opencl: Adreno-specific kernels should not be enabled for non-Adreno GPUs; "
             "run on an Adreno GPU or recompile with CMake option `-DGGML_OPENCL_USE_ADRENO_KERNELS=OFF`\n");
         return false;
     }
@@ -3537,7 +3537,7 @@ static bool ggml_opencl_is_device_supported(ggml_backend_dev_t dev) {
     // Check if ext_buffer contains cl_khr_fp16
     bool fp16_support = strstr(ext_buffer, "cl_khr_fp16") != NULL;
     if (!fp16_support) {
-        GGML_LOG_ERROR("ggml_opencl: device does not support FP16\n");
+        GGML_LOG_WARN("ggml_opencl: device does not support FP16\n");
         return false;
     }
 
@@ -3545,7 +3545,7 @@ static bool ggml_opencl_is_device_supported(ggml_backend_dev_t dev) {
     // optional in OpenCL 3.0 (cl_khr_subgroup is mandatory in OpenCL 2.x)
     if (opencl_c_version.major == 3 && strstr(ext_buffer, "cl_khr_subgroups") == NULL &&
         strstr(ext_buffer, "cl_intel_subgroups") == NULL) {
-        GGML_LOG_ERROR("ggml_opencl: device does not support subgroups (cl_khr_subgroups or cl_intel_subgroups) "
+        GGML_LOG_WARN("ggml_opencl: device does not support subgroups (cl_khr_subgroups or cl_intel_subgroups) "
             "(note that subgroups is an optional feature in OpenCL 3.0)\n");
         return false;
     }
