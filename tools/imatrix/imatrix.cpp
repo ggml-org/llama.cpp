@@ -1372,7 +1372,7 @@ int main(int argc, char ** argv) {
 
     // Enable pre-norm embeddings collection on the main context
     // so we can feed them to the MTP context
-    llama_set_embeddings_pre_norm(ctx, true);
+    llama_set_embeddings_pre_norm(ctx, true, /*masked*/ false);
 
     // Try to create an MTP context for collecting imatrix data for MTP layers
     llama_context * ctx_mtp = nullptr;
@@ -1383,7 +1383,7 @@ int main(int argc, char ** argv) {
         cparams_mtp.cb_eval_user_data = params.cb_eval_user_data;
         ctx_mtp = llama_init_from_model(model, cparams_mtp);
         if (ctx_mtp) {
-            llama_set_embeddings_pre_norm(ctx_mtp, true);
+            llama_set_embeddings_pre_norm(ctx_mtp, true, /*masked*/ true);
             LOG_INF("%s: created MTP context for imatrix collection\n", __func__);
         }
     }
