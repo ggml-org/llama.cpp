@@ -83,6 +83,10 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
+    // Compatibility: this branch still exposes --webui/--no-webui in the CLI.
+    // Keep the newer `ui` field in sync until `--ui/--no-ui` is wired here too.
+    params.ui = params.webui;
+
     llama_backend_init();
     llama_numa_init(params.numa);
 

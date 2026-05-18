@@ -372,6 +372,7 @@ struct common_speculative_state_mtp : public common_speculative_impl {
     common_params_speculative_draft params; // reuses the draft-model params slot (ctx_tgt/ctx_dft)
 
     llama_batch batch;
+    std::vector<llama_token> token_buf;
     common_sampler_ptr smpl;
     int32_t n_embd = 0;
     int32_t  last_n_accepted = -1;
@@ -394,7 +395,8 @@ struct common_speculative_state_mtp : public common_speculative_impl {
         smpl.reset(common_sampler_init(llama_get_model(ctx_dft), sparams));
 
         batch = llama_batch_init(/*n_tokens=*/ 1, /*embd=*/ n_embd, /*n_seq_max=*/ 1);
-        batch.token = (llama_token *) malloc(sizeof(llama_token));
+        token_buf.assign(1, LLAMA_TOKEN_NULL);
+        batch.token = token_buf.data();
         batch.n_tokens     = 1;
         batch.n_seq_id[0]  = 1;
         batch.seq_id[0][0] = 0;
@@ -404,11 +406,7 @@ struct common_speculative_state_mtp : public common_speculative_impl {
     }
 
     ~common_speculative_state_mtp() override {
-        llama_set_mtp(params.ctx_tgt, nullptr);
-        if (batch.token != nullptr) {
-            free(batch.token);
-            batch.token = nullptr;
-        }
+        batch.token = nullptr;
         llama_batch_free(batch);
     }
 

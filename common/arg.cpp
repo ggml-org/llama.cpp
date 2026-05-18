@@ -2872,6 +2872,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         string_format("whether to enable the Web UI (default: %s)", params.webui ? "enabled" : "disabled"),
         [](common_params & params, bool value) {
             params.webui = value;
+            params.ui = value;
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_WEBUI"));
     add_opt(common_arg(

@@ -7,7 +7,7 @@
 struct llama_mtp {
     llama_context * ctx_mtp    = nullptr; // non-owning
     llama_batch     hook_batch = {};      // sized to n_ubatch
-    std::vector<llama_token> hook_tokens;
+    std::vector<llama_token> hook_tokens;  // owns hook_batch.token storage
 
     // Cross-ubatch shift state: pair (h_p, x_{p+1}) at MTP pos p+1. The last
     // h-row of one ubatch needs the first token of the NEXT ubatch to pair
