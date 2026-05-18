@@ -21,6 +21,17 @@
 // llama_context
 //
 
+static llm_graph_type ctx_type_to_graph_type(llama_context_type ctx_type) {
+    switch (ctx_type) {
+        case LLAMA_CONTEXT_TYPE_DEFAULT:
+            return LLM_GRAPH_TYPE_DEFAULT;
+        case LLAMA_CONTEXT_TYPE_MTP:
+            return LLM_GRAPH_TYPE_DECODER_MTP;
+    }
+
+    throw std::runtime_error("unsupported llama_context_type");
+}
+
 llama_context::llama_context(
         const llama_model & model,
               llama_context_params params) :
@@ -42,9 +53,15 @@ llama_context::llama_context(
         throw std::runtime_error("n_seq_max must be <= " + std::to_string(LLAMA_MAX_SEQ));
     }
 
+    cparams.n_rs_seq = params.n_rs_seq;
+    if (cparams.n_rs_seq > 0 && !(llm_arch_is_recurrent(model.arch) || llm_arch_is_hybrid(model.arch))) {
+        LLAMA_LOG_DEBUG("%s: n_rs_seq=%u requested but model arch does not support rollback snapshots; clamping to 0\n",
+                        __func__, cparams.n_rs_seq);
+        cparams.n_rs_seq = 0;
+    }
+
     cparams.n_threads        = params.n_threads;
     cparams.n_threads_batch  = params.n_threads_batch;
-    cparams.n_rs_seq         = 0;
     cparams.yarn_ext_factor  = params.yarn_ext_factor  >= 0.0f ? params.yarn_ext_factor  : hparams.yarn_ext_factor;
     cparams.yarn_attn_factor = params.yarn_attn_factor >= 0.0f ? params.yarn_attn_factor : hparams.yarn_attn_factor;
     cparams.yarn_beta_fast   = params.yarn_beta_fast   >= 0.0f ? params.yarn_beta_fast   : hparams.yarn_beta_fast;
@@ -53,6 +70,7 @@ llama_context::llama_context(
     cparams.embeddings_pre_norm = false;
     cparams.offload_kqv      = params.offload_kqv;
     cparams.no_perf          = params.no_perf;
+    cparams.ctx_type         = params.ctx_type;
     cparams.pooling_type     = params.pooling_type;
     cparams.warmup           = false;
 
@@ -386,7 +404,9 @@ llama_context::~llama_context() {
         }
     }
     if (mtp.hook_batch.pos != nullptr) {
+        mtp.hook_batch.token = nullptr;
         llama_batch_free(mtp.hook_batch);
+        mtp.hook_batch = llama_batch{};
     }
     ggml_opt_free(opt_ctx);
 }
@@ -1797,7 +1817,7 @@ int llama_context::decode(const llama_batch & batch_inp) {
         }
 
         ggml_status status;
-        const auto * res = process_ubatch(ubatch, LLM_GRAPH_TYPE_DECODER, mctx.get(), status);
+        const auto * res = process_ubatch(ubatch, ctx_type_to_graph_type(cparams.ctx_type), mctx.get(), status);
 
         if (!res) {
             // the last ubatch failed or was aborted -> remove all positions of that ubatch from the memory module
@@ -1836,8 +1856,10 @@ int llama_context::decode(const llama_batch & batch_inp) {
         //}
 
         auto * t_logits        = res->get_logits();
-        auto * t_embd          = cparams.embeddings          ? res->get_embd()        : nullptr;
-        auto * t_h_pre_norm    = cparams.embeddings_pre_norm ? res->get_h_pre_norm()  : nullptr;
+        auto * t_embd          = cparams.embeddings ? res->get_embd() : nullptr;
+        auto * t_h_pre_norm    = (cparams.embeddings_pre_norm || mtp.ctx_mtp != nullptr)
+                               ? res->get_h_pre_norm()
+                               : nullptr;
 
         if (t_embd && res->get_embd_pooled()) {
             t_embd = res->get_embd_pooled();
@@ -2273,7 +2295,7 @@ ggml_cgraph * llama_context::graph_reserve(
 
     auto * res = gf_res_reserve.get();
 
-    const auto gparams = graph_params(res, ubatch, mctx, LLM_GRAPH_TYPE_DEFAULT);
+    const auto gparams = graph_params(res, ubatch, mctx, ctx_type_to_graph_type(cparams.ctx_type));
 
     res->reset();
 
@@ -2388,7 +2410,7 @@ public:
         size_written += size;
     }
 
-    void write_tensor(const ggml_tensor * /* tensor */, size_t /* offset */, size_t size) override {
+    void write_tensor(ggml_tensor * /* tensor */, size_t /* offset */, size_t size) override {
         if (skip_tensors) {
             return;
         }
@@ -2428,7 +2450,7 @@ public:
         buf_size -= size;
     }
 
-    void write_tensor(const ggml_tensor * tensor, size_t offset, size_t size) override {
+    void write_tensor(ggml_tensor * tensor, size_t offset, size_t size) override {
         if (size > buf_size) {
             throw std::runtime_error("unexpectedly reached end of buffer");
         }
@@ -2451,7 +2473,7 @@ private:
     size_t size_written = 0;
 
     struct write_info {
-        const ggml_tensor * tensor;
+        ggml_tensor * tensor;
         uint8_t * ptr;
         size_t size;
         size_t offset;
@@ -2520,7 +2542,7 @@ public:
         size_written += size;
     }
 
-    void write_tensor(const ggml_tensor * tensor, size_t offset, size_t size) override {
+    void write_tensor(ggml_tensor * tensor, size_t offset, size_t size) override {
         temp_buffer.resize(size);
         ggml_backend_tensor_get(tensor, temp_buffer.data(), offset, size);
         write(temp_buffer.data(), temp_buffer.size());
@@ -2668,7 +2690,7 @@ public:
         buf_size -= size;
     }
 
-    void write_tensor(const ggml_tensor * tensor, size_t offset, size_t size) override {
+    void write_tensor(ggml_tensor * tensor, size_t offset, size_t size) override {
         // save the write for later during destruction
         winfos.push_back({tensor, ptr, size, offset});
     }
@@ -2683,7 +2705,7 @@ private:
     size_t size_written = 0;
 
     struct write_info {
-        const ggml_tensor * tensor;
+        ggml_tensor * tensor;
         uint8_t * ptr;
         size_t size;
         size_t offset;
@@ -3252,7 +3274,7 @@ void llama_context::opt_epoch_iter(
 
             auto * res = gf_res_prev.get();
 
-            const auto gparams = graph_params(res, ubatch, mctx.get(), LLM_GRAPH_TYPE_DEFAULT);
+            const auto gparams = graph_params(res, ubatch, mctx.get(), ctx_type_to_graph_type(cparams.ctx_type));
 
             res->reset();
 
@@ -3353,8 +3375,10 @@ llama_context_params llama_context_default_params() {
         /*.n_batch                     =*/ 2048,
         /*.n_ubatch                    =*/ 512,
         /*.n_seq_max                   =*/ 1,
+        /*.n_rs_seq                    =*/ 0,
         /*.n_threads                   =*/ GGML_DEFAULT_N_THREADS, // TODO: better default
         /*.n_threads_batch             =*/ GGML_DEFAULT_N_THREADS,
+        /*.ctx_type                    =*/ LLAMA_CONTEXT_TYPE_DEFAULT,
         /*.rope_scaling_type           =*/ LLAMA_ROPE_SCALING_TYPE_UNSPECIFIED,
         /*.pooling_type                =*/ LLAMA_POOLING_TYPE_UNSPECIFIED,
         /*.attention_type              =*/ LLAMA_ATTENTION_TYPE_UNSPECIFIED,
@@ -3379,8 +3403,8 @@ llama_context_params llama_context_default_params() {
         /*.op_offload                  =*/ true,
         /*.swa_full                    =*/ true,
         /*.kv_unified                  =*/ false,
-        /*.sampler                     =*/ nullptr,
-        /*.n_sampler                   =*/ 0,
+        /*.samplers                    =*/ nullptr,
+        /*.n_samplers                  =*/ 0,
     };
 
     return result;
@@ -3497,6 +3521,10 @@ uint32_t llama_n_ubatch(const llama_context * ctx) {
 
 uint32_t llama_n_seq_max(const llama_context * ctx) {
     return ctx->n_seq_max();
+}
+
+uint32_t llama_n_rs_seq(const llama_context * ctx) {
+    return ctx->get_cparams().n_rs_seq;
 }
 
 const llama_model * llama_get_model(const llama_context * ctx) {
@@ -3629,8 +3657,10 @@ void llama_context::set_mtp(llama_context * ctx_mtp_in) {
     }
 
     if (mtp.hook_batch.pos != nullptr) {
+        mtp.hook_batch.token = nullptr;
         llama_batch_free(mtp.hook_batch);
         mtp.hook_batch = llama_batch{};
+        mtp.hook_tokens.clear();
     }
 
     mtp.ctx_mtp     = ctx_mtp_in;
@@ -3640,11 +3670,14 @@ void llama_context::set_mtp(llama_context * ctx_mtp_in) {
         const int32_t n_ub   = (int32_t) cparams.n_ubatch;
         const int32_t n_embd = (int32_t) model.hparams.n_embd;
         mtp.hook_batch       = llama_batch_init(n_ub, n_embd, 1);
-        mtp.hook_batch.token = (llama_token *) malloc(sizeof(llama_token) * n_ub);
+        mtp.hook_tokens.assign(n_ub, LLAMA_TOKEN_NULL);
+        mtp.hook_batch.token = mtp.hook_tokens.data();
         mtp.pending_h.assign(n_embd, 0.0f);
         LLAMA_LOG_INFO("%s: MTP draft head registered (ctx_mtp=%p, n_ubatch=%d, n_embd=%d)\n",
                        __func__, (const void *) mtp.ctx_mtp, n_ub, n_embd);
     } else {
+        mtp.hook_tokens.clear();
+        mtp.hook_tokens.shrink_to_fit();
         mtp.pending_h.clear();
         mtp.pending_h.shrink_to_fit();
         LLAMA_LOG_INFO("%s: MTP draft head unregistered\n", __func__);

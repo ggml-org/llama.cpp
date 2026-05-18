@@ -147,11 +147,6 @@ struct common_speculative_impl {
     virtual void draft(common_speculative_draft_params_vec & dparams) = 0;
 
     virtual void accept(llama_seq_id seq_id, uint16_t n_accepted) = 0;
-    // true if this implementation requires the target context to extract post-norm embeddings
-    virtual bool need_embd() const = 0;
-
-    // true if this implementation requires the target context to extract pre-norm embeddings
-    virtual bool need_embd_pre_norm() const { return false; }
 };
 
 struct common_speculative_state_draft : public common_speculative_impl {
@@ -405,27 +400,7 @@ struct common_speculative_state_mtp : public common_speculative_impl {
         batch.seq_id[0][0] = 0;
         batch.logits[0]    = 1;
 
-        smpls.resize(n_seq);
-        for (auto & s : smpls) {
-            common_params_sampling sparams;
-            sparams.no_perf  = false;
-            sparams.top_k    = 1; // TODO: re-enable top_k == 10 and utilize `p_min` spec param
-            sparams.samplers = { COMMON_SAMPLER_TYPE_TOP_K };
-            s.reset(common_sampler_init(llama_get_model(ctx_dft), sparams));
-        }
-
-        llama_set_embeddings_pre_norm(ctx_tgt, true, /*masked*/ false);
-        llama_set_embeddings_pre_norm(ctx_dft, true, /*masked*/ true);
-
-        pending_h.assign(n_seq, std::vector<float>(n_embd, 0.0f));
-
-        i_batch_beg.assign(n_seq, -1);
-        i_batch_end.assign(n_seq, -1);
-
-        verify_h.assign(n_seq, {});
-        verify_h_rows.assign(n_seq, 0);
-
-        last_n_drafted.assign(n_seq, 0);
+        llama_set_mtp(ctx_tgt, ctx_dft);
     }
 
     ~common_speculative_state_mtp() override {
@@ -550,17 +525,8 @@ struct common_speculative_state_mtp : public common_speculative_impl {
             llama_memory_seq_rm(mem_dft, 0, drop_from, -1);
         }
 
-        const int32_t i_h = std::min<int32_t>(n_accepted, n_rows - 1);
-        const size_t row_bytes = (size_t) n_embd * sizeof(float);
-        std::memcpy(pending_h[seq_id].data(), verify_h[seq_id].data() + (size_t) i_h * n_embd, row_bytes);
-    }
-
-    bool need_embd() const override {
-        return false;
-    }
-
-    bool need_embd_pre_norm() const override {
-        return true;
+        last_n_drafted  = 0;
+        last_n_accepted = (int32_t) n_accepted;
     }
 };
 
@@ -1247,33 +1213,6 @@ bool common_speculative_process(common_speculative * spec, const llama_batch & b
     return result;
 }
 
-bool common_speculative_need_embd(common_speculative * spec) {
-    if (spec == nullptr) {
-        return false;
-    }
-
-    for (auto & impl : spec->impls) {
-        if (impl->need_embd()) {
-            return true;
-        }
-    }
-
-    return false;
-}
-
-bool common_speculative_need_embd_pre_norm(common_speculative * spec) {
-    if (spec == nullptr) {
-        return false;
-    }
-
-    for (auto & impl : spec->impls) {
-        if (impl->need_embd_pre_norm()) {
-            return true;
-        }
-    }
-
-    return false;
-}
 void common_speculative_draft(common_speculative * spec) {
     if (spec == nullptr) {
         return;

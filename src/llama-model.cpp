@@ -1420,7 +1420,9 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
         }
     }
 
-    const bool partial_load = (arch == LLM_ARCH_QWEN35_MTP || arch == LLM_ARCH_QWEN35MOE_MTP);
+    const bool partial_load =
+        (arch == LLM_ARCH_QWEN35_MTP || arch == LLM_ARCH_QWEN35MOE_MTP) ||
+        hparams.trunk_only_nomtp;
     ml.done_getting_tensors(partial_load);
 
     // populate tensors_by_name

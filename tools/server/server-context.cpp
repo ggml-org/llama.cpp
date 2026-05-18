@@ -714,8 +714,17 @@ private:
         SRV_INF("loading model '%s'\n", params.model.path.c_str());
 
         params_base = params;
+        auto params_tgt = params_base;
+        if (std::find(params_base.speculative.types.begin(), params_base.speculative.types.end(),
+                      COMMON_SPECULATIVE_TYPE_MTP) != params_base.speculative.types.end()) {
+            string_parse_kv_override("llama.nomtp_trunk_only=bool:true", params_tgt.kv_overrides);
+            if (params_tgt.kv_overrides.empty() || params_tgt.kv_overrides.back().key[0] != 0) {
+                params_tgt.kv_overrides.emplace_back();
+                params_tgt.kv_overrides.back().key[0] = 0;
+            }
+        }
 
-        llama_init = common_init_from_params(params_base);
+        llama_init = common_init_from_params(params_tgt);
 
         model_tgt = llama_init->model();
         ctx_tgt   = llama_init->context();
@@ -797,7 +806,7 @@ private:
             }
 
             auto cparams_mtp = common_context_params_to_llama(params_base);
-
+            cparams_mtp.ctx_type = LLAMA_CONTEXT_TYPE_MTP;
             ctx_dft.reset(llama_init_from_model(model_dft.get(), cparams_mtp));
             if (ctx_dft == nullptr) {
                 SRV_ERR("%s", "failed to create MTP context\n");
@@ -868,6 +877,14 @@ private:
 
         // Necessary similarity of prompt for slot selection
         slot_prompt_similarity = params_base.slot_prompt_similarity;
+
+        const bool mtp_enabled = std::find(params_base.speculative.types.begin(), params_base.speculative.types.end(),
+                                           COMMON_SPECULATIVE_TYPE_MTP) != params_base.speculative.types.end();
+        if (mtp_enabled && params_base.n_parallel != 1) {
+            SRV_WRN("hook-driven MTP currently supports only a single sequence; clamping n_parallel from %d to 1\n",
+                    params_base.n_parallel);
+            params_base.n_parallel = 1;
+        }
 
         // setup slots
         SRV_INF("initializing slots, n_slots = %d\n", params_base.n_parallel);
@@ -3323,6 +3340,7 @@ server_context_meta server_context::get_meta() const {
         /* has_mtmd               */ impl->mctx != nullptr,
         /* has_inp_image          */ impl->chat_params.allow_image,
         /* has_inp_audio          */ impl->chat_params.allow_audio,
+        /* json_ui_settings       */ impl->json_webui_settings,
         /* json_webui_settings    */ impl->json_webui_settings,
         /* slot_n_ctx             */ impl->get_slot_n_ctx(),
         /* pooling_type           */ llama_pooling_type(impl->ctx_tgt),

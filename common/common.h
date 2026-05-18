@@ -7,6 +7,7 @@
 #include "ggml-opt.h"
 #include "ggml.h"
 
+#include <algorithm>
 #include <set>
 #include <sstream>
 #include <string>
@@ -354,6 +355,18 @@ struct common_params_speculative {
 
     bool has_dft() const {
         return !draft.mparams.path.empty() || !draft.mparams.hf_repo.empty();
+    }
+
+    uint32_t need_n_rs_seq() const {
+        if (getenv("LLAMA_ENABLE_MTP_RS_SEQ") == nullptr) {
+            return 0u;
+        }
+
+        const bool needs_rs_seq = std::any_of(types.begin(), types.end(), [&](auto t) {
+            return t == COMMON_SPECULATIVE_TYPE_MTP;
+        });
+
+        return needs_rs_seq ? (uint32_t) draft.n_max : 0u;
     }
 };
 
@@ -882,6 +895,7 @@ enum common_context_seq_rm_type {
     COMMON_CONTEXT_SEQ_RM_TYPE_NO   = 0, // seq_rm not supported (e.g. no memory module)
     COMMON_CONTEXT_SEQ_RM_TYPE_PART = 1, // can seq_rm partial sequences
     COMMON_CONTEXT_SEQ_RM_TYPE_FULL = 2, // can seq_rm full sequences only
+    COMMON_CONTEXT_SEQ_RM_TYPE_RS   = 3, // can seq_rm partial sequences, bounded by n_rs_seq
 };
 
 // check if the llama_context can remove sequences

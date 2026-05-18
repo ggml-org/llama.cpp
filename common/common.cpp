@@ -25,6 +25,7 @@
 #include <sstream>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -366,7 +367,11 @@ void common_init() {
     SetConsoleCP(CP_UTF8);
 #endif
 
+    common_log_set_prefix(common_log_main(), true);
+    common_log_set_timestamps(common_log_main(), true);
+
     llama_log_set(common_log_default_callback, NULL);
+}
 
 void common_params_print_info(const common_params & params, bool print_devices) {
 #ifdef NDEBUG
@@ -374,6 +379,7 @@ void common_params_print_info(const common_params & params, bool print_devices) 
 #else
     const char * build_type = " (debug)";
 #endif
+    LOG_TRC("%s: build %d (%s) with %s for %s%s\n", __func__, llama_build_number(), llama_commit(), llama_compiler(), llama_build_target(), build_type);
 
     LOG_INF("log_info: verbosity = %d (adjust with the `-lv N` CLI arg)\n", common_log_get_verbosity_thold());
 
@@ -1245,6 +1251,25 @@ common_init_result::common_init_result(common_params & params) :
         cparams.n_samplers = pimpl->samplers_seq_config.size();
     }
 
+    if (cparams.n_rs_seq > 0 && (llama_model_is_recurrent(model) || llama_model_is_hybrid(model))) {
+        auto & types = params.speculative.types;
+
+        for (int i = 0; i < (int) types.size(); ++i) {
+            if (types[i] == COMMON_SPECULATIVE_TYPE_NONE) {
+                continue;
+            }
+            if (types[i] == COMMON_SPECULATIVE_TYPE_MTP) {
+                continue;
+            }
+
+            cparams.n_rs_seq = 0;
+
+            LOG_WRN("%s: recurrent state rollback is not compatible with speculative type %d - disabling rollback support\n",
+                    __func__, (int) types[i]);
+            break;
+        }
+    }
+
     llama_context * lctx = llama_init_from_model(model, cparams);
     if (lctx == NULL) {
         LOG_ERR("%s: failed to create context with model '%s'\n", __func__, params.model.path.c_str());
@@ -1433,6 +1458,12 @@ common_context_seq_rm_type common_context_can_seq_rm(llama_context * ctx) {
         goto done;
     }
 
+    if (llama_n_rs_seq(ctx) > 0) {
+        LOG_INF("%s: the context supports bounded partial sequence removal\n", __func__);
+        res = COMMON_CONTEXT_SEQ_RM_TYPE_RS;
+        goto done;
+    }
+
     // try to remove the last tokens
     if (!llama_memory_seq_rm(mem, 0, 1, -1)) {
         LOG_WRN("%s: the target context does not support partial sequence removal\n", __func__);
@@ -1477,6 +1508,40 @@ struct llama_model_params common_model_params_to_llama(common_params & params) {
     mparams.use_extra_bufts = !params.no_extra_bufts;
     mparams.no_host         = params.no_host;
 
+    if (params.speculative.types.size() == 1 && params.speculative.types[0] == COMMON_SPECULATIVE_TYPE_NONE) {
+        LOG_INF("%s: speculative=none, enabling plain-trunk mode for MTP-capable models\n", __func__);
+        std::unordered_map<std::string, llama_model_kv_override> kv_map;
+        for (const auto & ov : params.kv_overrides) {
+            if (ov.key[0] == 0) {
+                break;
+            }
+            kv_map[ov.key] = ov;
+        }
+
+        llama_model_kv_override ov = {};
+        auto it = kv_map.find("llama.nomtp_trunk_only");
+        if (it != kv_map.end()) {
+            ov = it->second;
+        }
+        std::snprintf(ov.key, sizeof(ov.key), "%s", "llama.nomtp_trunk_only");
+        ov.tag = LLAMA_KV_OVERRIDE_TYPE_BOOL;
+        ov.val_bool = true;
+        kv_map["llama.nomtp_trunk_only"] = ov;
+
+        params.kv_overrides.clear();
+        params.kv_overrides.reserve(kv_map.size() + 1);
+        for (const auto & [_, kv] : kv_map) {
+            params.kv_overrides.push_back(kv);
+        }
+        params.kv_overrides.push_back({});
+        params.kv_overrides.back().key[0] = 0;
+    }
+
+    if (!params.kv_overrides.empty() && params.kv_overrides.back().key[0] != 0) {
+        params.kv_overrides.emplace_back();
+        params.kv_overrides.back().key[0] = 0;
+    }
+
     if (params.kv_overrides.empty()) {
         mparams.kv_overrides = NULL;
     } else {
@@ -1503,6 +1568,10 @@ struct llama_context_params common_context_params_to_llama(const common_params &
 
     cparams.n_ctx             = params.n_ctx;
     cparams.n_seq_max         = params.n_parallel;
+    cparams.n_rs_seq          = params.speculative.need_n_rs_seq();
+    if (getenv("LLAMA_DISABLE_MTP_RS_SEQ")) {
+        cparams.n_rs_seq = 0;
+    }
     cparams.n_batch           = params.n_batch;
     cparams.n_ubatch          = params.n_ubatch;
     cparams.n_threads         = params.cpuparams.n_threads;

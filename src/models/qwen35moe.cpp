@@ -18,7 +18,18 @@ void llama_model_qwen35moe::load_arch_hparams(llama_model_loader & ml) {
     // NextN/MTP (Qwen3.5/3.6): extra decoder block appended beyond the main stack
     ml.get_key(LLM_KV_NEXTN_PREDICT_LAYERS, hparams.nextn_predict_layers, false);
     GGML_ASSERT(hparams.nextn_predict_layers < hparams.n_layer && "nextn_predict_layers must be < n_layer");
-    hparams.n_layer_kv_from_start = hparams.n_layer - hparams.nextn_predict_layers;
+    ml.get_key("llama.nomtp_trunk_only", hparams.trunk_only_nomtp, false);
+
+    if (hparams.trunk_only_nomtp) {
+        hparams.n_layer -= hparams.nextn_predict_layers;
+        hparams.nextn_predict_layers = 0;
+        hparams.n_layer_kv_from_start = -1;
+        hparams.kv_only_nextn = false;
+    } else {
+        hparams.n_layer_kv_from_start = hparams.nextn_predict_layers > 0
+            ? hparams.n_layer - hparams.nextn_predict_layers
+            : -1;
+    }
 
     // Mark recurrent layers (linear attention layers). MTP layers are dense
     // attention-only and must be flagged non-recurrent.
