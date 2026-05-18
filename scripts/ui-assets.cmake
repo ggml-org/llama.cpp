@@ -114,16 +114,50 @@ function(npm_build out_var)
     set(${out_var} TRUE PARENT_SCOPE)
 endfunction()
 
-function(hf_download version out_var out_resolved)
+function(resolve_versions out_var)
+    set(versions "")
+
+    if(NOT "${HF_VERSION}" STREQUAL "")
+        list(APPEND versions "${HF_VERSION}")
+    else()
+        if(EXISTS "${LLAMA_SOURCE_DIR}/cmake/build-info.cmake")
+            include("${LLAMA_SOURCE_DIR}/cmake/build-info.cmake")
+            if(NOT "${BUILD_NUMBER}" STREQUAL "" AND NOT BUILD_NUMBER EQUAL 0)
+                list(APPEND versions "b${BUILD_NUMBER}")
+            endif()
+        endif()
+
+        find_package(Git)
+        if(Git_FOUND)
+            execute_process(
+                COMMAND ${GIT_EXECUTABLE} describe --tags --abbrev=0 --match b* --candidates 1 HEAD
+                WORKING_DIRECTORY "${LLAMA_SOURCE_DIR}"
+                OUTPUT_VARIABLE  closest_tag
+                OUTPUT_STRIP_TRAILING_WHITESPACE
+                RESULT_VARIABLE  rc
+                ERROR_QUIET
+            )
+            if(rc EQUAL 0 AND NOT "${closest_tag}" STREQUAL "")
+                list(APPEND versions "${closest_tag}")
+            endif()
+        endif()
+
+        list(REMOVE_DUPLICATES versions)
+    endif()
+
+    set(${out_var} "${versions}" PARENT_SCOPE)
+endfunction()
+
+function(hf_download versions out_var out_resolved)
     set(${out_var}      FALSE PARENT_SCOPE)
     set(${out_resolved} ""    PARENT_SCOPE)
 
     file(MAKE_DIRECTORY "${DIST_DIR}")
 
     set(urls "")
-    if(NOT "${version}" STREQUAL "")
-        list(APPEND urls "${version}|https://huggingface.co/buckets/ggml-org/${HF_BUCKET}/resolve/${version}")
-    endif()
+    foreach(v ${versions})
+        list(APPEND urls "${v}|https://huggingface.co/buckets/ggml-org/${HF_BUCKET}/resolve/${v}")
+    endforeach()
     list(APPEND urls "latest|https://huggingface.co/buckets/ggml-org/${HF_BUCKET}/resolve/latest")
 
     foreach(entry ${urls})
@@ -246,17 +280,9 @@ function(emit_files)
 endfunction()
 
 # ---------------------------------------------------------------------------
-# 1. Resolve version from build-info if not provided at configure time
+# 1. Resolve candidate versions for HF download
 # ---------------------------------------------------------------------------
-set(VERSION "")
-if(NOT "${HF_VERSION}" STREQUAL "")
-    set(VERSION "${HF_VERSION}")
-elseif(EXISTS "${LLAMA_SOURCE_DIR}/cmake/build-info.cmake")
-    include("${LLAMA_SOURCE_DIR}/cmake/build-info.cmake")
-    if(NOT "${BUILD_NUMBER}" STREQUAL "" AND NOT BUILD_NUMBER EQUAL 0)
-        set(VERSION "b${BUILD_NUMBER}")
-    endif()
-endif()
+resolve_versions(VERSIONS)
 
 # ---------------------------------------------------------------------------
 # 2. Early-out when UI is disabled — still emit empty ui.cpp/ui.h for the lib
@@ -286,17 +312,20 @@ if(HF_ENABLED)
     if(EXISTS "${STAMP_FILE}")
         file(READ "${STAMP_FILE}" stamped)
         string(STRIP "${stamped}" stamped)
-        if("${stamped}" STREQUAL "${VERSION}")
-            set(stamp_ok TRUE)
+        if(NOT "${stamped}" STREQUAL "latest")
+            list(FIND VERSIONS "${stamped}" stamp_idx)
+            if(NOT stamp_idx EQUAL -1)
+                set(stamp_ok TRUE)
+            endif()
         endif()
     endif()
 
     assets_present(have_assets)
     if(stamp_ok AND have_assets)
-        message(STATUS "UI: HF stamp matches '${VERSION}' and assets present, skipping HF fetch")
+        message(STATUS "UI: HF stamp '${stamped}' matches a candidate, skipping HF fetch")
         set(provisioned TRUE)
     else()
-        hf_download("${VERSION}" HF_OK HF_RESOLVED)
+        hf_download("${VERSIONS}" HF_OK HF_RESOLVED)
         if(HF_OK)
             file(WRITE "${STAMP_FILE}" "${HF_RESOLVED}")
             message(STATUS "UI: HF download succeeded, stamp updated (${HF_RESOLVED})")
