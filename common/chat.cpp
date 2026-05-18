@@ -70,6 +70,26 @@ static bool has_content_or_tool_calls(const common_chat_msg & msg) {
     return !msg.content.empty() || !msg.tool_calls.empty();
 }
 
+std::string common_chat_msg::render_content(const std::string & delimiter) const {
+    if (!content.empty() && !content_parts.empty()) {
+        throw std::runtime_error("Cannot specify both content and content_parts");
+    }
+    if (!content.empty()) {
+        return content;
+    }
+
+    std::string text;
+    for (const auto & part : content_parts) {
+        if (part.type == "text") {
+            if (!text.empty()) {
+                text += delimiter;
+            }
+            text += part.text;
+        }
+    }
+    return text;
+}
+
 json common_chat_msg::to_json_oaicompat(bool concat_typed_text) const {
     if (!content.empty() && !content_parts.empty()) {
         throw std::runtime_error("Cannot specify both content and content_parts");
@@ -451,6 +471,22 @@ std::vector<common_chat_tool> common_chat_tools_parse_oaicompat(const json & too
     return result;
 }
 
+common_chat_continuation common_chat_continuation_parse(const nlohmann::ordered_json & value) {
+    if (value.is_boolean() && value.get<bool>()) {
+        return COMMON_CHAT_CONTINUATION_AUTO;
+    }
+    if (value.is_string()) {
+        auto value_str = value.get<std::string>();
+        if (value_str == "reasoning_content") {
+            return COMMON_CHAT_CONTINUATION_REASONING;
+        }
+        if (value_str == "content") {
+            return COMMON_CHAT_CONTINUATION_CONTENT;
+        }
+    }
+    return COMMON_CHAT_CONTINUATION_NONE;
+}
+
 bool common_chat_verify_template(const std::string & tmpl, bool use_jinja) {
     if (use_jinja) {
         try {
@@ -811,6 +847,36 @@ std::string common_chat_template_direct_apply(
     return common_chat_template_direct_apply_impl(tmpl, inputs, std::nullopt, std::nullopt, std::nullopt);
 }
 
+static std::string common_chat_template_generation_prompt_impl(
+    const common_chat_template & tmpl,
+    const autoparser::generation_params & inputs,
+    const std::optional<json> & messages_override = std::nullopt,
+    const std::optional<json> & tools_override = std::nullopt,
+    const std::optional<json> & additional_context = std::nullopt) {
+
+    auto adjusted_messages = messages_override ? *messages_override : inputs.messages;
+
+    autoparser::generation_params params = inputs;
+    params.add_generation_prompt = false;
+    params.continue_final_message = COMMON_CHAT_CONTINUATION_NONE;
+    std::string no_gen_prompt    = common_chat_template_direct_apply_impl(tmpl, params, adjusted_messages, tools_override, additional_context);
+    params.add_generation_prompt = true;
+    std::string gen_prompt       = common_chat_template_direct_apply_impl(tmpl, params, adjusted_messages, tools_override, additional_context);
+
+    size_t prefix_len = 0;
+    size_t min_size = std::min(no_gen_prompt.size(), gen_prompt.size());
+    while (prefix_len < min_size && no_gen_prompt[prefix_len] == gen_prompt[prefix_len]) {
+        prefix_len++;
+    }
+    return gen_prompt.substr(prefix_len);
+}
+
+std::string common_chat_template_generation_prompt(
+    const common_chat_template & tmpl,
+    const autoparser::generation_params & inputs) {
+    return common_chat_template_generation_prompt_impl(tmpl, inputs, std::nullopt, std::nullopt, std::nullopt);
+}
+
 static common_chat_params common_chat_params_init_ministral_3(const common_chat_template &    tmpl,
                                                               const autoparser::generation_params & inputs) {
     common_chat_params data;
@@ -863,6 +929,7 @@ static common_chat_params common_chat_params_init_ministral_3(const common_chat_
     data.thinking_start_tag = "[THINK]";
     data.thinking_end_tag   = "[/THINK]";
     data.prompt            = common_chat_template_direct_apply_impl(tmpl, inputs, /* messages_override = */ adjusted_messages);
+    data.generation_prompt = common_chat_template_generation_prompt_impl(tmpl, inputs, /* messages_override = */ adjusted_messages);
     data.format            = COMMON_CHAT_FORMAT_PEG_NATIVE;
     data.preserved_tokens  = {
         "[THINK]",
@@ -871,8 +938,19 @@ static common_chat_params common_chat_params_init_ministral_3(const common_chat_
         "[ARGS]",
     };
 
+    if (inputs.has_continuation()) {
+        const auto & msg = inputs.continue_msg;
+
+        data.generation_prompt = "[THINK]" + msg.reasoning_content;
+        if (inputs.continue_final_message == COMMON_CHAT_CONTINUATION_CONTENT) {
+            data.generation_prompt += "[/THINK]" + msg.render_content();
+        }
+
+        data.prompt += data.generation_prompt;
+    }
+
     auto parser = build_chat_peg_parser([&](common_chat_peg_builder & p) {
-        auto generation_prompt = p.prefix(inputs.generation_prompt, "[THINK]");
+        auto generation_prompt = p.eps();
         auto reasoning =
             extract_reasoning ? p.optional("[THINK]" + p.reasoning(p.until("[/THINK]")) + "[/THINK]") : p.eps();
 
@@ -963,6 +1041,7 @@ static common_chat_params common_chat_params_init_gpt_oss(const common_chat_temp
     }
 
     data.prompt            = prompt;
+    data.generation_prompt = common_chat_template_generation_prompt_impl(tmpl, inputs, /* messages_override= */ adjusted_messages);
     data.format            = COMMON_CHAT_FORMAT_PEG_NATIVE;
     data.supports_thinking = true;
 
@@ -971,6 +1050,18 @@ static common_chat_params common_chat_params_init_gpt_oss(const common_chat_temp
     data.preserved_tokens = {
         "<|channel|>", "<|constrain|>", "<|message|>", "<|start|>", "<|end|>",
     };
+
+    // Adjust prompt for continuation
+    if (inputs.has_continuation()) {
+        const auto & msg = inputs.continue_msg;
+
+        data.generation_prompt = "<|start|>assistant<|channel|>analysis<|message|>" + msg.reasoning_content;
+        if (inputs.continue_final_message == COMMON_CHAT_CONTINUATION_CONTENT) {
+            data.generation_prompt += "<|end|><|start|>assistant<|channel|>final<|message|>" + msg.render_content();
+        }
+
+        data.prompt += data.generation_prompt;
+    }
 
     auto has_tools           = inputs.tools.is_array() && !inputs.tools.empty();
     auto has_response_format = !inputs.json_schema.is_null() && inputs.json_schema.is_object();
@@ -1080,12 +1171,14 @@ static common_chat_params common_chat_params_init_gemma4(const common_chat_templ
     common_chat_params data;
 
     data.prompt            = common_chat_template_direct_apply_impl(tmpl, inputs);
+    data.generation_prompt = common_chat_template_generation_prompt_impl(tmpl, inputs);
 
     if (inputs.add_generation_prompt && string_ends_with(data.prompt, "<turn|>\n")) {
         // This may happen if the model generates content + tool_call, the
         // template does not add the model's next turn and confuses the model
         // from emitting its proper reasoning token sequence.
-        data.prompt += "<|turn>model\n";
+        data.generation_prompt = "<|turn>model\n";
+        data.prompt += data.generation_prompt;
     }
 
     data.format            = COMMON_CHAT_FORMAT_PEG_GEMMA4;
@@ -1101,13 +1194,25 @@ static common_chat_params common_chat_params_init_gemma4(const common_chat_templ
         "<|turn>",
     };
 
+    if (inputs.has_continuation()) {
+        const auto & msg = inputs.continue_msg;
+
+        data.generation_prompt = string_ends_with(data.prompt, "<turn|>\n") ? "<|turn>model\n" : "";
+        data.generation_prompt += "<|channel>thought\n" + msg.reasoning_content;
+        if (inputs.continue_final_message == COMMON_CHAT_CONTINUATION_CONTENT) {
+            data.generation_prompt += "<channel|>" + msg.render_content();
+        }
+
+        data.prompt += data.generation_prompt;
+    }
+
     auto has_tools           = inputs.tools.is_array() && !inputs.tools.empty();
     auto has_response_format = !inputs.json_schema.is_null() && inputs.json_schema.is_object();
     auto include_grammar     = has_response_format || (has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE);
     auto extract_reasoning   = inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE;
 
     auto parser = build_chat_peg_parser([&](common_chat_peg_builder & p) {
-        auto start = p.rule("start", p.prefix(inputs.generation_prompt, "<|channel>"));
+        auto start = p.rule("start", p.optional(p.literal("<|turn>model\n")));
 
         if (extract_reasoning) {
             p.rule("thought", p.literal("<|channel>thought") + p.space() + p.reasoning(p.until("<channel|>")) + p.literal("<channel|>"));
@@ -1224,14 +1329,21 @@ static common_chat_params common_chat_params_init_functionary_v3_2(const common_
                                                                    const autoparser::generation_params & inputs) {
     common_chat_params data;
 
-    data.prompt           = common_chat_template_direct_apply_impl(tmpl, inputs);
-    data.format           = COMMON_CHAT_FORMAT_PEG_NATIVE;
-    data.preserved_tokens = {
+    data.prompt            = common_chat_template_direct_apply_impl(tmpl, inputs);
+    data.generation_prompt = common_chat_template_generation_prompt_impl(tmpl, inputs);
+    data.format            = COMMON_CHAT_FORMAT_PEG_NATIVE;
+    data.preserved_tokens  = {
         ">>>all",
     };
 
     auto has_tools         = inputs.tools.is_array() && !inputs.tools.empty();
     auto include_grammar   = has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE;
+
+    if (inputs.has_continuation()) {
+        const auto & msg = inputs.continue_msg;
+        data.generation_prompt = "<|start_header_id|>assistant<|end_header_id|>\n\n>>>all\n" + msg.render_content();
+        data.prompt += data.generation_prompt;
+    }
 
     auto parser = build_chat_peg_parser([&](common_chat_peg_builder & p) {
         // Functionary v3.2 format:
@@ -1244,7 +1356,7 @@ static common_chat_params common_chat_params_init_functionary_v3_2(const common_
         // When no tools, content goes until end
         auto content_until_tool = p.literal("all\n") + p.content(p.until(">>>"));
         auto content_until_end  = p.literal("all\n") + p.content(p.rest());
-        auto generation_prompt  = p.literal(inputs.generation_prompt);
+        auto generation_prompt  = p.literal("<|start_header_id|>assistant<|end_header_id|>\n\n>>>");
 
         // If no tools or tool_choice is NONE, just parse content
         if (!has_tools || inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_NONE) {
@@ -1318,9 +1430,10 @@ static common_chat_params common_chat_params_init_kimi_k2(const common_chat_temp
                                                           const autoparser::generation_params & inputs) {
     common_chat_params data;
 
-    data.prompt             = common_chat_template_direct_apply_impl(tmpl, inputs);
-    data.format             = COMMON_CHAT_FORMAT_PEG_NATIVE;
-    data.supports_thinking  = true;
+    data.prompt            = common_chat_template_direct_apply_impl(tmpl, inputs);
+    data.generation_prompt = common_chat_template_generation_prompt_impl(tmpl, inputs);
+    data.format            = COMMON_CHAT_FORMAT_PEG_NATIVE;
+    data.supports_thinking = true;
     data.preserved_tokens  = {
         "<|tool_calls_section_begin|>",
         "<|tool_calls_section_end|>",
@@ -1343,9 +1456,21 @@ static common_chat_params common_chat_params_init_kimi_k2(const common_chat_temp
 
     const std::string THINK_START = "<think>";
     const std::string THINK_END   = "</think>";
+    const std::string GEN_PROMPT  = "<|im_assistant|>assistant<|im_middle|>";
 
     data.thinking_start_tag = THINK_START;
     data.thinking_end_tag   = THINK_END;
+
+    if (inputs.has_continuation()) {
+        const auto & msg = inputs.continue_msg;
+
+        data.generation_prompt = GEN_PROMPT + THINK_START + msg.reasoning_content;
+        if (inputs.continue_final_message == COMMON_CHAT_CONTINUATION_CONTENT) {
+            data.generation_prompt += THINK_END + msg.render_content();
+        }
+
+        data.prompt += data.generation_prompt;
+    }
 
     auto parser = build_chat_peg_parser([&](common_chat_peg_builder & p) {
         // Kimi K2 Thinking format:
@@ -1366,7 +1491,7 @@ static common_chat_params common_chat_params_init_kimi_k2(const common_chat_temp
         auto reasoning = extract_reasoning ? p.optional(THINK_START + p.reasoning(
             p.until_one_of({ THINK_END, "<|tool_calls_section_begin|>", "<|tool_call_begin|>" })) +
             p.optional(p.literal(THINK_END))) : p.eps();
-        auto generation_prompt = p.prefix(inputs.generation_prompt, THINK_START);
+        auto generation_prompt = p.literal(GEN_PROMPT);
 
 
         // Content only parser (no tools)
@@ -1442,6 +1567,7 @@ static common_chat_params common_chat_params_init_lfm2(const common_chat_templat
     common_chat_params data;
 
     data.prompt            = common_chat_template_direct_apply_impl(tmpl, inputs);
+    data.generation_prompt = common_chat_template_generation_prompt_impl(tmpl, inputs);
     data.format            = COMMON_CHAT_FORMAT_PEG_NATIVE;
     data.supports_thinking = true;
     data.preserved_tokens  = {
@@ -1461,12 +1587,24 @@ static common_chat_params common_chat_params_init_lfm2(const common_chat_templat
     const std::string TOOL_CALL_END   = "<|tool_call_end|>";
     const std::string THINK_START     = "<think>";
     const std::string THINK_END       = "</think>";
+    const std::string GEN_PROMPT      = "<|im_start|>assistant\n";
 
     data.thinking_start_tag = THINK_START;
     data.thinking_end_tag   = THINK_END;
 
+    if (inputs.has_continuation()) {
+        const auto & msg = inputs.continue_msg;
+
+        data.generation_prompt = GEN_PROMPT + THINK_START + msg.reasoning_content;
+        if (inputs.continue_final_message == COMMON_CHAT_CONTINUATION_CONTENT) {
+            data.generation_prompt += THINK_END + msg.render_content();
+        }
+
+        data.prompt += data.generation_prompt;
+    }
+
     auto parser = build_chat_peg_parser([&](common_chat_peg_builder & p) {
-        auto generation_prompt = p.prefix(inputs.generation_prompt, THINK_START);
+        auto generation_prompt = p.literal(GEN_PROMPT);
         auto end = p.end();
 
         auto reasoning = p.eps();
@@ -1521,6 +1659,7 @@ static common_chat_params common_chat_params_init_lfm2_5(const common_chat_templ
     common_chat_params data;
 
     data.prompt            = common_chat_template_direct_apply_impl(tmpl, inputs);
+    data.generation_prompt = common_chat_template_generation_prompt_impl(tmpl, inputs);
     data.format            = COMMON_CHAT_FORMAT_PEG_NATIVE;
     data.supports_thinking = true;
     data.preserved_tokens  = {
@@ -1536,12 +1675,24 @@ static common_chat_params common_chat_params_init_lfm2_5(const common_chat_templ
 
     const std::string THINK_START     = "<think>";
     const std::string THINK_END       = "</think>";
+    const std::string GEN_PROMPT      = "<|im_start|>assistant\n";
 
     data.thinking_start_tag = THINK_START;
     data.thinking_end_tag   = THINK_END;
 
+    if (inputs.has_continuation()) {
+        const auto & msg = inputs.continue_msg;
+
+        data.generation_prompt = GEN_PROMPT + THINK_START + msg.reasoning_content;
+        if (inputs.continue_final_message == COMMON_CHAT_CONTINUATION_CONTENT) {
+            data.generation_prompt += THINK_END + msg.render_content();
+        }
+
+        data.prompt += data.generation_prompt;
+    }
+
     auto parser = build_chat_peg_parser([&](common_chat_peg_builder & p) {
-        auto generation_prompt = p.prefix(inputs.generation_prompt, THINK_START);
+        auto generation_prompt = p.literal(GEN_PROMPT);
         auto end = p.end();
 
         auto reasoning = p.eps();
@@ -1592,12 +1743,19 @@ static common_chat_params common_chat_params_init_gigachat_v3(
     common_chat_params data;
 
     data.prompt            = common_chat_template_direct_apply_impl(tmpl, inputs);
+    data.generation_prompt = common_chat_template_generation_prompt_impl(tmpl, inputs);
     data.format            = COMMON_CHAT_FORMAT_PEG_NATIVE;
     data.supports_thinking = false;
     data.preserved_tokens  = {
         "<|message_sep|>\n\n",
         "<|role_sep|>\n",
     };
+
+    if (inputs.has_continuation()) {
+        const auto & msg = inputs.continue_msg;
+        data.generation_prompt = "assistant<|role_sep|>\n" + msg.render_content();
+        data.prompt += data.generation_prompt;
+    }
 
     auto has_tools         = inputs.tools.is_array() && !inputs.tools.empty();
     auto include_grammar   = has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE;
@@ -1634,7 +1792,7 @@ static common_chat_params common_chat_params_init_gigachat_v3(
             ret = p.content(p.rest());
         }
 
-        return p.literal(inputs.generation_prompt) + ret;
+        return p.literal("assistant<|role_sep|>\n") + ret;
     });
 
     data.parser = parser.save();
@@ -1662,12 +1820,13 @@ static common_chat_params common_chat_params_init_deepseek_v3_2(const common_cha
                                                                  const autoparser::generation_params & inputs) {
     common_chat_params data;
 
-    data.prompt            = common_chat_template_direct_apply_impl(tmpl, inputs);
-    data.format            = COMMON_CHAT_FORMAT_PEG_NATIVE;
-    data.supports_thinking = true;
+    data.prompt             = common_chat_template_direct_apply_impl(tmpl, inputs);
+    data.generation_prompt  = common_chat_template_generation_prompt_impl(tmpl, inputs);
+    data.format             = COMMON_CHAT_FORMAT_PEG_NATIVE;
+    data.supports_thinking  = true;
     data.thinking_start_tag = "<think>";
     data.thinking_end_tag   = "</think>";
-    data.preserved_tokens  = {
+    data.preserved_tokens   = {
         "｜DSML｜",
         "<think>",
         "</think>",
@@ -1687,9 +1846,21 @@ static common_chat_params common_chat_params_init_deepseek_v3_2(const common_cha
     const std::string INVOKE_END   = "</" + DSML + "invoke>";
     const std::string PARAM_START  = "<" + DSML + "parameter";
     const std::string PARAM_END    = "</" + DSML + "parameter>";
+    const std::string GEN_PROMPT   = "<｜Assistant｜>";
+
+    if (inputs.has_continuation()) {
+        const auto & msg = inputs.continue_msg;
+
+        data.generation_prompt = GEN_PROMPT + THINK_START + msg.reasoning_content;
+        if (inputs.continue_final_message == COMMON_CHAT_CONTINUATION_CONTENT) {
+            data.generation_prompt += THINK_END + msg.render_content();
+        }
+
+        data.prompt += data.generation_prompt;
+    }
 
     auto parser = build_chat_peg_parser([&](common_chat_peg_builder & p) {
-        auto generation_prompt = p.prefix(inputs.generation_prompt, THINK_START);
+        auto generation_prompt = p.literal(GEN_PROMPT);
         auto end = p.end();
 
         auto reasoning = p.eps();
@@ -2116,21 +2287,6 @@ std::optional<common_chat_params> common_chat_try_specialized_template(
     return std::nullopt;
 }
 
-static std::string common_chat_templates_generation_prompt(const common_chat_template & tmpl, const autoparser::generation_params & inputs) {
-    autoparser::generation_params params = inputs;
-    params.add_generation_prompt = false;
-    std::string no_gen_prompt    = common_chat_template_direct_apply_impl(tmpl, params);
-    params.add_generation_prompt = true;
-    std::string gen_prompt       = common_chat_template_direct_apply_impl(tmpl, params);
-
-    size_t prefix_len = 0;
-    size_t min_size = std::min(no_gen_prompt.size(), gen_prompt.size());
-    while (prefix_len < min_size && no_gen_prompt[prefix_len] == gen_prompt[prefix_len]) {
-        prefix_len++;
-    }
-    return gen_prompt.substr(prefix_len);
-}
-
 static common_chat_params common_chat_templates_apply_jinja(const struct common_chat_templates *        tmpls,
                                                             const struct common_chat_templates_inputs & inputs) {
     autoparser::generation_params params;
@@ -2148,6 +2304,27 @@ static common_chat_params common_chat_templates_apply_jinja(const struct common_
     params.add_generation_prompt = inputs.add_generation_prompt;
     params.add_bos               = tmpls->add_bos;
     params.add_eos               = tmpls->add_eos;
+
+    params.continue_final_message = inputs.continue_final_message;
+    if (params.continue_final_message != COMMON_CHAT_CONTINUATION_NONE) {
+        params.add_generation_prompt = false;
+
+        if (!inputs.messages.empty()) {
+            // Render messages[:-1] and store continuation message separately
+            params.continue_msg = inputs.messages.back();
+            params.messages.erase(params.messages.size() - 1);
+        }
+
+        if (params.continue_final_message == COMMON_CHAT_CONTINUATION_AUTO && !inputs.messages.empty()) {
+            // Resolve based on message content
+            params.continue_final_message = COMMON_CHAT_CONTINUATION_CONTENT;
+            if (!params.continue_msg.reasoning_content.empty() &&
+                params.continue_msg.content.empty() &&
+                params.continue_msg.content_parts.empty()) {
+                params.continue_final_message = COMMON_CHAT_CONTINUATION_REASONING;
+            }
+        }
+    }
 
     if (src.find("<|channel|>") == std::string::npos) {
         // map developer to system for all models except for GPT-OSS
@@ -2168,8 +2345,6 @@ static common_chat_params common_chat_templates_apply_jinja(const struct common_
     if (tmpl.original_caps().supports_object_arguments) {
         workaround::func_args_not_string(params.messages);
     }
-
-    params.generation_prompt = common_chat_templates_generation_prompt(tmpl, params);
 
     params.extra_context = common_chat_extra_context();
     for (auto el : inputs.chat_template_kwargs) {
@@ -2200,17 +2375,16 @@ static common_chat_params common_chat_templates_apply_jinja(const struct common_
         auto params_copy               = params;
         params_copy.reasoning_format   = COMMON_REASONING_FORMAT_NONE;
         data.prompt                    = common_chat_template_direct_apply_impl(tmpl, params_copy);
+        data.generation_prompt         = common_chat_template_generation_prompt_impl(tmpl, params);
         data.format                    = COMMON_CHAT_FORMAT_PEG_NATIVE;
-        data.generation_prompt         = params.generation_prompt;
-        auto parser                    = build_chat_peg_parser([&params](common_chat_peg_builder &p) {
-            return p.prefix(params.generation_prompt) << p.content(p.rest());
+        auto parser                    = build_chat_peg_parser([&data](common_chat_peg_builder &p) {
+            return p.literal(data.generation_prompt) << p.content(p.rest());
         });
         data.parser                    = parser.save();
         return data;
     }
 
     if (auto result = common_chat_try_specialized_template(tmpl, src, params)) {
-        result->generation_prompt = params.generation_prompt;
         return *result;
     }
 
@@ -2224,7 +2398,6 @@ static common_chat_params common_chat_templates_apply_jinja(const struct common_
             auto_params.thinking_start_tag = trim_whitespace(autoparser.reasoning.start);
             auto_params.thinking_end_tag   = trim_whitespace(autoparser.reasoning.end);
         }
-        auto_params.generation_prompt = params.generation_prompt;
         common_peg_arena arena;
         arena.load(auto_params.parser);
         LOG_DBG("%s: generated parser:\n%s\n\nparser generation prompt: %s\n", __func__, arena.dump(arena.root()).c_str(), auto_params.generation_prompt.c_str());
