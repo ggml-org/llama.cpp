@@ -40,7 +40,7 @@ import type {
 	DatabaseMessageExtraMcpResource,
 	StreamConnectionState
 } from '$lib/types';
-import { modelsStore, selectedModelName } from '$lib/stores/models.svelte';
+import { modelsStore } from '$lib/stores/models.svelte';
 import { settingsStore } from '../stores/settings.svelte';
 import { capImageDataURLSize } from '../utils/cap-img-size';
 
