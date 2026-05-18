@@ -68,6 +68,8 @@ jobs:
       - name: Determine tag name
         id: tag
         uses: ./.github/actions/get-tag-name
+        env:
+          BRANCH_NAME: ${{ github.head_ref || github.ref_name }}
 
   ggml-ci-nvidia-cuda:
     needs: determine-tag
@@ -81,7 +83,7 @@ jobs:
       - name: Test
         id: ggml-ci
         env:
-          HF_WEBUI_VERSION: ${{ needs.determine-tag.outputs.tag_name }}
+          HF_UI_VERSION: ${{ needs.determine-tag.outputs.tag_name }}
         run: |
           nvidia-smi
           GG_BUILD_CUDA=1 bash ./ci/run.sh ~/results/llama.cpp /mnt/llama.cpp
@@ -98,7 +100,7 @@ jobs:
       - name: Test
         id: ggml-ci
         env:
-          HF_WEBUI_VERSION: ${{ needs.determine-tag.outputs.tag_name }}
+          HF_UI_VERSION: ${{ needs.determine-tag.outputs.tag_name }}
         run: |
           vulkaninfo --summary
           GG_BUILD_VULKAN=1 GGML_VK_DISABLE_COOPMAT2=1 bash ./ci/run.sh ~/results/llama.cpp /mnt/llama.cpp
@@ -115,7 +117,7 @@ jobs:
       - name: Test
         id: ggml-ci
         env:
-          HF_WEBUI_VERSION: ${{ needs.determine-tag.outputs.tag_name }}
+          HF_UI_VERSION: ${{ needs.determine-tag.outputs.tag_name }}
         run: |
           vulkaninfo --summary
           GG_BUILD_VULKAN=1 bash ./ci/run.sh ~/results/llama.cpp /mnt/llama.cpp
@@ -205,7 +207,7 @@ jobs:
       - name: Test
         id: ggml-ci
         env:
-          HF_WEBUI_VERSION: ${{ needs.determine-tag.outputs.tag_name }}
+          HF_UI_VERSION: ${{ needs.determine-tag.outputs.tag_name }}
         run: |
           GG_BUILD_METAL=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
 
@@ -234,7 +236,7 @@ jobs:
       - name: Test
         id: ggml-ci
         env:
-          HF_WEBUI_VERSION: ${{ needs.determine-tag.outputs.tag_name }}
+          HF_UI_VERSION: ${{ needs.determine-tag.outputs.tag_name }}
         run: |
           GG_BUILD_WEBGPU=1 GG_BUILD_WEBGPU_DAWN_PREFIX="$GITHUB_WORKSPACE/dawn" \
             bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
@@ -251,7 +253,7 @@ jobs:
       - name: Test
         id: ggml-ci
         env:
-          HF_WEBUI_VERSION: ${{ needs.determine-tag.outputs.tag_name }}
+          HF_UI_VERSION: ${{ needs.determine-tag.outputs.tag_name }}
         run: |
           vulkaninfo --summary
           GG_BUILD_VULKAN=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
@@ -270,7 +272,7 @@ jobs:
       - name: Test
         id: ggml-ci
         env:
-          HF_WEBUI_VERSION: ${{ needs.determine-tag.outputs.tag_name }}
+          HF_UI_VERSION: ${{ needs.determine-tag.outputs.tag_name }}
         run: |
           vulkaninfo --summary
           GG_BUILD_VULKAN=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
@@ -291,7 +293,7 @@ jobs:
           MSYSTEM: UCRT64
           CHERE_INVOKING: 1
           PATH: C:\msys64\ucrt64\bin;C:\msys64\usr\bin;C:\Windows\System32;${{ env.PATH }}
-          HF_WEBUI_VERSION: ${{ needs.determine-tag.outputs.tag_name }}
+          HF_UI_VERSION: ${{ needs.determine-tag.outputs.tag_name }}
         run: |
           vulkaninfo --summary
           # Skip python related tests with GG_BUILD_LOW_PERF=1 since Windows MSYS2 UCRT64 currently fails to create
@@ -332,7 +334,7 @@ jobs:
       - name: Test
         id: ggml-ci
         env:
-          HF_WEBUI_VERSION: ${{ needs.determine-tag.outputs.tag_name }}
+          HF_UI_VERSION: ${{ needs.determine-tag.outputs.tag_name }}
         run: |
           source ./openvino_toolkit/setupvars.sh
           GG_BUILD_OPENVINO=1 GGML_OPENVINO_DEVICE=GPU GG_BUILD_LOW_PERF=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt

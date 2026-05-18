@@ -163,7 +163,7 @@ llama_model_exaone4::graph<iswa>::graph(const llama_model & model, const llm_gra
     res->t_embd = cur;
 
     // lm_head
-    cur = build_lora_mm(model.output, cur);
+    cur = build_lora_mm(model.output, cur, model.output_s);
 
     cb(cur, "result_output", -1);
     res->t_logits = cur;

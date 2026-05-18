@@ -87,6 +87,7 @@ enum htp_op_code {
     HTP_OP_L2_NORM,
     HTP_OP_GATED_DELTA_NET,
     HTP_OP_TRI,
+    HTP_OP_PAD,
 
     HTP_OP_INVALID
 };
