@@ -108,20 +108,15 @@ option(LLAMA_BUILD_TESTS            "llama: build tests"                        
 option(LLAMA_BUILD_TOOLS            "llama: build tools"                                                                            ${LLAMA_STANDALONE})
 option(LLAMA_BUILD_EXAMPLES         "llama: build examples"                                                                         ${LLAMA_STANDALONE})
 option(LLAMA_BUILD_SERVER           "llama: build server example"                                                                   ${LLAMA_STANDALONE})
-# Deprecated: use LLAMA_BUILD_UI instead (kept for backward compat)
-option(LLAMA_BUILD_WEBUI            "llama: build the embedded Web UI for server (deprecated: use LLAMA_BUILD_UI)"                   ON)
-option(LLAMA_USE_PREBUILT_WEBUI     "llama: use prebuilt WebUI from HF Bucket when available (deprecated: use LLAMA_USE_PREBUILT_UI)" ON)
-
-# New option names
 option(LLAMA_BUILD_UI                "llama: build the embedded Web UI for server"                                                   ON)
 option(LLAMA_USE_PREBUILT_UI         "llama: use prebuilt UI from HF Bucket when available (requires LLAMA_BUILD_UI=ON)"             ON)
 
 # Backward compat: when old var is set but new one isn't, forward the value
-if(DEFINED LLAMA_BUILD_WEBUI AND NOT DEFINED LLAMA_BUILD_UI)
+if(DEFINED LLAMA_BUILD_WEBUI)
     set(LLAMA_BUILD_UI ${LLAMA_BUILD_WEBUI})
     message(DEPRECATION "LLAMA_BUILD_WEBUI is deprecated, use LLAMA_BUILD_UI instead")
 endif()
-if(DEFINED LLAMA_USE_PREBUILT_WEBUI AND NOT DEFINED LLAMA_USE_PREBUILT_UI)
+if(DEFINED LLAMA_USE_PREBUILT_WEBUI)
     set(LLAMA_USE_PREBUILT_UI ${LLAMA_USE_PREBUILT_WEBUI})
     message(DEPRECATION "LLAMA_USE_PREBUILT_WEBUI is deprecated, use LLAMA_USE_PREBUILT_UI instead")
 endif()
@@ -285,18 +280,6 @@ write_basic_package_version_file(
 install(FILES ${CMAKE_CURRENT_BINARY_DIR}/llama-config.cmake
               ${CMAKE_CURRENT_BINARY_DIR}/llama-version.cmake
         DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/llama)
-
-install(
-    FILES convert_hf_to_gguf.py
-    PERMISSIONS
-        OWNER_READ
-        OWNER_WRITE
-        OWNER_EXECUTE
-        GROUP_READ
-        GROUP_EXECUTE
-        WORLD_READ
-        WORLD_EXECUTE
-    DESTINATION ${CMAKE_INSTALL_BINDIR})
 
 configure_file(cmake/llama.pc.in
         "${CMAKE_CURRENT_BINARY_DIR}/llama.pc"

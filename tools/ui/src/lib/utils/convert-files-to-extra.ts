@@ -89,6 +89,21 @@ export async function parseFilesToMessageExtras(
 			} catch (error) {
 				console.error(`Failed to process audio file ${file.name}:`, error);
 			}
+		} else if (getFileTypeCategory(file.type) === FileTypeCategory.VIDEO) {
+			// Process video files (MP4, etc)
+			try {
+				const base64Data = await readFileAsBase64(file.file);
+
+				extras.push({
+					type: AttachmentType.VIDEO,
+					name: file.name,
+					size: file.size,
+					base64Data: base64Data,
+					mimeType: file.type
+				});
+			} catch (error) {
+				console.error(`Failed to process video file ${file.name}:`, error);
+			}
 		} else if (getFileTypeCategory(file.type) === FileTypeCategory.PDF) {
 			try {
 				// Always get base64 data for preview functionality

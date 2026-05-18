@@ -22,6 +22,10 @@ export interface ApiChatMessageContentPart {
 		data: string;
 		format: 'wav' | 'mp3';
 	};
+	input_video?: {
+		data: string;
+		format: 'mp4' | 'ogg' | 'auto';
+	};
 }
 
 export interface ApiContextSizeError {
@@ -190,6 +194,7 @@ export interface ApiLlamaCppServerProps {
 	modalities: {
 		vision: boolean;
 		audio: boolean;
+		video: boolean;
 	};
 	chat_template: string;
 	bos_token: string;
@@ -198,6 +203,7 @@ export interface ApiLlamaCppServerProps {
 	/** @deprecated Use {@link ui_settings} instead */
 	webui_settings?: Record<string, string | number | boolean>;
 	ui_settings?: Record<string, string | number | boolean>;
+	cors_proxy_enabled?: boolean;
 }
 
 export interface ApiChatCompletionRequest {

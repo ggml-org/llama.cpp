@@ -160,7 +160,7 @@ export function expandTemplate(template: string, values: Record<string, string>)
 								(name: string, i: number) =>
 									`${encodeURIComponent(name)}=${encodeURIComponent(expandedParts[i])}`
 							)
-							.join(URI_TEMPLATE_SEPARATORS.COMMA)
+							.join(URI_TEMPLATE_SEPARATORS.QUERY_CONTINUATION)
 					);
 				case URI_TEMPLATE_OPERATORS.FORM_CONTINUATION:
 					// Form-style query continuation

@@ -14,7 +14,6 @@ struct hf_file {
     std::string final_path;
     std::string oid;
     std::string repo_id;
-    size_t size = 0; // only for the migration
 };
 
 using hf_files = std::vector<hf_file>;
@@ -31,9 +30,11 @@ hf_files get_all_snapshot_files(const std::string & repo_id = {});
 // Create snapshot path (link or move/copy) and return it
 std::string finalize_file(const hf_file & file);
 
-void prune_old_files(const std::string & hf_repo, const hf_files & current_model_files, const hf_file & current_mmproj);
-
-// TODO: Remove later
-void migrate_old_cache_to_hf_cache(const std::string & token, bool offline = false);
+void prune_old_files(
+    const std::string & hf_repo,
+    const hf_files & current_model_files,
+    const hf_file & current_mmproj,
+    const hf_file & current_mtp
+);
 
 } // namespace hf_cache

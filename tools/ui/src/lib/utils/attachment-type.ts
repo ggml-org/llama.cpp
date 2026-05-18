@@ -103,3 +103,24 @@ export function isAudioFile(
 
 	return false;
 }
+
+/**
+ * Determines if an attachment or uploaded file is a video file
+ * @param uploadedFile - Optional uploaded file
+ * @param attachment - Optional database attachment
+ * @returns true if the file is a video file
+ */
+export function isVideoFile(
+	attachment?: DatabaseMessageExtra,
+	uploadedFile?: ChatUploadedFile
+): boolean {
+	if (uploadedFile) {
+		return getUploadedFileCategory(uploadedFile) === FileTypeCategory.VIDEO;
+	}
+
+	if (attachment) {
+		return attachment.type === AttachmentType.VIDEO;
+	}
+
+	return false;
+}

@@ -7,10 +7,10 @@
 	import { activeMessages } from '$lib/stores/conversations.svelte';
 
 	interface Props {
-		currentModel?: string;
 		disabled?: boolean;
 		forceForegroundText?: boolean;
 		hasAudioModality?: boolean;
+		hasVideoModality?: boolean;
 		hasVisionModality?: boolean;
 		hasModelSelected?: boolean;
 		isSelectedModelInCache?: boolean;
@@ -19,10 +19,10 @@
 	}
 
 	let {
-		currentModel,
 		disabled = false,
 		forceForegroundText = false,
 		hasAudioModality = $bindable(false),
+		hasVideoModality = $bindable(false),
 		hasVisionModality = $bindable(false),
 		hasModelSelected = $bindable(false),
 		isSelectedModelInCache = $bindable(true),
@@ -39,14 +39,28 @@
 
 	let lastSyncedConversationModel: string | null = null;
 
+	let selectorModel = $derived(conversationModel ?? modelsStore.selectedModelName ?? null);
+
 	$effect(() => {
 		if (conversationModel && conversationModel !== lastSyncedConversationModel) {
-			lastSyncedConversationModel = conversationModel;
+			if (modelOptions().some((m) => m.model === conversationModel)) {
+				modelsStore.selectedModelName = conversationModel;
+				modelsStore.selectModelByName(conversationModel);
+			} else {
+				modelsStore.selectedModelName = null;
+				modelsStore.clearSelection();
+			}
 
-			modelsStore.selectModelByName(conversationModel);
-		} else if (isRouter && !modelsStore.selectedModelId && modelsStore.loadedModelIds.length > 0) {
+			lastSyncedConversationModel = conversationModel;
+		} else if (
+			isRouter &&
+			!modelsStore.selectedModelId &&
+			modelsStore.loadedModelIds.length > 0 &&
+			activeMessages().length > 0 &&
+			!conversationModel
+		) {
 			lastSyncedConversationModel = null;
-			// auto-select the first loaded model only when nothing is selected yet
+
 			const first = modelOptions().find((m) => modelsStore.loadedModelIds.includes(m.model));
 
 			if (first) modelsStore.selectModelById(first.id);
@@ -93,6 +107,10 @@
 
 	$effect(() => {
 		hasAudioModality = activeModelId ? modelsStore.modelSupportsAudio(activeModelId) : false;
+	});
+
+	$effect(() => {
+		hasVideoModality = activeModelId ? modelsStore.modelSupportsVideo(activeModelId) : false;
 	});
 
 	$effect(() => {
@@ -145,7 +163,7 @@
 	<ModelsSelectorSheet
 		disabled={disabled || isOffline}
 		bind:this={selectorModelRef}
-		{currentModel}
+		currentModel={selectorModel}
 		{forceForegroundText}
 		{useGlobalSelection}
 	/>
@@ -153,7 +171,7 @@
 	<ModelsSelectorDropdown
 		disabled={disabled || isOffline}
 		bind:this={selectorModelRef}
-		{currentModel}
+		currentModel={selectorModel}
 		{forceForegroundText}
 		{useGlobalSelection}
 	/>
