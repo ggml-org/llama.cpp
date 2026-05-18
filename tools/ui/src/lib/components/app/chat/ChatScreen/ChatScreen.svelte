@@ -8,6 +8,7 @@
 		ChatMessages,
 		ChatScreenDragOverlay,
 		ChatScreenProcessingInfo,
+		ChatScreenActionScrollDown,
 		DialogEmptyFileAlert,
 		DialogFileUploadError,
 		DialogChatError,
@@ -338,7 +339,9 @@
 	});
 
 	function handleMessagesReady() {
-		if (!disableAutoScroll && !autoScroll.userScrolledUp) {
+		if (disableAutoScroll) return;
+
+		if (!autoScroll.userScrolledUp) {
 			requestAnimationFrame(() => {
 				autoScroll.scrollToBottom('instant');
 			});
@@ -405,7 +408,7 @@
 			<div
 				class="pointer-events-none {isEmpty
 					? 'absolute bottom-[calc(50dvh-7rem)]'
-					: 'sticky bottom-4'} right-4 left-4 mt-auto pt-16 transition-all duration-200"
+					: 'sticky bottom-4'} right-4 left-4 mt-auto -mb-14 pt-16 transition-all duration-200"
 			>
 				{#if isEmpty}
 					<div class="mb-8 px-4 text-center" use:fadeInView={{ duration: 300 }}>
@@ -418,6 +421,8 @@
 						</p>
 					</div>
 				{/if}
+
+				<ChatScreenActionScrollDown container={chatScrollContainer} />
 
 				{#if page.params.id}
 					<ChatScreenProcessingInfo />
