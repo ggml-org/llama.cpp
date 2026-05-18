@@ -23,6 +23,7 @@ import type { DatabaseMessageExtraMcpPrompt, DatabaseMessageExtraMcpResource } f
 import { modelsStore } from '$lib/stores/models.svelte';
 import { settingsStore } from '../stores/settings.svelte';
 import { capImageDataURLSize } from '../utils/cap-img-size';
+import { MEGAPIXELS_TO_PIXELS } from '$lib/constants/image-size';
 
 export class ChatService {
 	/**
@@ -871,7 +872,7 @@ export class ChatService {
 		for (const image of imageFiles) {
 			let base64Url = image.base64Url;
 			const maxImageResolution = settingsStore.getConfig('maxImageMPixels');
-			if (maxImageResolution > 1 / 1_000_000) {
+			if (maxImageResolution > 1 / MEGAPIXELS_TO_PIXELS) {
 				base64Url = await capImageDataURLSize(image.base64Url, maxImageResolution);
 			}
 			contentParts.push({
