@@ -1,5 +1,8 @@
 ARG GCC_VERSION=15.2.0
 ARG UBUNTU_VERSION=24.04
+ARG BUILD_DATE=N/A
+ARG APP_VERSION=N/A
+ARG APP_REVISION=N/A
 
 ### Build Llama.cpp stage
 FROM gcc:${GCC_VERSION} AS build
@@ -51,6 +54,19 @@ COPY --from=build /opt/llama.cpp/gguf-py /llama.cpp/gguf-py
 
 ### Base image
 FROM ubuntu:${UBUNTU_VERSION} AS base
+
+ARG BUILD_DATE=N/A
+ARG APP_VERSION=N/A
+ARG APP_REVISION=N/A
+ARG IMAGE_URL=https://github.com/ggml-org/llama.cpp
+ARG IMAGE_SOURCE=https://github.com/ggml-org/llama.cpp
+LABEL org.opencontainers.image.created=$BUILD_DATE \
+      org.opencontainers.image.version=$APP_VERSION \
+      org.opencontainers.image.revision=$APP_REVISION \
+      org.opencontainers.image.title="llama.cpp" \
+      org.opencontainers.image.description="LLM inference in C/C++" \
+      org.opencontainers.image.url=$IMAGE_URL \
+      org.opencontainers.image.source=$IMAGE_SOURCE
 
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
