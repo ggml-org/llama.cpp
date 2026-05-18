@@ -6182,7 +6182,7 @@ static void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer, 
             CL_BUFFER_CREATE_TYPE_REGION, &region, &err);
         CL_CHECK(err);
 
-        #ifdef GGML_OPENCL_USE_ADRENO_KERNELS
+#ifdef GGML_OPENCL_USE_ADRENO_KERNELS
         if (use_adreno_moe_kernels(backend_ctx, tensor)) {
             cl_kernel kernel = backend_ctx->kernel_convert_block_q4_k_trans4_ns;
 
@@ -6223,16 +6223,16 @@ static void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer, 
 
             return;
         }
-        #endif // GGML_OPENCL_USE_ADRENO_KERNELS
+#endif // GGML_OPENCL_USE_ADRENO_KERNELS
 
-        #ifdef GGML_OPENCL_USE_ADRENO_KERNELS
+#ifdef GGML_OPENCL_USE_ADRENO_KERNELS
         cl_kernel kernel = backend_ctx->kernel_convert_block_q4_K;
         if (use_adreno_kernels(backend_ctx, tensor)) {
             kernel = backend_ctx->kernel_convert_block_q4_K_noshuffle;
         }
-        #else
+#else
         cl_kernel kernel = backend_ctx->kernel_convert_block_q4_K;
-        #endif
+#endif // GGML_OPENCL_USE_ADRENO_KERNELS
 
         cl_uchar mask_0F = 0x0F;
         cl_uchar mask_F0 = 0xF0;
@@ -6335,7 +6335,7 @@ static void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer, 
         CL_CHECK((extra->qh = clCreateSubBuffer(extra_orig->data_device, CL_MEM_READ_WRITE, CL_BUFFER_CREATE_TYPE_REGION, &region, &err), err));
         CL_CHECK(err);
 
-        #ifdef GGML_OPENCL_USE_ADRENO_KERNELS
+#ifdef GGML_OPENCL_USE_ADRENO_KERNELS
         if (use_adreno_moe_kernels(backend_ctx, tensor)) {
             cl_kernel kernel = backend_ctx->kernel_convert_block_q5_k_trans4_ns;
 
@@ -6377,13 +6377,16 @@ static void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer, 
 
             return;
         }
+#endif // GGML_OPENCL_USE_ADRENO_KERNELS
+
+#ifdef GGML_OPENCL_USE_ADRENO_KERNELS
         cl_kernel kernel = backend_ctx->kernel_convert_block_q5_K;
         if (use_adreno_kernels(backend_ctx, tensor)) {
             kernel = backend_ctx->kernel_convert_block_q5_K_noshuffle;
         }
-        #else
+#else
         cl_kernel kernel = backend_ctx->kernel_convert_block_q5_K;
-        #endif
+#endif
 
         cl_uchar mask_0F = 0x0F;
         cl_uchar mask_F0 = 0xF0;
