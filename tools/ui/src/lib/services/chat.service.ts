@@ -831,11 +831,9 @@ export class ChatService {
 				// it will be retransmitted from a clean line boundary. reuse the model the POST was
 				// originally tagged with, the dropdown may have changed since but the server side
 				// identity is frozen at POST time
-				const resumeResp = await resumeStream(
-					conversationId,
-					abortSignal,
-					streamModel
-				).catch(() => null);
+				const resumeResp = await resumeStream(conversationId, abortSignal, streamModel).catch(
+					() => null
+				);
 				if (!resumeResp || resumeResp.status !== 200) {
 					onConnectionState?.('lost');
 					onError?.(new Error('Stream connection lost and could not be resumed'));
