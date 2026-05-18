@@ -205,6 +205,7 @@ add_library(ggml-base
             ggml-threading.cpp
             ggml-threading.h
             ggml-quants.c
+            ggml-turbo-quant.c
             ggml-quants.h
             gguf.cpp)
 
