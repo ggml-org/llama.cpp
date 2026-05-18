@@ -36,7 +36,8 @@ enum llm_graph_type {
     LLM_GRAPH_TYPE_DECODER_MTP,
 };
 
-enum llm_ffn_op_type {
+enum llm_ffn_op_type : int {
+    LLM_FFN_NONE = 0,           // sentinel: unset; archs must assign before use
     LLM_FFN_SILU,
     LLM_FFN_GELU,
     LLM_FFN_RELU,

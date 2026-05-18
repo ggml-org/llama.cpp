@@ -145,6 +145,10 @@ enum llm_type {
 
 std::string llama_rope_scaling_type_name(llama_rope_scaling_type rope_scaling_type);
 
+// Map a GGUF activation-name string to llm_ffn_op_type. Returns `fallback` if
+// the string is empty or not recognized.
+llm_ffn_op_type llm_ffn_op_type_from_string(const std::string & name, llm_ffn_op_type fallback);
+
 struct llama_layer_posnet {
     // resnet
     struct ggml_tensor * norm1   = nullptr;
