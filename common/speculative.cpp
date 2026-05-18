@@ -404,8 +404,8 @@ struct common_speculative_impl_draft_simple : public common_speculative_impl {
 //
 // Performance is overall good but there is waste in verify cycle:
 //   process() runs encoder + decoder on the *full* verify batch including rows for
-//   rejected drafts. The KV at those positions is then dropped. 
-// 
+//   rejected drafts. The KV at those positions is then dropped.
+//
 // TODO: Not sure if we need optimization for this waste?
 // If so we may need hybrid stash:
 //      in verify mode, have process() only stash features and let draft() seed run
@@ -486,8 +486,8 @@ struct common_speculative_impl_draft_eagle3 : public common_speculative_impl {
         }
 
         // turn on extraction of the draft model's pre-norm hidden state
-        // (used both for the encoder output g_embd and the decoder pre-norm output)
-        llama_set_embeddings_pre_norm(ctx_dft, true);
+        // (used both for the encoder output g_embd and the decoder pre-norm output).
+        llama_set_embeddings_pre_norm(ctx_dft, true, /*masked*/ true);
 
         pending_g_last.assign(n_seq, std::vector<float>(n_embd_dec, 0.0f));
         pending_pos_last.assign(n_seq, -1);
