@@ -3,7 +3,7 @@ import { toast } from 'svelte-sonner';
 import { ServerModelStatus, ModelModality } from '$lib/enums';
 import { ModelsService } from '$lib/services/models.service';
 import { PropsService } from '$lib/services/props.service';
-import { serverStore } from '$lib/stores/server.svelte';
+import { serverStore, isRouterMode } from '$lib/stores/server.svelte';
 import { TTLCache } from '$lib/utils';
 import {
 	MODEL_PROPS_CACHE_TTL_MS,
@@ -293,45 +293,88 @@ class ModelsStore {
 				await serverStore.fetch();
 			}
 
-			const response = await ModelsService.list();
+			const models: ModelOption[] = [];
 
-			const models: ModelOption[] = response.data.map((item: ApiModelDataEntry, index: number) => {
-				const details = response.models?.[index];
-				const rawCapabilities = Array.isArray(details?.capabilities) ? details?.capabilities : [];
-				const displayNameSource =
-					details?.name && details.name.trim().length > 0 ? details.name : item.id;
-				const displayName = this.toDisplayName(displayNameSource);
-				const modelId = details?.model || item.id;
+			if (isRouterMode()) {
+				// ROUTER mode: use listRouter() which returns extended metadata.
+				// This avoids a duplicate /v1/models request — the layout effect's
+				// fetchRouterModels() call becomes a no-op since models are already loaded.
+				const response = await ModelsService.listRouter();
 
-				return {
-					id: item.id,
-					name: displayName,
-					model: modelId,
-					description: details?.description,
-					capabilities: rawCapabilities.filter((value: unknown): value is string => Boolean(value)),
-					details: details?.details,
-					meta: item.meta ?? null,
-					parsedId: ModelsService.parseModelId(modelId),
-					aliases: item.aliases ?? [],
-					tags: item.tags ?? []
-				} satisfies ModelOption;
-			});
+				const modelOptions: ModelOption[] = response.data.map((item: ApiModelDataEntry, index: number) => {
+					const details = response.models?.[index];
+					const rawCapabilities = Array.isArray(details?.capabilities) ? details?.capabilities : [];
+					const displayNameSource =
+						details?.name && details.name.trim().length > 0 ? details.name : item.id;
+					const displayName = this.toDisplayName(displayNameSource);
+					const modelId = details?.model || item.id;
 
-			this.models = models;
+					return {
+						id: item.id,
+						name: displayName,
+						model: modelId,
+						description: details?.description,
+						capabilities: rawCapabilities.filter((value: unknown): value is string => Boolean(value)),
+						details: details?.details,
+						meta: item.meta ?? null,
+						parsedId: ModelsService.parseModelId(modelId),
+						aliases: item.aliases ?? [],
+						tags: item.tags ?? []
+					} satisfies ModelOption;
+				});
 
-			// WORKAROUND: In MODEL mode, /props returns modalities for the single model,
-			// but /v1/models doesn't include modalities. We bridge this gap here.
-			const serverProps = serverStore.props;
-			if (serverStore.isModelMode && this.models.length > 0 && serverProps?.modalities) {
-				const modalities: ModelModalities = {
-					vision: serverProps.modalities.vision ?? false,
-					audio: serverProps.modalities.audio ?? false,
-					video: serverProps.modalities.video ?? false
-				};
-				this.modelPropsCache.set(this.models[0].model, serverProps);
-				this.models = this.models.map((model, index) =>
-					index === 0 ? { ...model, modalities } : model
-				);
+				this.models = modelOptions;
+				this.routerModels = response.data;
+
+				// Fetch modalities for loaded models (ROUTER mode)
+				await this.fetchModalitiesForLoadedModels();
+
+				const o = this.models.filter((option) => this.getModelProps(option.model)?.ui !== false);
+				if (o.length === 1 && this.isModelLoaded(o[0].model)) {
+					this.selectModelById(o[0].id);
+				}
+			} else {
+				// MODEL mode: use list() — standard OpenAI-compatible response
+				const response = await ModelsService.list();
+
+				const modelOptions: ModelOption[] = response.data.map((item: ApiModelDataEntry, index: number) => {
+					const details = response.models?.[index];
+					const rawCapabilities = Array.isArray(details?.capabilities) ? details?.capabilities : [];
+					const displayNameSource =
+						details?.name && details.name.trim().length > 0 ? details.name : item.id;
+					const displayName = this.toDisplayName(displayNameSource);
+					const modelId = details?.model || item.id;
+
+					return {
+						id: item.id,
+						name: displayName,
+						model: modelId,
+						description: details?.description,
+						capabilities: rawCapabilities.filter((value: unknown): value is string => Boolean(value)),
+						details: details?.details,
+						meta: item.meta ?? null,
+						parsedId: ModelsService.parseModelId(modelId),
+						aliases: item.aliases ?? [],
+						tags: item.tags ?? []
+					} satisfies ModelOption;
+				});
+
+				this.models = modelOptions;
+
+				// WORKAROUND: In MODEL mode, /props returns modalities for the single model,
+				// but /v1/models doesn't include modalities. We bridge this gap here.
+				const serverProps = serverStore.props;
+				if (serverStore.isModelMode && this.models.length > 0 && serverProps?.modalities) {
+					const modalities: ModelModalities = {
+						vision: serverProps.modalities.vision ?? false,
+						audio: serverProps.modalities.audio ?? false,
+						video: serverProps.modalities.video ?? false
+					};
+					this.modelPropsCache.set(this.models[0].model, serverProps);
+					this.models = this.models.map((model, index) =>
+						index === 0 ? { ...model, modalities } : model
+					);
+				}
 			}
 		} catch (error) {
 			this.models = [];
@@ -343,10 +386,16 @@ class ModelsStore {
 	}
 
 	/**
-	 * Fetch router models with full metadata (ROUTER mode only)
-	 * This fetches the /models endpoint which returns status info for each model
+	 * Fetch router models with full metadata (ROUTER mode only).
+	 * No-op in router mode — fetch() already calls listRouter() internally.
+	 * Kept for API compatibility (e.g. handleOpenChange dropdown open handler).
 	 */
 	async fetchRouterModels(): Promise<void> {
+		// In router mode, fetch() already populated this.models and this.routerModels
+		if (isRouterMode()) {
+			return;
+		}
+
 		try {
 			const response = await ModelsService.listRouter();
 			this.routerModels = response.data;
