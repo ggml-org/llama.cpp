@@ -354,16 +354,17 @@ const ggml_cuda_device_info & ggml_cuda_info() {
 }
 
 #if defined(GGML_CUDA_USE_PDL)
-bool ggml_cuda_pdl_disabled() {
-    static const bool env_disable_pdl = []() {
-        const char * env = getenv("GGML_CUDA_DISABLE_PDL");
-        return env != nullptr && std::atoi(env) != 0;
+bool ggml_cuda_pdl_enabled() {
+    // PDL is enabled by default. Set GGML_CUDA_PDL=0 to disable.
+    static const bool env_pdl_enabled = []() {
+        const char * env = getenv("GGML_CUDA_PDL");
+        return env == nullptr || std::atoi(env) != 0;
     }();
-    if (env_disable_pdl) {
-        return true;
+    if (!env_pdl_enabled) {
+        return false;
     }
     // Runtime GPU check due to perf regressions on Ada with PDL.
-    return ggml_cuda_info().devices[ggml_cuda_get_device()].cc < GGML_CUDA_CC_HOPPER;
+    return ggml_cuda_info().devices[ggml_cuda_get_device()].cc >= GGML_CUDA_CC_HOPPER;
 }
 #endif // defined(GGML_CUDA_USE_PDL)
 
