@@ -728,7 +728,7 @@ static int execute_op_unary_f32(struct htp_ops_context * octx) {
             .block                 = (octx->src0_spad.size_per_thread / 2) / src0_row_size_aligned,
             .nc                    = src0->ne[0],
         };
-        
+
         worker_pool_run_func(octx->ctx->worker_pool, unary_job_f32_per_thread, &uctx, n_threads);
     }
 
