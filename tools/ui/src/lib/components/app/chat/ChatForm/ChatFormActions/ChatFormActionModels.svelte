@@ -7,7 +7,6 @@
 	import { activeMessages } from '$lib/stores/conversations.svelte';
 
 	interface Props {
-		currentModel?: string;
 		disabled?: boolean;
 		forceForegroundText?: boolean;
 		hasAudioModality?: boolean;
@@ -20,7 +19,6 @@
 	}
 
 	let {
-		currentModel,
 		disabled = false,
 		forceForegroundText = false,
 		hasAudioModality = $bindable(false),
@@ -41,14 +39,26 @@
 
 	let lastSyncedConversationModel: string | null = null;
 
+	let selectorModel = $derived(conversationModel ?? modelsStore.selectedModelName ?? null);
+
 	$effect(() => {
 		if (conversationModel && conversationModel !== lastSyncedConversationModel) {
-			lastSyncedConversationModel = conversationModel;
+			modelsStore.selectedModelName = conversationModel;
 
-			modelsStore.selectModelByName(conversationModel);
-		} else if (isRouter && !modelsStore.selectedModelId && modelsStore.loadedModelIds.length > 0) {
+			if (modelOptions().some((m) => m.model === conversationModel)) {
+				modelsStore.selectModelByName(conversationModel);
+			}
+
+			lastSyncedConversationModel = conversationModel;
+		} else if (
+			isRouter &&
+			!modelsStore.selectedModelId &&
+			modelsStore.loadedModelIds.length > 0 &&
+			activeMessages().length > 0 &&
+			!conversationModel
+		) {
 			lastSyncedConversationModel = null;
-			// auto-select the first loaded model only when nothing is selected yet
+
 			const first = modelOptions().find((m) => modelsStore.loadedModelIds.includes(m.model));
 
 			if (first) modelsStore.selectModelById(first.id);
@@ -151,7 +161,7 @@
 	<ModelsSelectorSheet
 		disabled={disabled || isOffline}
 		bind:this={selectorModelRef}
-		{currentModel}
+		currentModel={selectorModel}
 		{forceForegroundText}
 		{useGlobalSelection}
 	/>
@@ -159,7 +169,7 @@
 	<ModelsSelectorDropdown
 		disabled={disabled || isOffline}
 		bind:this={selectorModelRef}
-		{currentModel}
+		currentModel={selectorModel}
 		{forceForegroundText}
 		{useGlobalSelection}
 	/>
