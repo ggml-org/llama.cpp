@@ -91,14 +91,13 @@ __launch_bounds__(4 * WARP_SIZE, 1) __global__ void topk_moe_cuda(const float * 
         return;
     }
 
-    constexpr int experts_per_thread = (n_experts > WARP_SIZE) ? n_experts / WARP_SIZE : 1;
-    float wt[experts_per_thread];
-    float wt_sum = 0.f;
-    float output_weights[experts_per_thread];
-
     logits += n_experts * row;
     weights += n_expert_used * row;
     ids += n_experts * row;
+
+    constexpr int experts_per_thread = (n_experts > WARP_SIZE) ? n_experts / WARP_SIZE : 1;
+
+    float wt[experts_per_thread];
 
     // Initialize all slots to -INFINITY
 #pragma unroll
@@ -153,6 +152,10 @@ __launch_bounds__(4 * WARP_SIZE, 1) __global__ void topk_moe_cuda(const float * 
     //at this point, each thread holds either a portion of the softmax distribution
     //or the raw logits. We do the argmax reduce over n_expert_used, each time marking
     //the expert weight as -inf to exclude from the next iteration
+
+    float wt_sum = 0.f;
+
+    float output_weights[experts_per_thread];
 
 #pragma unroll
     for (int i = 0; i < experts_per_thread; i++) {
