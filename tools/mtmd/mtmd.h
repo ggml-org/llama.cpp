@@ -82,6 +82,7 @@ typedef struct mtmd_input_text   mtmd_input_text;
 
 struct mtmd_context_params {
     bool use_gpu;
+    const char * device;
     bool print_timings;
     int n_threads;
     const char * image_marker; // deprecated, use media_marker instead
