@@ -147,7 +147,6 @@ effectiveStdenv.mkDerivation (finalAttrs: {
       ninja
       pkg-config
       git
-      spirv-headers
     ]
     ++ optionals useCuda [
       cudaPackages.cuda_nvcc
