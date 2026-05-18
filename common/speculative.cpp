@@ -756,17 +756,13 @@ struct common_speculative_impl_ngram_simple : public common_speculative_impl {
 };
 
 struct common_speculative_impl_ngram_map_k : public common_speculative_impl {
-    common_params_speculative_ngram_map params;
-
     // n_seq configs
     std::vector<common_ngram_map> config;
 
     common_speculative_impl_ngram_map_k(
-            const common_params_speculative & params,
             const common_ngram_map & config,
             uint32_t n_seq)
-        : common_speculative_impl(COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K, n_seq)
-        , params(params.ngram_map_k) {
+        : common_speculative_impl(COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K, n_seq) {
         for (uint32_t i = 0; i < n_seq; i++) {
             this->config.push_back(config);
         }
@@ -1327,11 +1323,16 @@ common_speculative * common_speculative_init(common_params_speculative & params,
                 impls.push_back(std::move(state));
                 break;
             }
-            case COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K:
+            case COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K: {
+                impls.push_back(
+                        std::make_unique<common_speculative_impl_ngram_map_k>(
+                            get_common_ngram_map(config.type, config.params.ngram_map_k), n_seq));
+                break;
+            }
             case COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V: {
                 impls.push_back(
                         std::make_unique<common_speculative_impl_ngram_map_k>(
-                            config.params, get_common_ngram_map(config.type, config.params.ngram_map_k), n_seq));
+                            get_common_ngram_map(config.type, config.params.ngram_map_k4v), n_seq));
                 break;
             }
             case COMMON_SPECULATIVE_TYPE_NGRAM_MOD: {
