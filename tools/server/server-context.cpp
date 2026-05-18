@@ -2953,12 +2953,22 @@ private:
                     const bool at_last_user_checkpoint =
                         has_last_user_checkpoint &&
                         checkpoint_batch_start == checkpoint_before_last_user_n_tokens;
+                    const int64_t last_checkpoint = slot.prompt.checkpoints.empty()
+                        ? 0
+                        : slot.prompt.checkpoints.back().n_tokens;
+                    const int64_t distance_from_last_checkpoint = checkpoint_batch_start - last_checkpoint;
+                    const bool regular_checkpoint_due =
+                        params_base.checkpoint_every_nt > 0 &&
+                        distance_from_last_checkpoint >= params_base.checkpoint_every_nt;
                     const bool checkpoint_allowed_by_last_user =
-                        !has_last_user_checkpoint || at_last_user_checkpoint;
+                        !has_last_user_checkpoint ||
+                        at_last_user_checkpoint ||
+                        regular_checkpoint_due;
 
                     if (do_checkpoint && !checkpoint_allowed_by_last_user) {
                         SLT_INF(slot, "skip checkpoint at %d, expected checkpoint before user input = %d\n",
                                 checkpoint_batch_start, checkpoint_before_last_user_n_tokens);
+
                         do_checkpoint = false;
                     }
 
