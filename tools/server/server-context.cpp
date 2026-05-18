@@ -1026,6 +1026,14 @@ private:
         }
         SRV_INF("%s", "for more info see https://github.com/ggml-org/llama.cpp/pull/16391\n");
 
+        if (params_base.n_ctx_checkpoints > 0) {
+            SRV_INF("context checkpoints enabled, max = %d, every = %d, start after = %d, min spacing = %d\n",
+                    params_base.n_ctx_checkpoints, params_base.checkpoint_every_nt,
+                    params_base.checkpoint_start_after_nt, params_base.checkpoint_min_spacing_nt);
+        } else {
+            SRV_INF("%s", "context checkpoints disabled\n");
+        }
+
         if (!params_base.model_alias.empty()) {
             // backward compat: use first alias as model name
             model_name = *params_base.model_alias.begin();
@@ -2941,7 +2949,6 @@ private:
 
                     const auto pos_min = llama_memory_seq_pos_min(llama_get_memory(ctx_tgt), slot.id);
                     const auto pos_max = llama_memory_seq_pos_max(llama_get_memory(ctx_tgt), slot.id);
-                    constexpr int32_t min_checkpoint_tokens = 64;
 
                     const bool at_last_user_checkpoint =
                         has_last_user_checkpoint &&
@@ -2955,14 +2962,14 @@ private:
                         do_checkpoint = false;
                     }
 
-                    // no need for empty or small checkpoints
-                    do_checkpoint = do_checkpoint && (pos_min >= 0 && slot.prompt.n_tokens() >= min_checkpoint_tokens);
+                    // no need for checkpoints with no tokens or before the prompt reaches the configured token count
+                    do_checkpoint = do_checkpoint && (pos_min >= 0 && slot.prompt.n_tokens() >= params_base.checkpoint_start_after_nt);
 
                     // do not checkpoint after mtmd chunks
                     do_checkpoint = do_checkpoint && !has_mtmd;
 
                     // no need to create checkpoints that are too close together
-                    do_checkpoint = do_checkpoint && (slot.prompt.checkpoints.empty() || checkpoint_batch_start > slot.prompt.checkpoints.back().n_tokens + min_checkpoint_tokens);
+                    do_checkpoint = do_checkpoint && (slot.prompt.checkpoints.empty() || checkpoint_batch_start > slot.prompt.checkpoints.back().n_tokens + params_base.checkpoint_min_spacing_nt);
                     SLT_DBG(slot, "main/do_checkpoint = %s, pos_min = %d, pos_max = %d\n", do_checkpoint ? "yes" : "no", pos_min, pos_max);
 
                     // note: we create the checkpoint before calling llama_decode(), so the current batch is not
