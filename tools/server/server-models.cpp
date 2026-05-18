@@ -798,9 +798,10 @@ void server_models::load(const std::string & name) {
         std::thread log_thread([&]() {
             // read stdout/stderr and forward to main server log
             // also handle status report from child process
+            std::vector<char> vec_buf(128 * 1024); // large buffer for storing info
+            char * buffer = vec_buf.data();
             if (stdout_file) {
-                char buffer[128 * 1024]; // large buffer for storing info
-                while (fgets(buffer, sizeof(buffer), stdout_file) != nullptr) {
+                while (fgets(buffer, vec_buf.size(), stdout_file) != nullptr) {
                     LOG("[%5d] %s", port, buffer);
                     std::string str(buffer);
                     if (string_starts_with(buffer, CMD_CHILD_TO_ROUTER_READY)) {
@@ -1152,14 +1153,17 @@ void server_models_routes::init_routes() {
                 {"role",          "router"},
                 {"max_instances", params.models_max},
                 {"models_autoload", params.models_autoload},
-                // this is a dummy response to make sure webui doesn't break
+                // this is a dummy response to make sure the UI doesn't break
                 {"model_alias", "llama-server"},
                 {"model_path",  "none"},
                 {"default_generation_settings", {
                     {"params", json{}},
                     {"n_ctx",  0},
                 }},
-                {"webui_settings", webui_settings},
+                // New key
+                {"ui_settings",     ui_settings},
+                // Deprecated: use ui_settings instead (kept for backward compat)
+                {"webui_settings",  webui_settings},
                 {"build_info",     std::string(llama_build_info())},
             });
             return res;
