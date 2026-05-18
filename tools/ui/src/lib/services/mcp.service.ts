@@ -569,7 +569,7 @@ export class MCPService {
 			const msg = error.message || String(error);
 			if (
 				error.name === 'AbortError' ||
-				error.name === 'DOMException' ||
+				error instanceof DOMException ||
 				msg.includes('SSE stream disconnected') ||
 				msg.includes('stream locked by a reader') ||
 				msg.includes('The operation was aborted')

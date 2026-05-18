@@ -249,23 +249,23 @@ class ModelsStore {
 				await serverStore.fetch();
 			}
 
-			if (isRouterMode()) {
+			const router = isRouterMode();
+
+			if (router) {
 				const response = await ModelsService.listRouter();
 
 				this.routerModels = response.data;
 				this.models = this.buildModelOptions(response);
 
 				await this.fetchModalitiesForLoadedModels();
-			} else {
-				this.models = await this.fetchModelModeInternal();
-			}
 
-			if (isRouterMode()) {
 				const visible = this.getVisibleModels();
 
 				if (visible.length === 1 && this.isModelLoaded(visible[0].model)) {
 					this.selectModelById(visible[0].id);
 				}
+			} else {
+				this.models = await this.fetchModelModeInternal();
 			}
 		} catch (error) {
 			this.models = [];
@@ -320,7 +320,7 @@ class ModelsStore {
 	 * Kept for API compatibility (e.g. handleOpenChange dropdown open handler).
 	 */
 	async fetchRouterModels(): Promise<void> {
-		if (isRouterMode()) return;
+		if (!isRouterMode()) return;
 
 		try {
 			const response = await ModelsService.listRouter();

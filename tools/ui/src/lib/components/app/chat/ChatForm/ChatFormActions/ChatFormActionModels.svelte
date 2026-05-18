@@ -43,10 +43,12 @@
 
 	$effect(() => {
 		if (conversationModel && conversationModel !== lastSyncedConversationModel) {
-			modelsStore.selectedModelName = conversationModel;
-
 			if (modelOptions().some((m) => m.model === conversationModel)) {
+				modelsStore.selectedModelName = conversationModel;
 				modelsStore.selectModelByName(conversationModel);
+			} else {
+				modelsStore.selectedModelName = null;
+				modelsStore.clearSelection();
 			}
 
 			lastSyncedConversationModel = conversationModel;
