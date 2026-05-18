@@ -7,6 +7,22 @@
 extern "C" {
 #endif
 
+    // Emit a compile-time warning if the caller discards a returned ggml_status.
+    // Silently ignoring compute errors is a common source of hard-to-trace bugs.
+#if defined(__GNUC__) || defined(__clang__)
+#  define GGML_NODISCARD __attribute__((warn_unused_result))
+#else
+#  define GGML_NODISCARD
+#endif
+
+    // Propagate a non-success status immediately.
+    // Example: GGML_CHECK_STATUS(ggml_graph_compute(cg, &plan));
+#define GGML_CHECK_STATUS(expr)                        \
+    do {                                               \
+        enum ggml_status _s = (expr);                  \
+        if (_s != GGML_STATUS_SUCCESS) { return _s; } \
+    } while (0)
+
     // the compute plan that needs to be prepared for ggml_graph_compute()
     // since https://github.com/ggml-org/ggml/issues/287
     struct ggml_cplan {
@@ -67,11 +83,9 @@ extern "C" {
                   const struct ggml_cgraph * cgraph,
                                        int   n_threads, /* = GGML_DEFAULT_N_THREADS */
                     struct ggml_threadpool * threadpool /* = NULL */ );
-    GGML_BACKEND_API enum ggml_status  ggml_graph_compute(struct ggml_cgraph * cgraph, struct ggml_cplan * cplan);
 
-    // same as ggml_graph_compute() but the work data is allocated as a part of the context
-    // note: the drawback of this API is that you must have ensured that the context has enough memory for the work data
-    GGML_BACKEND_API enum ggml_status  ggml_graph_compute_with_ctx(struct ggml_context * ctx, struct ggml_cgraph * cgraph, int n_threads);
+    GGML_BACKEND_API GGML_NODISCARD enum ggml_status ggml_graph_compute          (struct ggml_cgraph * cgraph, struct ggml_cplan * cplan);
+    GGML_BACKEND_API GGML_NODISCARD enum ggml_status ggml_graph_compute_with_ctx (struct ggml_context * ctx, struct ggml_cgraph * cgraph, int n_threads);
 
     //
     // system info
