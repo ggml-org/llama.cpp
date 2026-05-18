@@ -164,7 +164,6 @@ if not "%GGML_SYCL_DEVICE%"=="-1" (
   echo Use %GGML_SYCL_DEVICE% as main GPU
   REM Use single GPU only.
   set "GPUS_SETTING=-mg %GGML_SYCL_DEVICE% -sm %SPLIT_MODE%"
-  set "ONEAPI_DEVICE_SELECTOR=level_zero:%GGML_SYCL_DEVICE%"
   echo ONEAPI_DEVICE_SELECTOR=%ONEAPI_DEVICE_SELECTOR%
 ) else (
   echo Use all Intel GPUs, including iGPU ^& dGPU
