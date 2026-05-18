@@ -1613,6 +1613,12 @@ int llama_context::decode(const llama_batch & batch_inp) {
     // so accept either present rather than requiring exactly one.
     GGML_ASSERT(batch_inp.token || batch_inp.embd);
 
+    if (cparams.ctx_type == LLAMA_CONTEXT_TYPE_MTP && (!batch_inp.token || !batch_inp.embd)) {
+        LLAMA_LOG_DEBUG("%s: MTP context requires token ids and pre-norm embeddings; incompatible batch token=%p, embd=%p\n",
+                __func__, (const void *) batch_inp.token, (const void *) batch_inp.embd);
+        return -1;
+    }
+
     if (!memory) {
         LLAMA_LOG_DEBUG("%s: cannot decode batches with this context (calling encode() instead)\n", __func__);
         return encode(batch_inp);

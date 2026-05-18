@@ -16,6 +16,8 @@
 #include <iomanip>
 #include <map>
 #include <cinttypes>
+#include <unordered_map>
+#include <unordered_set>
 
 #define SPEC_VOCAB_MAX_SIZE_DIFFERENCE  128
 #define SPEC_VOCAB_CHECK_START_TOKEN_ID 5
@@ -108,6 +110,107 @@ static bool common_speculative_are_compatible(
 }
 
 using common_speculative_draft_params_vec = std::vector<common_speculative_draft_params>;
+
+bool common_speculative_batch_is_token_only(const llama_batch & batch, std::string * reason) {
+    if (batch.n_tokens <= 0) {
+        if (reason) {
+            *reason = "empty batch";
+        }
+        return false;
+    }
+
+    if (batch.token == nullptr) {
+        if (reason) {
+            *reason = "no token ids";
+        }
+        return false;
+    }
+
+    if (batch.embd != nullptr) {
+        if (reason) {
+            *reason = "embedding batch";
+        }
+        return false;
+    }
+
+    if (batch.pos == nullptr) {
+        if (reason) {
+            *reason = "missing positions";
+        }
+        return false;
+    }
+
+    if (batch.seq_id == nullptr || batch.n_seq_id == nullptr) {
+        if (reason) {
+            *reason = "missing seq ids";
+        }
+        return false;
+    }
+
+    return true;
+}
+
+bool common_speculative_batch_is_mtp_process_safe(const llama_batch & batch, std::string * reason) {
+    if (!common_speculative_batch_is_token_only(batch, reason)) {
+        return false;
+    }
+
+    std::unordered_map<llama_seq_id, llama_pos> last_pos;
+    std::unordered_set<llama_seq_id> closed_seqs;
+    llama_seq_id last_seq = -1;
+    bool have_last_seq = false;
+
+    for (int32_t k = 0; k < batch.n_tokens; ++k) {
+        if (batch.n_seq_id[k] != 1 || batch.seq_id[k] == nullptr) {
+            if (reason) {
+                *reason = "token belongs to zero or multiple sequences";
+            }
+            return false;
+        }
+
+        const llama_seq_id seq = batch.seq_id[k][0];
+        const llama_pos    pos = batch.pos[k];
+
+        if (seq < 0) {
+            if (reason) {
+                *reason = "invalid sequence id";
+            }
+            return false;
+        }
+
+        if (pos < 0) {
+            if (reason) {
+                *reason = "invalid position";
+            }
+            return false;
+        }
+
+        if (have_last_seq && seq != last_seq) {
+            closed_seqs.insert(last_seq);
+        }
+
+        if (closed_seqs.find(seq) != closed_seqs.end()) {
+            if (reason) {
+                *reason = "interleaved sequence rows";
+            }
+            return false;
+        }
+
+        auto it = last_pos.find(seq);
+        if (it != last_pos.end() && pos != it->second + 1) {
+            if (reason) {
+                *reason = "non-consecutive positions for sequence";
+            }
+            return false;
+        }
+
+        last_pos[seq] = pos;
+        last_seq = seq;
+        have_last_seq = true;
+    }
+
+    return true;
+}
 
 // state of an implementation of speculative decoding
 //
@@ -471,12 +574,9 @@ struct common_speculative_state_draft_mtp : public common_speculative_impl {
     }
 
     bool process(const llama_batch & batch_in) override {
-        if (batch_in.n_tokens <= 0) {
-            return true;
-        }
-
-        // TODO: how to make it work with vision tokens?
-        if (batch_in.token == nullptr || batch_in.embd != nullptr) {
+        std::string reason;
+        if (!common_speculative_batch_is_mtp_process_safe(batch_in, &reason)) {
+            LOG_DBG("%s: MTP process skipped: %s\n", __func__, reason.c_str());
             return true;
         }
 
@@ -487,15 +587,16 @@ struct common_speculative_state_draft_mtp : public common_speculative_impl {
         std::fill(i_batch_end.begin(), i_batch_end.end(), -1);
 
         for (int k = 0; k < n_tokens; ++k) {
-            for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
-                GGML_ASSERT(batch_in.n_seq_id[k] == 1);
+            const llama_seq_id seq_id = batch_in.seq_id[k][0];
+            if (seq_id < 0 || seq_id >= (llama_seq_id) n_seq) {
+                LOG_DBG("%s: MTP process skipped: sequence id %d is outside configured range [0, %u)\n",
+                        __func__, seq_id, n_seq);
+                return true;
+            }
 
-                if (batch_in.seq_id[k][0] == seq_id) {
-                    i_batch_end[seq_id] = k;
-                    if (i_batch_beg[seq_id] < 0) {
-                        i_batch_beg[seq_id] = k;
-                    }
-                }
+            i_batch_end[seq_id] = k;
+            if (i_batch_beg[seq_id] < 0) {
+                i_batch_beg[seq_id] = k;
             }
         }
 
@@ -514,10 +615,16 @@ struct common_speculative_state_draft_mtp : public common_speculative_impl {
         // assumes that the tokens in the batch are sequential for each sequence
         // i.e. we cannot have seq_id like this: [0, 0, 0, 1, 1, 0, 1, 1]
         //                                                       ^--- this is a problem
-        // TODO:this is generally true, but would be nice to assert it
         {
             const float * h_tgt = llama_get_embeddings_pre_norm(ctx_tgt);
-            std::memcpy(batch.embd + (size_t) 1 * n_embd, h_tgt, row_bytes * (n_tokens-1));
+            if (h_tgt == nullptr) {
+                LOG_DBG("%s: MTP process skipped: target pre-norm embeddings are unavailable\n", __func__);
+                return true;
+            }
+
+            if (n_tokens > 1) {
+                std::memcpy(batch.embd + (size_t) 1 * n_embd, h_tgt, row_bytes * (n_tokens - 1));
+            }
 
             //{
             //    // string with seq_ids in the batch

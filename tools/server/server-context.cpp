@@ -291,6 +291,26 @@ struct server_slot {
         return !!spec;
     }
 
+    bool can_speculative_draft_now() const {
+        if (!can_speculate()) {
+            return false;
+        }
+
+        if (state != SLOT_STATE_GENERATING) {
+            return false;
+        }
+
+        if (!task || !task->need_sampling()) {
+            return false;
+        }
+
+        if (!has_next_token) {
+            return false;
+        }
+
+        return true;
+    }
+
     void add_token(const completion_token_output & token) {
         if (!is_processing()) {
             SLT_WRN(*this, "%s", "slot is not processing\n");
@@ -799,7 +819,7 @@ private:
             cparams.n_rs_seq = 0;
             ctx_dft.reset(llama_init_from_model(model_dft.get(), cparams));
 
-            ctx_dft_seq_rm_type = common_context_can_seq_rm(ctx_dft.get());
+            ctx_dft_seq_rm_type = spec_mtp ? COMMON_CONTEXT_SEQ_RM_TYPE_NO : common_context_can_seq_rm(ctx_dft.get());
 
             params_base.speculative.draft.ctx_tgt = ctx_tgt;
             params_base.speculative.draft.ctx_dft = ctx_dft.get();
@@ -818,7 +838,7 @@ private:
                 return false;
             }
 
-            ctx_dft_seq_rm_type = common_context_can_seq_rm(ctx_dft.get());
+            ctx_dft_seq_rm_type = COMMON_CONTEXT_SEQ_RM_TYPE_NO;
 
             params_base.speculative.draft.ctx_tgt = ctx_tgt;
             params_base.speculative.draft.ctx_dft = ctx_dft.get();
@@ -1003,6 +1023,12 @@ private:
         }
 
         return true;
+    }
+
+    bool speculative_mtp_enabled() const {
+        return spec && std::find(params_base.speculative.types.begin(),
+                                 params_base.speculative.types.end(),
+                                 COMMON_SPECULATIVE_TYPE_DRAFT_MTP) != params_base.speculative.types.end();
     }
 
     // unlike load_model(), this is only called once during initialization
@@ -2275,6 +2301,12 @@ private:
         // determine which slots are generating and drafting
         for (auto & slot : slots) {
             if (slot.state != SLOT_STATE_GENERATING) {
+                if (slot.can_speculate()) {
+                    common_speculative_get_draft_params(spec.get(), slot.id).drafting = false;
+                    if (speculative_mtp_enabled() && slot.is_processing()) {
+                        SLT_DBG(slot, "MTP draft skipped: slot is not generating (state = %d)\n", (int) slot.state);
+                    }
+                }
                 continue;
             }
 
@@ -2290,6 +2322,10 @@ private:
             if (spec) {
                 common_speculative_get_draft_params(spec.get(), slot.id).drafting = false;
 
+                if (!slot.can_speculative_draft_now()) {
+                    continue;
+                }
+
                 const bool use_ckpt_tgt = ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_FULL;
                 const bool use_ckpt_dft = ctx_dft_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_FULL;
 
@@ -2297,6 +2333,11 @@ private:
 
                 if (n_draft_max > 0) {
                     GGML_ASSERT(slot.can_speculate());
+                    if (speculative_mtp_enabled()) {
+                        SLT_DBG(slot, "MTP draft enabled: slot generating, n_draft_max = %d\n", n_draft_max);
+                    } else {
+                        SLT_DBG(slot, "speculative draft enabled: slot generating, n_draft_max = %d\n", n_draft_max);
+                    }
 
                     if (!slot.spec_draft.empty()) {
                         // we have a previous (partial) draft to reuse
@@ -2771,11 +2812,13 @@ private:
 
                         if (ctx_dft) {
                             // TODO: in the future, figure out how to infuse target embeddings to the images
-                            //       for now, we skip this for simplicity
-                            //       maybe we simply need to call `common_speculative_process()` on the mtmd batches in the `process_chunk` above?
-                            res = input_tokens.process_chunk(ctx_dft.get(), mctx, slot.prompt.n_tokens(), slot.prompt.tokens.pos_next(), slot.id, n_tokens_out);
-                            if (res != 0) {
-                                GGML_ABORT("failed to process multi-modal data on draft context\n");
+                            if (speculative_mtp_enabled()) {
+                                SLT_DBG(slot, "%s", "MTP process skipped: multimodal embedding batch\n");
+                            } else {
+                                res = input_tokens.process_chunk(ctx_dft.get(), mctx, slot.prompt.n_tokens(), slot.prompt.tokens.pos_next(), slot.id, n_tokens_out);
+                                if (res != 0) {
+                                    GGML_ABORT("failed to process multi-modal data on draft context\n");
+                                }
                             }
                         }
 

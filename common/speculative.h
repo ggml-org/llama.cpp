@@ -73,3 +73,19 @@ struct common_speculative_deleter {
 };
 
 typedef std::unique_ptr<common_speculative, common_speculative_deleter> common_speculative_ptr;
+
+// batch-safety predicates used internally by speculative implementations to
+// skip unsafe batches (embeddings, missing positions, non-consecutive rows,
+// interleaved sequence rows, ...). Exposed primarily for unit tests, but
+// callers may also use them to pre-check a batch before passing it to a
+// speculative implementation. If `reason` is non-null and the helper returns
+// false, it is set to a short human-readable reason.
+//
+// - common_speculative_batch_is_token_only: cheap check that the batch has
+//   token ids (no embeddings) and the basic pointer fields are present.
+// - common_speculative_batch_is_mtp_process_safe: stricter check used by the
+//   MTP draft path: each row must belong to exactly one sequence with a
+//   valid position, sequences must not be interleaved, and positions within
+//   a sequence must be consecutive.
+bool common_speculative_batch_is_token_only      (const llama_batch & batch, std::string * reason);
+bool common_speculative_batch_is_mtp_process_safe(const llama_batch & batch, std::string * reason);
