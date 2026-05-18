@@ -14,6 +14,7 @@
 #include <cassert>
 #include <cstdlib> // for qsort
 #include <cstdio>  // for GGML_ASSERT
+#include <iostream>
 
 #define GGML_CPU_CLANG_WORKAROUND
 #include "../../repack.h"
@@ -3776,6 +3777,7 @@ void ggml_gemm_q4_K_8x8_q8_K(int                        n,
     
     switch(svcntb() * 8){
         case 256:
+        {
             std::cout << "VL is 256" << std::endl;
             // constexpr int    q8_k_blocklen = 4;
             const svuint8_t m4b_1          = svdup_n_u8(0x0f);
@@ -4083,16 +4085,18 @@ void ggml_gemm_q4_K_8x8_q8_K(int                        n,
                 }  // for x
             }  // for y
             break;   
-    
+        }
         case 128:
+        {
             std::cout << "VL is 128" << std::endl;
             //constexpr int    q8_k_blocklen = 4;
             const svuint8_t m4b = svdup_n_u8(0x0f);
             svbool_t pg_b16_vl8 = svptrue_pat_b16(SV_VL8);
             svbool_t pg_b8_vl16 = svptrue_pat_b8(SV_VL16);
+            svbool_t pg_b32_vl4 = svptrue_pat_b32(SV_VL4);
 
             // 8 accumulators: 2 row pairs × 4 col pairs
-            svfloat32_t acc_f32[blocklen];
+            // svfloat32_t acc_f32[blocklen];
 
             for (int y = 0; y < nr / q8_k_blocklen; y++) {
                 const block_q8_Kx4 * GGML_RESTRICT q8_ptr = (const block_q8_Kx4 *) vy + (y * nb);
@@ -4100,9 +4104,9 @@ void ggml_gemm_q4_K_8x8_q8_K(int                        n,
                 for (int x = 0; x < nc / ncols_interleaved; x++) {
                     const block_q4_Kx8 * GGML_RESTRICT q4_ptr = (const block_q4_Kx8 *) vx + (x * nb);
 
-                    for (int i = 0; i < blocklen; i++) {
-                        acc_f32[i] = svdup_n_f32(0);
-                    }
+                    // for (int i = 0; i < blocklen; i++) {
+                    //     acc_f32[i] = svdup_n_f32(0);
+                    // }
 
                     for (int b = 0; b < nb; b++) {
                         // bsums pairs belongs to the same q8_k subblock
@@ -4184,27 +4188,27 @@ void ggml_gemm_q4_K_8x8_q8_K(int                        n,
                             // Q4s columns iterated in pairs (01, 23, 45, 67)
                             for (int cp = 0; cp < ncols_interleaved / 2; cp++) {
                                 
-                                //This is not allowed - change
-                                for (int i = 0; i < 4; i++) {
-                                    sb_acc[i] = svdup_n_s32(0);
-                                }
+                                // //This is not allowed - change
+                                // for (int i = 0; i < 4; i++) {
+                                //     sb_acc[i] = svdup_n_s32(0);
+                                // }
 
                                 svuint8_t q4_qs_cp_0 = svld1_u8(pg_b8_vl16, q4_ptr[b].qs + sb * QK_K + 16 * cp + 0);    // 0 .. 7 & 32..39
                                 svuint8_t q4_qs_cp_1 = svld1_u8(pg_b8_vl16, q4_ptr[b].qs + sb * QK_K + 16 * cp + 64);   // 8 ..15 & 40..47
                                 svuint8_t q4_qs_cp_2 = svld1_u8(pg_b8_vl16, q4_ptr[b].qs + sb * QK_K + 16 * cp + 128);  // 16..23 & 48..55
                                 svuint8_t q4_qs_cp_3 = svld1_u8(pg_b8_vl16, q4_ptr[b].qs + sb * QK_K + 16 * cp + 192);  // 24..31 & 56..63
-                                const int8x16_t q4_nibbles[2][4] = {
+                                const svint8_t q4_nibbles[2][4] = {
                                     {
-                                        vreinterpretq_s8_u8(svand(q4_qs_cp_0, m4b)),
-                                        vreinterpretq_s8_u8(svand(q4_qs_cp_1, m4b)),
-                                        vreinterpretq_s8_u8(svand(q4_qs_cp_2, m4b)),
-                                        vreinterpretq_s8_u8(svand(q4_qs_cp_3, m4b)),
+                                        svreinterpret_s8_u8(svand_u8_x(pg_b8_vl16, q4_qs_cp_0, m4b)),
+                                        svreinterpret_s8_u8(svand_u8_x(pg_b8_vl16, q4_qs_cp_1, m4b)),
+                                        svreinterpret_s8_u8(svand_u8_x(pg_b8_vl16, q4_qs_cp_2, m4b)),
+                                        svreinterpret_s8_u8(svand_u8_x(pg_b8_vl16, q4_qs_cp_3, m4b)),
                                     },
                                     {
-                                        vreinterpretq_s8_u8(vshrq_n_u8(q4_qs_cp_0, 4)),
-                                        vreinterpretq_s8_u8(vshrq_n_u8(q4_qs_cp_1, 4)),
-                                        vreinterpretq_s8_u8(vshrq_n_u8(q4_qs_cp_2, 4)),
-                                        vreinterpretq_s8_u8(vshrq_n_u8(q4_qs_cp_3, 4)),
+                                        svreinterpret_s8_u8(svlsr_n_u8_x(pg_b8_vl16, q4_qs_cp_0, 4)),
+                                        svreinterpret_s8_u8(svlsr_n_u8_x(pg_b8_vl16, q4_qs_cp_1, 4)),
+                                        svreinterpret_s8_u8(svlsr_n_u8_x(pg_b8_vl16, q4_qs_cp_2, 4)),
+                                        svreinterpret_s8_u8(svlsr_n_u8_x(pg_b8_vl16, q4_qs_cp_3, 4)),
                                     }
                                 };
 
@@ -4212,14 +4216,38 @@ void ggml_gemm_q4_K_8x8_q8_K(int                        n,
                                 // for each of the internal 32 qs subblock (blk)
                                 for (int rp = 0; rp < 2; rp++) {
                                     for (int blk = 0; blk < 2; blk++) {
-                                        const int8x16_t * q8  = &q8s[rp][4 * blk];
-                                        const int8x16_t * q4  = q4_nibbles[blk];
-                                        int32x4_t         acc = sb_acc[2 * rp + blk];
-                                        // mul add for each qs in the same subblock
-                                        for (int qs_offset = 0; qs_offset < 4; qs_offset++) {
-                                            acc = vmmlaq_s32(acc, q4[qs_offset], q8[qs_offset]);
+                                        const svuint8_t * q8  = &q8s[rp][4 * blk];
+                                        const svuint8_t * q4  = q4_nibbles[blk];
+                                        // int32x4_t         acc = sb_acc[2 * rp + blk];
+                                        // // mul add for each qs in the same subblock
+                                        // for (int qs_offset = 0; qs_offset < 4; qs_offset++) {
+                                        //     acc = vmmlaq_s32(acc, q4[qs_offset], q8[qs_offset]);
+                                        // }
+                                        if(rp == 0 && blk == 0){
+                                            sb_acc_0 = svmmla_s32(sb_acc_0, q4[0], q8[0]);
+                                            sb_acc_0 = svmmla_s32(sb_acc_0, q4[1], q8[1]);
+                                            sb_acc_0 = svmmla_s32(sb_acc_0, q4[2], q8[2]);
+                                            sb_acc_0 = svmmla_s32(sb_acc_0, q4[3], q8[3]);
                                         }
-                                        sb_acc[2 * rp + blk] = acc;
+                                        if(rp == 0 && blk == 1){
+                                            sb_acc_1 = svmmla_s32(sb_acc_0, q4[0], q8[0]);
+                                            sb_acc_1 = svmmla_s32(sb_acc_0, q4[1], q8[1]);
+                                            sb_acc_1 = svmmla_s32(sb_acc_0, q4[2], q8[2]);
+                                            sb_acc_1 = svmmla_s32(sb_acc_0, q4[3], q8[3]);
+                                        }
+                                        if(rp == 1 && blk == 0){
+                                            sb_acc_2 = svmmla_s32(sb_acc_0, q4[0], q8[0]);
+                                            sb_acc_2 = svmmla_s32(sb_acc_0, q4[1], q8[1]);
+                                            sb_acc_2 = svmmla_s32(sb_acc_0, q4[2], q8[2]);
+                                            sb_acc_2 = svmmla_s32(sb_acc_0, q4[3], q8[3]);
+                                        }
+                                        if(rp == 1 && blk == 1){
+                                            sb_acc_3 = svmmla_s32(sb_acc_0, q4[0], q8[0]);
+                                            sb_acc_3 = svmmla_s32(sb_acc_0, q4[1], q8[1]);
+                                            sb_acc_3 = svmmla_s32(sb_acc_0, q4[2], q8[2]);
+                                            sb_acc_3 = svmmla_s32(sb_acc_0, q4[3], q8[3]);
+                                        }
+                                        // sb_acc[2 * rp + blk] = acc;
                                     }
                                 }
 
@@ -4229,21 +4257,57 @@ void ggml_gemm_q4_K_8x8_q8_K(int                        n,
                                 const int32_t scale_01 = q4sb_scales[0][scale_offset + 1];
                                 const int32_t scale_10 = q4sb_scales[1][scale_offset];
                                 const int32_t scale_11 = q4sb_scales[1][scale_offset + 1];
-                                const int32x4_t block_scale_0 = vcombine_s32(vdup_n_s32(scale_00), vdup_n_s32(scale_01));
-                                const int32x4_t block_scale_1 = vcombine_s32(vdup_n_s32(scale_10), vdup_n_s32(scale_11));
+                                // const int32x4_t block_scale_0 = vcombine_s32(svdup_n_s32(scale_00), svdup_n_s32(scale_01));
+                                // const int32x4_t block_scale_1 = vcombine_s32(svdup_n_s32(scale_10), svdup_n_s32(scale_11));
 
-                                acc[cp]     = vmlaq_s32(acc[cp], sb_acc[0], block_scale_0);
-                                acc[cp + 4] = vmlaq_s32(acc[cp + 4], sb_acc[2], block_scale_0);
-                                acc[cp]     = vmlaq_s32(acc[cp], sb_acc[1], block_scale_1);
-                                acc[cp + 4] = vmlaq_s32(acc[cp + 4], sb_acc[3], block_scale_1);
+                                const svint32_t block_scale_0 = svsel_s32(
+                                                            svptrue_pat_b32(SV_VL2),
+                                                            svdup_n_s32(scale_00),
+                                                            svdup_n_s32(scale_01)
+                                                        );
+                                
+                                const svint32_t block_scale_1 = svsel_s32(
+                                                            svptrue_pat_b32(SV_VL2),
+                                                            svdup_n_s32(scale_10),
+                                                            svdup_n_s32(scale_11)
+                                                        );
+                                
+                                if(cp == 0)
+                                {
+                                    acc_00     = svmla_s32_x(svptrue_pat_b32(SV_VL4), acc_00, sb_acc_0, block_scale_0);
+                                    acc_44 = svmla_s32_x(svptrue_pat_b32(SV_VL4), acc_44, sb_acc_2, block_scale_0);
+                                    acc_00     = svmla_s32_x(svptrue_pat_b32(SV_VL4), acc_00, sb_acc_1, block_scale_1);
+                                    acc_44 = svmla_s32_x(svptrue_pat_b32(SV_VL4), acc_44, sb_acc_3, block_scale_1);
+                                }
+                                if(cp == 1)
+                                {
+                                    acc_11     = svmla_s32_x(svptrue_pat_b32(SV_VL4), acc_11, sb_acc_0, block_scale_0);
+                                    acc_55 = svmla_s32_x(svptrue_pat_b32(SV_VL4), acc_55, sb_acc_2, block_scale_0);
+                                    acc_11     = svmla_s32_x(svptrue_pat_b32(SV_VL4), acc_11, sb_acc_1, block_scale_1);
+                                    acc_55 = svmla_s32_x(svptrue_pat_b32(SV_VL4), acc_55, sb_acc_3, block_scale_1);
+                                }
+                                if(cp == 2)
+                                {
+                                    acc_22     = svmla_s32_x(svptrue_pat_b32(SV_VL4), acc_22, sb_acc_0, block_scale_0);
+                                    acc_66 = svmla_s32_x(svptrue_pat_b32(SV_VL4), acc_66, sb_acc_2, block_scale_0);
+                                    acc_22     = svmla_s32_x(svptrue_pat_b32(SV_VL4), acc_22, sb_acc_1, block_scale_1);
+                                    acc_66 = svmla_s32_x(svptrue_pat_b32(SV_VL4), acc_66, sb_acc_3, block_scale_1);
+                                }
+                                if(cp == 3)
+                                {
+                                    acc_33     = svmla_s32_x(svptrue_pat_b32(SV_VL4), acc_33, sb_acc_0, block_scale_0);
+                                    acc_77 = svmla_s32_x(svptrue_pat_b32(SV_VL4), acc_77, sb_acc_2, block_scale_0);
+                                    acc_33     = svmla_s32_x(svptrue_pat_b32(SV_VL4), acc_33, sb_acc_1, block_scale_1);
+                                    acc_77 = svmla_s32_x(svptrue_pat_b32(SV_VL4), acc_77, sb_acc_3, block_scale_1);
+                                }
                             }
 
                             // Multiply Acc bsum + mins
                             for (int q8_row = 0; q8_row < 4; q8_row++) {
                                 // Each pair of subblocks share the same bsums
                                 // Load scalar bsum → broadcast to a vector (vdupq_n_s16(s)).
-                                int16x4_t bsums_vec_lo = vdup_n_s16(bsums_arr[sb][q8_row * 2]);
-                                int16x4_t bsums_vec_hi = vdup_n_s16(bsums_arr[sb][q8_row * 2 + 1]);
+                                svint16_t bsums_vec_lo = svdup_n_s16(bsums_arr[sb][q8_row * 2]);
+                                svint16_t bsums_vec_hi = svdup_n_s16(bsums_arr[sb][q8_row * 2 + 1]);
 
                                 bias_acc[2 * q8_row] =
                                     vmlal_s16(bias_acc[2 * q8_row], bsums_vec_lo, vget_low_s16(q4sb_mins[0]));
@@ -4300,7 +4364,7 @@ void ggml_gemm_q4_K_8x8_q8_K(int                        n,
                 }  // for x
             }  // for y
             break;
-        
+        }
         default:
             std::cout << "Invalid VL. VL is neither 128 nor 256" << std::endl;      
     }
