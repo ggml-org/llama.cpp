@@ -2828,6 +2828,21 @@ static bool ggml_hexagon_supported_solve_tri(const struct ggml_hexagon_session *
     return true;
 }
 
+static bool ggml_hexagon_supported_tri(const struct ggml_hexagon_session * sess, const struct ggml_tensor * op) {
+
+    const struct ggml_tensor * src0 = op->src[0];
+    const struct ggml_tensor * dst  = op;
+
+    if (src0->type != GGML_TYPE_F32) { return false; }
+    if (dst->type  != GGML_TYPE_F32) { return false; }
+    if (!ggml_are_same_shape(src0, dst)) { return false; }
+    if (!ggml_is_contiguous(src0) || !ggml_is_contiguous(dst)) { return false; }
+
+    return true;
+
+    GGML_UNUSED(sess);
+}
+
 static const char * ggml_backend_hexagon_name(ggml_backend_t backend) {
     auto sess = static_cast<ggml_hexagon_session *>(backend->context);
     return sess->c_name();
@@ -2869,6 +2884,7 @@ static htp_op_code op_remap_to_htp(const ggml_tensor * t) {
         case GGML_OP_FILL:            return HTP_OP_FILL;
         case GGML_OP_DIAG:            return HTP_OP_DIAG;
         case GGML_OP_SOLVE_TRI:       return HTP_OP_SOLVE_TRI;
+        case GGML_OP_TRI:             return HTP_OP_TRI;
         case GGML_OP_PAD:             return HTP_OP_PAD;
 
         case GGML_OP_UNARY:
@@ -3428,6 +3444,10 @@ static bool ggml_backend_hexagon_device_supports_op(ggml_backend_dev_t dev, cons
 
         case GGML_OP_SOLVE_TRI:
             supp = ggml_hexagon_supported_solve_tri(sess, op);
+            break;
+
+        case GGML_OP_TRI:
+            supp = ggml_hexagon_supported_tri(sess, op);
             break;
 
         case GGML_OP_PAD:
