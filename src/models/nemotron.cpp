@@ -24,8 +24,11 @@ void llama_model_nemotron::load_arch_tensors(llama_model_loader &) {
         layer.attn_norm   = create_tensor(tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd}, 0);
         layer.attn_norm_b = create_tensor(tn(LLM_TENSOR_ATTN_NORM, "bias", i), {n_embd}, 0);
 
-        create_tensor_qkv(layer, i, n_embd, n_embd, n_embd_gqa, n_embd_gqa, 0);
-        layer.wo = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_embd, n_embd}, 0);
+        // n_embd_head_k * n_head equals n_embd for standard Nemotron (32 heads),
+        // but differs for models with non-standard GQA (e.g. 48 Q heads, head_dim=128).
+        const int64_t n_embd_q = n_embd_head_k * n_head;
+        create_tensor_qkv(layer, i, n_embd, n_embd_q, n_embd_gqa, n_embd_gqa, 0);
+        layer.wo = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_embd_q, n_embd}, 0);
 
         // optional bias tensors
         layer.wo_b = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "bias", i), {n_embd}, TENSOR_NOT_REQUIRED);
