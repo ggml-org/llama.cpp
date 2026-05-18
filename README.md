@@ -119,7 +119,7 @@ For GGUFs that include native MTP tensors, use the speculative runtime shape bel
   -m /path/to/model.gguf \
   -ngl 99 -fa on -np 1 -c 2048 -b 32 -ub 32 \
   --ctx-checkpoints 0 --checkpoint-every-n-tokens -1 \
-  --spec-type mtp --spec-draft-n-max 3 --spec-draft-ngl 99 \
+  --spec-type draft-mtp --spec-draft-n-max 3 --spec-draft-ngl 99 \
   -ctk q4_0 -ctv tq3_0 \
   --cache-ram 0 \
   --no-warmup --jinja \
@@ -130,7 +130,7 @@ For GGUFs that include native MTP tensors, use the speculative runtime shape bel
 Notes:
 - keep the same `-ctk q4_0 -ctv tq3_0` KV-cache shape used elsewhere in this fork
 - use `--ctx-checkpoints 0 --checkpoint-every-n-tokens -1` when the speculative path needs to avoid checkpoint pressure
-- `--spec-type mtp` is only for GGUFs that were built with MTP support
+- `--spec-type draft-mtp` is only for GGUFs that were built with MTP support
 
 ## Benchmark
 
