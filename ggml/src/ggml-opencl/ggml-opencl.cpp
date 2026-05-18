@@ -378,6 +378,8 @@ struct ggml_backend_opencl_device_context {
 
     GPU_FAMILY     gpu_family = GPU_FAMILY::UNKNOWN;
     ADRENO_GPU_GEN adreno_gen = ADRENO_GPU_GEN::ADRENO_UNKNOWN;
+
+    size_t global_mem_size = 0;
 };
 
 // backend context
@@ -3548,6 +3550,7 @@ static bool ggml_opencl_is_device_supported(ggml_backend_dev_t dev) {
         return false;
     }
 
+    clGetDeviceInfo(dev_ctx->device, CL_DEVICE_GLOBAL_MEM_SIZE, sizeof(size_t), &dev_ctx->global_mem_size, NULL);
     return true;
 }
 
@@ -3628,7 +3631,7 @@ static ggml_backend_opencl_context * ggml_cl_init(ggml_backend_dev_t dev) {
     backend_ctx->alignment = base_align_in_bits / 8u;
     GGML_LOG_INFO("ggml_opencl: mem base addr align: %u\n", backend_ctx->alignment);
 
-    clGetDeviceInfo(device, CL_DEVICE_GLOBAL_MEM_SIZE, sizeof(size_t), &backend_ctx->global_mem_size, NULL);
+    backend_ctx->global_mem_size = dev_ctx->global_mem_size;
     GGML_LOG_INFO("ggml_opencl: global mem size: %zu MB\n", backend_ctx->global_mem_size/1024/1024);
 
     clGetDeviceInfo(device, CL_DEVICE_MAX_MEM_ALLOC_SIZE, sizeof(size_t), &backend_ctx->max_alloc_size, NULL);
@@ -7223,15 +7226,12 @@ static const char * ggml_backend_opencl_device_get_description(ggml_backend_dev_
 static void ggml_backend_opencl_device_get_memory(ggml_backend_dev_t dev, size_t * free, size_t * total) {
     ggml_backend_opencl_device_context * dev_ctx = (ggml_backend_opencl_device_context *) dev->context;
 
-    size_t global_mem_size = 0;
-    clGetDeviceInfo(dev_ctx->device, CL_DEVICE_GLOBAL_MEM_SIZE, sizeof(size_t), &global_mem_size, NULL);
-
     static const size_t opencl_extra_margin = 1024ull*1024ull*1024ull;
 
     // OpenCL does not provide reliable currently-free device memory.
     // Use total/global memory as a best-effort upper bound.
     // Improved safety: Reduce by a 1GiB extra margin for common --fit
-    *total = global_mem_size;
+    *total = dev_ctx->global_mem_size;
     *free  = *total > opencl_extra_margin ? *total - opencl_extra_margin : 0;
 }
 
