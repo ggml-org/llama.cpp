@@ -2721,25 +2721,9 @@ private:
 
                     SLT_TRC(slot, "cached n_tokens = %d, memory_seq_rm [%d, end)\n", slot.prompt.n_tokens(), p0);
 
-                    // llama_memory_seq_rm can refuse a partial eviction on state-space and hybrid
-                    // backends (Mamba, RWKV, Jamba) when the rollback exceeds the snapshot window.
-                    // on refusal we full clear the seq and let update_slots reprefill from zero
-                    auto * mem_tgt = llama_get_memory(ctx_tgt);
-                    bool partial_ok_tgt = llama_memory_seq_rm(mem_tgt, slot.id, p0, -1);
-                    bool partial_ok_dft = true;
+                    common_context_seq_rm(ctx_tgt, slot.id, p0, -1);
                     if (ctx_dft) {
-                        partial_ok_dft = llama_memory_seq_rm(llama_get_memory(ctx_dft.get()), slot.id, p0, -1);
-                    }
-                    if (!partial_ok_tgt || !partial_ok_dft) {
-                        SLT_WRN(slot, "partial KV eviction refused at p0=%d (tgt=%d, dft=%d), full clear of seq %d, reprefilling from zero\n",
-                                p0, partial_ok_tgt ? 1 : 0, partial_ok_dft ? 1 : 0, slot.id);
-                        llama_memory_seq_rm(mem_tgt, slot.id, -1, -1);
-                        if (ctx_dft) {
-                            llama_memory_seq_rm(llama_get_memory(ctx_dft.get()), slot.id, -1, -1);
-                        }
-                        slot.prompt.tokens.keep_first(0);
-                        slot.n_prompt_tokens_cache = 0;
-                        slot.n_prompt_tokens_processed = 0;
+                        common_context_seq_rm(ctx_dft.get(), slot.id, p0, -1);
                     }
 
                     // If using an alora, there may be uncached tokens that come
