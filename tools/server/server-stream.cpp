@@ -1,6 +1,7 @@
 #include "server-stream.h"
 #include "server-common.h"
 #include "server-http.h"
+#include "server-queue.h"
 
 #include <chrono>
 #include <memory>
@@ -404,5 +405,55 @@ server_http_context::handler_t make_stream_delete_handler() {
         res->status = 204;
         res->content_type = "application/json";
         return res;
+    };
+}
+
+void stream_session_attach_hooks(server_http_res & res, server_response_reader & rd, const std::map<std::string, std::string> & headers) {
+    // case insensitive scan for x-conversation-id. headers preserve the wire casing, an ASCII
+    // tolower comparison is enough here, no locale machinery needed
+    static constexpr char   target[]   = "x-conversation-id";
+    static constexpr size_t target_len = sizeof(target) - 1;
+    std::string conversation_id;
+    for (const auto & [hk, hv] : headers) {
+        if (hk.size() != target_len) continue;
+        bool match = true;
+        for (size_t i = 0; i < target_len; ++i) {
+            char c = hk[i];
+            if (c >= 'A' && c <= 'Z') c = char(c + 32);
+            if (c != target[i]) { match = false; break; }
+        }
+        if (match) {
+            conversation_id = hv;
+            break;
+        }
+    }
+    if (conversation_id.empty()) {
+        return;
+    }
+    auto session = g_stream_sessions.create_or_replace(conversation_id);
+    session->set_stop_producer([rd_ptr = &rd] {
+        rd_ptr->stop();
+    });
+    res.tee = [session](const char * d, size_t n) {
+        session->append(d, n);
+    };
+    res.on_stream_end = [session] {
+        // detach the stop hook before the response goes out of scope, no dangling captured ptr
+        session->set_stop_producer(nullptr);
+        session->finalize();
+    };
+}
+
+std::function<bool()> stream_aware_should_stop(server_http_res * res, std::function<bool()> fallback) {
+    // capture fallback by value, the closure stays valid even after the original local goes
+    // out of scope, the std::function copy keeps the underlying target alive
+    return [res, fallback = std::move(fallback)]() -> bool {
+        if (res->tee) {
+            // a tee is attached, the session must outlive the http socket. ignore the peer
+            // disconnect signal, only an explicit DELETE through the session stop_producer
+            // hook is allowed to abort the producer
+            return false;
+        }
+        return fallback();
     };
 }

@@ -134,3 +134,19 @@ extern stream_session_manager g_stream_sessions;
 server_http_context::handler_t make_stream_get_handler();
 server_http_context::handler_t make_streams_list_handler();
 server_http_context::handler_t make_stream_delete_handler();
+
+// attach a resumable session to an outgoing streaming response. inspects the request headers
+// for X-Conversation-Id, and when present creates or replaces a session on the global manager,
+// then wires three closures on the response: tee mirrors each SSE chunk into the ring buffer,
+// on_stream_end finalizes the session, and the session's stop_producer hook calls rd.stop()
+// so the explicit DELETE /v1/stream/<conv_id> route can abort the underlying reader. no op
+// when the header is absent. server-context just calls this and never touches the manager
+struct server_response_reader; // forward declare to avoid pulling server-queue.h into the header
+void stream_session_attach_hooks(server_http_res & res, server_response_reader & rd, const std::map<std::string, std::string> & headers);
+
+// build a should_stop closure that suppresses the peer disconnect signal when a tee is
+// attached to the response. used by handler lambdas that pump a server_response_reader so
+// the producer keeps running past F5, only an explicit DELETE through the stop_producer
+// hook is allowed to abort it. without a tee the returned closure is bit identical to the
+// fallback, the legacy non resumable flow is unchanged
+std::function<bool()> stream_aware_should_stop(server_http_res * res, std::function<bool()> fallback);

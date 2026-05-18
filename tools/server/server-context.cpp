@@ -4135,28 +4135,6 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
 
     bool stream = json_value(data, "stream", false);
 
-    // resumable streaming opt in, a non empty X-Conversation-Id on a streaming request enables it.
-    // the conv id is the session identity end to end, client localStorage and server map share
-    // the same key. non stream and non opted in calls keep the standard flow unchanged
-    std::string conversation_id;
-    if (stream) {
-        static constexpr char   target[]   = "x-conversation-id";
-        static constexpr size_t target_len = sizeof(target) - 1;
-        for (const auto & [hk, hv] : req.headers) {
-            if (hk.size() != target_len) continue;
-            bool match = true;
-            for (size_t i = 0; i < target_len; ++i) {
-                char c = hk[i];
-                if (c >= 'A' && c <= 'Z') c = char(c + 32);
-                if (c != target[i]) { match = false; break; }
-            }
-            if (match) {
-                conversation_id = hv;
-                break;
-            }
-        }
-    }
-
     if (!stream) {
         // non-stream, wait for the results
         auto all_results = rd.wait_for_all(req.should_stop);
@@ -4233,16 +4211,9 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
                 }
             };
 
-            // when a tee is attached the session must outlive the http socket. ignore the
-            // connection closed signal in that case, only an explicit DELETE through the
-            // session stop_producer hook (which calls rd.stop()) is allowed to abort the
-            // producer. without a tee the legacy flow stays bit identical
-            auto effective_should_stop = [res_this, &req]() -> bool {
-                if (res_this->tee) {
-                    return false;
-                }
-                return req.should_stop();
-            };
+            // delegate to server-stream so the tee-aware rule lives there, not here. without a
+            // tee attached this is bit identical to req.should_stop, the legacy flow is unchanged
+            auto effective_should_stop = stream_aware_should_stop(res_this, req.should_stop);
 
             try {
                 if (effective_should_stop()) {
@@ -4336,25 +4307,11 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
         };
     }
 
-    // attach the resumable session, tee mirrors each SSE chunk into the ring buffer, on_stream_end
-    // finalizes it on either drain path (wire or detached), and the stop_producer hook lets the
-    // DELETE /v1/stream/<conv_id> route abort the underlying reader from anywhere. the http layer
-    // owns the keep alive after a client disconnect via its detached drain, server-context only
-    // declares the wiring here and never spawns a thread itself
-    if (!conversation_id.empty()) {
-        auto session = g_stream_sessions.create_or_replace(conversation_id);
-        session->set_stop_producer([res_this = res.get()] {
-            res_this->rd.stop();
-        });
-        res->tee = [session](const char * d, size_t n) {
-            session->append(d, n);
-        };
-        res->on_stream_end = [session] {
-            // detach the stop hook before the response goes out of scope, no dangling captured ptr
-            session->set_stop_producer(nullptr);
-            session->finalize();
-        };
-    }
+    // delegate the X-Conversation-Id sniff and the three hook wirings (tee, on_stream_end,
+    // stop_producer) to server-stream. when the header is absent this is a no op, when set
+    // the session is created or replaced and the response carries the tee that mirrors every
+    // SSE chunk into the ring buffer, plus the cancel hook for DELETE /v1/stream/<conv_id>
+    stream_session_attach_hooks(*res, res->rd, req.headers);
 
     return res;
 }
