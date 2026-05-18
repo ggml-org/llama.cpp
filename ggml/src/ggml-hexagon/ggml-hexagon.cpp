@@ -2869,33 +2869,7 @@ static htp_op_code op_remap_to_htp(const ggml_tensor * t) {
         case GGML_OP_FILL:            return HTP_OP_FILL;
         case GGML_OP_DIAG:            return HTP_OP_DIAG;
         case GGML_OP_SOLVE_TRI:       return HTP_OP_SOLVE_TRI;
-        case GGML_OP_FLASH_ATTN_EXT: return HTP_OP_FLASH_ATTN_EXT;
-        case GGML_OP_MUL_MAT:        return HTP_OP_MUL_MAT;
-        case GGML_OP_MUL_MAT_ID:     return HTP_OP_MUL_MAT_ID;
-        case GGML_OP_MUL:            return HTP_OP_MUL;
-        case GGML_OP_ADD:            return HTP_OP_ADD;
-        case GGML_OP_ADD_ID:         return HTP_OP_ADD_ID;
-        case GGML_OP_SUB:            return HTP_OP_SUB;
-        case GGML_OP_DIV:            return HTP_OP_DIV;
-        case GGML_OP_CPY:            return HTP_OP_CPY;
-        case GGML_OP_CONT:           return HTP_OP_CPY;
-        case GGML_OP_GET_ROWS:       return HTP_OP_GET_ROWS;
-        case GGML_OP_SET_ROWS:       return HTP_OP_SET_ROWS;
-        case GGML_OP_SUM_ROWS:       return HTP_OP_SUM_ROWS;
-        case GGML_OP_ARGSORT:        return HTP_OP_ARGSORT;
-        case GGML_OP_RMS_NORM:       return HTP_OP_RMS_NORM;
-        case GGML_OP_SCALE:          return HTP_OP_SCALE;
-        case GGML_OP_SQR:            return HTP_OP_SQR;
-        case GGML_OP_SQRT:           return HTP_OP_SQRT;
-        case GGML_OP_SOFT_MAX:       return HTP_OP_SOFTMAX;
-        case GGML_OP_SSM_CONV:       return HTP_OP_SSM_CONV;
-        case GGML_OP_ROPE:           return HTP_OP_ROPE;
-        case GGML_OP_REPEAT:         return HTP_OP_REPEAT;
-        case GGML_OP_CUMSUM:         return HTP_OP_CUMSUM;
-        case GGML_OP_FILL:           return HTP_OP_FILL;
-        case GGML_OP_DIAG:           return HTP_OP_DIAG;
-        case GGML_OP_SOLVE_TRI:      return HTP_OP_SOLVE_TRI;
-        case GGML_OP_PAD:            return HTP_OP_PAD;
+        case GGML_OP_PAD:             return HTP_OP_PAD;
 
         case GGML_OP_UNARY:
             switch (ggml_get_unary_op(t)) {
