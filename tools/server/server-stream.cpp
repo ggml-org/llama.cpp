@@ -431,14 +431,22 @@ void stream_session_attach_hooks(server_http_res & res, server_response_reader &
         return;
     }
     auto session = g_stream_sessions.create_or_replace(conversation_id);
-    session->set_stop_producer([rd_ptr = &rd] {
-        rd_ptr->stop();
+    // stop_producer may outlive the response (eviction by a later POST on the same conv_id,
+    // late DELETE). guard with a shared alive flag, flipped by on_stream_end before rd dies
+    auto alive = std::make_shared<std::atomic<bool>>(true);
+    auto * rd_ptr = &rd;
+    session->set_stop_producer([alive, rd_ptr] {
+        if (alive->load(std::memory_order_acquire)) {
+            rd_ptr->stop();
+        }
     });
     res.tee = [session](const char * d, size_t n) {
         session->append(d, n);
     };
-    res.on_stream_end = [session] {
-        // detach the stop hook before the response goes out of scope, no dangling captured ptr
+    res.on_stream_end = [session, alive] {
+        // flip alive first so any concurrent cancel (eg. from a create_or_replace racing with
+        // our natural end) skips the now invalid rd. then detach the stop hook and finalize
+        alive->store(false, std::memory_order_release);
         session->set_stop_producer(nullptr);
         session->finalize();
     };
