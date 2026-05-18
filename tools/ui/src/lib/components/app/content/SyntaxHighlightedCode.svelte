@@ -80,12 +80,6 @@
 </div>
 
 <style>
-	.code-preview-wrapper {
-		font-family:
-			ui-monospace, SFMono-Regular, 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas,
-			'Liberation Mono', Menlo, monospace;
-	}
-
 	.code-preview-wrapper pre {
 		background: transparent;
 	}
