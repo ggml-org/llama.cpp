@@ -1,5 +1,5 @@
 #!/usr/bin/env pwsh
-
+# Basedir on device
 $basedir=".\pkg-snapdragon"
 $cli_opts=$args
 $model="Llama-3.2-3B-Instruct-Q4_0.gguf"
@@ -53,7 +53,7 @@ if (-not (Test-Path $libPath)) {
 $env:ADSP_LIBRARY_PATH="$basedir\lib"
 
 & "$binary" `
-    --mmap 0 -m $modelPath `
+    --mmap 0 -m "$modelPath" `
     --poll 1000 -t 6 --cpu-mask 0xfc --cpu-strict 1 `
     --batch-size 128 -ngl 99 --device $device $cli_opts
 
