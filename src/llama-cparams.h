@@ -30,6 +30,11 @@ struct llama_cparams {
     bool embeddings;
     bool embeddings_pre_norm;        // also extract the hidden state before the final output norm
     bool embeddings_pre_norm_masked; // extract for only rows where batch.logits != 0
+
+    // MTP draft-step index, used by archs with num_nextn_predict_layers > 1 to
+    // round-robin across MTP blocks (matches vllm's spec_step_idx). The graph
+    // builder selects `il = n_main + (mtp_step % nextn_predict_layers)`.
+    uint32_t mtp_step;
     bool causal_attn;
     bool offload_kqv;
     bool flash_attn;

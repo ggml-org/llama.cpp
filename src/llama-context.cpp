@@ -67,6 +67,7 @@ llama_context::llama_context(
     cparams.embeddings                  = params.embeddings;
     cparams.embeddings_pre_norm         = false;
     cparams.embeddings_pre_norm_masked  = false;
+    cparams.mtp_step         = 0;
     cparams.offload_kqv      = params.offload_kqv;
     cparams.no_perf          = params.no_perf;
     cparams.pooling_type     = params.pooling_type;
@@ -1103,6 +1104,10 @@ void llama_context::set_embeddings_pre_norm(bool value, bool masked) {
 
     cparams.embeddings_pre_norm        = value;
     cparams.embeddings_pre_norm_masked = masked;
+}
+
+void llama_context::set_mtp_step(uint32_t step) {
+    cparams.mtp_step = step;
 }
 
 void llama_context::set_causal_attn(bool value) {
@@ -3598,6 +3603,10 @@ float * llama_get_embeddings_pre_norm_ith(llama_context * ctx, int32_t i) {
     ctx->synchronize();
 
     return ctx->get_embeddings_pre_norm_ith(i);
+}
+
+void llama_set_mtp_step(llama_context * ctx, uint32_t step) {
+    ctx->set_mtp_step(step);
 }
 
 bool llama_set_sampler(llama_context * ctx, llama_seq_id seq_id, llama_sampler * smpl) {

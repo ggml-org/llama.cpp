@@ -104,3 +104,13 @@ LLAMA_API float * llama_get_embeddings_pre_norm    (struct llama_context * ctx);
 
 // LLAMA_API float * llama_get_embeddings_ith(struct llama_context * ctx, int32_t i);
 LLAMA_API float * llama_get_embeddings_pre_norm_ith(struct llama_context * ctx, int32_t i);
+
+//
+// MTP draft-step index (round-robin selector across MTP blocks)
+//
+
+// Set the MTP draft-step index for the next llama_decode call. Used by archs
+// with num_nextn_predict_layers > 1 to round-robin across their MTP blocks
+// (matches vllm's spec_step_idx). Pass step = 0 for the first draft token,
+// step = 1 for the second, etc. The graph builder reads cparams.mtp_step.
+LLAMA_API void llama_set_mtp_step(struct llama_context * ctx, uint32_t step);
