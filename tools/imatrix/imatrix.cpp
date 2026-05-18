@@ -1061,10 +1061,12 @@ static bool compute_imatrix(llama_context * ctx, llama_context * ctx_mtp, const 
                 const size_t row_bytes = (size_t) n_embd * sizeof(float);
                 const float * h_tgt = llama_get_embeddings_pre_norm(ctx);
 
-                common_batch_clear(batch_mtp);
-                batch_mtp.n_tokens = batch_size;
+                const int mtp_n_tokens = n_seq_batch * batch_size;
 
-                for (int k = 0; k < batch_size; ++k) {
+                common_batch_clear(batch_mtp);
+                batch_mtp.n_tokens = mtp_n_tokens;
+
+                for (int k = 0; k < mtp_n_tokens; ++k) {
                     batch_mtp.token[k]    = batch.token[k];
                     batch_mtp.pos[k]      = batch.pos[k];
                     batch_mtp.n_seq_id[k] = batch.n_seq_id[k];
