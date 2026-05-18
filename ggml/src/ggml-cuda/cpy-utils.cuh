@@ -255,6 +255,86 @@ static __device__ void quantize_f32_tq3_0_block(const float * __restrict__ x, bl
     }
 }
 
+static __device__ void quantize_f32_turbo3_0_block(const float * __restrict__ x, block_turbo3_0 * __restrict__ y) {
+    float sum_sq = 0.0f;
+    for (int i = 0; i < QK_TURBO3; ++i) {
+        sum_sq += x[i] * x[i];
+    }
+    float norm = sqrtf(sum_sq);
+    if (norm < 1e-10f) {
+        norm = 1.0f;
+    }
+    y->norm = __float2half(norm);
+
+    const float inv = 1.0f / norm;
+    for (int i = 0; i < QK_TURBO3 / 4; ++i) {
+        y->qs[i] = 0;
+    }
+    for (int i = 0; i < QK_TURBO3 / 8; ++i) {
+        y->signs[i] = 0;
+    }
+
+    for (int i = 0; i < QK_TURBO3; ++i) {
+        const float v = x[i] * inv;
+        uint8_t low2 = 0;
+        if (v > -0.086728f) low2 = 1;
+        if (v >  0.000000f) low2 = 2;
+        if (v >  0.086728f) low2 = 3;
+        y->qs[i / 4] |= (low2 & 0x3) << ((i % 4) * 2);
+        if (v >= 0.0f) {
+            y->signs[i / 8] |= (1u << (i % 8));
+        }
+    }
+}
+
+static __device__ void quantize_f32_turbo4_0_block(const float * __restrict__ x, block_turbo4_0 * __restrict__ y) {
+    float norm_sq = 0.0f;
+    float abs_sum = 0.0f;
+    for (int i = 0; i < QK_TURBO4; ++i) {
+        const float v = x[i];
+        norm_sq += v * v;
+        abs_sum += fabsf(v);
+    }
+    float norm = sqrtf(norm_sq);
+    if (norm < 1e-10f) {
+        norm = 1.0f;
+    }
+    y->norm = __float2half(norm);
+    y->rnorm = __float2half(abs_sum / (float) QK_TURBO4);
+
+    const float inv = 1.0f / norm;
+    for (int i = 0; i < (int) sizeof(y->qs); ++i) {
+        y->qs[i] = 0;
+    }
+    for (int i = 0; i < (int) sizeof(y->signs); ++i) {
+        y->signs[i] = 0;
+    }
+
+    for (int i = 0; i < QK_TURBO4; ++i) {
+        const float v = x[i] * inv;
+        uint8_t idx = 0;
+        if (v > -0.154259f) idx = 1;
+        if (v > -0.091775f) idx = 2;
+        if (v > -0.043589f) idx = 3;
+        if (v >  0.000000f) idx = 4;
+        if (v >  0.043589f) idx = 5;
+        if (v >  0.091775f) idx = 6;
+        if (v >  0.154259f) idx = 7;
+
+        const int bit_offset = i * 3;
+        const int byte_idx = bit_offset / 8;
+        const int bit_pos = bit_offset % 8;
+        y->qs[byte_idx] |= (idx & 0x7) << bit_pos;
+        if (bit_pos > 5 && byte_idx + 1 < (int) sizeof(y->qs)) {
+            y->qs[byte_idx + 1] |= (idx & 0x7) >> (8 - bit_pos);
+        }
+
+        if (v >= 0.0f) {
+            y->signs[i / 8] |= (1u << (i % 8));
+        }
+    }
+}
+
 template<typename src_t, typename dst_t>
 static __device__ void cpy_1_scalar(const char * cxi, char * cdsti) {
     *(dst_t *) cdsti = ggml_cuda_cast<dst_t>(*(const src_t *) cxi);
