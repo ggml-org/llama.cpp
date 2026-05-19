@@ -1,61 +1,121 @@
 # llama.cpp + TurboQuant+
 
-> Fork of [ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp) carrying TurboQuant KV-cache and weight quantization support across CUDA / HIP-ROCm / Metal / Vulkan backends.
->
-> The codec itself (algorithm, calibration, papers) lives at **[TheTom/turboquant_plus](https://github.com/TheTom/turboquant_plus)**. This repo is the llama.cpp integration of that codec.
->
-> **Status**: work-in-progress. Not merged upstream. Default branch is `feature/turboquant-kv-cache`; ~300 commits ahead of `master`.
+> Production-grade KV-cache and weight quantization for llama.cpp, with cross-backend kernel support for Apple Silicon, NVIDIA CUDA, AMD ROCm, and Vulkan.
+
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://opensource.org/licenses/MIT)
+[![Status: WIP](https://img.shields.io/badge/status-work--in--progress-yellow.svg)](https://github.com/TheTom/llama-cpp-turboquant)
+[![Codec papers](https://img.shields.io/badge/codec-turboquant__plus-orange.svg)](https://github.com/TheTom/turboquant_plus)
+
+A fork of [ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp) integrating the **TurboQuant+** codec stack — Walsh-Hadamard rotated polar quantization, attention-gated sparse dequantization, and layer-aware V compression policies. The codec design, calibration, and validation papers live at [TheTom/turboquant_plus](https://github.com/TheTom/turboquant_plus); this repository is the llama.cpp runtime integration.
+
+This fork is additive: every existing llama.cpp quantization, model, and backend continues to work unchanged. New types are opt-in via the standard `--cache-type-k` / `--cache-type-v` and `llama-quantize` interfaces.
+
+## Production deployments
+
+This fork's TurboQuant integration is used in:
+
+- [**LocalAI**](https://localai.io) — drop-in OpenAI-compatible local inference server
+- **AtomicChat** — on-device chat application
+- and other downstream projects
+
+## Status
+
+| | |
+|---|---|
+| Default branch | `feature/turboquant-kv-cache` |
+| Commits ahead of upstream | ~300 |
+| Upstream tracking | continuous sync from `ggml-org/llama.cpp` master |
+| Upstream PR status | not yet upstreamed; running as a long-lived feature branch |
 
 ---
 
-## What this fork adds (vs upstream ggml-org/llama.cpp)
+## What this fork adds
 
-### New quantization types
+### Quantization types
 
-- **TQ3_1S** / **TQ4_1S** weight quantization formats — added to `GGMLQuantizationType` + `LlamaFileType` enums, with V2.1 fused Metal kernels. Smaller VRAM than `q8_0` at the 3.5-bit / 4.5-bit tier. ([weight-compression-tq4](https://github.com/TheTom/turboquant_plus/blob/main/docs/papers/weight-compression-tq4.md))
-- **turbo2** / **turbo3** / **turbo4** KV-cache formats — Walsh-Hadamard rotation + polar codebook quantization. Block size 128 (originally 32, increased after the block-size experiment). turbo4 went through significant rehabilitation from a broken state to beating `q4_0`. ([attn-rotation-and-ppl-artifact](https://github.com/TheTom/turboquant_plus/blob/main/docs/papers/attn-rotation-and-ppl-artifact.md), [block-size-experiment](https://github.com/TheTom/turboquant_plus/blob/main/docs/papers/block-size-experiment.md), [turbo4-resurrection](https://github.com/TheTom/turboquant_plus/blob/main/docs/papers/turbo4-resurrection.md), [why-mse-fails-for-kv-quantization](https://github.com/TheTom/turboquant_plus/blob/main/docs/papers/why-mse-fails-for-kv-quantization.md))
+| Type | Domain | Approx. bits | Notes | Paper |
+|---|---|---|---|---|
+| `TQ3_1S` | weights | ~3.5 | smaller VRAM than `q8_0` | [weight-compression-tq4](https://github.com/TheTom/turboquant_plus/blob/main/docs/papers/weight-compression-tq4.md) |
+| `TQ4_1S` | weights | ~4.5 | V2.1 fused Metal kernels; CUDA `dp4a` 3.5× faster (240 t/s vs 68 baseline) | [weight-compression-tq4](https://github.com/TheTom/turboquant_plus/blob/main/docs/papers/weight-compression-tq4.md) |
+| `turbo2` | KV cache | ~2.0 | aggressive; pair with Boundary V | [block-size-experiment](https://github.com/TheTom/turboquant_plus/blob/main/docs/papers/block-size-experiment.md) |
+| `turbo3` | KV cache | ~3.5 | ~4.6× compression at <1.5% PPL loss | [attn-rotation-and-ppl-artifact](https://github.com/TheTom/turboquant_plus/blob/main/docs/papers/attn-rotation-and-ppl-artifact.md) |
+| `turbo4` | KV cache | ~4.5 | rehabilitated to beat `q4_0` on fidelity | [turbo4-resurrection](https://github.com/TheTom/turboquant_plus/blob/main/docs/papers/turbo4-resurrection.md) |
+
+All turbo formats use Walsh-Hadamard rotation followed by polar codebook quantization on 128-element blocks. Why this works where MSE-driven codecs fail: [why-mse-fails-for-kv-quantization](https://github.com/TheTom/turboquant_plus/blob/main/docs/papers/why-mse-fails-for-kv-quantization.md).
 
 ### Compression policies
 
-- **Auto-asymmetric K/V compression** — recognizes that V tolerates aggressive compression while K does not; defaults pick complementary K/V codecs rather than symmetric. ([asymmetric-kv-compression](https://github.com/TheTom/turboquant_plus/blob/main/docs/papers/asymmetric-kv-compression.md))
-- **Boundary V (experimental, layer-aware)** — auto-enabled for `turbo2-V`. Protects layers where aggressive V quantization breaks quality, leaves the rest aggressively compressed. ([layer-aware-v-compression](https://github.com/TheTom/turboquant_plus/blob/main/docs/papers/layer-aware-v-compression.md), [moe-v-compression-frontier](https://github.com/TheTom/turboquant_plus/blob/main/docs/papers/moe-v-compression-frontier.md))
-- **Sparse V dequantization** — skip V dequant for positions whose softmax attention weight falls below threshold. Enabled on all Metal targets. ([sparse-v-dequant](https://github.com/TheTom/turboquant_plus/blob/main/docs/papers/sparse-v-dequant.md))
+- **Auto-asymmetric K/V compression** — recognizes that V tolerates aggressive compression while K does not; default policy picks complementary codecs rather than symmetric. [asymmetric-kv-compression](https://github.com/TheTom/turboquant_plus/blob/main/docs/papers/asymmetric-kv-compression.md)
+- **Boundary V (experimental, layer-aware)** — auto-enabled for `turbo2-V`. Protects layers where aggressive V quantization degrades quality, leaves the rest at full aggression. [layer-aware-v-compression](https://github.com/TheTom/turboquant_plus/blob/main/docs/papers/layer-aware-v-compression.md), [moe-v-compression-frontier](https://github.com/TheTom/turboquant_plus/blob/main/docs/papers/moe-v-compression-frontier.md)
+- **Sparse V dequantization** — skip V dequantization for positions whose softmax attention weight falls below threshold. Enabled across all Metal targets. [sparse-v-dequant](https://github.com/TheTom/turboquant_plus/blob/main/docs/papers/sparse-v-dequant.md)
 
-### Backend kernels
+### Backend coverage
 
-- **Metal**: TurboFlash attention kernel for `turbo3` KV-cache decode (currently OFF by default due to Apple10 corruption — re-enable via env knob once verified on your hardware); `dk=512` FA kernel instances for Gemma 4; V2.1 fused TQ weight kernels; Sparse V enabled across the family; concurrency handling. ([m5-max-stress-test](https://github.com/TheTom/turboquant_plus/blob/main/docs/papers/m5-max-stress-test.md))
-- **CUDA**: turbo VEC flash attention (+9% decode); `dp4a` kernel for `TQ4_1S` (3.5× faster, 240 t/s vs 68 baseline); warp-cooperative TQ dequant (16× less compute per block); multi-token + multi-GPU kernels; load-time `TQ4_1S → q8_0` conversion path.
-- **HIP / ROCm**: AMD RDNA3 (gfx1100), RDNA4, CDNA3 (MI300X/gfx942), CDNA4 (MI355X/gfx950). `ggml_cuda_dp4a` replaces `__dp4a` for portability; scalar half path for `TQ4_1S` on AMD; pool bypass for FA f16 temp buffers; VEC FA path forced for quantized KV. ([cross-engine-mi300x](https://github.com/TheTom/turboquant_plus/blob/main/docs/papers/cross-engine-mi300x.md))
-- **Vulkan**: compute-shader `turbo3` KV cache + coopmat flash attention; `SET_ROWS` support for `turbo2_0`/`turbo4_0`; `TQ4_1S` weight support.
+| Backend | Quant kernels | Flash Attention | Notes |
+|---|---|---|---|
+| **Metal** (Apple Silicon) | TQ V2.1 fused, TurboFlash | Yes — sparse V across the family; `dk=512` FA kernels for Gemma 4 | TurboFlash off by default on Apple10 (corruption regression under investigation). [m5-max-stress-test](https://github.com/TheTom/turboquant_plus/blob/main/docs/papers/m5-max-stress-test.md) |
+| **CUDA** (NVIDIA) | `dp4a` for `TQ4_1S`, warp-cooperative dequant (16× less compute per block), multi-token / multi-GPU | Yes — turbo VEC FA (+9% decode); mixed `f16/bf16 + q8_0` without `GGML_CUDA_FA_ALL_QUANTS` | Load-time `TQ4_1S → q8_0` conversion path |
+| **HIP / ROCm** (AMD) | Portable `ggml_cuda_dp4a`; scalar half path for `TQ4_1S` on AMD | Yes — VEC FA forced for quantized KV; pool bypass for FA f16 temp buffers | RDNA3 (gfx1100), RDNA4, CDNA3 (MI300X / gfx942), CDNA4 (MI355X / gfx950). [cross-engine-mi300x](https://github.com/TheTom/turboquant_plus/blob/main/docs/papers/cross-engine-mi300x.md) |
+| **Vulkan** | `TQ4_1S` weights, `SET_ROWS` for `turbo2`/`turbo4` | coopmat flash attention with `turbo3` KV | Compute-shader path; nix-buildable |
 
-### Flash Attention integration
+### Model-family support
 
-- `TURBO2_0` added to the FA auto-enable check.
-- Mixed `f16/bf16 + q8_0` KV pairs work without requiring `GGML_CUDA_FA_ALL_QUANTS`.
-- CPU `vec_dot` heap-allocation fix for turbo / TQ types at `n > 4096`.
-- F16-K + TURBO-V dispatch cases on CUDA fattn.
+- **Gemma 4** — `dk=512` Metal FA kernels, MoE token routing, op-concurrency handling
+- **Large MoE** — kernel instantiations for up to 256-expert routing
+- **Hybrid architectures (GDN, Mamba)** — speculative decoding cherry-picked from upstream feature branches
+- All existing llama.cpp model families remain fully supported
 
-### Model-family compatibility
+### Operational fixes carried by this fork
 
-- 256-expert MoE kernel instantiations (large MoE shape support).
-- Gemma 4 specifics: `dk512` Metal FA kernels, op concurrency, MoE token routing.
-- Speculative decoding cherry-picked for hybrid model architectures.
-- RPC `GGML_OP_COUNT` assertion fix.
+- CPU `vec_dot` heap-allocation fix for turbo / TQ types at `n > 4096`
+- Apple Silicon unified-memory explosion fix
+- RPC `GGML_OP_COUNT` assertion fix
+- Cross-vendor `-Werror` build fixes
+- Defensive `xxd.cmake` handling for missing input files
 
-### Memory + stability
+---
 
-- Apple Silicon memory-explosion fix.
-- TurboFlash off-by-default on Apple10 (known corruption — see Metal section).
+## Quick start
 
-### Using TurboQuant types
+Standard llama.cpp build flags. TurboQuant types become available automatically once the matching backend is compiled in.
 
-`turbo2` / `turbo3` / `turbo4` KV-cache quantization is selected at runtime via the existing `--cache-type-k` / `--cache-type-v` flags. `TQ3_1S` / `TQ4_1S` weight quantization is selected at conversion time by passing the type to `llama-quantize`.
+```bash
+# Apple Silicon (Metal)
+cmake -B build -DGGML_METAL=ON && cmake --build build -j
 
-Where this fork diverges, it diverges additively — existing `q4_K`, `q8_0`, `f16` paths are untouched. Everything below this point is the upstream llama.cpp README.
+# NVIDIA CUDA
+cmake -B build -DGGML_CUDA=ON && cmake --build build -j
 
-### Fork-specific references
+# AMD HIP / ROCm (multi-arch fat binary)
+cmake -B build -DGGML_HIP=ON -DCMAKE_HIP_ARCHITECTURES="gfx1100;gfx942;gfx950" && cmake --build build -j
 
-- Codec design + calibration + papers: [TheTom/turboquant_plus](https://github.com/TheTom/turboquant_plus)
+# Vulkan
+cmake -B build -DGGML_VULKAN=ON && cmake --build build -j
+```
+
+## Usage
+
+KV-cache quantization is selected at runtime:
+
+```bash
+llama-cli -m model.gguf --cache-type-k turbo3 --cache-type-v turbo3 [...other args]
+```
+
+Weight quantization is selected at conversion time:
+
+```bash
+llama-quantize model.f16.gguf model.tq4.gguf TQ4_1S
+```
+
+Asymmetric K/V (recommended default), Boundary V, and Sparse V activate automatically based on the selected types and the runtime target. See the codec papers linked above for parameter selection guidance.
+
+## Citation
+
+If this fork or any of its quantization types is used in your work, please cite the corresponding paper from the [TurboQuant+ paper corpus](https://github.com/TheTom/turboquant_plus/tree/main/docs/papers).
+
+## License
+
+MIT, same as upstream llama.cpp.
 
 ---
 
