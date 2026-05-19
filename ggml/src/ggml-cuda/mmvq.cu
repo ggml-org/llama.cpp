@@ -271,39 +271,19 @@ int get_mmvq_mmid_max_batch(ggml_type type, int cc) {
     return MMVQ_MAX_BATCH_SIZE;
 }
 
-// On AMD MFMA hardware (CDNA), pick the per-quant batch threshold above which
-// MMVQ should yield to the MMQ (MFMA-tiled GEMM) path. The crossover differs
-// noticeably by quant family because the per-row GEMV cost is dominated by the
-// dequantisation work, not the dot-product itself: K-quants pay a heavier
-// per-row decode (super-block scales) and so MMQ wins sooner; legacy and IQ
-// quants have lean decode and stay ahead until the batch is wide enough to
-// fully populate an MFMA tile.
-//
-// Calibrated on MI250X with Llama-3.2-3B (pp512, ubatch 1..8, 10 reps each),
-// across all 20 supported quant types. See PR description for the full table.
-static int64_t mmvq_max_batch_amd_mfma(ggml_type type) {
-    switch (type) {
-        case GGML_TYPE_Q3_K:
-        case GGML_TYPE_Q4_K:
-        case GGML_TYPE_Q5_K:
-            return 3; // MMQ wins from batch=4 onward (+5% to +76%)
-        case GGML_TYPE_Q2_K:
-        case GGML_TYPE_Q6_K:
-            return 5; // MMQ wins from batch=6 onward (+8% to +35%)
-        default:
-            // Legacy (Q4_0/Q4_1/Q5_0/Q5_1/Q8_0) and IQ quants regress under MMQ
-            // up to batch=7, so keep the global threshold for them.
-            return MMVQ_MAX_BATCH_SIZE;
-    }
-}
-
 bool ggml_cuda_should_use_mmvq(enum ggml_type type, int cc, int64_t ne11) {
-    static const bool force_mmvq = (getenv("GGML_CUDA_FORCE_MMVQ") != nullptr);
-    if (force_mmvq) {
-        return ne11 <= MMVQ_MAX_BATCH_SIZE;
-    }
-    if (amd_mfma_available(cc)) {
-        return ne11 <= mmvq_max_batch_amd_mfma(type);
+    if (GGML_CUDA_CC_IS_CDNA(cc)) { // tuned for CDNA2
+        switch (type) {
+            case GGML_TYPE_Q3_K:
+            case GGML_TYPE_Q4_K:
+            case GGML_TYPE_Q5_K:
+                return ne11 <= 3;
+            case GGML_TYPE_Q2_K:
+            case GGML_TYPE_Q6_K:
+                return ne11 <= 5;
+            default:
+                return ne11 <= MMVQ_MAX_BATCH_SIZE;
+        }
     }
     return ne11 <= MMVQ_MAX_BATCH_SIZE;
 }
