@@ -94,7 +94,7 @@ AEEResult htp_iface_open(const char * uri, remote_handle64 * handle) {
         request.type         = HAP_power_set_HMX;
         request.hmx.power_up = TRUE;
         FARF(ALWAYS, "Powering HMX on\n");
-        err = HAP_power_set((void *) &ctx, &request);
+        err = HAP_power_set((void *) ctx, &request);
         if (err != AEE_SUCCESS) {
             FARF(ERROR, "Error powering on HMX.");
             return err;
@@ -113,7 +113,7 @@ AEEResult htp_iface_open(const char * uri, remote_handle64 * handle) {
         request.hmx_v2.max_corner = HAP_DCVS_EXP_VCORNER_MAX;
         request.hmx_v2.perf_mode = HAP_CLK_PERF_HIGH;
         FARF(ALWAYS, "Setting HMX clock\n");
-        err = HAP_power_set((void *) &ctx, &request);
+        err = HAP_power_set((void *) ctx, &request);
         if (err != AEE_SUCCESS) {
             FARF(ERROR, "Error setting HMX clock.");
             return err;
