@@ -1173,7 +1173,8 @@ common_init_result::common_init_result(common_params & params, bool model_only) 
             params.tensor_buft_overrides.data(),
             params.fit_params_target.data(),
             params.fit_params_min_ctx,
-            params.verbosity >= 4 ? GGML_LOG_LEVEL_DEBUG : GGML_LOG_LEVEL_ERROR);
+            params.verbosity >= 4 ? GGML_LOG_LEVEL_DEBUG : GGML_LOG_LEVEL_ERROR,
+            params.fit_show_mem);
     }
 
     llama_model * model = llama_model_load_from_file(params.model.path.c_str(), mparams);
