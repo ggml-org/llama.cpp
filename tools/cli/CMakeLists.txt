@@ -2,7 +2,7 @@
 
 set(TARGET cli-lib)
 
-add_library(${TARGET} STATIC cli.cpp)
+add_library(${TARGET} cli.cpp)
 
 target_include_directories(${TARGET} PUBLIC ${CMAKE_CURRENT_SOURCE_DIR} ../server)
 target_link_libraries(${TARGET} PUBLIC server-context llama-common ${CMAKE_THREAD_LIBS_INIT})
