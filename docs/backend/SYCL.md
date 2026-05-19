@@ -5,6 +5,7 @@
 - [News](#news)
 - [OS](#os)
 - [Hardware](#hardware)
+- [Performance Reference](#performance-reference)
 - [Docker](#docker)
 - [Linux](#linux)
 - [Windows](#windows)
@@ -51,9 +52,8 @@ The packages for FP32 and FP16 would have different accuracy and performance on 
 
 ## News
 
-- 2026.04
-
-  - Optimize mul_mat by reorder feature for data type: Q4_K, Q5_K, Q_K, Q8_0.
+- 2026.04-05
+  - Optimize mul_mat by reorder feature for data type: Q4_K, Q5_K, Q6_K, Q8_0.
   - Fused MoE.
   - Upgrate CI and built package for oneAPI 2025.3.3, support Ubuntu 24.04 built package.
 
@@ -149,6 +149,13 @@ On older Intel GPUs, you may try [OpenCL](/docs/backend/OPENCL.md) although the 
 ### Other Vendor GPU
 
 NA
+
+## Performance Reference
+
+
+To get the supported LLMs, GPUs, and performance reference, please check [Performance of llama.cpp on Intel GPU with SYCL backend](https://github.com/ggml-org/llama.cpp/discussions/23313).
+
+You could update your test result in it directly.
 
 ## Docker
 
