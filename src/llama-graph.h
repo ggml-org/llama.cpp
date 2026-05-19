@@ -581,7 +581,8 @@ struct llm_graph_params {
             ubatch.n_seqs_unq   == other.ubatch.n_seqs_unq &&
             (
                 (!ubatch.token && !other.ubatch.token) ||
-                (!ubatch.embd  && !other.ubatch.embd)
+                (!ubatch.embd  && !other.ubatch.embd)  ||
+                (ubatch.token && other.ubatch.token && ubatch.embd && other.ubatch.embd)
             );
 
         // when we split the batch using "equal_seqs" we have to verify that the participating sequences are the same
