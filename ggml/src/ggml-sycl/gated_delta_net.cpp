@@ -62,7 +62,7 @@ void gated_delta_net_sycl(const float *     q,
         const int i = r * warp_size + lane;
         s_shard[r]  = curr_state[i];
     }
-    
+
     // slot mapping: target_slot = t - shift. When n_tokens < K only the last n_tokens slots
     // are written; earlier slots are left untouched (caller-owned).
     const int shift = (int) n_tokens - K;
@@ -140,7 +140,7 @@ void gated_delta_net_sycl(const float *     q,
         }
 
         attn_data += S_v * H;
-    
+
 
     // Write state back to global memory
         if constexpr (keep_rs_t) {
@@ -314,7 +314,7 @@ void ggml_sycl_op_gated_delta_net(ggml_backend_sycl_context & ctx, ggml_tensor *
     const float scale = 1.0f / sqrtf((float) S_v);
 
     dpct::queue_ptr stream = ctx.stream();
-   
+
     // state is 3D (S_v*S_v*H, K, n_seqs); K is the snapshot slot count.
     const int K = (int) src_state->ne[1];
     const bool keep_rs = K > 1;
