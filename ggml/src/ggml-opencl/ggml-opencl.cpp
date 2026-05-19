@@ -395,8 +395,6 @@ struct ggml_backend_opencl_context {
     size_t max_workgroup_size;
     bool fp16_support;
     bool has_vector_subgroup_broadcast;
-    bool has_subgroup_arithmetic = false;       // cl_khr_subgroup_arithmetic
-    bool has_subgroup_clustered_reduce = false; // cl_khr_subgroup_clustered_reduce
     bool has_qcom_subgroup_shuffle = false;     // cl_qcom_subgroup_shuffle
     int  subgroup_size = 0;                     // wavefront / subgroup width
     bool disable_fusion;
@@ -605,8 +603,8 @@ struct ggml_backend_opencl_context {
     cl_kernel kernel_conv_2d_f32;
     cl_kernel kernel_conv_2d_f16_f32;
     cl_kernel kernel_ssm_conv_f32_f32, kernel_ssm_conv_f32_f32_4;
-    // [size_idx][kda][tile] where size_idx: 0=S_V=16, 1=32, 2=64, 3=128; kda: 0 or 1.
-    // tile 0 = TG variant (COLS_PER_LANE_GROUP=1), tile 1 = prefill variant (COLS_PER_LANE_GROUP=4).
+    // [size_idx][kda][tgpp] where size_idx: 0=S_V=16, 1=32, 2=64, 3=128; kda: 0 or 1.
+    // tgpp 0 = TG variant (COLS_PER_LANE_GROUP=1), tgpp 1 = prefill variant (COLS_PER_LANE_GROUP=4).
     cl_kernel kernel_gated_delta_net_f32[4][2][2] = {};
 
     cl_kernel kernel_timestep_embedding;
@@ -3527,21 +3525,6 @@ static ggml_backend_opencl_context * ggml_cl2_init(ggml_backend_dev_t dev) {
     // check Adreno large buffer support
     backend_ctx->adreno_has_large_buffer = strstr(ext_buffer, "cl_qcom_large_buffer") != NULL;
 
-    // Detect subgroup arithmetic and clustered-reduce support. These are
-    // optional extensions; the gated_delta_net kernel uses them when
-    // available and falls back to a local-memory reduction otherwise.
-    backend_ctx->has_subgroup_arithmetic       = strstr(ext_buffer, "cl_khr_subgroup_arithmetic") != NULL;
-    backend_ctx->has_subgroup_clustered_reduce = strstr(ext_buffer, "cl_khr_subgroup_clustered_reduce") != NULL;
-    // The kernel needs a subgroup-size hint at build time. Use the
-    // Adreno wave size when we already know it; otherwise default to 32
-    // (a common subgroup size for Intel/Mali). The local-memory fallback
-    // is correct for any device whose actual subgroup_size divides this.
-    backend_ctx->subgroup_size = backend_ctx->gpu_family == ADRENO ? backend_ctx->adreno_wave_size : 32;
-    GGML_LOG_INFO("ggml_opencl: subgroup arithmetic support: %s\n",
-        backend_ctx->has_subgroup_arithmetic ? "true" : "false");
-    GGML_LOG_INFO("ggml_opencl: subgroup clustered reduce support: %s\n",
-        backend_ctx->has_subgroup_clustered_reduce ? "true" : "false");
-
     // fp16 is required
     if (!backend_ctx->fp16_support) {
         GGML_LOG_ERROR("ggml_opencl: device does not support FP16\n");
@@ -3552,7 +3535,7 @@ static ggml_backend_opencl_context * ggml_cl2_init(ggml_backend_dev_t dev) {
     // optional in OpenCL 3.0 (cl_khr_subgroup is mandatory in OpenCL 2.x)
     if (opencl_c_version.major == 3 && strstr(ext_buffer, "cl_khr_subgroups") == NULL &&
         strstr(ext_buffer, "cl_intel_subgroups") == NULL) {
-        GGML_LOG_INFO("ggml_opencl: device does not support subgroups (cl_khr_subgroups or cl_intel_subgroups) "
+        GGML_LOG_ERROR("ggml_opencl: device does not support subgroups (cl_khr_subgroups or cl_intel_subgroups) "
             "(note that subgroups is an optional feature in OpenCL 3.0)\n");
         return nullptr;
     }
