@@ -13133,20 +13133,17 @@ class Granite4VisionMmprojModel(MmprojModel):
 
     def set_gguf_parameters(self):
         assert self.hparams_vision is not None
+        super().set_gguf_parameters()
         v = self.hparams_vision
 
-        super().set_gguf_parameters()
-
-        # Set projector type
         self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.GRANITE4_VISION)
 
-        # Vision encoder params (SigLIP)
-        self.gguf_writer.add_vision_embedding_length(v["hidden_size"])
-        self.gguf_writer.add_vision_feed_forward_length(v["intermediate_size"])
-        self.gguf_writer.add_vision_block_count(v["num_hidden_layers"])
-        self.gguf_writer.add_vision_head_count(v["num_attention_heads"])
-        self.gguf_writer.add_vision_image_size(v["image_size"])
-        self.gguf_writer.add_vision_patch_size(v["patch_size"])
+        # SigLIP encoder hparams
+        self.gguf_writer.add_vision_attention_layernorm_eps(self.hparams.get("layer_norm_eps", 1e-6))
+        self.gguf_writer.add_vision_use_gelu(True)
+
+        # Preprocessor
+        self.gguf_writer.add_vision_preproc_image_size(self.hparams.get("image_size", 384))
 
         # QFormer projector config
         ds_rate = self.global_config["downsample_rate"]
@@ -13155,11 +13152,6 @@ class Granite4VisionMmprojModel(MmprojModel):
         query_side, window_side = [int(p) for p in ds_parts]
         self.gguf_writer.add_vision_projector_query_side(query_side)
         self.gguf_writer.add_vision_projector_window_side(window_side)
-
-        # Layer norm epsilon for ViT (use text model epsilon as fallback)
-        text_config = self.global_config.get("text_config", {})
-        eps = v.get("rms_norm_eps", text_config.get("rms_norm_eps", 1e-5))
-        self.gguf_writer.add_vision_attention_layernorm_eps(eps)
 
         # Set vision feature layers
         self.gguf_writer.add_vision_feature_layers(self._vision_feature_layers)
@@ -13170,7 +13162,7 @@ class Granite4VisionMmprojModel(MmprojModel):
         # The granite LLM will scale the first embedding input by
         # embedding_multiplier, so the mmproj needs to invert that scale for its
         # output so that the resulting injection works as expected.
-        if (embed_mult := text_config.get("embedding_multiplier")) is not None:
+        if (embed_mult := self.global_config.get("text_config", {}).get("embedding_multiplier")) is not None:
             self.gguf_writer.add_embedding_scale(embed_mult)
 
         # Add flattened image grind pinpoints (resolution candidates internally)
@@ -13217,10 +13209,7 @@ class Granite4VisionMmprojModel(MmprojModel):
             else: # len(all_ids) == 2
                 new_bid = projector_idx # + all_ids[1]
                 new_name = name[:id_matches[0].span(0)[0]] + name[id_matches[0].span(1)[1]:id_matches[1].span(1)[0]] + str(new_bid) + name[id_matches[1].span(1)[1]:]
-            try:
-                yield from super().modify_tensors(data_torch, new_name, new_bid)
-            except Exception as err:
-                breakpoint()
+            yield from super().modify_tensors(data_torch, new_name, new_bid)
             return
         yield from super().modify_tensors(data_torch, name, bid)
 
