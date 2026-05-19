@@ -6,6 +6,7 @@
 #import "ggml-metal-impl.h"
 #import "ggml-metal-common.h"
 #import "ggml-metal-ops.h"
+#import "ggml-profiler.h"
 
 #import <Foundation/Foundation.h>
 
@@ -79,6 +80,19 @@ struct ggml_metal {
     // error state - set when a command buffer fails during synchronize
     // once set, graph_compute will return GGML_STATUS_FAILED until the backend is recreated
     bool has_error;
+
+    // Profiling
+    // Borrowed; owned by the C++ backend layer (ggml-metal.cpp). NULL when profiling is unavailable.
+    struct ggml_metal_profiler_state * profiler_state;
+
+    // Per-graph-compute scratch state populated when profiling is active for the current invocation.
+    // Lifetime: from start of ggml_metal_graph_compute until its end.
+    bool                              profiler_active;
+    ggml_metal_sample_buf_t           profiler_sample_buf;
+    size_t                            profiler_total_slots;
+    uint64_t                          profiler_cpu_anchor_ns;
+    uint64_t                          profiler_gpu_anchor_ns;
+    struct ggml_metal_op_sample_slot * profiler_slot_map;  // size = gf->n_nodes
 };
 
 ggml_metal_t ggml_metal_init(ggml_metal_device_t dev) {
@@ -450,6 +464,34 @@ enum ggml_status ggml_metal_graph_compute(ggml_metal_t ctx, struct ggml_cgraph *
     // keep the memory wired
     ggml_metal_device_rsets_keep_alive(ctx->dev);
 
+    // Decide whether profiling is active for this invocation. Activation is sticky for the whole
+    // call: allocate sample buffer + slot map up front so the encode_async block can use them.
+    ctx->profiler_active = false;
+    if (ctx->profiler_state != NULL && ggml_metal_profiler_is_enabled(ctx->profiler_state)) {
+        if (ggml_metal_device_supports_profiling(ctx->dev) && gf->n_nodes > 0) {
+            const size_t total_slots = 2 * (size_t) gf->n_nodes;
+            ctx->profiler_sample_buf = ggml_metal_device_create_sample_buf(ctx->dev, total_slots);
+            if (ctx->profiler_sample_buf != NULL) {
+                ctx->profiler_total_slots = total_slots;
+                ctx->profiler_slot_map = (struct ggml_metal_op_sample_slot *) calloc(
+                    (size_t) gf->n_nodes, sizeof(struct ggml_metal_op_sample_slot));
+                if (ctx->profiler_slot_map != NULL) {
+                    // Mark all entries unused (node_idx < 0).
+                    for (int i = 0; i < gf->n_nodes; ++i) {
+                        ctx->profiler_slot_map[i].node_idx = -1;
+                    }
+                    ggml_metal_device_sample_timestamps(ctx->dev,
+                                                       &ctx->profiler_cpu_anchor_ns,
+                                                       &ctx->profiler_gpu_anchor_ns);
+                    ctx->profiler_active = true;
+                } else {
+                    ggml_metal_sample_buf_free(ctx->profiler_sample_buf);
+                    ctx->profiler_sample_buf = NULL;
+                }
+            }
+        }
+    }
+
     // submit the ggml compute graph to the GPU by creating command buffers and encoding the ops in them
     // the first n_nodes_0 are encoded and submitted for processing directly by the calling thread
     // while these nodes are processing, we start n_cb threads to enqueue the rest of the nodes
@@ -609,6 +651,66 @@ enum ggml_status ggml_metal_graph_compute(ggml_metal_t ctx, struct ggml_cgraph *
 
             ctx->capture_started = false;
         }
+
+        // Profiling drain: wait for all command buffers to complete, resolve timestamps, push records.
+        // This forces a synchronous wait — Vulkan does the same when its profiler is active.
+        if (ctx->profiler_active) {
+            {
+                id<MTLCommandBuffer> cmd_buf = ctx->cmd_bufs[n_cb].obj;
+                if (cmd_buf) {
+                    [cmd_buf waitUntilCompleted];
+                }
+            }
+            for (int i = 0; i < n_cb; ++i) {
+                id<MTLCommandBuffer> cmd_buf = ctx->cmd_bufs[i].obj;
+                if (cmd_buf) {
+                    // Ensure cmd_bufs that were not auto-enqueued get committed.
+                    if ([cmd_buf status] == MTLCommandBufferStatusNotEnqueued) {
+                        [cmd_buf commit];
+                    }
+                    [cmd_buf waitUntilCompleted];
+                }
+            }
+
+            uint64_t * ns = (uint64_t *) calloc(ctx->profiler_total_slots, sizeof(uint64_t));
+            if (ns != NULL) {
+                ggml_metal_sample_buf_resolve(ctx->profiler_sample_buf,
+                                              /*base=*/0,
+                                              ctx->profiler_total_slots,
+                                              ctx->profiler_cpu_anchor_ns,
+                                              ctx->profiler_gpu_anchor_ns,
+                                              ns);
+
+                for (int i = 0; i < gf->n_nodes; ++i) {
+                    const struct ggml_metal_op_sample_slot * slot = &ctx->profiler_slot_map[i];
+                    if (slot->node_idx < 0) {
+                        continue;
+                    }
+                    if (slot->slot_start >= ctx->profiler_total_slots ||
+                        slot->slot_end   >= ctx->profiler_total_slots) {
+                        continue;
+                    }
+                    const uint64_t t0 = ns[slot->slot_start];
+                    const uint64_t t1 = ns[slot->slot_end];
+                    if (t0 == 0 || t1 == 0 || t1 < t0) {
+                        continue;
+                    }
+                    ggml_metal_profiler_push_record(ctx->profiler_state,
+                                                    ggml_graph_node(gf, slot->node_idx),
+                                                    t0,
+                                                    t1);
+                }
+
+                free(ns);
+            }
+
+            free(ctx->profiler_slot_map);
+            ctx->profiler_slot_map = NULL;
+            ggml_metal_sample_buf_free(ctx->profiler_sample_buf);
+            ctx->profiler_sample_buf = NULL;
+            ctx->profiler_total_slots = 0;
+            ctx->profiler_active = false;
+        }
     }
 
     return GGML_STATUS_SUCCESS;
@@ -660,6 +762,10 @@ ggml_metal_event_t ggml_metal_get_ev_cpy(ggml_metal_t ctx) {
     return ctx->ev_cpy;
 }
 
+void ggml_metal_set_profiler_state(ggml_metal_t ctx, struct ggml_metal_profiler_state * state) {
+    ctx->profiler_state = state;
+}
+
 void ggml_metal_set_n_cb(ggml_metal_t ctx, int n_cb) {
     if (ctx->n_cb != n_cb) {
         ctx->n_cb = MIN(n_cb, GGML_METAL_MAX_COMMAND_BUFFERS);
@@ -703,6 +809,17 @@ void ggml_metal_set_n_cb(ggml_metal_t ctx, int n_cb) {
             ctx->capture_compute,
             ctx->debug_graph,
             ctx->debug_fusion);
+
+        if (ctx->profiler_active) {
+            // Base slot for this command buffer is 2 * (first graph-node index it processes).
+            // The encoder uses one (start, end) pair per encoded op group; we over-allocate so
+            // that empty/filtered nodes simply leave gaps in the sample buffer.
+            const size_t base_slot = 2 * (size_t) idx_start;
+            ggml_metal_op_enable_profiling(ctx_op,
+                                           ctx->profiler_sample_buf,
+                                           base_slot,
+                                           ctx->profiler_slot_map);
+        }
 
         for (int idx = 0; idx < ggml_metal_op_n_nodes(ctx_op); ++idx) {
             const int res = ggml_metal_op_encode(ctx_op, idx);
