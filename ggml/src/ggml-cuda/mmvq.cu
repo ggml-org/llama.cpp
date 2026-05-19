@@ -363,7 +363,7 @@ static constexpr __host__ __device__ int calc_nwarps(ggml_type type, int ncols_d
                 case GGML_TYPE_Q6_K:
                     return 2;
                 case GGML_TYPE_IQ4_NL:
-                    return 8;  
+                    return 8;
                 default:
                     return 1;
             }
