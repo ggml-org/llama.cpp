@@ -496,7 +496,8 @@ llama_model_qwen35::graph_mtp::graph_mtp(const llama_model & model, const llm_gr
     const int64_t n_embd_head = hparams.n_embd_head_v();
     GGML_ASSERT(n_embd_head == hparams.n_embd_head_k());
 
-    // The MTP block lives at the source file's original layer index.
+    // hparams.n_layer includes both main model layers and MTP layers. The MTP
+    // layer is stored immediately after the main layers in model.layers[].
     const int il = (int) hparams.n_layer - (int) hparams.nextn_predict_layers;
     const auto & layer = model.layers[il];
 
