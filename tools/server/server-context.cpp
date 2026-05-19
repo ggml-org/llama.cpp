@@ -10,6 +10,7 @@
 #include "common.h"
 #include "fit.h"
 #include "llama.h"
+#include "../../src/llama-ext.h" // staging API: llama_set_mtp_source
 #include "log.h"
 #include "sampling.h"
 #include "speculative.h"
@@ -949,6 +950,11 @@ private:
             cparams.n_rs_seq = 0;
             ctx_dft.reset(llama_init_from_model(model_dft.get(), cparams));
 
+            if (spec_mtp) {
+                // MTP draft must know its target before the first decode
+                llama_set_mtp_source(ctx_dft.get(), ctx_tgt);
+            }
+
             ctx_dft_seq_rm_type = common_context_can_seq_rm(ctx_dft.get());
 
             params_base.speculative.draft.ctx_tgt = ctx_tgt;
@@ -970,6 +976,10 @@ private:
                 SRV_ERR("%s", "failed to create MTP context\n");
                 return false;
             }
+
+            // wire the source before any decode (the seq-rm probe below
+            // triggers sched_reserve which needs src for Gemma4-style MTP)
+            llama_set_mtp_source(ctx_dft.get(), ctx_tgt);
 
             ctx_dft_seq_rm_type = common_context_can_seq_rm(ctx_dft.get());
 

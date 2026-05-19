@@ -548,6 +548,10 @@ struct llama_model {
     struct ggml_tensor * output_s    = nullptr;
     struct ggml_tensor * output_in_s = nullptr;
 
+    // NextN/MTP model-level projections
+    struct ggml_tensor * nextn_pre_proj  = nullptr;
+    struct ggml_tensor * nextn_post_proj = nullptr;
+
     // classifier
     struct ggml_tensor * cls       = nullptr;
     struct ggml_tensor * cls_b     = nullptr;

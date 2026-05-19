@@ -30,6 +30,21 @@ static llm_graph_type ctx_type_to_graph_type(llama_context_type ctx_type) {
     throw std::runtime_error("Unsupported ctx type");
 }
 
+static uint32_t ctx_type_to_embd_inp(const llama_hparams & hparams, llama_context_type ctx_type) {
+    switch (ctx_type) {
+        case LLAMA_CONTEXT_TYPE_DEFAULT: return hparams.n_embd_inp();
+        case LLAMA_CONTEXT_TYPE_MTP    : return hparams.n_embd_out();
+    }
+    throw std::runtime_error("Unsupported ctx type");
+}
+
+namespace {
+struct src_mctx_reset_on_exit {
+    llama_memory_context_ptr * slot;
+    ~src_mctx_reset_on_exit() { if (slot) slot->reset(); }
+};
+}
+
 llama_context::llama_context(
         const llama_model & model,
               llama_context_params params) :
@@ -372,7 +387,11 @@ llama_context::llama_context(
             LLAMA_LOG_INFO("%s: pipeline parallelism enabled\n", __func__);
         }
 
-        sched_reserve();
+        // MTP draft contexts can't reserve until the source context is wired
+        // via llama_set_mtp_source — defer to the first decode.
+        if (cparams.ctx_type != LLAMA_CONTEXT_TYPE_MTP) {
+            sched_reserve();
+        }
 
         if (!cparams.flash_attn) {
             if (ggml_is_quantized(params.type_v)) {
@@ -445,6 +464,23 @@ void llama_context::sched_reserve() {
             throw std::runtime_error("failed to initialize memory module");
         }
     }
+
+    // When called from decode(), src_mctx_for_decode is already populated and
+    // we must not drop it on exit (process_ubatch still needs it). Snapshot
+    // only when sched_reserve runs standalone (e.g. lazy first-decode reserve
+    // when set_mtp_source flipped sched_need_reserve).
+    const bool owns_src_snapshot = src_ctx && !src_mctx_for_decode;
+    if (owns_src_snapshot) {
+        auto * src_memory = src_ctx->get_memory();
+        if (!src_memory) {
+            throw std::runtime_error("MTP source context has no memory module");
+        }
+        src_mctx_for_decode = src_memory->init_full();
+        if (!src_mctx_for_decode) {
+            throw std::runtime_error("failed to initialize MTP source memory snapshot");
+        }
+    }
+    src_mctx_reset_on_exit reserve_src_drop{owns_src_snapshot ? &src_mctx_for_decode : nullptr};
 
     // avoid reserving graphs with zero outputs - assume one output per sequence
     const int n_outputs = n_seqs;
@@ -904,7 +940,7 @@ float * llama_context::get_embeddings_nextn_ith(int32_t i) {
             throw std::runtime_error("no nextn embeddings");
         }
 
-        const uint32_t n_embd = model.hparams.n_embd;
+        const uint32_t n_embd = model.hparams.n_embd_out();
 
         if (!cparams.embeddings_nextn_masked) {
             // unmasked: nextn rows are stored densely, indexed by raw token position.
@@ -1111,6 +1147,17 @@ void llama_context::set_embeddings_nextn(bool value, bool masked) {
 
     cparams.embeddings_nextn        = value;
     cparams.embeddings_nextn_masked = masked;
+}
+
+void llama_context::set_mtp_source(llama_context * src) {
+    if (src_ctx == src) {
+        return;
+    }
+    src_ctx = src;
+    src_mctx_for_decode.reset();
+    // worst-case compute buffers were reserved without knowing about the source
+    // memory; force a re-reserve so the next decode sees src views
+    sched_need_reserve = true;
 }
 
 void llama_context::set_causal_attn(bool value) {
@@ -1338,7 +1385,7 @@ int llama_context::encode(const llama_batch & batch_inp) {
 
     const auto & hparams = model.hparams;
 
-    const int64_t n_embd  = hparams.n_embd_inp();
+    const int64_t n_embd  = ctx_type_to_embd_inp(hparams, cparams.ctx_type);
     const int64_t n_vocab = model.vocab.n_tokens();
 
     // note: during encode, we always pass the full sequence starting from pos = 0
@@ -1473,7 +1520,7 @@ int llama_context::encode(const llama_batch & batch_inp) {
         ggml_backend_t backend_h = ggml_backend_sched_get_tensor_backend(sched.get(), t_h_nextn);
         GGML_ASSERT(backend_h != nullptr);
 
-        const uint32_t n_embd = hparams.n_embd;
+        const uint32_t n_embd = hparams.n_embd_out();
         GGML_ASSERT(n_tokens*n_embd <= (int64_t) embd_nextn.size);
         ggml_backend_tensor_get_async(backend_h, t_h_nextn, embd_nextn.data, 0, n_tokens*n_embd*sizeof(float));
     }
@@ -1648,7 +1695,7 @@ int llama_context::decode(const llama_batch & batch_inp) {
     const auto & hparams = model.hparams;
 
     const int64_t n_vocab = vocab.n_tokens();
-    const int64_t n_embd  = hparams.n_embd_inp();
+    const int64_t n_embd  = ctx_type_to_embd_inp(hparams, cparams.ctx_type);
 
     // when computing embeddings, all tokens are output
     const bool output_all   = cparams.embeddings;
@@ -1709,6 +1756,20 @@ int llama_context::decode(const llama_batch & batch_inp) {
     // TODO: this clear of the buffer can easily be forgotten - need something better
     embd_seq.clear();
     output_swaps.clear();
+
+    src_mctx_reset_on_exit decode_src_drop{&src_mctx_for_decode};
+    if (src_ctx) {
+        auto * src_memory = src_ctx->get_memory();
+        if (!src_memory) {
+            LLAMA_LOG_ERROR("%s: MTP source context has no memory module\n", __func__);
+            return -2;
+        }
+        src_mctx_for_decode = src_memory->init_full();
+        if (!src_mctx_for_decode) {
+            LLAMA_LOG_ERROR("%s: failed to snapshot MTP source memory\n", __func__);
+            return -2;
+        }
+    }
 
     sched_reserve();
 
@@ -1924,7 +1985,7 @@ int llama_context::decode(const llama_batch & batch_inp) {
                 ggml_backend_t backend_h = ggml_backend_sched_get_tensor_backend(sched.get(), t_h_nextn);
                 GGML_ASSERT(backend_h != nullptr);
 
-                const uint32_t n_embd  = hparams.n_embd;
+                const uint32_t n_embd  = hparams.n_embd_out();
                 float * embd_nextn_out = embd_nextn.data + offset*n_embd;
 
                 GGML_ASSERT((offset + n_rows)*n_embd <= (int64_t) embd_nextn.size);
@@ -2017,7 +2078,6 @@ uint32_t llama_context::output_reserve(int32_t n_outputs) {
 
     const auto n_batch    = cparams.n_batch;
     const auto n_vocab    = vocab.n_tokens();
-    const auto n_embd     = hparams.n_embd;
     const auto n_embd_out = hparams.n_embd_out();
 
     bool has_logits     = true;
@@ -2036,12 +2096,12 @@ uint32_t llama_context::output_reserve(int32_t n_outputs) {
 
     logits.size     = has_logits     ? n_vocab*n_outputs_max     : 0;
     embd.size       = has_embd       ? n_embd_out*n_outputs_max  : 0;
-    embd_nextn.size = has_embd_nextn ? n_embd*n_outputs_max      : 0;
+    embd_nextn.size = has_embd_nextn ? n_embd_out*n_outputs_max  : 0;
 
     if (has_embd_nextn && !cparams.embeddings_nextn_masked) {
         // unmasked: nextn row exists for every token in the batch, not just
         // those flagged via batch.logits[i] -> size by token count instead.
-        embd_nextn.size = (size_t) n_embd * n_batch;
+        embd_nextn.size = (size_t) n_embd_out * n_batch;
     }
 
     // Allocate backend sampling output buffers if there are backend samplers configured.
@@ -2304,6 +2364,8 @@ llm_graph_params llama_context::graph_params(
         /*.cvec        =*/ cvec.get(),
         /*.loras       =*/ loras.get(),
         /*.mctx        =*/ mctx,
+        /*.src_mctx    =*/ src_mctx_for_decode.get(),
+        /*.src_model   =*/ src_ctx ? &src_ctx->get_model() : nullptr,
         /*.cross       =*/ &cross,
         /*.samplers    =*/ sampling.samplers,
         /*.n_outputs   =*/ n_outputs,
@@ -3591,6 +3653,10 @@ float * llama_get_embeddings_seq(llama_context * ctx, llama_seq_id seq_id) {
 
 void llama_set_embeddings_nextn(llama_context * ctx, bool value, bool masked) {
     ctx->set_embeddings_nextn(value, masked);
+}
+
+void llama_set_mtp_source(llama_context * ctx, llama_context * src) {
+    ctx->set_mtp_source(src);
 }
 
 float * llama_get_embeddings_nextn(llama_context * ctx) {

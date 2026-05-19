@@ -354,6 +354,11 @@ public:
 
     uint32_t get_n_kv() const;
 
+    // last position recorded in the cache for this sequence; -1 if absent.
+    // exposed for cross-context KV consumers (e.g. MTP draft) that need to
+    // anchor the source position without owning a memory module of their own.
+    llama_pos seq_pos_max(llama_seq_id seq_id) const;
+
     ggml_type type_k() const;
     ggml_type type_v() const;
 

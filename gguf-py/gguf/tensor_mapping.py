@@ -2279,6 +2279,14 @@ class TensorNameMap:
         ),
 
         # NextN/MTP tensors
+        MODEL_TENSOR.NEXTN_PRE_PROJ: (
+            "pre_projection",
+        ),
+
+        MODEL_TENSOR.NEXTN_POST_PROJ: (
+            "post_projection",
+        ),
+
         MODEL_TENSOR.NEXTN_EH_PROJ: (
             "model.layers.{bid}.eh_proj",
         ),

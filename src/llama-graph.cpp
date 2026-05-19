@@ -620,6 +620,22 @@ bool llm_graph_input_attn_kv_iswa::can_reuse(const llm_graph_params & params) {
     return res;
 }
 
+void llm_graph_input_attn_src_kv_iswa::set_input(const llama_ubatch * ubatch) {
+    src_mctx->get_base()->set_input_kq_mask(self_kq_mask,     ubatch, cparams.causal_attn);
+    src_mctx->get_swa() ->set_input_kq_mask(self_kq_mask_swa, ubatch, cparams.causal_attn);
+}
+
+bool llm_graph_input_attn_src_kv_iswa::can_reuse(const llm_graph_params & params) {
+    const auto * mctx = static_cast<const llama_kv_cache_iswa_context *>(params.src_mctx);
+
+    this->src_mctx = mctx;
+
+    bool res = true;
+    res &= can_reuse_kq_mask(self_kq_mask,     mctx->get_base(), params.ubatch, params.cparams);
+    res &= can_reuse_kq_mask(self_kq_mask_swa, mctx->get_swa(),  params.ubatch, params.cparams);
+    return res;
+}
+
 void llm_graph_input_attn_cross::set_input(const llama_ubatch * ubatch) {
     GGML_ASSERT(cross_kq_mask);
 
@@ -1034,6 +1050,8 @@ llm_graph_context::llm_graph_context(const llm_graph_params & params) :
     cvec             (params.cvec),
     loras            (params.loras),
     mctx             (params.mctx),
+    src_mctx         (params.src_mctx),
+    src_model        (params.src_model),
     cross            (params.cross),
     samplers         (params.samplers),
     cb_func          (params.cb),
@@ -2602,6 +2620,59 @@ llm_graph_input_attn_cross * llm_graph_context::build_attn_inp_cross() const {
     inp->cross_kq_mask_cnv = inp->cross_kq_mask;
 
     return (llm_graph_input_attn_cross *) res->add_input(std::move(inp));
+}
+
+llm_graph_input_attn_src_kv_iswa * llm_graph_context::build_attn_inp_src_kv_iswa() const {
+    GGML_ASSERT(src_mctx && "MTP draft graph requires src_mctx (set via llama_set_mtp_source)");
+
+    const auto * src_iswa = static_cast<const llama_kv_cache_iswa_context *>(src_mctx);
+
+    auto inp = std::make_unique<llm_graph_input_attn_src_kv_iswa>(hparams, cparams, src_iswa);
+
+    inp->self_kq_mask     = build_attn_inp_kq_mask(ctx0, src_iswa->get_base(), ubatch, cparams);
+    inp->self_kq_mask_cnv = cparams.flash_attn ? ggml_cast(ctx0, inp->self_kq_mask, GGML_TYPE_F16) : inp->self_kq_mask;
+
+    inp->self_kq_mask_swa     = build_attn_inp_kq_mask(ctx0, src_iswa->get_swa(), ubatch, cparams);
+    inp->self_kq_mask_swa_cnv = cparams.flash_attn ? ggml_cast(ctx0, inp->self_kq_mask_swa, GGML_TYPE_F16) : inp->self_kq_mask_swa;
+
+    return (llm_graph_input_attn_src_kv_iswa *) res->add_input(std::move(inp));
+}
+
+ggml_tensor * llm_graph_context::build_attn(
+        llm_graph_input_attn_src_kv_iswa * inp,
+        ggml_tensor * wo,
+        ggml_tensor * wo_b,
+        ggml_tensor * wo_s,
+        ggml_tensor * q_cur,
+        ggml_tensor * kq_b,
+        ggml_tensor * sinks,
+        ggml_tensor * v_mla,
+            float     kq_scale,
+            int       il_assist,
+            int       il_src) const {
+    const bool is_swa = hparams.is_swa(il_assist);
+
+    const auto * src_iswa = inp->src_mctx;
+    const auto * src_cur  = is_swa ? src_iswa->get_swa() : src_iswa->get_base();
+
+    const auto & kq_mask = is_swa ? inp->get_kq_mask_swa() : inp->get_kq_mask();
+
+    ggml_build_forward_expand(gf, q_cur);
+
+    ggml_tensor * q = q_cur;
+    ggml_tensor * k = src_cur->get_k(ctx0, il_src);
+    ggml_tensor * v = src_cur->get_v(ctx0, il_src);
+
+    ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, sinks, v_mla, kq_scale, il_assist);
+    cb(cur, "kqv_out", il_assist);
+
+    if (wo) {
+        cur = build_lora_mm(wo, cur, wo_s);
+    }
+    if (wo_b) {
+        cur = ggml_add(ctx0, cur, wo_b);
+    }
+    return cur;
 }
 
 ggml_tensor * llm_graph_context::build_attn(
