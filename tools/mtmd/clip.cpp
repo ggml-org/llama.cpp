@@ -955,6 +955,10 @@ static ggml_cgraph * clip_image_build_graph(clip_ctx * ctx, const clip_image_f32
             {
                 builder = std::make_unique<clip_graph_granite_speech>(ctx, img);
             } break;
+        case PROJECTOR_TYPE_GRANITE4_VISION:
+            {
+                builder = std::make_unique<clip_graph_granite_vision>(ctx, img);
+            } break;
         case PROJECTOR_TYPE_GLM4V:
             {
                 builder = std::make_unique<clip_graph_glm4v>(ctx, img);
@@ -4327,6 +4331,8 @@ int clip_n_mmproj_embd(const struct clip_ctx * ctx) {
             return ctx->model.hparams.projection_dim;
         case PROJECTOR_TYPE_GRANITE_SPEECH:
             return ctx->model.qf_proj_blocks[0].qf_proj_linear_w->ne[1];
+        case PROJECTOR_TYPE_GRANITE4_VISION:
+            return ctx->model.qf_proj_blocks[0].qf_proj_linear_w->ne[1] * (1 + ctx->model.qf_proj_blocks.size());
         case PROJECTOR_TYPE_GLM4V:
             return ctx->model.mm_ffn_down_w->ne[1];
         default:

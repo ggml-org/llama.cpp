@@ -496,6 +496,13 @@ struct mtmd_context {
                     img_end = "<｜hy_place▁holder▁no▁101｜>";
                     image_preproc = std::make_unique<mtmd_image_preprocessor_dyn_size>(ctx_v);
                 } break;
+            case PROJECTOR_TYPE_GRANITE4_VISION:
+                {
+                    // <|image_embeds|> ... (image embeddings) ...
+                    img_beg = "<|image_embeds|>";
+                    img_end = "";
+                    image_preproc = std::make_unique<mtmd_image_preprocessor_dyn_size>(ctx_v);
+                } break;
             default:
                 throw std::runtime_error(string_format("%s: unexpected vision projector type %d\n", __func__, proj));
         }
