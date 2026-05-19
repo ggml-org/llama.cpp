@@ -13171,7 +13171,8 @@ class Granite4VisionMmprojModel(MmprojModel):
 
         # Add flattened image grind pinpoints (resolution candidates internally)
         if pinpoints := self.global_config.get("image_grid_pinpoints"):
-            pinpoints = [x for pair in pinpoints for x in pair]
+            # Flatten with h, w -> w, h inversion
+            pinpoints = [val for h, w in pinpoints for val in (w, h)]
             self.gguf_writer.add_vision_image_grid_pinpoints(pinpoints)
 
     @classmethod
