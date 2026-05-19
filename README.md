@@ -15,7 +15,8 @@ This fork is additive: every existing llama.cpp quantization, model, and backend
 This fork's TurboQuant integration is used in:
 
 - [**LocalAI**](https://localai.io) — drop-in OpenAI-compatible local inference server
-- **AtomicChat** — on-device chat application
+- [**Chronara**](https://chronara.io) — quantum-safe fintech infrastructure with AI-driven networks
+- [**AtomicChat**](https://atomic.chat/) — on-device chat application
 - and other downstream projects
 
 ## Status
