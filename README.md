@@ -96,19 +96,61 @@ cmake -B build -DGGML_VULKAN=ON && cmake --build build -j
 
 ## Usage
 
-KV-cache quantization is selected at runtime:
+### KV-cache quantization (runtime)
+
+KV-cache types are selected per-side via the standard `--cache-type-k` / `--cache-type-v` flags.
+
+> **Start light, then compress.** Some model families — small models, certain MoE configurations, quant-sensitive instruction-tuned variants — are more delicate than others. Pick a light asymmetric configuration first, verify output quality (eyeball + PPL on a hold-out set) on your specific model, then ratchet up V aggression if you have memory headroom to gain. **Do not start at maximum compression** and work backwards.
+
+The core finding from the asymmetric-kv-compression paper ([asymmetric-kv-compression](https://github.com/TheTom/turboquant_plus/blob/main/docs/papers/asymmetric-kv-compression.md)) drives all the configs below: **V tolerates aggressive compression, K does not**. Always keep K at higher precision than V; never start symmetric.
+
+Recommendations, ordered from most conservative to most aggressive:
+
+| Step | `--cache-type-k` | `--cache-type-v` | When | Notes |
+|---|---|---|---|---|
+| **1. Safest start** | `f16` | `turbo3` | First contact with any new model | K untouched, V at ~4.6× compression. If this isn't faithful, the model is unusually quant-sensitive — stop here and investigate. |
+| **2. Recommended default** | `q8_0` | `turbo3` | Most dense models, most workloads | The "asymmetric turbo" sweet spot. Near-lossless K, ~4.6× compressed V. Total KV memory ~3-4× smaller than `f16`/`f16`. |
+| **3. Aggressive V** | `q8_0` | `turbo2` | Memory-bound long context, validated quality | Boundary V auto-engages and protects sensitive layers. Expect <2% PPL loss on dense models outside the protected layers. |
+| **4. MoE-aware aggressive** | `q8_0` | `turbo2` | Large MoE models (DeepSeek, Qwen3.6, Mixtral-style) | Same flags; Boundary V's per-expert-boundary protection is what makes this work on MoE. See [moe-v-compression-frontier](https://github.com/TheTom/turboquant_plus/blob/main/docs/papers/moe-v-compression-frontier.md). |
+| **5. Discouraged: symmetric K compression** | `turbo3` | `turbo2` | Only with model-specific quality validation | Compressing K is where models break. The asymmetric paper documents the failure modes. Not a recommended starting point. |
+
+Example invocations:
 
 ```bash
-llama-cli -m model.gguf --cache-type-k turbo3 --cache-type-v turbo3 [...other args]
+# Step 1 — safest start (first contact)
+llama-cli -m model.gguf --cache-type-k f16 --cache-type-v turbo3 -p "..."
+
+# Step 2 — recommended default (most production)
+llama-cli -m model.gguf --cache-type-k q8_0 --cache-type-v turbo3 -p "..."
+
+# Step 3 — aggressive V at long context
+llama-cli -m model.gguf --cache-type-k q8_0 --cache-type-v turbo2 -c 131072 -p "..."
 ```
 
-Weight quantization is selected at conversion time:
+If output quality drops between steps, walk back to the previous step. The compression frontier is per-model — there is no global "best" setting.
+
+### Weight quantization (offline)
+
+Weight quantization is selected at conversion time via `llama-quantize`:
 
 ```bash
-llama-quantize model.f16.gguf model.tq4.gguf TQ4_1S
+# TQ4_1S — recommended for most CUDA / HIP deployments (dp4a 3.5× faster than baseline)
+llama-quantize model.f16.gguf model.tq4_1s.gguf TQ4_1S
+
+# TQ3_1S — smaller, accept ~1-2 PPL bump
+llama-quantize model.f16.gguf model.tq3_1s.gguf TQ3_1S
 ```
 
-Asymmetric K/V (recommended default), Boundary V, and Sparse V activate automatically based on the selected types and the runtime target. See the codec papers linked above for parameter selection guidance.
+### Automatic behavior
+
+The following activate based on the selected types — no flags required:
+
+- **Auto-asymmetric K/V** — when both sides are turbo / TQ types, the policy picks complementary configurations rather than symmetric.
+- **Boundary V (layer-aware)** — auto-enables for any `turbo2-V` selection.
+- **Sparse V dequantization** — on Metal targets, sparse V activates for all turbo V types.
+- **Flash Attention** — auto-enabled for turbo KV with the relevant backend kernel.
+
+See the linked papers above for parameter selection guidance on a per-model basis.
 
 ## Citation
 
