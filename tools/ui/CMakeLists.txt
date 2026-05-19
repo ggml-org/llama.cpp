@@ -37,6 +37,9 @@ set(UI_H   "${CMAKE_CURRENT_BINARY_DIR}/ui.h")
 
 add_executable(llama-ui-embed embed.cpp)
 target_compile_features(llama-ui-embed PRIVATE cxx_std_17)
+set_target_properties(llama-ui-embed PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
+)
 
 # Run the provisioning script every build so source changes in tools/ui/ are
 # always picked up. The script uses copy_if_different for ui.cpp/ui.h, so the
