@@ -770,9 +770,14 @@ inline ggml_webgpu_flash_attn_decisions ggml_webgpu_flash_attn_get_decisions(
                                   (v_offset_elems % GGML_WEBGPU_FLASH_ATTN_TILE_KV_VEC_WIDTH == 0u);
     const bool kv_vec_type_supported =
         K->type == GGML_TYPE_F16 || K->type == GGML_TYPE_Q4_0 || K->type == GGML_TYPE_Q8_0;
-    const bool use_vec = context.supports_subgroups && (context.src0->ne[1] < 20) && (context.src0->ne[0] % 32 == 0) &&
-                         (context.src2->ne[0] % GGML_WEBGPU_FLASH_ATTN_TILE_KV_VEC_WIDTH == 0) &&
-                         kv_vec_type_supported && (K->type != GGML_TYPE_F16 || f16_vec4_aligned) &&
+    const uint32_t kv_vec_head_align = K->type == GGML_TYPE_F16 ? GGML_WEBGPU_FLASH_ATTN_TILE_KV_VEC_WIDTH :
+                                                                  (uint32_t) ggml_blck_size(K->type);
+    const bool kv_vec_head_dims_aligned = context.src0->ne[0] % kv_vec_head_align == 0 &&
+                                          context.src2->ne[0] % kv_vec_head_align == 0;
+    // Compile with enough invocations to cover the largest reported subgroup.
+    const bool use_vec = context.supports_subgroups && (context.src0->ne[1] < 20) &&
+                         kv_vec_head_dims_aligned && kv_vec_type_supported &&
+                         (K->type != GGML_TYPE_F16 || f16_vec4_aligned) &&
                          (context.src2->type == K->type);
     const bool tile_can_dispatch_all_q_rows =
         context.max_subgroup_size > 0 &&
@@ -808,7 +813,7 @@ inline ggml_webgpu_flash_attn_decisions ggml_webgpu_flash_attn_get_decisions(
         decisions.q_tile  = 1u;
         decisions.kv_tile = std::max(8u, std::min(32u, max_kv_tile));
         decisions.kv_tile = (decisions.kv_tile / 8u) * 8u;
-        decisions.wg_size = std::max(1u, std::min<uint32_t>(32u, context.max_subgroup_size));
+        decisions.wg_size = context.max_subgroup_size;
         if (decisions.kv_direct) {
             decisions.kv_tile = std::min(decisions.kv_tile, GGML_WEBGPU_KV_SEQ_PAD);
             while (GGML_WEBGPU_KV_SEQ_PAD % decisions.kv_tile != 0) {

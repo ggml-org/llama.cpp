@@ -1234,6 +1234,7 @@ static webgpu_encoded_op ggml_webgpu_gated_delta_net(webgpu_context & ctx,
     const uint32_t h        = (uint32_t) src2->ne[1];
     const uint32_t n_tokens = (uint32_t) src2->ne[2];
     const uint32_t n_seqs   = (uint32_t) src2->ne[3];
+    const uint32_t K        = (uint32_t) src5->ne[1];
     const float    scale    = 1.0f / sqrtf((float) s_v);
     uint32_t       scale_u32;
     memcpy(&scale_u32, &scale, sizeof(scale_u32));
@@ -1258,6 +1259,7 @@ static webgpu_encoded_op ggml_webgpu_gated_delta_net(webgpu_context & ctx,
 
         (uint32_t) src0->ne[1],
         (uint32_t) (src2->ne[3] / src0->ne[3]),
+        K,
         scale_u32,
     };
 
@@ -1832,7 +1834,7 @@ static webgpu_encoded_op ggml_webgpu_flash_attn(webgpu_context & ctx,
     uint32_t     blk_nblk1       = 0;
     uint32_t     blk_batch_count = 0;
 
-    const uint32_t vec_nwg_cap = std::max(1u, std::min<uint32_t>(32u, ctx->global_ctx->capabilities.max_subgroup_size));
+    const uint32_t vec_nwg_cap = ctx->global_ctx->capabilities.min_subgroup_size;
     uint32_t       nwg         = 1u;
     const uint64_t kv_span     = (uint64_t) std::max(1u, decisions->kv_tile);
     while ((2u * nwg * kv_span) < (uint64_t) K->ne[1] && nwg < vec_nwg_cap) {
@@ -1953,8 +1955,11 @@ static webgpu_encoded_op ggml_webgpu_flash_attn(webgpu_context & ctx,
     std::vector<uint32_t>             reduce_params;
     std::vector<wgpu::BindGroupEntry> reduce_entries;
     if (use_vec_reduce) {
-        const uint32_t reduce_wg_size = std::max(
-            32u, std::min<uint32_t>(nwg * 32u, ctx->global_ctx->capabilities.limits.maxComputeInvocationsPerWorkgroup));
+        const uint32_t reduce_sg_size = ctx->global_ctx->capabilities.max_subgroup_size;
+        const uint32_t reduce_wg_size =
+            std::max(reduce_sg_size, (uint32_t) std::min<uint64_t>(
+                                         (uint64_t) nwg * reduce_sg_size,
+                                         ctx->global_ctx->capabilities.limits.maxComputeInvocationsPerWorkgroup));
         ggml_webgpu_shader_lib_context reduce_shader_ctx = shader_lib_ctx;
         reduce_shader_ctx.max_wg_size                    = reduce_wg_size;
         reduce_pipeline = ctx->shader_lib->get_flash_attn_vec_reduce_pipeline(reduce_shader_ctx);
@@ -3542,8 +3547,7 @@ static size_t ggml_backend_webgpu_buffer_type_get_alloc_size(ggml_backend_buffer
                     if (decisions.path == GGML_WEBGPU_FLASH_ATTN_PATH_VEC) {
                         const uint32_t kv_tile = decisions.kv_tile;
 
-                        const uint32_t vec_nwg_cap = std::max(
-                            1u, std::min<uint32_t>(32u, ctx->webgpu_global_ctx->capabilities.max_subgroup_size));
+                        const uint32_t vec_nwg_cap = ctx->webgpu_global_ctx->capabilities.min_subgroup_size;
                         uint32_t       nwg     = 1u;
                         const uint64_t kv_span = (uint64_t) std::max(1u, kv_tile);
                         while ((2u * nwg * kv_span) < (uint64_t) K->ne[1] && nwg < vec_nwg_cap) {
