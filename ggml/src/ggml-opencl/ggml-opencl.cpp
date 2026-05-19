@@ -391,6 +391,14 @@ struct ggml_backend_opencl_context {
 
     ggml_cl_version platform_version;
     ggml_cl_version opencl_c_version;
+
+    // argsort is loaded in supports_op because its availability depends on how
+    // many workgroups are allowed, which requires kernel compilation.
+    bool kernels_loaded_argsort = false;
+    // flash attn is loaded in supports_op because it contains multiple variants
+    // and takes time to compile, so we want to only compile it when needed.
+    bool kernels_loaded_flash_attn = false;
+    // rest of the kernels are currently always loaded in alloc_buffer.
     bool kernels_loaded = false;
 
     std::string driver_version;
@@ -842,6 +850,110 @@ static cl_program build_program_from_source(cl_context ctx, cl_device_id dev, co
     }
 
     return p;
+}
+
+static void load_cl_kernels_argsort(ggml_backend_opencl_context *backend_ctx) {
+    // compiler options for general kernels
+    auto opencl_c_std =
+        std::string("CL") + std::to_string(backend_ctx->opencl_c_version.major) + "." + std::to_string(backend_ctx->opencl_c_version.minor);
+    std::string compile_opts = std::string("-cl-std=") + opencl_c_std +
+                               " -cl-mad-enable -cl-unsafe-math-optimizations"
+                               " -cl-finite-math-only -cl-fast-relaxed-math";
+
+    // argsort
+    if (!backend_ctx->kernels_loaded_argsort) {
+        cl_int err;
+#ifdef GGML_OPENCL_EMBED_KERNELS
+        const std::string kernel_src {
+            #include "argsort.cl.h"
+        };
+#else
+        const std::string kernel_src = read_file("argsort.cl");
+#endif
+        backend_ctx->program_argsort_f32_i32 =
+            build_program_from_source(backend_ctx->context, backend_ctx->device, kernel_src.c_str(), compile_opts);
+
+        CL_CHECK((backend_ctx->kernel_argsort_f32_i32 = clCreateKernel(backend_ctx->program_argsort_f32_i32, "kernel_argsort_f32_i32", &err), err));
+        backend_ctx->kernels_loaded_argsort = true;
+    }
+}
+
+static void load_cl_kernels_flash_attn(ggml_backend_opencl_context *backend_ctx) {
+    // compiler options for general kernels
+    auto opencl_c_std =
+        std::string("CL") + std::to_string(backend_ctx->opencl_c_version.major) + "." + std::to_string(backend_ctx->opencl_c_version.minor);
+    std::string compile_opts = std::string("-cl-std=") + opencl_c_std +
+                               " -cl-mad-enable -cl-unsafe-math-optimizations"
+                               " -cl-finite-math-only -cl-fast-relaxed-math";
+
+    // flash_attn
+    if (!backend_ctx->kernels_loaded_flash_attn) {
+        cl_int err;
+
+        #ifdef GGML_OPENCL_EMBED_KERNELS
+                const std::string kernel_src_f16 {
+                    #include "flash_attn_f16.cl.h"
+                };
+                const std::string kernel_src_f32 {
+                    #include "flash_attn_f32.cl.h"
+                };
+                const std::string kernel_src_f32_f16 {
+                    #include "flash_attn_f32_f16.cl.h"
+                };
+        #else
+                const std::string kernel_src_f16 = read_file("flash_attn_f16.cl");
+                const std::string kernel_src_f32 = read_file("flash_attn_f32.cl");
+                const std::string kernel_src_f32_f16 = read_file("flash_attn_f32_f16.cl");
+        #endif
+
+        if (!kernel_src_f16.empty() && !kernel_src_f32.empty() && !kernel_src_f32_f16.empty()) {
+            const struct { int dk; int dv; int bm; int bn; } fa_dims[] = {
+                { 40,  40, 32, 32}, { 64,  64, 64, 64}, { 80,  80, 64, 32}, { 96,  96, 64, 32},
+                {112, 112, 32, 32}, {128, 128, 32, 32}, {192, 128, 16, 16},
+                {192, 192, 16, 16}, {256, 256, 16, 16},
+            };
+
+            for (size_t i = 0; i < sizeof(fa_dims)/sizeof(fa_dims[0]); ++i) {
+                const int dk = fa_dims[i].dk;
+                const int dv = fa_dims[i].dv;
+                const int bm = fa_dims[i].bm;
+                const int bn = fa_dims[i].bn;
+                std::string OPTS = compile_opts +
+                    " -D DK=" + std::to_string(dk) +
+                    " -D DV=" + std::to_string(dv) +
+                    " -D BLOCK_M=" + std::to_string(bm) +
+                    " -D BLOCK_N=" + std::to_string(bn);
+
+                cl_program prog_f16 = build_program_from_source(backend_ctx->context, backend_ctx->device, kernel_src_f16.c_str(), OPTS);
+                cl_kernel k_f16, k_f16_q1;
+                CL_CHECK((k_f16 = clCreateKernel(prog_f16, "flash_attn_f16", &err), err));
+                CL_CHECK((k_f16_q1 = clCreateKernel(prog_f16, "flash_attn_f16_q1", &err), err));
+                backend_ctx->kernels_flash_attn_f16[{dk, dv}] = k_f16;
+                backend_ctx->kernels_flash_attn_f16_q1[{dk, dv}] = k_f16_q1;
+                CL_CHECK(clReleaseProgram(prog_f16));
+
+                cl_program prog_f32 = build_program_from_source(backend_ctx->context, backend_ctx->device, kernel_src_f32.c_str(), OPTS);
+                cl_kernel k_f32, k_f32_q1;
+                CL_CHECK((k_f32 = clCreateKernel(prog_f32, "flash_attn_f32", &err), err));
+                CL_CHECK((k_f32_q1 = clCreateKernel(prog_f32, "flash_attn_f32_q1", &err), err));
+                backend_ctx->kernels_flash_attn_f32[{dk, dv}] = k_f32;
+                backend_ctx->kernels_flash_attn_f32_q1[{dk, dv}] = k_f32_q1;
+                CL_CHECK(clReleaseProgram(prog_f32));
+
+                cl_program prog_f32_f16 = build_program_from_source(backend_ctx->context, backend_ctx->device, kernel_src_f32_f16.c_str(), OPTS);
+                cl_kernel k_f32_f16, k_f32_f16_q1;
+                CL_CHECK((k_f32_f16 = clCreateKernel(prog_f32_f16, "flash_attn_f32_f16", &err), err));
+                CL_CHECK((k_f32_f16_q1 = clCreateKernel(prog_f32_f16, "flash_attn_f32_f16_q1", &err), err));
+                backend_ctx->kernels_flash_attn_f32_f16[{dk, dv}] = k_f32_f16;
+                backend_ctx->kernels_flash_attn_f32_f16_q1[{dk, dv}] = k_f32_f16_q1;
+                CL_CHECK(clReleaseProgram(prog_f32_f16));
+
+                backend_ctx->kernels_flash_attn_bm[{dk, dv}] = bm;
+                backend_ctx->kernels_flash_attn_bn[{dk, dv}] = bn;
+            }
+            backend_ctx->kernels_loaded_flash_attn = true;
+        }
+    }
 }
 
 static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx) {
@@ -1989,89 +2101,6 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx) {
             build_program_from_source(backend_ctx->context, backend_ctx->device, kernel_src.c_str(), compile_opts);
 
         CL_CHECK((backend_ctx->kernel_soft_max_4_f16 = clCreateKernel(backend_ctx->program_softmax_4_f16, "kernel_soft_max_4_f16", &err), err));
-        GGML_LOG_CONT(".");
-    }
-
-    // flash_attn
-    {
-        #ifdef GGML_OPENCL_EMBED_KERNELS
-                const std::string kernel_src_f16 {
-                    #include "flash_attn_f16.cl.h"
-                };
-                const std::string kernel_src_f32 {
-                    #include "flash_attn_f32.cl.h"
-                };
-                const std::string kernel_src_f32_f16 {
-                    #include "flash_attn_f32_f16.cl.h"
-                };
-        #else
-                const std::string kernel_src_f16 = read_file("flash_attn_f16.cl");
-                const std::string kernel_src_f32 = read_file("flash_attn_f32.cl");
-                const std::string kernel_src_f32_f16 = read_file("flash_attn_f32_f16.cl");
-        #endif
-
-        if (!kernel_src_f16.empty() && !kernel_src_f32.empty() && !kernel_src_f32_f16.empty()) {
-            const struct { int dk; int dv; int bm; int bn; } fa_dims[] = {
-                { 40,  40, 32, 32}, { 64,  64, 64, 64}, { 80,  80, 64, 32}, { 96,  96, 64, 32},
-                {112, 112, 32, 32}, {128, 128, 32, 32}, {192, 128, 16, 16},
-                {192, 192, 16, 16}, {256, 256, 16, 16},
-            };
-
-            for (size_t i = 0; i < sizeof(fa_dims)/sizeof(fa_dims[0]); ++i) {
-                const int dk = fa_dims[i].dk;
-                const int dv = fa_dims[i].dv;
-                const int bm = fa_dims[i].bm;
-                const int bn = fa_dims[i].bn;
-                std::string OPTS = compile_opts +
-                    " -D DK=" + std::to_string(dk) +
-                    " -D DV=" + std::to_string(dv) +
-                    " -D BLOCK_M=" + std::to_string(bm) +
-                    " -D BLOCK_N=" + std::to_string(bn);
-
-                cl_program prog_f16 = build_program_from_source(backend_ctx->context, backend_ctx->device, kernel_src_f16.c_str(), OPTS);
-                cl_kernel k_f16, k_f16_q1;
-                CL_CHECK((k_f16 = clCreateKernel(prog_f16, "flash_attn_f16", &err), err));
-                CL_CHECK((k_f16_q1 = clCreateKernel(prog_f16, "flash_attn_f16_q1", &err), err));
-                backend_ctx->kernels_flash_attn_f16[{dk, dv}] = k_f16;
-                backend_ctx->kernels_flash_attn_f16_q1[{dk, dv}] = k_f16_q1;
-                CL_CHECK(clReleaseProgram(prog_f16));
-
-                cl_program prog_f32 = build_program_from_source(backend_ctx->context, backend_ctx->device, kernel_src_f32.c_str(), OPTS);
-                cl_kernel k_f32, k_f32_q1;
-                CL_CHECK((k_f32 = clCreateKernel(prog_f32, "flash_attn_f32", &err), err));
-                CL_CHECK((k_f32_q1 = clCreateKernel(prog_f32, "flash_attn_f32_q1", &err), err));
-                backend_ctx->kernels_flash_attn_f32[{dk, dv}] = k_f32;
-                backend_ctx->kernels_flash_attn_f32_q1[{dk, dv}] = k_f32_q1;
-                CL_CHECK(clReleaseProgram(prog_f32));
-
-                cl_program prog_f32_f16 = build_program_from_source(backend_ctx->context, backend_ctx->device, kernel_src_f32_f16.c_str(), OPTS);
-                cl_kernel k_f32_f16, k_f32_f16_q1;
-                CL_CHECK((k_f32_f16 = clCreateKernel(prog_f32_f16, "flash_attn_f32_f16", &err), err));
-                CL_CHECK((k_f32_f16_q1 = clCreateKernel(prog_f32_f16, "flash_attn_f32_f16_q1", &err), err));
-                backend_ctx->kernels_flash_attn_f32_f16[{dk, dv}] = k_f32_f16;
-                backend_ctx->kernels_flash_attn_f32_f16_q1[{dk, dv}] = k_f32_f16_q1;
-                CL_CHECK(clReleaseProgram(prog_f32_f16));
-
-                backend_ctx->kernels_flash_attn_bm[{dk, dv}] = bm;
-                backend_ctx->kernels_flash_attn_bn[{dk, dv}] = bn;
-            }
-            GGML_LOG_CONT(".");
-        }
-    }
-
-    // argsort
-    {
-#ifdef GGML_OPENCL_EMBED_KERNELS
-        const std::string kernel_src {
-            #include "argsort.cl.h"
-        };
-#else
-        const std::string kernel_src = read_file("argsort.cl");
-#endif
-        backend_ctx->program_argsort_f32_i32 =
-            build_program_from_source(backend_ctx->context, backend_ctx->device, kernel_src.c_str(), compile_opts);
-
-        CL_CHECK((backend_ctx->kernel_argsort_f32_i32 = clCreateKernel(backend_ctx->program_argsort_f32_i32, "kernel_argsort_f32_i32", &err), err));
         GGML_LOG_CONT(".");
     }
 
@@ -4789,6 +4818,8 @@ static bool ggml_opencl_supports_op(ggml_backend_dev_t dev, const struct ggml_te
         case GGML_OP_IM2COL:
             return true;
         case GGML_OP_ARGSORT: {
+            load_cl_kernels_argsort(backend_ctx);
+
             cl_kernel kernel = backend_ctx->kernel_argsort_f32_i32;
             int max_workgroup_size = backend_ctx->get_kernel_workgroup_size(kernel);
 
@@ -4806,6 +4837,8 @@ static bool ggml_opencl_supports_op(ggml_backend_dev_t dev, const struct ggml_te
             return op->src[0]->type == GGML_TYPE_F32;
         case GGML_OP_FLASH_ATTN_EXT:
             {
+                load_cl_kernels_flash_attn(backend_ctx);
+
                 const ggml_tensor * q = op->src[0];
                 const ggml_tensor * k = op->src[1];
                 const ggml_tensor * v = op->src[2];
