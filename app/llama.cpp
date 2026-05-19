@@ -1,55 +1,67 @@
+#include <cstdio>
 #include <string>
 #include <vector>
-#include <cstdio>
 
 int llama_server(int argc, char ** argv);
-int llama_completion(int argc, char ** argv);
 int llama_cli(int argc, char ** argv);
+
+// hidden
+int llama_completion(int argc, char ** argv);
 int llama_bench(int argc, char ** argv);
+static int help(int argc, char ** argv);
 
 struct command {
-    std::string name;
-    std::string desc;
-    std::vector<const char *> aliases;
+    const char * name;
+    const char * desc;
+    std::vector<std::string> aliases;
+    bool hidden;
     int (*func)(int, char **);
 };
 
-static struct command cmds[] = {
-    {"serve",     "HTTP API server",                     {"server"},   llama_server    },
-    {"cli",        "Command-line interactive interface", {"client"},   llama_cli       },
-    {"completion", "Text completion",                    {"complete"}, llama_completion},
-    {"bench",      "Benchmarking tool",                  {},           llama_bench     },
+static const command cmds[] = {
+    {"serve",      "HTTP API server",                    {"server"},   false, llama_server     },
+    {"cli",        "Command-line interactive interface", {"client"},   false, llama_cli        },
+    {"completion", "Text completion",                    {"complete"}, true,  llama_completion },
+    {"bench",      "Benchmarking tool",                  {},           true,  llama_bench      },
+    {"help",       "Show available commands",            {},           true,  help             },
 };
 
-static void print_usage(const char * prog) {
-    printf("Usage: %s <command> [options]\n\n", prog);
-    printf("Available commands:\n");
+static int help(int argc, char ** argv) {
+    const bool show_all = argc >= 2 && std::string(argv[1]) == "all";
+
+    printf("Usage: llama <command> [options]\n\nAvailable commands:\n");
 
     for (const auto & cmd : cmds) {
-        printf("  %-15s %s\n", cmd.name.data(), cmd.desc.data());
+        if (show_all || !cmd.hidden) {
+            printf("  %-15s %s\n", cmd.name, cmd.desc);
+        }
     }
-    printf("\nRun '%s <command> --help' for command-specific usage.\n", prog);
+    printf("\nRun 'llama <command> --help' for command-specific usage.\n");
+
+    return 0;
+}
+
+static bool matches(const std::string & arg, const command & cmd) {
+    if (arg == cmd.name) {
+        return true;
+    }
+    for (const auto & alias : cmd.aliases) {
+        if (arg == alias) {
+            return true;
+        }
+    }
+    return false;
 }
 
 int main(int argc, char ** argv) {
-    if (argc < 2) {
-        print_usage(argv[0]);
-        return 1;
-    }
-
-    const std::string arg = argv[1];
+    const std::string arg = argc >= 2 ? argv[1] : "help";
 
     for (const auto & cmd : cmds) {
-        if (arg == cmd.name) {
+        if (matches(arg, cmd)) {
             return cmd.func(argc - 1, argv + 1);
-        }
-        for (const auto & alias : cmd.aliases) {
-            if (arg == alias) {
-                return cmd.func(argc - 1, argv + 1);
-            }
         }
     }
 
-    fprintf(stderr, "error: unknown command '%s'\n\n", argv[1]);
+    fprintf(stderr, "error: unknown command '%s'\n", arg.c_str());
     return 1;
 }
