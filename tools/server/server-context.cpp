@@ -35,6 +35,7 @@
 using json = nlohmann::ordered_json;
 
 constexpr int HTTP_POLLING_SECONDS = 1;
+constexpr int HTTP_STREAM_HEARTBEAT_SECONDS = 5;
 
 // state diagram: https://github.com/ggml-org/llama.cpp/pull/9283
 enum slot_state {
@@ -3550,35 +3551,43 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
             }
         }
     } else {
-        // in streaming mode, the first error must be treated as non-stream response
-        // this is to match the OAI API behavior
-        // ref: https://github.com/ggml-org/llama.cpp/pull/16486#discussion_r2419657309
-        auto first_result = rd.next(req.should_stop);
-        if (first_result == nullptr) {
-            GGML_ASSERT(req.should_stop());
+        // Try to get the first result quickly. If nothing is ready yet, start
+        // streaming with a keepalive comment to prevent intermediary idle timeouts.
+        auto first_result = rd.next_or_timeout(HTTP_POLLING_SECONDS);
+        if (first_result == nullptr && req.should_stop()) {
             return res; // connection is closed
         }
 
-        if (first_result->is_error()) {
-            res->error(first_result->to_json());
-            return res;
-        }
+        if (first_result != nullptr) {
+            if (first_result->is_error()) {
+                // first error returned as a non-stream response (matches OAI API behavior)
+                // ref: https://github.com/ggml-org/llama.cpp/pull/16486#discussion_r2419657309
+                res->error(first_result->to_json());
+                return res;
+            }
 
-        GGML_ASSERT(
-            dynamic_cast<server_task_result_cmpl_partial*>(first_result.get()) != nullptr ||
-            dynamic_cast<server_task_result_cmpl_final*>  (first_result.get()) != nullptr
-        );
+            GGML_ASSERT(
+                dynamic_cast<server_task_result_cmpl_partial*>(first_result.get()) != nullptr ||
+                dynamic_cast<server_task_result_cmpl_final*>  (first_result.get()) != nullptr
+            );
 
-        // next responses are streamed
-        // to be sent immediately
-        json first_result_json = first_result->to_json();
-        if (res_type == TASK_RESPONSE_TYPE_ANTHROPIC) {
-            res->data = format_anthropic_sse(first_result_json);
-        } else if (res_type == TASK_RESPONSE_TYPE_OAI_RESP) {
-            res->data = format_oai_resp_sse(first_result_json);
+            // next responses are streamed
+            // to be sent immediately
+            json first_result_json = first_result->to_json();
+            if (res_type == TASK_RESPONSE_TYPE_ANTHROPIC) {
+                res->data = format_anthropic_sse(first_result_json);
+            } else if (res_type == TASK_RESPONSE_TYPE_OAI_RESP) {
+                res->data = format_oai_resp_sse(first_result_json);
+            } else {
+                res->data = format_oai_sse(first_result_json);
+            }
         } else {
-            res->data = format_oai_sse(first_result_json);
+            // Send an initial heartbeat to start the stream immediately.
+            // This keeps L7 proxies/load balancers from treating long prompt
+            // processing as a silent idle connection.
+            res->data = ": keep-alive\n\n";
         }
+
         res->status = 200;
         res->content_type = "text/event-stream";
         res->next = [res_this = res.get(), res_type, &req](std::string & output) -> bool {
@@ -3626,11 +3635,15 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
                 }
 
                 // receive subsequent results
-                auto result = rd.next(req.should_stop);
+                auto result = rd.next_or_timeout(HTTP_STREAM_HEARTBEAT_SECONDS);
                 if (result == nullptr) {
-                    SRV_DBG("%s", "stopping streaming due to should_stop condition\n");
-                    GGML_ASSERT(req.should_stop());
-                    return false; // should_stop condition met
+                    if (req.should_stop()) {
+                        SRV_DBG("%s", "stopping streaming due to should_stop condition\n");
+                        return false; // should_stop condition met
+                    }
+
+                    output = ": keep-alive\n\n";
+                    return true;
                 }
 
                 // send the results
