@@ -3242,6 +3242,29 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}));
     add_opt(common_arg(
+        {"--slot-context"}, "SLOT_CONTEXTS",
+        "assign custom context sizes to specific slots; comma-separated list of <slot_id>=<ctx_size> pairs (e.g. \"0=4096,1=8192\"); unlisted slots share the remaining context equally",
+        [](common_params & params, const std::string & value) {
+            std::istringstream ss(value);
+            std::string token;
+            while (std::getline(ss, token, ',')) {
+                const auto eq = token.find('=');
+                if (eq == std::string::npos) {
+                    throw std::invalid_argument("error: invalid --slot-context pair (expected <slot_id>=<ctx_size>): " + token + "\n");
+                }
+                const int    slot_id  = std::stoi(token.substr(0, eq));
+                const int32_t ctx_size = std::stoi(token.substr(eq + 1));
+                if (slot_id < 0) {
+                    throw std::invalid_argument("error: --slot-context slot_id must be non-negative\n");
+                }
+                if (ctx_size <= 0) {
+                    throw std::invalid_argument("error: --slot-context ctx_size must be positive\n");
+                }
+                params.slot_ctx_sizes[slot_id] = ctx_size;
+            }
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}));
+    add_opt(common_arg(
         {"--lora-init-without-apply"},
         string_format("load LoRA adapters without applying them (apply later via POST /lora-adapters) (default: %s)", params.lora_init_without_apply ? "enabled" : "disabled"),
         [](common_params & params) {
