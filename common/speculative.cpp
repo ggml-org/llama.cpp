@@ -1623,7 +1623,7 @@ void common_speculative_print_stats(const common_speculative * spec) {
             str_perf = "";
         }
 
-        LOG_INF("statistics %s: #calls(b,g,a) = %zu %zu %zu, #gen drafts = %zu, #acc drafts = %zu, #gen tokens = %zu, #acc tokens = %zu%s\n",
+        LOG_INF("statistics %16s: #calls(b,g,a) = %4zu %6zu %6zu, #gen drafts = %6zu, #acc drafts = %5zu, #gen tokens = %6zu, #acc tokens = %5zu%s\n",
                 common_speculative_type_to_str(impl->type).c_str(),
                 impl->n_call_begin, impl->n_call_draft, impl->n_call_accept,
                 impl->n_gen_drafts,

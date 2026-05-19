@@ -536,7 +536,11 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
                 throw std::invalid_argument(string_format("error: invalid argument: %s", arg.c_str()));
             }
             if (!seen_args.insert(arg).second) {
-                LOG_WRN("DEPRECATED: argument '%s' specified multiple times, use comma-separated values instead (only last value will be used)\n", arg.c_str());
+                const bool skip = (arg == "--spec-type");
+
+                if (!skip) {
+                    LOG_WRN("DEPRECATED: argument '%s' specified multiple times, use comma-separated values instead (only last value will be used)\n", arg.c_str());
+                }
             }
             auto & tmp = arg_to_options[arg];
             auto opt = *tmp.first;
@@ -893,7 +897,11 @@ bool common_params_to_map(int argc, char ** argv, llama_example ex, std::map<com
             throw std::invalid_argument(string_format("error: invalid argument: %s", arg.c_str()));
         }
         if (!seen_args.insert(arg).second) {
-            LOG_WRN("DEPRECATED: argument '%s' specified multiple times, use comma-separated values instead (only last value will be used)\n", arg.c_str());
+            const bool skip = (arg == "--spec-type");
+
+            if (!skip) {
+                LOG_WRN("DEPRECATED: argument '%s' specified multiple times, use comma-separated values instead (only last value will be used)\n", arg.c_str());
+            }
         }
         auto opt = *arg_to_options[arg];
         std::string val;
