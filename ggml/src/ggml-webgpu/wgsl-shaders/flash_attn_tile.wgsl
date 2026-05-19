@@ -1,12 +1,33 @@
 enable f16;
 enable subgroups;
 
+#ifdef Q_F16
+#define Q_TYPE f16
+#else
+#define Q_TYPE f32
+#endif
+
+#ifdef KV_F32
+#define KV_TYPE f32
+#else
+#define KV_TYPE f16
+#endif
+
+#ifdef DST_F16
+#define DST_TYPE f16
+#else
+#define DST_TYPE f32
+#endif
+
 #define HEAD_DIM_QK 64
 #define HEAD_DIM_V 64
 #define KV_STAGE_STRIDE 64
 #define Q_TILE 4
 #define KV_TILE 64
 #define WG_SIZE 128
+#ifndef MIN_SUBGROUP_SIZE
+#define MIN_SUBGROUP_SIZE MAX_SUBGROUP_SIZE
+#endif
 
 struct Params {
     offset_q: u32,
@@ -41,13 +62,13 @@ struct Params {
     m1: f32,
 };
 
-@group(0) @binding(0) var<storage, read_write> Q: array<f32>;
+@group(0) @binding(0) var<storage, read_write> Q: array<Q_TYPE>;
 #ifdef KV_OVERLAP
-@group(0) @binding(1) var<storage, read_write> K: array<vec4<f16>>;
+@group(0) @binding(1) var<storage, read_write> K: array<vec4<KV_TYPE>>;
 #define V K
 #else
-@group(0) @binding(1) var<storage, read_write> K: array<vec4<f16>>;
-@group(0) @binding(2) var<storage, read_write> V: array<vec4<f16>>;
+@group(0) @binding(1) var<storage, read_write> K: array<vec4<KV_TYPE>>;
+@group(0) @binding(2) var<storage, read_write> V: array<vec4<KV_TYPE>>;
 #endif
 
 #if defined(MASK) && defined(SINKS)
@@ -92,17 +113,17 @@ struct Params {
 #endif
 #endif
 
-@group(0) @binding(DST_BINDING) var<storage, read_write> dst: array<vec4<f32>>;
+@group(0) @binding(DST_BINDING) var<storage, read_write> dst: array<vec4<DST_TYPE>>;
 @group(0) @binding(PARAMS_BINDING) var<uniform> params: Params;
 
 const FLOAT_MIN: f32 = -1.0e9;
 const Q_CHUNKS: u32 = HEAD_DIM_QK / 4u;
 const V_CHUNKS: u32 = HEAD_DIM_V / 4u;
-const SCORE_REGS_PER_LANE: u32 = (KV_TILE + MAX_SUBGROUP_SIZE - 1u) / MAX_SUBGROUP_SIZE;
-const OUT_REGS_PER_LANE: u32 = (V_CHUNKS + MAX_SUBGROUP_SIZE - 1u) / MAX_SUBGROUP_SIZE;
+const SCORE_REGS_PER_LANE: u32 = (KV_TILE + MIN_SUBGROUP_SIZE - 1u) / MIN_SUBGROUP_SIZE;
+const OUT_REGS_PER_LANE: u32 = (V_CHUNKS + MIN_SUBGROUP_SIZE - 1u) / MIN_SUBGROUP_SIZE;
 
-var<workgroup> q_shmem: array<f16, Q_TILE * HEAD_DIM_QK>;
-var<workgroup> kv_shmem: array<f16, KV_TILE * KV_STAGE_STRIDE>;
+var<workgroup> q_shmem: array<f32, Q_TILE * HEAD_DIM_QK>;
+var<workgroup> kv_shmem: array<f32, KV_TILE * KV_STAGE_STRIDE>;
 var<workgroup> p_shmem: array<f32, Q_TILE * KV_TILE>;
 
 @compute @workgroup_size(WG_SIZE)
@@ -158,10 +179,10 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
         let q_col = elem_idx % HEAD_DIM_QK;
         let head_q_row = q_row_start + q_tile_row;
         let global_q_row_offset = q_head_offset + head_q_row * params.stride_q1;
-        q_shmem[elem_idx] = f16(select(
+        q_shmem[elem_idx] = select(
             0.0,
-            Q[global_q_row_offset + q_col] * params.scale,
-            head_q_row < params.seq_len_q));
+            f32(Q[global_q_row_offset + q_col]) * params.scale,
+            head_q_row < params.seq_len_q);
     }
 
     workgroupBarrier();
@@ -192,10 +213,10 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
             let k_vec_index = (k_head_offset + global_k_row * params.stride_k1 + chunk * 4u) >> 2u;
             let k4 = K[k_vec_index];
             let kv_off = kv_local * KV_STAGE_STRIDE + chunk * 4u;
-            kv_shmem[kv_off + 0u] = k4.x;
-            kv_shmem[kv_off + 1u] = k4.y;
-            kv_shmem[kv_off + 2u] = k4.z;
-            kv_shmem[kv_off + 3u] = k4.w;
+            kv_shmem[kv_off + 0u] = f32(k4.x);
+            kv_shmem[kv_off + 1u] = f32(k4.y);
+            kv_shmem[kv_off + 2u] = f32(k4.z);
+            kv_shmem[kv_off + 3u] = f32(k4.w);
         }
 
         workgroupBarrier();
@@ -213,16 +234,16 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
                 for (var chunk = 0u; chunk < Q_CHUNKS; chunk += 1u) {
                     let q_off = q_base + chunk * 4u;
                     let qv = vec4<f32>(
-                        f32(q_shmem[q_off + 0u]),
-                        f32(q_shmem[q_off + 1u]),
-                        f32(q_shmem[q_off + 2u]),
-                        f32(q_shmem[q_off + 3u]));
+                        q_shmem[q_off + 0u],
+                        q_shmem[q_off + 1u],
+                        q_shmem[q_off + 2u],
+                        q_shmem[q_off + 3u]);
                     let kv_off = kv_local * KV_STAGE_STRIDE + chunk * 4u;
                     let kv = vec4<f32>(
-                        f32(kv_shmem[kv_off + 0u]),
-                        f32(kv_shmem[kv_off + 1u]),
-                        f32(kv_shmem[kv_off + 2u]),
-                        f32(kv_shmem[kv_off + 3u]));
+                        kv_shmem[kv_off + 0u],
+                        kv_shmem[kv_off + 1u],
+                        kv_shmem[kv_off + 2u],
+                        kv_shmem[kv_off + 3u]);
                     dot_val += dot(qv, kv);
                 }
 #ifdef LOGIT_SOFTCAP
@@ -264,10 +285,10 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
             let v_vec_index = (v_head_offset + global_v_row * params.stride_v1 + chunk * 4u) >> 2u;
             let v4 = V[v_vec_index];
             let kv_off = kv_local * KV_STAGE_STRIDE + chunk * 4u;
-            kv_shmem[kv_off + 0u] = v4.x;
-            kv_shmem[kv_off + 1u] = v4.y;
-            kv_shmem[kv_off + 2u] = v4.z;
-            kv_shmem[kv_off + 3u] = v4.w;
+            kv_shmem[kv_off + 0u] = f32(v4.x);
+            kv_shmem[kv_off + 1u] = f32(v4.y);
+            kv_shmem[kv_off + 2u] = f32(v4.z);
+            kv_shmem[kv_off + 3u] = f32(v4.w);
         }
 
         workgroupBarrier();
@@ -288,10 +309,10 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
                     let p = p_shmem[subgroup_p_offset + kv_local];
                     let kv_off = kv_local * KV_STAGE_STRIDE + chunk * 4u;
                     let v4 = vec4<f32>(
-                        f32(kv_shmem[kv_off + 0u]),
-                        f32(kv_shmem[kv_off + 1u]),
-                        f32(kv_shmem[kv_off + 2u]),
-                        f32(kv_shmem[kv_off + 3u]));
+                        kv_shmem[kv_off + 0u],
+                        kv_shmem[kv_off + 1u],
+                        kv_shmem[kv_off + 2u],
+                        kv_shmem[kv_off + 3u]);
                     acc += p * v4;
                 }
                 out_regs[reg_idx] = acc;
@@ -324,7 +345,7 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
                 continue;
             }
             let dst_vec_index = (row_base + chunk * 4u) >> 2u;
-            dst[dst_vec_index] = out_regs[reg_idx] * inv_exp_sum;
+            dst[dst_vec_index] = vec4<DST_TYPE>(out_regs[reg_idx] * inv_exp_sum);
         }
     }
 }
