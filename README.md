@@ -102,28 +102,31 @@ KV-cache types are selected per-side via the standard `--cache-type-k` / `--cach
 
 > **Start light, then compress.** Some model families — small models, certain MoE configurations, quant-sensitive instruction-tuned variants — are more delicate than others. Pick a light asymmetric configuration first, verify output quality (eyeball + PPL on a hold-out set) on your specific model, then ratchet up V aggression if you have memory headroom to gain. **Do not start at maximum compression** and work backwards.
 
-The core finding from the asymmetric-kv-compression paper ([asymmetric-kv-compression](https://github.com/TheTom/turboquant_plus/blob/main/docs/papers/asymmetric-kv-compression.md)) drives all the configs below: **V tolerates aggressive compression, K does not**. Always keep K at higher precision than V; never start symmetric.
+The core finding from the asymmetric-kv-compression paper — [**Asymmetric K/V Cache Compression: Why V is Free and K is Everything**](https://github.com/TheTom/turboquant_plus/blob/main/docs/papers/asymmetric-kv-compression.md) — drives all the configs below: **V tolerates aggressive compression, K does not**. Always keep K at higher precision than V; never start symmetric. That paper documents the specific failure modes you'll hit if you ignore this and compress K aggressively (PPL blow-up on certain model families, attention-rotation interaction with low-bit K, etc.) — read it before considering step 6.
+
+Higher turbo number = more bits per element = less aggressive compression. The V-side compression ladder is `turbo4` (lightest) → `turbo3` → `turbo2` (heaviest). On the K side, prefer `f16` or `q8_0`; never lead with a turbo K.
 
 Recommendations, ordered from most conservative to most aggressive:
 
 | Step | `--cache-type-k` | `--cache-type-v` | When | Notes |
 |---|---|---|---|---|
-| **1. Safest start** | `f16` | `turbo3` | First contact with any new model | K untouched, V at ~4.6× compression. If this isn't faithful, the model is unusually quant-sensitive — stop here and investigate. |
-| **2. Recommended default** | `q8_0` | `turbo3` | Most dense models, most workloads | The "asymmetric turbo" sweet spot. Near-lossless K, ~4.6× compressed V. Total KV memory ~3-4× smaller than `f16`/`f16`. |
-| **3. Aggressive V** | `q8_0` | `turbo2` | Memory-bound long context, validated quality | Boundary V auto-engages and protects sensitive layers. Expect <2% PPL loss on dense models outside the protected layers. |
-| **4. MoE-aware aggressive** | `q8_0` | `turbo2` | Large MoE models (DeepSeek, Qwen3.6, Mixtral-style) | Same flags; Boundary V's per-expert-boundary protection is what makes this work on MoE. See [moe-v-compression-frontier](https://github.com/TheTom/turboquant_plus/blob/main/docs/papers/moe-v-compression-frontier.md). |
-| **5. Discouraged: symmetric K compression** | `turbo3` | `turbo2` | Only with model-specific quality validation | Compressing K is where models break. The asymmetric paper documents the failure modes. Not a recommended starting point. |
+| **1. Safest start** | `f16` | `turbo4` | First contact with any new model | K untouched, V at the lightest turbo tier. If output isn't faithful at this step, the model is unusually quant-sensitive — stop and investigate before escalating. |
+| **2. Conservative** | `q8_0` | `turbo4` | Verified safe at step 1, want a memory win without much risk | Light on both sides. Typically near-indistinguishable from `f16`/`f16` outputs. |
+| **3. Recommended default** | `q8_0` | `turbo3` | Most dense models, most production workloads | The "asymmetric turbo" sweet spot from the [asymmetric-kv-compression](https://github.com/TheTom/turboquant_plus/blob/main/docs/papers/asymmetric-kv-compression.md) paper. Near-lossless K, ~4.6× compressed V. Total KV ~3-4× smaller than `f16`/`f16`. |
+| **4. Aggressive V** | `q8_0` | `turbo2` | Memory-bound long context, after validating quality at step 3 | Boundary V auto-engages and protects sensitive layers. Expect <2% PPL loss on dense models outside the protected layers. |
+| **5. MoE-aware aggressive** | `q8_0` | `turbo2` | Large MoE models (DeepSeek, Qwen3.6, Mixtral-style) | Same flags; Boundary V's per-expert-boundary protection is what makes this work on MoE. See [moe-v-compression-frontier](https://github.com/TheTom/turboquant_plus/blob/main/docs/papers/moe-v-compression-frontier.md). |
+| **6. Discouraged: symmetric K compression** | any `turbo*` | any `turbo*` | Only with model-specific quality validation in hand | Compressing K is where models break. The asymmetric paper documents the failure modes. Not a starting point. |
 
 Example invocations:
 
 ```bash
-# Step 1 — safest start (first contact)
-llama-cli -m model.gguf --cache-type-k f16 --cache-type-v turbo3 -p "..."
+# Step 1 — safest start (first contact with a new model)
+llama-cli -m model.gguf --cache-type-k f16 --cache-type-v turbo4 -p "..."
 
-# Step 2 — recommended default (most production)
+# Step 3 — recommended default (asymmetric turbo)
 llama-cli -m model.gguf --cache-type-k q8_0 --cache-type-v turbo3 -p "..."
 
-# Step 3 — aggressive V at long context
+# Step 4 — aggressive V at long context
 llama-cli -m model.gguf --cache-type-k q8_0 --cache-type-v turbo2 -c 131072 -p "..."
 ```
 
