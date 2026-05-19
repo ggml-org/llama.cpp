@@ -3334,8 +3334,9 @@ static vk_fa_pipeline_state get_fa_pipeline_state(const vk_device& device, const
 
 static std::vector<uint32_t> get_fa_spec_constants(const vk_fa_pipeline_state& state) {
     const auto fa_block_bytes = [](ggml_type t) -> uint32_t {
-        // decodeBufF32 uses a block of vec4s for a better memory access pattern.
-        return t == GGML_TYPE_F32 ? 16u : (uint32_t) ggml_type_size(t);
+        if (t == GGML_TYPE_F32)  return 16u;
+        if (t == GGML_TYPE_BF16) return 8u;
+        return (uint32_t) ggml_type_size(t);
     };
     return {
         /* 0 WorkGroupSize   */ state.workgroup_size,
@@ -3849,10 +3850,16 @@ static void ggml_vk_load_shaders(vk_device& device) {
         const uint32_t fa_sgs = fa.first.subgroup_size;
         const bool fa_ds = fa.first.subgroup_size == 0;
 
+        const bool bf16_kv = fa.first.k_type == GGML_TYPE_BF16;
         const bool use_mmq = ggml_vk_fa_scalar_uses_mmq(device, fa.first.k_type);
         const void * spv_data = nullptr;
         size_t spv_size = 0;
-        if (use_mmq) {
+        const char *name = nullptr;
+        if (bf16_kv) {
+            spv_data = flash_attn_f32_f16_fp32_data;
+            spv_size = flash_attn_f32_f16_fp32_len;
+            name = aligned ? "flash_attn_f32_bf16_aligned" : "flash_attn_f32_bf16";
+        } else if (use_mmq) {
 #if defined(GGML_VULKAN_INTEGER_DOT_GLSLC_SUPPORT)
             if (device->fp16) {
                 if (f32acc) { spv_data = flash_attn_f32_f16_int8_data;        spv_size = flash_attn_f32_f16_int8_len; }
@@ -3862,6 +3869,7 @@ static void ggml_vk_load_shaders(vk_device& device) {
                 spv_size = flash_attn_f32_f16_fp32_int8_len;
             }
 #endif
+            name = aligned ? "flash_attn_f32_f16_aligned" : "flash_attn_f32_f16";
         } else {
             if (device->fp16) {
                 if (f32acc) { spv_data = flash_attn_f32_f16_data;        spv_size = flash_attn_f32_f16_len; }
@@ -3870,8 +3878,8 @@ static void ggml_vk_load_shaders(vk_device& device) {
                 spv_data = flash_attn_f32_f16_fp32_data;
                 spv_size = flash_attn_f32_f16_fp32_len;
             }
+            name = aligned ? "flash_attn_f32_f16_aligned" : "flash_attn_f32_f16";
         }
-        const char *name = aligned ? "flash_attn_f32_f16_aligned" : "flash_attn_f32_f16";
         ggml_vk_create_pipeline(device, fa.second, name, spv_size, spv_data, "main", 7,
                                 sizeof(vk_flash_attn_push_constants), {Br, 1, 1},
                                 get_fa_spec_constants(fa.first), aligned ? Bc : 1, true,
@@ -9448,7 +9456,8 @@ static bool ggml_vk_flash_attn_scalar_shmem_support(const vk_device& device, con
     const uint32_t Br = params.block_rows;
     const uint32_t Bc = params.block_cols;
 
-    const uint32_t float_type_size = device->fp16 ? sizeof(ggml_fp16_t) : sizeof(float);
+    // BF16 uses the fp32 shader (FLOAT_TYPE=float)
+    const uint32_t float_type_size = (device->fp16 && k_type != GGML_TYPE_BF16) ? sizeof(ggml_fp16_t) : sizeof(float);
 
     const bool mmq = ggml_vk_fa_scalar_uses_mmq(device, k_type);
 
@@ -9589,7 +9598,7 @@ static void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx
     uint32_t workgroups_y = (uint32_t)neq2;
     uint32_t workgroups_z = (uint32_t)neq3;
 
-    const bool f32acc = !ctx->device->fp16 || dst->op_params[3] == GGML_PREC_F32;
+    const bool f32acc = !ctx->device->fp16 || dst->op_params[3] == GGML_PREC_F32 || k->type == GGML_TYPE_BF16;
 
     // For scalar/coopmat1 FA, we can use the "large" size to accommodate qga.
     // For coopmat2 FA, we always use the small size (which is still pretty large for gqa).
@@ -9612,11 +9621,11 @@ static void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx
     uint32_t k_stride = (uint32_t)(nbk1 / ggml_type_size(k->type));
     uint32_t v_stride = (uint32_t)(nbv1 / ggml_type_size(v->type));
 
-    // For F32, the shader treats it as a block of size 4 (for vec4 loads)
-    if (k->type == GGML_TYPE_F32) {
+    // F32 and BF16 use block_elems=4, so stride is in units of vec4/u16vec4 blocks
+    if (k->type == GGML_TYPE_F32 || k->type == GGML_TYPE_BF16) {
         k_stride /= 4;
     }
-    if (v->type == GGML_TYPE_F32) {
+    if (v->type == GGML_TYPE_F32 || v->type == GGML_TYPE_BF16) {
         v_stride /= 4;
     }
 
@@ -16400,6 +16409,7 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
                     switch (t) {
                     case GGML_TYPE_F32:
                     case GGML_TYPE_F16:
+                    case GGML_TYPE_BF16:
                     case GGML_TYPE_Q8_0:
                     case GGML_TYPE_Q5_1:
                     case GGML_TYPE_Q5_0:
@@ -16413,6 +16423,12 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
                     }
                 };
                 if (!fa_kv_ok(op->src[1]->type) || !fa_kv_ok(op->src[2]->type)) {
+                    return false;
+                }
+                if (op->src[1]->type == GGML_TYPE_BF16 && op->src[2]->type != GGML_TYPE_BF16) {
+                    return false;
+                }
+                if (op->src[2]->type == GGML_TYPE_BF16 && op->src[1]->type != GGML_TYPE_BF16) {
                     return false;
                 }
                 if (!coopmat2 && !(device->subgroup_shuffle && device->subgroup_vote)) {
