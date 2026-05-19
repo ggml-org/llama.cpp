@@ -284,10 +284,10 @@ static __global__ void flash_attn_ext_vec(
             for (int offset = nthreads_KQ; offset < WARP_SIZE; offset <<= 1) {
                 KQ_max_new[j] = fmaxf(KQ_max_new[j], __shfl_xor_sync(0xFFFFFFFF, KQ_max_new[j], offset, WARP_SIZE));
             }
-            const float KQ_max_scale = expf(KQ_max[j] - KQ_max_new[j]);
+            const float KQ_max_scale = __expf(KQ_max[j] - KQ_max_new[j]);
             KQ_max[j] = KQ_max_new[j];
 
-            KQ_reg[j] = expf(KQ_reg[j] - KQ_max[j]);
+            KQ_reg[j] = __expf(KQ_reg[j] - KQ_max[j]);
             KQ_sum[j] = KQ_sum[j]*KQ_max_scale + KQ_reg[j];
             KQ[j*nthreads + tid] = KQ_reg[j];
 
@@ -379,10 +379,10 @@ static __global__ void flash_attn_ext_vec(
             }
 
             const float kqmax_new_j = fmaxf(sink, KQ_max[j]);
-            const float KQ_max_scale = expf(KQ_max[j] - kqmax_new_j);
+            const float KQ_max_scale = __expf(KQ_max[j] - kqmax_new_j);
             KQ_max[j] = kqmax_new_j;
 
-            KQ_sum[j] = KQ_sum[j]*KQ_max_scale + (threadIdx.x == 0 ? expf(sink - KQ_max[j]) : 0.0f);
+            KQ_sum[j] = KQ_sum[j]*KQ_max_scale + (threadIdx.x == 0 ? __expf(sink - KQ_max[j]) : 0.0f);
 
 #ifdef V_DOT2_F32_F16_AVAILABLE
             const half2 KQ_max_scale_h2 = make_half2(KQ_max_scale, KQ_max_scale);
@@ -428,7 +428,7 @@ static __global__ void flash_attn_ext_vec(
 
         float kqmax_new = KQ_max_shared[j_VKQ][threadIdx.x];
         kqmax_new = warp_reduce_max(kqmax_new);
-        const float kqmax_scale = expf(KQ_max[j_VKQ] - kqmax_new);
+        const float kqmax_scale = __expf(KQ_max[j_VKQ] - kqmax_new);
         KQ_max[j_VKQ] = kqmax_new;
 
 #ifdef V_DOT2_F32_F16_AVAILABLE

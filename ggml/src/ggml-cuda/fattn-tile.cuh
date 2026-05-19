@@ -669,14 +669,14 @@ static __device__ __forceinline__ void flash_attn_tile_iter(
         for (int jc1 = 0; jc1 < KQ_cs; ++jc1) {
             const int jc = jc0 + jc1;
 
-            const float KQ_max_scale = expf(KQ_max[jc] - KQ_max_new[jc]);
+            const float KQ_max_scale = __expf(KQ_max[jc] - KQ_max_new[jc]);
             KQ_max[jc] = KQ_max_new[jc];
 
             float KQ_sum_add = 0.0f;
 #pragma unroll
             for (int i0 = 0; i0 < nbatch_fa; i0 += np*warp_size) {
                 const float val = !oob_check || i0 + (threadIdx.y % np)*warp_size + threadIdx.x < static_cast<uint32_t>(k_VKQ_sup) ?
-                    expf(KQ_acc[(i0/(np*warp_size))*cpw + jc] - KQ_max[jc]) : 0.0f;
+                    __expf(KQ_acc[(i0/(np*warp_size))*cpw + jc] - KQ_max[jc]) : 0.0f;
                 KQ_sum_add += val;
                 tmp[i0/(np*warp_size)][jc1] = val;
             }
@@ -1049,10 +1049,10 @@ static __global__ void flash_attn_tile(
             const float sink = ((const float *) sinks)[head0 + jc % ncols2];
 
             float KQ_max_new_j = fmaxf(KQ_max[jc0], sink);
-            const float KQ_max_scale = expf(KQ_max[jc0] - KQ_max_new_j);
+            const float KQ_max_scale = __expf(KQ_max[jc0] - KQ_max_new_j);
             KQ_max[jc0] = KQ_max_new_j;
 
-            const float val = expf(sink - KQ_max[jc0]);
+            const float val = __expf(sink - KQ_max[jc0]);
             KQ_sum[jc0] = KQ_sum[jc0]*KQ_max_scale + val;
 
 #ifdef FAST_FP16_AVAILABLE
