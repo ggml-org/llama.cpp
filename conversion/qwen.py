@@ -332,6 +332,10 @@ class Qwen3NextModel(Qwen2MoeModel):
             z = z.permute(1, 0).contiguous()
             yield (self.format_tensor_name(gguf.MODEL_TENSOR.ATTN_QKV,  bid, ".weight"), qkv)
             yield (self.format_tensor_name(gguf.MODEL_TENSOR.ATTN_GATE, bid, ".weight"), z)
+        elif "in_proj_qkv.weight" in name:
+            # Qwen3.5 MoE: merged QKV without z component, already in correct order
+            data_torch = data_torch.permute(1, 0).contiguous()
+            yield (self.format_tensor_name(gguf.MODEL_TENSOR.ATTN_QKV, bid, ".weight"), data_torch)
         else:
             yield from super().modify_tensors(data_torch, name, bid)
 
