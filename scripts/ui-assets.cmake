@@ -2,8 +2,8 @@
 #
 # Asset provisioning priority:
 #   1. Pre-built assets in SRC_DIST_DIR (manually built by user)
-#   2. If HF_ENABLED=ON: HF Bucket download, falling back to npm on failure
-#      If HF_ENABLED=OFF: npm build only (HF is skipped)
+#   2. If BUILD_UI=ON: npm build
+#   3. If above did not produce assets and HF_ENABLED=ON: HF Bucket download
 
 cmake_minimum_required(VERSION 3.16)
 
@@ -13,7 +13,7 @@ set(LLAMA_SOURCE_DIR  "" CACHE STRING "Project source root (to resolve version f
 set(HF_BUCKET         "" CACHE STRING "Hugging Face bucket name")
 set(HF_VERSION        "" CACHE STRING "Version to download (empty = resolve from git)")
 set(HF_ENABLED        "" CACHE STRING "Whether to allow HF Bucket download (ON/OFF)")
-set(BUILD_UI          "" CACHE STRING "Embed UI (ON/OFF)")
+set(BUILD_UI          "" CACHE STRING "Build UI via npm (ON/OFF)")
 
 set(ASSETS
     bundle.css
@@ -114,55 +114,37 @@ function(npm_build out_var)
     set(${out_var} TRUE PARENT_SCOPE)
 endfunction()
 
-function(resolve_versions out_var)
-    set(versions "")
-
+function(resolve_version out_var)
     if(NOT "${HF_VERSION}" STREQUAL "")
-        list(APPEND versions "${HF_VERSION}")
-    else()
-        if(EXISTS "${LLAMA_SOURCE_DIR}/cmake/build-info.cmake")
-            include("${LLAMA_SOURCE_DIR}/cmake/build-info.cmake")
-            if(NOT "${BUILD_NUMBER}" STREQUAL "" AND NOT BUILD_NUMBER EQUAL 0)
-                list(APPEND versions "b${BUILD_NUMBER}")
-            endif()
-        endif()
-
-        find_package(Git)
-        if(Git_FOUND)
-            execute_process(
-                COMMAND ${GIT_EXECUTABLE} describe --tags --abbrev=0 --match b* --candidates 1 HEAD
-                WORKING_DIRECTORY "${LLAMA_SOURCE_DIR}"
-                OUTPUT_VARIABLE  closest_tag
-                OUTPUT_STRIP_TRAILING_WHITESPACE
-                RESULT_VARIABLE  rc
-                ERROR_QUIET
-            )
-            if(rc EQUAL 0 AND NOT "${closest_tag}" STREQUAL "")
-                list(APPEND versions "${closest_tag}")
-            endif()
-        endif()
-
-        list(REMOVE_DUPLICATES versions)
+        set(${out_var} "${HF_VERSION}" PARENT_SCOPE)
+        return()
     endif()
 
-    set(${out_var} "${versions}" PARENT_SCOPE)
+    if(EXISTS "${LLAMA_SOURCE_DIR}/cmake/build-info.cmake")
+        include("${LLAMA_SOURCE_DIR}/cmake/build-info.cmake")
+        if(NOT "${BUILD_NUMBER}" STREQUAL "" AND NOT BUILD_NUMBER EQUAL 0)
+            set(${out_var} "b${BUILD_NUMBER}" PARENT_SCOPE)
+            return()
+        endif()
+    endif()
+
+    set(${out_var} "" PARENT_SCOPE)
 endfunction()
 
-function(hf_download versions out_var out_resolved)
+function(hf_download version out_var out_resolved)
     set(${out_var}      FALSE PARENT_SCOPE)
     set(${out_resolved} ""    PARENT_SCOPE)
 
     file(MAKE_DIRECTORY "${DIST_DIR}")
 
-    set(urls "")
-    foreach(v ${versions})
-        list(APPEND urls "${v}|https://huggingface.co/buckets/ggml-org/${HF_BUCKET}/resolve/${v}")
-    endforeach()
-    list(APPEND urls "latest|https://huggingface.co/buckets/ggml-org/${HF_BUCKET}/resolve/latest")
+    set(candidates "")
+    if(NOT "${version}" STREQUAL "")
+        list(APPEND candidates "${version}")
+    endif()
+    list(APPEND candidates "latest")
 
-    foreach(entry ${urls})
-        string(REGEX REPLACE "^([^|]+)\\|.*$" "\\1" resolved "${entry}")
-        string(REGEX REPLACE "^[^|]+\\|(.*)$" "\\1" base     "${entry}")
+    foreach(resolved ${candidates})
+        set(base "https://huggingface.co/buckets/ggml-org/${HF_BUCKET}/resolve/${resolved}")
 
         message(STATUS "UI: downloading from ${resolved}: ${base}")
 
@@ -280,21 +262,7 @@ function(emit_files)
 endfunction()
 
 # ---------------------------------------------------------------------------
-# 1. Resolve candidate versions for HF download
-# ---------------------------------------------------------------------------
-resolve_versions(VERSIONS)
-
-# ---------------------------------------------------------------------------
-# 2. Early-out when UI is disabled — still emit empty ui.cpp/ui.h for the lib
-# ---------------------------------------------------------------------------
-if(NOT BUILD_UI)
-    message(STATUS "UI: BUILD_UI=OFF, no UI will be embedded")
-    emit_files()
-    return()
-endif()
-
-# ---------------------------------------------------------------------------
-# 3. Priority 1: pre-built assets supplied in tools/ui/dist
+# 1. Priority 1: pre-built assets supplied in tools/ui/dist
 # ---------------------------------------------------------------------------
 copy_src_dist(SRC_OK)
 if(SRC_OK)
@@ -303,40 +271,11 @@ if(SRC_OK)
 endif()
 
 # ---------------------------------------------------------------------------
-# 4. Provision via HF (if enabled) with npm fallback, or npm directly
+# 2. Priority 2: npm build (if BUILD_UI=ON)
 # ---------------------------------------------------------------------------
 set(provisioned FALSE)
 
-if(HF_ENABLED)
-    set(stamp_ok FALSE)
-    if(EXISTS "${STAMP_FILE}")
-        file(READ "${STAMP_FILE}" stamped)
-        string(STRIP "${stamped}" stamped)
-        if(NOT "${stamped}" STREQUAL "latest")
-            list(FIND VERSIONS "${stamped}" stamp_idx)
-            if(NOT stamp_idx EQUAL -1)
-                set(stamp_ok TRUE)
-            endif()
-        endif()
-    endif()
-
-    assets_present(have_assets)
-    if(stamp_ok AND have_assets)
-        message(STATUS "UI: HF stamp '${stamped}' matches a candidate, skipping HF fetch")
-        set(provisioned TRUE)
-    else()
-        hf_download("${VERSIONS}" HF_OK HF_RESOLVED)
-        if(HF_OK)
-            file(WRITE "${STAMP_FILE}" "${HF_RESOLVED}")
-            message(STATUS "UI: HF download succeeded, stamp updated (${HF_RESOLVED})")
-            set(provisioned TRUE)
-        else()
-            message(STATUS "UI: HF download failed, falling back to npm build")
-        endif()
-    endif()
-endif()
-
-if(NOT provisioned)
+if(BUILD_UI)
     npm_build(NPM_OK)
     if(NPM_OK)
         set(provisioned TRUE)
@@ -344,12 +283,43 @@ if(NOT provisioned)
 endif()
 
 # ---------------------------------------------------------------------------
-# 5. Fallback: warn about stale or missing assets, then emit whatever we have
+# 3. Priority 3: HF Bucket download (if npm did not produce assets and HF_ENABLED=ON)
+# ---------------------------------------------------------------------------
+if(NOT provisioned AND HF_ENABLED)
+    resolve_version(VERSION)
+
+    set(stamp_ok FALSE)
+    if(EXISTS "${STAMP_FILE}" AND NOT "${VERSION}" STREQUAL "")
+        file(READ "${STAMP_FILE}" stamped)
+        string(STRIP "${stamped}" stamped)
+        if("${stamped}" STREQUAL "${VERSION}")
+            set(stamp_ok TRUE)
+        endif()
+    endif()
+
+    assets_present(have_assets)
+    if(stamp_ok AND have_assets)
+        message(STATUS "UI: HF stamp '${stamped}' matches version, skipping HF fetch")
+        set(provisioned TRUE)
+    else()
+        hf_download("${VERSION}" HF_OK HF_RESOLVED)
+        if(HF_OK)
+            file(WRITE "${STAMP_FILE}" "${HF_RESOLVED}")
+            message(STATUS "UI: HF download succeeded, stamp updated (${HF_RESOLVED})")
+            set(provisioned TRUE)
+        else()
+            message(STATUS "UI: HF download failed")
+        endif()
+    endif()
+endif()
+
+# ---------------------------------------------------------------------------
+# 4. Fallback: warn about stale or missing assets, then emit whatever we have
 # ---------------------------------------------------------------------------
 if(NOT provisioned)
     assets_present(have_assets)
     if(have_assets)
-        message(WARNING "UI: provisioning failed; embedding stale assets from ${DIST_DIR} (stamp left untouched)")
+        message(WARNING "UI: provisioning failed; embedding stale assets from ${DIST_DIR}")
     else()
         message(WARNING "UI: no UI assets available — building without embedded UI")
     endif()
