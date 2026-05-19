@@ -76,6 +76,52 @@ private:
 
 using stream_session_ptr = std::shared_ptr<stream_session>;
 
+// RAII wrapper around a stream_session that represents one end of the pipe.
+// the producer side writes chunks and is responsible for finalizing; the consumer side reads.
+//
+// lifetime safety: the producer pipe holds a shared_ptr<atomic<bool>> alive that is also
+// captured by the session's stop_producer hook. cleanup() sets alive=false and clears the
+// hook; it must be called while the owning response object is still valid (i.e. before the
+// reader it would call stop() on is destroyed). ~server_res_generator() does this explicitly.
+struct stream_pipe {
+    ~stream_pipe();
+
+    // producer: append raw bytes to the session's ring buffer.
+    // returns false if the session is already finalized.
+    bool write(const char * data, size_t len);
+
+    // consumer: drain bytes from offset, calling sink for each available chunk.
+    // blocks until more data arrives or the session finalizes.
+    // should_stop is polled periodically; returns OFFSET_LOST if offset fell below the prefix.
+    stream_read_status read(size_t & offset,
+        const std::function<bool(const char *, size_t)> & sink,
+        const std::function<bool()> & should_stop);
+
+    // true if the session was cancelled (e.g. via DELETE /v1/stream/<conv_id>)
+    bool is_cancelled() const;
+
+    // disarm the stop hook and mark the alive guard false; must be called while the
+    // object that stop_fn references (the response reader) is still alive.
+    // idempotent; ~stream_pipe() calls it automatically but callers can do it earlier.
+    void cleanup();
+
+    // factory: producer pipe. res.stop() is invoked when the session is cancelled.
+    // the alive guard ensures stop() is not called after cleanup() has run.
+    static std::shared_ptr<stream_pipe> create_producer(stream_session_ptr session,
+                                                        server_http_res & res);
+
+    // factory: consumer pipe (read-only; destructor does not finalize the session).
+    static std::shared_ptr<stream_pipe> create_consumer(stream_session_ptr session);
+
+private:
+    stream_session_ptr                  session_;
+    bool                                is_producer_;
+    std::shared_ptr<std::atomic<bool>>  alive_; // only set for producer pipes
+    server_http_res *                   res_;   // only set for producer pipes
+
+    stream_pipe(stream_session_ptr session, bool is_producer);
+};
+
 // owns all live sessions, runs a periodic GC to evict expired ones.
 // the map is keyed by conversation_id, so the invariant "one conv = at most one
 // live session" is enforced at the type level
@@ -137,18 +183,14 @@ server_http_context::handler_t make_stream_get_handler();
 server_http_context::handler_t make_streams_lookup_handler();
 server_http_context::handler_t make_stream_delete_handler();
 
-// attach a resumable session to an outgoing streaming response. inspects the request headers
-// for X-Conversation-Id, and when present creates or replaces a session on the global manager,
-// then wires three closures on the response: tee mirrors each SSE chunk into the ring buffer,
-// on_stream_end finalizes the session, and the session's stop_producer hook calls rd.stop()
-// so the explicit DELETE /v1/stream/<conv_id> route can abort the underlying reader. no op
-// when the header is absent. server-context just calls this and never touches the manager
-struct server_response_reader; // forward declare to avoid pulling server-queue.h into the header
-void stream_session_attach_hooks(server_http_res & res, server_response_reader & rd, const std::map<std::string, std::string> & headers);
+// inspect request headers for X-Conversation-Id and, when present, create or replace a
+// session on the global manager then attach a producer pipe to res. the pipe's stop_fn
+// calls res.stop() (overridden by server_res_generator to stop its reader). no-op when
+// the header is absent. server-context calls this from the server_res_generator constructor.
+void stream_session_attach_pipe(server_http_res & res, const std::map<std::string, std::string> & headers);
 
-// build a should_stop closure that suppresses the peer disconnect signal when a tee is
-// attached to the response. used by handler lambdas that pump a server_response_reader so
-// the producer keeps running past F5, only an explicit DELETE through the stop_producer
-// hook is allowed to abort it. without a tee the returned closure is bit identical to the
-// fallback, the legacy non resumable flow is unchanged
+// build a should_stop closure that suppresses peer-disconnect when a pipe is attached.
+// when spipe is set, only an explicit cancel (DELETE /v1/stream/<conv_id>) stops the
+// producer; peer disconnect is ignored so generation continues into the ring buffer.
+// without a pipe the closure delegates to fallback, preserving the legacy non-resumable flow.
 std::function<bool()> stream_aware_should_stop(server_http_res * res, std::function<bool()> fallback);

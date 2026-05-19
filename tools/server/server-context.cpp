@@ -4023,6 +4023,15 @@ struct server_res_generator : server_http_res {
             queue_tasks.wait_until_no_sleep();
         }
     }
+    ~server_res_generator() override {
+        // cleanup() must run while rd is still alive (rd is destroyed after this body returns)
+        if (spipe) {
+            spipe->cleanup();
+        }
+    }
+    void stop() override {
+        rd.stop();
+    }
     void ok(const json & response_data) {
         status = 200;
         data = safe_json_to_str(response_data);
@@ -4211,8 +4220,6 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
                 }
             };
 
-            // delegate to server-stream so the tee-aware rule lives there, not here. without a
-            // tee attached this is bit identical to req.should_stop, the legacy flow is unchanged
             auto effective_should_stop = stream_aware_should_stop(res_this, req.should_stop);
 
             try {
@@ -4307,11 +4314,9 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
         };
     }
 
-    // delegate the X-Conversation-Id sniff and the three hook wirings (tee, on_stream_end,
-    // stop_producer) to server-stream. when the header is absent this is a no op, when set
-    // the session is created or replaced and the response carries the tee that mirrors every
-    // SSE chunk into the ring buffer, plus the cancel hook for DELETE /v1/stream/<conv_id>
-    stream_session_attach_hooks(*res, res->rd, req.headers);
+    // attach a producer pipe to the response when X-Conversation-Id is present.
+    // the pipe mirrors SSE chunks into the ring buffer and wires up the cancel hook.
+    stream_session_attach_pipe(*res, req.headers);
 
     return res;
 }

@@ -3,6 +3,7 @@
 #include <atomic>
 #include <functional>
 #include <map>
+#include <memory>
 #include <string>
 #include <thread>
 #include <vector>
@@ -10,6 +11,7 @@
 #include <unordered_map>
 
 struct common_params;
+struct stream_pipe; // defined in server-stream.h
 
 // generator-like API for HTTP response generation
 // this object response with one of the 2 modes:
@@ -23,22 +25,20 @@ struct server_http_res {
     std::string data;
     std::map<std::string, std::string> headers;
 
-    // TODO: move this to a virtual function once we have proper polymorphism support
+    // if set, the stream survives a client disconnect: the http layer keeps calling next() and
+    // feeding chunks into the pipe even when sink.write fails, until next() returns false.
+    // the pipe destructor finalizes the session so no explicit on_stream_end callback is needed.
+    // shared_ptr used (not unique_ptr) so the forward-declared type is safe to delete here.
+    std::shared_ptr<stream_pipe> spipe;
+
     std::function<bool(std::string &)> next = nullptr;
     bool is_stream() const {
         return next != nullptr;
     }
 
-    // optional, each chunk produced by next() is forwarded here before being written to the
-    // wire. on wire failure (peer gone), the http layer detaches a background drain that keeps
-    // invoking next() and forwarding to the tee until next() returns false. lets streams
-    // survive a client disconnect, the producer keeps writing into the tee even when nobody
-    // is listening on the original HTTP socket
-    std::function<void(const char *, size_t)> tee = nullptr;
-
-    // optional, called when the stream ends on either path (wire drained to false, or detached
-    // drain reached false). used by the tee owner to finalize its sink, idempotent expected
-    std::function<void()> on_stream_end = nullptr;
+    // called when the session is cancelled (e.g. DELETE /v1/stream/<conv_id>).
+    // server_res_generator overrides this to stop its reader; the default is a no-op.
+    virtual void stop() {}
 
     virtual ~server_http_res() = default;
 };
