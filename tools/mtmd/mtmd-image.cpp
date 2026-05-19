@@ -30,6 +30,16 @@ void mtmd_image_preprocessor::img_u8_to_f32(const clip_image_u8 & src, clip_imag
     }
 }
 
+// Pad rounding behavior for img_tool::resize
+//   PAD_ROUNDING_CEIL    - default
+//   PAD_ROUNDING_NEAREST - rounding to the nearest integer
+enum pad_rounding {
+    PAD_ROUNDING_CEIL,
+    // For matching exact Pillow behavior
+    // used for deepseek-ocr models
+    PAD_ROUNDING_NEAREST,
+};
+
 // set of tools to manipulate images
 // in the future, we can have HW acceleration by allowing this struct to access 3rd party lib like imagick or opencv
 struct img_tool {
@@ -39,7 +49,8 @@ struct img_tool {
             const clip_image_size & target_resolution,
             resize_algo algo,
             bool add_padding = true, // TODO: define the behavior for add_padding = false
-            std::array<uint8_t, 3> pad_color = {0, 0, 0}) {
+            std::array<uint8_t, 3> pad_color = {0, 0, 0},
+            pad_rounding rounding = PAD_ROUNDING_CEIL) {
         dst.nx = target_resolution.width;
         dst.ny = target_resolution.height;
         dst.buf.resize(3 * dst.nx * dst.ny);
@@ -71,8 +82,15 @@ struct img_tool {
             float scale_w = static_cast<float>(target_resolution.width) / src.nx;
             float scale_h = static_cast<float>(target_resolution.height) / src.ny;
             float scale = std::min(scale_w, scale_h);
-            int new_width  = std::min(static_cast<int>(std::ceil(src.nx * scale)), target_resolution.width);
-            int new_height = std::min(static_cast<int>(std::ceil(src.ny * scale)), target_resolution.height);
+
+            int new_width, new_height;
+            if (rounding == PAD_ROUNDING_NEAREST) {
+                new_width  = std::min(static_cast<int>(std::round(src.nx * scale)), target_resolution.width);
+                new_height = std::min(static_cast<int>(std::round(src.ny * scale)), target_resolution.height);
+            } else {
+                new_width  = std::min(static_cast<int>(std::ceil(src.nx * scale)), target_resolution.width);
+                new_height = std::min(static_cast<int>(std::ceil(src.ny * scale)), target_resolution.height);
+            }
 
             switch (algo) {
                 case RESIZE_ALGO_BILINEAR:
@@ -91,9 +109,14 @@ struct img_tool {
             // fill dst with pad_color
             fill(dst, pad_color);
 
-            int offset_x = (target_resolution.width  - new_width)  / 2;
-            int offset_y = (target_resolution.height - new_height) / 2;
-
+            int offset_x, offset_y;
+            if (rounding == PAD_ROUNDING_NEAREST) {
+                offset_x = static_cast<int>(std::round((target_resolution.width  - new_width)  / 2.0f));
+                offset_y = static_cast<int>(std::round((target_resolution.height - new_height) / 2.0f));
+            } else {
+                offset_x = (target_resolution.width  - new_width)  / 2;
+                offset_y = (target_resolution.height - new_height) / 2;
+            }
             composite(dst, resized_image, offset_x, offset_y);
         }
     }
@@ -356,10 +379,10 @@ private:
             GGML_ASSERT(inSize > 0 && outSize > 0);
             double support, scale, filterscale;
             double center, ww, ss;
-            int xx, x, ksize, xmin, xmax, xcnt;
+            int xx, x, ksize, xmin, xmax;
 
             // Calculate scaling factor: ratio of input range to output size
-            filterscale = scale = (double)inSize / outSize;
+            filterscale = scale = static_cast<double>(inSize) / outSize;
             // For upsampling (scale < 1), keep filterscale = 1 to maintain filter sharpness
             // For downsampling (scale > 1), widen filter to prevent aliasing
             if (filterscale < 1.0) {
@@ -372,6 +395,7 @@ private:
 
             std::vector<double> pre_weights(outSize * ksize);  // Temporary weights
             bounds.resize(outSize * 2);
+
 
             // For each output pixel, compute its filter coefficients
             for (xx = 0; xx < outSize; xx++) {
@@ -391,10 +415,10 @@ private:
                     xmax = inSize;
                 }
 
-                xcnt = xmax - xmin;
+                xmax -= xmin;
 
                 // Compute filter weights for each contributing input pixel
-                for (x = 0; x < xcnt; x++) {
+                for (x = 0; x < xmax; x++) {
                     // Distance from input pixel center to output pixel center in input space
                     double w = bicubic_filter((x + xmin - center + 0.5) * ss);
                     pre_weights[xx * ksize + x] = w;
@@ -402,7 +426,7 @@ private:
                 }
 
                 // Normalize weights to sum to 1.0 (preserves brightness)
-                for (x = 0; x < xcnt; x++) {
+                for (x = 0; x < xmax; x++) {
                     if (ww != 0.0) {
                         pre_weights[xx * ksize + x] /= ww;
                     }
@@ -415,18 +439,27 @@ private:
 
                 // Store input pixel range for this output pixel
                 bounds[xx * 2 + 0] = xmin;
-                bounds[xx * 2 + 1] = xcnt;
+                bounds[xx * 2 + 1] = xmax;
             }
 
             // Convert floating-point coefficients to fixed-point integers
             // Formula: int32 = round(float * 2^PRECISION_BITS)
             weights.resize(outSize * ksize);
+
+            const double fxp_scale = std::ldexp(1.0, PRECISION_BITS); // 1.0 * 2^PRECISION_BITS
+
             for (int i = 0; i < outSize * ksize; i++) {
+                double tmp_val = pre_weights[i] * fxp_scale;
                 if (pre_weights[i] < 0) {
-                    weights[i] = static_cast<int32_t>(-0.5 + pre_weights[i] * (1 << PRECISION_BITS));
+                    tmp_val -= 0.5;
                 } else {
-                    weights[i] = static_cast<int32_t>(0.5 + pre_weights[i] * (1 << PRECISION_BITS));
+                    tmp_val += 0.5;
                 }
+                tmp_val = std::round(tmp_val);
+                tmp_val = std::clamp(tmp_val,
+                                     static_cast<double>(std::numeric_limits<int32_t>::min()),
+                                     static_cast<double>(std::numeric_limits<int32_t>::max()));
+                weights[i] = static_cast<int32_t>(tmp_val);
             }
 
             return ksize;
@@ -1083,35 +1116,31 @@ bool mtmd_image_preprocessor_internvl::preprocess(const clip_image_u8 & img, cli
 //
 
 bool mtmd_image_preprocessor_deepseekocr::preprocess(const clip_image_u8 & img, clip_image_f32_batch & output) {
-    const std::vector native_resolutions = {
-        /*512 tiny , 640 small, */ 1024 /* base */, 1280 /* large */
-    };
-    // original image size
-    const clip_image_size original_size{img.nx, img.ny};
-    const int orig_w = original_size.width;
-    const int orig_h = original_size.height;
-    const int orig_area = orig_h * orig_w;
+    static constexpr int native_resolutions[] = { 1024 /* base */, 1280 /* large */ };
+    // TODO: support 512 (tiny) and 640 (small) once we have eval data for them
 
-    size_t mode_i = 0;
-    int min_diff = orig_area;
+    const int64_t orig_area = static_cast<int64_t>(img.nx) * img.ny;
 
-    for (size_t i = 0; i < native_resolutions.size(); i++) {
-        int r = native_resolutions[i];
-        if (std::abs(orig_area - r * r) < min_diff) {
-            mode_i = i;
-            min_diff = std::abs(orig_area - r * r);
+    size_t  mode_i   = 0;
+    int64_t min_diff = std::numeric_limits<int64_t>::max();
+    for (size_t i = 0; i < std::size(native_resolutions); i++) {
+        const int64_t r    = native_resolutions[i];
+        const int64_t diff = std::abs(orig_area - r * r);
+        if (diff < min_diff) {
+            mode_i   = i;
+            min_diff = diff;
         }
     }
-
-    /* Native Resolution (Base/Large) */
     const int image_size = native_resolutions[mode_i];
 
-    // scaled and padded image
-    clip_image_u8_ptr scaled_img(clip_image_u8_init());
-    img_tool::resize(img, *scaled_img, clip_image_size{image_size, image_size}, hparams.image_resize_algo);
+    // Aspect-preserving fit-and-pad. Pillow bicubic + PAD_ROUNDING_NEAREST for
+    // byte-parity with the upstream deepseek-ai/DeepSeek-OCR HF preprocessor.
+    clip_image_u8 padded;
+    img_tool::resize(img, padded, {image_size, image_size}, RESIZE_ALGO_BICUBIC_PILLOW,
+                     /*add_padding=*/true, hparams.image_pad_color, PAD_ROUNDING_NEAREST);
 
     clip_image_f32_ptr res(clip_image_f32_init());
-    img_u8_to_f32(*scaled_img, *res, hparams.image_mean, hparams.image_std);
+    img_u8_to_f32(padded, *res, hparams.image_mean, hparams.image_std);
     output.entries.push_back(std::move(res));
 
     output.grid_x = 1;

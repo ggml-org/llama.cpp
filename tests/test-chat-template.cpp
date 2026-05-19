@@ -336,7 +336,7 @@ static common_chat_msg simple_msg(const std::string & role, const std::string & 
 int main_automated_tests(void) {
     // jinja::enable_debug(true);
 
-    std::vector<llama_chat_message> conversation {
+    std::vector<llama_chat_message> common_conversation {
         {"system", "You are a helpful assistant"},
         {"user", "Hello"},
         {"assistant", "Hi there"},
@@ -355,6 +355,9 @@ int main_automated_tests(void) {
         std::string eos_token = "";
         bool supported_with_jinja = true;
         std::vector<llama_chat_message> extra_conversation = {};
+        // when set override the default conversation for this test case
+        // useful for testing tool calls and other features not covered by the default conversation
+        std::vector<llama_chat_message> conversation = common_conversation;
     };
     std::vector<TestCase> test_cases {
         {
@@ -625,6 +628,40 @@ int main_automated_tests(void) {
             /* .eos_token= */ "",
             /* .supported_with_jinja= */ true,
             /* .extra_conversation= */ {{"user", "What is the weather?"}, {"assistant_tool_call", "<tool_call>\n{\"name\": \"get_weather\", \"arguments\": {\"location\": \"NYC\"}}\n</tool_call>"}, {"tool_response", "{\"temperature\": 72}"}},
+        },
+        // DeepSeek-OCR needs markers before the prompt and is newline-sensitive
+        {
+            /* .name= */ "deepseek-ai/DeepSeek-OCR (WebUI Two Images)",
+            /* .template_str= */ "deepseek-ocr",
+            /* .expected_output= */ "<__media_a__>\n<__media_b__>\nFree OCR.",
+            /* .expected_output_jinja= */ "",
+            /* .bos_token= */ "",
+            /* .eos_token= */ "",
+            /* .supported_with_jinja= */ false,
+            /* .extra_conversation= */ {},
+            /* .conversation= */ {{"user", "Free OCR.\n<__media_a__>\n<__media_b__>"}},
+        },
+        {
+            /* .name= */ "deepseek-ai/DeepSeek-OCR (mtmd-cli)",
+            /* .template_str= */ "deepseek-ocr",
+            /* .expected_output= */ "<__media__>\nFree OCR. ",
+            /* .expected_output_jinja= */ "",
+            /* .bos_token= */ "",
+            /* .eos_token= */ "",
+            /* .supported_with_jinja= */ false,
+            /* .extra_conversation= */ {},
+            /* .conversation= */ {{"user", "<__media__>Free OCR. "}},
+        },
+        {
+            /* .name= */ "deepseek-ai/DeepSeek-OCR (newlines around marker)",
+            /* .template_str= */ "deepseek-ocr",
+            /* .expected_output= */ "<__media_a__>\nFree OCR.",
+            /* .expected_output_jinja= */ "",
+            /* .bos_token= */ "",
+            /* .eos_token= */ "",
+            /* .supported_with_jinja= */ false,
+            /* .extra_conversation= */ {},
+            /* .conversation= */ {{"user", "\n<__media_a__>\n\nFree OCR."}},
         }
     };
     std::vector<char> formatted_chat(1024);
@@ -642,13 +679,13 @@ int main_automated_tests(void) {
     }
 
     // test invalid chat template
-    res = llama_chat_apply_template("INVALID TEMPLATE", conversation.data(), conversation.size(), true, formatted_chat.data(), formatted_chat.size());
+    res = llama_chat_apply_template("INVALID TEMPLATE", common_conversation.data(), common_conversation.size(), true, formatted_chat.data(), formatted_chat.size());
     assert(res < 0);
     const auto add_generation_prompt = true;
 
     for (const auto & test_case : test_cases) {
         std::cout << "\n\n=== " << test_case.name << " ===\n\n";
-        auto conv = conversation;
+        auto conv = test_case.conversation;
         conv.insert(conv.end(), test_case.extra_conversation.begin(), test_case.extra_conversation.end());
         formatted_chat.resize(2048);
         res = llama_chat_apply_template(
@@ -670,18 +707,18 @@ int main_automated_tests(void) {
         }
     }
 
-    std::vector<common_chat_msg> messages;
-    messages.reserve(conversation.size());
-    for (const auto & msg : conversation) {
-        messages.push_back(simple_msg(msg.role, msg.content));
-    }
     for (const auto & test_case : test_cases) {
         if (!test_case.supported_with_jinja) {
             continue;
         }
         std::cout << "\n\n=== " << test_case.name << " (jinja) ===\n\n";
         try {
-            auto msgs = messages;
+            auto conv = test_case.conversation;
+            std::vector<common_chat_msg> msgs;
+            msgs.reserve(conv.size() + test_case.extra_conversation.size());
+            for (const auto & msg : conv) {
+                msgs.push_back(simple_msg(msg.role, msg.content));
+            }
             for (const auto & msg : test_case.extra_conversation) {
                 msgs.push_back(simple_msg(msg.role, msg.content));
             }
