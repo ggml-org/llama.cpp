@@ -112,19 +112,36 @@ llama_model_granite::graph::graph(
     ggml_tensor * inp_out_ids = build_inp_out_ids();
 
     for (int il = 0; il < n_layer; ++il) {
-        ggml_tensor * inpSA = inpL;
-        cur = inpL;
 
-        // apply deepstack injection for Granite4 Vision
+        // Granite Vision 4.1 deepstack: inject the projector stream that
+        // targets decoder layer `il`, BEFORE the decoder layer runs.  This
+        // matches the reference forward in
+        // /ibm-granite/granite-vision-4.1/modeling.py: for each layer_idx,
+        // check the (llm_layer, packed_features) pairs and add to
+        // hidden_states[image_positions] if layer_idx == llm_layer.
+        //
+        // In the qwen3vl-deepstack layout the mmproj writes streams into
+        // res->t_inp_embd at offset (stream_index + 1) * n_embd (stream 0
+        // is the base and is already consumed via build_inp_embd).  For
+        // pure-text requests the input embedding carries zeros at those
+        // offsets (see build_inp_embd's zero-pad of the token branch), so
+        // the add is a no-op.
         const auto & deepstack_emb_idx = hparams.deepstack_layers_arr[il];
-        if (deepstack_emb_idx >= 0) {
-            ggml_tensor * ds = ggml_view_2d(ctx0, res->t_inp_embd, n_embd, n_tokens, res->t_inp_embd->nb[1], deepstack_emb_idx * n_embd * sizeof(float));
-            cur = ggml_add(ctx0, cur, ds);
-            cb(cur, "deepstack_out", il);
+        if (il > 0 && deepstack_emb_idx >= 0) {
+            // Note: il == 0 uses the stream at offset 0, which is already
+            // inpL (= base == stream at llm_layer 0 for granite vision 4.1).
+            ggml_tensor * ds = ggml_view_2d(ctx0,
+                res->t_inp_embd, n_embd, n_tokens,
+                res->t_inp_embd->nb[1],
+                deepstack_emb_idx * n_embd * sizeof(float));
+            inpL = ggml_add(ctx0, inpL, ds);
+            cb(inpL, "deepstack_in", il);
         }
 
+        ggml_tensor * inpSA = inpL;
+
         // norm
-        cur = build_norm(cur,
+        cur = build_norm(inpL,
                 model.layers[il].attn_norm, NULL,
                 LLM_NORM_RMS, il);
         cb(cur, "attn_norm", il);
