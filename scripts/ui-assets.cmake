@@ -14,6 +14,7 @@ set(HF_BUCKET         "" CACHE STRING "Hugging Face bucket name")
 set(HF_VERSION        "" CACHE STRING "Version to download (empty = resolve from git)")
 set(HF_ENABLED        "" CACHE STRING "Whether to allow HF Bucket download (ON/OFF)")
 set(BUILD_UI          "" CACHE STRING "Build UI via npm (ON/OFF)")
+set(LLAMA_UI_EMBED    "" CACHE STRING "Path to llama-ui-embed helper")
 
 set(ASSETS
     bundle.css
@@ -242,67 +243,23 @@ function(hf_download version out_var out_resolved)
     endforeach()
 endfunction()
 
-function(write_if_different path content)
-    set(tmp "${path}.tmp")
-    file(WRITE "${tmp}" "${content}")
-    execute_process(
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different "${tmp}" "${path}"
-    )
-    file(REMOVE "${tmp}")
-endfunction()
-
 function(emit_files)
     assets_present(present)
 
-    set(h "#pragma once\n\n#include <stddef.h>\n\n")
+    set(args "${UI_CPP}" "${UI_H}")
     if(present)
-        string(APPEND h "#define LLAMA_UI_HAS_ASSETS 1\n\n")
-    endif()
-    string(APPEND h "struct llama_ui_asset {\n")
-    string(APPEND h "    const char *          name;\n")
-    string(APPEND h "    const unsigned char * data;\n")
-    string(APPEND h "    size_t                size;\n")
-    string(APPEND h "};\n\n")
-    string(APPEND h "const llama_ui_asset * llama_ui_find_asset(const char * name);\n")
-
-    set(cpp "#include \"ui.h\"\n\n#include <cstring>\n\n")
-
-    if(present)
-        set(idx 0)
         foreach(asset ${ASSETS})
-            file(READ "${DIST_DIR}/${asset}" hex HEX)
-            string(LENGTH "${hex}" hex_len)
-            math(EXPR len "${hex_len} / 2")
-            string(REGEX REPLACE "([0-9a-f][0-9a-f])" "0x\\1," bytes "${hex}")
-            string(APPEND cpp "static const unsigned char asset_${idx}_data[] = {${bytes}};\n")
-            string(APPEND cpp "static const size_t        asset_${idx}_size = ${len};\n\n")
-            math(EXPR idx "${idx} + 1")
+            list(APPEND args "${asset}" "${DIST_DIR}/${asset}")
         endforeach()
-
-        string(APPEND cpp "static const llama_ui_asset g_assets[] = {\n")
-        set(idx 0)
-        foreach(asset ${ASSETS})
-            string(APPEND cpp "    { \"${asset}\", asset_${idx}_data, asset_${idx}_size },\n")
-            math(EXPR idx "${idx} + 1")
-        endforeach()
-        string(APPEND cpp "};\n\n")
-
-        string(APPEND cpp "const llama_ui_asset * llama_ui_find_asset(const char * name) {\n")
-        string(APPEND cpp "    for (const auto & a : g_assets) {\n")
-        string(APPEND cpp "        if (std::strcmp(a.name, name) == 0) {\n")
-        string(APPEND cpp "            return &a;\n")
-        string(APPEND cpp "        }\n")
-        string(APPEND cpp "    }\n")
-        string(APPEND cpp "    return nullptr;\n")
-        string(APPEND cpp "}\n")
-    else()
-        string(APPEND cpp "const llama_ui_asset * llama_ui_find_asset(const char *) {\n")
-        string(APPEND cpp "    return nullptr;\n")
-        string(APPEND cpp "}\n")
     endif()
 
-    write_if_different("${UI_H}"   "${h}")
-    write_if_different("${UI_CPP}" "${cpp}")
+    execute_process(
+        COMMAND "${LLAMA_UI_EMBED}" ${args}
+        RESULT_VARIABLE rc
+    )
+    if(NOT rc EQUAL 0)
+        message(FATAL_ERROR "UI: llama-ui-embed failed (${rc})")
+    endif()
 endfunction()
 
 # ---------------------------------------------------------------------------

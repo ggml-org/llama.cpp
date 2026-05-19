@@ -35,6 +35,9 @@ endif()
 set(UI_CPP "${CMAKE_CURRENT_BINARY_DIR}/ui.cpp")
 set(UI_H   "${CMAKE_CURRENT_BINARY_DIR}/ui.h")
 
+add_executable(llama-ui-embed embed.cpp)
+target_compile_features(llama-ui-embed PRIVATE cxx_std_17)
+
 # Run the provisioning script every build so source changes in tools/ui/ are
 # always picked up. The script uses copy_if_different for ui.cpp/ui.h, so the
 # library only recompiles when contents actually change.
@@ -48,10 +51,13 @@ add_custom_target(llama-ui-assets ALL
         "-DHF_VERSION=${HF_UI_VERSION}"
         "-DHF_ENABLED=${LLAMA_USE_PREBUILT_UI}"
         "-DBUILD_UI=${LLAMA_BUILD_UI}"
+        "-DLLAMA_UI_EMBED=$<TARGET_FILE:llama-ui-embed>"
         -P "${PROJECT_SOURCE_DIR}/scripts/ui-assets.cmake"
     COMMENT "Provisioning UI assets"
     VERBATIM
 )
+
+add_dependencies(llama-ui-assets llama-ui-embed)
 
 set_source_files_properties(${UI_CPP} ${UI_H} PROPERTIES GENERATED TRUE)
 
