@@ -626,9 +626,20 @@ class ChatStore {
 	 * for sessions that finalized while the browser was elsewhere are dropped naturally.
 	 */
 	async syncRemoteRunningStreams(): Promise<void> {
-		// only ask about conv ids the user already owns (the sidebar list). the server never lists
-		// ids the caller did not provide, so a random foreign UUID stays unguessable
-		const ids = conversationsStore.conversations.map((c) => c.id).filter((id) => !!id);
+		// the conversations store loads from IndexedDB asynchronously, the +layout onMount caller
+		// fires before that finishes. read ids straight from the DB so the result does not depend
+		// on the store init race, and the sidebar spinners light up at first paint for every conv
+		// the user owns even if it has not been hydrated into the store yet
+		let ids: string[];
+		try {
+			const all = await DatabaseService.getAllConversations();
+			ids = all.map((c) => c.id).filter((id) => !!id);
+		} catch (e) {
+			console.warn('syncRemoteRunningStreams DB read failed:', e);
+			return;
+		}
+		// only ask about conv ids the user already owns. the server never lists ids the caller did
+		// not provide, so a random foreign UUID stays unguessable
 		if (ids.length === 0) {
 			for (const id of Array.from(this.remoteRunningConvs)) {
 				this.remoteRunningConvs.delete(id);
