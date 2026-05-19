@@ -1566,15 +1566,20 @@ static void ggml_gemv_q4_K_8x8_q8_K_avx2(int n, float * GGML_RESTRICT s, size_t 
                     sumi = _mm256_add_epi32(sumi, _mm256_mullo_epi32(scales_hi, row_dot_hi));
                 }
 
-                // Accumulate Q4_K min correction using the Q8_K sub-block sums
-                alignas(32) int32_t q8sums_arr[8];
-                _mm256_store_si256((__m256i *) q8sums_arr, q8sums);
-                for (int sb = 0; sb < 8; sb++) {
+                // Accumulate Q4_K min correction using paired Q8_K sub-block sums
+                alignas(16) int32_t q8sum_pairs[4];
+                const __m128i q8sums16 = _mm_packs_epi32(
+                    _mm256_castsi256_si128(q8sums),
+                    _mm256_extracti128_si256(q8sums, 1));
+                _mm_store_si128((__m128i *) q8sum_pairs, q8sums16);
+                for (int sb = 0; sb < 4; sb++) {
                     const uint8_t * utmp_bytes = (const uint8_t *) utmp;
-                    __m256i mins = _mm256_cvtepu8_epi32(
-                        _mm_loadl_epi64((const __m128i *) (utmp_bytes + 8 + sb * 16)));
-                    __m256i q8sum_v = _mm256_set1_epi32(q8sums_arr[sb]);
-                    smin = _mm256_add_epi32(smin, _mm256_mullo_epi32(mins, q8sum_v));
+                    __m128i mins8 = _mm_unpacklo_epi8(
+                        _mm_loadl_epi64((const __m128i *) (utmp_bytes + 8 + (2 * sb) * 16)),
+                        _mm_loadl_epi64((const __m128i *) (utmp_bytes + 8 + (2 * sb + 1) * 16)));
+                    __m256i mins16 = _mm256_cvtepu8_epi16(mins8);
+                    __m256i q8sum_pair = _mm256_set1_epi32(q8sum_pairs[sb]);
+                    smin = _mm256_add_epi32(smin, _mm256_madd_epi16(mins16, q8sum_pair));
                 }
 
                 // Apply Q8_K row scale and per-column Q4_K scales
