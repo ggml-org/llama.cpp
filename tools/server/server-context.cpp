@@ -917,6 +917,15 @@ private:
                 SRV_ERR("--slot-context: sum of configured slot contexts (%d) exceeds total context (%d)\n", configured_sum, n_ctx_total);
                 return false;
             }
+            // warn if any slot exceeds the equal-split physical limit without --kv-unified
+            if (!params_base.kv_unified) {
+                for (const auto & kv : params_base.slot_ctx_sizes) {
+                    if (kv.second > n_ctx_slot) {
+                        SRV_WRN("--slot-context: slot %d context (%d) exceeds the physical KV cache limit per slot (%d) -- add --kv-unified to pool the KV cache, otherwise the slot will exhaust at %d tokens\n",
+                                kv.first, kv.second, n_ctx_slot, n_ctx_slot);
+                    }
+                }
+            }
             // distribute remaining context equally among unconfigured slots
             const int n_unconfigured = params_base.n_parallel - (int) params_base.slot_ctx_sizes.size();
             const int n_ctx_remaining = n_ctx_total - configured_sum;
