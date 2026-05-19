@@ -3243,7 +3243,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_examples({LLAMA_EXAMPLE_SERVER}));
     add_opt(common_arg(
         {"--slot-context"}, "SLOT_CONTEXTS",
-        "assign custom context sizes to specific slots; comma-separated list of <slot_id>=<ctx_size> pairs (e.g. \"0=4096,1=8192\"); unlisted slots share the remaining context equally",
+        "assign custom context sizes to specific slots; comma-separated list of <slot_id>=<ctx_size> pairs (e.g. \"0=4096,1=8192\"); unlisted slots share the remaining context equally; to allow a slot to exceed the default equal-split physical KV limit, --kv-unified must also be set",
         [](common_params & params, const std::string & value) {
             std::istringstream ss(value);
             std::string token;
