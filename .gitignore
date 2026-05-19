@@ -159,3 +159,7 @@ a.out.*
 
 AGENTS.local.md
 .pi/SYSTEM.md
+
+
+/models
+/model_zoo

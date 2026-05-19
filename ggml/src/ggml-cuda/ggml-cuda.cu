@@ -2354,7 +2354,7 @@ static bool ggml_cuda_should_fuse_mul_mat_vec_q(const ggml_tensor * tensor) {
                                    ggml_nbytes(src0) != ggml_backend_buffer_get_alloc_size(src0->buffer, src0) &&
                                    src0->view_src;
 
-    bool use_mul_mat_vec_q = ggml_is_quantized(src0->type) && !bad_padding_clear && src1->type == GGML_TYPE_F32 &&
+    bool use_mul_mat_vec_q = ggml_is_quantized(src0->type) && src0->type != GGML_TYPE_STQ1_0 && !bad_padding_clear && src1->type == GGML_TYPE_F32 &&
                              dst->type == GGML_TYPE_F32 && src1->ne[1] <= MMVQ_MAX_BATCH_SIZE;
 
     // fusion is not universally faster on Pascal
@@ -2396,10 +2396,10 @@ static void ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor
         && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32;
     bool use_mul_mat_f     = !ggml_is_quantized(src0->type)
         && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32;
-    bool use_mul_mat_vec_q = ggml_is_quantized(src0->type) && !bad_padding_clear
+    bool use_mul_mat_vec_q = ggml_is_quantized(src0->type) && src0->type != GGML_TYPE_STQ1_0 && !bad_padding_clear
         && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32
         && src1->ne[1] <= MMVQ_MAX_BATCH_SIZE;
-    bool use_mul_mat_q     = ggml_is_quantized(src0->type) && !bad_padding_clear
+    bool use_mul_mat_q     = ggml_is_quantized(src0->type) && src0->type != GGML_TYPE_STQ1_0 && !bad_padding_clear
         && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32;
 
     bool any_gpus_with_slow_fp16 = false;
@@ -2485,7 +2485,7 @@ static void ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
     if (src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
         static_assert(MMVQ_MAX_BATCH_SIZE == MMVF_MAX_BATCH_SIZE);
         if (ne2 <= MMVQ_MAX_BATCH_SIZE) {
-            if (ggml_is_quantized(src0->type)) {
+            if (ggml_is_quantized(src0->type) && src0->type != GGML_TYPE_STQ1_0) {
                 const int mmvq_mmid_max = get_mmvq_mmid_max_batch(src0->type, cc);
                 if (ne2 <= mmvq_mmid_max) {
                     ggml_cuda_mul_mat_vec_q(ctx, src0, src1, ids, dst);
@@ -3110,7 +3110,7 @@ static bool ggml_cuda_graph_check_compability(ggml_cgraph * cgraph) {
         if (node->op == GGML_OP_MUL_MAT_ID) {
             const int cc = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
             const int mmvq_mmid_max = get_mmvq_mmid_max_batch(node->src[0]->type, cc);
-            if (!ggml_is_quantized(node->src[0]->type) || node->ne[2] > mmvq_mmid_max) {
+            if (!ggml_is_quantized(node->src[0]->type) || node->src[0]->type == GGML_TYPE_STQ1_0 || node->ne[2] > mmvq_mmid_max) {
                 // under these conditions, the mul_mat_id operation will need to synchronize the stream, so we cannot use CUDA graphs
                 // TODO: figure out a way to enable for larger batch sizes, without hurting performance
                 // ref: https://github.com/ggml-org/llama.cpp/pull/18958
@@ -4993,6 +4993,7 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
                     case GGML_TYPE_IQ3_XXS:
                     case GGML_TYPE_IQ4_NL:
                     case GGML_TYPE_IQ4_XS:
+                    case GGML_TYPE_STQ1_0:
                     case GGML_TYPE_BF16:
                         return true;
                     default:
