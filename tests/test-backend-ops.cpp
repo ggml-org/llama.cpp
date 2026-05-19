@@ -2956,6 +2956,53 @@ struct test_cpy : public test_case {
     }
 };
 
+struct test_cpy_view_dst : public test_case {
+    static constexpr int64_t max_t  = 8;
+    static constexpr int64_t d_head = 4;
+    static constexpr int64_t pos    = 3;
+
+    ggml_tensor * cache = nullptr;
+
+    std::string vars() override {
+        return VARS_TO_STR3(max_t, d_head, pos);
+    }
+
+    bool run_whole_graph() override { return true; }
+
+    std::vector<ggml_tensor *> fusion_test_nodes() override {
+        return { cache };
+    }
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * src = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 1, d_head);
+        ggml_set_param(src);
+        ggml_set_name(src, "src");
+
+        cache = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, max_t, d_head);
+        ggml_set_param(cache);
+        ggml_set_name(cache, "cache");
+
+        ggml_tensor * slot = ggml_view_2d(ctx, cache, 1, d_head, cache->nb[1], pos*cache->nb[0]);
+        ggml_set_name(slot, "slot");
+
+        ggml_tensor * out = ggml_cpy(ctx, src, slot);
+        ggml_set_name(out, "out");
+
+        return out;
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        ggml_tensor * src   = ggml_get_tensor(ctx, "src");
+        ggml_tensor * cache = ggml_get_tensor(ctx, "cache");
+
+        const std::array<float, d_head> src_data = { 1.0f, 2.0f, 3.0f, 4.0f };
+        const std::array<float, max_t*d_head> cache_data = {};
+
+        ggml_backend_tensor_set(src, src_data.data(), 0, ggml_nbytes(src));
+        ggml_backend_tensor_set(cache, cache_data.data(), 0, ggml_nbytes(cache));
+    }
+};
+
 // GGML_OP_CONT
 struct test_cont : public test_case {
     const ggml_type type;
@@ -8076,6 +8123,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_cpy(GGML_TYPE_I32, GGML_TYPE_I32, {256, 4, 1, 1}, {0, 0, 0, 0}, {0, 0, 0, 0}, true));
     test_cases.emplace_back(new test_cpy(GGML_TYPE_I32, GGML_TYPE_I32, {256, 1, 4, 1}, {1, 2, 0, 3}, {0, 0, 0, 0}));
     test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {256, 1, 4, 1}, {1, 2, 0, 3}, {0, 0, 0, 0}));
+    test_cases.emplace_back(new test_cpy_view_dst());
 
     for (ggml_type type_dst : { GGML_TYPE_F32, GGML_TYPE_I32, GGML_TYPE_F16, GGML_TYPE_BF16 }) {
         for (bool use_view_slice : { true, false }) {
