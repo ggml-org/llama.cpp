@@ -22,6 +22,8 @@ Pull requests (PRs):
 Commits:
 - On every commit that you make, include a "Assisted-by: llama.cpp:local pi" tag
 - Do not explicitly set the git author in commits - rely on the default git config
+- Always use `--no-gpg-sign` when committing
+- Never `git push` without explicit confirmation from the user
 
 Resources (read on demand):
 - [CONTRIBUTING.md](CONTRIBUTING.md)
