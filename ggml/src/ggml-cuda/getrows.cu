@@ -160,7 +160,7 @@ static void get_rows_cuda_float(
     GGML_ASSERT(ne11 <= std::numeric_limits<uint32_t>::max() / ne12);
     const uint3 ne12_fdv = init_fastdiv_values(ne12);
 
-    auto launch_params = ggml_cuda_kernel_launch_params{block_nums, block_dims, 0, stream};
+    ggml_cuda_kernel_launch_params launch_params = ggml_cuda_kernel_launch_params{block_nums, block_dims, 0, stream};
     ggml_cuda_kernel_launch(k_get_rows_float<src0_t, dst_t>, launch_params,
         src0_d, src1_d, dst_d,
         ne00, /*ne01, ne02, ne03,*/

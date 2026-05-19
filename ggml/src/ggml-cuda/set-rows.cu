@@ -206,7 +206,7 @@ static void set_rows_cuda(
         const uint3 ne11_fd = init_fastdiv_values((uint32_t) ne11);
         const uint3 ne12_fd = init_fastdiv_values((uint32_t) ne12);
 
-        auto launch_params = ggml_cuda_kernel_launch_params(grid_size, block_size, 0, stream);
+        ggml_cuda_kernel_launch_params launch_params = ggml_cuda_kernel_launch_params(grid_size, block_size, 0, stream);
         ggml_cuda_kernel_launch(k_set_rows<src_t, idx_t, dst_t>, launch_params,
             src0_d, src1_d, dst_d, ne_total, ne10, ne11, ne12, ne13, s01,
             s02, s03, s10, s11, s12, s1, s2, s3, ne00_fd, ne01_fd, ne02_fd,
