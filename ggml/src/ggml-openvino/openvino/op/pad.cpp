@@ -6,6 +6,8 @@
 #include <openvino/op/constant.hpp>
 #include <openvino/op/gather.hpp>
 #include <openvino/op/pad.hpp>
+#include <openvino/op/shape_of.hpp>
+#include <openvino/op/reshape.hpp>
 #include <vector>
 
 namespace ov {
@@ -58,7 +60,9 @@ OutputVector translate_pad(const NodeContext & context) {
 
     auto input = process_view_input_new(context, 0);
     if (context.get_input_shape(0) == context.get_output_shape()) {
-        return rename_outputs_with_suffix({input}, context.get_name());
+        auto input_shape = std::make_shared<ov::op::v3::ShapeOf>(input);
+        auto res = std::make_shared<ov::op::v1::Reshape>(input, input_shape, false);
+        return rename_outputs_with_suffix({res}, context.get_name());
     }
 
     const int32_t * op_params = context.get_output_op_params();

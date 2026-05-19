@@ -356,6 +356,9 @@ enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, std::shared_ptr<
 
         for (size_t i = 0; i < ov_output_names.size(); i++) {
             auto * ggml_tensor = ggml_decoder->get_model_outputs().at(ov_output_names[i]);
+            if (ggml_nbytes(ggml_tensor) == 0) {
+                continue;
+            }
             auto output_tensor = create_ov_output_tensor(ggml_decoder, infer_request, i, ggml_tensor);
             infer_request->set_output_tensor(i, output_tensor);
         }
@@ -774,7 +777,7 @@ ov::Tensor convert_ggml_input_to_ov(std::shared_ptr<GgmlOvDecoder> ggml_decoder,
     //   Add explicit strided-copy reconstruction for PERMUTE and VIEW tensors in split
     //   models: iterate over all 4 dimensions using `nb[]` strides and `view_offs` to
     //   copy non-contiguous source data into a contiguous `ov::Tensor` buffer
-    if ((ggml_tensor->op == GGML_OP_PERMUTE || ggml_tensor->op == GGML_OP_VIEW) && ggml_decoder->is_splited_model()) {
+    if ((ggml_tensor->op == GGML_OP_PERMUTE) && ggml_decoder->is_splited_model()) {
         // Create OpenVINO input tensor, the data need to reconstructed based on the view tensor shape & stride
         ov::Tensor input_tensor(ggml_decoder->get_ov_type(ggml_tensor), input_shape);
         const auto * src_tensor = ggml_tensor->view_src;

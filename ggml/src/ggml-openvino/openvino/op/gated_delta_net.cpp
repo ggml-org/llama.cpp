@@ -93,12 +93,12 @@ OutputVector translate_gated_delta_net_ref(const NodeContext & context) {
     // OV:   g[B, T, H_v, 1 or S_v], beta[B, T, H_v, 1]
     // ggml: state[S_v, S_v, H_v, B]
     // OV:   state[B, H_v, S_v, S_v]
-    auto q     = context.get_input(0);
-    auto k     = context.get_input(1);
-    auto v     = context.get_input(2);
-    auto g     = context.get_input(3);
-    auto beta  = context.get_input(4);
-    auto state = context.get_input(5);
+    auto q     = process_view_input_new(context, 0);
+    auto k     = process_view_input_new(context, 1);
+    auto v     = process_view_input_new(context, 2);
+    auto g     = process_view_input_new(context, 3);
+    auto beta  = process_view_input_new(context, 4);
+    auto state = process_view_input_new(context, 5);
 
     auto v_shape = context.get_input_shape(2).to_shape();  // [B, T, H_v, S_v]
     auto q_shape = context.get_input_shape(0).to_shape();  // [B, T, H_k, S_k]

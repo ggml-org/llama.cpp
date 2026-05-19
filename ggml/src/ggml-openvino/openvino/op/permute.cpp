@@ -30,12 +30,11 @@ OutputVector translate_permute(const NodeContext & context) {
     // op_case 5 6 is to permute V cache when `-fa off`, where v_trans=true
 
     ov::Output<Node> res;
-    // auto src = context.get_input(0);
     ov::Output<Node> src;
-    if (op_case == 2) {
-        src = process_view_input_new(context, 0);
-    } else {
+    if (op_case == 3 || op_case == 4 || op_case == 5 || op_case == 6) {
         src = context.get_input(0);
+    } else {
+        src = process_view_input_new(context, 0);
     }
     std::vector<int64_t> perm_values{0, 2, 1, 3};
     const int32_t* op_params = context.get_output_op_params();

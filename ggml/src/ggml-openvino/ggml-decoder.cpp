@@ -181,6 +181,9 @@ int GgmlOvDecoder::compute_op_case(const ggml_tensor * node) const {
         } else if (src->ne[1] * src->ne[2] == node->ne[1]) {
             op_case = 6;
         }
+        if (op_case == 0 && ggml_nelements(node) == ggml_nelements(src)) {
+            op_case = 6;
+        }
         break;
     }
     case GGML_OP_PERMUTE: {
