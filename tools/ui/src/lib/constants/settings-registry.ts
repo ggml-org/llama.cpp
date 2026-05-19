@@ -1,5 +1,5 @@
-import { ColorMode } from '$lib/enums/ui';
-import { SettingsFieldType } from '$lib/enums/settings';
+import { ColorMode } from '$lib/enums/ui.enums';
+import { SettingsFieldType } from '$lib/enums/settings.enums';
 import { SyncableParameterType } from '$lib/enums';
 import {
 	Funnel,

@@ -17,7 +17,7 @@
 	} from '$lib/constants';
 	import { RouterService } from '$lib/services/router.service';
 	import { setMode } from 'mode-watcher';
-	import { ColorMode } from '$lib/enums/ui';
+	import { ColorMode } from '$lib/enums/ui.enums';
 	import { fade } from 'svelte/transition';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';

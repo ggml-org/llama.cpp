@@ -6,7 +6,7 @@
 	import * as Select from '$lib/components/ui/select';
 	import { Textarea } from '$lib/components/ui/textarea';
 	import { SETTING_CONFIG_INFO, SETTINGS_KEYS } from '$lib/constants';
-	import { SettingsFieldType } from '$lib/enums/settings';
+	import { SettingsFieldType } from '$lib/enums/settings.enums';
 	import { settingsStore } from '$lib/stores/settings.svelte';
 	import { serverStore } from '$lib/stores/server.svelte';
 	import { modelsStore, selectedModelName, propsCacheVersion } from '$lib/stores/models.svelte';

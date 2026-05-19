@@ -41,7 +41,7 @@ jobs:
   ui-checks:
     name: UI Checks
     needs: ui-build
-    runs-on: ubuntu-slim
+    runs-on: ubuntu-latest
     continue-on-error: true
     steps:
       - name: Checkout code
@@ -93,7 +93,7 @@ jobs:
   e2e-tests:
     name: E2E Tests
     needs: ui-build
-    runs-on: ubuntu-slim
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
