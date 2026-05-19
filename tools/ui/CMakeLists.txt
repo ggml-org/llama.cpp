@@ -16,12 +16,14 @@ if(DEFINED LLAMA_WEBUI_HF_BUCKET)
     message(DEPRECATION "LLAMA_WEBUI_HF_BUCKET is deprecated, use LLAMA_UI_HF_BUCKET instead")
 endif()
 
-# Resolve HF asset version: explicit env var > derived from build number > unset
+# Resolve HF asset version: explicit env var > cmake var > unset
 if(DEFINED ENV{HF_WEBUI_VERSION})
     set(HF_UI_VERSION "$ENV{HF_WEBUI_VERSION}")
     message(DEPRECATION "HF_WEBUI_VERSION env var is deprecated, use HF_UI_VERSION instead")
 elseif(DEFINED ENV{HF_UI_VERSION})
     set(HF_UI_VERSION "$ENV{HF_UI_VERSION}")
+elseif(DEFINED LLAMA_UI_HF_VERSION)
+    set(HF_UI_VERSION "${LLAMA_UI_HF_VERSION}")
 else()
     set(HF_UI_VERSION "")
 endif()
