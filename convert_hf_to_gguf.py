@@ -11069,6 +11069,10 @@ class GraniteModel(LlamaModel):
             normalized_projector_map = Granite4VisionMmprojModel.get_normalized_projector_map(self.hparams)
             deepstack_layer_arr = [-1 for _ in range(self.block_count)] # Populate with -1 sentinels
             for proj_idx, (_, llm_layer, _, _) in enumerate(normalized_projector_map):
+                # Skip the first projector which is handled as the base embedding
+                # stream like normal
+                if proj_idx == 0:
+                    continue
                 deepstack_layer_arr[llm_layer] = proj_idx
             self.gguf_writer.add_num_deepstack_layers(deepstack_layer_arr)
 
@@ -13110,7 +13114,7 @@ class Granite4VisionMmprojModel(MmprojModel):
                 spatial_vision_layer = n_vision_layers + spatial_vision_layer
             for spatial_idx, llm_layer in enumerate(spatial_layers):
                 normalized_projector_map.append((spatial_vision_layer, llm_layer, "spatial", spatial_idx))
-        return list(sorted(normalized_projector_map))
+        return list(sorted(normalized_projector_map, key=(lambda entry: entry[1])))
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
