@@ -2498,6 +2498,7 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx, ggml_cl_ve
             const int S_V = gdn_sizes[si];
 
             // MUST match the dispatcher heuristic in ggml_cl_gated_delta_net exactly.
+            int lanes_per_column;
             if (S_V >= 128) {
                 lanes_per_column = 8;
             } else {
