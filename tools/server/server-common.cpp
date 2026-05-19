@@ -91,7 +91,8 @@ const char * get_media_marker() {
         if (env && env[0] != '\0') {
             return std::string(env);
         }
-        return std::string("<__media_") + random_string() + "__>";
+        // must match mtmd_default_marker() so the tokenizer can split on it
+        return std::string(mtmd_default_marker());
     }();
     return marker.c_str();
 }

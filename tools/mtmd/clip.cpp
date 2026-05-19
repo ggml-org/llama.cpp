@@ -2608,6 +2608,13 @@ struct clip_model_loader {
             // alloc memory and offload data
             ggml_backend_buffer_type_t buft = ggml_backend_get_default_buffer_type(ctx_clip.backend);
             ctx_clip.buf.reset(ggml_backend_alloc_ctx_tensors_from_buft(ctx_clip.ctx_data.get(), buft));
+            if (!ctx_clip.buf && ctx_clip.backend != ctx_clip.backend_cpu) {
+                LOG_WRN("%s: WARNING: failed to allocate tensors on %s, falling back to CPU\n", __func__, ggml_backend_name(ctx_clip.backend));
+                ctx_clip.backend = ctx_clip.backend_cpu;
+                buft = ggml_backend_get_default_buffer_type(ctx_clip.backend);
+                ctx_clip.buf.reset(ggml_backend_alloc_ctx_tensors_from_buft(ctx_clip.ctx_data.get(), buft));
+            }
+            GGML_ASSERT(ctx_clip.buf && "failed to allocate tensors on any backend");
             ggml_backend_buffer_set_usage(ctx_clip.buf.get(), GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
             for (auto & t : tensors_to_load) {
                 ggml_tensor * cur = ggml_get_tensor(ctx_clip.ctx_data.get(), t->name);
@@ -3341,7 +3348,10 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
     // build the inference graph
     ggml_backend_sched_reset(ctx->sched.get());
     ggml_cgraph * gf = clip_image_build_graph(ctx, imgs);
-    ggml_backend_sched_alloc_graph(ctx->sched.get(), gf);
+    if (!ggml_backend_sched_alloc_graph(ctx->sched.get(), gf)) {
+        LOG_ERR("%s: failed to allocate compute graph (OOM)\n", __func__);
+        return false;
+    }
 
     // set inputs
     const auto & model   = ctx->model;

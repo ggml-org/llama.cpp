@@ -823,7 +823,13 @@ private:
         if (!mmproj_path.empty()) {
             mtmd_context_params mparams = mtmd_context_params_default();
 
-            mparams.use_gpu          = params_base.mmproj_use_gpu;
+            // if user explicitly sets n_gpu_layers to 0, disable mmproj GPU too
+            bool mmproj_use_gpu = params_base.mmproj_use_gpu;
+            if (mmproj_use_gpu && params_base.n_gpu_layers == 0) {
+                LOG_INF("%s: n_gpu_layers=0, disabling mmproj GPU\n", __func__);
+                mmproj_use_gpu = false;
+            }
+            mparams.use_gpu          = mmproj_use_gpu;
             mparams.print_timings    = false;
             mparams.n_threads        = params_base.cpuparams.n_threads;
             mparams.flash_attn_type  = params_base.flash_attn_type;
@@ -2751,9 +2757,10 @@ private:
                             n_swa > 0);
 
                     bool has_mtmd = false;
+                    bool slot_released = false;
 
                     // check if we should process the image
-                    while (slot.prompt.n_tokens() < slot.task->n_tokens() && input_tokens[slot.prompt.n_tokens()] == LLAMA_TOKEN_NULL) {
+                    while (!slot_released && slot.prompt.n_tokens() < slot.task->n_tokens() && input_tokens[slot.prompt.n_tokens()] == LLAMA_TOKEN_NULL) {
                         // process the image
                         size_t n_tokens_out = 0;
                         int32_t res = input_tokens.process_chunk(ctx_tgt, mctx, slot.prompt.n_tokens(), slot.prompt.tokens.pos_next(), slot.id, n_tokens_out);
@@ -2761,7 +2768,8 @@ private:
                             SLT_ERR(slot, "failed to process image, res = %d\n", res);
                             send_error(slot, "failed to process image", ERROR_TYPE_SERVER);
                             slot.release();
-                            continue;
+                            slot_released = true;
+                            break;
                         }
 
                         if (ctx_dft) {
@@ -2783,6 +2791,11 @@ private:
                         }
 
                         has_mtmd = true;
+                    }
+
+                    if (slot_released) {
+                        // released inside mtmd loop, skip the rest
+                        continue;
                     }
 
                     // add prompt tokens for processing in the current batch
@@ -2841,6 +2854,40 @@ private:
                     // entire prompt has been processed
                     if (slot.prompt.n_tokens() == slot.task->n_tokens()) {
                         slot.state = SLOT_STATE_DONE_PROMPT;
+
+                        // If the prompt ended with mtmd chunks and no text tokens remain,
+                        // add the last valid text token to the batch to produce generation logits
+                        if (batch.n_tokens == 0) {
+                            GGML_ASSERT(has_mtmd);
+                            // find the last non-NULL token from the processed prompt
+                            bool found = false;
+                            for (int i = (int)slot.prompt.tokens.size() - 1; i >= 0; i--) {
+                                if (slot.prompt.tokens[i] != LLAMA_TOKEN_NULL) {
+                                    common_batch_add(batch,
+                                        slot.prompt.tokens[i],
+                                        slot.prompt.tokens.pos_next(),
+                                        { slot.id },
+                                        slot.task->need_embd());
+                                    slot.prompt.tokens.push_back(slot.prompt.tokens[i]);
+                                    found = true;
+                                    break;
+                                }
+                            }
+                            if (!found) {
+                                // image-only prompt (no text tokens at all)
+                                // use BOS to produce logits so sampling can proceed
+                                const auto bos = llama_vocab_bos(vocab);
+                                if (bos != LLAMA_TOKEN_NULL) {
+                                    common_batch_add(batch,
+                                        bos,
+                                        slot.prompt.tokens.pos_next(),
+                                        { slot.id },
+                                        slot.task->need_embd());
+                                    slot.prompt.tokens.push_back(bos);
+                                }
+                            }
+                            SRV_DBG("slot %12.*s: id %2d | task %d | prompt ended with mtmd, added synthetic token to batch\n", 12, __func__, slot.id, slot.task ? slot.task->id : -1);
+                        }
 
                         GGML_ASSERT(batch.n_tokens > 0);
 

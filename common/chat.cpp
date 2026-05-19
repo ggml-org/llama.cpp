@@ -2474,10 +2474,25 @@ static common_chat_params common_chat_templates_apply_legacy(const struct common
 }
 
 common_chat_params common_chat_templates_apply(const struct common_chat_templates *        tmpls,
-                                               const struct common_chat_templates_inputs & inputs) {
+                                                const struct common_chat_templates_inputs & inputs) {
     GGML_ASSERT(tmpls != nullptr);
-    return inputs.use_jinja ? common_chat_templates_apply_jinja(tmpls, inputs) :
-                              common_chat_templates_apply_legacy(tmpls, inputs);
+
+    // if use_jinja is requested, check if the template source is actually a built-in template name
+    // if so, fall back to the legacy path which resolves built-in templates by name
+    if (inputs.use_jinja) {
+        const auto src = common_chat_templates_source(tmpls);
+        if (!src.empty()) {
+            // test if this is a built-in template name by attempting to apply it with an empty chat
+            // if it returns >= 0, it's a built-in template
+            int32_t test_res = llama_chat_apply_template(src.c_str(), nullptr, 0, false, nullptr, 0);
+            if (test_res >= 0) {
+                return common_chat_templates_apply_legacy(tmpls, inputs);
+            }
+        }
+        return common_chat_templates_apply_jinja(tmpls, inputs);
+    }
+
+    return common_chat_templates_apply_legacy(tmpls, inputs);
 }
 
 common_chat_msg common_chat_parse(const std::string &               input,
