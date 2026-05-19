@@ -225,3 +225,62 @@ export function hasAgenticContent(
 
 	return toolMessages.length > 0;
 }
+
+/**
+ * Classification of how a Continue click on an assistant message should resume
+ * generation. The caller dispatches the resume path based on this value.
+ *
+ *   append_text  -> the target is a plain text turn, resume with
+ *                   continue_final_message and rehydrate the persisted
+ *                   tool_calls and attachments through the regular DB to API
+ *                   message converter.
+ *   rerun_turn   -> the target carries tool_calls that were never resolved by
+ *                   tool result messages. The agentic stream was cut mid turn,
+ *                   so we drop the target and rerun the loop from the previous
+ *                   history. truncateAfter is the last kept index, inclusive.
+ *   next_turn    -> the target's tool_calls were already resolved by trailing
+ *                   tool results. Hand the history up to and including the
+ *                   last consecutive tool result back to the agentic loop so it
+ *                   starts the next turn naturally. truncateAfter points at
+ *                   that last tool result.
+ */
+export type ContinueIntent =
+	| { kind: 'append_text' }
+	| { kind: 'rerun_turn'; truncateAfter: number }
+	| { kind: 'next_turn'; truncateAfter: number };
+
+/**
+ * Decide how a Continue click on messages[idx] should resume generation.
+ * Pure function over the persisted history snapshot.
+ */
+export function classifyContinueIntent(messages: DatabaseMessage[], idx: number): ContinueIntent {
+	const target = messages[idx];
+
+	// Defensive default: callers already filter by role, stay deterministic.
+	if (!target || target.role !== MessageRole.ASSISTANT) {
+		return { kind: 'append_text' };
+	}
+
+	const hasToolCalls = parseToolCalls(target.toolCalls).length > 0;
+	if (!hasToolCalls) {
+		return { kind: 'append_text' };
+	}
+
+	// Walk consecutive trailing tool results. The agentic loop only emits tool
+	// messages directly after the assistant turn that owns them, so the first
+	// non tool message marks the boundary.
+	let lastTrailingTool = idx;
+	for (let i = idx + 1; i < messages.length; i++) {
+		if (messages[i].role === MessageRole.TOOL) {
+			lastTrailingTool = i;
+		} else {
+			break;
+		}
+	}
+
+	if (lastTrailingTool > idx) {
+		return { kind: 'next_turn', truncateAfter: lastTrailingTool };
+	}
+
+	return { kind: 'rerun_turn', truncateAfter: idx - 1 };
+}
