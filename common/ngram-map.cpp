@@ -453,11 +453,17 @@ void common_ngram_map_draft(common_ngram_map & map,
 
     // Do we have a value we could use for the draft?
     uint16_t max_occur = 0;
+    uint32_t max_score = 0;
     int slot_max = 0;
     for (int v = 0; v < COMMON_NGRAM_MAX_VALUES; ++v) {
+        if (curr_key.values[v].value_idx == 0) {
+            continue;
+        }
         uint16_t curr_occur = curr_key.values[v].value_num;
-        if (curr_occur > max_occur) {
+        uint32_t score = (uint32_t)curr_occur * (uint32_t)curr_key.values[v].n_accepted;
+        if (score > max_score) {
             max_occur = curr_occur;
+            max_score = score;
             slot_max = v;
         }
     }
@@ -526,5 +532,7 @@ void common_ngram_map_accept(common_ngram_map & map, uint16_t n_accepted) {
     // update the value statistics
     LOG_DBG("common_ngram_map_send_accepted: n_accepted = %d, prev value_num = %d\n",
             n_accepted, curr_value.n_accepted);
-    curr_value.n_accepted = n_accepted;
+    curr_value.n_accepted = (int16_t)(
+        (7*(int)curr_value.n_accepted + 3 * (int)n_accepted +5)/10
+    );
 }
