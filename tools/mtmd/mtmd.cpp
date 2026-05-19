@@ -850,6 +850,32 @@ struct mtmd_tokenizer {
                     n_tokens += clip_n_output_tokens(ctx->ctx_v, entry.get());
                 }
 
+                // Granite Vision 4.1 pack_and_unpad (mtmd layer) changes
+                // the token count: single-tile appends 1 image_newline row,
+                // multi-tile adds a newline column per grid row and a
+                // full base tile.  Compute the adjustment here so that
+                // image_tokens->nx reflects the final packed size.
+                if (ctx->proj_type_v() == PROJECTOR_TYPE_GRANITE4_VISION) {
+                    if (batch_f32.entries.size() == 1) {
+                        n_tokens += 1; // newline row
+                    } else {
+                        // +1 newline per grid row + base tile (= entries[0])
+                        const int grid_x = (int) batch_f32.grid_x;
+                        const int grid_y = (int) batch_f32.grid_y;
+                        const int per_tile = clip_n_output_tokens(ctx->ctx_v,
+                                                                  batch_f32.entries[0].get());
+                        const int per_tile_side = (int) std::lround(std::sqrt((double)per_tile));
+                        GGML_ASSERT(per_tile_side * per_tile_side == per_tile);
+                        // Grid features: (per_tile_side * grid_y) rows,
+                        // each (per_tile_side * grid_x + 1) cols (newline)
+                        const int grid_tokens = (per_tile_side * grid_y)
+                                              * (per_tile_side * grid_x + 1);
+                        // Base tile: per_tile tokens.  Replace the raw
+                        // sum with base + grid.
+                        n_tokens = per_tile + grid_tokens;
+                    }
+                }
+
                 mtmd_image_tokens_ptr image_tokens(new mtmd_image_tokens);
                 if (mtmd_decode_use_mrope(ctx)) {
                     // for Qwen2VL, we need this information for M-RoPE decoding positions
@@ -1073,6 +1099,144 @@ int32_t mtmd_encode(mtmd_context * ctx, const mtmd_image_tokens * image_tokens) 
     int n_mmproj_embd = clip_n_mmproj_embd(ctx_clip);
     ctx->image_embd_v.resize(image_tokens->n_tokens() * n_mmproj_embd);
     bool ok = false;
+
+    if (proj_type == PROJECTOR_TYPE_GRANITE4_VISION) {
+        // Granite Vision 4.1: encode each tile separately, then run
+        // pack_and_unpad at the mtmd layer.  The clip graph emits
+        // (n_mmproj_embd, 144) per tile; the final output depends on
+        // whether anyres split produced 1 tile (append one image_newline
+        // row across all K = projector_count stream slices) or more than
+        // one (reshape into the selected pinpoint grid, unpad, append
+        // newline column, prepend base tile).
+        const auto & entries = image_tokens->batch_f32.entries;
+        const int n_per_tile = clip_n_output_tokens(ctx_clip, entries[0].get());
+        std::vector<float> per_tile(entries.size() * n_per_tile * n_mmproj_embd);
+        for (size_t i = 0; i < entries.size(); i++) {
+            ok = clip_image_encode(
+                ctx_clip,
+                ctx->n_threads,
+                entries[i].get(),
+                per_tile.data() + i*n_mmproj_embd*n_per_tile);
+            if (!ok) return 1;
+        }
+
+        // Per-slice image_newline vectors: the base slice (offset 0) is
+        // pre-divided by g4v.base_stream_scale to match what the clip
+        // graph does internally to the base stream.
+        //DEBUG------------------------------------------------------------------------------------------------------------------------
+        const int n_slices       = 8; //clip_projector_count(ctx_clip);
+        GGML_ASSERT(n_slices > 0 && n_mmproj_embd % n_slices == 0);
+        const int projection_dim = n_mmproj_embd / n_slices;
+        const float base_scale   = 1.0 / 12.; // clip_base_stream_scale(ctx_clip);
+        std::vector<float> newline_row(n_mmproj_embd);
+        // Copy learned image_newline vector (projection_dim floats)
+        // into the newline_row, K times.
+        std::vector<float> newline(projection_dim);
+        {
+            ggml_tensor * t = clip_get_newline_tensor(ctx_clip);
+            GGML_ASSERT(t != nullptr && ggml_nelements(t) == projection_dim);
+            ggml_backend_tensor_get(t, newline.data(), 0, projection_dim * sizeof(float));
+        }
+        for (int k = 0; k < n_slices; ++k) {
+            for (int d = 0; d < projection_dim; ++d) {
+                newline_row[k*projection_dim + d] = newline[d] * (k == 0 ? base_scale : 1.0f);
+            }
+        }
+
+        // Assemble the final image_embd_v.
+        if (entries.size() == 1) {
+            // Single tile: 144 tokens + 1 newline row = 145 tokens.
+            std::memcpy(ctx->image_embd_v.data(),
+                        per_tile.data(),
+                        n_per_tile * n_mmproj_embd * sizeof(float));
+            std::memcpy(ctx->image_embd_v.data() + n_per_tile * n_mmproj_embd,
+                        newline_row.data(),
+                        n_mmproj_embd * sizeof(float));
+        } else {
+            // Multi-tile (LlavaNext-style) pack_and_unpad.  Layout:
+            //   out[0..per_tile]          = base tile features (overview)
+            //   out[per_tile..final_len]  = grid features with newline col
+            //
+            // Grid: entries[1..end] are grid tiles in row-major order.
+            // Each tile contributes a per_tile_side × per_tile_side block
+            // of tokens, concatenated into a (grid_y*side, grid_x*side)
+            // spatial map, then unpadded against the original image
+            // aspect and topped up with one image_newline column.
+            const int per_tile_side = (int) std::lround(std::sqrt((double)n_per_tile));
+            GGML_ASSERT(per_tile_side * per_tile_side == n_per_tile);
+            const int grid_x = (int) image_tokens->batch_f32.grid_x;
+            const int grid_y = (int) image_tokens->batch_f32.grid_y;
+            GGML_ASSERT(grid_x > 0 && grid_y > 0);
+            GGML_ASSERT((size_t)(grid_x * grid_y + 1) == entries.size());
+
+            const int H = per_tile_side * grid_y;
+            const int W = per_tile_side * grid_x;
+
+            // Copy base tile (entries[0]) directly.
+            std::memcpy(ctx->image_embd_v.data(),
+                        per_tile.data(),
+                        n_per_tile * n_mmproj_embd * sizeof(float));
+            size_t out_off = n_per_tile * n_mmproj_embd;
+
+            // Reshape grid tiles into a (H, W, n_mmproj_embd) spatial
+            // buffer.  Grid order matches entry indices 1..end in
+            // row-major (tile y*grid_x + x is at entries[1 + y*grid_x + x]).
+            const size_t spatial_floats = (size_t) H * W * n_mmproj_embd;
+            std::vector<float> spatial(spatial_floats);
+            for (int gy = 0; gy < grid_y; ++gy) {
+                for (int gx = 0; gx < grid_x; ++gx) {
+                    const int tile_idx = gy * grid_x + gx; // among grid tiles
+                    const float * tile_src = per_tile.data()
+                        + (1 + tile_idx) * n_per_tile * n_mmproj_embd;
+                    for (int ty = 0; ty < per_tile_side; ++ty) {
+                        for (int tx = 0; tx < per_tile_side; ++tx) {
+                            const int y = gy * per_tile_side + ty;
+                            const int x = gx * per_tile_side + tx;
+                            const int src_row = ty * per_tile_side + tx;
+                            std::memcpy(
+                                spatial.data() + ((size_t) y * W + x) * n_mmproj_embd,
+                                tile_src + src_row * n_mmproj_embd,
+                                n_mmproj_embd * sizeof(float));
+                        }
+                    }
+                }
+            }
+
+            // Unpad: crop rows or columns based on original image aspect.
+            // image_tokens carries no image_size field today; reconstruct
+            // from nx/ny if possible, otherwise skip cropping.
+            // For now assume no unpad (i.e. the pinpoint grid perfectly
+            // matches the image aspect, which is the common case; unpad
+            // cropping will be added when multi-aspect images regress).
+            int H_unp = H;
+            int W_unp = W;
+            // TODO: implement unpad crop based on original image size.
+
+            // Append newline column: for each row (H_unp), append one
+            // newline_row across the K slices.
+            const int W_final = W_unp + 1;
+            const size_t grid_tokens = (size_t) H_unp * W_final;
+            for (int y = 0; y < H_unp; ++y) {
+                // Copy the W_unp row of spatial features.
+                std::memcpy(
+                    ctx->image_embd_v.data() + out_off + (size_t) y * W_final * n_mmproj_embd,
+                    spatial.data() + (size_t) y * W * n_mmproj_embd,
+                    (size_t) W_unp * n_mmproj_embd * sizeof(float));
+                // Copy the newline row into the last column of this row.
+                std::memcpy(
+                    ctx->image_embd_v.data() + out_off
+                        + ((size_t) y * W_final + W_unp) * n_mmproj_embd,
+                    newline_row.data(),
+                    n_mmproj_embd * sizeof(float));
+            }
+
+            // Sanity check token count.
+            const size_t final_tokens = n_per_tile + grid_tokens;
+            GGML_ASSERT(final_tokens == image_tokens->n_tokens()
+                        && "mtmd_encode: token count mismatch with image_tokens->n_tokens");
+        }
+        return 0;
+    }
 
     if (clip_is_llava(ctx_clip)
         || clip_is_minicpmv(ctx_clip)

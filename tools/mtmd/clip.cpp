@@ -955,10 +955,6 @@ static ggml_cgraph * clip_image_build_graph(clip_ctx * ctx, const clip_image_f32
             {
                 builder = std::make_unique<clip_graph_granite_speech>(ctx, img);
             } break;
-        case PROJECTOR_TYPE_GRANITE4_VISION:
-            {
-                builder = std::make_unique<clip_graph_granite_vision>(ctx, img);
-            } break;
         case PROJECTOR_TYPE_GLM4V:
             {
                 builder = std::make_unique<clip_graph_glm4v>(ctx, img);
@@ -974,6 +970,10 @@ static ggml_cgraph * clip_image_build_graph(clip_ctx * ctx, const clip_image_f32
         case PROJECTOR_TYPE_YASA2:
             {
                 builder = std::make_unique<clip_graph_yasa2>(ctx, img);
+            } break;
+        case PROJECTOR_TYPE_GRANITE4_VISION:
+            {
+                builder = std::make_unique<clip_graph_granite_vision>(ctx, img);
             } break;
         default:
             GGML_ABORT("missing cgraph builder");
@@ -3379,6 +3379,19 @@ int clip_n_output_tokens(const struct clip_ctx * ctx, struct clip_image_f32 * im
                 const int ds = ctx->model.hparams.audio_proj_downsample_rate;
                 n_patches = ((img->nx + ws - 1) / ws) * (ws / ds);
             } break;
+        case PROJECTOR_TYPE_GRANITE4_VISION:
+            {
+                // Per-tile output token count: each projector block outputs
+                // query_side^2 tokens per window × n^2 windows.
+                // For 384×384 input: n = 24/8 = 3, query_side = 4 → 144.
+                // The +1 image_newline row / newline column logic runs in
+                // mtmd_encode's pack_and_unpad path, not here.
+                const int window_side = ctx->model.hparams.downsample_window_side;
+                const int query_side  = ctx->model.hparams.downsample_query_side;
+                const int side        = img->nx / params.patch_size;
+                const int n           = side / window_side;
+                n_patches             = (query_side * n) * (query_side * n);
+            } break;
         default:
             GGML_ABORT("unsupported projector type");
     }
@@ -4177,6 +4190,92 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
                     set_input_f32("attn_mask", mask);
                 }
             } break;
+        case PROJECTOR_TYPE_GRANITE4_VISION:
+            {
+                // Granite Vision 4.1 uses precomputed permutation index
+                // tensors to express the _win / _unwin / spatial sampling
+                // reshapes as ggml_get_rows gathers.  The names are set
+                // by g4v_gather() in models/granite4v.cpp.
+                const int patch_size  = model.hparams.patch_size;
+                const int image_side  = imgs.entries.front()->nx / patch_size;
+                const int window_side = hparams.downsample_window_side;
+                const int query_side  = hparams.downsample_query_side;
+                const int n           = image_side / window_side;
+                const int new_side    = n * query_side;
+
+                // Builds the raster→window permutation indices for a
+                // (side, side) grid split into (n × n) windows of (win × win)
+                // tokens each.  dst[w * win*win + p] = source raster index.
+                auto make_win_idx = [](int side, int win) {
+                    const int nn = side / win;
+                    std::vector<int32_t> idx(static_cast<size_t>(side) * side);
+                    for (int wy = 0; wy < nn; ++wy) {
+                        for (int wx = 0; wx < nn; ++wx) {
+                            for (int iy = 0; iy < win; ++iy) {
+                                for (int ix = 0; ix < win; ++ix) {
+                                    const int w  = wy * nn + wx;
+                                    const int p  = iy * win + ix;
+                                    const int y  = wy * win + iy;
+                                    const int x  = wx * win + ix;
+                                    idx[static_cast<size_t>(w) * (win*win) + p] = y * side + x;
+                                }
+                            }
+                        }
+                    }
+                    return idx;
+                };
+
+                auto make_unwin_idx = [&](int side, int win) {
+                    const std::vector<int32_t> fwd = make_win_idx(side, win);
+                    std::vector<int32_t> inv(fwd.size());
+                    for (size_t i = 0; i < fwd.size(); ++i) {
+                        inv[fwd[i]] = static_cast<int32_t>(i);
+                    }
+                    return inv;
+                };
+
+                auto make_spatial_idx = [](int side, int offset) {
+                    const int off_y = (offset >> 1) & 1;
+                    const int off_x = offset & 1;
+                    const int new_s = side / 2;
+                    std::vector<int32_t> idx(static_cast<size_t>(new_s) * new_s);
+                    for (int y = 0; y < new_s; ++y) {
+                        for (int x = 0; x < new_s; ++x) {
+                            idx[y * new_s + x] = (y * 2 + off_y) * side + (x * 2 + off_x);
+                        }
+                    }
+                    return idx;
+                };
+
+                auto upload = [&](const std::string & name, const std::vector<int32_t> & idx) {
+                    ggml_tensor * t = ggml_graph_get_tensor(gf, name.c_str());
+                    if (t) {
+                        if (std::getenv("G4V_DEBUG_NAMES")) {
+                            std::fprintf(stderr, "granite4v: upload %s len=%zu first=%d\n",
+                                         name.c_str(), idx.size(),
+                                         idx.empty() ? -1 : idx.front());
+                        }
+                        ggml_backend_tensor_set(t, idx.data(), 0, idx.size() * sizeof(int32_t));
+                    } else if (std::getenv("G4V_DEBUG_NAMES")) {
+                        std::fprintf(stderr, "granite4v: index tensor %s not found in graph\n",
+                                     name.c_str());
+                    }
+                };
+
+                // Stage 1b only uses block 0's permutations; future stages
+                // will upload all 8 blocks.  upload() no-ops when a tensor
+                // is not present in the graph, so this is safe for either.
+                for (size_t bid = 0; bid < hparams.vision_feature_layer.size(); ++bid) {
+                    const std::string prefix = "g4v_blk" + std::to_string(bid) + "_";
+                    upload(prefix + "win_idx",     make_win_idx(image_side, window_side));
+                    upload(prefix + "qwin_idx",    make_win_idx(new_side, query_side));
+                    upload(prefix + "unwin_idx",   make_unwin_idx(new_side, query_side));
+                    const auto spatial_offset = hparams.proj_spatial_offsets[bid];
+                    if (spatial_offset >= 0) {
+                        upload(prefix + "spatial_idx", make_spatial_idx(image_side,spatial_offset));
+                    }
+                }
+            } break;
         default:
             GGML_ABORT("Unknown projector type");
     }
@@ -4332,7 +4431,10 @@ int clip_n_mmproj_embd(const struct clip_ctx * ctx) {
         case PROJECTOR_TYPE_GRANITE_SPEECH:
             return ctx->model.qf_proj_blocks[0].qf_proj_linear_w->ne[1];
         case PROJECTOR_TYPE_GRANITE4_VISION:
-            return ctx->model.qf_proj_blocks[0].qf_proj_linear_w->ne[1] * (1 + ctx->model.qf_proj_blocks.size());
+            // Stage 2a: graph output is 8 concatenated streams (deepstack
+            // layout with "base" = stream targeting llm_layer 0).  Per-token
+            // feature count = projector_count * projection_dim.
+            return ctx->model.qf_proj_blocks.size() * ctx->model.hparams.projection_dim;
         case PROJECTOR_TYPE_GLM4V:
             return ctx->model.mm_ffn_down_w->ne[1];
         default:
