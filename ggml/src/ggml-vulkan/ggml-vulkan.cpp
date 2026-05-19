@@ -9632,13 +9632,13 @@ static vk_pipeline ggml_vk_op_get_pipeline(ggml_backend_vk_context * ctx, const 
         }
         return nullptr;
     case GGML_OP_REPEAT:
-           if (ggml_type_size(src0->type) == sizeof(float) && ggml_type_size(dst->type) == sizeof(float)) {
-             return ctx->device->pipeline_repeat_f32;
-           }
-           if (ggml_type_size(src0->type) == 2 && ggml_type_size(dst->type) == 2) {
-             return ctx->device->pipeline_repeat_f16;
-           }
-          return nullptr;
+        if (src0->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
+            return ctx->device->pipeline_repeat_f32;
+        }
+        if (src0->type == GGML_TYPE_F16 && dst->type == GGML_TYPE_F16) {
+            return ctx->device->pipeline_repeat_f16;
+        }
+        return nullptr;
     case GGML_OP_REPEAT_BACK:
         if (src0->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
             return ctx->device->pipeline_repeat_back_f32;
@@ -16026,8 +16026,7 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
                 return false;
             }
         case GGML_OP_REPEAT:
-            return (op->type == GGML_TYPE_F32 || op->type == GGML_TYPE_F16) &&
-                   (op->src[0]->type == GGML_TYPE_F32 || op->src[0]->type == GGML_TYPE_F16);
+            return (op->type == GGML_TYPE_F32 || op->type == GGML_TYPE_F16) && op->type == op->src[0]->type;
         case GGML_OP_REPEAT_BACK:
             return op->type == GGML_TYPE_F32 && op->src[0]->type == GGML_TYPE_F32;
         case GGML_OP_ROPE:
