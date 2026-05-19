@@ -445,6 +445,11 @@ if __name__ == '__main__':
                     if self.lazy:
                         tensor = LazyTorchTensor.from_eager(tensor)
                     base_name = get_base_tensor_name(name)
+                    # filter base name, ignore tensor transformations for now
+                    data_gen = lambda g=tensor: g  # noqa: E731
+                    if (titem := self.filter_tensors((base_name, data_gen))) is None:
+                        continue
+                    base_name, _ = titem
                     # note: mergekit-extract-lora also adds token embeddings to the adapter
                     is_lora_a = ".lora_A.weight" in name or ".lora_embedding_A" in name
                     is_lora_b = ".lora_B.weight" in name or ".lora_embedding_B" in name
