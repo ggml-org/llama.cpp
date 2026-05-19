@@ -4202,21 +4202,36 @@ void ggml_gemm_q4_K_8x8_q8_K(int                        n,
                             // q8_ptr[b].qs has interleaved Q8 rows (01, 23)
                             const int8_t * q8_base = q8_ptr[b].qs + sb * 256;
 
-                            svint8_t q8_qs_01[8];
-                            svint8_t q8_qs_23[8];
+                            // svint8_t q8_qs_01[8];
+                            svint8_t  q8_qs_01_0 = svld1_s8(pg_b8_vl16, q8_base + 0*32);
+                            svint8_t  q8_qs_01_1 = svld1_s8(pg_b8_vl16, q8_base + 1*32);
+                            svint8_t  q8_qs_01_2 = svld1_s8(pg_b8_vl16, q8_base + 2*32);
+                            svint8_t  q8_qs_01_3 = svld1_s8(pg_b8_vl16, q8_base + 3*32);
+                            svint8_t  q8_qs_01_4 = svld1_s8(pg_b8_vl16, q8_base + 4*32);
+                            svint8_t  q8_qs_01_5 = svld1_s8(pg_b8_vl16, q8_base + 5*32);
+                            svint8_t  q8_qs_01_6 = svld1_s8(pg_b8_vl16, q8_base + 6*32); 
+                            svint8_t  q8_qs_01_7 = svld1_s8(pg_b8_vl16, q8_base + 7*32);
 
-                            // Load 32-byte per row pair, 1 subblock each time
-                            for (int i = 0; i < 8; i++) {
-                                const int offset = i * 32;  // 16 for row 01, 16 for row 23
-                                q8_qs_01[i]      = svld1_s8(pg_b8_vl16, q8_base + offset);
-                                q8_qs_23[i]      = svld1_s8(pg_b8_vl16, q8_base + offset + 16);
-                            }
+                            // svint8_t q8_qs_23[8];
+                            svint8_t q8_qs_23_0 = svld1_s8(pg_b8_vl16, q8_base + 0*32 + 16);
+                            svint8_t q8_qs_23_1 = svld1_s8(pg_b8_vl16, q8_base + 1*32 + 16);
+                            svint8_t q8_qs_23_2 = svld1_s8(pg_b8_vl16, q8_base + 2*32 + 16);
+                            svint8_t q8_qs_23_3 = svld1_s8(pg_b8_vl16, q8_base + 3*32 + 16);
+                            svint8_t q8_qs_23_4 = svld1_s8(pg_b8_vl16, q8_base + 4*32 + 16);
+                            svint8_t q8_qs_23_5 = svld1_s8(pg_b8_vl16, q8_base + 5*32 + 16);
+                            svint8_t q8_qs_23_6 = svld1_s8(pg_b8_vl16, q8_base + 6*32 + 16);
+                            svint8_t q8_qs_23_7 = svld1_s8(pg_b8_vl16, q8_base + 7*32 + 16);
+
+                            // // Load 32-byte per row pair, 1 subblock each time
+                            // for (int i = 0; i < 8; i++) {
+                            //     const int offset = i * 32;  // 16 for row 01, 16 for row 23
+                            //     q8_qs_01[i]      = svld1_s8(pg_b8_vl16, q8_base + offset);
+                            //     q8_qs_23[i]      = svld1_s8(pg_b8_vl16, q8_base + offset + 16);
+                            // }
 
                             const svint8_t q8s[2][8] = {
-                                { q8_qs_01[0], q8_qs_01[1], q8_qs_01[2], q8_qs_01[3],
-                                q8_qs_01[4], q8_qs_01[5], q8_qs_01[6], q8_qs_01[7] },
-                                { q8_qs_23[0], q8_qs_23[1], q8_qs_23[2], q8_qs_23[3],
-                                q8_qs_23[4], q8_qs_23[5], q8_qs_23[6], q8_qs_23[7] },
+                                { q8_qs_01[0], q8_qs_01[1], q8_qs_01[2], q8_qs_01[3], q8_qs_01[4], q8_qs_01[5], q8_qs_01[6], q8_qs_01[7] },
+                                { q8_qs_23[0], q8_qs_23[1], q8_qs_23[2], q8_qs_23[3], q8_qs_23[4], q8_qs_23[5], q8_qs_23[6], q8_qs_23[7] },
                             };
 
                             // Q4s columns iterated in pairs (01, 23, 45, 67)
@@ -4231,59 +4246,92 @@ void ggml_gemm_q4_K_8x8_q8_K(int                        n,
                                 svuint8_t q4_qs_cp_1 = svld1_u8(pg_b8_vl16, q4_ptr[b].qs + sb * QK_K + 16 * cp + 64);   // 8 ..15 & 40..47
                                 svuint8_t q4_qs_cp_2 = svld1_u8(pg_b8_vl16, q4_ptr[b].qs + sb * QK_K + 16 * cp + 128);  // 16..23 & 48..55
                                 svuint8_t q4_qs_cp_3 = svld1_u8(pg_b8_vl16, q4_ptr[b].qs + sb * QK_K + 16 * cp + 192);  // 24..31 & 56..63
-                                const svint8_t q4_nibbles[2][4] = {
-                                    {
-                                        svreinterpret_s8_u8(svand_u8_x(pg_b8_vl16, q4_qs_cp_0, m4b)),
-                                        svreinterpret_s8_u8(svand_u8_x(pg_b8_vl16, q4_qs_cp_1, m4b)),
-                                        svreinterpret_s8_u8(svand_u8_x(pg_b8_vl16, q4_qs_cp_2, m4b)),
-                                        svreinterpret_s8_u8(svand_u8_x(pg_b8_vl16, q4_qs_cp_3, m4b)),
-                                    },
-                                    {
-                                        svreinterpret_s8_u8(svlsr_n_u8_x(pg_b8_vl16, q4_qs_cp_0, 4)),
-                                        svreinterpret_s8_u8(svlsr_n_u8_x(pg_b8_vl16, q4_qs_cp_1, 4)),
-                                        svreinterpret_s8_u8(svlsr_n_u8_x(pg_b8_vl16, q4_qs_cp_2, 4)),
-                                        svreinterpret_s8_u8(svlsr_n_u8_x(pg_b8_vl16, q4_qs_cp_3, 4)),
-                                    }
-                                };
+                                // const svint8_t q4_nibbles[2][4] = {
+                                //     {
+                                //         svreinterpret_s8_u8(svand_u8_x(pg_b8_vl16, q4_qs_cp_0, m4b)),
+                                //         svreinterpret_s8_u8(svand_u8_x(pg_b8_vl16, q4_qs_cp_1, m4b)),
+                                //         svreinterpret_s8_u8(svand_u8_x(pg_b8_vl16, q4_qs_cp_2, m4b)),
+                                //         svreinterpret_s8_u8(svand_u8_x(pg_b8_vl16, q4_qs_cp_3, m4b)),
+                                //     },
+                                //     {
+                                //         svreinterpret_s8_u8(svlsr_n_u8_x(pg_b8_vl16, q4_qs_cp_0, 4)),
+                                //         svreinterpret_s8_u8(svlsr_n_u8_x(pg_b8_vl16, q4_qs_cp_1, 4)),
+                                //         svreinterpret_s8_u8(svlsr_n_u8_x(pg_b8_vl16, q4_qs_cp_2, 4)),
+                                //         svreinterpret_s8_u8(svlsr_n_u8_x(pg_b8_vl16, q4_qs_cp_3, 4)),
+                                //     }
+                                // };
+                                svint8_t q4_nibbles_00 = svreinterpret_s8_u8(svand_u8_x(pg_b8_vl16, q4_qs_cp_0, m4b));
+                                svint8_t q4_nibbles_01 = svreinterpret_s8_u8(svand_u8_x(pg_b8_vl16, q4_qs_cp_1, m4b));
+                                svint8_t q4_nibbles_02 = svreinterpret_s8_u8(svand_u8_x(pg_b8_vl16, q4_qs_cp_2, m4b));
+                                svint8_t q4_nibbles_03 = svreinterpret_s8_u8(svand_u8_x(pg_b8_vl16, q4_qs_cp_3, m4b));
+                                svint8_t q4_nibbles_10 = svreinterpret_s8_u8(svlsr_n_u8_x(pg_b8_vl16, q4_qs_cp_0, 4));
+                                svint8_t q4_nibbles_11 = svreinterpret_s8_u8(svlsr_n_u8_x(pg_b8_vl16, q4_qs_cp_0, 4));
+                                svint8_t q4_nibbles_12 = svreinterpret_s8_u8(svlsr_n_u8_x(pg_b8_vl16, q4_qs_cp_0, 4));
+                                svint8_t q4_nibbles_13 = svreinterpret_s8_u8(svlsr_n_u8_x(pg_b8_vl16, q4_qs_cp_0, 4));
 
                                 // Calculates the Qs muladd of every row pair (rp) rows 01 and 23 of q8
                                 // for each of the internal 32 qs subblock (blk)
-                                for (int rp = 0; rp < 2; rp++) {
-                                    for (int blk = 0; blk < 2; blk++) {
-                                        const svuint8_t * q8  = &q8s[rp][4 * blk];
-                                        const svuint8_t * q4  = q4_nibbles[blk];
-                                        // int32x4_t         acc = sb_acc[2 * rp + blk];
-                                        // // mul add for each qs in the same subblock
-                                        // for (int qs_offset = 0; qs_offset < 4; qs_offset++) {
-                                        //     acc = vmmlaq_s32(acc, q4[qs_offset], q8[qs_offset]);
-                                        // }
-                                        if(rp == 0 && blk == 0){
-                                            sb_acc_0 = svmmla_s32(sb_acc_0, q4[0], q8[0]);
-                                            sb_acc_0 = svmmla_s32(sb_acc_0, q4[1], q8[1]);
-                                            sb_acc_0 = svmmla_s32(sb_acc_0, q4[2], q8[2]);
-                                            sb_acc_0 = svmmla_s32(sb_acc_0, q4[3], q8[3]);
-                                        }
-                                        if(rp == 0 && blk == 1){
-                                            sb_acc_1 = svmmla_s32(sb_acc_0, q4[0], q8[0]);
-                                            sb_acc_1 = svmmla_s32(sb_acc_0, q4[1], q8[1]);
-                                            sb_acc_1 = svmmla_s32(sb_acc_0, q4[2], q8[2]);
-                                            sb_acc_1 = svmmla_s32(sb_acc_0, q4[3], q8[3]);
-                                        }
-                                        if(rp == 1 && blk == 0){
-                                            sb_acc_2 = svmmla_s32(sb_acc_0, q4[0], q8[0]);
-                                            sb_acc_2 = svmmla_s32(sb_acc_0, q4[1], q8[1]);
-                                            sb_acc_2 = svmmla_s32(sb_acc_0, q4[2], q8[2]);
-                                            sb_acc_2 = svmmla_s32(sb_acc_0, q4[3], q8[3]);
-                                        }
-                                        if(rp == 1 && blk == 1){
-                                            sb_acc_3 = svmmla_s32(sb_acc_0, q4[0], q8[0]);
-                                            sb_acc_3 = svmmla_s32(sb_acc_0, q4[1], q8[1]);
-                                            sb_acc_3 = svmmla_s32(sb_acc_0, q4[2], q8[2]);
-                                            sb_acc_3 = svmmla_s32(sb_acc_0, q4[3], q8[3]);
-                                        }
-                                        // sb_acc[2 * rp + blk] = acc;
-                                    }
-                                }
+                                // for (int rp = 0; rp < 2; rp++) {
+                                //     for (int blk = 0; blk < 2; blk++) {
+                                //         const svuint8_t * q8  = &q8s[rp][4 * blk];
+                                //         const svuint8_t * q4  = q4_nibbles[blk];
+                                //         // int32x4_t         acc = sb_acc[2 * rp + blk];
+                                //         // // mul add for each qs in the same subblock
+                                //         // for (int qs_offset = 0; qs_offset < 4; qs_offset++) {
+                                //         //     acc = vmmlaq_s32(acc, q4[qs_offset], q8[qs_offset]);
+                                //         // }
+                                //         if(rp == 0 && blk == 0){
+                                //             sb_acc_0 = svmmla_s32(sb_acc_0, q4[0], q8[0]);
+                                //             sb_acc_0 = svmmla_s32(sb_acc_0, q4[1], q8[1]);
+                                //             sb_acc_0 = svmmla_s32(sb_acc_0, q4[2], q8[2]);
+                                //             sb_acc_0 = svmmla_s32(sb_acc_0, q4[3], q8[3]);
+                                //         }
+                                //         if(rp == 0 && blk == 1){
+                                //             sb_acc_1 = svmmla_s32(sb_acc_0, q4[0], q8[0]);
+                                //             sb_acc_1 = svmmla_s32(sb_acc_0, q4[1], q8[1]);
+                                //             sb_acc_1 = svmmla_s32(sb_acc_0, q4[2], q8[2]);
+                                //             sb_acc_1 = svmmla_s32(sb_acc_0, q4[3], q8[3]);
+                                //         }
+                                //         if(rp == 1 && blk == 0){
+                                //             sb_acc_2 = svmmla_s32(sb_acc_0, q4[0], q8[0]);
+                                //             sb_acc_2 = svmmla_s32(sb_acc_0, q4[1], q8[1]);
+                                //             sb_acc_2 = svmmla_s32(sb_acc_0, q4[2], q8[2]);
+                                //             sb_acc_2 = svmmla_s32(sb_acc_0, q4[3], q8[3]);
+                                //         }
+                                //         if(rp == 1 && blk == 1){
+                                //             sb_acc_3 = svmmla_s32(sb_acc_0, q4[0], q8[0]);
+                                //             sb_acc_3 = svmmla_s32(sb_acc_0, q4[1], q8[1]);
+                                //             sb_acc_3 = svmmla_s32(sb_acc_0, q4[2], q8[2]);
+                                //             sb_acc_3 = svmmla_s32(sb_acc_0, q4[3], q8[3]);
+                                //         }
+                                //         // sb_acc[2 * rp + blk] = acc;
+                                //     }
+                                // }
+
+                                // Calculates the Qs muladd of every row pair (rp) rows 01 and 23 of q8
+                                //Low nibbles of q4 and first 4 bytes of row 01
+                                sb_acc_0 = svmmla_s32(sb_acc_0, q4_nibbles_00, q8_qs_01_0);
+                                sb_acc_0 = svmmla_s32(sb_acc_0, q4_nibbles_01, q8_qs_01_1);
+                                sb_acc_0 = svmmla_s32(sb_acc_0, q4_nibbles_02, q8_qs_01_2);
+                                sb_acc_0 = svmmla_s32(sb_acc_0, q4_nibbles_03, q8_qs_01_3);
+
+                                //High nibbles of q4 and next 4 bytes of row 01
+                                sb_acc_1 = svmmla_s32(sb_acc_0, q4_nibbles_10, q8_qs_01_4);
+                                sb_acc_1 = svmmla_s32(sb_acc_0, q4_nibbles_11, q8_qs_01_5);
+                                sb_acc_1 = svmmla_s32(sb_acc_0, q4_nibbles_12, q8_qs_01_6);
+                                sb_acc_1 = svmmla_s32(sb_acc_0, q4_nibbles_13, q8_qs_01_7);
+
+                                //Low nibbles of q4 and first 4 bytes of row 23
+                                sb_acc_0 = svmmla_s32(sb_acc_0, q4_nibbles_00, q8_qs_23_0);
+                                sb_acc_0 = svmmla_s32(sb_acc_0, q4_nibbles_01, q8_qs_23_1);
+                                sb_acc_0 = svmmla_s32(sb_acc_0, q4_nibbles_02, q8_qs_23_2);
+                                sb_acc_0 = svmmla_s32(sb_acc_0, q4_nibbles_03, q8_qs_23_3);
+
+                                //High nibbles of q4 and next 4 bytes of row 23
+                                sb_acc_1 = svmmla_s32(sb_acc_0, q4_nibbles_10, q8_qs_23_4);
+                                sb_acc_1 = svmmla_s32(sb_acc_0, q4_nibbles_11, q8_qs_23_5);
+                                sb_acc_1 = svmmla_s32(sb_acc_0, q4_nibbles_12, q8_qs_23_6);
+                                sb_acc_1 = svmmla_s32(sb_acc_0, q4_nibbles_13, q8_qs_23_7);
 
                                 // Scales[i] corresponds to column i
                                 const int scale_offset = cp * 2;
