@@ -252,8 +252,6 @@ struct ggml_backend_meta_buffer_type_context {
 
     std::string name;
 
-    std::atomic<size_t> max_n_tensors = 1024; // FIXME replace with better handling in ggml-alloc.c
-
     ggml_backend_meta_buffer_type_context(std::vector<ggml_backend_buffer_type_t> simple_bufts) : simple_bufts(std::move(simple_bufts)) {
         name = "Meta(";
         for (size_t i = 0; i < simple_bufts.size(); i++) {
@@ -269,18 +267,6 @@ struct ggml_backend_meta_buffer_type_context {
         return simple_bufts < other.simple_bufts;
     }
 };
-
-void ggml_backend_meta_buft_update_max_n_tensors(struct ggml_backend_buffer_type * buft, size_t n_tensors) {
-    GGML_ASSERT(ggml_backend_buft_is_meta(buft));
-    ggml_backend_meta_buffer_type_context * ctx = (ggml_backend_meta_buffer_type_context *) buft->context;
-    size_t max_n_tensors_cur = ctx->max_n_tensors.load();
-    while (max_n_tensors_cur < n_tensors) {
-        // If max_n_tensors_cur has not changed, it is written to the atomic (true), otherwise the new value is fetched (false).
-        if (ctx->max_n_tensors.compare_exchange_weak(/*expected =*/ max_n_tensors_cur, /*desired =*/n_tensors)) {
-            break;
-        }
-    }
-}
 
 static size_t ggml_backend_meta_buft_n_bufts(ggml_backend_buffer_type_t meta_buft) {
     GGML_ASSERT(ggml_backend_buft_is_meta(meta_buft));
@@ -1506,10 +1492,8 @@ bool ggml_backend_buffer_is_meta(ggml_backend_buffer_t buf) {
 static ggml_backend_buffer_t ggml_backend_meta_buffer_type_alloc_buffer(ggml_backend_buffer_type_t buft, size_t size) {
     const size_t n_simple_bufts = ggml_backend_meta_buft_n_bufts(buft);
 
-    const ggml_backend_meta_buffer_type_context * buft_ctx = (const ggml_backend_meta_buffer_type_context *) buft->context;
-
-    ggml_init_params params = {
-        /*.mem_size   =*/ buft_ctx->max_n_tensors.load()*ggml_tensor_overhead(),
+    const ggml_init_params params = {
+        /*.mem_size   =*/ 1024*1024*ggml_tensor_overhead(), // FIXME
         /*.mem_buffer =*/ nullptr,
         /*.no_alloc   =*/ true,
     };
@@ -1534,12 +1518,12 @@ struct ggml_backend_buffer * ggml_backend_meta_alloc_ctx_tensors_from_buft(struc
     const size_t n_simple_bufts = ggml_backend_meta_buft_n_bufts(buft);
 
     constexpr size_t compute_headroom = 8;
-    ggml_init_params params_static = {
+    const ggml_init_params params_static = {
         /*.mem_size   =*/ ggml_get_mem_size(ctx),
         /*.mem_buffer =*/ nullptr,
         /*.no_alloc   =*/ true,
     };
-    ggml_init_params params_compute = {
+    const ggml_init_params params_compute = {
         /*.mem_size   =*/ compute_headroom*ggml_get_mem_size(ctx),
         /*.mem_buffer =*/ nullptr,
         /*.no_alloc   =*/ true,
@@ -2006,7 +1990,7 @@ static enum ggml_status ggml_backend_meta_graph_compute(ggml_backend_t backend, 
             const size_t mem_per_device_graphs_main = backend_ctx->max_subgraphs*ggml_graph_overhead_custom(backend_ctx->max_nnodes, cgraph->grads);
             const size_t mem_per_device_graphs_aux = n_cgraphs_per_device*backend_ctx->max_subgraphs*ggml_graph_overhead_custom(1, cgraph->grads);
             const size_t mem_per_device_nodes_aux = n_nodes_per_device*backend_ctx->max_subgraphs*ggml_tensor_overhead();
-            ggml_init_params params = {
+            const ggml_init_params params = {
                 /*.mem_size   =*/ n_backends * (mem_per_device_graphs_main + mem_per_device_graphs_aux + mem_per_device_nodes_aux),
                 /*.mem_buffer =*/ nullptr,
                 /*.no_alloc   =*/ true,
