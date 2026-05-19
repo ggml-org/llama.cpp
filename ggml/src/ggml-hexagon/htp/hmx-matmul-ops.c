@@ -889,8 +889,6 @@ int hmx_matmul_q_f32(struct htp_context *ctx, float *restrict dst, const float *
         return -1;
     }
 
-    FARF(HIGH, "hmx-mm-q: m %d k %d n %d wtype %d", m, k, n, weight_type);
-
     size_t row_stride = get_x4x2_row_stride(weight_type, k);
     if (row_stride == 0) {
         return -1;
@@ -902,13 +900,11 @@ int hmx_matmul_q_f32(struct htp_context *ctx, float *restrict dst, const float *
     size_t vtcm_used = 0;
 
     // Pipeline = 4-stage DMA→dequant→HMX→store with HMX worker overlap.
-    const size_t pipe_per_n  = row_stride + 2 * vec_dot_size;  // Q + S0 + S1 (dequant bufs)
-    const size_t pipe_per_mn = 2 * sizeof(__fp16);             // O x 2 (output double buffer)
-    const size_t seq_per_n   = vec_dot_size + 2 * row_stride;  // W + S0 + S1 (x4x2 DMA bufs)
-    const size_t seq_per_mn  = sizeof(__fp16);                 // O x 1
+    const size_t size_per_n  = row_stride + 2 * vec_dot_size;  // Q + S0 + S1 (dequant bufs)
+    const size_t size_per_mn = 2 * sizeof(__fp16);             // O x 2 (output double buffer)
 
     size_t m_chunk_n_rows = 0, n_chunk_n_cols = 0;
-    if (hmx_compute_chunks(vtcm_budget, /*overhead=*/256, pipe_per_n, /*per_m=*/vec_dot_size, pipe_per_mn,
+    if (hmx_compute_chunks(vtcm_budget, /*overhead=*/256, size_per_n, /*per_m=*/vec_dot_size, size_per_mn,
                            hex_align_up(m, HMX_FP16_TILE_N_ROWS), n,
                            /*m_block_cost=*/(size_t) n * 3,
                            /*n_block_cost=*/(size_t) m * 2, &m_chunk_n_rows, &n_chunk_n_cols, &vtcm_used)) {
@@ -923,7 +919,7 @@ int hmx_matmul_q_f32(struct htp_context *ctx, float *restrict dst, const float *
     size_t scratch0_size, scratch1_size, scratch2_size;
     scratch0_size = hex_align_up(n_chunk_n_cols * vec_dot_size, HMX_FP16_TILE_SIZE);  // dequant buf 0
     scratch1_size = scratch0_size;                                                    // dequant buf 1
-    scratch2_size = output_area_size;                                                 // output buf 1
+    scratch2_size = output_area_size;                                                 // output  buf 1
 
     uint8_t *vtcm_ptr        = (uint8_t *) ctx->vtcm_base;
     __fp16  *vtcm_weight     = (__fp16 *) vtcm_seq_alloc(&vtcm_ptr, weight_area_size);
