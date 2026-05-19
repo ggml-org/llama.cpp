@@ -134,7 +134,7 @@ extern stream_session_manager g_stream_sessions;
 // through server-context's server_routes. keeps the resumable stream surface confined to
 // server-stream and server-http
 server_http_context::handler_t make_stream_get_handler();
-server_http_context::handler_t make_streams_list_handler();
+server_http_context::handler_t make_streams_lookup_handler();
 server_http_context::handler_t make_stream_delete_handler();
 
 // attach a resumable session to an outgoing streaming response. inspects the request headers

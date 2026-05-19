@@ -359,28 +359,49 @@ server_http_context::handler_t make_stream_get_handler() {
     };
 }
 
-server_http_context::handler_t make_streams_list_handler() {
+server_http_context::handler_t make_streams_lookup_handler() {
     return [](const server_http_req & req) -> server_http_res_ptr {
-        // GET /v1/streams returns sessions as a JSON array. with conversation_id set, every
-        // session whose key is exactly that id or starts with "<id>::" matches, so a single
-        // call returns every per model variant for a given conv. without conversation_id,
-        // every live or recently completed session known to this server, used by the WebUI
-        // at mount and on visibilitychange to populate the sidebar spinners
-        std::string conversation_id = req.get_param("conversation_id");
+        // POST /v1/streams/lookup with body {"conversation_ids": ["X", "Y", ...]} returns the
+        // matching sessions. you can only ask for ids you already know, the server never lists
+        // sessions it has not been asked about. for each requested id we match the exact key
+        // and any "<id>::<model>" variant, so a single lookup covers every per model session
+        // for that conv. used by the WebUI sidebar at mount and on visibilitychange
+        std::vector<std::string> requested;
+        try {
+            json body = json::parse(req.body);
+            if (body.contains("conversation_ids") && body["conversation_ids"].is_array()) {
+                for (const auto & v : body["conversation_ids"]) {
+                    if (v.is_string()) {
+                        std::string id = v.get<std::string>();
+                        if (!id.empty()) {
+                            requested.push_back(std::move(id));
+                        }
+                    }
+                }
+            }
+        } catch (const std::exception & e) {
+            auto res = std::make_unique<server_http_res>();
+            res->status = 400;
+            res->content_type = "application/json; charset=utf-8";
+            res->data = safe_json_to_str({{"error", {{"message", std::string("invalid body: ") + e.what()},
+                                                     {"type", "invalid_request_error"}}}});
+            return res;
+        }
+
         std::vector<stream_session_ptr> sessions;
-        if (conversation_id.empty()) {
-            sessions = g_stream_sessions.list_all();
-        } else {
-            const std::string with_sep = conversation_id + "::";
+        if (!requested.empty()) {
             auto all = g_stream_sessions.list_all();
-            for (auto & s : all) {
-                if (s->conversation_id == conversation_id) {
-                    sessions.push_back(s);
-                } else if (s->conversation_id.compare(0, with_sep.size(), with_sep) == 0) {
-                    sessions.push_back(s);
+            for (const auto & rid : requested) {
+                const std::string with_sep = rid + "::";
+                for (auto & s : all) {
+                    if (s->conversation_id == rid ||
+                        s->conversation_id.compare(0, with_sep.size(), with_sep) == 0) {
+                        sessions.push_back(s);
+                    }
                 }
             }
         }
+
         json arr = json::array();
         for (auto & s : sessions) {
             arr.push_back({

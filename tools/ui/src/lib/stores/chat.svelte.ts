@@ -178,7 +178,7 @@ class ChatStore {
 	/**
 	 * Server side stream discovery, split in three pieces:
 	 *
-	 * probeServerStream(convId) -> hits GET /v1/streams?conversation_id, returns the session to attach
+	 * probeServerStream(convId) -> hits POST /v1/streams/lookup with the conv id, returns the session to attach
 	 *   to or null. Pure read, no side effect, no UI lock. Safe to fire in parallel with anything.
 	 *
 	 * attachServerStream(convId) -> flips the spinner immediately, fetches the replay stream
@@ -197,8 +197,12 @@ class ChatStore {
 		if (!convId) return null;
 		let listResp: Response;
 		try {
-			listResp = await fetch(`./v1/streams?conversation_id=${encodeURIComponent(convId)}`, {
-				headers: getAuthHeaders()
+			// POST the one conv id we are probing, the server only returns a match if it owns it,
+			// never lists ids the caller did not already provide
+			listResp = await fetch(`./v1/streams/lookup`, {
+				method: 'POST',
+				headers: { ...getAuthHeaders(), 'Content-Type': 'application/json' },
+				body: JSON.stringify({ conversation_ids: [convId] })
 			});
 		} catch (e) {
 			console.warn('probeServerStream fetch failed:', e);
@@ -622,9 +626,22 @@ class ChatStore {
 	 * for sessions that finalized while the browser was elsewhere are dropped naturally.
 	 */
 	async syncRemoteRunningStreams(): Promise<void> {
+		// only ask about conv ids the user already owns (the sidebar list). the server never lists
+		// ids the caller did not provide, so a random foreign UUID stays unguessable
+		const ids = conversationsStore.conversations.map((c) => c.id).filter((id) => !!id);
+		if (ids.length === 0) {
+			for (const id of Array.from(this.remoteRunningConvs)) {
+				this.remoteRunningConvs.delete(id);
+			}
+			return;
+		}
 		let sessions: ApiStreamSession[];
 		try {
-			const resp = await fetch('./v1/streams', { headers: getAuthHeaders() });
+			const resp = await fetch('./v1/streams/lookup', {
+				method: 'POST',
+				headers: { ...getAuthHeaders(), 'Content-Type': 'application/json' },
+				body: JSON.stringify({ conversation_ids: ids })
+			});
 			if (!resp.ok) return;
 			const body = (await resp.json()) as unknown;
 			if (!Array.isArray(body)) return;

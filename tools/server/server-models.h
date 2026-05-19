@@ -274,7 +274,7 @@ struct server_models_routes {
     // the suffix is absent the get/delete paths fall back to a loopback probe and a fan out
     // respectively, the list path always fans out and aggregates
     server_http_context::handler_t router_stream_get;
-    server_http_context::handler_t router_streams_list;
+    server_http_context::handler_t router_streams_lookup;
     server_http_context::handler_t router_stream_delete;
 };
 

@@ -1624,7 +1624,10 @@ static std::optional<server_model_meta> probe_child_for_conv(
     if (conversation_id.empty()) {
         return std::nullopt;
     }
-    std::string child_path = "/v1/streams?conversation_id=" + encode_qs(conversation_id);
+    // POST /v1/streams/lookup with the one conv id we are probing. the child only returns a
+    // match if it owns that conv, listing is never exposed
+    json body = {{"conversation_ids", json::array({conversation_id})}};
+    std::string body_str = body.dump();
     for (auto & meta : models.get_all_meta()) {
         if (!meta.is_ready()) {
             continue;
@@ -1633,7 +1636,7 @@ static std::optional<server_model_meta> probe_child_for_conv(
         cli.set_connection_timeout(0, 250 * 1000);
         cli.set_read_timeout(0, 250 * 1000);
         cli.set_write_timeout(0, 250 * 1000);
-        auto resp = cli.Get(child_path.c_str());
+        auto resp = cli.Post("/v1/streams/lookup", body_str, "application/json");
         if (!resp || resp->status != 200) {
             continue;
         }
@@ -1945,17 +1948,11 @@ void server_models_routes::init_routes() {
         return std::unique_ptr<server_http_res>(std::move(proxy));
     };
 
-    this->router_streams_list = [this](const server_http_req & req) {
-        // GET /v1/streams aggregates sessions from every ready child. the WebUI mounts and
-        // visibilitychanges use this to drive the sidebar spinners across convs. when a
-        // conversation_id filter is set we still fan out because the matching session can live
-        // on any child, the filter just narrows the response set
+    this->router_streams_lookup = [this](const server_http_req & req) {
+        // POST /v1/streams/lookup forwards the same body to every ready child and aggregates
+        // the results. the child responds only for the conv ids we asked about, never lists
+        // anything else, so the router never exposes ids the caller did not already know
         auto res = std::make_unique<server_http_res>();
-        std::string conversation_id = req.get_param("conversation_id");
-        std::string child_path = "/v1/streams";
-        if (!conversation_id.empty()) {
-            child_path += "?conversation_id=" + encode_qs(conversation_id);
-        }
         json aggregated = json::array();
         for (auto & meta : models.get_all_meta()) {
             if (!meta.is_ready()) {
@@ -1965,7 +1962,7 @@ void server_models_routes::init_routes() {
             cli.set_connection_timeout(0, 250 * 1000);
             cli.set_read_timeout(0, 250 * 1000);
             cli.set_write_timeout(0, 250 * 1000);
-            auto resp = cli.Get(child_path.c_str());
+            auto resp = cli.Post("/v1/streams/lookup", req.body, "application/json");
             if (!resp || resp->status != 200) {
                 continue;
             }
