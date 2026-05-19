@@ -1011,9 +1011,9 @@ struct common_speculative_impl_ngram_mod : public common_speculative_impl {
         // compute acceptance fraction if we have a recorded draft length
         if (sinfo.n_draft_last > 0) {
             const double f_acc = (double)n_accepted / (double)sinfo.n_draft_last;
-            if (f_acc < 0.5) {
+            if (f_acc < 0.25) {
                 sinfo.n_low++;
-                if (sinfo.n_low >= 3) {
+                if (sinfo.n_low >= 5) {
                     if (verbose) {
                         LOG_WRN("%s: low acceptance streak (%d) - resetting ngram_mod\n", __func__, sinfo.n_low);
                     }
