@@ -674,3 +674,10 @@ export { default as ChatScreenProcessingInfo } from './ChatScreen/ChatScreenProc
  * Takes the chat container element as a prop to manage scroll state internally.
  */
 export { default as ChatScreenActionScrollDown } from './ChatScreen/ChatScreenActionScrollDown.svelte';
+
+/**
+ * Server error alert displayed when the server is unreachable.
+ * Shows the error message with a retry button.
+ * Rendered inside ChatScreen when `serverError` store has a value.
+ */
+export { default as ChatScreenServerError } from './ChatScreen/ChatScreenServerError.svelte';
