@@ -1256,29 +1256,6 @@ common_init_result::common_init_result(common_params & params, bool model_only) 
         cparams.n_samplers = pimpl->samplers_seq_config.size();
     }
 
-    // [TAG_RS_STATE_ROLLBACK_SUPPORT]
-    // TODO: ngram speculative methods require checkpointing in addition to partial RS rollback
-    //       currently this is not supported. so we disable the partial rollback
-    if (cparams.n_rs_seq > 0 && (llama_model_is_recurrent(model) || llama_model_is_hybrid(model))) {
-        auto & types = params.speculative.types;
-
-        for (int i = 0; i < (int) types.size(); i++) {
-            if (types[i] == COMMON_SPECULATIVE_TYPE_NONE) {
-                continue;
-            }
-            if (types[i] == COMMON_SPECULATIVE_TYPE_DRAFT_MTP) {
-                continue;
-            }
-
-            cparams.n_rs_seq = 0;
-
-            LOG_WRN("%s: recurrent state rollback is not compatible with '%s' - disabling rollback support\n", __func__,
-                    common_speculative_type_to_str(types[i]).c_str());
-
-            break;
-        }
-    }
-
     llama_context * lctx = llama_init_from_model(model, cparams);
     if (lctx == NULL) {
         LOG_ERR("%s: failed to create context with model '%s'\n", __func__, params.model.path.c_str());
