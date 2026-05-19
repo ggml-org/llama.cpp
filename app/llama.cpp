@@ -1,4 +1,5 @@
 #include <string>
+#include <vector>
 #include <cstdio>
 
 int llama_server(int argc, char ** argv);
@@ -9,14 +10,15 @@ int llama_bench(int argc, char ** argv);
 struct command {
     std::string name;
     std::string desc;
+    std::vector<const char *> aliases;
     int (*func)(int, char **);
 };
 
 static struct command cmds[] = {
-    {"server",     "HTTP API server",                    llama_server    },
-    {"cli",        "Command-line interactive interface", llama_cli       },
-    {"completion", "Text completion",                    llama_completion},
-    {"bench",      "Benchmarking tool",                  llama_bench     },
+    {"serve",     "HTTP API server",                     {"server"},   llama_server    },
+    {"cli",        "Command-line interactive interface", {"client"},   llama_cli       },
+    {"completion", "Text completion",                    {"complete"}, llama_completion},
+    {"bench",      "Benchmarking tool",                  {},           llama_bench     },
 };
 
 static void print_usage(const char * prog) {
@@ -40,6 +42,11 @@ int main(int argc, char ** argv) {
     for (const auto & cmd : cmds) {
         if (arg == cmd.name) {
             return cmd.func(argc - 1, argv + 1);
+        }
+        for (const auto & alias : cmd.aliases) {
+            if (arg == alias) {
+                return cmd.func(argc - 1, argv + 1);
+            }
         }
     }
 
