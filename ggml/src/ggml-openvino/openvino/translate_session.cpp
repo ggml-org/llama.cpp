@@ -124,6 +124,12 @@ void add_rope_sin_cos(TensorMap & tensor_map, GgmlDecoder & ggml_model_decoder) 
     if (ggml_model_decoder.has_mixed_rope_params()) {
         return;
     }
+    // Dynamic active-sequence slicing is reconstructed per ROPE node. Reusing a
+    // single shared rope_sin/rope_cos across the whole graph is unsafe here,
+    // because the graph-level inp_pos does not necessarily match each ROPE use.
+    if (tensor_map.find("seq_active_start") != tensor_map.end() && tensor_map.find("seq_active_end") != tensor_map.end()) {
+        return;
+    }
     int32_t * rope_params = ggml_model_decoder.get_rope_params();
     if (tensor_map.find("inp_pos") == tensor_map.end() || rope_params == nullptr) {
         return;

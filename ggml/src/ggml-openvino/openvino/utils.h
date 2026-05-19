@@ -68,7 +68,8 @@ std::pair<ov::Output<Node>, ov::Output<Node>> make_sin_cos(int32_t* rope_params,
                                                            std::shared_ptr<ov::Node> inp_pos,
                                                            std::shared_ptr<ov::Node> rope_freqs_weight = nullptr,
                                                            bool imrope = false,
-                                                           bool stateful = false);
+                                                           bool stateful = false,
+                                                           std::shared_ptr<ov::Node> token_len_per_seq = nullptr);
 
 ov::Output<ov::Node> process_view_input(const NodeContext& context, int input_index, int slice_len = 0);
 
