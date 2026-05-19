@@ -1017,11 +1017,24 @@ static bool is_op_unsupported_case(const ggml_tensor * op) {
         break;
     }
     case GGML_OP_GATED_DELTA_NET: {
-        if (ggml_openvino_get_device_name() == "GPU" && op->src[0]->ne[2] > 1) {
-            // CVS-186471
+        // if (ggml_openvino_get_device_name() == "GPU" && op->src[0]->ne[2] > 1) {
+        //     // CVS-186471
+        //     return true;
+        // }
+        if (ggml_openvino_get_device_name() == "GPU") {
+            // enable after https://github.com/openvinotoolkit/openvino/pull/35917 is included in OV release
             return true;
         }
         if (op->src[0]->op == GGML_OP_PERMUTE) {
+            return true;
+        }
+        // kda (per-key-dimension gating) not supported by fused GatedDeltaNet op
+        if (op->src[3]->ne[0] != 1) {
+            return true;
+        }
+        // v_repeat > 1 (GQA): ggml uses modulo head mapping (h_q = h_v % H_k)
+        // but the fused op uses consecutive mapping (h_q = h_v / group_size)
+        if (op->src[2]->ne[1] != op->src[0]->ne[1]) {
             return true;
         }
         break;
@@ -1033,7 +1046,6 @@ static bool is_op_unsupported_case(const ggml_tensor * op) {
 }
 
 static bool ggml_backend_openvino_device_supports_op(ggml_backend_dev_t dev, const ggml_tensor * op) {
-    // return true;
     GGML_ASSERT(dev->reg != nullptr);
 
     static std::set<ggml_type> supported_types{GGML_TYPE_F32,  GGML_TYPE_F16,  GGML_TYPE_BF16, GGML_TYPE_I64,

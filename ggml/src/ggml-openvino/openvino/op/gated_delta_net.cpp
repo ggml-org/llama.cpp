@@ -1,3 +1,5 @@
+#include "gated_delta_net.hpp"
+
 #include "../node_context.h"
 #include "../op_table.h"
 #include "../utils.h"
@@ -27,6 +29,61 @@ namespace ggml {
 namespace op {
 
 OutputVector translate_gated_delta_net(const NodeContext & context) {
+    auto v_shape = context.get_input_shape(2).to_shape();  // [B, T, H_v, S_v]
+    auto q_shape = context.get_input_shape(0).to_shape();  // [B, T, H_k, S_k]
+    auto g_shape = context.get_input_shape(3).to_shape();  // [B, T, H_v, 1 or S_v]
+
+    const bool kda = (g_shape[3] == v_shape[3]);
+
+    // Fused GatedDeltaNet op only supports scalar gate (kda=0).
+    // Fall back to reference implementation for per-key-dimension gating.
+    // if (kda) {
+    //     return translate_gated_delta_net_ref(context);
+    // }
+
+    auto q = context.get_input(0);
+    auto k = context.get_input(1);
+    auto v = context.get_input(2);
+    auto g = context.get_input(3);
+    auto beta = context.get_input(4);
+    auto state = context.get_input(5);
+
+    const int64_t B = v_shape[0];
+    const int64_t T = v_shape[1];
+    const int64_t H_v = v_shape[2];
+    const int64_t S_v = v_shape[3];
+    const int64_t H_k = q_shape[2];
+    const int64_t S_k = q_shape[3];
+
+    // ggml state layout (OV notation): [B, H_v, value_dim, key_dim]
+    // GatedDeltaNet op expects: [B, H_v, key_dim, value_dim]
+    auto state_reshape_shape =
+        ov::op::v0::Constant::create(ov::element::i64, {4}, std::vector<int64_t>{B, H_v, S_v, S_k});
+    state = std::make_shared<ov::op::v1::Reshape>(state, state_reshape_shape, false);
+    auto state_perm = ov::op::v0::Constant::create(ov::element::i64, {4}, std::vector<int64_t>{0, 1, 3, 2});
+    state = std::make_shared<ov::op::v1::Transpose>(state, state_perm);
+
+    g = std::make_shared<ov::op::v0::Squeeze>(g, ov::op::v0::Constant::create(ov::element::i64, {1}, {3}));
+    beta = std::make_shared<ov::op::v0::Squeeze>(beta, ov::op::v0::Constant::create(ov::element::i64, {1}, {3}));
+
+    auto gdn = std::make_shared<ov::op::internal::GatedDeltaNet>(q, k, v, state, g, beta);
+
+    auto attn_4d = gdn->output(0);
+    auto state_4d = gdn->output(1);  // [B, H_v, key_dim, value_dim]
+    // Transpose output state back to ggml layout [B, H_v, value_dim, key_dim]
+    auto state_transposed = std::make_shared<ov::op::v1::Transpose>(state_4d, state_perm);
+    auto flat_shape_1d = ov::op::v0::Constant::create(ov::element::i64, {1}, {-1});
+    auto attn = std::make_shared<ov::op::v1::Reshape>(attn_4d, flat_shape_1d, false);
+    auto new_state = std::make_shared<ov::op::v1::Reshape>(state_transposed, flat_shape_1d, false);
+    auto packed = std::make_shared<ov::op::v0::Concat>(ov::OutputVector{attn, new_state}, 0);
+    auto out_shape =
+        ov::op::v0::Constant::create(ov::element::i64, {4}, std::vector<int64_t>{1, 1, T * B + S_v * B, S_v * H_v});
+    auto res = std::make_shared<ov::op::v1::Reshape>(packed, out_shape, false);
+
+    return rename_outputs_with_suffix({res}, context.get_name());
+}
+
+OutputVector translate_gated_delta_net_ref(const NodeContext & context) {
     num_inputs_check(context, 6, 6);
 
     // Inputs (OV shapes are reversed from ggml):
