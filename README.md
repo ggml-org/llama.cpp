@@ -12,43 +12,50 @@
 
 ### New quantization types
 
-- **TQ3_1S** / **TQ4_1S** weight quantization formats (added to `GGMLQuantizationType` + `LlamaFileType` enums) — smaller VRAM than `q8_0` at the 3.5-bit / 4.5-bit tier.
-- **turbo3** / **turbo4** KV-cache formats — Walsh-Hadamard rotation + polar codebook, ~4.6× compression at <1.5% PPL loss.
+- **TQ3_1S** / **TQ4_1S** weight quantization formats — added to `GGMLQuantizationType` + `LlamaFileType` enums, with V2.1 fused Metal kernels. Smaller VRAM than `q8_0` at the 3.5-bit / 4.5-bit tier. ([weight-compression-tq4](https://github.com/TheTom/turboquant_plus/blob/main/docs/papers/weight-compression-tq4.md))
+- **turbo2** / **turbo3** / **turbo4** KV-cache formats — Walsh-Hadamard rotation + polar codebook quantization. Block size 128 (originally 32, increased after the block-size experiment). turbo4 went through significant rehabilitation from a broken state to beating `q4_0`. ([attn-rotation-and-ppl-artifact](https://github.com/TheTom/turboquant_plus/blob/main/docs/papers/attn-rotation-and-ppl-artifact.md), [block-size-experiment](https://github.com/TheTom/turboquant_plus/blob/main/docs/papers/block-size-experiment.md), [turbo4-resurrection](https://github.com/TheTom/turboquant_plus/blob/main/docs/papers/turbo4-resurrection.md), [why-mse-fails-for-kv-quantization](https://github.com/TheTom/turboquant_plus/blob/main/docs/papers/why-mse-fails-for-kv-quantization.md))
+
+### Compression policies
+
+- **Auto-asymmetric K/V compression** — recognizes that V tolerates aggressive compression while K does not; defaults pick complementary K/V codecs rather than symmetric. ([asymmetric-kv-compression](https://github.com/TheTom/turboquant_plus/blob/main/docs/papers/asymmetric-kv-compression.md))
+- **Boundary V (experimental, layer-aware)** — auto-enabled for `turbo2-V`. Protects layers where aggressive V quantization breaks quality, leaves the rest aggressively compressed. ([layer-aware-v-compression](https://github.com/TheTom/turboquant_plus/blob/main/docs/papers/layer-aware-v-compression.md), [moe-v-compression-frontier](https://github.com/TheTom/turboquant_plus/blob/main/docs/papers/moe-v-compression-frontier.md))
+- **Sparse V dequantization** — skip V dequant for positions whose softmax attention weight falls below threshold. Enabled on all Metal targets. ([sparse-v-dequant](https://github.com/TheTom/turboquant_plus/blob/main/docs/papers/sparse-v-dequant.md))
 
 ### Backend kernels
 
-- **Metal**: TurboFlash attention kernel for `turbo3` KV-cache decode, `dk=512` FA kernel instances for Gemma 4, TQ weight ops, concurrency handling.
-- **CUDA**: `dp4a` kernel for `TQ4_1S` (3.5× faster, 240 t/s vs 68 baseline), warp-cooperative TQ dequant (16× less compute per block), multi-token + multi-GPU kernels, load-time `TQ4_1S → q8_0` conversion path.
-- **HIP / ROCm**: AMD RDNA3 (gfx1100), RDNA4, CDNA3 (MI300X/gfx942), CDNA4 (MI355X/gfx950). `ggml_cuda_dp4a` replaces `__dp4a` for portability; scalar half path for `TQ4_1S` on AMD; pool bypass for FA f16 temp buffers; VEC FA path forced for quantized KV.
-- **Vulkan**: compute-shader `turbo3` KV cache + coopmat flash attention.
+- **Metal**: TurboFlash attention kernel for `turbo3` KV-cache decode (currently OFF by default due to Apple10 corruption — re-enable via env knob once verified on your hardware); `dk=512` FA kernel instances for Gemma 4; V2.1 fused TQ weight kernels; Sparse V enabled across the family; concurrency handling. ([m5-max-stress-test](https://github.com/TheTom/turboquant_plus/blob/main/docs/papers/m5-max-stress-test.md))
+- **CUDA**: turbo VEC flash attention (+9% decode); `dp4a` kernel for `TQ4_1S` (3.5× faster, 240 t/s vs 68 baseline); warp-cooperative TQ dequant (16× less compute per block); multi-token + multi-GPU kernels; load-time `TQ4_1S → q8_0` conversion path.
+- **HIP / ROCm**: AMD RDNA3 (gfx1100), RDNA4, CDNA3 (MI300X/gfx942), CDNA4 (MI355X/gfx950). `ggml_cuda_dp4a` replaces `__dp4a` for portability; scalar half path for `TQ4_1S` on AMD; pool bypass for FA f16 temp buffers; VEC FA path forced for quantized KV. ([cross-engine-mi300x](https://github.com/TheTom/turboquant_plus/blob/main/docs/papers/cross-engine-mi300x.md))
+- **Vulkan**: compute-shader `turbo3` KV cache + coopmat flash attention; `SET_ROWS` support for `turbo2_0`/`turbo4_0`; `TQ4_1S` weight support.
 
 ### Flash Attention integration
 
 - `TURBO2_0` added to the FA auto-enable check.
 - Mixed `f16/bf16 + q8_0` KV pairs work without requiring `GGML_CUDA_FA_ALL_QUANTS`.
 - CPU `vec_dot` heap-allocation fix for turbo / TQ types at `n > 4096`.
+- F16-K + TURBO-V dispatch cases on CUDA fattn.
 
 ### Model-family compatibility
 
 - 256-expert MoE kernel instantiations (large MoE shape support).
 - Gemma 4 specifics: `dk512` Metal FA kernels, op concurrency, MoE token routing.
+- Speculative decoding cherry-picked for hybrid model architectures.
 - RPC `GGML_OP_COUNT` assertion fix.
 
 ### Memory + stability
 
 - Apple Silicon memory-explosion fix.
-- Bench-suite for CUDA dp4a + Metal TurboFlash + Vulkan coopmat.
+- TurboFlash off-by-default on Apple10 (known corruption — see Metal section).
 
 ### Using TurboQuant types
 
-`turbo3` / `turbo4` KV-cache quantization is selected at runtime via the existing `--cache-type-k` / `--cache-type-v` flags. `TQ3_1S` / `TQ4_1S` weight quantization is selected at conversion time by passing the type to `llama-quantize`.
+`turbo2` / `turbo3` / `turbo4` KV-cache quantization is selected at runtime via the existing `--cache-type-k` / `--cache-type-v` flags. `TQ3_1S` / `TQ4_1S` weight quantization is selected at conversion time by passing the type to `llama-quantize`.
 
 Where this fork diverges, it diverges additively — existing `q4_K`, `q8_0`, `f16` paths are untouched. Everything below this point is the upstream llama.cpp README.
 
 ### Fork-specific references
 
 - Codec design + calibration + papers: [TheTom/turboquant_plus](https://github.com/TheTom/turboquant_plus)
-- Cross-backend bench results: [TheTom/tqkit](https://github.com/TheTom/tqkit)
 
 ---
 
