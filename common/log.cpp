@@ -101,19 +101,24 @@ struct common_log_entry {
                         g_col[COMMON_LOG_COL_DEFAULT]);
             }
 
-            switch (level) {
-                case GGML_LOG_LEVEL_INFO:  fprintf(fcur, "%sI %s", g_col[COMMON_LOG_COL_GREEN],   g_col[COMMON_LOG_COL_DEFAULT]); break;
-                case GGML_LOG_LEVEL_WARN:  fprintf(fcur, "%sW %s", g_col[COMMON_LOG_COL_MAGENTA], ""                        ); break;
-                case GGML_LOG_LEVEL_ERROR: fprintf(fcur, "%sE %s", g_col[COMMON_LOG_COL_RED],     ""                        ); break;
-                case GGML_LOG_LEVEL_DEBUG: fprintf(fcur, "%sD %s", g_col[COMMON_LOG_COL_YELLOW],  ""                        ); break;
-                default:
-                    break;
+            if (level == COMMON_LOG_LEVEL_TRACE) {
+                fprintf(fcur, "%sT %s", g_col[COMMON_LOG_COL_CYAN], "");
+            } else {
+                switch (level) {
+                    case GGML_LOG_LEVEL_INFO:  fprintf(fcur, "%sI %s", g_col[COMMON_LOG_COL_GREEN],   g_col[COMMON_LOG_COL_DEFAULT]); break;
+                    case GGML_LOG_LEVEL_WARN:  fprintf(fcur, "%sW %s", g_col[COMMON_LOG_COL_MAGENTA], ""                        ); break;
+                    case GGML_LOG_LEVEL_ERROR: fprintf(fcur, "%sE %s", g_col[COMMON_LOG_COL_RED],     ""                        ); break;
+                    case GGML_LOG_LEVEL_DEBUG: fprintf(fcur, "%sD %s", g_col[COMMON_LOG_COL_YELLOW],  ""                        ); break;
+                    default:
+                        break;
+                }
             }
         }
 
         fprintf(fcur, "%s", msg.data());
 
-        if (level == GGML_LOG_LEVEL_WARN || level == GGML_LOG_LEVEL_ERROR || level == GGML_LOG_LEVEL_DEBUG) {
+        if (level == GGML_LOG_LEVEL_WARN || level == GGML_LOG_LEVEL_ERROR ||
+            level == GGML_LOG_LEVEL_DEBUG || level == COMMON_LOG_LEVEL_TRACE) {
             fprintf(fcur, "%s", g_col[COMMON_LOG_COL_DEFAULT]);
         }
 
@@ -433,6 +438,10 @@ void common_log_flush(struct common_log * log) {
 }
 
 static int common_get_verbosity(enum ggml_log_level level) {
+    if (level == COMMON_LOG_LEVEL_TRACE) {
+        return LOG_LEVEL_TRACE;
+    }
+
     switch (level) {
         case GGML_LOG_LEVEL_DEBUG: return LOG_LEVEL_DEBUG;
         case GGML_LOG_LEVEL_INFO:  return LOG_LEVEL_TRACE;

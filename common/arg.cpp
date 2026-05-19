@@ -3364,8 +3364,8 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             " - 1: error\n"
             " - 2: warning\n"
             " - 3: info\n"
-            " - 4: trace (more info)\n"
-            " - 5: debug\n"
+            " - 4: debug\n"
+            " - 5: trace\n"
             "(default: %d)\n", params.verbosity),
         [](common_params & params, int value) {
             params.verbosity = value;
