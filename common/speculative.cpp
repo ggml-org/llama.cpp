@@ -407,7 +407,7 @@ struct common_speculative_impl_draft_eagle3 : public common_speculative_impl {
     }
 };
 
-struct common_speculative_state_draft_mtp : public common_speculative_impl {
+struct common_speculative_impl_draft_mtp : public common_speculative_impl {
     common_params_speculative_draft params; // reuses the draft-model params slot (ctx_tgt/ctx_dft)
 
     llama_batch batch;
@@ -434,7 +434,7 @@ struct common_speculative_state_draft_mtp : public common_speculative_impl {
     // pre-advancement before process() mirrored the verify batch.
     std::vector<uint16_t> last_n_drafted;
 
-    common_speculative_state_draft_mtp(const common_params_speculative & params, uint32_t n_seq)
+    common_speculative_impl_draft_mtp(const common_params_speculative & params, uint32_t n_seq)
         : common_speculative_impl(COMMON_SPECULATIVE_TYPE_DRAFT_MTP, n_seq)
         , params(params.draft)
     {
@@ -483,7 +483,7 @@ struct common_speculative_state_draft_mtp : public common_speculative_impl {
         last_n_drafted.assign(n_seq, 0);
     }
 
-    ~common_speculative_state_draft_mtp() override {
+    ~common_speculative_impl_draft_mtp() override {
         if (batch.token != nullptr) {
             free(batch.token);
             batch.token = nullptr;
@@ -1365,7 +1365,7 @@ common_speculative * common_speculative_init(common_params_speculative & params,
                 break;
             }
             case COMMON_SPECULATIVE_TYPE_DRAFT_MTP: {
-                impls.push_back(std::make_unique<common_speculative_state_draft_mtp>(config.params, n_seq));
+                impls.push_back(std::make_unique<common_speculative_impl_draft_mtp>(config.params, n_seq));
                 break;
             }
             case COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE: {
