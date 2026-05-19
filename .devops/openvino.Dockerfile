@@ -106,12 +106,15 @@ LABEL org.opencontainers.image.created=$BUILD_DATE \
       org.opencontainers.image.source=$IMAGE_SOURCE
 
 RUN apt-get update \
-    && apt-get install -y libgomp1 libtbb12 curl wget ocl-icd-libopencl1 \
+    && apt-get install -y libgomp1 libtbb12 curl wget ocl-icd-libopencl1 locales \
+    && locale-gen en_US.UTF-8 \
     && apt autoremove -y \
     && apt clean -y \
     && rm -rf /tmp/* /var/tmp/* \
     && find /var/cache/apt/archives /var/lib/apt/lists -not -name lock -type f -delete \
     && find /var/cache -type f -delete
+
+ENV LANG=en_US.UTF-8
 
 # Install GPU drivers
 ARG IGC_VERSION

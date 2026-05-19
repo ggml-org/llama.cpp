@@ -74,12 +74,15 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     apt install -y --no-install-recommends \
         # WARNING: Do not use libopenblas-openmp-dev. libopenblas-dev is faster.
         # See: https://github.com/ggml-org/llama.cpp/pull/15915#issuecomment-3317166506
-        curl libgomp1 libopenblas-dev && \
+        curl libgomp1 libopenblas-dev locales && \
+    locale-gen en_US.UTF-8 && \
     apt autoremove -y && \
     apt clean -y && \
     rm -rf /tmp/* /var/tmp/* && \
     find /var/cache/apt/archives /var/lib/apt/lists -not -name lock -type f -delete && \
     find /var/cache -type f -delete
+
+ENV LANG=en_US.UTF-8
 
 # Copy llama.cpp libraries
 COPY --from=collector /llama.cpp/lib /usr/lib/s390x-linux-gnu
