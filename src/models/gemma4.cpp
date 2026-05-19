@@ -329,7 +329,6 @@ llama_model_gemma4_assistant::graph::graph(const llama_model & model, const llm_
 
     cur = build_norm(cur, model.output_norm, nullptr, LLM_NORM_RMS, -1);
     cb(cur, "result_norm", -1);
-    res->t_embd = cur;
 
     ggml_tensor * logits = build_lora_mm(model.output, cur);
     cb(logits, "result_output", -1);
