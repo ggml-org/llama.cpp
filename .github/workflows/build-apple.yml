@@ -22,6 +22,7 @@ on:
     types: [opened, synchronize, reopened]
     paths: [
       '.github/workflows/build-apple.yml',
+      'build-xcframework.sh',
       'ggml/src/ggml-metal/**'
     ]
 

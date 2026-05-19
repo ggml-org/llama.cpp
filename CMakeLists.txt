@@ -106,6 +106,7 @@ option(LLAMA_BUILD_COMMON "llama: build common utils library" ${LLAMA_STANDALONE
 # extra artifacts
 option(LLAMA_BUILD_TESTS            "llama: build tests"                                                                            ${LLAMA_STANDALONE})
 option(LLAMA_BUILD_TOOLS            "llama: build tools"                                                                            ${LLAMA_STANDALONE})
+option(LLAMA_BUILD_MTMD             "llama: build multimodal library"                                                               ${LLAMA_BUILD_TOOLS})
 option(LLAMA_BUILD_EXAMPLES         "llama: build examples"                                                                         ${LLAMA_STANDALONE})
 option(LLAMA_BUILD_SERVER           "llama: build server example"                                                                   ${LLAMA_STANDALONE})
 option(LLAMA_BUILD_UI                "llama: build the embedded Web UI for server"                                                   ON)
@@ -224,6 +225,9 @@ endif()
 
 if (LLAMA_BUILD_COMMON AND LLAMA_BUILD_TOOLS)
     add_subdirectory(tools)
+elseif (LLAMA_BUILD_MTMD)
+    llama_add_compile_flags()
+    add_subdirectory(tools/mtmd)
 endif()
 
 # Automatically add all files from the 'licenses' directory
