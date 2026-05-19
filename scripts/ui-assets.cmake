@@ -68,6 +68,10 @@ function(npm_build_should_skip out_var)
         return()
     endif()
 
+    if(EXISTS "${STAMP_FILE}")
+        return()
+    endif()
+
     if(NOT EXISTS "${UI_SOURCE_DIR}/sources.cmake")
         return()
     endif()
@@ -156,6 +160,7 @@ function(npm_build out_var)
     endif()
 
     message(STATUS "UI: npm build succeeded")
+    file(REMOVE "${STAMP_FILE}")
     set(${out_var} TRUE PARENT_SCOPE)
 endfunction()
 
