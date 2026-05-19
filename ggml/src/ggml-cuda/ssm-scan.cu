@@ -96,6 +96,8 @@ __global__ void __launch_bounds__(splitD, 1)
             regs0[n] = state;
         }
         y_block[i * stride_y + threadIdx.x] = sumf;
+        // Keep smemB/smemC from this iteration alive until all threads finish reading them.
+        __syncthreads();
     }
 
 #ifdef USE_CUB
