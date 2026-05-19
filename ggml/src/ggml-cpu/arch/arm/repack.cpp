@@ -49,6 +49,35 @@ static inline void decode_q_Kx8_6bit_scales(const uint8_t * scales_in, int16x8_t
 }
 #endif
 
+
+#if defined(__aarch64__) && defined(__ARM_FEATURE_SVE) && (defined(__ARM_FEATURE_MATMUL_INT8) || defined(__ARM_FEATURE_DOTPROD))
+// Helper for decoding scales and mins of Q4_K and Q5_K block formats
+static inline void decode_q_Kx8_6bit_scales_sve(const uint8_t * scales_in, svint16_t * out_mins, int8_t * out_scales) {
+    constexpr uint32_t kmask1 = 0x3f3f3f3f;
+    constexpr uint32_t kmask2 = 0x0f0f0f0f;
+    constexpr uint32_t kmask3 = 0x03030303;
+    constexpr uint8_t  scales_size = 12;
+
+    uint32_t sm[3];
+    memcpy(sm, scales_in, scales_size);
+
+    const uint32_t   mins_0_3 = sm[1] & kmask1;
+    const uint32_t   mins_4_7 = ((sm[2] >> 4) & kmask2) | (((sm[1] >> 6) & kmask3) << 4);
+    // const uint32x2_t mins_u32 = { mins_0_3, mins_4_7 };    
+    uint32_t tmp_mins[2] = { mins_0_3, mins_4_7 };
+    svbool_t pg2_u32 = svptrue_pat_b32(SV_VL2);   // 2 x uint32_t = 64 bits
+    svuint32_t mins_u32 = svld1_u32(pg2_u32, tmp_mins);
+
+
+    *out_mins = svreinterpret_s16_u16(svunpklo_u16(svreinterpret_u8_u32(mins_u32)));
+
+    uint32_t scales_u32[2];
+    scales_u32[0] = sm[0] & kmask1;
+    scales_u32[1] = (sm[2] & kmask2) | (((sm[0] >> 6) & kmask3) << 4);
+    memcpy(out_scales, scales_u32, 8);
+}
+#endif
+
 void ggml_quantize_mat_q8_0_4x4(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t k) {
     assert(QK8_0 == 32);
     assert(k % QK8_0 == 0);
@@ -4110,15 +4139,16 @@ void ggml_gemm_q4_K_8x8_q8_K(int                        n,
 
                     for (int b = 0; b < nb; b++) {
                         // bsums pairs belongs to the same q8_k subblock
-                        const svint16_t bsums[4]{
-                            svaddp_s16_x(pg_b16_vl8, svld1_s16(pg_b16_vl8, q8_ptr[b].bsums + 16 * 0), svld1_s16(pg_b16_vl8, q8_ptr[b].bsums + 16 * 0 + 8)),
-                            svaddp_s16_x(pg_b16_vl8, svld1_s16(pg_b16_vl8, q8_ptr[b].bsums + 16 * 1), svld1_s16(pg_b16_vl8, q8_ptr[b].bsums + 16 * 1 + 8)),
-                            svaddp_s16_x(pg_b16_vl8, svld1_s16(pg_b16_vl8, q8_ptr[b].bsums + 16 * 2), svld1_s16(pg_b16_vl8, q8_ptr[b].bsums + 16 * 2 + 8)),
-                            svaddp_s16_x(pg_b16_vl8, svld1_s16(pg_b16_vl8, q8_ptr[b].bsums + 16 * 3), svld1_s16(pg_b16_vl8, q8_ptr[b].bsums + 16 * 3 + 8)),
+                        const int16x8_t bsums[4]{
+                            vpaddq_s16(vld1q_s16(q8_ptr[b].bsums + 16 * 0), vld1q_s16(q8_ptr[b].bsums + 16 * 0 + 8)),
+                            vpaddq_s16(vld1q_s16(q8_ptr[b].bsums + 16 * 1), vld1q_s16(q8_ptr[b].bsums + 16 * 1 + 8)),
+                            vpaddq_s16(vld1q_s16(q8_ptr[b].bsums + 16 * 2), vld1q_s16(q8_ptr[b].bsums + 16 * 2 + 8)),
+                            vpaddq_s16(vld1q_s16(q8_ptr[b].bsums + 16 * 3), vld1q_s16(q8_ptr[b].bsums + 16 * 3 + 8)),
                         };
+
                         int16_t bsums_arr[4][8];
                         for (int q8_row = 0; q8_row < 4; q8_row++) {
-                            svst1_s16(pg_b16_vl8, bsums_arr[q8_row], bsums[q8_row]);
+                            vst1q_s16(bsums_arr[q8_row], bsums[q8_row]);
                         }
 
                         // svint32_t sb_acc[4];    // Aux accumulators to store subblock (partial) results
@@ -4130,28 +4160,28 @@ void ggml_gemm_q4_K_8x8_q8_K(int                        n,
                         //     bias_acc[i] = svdup_n_f32(0);
                         // }
                         
-                        svint32_t sb_acc_0 = svdup_n_f32(0);
-                        svint32_t sb_acc_1 = svdup_n_f32(0);
-                        svint32_t sb_acc_2 = svdup_n_f32(0);
-                        svint32_t sb_acc_3 = svdup_n_f32(0);
+                        svint32_t sb_acc_0 = svdup_n_s32(0);
+                        svint32_t sb_acc_1 = svdup_n_s32(0);
+                        svint32_t sb_acc_2 = svdup_n_s32(0);
+                        svint32_t sb_acc_3 = svdup_n_s32(0);
 
-                        svint32_t acc_00 = svdup_n_f32(0);
-                        svint32_t acc_11 = svdup_n_f32(0);
-                        svint32_t acc_22 = svdup_n_f32(0);
-                        svint32_t acc_33 = svdup_n_f32(0);
-                        svint32_t acc_44 = svdup_n_f32(0);
-                        svint32_t acc_55 = svdup_n_f32(0);
-                        svint32_t acc_66 = svdup_n_f32(0);
-                        svint32_t acc_77 = svdup_n_f32(0);
+                        svint32_t acc_00 = svdup_n_s32(0);
+                        svint32_t acc_11 = svdup_n_s32(0);
+                        svint32_t acc_22 = svdup_n_s32(0);
+                        svint32_t acc_33 = svdup_n_s32(0);
+                        svint32_t acc_44 = svdup_n_s32(0);
+                        svint32_t acc_55 = svdup_n_s32(0);
+                        svint32_t acc_66 = svdup_n_s32(0);
+                        svint32_t acc_77 = svdup_n_s32(0);
 
-                        svint32_t bias_acc_00 = svdup_n_f32(0);
-                        svint32_t bias_acc_11 = svdup_n_f32(0);
-                        svint32_t bias_acc_22 = svdup_n_f32(0);
-                        svint32_t bias_acc_33 = svdup_n_f32(0);
-                        svint32_t bias_acc_44 = svdup_n_f32(0);
-                        svint32_t bias_acc_55 = svdup_n_f32(0);
-                        svint32_t bias_acc_66 = svdup_n_f32(0);
-                        svint32_t bias_acc_77 = svdup_n_f32(0);
+                        svint32_t bias_acc_00 = svdup_n_s32(0);
+                        svint32_t bias_acc_11 = svdup_n_s32(0);
+                        svint32_t bias_acc_22 = svdup_n_s32(0);
+                        svint32_t bias_acc_33 = svdup_n_s32(0);
+                        svint32_t bias_acc_44 = svdup_n_s32(0);
+                        svint32_t bias_acc_55 = svdup_n_s32(0);
+                        svint32_t bias_acc_66 = svdup_n_s32(0);
+                        svint32_t bias_acc_77 = svdup_n_s32(0);
                         
 
 
@@ -4159,10 +4189,14 @@ void ggml_gemm_q4_K_8x8_q8_K(int                        n,
                             // Need scales for the low and high nibbles
                             // 2 * 12 = 24 bytes per subblock, 4 sbs -> 4 * 24 = 96 bytes total
                             int8_t    q4sb_scales[2][8];
-                            svint16_t q4sb_mins[2];  // int16 as its needed for bias_acc later
+                            // svint16_t q4sb_mins[2];  // int16 as its needed for bias_acc later
+                            svint16_t q4sb_mins_0, q4sb_mins_1;  // int16 as its needed for bias_acc later
                             for (int i = 0; i < 2; i++) {
                                 const int offset = sb * 24 + i * 12;
-                                decode_q_Kx8_6bit_scales_sve(&q4_ptr[b].scales[offset], &q4sb_mins[i], q4sb_scales[i]);
+                                if(i==0)
+                                    decode_q_Kx8_6bit_scales_sve(&q4_ptr[b].scales[offset], &q4sb_mins_0, q4sb_scales[i]);
+                                else
+                                    decode_q_Kx8_6bit_scales_sve(&q4_ptr[b].scales[offset], &q4sb_mins_1, q4sb_scales[i]);
                             }
 
                             // q8_ptr[b].qs has interleaved Q8 rows (01, 23)
