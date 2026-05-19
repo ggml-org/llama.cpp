@@ -59,11 +59,55 @@ function(copy_src_dist out_var)
     set(${out_var} TRUE PARENT_SCOPE)
 endfunction()
 
+function(npm_build_should_skip out_var)
+    set(${out_var} FALSE PARENT_SCOPE)
+
+    assets_present(present)
+    if(NOT present)
+        return()
+    endif()
+
+    if(NOT EXISTS "${UI_SOURCE_DIR}/sources.cmake")
+        return()
+    endif()
+    include("${UI_SOURCE_DIR}/sources.cmake")
+
+    set(globs "")
+    foreach(g ${UI_SOURCE_GLOBS})
+        list(APPEND globs "${UI_SOURCE_DIR}/${g}")
+    endforeach()
+    file(GLOB_RECURSE sources ${globs})
+    foreach(f ${UI_SOURCE_FILES})
+        list(APPEND sources "${UI_SOURCE_DIR}/${f}")
+    endforeach()
+
+    file(TIMESTAMP "${DIST_DIR}/index.html" out_ts)
+
+    foreach(s ${sources})
+        if(NOT EXISTS "${s}")
+            continue()
+        endif()
+        file(TIMESTAMP "${s}" s_ts)
+        if(s_ts STRGREATER out_ts)
+            return()
+        endif()
+    endforeach()
+
+    set(${out_var} TRUE PARENT_SCOPE)
+endfunction()
+
 function(npm_build out_var)
     set(${out_var} FALSE PARENT_SCOPE)
 
     if(NOT EXISTS "${UI_SOURCE_DIR}/package.json")
         message(STATUS "UI: ${UI_SOURCE_DIR}/package.json not found, skipping npm")
+        return()
+    endif()
+
+    npm_build_should_skip(skip)
+    if(skip)
+        message(STATUS "UI: npm output up-to-date, skipping build")
+        set(${out_var} TRUE PARENT_SCOPE)
         return()
     endif()
 
