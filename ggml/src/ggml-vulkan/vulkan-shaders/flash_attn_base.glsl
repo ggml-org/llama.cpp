@@ -137,10 +137,10 @@ uint fa_quant_r_mmq(uint ty) {
 // them. Macros expand at the use site and fold after specialization.
 #define BLOCK_SIZE_K fa_block_elems(FaTypeK)
 #define BLOCK_SIZE_V fa_block_elems(FaTypeV)
-// F16/BF16 read elements directly from the binding; everything else routes
+// F16 reads f16 elements directly from the binding; everything else routes
 // through dequantize4 / the MMQ helpers to unpack from the packed block layout.
-#define USE_DECODE_K (FaTypeK != FA_TYPE_F16 && FaTypeK != FA_TYPE_BF16)
-#define USE_DECODE_V (FaTypeV != FA_TYPE_F16 && FaTypeV != FA_TYPE_BF16)
+#define USE_DECODE_K (FaTypeK != FA_TYPE_F16)
+#define USE_DECODE_V (FaTypeV != FA_TYPE_F16)
 
 #define CEIL_DIV(a, b) (((a) + (b) - 1) / (b))
 
