@@ -1631,10 +1631,10 @@ uint64_t llama_model::n_elements() const {
 void llama_model::print_info() const {
     const std::string rope_scaling_type = llama_rope_scaling_type_name(hparams.rope_scaling_type_train);
 
-    auto print_f = [](const std::function<uint32_t(uint32_t)> & f, uint32_t n) {
+    auto print_f = [](const std::function<int32_t(uint32_t)> & f, uint32_t n) {
         bool is_var = false;
 
-        std::vector<uint32_t> v;
+        std::vector<int32_t> v;
         for (uint32_t i = 0; i < n; ++i) {
             v.push_back(f(i));
             if (v[i] != v[0]) {
@@ -1708,6 +1708,13 @@ void llama_model::print_info() const {
         LLAMA_LOG_INFO("%s: n_ctx_orig_yarn       = %u\n",     __func__, hparams.n_ctx_orig_yarn);
         LLAMA_LOG_INFO("%s: rope_yarn_log_mul     = %.4f\n",   __func__, hparams.rope_yarn_log_mul);
         LLAMA_LOG_INFO("%s: rope_finetuned        = %s\n",     __func__, hparams.rope_finetuned ? "yes" : "unknown");
+        if (std::any_of(hparams.deepstack_layers_arr.begin(),
+                        hparams.deepstack_layers_arr.end(),
+                        [](const auto & entry) { return entry >= 0; })) {
+            LLAMA_LOG_INFO("%s: deepstack_layers_arr = %s\n", __func__,
+                           print_f([&](uint32_t il) { return hparams.deepstack_layers_arr[il]; },
+                           hparams.n_layer).c_str());
+        }
         // MRoPE (Multi-axis Rotary Position Embedding) sections
         if (const auto & s = hparams.rope_sections; s[0] || s[1] || s[2] || s[3]) {
             LLAMA_LOG_INFO("%s: mrope sections        = [%d, %d, %d, %d]\n", __func__, s[0], s[1], s[2], s[3]);
