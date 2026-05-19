@@ -266,7 +266,7 @@ enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, std::shared_ptr<
                         ov::Tensor new_state_tensor(state_tensor, begin, end);
                         state.set_state(new_state_tensor);
                     }
-                    r_ctx->stateful_kv_size = pos_data[0] + 1;
+                    r_ctx->stateful_kv_size = pos_data[0] + pos_shape[3];
                 }
             }
 
