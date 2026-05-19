@@ -32,6 +32,19 @@ const std::map<std::string, common_speculative_type> common_speculative_type_fro
     {"ngram-cache",   COMMON_SPECULATIVE_TYPE_NGRAM_CACHE}
 };
 
+static std::string common_speculative_get_devices_str(const std::vector<ggml_backend_dev_t> & devices) {
+    if (devices.empty()) {
+        return "default";
+    }
+
+    std::string result;
+    for (size_t i = 0; i < devices.size(); i++) {
+        if (i > 0) result += ", ";
+        result += ggml_backend_dev_name(devices[i]);
+    }
+    return result;
+}
+
 struct common_speculative_config {
     common_speculative_type type;
     common_params_speculative params;
@@ -166,6 +179,16 @@ struct common_speculative_impl_draft_simple : public common_speculative_impl {
     {
         auto * ctx_dft = this->params.ctx_dft;
         auto * ctx_tgt = this->params.ctx_tgt;
+
+        LOG_INF("%s: adding speculative implementation 'draft-simple'\n", __func__);
+        LOG_INF("%s: - n_max=%d, n_min=%d, p_min=%f\n", __func__, this->params.n_max, this->params.n_min, this->params.p_min);
+        LOG_INF("%s: - gpu_layers=%d, cache_k=%s, cache_v=%s, ctx_tgt=%s, ctx_dft=%s, devices=[%s]\n", __func__,
+                this->params.n_gpu_layers,
+                ggml_type_name(this->params.cache_type_k),
+                ggml_type_name(this->params.cache_type_v),
+                ctx_tgt ? "yes" : "no",
+                ctx_dft ? "yes" : "no",
+                common_speculative_get_devices_str(this->params.devices).c_str());
 
         batch = llama_batch_init(llama_n_batch(ctx_dft), 0, 1);
 
@@ -355,8 +378,12 @@ struct common_speculative_impl_draft_simple : public common_speculative_impl {
 struct common_speculative_impl_draft_eagle3 : public common_speculative_impl {
     //common_params_speculative_eagle3 params;
 
-    common_speculative_impl_draft_eagle3(const common_params_speculative & /*params*/, uint32_t n_seq)
-        : common_speculative_impl(COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3, n_seq) {}
+    common_speculative_impl_draft_eagle3(const common_params_speculative & params, uint32_t n_seq)
+        : common_speculative_impl(COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3, n_seq)
+    {
+        LOG_INF("%s: adding speculative implementation 'draft-eagle3'\n", __func__);
+        LOG_INF("%s: - n_max=%d, n_min=%d, p_min=%f\n", __func__, params.draft.n_max, params.draft.n_min, params.draft.p_min);
+    }
 
     void begin(llama_seq_id /*seq_id*/, const llama_tokens & /*prompt*/) override {
         // noop
@@ -417,6 +444,17 @@ struct common_speculative_state_draft_mtp : public common_speculative_impl {
 
         n_embd = llama_model_n_embd(llama_get_model(ctx_dft));
 
+        LOG_INF("%s: adding speculative implementation 'draft-mtp'\n", __func__);
+        LOG_INF("%s: - n_max=%d, n_min=%d, p_min=%f\n", __func__, this->params.n_max, this->params.n_min, this->params.p_min);
+        LOG_INF("%s: - n_embd=%d\n", __func__, n_embd);
+        LOG_INF("%s: - gpu_layers=%d, cache_k=%s, cache_v=%s, ctx_tgt=%s, ctx_dft=%s, devices=[%s]\n", __func__,
+                this->params.n_gpu_layers,
+                ggml_type_name(this->params.cache_type_k),
+                ggml_type_name(this->params.cache_type_v),
+                ctx_tgt ? "yes" : "no",
+                ctx_dft ? "yes" : "no",
+                common_speculative_get_devices_str(this->params.devices).c_str());
+
         const int32_t n_b = (int32_t) llama_n_batch(ctx_dft);
         batch = llama_batch_init(/*n_tokens=*/ n_b, /*embd=*/ n_embd, /*n_seq_max=*/ 1);
         // llama_batch_init allocates only one of token/embd; MTP needs both.
@@ -462,7 +500,7 @@ struct common_speculative_state_draft_mtp : public common_speculative_impl {
         auto * ctx_dft = this->params.ctx_dft;
         const llama_pos pos_max = llama_memory_seq_pos_max(llama_get_memory(ctx_dft), seq_id);
         if (pos_max < N - 1) {
-            LOG_WRN("%s: ctx_dft pos_max=%d < N-1=%d — "
+            LOG_WRN("%s: ctx_dft pos_max=%d < N-1=%d - "
                     "process() hook may not have run on every prefill ubatch "
                     "(need_embd / logits=1 on every prompt position?). "
                     "Drafts may degrade.\n",
@@ -722,7 +760,12 @@ struct common_speculative_impl_ngram_simple : public common_speculative_impl {
             common_ngram_simple_config config)
         : common_speculative_impl(COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE, n_seq)
         , params(params.ngram_simple)
-        , config(config) {}
+        , config(config)
+    {
+        LOG_INF("%s: adding speculative implementation 'ngram-simple'\n", __func__);
+        LOG_INF("%s: - size_n=%d, size_m=%d, min_hits=%d\n", __func__,
+                this->params.size_n, this->params.size_m, this->params.min_hits);
+    }
 
     void begin(llama_seq_id /*seq_id*/, const llama_tokens & /*prompt*/) override {
         // noop
@@ -762,10 +805,15 @@ struct common_speculative_impl_ngram_map_k : public common_speculative_impl {
     common_speculative_impl_ngram_map_k(
             const common_ngram_map & config,
             uint32_t n_seq)
-        : common_speculative_impl(COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K, n_seq) {
+        : common_speculative_impl(COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K, n_seq)
+    {
         for (uint32_t i = 0; i < n_seq; i++) {
             this->config.push_back(config);
         }
+
+        LOG_INF("%s: adding speculative implementation '%s'\n", __func__, common_speculative_type_to_str(this->type).c_str());
+        LOG_INF("%s: - size_key=%d, size_value=%d, key_only=%d, min_hits=%d\n", __func__,
+                config.size_key, config.size_value, config.key_only, config.min_hits);
     }
 
     void begin(llama_seq_id seq_id, const llama_tokens & prompt) override {
@@ -820,7 +868,7 @@ struct common_speculative_impl_ngram_mod : public common_speculative_impl {
         // the last position in the prompt that was added to the ngram container
         size_t i_last = 0;
 
-        // length of the last drafted n‑gram (number of tokens returned by draft)
+        // length of the last drafted n-gram (number of tokens returned by draft)
         size_t n_draft_last = 0;
 
         // consecutive accept rounds with low acceptance fraction (< 0.5)
@@ -838,8 +886,11 @@ struct common_speculative_impl_ngram_mod : public common_speculative_impl {
         , verbose(std::getenv("LLAMA_TRACE") != nullptr) {
         static_assert(sizeof(llama_token) == sizeof(common_ngram_mod::entry_t));
 
-        LOG_INF("%s: initialized ngram_mod with n_match=%d, size=%zu (%.3f MB)\n", __func__,
-                this->params.n_match, mod.size(), (float)(mod.size_bytes())/1024/1024);
+        LOG_INF("%s: adding speculative implementation 'ngram-mod'\n", __func__);
+        LOG_INF("%s: - n_match=%d, n_max=%d, n_min=%d\n", __func__,
+                this->params.n_match, this->params.n_max, this->params.n_min);
+        LOG_INF("%s: - mod size=%zu (%.3f MB)\n", __func__,
+                mod.size(), (float)(mod.size_bytes())/1024/1024);
 
         if (this->params.n_match < 16) {
             LOG_WRN("%s: ngram_mod n_match=%d is too small - poor quality is possible, "
@@ -929,7 +980,7 @@ struct common_speculative_impl_ngram_mod : public common_speculative_impl {
         }
         result.resize(result.size() - n);
 
-        // store length of drafted n‑gram for later acceptance analysis
+        // store length of drafted n-gram for later acceptance analysis
         sinfo.n_draft_last = result.size();
     }
 
@@ -965,7 +1016,7 @@ struct common_speculative_impl_ngram_mod : public common_speculative_impl {
                 sinfo.n_low++;
                 if (sinfo.n_low >= 3) {
                     if (verbose) {
-                        LOG_WRN("%s: low acceptance streak (%d) – resetting ngram_mod\n", __func__, sinfo.n_low);
+                        LOG_WRN("%s: low acceptance streak (%d) - resetting ngram_mod\n", __func__, sinfo.n_low);
                     }
 
                     mod.reset();
@@ -1015,6 +1066,12 @@ struct common_speculative_impl_ngram_cache : public common_speculative_impl {
         , save_dynamic(save_dynamic)
         , save_static(save_static)
     {
+        LOG_INF("%s: adding speculative implementation 'ngram-cache'\n", __func__);
+        LOG_INF("%s: - n_draft=%d, cache_static=%s, cache_dynamic=%s\n", __func__,
+                n_draft,
+                path_static.empty() ? "none" : path_static.c_str(),
+                path_dynamic.empty() ? "none" : path_dynamic.c_str());
+
         sinfos.resize(n_seq);
 
         if (!path_static.empty()) {
@@ -1297,7 +1354,6 @@ common_speculative * common_speculative_init(common_params_speculative & params,
     std::vector<std::unique_ptr<common_speculative_impl>> impls = {};
 
     for (const common_speculative_config & config : configs) {
-        LOG_INF("%s: adding speculative implementation '%s'\n", __func__, common_speculative_type_to_str(config.type).c_str());
         switch (config.type) {
             case COMMON_SPECULATIVE_TYPE_NONE:
                 break;
