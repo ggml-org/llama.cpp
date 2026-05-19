@@ -500,7 +500,7 @@ void common_ngram_map_draft(common_ngram_map & map,
         draft.push_back(inp[match_pos + n + i]);
     }
 
-    LOG_INF("%s: key_offset = %zu, slot_max = %d, key_num = %d, draft.size = %zu\n", __func__,
+    LOG_DBG("%s: key_offset = %zu, slot_max = %d, key_num = %d, draft.size = %zu\n", __func__,
             key_offset, slot_max,
             curr_key.key_num, draft.size());
 
