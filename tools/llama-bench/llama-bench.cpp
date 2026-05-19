@@ -25,6 +25,7 @@
 #include "fit.h"
 #include "ggml.h"
 #include "llama.h"
+#include "llama-ext.h"
 
 #ifdef _WIN32
 #    define WIN32_LEAN_AND_MEAN
@@ -355,6 +356,7 @@ struct cmd_params {
     bool                             verbose;
     bool                             progress;
     bool                             no_warmup;
+    bool                             memory;
     output_formats                   output_format;
     output_formats                   output_format_stderr;
 };
@@ -399,6 +401,7 @@ static const cmd_params cmd_params_defaults = {
     /* verbose              */ false,
     /* progress             */ false,
     /* no_warmup            */ false,
+    /* memory               */ false,
     /* output_format        */ MARKDOWN,
     /* output_format_stderr */ NONE,
 };
@@ -418,6 +421,7 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("  -v, --verbose                               verbose output\n");
     printf("  --progress                                  print test progress indicators\n");
     printf("  --no-warmup                                 skip warmup runs before benchmarking\n");
+    printf("  -mm, --memory                               report VRAM and RAM usage\n");
     printf("  -fitt, --fit-target <MiB>                   fit model to device memory with this margin per device in MiB (default: off)\n");
     printf("  -fitc, --fit-ctx <n>                        minimum ctx size for --fit-target (default: 4096)\n");
     if (llama_supports_rpc()) {
@@ -513,6 +517,7 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
     params.delay                = cmd_params_defaults.delay;
     params.progress             = cmd_params_defaults.progress;
     params.no_warmup            = cmd_params_defaults.no_warmup;
+    params.memory               = cmd_params_defaults.memory;
 
     if (const char * env = getenv("HF_TOKEN")) {
         params.hf_token = env;
@@ -970,6 +975,8 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                 params.progress = true;
             } else if (arg == "--no-warmup") {
                 params.no_warmup = true;
+            } else if (arg == "-mm" || arg == "--memory") {
+                params.memory = true;
             } else if (arg == "-fitt" || arg == "--fit-target") {
                 if (++i >= argc) {
                     invalid_param = true;
@@ -1149,6 +1156,7 @@ struct cmd_params_instance {
     bool               no_host;
     size_t             fit_target;
     uint32_t           fit_min_ctx;
+    bool               memory;
 
     llama_model_params to_llama_mparams() const {
         llama_model_params mparams = llama_model_default_params();
@@ -1295,6 +1303,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .no_host      = */ noh,
                 /* .fit_target   = */ fpt,
                 /* .fit_min_ctx  = */ fpc,
+                /* .memory       = */ params.memory,
             };
             instances.push_back(instance);
         }
@@ -1332,6 +1341,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .no_host      = */ noh,
                 /* .fit_target   = */ fpt,
                 /* .fit_min_ctx  = */ fpc,
+                /* .memory       = */ params.memory,
             };
             instances.push_back(instance);
         }
@@ -1369,6 +1379,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .no_host      = */ noh,
                 /* .fit_target   = */ fpt,
                 /* .fit_min_ctx  = */ fpc,
+                /* .memory       = */ params.memory,
             };
             instances.push_back(instance);
         }
@@ -1387,6 +1398,8 @@ struct test {
     std::string              model_type;
     uint64_t                 model_size;
     uint64_t                 model_n_params;
+    std::string              vram;
+    std::string              ram;
     int                      n_batch;
     int                      n_ubatch;
     int                      n_threads;
@@ -1411,6 +1424,7 @@ struct test {
     bool                     no_host;
     size_t                   fit_target;
     uint32_t                 fit_min_ctx;
+    bool                     memory;
     int                      n_prompt;
     int                      n_gen;
     int                      n_depth;
@@ -1451,6 +1465,7 @@ struct test {
         no_host        = inst.no_host;
         fit_target     = inst.fit_target;
         fit_min_ctx    = inst.fit_min_ctx;
+        memory         = inst.memory;
         n_prompt       = inst.n_prompt;
         n_gen          = inst.n_gen;
         n_depth        = inst.n_depth;
@@ -1459,7 +1474,43 @@ struct test {
         std::strftime(buf, sizeof(buf), "%FT%TZ", gmtime(&t));
         test_time = buf;
 
-        (void) ctx;
+        if (memory) {
+            constexpr size_t MiB = 1024 * 1024;
+
+            llama_memory_breakdown memory_breakdown = llama_get_memory_breakdown(ctx);
+
+            std::map<ggml_backend_dev_t, size_t> dev_vram;
+            size_t host_mem = 0;
+
+            for (const auto & entry : memory_breakdown) {
+                ggml_backend_buffer_type_t buft = entry.first;
+                const llama_memory_breakdown_data & mb = entry.second;
+                if (ggml_backend_buft_is_host(buft)) {
+                    host_mem += mb.model + mb.context + mb.compute;
+                } else {
+                    ggml_backend_dev_t dev = ggml_backend_buft_get_device(buft);
+                    if (dev) {
+                        dev_vram[dev] += mb.model + mb.context + mb.compute;
+                    }
+                }
+            }
+
+            if (dev_vram.empty()) {
+                vram = "0";
+            } else {
+                std::vector<std::string> parts;
+                for (const auto & [dev, mem] : dev_vram) {
+                    parts.push_back(std::to_string(mem / MiB));
+                }
+                vram = join(parts, "/");
+            }
+
+            if (host_mem == 0) {
+                ram = "0";
+            } else {
+                ram = std::to_string(host_mem / MiB);
+            }
+        }
     }
 
     uint64_t avg_ns() const { return ::avg(samples_ns); }
@@ -1503,7 +1554,8 @@ struct test {
     static const std::vector<std::string> & get_fields() {
         static const std::vector<std::string> fields = {
             "build_commit",   "build_number",   "cpu_info",      "gpu_info",       "backends",
-            "model_filename", "model_type",     "model_size",    "model_n_params", "n_batch",
+            "model_filename", "model_type",     "model_size",    "model_n_params", "vram",
+            "ram",           "n_batch",
             "n_ubatch",       "n_threads",      "cpu_mask",      "cpu_strict",     "poll",
             "type_k",         "type_v",         "n_gpu_layers",  "n_cpu_moe",      "split_mode",
             "main_gpu",       "no_kv_offload",  "flash_attn",    "devices",        "tensor_split",
@@ -1581,6 +1633,8 @@ struct test {
                                             model_type,
                                             std::to_string(model_size),
                                             std::to_string(model_n_params),
+                                            vram,
+                                            ram,
                                             std::to_string(n_batch),
                                             std::to_string(n_ubatch),
                                             std::to_string(n_threads),
@@ -1760,6 +1814,12 @@ struct markdown_printer : public printer {
         if (field == "size" || field == "params") {
             return 10;
         }
+        if (field == "vram") {
+            return -12;
+        }
+        if (field == "ram") {
+            return -10;
+        }
         if (field == "n_gpu_layers") {
             return 3;
         }
@@ -1812,6 +1872,12 @@ struct markdown_printer : public printer {
         if (field == "n_gpu_layers") {
             return "ngl";
         }
+        if (field == "vram") {
+            return "VRAM";
+        }
+        if (field == "ram") {
+            return "RAM";
+        }
         if (field == "split_mode") {
             return "sm";
         }
@@ -1863,6 +1929,10 @@ struct markdown_printer : public printer {
         fields.emplace_back("size");
         fields.emplace_back("params");
         fields.emplace_back("backend");
+        if (params.memory) {
+            fields.emplace_back("vram");
+            fields.emplace_back("ram");
+        }
         bool is_cpu_backend = test::get_backend().find("CPU") != std::string::npos ||
                               test::get_backend().find("BLAS") != std::string::npos ||
                               test::get_backend().find("ZenDNN") != std::string::npos;
@@ -1979,6 +2049,10 @@ struct markdown_printer : public printer {
                 value = buf;
             } else if (field == "backend") {
                 value = test::get_backend();
+            } else if (field == "vram") {
+                value = t.vram.empty() || t.vram == "0" ? "0 MiB" : t.vram + " MiB";
+            } else if (field == "ram") {
+                value = t.ram.empty() || t.ram == "0" ? "0 MiB" : t.ram + " MiB";
             } else if (field == "test") {
                 if (t.n_prompt > 0 && t.n_gen == 0) {
                     snprintf(buf, sizeof(buf), "pp%d", t.n_prompt);
