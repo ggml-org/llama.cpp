@@ -4957,17 +4957,19 @@ struct test_rope : public test_case {
     int v; // view (1 : non-contiguous a)
     bool forward;
     bool inplace;
+    int n_ctx_orig; // passed to ggml_rope_ext as n_ctx_orig (yarn original context); 0 = unset
 
     std::string vars() override {
         // forward can be inferred from the op, does not need to be printed
-        return VARS_TO_STR11(type, ne_a, n_dims, mode, n_ctx, fs, ef, af, ff, v, inplace);
+        return VARS_TO_STR12(type, ne_a, n_dims, mode, n_ctx, fs, ef, af, ff, v, inplace, n_ctx_orig);
     }
 
     test_rope(ggml_type type = GGML_TYPE_F32,
             std::array<int64_t, 4> ne_a = {10, 5, 3, 1},
             int n_dims = 10, int mode = GGML_ROPE_TYPE_NORMAL, int n_ctx = 512, float fs = 1.0f,
-            float ef = 0.0f, float af = 0.0f, bool ff = false, int v = 0, bool forward = true, bool inplace = false)
-        : type(type), ne_a(ne_a), n_dims(n_dims), mode(mode), n_ctx(n_ctx), fs(fs), ef(ef), af(af), ff(ff), v(v), forward(forward), inplace(inplace) {}
+            float ef = 0.0f, float af = 0.0f, bool ff = false, int v = 0, bool forward = true, bool inplace = false,
+            int n_ctx_orig = 0)
+        : type(type), ne_a(ne_a), n_dims(n_dims), mode(mode), n_ctx(n_ctx), fs(fs), ef(ef), af(af), ff(ff), v(v), forward(forward), inplace(inplace), n_ctx_orig(n_ctx_orig) {}
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         ggml_tensor * a;
@@ -5051,12 +5053,12 @@ struct test_rope : public test_case {
         } else {
             if (forward) {
                 if (inplace) {
-                    out = ggml_rope_ext_inplace(ctx, a, pos, freq, n_dims, mode, 0, 10000.0f, fs, ef, af, 1.0f, 1.0f);
+                    out = ggml_rope_ext_inplace(ctx, a, pos, freq, n_dims, mode, n_ctx_orig, 10000.0f, fs, ef, af, 1.0f, 1.0f);
                 } else {
-                    out = ggml_rope_ext(ctx, a, pos, freq, n_dims, mode, 0, 10000.0f, fs, ef, af, 1.0f, 1.0f);
+                    out = ggml_rope_ext(ctx, a, pos, freq, n_dims, mode, n_ctx_orig, 10000.0f, fs, ef, af, 1.0f, 1.0f);
                 }
             } else {
-                out = ggml_rope_ext_back(ctx, a, pos, freq, n_dims, mode, 0, 10000.0f, fs, ef, af, 1.0f, 1.0f);
+                out = ggml_rope_ext_back(ctx, a, pos, freq, n_dims, mode, n_ctx_orig, 10000.0f, fs, ef, af, 1.0f, 1.0f);
             }
         }
         ggml_set_name(out, "out");
@@ -9037,6 +9039,20 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
                 test_cases.emplace_back(new test_rope(type, {128,  32, 2, 1}, 128, mode, 512, 1.4245f, 0.7465f, 1.4245f, ff, 0, true, true));
                 test_cases.emplace_back(new test_rope(type, {128,  32, 2, 1}, 128, mode, 512, 1.4245f, 0.7465f, 1.4245f, ff, 1, true, true));
                 test_cases.emplace_back(new test_rope(type, {128,  32, 2, 3}, 128, mode, 512, 1.4245f, 0.7465f, 1.4245f, ff, 1, true, true));
+            }
+        }
+    }
+
+    // DeepSeek-V2-Lite MLA: YaRN RoPE on non-contiguous view with small freq_scale.
+    for (ggml_type type : {GGML_TYPE_F32}) {
+        for (bool ff : {false, true}) {
+            for (int v : {0, 1}) {
+                for (int64_t s : {2, 32, 128}) {
+                    // q_pe-like: many heads
+                    test_cases.emplace_back(new test_rope(type, { 64, 16, s, 1}, 64, GGML_ROPE_TYPE_NORMAL, 4096, 0.025f, 1.0f, 0.7f, ff, v, true, false, 4096)); // deepseek-v2-lite q_pe
+                    // k_pe-like: single head
+                    test_cases.emplace_back(new test_rope(type, { 64,  1, s, 1}, 64, GGML_ROPE_TYPE_NORMAL, 4096, 0.025f, 1.0f, 0.7f, ff, v, true, false, 4096)); // deepseek-v2-lite k_pe
+                }
             }
         }
     }
