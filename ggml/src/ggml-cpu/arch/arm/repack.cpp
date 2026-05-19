@@ -4451,14 +4451,14 @@ void ggml_gemm_q4_K_8x8_q8_K(int                        n,
                         //     vcombine_s32(vget_high_s32(acc[6]), vget_high_s32(acc[7])),
                         // };
 
-                        reorder_acc_0 = svsplice_s32(svptrue_pat_b32(SV_VL2), acc_00, acc_11);
-                        reorder_acc_1 = svsplice_s32(svptrue_pat_b32(SV_VL2), acc_22, acc_33);
-                        reorder_acc_2 = svsplice_s32(svptrue_pat_b32(SV_VL2), svext_s32(acc_00, acc_00, 2), svext_s32(acc_11, acc_11, 2));
-                        reorder_acc_3 = svsplice_s32(svptrue_pat_b32(SV_VL2), svext_s32(acc_22, acc_22, 2), svext_s32(acc_33, acc_33, 2));
-                        reorder_acc_4 = svsplice_s32(svptrue_pat_b32(SV_VL2), acc[4], acc[5])
-                        reorder_acc_5 = svsplice_s32(svptrue_pat_b32(SV_VL2), acc[6], acc[7])
-                        reorder_acc_6 = svsplice_s32(svptrue_pat_b32(SV_VL2), svext_s32(acc_44, acc_44, 2), svext_s32(acc_55, acc_55, 2));
-                        reorder_acc_7 = svsplice_s32(svptrue_pat_b32(SV_VL2), svext_s32(acc_66, acc_66, 2), svext_s32(acc_77, acc_77, 2));
+                        svint32_t reorder_acc_0 = svsplice_s32(svptrue_pat_b32(SV_VL2), acc_00, acc_11);
+                        svint32_t reorder_acc_1 = svsplice_s32(svptrue_pat_b32(SV_VL2), acc_22, acc_33);
+                        svint32_t reorder_acc_2 = svsplice_s32(svptrue_pat_b32(SV_VL2), svext_s32(acc_00, acc_00, 2), svext_s32(acc_11, acc_11, 2));
+                        svint32_t reorder_acc_3 = svsplice_s32(svptrue_pat_b32(SV_VL2), svext_s32(acc_22, acc_22, 2), svext_s32(acc_33, acc_33, 2));
+                        svint32_t reorder_acc_4 = svsplice_s32(svptrue_pat_b32(SV_VL2), acc_44, acc_55);
+                        svint32_t reorder_acc_5 = svsplice_s32(svptrue_pat_b32(SV_VL2), acc_66, acc_77);
+                        svint32_t reorder_acc_6 = svsplice_s32(svptrue_pat_b32(SV_VL2), svext_s32(acc_44, acc_44, 2), svext_s32(acc_55, acc_55, 2));
+                        svint32_t reorder_acc_7 = svsplice_s32(svptrue_pat_b32(SV_VL2), svext_s32(acc_66, acc_66, 2), svext_s32(acc_77, acc_77, 2));
 
 
                         for (int i = 0; i < q8_k_blocklen; i++) {
