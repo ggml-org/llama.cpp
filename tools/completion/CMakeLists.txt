@@ -1,6 +1,6 @@
-# completion-lib: completion logic, reusable by app
+# llama-completion-impl: completion logic, reusable by app
 
-set(TARGET completion-lib)
+set(TARGET llama-completion-impl)
 
 add_library(${TARGET} completion.cpp)
 
@@ -12,7 +12,7 @@ target_link_libraries(${TARGET} PUBLIC llama-common llama ${CMAKE_THREAD_LIBS_IN
 set(TARGET llama-completion)
 
 add_executable(${TARGET} main.cpp)
-target_link_libraries(${TARGET} PRIVATE completion-lib)
+target_link_libraries(${TARGET} PRIVATE llama-completion-impl)
 target_compile_features(${TARGET} PRIVATE cxx_std_17)
 
 if(LLAMA_TOOLS_INSTALL)

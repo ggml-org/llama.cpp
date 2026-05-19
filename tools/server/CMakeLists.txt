@@ -27,9 +27,9 @@ target_include_directories(${TARGET} PRIVATE ../mtmd)
 target_include_directories(${TARGET} PRIVATE ${CMAKE_SOURCE_DIR})
 target_link_libraries(${TARGET} PUBLIC llama-common mtmd ${CMAKE_THREAD_LIBS_INIT})
 
-# server-lib: server logic, reusable by app
+# llama-server-impl: server logic, reusable by app
 
-set(TARGET server-lib)
+set(TARGET llama-server-impl)
 
 add_library(${TARGET}
     server.cpp
@@ -50,5 +50,5 @@ set(TARGET llama-server)
 add_executable(${TARGET} main.cpp)
 install(TARGETS ${TARGET} RUNTIME)
 
-target_link_libraries(${TARGET} PRIVATE server-lib)
+target_link_libraries(${TARGET} PRIVATE llama-server-impl)
 target_compile_features(${TARGET} PRIVATE cxx_std_17)

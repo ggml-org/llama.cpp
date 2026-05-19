@@ -1,6 +1,6 @@
-# cli-lib: CLI logic, reusable by app
+# llama-cli-impl: CLI logic, reusable by app
 
-set(TARGET cli-lib)
+set(TARGET llama-cli-impl)
 
 add_library(${TARGET} cli.cpp)
 
@@ -12,7 +12,7 @@ target_link_libraries(${TARGET} PUBLIC server-context llama-common ${CMAKE_THREA
 set(TARGET llama-cli)
 
 add_executable(${TARGET} main.cpp)
-target_link_libraries(${TARGET} PRIVATE cli-lib)
+target_link_libraries(${TARGET} PRIVATE llama-cli-impl)
 target_compile_features(${TARGET} PRIVATE cxx_std_17)
 
 if(LLAMA_TOOLS_INSTALL)

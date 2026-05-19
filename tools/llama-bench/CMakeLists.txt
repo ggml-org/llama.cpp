@@ -1,6 +1,6 @@
-# bench-lib: benchmark logic, reusable by app
+# llama-bench-impl: benchmark logic, reusable by app
 
-set(TARGET bench-lib)
+set(TARGET llama-bench-impl)
 
 add_library(${TARGET} llama-bench.cpp)
 
@@ -12,7 +12,7 @@ target_link_libraries(${TARGET} PUBLIC llama-common llama ${CMAKE_THREAD_LIBS_IN
 set(TARGET llama-bench)
 
 add_executable(${TARGET} main.cpp)
-target_link_libraries(${TARGET} PRIVATE bench-lib)
+target_link_libraries(${TARGET} PRIVATE llama-bench-impl)
 target_compile_features(${TARGET} PRIVATE cxx_std_17)
 
 if(LLAMA_TOOLS_INSTALL)
