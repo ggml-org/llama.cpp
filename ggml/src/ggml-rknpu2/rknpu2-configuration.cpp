@@ -2,6 +2,7 @@
 
 #include "rknpu2-configuration.h"
 
+#include <algorithm>
 #include <arm_neon.h>
 #include <cstdlib>
 #include <sstream>
