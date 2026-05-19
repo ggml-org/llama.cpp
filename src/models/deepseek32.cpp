@@ -322,8 +322,8 @@ llama_model_deepseek32::graph::graph(const llama_model & model, const llm_graph_
                 ggml_tensor * indexer_score = ggml_relu(ctx0, indexer_kq);
                 cb(indexer_score, "indexer_score", il);
 
-                // scale weights
-                indexer_weights = ggml_scale(ctx0, indexer_weights, 1.0f / sqrtf(float(n_indexer_head)));
+                // pre-scale weights to avoid scaling operations on huge indexer_score tensor
+                indexer_weights = ggml_scale(ctx0, indexer_weights, 1.0f / sqrtf(float(n_embd_indexer_head * n_indexer_head)));
                 cb(indexer_weights, "indexer_weights", il);
 
                 // multiply scores by indexer weights
@@ -334,14 +334,8 @@ llama_model_deepseek32::graph::graph(const llama_model & model, const llm_graph_
                 indexer_score = ggml_sum_rows(ctx0, indexer_score);
                 cb(indexer_score, "indexer_score", il);
 
-                indexer_score = ggml_permute(ctx0, indexer_score, 2, 1, 0, 3);
-                cb(indexer_score, "indexer_score", il);
-
-                indexer_score = ggml_cont(ctx0, indexer_score);
-                cb(indexer_score, "indexer_score", il);
-
-                // TODO maybe pre-scale indexer weights, so we won't have to do it here
-                indexer_score = ggml_scale(ctx0, indexer_score, 1.0f / sqrtf(float(n_embd_indexer_head)));
+                // permute result to match KQ mask
+                indexer_score = ggml_cont(ctx0, ggml_permute(ctx0, indexer_score, 2, 1, 0, 3));
                 cb(indexer_score, "indexer_score", il);
 
                 // mask indexer scores
