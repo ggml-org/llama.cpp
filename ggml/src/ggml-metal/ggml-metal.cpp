@@ -2,6 +2,7 @@
 
 #include "ggml-impl.h"
 #include "ggml-backend-impl.h"
+#include "ggml-profiler.h"
 
 #include "ggml-metal-device.h"
 #include "ggml-metal-context.h"
@@ -9,6 +10,7 @@
 
 #include <mutex>
 #include <string>
+#include <vector>
 
 #define GGML_METAL_NAME "MTL"
 #define GGML_METAL_MAX_DEVICES 16
@@ -19,6 +21,59 @@ static int g_devices = 1;
 
 // forward declaration
 static bool ggml_backend_buffer_is_metal(ggml_backend_buffer_t buffer);
+
+//
+// Profiler state (mirrors the per-backend profiler state from the Vulkan integration)
+//
+// Owned by ggml_backend_metal_init / device_init_backend; lifetime is the backend's lifetime.
+// The Metal context holds a borrowed pointer and calls into the bridge functions below to push
+// records during graph_compute.
+//
+
+struct ggml_metal_profiler_state {
+    bool enabled  = false;
+    int  split_id = -1;
+    std::vector<ggml_profile_record> records;
+
+    void reset() {
+        records.clear();
+        split_id = -1;
+    }
+};
+
+extern "C" {
+
+void ggml_metal_profiler_push_record(
+        ggml_metal_profiler_state * state,
+        const ggml_tensor * node,
+        uint64_t start_ns,
+        uint64_t end_ns) {
+    if (state == nullptr || node == nullptr) {
+        return;
+    }
+
+    ggml_profile_record rec;
+    rec.type       = GGML_PROFILE_EVENT_OP;
+    rec.name       = ggml_op_name(node->op);
+    rec.backend_id = -1;
+    rec.split_id   = state->split_id;
+    rec.start_ns   = start_ns;
+    rec.end_ns     = end_ns;
+    rec.bytes      = ggml_nbytes(node);
+    rec.extra      = nullptr;
+    ggml_profile_record_from_tensor(&rec, node);
+    state->records.push_back(rec);
+}
+
+bool ggml_metal_profiler_is_enabled(ggml_metal_profiler_state * state) {
+    return state != nullptr && state->enabled;
+}
+
+int ggml_metal_profiler_get_split_id(ggml_metal_profiler_state * state) {
+    return state != nullptr ? state->split_id : -1;
+}
+
+} // extern "C"
 
 ////////////////////////////////////////////////////////////////////////////////
 // backend interface
@@ -589,6 +644,48 @@ static ggml_guid_t ggml_backend_metal_guid(void) {
     return &guid;
 }
 
+// Register the per-backend ggml_backend_profiler interface on `backend` and inject the borrowed
+// state pointer into the Metal context so graph_compute can push records.
+static void ggml_backend_metal_register_profiler(ggml_backend_t backend, ggml_metal_t ctx) {
+    auto * state = new ggml_metal_profiler_state();
+    ggml_metal_set_profiler_state(ctx, state);
+
+    static auto metal_prof_enable = [](void * context, bool enable) {
+        auto * state = (ggml_metal_profiler_state *) context;
+        state->enabled = enable;
+        if (!enable) {
+            state->reset();
+        }
+    };
+    static auto metal_prof_reset = [](void * context) {
+        auto * state = (ggml_metal_profiler_state *) context;
+        state->reset();
+    };
+    static auto metal_prof_set_split_id = [](void * context, int split_id) {
+        auto * state = (ggml_metal_profiler_state *) context;
+        state->split_id = split_id;
+    };
+    static auto metal_prof_get_records = [](void * context, const ggml_profile_record ** out) -> int {
+        auto * state = (ggml_metal_profiler_state *) context;
+        *out = state->records.data();
+        return (int) state->records.size();
+    };
+    static auto metal_prof_free = [](void * context) {
+        auto * state = (ggml_metal_profiler_state *) context;
+        delete state;
+    };
+
+    auto * profiler = new ggml_backend_profiler {
+        /* .context      = */ state,
+        /* .enable       = */ metal_prof_enable,
+        /* .reset        = */ metal_prof_reset,
+        /* .set_split_id = */ metal_prof_set_split_id,
+        /* .get_records  = */ metal_prof_get_records,
+        /* .free_context = */ metal_prof_free,
+    };
+    ggml_backend_set_profiler(backend, profiler);
+}
+
 ggml_backend_t ggml_backend_metal_init(void) {
     ggml_backend_dev_t dev = ggml_backend_reg_dev_get(ggml_backend_metal_reg(), 0);
     ggml_metal_device_t ctx_dev = (ggml_metal_device_t)dev->context;
@@ -610,6 +707,8 @@ ggml_backend_t ggml_backend_metal_init(void) {
     };
 
     ggml_backend_metal_set_n_cb(backend, 1);
+
+    ggml_backend_metal_register_profiler(backend, ctx);
 
     return backend;
 }
@@ -705,6 +804,8 @@ static ggml_backend_t ggml_backend_metal_device_init_backend(ggml_backend_dev_t 
     };
 
     ggml_backend_metal_set_n_cb(backend, 1);
+
+    ggml_backend_metal_register_profiler(backend, ctx);
 
     return backend;
 
