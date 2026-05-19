@@ -5336,10 +5336,10 @@ kernel void kernel_pad_f32(
     uint3 tgpig[[threadgroup_position_in_grid]],
     uint3 tpitg[[thread_position_in_threadgroup]],
     uint3   ntg[[threads_per_threadgroup]]) {
-
     const int64_t i3 = tgpig.z;
     const int64_t i2 = tgpig.y;
-    const int64_t i1 = tgpig.x;
+    const int64_t k0 = tgpig.x/args.ne1;
+    const int64_t i1 = tgpig.x - k0*args.ne1;
 
     const int64_t i03 = i3;
     const int64_t i02 = i2;
@@ -5348,8 +5348,10 @@ kernel void kernel_pad_f32(
     device const float * src0_ptr = (device const float *) (src0 + i03*args.nb03 + i02*args.nb02 + i01*args.nb01);
     device       float * dst_ptr  = (device       float *) (dst  +  i3*args.nb3  +  i2*args.nb2  +  i1*args.nb1);
 
+    const int64_t i0 = k0*ntg.x + tpitg.x;
+
     if (i1 < args.ne01 && i2 < args.ne02 && i3 < args.ne03) {
-        for (int i0 = tpitg.x; i0 < args.ne0; i0 += ntg.x) {
+        if (i0 < args.ne0) {
             if (i0 < args.ne00) {
                 dst_ptr[i0] = src0_ptr[i0];
             } else {
@@ -5360,7 +5362,7 @@ kernel void kernel_pad_f32(
         return;
     }
 
-    for (int i0 = tpitg.x; i0 < args.ne0; i0 += ntg.x) {
+    if (i0 < args.ne0) {
         dst_ptr[i0] = 0.0f;
     }
 }
