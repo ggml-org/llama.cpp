@@ -1,6 +1,14 @@
 <script lang="ts">
 	import { base } from '$app/paths';
-	import { AlertTriangle, RefreshCw, Key, CheckCircle, XCircle } from '@lucide/svelte';
+	import {
+		AlertTriangle,
+		RefreshCw,
+		Key,
+		CheckCircle,
+		XCircle,
+		Eye,
+		EyeOff
+	} from '@lucide/svelte';
 	import { goto } from '$app/navigation';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
@@ -39,6 +47,7 @@
 
 	let apiKeyInput = $state('');
 	let showApiKeyInput = $state(false);
+	let showApiKeyValue = $state(false);
 	let apiKeyState = $state<'idle' | 'validating' | 'success' | 'error'>('idle');
 	let apiKeyError = $state('');
 
@@ -52,6 +61,7 @@
 
 	function handleShowApiKeyInput() {
 		showApiKeyInput = true;
+		showApiKeyValue = false;
 		// Pre-fill with current API key if it exists
 		const currentConfig = config();
 		apiKeyInput = currentConfig.apiKey?.toString() || '';
@@ -159,10 +169,13 @@
 					<div class="relative">
 						<Input
 							id="api-key-input"
+							type={showApiKeyValue ? 'text' : 'password'}
+							autocomplete="off"
+							spellcheck="false"
 							placeholder="Enter your API key..."
 							bind:value={apiKeyInput}
 							onkeydown={handleApiKeyKeydown}
-							class="w-full pr-10 {apiKeyState === 'error'
+							class="w-full pr-16 {apiKeyState === 'error'
 								? 'border-destructive'
 								: apiKeyState === 'success'
 									? 'border-green-500'
@@ -170,24 +183,37 @@
 							disabled={apiKeyState === 'validating'}
 						/>
 						{#if apiKeyState === 'validating'}
-							<div class="absolute top-1/2 right-3 -translate-y-1/2">
+							<div class="absolute top-1/2 right-10 -translate-y-1/2">
 								<RefreshCw class="h-4 w-4 animate-spin text-muted-foreground" />
 							</div>
 						{:else if apiKeyState === 'success'}
 							<div
-								class="absolute top-1/2 right-3 -translate-y-1/2"
+								class="absolute top-1/2 right-10 -translate-y-1/2"
 								in:scale={{ duration: 200, start: 0.8 }}
 							>
 								<CheckCircle class="h-4 w-4 text-green-500" />
 							</div>
 						{:else if apiKeyState === 'error'}
 							<div
-								class="absolute top-1/2 right-3 -translate-y-1/2"
+								class="absolute top-1/2 right-10 -translate-y-1/2"
 								in:scale={{ duration: 200, start: 0.8 }}
 							>
 								<XCircle class="h-4 w-4 text-destructive" />
 							</div>
 						{/if}
+						<button
+							type="button"
+							onclick={() => (showApiKeyValue = !showApiKeyValue)}
+							class="absolute top-1/2 right-3 inline-flex h-4 w-4 -translate-y-1/2 items-center justify-center text-muted-foreground transition-colors hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+							aria-label={showApiKeyValue ? 'Hide API key' : 'Show API key'}
+							disabled={apiKeyState === 'validating'}
+						>
+							{#if showApiKeyValue}
+								<EyeOff class="h-4 w-4" />
+							{:else}
+								<Eye class="h-4 w-4" />
+							{/if}
+						</button>
 					</div>
 					{#if apiKeyError}
 						<p class="text-sm text-destructive" in:fly={{ y: -10, duration: 200 }}>
@@ -220,6 +246,7 @@
 					<Button
 						onclick={() => {
 							showApiKeyInput = false;
+							showApiKeyValue = false;
 							apiKeyState = 'idle';
 							apiKeyError = '';
 						}}

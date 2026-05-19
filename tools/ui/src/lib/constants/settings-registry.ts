@@ -78,6 +78,7 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				help: `Set the API Key if you are using <code> ${CLI_FLAGS.API_KEY} </code> option for the server.`,
 				defaultValue: '',
 				type: SettingsFieldType.INPUT,
+				isSensitive: true,
 				section: SETTINGS_SECTION_SLUGS.GENERAL
 			},
 			{
@@ -746,6 +747,7 @@ export const SETTINGS_CHAT_SECTIONS: SettingsSection[] = [
 			type: s.type,
 			isExperimental: s.isExperimental,
 			isPositiveInteger: s.isPositiveInteger,
+			isSensitive: s.isSensitive,
 			help: s.help,
 			options: s.options
 		}))
