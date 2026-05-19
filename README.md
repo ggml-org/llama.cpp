@@ -8,6 +8,10 @@
 
 A fork of [ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp) integrating the **TurboQuant+** codec stack — Walsh-Hadamard rotated polar quantization, attention-gated sparse dequantization, and layer-aware V compression policies. The codec design, calibration, and validation papers live at [TheTom/turboquant_plus](https://github.com/TheTom/turboquant_plus); this repository is the llama.cpp runtime integration.
 
+### Lineage — why the `+`
+
+TurboQuant+ is inspired by Google's original **TurboQuant** paper (ICLR 2026), which introduced Walsh-Hadamard-rotated polar codebook quantization for KV cache and demonstrated 4.6× compression at ~1% PPL loss. This project extends that foundation substantially — adding the asymmetric K/V policy (V is free, K is everything), layer-aware Boundary V protection, attention-gated sparse V dequantization, the `TQ3_1S` / `TQ4_1S` weight quantization formats, the `turbo2` / `turbo4` tier variants, the cross-backend kernel coverage (CUDA `dp4a`, HIP/ROCm RDNA/CDNA, Vulkan coopmat, Metal TurboFlash + V2.1 fused kernels), and a body of model-family-specific quality and operational fixes. The trailing `+` denotes that ongoing extension work; the original TurboQuant codec remains the foundation.
+
 This fork is additive: every existing llama.cpp quantization, model, and backend continues to work unchanged. New types are opt-in via the standard `--cache-type-k` / `--cache-type-v` and `llama-quantize` interfaces.
 
 ## Production deployments
