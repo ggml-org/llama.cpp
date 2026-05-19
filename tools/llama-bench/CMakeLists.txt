@@ -2,7 +2,7 @@
 
 set(TARGET llama-bench-impl)
 
-add_library(${TARGET} llama-bench.cpp)
+add_library(${TARGET} STATIC llama-bench.cpp)
 
 target_include_directories(${TARGET} PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(${TARGET} PUBLIC llama-common llama ${CMAKE_THREAD_LIBS_INIT})

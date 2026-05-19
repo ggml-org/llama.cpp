@@ -31,7 +31,7 @@ target_link_libraries(${TARGET} PUBLIC llama-common mtmd ${CMAKE_THREAD_LIBS_INI
 
 set(TARGET llama-server-impl)
 
-add_library(${TARGET}
+add_library(${TARGET} STATIC
     server.cpp
     server-http.cpp
     server-http.h
