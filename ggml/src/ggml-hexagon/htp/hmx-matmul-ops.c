@@ -228,7 +228,7 @@ static inline HVX_Vector_x2 dequantize_x4x2_q4_0_x4groups_hvx(
     v_hi = Q6_Vhf_equals_Vqf16(Q6_Vqf16_vmpy_VhfVhf(v_hi, v_sc23));
 
     // Extract individual groups: scatter uses q_mask64 so only first 64 bytes matter
-    HVX_Vector_x2 r = { v_lo,/* group1 already in [0:63] */ 
+    HVX_Vector_x2 r = { v_lo,/* group1 already in [0:63] */
                         v_hi /* group2 already in [0:63] */ };
     return r;
 }
