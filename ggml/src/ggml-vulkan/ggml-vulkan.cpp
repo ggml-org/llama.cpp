@@ -3340,7 +3340,7 @@ static vk_fa_pipeline_state get_fa_pipeline_state(const vk_device& device, const
 static std::vector<uint32_t> get_fa_spec_constants(const vk_fa_pipeline_state& state) {
     const auto fa_block_bytes = [](ggml_type t) -> uint32_t {
         if (t == GGML_TYPE_F32)  return 16u;
-        if (t == GGML_TYPE_BF16) return 8u;
+        if (t == GGML_TYPE_BF16) return 2u;
         return (uint32_t) ggml_type_size(t);
     };
     return {
@@ -9678,11 +9678,11 @@ static void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx
     uint32_t k_stride = (uint32_t)(nbk1 / ggml_type_size(k->type));
     uint32_t v_stride = (uint32_t)(nbv1 / ggml_type_size(v->type));
 
-    // F32 and BF16 use block_elems=4, so stride is in units of vec4/u16vec4 blocks
-    if (k->type == GGML_TYPE_F32 || k->type == GGML_TYPE_BF16) {
+    // F32 uses block_elems=4, so stride is in units of vec4 blocks
+    if (k->type == GGML_TYPE_F32) {
         k_stride /= 4;
     }
-    if (v->type == GGML_TYPE_F32 || v->type == GGML_TYPE_BF16) {
+    if (v->type == GGML_TYPE_F32) {
         v_stride /= 4;
     }
 

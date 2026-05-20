@@ -112,7 +112,7 @@ uint fa_block_elems(uint ty) {
         case FA_TYPE_Q5_0: return uint(QUANT_K_Q5_0);
         case FA_TYPE_Q5_1: return uint(QUANT_K_Q5_1);
         case FA_TYPE_Q8_0: return uint(QUANT_K_Q8_0);
-        case FA_TYPE_BF16: return 4u;
+        case FA_TYPE_BF16: return 1u;
         case FA_TYPE_Q1_0: return uint(QUANT_K_Q1_0); // cm2-only, harmless elsewhere
         default:           return 1u;
     }
@@ -250,7 +250,12 @@ const float FATTN_KQ_MAX_OFFSET = 3.0f*0.6931f;
 
 // Store the output when doing grouped query attention.
 // Rows index by Q's dimension 2, and the first N rows are valid.
-void gqaStore(const in uint32_t r, const in uint32_t c, const in FLOAT_TYPEV4 elems, const in uint32_t o_offset, const in uint32_t iq2, const in uint32_t N)
+#if defined(BFLOAT16)
+#define GQA_STORE_TYPE vec4
+#else
+#define GQA_STORE_TYPE FLOAT_TYPEV4
+#endif
+void gqaStore(const in uint32_t r, const in uint32_t c, const in GQA_STORE_TYPE elems, const in uint32_t o_offset, const in uint32_t iq2, const in uint32_t N)
 {
     uint32_t offset = (iq2 + r) * HSV / 4 + c;
     data_ov4[o_offset + offset] = D_TYPEV4(elems);

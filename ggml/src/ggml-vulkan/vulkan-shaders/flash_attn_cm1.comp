@@ -104,7 +104,11 @@ void main() {
     }
     barrier();
 
+#if defined(BFLOAT16)
+    vec4 Of[rows_per_thread][d_per_thread];
+#else
     FLOAT_TYPEV4 Of[rows_per_thread][d_per_thread];
+#endif
     [[unroll]] for (uint32_t r = 0; r < rows_per_thread; ++r) {
         [[unroll]] for (uint32_t d = 0; d < d_per_thread; ++d) {
             Of[r][d] = FLOAT_TYPEV4(0.0);
@@ -374,7 +378,7 @@ void main() {
             const uint d_local = d0 / threads_per_rowgroup;
             [[unroll]] for (uint32_t r = 0; r < rows_per_thread; ++r) {
 #if defined(BFLOAT16)
-                Of[r][d_local] = FLOAT_TYPEV4(eMf[r] * vec4(Of[r][d_local]));
+                Of[r][d_local] *= eMf[r];
 #else
                 Of[r][d_local] = FLOAT_TYPE(eMf[r]) * Of[r][d_local];
 #endif
@@ -527,11 +531,7 @@ void main() {
 
                     if (hsv_col >= hsv_base && hsv_col < hsv_base + hsv_per_tile && hsv_col < HSV) {
                         const uint local_hsv = (hsv_col - hsv_base) / 4;
-#if defined(BFLOAT16)
-                        Of[r][d_local] = FLOAT_TYPEV4(vec4(Of[r][d_local]) + pvsh[row * osh_stride + local_hsv]);
-#else
                         Of[r][d_local] += pvsh[row * osh_stride + local_hsv];
-#endif
                     }
                 }
             }
@@ -608,7 +608,7 @@ void main() {
                 [[unroll]] for (uint32_t d0 = 0; d0 < HSV / 4; d0 += threads_per_rowgroup) {
                     const uint d_local = d0 / threads_per_rowgroup;
 #if defined(BFLOAT16)
-                    Of[r][d_local] = FLOAT_TYPEV4(ms * vec4(Of[r][d_local]));
+                    Of[r][d_local] *= ms;
 #else
                     Of[r][d_local] *= FLOAT_TYPE(ms);
 #endif
@@ -630,7 +630,7 @@ void main() {
         const uint d_local = d0 / threads_per_rowgroup;
         [[unroll]] for (uint32_t r = 0; r < rows_per_thread; ++r) {
 #if defined(BFLOAT16)
-            Of[r][d_local] = FLOAT_TYPEV4(Lfrcp[r] * vec4(Of[r][d_local]));
+            Of[r][d_local] *= Lfrcp[r];
 #else
             Of[r][d_local] *= FLOAT_TYPE(Lfrcp[r]);
 #if defined(FLOAT_TYPE_MAX)
