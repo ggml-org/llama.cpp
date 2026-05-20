@@ -116,10 +116,7 @@ static ggml_tensor * g4v_build_block(
     ggml_tensor * e_in = ggml_add(ctx, enc, blk.qf_proj_img_pos);
     cbx(e_in, "encoder_embeds");
 
-    // 6. Qformer forward.  Per Blip2QFormerModel.forward: first runs
-    //    self.layernorm(query_embeds) before entering the single layer.
-    //    blk.post_norm_* holds this (our naming is historical; see the
-    //    comment in clip-model.h's g4v_projector_block struct).
+    // 6. Qformer forward.
     ggml_tensor * q = g->build_norm(q_in, blk.qf_proj_post_norm_w, blk.qf_proj_post_norm_b, NORM_TYPE_NORMAL, qformer_eps, bid);
 
     // Helper: one post-norm BERT attention block.
@@ -320,7 +317,7 @@ ggml_cgraph * clip_graph_granite_vision::build() {
     for (int k = 0; k < projector_count; ++k) {
         ggml_tensor * s = ggml_cont(ctx0, streams[k]);
         if (k == 0 && hparams.base_stream_scale != 1.0f) {
-            s = ggml_scale_inplace(ctx0, s, hparams.base_stream_scale);
+            s = ggml_scale_inplace(ctx0, s, 1.0 / hparams.base_stream_scale);
         }
         mmproj = (k == 0) ? s : ggml_concat(ctx0, mmproj, s, 0);
     }
