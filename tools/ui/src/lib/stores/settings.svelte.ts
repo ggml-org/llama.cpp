@@ -41,8 +41,7 @@ import {
 	SETTINGS_KEYS,
 	USER_OVERRIDES_LOCALSTORAGE_KEY
 } from '$lib/constants';
-
-import { IsMobile } from '$lib/hooks/is-mobile.svelte';
+import { isMobile } from '$lib/stores/viewport.svelte';
 import { ParameterSyncService } from '$lib/services/parameter-sync.service';
 import { serverStore } from '$lib/stores/server.svelte';
 import {
@@ -132,7 +131,7 @@ class SettingsStore {
 
 			// Default sendOnEnter to false on mobile when the user has no saved preference
 			if (!(SETTINGS_KEYS.SEND_ON_ENTER in savedVal)) {
-				if (new IsMobile().current) {
+				if (isMobile.current) {
 					this.config[SETTINGS_KEYS.SEND_ON_ENTER] = false;
 				}
 			}

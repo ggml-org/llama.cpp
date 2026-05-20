@@ -26,18 +26,18 @@
 	import { modelsStore } from '$lib/stores/models.svelte';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import { TOOLTIP_DELAY_DURATION } from '$lib/constants';
-	import { IsMobile } from '$lib/hooks/is-mobile.svelte';
 	import { useKeyboardShortcuts } from '$lib/hooks/use-keyboard-shortcuts.svelte';
 	import { useSettingsNavigation } from '$lib/hooks/use-settings-navigation.svelte';
 	import { conversations } from '$lib/stores/conversations.svelte';
+	import { isMobile } from '$lib/stores/viewport.svelte';
 
 	let { children } = $props();
 	let alwaysShowSidebarOnDesktop = $derived(config().alwaysShowSidebarOnDesktop);
-	let isMobile = new IsMobile();
 	let isDesktop = $derived(!isMobile.current);
 	let sidebarOpen = $state(false);
 	let mounted = $state(false);
 	let innerHeight = $state<number | undefined>();
+	let innerWidth = $state(browser ? window.innerWidth : 0);
 
 	let chatSidebar:
 		| {
@@ -278,4 +278,4 @@
 	</Sidebar.Provider>
 </Tooltip.Provider>
 
-<svelte:window onkeydown={handleKeydown} bind:innerHeight />
+<svelte:window onkeydown={handleKeydown} bind:innerHeight bind:innerWidth />

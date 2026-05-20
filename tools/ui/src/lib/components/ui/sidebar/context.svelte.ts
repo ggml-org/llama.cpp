@@ -1,4 +1,4 @@
-import { IsMobile } from '$lib/hooks/is-mobile.svelte.js';
+import { isMobile } from '$lib/stores/viewport.svelte.js';
 import { getContext, setContext } from 'svelte';
 import { SIDEBAR_KEYBOARD_SHORTCUT, SIDEBAR_MIN_WIDTH } from './constants.js';
 
@@ -27,19 +27,17 @@ class SidebarState {
 	sidebarWidth = $state(SIDEBAR_MIN_WIDTH);
 	isResizing = $state(false);
 	setOpen: SidebarStateProps['setOpen'];
-	#isMobile: IsMobile;
 	state = $derived.by(() => (this.open ? 'expanded' : 'collapsed'));
 
 	constructor(props: SidebarStateProps) {
 		this.setOpen = props.setOpen;
-		this.#isMobile = new IsMobile();
 		this.props = props;
 	}
 
 	// Convenience getter for checking if the sidebar is mobile
 	// without this, we would need to use `sidebar.isMobile.current` everywhere
 	get isMobile() {
-		return this.#isMobile.current;
+		return isMobile.current;
 	}
 
 	// Event handler to apply to the `<svelte:window>`
