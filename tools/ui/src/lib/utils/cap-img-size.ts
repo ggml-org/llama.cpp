@@ -1,4 +1,5 @@
 import { MEGAPIXELS_TO_PIXELS } from '$lib/constants/image-size';
+import { BASE64_IMAGE_URI_REGEX } from '$lib/constants/uri-template';
 import { MimeTypeImage } from '$lib/enums';
 
 /**
@@ -13,7 +14,8 @@ export function capImageDataURLSize(
 ): Promise<string> {
 	return new Promise((resolve, reject) => {
 		try {
-			const mimeMatch = base64UrlImage.match(/^data:(image\/[a-z0-9.\-+]+);base64/);
+			
+			const mimeMatch = base64UrlImage.match(BASE64_IMAGE_URI_REGEX);
 			
 			if (!mimeMatch) {
 				return reject(new Error('Invalid data URL format.'));
