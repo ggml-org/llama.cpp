@@ -63,6 +63,9 @@ class LlamaModel(TextModel):
             with open(self.target_model_dir / "config.json", 'r', encoding='utf-8') as f:
                 target_config = json.load(f)
 
+            if "text_config" in target_config:
+                target_config = {**target_config, **target_config["text_config"]}
+
             # extract_layers: derived from target model layer count (low/mid/high)
             target_num_layers = target_config["num_hidden_layers"]
             extract_layers = [2, target_num_layers // 2, target_num_layers - 3]
