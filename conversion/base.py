@@ -1258,21 +1258,7 @@ class TextModel(ModelBase):
         toktypes: list[int] = []
 
         from transformers import AutoTokenizer
-
-        # Carbon-3B's HybridDNATokenizer is defined in the repo's tokenizer.py
-        # and adds DNA k-mer tokens at construction; loading it requires
-        # trust_remote_code=True.
-        trust_remote_code = False
-        tok_config_path = self.dir_model / "tokenizer_config.json"
-        if tok_config_path.is_file():
-            try:
-                with open(tok_config_path, "r", encoding="utf-8") as f:
-                    if json.load(f).get("tokenizer_class") == "HybridDNATokenizer":
-                        trust_remote_code = True
-            except Exception:
-                pass
-
-        tokenizer = AutoTokenizer.from_pretrained(self.dir_model, trust_remote_code=trust_remote_code)
+        tokenizer = AutoTokenizer.from_pretrained(self.dir_model)
         vocab_size = self.hparams.get("vocab_size", len(tokenizer.vocab))  # ty: ignore[unresolved-attribute]
         assert max(tokenizer.vocab.values()) < vocab_size  # ty: ignore[unresolved-attribute]
 
@@ -1320,12 +1306,6 @@ class TextModel(ModelBase):
         # is specific for the BPE pre-tokenizer used by the model
         # we will use this unique identifier to write a "tokenizer.ggml.pre" entry in the GGUF file which we can
         # use in llama.cpp to implement the same pre-tokenizer
-
-        # Carbon-3B (HybridDNATokenizer) wraps the Qwen3-4B-Base BPE — the
-        # chktxt below contains no <dna> tags, so the hash collides with the
-        # underlying Qwen3 vocab. Disambiguate by tokenizer class name.
-        if type(tokenizer).__name__ == "HybridDNATokenizer":
-            return "carbon"
 
         chktxt = '\n \n\n \n\n\n \t \t\t \t\n  \n   \n    \n     \n🚀 (normal) 😶\u200d🌫️ (multiple emojis concatenated) ✅ 🦙🦙 3 33 333 3333 33333 333333 3333333 33333333 3.3 3..3 3...3 កាន់តែពិសេសអាច😁 ?我想在apple工作1314151天～ ------======= нещо на Български \'\'\'\'\'\'```````""""......!!!!!!?????? I\'ve been \'told he\'s there, \'RE you sure? \'M not sure I\'ll make it, \'D you like some tea? We\'Ve a\'lL'
 
@@ -1624,6 +1604,48 @@ class TextModel(ModelBase):
         tokens, toktypes, tokpre = self.get_vocab_base()
         self.gguf_writer.add_tokenizer_model("gpt2")
         self.gguf_writer.add_tokenizer_pre(tokpre)
+        self.gguf_writer.add_token_list(tokens)
+        self.gguf_writer.add_token_types(toktypes)
+
+        special_vocab = gguf.SpecialVocab(self.dir_model, load_merges=True)
+        special_vocab.add_to_gguf(self.gguf_writer)
+
+    def _set_vocab_carbon(self):
+        # Carbon-3B uses a custom HybridDNATokenizer (defined in the model
+        # repo's tokenizer.py) that wraps Qwen3-4B-Base BPE and adds 4096
+        # fixed 6-mer DNA tokens plus <dna>/</dna>/<oov> special tokens at
+        # construction. Loading it requires trust_remote_code=True, and the
+        # pre-tokenizer name "carbon" tells llama.cpp to enable the
+        # <dna>...</dna>-aware path (LLAMA_VOCAB_PRE_TYPE_CARBON in
+        # src/llama-vocab.cpp).
+        from transformers import AutoTokenizer
+        tokenizer = AutoTokenizer.from_pretrained(self.dir_model, trust_remote_code=True)
+        vocab_size = self.hparams.get("vocab_size", len(tokenizer.vocab))  # ty: ignore[unresolved-attribute]
+        assert max(tokenizer.vocab.values()) < vocab_size  # ty: ignore[unresolved-attribute]
+
+        reverse_vocab = {id_: encoded_tok for encoded_tok, id_ in tokenizer.vocab.items()}  # ty: ignore[unresolved-attribute]
+        added_vocab = tokenizer.get_added_vocab()  # ty: ignore[unresolved-attribute]
+        added_tokens_decoder = tokenizer.added_tokens_decoder  # ty: ignore[unresolved-attribute]
+
+        tokens: list[str] = []
+        toktypes: list[int] = []
+        for i in range(vocab_size):
+            if i not in reverse_vocab:
+                tokens.append(f"[PAD{i}]")
+                toktypes.append(gguf.TokenType.UNUSED)
+            else:
+                token: str = reverse_vocab[i]
+                if token in added_vocab:
+                    if added_tokens_decoder[i].special or self.does_token_look_special(token):
+                        toktypes.append(gguf.TokenType.CONTROL)
+                    else:
+                        toktypes.append(gguf.TokenType.USER_DEFINED)
+                else:
+                    toktypes.append(gguf.TokenType.NORMAL)
+                tokens.append(token)
+
+        self.gguf_writer.add_tokenizer_model("gpt2")
+        self.gguf_writer.add_tokenizer_pre("carbon")
         self.gguf_writer.add_token_list(tokens)
         self.gguf_writer.add_token_types(toktypes)
 
