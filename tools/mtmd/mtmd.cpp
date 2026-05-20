@@ -493,7 +493,6 @@ struct mtmd_context {
                     img_end = "\n"; // prevent empty batch on llama-server
                     image_preproc = std::make_unique<mtmd_image_preprocessor_deepseekocr>(ctx_v);
                 } break;
-            case PROJECTOR_TYPE_HUNYUANOCR:
             case PROJECTOR_TYPE_HUNYUANVL:
                 {
                     // note: these use fullwidth ｜ (U+FF5C) and ▁ (U+2581) to match the tokenizer vocabulary

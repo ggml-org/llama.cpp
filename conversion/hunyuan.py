@@ -189,7 +189,8 @@ class HunYuanModel(TextModel):
             self.gguf_writer.add_token_list(tokens)
             self.gguf_writer.add_token_types(toktypes)
 
-            # HunyuanOCR has pad_token_id=-1 in config.json; exclude pad from SpecialVocab
+            # Some HunYuanVL variants (e.g. OCR-style configs) have pad_token_id=-1;
+            # guard SpecialVocab so it doesn't try to emit an invalid pad id.
             token_types = None
             if (self.hparams.get("pad_token_id") or 0) < 0:
                 token_types = ('bos', 'eos', 'unk', 'sep', 'cls', 'mask')
@@ -250,7 +251,8 @@ class HunYuanModel(TextModel):
             self._fix_special_tokens()
 
     def set_gguf_parameters(self):
-        # HunyuanOCR has num_experts=1 which is not MoE, prevent parent from writing it
+        # Some HunYuanVL variants set num_experts=1 (not real MoE);
+        # prevent the parent class from emitting expert_count metadata in that case.
         saved_num_experts = self.hparams.pop("num_experts", None)
         super().set_gguf_parameters()
         if saved_num_experts is not None and saved_num_experts > 1:
@@ -288,51 +290,21 @@ class HunYuanModel(TextModel):
 
 @ModelBase.register("HunYuanVLForConditionalGeneration")
 class HunyuanVLVisionModel(MmprojModel):
-    # Handles both HunyuanOCR and HunyuanVL, which share the HF architecture name
-    # "HunYuanVLForConditionalGeneration" and the `vit.perceive.*` vision layout.
-    # Each variant maps to a different projector type in clip.cpp so image
-    # preprocessing follows the correct code path.
-
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         assert self.hparams_vision is not None
-        # HunyuanOCR / HunyuanVL uses max_image_size instead of image_size
+        # HunyuanVL uses max_image_size instead of image_size
         if "image_size" not in self.hparams_vision:
             self.hparams_vision["image_size"] = self.hparams_vision.get("max_image_size", 2048)
-
-    @staticmethod
-    def is_ocr_variant(hparams: dict) -> bool:
-        """Return True for HunyuanOCR, False for HunyuanVL.
-
-        The projector's output dim must equal the text model's hidden_size by
-        construction (that's what "projector" means). HunyuanOCR pairs a 1B text
-        backbone (hidden=1024); HunyuanVL pairs a 4B one (hidden=3072). So the
-        ViT -> LLM projection dim is a hard architectural signature, not a
-        magic number.
-        """
-        vision_out = int((hparams.get("vision_config") or {}).get("out_hidden_size", 0))
-        return vision_out == 1024
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
         assert self.hparams_vision is not None
         vcfg = self.hparams_vision
-
-        if self.is_ocr_variant(self.global_config):
-            # --- HunyuanOCR ---
-            self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.HUNYUANOCR)
-            self.gguf_writer.add_vision_use_gelu(True)
-            self.gguf_writer.add_vision_attention_layernorm_eps(vcfg.get("rms_norm_eps", 1e-5))
-            self.gguf_writer.add_vision_spatial_merge_size(vcfg.get("spatial_merge_size", 2))
-            self.gguf_writer.add_vision_min_pixels(self.preprocessor_config["min_pixels"])
-            self.gguf_writer.add_vision_max_pixels(self.preprocessor_config["max_pixels"])
-            return
-
-        # --- HunyuanVL ---
         self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.HUNYUANVL)
-        self.gguf_writer.add_vision_use_gelu(str(vcfg["hidden_act"]).lower() == "gelu")
-        self.gguf_writer.add_vision_attention_layernorm_eps(float(vcfg["rms_norm_eps"]))
-        self.gguf_writer.add_vision_spatial_merge_size(int(vcfg["spatial_merge_size"]))
+        self.gguf_writer.add_vision_use_gelu(True)
+        self.gguf_writer.add_vision_attention_layernorm_eps(vcfg.get("rms_norm_eps", 1e-5))
+        self.gguf_writer.add_vision_spatial_merge_size(vcfg.get("spatial_merge_size", 2))
         self.gguf_writer.add_vision_min_pixels(int(self.preprocessor_config["min_pixels"]))
         self.gguf_writer.add_vision_max_pixels(int(self.preprocessor_config["max_pixels"]))
 
@@ -353,7 +325,7 @@ class HunyuanVLVisionModel(MmprojModel):
 
     def tensor_force_quant(self, name, new_name, bid, n_dims):
         # force conv weights to F32 or F16 to avoid BF16 IM2COL issues on Metal
-        # Both HunyuanOCR and HunyuanVL emit the ViT -> LLM projection as mm.0/mm.2.
+        # HunyuanVL emit the ViT -> LLM projection as mm.0/mm.2.
         if ("mm.0." in new_name or "mm.2." in new_name) and new_name.endswith(".weight"):
             return gguf.GGMLQuantizationType.F16 if self.ftype == gguf.LlamaFileType.MOSTLY_F16 else gguf.GGMLQuantizationType.F32
         return super().tensor_force_quant(name, new_name, bid, n_dims)
@@ -361,40 +333,18 @@ class HunyuanVLVisionModel(MmprojModel):
 
 @ModelBase.register("HunYuanVLForConditionalGeneration")
 class HunyuanVLTextModel(HunYuanModel):
-    # The "HunYuanVLForConditionalGeneration" HF architecture covers both HunyuanOCR
-    # and HunyuanVL. HunyuanOCR reuses the HunYuan-Dense text backbone (standard RoPE),
-    # while HunyuanVL introduces a new LLM arch with XD-RoPE. Detect the variant from
-    # the config and pick the matching GGUF architecture.
     model_arch = gguf.MODEL_ARCH.HUNYUAN_VL
 
-    @staticmethod
-    def _is_ocr_config(hparams: dict) -> bool:
-        # OCR pairs a 1B text backbone (hidden=1024) with a ViT projector that
-        # outputs 1024-d; HunyuanVL uses 3072-d. Keep in sync with
-        # HunyuanVLVisionModel.is_ocr_variant.
-        return int((hparams.get("vision_config") or {}).get("out_hidden_size", 0)) == 1024
-
     def __init__(self, dir_model: Path, *args, **kwargs):
-        raw_hparams = kwargs.get("hparams") or ModelBase.load_hparams(dir_model, is_mistral_format=False)
-        if self._is_ocr_config(raw_hparams):
-            self.model_arch = gguf.MODEL_ARCH.HUNYUAN_DENSE
-        else:
-            self.model_arch = gguf.MODEL_ARCH.HUNYUAN_VL
         super().__init__(dir_model, *args, **kwargs)
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
 
-        # Only emit XD-RoPE metadata for the HunyuanVL backbone; HunyuanOCR uses
-        # the HunYuan-Dense arch which already handles standard rope in super().
-        if self.model_arch != gguf.MODEL_ARCH.HUNYUAN_VL:
-            return
-
+        # XD-RoPE metadata for the HunyuanVL;
         if self.rope_parameters.get("rope_type") != "xdrope":
             return
 
-        # defaults for HunyuanVL. The C++ side later computes:
-        #   freq_base = rope_theta * alpha ** (head_dim / (head_dim - 2))
         self.gguf_writer.add_rope_freq_base(float(self.rope_parameters["rope_theta"]))
         self.gguf_writer.add_rope_scaling_alpha(float(self.rope_parameters["alpha"]))
         self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.NONE)
