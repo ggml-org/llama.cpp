@@ -528,12 +528,12 @@ static void process_handler_response(server_http_req_ptr && request, server_http
             return has_next;
         };
         const auto on_complete = [request = q_ptr, response = r_ptr](bool) mutable {
-            // the peer may have dropped before the producer finished. when a drain is still owed,
-            // hand the response to a manager owned thread that pumps it to completion, so this http
-            // worker is released at once. see stream_session_manager::adopt_orphan
-            if (response->spipe && response->spipe->needs_drain()) {
-                g_stream_sessions.adopt_orphan(std::move(response), std::move(request));
-                return;
+            // the peer may have dropped before the producer finished. when a pipe is attached, drain
+            // the rest of the generation into the ring buffer here, on this http worker. httplib
+            // runs a large dynamic pool and the worker blocks in next() on a condvar rather than
+            // burning cpu, so holding it until the generation ends is fine. see finish_producer
+            if (response->spipe) {
+                response->spipe->finish_producer();
             }
             response.reset(); // spipe destructor finalizes the session if attached
             request.reset();
