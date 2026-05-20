@@ -3157,7 +3157,8 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             if (parts.empty() || parts[0].empty()) {
                 throw std::invalid_argument("--remote-model: empty spec");
             }
-            // First part must be NAME=URL.
+            // First part must be NAME=URL. As sugar for same-host upstreams,
+            // an all-digit value is treated as a port on 127.0.0.1.
             {
                 auto eq = parts[0].find('=');
                 if (eq == std::string::npos) {
@@ -3167,6 +3168,9 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
                 decl.url  = parts[0].substr(eq + 1);
                 if (decl.name.empty() || decl.url.empty()) {
                     throw std::invalid_argument("--remote-model: empty NAME or URL");
+                }
+                if (decl.url.find_first_not_of("0123456789") == std::string::npos) {
+                    decl.url = "http://127.0.0.1:" + decl.url;
                 }
             }
             auto split_pipe = [](const std::string & s) {

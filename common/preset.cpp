@@ -363,13 +363,30 @@ common_presets common_preset_context::load_from_ini(const std::string & path, co
 
             // Remote-entry keys: intercept before key_to_opt lookup. These
             // declare a vLLM-style upstream and are not CLI args.
-            if (key == "remote-url" || key == "remote-api-key" || key == "remote-model") {
+            // `remote-port = N` is sugar for `remote-url = http://127.0.0.1:N`
+            // when the upstream runs on the same host.
+            if (key == "remote-url" || key == "remote-api-key" || key == "remote-model" || key == "remote-port") {
                 if (!preset.remote.has_value()) {
                     preset.remote.emplace();
                 }
                 if      (key == "remote-url")     preset.remote->url      = value;
                 else if (key == "remote-api-key") preset.remote->api_key  = expand_env_vars(value);
-                else                              preset.remote->model_id = value;
+                else if (key == "remote-model")   preset.remote->model_id = value;
+                else /* remote-port */ {
+                    if (!preset.remote->url.empty()) {
+                        throw std::runtime_error(string_format(
+                            "preset '%s': remote-port and remote-url are mutually exclusive",
+                            preset.name.c_str()));
+                    }
+                    try {
+                        (void) std::stoi(value); // validate
+                    } catch (...) {
+                        throw std::runtime_error(string_format(
+                            "preset '%s': remote-port must be an integer, got '%s'",
+                            preset.name.c_str(), value.c_str()));
+                    }
+                    preset.remote->url = "http://127.0.0.1:" + value;
+                }
                 continue;
             }
 
