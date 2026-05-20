@@ -463,6 +463,10 @@ std::pair<ModelParams, ComputeParams> GgmlOvDecoder::compute_llm_params(ggml_cgr
             }
         }
         if (node->op == GGML_OP_ROPE) {
+            if (compute_params.token_len_per_seq == -1 && node->src[1] != nullptr) {
+                compute_params.token_len_per_seq = ggml_nelements(node->src[1]);
+            }
+
             // When multiple ROPE ops in the graph disagree on op_params (e.g. gemma4's
             // mixed SWA/non-SWA layers with different n_dims or freq_base), we cannot
             // share a single precomputed rope_sin/rope_cos. Track divergence so the
@@ -578,14 +582,18 @@ void GgmlOvDecoder::add_extra_inputs() {
         }
     };
 
-    create_1d_input("attention_size", m_compute_params.attention_size);
+    if (m_compute_params.attention_size != -1) {
+        create_1d_input("attention_size", m_compute_params.attention_size);
+    }
     if (m_compute_params.attention_size_swa != -1) {
         create_1d_input("attention_size_swa", m_compute_params.attention_size_swa);
     }
     create_1d_input("n_seq_active", m_compute_params.n_seq_active);
     create_1d_input("seq_active_start", m_compute_params.seq_active_start);
     create_1d_input("seq_active_end", m_compute_params.seq_active_start + m_compute_params.n_seq_active);
-    create_1d_input("token_len_per_seq", m_compute_params.token_len_per_seq);
+    if (m_compute_params.token_len_per_seq != -1) {
+        create_1d_input("token_len_per_seq", m_compute_params.token_len_per_seq);
+    }
     // create_1d_input("token_len", m_token_len_per_seq * m_n_seq_active);
 }
 
