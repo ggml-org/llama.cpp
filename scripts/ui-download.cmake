@@ -134,6 +134,13 @@ endif()
 # ---------------------------------------------------------------------------
 # 5. Priority 3: download from Hugging Face Bucket (if enabled)
 # ---------------------------------------------------------------------------
+# Retry logic: transient network failures (common in offline/sandboxed
+# environments like Nix, Gentoo, CI with restricted network) should not
+# cause immediate provisioning failure. We retry each download up to
+# DOWNLOAD_RETRIES times (default: 3) with a short delay between attempts.
+set(_DOWNLOAD_RETRIES "3" CACHE STRING "Number of download retries for UI assets")
+set(_DOWNLOAD_DELAY  "2" CACHE STRING "Delay in seconds between download retries")
+
 if(NOT PROVISION_SUCCESS AND HF_ENABLED)
     # Build list of URLs to try — version-specific first, then 'latest'
     set(URL_ENTRIES "")
@@ -150,29 +157,44 @@ if(NOT PROVISION_SUCCESS AND HF_ENABLED)
 
         message(STATUS "UI: downloading assets from ${url_label}: ${base_url}")
 
-        # Download each asset
+        # Download each asset with retry support
         set(ALL_OK TRUE)
         foreach(asset ${ASSETS})
             set(download_url "${base_url}/${asset}?download=true")
             set(download_path "${PUBLIC_DIR}/${asset}")
-            file(DOWNLOAD "${download_url}" "${download_path}"
-                STATUS download_status TIMEOUT 60
-            )
-            list(GET download_status 0 download_result)
-            if(NOT download_result EQUAL 0)
-                list(GET download_status 1 error_message)
-                message(STATUS "UI: failed to download ${asset} from ${url_label}: ${error_message}")
-                set(ALL_OK FALSE)
+            set(_download_attempt 0)
+            set(_download_success FALSE)
+            while(NOT _download_success AND _download_attempt LESS _DOWNLOAD_RETRIES)
+                math(EXPR _download_attempt "${_download_attempt} + 1")
+                message(STATUS "UI: downloading ${asset} (attempt ${_download_attempt}/${_DOWNLOAD_RETRIES})...")
+                file(DOWNLOAD "${download_url}" "${download_path}"
+                    STATUS download_status TIMEOUT 60
+                )
+                list(GET download_status 0 download_result)
+                if(download_result EQUAL 0)
+                    set(_download_success TRUE)
+                    message(STATUS "UI: downloaded ${asset}")
+                else()
+                    list(GET download_status 1 error_message)
+                    if(_download_attempt LESS _DOWNLOAD_RETRIES)
+                        message(STATUS "UI: download failed (${error_message}), retrying in ${_DOWNLOAD_DELAY}s...")
+                        execute_process(COMMAND sleep ${_DOWNLOAD_DELAY})
+                    else()
+                        message(STATUS "UI: failed to download ${asset} after ${_DOWNLOAD_RETRIES} attempts: ${error_message}")
+                        set(ALL_OK FALSE)
+                    endif()
+                endif()
+            endwhile()
+            if(NOT _download_success)
                 break()
             endif()
-            message(STATUS "UI: downloaded ${asset}")
         endforeach()
 
         if(NOT ALL_OK)
             continue()
         endif()
 
-        # Verify checksums if the server provides them
+        # Verify checksums if the server provides them (no retry for checksums)
         file(DOWNLOAD "${base_url}/checksums.txt?download=true"
             "${PUBLIC_DIR}/checksums.txt"
             STATUS checksum_status TIMEOUT 30
