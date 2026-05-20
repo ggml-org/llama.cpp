@@ -229,6 +229,19 @@ static void compute_cossim(std::vector<tensor_statistics> & tstats) {
 bool IMatrixCollector::collect_imatrix(struct ggml_tensor * t, bool ask, void * user_data) {
     GGML_UNUSED(user_data);
 
+    // imatrix only records calibration statistics from matrix multiplications
+    // (MUL_MAT and MUL_MAT_ID). Reject every other op early -- before the
+    // src0 dereference below -- so we don't crash on graph nodes that legitimately
+    // have null t->src[0] (e.g. leaf inputs, GGML_OP_NONE) or that are V4-specific
+    // DSV4 ops whose outputs aren't consumed by anything that benefits from
+    // imatrix data. The cb_eval callback is invoked for every scheduled node, so
+    // this filter also runs for graph nodes that the original code only happened
+    // not to crash on by accident on pre-V4 architectures. See
+    // docs/plans/v4-port-imatrix-diagnosis.md.
+    if (t->op != GGML_OP_MUL_MAT && t->op != GGML_OP_MUL_MAT_ID) {
+        return false;
+    }
+
     const struct ggml_tensor * src0 = t->src[0];
     const struct ggml_tensor * src1 = t->src[1];
     std::string wname = filter_tensor_name(src0->name);
@@ -239,7 +252,6 @@ bool IMatrixCollector::collect_imatrix(struct ggml_tensor * t, bool ask, void * 
     // if we return true, a follow-up call will be made with ask=false in which we can do the actual collection
     if (ask) {
         if (t->op == GGML_OP_MUL_MAT_ID) return true; // collect all indirect matrix multiplications
-        if (t->op != GGML_OP_MUL_MAT) return false;
         // why are small batches ignored (<16 tokens)?
         if (src1->ne[1] < 16 || src1->type != GGML_TYPE_F32) return false;
         if (!(wname.substr(0, 4) == "blk." || (m_params.process_output && wname == "output.weight"))) return false;
@@ -1240,6 +1252,19 @@ int main(int argc, char ** argv) {
         params.n_ctx      = n_kv;
 
         params.n_batch = std::min(params.n_batch, n_kv);
+
+        // V4 fix: imatrix raises n_parallel (=> cparams.n_seq_max) so it can
+        // fan out chunks across multiple sequences for throughput. With
+        // kv_unified=false (the default) this allocates per-stream KV
+        // buffers, which collide with V4's compressed-attention graph: V4
+        // unconditionally forces n_seqs=1 for LLM_ARCH_DEEPSEEK4 and its
+        // compressed-attention reshape hard-codes n_stream == 1, so it
+        // aborts on the elements-mismatch assertion in ggml_reshape_3d when
+        // n_stream > 1. Forcing kv_unified=true keeps a single shared KV
+        // buffer (n_stream=1) without reducing imatrix's ubatch
+        // parallelism, and is benign for non-V4 archs. See
+        // docs/plans/v4-port-imatrix-diagnosis.md.
+        params.kv_unified = true;
     }
 
     g_collector.set_params(params);

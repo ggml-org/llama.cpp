@@ -292,6 +292,14 @@ static bool tensor_allows_quantization(const llama_model_quantize_params * param
     // quantize only 2D and 3D tensors (experts)
     if (ggml_n_dims(tensor) < 2) return false;
 
+    // do not quantize integer tensors (e.g. DeepSeek V4 ffn_gate_tid2eid which
+    // stores expert-id indices as I32). Quantization makes no sense for non
+    // floating-point data; the dequantize path also explicitly rejects them.
+    if (tensor->type == GGML_TYPE_I8  ||
+        tensor->type == GGML_TYPE_I16 ||
+        tensor->type == GGML_TYPE_I32 ||
+        tensor->type == GGML_TYPE_I64) return false;
+
     const std::string name = ggml_get_name(tensor);
 
     // This used to be a regex, but <regex> has an extreme cost to compile times.
