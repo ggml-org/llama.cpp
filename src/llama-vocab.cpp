@@ -536,6 +536,7 @@ struct llm_tokenizer_bpe : llm_tokenizer {
                 byte_encode = false; // uses raw UTF-8, not GPT-2 byte encoding
                 break;
             case LLAMA_VOCAB_PRE_TYPE_SARVAM_MOE:
+            case LLAMA_VOCAB_PRE_TYPE_DOMYN_SMALL:
                 // Sarvam uses SPM-style BPE (same shape as Gemma4): spaces replaced with U+2581
                 // by the normalizer, BPE merges over the whole text on raw UTF-8.
                 regex_exprs = {
@@ -2466,6 +2467,10 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
                 tokenizer_pre == "minerva-7b") {
                 pre_type = LLAMA_VOCAB_PRE_TYPE_MINERVA;
             } else if (
+                tokenizer_pre == "domyn-small") {
+                pre_type = LLAMA_VOCAB_PRE_TYPE_DOMYN_SMALL;
+                escape_whitespaces = true;
+            } else if (
                 tokenizer_pre == "megrez") {
                 pre_type = LLAMA_VOCAB_PRE_TYPE_QWEN2;
             } else if (
@@ -3651,6 +3656,12 @@ std::vector<llama_token> llama_vocab::impl::tokenize(
                             llama_escape_whitespace(text);
                         }
 
+                        // Metaspace prepend_scheme "first": add U+2581 only at the start of the input
+                        if (pre_type == LLAMA_VOCAB_PRE_TYPE_DOMYN_SMALL && &fragment == &fragment_buffer.front() &&
+                            text.rfind("\xe2\x96\x81", 0) != 0) {
+                            text.insert(0, "\xe2\x96\x81");
+                        }
+
 #ifdef PRETOKENIZERDEBUG
                         LLAMA_LOG_WARN("TT: (%ld %ld %ld) '%s'\n", text.length(), fragment.offset, fragment.length, text.c_str());
 #endif
@@ -3965,7 +3976,7 @@ int32_t llama_vocab::impl::detokenize(
     int32_t total = 0;
 
     // remove the leading space
-    bool remove_space = add_space_prefix;
+    bool remove_space = add_space_prefix || pre_type == LLAMA_VOCAB_PRE_TYPE_DOMYN_SMALL;
 
     if (remove_special && add_bos) {
         if (n_tokens > 0 && tokens[0] == special_bos_id) {
