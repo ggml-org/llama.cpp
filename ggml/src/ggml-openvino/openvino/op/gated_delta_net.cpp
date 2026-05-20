@@ -31,9 +31,6 @@ namespace op {
 OutputVector translate_gated_delta_net(const NodeContext & context) {
     auto v_shape = context.get_input_shape(2).to_shape();  // [B, T, H_v, S_v]
     auto q_shape = context.get_input_shape(0).to_shape();  // [B, T, H_k, S_k]
-    auto g_shape = context.get_input_shape(3).to_shape();  // [B, T, H_v, 1 or S_v]
-
-    const bool kda = (g_shape[3] == v_shape[3]);
 
     // Fused GatedDeltaNet op only supports scalar gate (kda=0).
     // Fall back to reference implementation for per-key-dimension gating.
@@ -52,7 +49,6 @@ OutputVector translate_gated_delta_net(const NodeContext & context) {
     const int64_t T = v_shape[1];
     const int64_t H_v = v_shape[2];
     const int64_t S_v = v_shape[3];
-    const int64_t H_k = q_shape[2];
     const int64_t S_k = q_shape[3];
 
     // ggml state layout (OV notation): [B, H_v, value_dim, key_dim]
@@ -83,7 +79,7 @@ OutputVector translate_gated_delta_net(const NodeContext & context) {
     return rename_outputs_with_suffix({res}, context.get_name());
 }
 
-OutputVector translate_gated_delta_net_ref(const NodeContext & context) {
+static OutputVector translate_gated_delta_net_ref(const NodeContext & context) {
     num_inputs_check(context, 6, 6);
 
     // Inputs (OV shapes are reversed from ggml):
