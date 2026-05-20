@@ -4,7 +4,6 @@
 
 #include <map>
 #include <sstream>
-#include <string_view>
 #include <algorithm>
 
 #if __cplusplus >= 202000L
@@ -24,57 +23,6 @@ static std::string trim(const std::string & str) {
         end -= 1;
     }
     return str.substr(start, end - start);
-}
-
-// moves mtmd media-marker(s), to the front
-// keeping the order required by models like DeepSeek-OCR
-static std::string media_markers_first(const std::string & content) {
-    // mtmd marker is "<__media__>"
-    // server marker pattern is "<__media_<hex>__>"
-    static constexpr std::string_view prefix = "<__media";
-    static constexpr std::string_view suffix = "__>";
-
-    std::string markers;
-    std::string text;
-    text.reserve(content.size());
-
-    size_t i = 0;
-    while (i < content.size()) {
-        // find start and end of the next marker
-        if (content.compare(i, prefix.size(), prefix) == 0) {
-            const size_t e = content.find(suffix, i + prefix.size());
-            if (e != std::string::npos) {
-                const size_t end = e + suffix.size();
-                markers.append(content, i, end - i);
-                markers.push_back('\n'); // add newline after each marker
-                i = end;
-                if (i < content.size() && content[i] == '\n') {
-                    ++i;  // skip the newline after the marker
-                }
-                continue;
-            }
-        }
-        // add to text
-        text.push_back(content[i++]);
-    }
-
-    // no markers found
-    if (markers.empty()) {
-        return content;
-    }
-    // strip leading newlines
-    const size_t start = text.find_first_not_of('\n');
-    if (start == std::string::npos) {
-        // markers only
-        return markers;
-    }
-    text.erase(0, start);
-    // strip trailing newlines
-    while (!text.empty() && text.back() == '\n') {
-        text.pop_back();
-    }
-
-    return markers + text;
 }
 
 static const std::map<std::string, llm_chat_template> LLM_CHAT_TEMPLATES = {
@@ -609,10 +557,9 @@ int32_t llm_chat_apply_template(
             ss << LU8("<｜Assistant｜>");
         }
     } else if (tmpl == LLM_CHAT_TEMPLATE_DEEPSEEK_OCR) {
-        // DeepSeek-OCR expects "<image>\n<prompt>", but other callers
-        // (e.g., the Server WebUI) may put the image after the text.
         for (auto message : chat) {
-            ss << media_markers_first(message->content);
+            // no template
+            ss << message->content;
         }
     } else if (tmpl == LLM_CHAT_TEMPLATE_EXAONE_3) {
         // ref: https://huggingface.co/LGAI-EXAONE/EXAONE-3.0-7.8B-Instruct/discussions/8#66bae61b1893d14ee8ed85bb
