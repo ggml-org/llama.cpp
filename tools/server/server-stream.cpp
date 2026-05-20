@@ -230,6 +230,37 @@ void stream_session_manager::evict_and_cancel(const std::string & conversation_i
     s->finalize();
 }
 
+void stream_session_manager::reap_orphans_locked() {
+    for (auto it = orphans.begin(); it != orphans.end(); ) {
+        if (it->finished.load(std::memory_order_acquire)) {
+            if (it->thread.joinable()) {
+                it->thread.join();
+            }
+            it = orphans.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
+void stream_session_manager::adopt_orphan(std::shared_ptr<server_http_res> res,
+                                          std::shared_ptr<server_http_req> req) {
+    std::lock_guard<std::mutex> lock(orphan_mu);
+    reap_orphans_locked();
+    auto & node     = orphans.emplace_back();
+    auto * finished = &node.finished;
+    node.thread = std::thread([res = std::move(res), req = std::move(req), finished]() mutable {
+        // pump the rest of the generation into the ring buffer, then drop the response and the
+        // request. dropping res finalizes the session through the producer pipe destructor
+        if (res->spipe) {
+            res->spipe->finish_producer();
+        }
+        res.reset();
+        req.reset();
+        finished->store(true, std::memory_order_release);
+    });
+}
+
 void stream_session_manager::start_gc() {
     if (running.exchange(true)) {
         return;
@@ -249,7 +280,8 @@ void stream_session_manager::stop_gc() {
             gc_thread.join();
         }
     }
-    // finalize all live sessions so no reader ever hangs
+    // cancel then finalize all live sessions so any in flight orphan drain unblocks and no reader
+    // ever hangs
     std::vector<stream_session_ptr> snapshot;
     {
         std::unique_lock<std::shared_mutex> lock(map_mu);
@@ -260,7 +292,18 @@ void stream_session_manager::stop_gc() {
         sessions.clear();
     }
     for (auto & s : snapshot) {
+        s->cancel();
         s->finalize();
+    }
+    // join the orphan drain threads now that their producers are cancelled
+    {
+        std::lock_guard<std::mutex> lock(orphan_mu);
+        for (auto & o : orphans) {
+            if (o.thread.joinable()) {
+                o.thread.join();
+            }
+        }
+        orphans.clear();
     }
 }
 
@@ -292,6 +335,11 @@ void stream_session_manager::gc_loop() {
         // finalize outside the map lock, idempotent if the session was already done
         for (auto & s : to_drop) {
             s->finalize();
+        }
+        // reap any orphan drain threads that finished since the last pass
+        {
+            std::lock_guard<std::mutex> lock(orphan_mu);
+            reap_orphans_locked();
         }
     }
 }
@@ -344,9 +392,10 @@ void stream_pipe::mark_producer_done() {
 void stream_pipe::finish_producer() {
     // the peer dropped before the producer finished. httplib bails its content provider the moment
     // is_peer_alive() goes false, so the rest of the generation is pumped here into the ring buffer
-    // on the caller's thread. stream_aware_should_stop ignores peer disconnect while a pipe is
-    // attached, so res_->next() runs to natural completion, only an explicit DELETE flips
-    // is_cancelled and cuts it short. is_producer_ guarantees res_ is set
+    // on the orphan drain thread that on_complete handed this response to. stream_aware_should_stop
+    // ignores peer disconnect while a pipe is attached, so res_->next() runs to natural completion,
+    // only an explicit DELETE flips is_cancelled and cuts it short. is_producer_ guarantees res_ is
+    // set, the guard also covers a DELETE that races between adopt_orphan and this thread starting
     if (!is_producer_ || producer_done_ || session_->is_cancelled()) {
         return;
     }
@@ -361,6 +410,10 @@ void stream_pipe::finish_producer() {
             break;
         }
     }
+}
+
+bool stream_pipe::needs_drain() const {
+    return is_producer_ && !producer_done_ && !session_->is_cancelled();
 }
 
 std::shared_ptr<stream_pipe> stream_pipe::create_producer(stream_session_ptr session,

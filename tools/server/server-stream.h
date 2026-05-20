@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <list>
 #include <memory>
 #include <mutex>
 #include <shared_mutex>
@@ -105,10 +106,15 @@ struct stream_pipe {
     void mark_producer_done();
 
     // producer: when the peer dropped before the producer finished, pump the response next() into
-    // the ring buffer until it reports done. runs on the caller's thread (the http worker, from
-    // on_complete), no extra thread. no-op for a consumer pipe, an already finished producer, or a
-    // cancelled session. only an explicit DELETE flips is_cancelled and cuts the drain short
+    // the ring buffer until it reports done. runs on the caller's thread (the orphan drain thread,
+    // see stream_session_manager::adopt_orphan), no-op for a consumer pipe, an already finished
+    // producer, or a cancelled session. only an explicit DELETE flips is_cancelled and cuts short
     void finish_producer();
+
+    // producer: true when a disconnect drain is still owed, the producer has not reached its
+    // natural end and the session is not cancelled. on_complete checks this before handing the
+    // response to an orphan drain thread, so a cleanly finished stream never spawns one
+    bool needs_drain() const;
 
     // disarm the stop hook and mark the alive guard false; must be called while the
     // object that stop_fn references (the response reader) is still alive.
@@ -161,6 +167,12 @@ public:
     // signal the producer to cancel asap then evict, used by the explicit user Stop path
     void evict_and_cancel(const std::string & conversation_id);
 
+    // take ownership of a response whose client disconnected mid generation and pump it to
+    // completion on a manager owned thread, so the http worker is released at once. the response
+    // and its request stay alive until the drain finishes, then both are dropped here. finished
+    // threads are joined and reaped on the next adopt, by the GC, and at shutdown
+    void adopt_orphan(std::shared_ptr<server_http_res> res, std::shared_ptr<server_http_req> req);
+
     void start_gc();
     void stop_gc();
 
@@ -170,6 +182,9 @@ public:
 private:
     void gc_loop();
 
+    // join and erase the orphan drain threads that have already finished, caller holds orphan_mu
+    void reap_orphans_locked();
+
     mutable std::shared_mutex                           map_mu;
     std::unordered_map<std::string, stream_session_ptr> sessions; // key: conversation_id
     std::thread                                         gc_thread;
@@ -177,6 +192,16 @@ private:
     std::mutex                                          gc_wake_mu;
     std::condition_variable                             gc_wake_cv;
     std::shared_ptr<std::atomic<bool>>                  drain_shutdown;
+
+    // one entry per disconnected stream still generating. the drain thread flips finished on exit
+    // so reap can join without blocking. std::list keeps the node address stable for the flag
+    // pointer captured by the thread
+    struct orphan_drain {
+        std::thread       thread;
+        std::atomic<bool> finished{false};
+    };
+    std::mutex              orphan_mu;
+    std::list<orphan_drain> orphans;
 };
 
 // the process wide stream session manager. defined in server-stream.cpp so the symbol
