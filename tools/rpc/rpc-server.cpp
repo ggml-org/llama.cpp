@@ -1,4 +1,6 @@
 #include "ggml-rpc.h"
+#include <csignal>
+#include "rpc-trace.h"
 #ifdef _WIN32
 #  define NOMINMAX
 #  define DIRECTORY_SEPARATOR '\\'
@@ -187,6 +189,11 @@ static void print_usage(int /*argc*/, char ** argv, rpc_server_params params) {
     fprintf(stderr, "  -p, --port PORT                  port to bind to (default: %d)\n", params.port);
     fprintf(stderr, "  -c, --cache                      enable local file cache\n");
     fprintf(stderr, "\n");
+    fprintf(stderr, "environment variables:\n");
+    fprintf(stderr, "  GGML_RPC_DEADMAN_S     close connection if idle this many seconds (0=off, default 0)\n");
+    fprintf(stderr, "  GGML_RPC_OTLP_ENDPOINT OTLP/gRPC endpoint for trace span export (unset=tracing off)\n");
+    fprintf(stderr, "  GGML_RPC_OTLP_SERVICE  service.name attribute for traced spans (default ggml-rpc)\n");
+    fprintf(stderr, "\n");
 }
 
 static bool rpc_server_params_parse(int argc, char ** argv, rpc_server_params & params) {
@@ -287,7 +294,32 @@ static std::vector<ggml_backend_dev_t> get_devices(const rpc_server_params & par
     return devices;
 }
 
+
+// Install signal handlers so SIGINT/SIGTERM flush traced spans before exit.
+// Without this, `kill <pid>` (default SIGTERM) bypasses atexit() entirely
+// and any unflushed BatchSpanProcessor queue is lost.
+static void rpc_signal_shutdown(int signum) {
+    rpc_trace_shutdown();
+    // Re-raise with default disposition so the kernel produces the expected
+    // exit status (e.g. 128 + SIGTERM).
+    std::signal(signum, SIG_DFL);
+    std::raise(signum);
+}
+
+static void install_rpc_signal_handlers() {
+    std::signal(SIGINT,  rpc_signal_shutdown);
+    std::signal(SIGTERM, rpc_signal_shutdown);
+}
+
 int main(int argc, char * argv[]) {
+    RPC_TRACE_INIT();
+    install_rpc_signal_handlers();
+    if (const char * ep = std::getenv("GGML_RPC_OTLP_ENDPOINT"); ep && *ep) {
+        const char * svc = std::getenv("GGML_RPC_OTLP_SERVICE");
+        fprintf(stderr, "ggml-rpc: tracing enabled, exporting to %s (service %s)\n",
+                ep, svc && *svc ? svc : "ggml-rpc");
+    }
+
     std::setlocale(LC_NUMERIC, "C");
 
     ggml_backend_load_all();
@@ -338,5 +370,6 @@ int main(int argc, char * argv[]) {
     }
 
     start_server_fn(endpoint.c_str(), cache_dir, params.n_threads, devices.size(), devices.data());
+        RPC_TRACE_SHUTDOWN();
     return 0;
 }

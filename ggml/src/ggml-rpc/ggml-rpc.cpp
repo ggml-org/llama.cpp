@@ -3,12 +3,18 @@
 #include "ggml-backend-impl.h"
 #include "ggml-cpp.h"
 #include "transport.h"
+#include "rpc-trace.h"
 
 #include <array>
 #include <cinttypes>
 #include <optional>
 #include <string>
 #include <vector>
+#include <semaphore.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <sys/mman.h>
 #include <memory>
 #include <mutex>
 #include <unordered_map>
@@ -20,6 +26,20 @@
 
 static const char * RPC_DEBUG = std::getenv("GGML_RPC_DEBUG");
 
+// Server-side idle deadman timeout (seconds). 0 = disabled (default).
+// When set, the rpc_serve_client loop will close the connection if no
+// command arrives within this many seconds. Pairs with systemds
+// Restart=always to free GPU memory held by a worker whose controller
+// has hung.
+static int rpc_deadman_seconds() {
+    static const int s = []() {
+        const char * v = std::getenv("GGML_RPC_DEADMAN_S");
+        if (!v || !*v) return 0;
+        try { return std::max(0, std::stoi(v)); } catch (...) { return 0; }
+    }();
+    return s;
+}
+
 #define LOG_DBG(...) \
     do { if (RPC_DEBUG) GGML_LOG_DEBUG(__VA_ARGS__); } while (0)
 
@@ -27,7 +47,7 @@ static const char * RPC_DEBUG = std::getenv("GGML_RPC_DEBUG");
 namespace fs = std::filesystem;
 
 // macro for nicer error messages on server crash
-#define RPC_STATUS_ASSERT(x) if (!(x)) GGML_ABORT("Remote RPC server crashed or returned malformed response")
+#define RPC_STATUS_ASSERT(x) do { if (!(x)) { GGML_ABORT("Remote RPC server crashed or returned malformed response (in %s at %s:%d)", __func__, __FILE__, __LINE__); } } while (0)
 
 // all RPC structures must be packed
 #pragma pack(push, 1)
@@ -71,13 +91,136 @@ enum rpc_cmd {
     RPC_CMD_HELLO,
     RPC_CMD_DEVICE_COUNT,
     RPC_CMD_GRAPH_RECOMPUTE,
+    RPC_CMD_CAPS,
+    RPC_CMD_SHM_SETUP,
     RPC_CMD_COUNT,
 };
 
 static_assert(RPC_CMD_HELLO == 14, "RPC_CMD_HELLO must be always 14");
 
+#define GGML_RPC_SHM_MAGIC 0x534d4847504352ULL // "RCPGHMS"
+
+// ---- SHM transport segment lifecycle (phase 3b foundation) ----
+// Layout written at offset 0 of each segment. After this header the
+// segment holds two per-direction ring regions, but 3c lands the ring
+// itself; 3b only validates the header round-trip.
+struct rpc_shm_header {
+    uint64_t magic;       // = GGML_RPC_SHM_MAGIC
+    uint64_t version;     // = 1
+    uint64_t ring_size;   // per-direction ring size in bytes
+    uint64_t reserved[5]; // pad header to 64 bytes
+};
+static_assert(sizeof(rpc_shm_header) == 64, "rpc_shm_header must be 64 bytes");
+
+// A mapped SHM segment held by either side. The shared_ptr lives on
+// socket_t::impl when SHM was set up successfully; on destruction it
+// munmaps and (for the server side only) shm_unlinks the name so the
+// segment doesn't leak in /dev/shm.
+struct rpc_shm_segment {
+    int     fd        = -1;
+    void *  addr      = nullptr;
+    size_t  total_size = 0;
+    char    name[96]  = {0};
+    bool    owner    = false; // server (creator) sets this true
+
+    ~rpc_shm_segment() {
+        if (addr && addr != MAP_FAILED) {
+            munmap(addr, total_size);
+        }
+        if (fd >= 0) {
+            close(fd);
+        }
+        if (owner && name[0]) {
+            shm_unlink(name);
+        }
+    }
+};
+using rpc_shm_segment_ptr = std::shared_ptr<rpc_shm_segment>;
+
+// Total segment size = header + 2 * ring (c2s, s2c). 16 MiB rings by
+// default — large enough to absorb a full GRAPH_COMPUTE serialization
+// for typical models without blocking, small enough that the OS won't
+// flinch at allocating two of them.
+static constexpr size_t RPC_SHM_DEFAULT_RING = 16ull * 1024ull * 1024ull;
+static constexpr size_t RPC_SHM_HEADER_SIZE  = sizeof(rpc_shm_header);
+
+static size_t rpc_shm_total_size(size_t ring) {
+    return RPC_SHM_HEADER_SIZE + 2 * ring;
+}
+
+// Server-side: create + initialise. Returns null on failure (caller
+// falls back to TCP).
+static rpc_shm_segment_ptr rpc_shm_create(uint32_t client_pid, size_t ring) {
+    auto seg = std::make_shared<rpc_shm_segment>();
+    snprintf(seg->name, sizeof(seg->name),
+             "/ggml-rpc-shm-%d-%u", (int) getpid(), (unsigned) client_pid);
+
+    // Best-effort cleanup of a stale segment from a prior crashed run.
+    shm_unlink(seg->name);
+
+    seg->fd = shm_open(seg->name, O_CREAT | O_EXCL | O_RDWR, 0600);
+    if (seg->fd < 0) {
+        GGML_LOG_WARN("rpc-shm: shm_open(create) %s failed: %s\n",
+                      seg->name, strerror(errno));
+        return nullptr;
+    }
+    seg->total_size = rpc_shm_total_size(ring);
+    if (ftruncate(seg->fd, seg->total_size) != 0) {
+        GGML_LOG_WARN("rpc-shm: ftruncate failed: %s\n", strerror(errno));
+        return nullptr;
+    }
+    seg->addr = mmap(nullptr, seg->total_size, PROT_READ | PROT_WRITE,
+                     MAP_SHARED, seg->fd, 0);
+    if (seg->addr == MAP_FAILED) {
+        GGML_LOG_WARN("rpc-shm: mmap failed: %s\n", strerror(errno));
+        return nullptr;
+    }
+    seg->owner = true;
+
+    auto * hdr = reinterpret_cast<rpc_shm_header *>(seg->addr);
+    hdr->magic     = GGML_RPC_SHM_MAGIC;
+    hdr->version   = 1;
+    hdr->ring_size = ring;
+    for (auto & r : hdr->reserved) r = 0;
+    return seg;
+}
+
+// Client-side: open existing segment by name.
+static rpc_shm_segment_ptr rpc_shm_open(const char * name, size_t ring) {
+    auto seg = std::make_shared<rpc_shm_segment>();
+    snprintf(seg->name, sizeof(seg->name), "%s", name);
+    seg->fd = shm_open(seg->name, O_RDWR, 0600);
+    if (seg->fd < 0) {
+        GGML_LOG_WARN("rpc-shm: shm_open(client) %s failed: %s\n",
+                      seg->name, strerror(errno));
+        return nullptr;
+    }
+    seg->total_size = rpc_shm_total_size(ring);
+    seg->addr = mmap(nullptr, seg->total_size, PROT_READ | PROT_WRITE,
+                     MAP_SHARED, seg->fd, 0);
+    if (seg->addr == MAP_FAILED) {
+        GGML_LOG_WARN("rpc-shm: mmap(client) failed: %s\n", strerror(errno));
+        return nullptr;
+    }
+    seg->owner = false;
+
+    auto * hdr = reinterpret_cast<const rpc_shm_header *>(seg->addr);
+    if (hdr->magic != GGML_RPC_SHM_MAGIC) {
+        GGML_LOG_WARN("rpc-shm: bad magic 0x%016lx in %s\n",
+                      (unsigned long) hdr->magic, seg->name);
+        return nullptr;
+    }
+    if (hdr->ring_size != ring) {
+        GGML_LOG_WARN("rpc-shm: ring size mismatch %lu vs %lu in %s\n",
+                      (unsigned long) hdr->ring_size, (unsigned long) ring, seg->name);
+        return nullptr;
+    }
+    return seg;
+}
+
 // Try RPC_CMD_SET_TENSOR_HASH first when data size is larger than this threshold
 const size_t HASH_THRESHOLD = 10 * 1024 * 1024;
+
 
 struct rpc_msg_hello_req {
     uint8_t conn_caps[RPC_CONN_CAPS_SIZE];
@@ -90,6 +233,62 @@ struct rpc_msg_hello_rsp {
     uint8_t padding;
     uint8_t conn_caps[RPC_CONN_CAPS_SIZE];
 };
+
+// Post-HELLO capabilities negotiation (protocol minor >= 1). AND of
+// client and server feature bitmaps becomes the negotiated set. Bit 0
+// reserved for trace-context propagation; no feature actually uses any
+// bit yet — this commit lands the plumbing only.
+#define GGML_RPC_FEATURE_TRACE_CTX_V1 (1ull << 0)
+// Same-host shared-memory transport. Advertised by both peers only when
+// they are on the same machine (see socket_t::is_same_host). No wire
+// implication on its own — gating bit for the SHM data path landed in
+// follow-up commits.
+#define GGML_RPC_FEATURE_SHM_V1       (1ull << 1)
+
+struct rpc_msg_caps_req {
+    uint64_t client_features;
+};
+
+struct rpc_msg_caps_rsp {
+    uint64_t server_features;
+    uint64_t negotiated;
+};
+
+// SHM transport setup (phase 3b). Client sends client_pid + ring_size
+// hint; server allocates a POSIX SHM segment whose name is derived from
+// (server_pid, client_pid), writes a magic header, and returns the name
+// + actual ring size. status != 0 means the setup failed and the client
+// should keep using TCP for this connection (the SHM bit was a hint,
+// not a contract).
+struct rpc_msg_shm_setup_req {
+    uint32_t client_pid;
+    uint32_t reserved;
+    uint64_t ring_size_hint;   // requested per-direction ring size, in bytes
+};
+
+struct rpc_msg_shm_setup_rsp {
+    uint8_t  status;           // 0 = ok, 1 = server-side failure
+    uint8_t  padding[7];
+    uint64_t ring_size;        // actual per-direction ring size
+    uint64_t magic;            // = GGML_RPC_SHM_MAGIC, sanity check
+    char     name[96];         // POSIX SHM name (leading slash)
+};
+
+
+// Local feature bitmap advertised in the CAPS exchange. Bit 0 is
+// TRACE_CTX_V1 (W3C trace_id + parent_span_id prepended to every
+// command frame); the bit is only honored if the peer also advertises it.
+// Per-connection local feature bitmap. Bits that depend on transport
+// properties (same-host vs cross-host, e.g. SHM) are added conditionally
+// here so we never advertise a feature we can't actually deliver on this
+// link.
+static uint64_t compute_local_features(const socket_ptr & sock) {
+    uint64_t feats = GGML_RPC_FEATURE_TRACE_CTX_V1;
+    if (sock && sock->is_same_host()) {
+        feats |= GGML_RPC_FEATURE_SHM_V1;
+    }
+    return feats;
+}
 
 struct rpc_msg_device_count_rsp {
     uint32_t device_count;
@@ -213,6 +412,13 @@ struct ggml_backend_rpc_buffer_type_context {
     std::string name;
     size_t      alignment;
     size_t      max_size;
+    // Cache of GET_ALLOC_SIZE responses keyed by FNV-1a of the serialized
+    // request bytes. The serialized request is deterministic for a given
+    // tensor topology, so cache hits are correct. Protected by alloc_mu
+    // because get_alloc_size can be called from multiple framework threads
+    // during buffer initialization on some backends.
+    mutable std::mutex                       alloc_mu;
+    mutable std::unordered_map<uint64_t, uint64_t> alloc_size_cache;
 };
 
 struct ggml_backend_rpc_context {
@@ -287,38 +493,109 @@ static bool parse_endpoint(const std::string & endpoint, std::string & host, int
     return true;
 }
 
+// rpc_cmd enum -> name string, for span attributes. Keep in sync with the
+// enum rpc_cmd in this file's header section above.
+static const char * rpc_cmd_name(enum rpc_cmd cmd) {
+    switch (cmd) {
+        case RPC_CMD_ALLOC_BUFFER:      return "ALLOC_BUFFER";
+        case RPC_CMD_GET_ALIGNMENT:     return "GET_ALIGNMENT";
+        case RPC_CMD_GET_MAX_SIZE:      return "GET_MAX_SIZE";
+        case RPC_CMD_BUFFER_GET_BASE:   return "BUFFER_GET_BASE";
+        case RPC_CMD_FREE_BUFFER:       return "FREE_BUFFER";
+        case RPC_CMD_BUFFER_CLEAR:      return "BUFFER_CLEAR";
+        case RPC_CMD_SET_TENSOR:        return "SET_TENSOR";
+        case RPC_CMD_SET_TENSOR_HASH:   return "SET_TENSOR_HASH";
+        case RPC_CMD_GET_TENSOR:        return "GET_TENSOR";
+        case RPC_CMD_COPY_TENSOR:       return "COPY_TENSOR";
+        case RPC_CMD_GRAPH_COMPUTE:     return "GRAPH_COMPUTE";
+        case RPC_CMD_GET_DEVICE_MEMORY: return "GET_DEVICE_MEMORY";
+        case RPC_CMD_INIT_TENSOR:       return "INIT_TENSOR";
+        case RPC_CMD_GET_ALLOC_SIZE:    return "GET_ALLOC_SIZE";
+        case RPC_CMD_HELLO:             return "HELLO";
+        case RPC_CMD_DEVICE_COUNT:      return "DEVICE_COUNT";
+        case RPC_CMD_GRAPH_RECOMPUTE:   return "GRAPH_RECOMPUTE";
+        case RPC_CMD_CAPS:              return "CAPS";
+        case RPC_CMD_SHM_SETUP:         return "SHM_SETUP";
+        default:                        return "UNKNOWN";
+    }
+}
+
+// Private helper: send an RPC request without tracing. Used by both public
+// overloads of send_rpc_cmd so each "real" RPC emits exactly one span at the
+// outer call site (no double-emission when request/response form invokes
+// fire-and-forget internally).
+//
 // RPC request : | rpc_cmd (1 byte) | request_size (8 bytes) | request_data (request_size bytes) |
-// No response
-static bool send_rpc_cmd(socket_ptr sock, enum rpc_cmd cmd, const void * input, size_t input_size) {
+static bool send_rpc_request(socket_ptr sock, enum rpc_cmd cmd,
+                             const void * input, size_t input_size,
+                             rpc_trace_span_t parent_span) {
     uint8_t cmd_byte = cmd;
     if (!sock->send_data(&cmd_byte, sizeof(cmd_byte))) {
         return false;
     }
+    // Trace-context propagation. When the peer negotiated TRACE_CTX_V1 we
+    // prepend 24 bytes (W3C trace_id[16] + parent_span_id[8]) right after
+    // the cmd byte. If no parent_span is in flight the buffer is zeros and
+    // the server treats the lack of context as "start a root span".
+    if (sock->get_negotiated_features() & GGML_RPC_FEATURE_TRACE_CTX_V1) {
+        uint8_t trace_ctx[24] = {0};
+        if (parent_span) {
+            rpc_trace_span_get_ids(parent_span, trace_ctx, trace_ctx + 16);
+        }
+        if (!sock->send_data(trace_ctx, sizeof(trace_ctx))) {
+            return false;
+        }
+    }
     if (!sock->send_data(&input_size, sizeof(input_size))) {
         return false;
     }
-    if (!sock->send_data(input, input_size)) {
+    return sock->send_data(input, input_size);
+}
+
+// Public overload 1: fire-and-forget. No response expected.
+static bool send_rpc_cmd(socket_ptr sock, enum rpc_cmd cmd, const void * input, size_t input_size) {
+    rpc_trace_span_t span = RPC_TRACE_BEGIN("ggml.rpc.client.send");
+    RPC_TRACE_INT(span, "rpc.cmd", (int64_t) cmd);
+    RPC_TRACE_STR(span, "rpc.cmd_name", rpc_cmd_name(cmd));
+    RPC_TRACE_BYTES(span, "rpc.input_bytes", input_size);
+    RPC_TRACE_STR(span, "rpc.has_response", "false");
+
+    if (!send_rpc_request(sock, cmd, input, input_size, span)) {
+        RPC_TRACE_FAIL(span, "send_data failed");
         return false;
     }
+    RPC_TRACE_END(span);
     return true;
 }
 
-// RPC request : | rpc_cmd (1 byte) | request_size (8 bytes) | request_data (request_size bytes) |
+// Public overload 2: request/response.
 // RPC response: | response_size (8 bytes) | response_data (response_size bytes) |
 static bool send_rpc_cmd(socket_ptr sock, enum rpc_cmd cmd, const void * input, size_t input_size, void * output, size_t output_size) {
-    if (!send_rpc_cmd(sock, cmd, input, input_size)) {
+    rpc_trace_span_t span = RPC_TRACE_BEGIN("ggml.rpc.client.send_recv");
+    RPC_TRACE_INT(span, "rpc.cmd", (int64_t) cmd);
+    RPC_TRACE_STR(span, "rpc.cmd_name", rpc_cmd_name(cmd));
+    RPC_TRACE_BYTES(span, "rpc.input_bytes", input_size);
+    RPC_TRACE_BYTES(span, "rpc.expected_output_bytes", output_size);
+    RPC_TRACE_STR(span, "rpc.has_response", "true");
+
+    if (!send_rpc_request(sock, cmd, input, input_size, span)) {
+        RPC_TRACE_FAIL(span, "send phase failed");
         return false;
     }
     uint64_t out_size;
     if (!sock->recv_data(&out_size, sizeof(out_size))) {
+        RPC_TRACE_FAIL(span, "recv size failed");
         return false;
     }
     if (out_size != output_size) {
+        RPC_TRACE_FAIL(span, "response size mismatch");
         return false;
     }
     if (!sock->recv_data(output, output_size)) {
+        RPC_TRACE_FAIL(span, "recv body failed");
         return false;
     }
+    RPC_TRACE_END(span);
     return true;
 }
 
@@ -343,6 +620,42 @@ static bool negotiate_hello(const std::shared_ptr<socket_t> & sock) {
     }
 
     sock->update_caps(response.conn_caps);
+
+    // Post-HELLO capabilities exchange. Only attempt if the server speaks
+    // at least minor v1; older servers never see this command.
+    if (response.minor >= 1) {
+        rpc_msg_caps_req caps_req = { compute_local_features(sock) };
+        rpc_msg_caps_rsp caps_rsp = {};
+        if (!send_rpc_cmd(sock, RPC_CMD_CAPS, &caps_req, sizeof(caps_req),
+                          &caps_rsp, sizeof(caps_rsp))) {
+            GGML_LOG_WARN("ggml-rpc: CAPS exchange failed; assuming no extensions\n");
+        } else {
+            sock->set_negotiated_features(caps_rsp.negotiated);
+            // If SHM was negotiated, set up the segment. On failure we
+            // clear the bit so the rest of the stack treats this link
+            // as TCP-only — fully transparent fallback.
+            if (caps_rsp.negotiated & GGML_RPC_FEATURE_SHM_V1) {
+                rpc_msg_shm_setup_req sreq = {};
+                sreq.client_pid     = (uint32_t) getpid();
+                sreq.ring_size_hint = RPC_SHM_DEFAULT_RING;
+                rpc_msg_shm_setup_rsp srsp = {};
+                bool shm_ok = send_rpc_cmd(sock, RPC_CMD_SHM_SETUP,
+                                           &sreq, sizeof(sreq),
+                                           &srsp, sizeof(srsp));
+                if (!shm_ok || srsp.status != 0 || srsp.magic != GGML_RPC_SHM_MAGIC) {
+                    GGML_LOG_WARN("ggml-rpc: SHM setup failed; falling back to TCP\n");
+                    sock->set_negotiated_features(caps_rsp.negotiated & ~GGML_RPC_FEATURE_SHM_V1);
+                } else {
+                    auto seg = rpc_shm_open(srsp.name, srsp.ring_size);
+                    if (!seg) {
+                        sock->set_negotiated_features(caps_rsp.negotiated & ~GGML_RPC_FEATURE_SHM_V1);
+                    } else {
+                        sock->set_shm_segment(seg);
+                    }
+                }
+            }
+        }
+    }
     return true;
 }
 
@@ -617,11 +930,28 @@ static size_t ggml_backend_rpc_buffer_type_get_alloc_size(ggml_backend_buffer_ty
             request.srcs[i] = serialize_tensor(tensor->src[i]);
         }
 
-        // TODO: cache the alloc responses to avoid extra RPC calls?
+        // Cache responses keyed on FNV-1a of the serialized request. This is
+        // the request the framework would send anyway, so the hash is the same
+        // every call with the same tensor topology. Reduces RPC count on model
+        // load substantially for graphs with many quantized / MUL_MAT_ID /
+        // FLASH_ATTN_EXT tensors (which are the ops that go down this path).
+        const uint64_t cache_key = fnv_hash(reinterpret_cast<const uint8_t *>(&request), sizeof(request));
+        {
+            std::lock_guard<std::mutex> lock(buft_ctx->alloc_mu);
+            auto it = buft_ctx->alloc_size_cache.find(cache_key);
+            if (it != buft_ctx->alloc_size_cache.end()) {
+                return it->second;
+            }
+        }
+
         rpc_msg_get_alloc_size_rsp response;
         bool status = send_rpc_cmd(sock, RPC_CMD_GET_ALLOC_SIZE, &request, sizeof(request), &response, sizeof(response));
         RPC_STATUS_ASSERT(status);
 
+        {
+            std::lock_guard<std::mutex> lock(buft_ctx->alloc_mu);
+            buft_ctx->alloc_size_cache.emplace(cache_key, response.alloc_size);
+        }
         return response.alloc_size;
     }
 
@@ -652,6 +982,48 @@ static void ggml_backend_rpc_free(ggml_backend_t backend) {
 static void ggml_backend_rpc_synchronize(ggml_backend_t backend) {
     GGML_UNUSED(backend);
     // this is no-op because we don't have any async operations
+}
+
+// Async tensor upload hook. The wire behavior is identical to the
+// buffer-level ggml_backend_rpc_buffer_set_tensor (fire-and-forget RPC
+// over the same socket — the kernel will buffer multiple in-flight
+// SET_TENSOR frames). Plugging this into the backend interface lets the
+// ggml scheduler treat this backend as async-capable and pipeline
+// tensor sends behind other work, which it can't do when the field is
+// NULL. Subsequent ggml_backend_synchronize calls fall through to the
+// existing rpc_synchronize no-op since the socket itself provides FIFO
+// ordering across all sends to a given backend.
+static void ggml_backend_rpc_set_tensor_async(ggml_backend_t backend, ggml_tensor * tensor,
+                                              const void * data, size_t offset, size_t size) {
+    ggml_backend_rpc_context * rpc_ctx = (ggml_backend_rpc_context *)backend->context;
+    auto sock = get_socket(rpc_ctx->endpoint);
+
+    rpc_tensor t = serialize_tensor(tensor);
+    if (size > HASH_THRESHOLD) {
+        // For large transfers, prefer the hash-dedup path so the server
+        // can skip the bytes-on-the-wire when it already has the data.
+        // Falls back to the literal SET_TENSOR send if the hash misses.
+        rpc_msg_set_tensor_hash_req hreq{};
+        hreq.tensor = t;
+        hreq.offset = offset;
+        hreq.hash   = fnv_hash((const uint8_t *) data, size);
+        rpc_msg_set_tensor_hash_rsp hrsp{};
+        bool ok = send_rpc_cmd(sock, RPC_CMD_SET_TENSOR_HASH, &hreq, sizeof(hreq), &hrsp, sizeof(hrsp));
+        RPC_STATUS_ASSERT(ok);
+        if (hrsp.result) {
+            return; // server already has these bytes
+        }
+    }
+
+    // Header + payload concatenated into a single send so the server sees
+    // them as one frame.
+    std::vector<uint8_t> input(sizeof(rpc_tensor) + sizeof(offset) + size);
+    memcpy(input.data(),                                           &t,      sizeof(t));
+    memcpy(input.data() + sizeof(t),                               &offset, sizeof(offset));
+    memcpy(input.data() + sizeof(t) + sizeof(offset),              data,    size);
+
+    bool ok = send_rpc_cmd(sock, RPC_CMD_SET_TENSOR, input.data(), input.size());
+    RPC_STATUS_ASSERT(ok);
 }
 
 static void add_tensor(ggml_tensor * tensor, std::vector<rpc_tensor> & tensors, std::unordered_set<ggml_tensor*> & visited) {
@@ -723,7 +1095,7 @@ static enum ggml_status ggml_backend_rpc_graph_compute(ggml_backend_t backend, g
 static ggml_backend_i ggml_backend_rpc_interface = {
     /* .get_name                = */ ggml_backend_rpc_name,
     /* .free                    = */ ggml_backend_rpc_free,
-    /* .set_tensor_async        = */ NULL,
+    /* .set_tensor_async        = */ ggml_backend_rpc_set_tensor_async,
     /* .get_tensor_async        = */ NULL,
     /* .set_tensor_2d_async     = */ NULL,
     /* .get_tensor_2d_async     = */ NULL,
@@ -1428,7 +1800,15 @@ rpc_server::~rpc_server() {
 static void rpc_serve_client(const std::vector<ggml_backend_t> & backends, const char * cache_dir,
                              socket_ptr sock) {
     rpc_server server(backends, cache_dir);
+    const int deadman_s = rpc_deadman_seconds();
     uint8_t cmd;
+    // Pre-HELLO timeout: without it a client that connects but never
+    // sends HELLO parks an accept slot forever. Use the same deadman
+    // knob as the post-HELLO loop.
+    if (deadman_s > 0 && !sock->wait_readable(deadman_s)) {
+        GGML_LOG_WARN("rpc deadman: pre-HELLO idle %ds, closing connection\n", deadman_s);
+        return;
+    }
     if (!sock->recv_data(&cmd, 1)) {
         return;
     }
@@ -1443,8 +1823,8 @@ static void rpc_serve_client(const std::vector<ggml_backend_t> & backends, const
         return;
     }
 
-    if (hello_input_size != sizeof(rpc_msg_hello_req)) {
-        GGML_LOG_ERROR("HELLO request size mismatch (%zu vs %zu) — client needs upgrade to protocol v%d.x\n",
+    if (hello_input_size < sizeof(rpc_msg_hello_req)) {
+        GGML_LOG_ERROR("HELLO request too small (%zu vs %zu) — client needs upgrade to protocol v%d.x\n",
                        (size_t)hello_input_size, sizeof(rpc_msg_hello_req), RPC_PROTO_MAJOR_VERSION);
         return;
     }
@@ -1452,6 +1832,15 @@ static void rpc_serve_client(const std::vector<ggml_backend_t> & backends, const
     rpc_msg_hello_req req = {};
     if (!sock->recv_data(&req, sizeof(req))) {
         return;
+    }
+    // Forward compatibility: a newer client may send a larger HELLO with
+    // additional trailing fields we don't yet understand. Consume and
+    // discard the extra bytes so they don't corrupt the next command read.
+    if (hello_input_size > sizeof(rpc_msg_hello_req)) {
+        std::vector<uint8_t> discard(hello_input_size - sizeof(rpc_msg_hello_req));
+        if (!sock->recv_data(discard.data(), discard.size())) {
+            return;
+        }
     }
 
     rpc_msg_hello_rsp rsp = {};
@@ -1465,6 +1854,10 @@ static void rpc_serve_client(const std::vector<ggml_backend_t> & backends, const
     // Activate transport upgrade using client's caps
     sock->update_caps(req.conn_caps);
     while (true) {
+        if (deadman_s > 0 && !sock->wait_readable(deadman_s)) {
+            GGML_LOG_WARN("rpc deadman: no command for %ds, closing connection\n", deadman_s);
+            break;
+        }
         if (!sock->recv_data(&cmd, 1)) {
             break;
         }
@@ -1473,6 +1866,22 @@ static void rpc_serve_client(const std::vector<ggml_backend_t> & backends, const
             GGML_LOG_ERROR("Unknown command: %d\n", cmd);
             break;
         }
+        // Trace-context propagation (TRACE_CTX_V1): pull the 24 bytes the
+        // client prepended after the cmd byte, then build a span whose
+        // parent is the client's in-flight send span. Old peers (minor v0)
+        // never negotiate the feature so we don't even peek the socket.
+        uint8_t trace_ctx[24] = {0};
+        if (sock->get_negotiated_features() & GGML_RPC_FEATURE_TRACE_CTX_V1) {
+            if (!sock->recv_data(trace_ctx, sizeof(trace_ctx))) {
+                break;
+            }
+        }
+        // RAII span guard — auto-ends on any scope exit including the early
+        // `return`s that the case bodies use on send/recv errors. set_int
+        // takes long long, the cmd is uint8_t so no narrowing concern.
+        rpc_trace_scope srv_span("ggml.rpc.server.dispatch", trace_ctx, trace_ctx + 16);
+        srv_span.set_int("rpc.cmd", (long long) cmd);
+        srv_span.set_str("rpc.cmd_name", rpc_cmd_name((enum rpc_cmd) cmd));
         switch (cmd) {
             case RPC_CMD_HELLO: {
                 // HELLO command is handled above
@@ -1666,6 +2075,49 @@ static void rpc_serve_client(const std::vector<ggml_backend_t> & backends, const
                     return;
                 }
                 if (!server.graph_recompute(request)) {
+                    return;
+                }
+                break;
+            }
+            case RPC_CMD_CAPS: {
+                rpc_msg_caps_req request;
+                if (!recv_msg(sock, &request, sizeof(request))) {
+                    return;
+                }
+                rpc_msg_caps_rsp response;
+                {
+                    uint64_t local = compute_local_features(sock);
+                    response.server_features = local;
+                    response.negotiated      = request.client_features & local;
+                }
+                sock->set_negotiated_features(response.negotiated);
+                if (!send_msg(sock, &response, sizeof(response))) {
+                    return;
+                }
+                break;
+            }
+            case RPC_CMD_SHM_SETUP: {
+                rpc_msg_shm_setup_req shm_req;
+                if (!recv_msg(sock, &shm_req, sizeof(shm_req))) {
+                    return;
+                }
+                rpc_msg_shm_setup_rsp shm_rsp{};
+                shm_rsp.status = 1;
+                shm_rsp.magic  = GGML_RPC_SHM_MAGIC;
+                if (sock->get_negotiated_features() & GGML_RPC_FEATURE_SHM_V1) {
+                    size_t ring = shm_req.ring_size_hint;
+                    if (ring == 0 || ring > 256ull * 1024 * 1024) {
+                        ring = RPC_SHM_DEFAULT_RING;
+                    }
+                    auto seg = rpc_shm_create(shm_req.client_pid, ring);
+                    if (seg) {
+                        shm_rsp.status    = 0;
+                        shm_rsp.ring_size = ring;
+                        snprintf(shm_rsp.name, sizeof(shm_rsp.name), "%s", seg->name);
+                        sock->set_shm_segment(seg);
+                    }
+                }
+                if (!send_msg(sock, &shm_rsp, sizeof(shm_rsp))) {
                     return;
                 }
                 break;

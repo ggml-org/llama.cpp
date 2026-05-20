@@ -135,6 +135,8 @@ struct socket_t::impl {
 #endif // GGML_RPC_RDMA
     bool     use_rdma;
     sockfd_t fd;
+    uint64_t negotiated_features = 0;
+    std::shared_ptr<void> shm_seg;
 };
 
 socket_t::impl::~impl() {
@@ -564,12 +566,110 @@ void socket_t::update_caps(const uint8_t * remote_caps) {
     return pimpl->update_caps(remote_caps);
 }
 
+void socket_t::set_negotiated_features(uint64_t features) {
+    pimpl->negotiated_features = features;
+}
+
+uint64_t socket_t::get_negotiated_features() const {
+    return pimpl->negotiated_features;
+}
+
+void socket_t::set_shm_segment(std::shared_ptr<void> seg) {
+    pimpl->shm_seg = std::move(seg);
+}
+
+void * socket_t::get_shm_segment_raw() const {
+    return pimpl->shm_seg.get();
+}
+
+bool socket_t::is_same_host() const {
+    // Loopback is the cheap-and-correct signal for "same host". On Linux
+    // a connection from a process on the same machine arrives over the
+    // lo interface unless the user explicitly bound to an external IP,
+    // in which case it's still routed locally but we can't tell the two
+    // halves of "same physical host" apart from a separate machine on the
+    // same subnet — be conservative and only return true for the
+    // unambiguous loopback case.
+    sockaddr_storage addr{};
+    socklen_t addr_len = sizeof(addr);
+    if (getpeername(pimpl->fd, reinterpret_cast<sockaddr *>(&addr), &addr_len) != 0) {
+        return false;
+    }
+    if (addr.ss_family == AF_INET) {
+        const auto * a = reinterpret_cast<const sockaddr_in *>(&addr);
+        // 127.0.0.0/8 (network byte order: high byte == 127)
+        return (ntohl(a->sin_addr.s_addr) >> 24) == 127;
+    }
+    if (addr.ss_family == AF_INET6) {
+        const auto * a = reinterpret_cast<const sockaddr_in6 *>(&addr);
+        // ::1
+        const uint8_t * b = a->sin6_addr.s6_addr;
+        for (int i = 0; i < 15; ++i) {
+            if (b[i] != 0) return false;
+        }
+        return b[15] == 1;
+    }
+    return false;
+}
+
 static bool is_valid_fd(sockfd_t sockfd) {
 #ifdef _WIN32
     return sockfd != INVALID_SOCKET;
 #else
     return sockfd >= 0;
 #endif
+}
+
+static bool set_socket_perf_options(sockfd_t sockfd) {
+    // Per-socket send/recv buffer requests. The kernel clamps to
+    // net.core.{rmem,wmem}_max; on Linux the ceiling is typically set high by
+    // the v12 §12.5 sysctl block. Failing to grow the buffer is not fatal —
+    // we still want TCP_NODELAY etc. applied — so log and continue.
+    int buf_size = 16 * 1024 * 1024;  // 16 MB request
+    if (setsockopt(sockfd, SOL_SOCKET, SO_RCVBUF, (char *)&buf_size, sizeof(buf_size)) != 0) {
+        GGML_LOG_DEBUG("ggml-rpc: SO_RCVBUF request failed (continuing)\n");
+    }
+    if (setsockopt(sockfd, SOL_SOCKET, SO_SNDBUF, (char *)&buf_size, sizeof(buf_size)) != 0) {
+        GGML_LOG_DEBUG("ggml-rpc: SO_SNDBUF request failed (continuing)\n");
+    }
+
+    // Detect dead peers. Default kernel probe intervals are fine; for faster
+    // detection a future commit will add an application-level heartbeat (see
+    // proposal §12.11.11).
+    int ka = 1;
+    if (setsockopt(sockfd, SOL_SOCKET, SO_KEEPALIVE, (char *)&ka, sizeof(ka)) != 0) {
+        GGML_LOG_DEBUG("ggml-rpc: SO_KEEPALIVE failed (continuing)\n");
+    }
+
+#if defined(__linux__) && defined(TCP_KEEPIDLE) && defined(TCP_KEEPINTVL) && defined(TCP_KEEPCNT)
+    // Tighten the default Linux keepalive timing so a silently-dead peer
+    // is detected within ~90 seconds (60 idle + 3 × 10s probes) instead of
+    // the default ~2 hours. Configurable via GGML_RPC_KEEPALIVE_S to
+    // override the idle window.
+    int idle_s = 60;
+    if (const char * v = std::getenv("GGML_RPC_KEEPALIVE_S")) {
+        int parsed = std::atoi(v); if (parsed >= 10) idle_s = parsed;
+    }
+    int intvl_s = 10;
+    int cnt     = 3;
+    setsockopt(sockfd, IPPROTO_TCP, TCP_KEEPIDLE,  (char *)&idle_s,  sizeof(idle_s));
+    setsockopt(sockfd, IPPROTO_TCP, TCP_KEEPINTVL, (char *)&intvl_s, sizeof(intvl_s));
+    setsockopt(sockfd, IPPROTO_TCP, TCP_KEEPCNT,   (char *)&cnt,     sizeof(cnt));
+#endif
+
+#if defined(__linux__) && defined(TCP_QUICKACK)
+    // Disable the default delayed-ACK timer (~40 ms). RPC traffic is
+    // request/response heavy; immediate ACKs avoid stalling the sender on
+    // ACK clocking. Linux flips QUICKACK off automatically per-packet; one
+    // setsockopt at connect time covers the warm-up phase, which is the
+    // common case for short-lived RPCs.
+    int qa = 1;
+    if (setsockopt(sockfd, IPPROTO_TCP, TCP_QUICKACK, (char *)&qa, sizeof(qa)) != 0) {
+        GGML_LOG_DEBUG("ggml-rpc: TCP_QUICKACK failed (continuing)\n");
+    }
+#endif
+
+    return true;
 }
 
 static bool set_no_delay(sockfd_t sockfd) {
@@ -585,6 +685,29 @@ static bool set_reuse_addr(sockfd_t sockfd) {
     return ret == 0;
 }
 
+bool socket_t::wait_readable(int timeout_seconds) {
+    sockfd_t fd = pimpl->fd;
+    if (!is_valid_fd(fd)) {
+        return false;
+    }
+#ifdef _WIN32
+    WSAPOLLFD pfd = {};
+    pfd.fd = fd;
+    pfd.events = POLLRDNORM;
+    int ret = WSAPoll(&pfd, 1, timeout_seconds * 1000);
+    return ret > 0 && (pfd.revents & (POLLRDNORM | POLLERR | POLLHUP)) != 0;
+#else
+    fd_set rfds;
+    FD_ZERO(&rfds);
+    FD_SET(fd, &rfds);
+    struct timeval tv;
+    tv.tv_sec = timeout_seconds;
+    tv.tv_usec = 0;
+    int ret = ::select((int)fd + 1, &rfds, nullptr, nullptr, &tv);
+    return ret > 0;
+#endif
+}
+
 socket_ptr socket_t::accept() {
     auto client_socket_fd = ::accept(pimpl->fd, NULL, NULL);
     if (!is_valid_fd(client_socket_fd)) {
@@ -594,6 +717,7 @@ socket_ptr socket_t::accept() {
         GGML_LOG_ERROR("Failed to set TCP_NODELAY\n");
         return nullptr;
     }
+    set_socket_perf_options(client_socket_fd);
     return socket_ptr(new socket_t(std::make_unique<impl>(client_socket_fd)));
 }
 
@@ -633,6 +757,7 @@ socket_ptr socket_t::connect(const char * host, int port) {
         GGML_LOG_ERROR("Failed to set TCP_NODELAY\n");
         return nullptr;
     }
+    set_socket_perf_options(sockfd);
     struct sockaddr_in addr;
     addr.sin_family = AF_INET;
     addr.sin_port = htons(port);

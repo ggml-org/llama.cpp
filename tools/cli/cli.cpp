@@ -1,4 +1,5 @@
 #include "chat.h"
+#include "rpc-trace.h"
 #include "common.h"
 #include "arg.h"
 #include "console.h"
@@ -343,6 +344,8 @@ static std::vector<std::pair<std::string, size_t>> auto_completion_callback(std:
 static constexpr size_t FILE_GLOB_MAX_RESULTS = 100;
 
 int main(int argc, char ** argv) {
+    RPC_TRACE_INIT();
+
     common_params params;
 
     params.verbosity = LOG_LEVEL_ERROR; // by default, less verbose logs
@@ -648,5 +651,6 @@ int main(int argc, char ** argv) {
     common_log_set_verbosity_thold(LOG_LEVEL_INFO);
     common_memory_breakdown_print(ctx_cli.ctx_server.get_llama_context());
 
+    RPC_TRACE_SHUTDOWN();
     return 0;
 }
