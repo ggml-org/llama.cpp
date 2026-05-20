@@ -3953,6 +3953,19 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_TTS}));
 
+    // default embedding preset
+    add_opt(common_arg(
+        {"--embd-bert-default"},
+        string_format("use default BERT embedding model (note: can download weights from the internet)"),
+        [](common_params & params) {
+            params.model.hf_repo = "ggml-org/bert-base-uncased";
+            params.model.hf_file = "bert-base-uncased-Q8_0.gguf";
+            params.embeddings = true;
+            params.pooling_type = LLAMA_POOLING_TYPE_MEAN;
+            params.n_ctx = 512;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}));
+
     add_opt(common_arg(
         {"--embd-gemma-default"},
         string_format("use default EmbeddingGemma model (note: can download weights from the internet)"),
