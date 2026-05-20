@@ -407,7 +407,7 @@ std::pair<ModelParams, ComputeParams> GgmlOvDecoder::compute_llm_params(ggml_cgr
             model_params.head_size = cache_k_permute->ne[0];
             model_params.n_heads_kv = cache_k_permute->ne[2];
             compute_params.input_len = node->src[0]->ne[1];
-            compute_params.token_len_per_seq = node->ne[2];
+            compute_params.token_len_per_seq = node->src[0]->ne[1];
 
             auto * cache_k_view = cache_k_permute->src[0];
             if (cache_k_view->op != GGML_OP_VIEW) {
