@@ -1855,8 +1855,8 @@ void ggml_gemv_q1_0_4x4_q8_0(int                        n,
     assert(n % qk == 0);
     assert(nc % ncols_interleaved == 0);
 
-    UNUSED(bs);
-    UNUSED(nr);
+    UNUSED(nb);
+    UNUSED(ncols_interleaved);
 
 #if defined(__aarch64__) && defined(__ARM_NEON) && defined(__ARM_FEATURE_DOTPROD)
     for (int c = 0; c < nc; c += ncols_interleaved) {
@@ -1916,8 +1916,8 @@ void ggml_gemv_q1_0_4x8_q8_0(int                        n,
     assert(n % qk == 0);
     assert(nc % ncols_interleaved == 0);
 
-    UNUSED(bs);
-    UNUSED(nr);
+    UNUSED(nb);
+    UNUSED(ncols_interleaved);
 
 #if defined(__aarch64__) && defined(__ARM_NEON) && defined(__ARM_FEATURE_DOTPROD)
     for (int c = 0; c < nc; c += ncols_interleaved) {
@@ -5314,6 +5314,9 @@ void ggml_gemm_q1_0_4x4_q8_0(int                        n,
     assert(nr % 4 == 0);
     assert(nc % ncols_interleaved == 0);
 
+    UNUSED(nb);
+    UNUSED(ncols_interleaved);
+
 #if defined(__aarch64__) && defined(__ARM_NEON) && defined(__ARM_FEATURE_DOTPROD)
     for (int y = 0; y < nr / 4; y++) {
         const block_q8_0x4 * a_ptr = (const block_q8_0x4 *) vy + (4 * y * nb);
@@ -5388,6 +5391,9 @@ void ggml_gemm_q1_0_4x8_q8_0(int                        n,
     assert(n % qk == 0);
     assert(nr % 4 == 0);
     assert(nc % ncols_interleaved == 0);
+
+    UNUSED(nb);
+    UNUSED(ncols_interleaved);
 
 #if defined(__aarch64__) && defined(__ARM_NEON) && defined(__ARM_FEATURE_MATMUL_INT8)
     for (int y = 0; y < nr / 4; y++) {
