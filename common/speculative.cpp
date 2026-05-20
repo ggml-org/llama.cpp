@@ -872,6 +872,9 @@ struct common_speculative_impl_ngram_mod : public common_speculative_impl {
 
         // consecutive accept rounds with low acceptance fraction (< 0.5)
         int n_low = 0;
+
+        //EMA of acceptance fraction(0.-1.); smooths out temporary dips
+        float ema_acc = 1.0f;
     };
 
     std::vector<seq_info> sinfos;
@@ -904,6 +907,7 @@ struct common_speculative_impl_ngram_mod : public common_speculative_impl {
 
         sinfo.i_last = 0;
         sinfo.n_draft_last = 0;
+        sinfo.ema_acc = 1.0f;
 
         const size_t n = mod.get_n();
         if (prompt.size() < n) {
@@ -1011,20 +1015,19 @@ struct common_speculative_impl_ngram_mod : public common_speculative_impl {
         // compute acceptance fraction if we have a recorded draft length
         if (sinfo.n_draft_last > 0) {
             const double f_acc = (double)n_accepted / (double)sinfo.n_draft_last;
-            if (f_acc < 0.25) {
-                sinfo.n_low++;
-                if (sinfo.n_low >= 5) {
-                    if (verbose) {
-                        LOG_WRN("%s: low acceptance streak (%d) - resetting ngram_mod\n", __func__, sinfo.n_low);
-                    }
-
-                    mod.reset();
-                    sinfo.n_low = 0;
-                    sinfo.i_last = 0;
+            sinfo.ema_acc = 0.7f * sinfo.ema_acc + 0.3f * (float)f_acc;
+            if(sinfo.ema_acc < 0.15f) {
+                if(verbose) {
+                    LOG_WRN("%s: low acceptance (ema_acc=%.3f) -resetting ngra,_mod\n", __func__, sinfo.ema_acc);
                 }
-            } else {
+
+                mod.reset();
+                sinfo.ema_acc = 1.0f;
                 sinfo.n_low = 0;
-            }
+                sinfo.i_last = 0;
+            } else {
+                sinfo.n_low =0;
+            }  
         }
     }
 
