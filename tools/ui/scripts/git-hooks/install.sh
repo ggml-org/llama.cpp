@@ -5,7 +5,7 @@
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
-HOOKS_DIR="$(cd "$REPO_ROOT" && git rev-parse --git-path hooks)"
+HOOKS_DIR="$REPO_ROOT/$(cd "$REPO_ROOT" && git rev-parse --git-path hooks)"
 
 # Verify package.json exists
 if [ ! -f "$REPO_ROOT/tools/ui/package.json" ]; then
