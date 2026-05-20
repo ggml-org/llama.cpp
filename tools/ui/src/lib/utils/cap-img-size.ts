@@ -48,8 +48,7 @@ export function capImageDataURLSize(
 						canvas.width = Math.floor(targetWidth * scaleFactor);
 						canvas.height = Math.floor(targetHeight * scaleFactor);
 					} else {
-						canvas.width = targetWidth;
-						canvas.height = targetHeight;
+						return resolve(base64UrlImage);
 					}
 
 					ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
