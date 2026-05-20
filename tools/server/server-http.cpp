@@ -99,6 +99,7 @@ bool server_http_context::init(const common_params & params) {
         srv.reset(
             new httplib::SSLServer(params.ssl_file_cert.c_str(), params.ssl_file_key.c_str())
         );
+        is_ssl = true;
     } else {
         SRV_INF("%s", "running without SSL\n");
         srv.reset(new httplib::Server());
@@ -378,8 +379,8 @@ bool server_http_context::start() {
     thread = std::thread([this]() { pimpl->srv->listen_after_bind(); });
     srv->wait_until_ready();
 
-    listening_address = is_sock ? string_format("unix://%s",    hostname.c_str())
-                                : string_format("http://%s:%d", hostname.c_str(), port);
+    listening_address = is_sock ? string_format("unix://%s", hostname.c_str())
+                                : string_format("%s://%s:%d", is_ssl ? "https" : "http", hostname.c_str(), port);
     return true;
 }
 
