@@ -43,12 +43,6 @@ class LlamaModel(TextModel):
         if self.origin_hf_arch == "GlmasrModel":
             return self._set_vocab_glmedge()
 
-        tok_config_path = self.dir_model / "tokenizer_config.json"
-        if tok_config_path.is_file():
-            with open(tok_config_path, "r", encoding="utf-8") as f:
-                if json.load(f).get("tokenizer_class") == "HybridDNATokenizer":
-                    return self._set_vocab_hybriddna()
-
         if self.is_mistral_format:
             return self._set_vocab_mistral()
 
@@ -56,6 +50,15 @@ class LlamaModel(TextModel):
         path_tokenizer_json = self.dir_model / "tokenizer.json"
         if path_tekken_json.is_file() and not path_tokenizer_json.is_file():
             self._set_vocab_mistral()
+
+        tokenizer_config_file = self.dir_model / 'tokenizer_config.json'
+        if tokenizer_config_file.is_file():
+            with open(tokenizer_config_file, "r", encoding="utf-8") as f:
+                tokenizer_config_json = json.load(f)
+                if (add_prefix_space := tokenizer_config_json.get("add_prefix_space")) is not None:
+                    self.gguf_writer.add_add_space_prefix(add_prefix_space)
+                if tokenizer_config_json.get("tokenizer_class") == "HybridDNATokenizer":
+                    return self._set_vocab_hybriddna()
 
         try:
             self._set_vocab_sentencepiece()
@@ -77,13 +80,6 @@ class LlamaModel(TextModel):
             special_vocab._set_special_token("middle", 32009)
             special_vocab._set_special_token("eot",    32010)
             special_vocab.add_to_gguf(self.gguf_writer)
-
-        tokenizer_config_file = self.dir_model / 'tokenizer_config.json'
-        if tokenizer_config_file.is_file():
-            with open(tokenizer_config_file, "r", encoding="utf-8") as f:
-                tokenizer_config_json = json.load(f)
-                if "add_prefix_space" in tokenizer_config_json:
-                    self.gguf_writer.add_add_space_prefix(tokenizer_config_json["add_prefix_space"])
 
         # Apply to granite small models only
         if self.hparams.get("vocab_size", 32000) == 49152:
