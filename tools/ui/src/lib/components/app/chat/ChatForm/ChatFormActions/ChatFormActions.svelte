@@ -91,7 +91,7 @@
 	style="container-type: inline-size"
 >
 	{#if showAddButton}
-		<div class="mr-auto flex items-center gap-2">
+		<div class="mr-auto flex items-center gap-3">
 			<ChatFormActionsAdd
 				{disabled}
 				{hasAudioModality}

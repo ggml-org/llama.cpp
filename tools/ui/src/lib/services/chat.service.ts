@@ -158,6 +158,7 @@ export class ChatService {
 			// Config options
 			disableReasoningParsing,
 			excludeReasoningFromContext,
+			enableThinking,
 			continueFinalMessage
 		} = options;
 
@@ -238,6 +239,11 @@ export class ChatService {
 		requestBody.reasoning_format = disableReasoningParsing
 			? ReasoningFormat.NONE
 			: ReasoningFormat.AUTO;
+
+		requestBody.chat_template_kwargs = {
+			...(requestBody.chat_template_kwargs ?? {}),
+			enable_thinking: enableThinking
+		};
 
 		if (continueFinalMessage) {
 			requestBody.continue_final_message = true;

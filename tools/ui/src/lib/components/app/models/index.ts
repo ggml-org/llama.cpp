@@ -75,6 +75,16 @@ export { default as ModelsSelectorOption } from './ModelsSelectorOption.svelte';
 export { default as ModelsSelectorSheet } from './ModelsSelectorSheet.svelte';
 
 /**
+ * **ModelsSelectorThinkingIcon** - Thinking status indicator
+ *
+ * Small lightbulb icon displayed in the models selector trigger.
+ * Only renders when thinking is enabled, with a tooltip showing
+ * "Thinking enabled". Used as a visual indicator without toggle
+ * functionality (toggle is handled separately in the thinking settings).
+ */
+export { default as ModelsSelectorThinkingIcon } from './ModelsSelectorThinkingIcon.svelte';
+
+/**
  * **ModelBadge** - Model name display badge
  *
  * Compact badge showing current model name with package icon.

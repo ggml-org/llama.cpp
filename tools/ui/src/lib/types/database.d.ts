@@ -12,6 +12,7 @@ export interface DatabaseConversation {
 	lastModified: number;
 	name: string;
 	mcpServerOverrides?: McpServerOverride[];
+	thinkingEnabled?: boolean;
 	forkedFromConversationId?: string;
 }
 

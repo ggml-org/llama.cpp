@@ -9,7 +9,8 @@
 		DropdownMenuSearchable,
 		ModelId,
 		ModelsSelectorList,
-		ModelsSelectorOption
+		ModelsSelectorOption,
+		ModelsSelectorThinkingIcon
 	} from '$lib/components/app';
 	import type { ModelItem } from './utils';
 
@@ -108,7 +109,9 @@
 			>
 				<Package class="h-3.5 w-3.5" />
 
-				<ModelId modelId={currentModel} class="min-w-0" hideQuantization />
+				<ModelId modelId={currentModel} class="min-w-0" hideQuantization hideTags />
+
+				<ModelsSelectorThinkingIcon />
 			</span>
 		{:else}
 			<p class="text-xs text-muted-foreground">No models available.</p>
@@ -120,7 +123,7 @@
 			<DropdownMenu.Root bind:open={isOpen} onOpenChange={ms.handleOpenChange}>
 				<DropdownMenu.Trigger
 					class={[
-						`inline-grid cursor-pointer grid-cols-[1fr_auto_1fr] items-center gap-1.5 rounded-sm bg-background px-1.5 py-1 text-xs shadow-sm transition hover:bg-muted-foreground/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-muted-foreground/15 dark:text-secondary-foreground`,
+						`inline-flex cursor-pointer items-center gap-1.5 rounded-sm bg-background px-1.5 py-1 text-xs shadow-sm transition hover:bg-muted-foreground/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-muted-foreground/15 dark:text-secondary-foreground`,
 						!ms.isCurrentModelInCache
 							? 'bg-red-400/10 !text-red-400 hover:bg-red-400/20 hover:text-red-400'
 							: forceForegroundText
@@ -133,7 +136,7 @@
 					]}
 					disabled={disabled || ms.updating}
 				>
-					<Package class="h-3.5 w-3.5" />
+					<Package class="h-3.5 w-3.5 shrink-0" />
 
 					{#if selectedOption}
 						<Tooltip.Root>
@@ -144,6 +147,8 @@
 										modelId={selectedOption.model}
 										class="min-w-0 overflow-hidden"
 										hideOrgName={false}
+										hideQuantization
+										hideTags
 										{...props}
 									/>
 								{/snippet}
@@ -157,10 +162,12 @@
 						<span class="min-w-0 font-medium">Select model</span>
 					{/if}
 
+					<ModelsSelectorThinkingIcon />
+
 					{#if ms.updating || ms.isLoadingModel}
-						<Loader2 class="h-3 w-3.5 animate-spin" />
+						<Loader2 class="h-3 w-3.5 shrink-0 animate-spin" />
 					{:else}
-						<ChevronDown class="h-3 w-3.5" />
+						<ChevronDown class="h-3 w-3.5 shrink-0" />
 					{/if}
 				</DropdownMenu.Trigger>
 
@@ -251,7 +258,7 @@
 				onclick={() => ms.handleOpenChange(true)}
 				disabled={disabled || ms.updating}
 			>
-				<Package class="h-3.5 w-3.5" />
+				<Package class="h-3.5 w-3.5 shrink-0" />
 
 				{#if selectedOption}
 					<Tooltip.Root>
@@ -262,6 +269,8 @@
 									modelId={selectedOption.model}
 									class="min-w-0 overflow-hidden"
 									hideOrgName={false}
+									hideQuantization
+									hideTags
 									{...props}
 								/>
 							{/snippet}
@@ -273,8 +282,10 @@
 					</Tooltip.Root>
 				{/if}
 
+				<ModelsSelectorThinkingIcon />
+
 				{#if ms.updating}
-					<Loader2 class="h-3 w-3.5 animate-spin" />
+					<Loader2 class="h-3 w-3.5 shrink-0 animate-spin" />
 				{/if}
 			</button>
 		{/if}
