@@ -238,7 +238,10 @@ bool server_http_context::init(const common_params & params) {
             auto tmp = string_split<std::string>(req.path, '.');
             if (req.path == "/" || (tmp.size() > 0 && tmp.back() == "html")) {
                 res.status = 503;
-                res.set_content(reinterpret_cast<const char*>(loading_html), loading_html_len, "text/html; charset=utf-8");
+                // Only serve loading page if we have actual UI assets
+                if (loading_html_len > 0) {
+                    res.set_content(reinterpret_cast<const char*>(loading_html), loading_html_len, "text/html; charset=utf-8");
+                }
                 return false;
             }
 #endif
@@ -313,22 +316,30 @@ bool server_http_context::init(const common_params & params) {
             }
         } else {
 #if defined(LLAMA_BUILD_UI)
-            // using embedded static index.html
-            srv->Get(params.api_prefix + "/", [](const httplib::Request & /*req*/, httplib::Response & res) {
-                // COEP and COOP headers, required by pyodide (python interpreter)
-                res.set_header("Cross-Origin-Embedder-Policy", "require-corp");
-                res.set_header("Cross-Origin-Opener-Policy", "same-origin");
-                res.set_content(reinterpret_cast<const char*>(index_html), index_html_len, "text/html; charset=utf-8");
-                return false;
-            });
-            srv->Get(params.api_prefix + "/bundle.js", [](const httplib::Request & /*req*/, httplib::Response & res) {
-                res.set_content(reinterpret_cast<const char*>(bundle_js), bundle_js_len, "application/javascript; charset=utf-8");
-                return false;
-            });
-            srv->Get(params.api_prefix + "/bundle.css", [](const httplib::Request & /*req*/, httplib::Response & res) {
-                res.set_content(reinterpret_cast<const char*>(bundle_css), bundle_css_len, "text/css; charset=utf-8");
-                return false;
-            });
+            // Only register UI routes if we actually have embedded assets.
+            // When provisioning fails (e.g., offline build), xxd generates empty
+            // placeholders (len=0), and we should skip UI registration to avoid
+            // the server responding with empty content for web requests.
+            if (index_html_len == 0) {
+                SRV_WRN("%s", "Embedded UI assets are empty (provisioning may have failed). Web UI will not be available.");
+            } else {
+                // using embedded static index.html
+                srv->Get(params.api_prefix + "/", [](const httplib::Request & /*req*/, httplib::Response & res) {
+                    // COEP and COOP headers, required by pyodide (python interpreter)
+                    res.set_header("Cross-Origin-Embedder-Policy", "require-corp");
+                    res.set_header("Cross-Origin-Opener-Policy", "same-origin");
+                    res.set_content(reinterpret_cast<const char*>(index_html), index_html_len, "text/html; charset=utf-8");
+                    return false;
+                });
+                srv->Get(params.api_prefix + "/bundle.js", [](const httplib::Request & /*req*/, httplib::Response & res) {
+                    res.set_content(reinterpret_cast<const char*>(bundle_js), bundle_js_len, "application/javascript; charset=utf-8");
+                    return false;
+                });
+                srv->Get(params.api_prefix + "/bundle.css", [](const httplib::Request & /*req*/, httplib::Response & res) {
+                    res.set_content(reinterpret_cast<const char*>(bundle_css), bundle_css_len, "text/css; charset=utf-8");
+                    return false;
+                });
+            }
 #endif
         }
     }
