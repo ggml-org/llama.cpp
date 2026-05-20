@@ -516,7 +516,12 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
     }
 
     // AMD WMMA is always faster than the tile kernel if the full tile width of 16 can be utilized.
-    if ((amd_wmma_available(cc) && gqa_opt_applies && Q->ne[0] <= 128) && Q->ne[0] != 40 && Q->ne[0] != 72 && Q->ne[1] * gqa_ratio_eff > 8) {
+    // DKQ=64: spill-free on RDNA3 (244-246 VGPRs).
+    // DKQ=256: Q_in_reg=false reduces spill to ~18-36 bytes (4-9 VGPRs), effectively noise.
+    //   Non-softcap variant (Qwen3.5-27B etc.): ~36 bytes scratch. Softcap still spills heavily.
+    // DKQ=80-128: still 320-480+ bytes scratch even with Q_in_reg=false — excluded until inner
+    //   loop register pressure is reduced.
+    if (amd_wmma_available(cc) && gqa_opt_applies && Q->ne[0] == 64 && Q->ne[1] * gqa_ratio_eff > 8) {
         return BEST_FATTN_KERNEL_MMA_F16;
     }
 
