@@ -3281,7 +3281,7 @@ static vk_fa_tuning_params get_fa_tuning_params(const vk_device& device, uint32_
                       device->coopmat1_fa_support ? FA_COOPMAT1 : FA_SCALAR;
 
     if (path == FA_COOPMAT2 && k_type == GGML_TYPE_BF16 && !device->coopmat2_bf16_support) {
-        path = device->coopmat1_fa_support ? FA_COOPMAT1 : FA_SCALAR;
+        path = (device->coopmat1_fa_support && device->coopmat_bf16_support) ? FA_COOPMAT1 : FA_SCALAR;
     }
 
     if (path == FA_COOPMAT1 && device->architecture == vk_device_architecture::NVIDIA_TURING) {
@@ -16482,10 +16482,7 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
                 if (!fa_kv_ok(op->src[1]->type) || !fa_kv_ok(op->src[2]->type)) {
                     return false;
                 }
-                if (op->src[1]->type == GGML_TYPE_BF16 && op->src[2]->type != GGML_TYPE_BF16) {
-                    return false;
-                }
-                if (op->src[2]->type == GGML_TYPE_BF16 && op->src[1]->type != GGML_TYPE_BF16) {
+                if ((op->src[1]->type == GGML_TYPE_BF16) != (op->src[2]->type == GGML_TYPE_BF16)) {
                     return false;
                 }
                 if (!coopmat2 && !(device->subgroup_shuffle && device->subgroup_vote)) {
