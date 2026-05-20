@@ -1633,11 +1633,14 @@ In addition to spawning child `llama-server` instances, the router can also forw
 
 Three keys turn a preset section into a remote entry:
 
-| Key              | Required | Description                                                                                   |
-|------------------|----------|-----------------------------------------------------------------------------------------------|
-| `remote-url`     | yes      | Upstream base URL (e.g. `http://127.0.0.1:8082` or `https://gateway.example.com/vllm`)        |
-| `remote-api-key` | no       | Bearer token to inject as `Authorization`. Supports `${ENV_VAR}` expansion at load time.       |
-| `remote-model`   | no       | Upstream model id; if set, the router rewrites the JSON `"model"` field before forwarding.    |
+| Key              | Required        | Description                                                                                   |
+|------------------|-----------------|-----------------------------------------------------------------------------------------------|
+| `remote-url`     | yes<sup>*</sup> | Upstream base URL (e.g. `http://127.0.0.1:8082` or `https://gateway.example.com/vllm`)        |
+| `remote-port`    | yes<sup>*</sup> | Sugar for `remote-url = http://127.0.0.1:<PORT>` when the upstream runs on the same host.     |
+| `remote-api-key` | no              | Bearer token to inject as `Authorization`. Supports `${ENV_VAR}` expansion at load time.       |
+| `remote-model`   | no              | Upstream model id; if set, the router rewrites the JSON `"model"` field before forwarding.    |
+
+<sup>*</sup> Exactly one of `remote-url` or `remote-port` must be set.
 
 The router strips any client-supplied `Authorization` header on remote requests and injects the configured `remote-api-key` (if any). It never serializes the api key back through `/v1/models`.
 
@@ -1647,6 +1650,16 @@ The router strips any client-supplied `Authorization` header on remote requests 
 [vllm-qwen3-coder]
 remote-url = http://127.0.0.1:8082
 remote-api-key = ${VLLM_API_KEY}
+remote-model = /llm-models/Qwen3-Coder-Next-FP8/
+alias = vllm, qwen-fp8
+tags = remote, vllm
+```
+
+For a same-host upstream (no auth, no gateway), `remote-port` is shorter:
+
+```ini
+[vllm-qwen3-coder]
+remote-port = 8082
 remote-model = /llm-models/Qwen3-Coder-Next-FP8/
 alias = vllm, qwen-fp8
 tags = remote, vllm
@@ -1672,7 +1685,7 @@ llama-server \
   --remote-model 'vllm-qwen3-coder=http://127.0.0.1:8082,key=${VLLM_API_KEY},model=/llm-models/Qwen3-Coder-Next-FP8/,alias=vllm|qwen-fp8,tags=remote|vllm'
 ```
 
-The first segment is `NAME=URL`. Remaining comma-separated segments are `key=...`, `model=...`, `alias=...`, `tags=...`. Multiple aliases and tags are separated by `|` (commas already split top-level segments). Like in INI presets, `${ENV_VAR}` is expanded at parse time so secrets stay out of the process argv.
+The first segment is `NAME=URL`. As same-host sugar, an all-digit value is expanded to `http://127.0.0.1:<PORT>`, so `--remote-model 'vllm-qwen3-coder=8082,model=/llm-models/Qwen3-Coder-Next-FP8/'` is equivalent to the full URL form. Remaining comma-separated segments are `key=...`, `model=...`, `alias=...`, `tags=...`. Multiple aliases and tags are separated by `|` (commas already split top-level segments). Like in INI presets, `${ENV_VAR}` is expanded at parse time so secrets stay out of the process argv.
 
 #### Behavior of remote entries
 
@@ -1683,6 +1696,53 @@ The first segment is `NAME=URL`. Remaining comma-separated segments are `key=...
 - **Auth.** The client's `Authorization` header is always stripped on remote forwards; the configured `remote-api-key` is injected if set. This is per-model auth — pass-through is not supported.
 - **Model rewrite.** If `remote-model` is set, the router rewrites the JSON `"model"` field of POST inference requests to that upstream id. The router-side name (and aliases) is what clients use; the upstream sees its own id.
 - **`/v1/models` shape.** Remote entries expose `kind: "remote"`, `owned_by: "remote"`, and a `remote: { url, model }` object. The api key is never serialized.
+
+#### Spawning the remote upstream alongside the router
+
+The router does not spawn remote upstreams itself — that's intentional, since a process supervisor (shell script, systemd, Docker Compose) does this better than reimplementing it inside `llama-server`. The pattern that's been validated in practice is a small shell wrapper that brings up the GPU-backed upstream (e.g. vLLM) and the CPU-backed router as a unit, with a `trap` to clean up on exit:
+
+```sh
+#!/usr/bin/env bash
+set -euo pipefail
+
+# 1. Start vLLM in the background. Use the project's venv or an absolute path
+#    to the vllm binary. Pipe logs somewhere you can inspect later.
+VLLM_VENV=/path/to/vllm-venv
+VLLM_MODEL=/llm-models/Qwen3-Coder-Next-FP8/
+
+"$VLLM_VENV/bin/vllm" serve "$VLLM_MODEL" \
+    --port 8082 \
+    --host 127.0.0.1 \
+    --gpu-memory-utilization 0.92 \
+    > /var/log/vllm.log 2>&1 &
+VLLM_PID=$!
+
+# 2. Tear vLLM down when the router exits (Ctrl-C, normal exit, or kill -TERM).
+trap 'kill "$VLLM_PID" 2>/dev/null || true; wait "$VLLM_PID" 2>/dev/null || true' EXIT
+
+# 3. Start the router in the foreground. The INI references vLLM via remote-port.
+llama-server --models-preset ~/models/models-cpu.ini --host 0.0.0.0 --port 8081
+```
+
+The matching INI entry uses the same-host sugar:
+
+```ini
+[Qwen3-Coder-Next-FP8]
+alias = vllm-qwen3-coder
+tags = remote, vllm
+remote-port = 8082
+remote-model = /llm-models/Qwen3-Coder-Next-FP8/
+```
+
+A few things to know about this pattern:
+
+- **Boot-time race.** The router happily comes up before vLLM finishes loading weights. Until vLLM's `/health` returns 200, requests to the remote entry will fail with a proxy error. If you need a hard ready-gate, add a `curl --retry`/`wait-for-it` loop between steps 1 and 3, or check `curl -fs http://127.0.0.1:8082/v1/models` in a loop.
+- **Crash recovery.** The wrapper above does not restart vLLM on crash. If you want that, use `systemd` (`Restart=on-failure`) or a `while true; do ... done` loop around the vLLM invocation — don't try to bake it into the router.
+- **Kill -9 to the router.** The `trap` only fires on `EXIT`/`TERM`/`INT`, not on `SIGKILL`. If something kills the router uncleanly, vLLM will be orphaned. `systemd` units with `KillMode=control-group` or a Docker Compose service handle this cleanly.
+- **Python venv vs binary.** Activating the venv with `source $VLLM_VENV/bin/activate` works too, but calling `$VLLM_VENV/bin/vllm` directly is enough — Python finds its site-packages from `sys.executable`, no activation needed.
+- **Environment variables.** Pass them on the line that starts vLLM (`VLLM_ATTENTION_BACKEND=FLASHINFER "$VLLM_VENV/bin/vllm" serve ...`) or `export` them before the call. Don't export GPU-specific env (`CUDA_VISIBLE_DEVICES`) at the top of the script if the router process shouldn't also see it.
+
+For a systemd-managed deployment, the equivalent is two units with the router declaring `After=vllm.service` (and optionally `Requires=`), or a single unit that exec's the wrapper above.
 
 ### Routing requests
 
