@@ -337,6 +337,32 @@ bool stream_pipe::is_cancelled() const {
     return session_->is_cancelled();
 }
 
+void stream_pipe::mark_producer_done() {
+    producer_done_ = true;
+}
+
+void stream_pipe::finish_producer() {
+    // the peer dropped before the producer finished. httplib bails its content provider the moment
+    // is_peer_alive() goes false, so the rest of the generation is pumped here into the ring buffer
+    // on the caller's thread. stream_aware_should_stop ignores peer disconnect while a pipe is
+    // attached, so res_->next() runs to natural completion, only an explicit DELETE flips
+    // is_cancelled and cuts it short. is_producer_ guarantees res_ is set
+    if (!is_producer_ || producer_done_ || session_->is_cancelled()) {
+        return;
+    }
+    std::string chunk;
+    while (true) {
+        chunk.clear();
+        bool has_next = res_->next(chunk);
+        if (!chunk.empty()) {
+            write(chunk.data(), chunk.size());
+        }
+        if (!has_next) {
+            break;
+        }
+    }
+}
+
 std::shared_ptr<stream_pipe> stream_pipe::create_producer(stream_session_ptr session,
                                                           server_http_res & res) {
     auto alive = std::make_shared<std::atomic<bool>>(true);

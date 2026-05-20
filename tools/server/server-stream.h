@@ -100,6 +100,16 @@ struct stream_pipe {
     // true if the session was cancelled (e.g. via DELETE /v1/stream/<conv_id>)
     bool is_cancelled() const;
 
+    // producer: record that next() reached its natural end on the wire, so finish_producer turns
+    // into a no-op. the http drain calls this right before it closes the stream cleanly
+    void mark_producer_done();
+
+    // producer: when the peer dropped before the producer finished, pump the response next() into
+    // the ring buffer until it reports done. runs on the caller's thread (the http worker, from
+    // on_complete), no extra thread. no-op for a consumer pipe, an already finished producer, or a
+    // cancelled session. only an explicit DELETE flips is_cancelled and cuts the drain short
+    void finish_producer();
+
     // disarm the stop hook and mark the alive guard false; must be called while the
     // object that stop_fn references (the response reader) is still alive.
     // idempotent; ~stream_pipe() calls it automatically but callers can do it earlier.
@@ -116,6 +126,7 @@ struct stream_pipe {
 private:
     stream_session_ptr                  session_;
     bool                                is_producer_;
+    bool                                producer_done_ = false; // producer only, set on clean wire end
     std::shared_ptr<std::atomic<bool>>  alive_; // only set for producer pipes
     server_http_res *                   res_;   // only set for producer pipes
 

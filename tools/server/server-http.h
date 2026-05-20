@@ -25,9 +25,10 @@ struct server_http_res {
     std::string data;
     std::map<std::string, std::string> headers;
 
-    // if set, the stream survives a client disconnect: the http layer keeps calling next() and
-    // feeding chunks into the pipe even when sink.write fails, until next() returns false.
-    // the pipe destructor finalizes the session so no explicit on_stream_end callback is needed.
+    // if set, the stream survives a client disconnect: when the peer leaves before the producer
+    // is done, on_complete calls spipe->finish_producer() to drain the rest of the generation into
+    // the ring buffer on the same worker. the pipe destructor finalizes the session so no explicit
+    // on_stream_end callback is needed.
     // shared_ptr used (not unique_ptr) so the forward-declared type is safe to delete here.
     std::shared_ptr<stream_pipe> spipe;
 

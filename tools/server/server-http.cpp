@@ -505,25 +505,35 @@ static void process_handler_response(server_http_req_ptr && request, server_http
             std::string chunk;
             const bool has_next = response->next(chunk);
             if (!chunk.empty()) {
+                // mirror into the ring buffer first, the session must reflect every SSE chunk
+                // whether or not the wire write below succeeds
                 if (response->spipe) {
                     response->spipe->write(chunk.data(), chunk.size());
                 }
                 if (!sink.write(chunk.data(), chunk.size())) {
-                    // peer gone; if a pipe is attached keep producing into it, otherwise stop
-                    if (response->spipe) {
-                        return true;
-                    }
+                    // peer is gone, stop the wire path here. when a pipe is attached on_complete
+                    // drains the rest of the generation into the ring buffer
                     return false;
                 }
                 SRV_DBG("http: streamed chunk: %s\n", chunk.c_str());
             }
             if (!has_next) {
+                // producer reached its natural end on the wire, the pipe skips its drain
+                if (response->spipe) {
+                    response->spipe->mark_producer_done();
+                }
                 sink.done();
                 SRV_DBG("%s", "http: stream ended\n");
             }
             return has_next;
         };
         const auto on_complete = [request = q_ptr, response = r_ptr](bool) mutable {
+            // the peer may have dropped before the producer finished. when a pipe is attached it
+            // drains the rest of the generation into the ring buffer on this same worker, see
+            // stream_pipe::finish_producer
+            if (response->spipe) {
+                response->spipe->finish_producer();
+            }
             response.reset(); // spipe destructor finalizes the session if attached
             request.reset();
         };
