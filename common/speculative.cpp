@@ -33,16 +33,15 @@ const std::map<std::string, common_speculative_type> common_speculative_type_fro
 };
 
 static std::string common_speculative_get_devices_str(const std::vector<ggml_backend_dev_t> & devices) {
-    if (devices.empty()) {
-        return "default";
-    }
-
     std::string result;
     for (size_t i = 0; i < devices.size(); i++) {
-        if (i > 0) result += ", ";
+        if (devices[i] == nullptr) {
+            continue;
+        }
+        if (!result.empty()) result += ", ";
         result += ggml_backend_dev_name(devices[i]);
     }
-    return result;
+    return result.empty() ? "default" : result;
 }
 
 struct common_speculative_config {
