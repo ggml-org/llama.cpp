@@ -5,7 +5,8 @@ import {
 	ATTACHMENT_LABEL_PDF_FILE,
 	ATTACHMENT_LABEL_MCP_PROMPT,
 	ATTACHMENT_LABEL_MCP_RESOURCE,
-	LEGACY_AGENTIC_REGEX
+	LEGACY_AGENTIC_REGEX,
+	SETTINGS_KEYS
 } from '$lib/constants';
 import {
 	AttachmentType,
@@ -870,8 +871,8 @@ export class ChatService {
 		);
 
 		for (const image of imageFiles) {
+			const maxImageResolution = settingsStore.getConfig(SETTINGS_KEYS.MAX_IMAGE_RESOLUTION);
 			let base64Url = image.base64Url;
-			const maxImageResolution = settingsStore.getConfig('maxImageMPixels');
 			if (maxImageResolution > 1 / MEGAPIXELS_TO_PIXELS) {
 				base64Url = await capImageDataURLSize(image.base64Url, maxImageResolution);
 			}
