@@ -8877,6 +8877,17 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         }
     }
 
+    // Test concat with small ne0 values to exercise the Metal kernel row batching logic
+    // When ne0 < 1024, multiple rows are batched into a single threadgroup
+    // Key cases: ne0 values that trigger different nrptg calculations
+    for (int64_t ne0 : {1, 2, 7, 31, 32, 63, 64, 127, 128, 255, 256, 511, 512, 1023, 1024, 1025}) {
+        // Test with various ne1 values including edge cases for batching
+        for (int64_t ne1 : {1, 2, 10, 100, 1000}) {
+            test_cases.emplace_back(new test_concat(GGML_TYPE_F32, {ne0, ne1, 3, 2}, ne1 + 1, 0, 0));
+            test_cases.emplace_back(new test_concat(GGML_TYPE_F32, {ne0, ne1, 3, 2}, ne1 + 1, 1, 0));
+        }
+    }
+
     for (ggml_sort_order order : {GGML_SORT_ORDER_ASC, GGML_SORT_ORDER_DESC}) {
         for (uint32_t i = 4; i <= 1024*1024; i *= 2) {
             test_cases.emplace_back(new test_argsort(GGML_TYPE_F32, {i-1, 1, 1, 1}));
