@@ -665,11 +665,6 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
             std::memcpy(batch.embd + n_embd*(batch.n_tokens - 1), h_row, row_bytes);
         }
 
-        // First draft step uses the first MTP block (step 0). Archs with a
-        // single MTP block ignore this; multi-block archs (Step-3.5-Flash) use
-        // it to round-robin across their N MTP layers.
-        llama_set_mtp_step(ctx_dft, 0);
-
         int ret = llama_decode(ctx_dft, batch);
         if (ret != 0) {
             LOG_WRN("%s: llama_decode returned %d\n", __func__, ret);
@@ -734,12 +729,6 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
                 break;
             }
 
-            // Single-block-MTP-only: every AR step reuses the first MTP block
-            // (Qwen MTP / vLLM single-MTP-layer style). mtp_step stays at 0;
-            // trailing MTP blocks loaded from the GGUF are ignored at
-            // runtime, and pruned GGUFs (block 0 only) work the same way.
-            llama_set_mtp_step(ctx_dft, 0);
-
             // evaluate the drafted tokens on the draft model
             ret = llama_decode(ctx_dft, batch);
             if (ret != 0) {
@@ -749,10 +738,6 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
 
             ++i;
         }
-
-        // Reset MTP step so a subsequent non-MTP decode on this context doesn't
-        // inherit a stale offset.
-        llama_set_mtp_step(ctx_dft, 0);
 
         for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
             auto & dp = dparams[seq_id];
