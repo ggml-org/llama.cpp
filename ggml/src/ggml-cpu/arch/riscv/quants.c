@@ -4551,3 +4551,201 @@ void ggml_vec_dot_mxfp4_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const vo
     ggml_vec_dot_mxfp4_q8_0_generic(n, s, bs, vx, bx, vy, by, nrc);
 #endif
 }
+
+#if defined __riscv_v_intrinsic
+
+static const float ue4m3_lut[256] __attribute__((aligned(64))) = {
+    0.0f, 0.0009765625f, 0.001953125f, 0.0029296875f,
+    0.00390625f, 0.0048828125f, 0.005859375f, 0.0068359375f,
+    0.0078125f, 0.0087890625f, 0.009765625f, 0.0107421875f,
+    0.01171875f, 0.0126953125f, 0.013671875f, 0.0146484375f,
+    0.015625f, 0.017578125f, 0.01953125f, 0.021484375f,
+    0.0234375f, 0.025390625f, 0.02734375f, 0.029296875f,
+    0.03125f, 0.03515625f, 0.0390625f, 0.04296875f,
+    0.046875f, 0.05078125f, 0.0546875f, 0.05859375f,
+    0.0625f, 0.0703125f, 0.078125f, 0.0859375f,
+    0.09375f, 0.1015625f, 0.109375f, 0.1171875f,
+    0.125f, 0.140625f, 0.15625f, 0.171875f,
+    0.1875f, 0.203125f, 0.21875f, 0.234375f,
+    0.25f, 0.28125f, 0.3125f, 0.34375f,
+    0.375f, 0.40625f, 0.4375f, 0.46875f,
+    0.5f, 0.5625f, 0.625f, 0.6875f,
+    0.75f, 0.8125f, 0.875f, 0.9375f,
+    1.0f, 1.125f, 1.25f, 1.375f,
+    1.5f, 1.625f, 1.75f, 1.875f,
+    2.0f, 2.25f, 2.5f, 2.75f,
+    3.0f, 3.25f, 3.5f, 3.75f,
+    4.0f, 4.5f, 5.0f, 5.5f,
+    6.0f, 6.5f, 7.0f, 7.5f,
+    8.0f, 9.0f, 10.0f, 11.0f,
+    12.0f, 13.0f, 14.0f, 15.0f,
+    16.0f, 18.0f, 20.0f, 22.0f,
+    24.0f, 26.0f, 28.0f, 30.0f,
+    32.0f, 36.0f, 40.0f, 44.0f,
+    48.0f, 52.0f, 56.0f, 60.0f,
+    64.0f, 72.0f, 80.0f, 88.0f,
+    96.0f, 104.0f, 112.0f, 120.0f,
+    128.0f, 144.0f, 160.0f, 176.0f,
+    192.0f, 208.0f, 224.0f, 0.0f,
+    0.0f, 0.0009765625f, 0.001953125f, 0.0029296875f,
+    0.00390625f, 0.0048828125f, 0.005859375f, 0.0068359375f,
+    0.0078125f, 0.0087890625f, 0.009765625f, 0.0107421875f,
+    0.01171875f, 0.0126953125f, 0.013671875f, 0.0146484375f,
+    0.015625f, 0.017578125f, 0.01953125f, 0.021484375f,
+    0.0234375f, 0.025390625f, 0.02734375f, 0.029296875f,
+    0.03125f, 0.03515625f, 0.0390625f, 0.04296875f,
+    0.046875f, 0.05078125f, 0.0546875f, 0.05859375f,
+    0.0625f, 0.0703125f, 0.078125f, 0.0859375f,
+    0.09375f, 0.1015625f, 0.109375f, 0.1171875f,
+    0.125f, 0.140625f, 0.15625f, 0.171875f,
+    0.1875f, 0.203125f, 0.21875f, 0.234375f,
+    0.25f, 0.28125f, 0.3125f, 0.34375f,
+    0.375f, 0.40625f, 0.4375f, 0.46875f,
+    0.5f, 0.5625f, 0.625f, 0.6875f,
+    0.75f, 0.8125f, 0.875f, 0.9375f,
+    1.0f, 1.125f, 1.25f, 1.375f,
+    1.5f, 1.625f, 1.75f, 1.875f,
+    2.0f, 2.25f, 2.5f, 2.75f,
+    3.0f, 3.25f, 3.5f, 3.75f,
+    4.0f, 4.5f, 5.0f, 5.5f,
+    6.0f, 6.5f, 7.0f, 7.5f,
+    8.0f, 9.0f, 10.0f, 11.0f,
+    12.0f, 13.0f, 14.0f, 15.0f,
+    16.0f, 18.0f, 20.0f, 22.0f,
+    24.0f, 26.0f, 28.0f, 30.0f,
+    32.0f, 36.0f, 40.0f, 44.0f,
+    48.0f, 52.0f, 56.0f, 60.0f,
+    64.0f, 72.0f, 80.0f, 88.0f,
+    96.0f, 104.0f, 112.0f, 120.0f,
+    128.0f, 144.0f, 160.0f, 176.0f,
+    192.0f, 208.0f, 224.0f, 240.0f
+};
+
+static NOINLINE void ggml_vec_dot_nvfp4_q8_0_vl128(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx,const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    assert(nrc == 1);
+    UNUSED(nrc);
+    UNUSED(bx);
+    UNUSED(by);
+    UNUSED(bs);
+    assert(n % QK_NVFP4 == 0);
+
+    const block_nvfp4 * GGML_RESTRICT x = vx;
+    const block_q8_0  * GGML_RESTRICT y = vy;
+    const int nb = n / QK_NVFP4;
+
+    const vint8m2_t  values = __riscv_vle8_v_i8m2(kvalues_mxfp4, 16);
+    const vint32m1_t vzero  = __riscv_vmv_v_x_i32m1(0, 1);
+
+    float sumf = 0;
+
+    for (int ib = 0; ib < nb; ++ib) {
+        vuint8m1_t p0 = __riscv_vle8_v_u8m1(x[ib].qs +  0, 8);
+        vuint8m1_t p1 = __riscv_vle8_v_u8m1(x[ib].qs +  8, 8);
+        vuint8m1_t p2 = __riscv_vle8_v_u8m1(x[ib].qs + 16, 8);
+        vuint8m1_t p3 = __riscv_vle8_v_u8m1(x[ib].qs + 24, 8);
+
+        vuint8m1_t s0 = __riscv_vslideup_vx_u8m1(__riscv_vand_vx_u8m1(p0, 0x0F, 8), __riscv_vsrl_vx_u8m1(p0, 4, 8), 8, 16);
+        vuint8m1_t s1 = __riscv_vslideup_vx_u8m1(__riscv_vand_vx_u8m1(p1, 0x0F, 8), __riscv_vsrl_vx_u8m1(p1, 4, 8), 8, 16);
+        vuint8m1_t s2 = __riscv_vslideup_vx_u8m1(__riscv_vand_vx_u8m1(p2, 0x0F, 8), __riscv_vsrl_vx_u8m1(p2, 4, 8), 8, 16);
+        vuint8m1_t s3 = __riscv_vslideup_vx_u8m1(__riscv_vand_vx_u8m1(p3, 0x0F, 8), __riscv_vsrl_vx_u8m1(p3, 4, 8), 8, 16);
+
+
+        vint8m2_t  w01    = __riscv_vrgather_vv_i8m2(values, __riscv_vcreate_v_u8m1_u8m2(s0, s1), 32);
+        vint8m2_t  w23    = __riscv_vrgather_vv_i8m2(values, __riscv_vcreate_v_u8m1_u8m2(s2, s3), 32);
+        vint16m4_t prod01 = __riscv_vwmul_vv_i16m4(__riscv_vle8_v_i8m2(y[2*ib + 0].qs, 32), w01, 32);
+        vint16m4_t prod23 = __riscv_vwmul_vv_i16m4(__riscv_vle8_v_i8m2(y[2*ib + 1].qs, 32), w23, 32);
+
+        int acc0, acc1, acc2, acc3;
+        __riscv_vse32_v_i32m1(&acc0, __riscv_vwredsum_vs_i16m2_i32m1(__riscv_vget_v_i16m4_i16m2(prod01, 0), vzero, 16), 1);
+        __riscv_vse32_v_i32m1(&acc1, __riscv_vwredsum_vs_i16m2_i32m1(__riscv_vget_v_i16m4_i16m2(prod01, 1), vzero, 16), 1);
+        __riscv_vse32_v_i32m1(&acc2, __riscv_vwredsum_vs_i16m2_i32m1(__riscv_vget_v_i16m4_i16m2(prod23, 0), vzero, 16), 1);
+        __riscv_vse32_v_i32m1(&acc3, __riscv_vwredsum_vs_i16m2_i32m1(__riscv_vget_v_i16m4_i16m2(prod23, 1), vzero, 16), 1);
+
+        const float dy_a = GGML_CPU_FP16_TO_FP32(y[2*ib + 0].d);
+        const float dy_b = GGML_CPU_FP16_TO_FP32(y[2*ib + 1].d);
+        sumf += dy_a * ue4m3_lut[x[ib].d[0]] * (float)acc0;
+        sumf += dy_a * ue4m3_lut[x[ib].d[1]] * (float)acc1;
+        sumf += dy_b * ue4m3_lut[x[ib].d[2]] * (float)acc2;
+        sumf += dy_b * ue4m3_lut[x[ib].d[3]] * (float)acc3;
+    }
+
+    *s = sumf;
+}
+
+static inline int nvfp4_q8_0_subdot_vl256(const uint8_t * GGML_RESTRICT x_qs_sub, const int8_t * GGML_RESTRICT y_qs_sub, vint8mf2_t values, vint32m1_t vzero) {
+    vuint8mf2_t packed  = __riscv_vle8_v_u8mf2(x_qs_sub, 8);
+    vuint8mf2_t bits_lo = __riscv_vand_vx_u8mf2(packed, 0x0F, 8);
+    vuint8mf2_t bits_hi = __riscv_vsrl_vx_u8mf2(packed, 4, 8);
+    vint8mf2_t  w_lo    = __riscv_vrgather_vv_i8mf2(values, bits_lo, 8);
+    vint8mf2_t  w_hi    = __riscv_vrgather_vv_i8mf2(values, bits_hi, 8);
+    vint8mf2_t  y_lo    = __riscv_vle8_v_i8mf2(y_qs_sub + 0, 8);
+    vint8mf2_t  y_hi    = __riscv_vle8_v_i8mf2(y_qs_sub + 8, 8);
+    vint16m1_t  prod    = __riscv_vwmul_vv_i16m1(y_lo, w_lo, 8);
+    prod = __riscv_vwmacc_vv_i16m1(prod, y_hi, w_hi, 8);
+    int acc;
+    __riscv_vse32_v_i32m1(&acc, __riscv_vwredsum_vs_i16m1_i32m1(prod, vzero, 8), 1);
+    return acc;
+}
+
+static NOINLINE void ggml_vec_dot_nvfp4_q8_0_vl256(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    assert(nrc == 1);
+    UNUSED(nrc);
+    UNUSED(bx);
+    UNUSED(by);
+    UNUSED(bs);
+    assert(n % QK_NVFP4 == 0);
+
+    const block_nvfp4 * GGML_RESTRICT x = vx;
+    const block_q8_0  * GGML_RESTRICT y = vy;
+    const int nb = n / QK_NVFP4;
+
+    const vint8mf2_t values = __riscv_vle8_v_i8mf2(kvalues_mxfp4, 16);
+    const vint32m1_t vzero  = __riscv_vmv_v_x_i32m1(0, 1);
+
+    float sumf = 0;
+    int ib = 0;
+
+    for (; ib + 1 < nb; ib += 2) {
+        const float dy_a0 = GGML_CPU_FP16_TO_FP32(y[2*ib + 0].d);
+        const float dy_a1 = GGML_CPU_FP16_TO_FP32(y[2*ib + 1].d);
+        const float dy_b0 = GGML_CPU_FP16_TO_FP32(y[2*ib + 2].d);
+        const float dy_b1 = GGML_CPU_FP16_TO_FP32(y[2*ib + 3].d);
+
+        const int a0 = nvfp4_q8_0_subdot_vl256(x[ib    ].qs +  0, y[2*ib + 0].qs +  0, values, vzero);
+        const int a1 = nvfp4_q8_0_subdot_vl256(x[ib    ].qs +  8, y[2*ib + 0].qs + 16, values, vzero);
+        const int a2 = nvfp4_q8_0_subdot_vl256(x[ib    ].qs + 16, y[2*ib + 1].qs +  0, values, vzero);
+        const int a3 = nvfp4_q8_0_subdot_vl256(x[ib    ].qs + 24, y[2*ib + 1].qs + 16, values, vzero);
+        const int b0 = nvfp4_q8_0_subdot_vl256(x[ib + 1].qs +  0, y[2*ib + 2].qs +  0, values, vzero);
+        const int b1 = nvfp4_q8_0_subdot_vl256(x[ib + 1].qs +  8, y[2*ib + 2].qs + 16, values, vzero);
+        const int b2 = nvfp4_q8_0_subdot_vl256(x[ib + 1].qs + 16, y[2*ib + 3].qs +  0, values, vzero);
+        const int b3 = nvfp4_q8_0_subdot_vl256(x[ib + 1].qs + 24, y[2*ib + 3].qs + 16, values, vzero);
+
+        sumf += dy_a0 * ue4m3_lut[x[ib    ].d[0]] * (float)a0;
+        sumf += dy_a0 * ue4m3_lut[x[ib    ].d[1]] * (float)a1;
+        sumf += dy_a1 * ue4m3_lut[x[ib    ].d[2]] * (float)a2;
+        sumf += dy_a1 * ue4m3_lut[x[ib    ].d[3]] * (float)a3;
+        sumf += dy_b0 * ue4m3_lut[x[ib + 1].d[0]] * (float)b0;
+        sumf += dy_b0 * ue4m3_lut[x[ib + 1].d[1]] * (float)b1;
+        sumf += dy_b1 * ue4m3_lut[x[ib + 1].d[2]] * (float)b2;
+        sumf += dy_b1 * ue4m3_lut[x[ib + 1].d[3]] * (float)b3;
+    }
+
+    *s = sumf;
+}
+
+#endif // __riscv_v_intrinsic
+
+void ggml_vec_dot_nvfp4_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+#if defined __riscv_v_intrinsic
+    switch (__riscv_vlenb() * 8) {
+        case 128:
+            ggml_vec_dot_nvfp4_q8_0_vl128(n, s, bs, vx, bx, vy, by, nrc);
+            break;
+        default: // 256 and above
+            ggml_vec_dot_nvfp4_q8_0_vl256(n, s, bs, vx, bx, vy, by, nrc);
+            break;
+    }
+#else
+    ggml_vec_dot_nvfp4_q8_0_generic(n, s, bs, vx, bx, vy, by, nrc);
+#endif
+}
