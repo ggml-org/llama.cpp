@@ -734,9 +734,11 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
                 break;
             }
 
-            // Step i+1: feed the i-th sampled draft token into the (i+1)-th
-            // MTP block. Multi-block archs round-robin via mtp_step % N.
-            llama_set_mtp_step(ctx_dft, (uint32_t)(i + 1));
+            // Single-block-MTP-only: every AR step reuses the first MTP block
+            // (Qwen MTP / vLLM single-MTP-layer style). mtp_step stays at 0;
+            // trailing MTP blocks loaded from the GGUF are ignored at
+            // runtime, and pruned GGUFs (block 0 only) work the same way.
+            llama_set_mtp_step(ctx_dft, 0);
 
             // evaluate the drafted tokens on the draft model
             ret = llama_decode(ctx_dft, batch);

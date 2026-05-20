@@ -113,7 +113,7 @@ void llama_model_step35::load_arch_tensors(llama_model_loader & ml) {
         layer.ffn_down_shexp = create_tensor(tn(LLM_TENSOR_FFN_DOWN_SHEXP, "weight", i), {hparams.n_ff_shexp, n_embd}, TENSOR_NOT_REQUIRED);
     };
 
-    auto load_block_mtp = [&](int i) {
+    auto load_block_mtp = [&](int i, bool is_first_mtp) {
         auto & layer = layers[i];
 
         const uint32_t n_head_l      = hparams.n_head(i);
@@ -123,7 +123,14 @@ void llama_model_step35::load_arch_tensors(llama_model_loader & ml) {
         // The MTP block is a full Step3p5 decoder layer (mtp_block) plus the
         // NextN-specific wiring (enorm/hnorm/eh_proj + optional shared head).
         // `mtp_flags` becomes NOT_REQUIRED when the GGUF is trunk-only.
-        layer.attn_norm   = create_tensor(tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd}, mtp_flags);
+        //
+        // Only the FIRST MTP block (i == n_main) is required for the
+        // single-block MTP runtime; trailing MTP blocks are always tolerated
+        // as missing so pruned GGUFs (block 0 only) load cleanly. Override
+        // mtp_flags to NOT_REQUIRED for those.
+        const int eff_mtp_flags = is_first_mtp ? mtp_flags : (mtp_flags | TENSOR_NOT_REQUIRED);
+
+        layer.attn_norm   = create_tensor(tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd}, eff_mtp_flags);
         layer.attn_q_norm = create_tensor(tn(LLM_TENSOR_ATTN_Q_NORM, "weight", i), {n_embd_head_k}, TENSOR_NOT_REQUIRED);
         layer.attn_k_norm = create_tensor(tn(LLM_TENSOR_ATTN_K_NORM, "weight", i), {n_embd_head_k}, TENSOR_NOT_REQUIRED);
 
@@ -134,12 +141,12 @@ void llama_model_step35::load_arch_tensors(llama_model_loader & ml) {
             layer.rope_freqs = create_tensor(tn(LLM_TENSOR_ROPE_FREQS, "weight", i), {n_rot_max/2}, TENSOR_NOT_REQUIRED | TENSOR_DUPLICATED);
         }
 
-        create_tensor_qkv(layer, i, n_embd, n_embd_head_k * n_head_l, n_embd_k_gqa, n_embd_v_gqa, mtp_flags);
-        layer.wo = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_embd_head_v * n_head_l, n_embd}, mtp_flags);
+        create_tensor_qkv(layer, i, n_embd, n_embd_head_k * n_head_l, n_embd_k_gqa, n_embd_v_gqa, eff_mtp_flags);
+        layer.wo = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_embd_head_v * n_head_l, n_embd}, eff_mtp_flags);
 
         layer.wqkv_gate = create_tensor(tn(LLM_TENSOR_ATTN_GATE, "weight", i), {n_embd, n_head_l}, TENSOR_NOT_REQUIRED);
 
-        layer.ffn_norm = create_tensor(tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd}, mtp_flags);
+        layer.ffn_norm = create_tensor(tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd}, eff_mtp_flags);
 
         // dense MLP (leading dense blocks) — present if the MTP block isn't MoE
         layer.ffn_gate = create_tensor(tn(LLM_TENSOR_FFN_GATE, "weight", i), {n_embd,   n_ff}, TENSOR_NOT_REQUIRED);
@@ -159,9 +166,9 @@ void llama_model_step35::load_arch_tensors(llama_model_loader & ml) {
         layer.ffn_down_shexp = create_tensor(tn(LLM_TENSOR_FFN_DOWN_SHEXP, "weight", i), {hparams.n_ff_shexp, n_embd}, TENSOR_NOT_REQUIRED);
 
         // NextN-specific tensors that define the MTP block.
-        layer.nextn.eh_proj          = create_tensor(tn(LLM_TENSOR_NEXTN_EH_PROJ,          "weight", i), { 2 * n_embd, n_embd }, mtp_flags);
-        layer.nextn.enorm            = create_tensor(tn(LLM_TENSOR_NEXTN_ENORM,            "weight", i), { n_embd },              mtp_flags);
-        layer.nextn.hnorm            = create_tensor(tn(LLM_TENSOR_NEXTN_HNORM,            "weight", i), { n_embd },              mtp_flags);
+        layer.nextn.eh_proj          = create_tensor(tn(LLM_TENSOR_NEXTN_EH_PROJ,          "weight", i), { 2 * n_embd, n_embd }, eff_mtp_flags);
+        layer.nextn.enorm            = create_tensor(tn(LLM_TENSOR_NEXTN_ENORM,            "weight", i), { n_embd },              eff_mtp_flags);
+        layer.nextn.hnorm            = create_tensor(tn(LLM_TENSOR_NEXTN_HNORM,            "weight", i), { n_embd },              eff_mtp_flags);
         layer.nextn.embed_tokens     = create_tensor(tn(LLM_TENSOR_NEXTN_EMBED_TOKENS,     "weight", i), { n_embd, n_vocab },     TENSOR_NOT_REQUIRED);
         layer.nextn.shared_head_head = create_tensor(tn(LLM_TENSOR_NEXTN_SHARED_HEAD_HEAD, "weight", i), { n_embd, n_vocab },     TENSOR_NOT_REQUIRED);
         layer.nextn.shared_head_norm = create_tensor(tn(LLM_TENSOR_NEXTN_SHARED_HEAD_NORM, "weight", i), { n_embd },              TENSOR_NOT_REQUIRED);
@@ -170,8 +177,13 @@ void llama_model_step35::load_arch_tensors(llama_model_loader & ml) {
     for (int i = 0; i < (int) n_main; ++i) {
         load_block_trunk(i, trunk_flags);
     }
+    // Only the first MTP block (i == n_main) is required at runtime — the
+    // single-block-MTP graph in build_arch_graph always uses that one.
+    // Trailing MTP blocks are loaded if present (so an un-pruned GGUF with
+    // all MTP layers still works) but tolerated when absent via the pruning
+    // path. See scripts/prune_step35_extra_mtp.py for the pruner.
     for (int i = (int) n_main; i < n_layer; ++i) {
-        load_block_mtp(i);
+        load_block_mtp(i, /*is_first_mtp=*/ i == (int) n_main);
     }
 }
 
@@ -362,13 +374,13 @@ llama_model_step35::graph_mtp::graph_mtp(const llama_model & model, const llm_gr
     : llm_graph_context(params) {
     GGML_ASSERT(hparams.nextn_predict_layers > 0 && "STEP35 MTP requires nextn_predict_layers > 0");
 
-    // Round-robin across MTP blocks at draft step boundaries. Matches vllm's
-    // `current_step_idx = spec_step_idx % num_mtp_layers` (step3p5_mtp.py).
-    // The first MTP block lives at layer index `n_main`; the speculative
-    // driver bumps `cparams.mtp_step` between AR iterations.
-    const int n_main      = (int) hparams.n_layer - (int) hparams.nextn_predict_layers;
-    const int step_offset = (int) (cparams.mtp_step % hparams.nextn_predict_layers);
-    const int il          = n_main + step_offset;
+    // Single-block MTP only: always run the first trained MTP block (Qwen
+    // MTP / vLLM single-MTP-layer style). Multi-block round-robin proved to
+    // be a much deeper refactor than this PR justifies; the trailing MTP
+    // blocks are loaded with TENSOR_NOT_REQUIRED so pruned GGUFs (with just
+    // block 0) also work — see load_arch_tensors below and
+    // scripts/prune_step35_extra_mtp.py.
+    const int il       = (int) hparams.n_layer - (int) hparams.nextn_predict_layers;
     const auto & layer = model.layers[il];
 
     GGML_ASSERT(layer.nextn.eh_proj && "MTP block missing nextn.eh_proj");
