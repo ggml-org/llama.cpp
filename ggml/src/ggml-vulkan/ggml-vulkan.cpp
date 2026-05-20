@@ -9678,7 +9678,7 @@ static void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx
     uint32_t k_stride = (uint32_t)(nbk1 / ggml_type_size(k->type));
     uint32_t v_stride = (uint32_t)(nbv1 / ggml_type_size(v->type));
 
-    // F32 uses block_elems=4, so stride is in units of vec4 blocks
+    // For F32, the shader treats it as a block of size 4 (for vec4 loads)
     if (k->type == GGML_TYPE_F32) {
         k_stride /= 4;
     }
