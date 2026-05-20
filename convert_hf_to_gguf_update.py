@@ -156,7 +156,6 @@ models = [
     {"name": "kanana2",          "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/kakaocorp/kanana-2-30b-a3b-instruct-2601", },
     {"name": "f2llmv2",          "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/codefuse-ai/F2LLM-v2-4B", },
     {"name": "sarvam-moe",       "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/sarvamai/sarvam-30b", },
-    {"name": "carbon",           "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/HuggingFaceBio/Carbon-3B", },
 ]
 
 # some models are known to be broken upstream, so we will skip them as exceptions
@@ -294,8 +293,6 @@ for model in [*pre_computed_hashes, *all_models]:
             logger.info(f"Loading tokenizer from {f'models/tokenizers/{name}'}...")
             if name == "t5":
                 tokenizer = AutoTokenizer.from_pretrained(f"models/tokenizers/{name}", use_fast=False)
-            elif name == "carbon":
-                tokenizer = AutoTokenizer.from_pretrained(f"models/tokenizers/{name}", trust_remote_code=True)
             else:
                 tokenizer = AutoTokenizer.from_pretrained(f"models/tokenizers/{name}")
         except Exception as e:
@@ -456,8 +453,6 @@ for model in models:
     try:
         if name == "t5":
             tokenizer = AutoTokenizer.from_pretrained(f"models/tokenizers/{name}", use_fast=False)
-        elif name == "carbon":
-            tokenizer = AutoTokenizer.from_pretrained(f"models/tokenizers/{name}", trust_remote_code=True)
         else:
             tokenizer = AutoTokenizer.from_pretrained(f"models/tokenizers/{name}")
     except (OSError, TypeError) as e:

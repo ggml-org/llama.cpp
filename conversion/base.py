@@ -1610,14 +1610,7 @@ class TextModel(ModelBase):
         special_vocab = gguf.SpecialVocab(self.dir_model, load_merges=True)
         special_vocab.add_to_gguf(self.gguf_writer)
 
-    def _set_vocab_carbon(self):
-        # Carbon-3B uses a custom HybridDNATokenizer (defined in the model
-        # repo's tokenizer.py) that wraps Qwen3-4B-Base BPE and adds 4096
-        # fixed 6-mer DNA tokens plus <dna>/</dna>/<oov> special tokens at
-        # construction. Loading it requires trust_remote_code=True, and the
-        # pre-tokenizer name "carbon" tells llama.cpp to enable the
-        # <dna>...</dna>-aware path (LLAMA_VOCAB_PRE_TYPE_CARBON in
-        # src/llama-vocab.cpp).
+    def _set_vocab_hybriddna(self):
         from transformers import AutoTokenizer
         tokenizer = AutoTokenizer.from_pretrained(self.dir_model, trust_remote_code=True)
         vocab_size = self.hparams.get("vocab_size", len(tokenizer.vocab))  # ty: ignore[unresolved-attribute]
@@ -1644,8 +1637,7 @@ class TextModel(ModelBase):
                     toktypes.append(gguf.TokenType.NORMAL)
                 tokens.append(token)
 
-        self.gguf_writer.add_tokenizer_model("gpt2")
-        self.gguf_writer.add_tokenizer_pre("carbon")
+        self.gguf_writer.add_tokenizer_model("hybriddna")
         self.gguf_writer.add_token_list(tokens)
         self.gguf_writer.add_token_types(toktypes)
 

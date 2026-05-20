@@ -43,13 +43,11 @@ class LlamaModel(TextModel):
         if self.origin_hf_arch == "GlmasrModel":
             return self._set_vocab_glmedge()
 
-        # Carbon-3B is a stock Llama 3 model architecturally, but ships a
-        # custom HybridDNATokenizer that adds DNA k-mers at construction.
         tok_config_path = self.dir_model / "tokenizer_config.json"
         if tok_config_path.is_file():
             with open(tok_config_path, "r", encoding="utf-8") as f:
                 if json.load(f).get("tokenizer_class") == "HybridDNATokenizer":
-                    return self._set_vocab_carbon()
+                    return self._set_vocab_hybriddna()
 
         if self.is_mistral_format:
             return self._set_vocab_mistral()
