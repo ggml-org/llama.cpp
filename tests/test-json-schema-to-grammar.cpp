@@ -1564,6 +1564,188 @@ int main() {
                 space ::= | " " | "\n"{1,2} [ \t]{0,20}
             )""",
         });
+
+        run({
+            SUCCESS,
+            R"(regexp \d shorthand)",
+            R"""({
+                "type": "string",
+                "pattern": "^\\d+$"
+            })""",
+            R"""(
+                root ::= "\"" ([0-9]+) "\"" space
+                space ::= | " " | "\n"{1,2} [ \t]{0,20}
+            )""",
+        });
+
+        run({
+            SUCCESS,
+            R"(regexp [\d] class)",
+            R"""({
+                "type": "string",
+                "pattern": "^[\\d]+$"
+            })""",
+            R"""(
+                root ::= "\"" ([0-9]+) "\"" space
+                space ::= | " " | "\n"{1,2} [ \t]{0,20}
+            )""",
+        });
+
+        run({
+            SUCCESS,
+            R"(regexp \w shorthand)",
+            R"""({
+                "type": "string",
+                "pattern": "^\\w+$"
+            })""",
+            R"""(
+                root ::= "\"" ([a-zA-Z0-9_]+) "\"" space
+                space ::= | " " | "\n"{1,2} [ \t]{0,20}
+            )""",
+        });
+
+        run({
+            SUCCESS,
+            R"(regexp [\w] class)",
+            R"""({
+                "type": "string",
+                "pattern": "^[\\w]+$"
+            })""",
+            R"""(
+                root ::= "\"" ([a-zA-Z0-9_]+) "\"" space
+                space ::= | " " | "\n"{1,2} [ \t]{0,20}
+            )""",
+        });
+
+        run({
+            SUCCESS,
+            R"(regexp \s shorthand)",
+            R"""({
+                "type": "string",
+                "pattern": "^\\s+$"
+            })""",
+            R"""(
+                root ::= "\"" ([ \t\n\r]+) "\"" space
+                space ::= | " " | "\n"{1,2} [ \t]{0,20}
+            )""",
+        });
+
+        run({
+            SUCCESS,
+            R"(regexp [\s] class)",
+            R"""({
+                "type": "string",
+                "pattern": "^[\\s]+$"
+            })""",
+            R"""(
+                root ::= "\"" ([ \t\n\r]+) "\"" space
+                space ::= | " " | "\n"{1,2} [ \t]{0,20}
+            )""",
+        });
+
+        run({
+            SUCCESS,
+            R"(regexp \b boundary skipped)",
+            R"""({
+                "type": "string",
+                "pattern": "^\\bfoo\\b$"
+            })""",
+            R"""(
+                root ::= "\"" ("foo") "\"" space
+                space ::= | " " | "\n"{1,2} [ \t]{0,20}
+            )""",
+        });
+
+        run({
+            SUCCESS,
+            R"(regexp \D shorthand)",
+            R"""({
+                "type": "string",
+                "pattern": "^\\D+$"
+            })""",
+            R"""(
+                root ::= "\"" ([^0-9]+) "\"" space
+                space ::= | " " | "\n"{1,2} [ \t]{0,20}
+            )""",
+        });
+
+        run({
+            SUCCESS,
+            R"(regexp [\D] class)",
+            R"""({
+                "type": "string",
+                "pattern": "^[\\D]+$"
+            })""",
+            R"""(
+                root ::= "\"" ([^0-9]+) "\"" space
+                space ::= | " " | "\n"{1,2} [ \t]{0,20}
+            )""",
+        });
+
+        run({
+            SUCCESS,
+            R"(regexp \W shorthand)",
+            R"""({
+                "type": "string",
+                "pattern": "^\\W+$"
+            })""",
+            R"""(
+                root ::= "\"" ([^a-zA-Z0-9_]+) "\"" space
+                space ::= | " " | "\n"{1,2} [ \t]{0,20}
+            )""",
+        });
+
+        run({
+            SUCCESS,
+            R"(regexp [\W] class)",
+            R"""({
+                "type": "string",
+                "pattern": "^[\\W]+$"
+            })""",
+            R"""(
+                root ::= "\"" ([^a-zA-Z0-9_]+) "\"" space
+                space ::= | " " | "\n"{1,2} [ \t]{0,20}
+            )""",
+        });
+
+        run({
+            SUCCESS,
+            R"(regexp \S shorthand)",
+            R"""({
+                "type": "string",
+                "pattern": "^\\S+$"
+            })""",
+            R"""(
+                root ::= "\"" ([^ \t\n\r]+) "\"" space
+                space ::= | " " | "\n"{1,2} [ \t]{0,20}
+            )""",
+        });
+
+        run({
+            SUCCESS,
+            R"(regexp [\S] class)",
+            R"""({
+                "type": "string",
+                "pattern": "^[\\S]+$"
+            })""",
+            R"""(
+                root ::= "\"" ([^ \t\n\r]+) "\"" space
+                space ::= | " " | "\n"{1,2} [ \t]{0,20}
+            )""",
+        });
+
+        run({
+            SUCCESS,
+            R"(regexp \B boundary skipped)",
+            R"""({
+                "type": "string",
+                "pattern": "^\\Bfoo\\B$"
+            })""",
+            R"""(
+                root ::= "\"" ("foo") "\"" space
+                space ::= | " " | "\n"{1,2} [ \t]{0,20}
+            )""",
+        });
     }
 
     if (getenv("LLAMA_SKIP_TESTS_SLOW_ON_EMULATOR")) {

@@ -448,8 +448,22 @@ private:
                     i++;
                     while (i < length && sub_pattern[i] != ']') {
                         if (sub_pattern[i] == '\\') {
-                            square_brackets += sub_pattern.substr(i, 2);
-                            i += 2;
+                            char next = sub_pattern[i + 1];
+                            if (next == 'd' || next == 'D') {
+                                square_brackets += next == 'd' ? "0-9" : "^0-9";
+                                i += 2;
+                            } else if (next == 'w' || next == 'W') {
+                                square_brackets += next == 'w' ? "a-zA-Z0-9_" : "^a-zA-Z0-9_";
+                                i += 2;
+                            } else if (next == 's' || next == 'S') {
+                                square_brackets += next == 's' ? " \\t\\n\\r" : "^ \\t\\n\\r";
+                                i += 2;
+                            } else if (next == 'b' || next == 'B') {
+                                i += 2;  // word boundary - no GBNF equivalent, skip
+                            } else {
+                                square_brackets += sub_pattern.substr(i, 2);
+                                i += 2;
+                            }
                         } else {
                             square_brackets += sub_pattern[i];
                             i++;
@@ -529,6 +543,20 @@ private:
                                 i++;
                                 literal += sub_pattern[i];
                                 i++;
+                            } else if (next == 'd' || next == 'D') {
+                                if (!literal.empty()) { seq.emplace_back(literal, true); literal = ""; }
+                                seq.emplace_back(next == 'd' ? "[0-9]" : "[^0-9]", false);
+                                i += 2;
+                            } else if (next == 'w' || next == 'W') {
+                                if (!literal.empty()) { seq.emplace_back(literal, true); literal = ""; }
+                                seq.emplace_back(next == 'w' ? "[a-zA-Z0-9_]" : "[^a-zA-Z0-9_]", false);
+                                i += 2;
+                            } else if (next == 's' || next == 'S') {
+                                if (!literal.empty()) { seq.emplace_back(literal, true); literal = ""; }
+                                seq.emplace_back(next == 's' ? "[ \\t\\n\\r]" : "[^ \\t\\n\\r]", false);
+                                i += 2;
+                            } else if (next == 'b' || next == 'B') {
+                                i += 2;  // word boundary - no GBNF equivalent, skip
                             } else {
                                 literal += sub_pattern.substr(i, 2);
                                 i += 2;
