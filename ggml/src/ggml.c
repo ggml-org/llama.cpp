@@ -1693,11 +1693,8 @@ static struct ggml_object * ggml_new_object(struct ggml_context * ctx, enum ggml
     }
 
     if (cur_end + size_needed + GGML_OBJECT_SIZE > ctx->mem_size) {
-        GGML_LOG_WARN("%s: not enough space in the context's memory pool (needed %zu, available %zu)\n",
+        GGML_LOG_DEBUG("%s: not enough space in the context's memory pool (needed %zu, available %zu)\n",
                 __func__, cur_end + size_needed + GGML_OBJECT_SIZE, ctx->mem_size);
-#ifndef NDEBUG
-        GGML_ABORT("not enough space in the context's memory pool");
-#endif
         return NULL;
     }
 
@@ -1763,7 +1760,9 @@ static struct ggml_tensor * ggml_new_tensor_impl(
     GGML_ASSERT(GGML_TENSOR_SIZE <= SIZE_MAX - obj_alloc_size);
 
     struct ggml_object * const obj_new = ggml_new_object(ctx, GGML_OBJECT_TYPE_TENSOR, GGML_TENSOR_SIZE + obj_alloc_size);
-    GGML_ASSERT(obj_new);
+    if (obj_new == NULL) {
+        return NULL;
+    }
 
     struct ggml_tensor * const result = (struct ggml_tensor *)((char *)ctx->mem_buffer + obj_new->offs);
 

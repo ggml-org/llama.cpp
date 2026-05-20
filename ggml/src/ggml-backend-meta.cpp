@@ -394,15 +394,46 @@ static ggml_backend_buffer_type_t ggml_backend_meta_device_get_host_buffer_type(
 
 struct ggml_backend_meta_buffer_context {
     static constexpr size_t nbtc = GGML_TENSOR_SIZE - sizeof(ggml_tensor::padding);
+    static constexpr size_t initial_ctx_size = 4 * 1024 * 1024;  // 4MB small enough to not waste RAM
 
     std::map<std::pair<const ggml_tensor *, bool>, std::pair<ggml_backend_meta_split_state, char[nbtc]>> split_state_cache;
-    std::map<          const ggml_tensor *,        std::vector<ggml_tensor *>>                           simple_tensors;
+    std::map<const ggml_tensor *, std::vector<ggml_tensor *>> simple_tensors;
 
     struct buffer_config {
-        ggml_context          * ctx;
-        ggml_backend_buffer_t   buf;
+        ggml_backend_buffer_t buf;
+        ggml_context * ctx = nullptr;
+        std::vector<ggml_context *> ctxs;
+        std::vector<std::unique_ptr<uint8_t[]>> ctx_mems;
+        size_t chunk_size;
 
-        buffer_config(ggml_context * ctx, ggml_backend_buffer_t buf) : ctx(ctx), buf(buf) {}
+        buffer_config() : buf(nullptr), chunk_size(initial_ctx_size) {}
+        buffer_config(buffer_config&&) noexcept = default;
+        buffer_config& operator=(buffer_config&&) noexcept = default;
+        buffer_config(const buffer_config&) = delete;
+        buffer_config& operator=(const buffer_config&) = delete;
+
+        void init(size_t mem_size) {
+            chunk_size = mem_size;
+            add_chunk();
+        }
+
+        void add_chunk() {
+            ctx_mems.push_back(std::unique_ptr<uint8_t[]>(new uint8_t[chunk_size]));
+            ggml_init_params params = {
+                /*.mem_size   =*/ chunk_size,
+                /*.mem_buffer =*/ ctx_mems.back().get(),
+                /*.no_alloc   =*/ true,
+            };
+            ctx = ggml_init(params);
+            ctxs.push_back(ctx);
+            chunk_size = (chunk_size * 3) / 2;  // 1.5x growth (33% max waste)
+        }
+
+        ~buffer_config() {
+            for (auto * ctx : ctxs) {
+                ggml_free(ctx);
+            }
+        }
     };
     std::vector<buffer_config> buf_configs;
 
@@ -417,9 +448,10 @@ struct ggml_backend_meta_buffer_context {
 static void ggml_backend_meta_buffer_free_buffer(ggml_backend_buffer_t buffer) {
     GGML_ASSERT(ggml_backend_buffer_is_meta(buffer));
     ggml_backend_meta_buffer_context * buf_ctx = (ggml_backend_meta_buffer_context *) buffer->context;
-    for (auto & [ctx, buf] : buf_ctx->buf_configs) {
-        ggml_backend_buffer_free(buf);
-        ggml_free(ctx);
+    for (auto & config : buf_ctx->buf_configs) {
+        if (config.buf) {
+            ggml_backend_buffer_free(config.buf);
+        }
     }
     delete buf_ctx;
 }
@@ -1103,74 +1135,84 @@ static enum ggml_status ggml_backend_meta_buffer_init_tensor(ggml_backend_buffer
 
     std::vector<ggml_tensor *> simple_tensors;
     simple_tensors.reserve(n_simple_bufs);
-    for (size_t j = 0; j < n_simple_bufs; j++) {
-        ggml_context          * simple_ctx = buf_ctx->buf_configs[j].ctx;
-        ggml_backend_buffer_t   simple_buf = buf_ctx->buf_configs[j].buf;
+    bool retry_alloc = true;
+    while (retry_alloc) {
+        retry_alloc = false;
+        simple_tensors.clear();
+        for (size_t j = 0; j < n_simple_bufs; j++) {
+            ggml_context          * simple_ctx = buf_ctx->buf_configs[j].ctx;
+            ggml_backend_buffer_t   simple_buf = buf_ctx->buf_configs[j].buf;
 
-        if (split_dim >= 0 && split_dim < GGML_MAX_DIMS) {
-            // TODO: the following assert fails for llama-parallel even though the results are correct:
-            // GGML_ASSERT(ggml_is_contiguously_allocated(tensor));
-            ne[split_dim] = 0;
-            for (size_t s = 0; s < split_state.n_segments; s++) {
-                ne[split_dim] += split_state.ne[s*n_simple_bufs + j];
-            }
-            for (int i = 0; i < GGML_MAX_DIMS; i++) {
-                if (tensor->nb[i] > tensor->nb[split_dim]) {
-                    nb[i] = tensor->nb[i] * ne[split_dim]/tensor->ne[split_dim];
+            if (split_dim >= 0 && split_dim < GGML_MAX_DIMS) {
+                // TODO: the following assert fails for llama-parallel even though the results are correct:
+                // GGML_ASSERT(ggml_is_contiguously_allocated(tensor));
+                ne[split_dim] = 0;
+                for (size_t s = 0; s < split_state.n_segments; s++) {
+                    ne[split_dim] += split_state.ne[s*n_simple_bufs + j];
                 }
-            }
-        }
-
-        ggml_tensor * t_ij = ggml_new_tensor(simple_ctx, tensor->type, GGML_MAX_DIMS, ne);
-        t_ij->op = tensor->op;
-        for (int i = 0; i < GGML_MAX_DIMS; i++) {
-            t_ij->nb[i] = nb[i];
-        }
-        t_ij->flags = tensor->flags;
-        memcpy(t_ij->op_params, tensor->op_params, sizeof(tensor->op_params));
-        ggml_set_name(t_ij, tensor->name);
-        t_ij->buffer = simple_buf;
-        t_ij->view_src = tensor->view_src;
-        t_ij->view_offs = tensor->view_offs;
-        if (t_ij->view_src != nullptr && ggml_backend_buffer_is_meta(t_ij->view_src->buffer)) {
-            t_ij->view_src = ggml_backend_meta_buffer_simple_tensor(tensor->view_src, j);
-            if (t_ij->view_offs > 0 && split_dim >= 0 && split_dim < GGML_MAX_DIMS) {
-                GGML_ASSERT(tensor->ne[split_dim] != 0);
-                const int split_dim_view_src = ggml_backend_meta_get_split_state(tensor->view_src, /*assume_sync =*/ true).axis;
-                GGML_ASSERT(split_dim_view_src >= 0 && split_dim_view_src < GGML_MAX_DIMS);
-
-                // The offset can be internal to the data split, in those cases the view offset should not be scaled.
-                // If however, the offset is larger than the data split then it needs to be scaled proportionally.
-                bool split_internal_offset = t_ij->view_offs <= tensor->view_src->nb[split_dim_view_src];
                 for (int i = 0; i < GGML_MAX_DIMS; i++) {
-                    const size_t dim_size = tensor->ne[i] * tensor->nb[i];
-                    if (tensor->view_offs <= dim_size && dim_size < tensor->nb[split_dim]) {
-                        split_internal_offset = true;
-                        break;
+                    if (tensor->nb[i] > tensor->nb[split_dim]) {
+                        nb[i] = tensor->nb[i] * ne[split_dim]/tensor->ne[split_dim];
                     }
                 }
-                if (!split_internal_offset) {
-                    t_ij->view_offs = t_ij->view_offs * ne[split_dim]/tensor->ne[split_dim];
+            }
+
+            ggml_tensor * t_ij = ggml_new_tensor(simple_ctx, tensor->type, GGML_MAX_DIMS, ne);
+            if (t_ij == nullptr) {
+                buf_ctx->buf_configs[j].add_chunk();
+                retry_alloc = true;
+                break;
+            }
+            t_ij->op = tensor->op;
+            for (int i = 0; i < GGML_MAX_DIMS; i++) {
+                t_ij->nb[i] = nb[i];
+            }
+            t_ij->flags = tensor->flags;
+            memcpy(t_ij->op_params, tensor->op_params, sizeof(tensor->op_params));
+            ggml_set_name(t_ij, tensor->name);
+            t_ij->buffer = simple_buf;
+            t_ij->view_src = tensor->view_src;
+            t_ij->view_offs = tensor->view_offs;
+            if (t_ij->view_src != nullptr && ggml_backend_buffer_is_meta(t_ij->view_src->buffer)) {
+                t_ij->view_src = ggml_backend_meta_buffer_simple_tensor(tensor->view_src, j);
+                if (t_ij->view_offs > 0 && split_dim >= 0 && split_dim < GGML_MAX_DIMS) {
+                    GGML_ASSERT(tensor->ne[split_dim] != 0);
+                    const int split_dim_view_src = ggml_backend_meta_get_split_state(tensor->view_src, /*assume_sync =*/ true).axis;
+                    GGML_ASSERT(split_dim_view_src >= 0 && split_dim_view_src < GGML_MAX_DIMS);
+
+                    // The offset can be internal to the data split, in those cases the view offset should not be scaled.
+                    // If however, the offset is larger than the data split then it needs to be scaled proportionally.
+                    bool split_internal_offset = t_ij->view_offs <= tensor->view_src->nb[split_dim_view_src];
+                    for (int i = 0; i < GGML_MAX_DIMS; i++) {
+                        const size_t dim_size = tensor->ne[i] * tensor->nb[i];
+                        if (tensor->view_offs <= dim_size && dim_size < tensor->nb[split_dim]) {
+                            split_internal_offset = true;
+                            break;
+                        }
+                    }
+                    if (!split_internal_offset) {
+                        t_ij->view_offs = t_ij->view_offs * ne[split_dim]/tensor->ne[split_dim];
+                    }
                 }
             }
-        }
-        if (t_ij->view_src != nullptr) {
-            t_ij->data = (char *) t_ij->view_src->data + t_ij->view_offs;
-        } else if (simple_buf != nullptr) {
-            t_ij->data = (char *) ggml_backend_buffer_get_base(simple_buf)
-                + size_t(tensor->data) - size_t(ggml_backend_buffer_get_base(buffer));
-        }
-        t_ij->extra = tensor->extra;
-        for (int i = 0; i < GGML_MAX_SRC; i++) {
-            t_ij->src[i] = tensor->src[i];
-            if (tensor->src[i] == tensor) {
-                t_ij->src[i] = t_ij;
-            } else if (t_ij->src[i] != nullptr && ggml_backend_buffer_is_meta(t_ij->src[i]->buffer)) {
-                t_ij->src[i] = ggml_backend_meta_buffer_simple_tensor(tensor->src[i], j);
+            if (t_ij->view_src != nullptr) {
+                t_ij->data = (char *) t_ij->view_src->data + t_ij->view_offs;
+            } else if (simple_buf != nullptr) {
+                t_ij->data = (char *) ggml_backend_buffer_get_base(simple_buf)
+                    + size_t(tensor->data) - size_t(ggml_backend_buffer_get_base(buffer));
             }
-        }
+            t_ij->extra = tensor->extra;
+            for (int i = 0; i < GGML_MAX_SRC; i++) {
+                t_ij->src[i] = tensor->src[i];
+                if (tensor->src[i] == tensor) {
+                    t_ij->src[i] = t_ij;
+                } else if (t_ij->src[i] != nullptr && ggml_backend_buffer_is_meta(t_ij->src[i]->buffer)) {
+                    t_ij->src[i] = ggml_backend_meta_buffer_simple_tensor(tensor->src[i], j);
+                }
+            }
 
-        simple_tensors.push_back(t_ij);
+            simple_tensors.push_back(t_ij);
+        }
     }
 
     // If one of the sources has a zero-sized slice, disable the computation:
@@ -1411,6 +1453,14 @@ static void ggml_backend_meta_buffer_reset(ggml_backend_buffer_t buffer) {
     for (size_t i = 0; i < n_buffers; i++) {
         ggml_backend_buffer_reset(ggml_backend_meta_buffer_simple_buffer(buffer, i));
     }
+
+    ggml_backend_meta_buffer_context * buf_ctx = (ggml_backend_meta_buffer_context *) buffer->context;
+    buf_ctx->simple_tensors.clear();
+    for (auto & config : buf_ctx->buf_configs) {
+        for (auto * ctx : config.ctxs) {
+            ggml_reset(ctx);
+        }
+    }
 }
 
 static const ggml_backend_buffer_i ggml_backend_meta_buffer_iface = {
@@ -1434,19 +1484,15 @@ bool ggml_backend_buffer_is_meta(ggml_backend_buffer_t buf) {
 static ggml_backend_buffer_t ggml_backend_meta_buffer_type_alloc_buffer(ggml_backend_buffer_type_t buft, size_t size) {
     const size_t n_simple_bufts = ggml_backend_meta_buft_n_bufts(buft);
 
-    ggml_init_params params = {
-        /*.mem_size   =*/ 1024*1024*1024, // FIXME
-        /*.mem_buffer =*/ nullptr,
-        /*.no_alloc   =*/ true,
-    };
-
     ggml_backend_meta_buffer_context * buf_ctx = new ggml_backend_meta_buffer_context();
     size_t max_size = 0;
     buf_ctx->buf_configs.reserve(n_simple_bufts);
     for (size_t i = 0; i < n_simple_bufts; i++) {
+        buf_ctx->buf_configs.emplace_back();
+        buf_ctx->buf_configs.back().init(ggml_backend_meta_buffer_context::initial_ctx_size);
         ggml_backend_buffer_t simple_buf = ggml_backend_buft_alloc_buffer(ggml_backend_meta_buft_simple_buft(buft, i), size);
         max_size = std::max(max_size, ggml_backend_buffer_get_size(simple_buf));
-        buf_ctx->buf_configs.emplace_back(ggml_init(params), simple_buf);
+        buf_ctx->buf_configs.back().buf = simple_buf;
     }
 
     return ggml_backend_buffer_init(buft, ggml_backend_meta_buffer_iface, buf_ctx, max_size);
@@ -1455,16 +1501,11 @@ static ggml_backend_buffer_t ggml_backend_meta_buffer_type_alloc_buffer(ggml_bac
 struct ggml_backend_buffer * ggml_backend_meta_alloc_ctx_tensors_from_buft(struct ggml_context * ctx, ggml_backend_buffer_type_t buft) {
     const size_t n_simple_bufts = ggml_backend_meta_buft_n_bufts(buft);
 
-    ggml_init_params params = {
-        /*.mem_size   =*/ 1024*1024*1024, // FIXME
-        /*.mem_buffer =*/ nullptr,
-        /*.no_alloc   =*/ true,
-    };
-
     ggml_backend_meta_buffer_context * meta_buf_ctx = new ggml_backend_meta_buffer_context();
     meta_buf_ctx->buf_configs.reserve(n_simple_bufts);
     for (size_t i = 0; i < n_simple_bufts; i++) {
-        meta_buf_ctx->buf_configs.emplace_back(ggml_init(params), nullptr);
+        meta_buf_ctx->buf_configs.emplace_back();
+        meta_buf_ctx->buf_configs.back().init(ggml_backend_meta_buffer_context::initial_ctx_size);
     }
 
     ggml_backend_buffer_t meta_buf = ggml_backend_buffer_init(buft, ggml_backend_meta_buffer_iface, meta_buf_ctx, 0);
@@ -1474,9 +1515,13 @@ struct ggml_backend_buffer * ggml_backend_meta_alloc_ctx_tensors_from_buft(struc
         t->data = (void *) 0x2000000000000000; // FIXME
     }
     for (size_t i = 0; i < n_simple_bufts; i++) {
+        // Weight tensors fit in one chunk by construction (~320 bytes/tensor)
+        GGML_ASSERT(meta_buf_ctx->buf_configs[i].ctxs.size() == 1);
         meta_buf_ctx->buf_configs[i].buf = ggml_backend_alloc_ctx_tensors_from_buft(
             meta_buf_ctx->buf_configs[i].ctx, ggml_backend_meta_buft_simple_buft(buft, i));
-        meta_buf->size = std::max(meta_buf->size, ggml_backend_buffer_get_size(meta_buf_ctx->buf_configs[i].buf));
+        if (meta_buf_ctx->buf_configs[i].buf) {
+            meta_buf->size = std::max(meta_buf->size, ggml_backend_buffer_get_size(meta_buf_ctx->buf_configs[i].buf));
+        }
     }
     return meta_buf;
 }
