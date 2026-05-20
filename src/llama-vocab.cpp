@@ -1,7 +1,5 @@
 #include "llama-vocab.h"
 
-#include "llama-vocab-carbon.h"
-
 #include "ggml.h"
 #include "gguf.h"
 #include "llama-impl.h"
@@ -578,12 +576,16 @@ struct llm_tokenizer_bpe_session {
         tokenize_bpe(text, output);
     }
 
-    // Carbon-3B (HybridDNATokenizer): switches between Qwen3 BPE for plain
-    // text and fixed k-mer chunking inside <dna>...</dna> regions.  Falls back
-    // to plain BPE if the DNA pieces are missing from the vocab.
+    // Carbon-3B (HybridDNATokenizer) — Qwen3 BPE for plain text, fixed 6-mer
+    // chunking inside <dna>...</dna> regions, <oov> for any non-ACGT base,
+    // trailing partial 6-mer right-padded with 'A'. Falls back to plain BPE
+    // if the DNA pieces are missing from the vocab.
     void tokenize_carbon(const std::string & text, std::vector<llama_token> & output) {
-        const auto dna_begin_id = vocab.text_to_token("<dna>");
-        const auto dna_end_id   = vocab.text_to_token("</dna>");
+        static const std::string open_tag  = "<dna>";
+        static const std::string close_tag = "</dna>";
+
+        const auto dna_begin_id = vocab.text_to_token(open_tag);
+        const auto dna_end_id   = vocab.text_to_token(close_tag);
         const auto dna_oov_id   = vocab.text_to_token("<oov>");
 
         if (dna_begin_id == LLAMA_TOKEN_NULL || dna_end_id == LLAMA_TOKEN_NULL || dna_oov_id == LLAMA_TOKEN_NULL) {
@@ -591,13 +593,72 @@ struct llm_tokenizer_bpe_session {
             return;
         }
 
-        llama_carbon::tokenize_carbon(
-            text,
-            dna_begin_id, dna_end_id, dna_oov_id,
-            /*k=*/6,
-            [this](const std::string & s) { return vocab.text_to_token(s); },
-            [this](const std::string & s, std::vector<llama_token> & out) { tokenize_bpe(s, out); },
-            output);
+        const size_t k = 6;
+        size_t pos = 0;
+
+        while (pos < text.size()) {
+            const size_t start = text.find(open_tag, pos);
+            if (start == std::string::npos) {
+                if (pos < text.size()) {
+                    tokenize_bpe(text.substr(pos), output);
+                }
+                break;
+            }
+            if (start > pos) {
+                tokenize_bpe(text.substr(pos, start - pos), output);
+            }
+            output.push_back(dna_begin_id);
+
+            const size_t content_start = start + open_tag.size();
+            const size_t end           = text.find(close_tag, content_start);
+            const size_t content_end   = (end == std::string::npos) ? text.size() : end;
+
+            emit_dna_kmers(text.substr(content_start, content_end - content_start), k, dna_oov_id, output);
+
+            if (end == std::string::npos) {
+                break;
+            }
+            output.push_back(dna_end_id);
+            pos = end + close_tag.size();
+        }
+    }
+
+    void emit_dna_kmers(const std::string & raw, size_t k, llama_token oov_id, std::vector<llama_token> & output) {
+        std::string seq = raw;
+        for (char & c : seq) {
+            if (c >= 'a' && c <= 'z') {
+                c = char(c - 32);
+            }
+        }
+        auto is_valid_kmer = [](const std::string & s) {
+            for (char c : s) {
+                if (c != 'A' && c != 'C' && c != 'G' && c != 'T') {
+                    return false;
+                }
+            }
+            return true;
+        };
+
+        size_t i = 0;
+        for (; i + k <= seq.size(); i += k) {
+            const std::string kmer = seq.substr(i, k);
+            if (is_valid_kmer(kmer)) {
+                const auto tok = vocab.text_to_token(kmer);
+                output.push_back(tok != LLAMA_TOKEN_NULL ? tok : oov_id);
+            } else {
+                output.push_back(oov_id);
+            }
+        }
+        if (i < seq.size()) {
+            std::string kmer = seq.substr(i);
+            kmer.append(k - kmer.size(), 'A');
+            if (is_valid_kmer(kmer)) {
+                const auto tok = vocab.text_to_token(kmer);
+                output.push_back(tok != LLAMA_TOKEN_NULL ? tok : oov_id);
+            } else {
+                output.push_back(oov_id);
+            }
+        }
     }
 
     void tokenize_bpe(const std::string & text, std::vector<llama_token> & output) {
