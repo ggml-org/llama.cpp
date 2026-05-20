@@ -355,6 +355,14 @@ class ModelsStore {
 			return null;
 		}
 
+		// Remote (proxy) entries have no /props endpoint — the upstream is an
+		// OAI-compatible server (e.g. vLLM) that doesn't expose llama.cpp's
+		// props. The router refuses to forward /props for remote entries, so
+		// short-circuit here to avoid an inevitable error.
+		if (this.routerModels.find((m) => m.id === modelId)?.kind === 'remote') {
+			return null;
+		}
+
 		if (this.modelPropsFetching.has(modelId)) return null;
 
 		this.modelPropsFetching.add(modelId);

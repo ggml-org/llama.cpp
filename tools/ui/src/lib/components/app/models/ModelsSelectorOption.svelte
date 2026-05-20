@@ -39,10 +39,9 @@
 	}: Props = $props();
 
 	let currentRouterModels = $derived(routerModels());
-	let serverStatus = $derived.by(() => {
-		const model = currentRouterModels.find((m) => m.id === option.model);
-		return (model?.status?.value as ServerModelStatus) ?? null;
-	});
+	let routerEntry = $derived(currentRouterModels.find((m) => m.id === option.model));
+	let serverStatus = $derived((routerEntry?.status?.value as ServerModelStatus) ?? null);
+	let isRemote = $derived(routerEntry?.kind === 'remote');
 	let isOperationInProgress = $derived(modelsStore.isModelOperationInProgress(option.model));
 	let isFailed = $derived(serverStatus === ServerModelStatus.FAILED);
 	let isSleeping = $derived(serverStatus === ServerModelStatus.SLEEPING);
@@ -112,7 +111,24 @@
 			{/if}
 		</div>
 
-		{#if isLoading}
+		{#if isRemote}
+			<div class="flex w-4 items-center justify-center">
+				<!-- sky-500 is a calm, distinct blue that reads well on both themes -->
+				<span class="h-2 w-2 rounded-full bg-sky-500 group-hover:hidden"></span>
+
+				<div class="hidden group-hover:flex">
+					<ActionIcon
+						iconSize="h-2.5 w-2.5"
+						icon={PowerOff}
+						tooltip="Remote models cannot be loaded/unloaded"
+						class="h-3 w-3 text-muted-foreground"
+						disabled
+						onclick={() => {}}
+						stopPropagationOnClick
+					/>
+				</div>
+			</div>
+		{:else if isLoading}
 			<Loader2 class="h-4 w-4 animate-spin text-muted-foreground" />
 		{:else if isFailed}
 			<div class="flex w-4 items-center justify-center">

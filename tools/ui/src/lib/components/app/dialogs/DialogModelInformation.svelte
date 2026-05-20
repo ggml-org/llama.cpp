@@ -3,7 +3,12 @@
 	import * as Table from '$lib/components/ui/table';
 	import { BadgesModality, ActionIconCopyToClipboard } from '$lib/components/app';
 	import { serverStore } from '$lib/stores/server.svelte';
-	import { modelsStore, modelOptions, modelsLoading } from '$lib/stores/models.svelte';
+	import {
+		modelsStore,
+		modelOptions,
+		modelsLoading,
+		routerModels
+	} from '$lib/stores/models.svelte';
 	import { formatFileSize, formatParameters, formatNumber } from '$lib/utils';
 	import type { ApiLlamaCppServerProps } from '$lib/types';
 
@@ -44,6 +49,46 @@
 		return modelsStore.getModelModalitiesArray(firstModel.id);
 	});
 
+	// Look up the raw router entry to access kind/remote/upstream fields,
+	// which aren't carried on ModelOption.
+	let routerEntry = $derived.by(() => {
+		const id = firstModel?.id ?? modelId;
+		if (!id) return null;
+		return routerModels().find((m) => m.id === id) ?? null;
+	});
+	let isRemoteEntry = $derived(routerEntry?.kind === 'remote');
+	let upstreamMeta = $derived(routerEntry?.upstream ?? null);
+	let upstreamUrl = $derived(routerEntry?.remote?.url ?? '');
+	let upstreamModelId = $derived(routerEntry?.remote?.model ?? '');
+	let upstreamModelsUrl = $derived(
+		upstreamUrl ? `${upstreamUrl.replace(/\/$/, '')}/v1/models` : ''
+	);
+	// Display helpers — render whatever scalar fields the upstream returned.
+	function formatUpstreamValue(value: unknown): string {
+		if (value === null || value === undefined) return '';
+		if (typeof value === 'number' || typeof value === 'string' || typeof value === 'boolean') {
+			return String(value);
+		}
+		try {
+			return JSON.stringify(value);
+		} catch {
+			return '';
+		}
+	}
+	function humanizeUpstreamKey(key: string): string {
+		return key.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+	}
+	// Hide keys that duplicate what the router-level row already shows or that
+	// add noise (permissions are huge nested arrays in vLLM).
+	const UPSTREAM_KEY_SKIP = new Set(['id', 'object', 'permission']);
+	let upstreamRows = $derived.by(() => {
+		if (!upstreamMeta) return [] as Array<{ key: string; label: string; value: string }>;
+		return Object.entries(upstreamMeta)
+			.filter(([k]) => !UPSTREAM_KEY_SKIP.has(k))
+			.map(([k, v]) => ({ key: k, label: humanizeUpstreamKey(k), value: formatUpstreamValue(v) }))
+			.filter((row) => row.value !== '');
+	});
+
 	// Ensure models are fetched when dialog opens
 	$effect(() => {
 		if (open && models.length === 0) {
@@ -51,9 +96,10 @@
 		}
 	});
 
-	// fetch per-model props from child process when dialog opens in router mode
+	// fetch per-model props from child process when dialog opens in router mode.
+	// Remote entries have no child process, so skip — we render upstream metadata instead.
 	$effect(() => {
-		if (open && isRouter && modelId) {
+		if (open && isRouter && modelId && !isRemoteEntry) {
 			isLoadingRouterProps = true;
 			modelsStore
 				.fetchModelProps(modelId)
@@ -94,6 +140,101 @@
 				<div class="flex items-center justify-center py-8">
 					<div class="text-sm text-muted-foreground">Loading model information...</div>
 				</div>
+			{:else if isRemoteEntry && firstModel}
+				<!-- Remote (proxy) entries: render upstream metadata captured at router boot, -->
+				<!-- with explicit N/A + links when the upstream was unreachable.              -->
+				<Table.Root>
+					<Table.Header>
+						<Table.Row>
+							<Table.Head class="w-[10rem]">Remote Model</Table.Head>
+							<Table.Head>
+								<div class="inline-flex items-center gap-2">
+									<span
+										class="resizable-text-container min-w-0 flex-1 truncate"
+										style:--threshold="12rem"
+									>
+										{modelName}
+									</span>
+
+									<ActionIconCopyToClipboard
+										text={modelName || ''}
+										canCopy={!!modelName}
+										ariaLabel="Copy model name to clipboard"
+									/>
+								</div>
+							</Table.Head>
+						</Table.Row>
+					</Table.Header>
+					<Table.Body>
+						<Table.Row>
+							<Table.Cell class="h-10 align-middle font-medium">Upstream URL</Table.Cell>
+							<Table.Cell class="h-10 align-middle font-mono text-xs">
+								{#if upstreamUrl}
+									<a
+										href={upstreamModelsUrl}
+										target="_blank"
+										rel="noreferrer noopener"
+										class="text-sky-600 underline-offset-2 hover:underline"
+									>
+										{upstreamUrl}
+									</a>
+								{:else}
+									<span class="text-muted-foreground">N/A</span>
+								{/if}
+							</Table.Cell>
+						</Table.Row>
+
+						{#if upstreamModelId}
+							<Table.Row>
+								<Table.Cell class="h-10 align-middle font-medium">Upstream Model ID</Table.Cell>
+								<Table.Cell class="h-10 align-middle font-mono text-xs">
+									{upstreamModelId}
+								</Table.Cell>
+							</Table.Row>
+						{/if}
+
+						{#if upstreamRows.length > 0}
+							{#each upstreamRows as row (row.key)}
+								<Table.Row>
+									<Table.Cell class="h-10 align-middle font-medium">{row.label}</Table.Cell>
+									<Table.Cell class="h-10 align-middle font-mono text-xs">
+										{row.value}
+									</Table.Cell>
+								</Table.Row>
+							{/each}
+						{:else}
+							<Table.Row>
+								<Table.Cell class="h-10 align-middle font-medium text-muted-foreground">
+									Upstream metadata
+								</Table.Cell>
+								<Table.Cell class="h-10 align-middle text-xs text-muted-foreground">
+									N/A — upstream was unreachable when the router started. Try:
+									{#if upstreamUrl}
+										<a
+											href={upstreamModelsUrl}
+											target="_blank"
+											rel="noreferrer noopener"
+											class="ml-1 text-sky-600 underline-offset-2 hover:underline"
+										>
+											{upstreamModelsUrl}
+										</a>
+									{/if}
+								</Table.Cell>
+							</Table.Row>
+						{/if}
+
+						{#if modalities.length > 0}
+							<Table.Row>
+								<Table.Cell class="align-middle font-medium">Modalities</Table.Cell>
+								<Table.Cell>
+									<div class="flex flex-wrap gap-1">
+										<BadgesModality {modalities} />
+									</div>
+								</Table.Cell>
+							</Table.Row>
+						{/if}
+					</Table.Body>
+				</Table.Root>
 			{:else if firstModel}
 				{@const modelMeta = firstModel.meta}
 

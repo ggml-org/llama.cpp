@@ -94,6 +94,20 @@ export interface ApiModelDataEntry {
 	tags?: string[];
 	/** Legacy meta field (may be present in older responses) */
 	meta?: Record<string, unknown> | null;
+	/** "local" (router-spawned child llama-server) or "remote" (proxy to external OAI-compatible server). */
+	kind?: 'local' | 'remote';
+	/** For remote entries: upstream URL and (optional) upstream model id. */
+	remote?: {
+		url: string;
+		model?: string;
+	};
+	/**
+	 * For remote entries: raw upstream metadata captured at router boot by
+	 * GETting the upstream's /v1/models and picking the entry matching
+	 * `remote.model`. Shape varies by upstream (vLLM, OpenAI, etc.).
+	 * Absent if the upstream was unreachable when the router started.
+	 */
+	upstream?: Record<string, unknown>;
 }
 
 export interface ApiModelDetails {
