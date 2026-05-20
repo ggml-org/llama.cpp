@@ -4113,7 +4113,7 @@ void ggml_gemm_q4_K_8x8_q8_K(int                        n,
                     }
                 }  // for x
             }  // for y
-            break;   
+            return;   
         }
         case 128:
         {
@@ -4717,10 +4717,10 @@ void ggml_gemm_q4_K_8x8_q8_K(int                        n,
                     }
                 }  // for x
             }  // for y
-            break;
+            return;
         }
         default:
-            std::cout << "Invalid VL. VL is neither 128 nor 256" << std::endl;      
+            std::cout << "Invalid VL. VL is neither 128 nor 256" << std::endl;    
     }
 #endif  // SVE compile-time end
 
