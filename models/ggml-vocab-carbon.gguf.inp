@@ -23,3 +23,15 @@ __ggml_vocab_test__
 <dna>ATCGAT
 __ggml_vocab_test__
 <dna>ATCGAT</dna> <dna>CGTACG</dna>
+__ggml_vocab_test__
+<dna>ATGCGCTAGCTACGATCGATCGTAGCTAGCTAGCTAGCTACG
+__ggml_vocab_test__
+<dna>ATGCGCTAGCTACGATCGATCGTAGCTAGCTAG</dna>
+__ggml_vocab_test__
+<vertebrate_mammalian><protein_coding_region><dna>ATGCGCTAG
+__ggml_vocab_test__
+ATGCGCTAGCTACGATCGATCGTAGCTAGCTAG
+__ggml_vocab_test__
+<dna>GGGCTATAAAGGCCATCGATCGATCGATCGATCGATCGATCG</dna>
+__ggml_vocab_test__
+<dna>GGGCGCGCGCGGCCATCGATCGATCGATCGATCGATCGATCG</dna>
