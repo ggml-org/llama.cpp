@@ -87,6 +87,9 @@ static ggml_sycl_device_info ggml_sycl_init() {
         return info;
     }
 
+    // we need to know if the user wants Level Zero off, before earliest allocations
+    info.ext_oneapi_level_zero = get_sycl_env("GGML_SYCL_ENABLE_LEVEL_ZERO", info.ext_oneapi_level_zero);
+
     GGML_ASSERT(info.device_count <= GGML_SYCL_MAX_DEVICES);
 
     int64_t total_vram = 0;
@@ -126,8 +129,6 @@ static ggml_sycl_device_info ggml_sycl_init() {
             info.ext_oneapi_level_zero = false;
         }
     }
-
-    info.ext_oneapi_level_zero = get_sycl_env("GGML_SYCL_ENABLE_LEVEL_ZERO", info.ext_oneapi_level_zero);
 
     for (int id = 0; id < info.device_count; ++id) {
         info.default_tensor_split[id] /= total_vram;
