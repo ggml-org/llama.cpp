@@ -345,16 +345,108 @@ void server_models::add_model(server_model_meta && meta) {
         meta.remote = server_model_remote{rp.url, rp.api_key, rp.model_id};
         // Remote entries are always "loaded" from the router's perspective.
         meta.status = SERVER_MODEL_STATUS_LOADED;
+        // Note: the upstream model id is intentionally NOT registered as an
+        // alias. The router rewrites `"model":"<upstream-id>"` to the router-
+        // side name on response bodies (see proxy_request), so clients never
+        // need to know the upstream id exists.
     } else {
         meta.update_args(ctx_preset, bin_path); // render args
         meta.update_caps();
     }
     std::string name = meta.name;
+    bool is_remote_entry = meta.is_remote();
+    std::string remote_url, remote_key, remote_id;
+    if (is_remote_entry) {
+        remote_url = meta.remote->url;
+        remote_key = meta.remote->api_key;
+        remote_id  = meta.remote->model_id;
+    }
     mapping[name] = instance_t{
         /* subproc */ std::make_shared<subprocess_s>(),
         /* th      */ std::thread(),
         /* meta    */ std::move(meta)
     };
+    if (is_remote_entry) {
+        fetch_remote_metadata_async(name, remote_url, remote_key, remote_id);
+    }
+}
+
+void server_models::fetch_remote_metadata_async(
+        const std::string & name,
+        const std::string & url,
+        const std::string & api_key,
+        const std::string & upstream_model) {
+    std::thread([this, name, url, api_key, upstream_model]() {
+        try {
+            auto target = parse_remote_url(url);
+            // Use ClientImpl directly: SSLClient derives from ClientImpl (not from Client),
+            // so this lets us switch between http and https with one pointer type.
+            std::unique_ptr<httplib::ClientImpl> cli(
+                new httplib::ClientImpl(target.host, target.port));
+            if (target.scheme == "https") {
+#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
+                cli.reset(new httplib::SSLClient(target.host, target.port));
+#else
+                SRV_WRN("remote %s: HTTPS metadata fetch requires CPPHTTPLIB_OPENSSL_SUPPORT\n", name.c_str());
+                return;
+#endif
+            }
+            cli->set_connection_timeout(5, 0);
+            cli->set_read_timeout(10, 0);
+
+            httplib::Headers hdrs;
+            if (!api_key.empty()) {
+                hdrs.emplace("Authorization", "Bearer " + api_key);
+            }
+
+            const std::string path = target.base_path + "/v1/models";
+            auto res = cli->Get(path.c_str(), hdrs);
+            if (!res) {
+                SRV_WRN("remote %s: /v1/models fetch failed (no response)\n", name.c_str());
+                return;
+            }
+            if (res->status != 200) {
+                SRV_WRN("remote %s: /v1/models returned status %d\n", name.c_str(), res->status);
+                return;
+            }
+
+            json parsed = json::parse(res->body, nullptr, false);
+            if (parsed.is_discarded() || !parsed.contains("data") || !parsed["data"].is_array()) {
+                SRV_WRN("remote %s: /v1/models response not in expected shape\n", name.c_str());
+                return;
+            }
+
+            json upstream_entry;
+            for (auto & m : parsed["data"]) {
+                if (!upstream_model.empty() && m.contains("id") && m["id"] == upstream_model) {
+                    upstream_entry = m;
+                    break;
+                }
+            }
+            if (upstream_entry.is_null()) {
+                // Fall back to the first entry — useful when remote-model isn't configured.
+                if (!parsed["data"].empty()) {
+                    upstream_entry = parsed["data"][0];
+                }
+            }
+            if (upstream_entry.is_null()) {
+                SRV_WRN("remote %s: /v1/models returned empty list\n", name.c_str());
+                return;
+            }
+
+            std::unique_lock<std::mutex> lk(mutex);
+            auto it = mapping.find(name);
+            if (it != mapping.end()) {
+                it->second.meta.loaded_info = json{{"upstream", upstream_entry}};
+                SRV_INF("remote %s: cached upstream metadata (id=%s)\n",
+                    name.c_str(),
+                    upstream_entry.contains("id") ? std::string(upstream_entry["id"]).c_str() : "?");
+            }
+            cv.notify_all();
+        } catch (const std::exception & e) {
+            SRV_WRN("remote %s: upstream metadata fetch threw: %s\n", name.c_str(), e.what());
+        }
+    }).detach();
 }
 
 void server_models::load_models() {
@@ -1478,8 +1570,10 @@ void server_models_routes::init_routes() {
                 };
             }
 
-            // merge with loaded_info from the child process if available (local only)
-            if (!meta.is_remote() && meta.is_running()) {
+            // Merge loaded_info from the child (local) or the async upstream
+            // metadata fetch (remote). loaded_info is non-clobbering: router-set
+            // keys (id, owned_by, kind, status, ...) win.
+            if (meta.is_running()) {
                 for (auto it = meta.loaded_info.begin(); it != meta.loaded_info.end(); ++it) {
                     if (!model_info.contains(it.key())) {
                         model_info[it.key()] = it.value();

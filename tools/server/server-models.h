@@ -138,6 +138,16 @@ private:
     // not thread-safe, caller must hold mutex
     void add_model(server_model_meta && meta);
 
+    // For remote entries: fire-and-forget background fetch of the upstream's
+    // /v1/models, storing the matching entry under loaded_info["upstream"].
+    // Caller passes the values directly because this can be invoked while the
+    // calling thread holds `mutex` (which is non-reentrant).
+    void fetch_remote_metadata_async(
+        const std::string & name,
+        const std::string & url,
+        const std::string & api_key,
+        const std::string & upstream_model);
+
 public:
     server_models(const common_params & params, int argc, char ** argv);
 
