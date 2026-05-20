@@ -1027,9 +1027,8 @@ private:
         SRV_INF("%s", "for more info see https://github.com/ggml-org/llama.cpp/pull/16391\n");
 
         if (params_base.n_ctx_checkpoints > 0) {
-            SRV_INF("context checkpoints enabled, max = %d, every = %d, start after = %d, min spacing = %d\n",
-                    params_base.n_ctx_checkpoints, params_base.checkpoint_every_nt,
-                    params_base.checkpoint_start_after_nt, params_base.checkpoint_min_spacing_nt);
+            SRV_INF("context checkpoints enabled, max = %d, min spacing = %d\n",
+                    params_base.n_ctx_checkpoints, params_base.checkpoint_min_spacing_nt);
         } else {
             SRV_INF("%s", "context checkpoints disabled\n");
         }
@@ -2689,8 +2688,6 @@ private:
                                 }
 
                                 if (pos_min >= pos_min_thold) {
-                                    SLT_WRN(slot, "n_past = %d, slot.prompt.tokens.size() = %d, seq_id = %d, pos_min = %d, n_swa = %d\n", n_past, (int) slot.prompt.tokens.size(), slot.id, pos_min, n_swa);
-
                                     // search for a context checkpoint
                                     const auto it = std::find_if(
                                         slot.prompt.checkpoints.rbegin(),
@@ -2707,7 +2704,6 @@ private:
 
                                     if (!do_reset) {
                                         // restore the context checkpoint
-
                                         it->load_tgt(ctx_tgt,       slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
                                         it->load_dft(ctx_dft.get(), slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
 
@@ -2878,8 +2874,6 @@ private:
                         // can be created after the previous messages
                         if (has_last_user_checkpoint &&
                             slot.prompt.n_tokens() == checkpoint_before_last_user_n_tokens) {
-                            SLT_INF(slot, "checkpoint before user input reached: ending prompt batch at prompt_n_tokens = %d\n",
-                                    slot.prompt.n_tokens());
                             break;
                         }
 
@@ -2910,6 +2904,7 @@ private:
                     // checkpoints are created before the current batch is decoded, so
                     // their token position is the batch start rather than the prompt end
                     const int32_t checkpoint_batch_start = slot.prompt.n_tokens() - n_tokens_cur;
+                    const bool near_prompt_end = slot.task->n_tokens() < slot.prompt.n_tokens() + n_ubatch;
 
                     // entire prompt has been processed
                     if (slot.prompt.n_tokens() == slot.task->n_tokens()) {
@@ -2925,25 +2920,9 @@ private:
 
                         slot.init_sampler();
                     } else {
-                        const bool near_prompt_end = slot.task->n_tokens() < slot.prompt.n_tokens() + n_ubatch;
-                        const bool use_periodic_checkpoint_schedule = !has_last_user_checkpoint && !near_prompt_end;
-
-                        if (use_periodic_checkpoint_schedule) {
-                            // only do non-end checkpoints if the "checkpoint every n tokens" option is set
-                            do_checkpoint = do_checkpoint && params_base.checkpoint_every_nt > 0;
-
-                            if (do_checkpoint) {
-                                llama_pos last_checkpoint = 0;
-                                if (!slot.prompt.checkpoints.empty()) {
-                                    last_checkpoint = slot.prompt.checkpoints.back().n_tokens;
-                                }
-
-                                do_checkpoint = do_checkpoint && slot.prompt.n_tokens() - batch.n_tokens - last_checkpoint >= params_base.checkpoint_every_nt;
-
-                                if (do_checkpoint) {
-                                    SLT_INF(slot, "%d tokens since last checkpoint at %d, creating new checkpoint during processing at position %d\n", params_base.checkpoint_every_nt, last_checkpoint, slot.prompt.n_tokens());
-                                }
-                            }
+                        // skip ordinary mid-prompt checkpoints
+                        if (!has_last_user_checkpoint && !near_prompt_end) {
+                            do_checkpoint = false;
                         }
                     }
 
@@ -2953,27 +2932,22 @@ private:
                     const bool at_last_user_checkpoint =
                         has_last_user_checkpoint &&
                         checkpoint_batch_start == checkpoint_before_last_user_n_tokens;
-                    const int64_t last_checkpoint = slot.prompt.checkpoints.empty()
-                        ? 0
-                        : slot.prompt.checkpoints.back().n_tokens;
-                    const int64_t distance_from_last_checkpoint = checkpoint_batch_start - last_checkpoint;
-                    const bool regular_checkpoint_due =
-                        params_base.checkpoint_every_nt > 0 &&
-                        distance_from_last_checkpoint >= params_base.checkpoint_every_nt;
+                    const bool after_last_user_checkpoint =
+                        has_last_user_checkpoint &&
+                        checkpoint_batch_start > checkpoint_before_last_user_n_tokens;
                     const bool checkpoint_allowed_by_last_user =
                         !has_last_user_checkpoint ||
                         at_last_user_checkpoint ||
-                        regular_checkpoint_due;
+                        (after_last_user_checkpoint && near_prompt_end);
 
                     if (do_checkpoint && !checkpoint_allowed_by_last_user) {
-                        SLT_INF(slot, "skip checkpoint at %d, expected checkpoint before user input = %d\n",
-                                checkpoint_batch_start, checkpoint_before_last_user_n_tokens);
-
                         do_checkpoint = false;
                     }
 
-                    // no need for checkpoints with no tokens or before the prompt reaches the configured token count
-                    do_checkpoint = do_checkpoint && (pos_min >= 0 && slot.prompt.n_tokens() >= params_base.checkpoint_start_after_nt);
+                    // nothing to checkpoint yet
+                    if (do_checkpoint && pos_min < 0) {
+                        do_checkpoint = false;
+                    }
 
                     // do not checkpoint after mtmd chunks
                     do_checkpoint = do_checkpoint && !has_mtmd;
