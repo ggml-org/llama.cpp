@@ -299,21 +299,27 @@ stream_session_manager g_stream_sessions;
 
 // stream_pipe ---------------------------------------------------------------------------------
 
-stream_pipe::stream_pipe(stream_session_ptr session, bool is_producer)
-    : session_(std::move(session))
-    , is_producer_(is_producer)
-    , res_(nullptr) {
+stream_pipe::stream_pipe(stream_session_ptr session)
+    : session_(std::move(session)) {
 }
 
-stream_pipe::~stream_pipe() {
+bool stream_pipe::is_cancelled() const {
+    return session_->is_cancelled();
+}
+
+// stream_pipe_producer
+
+stream_pipe_producer::stream_pipe_producer(stream_session_ptr session)
+    : stream_pipe(std::move(session)) {
+}
+
+stream_pipe_producer::~stream_pipe_producer() {
     cleanup();
-    if (is_producer_) {
-        session_->finalize();
-    }
+    session_->finalize();
 }
 
-void stream_pipe::cleanup() {
-    if (!is_producer_ || !alive_) {
+void stream_pipe_producer::cleanup() {
+    if (!alive_) {
         return;
     }
     alive_->store(false, std::memory_order_release);
@@ -321,31 +327,21 @@ void stream_pipe::cleanup() {
     alive_.reset();
 }
 
-bool stream_pipe::write(const char * data, size_t len) {
+bool stream_pipe_producer::write(const char * data, size_t len) {
     return session_->append(data, len);
 }
 
-stream_read_status stream_pipe::read(size_t & offset,
-        const std::function<bool(const char *, size_t)> & sink,
-        const std::function<bool()> & should_stop) {
-    return session_->read_from(offset, sink, should_stop);
-}
-
-bool stream_pipe::is_cancelled() const {
-    return session_->is_cancelled();
-}
-
-void stream_pipe::mark_producer_done() {
+void stream_pipe_producer::mark_producer_done() {
     producer_done_ = true;
 }
 
-void stream_pipe::finish_producer() {
+void stream_pipe_producer::finish_producer() {
     // the peer dropped before the producer finished. httplib bails its content provider the moment
     // is_peer_alive() goes false, so the rest of the generation is pumped here into the ring buffer
     // on the http worker, from on_complete. stream_aware_should_stop ignores peer disconnect while a
     // pipe is attached, so res_->next() runs to natural completion, only an explicit DELETE flips
-    // is_cancelled and cuts it short. is_producer_ guarantees res_ is set
-    if (!is_producer_ || producer_done_ || session_->is_cancelled()) {
+    // is_cancelled and cuts it short
+    if (producer_done_ || session_->is_cancelled()) {
         return;
     }
     std::string chunk;
@@ -361,8 +357,8 @@ void stream_pipe::finish_producer() {
     }
 }
 
-std::shared_ptr<stream_pipe> stream_pipe::create_producer(stream_session_ptr session,
-                                                          server_http_res & res) {
+std::shared_ptr<stream_pipe_producer> stream_pipe_producer::create(stream_session_ptr session,
+                                                                   server_http_res & res) {
     auto alive = std::make_shared<std::atomic<bool>>(true);
     auto * res_ptr = &res;
     session->set_stop_producer([alive, res_ptr]() {
@@ -370,14 +366,26 @@ std::shared_ptr<stream_pipe> stream_pipe::create_producer(stream_session_ptr ses
             res_ptr->stop();
         }
     });
-    auto pipe = std::shared_ptr<stream_pipe>(new stream_pipe(std::move(session), true));
+    auto pipe = std::shared_ptr<stream_pipe_producer>(new stream_pipe_producer(std::move(session)));
     pipe->alive_ = std::move(alive);
     pipe->res_   = res_ptr;
     return pipe;
 }
 
-std::shared_ptr<stream_pipe> stream_pipe::create_consumer(stream_session_ptr session) {
-    return std::shared_ptr<stream_pipe>(new stream_pipe(std::move(session), false));
+// stream_pipe_consumer
+
+stream_pipe_consumer::stream_pipe_consumer(stream_session_ptr session)
+    : stream_pipe(std::move(session)) {
+}
+
+stream_read_status stream_pipe_consumer::read(size_t & offset,
+        const std::function<bool(const char *, size_t)> & sink,
+        const std::function<bool()> & should_stop) {
+    return session_->read_from(offset, sink, should_stop);
+}
+
+std::shared_ptr<stream_pipe_consumer> stream_pipe_consumer::create(stream_session_ptr session) {
+    return std::shared_ptr<stream_pipe_consumer>(new stream_pipe_consumer(std::move(session)));
 }
 
 // helper, builds the standard error response and assigns it to a brand new http_res
@@ -424,7 +432,7 @@ server_http_context::handler_t make_stream_get_handler() {
         // chunk so set_chunked_content_provider gets a chance to flush to the socket
         auto offset_ptr = std::make_shared<size_t>(from);
         // consumer pipe: read-only, does not finalize the session on destruction
-        auto pipe = stream_pipe::create_consumer(session);
+        auto pipe = stream_pipe_consumer::create(session);
         res->next = [pipe, offset_ptr, &req](std::string & output) -> bool {
             bool got_any = false;
             pipe->read(*offset_ptr,
@@ -542,7 +550,7 @@ void stream_session_attach_pipe(server_http_res & res, const std::map<std::strin
         return;
     }
     auto session = g_stream_sessions.create_or_replace(conversation_id);
-    res.spipe = stream_pipe::create_producer(session, res);
+    res.spipe = stream_pipe_producer::create(session, res);
 }
 
 std::function<bool()> stream_aware_should_stop(server_http_res * res, std::function<bool()> fallback) {

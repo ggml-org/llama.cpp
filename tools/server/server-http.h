@@ -11,7 +11,7 @@
 #include <unordered_map>
 
 struct common_params;
-struct stream_pipe; // defined in server-stream.h
+struct stream_pipe_producer; // defined in server-stream.h
 
 // generator-like API for HTTP response generation
 // this object response with one of the 2 modes:
@@ -26,11 +26,10 @@ struct server_http_res {
     std::map<std::string, std::string> headers;
 
     // if set, the stream survives a client disconnect: when the peer leaves before the producer is
-    // done, on_complete hands the response to a manager owned thread that drains the rest of the
-    // generation into the ring buffer, releasing the http worker at once. the pipe destructor
-    // finalizes the session so no explicit on_stream_end callback is needed.
+    // done, on_complete drains the rest of the generation into the ring buffer on the http worker.
+    // the producer pipe destructor finalizes the session so no explicit on_stream_end is needed.
     // shared_ptr used (not unique_ptr) so the forward-declared type is safe to delete here.
-    std::shared_ptr<stream_pipe> spipe;
+    std::shared_ptr<stream_pipe_producer> spipe;
 
     std::function<bool(std::string &)> next = nullptr;
     bool is_stream() const {

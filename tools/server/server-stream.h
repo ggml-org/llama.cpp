@@ -76,61 +76,72 @@ private:
 
 using stream_session_ptr = std::shared_ptr<stream_session>;
 
-// RAII wrapper around a stream_session that represents one end of the pipe.
-// the producer side writes chunks and is responsible for finalizing; the consumer side reads.
-//
-// lifetime safety: the producer pipe holds a shared_ptr<atomic<bool>> alive that is also
-// captured by the session's stop_producer hook. cleanup() sets alive=false and clears the
-// hook; it must be called while the owning response object is still valid (i.e. before the
-// reader it would call stop() on is destroyed). ~server_res_generator() does this explicitly.
+// one end of a stream_session pipe. the base holds the session and the shared query, the
+// producer and consumer ends derive from it. virtual dtor so each end runs its own teardown:
+// the producer finalizes the session, the consumer leaves it untouched
 struct stream_pipe {
-    ~stream_pipe();
-
-    // producer: append raw bytes to the session's ring buffer.
-    // returns false if the session is already finalized.
-    bool write(const char * data, size_t len);
-
-    // consumer: drain bytes from offset, calling sink for each available chunk.
-    // blocks until more data arrives or the session finalizes.
-    // should_stop is polled periodically; returns OFFSET_LOST if offset fell below the prefix.
-    stream_read_status read(size_t & offset,
-        const std::function<bool(const char *, size_t)> & sink,
-        const std::function<bool()> & should_stop);
+    virtual ~stream_pipe() = default;
 
     // true if the session was cancelled (e.g. via DELETE /v1/stream/<conv_id>)
     bool is_cancelled() const;
 
-    // producer: record that next() reached its natural end on the wire, so finish_producer turns
-    // into a no-op. the http drain calls this right before it closes the stream cleanly
+protected:
+    explicit stream_pipe(stream_session_ptr session);
+
+    stream_session_ptr session_;
+};
+
+// producer end: writes chunks into the ring buffer and owns the session lifetime, finalizing it
+// on destruction.
+//
+// lifetime safety: holds a shared_ptr<atomic<bool>> alive also captured by the session's
+// stop_producer hook. cleanup() sets alive=false and clears the hook; it must run while the
+// response the hook calls stop() on is still alive. ~server_res_generator() does this explicitly.
+struct stream_pipe_producer : stream_pipe {
+    ~stream_pipe_producer() override;
+
+    // append raw bytes to the session's ring buffer, returns false if already finalized
+    bool write(const char * data, size_t len);
+
+    // record that next() reached its natural end on the wire, so finish_producer turns into a
+    // no-op. the http drain calls this right before it closes the stream cleanly
     void mark_producer_done();
 
-    // producer: when the peer dropped before the producer finished, pump the response next() into
-    // the ring buffer until it reports done. runs on the caller's thread (the http worker, from
-    // on_complete), no-op for a consumer pipe, an already finished producer, or a cancelled session.
-    // only an explicit DELETE flips is_cancelled and cuts the drain short
+    // when the peer dropped before the producer finished, pump the response next() into the ring
+    // buffer until it reports done. runs on the http worker, from on_complete. no-op for an
+    // already finished producer or a cancelled session, only a DELETE flips is_cancelled and cuts
+    // the drain short
     void finish_producer();
 
-    // disarm the stop hook and mark the alive guard false; must be called while the
-    // object that stop_fn references (the response reader) is still alive.
-    // idempotent; ~stream_pipe() calls it automatically but callers can do it earlier.
+    // disarm the stop hook and drop the alive guard, must run while the response the hook
+    // references is still alive. idempotent, the destructor calls it too
     void cleanup();
 
-    // factory: producer pipe. res.stop() is invoked when the session is cancelled.
-    // the alive guard ensures stop() is not called after cleanup() has run.
-    static std::shared_ptr<stream_pipe> create_producer(stream_session_ptr session,
-                                                        server_http_res & res);
-
-    // factory: consumer pipe (read-only; destructor does not finalize the session).
-    static std::shared_ptr<stream_pipe> create_consumer(stream_session_ptr session);
+    // res.stop() is invoked when the session is cancelled, the alive guard ensures stop() is not
+    // called after cleanup() has run
+    static std::shared_ptr<stream_pipe_producer> create(stream_session_ptr session, server_http_res & res);
 
 private:
-    stream_session_ptr                  session_;
-    bool                                is_producer_;
-    bool                                producer_done_ = false; // producer only, set on clean wire end
-    std::shared_ptr<std::atomic<bool>>  alive_; // only set for producer pipes
-    server_http_res *                   res_;   // only set for producer pipes
+    explicit stream_pipe_producer(stream_session_ptr session);
 
-    stream_pipe(stream_session_ptr session, bool is_producer);
+    bool                                producer_done_ = false;
+    std::shared_ptr<std::atomic<bool>>  alive_;
+    server_http_res *                   res_ = nullptr;
+};
+
+// consumer end: read-only replay of the ring buffer, the destructor does not finalize the session
+struct stream_pipe_consumer : stream_pipe {
+    // drain bytes from offset, calling sink for each available chunk. blocks until more data
+    // arrives or the session finalizes. should_stop is polled, returns OFFSET_LOST if offset
+    // fell below the dropped prefix
+    stream_read_status read(size_t & offset,
+        const std::function<bool(const char *, size_t)> & sink,
+        const std::function<bool()> & should_stop);
+
+    static std::shared_ptr<stream_pipe_consumer> create(stream_session_ptr session);
+
+private:
+    explicit stream_pipe_consumer(stream_session_ptr session);
 };
 
 // owns all live sessions, runs a periodic GC to evict expired ones.
