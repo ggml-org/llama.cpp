@@ -30,16 +30,6 @@ void mtmd_image_preprocessor::img_u8_to_f32(const clip_image_u8 & src, clip_imag
     }
 }
 
-// Pad rounding behavior for img_tool::resize
-//   PAD_ROUNDING_CEIL    - default
-//   PAD_ROUNDING_NEAREST - rounding to the nearest integer
-enum pad_rounding {
-    PAD_ROUNDING_CEIL,
-    // For matching exact Pillow behavior
-    // used for deepseek-ocr models
-    PAD_ROUNDING_NEAREST,
-};
-
 // set of tools to manipulate images
 // in the future, we can have HW acceleration by allowing this struct to access 3rd party lib like imagick or opencv
 struct img_tool {
@@ -48,9 +38,8 @@ struct img_tool {
             clip_image_u8 & dst,
             const clip_image_size & target_resolution,
             resize_algo algo,
-            bool add_padding = true, // TODO: define the behavior for add_padding = false
-            std::array<uint8_t, 3> pad_color = {0, 0, 0},
-            pad_rounding rounding = PAD_ROUNDING_CEIL) {
+            pad_style padding = PAD_CEIL,
+            std::array<uint8_t, 3> pad_color = {0, 0, 0}) {
         dst.nx = target_resolution.width;
         dst.ny = target_resolution.height;
         dst.buf.resize(3 * dst.nx * dst.ny);
@@ -61,7 +50,7 @@ struct img_tool {
             return;
         }
 
-        if (!add_padding) {
+        if (padding == PAD_NONE) {
             // direct resize
             switch (algo) {
                 case RESIZE_ALGO_BILINEAR:
@@ -84,7 +73,7 @@ struct img_tool {
             float scale = std::min(scale_w, scale_h);
 
             int new_width, new_height;
-            if (rounding == PAD_ROUNDING_NEAREST) {
+            if (padding == PAD_NEAREST) {
                 new_width  = std::min(static_cast<int>(std::round(src.nx * scale)), target_resolution.width);
                 new_height = std::min(static_cast<int>(std::round(src.ny * scale)), target_resolution.height);
             } else {
@@ -110,7 +99,7 @@ struct img_tool {
             fill(dst, pad_color);
 
             int offset_x, offset_y;
-            if (rounding == PAD_ROUNDING_NEAREST) {
+            if (padding == PAD_NEAREST) {
                 offset_x = static_cast<int>(std::round((target_resolution.width  - new_width)  / 2.0f));
                 offset_y = static_cast<int>(std::round((target_resolution.height - new_height) / 2.0f));
             } else {
@@ -1133,11 +1122,11 @@ bool mtmd_image_preprocessor_deepseekocr::preprocess(const clip_image_u8 & img, 
     }
     const int image_size = native_resolutions[mode_i];
 
-    // Aspect-preserving fit-and-pad. Pillow bicubic + PAD_ROUNDING_NEAREST for
+    // Aspect-preserving fit-and-pad. Pillow bicubic + PAD_NEAREST for
     // byte-parity with the upstream deepseek-ai/DeepSeek-OCR HF preprocessor.
     clip_image_u8 padded;
     img_tool::resize(img, padded, {image_size, image_size}, RESIZE_ALGO_BICUBIC_PILLOW,
-                     /*add_padding=*/true, hparams.image_pad_color, PAD_ROUNDING_NEAREST);
+                     PAD_NEAREST, hparams.image_pad_color);
 
     clip_image_f32_ptr res(clip_image_f32_init());
     img_u8_to_f32(padded, *res, hparams.image_mean, hparams.image_std);
@@ -1275,7 +1264,7 @@ clip_image_u8 mtmd_image_preprocessor_step3vl::prepare_image(const clip_image_u8
             std::max(1, static_cast<int>(std::floor(resized.ny * scale))),
         };
         clip_image_u8 scaled;
-        img_tool::resize(resized, scaled, new_size, RESIZE_ALGO_BILINEAR, false);
+        img_tool::resize(resized, scaled, new_size, RESIZE_ALGO_BILINEAR, PAD_NONE);
         resized = std::move(scaled);
     }
 
@@ -1376,7 +1365,7 @@ bool mtmd_image_preprocessor_step3vl::preprocess(const clip_image_u8 & img, clip
     clip_image_u8 img_for_crop = prepared;
     if (instructions.refined_size.width != prepared.nx || instructions.refined_size.height != prepared.ny) {
         clip_image_u8 refined;
-        img_tool::resize(prepared, refined, instructions.refined_size, RESIZE_ALGO_BILINEAR, false);
+        img_tool::resize(prepared, refined, instructions.refined_size, RESIZE_ALGO_BILINEAR, PAD_NONE);
         img_for_crop = std::move(refined);
     }
 

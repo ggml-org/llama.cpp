@@ -1233,12 +1233,12 @@ struct clip_model_loader {
                         hparams.has_llava_projector = model.proj_type != PROJECTOR_TYPE_COGVLM;
                         hparams.image_pad_color     = {122, 116, 104};
                         if (!hparams.image_res_candidates.empty()) {
-                            hparams.image_resize_pad  = true;
+                            hparams.image_resize_pad  = PAD_CEIL;
                             hparams.image_resize_algo = RESIZE_ALGO_BILINEAR;
                         } else {
                             // llava-1.6 default params
-                            hparams.image_pad_ov         = false;
-                            hparams.image_pad_rf         = true;
+                            hparams.image_pad_ov         = PAD_NONE;
+                            hparams.image_pad_rf         = PAD_CEIL;
                             hparams.image_pad_color_rf   = {122, 116, 104};
                             hparams.image_resize_algo_rf = RESIZE_ALGO_BICUBIC;
                             hparams.image_resize_algo_ov = RESIZE_ALGO_BILINEAR;
@@ -1246,7 +1246,7 @@ struct clip_model_loader {
                     } break;
                 case PROJECTOR_TYPE_GLM_EDGE:
                     {
-                        hparams.image_resize_pad  = true;
+                        hparams.image_resize_pad  = PAD_CEIL;
                         hparams.image_resize_algo = RESIZE_ALGO_BILINEAR;
                     } break;
                 case PROJECTOR_TYPE_MINICPMV:
@@ -1441,7 +1441,7 @@ struct clip_model_loader {
                     {
                         hparams.n_merge = 2;
                         hparams.image_resize_algo = RESIZE_ALGO_BILINEAR;
-                        hparams.image_resize_pad  = false;
+                        hparams.image_resize_pad  = PAD_NONE;
                         get_u32(KEY_SPATIAL_MERGE_SIZE, hparams.n_merge, false);
                         get_u32(KEY_ATTN_WINDOW_SIZE, hparams.attn_window_size, true);
                         std::vector<int> wa_layer_indexes_vec;
@@ -1461,7 +1461,7 @@ struct clip_model_loader {
 
                         // reka model performs better when using resize_bicubic, which stretches
                         // the image to fit fixed square size
-                        hparams.image_resize_pad = false;
+                        hparams.image_resize_pad = PAD_NONE;
                     } break;
                 case PROJECTOR_TYPE_GLM4V:
                     {
@@ -1535,7 +1535,7 @@ struct clip_model_loader {
                     {
                         hparams.n_merge = 2;
                         hparams.image_resize_algo = RESIZE_ALGO_BICUBIC_PILLOW;
-                        hparams.image_resize_pad = false;
+                        hparams.image_resize_pad = PAD_NONE;
                         hparams.ffn_op = FFN_GELU;
                         get_u32(KEY_SPATIAL_MERGE_SIZE, hparams.n_merge, false);
                         hparams.set_limit_image_tokens(256, 16384);
