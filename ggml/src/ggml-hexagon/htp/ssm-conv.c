@@ -410,7 +410,7 @@ int op_ssm_conv_f32(struct htp_ops_context * octx) {
             worker_pool_run_func(octx->ctx->worker_pool, ssm_conv_thread_f32_f32, &scctx, n_threads);
         }
     }
-    
+
     return HTP_STATUS_OK;
 }
 
