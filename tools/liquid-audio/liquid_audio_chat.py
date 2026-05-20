@@ -68,7 +68,7 @@ class AudioPlayer:
 
     def _playback_thread(self):
         """Background thread that writes audio to the stream in uniform chunks."""
-        buffer = b""
+        buffer = bytearray()
         bytes_per_chunk = self.chunk_size * 2  # 16-bit PCM = 2 bytes per sample
 
         # Pre-buffer slightly before beginning playback
@@ -78,7 +78,7 @@ class AudioPlayer:
         # Warm up buffer
         while self.running and len(buffer) < target_prebuffer_bytes:
             try:
-                buffer += self.queue.get(timeout=0.05)
+                buffer.extend(self.queue.get(timeout=0.05))
             except:
                 # If we timeout during pre-buffering, it's fine, we will start anyway if no more chunks or timeout
                 break
@@ -87,20 +87,20 @@ class AudioPlayer:
             # Fill buffer if needed
             while len(buffer) < bytes_per_chunk and (self.running or not self.queue.empty()):
                 try:
-                    buffer += self.queue.get(timeout=0.05)
+                    buffer.extend(self.queue.get(timeout=0.05))
                 except:
                     break  # Queue empty, play what we have
 
             if len(buffer) >= bytes_per_chunk:
-                chunk_to_play = buffer[:bytes_per_chunk]
-                buffer = buffer[bytes_per_chunk:]
+                chunk_to_play = bytes(buffer[:bytes_per_chunk])
+                del buffer[:bytes_per_chunk]
                 if self.stream:
                     self.stream.write(chunk_to_play)
             elif len(buffer) > 0 and not self.running and self.queue.empty():
                 # Play remaining if we're stopping
                 if self.stream:
-                    self.stream.write(buffer)
-                buffer = b""
+                    self.stream.write(bytes(buffer))
+                buffer.clear()
 
     def start(self):
         """Prepare the audio player (stream starts on first samples)."""
@@ -132,6 +132,15 @@ class AudioPlayer:
         self._start_stream()
         self.all_samples.extend(samples)
         pcm_data = np.array(samples, dtype=np.int16).tobytes()
+        self.queue.put(pcm_data)
+
+    def add_pcm_data(self, pcm_data: bytes, sample_rate: int = None):
+        """Add raw PCM bytes to playback queue (non-blocking with backpressure)."""
+        if sample_rate is not None and self.sample_rate is None:
+            self.sample_rate = sample_rate
+        self._start_stream()
+
+        # Avoid blocking the audio processing loop by not converting to float here
         self.queue.put(pcm_data)
 
     def stop(self, output_file="output.wav"):
@@ -324,15 +333,16 @@ def process_stream(stream, audio_player=None):
                 audio_sample_rate = delta.audio["sample_rate"]
             chunk_data = delta.audio["data"]
             pcm_bytes = base64.b64decode(chunk_data)
-            samples = np.frombuffer(pcm_bytes, dtype=np.int16)
-            audio_chunks.append((time.time(), samples))
-            total_samples += len(samples)
+            num_samples = len(pcm_bytes) // 2
+
+            audio_chunks.append((time.time(), num_samples))
+            total_samples += num_samples
 
             # Print note symbol for audio progress
             print("♪", end="", flush=True)
 
             if audio_player:
-                audio_player.add_samples(samples, sample_rate=audio_sample_rate)
+                audio_player.add_pcm_data(pcm_bytes, sample_rate=audio_sample_rate)
 
     if text_chunks or audio_chunks:
         print()  # Newline after output
@@ -359,7 +369,7 @@ def process_stream(stream, audio_player=None):
         # Calculate from ttft to last chunk for accurate throughput
         first_audio_time = audio_chunks[0][0]
         last_audio_time = audio_chunks[-1][0]
-        audio_duration = last_audio_time - first_audio_time
+        audio_duration = max(last_audio_time - first_audio_time, 0.001)
         audio_secs = total_samples / audio_sample_rate
         stats.append(
             f"audio {audio_secs:.1f}s @ {total_samples / audio_duration:.0f} samples/s"
