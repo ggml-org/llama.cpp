@@ -816,9 +816,7 @@ int ggml_metal_op_unary(ggml_metal_op_t ctx, int idx) {
         ggml_metal_encoder_dispatch_threadgroups(enc, n, 1, 1, 1, 1, 1);
     } else {
         const int nth_max = MIN(256, ggml_metal_pipeline_max_theads_per_threadgroup(pipeline));
-
         const int nth = MIN(args.ne00, nth_max);
-
         const int nk0 = (args.ne00 + nth - 1)/nth;
 
         ggml_metal_encoder_dispatch_threadgroups(enc, nk0*ne01, ne02, ne03, nth, 1, 1);
