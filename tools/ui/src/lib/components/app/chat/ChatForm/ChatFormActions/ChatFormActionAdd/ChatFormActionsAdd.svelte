@@ -33,7 +33,7 @@
 	}: Props = $props();
 </script>
 
-{#if isMobile()}
+{#if isMobile.current}
 	<ChatFormActionAddSheet
 		{disabled}
 		{hasAudioModality}

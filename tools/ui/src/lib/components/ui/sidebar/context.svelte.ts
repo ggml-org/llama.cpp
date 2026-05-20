@@ -37,7 +37,7 @@ class SidebarState {
 	// Convenience getter for checking if the sidebar is mobile
 	// without this, we would need to use `sidebar.isMobile.current` everywhere
 	get isMobile() {
-		return isMobile();
+		return isMobile.current;
 	}
 
 	// Event handler to apply to the `<svelte:window>`

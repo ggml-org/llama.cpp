@@ -157,7 +157,7 @@
 	}
 </script>
 
-{#if isMobile()}
+{#if isMobile.current}
 	<ModelsSelectorSheet
 		disabled={disabled || isOffline}
 		bind:this={selectorModelRef}

@@ -131,7 +131,7 @@ class SettingsStore {
 
 			// Default sendOnEnter to false on mobile when the user has no saved preference
 			if (!(SETTINGS_KEYS.SEND_ON_ENTER in savedVal)) {
-				if (isMobile()) {
+				if (isMobile.current) {
 					this.config[SETTINGS_KEYS.SEND_ON_ENTER] = false;
 				}
 			}
