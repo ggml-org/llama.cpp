@@ -2,9 +2,25 @@ ARG OPENVINO_VERSION_MAJOR=2026.0
 ARG OPENVINO_VERSION_FULL=2026.0.0.20965.c6d6a13a886
 ARG UBUNTU_VERSION=24.04
 
-# Optional proxy build arguments - empty by default
+# Intel GPU driver versions. https://github.com/intel/compute-runtime/releases
+ARG IGC_VERSION=v2.30.1
+ARG IGC_VERSION_FULL=2_2.30.1+20950
+ARG COMPUTE_RUNTIME_VERSION=26.09.37435.1
+ARG COMPUTE_RUNTIME_VERSION_FULL=26.09.37435.1-0
+ARG IGDGMM_VERSION=22.9.0
+
+# Intel NPU driver versions. https://github.com/intel/linux-npu-driver/releases
+ARG NPU_DRIVER_VERSION=v1.32.0
+ARG NPU_DRIVER_FULL=v1.32.0.20260402-23905121947
+ARG LIBZE1_VERSION=1.27.0-1~24.04~ppa2
+
+# Optional proxy build arguments
 ARG http_proxy=
 ARG https_proxy=
+
+ARG BUILD_DATE=N/A
+ARG APP_VERSION=N/A
+ARG APP_REVISION=N/A
 
 ## Build Image
 FROM ubuntu:${UBUNTU_VERSION} AS build
@@ -65,6 +81,7 @@ RUN mkdir -p /app/lib && \
 RUN mkdir -p /app/full \
     && cp build/ReleaseOV/bin/* /app/full/ \
     && cp *.py /app/full \
+    && cp -r conversion /app/full \
     && cp -r gguf-py /app/full \
     && cp -r requirements /app/full \
     && cp requirements.txt /app/full \
@@ -76,14 +93,60 @@ FROM ubuntu:${UBUNTU_VERSION} AS base
 # Pass proxy args to runtime stage
 ARG http_proxy
 ARG https_proxy
+ARG BUILD_DATE=N/A
+ARG APP_VERSION=N/A
+ARG APP_REVISION=N/A
+ARG IMAGE_URL=https://github.com/ggml-org/llama.cpp
+ARG IMAGE_SOURCE=https://github.com/ggml-org/llama.cpp
+LABEL org.opencontainers.image.created=$BUILD_DATE \
+      org.opencontainers.image.version=$APP_VERSION \
+      org.opencontainers.image.revision=$APP_REVISION \
+      org.opencontainers.image.title="llama.cpp" \
+      org.opencontainers.image.description="LLM inference in C/C++" \
+      org.opencontainers.image.url=$IMAGE_URL \
+      org.opencontainers.image.source=$IMAGE_SOURCE
 
 RUN apt-get update \
-    && apt-get install -y libgomp1 libtbb12 curl \
+    && apt-get install -y libgomp1 libtbb12 curl wget ocl-icd-libopencl1 \
     && apt autoremove -y \
     && apt clean -y \
     && rm -rf /tmp/* /var/tmp/* \
     && find /var/cache/apt/archives /var/lib/apt/lists -not -name lock -type f -delete \
     && find /var/cache -type f -delete
+
+# Install GPU drivers
+ARG IGC_VERSION
+ARG IGC_VERSION_FULL
+ARG COMPUTE_RUNTIME_VERSION
+ARG COMPUTE_RUNTIME_VERSION_FULL
+ARG IGDGMM_VERSION
+RUN mkdir /tmp/neo/ && cd /tmp/neo/ \
+    && wget https://github.com/intel/intel-graphics-compiler/releases/download/${IGC_VERSION}/intel-igc-core-${IGC_VERSION_FULL}_amd64.deb \
+    && wget https://github.com/intel/intel-graphics-compiler/releases/download/${IGC_VERSION}/intel-igc-opencl-${IGC_VERSION_FULL}_amd64.deb \
+    && wget https://github.com/intel/compute-runtime/releases/download/${COMPUTE_RUNTIME_VERSION}/intel-ocloc-dbgsym_${COMPUTE_RUNTIME_VERSION_FULL}_amd64.ddeb \
+    && wget https://github.com/intel/compute-runtime/releases/download/${COMPUTE_RUNTIME_VERSION}/intel-ocloc_${COMPUTE_RUNTIME_VERSION_FULL}_amd64.deb \
+    && wget https://github.com/intel/compute-runtime/releases/download/${COMPUTE_RUNTIME_VERSION}/intel-opencl-icd-dbgsym_${COMPUTE_RUNTIME_VERSION_FULL}_amd64.ddeb \
+    && wget https://github.com/intel/compute-runtime/releases/download/${COMPUTE_RUNTIME_VERSION}/intel-opencl-icd_${COMPUTE_RUNTIME_VERSION_FULL}_amd64.deb \
+    && wget https://github.com/intel/compute-runtime/releases/download/${COMPUTE_RUNTIME_VERSION}/libigdgmm12_${IGDGMM_VERSION}_amd64.deb \
+    && wget https://github.com/intel/compute-runtime/releases/download/${COMPUTE_RUNTIME_VERSION}/libze-intel-gpu1-dbgsym_${COMPUTE_RUNTIME_VERSION_FULL}_amd64.ddeb \
+    && wget https://github.com/intel/compute-runtime/releases/download/${COMPUTE_RUNTIME_VERSION}/libze-intel-gpu1_${COMPUTE_RUNTIME_VERSION_FULL}_amd64.deb \
+    && dpkg --install *.deb \
+    && rm -rf /tmp/neo/
+
+# Install NPU drivers
+ARG NPU_DRIVER_VERSION
+ARG NPU_DRIVER_FULL
+ARG LIBZE1_VERSION
+RUN mkdir /tmp/npu/ && cd /tmp/npu/ \
+    && wget https://github.com/intel/linux-npu-driver/releases/download/${NPU_DRIVER_VERSION}/linux-npu-driver-${NPU_DRIVER_FULL}-ubuntu2404.tar.gz \
+    && tar -xf linux-npu-driver-${NPU_DRIVER_FULL}-ubuntu2404.tar.gz \
+    && dpkg --install *.deb \
+    && rm -rf /tmp/npu/
+
+RUN cd /tmp \
+    && wget https://snapshot.ppa.launchpadcontent.net/kobuk-team/intel-graphics/ubuntu/20260324T100000Z/pool/main/l/level-zero-loader/libze1_${LIBZE1_VERSION}_amd64.deb \
+    && dpkg --install libze1_${LIBZE1_VERSION}_amd64.deb \
+    && rm libze1_${LIBZE1_VERSION}_amd64.deb
 
 COPY --from=build /app/lib/ /app/
 

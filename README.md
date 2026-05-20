@@ -172,6 +172,7 @@ Instructions for adding support for new models: [HOWTO-add-model.md](docs/develo
 - JavaScript/Wasm (works in browser): [tangledgroup/llama-cpp-wasm](https://github.com/tangledgroup/llama-cpp-wasm)
 - Typescript/Wasm (nicer API, available on npm): [ngxson/wllama](https://github.com/ngxson/wllama)
 - Ruby: [yoshoku/llama_cpp.rb](https://github.com/yoshoku/llama_cpp.rb)
+- Ruby: [docusealco/rllama](https://github.com/docusealco/rllama)
 - Rust (more features): [edgenai/llama_cpp-rs](https://github.com/edgenai/llama_cpp-rs)
 - Rust (nicer API): [mdrokz/rust-llama.cpp](https://github.com/mdrokz/rust-llama.cpp)
 - Rust (more direct bindings): [utilityai/llama-cpp-rs](https://github.com/utilityai/llama-cpp-rs)
@@ -279,7 +280,7 @@ Instructions for adding support for new models: [HOWTO-add-model.md](docs/develo
 | [Metal](docs/build.md#metal-build) | Apple Silicon |
 | [BLAS](docs/build.md#blas-build) | All |
 | [BLIS](docs/backend/BLIS.md) | All |
-| [SYCL](docs/backend/SYCL.md) | Intel and Nvidia GPU |
+| [SYCL](docs/backend/SYCL.md) | Intel GPU |
 | [OpenVINO [In Progress]](docs/backend/OPENVINO.md) | Intel CPUs, GPUs, and NPUs |
 | [MUSA](docs/build.md#musa) | Moore Threads GPU |
 | [CUDA](docs/build.md#cuda) | Nvidia GPU |
@@ -529,6 +530,7 @@ To learn more about model quantization, [read this documentation](tools/quantize
 - [How to build](docs/build.md)
 - [Running on Docker](docs/docker.md)
 - [Build on Android](docs/android.md)
+- [Multi-GPU usage](docs/multi-gpu.md)
 - [Performance troubleshooting](docs/development/token_generation_performance_tips.md)
 - [GGML tips & tricks](https://github.com/ggml-org/llama.cpp/wiki/GGML-Tips-&-Tricks)
 

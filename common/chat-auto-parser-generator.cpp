@@ -43,11 +43,33 @@ common_chat_params peg_generator::generate_parser(const common_chat_template &  
                                                   const autoparser &              autoparser) {
     // Create the result structure
     common_chat_params data;
-    data.prompt           = common_chat_template_direct_apply(tmpl, inputs);
-    data.format           = COMMON_CHAT_FORMAT_PEG_NATIVE;
-    data.preserved_tokens = autoparser.preserved_tokens;
+    data.prompt            = common_chat_template_direct_apply(tmpl, inputs);
+    data.generation_prompt = common_chat_template_generation_prompt(tmpl, inputs);
+    data.format            = COMMON_CHAT_FORMAT_PEG_NATIVE;
+    data.preserved_tokens  = autoparser.preserved_tokens;
 
-    auto parser = autoparser.build_parser(inputs);
+    std::string parser_generation_prompt = data.generation_prompt;
+
+    if (inputs.continue_final_message != COMMON_CHAT_CONTINUATION_NONE && !inputs.continue_msg.empty()) {
+        // Build up generation prompt manually
+        const auto & msg = inputs.continue_msg;
+
+        if (!autoparser.reasoning.start.empty()) {
+            data.generation_prompt = data.generation_prompt.substr(0, data.generation_prompt.find(autoparser.reasoning.start));
+            data.generation_prompt += autoparser.reasoning.start + msg.reasoning_content;
+            if (inputs.continue_final_message == COMMON_CHAT_CONTINUATION_CONTENT) {
+                data.generation_prompt += autoparser.reasoning.end;
+            }
+        }
+
+        if (inputs.continue_final_message == COMMON_CHAT_CONTINUATION_CONTENT) {
+            data.generation_prompt += msg.render_content();
+        }
+
+        data.prompt += data.generation_prompt;
+    }
+
+    auto parser = autoparser.build_parser(inputs, parser_generation_prompt);
     data.parser = parser.save();
 
     // Build grammar if tools are present
@@ -87,7 +109,7 @@ common_chat_params peg_generator::generate_parser(const common_chat_template &  
     return data;
 }
 
-common_peg_arena autoparser::build_parser(const generation_params & inputs) const {
+common_peg_arena autoparser::build_parser(const generation_params & inputs, const std::string & generation_prompt) const {
     if (!analysis_complete) {
         throw std::invalid_argument("Cannot call build_parser on autoparser without performing analysis first, call analyze_template(...)");
     }
@@ -121,7 +143,7 @@ common_peg_arena autoparser::build_parser(const generation_params & inputs) cons
         } else {
             parser = content.build_parser(ctx);
         }
-        return pure_content ? p.prefix(inputs.generation_prompt, reasoning.start) + parser : p.prefix(inputs.generation_prompt, reasoning.start) << parser;
+        return pure_content ? p.prefix(generation_prompt, reasoning.start) + parser : p.prefix(generation_prompt, reasoning.start) << parser;
     });
 }
 
@@ -136,10 +158,10 @@ common_peg_parser analyze_reasoning::build_parser(parser_build_context & ctx) co
         if (!end.empty()) {
             if (!start.empty()) {
                 // Standard tag-based: optional(<think>reasoning</think>)
-                return p.optional(start + p.reasoning(p.until(end)) + end + p.space());
+                return p.optional(p.optspace(start) + p.reasoning(p.until(trim_whitespace(end))) + p.optspace(end));
             }
             // Delimiter-style (empty start)
-            return p.optional(p.reasoning(p.until(end)) + end + p.space());
+            return p.optional(p.reasoning(p.until(trim_whitespace(end))) + p.optspace(end));
         }
     }
 
@@ -186,7 +208,6 @@ common_peg_parser analyze_tools::build_parser(parser_build_context & ctx) const 
 common_peg_parser analyze_tools::build_tool_parser_json_native(parser_build_context & ctx) const {
     auto &       p           = ctx.p;
     const auto & inputs      = ctx.inputs;
-    bool         force_tools = inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED;
 
     // Build effective field names with dot notation if function_field is set
     std::string name_field = format.name_field;
@@ -225,8 +246,7 @@ common_peg_parser analyze_tools::build_tool_parser_json_native(parser_build_cont
         tool_start = format.per_call_start;
     }
 
-    return ctx.reasoning_parser + (force_tools ? p.eps() : p.optional(p.content(p.until(tool_start)))) + tools_parser +
-           p.end();
+    return ctx.reasoning_parser + p.optional(p.content(p.until(tool_start))) + tools_parser + p.end();
 }
 
 common_peg_parser analyze_tools::build_func_parser(common_chat_peg_builder & p, const std::string & name,
@@ -270,7 +290,6 @@ common_peg_parser analyze_tools::build_func_parser(common_chat_peg_builder & p, 
 common_peg_parser analyze_tools::build_tool_parser_tag_json(parser_build_context & ctx) const {
     auto &       p           = ctx.p;
     const auto & inputs      = ctx.inputs;
-    bool         force_tools = inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED;
 
     common_peg_parser tool_choice = p.choice();
 
@@ -336,14 +355,12 @@ common_peg_parser analyze_tools::build_tool_parser_tag_json(parser_build_context
 
     std::string trigger_marker       = !format.section_start.empty() ? format.section_start : format.per_call_start;
     auto        content_before_tools = trigger_marker.empty() ? p.eps() : p.until(trigger_marker);
-    return ctx.reasoning_parser + (force_tools ? p.eps() : p.optional(p.content(content_before_tools))) + tool_calls +
-           p.end();
+    return ctx.reasoning_parser + p.optional(p.content(content_before_tools)) + tool_calls + p.end();
 }
 
 common_peg_parser analyze_tools::build_tool_parser_tag_tagged(parser_build_context & ctx) const {
     auto &       p           = ctx.p;
     const auto & inputs      = ctx.inputs;
-    bool         force_tools = inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED;
 
     auto until_suffix = p.rule("until-suffix", p.until(arguments.value_suffix));
 
@@ -374,9 +391,7 @@ common_peg_parser analyze_tools::build_tool_parser_tag_tagged(parser_build_conte
                                            arguments.name_suffix) +
                            arguments.value_prefix +
                            (schema_info.resolves_to_string(param_schema) ?
-                                p.tool_arg_string_value(p.schema(until_suffix,
-                                                                 "tool-" + name + "-arg-" + param_name + "-schema",
-                                                                 param_schema, true)) :
+                                p.tool_arg_string_value(until_suffix) :
                                 p.tool_arg_json_value(p.schema(
                                     p.json(), "tool-" + name + "-arg-" + param_name + "-schema", param_schema, false)) +
                                     p.space()) +
@@ -471,8 +486,7 @@ common_peg_parser analyze_tools::build_tool_parser_tag_tagged(parser_build_conte
 
     std::string trigger_marker       = !format.section_start.empty() ? format.section_start : format.per_call_start;
     auto        content_before_tools = trigger_marker.empty() ? p.eps() : p.until(trigger_marker);
-    return ctx.reasoning_parser + (force_tools ? p.eps() : p.optional(p.content(content_before_tools))) + tool_calls +
-           p.end();
+    return ctx.reasoning_parser + p.optional(p.content(content_before_tools)) + tool_calls + p.end();
 }
 
 }  // namespace autoparser

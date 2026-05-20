@@ -9,6 +9,7 @@
 #include <stdbool.h>
 
 #ifdef __cplusplus
+#include <map>
 #include <string>
 #include <vector>
 #include <cinttypes>
@@ -112,20 +113,20 @@ MTMD_API void mtmd_free(mtmd_context * ctx);
 
 // whether we need to set non-causal mask before llama_decode
 // if chunk is nullptr, we assume the default case where chunk is an image chunk
-MTMD_API bool mtmd_decode_use_non_causal(mtmd_context * ctx, const mtmd_input_chunk * chunk);
+MTMD_API bool mtmd_decode_use_non_causal(const mtmd_context * ctx, const mtmd_input_chunk * chunk);
 
 // whether the current model use M-RoPE for llama_decode
-MTMD_API bool mtmd_decode_use_mrope(mtmd_context * ctx);
+MTMD_API bool mtmd_decode_use_mrope(const mtmd_context * ctx);
 
 // whether the current model supports vision input
-MTMD_API bool mtmd_support_vision(mtmd_context * ctx);
+MTMD_API bool mtmd_support_vision(const mtmd_context * ctx);
 
 // whether the current model supports audio input
-MTMD_API bool mtmd_support_audio(mtmd_context * ctx);
+MTMD_API bool mtmd_support_audio(const mtmd_context * ctx);
 
 // get audio sample rate in Hz, for example 16000 for Whisper
 // return -1 if audio is not supported
-MTMD_API int mtmd_get_audio_sample_rate(mtmd_context * ctx);
+MTMD_API int mtmd_get_audio_sample_rate(const mtmd_context * ctx);
 
 // mtmd_bitmap
 //
@@ -244,6 +245,14 @@ MTMD_API float * mtmd_get_output_embd(mtmd_context * ctx);
 // If this is not called, or NULL is supplied, everything is output on stderr.
 MTMD_API void mtmd_log_set(ggml_log_callback log_callback, void * user_data);
 
+// EXPERIMENTAL API to get mmproj's capabilities without initializing the full context
+// This is only intended to be used by llama-server, breaking changes is expected
+struct mtmd_caps {
+    bool inp_vision;
+    bool inp_audio;
+};
+MTMD_API struct mtmd_caps mtmd_get_cap_from_file(const char * mmproj_fname);
+
 /////////////////////////////////////////
 
 // test function, to be used in test-mtmd-c-api.c
@@ -251,6 +260,14 @@ MTMD_API mtmd_input_chunks * mtmd_test_create_input_chunks(void);
 
 #ifdef __cplusplus
 } // extern "C"
+#endif
+
+// Get memory usage of the current model in bytes, per backend device
+// Note: this is an unstable API, used internally by fit_params; it WILL be removed or changed without deprecation
+#ifdef __cplusplus
+MTMD_API std::map<ggml_backend_dev_t, size_t> mtmd_get_memory_usage(
+    const char * mmproj_fname,
+    struct mtmd_context_params ctx_params);
 #endif
 
 //

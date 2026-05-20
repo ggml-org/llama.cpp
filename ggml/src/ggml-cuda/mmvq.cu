@@ -115,6 +115,7 @@ static constexpr __host__ __device__ int get_mmvq_mmid_max_batch_pascal_older(gg
         case GGML_TYPE_IQ4_NL:  return 6;
         case GGML_TYPE_IQ4_XS:  return 5;
         case GGML_TYPE_MXFP4:   return 4;
+        case GGML_TYPE_NVFP4:   return 4;
         case GGML_TYPE_Q2_K:    return 4;
         case GGML_TYPE_Q3_K:    return 4;
         case GGML_TYPE_Q4_0:    return 6;
@@ -135,6 +136,7 @@ static constexpr __host__ __device__ int get_mmvq_mmid_max_batch_turing_plus(ggm
         case GGML_TYPE_IQ3_S:   return 6;
         case GGML_TYPE_IQ3_XXS: return 7;
         case GGML_TYPE_MXFP4:   return 7;
+        case GGML_TYPE_NVFP4:   return 8;
         case GGML_TYPE_Q2_K:    return 7;
         case GGML_TYPE_Q3_K:    return 5;
         default:                return MMVQ_MAX_BATCH_SIZE;
@@ -221,6 +223,7 @@ static constexpr __host__ __device__ int get_mmvq_mmid_max_batch_rdna4(ggml_type
         case GGML_TYPE_IQ4_NL:  return 7;
         case GGML_TYPE_IQ4_XS:  return 5;
         case GGML_TYPE_MXFP4:   return 5;
+        case GGML_TYPE_NVFP4:   return 5;
         case GGML_TYPE_Q3_K:    return 4;
         case GGML_TYPE_Q4_0:    return 7;
         case GGML_TYPE_Q4_1:    return 7;
@@ -356,7 +359,9 @@ static constexpr __host__ __device__ int calc_nwarps(ggml_type type, int ncols_d
                 case GGML_TYPE_Q5_1:
                 case GGML_TYPE_Q8_0:
                 case GGML_TYPE_Q4_K:
+                    return 8;
                 case GGML_TYPE_Q6_K:
+                    return 2;
                 case GGML_TYPE_IQ4_NL:
                     return 8;
                 default:
@@ -419,6 +424,7 @@ static __global__ void mul_mat_vec_q(
     uint32_t channel_y;
     uint32_t sample_dst;
 
+    ggml_cuda_pdl_sync();
     channel_x  = ncols_dst == 1 && ids ? ids[channel_dst]                     : fastdiv(channel_dst, channel_ratio);
     channel_y  = ncols_dst == 1 && ids ? fastmodulo(channel_dst, nchannels_y) : channel_dst;
     sample_dst = blockIdx.z;
@@ -678,8 +684,9 @@ static void mul_mat_vec_q_switch_fusion(
     const bool has_fusion = fusion.gate != nullptr || fusion.x_bias != nullptr || fusion.gate_bias != nullptr;
     if constexpr (c_ncols_dst == 1) {
         if (has_fusion) {
-            mul_mat_vec_q<type, c_ncols_dst, true, small_k><<<block_nums, block_dims, nbytes_shared, stream>>>
-                (vx, vy, ids, fusion, dst, ncols_x, nchannels_y, stride_row_x, stride_col_y, stride_col_dst,
+            const ggml_cuda_kernel_launch_params launch_params = ggml_cuda_kernel_launch_params(block_nums, block_dims, nbytes_shared, stream);
+            ggml_cuda_kernel_launch(mul_mat_vec_q<type, c_ncols_dst, true, small_k>, launch_params,
+                 vx, vy, ids, fusion, dst, ncols_x, nchannels_y, stride_row_x, stride_col_y, stride_col_dst,
                  channel_ratio, stride_channel_x, stride_channel_y, stride_channel_dst,
                  sample_ratio, stride_sample_x, stride_sample_y, stride_sample_dst, ids_stride);
             return;
@@ -688,8 +695,9 @@ static void mul_mat_vec_q_switch_fusion(
 
     GGML_ASSERT(!has_fusion && "fusion only supported for ncols_dst=1");
 
-    mul_mat_vec_q<type, c_ncols_dst, false, small_k><<<block_nums, block_dims, nbytes_shared, stream>>>
-        (vx, vy, ids, fusion, dst, ncols_x, nchannels_y, stride_row_x, stride_col_y, stride_col_dst,
+    const ggml_cuda_kernel_launch_params launch_params = ggml_cuda_kernel_launch_params(block_nums, block_dims, nbytes_shared, stream);
+    ggml_cuda_kernel_launch(mul_mat_vec_q<type, c_ncols_dst, false, small_k>, launch_params,
+        vx, vy, ids, fusion, dst, ncols_x, nchannels_y, stride_row_x, stride_col_y, stride_col_dst,
         channel_ratio, stride_channel_x, stride_channel_y, stride_channel_dst,
         sample_ratio, stride_sample_x, stride_sample_y, stride_sample_dst, ids_stride);
 }

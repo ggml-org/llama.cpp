@@ -15,7 +15,7 @@
 # ggml-org/llama-common     : ggerganov, aldehir, angt, danbev, ngxson, pwilkin
 # ggml-org/llama-mtmd       : ngxson
 # ggml-org/llama-server     : ggerganov, ngxson, allozaur, angt, ServeurpersoCom
-# ggml-org/llama-webui      : allozaur
+# ggml-org/llama-ui           : allozaur
 
 /.devops/*.Dockerfile                   @ngxson
 /.github/actions/                       @ggml-org/ci
@@ -23,8 +23,10 @@
 /ci/                                    @ggerganov
 /cmake/                                 @ggerganov
 /common/                                @ggml-org/llama-common
+/common/fit.*                           @JohannesGaessler
 /common/jinja/                          @CISC
 /common/ngram-map.*                     @srogmann
+/conversion/                            @CISC
 /convert_*.py                           @CISC
 /docs/backend/snapdragon/               @ggml-org/ggml-hexagon
 /examples/batched.swift/                @ggerganov
@@ -52,28 +54,30 @@
 /examples/speculative/                  @ggerganov
 /ggml/cmake/                            @ggerganov
 /ggml/include/                          @ggerganov
+/ggml/src/ggml-backend-meta.cpp         @JohannesGaessler
 /ggml/src/ggml-cann/                    @ggml-org/ggml-cann
 /ggml/src/ggml-common.h                 @ggerganov
 /ggml/src/ggml-cpu/                     @ggerganov
 /ggml/src/ggml-cpu/spacemit/            @alex-spacemit
 /ggml/src/ggml-cuda/                    @ggml-org/ggml-cuda
-/ggml/src/ggml-cuda/fattn-wmma*         @IMbackK
-/ggml/src/ggml-hip/                     @IMbackK
 /ggml/src/ggml-cuda/vendors/hip.h       @IMbackK
+/ggml/src/ggml-cuda/fattn-wmma*         @IMbackK
+/ggml/src/ggml-hexagon/                 @ggml-org/ggml-hexagon
+/ggml/src/ggml-hip/                     @IMbackK
 /ggml/src/ggml-impl.h                   @ggerganov
 /ggml/src/ggml-metal/                   @ggml-org/ggml-metal
 /ggml/src/ggml-opencl/                  @ggml-org/ggml-opencl
-/ggml/src/ggml-hexagon/                 @ggml-org/ggml-hexagon
+/ggml/src/ggml-openvino/                @cavusmustafa @wine99
 /ggml/src/ggml-opt.cpp                  @JohannesGaessler
 /ggml/src/ggml-quants.*                 @ggerganov
 /ggml/src/ggml-rpc/                     @ggml-org/ggml-rpc
 /ggml/src/ggml-sycl/                    @ggml-org/ggml-sycl
 /ggml/src/ggml-threading.*              @ggerganov
-/ggml/src/ggml-vulkan/                  @ggml-org/ggml-vulkan
 /ggml/src/ggml-virtgpu/                 @kpouget
+/ggml/src/ggml-vulkan/                  @ggml-org/ggml-vulkan
 /ggml/src/ggml-webgpu/                  @ggml-org/ggml-webgpu
 /ggml/src/ggml-zdnn/                    @ggml-org/ggml-zdnn @Andreas-Krebbel @AlekseiNikiforovIBM
-/ggml/src/ggml-openvino/                @cavusmustafa @wine99
+/ggml/src/ggml-zendnn/                  @avinashcpandey @Jiten1parmar @z-vishal
 /ggml/src/ggml.c                        @ggerganov
 /ggml/src/ggml.cpp                      @ggerganov
 /ggml/src/gguf.cpp                      @JohannesGaessler @Green-Sky
@@ -104,7 +108,7 @@
 /tools/rpc/                             @ggml-org/ggml-rpc
 /tools/server/*                         @ggml-org/llama-server # no subdir
 /tools/server/tests/                    @ggml-org/llama-server
-/tools/server/webui/                    @ggml-org/llama-webui
+/tools/ui/                              @ggml-org/llama-ui
 /tools/tokenize/                        @ggerganov
 /tools/tts/                             @ggerganov
 /vendor/                                @ggerganov
