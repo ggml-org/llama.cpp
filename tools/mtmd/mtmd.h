@@ -9,6 +9,7 @@
 #include <stdbool.h>
 
 #ifdef __cplusplus
+#include <map>
 #include <string>
 #include <vector>
 #include <cinttypes>
@@ -259,6 +260,14 @@ MTMD_API mtmd_input_chunks * mtmd_test_create_input_chunks(void);
 
 #ifdef __cplusplus
 } // extern "C"
+#endif
+
+// Get memory usage of the current model in bytes, per backend device
+// Note: this is an unstable API, used internally by fit_params; it WILL be removed or changed without deprecation
+#ifdef __cplusplus
+MTMD_API std::map<ggml_backend_dev_t, size_t> mtmd_get_memory_usage(
+    const char * mmproj_fname,
+    struct mtmd_context_params ctx_params);
 #endif
 
 //
