@@ -1637,7 +1637,9 @@ class TextModel(ModelBase):
                     toktypes.append(gguf.TokenType.NORMAL)
                 tokens.append(token)
 
+        tokpre = self.get_vocab_base_pre(tokenizer)
         self.gguf_writer.add_tokenizer_model("hybriddna")
+        self.gguf_writer.add_tokenizer_pre(tokpre)
         self.gguf_writer.add_token_list(tokens)
         self.gguf_writer.add_token_types(toktypes)
 

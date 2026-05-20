@@ -2064,8 +2064,7 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
             throw std::runtime_error(format("unknown tokenizer: '%s'", tokenizer_model.c_str()));
         }
 
-        // for now, only BPE models have pre-tokenizers
-        if (type == LLAMA_VOCAB_TYPE_BPE) {
+        if (type == LLAMA_VOCAB_TYPE_BPE || type == LLAMA_VOCAB_TYPE_HYBRIDDNA) {
             add_space_prefix = false;
             escape_whitespaces = false;
             clean_spaces = true;
@@ -2321,13 +2320,6 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
         } else if (type == LLAMA_VOCAB_TYPE_RWKV) {
             pre_type = LLAMA_VOCAB_PRE_TYPE_DEFAULT;
             add_space_prefix = false;
-            clean_spaces = false;
-            add_bos = false;
-            add_eos = false;
-        } else if (type == LLAMA_VOCAB_TYPE_HYBRIDDNA) {
-            pre_type = LLAMA_VOCAB_PRE_TYPE_QWEN2;
-            add_space_prefix = false;
-            escape_whitespaces = false;
             clean_spaces = false;
             add_bos = false;
             add_eos = false;
