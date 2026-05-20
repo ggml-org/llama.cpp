@@ -193,6 +193,7 @@ static struct llama_sampler_i common_reasoning_budget_i = {
     /* .backend_accept    = */ nullptr,
     /* .backend_apply     = */ nullptr,
     /* .backend_set_input = */ nullptr,
+    /* .backend_n_nodes   = */ nullptr,
 };
 
 static struct llama_sampler * common_reasoning_budget_clone(const struct llama_sampler * smpl) {

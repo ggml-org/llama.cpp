@@ -507,6 +507,7 @@ static struct llama_sampler_i llama_sampler_empty_i = {
     /* .backend_accept    = */ llama_sampler_empty_backend_accept,
     /* .backend_apply     = */ llama_sampler_empty_backend_apply,
     /* .backend_set_input = */ llama_sampler_empty_backend_set_input,
+    /* .backend_n_nodes   = */ nullptr,
 };
 
 struct llama_sampler * llama_sampler_init_empty(const char * name) {
@@ -776,6 +777,17 @@ static void llama_sampler_chain_backend_set_input(struct llama_sampler * smpl) {
     }
 }
 
+static uint32_t llama_sampler_chain_backend_n_nodes(const struct llama_sampler * smpl) {
+    auto * sctx = (llama_sampler_chain *) smpl->ctx;
+    uint32_t total = 0;
+    for (const auto & s : sctx->samplers) {
+        if (s.ptr->iface->backend_n_nodes) {
+            total += s.ptr->iface->backend_n_nodes(s.ptr);
+        }
+    }
+    return total;
+}
+
 static struct llama_sampler_i llama_sampler_chain_i = {
     /* .name              = */ llama_sampler_chain_name,
     /* .accept            = */ llama_sampler_chain_accept,
@@ -787,6 +799,7 @@ static struct llama_sampler_i llama_sampler_chain_i = {
     /* .backend_accept    = */ llama_sampler_chain_backend_accept,
     /* .backend_apply     = */ llama_sampler_chain_backend_apply,
     /* .backend_set_input = */ llama_sampler_chain_backend_set_input,
+    /* .backend_n_nodes   = */ llama_sampler_chain_backend_n_nodes,
 };
 
 struct llama_sampler * llama_sampler_chain_init(struct llama_sampler_chain_params params) {
@@ -995,6 +1008,10 @@ static void llama_sampler_greedy_backend_apply(
     data->sampled = curl;
 }
 
+static uint32_t llama_sampler_greedy_backend_n_nodes(const struct llama_sampler *) {
+    return 1;
+}
+
 static struct llama_sampler_i llama_sampler_greedy_i = {
     /* .name              = */ llama_sampler_greedy_name,
     /* .accept            = */ nullptr,
@@ -1006,6 +1023,7 @@ static struct llama_sampler_i llama_sampler_greedy_i = {
     /* .backend_accept    = */ nullptr,
     /* .backend_apply     = */ llama_sampler_greedy_backend_apply,
     /* .backend_set_input = */ nullptr,
+    /* .backend_n_nodes   = */ llama_sampler_greedy_backend_n_nodes,
 };
 
 struct llama_sampler * llama_sampler_init_greedy() {
@@ -1217,6 +1235,10 @@ static void llama_sampler_dist_backend_set_input(struct llama_sampler * smpl) {
     ggml_backend_tensor_set(sctx->inp_uniform, &rnd, 0, sizeof(float));
 }
 
+static uint32_t llama_sampler_dist_backend_n_nodes(const struct llama_sampler *) {
+    return 11;
+}
+
 static struct llama_sampler_i llama_sampler_dist_i = {
     /* .name              = */ llama_sampler_dist_name,
     /* .accept            = */ nullptr,
@@ -1228,6 +1250,7 @@ static struct llama_sampler_i llama_sampler_dist_i = {
     /* .backend_accept    = */ nullptr,
     /* .backend_apply     = */ llama_sampler_dist_backend_apply,
     /* .backend_set_input = */ llama_sampler_dist_backend_set_input,
+    /* .backend_n_nodes   = */ llama_sampler_dist_backend_n_nodes,
 };
 
 struct llama_sampler * llama_sampler_init_dist(uint32_t seed) {
@@ -1308,6 +1331,10 @@ static void llama_sampler_top_k_backend_apply(
     GGML_UNUSED(gf);
 }
 
+static uint32_t llama_sampler_top_k_backend_n_nodes(const struct llama_sampler *) {
+    return 7;
+}
+
 static struct llama_sampler_i llama_sampler_top_k_i = {
     /* .name              = */ llama_sampler_top_k_name,
     /* .accept            = */ nullptr,
@@ -1319,6 +1346,7 @@ static struct llama_sampler_i llama_sampler_top_k_i = {
     /* .backend_accept    = */ nullptr,
     /* .backend_apply     = */ llama_sampler_top_k_backend_apply,
     /* .backend_set_input = */ nullptr,
+    /* .backend_n_nodes   = */ llama_sampler_top_k_backend_n_nodes,
 };
 
 struct llama_sampler * llama_sampler_init_top_k(int32_t k) {
@@ -1500,6 +1528,10 @@ static void llama_sampler_top_p_backend_apply(
     GGML_UNUSED(gf);
 }
 
+static uint32_t llama_sampler_top_p_backend_n_nodes(const struct llama_sampler *) {
+    return 20;
+}
+
 static struct llama_sampler_i llama_sampler_top_p_i = {
     /* .name              = */ llama_sampler_top_p_name,
     /* .accept            = */ nullptr,
@@ -1511,6 +1543,7 @@ static struct llama_sampler_i llama_sampler_top_p_i = {
     /* .backend_accept    = */ nullptr,
     /* .backend_apply     = */ llama_sampler_top_p_backend_apply,
     /* .backend_set_input = */ nullptr,
+    /* .backend_n_nodes   = */ llama_sampler_top_p_backend_n_nodes,
 };
 
 struct llama_sampler * llama_sampler_init_top_p(float p, size_t min_keep) {
@@ -1657,6 +1690,10 @@ static void llama_sampler_min_p_backend_apply(
     GGML_UNUSED(gf);
 }
 
+static uint32_t llama_sampler_min_p_backend_n_nodes(const struct llama_sampler *) {
+    return 8;
+}
+
 static struct llama_sampler_i llama_sampler_min_p_i = {
     /* .name              = */ llama_sampler_min_p_name,
     /* .accept            = */ nullptr,
@@ -1668,6 +1705,7 @@ static struct llama_sampler_i llama_sampler_min_p_i = {
     /* .backend_accept    = */ nullptr,
     /* .backend_apply     = */ llama_sampler_min_p_backend_apply,
     /* .backend_set_input = */ nullptr,
+    /* .backend_n_nodes   = */ llama_sampler_min_p_backend_n_nodes,
 };
 
 struct llama_sampler * llama_sampler_init_min_p(float p, size_t min_keep) {
@@ -1778,6 +1816,7 @@ static struct llama_sampler_i llama_sampler_typical_i = {
     /* .backend_accept    = */ nullptr,
     /* .backend_apply     = */ nullptr,
     /* .backend_set_input = */ nullptr,
+    /* .backend_n_nodes   = */ nullptr,
 };
 
 struct llama_sampler * llama_sampler_init_typical(float p, size_t min_keep) {
@@ -1871,6 +1910,10 @@ static void llama_sampler_temp_backend_apply(
     llama_sampler_backend_temp_sampling(ctx, gf, data, sctx->temp);
 }
 
+static uint32_t llama_sampler_temp_backend_n_nodes(const struct llama_sampler *) {
+    return 5;
+}
+
 static struct llama_sampler_i llama_sampler_temp_i = {
     /* .name              = */ llama_sampler_temp_name,
     /* .accept            = */ nullptr,
@@ -1882,6 +1925,7 @@ static struct llama_sampler_i llama_sampler_temp_i = {
     /* .backend_accept    = */ nullptr,
     /* .backend_apply     = */ llama_sampler_temp_backend_apply,
     /* .backend_set_input = */ nullptr,
+    /* .backend_n_nodes   = */ llama_sampler_temp_backend_n_nodes,
 };
 
 struct llama_sampler * llama_sampler_init_temp(float temp) {
@@ -2068,6 +2112,10 @@ static void llama_sampler_temp_ext_backend_apply(
     data->logits = scaled_logits;
 }
 
+static uint32_t llama_sampler_temp_ext_backend_n_nodes(const struct llama_sampler *) {
+    return 12;
+}
+
 static struct llama_sampler_i llama_sampler_temp_ext_i = {
     /* .name              = */ llama_sampler_temp_ext_name,
     /* .accept            = */ nullptr,
@@ -2079,6 +2127,7 @@ static struct llama_sampler_i llama_sampler_temp_ext_i = {
     /* .backend_accept    = */ nullptr,
     /* .backend_apply     = */ llama_sampler_temp_ext_backend_apply,
     /* .backend_set_input = */ nullptr,
+    /* .backend_n_nodes   = */ llama_sampler_temp_ext_backend_n_nodes,
 };
 
 struct llama_sampler * llama_sampler_init_temp_ext(float temp, float delta, float exponent) {
@@ -2186,6 +2235,7 @@ static struct llama_sampler_i llama_sampler_xtc_i = {
     /* .backend_accept    = */ nullptr,
     /* .backend_apply     = */ nullptr,
     /* .backend_set_input = */ nullptr,
+    /* .backend_n_nodes   = */ nullptr,
 };
 
 struct llama_sampler * llama_sampler_init_xtc(float p, float t, size_t min_keep, uint32_t seed) {
@@ -2305,6 +2355,7 @@ static struct llama_sampler_i llama_sampler_mirostat_i = {
     /* .backend_accept    = */ nullptr,
     /* .backend_apply     = */ nullptr,
     /* .backend_set_input = */ nullptr,
+    /* .backend_n_nodes   = */ nullptr,
 };
 
 struct llama_sampler * llama_sampler_init_mirostat(int32_t n_vocab, uint32_t seed, float tau, float eta, int32_t m) {
@@ -2409,6 +2460,7 @@ static struct llama_sampler_i llama_sampler_mirostat_v2_i = {
     /* .backend_accept    = */ nullptr,
     /* .backend_apply     = */ nullptr,
     /* .backend_set_input = */ nullptr,
+    /* .backend_n_nodes   = */ nullptr,
 };
 
 struct llama_sampler * llama_sampler_init_mirostat_v2(uint32_t seed, float tau, float eta) {
@@ -2530,6 +2582,7 @@ static struct llama_sampler_i llama_sampler_grammar_i = {
     /* .backend_accept    = */ nullptr,
     /* .backend_apply     = */ nullptr,
     /* .backend_set_input = */ nullptr,
+    /* .backend_n_nodes   = */ nullptr,
 };
 
 static struct llama_sampler * llama_sampler_init_grammar_impl(
@@ -2741,6 +2794,7 @@ static struct llama_sampler_i llama_sampler_penalties_i = {
     /* .backend_accept    = */ nullptr,
     /* .backend_apply     = */ nullptr,
     /* .backend_set_input = */ nullptr,
+    /* .backend_n_nodes   = */ nullptr,
 };
 
 struct llama_sampler * llama_sampler_init_penalties(
@@ -2840,6 +2894,7 @@ static struct llama_sampler_i llama_sampler_top_n_sigma_i = {
     /* .backend_accept    = */ nullptr,
     /* .backend_apply     = */ nullptr,
     /* .backend_set_input = */ nullptr,
+    /* .backend_n_nodes   = */ nullptr,
 };
 
 struct llama_sampler * llama_sampler_init_top_n_sigma(float n) {
@@ -3180,6 +3235,7 @@ static struct llama_sampler_i llama_sampler_dry_i = {
     /* .backend_accept    = */ nullptr,
     /* .backend_apply     = */ nullptr,
     /* .backend_set_input = */ nullptr,
+    /* .backend_n_nodes   = */ nullptr,
 };
 
 struct llama_sampler * llama_sampler_init_dry(const struct llama_vocab * vocab, int32_t n_ctx_train, float dry_multiplier, float dry_base, int32_t dry_allowed_length, int32_t dry_penalty_last_n, const char** seq_breakers, size_t num_breakers) {
@@ -3400,6 +3456,7 @@ static struct llama_sampler_i llama_sampler_adaptive_p_i = {
     /* .backend_accept    = */ nullptr,
     /* .backend_apply     = */ nullptr,
     /* .backend_set_input = */ nullptr,
+    /* .backend_n_nodes   = */ nullptr,
 };
 
 struct llama_sampler * llama_sampler_init_adaptive_p(
@@ -3558,6 +3615,10 @@ static bool llama_sampler_logit_bias_backend_init(
     return true;
 }
 
+static uint32_t llama_sampler_logit_bias_backend_n_nodes(const struct llama_sampler *) {
+    return 7;
+}
+
 static struct llama_sampler_i llama_sampler_logit_bias_i = {
     /* .name              = */ llama_sampler_logit_bias_name,
     /* .accept            = */ nullptr,
@@ -3569,6 +3630,7 @@ static struct llama_sampler_i llama_sampler_logit_bias_i = {
     /* .backend_accept    = */ nullptr,
     /* .backend_apply     = */ llama_sampler_logit_bias_backend_apply,
     /* .backend_set_input = */ llama_sampler_logit_bias_backend_set_input,
+    /* .backend_n_nodes   = */ llama_sampler_logit_bias_backend_n_nodes,
 };
 
 struct llama_sampler * llama_sampler_init_logit_bias(
@@ -3812,6 +3874,7 @@ static struct llama_sampler_i llama_sampler_infill_i = {
     /* .backend_accept    = */ nullptr,
     /* .backend_set_input = */ nullptr,
     /* .backend_init      = */ nullptr,
+    /* .backend_n_nodes   = */ nullptr,
 };
 
 struct llama_sampler * llama_sampler_init_infill(const struct llama_vocab * vocab) {

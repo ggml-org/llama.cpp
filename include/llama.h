@@ -1260,6 +1260,9 @@ extern "C" {
 
         // called before graph execution to set inputs for the current ubatch
         void (*backend_set_input)(struct llama_sampler * smpl);
+
+        // returns the number of ggml tensors that a backend sampler needs.
+        uint32_t (*backend_n_nodes)(const struct llama_sampler * smpl);
     };
 
     struct llama_sampler {

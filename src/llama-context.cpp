@@ -2198,13 +2198,19 @@ uint32_t llama_context::graph_max_nodes(uint32_t n_tokens) const {
     // Account for backend sampling with multiple outputs per sequence.
     uint32_t sampling_nodes = 0;
     if (!sampling.samplers.empty()) {
-        const uint32_t tensors_per_output   = 50;
-        const uint32_t sampling_outputs     = std::min<uint32_t>(n_tokens, cparams.n_sampling_outputs_max);
+        uint32_t backend_n_nodes = 0;
+        for (const auto & [seq_id, sampler] : sampling.samplers) {
+            if (sampler->iface->backend_n_nodes) {
+                backend_n_nodes += sampler->iface->backend_n_nodes(sampler);
+            }
+        }
 
-        // Account for worst case (all sequences could have backend samplers).
-        const uint32_t max_samplers         = cparams.n_seq_max;
-
-        sampling_nodes = tensors_per_output * sampling_outputs * max_samplers;
+        const uint32_t sampling_outputs = std::min<uint32_t>(n_tokens, cparams.n_sampling_outputs_max);
+        const uint32_t max_samplers = cparams.n_seq_max;
+        const uint32_t n_active_samplers = (uint32_t) sampling.samplers.size();
+        const uint32_t logits_t_pad = 1;
+        // each active sampler contributes one logits_seq view plus its backend tensors per output
+        sampling_nodes = (backend_n_nodes + n_active_samplers) * sampling_outputs * max_samplers + logits_t_pad;
     }
 
     return res + sampling_nodes;
