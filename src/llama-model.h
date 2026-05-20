@@ -6,6 +6,7 @@
 #include "llama-hparams.h"
 #include "llama-memory.h"
 #include "llama-vocab.h"
+#include "llama-model-loader.h"
 
 #include <map>
 #include <memory>
@@ -585,6 +586,10 @@ struct llama_model {
 
     int64_t t_load_us  = 0;
     int64_t t_start_us = 0;
+
+    // for moe disk offloader
+    std::vector<int>                                      moe_duped_fds;
+    std::unordered_map<std::string, llm_tensor_file_info> moe_file_idx;
 
     explicit llama_model(const llama_model_params & params);
     virtual ~llama_model();

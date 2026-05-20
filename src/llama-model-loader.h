@@ -28,6 +28,11 @@ enum llama_fver {
 
 const char * llama_file_version_name(llama_fver version);
 
+struct llm_tensor_file_info {
+    int      fd;
+    uint64_t offset;
+};
+
 struct llama_model_loader {
     // Holds information on a model weight
     struct llama_tensor_weight {

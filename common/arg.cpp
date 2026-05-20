@@ -2302,6 +2302,20 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_DEVICE"));
     add_opt(common_arg(
+        {"--moe-n-slots"}, "N",
+        "number of expert slots in GPU memory for MoE disk offloading (0 = disabled)",
+        [](common_params & params, const std::string & value) {
+            params.moe.n_slots = std::stoi(value);
+        }
+    ).set_env("LLAMA_ARG_MOE_N_SLOTS"));
+    add_opt(common_arg(
+        {"--moe-n-layers"}, "N",
+        "number of MoE layers to disk-offload (0 = all layers)",
+        [](common_params & params, const std::string & value) {
+            params.moe.n_layers = std::stoi(value);
+        }
+    ).set_env("LLAMA_ARG_MOE_N_LAYERS"));
+    add_opt(common_arg(
         {"--list-devices"},
         "print list of available devices and exit",
         [](common_params &) {

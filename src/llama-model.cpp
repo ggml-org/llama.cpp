@@ -34,6 +34,12 @@
 #include <string>
 #include <vector>
 
+#ifdef __has_include
+#    if __has_include(<unistd.h>)
+#        include <unistd.h>
+#    endif
+#endif
+
 static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params & params) {
     switch (arch) {
         case LLM_ARCH_LLAMA:
@@ -967,6 +973,12 @@ llama_model::~llama_model() {
     for (auto * lora : loras) {
         delete lora;
     }
+
+#if defined(__APPLE__)
+    for (int fd : moe_duped_fds) {
+        close(fd);
+    }
+#endif
 }
 
 void llama_model_base::load_stats(llama_model_loader & ml) {
@@ -1421,6 +1433,21 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
         }
     }
     ml.done_getting_tensors();
+
+#if defined(__APPLE__)
+    // TODO: ignore non-expert files/weights
+    for (const auto & file : ml.files) {
+        const int fd = dup(file->file_id());
+        if (fd < 0) {
+            throw std::runtime_error(format("failed to dup fd for model file: %s", strerror(errno)));
+        }
+        moe_duped_fds.push_back(fd);
+    }
+
+    for (const auto & [name, w] : ml.weights_map) {
+        moe_file_idx[name] = { moe_duped_fds.at(w.idx), w.offs };
+    }
+#endif
 
     GGML_ASSERT(!(output && tok_embd &&
             strcmp(output->name, tok_embd->name) == 0 &&

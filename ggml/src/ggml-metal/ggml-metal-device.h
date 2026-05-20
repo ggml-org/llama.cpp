@@ -97,6 +97,9 @@ void ggml_metal_encoder_end_encoding(ggml_metal_encoder_t encoder);
 
 typedef struct ggml_metal_library * ggml_metal_library_t;
 
+struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_moe_interceptor(ggml_metal_library_t lib);
+void ggml_metal_encoder_wait_for_event(ggml_metal_encoder_t enc, void * event, uint64_t value);
+
 ggml_metal_library_t ggml_metal_library_init            (ggml_metal_device_t dev);
 ggml_metal_library_t ggml_metal_library_init_from_source(ggml_metal_device_t dev, const char * source, bool verbose);
 

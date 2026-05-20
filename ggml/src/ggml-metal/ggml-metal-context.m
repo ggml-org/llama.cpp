@@ -79,6 +79,8 @@ struct ggml_metal {
     // error state - set when a command buffer fails during synchronize
     // once set, graph_compute will return GGML_STATUS_FAILED until the backend is recreated
     bool has_error;
+
+    struct ggml_metal_moe_handler moe_handler;
 };
 
 ggml_metal_t ggml_metal_init(ggml_metal_device_t dev) {
@@ -660,6 +662,11 @@ ggml_metal_event_t ggml_metal_get_ev_cpy(ggml_metal_t ctx) {
     return ctx->ev_cpy;
 }
 
+void ggml_metal_set_moe_handler(ggml_metal_t ctx, struct ggml_metal_moe_handler moe_handler) {
+    GGML_ASSERT(moe_handler.fn == NULL || ctx->moe_handler.fn == NULL);
+    ctx->moe_handler = moe_handler;
+}
+
 void ggml_metal_set_n_cb(ggml_metal_t ctx, int n_cb) {
     if (ctx->n_cb != n_cb) {
         ctx->n_cb = MIN(n_cb, GGML_METAL_MAX_COMMAND_BUFFERS);
@@ -702,7 +709,8 @@ void ggml_metal_set_n_cb(ggml_metal_t ctx, int n_cb) {
             ctx->use_concurrency,
             ctx->capture_compute,
             ctx->debug_graph,
-            ctx->debug_fusion);
+            ctx->debug_fusion,
+            ctx->moe_handler);
 
         for (int idx = 0; idx < ggml_metal_op_n_nodes(ctx_op); ++idx) {
             const int res = ggml_metal_op_encode(ctx_op, idx);

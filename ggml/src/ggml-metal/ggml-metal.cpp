@@ -565,6 +565,14 @@ static void ggml_backend_metal_set_n_cb(ggml_backend_t backend, int n_cb) {
     ggml_metal_set_n_cb(ctx, n_cb);
 }
 
+void ggml_backend_metal_set_moe_handler(ggml_backend_t backend, struct ggml_metal_moe_handler moe_handler) {
+    GGML_ASSERT(ggml_backend_is_metal(backend));
+
+    ggml_metal_t ctx = (ggml_metal_t) backend->context;
+
+    ggml_metal_set_moe_handler(ctx, moe_handler);
+}
+
 static ggml_backend_i ggml_backend_metal_i = {
     /* .get_name                = */ ggml_backend_metal_name,
     /* .free                    = */ ggml_backend_metal_free,

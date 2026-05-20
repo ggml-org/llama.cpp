@@ -331,6 +331,11 @@ extern "C" {
         struct llama_sampler * sampler;
     };
 
+    typedef struct llama_moe_params {
+        int32_t n_slots;
+        int32_t n_layers;
+    } llama_moe_params;
+
     // NOTE: changing the default values of parameters marked as [EXPERIMENTAL] may cause crashes or incorrect results in certain configurations
     //       https://github.com/ggml-org/llama.cpp/pull/7544
     struct llama_context_params {
@@ -341,6 +346,8 @@ extern "C" {
         uint32_t n_rs_seq;          // number of recurrent-state snapshots per seq for rollback (0 = no rollback) [EXPERIMENTAL]
         int32_t  n_threads;         // number of threads to use for generation
         int32_t  n_threads_batch;   // number of threads to use for batch processing
+
+        llama_moe_params moe;
 
         enum llama_context_type      ctx_type;          // set the context type (e.g. MTP)
         enum llama_rope_scaling_type rope_scaling_type; // RoPE scaling type, from `enum llama_rope_scaling_type`

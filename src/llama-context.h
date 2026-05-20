@@ -1,5 +1,6 @@
 #pragma once
 
+#include "llama-moe-offloader.h"
 #include "llama.h"
 #include "llama-ext.h"
 #include "llama-cparams.h"
@@ -360,6 +361,8 @@ private:
 
     // env: LLAMA_GRAPH_REUSE_DISABLE
     bool graph_reuse_disable = false;
+
+    std::unique_ptr<llama_moe_offloader> moe_offloader;
 
     // perf
     mutable int64_t t_start_us  = 0;

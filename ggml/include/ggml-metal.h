@@ -56,6 +56,30 @@ GGML_BACKEND_API void ggml_backend_metal_capture_next_compute(ggml_backend_t bac
 
 GGML_BACKEND_API ggml_backend_reg_t ggml_backend_metal_reg(void);
 
+struct ggml_metal_moe_intercept {
+    int                        n;
+    uint32_t                   seq;
+    const struct ggml_tensor * msg_tensor;
+    size_t                     off_req;
+    size_t                     off_selected;
+    size_t                     off_remapped;
+    void *                     event;
+    uint64_t                   event_value;
+    bool                       reuse;
+};
+
+typedef bool (*ggml_metal_moe_query_fn)(void *                            user_data,
+                                        const struct ggml_tensor *        src0,
+                                        const struct ggml_tensor *        ids,
+                                        struct ggml_metal_moe_intercept * out);
+
+struct ggml_metal_moe_handler {
+    ggml_metal_moe_query_fn fn;
+    void *                  user_data;
+};
+
+GGML_BACKEND_API void ggml_backend_metal_set_moe_handler(ggml_backend_t backend, struct ggml_metal_moe_handler handler);
+
 #ifdef __cplusplus
 }
 #endif

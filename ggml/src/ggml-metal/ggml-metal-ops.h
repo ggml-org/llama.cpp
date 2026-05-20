@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ggml-metal-device.h"
+#include "ggml-metal.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -18,7 +19,8 @@ ggml_metal_op_t ggml_metal_op_init(
         bool use_concurrency,
         bool use_capture,
         int  debug_graph,
-        int  debug_fusion);
+        int  debug_fusion,
+        struct ggml_metal_moe_handler);
 
 void ggml_metal_op_free(ggml_metal_op_t ctx);
 

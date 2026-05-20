@@ -53,6 +53,20 @@ target_compile_features   (llama PRIVATE cxx_std_17) # don't bump
 
 target_link_libraries(llama PUBLIC ggml)
 
+if(APPLE AND GGML_METAL)
+    find_library(FOUNDATION_LIBRARY Foundation REQUIRED)
+    find_library(METAL_FRAMEWORK    Metal      REQUIRED)
+
+    target_sources(llama PRIVATE
+        llama-moe-offloader.cpp
+        llama-moe-offloader-metal.mm
+    )
+    target_link_libraries(llama PRIVATE
+        ${FOUNDATION_LIBRARY}
+        ${METAL_FRAMEWORK}
+    )
+endif()
+
 if (BUILD_SHARED_LIBS)
     set_target_properties(llama PROPERTIES POSITION_INDEPENDENT_CODE ON)
     target_compile_definitions(llama PRIVATE LLAMA_BUILD)

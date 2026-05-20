@@ -1010,6 +1010,22 @@ template<> inline float4 elu_approx<float4>(float4 x) {
     return res;
 }
 
+kernel void kernel_moe_interceptor(
+        device const int   * selected   [[buffer(0)]],
+        device atomic_uint * req_seq    [[buffer(1)]],
+        device       int   * msg_sel    [[buffer(2)]],
+        constant uint      & n          [[buffer(3)]],
+        constant uint      & seq        [[buffer(4)]],
+        uint tid [[thread_position_in_threadgroup]]) {
+    for (uint i = tid; i < n; i += 32) {
+        msg_sel[i] = selected[i];
+    }
+    threadgroup_barrier(mem_flags::mem_device);
+    if (tid == 0) {
+        atomic_store_explicit(req_seq, seq, memory_order_relaxed);
+    }
+}
+
 constant short FC_unary_op [[function_constant(FC_UNARY + 0)]];
 constant bool  FC_unary_cnt[[function_constant(FC_UNARY + 1)]];
 

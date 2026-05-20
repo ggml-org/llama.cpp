@@ -5,6 +5,8 @@
 #include "llama-batch.h"
 #include "llama-cparams.h"
 
+#include "llama-moe-offloader.h"
+
 #include "llama-kv-cache.h"
 #include "llama-kv-cache-iswa.h"
 #include "llama-memory-hybrid.h"
@@ -968,6 +970,10 @@ llm_graph_context::llm_graph_context(const llm_graph_params & params) :
     mctx             (params.mctx),
     cross            (params.cross),
     samplers         (params.samplers),
+    moe_n_slots      (params.moe_n_slots),
+    moe_n_layers     (params.moe_n_layers),
+    moe_file_idx     (params.moe_file_idx),
+    moe_offloader    (params.moe_offloader),
     cb_func          (params.cb),
     res              (params.res),
     ctx0             (res->get_ctx()),
@@ -1530,9 +1536,48 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
     ggml_tensor * up = nullptr;
     ggml_tensor * experts = nullptr;
 
+    const bool moe_layer_enabled = moe_offloader != nullptr && (il < moe_n_layers) && (n_expert_used < n_expert);
+    int64_t n_slots = moe_n_slots > 0 ? (int64_t) moe_n_slots : n_expert;
+
+    ggml_tensor * routing_ids = selected_experts;
+
+    ggml_tensor * gate_up_exps_src = gate_up_exps;
+    ggml_tensor * up_exps_src      = up_exps;
+    ggml_tensor * gate_exps_src    = gate_exps;
+    ggml_tensor * down_exps_src    = down_exps;
+
+    if (moe_layer_enabled) {
+        // find weight by name and create a slot for it
+        auto bind_pool = [&](ggml_tensor * orig) -> ggml_tensor * {
+            if (!orig) {
+                return nullptr;
+            }
+            auto it = moe_file_idx->find(orig->name);
+            if (it == moe_file_idx->end()) {
+                GGML_ABORT("moe: tensor not found in file index: %s", orig->name);
+            }
+            const auto & fi = it->second;
+            return moe_offloader->bind_pool(il, orig, n_slots, fi.offset, fi.fd);
+        };
+
+        // must share the same expert->slot mapping
+        // see resolve() which picks victims in lockstep across all pools.
+        // nullptr tensors (merged gate_up path) are skipped by bind_pool.
+        gate_up_exps_src = bind_pool(gate_up_exps);
+        up_exps_src      = bind_pool(up_exps);
+        gate_exps_src    = bind_pool(gate_exps);
+        down_exps_src    = bind_pool(down_exps);
+
+        // selected experts is a non-contiguous view,
+        // but the interceptor expects flat i32 array
+        routing_ids = ggml_cont(ctx0, selected_experts);
+        ggml_set_name(routing_ids, "moe_slot_ids");
+        cb(routing_ids, "ffn_moe_slot_ids", il);
+    }
+
     if (gate_up_exps) {
         // merged gate_up path: one mul_mat_id, then split into gate and up views
-        ggml_tensor * gate_up = build_lora_mm_id(gate_up_exps, cur, selected_experts); // [n_ff*2, n_expert_used, n_tokens]
+        ggml_tensor * gate_up = build_lora_mm_id(gate_up_exps_src, cur, routing_ids);  // [n_ff*2, n_expert_used, n_tokens]
         cb(gate_up, "ffn_moe_gate_up", il);
 
         if (gate_up_exps_b) {
@@ -1556,7 +1601,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
         cb(up, "ffn_moe_up", il);
     } else {
         // separate gate and up path
-        up = build_lora_mm_id(up_exps, cur, selected_experts); // [n_ff, n_expert_used, n_tokens]
+        up = build_lora_mm_id(up_exps_src, cur, routing_ids);  // [n_ff, n_expert_used, n_tokens]
         cb(up, "ffn_moe_up", il);
 
         if (up_exps_b) {
@@ -1574,7 +1619,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
         }
 
         if (gate_exps) {
-            cur = build_lora_mm_id(gate_exps, cur, selected_experts); // [n_ff, n_expert_used, n_tokens]
+            cur = build_lora_mm_id(gate_exps_src, cur, routing_ids);  // [n_ff, n_expert_used, n_tokens]
             cb(cur, "ffn_moe_gate", il);
         } else {
             cur = up;
@@ -1664,7 +1709,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
             GGML_ABORT("fatal error");
     }
 
-    experts = build_lora_mm_id(down_exps, cur, selected_experts); // [n_embd, n_expert_used, n_tokens]
+    experts = build_lora_mm_id(down_exps_src, cur, routing_ids);  // [n_embd, n_expert_used, n_tokens]
     cb(experts, "ffn_moe_down", il);
 
     if (down_exps_b) {

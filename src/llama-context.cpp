@@ -60,6 +60,10 @@ llama_context::llama_context(
 
     cparams.n_threads        = params.n_threads;
     cparams.n_threads_batch  = params.n_threads_batch;
+    cparams.moe = params.moe;
+    if (cparams.moe.n_layers == 0) {
+        cparams.moe.n_layers = INT32_MAX;
+    }
     cparams.yarn_ext_factor  = params.yarn_ext_factor  >= 0.0f ? params.yarn_ext_factor  : hparams.yarn_ext_factor;
     cparams.yarn_attn_factor = params.yarn_attn_factor >= 0.0f ? params.yarn_attn_factor : hparams.yarn_attn_factor;
     cparams.yarn_beta_fast   = params.yarn_beta_fast   >= 0.0f ? params.yarn_beta_fast   : hparams.yarn_beta_fast;
@@ -248,6 +252,24 @@ llama_context::llama_context(
             backends.emplace_back(backend);
         }
 
+        if (cparams.moe.n_slots > 0) {
+#if defined(__APPLE__) && defined(GGML_USE_METAL)
+            ggml_backend_t metal_be = nullptr;
+            for (auto & backend : backends) {
+                if (ggml_backend_is_metal(backend.get())) {
+                    metal_be = backend.get();
+                    break;
+                }
+            }
+            if (metal_be) {
+                moe_offloader = std::make_unique<llama_moe_offloader>(metal_be);
+                moe_offloader->start();
+            }
+#else
+            LLAMA_LOG_WARN("%s: moe offloader not supported on this platform, ignoring --moe-n-slots\n", __func__);
+#endif
+        }
+
         // add ACCEL backends (such as BLAS)
         for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
             ggml_backend_dev_t dev = ggml_backend_dev_get(i);
@@ -389,6 +411,14 @@ llama_context::llama_context(
 }
 
 llama_context::~llama_context() {
+    if (moe_offloader) {
+        moe_offloader->stop();
+
+        // not sure about this
+        for (size_t i = 0; i < backend_ptrs.size(); ++i) {
+            backend_buf_exp_size[i] = ggml_backend_sched_get_buffer_size(sched.get(), backend_ptrs[i]);
+        }
+    }
     if (!model.hparams.no_alloc) {
         for (size_t i = 0; i < backend_ptrs.size(); ++i) {
             ggml_backend_t             backend = backend_ptrs[i];
@@ -2286,21 +2316,25 @@ llm_graph_params llama_context::graph_params(
             const llama_memory_context_i * mctx,
                           llm_graph_type   gtype) const {
     return {
-        /*.arch        =*/ model.arch,
-        /*.hparams     =*/ model.hparams,
-        /*.cparams     =*/ cparams,
-        /*.ubatch      =*/ ubatch,
-        /*.gtype       =*/ gtype,
-        /*.sched       =*/ sched.get(),
-        /*.backend_cpu =*/ backend_cpu,
-        /*.cvec        =*/ cvec.get(),
-        /*.loras       =*/ loras.get(),
-        /*.mctx        =*/ mctx,
-        /*.cross       =*/ &cross,
-        /*.samplers    =*/ sampling.samplers,
-        /*.n_outputs   =*/ n_outputs,
-        /*.cb          =*/ graph_get_cb(),
-        /*.res         =*/ res,
+        /*.arch          =*/ model.arch,
+        /*.hparams       =*/ model.hparams,
+        /*.cparams       =*/ cparams,
+        /*.ubatch        =*/ ubatch,
+        /*.gtype         =*/ gtype,
+        /*.sched         =*/ sched.get(),
+        /*.backend_cpu   =*/ backend_cpu,
+        /*.cvec          =*/ cvec.get(),
+        /*.loras         =*/ loras.get(),
+        /*.mctx          =*/ mctx,
+        /*.cross         =*/ &cross,
+        /*.samplers      =*/ sampling.samplers,
+        /*.moe_n_slots   =*/ cparams.moe.n_slots,
+        /*.moe_n_layers  =*/ cparams.moe.n_layers,
+        /*.moe_file_idx  =*/ &model.moe_file_idx,
+        /*.moe_offloader =*/ moe_offloader.get(),
+        /*.n_outputs     =*/ n_outputs,
+        /*.cb            =*/ graph_get_cb(),
+        /*.res           =*/ res,
     };
 }
 
@@ -3339,6 +3373,7 @@ llama_context_params llama_context_default_params() {
         /*.n_rs_seq                    =*/ 0,
         /*.n_threads                   =*/ GGML_DEFAULT_N_THREADS, // TODO: better default
         /*.n_threads_batch             =*/ GGML_DEFAULT_N_THREADS,
+        /*.moe                         =*/ {0, 0},
         /*.ctx_type                    =*/ LLAMA_CONTEXT_TYPE_DEFAULT,
         /*.rope_scaling_type           =*/ LLAMA_ROPE_SCALING_TYPE_UNSPECIFIED,
         /*.pooling_type                =*/ LLAMA_POOLING_TYPE_UNSPECIFIED,
