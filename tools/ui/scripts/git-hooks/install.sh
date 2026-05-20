@@ -5,7 +5,7 @@
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
-HOOKS_DIR="$REPO_ROOT/.git/hooks"
+HOOKS_DIR="$(cd "$REPO_ROOT" && git rev-parse --git-path hooks)"
 
 # Verify package.json exists
 if [ ! -f "$REPO_ROOT/tools/ui/package.json" ]; then
@@ -19,10 +19,7 @@ for hook in pre-commit pre-push; do
     src="$SCRIPT_DIR/${hook}.sh"
     dst="$HOOKS_DIR/$hook"
 
-    cp "$src" "$dst"
-    chmod +x "$dst"
-
-    if [ $? -eq 0 ]; then
+    if cp "$src" "$dst" && chmod +x "$dst"; then
         echo "  ✅ $hook"
     else
         echo "  ❌ Failed to install $hook"

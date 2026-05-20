@@ -20,7 +20,7 @@ fi
 
 # Stash unstaged changes in tools/ui/ so they don't interfere
 stash_name="pi-ui-precommit"
-git stash push -u -m "$stash_name" -- tools/ui/ 2>/dev/null || true
+git stash push --keep-index -u -m "$stash_name" -- tools/ui/ 2>/dev/null || true
 
 echo "Running pre-commit checks for llama-ui..."
 
