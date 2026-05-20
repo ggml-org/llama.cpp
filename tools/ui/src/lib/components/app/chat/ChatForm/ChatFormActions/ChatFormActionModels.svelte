@@ -3,7 +3,7 @@
 	import { modelsStore, modelOptions, selectedModelId } from '$lib/stores/models.svelte';
 	import { isRouterMode, serverError } from '$lib/stores/server.svelte';
 	import { ModelsSelectorDropdown, ModelsSelectorSheet } from '$lib/components/app';
-	import { IsMobile } from '$lib/hooks/is-mobile.svelte';
+	import { isMobile } from '$lib/stores/viewport.svelte';
 	import { activeMessages } from '$lib/stores/conversations.svelte';
 
 	interface Props {
@@ -151,8 +151,6 @@
 
 	let selectorModelRef: ModelsSelectorDropdown | ModelsSelectorSheet | undefined =
 		$state(undefined);
-
-	let isMobile = new IsMobile();
 
 	export function open() {
 		selectorModelRef?.open();
