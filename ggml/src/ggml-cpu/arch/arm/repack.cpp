@@ -4117,7 +4117,7 @@ void ggml_gemm_q4_K_8x8_q8_K(int                        n,
         }
         case 128:
         {
-            std::cout << "VL is 128" << std::endl;
+            //std::cout << "VL is 128" << std::endl;
             //constexpr int    q8_k_blocklen = 4;
             const svuint8_t m4b = svdup_n_u8(0x0f);
             svbool_t pg_b16_vl8 = svptrue_pat_b16(SV_VL8);
