@@ -444,6 +444,8 @@ void ggml_vec_dot_tq1_0_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, 
     float sumf = 0.0f;
 
     for (int i = 0; i < nb; ++i) {
+        if (!x[i].d) continue; // all weights in block are zero, skip
+
         int sum = 0;
 
         for (size_t j = 0; j < sizeof(x->qs) - sizeof(x->qs) % 32; j += 32) {
@@ -493,6 +495,8 @@ void ggml_vec_dot_tq2_0_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, 
     float sumf = 0.0f;
 
     for (int i = 0; i < nb; ++i) {
+        if (!x[i].d) continue; // all weights in block are zero, skip
+
         int32_t sumi = 0;
 
         for (size_t j = 0; j < sizeof(x->qs); j += 32) {

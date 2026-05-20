@@ -1340,6 +1340,8 @@ void ggml_vec_dot_tq1_0_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
     const uint8x16_t shift = vld1q_u8(k_shift);
 
     for (int i = 0; i < nb; ++i) {
+        if (!x[i].d) continue; // all weights in block are zero, skip
+
 #if defined(__ARM_FEATURE_DOTPROD)
         int32x4_t sumi0 = vdupq_n_s32(0);
         int32x4_t sumi1 = vdupq_n_s32(0);
@@ -1515,6 +1517,8 @@ void ggml_vec_dot_tq2_0_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
     const uint8x16_t m3 = vdupq_n_u8(3);
 
     for (int i = 0; i < nb; ++i) {
+        if (!x[i].d) continue; // all weights in block are zero, skip
+
 #if defined(__ARM_FEATURE_DOTPROD)
         int32x4_t sumi0 = vdupq_n_s32(0);
         int32x4_t sumi1 = vdupq_n_s32(0);
