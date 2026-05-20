@@ -257,7 +257,7 @@ int GgmlOvDecoder::compute_op_case(const ggml_tensor * node) const {
         if (node->src[0]->op == GGML_OP_VIEW) {
             auto * src = node->src[0];
             if (ggml_nelements(node) != ggml_nelements(src)) {
-                throw std::runtime_error("Unsupported VIEW case");
+                // throw std::runtime_error("Unsupported VIEW case");
             }
             op_case = 0;
             if (m_model_is_splitted && m_model_inputs.find(std::string(src->name)) != m_model_inputs.end()) {
@@ -397,6 +397,7 @@ std::pair<ModelParams, ComputeParams> GgmlOvDecoder::compute_llm_params(ggml_cgr
                 break;
             case 3:
                 cache_k_permute = node->src[0]->src[0]->src[0];
+                mask = node->src[1];
                 break;
             default:
                 break;
@@ -410,7 +411,7 @@ std::pair<ModelParams, ComputeParams> GgmlOvDecoder::compute_llm_params(ggml_cgr
             compute_params.token_len_per_seq = node->src[0]->ne[1];
 
             auto * cache_k_view = cache_k_permute->src[0];
-            if (cache_k_view->op != GGML_OP_VIEW) {
+            if (cache_k_view->op != GGML_OP_VIEW || mask == nullptr) {
                 continue;
             }
 
