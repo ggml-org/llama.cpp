@@ -1,5 +1,7 @@
 #include "llama-vocab.h"
 
+#include "llama-vocab-carbon.h"
+
 #include "ggml.h"
 #include "gguf.h"
 #include "llama-impl.h"
@@ -372,6 +374,7 @@ struct llm_tokenizer_bpe : llm_tokenizer {
             case LLAMA_VOCAB_PRE_TYPE_QWEN2:
             case LLAMA_VOCAB_PRE_TYPE_HUNYUAN:
             case LLAMA_VOCAB_PRE_TYPE_SOLAR_OPEN:
+            case LLAMA_VOCAB_PRE_TYPE_CARBON:
                 regex_exprs = {
                     // original regex from tokenizer.json
                     // "(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\\r\\n\\p{L}\\p{N}]?\\p{L}+|\\p{N}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+"
@@ -568,6 +571,36 @@ struct llm_tokenizer_bpe_session {
     }
 
     void tokenize(const std::string & text, std::vector<llama_token> & output) {
+        if (vocab.get_pre_type() == LLAMA_VOCAB_PRE_TYPE_CARBON) {
+            tokenize_carbon(text, output);
+            return;
+        }
+        tokenize_bpe(text, output);
+    }
+
+    // Carbon-3B (HybridDNATokenizer): switches between Qwen3 BPE for plain
+    // text and fixed k-mer chunking inside <dna>...</dna> regions.  Falls back
+    // to plain BPE if the DNA pieces are missing from the vocab.
+    void tokenize_carbon(const std::string & text, std::vector<llama_token> & output) {
+        const auto dna_begin_id = vocab.text_to_token("<dna>");
+        const auto dna_end_id   = vocab.text_to_token("</dna>");
+        const auto dna_oov_id   = vocab.text_to_token("<oov>");
+
+        if (dna_begin_id == LLAMA_TOKEN_NULL || dna_end_id == LLAMA_TOKEN_NULL || dna_oov_id == LLAMA_TOKEN_NULL) {
+            tokenize_bpe(text, output);
+            return;
+        }
+
+        llama_carbon::tokenize_carbon(
+            text,
+            dna_begin_id, dna_end_id, dna_oov_id,
+            /*k=*/6,
+            [this](const std::string & s) { return vocab.text_to_token(s); },
+            [this](const std::string & s, std::vector<llama_token> & out) { tokenize_bpe(s, out); },
+            output);
+    }
+
+    void tokenize_bpe(const std::string & text, std::vector<llama_token> & output) {
         int final_prev_index = -1;
         const auto word_collection = unicode_regex_split(text, tokenizer.regex_exprs, tokenizer.byte_encode);
 
@@ -2041,6 +2074,10 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
             } else if (
                     tokenizer_pre == "qwen35") {
                 pre_type = LLAMA_VOCAB_PRE_TYPE_QWEN35;
+                clean_spaces = false;
+            } else if (
+                    tokenizer_pre == "carbon") {
+                pre_type = LLAMA_VOCAB_PRE_TYPE_CARBON;
                 clean_spaces = false;
             } else if (
                 tokenizer_pre == "stablelm2") {

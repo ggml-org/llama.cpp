@@ -1258,7 +1258,21 @@ class TextModel(ModelBase):
         toktypes: list[int] = []
 
         from transformers import AutoTokenizer
-        tokenizer = AutoTokenizer.from_pretrained(self.dir_model)
+
+        # Carbon-3B's HybridDNATokenizer is defined in the repo's tokenizer.py
+        # and adds DNA k-mer tokens at construction; loading it requires
+        # trust_remote_code=True.
+        trust_remote_code = False
+        tok_config_path = self.dir_model / "tokenizer_config.json"
+        if tok_config_path.is_file():
+            try:
+                with open(tok_config_path, "r", encoding="utf-8") as f:
+                    if json.load(f).get("tokenizer_class") == "HybridDNATokenizer":
+                        trust_remote_code = True
+            except Exception:
+                pass
+
+        tokenizer = AutoTokenizer.from_pretrained(self.dir_model, trust_remote_code=trust_remote_code)
         vocab_size = self.hparams.get("vocab_size", len(tokenizer.vocab))  # ty: ignore[unresolved-attribute]
         assert max(tokenizer.vocab.values()) < vocab_size  # ty: ignore[unresolved-attribute]
 
@@ -1306,6 +1320,12 @@ class TextModel(ModelBase):
         # is specific for the BPE pre-tokenizer used by the model
         # we will use this unique identifier to write a "tokenizer.ggml.pre" entry in the GGUF file which we can
         # use in llama.cpp to implement the same pre-tokenizer
+
+        # Carbon-3B (HybridDNATokenizer) wraps the Qwen3-4B-Base BPE — the
+        # chktxt below contains no <dna> tags, so the hash collides with the
+        # underlying Qwen3 vocab. Disambiguate by tokenizer class name.
+        if type(tokenizer).__name__ == "HybridDNATokenizer":
+            return "carbon"
 
         chktxt = '\n \n\n \n\n\n \t \t\t \t\n  \n   \n    \n     \n🚀 (normal) 😶\u200d🌫️ (multiple emojis concatenated) ✅ 🦙🦙 3 33 333 3333 33333 333333 3333333 33333333 3.3 3..3 3...3 កាន់តែពិសេសអាច😁 ?我想在apple工作1314151天～ ------======= нещо на Български \'\'\'\'\'\'```````""""......!!!!!!?????? I\'ve been \'told he\'s there, \'RE you sure? \'M not sure I\'ll make it, \'D you like some tea? We\'Ve a\'lL'
 
