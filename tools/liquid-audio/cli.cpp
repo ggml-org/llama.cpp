@@ -1,6 +1,9 @@
 #include "mtmd-helper.h"
 #include "mtmd.h"
 #include "runner.h"
+#include "audio_playback.h"
+
+#include <memory>
 
 //
 #include "arg.h"
@@ -142,6 +145,12 @@ int main(int argc, char ** argv) {
         exit(1);
     }
 
+    std::unique_ptr<AudioPlayback> player;
+    if (runner.get_output_sample_rate() > 0 && params.out_file.empty()) {
+        player = std::make_unique<AudioPlayback>(runner.get_output_sample_rate());
+        player->start();
+    }
+
     auto modalities = get_modalities_from_system_prompt(params.system_prompt);
 
     // prepare inputs
@@ -160,7 +169,10 @@ int main(int argc, char ** argv) {
     auto text_cb = [&generated_text](const std::string & text) {
         generated_text += text;
     };
-    auto audio_cb = [&generated_audio](const std::vector<int16_t> & audio) {
+    auto audio_cb = [&generated_audio, &player](const std::vector<int16_t> & audio) {
+        if (player) {
+            player->add_samples(audio);
+        }
         generated_audio.insert(generated_audio.end(), audio.begin(), audio.end());
     };
 
@@ -170,17 +182,22 @@ int main(int argc, char ** argv) {
 
     LOG("\n");
 
+    if (player) {
+        player->wait_until_done();
+        player->stop();
+    }
+
     // write output
     if (not generated_audio.empty()) {
         if (params.out_file.empty()) {
-            LOG_ERR("ERR: --output is required for audio generation\n");
-            return 1;
+            LOG("=== GENERATED AUDIO ===\nPlayed locally\n\n");
+        } else {
+            if (!mtmd_helper_save_wav(params.out_file.c_str(), generated_audio.data(), generated_audio.size(),
+                                      runner.get_output_sample_rate())) {
+                exit(1);
+            }
+            LOG("=== GENERATED AUDIO ===\nSaved to %s\n\n", params.out_file.c_str());
         }
-        if (!mtmd_helper_save_wav(params.out_file.c_str(), generated_audio.data(), generated_audio.size(),
-                                  runner.get_output_sample_rate())) {
-            exit(1);
-        }
-        LOG("=== GENERATED AUDIO ===\nSaved to %s\n\n", params.out_file.c_str());
     }
 
     if (not generated_text.empty()) {
