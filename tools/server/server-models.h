@@ -9,6 +9,7 @@
 #include <condition_variable>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <set>
 
 /**
@@ -54,6 +55,14 @@ static std::string server_model_status_to_string(server_model_status status) {
     }
 }
 
+// Remote (proxy-only) model entry: no child process is spawned; requests are
+// forwarded to an external OpenAI-compatible server (e.g. vLLM).
+struct server_model_remote {
+    std::string url;       // e.g. "http://127.0.0.1:8082" or "https://host/base"
+    std::string api_key;   // bearer token to inject as Authorization (already env-expanded)
+    std::string model_id;  // optional: overrides JSON "model" before forwarding
+};
+
 struct server_model_meta {
     common_preset preset;
     std::string name;
@@ -67,17 +76,25 @@ struct server_model_meta {
     int exit_code = 0; // exit code of the model instance process (only valid if status == FAILED)
     int stop_timeout = 0; // seconds to wait before force-killing the model instance during shutdown
     mtmd_caps multimodal; // multimodal capabilities
+    std::optional<server_model_remote> remote; // set ⇒ this is a remote entry (no child process)
+
+    bool is_remote() const {
+        return remote.has_value();
+    }
 
     bool is_ready() const {
-        return status == SERVER_MODEL_STATUS_LOADED;
+        return is_remote() || status == SERVER_MODEL_STATUS_LOADED;
     }
 
     bool is_running() const {
-        return status == SERVER_MODEL_STATUS_LOADED || status == SERVER_MODEL_STATUS_LOADING || status == SERVER_MODEL_STATUS_SLEEPING;
+        return is_remote()
+            || status == SERVER_MODEL_STATUS_LOADED
+            || status == SERVER_MODEL_STATUS_LOADING
+            || status == SERVER_MODEL_STATUS_SLEEPING;
     }
 
     bool is_failed() const {
-        return status == SERVER_MODEL_STATUS_UNLOADED && exit_code != 0;
+        return !is_remote() && status == SERVER_MODEL_STATUS_UNLOADED && exit_code != 0;
     }
 
     void update_args(common_preset_context & ctx_presets, std::string bin_path);
@@ -224,7 +241,14 @@ public:
                       const std::map<std::string, uploaded_file> & files,
                       const std::function<bool()> should_stop,
                       int32_t timeout_read,
-                      int32_t timeout_write
+                      int32_t timeout_write,
+                      // Optional response-body substring rewrite. Applied to every
+                      // chunk before relay; a tail buffer handles boundary splits.
+                      // Used by remote proxies to rewrite `"model":"<upstream-id>"`
+                      // back to the router-side name so clients never see the
+                      // upstream's internal id.
+                      const std::string & body_rewrite_from = "",
+                      const std::string & body_rewrite_to   = ""
                       );
     ~server_http_proxy() {
         if (cleanup) {

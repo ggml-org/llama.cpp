@@ -3137,6 +3137,88 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_MODELS_AUTOLOAD"));
     add_opt(common_arg(
+        {"--remote-model"}, "SPEC",
+        "for router server, declare a remote (e.g. vLLM) OpenAI-compatible model entry. "
+        "SPEC format: NAME=URL[,key=API_KEY][,model=UPSTREAM_ID][,alias=A|B][,tags=T1|T2]. "
+        "API_KEY supports ${ENV_VAR} expansion. Repeatable.",
+        [](common_params & params, const std::string & value) {
+            common_params::remote_model_decl decl;
+            // Split into top-level comma-separated key=value pairs. The first
+            // segment is "NAME=URL"; subsequent segments are key=value.
+            std::vector<std::string> parts;
+            {
+                std::string cur;
+                for (char c : value) {
+                    if (c == ',') { parts.push_back(cur); cur.clear(); }
+                    else          { cur.push_back(c); }
+                }
+                parts.push_back(cur);
+            }
+            if (parts.empty() || parts[0].empty()) {
+                throw std::invalid_argument("--remote-model: empty spec");
+            }
+            // First part must be NAME=URL.
+            {
+                auto eq = parts[0].find('=');
+                if (eq == std::string::npos) {
+                    throw std::invalid_argument("--remote-model: first segment must be NAME=URL");
+                }
+                decl.name = parts[0].substr(0, eq);
+                decl.url  = parts[0].substr(eq + 1);
+                if (decl.name.empty() || decl.url.empty()) {
+                    throw std::invalid_argument("--remote-model: empty NAME or URL");
+                }
+            }
+            auto split_pipe = [](const std::string & s) {
+                std::vector<std::string> out;
+                std::string cur;
+                for (char c : s) {
+                    if (c == '|') { if (!cur.empty()) out.push_back(cur); cur.clear(); }
+                    else          { cur.push_back(c); }
+                }
+                if (!cur.empty()) out.push_back(cur);
+                return out;
+            };
+            for (size_t i = 1; i < parts.size(); ++i) {
+                auto eq = parts[i].find('=');
+                if (eq == std::string::npos) {
+                    throw std::invalid_argument("--remote-model: expected key=value in '" + parts[i] + "'");
+                }
+                std::string k = parts[i].substr(0, eq);
+                std::string v = parts[i].substr(eq + 1);
+                if      (k == "key")    decl.api_key  = v;
+                else if (k == "model")  decl.model_id = v;
+                else if (k == "alias")  decl.aliases  = split_pipe(v);
+                else if (k == "tags")   decl.tags     = split_pipe(v);
+                else throw std::invalid_argument("--remote-model: unknown key '" + k + "'");
+            }
+            // Expand ${ENV_VAR} in api_key now so secrets stay out of process args.
+            if (!decl.api_key.empty()) {
+                std::string out;
+                size_t i = 0;
+                while (i < decl.api_key.size()) {
+                    if (decl.api_key[i] == '$' && i + 1 < decl.api_key.size() && decl.api_key[i+1] == '{') {
+                        size_t end = decl.api_key.find('}', i + 2);
+                        if (end == std::string::npos) {
+                            throw std::invalid_argument("--remote-model: unterminated ${...} in key");
+                        }
+                        std::string var = decl.api_key.substr(i + 2, end - (i + 2));
+                        const char * envv = std::getenv(var.c_str());
+                        if (envv == nullptr) {
+                            throw std::invalid_argument("--remote-model: environment variable not set: " + var);
+                        }
+                        out.append(envv);
+                        i = end + 1;
+                    } else {
+                        out.push_back(decl.api_key[i++]);
+                    }
+                }
+                decl.api_key = out;
+            }
+            params.remote_models.push_back(std::move(decl));
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}));
+    add_opt(common_arg(
         {"--jinja"},
         {"--no-jinja"},
         string_format("whether to use jinja template engine for chat (default: %s)", params.use_jinja ? "enabled" : "disabled"),

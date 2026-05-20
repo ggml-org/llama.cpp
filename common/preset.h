@@ -7,6 +7,7 @@
 #include <vector>
 #include <map>
 #include <set>
+#include <optional>
 
 //
 // INI preset parser and writer
@@ -16,11 +17,22 @@ constexpr const char * COMMON_PRESET_DEFAULT_NAME = "default";
 
 struct common_preset_context;
 
+// Remote (proxy-only) model entry parsed from a preset section.
+// Lives next to common_preset so INI loading can produce both kinds uniformly.
+struct common_preset_remote {
+    std::string url;       // e.g. http://127.0.0.1:8082 (optional /base path)
+    std::string api_key;   // bearer token, ${ENV} expanded at load time
+    std::string model_id;  // optional: overrides JSON "model" before forwarding
+};
+
 struct common_preset {
     std::string name;
 
     // options are stored as common_arg to string mapping, representing CLI arg and its value
     std::map<common_arg, std::string> options;
+
+    // if set, this preset describes a remote (vLLM-style) entry; router will not spawn a child
+    std::optional<common_preset_remote> remote;
 
     // convert preset to CLI argument list
     std::vector<std::string> to_args(const std::string & bin_path = "") const;

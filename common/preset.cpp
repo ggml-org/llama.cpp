@@ -8,6 +8,33 @@
 #include <sstream>
 #include <filesystem>
 
+// Expand ${VAR} references in a string using process environment. Missing vars
+// are an error so secrets-by-typo don't silently turn into empty tokens. Used
+// for `remote-api-key` values from INI presets and --remote-model CLI flags.
+static std::string expand_env_vars(const std::string & in) {
+    std::string out;
+    out.reserve(in.size());
+    size_t i = 0;
+    while (i < in.size()) {
+        if (in[i] == '$' && i + 1 < in.size() && in[i+1] == '{') {
+            size_t end = in.find('}', i + 2);
+            if (end == std::string::npos) {
+                throw std::runtime_error("unterminated ${...} in value");
+            }
+            std::string var = in.substr(i + 2, end - (i + 2));
+            const char * v = std::getenv(var.c_str());
+            if (v == nullptr) {
+                throw std::runtime_error("environment variable not set: " + var);
+            }
+            out.append(v);
+            i = end + 1;
+        } else {
+            out.push_back(in[i++]);
+        }
+    }
+    return out;
+}
+
 static std::string rm_leading_dashes(const std::string & str) {
     size_t pos = 0;
     while (pos < str.size() && str[pos] == '-') {
@@ -160,6 +187,10 @@ bool common_preset::get_option(const std::string & env, std::string & value) con
 void common_preset::merge(const common_preset & other) {
     for (const auto & [opt, val] : other.options) {
         options[opt] = val; // overwrite existing options
+    }
+    // Carry remote info from the higher-priority preset, if present.
+    if (other.remote.has_value()) {
+        remote = other.remote;
     }
 }
 
@@ -330,6 +361,18 @@ common_presets common_preset_context::load_from_ini(const std::string & path, co
                 continue;
             }
 
+            // Remote-entry keys: intercept before key_to_opt lookup. These
+            // declare a vLLM-style upstream and are not CLI args.
+            if (key == "remote-url" || key == "remote-api-key" || key == "remote-model") {
+                if (!preset.remote.has_value()) {
+                    preset.remote.emplace();
+                }
+                if      (key == "remote-url")     preset.remote->url      = value;
+                else if (key == "remote-api-key") preset.remote->api_key  = expand_env_vars(value);
+                else                              preset.remote->model_id = value;
+                continue;
+            }
+
             LOG_DBG("option: %s = %s\n", key.c_str(), value.c_str());
             if (filter_allowed_keys && allowed_keys.find(key) == allowed_keys.end()) {
                 throw std::runtime_error(string_format(
@@ -351,6 +394,14 @@ common_presets common_preset_context::load_from_ini(const std::string & path, co
                     key.c_str(), preset.name.c_str()
                 ));
             }
+        }
+
+        // Validate remote presets: url is required if any remote-* key was set.
+        if (preset.remote.has_value() && preset.remote->url.empty()) {
+            throw std::runtime_error(string_format(
+                "preset '%s' has remote-api-key or remote-model but no remote-url",
+                preset.name.c_str()
+            ));
         }
 
         if (preset.name == "*") {

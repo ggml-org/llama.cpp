@@ -1627,6 +1627,63 @@ We also offer additional options that are exclusive to presets (these aren't tre
 - `load-on-startup` (boolean): Controls whether the model loads automatically when the server starts
 - `stop-timeout` (int, seconds): After requested unload, wait for this many seconds before forcing termination (default: 10)
 
+### Remote (proxy-only) models
+
+In addition to spawning child `llama-server` instances, the router can also forward requests to an external OpenAI-compatible server (for example, a [vLLM](https://github.com/vllm-project/vllm) instance). Remote entries have no child process: the router does not load weights or manage their lifecycle — it simply proxies requests to the configured upstream URL.
+
+Three keys turn a preset section into a remote entry:
+
+| Key              | Required | Description                                                                                   |
+|------------------|----------|-----------------------------------------------------------------------------------------------|
+| `remote-url`     | yes      | Upstream base URL (e.g. `http://127.0.0.1:8082` or `https://gateway.example.com/vllm`)        |
+| `remote-api-key` | no       | Bearer token to inject as `Authorization`. Supports `${ENV_VAR}` expansion at load time.       |
+| `remote-model`   | no       | Upstream model id; if set, the router rewrites the JSON `"model"` field before forwarding.    |
+
+The router strips any client-supplied `Authorization` header on remote requests and injects the configured `remote-api-key` (if any). It never serializes the api key back through `/v1/models`.
+
+#### Example: vLLM behind the router
+
+```ini
+[vllm-qwen3-coder]
+remote-url = http://127.0.0.1:8082
+remote-api-key = ${VLLM_API_KEY}
+remote-model = /llm-models/Qwen3-Coder-Next-FP8/
+alias = vllm, qwen-fp8
+tags = remote, vllm
+```
+
+Launch the router and call it with the section name (or any alias):
+
+```sh
+export VLLM_API_KEY=sk-...
+llama-server --models-preset ./router.ini --host 0.0.0.0 --port 8081
+
+curl http://127.0.0.1:8081/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -d '{"model": "vllm-qwen3-coder", "messages": [{"role": "user", "content": "hi"}]}'
+```
+
+#### Alternative: declare remote entries on the CLI
+
+You can also declare remote entries without an INI file using the repeatable `--remote-model` flag:
+
+```sh
+llama-server \
+  --remote-model 'vllm-qwen3-coder=http://127.0.0.1:8082,key=${VLLM_API_KEY},model=/llm-models/Qwen3-Coder-Next-FP8/,alias=vllm|qwen-fp8,tags=remote|vllm'
+```
+
+The first segment is `NAME=URL`. Remaining comma-separated segments are `key=...`, `model=...`, `alias=...`, `tags=...`. Multiple aliases and tags are separated by `|` (commas already split top-level segments). Like in INI presets, `${ENV_VAR}` is expanded at parse time so secrets stay out of the process argv.
+
+#### Behavior of remote entries
+
+- **Always available.** Remote entries report `"status": "loaded"` in `/v1/models` and skip the load/unload control plane:
+  - `POST /models/load` and `POST /models/unload` return `400` for remote entries.
+  - They do not count against `--models-max` and are never evicted by the LRU.
+- **Supported endpoints.** Only OpenAI-compatible inference paths forward to remote entries: `/v1/chat/completions`, `/v1/completions`, `/v1/embeddings`, `/v1/messages`, `/v1/responses`, `/completion`, and `/props`. Anything else (`/tokenize`, `/slots`, `/metrics`, `/apply-template`, lora endpoints, etc.) returns `400` for a remote model, since the upstream has no equivalent in our control plane.
+- **Auth.** The client's `Authorization` header is always stripped on remote forwards; the configured `remote-api-key` is injected if set. This is per-model auth — pass-through is not supported.
+- **Model rewrite.** If `remote-model` is set, the router rewrites the JSON `"model"` field of POST inference requests to that upstream id. The router-side name (and aliases) is what clients use; the upstream sees its own id.
+- **`/v1/models` shape.** Remote entries expose `kind: "remote"`, `owned_by: "remote"`, and a `remote: { url, model }` object. The api key is never serialized.
+
 ### Routing requests
 
 Requests are routed according to the requested model name.

@@ -50,6 +50,85 @@ extern char **environ;
 // ref: https://github.com/ggml-org/llama.cpp/issues/17862
 #define CHILD_ADDR "127.0.0.1"
 
+// Parsed remote upstream URL (scheme://host[:port][/base_path]).
+struct remote_target {
+    std::string scheme;   // "http" or "https"
+    std::string host;
+    int         port;
+    std::string base_path; // may be empty; prepended to req.path
+};
+
+static remote_target parse_remote_url(const std::string & url) {
+    remote_target t{};
+    size_t pos = 0;
+    auto scheme_end = url.find("://");
+    if (scheme_end == std::string::npos) {
+        throw std::runtime_error("remote URL missing scheme: " + url);
+    }
+    t.scheme = url.substr(0, scheme_end);
+    if (t.scheme != "http" && t.scheme != "https") {
+        throw std::runtime_error("remote URL scheme must be http or https: " + url);
+    }
+    pos = scheme_end + 3;
+    auto path_start = url.find('/', pos);
+    std::string authority = (path_start == std::string::npos)
+        ? url.substr(pos)
+        : url.substr(pos, path_start - pos);
+    if (authority.empty()) {
+        throw std::runtime_error("remote URL missing host: " + url);
+    }
+    auto colon = authority.find(':');
+    if (colon == std::string::npos) {
+        t.host = authority;
+        t.port = (t.scheme == "https") ? 443 : 80;
+    } else {
+        t.host = authority.substr(0, colon);
+        try {
+            t.port = std::stoi(authority.substr(colon + 1));
+        } catch (...) {
+            throw std::runtime_error("remote URL has invalid port: " + url);
+        }
+    }
+    if (path_start != std::string::npos) {
+        t.base_path = url.substr(path_start);
+        // strip a single trailing '/' so req.path can join cleanly
+        if (t.base_path.size() > 1 && t.base_path.back() == '/') {
+            t.base_path.pop_back();
+        }
+    }
+    return t;
+}
+
+// Inference endpoints that make sense to forward to a remote OpenAI-compatible
+// upstream. Anything else (load/unload/slots/metrics/apply-template/tokenize/
+// detokenize/lora) returns 400 for remote entries since the upstream has no
+// equivalent semantics in our control plane.
+static bool remote_allows_path(const std::string & path) {
+    // /props is llama.cpp-specific; OAI-compatible upstreams (vLLM, OpenAI, etc.)
+    // don't expose it. The UI reads remote metadata from /v1/models["upstream"]
+    // (router-side cache) instead, and proxy_request short-circuits /props on
+    // remote entries to a synthetic response.
+    static const std::set<std::string> allowed = {
+        "/v1/chat/completions",
+        "/v1/completions",
+        "/v1/embeddings",
+        "/v1/messages",
+        "/v1/responses",
+        "/chat/completions",
+        "/completions",
+        "/embeddings",
+        "/completion",
+    };
+    return allowed.count(path) > 0;
+}
+
+static std::string proxy_header_to_lower(const std::string & s) {
+    std::string out;
+    out.reserve(s.size());
+    for (char c : s) out.push_back(c >= 'A' && c <= 'Z' ? char(c + 32) : c);
+    return out;
+}
+
 static std::filesystem::path get_server_exec_path() {
 #if defined(_WIN32)
     wchar_t buf[32768] = { 0 };  // Large buffer to handle long paths
@@ -259,8 +338,17 @@ void server_models::add_model(server_model_meta && meta) {
         }
     }
 
-    meta.update_args(ctx_preset, bin_path); // render args
-    meta.update_caps();
+    // Promote remote info from the preset (INI or synthetic CLI preset) onto the meta.
+    // Remote entries have no child process, so we skip arg rendering / caps probing.
+    if (meta.preset.remote.has_value()) {
+        const auto & rp = meta.preset.remote.value();
+        meta.remote = server_model_remote{rp.url, rp.api_key, rp.model_id};
+        // Remote entries are always "loaded" from the router's perspective.
+        meta.status = SERVER_MODEL_STATUS_LOADED;
+    } else {
+        meta.update_args(ctx_preset, bin_path); // render args
+        meta.update_caps();
+    }
     std::string name = meta.name;
     mapping[name] = instance_t{
         /* subproc */ std::make_shared<subprocess_s>(),
@@ -307,6 +395,31 @@ void server_models::load_models() {
     // server base preset from CLI args takes highest precedence
     for (auto & [name, preset] : final_presets) {
         preset.merge(base_preset);
+    }
+
+    // Inject --remote-model declarations as synthetic presets. These take
+    // precedence over identically-named entries from cache / models-dir / INI.
+    for (const auto & decl : base_params.remote_models) {
+        common_preset p;
+        p.name = decl.name;
+        p.remote = common_preset_remote{decl.url, decl.api_key, decl.model_id};
+        if (!decl.aliases.empty()) {
+            std::string joined;
+            for (const auto & a : decl.aliases) {
+                if (!joined.empty()) joined += ",";
+                joined += a;
+            }
+            p.set_option(ctx_preset, "LLAMA_ARG_ALIAS", joined);
+        }
+        if (!decl.tags.empty()) {
+            std::string joined;
+            for (const auto & t : decl.tags) {
+                if (!joined.empty()) joined += ",";
+                joined += t;
+            }
+            p.set_option(ctx_preset, "LLAMA_ARG_TAGS", joined);
+        }
+        final_presets[decl.name] = p;
     }
 
     // Helpers that read `mapping` — must be called while holding the lock.
@@ -375,6 +488,7 @@ void server_models::load_models() {
                 /* exit_code    */ 0,
                 /* stop_timeout */ DEFAULT_STOP_TIMEOUT,
                 /* multimodal   */ mtmd_caps{false, false},
+                /* remote       */ std::optional<server_model_remote>{},
             };
             add_model(std::move(meta));
         }
@@ -528,6 +642,7 @@ void server_models::load_models() {
                     /* exit_code    */ 0,
                     /* stop_timeout */ DEFAULT_STOP_TIMEOUT,
                     /* multimodal   */ mtmd_caps{false, false},
+                    /* remote       */ std::optional<server_model_remote>{},
                 };
                 add_model(std::move(meta));
                 newly_added.push_back(name);
@@ -692,6 +807,10 @@ void server_models::unload_lru() {
     {
         std::unique_lock<std::mutex> lk(mutex);
         for (const auto & m : mapping) {
+            // remote entries don't consume a slot and can't be evicted
+            if (m.second.meta.is_remote()) {
+                continue;
+            }
             if (m.second.meta.is_running()) {
                 count_active++;
                 if (m.second.meta.last_used < lru_last_used) {
@@ -718,6 +837,14 @@ void server_models::load(const std::string & name) {
     if (!has_model(name)) {
         throw std::runtime_error("model name=" + name + " is not found");
     }
+    // Remote entries are always live — no spawn, no LRU eviction needed.
+    {
+        std::unique_lock<std::mutex> lk(mutex);
+        auto it = mapping.find(name);
+        if (it != mapping.end() && it->second.meta.is_remote()) {
+            return;
+        }
+    }
     unload_lru();
 
     std::unique_lock<std::mutex> lk(mutex);
@@ -738,6 +865,8 @@ void server_models::load(const std::string & name) {
     if (base_params.models_max > 0) {
         size_t count_active = 0;
         for (const auto & m : mapping) {
+            // remote entries don't consume a slot
+            if (m.second.meta.is_remote()) continue;
             if (m.second.meta.is_running()) {
                 count_active++;
             }
@@ -902,6 +1031,10 @@ void server_models::unload(const std::string & name) {
     std::lock_guard<std::mutex> lk(mutex);
     auto it = mapping.find(name);
     if (it != mapping.end()) {
+        if (it->second.meta.is_remote()) {
+            // remote entries can't be unloaded; no-op
+            return;
+        }
         if (it->second.meta.is_running()) {
             SRV_INF("stopping model instance name=%s\n", name.c_str());
             stopping_models.insert(name);
@@ -923,6 +1056,9 @@ void server_models::unload_all() {
     {
         std::lock_guard<std::mutex> lk(mutex);
         for (auto & [name, inst] : mapping) {
+            if (inst.meta.is_remote()) {
+                continue; // no process, no thread
+            }
             if (inst.meta.is_running()) {
                 SRV_INF("stopping model instance name=%s\n", name.c_str());
                 stopping_models.insert(name);
@@ -1026,23 +1162,82 @@ server_http_res_ptr server_models::proxy_request(const server_http_req & req, co
         std::unique_lock<std::mutex> lk(mutex);
         mapping[name].meta.last_used = ggml_time_ms();
     }
-    SRV_INF("proxying request to model %s on port %d\n", name.c_str(), meta->port);
-    std::string proxy_path = req.path;
+
+    // Default: forward to the local child server instance.
+    std::string scheme = "http";
+    std::string host   = CHILD_ADDR;
+    int         port   = meta->port;
+    std::string path   = req.path;
+    std::map<std::string, std::string> headers = req.headers;
+    std::string body   = req.body;
+
+    std::string body_rewrite_from, body_rewrite_to;
+
+    if (meta->is_remote()) {
+        if (!remote_allows_path(req.path)) {
+            throw std::invalid_argument(
+                "endpoint '" + req.path + "' is not supported for remote model '" + name + "'");
+        }
+        auto target = parse_remote_url(meta->remote->url);
+        scheme = target.scheme;
+        host   = target.host;
+        port   = target.port;
+        path   = target.base_path + req.path;
+
+        // Rewrite the upstream's `"model":"<id>"` back to the router-side name
+        // on the response stream. Without this, every chat/completion response
+        // would echo the upstream model id (e.g. a vLLM filesystem path), which
+        // leaks into the web UI and breaks model selection on subsequent turns.
+        if (!meta->remote->model_id.empty() && meta->remote->model_id != meta->name) {
+            body_rewrite_from = "\"model\":\"" + meta->remote->model_id + "\"";
+            body_rewrite_to   = "\"model\":\"" + meta->name + "\"";
+        }
+
+        // Replace any client-supplied Authorization with the configured per-model key.
+        for (auto it = headers.begin(); it != headers.end(); ) {
+            if (proxy_header_to_lower(it->first) == "authorization") {
+                it = headers.erase(it);
+            } else {
+                ++it;
+            }
+        }
+        if (!meta->remote->api_key.empty()) {
+            headers["Authorization"] = "Bearer " + meta->remote->api_key;
+        }
+
+        // Rewrite JSON "model" field for POST inference calls when an upstream
+        // model id is configured. Keep other request shapes (GET / empty body) untouched.
+        if (method == "POST" && !meta->remote->model_id.empty() && !body.empty()) {
+            json j = json::parse(body, nullptr, false);
+            if (!j.is_discarded() && j.is_object() && j.contains("model")) {
+                j["model"] = meta->remote->model_id;
+                body = j.dump();
+            }
+        }
+        SRV_INF("proxying request to remote model %s at %s://%s:%d%s\n",
+                name.c_str(), scheme.c_str(), host.c_str(), port, path.c_str());
+    } else {
+        SRV_INF("proxying request to model %s on port %d\n", name.c_str(), meta->port);
+    }
+
+    std::string proxy_path = path;
     if (!req.query_string.empty()) {
         proxy_path += '?' + req.query_string;
     }
     auto proxy = std::make_unique<server_http_proxy>(
             method,
-            "http",
-            CHILD_ADDR,
-            meta->port,
+            scheme,
+            host,
+            port,
             proxy_path,
-            req.headers,
-            req.body,
+            headers,
+            body,
             req.files,
             req.should_stop,
             base_params.timeout_read,
-            base_params.timeout_write
+            base_params.timeout_write,
+            body_rewrite_from,
+            body_rewrite_to
             );
     return proxy;
 }
@@ -1204,6 +1399,10 @@ void server_models_routes::init_routes() {
             res_err(res, format_error_response("model is not found", ERROR_TYPE_NOT_FOUND));
             return res;
         }
+        if (meta->is_remote()) {
+            res_err(res, format_error_response("remote models are always available; load not applicable", ERROR_TYPE_INVALID_REQUEST));
+            return res;
+        }
         if (meta->is_running()) {
             res_err(res, format_error_response("model is already running", ERROR_TYPE_INVALID_REQUEST));
             return res;
@@ -1223,22 +1422,27 @@ void server_models_routes::init_routes() {
         auto all_models = models.get_all_meta();
         std::time_t t = std::time(0);
         for (const auto & meta : all_models) {
-            json status {
-                {"value",  server_model_status_to_string(meta.status)},
-                {"args",   meta.args},
-            };
-            if (!meta.preset.name.empty()) {
-                common_preset preset_copy = meta.preset;
-                unset_reserved_args(preset_copy, false);
-                preset_copy.unset_option("LLAMA_ARG_HOST");
-                preset_copy.unset_option("LLAMA_ARG_PORT");
-                preset_copy.unset_option("LLAMA_ARG_ALIAS");
-                preset_copy.unset_option("LLAMA_ARG_TAGS");
-                status["preset"] = preset_copy.to_ini();
-            }
-            if (meta.is_failed()) {
-                status["exit_code"] = meta.exit_code;
-                status["failed"]    = true;
+            json status;
+            if (meta.is_remote()) {
+                // Remote entries have no spawned process, no args, no preset
+                // worth echoing back, and are always considered loaded.
+                status["value"] = "loaded";
+            } else {
+                status["value"] = server_model_status_to_string(meta.status);
+                status["args"]  = meta.args;
+                if (!meta.preset.name.empty()) {
+                    common_preset preset_copy = meta.preset;
+                    unset_reserved_args(preset_copy, false);
+                    preset_copy.unset_option("LLAMA_ARG_HOST");
+                    preset_copy.unset_option("LLAMA_ARG_PORT");
+                    preset_copy.unset_option("LLAMA_ARG_ALIAS");
+                    preset_copy.unset_option("LLAMA_ARG_TAGS");
+                    status["preset"] = preset_copy.to_ini();
+                }
+                if (meta.is_failed()) {
+                    status["exit_code"] = meta.exit_code;
+                    status["failed"]    = true;
+                }
             }
 
             // pi coding agent multimodal compatibility
@@ -1259,15 +1463,23 @@ void server_models_routes::init_routes() {
                 {"aliases",      meta.aliases},
                 {"tags",         meta.tags},
                 {"object",       "model"},    // for OAI-compat
-                {"owned_by",     "llamacpp"}, // for OAI-compat
+                {"owned_by",     meta.is_remote() ? std::string("remote") : std::string("llamacpp")},
                 {"created",      t},          // for OAI-compat
                 {"status",       status},
                 {"architecture", architecture},
+                {"kind",         meta.is_remote() ? std::string("remote") : std::string("local")},
                 // TODO: add other fields, may require reading GGUF metadata
             };
+            if (meta.is_remote()) {
+                // expose upstream URL + model id for observability, but never api_key
+                model_info["remote"] = json {
+                    {"url",   meta.remote->url},
+                    {"model", meta.remote->model_id},
+                };
+            }
 
-            // merge with loaded_info from the child process if available
-            if (meta.is_running()) {
+            // merge with loaded_info from the child process if available (local only)
+            if (!meta.is_remote() && meta.is_running()) {
                 for (auto it = meta.loaded_info.begin(); it != meta.loaded_info.end(); ++it) {
                     if (!model_info.contains(it.key())) {
                         model_info[it.key()] = it.value();
@@ -1290,6 +1502,10 @@ void server_models_routes::init_routes() {
         auto model = models.get_meta(name);
         if (!model.has_value()) {
             res_err(res, format_error_response("model is not found", ERROR_TYPE_INVALID_REQUEST));
+            return res;
+        }
+        if (model->is_remote()) {
+            res_err(res, format_error_response("remote models cannot be unloaded", ERROR_TYPE_INVALID_REQUEST));
             return res;
         }
         if (!model->is_running()) {
@@ -1460,7 +1676,9 @@ server_http_proxy::server_http_proxy(
         const std::map<std::string, uploaded_file> & files,
         const std::function<bool()> should_stop,
         int32_t timeout_read,
-        int32_t timeout_write
+        int32_t timeout_write,
+        const std::string & body_rewrite_from,
+        const std::string & body_rewrite_to
         ) {
     // shared between reader and writer threads
     auto cli  = std::make_shared<httplib::ClientImpl>(host, port);
@@ -1513,11 +1731,49 @@ server_http_proxy::server_http_proxy(
         }
         return pipe->write(std::move(msg)); // send headers first
     };
-    httplib::ContentReceiverWithProgress content_receiver = [pipe](const char * data, size_t data_length, size_t, size_t) {
-        // send data chunks
-        // returns false if pipe is closed / broken (signal to stop receiving)
-        return pipe->write({{}, 0, std::string(data, data_length), ""});
-    };
+    // Optional response-body substring rewrite. Used by remote proxies to
+    // rewrite `"model":"<upstream-id>"` back to the router-side name so clients
+    // never see the upstream's internal id. `tail` retains the last
+    // (from.size()-1) bytes between callbacks so a needle straddling a chunk
+    // boundary still matches.
+    const bool   do_rewrite = !body_rewrite_from.empty();
+    auto         tail       = std::make_shared<std::string>();
+    const auto   rw_from    = body_rewrite_from;
+    const auto   rw_to      = body_rewrite_to;
+
+    httplib::ContentReceiverWithProgress content_receiver =
+        [pipe, do_rewrite, tail, rw_from, rw_to](const char * data, size_t data_length, size_t, size_t) {
+            if (!do_rewrite) {
+                return pipe->write({{}, 0, std::string(data, data_length), ""});
+            }
+            // Concatenate any retained tail with this chunk.
+            std::string work;
+            work.reserve(tail->size() + data_length);
+            work.append(*tail);
+            work.append(data, data_length);
+
+            // Replace every occurrence of rw_from with rw_to.
+            if (rw_from != rw_to) {
+                size_t pos = 0;
+                while ((pos = work.find(rw_from, pos)) != std::string::npos) {
+                    work.replace(pos, rw_from.size(), rw_to);
+                    pos += rw_to.size();
+                }
+            }
+
+            // Retain the last (rw_from.size()-1) bytes so a future occurrence
+            // straddling the next chunk boundary still matches. The proxy
+            // thread flushes the final tail after cli->send() returns.
+            const size_t keep = rw_from.size() > 0 ? rw_from.size() - 1 : 0;
+            if (work.size() > keep) {
+                std::string emit = work.substr(0, work.size() - keep);
+                *tail = work.substr(work.size() - keep);
+                return pipe->write({{}, 0, std::move(emit), ""});
+            }
+            // Whole work is shorter than the needle — buffer it entirely.
+            *tail = std::move(work);
+            return true;
+        };
 
     // when files are present, the body was converted from multipart form data to JSON
     // we need to reconstruct the multipart body for the downstream server
@@ -1584,13 +1840,17 @@ server_http_proxy::server_http_proxy(
 
     // start the proxy thread
     SRV_DBG("start proxy thread %s %s\n", req.method.c_str(), req.path.c_str());
-    this->thread = std::thread([cli, pipe, req]() {
+    this->thread = std::thread([cli, pipe, req, tail, do_rewrite]() {
         auto result = cli->send(std::move(req));
         if (result.error() != httplib::Error::Success) {
             auto err_str = httplib::to_string(result.error());
             SRV_ERR("http client error: %s\n", err_str.c_str());
             pipe->write({{}, 500, "", ""}); // header
             pipe->write({{}, 0, "proxy error: " + err_str, ""}); // body
+        } else if (do_rewrite && tail && !tail->empty()) {
+            // Flush the retained boundary tail (it can never contain a complete
+            // match anymore since no more bytes are coming).
+            pipe->write({{}, 0, std::move(*tail), ""});
         }
         pipe->close_write(); // signal EOF to reader
         SRV_DBG("%s", "client request thread ended\n");
