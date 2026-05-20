@@ -7,6 +7,7 @@ import json
 import logging
 import sys
 
+from . import scanner
 from .llm_engine import EngineConfig, LLMEngine
 from .solver import solve
 
@@ -14,13 +15,27 @@ from .solver import solve
 def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     p = argparse.ArgumentParser(description="GCSE math solver — headless CLI")
-    p.add_argument("--model", required=True)
+    g = p.add_mutually_exclusive_group(required=True)
+    g.add_argument("--model", help="Path to a GGUF model")
+    g.add_argument("--auto", action="store_true",
+                   help="Scan the filesystem and auto-select the best GGUF")
     p.add_argument("--n-ctx", type=int, default=4096)
     p.add_argument("--n-threads", type=int, default=None)
     p.add_argument("--n-gpu-layers", type=int, default=0)
     p.add_argument("--json", action="store_true", help="Emit JSON instead of text")
     p.add_argument("problem", nargs="*", help="Problem text (defaults to stdin)")
     args = p.parse_args(argv)
+
+    if args.auto:
+        models = scanner.scan()
+        best = scanner.auto_pick(models)
+        if best is None:
+            print("error: no GGUF models found on the filesystem", file=sys.stderr)
+            return 1
+        print(f"[auto] selected {best.path} ({best.size_gb:.2f} GB)", file=sys.stderr)
+        model_path = str(best.path)
+    else:
+        model_path = args.model
 
     problem = " ".join(args.problem).strip()
     if not problem:
@@ -30,7 +45,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     engine = LLMEngine(EngineConfig(
-        model_path=args.model,
+        model_path=model_path,
         n_ctx=args.n_ctx,
         n_threads=args.n_threads,
         n_gpu_layers=args.n_gpu_layers,

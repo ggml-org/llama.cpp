@@ -38,6 +38,16 @@ CMAKE_ARGS="-DGGML_VULKAN=on" pip install --no-binary=:llama-cpp-python: llama-c
 
 ## Models
 
+**Auto-discovery.** On launch the GUI scans for `.gguf` files under common
+locations (`~/Downloads`, `~/Documents`, `~/Models`,
+`~/.cache/huggingface`, `~/.cache/lm-studio`, `~/.lmstudio/models`,
+`~/.ollama/models`, `~/.local/share/models`, `/opt/models`, …) and your
+home tree, with a total deadline of ~90 s. The highest-scoring local
+model is loaded automatically — math-tuned filenames
+(`math` / `qwen-math` / `deepseek-math` / `mathstral`) and Q4 quantisations
+score highest, and anything larger than ~70 % of system RAM is heavily
+penalised. Pass `--model /path/to/model.gguf` to skip the scan.
+
 Pick one math-tuned GGUF that fits your RAM budget:
 
 | Model                                       | Approx RSS | Notes                                    |

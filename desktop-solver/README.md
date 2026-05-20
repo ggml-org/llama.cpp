@@ -4,11 +4,14 @@ A desktop variant of the GCSE math solver, intended for workstations with
 ~8 GB of RAM. Unlike the embedded `gcse-solver/` (Pi Zero 2 W, C++ + ExprTk +
 Lua), this variant uses:
 
+- **Automatic model discovery** — scans your filesystem on launch and loads
+  the highest-scoring local GGUF; falls back to a file picker if none found
 - **A larger math-tuned LLM** (e.g. Qwen2.5-Math-7B-Instruct-Q4_K_M, ~4.4 GB)
 - **SymPy** for exact symbolic computation
 - **A verification step** that substitutes the answer back into the original
   problem; if the residual is non-zero, the LLM is re-prompted with the error
-- **PyQt6 GUI** with LaTeX rendering for both the problem and the answer
+- **PyQt6 chat GUI** with persistent history — every conversation is saved
+  under `~/.config/desktop-solver/chats/` and can be revisited or deleted
 
 ## On the "100% correct" goal
 
@@ -69,18 +72,40 @@ python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 
-# Pick a math-tuned GGUF and launch the GUI:
+# Just launch — the GUI scans your filesystem and picks the best local GGUF.
+python run.py
+
+# Or pin a specific model to skip the scan:
 python run.py --model /path/to/Qwen2.5-Math-7B-Instruct-Q4_K_M.gguf
 ```
 
-The first launch loads the model (~10–30 s on modern CPUs). Once
-"Ready" is shown in the status bar, type a problem and press **Solve**.
+The first launch scans common model paths (`~/Downloads`, `~/.cache/huggingface`,
+`~/.lmstudio/models`, `/opt/models`, …) and then your home tree. The
+highest-scoring math-tuned, Q4-quantised model that fits in ~70 % of your RAM
+is loaded automatically. Status appears in the title bar; once it says
+"ready — <model>", type a problem and press **Ctrl+Enter** (or click Send).
 
 For full setup and model recommendations, see [BUILD.md](BUILD.md).
+
+## Chat interface
+
+The GUI is a chat window. Each conversation is a list of bubbles —
+your message on the right, the solver's response (rendered LaTeX +
+verification badge + collapsible working / SymPy code) on the left.
+Chats are saved as JSON under `~/.config/desktop-solver/chats/` (or
+`$XDG_CONFIG_HOME/desktop-solver/chats/`), one file per conversation.
+Use the sidebar to switch between chats; **+ New chat** starts a fresh one;
+**Delete** removes the current chat from disk.
+
+Keyboard shortcut: **Ctrl+Enter** sends the message.
 
 ## CLI mode
 
 ```bash
+# Auto-pick a model:
+python -m desktop_solver.cli --auto "Solve x^2 + 5x + 6 = 0"
+
+# Or pass an explicit path:
 python -m desktop_solver.cli --model /path/to/model.gguf "Solve x^2 + 5x + 6 = 0"
 ```
 
@@ -112,16 +137,20 @@ desktop-solver/
 │   ├── __init__.py
 │   ├── __main__.py                 # python -m desktop_solver
 │   ├── prompts.py                  # LLM system prompt + correction template
+│   ├── scanner.py                  # filesystem scan + best-model picker
 │   ├── llm_engine.py               # llama-cpp-python wrapper
 │   ├── tag_extractor.py            # [CALC] [VERIFY] [LATEX] [STEPS] parsing
 │   ├── executor.py                 # SymPy-backed exec in a curated namespace
 │   ├── verifier.py                 # re-substitution check
 │   ├── latex_io.py                 # parse + render LaTeX (matplotlib mathtext)
+│   ├── chat_store.py               # JSON-on-disk chat persistence
 │   ├── solver.py                   # full pipeline with self-correction
-│   ├── gui.py                      # PyQt6 main window + worker thread
+│   ├── gui.py                      # PyQt6 chat window + worker threads
 │   └── cli.py                      # headless CLI / batch mode
 └── tests/
-    └── test_executor.py            # pytest suite (no LLM required)
+    ├── test_executor.py            # executor + verifier + tag extractor
+    ├── test_scanner.py             # filesystem scan + scoring
+    └── test_chat_store.py          # chat persistence roundtrips
 ```
 
 ## Tests
