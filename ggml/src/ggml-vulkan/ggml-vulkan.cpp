@@ -49,6 +49,7 @@ DispatchLoaderDynamic & ggml_vk_default_dispatcher();
 #include <map>
 #include <set>
 #include <unordered_map>
+#include <shared_mutex>
 #include <mutex>
 #include <future>
 #include <thread>
@@ -595,6 +596,7 @@ static constexpr std::initializer_list<std::array<int, 3>> rms_norm_mul_rope_vie
 
 struct vk_device_struct {
     std::recursive_mutex mutex;
+    mutable std::shared_mutex pinned_memory_mutex;
 
     vk::PhysicalDevice physical_device;
     vk::PhysicalDeviceProperties properties;
@@ -6633,7 +6635,7 @@ static void * ggml_vk_host_malloc(vk_device& device, size_t size) {
         return nullptr;
     }
 
-    std::lock_guard<std::recursive_mutex> guard(device->mutex);
+    std::unique_lock<std::shared_mutex> guard(device->pinned_memory_mutex);
     device->pinned_memory.push_back(std::make_tuple(buf->ptr, size, buf));
 
     return buf->ptr;
@@ -6644,7 +6646,7 @@ static void ggml_vk_host_free(vk_device& device, void* ptr) {
         return;
     }
     VK_LOG_MEMORY("ggml_vk_host_free(" << ptr << ")");
-    std::lock_guard<std::recursive_mutex> guard(device->mutex);
+    std::unique_lock<std::shared_mutex> guard(device->pinned_memory_mutex);
 
     vk_buffer buf;
     size_t index;
@@ -6668,7 +6670,7 @@ static void ggml_vk_host_free(vk_device& device, void* ptr) {
 }
 
 static void ggml_vk_host_get(const vk_device& device, const void * ptr, vk_buffer& buf, size_t& buf_offset) {
-    std::lock_guard<std::recursive_mutex> guard(device->mutex);
+    std::shared_lock<std::shared_mutex> guard(device->pinned_memory_mutex);
     buf = nullptr;
     buf_offset = 0;
     for (size_t i = 0; i < device->pinned_memory.size(); i++) {
