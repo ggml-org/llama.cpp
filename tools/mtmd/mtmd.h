@@ -243,11 +243,11 @@ MTMD_API mtmd_input_chunks * mtmd_test_create_input_chunks(void);
 //
 // Audio output API
 //
-enum mtmd_output_modality {
+typedef enum mtmd_output_modality {
     MTMD_OUTPUT_MODALITY_TEXT,
     MTMD_OUTPUT_MODALITY_AUDIO,
     MTMD_OUTPUT_MODALITY_END,
-};
+} mtmd_output_modality;
 
 MTMD_API bool mtmd_support_audio_output(mtmd_context * ctx);
 MTMD_API int mtmd_audio_output_get_sample_rate(mtmd_context * ctx);
