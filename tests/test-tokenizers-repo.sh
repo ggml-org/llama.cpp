@@ -32,12 +32,24 @@ else
     fi
 fi
 
-shopt -s globstar
-for gguf in $folder/**/*.gguf; do
-    if [ -f $gguf.inp ] && [ -f $gguf.out ]; then
-        $toktest $gguf
-    else
-        printf "Found \"$gguf\" without matching inp/out files, ignoring...\n"
-    fi
-done
+# globstar is unavailable in Bash < 4.0 (e.g., macOS default Bash 3.2)
+# use find for portable recursive matching
+if [ "${BASH_VERSINFO[0]}" -ge 4 ] 2>/dev/null; then
+    shopt -s globstar
+    for gguf in "$folder"/**/*.gguf; do
+        if [ -f "$gguf.inp" ] && [ -f "$gguf.out" ]; then
+            $toktest "$gguf"
+        else
+            printf "Found \"%s\" without matching inp/out files, ignoring...\n" "$gguf"
+        fi
+    done
+else
+    find "$folder" -name '*.gguf' -print0 | while IFS= read -r -d '' gguf; do
+        if [ -f "$gguf.inp" ] && [ -f "$gguf.out" ]; then
+            $toktest "$gguf"
+        else
+            printf "Found \"%s\" without matching inp/out files, ignoring...\n" "$gguf"
+        fi
+    done
+fi
 
