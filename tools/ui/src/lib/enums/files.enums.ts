@@ -183,6 +183,10 @@ export enum MimeTypeAudio {
 	MP3 = 'audio/mp3',
 	MP4 = 'audio/mp4',
 	WAV = 'audio/wav',
+	WAVE = 'audio/wave',
+	X_WAV = 'audio/x-wav',
+	X_WAVE = 'audio/x-wave',
+	X_PN_WAV = 'audio/x-pn-wav',
 	WEBM = 'audio/webm',
 	WEBM_OPUS = 'audio/webm;codecs=opus'
 }

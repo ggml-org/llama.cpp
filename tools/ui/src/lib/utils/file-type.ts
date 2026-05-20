@@ -18,8 +18,12 @@ import {
 	MimeTypeText
 } from '$lib/enums';
 
+function normalizeMimeType(mimeType: string): string {
+	return mimeType.trim().toLowerCase();
+}
+
 export function getFileTypeCategory(mimeType: string): FileTypeCategory | null {
-	switch (mimeType) {
+	switch (normalizeMimeType(mimeType)) {
 		// Images
 		case MimeTypeImage.JPEG:
 		case MimeTypeImage.PNG:
@@ -33,6 +37,10 @@ export function getFileTypeCategory(mimeType: string): FileTypeCategory | null {
 		case MimeTypeAudio.MP3:
 		case MimeTypeAudio.MP4:
 		case MimeTypeAudio.WAV:
+		case MimeTypeAudio.WAVE:
+		case MimeTypeAudio.X_WAV:
+		case MimeTypeAudio.X_WAVE:
+		case MimeTypeAudio.X_PN_WAV:
 		case MimeTypeAudio.WEBM:
 		case MimeTypeAudio.WEBM_OPUS:
 			return FileTypeCategory.AUDIO;
