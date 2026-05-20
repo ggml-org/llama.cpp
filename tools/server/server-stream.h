@@ -103,15 +103,15 @@ struct stream_pipe_producer : stream_pipe {
     // append raw bytes to the session's ring buffer, returns false if already finalized
     bool write(const char * data, size_t len);
 
-    // record that next() reached its natural end on the wire, so finish_producer turns into a
-    // no-op. the http drain calls this right before it closes the stream cleanly
-    void mark_producer_done();
+    // record that the producer reached its natural end on the wire, so a later close() turns into
+    // a no-op. the http drain calls this right before it closes the stream cleanly
+    void done();
 
-    // when the peer dropped before the producer finished, pump the response next() into the ring
-    // buffer until it reports done. runs on the http worker, from on_complete. no-op for an
-    // already finished producer or a cancelled session, only a DELETE flips is_cancelled and cuts
-    // the drain short
-    void finish_producer();
+    // close the producer end. when the peer dropped before the producer finished, pump the
+    // response next() into the ring buffer until it reports done. runs on the http worker, from
+    // on_complete. no-op once done() has fired or the session is cancelled, only a DELETE flips
+    // is_cancelled and cuts the drain short
+    void close();
 
     // disarm the stop hook and drop the alive guard, must run while the response the hook
     // references is still alive. idempotent, the destructor calls it too
@@ -124,7 +124,7 @@ struct stream_pipe_producer : stream_pipe {
 private:
     explicit stream_pipe_producer(stream_session_ptr session);
 
-    bool                                producer_done_ = false;
+    bool                                done_ = false;
     std::shared_ptr<std::atomic<bool>>  alive_;
     server_http_res *                   res_ = nullptr;
 };

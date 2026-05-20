@@ -518,9 +518,9 @@ static void process_handler_response(server_http_req_ptr && request, server_http
                 SRV_DBG("http: streamed chunk: %s\n", chunk.c_str());
             }
             if (!has_next) {
-                // producer reached its natural end on the wire, the pipe skips its drain
+                // producer reached its natural end on the wire, a later close() skips the drain
                 if (response->spipe) {
-                    response->spipe->mark_producer_done();
+                    response->spipe->done();
                 }
                 sink.done();
                 SRV_DBG("%s", "http: stream ended\n");
@@ -531,9 +531,9 @@ static void process_handler_response(server_http_req_ptr && request, server_http
             // the peer may have dropped before the producer finished. when a pipe is attached, drain
             // the rest of the generation into the ring buffer here, on this http worker. httplib
             // runs a large dynamic pool and the worker blocks in next() on a condvar rather than
-            // burning cpu, so holding it until the generation ends is fine. see finish_producer
+            // burning cpu, so holding it until the generation ends is fine. see stream_pipe_producer::close
             if (response->spipe) {
-                response->spipe->finish_producer();
+                response->spipe->close();
             }
             response.reset(); // spipe destructor finalizes the session if attached
             request.reset();

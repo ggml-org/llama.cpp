@@ -331,17 +331,17 @@ bool stream_pipe_producer::write(const char * data, size_t len) {
     return session_->append(data, len);
 }
 
-void stream_pipe_producer::mark_producer_done() {
-    producer_done_ = true;
+void stream_pipe_producer::done() {
+    done_ = true;
 }
 
-void stream_pipe_producer::finish_producer() {
+void stream_pipe_producer::close() {
     // the peer dropped before the producer finished. httplib bails its content provider the moment
     // is_peer_alive() goes false, so the rest of the generation is pumped here into the ring buffer
     // on the http worker, from on_complete. stream_aware_should_stop ignores peer disconnect while a
     // pipe is attached, so res_->next() runs to natural completion, only an explicit DELETE flips
     // is_cancelled and cuts it short
-    if (producer_done_ || session_->is_cancelled()) {
+    if (done_ || session_->is_cancelled()) {
         return;
     }
     std::string chunk;
