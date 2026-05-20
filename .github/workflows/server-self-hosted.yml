@@ -39,12 +39,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  webui-build:
-    name: Build WebUI
-    uses: ./.github/workflows/webui-build.yml
-
   server-metal:
-    needs: webui-build
     runs-on: [self-hosted, llama-server, macOS, ARM64]
 
     name: server-metal (${{ matrix.wf_name }})
@@ -72,11 +67,12 @@ jobs:
           fetch-depth: 0
           ref: ${{ github.event.inputs.sha || github.event.pull_request.head.sha || github.sha || github.head_ref || github.ref_name }}
 
-      - name: Download WebUI build artifact
-        uses: actions/download-artifact@v7
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
         with:
-          name: webui-build
-          path: tools/server/public/
+          node-version: "24"
+          cache: "npm"
+          cache-dependency-path: "tools/ui/package-lock.json"
 
       - name: Build
         id: cmake_build
@@ -134,3 +130,68 @@ jobs:
   #          pip install -r requirements.txt
   #          export ${{ matrix.extra_args }}
   #          pytest -v -x -m "not slow"
+
+  server-kleidiai:
+    runs-on: ah-ubuntu_22_04-c8g_8x
+
+    name: server-kleidiai (${{ matrix.wf_name }})
+    strategy:
+      matrix:
+        include:
+          - build_type: Release
+            extra_build_flags: "-DGGML_CPU_KLEIDIAI=ON"
+            extra_args: ""
+            wf_name:    "CPUx1, kleidiai"
+      fail-fast: false
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.inputs.sha || github.event.pull_request.head.sha || github.sha || github.head_ref || github.ref_name }}
+
+      - name: Dependencies
+        id: depends
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a \
+          apt-get install -y \
+           build-essential \
+           libssl-dev \
+           python3-venv \
+           gpg \
+           wget \
+           time \
+           git-lfs
+
+          git lfs install
+
+          # install the latest cmake
+          sudo install -d /usr/share/keyrings
+          wget -O - https://apt.kitware.com/keys/kitware-archive-latest.asc \
+           | gpg --dearmor \
+           | sudo tee /usr/share/keyrings/kitware-archive-keyring.gpg >/dev/null
+          echo 'deb [signed-by=/usr/share/keyrings/kitware-archive-keyring.gpg] https://apt.kitware.com/ubuntu/ jammy main' \
+           | sudo tee /etc/apt/sources.list.d/kitware.list
+          sudo apt-get update
+          sudo apt-get install -y cmake
+
+      - name: Build
+        id: cmake_build
+        run: |
+          cmake -B build -DGGML_SCHED_NO_REALLOC=ON ${{ matrix.extra_build_flags }}
+          cmake --build build --config ${{ matrix.build_type }} -j $(nproc) --target llama-server
+
+      - name: Tests
+        id: server_integration_tests
+        if: ${{ (!matrix.disabled_on_pr || !github.event.pull_request) }}
+        run: |
+          cd tools/server/tests
+          python3 -m venv venv
+          source venv/bin/activate
+          pip install -r requirements.txt
+          export ${{ matrix.extra_args }}
+          pytest -v -x -m "not slow"

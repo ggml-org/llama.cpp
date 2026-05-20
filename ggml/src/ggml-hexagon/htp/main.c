@@ -534,6 +534,7 @@ static int execute_op(struct htp_ops_context * octx) {
         case HTP_OP_ADD_ID:
             return op_binary(octx);
 
+        case HTP_OP_NORM:
         case HTP_OP_RMS_NORM:
         case HTP_OP_SCALE:
         case HTP_OP_SQR:
@@ -595,8 +596,14 @@ static int execute_op(struct htp_ops_context * octx) {
         case HTP_OP_SOLVE_TRI:
             return op_solve_tri(octx);
 
+        case HTP_OP_PAD:
+            return op_pad(octx);
+
         case HTP_OP_GATED_DELTA_NET:
             return op_gated_delta_net(octx);
+
+        case HTP_OP_TRI:
+            return op_tri(octx);
 
         case HTP_OP_INVALID:
             break;
