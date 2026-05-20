@@ -1,4 +1,5 @@
 #include <cstdio>
+#include <cstdlib>
 #include <string>
 #include <vector>
 
@@ -58,6 +59,14 @@ int main(int argc, char ** argv) {
 
     for (const auto & cmd : cmds) {
         if (matches(arg, cmd)) {
+
+            // router spawns children through this same binary, it needs the
+            // subcommand to relaunch as 'llama serve' and not bare options
+#ifdef _WIN32
+            _putenv_s("LLAMA_APP_CMD", cmd.name);
+#else
+            setenv("LLAMA_APP_CMD", cmd.name, 1);
+#endif
             return cmd.func(argc - 1, argv + 1);
         }
     }
