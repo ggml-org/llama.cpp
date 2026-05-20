@@ -1159,15 +1159,7 @@ bool llama_context::set_sampler(llama_seq_id seq_id, llama_sampler * sampler) {
     if (sampler && can_offload) {
         auto * buft = ggml_backend_dev_buffer_type(model.dev_output());
 
-        if (!sampler->iface->backend_init(sampler, buft)) {
-            LLAMA_LOG_WARN("%s: sampler '%s' for seq_id = %d, backend_init failed\n",
-                    __func__, llama_sampler_name(sampler), seq_id);
-            if (sampling.samplers.count(seq_id) > 0) {
-                sched_need_reserve = true;
-            }
-            sampling.samplers.erase(seq_id);
-            return false;
-        }
+        sampler->iface->backend_init(sampler, buft);
 
         sampling.samplers[seq_id] = sampler;
 

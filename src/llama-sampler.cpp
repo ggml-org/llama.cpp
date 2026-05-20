@@ -698,6 +698,8 @@ static bool llama_sampler_chain_backend_init(
 
     GGML_ASSERT(chain->is_init == false && "llama_sampler_chain_backend_init() called twice");
 
+    chain->is_init = true;
+
     bool res = true;
 
     for (auto & smpl : chain->samplers) {
@@ -717,15 +719,6 @@ static bool llama_sampler_chain_backend_init(
         smpl.is_backend = res_cur;
 
         res = res && res_cur;
-    }
-
-    if (res) {
-        chain->is_init = true;
-    } else {
-        // partial failure - force CPU path for all samplers
-        for (auto & smpl : chain->samplers) {
-            smpl.is_backend = false;
-        }
     }
 
     return res;
