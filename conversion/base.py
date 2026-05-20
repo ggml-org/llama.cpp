@@ -1374,6 +1374,9 @@ class TextModel(ModelBase):
         if chkhsh == "0fe1cf6eda062318a1af7270f3331a85c539a01778ff948e24388e949c5282f4":
             # ref: https://huggingface.co/evilfreelancer/ruGPT3XL
             res = "gpt-2"
+        if chkhsh == "a63e0d2191069e2b760b155e39a0d9a348ec29a6ee47e8beb24a1174a4b8f197":
+            # ref: https://huggingface.co/deepseek-ai/DeepSeek-R1-Distill-Llama-8B
+            res = "llama-bpe"
         if chkhsh == "0ef9807a4087ebef797fc749390439009c3b9eda9ad1a097abbe738f486c01e5":
             # ref: https://huggingface.co/meta-llama/Meta-Llama-3-8B
             res = "llama-bpe"
