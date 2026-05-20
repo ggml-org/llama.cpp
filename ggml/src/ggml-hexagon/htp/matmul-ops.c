@@ -2995,7 +2995,6 @@ int op_matmul(struct htp_ops_context * octx) {
     //  is handled by HMX itself; when M < 32  fall back to HVX.
     const int m_total = (int) src1->ne[1];
     const int m_hmx   = m_total & ~31;   // 0 when M < 32
-
     if (m_hmx == 0) {
         return op_matmul_hvx(octx);
     }
@@ -3020,7 +3019,7 @@ int op_matmul(struct htp_ops_context * octx) {
 
     if (src0->type == HTP_TYPE_F16) {
         if (is_batched) {
-            hmx_matmul_w16a32_batched_params_t batch_params = {
+            hmx_matmul_f16_f32_batched_params_t batch_params = {
                 .dst             = (float *) dst->data,
                 .activation      = (float *) src1->data,
                 .permuted_weight = (const __fp16 *) src0->data,
@@ -3041,15 +3040,14 @@ int op_matmul(struct htp_ops_context * octx) {
                 .dst_nb2         = dst->nb[2],
                 .dst_nb3         = dst->nb[3],
             };
-            ret = hmx_mat_mul_permuted_w16a32_batched(octx->ctx, &batch_params);
+            ret = hmx_matmul_f16_f32_batched(octx->ctx, &batch_params);
         } else {
-            ret = hmx_mat_mul_permuted_w16a32(octx->ctx,
+            ret = hmx_matmul_f16_f32(octx->ctx,
                     (float*) dst->data, (float*) src1->data, (const __fp16 *) src0->data,
                     m_total, k, n, act_stride, wgt_stride);
         }
     } else {
-        ret = hmx_mat_mul_permuted_qk_0_d16a32(octx->ctx,
-                    (float*) dst->data, (float*) src1->data, (const uint8_t *) src0->data,
+        ret = hmx_matmul_q_f32(octx->ctx, (float*) dst->data, (float*) src1->data, (const uint8_t *) src0->data,
                     m_total, k, n, (int) src0->type);
     }
 
