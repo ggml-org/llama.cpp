@@ -1583,7 +1583,11 @@ struct clip_model_loader {
 
                         get_u32(KEY_PROJ_SAMPLE_QUERY_SIDE,  hparams.downsample_query_side);
                         get_u32(KEY_PROJ_SAMPLE_WINDOW_SIDE, hparams.downsample_window_side);
-                        get_f32(KEY_LLM_KV_EMBEDDING_SCALE, hparams.base_stream_scale, false);
+                        float embedding_scale = 0.;
+                        get_f32(KEY_LLM_KV_EMBEDDING_SCALE, embedding_scale, false);
+                        if (embedding_scale != 0) {
+                            hparams.base_stream_scale = 1.0 / embedding_scale;
+                        }
                         hparams.warmup_image_size = hparams.image_size;
                     } break;
                 default:

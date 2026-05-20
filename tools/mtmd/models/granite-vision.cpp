@@ -317,12 +317,10 @@ ggml_cgraph * clip_graph_granite_vision::build() {
     for (int k = 0; k < projector_count; ++k) {
         ggml_tensor * s = ggml_cont(ctx0, streams[k]);
         if (k == 0 && hparams.base_stream_scale != 1.0f) {
-            s = ggml_scale_inplace(ctx0, s, 1.0 / hparams.base_stream_scale);
+            s = ggml_scale_inplace(ctx0, s, hparams.base_stream_scale);
         }
         mmproj = (k == 0) ? s : ggml_concat(ctx0, mmproj, s, 0);
     }
-    ggml_set_name(mmproj, "g4v_mmproj_packed");
-
     ggml_set_name(mmproj, "g4v_mmproj_out");
     ggml_build_forward_expand(gf, mmproj);
 
