@@ -344,7 +344,8 @@ struct handle_model_result {
 static handle_model_result common_params_handle_model(struct common_params_model & model,
                                                       const std::string          & bearer_token,
                                                       bool                         offline,
-                                                      bool                         search_mtp = false) {
+                                                      bool                         search_mtp = false,
+                                                      bool                         search_mmproj = false) {
     handle_model_result result;
 
     if (!model.docker_repo.empty()) {
@@ -359,7 +360,7 @@ static handle_model_result common_params_handle_model(struct common_params_model
         common_download_opts opts;
         opts.bearer_token = bearer_token;
         opts.offline = offline;
-        auto download_result = common_download_model(model, opts, true, search_mtp);
+        auto download_result = common_download_model(model, opts, search_mmproj, search_mtp);
 
         if (download_result.model_path.empty()) {
             throw std::runtime_error("failed to download model from Hugging Face");
@@ -448,7 +449,7 @@ void common_params_handle_models(common_params & params, llama_example curr_ex) 
                                          params.speculative.types.end(),
                                          COMMON_SPECULATIVE_TYPE_DRAFT_MTP) != params.speculative.types.end();
 
-    auto res = common_params_handle_model(params.model, params.hf_token, params.offline, spec_type_draft_mtp);
+    auto res = common_params_handle_model(params.model, params.hf_token, params.offline, spec_type_draft_mtp, !params.no_mmproj);
     if (params.no_mmproj) {
         params.mmproj = {};
     } else if (res.found_mmproj && params.mmproj.path.empty() && params.mmproj.url.empty()) {
