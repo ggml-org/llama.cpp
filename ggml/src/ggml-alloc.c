@@ -486,11 +486,14 @@ struct ggml_gallocr {
 
     struct ggml_hash_set hash_set;
     struct hash_node * hash_values; // [hash_set.size]
+    size_t hash_values_cap;
 
-    struct node_alloc * node_allocs; // [n_nodes]
+    struct node_alloc * node_allocs; // [node_allocs_cap]
+    size_t node_allocs_cap;
     int n_nodes;
 
-    struct leaf_alloc * leaf_allocs; // [n_leafs]
+    struct leaf_alloc * leaf_allocs; // [leaf_allocs_cap]
+    size_t leaf_allocs_cap;
     int n_leafs;
 };
 
@@ -833,9 +836,9 @@ static bool ggml_gallocr_reserve_n_impl(
         galloc->hash_set = ggml_hash_set_new(min_hash_size);
         GGML_ASSERT(galloc->hash_set.keys != NULL);
 
-        free(galloc->hash_values);
-        galloc->hash_values = malloc(sizeof(struct hash_node) * galloc->hash_set.size);
+        galloc->hash_values = realloc(galloc->hash_values, sizeof(struct hash_node) * galloc->hash_set.size);
         GGML_ASSERT(galloc->hash_values != NULL);
+        galloc->hash_values_cap = galloc->hash_set.size;
     }
 
     // reset allocators
@@ -847,10 +850,13 @@ static bool ggml_gallocr_reserve_n_impl(
     ggml_gallocr_alloc_graph_impl(galloc, graph, node_buffer_ids, leaf_buffer_ids);
 
     // set the node_allocs from the hash table
-    if (galloc->n_nodes < graph->n_nodes) {
-        free(galloc->node_allocs);
-        galloc->node_allocs = calloc(graph->n_nodes, sizeof(struct node_alloc));
+    if (galloc->node_allocs_cap < (size_t)graph->n_nodes) {
+        galloc->node_allocs = realloc(galloc->node_allocs, sizeof(struct node_alloc) * (size_t)graph->n_nodes);
         GGML_ASSERT(galloc->node_allocs != NULL);
+        // Zero the newly allocated portion (realloc doesn't zero extended memory)
+        memset((char *)galloc->node_allocs + galloc->node_allocs_cap * sizeof(struct node_alloc),
+               0, ((size_t)graph->n_nodes - galloc->node_allocs_cap) * sizeof(struct node_alloc));
+        galloc->node_allocs_cap = graph->n_nodes;
     }
     galloc->n_nodes = graph->n_nodes;
     for (int i = 0; i < graph->n_nodes; i++) {
@@ -880,10 +886,13 @@ static bool ggml_gallocr_reserve_n_impl(
             }
         }
     }
-    if (galloc->n_leafs < graph->n_leafs) {
-        free(galloc->leaf_allocs);
-        galloc->leaf_allocs = calloc(graph->n_leafs, sizeof(galloc->leaf_allocs[0]));
+    if (galloc->leaf_allocs_cap < (size_t)graph->n_leafs) {
+        galloc->leaf_allocs = realloc(galloc->leaf_allocs, sizeof(galloc->leaf_allocs[0]) * (size_t)graph->n_leafs);
         GGML_ASSERT(galloc->leaf_allocs != NULL);
+        // Zero the newly allocated portion
+        memset((char *)galloc->leaf_allocs + galloc->leaf_allocs_cap * sizeof(galloc->leaf_allocs[0]),
+               0, ((size_t)graph->n_leafs - galloc->leaf_allocs_cap) * sizeof(galloc->leaf_allocs[0]));
+        galloc->leaf_allocs_cap = graph->n_leafs;
     }
     galloc->n_leafs = graph->n_leafs;
     for (int i = 0; i < graph->n_leafs; i++) {
