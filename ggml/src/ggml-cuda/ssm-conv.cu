@@ -1,3 +1,4 @@
+#include "common.cuh"
 #include "ssm-conv.cuh"
 #include "unary.cuh"
 
@@ -7,6 +8,7 @@ static __global__ void ssm_conv_f32(const float * __restrict__ src0, const float
                                     const int src0_nb0, const int src0_nb1, const int src0_nb2, const int src1_nb1,
                                     float * __restrict__ dst, const int dst_nb0, const int dst_nb1, const int dst_nb2,
                                     const int64_t n_t) {
+    ggml_cuda_pdl_lc();
     GGML_UNUSED(src0_nb0);
     const int tid  = threadIdx.x;
     const int bidx = blockIdx.x;
@@ -23,6 +25,7 @@ static __global__ void ssm_conv_f32(const float * __restrict__ src0, const float
     float x[d_conv] = { 0.0f };
     float w[d_conv] = { 0.0f };
 
+    ggml_cuda_pdl_sync();
 #pragma unroll
     for (size_t j = 0; j < d_conv; j++) {
         w[j] = w_block[tid * stride_w + j];
@@ -128,8 +131,9 @@ static void ssm_conv_f32_cuda(const float * src0, const float * src1, const floa
         constexpr int kNC = decltype(NC)::value;
         if (n_t <= 32) {
             const dim3 blocks(n_s, (nr + threads - 1) / threads, 1);
-            ssm_conv_f32<apply_silu, threads, kNC><<<blocks, threads, 0, stream>>>(src0, src1, bias, src0_nb0, src0_nb1, src0_nb2, src1_nb1,
-                                                                       dst, dst_nb0, dst_nb1, dst_nb2, n_t);
+            const ggml_cuda_kernel_launch_params launch_params = ggml_cuda_kernel_launch_params(blocks, threads, 0, stream);
+            ggml_cuda_kernel_launch(ssm_conv_f32<apply_silu, threads, kNC>, launch_params, src0, src1, bias, src0_nb0, src0_nb1,
+                                                                        src0_nb2, src1_nb1, dst, dst_nb0, dst_nb1, dst_nb2, n_t);
         } else {
             const int64_t split_n_t = 32;
             dim3          blocks(n_s, (nr + threads - 1) / threads, (n_t + split_n_t - 1) / split_n_t);
