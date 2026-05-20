@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "desktop-solver"
+version = "0.1.0"
+description = "GCSE math solver with LLM + SymPy + PyQt6 GUI for desktop systems (>= 8 GB RAM)"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = [
+    "llama-cpp-python>=0.3.0",
+    "sympy>=1.13",
+    "mpmath>=1.3.0",
+    "PyQt6>=6.7",
+    "matplotlib>=3.8",
+    "antlr4-python3-runtime==4.11",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8.0"]
+
+[project.scripts]
+desktop-solver       = "desktop_solver.gui:main"
+desktop-solver-cli   = "desktop_solver.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
