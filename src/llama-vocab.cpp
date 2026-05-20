@@ -278,7 +278,6 @@ struct llm_bigram_bpe {
 
 struct llm_tokenizer_bpe : llm_tokenizer {
     llm_tokenizer_bpe(const llama_vocab & vocab) {
-        GGML_ASSERT(vocab.get_type() == LLAMA_VOCAB_TYPE_BPE || vocab.get_type() == LLAMA_VOCAB_TYPE_HYBRIDDNA);
         switch (vocab.get_pre_type()) {
             case LLAMA_VOCAB_PRE_TYPE_LLAMA3:
                 regex_exprs = {
