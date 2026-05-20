@@ -280,7 +280,7 @@ Instructions for adding support for new models: [HOWTO-add-model.md](docs/develo
 | [Metal](docs/build.md#metal-build) | Apple Silicon |
 | [BLAS](docs/build.md#blas-build) | All |
 | [BLIS](docs/backend/BLIS.md) | All |
-| [SYCL](docs/backend/SYCL.md) | Intel and Nvidia GPU |
+| [SYCL](docs/backend/SYCL.md) | Intel GPU |
 | [OpenVINO [In Progress]](docs/backend/OPENVINO.md) | Intel CPUs, GPUs, and NPUs |
 | [MUSA](docs/build.md#musa) | Moore Threads GPU |
 | [CUDA](docs/build.md#cuda) | Nvidia GPU |

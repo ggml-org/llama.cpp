@@ -162,8 +162,14 @@ struct clip_ctx {
 
     bool debug_output_embeddings = false;
 
+    // for measuring memory usage
+    bool no_alloc = false;
+    std::map<ggml_backend_dev_t, size_t> mem_usage;
+    std::map<ggml_backend_dev_t, size_t> mem_compute;
+
     clip_ctx(clip_context_params & ctx_params) {
         flash_attn_type = ctx_params.flash_attn_type;
+        no_alloc = ctx_params.no_alloc;
         backend_cpu = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, nullptr);
         if (!backend_cpu) {
             throw std::runtime_error("failed to initialize CPU backend");
@@ -300,7 +306,8 @@ ggml_tensor * clip_graph::build_vit(
             norm_type norm_t,
             ffn_op_type ffn_t,
             ggml_tensor * learned_pos_embd,
-            std::function<ggml_tensor *(ggml_tensor *, const clip_layer &)> add_pos
+            std::function<ggml_tensor *(ggml_tensor *, const clip_layer &)> add_pos,
+            const build_vit_opts & opts
         ) {
     if (learned_pos_embd) {
         inp = ggml_add(ctx0, inp, learned_pos_embd);
@@ -427,7 +434,7 @@ ggml_tensor * clip_graph::build_vit(
             }
 
             cur = build_attn(layer.o_w, layer.o_b,
-                Qcur, Kcur, Vcur, nullptr, kq_scale, il);
+                Qcur, Kcur, Vcur, opts.attn_mask, kq_scale, il);
             cb(cur, "attn_out", il);
         }
 
@@ -663,6 +670,9 @@ ggml_tensor * clip_graph::build_attn(
 
         k = ggml_cast(ctx0, k, GGML_TYPE_F16);
         v = ggml_cast(ctx0, v, GGML_TYPE_F16);
+        if (kq_mask) {
+            kq_mask = ggml_cast(ctx0, kq_mask, GGML_TYPE_F16);
+        }
 
         cur = ggml_flash_attn_ext(ctx0, q, k, v, kq_mask, kq_scale, 0.0f, 0.0f);
         ggml_flash_attn_ext_set_prec(cur, GGML_PREC_F32);
@@ -1684,6 +1694,8 @@ struct clip_model_loader {
                 ggml_set_name(data_tensor, cur->name);
                 loaded_tensor_names.insert(name);
                 cur = data_tensor;
+                // add to weight memory counter
+                ctx_clip.mem_usage[ggml_backend_get_device(ctx_clip.backend)] += ggml_nbytes(cur);
             }
             return cur;
         };
@@ -2598,7 +2610,7 @@ struct clip_model_loader {
         }
 
         // load data
-        {
+        if (!ctx_clip.no_alloc) {
             std::vector<uint8_t> read_buf;
 
             // alloc memory and offload data
@@ -2672,7 +2684,7 @@ struct clip_model_loader {
         if (ctx_clip.flash_attn_type == CLIP_FLASH_ATTN_TYPE_AUTO) {
             // try to enable flash attention to see if it's supported
             ctx_clip.flash_attn_type = CLIP_FLASH_ATTN_TYPE_ENABLED;
-            info = alloc_compute_meta(ctx_clip, batch);
+            info = reserve_compute_meta(ctx_clip, batch);
             if (!info.fattn && info.fattn_op) {
                 auto op = info.fattn_op;
                 LOG_WRN("%s: *****************************************************************\n", __func__);
@@ -2691,10 +2703,10 @@ struct clip_model_loader {
                 LOG_WRN("%s: please report this on github as an issue\n", __func__);
                 LOG_WRN("%s: *****************************************************************\n", __func__);
                 ctx_clip.flash_attn_type = CLIP_FLASH_ATTN_TYPE_DISABLED;
-                alloc_compute_meta(ctx_clip, batch);
+                reserve_compute_meta(ctx_clip, batch);
             }
         } else {
-            info = alloc_compute_meta(ctx_clip, batch);
+            info = reserve_compute_meta(ctx_clip, batch);
             if (!info.fattn && ctx_clip.flash_attn_type == CLIP_FLASH_ATTN_TYPE_ENABLED) {
                 LOG_WRN("%s: flash attention is not supported by the current backend; falling back to CPU (performance will be degraded)\n", __func__);
             }
@@ -2733,12 +2745,14 @@ struct clip_model_loader {
         }
     }
 
-    static support_info_graph alloc_compute_meta(clip_ctx & ctx_clip, const clip_image_f32_batch & batch) {
+    // only initialize backend buffers, but do not allocate them yet
+    static support_info_graph reserve_compute_meta(clip_ctx & ctx_clip, const clip_image_f32_batch & batch) {
         ctx_clip.buf_compute_meta.resize(ctx_clip.max_nodes * ggml_tensor_overhead() + ggml_graph_overhead());
 
         ggml_cgraph * gf = clip_image_build_graph(&ctx_clip, batch);
         ggml_backend_sched_reserve(ctx_clip.sched.get(), gf);
 
+        ctx_clip.mem_compute.clear();
         for (size_t i = 0; i < ctx_clip.backend_ptrs.size(); ++i) {
             ggml_backend_t backend = ctx_clip.backend_ptrs[i];
             ggml_backend_buffer_type_t buft = ctx_clip.backend_buft[i];
@@ -2748,6 +2762,7 @@ struct clip_model_loader {
                         ggml_backend_buft_name(buft),
                         size / 1024.0 / 1024.0);
             }
+            ctx_clip.mem_compute[ggml_backend_get_device(backend)] += size;
         }
 
         const int n_splits = ggml_backend_sched_get_n_splits(ctx_clip.sched.get());
@@ -3244,12 +3259,10 @@ int clip_n_output_tokens(const struct clip_ctx * ctx, struct clip_image_f32 * im
             } break;
         case PROJECTOR_TYPE_QWEN3A:
             {
-                // 3x stride-2 conv2d: each step is floor((n-1)/2)+1
-                int n = img->nx;
-                n = (n - 1) / 2 + 1;
-                n = (n - 1) / 2 + 1;
-                n = (n - 1) / 2 + 1;
-                n_patches = n;
+                // chunk_size=100 frames --> 3x stride-2 conv2d --> 13 tokens per chunk
+                const int chunk_size       = 100;
+                const int tokens_per_chunk = 13;
+                n_patches = (img->nx / chunk_size) * tokens_per_chunk;
             } break;
         case PROJECTOR_TYPE_GLMA:
             {
@@ -4264,22 +4277,6 @@ int clip_n_mmproj_embd(const struct clip_ctx * ctx) {
     }
 }
 
-int clip_is_minicpmv(const struct clip_ctx * ctx) {
-    // TODO: remove this function
-    if (ctx->proj_type() == PROJECTOR_TYPE_MINICPMV) {
-        return ctx->model.hparams.minicpmv_version;
-    }
-    if (ctx->proj_type() == PROJECTOR_TYPE_MINICPMV4_6) {
-        return 46;
-    }
-    return 0;
-}
-
-bool clip_is_glm(const struct clip_ctx * ctx) {
-    // TODO: remove this function
-    return ctx->proj_type() == PROJECTOR_TYPE_GLM_EDGE;
-}
-
 bool clip_is_llava(const struct clip_ctx * ctx) {
     return ctx->model.hparams.has_llava_projector;
 }
@@ -4290,21 +4287,6 @@ bool clip_has_vision_encoder(const struct clip_ctx * ctx) {
 
 bool clip_has_audio_encoder(const struct clip_ctx * ctx) {
     return ctx->model.modality == CLIP_MODALITY_AUDIO;
-}
-
-bool clip_has_whisper_encoder(const struct clip_ctx * ctx) {
-    switch (ctx->proj_type()) {
-        case PROJECTOR_TYPE_ULTRAVOX:
-        case PROJECTOR_TYPE_QWEN2A:
-        case PROJECTOR_TYPE_QWEN3A:
-        case PROJECTOR_TYPE_GLMA:
-        case PROJECTOR_TYPE_VOXTRAL:
-        case PROJECTOR_TYPE_MERALION:
-        case PROJECTOR_TYPE_MUSIC_FLAMINGO:
-            return true;
-        default:
-            return false;
-    }
 }
 
 bool clip_encode_float_image (struct clip_ctx * ctx, int n_threads, float * img, int h, int w, float * vec) {
@@ -4341,6 +4323,14 @@ void clip_image_f32_batch_add_mel(struct clip_image_f32_batch * batch, int n_mel
 
 const clip_hparams * clip_get_hparams(const struct clip_ctx * ctx) {
     return &ctx->model.hparams;
+}
+
+std::map<ggml_backend_dev_t, size_t> clip_get_mem_usage(const struct clip_ctx * ctx) {
+    std::map<ggml_backend_dev_t, size_t> result = ctx->mem_usage;
+    for (auto & [dev, size] : ctx->mem_compute) {
+        result[dev] += size;
+    }
+    return result;
 }
 
 //

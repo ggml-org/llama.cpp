@@ -145,7 +145,7 @@ llama_model_granite::graph::graph(
     res->t_embd = cur;
 
     // lm_head
-    cur = build_lora_mm(model.output, cur);
+    cur = build_lora_mm(model.output, cur, model.output_s);
 
     // For Granite architectures - scale logits
     cur = ggml_scale(ctx0, cur, 1.0f / hparams.f_logit_scale);
