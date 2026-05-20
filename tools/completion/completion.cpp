@@ -84,7 +84,10 @@ static void sigint_handler(int signo) {
 }
 #endif
 
-int main(int argc, char ** argv) {
+// satisfies -Wmissing-declarations
+int llama_completion(int argc, char ** argv);
+
+int llama_completion(int argc, char ** argv) {
     std::setlocale(LC_NUMERIC, "C");
 
     common_params params;
