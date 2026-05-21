@@ -90,6 +90,7 @@ add_dependencies(llama-ui-assets llama-ui-embed)
 set_source_files_properties(${UI_CPP} ${UI_H} PROPERTIES GENERATED TRUE)
 
 add_library(${TARGET} STATIC ${UI_CPP} ${UI_H})
+target_compile_features(${TARGET} PRIVATE cxx_std_17)
 add_dependencies(${TARGET} llama-ui-assets)
 
 target_include_directories(${TARGET} PUBLIC
