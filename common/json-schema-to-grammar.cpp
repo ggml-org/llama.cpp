@@ -447,7 +447,7 @@ private:
                     std::string square_brackets = std::string(1, c);
                     i++;
                     while (i < length && sub_pattern[i] != ']') {
-                        if (sub_pattern[i] == '\\') {
+                        if (sub_pattern[i] == '\\' && i + 1 < length) {
                             char next = sub_pattern[i + 1];
                             if (next == 'd' || next == 'D') {
                                 square_brackets += next == 'd' ? "0-9" : "^0-9";
