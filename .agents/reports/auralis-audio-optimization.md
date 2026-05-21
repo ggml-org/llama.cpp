@@ -8,7 +8,7 @@ Improved the playback reliability of the Liquid AI `liquid_audio_chat.py` intera
 - **Python Warmup/Pre-Buffering Phase**: Added logic to buffer ~50ms of audio before initiating stream playback to avoid instant underruns when the first chunk arrives.
 - **Python Deterministic Chunk Sizing**: Group incoming decoded Base64 PCM data and chunk it deterministically into 1024-frame chunks before writing them to the PyAudio stream. This greatly stabilizes the audio device.
 - **C++ Local Streaming Audio Playback**: Implemented an `AudioPlayback` abstraction in C++ wrapping the header-only `miniaudio.h` library.
-- **C++ Backpressure and Bounded Queuing**: Similar to the Python client, `AudioPlayback` uses a thread-safe bounding queue to prevent unbound memory scaling and ensure stable chunks are streamed safely to the OS audio system.
+- **C++ Backpressure and Bounded Queuing**: `AudioPlayback` uses a thread-safe bounding queue (implemented as a ring buffer) to prevent unbound memory scaling and ensure stable chunks are streamed safely to the OS audio system.
 - **C++ CLI Integration**: Modified `tools/liquid-audio/cli.cpp` to conditionally instantiate playback and feed generated `int16_t` buffers in real-time if `--output` is empty but the model is emitting audio.
 
 ## Files Changed
@@ -40,7 +40,7 @@ flowchart TD
 ```
 
 ## Benchmarks
-- Verified CLI binary correctly links against miniaudio and executes successfully natively, picking up the default `ALSA` or `PulseAudio` endpoints.
+- Verified CLI binary correctly links against miniaudio and executes successfully natively, picking up the default ALSA or PulseAudio endpoints.
 - Successfully streams LFM2.5 audio generation chunk by chunk.
 - Validated via `--help` tests that Python dependencies install successfully on Ubuntu via script and logic modifications execute cleanly.
 
