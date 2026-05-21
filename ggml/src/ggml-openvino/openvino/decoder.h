@@ -101,8 +101,6 @@ public:
     virtual int is_swa_layer(int layer) const = 0;
 
     virtual int32_t get_op_dynamic_dim(int node_idx) const = 0;
-
-    virtual int get_static_n_tokens() const = 0;
 };
 
 }  // namespace ggml

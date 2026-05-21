@@ -170,8 +170,6 @@ public:
 
     bool is_stateful() const { return m_decoder->is_stateful(); }
 
-    int get_static_n_tokens() const { return m_decoder->get_static_n_tokens(); }
-
 private:
     std::shared_ptr<GgmlDecoder> m_decoder;
     std::shared_ptr<TensorMap>& m_tensor_map;

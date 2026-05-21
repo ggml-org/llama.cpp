@@ -206,7 +206,7 @@ public:
 
     virtual bool is_stateful() const override { return m_is_stateful; }
 
-    virtual int get_static_n_tokens() const override {
+    int get_static_n_tokens() const {
         return m_is_prefill ? m_prefill_chunk_size : 1;
     }
 
