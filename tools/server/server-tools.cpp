@@ -719,7 +719,42 @@ struct server_tool_get_datetime : server_tool {
         auto now = std::chrono::system_clock::now();
         auto time = std::chrono::system_clock::to_time_t(now);
 
-        return {{"result", std::ctime(&time)}};
+        std::tm local{};
+#ifdef _WIN32
+        localtime_s(&local, &time);
+#else
+        localtime_r(&time, &local);
+#endif
+
+        // strftime returns locale-dependant values for weekdays and months, while IMF requires English
+        static constexpr const char weekdays[7][4] = {
+            "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"
+        };
+        static constexpr const char months[12][4] = {
+            "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+            "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
+        };
+
+        // Calculating the timezone is somewhat complex - let's use the strftime for that alone
+        char tz[8];
+        std::strftime(tz, sizeof(tz), "%z", &local);
+
+        char buf[48];
+        std::snprintf(
+            buf,
+            sizeof(buf),
+            "%s, %02d %s %04d %02d:%02d:%02d %s",
+            weekdays[local.tm_wday],
+            local.tm_mday,
+            months[local.tm_mon],
+            local.tm_year + 1900,
+            local.tm_hour,
+            local.tm_min,
+            local.tm_sec,
+            tz
+        );
+
+        return {{"result", buf}};
     }
 };
 
