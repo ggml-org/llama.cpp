@@ -18,7 +18,7 @@ import {
 	MimeTypeApplication,
 	MimeTypeText
 } from '$lib/enums';
-import { FileExtensionVideo, FileTypeVideo } from '$lib/enums/files';
+import { FileExtensionVideo, FileTypeVideo } from '$lib/enums/files.enums';
 
 // File type configuration using enums
 export const AUDIO_FILE_TYPES = {

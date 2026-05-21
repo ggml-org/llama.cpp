@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { IsMobile } from '$lib/hooks/is-mobile.svelte';
+	import { isMobile } from '$lib/stores/viewport.svelte';
 	import ChatFormActionAddDropdown from './ChatFormActionAddDropdown.svelte';
 	import ChatFormActionAddSheet from './ChatFormActionAddSheet.svelte';
 	import ChatFormActionAddButton from './ChatFormActionAddButton.svelte';
@@ -31,8 +31,6 @@
 		onMcpSettingsClick,
 		onSystemPromptClick
 	}: Props = $props();
-
-	const isMobile = new IsMobile();
 </script>
 
 {#if isMobile.current}

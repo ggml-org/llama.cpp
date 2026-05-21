@@ -152,6 +152,33 @@ jobs:
           fetch-depth: 0
           ref: ${{ github.event.inputs.sha || github.event.pull_request.head.sha || github.sha || github.head_ref || github.ref_name }}
 
+      - name: Dependencies
+        id: depends
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a \
+          apt-get install -y \
+           build-essential \
+           libssl-dev \
+           python3-venv \
+           gpg \
+           wget \
+           time \
+           git-lfs
+
+          git lfs install
+
+          # install the latest cmake
+          sudo install -d /usr/share/keyrings
+          wget -O - https://apt.kitware.com/keys/kitware-archive-latest.asc \
+           | gpg --dearmor \
+           | sudo tee /usr/share/keyrings/kitware-archive-keyring.gpg >/dev/null
+          echo 'deb [signed-by=/usr/share/keyrings/kitware-archive-keyring.gpg] https://apt.kitware.com/ubuntu/ jammy main' \
+           | sudo tee /etc/apt/sources.list.d/kitware.list
+          sudo apt-get update
+          sudo apt-get install -y cmake
+
       - name: Build
         id: cmake_build
         run: |

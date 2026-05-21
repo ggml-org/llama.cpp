@@ -72,6 +72,7 @@ int g_ggml_sycl_disable_graph = 0;
 int g_ggml_sycl_disable_dnn = 0;
 int g_ggml_sycl_prioritize_dmmv = 0;
 int g_ggml_sycl_use_async_mem_op = 0;
+int g_ggml_sycl_use_async_mem_op_requested = 1;
 int g_ggml_sycl_enable_level_zero = 0;
 int g_ggml_sycl_enable_flash_attention = 1;
 
@@ -304,6 +305,8 @@ static void ggml_check_sycl() try {
         GGML_LOG_INFO("  GGML_SYCL_DISABLE_DNN: DNN disabled by compile flag\n");
 #endif
         GGML_LOG_INFO("  GGML_SYCL_PRIORITIZE_DMMV: %d\n", g_ggml_sycl_prioritize_dmmv);
+        g_ggml_sycl_use_async_mem_op_requested = get_sycl_env("GGML_SYCL_USE_ASYNC_MEM_OP", 1);
+        GGML_LOG_INFO("  GGML_SYCL_USE_ASYNC_MEM_OP: %d\n", g_ggml_sycl_use_async_mem_op_requested);
 
 #ifdef SYCL_FLASH_ATTN
         GGML_LOG_INFO("  GGML_SYCL_ENABLE_FLASH_ATTN: %d\n", g_ggml_sycl_enable_flash_attention);
@@ -319,11 +322,11 @@ static void ggml_check_sycl() try {
         fprintf(stderr, "%s: SYCL_USE_XMX: no\n", __func__);
 #endif
 */
-        // Currently, we only use async malloc / free when graphs are enabled as it is required for the calls to be
-        // properly recorded. As this SYCL extension matures it may be beneficial to enable as the default path and in
-        // other places.
+        // Async USM allocation/free is also useful outside the graph path: it avoids the host waits in the reorder
+        // staging path while preserving queue ordering semantics. Graph support still depends on the extension being
+        // available, but it no longer needs to control the non-graph fast path.
 #if defined(GGML_SYCL_GRAPH) && SYCL_EXT_ONEAPI_ASYNC_MEMORY_ALLOC
-        g_ggml_sycl_use_async_mem_op = !g_ggml_sycl_disable_graph;
+        g_ggml_sycl_use_async_mem_op = g_ggml_sycl_use_async_mem_op_requested || !g_ggml_sycl_disable_graph;
         if (g_ggml_sycl_use_async_mem_op) {
             for (unsigned int i = 0; i < dpct::dev_mgr::instance().device_count(); ++i) {
                 if (!dpct::dev_mgr::instance().get_device(i).has(sycl::aspect::ext_oneapi_async_memory_alloc)) {

@@ -2661,7 +2661,7 @@ static bool ggml_hexagon_supported_rope(const struct ggml_hexagon_session * sess
 
     int mode = op_params[2];
 
-    if ((mode & GGML_ROPE_TYPE_MROPE) || (mode & GGML_ROPE_TYPE_VISION)) {
+    if (mode == GGML_ROPE_TYPE_VISION) {
         return false;
     }
     if (mode & 1) {
@@ -2735,12 +2735,25 @@ static bool ggml_hexagon_supported_ssm_conv(const struct ggml_hexagon_session * 
     if (dst->ne[0] != d_inner || dst->ne[1] != n_t || dst->ne[2] != n_s) {
         return false;
     }
-
-    // TODO: add support for non-contiguous tensors
-    if (!ggml_is_contiguous(src0) || !ggml_is_contiguous(src1) || !ggml_is_contiguous(dst)) {
+    if (src0->nb[0] != sizeof(float) || src1->nb[0] != sizeof(float) || dst->nb[0] != sizeof(float)) {
+        return false;
+    }
+    if (src0->nb[1] != src0->ne[0] * sizeof(float) || src1->nb[1] != src1->ne[0] * sizeof(float)) {
         return false;
     }
 
+    return true;
+}
+
+static bool ggml_hexagon_supported_pad(const struct ggml_hexagon_session * sess, const struct ggml_tensor * op) {
+    const struct ggml_tensor * src0 = op->src[0];
+    const struct ggml_tensor * dst  = op;
+
+    if (src0->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32) {
+        return false;
+    }
+
+    GGML_UNUSED(sess);
     return true;
 }
 
@@ -2816,6 +2829,21 @@ static bool ggml_hexagon_supported_solve_tri(const struct ggml_hexagon_session *
     return true;
 }
 
+static bool ggml_hexagon_supported_tri(const struct ggml_hexagon_session * sess, const struct ggml_tensor * op) {
+
+    const struct ggml_tensor * src0 = op->src[0];
+    const struct ggml_tensor * dst  = op;
+
+    if (src0->type != GGML_TYPE_F32) { return false; }
+    if (dst->type  != GGML_TYPE_F32) { return false; }
+    if (!ggml_are_same_shape(src0, dst)) { return false; }
+    if (!ggml_is_contiguous(src0) || !ggml_is_contiguous(dst)) { return false; }
+
+    return true;
+
+    GGML_UNUSED(sess);
+}
+
 static const char * ggml_backend_hexagon_name(ggml_backend_t backend) {
     auto sess = static_cast<ggml_hexagon_session *>(backend->context);
     return sess->c_name();
@@ -2843,6 +2871,7 @@ static htp_op_code op_remap_to_htp(const ggml_tensor * t) {
         case GGML_OP_SET_ROWS:        return HTP_OP_SET_ROWS;
         case GGML_OP_SUM_ROWS:        return HTP_OP_SUM_ROWS;
         case GGML_OP_ARGSORT:         return HTP_OP_ARGSORT;
+        case GGML_OP_NORM:            return HTP_OP_NORM;
         case GGML_OP_L2_NORM:         return HTP_OP_L2_NORM;
         case GGML_OP_RMS_NORM:        return HTP_OP_RMS_NORM;
         case GGML_OP_SCALE:           return HTP_OP_SCALE;
@@ -2857,6 +2886,9 @@ static htp_op_code op_remap_to_htp(const ggml_tensor * t) {
         case GGML_OP_FILL:            return HTP_OP_FILL;
         case GGML_OP_DIAG:            return HTP_OP_DIAG;
         case GGML_OP_SOLVE_TRI:       return HTP_OP_SOLVE_TRI;
+        case GGML_OP_TRI:             return HTP_OP_TRI;
+        case GGML_OP_PAD:             return HTP_OP_PAD;
+
         case GGML_OP_UNARY:
             switch (ggml_get_unary_op(t)) {
                 case GGML_UNARY_OP_SILU:     return HTP_OP_UNARY_SILU;
@@ -3308,10 +3340,8 @@ static bool ggml_backend_hexagon_device_supports_op(ggml_backend_dev_t dev, cons
             supp = ggml_hexagon_supported_add_id(sess, op);
             break;
 
+        case GGML_OP_NORM:
         case GGML_OP_L2_NORM:
-            supp = ggml_hexagon_supported_unary(sess, op);
-            break;
-
         case GGML_OP_RMS_NORM:
         case GGML_OP_SCALE:
             supp = ggml_hexagon_supported_unary(sess, op);
@@ -3414,6 +3444,14 @@ static bool ggml_backend_hexagon_device_supports_op(ggml_backend_dev_t dev, cons
 
         case GGML_OP_SOLVE_TRI:
             supp = ggml_hexagon_supported_solve_tri(sess, op);
+            break;
+
+        case GGML_OP_TRI:
+            supp = ggml_hexagon_supported_tri(sess, op);
+            break;
+
+        case GGML_OP_PAD:
+            supp = ggml_hexagon_supported_pad(sess, op);
             break;
 
         default:

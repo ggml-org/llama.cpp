@@ -1165,6 +1165,7 @@ void server_models_routes::init_routes() {
                 // Deprecated: use ui_settings instead (kept for backward compat)
                 {"webui_settings",  webui_settings},
                 {"build_info",     std::string(llama_build_info())},
+                {"cors_proxy_enabled", params.ui_mcp_proxy || params.webui_mcp_proxy},
             });
             return res;
         }
