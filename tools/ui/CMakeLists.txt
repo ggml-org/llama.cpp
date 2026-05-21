@@ -35,23 +35,32 @@ endif()
 set(UI_CPP "${CMAKE_CURRENT_BINARY_DIR}/ui.cpp")
 set(UI_H   "${CMAKE_CURRENT_BINARY_DIR}/ui.h")
 
-# llama-ui-embed is a host tool, need to ensure it is not cross-compiled.
-if(CMAKE_HOST_WIN32)
-    set(LLAMA_UI_EMBED_SUFFIX ".exe")
-else()
-    set(LLAMA_UI_EMBED_SUFFIX "")
-endif()
+# llama-ui-embed is a host tool: build it natively, or via a nested host project when cross-compiling.
+if(CMAKE_CROSSCOMPILING)
+    if(CMAKE_HOST_WIN32)
+        set(LLAMA_UI_EMBED_SUFFIX ".exe")
+    else()
+        set(LLAMA_UI_EMBED_SUFFIX "")
+    endif()
 
-include(ExternalProject)
-ExternalProject_Add(llama-ui-embed
-    SOURCE_DIR       "${CMAKE_CURRENT_SOURCE_DIR}/embed"
-    CMAKE_ARGS       "-DCMAKE_BUILD_TYPE=Release"
-    BUILD_ALWAYS     TRUE
-    INSTALL_COMMAND  ""
-    BUILD_BYPRODUCTS "<BINARY_DIR>/llama-ui-embed${LLAMA_UI_EMBED_SUFFIX}"
-)
-ExternalProject_Get_Property(llama-ui-embed BINARY_DIR)
-set(LLAMA_UI_EMBED_EXE "${BINARY_DIR}/llama-ui-embed${LLAMA_UI_EMBED_SUFFIX}")
+    include(ExternalProject)
+    ExternalProject_Add(llama-ui-embed
+        SOURCE_DIR       "${CMAKE_CURRENT_SOURCE_DIR}/embed"
+        CMAKE_ARGS       "-DCMAKE_BUILD_TYPE=Release"
+        BUILD_ALWAYS     TRUE
+        INSTALL_COMMAND  ""
+        BUILD_BYPRODUCTS "<BINARY_DIR>/llama-ui-embed${LLAMA_UI_EMBED_SUFFIX}"
+    )
+    ExternalProject_Get_Property(llama-ui-embed BINARY_DIR)
+    set(LLAMA_UI_EMBED_EXE "${BINARY_DIR}/llama-ui-embed${LLAMA_UI_EMBED_SUFFIX}")
+else()
+    add_executable(llama-ui-embed embed/embed.cpp)
+    target_compile_features(llama-ui-embed PRIVATE cxx_std_17)
+    set_target_properties(llama-ui-embed PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
+    )
+    set(LLAMA_UI_EMBED_EXE "$<TARGET_FILE:llama-ui-embed>")
+endif()
 
 # Run the provisioning script every build so source changes in tools/ui/ are
 # always picked up. The script uses copy_if_different for ui.cpp/ui.h, so the
