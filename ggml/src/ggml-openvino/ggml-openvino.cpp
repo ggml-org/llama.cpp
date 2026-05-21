@@ -796,6 +796,18 @@ static bool has_view_op_input(const ggml_tensor * op) {
     return false;
 }
 
+static bool has_non_contiguous_view_input(const ggml_tensor * op) {
+    for (int i = 0; i < GGML_MAX_SRC; i++) {
+        if (op->src[i] == nullptr) {
+            break;
+        }
+        if (op->src[i]->op == GGML_OP_VIEW && !ggml_is_contiguous(op->src[i])) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static bool is_supported_flash_attn_pattern(const ggml_tensor * op) {
     // pattern of q,k,v should be q->op==PERMUTE, q->src[0]->op==VIEW, q->src[0]->src[0]->view_src==nullptr
     for (int i = 0; i < 3; i++) {
@@ -1154,6 +1166,9 @@ static bool ggml_backend_openvino_device_supports_op(ggml_backend_dev_t dev, con
         };
         if (ops_not_support_view_input.find(op->op) != ops_not_support_view_input.end() && has_view_op_input(op)) {
             // GGML_LOG_WARN("OpenVINO backend does not support op %s with view input\n", ggml_op_name(op->op));
+            return false;
+        }
+        if (op->op == GGML_OP_RMS_NORM && has_non_contiguous_view_input(op)) {
             return false;
         }
     }
