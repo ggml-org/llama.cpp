@@ -13,6 +13,10 @@ import { getAuthHeaders } from '$lib/utils/api-headers';
 interface ResumableStreamState {
 	bytesReceived: number;
 	updatedAt: number;
+
+	// model frozen at POST time, lets a reload rebuild the exact conv::model identity the
+	// server keyed the session under. null when the POST carried no explicit model
+	model?: string | null;
 }
 
 const STORAGE_PREFIX = 'llamacpp.stream.resume.';
@@ -21,12 +25,17 @@ function storageKey(conversationId: string): string {
 	return STORAGE_PREFIX + conversationId;
 }
 
-export function saveStreamState(conversationId: string, bytesReceived: number): void {
+export function saveStreamState(
+	conversationId: string,
+	bytesReceived: number,
+	model?: string | null
+): void {
 	if (!conversationId) return;
 	try {
 		const state: ResumableStreamState = {
 			bytesReceived,
-			updatedAt: Date.now()
+			updatedAt: Date.now(),
+			model: model ?? null
 		};
 		localStorage.setItem(storageKey(conversationId), JSON.stringify(state));
 	} catch {
@@ -54,6 +63,21 @@ export function clearStreamState(conversationId: string): void {
 	} catch {
 		// nothing to do
 	}
+}
+
+/**
+ * Rebuild the stream identity for a resume. The model persisted at POST time wins, including a
+ * stored null which means the POST carried no explicit model so the identity stays the bare
+ * conv id. Only fall back to the caller supplied current model when nothing was persisted, e.g.
+ * a state written before the model field existed.
+ */
+export function resumeStreamIdentity(
+	conversationId: string,
+	state: ResumableStreamState | null,
+	fallbackModel: string | null
+): string {
+	const model = state && state.model !== undefined ? state.model : fallbackModel;
+	return streamIdentity(conversationId, model);
 }
 
 /**

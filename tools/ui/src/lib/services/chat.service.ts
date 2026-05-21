@@ -627,7 +627,7 @@ export class ChatService {
 		let madeProgress = true;
 		const encoder = new TextEncoder();
 		if (conversationId) {
-			saveStreamState(conversationId, 0);
+			saveStreamState(conversationId, 0, streamModel);
 		}
 		onConnectionState?.('streaming');
 
@@ -744,7 +744,7 @@ export class ChatService {
 					if (conversationId) {
 						const tailBytes = encoder.encode(chunk).byteLength;
 						bytesParsed = segmentStartOffset + segmentBytesRead - tailBytes;
-						saveStreamState(conversationId, bytesParsed);
+						saveStreamState(conversationId, bytesParsed, streamModel);
 					}
 
 					for (const line of lines) {

@@ -457,13 +457,40 @@ static void set_headers(httplib::Response & res, const std::map<std::string, std
     }
 }
 
+// percent-decode a path component (%XX). path params arrive raw from httplib, unlike query
+// params, so a conv id like "conv::model" sent as "conv%3A%3Amodel" must be decoded here to
+// match the value the client put in the X-Conversation-Id header
+static std::string decode_path_component(const std::string & in) {
+    std::string out;
+    out.reserve(in.size());
+    for (size_t i = 0; i < in.size(); i++) {
+        if (in[i] == '%' && i + 2 < in.size()) {
+            auto hex = [](char c) -> int {
+                if (c >= '0' && c <= '9') return c - '0';
+                if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+                if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+                return -1;
+            };
+            int hi = hex(in[i + 1]);
+            int lo = hex(in[i + 2]);
+            if (hi >= 0 && lo >= 0) {
+                out.push_back(char((hi << 4) | lo));
+                i += 2;
+                continue;
+            }
+        }
+        out.push_back(in[i]);
+    }
+    return out;
+}
+
 static std::map<std::string, std::string> get_params(const httplib::Request & req) {
     std::map<std::string, std::string> params;
     for (const auto & [key, value] : req.params) {
         params[key] = value;
     }
     for (const auto & [key, value] : req.path_params) {
-        params[key] = value;
+        params[key] = decode_path_component(value);
     }
     return params;
 }

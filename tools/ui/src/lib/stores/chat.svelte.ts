@@ -15,7 +15,11 @@ import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 import { DatabaseService } from '$lib/services/database.service';
 import { ChatService } from '$lib/services/chat.service';
 import { selectActiveStream } from '$lib/services/stream-discovery.service';
-import { getStreamState, clearStreamState } from '$lib/services/stream-resume.service';
+import {
+	getStreamState,
+	clearStreamState,
+	resumeStreamIdentity
+} from '$lib/services/stream-resume.service';
 import { streamIdentity } from '$lib/utils/stream-identity';
 import { getAuthHeaders } from '$lib/utils/api-headers';
 import { conversationsStore } from '$lib/stores/conversations.svelte';
@@ -440,8 +444,14 @@ class ChatStore {
 		this.discoveringConvs.add(convId);
 
 		try {
-			// primary path: ask the server which sessions exist for this conversation
-			const serverTarget = await this.probeServerStream(convId);
+			// the model is frozen at POST time, rebuild the exact conv::model identity from the
+			// persisted state so the lookup key matches what the server stored. null means a single
+			// model conv with no ::suffix, only guess from the dropdown with no persisted state
+			const localState = getStreamState(convId);
+			const streamId = resumeStreamIdentity(convId, localState, selectedModelName());
+
+			// primary path: ask the server which sessions exist for this identity
+			const serverTarget = await this.probeServerStream(streamId);
 			if (serverTarget) {
 				// pass the full server side identity (may carry a ::model suffix) so the GET routes
 				// straight to the owning session, no probe or fan out
@@ -450,13 +460,12 @@ class ChatStore {
 			}
 
 			// fallback: local state remembers an interrupted byte offset for this conv, the server may
-			// still have a live session matching that conv id (we just lost the bytes mid stream). try to
-			// attach with conv id only, the server probe inside attachServerStream tells us if it exists
-			const localState = getStreamState(convId);
+			// still have a live session matching that identity (we just lost the bytes mid stream). retry
+			// with the frozen identity, the server probe inside attachServerStream tells us if it exists
 			if (!localState) {
 				return;
 			}
-			await this.attachServerStream(convId);
+			await this.attachServerStream(convId, streamId);
 			// if attachServerStream failed (session gone, TTL expired), clear the local state to avoid retrying forever
 			if (!this.chatStreamingStates.has(convId) && !this.chatLoadingStates.get(convId)) {
 				clearStreamState(convId);
@@ -646,12 +655,17 @@ class ChatStore {
 			}
 			return;
 		}
+		// the lookup is keyed by the identity frozen at POST time (conv::model when the stream
+		// carried an explicit model), rebuild it per conv from the persisted state so a running
+		// session started with a model still matches. a single model conv stays a bare id, and
+		// the server response is mapped back to the bare id below for the sidebar set
+		const lookupIds = ids.map((id) => resumeStreamIdentity(id, getStreamState(id), null));
 		let sessions: ApiStreamSession[];
 		try {
 			const resp = await fetch('./v1/streams/lookup', {
 				method: 'POST',
 				headers: { ...getAuthHeaders(), 'Content-Type': 'application/json' },
-				body: JSON.stringify({ conversation_ids: ids })
+				body: JSON.stringify({ conversation_ids: lookupIds })
 			});
 			if (!resp.ok) return;
 			const body = (await resp.json()) as unknown;

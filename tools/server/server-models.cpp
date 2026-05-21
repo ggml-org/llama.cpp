@@ -1,6 +1,7 @@
 #include "server-common.h"
 #include "server-models.h"
 #include "server-context.h"
+#include "server-stream.h"
 
 #include "build-info.h"
 #include "preset.h"
@@ -1368,6 +1369,34 @@ void server_models::handle_child_state(const std::string & name, const std::stri
     }
 }
 
+void server_models::remember_conv_model(const std::string & conv_id, const std::string & model) {
+    if (conv_id.empty() || model.empty()) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(conv_model_mu);
+    conv_model_map[conv_id] = model;
+}
+
+std::optional<std::string> server_models::lookup_conv_model(const std::string & conv_id) {
+    if (conv_id.empty()) {
+        return std::nullopt;
+    }
+    std::lock_guard<std::mutex> lock(conv_model_mu);
+    auto it = conv_model_map.find(conv_id);
+    if (it == conv_model_map.end()) {
+        return std::nullopt;
+    }
+    return it->second;
+}
+
+void server_models::forget_conv_model(const std::string & conv_id) {
+    if (conv_id.empty()) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(conv_model_mu);
+    conv_model_map.erase(conv_id);
+}
+
 //
 // server_child
 //
@@ -1605,52 +1634,22 @@ static std::string encode_qs(const std::string & in) {
     return out;
 }
 
-// extract the optional model suffix from a conversation_id. the WebUI encodes the active model
-// name after :: when the user has explicitly picked a model, so the router can route stream
-// lookups direct to the right child without probing every other one. returns empty when no
-// separator is present, in which case the caller falls back to probing or fan out
-static std::string extract_model_from_conv(const std::string & conv_id) {
-    static constexpr char   SEP[]    = "::";
-    static constexpr size_t SEP_LEN  = sizeof(SEP) - 1;
-    auto pos = conv_id.rfind(SEP);
-    if (pos == std::string::npos) {
-        return std::string();
-    }
-    return conv_id.substr(pos + SEP_LEN);
-}
-
-// loopback probe across every ready child, returns the meta of the first one that reports a
-// live or recently completed session for this conv. only called as a fallback when the conv
-// id carries no :: suffix
-static std::optional<server_model_meta> probe_child_for_conv(
+// resolve the child that owns a conversation's stream session via the conv_id -> model map
+// populated when the POST was routed. single map lookup then a meta lookup, no polling, no
+// parsing of the conv id. returns nullopt when nothing maps, the caller answers not found and
+// the client recovers
+static std::optional<server_model_meta> resolve_child_for_conv(
         server_models & models, const std::string & conversation_id) {
     if (conversation_id.empty()) {
         return std::nullopt;
     }
-    // POST /v1/streams/lookup with the one conv id we are probing. the child only returns a
-    // match if it owns that conv, listing is never exposed
-    json body = {{"conversation_ids", json::array({conversation_id})}};
-    std::string body_str = body.dump();
-    for (auto & meta : models.get_all_meta()) {
-        if (!meta.is_ready()) {
-            continue;
-        }
-        httplib::Client cli(CHILD_ADDR, meta.port);
-        cli.set_connection_timeout(0, STREAM_LOOKUP_TIMEOUT_MS * 1000);
-        cli.set_read_timeout(0, STREAM_LOOKUP_TIMEOUT_MS * 1000);
-        cli.set_write_timeout(0, STREAM_LOOKUP_TIMEOUT_MS * 1000);
-        auto resp = cli.Post("/v1/streams/lookup", body_str, "application/json");
-        if (!resp || resp->status != 200) {
-            continue;
-        }
-        try {
-            json arr = json::parse(resp->body);
-            if (arr.is_array() && !arr.empty()) {
-                return meta;
-            }
-        } catch (const std::exception &) {
-            continue;
-        }
+    auto tracked = models.lookup_conv_model(conversation_id);
+    if (!tracked.has_value()) {
+        return std::nullopt;
+    }
+    auto meta = models.get_meta(*tracked);
+    if (meta.has_value() && meta->is_ready()) {
+        return meta;
     }
     return std::nullopt;
 }
@@ -1702,6 +1701,13 @@ void server_models_routes::init_routes() {
         auto error_res = std::make_unique<server_http_res>();
         if (!router_validate_model(name, models, autoload, error_res)) {
             return error_res;
+        }
+        // remember which child serves this conversation so the resumable stream routes can route
+        // straight to it without polling. key on the exact conv id from the header, the same value
+        // the GET and DELETE routes receive in their path, no parsing either side
+        std::string conv_id = stream_conv_id_from_headers(req.headers);
+        if (!conv_id.empty()) {
+            models.remember_conv_model(conv_id, name);
         }
         return models.proxy_request(req, method, name, true); // update last usage for POST request only
     };
@@ -1905,26 +1911,16 @@ void server_models_routes::init_routes() {
     };
 
     this->router_stream_get = [this](const server_http_req & req) {
-        // GET /v1/stream/<conv_id>?from=N. when the conv carries a ::model suffix, route
-        // straight to that child, otherwise loopback probe every ready child. returns 404
-        // when no child currently owns a session for this conv
+        // GET /v1/stream/<conv_id>?from=N. resolve the owning child from the conv_id -> model
+        // map (no polling), 404 when nothing maps. a stale map entry just forwards to a child
+        // that answers not found, the client recovers
         auto res = std::make_unique<server_http_res>();
         std::string conv_id = req.get_param("conv_id");
         if (conv_id.empty()) {
             res_err(res, format_error_response("Missing conversation id in path", ERROR_TYPE_INVALID_REQUEST));
             return res;
         }
-        std::optional<server_model_meta> owner;
-        std::string model_hint = extract_model_from_conv(conv_id);
-        if (!model_hint.empty()) {
-            auto direct = models.get_meta(model_hint);
-            if (direct.has_value() && direct->is_ready()) {
-                owner = direct;
-            }
-        }
-        if (!owner.has_value()) {
-            owner = probe_child_for_conv(models, conv_id);
-        }
+        std::optional<server_model_meta> owner = resolve_child_for_conv(models, conv_id);
         if (!owner.has_value()) {
             res_err(res, format_error_response("Stream not found or expired", ERROR_TYPE_NOT_FOUND));
             return res;
@@ -1952,20 +1948,44 @@ void server_models_routes::init_routes() {
     };
 
     this->router_streams_lookup = [this](const server_http_req & req) {
-        // POST /v1/streams/lookup forwards the same body to every ready child and aggregates
-        // the results. the child responds only for the conv ids we asked about, never lists
-        // anything else, so the router never exposes ids the caller did not already know
+        // POST /v1/streams/lookup. resolve each requested conv id to its owning child via the
+        // map, group the ids per child, and query only the children that actually own some of
+        // them instead of fanning out to every ready child. a child only answers for the ids
+        // it owns, never lists anything else
         auto res = std::make_unique<server_http_res>();
-        json aggregated = json::array();
-        for (auto & meta : models.get_all_meta()) {
-            if (!meta.is_ready()) {
+        std::vector<std::string> requested;
+        try {
+            json body = json::parse(req.body);
+            if (body.contains("conversation_ids") && body["conversation_ids"].is_array()) {
+                for (const auto & v : body["conversation_ids"]) {
+                    if (v.is_string() && !v.get<std::string>().empty()) {
+                        requested.push_back(v.get<std::string>());
+                    }
+                }
+            }
+        } catch (const std::exception &) {
+            res_ok(res, json::array());
+            return res;
+        }
+
+        // group requested ids by the child port that owns them, drop ids that map to nothing
+        std::unordered_map<int, json> per_child;
+        for (const auto & cid : requested) {
+            auto owner = resolve_child_for_conv(models, cid);
+            if (!owner.has_value()) {
                 continue;
             }
-            httplib::Client cli(CHILD_ADDR, meta.port);
+            per_child[owner->port].push_back(cid);
+        }
+
+        json aggregated = json::array();
+        for (auto & [port, ids] : per_child) {
+            json child_body = {{"conversation_ids", ids}};
+            httplib::Client cli(CHILD_ADDR, port);
             cli.set_connection_timeout(0, STREAM_LOOKUP_TIMEOUT_MS * 1000);
             cli.set_read_timeout(0, STREAM_LOOKUP_TIMEOUT_MS * 1000);
             cli.set_write_timeout(0, STREAM_LOOKUP_TIMEOUT_MS * 1000);
-            auto resp = cli.Post("/v1/streams/lookup", req.body, "application/json");
+            auto resp = cli.Post("/v1/streams/lookup", child_body.dump(), "application/json");
             if (!resp || resp->status != 200) {
                 continue;
             }
@@ -1988,9 +2008,9 @@ void server_models_routes::init_routes() {
     };
 
     this->router_stream_delete = [this](const server_http_req & req) {
-        // DELETE /v1/stream/<conv_id>. with a ::model suffix we forward to that child only,
-        // otherwise fan out across every ready child. each child runs an idempotent
-        // evict_and_cancel so a child without the session returns 204 and does nothing
+        // DELETE /v1/stream/<conv_id>. resolve the owning child via the map and forward only to
+        // it. evict_and_cancel is idempotent on the child, a stale map entry just hits a child
+        // that has nothing to cancel and returns 204
         auto res = std::make_unique<server_http_res>();
         std::string conv_id = req.get_param("conv_id");
         if (conv_id.empty()) {
@@ -1998,30 +2018,17 @@ void server_models_routes::init_routes() {
             return res;
         }
         std::string child_path = "/v1/stream/" + encode_qs(conv_id);
-        std::string model_hint = extract_model_from_conv(conv_id);
-        auto delete_on = [&](int port) {
-            httplib::Client cli(CHILD_ADDR, port);
+        auto owner = resolve_child_for_conv(models, conv_id);
+        if (owner.has_value()) {
+            httplib::Client cli(CHILD_ADDR, owner->port);
             cli.set_connection_timeout(0, STREAM_LOOKUP_TIMEOUT_MS * 1000);
             cli.set_read_timeout(0, STREAM_LOOKUP_TIMEOUT_MS * 1000);
             cli.set_write_timeout(0, STREAM_LOOKUP_TIMEOUT_MS * 1000);
             auto resp = cli.Delete(child_path.c_str());
             (void) resp; // best effort, 404 and network errors are equivalent to no op
-        };
-        if (!model_hint.empty()) {
-            auto direct = models.get_meta(model_hint);
-            if (direct.has_value() && direct->is_ready()) {
-                delete_on(direct->port);
-                res->status = 204;
-                res->content_type = "application/json";
-                return res;
-            }
         }
-        for (auto & meta : models.get_all_meta()) {
-            if (!meta.is_ready()) {
-                continue;
-            }
-            delete_on(meta.port);
-        }
+        // drop the tracking entry, the session is being torn down
+        models.forget_conv_model(conv_id);
         res->status = 204;
         res->content_type = "application/json";
         return res;

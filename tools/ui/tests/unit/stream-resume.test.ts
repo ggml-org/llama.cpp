@@ -23,7 +23,8 @@ beforeAll(() => {
 import {
 	saveStreamState,
 	getStreamState,
-	clearStreamState
+	clearStreamState,
+	resumeStreamIdentity
 } from '$lib/services/stream-resume.service';
 
 describe('stream-resume.service', () => {
@@ -74,5 +75,56 @@ describe('stream-resume.service', () => {
 	it('returns null on corrupted storage payload', () => {
 		localStorage.setItem('llamacpp.stream.resume.conv-a', '{not-json');
 		expect(getStreamState('conv-a')).toBeNull();
+	});
+
+	it('persists the model alongside the byte count', () => {
+		saveStreamState('conv-a', 10, 'model-x');
+		expect(getStreamState('conv-a')!.model).toBe('model-x');
+	});
+
+	it('stores a null model when none is provided', () => {
+		saveStreamState('conv-a', 10);
+		expect(getStreamState('conv-a')!.model).toBeNull();
+	});
+
+	it('overwrites the model on a new save for the same conversation', () => {
+		saveStreamState('conv-a', 10, 'model-x');
+		saveStreamState('conv-a', 20, 'model-y');
+		expect(getStreamState('conv-a')!.model).toBe('model-y');
+	});
+
+	describe('resumeStreamIdentity', () => {
+		it('appends the persisted model so the resume key matches the frozen POST identity', () => {
+			saveStreamState('conv-a', 10, 'model-x');
+			expect(resumeStreamIdentity('conv-a', getStreamState('conv-a'), 'dropdown')).toBe(
+				'conv-a::model-x'
+			);
+		});
+
+		it('keeps the bare conv id when the persisted model is null', () => {
+			saveStreamState('conv-a', 10);
+			expect(resumeStreamIdentity('conv-a', getStreamState('conv-a'), 'dropdown')).toBe('conv-a');
+		});
+
+		it('falls back to the current model only when no state is persisted', () => {
+			expect(resumeStreamIdentity('conv-a', null, 'dropdown')).toBe('conv-a::dropdown');
+		});
+
+		it('ignores the fallback when a state exists, the persisted value is authoritative', () => {
+			saveStreamState('conv-a', 10, 'model-x');
+			expect(resumeStreamIdentity('conv-a', getStreamState('conv-a'), 'dropdown')).toBe(
+				'conv-a::model-x'
+			);
+		});
+
+		it('falls back when a legacy state has no model field', () => {
+			localStorage.setItem(
+				'llamacpp.stream.resume.conv-a',
+				JSON.stringify({ bytesReceived: 10, updatedAt: 1 })
+			);
+			expect(resumeStreamIdentity('conv-a', getStreamState('conv-a'), 'dropdown')).toBe(
+				'conv-a::dropdown'
+			);
+		});
 	});
 });

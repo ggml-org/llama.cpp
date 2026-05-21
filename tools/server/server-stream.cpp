@@ -342,19 +342,25 @@ void stream_pipe_producer::close() {
     // pipe is attached, so res_->next() runs to natural completion, only an explicit DELETE flips
     // is_cancelled and cuts it short
     if (done_ || session_->is_cancelled()) {
+        SRV_INF("stream_pipe close: skip drain (done=%d cancelled=%d) conv=%s\n",
+                done_ ? 1 : 0, session_->is_cancelled() ? 1 : 0, session_->conversation_id.c_str());
         return;
     }
+    SRV_INF("stream_pipe close: draining conv=%s\n", session_->conversation_id.c_str());
+    size_t drained = 0;
     std::string chunk;
     while (true) {
         chunk.clear();
         bool has_next = res_->next(chunk);
         if (!chunk.empty()) {
             write(chunk.data(), chunk.size());
+            drained += chunk.size();
         }
         if (!has_next) {
             break;
         }
     }
+    SRV_INF("stream_pipe close: drain ended conv=%s bytes=%zu\n", session_->conversation_id.c_str(), drained);
 }
 
 std::shared_ptr<stream_pipe_producer> stream_pipe_producer::create(stream_session_ptr session,
@@ -528,11 +534,10 @@ server_http_context::handler_t make_stream_delete_handler() {
     };
 }
 
-void stream_session_attach_pipe(server_http_res & res, const std::map<std::string, std::string> & headers) {
+std::string stream_conv_id_from_headers(const std::map<std::string, std::string> & headers) {
     // case-insensitive scan for x-conversation-id
     static constexpr char   target[]   = "x-conversation-id";
     static constexpr size_t target_len = sizeof(target) - 1;
-    std::string conversation_id;
     for (const auto & [hk, hv] : headers) {
         if (hk.size() != target_len) continue;
         bool match = true;
@@ -542,10 +547,16 @@ void stream_session_attach_pipe(server_http_res & res, const std::map<std::strin
             if (c != target[i]) { match = false; break; }
         }
         if (match) {
-            conversation_id = hv;
-            break;
+            return hv;
         }
     }
+    return std::string();
+}
+
+void stream_session_attach_pipe(server_http_res & res, const std::map<std::string, std::string> & headers) {
+    std::string conversation_id = stream_conv_id_from_headers(headers);
+    SRV_INF("stream_session_attach_pipe: conv_id=%s (empty=%d)\n",
+            conversation_id.c_str(), conversation_id.empty() ? 1 : 0);
     if (conversation_id.empty()) {
         return;
     }

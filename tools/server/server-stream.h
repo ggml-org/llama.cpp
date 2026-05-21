@@ -201,6 +201,10 @@ server_http_context::handler_t make_stream_get_handler();
 server_http_context::handler_t make_streams_lookup_handler();
 server_http_context::handler_t make_stream_delete_handler();
 
+// extract the X-Conversation-Id header value (case-insensitive), empty when absent. exposed
+// so the router can read the conv id off a forwarded POST to track which child serves it
+std::string stream_conv_id_from_headers(const std::map<std::string, std::string> & headers);
+
 // inspect request headers for X-Conversation-Id and, when present, create or replace a
 // session on the global manager then attach a producer pipe to res. the pipe's stop_fn
 // calls res.stop() (overridden by server_res_generator to stop its reader). no-op when
