@@ -247,7 +247,7 @@ Specifies a comma-separated list of speculative decoding types to use.
 |------|-------------|
 | `none` | No speculative decoding (default) |
 | `draft-simple` | Use a simple draft model for speculation |
-| `draft-mtp` | Use Masked Token Prediction (MTP) heads from the main model |
+| `draft-mtp` | Use Multi Token Prediction (MTP) heads from the main model |
 | `ngram-cache` | Use n-gram cache lookup |
 | `ngram-simple` | Use simple n-gram pattern matching |
 | `ngram-map-k` | Use n-gram pattern matching with n-gram-keys |
