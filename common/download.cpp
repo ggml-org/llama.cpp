@@ -579,10 +579,16 @@ static hf_cache::hf_file find_best_sibling(const hf_cache::hf_files & files,
     auto model_bits = extract_quant_bits(model);
     auto model_parts = string_split<std::string>(model, '/');
     auto model_dir = model_parts.end() - 1;
+    auto model_split = get_gguf_split_info(model);
 
     for (const auto & f : files) {
         if (!string_ends_with(f.path, ".gguf") ||
             f.path.find(keyword) == std::string::npos) {
+            continue;
+        }
+
+        auto sib_split = get_gguf_split_info(f.path);
+        if (sib_split.prefix == model_split.prefix) {
             continue;
         }
 
