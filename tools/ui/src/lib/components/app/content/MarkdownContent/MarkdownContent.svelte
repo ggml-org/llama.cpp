@@ -35,7 +35,7 @@
 	import githubDarkCss from 'highlight.js/styles/github-dark.css?inline';
 	import githubLightCss from 'highlight.js/styles/github.css?inline';
 	import { mode } from 'mode-watcher';
-	import { CodeBlockActions, DialogCodePreview } from '$lib/components/app';
+	import { CodeBlockActions, DialogCodePreview, DialogMermaidPreview } from '$lib/components/app';
 	import { createAutoScrollController } from '$lib/hooks/use-auto-scroll.svelte';
 	import type { DatabaseMessageExtra } from '$lib/types/database';
 	import { config } from '$lib/stores/settings.svelte';
@@ -63,6 +63,8 @@
 	let previewDialogOpen = $state(false);
 	let previewCode = $state('');
 	let previewLanguage = $state('text');
+	let mermaidPreviewOpen = $state(false);
+	let mermaidPreviewCode = $state('');
 	let streamingCodeScrollContainer = $state<HTMLDivElement>();
 
 	// Auto-scroll controller for streaming code block content
@@ -126,6 +128,21 @@
 
 		for (const button of previewButtons) {
 			button.removeEventListener('click', handlePreviewClick);
+		}
+	}
+
+	/**
+	 * Removes click event listeners from mermaid fullscreen buttons.
+	 * Called on component destroy.
+	 */
+	function cleanupMermaidEventListeners() {
+		if (!containerRef) return;
+
+		const fullscreenButtons =
+			containerRef.querySelectorAll<HTMLButtonElement>('.mermaid-fullscreen-btn');
+
+		for (const button of fullscreenButtons) {
+			button.removeEventListener('click', handleMermaidFullscreenClick);
 		}
 	}
 
@@ -327,6 +344,44 @@
 	}
 
 	/**
+	 * Handles click events on mermaid fullscreen buttons.
+	 * Opens a fullscreen preview dialog with the mermaid diagram.
+	 * @param event - The click event from the fullscreen button
+	 */
+	function handleMermaidFullscreenClick(event: Event) {
+		event.preventDefault();
+		event.stopPropagation();
+
+		const target = event.currentTarget as HTMLButtonElement | null;
+
+		if (!target) {
+			return;
+		}
+
+		const code = target.dataset.mermaidCode;
+
+		if (!code) {
+			return;
+		}
+
+		mermaidPreviewCode = code;
+		mermaidPreviewOpen = true;
+	}
+
+	/**
+	 * Handles mermaid preview dialog open state changes.
+	 * Clears preview content when dialog is closed.
+	 * @param open - Whether the dialog is being opened or closed
+	 */
+	function handleMermaidPreviewDialogOpenChange(open: boolean) {
+		mermaidPreviewOpen = open;
+
+		if (!open) {
+			mermaidPreviewCode = '';
+		}
+	}
+
+	/**
 	 * Processes markdown content into stable and unstable HTML blocks.
 	 * Uses incremental rendering: stable blocks are cached, unstable block is re-rendered.
 	 * Incomplete code blocks are rendered using SyntaxHighlightedCode to maintain interactivity.
@@ -484,6 +539,23 @@
 	}
 
 	/**
+	 * Attaches click event listeners to mermaid fullscreen buttons.
+	 * Uses data-listener-bound attribute to prevent duplicate bindings.
+	 */
+	function setupMermaidActions() {
+		if (!containerRef) return;
+
+		const buttons = containerRef.querySelectorAll<HTMLButtonElement>('.mermaid-fullscreen-btn');
+
+		for (const button of buttons) {
+			if (button.dataset.listenerBound !== 'true') {
+				button.dataset.listenerBound = 'true';
+				button.addEventListener('click', handleMermaidFullscreenClick);
+			}
+		}
+	}
+
+	/**
 	 * Attaches error handlers to images to show fallback UI when loading fails (e.g., CORS).
 	 * Uses data-error-bound attribute to prevent duplicate bindings.
 	 */
@@ -609,6 +681,7 @@
 		if ((hasRenderedBlocks || hasUnstableBlock) && containerRef) {
 			setupCodeBlockActions();
 			setupImageErrorHandlers();
+			setupMermaidActions();
 			renderMermaidDiagrams();
 		}
 	});
@@ -624,6 +697,7 @@
 
 	onDestroy(() => {
 		cleanupEventListeners();
+		cleanupMermaidEventListeners();
 		cleanupHighlightTheme();
 		streamingAutoScroll.destroy();
 	});
@@ -695,6 +769,12 @@
 	code={previewCode}
 	language={previewLanguage}
 	onOpenChange={handlePreviewDialogOpenChange}
+/>
+
+<DialogMermaidPreview
+	open={mermaidPreviewOpen}
+	code={mermaidPreviewCode}
+	onOpenChange={handleMermaidPreviewDialogOpenChange}
 />
 
 <style>
@@ -1273,7 +1353,60 @@
 	div :global(pre.mermaid svg) {
 		max-width: 100%;
 		height: auto;
-		display: inline-block;
+		display: block;
+		margin: 0 auto;
+	}
+
+	/* Mermaid wrapper with fullscreen button */
+	div :global(.mermaid-wrapper) {
+		position: relative;
+		display: block;
+		width: 100%;
+	}
+
+	div :global(.mermaid-wrapper pre.mermaid) {
+		margin: 1.5rem 0 0.5rem;
+	}
+
+	div :global(.mermaid-fullscreen-btn) {
+		position: absolute;
+		top: 0.25rem;
+		right: 0.25rem;
+		padding: 0.375rem;
+		background: var(--background);
+		border: 1px solid var(--border);
+		border-radius: 0.375rem;
+		color: var(--muted-foreground);
+		cursor: pointer;
+		opacity: 0;
+		transition:
+			opacity 0.2s ease,
+			background-color 0.2s ease,
+			color 0.2s ease;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+	}
+
+	div :global(.mermaid-fullscreen-btn span) {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+	}
+
+	div :global(.mermaid-fullscreen-btn svg) {
+		display: block;
+		width: 16px;
+		height: 16px;
+	}
+
+	div :global(.mermaid-wrapper:hover .mermaid-fullscreen-btn) {
+		opacity: 1;
+	}
+
+	div :global(.mermaid-fullscreen-btn:hover) {
+		background: var(--muted);
+		color: var(--foreground);
 	}
 
 	/* Streaming mermaid block */

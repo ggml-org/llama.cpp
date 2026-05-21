@@ -474,3 +474,33 @@ export { default as DialogMcpResourcesBrowser } from './DialogMcpResourcesBrowse
  * ```
  */
 export { default as DialogMcpResourcePreview } from './DialogMcpResourcePreview.svelte';
+
+/**
+ * **DialogMermaidPreview** - Full-screen mermaid diagram preview
+ *
+ * Full-screen dialog for previewing mermaid diagrams at full size.
+ * Renders the mermaid diagram using the mermaid library with theme-aware
+ * initialization (dark/light mode).
+ *
+ * **Architecture:**
+ * - Uses ShadCN Dialog with full viewport layout
+ * - Lazy loads mermaid library on open
+ * - Renders SVG using mermaid.render() API
+ * - Binds diagram interactions (tooltips, clicks) via bindFunctions
+ *
+ * **Features:**
+ * - Full viewport preview
+ * - Theme-aware rendering (dark/light)
+ * - Error handling with user-friendly message
+ * - Close button with mix-blend-difference for visibility
+ * - Centered SVG with responsive sizing
+ *
+ * @example
+ * ```svelte
+ * <DialogMermaidPreview
+ *   bind:open={showPreview}
+ *   code={mermaidSourceCode}
+ * />
+ * ```
+ */
+export { default as DialogMermaidPreview } from './DialogMermaidPreview.svelte';
