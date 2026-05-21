@@ -63,7 +63,7 @@ static std::string test_baseline(struct llama_model * model, const struct common
     auto tokens = common_tokenize(ctx.get(), params.prompt, true);
 
     auto n_past = 0;
-    if (!common_prompt_batch_decode(ctx.get(), tokens, n_past, params.n_batch, params.out_file, true)) {
+    if (!common_prompt_batch_decode(ctx.get(), tokens, (int)tokens.size(), n_past, params.n_batch, params.out_file, true)) {
         LOG_ERR("%s: failed to decode prompt\n", __func__);
         return {};
     }

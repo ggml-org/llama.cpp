@@ -929,7 +929,8 @@ void common_batch_add(
 // tokens from memory, so this approach works across all model architectures.
 bool common_prompt_batch_decode(
               struct llama_context * ctx,
-    const std::vector<llama_token> & embd,
+    const std::vector<llama_token> & all_tokens,
+                               int   n_tokens,
                                int & n_past,
                                int   n_batch,
                   std::string_view   state_path,
