@@ -779,9 +779,13 @@ llama_model_zaya::graph::graph(const llama_model & model, const llm_graph_params
             cb(router_probs, "router_probs", il);
 
             /*
-             * zaya.py ref: L387-389 (MOD skip expert handling)
+             * zaya.py ref: L459-469 (MOD skip expert handling)
              *
              * gate_probs = router_probs[:, :n_expert]  // exclude skip expert from routing
+             *
+             * Note: the skip expert (index n_expert) has a -1.0 bias in
+             * balancing_biases, making it practically never selected during
+             * inference with topk=1.
              */
             ggml_tensor * gate_probs = ggml_cont(ctx0,
                     ggml_view_2d(ctx0, router_probs, n_expert, n_tokens, router_probs->nb[1], 0));
