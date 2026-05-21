@@ -260,7 +260,8 @@ class GraniteHybridModel(Mamba2Model, GraniteMoeModel):
         assert self.d_inner % d_head == 0, f"SSM inner size {self.d_inner} not a multiple of head dim {d_head}"
 
     def set_vocab(self):
-        self.hparams["pad_vocab_size_multiple"] = 8
+        # For models with no ssm layers, don't pad for mamba2
+        self.hparams["pad_vocab_size_multiple"] = 8 if self._ssm_layers else 1
         Mamba2Model.set_vocab(self)
 
 
