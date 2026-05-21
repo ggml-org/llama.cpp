@@ -598,7 +598,7 @@ class tinyBLAS {
             ggml_threadpool_chunk_set(params->threadpool, params->nth);
         }
 
-        ggml_barrier(params->threadpool);
+        ggml_barrier(params->threadpool, params->ith);
 
         int64_t job = params->ith;
         while (job < nb_job) {
@@ -627,7 +627,7 @@ class tinyBLAS {
             job = ggml_threadpool_chunk_add(params->threadpool, 1);
         }
 
-        ggml_barrier(params->threadpool);
+        ggml_barrier(params->threadpool, params->ith);
         return;
     }
 
@@ -1164,7 +1164,7 @@ class tinyBLAS_RVV {
             ggml_threadpool_chunk_set(params->threadpool, params->nth);
         }
 
-        ggml_barrier(params->threadpool);
+        ggml_barrier(params->threadpool, params->ith);
 
         int64_t job = params->ith;
         while (job < nb_job) {
@@ -1193,7 +1193,7 @@ class tinyBLAS_RVV {
             job = ggml_threadpool_chunk_add(params->threadpool, 1);
         }
 
-        ggml_barrier(params->threadpool);
+        ggml_barrier(params->threadpool, params->ith);
         return;
     }
 

@@ -2431,7 +2431,7 @@ void ggml_backend_amx_mul_mat(const ggml_compute_params * params, struct ggml_te
         });
  // }
 
-    ggml_barrier(params->threadpool);
+    ggml_barrier(params->threadpool, params->ith);
 
     if (M == 1) {
         // MB = 1 and handle 8 tiles in each block

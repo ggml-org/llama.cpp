@@ -509,6 +509,14 @@ struct ggml_threadpool {
     uint32_t     poll;        // Polling level (0 - no polling)
 
     enum ggml_status ec;
+
+    // per-thread timing accumulators (indexed by thread id, size = n_threads)
+    int64_t  * t_compute_us;
+    int64_t  * t_barrier_us;
+    int64_t  * t_poll_us;
+    int64_t  * t_idle_us;
+    uint64_t * n_compute_ops;
+    uint64_t * n_barrier_ops;
 };
 
 // Per-thread state
@@ -580,7 +588,7 @@ struct ggml_state {
 
 static struct ggml_state g_state = {0};
 
-void ggml_barrier(struct ggml_threadpool * tp) {
+void ggml_barrier(struct ggml_threadpool * tp, int ith) {
     int n_threads = atomic_load_explicit(&tp->n_graph, memory_order_relaxed) & GGML_THREADPOOL_N_THREADS_MASK;
     if (n_threads == 1) {
         return;
@@ -607,25 +615,33 @@ void ggml_barrier(struct ggml_threadpool * tp) {
     }
 
     // wait for other threads
-
-    // Phase 1: brief spin (uses existing poll parameter, same scale as poll_for_work)
     {
-        const uint64_t n_rounds = 1024UL * 128 * tp->poll;
-        for (uint64_t i = 0; i < n_rounds; i++) {
-            if (atomic_load_explicit(&tp->n_barrier_passed, memory_order_acquire) != n_passed) {
-                break;
-            }
-            ggml_thread_cpu_relax();
-        }
-    }
+        const int64_t t_barrier_start = ggml_time_us();
 
-    // Phase 2: sleep on condition variable if threads still haven't arrived
-    while (atomic_load_explicit(&tp->n_barrier_passed, memory_order_acquire) == n_passed) {
-        ggml_mutex_lock_shared(&tp->mutex);
-        // Timed wait to avoid missing the broadcast (spurious wakeup protection)
-        // 1ms timeout — last thread also increments n_barrier_passed, so we'll see it
-        ggml_cond_wait_timeout(&tp->cond, &tp->mutex, 1000);
-        ggml_mutex_unlock_shared(&tp->mutex);
+        // Phase 1: brief spin (uses existing poll parameter, same scale as poll_for_work)
+        {
+            const uint64_t n_rounds = 1024UL * 128 * tp->poll;
+            for (uint64_t i = 0; i < n_rounds; i++) {
+                if (atomic_load_explicit(&tp->n_barrier_passed, memory_order_acquire) != n_passed) {
+                    break;
+                }
+                ggml_thread_cpu_relax();
+            }
+        }
+
+        // Phase 2: sleep on condition variable if threads still haven't arrived
+        while (atomic_load_explicit(&tp->n_barrier_passed, memory_order_acquire) == n_passed) {
+            ggml_mutex_lock_shared(&tp->mutex);
+            // Timed wait to avoid missing the broadcast (spurious wakeup protection)
+            // 1ms timeout — last thread also increments n_barrier_passed, so we'll see it
+            ggml_cond_wait_timeout(&tp->cond, &tp->mutex, 1000);
+            ggml_mutex_unlock_shared(&tp->mutex);
+        }
+
+        atomic_fetch_add_explicit(&tp->t_barrier_us[ith],
+            ggml_time_us() - t_barrier_start, memory_order_relaxed);
+        atomic_fetch_add_explicit(&tp->n_barrier_ops[ith],
+            1, memory_order_relaxed);
     }
 
     // exit barrier (full seq-cst fence)
@@ -1388,7 +1404,7 @@ UseGgmlGemm1:;
         atomic_store_explicit(&params->threadpool->current_chunk, nth, memory_order_relaxed);
     }
 
-    ggml_barrier(params->threadpool);
+    ggml_barrier(params->threadpool, params->ith);
 
 #if GGML_USE_LLAMAFILE
     if (src1->type != vec_dot_type) {
@@ -1669,7 +1685,7 @@ static void ggml_compute_forward_mul_mat_id(
         *current_chunk_ctr = nth;
     }
 
-    ggml_barrier(params->threadpool);
+    ggml_barrier(params->threadpool, params->ith);
 
     for (int cur_a = 0; cur_a < n_as; ++cur_a) {
         const int64_t cne1 = matrix_row_counts[cur_a];
@@ -2710,6 +2726,40 @@ static void ggml_thread_cpumask_next(const bool * global_mask, bool * local_mask
     }
 }
 
+void ggml_threadpool_print_timings(struct ggml_threadpool * tp) {
+    if (!tp) return;
+
+    const int n_threads = tp->n_threads;
+
+    GGML_LOG_INFO("\n=== CPU Threadpool Timing (per thread) ===\n");
+    GGML_LOG_INFO("  Thread | t_compute_us | t_barrier_us | t_poll_us | t_idle_us | n_compute | n_barrier\n");
+
+    for (int i = 0; i < n_threads; i++) {
+        GGML_LOG_INFO("  %7d | %12" PRId64 " | %12" PRId64 " | %11" PRId64 " | %11" PRId64 " | %9" PRIu64 " | %9" PRIu64 "\n",
+            i,
+            tp->t_compute_us[i],
+            tp->t_barrier_us[i],
+            tp->t_poll_us[i],
+            tp->t_idle_us[i],
+            tp->n_compute_ops[i],
+            tp->n_barrier_ops[i]);
+    }
+    GGML_LOG_INFO("================================================\n\n");
+}
+
+void ggml_threadpool_reset_timings(struct ggml_threadpool * tp) {
+    if (!tp) return;
+
+    const size_t timing_size = sizeof(int64_t) * tp->n_threads;
+    const size_t count_size  = sizeof(uint64_t) * tp->n_threads;
+    memset(tp->t_compute_us, 0, timing_size);
+    memset(tp->t_barrier_us, 0, timing_size);
+    memset(tp->t_poll_us,    0, timing_size);
+    memset(tp->t_idle_us,    0, timing_size);
+    memset(tp->n_compute_ops,    0, count_size);
+    memset(tp->n_barrier_ops,    0, count_size);
+}
+
 void ggml_threadpool_free(struct ggml_threadpool* threadpool) {
     if (!threadpool) return;
 
@@ -2735,6 +2785,17 @@ void ggml_threadpool_free(struct ggml_threadpool* threadpool) {
     ggml_mutex_destroy(&threadpool->mutex);
     ggml_cond_destroy(&threadpool->cond);
 #endif // GGML_USE_OPENMP
+
+    // Print timing summary on shutdown
+    ggml_threadpool_print_timings(threadpool);
+
+    // Free timing arrays
+    ggml_aligned_free(threadpool->t_compute_us, sizeof(int64_t) * n_threads);
+    ggml_aligned_free(threadpool->t_barrier_us, sizeof(int64_t) * n_threads);
+    ggml_aligned_free(threadpool->t_poll_us,    sizeof(int64_t) * n_threads);
+    ggml_aligned_free(threadpool->t_idle_us,    sizeof(int64_t) * n_threads);
+    ggml_aligned_free(threadpool->n_compute_ops,    sizeof(uint64_t) * n_threads);
+    ggml_aligned_free(threadpool->n_barrier_ops,    sizeof(uint64_t) * n_threads);
 
     const size_t workers_size = sizeof(struct ggml_compute_state) * n_threads;
     ggml_aligned_free(threadpool->workers, workers_size);
@@ -3102,7 +3163,7 @@ static thread_ret_t ggml_graph_compute_thread(void * data) {
         }
 
         if (node_n + 1 < cgraph->n_nodes) {
-            ggml_barrier(state->threadpool);
+            ggml_barrier(state->threadpool, state->ith);
         }
     }
 
@@ -3112,7 +3173,7 @@ static thread_ret_t ggml_graph_compute_thread(void * data) {
     GGML_PRINT_DEBUG("thread #%d compute-done cplan %p last-graph %d\n", state->ith, (const void *)cplan, state->last_graph);
 #endif
 
-    ggml_barrier(state->threadpool);
+    ggml_barrier(state->threadpool, state->ith);
 
 #ifdef GGML_USE_CPU_RISCV64_SPACEMIT
     ggml_backend_cpu_riscv64_spacemit_clear_numa_thread_affinity_threaded(state->ith);
@@ -3214,10 +3275,21 @@ static thread_ret_t ggml_graph_compute_secondary_thread(void* data) {
         // Check if there is new work
         // The main thread is the only one that can dispatch new work
 
-        ggml_graph_compute_check_for_work(state);
+        {
+            const int64_t t_poll_start = ggml_time_us();
+            ggml_graph_compute_check_for_work(state);
+            atomic_fetch_add_explicit(&threadpool->t_poll_us[state->ith],
+                ggml_time_us() - t_poll_start, memory_order_relaxed);
+        }
         if (state->pending) {
             state->pending = false;
+
+            const int64_t t_compute_start = ggml_time_us();
             ggml_graph_compute_thread(state);
+            atomic_fetch_add_explicit(&threadpool->t_compute_us[state->ith],
+                ggml_time_us() - t_compute_start, memory_order_relaxed);
+            atomic_fetch_add_explicit(&threadpool->n_compute_ops[state->ith],
+                1, memory_order_relaxed);
         }
     }
 
@@ -3281,6 +3353,24 @@ static struct ggml_threadpool * ggml_threadpool_new_impl(
         threadpool->poll             = tpp->poll;
         threadpool->prio             = tpp->prio;
         threadpool->ec               = GGML_STATUS_SUCCESS;
+
+        // Allocate per-thread timing accumulators (zeroed)
+        {
+            const size_t timing_size = sizeof(int64_t) * tpp->n_threads;
+            const size_t count_size  = sizeof(uint64_t) * tpp->n_threads;
+            threadpool->t_compute_us = (int64_t  *) ggml_aligned_malloc(timing_size);
+            threadpool->t_barrier_us = (int64_t  *) ggml_aligned_malloc(timing_size);
+            threadpool->t_poll_us    = (int64_t  *) ggml_aligned_malloc(timing_size);
+            threadpool->t_idle_us    = (int64_t  *) ggml_aligned_malloc(timing_size);
+            threadpool->n_compute_ops    = (uint64_t *) ggml_aligned_malloc(count_size);
+            threadpool->n_barrier_ops    = (uint64_t *) ggml_aligned_malloc(count_size);
+            memset(threadpool->t_compute_us, 0, timing_size);
+            memset(threadpool->t_barrier_us, 0, timing_size);
+            memset(threadpool->t_poll_us,    0, timing_size);
+            memset(threadpool->t_idle_us,    0, timing_size);
+            memset(threadpool->n_compute_ops,    0, count_size);
+            memset(threadpool->n_barrier_ops,    0, count_size);
+        }
     }
 
     // Allocate and init workers state

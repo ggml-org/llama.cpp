@@ -4349,7 +4349,7 @@ template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS, ggml_type PAR
             ggml_threadpool_chunk_set(params->threadpool, nth);
         }
 
-        ggml_barrier(params->threadpool);
+        ggml_barrier(params->threadpool, params->ith);
 
         // The first chunk comes from our thread_id, the rest will get auto-assigned.
         int current_chunk = ith;
@@ -4466,7 +4466,7 @@ template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS, ggml_type PAR
             }
         }
 
-        ggml_barrier(params->threadpool);
+        ggml_barrier(params->threadpool, params->ith);
 
         // compute each matrix multiplication in sequence
         for (int cur_a = 0; cur_a < n_as; ++cur_a) {

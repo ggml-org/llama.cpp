@@ -529,7 +529,7 @@ static __m256 __lasx_xvreplfr2vr_s(const float val) {
 #endif
 
 // TODO: move to ggml-threading
-void ggml_barrier(struct ggml_threadpool * tp);
+void ggml_barrier(struct ggml_threadpool * tp, int ith);
 
 void ggml_threadpool_chunk_set(struct ggml_threadpool * tp, int value);
 int  ggml_threadpool_chunk_add(struct ggml_threadpool * tp, int value);

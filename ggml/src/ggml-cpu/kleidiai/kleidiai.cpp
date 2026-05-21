@@ -664,7 +664,7 @@ class tensor_traits : public ggml::cpu::tensor_traits {
                              rhs_kxn, bias, nullptr, rhs_packed, 0, nullptr);
             }
 
-            ggml_barrier(params->threadpool);
+            ggml_barrier(params->threadpool, params->ith);
 
             // Matmul (threaded over n)
             {
@@ -695,7 +695,7 @@ class tensor_traits : public ggml::cpu::tensor_traits {
             }
 
             if (batch_idx != batch_size - 1) {
-                ggml_barrier(params->threadpool);
+                ggml_barrier(params->threadpool, params->ith);
             }
         }
 
@@ -1057,7 +1057,7 @@ class tensor_traits : public ggml::cpu::tensor_traits {
                 }
             }
 
-            ggml_barrier(params->threadpool);
+            ggml_barrier(params->threadpool, params->ith);
 
             runtime_slot & slot = runtime[local_slot];
             if (slot.n_cols > 0 && slot.assigned_threads > 0) {
@@ -1103,7 +1103,7 @@ class tensor_traits : public ggml::cpu::tensor_traits {
             }
 
             if (batch_idx != ne12 - 1) {
-                ggml_barrier(params->threadpool);
+                ggml_barrier(params->threadpool, params->ith);
             }
         }
 
