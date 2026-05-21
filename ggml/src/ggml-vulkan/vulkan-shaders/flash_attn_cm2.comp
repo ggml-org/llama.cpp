@@ -100,12 +100,6 @@ f16vec4 faDecodeVVector(const decodeBufFA_V bl_in, const uint blockCoords[2], co
 #endif
 #endif
 
-#if defined(BFLOAT16)
-#define O_TYPE float
-#else
-#define O_TYPE float16_t
-#endif
-
 layout (binding = 0) readonly buffer Q {uint8_t data_q[];};
 layout (binding = 1) readonly buffer K {uint8_t data_k[];};
 layout (binding = 2) readonly buffer V {uint8_t data_v[];};

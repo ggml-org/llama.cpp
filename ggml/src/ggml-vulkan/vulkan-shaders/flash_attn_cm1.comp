@@ -104,11 +104,7 @@ void main() {
     }
     barrier();
 
-#if defined(BFLOAT16)
-    vec4 Of[rows_per_thread][d_per_thread];
-#else
-    FLOAT_TYPEV4 Of[rows_per_thread][d_per_thread];
-#endif
+    O_TYPEV4 Of[rows_per_thread][d_per_thread];
     [[unroll]] for (uint32_t r = 0; r < rows_per_thread; ++r) {
         [[unroll]] for (uint32_t d = 0; d < d_per_thread; ++d) {
             Of[r][d] = FLOAT_TYPEV4(0.0);
