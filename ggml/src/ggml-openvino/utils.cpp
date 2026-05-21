@@ -748,6 +748,43 @@ enum ggml_status naive_compute(ggml_cgraph * cgraph,
 }
 
 namespace {
+ov::Tensor make_contiguous_split_input_tensor(std::shared_ptr<GgmlOvDecoder> ggml_decoder,
+                                              const struct ggml_tensor * ggml_tensor,
+                                              const ov::Shape & input_shape) {
+    const size_t element_size = ggml_type_size(ggml_tensor->type);
+    const size_t block_size   = ggml_blck_size(ggml_tensor->type);
+
+    GGML_ASSERT(block_size == 1 && "non-contiguous split inputs must be plain element types");
+
+    const struct ggml_tensor * source_tensor = ggml_tensor->view_src != nullptr ? ggml_tensor->view_src : ggml_tensor;
+    const size_t source_offset = ggml_tensor->view_src != nullptr ? ggml_tensor->view_offs : 0;
+
+    std::vector<uint8_t> source_data(ggml_nbytes(source_tensor));
+    ggml_backend_tensor_get(source_tensor, source_data.data(), 0, source_data.size());
+
+    ov::Tensor input_tensor(ggml_decoder->get_ov_type(ggml_tensor), input_shape);
+    auto * dst = static_cast<uint8_t *>(input_tensor.data());
+    size_t dst_offset = 0;
+
+    for (size_t i3 = 0; i3 < static_cast<size_t>(ggml_tensor->ne[3]); ++i3) {
+        for (size_t i2 = 0; i2 < static_cast<size_t>(ggml_tensor->ne[2]); ++i2) {
+            for (size_t i1 = 0; i1 < static_cast<size_t>(ggml_tensor->ne[1]); ++i1) {
+                for (size_t i0 = 0; i0 < static_cast<size_t>(ggml_tensor->ne[0]); ++i0) {
+                    const size_t src_offset = source_offset +
+                                              i3 * ggml_tensor->nb[3] +
+                                              i2 * ggml_tensor->nb[2] +
+                                              i1 * ggml_tensor->nb[1] +
+                                              i0 * ggml_tensor->nb[0];
+                    std::memcpy(dst + dst_offset, source_data.data() + src_offset, element_size);
+                    dst_offset += element_size;
+                }
+            }
+        }
+    }
+
+    return input_tensor;
+}
+
 ov::Tensor convert_ggml_input_to_ov(std::shared_ptr<GgmlOvDecoder> ggml_decoder, const std::string & name) {
     const auto * ggml_tensor = ggml_decoder->get_input_ggml_tensor(name);
 
@@ -774,34 +811,8 @@ ov::Tensor convert_ggml_input_to_ov(std::shared_ptr<GgmlOvDecoder> ggml_decoder,
         input_shape = ggml_decoder->get_shape(ggml_tensor);
     }
 
-    //   Add explicit strided-copy reconstruction for PERMUTE and VIEW tensors in split
-    //   models: iterate over all 4 dimensions using `nb[]` strides and `view_offs` to
-    //   copy non-contiguous source data into a contiguous `ov::Tensor` buffer
-    if ((ggml_tensor->op == GGML_OP_PERMUTE) && ggml_decoder->is_splited_model()) {
-        // Create OpenVINO input tensor, the data need to reconstructed based on the view tensor shape & stride
-        ov::Tensor input_tensor(ggml_decoder->get_ov_type(ggml_tensor), input_shape);
-        const auto * src_tensor = ggml_tensor->view_src;
-        std::vector<uint8_t>    data;
-        auto n_bytes = ggml_nbytes(src_tensor);
-        data.resize(n_bytes);
-        ggml_backend_tensor_get(src_tensor, data.data(), 0, n_bytes);
-
-        size_t des_index = 0;
-        for (size_t i0 = 0; i0 < static_cast<size_t>(ggml_tensor->ne[3]); i0++) {
-            for (size_t i1 = 0; i1 < static_cast<size_t>(ggml_tensor->ne[2]); i1++) {
-                for (size_t i2 = 0; i2 < static_cast<size_t>(ggml_tensor->ne[1]); i2++) {
-                    for (size_t i3 = 0; i3 < static_cast<size_t>(ggml_tensor->ne[0]); i3++) {
-                        size_t src_index = ggml_tensor->view_offs + i0 * ggml_tensor->nb[3] + i1 * ggml_tensor->nb[2] +
-                                           i2 * ggml_tensor->nb[1] + i3 * ggml_tensor->nb[0];
-
-                        memcpy(static_cast<char *>(input_tensor.data()) + des_index,
-                               reinterpret_cast<const char *>(data.data()) + src_index, ggml_tensor->nb[0]);
-                        des_index += ggml_tensor->nb[0];
-                    }
-                }
-            }
-        }
-        return input_tensor;
+    if (ggml_decoder->is_splited_model() && !ggml_is_contiguous(ggml_tensor)) {
+        return make_contiguous_split_input_tensor(ggml_decoder, ggml_tensor, input_shape);
     }
 
     auto input_tensor = ov::Tensor(ggml_decoder->get_ov_type(ggml_tensor), input_shape, input_data);
