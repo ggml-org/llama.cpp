@@ -31,13 +31,14 @@ target_link_libraries(${TARGET} PUBLIC llama-common mtmd ${CMAKE_THREAD_LIBS_INI
 
 set(TARGET llama-server-impl)
 
-add_library(${TARGET} STATIC
+add_library(${TARGET}
     server.cpp
     server-http.cpp
     server-http.h
     server-models.cpp
     server-models.h
 )
+set_target_properties(${TARGET} PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
 
 target_include_directories(${TARGET} PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_include_directories(${TARGET} PRIVATE ../mtmd ${CMAKE_SOURCE_DIR})
