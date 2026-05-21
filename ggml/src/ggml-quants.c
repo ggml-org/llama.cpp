@@ -2349,6 +2349,12 @@ size_t quantize_tq2_0(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst,
     return nrow * row_size;
 }
 
+size_t quantize_q4_t(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrow, int64_t n_per_row, const float * quant_weights) {
+    (void)quant_weights; // not used
+    quantize_row_q4_t_ref(src, dst, (int64_t)nrow*n_per_row);
+    return nrow * ggml_row_size(GGML_TYPE_Q4_T, n_per_row);
+}
+
 void dequantize_row_tq1_0(const block_tq1_0 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
     assert(k % QK_K == 0);
     const int64_t nb = k / QK_K;
@@ -2683,6 +2689,22 @@ void dequantize_row_iq4_xs(const block_iq4_xs * GGML_RESTRICT x, float * GGML_RE
             }
             y  += 32;
             qs += 16;
+        }
+    }
+}
+
+void dequantize_row_q4_t(const block_q4_t * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
+    const int nb = k / QK_T;
+
+    for (int i = 0; i < nb; i++) {
+        const float d = GGML_FP16_TO_FP32(x[i].d);
+
+        for (int j = 0; j < QK_T/2; ++j) {
+            const int x0 = (x[i].qs[j] & 0x0F) - 8;
+            const int x1 = (x[i].qs[j] >>   4) - 8;
+
+            y[i*QK_T + j + 0   ] = x0*d;
+            y[i*QK_T + j + QK_T/2] = x1*d;
         }
     }
 }
@@ -5153,6 +5175,39 @@ void quantize_row_iq2_s_ref(const float * GGML_RESTRICT x, block_iq2_s * GGML_RE
     quantize_iq2_s(x, y, 1, k, NULL);
 }
 
+void quantize_row_q4_t_ref(const float * GGML_RESTRICT x, block_q4_t * GGML_RESTRICT y, int64_t k) {
+    const int nb = k / QK_T;
+
+    for (int i = 0; i < nb; i++) {
+        float amax = 0.0f; // absolute max
+        float max  = 0.0f;
+
+        for (int j = 0; j < QK_T; j++) {
+            const float v = x[i*QK_T + j];
+            if (amax < fabsf(v)) {
+                amax = fabsf(v);
+                max  = v;
+            }
+        }
+
+        const float d  = max / -8;
+        const float id = d ? 1.0f/d : 0.0f;
+
+        y[i].d = GGML_FP32_TO_FP16(d);
+
+        for (int j = 0; j < QK_T/2; ++j) {
+            const float x0 = x[i*QK_T +     j]*id;
+            const float x1 = x[i*QK_T + QK_T/2 + j]*id;
+
+            const uint8_t xi0 = MIN(15, (int8_t)(x0 + 8.5f));
+            const uint8_t xi1 = MIN(15, (int8_t)(x1 + 8.5f));
+
+            y[i].qs[j]  = xi0;
+            y[i].qs[j] |= xi1 << 4;
+        }
+    }
+}
+
 // =============================== data validation
 
 static bool validate_float(float f, size_t i) {
@@ -5427,6 +5482,10 @@ bool ggml_validate_row_data(enum ggml_type type, const void * data, size_t nbyte
         case GGML_TYPE_TQ2_0:
             {
                 VALIDATE_ROW_DATA_D_F16_IMPL(block_tq2_0, data, nb);
+            } break;
+        case GGML_TYPE_Q4_T:
+            {
+                VALIDATE_ROW_DATA_D_F16_IMPL(block_q4_t, data, nb);
             } break;
         case GGML_TYPE_IQ1_S:
             {

@@ -112,6 +112,39 @@ void quantize_row_tq2_0(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, 
     quantize_row_tq2_0_ref(x, y, k);
 }
 
+//======================== TurboQuant Q4_T (de)-quantization ==========================
+
+void quantize_row_q4_t(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t k) {
+    const int nb = k / QK_T;
+    block_q4_t * GGML_RESTRICT y = vy;
+
+    for (int i = 0; i < nb; ++i) {
+        float amax = 0.0f;
+        float max  = 0.0f;
+
+        for (int j = 0; j < QK_T; ++j) {
+            const float v = x[i * QK_T + j];
+            if (amax < fabsf(v)) {
+                amax = fabsf(v);
+                max  = v;
+            }
+        }
+
+        const float d  = max / -8.0f;
+        const float id = d != 0.0f ? 1.0f / d : 0.0f;
+
+        y[i].d = GGML_FP32_TO_FP16(d);
+
+        for (int j = 0; j < QK_T / 2; ++j) {
+            const float x0 = x[i * QK_T +     j] * id;
+            const float x1 = x[i * QK_T + QK_T/2 + j] * id;
+
+            y[i].qs[j]  = MIN(15, (int8_t)(x0 + 8.5f));
+            y[i].qs[j] |= MIN(15, (int8_t)(x1 + 8.5f)) << 4;
+        }
+    }
+}
+
 //===================================== Q8_K ==============================================
 
 void quantize_row_q8_K_generic(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k) {
@@ -239,6 +272,53 @@ void ggml_vec_dot_q4_1_q8_1_generic(int n, float * GGML_RESTRICT s, size_t bs, c
 
         int sumi = sumi0 + sumi1;
         sumf += (GGML_CPU_FP16_TO_FP32(x[ib].d)*GGML_CPU_FP16_TO_FP32(y[ib].d))*sumi + GGML_CPU_FP16_TO_FP32(x[ib].m)*GGML_CPU_FP16_TO_FP32(y[ib].s);
+    }
+
+    *s = sumf;
+}
+
+// TurboQuant Q4_T dot product with Q8_0 keys — handles 256-element blocks (QK_T)
+void ggml_vec_dot_q4_t_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    const int qk = QK_T;
+    const int nb_x = n / qk;
+
+    assert(n % qk == 0);
+    assert(nrc == 1);
+    UNUSED(nrc);
+    UNUSED(bx);
+    UNUSED(by);
+    UNUSED(bs);
+
+    const block_q4_t * GGML_RESTRICT x = vx;
+    const block_q8_0 * GGML_RESTRICT y = vy;
+
+    float sumf = 0;
+
+    for (int ib = 0; ib < nb_x; ++ib) {
+        int sumi[8] = {0};
+
+        // Each of the 128 qs bytes encodes 2 elements, total qk=256 elements.
+        // qs[j] stores: low_nibble = element at position j, high_nibble = element at position (qk/2+j):
+        for (int j = 0; j < qk/2; ++j) {
+            const uint8_t qs = x[ib].qs[j];
+            const int v0 = (qs & 0x0F) - 8;
+            const int v1 = (qs >>    4) - 8;
+
+            // Element positions within the qk=256 block: k0=j, k1=(qk/2+j)
+            const int k0 = j;
+            const int k1 = (qk >> 1) + j;
+
+            // Map to y-group (0-7) and position within that Q8_0 block:
+            sumi[k0 >> 5] += v0 * y[(ib << 3) + (k0 >> 5)].qs[k0 & 31];
+            sumi[k1 >> 5] += v1 * y[(ib << 3) + (k1 >> 5)].qs[k1 & 31];
+        }
+
+        const float scale_x = GGML_CPU_FP16_TO_FP32(x[ib].d);
+        for (int g = 0; g < 8; ++g) {
+            if (sumi[g]) {
+                sumf += (float)sumi[g] * scale_x * GGML_CPU_FP16_TO_FP32(y[(ib << 3) + g].d);
+            }
+        }
     }
 
     *s = sumf;
