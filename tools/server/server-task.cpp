@@ -12,17 +12,21 @@
 
 using json = nlohmann::ordered_json;
 
-static int32_t text_n_tokens_to_server_tokens_n_tokens(const server_tokens & tokens, int32_t text_n_tokens) {
+static int32_t map_text_tokens_to_server_tokens(const server_tokens & tokens, int32_t text_n_tokens) {
     int32_t n_text_tokens = 0;
+
     for (size_t n_server_tokens = 0; n_server_tokens < tokens.size(); ++n_server_tokens) {
         if (n_text_tokens == text_n_tokens) {
             return (int32_t) n_server_tokens;
         }
+
         if (tokens[n_server_tokens] != LLAMA_TOKEN_NULL) {
             n_text_tokens++;
         }
     }
-    return n_text_tokens == text_n_tokens ? (int32_t) tokens.size() : -1;
+
+    GGML_ASSERT(n_text_tokens == text_n_tokens);
+    return (int32_t) tokens.size();
 }
 
 //
@@ -651,7 +655,7 @@ task_params server_task::params_from_json_cmpl(
                 const std::string prefix = prompt.substr(0, (size_t) last_user_byte_pos);
                 const auto prefix_tokens = common_tokenize(vocab, prefix, true, true);
                 const int32_t checkpoint_n_tokens =
-                    text_n_tokens_to_server_tokens_n_tokens(tokens, (int32_t) prefix_tokens.size());
+                    map_text_tokens_to_server_tokens(tokens, (int32_t) prefix_tokens.size());
 
                 SRV_INF("message_spans: last user message: byte_pos=%d, text_n_tokens=%zu, checkpoint_n_tokens=%d\n",
                         last_user_byte_pos, prefix_tokens.size(), checkpoint_n_tokens);
