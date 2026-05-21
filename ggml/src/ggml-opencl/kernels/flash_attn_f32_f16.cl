@@ -1849,6 +1849,260 @@ __kernel void flash_attn_f32_f16_q1_vec_mq_split(
     }
 }
 
+// K-image variant of _q1_vec_mq_split.
+//
+// K is bound as a __read_only image1d_buffer_t (CL_RGBA, CL_HALF_FLOAT —
+// 8-byte pixels = 1 half4) over a sub-buffer covering the K cache for
+// this call. Adreno's texture cache is a separate BW path from L2 and
+// dramatically outperforms __global K reads at long context (the
+// _x8_gqa4_img port at the mul_mat layer gave +244% on KQ decode at
+// d=16k). FA's split-path K access pattern (NSG_SPLIT subgroups each
+// stream a contiguous slice of n_kv) is the same shape, so the same
+// texture-cache win should apply.
+//
+// V stays on __global: V's inner loop is long (DV_VEC iters per K
+// position) and arithmetic-intensity hides V latency, so the texture
+// cache adds latency without enough memory-stall to mask (the
+// _y8_gqa_img port at mul_mat regressed -13% for this reason).
+//
+// k_offset is NOT a kernel arg: the sub-buffer is created host-side
+// with CL_BUFFER_CREATE_TYPE_REGION (origin = offset_k), so image
+// addressing is relative to the sub-buffer start. Pixel pitches come
+// from the byte strides via (k_nb >> 3) since each pixel = 8 B.
+
+REQD_SUBGROUP_SIZE_64
+__kernel void flash_attn_f32_f16_q1_vec_mq_split_k_img(
+    const global void * q_void, ulong q_offset,
+    __read_only image1d_buffer_t k_img,
+    const global void * v_void, ulong v_offset,
+    const float scale,
+    const int n_q,
+    const int n_kv,
+    const int n_head,
+    const ulong q_nb1, const ulong q_nb2, const ulong q_nb3,
+    const ulong k_nb1, const ulong k_nb2, const ulong k_nb3,
+    const ulong v_nb1, const ulong v_nb2, const ulong v_nb3,
+    const float max_bias,
+    const float m0,
+    const float m1,
+    const int n_head_log2,
+    const float logit_softcap,
+    const int n_head_kv,
+    const global void * mask_void,
+    const ulong mask_offset,
+    const ulong mask_nb1,
+    const ulong mask_nb2,
+    const ulong mask_nb3,
+    const int mask_ne2,
+    const int mask_ne3,
+    global float * partial_void,
+    const int n_splits,
+    const int kv_per_split
+) {
+    const int tid              = get_local_id(0);
+    const int sgid             = tid / Q1_WG_SIZE;
+    const int tid_sg           = tid % Q1_WG_SIZE;
+    const int kvhead_batch_idx = get_global_id(1);
+    const int split_q_idx      = get_global_id(2);
+    const int split_idx        = split_q_idx % n_splits;
+    const int q_idx            = split_q_idx / n_splits;
+
+    const int batch_idx   = kvhead_batch_idx / n_head_kv;
+    const int head_kv_idx = kvhead_batch_idx % n_head_kv;
+
+    const int kv_start = split_idx * kv_per_split;
+    const int kv_end   = min(kv_start + kv_per_split, n_kv);
+
+    const ulong record_stride = (ulong) FA_PARTIAL_FLOATS;
+
+    if (kv_start >= kv_end) {
+        if (tid == 0) {
+            #pragma unroll
+            for (int h = 0; h < MQ_GQA; ++h) {
+                const int head_idx = head_kv_idx * MQ_GQA + h;
+                const ulong rec_idx = ((((ulong) batch_idx * n_head + head_idx) * n_q + q_idx)
+                                       * n_splits + split_idx);
+                global float * rec = partial_void + rec_idx * record_stride;
+                rec[0] = -INFINITY;
+                rec[1] = 0.0f;
+            }
+        }
+        return;
+    }
+
+    const global char * q_base = (const global char *) q_void + q_offset;
+    const global char * v_base = (const global char *) v_void + v_offset;
+
+    __local ACC_TYPE4 q_shared[MQ_GQA * DK_VEC];
+    for (int i = tid; i < MQ_GQA * DK_VEC; i += MQ_SPLIT_WG_SIZE) {
+        const int h        = i / DK_VEC;
+        const int k        = i % DK_VEC;
+        const int head_idx = head_kv_idx * MQ_GQA + h;
+        const ulong q_row_offset = batch_idx * q_nb3 + head_idx * q_nb2 + (ulong) q_idx * q_nb1;
+        const global Q_DATA_TYPE4 * q_ptr = (const global Q_DATA_TYPE4 *) (q_base + q_row_offset);
+        q_shared[h * DK_VEC + k] = CONVERT_Q_ACC4(q_ptr[k]);
+    }
+    barrier(CLK_LOCAL_MEM_FENCE);
+
+    float slope[MQ_GQA];
+    #pragma unroll
+    for (int h = 0; h < MQ_GQA; ++h) {
+        slope[h] = get_alibi_slope(max_bias, head_kv_idx * MQ_GQA + h, n_head_log2, m0, m1);
+    }
+
+    const global char * mask_base[MQ_GQA];
+    if (mask_void != NULL) {
+        const int mask_batch_idx = batch_idx % mask_ne3;
+        const global char * mask_base_b = (const global char *) mask_void + mask_offset +
+                                          mask_batch_idx * mask_nb3 +
+                                          (ulong) q_idx * mask_nb1;
+        #pragma unroll
+        for (int h = 0; h < MQ_GQA; ++h) {
+            const int head_idx      = head_kv_idx * MQ_GQA + h;
+            const int mask_head_idx = head_idx % mask_ne2;
+            mask_base[h] = mask_base_b + mask_head_idx * mask_nb2;
+        }
+    } else {
+        #pragma unroll
+        for (int h = 0; h < MQ_GQA; ++h) mask_base[h] = NULL;
+    }
+
+    ACC_TYPE4 o_acc[MQ_GQA][Q1V_DV_PER_THREAD];
+    ACC_TYPE  m_i[MQ_GQA];
+    ACC_TYPE  l_i[MQ_GQA];
+    #pragma unroll
+    for (int h = 0; h < MQ_GQA; ++h) {
+        m_i[h] = -INFINITY;
+        l_i[h] = 0.0f;
+        #pragma unroll
+        for (int i = 0; i < Q1V_DV_PER_THREAD; ++i) o_acc[h][i] = (ACC_TYPE4)(0.0f);
+    }
+
+    // K pitches in pixel units. Pixel = 1 half4 = 8 B → byte_stride >> 3.
+    const int pitch_px_row   = (int)(k_nb1 >> 3);
+    const int pitch_px_head  = (int)(k_nb2 >> 3);
+    const int pitch_px_batch = (int)(k_nb3 >> 3);
+
+    const int kv_len    = kv_end - kv_start;
+    const int kv_per_sg = (kv_len + MQ_NSG_SPLIT - 1) / MQ_NSG_SPLIT;
+    const int kv_lo     = kv_start + sgid * kv_per_sg;
+    const int kv_hi     = min(kv_end, kv_lo + kv_per_sg);
+
+    for (int k_idx = kv_lo; k_idx < kv_hi; ++k_idx) {
+        const int k_row_px = batch_idx * pitch_px_batch +
+                             head_kv_idx * pitch_px_head +
+                             k_idx * pitch_px_row;
+
+        const ulong v_row_off = batch_idx * v_nb3 + head_kv_idx * v_nb2 + k_idx * v_nb1;
+        const global KV_DATA_TYPE4 * v_ptr = (const global KV_DATA_TYPE4 *) (v_base + v_row_off);
+
+        ACC_TYPE4 dot4[MQ_GQA];
+        #pragma unroll
+        for (int h = 0; h < MQ_GQA; ++h) dot4[h] = (ACC_TYPE4)(0.0f);
+        for (int k = tid_sg; k < DK_VEC; k += Q1_WG_SIZE) {
+            const half4     k_h4  = read_imageh(k_img, k_row_px + k);
+            const ACC_TYPE4 k_vec = CONVERT_KV_ACC4(k_h4);
+            #pragma unroll
+            for (int h = 0; h < MQ_GQA; ++h) {
+                dot4[h] = mad(q_shared[h * DK_VEC + k], k_vec, dot4[h]);
+            }
+        }
+
+        ACC_TYPE score[MQ_GQA];
+        #pragma unroll
+        for (int h = 0; h < MQ_GQA; ++h) {
+            const ACC_TYPE dot_partial = dot4[h].s0 + dot4[h].s1 + dot4[h].s2 + dot4[h].s3;
+            ACC_TYPE s = sub_group_reduce_add(dot_partial) * scale;
+            if (mask_base[h] != NULL) {
+                const global MASK_DATA_TYPE * mask_ptr = (const global MASK_DATA_TYPE *) mask_base[h];
+                s += slope[h] * (ACC_TYPE) mask_ptr[k_idx];
+            }
+            if (logit_softcap > 0.0f) {
+                s = logit_softcap * tanh(s / logit_softcap);
+            }
+            score[h] = s;
+        }
+
+        ACC_TYPE p_h[MQ_GQA];
+        ACC_TYPE sp_h[MQ_GQA];
+        #pragma unroll
+        for (int h = 0; h < MQ_GQA; ++h) {
+            const ACC_TYPE m_new = max(m_i[h], score[h]);
+            sp_h[h] = native_exp(m_i[h] - m_new);
+            p_h[h]  = native_exp(score[h] - m_new);
+            l_i[h]  = l_i[h] * sp_h[h] + p_h[h];
+            m_i[h]  = m_new;
+        }
+
+        int idx = 0;
+        for (int dv_idx = tid_sg; dv_idx < DV_VEC; dv_idx += Q1_WG_SIZE, ++idx) {
+            const ACC_TYPE4 v_vec = CONVERT_KV_ACC4(v_ptr[dv_idx]);
+            #pragma unroll
+            for (int h = 0; h < MQ_GQA; ++h) {
+                o_acc[h][idx] = mad(p_h[h], v_vec, o_acc[h][idx] * sp_h[h]);
+            }
+        }
+    }
+
+    __local ACC_TYPE  sg_m[MQ_GQA][MQ_NSG_SPLIT];
+    __local ACC_TYPE  sg_l[MQ_GQA][MQ_NSG_SPLIT];
+    __local ACC_TYPE4 sg_o[MQ_NSG_SPLIT][DV_VEC];
+
+    if (tid_sg == 0) {
+        #pragma unroll
+        for (int h = 0; h < MQ_GQA; ++h) {
+            sg_m[h][sgid] = m_i[h];
+            sg_l[h][sgid] = l_i[h];
+        }
+    }
+
+    #pragma unroll
+    for (int h = 0; h < MQ_GQA; ++h) {
+        {
+            int idx = 0;
+            for (int dv_idx = tid_sg; dv_idx < DV_VEC; dv_idx += Q1_WG_SIZE, ++idx) {
+                sg_o[sgid][dv_idx] = o_acc[h][idx];
+            }
+        }
+        barrier(CLK_LOCAL_MEM_FENCE);
+
+        if (sgid == 0) {
+            const int head_idx = head_kv_idx * MQ_GQA + h;
+
+            ACC_TYPE m_c = sg_m[h][0];
+            #pragma unroll
+            for (int s = 1; s < MQ_NSG_SPLIT; ++s) {
+                m_c = max(m_c, sg_m[h][s]);
+            }
+            ACC_TYPE l_c = 0.0f;
+            #pragma unroll
+            for (int s = 0; s < MQ_NSG_SPLIT; ++s) {
+                l_c += sg_l[h][s] * native_exp(sg_m[h][s] - m_c);
+            }
+
+            const ulong rec_idx = ((((ulong) batch_idx * n_head + head_idx) * n_q + q_idx)
+                                   * n_splits + split_idx);
+            global float  * rec   = partial_void + rec_idx * record_stride;
+            global float4 * rec_o = (global float4 *) (rec + 2);
+
+            if (tid_sg == 0) {
+                rec[0] = (float) m_c;
+                rec[1] = (float) l_c;
+            }
+            for (int dv_idx = tid_sg; dv_idx < DV_VEC; dv_idx += Q1_WG_SIZE) {
+                ACC_TYPE4 o_merged = (ACC_TYPE4)(0.0f);
+                #pragma unroll
+                for (int s = 0; s < MQ_NSG_SPLIT; ++s) {
+                    const ACC_TYPE alpha = native_exp(sg_m[h][s] - m_c);
+                    o_merged = mad((ACC_TYPE4)(alpha), sg_o[s][dv_idx], o_merged);
+                }
+                rec_o[dv_idx] = o_merged;
+            }
+        }
+        barrier(CLK_LOCAL_MEM_FENCE);
+    }
+}
+
 
 __kernel void flash_attn_f32_f16_q1_split(
     const global void * q_void, ulong q_offset,
