@@ -14809,7 +14809,8 @@ static void ggml_vk_bench_pair(
         //    device via dma-buf fd — true zero-copy if PCIe P2P works.
         //    Setup (export/import) is outside the timing loop.
         // =================================================================
-        if (dev0->external_memory_dma_buf && dev1->external_memory_dma_buf) {
+        if (dev0->external_memory_dma_buf && dev1->external_memory_dma_buf &&
+            !((dev0->vendor_id == VK_VENDOR_ID_NVIDIA) != (dev1->vendor_id == VK_VENDOR_ID_NVIDIA))) {
             bool setup_ok = true;
 
             // Create exportable source buffer on dev0
