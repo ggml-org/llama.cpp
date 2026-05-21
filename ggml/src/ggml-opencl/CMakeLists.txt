@@ -110,6 +110,12 @@ set(GGML_OPENCL_KERNELS
     gemv_moe_q5_0_f32_ns
     gemm_moe_q5_1_f32_ns
     gemv_moe_q5_1_f32_ns
+    gemm_moe_q4_k_f32_ns
+    gemv_moe_q4_k_f32_ns
+    gemm_moe_q5_k_f32_ns
+    gemv_moe_q5_k_f32_ns
+    gemm_moe_q6_k_f32_ns
+    gemv_moe_q6_k_f32_ns
     gemm_moe_mxfp4_f32
     gemv_moe_mxfp4_f32
     gemm_moe_mxfp4_f32_ns

@@ -2,9 +2,16 @@
 	import { ArrowDown } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 
-	let { container }: { container: HTMLDivElement | undefined } = $props();
+	interface Props {
+		container: HTMLDivElement | undefined;
+		hasProcessingInfoVisible: boolean;
+	}
+
+	let { container, hasProcessingInfoVisible }: Props = $props();
 
 	let show = $state(false);
+
+	let buttonBottom = $derived(hasProcessingInfoVisible ? '2rem' : '0');
 
 	function checkVisibility() {
 		if (!container) return;
@@ -34,14 +41,20 @@
 	});
 </script>
 
-<div class="pointer-events-auto relative z-50 mx-auto mb-4 flex max-w-[48rem] justify-center">
+<div
+	class="pointer-events-{show
+		? 'auto'
+		: 'none'} relative z-50 mx-auto mb-4 flex max-w-[48rem] justify-center"
+>
 	<Button
 		onclick={scrollToBottom}
 		variant="secondary"
 		size="icon"
-		class="h-10 w-10 rounded-full bg-background/80 shadow-lg backdrop-blur-sm transition-all duration-200 hover:bg-muted/80"
+		class="pointer-events-all absolute h-10 w-10 rounded-full bg-background/80 shadow-lg backdrop-blur-sm transition-all duration-200 hover:bg-muted/80"
+		style="bottom: {buttonBottom}; transform: translateY({show ? '0' : '2rem'}); opacity: {show
+			? 1
+			: 0};"
 		aria-label="Scroll to bottom"
-		style="transform: translateY({show ? '0' : '20px'}); opacity: {show ? 1 : 0};"
 	>
 		<ArrowDown class="h-4 w-4" />
 	</Button>
