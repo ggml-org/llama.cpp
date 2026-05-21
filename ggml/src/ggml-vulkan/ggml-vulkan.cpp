@@ -15161,6 +15161,354 @@ static void ggml_vk_bench_pair(
             if (gtt_buffer) dev0->device.destroyBuffer(gtt_buffer);
             if (gtt_mem) dev0->device.freeMemory(gtt_mem);
         }
+
+        // =================================================================
+        // 6c. DMA-BUF GTT (reversed): GTT buffer allocated on dev1 (dest),
+        //     imported by dev0 (source). Covers cases where dev1's exports
+        //     are importable but dev0's are not.
+        // =================================================================
+        if (dev0->external_memory_dma_buf && dev1->external_memory_dma_buf) {
+            bool setup_ok = true;
+
+            vk::Buffer gtt_buffer{};
+            vk::DeviceMemory gtt_mem{};
+            vk::Buffer imported_buffer{};
+            vk::DeviceMemory imported_mem{};
+
+            // Allocate exportable host-visible buffer on dev1
+            vk::ExternalMemoryBufferCreateInfo ext_bci{};
+            ext_bci.handleTypes = vk::ExternalMemoryHandleTypeFlagBits::eDmaBufEXT;
+            vk::BufferCreateInfo bci{};
+            bci.size = size;
+            bci.usage = vk::BufferUsageFlagBits::eTransferSrc | vk::BufferUsageFlagBits::eTransferDst;
+            bci.setPNext(&ext_bci);
+
+            try {
+                gtt_buffer = dev1->device.createBuffer(bci);
+                vk::MemoryRequirements mem_req = dev1->device.getBufferMemoryRequirements(gtt_buffer);
+
+                vk::PhysicalDeviceMemoryProperties mem_props = dev1->physical_device.getMemoryProperties();
+                uint32_t mem_type = UINT32_MAX;
+                for (uint32_t m = 0; m < mem_props.memoryTypeCount; m++) {
+                    if (!(mem_req.memoryTypeBits & (1u << m))) continue;
+                    auto flags = mem_props.memoryTypes[m].propertyFlags;
+                    if ((flags & vk::MemoryPropertyFlagBits::eHostVisible) &&
+                        (flags & vk::MemoryPropertyFlagBits::eHostCoherent) &&
+                        !(flags & vk::MemoryPropertyFlagBits::eDeviceLocal)) {
+                        mem_type = m;
+                        break;
+                    }
+                }
+                if (mem_type == UINT32_MAX) {
+                    for (uint32_t m = 0; m < mem_props.memoryTypeCount; m++) {
+                        if (!(mem_req.memoryTypeBits & (1u << m))) continue;
+                        auto flags = mem_props.memoryTypes[m].propertyFlags;
+                        if ((flags & vk::MemoryPropertyFlagBits::eHostVisible) &&
+                            (flags & vk::MemoryPropertyFlagBits::eHostCoherent)) {
+                            mem_type = m;
+                            break;
+                        }
+                    }
+                }
+                if (mem_type == UINT32_MAX) {
+                    throw vk::SystemError(vk::make_error_code(vk::Result::eErrorInitializationFailed));
+                }
+
+                vk::ExportMemoryAllocateInfo export_ai{};
+                export_ai.handleTypes = vk::ExternalMemoryHandleTypeFlagBits::eDmaBufEXT;
+                vk::MemoryAllocateInfo alloc{};
+                alloc.allocationSize = mem_req.size;
+                alloc.memoryTypeIndex = mem_type;
+                alloc.setPNext(&export_ai);
+                gtt_mem = dev1->device.allocateMemory(alloc);
+                dev1->device.bindBufferMemory(gtt_buffer, gtt_mem, 0);
+            } catch (vk::SystemError& e) {
+                std::cerr << "  dmabuf_gtt_rev        : SKIPPED (GTT alloc: " << e.what() << ")" << std::endl;
+                if (gtt_buffer) dev1->device.destroyBuffer(gtt_buffer);
+                if (gtt_mem) dev1->device.freeMemory(gtt_mem);
+                gtt_buffer = vk::Buffer{};
+                gtt_mem = vk::DeviceMemory{};
+                setup_ok = false;
+            }
+
+            // Export fd from dev1 and import on dev0
+            if (setup_ok) do {
+                vk::MemoryGetFdInfoKHR gi{};
+                gi.memory = gtt_mem;
+                gi.handleType = vk::ExternalMemoryHandleTypeFlagBits::eDmaBufEXT;
+                int dmabuf_fd = -1;
+                try {
+                    dmabuf_fd = dev1->device.getMemoryFdKHR(gi);
+                } catch (vk::SystemError& e) {
+                    std::cerr << "  dmabuf_gtt_rev        : SKIPPED (export fd: " << e.what() << ")" << std::endl;
+                    setup_ok = false; break;
+                }
+
+                vk::MemoryFdPropertiesKHR fd_props;
+                try {
+                    fd_props = dev0->device.getMemoryFdPropertiesKHR(
+                        vk::ExternalMemoryHandleTypeFlagBits::eDmaBufEXT, dmabuf_fd);
+                } catch (vk::SystemError& e) {
+                    std::cerr << "  dmabuf_gtt_rev        : SKIPPED (fd props: " << e.what() << ")" << std::endl;
+                    close(dmabuf_fd);
+                    setup_ok = false; break;
+                }
+
+                if (fd_props.memoryTypeBits == 0) {
+                    std::cerr << "  dmabuf_gtt_rev        : SKIPPED (no importable memory types on source)" << std::endl;
+                    close(dmabuf_fd);
+                    setup_ok = false; break;
+                }
+
+                vk::ExternalMemoryBufferCreateInfo imp_ext_bci{};
+                imp_ext_bci.handleTypes = vk::ExternalMemoryHandleTypeFlagBits::eDmaBufEXT;
+                vk::BufferCreateInfo imp_bci{};
+                imp_bci.size = size;
+                imp_bci.usage = vk::BufferUsageFlagBits::eTransferSrc | vk::BufferUsageFlagBits::eTransferDst;
+                imp_bci.setPNext(&imp_ext_bci);
+                imported_buffer = dev0->device.createBuffer(imp_bci);
+
+                vk::MemoryRequirements imp_req = dev0->device.getBufferMemoryRequirements(imported_buffer);
+                uint32_t mem_type_idx = UINT32_MAX;
+                for (uint32_t m = 0; m < 32; m++) {
+                    if ((fd_props.memoryTypeBits & (1u << m)) && (imp_req.memoryTypeBits & (1u << m))) {
+                        mem_type_idx = m;
+                        break;
+                    }
+                }
+                if (mem_type_idx == UINT32_MAX) {
+                    std::cerr << "  dmabuf_gtt_rev        : SKIPPED (fd_props=0x" << std::hex << fd_props.memoryTypeBits
+                              << " buf_req=0x" << imp_req.memoryTypeBits << std::dec << " — no overlap)" << std::endl;
+                    close(dmabuf_fd);
+                    dev0->device.destroyBuffer(imported_buffer);
+                    imported_buffer = vk::Buffer{};
+                    setup_ok = false; break;
+                }
+
+                vk::ImportMemoryFdInfoKHR import_info{};
+                import_info.handleType = vk::ExternalMemoryHandleTypeFlagBits::eDmaBufEXT;
+                import_info.fd = dmabuf_fd;
+                vk::MemoryAllocateInfo alloc_info{};
+                alloc_info.allocationSize = imp_req.size;
+                alloc_info.memoryTypeIndex = mem_type_idx;
+                alloc_info.setPNext(&import_info);
+                try {
+                    imported_mem = dev0->device.allocateMemory(alloc_info);
+                } catch (vk::SystemError& e) {
+                    std::cerr << "  dmabuf_gtt_rev        : SKIPPED (import alloc: " << e.what() << ")" << std::endl;
+                    dev0->device.destroyBuffer(imported_buffer);
+                    imported_buffer = vk::Buffer{};
+                    setup_ok = false; break;
+                }
+                dev0->device.bindBufferMemory(imported_buffer, imported_mem, 0);
+            } while (false);
+
+            if (setup_ok) {
+                std::vector<double> times;
+                bool run_ok = true;
+                for (size_t i = 0; i < num_it + warmup && run_ok; i++) {
+                    auto begin = std::chrono::high_resolution_clock::now();
+
+                    try {
+                        // Hop 1: dev0 VRAM -> GTT buffer (imported from dev1)
+                        {
+                            std::lock_guard<std::recursive_mutex> guard(dev0->mutex);
+                            vk_context subctx = ggml_vk_create_temporary_context(dev0->transfer_queue.cmd_pool);
+                            ggml_vk_ctx_begin(dev0, subctx);
+                            VkBufferCopy bc{ 0, 0, size };
+                            vkCmdCopyBuffer(subctx->s->buffer->buf, buf_src->buffer, imported_buffer, 1, &bc);
+                            ggml_vk_ctx_end(subctx);
+                            ggml_vk_submit(subctx, dev0->fence);
+                            VK_CHECK(dev0->device.waitForFences({ dev0->fence }, true, UINT64_MAX), "dmabuf_gtt_rev hop1");
+                            dev0->device.resetFences({ dev0->fence });
+                        }
+                        // Hop 2: GTT buffer (own) -> dev1 VRAM
+                        {
+                            std::lock_guard<std::recursive_mutex> guard(dev1->mutex);
+                            vk_context subctx = ggml_vk_create_temporary_context(dev1->transfer_queue.cmd_pool);
+                            ggml_vk_ctx_begin(dev1, subctx);
+                            VkBufferCopy bc{ 0, 0, size };
+                            vkCmdCopyBuffer(subctx->s->buffer->buf, gtt_buffer, buf_dst->buffer, 1, &bc);
+                            ggml_vk_ctx_end(subctx);
+                            ggml_vk_submit(subctx, dev1->fence);
+                            VK_CHECK(dev1->device.waitForFences({ dev1->fence }, true, UINT64_MAX), "dmabuf_gtt_rev hop2");
+                            dev1->device.resetFences({ dev1->fence });
+                        }
+                    } catch (vk::SystemError& e) {
+                        std::cerr << "  dmabuf_gtt_rev        : FAILED (" << e.what() << ")" << std::endl;
+                        run_ok = false; break;
+                    }
+
+                    auto end = std::chrono::high_resolution_clock::now();
+                    if (i >= warmup) times.push_back(std::chrono::duration_cast<std::chrono::microseconds>(end - begin).count() / 1000.0);
+                }
+                if (run_ok) record("dmabuf_gtt_rev", size, times);
+            }
+
+            if (imported_buffer) dev0->device.destroyBuffer(imported_buffer);
+            if (imported_mem) dev0->device.freeMemory(imported_mem);
+            if (gtt_buffer) dev1->device.destroyBuffer(gtt_buffer);
+            if (gtt_mem) dev1->device.freeMemory(gtt_mem);
+        }
+
+        // =================================================================
+        // 6d. DMA-BUF P2P (reversed): dest device exports VRAM, source
+        //     device imports and writes into it via P2P.
+        // =================================================================
+        if (dev0->external_memory_dma_buf && dev1->external_memory_dma_buf &&
+            !((dev0->vendor_id == VK_VENDOR_ID_NVIDIA) != (dev1->vendor_id == VK_VENDOR_ID_NVIDIA))) {
+            bool setup_ok = true;
+
+            // Create exportable VRAM buffer on dev1 (destination)
+            vk::Buffer exp_buffer{};
+            vk::DeviceMemory exp_mem{};
+
+            vk::ExternalMemoryBufferCreateInfo exp_ext_bci{};
+            exp_ext_bci.handleTypes = vk::ExternalMemoryHandleTypeFlagBits::eDmaBufEXT;
+            vk::BufferCreateInfo exp_bci{};
+            exp_bci.size = size;
+            exp_bci.usage = vk::BufferUsageFlagBits::eTransferSrc | vk::BufferUsageFlagBits::eTransferDst;
+            exp_bci.setPNext(&exp_ext_bci);
+
+            try {
+                exp_buffer = dev1->device.createBuffer(exp_bci);
+                vk::MemoryRequirements exp_mem_req = dev1->device.getBufferMemoryRequirements(exp_buffer);
+
+                vk::PhysicalDeviceMemoryProperties mem_props = dev1->physical_device.getMemoryProperties();
+                uint32_t exp_mem_type = UINT32_MAX;
+                for (uint32_t m = 0; m < mem_props.memoryTypeCount; m++) {
+                    if ((exp_mem_req.memoryTypeBits & (1u << m)) &&
+                        (mem_props.memoryTypes[m].propertyFlags & vk::MemoryPropertyFlagBits::eDeviceLocal)) {
+                        exp_mem_type = m;
+                        break;
+                    }
+                }
+                if (exp_mem_type == UINT32_MAX) {
+                    throw vk::SystemError(vk::make_error_code(vk::Result::eErrorInitializationFailed));
+                }
+
+                vk::ExportMemoryAllocateInfo export_ai{};
+                export_ai.handleTypes = vk::ExternalMemoryHandleTypeFlagBits::eDmaBufEXT;
+                vk::MemoryAllocateInfo exp_alloc{};
+                exp_alloc.allocationSize = exp_mem_req.size;
+                exp_alloc.memoryTypeIndex = exp_mem_type;
+                exp_alloc.setPNext(&export_ai);
+                exp_mem = dev1->device.allocateMemory(exp_alloc);
+                dev1->device.bindBufferMemory(exp_buffer, exp_mem, 0);
+            } catch (vk::SystemError& e) {
+                std::cerr << "  dmabuf_p2p_rev        : SKIPPED (dst alloc: " << e.what() << ")" << std::endl;
+                if (exp_buffer) dev1->device.destroyBuffer(exp_buffer);
+                if (exp_mem) dev1->device.freeMemory(exp_mem);
+                setup_ok = false;
+            }
+
+            // Export fd from dev1, import on dev0
+            vk::Buffer imported_buffer{};
+            vk::DeviceMemory imported_mem{};
+
+            if (setup_ok) do {
+                vk::MemoryGetFdInfoKHR gi{};
+                gi.memory = exp_mem;
+                gi.handleType = vk::ExternalMemoryHandleTypeFlagBits::eDmaBufEXT;
+                int dmabuf_fd = -1;
+                try {
+                    dmabuf_fd = dev1->device.getMemoryFdKHR(gi);
+                } catch (vk::SystemError& e) {
+                    std::cerr << "  dmabuf_p2p_rev        : SKIPPED (export fd: " << e.what() << ")" << std::endl;
+                    setup_ok = false; break;
+                }
+
+                vk::MemoryFdPropertiesKHR fd_props;
+                try {
+                    fd_props = dev0->device.getMemoryFdPropertiesKHR(
+                        vk::ExternalMemoryHandleTypeFlagBits::eDmaBufEXT, dmabuf_fd);
+                } catch (vk::SystemError& e) {
+                    std::cerr << "  dmabuf_p2p_rev        : SKIPPED (fd props: " << e.what() << ")" << std::endl;
+                    close(dmabuf_fd);
+                    setup_ok = false; break;
+                }
+
+                if (fd_props.memoryTypeBits == 0) {
+                    std::cerr << "  dmabuf_p2p_rev        : SKIPPED (no importable memory types on source)" << std::endl;
+                    close(dmabuf_fd);
+                    setup_ok = false; break;
+                }
+
+                vk::ExternalMemoryBufferCreateInfo imp_ext_bci{};
+                imp_ext_bci.handleTypes = vk::ExternalMemoryHandleTypeFlagBits::eDmaBufEXT;
+                vk::BufferCreateInfo imp_bci{};
+                imp_bci.size = size;
+                imp_bci.usage = vk::BufferUsageFlagBits::eTransferDst;
+                imp_bci.setPNext(&imp_ext_bci);
+                imported_buffer = dev0->device.createBuffer(imp_bci);
+
+                vk::MemoryRequirements mem_req = dev0->device.getBufferMemoryRequirements(imported_buffer);
+                uint32_t mem_type_idx = UINT32_MAX;
+                for (uint32_t m = 0; m < 32; m++) {
+                    if ((fd_props.memoryTypeBits & (1u << m)) && (mem_req.memoryTypeBits & (1u << m))) {
+                        mem_type_idx = m;
+                        break;
+                    }
+                }
+                if (mem_type_idx == UINT32_MAX) {
+                    std::cerr << "  dmabuf_p2p_rev        : SKIPPED (fd_props=0x" << std::hex << fd_props.memoryTypeBits
+                              << " buf_req=0x" << mem_req.memoryTypeBits << std::dec << " — no overlap)" << std::endl;
+                    close(dmabuf_fd);
+                    dev0->device.destroyBuffer(imported_buffer);
+                    imported_buffer = vk::Buffer{};
+                    setup_ok = false; break;
+                }
+
+                vk::ImportMemoryFdInfoKHR import_info{};
+                import_info.handleType = vk::ExternalMemoryHandleTypeFlagBits::eDmaBufEXT;
+                import_info.fd = dmabuf_fd;
+                vk::MemoryAllocateInfo alloc_info{};
+                alloc_info.allocationSize = mem_req.size;
+                alloc_info.memoryTypeIndex = mem_type_idx;
+                alloc_info.setPNext(&import_info);
+                try {
+                    imported_mem = dev0->device.allocateMemory(alloc_info);
+                } catch (vk::SystemError& e) {
+                    std::cerr << "  dmabuf_p2p_rev        : SKIPPED (import alloc: " << e.what() << ")" << std::endl;
+                    dev0->device.destroyBuffer(imported_buffer);
+                    imported_buffer = vk::Buffer{};
+                    setup_ok = false; break;
+                }
+                dev0->device.bindBufferMemory(imported_buffer, imported_mem, 0);
+            } while (false);
+
+            if (setup_ok) {
+                std::vector<double> times;
+                bool run_ok = true;
+                for (size_t i = 0; i < num_it + warmup && run_ok; i++) {
+                    auto begin = std::chrono::high_resolution_clock::now();
+
+                    try {
+                        // Single hop: dev0 copies VRAM -> imported dev1 VRAM (P2P write)
+                        vk_context subctx = ggml_vk_create_temporary_context(dev0->transfer_queue.cmd_pool);
+                        ggml_vk_ctx_begin(dev0, subctx);
+                        VkBufferCopy bc{ 0, 0, size };
+                        vkCmdCopyBuffer(subctx->s->buffer->buf, buf_src->buffer, imported_buffer, 1, &bc);
+                        ggml_vk_ctx_end(subctx);
+                        ggml_vk_submit(subctx, dev0->fence);
+                        VK_CHECK(dev0->device.waitForFences({ dev0->fence }, true, UINT64_MAX), "dmabuf_p2p_rev");
+                        dev0->device.resetFences({ dev0->fence });
+                    } catch (vk::SystemError& e) {
+                        std::cerr << "  dmabuf_p2p_rev        : FAILED (copy: " << e.what() << ")" << std::endl;
+                        run_ok = false; break;
+                    }
+
+                    auto end = std::chrono::high_resolution_clock::now();
+                    if (i >= warmup) times.push_back(std::chrono::duration_cast<std::chrono::microseconds>(end - begin).count() / 1000.0);
+                }
+                if (run_ok) record("dmabuf_p2p_rev", size, times);
+            }
+
+            if (imported_buffer) dev0->device.destroyBuffer(imported_buffer);
+            if (imported_mem) dev0->device.freeMemory(imported_mem);
+            if (exp_buffer) dev1->device.destroyBuffer(exp_buffer);
+            if (exp_mem) dev1->device.freeMemory(exp_mem);
+        }
 #endif
 
         // =================================================================
