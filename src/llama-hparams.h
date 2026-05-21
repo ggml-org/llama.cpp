@@ -261,6 +261,9 @@ struct llama_hparams {
     // >=0 => input embedding index for deepstack injection
     std::array<int32_t, LLAMA_MAX_LAYERS> deepstack_mapping_arr;
 
+    // zaya: FP32 output logits for numerical stability
+    bool zaya_high_prec = true;
+
     // gemma4 per-layer embedding
     uint32_t n_embd_per_layer = 0;
 
