@@ -1114,7 +1114,7 @@ ggml_type llama_kv_cache::type_k() const {
 }
 
 ggml_type llama_kv_cache::type_v() const {
-    return layers[0].v->type;
+    return layers[0].v ? layers[0].v->type : GGML_TYPE_COUNT;
 }
 
 uint32_t llama_kv_cache::get_n_kv(const slot_info & sinfo) const {
