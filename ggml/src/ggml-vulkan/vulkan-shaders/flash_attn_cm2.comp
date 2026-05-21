@@ -63,7 +63,6 @@ float16_t faDecodeV(const decodeBufFA_V bl_in, const uint blockCoords[2], const 
         default: return float16_t(0);
     }
 }
-#endif
 
 // V=4 vector decode for K/V; dispatches to per-format _v decoders.
 f16vec4 faDecodeKVector(const decodeBufFA_K bl_in, const uint blockCoords[2], const uint coordInBlock[2]) {
@@ -98,6 +97,13 @@ f16vec4 faDecodeVVector(const decodeBufFA_V bl_in, const uint blockCoords[2], co
 #else
 #define FADECODEK , faDecodeK
 #define FADECODEV , faDecodeV
+#endif
+#endif
+
+#if defined(BFLOAT16)
+#define O_TYPE float
+#else
+#define O_TYPE float16_t
 #endif
 
 layout (binding = 0) readonly buffer Q {uint8_t data_q[];};
@@ -216,11 +222,7 @@ void main() {
     Qf16 *= FLOAT_TYPE(p.scale);
 #endif
 
-#if defined(BFLOAT16)
-    coopmat<float, gl_ScopeWorkgroup, Br, HSV_pad, gl_MatrixUseAccumulator> O = coopmat<float, gl_ScopeWorkgroup, Br, HSV_pad, gl_MatrixUseAccumulator>(0);
-#else
-    coopmat<float16_t, gl_ScopeWorkgroup, Br, HSV_pad, gl_MatrixUseAccumulator> O = coopmat<float16_t, gl_ScopeWorkgroup, Br, HSV_pad, gl_MatrixUseAccumulator>(0);
-#endif
+    coopmat<O_TYPE, gl_ScopeWorkgroup, Br, HSV_pad, gl_MatrixUseAccumulator> O = coopmat<O_TYPE, gl_ScopeWorkgroup, Br, HSV_pad, gl_MatrixUseAccumulator>(0);
 
     coopmat<ACC_TYPE, gl_ScopeWorkgroup, Br, Bc, gl_MatrixUseAccumulator> L, M;
 
@@ -403,11 +405,7 @@ void main() {
         // resize eM by using smear/reduce
         coopMatReduceNV(eMdiag, eM, gl_CooperativeMatrixReduceRowNV, smearReduce);
 
-#if defined(BFLOAT16)
-        O *= coopmat<float, gl_ScopeWorkgroup, Br, HSV_pad, gl_MatrixUseAccumulator>(eMdiag);
-#else
-        O *= coopmat<float16_t, gl_ScopeWorkgroup, Br, HSV_pad, gl_MatrixUseAccumulator>(eMdiag);
-#endif
+        O *= coopmat<O_TYPE, gl_ScopeWorkgroup, Br, HSV_pad, gl_MatrixUseAccumulator>(eMdiag);
         O = coopMatMulAdd(P_A, V, O);
     }
 
@@ -456,11 +454,7 @@ void main() {
             if (sink > Mr[i]) {
                 ms = exp(Mr[i] - sink);
 
-#if defined(BFLOAT16)
-                O[i] *= ms;
-#else
-                O[i] *= float16_t(ms);
-#endif
+                O[i] *= O_TYPE(ms);
             } else {
                 vs = exp(sink - Mr[i]);
             }
