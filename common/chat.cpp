@@ -1187,7 +1187,7 @@ static common_chat_params common_chat_params_init_gemma4(const common_chat_templ
     data.supports_thinking  = true;
     data.thinking_start_tag = "<|channel>thought";
     data.thinking_end_tag   = "<channel|>";
-    data.tool_start_tag     = "<tool_call|>";
+    data.tool_start_tag     = "<|tool_call>";
 
     data.preserved_tokens = {
         "<|channel>",
