@@ -1331,7 +1331,7 @@ jobs:
       - name: Package UI
         id: package_ui
         run: |
-          tar -czvf release/llama-${{ steps.tag.outputs.name }}-ui.tar.gz -C ./ui-dist .
+          tar -czvf release/llama-${{ steps.tag.outputs.name }}-ui.tar.gz --transform "s,^\.,llama-${{ steps.tag.outputs.name }}," -C ./ui-dist .
 
       - name: Create release
         id: create_release
