@@ -2005,7 +2005,10 @@ static void kl_divergence(llama_context * ctx, const common_params & params) {
     LOG("Same top p: %6.3lf ± %5.3lf %%\n", 100.0*same_top_p, 100.0*sqrt(same_top_p*(1.0 - same_top_p)/(kld.count - 1)));
 }
 
-int main(int argc, char ** argv) {
+// satisfies -Wmissing-declarations
+int llama_perplexity(int argc, char ** argv);
+
+int llama_perplexity(int argc, char ** argv) {
     std::setlocale(LC_NUMERIC, "C");
 
     common_params params;
