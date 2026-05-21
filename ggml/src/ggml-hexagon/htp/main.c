@@ -87,6 +87,27 @@ AEEResult htp_iface_open(const char * uri, remote_handle64 * handle) {
         }
     }
 
+#if __HVX_ARCH__ >= 75
+    {
+        // Power on HMX and set HMX clock
+        HAP_power_request_t request;
+        memset(&request, 0, sizeof(HAP_power_request_t));
+        request.type = HAP_power_set_HMX_v2;
+        request.hmx_v2.set_power     = TRUE;
+        request.hmx_v2.power_up      = TRUE;
+        request.hmx_v2.set_clock     = TRUE;
+        request.hmx_v2.target_corner = HAP_DCVS_EXP_VCORNER_MAX;
+        request.hmx_v2.min_corner    = HAP_DCVS_EXP_VCORNER_MAX;
+        request.hmx_v2.max_corner    = HAP_DCVS_EXP_VCORNER_MAX;
+        request.hmx_v2.perf_mode     = HAP_CLK_PERF_HIGH;
+        FARF(ALWAYS, "Setting HMX clock\n");
+        err = HAP_power_set((void *) ctx, &request);
+        if (err != AEE_SUCCESS) {
+            FARF(ERROR, "Error setting HMX clock.");
+            return err;
+        }
+    }
+#else
     {
         // Power on HMX
         HAP_power_request_t request;
@@ -94,28 +115,9 @@ AEEResult htp_iface_open(const char * uri, remote_handle64 * handle) {
         request.type         = HAP_power_set_HMX;
         request.hmx.power_up = TRUE;
         FARF(ALWAYS, "Powering HMX on\n");
-        err = HAP_power_set((void *) &ctx, &request);
+        err = HAP_power_set((void *) ctx, &request);
         if (err != AEE_SUCCESS) {
             FARF(ERROR, "Error powering on HMX.");
-            return err;
-        }
-    }
-
-#if __HVX_ARCH__ >= 75
-    {
-        // Set HMX clock
-        HAP_power_request_t request;
-        memset(&request, 0, sizeof(HAP_power_request_t));
-        request.type = HAP_power_set_HMX_v2;
-        request.hmx_v2.set_clock = TRUE;
-        request.hmx_v2.target_corner = HAP_DCVS_EXP_VCORNER_MAX;
-        request.hmx_v2.min_corner = HAP_DCVS_EXP_VCORNER_MAX;
-        request.hmx_v2.max_corner = HAP_DCVS_EXP_VCORNER_MAX;
-        request.hmx_v2.perf_mode = HAP_CLK_PERF_HIGH;
-        FARF(ALWAYS, "Setting HMX clock\n");
-        err = HAP_power_set((void *) &ctx, &request);
-        if (err != AEE_SUCCESS) {
-            FARF(ERROR, "Error setting HMX clock.");
             return err;
         }
     }
@@ -534,6 +536,7 @@ static int execute_op(struct htp_ops_context * octx) {
         case HTP_OP_ADD_ID:
             return op_binary(octx);
 
+        case HTP_OP_NORM:
         case HTP_OP_RMS_NORM:
         case HTP_OP_SCALE:
         case HTP_OP_SQR:
@@ -595,8 +598,14 @@ static int execute_op(struct htp_ops_context * octx) {
         case HTP_OP_SOLVE_TRI:
             return op_solve_tri(octx);
 
+        case HTP_OP_PAD:
+            return op_pad(octx);
+
         case HTP_OP_GATED_DELTA_NET:
             return op_gated_delta_net(octx);
+
+        case HTP_OP_TRI:
+            return op_tri(octx);
 
         case HTP_OP_INVALID:
             break;
