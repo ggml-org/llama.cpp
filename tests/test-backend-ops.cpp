@@ -8089,61 +8089,6 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_cpy(GGML_TYPE_I32, GGML_TYPE_I32, {256, 1, 4, 1}, {-1,-1,-1,-1}, {1, 2, 0, 3}, {0, 0, 0, 0}));
     test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {256, 1, 4, 1}, {-1,-1,-1,-1}, {1, 2, 0, 3}, {0, 0, 0, 0}));
 
-    // CPY - test the new Metal kernel logic (nth = min(nk0*ne01, 256), row packing nrptg, early return i01>=ne01)
-    // Small ne0 (nk0=1) with various ne01 values (tests nth = min(nk0*ne01, 256))
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {1, 1, 1, 1}));
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {1, 2, 1, 1}));
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {1, 4, 1, 1}));
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {1, 8, 1, 1}));
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {1, 16, 1, 1}));
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {1, 32, 1, 1}));
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {1, 64, 1, 1}));
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {1, 128, 1, 1}));
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {1, 256, 1, 1}));
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {1, 512, 1, 1}));
-    // Small ne0 with large ne01 (tests nrptg row packing)
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {2, 128, 1, 1}));
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {2, 256, 1, 1}));
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {4, 64, 1, 1}));
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {4, 128, 1, 1}));
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {8, 32, 1, 1}));
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {8, 64, 1, 1}));
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {16, 16, 1, 1}));
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {16, 32, 1, 1}));
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {32, 8, 1, 1}));
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {32, 64, 1, 1}));
-    // ne0*ne01 near 256 boundary (tests nth = min(nk0*ne01, 256))
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {1, 255, 1, 1}));
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {1, 257, 1, 1}));
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {2, 128, 1, 1})); // nk0*ne01 = 256
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {2, 129, 1, 1})); // nk0*ne01 = 258
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {4, 64, 1, 1}));  // nk0*ne01 = 256
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {4, 65, 1, 1}));  // nk0*ne01 = 260
-    // Large ne0 with small ne01 (tests nrptg logic)
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {1024, 1, 1, 1}));
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {2048, 1, 1, 1}));
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {4096, 1, 1, 1}));
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {1024, 2, 1, 1}));
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {1024, 4, 1, 1}));
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {2048, 8, 1, 1}));
-    // Multi-dimensional with row packing
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {4, 64, 2, 1}));
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {4, 64, 4, 1}));
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {8, 32, 2, 3}));
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {16, 16, 4, 2}));
-    // Permute src with various ne01 (tests the i01 calculation with tpitg.y)
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {256, 2, 3, 4}, {-1,-1,-1,-1}, {0, 2, 1, 3}));
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {4, 256, 3, 1}, {-1,-1,-1,-1}, {0, 2, 1, 3}));
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {8, 128, 2, 1}, {-1,-1,-1,-1}, {0, 2, 1, 3}));
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {16, 64, 2, 1}, {-1,-1,-1,-1}, {0, 2, 1, 3}));
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {2, 128, 4, 3}, {-1,-1,-1,-1}, {0, 2, 1, 3}));
-    // Permute dst with various ne01
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {4, 64, 1, 1}, {-1,-1,-1,-1}, {0, 0, 0, 0}, {0, 2, 1, 3}));
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {8, 32, 1, 1}, {-1,-1,-1,-1}, {0, 0, 0, 0}, {0, 2, 1, 3}));
-    // Both src and dst permuted
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {4, 64, 2, 1}, {-1,-1,-1,-1}, {0, 2, 1, 3}, {0, 2, 1, 3}));
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {8, 32, 2, 3}, {-1,-1,-1,-1}, {0, 2, 1, 3}, {0, 2, 1, 3}));
-
     // CPY - different src/dst shapes (reshaping via CPY)
     // 1D -> 2D
     test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {64, 1, 1, 1}, {8, 8, 1, 1}));
@@ -8877,17 +8822,6 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         }
     }
 
-    // Test concat with small ne0 values to exercise the Metal kernel row batching logic
-    // When ne0 < 1024, multiple rows are batched into a single threadgroup
-    // Key cases: ne0 values that trigger different nrptg calculations
-    for (int64_t ne0 : {1, 2, 7, 31, 32, 63, 64, 127, 128, 255, 256, 511, 512, 1023, 1024, 1025}) {
-        // Test with various ne1 values including edge cases for batching
-        for (int64_t ne1 : {1, 2, 10, 100, 1000}) {
-            test_cases.emplace_back(new test_concat(GGML_TYPE_F32, {ne0, ne1, 3, 2}, ne1 + 1, 0, 0));
-            test_cases.emplace_back(new test_concat(GGML_TYPE_F32, {ne0, ne1, 3, 2}, ne1 + 1, 1, 0));
-        }
-    }
-
     for (ggml_sort_order order : {GGML_SORT_ORDER_ASC, GGML_SORT_ORDER_DESC}) {
         for (uint32_t i = 4; i <= 1024*1024; i *= 2) {
             test_cases.emplace_back(new test_argsort(GGML_TYPE_F32, {i-1, 1, 1, 1}));
@@ -8984,58 +8918,23 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_acc(GGML_TYPE_F32, {256, 17, 2, 3}, {256, 16, 2, 3}, 1));
     test_cases.emplace_back(new test_acc(GGML_TYPE_F32, {256, 17, 2, 3}, {128, 16, 2, 3}, 2));
     test_cases.emplace_back(new test_acc(GGML_TYPE_F32, {256, 17, 2, 3}, {64, 16, 2, 3}, 3));
+
     test_cases.emplace_back(new test_pad());
     test_cases.emplace_back(new test_pad(GGML_TYPE_F32, {33, 17, 2, 1}, 4, 3, true)); // circular
     test_cases.emplace_back(new test_pad_ext());
-
-    // PAD - test the new Metal kernel logic (1024-block processing, k0/i1 split, nth_max=64)
-    // ne0 exactly at 1024 boundary
     test_cases.emplace_back(new test_pad(GGML_TYPE_F32, {1024, 1, 1, 1}, 1, 0, false));
     test_cases.emplace_back(new test_pad(GGML_TYPE_F32, {1024, 2, 1, 1}, 1, 0, false));
     test_cases.emplace_back(new test_pad(GGML_TYPE_F32, {1024, 16, 1, 1}, 0, 1, false));
-    // ne0 just below 1024 (partial block)
     test_cases.emplace_back(new test_pad(GGML_TYPE_F32, {1023, 1, 1, 1}, 1, 0, false));
     test_cases.emplace_back(new test_pad(GGML_TYPE_F32, {1023, 8, 1, 1}, 1, 0, false));
-    // ne0 just above 1024 (tests nk0 > 1)
     test_cases.emplace_back(new test_pad(GGML_TYPE_F32, {1025, 1, 1, 1}, 1, 0, false));
     test_cases.emplace_back(new test_pad(GGML_TYPE_F32, {1025, 8, 1, 1}, 1, 0, false));
-    // ne0 = 2048 (exactly 2 blocks)
     test_cases.emplace_back(new test_pad(GGML_TYPE_F32, {2048, 1, 1, 1}, 1, 0, false));
     test_cases.emplace_back(new test_pad(GGML_TYPE_F32, {2048, 4, 1, 1}, 1, 0, false));
-    // ne0 = 2049 (3 blocks needed)
     test_cases.emplace_back(new test_pad(GGML_TYPE_F32, {2049, 1, 1, 1}, 1, 0, false));
-    // ne0 very small (tests early break in loop)
-    test_cases.emplace_back(new test_pad(GGML_TYPE_F32, {1, 1, 1, 1}, 1, 0, false));
-    test_cases.emplace_back(new test_pad(GGML_TYPE_F32, {1, 8, 1, 1}, 1, 0, false));
-    test_cases.emplace_back(new test_pad(GGML_TYPE_F32, {2, 1, 1, 1}, 1, 0, false));
-    test_cases.emplace_back(new test_pad(GGML_TYPE_F32, {3, 1, 1, 1}, 1, 0, false));
-    test_cases.emplace_back(new test_pad(GGML_TYPE_F32, {63, 1, 1, 1}, 1, 0, false)); // nth_max-1
-    test_cases.emplace_back(new test_pad(GGML_TYPE_F32, {64, 1, 1, 1}, 1, 0, false)); // nth_max
-    test_cases.emplace_back(new test_pad(GGML_TYPE_F32, {65, 1, 1, 1}, 1, 0, false)); // nth_max+1
-    // Various ne1 values (tests k0/i1 split in threadgroup dispatch)
-    test_cases.emplace_back(new test_pad(GGML_TYPE_F32, {100, 1, 1, 1}, 1, 0, false));
-    test_cases.emplace_back(new test_pad(GGML_TYPE_F32, {100, 2, 1, 1}, 1, 0, false));
-    test_cases.emplace_back(new test_pad(GGML_TYPE_F32, {100, 3, 1, 1}, 1, 0, false));
-    test_cases.emplace_back(new test_pad(GGML_TYPE_F32, {100, 7, 1, 1}, 1, 0, false));
-    test_cases.emplace_back(new test_pad(GGML_TYPE_F32, {100, 16, 1, 1}, 1, 0, false));
-    test_cases.emplace_back(new test_pad(GGML_TYPE_F32, {100, 32, 1, 1}, 1, 0, false));
-    // Large ne1 with ne0 > 1024 (tests nk0*ne1 threadgroup count)
-    test_cases.emplace_back(new test_pad(GGML_TYPE_F32, {2048, 64, 1, 1}, 1, 0, false));
-    test_cases.emplace_back(new test_pad(GGML_TYPE_F32, {1024, 128, 1, 1}, 1, 0, false));
-    // Multi-dimensional (ne2, ne3 > 1)
-    test_cases.emplace_back(new test_pad(GGML_TYPE_F32, {1024, 1, 2, 1}, 1, 0, false));
-    test_cases.emplace_back(new test_pad(GGML_TYPE_F32, {1024, 1, 2, 3}, 1, 0, false));
-    test_cases.emplace_back(new test_pad(GGML_TYPE_F32, {1025, 8, 4, 2}, 1, 1, false));
-    // Large padding
     test_cases.emplace_back(new test_pad(GGML_TYPE_F32, {100, 1, 1, 1}, 100, 0, false));
     test_cases.emplace_back(new test_pad(GGML_TYPE_F32, {100, 1, 1, 1}, 0, 100, false));
     test_cases.emplace_back(new test_pad(GGML_TYPE_F32, {100, 100, 1, 1}, 50, 50, false));
-    // ne0 large, pad_0 = 0 (no padding in dim 0)
-    test_cases.emplace_back(new test_pad(GGML_TYPE_F32, {2048, 1, 1, 1}, 0, 1, false));
-    test_cases.emplace_back(new test_pad(GGML_TYPE_F32, {4096, 4, 1, 1}, 0, 1, false));
-    // ne0 large with large pad
-    test_cases.emplace_back(new test_pad(GGML_TYPE_F32, {1024, 1, 1, 1}, 1024, 0, false));
-    test_cases.emplace_back(new test_pad(GGML_TYPE_F32, {1024, 16, 1, 1}, 512, 1, false));
 
     test_cases.emplace_back(new test_pad_reflect_1d());
     test_cases.emplace_back(new test_pad_reflect_1d(GGML_TYPE_F32, {3000, 384, 4, 1}));
@@ -9351,32 +9250,6 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
     test_cases.emplace_back(new test_cpy(GGML_TYPE_F16, GGML_TYPE_F16, {768*1024, 256, 1, 1}, {-1,-1,-1,-1}, {0, 0, 0, 0}, {0, 0, 0, 0}, true));
     test_cases.emplace_back(new test_cpy(GGML_TYPE_F16, GGML_TYPE_F16, {768, 1024, 256, 1}, {-1,-1,-1,-1}, {0, 0, 0, 0}, {0, 0, 0, 0}, true));
     test_cases.emplace_back(new test_cpy(GGML_TYPE_BF16, GGML_TYPE_BF16, {768, 1024, 256, 1}, {-1,-1,-1,-1}, {0, 0, 0, 0}, {0, 0, 0, 0}, true));
-
-    // CPY - more tests for the new Metal kernel (tpitg ushort3, nrptg row packing)
-    // Very large ne0*ne01 (tests nrptg with many rows)
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {2, 1024, 1, 1}));
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {4, 512, 1, 1}));
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {8, 256, 1, 1}));
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {16, 128, 1, 1}));
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {32, 64, 1, 1}));
-    // Large ne0 with moderate ne01 (tests nrptg logic with larger rows)
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {256, 128, 1, 1}));
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {512, 64, 1, 1}));
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {1024, 32, 1, 1}));
-    // Quantized types with small rows (tests kernel_cpy_f32_q and kernel_cpy_q_f32)
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_Q4_0, {4, 64, 1, 1}));
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_Q4_0, {8, 32, 1, 1}));
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_Q4_0, {16, 16, 1, 1}));
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_Q4_0, GGML_TYPE_F32, {4, 64, 1, 1}));
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_Q4_0, GGML_TYPE_F32, {8, 32, 1, 1}));
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_Q4_0, GGML_TYPE_F32, {16, 16, 1, 1}));
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_Q8_0, {4, 64, 1, 1}));
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_Q8_0, {8, 32, 1, 1}));
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_Q8_0, GGML_TYPE_F32, {4, 64, 1, 1}));
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_Q8_0, GGML_TYPE_F32, {8, 32, 1, 1}));
-    // Quantized with permuted src
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_Q4_0, {256, 2, 3, 4}, {-1,-1,-1,-1}, {0, 2, 1, 3}));
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_Q4_0, GGML_TYPE_F32, {256, 2, 3, 4}, {-1,-1,-1,-1}, {0, 2, 1, 3}));
 
     test_cases.emplace_back(new test_soft_max(GGML_TYPE_F32, {4096, 4096, 5, 1}, false, false, GGML_TYPE_F32, {1, 1}, 1.0f, 0.0f));
     test_cases.emplace_back(new test_soft_max(GGML_TYPE_F32, {12888, 256, 5, 1}, false, false, GGML_TYPE_F32, {1, 1}, 1.0f, 0.0f));
