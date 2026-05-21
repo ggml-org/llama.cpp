@@ -35,11 +35,23 @@ endif()
 set(UI_CPP "${CMAKE_CURRENT_BINARY_DIR}/ui.cpp")
 set(UI_H   "${CMAKE_CURRENT_BINARY_DIR}/ui.h")
 
-add_executable(llama-ui-embed embed.cpp)
-target_compile_features(llama-ui-embed PRIVATE cxx_std_17)
-set_target_properties(llama-ui-embed PROPERTIES
-    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
+# llama-ui-embed is a host tool, need to ensure it is not cross-compiled.
+if(CMAKE_HOST_WIN32)
+    set(LLAMA_UI_EMBED_SUFFIX ".exe")
+else()
+    set(LLAMA_UI_EMBED_SUFFIX "")
+endif()
+
+include(ExternalProject)
+ExternalProject_Add(llama-ui-embed
+    SOURCE_DIR       "${CMAKE_CURRENT_SOURCE_DIR}/embed"
+    CMAKE_ARGS       "-DCMAKE_BUILD_TYPE=Release"
+    BUILD_ALWAYS     TRUE
+    INSTALL_COMMAND  ""
+    BUILD_BYPRODUCTS "<BINARY_DIR>/llama-ui-embed${LLAMA_UI_EMBED_SUFFIX}"
 )
+ExternalProject_Get_Property(llama-ui-embed BINARY_DIR)
+set(LLAMA_UI_EMBED_EXE "${BINARY_DIR}/llama-ui-embed${LLAMA_UI_EMBED_SUFFIX}")
 
 # Run the provisioning script every build so source changes in tools/ui/ are
 # always picked up. The script uses copy_if_different for ui.cpp/ui.h, so the
@@ -54,7 +66,7 @@ add_custom_target(llama-ui-assets ALL
         "-DHF_VERSION=${HF_UI_VERSION}"
         "-DHF_ENABLED=${LLAMA_USE_PREBUILT_UI}"
         "-DBUILD_UI=${LLAMA_BUILD_UI}"
-        "-DLLAMA_UI_EMBED=$<TARGET_FILE:llama-ui-embed>"
+        "-DLLAMA_UI_EMBED=${LLAMA_UI_EMBED_EXE}"
         -P "${PROJECT_SOURCE_DIR}/scripts/ui-assets.cmake"
     COMMENT "Provisioning UI assets"
     VERBATIM
