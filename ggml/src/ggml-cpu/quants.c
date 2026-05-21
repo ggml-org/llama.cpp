@@ -665,7 +665,6 @@ void ggml_vec_dot_q4_K_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, c
     const uint8_t * mins   = (const uint8_t*)&utmp[2];
 
     int8_t  aux8[QK_K];
-    int16_t aux16[8];
     float   sums [8];
     int32_t aux32[8];
     memset(sums, 0, 8*sizeof(float));
@@ -694,18 +693,14 @@ void ggml_vec_dot_q4_K_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, c
         a = aux8;
         int is = 0;
         for (int j = 0; j < QK_K/32; ++j) {
-            int32_t scale = scales[is++];
-            for (int l = 0; l < 8; ++l) aux16[l] = q8[l] * a[l];
-            for (int l = 0; l < 8; ++l) aux32[l] += scale * aux16[l];
+            const int32_t scale = scales[is++];
+            for (int l = 0; l < 8; ++l) aux32[l] += scale * (int16_t)(q8[l] * a[l]);
             q8 += 8; a += 8;
-            for (int l = 0; l < 8; ++l) aux16[l] = q8[l] * a[l];
-            for (int l = 0; l < 8; ++l) aux32[l] += scale * aux16[l];
+            for (int l = 0; l < 8; ++l) aux32[l] += scale * (int16_t)(q8[l] * a[l]);
             q8 += 8; a += 8;
-            for (int l = 0; l < 8; ++l) aux16[l] = q8[l] * a[l];
-            for (int l = 0; l < 8; ++l) aux32[l] += scale * aux16[l];
+            for (int l = 0; l < 8; ++l) aux32[l] += scale * (int16_t)(q8[l] * a[l]);
             q8 += 8; a += 8;
-            for (int l = 0; l < 8; ++l) aux16[l] = q8[l] * a[l];
-            for (int l = 0; l < 8; ++l) aux32[l] += scale * aux16[l];
+            for (int l = 0; l < 8; ++l) aux32[l] += scale * (int16_t)(q8[l] * a[l]);
             q8 += 8; a += 8;
         }
         const float d = GGML_CPU_FP16_TO_FP32(x[i].d) * y[i].d;
