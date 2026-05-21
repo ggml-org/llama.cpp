@@ -1575,7 +1575,7 @@ struct clip_model_loader {
                     {
                         // SigLIP tower.
                         hparams.image_resize_algo = RESIZE_ALGO_BICUBIC_PILLOW;
-                        hparams.image_resize_pad = true;
+                        hparams.image_resize_pad = PAD_CEIL;
 
                         // Load the per-projector hparams (vision_feature_layers, spatial_offsets)
                         get_arr_int(KEY_FEATURE_LAYER, hparams.vision_feature_layer);
