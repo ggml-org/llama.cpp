@@ -143,18 +143,6 @@ public:
         return m_tensor_map->at(m_input_names[idx]);
     }
 
-    void cache_tensor(const std::string& name, const Output<Node>& tensor) const {
-        (*m_tensor_map)[name] = tensor;
-    }
-
-    Output<Node> get_cached_tensor(const std::string& name) const {
-        auto it = m_tensor_map->find(name);
-        if (it != m_tensor_map->end()) {
-            return it->second;
-        }
-        return Output<Node>();
-    }
-
     Output<Node> get_input(const std::string& name) const override {
         if (m_tensor_map->find(name) == m_tensor_map->end()) {
             throw std::runtime_error("'" + name + "' not found in tensor map.");

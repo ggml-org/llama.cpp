@@ -337,28 +337,21 @@ ov::Output<ov::Node> process_view_input_new(const NodeContext & context, int inp
                         relative_offset / view_src_stride_v[split_dim]);
 
                     if (split_index >= 0 && split_index < num_splits) {
-                        // TODO: avoid hardcoded name
-                        std::string src_name = context.get_view_input_src_name(input_index, 0);
-                        std::string cache_key = "__split__" + src_name + "__" +
-                            std::to_string(split_dim) + "__";
+                        auto src_node = input.get_node_shared_ptr();
+                        std::string rt_key = "split_dim_" + std::to_string(split_dim);
+                        auto & rt_info = src_node->get_rt_info();
 
-                        auto cached = context.get_cached_tensor(cache_key + "0");
-                        if (cached.get_node_shared_ptr() == nullptr) {
+                        if (rt_info.find(rt_key) == rt_info.end()) {
                             auto axis_const = ov::op::v0::Constant::create(
                                 ov::element::i64, {}, {static_cast<int64_t>(split_dim)});
                             auto split_node = std::make_shared<ov::op::v1::Split>(
                                 input, axis_const, static_cast<size_t>(num_splits));
-                            split_node->set_friendly_name(src_name + "_split");
-
-                            for (int64_t p = 0; p < num_splits; ++p) {
-                                context.cache_tensor(
-                                    cache_key + std::to_string(p),
-                                    split_node->output(static_cast<size_t>(p)));
-                            }
+                            split_node->set_friendly_name(src_node->get_friendly_name() + "_split");
+                            rt_info[rt_key] = split_node;
                         }
 
-                        return context.get_cached_tensor(
-                            cache_key + std::to_string(split_index));
+                        auto split_node = rt_info[rt_key].as<std::shared_ptr<ov::op::v1::Split>>();
+                        return split_node->output(static_cast<size_t>(split_index));
                     }
                 }
             }
