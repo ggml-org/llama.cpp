@@ -29,6 +29,12 @@
 #define DV_VEC (DV/4)
 #define Q1_WG_SIZE 64
 
+// Finite stand-in for negative infinity as the softmax running-max init:
+// these kernels build with -cl-finite-math-only, under which exp() of an
+// infinite operand is UB and miscompiles on the Adreno X1 driver. -3e38
+// leaves headroom under FLT_MAX so (m_i - score) cannot overflow.
+#define FA_M_INIT (-3.0e38f)
+
 #define QK4_0 32
 #define Q4_0_BLOCK_SIZE 18
 
@@ -253,7 +259,7 @@ __kernel void flash_attn_f32_q4_0_q1(
     // One-pass online softmax (FA-2): single sweep over kv positions,
     // updating per-thread (m_i, l_i, o_acc) per K. Eliminates the second
     // K read of the original two-pass implementation.
-    ACC_TYPE m_i = (sinks_ptr != NULL) ? sinks_ptr[head_idx] : -INFINITY;
+    ACC_TYPE m_i = (sinks_ptr != NULL) ? sinks_ptr[head_idx] : FA_M_INIT;
     ACC_TYPE l_i = 0.0f;
     ACC_TYPE4 o_acc[DV_VEC];
     #pragma unroll
@@ -413,7 +419,7 @@ __kernel void flash_attn_f32_q4_0_q1_split(
 
     if (kv_start >= kv_end) {
         if (tid == 0) {
-            rec[0] = -INFINITY;
+            rec[0] = FA_M_INIT;
             rec[1] = 0.0f;
         }
         return;
@@ -455,7 +461,7 @@ __kernel void flash_attn_f32_q4_0_q1_split(
     const float slope = get_alibi_slope(max_bias, head_idx, n_head_log2, m0, m1);
 
     // One-pass online softmax (FA-2): single sweep over the split's K range.
-    ACC_TYPE m_i = -INFINITY;
+    ACC_TYPE m_i = FA_M_INIT;
     ACC_TYPE l_i = 0.0f;
     ACC_TYPE4 o_acc[DV_VEC];
     #pragma unroll
@@ -689,7 +695,7 @@ __kernel void flash_attn_f32_q4_0(
     #pragma unroll
     for (int i = 0; i < SPLIT_DV_VEC; ++i) o_acc[i] = (ACC_TYPE4)(0.0f);
 
-    ACC_TYPE m_i = -INFINITY;
+    ACC_TYPE m_i = FA_M_INIT;
     ACC_TYPE l_i = 0.0f;
 
     float slope = get_alibi_slope(max_bias, head_idx, n_head_log2, m0, m1);
@@ -877,21 +883,21 @@ __kernel void flash_attn_f32_q4_0(
                     s2 = sub_group_shuffle(s2, tri_base + 0) + sub_group_shuffle(s2, tri_base + 1) + sub_group_shuffle(s2, tri_base + 2);
                     s3 = sub_group_shuffle(s3, tri_base + 0) + sub_group_shuffle(s3, tri_base + 1) + sub_group_shuffle(s3, tri_base + 2);
                 #endif
-                if (!query_valid) { s0 = -INFINITY; s1 = -INFINITY; s2 = -INFINITY; s3 = -INFINITY; }
+                if (!query_valid) { s0 = FA_M_INIT; s1 = FA_M_INIT; s2 = FA_M_INIT; s3 = FA_M_INIT; }
 #endif
                 s0 *= scale; s1 *= scale; s2 *= scale; s3 *= scale;
 
                 if (is_causal) {
                     const int causal_limit = n_kv - n_q + my_query_row;
-                    if (k_row0 > causal_limit) s0 = -INFINITY;
-                    if (k_row1 > causal_limit) s1 = -INFINITY;
-                    if (k_row2 > causal_limit) s2 = -INFINITY;
-                    if (k_row3 > causal_limit) s3 = -INFINITY;
+                    if (k_row0 > causal_limit) s0 = FA_M_INIT;
+                    if (k_row1 > causal_limit) s1 = FA_M_INIT;
+                    if (k_row2 > causal_limit) s2 = FA_M_INIT;
+                    if (k_row3 > causal_limit) s3 = FA_M_INIT;
                 }
-                if (k_row0 >= n_kv) s0 = -INFINITY;
-                if (k_row1 >= n_kv) s1 = -INFINITY;
-                if (k_row2 >= n_kv) s2 = -INFINITY;
-                if (k_row3 >= n_kv) s3 = -INFINITY;
+                if (k_row0 >= n_kv) s0 = FA_M_INIT;
+                if (k_row1 >= n_kv) s1 = FA_M_INIT;
+                if (k_row2 >= n_kv) s2 = FA_M_INIT;
+                if (k_row3 >= n_kv) s3 = FA_M_INIT;
 
                 if (query_valid && mask_base != NULL && blk_cur != 2) {
                     const global MASK_DATA_TYPE * mask_ptr =
@@ -909,9 +915,9 @@ __kernel void flash_attn_f32_q4_0(
                 }
 
                 const ACC_TYPE m_new      = max(m_i, max(max(s0, s1), max(s2, s3)));
-                // m_new == -inf means every score so far is masked; m_exp keeps
-                // the exp() args finite so exp(-inf - -inf) does not become nan.
-                const ACC_TYPE m_exp      = (m_new == -INFINITY) ? 0.0f : m_new;
+                // Whole tile masked (m_new == FA_M_INIT): force the exp() args
+                // far negative so the tile contributes 0, not exp(0)=1.
+                const ACC_TYPE m_exp      = (m_new == FA_M_INIT) ? 0.0f : m_new;
                 const ACC_TYPE scale_prev = native_exp(m_i - m_exp);
                 const ACC_TYPE p0         = native_exp(s0 - m_exp);
                 const ACC_TYPE p1         = native_exp(s1 - m_exp);
@@ -986,7 +992,7 @@ __kernel void flash_attn_f32_merge(
     __local ACC_TYPE m_final_shared;
     __local ACC_TYPE l_final_shared;
     if (lane == 0) {
-        ACC_TYPE m = -INFINITY;
+        ACC_TYPE m = FA_M_INIT;
         for (int c = 0; c < n_splits; ++c) {
             const ACC_TYPE m_c = rec0[c * record_stride + 0];
             m = max(m, m_c);
@@ -1004,7 +1010,7 @@ __kernel void flash_attn_f32_merge(
         for (int c = 0; c < n_splits; ++c) {
             const ACC_TYPE m_c = rec0[c * record_stride + 0];
             const ACC_TYPE l_c = rec0[c * record_stride + 1];
-            if (m_c > -INFINITY) {
+            if (m_c > FA_M_INIT) {
                 l += l_c * exp(m_c - m);
             }
         }
@@ -1023,7 +1029,7 @@ __kernel void flash_attn_f32_merge(
     for (int c = 0; c < n_splits; ++c) {
         const global float * rec_c   = rec0 + c * record_stride;
         const ACC_TYPE       m_c     = rec_c[0];
-        if (m_c <= -INFINITY) continue;
+        if (m_c <= FA_M_INIT) continue;
         const global float4 * rec_oc = (const global float4 *) (rec_c + 2);
         const ACC_TYPE scale_c = exp(m_c - m_final);
         o = mad((ACC_TYPE4)(scale_c), rec_oc[lane], o);

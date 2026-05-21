@@ -13,6 +13,12 @@
 #define WG_SIZE (BLOCK_M)
 #define Q1_WG_SIZE 64
 
+// Finite stand-in for negative infinity as the softmax running-max init:
+// these kernels build with -cl-finite-math-only, under which exp() of an
+// infinite operand is UB and miscompiles on the Adreno X1 driver. -3e38
+// leaves headroom under FLT_MAX so (m_i - score) cannot overflow.
+#define FA_M_INIT (-3.0e38f)
+
 // Drop full unroll at DK>=192 — Adreno compiler host-memory budget.
 #if DK >= 192
 #define FA_UNROLL
@@ -100,7 +106,7 @@ __kernel void flash_attn_f32(
     for (int i = 0; i < DV_VEC; ++i) {
         o_acc[i] = (ACC_TYPE4)(0.0f);
     }
-    ACC_TYPE m_i = -INFINITY;
+    ACC_TYPE m_i = FA_M_INIT;
     ACC_TYPE l_i = 0.0f;
 
     float slope = get_alibi_slope(max_bias, head_idx, n_head_log2, m0, m1);
@@ -158,15 +164,15 @@ __kernel void flash_attn_f32(
 
             if (is_causal) {
                 const int causal_limit = n_kv - n_q + my_query_row;
-                if (k_row0 > causal_limit) s0 = -INFINITY;
-                if (k_row1 > causal_limit) s1 = -INFINITY;
-                if (k_row2 > causal_limit) s2 = -INFINITY;
-                if (k_row3 > causal_limit) s3 = -INFINITY;
+                if (k_row0 > causal_limit) s0 = FA_M_INIT;
+                if (k_row1 > causal_limit) s1 = FA_M_INIT;
+                if (k_row2 > causal_limit) s2 = FA_M_INIT;
+                if (k_row3 > causal_limit) s3 = FA_M_INIT;
             }
-            if (k_row0 >= n_kv) s0 = -INFINITY;
-            if (k_row1 >= n_kv) s1 = -INFINITY;
-            if (k_row2 >= n_kv) s2 = -INFINITY;
-            if (k_row3 >= n_kv) s3 = -INFINITY;
+            if (k_row0 >= n_kv) s0 = FA_M_INIT;
+            if (k_row1 >= n_kv) s1 = FA_M_INIT;
+            if (k_row2 >= n_kv) s2 = FA_M_INIT;
+            if (k_row3 >= n_kv) s3 = FA_M_INIT;
 
             if (mask_base != NULL) {
                 const global MASK_DATA_TYPE* mask_ptr = (const global MASK_DATA_TYPE*)(mask_base + my_query_row * mask_nb1);
@@ -301,7 +307,7 @@ __kernel void flash_attn_f32_q1(
         sinks_ptr = (const global ACC_TYPE*)((const global char*)sinks_void + sinks_offset);
     }
 
-    ACC_TYPE m_i = (sinks_ptr != NULL) ? sinks_ptr[head_idx] : -INFINITY;
+    ACC_TYPE m_i = (sinks_ptr != NULL) ? sinks_ptr[head_idx] : FA_M_INIT;
     for (int k_idx = tid; k_idx < n_kv; k_idx += Q1_WG_SIZE) {
         const ulong k_row_offset = batch_idx * k_nb3 + head_kv_idx * k_nb2 + k_idx * k_nb1;
         const global DATA_TYPE4* k_ptr = (const global DATA_TYPE4*)(k_base + k_row_offset);
