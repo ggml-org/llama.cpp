@@ -35,26 +35,30 @@ endif()
 set(UI_CPP "${CMAKE_CURRENT_BINARY_DIR}/ui.cpp")
 set(UI_H   "${CMAKE_CURRENT_BINARY_DIR}/ui.h")
 
-# llama-ui-embed is a host tool: build it natively, or via a nested host project when cross-compiling.
 if(CMAKE_CROSSCOMPILING)
+    find_program(HOST_CXX_COMPILER NAMES g++ clang++ NO_CMAKE_FIND_ROOT_PATH)
+    if(NOT HOST_CXX_COMPILER)
+        message(FATAL_ERROR "UI: no host C++ compiler (g++/clang++) found to build llama-ui-embed; set -DHOST_CXX_COMPILER=<path>")
+    endif()
+    message(STATUS "UI: building llama-ui-embed with host compiler ${HOST_CXX_COMPILER}")
+
     if(CMAKE_HOST_WIN32)
-        set(LLAMA_UI_EMBED_SUFFIX ".exe")
+        set(LLAMA_UI_EMBED_EXE "${CMAKE_CURRENT_BINARY_DIR}/llama-ui-embed.exe")
     else()
-        set(LLAMA_UI_EMBED_SUFFIX "")
+        set(LLAMA_UI_EMBED_EXE "${CMAKE_CURRENT_BINARY_DIR}/llama-ui-embed")
     endif()
 
-    include(ExternalProject)
-    ExternalProject_Add(llama-ui-embed
-        SOURCE_DIR       "${CMAKE_CURRENT_SOURCE_DIR}/embed"
-        CMAKE_ARGS       "-DCMAKE_BUILD_TYPE=Release"
-        BUILD_ALWAYS     TRUE
-        INSTALL_COMMAND  ""
-        BUILD_BYPRODUCTS "<BINARY_DIR>/llama-ui-embed${LLAMA_UI_EMBED_SUFFIX}"
+    add_custom_command(
+        OUTPUT  "${LLAMA_UI_EMBED_EXE}"
+        COMMAND "${HOST_CXX_COMPILER}" -O2 -std=c++17
+                -o "${LLAMA_UI_EMBED_EXE}" "${CMAKE_CURRENT_SOURCE_DIR}/embed.cpp"
+        DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/embed.cpp"
+        COMMENT "Building llama-ui-embed (host)"
+        VERBATIM
     )
-    ExternalProject_Get_Property(llama-ui-embed BINARY_DIR)
-    set(LLAMA_UI_EMBED_EXE "${BINARY_DIR}/llama-ui-embed${LLAMA_UI_EMBED_SUFFIX}")
+    add_custom_target(llama-ui-embed DEPENDS "${LLAMA_UI_EMBED_EXE}")
 else()
-    add_executable(llama-ui-embed embed/embed.cpp)
+    add_executable(llama-ui-embed embed.cpp)
     target_compile_features(llama-ui-embed PRIVATE cxx_std_17)
     set_target_properties(llama-ui-embed PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
