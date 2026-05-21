@@ -16,6 +16,7 @@
 	import { rehypeRestoreTableHtml } from './plugins/rehype/table-html-restorer';
 	import { rehypeEnhanceLinks } from './plugins/rehype/enhance-links';
 	import { rehypeEnhanceCodeBlocks } from './plugins/rehype/enhance-code-blocks';
+	import { rehypeMermaidPre } from './plugins/rehype/mermaid-pre';
 	import { rehypeResolveAttachmentImages } from './plugins/rehype/resolve-attachment-images';
 	import { rehypeRtlSupport } from './plugins/rehype/rehype-rtl-support';
 	import { remarkLiteralHtml } from './plugins/remark/literal-html';
@@ -102,6 +103,7 @@
 			}) // Add syntax highlighting
 			.use(rehypeRestoreTableHtml) // Restore limited HTML (e.g., <br>, <ul>) inside Markdown tables
 			.use(rehypeEnhanceLinks) // Add target="_blank" to links
+			.use(rehypeMermaidPre) // Convert mermaid blocks to <pre class="mermaid">
 			.use(rehypeEnhanceCodeBlocks) // Wrap code blocks with header and actions
 			.use(rehypeResolveAttachmentImages, { attachments })
 			.use(rehypeRtlSupport) // Add bidirectional text support
@@ -497,6 +499,36 @@
 	}
 
 	/**
+	 * Renders mermaid diagrams that haven't been rendered yet.
+	 * Called after each markdown content update.
+	 */
+	async function renderMermaidDiagrams() {
+		if (!containerRef) return;
+
+		const nodes = containerRef.querySelectorAll('pre.mermaid:not([data-mermaid-rendered])');
+		if (nodes.length === 0) return;
+
+		// lazy load the mermaid dependecy only when needed to reduce bundle size.
+		const { default: mermaid } = await import('mermaid');
+
+		const isDark = mode.current === ColorMode.DARK;
+		mermaid.initialize({
+			startOnLoad: false,
+			theme: isDark ? 'dark' : 'default',
+			securityLevel: 'strict'
+		});
+
+		try {
+			await mermaid.run({
+				nodes: Array.from(nodes) as unknown as NodeListOf<HTMLElement>
+			});
+			nodes.forEach((node) => node.setAttribute('data-mermaid-rendered', 'true'));
+		} catch (error) {
+			console.error('Failed to render mermaid diagram:', error);
+		}
+	}
+
+	/**
 	 * Handles image load errors by replacing the image with a fallback UI.
 	 * Shows a placeholder with a link to open the image in a new tab.
 	 */
@@ -577,6 +609,7 @@
 		if ((hasRenderedBlocks || hasUnstableBlock) && containerRef) {
 			setupCodeBlockActions();
 			setupImageErrorHandlers();
+			renderMermaidDiagrams();
 		}
 	});
 
@@ -617,34 +650,43 @@
 	{/if}
 
 	{#if incompleteCodeBlock}
-		<div class="code-block-wrapper streaming-code-block relative">
-			<div class="code-block-header">
-				<span class="code-language">{incompleteCodeBlock.language || 'text'}</span>
-				<CodeBlockActions
-					code={incompleteCodeBlock.code}
-					language={incompleteCodeBlock.language || 'text'}
-					disabled
-					onPreview={(code, lang) => {
-						previewCode = code;
-						previewLanguage = lang;
-						previewDialogOpen = true;
-					}}
-				/>
+		{#if incompleteCodeBlock.language === 'mermaid'}
+			<div class="mermaid-streaming-block">
+				<div class="mermaid-streaming-header">
+					<span class="code-language">mermaid</span>
+				</div>
+				<pre class="mermaid-streaming-code"><code>{incompleteCodeBlock.code}</code></pre>
 			</div>
-			<div
-				bind:this={streamingCodeScrollContainer}
-				class="streaming-code-scroll-container"
-				onscroll={() => streamingAutoScroll.handleScroll()}
-			>
-				<pre class="streaming-code-pre"><code
-						class="hljs language-{incompleteCodeBlock.language || 'text'}"
-						>{@html highlightCode(
-							incompleteCodeBlock.code,
-							incompleteCodeBlock.language || 'text'
-						)}</code
-					></pre>
+		{:else}
+			<div class="code-block-wrapper streaming-code-block relative">
+				<div class="code-block-header">
+					<span class="code-language">{incompleteCodeBlock.language || 'text'}</span>
+					<CodeBlockActions
+						code={incompleteCodeBlock.code}
+						language={incompleteCodeBlock.language || 'text'}
+						disabled
+						onPreview={(code, lang) => {
+							previewCode = code;
+							previewLanguage = lang;
+							previewDialogOpen = true;
+						}}
+					/>
+				</div>
+				<div
+					bind:this={streamingCodeScrollContainer}
+					class="streaming-code-scroll-container"
+					onscroll={() => streamingAutoScroll.handleScroll()}
+				>
+					<pre class="streaming-code-pre"><code
+							class="hljs language-{incompleteCodeBlock.language || 'text'}"
+							>{@html highlightCode(
+								incompleteCodeBlock.code,
+								incompleteCodeBlock.language || 'text'
+							)}</code
+						></pre>
+				</div>
 			</div>
-		</div>
+		{/if}
 	{/if}
 </div>
 
@@ -1216,5 +1258,63 @@
 	div :global(.image-error-link:hover) {
 		background: var(--muted);
 		border-color: var(--primary);
+	}
+
+	/* Mermaid diagrams */
+	div :global(pre.mermaid) {
+		background: transparent;
+		border: none;
+		margin: 1.5rem 0;
+		padding: 0;
+		text-align: center;
+		font-family: inherit;
+	}
+
+	div :global(pre.mermaid svg) {
+		max-width: 100%;
+		height: auto;
+		display: inline-block;
+	}
+
+	/* Streaming mermaid block */
+	.mermaid-streaming-block {
+		margin: 1.5rem 0;
+		border-radius: 0.75rem;
+		overflow: hidden;
+		border: 1px dashed var(--border);
+		background: var(--muted);
+	}
+
+	.mermaid-streaming-header {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		padding: 0.5rem 1rem;
+		font-size: 0.875rem;
+		background: hsl(var(--muted) / 0.5);
+	}
+
+	.mermaid-streaming-header .code-language {
+		color: var(--muted-foreground);
+		font-weight: 500;
+		font-family: ui-monospace, SFMono-Regular, 'SF Mono', Monaco, monospace;
+		text-transform: uppercase;
+		font-size: 0.75rem;
+		letter-spacing: 0.05em;
+	}
+
+	.mermaid-streaming-code {
+		margin: 0;
+		padding: 1rem;
+		overflow-x: auto;
+		background: transparent;
+		font-size: 0.875rem;
+		line-height: 1.5;
+		white-space: pre;
+	}
+
+	.mermaid-streaming-code code {
+		font-family: ui-monospace, SFMono-Regular, 'SF Mono', Monaco, monospace;
+		color: var(--foreground);
 	}
 </style>
