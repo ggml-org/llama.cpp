@@ -64,7 +64,32 @@ code and the verification residual so you can intervene.
 └────────────────┘
 ```
 
-## Quick start
+## Pre-built binary
+
+A single-file executable is built on every push to a desktop-solver branch
+by `.github/workflows/build-desktop-solver.yml` (Windows and Linux). To
+grab it:
+
+1. Open the latest successful run of **build-desktop-solver** on the
+   Actions tab.
+2. Download the `desktop-solver-windows.exe` (or `desktop-solver-linux`)
+   artifact from the run page.
+3. Run it directly — no Python install required. On first launch it scans
+   the filesystem for a GGUF model; if none is found, a file picker opens.
+
+The executable is ~300–500 MB (PyQt6 + matplotlib + the bundled
+llama-cpp-python native libraries).
+
+To build locally:
+
+```bash
+cd desktop-solver
+pip install -e .[build]
+pyinstaller --clean --noconfirm desktop-solver.spec
+./dist/desktop-solver           # or dist\desktop-solver.exe on Windows
+```
+
+## Quick start (from source)
 
 ```bash
 cd desktop-solver

@@ -1,0 +1,99 @@
+name: build-desktop-solver
+
+# Bundles desktop-solver/ into a single-file executable via PyInstaller.
+# Output is uploaded as a workflow artifact; tag pushes also attach the
+# .exe to a draft GitHub release.
+
+on:
+  push:
+    branches:
+      - master
+      - 'claude/desktop-solver**'
+    paths:
+      - 'desktop-solver/**'
+      - '.github/workflows/build-desktop-solver.yml'
+  pull_request:
+    paths:
+      - 'desktop-solver/**'
+      - '.github/workflows/build-desktop-solver.yml'
+  workflow_dispatch:
+  release:
+    types: [created]
+
+permissions:
+  contents: write   # needed for the release-upload step on tag pushes
+
+jobs:
+  build:
+    name: pyinstaller (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            artifact: desktop-solver-windows.exe
+            exe_name: desktop-solver.exe
+          - os: ubuntu-latest
+            artifact: desktop-solver-linux
+            exe_name: desktop-solver
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: desktop-solver/requirements.txt
+
+      - name: Install Linux system dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libgl1 libegl1 libxkbcommon0 libdbus-1-3 \
+            libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 \
+            libxcb-randr0 libxcb-render-util0 libxcb-shape0 libxcb-xinerama0 \
+            libxcb-xkb1 libxkbcommon-x11-0
+
+      - name: Install Python dependencies
+        working-directory: desktop-solver
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install "pyinstaller>=6.0"
+
+      - name: Build single-file executable
+        working-directory: desktop-solver
+        run: pyinstaller --clean --noconfirm desktop-solver.spec
+
+      - name: Verify build output
+        shell: bash
+        working-directory: desktop-solver
+        run: |
+          ls -la dist/
+          test -f "dist/${{ matrix.exe_name }}"
+          file "dist/${{ matrix.exe_name }}" || true
+          du -h "dist/${{ matrix.exe_name }}"
+
+      - name: Rename for artifact upload
+        shell: bash
+        working-directory: desktop-solver
+        run: mv "dist/${{ matrix.exe_name }}" "dist/${{ matrix.artifact }}"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: desktop-solver/dist/${{ matrix.artifact }}
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Attach to release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: desktop-solver/dist/${{ matrix.artifact }}
