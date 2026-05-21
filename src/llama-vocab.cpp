@@ -2354,12 +2354,15 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
     // it from id_to_token so the k-mers detokenize to the bare DNA sequence. The
     // k-mers are the block right after <oov>, so only scan from there.
     if (tokenizer_model == "hybriddna") {
-        const auto it = token_to_id.find("<oov>");
-        for (size_t i = (it != token_to_id.end() ? it->second + 1 : id_to_token.size()); i < id_to_token.size(); ++i) {
-            std::string & text = id_to_token[i].text;
-            if (text.size() > dna_kmer_marker.size() &&
-                text.compare(text.size() - dna_kmer_marker.size(), dna_kmer_marker.size(), dna_kmer_marker) == 0) {
-                text.erase(text.size() - dna_kmer_marker.size());
+        const auto idx = token_to_id.find("<oov>");
+        if (idx != token_to_id.end()) {
+            auto it = id_to_token.begin() + idx->second + 1;
+            for (; it != id_to_token.end(); ++it) {
+                std::string & text = it->text;
+                if (text.size() > dna_kmer_marker.size()
+                        && text.compare(text.size() - dna_kmer_marker.size(), dna_kmer_marker.size(), dna_kmer_marker) == 0) {
+                    text.erase(text.size() - dna_kmer_marker.size());
+                }
             }
         }
     }
