@@ -615,7 +615,7 @@ void ggml_barrier(struct ggml_threadpool * tp, int ith) {
     }
 
     // wait for other threads
-    {
+   {
         const int64_t t_barrier_start = ggml_time_us();
 
         // Phase 1: brief spin (uses existing poll parameter, same scale as poll_for_work)
