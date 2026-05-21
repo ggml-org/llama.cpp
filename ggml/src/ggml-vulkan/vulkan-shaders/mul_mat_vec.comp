@@ -47,9 +47,13 @@ void iter(inout FLOAT_TYPE temp[NUM_COLS][NUM_ROWS], const uint first_row, const
             b1 = FLOAT_TYPE(data_b[j*p.batch_stride_b + b_offset + iybs + iqs + y_offset]);
         }
 #endif
+        const bool transa_rt = (p.fusion_flags & MAT_VEC_FUSION_FLAGS_TRANSPOSE_A) != 0;
+        const uint a_kb = col / QUANT_K;
         uint ibi = first_row*p.ncols;
         [[unroll]] for (uint n = 0; n < num_rows; ++n) {
-            const uint ib = (ibi + col)/QUANT_K; // block index
+            const uint ib = transa_rt
+                ? (a_kb * p.stride_d + (first_row + n))
+                : ((ibi + col)/QUANT_K);
             ibi += p.ncols;
 
 #if K_PER_ITER == 8
