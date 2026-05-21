@@ -871,7 +871,7 @@ struct mtmd_tokenizer {
                     n_tokens += clip_n_output_tokens(ctx->ctx_v, entry.get());
                 }
 
-                // Granite Vision 4.1 pack_and_unpad (mtmd layer) changes
+                // Granite Vision 4.x pack_and_unpad (mtmd layer) changes
                 // the token count: single-tile appends 1 image_newline row,
                 // multi-tile adds a newline column per grid row and a
                 // full base tile.  Compute the adjustment here so that
@@ -880,20 +880,12 @@ struct mtmd_tokenizer {
                     if (batch_f32.entries.size() == 1) {
                         n_tokens += 1; // newline row
                     } else {
-                        // +1 newline per grid row + base tile (= entries[0])
-                        const int grid_x = (int) batch_f32.grid_x;
-                        const int grid_y = (int) batch_f32.grid_y;
+                        // +1 newline per grid row
                         const int per_tile = clip_n_output_tokens(ctx->ctx_v,
                                                                   batch_f32.entries[0].get());
                         const int per_tile_side = (int) std::lround(std::sqrt((double)per_tile));
                         GGML_ASSERT(per_tile_side * per_tile_side == per_tile);
-                        // Grid features: (per_tile_side * grid_y) rows,
-                        // each (per_tile_side * grid_x + 1) cols (newline)
-                        const int grid_tokens = (per_tile_side * grid_y)
-                                              * (per_tile_side * grid_x + 1);
-                        // Base tile: per_tile tokens.  Replace the raw
-                        // sum with base + grid.
-                        n_tokens = per_tile + grid_tokens;
+                        n_tokens += per_tile_side * batch_f32.grid_y;
                     }
                 }
 
