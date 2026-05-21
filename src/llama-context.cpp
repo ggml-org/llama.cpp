@@ -1537,7 +1537,7 @@ static void copy_tensor_async_ints(
 
 static void copy_tensor_async_rows(
     const std::map<llama_seq_id, ggml_tensor*> & tensor_map,
-    const void * dst_data,
+    void * dst_data,
     size_t stride,
     std::vector<uint32_t> & counts,
     const std::unordered_map<llama_seq_id, uint32_t> & seq_to_row,
@@ -1558,8 +1558,8 @@ static void copy_tensor_async_rows(
         GGML_ASSERT(ggml_is_contiguous(tensor) && "tensor must be contiguous for async copy");
 
         ggml_backend_t backend = ggml_backend_sched_get_tensor_backend(sched, tensor);
-        const uint8_t * row_ptr = static_cast<const uint8_t *>(dst_data) + (size_t) row * stride;
-        ggml_backend_tensor_get_async(backend, tensor, const_cast<uint8_t *>(row_ptr), 0, ggml_nbytes(tensor));
+        uint8_t * row_ptr = static_cast<uint8_t *>(dst_data) + (size_t) row * stride;
+        ggml_backend_tensor_get_async(backend, tensor, row_ptr, 0, ggml_nbytes(tensor));
 
         counts[row] = ggml_nelements(tensor);
     }
