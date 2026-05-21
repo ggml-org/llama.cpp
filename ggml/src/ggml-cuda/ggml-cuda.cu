@@ -3300,7 +3300,10 @@ phase3:
 static void ggml_backend_cuda_synchronize(ggml_backend_t backend) {
     ggml_backend_cuda_context * cuda_ctx = (ggml_backend_cuda_context *)backend->context;
 
-    CUDA_CHECK(cudaStreamSynchronize(cuda_ctx->stream()));
+    if (!ggml_cuda_adaptive_wait(cuda_ctx->stream(), cuda_ctx->device)) {
+        /* adaptive wait returned false -- fallback */
+        CUDA_CHECK(cudaStreamSynchronize(cuda_ctx->stream()));
+    }
 
     GGML_UNUSED(backend);
 }
