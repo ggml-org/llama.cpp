@@ -26,6 +26,7 @@
 
 /.cache/
 /.ccls-cache/
+/.claude/
 /.direnv/
 /.envrc
 /.idea/
@@ -41,6 +42,7 @@
 
 # Build Artifacts
 
+/Testing/
 /tags
 /.build/
 /build*
