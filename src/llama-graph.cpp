@@ -540,7 +540,7 @@ bool llm_graph_input_attn_kv_iswa::can_reuse(const llm_graph_params & params) {
 
     bool res = true;
 
-   // base tensors may not be allocated if there are no non-SWA attention layers
+  // base tensors may not be allocated if there are no non-SWA attention layers
     if (self_k_idxs && self_k_idxs->buffer) {
         res &= self_k_idxs->ne[0] == params.ubatch.n_tokens;
         res &= (!self_v_idxs) || (self_v_idxs->ne[0] == params.ubatch.n_tokens);
