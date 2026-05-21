@@ -3281,7 +3281,10 @@ static vk_fa_tuning_params get_fa_tuning_params(const vk_device& device, uint32_
                       device->coopmat1_fa_support ? FA_COOPMAT1 : FA_SCALAR;
 
     if (path == FA_COOPMAT2 && k_type == GGML_TYPE_BF16 && !device->coopmat2_bf16_support) {
-        path = (device->coopmat1_fa_support && device->coopmat_bf16_support) ? FA_COOPMAT1 : FA_SCALAR;
+        path = FA_COOPMAT1;
+    }
+    if (path == FA_COOPMAT1 && k_type == GGML_TYPE_BF16 && !device->coopmat_bf16_support) {
+        path = FA_SCALAR;
     }
 
     if (path == FA_COOPMAT1 && device->architecture == vk_device_architecture::NVIDIA_TURING) {
@@ -3339,8 +3342,7 @@ static vk_fa_pipeline_state get_fa_pipeline_state(const vk_device& device, const
 
 static std::vector<uint32_t> get_fa_spec_constants(const vk_fa_pipeline_state& state) {
     const auto fa_block_bytes = [](ggml_type t) -> uint32_t {
-        if (t == GGML_TYPE_F32)  return 16u;
-        if (t == GGML_TYPE_BF16) return 2u;
+        if (t == GGML_TYPE_F32) return 16u;
         return (uint32_t) ggml_type_size(t);
     };
     return {
