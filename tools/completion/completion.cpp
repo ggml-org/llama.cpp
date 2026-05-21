@@ -373,16 +373,10 @@ int llama_completion(int argc, char ** argv) {
                         __func__, n_match, embd_inp.size());
             }
 
-            if (session_tokens.size() == n_match) {
-                // [TAG_CONTEXT_STATE_LOGITS]
-                // in this case, we are going to reuse the logits from the session
-                // if we ever decide to remove the logits from the session, we need to handle this somehow
-                // ref: https://github.com/ggml-org/llama.cpp/pull/18862#issuecomment-3756330941
-            }
-
             // remove any "future" tokens that we might have inherited from the previous session
             if (session_tokens.size() > n_match) {
-                if (!llama_memory_seq_rm(mem, -1, n_match, -1)) {
+                llama_pos pos = n_match > 0 ? (llama_pos)(n_match - 1) : 0;
+                if (!llama_memory_seq_rm(mem, -1, pos, -1)) {
                     LOG_WRN("%s: unable to reuse common prefix (for example, when the memory is recurrent)\n", __func__);
                     llama_memory_clear(mem, true);
                     session_tokens.clear();
@@ -398,7 +392,7 @@ int llama_completion(int argc, char ** argv) {
         // Logits are not stored as part of the session state so we need to
         // "replay" the last token to get logits for sampling.
         if (!session_tokens.empty() && n_match > 0 && n_match == session_tokens.size()) {
-            if (!common_replay_last_token(ctx, session_tokens.back(), n_match)) {
+            if (!common_replay_last_token(ctx, session_tokens.back(), n_match - 1)) {
                 return 1;
             }
 
@@ -991,7 +985,10 @@ int llama_completion(int argc, char ** argv) {
 
     if (!path_session.empty() && params.prompt_cache_all && !params.prompt_cache_ro) {
         LOG("\n%s: saving final output to session file '%s'\n", __func__, path_session.c_str());
+        session_tokens.insert(session_tokens.end(), embd.begin(), embd.end());
         llama_state_save_file(ctx, path_session.c_str(), session_tokens.data(), session_tokens.size());
+        LOG_INF("saved final session to %s, n_tokens = %ld\n", path_session.data(), session_tokens.size());
+
     }
 
     LOG("\n\n");

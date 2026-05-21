@@ -1989,8 +1989,8 @@ bool common_prompt_batch_decode(
         }
         n_past += n_tokens_before_last;
 
-        llama_state_save_file(ctx, state_path.data(), tokens.data(), n_tokens_before_last);
-        LOG_INF("saved session before last token to %s, n_tokens = %d\n", state_path.data(), n_tokens_before_last);
+        llama_state_save_file(ctx, state_path.data(), tokens.data(), n_eval);
+        LOG_INF("saved session before last token to %s, n_tokens = %d\n", state_path.data(), n_eval);
 
         llama_token last_token = tokens.back();
         llama_batch batch = llama_batch_get_one(&last_token, 1);
