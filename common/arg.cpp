@@ -1334,23 +1334,6 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_CTX_CHECKPOINTS").set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
     add_opt(common_arg(
-        {"-cpent", "--checkpoint-every-n-tokens"}, "N",
-        string_format("create a checkpoint every n tokens during prefill (processing), -1 to disable (default: %d)", params.checkpoint_every_nt),
-        [](common_params & params, int value) {
-            params.checkpoint_every_nt = value;
-        }
-    ).set_env("LLAMA_ARG_CHECKPOINT_EVERY_NT").set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
-    add_opt(common_arg(
-        {"-csant", "--checkpoint-start-after-n-tokens"}, "N",
-        string_format("start creating context checkpoints after n prompt tokens (default: %d, 0 = immediately)", params.checkpoint_start_after_nt),
-        [](common_params & params, int value) {
-            if (value < 0) {
-                throw std::invalid_argument("checkpoint-start-after-n-tokens must be non-negative");
-            }
-            params.checkpoint_start_after_nt = value;
-        }
-    ).set_env("LLAMA_ARG_CHECKPOINT_START_AFTER_NT").set_examples({LLAMA_EXAMPLE_SERVER}));
-    add_opt(common_arg(
         {"-cmsnt", "--checkpoint-min-spacing-n-tokens"}, "N",
         string_format("minimum spacing between context checkpoints in tokens (default: %d, 0 = no minimum)", params.checkpoint_min_spacing_nt),
         [](common_params & params, int value) {
