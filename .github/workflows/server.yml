@@ -102,7 +102,7 @@ jobs:
         uses: actions/download-artifact@v7
         with:
           name: ui-build
-          path: build/tools/ui/dist
+          path: tools/ui/dist
 
       - name: Build
         id: cmake_build
