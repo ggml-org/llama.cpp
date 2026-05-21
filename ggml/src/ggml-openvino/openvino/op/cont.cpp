@@ -22,7 +22,7 @@ OutputVector translate_cont(const NodeContext & context) {
     auto dst_shape = context.get_output_shape().to_shape();
 
     if (context.get_op_dynamic_dim() != -1) {
-        dst_shape[3 - context.get_op_dynamic_dim()] = -1;
+        dst_shape[3 - context.get_op_dynamic_dim()] = context.is_static() ? context.get_static_n_tokens() : -1;
     }
 
     auto input = process_view_input_new(context, 0);

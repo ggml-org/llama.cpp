@@ -125,12 +125,34 @@ public:
         if (view_input_size > 0) {
             // This is a VIEW input, get the base tensor name (last element in the chain)
             std::string base_name = m_decoder->get_view_input_src_name(m_node_idx, m_input_names[idx], view_input_size - 1);
+            // Check if the VIEW has been resolved (translate_view produced a Slice)
+            auto view_it = m_tensor_map->find(m_input_names[idx]);
+            if (!base_name.empty() && view_it != m_tensor_map->end()) {
+                auto base_it = m_tensor_map->find(base_name);
+                if (base_it != m_tensor_map->end() &&
+                    view_it->second.get_node_shared_ptr() != base_it->second.get_node_shared_ptr()) {
+                    return view_it->second;
+                }
+                return base_it->second;
+            }
             if (!base_name.empty()) {
                 return m_tensor_map->at(base_name);
             }
         }
         // Not a VIEW or failed to get base name, use the original logic
         return m_tensor_map->at(m_input_names[idx]);
+    }
+
+    void cache_tensor(const std::string& name, const Output<Node>& tensor) const {
+        (*m_tensor_map)[name] = tensor;
+    }
+
+    Output<Node> get_cached_tensor(const std::string& name) const {
+        auto it = m_tensor_map->find(name);
+        if (it != m_tensor_map->end()) {
+            return it->second;
+        }
+        return Output<Node>();
     }
 
     Output<Node> get_input(const std::string& name) const override {
@@ -159,6 +181,8 @@ public:
     bool is_static() const { return m_decoder->is_static(); }
 
     bool is_stateful() const { return m_decoder->is_stateful(); }
+
+    int get_static_n_tokens() const { return m_decoder->get_static_n_tokens(); }
 
 private:
     std::shared_ptr<GgmlDecoder> m_decoder;
