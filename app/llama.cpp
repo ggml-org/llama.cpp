@@ -1,3 +1,5 @@
+#include "build-info.h"
+
 #include <cstdio>
 #include <string>
 #include <vector>
@@ -9,6 +11,7 @@ int llama_cli(int argc, char ** argv);
 int llama_completion(int argc, char ** argv);
 int llama_bench(int argc, char ** argv);
 static int help(int argc, char ** argv);
+static int version(int argc, char ** argv);
 
 struct command {
     const char * name;
@@ -23,8 +26,14 @@ static const command cmds[] = {
     {"cli",        "Command-line interactive interface", {"client"},   false, llama_cli        },
     {"completion", "Text completion",                    {"complete"}, true,  llama_completion },
     {"bench",      "Benchmarking tool",                  {},           true,  llama_bench      },
+    {"version",    "Show version",                       {},           true,  version          },
     {"help",       "Show available commands",            {},           true,  help             },
 };
+
+static int version(int argc, char ** argv) {
+    printf("%s\n", llama_build_info());
+    return 0;
+}
 
 static int help(int argc, char ** argv) {
     const bool show_all = argc >= 2 && std::string(argv[1]) == "all";
