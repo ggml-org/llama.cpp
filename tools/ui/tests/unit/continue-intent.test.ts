@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { classifyContinueIntent } from '$lib/utils/agentic';
-import { MessageRole, MessageType } from '$lib/enums';
+import { ContinueIntentKind, MessageRole, MessageType } from '$lib/enums';
 import type { DatabaseMessage } from '$lib/types/database';
 
 /**
@@ -49,7 +49,7 @@ describe('classifyContinueIntent', () => {
 
 		const intent = classifyContinueIntent(messages, 1);
 
-		expect(intent).toEqual({ kind: 'append_text' });
+		expect(intent).toEqual({ kind: ContinueIntentKind.APPEND_TEXT });
 	});
 
 	it('returns append_text for a plain text assistant turn in the middle', () => {
@@ -60,7 +60,7 @@ describe('classifyContinueIntent', () => {
 			makeMsg(MessageRole.ASSISTANT, { content: 'a2' })
 		];
 
-		expect(classifyContinueIntent(messages, 1)).toEqual({ kind: 'append_text' });
+		expect(classifyContinueIntent(messages, 1)).toEqual({ kind: ContinueIntentKind.APPEND_TEXT });
 	});
 
 	it('returns rerun_turn when the assistant has tool_calls without results', () => {
@@ -74,7 +74,7 @@ describe('classifyContinueIntent', () => {
 
 		const intent = classifyContinueIntent(messages, 1);
 
-		expect(intent).toEqual({ kind: 'rerun_turn', truncateAfter: 0 });
+		expect(intent).toEqual({ kind: ContinueIntentKind.RERUN_TURN, truncateAfter: 0 });
 	});
 
 	it('returns next_turn when trailing tool results resolve the tool_calls', () => {
@@ -89,7 +89,7 @@ describe('classifyContinueIntent', () => {
 
 		const intent = classifyContinueIntent(messages, 1);
 
-		expect(intent).toEqual({ kind: 'next_turn', truncateAfter: 2 });
+		expect(intent).toEqual({ kind: ContinueIntentKind.NEXT_TURN, truncateAfter: 2 });
 	});
 
 	it('next_turn keeps all consecutive trailing tool results, not just one', () => {
@@ -108,7 +108,7 @@ describe('classifyContinueIntent', () => {
 
 		const intent = classifyContinueIntent(messages, 1);
 
-		expect(intent).toEqual({ kind: 'next_turn', truncateAfter: 3 });
+		expect(intent).toEqual({ kind: ContinueIntentKind.NEXT_TURN, truncateAfter: 3 });
 	});
 
 	it('next_turn stops at the first non tool message after the target', () => {
@@ -127,7 +127,7 @@ describe('classifyContinueIntent', () => {
 
 		// truncateAfter must point at the contiguous tool block, not jump over
 		// the user message to grab the dangling late tool.
-		expect(intent).toEqual({ kind: 'next_turn', truncateAfter: 2 });
+		expect(intent).toEqual({ kind: ContinueIntentKind.NEXT_TURN, truncateAfter: 2 });
 	});
 
 	it('returns append_text when toolCalls is set but parses to empty array', () => {
@@ -136,7 +136,7 @@ describe('classifyContinueIntent', () => {
 			makeMsg(MessageRole.ASSISTANT, { content: 'a', toolCalls: '[]' })
 		];
 
-		expect(classifyContinueIntent(messages, 1)).toEqual({ kind: 'append_text' });
+		expect(classifyContinueIntent(messages, 1)).toEqual({ kind: ContinueIntentKind.APPEND_TEXT });
 	});
 
 	it('returns append_text when toolCalls is malformed JSON', () => {
@@ -145,7 +145,7 @@ describe('classifyContinueIntent', () => {
 			makeMsg(MessageRole.ASSISTANT, { content: 'a', toolCalls: '{not json' })
 		];
 
-		expect(classifyContinueIntent(messages, 1)).toEqual({ kind: 'append_text' });
+		expect(classifyContinueIntent(messages, 1)).toEqual({ kind: ContinueIntentKind.APPEND_TEXT });
 	});
 
 	it('returns append_text defensively when idx points at a non assistant message', () => {
@@ -154,13 +154,13 @@ describe('classifyContinueIntent', () => {
 			makeMsg(MessageRole.ASSISTANT, { content: 'a' })
 		];
 
-		expect(classifyContinueIntent(messages, 0)).toEqual({ kind: 'append_text' });
+		expect(classifyContinueIntent(messages, 0)).toEqual({ kind: ContinueIntentKind.APPEND_TEXT });
 	});
 
 	it('returns append_text defensively when idx is out of bounds', () => {
 		const messages = [makeMsg(MessageRole.ASSISTANT, { content: 'a' })];
 
-		expect(classifyContinueIntent(messages, 5)).toEqual({ kind: 'append_text' });
-		expect(classifyContinueIntent([], 0)).toEqual({ kind: 'append_text' });
+		expect(classifyContinueIntent(messages, 5)).toEqual({ kind: ContinueIntentKind.APPEND_TEXT });
+		expect(classifyContinueIntent([], 0)).toEqual({ kind: ContinueIntentKind.APPEND_TEXT });
 	});
 });

@@ -52,7 +52,7 @@ import type {
 	DatabaseMessage,
 	DatabaseMessageExtra
 } from '$lib/types';
-import { ErrorDialogType, MessageRole, MessageType } from '$lib/enums';
+import { ContinueIntentKind, ErrorDialogType, MessageRole, MessageType } from '$lib/enums';
 
 interface ConversationStateEntry {
 	lastAccessed: number;
@@ -1325,10 +1325,10 @@ class ChatStore {
 		// tool_calls already paired with tool results need a fresh next turn,
 		// not a token level continuation of the target assistant.
 		const intent = classifyContinueIntent(conversationsStore.activeMessages, idx);
-		if (intent.kind === 'rerun_turn') {
+		if (intent.kind === ContinueIntentKind.RERUN_TURN) {
 			return this.regenerateMessageWithBranching(messageId);
 		}
-		if (intent.kind === 'next_turn') {
+		if (intent.kind === ContinueIntentKind.NEXT_TURN) {
 			return this.continueAsNextAgenticTurn(intent.truncateAfter);
 		}
 

@@ -1,4 +1,4 @@
-import { AgenticSectionType, MessageRole } from '$lib/enums';
+import { AgenticSectionType, ContinueIntentKind, MessageRole } from '$lib/enums';
 import { ATTACHMENT_SAVED_REGEX, NEWLINE_SEPARATOR } from '$lib/constants';
 import type { ApiChatCompletionToolCall } from '$lib/types/api';
 import type {
@@ -245,9 +245,9 @@ export function hasAgenticContent(
  *                   that last tool result.
  */
 export type ContinueIntent =
-	| { kind: 'append_text' }
-	| { kind: 'rerun_turn'; truncateAfter: number }
-	| { kind: 'next_turn'; truncateAfter: number };
+	| { kind: ContinueIntentKind.APPEND_TEXT }
+	| { kind: ContinueIntentKind.RERUN_TURN; truncateAfter: number }
+	| { kind: ContinueIntentKind.NEXT_TURN; truncateAfter: number };
 
 /**
  * Decide how a Continue click on messages[idx] should resume generation.
@@ -258,12 +258,12 @@ export function classifyContinueIntent(messages: DatabaseMessage[], idx: number)
 
 	// Defensive default: callers already filter by role, stay deterministic.
 	if (!target || target.role !== MessageRole.ASSISTANT) {
-		return { kind: 'append_text' };
+		return { kind: ContinueIntentKind.APPEND_TEXT };
 	}
 
 	const hasToolCalls = parseToolCalls(target.toolCalls).length > 0;
 	if (!hasToolCalls) {
-		return { kind: 'append_text' };
+		return { kind: ContinueIntentKind.APPEND_TEXT };
 	}
 
 	// Walk consecutive trailing tool results. The agentic loop only emits tool
@@ -279,8 +279,8 @@ export function classifyContinueIntent(messages: DatabaseMessage[], idx: number)
 	}
 
 	if (lastTrailingTool > idx) {
-		return { kind: 'next_turn', truncateAfter: lastTrailingTool };
+		return { kind: ContinueIntentKind.NEXT_TURN, truncateAfter: lastTrailingTool };
 	}
 
-	return { kind: 'rerun_turn', truncateAfter: idx - 1 };
+	return { kind: ContinueIntentKind.RERUN_TURN, truncateAfter: idx - 1 };
 }
