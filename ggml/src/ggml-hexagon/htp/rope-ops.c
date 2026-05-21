@@ -107,7 +107,7 @@ static inline void rope_yarn_one(float theta, float freq_scale, float * corr_dim
     cache[i0 + 1] = sinf(theta_final) * mscale_final;
 }
 
-static void rope_cache_init(const float    theta_base,
+static __attribute__((noinline)) void rope_cache_init(const float    theta_base,
                             const float    freq_scale,
                             const float *  freq_factors,
                             float *        corr_dims,
@@ -129,7 +129,7 @@ static void rope_cache_init(const float    theta_base,
 
 // pos_t/h/w/e: the four position ids for this sequence step (t=time, h=height, w=width, e=extra).
 // sections[4]: number of head dims assigned to each position component.
-static void mrope_cache_init(const float    pos_t,
+static __attribute__((noinline)) void mrope_cache_init(const float    pos_t,
                              const float    pos_h,
                              const float    pos_w,
                              const float    pos_e,
