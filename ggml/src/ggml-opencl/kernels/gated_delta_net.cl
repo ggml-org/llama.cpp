@@ -1,5 +1,17 @@
 #pragma OPENCL EXTENSION cl_khr_subgroups : enable
 
+#ifdef cl_intel_required_subgroup_size
+#pragma OPENCL EXTENSION cl_intel_required_subgroup_size : enable
+#define INTEL_GPU 1
+#define REQD_SUBGROUP_SIZE_16 __attribute__((intel_reqd_sub_group_size(16)))
+#define REQD_SUBGROUP_SIZE_32 __attribute__((intel_reqd_sub_group_size(32)))
+#elif defined(cl_qcom_reqd_sub_group_size)
+#pragma OPENCL EXTENSION cl_qcom_reqd_sub_group_size : enable
+#define ADRENO_GPU 1
+#define REQD_SUBGROUP_SIZE_64  __attribute__((qcom_reqd_sub_group_size("half")))
+#define REQD_SUBGROUP_SIZE_128 __attribute__((qcom_reqd_sub_group_size("full")))
+#endif
+
 #ifndef S_V
 #define S_V 128
 #endif
@@ -62,6 +74,11 @@ static inline float reduce_add_shmem(float partial, __local float * temp, uint l
 
 // force compiler to optimize kernel for a specific fixed work-group size
 __attribute__((reqd_work_group_size(WG_SIZE, 1, 1)))
+#ifdef INTEL_GPU
+REQD_SUBGROUP_SIZE_32
+#elif defined (ADRENO_GPU)
+REQD_SUBGROUP_SIZE_64
+#endif
 kernel void kernel_gated_delta_net(
         global const char * q_buf,     ulong off_q,
         global const char * k_buf,     ulong off_k,
@@ -79,7 +96,8 @@ kernel void kernel_gated_delta_net(
         uint  sb1, uint sb2, uint sb3,
         uint  H_k,
         uint  rq3,
-        float scale) {
+        float scale,
+        uint K) {
 
     global const float * data_q     = (global const float *)(q_buf     + off_q);
     global const float * data_k     = (global const float *)(k_buf     + off_k);
@@ -105,10 +123,12 @@ kernel void kernel_gated_delta_net(
     const uint iq3 = seq_id / rq3; // seq index for Q and K
 
     const uint state_size = S_V * S_V;
-    const uint state_base = (seq_id * H_v + head_id) * state_size;
+    const uint state_base = (seq_id * K * H_v + head_id) * state_size;
     const uint q_off_base  = iq3 * sq3 + iq1 * sq1;
     const uint v_off_base  = seq_id * sv3 + head_id * sv1;
     const uint gb_off_base = seq_id * sb3 + head_id * sb1;
+    const uint state_out_base      = (seq_id * H_v + head_id) * state_size;
+    const uint state_size_per_snap = state_size * H_v * n_seqs;
 
     __local float reduce_temp[WG_SIZE];
     __local float * temp_ptr = reduce_temp + sg_id * SUBGROUP_SIZE;
@@ -123,6 +143,7 @@ kernel void kernel_gated_delta_net(
         }
     }
 
+    const int shift = (int)n_tokens - (int)K;
     uint attn_off = (seq_id * n_tokens * H_v + head_id) * S_V;
 
     for (uint t = 0; t < n_tokens; t++) {
@@ -196,14 +217,31 @@ kernel void kernel_gated_delta_net(
             }
         }
         attn_off += S_V * H_v;
+
+        if (K > 1u) {
+            const int target_slot = (int)t - shift;
+            if (target_slot >= 0 && target_slot < (int)K) {
+                #pragma unroll
+                for (uint cg = 0; cg < COLS_PER_LANE_GROUP; cg++) {
+                    const uint col = sg_col_base + cg * LANE_GROUPS_PER_SG + lane_group;
+                    const uint slot_base = s_off + (uint)target_slot * state_size_per_snap + state_out_base;
+                    #pragma unroll
+                    for (uint r = 0; r < ROWS_PER_LANE; r++) {
+                        data_dst[slot_base + col * S_V + r * LANES_PER_COLUMN + lane] = s_shard[cg][r];
+                    }
+                }
+            }
+        }
     }
 
-    #pragma unroll
-    for (uint cg = 0; cg < COLS_PER_LANE_GROUP; cg++) {
-        const uint col = sg_col_base + cg * LANE_GROUPS_PER_SG + lane_group;
+    if (K == 1u) {
         #pragma unroll
-        for (uint r = 0; r < ROWS_PER_LANE; r++) {
-            data_dst[s_off + state_base + col * S_V + r * LANES_PER_COLUMN + lane] = s_shard[cg][r];
+        for (uint cg = 0; cg < COLS_PER_LANE_GROUP; cg++) {
+            const uint col = sg_col_base + cg * LANE_GROUPS_PER_SG + lane_group;
+            #pragma unroll
+            for (uint r = 0; r < ROWS_PER_LANE; r++) {
+                data_dst[s_off + state_base + col * S_V + r * LANES_PER_COLUMN + lane] = s_shard[cg][r];
+            }
         }
     }
 }

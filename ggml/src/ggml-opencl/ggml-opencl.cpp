@@ -4971,12 +4971,8 @@ static bool ggml_opencl_supports_op(ggml_backend_dev_t dev, const struct ggml_te
                 if (op->src[0]->type != GGML_TYPE_F32 || op->type != GGML_TYPE_F32) {
                     return false;
                 }
-                // K>1 state snapshot is not supported
-                // This means state dimension must be S_v * S_v * H_v * n_seqs
                 const int64_t S_v = op->src[2]->ne[0];
-                const int64_t H_v = op->src[2]->ne[1];
-                const int64_t n_seqs = op->src[2]->ne[3];
-                return (S_v == 16 || S_v == 32 || S_v == 64 || S_v == 128) && ggml_nelements(op->src[5]) == S_v * S_v * H_v * n_seqs;
+                return S_v == 16 || S_v == 32 || S_v == 64 || S_v == 128;
             }
         case GGML_OP_CONCAT:
             return op->src[0]->type == GGML_TYPE_F32 && op->src[1]->type == GGML_TYPE_F32 && op->type == GGML_TYPE_F32;
@@ -17163,6 +17159,7 @@ static void ggml_cl_gated_delta_net(ggml_backend_t backend, ggml_tensor * dst) {
     const cl_uint H_v      = (cl_uint) src_v->ne[1];
     const cl_uint n_tokens = (cl_uint) src_v->ne[2];
     const cl_uint n_seqs   = (cl_uint) src_v->ne[3];
+    const cl_uint K        = (cl_uint) src_state->ne[1];
 
     int si;
     switch (S_v) {
@@ -17264,6 +17261,7 @@ static void ggml_cl_gated_delta_net(ggml_backend_t backend, ggml_tensor * dst) {
     CL_CHECK(clSetKernelArg(kernel, idx++, sizeof(cl_uint),  &H_k));
     CL_CHECK(clSetKernelArg(kernel, idx++, sizeof(cl_uint),  &rq3));
     CL_CHECK(clSetKernelArg(kernel, idx++, sizeof(float),    &scale));
+    CL_CHECK(clSetKernelArg(kernel, idx++, sizeof(cl_uint),    &K));
 
     // Subgroup size is 64 for Adreno and 32 for Intel
     const int sg_size = backend_ctx->gpu_family == GPU_FAMILY::ADRENO ? 64 : backend_ctx->gpu_family == GPU_FAMILY::INTEL ? 32 : -1;
