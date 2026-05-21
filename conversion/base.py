@@ -1610,6 +1610,42 @@ class TextModel(ModelBase):
         special_vocab = gguf.SpecialVocab(self.dir_model, load_merges=True)
         special_vocab.add_to_gguf(self.gguf_writer)
 
+    def _set_vocab_hybriddna(self):
+        from transformers import AutoTokenizer
+        tokenizer = AutoTokenizer.from_pretrained(self.dir_model, trust_remote_code=True)
+        vocab_size = self.hparams.get("vocab_size", len(tokenizer.vocab))  # ty: ignore[unresolved-attribute]
+        assert max(tokenizer.vocab.values()) < vocab_size  # ty: ignore[unresolved-attribute]
+
+        reverse_vocab = {id_: encoded_tok for encoded_tok, id_ in tokenizer.vocab.items()}  # ty: ignore[unresolved-attribute]
+        added_vocab = tokenizer.get_added_vocab()  # ty: ignore[unresolved-attribute]
+        added_tokens_decoder = tokenizer.added_tokens_decoder  # ty: ignore[unresolved-attribute]
+
+        tokens: list[str] = []
+        toktypes: list[int] = []
+        for i in range(vocab_size):
+            if i not in reverse_vocab:
+                tokens.append(f"[PAD{i}]")
+                toktypes.append(gguf.TokenType.UNUSED)
+            else:
+                token: str = reverse_vocab[i]
+                if token in added_vocab:
+                    if added_tokens_decoder[i].special or self.does_token_look_special(token):
+                        toktypes.append(gguf.TokenType.CONTROL)
+                    else:
+                        toktypes.append(gguf.TokenType.USER_DEFINED)
+                else:
+                    toktypes.append(gguf.TokenType.NORMAL)
+                tokens.append(token)
+
+        tokpre = self.get_vocab_base_pre(tokenizer)
+        self.gguf_writer.add_tokenizer_model("hybriddna")
+        self.gguf_writer.add_tokenizer_pre(tokpre)
+        self.gguf_writer.add_token_list(tokens)
+        self.gguf_writer.add_token_types(toktypes)
+
+        special_vocab = gguf.SpecialVocab(self.dir_model, load_merges=True)
+        special_vocab.add_to_gguf(self.gguf_writer)
+
     def _set_vocab_qwen(self):
         from .qwen import QwenModel
 
