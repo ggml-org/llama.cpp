@@ -7486,7 +7486,11 @@ kernel void kernel_concat(
 
     const int i3 = tgpig.z;
     const int i2 = tgpig.y;
-    const int i1 = tgpig.x;
+    const int i1 = ntg.y == 1 ? tgpig.x : tgpig.x*ntg.y + tpitg.y;
+
+    if (i1 >= args.ne1) {
+        return;
+    }
 
     int o[4] = {0, 0, 0, 0};
     o[args.dim] = args.dim == 0 ? args.ne00 : (args.dim == 1 ? args.ne01 : (args.dim == 2 ? args.ne02 : args.ne03));
