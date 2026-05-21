@@ -496,7 +496,7 @@ __kernel void flash_attn_f32_q4_0_q1_vec(
     #pragma unroll
     for (int i = 0; i < Q1V_DV_PER_THREAD; ++i) o_acc[i] = (ACC_TYPE4)(0.0f);
 
-    ACC_TYPE m_i = -INFINITY;
+    ACC_TYPE m_i = FA_M_INIT;
     ACC_TYPE l_i = 0.0f;
 
     const int kv_per_sg = (n_kv + VEC_NSG - 1) / VEC_NSG;
@@ -927,7 +927,7 @@ __kernel void flash_attn_f32_q4_0_q1_vec_mq_split(
                 const ulong rec_idx = ((((ulong) batch_idx * n_head + head_idx) * n_q + q_idx)
                                        * n_splits + split_idx);
                 global float * rec = partial_void + rec_idx * record_stride;
-                rec[0] = -INFINITY;
+                rec[0] = FA_M_INIT;
                 rec[1] = 0.0f;
             }
         }
@@ -1005,7 +1005,7 @@ __kernel void flash_attn_f32_q4_0_q1_vec_mq_split(
     ACC_TYPE  l_i[MQ_GQA];
     #pragma unroll
     for (int h = 0; h < MQ_GQA; ++h) {
-        m_i[h] = -INFINITY;
+        m_i[h] = FA_M_INIT;
         l_i[h] = 0.0f;
         #pragma unroll
         for (int i = 0; i < Q1V_DV_PER_THREAD; ++i) o_acc[h][i] = (ACC_TYPE4)(0.0f);

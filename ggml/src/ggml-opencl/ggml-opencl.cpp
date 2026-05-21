@@ -443,6 +443,12 @@ struct ggml_opencl_fa_kernels {
     // K-image variant of MQ_G8 vec_mq_split: K bound as image1d_buffer_t
     // (Adreno texture cache, separate BW path from L2). Opt-in, GGML_OPENCL_FA_K_IMG=1.
     std::map<std::pair<int, int>, cl_kernel> f32_f16_q1_vec_mq_split_g8_k_img;
+    // K-image variant of MQ_GQA=4 vec_mq_split (default program). Same source as
+    // _g8_k_img but compiled with the default MQ_GQA=4 — targets dense GQA=4
+    // DK=DV=128 (Mistral-7B / Qwen3-8B / Llama-3-8B). Opt-in via
+    // GGML_OPENCL_FA_F16_MQ_DK128=1 (+ GGML_OPENCL_FA_K_IMG=1 for the K-image
+    // path; without K_IMG, the non-image f32_f16_q1_vec_mq_split fires).
+    std::map<std::pair<int, int>, cl_kernel> f32_f16_q1_vec_mq_split_k_img;
     // Alternative decode FA: 1 WG per (q_idx, q_head) with a __local K/V tile +
     // pure __local tree-reduce. Compiled only at DK=DV=128. Opt-in.
     std::map<std::pair<int, int>, cl_kernel> f32_f16_q1_local_tile;
@@ -4489,6 +4495,20 @@ static bool ggml_opencl_ensure_fa_variant(ggml_backend_opencl_context * backend_
                     ggml_opencl_log_fa_kernel_spill(backend_ctx, k_q1_vec_mq_split, "flash_attn_f32_f16_q1_vec_mq_split", dk, dv);
                 } else {
                     clReleaseKernel(k_q1_vec_mq_split);
+                }
+            }
+            // K-image variant of MQ_GQA=4 split (default prog). Same source as
+            // the _g8 K-image kernel below, just compiled with the default
+            // MQ_GQA=4 specialization — targets dense GQA=4 DK=DV=128 (Mistral,
+            // Qwen3-8B, Llama-3-8B). Opt-in dispatch.
+            cl_kernel k_q1_vec_mq_split_k_img = clCreateKernel(prog, "flash_attn_f32_f16_q1_vec_mq_split_k_img", &err);
+            if (err == CL_SUCCESS) {
+                if (ggml_opencl_fa_kernel_fits_wg(backend_ctx, k_q1_vec_mq_split_k_img, 256,
+                                                  "flash_attn_f32_f16_q1_vec_mq_split_k_img", dk, dv)) {
+                    backend_ctx->fa.f32_f16_q1_vec_mq_split_k_img[{dk, dv}] = k_q1_vec_mq_split_k_img;
+                    ggml_opencl_log_fa_kernel_spill(backend_ctx, k_q1_vec_mq_split_k_img, "flash_attn_f32_f16_q1_vec_mq_split_k_img", dk, dv);
+                } else {
+                    clReleaseKernel(k_q1_vec_mq_split_k_img);
                 }
             }
             cl_kernel k_merge = clCreateKernel(prog, "flash_attn_f32_merge", &err);
@@ -13302,6 +13322,10 @@ static constexpr int FD_MAX_SPLITS    = 16;
 static constexpr int FD_MAX_DK        = 128;
 static constexpr int FD_MAX_DK_MULTI  = 64;
 static constexpr int FD_MAX_N_Q_MULTI = 8;
+// MQ FD split-groups have few subgroups (MQ_NSG_SPLIT), so use a smaller
+// kv_per_split to keep the softmax recurrence short; non-MQ keeps FD_KV_PER_SPLIT.
+static constexpr int FD_MQ_KV_PER_SPLIT = 256;
+static constexpr int FD_MQ_MAX_SPLITS   = 128;
 
 static void ggml_cl_flash_attn(ggml_backend_t backend, const ggml_tensor * q, const ggml_tensor * k, ggml_tensor * dst) {
     const ggml_tensor * v = dst->src[2];
@@ -13675,12 +13699,40 @@ static void ggml_cl_flash_attn(ggml_backend_t backend, const ggml_tensor * q, co
                 fd_k_split = backend_ctx->fa.f32_f16_q1_local_mq_split.at(dk_dv);
                 use_fd_mq  = true;
                 fd_mq_wg   = 64;  // LMQ_WG
-            // f16 KV — Gemma-3 class (DK=DV=256 GQA=4); n_q==1 only for now
+            // f16 KV — Gemma-3 class (DK=DV=256 GQA=4) and the GQA=4 DK=DV=128
+            // family (Qwen3-4B/8B, Llama-3.x, Mistral-7B). Same MQ_GQA=4 kernel,
+            // already compiled per (dk, dv). Without the DK=128 branch f16 KV
+            // decode on these models falls to the spilling non-MQ split and
+            // pays a GQA-replay on K reads — structurally slower than the q8_0
+            // path on the same model. WG=256 fits at DK=128 (less per-thread
+            // state than DK=256); if the kernel didn't compile or doesn't fit,
+            // `count(dk_dv) > 0` skips dispatch. n_q==1 only for now.
             } else if (nq1_only && is_mixed && gqa_ratio_dispatch == 4 &&
-                d_head_q == 256 && d_head_v == 256 &&
+                ((d_head_q == 256 && d_head_v == 256) ||
+                 (d_head_q == 128 && d_head_v == 128)) &&
                 backend_ctx->fa.f32_f16_q1_vec_mq_split.count(dk_dv) > 0) {
                 fd_k_split = backend_ctx->fa.f32_f16_q1_vec_mq_split.at(dk_dv);
                 use_fd_mq  = true;
+            // f16 KV — dense 7-8B class (Mistral-7B / Qwen3-8B / Llama-3-8B),
+            // DK=DV=128 GQA=4. Plain q1_split is 3.5x slower per layer than
+            // FA=0's image-fed l4_x8_gqa_r4_img KQ. MQ closes +60-90% of that
+            // end-to-end at d=8k on X1-85 (Mistral 2.90→5.49, Qwen3-8B 2.37→3.80,
+            // Llama-3-8B 2.56→4.68 t/s). K-image adds ~1-3% per-FA-call further,
+            // opt-in via GGML_OPENCL_FA_K_IMG=1 (mirrors the g8 dispatch).
+            } else if (nq1_only && is_mixed && gqa_ratio_dispatch == 4 &&
+                d_head_q == 128 && d_head_v == 128 &&
+                backend_ctx->fa.f32_f16_q1_vec_mq_split.count(dk_dv) > 0) {
+                const bool k_img_on = getenv("GGML_OPENCL_FA_K_IMG") != NULL &&
+                                      getenv("GGML_OPENCL_FA_K_IMG")[0] != '0';
+                if (k_img_on &&
+                    backend_ctx->fa.f32_f16_q1_vec_mq_split_k_img.count(dk_dv) > 0) {
+                    fd_k_split   = backend_ctx->fa.f32_f16_q1_vec_mq_split_k_img.at(dk_dv);
+                    use_fd_mq    = true;
+                    use_fa_k_img = true;
+                } else {
+                    fd_k_split = backend_ctx->fa.f32_f16_q1_vec_mq_split.at(dk_dv);
+                    use_fd_mq  = true;
+                }
             // f16 KV — Qwen3-30B-A3B class (DK=DV=128 GQA=8); extended to n_q ∈ [1, N_MAX_VEC_NQ].
             // K-image variant: same MQ_G8 path but K bound via image1d_buffer_t.
             // Opt-in via GGML_OPENCL_FA_K_IMG=1; targets the long-context FA
@@ -13713,11 +13765,16 @@ static void ggml_cl_flash_attn(ggml_backend_t backend, const ggml_tensor * q, co
                 backend_ctx->fa.f32_q8_0_q1_vec_mq_split.count(dk_dv) > 0) {
                 fd_k_split = backend_ctx->fa.f32_q8_0_q1_vec_mq_split.at(dk_dv);
                 use_fd_mq  = true;
-            // q4_0 KV — opt-in only. The MQ port for q4_0 regressed on
-            // Qwen3-30B-A3B: q4_0 K is only 4 bits/element, so the K-bandwidth
-            // saving MQ offers doesn't offset the per-head dp4a + LDS overhead
-            // (q8_0 at 8 b/e and f16 at 16 b/e do win). Kernel kept registered;
-            // enable for measurement via GGML_OPENCL_FA_Q4_MQ=1.
+            // q4_0 KV — MQ-split dispatch is split by GQA fan-out:
+            //   GQA=4 (MQ_GQA=4 kernel): default-on. Dense 4/8-class targets
+            //     (Mistral-7B, Qwen3-4B/8B, Llama-3-8B) measure +72-151%
+            //     decode at d=8k/16k vs plain q1_split on Adreno X1-85.
+            //   GQA=8 (g8 / MQ_GQA=8 kernel): opt-in. Regressed on
+            //     Qwen3-30B-A3B (per-FA-call +20% on X1-85): q4_0 K at
+            //     4 b/e gives less K-BW saving than q8/f16 while the
+            //     occupancy drop + per-head dp4a + LDS overhead cost
+            //     more than they save on that shape.
+            //     Enable for measurement via GGML_OPENCL_FA_Q4_MQ=1.
             } else if (nq1_only && is_q4_0) {
                 const char * q4_mq_env = getenv("GGML_OPENCL_FA_Q4_MQ");
                 const bool   q4_mq_on  = (q4_mq_env != NULL) && (q4_mq_env[0] != '0');
@@ -13727,7 +13784,7 @@ static void ggml_cl_flash_attn(ggml_backend_t backend, const ggml_tensor * q, co
                     fd_k_split = backend_ctx->fa.f32_q4_0_q1_vec_mq_split_g8.at(dk_dv);
                     use_fd_mq  = true;
                     fd_mq_wg   = 192;
-                } else if (q4_mq_on && gqa_ratio_dispatch == 4 &&
+                } else if (gqa_ratio_dispatch == 4 &&
                     d_head_q == 128 && d_head_v == 128 &&
                     backend_ctx->fa.f32_q4_0_q1_vec_mq_split.count(dk_dv) > 0) {
                     fd_k_split = backend_ctx->fa.f32_q4_0_q1_vec_mq_split.at(dk_dv);
@@ -13854,13 +13911,25 @@ static void ggml_cl_flash_attn(ggml_backend_t backend, const ggml_tensor * q, co
     const float m1 = powf(2.0f, -(max_bias / 2.0f) / n_head_log2_f);
 
     if (use_fd) {
-        int n_splits = (n_kv + FD_KV_PER_SPLIT - 1) / FD_KV_PER_SPLIT;
-        if (n_splits < FD_MIN_SPLITS) {
-            n_splits = FD_MIN_SPLITS;
-        }
-        if (n_splits > FD_MAX_SPLITS) {
-            n_splits = FD_MAX_SPLITS;
-        }
+        // MQ FD split kernels are latency-bound on a deep per-subgroup
+        // online-softmax recurrence at the prefill-tuned FD_KV_PER_SPLIT;
+        // use a finer decode granularity for them (see FD_MQ_KV_PER_SPLIT).
+        // Env overrides (read once) keep the granularity sweepable.
+        static const int fd_env_kv_per_split = []{
+            const char * e = getenv("GGML_OPENCL_FD_KV_PER_SPLIT");
+            return (e && e[0]) ? atoi(e) : 0;
+        }();
+        static const int fd_env_max_splits = []{
+            const char * e = getenv("GGML_OPENCL_FD_MAX_SPLITS");
+            return (e && e[0]) ? atoi(e) : 0;
+        }();
+        int fd_kv_per_split = use_fd_mq ? FD_MQ_KV_PER_SPLIT : FD_KV_PER_SPLIT;
+        int fd_max_splits   = use_fd_mq ? FD_MQ_MAX_SPLITS   : FD_MAX_SPLITS;
+        if (fd_env_kv_per_split > 0) fd_kv_per_split = fd_env_kv_per_split;
+        if (fd_env_max_splits   > 0) fd_max_splits   = fd_env_max_splits;
+        int n_splits = (n_kv + fd_kv_per_split - 1) / fd_kv_per_split;
+        if (n_splits < FD_MIN_SPLITS) n_splits = FD_MIN_SPLITS;
+        if (n_splits > fd_max_splits) n_splits = fd_max_splits;
         const int kv_per_split = (n_kv + n_splits - 1) / n_splits;
 
         const int fa_partial_floats = 2 + d_head_v;
@@ -13904,10 +13973,16 @@ static void ggml_cl_flash_attn(ggml_backend_t backend, const ggml_tensor * q, co
                     k_data_device, offset_k, k_bytes, CL_HALF_FLOAT);
             }
             // Fallback: if image creation failed (over max pixels, alloc fail),
-            // re-route through the regular MQ_G8 path. Rare; keeps the run
-            // alive instead of crashing.
+            // re-route through the matching non-image MQ path. Rare; keeps the
+            // run alive instead of crashing. gqa==4 → default MQ kernel,
+            // gqa==8 → MQ_G8 kernel.
             if (k_img == nullptr) {
-                k_split = backend_ctx->fa.f32_f16_q1_vec_mq_split_g8.at(dk_dv);
+                if (gqa_ratio_dispatch == 4 &&
+                    backend_ctx->fa.f32_f16_q1_vec_mq_split.count(dk_dv) > 0) {
+                    k_split = backend_ctx->fa.f32_f16_q1_vec_mq_split.at(dk_dv);
+                } else {
+                    k_split = backend_ctx->fa.f32_f16_q1_vec_mq_split_g8.at(dk_dv);
+                }
                 use_fa_k_img = false;
                 CL_CHECK(clSetKernelArg(k_split, argi++, sizeof(cl_mem),   &k_data_device));
                 CL_CHECK(clSetKernelArg(k_split, argi++, sizeof(cl_ulong), &offset_k));
