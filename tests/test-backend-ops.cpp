@@ -8090,80 +8090,34 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {256, 1, 4, 1}, {-1,-1,-1,-1}, {1, 2, 0, 3}, {0, 0, 0, 0}));
 
     // CPY - different src/dst shapes (reshaping via CPY)
-    // 1D -> 2D
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {64, 1, 1, 1}, {8, 8, 1, 1}));
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {256, 1, 1, 1}, {16, 16, 1, 1}));
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {1024, 1, 1, 1}, {32, 32, 1, 1}));
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {1024, 1, 1, 1}, {1024, 1, 1, 1})); // same shape
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {2048, 1, 1, 1}, {64, 32, 1, 1}));
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {4096, 1, 1, 1}, {128, 32, 1, 1}));
-    // 1D -> 3D
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {64, 1, 1, 1}, {4, 4, 4, 1}));
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {1024, 1, 1, 1}, {8, 8, 16, 1}));
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {2048, 1, 1, 1}, {16, 8, 16, 1}));
-    // 1D -> 4D
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {64, 1, 1, 1}, {4, 2, 4, 2}));
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {1024, 1, 1, 1}, {8, 4, 8, 4}));
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {2048, 1, 1, 1}, {16, 8, 4, 4}));
-    // 2D -> 1D
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {8, 8, 1, 1}, {64, 1, 1, 1}));
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {16, 16, 1, 1}, {256, 1, 1, 1}));
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {32, 32, 1, 1}, {1024, 1, 1, 1}));
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {64, 32, 1, 1}, {2048, 1, 1, 1}));
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {128, 32, 1, 1}, {4096, 1, 1, 1}));
-    // 2D -> 2D (different shapes)
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {64, 1, 1, 1}, {1, 64, 1, 1}));
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {1024, 1, 1, 1}, {1, 1024, 1, 1}));
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {256, 4, 1, 1}, {32, 32, 1, 1}));
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {32, 32, 1, 1}, {256, 4, 1, 1}));
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {1024, 2, 1, 1}, {512, 4, 1, 1}));
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {512, 4, 1, 1}, {1024, 2, 1, 1}));
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {2048, 8, 1, 1}, {256, 64, 1, 1}));
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {256, 64, 1, 1}, {2048, 8, 1, 1}));
-    // 2D -> 3D
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {64, 1, 1, 1}, {4, 4, 4, 1}));
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {1024, 1, 1, 1}, {16, 8, 8, 1}));
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {256, 4, 1, 1}, {16, 4, 16, 1}));
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {32, 32, 1, 1}, {8, 8, 16, 1}));
-    // 3D -> 1D
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {4, 4, 4, 1}, {64, 1, 1, 1}));
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {16, 8, 8, 1}, {1024, 1, 1, 1}));
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {8, 8, 16, 1}, {1024, 1, 1, 1}));
-    // 3D -> 2D
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {4, 4, 4, 1}, {16, 4, 1, 1}));
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {8, 8, 16, 1}, {128, 8, 1, 1}));
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {16, 8, 8, 1}, {128, 8, 1, 1}));
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {16, 8, 16, 1}, {128, 16, 1, 1}));
-    // 3D -> 3D (different shapes)
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {4, 4, 4, 1}, {8, 2, 4, 1}));
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {8, 8, 16, 1}, {16, 8, 8, 1}));
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {16, 8, 16, 1}, {32, 8, 8, 1}));
-    // 4D -> 1D
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {4, 2, 4, 2}, {64, 1, 1, 1}));
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {8, 4, 8, 4}, {1024, 1, 1, 1}));
-    // 4D -> 2D
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {4, 2, 4, 2}, {32, 2, 1, 1}));
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {8, 4, 8, 4}, {128, 8, 1, 1}));
-    // 4D -> 3D
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {4, 2, 4, 2}, {8, 4, 2, 1}));
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {8, 4, 8, 4}, {16, 8, 8, 1}));
-    // 4D -> 4D (different shapes)
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {4, 2, 4, 2}, {2, 4, 4, 2}));
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {8, 4, 8, 4}, {4, 8, 8, 4}));
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {16, 8, 4, 4}, {8, 16, 4, 4}));
-    // Various sizes with 1024 boundary
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {1024, 1, 1, 1}, {32, 32, 1, 1}));
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {32, 32, 1, 1}, {1024, 1, 1, 1}));
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {1023, 1, 1, 1}, {341, 3, 1, 1}));
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {1025, 1, 1, 1}, {205, 5, 1, 1}));
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {2048, 1, 1, 1}, {64, 32, 1, 1}));
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {64, 32, 1, 1}, {2048, 1, 1, 1}));
-    // Small shapes
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {1, 1, 1, 1}, {1, 1, 1, 1}));
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {2, 1, 1, 1}, {1, 2, 1, 1}));
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {3, 1, 1, 1}, {1, 3, 1, 1}));
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {6, 1, 1, 1}, {2, 3, 1, 1}));
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {2, 3, 1, 1}, {6, 1, 1, 1}));
+    // Use permutations of {3, 5, 7, 32}. Total elements: 3*5*7*32 = 3360.
+    // Each src permutation is tested against canonical sorted and reverse dst (skip self).
+    {
+        std::array<int64_t, 4> dims = {3, 5, 7, 32};
+        std::sort(dims.begin(), dims.end());
+        std::array<int64_t, 4> canonical = dims;
+        std::array<int64_t, 4> reversed  = {32, 7, 5, 3};
+        for (ggml_type type : {GGML_TYPE_F32, GGML_TYPE_F16}) {
+            std::array<int64_t, 4> cur = dims;
+            do {
+                if (cur != canonical) {
+                    test_cases.emplace_back(new test_cpy(type, type, cur, canonical));
+                }
+                if (cur != reversed) {
+                    test_cases.emplace_back(new test_cpy(type, type, cur, reversed));
+                }
+                if (cur[0] == 32 && type == GGML_TYPE_F32) {
+                    if (canonical[0] == 32) {
+                        test_cases.emplace_back(new test_cpy(GGML_TYPE_Q4_0, GGML_TYPE_Q4_0, cur, canonical));
+                    }
+                    if (reversed[0] == 32) {
+                        test_cases.emplace_back(new test_cpy(GGML_TYPE_Q4_0, GGML_TYPE_Q4_0, cur, reversed));
+                    }
+                }
+                std::next_permutation(cur.begin(), cur.end());
+            } while (cur != canonical);
+        }
+    }
 
     for (ggml_type type_dst : { GGML_TYPE_F32, GGML_TYPE_I32, GGML_TYPE_F16, GGML_TYPE_BF16 }) {
         for (bool use_view_slice : { true, false }) {
