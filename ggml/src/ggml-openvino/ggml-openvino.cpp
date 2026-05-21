@@ -1042,15 +1042,13 @@ static bool is_op_unsupported_case(const ggml_tensor * op) {
         break;
     }
     case GGML_OP_GATED_DELTA_NET: {
+        // enable after https://github.com/openvinotoolkit/openvino/pull/35917 is included in OV release
+        return true;
         // if (ggml_openvino_get_device_name() == "GPU" && op->src[0]->ne[2] > 1) {
         //     // CVS-186471
         //     return true;
         // }
-        if (ggml_openvino_get_device_name() == "GPU") {
-            // enable after https://github.com/openvinotoolkit/openvino/pull/35917 is included in OV release
-            return true;
-        }
-        if (op->src[0]->op == GGML_OP_PERMUTE) {
+        if (op->src[2]->op == GGML_OP_PERMUTE) {
             return true;
         }
         // kda (per-key-dimension gating) not supported by fused GatedDeltaNet op
@@ -1060,6 +1058,10 @@ static bool is_op_unsupported_case(const ggml_tensor * op) {
         // v_repeat > 1 (GQA): ggml uses modulo head mapping (h_q = h_v % H_k)
         // but the fused op uses consecutive mapping (h_q = h_v / group_size)
         if (op->src[2]->ne[1] != op->src[0]->ne[1]) {
+            return true;
+        }
+        // K > 1 (multiple state snapshots) not supported by fused op
+        if (op->src[5]->ne[1] > 1) {
             return true;
         }
         break;
