@@ -2599,53 +2599,59 @@ public:
     llama_io_read_device(const uint8_t * p, size_t len, const llama_memory_buffers & mbufs) : ptr(p), buf_size(len), mbufs(mbufs) {
     }
 
-    ~llama_io_read_device() {
-        llama_memory_buffers mbufs_new;
+    ~llama_io_read_device() noexcept {
+        try {
+            llama_memory_buffers mbufs_new;
 
-        for (const auto & rinfo : rinfos) {
-            auto * buft = ggml_backend_buffer_get_type(rinfo.tensor->buffer);
+            for (const auto & rinfo : rinfos) {
+                auto * buft = ggml_backend_buffer_get_type(rinfo.tensor->buffer);
 
-            mbufs_new[buft].n_tensors++;
-            mbufs_new[buft].total_size += rinfo.size;
-        }
-
-        for (auto & [buft, mbuf] : mbufs_new) {
-            ggml_init_params params = {
-                /*.mem_size   =*/ mbuf.n_tensors*ggml_tensor_overhead(),
-                /*.mem_buffer =*/ NULL,
-                /*.no_alloc   =*/ true,
-            };
-
-            mbuf.ctx.reset(ggml_init(params));
-
-            mbuf.org.reserve(mbuf.n_tensors);
-        }
-
-        for (const auto & rinfo : rinfos) {
-            auto * buft = ggml_backend_buffer_get_type(rinfo.tensor->buffer);
-
-            const int64_t n = rinfo.size/ggml_element_size(rinfo.tensor);
-
-            auto & mbuf = mbufs_new[buft];
-
-            mbuf.org.push_back(ggml_view_1d(mbuf.ctx.get(), rinfo.tensor, n, rinfo.offset));
-
-            ggml_backend_view_init(mbuf.org.back());
-        }
-
-        for (auto & [buft, mbuf] : mbufs_new) {
-            const auto & mbuf_cur = mbufs.at(buft);
-
-            if (!mbuf_cur.buf || mbuf_cur.n_tensors != mbuf.n_tensors || mbuf_cur.total_size != mbuf.total_size) {
-                GGML_ABORT("%s: memory buffer mismatch\n", __func__);
+                mbufs_new[buft].n_tensors++;
+                mbufs_new[buft].total_size += rinfo.size;
             }
 
-            for (size_t i = 0; i < mbuf_cur.org.size(); ++i) {
-                ggml_backend_tensor_copy(mbuf_cur.cpy[i], mbuf.org[i]);
-            }
-        }
+            for (auto & [buft, mbuf] : mbufs_new) {
+                ggml_init_params params = {
+                    /*.mem_size   =*/ mbuf.n_tensors*ggml_tensor_overhead(),
+                    /*.mem_buffer =*/ NULL,
+                    /*.no_alloc   =*/ true,
+                };
 
-        GGML_ASSERT(buf_size == 0);
+                mbuf.ctx.reset(ggml_init(params));
+
+                mbuf.org.reserve(mbuf.n_tensors);
+            }
+
+            for (const auto & rinfo : rinfos) {
+                auto * buft = ggml_backend_buffer_get_type(rinfo.tensor->buffer);
+
+                const int64_t n = rinfo.size/ggml_element_size(rinfo.tensor);
+
+                auto & mbuf = mbufs_new[buft];
+
+                mbuf.org.push_back(ggml_view_1d(mbuf.ctx.get(), rinfo.tensor, n, rinfo.offset));
+
+                ggml_backend_view_init(mbuf.org.back());
+            }
+
+            for (auto & [buft, mbuf] : mbufs_new) {
+                const auto & mbuf_cur = mbufs.at(buft);
+
+                if (!mbuf_cur.buf || mbuf_cur.n_tensors != mbuf.n_tensors || mbuf_cur.total_size != mbuf.total_size) {
+                    GGML_ABORT("%s: memory buffer mismatch\n", __func__);
+                }
+
+                for (size_t i = 0; i < mbuf_cur.org.size(); ++i) {
+                    ggml_backend_tensor_copy(mbuf_cur.cpy[i], mbuf.org[i]);
+                }
+            }
+
+            GGML_ASSERT(buf_size == 0);
+        } catch (const std::exception & e) {
+            LLAMA_LOG_ERROR("%s: failed to copy buffers: %s\n", __func__, e.what());
+        } catch (...) {
+            LLAMA_LOG_ERROR("%s: failed to copy buffers (unknown exception)\n", __func__);
+        }
     }
 
     void read(void * dst, size_t size) override {
