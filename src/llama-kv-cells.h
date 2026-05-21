@@ -132,6 +132,10 @@ public:
             res.seq[j] = seq[idx];
 
             assert(shift[idx] == 0);
+
+            if (res.pos[j] != -1) {
+                res.used.insert(j);
+            }
         }
 
         return res;
@@ -151,6 +155,10 @@ public:
             res.seq[j] = seq[idx];
 
             assert(shift[idx] == 0);
+
+            if (res.pos[j] != -1) {
+                res.used.insert(j);
+            }
         }
 
         return res;
