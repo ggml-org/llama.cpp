@@ -5999,6 +5999,9 @@ static void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer, 
             };
             extra->q_img = clCreateImage(context, CL_MEM_READ_ONLY, &img_format_q, &img_desc_q, NULL, &err);
             tensor->extra = extra;
+            // Register as SoA so get_tensor / ggml_cl_is_q4_0_soa take the SoA
+            // restore path, matching the non-MoE conversion branch below.
+            ctx->q4_0_soa_tensors.insert(tensor);
 
             return;
         }
