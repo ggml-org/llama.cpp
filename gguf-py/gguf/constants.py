@@ -153,6 +153,9 @@ class Keys:
         DENSE_FEAT_IN_SIZE                = "{arch}.{dense}_feat_in"
         DENSE_FEAT_OUT_SIZE               = "{arch}.{dense}_feat_out"
 
+        # Zaya-specific
+        ZAYA_HIGH_PREC                    = "zaya.high_prec"
+
     class Attention:
         HEAD_COUNT                   = "{arch}.attention.head_count"
         HEAD_COUNT_KV                = "{arch}.attention.head_count_kv"

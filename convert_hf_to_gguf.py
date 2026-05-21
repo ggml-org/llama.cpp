@@ -6500,6 +6500,10 @@ class ZayaModel(TextModel):
         n_ff_exp = self.hparams.get("zaya_mlp_expansion", 256)
         self.gguf_writer.add_expert_feed_forward_length(n_ff_exp)
 
+        # FP32 output logits for numerical stability (zaya_high_prec)
+        zaya_high_prec = self.hparams.get("zaya_high_prec", True)
+        self.gguf_writer.add_zaya_high_prec(zaya_high_prec)
+
     def _map_cca(self, name: str, data_torch: Tensor, bid: int) -> Iterable[tuple[str, Tensor]]:
         if "linear_q" in name:
             yield self.format_tensor_name(gguf.MODEL_TENSOR.ATTN_Q, bid), data_torch

@@ -293,6 +293,9 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
     { LLM_KV_DENSE_3_FEAT_IN,        "%s.dense_3_feat_in"   },
     { LLM_KV_DENSE_3_FEAT_OUT,       "%s.dense_3_feat_out"  },
 
+    // Zaya-specific
+    { LLM_KV_ZAYA_HIGH_PREC,         "%s.zaya.high_prec"    },
+
     { LLM_KV_TOKENIZER_MODEL,                "tokenizer.ggml.model"                    },
     { LLM_KV_TOKENIZER_PRE,                  "tokenizer.ggml.pre"                      },
     { LLM_KV_TOKENIZER_LIST,                 "tokenizer.ggml.tokens"                   },

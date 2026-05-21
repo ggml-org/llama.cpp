@@ -204,7 +204,7 @@ void llama_model_zaya::load_arch_tensors(llama_model_loader &) {
          * hidden_states = (hidden_states.float() + hs_bias) * hs_scale
          * residual = (residual.float() + res_bias) * res_scale
          */
-        layer.res_scale_hs   = create_tensor(tn(LLM_TENSOR_RES_SCALE_HS, "weight", i), {n_embd}, 0);
+        layer.res_scale_hs   = create_tensor(tn(LLM_TENSOR_RES_SCALE_HS, "weight", i), {n_embd}, TENSOR_NOT_REQUIRED);
         layer.res_scale_hs_b = create_tensor(tn(LLM_TENSOR_RES_SCALE_HS, "bias", i), {n_embd}, TENSOR_NOT_REQUIRED);
         layer.res_scale_res  = create_tensor(tn(LLM_TENSOR_RES_SCALE_RES, "weight", i), {n_embd}, TENSOR_NOT_REQUIRED);
         layer.res_scale_res_b = create_tensor(tn(LLM_TENSOR_RES_SCALE_RES, "bias", i), {n_embd}, TENSOR_NOT_REQUIRED);
@@ -876,6 +876,18 @@ llama_model_zaya::graph::graph(const llama_model & model, const llm_graph_params
      */
     cur = ggml_mul_mat(ctx0, model.output, cur);
     cb(cur, "result_output", -1);
+
+    /*
+     * zaya.py ref: L748-749 (_FP32EmbeddingMethod)
+     *
+     * if self.zaya_high_prec:
+     *     out = out.to(dtype=torch.float32)
+     */
+    if (hparams.zaya_high_prec) {
+        cur = ggml_cont(ctx0, ggml_cast(ctx0, cur, GGML_TYPE_F32));
+        cb(cur, "result_output_fp32", -1);
+    }
+
     res->t_logits = cur;
 
     ggml_build_forward_expand(gf, cur);

@@ -1293,6 +1293,9 @@ class GGUFWriter:
     def add_xielu_eps(self, values: Sequence[float]):
         self.add_array(Keys.xIELU.EPS, values)
 
+    def add_zaya_high_prec(self, value: bool) -> None:
+        self.add_bool(Keys.LLM.ZAYA_HIGH_PREC, value)
+
     # diffusion models
 
     def add_diffusion_shift_logits(self, value: bool) -> None:
