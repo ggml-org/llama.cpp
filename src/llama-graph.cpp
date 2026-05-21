@@ -623,6 +623,19 @@ bool llm_graph_input_attn_kv_iswa::can_reuse(const llm_graph_params & params) {
 void llm_graph_input_attn_src_kv_iswa::set_input(const llama_ubatch * ubatch) {
     src_mctx->get_base()->set_input_kq_mask(self_kq_mask,     ubatch, cparams.causal_attn);
     src_mctx->get_swa() ->set_input_kq_mask(self_kq_mask_swa, ubatch, cparams.causal_attn);
+
+    if (self_k_rot) {
+        src_mctx->get_base()->set_input_k_rot(self_k_rot);
+    }
+    if (self_v_rot) {
+        src_mctx->get_base()->set_input_v_rot(self_v_rot);
+    }
+    if (self_k_rot_swa) {
+        src_mctx->get_swa()->set_input_k_rot(self_k_rot_swa);
+    }
+    if (self_v_rot_swa) {
+        src_mctx->get_swa()->set_input_v_rot(self_v_rot_swa);
+    }
 }
 
 bool llm_graph_input_attn_src_kv_iswa::can_reuse(const llm_graph_params & params) {
@@ -2635,6 +2648,11 @@ llm_graph_input_attn_src_kv_iswa * llm_graph_context::build_attn_inp_src_kv_iswa
     inp->self_kq_mask_swa     = build_attn_inp_kq_mask(ctx0, src_iswa->get_swa(), ubatch, cparams);
     inp->self_kq_mask_swa_cnv = cparams.flash_attn ? ggml_cast(ctx0, inp->self_kq_mask_swa, GGML_TYPE_F16) : inp->self_kq_mask_swa;
 
+    inp->self_k_rot     = src_iswa->get_base()->build_input_k_rot(ctx0);
+    inp->self_v_rot     = src_iswa->get_base()->build_input_v_rot(ctx0);
+    inp->self_k_rot_swa = src_iswa->get_swa()->build_input_k_rot(ctx0);
+    inp->self_v_rot_swa = src_iswa->get_swa()->build_input_v_rot(ctx0);
+
     return (llm_graph_input_attn_src_kv_iswa *) res->add_input(std::move(inp));
 }
 
@@ -2656,6 +2674,13 @@ ggml_tensor * llm_graph_context::build_attn(
     const auto * src_cur  = is_swa ? src_iswa->get_swa() : src_iswa->get_base();
 
     const auto & kq_mask = is_swa ? inp->get_kq_mask_swa() : inp->get_kq_mask();
+
+    auto * k_rot = is_swa ? inp->self_k_rot_swa : inp->self_k_rot;
+    auto * v_rot = is_swa ? inp->self_v_rot_swa : inp->self_v_rot;
+
+    if (k_rot) {
+        q_cur = ggml_mul_mat_aux(ctx0, q_cur, k_rot);
+    }
 
     ggml_build_forward_expand(gf, q_cur);
 
@@ -2688,6 +2713,10 @@ ggml_tensor * llm_graph_context::build_attn(
 
     ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, sinks, v_mla, kq_scale, il_assist);
     cb(cur, "kqv_out", il_assist);
+
+    if (v_rot) {
+        cur = ggml_mul_mat_aux(ctx0, cur, v_rot);
+    }
 
     if (wo) {
         cur = build_lora_mm(wo, cur, wo_s);

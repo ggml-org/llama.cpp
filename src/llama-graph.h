@@ -484,6 +484,11 @@ public:
     ggml_tensor * self_kq_mask_swa     = nullptr;
     ggml_tensor * self_kq_mask_swa_cnv = nullptr;
 
+    ggml_tensor * self_k_rot     = nullptr;
+    ggml_tensor * self_v_rot     = nullptr;
+    ggml_tensor * self_k_rot_swa = nullptr;
+    ggml_tensor * self_v_rot_swa = nullptr;
+
     const llama_hparams hparams;
     const llama_cparams cparams;
 
