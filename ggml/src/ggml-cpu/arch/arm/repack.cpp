@@ -15,6 +15,9 @@
 #include <cstdlib> // for qsort
 #include <cstdio>  // for GGML_ASSERT
 #include <iostream>
+#include <cstdint>
+#include <fstream>
+#include <vector>
 
 #define GGML_CPU_CLANG_WORKAROUND
 #include "../../repack.h"
@@ -24,6 +27,106 @@
 #endif
 
 #define UNUSED GGML_UNUSED
+
+#include <arm_sve.h>
+
+void dump_svint32(const std::string& filename, svint32_t vec)
+{
+    const std::uint64_t lanes = svcntw();
+
+    std::vector<std::int32_t> buffer(lanes);
+
+    svbool_t pg = svptrue_b32();
+
+    svst1_s32(pg, buffer.data(), vec);
+
+    std::ofstream out(filename);
+    if (!out) {
+        std::cerr << "Failed to open file: " << filename << '\n';
+        return;
+    }
+
+    for (std::uint64_t i = 0; i < lanes; ++i) {
+        out << "lane[" << i << "] = " << buffer[i] << '\n';
+    }
+}
+
+
+
+void dump_svuint32_to_file(const std::string& filename, svuint32_t vec)
+{
+    // Number of 32-bit lanes for the current SVE vector length
+    const std::uint64_t lanes = svcntw();
+
+    // Temporary scalar buffer
+    std::vector<std::uint32_t> buffer(lanes);
+
+    // Store all lanes from SVE vector into normal memory
+    svst1_u32(svptrue_b32(), buffer.data(), vec);
+
+    // Create / overwrite the text file
+    std::ofstream out(filename);
+    if (!out) {
+        std::cerr << "Failed to create/open file: " << filename << '\n';
+        return;
+    }
+
+    // Dump each lane
+    for (std::uint64_t i = 0; i < lanes; ++i) {
+        out << "lane[" << i << "] = " << buffer[i] << '\n';
+    }
+    out.close();
+    std::exit(EXIT_SUCCESS);
+}
+
+
+void dump_sve_s16_to_file_and_exit(const std::string& filename,
+                                   svint16_t vec)
+{
+    // Number of signed 16-bit lanes in current SVE vector length
+    const std::uint64_t lanes = svcnth();
+
+    // Temporary scalar buffer
+    std::vector<std::int16_t> buffer(lanes);
+
+    // Store all active SVE lanes into normal memory
+    svst1_s16(svptrue_b16(), buffer.data(), vec);
+
+    // Create / overwrite file
+    std::ofstream out(filename);
+    if (!out) {
+        std::cerr << "Failed to open file: " << filename << '\n';
+        std::exit(EXIT_FAILURE);
+    }
+
+    for (std::uint64_t i = 0; i < lanes; ++i) {
+        out << "lane[" << i << "] = " << buffer[i] << '\n';
+        std::cout << "lane[" << i << "] = " << buffer[i] << '\n';
+
+    }
+
+    // Important because std::exit() does not run local destructors
+    out.close();
+    // std::exit(EXIT_SUCCESS);
+}
+
+#include <arm_sve.h>
+#include <stdint.h>
+#include <stdio.h>
+
+static inline void print_svint8(const char *name, svint8_t v)
+{
+    size_t vl = svcntb();        // Number of int8 lanes in current SVE vector
+    int8_t buf[vl];
+
+    svst1_s8(svptrue_b8(), buf, v);
+
+    printf("%s = [", name);
+    for (size_t i = 0; i < vl; ++i) {
+        printf("%s%d", i ? ", " : "", (int)buf[i]);
+    }
+    printf("]\n");
+}
 
 #if defined(__aarch64__) && defined(__ARM_NEON) && (defined(__ARM_FEATURE_MATMUL_INT8) || defined(__ARM_FEATURE_DOTPROD))
 // Helper for decoding scales and mins of Q4_K and Q5_K block formats
@@ -50,6 +153,28 @@ static inline void decode_q_Kx8_6bit_scales(const uint8_t * scales_in, int16x8_t
 #endif
 
 
+bool saveBytesToFile(const uint8_t* ptr, std::size_t size, const std::string& filename)
+{
+    std::ofstream out(filename, std::ios::binary);
+    if (!out) {
+        return false;
+    }
+
+    out.write(reinterpret_cast<const char*>(ptr), size);
+    return static_cast<bool>(out);
+}
+
+bool loadBytesFromFile(uint8_t* ptr, std::size_t size, const std::string& filename)
+{
+    std::ifstream in(filename, std::ios::binary);
+    if (!in) {
+        return false;
+    }
+
+    in.read(reinterpret_cast<char*>(ptr), size);
+    return in.gcount() == static_cast<std::streamsize>(size);
+}
+
 #if defined(__aarch64__) && defined(__ARM_FEATURE_SVE) && (defined(__ARM_FEATURE_MATMUL_INT8) || defined(__ARM_FEATURE_DOTPROD))
 // Helper for decoding scales and mins of Q4_K and Q5_K block formats
 static inline void decode_q_Kx8_6bit_scales_sve(const uint8_t * scales_in, svint16_t * out_mins, int8_t * out_scales) {
@@ -60,20 +185,42 @@ static inline void decode_q_Kx8_6bit_scales_sve(const uint8_t * scales_in, svint
 
     uint32_t sm[3];
     memcpy(sm, scales_in, scales_size);
+    std::cout<<sm[0]<<" "<<sm[1]<<" "<<sm[2]<<std::endl;
+    
+    if (!saveBytesToFile(scales_in, 12, "data.txt")) {
+        std::cerr << "Failed to save file\n";
+        return;
+    }
+    std::cout << "Saved Data" << std::endl;
+    
+    std::array<uint8_t, 12> loadedData{};
+    uint8_t* loadPtr = loadedData.data();
 
+    if (!loadBytesFromFile(loadPtr, loadedData.size(), "data.txt")) {
+        std::cerr << "Failed to load file\n";
+        return;
+    }
+
+    std::cout << "Loaded Data" << std::endl << "scales_in: ";
+    for (uint8_t value : loadedData) {
+        std::cout << static_cast<unsigned>(value) << " ";
+    }
+    std::cout << "\nout_mins: \n";
     const uint32_t   mins_0_3 = sm[1] & kmask1;
     const uint32_t   mins_4_7 = ((sm[2] >> 4) & kmask2) | (((sm[1] >> 6) & kmask3) << 4);
     // const uint32x2_t mins_u32 = { mins_0_3, mins_4_7 };    
     uint32_t tmp_mins[2] = { mins_0_3, mins_4_7 };
-    svbool_t pg2_u32 = svptrue_pat_b32(SV_VL2);   // 2 x uint32_t = 64 bits
+    svbool_t pg2_u32 = svptrue_pat_b32(SV_VL4);   // 2 x uint32_t = 64 bits
     svuint32_t mins_u32 = svld1_u32(pg2_u32, tmp_mins);
 
-
     *out_mins = svreinterpret_s16_u16(svunpklo_u16(svreinterpret_u8_u32(mins_u32)));
+    dump_sve_s16_to_file_and_exit("out_mins_s16.txt", *out_mins);
 
     uint32_t scales_u32[2];
     scales_u32[0] = sm[0] & kmask1;
     scales_u32[1] = (sm[2] & kmask2) | (((sm[0] >> 6) & kmask3) << 4);
+    std::cout<<"\nout_scales: "<< scales_u32[0] <<" - "<<scales_u32[1]<<std::endl;
+    // std::exit(EXIT_SUCCESS);
     memcpy(out_scales, scales_u32, 8);
 }
 #endif
@@ -4133,10 +4280,6 @@ void ggml_gemm_q4_K_8x8_q8_K(int                        n,
                 for (int x = 0; x < nc / ncols_interleaved; x++) {
                     const block_q4_Kx8 * GGML_RESTRICT q4_ptr = (const block_q4_Kx8 *) vx + (x * nb);
 
-                    // for (int i = 0; i < blocklen; i++) {
-                    //     acc_f32[i] = svdup_n_f32(0);
-                    // }
-
                     svfloat32_t acc_f32_00 = svdup_n_f32(0);
                     svfloat32_t acc_f32_11 = svdup_n_f32(0);
                     svfloat32_t acc_f32_22 = svdup_n_f32(0);
@@ -4160,15 +4303,6 @@ void ggml_gemm_q4_K_8x8_q8_K(int                        n,
                         for (int q8_row = 0; q8_row < 4; q8_row++) {
                             vst1q_s16(bsums_arr[q8_row], bsums[q8_row]);
                         }
-
-                        // svint32_t sb_acc[4];    // Aux accumulators to store subblock (partial) results
-                        // svint32_t acc[8];       // rows 01 stored in [0][1][2][3] rows 23 stored in [4][5][6][7]
-                        // svint32_t bias_acc[8];  // interleaved bias_acc: [0]->r0 0123, [1]->r0 4567, [2]->r1 0123 ...
-
-                        // for (int i = 0; i < 8; i++) {
-                        //     acc[i]      = svdup_n_f32(0);
-                        //     bias_acc[i] = svdup_n_f32(0);
-                        // }
                         
                         svint32_t sb_acc_0 = svdup_n_s32(0);
                         svint32_t sb_acc_1 = svdup_n_s32(0);
@@ -4199,7 +4333,6 @@ void ggml_gemm_q4_K_8x8_q8_K(int                        n,
                             // Need scales for the low and high nibbles
                             // 2 * 12 = 24 bytes per subblock, 4 sbs -> 4 * 24 = 96 bytes total
                             int8_t    q4sb_scales[2][8];
-                            // svint16_t q4sb_mins[2];  // int16 as its needed for bias_acc later
                             svint16_t q4sb_mins_0, q4sb_mins_1;  // int16 as its needed for bias_acc later
                             for (int i = 0; i < 2; i++) {
                                 const int offset = sb * 24 + i * 12;
@@ -4221,6 +4354,14 @@ void ggml_gemm_q4_K_8x8_q8_K(int                        n,
                             svint8_t  q8_qs_01_5 = svld1_s8(pg_b8_vl16, q8_base + 5*32);
                             svint8_t  q8_qs_01_6 = svld1_s8(pg_b8_vl16, q8_base + 6*32); 
                             svint8_t  q8_qs_01_7 = svld1_s8(pg_b8_vl16, q8_base + 7*32);
+                            print_svint8("q8_qs_01_0", q8_qs_01_0);
+                            print_svint8("q8_qs_01_1", q8_qs_01_1);
+                            print_svint8("q8_qs_01_2", q8_qs_01_2);
+                            print_svint8("q8_qs_01_3", q8_qs_01_3);
+                            print_svint8("q8_qs_01_4", q8_qs_01_4);
+                            print_svint8("q8_qs_01_5", q8_qs_01_5);
+                            print_svint8("q8_qs_01_6", q8_qs_01_6);
+                            print_svint8("q8_qs_01_7", q8_qs_01_7);
 
                             // svint8_t q8_qs_23[8];
                             svint8_t q8_qs_23_0 = svld1_s8(pg_b8_vl16, q8_base + 0*32 + 16);
@@ -4232,52 +4373,33 @@ void ggml_gemm_q4_K_8x8_q8_K(int                        n,
                             svint8_t q8_qs_23_6 = svld1_s8(pg_b8_vl16, q8_base + 6*32 + 16);
                             svint8_t q8_qs_23_7 = svld1_s8(pg_b8_vl16, q8_base + 7*32 + 16);
 
-                            // // Load 32-byte per row pair, 1 subblock each time
-                            // for (int i = 0; i < 8; i++) {
-                            //     const int offset = i * 32;  // 16 for row 01, 16 for row 23
-                            //     q8_qs_01[i]      = svld1_s8(pg_b8_vl16, q8_base + offset);
-                            //     q8_qs_23[i]      = svld1_s8(pg_b8_vl16, q8_base + offset + 16);
-                            // }
+                            print_svint8("q8_qs_23_0", q8_qs_23_0);
+                            print_svint8("q8_qs_23_1", q8_qs_23_1);
+                            print_svint8("q8_qs_23_2", q8_qs_23_2);
+                            print_svint8("q8_qs_23_3", q8_qs_23_3);
+                            print_svint8("q8_qs_23_4", q8_qs_23_4);
+                            print_svint8("q8_qs_23_5", q8_qs_23_5);
+                            print_svint8("q8_qs_23_6", q8_qs_23_6);
+                            print_svint8("q8_qs_23_7", q8_qs_23_7);
 
-                            // const svint8_t q8s[2][8] = {
-                            //     { q8_qs_01[0], q8_qs_01[1], q8_qs_01[2], q8_qs_01[3], q8_qs_01[4], q8_qs_01[5], q8_qs_01[6], q8_qs_01[7] },
-                            //     { q8_qs_23[0], q8_qs_23[1], q8_qs_23[2], q8_qs_23[3], q8_qs_23[4], q8_qs_23[5], q8_qs_23[6], q8_qs_23[7] },
-                            // };
+                            std::exit(EXIT_SUCCESS);
 
                             // Q4s columns iterated in pairs (01, 23, 45, 67)
                             for (int cp = 0; cp < ncols_interleaved / 2; cp++) {
                                 
-                                // //This is not allowed - change
-                                // for (int i = 0; i < 4; i++) {
-                                //     sb_acc[i] = svdup_n_s32(0);
-                                // }
-
-                                svuint8_t q4_qs_cp_0 = svld1_u8(pg_b8_vl16, q4_ptr[b].qs + sb * QK_K + 16 * cp + 0);    // 0 .. 7 & 32..39
+                                                                svuint8_t q4_qs_cp_0 = svld1_u8(pg_b8_vl16, q4_ptr[b].qs + sb * QK_K + 16 * cp + 0);    // 0 .. 7 & 32..39
                                 svuint8_t q4_qs_cp_1 = svld1_u8(pg_b8_vl16, q4_ptr[b].qs + sb * QK_K + 16 * cp + 64);   // 8 ..15 & 40..47
                                 svuint8_t q4_qs_cp_2 = svld1_u8(pg_b8_vl16, q4_ptr[b].qs + sb * QK_K + 16 * cp + 128);  // 16..23 & 48..55
                                 svuint8_t q4_qs_cp_3 = svld1_u8(pg_b8_vl16, q4_ptr[b].qs + sb * QK_K + 16 * cp + 192);  // 24..31 & 56..63
-                                // const svint8_t q4_nibbles[2][4] = {
-                                //     {
-                                //         svreinterpret_s8_u8(svand_u8_x(pg_b8_vl16, q4_qs_cp_0, m4b)),
-                                //         svreinterpret_s8_u8(svand_u8_x(pg_b8_vl16, q4_qs_cp_1, m4b)),
-                                //         svreinterpret_s8_u8(svand_u8_x(pg_b8_vl16, q4_qs_cp_2, m4b)),
-                                //         svreinterpret_s8_u8(svand_u8_x(pg_b8_vl16, q4_qs_cp_3, m4b)),
-                                //     },
-                                //     {
-                                //         svreinterpret_s8_u8(svlsr_n_u8_x(pg_b8_vl16, q4_qs_cp_0, 4)),
-                                //         svreinterpret_s8_u8(svlsr_n_u8_x(pg_b8_vl16, q4_qs_cp_1, 4)),
-                                //         svreinterpret_s8_u8(svlsr_n_u8_x(pg_b8_vl16, q4_qs_cp_2, 4)),
-                                //         svreinterpret_s8_u8(svlsr_n_u8_x(pg_b8_vl16, q4_qs_cp_3, 4)),
-                                //     }
-                                // };
+                                
                                 svint8_t q4_nibbles_00 = svreinterpret_s8_u8(svand_u8_x(pg_b8_vl16, q4_qs_cp_0, m4b));
                                 svint8_t q4_nibbles_01 = svreinterpret_s8_u8(svand_u8_x(pg_b8_vl16, q4_qs_cp_1, m4b));
                                 svint8_t q4_nibbles_02 = svreinterpret_s8_u8(svand_u8_x(pg_b8_vl16, q4_qs_cp_2, m4b));
                                 svint8_t q4_nibbles_03 = svreinterpret_s8_u8(svand_u8_x(pg_b8_vl16, q4_qs_cp_3, m4b));
                                 svint8_t q4_nibbles_10 = svreinterpret_s8_u8(svlsr_n_u8_x(pg_b8_vl16, q4_qs_cp_0, 4));
-                                svint8_t q4_nibbles_11 = svreinterpret_s8_u8(svlsr_n_u8_x(pg_b8_vl16, q4_qs_cp_0, 4));
-                                svint8_t q4_nibbles_12 = svreinterpret_s8_u8(svlsr_n_u8_x(pg_b8_vl16, q4_qs_cp_0, 4));
-                                svint8_t q4_nibbles_13 = svreinterpret_s8_u8(svlsr_n_u8_x(pg_b8_vl16, q4_qs_cp_0, 4));
+                                svint8_t q4_nibbles_11 = svreinterpret_s8_u8(svlsr_n_u8_x(pg_b8_vl16, q4_qs_cp_1, 4));
+                                svint8_t q4_nibbles_12 = svreinterpret_s8_u8(svlsr_n_u8_x(pg_b8_vl16, q4_qs_cp_2, 4));
+                                svint8_t q4_nibbles_13 = svreinterpret_s8_u8(svlsr_n_u8_x(pg_b8_vl16, q4_qs_cp_3, 4));
 
                                 // Calculates the Qs muladd of every row pair (rp) rows 01 and 23 of q8
                                 // for each of the internal 32 qs subblock (blk)
