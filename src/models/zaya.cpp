@@ -716,12 +716,19 @@ llama_model_zaya::graph::graph(const llama_model & model, const llm_graph_params
             cb(router_h, "router_down", il);
 
             /*
-             * zaya.py ref: L344-345
+             * zaya.py ref: L294-296, L344-345
+             *
+             * zaya_first_layer = 1
+             * use_eda_cfg = bool(getattr(config, "zaya_use_eda", False))
+             * self.use_eda = use_eda_cfg and (zaya_first_layer is not None) and (self.layer_number != zaya_first_layer)
              *
              * if self.use_eda and (prev_router_hidden_states is not None):
              *     hs = hs + prev_router_hidden_states * self.router_states_scale
+             *
+             * EDA is disabled for layer 1 (first MoE layer) via (self.layer_number != zaya_first_layer).
+             * When zaya_use_eda is False globally, the parameter is never created (tensor stays nullptr).
              */
-            if (prev_router != nullptr && layer.zaya_router_eda_scale != nullptr) {
+            if (il != 1 && prev_router != nullptr && layer.zaya_router_eda_scale != nullptr) {
                 router_h = ggml_add(ctx0, router_h, ggml_mul(ctx0, prev_router, layer.zaya_router_eda_scale));
                 cb(router_h, "router_eda", il);
             }
