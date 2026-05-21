@@ -506,6 +506,9 @@ struct server_slot {
 
         if (ptask) {
             res["id_task"] = ptask->id;
+            res["n_prompt_tokens"]           = (int32_t) prompt.tokens.size();
+            res["n_prompt_tokens_processed"] = n_prompt_tokens_processed;
+            res["n_prompt_tokens_cache"]     = n_prompt_tokens_cache;
             res["params"] = ptask->params.to_json(only_metrics);
             res["next_token"] = {
                 {
