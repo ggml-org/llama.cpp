@@ -8,8 +8,21 @@
 #include <cstdlib>
 #include <functional>
 #include <future>
+#include <sstream>
 #include <string>
 #include <thread>
+#include <vector>
+
+#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
+#include <openssl/bio.h>
+#include <openssl/bn.h>
+#include <openssl/ec.h>
+#include <openssl/evp.h>
+#include <openssl/pem.h>
+#include <openssl/rand.h>
+#include <openssl/x509.h>
+#include <openssl/x509v3.h>
+#endif
 
 //
 // HTTP implementation using cpp-httplib
@@ -74,6 +87,203 @@ struct gcp_params {
     }
 };
 
+#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
+static std::vector<std::string> split_csv(const std::string & s) {
+    std::vector<std::string> out;
+    std::stringstream ss(s);
+    std::string item;
+    while (std::getline(ss, item, ',')) {
+        size_t a = item.find_first_not_of(" \t");
+        size_t b = item.find_last_not_of(" \t");
+        if (a == std::string::npos) {
+            continue;
+        }
+        out.push_back(item.substr(a, b - a + 1));
+    }
+    return out;
+}
+
+// Generate an ephemeral ECDSA P-256 self-signed certificate with SAN entries
+// taken verbatim from the supplied dns/ip lists. On success, writes PEM strings
+// to out_cert_pem / out_key_pem and returns true.
+static bool generate_self_signed_cert(
+        const std::vector<std::string> & san_dns,
+        const std::vector<std::string> & san_ip,
+        int validity_days,
+        std::string & out_cert_pem,
+        std::string & out_key_pem) {
+    if (validity_days <= 0) {
+        SRV_ERR("self-signed cert: invalid validity %d\n", validity_days);
+        return false;
+    }
+    if (san_dns.empty() && san_ip.empty()) {
+        SRV_ERR("%s", "self-signed cert: at least one SAN DNS or IP is required\n");
+        return false;
+    }
+
+    // Portable EC P-256 keygen (works on OpenSSL 1.1.1+/3.x, LibreSSL, BoringSSL);
+    // EVP_EC_gen is OpenSSL 3.0-only and not in BoringSSL.
+    EVP_PKEY * pkey = nullptr;
+    {
+        EVP_PKEY_CTX * kctx = EVP_PKEY_CTX_new_id(EVP_PKEY_EC, nullptr);
+        if (!kctx) {
+            SRV_ERR("%s", "self-signed cert: EVP_PKEY_CTX_new_id failed\n");
+            return false;
+        }
+        if (EVP_PKEY_keygen_init(kctx) <= 0 ||
+            EVP_PKEY_CTX_set_ec_paramgen_curve_nid(kctx, NID_X9_62_prime256v1) <= 0 ||
+            EVP_PKEY_keygen(kctx, &pkey) <= 0) {
+            SRV_ERR("%s", "self-signed cert: EC P-256 keygen failed\n");
+            EVP_PKEY_CTX_free(kctx);
+            return false;
+        }
+        EVP_PKEY_CTX_free(kctx);
+    }
+
+    X509 * x509 = X509_new();
+    if (!x509) {
+        EVP_PKEY_free(pkey);
+        return false;
+    }
+
+    bool ok = false;
+    BIO * cert_bio = nullptr;
+    BIO * key_bio  = nullptr;
+
+    do {
+        X509_set_version(x509, 2); // X509v3
+
+        // random 64-bit serial
+        unsigned char serial_bytes[8];
+        if (RAND_bytes(serial_bytes, sizeof(serial_bytes)) != 1) {
+            SRV_ERR("%s", "self-signed cert: RAND_bytes failed\n");
+            break;
+        }
+        serial_bytes[0] &= 0x7f; // keep positive
+        BIGNUM * bn = BN_bin2bn(serial_bytes, sizeof(serial_bytes), nullptr);
+        if (!bn) {
+            break;
+        }
+        ASN1_INTEGER * serial = BN_to_ASN1_INTEGER(bn, nullptr);
+        BN_free(bn);
+        if (!serial) {
+            break;
+        }
+        X509_set_serialNumber(x509, serial);
+        ASN1_INTEGER_free(serial);
+
+        X509_gmtime_adj(X509_getm_notBefore(x509), 0);
+        X509_gmtime_adj(X509_getm_notAfter(x509),  (long) 60 * 60 * 24 * validity_days);
+
+        X509_set_pubkey(x509, pkey);
+
+        // use first DNS (or first IP if no DNS) as CN
+        const std::string & cn = !san_dns.empty() ? san_dns[0] : san_ip[0];
+        X509_NAME * name = X509_get_subject_name(x509);
+        X509_NAME_add_entry_by_txt(name, "CN", MBSTRING_ASC,
+            (const unsigned char *) cn.c_str(), -1, -1, 0);
+        X509_set_issuer_name(x509, name); // self-signed
+
+        // SAN extension: build GENERAL_NAMES directly instead of using the
+        // V3-conf string parser (X509V3_EXT_conf_nid is not linkable against
+        // BoringSSL — the V3 conf machinery is stripped).
+        GENERAL_NAMES * gens = sk_GENERAL_NAME_new_null();
+        if (!gens) {
+            break;
+        }
+        bool san_ok = true;
+        auto push_san = [&](int type, void * value) -> bool {
+            // On success `gens` owns `value` (via the GENERAL_NAME); on failure
+            // `value` is freed here.
+            GENERAL_NAME * gn = GENERAL_NAME_new();
+            if (!gn) {
+                if (type == GEN_DNS) {
+                    ASN1_STRING_free(static_cast<ASN1_STRING *>(value));
+                } else {
+                    ASN1_OCTET_STRING_free(static_cast<ASN1_OCTET_STRING *>(value));
+                }
+                return false;
+            }
+            GENERAL_NAME_set0_value(gn, type, value);
+            if (sk_GENERAL_NAME_push(gens, gn) <= 0) {
+                GENERAL_NAME_free(gn);
+                return false;
+            }
+            return true;
+        };
+        for (const auto & d : san_dns) {
+            ASN1_IA5STRING * ia5 = ASN1_IA5STRING_new();
+            if (!ia5 || ASN1_STRING_set(ia5, d.c_str(), static_cast<int>(d.size())) == 0) {
+                if (ia5) {
+                    ASN1_STRING_free(ia5);
+                }
+                san_ok = false;
+                break;
+            }
+            if (!push_san(GEN_DNS, ia5)) {
+                san_ok = false;
+                break;
+            }
+        }
+        if (san_ok) {
+            for (const auto & ip : san_ip) {
+                ASN1_OCTET_STRING * os = a2i_IPADDRESS(ip.c_str());
+                if (!os) {
+                    SRV_ERR("self-signed cert: failed to parse IP \"%s\"\n", ip.c_str());
+                    san_ok = false;
+                    break;
+                }
+                if (!push_san(GEN_IPADD, os)) {
+                    san_ok = false;
+                    break;
+                }
+            }
+        }
+        if (!san_ok) {
+            GENERAL_NAMES_free(gens);
+            break;
+        }
+        if (X509_add1_ext_i2d(x509, NID_subject_alt_name, gens, 0, X509V3_ADD_DEFAULT) <= 0) {
+            SRV_ERR("%s", "self-signed cert: X509_add1_ext_i2d failed\n");
+            GENERAL_NAMES_free(gens);
+            break;
+        }
+        GENERAL_NAMES_free(gens);
+
+        if (!X509_sign(x509, pkey, EVP_sha256())) {
+            SRV_ERR("%s", "self-signed cert: X509_sign failed\n");
+            break;
+        }
+
+        cert_bio = BIO_new(BIO_s_mem());
+        key_bio  = BIO_new(BIO_s_mem());
+        if (!cert_bio || !key_bio) {
+            break;
+        }
+        if (!PEM_write_bio_X509(cert_bio, x509)) {
+            break;
+        }
+        if (!PEM_write_bio_PrivateKey(key_bio, pkey, nullptr, nullptr, 0, nullptr, nullptr)) {
+            break;
+        }
+
+        BUF_MEM * cert_mem = nullptr;
+        BUF_MEM * key_mem  = nullptr;
+        BIO_get_mem_ptr(cert_bio, &cert_mem);
+        BIO_get_mem_ptr(key_bio,  &key_mem);
+        out_cert_pem.assign(cert_mem->data, cert_mem->length);
+        out_key_pem.assign(key_mem->data,   key_mem->length);
+        ok = true;
+    } while (false);
+
+    if (cert_bio) BIO_free(cert_bio);
+    if (key_bio)  BIO_free(key_bio);
+    X509_free(x509);
+    EVP_PKEY_free(pkey);
+    return ok;
+}
+#endif // CPPHTTPLIB_OPENSSL_SUPPORT
+
 bool server_http_context::init(const common_params & params) {
     const gcp_params gcp;
 
@@ -93,18 +303,41 @@ bool server_http_context::init(const common_params & params) {
 
     auto & srv = pimpl->srv;
 
+    const bool ssl_files_set = params.ssl_file_key != "" && params.ssl_file_cert != "";
+    const bool ssl_san_set   = params.ssl_san_dns  != "" || params.ssl_san_ip   != "";
+
 #ifdef CPPHTTPLIB_OPENSSL_SUPPORT
-    if (params.ssl_file_key != "" && params.ssl_file_cert != "") {
+    if (ssl_files_set && ssl_san_set) {
+        SRV_ERR("%s", "--ssl-key-file/--ssl-cert-file and --ssl-san-dns/--ssl-san-ip are mutually exclusive\n");
+        return false;
+    }
+    if (ssl_files_set) {
         SRV_INF("running with SSL: key = %s, cert = %s\n", params.ssl_file_key.c_str(), params.ssl_file_cert.c_str());
         srv.reset(
             new httplib::SSLServer(params.ssl_file_cert.c_str(), params.ssl_file_key.c_str())
         );
+    } else if (ssl_san_set) {
+        const auto san_dns = split_csv(params.ssl_san_dns);
+        const auto san_ip  = split_csv(params.ssl_san_ip);
+        std::string cert_pem, key_pem;
+        if (!generate_self_signed_cert(san_dns, san_ip, params.ssl_validity_days, cert_pem, key_pem)) {
+            SRV_ERR("%s", "failed to generate self-signed certificate\n");
+            return false;
+        }
+        SRV_INF("running with SSL: self-signed cert (DNS SAN=[%s], IP SAN=[%s], validity=%d days)\n",
+            params.ssl_san_dns.c_str(), params.ssl_san_ip.c_str(), params.ssl_validity_days);
+        httplib::SSLServer::PemMemory pem{};
+        pem.cert_pem     = cert_pem.data();
+        pem.cert_pem_len = cert_pem.size();
+        pem.key_pem      = key_pem.data();
+        pem.key_pem_len  = key_pem.size();
+        srv.reset(new httplib::SSLServer(pem));
     } else {
         SRV_INF("%s", "running without SSL\n");
         srv.reset(new httplib::Server());
     }
 #else
-    if (params.ssl_file_key != "" && params.ssl_file_cert != "") {
+    if (ssl_files_set || ssl_san_set) {
         SRV_ERR("%s", "the server is built without SSL support\n");
         return false;
     }

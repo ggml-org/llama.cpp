@@ -3011,6 +3011,30 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_SSL_CERT_FILE"));
     add_opt(common_arg(
+        {"--ssl-san-dns"}, "LIST",
+        "comma-separated DNS names for SAN of an auto-generated self-signed certificate; "
+        "if set and --ssl-key-file/--ssl-cert-file are not, the server generates an ephemeral "
+        "ECDSA P-256 cert in memory at startup",
+        [](common_params & params, const std::string & value) {
+            params.ssl_san_dns = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_SSL_SAN_DNS"));
+    add_opt(common_arg(
+        {"--ssl-san-ip"}, "LIST",
+        "comma-separated IP addresses for SAN of an auto-generated self-signed certificate; "
+        "see --ssl-san-dns",
+        [](common_params & params, const std::string & value) {
+            params.ssl_san_ip = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_SSL_SAN_IP"));
+    add_opt(common_arg(
+        {"--ssl-validity-days"}, "N",
+        string_format("validity period in days for the auto-generated self-signed certificate (default: %d)", params.ssl_validity_days),
+        [](common_params & params, const std::string & value) {
+            params.ssl_validity_days = std::stoi(value);
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_SSL_VALIDITY_DAYS"));
+    add_opt(common_arg(
         {"--chat-template-kwargs"}, "STRING",
         "sets additional params for the json template parser, must be a valid json object string, e.g. '{\"key1\":\"value1\",\"key2\":\"value2\"}'",
         [](common_params & params, const std::string & value) {

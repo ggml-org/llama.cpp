@@ -204,6 +204,9 @@ For the full list of features, please refer to [server's changelog](https://gith
 | `--api-key-file FNAME` | path to file containing API keys (default: none) |
 | `--ssl-key-file FNAME` | path to file a PEM-encoded SSL private key<br/>(env: LLAMA_ARG_SSL_KEY_FILE) |
 | `--ssl-cert-file FNAME` | path to file a PEM-encoded SSL certificate<br/>(env: LLAMA_ARG_SSL_CERT_FILE) |
+| `--ssl-san-dns LIST` | comma-separated DNS names for SAN of an auto-generated self-signed certificate; if set and `--ssl-key-file`/`--ssl-cert-file` are not, the server generates an ephemeral ECDSA P-256 cert in memory at startup<br/>(env: LLAMA_ARG_SSL_SAN_DNS) |
+| `--ssl-san-ip LIST` | comma-separated IP addresses for SAN of an auto-generated self-signed certificate; see `--ssl-san-dns`<br/>(env: LLAMA_ARG_SSL_SAN_IP) |
+| `--ssl-validity-days N` | validity period in days for the auto-generated self-signed certificate (default: 365)<br/>(env: LLAMA_ARG_SSL_VALIDITY_DAYS) |
 | `--chat-template-kwargs STRING` | sets additional params for the json template parser, must be a valid json object string, e.g. '{"key1":"value1","key2":"value2"}'<br/>(env: LLAMA_CHAT_TEMPLATE_KWARGS) |
 | `-to, --timeout N` | server read/write timeout in seconds (default: 600)<br/>(env: LLAMA_ARG_TIMEOUT) |
 | `--threads-http N` | number of threads used to process HTTP requests (default: -1)<br/>(env: LLAMA_ARG_THREADS_HTTP) |
@@ -352,6 +355,11 @@ To use this feature, start the server with `--tools all`. You can also enable on
   cmake -B build -DLLAMA_OPENSSL=ON
   cmake --build build --config Release -t llama-server
   ```
+
+There are two ways to enable HTTPS at runtime:
+
+- Supply your own certificate with `--ssl-key-file` and `--ssl-cert-file`.
+- Set `--ssl-san-dns` and/or `--ssl-san-ip` (or the corresponding `LLAMA_ARG_SSL_SAN_*` env vars) to have the server generate a single ephemeral ECDSA P-256 self-signed certificate at startup, with the supplied names/addresses in `subjectAltName`. The certificate lives only in memory for the lifetime of the process. Use `--ssl-validity-days` to override the default 365-day validity. The two modes are mutually exclusive.
 
 ## Quick Start
 
