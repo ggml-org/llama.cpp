@@ -587,7 +587,7 @@ void ggml_barrier(struct ggml_threadpool * tp) {
     }
 
     // wait for other threads
-    while (atomic_load_explicit(&tp->n_barrier_passed, memory_order_relaxed) == n_passed) {
+    while (atomic_load_explicit(&tp->n_barrier_passed, memory_order_acquire) == n_passed) {
         ggml_thread_cpu_relax();
     }
 
