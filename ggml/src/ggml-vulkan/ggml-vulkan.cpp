@@ -14358,8 +14358,15 @@ static void ggml_vk_bench_pair(
         std::cerr << "  Device groups found: " << groups.size() << std::endl;
         for (size_t g = 0; g < groups.size(); g++) {
             auto & group = groups[g];
+            bool has_dev0 = false, has_dev1 = false;
+            for (uint32_t i = 0; i < group.physicalDeviceCount; i++) {
+                if (group.physicalDevices[i] == dev0->physical_device) has_dev0 = true;
+                if (group.physicalDevices[i] == dev1->physical_device) has_dev1 = true;
+            }
+            if (!has_dev0 && !has_dev1) continue;
             std::cerr << "    Group " << g << ": " << group.physicalDeviceCount << " device(s)";
             if (group.subsetAllocation) std::cerr << " [subsetAllocation]";
+            if (has_dev0 && has_dev1) std::cerr << " [contains both devices]";
             std::cerr << std::endl;
             for (uint32_t i = 0; i < group.physicalDeviceCount; i++) {
                 auto props = group.physicalDevices[i].getProperties();
@@ -15297,7 +15304,7 @@ static void ggml_vk_test_cross_device_copy(ggml_backend_vk_context * ctx) {
     std::vector<vk_device> devices(n_devices);
     for (size_t i = 0; i < n_devices; i++) {
         devices[i] = ggml_vk_get_device(i);
-        std::cerr << "  [" << i << "] " << devices[i]->name
+        std::cerr << "  [" << i << "] " << devices[i]->properties.deviceName.data()
                   << " (ext_mem_host=" << devices[i]->external_memory_host
                   << " dma_buf=" << devices[i]->external_memory_dma_buf
                   << " sem_fd=" << devices[i]->external_semaphore_fd << ")" << std::endl;
@@ -15324,7 +15331,7 @@ static void ggml_vk_test_cross_device_copy(ggml_backend_vk_context * ctx) {
         for (size_t j = 0; j < n_devices; j++) {
             if (i == j) continue;
 
-            std::string label = devices[i]->name + " -> " + devices[j]->name;
+            std::string label = std::string(devices[i]->properties.deviceName.data()) + " -> " + devices[j]->properties.deviceName.data();
             std::cerr << "\n\n=== " << label << " ===" << std::endl;
 
             pair_results pr;
