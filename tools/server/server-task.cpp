@@ -494,10 +494,12 @@ task_params server_task::params_from_json_cmpl(
 
     // Parse reasoning budget sampler parameters
     {
-        const int32_t budget = json_value(data, "reasoning_budget_tokens", (int32_t) -1);
-        const auto start_tag = json_value(data, "reasoning_budget_start_tag", std::string());
-        const auto end_tag   = json_value(data, "reasoning_budget_end_tag", std::string());
-        const auto message   = json_value(data, "reasoning_budget_message", std::string());
+        const int32_t budget                    = json_value(data, "reasoning_budget_tokens", (int32_t) -1);
+        const auto    start_tag                 = json_value(data, "reasoning_budget_start_tag", std::string());
+        const auto    end_tag                   = json_value(data, "reasoning_budget_end_tag", std::string());
+        const auto    tool_start_tag            = json_value(data, "reasoning_budget_tool_start_tag", std::string());
+        const auto    message                   = json_value(data, "reasoning_budget_message", std::string());
+        const auto    reasoning_force_tool                    = json_value(data, "reasoning_budget_force_tool", false);
         params.sampling.reasoning_budget_tokens = budget;
 
         if (!start_tag.empty()) {
@@ -505,13 +507,19 @@ task_params server_task::params_from_json_cmpl(
         }
         if (!end_tag.empty()) {
             params.sampling.reasoning_budget_end = common_tokenize(vocab, end_tag, false, true);
-            params.sampling.reasoning_budget_forced = common_tokenize(vocab, message + end_tag, false, true);
+            auto end_forced_msg = message + end_tag;
+            if (reasoning_force_tool && data.contains("tools")) {
+                end_forced_msg += tool_start_tag;
+            }
+            params.sampling.reasoning_budget_forced = common_tokenize(vocab, end_forced_msg, false, true);
 
-            SRV_DBG("reasoning budget: tokens=%d, generation_prompt='%s', start=%zu toks, end=%zu toks, forced=%zu toks\n",
+            SRV_DBG("reasoning budget: tokens=%d, generation_prompt='%s', start=%zu toks, end=%zu toks, forced=%zu toks, tool_forced='%s'\n",
                 budget, params.sampling.generation_prompt.c_str(),
                 params.sampling.reasoning_budget_start.size(),
                 params.sampling.reasoning_budget_end.size(),
-                params.sampling.reasoning_budget_forced.size());
+                params.sampling.reasoning_budget_forced.size(),
+                reasoning_force_tool ? "true" : "false"
+            );
         }
     }
 

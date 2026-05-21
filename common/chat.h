@@ -208,6 +208,7 @@ struct common_chat_params {
     std::vector<std::string>            preserved_tokens;
     std::vector<std::string>            additional_stops;
     std::string                         parser;
+    std::string                         tool_start_tag;    // e.g., "<tool_calls>"
 };
 
 // per-message parsing syntax

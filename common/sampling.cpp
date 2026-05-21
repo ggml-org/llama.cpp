@@ -433,7 +433,7 @@ static bool grammar_should_apply(struct common_sampler * gsmpl) {
     if (gsmpl->params.grammar_lazy) {
         // if grammar is lazy, only apply when reasoning budget is not active
         const auto state = common_reasoning_budget_get_state(gsmpl->rbudget);
-        return state == REASONING_BUDGET_IDLE || state == REASONING_BUDGET_DONE;
+        return state == REASONING_BUDGET_IDLE || state == REASONING_BUDGET_DONE || state == REASONING_BUDGET_FORCING;
     }
     return true;
 }

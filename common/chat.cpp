@@ -928,6 +928,8 @@ static common_chat_params common_chat_params_init_ministral_3(const common_chat_
     data.supports_thinking  = true;
     data.thinking_start_tag = "[THINK]";
     data.thinking_end_tag   = "[/THINK]";
+    data.tool_start_tag     = "[TOOL_CALLS]";
+    
     data.prompt            = common_chat_template_direct_apply_impl(tmpl, inputs, /* messages_override = */ adjusted_messages);
     data.generation_prompt = common_chat_template_generation_prompt_impl(tmpl, inputs, /* messages_override = */ adjusted_messages);
     data.format            = COMMON_CHAT_FORMAT_PEG_NATIVE;
@@ -1185,6 +1187,7 @@ static common_chat_params common_chat_params_init_gemma4(const common_chat_templ
     data.supports_thinking  = true;
     data.thinking_start_tag = "<|channel>thought";
     data.thinking_end_tag   = "<channel|>";
+    data.tool_start_tag     = "<tool_call|>";
 
     data.preserved_tokens = {
         "<|channel>",
@@ -1471,6 +1474,7 @@ static common_chat_params common_chat_params_init_kimi_k2(const common_chat_temp
 
         data.prompt += data.generation_prompt;
     }
+    data.tool_start_tag     = SECTION_BEGIN;
 
     auto parser = build_chat_peg_parser([&](common_chat_peg_builder & p) {
         // Kimi K2 Thinking format:
@@ -1591,6 +1595,7 @@ static common_chat_params common_chat_params_init_lfm2(const common_chat_templat
 
     data.thinking_start_tag = THINK_START;
     data.thinking_end_tag   = THINK_END;
+    data.tool_start_tag     = TOOL_CALL_START;
 
     if (inputs.has_continuation()) {
         const auto & msg = inputs.continue_msg;
@@ -1675,10 +1680,12 @@ static common_chat_params common_chat_params_init_lfm2_5(const common_chat_templ
 
     const std::string THINK_START     = "<think>";
     const std::string THINK_END       = "</think>";
+    const std::string TOOL_START      = "<|tool_call_start|>";
     const std::string GEN_PROMPT      = "<|im_start|>assistant\n";
 
     data.thinking_start_tag = THINK_START;
     data.thinking_end_tag   = THINK_END;
+    data.tool_start_tag     = TOOL_START;
 
     if (inputs.has_continuation()) {
         const auto & msg = inputs.continue_msg;
@@ -1710,8 +1717,8 @@ static common_chat_params common_chat_params_init_lfm2_5(const common_chat_templ
             )
         );
 
-        auto content = p.content(p.until_one_of({"<|tool_call_start|>", "["}));
-        auto maybe_start = p.optional(p.literal("<|tool_call_start|>"));
+        auto content = p.content(p.until_one_of({TOOL_START, "["}));
+        auto maybe_start = p.optional(p.literal(TOOL_START));
         return generation_prompt + reasoning + content + maybe_start + tool_calls + end;
     });
 
@@ -1846,6 +1853,8 @@ static common_chat_params common_chat_params_init_deepseek_v3_2(const common_cha
     const std::string INVOKE_END   = "</" + DSML + "invoke>";
     const std::string PARAM_START  = "<" + DSML + "parameter";
     const std::string PARAM_END    = "</" + DSML + "parameter>";
+
+    data.tool_start_tag            = FC_START;
     const std::string GEN_PROMPT   = "<｜Assistant｜>";
 
     if (inputs.has_continuation()) {
@@ -2396,7 +2405,8 @@ static common_chat_params common_chat_templates_apply_jinja(const struct common_
         auto_params.supports_thinking = autoparser.reasoning.mode != autoparser::reasoning_mode::NONE;
         if (auto_params.supports_thinking) {
             auto_params.thinking_start_tag = trim_whitespace(autoparser.reasoning.start);
-            auto_params.thinking_end_tag   = trim_whitespace(autoparser.reasoning.end);
+            auto_params.thinking_end_tag   = autoparser.reasoning.end;
+            auto_params.tool_start_tag     = autoparser.tools.format.section_start.empty() ? autoparser.tools.format.per_call_start : autoparser.tools.format.section_start;
         }
         common_peg_arena arena;
         arena.load(auto_params.parser);
