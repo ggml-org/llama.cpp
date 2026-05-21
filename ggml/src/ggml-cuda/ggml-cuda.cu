@@ -304,13 +304,14 @@ static ggml_cuda_device_info ggml_cuda_init() {
             turing_devices_without_mma.push_back({ id, device_name });
         }
 
-        // Temporary performance fix:
-        // Setting device scheduling strategy for iGPUs with cc121 to "spinning" to avoid delays in cuda synchronize calls.
-        // TODO: Check for future drivers the default scheduling strategy and
-        // remove this call again when cudaDeviceScheduleSpin is default.
+        // Use adaptive yield by default. Users can force spin for
+        // latency-sensitive workloads via GGML_CUDA_SCHEDULE_SPIN=1.
         if (prop.major == 12 && prop.minor == 1) {
             CUDA_CHECK(cudaSetDevice(id));
-            CUDA_CHECK(cudaSetDeviceFlags(cudaDeviceScheduleSpin));
+            if (getenv("GGML_CUDA_SCHEDULE_SPIN") != nullptr) {
+                CUDA_CHECK(cudaSetDeviceFlags(cudaDeviceScheduleSpin));
+            }
+            // else: use default cudaDeviceScheduleAuto (yields on shared GPUs)
         }
 
 #endif  // defined(GGML_USE_HIP)
