@@ -2,6 +2,9 @@
 #include "ggml-impl.h"
 #include "ggml-backend-impl.h"
 
+#include <sched.h>
+#include <unistd.h>
+
 #include "ggml-cuda/allreduce.cuh"
 #include "ggml-cuda/common.cuh"
 #include "ggml-cuda/acc.cuh"
@@ -3233,6 +3236,65 @@ static bool ggml_backend_cuda_cpy_tensor_async(ggml_backend_t backend_src, ggml_
         CUDA_CHECK(cudaMemcpyAsync(dst->data, src->data, ggml_nbytes(dst), cudaMemcpyDeviceToDevice, cuda_ctx_src->stream()));
     }
     return true;
+}
+
+// 3-phase adaptive wait: spin -> backoff -> yield
+// Returns true if wait completed, false if fell back to cudaStreamSynchronize
+bool ggml_cuda_adaptive_wait(cudaStream_t stream, int device) {
+    GGML_UNUSED(device);
+
+    // Create a transient event for querying completion
+    cudaEvent_t wait_event;
+    cudaError_t err = cudaEventCreateWithFlags(&wait_event, cudaEventDisableTiming);
+    if (err != cudaSuccess) {
+        return false; // fallback caller will handle
+    }
+    cudaEventRecord(wait_event, stream);
+
+    // Phase 1: busy-spin with short usleep (0->~100 us)
+    // 10 iterations of 10 us sleep between event queries
+    {
+        for (int i = 0; i < 10; i++) {
+            err = cudaEventQuery(wait_event);
+            if (err == cudaSuccess) {
+                cudaEventDestroy(wait_event);
+                return true;
+            }
+            if (err != cudaErrorNotReady) {
+                goto phase3; // error - fall through to OS-aware wait
+            }
+            usleep(10);
+        }
+    }
+
+    // Phase 2: exponential backoff (100 us -> 10 ms)
+    static const uint32_t backoff_us[] = { 100, 200, 500, 1000, 2000, 5000, 10000 };
+    for (size_t i = 0; i < sizeof(backoff_us) / sizeof(backoff_us[0]); i++) {
+        usleep(backoff_us[i]);
+        err = cudaEventQuery(wait_event);
+        if (err == cudaSuccess) {
+            cudaEventDestroy(wait_event);
+            return true;
+        }
+        if (err != cudaErrorNotReady) {
+            break; // error - fall through
+        }
+    }
+
+    // Phase 3: yield CPU + OS-aware wait
+    sched_yield();
+
+phase3:
+    // cudaEventSynchronize uses CUDA's internal OS-aware wait mechanism
+    err = cudaEventSynchronize(wait_event);
+    cudaEventDestroy(wait_event);
+
+    if (err == cudaSuccess) {
+        return true;
+    }
+
+    // Fallback: if event operations failed, use the original stream sync
+    return false;
 }
 
 static void ggml_backend_cuda_synchronize(ggml_backend_t backend) {
