@@ -2,10 +2,14 @@
 
 #include "ggml-backend-impl.h"
 #include "ggml-impl.h"
+
+#define GGML_COMMON_DECL_CPP
+#include "ggml-common.h"
+
 #include "zendnnl.hpp"
 
 #include <cstring>
-#include "ggml-quants.h"
+
 
 struct ggml_backend_zendnn_context {
     int n_threads = GGML_DEFAULT_N_THREADS;
@@ -51,14 +55,13 @@ static bool ggml_zendnn_matmul(ggml_backend_zendnn_context * ctx, int64_t m, int
 
     zendnnl::lowoha::matmul::matmul_batch_params_t batch_params;
 
-    if constexpr (std::is_same_v<TA, block_q8_0>){
+    if constexpr (std::is_same_v<TA, block_q8_0>) {
         params.dtypes.compute = zendnnl::common::data_type_t::s8;
-
         const int64_t num_groups = k / QK8_0;
         params.dynamic_quant = true;
         params.quant_params.src_scale.buff = nullptr;
         params.quant_params.src_scale.dt   = zendnnl::common::data_type_t::bf16;
-        params.quant_params.src_scale.dims = {static_cast<int>(n), static_cast<int>(num_groups)};        
+        params.quant_params.src_scale.dims = {n, num_groups};
         params.packing.pack_format_b = 1;
     }
 
@@ -98,14 +101,6 @@ static bool ggml_zendnn_sgemm(ggml_backend_zendnn_context * ctx, int64_t m, int6
 
     // categorize types
     switch (Atype) {
-        case GGML_TYPE_Q8_0:
-            if (Btype != GGML_TYPE_F32 || Ctype != GGML_TYPE_F32)
-                return false;
-            return ggml_zendnn_matmul<block_q8_0, float, float>(
-                ctx, m, n, k,
-                (const block_q8_0 *)A, lda,
-                (const float *)B, ldb,
-                (float *)C, ldc);
         case GGML_TYPE_F32:
             if (Btype != GGML_TYPE_F32 || Ctype != GGML_TYPE_F32)
                 return false;
@@ -130,6 +125,14 @@ static bool ggml_zendnn_sgemm(ggml_backend_zendnn_context * ctx, int64_t m, int6
                     (const ggml_bf16_t *)B, ldb,
                     (float *)C, ldc);
             return false;
+        case GGML_TYPE_Q8_0:
+            if (Btype != GGML_TYPE_F32 || Ctype != GGML_TYPE_F32)
+                return false;
+            return ggml_zendnn_matmul<block_q8_0, float, float>(
+                ctx, m, n, k,
+                (const block_q8_0 *)A, lda,
+                (const float *)B, ldb,
+                (float *)C, ldc);
         default:
             return false; // unsupported type
     }
@@ -167,6 +170,8 @@ static void ggml_zendnn_compute_forward_mul_mat(
     const int64_t r3 = ne13/ne03;
 
     void * work_data = ctx->work_data.get();
+
+    // ZenDNN requires FP32 for dynamic quantization, so conversion is skipped
     if (src1->type != vec_dot_type && src0->type != GGML_TYPE_Q8_0) {
         const size_t nbw1 = ggml_row_size(vec_dot_type, ne10);
         const size_t nbw2 = nbw1 * ne11;
@@ -306,6 +311,7 @@ static void ggml_zendnn_compute_forward_mul_mat_id(
     char * wdata_cur = work_data + src1_conv_size;
     char * dst_cur = wdata_cur + wdata_cur_size;
 
+    // ZenDNN requires FP32 for dynamic quantization, so conversion is skipped
     if (src1->type != vec_dot_type && src0->type != GGML_TYPE_Q8_0) {
         GGML_ASSERT(src1->type == GGML_TYPE_F32);
 
