@@ -73,7 +73,6 @@ int g_ggml_sycl_disable_dnn = 0;
 int g_ggml_sycl_prioritize_dmmv = 0;
 int g_ggml_sycl_use_async_mem_op = 0;
 int g_ggml_sycl_use_async_mem_op_requested = 1;
-int g_ggml_sycl_enable_level_zero = 0;
 int g_ggml_sycl_enable_flash_attention = 1;
 
 static inline int get_sycl_env(const char *env_name, int default_val);
@@ -240,7 +239,6 @@ static void ggml_check_sycl() try {
         g_ggml_sycl_disable_graph = get_sycl_env("GGML_SYCL_DISABLE_GRAPH", 1);
         g_ggml_sycl_disable_dnn = get_sycl_env("GGML_SYCL_DISABLE_DNN", 0);
         g_ggml_sycl_prioritize_dmmv = get_sycl_env("GGML_SYCL_PRIORITIZE_DMMV", 0);
-        g_ggml_sycl_enable_level_zero = ggml_sycl_info().ext_oneapi_level_zero;
 
 #ifdef SYCL_FLASH_ATTN
         g_ggml_sycl_enable_flash_attention = get_sycl_env("GGML_SYCL_ENABLE_FLASH_ATTN", 1);
@@ -286,7 +284,7 @@ static void ggml_check_sycl() try {
         GGML_LOG_INFO("  GGML_SYCL_DISABLE_GRAPH: graph disabled by compile flag\n");
 #endif
 #ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO
-        GGML_LOG_INFO("  GGML_SYCL_ENABLE_LEVEL_ZERO: %d\n", g_ggml_sycl_enable_level_zero);
+        GGML_LOG_INFO("  GGML_SYCL_ENABLE_LEVEL_ZERO: %d\n", ggml_sycl_info().ext_oneapi_level_zero);
 #else
         GGML_LOG_INFO("  GGML_SYCL_ENABLE_LEVEL_ZERO: Level Zero disabled by compile flag\n");
 #endif
@@ -552,9 +550,9 @@ static void dev2dev_memcpy(sycl::queue &q_dst, sycl::queue &q_src, void *ptr_dst
                     const void *ptr_src, size_t size) {
 #ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO
     // Use Level Zero direct copy for dGPU-to-dGPU transfers.
-    const bool l0_copy_supported =
+    const bool l0_copy_supported = ggml_sycl_info().ext_oneapi_level_zero &&
         ggml_sycl_is_l0_discrete_gpu(q_dst) && ggml_sycl_is_l0_discrete_gpu(q_src);
-    if (g_ggml_sycl_enable_level_zero && l0_copy_supported) {
+    if (l0_copy_supported) {
         auto ze_ctx = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(q_dst.get_context());
         auto ze_dev = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(q_dst.get_device());
         ze_command_queue_desc_t cq_desc = {ZE_STRUCTURE_TYPE_COMMAND_QUEUE_DESC, nullptr, 0, 0,
