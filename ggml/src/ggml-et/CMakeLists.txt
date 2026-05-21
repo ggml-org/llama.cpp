@@ -81,18 +81,21 @@ set(KERNELS
 )
 
 set(UBERKERNEL_SUPPORTED_KERNELS
+    # el_map_f32
+    unary_f32   # qwen3.5
+
+    # cpy_f32_f16
+    # get_rows_f32  # qwen3.5
+    # cont_f32
+
     concat_f32
     cont_f16
-    cont_f32
-    cpy_f32_f16
     cumsum_f32
     diag_f32
-    el_map_f32
     fill_f32
     flash_attn_ext_f16_me
-    flash_attn_ext_f32     # disabled for debugging
+    flash_attn_ext_f32
     gated_delta_net_f32
-    get_rows_f32
     glu_f32
     group_norm_f32
     im2col
@@ -114,7 +117,7 @@ set(UBERKERNEL_SUPPORTED_KERNELS
     rwkv_wkv7_f32
     scale_f32
     set_f32
-    set_rows_f32           # disabled for debugging
+    set_rows_f32
     softmax_f32
     solve_tri_f32
     sqr_f32
@@ -122,7 +125,6 @@ set(UBERKERNEL_SUPPORTED_KERNELS
     ssm_scan_f32
     sum_rows_f32
     tri_f32
-    unary_f32
 )
 
 set(UBERKERNEL_MAP_SCRIPT ${CMAKE_CURRENT_SOURCE_DIR}/et-kernels/scripts/generate_uberkernel_mapping.py)

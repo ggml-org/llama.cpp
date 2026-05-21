@@ -329,7 +329,7 @@ int entry_point(struct ggml_et_uberkernel_params * params, void * env) {
     // Enable L1 SCP once upfront - _me kernels need it, and the enable is a
     // one-shot operation that hangs if issued twice.
     
-    // setup_cache_scp();
+    setup_cache_scp();
     //FIXME: 
 
     struct ggml_et_uberkernel_inst * insts =
@@ -347,17 +347,43 @@ int entry_point(struct ggml_et_uberkernel_params * params, void * env) {
         int rc = -1;
         
         // et_barrier(ET_BARRIER_GLOBAL);
-        et_barrier_global(32ULL);
+        // et_barrier_global(32ULL);
 
         switch (inst->kernel_id) {
     
-            case GGML_ET_UBERKERNEL_KERNEL_EL_MAP_F32: {
-                struct ggml_et_binary_params *p = (struct ggml_et_binary_params *) inst_params;
-                // evict_region_past_l2_local(p->src0.data, tensor_bytes(&p->src0));
-                // evict_region_past_l2_local(p->src1.data, tensor_bytes(&p->src1));
-                rc = el_map_f32_entry(p, env);
+            // case GGML_ET_UBERKERNEL_KERNEL_EL_MAP_F32: {
+            //     struct ggml_et_binary_params *p = (struct ggml_et_binary_params *) inst_params;
+            //     // evict_region_past_l2_local(p->src0.data, tensor_bytes(&p->src0));
+            //     // evict_region_past_l2_local(p->src1.data, tensor_bytes(&p->src1));
+            //     rc = el_map_f32_entry(p, env);
+            //     break;
+            // }
+            
+            case GGML_ET_UBERKERNEL_KERNEL_UNARY_F32: {
+                struct uber_unary_params *p = (struct uber_unary_params *) inst_params;
+                // evict_region_past_l2(p->src0.data, tensor_bytes(&p->src0));
+                // evict_region_past_l2(p->dst.data, tensor_bytes(&p->dst));
+                rc = unary_f32_entry((struct ggml_et_unary_params *) inst_params, env);
                 break;
             }
+
+            // case GGML_ET_UBERKERNEL_KERNEL_CPY_F32_F16: {
+            //     struct uber_unary_params *p = (struct uber_unary_params *) inst_params;
+            //     rc = cpy_f32_f16_entry((struct ggml_et_cont_params *) inst_params, env);
+            //     break;
+            // }
+
+            // case GGML_ET_UBERKERNEL_KERNEL_GET_ROWS_F32: {
+            //     struct uber_get_rows_params *p = (struct uber_get_rows_params *) inst_params;
+            //     rc = get_rows_f32_entry((struct ggml_et_get_rows_params *) inst_params, env);
+            //     break;
+            // }
+
+            // case GGML_ET_UBERKERNEL_KERNEL_CONT_F32: {
+            //     struct uber_cont_params *p = (struct uber_cont_params *) inst_params;
+            //     rc = cont_f32_entry((struct ggml_et_cont_params *) inst_params, env);
+            //     break;
+            // }
 
             case GGML_ET_UBERKERNEL_KERNEL_GLU_F32: {
                 struct uber_glu_params *p = (struct uber_glu_params *) inst_params;
@@ -365,12 +391,7 @@ int entry_point(struct ggml_et_uberkernel_params * params, void * env) {
                 break;
             }
 
-            case GGML_ET_UBERKERNEL_KERNEL_UNARY_F32: {
-                struct uber_unary_params *p = (struct uber_unary_params *) inst_params;
-                rc = unary_f32_entry((struct ggml_et_unary_params *) inst_params, env);
-                break;
-            }
-
+            
             case GGML_ET_UBERKERNEL_KERNEL_ROPE_F32: {
                 struct uber_rope_params *p = (struct uber_rope_params *) inst_params;
                 rc = rope_f32_entry((struct ggml_et_rope_params *) inst_params, env);
@@ -402,18 +423,6 @@ int entry_point(struct ggml_et_uberkernel_params * params, void * env) {
                 // evict_region_past_l2_local(p->src1.data, tensor_bytes(&p->src1));
                 rc = set_rows_f32_impl((struct uber_set_rows_params *) inst_params, env);
                 // rc = set_rows_f32_entry((struct ggml_et_set_rows_params *) inst_params, env);
-                break;
-            }
-
-            case GGML_ET_UBERKERNEL_KERNEL_GET_ROWS_F32: {
-                struct uber_get_rows_params *p = (struct uber_get_rows_params *) inst_params;
-                rc = get_rows_f32_entry((struct ggml_et_get_rows_params *) inst_params, env);
-                break;
-            }
-
-            case GGML_ET_UBERKERNEL_KERNEL_CONT_F32: {
-                struct uber_cont_params *p = (struct uber_cont_params *) inst_params;
-                rc = cont_f32_entry((struct ggml_et_cont_params *) inst_params, env);
                 break;
             }
 
@@ -478,11 +487,7 @@ int entry_point(struct ggml_et_uberkernel_params * params, void * env) {
                 rc = cont_f16_entry((struct ggml_et_cont_params *) inst_params, env);
                 break;
             }
-            case GGML_ET_UBERKERNEL_KERNEL_CPY_F32_F16: {
-                struct uber_unary_params *p = (struct uber_unary_params *) inst_params;
-                rc = cpy_f32_f16_entry((struct ggml_et_cont_params *) inst_params, env);
-                break;
-            }
+            
             // fill: no input to evict (writes dst from scalar constant)
             case GGML_ET_UBERKERNEL_KERNEL_FILL_F32: {
                 rc = fill_f32_entry((struct ggml_et_fill_params *) inst_params, env);
@@ -593,7 +598,7 @@ int entry_point(struct ggml_et_uberkernel_params * params, void * env) {
             return rc;
         }
 
-        // et_barrier(ET_BARRIER_GLOBAL);
+        et_barrier(ET_BARRIER_GLOBAL);
     }
 
     return 0;
