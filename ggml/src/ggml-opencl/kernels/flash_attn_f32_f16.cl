@@ -33,6 +33,11 @@
 
 #define DK_VEC (DK/4)
 #define DV_VEC (DV/4)
+// Hoisted to file scope so the kept decode kernels (q1_split, merge) still see
+// it when FA_DECODE_ONLY excludes the vec/MQ block that originally defined it.
+#ifndef FA_PARTIAL_FLOATS
+#define FA_PARTIAL_FLOATS (2 + DV)
+#endif
 #define Q1_WG_SIZE 64
 
 // The kernels are built with -cl-finite-math-only. On some older Adreno GPUs,
@@ -72,9 +77,26 @@ inline float get_alibi_slope(
 
     return pow(base, exph);
 }
-__kernel void flash_attn_f32_f16(
+// FA_DECODE_ONLY: built for DK=512 (Gemma-4 global layers) where compiling the
+// full program OOMs the Adreno shader compiler (CL_OUT_OF_HOST_MEMORY). The
+// decode-only build keeps just q1 + q1_split + merge; the heavy BM-tile prefill
+// kernel and all vec/MQ variants are excluded so the program fits the compiler.
+#ifndef FA_DECODE_ONLY
+#ifndef FA_TILE_NAME
+#define FA_TILE_NAME flash_attn_f32_f16
+#endif
+__kernel void FA_TILE_NAME(
     const global void * q_void, ulong q_offset,
+#ifdef FA_K_IMG
+    // K bound as a read-only image1d_buffer_t (CL_RGBA / CL_HALF_FLOAT, 8 B/pixel
+    // = 1 half4) → reads go through the Adreno texture cache, a separate BW lane
+    // that survives the per-query-block K re-reads. k_offset is baked into the
+    // sub-buffer the image views, so the second slot is an unused placeholder
+    // kept only so the host arg layout matches the non-image tile.
+    __read_only image1d_buffer_t k_img, ulong k_offset_unused,
+#else
     const global void * k_void, ulong k_offset,
+#endif
     const global void * v_void, ulong v_offset,
     global void * o_void, ulong o_offset,
     const float scale,
@@ -134,7 +156,9 @@ __kernel void flash_attn_f32_f16(
     const int mask_batch_idx = mask_void != NULL ? batch_idx % mask_ne3 : 0;
 
     const global char* q_base = (const global char*)q_void + q_offset;
+#ifndef FA_K_IMG
     const global char* k_base = (const global char*)k_void + k_offset;
+#endif
     const global char* v_base = (const global char*)v_void + v_offset;
     global char* o_base = (global char*)o_void + o_offset;
 
@@ -202,7 +226,16 @@ __kernel void flash_attn_f32_f16(
         const ulong k_tile_nb3 = use_kv_pad ? (ulong) n_head_kv * k_tile_nb2 : k_nb3;
         const ulong v_tile_nb2 = use_kv_pad ? (ulong) BLOCK_N * v_nb1 : v_nb2;
         const ulong v_tile_nb3 = use_kv_pad ? (ulong) n_head_kv * v_tile_nb2 : v_nb3;
+#ifdef FA_K_IMG
+        // K via texture cache for the bulk (aligned) tiles; the ragged last
+        // tile (use_kv_pad) still reads the f32-strided pad buffer from global.
+        const global char* k_tile_base = use_kv_pad ? (const global char*) k_pad_void : (const global char*) 0;
+        const int k_pitch_px_row   = (int)(k_nb1 >> 3);
+        const int k_pitch_px_head  = (int)(k_nb2 >> 3);
+        const int k_pitch_px_batch = (int)(k_nb3 >> 3);
+#else
         const global char* k_tile_base = use_kv_pad ? (const global char*) k_pad_void : k_base;
+#endif
         const global char* v_tile_base = use_kv_pad ? (const global char*) v_pad_void : v_base;
 
         for (int i = tid; i < BLOCK_N * DK_VEC; i += WG_SIZE) {
@@ -210,8 +243,18 @@ __kernel void flash_attn_f32_f16(
             const int col = i % DK_VEC;
             const int k_row_idx = k_tile_start + row;
             if (use_kv_pad || k_row_idx < n_kv) {
+#ifdef FA_K_IMG
+                if (use_kv_pad) {
+                    const ulong k_row_offset = batch_idx * k_tile_nb3 + head_kv_idx * k_tile_nb2 + k_row_idx * k_nb1;
+                    l_k[row][col] = ((__global KV_DATA_TYPE4*)(k_tile_base + k_row_offset))[col];
+                } else {
+                    const int k_row_px = batch_idx * k_pitch_px_batch + head_kv_idx * k_pitch_px_head + k_row_idx * k_pitch_px_row;
+                    l_k[row][col] = read_imageh(k_img, k_row_px + col);
+                }
+#else
                 const ulong k_row_offset = batch_idx * k_tile_nb3 + head_kv_idx * k_tile_nb2 + k_row_idx * k_nb1;
                 l_k[row][col] = ((__global KV_DATA_TYPE4*)(k_tile_base + k_row_offset))[col];
+#endif
             } else {
                 l_k[row][col] = (KV_DATA_TYPE4)(0.0h);
             }
@@ -576,6 +619,12 @@ __kernel void flash_attn_f32_f16(
 // _q1_vec at d=8192. At WG=Q1_WG_SIZE=64 the Adreno default sg=64, so
 // sub_group_reduce_max/add and sub_group_barrier produce correct WG-wide
 // semantics without the explicit attribute (TBO 2564/2564).
+#endif  // !FA_DECODE_ONLY (BM-tile prefill kernel)
+
+// FA_PREFILL_ONLY: the DK=512 prefill program builds ONLY the BM-tile kernel
+// above; every decode kernel below is excluded so the tile compiles in its own
+// minimal program (the full program OOMs the Adreno compiler at DK=512).
+#ifndef FA_PREFILL_ONLY
 __kernel void flash_attn_f32_f16_q1(
     const global void * q_void, ulong q_offset,
     const global void * k_void, ulong k_offset,
@@ -616,7 +665,9 @@ __kernel void flash_attn_f32_f16_q1(
     const int head_kv_idx = head_idx / gqa_ratio;
 
     const global char* q_base = (const global char*)q_void + q_offset;
+#ifndef FA_K_IMG
     const global char* k_base = (const global char*)k_void + k_offset;
+#endif
     const global char* v_base = (const global char*)v_void + v_offset;
     global char* o_base = (global char*)o_void + o_offset;
 
@@ -933,6 +984,7 @@ __kernel void flash_attn_f32_f16_q1_vec(
     }
 }
 
+#ifndef FA_DECODE_ONLY  // MQ / local-tile decode variants — excluded for the DK=512 decode-only program (q1 + q1_vec + q1_split + merge kept)
 // Multi-Query coalesced vec decode (KV-head-coalesced WG dispatch).
 //
 // At high GQA + DK>=256 + small n_head_kv (e.g. Gemma-3-1B: n_head=4,
@@ -2095,6 +2147,7 @@ __kernel void flash_attn_f32_f16_q1_vec_mq_split_k_img(
 }
 
 
+#endif  // !FA_DECODE_ONLY (vec / MQ / local-tile decode variants)
 __kernel void flash_attn_f32_f16_q1_split(
     const global void * q_void, ulong q_offset,
     const global void * k_void, ulong k_offset,
@@ -2324,3 +2377,4 @@ __kernel void flash_attn_f32_merge(
     global O_DATA_TYPE4 * o_row = (global O_DATA_TYPE4 *) ((global char *) o_void + o_offset + o_row_offset);
     o_row[lane] = CONVERT_O_DATA4(o);
 }
+#endif  // !FA_PREFILL_ONLY (decode kernels)

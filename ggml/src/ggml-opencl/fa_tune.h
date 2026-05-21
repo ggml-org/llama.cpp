@@ -20,6 +20,14 @@ static const ggml_opencl_fa_dim g_fa_dims_adreno_default[] = {
     {192, 128, 16, 16, 1, 0},
     {192, 192, 16, 16, 1, 0},
     {256, 256, 16, 16, 16, 0},
+    // DK=DV=512 covers Gemma-4's global-attention layers (SWA layers run on
+    // the 256 path). BLOCK_N=16 fixes l_k+l_v at 32 KB local (2×16×128×8 B), so
+    // only one WG is resident per CU — N_SPLIT=64 (WG = BM×N_SPLIT = 512) gives
+    // that single WG enough threads to hide the K/V load latency: measured
+    // +25% on Gemma-4-26B pp2048@d16384 (52.97 → 66) vs N_SPLIT=32/WG=256.
+    // N_SPLIT=128/WG=1024 overshoots (58.8); BM<8 starves on query rows.
+    // SPLIT_DK_VEC/SPLIT_DV_VEC = 2 float4 each → tiny per-thread footprint.
+    {512, 512,  8, 16, 64, 0},
 };
 
 struct ggml_opencl_fa_dim_table {
