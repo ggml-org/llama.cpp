@@ -37,7 +37,11 @@ env:
   LLAMA_LOG_TIMESTAMPS: 1
 
 jobs:
+  approval:
+    uses: ./.github/workflows/approval.yml
+
   macOS-latest-ios:
+    needs: [approval]
     runs-on: macos-latest
 
     steps:
@@ -71,6 +75,7 @@ jobs:
           cmake --build build --config Release -j $(sysctl -n hw.logicalcpu) -- CODE_SIGNING_ALLOWED=NO
 
   macos-latest-ios-xcode:
+    needs: [approval]
     runs-on: macos-latest
 
     steps:
@@ -118,6 +123,7 @@ jobs:
           xcodebuild -project examples/llama.swiftui/llama.swiftui.xcodeproj -scheme llama.swiftui -sdk iphoneos CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY= -destination 'generic/platform=iOS' FRAMEWORK_FOLDER_PATH=./build-ios build
 
   macOS-latest-tvos:
+    needs: [approval]
     runs-on: macos-latest
 
     steps:
@@ -151,6 +157,7 @@ jobs:
           cmake --build build --config Release -j $(sysctl -n hw.logicalcpu) -- CODE_SIGNING_ALLOWED=NO
 
   macOS-latest-visionos:
+    needs: [approval]
     runs-on: macos-latest
 
     steps:
@@ -178,7 +185,7 @@ jobs:
 
   macOS-latest-swift:
     runs-on: macos-latest
-    needs: macos-latest-ios-xcode
+    needs: [approval, macos-latest-ios-xcode]
 
     strategy:
       matrix:

@@ -1,0 +1,20 @@
+name: Approval
+
+on:
+  workflow_call:
+
+jobs:
+  approval-auto:
+    if: github.ref_name == 'master'
+    runs-on: ubuntu-slim
+    steps:
+      - name: Auto-approve (master branch)
+        run: echo "Running on master branch - auto-approved"
+
+  approval-manual:
+    if: github.ref_name != 'master'
+    runs-on: ubuntu-slim
+    environment: ci-approval
+    steps:
+      - name: Approved after review
+        run: echo "Non-master branch - approved after manual review"
