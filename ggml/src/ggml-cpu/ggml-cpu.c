@@ -432,6 +432,11 @@ typedef SRWLOCK            ggml_mutex_t;
 #define ggml_cond_wait(c, m) SleepConditionVariableSRW(c, m, INFINITE, CONDITION_VARIABLE_LOCKMODE_SHARED)
 #define ggml_cond_broadcast(c) WakeAllConditionVariable(c)
 
+static inline void ggml_cond_wait_timeout(ggml_cond_t * cond, ggml_mutex_t * mutex, int ms) {
+    (void)mutex;
+    SleepConditionVariableSRW(cond, mutex, ms, 0);
+}
+
 #define ggml_thread_create pthread_create
 #define ggml_thread_join   pthread_join
 
@@ -461,6 +466,18 @@ typedef pthread_mutex_t    ggml_mutex_t;
 #define ggml_cond_destroy(c)   pthread_cond_destroy(c)
 #define ggml_cond_wait(c, m)   pthread_cond_wait(c, m)
 #define ggml_cond_broadcast(c) pthread_cond_broadcast(c)
+
+static inline void ggml_cond_wait_timeout(ggml_cond_t * cond, ggml_mutex_t * mutex, int ms) {
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    ts.tv_sec  += ms / 1000;
+    ts.tv_nsec += (ms % 1000) * 1000000L;
+    if (ts.tv_nsec >= 1000000000L) {
+        ts.tv_sec++;
+        ts.tv_nsec -= 1000000000L;
+    }
+    pthread_cond_timedwait(cond, mutex, &ts);
+}
 
 #define ggml_thread_create pthread_create
 #define ggml_thread_join   pthread_join
@@ -572,7 +589,7 @@ void ggml_barrier(struct ggml_threadpool * tp) {
 #ifdef GGML_USE_OPENMP
     #pragma omp barrier
 #else
-    int n_passed = atomic_load_explicit(&tp->n_barrier_passed, memory_order_relaxed);
+    int n_passed = atomic_load_explicit(&tp->n_barrier_passed, memory_order_acquire);
 
     // enter barrier (full seq-cst fence)
     int n_barrier = atomic_fetch_add_explicit(&tp->n_barrier, 1, memory_order_seq_cst);
@@ -583,16 +600,35 @@ void ggml_barrier(struct ggml_threadpool * tp) {
 
         // exit barrier (full seq-cst fence)
         atomic_fetch_add_explicit(&tp->n_barrier_passed, 1, memory_order_seq_cst);
+
+        // wake any threads sleeping in cond_wait
+        ggml_cond_broadcast(&tp->cond);
         return;
     }
 
     // wait for other threads
+
+    // Phase 1: brief spin (uses existing poll parameter, same scale as poll_for_work)
+    {
+        const uint64_t n_rounds = 1024UL * 128 * tp->poll;
+        for (uint64_t i = 0; i < n_rounds; i++) {
+            if (atomic_load_explicit(&tp->n_barrier_passed, memory_order_acquire) != n_passed) {
+                break;
+            }
+            ggml_thread_cpu_relax();
+        }
+    }
+
+    // Phase 2: sleep on condition variable if threads still haven't arrived
     while (atomic_load_explicit(&tp->n_barrier_passed, memory_order_acquire) == n_passed) {
-        ggml_thread_cpu_relax();
+        ggml_mutex_lock_shared(&tp->mutex);
+        // Timed wait to avoid missing the broadcast (spurious wakeup protection)
+        // 1ms timeout — last thread also increments n_barrier_passed, so we'll see it
+        ggml_cond_wait_timeout(&tp->cond, &tp->mutex, 1000);
+        ggml_mutex_unlock_shared(&tp->mutex);
     }
 
     // exit barrier (full seq-cst fence)
-    // TSAN doesn't support standalone fence yet, we use a dummy read-modify-write instead
     #ifdef GGML_TSAN_ENABLED
     atomic_fetch_add_explicit(&tp->n_barrier_passed, 0, memory_order_seq_cst);
     #else
