@@ -26,6 +26,7 @@ __global__ void __launch_bounds__(splitD, 1)
                  const int64_t s_off, const int64_t d_inner, const int64_t L_param)
 {
     const size_t L = L_template == 0 ? L_param : L_template;
+    ggml_cuda_pdl_sync();
     const float *s0_block = (const float *)((const char *)src0 + src6[blockIdx.x] * src0_nb3 + blockIdx.y * splitD * src0_nb2);
     const float *x_block = (const float *)((const char *)src1 + (blockIdx.x * src1_nb3) + blockIdx.y * splitD * sizeof(float));
     const float *dt_block = (const float *)((const char *)src2 + (blockIdx.x * src2_nb2) + blockIdx.y * splitD * sizeof(float));
@@ -135,6 +136,7 @@ __global__ void __launch_bounds__(d_state, 1)
 
     const int group_off = (head_idx / (n_head / n_group)) * d_state * sizeof(float);
 
+    ggml_cuda_pdl_sync();
     // TODO: refactor strides to be in elements/floats instead of bytes to be cleaner and consistent with the rest of the codebase
     const float * s0_warp = (const float *) ((const char *) src0 + src6[seq_idx] * src0_nb3 + head_idx * src0_nb2 + head_off * d_state);
     const float * x_warp  = (const float *) ((const char *) src1 + (seq_idx * src1_nb3) + (warp_idx * sizeof(float)));
@@ -206,7 +208,8 @@ static void ssm_scan_f32_cuda(const float * src0, const float * src1, const floa
             constexpr int num_warps = threads/WARP_SIZE;
 
             const dim3 blocks((n_head * head_dim + (num_warps - 1)) / num_warps, n_seq, 1);
-            ssm_scan_f32_group<128/WARP_SIZE, 128><<<blocks, threads, 0, stream>>>(
+            const ggml_cuda_kernel_launch_params launch_params = ggml_cuda_kernel_launch_params(blocks, threads, 0, stream);
+            ggml_cuda_kernel_launch(ssm_scan_f32_group<128/WARP_SIZE, 128>, launch_params,
                     src0, src1, src2, src3, src4, src5, src6, dst,
                     src0_nb2, src0_nb3, src1_nb2, src1_nb3, src2_nb1, src2_nb2, src3_nb1,
                     src4_nb2, src4_nb3, src5_nb2, src5_nb3, s_off, n_head, head_dim, n_group, n_tok);
@@ -215,7 +218,8 @@ static void ssm_scan_f32_cuda(const float * src0, const float * src1, const floa
             constexpr int num_warps = threads/WARP_SIZE;
 
             const dim3 blocks((n_head * head_dim + (num_warps - 1)) / num_warps, n_seq, 1);
-            ssm_scan_f32_group<256/WARP_SIZE, 256><<<blocks, threads, 0, stream>>>(
+            const ggml_cuda_kernel_launch_params launch_params = ggml_cuda_kernel_launch_params(blocks, threads, 0, stream);
+            ggml_cuda_kernel_launch(ssm_scan_f32_group<256/WARP_SIZE, 256>, launch_params,
                     src0, src1, src2, src3, src4, src5, src6, dst,
                     src0_nb2, src0_nb3, src1_nb2, src1_nb3, src2_nb1, src2_nb2, src3_nb1,
                     src4_nb2, src4_nb3, src5_nb2, src5_nb3, s_off, n_head, head_dim, n_group, n_tok);
@@ -231,58 +235,59 @@ static void ssm_scan_f32_cuda(const float * src0, const float * src1, const floa
         const dim3 blocks(n_seq, (n_head + threads - 1) / threads, 1);
         const int  smem_size = (threads * (d_state + 1) * 2) * sizeof(float);
         if (d_state == 16) {
+            const ggml_cuda_kernel_launch_params launch_params = ggml_cuda_kernel_launch_params(blocks, threads, smem_size, stream);
             switch (n_tok)
             {
             case 1:
-                ssm_scan_f32<threads, 16, 1><<<blocks, threads, smem_size, stream>>>(
+                ggml_cuda_kernel_launch(ssm_scan_f32<threads, 16, 1>, launch_params,
                     src0, src1, src2, src3, src4, src5, src6, dst,
                 src0_nb2, src0_nb3, src1_nb2, src1_nb3, src2_nb1, src2_nb2,
                 src3_nb1, src4_nb2, src4_nb3, src5_nb2, src5_nb3, s_off, n_head, n_tok);
                 break;
             case 2:
-                ssm_scan_f32<threads, 16, 2><<<blocks, threads, smem_size, stream>>>(
+                ggml_cuda_kernel_launch(ssm_scan_f32<threads, 16, 2>, launch_params,
                     src0, src1, src2, src3, src4, src5, src6, dst,
                 src0_nb2, src0_nb3, src1_nb2, src1_nb3, src2_nb1, src2_nb2,
                 src3_nb1, src4_nb2, src4_nb3, src5_nb2, src5_nb3, s_off, n_head, n_tok);
                 break;
             case 3:
-                ssm_scan_f32<threads, 16, 3><<<blocks, threads, smem_size, stream>>>(
+                ggml_cuda_kernel_launch(ssm_scan_f32<threads, 16, 3>, launch_params,
                     src0, src1, src2, src3, src4, src5, src6, dst,
                 src0_nb2, src0_nb3, src1_nb2, src1_nb3, src2_nb1, src2_nb2,
                 src3_nb1, src4_nb2, src4_nb3, src5_nb2, src5_nb3, s_off, n_head, n_tok);
                 break;
             case 4:
-                ssm_scan_f32<threads, 16, 4><<<blocks, threads, smem_size, stream>>>(
+                ggml_cuda_kernel_launch(ssm_scan_f32<threads, 16, 4>, launch_params,
                     src0, src1, src2, src3, src4, src5, src6, dst,
                 src0_nb2, src0_nb3, src1_nb2, src1_nb3, src2_nb1, src2_nb2,
                 src3_nb1, src4_nb2, src4_nb3, src5_nb2, src5_nb3, s_off, n_head, n_tok);
                 break;
             case 5:
-                ssm_scan_f32<threads, 16, 5><<<blocks, threads, smem_size, stream>>>(
+                ggml_cuda_kernel_launch(ssm_scan_f32<threads, 16, 5>, launch_params,
                     src0, src1, src2, src3, src4, src5, src6, dst,
                 src0_nb2, src0_nb3, src1_nb2, src1_nb3, src2_nb1, src2_nb2,
                 src3_nb1, src4_nb2, src4_nb3, src5_nb2, src5_nb3, s_off, n_head, n_tok);
                 break;
             case 6:
-                ssm_scan_f32<threads, 16, 6><<<blocks, threads, smem_size, stream>>>(
+                ggml_cuda_kernel_launch(ssm_scan_f32<threads, 16, 6>, launch_params,
                     src0, src1, src2, src3, src4, src5, src6, dst,
                 src0_nb2, src0_nb3, src1_nb2, src1_nb3, src2_nb1, src2_nb2,
                 src3_nb1, src4_nb2, src4_nb3, src5_nb2, src5_nb3, s_off, n_head, n_tok);
                 break;
             case 7:
-                ssm_scan_f32<threads, 16, 7><<<blocks, threads, smem_size, stream>>>(
+                ggml_cuda_kernel_launch(ssm_scan_f32<threads, 16, 7>, launch_params,
                     src0, src1, src2, src3, src4, src5, src6, dst,
                 src0_nb2, src0_nb3, src1_nb2, src1_nb3, src2_nb1, src2_nb2,
                 src3_nb1, src4_nb2, src4_nb3, src5_nb2, src5_nb3, s_off, n_head, n_tok);
                 break;
             case 8:
-                ssm_scan_f32<threads, 16, 8><<<blocks, threads, smem_size, stream>>>(
+                ggml_cuda_kernel_launch(ssm_scan_f32<threads, 16, 8>, launch_params,
                     src0, src1, src2, src3, src4, src5, src6, dst,
                 src0_nb2, src0_nb3, src1_nb2, src1_nb3, src2_nb1, src2_nb2,
                 src3_nb1, src4_nb2, src4_nb3, src5_nb2, src5_nb3, s_off, n_head, n_tok);
                 break;
             default:
-                ssm_scan_f32<threads, 16, 0><<<blocks, threads, smem_size, stream>>>(
+                ggml_cuda_kernel_launch(ssm_scan_f32<threads, 16, 0>, launch_params,
                     src0, src1, src2, src3, src4, src5, src6, dst,
                 src0_nb2, src0_nb3, src1_nb2, src1_nb3, src2_nb1, src2_nb2,
                 src3_nb1, src4_nb2, src4_nb3, src5_nb2, src5_nb3, s_off, n_head, n_tok);

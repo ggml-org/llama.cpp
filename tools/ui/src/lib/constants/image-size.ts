@@ -1,0 +1,1 @@
+export const MEGAPIXELS_TO_PIXELS = 1_000_000;

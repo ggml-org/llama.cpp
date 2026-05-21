@@ -108,11 +108,12 @@ If a draft model is combined with a draftless decoding the draftless decoding ha
 ### General Speculative Parameters
 
 ```
---spec-type [none|ngram-cache|ngram-simple|ngram-map-k|ngram-map-k4v|ngram-mod]
-                                        type of speculative decoding to use when no draft model is provided
+--spec-type [none|draft-simple|draft-mtp|ngram-cache|ngram-simple|ngram-map-k|ngram-map-k4v|ngram-mod]
+                                        comma-separated list of types of speculative decoding to use
                                         (default: none)
                                         (env: LLAMA_ARG_SPEC_TYPE)
---spec-default                          use default speculative decoding
+--spec-default                          use default speculative decoding config
+                                        (enables ngram-mod)
 ```
 
 ### Draft Model Parameters
@@ -123,8 +124,9 @@ If a draft model is combined with a draftless decoding the draftless decoding ha
                                         (env: LLAMA_ARG_SPEC_DRAFT_MODEL)
 --spec-draft-hf, -hfd, -hfrd, --hf-repo-draft  <user>/<model>[:quant]
                                         HuggingFace repository for the draft model
+                                        (env: LLAMA_ARG_SPEC_DRAFT_HF_REPO)
 --spec-draft-n-max                      N
-                                        number of tokens to draft for speculative decoding (default: 16)
+                                        number of tokens to draft for speculative decoding (default: 3)
                                         (env: LLAMA_ARG_SPEC_DRAFT_N_MAX)
 --spec-draft-n-min                      N
                                         minimum number of draft tokens to use for speculative decoding (default: 0)
@@ -133,18 +135,64 @@ If a draft model is combined with a draftless decoding the draftless decoding ha
                                         speculative decoding split probability (default: 0.10)
                                         (env: LLAMA_ARG_SPEC_DRAFT_P_SPLIT)
 --spec-draft-p-min, --draft-p-min       P
-                                        minimum speculative decoding probability (greedy) (default: 0.75)
+                                        minimum speculative decoding probability (greedy) (default: 0.00)
                                         (env: LLAMA_ARG_SPEC_DRAFT_P_MIN)
---spec-draft-ctx-size, -cd, --ctx-size-draft  N
-                                        size of the prompt context for the draft model (default: 0, 0 = loaded from model)
-                                        (env: LLAMA_ARG_SPEC_DRAFT_CTX_SIZE)
 --spec-draft-ngl, -ngld, --gpu-layers-draft, --n-gpu-layers-draft  N
                                         max. number of draft model layers to store in VRAM, either an exact number, 'auto', or 'all' (default: auto)
                                         (env: LLAMA_ARG_N_GPU_LAYERS_DRAFT)
 --spec-draft-device, -devd, --device-draft  <dev1,dev2,..>
                                         comma-separated list of devices to use for offloading the draft model
---spec-draft-replace, --spec-replace    TARGET  DRAFT
-                                        translate the string in TARGET into DRAFT if the draft model and main model are not compatible
+                                        (use --list-devices to see available devices)
+```
+
+### Draft Model CPU Scheduling Parameters
+
+```
+--spec-draft-threads, -td, --threads-draft  N
+                                        number of CPU threads to use during generation
+--spec-draft-threads-batch, -tbd, --threads-batch-draft  N
+                                        number of threads to use during batch and prompt processing (default: same as --threads-draft)
+--spec-draft-cpu-mask, -Cd, --cpu-mask-draft  M
+                                        Draft model CPU affinity mask. Complements cpu-range-draft
+--spec-draft-cpu-range, -Crd, --cpu-range-draft  lo-hi
+                                        Ranges of CPUs for affinity. Complements --cpu-mask-draft
+--spec-draft-cpu-strict, --cpu-strict-draft  <0|1>
+                                        Use strict CPU placement for draft model (default: same as --cpu-strict)
+--spec-draft-prio, --prio-draft  N
+                                        set draft process/thread priority : 0-normal, 1-medium, 2-high, 3-realtime
+--spec-draft-poll, --poll-draft  <0|1>
+                                        Use polling to wait for draft model work (default: same as --poll)
+--spec-draft-cpu-mask-batch, -Cbd, --cpu-mask-batch-draft  M
+                                        Draft model CPU affinity mask for batch. Complements cpu-range-batch-draft
+--spec-draft-cpu-range-batch, -Crbd, --cpu-range-batch-draft  lo-hi
+                                        Ranges of CPUs for affinity for batch. Complements --cpu-mask-batch-draft
+--spec-draft-cpu-strict-batch, --cpu-strict-batch-draft  <0|1>
+                                        Use strict CPU placement for draft model batch (default: --cpu-strict-draft)
+--spec-draft-prio-batch, --prio-batch-draft  N
+                                        set draft process/thread priority for batch : 0-normal, 1-medium, 2-high, 3-realtime
+--spec-draft-poll-batch, --poll-batch-draft  <0|1>
+                                        Use polling to wait for draft model work for batch (default: --poll-draft)
+```
+
+### Draft Model KV Cache and Tensor Override Parameters
+
+```
+--spec-draft-type-k, -ctkd, --cache-type-k-draft  TYPE
+                                        KV cache data type for K for the draft model
+                                        allowed values: f32, f16, bf16, q8_0, q4_0, q4_1, iq4_nl, q5_0, q5_1
+                                        (env: LLAMA_ARG_SPEC_DRAFT_CACHE_TYPE_K)
+--spec-draft-type-v, -ctvd, --cache-type-v-draft  TYPE
+                                        KV cache data type for V for the draft model
+                                        allowed values: f32, f16, bf16, q8_0, q4_0, q4_1, iq4_nl, q5_0, q5_1
+                                        (env: LLAMA_ARG_SPEC_DRAFT_CACHE_TYPE_V)
+--spec-draft-override-tensor, -otd, --override-tensor-draft  <tensor name pattern>=<buffer type>,...
+                                        override tensor buffer type for draft model
+--spec-draft-cpu-moe, -cmoed, --cpu-moe-draft
+                                        keep all Mixture of Experts (MoE) weights in the CPU for the draft model
+                                        (env: LLAMA_ARG_SPEC_DRAFT_CPU_MOE)
+--spec-draft-n-cpu-moe, --spec-draft-ncmoe, -ncmoed, --n-cpu-moe-draft  N
+                                        keep the MoE weights of the first N layers in the CPU for the draft model
+                                        (env: LLAMA_ARG_SPEC_DRAFT_N_CPU_MOE)
 ```
 
 ### n-gram Mod Parameters
@@ -193,11 +241,13 @@ If a draft model is combined with a draftless decoding the draftless decoding ha
 
 ### `--spec-type TYPE`
 
-Specifies a type of speculative decoding without draft model.
+Specifies a comma-separated list of speculative decoding types to use.
 
 | Type | Description |
 |------|-------------|
 | `none` | No speculative decoding (default) |
+| `draft-simple` | Use a simple draft model for speculation |
+| `draft-mtp` | Use Multi Token Prediction (MTP) heads from the main model |
 | `ngram-cache` | Use n-gram cache lookup |
 | `ngram-simple` | Use simple n-gram pattern matching |
 | `ngram-map-k` | Use n-gram pattern matching with n-gram-keys |
@@ -207,6 +257,11 @@ Specifies a type of speculative decoding without draft model.
 **Example:** Server-instance used to refactor source code.
 ```bash
 ./llama-server [...] --spec-type ngram-simple
+```
+
+**Example:** Multiple speculative implementations.
+```bash
+./llama-server [...] --spec-type ngram-mod,ngram-map-k4v
 ```
 
 ### `--spec-ngram-*-size-n N`

@@ -22,11 +22,10 @@ if TYPE_CHECKING:
 if 'NO_LOCAL_GGUF' not in os.environ:
     sys.path.insert(1, str(Path(__file__).parent / 'gguf-py'))
 import gguf
-
-# reuse model definitions from convert_hf_to_gguf.py
-from convert_hf_to_gguf import LazyTorchTensor, ModelBase
-
 from gguf.constants import GGUFValueType
+
+# reuse model definitions from the conversion/ package
+from conversion import LazyTorchTensor, ModelBase, get_model_class
 
 logger = logging.getLogger("lora-to-gguf")
 
@@ -390,7 +389,7 @@ if __name__ == '__main__':
         try:
             model_arch = hparams.get("text_config", {}).get("architectures", hparams["architectures"])[0]
             logger.info("Using model architecture: %s", model_arch)
-            model_class = ModelBase.from_model_architecture(model_arch)
+            model_class = get_model_class(model_arch)
         except NotImplementedError:
             logger.error(f"Model {hparams['architectures'][0]} is not supported")
             sys.exit(1)
@@ -452,6 +451,11 @@ if __name__ == '__main__':
                     if self.lazy:
                         tensor = LazyTorchTensor.from_eager(tensor)
                     base_name = get_base_tensor_name(name)
+                    # filter base name, ignore tensor transformations for now
+                    data_gen = lambda g=tensor: g  # noqa: E731
+                    if (titem := self.filter_tensors((base_name, data_gen))) is None:
+                        continue
+                    base_name, _ = titem
                     # note: mergekit-extract-lora also adds token embeddings to the adapter
                     is_lora_a = ".lora_A.weight" in name or ".lora_embedding_A" in name
                     is_lora_b = ".lora_B.weight" in name or ".lora_embedding_B" in name
