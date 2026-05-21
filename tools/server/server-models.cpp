@@ -14,6 +14,7 @@
 #include <mutex>
 #include <condition_variable>
 #include <cstring>
+#include <cstdlib>
 #include <atomic>
 #include <chrono>
 #include <queue>
@@ -159,6 +160,13 @@ void server_model_meta::update_args(common_preset_context & ctx_preset, std::str
     // TODO: maybe validate preset before rendering ?
     // render args
     args = preset.to_args(bin_path);
+
+    // unified binary dispatches by subcommand, re-inject it right after the
+    // binary path so the child starts as 'llama serve ...' not 'llama ...'
+    const char * app_cmd = std::getenv("LLAMA_APP_CMD");
+    if (app_cmd != nullptr && app_cmd[0] != '\0' && !bin_path.empty()) {
+        args.insert(args.begin() + 1, app_cmd);
+    }
 }
 
 void server_model_meta::update_caps() {
