@@ -3,6 +3,7 @@
 #include "../utils.h"
 
 #include <cstdint>
+#include <cstdlib>
 #include <memory>
 #include <openvino/op/add.hpp>
 #include <openvino/op/broadcast.hpp>
@@ -63,11 +64,16 @@ OutputVector translate_flash_attn_ext(const NodeContext & context) {
     const int64_t head_size     = q_shape[3];
     const int64_t factor        = num_heads / num_heads_kv;
 
-    // Optional path: skip the explicit Broadcast that materialises K and V at
-    // num_heads. Express attention manually so MatMul's NUMPY-broadcast handles
-    // the GQA expansion at kernel level (K and V are read once from DRAM).
-    // Opt in with GGML_OPENVINO_MANUAL_GQA_ATTN=1.
-    static const bool manual_gqa_enabled = getenv("GGML_OPENVINO_MANUAL_GQA_ATTN") != nullptr;
+    // Manual GQA attention: enabled by default on GPU in stateless mode.
+    // Set GGML_OPENVINO_MANUAL_GQA_ATTN=0 to explicitly disable.
+    static const bool manual_gqa_enabled = []() {
+        const char * env = getenv("GGML_OPENVINO_MANUAL_GQA_ATTN");
+        if (env != nullptr) {
+            return std::string(env) != "0";
+        }
+        const char * dev = getenv("GGML_OPENVINO_DEVICE");
+        return dev != nullptr && std::string(dev) == "GPU";
+    }();
     const bool use_manual_gqa_attention =
         manual_gqa_enabled && factor > 1 && num_heads_kv > 1 && !context.is_stateful();
 
