@@ -3194,7 +3194,16 @@ static void ggml_backend_cuda_get_tensor_async(ggml_backend_t backend, const ggm
 
     GGML_ASSERT(buf->buft == ggml_backend_cuda_buffer_type(cuda_ctx->device) && "unsupported buffer type");
 
-    CUDA_CHECK(cudaMemcpyAsync(data, (const char *) tensor->data + offset, size, cudaMemcpyDeviceToHost, cuda_ctx->stream()));
+    cudaStream_t rb_stream = cuda_ctx->readback_stream_get();
+
+    // Record event on compute stream marking end of kernels
+    CUDA_CHECK(cudaEventRecord(cuda_ctx->readback_event, cuda_ctx->stream()));
+    // Readback stream waits for compute to finish
+    CUDA_CHECK(cudaStreamWaitEvent(rb_stream, cuda_ctx->readback_event, 0));
+    // Launch async copy on readback stream (pinned host memory already guaranteed by cuda_host buffer type)
+    CUDA_CHECK(cudaMemcpyAsync(data, (const char *) tensor->data + offset, size, cudaMemcpyDeviceToHost, rb_stream));
+    // Record completion event so synchronize can wait on it
+    CUDA_CHECK(cudaEventRecord(cuda_ctx->copy_done_event, rb_stream));
 }
 
 static void ggml_backend_cuda_set_tensor_2d_async(ggml_backend_t backend, struct ggml_tensor * tensor, const void * data,
@@ -3215,8 +3224,13 @@ static void ggml_backend_cuda_get_tensor_2d_async(ggml_backend_t backend, const 
 
     GGML_ASSERT(buf->buft == ggml_backend_cuda_buffer_type(cuda_ctx->device) && "unsupported buffer type");
 
+    cudaStream_t rb_stream = cuda_ctx->readback_stream_get();
+
+    CUDA_CHECK(cudaEventRecord(cuda_ctx->readback_event, cuda_ctx->stream()));
+    CUDA_CHECK(cudaStreamWaitEvent(rb_stream, cuda_ctx->readback_event, 0));
     CUDA_CHECK(cudaMemcpy2DAsync(
-        data, stride_data, (const char *) tensor->data + offset, stride_tensor, size, n_copies, cudaMemcpyDeviceToHost, cuda_ctx->stream()));
+        data, stride_data, (const char *) tensor->data + offset, stride_tensor, size, n_copies, cudaMemcpyDeviceToHost, rb_stream));
+    CUDA_CHECK(cudaEventRecord(cuda_ctx->copy_done_event, rb_stream));
 }
 
 static bool ggml_backend_cuda_cpy_tensor_async(ggml_backend_t backend_src, ggml_backend_t backend_dst, const ggml_tensor * src, ggml_tensor * dst) {
