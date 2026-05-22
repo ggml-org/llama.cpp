@@ -334,8 +334,8 @@ if(NOT provisioned)
         message(WARNING "UI: no assets available - building without an embedded UI. "
                         "In a disconnected environment, download the pre-built UI "
                         "from a llama.cpp release at "
-                        "https://github.com/ggml-org/llama.cpp/releases and place it "
-                        "in ${SRC_DIST_DIR}.")
+                        "https://github.com/ggml-org/llama.cpp/releases and "
+                        "extract to tools/ui/dist.")
     endif()
 endif()
 
