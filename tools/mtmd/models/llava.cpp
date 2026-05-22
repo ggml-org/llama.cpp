@@ -1,5 +1,7 @@
 #include "models.h"
 
+#include <algorithm>
+
 // this graph is used by llava, granite and glm
 // due to having embedding_stack (used by granite), we cannot reuse build_vit
 ggml_cgraph * clip_graph_llava::build() {
