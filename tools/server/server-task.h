@@ -61,6 +61,9 @@ struct task_params {
 
     int32_t n_cache_reuse = 0; // min chunk size to attempt reusing from the cache via KV shifting (0 = disabled)
 
+    // number of prompt tokens before the latest user message
+    int32_t n_before_user = -1;
+
     int64_t t_max_prompt_ms  = -1; // TODO: implement
     int64_t t_max_predict_ms = -1; // if positive, limit the generation phase to this time limit
 
@@ -89,9 +92,6 @@ struct task_params {
 
     json format_logit_bias(const std::vector<llama_logit_bias> & logit_bias) const;
     json to_json(bool only_metrics = false) const;
-
-    // number of prompt tokens before the latest user message
-    int32_t checkpoint_before_last_user_n_tokens = -1;
 };
 
 // struct for tracking the state of a task (e.g., for streaming)
