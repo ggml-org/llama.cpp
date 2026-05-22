@@ -1829,7 +1829,11 @@ class ChatStore {
 
 			const updateStreamingContent = (fullContent: string) => {
 				this.setChatStreaming(msg.convId, fullContent, msg.id);
-				conversationsStore.updateMessageAtIndex(idx, { content: fullContent });
+				// resolve the row by id on every write, switching to another conv mid continue makes
+				// this a no op instead of writing positionally into the now displayed conversation
+				conversationsStore.updateMessageAtIndex(conversationsStore.findMessageIndex(msg.id), {
+					content: fullContent
+				});
 			};
 
 			const abortController = this.getOrCreateAbortController(msg.convId);
@@ -1855,7 +1859,7 @@ class ChatStore {
 						hasReceivedContent = true;
 						// mark streaming state so a stop mid-thinking can persist the partial reasoning
 						this.setChatStreaming(msg.convId, originalContent + appendedContent, msg.id);
-						conversationsStore.updateMessageAtIndex(idx, {
+						conversationsStore.updateMessageAtIndex(conversationsStore.findMessageIndex(msg.id), {
 							reasoningContent: originalReasoning + appendedReasoning
 						});
 						this.setChatReasoning(msg.convId, true);
@@ -1896,7 +1900,7 @@ class ChatStore {
 							timings
 						});
 
-						conversationsStore.updateMessageAtIndex(idx, {
+						conversationsStore.updateMessageAtIndex(conversationsStore.findMessageIndex(msg.id), {
 							content: fullContent,
 							reasoningContent: fullReasoning,
 							timestamp: Date.now(),
@@ -1918,11 +1922,14 @@ class ChatStore {
 									timestamp: Date.now()
 								});
 
-								conversationsStore.updateMessageAtIndex(idx, {
-									content: originalContent + appendedContent,
-									reasoningContent: originalReasoning + appendedReasoning || undefined,
-									timestamp: Date.now()
-								});
+								conversationsStore.updateMessageAtIndex(
+									conversationsStore.findMessageIndex(msg.id),
+									{
+										content: originalContent + appendedContent,
+										reasoningContent: originalReasoning + appendedReasoning || undefined,
+										timestamp: Date.now()
+									}
+								);
 							}
 
 							this.setChatLoading(msg.convId, false);
@@ -1939,7 +1946,7 @@ class ChatStore {
 							reasoningContent: originalReasoning + appendedReasoning || undefined,
 							timestamp: Date.now()
 						});
-						conversationsStore.updateMessageAtIndex(idx, {
+						conversationsStore.updateMessageAtIndex(conversationsStore.findMessageIndex(msg.id), {
 							content: originalContent + appendedContent,
 							reasoningContent: originalReasoning + appendedReasoning || undefined,
 							timestamp: Date.now()
