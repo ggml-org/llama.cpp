@@ -53,13 +53,13 @@
 #define GGML_CUDA_CC_AMPERE          800
 #define GGML_CUDA_CC_ADA_LOVELACE    890
 #define GGML_CUDA_CC_HOPPER          900
+// Consumer Blackwell WGMMA floor (SM100/101) — placed before datacenter Blackwell for numeric order
+#define GGML_CUDA_CC_BLACKWELL_WG    1000
 // While BW spans CC 1000, 1100 & 1200, we are integrating Tensor Core instructions available to 1200 family, see
 // https://docs.nvidia.com/cutlass/media/docs/cpp/blackwell_functionality.html#blackwell-sm120-gemms
 #define GGML_CUDA_CC_BLACKWELL       1200
 #define GGML_CUDA_CC_DGX_SPARK       1210
 #define GGML_CUDA_CC_RUBIN           1300
-// Consumer Blackwell (SM100/101) also has WGMMA; use 1000 as the WGMMA availability floor
-#define GGML_CUDA_CC_BLACKWELL_WG    1000
 #define GGML_CUDA_CC_OFFSET_AMD      0x1000000
 #define GGML_CUDA_CC_OFFSET_MTHREADS 0x0100000
 #define GGML_CUDA_CC_IS_NVIDIA(cc)   (cc < GGML_CUDA_CC_OFFSET_MTHREADS)
