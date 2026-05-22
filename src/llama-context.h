@@ -356,7 +356,8 @@ private:
     // keep copies of the per-sequence memory on the device
     std::map<llama_seq_id, llama_memory_buffers> mem_storage;
 
-    bool has_evaluated_once = false;
+    bool has_evaluated_once    = false;
+    bool warned_logits_all     = false;
 
     // env: LLAMA_GRAPH_REUSE_DISABLE
     bool graph_reuse_disable = false;

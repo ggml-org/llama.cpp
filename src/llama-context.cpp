@@ -184,6 +184,7 @@ llama_context::llama_context(
 
     cparams.op_offload = params.op_offload;
     cparams.kv_unified = params.kv_unified;
+    cparams.logits_all = params.logits_all;
 
     // initialized later
     cparams.pipeline_parallel = false;
@@ -571,6 +572,9 @@ void llama_context::sched_reserve() {
     }
 
     // reserve worst-case graph
+    // when logits_all is false, reserve for n_seqs outputs only to save VRAM on big-vocab models
+    const int n_outputs_pp = (cparams.logits_all || cparams.ctx_type == LLAMA_CONTEXT_TYPE_MTP) ? (int)n_tokens : (int)n_seqs;
+
     int n_splits_pp = -1;
     int n_nodes_pp  = -1;
 
@@ -579,14 +583,14 @@ void llama_context::sched_reserve() {
 
     // reserve pp (prompt processing) graph first so that buffers are only allocated once
     {
-        auto * gf = graph_reserve(n_tokens, n_seqs, n_tokens, mctx.get(),
+        auto * gf = graph_reserve(n_tokens, n_seqs, n_outputs_pp, mctx.get(),
                 model.hparams.no_alloc, model.hparams.no_alloc ? backend_buf_exp_size.data() : nullptr);
         if (!gf) {
             if (cparams.pipeline_parallel) {
                 LLAMA_LOG_WARN("%s: compute buffer allocation failed, retrying without pipeline parallelism\n", __func__);
                 cparams.pipeline_parallel = false;
                 sched.reset(ggml_backend_sched_new(backend_ptrs.data(), backend_buft.data(), backend_ptrs.size(), max_nodes, false, cparams.op_offload));
-                gf = graph_reserve(n_tokens, n_seqs, n_tokens, mctx.get());
+                gf = graph_reserve(n_tokens, n_seqs, n_outputs_pp, mctx.get());
             }
             if (!gf) {
                 throw std::runtime_error("failed to allocate compute pp buffers");
@@ -612,9 +616,9 @@ void llama_context::sched_reserve() {
     {
         // TODO: not sure if the following graph would be worst case for multi-stream KV caches:
         //
-        // auto * gf = graph_reserve(n_tokens, 1, n_tokens, mctx.get());
+        // auto * gf = graph_reserve(n_tokens, 1, n_outputs_pp, mctx.get());
         //
-        auto * gf = graph_reserve(n_tokens, n_seqs, n_tokens, mctx.get(), model.hparams.no_alloc);
+        auto * gf = graph_reserve(n_tokens, n_seqs, n_outputs_pp, mctx.get(), model.hparams.no_alloc);
         if (!gf) {
             throw std::runtime_error("failed to allocate compute pp buffers");
         }
@@ -774,7 +778,8 @@ bool llama_context::memory_update(bool optimize) {
         const uint32_t n_seqs = cparams.n_seq_max;
         const uint32_t n_tokens = std::min(cparams.n_ctx, cparams.n_ubatch);
 
-        auto * gf = graph_reserve(n_tokens, n_seqs, n_tokens, mctx.get());
+        const int n_outputs_pp = (cparams.logits_all || cparams.ctx_type == LLAMA_CONTEXT_TYPE_MTP) ? (int)n_tokens : (int)n_seqs;
+        auto * gf = graph_reserve(n_tokens, n_seqs, n_outputs_pp, mctx.get());
         if (!gf) {
             LLAMA_LOG_ERROR("%s: failed to reserve graph after the memory update\n", __func__);
         }
@@ -1780,6 +1785,13 @@ int llama_context::decode(const llama_batch & batch_inp) {
 
             // needs to happen before the graph is built
             n_outputs = n_outputs_new;
+
+            if (!cparams.logits_all && !warned_logits_all && n_outputs > (int32_t)cparams.n_seq_max) {
+                warned_logits_all = true;
+                LLAMA_LOG_WARN("%s: --no-logits-all is set but batch requested %d outputs (> n_seq_max = %d); "
+                               "consider removing --no-logits-all for this workload\n",
+                               __func__, n_outputs, cparams.n_seq_max);
+            }
         }
 
         ggml_status status;
@@ -3364,6 +3376,7 @@ llama_context_params llama_context_default_params() {
         /*.op_offload                  =*/ true,
         /*.swa_full                    =*/ true,
         /*.kv_unified                  =*/ false,
+        /*.logits_all                  =*/ true,
         /*.sampler                     =*/ nullptr,
         /*.n_sampler                   =*/ 0,
     };

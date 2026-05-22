@@ -41,6 +41,7 @@ struct llama_cparams {
     bool warmup;
     bool op_offload;
     bool kv_unified;
+    bool logits_all;
     bool pipeline_parallel;
 
     enum llama_context_type ctx_type;
