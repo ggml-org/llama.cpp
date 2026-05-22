@@ -64,10 +64,10 @@ class GraniteModel(LlamaModel):
         name, gen = item
         # Skip multimodal tensors
         if (
-            name.startswith(("encoder.")) or
-            "image_" in name or
-            "layerwise_projectors" in name or
-            "spatial_projectors" in name
+            name.startswith(("encoder."))
+            or "image_" in name
+            or "layerwise_projectors" in name
+            or "spatial_projectors" in name
         ):
             return
         return super().filter_tensors(item)
@@ -409,7 +409,6 @@ class Granite4VisionMmprojModel(MmprojModel):
     def set_gguf_parameters(self):
         assert self.hparams_vision is not None
         super().set_gguf_parameters()
-        v = self.hparams_vision
 
         self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.GRANITE4_VISION)
 
@@ -450,9 +449,9 @@ class Granite4VisionMmprojModel(MmprojModel):
     def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
         name, _ = item
         if (
-            name.startswith("language_model.") or
-            "vision_model.head" in name or
-            name.startswith("lm_head")
+            name.startswith("language_model.")
+            or "vision_model.head" in name
+            or name.startswith("lm_head")
         ):
             return None
         return super().filter_tensors(item)
