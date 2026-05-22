@@ -204,7 +204,7 @@ void llama_model_zaya::load_arch_tensors(llama_model_loader &) {
          * hidden_states = (hidden_states.float() + hs_bias) * hs_scale
          * residual = (residual.float() + res_bias) * res_scale
          */
-        layer.res_scale_hs   = create_tensor(tn(LLM_TENSOR_RES_SCALE_HS, "weight", i), {n_embd}, TENSOR_NOT_REQUIRED);
+        layer.res_scale_hs   = create_tensor(tn(LLM_TENSOR_RES_SCALE_HS, "weight", i), {n_embd}, 0);
         layer.res_scale_hs_b = create_tensor(tn(LLM_TENSOR_RES_SCALE_HS, "bias", i), {n_embd}, TENSOR_NOT_REQUIRED);
         layer.res_scale_res  = create_tensor(tn(LLM_TENSOR_RES_SCALE_RES, "weight", i), {n_embd}, TENSOR_NOT_REQUIRED);
         layer.res_scale_res_b = create_tensor(tn(LLM_TENSOR_RES_SCALE_RES, "bias", i), {n_embd}, TENSOR_NOT_REQUIRED);
@@ -343,17 +343,6 @@ llama_model_zaya::graph::graph(const llama_model & model, const llm_graph_params
 
     ggml_tensor * inp_pos     = build_inp_pos();
     ggml_tensor * inp_out_ids = build_inp_out_ids();
-    ggml_tensor * inp_cca_mask = nullptr;
-    // modeling_zaya.py ref: L1555-1558 (ZayaModel.forward)
-    //
-    // if attention_mask is not None:
-    //     cca_mask = attention_mask.clone()
-    // else:
-    //     cca_mask = None
-    //
-    // Built unconditionally; set_input fills with 1.0 for all positions
-    // (padding mask is not available in llama.cpp ubatch).
-    inp_cca_mask = build_inp_cca_mask();
     ggml_tensor * residual    = nullptr;
     ggml_tensor * prev_router = nullptr;
 
@@ -407,17 +396,12 @@ llama_model_zaya::graph::graph(const llama_model & model, const llm_graph_params
          *     residual = hidden_states.float()
          * hidden_states = _apply_norm_with_fp32_residual(self.input_norm, residual, layer_input_dtype)
          */
-         ggml_tensor * hidden_states = apply_res_scale(inpL, layer.res_scale_hs, layer.res_scale_hs_b, "res_scale_hs", il);
-        /*
-         * zaya.py ref: L900, L1387, L1701
-         * if self.config.residual_in_fp32:
-         *     residual = hidden_states.to(torch.float32)
-         */
+        ggml_tensor * hidden_states = apply_res_scale(inpL, layer.res_scale_hs, layer.res_scale_hs_b, "res_scale_hs", il);
         if (residual != nullptr) {
             residual = apply_res_scale(residual, layer.res_scale_res, layer.res_scale_res_b, "res_scale_res", il);
-            residual = ggml_add(ctx0, ggml_cast(ctx0, hidden_states, GGML_TYPE_F32), ggml_cast(ctx0, residual, GGML_TYPE_F32));
+            residual = ggml_add(ctx0, hidden_states, residual);
         } else {
-            residual = ggml_cast(ctx0, hidden_states, GGML_TYPE_F32);
+            residual = hidden_states;
         }
         cb(residual, "residual", il);
 
@@ -474,22 +458,6 @@ llama_model_zaya::graph::graph(const llama_model & model, const llm_graph_params
                     cca_state->nb[1],
                     conv_state_size*ggml_element_size(cca_state));
             cb(prev_hs, "cca_prev_hs", il);
-
-            /*
-             * modeling_zaya.py ref: L325-328 (CCA.forward)
-             *
-             * if cca_mask is not None and hidden_states.shape[1] > 1:
-             *     # Only applying in prefill
-             *     dtype = hidden_states.dtype
-             *     hidden_states = (hidden_states * cca_mask[:, :, None]).to(dtype)
-             *
-             * In ggml: cur is [n_embd, n_tokens], cca_mask is [1, n_tokens].
-             * Broadcasting along dim 0 zeros out hidden states of masked positions.
-             */
-            if (inp_cca_mask != nullptr && n_seq_tokens > 1) {
-                cur = ggml_mul(ctx0, cur, inp_cca_mask);
-                cb(cur, "cca_masked", il);
-            }
 
             /*
              * zaya.py ref: L177-179
@@ -748,19 +716,12 @@ llama_model_zaya::graph::graph(const llama_model & model, const llm_graph_params
             cb(router_h, "router_down", il);
 
             /*
-             * zaya.py ref: L294-296, L344-345
-             *
-             * zaya_first_layer = 1
-             * use_eda_cfg = bool(getattr(config, "zaya_use_eda", False))
-             * self.use_eda = use_eda_cfg and (zaya_first_layer is not None) and (self.layer_number != zaya_first_layer)
+             * zaya.py ref: L344-345
              *
              * if self.use_eda and (prev_router_hidden_states is not None):
              *     hs = hs + prev_router_hidden_states * self.router_states_scale
-             *
-             * EDA is disabled for layer 1 (first MoE layer) via (self.layer_number != zaya_first_layer).
-             * When zaya_use_eda is False globally, the parameter is never created (tensor stays nullptr).
              */
-            if (il != 1 && prev_router != nullptr && layer.zaya_router_eda_scale != nullptr) {
+            if (prev_router != nullptr && layer.zaya_router_eda_scale != nullptr) {
                 router_h = ggml_add(ctx0, router_h, ggml_mul(ctx0, prev_router, layer.zaya_router_eda_scale));
                 cb(router_h, "router_eda", il);
             }
@@ -811,13 +772,9 @@ llama_model_zaya::graph::graph(const llama_model & model, const llm_graph_params
             cb(router_probs, "router_probs", il);
 
             /*
-             * zaya.py ref: L459-469 (MOD skip expert handling)
+             * zaya.py ref: L387-389 (MOD skip expert handling)
              *
              * gate_probs = router_probs[:, :n_expert]  // exclude skip expert from routing
-             *
-             * Note: the skip expert (index n_expert) has a -1.0 bias in
-             * balancing_biases, making it practically never selected during
-             * inference with topk=1.
              */
             ggml_tensor * gate_probs = ggml_cont(ctx0,
                     ggml_view_2d(ctx0, router_probs, n_expert, n_tokens, router_probs->nb[1], 0));
@@ -884,15 +841,9 @@ llama_model_zaya::graph::graph(const llama_model & model, const llm_graph_params
     ggml_tensor * final_hidden = apply_res_scale(inpL, model.zaya_res_scale_hs, model.zaya_res_scale_hs_b, "final_res_scale_hs", -1);
     if (residual != nullptr) {
         residual = apply_res_scale(residual, model.zaya_res_scale_res, model.zaya_res_scale_res_b, "final_res_scale_res", -1);
-        /*
-         * zaya.py ref: L1701
-         * if self.config.residual_in_fp32:
-         *     hidden_states = hidden_states.float()
-         *     residual = residual.float()
-         */
-        cur = ggml_add(ctx0, ggml_cast(ctx0, final_hidden, GGML_TYPE_F32), ggml_cast(ctx0, residual, GGML_TYPE_F32));
+        cur = ggml_add(ctx0, final_hidden, residual);
     } else {
-        cur = ggml_cast(ctx0, final_hidden, GGML_TYPE_F32);
+        cur = final_hidden;
     }
     cb(cur, "final_residual", -1);
 
@@ -918,18 +869,6 @@ llama_model_zaya::graph::graph(const llama_model & model, const llm_graph_params
      */
     cur = ggml_mul_mat(ctx0, model.output, cur);
     cb(cur, "result_output", -1);
-
-    /*
-     * zaya.py ref: L748-749 (_FP32EmbeddingMethod)
-     *
-     * if self.zaya_high_prec:
-     *     out = out.to(dtype=torch.float32)
-     */
-    if (hparams.zaya_high_prec) {
-        cur = ggml_cont(ctx0, ggml_cast(ctx0, cur, GGML_TYPE_F32));
-        cb(cur, "result_output_fp32", -1);
-    }
-
     res->t_logits = cur;
 
     ggml_build_forward_expand(gf, cur);

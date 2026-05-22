@@ -150,21 +150,6 @@ public:
     const float    f_attn_temp_offset;
 };
 
-// cca_mask for CCA (Channel-wise Cross Attention), used by zaya
-// Binary mask applied to hidden_states before CCA convolutions,
-// matching modeling_zaya.py ref: CCA.forward L325-328
-//   if cca_mask is not None and hidden_states.shape[1] > 1:
-//       hidden_states = (hidden_states * cca_mask[:, :, None]).to(dtype)
-class llm_graph_input_cca_mask : public llm_graph_input_i {
-public:
-    llm_graph_input_cca_mask() = default;
-    virtual ~llm_graph_input_cca_mask() = default;
-
-    void set_input(const llama_ubatch * ubatch) override;
-
-    ggml_tensor * cca_mask = nullptr; // F32 [1, n_tokens]
-};
-
 class llm_graph_input_pos_bucket : public llm_graph_input_i {
 public:
     llm_graph_input_pos_bucket(const llama_hparams & hparams) : hparams(hparams) {}
@@ -895,7 +880,6 @@ struct llm_graph_context {
     ggml_tensor * build_inp_embd(ggml_tensor * tok_embd) const;
     ggml_tensor * build_inp_pos() const;
     ggml_tensor * build_inp_attn_scale() const;
-    ggml_tensor * build_inp_cca_mask() const;
     ggml_tensor * build_inp_out_ids() const;
     ggml_tensor * build_inp_mean() const;
     ggml_tensor * build_inp_cls() const;

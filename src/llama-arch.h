@@ -345,9 +345,6 @@ enum llm_kv {
     LLM_KV_DENSE_2_FEAT_OUT,
     LLM_KV_DENSE_3_FEAT_IN,
     LLM_KV_DENSE_3_FEAT_OUT,
-
-    // Zaya-specific
-    LLM_KV_ZAYA_HIGH_PREC,
 };
 
 enum llm_tensor {

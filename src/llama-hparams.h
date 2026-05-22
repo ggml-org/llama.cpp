@@ -212,9 +212,6 @@ struct llama_hparams {
     // qwen3vl deepstack
     uint32_t n_deepstack_layers = 0;
 
-    // zaya: FP32 output logits for numerical stability
-    bool zaya_high_prec = true;
-
     // gemma4 per-layer embedding
     uint32_t n_embd_per_layer = 0;
 
