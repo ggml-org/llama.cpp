@@ -3089,10 +3089,6 @@ void clip_build_img_from_pixels(const unsigned char * rgb_pixels, int nx, int ny
     memcpy(img->buf.data(), rgb_pixels, img->buf.size());
 }
 
-ggml_tensor * clip_get_newline_tensor(const struct clip_ctx * ctx) {
-    return ctx->model.image_newline;
-}
-
 void clip_free(clip_ctx * ctx) {
     if (ctx == nullptr) {
         return;
@@ -4199,7 +4195,7 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
                 // Granite Vision 4.1 uses precomputed permutation index
                 // tensors to express the _win / _unwin / spatial sampling
                 // reshapes as ggml_get_rows gathers.  The names are set
-                // by g4v_gather() in models/granite4v.cpp.
+                // by g4v_gather() in models/granite4-vision.cpp.
                 const int patch_size  = model.hparams.patch_size;
                 const int image_side  = imgs.entries.front()->nx / patch_size;
                 const int window_side = hparams.downsample_window_side;
@@ -4253,17 +4249,8 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
 
                 auto upload = [&](const std::string & name, const std::vector<int32_t> & idx) {
                     ggml_tensor * t = ggml_graph_get_tensor(gf, name.c_str());
-                    if (t) {
-                        if (std::getenv("G4V_DEBUG_NAMES")) {
-                            std::fprintf(stderr, "granite4v: upload %s len=%zu first=%d\n",
-                                         name.c_str(), idx.size(),
-                                         idx.empty() ? -1 : idx.front());
-                        }
-                        ggml_backend_tensor_set(t, idx.data(), 0, idx.size() * sizeof(int32_t));
-                    } else if (std::getenv("G4V_DEBUG_NAMES")) {
-                        std::fprintf(stderr, "granite4v: index tensor %s not found in graph\n",
-                                     name.c_str());
-                    }
+                    GGML_ASSERT(t);
+                    ggml_backend_tensor_set(t, idx.data(), 0, idx.size() * sizeof(int32_t));
                 };
 
                 // Stage 1b only uses block 0's permutations; future stages
@@ -4358,6 +4345,108 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
     }
 
     return true;
+}
+
+size_t clip_n_assembled_output_tokens(clip_ctx * ctx, const clip_image_f32_batch * batch) {
+    GGML_ASSERT(batch != nullptr);
+    switch (ctx->proj_type()) {
+        case PROJECTOR_TYPE_GRANITE4_VISION:
+            return granite_vision_n_assembled_output_tokens(ctx, batch);
+        // No assembler: flat sum of per-entry token counts.
+        default:
+            break;
+    }
+    size_t n = 0;
+    for (const auto & e : batch->entries) {
+        n += clip_n_output_tokens(ctx, e.get());
+    }
+    return n;
+}
+
+bool clip_image_assemble(clip_ctx * ctx, const int n_threads,
+                         const float * per_tile_embd,
+                         int n_tiles,
+                         int grid_x, int grid_y,
+                         float * out_embd) {
+    // Extend this switch for all models that require assembling. All others
+    // will fall through to the default case and return false indicating no
+    // assembly required.
+    switch (ctx->proj_type()) {
+        case PROJECTOR_TYPE_GRANITE4_VISION:
+            {
+                GGML_ASSERT(per_tile_embd != nullptr && out_embd != nullptr && n_tiles > 0);
+
+                const int n_mmproj_embd = clip_n_mmproj_embd(ctx);
+
+                // Recover n_per_tile from a representative entry. The encoder uses a
+                // fixed tile size for G4V, so all entries produce the same per-tile
+                // count; the warmup path stashes a representative image but we use the
+                // model's image_size since the assembler runs after encoding has
+                // finished.
+                clip_image_f32 tile_img;
+                tile_img.nx = ctx->model.hparams.image_size;
+                tile_img.ny = ctx->model.hparams.image_size;
+                const int n_per_tile = clip_n_output_tokens(ctx, &tile_img);
+
+                // Build host-side gather index.
+                std::vector<int32_t> gather_idx =
+                    granite_vision_build_assembler_gather_idx(n_tiles, n_per_tile, grid_x, grid_y);
+                const int gather_len = (int) gather_idx.size();
+
+                // Build the assembler cgraph in a fresh ggml context backed by the
+                // shared compute-meta buffer.
+                struct ggml_init_params params = {
+                    /*.mem_size   =*/ ctx->buf_compute_meta.size(),
+                    /*.mem_buffer =*/ ctx->buf_compute_meta.data(),
+                    /*.no_alloc   =*/ true,
+                };
+                ggml_context_ptr ctx0_ptr(ggml_init(params));
+                ggml_context * ctx0 = ctx0_ptr.get();
+                GGML_ASSERT(ctx0 != nullptr);
+                ggml_cgraph * gf = ggml_new_graph_custom(ctx0, ctx->max_nodes, false);
+
+                ggml_tensor * out = granite_vision_build_assembler_graph(
+                    ctx0, gf, ctx->model, n_tiles, n_per_tile, n_mmproj_embd, gather_len);
+
+                // Allocate buffers for this graph on the sched.
+                ggml_backend_sched_reset(ctx->sched.get());
+                if (!ggml_backend_sched_alloc_graph(ctx->sched.get(), gf)) {
+                    LOG_ERR("%s: ggml_backend_sched_alloc_graph failed\n", __func__);
+                    return false;
+                }
+
+                // Set inputs.
+                ggml_tensor * in_per_tile = ggml_graph_get_tensor(gf, "g4v_assembler_per_tile_in");
+                ggml_tensor * in_gather   = ggml_graph_get_tensor(gf, "g4v_assembler_gather_idx");
+                GGML_ASSERT(in_per_tile != nullptr && in_gather != nullptr);
+                ggml_backend_tensor_set(in_per_tile, per_tile_embd, 0,
+                                        (size_t) n_tiles * n_per_tile * n_mmproj_embd * sizeof(float));
+                ggml_backend_tensor_set(in_gather, gather_idx.data(), 0,
+                                        gather_idx.size() * sizeof(int32_t));
+
+                // Thread count on the CPU backend (matches clip_image_batch_encode).
+                ggml_backend_dev_t dev = ggml_backend_get_device(ctx->backend_cpu);
+                ggml_backend_reg_t reg = dev ? ggml_backend_dev_backend_reg(dev) : nullptr;
+                if (reg) {
+                    auto set_n_threads_fn = (ggml_backend_set_n_threads_t)
+                        ggml_backend_reg_get_proc_address(reg, "ggml_backend_set_n_threads");
+                    if (set_n_threads_fn) {
+                        set_n_threads_fn(ctx->backend_cpu, n_threads);
+                    }
+                }
+
+                auto status = ggml_backend_sched_graph_compute(ctx->sched.get(), gf);
+                if (status != GGML_STATUS_SUCCESS) {
+                    LOG_ERR("%s: ggml_backend_sched_graph_compute failed (%d)\n", __func__, status);
+                    return false;
+                }
+
+                ggml_backend_tensor_get(out, out_embd, 0, ggml_nbytes(out));
+                return true;
+            }
+        default:
+            return false;
+    }
 }
 
 int clip_n_mmproj_embd(const struct clip_ctx * ctx) {
