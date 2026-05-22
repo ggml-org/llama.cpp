@@ -835,6 +835,8 @@ export class ChatService {
 				const resumeResp = await resumeStream(conversationId, abortSignal, streamModel).catch(
 					() => null
 				);
+				// an abort landing during the resume request is intentional, not a lost connection
+				if (abortSignal?.aborted) break;
 				if (!resumeResp || resumeResp.status !== 200) {
 					onConnectionState?.('lost');
 					onError?.(new Error('Stream connection lost and could not be resumed'));
