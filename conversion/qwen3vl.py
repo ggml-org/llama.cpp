@@ -35,10 +35,6 @@ class Qwen3VLVisionModel(MmprojModel):
         self.hparams_vision["num_attention_heads"] = self.hparams_vision.get("num_heads")
         self.hparams_vision["num_hidden_layers"] = self.hparams_vision.get("depth")
 
-        self.is_deepstack_layers = [False] * int(self.hparams_vision["num_hidden_layers"] or 0)
-        for idx in self.hparams_vision.get("deepstack_visual_indexes", []):
-            self.is_deepstack_layers[idx] = True
-
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
         # in case mixed modalities, the arch will be handled by subclass
@@ -54,9 +50,6 @@ class Qwen3VLVisionModel(MmprojModel):
         # Use text config's rms_norm_eps for vision attention layernorm eps
         rms_norm_eps = self.global_config.get("text_config", {}).get("rms_norm_eps", 1e-6)
         self.gguf_writer.add_vision_attention_layernorm_eps(rms_norm_eps)
-
-        if self.is_deepstack_layers:
-            self.gguf_writer.add_vision_is_deepstack_layers(self.is_deepstack_layers)
 
     @classmethod
     def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
