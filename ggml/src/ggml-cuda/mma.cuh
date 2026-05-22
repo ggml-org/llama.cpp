@@ -1153,6 +1153,49 @@ namespace ggml_cuda_mma {
 #endif // BLACKWELL_MMA_AVAILABLE
     }
 
+// ---------------------------------------------------------------------------------------------------------
+// Blackwell Warpgroup MMA (WGMMA) primitives — SM 100/101/120/121
+// Register fragments: explicit uint32_t arrays for strict WGMMA PTX register mapping
+// https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#warpgroup-matrix-instructions-wgmma
+
+#if __CUDA_ARCH__ >= 1000 && __CUDA_ARCH__ < 1300
+
+namespace ggml_cuda_wgmma {
+
+    // Accumulator fragments: uint32_t x[ne], zero-init
+    // ne = M * N / 32 (elements per warp thread in inline asm context)
+    template <int M, int N>
+    struct frag_c {
+        static constexpr int ne = (M * N) / 32;
+        alignas(16) uint32_t x[ne] = {};
+
+        __device__ __forceinline__ frag_c() = default;
+
+        __device__ __forceinline__ void zero() {
+            for (int i = 0; i < ne; ++i) x[i] = 0;
+        }
+    };
+
+    // m16 variants (single warp within warpgroup)
+    template <> struct frag_c<16, 8>  { static constexpr int ne = 4;  alignas(16) uint32_t x[ne] = {}; __device__ __forceinline__ frag_c() = default; __device__ __forceinline__ void zero() { for(int i=0;i<ne;++i) x[i]=0; } };
+    template <> struct frag_c<16, 16> { static constexpr int ne = 8;  alignas(16) uint32_t x[ne] = {}; __device__ __forceinline__ frag_c() = default; __device__ __forceinline__ void zero() { for(int i=0;i<ne;++i) x[i]=0; } };
+    template <> struct frag_c<16, 32> { static constexpr int ne = 16; alignas(16) uint32_t x[ne] = {}; __device__ __forceinline__ frag_c() = default; __device__ __forceinline__ void zero() { for(int i=0;i<ne;++i) x[i]=0; } };
+    template <> struct frag_c<16, 64> { static constexpr int ne = 32; alignas(16) uint32_t x[ne] = {}; __device__ __forceinline__ frag_c() = default; __device__ __forceinline__ void zero() { for(int i=0;i<ne;++i) x[i]=0; } };
+
+    // m64 variants (full warpgroup, 4 warps)
+    template <> struct frag_c<64, 16> { static constexpr int ne = 32;  alignas(16) uint32_t x[ne] = {}; __device__ __forceinline__ frag_c() = default; __device__ __forceinline__ void zero() { for(int i=0;i<ne;++i) x[i]=0; } };
+    template <> struct frag_c<64, 32> { static constexpr int ne = 64;  alignas(16) uint32_t x[ne] = {}; __device__ __forceinline__ frag_c() = default; __device__ __forceinline__ void zero() { for(int i=0;i<ne;++i) x[i]=0; } };
+    template <> struct frag_c<64, 64> { static constexpr int ne = 128; alignas(16) uint32_t x[ne] = {}; __device__ __forceinline__ frag_c() = default; __device__ __forceinline__ void zero() { for(int i=0;i<ne;++i) x[i]=0; } };
+    template <> struct frag_c<64, 128>{ static constexpr int ne = 256; alignas(16) uint32_t x[ne] = {}; __device__ __forceinline__ frag_c() = default; __device__ __forceinline__ void zero() { for(int i=0;i<ne;++i) x[i]=0; } };
+
+    // m128 variants (full warpgroup, large tiles)
+    template <> struct frag_c<128, 64> { static constexpr int ne = 256; alignas(16) uint32_t x[ne] = {}; __device__ __forceinline__ frag_c() = default; __device__ __forceinline__ void zero() { for(int i=0;i<ne;++i) x[i]=0; } };
+    template <> struct frag_c<128, 128>{ static constexpr int ne = 512; alignas(16) uint32_t x[ne] = {}; __device__ __forceinline__ frag_c() = default; __device__ __forceinline__ void zero() { for(int i=0;i<ne;++i) x[i]=0; } };
+
+} // namespace ggml_cuda_wgmma
+
+#endif // __CUDA_ARCH__ >= 1000 && __CUDA_ARCH__ < 1300
+
     static __device__ __forceinline__ void mma(
             tile<16, 8, float> & D, const tile<16, 8, half2> & A, const tile<8, 8, half2> & B) {
 #ifdef TURING_MMA_AVAILABLE
