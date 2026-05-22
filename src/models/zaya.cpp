@@ -301,8 +301,8 @@ llama_model_zaya::graph::graph(const llama_model & model, const llm_graph_params
             cb(QK, "QK_dw", il);
 
             ggml_tensor * conv_grp = layer.cca_conv_grp;
-            if (conv_grp->type != GGML_TYPE_F16) {
-                conv_grp = ggml_cont(ctx0, ggml_cast(ctx0, conv_grp, GGML_TYPE_F16));
+            if (conv_grp->type != GGML_TYPE_F16 && conv_grp->type != GGML_TYPE_F32) {
+                conv_grp = ggml_cont(ctx0, ggml_cast(ctx0, conv_grp, GGML_TYPE_F32));
             }
             QK = ggml_conv_1d_grouped(ctx0, conv_grp, QK, 1, 0, 1, n_groups);
             QK = ggml_add(ctx0, QK, ggml_reshape_3d(ctx0, layer.cca_conv_grp_b, 1, n_qk, 1));
