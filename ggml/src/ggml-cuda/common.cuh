@@ -1398,6 +1398,11 @@ struct ggml_backend_cuda_context {
     std::string name;
     cudaEvent_t copy_event = nullptr;
 
+    // Two-stream readback: dedicated stream for device-to-host copies
+    cudaStream_t readback_stream = nullptr;
+    cudaEvent_t  readback_event  = nullptr;
+    cudaEvent_t  copy_done_event = nullptr;
+
     // Timing instrumentation for adaptive wait
     int64_t  t_wait_us = 0;
     uint64_t n_wait_ops = 0;
@@ -1482,6 +1487,16 @@ struct ggml_backend_cuda_context {
     }
 
     cudaStream_t stream() { return stream(device, curr_stream_no); }
+
+    cudaStream_t readback_stream_get() {
+        if (readback_stream == nullptr) {
+            ggml_cuda_set_device(device);
+            CUDA_CHECK(cudaStreamCreateWithFlags(&readback_stream, cudaStreamNonBlocking));
+            CUDA_CHECK(cudaEventCreateWithFlags(&readback_event, cudaEventDisableTiming));
+            CUDA_CHECK(cudaEventCreateWithFlags(&copy_done_event, cudaEventDisableTiming));
+        }
+        return readback_stream;
+    }
 
     ggml_cuda_stream_context & stream_context() { return concurrent_stream_context; }
 

@@ -611,6 +611,16 @@ ggml_backend_cuda_context::~ggml_backend_cuda_context() {
     if (copy_event != nullptr) {
         CUDA_CHECK(cudaEventDestroy(copy_event));
     }
+    if (readback_stream != nullptr) {
+        CUDA_CHECK(cudaStreamSynchronize(readback_stream));
+        CUDA_CHECK(cudaStreamDestroy(readback_stream));
+    }
+    if (readback_event != nullptr) {
+        CUDA_CHECK(cudaEventDestroy(readback_event));
+    }
+    if (copy_done_event != nullptr) {
+        CUDA_CHECK(cudaEventDestroy(copy_done_event));
+    }
     for (int i = 0; i < GGML_CUDA_MAX_DEVICES; ++i) {
         for (int j = 0; j < GGML_CUDA_MAX_STREAMS; ++j) {
             if (streams[i][j] != nullptr) {
