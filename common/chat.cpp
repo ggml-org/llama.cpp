@@ -2451,7 +2451,7 @@ static common_chat_params common_chat_templates_apply_jinja(const struct common_
             delimiters.push_back({ "assistant", autoparser.assistant_start });
         }
         if (!autoparser.user_start.empty()) {
-            delimiters.push_back({ "user", autoparser.assistant_start });
+            delimiters.push_back({ "user", autoparser.user_start });
         }
 
         if (!delimiters.empty()) {
