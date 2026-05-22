@@ -1736,6 +1736,58 @@ int main() {
 
         run({
             SUCCESS,
+            R"(regexp [\d\W] mixed pos-and-neg class)",
+            R"""({
+                "type": "string",
+                "pattern": "^[\\d\\W]+$"
+            })""",
+            R"""(
+                root ::= "\"" (([0-9] | [^a-zA-Z0-9_])+) "\"" space
+                space ::= | " " | "\n"{1,2} [ \t]{0,20}
+            )""",
+        });
+
+        run({
+            SUCCESS,
+            R"(regexp [\s\S] any-char class)",
+            R"""({
+                "type": "string",
+                "pattern": "^[\\s\\S]+$"
+            })""",
+            R"""(
+                root ::= "\"" (([ \t\n\r] | [^ \t\n\r])+) "\"" space
+                space ::= | " " | "\n"{1,2} [ \t]{0,20}
+            )""",
+        });
+
+        run({
+            SUCCESS,
+            R"(regexp [a-z\D] literal-and-neg class)",
+            R"""({
+                "type": "string",
+                "pattern": "^[a-z\\D]+$"
+            })""",
+            R"""(
+                root ::= "\"" (([a-z] | [^0-9])+) "\"" space
+                space ::= | " " | "\n"{1,2} [ \t]{0,20}
+            )""",
+        });
+
+        run({
+            SUCCESS,
+            R"(regexp [\d\w\D] multi-shorthand mixed class)",
+            R"""({
+                "type": "string",
+                "pattern": "^[\\d\\w\\D]+$"
+            })""",
+            R"""(
+                root ::= "\"" (([0-9a-zA-Z0-9_] | [^0-9])+) "\"" space
+                space ::= | " " | "\n"{1,2} [ \t]{0,20}
+            )""",
+        });
+
+        run({
+            SUCCESS,
             R"(regexp \B boundary skipped)",
             R"""({
                 "type": "string",

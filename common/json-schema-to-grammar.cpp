@@ -444,37 +444,70 @@ private:
                     }
                     return join_seq();
                 } else if (c == '[') {
-                    std::string square_brackets = std::string(1, c);
                     i++;
+                    bool outer_neg = (i < length && sub_pattern[i] == '^');
+                    if (outer_neg) i++;
+
+                    // Collect positive content (literals + positive shorthands) and
+                    // negated shorthands separately. Negated shorthands can't be inlined
+                    // into a single bracket class alongside other content because the ^
+                    // only means negation at position 0 of a class.
+                    std::string literals;
+                    std::vector<std::string> neg_parts;
+
                     while (i < length && sub_pattern[i] != ']') {
                         if (sub_pattern[i] == '\\' && i + 1 < length) {
                             char next = sub_pattern[i + 1];
-                            if (next == 'd' || next == 'D') {
-                                square_brackets += next == 'd' ? "0-9" : "^0-9";
-                                i += 2;
-                            } else if (next == 'w' || next == 'W') {
-                                square_brackets += next == 'w' ? "a-zA-Z0-9_" : "^a-zA-Z0-9_";
-                                i += 2;
-                            } else if (next == 's' || next == 'S') {
-                                square_brackets += next == 's' ? " \\t\\n\\r" : "^ \\t\\n\\r";
-                                i += 2;
-                            } else if (next == 'b' || next == 'B') {
-                                i += 2;  // word boundary - no GBNF equivalent, skip
-                            } else {
-                                square_brackets += sub_pattern.substr(i, 2);
-                                i += 2;
-                            }
+                            if (next == 'd') { literals += "0-9"; i += 2; }
+                            else if (next == 'D') { neg_parts.push_back("0-9"); i += 2; }
+                            else if (next == 'w') { literals += "a-zA-Z0-9_"; i += 2; }
+                            else if (next == 'W') { neg_parts.push_back("a-zA-Z0-9_"); i += 2; }
+                            else if (next == 's') { literals += " \\t\\n\\r"; i += 2; }
+                            else if (next == 'S') { neg_parts.push_back(" \\t\\n\\r"); i += 2; }
+                            else if (next == 'b' || next == 'B') { i += 2; }  // no GBNF equivalent, skip
+                            else { literals += sub_pattern.substr(i, 2); i += 2; }
                         } else {
-                            square_brackets += sub_pattern[i];
+                            literals += sub_pattern[i];
                             i++;
                         }
                     }
                     if (i >= length) {
                         _errors.push_back("Unbalanced square brackets");
                     }
-                    square_brackets += ']';
                     i++;
-                    seq.emplace_back(square_brackets, false);
+
+                    if (neg_parts.empty()) {
+                        // No negated shorthands: emit a single bracket class.
+                        seq.emplace_back((outer_neg ? "[^" : "[") + literals + "]", false);
+                    } else if (!outer_neg) {
+                        // Mix of positive and negated content: emit alternation.
+                        // e.g. [\d\W] -> ([0-9] | [^a-zA-Z0-9_])
+                        // e.g. [\s\S] -> ([ \t\n\r] | [^ \t\n\r])
+                        std::vector<std::string> parts;
+                        if (!literals.empty()) {
+                            parts.push_back("[" + literals + "]");
+                        }
+                        for (const std::string & neg : neg_parts) {
+                            parts.push_back("[^" + neg + "]");
+                        }
+                        if (parts.size() == 1) {
+                            seq.emplace_back(parts[0], false);
+                        } else {
+                            std::string alt = "(" + parts[0];
+                            for (size_t pi = 1; pi < parts.size(); pi++) {
+                                alt += " | " + parts[pi];
+                            }
+                            seq.emplace_back(alt + ")", false);
+                        }
+                    } else {
+                        // Outer-negated class with negated shorthands, e.g. [^\D\w].
+                        // Concatenate all expansions under the outer ^ (best effort).
+                        std::string combined = literals;
+                        for (const std::string & neg : neg_parts) {
+                            combined += neg;
+                        }
+                        seq.emplace_back("[^" + combined + "]", false);
+                    }
                 } else if (c == '|') {
                     seq.emplace_back("|", false);
                     i++;
