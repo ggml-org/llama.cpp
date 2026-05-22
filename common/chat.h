@@ -219,6 +219,7 @@ struct common_chat_parser_params {
     bool                    reasoning_in_content = false;
     std::string             generation_prompt;
     bool                    parse_tool_calls     = true;
+    bool                    is_continuation      = false;
     bool                    echo                 = false;  // Include assistant prefilled msg in output
     bool                    debug                = false;  // Enable debug output for PEG parser
     common_peg_arena        parser               = {};

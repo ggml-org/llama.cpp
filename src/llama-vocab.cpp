@@ -1581,6 +1581,11 @@ private:
     const llm_tokenizer_plamo2 & tokenizer;
 };
 
+// reserved suffix (U+E000) that keeps DNA k-mers distinct from identical
+// base-vocab BPE tokens (e.g. CCCCCC) in token_to_id; erased from id_to_token
+// text at load
+static const std::string dna_kmer_marker = "\xee\x80\x80";
+
 struct llm_tokenizer_hybriddna_session : llm_tokenizer_bpe_session {
     llm_tokenizer_hybriddna_session(const llama_vocab & vocab, const llm_tokenizer_bpe & tokenizer) : llm_tokenizer_bpe_session{vocab, tokenizer}, vocab{vocab} {}
 
@@ -1636,34 +1641,22 @@ private:
                 c = char(c - 32);
             }
         }
-        auto is_valid_kmer = [](const std::string & s) {
-            for (char c : s) {
-                if (c != 'A' && c != 'C' && c != 'G' && c != 'T') {
-                    return false;
-                }
-            }
-            return true;
+
+        // k-mers carry the reserved marker suffix; a non-ACGT k-mer simply
+        // isn't in the vocab and falls back to <oov>
+        auto kmer_token = [&](const std::string & kmer) {
+            const auto tok = vocab.text_to_token(kmer + dna_kmer_marker);
+            return tok != LLAMA_TOKEN_NULL ? tok : oov_id;
         };
 
         size_t i = 0;
         for (; i + k <= seq.size(); i += k) {
-            const std::string kmer = seq.substr(i, k);
-            if (is_valid_kmer(kmer)) {
-                const auto tok = vocab.text_to_token(kmer);
-                output.push_back(tok != LLAMA_TOKEN_NULL ? tok : oov_id);
-            } else {
-                output.push_back(oov_id);
-            }
+            output.push_back(kmer_token(seq.substr(i, k)));
         }
         if (i < seq.size()) {
             std::string kmer = seq.substr(i);
             kmer.append(k - kmer.size(), 'A');
-            if (is_valid_kmer(kmer)) {
-                const auto tok = vocab.text_to_token(kmer);
-                output.push_back(tok != LLAMA_TOKEN_NULL ? tok : oov_id);
-            } else {
-                output.push_back(oov_id);
-            }
+            output.push_back(kmer_token(kmer));
         }
     }
 
@@ -2356,6 +2349,23 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
         }
     }
     GGML_ASSERT(id_to_token.size() == token_to_id.size());
+
+    // hybriddna: the marker suffix kept k-mer ids distinct in token_to_id; erase
+    // it from id_to_token so the k-mers detokenize to the bare DNA sequence. The
+    // k-mers are the block right after <oov>, so only scan from there.
+    if (tokenizer_model == "hybriddna") {
+        const auto idx = token_to_id.find("<oov>");
+        if (idx != token_to_id.end()) {
+            auto it = id_to_token.begin() + idx->second + 1;
+            for (; it != id_to_token.end(); ++it) {
+                std::string & text = it->text;
+                if (text.size() > dna_kmer_marker.size()
+                        && text.compare(text.size() - dna_kmer_marker.size(), dna_kmer_marker.size(), dna_kmer_marker) == 0) {
+                    text.erase(text.size() - dna_kmer_marker.size());
+                }
+            }
+        }
+    }
 
     init_tokenizer(type);
 
