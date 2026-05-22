@@ -326,3 +326,146 @@ ggml_cgraph * clip_graph_granite_vision::build() {
 
     return gf;
 }
+
+// ---------------------------------------------------------------------------
+// Assembler — pack-and-unpad + scaled image_newline injection
+// ---------------------------------------------------------------------------
+//
+// Granite Vision 4.1 follows the llava-next layout: the per-tile encoder
+// outputs are reshaped so the assembled super-image is read in spatial
+// scan order with a learned newline embedding appended to every super-row.
+// Single-tile inputs (overview only) get a single trailing newline row.
+//
+// All knowledge of image_newline and base_stream_scale lives here. The
+// graph itself is a single ggml_get_rows over a virtual buffer formed by
+// concatenating per-tile encoder outputs with the K-tiled, base-scaled
+// newline row. The gather index is built host-side.
+
+size_t granite_vision_n_assembled_output_tokens(
+        const clip_ctx * ctx,
+        const clip_image_f32_batch * batch) {
+    GGML_ASSERT(batch != nullptr && !batch->entries.empty());
+    const int n_per_tile = clip_n_output_tokens(
+        const_cast<clip_ctx *>(ctx), batch->entries[0].get());
+    if (batch->entries.size() == 1) {
+        // overview tile + 1 newline row
+        return (size_t)n_per_tile + 1;
+    }
+    const int per_tile_side = (int) std::lround(std::sqrt((double)n_per_tile));
+    GGML_ASSERT(per_tile_side * per_tile_side == n_per_tile);
+    // overview + (per_tile_side*grid_y) super-rows, each (per_tile_side*grid_x + 1) wide
+    const size_t super_h = (size_t)per_tile_side * (size_t)batch->grid_y;
+    const size_t super_w_plus_nl = (size_t)per_tile_side * (size_t)batch->grid_x + 1;
+    return (size_t)n_per_tile + super_h * super_w_plus_nl;
+}
+
+std::vector<int32_t> granite_vision_build_assembler_gather_idx(
+        int n_tiles, int n_per_tile, int grid_x, int grid_y) {
+    // virtual source layout: [tile_0 tokens | tile_1 tokens | ... | newline_row]
+    // newline_row is at virtual index n_tiles * n_per_tile.
+    const int32_t nl_idx = n_tiles * n_per_tile;
+
+    std::vector<int32_t> idx;
+    // overview comes first
+    idx.reserve((size_t)n_per_tile + 1);
+    for (int i = 0; i < n_per_tile; ++i) {
+        idx.push_back(i);
+    }
+
+    if (n_tiles == 1) {
+        // single tile: just one trailing newline
+        idx.push_back(nl_idx);
+        return idx;
+    }
+
+    GGML_ASSERT(grid_x > 0 && grid_y > 0);
+    GGML_ASSERT(n_tiles == grid_x * grid_y + 1);
+    const int per_tile_side = (int) std::lround(std::sqrt((double)n_per_tile));
+    GGML_ASSERT(per_tile_side * per_tile_side == n_per_tile);
+
+    // Spatial scan: for each super-row, walk across grid columns then within
+    // each tile across local columns, ending with a newline. This reproduces
+    // the loop nest from the pre-refactor host-side code exactly.
+    const size_t total = (size_t)n_per_tile +
+        (size_t)per_tile_side * (size_t)grid_y *
+            ((size_t)per_tile_side * (size_t)grid_x + 1);
+    idx.reserve(total);
+    for (int gy = 0; gy < grid_y; ++gy) {
+        for (int ty = 0; ty < per_tile_side; ++ty) {
+            for (int gx = 0; gx < grid_x; ++gx) {
+                const int tile_idx = 1 + gy * grid_x + gx; // +1: skip overview
+                const int row_off = tile_idx * n_per_tile + ty * per_tile_side;
+                for (int tx = 0; tx < per_tile_side; ++tx) {
+                    idx.push_back(row_off + tx);
+                }
+            }
+            idx.push_back(nl_idx);
+        }
+    }
+    GGML_ASSERT(idx.size() == total);
+    return idx;
+}
+
+ggml_tensor * granite_vision_build_assembler_graph(
+        ggml_context * ctx0,
+        ggml_cgraph * gf,
+        const clip_model & model,
+        int n_tiles,
+        int n_per_tile,
+        int n_mmproj_embd,
+        int gather_len) {
+    const int K = (int) model.qf_proj_blocks.size();
+    GGML_ASSERT(K > 0);
+    GGML_ASSERT(n_mmproj_embd % K == 0);
+    const int projection_dim = n_mmproj_embd / K;
+    GGML_ASSERT(model.image_newline != nullptr);
+    GGML_ASSERT(ggml_nelements(model.image_newline) == projection_dim);
+
+    // 1) Inputs
+    ggml_tensor * per_tile_in = ggml_new_tensor_2d(
+        ctx0, GGML_TYPE_F32, n_mmproj_embd, n_tiles * n_per_tile);
+    ggml_set_name(per_tile_in, "g4v_assembler_per_tile_in");
+    ggml_set_input(per_tile_in);
+
+    ggml_tensor * gather_idx = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, gather_len);
+    ggml_set_name(gather_idx, "g4v_assembler_gather_idx");
+    ggml_set_input(gather_idx);
+
+    // 2) Build K-tiled, base-scaled newline row.
+    //
+    // Final layout matches the pre-refactor host code:
+    //   newline_row[k*projection_dim + d] = nl[d] * (k == 0 ? base : 1.0)
+    //
+    // i.e. with ne[0]=projection_dim, ne[1]=K stacking, then reshape to a
+    // 1-row vector of length K*projection_dim.
+    ggml_tensor * nl = model.image_newline; // (projection_dim,)
+    ggml_tensor * nl_first = ggml_scale(ctx0, nl, model.hparams.base_stream_scale);
+    ggml_tensor * nl_first_2d = ggml_reshape_2d(ctx0, nl_first, projection_dim, 1);
+    ggml_tensor * nl_row_2d;
+    if (K == 1) {
+        nl_row_2d = nl_first_2d;
+    } else {
+        ggml_tensor * nl_2d = ggml_reshape_2d(ctx0, nl, projection_dim, 1);
+        ggml_tensor * rest_template = ggml_new_tensor_2d(
+            ctx0, GGML_TYPE_F32, projection_dim, K - 1);
+        ggml_tensor * nl_rest = ggml_repeat(ctx0, nl_2d, rest_template);
+        nl_row_2d = ggml_concat(ctx0, nl_first_2d, nl_rest, 1); // (projection_dim, K)
+    }
+    // Reshape to a single row of length n_mmproj_embd. Must be contiguous.
+    nl_row_2d = ggml_cont(ctx0, nl_row_2d);
+    ggml_tensor * nl_row = ggml_reshape_2d(ctx0, nl_row_2d, n_mmproj_embd, 1);
+    ggml_set_name(nl_row, "g4v_assembler_nl_row");
+
+    // 3) Concat per-tile outputs with the newline row to form the virtual
+    //    source. The newline becomes the row at index n_tiles*n_per_tile.
+    ggml_tensor * src = ggml_concat(ctx0, per_tile_in, nl_row, 1);
+    ggml_set_name(src, "g4v_assembler_src");
+
+    // 4) Gather. ggml_get_rows selects along ne[1], producing a tensor of
+    //    shape (n_mmproj_embd, gather_len) in spatial scan order.
+    ggml_tensor * out = ggml_get_rows(ctx0, src, gather_idx);
+    ggml_set_name(out, "g4v_assembler_out");
+
+    ggml_build_forward_expand(gf, out);
+    return out;
+}

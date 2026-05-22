@@ -196,3 +196,36 @@ struct clip_graph_granite_vision : clip_graph {
     clip_graph_granite_vision(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
     ggml_cgraph * build() override;
 };
+
+// --- Granite Vision 4 assembler ---
+//
+// Per-tile encoder outputs are reshaped (pack-and-unpad) and interleaved with
+// a learned, base-scaled newline embedding to produce the final image-token
+// sequence. These helpers are used by clip_image_assemble and
+// clip_n_assembled_output_tokens dispatch in clip.cpp.
+
+// Build the host-side gather index used by the assembler graph. Entries
+// index into a virtual buffer of length n_tiles*n_per_tile + 1 where the
+// last row is the K-tiled newline. The number of entries returned is the
+// final assembled token count.
+std::vector<int32_t> granite_vision_build_assembler_gather_idx(
+        int n_tiles, int n_per_tile, int grid_x, int grid_y);
+
+// Build the assembler cgraph into the supplied ggml context and graph.
+// Returns the final output tensor (also expanded into gf). Creates two
+// input tensors registered with ggml_set_input:
+//   - "g4v_assembler_per_tile_in"  : F32 (n_mmproj_embd, n_per_tile * n_tiles)
+//   - "g4v_assembler_gather_idx"   : I32 (gather_len,)
+ggml_tensor * granite_vision_build_assembler_graph(
+        ggml_context * ctx0,
+        ggml_cgraph * gf,
+        const clip_model & model,
+        int n_tiles,
+        int n_per_tile,
+        int n_mmproj_embd,
+        int gather_len);
+
+// Final assembled token count for a preprocessed tile batch.
+size_t granite_vision_n_assembled_output_tokens(
+        const clip_ctx * ctx,
+        const clip_image_f32_batch * batch);
