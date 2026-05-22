@@ -193,6 +193,14 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				defaultValue: TITLE_GENERATION.DEFAULT_PROMPT,
 				type: SettingsFieldType.TEXTAREA,
 				section: SETTINGS_SECTION_SLUGS.GENERAL
+			},
+			{
+				key: SETTINGS_KEYS.MAX_IMAGE_RESOLUTION,
+				label: 'Maximum image resolution (megapixels)',
+				help: 'Images larger than this will be resized before sending to server. Set to 0 to disable.',
+				defaultValue: 0,
+				type: SettingsFieldType.INPUT,
+				section: SETTINGS_SECTION_SLUGS.GENERAL
 			}
 		]
 	},
