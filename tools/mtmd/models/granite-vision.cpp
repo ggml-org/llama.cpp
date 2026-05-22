@@ -311,8 +311,9 @@ ggml_cgraph * clip_graph_granite_vision::build() {
             qformer_eps);
     }
 
-    // Sort by target LLM layer (implicit from vision_feature_layer ordering in conversion)
-    // For Granite Vision, the blocks are already in the correct order
+    // Concatenate the projector activations in the correct order, and apply the
+    // base stream multiplier to invert the embedding multipler that gets
+    // applied on the LLM side.
     ggml_tensor * mmproj = nullptr;
     for (int k = 0; k < projector_count; ++k) {
         ggml_tensor * s = ggml_cont(ctx0, streams[k]);
