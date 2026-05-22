@@ -445,7 +445,7 @@ std::string string_strip(const std::string & str) {
     return str.substr(start, end - start);
 }
 
-std::string longest_common_substring(std::string_view a, std::string_view b) {
+std::string string_lcs(std::string_view a, std::string_view b) {
     if (a.empty() || b.empty()) return {};
 
     std::vector<std::vector<size_t>> dp(a.size() + 1, std::vector<size_t>(b.size() + 1, 0));
