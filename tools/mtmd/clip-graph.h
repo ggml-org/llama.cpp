@@ -126,3 +126,19 @@ struct clip_graph {
     // Abstracts out the StackAudioFrames logic used by ultravox
     ggml_tensor * build_stack(ggml_tensor * cur, int32_t stack_factor, int32_t n_embed);
 };
+
+// Abstract base for post-encoding assembler graphs (e.g. llava-next-style
+// pack-and-unpad with learned newline injection). Models that need an
+// assembler register a subclass and a factory case in clip_image_assemble.
+struct clip_assembler {
+    virtual ~clip_assembler() = default;
+
+    // Build the cgraph in the supplied ctx0; return the output tensor
+    // (also expanded into gf). Per-call inputs (per_tile data, n_tiles,
+    // grid dims, etc.) are stashed by the subclass constructor.
+    virtual ggml_tensor * build(ggml_context * ctx0, ggml_cgraph * gf) = 0;
+
+    // Push input data into the allocated input tensors. Called after
+    // ggml_backend_sched_alloc_graph and before compute.
+    virtual void set_inputs(ggml_cgraph * gf) = 0;
+};

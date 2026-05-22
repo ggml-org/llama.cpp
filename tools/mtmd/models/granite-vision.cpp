@@ -359,21 +359,20 @@ size_t granite_vision_n_assembled_output_tokens(
     return (size_t)n_per_tile + super_h * super_w_plus_nl;
 }
 
-std::vector<int32_t> granite_vision_build_assembler_gather_idx(
+// Build the host-side gather index. Each entry indexes into a virtual buffer
+// of length (n_tiles*n_per_tile + 1) whose last row is the K-tiled newline.
+static std::vector<int32_t> g4v_build_gather_idx(
         int n_tiles, int n_per_tile, int grid_x, int grid_y) {
-    // virtual source layout: [tile_0 tokens | tile_1 tokens | ... | newline_row]
-    // newline_row is at virtual index n_tiles * n_per_tile.
     const int32_t nl_idx = n_tiles * n_per_tile;
 
     std::vector<int32_t> idx;
-    // overview comes first
     idx.reserve((size_t)n_per_tile + 1);
+    // overview comes first
     for (int i = 0; i < n_per_tile; ++i) {
         idx.push_back(i);
     }
 
     if (n_tiles == 1) {
-        // single tile: just one trailing newline
         idx.push_back(nl_idx);
         return idx;
     }
@@ -383,9 +382,6 @@ std::vector<int32_t> granite_vision_build_assembler_gather_idx(
     const int per_tile_side = (int) std::lround(std::sqrt((double)n_per_tile));
     GGML_ASSERT(per_tile_side * per_tile_side == n_per_tile);
 
-    // Spatial scan: for each super-row, walk across grid columns then within
-    // each tile across local columns, ending with a newline. This reproduces
-    // the loop nest from the pre-refactor host-side code exactly.
     const size_t total = (size_t)n_per_tile +
         (size_t)per_tile_side * (size_t)grid_y *
             ((size_t)per_tile_side * (size_t)grid_x + 1);
@@ -406,14 +402,32 @@ std::vector<int32_t> granite_vision_build_assembler_gather_idx(
     return idx;
 }
 
-ggml_tensor * granite_vision_build_assembler_graph(
-        ggml_context * ctx0,
-        ggml_cgraph * gf,
-        const clip_model & model,
-        int n_tiles,
-        int n_per_tile,
-        int n_mmproj_embd,
-        int gather_len) {
+clip_assembler_granite_vision::clip_assembler_granite_vision(
+        const clip_ctx * ctx,
+        const float * per_tile_embd,
+        int n_tiles, int grid_x, int grid_y)
+    : model(*clip_get_model(ctx)),
+      per_tile_embd(per_tile_embd),
+      n_tiles(n_tiles),
+      grid_x(grid_x),
+      grid_y(grid_y) {
+    GGML_ASSERT(per_tile_embd != nullptr && n_tiles > 0);
+
+    n_mmproj_embd = clip_n_mmproj_embd(ctx);
+
+    // Recover n_per_tile from the model's fixed tile size. All G4V tiles
+    // are produced at hparams.image_size × hparams.image_size, so a dummy
+    // tile image at that size yields the same n_per_tile as any real tile.
+    clip_image_f32 tile_img;
+    tile_img.nx = model.hparams.image_size;
+    tile_img.ny = model.hparams.image_size;
+    n_per_tile = clip_n_output_tokens(const_cast<clip_ctx *>(ctx), &tile_img);
+
+    gather_idx = g4v_build_gather_idx(n_tiles, n_per_tile, grid_x, grid_y);
+}
+
+ggml_tensor * clip_assembler_granite_vision::build(
+        ggml_context * ctx0, ggml_cgraph * gf) {
     const int K = (int) model.qf_proj_blocks.size();
     GGML_ASSERT(K > 0);
     GGML_ASSERT(n_mmproj_embd % K == 0);
@@ -421,23 +435,21 @@ ggml_tensor * granite_vision_build_assembler_graph(
     GGML_ASSERT(model.image_newline != nullptr);
     GGML_ASSERT(ggml_nelements(model.image_newline) == projection_dim);
 
-    // 1) Inputs
+    // 1) Inputs.
     ggml_tensor * per_tile_in = ggml_new_tensor_2d(
         ctx0, GGML_TYPE_F32, n_mmproj_embd, n_tiles * n_per_tile);
     ggml_set_name(per_tile_in, "g4v_assembler_per_tile_in");
     ggml_set_input(per_tile_in);
 
-    ggml_tensor * gather_idx = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, gather_len);
-    ggml_set_name(gather_idx, "g4v_assembler_gather_idx");
-    ggml_set_input(gather_idx);
+    ggml_tensor * idx_in = ggml_new_tensor_1d(
+        ctx0, GGML_TYPE_I32, (int64_t) gather_idx.size());
+    ggml_set_name(idx_in, "g4v_assembler_gather_idx");
+    ggml_set_input(idx_in);
 
     // 2) Build K-tiled, base-scaled newline row.
-    //
-    // Final layout matches the pre-refactor host code:
-    //   newline_row[k*projection_dim + d] = nl[d] * (k == 0 ? base : 1.0)
-    //
-    // i.e. with ne[0]=projection_dim, ne[1]=K stacking, then reshape to a
-    // 1-row vector of length K*projection_dim.
+    //      newline_row[k*projection_dim + d] = nl[d] * (k == 0 ? base : 1.0)
+    //    i.e. with ne[0]=projection_dim, ne[1]=K stacking, then reshape to
+    //    a 1-row vector of length K*projection_dim.
     ggml_tensor * nl = model.image_newline; // (projection_dim,)
     ggml_tensor * nl_first = ggml_scale(ctx0, nl, model.hparams.base_stream_scale);
     ggml_tensor * nl_first_2d = ggml_reshape_2d(ctx0, nl_first, projection_dim, 1);
@@ -451,7 +463,6 @@ ggml_tensor * granite_vision_build_assembler_graph(
         ggml_tensor * nl_rest = ggml_repeat(ctx0, nl_2d, rest_template);
         nl_row_2d = ggml_concat(ctx0, nl_first_2d, nl_rest, 1); // (projection_dim, K)
     }
-    // Reshape to a single row of length n_mmproj_embd. Must be contiguous.
     nl_row_2d = ggml_cont(ctx0, nl_row_2d);
     ggml_tensor * nl_row = ggml_reshape_2d(ctx0, nl_row_2d, n_mmproj_embd, 1);
     ggml_set_name(nl_row, "g4v_assembler_nl_row");
@@ -463,9 +474,19 @@ ggml_tensor * granite_vision_build_assembler_graph(
 
     // 4) Gather. ggml_get_rows selects along ne[1], producing a tensor of
     //    shape (n_mmproj_embd, gather_len) in spatial scan order.
-    ggml_tensor * out = ggml_get_rows(ctx0, src, gather_idx);
+    ggml_tensor * out = ggml_get_rows(ctx0, src, idx_in);
     ggml_set_name(out, "g4v_assembler_out");
 
     ggml_build_forward_expand(gf, out);
     return out;
+}
+
+void clip_assembler_granite_vision::set_inputs(ggml_cgraph * gf) {
+    ggml_tensor * in_per_tile = ggml_graph_get_tensor(gf, "g4v_assembler_per_tile_in");
+    ggml_tensor * in_gather   = ggml_graph_get_tensor(gf, "g4v_assembler_gather_idx");
+    GGML_ASSERT(in_per_tile != nullptr && in_gather != nullptr);
+    ggml_backend_tensor_set(in_per_tile, per_tile_embd, 0,
+                            (size_t) n_tiles * n_per_tile * n_mmproj_embd * sizeof(float));
+    ggml_backend_tensor_set(in_gather, gather_idx.data(), 0,
+                            gather_idx.size() * sizeof(int32_t));
 }
