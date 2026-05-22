@@ -919,6 +919,16 @@ static bool is_op_unsupported_case(const ggml_tensor * op) {
             // GGML_LOG_WARN("OpenVINO backend does not support SOFT_MAX with sinks\n");
             return true;
         }
+
+        // GPU execution of the MoE routing weights softmax is numerically unstable
+        // when fused with the surrounding GET_ROWS/reshape path. Keep this softmax
+        // on CPU so the scheduler splits at the same boundary that restores parity.
+        if (ggml_openvino_get_device_name() == "GPU" &&
+            op->src[0] != nullptr && op->src[0]->op == GGML_OP_RESHAPE &&
+            op->src[0]->src[0] != nullptr &&
+            strncmp(op->src[0]->src[0]->name, "ffn_moe_weights", sizeof("ffn_moe_weights") - 1) == 0) {
+            return true;
+        }
         break;
     }
     case GGML_OP_SUM_ROWS: {
@@ -966,6 +976,11 @@ static bool is_op_unsupported_case(const ggml_tensor * op) {
         break;
     }
     case GGML_OP_PERMUTE: {
+        if (ggml_openvino_get_device_name() == "GPU" && op->src[0] != nullptr && op->src[0]->op == GGML_OP_VIEW &&
+            op->src[0]->src[0] != nullptr && op->src[0]->src[0]->op == GGML_OP_NONE &&
+            !ggml_is_contiguous(op->src[0])) {
+            return true;
+        }
         if (op->type == GGML_TYPE_BF16) {
             // err msg: [GPU] Could not find a suitable kernel for transpose
             // GGML_LOG_WARN("OpenVINO backend does not support PERMUTE with BF16 type\n");
@@ -987,6 +1002,12 @@ static bool is_op_unsupported_case(const ggml_tensor * op) {
         break;
     }
     case GGML_OP_MUL_MAT: {
+        if (ggml_openvino_get_device_name() == "GPU" && op->src[1]->op == GGML_OP_SOFT_MAX &&
+            op->src[0]->op == GGML_OP_CONT && op->src[0]->src[0] != nullptr &&
+            op->src[0]->src[0]->op == GGML_OP_TRANSPOSE && op->src[0]->src[0]->src[0] != nullptr &&
+            op->src[0]->src[0]->src[0]->op == GGML_OP_PERMUTE) {
+            return true;
+        }
         if (op->src[0]->type == GGML_TYPE_F16 && op->src[1]->type == GGML_TYPE_F16) {
             // Has accuracy issue, try enabling this and see `test-backend-ops -o "MUL_MAT"`
             // GGML_LOG_WARN("OpenVINO backend does not support MUL_MAT with two F16 tensors\n");
