@@ -1105,7 +1105,7 @@ private:
 
         if (params_base.n_ctx_checkpoints > 0) {
             SRV_INF("context checkpoints enabled, max = %d, min spacing = %d\n",
-                    params_base.n_ctx_checkpoints, params_base.checkpoint_min_spacing_nt);
+                    params_base.n_ctx_checkpoints, params_base.checkpoint_min_step);
         } else {
             SRV_INF("%s", "context checkpoints disabled\n");
         }
@@ -2916,8 +2916,8 @@ private:
                         has_mtmd = true;
                     }
 
-                    const int32_t checkpoint_before_last_user_n_tokens = slot.task->params.checkpoint_before_last_user_n_tokens;
-                    const bool has_last_user_checkpoint = checkpoint_before_last_user_n_tokens > 0;
+                    const int32_t n_before_user = slot.task->params.n_before_user;
+                    const bool n_before_user_known = n_before_user > 0;
 
                     // add prompt tokens for processing in the current batch
                     while (slot.prompt.n_tokens() < slot.task->n_tokens() && batch.n_tokens < n_batch) {
@@ -2949,8 +2949,8 @@ private:
 
                         // stop the prompt batch exactly before the latest user input, so a checkpoint
                         // can be created after the previous messages
-                        if (has_last_user_checkpoint &&
-                            slot.prompt.n_tokens() == checkpoint_before_last_user_n_tokens) {
+                        if (n_before_user_known &&
+                            slot.prompt.n_tokens() == n_before_user) {
                             break;
                         }
 
@@ -2978,9 +2978,7 @@ private:
 
                     // the number of tokens added to the batch for the current slot
                     const auto n_tokens_cur = batch.n_tokens - n_tokens_prev;
-                    // checkpoints are created before the current batch is decoded, so
-                    // their token position is the batch start rather than the prompt end
-                    const int32_t checkpoint_batch_start = slot.prompt.n_tokens() - n_tokens_cur;
+
                     const bool near_prompt_end = slot.task->n_tokens() < slot.prompt.n_tokens() + n_ubatch;
 
                     // entire prompt has been processed
@@ -2998,7 +2996,7 @@ private:
                         slot.init_sampler();
                     } else {
                         // skip ordinary mid-prompt checkpoints
-                        if (!has_last_user_checkpoint && !near_prompt_end) {
+                        if (!n_before_user_known && !near_prompt_end) {
                             do_checkpoint = false;
                         }
                     }
@@ -3006,22 +3004,31 @@ private:
                     const auto pos_min = llama_memory_seq_pos_min(llama_get_memory(ctx_tgt), slot.id);
                     const auto pos_max = llama_memory_seq_pos_max(llama_get_memory(ctx_tgt), slot.id);
 
-                    const bool at_last_user_checkpoint =
-                        has_last_user_checkpoint &&
-                        checkpoint_batch_start == checkpoint_before_last_user_n_tokens;
-                    const bool after_last_user_checkpoint =
-                        has_last_user_checkpoint &&
-                        checkpoint_batch_start > checkpoint_before_last_user_n_tokens;
-                    const bool checkpoint_allowed_by_last_user =
-                        !has_last_user_checkpoint ||
-                        at_last_user_checkpoint ||
-                        (after_last_user_checkpoint && near_prompt_end);
+                    // checkpoints are created before the current batch is decoded, so
+                    // their token position is the batch start rather than the prompt end
+                    const int32_t n_tokens_start = slot.prompt.n_tokens() - n_tokens_cur;
 
-                    if (do_checkpoint && !checkpoint_allowed_by_last_user) {
-                        do_checkpoint = false;
+                    {
+                        const bool is_on_user =
+                            n_before_user_known &&
+                            n_tokens_start == n_before_user;
+
+                        const bool is_after_user =
+                            n_before_user_known &&
+                            n_tokens_start > n_before_user;
+
+                        const bool is_allowed =
+                            !n_before_user_known ||
+                            is_on_user ||
+                            (is_after_user && near_prompt_end);
+
+                        if (do_checkpoint && !is_allowed) {
+                            do_checkpoint = false;
+                        }
                     }
 
                     // nothing to checkpoint yet
+                    // TODO: is this check needed?
                     if (do_checkpoint && pos_min < 0) {
                         do_checkpoint = false;
                     }
@@ -3030,7 +3037,7 @@ private:
                     do_checkpoint = do_checkpoint && !has_mtmd;
 
                     // no need to create checkpoints that are too close together
-                    do_checkpoint = do_checkpoint && (slot.prompt.checkpoints.empty() || checkpoint_batch_start > slot.prompt.checkpoints.back().n_tokens + params_base.checkpoint_min_spacing_nt);
+                    do_checkpoint = do_checkpoint && (slot.prompt.checkpoints.empty() || n_tokens_start > slot.prompt.checkpoints.back().n_tokens + params_base.checkpoint_min_step);
                     SLT_DBG(slot, "main/do_checkpoint = %s, pos_min = %d, pos_max = %d\n", do_checkpoint ? "yes" : "no", pos_min, pos_max);
 
                     // note: we create the checkpoint before calling llama_decode(), so the current batch is not
@@ -3547,28 +3554,29 @@ void server_context::on_sleeping_changed(std::function<void(bool)> callback) {
     impl->queue_tasks.on_sleeping_state(std::move(callback));
 }
 
-static int32_t server_checkpoint_before_last_user(
-        const llama_vocab * vocab,
-        mtmd_context * mctx,
+// compute the number of tokens before the last user message in the prompt
+static int32_t prompt_get_n_before_user(
+        const json & message_spans,
         const std::string & prompt,
         const std::vector<raw_buffer> & files,
-        const json & message_spans) {
-    int32_t checkpoint_n_tokens = -1;
-    int32_t last_user_byte_pos = -1;
+        const llama_vocab * vocab,
+        mtmd_context * mctx) {
+    int32_t result = -1;
+    int32_t byte_pos = -1;
 
     for (const auto & span : message_spans) {
         const std::string role = json_value(span, "role", std::string());
-        const int32_t byte_pos = json_value(span, "pos", -1);
 
         if (role == "user") {
-            last_user_byte_pos = byte_pos;
+            byte_pos = json_value(span, "pos", -1);
         }
     }
 
-    if (last_user_byte_pos >= 0) {
-        GGML_ASSERT((size_t) last_user_byte_pos <= prompt.size());
+    if (byte_pos >= 0) {
+        GGML_ASSERT((size_t) byte_pos <= prompt.size());
 
-        const std::string prefix = prompt.substr(0, (size_t) last_user_byte_pos);
+        const std::string prefix = prompt.substr(0, (size_t) byte_pos);
+
         const std::string marker = get_media_marker();
         size_t n_prefix_media = 0;
         for (size_t pos = 0; (pos = prefix.find(marker, pos)) != std::string::npos; pos += marker.size()) {
@@ -3578,17 +3586,19 @@ static int32_t server_checkpoint_before_last_user(
         GGML_ASSERT(n_prefix_media <= files.size());
 
         if (mctx != nullptr && n_prefix_media > 0) {
+            // TODO: this makes a copy - avoid it
             std::vector<raw_buffer> prefix_files(files.begin(), files.begin() + n_prefix_media);
-            checkpoint_n_tokens = (int32_t) process_mtmd_prompt(mctx, prefix, prefix_files).size();
+
+            result = (int32_t) process_mtmd_prompt(mctx, prefix, prefix_files).size();
         } else {
-            checkpoint_n_tokens = (int32_t) tokenize_input_prompts(vocab, nullptr, prefix, true, true)[0].size();
+            result = (int32_t) tokenize_input_prompts(vocab, nullptr, prefix, true, true)[0].size();
         }
 
-        SRV_INF("message_spans: last user message: byte_pos=%d, media=%zu, checkpoint_n_tokens=%d\n",
-                last_user_byte_pos, n_prefix_media, checkpoint_n_tokens);
+        SRV_TRC("message_spans: last user message: byte_pos=%d, media=%zu, n_before_user=%d\n",
+                byte_pos, n_prefix_media, result);
     }
 
-    return checkpoint_n_tokens;
+    return result;
 }
 
 
@@ -3643,13 +3653,13 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
 
             const auto message_spans = json_value(data, "message_spans", json::array());
             if (prompt.is_string() && message_spans.is_array()) {
-                task.params.checkpoint_before_last_user_n_tokens =
-                    server_checkpoint_before_last_user(
-                        ctx_server.vocab,
-                        task.tokens.has_mtmd ? ctx_server.mctx : nullptr,
+                task.params.n_before_user =
+                    prompt_get_n_before_user(
+                        message_spans,
                         prompt.get<std::string>(),
                         files,
-                        message_spans);
+                        ctx_server.vocab,
+                        ctx_server.mctx);
             }
 
             task.id_slot = json_value(data, "id_slot", -1);

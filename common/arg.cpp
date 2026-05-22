@@ -1334,13 +1334,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_CTX_CHECKPOINTS").set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
     add_opt(common_arg(
-        {"-cmsnt", "--checkpoint-min-spacing-n-tokens"}, "N",
-        string_format("minimum spacing between context checkpoints in tokens (default: %d, 0 = no minimum)", params.checkpoint_min_spacing_nt),
+        {"-cms", "--checkpoint-min-step"}, "N",
+        string_format("minimum spacing between context checkpoints in tokens (default: %d, 0 = no minimum)", params.checkpoint_min_step),
         [](common_params & params, int value) {
             if (value < 0) {
-                throw std::invalid_argument("checkpoint-min-spacing-n-tokens must be non-negative");
+                throw std::invalid_argument("checkpoint-min-step must be non-negative");
             }
-            params.checkpoint_min_spacing_nt = value;
+            params.checkpoint_min_step = value;
         }
     ).set_env("LLAMA_ARG_CHECKPOINT_MIN_SPACING_NT").set_examples({LLAMA_EXAMPLE_SERVER}));
     add_opt(common_arg(
