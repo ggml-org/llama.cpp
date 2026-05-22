@@ -50,13 +50,34 @@ public:
     void add_samples(const std::vector<int16_t>& samples) {
         std::unique_lock<std::mutex> lock(mutex_);
 
-        // Wait until queue is small enough for backpressure (bounded queue max 100 chunks ~ 1 sec)
-        // 16000 sample rate / 1024 frames = ~15 chunks per second
-        cv_.wait(lock, [this]() { return !running_ || buffer_.size() < 16000 * 2; });
+        size_t samples_added = 0;
+        while (samples_added < samples.size() && running_) {
+            // Wait until queue is small enough for backpressure (bounded queue max 2 sec)
+            cv_.wait(lock, [this]() { return !running_ || count_ < max_capacity_; });
 
-        if (!running_) return;
+            if (!running_) break;
 
-        buffer_.insert(buffer_.end(), samples.begin(), samples.end());
+            size_t available = max_capacity_ - count_;
+            size_t to_write = std::min(available, samples.size() - samples_added);
+
+            // Write in two parts if it wraps around
+            size_t space_until_end = max_capacity_ - tail_;
+            size_t first_write = std::min(to_write, space_until_end);
+
+            if (buffer_.size() < max_capacity_) {
+                buffer_.resize(max_capacity_);
+            }
+
+            std::copy(samples.begin() + samples_added, samples.begin() + samples_added + first_write, buffer_.begin() + tail_);
+
+            if (first_write < to_write) {
+                std::copy(samples.begin() + samples_added + first_write, samples.begin() + samples_added + to_write, buffer_.begin());
+            }
+
+            tail_ = (tail_ + to_write) % max_capacity_;
+            count_ += to_write;
+            samples_added += to_write;
+        }
     }
 
     void wait_until_done() {
@@ -64,7 +85,7 @@ public:
             bool done = false;
             {
                 std::lock_guard<std::mutex> lock(mutex_);
-                if (buffer_.empty()) {
+                if (count_ == 0) {
                     done = true;
                 }
             }
@@ -81,13 +102,22 @@ private:
         std::lock_guard<std::mutex> lock(player->mutex_);
 
         size_t samples_to_read = frameCount;
-        if (player->buffer_.size() < samples_to_read) {
-            samples_to_read = player->buffer_.size();
+        if (player->count_ < samples_to_read) {
+            samples_to_read = player->count_;
         }
 
         if (samples_to_read > 0) {
-            std::copy(player->buffer_.begin(), player->buffer_.begin() + samples_to_read, out);
-            player->buffer_.erase(player->buffer_.begin(), player->buffer_.begin() + samples_to_read);
+            size_t space_until_end = player->max_capacity_ - player->head_;
+            size_t first_read = std::min(samples_to_read, space_until_end);
+
+            std::copy(player->buffer_.begin() + player->head_, player->buffer_.begin() + player->head_ + first_read, out);
+
+            if (first_read < samples_to_read) {
+                std::copy(player->buffer_.begin(), player->buffer_.begin() + (samples_to_read - first_read), out + first_read);
+            }
+
+            player->head_ = (player->head_ + samples_to_read) % player->max_capacity_;
+            player->count_ -= samples_to_read;
         }
 
         // Fill remainder with silence
@@ -96,7 +126,7 @@ private:
         }
 
         // Notify producer that space is available
-        player->cv_.notify_one();
+        player->cv_.notify_all();
 
         (void)pInput; // Unused
     }
@@ -104,6 +134,10 @@ private:
     int sample_rate_;
     ma_device device_;
     std::vector<int16_t> buffer_;
+    size_t head_{0};
+    size_t tail_{0};
+    size_t count_{0};
+    size_t max_capacity_{32000}; // 2 seconds at 16kHz
     std::mutex mutex_;
     std::condition_variable cv_;
     std::atomic<bool> running_{false};
