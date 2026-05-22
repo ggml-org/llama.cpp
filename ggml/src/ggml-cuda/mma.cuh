@@ -1176,6 +1176,135 @@ namespace ggml_cuda_wgmma {
         }
     };
 
+    // ------------------------------------------------------------------
+    // Pipeline control: commit, wait, fence
+    // ------------------------------------------------------------------
+
+    __device__ __forceinline__ void commit_sync() {
+        asm volatile("wgmma.commit_group.sync;" ::: "memory");
+    }
+
+    template <int N> // N = number of most recent commit groups to wait for
+    __device__ __forceinline__ void wait_sync() {
+        asm volatile("wgmma.wait_group.sync %0;" : : "n"(N) : "memory");
+    }
+
+    __device__ __forceinline__ void fence() {
+        asm volatile("wgmma.fence.sync;" ::: "memory");
+    }
+
+    __device__ __forceinline__ void mem_sync() {
+        asm volatile("membar.cta;" ::: "memory");
+    }
+
+    // ------------------------------------------------------------------
+    // WGMMA MMA — INT8 input, FP32 accumulator
+    // Template: M=output rows, N=output cols, K=stage size (4, 8)
+    // A, B: shared memory pointers (must be 16-byte aligned, caller responsibility)
+    // D: read-modify-write accumulator fragment
+    // scale_d: true = accumulate into D, false = D = A@B (zero-init)
+    // ------------------------------------------------------------------
+
+    template <int M, int N, int K>
+    __device__ __forceinline__ void
+    mma_sync(frag_c<M, N> & D,
+             const uint32_t *A,
+             const uint32_t *B,
+             bool scale_d = true) {
+
+        // m16n8h4: 16x8 output, K=4 INT8. 4 uint32_t accumulator (one warp).
+        if constexpr (M == 16 && N == 8 && K == 4) {
+            asm volatile(
+                "wgmma.mma_sync.sync.aligned.m16n8h4.s32.s8.s8.s32 "
+                "{%0, %1, %2, %3}, [%4], [%5], {%0, %1, %2, %3}, %6;"
+                : "+r"(D.x[0]), "+r"(D.x[1]), "+r"(D.x[2]), "+r"(D.x[3])
+                : "l"(reinterpret_cast<uint64_t>(__cvta_generic_to_shared(A))),
+                  "l"(reinterpret_cast<uint64_t>(__cvta_generic_to_shared(B))),
+                  "r"(scale_d ? 1 : 0)
+                : "memory");
+        }
+
+        // m16n16h4: 16x16 output, K=4 INT8. Two m16n8h4 passes, advancing B by 8.
+        else if constexpr (M == 16 && N == 16 && K == 4) {
+            for (int pass = 0; pass < 2; ++pass) {
+                asm volatile(
+                    "wgmma.mma_sync.sync.aligned.m16n8h4.s32.s8.s8.s32 "
+                    "{%0, %1, %2, %3}, [%4], [%5], {%0, %1, %2, %3}, %6;"
+                    : "+r"(D.x[0]), "+r"(D.x[1]), "+r"(D.x[2]), "+r"(D.x[3])
+                    : "l"(reinterpret_cast<uint64_t>(__cvta_generic_to_shared(A))),
+                      "l"(reinterpret_cast<uint64_t>(__cvta_generic_to_shared(B + pass * 8))),
+                      "r"(pass == 0 ? (scale_d ? 1 : 0) : 1)
+                    : "memory");
+            }
+        }
+
+        // m64n16h8: 64x16 output, K=8 INT8. Warpgroup-wide, 32 uint32_t accumulator.
+        else if constexpr (M == 64 && N == 16 && K == 8) {
+            uint32_t *dx = D.x;
+            asm volatile(
+                "wgmma.mma_sync.sync.aligned.m64n16h8.s32.s8.s8.s32 "
+                "{%0<16>}, [%1], [%2], {%3<16>}, %4;"
+                : "+r"(dx[0]), "+r"(dx[1]), "+r"(dx[2]), "+r"(dx[3]),
+                  "+r"(dx[4]), "+r"(dx[5]), "+r"(dx[6]), "+r"(dx[7]),
+                  "+r"(dx[8]), "+r"(dx[9]), "+r"(dx[10]), "+r"(dx[11]),
+                  "+r"(dx[12]), "+r"(dx[13]), "+r"(dx[14]), "+r"(dx[15]),
+                  "+r"(dx[16]), "+r"(dx[17]), "+r"(dx[18]), "+r"(dx[19]),
+                  "+r"(dx[20]), "+r"(dx[21]), "+r"(dx[22]), "+r"(dx[23]),
+                  "+r"(dx[24]), "+r"(dx[25]), "+r"(dx[26]), "+r"(dx[27]),
+                  "+r"(dx[28]), "+r"(dx[29]), "+r"(dx[30]), "+r"(dx[31])
+                : "l"(reinterpret_cast<uint64_t>(__cvta_generic_to_shared(A))),
+                  "l"(reinterpret_cast<uint64_t>(__cvta_generic_to_shared(B))),
+                  "r"(scale_d ? 1 : 0)
+                : "memory");
+        }
+
+        // m64n32h8: 64x32 output, K=8 INT8. Two m64n16h8 passes, advancing B by 16.
+        else if constexpr (M == 64 && N == 32 && K == 8) {
+            for (int pass = 0; pass < 2; ++pass) {
+                uint32_t *dx = D.x;
+                const uint32_t *Bptr = B + pass * 16;
+                asm volatile(
+                    "wgmma.mma_sync.sync.aligned.m64n16h8.s32.s8.s8.s32 "
+                    "{%0<16>}, [%1], [%2], {%3<16>}, %4;"
+                    : "+r"(dx[0]), "+r"(dx[1]), "+r"(dx[2]), "+r"(dx[3]),
+                      "+r"(dx[4]), "+r"(dx[5]), "+r"(dx[6]), "+r"(dx[7]),
+                      "+r"(dx[8]), "+r"(dx[9]), "+r"(dx[10]), "+r"(dx[11]),
+                      "+r"(dx[12]), "+r"(dx[13]), "+r"(dx[14]), "+r"(dx[15]),
+                      "+r"(dx[16]), "+r"(dx[17]), "+r"(dx[18]), "+r"(dx[19]),
+                      "+r"(dx[20]), "+r"(dx[21]), "+r"(dx[22]), "+r"(dx[23]),
+                      "+r"(dx[24]), "+r"(dx[25]), "+r"(dx[26]), "+r"(dx[27]),
+                      "+r"(dx[28]), "+r"(dx[29]), "+r"(dx[30]), "+r"(dx[31])
+                    : "l"(reinterpret_cast<uint64_t>(__cvta_generic_to_shared(A))),
+                      "l"(reinterpret_cast<uint64_t>(__cvta_generic_to_shared(Bptr))),
+                      "r"(pass == 0 ? (scale_d ? 1 : 0) : 1)
+                    : "memory");
+            }
+        }
+
+        // m64n64h8: 64x64 output, K=8 INT8. Four m64n16h8 passes, advancing B by 16 each.
+        else if constexpr (M == 64 && N == 64 && K == 8) {
+            for (int pass = 0; pass < 4; ++pass) {
+                uint32_t *dx = D.x;
+                const uint32_t *Bptr = B + pass * 16;
+                asm volatile(
+                    "wgmma.mma_sync.sync.aligned.m64n16h8.s32.s8.s8.s32 "
+                    "{%0<16>}, [%1], [%2], {%3<16>}, %4;"
+                    : "+r"(dx[0]), "+r"(dx[1]), "+r"(dx[2]), "+r"(dx[3]),
+                      "+r"(dx[4]), "+r"(dx[5]), "+r"(dx[6]), "+r"(dx[7]),
+                      "+r"(dx[8]), "+r"(dx[9]), "+r"(dx[10]), "+r"(dx[11]),
+                      "+r"(dx[12]), "+r"(dx[13]), "+r"(dx[14]), "+r"(dx[15]),
+                      "+r"(dx[16]), "+r"(dx[17]), "+r"(dx[18]), "+r"(dx[19]),
+                      "+r"(dx[20]), "+r"(dx[21]), "+r"(dx[22]), "+r"(dx[23]),
+                      "+r"(dx[24]), "+r"(dx[25]), "+r"(dx[26]), "+r"(dx[27]),
+                      "+r"(dx[28]), "+r"(dx[29]), "+r"(dx[30]), "+r"(dx[31])
+                    : "l"(reinterpret_cast<uint64_t>(__cvta_generic_to_shared(A))),
+                      "l"(reinterpret_cast<uint64_t>(__cvta_generic_to_shared(Bptr))),
+                      "r"(pass == 0 ? (scale_d ? 1 : 0) : 1)
+                    : "memory");
+            }
+        }
+    }
+
 } // namespace ggml_cuda_wgmma
 
 #endif // __CUDA_ARCH__ >= 1000
