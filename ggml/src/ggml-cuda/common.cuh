@@ -1086,6 +1086,13 @@ struct ggml_cuda_type_traits<GGML_TYPE_IQ3_S> {
     static constexpr int qi = QI3_S;
 };
 
+template<> 
+struct ggml_cuda_type_traits<GGML_TYPE_STQ1_0> {
+    static constexpr int qk  = QK_K;  // 256
+    static constexpr int qi  = 32;    // 32 calls per block, 8 elements each
+    static constexpr int vdr = 1;
+};
+
 //////////////////////
 
 struct ggml_cuda_device_info {

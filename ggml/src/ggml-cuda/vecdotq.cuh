@@ -1216,10 +1216,57 @@ static __device__ __forceinline__ float vec_dot_iq1_s_q8_1(
     const float2 ds    = __half22float2(bq8_1[iqs].ds);
     return d1q * (ds.x*sumi + ds.y*delta);
 }
+#define VDR_STQ1_0_Q8_1_MMVQ 1
+#define VDR_STQ1_0_Q8_1_MMQ  1
+
+static __device__ __forceinline__ float vec_dot_stq1_0_q8_1(
+        const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1,
+        const int & kbx, const int & iqs) {
+
+    const block_stq1_0 * bq = (const block_stq1_0 *) vbq + kbx;
+
+    // iqs: 0..31 (qi=32, mỗi call xử lý 8 elements = 1 byte qs = 2 groups)
+    const int qb_idx    = iqs >> 2;           // Q8_1 sub-block index: 0..7
+    const int q8_start  = (iqs & 3) << 3;     // offset trong Q8_1.qs: 0,8,16,24
+
+    const float d  = __half2float(bq->d);
+    const float d8 = __low2float(bq8_1[qb_idx].ds);
+
+    const uint8_t qs_byte = bq->qs[iqs];      // 1 byte = 2 group (4 element mỗi group)
+
+    // Sign bits — mirror chính xác kernel dequantize
+    const int     sign_byte_idx = iqs >> 2;
+    const int     shift1        = (iqs & 3) << 1;   // 0, 2, 4, 6
+    const int     shift2        = shift1 | 1;         // 1, 3, 5, 7
+    const uint8_t sb            = bq->sign[sign_byte_idx];
+    const uint8_t sign1         = (sb >> shift1) & 0x01;
+    const uint8_t sign2         = (sb >> shift2) & 0x01;
+
+    const uint8_t code1 = qs_byte & 0x0F;
+    const uint8_t code2 = qs_byte >> 4;
+
+    const uint8_t qpk1 = stq1_0_codebook[((uint32_t)sign1 << 4) | code1];
+    const uint8_t qpk2 = stq1_0_codebook[((uint32_t)sign2 << 4) | code2];
+
+    const int8_t * q8 = bq8_1[qb_idx].qs + q8_start;
+
+    int sumi = 0;
+#pragma unroll
+    for (int p = 0; p < 4; ++p) {
+        const int stq = (int)((qpk1 >> (2*p)) & 0x3) - 1;
+        sumi += stq * (int)q8[p];
+    }
+#pragma unroll
+    for (int p = 0; p < 4; ++p) {
+        const int stq = (int)((qpk2 >> (2*p)) & 0x3) - 1;
+        sumi += stq * (int)q8[4 + p];
+    }
+
+    return d * d8 * (float)sumi;
+}
 
 #define VDR_IQ1_M_Q8_1_MMVQ 1
 #define VDR_IQ1_M_Q8_1_MMQ  1
-
 static __device__ __forceinline__ float vec_dot_iq1_m_q8_1(
     const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs) {
 
