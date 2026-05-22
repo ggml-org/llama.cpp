@@ -1617,6 +1617,11 @@ class TextModel(ModelBase):
         assert max(tokenizer.vocab.values()) < vocab_size  # ty: ignore[unresolved-attribute]
 
         reverse_vocab = {id_: encoded_tok for encoded_tok, id_ in tokenizer.vocab.items()}  # ty: ignore[unresolved-attribute]
+        # k-mers can share text with a base-vocab BPE token (e.g. CCCCCC) and get
+        # dropped by get_vocab(); a reserved marker suffix (U+E000) keeps each
+        # k-mer's own id (llama.cpp strips it on detokenization)
+        for kmer in tokenizer.kmers:  # ty: ignore[unresolved-attribute]
+            reverse_vocab[tokenizer.dna_token_to_id[kmer]] = kmer + "\ue000"  # ty: ignore[unresolved-attribute]
         added_vocab = tokenizer.get_added_vocab()  # ty: ignore[unresolved-attribute]
         added_tokens_decoder = tokenizer.added_tokens_decoder  # ty: ignore[unresolved-attribute]
 
