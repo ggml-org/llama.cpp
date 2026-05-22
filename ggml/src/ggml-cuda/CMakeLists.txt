@@ -54,6 +54,7 @@ if (CUDAToolkit_FOUND)
                 list(APPEND CMAKE_CUDA_ARCHITECTURES 121a-real)
             endif()
 
+            # Consumer Blackwell: 100a = SM100 (RTX 5090), 101a = SM101 (RTX 5060 Ti)
             if (CUDAToolkit_VERSION VERSION_GREATER_EQUAL "13.0")
                 list(APPEND CMAKE_CUDA_ARCHITECTURES 100a-real 101a-real)
             endif()
