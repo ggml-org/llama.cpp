@@ -776,7 +776,7 @@ private:
                 for (auto & [dev, size] : mmproj_mem) {
                     total += size;
                 }
-                SRV_INF("[mtmd] estimated memory usage of mmproj is %.2f MiB\n", total / (1024.0 * 1024.0));
+                SRV_INF("[mtmd] estimated worst-case memory usage of mmproj is %.2f MiB\n", total / (1024.0 * 1024.0));
                 GGML_ASSERT(!params_base.fit_params_target.empty());
                 for (auto & [dev, size] : mmproj_mem) {
                     for (size_t i = 0; i < ggml_backend_dev_count(); i++) {
