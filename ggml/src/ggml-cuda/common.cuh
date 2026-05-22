@@ -1561,7 +1561,8 @@ static __inline__ void ggml_cuda_kernel_launch(Kernel kernel, const ggml_cuda_ke
         return env == nullptr || std::atoi(env) != 0;
     }();
 
-    if (env_pdl_enabled && ggml_cuda_info().devices[ggml_cuda_get_device()].cc >= GGML_CUDA_CC_HOPPER) {
+    const int cc = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
+    if (env_pdl_enabled && ggml_cuda_highest_compiled_arch(cc) >= GGML_CUDA_CC_HOPPER) {
         auto pdl_cfg = ggml_cuda_pdl_config(launch_params);
 
         CUDA_CHECK(cudaLaunchKernelEx(&pdl_cfg.cfg, kernel, std::forward<Args>(args)... ));
