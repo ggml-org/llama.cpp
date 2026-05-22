@@ -53,6 +53,10 @@ if (CUDAToolkit_FOUND)
             if (CUDAToolkit_VERSION VERSION_GREATER_EQUAL "12.9")
                 list(APPEND CMAKE_CUDA_ARCHITECTURES 121a-real)
             endif()
+
+            if (CUDAToolkit_VERSION VERSION_GREATER_EQUAL "13.0")
+                list(APPEND CMAKE_CUDA_ARCHITECTURES 100a-real 101a-real)
+            endif()
         endif()
     endif()
 
