@@ -3470,6 +3470,50 @@ void server_context::on_sleeping_changed(std::function<void(bool)> callback) {
     impl->queue_tasks.on_sleeping_state(std::move(callback));
 }
 
+static int32_t server_checkpoint_before_last_user(
+        const llama_vocab * vocab,
+        mtmd_context * mctx,
+        const std::string & prompt,
+        const std::vector<raw_buffer> & files,
+        const json & message_spans) {
+    int32_t checkpoint_n_tokens = -1;
+    int32_t last_user_byte_pos = -1;
+
+    for (const auto & span : message_spans) {
+        const std::string role = json_value(span, "role", std::string());
+        const int32_t byte_pos = json_value(span, "pos", -1);
+
+        if (role == "user") {
+            last_user_byte_pos = byte_pos;
+        }
+    }
+
+    if (last_user_byte_pos >= 0) {
+        GGML_ASSERT((size_t) last_user_byte_pos <= prompt.size());
+
+        const std::string prefix = prompt.substr(0, (size_t) last_user_byte_pos);
+        const std::string marker = get_media_marker();
+        size_t n_prefix_media = 0;
+        for (size_t pos = 0; (pos = prefix.find(marker, pos)) != std::string::npos; pos += marker.size()) {
+            n_prefix_media++;
+        }
+
+        GGML_ASSERT(n_prefix_media <= files.size());
+
+        if (mctx != nullptr && n_prefix_media > 0) {
+            std::vector<raw_buffer> prefix_files(files.begin(), files.begin() + n_prefix_media);
+            checkpoint_n_tokens = (int32_t) process_mtmd_prompt(mctx, prefix, prefix_files).size();
+        } else {
+            checkpoint_n_tokens = (int32_t) tokenize_input_prompts(vocab, nullptr, prefix, true, true)[0].size();
+        }
+
+        SRV_INF("message_spans: last user message: byte_pos=%d, media=%zu, checkpoint_n_tokens=%d\n",
+                last_user_byte_pos, n_prefix_media, checkpoint_n_tokens);
+    }
+
+    return checkpoint_n_tokens;
+}
+
 
 //
 // server_routes
@@ -3515,11 +3559,22 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
             task.tokens = std::move(inputs[i]);
             task.params = server_task::params_from_json_cmpl(
                     ctx_server.vocab,
-                    task.tokens,
                     params,
                     meta->slot_n_ctx,
                     meta->logit_bias_eog,
                     data);
+
+            const auto message_spans = json_value(data, "message_spans", json::array());
+            if (prompt.is_string() && message_spans.is_array()) {
+                task.params.checkpoint_before_last_user_n_tokens =
+                    server_checkpoint_before_last_user(
+                        ctx_server.vocab,
+                        task.tokens.has_mtmd ? ctx_server.mctx : nullptr,
+                        prompt.get<std::string>(),
+                        files,
+                        message_spans);
+            }
+
             task.id_slot = json_value(data, "id_slot", -1);
 
             // OAI-compat

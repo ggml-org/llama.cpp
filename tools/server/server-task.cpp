@@ -12,23 +12,6 @@
 
 using json = nlohmann::ordered_json;
 
-static int32_t map_text_tokens_to_server_tokens(const server_tokens & tokens, int32_t text_n_tokens) {
-    int32_t n_text_tokens = 0;
-
-    for (size_t n_server_tokens = 0; n_server_tokens < tokens.size(); ++n_server_tokens) {
-        if (n_text_tokens == text_n_tokens) {
-            return (int32_t) n_server_tokens;
-        }
-
-        if (tokens[n_server_tokens] != LLAMA_TOKEN_NULL) {
-            n_text_tokens++;
-        }
-    }
-
-    GGML_ASSERT(n_text_tokens == text_n_tokens);
-    return (int32_t) tokens.size();
-}
-
 //
 // task_params
 //
@@ -255,7 +238,6 @@ common_chat_msg task_result_state::update_chat_msg(
 
 task_params server_task::params_from_json_cmpl(
         const llama_vocab * vocab,
-        const server_tokens & tokens,
         const common_params & params_base,
         const int n_ctx_slot,
         const std::vector<llama_logit_bias> & logit_bias_eog,
@@ -633,36 +615,6 @@ task_params server_task::params_from_json_cmpl(
 
     if (params.n_cmpl > params_base.n_parallel) {
         throw std::runtime_error("n_cmpl cannot be greater than the number of slots, please increase -np");
-    }
-
-    const auto message_spans = json_value(data, "message_spans", json::array());
-    if (message_spans.is_array()) {
-        int32_t last_user_byte_pos = -1;
-
-        for (const auto & span : message_spans) {
-            const std::string role = json_value(span, "role", std::string());
-            const int32_t byte_pos = json_value(span, "pos", -1);
-
-            if (role == "user") {
-                last_user_byte_pos = byte_pos;
-            }
-        }
-
-        if (last_user_byte_pos >= 0) {
-            const std::string prompt = json_value(data, "prompt", std::string());
-
-            if ((size_t) last_user_byte_pos <= prompt.size()) {
-                const std::string prefix = prompt.substr(0, (size_t) last_user_byte_pos);
-                const auto prefix_tokens = common_tokenize(vocab, prefix, true, true);
-                const int32_t checkpoint_n_tokens =
-                    map_text_tokens_to_server_tokens(tokens, (int32_t) prefix_tokens.size());
-
-                SRV_INF("message_spans: last user message: byte_pos=%d, text_n_tokens=%zu, checkpoint_n_tokens=%d\n",
-                        last_user_byte_pos, prefix_tokens.size(), checkpoint_n_tokens);
-
-                params.checkpoint_before_last_user_n_tokens = checkpoint_n_tokens;
-            }
-        }
     }
 
     return params;
