@@ -1435,7 +1435,6 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
     ml.done_getting_tensors();
 
 #if defined(__APPLE__)
-    // TODO: ignore non-expert files/weights
     for (const auto & file : ml.files) {
         const int fd = dup(file->file_id());
         if (fd < 0) {
@@ -1445,6 +1444,9 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
     }
 
     for (const auto & [name, w] : ml.weights_map) {
+        if (name.find("_exps.") == std::string::npos) {
+            continue;
+        }
         moe_file_idx[name] = { moe_duped_fds.at(w.idx), w.offs };
     }
 #endif

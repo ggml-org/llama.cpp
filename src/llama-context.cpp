@@ -413,11 +413,6 @@ llama_context::llama_context(
 llama_context::~llama_context() {
     if (moe_offloader) {
         moe_offloader->stop();
-
-        // not sure about this
-        for (size_t i = 0; i < backend_ptrs.size(); ++i) {
-            backend_buf_exp_size[i] = ggml_backend_sched_get_buffer_size(sched.get(), backend_ptrs[i]);
-        }
     }
     if (!model.hparams.no_alloc) {
         for (size_t i = 0; i < backend_ptrs.size(); ++i) {

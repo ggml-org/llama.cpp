@@ -15,19 +15,11 @@
 
 moe_layer::~moe_layer() {
     for (auto & p : pools) {
-        if (p.own_buf) {
-            ggml_backend_buffer_free(p.own_buf);
-        }
-        if (p.own_ctx) {
-            ggml_free(p.own_ctx);
-        }
+        ggml_backend_buffer_free(p.own_buf);
+        ggml_free(p.own_ctx);
     }
-    if (msg_buf) {
-        ggml_backend_buffer_free(msg_buf);
-    }
-    if (msg_ctx) {
-        ggml_free(msg_ctx);
-    }
+    ggml_backend_buffer_free(msg_buf);
+    ggml_free(msg_ctx);
     if (shared_event) {
         llama_moe_offloader_release_event(shared_event);
     }
