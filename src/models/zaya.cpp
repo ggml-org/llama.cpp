@@ -407,12 +407,17 @@ llama_model_zaya::graph::graph(const llama_model & model, const llm_graph_params
          *     residual = hidden_states.float()
          * hidden_states = _apply_norm_with_fp32_residual(self.input_norm, residual, layer_input_dtype)
          */
-        ggml_tensor * hidden_states = apply_res_scale(inpL, layer.res_scale_hs, layer.res_scale_hs_b, "res_scale_hs", il);
+         ggml_tensor * hidden_states = apply_res_scale(inpL, layer.res_scale_hs, layer.res_scale_hs_b, "res_scale_hs", il);
+        /*
+         * zaya.py ref: L900, L1387, L1701
+         * if self.config.residual_in_fp32:
+         *     residual = hidden_states.to(torch.float32)
+         */
         if (residual != nullptr) {
             residual = apply_res_scale(residual, layer.res_scale_res, layer.res_scale_res_b, "res_scale_res", il);
-            residual = ggml_add(ctx0, hidden_states, residual);
+            residual = ggml_add(ctx0, ggml_cast(ctx0, hidden_states, GGML_TYPE_F32), ggml_cast(ctx0, residual, GGML_TYPE_F32));
         } else {
-            residual = hidden_states;
+            residual = ggml_cast(ctx0, hidden_states, GGML_TYPE_F32);
         }
         cb(residual, "residual", il);
 
@@ -879,9 +884,15 @@ llama_model_zaya::graph::graph(const llama_model & model, const llm_graph_params
     ggml_tensor * final_hidden = apply_res_scale(inpL, model.zaya_res_scale_hs, model.zaya_res_scale_hs_b, "final_res_scale_hs", -1);
     if (residual != nullptr) {
         residual = apply_res_scale(residual, model.zaya_res_scale_res, model.zaya_res_scale_res_b, "final_res_scale_res", -1);
-        cur = ggml_add(ctx0, final_hidden, residual);
+        /*
+         * zaya.py ref: L1701
+         * if self.config.residual_in_fp32:
+         *     hidden_states = hidden_states.float()
+         *     residual = residual.float()
+         */
+        cur = ggml_add(ctx0, ggml_cast(ctx0, final_hidden, GGML_TYPE_F32), ggml_cast(ctx0, residual, GGML_TYPE_F32));
     } else {
-        cur = final_hidden;
+        cur = ggml_cast(ctx0, final_hidden, GGML_TYPE_F32);
     }
     cb(cur, "final_residual", -1);
 
