@@ -2446,14 +2446,16 @@ static common_chat_params common_chat_templates_apply_jinja(const struct common_
         autoparser.analyze_template(tmpl);
         auto auto_params = autoparser::peg_generator::generate_parser(tmpl, params, autoparser);
 
-        if (auto_params.prompt.find("<|im_start|>user\n") != std::string::npos &&
-            auto_params.prompt.find("<|im_end|>") != std::string::npos) {
-            auto_params.message_spans = common_chat_split_by_role(auto_params.prompt, {
-                { "system",    "<|im_start|>system\n" },
-                { "user",      "<|im_start|>user\n" },
-                { "assistant", "<|im_start|>assistant\n" },
-                { "tool",      "<|im_start|>tool\n" },
-            });
+        std::vector<common_chat_msg_delimiter> delimiters;
+        if (!autoparser.assistant_start.empty()) {
+            delimiters.push_back({ "assistant", autoparser.assistant_start });
+        }
+        if (!autoparser.user_start.empty()) {
+            delimiters.push_back({ "user", autoparser.assistant_start });
+        }
+
+        if (!delimiters.empty()) {
+            auto_params.message_spans = common_chat_split_by_role(auto_params.prompt, delimiters);
         }
 
         auto_params.supports_thinking = autoparser.reasoning.mode != autoparser::reasoning_mode::NONE;
