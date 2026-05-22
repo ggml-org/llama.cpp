@@ -3394,16 +3394,24 @@ static inline void ggml_cuda_adaptive_wait_per_thread(int device) {
 static void ggml_backend_cuda_synchronize(ggml_backend_t backend) {
     ggml_backend_cuda_context * cuda_ctx = (ggml_backend_cuda_context *)backend->context;
 
+    // Synchronize compute stream — covers all kernels and cuBLAS work
     if (!ggml_cuda_adaptive_wait(cuda_ctx->stream(), cuda_ctx->device,
             &cuda_ctx->t_wait_us, &cuda_ctx->n_wait_ops,
             &cuda_ctx->t_wait_phase1_us, &cuda_ctx->t_wait_phase2_us,
             &cuda_ctx->t_wait_phase3_us,
             &cuda_ctx->t_wait_fallback_us, &cuda_ctx->n_wait_fallback)) {
-        /* adaptive wait returned false -- fallback */
         CUDA_CHECK(cudaStreamSynchronize(cuda_ctx->stream()));
     }
 
-    GGML_UNUSED(backend);
+    // Synchronize readback stream — covers in-flight device-to-host copies.
+    // The copy_done_event is recorded on the readback stream after each
+    // memcpyAsync, so synchronizing it guarantees the copy finished.
+    if (cuda_ctx->copy_done_event != nullptr) {
+        cudaError_t err = cudaEventSynchronize(cuda_ctx->copy_done_event);
+        if (err != cudaSuccess) {
+            CUDA_CHECK(cudaStreamSynchronize(cuda_ctx->readback_stream));
+        }
+    }
 }
 
 #ifdef USE_CUDA_GRAPH
