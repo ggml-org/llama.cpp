@@ -982,7 +982,7 @@ static ggml_cgraph * clip_image_build_graph(clip_ctx * ctx, const clip_image_f32
             } break;
         case PROJECTOR_TYPE_GRANITE4_VISION:
             {
-                builder = std::make_unique<clip_graph_granite_vision>(ctx, img);
+                builder = std::make_unique<clip_graph_granite4_vision>(ctx, img);
             } break;
         default:
             GGML_ABORT("missing cgraph builder");
@@ -4351,7 +4351,7 @@ size_t clip_n_assembled_output_tokens(clip_ctx * ctx, const clip_image_f32_batch
     GGML_ASSERT(batch != nullptr);
     switch (ctx->proj_type()) {
         case PROJECTOR_TYPE_GRANITE4_VISION:
-            return granite_vision_n_assembled_output_tokens(ctx, batch);
+            return granite4_vision_n_assembled_output_tokens(ctx, batch);
         // No assembler: flat sum of per-entry token counts.
         default:
             break;
@@ -4373,7 +4373,7 @@ bool clip_image_assemble(clip_ctx * ctx, const int n_threads,
     std::unique_ptr<clip_assembler> builder;
     switch (ctx->proj_type()) {
         case PROJECTOR_TYPE_GRANITE4_VISION:
-            builder = std::make_unique<clip_assembler_granite_vision>(
+            builder = std::make_unique<clip_assembler_granite4_vision>(
                 ctx, per_tile_embd, n_tiles, grid_x, grid_y);
             break;
         default:

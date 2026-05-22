@@ -238,7 +238,7 @@ static ggml_tensor * g4v_build_block(
 // build() — top-level graph
 // ---------------------------------------------------------------------------
 
-ggml_cgraph * clip_graph_granite_vision::build() {
+ggml_cgraph * clip_graph_granite4_vision::build() {
     GGML_ASSERT(model.patch_embeddings_0 != nullptr);
     GGML_ASSERT(model.position_embeddings != nullptr);
     GGML_ASSERT(model.class_embedding == nullptr);
@@ -342,7 +342,7 @@ ggml_cgraph * clip_graph_granite_vision::build() {
 // concatenating per-tile encoder outputs with the K-tiled, base-scaled
 // newline row. The gather index is built host-side.
 
-size_t granite_vision_n_assembled_output_tokens(
+size_t granite4_vision_n_assembled_output_tokens(
         const clip_ctx * ctx,
         const clip_image_f32_batch * batch) {
     GGML_ASSERT(batch != nullptr && !batch->entries.empty());
@@ -403,7 +403,7 @@ static std::vector<int32_t> g4v_build_gather_idx(
     return idx;
 }
 
-clip_assembler_granite_vision::clip_assembler_granite_vision(
+clip_assembler_granite4_vision::clip_assembler_granite4_vision(
         const clip_ctx * ctx,
         const float * per_tile_embd,
         int n_tiles, int grid_x, int grid_y)
@@ -427,7 +427,7 @@ clip_assembler_granite_vision::clip_assembler_granite_vision(
     gather_idx = g4v_build_gather_idx(n_tiles, n_per_tile, grid_x, grid_y);
 }
 
-ggml_tensor * clip_assembler_granite_vision::build(
+ggml_tensor * clip_assembler_granite4_vision::build(
         ggml_context * ctx0, ggml_cgraph * gf) {
     const int K = (int) model.qf_proj_blocks.size();
     GGML_ASSERT(K > 0);
@@ -482,7 +482,7 @@ ggml_tensor * clip_assembler_granite_vision::build(
     return out;
 }
 
-void clip_assembler_granite_vision::set_inputs(ggml_cgraph * gf) {
+void clip_assembler_granite4_vision::set_inputs(ggml_cgraph * gf) {
     ggml_tensor * in_per_tile = ggml_graph_get_tensor(gf, "g4v_assembler_per_tile_in");
     ggml_tensor * in_gather   = ggml_graph_get_tensor(gf, "g4v_assembler_gather_idx");
     GGML_ASSERT(in_per_tile != nullptr && in_gather != nullptr);

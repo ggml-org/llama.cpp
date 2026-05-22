@@ -192,8 +192,8 @@ struct clip_graph_kimik25 : clip_graph {
     ggml_tensor * resize_position_embeddings_3d(uint32_t interpolation_mode);
 };
 
-struct clip_graph_granite_vision : clip_graph {
-    clip_graph_granite_vision(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
+struct clip_graph_granite4_vision : clip_graph {
+    clip_graph_granite4_vision(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
     ggml_cgraph * build() override;
 };
 
@@ -206,7 +206,7 @@ struct clip_graph_granite_vision : clip_graph {
 // newline row. All model-specific knowledge (n_per_tile inference, gather
 // index construction, input tensor names) lives on the class below.
 
-struct clip_assembler_granite_vision : clip_assembler {
+struct clip_assembler_granite4_vision : clip_assembler {
     const clip_model & model;
     const float *      per_tile_embd; // borrowed, caller-owned lifetime
     int                n_tiles;
@@ -216,9 +216,9 @@ struct clip_assembler_granite_vision : clip_assembler {
     int                n_mmproj_embd;
     std::vector<int32_t> gather_idx;  // computed in constructor
 
-    clip_assembler_granite_vision(const clip_ctx * ctx,
-                                  const float * per_tile_embd,
-                                  int n_tiles, int grid_x, int grid_y);
+    clip_assembler_granite4_vision(const clip_ctx * ctx,
+                                   const float * per_tile_embd,
+                                   int n_tiles, int grid_x, int grid_y);
 
     ggml_tensor * build(ggml_context * ctx0, ggml_cgraph * gf) override;
     void set_inputs(ggml_cgraph * gf) override;
@@ -227,6 +227,6 @@ struct clip_assembler_granite_vision : clip_assembler {
 // Final assembled token count for a preprocessed tile batch. Called before
 // per-tile encoding (from add_media), so kept as a free function rather than
 // a method on the assembler class.
-size_t granite_vision_n_assembled_output_tokens(
+size_t granite4_vision_n_assembled_output_tokens(
         const clip_ctx * ctx,
         const clip_image_f32_batch * batch);
