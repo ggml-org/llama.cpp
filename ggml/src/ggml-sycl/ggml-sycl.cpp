@@ -3455,6 +3455,7 @@ static bool ggml_sycl_supports_dmmv(enum ggml_type type) {
         case GGML_TYPE_Q5_K:
         case GGML_TYPE_Q6_K:
         case GGML_TYPE_F16:
+        case GGML_TYPE_BF16:
             return true;
         default:
             return false;
@@ -3818,8 +3819,13 @@ static void opt_for_reorder(ggml_backend_sycl_context * ctx, const ggml_tensor *
 
 
 static bool can_use_dequantize_mul_mat_vec(const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
+    // The F16/BF16 qk=1 kernel iterates with stride 2*DMMV_X, requiring ne[0] to be
+    // a multiple of 2*DMMV_X. Quantized types use block-structured kernels that only
+    // need ne[0] % DMMV_X == 0.
+    const int64_t dmmv_x_required = (src0->type == GGML_TYPE_BF16 || src0->type == GGML_TYPE_F16) ?
+                                    2*GGML_SYCL_DMMV_X : GGML_SYCL_DMMV_X;
     return ggml_sycl_supports_dmmv(src0->type) && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32 &&
-           src0->ne[0] % GGML_SYCL_DMMV_X == 0 && src1->ne[1] == 1;
+           src0->ne[0] % dmmv_x_required == 0 && src1->ne[1] == 1;
 }
 
 static bool can_use_mul_mat_vec_q(const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
