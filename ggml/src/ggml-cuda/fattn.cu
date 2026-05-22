@@ -201,7 +201,7 @@ static void ggml_cuda_flash_attn_ext_mma_f16(ggml_backend_cuda_context & ctx, gg
                     break;
                 }
                 if (cc >= GGML_CUDA_CC_BLACKWELL) {
-                    if (Q->ne[1] <= 4 && K->ne[1] >= 65536) {
+                    if (K->ne[1] >= 65536) {
                         ggml_cuda_flash_attn_ext_mma_f16_switch_ncols1<576, 512, 16>(ctx, dst);
                         break;
                     }
