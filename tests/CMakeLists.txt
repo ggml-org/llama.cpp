@@ -260,7 +260,7 @@ endif()
 # libmtmd
 set(LLAMA_TEST_NAME test-mtmd-c-api)
 llama_build_and_test(test-mtmd-c-api.c)
-target_link_libraries(${LLAMA_TEST_NAME} PRIVATE mtmd)
+target_link_libraries(${LLAMA_TEST_NAME} PRIVATE mtmd common)
 unset(LLAMA_TEST_NAME)
 
 # GGUF model data fetcher library for tests that need real model metadata

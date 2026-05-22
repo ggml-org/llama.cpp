@@ -178,13 +178,11 @@ int main(int argc, char ** argv) {
                 output->push("data: " + chunk.dump() + "\n\n");
             };
 
-            auto audio_cb = [&output, &item](const std::vector<int16_t> & audio) {
-                item.check_abort();
-                if (output->aborted.load()) {
-                    return;
-                }
+            std::vector<int16_t> audio_buffer;
+            auto flush_audio = [&]() {
+                if (audio_buffer.empty()) return;
                 std::string audio_base64 =
-                    base64::encode(reinterpret_cast<const char *>(audio.data()), audio.size() * sizeof(audio.front()));
+                    base64::encode(reinterpret_cast<const char *>(audio_buffer.data()), audio_buffer.size() * sizeof(audio_buffer.front()));
                 json chunk = {
                     { "object",  "chat.completion.chunk"                                                           },
                     { "created", std::time(0)                                                                      },
@@ -197,12 +195,26 @@ int main(int argc, char ** argv) {
                                                  { "finish_reason", nullptr } } }) }
                 };
                 output->push("data: " + chunk.dump() + "\n\n");
+                audio_buffer.clear();
+            };
+
+            auto audio_cb = [&output, &item, &audio_buffer, &flush_audio](const std::vector<int16_t> & audio) {
+                item.check_abort();
+                if (output->aborted.load()) {
+                    return;
+                }
+                audio_buffer.insert(audio_buffer.end(), audio.begin(), audio.end());
+                if (audio_buffer.size() >= 2048) {
+                    flush_audio();
+                }
             };
 
             std::optional<std::string> err;
             if (runner.generate(item.messages, item.n_predict, text_cb, audio_cb, item.modalities)) {
                 err = runner.get_last_error();
             }
+
+            flush_audio();
 
             if (!output->aborted.load()) {
                 if (err) {
