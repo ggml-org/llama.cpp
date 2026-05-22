@@ -132,6 +132,23 @@ bool llm_graph_input_pos::can_reuse(const llm_graph_params & params) {
     return res;
 }
 
+void llm_graph_input_cca_mask::set_input(const llama_ubatch * ubatch) {
+    if (cca_mask) {
+        const int64_t n_tokens = ubatch->n_tokens;
+        // modeling_zaya.py ref: L1555-1558 (ZayaModel.forward)
+        //
+        // if attention_mask is not None:
+        //     cca_mask = attention_mask.clone()
+        // else:
+        //     cca_mask = None
+        //
+        // In llama.cpp, all tokens are valid (no padding tokens in the ubatch),
+        // so the mask is set to 1.0 for every token position.
+        std::vector<float> mask_data(n_tokens, 1.0f);
+        ggml_backend_tensor_set(cca_mask, mask_data.data(), 0, n_tokens * ggml_element_size(cca_mask));
+    }
+}
+
 void llm_graph_input_attn_temp::set_input(const llama_ubatch * ubatch) {
     if (ubatch->pos && attn_scale) {
         const int64_t n_tokens = ubatch->n_tokens;
@@ -1816,6 +1833,21 @@ ggml_tensor * llm_graph_context::build_inp_attn_scale() const {
     cur = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, 1, 1, n_tokens);
     ggml_set_input(cur);
     ggml_set_name(cur, "attn_scale");
+
+    res->add_input(std::move(inp));
+
+    return cur;
+}
+
+ggml_tensor * llm_graph_context::build_inp_cca_mask() const {
+    auto inp = std::make_unique<llm_graph_input_cca_mask>();
+
+    auto & cur = inp->cca_mask;
+
+    // shape: [1, n_tokens] for broadcasting with [n_embd, n_tokens] hidden states
+    cur = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, 1, n_tokens);
+    ggml_set_input(cur);
+    ggml_set_name(cur, "cca_mask");
 
     res->add_input(std::move(inp));
 

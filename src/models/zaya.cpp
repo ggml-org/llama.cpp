@@ -343,6 +343,17 @@ llama_model_zaya::graph::graph(const llama_model & model, const llm_graph_params
 
     ggml_tensor * inp_pos     = build_inp_pos();
     ggml_tensor * inp_out_ids = build_inp_out_ids();
+    ggml_tensor * inp_cca_mask = nullptr;
+    // modeling_zaya.py ref: L1555-1558 (ZayaModel.forward)
+    //
+    // if attention_mask is not None:
+    //     cca_mask = attention_mask.clone()
+    // else:
+    //     cca_mask = None
+    //
+    // Built unconditionally; set_input fills with 1.0 for all positions
+    // (padding mask is not available in llama.cpp ubatch).
+    inp_cca_mask = build_inp_cca_mask();
     ggml_tensor * residual    = nullptr;
     ggml_tensor * prev_router = nullptr;
 
@@ -458,6 +469,22 @@ llama_model_zaya::graph::graph(const llama_model & model, const llm_graph_params
                     cca_state->nb[1],
                     conv_state_size*ggml_element_size(cca_state));
             cb(prev_hs, "cca_prev_hs", il);
+
+            /*
+             * modeling_zaya.py ref: L325-328 (CCA.forward)
+             *
+             * if cca_mask is not None and hidden_states.shape[1] > 1:
+             *     # Only applying in prefill
+             *     dtype = hidden_states.dtype
+             *     hidden_states = (hidden_states * cca_mask[:, :, None]).to(dtype)
+             *
+             * In ggml: cur is [n_embd, n_tokens], cca_mask is [1, n_tokens].
+             * Broadcasting along dim 0 zeros out hidden states of masked positions.
+             */
+            if (inp_cca_mask != nullptr && n_seq_tokens > 1) {
+                cur = ggml_mul(ctx0, cur, inp_cca_mask);
+                cb(cur, "cca_masked", il);
+            }
 
             /*
              * zaya.py ref: L177-179
