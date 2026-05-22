@@ -212,6 +212,19 @@ GeForce RTX 3070      8.6
 cmake -B build -DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES="86;89"
 ```
 
+#### 3. Diagnosing arch-coverage runtime crashes
+
+If your binary builds successfully but crashes on the first MoE forward pass with
+`ggml_cuda_compute_forward: MUL_MAT_ID failed / CUDA error: invalid argument`, check
+the `system_info` line in startup logs for `CUDA : ARCHS = <N>`. If `<N>` does not
+include your GPU's compute capability, the binary may have been built without
+SASS coverage for your device — in our experience this manifests as MoE expert-routing
+crashes even when standard matmul/attention paths run normally.
+
+This commonly happens for container builds where `nvcc -arch=native` cannot probe
+a GPU during build. Rebuild with explicit arch coverage as described above, or
+disable native detection with `-DGGML_NATIVE=OFF`.
+
 ### Overriding the CUDA Version
 
 If you have multiple CUDA installations on your system and want to compile llama.cpp for a specific one, e.g. for CUDA 11.7 installed under `/opt/cuda-11.7`:
