@@ -524,7 +524,7 @@ static results_perplexity perplexity(llama_context * ctx, const common_params & 
         logits_stream.write((const char *)&n_chunk, sizeof(n_chunk));
         logits_stream.write((const char *)tokens.data(), n_chunk*n_ctx*sizeof(tokens[0]));
         const int nv = 2*((n_vocab + 1)/2) + 4;
-        log_probs.resize(n_ctx * nv);
+        log_probs.resize(size_t(n_ctx) * nv);
     }
 
     // We get the logits for all the tokens in the context window (params.n_ctx)
