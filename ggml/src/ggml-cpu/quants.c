@@ -532,14 +532,18 @@ void ggml_vec_dot_stq1_0_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs,
     for (int i = 0; i < nb; ++i) {
         int32_t sumi = 0;
 
+        // Groups are stride-16 within each 64-byte chunk: group g (chunk-local
+        // in 0..15) pairs with {y[c*64 + g + p*16] : p in 0..3}.
         for (int g = 0; g < QK_K/4; ++g) {
             const uint8_t code = (x[i].qs[g/2] >> (4 * (g & 1))) & 0x0F;
             const uint8_t sign = (x[i].sign[g/8] >> (g % 8)) & 0x01;
             const uint8_t qpack = stq1_0_codebook[((uint32_t) sign << 4) | code];
 
+            const int chunk = g / 16;
+            const int gloc  = g % 16;
             for (int p = 0; p < 4; ++p) {
                 const int q = (qpack >> (2*p)) & 0x3;
-                sumi += (q - 1) * y[i].qs[g*4 + p];
+                sumi += (q - 1) * y[i].qs[chunk*64 + gloc + p*16];
             }
         }
 

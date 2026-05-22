@@ -1347,17 +1347,6 @@ UseGgmlGemm1:;
                     from_float((float *)((char *) src1->data + i13*nb13 + i12*nb12 + i11*nb11 + ne10_block_start*bs*nb10),
                                (void *)               (wdata + i13*nbw3 + i12*nbw2 + i11*nbw1 + ne10_block_start*nbw0),
                                (ne10_block_end - ne10_block_start) * bs);
-
-#if defined(__aarch64__) || defined(__arm__) || defined(_M_ARM) || defined(_M_ARM64)
-                    // STQ1_0 NEON vec_dot wants Q8_K activations in planar
-                    // layout (vld1q reads); deinterleave once here so the
-                    // per-row dot loop amortizes it across all M weight rows.
-                    if (src0->type == GGML_TYPE_STQ1_0) {
-                        stq1_0_repack_q8_K_inplace(
-                            (void *)(wdata + i13*nbw3 + i12*nbw2 + i11*nbw1 + ne10_block_start*nbw0),
-                            (int)(ne10_block_end - ne10_block_start));
-                    }
-#endif
                 }
             }
         }

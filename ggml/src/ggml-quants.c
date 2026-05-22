@@ -2354,15 +2354,19 @@ void quantize_row_stq1_0_ref(const float * GGML_RESTRICT x, block_stq1_0 * GGML_
         }
         y[i].d = GGML_FP32_TO_FP16(amax);
 
-        // STQ1_0 forces exactly one zero per group of 4. Pick the smallest-|x|
-        // lane as that zero; project the other 3 onto {-d, +d} via sign.
+        // STQ1_0 forces exactly one zero per group of 4. Groups are stride-16
+        // within each 64-weight chunk: group g (chunk-local in 0..15) covers
+        // {x[c*64 + g + p*16] : p in 0..3}. Pick the smallest-|x| lane as zero;
+        // project the other 3 onto {-d, +d} via sign.
         for (int g = 0; g < QK_K/4; ++g) {
-            const float * xv = x + g*4;
+            const int chunk = g / 16;
+            const int gloc  = g % 16;
+            const float * base = x + chunk*64 + gloc;
 
             int   zero_pos = 0;
-            float min_abs  = fabsf(xv[0]);
+            float min_abs  = fabsf(base[0]);
             for (int p = 1; p < 4; ++p) {
-                const float a = fabsf(xv[p]);
+                const float a = fabsf(base[p*16]);
                 if (a < min_abs) { min_abs = a; zero_pos = p; }
             }
 
@@ -2373,7 +2377,7 @@ void quantize_row_stq1_0_ref(const float * GGML_RESTRICT x, block_stq1_0 * GGML_
                 if (p == zero_pos) {
                     lane = 0x1;
                 } else {
-                    lane = (xv[p] < 0.0f) ? 0x0 : 0x2;
+                    lane = (base[p*16] < 0.0f) ? 0x0 : 0x2;
                 }
                 qpack |= (uint8_t)(lane << (2*p));
             }
@@ -2476,16 +2480,22 @@ void dequantize_row_stq1_0(const block_stq1_0 * GGML_RESTRICT x, float * GGML_RE
     for (int64_t i = 0; i < nb; ++i) {
         const float d = GGML_FP16_TO_FP32(x[i].d);
 
+        // Groups are stride-16 within each 64-weight chunk: group g (chunk-local
+        // in 0..15) writes to {y[c*64 + g + p*16] : p in 0..3}.
         for (int g = 0; g < QK_K/4; ++g) {
             const uint8_t code = (x[i].qs[g/2] >> (4 * (g & 1))) & 0x0F;
             const uint8_t sign = (x[i].sign[g/8] >> (g % 8)) & 0x01;
             const uint8_t qpack = stq1_0_codebook[((uint32_t) sign << 4) | code];
 
+            const int chunk = g / 16;
+            const int gloc  = g % 16;
             for (int p = 0; p < 4; ++p) {
                 const int q = (qpack >> (2*p)) & 0x3;
-                *y++ = (float) (q - 1) * d;
+                y[chunk*64 + gloc + p*16] = (float) (q - 1) * d;
             }
         }
+
+        y += QK_K;
     }
 }
 
