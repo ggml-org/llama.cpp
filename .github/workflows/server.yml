@@ -54,7 +54,11 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  approval:
+    uses: ./.github/workflows/approval.yml
+
   server:
+    needs: [approval]
     runs-on: ubuntu-latest
 
     name: server (${{ matrix.wf_name }})
@@ -132,6 +136,7 @@ jobs:
           SLOW_TESTS=1 pytest -v -x
 
   server-windows:
+    needs: [approval]
     runs-on: windows-2022
 
     steps:

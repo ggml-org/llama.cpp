@@ -55,7 +55,11 @@ env:
   LLAMA_LOG_TIMESTAMPS: 1
 
 jobs:
+  approval:
+    uses: ./.github/workflows/approval.yml
+
   determine-tag:
+    needs: [approval]
     name: Determine tag name
     runs-on: ubuntu-slim
     outputs:

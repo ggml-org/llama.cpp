@@ -27,7 +27,11 @@ env:
   LLAMA_LOG_TIMESTAMPS: 1
 
 jobs:
+  approval:
+    uses: ./.github/workflows/approval.yml
+
   ubuntu-latest-sanitizer:
+    needs: [approval]
     runs-on: ubuntu-latest
 
     continue-on-error: true

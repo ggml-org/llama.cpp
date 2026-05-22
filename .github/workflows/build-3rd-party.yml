@@ -27,7 +27,11 @@ env:
   LLAMA_LOG_TIMESTAMPS: 1
 
 jobs:
+  approval:
+    uses: ./.github/workflows/approval.yml
+
   ubuntu-24-llguidance:
+    needs: [approval]
     runs-on: ${{ 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
 
     steps:

@@ -34,7 +34,11 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  approval:
+    uses: ./.github/workflows/approval.yml
+
   ui-build:
+    needs: [approval]
     name: Build static output
     uses: ./.github/workflows/ui-build.yml
 

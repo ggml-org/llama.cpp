@@ -34,7 +34,11 @@ env:
   LLAMA_LOG_TIMESTAMPS: 1
 
 jobs:
+  approval:
+    uses: ./.github/workflows/approval.yml
+
   ubuntu-riscv64-native-sanitizer:
+    needs: [approval]
     runs-on: ubuntu-24.04-riscv
 
     continue-on-error: true

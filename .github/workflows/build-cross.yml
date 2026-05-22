@@ -21,6 +21,9 @@ concurrency:
 
 
 jobs:
+  approval:
+    uses: ./.github/workflows/approval.yml
+
   # ubuntu-24-riscv64-cpu-cross:
   #   runs-on: ubuntu-24.04
 
@@ -159,6 +162,7 @@ jobs:
   #         cmake --build build --config Release -j $(nproc)
 
   debian-13-loongarch64-cpu-cross:
+    needs: [approval]
     runs-on: ${{ 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
     container: debian@sha256:653dfb9f86c3782e8369d5f7d29bb8faba1f4bff9025db46e807fa4c22903671
 
@@ -214,6 +218,7 @@ jobs:
           cmake --build build --config Release -j $(nproc)
 
   debian-13-loongarch64-vulkan-cross:
+    needs: [approval]
     runs-on: ${{ 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
     container: debian@sha256:653dfb9f86c3782e8369d5f7d29bb8faba1f4bff9025db46e807fa4c22903671
 
@@ -273,6 +278,7 @@ jobs:
           cmake --build build --config Release -j $(nproc)
 
   ubuntu-24-riscv64-cpu-spacemit-ime-cross:
+    needs: [approval]
     runs-on: ubuntu-24.04
 
     env:

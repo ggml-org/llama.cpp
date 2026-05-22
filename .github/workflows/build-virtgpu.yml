@@ -27,7 +27,11 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  approval:
+    uses: ./.github/workflows/approval.yml
+
   ubuntu-24-virtgpu:
+    needs: [approval]
     runs-on: ${{ 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
 
     steps:

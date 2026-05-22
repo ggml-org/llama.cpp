@@ -36,7 +36,11 @@ env:
   LLAMA_LOG_TIMESTAMPS: 1
 
 jobs:
+  approval:
+    uses: ./.github/workflows/approval.yml
+
   ubuntu-24-vulkan-llvmpipe:
+    needs: [approval]
     runs-on: ubuntu-24.04
 
     steps:

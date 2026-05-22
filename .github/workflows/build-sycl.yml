@@ -34,8 +34,11 @@ env:
   LLAMA_LOG_TIMESTAMPS: 1
 
 jobs:
+  approval:
+    uses: ./.github/workflows/approval.yml
 
   ubuntu-24-sycl:
+    needs: [approval]
     strategy:
       matrix:
         build: [fp32, fp16]
@@ -108,6 +111,7 @@ jobs:
           time cmake --build build --config Release -j $(nproc)
 
   windows-latest-sycl:
+    needs: [approval]
     runs-on: windows-2022
 
     defaults:

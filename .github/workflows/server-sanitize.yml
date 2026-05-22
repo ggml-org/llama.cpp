@@ -36,7 +36,11 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  approval:
+    uses: ./.github/workflows/approval.yml
+
   server:
+    needs: [approval]
     runs-on: ubuntu-latest
 
     strategy:

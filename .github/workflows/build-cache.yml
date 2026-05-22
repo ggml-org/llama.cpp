@@ -10,7 +10,11 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  approval:
+    uses: ./.github/workflows/approval.yml
+
   ubuntu-24-vulkan-cache:
+    needs: [approval]
     runs-on: ubuntu-24.04
 
     steps:
@@ -64,6 +68,7 @@ jobs:
   #        version: ${{ env.SPACEMIT_IME_TOOLCHAIN_VERSION }}
 
   ubuntu-24-openvino-cache:
+    needs: [approval]
     runs-on: ubuntu-24.04
 
     env:
@@ -92,6 +97,7 @@ jobs:
           version_full: ${{ env.OPENVINO_VERSION_FULL }}
 
   windows-2022-rocm-cache:
+    needs: [approval]
     runs-on: windows-2022
 
     env:

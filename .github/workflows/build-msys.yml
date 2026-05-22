@@ -20,7 +20,11 @@ env:
   LLAMA_LOG_TIMESTAMPS: 1
 
 jobs:
+  approval:
+    uses: ./.github/workflows/approval.yml
+
   windows-msys2:
+    needs: [approval]
     runs-on: windows-2025
 
     strategy:

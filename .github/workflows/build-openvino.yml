@@ -34,7 +34,11 @@ env:
   LLAMA_LOG_TIMESTAMPS: 1
 
 jobs:
+  approval:
+    uses: ./.github/workflows/approval.yml
+
   ubuntu-24-openvino:
+    needs: [approval]
     name: ubuntu-24-openvino-${{ matrix.openvino_device }}
 
     concurrency:
