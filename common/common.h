@@ -930,7 +930,7 @@ void common_batch_add(
 bool common_prompt_batch_decode(
               struct llama_context * ctx,
     const std::vector<llama_token> & all_tokens,
-                               int   n_tokens,
+                               int   n_new,
                                int & n_past,
                                int   n_batch,
                   std::string_view   state_path,

@@ -1964,20 +1964,20 @@ bool common_replay_last_token(struct llama_context * ctx, llama_token last_token
 bool common_prompt_batch_decode(
               struct llama_context * ctx,
     const std::vector<llama_token> & all_tokens,
-                               int   n_tokens,
+                               int   n_new,
                                int & n_past,
                                int   n_batch,
                   std::string_view   state_path,
                               bool   save_state) {
-    if (n_tokens == 0) {
+    if (n_new == 0) {
         return true;
     }
-    const int offset = all_tokens.size() - n_tokens;
+    const int offset = all_tokens.size() - n_new;
 
-    if (save_state && n_tokens > 1) {
-        const int n_tokens_before_last = n_tokens - 1;
+    if (save_state && n_new > 1) {
+        const int n_tokens_before_last = n_new - 1;
 
-        GGML_ASSERT(n_tokens <= n_batch);
+        GGML_ASSERT(n_new <= n_batch);
 
         // Decode all but the last token so we can save the memory state before decoding the last token.
         // This is done so we can restore the session state later and replay the last token.
@@ -1991,7 +1991,7 @@ bool common_prompt_batch_decode(
         n_past += n_tokens_before_last;
 
         llama_state_save_file(ctx, state_path.data(), all_tokens.data(), all_tokens.size());
-        LOG_INF("saved session before last token to %s, n_tokens = %zu\n", state_path.data(), all_tokens.size());
+        LOG_INF("saved session before last token to %s, n_new = %zu\n", state_path.data(), all_tokens.size());
 
         llama_token last_token = all_tokens.back();
         llama_batch batch = llama_batch_get_one(&last_token, 1);
@@ -2004,11 +2004,11 @@ bool common_prompt_batch_decode(
         }
         n_past++;
     } else {
-        if (llama_decode(ctx, llama_batch_get_one(const_cast<llama_token*>(all_tokens.data() + offset), n_tokens))) {
+        if (llama_decode(ctx, llama_batch_get_one(const_cast<llama_token*>(all_tokens.data() + offset), n_new))) {
             LOG_ERR("%s : failed to eval\n", __func__);
             return false;
         }
-        n_past += n_tokens;
+        n_past += n_new;
     }
 
     return true;
