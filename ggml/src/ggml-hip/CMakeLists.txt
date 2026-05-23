@@ -61,6 +61,7 @@ file(GLOB   GGML_HEADERS_ROCM "../ggml-cuda/*.cuh")
 list(APPEND GGML_HEADERS_ROCM "../../include/ggml-cuda.h")
 
 file(GLOB   GGML_SOURCES_ROCM "../ggml-cuda/*.cu")
+list(APPEND GGML_SOURCES_ROCM "../../rocmfp4/rocmfp4_hip.cu")
 file(GLOB   SRCS "../ggml-cuda/template-instances/fattn-tile*.cu")
 list(APPEND GGML_SOURCES_ROCM ${SRCS})
 file(GLOB   SRCS "../ggml-cuda/template-instances/fattn-mma*.cu")
@@ -78,6 +79,8 @@ else()
     list(APPEND GGML_SOURCES_ROCM
         ../ggml-cuda/template-instances/fattn-vec-instance-f16-f16.cu
         ../ggml-cuda/template-instances/fattn-vec-instance-q4_0-q4_0.cu
+        ../ggml-cuda/template-instances/fattn-vec-instance-q4_0_rocmfp4-q4_0_rocmfp4.cu
+        ../ggml-cuda/template-instances/fattn-vec-instance-q4_0_rocmfp4_fast-q4_0_rocmfp4_fast.cu
         ../ggml-cuda/template-instances/fattn-vec-instance-q8_0-q8_0.cu
         ../ggml-cuda/template-instances/fattn-vec-instance-bf16-bf16.cu)
 endif()
@@ -94,7 +97,7 @@ endif()
 
 add_compile_definitions(GGML_USE_HIP)
 
-if (GGML_CUDA_FORCE_MMQ)
+if (GGML_HIP_FORCE_MMQ OR GGML_CUDA_FORCE_MMQ)
     add_compile_definitions(GGML_CUDA_FORCE_MMQ)
 endif()
 

@@ -120,6 +120,8 @@ if (CUDAToolkit_FOUND)
         list(APPEND GGML_SOURCES_CUDA
             template-instances/fattn-vec-instance-f16-f16.cu
             template-instances/fattn-vec-instance-q4_0-q4_0.cu
+            template-instances/fattn-vec-instance-q4_0_rocmfp4-q4_0_rocmfp4.cu
+            template-instances/fattn-vec-instance-q4_0_rocmfp4_fast-q4_0_rocmfp4_fast.cu
             template-instances/fattn-vec-instance-q8_0-q8_0.cu
             template-instances/fattn-vec-instance-bf16-bf16.cu)
     endif()

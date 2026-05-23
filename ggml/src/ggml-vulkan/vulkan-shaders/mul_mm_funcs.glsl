@@ -488,21 +488,36 @@ void load_a_to_shmem(const uint pos_a, const uint row, const uint col, const uin
                                                   kvalues_iq4nl[bitfieldExtract(vui, 8, 4)]);
             buf_a[buf_idx + 8] = d * FLOAT_TYPEV2(kvalues_iq4nl[bitfieldExtract(vui, 4, 4)],
                                                   kvalues_iq4nl[vui >> 12]);
-#elif defined(DATA_A_MXFP4)
+#elif defined(DATA_A_MXFP4) || defined(DATA_A_ROCMFP4) || defined(DATA_A_ROCMFP4_FAST)
             const uint idx = pos_a + col * p.stride_a / LOAD_VEC_A + row;
             const uint buf_idx = col * SHMEM_STRIDE + row * LOAD_VEC_A / 4;
 
             const uint ib = idx / 8;
             const uint iqs = (idx & 0x07) * 2;
 
-            const float d = e8m0_to_fp32(data_a[ib].e) * 0.5;
             const uint vui = uint(data_a[ib].qs[iqs]);
             const uint vui2 = uint(data_a[ib].qs[iqs+1]);
 
+#if defined(DATA_A_ROCMFP4)
+            const float d0 = ue4m3_to_fp32(data_a[ib].e[0]);
+            const float d1 = ue4m3_to_fp32(data_a[ib].e[1]);
+            buf_a[buf_idx    ] = FLOAT_TYPEV2(float(kvalues_rocmfp4[vui  & 0xF]) * d0,
+                                              float(kvalues_rocmfp4[vui2 & 0xF]) * d0);
+            buf_a[buf_idx + 8] = FLOAT_TYPEV2(float(kvalues_rocmfp4[vui  >>  4]) * d1,
+                                              float(kvalues_rocmfp4[vui2 >>  4]) * d1);
+#elif defined(DATA_A_ROCMFP4_FAST)
+            const float d = ue4m3_to_fp32(data_a[ib].e);
+            buf_a[buf_idx    ] = FLOAT_TYPEV2(float(kvalues_rocmfp4[vui  & 0xF]) * d,
+                                              float(kvalues_rocmfp4[vui2 & 0xF]) * d);
+            buf_a[buf_idx + 8] = FLOAT_TYPEV2(float(kvalues_rocmfp4[vui  >>  4]) * d,
+                                              float(kvalues_rocmfp4[vui2 >>  4]) * d);
+#else
+            const float d = e8m0_to_fp32(data_a[ib].e) * 0.5;
             buf_a[buf_idx    ] = FLOAT_TYPEV2(kvalues_mxfp4[vui  & 0xF] * d,
                                               kvalues_mxfp4[vui2 & 0xF] * d);
             buf_a[buf_idx + 8] = FLOAT_TYPEV2(kvalues_mxfp4[vui  >>  4] * d,
                                               kvalues_mxfp4[vui2 >>  4] * d);
+#endif
 #elif defined(DATA_A_NVFP4)
             const uint idx = pos_a + col * p.stride_a / LOAD_VEC_A + row;
             // lo and hi nibbles are 8 elements apart, which doesn't quite line up with

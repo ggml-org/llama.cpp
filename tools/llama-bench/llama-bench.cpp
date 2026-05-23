@@ -496,6 +496,12 @@ static ggml_type ggml_type_from_name(const std::string & s) {
     if (s == "iq4_nl") {
         return GGML_TYPE_IQ4_NL;
     }
+    if (s == "q4_0_rocmfp4") {
+        return GGML_TYPE_Q4_0_ROCMFP4;
+    }
+    if (s == "q4_0_rocmfp4_fast") {
+        return GGML_TYPE_Q4_0_ROCMFP4_FAST;
+    }
 
     return GGML_TYPE_COUNT;
 }

@@ -1,4 +1,5 @@
 #include "common.cuh"
+#include "../../rocmfp4/rocmfp4_hip_scale.cuh"
 
 static __device__ __forceinline__ void dequantize_q1_0(const void * vx, const int64_t ib, const int iqs, float2 & v){
     const block_q1_0 * x = (const block_q1_0 *) vx;
@@ -48,6 +49,27 @@ static __device__ __forceinline__ void dequantize_q4_1(const void * vx, const in
 
     v.x = (v.x * dm.x) + dm.y;
     v.y = (v.y * dm.x) + dm.y;
+}
+
+static __device__ __forceinline__ void dequantize_rocmfp4(const void * vx, const int64_t ib, const int iqs, float2 & v) {
+    const block_rocmfp4 * x = (const block_rocmfp4 *) vx;
+
+    const int q = x[ib].qs[iqs];
+    const float d0 = rocmfp4_ue4m3_to_fp32_half_finite(x[ib].e[0]);
+    const float d1 = rocmfp4_ue4m3_to_fp32_half_finite(x[ib].e[1]);
+
+    v.x = d0 * rocmfp4_decode_i8(q);
+    v.y = d1 * rocmfp4_decode_i8(q >> 4);
+}
+
+static __device__ __forceinline__ void dequantize_rocmfp4_fast(const void * vx, const int64_t ib, const int iqs, float2 & v) {
+    const block_rocmfp4_fast * x = (const block_rocmfp4_fast *) vx;
+
+    const int q = x[ib].qs[iqs];
+    const float d = rocmfp4_ue4m3_to_fp32_half_finite(x[ib].e);
+
+    v.x = d * rocmfp4_decode_i8(q);
+    v.y = d * rocmfp4_decode_i8(q >> 4);
 }
 
 static __device__ __forceinline__ void dequantize_q5_0(const void * vx, const int64_t ib, const int iqs, float2 & v){

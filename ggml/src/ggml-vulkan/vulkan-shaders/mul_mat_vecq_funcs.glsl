@@ -22,6 +22,19 @@ FLOAT_TYPE get_dm(uint ib) {
 }
 #endif
 
+#if defined(DATA_A_ROCMFP4)
+FLOAT_TYPEV2 get_dm(uint ib) {
+    return FLOAT_TYPEV2(ue4m3_to_fp32(data_a[ib].e[0]), ue4m3_to_fp32(data_a[ib].e[1]));
+}
+#endif
+
+#if defined(DATA_A_ROCMFP4_FAST)
+FLOAT_TYPEV2 get_dm(uint ib) {
+    const FLOAT_TYPE d = FLOAT_TYPE(ue4m3_to_fp32(data_a[ib].e));
+    return FLOAT_TYPEV2(d, d);
+}
+#endif
+
 #if defined(DATA_A_Q2_K)
 FLOAT_TYPEV2 get_dm(uint ib) {
     const uint ib_k = ib / 8;
@@ -112,8 +125,8 @@ FLOAT_TYPE mul_q8_1(const int32_t q_sum, const float da, const vec2 dsb, const i
 }
 #endif
 
-#if defined(DATA_A_MXFP4)
-// 1-byte loads for mxfp4 blocks (17 bytes)
+#if defined(DATA_A_MXFP4) || defined(DATA_A_ROCMFP4) || defined(DATA_A_ROCMFP4_FAST)
+// 1-byte quant loads for microscaled FP4 blocks. ROCmFP4 uses 18-byte dual-scale blocks.
 i32vec2 repack(uint ib, uint iqs) {
     const uint32_t qs = pack32(u8vec4(data_a[ib].qs[iqs * 4    ],
                                       data_a[ib].qs[iqs * 4 + 1],
@@ -123,12 +136,39 @@ i32vec2 repack(uint ib, uint iqs) {
     const u8vec4 i_a0 = unpack8( qs       & 0x0F0F0F0F);
     const u8vec4 i_a1 = unpack8((qs >> 4) & 0x0F0F0F0F);
 
+#if defined(DATA_A_ROCMFP4) || defined(DATA_A_ROCMFP4_FAST)
+    return i32vec2(pack32(i8vec4(kvalues_rocmfp4[i_a0.x], kvalues_rocmfp4[i_a0.y], kvalues_rocmfp4[i_a0.z], kvalues_rocmfp4[i_a0.w])),
+                   pack32(i8vec4(kvalues_rocmfp4[i_a1.x], kvalues_rocmfp4[i_a1.y], kvalues_rocmfp4[i_a1.z], kvalues_rocmfp4[i_a1.w])));
+#else
     return i32vec2(pack32(i8vec4(kvalues_mxfp4[i_a0.x], kvalues_mxfp4[i_a0.y], kvalues_mxfp4[i_a0.z], kvalues_mxfp4[i_a0.w])),
                    pack32(i8vec4(kvalues_mxfp4[i_a1.x], kvalues_mxfp4[i_a1.y], kvalues_mxfp4[i_a1.z], kvalues_mxfp4[i_a1.w])));
+#endif
 }
 
 FLOAT_TYPE mul_q8_1(const int32_t q_sum, const float da, const vec2 dsb, const int32_t sum_divisor) {
     return FLOAT_TYPE(da * dsb.x * float(q_sum) * 0.5);
+}
+#endif
+
+#if defined(DATA_A_ROCMFP4_FAST)
+FLOAT_TYPE mmvq_dot_product(const uint ib_a, const uint iqs) {
+    const i32vec2 data_a_qs = repack(ib_a, iqs);
+
+    const int32_t q_sum = dotPacked4x8EXT(data_a_qs.x, cache_b_qs[0]) +
+                          dotPacked4x8EXT(data_a_qs.y, cache_b_qs[1]);
+
+    const FLOAT_TYPE d = FLOAT_TYPE(ue4m3_to_fp32(data_a[ib_a].e));
+    return FLOAT_TYPE(cache_b_ds.x * float(q_sum) * d);
+}
+#elif defined(DATA_A_ROCMFP4)
+FLOAT_TYPE mmvq_dot_product(const uint ib_a, const uint iqs) {
+    const i32vec2 data_a_qs = repack(ib_a, iqs);
+
+    const int32_t q_sum0 = dotPacked4x8EXT(data_a_qs.x, cache_b_qs[0]);
+    const int32_t q_sum1 = dotPacked4x8EXT(data_a_qs.y, cache_b_qs[1]);
+
+    const FLOAT_TYPEV2 d = get_dm(ib_a);
+    return FLOAT_TYPE(cache_b_ds.x * (float(q_sum0) * d.x + float(q_sum1) * d.y));
 }
 #endif
 

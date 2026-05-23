@@ -39,6 +39,24 @@ int32_t get_k_qs(uint ib, uint iqs, uint a_offset) {
             return pack32(i16vec2(k_packed_q8_0.data[a_offset + ib].qs[iqs / 2],
                                   k_packed_q8_0.data[a_offset + ib].qs[iqs / 2 + 1]));
         }
+        case FA_TYPE_Q4_0_ROCMFP4: {
+            const uint qbase = iqs & 0xFu;
+            uint vui = pack32(u8vec4(k_packed_rocmfp4.data[a_offset + ib].qs[qbase + 0u],
+                                     k_packed_rocmfp4.data[a_offset + ib].qs[qbase + 1u],
+                                     k_packed_rocmfp4.data[a_offset + ib].qs[qbase + 2u],
+                                     k_packed_rocmfp4.data[a_offset + ib].qs[qbase + 3u]));
+            uint shift = (iqs & 0x10) >> 2;
+            return fa_rocmfp4_pack4_i8(vui >> shift);
+        }
+        case FA_TYPE_Q4_0_ROCMFP4_FAST: {
+            const uint qbase = iqs & 0xFu;
+            uint vui = pack32(u8vec4(k_packed_rocmfp4_fast.data[a_offset + ib].qs[qbase + 0u],
+                                     k_packed_rocmfp4_fast.data[a_offset + ib].qs[qbase + 1u],
+                                     k_packed_rocmfp4_fast.data[a_offset + ib].qs[qbase + 2u],
+                                     k_packed_rocmfp4_fast.data[a_offset + ib].qs[qbase + 3u]));
+            uint shift = (iqs & 0x10) >> 2;
+            return fa_rocmfp4_pack4_i8(vui >> shift);
+        }
         default: return 0;
     }
 }
@@ -52,6 +70,11 @@ FLOAT_TYPEV2 get_k_scale(uint ib, uint a_offset) {
         case FA_TYPE_Q5_0: return FLOAT_TYPEV2(FLOAT_TYPE(k_packed_q5_0.data[a_offset + ib].d), 0.0);
         case FA_TYPE_Q5_1: return FLOAT_TYPEV2(k_packed_q5_1_p32.data[a_offset + ib].dm);
         case FA_TYPE_Q8_0: return FLOAT_TYPEV2(FLOAT_TYPE(k_packed_q8_0.data[a_offset + ib].d), 0.0);
+        case FA_TYPE_Q4_0_ROCMFP4:
+            return FLOAT_TYPEV2(fa_rocmfp4_ue4m3_to_fp_half(k_packed_rocmfp4.data[a_offset + ib].e[0]),
+                                fa_rocmfp4_ue4m3_to_fp_half(k_packed_rocmfp4.data[a_offset + ib].e[1]));
+        case FA_TYPE_Q4_0_ROCMFP4_FAST:
+            return FLOAT_TYPEV2(fa_rocmfp4_ue4m3_to_fp_half(k_packed_rocmfp4_fast.data[a_offset + ib].e), 0.0);
         default: return FLOAT_TYPEV2(0);
     }
 }
@@ -91,6 +114,26 @@ void k_block_to_shmem(const uint buf_ib, const uint global_ib, const uint iqs, c
                                                       k_packed_q8_0.data[a_offset + global_ib].qs[iqs * 2 + 1]));
             break;
         }
+        case FA_TYPE_Q4_0_ROCMFP4: {
+            const uint qbase = (iqs & 3u) * 4u;
+            const uint shift = (iqs & 4u) != 0u ? 4u : 0u;
+            const uint vui = pack32(u8vec4(k_packed_rocmfp4.data[a_offset + global_ib].qs[qbase + 0u],
+                                           k_packed_rocmfp4.data[a_offset + global_ib].qs[qbase + 1u],
+                                           k_packed_rocmfp4.data[a_offset + global_ib].qs[qbase + 2u],
+                                           k_packed_rocmfp4.data[a_offset + global_ib].qs[qbase + 3u]));
+            kblocksh[buf_ib].qs[iqs] = fa_rocmfp4_pack4_i8(vui >> shift);
+            break;
+        }
+        case FA_TYPE_Q4_0_ROCMFP4_FAST: {
+            const uint qbase = (iqs & 3u) * 4u;
+            const uint shift = (iqs & 4u) != 0u ? 4u : 0u;
+            const uint vui = pack32(u8vec4(k_packed_rocmfp4_fast.data[a_offset + global_ib].qs[qbase + 0u],
+                                           k_packed_rocmfp4_fast.data[a_offset + global_ib].qs[qbase + 1u],
+                                           k_packed_rocmfp4_fast.data[a_offset + global_ib].qs[qbase + 2u],
+                                           k_packed_rocmfp4_fast.data[a_offset + global_ib].qs[qbase + 3u]));
+            kblocksh[buf_ib].qs[iqs] = fa_rocmfp4_pack4_i8(vui >> shift);
+            break;
+        }
     }
 
     if (iqs == 0) {
@@ -101,6 +144,13 @@ void k_block_to_shmem(const uint buf_ib, const uint global_ib, const uint iqs, c
             case FA_TYPE_Q5_0: kblocksh[buf_ib].dm = FLOAT_TYPEV2(FLOAT_TYPE(k_packed_q5_0.data[a_offset + global_ib].d), 0.0); break;
             case FA_TYPE_Q5_1: kblocksh[buf_ib].dm = FLOAT_TYPEV2(k_packed_q5_1_p32.data[a_offset + global_ib].dm); break;
             case FA_TYPE_Q8_0: kblocksh[buf_ib].dm = FLOAT_TYPEV2(FLOAT_TYPE(k_packed_q8_0.data[a_offset + global_ib].d), 0.0); break;
+            case FA_TYPE_Q4_0_ROCMFP4:
+                kblocksh[buf_ib].dm = FLOAT_TYPEV2(fa_rocmfp4_ue4m3_to_fp_half(k_packed_rocmfp4.data[a_offset + global_ib].e[0]),
+                                                    fa_rocmfp4_ue4m3_to_fp_half(k_packed_rocmfp4.data[a_offset + global_ib].e[1]));
+                break;
+            case FA_TYPE_Q4_0_ROCMFP4_FAST:
+                kblocksh[buf_ib].dm = FLOAT_TYPEV2(fa_rocmfp4_ue4m3_to_fp_half(k_packed_rocmfp4_fast.data[a_offset + global_ib].e), 0.0);
+                break;
         }
     }
 }
@@ -179,6 +229,10 @@ int32_t get_k_qs_shmem(const uint buf_ib, const uint pos) {
             return result | int32_t((qh_bits * 0x02040810u) & 0x10101010u);
         }
         case FA_TYPE_Q8_0: {
+            return kblocksh[buf_ib].qs[pos];
+        }
+        case FA_TYPE_Q4_0_ROCMFP4:
+        case FA_TYPE_Q4_0_ROCMFP4_FAST: {
             return kblocksh[buf_ib].qs[pos];
         }
         default: return 0;

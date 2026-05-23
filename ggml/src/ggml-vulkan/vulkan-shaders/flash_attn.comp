@@ -364,7 +364,9 @@ void main() {
                 // Q4_*/Q5_* take the block-8 fast path when one step covers a full
                 // block; Q8_0 always goes through the per-int get_k_qs* helpers
                 // (its qs is byte-packed, not nibble-packed).
-                const bool block8_fast = (d_per_step == 8) && (FaTypeK != FA_TYPE_Q8_0);
+                const bool rocmfp4_k = (FaTypeK == FA_TYPE_Q4_0_ROCMFP4) || (FaTypeK == FA_TYPE_Q4_0_ROCMFP4_FAST);
+                const bool rocmfp4_dual_k = FaTypeK == FA_TYPE_Q4_0_ROCMFP4;
+                const bool block8_fast = (d_per_step == 8) && (FaTypeK != FA_TYPE_Q8_0) && !rocmfp4_k;
 
                 if (SHMEM_STAGING != 0) {
                     const uint k_block_idx = (d_tid * (HSK_per_thread / 4) + d_block) / 8;
@@ -413,12 +415,27 @@ void main() {
                     const uint qiqs = (d_tid * (HSK_per_thread / 4) + d_block) % 8;
 
                     int32_t acc = 0;
+                    int32_t acc0 = 0;
+                    int32_t acc1 = 0;
                     [[unroll]] for (uint32_t d = 0; d < d_per_step; d++) {
-                        acc += dotPacked4x8EXT(Qf[qib].qs[qiqs + d], k_quants[d]);
+                        const int32_t dot_qk = dotPacked4x8EXT(Qf[qib].qs[qiqs + d], k_quants[d]);
+                        if (rocmfp4_dual_k) {
+                            if (((qiqs + d) & 4u) == 0u) {
+                                acc0 += dot_qk;
+                            } else {
+                                acc1 += dot_qk;
+                            }
+                        } else {
+                            acc += dot_qk;
+                        }
                     }
 
-                    Sf[r][c] += ACC_TYPE(acc) * ACC_TYPE(Qf[qib].ds.x) * k_dm.x;
-                    if ((d_tid * (HSK_per_thread / 4) + d_block) % 8 == 0) {
+                    if (rocmfp4_dual_k) {
+                        Sf[r][c] += ACC_TYPE(Qf[qib].ds.x) * (ACC_TYPE(acc0) * k_dm.x + ACC_TYPE(acc1) * k_dm.y);
+                    } else {
+                        Sf[r][c] += ACC_TYPE(acc) * ACC_TYPE(Qf[qib].ds.x) * k_dm.x;
+                    }
+                    if (!rocmfp4_k && (d_tid * (HSK_per_thread / 4) + d_block) % 8 == 0) {
                         Sf[r][c] += k_dot_correction(qib, k_dm);
                     }
                 }

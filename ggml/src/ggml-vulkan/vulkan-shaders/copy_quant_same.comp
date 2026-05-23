@@ -1,0 +1,55 @@
+#version 450
+
+#include "types.glsl"
+#include "generic_unary_head.glsl"
+
+layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;
+
+#if !defined(BLOCK_BYTES)
+#error BLOCK_BYTES must be defined
+#endif
+
+uint src0_block_idx(uint idx) {
+    const uint ne00b = p.ne00 / QUANT_K;
+    const uint nb02 = p.ne01 * ne00b;
+    const uint nb03 = p.ne02 * nb02;
+
+    const uint i03 = idx / nb03;
+    const uint r03 = idx - i03 * nb03;
+    const uint i02 = r03 / nb02;
+    const uint r02 = r03 - i02 * nb02;
+    const uint i01 = r02 / ne00b;
+    const uint i00b = r02 - i01 * ne00b;
+
+    return i03*p.nb03 + i02*p.nb02 + i01*p.nb01 + i00b*p.nb00;
+}
+
+uint dst_block_idx(uint idx) {
+    const uint ne10b = p.ne10 / QUANT_K;
+    const uint nb12 = p.ne11 * ne10b;
+    const uint nb13 = p.ne12 * nb12;
+
+    const uint i13 = idx / nb13;
+    const uint r13 = idx - i13 * nb13;
+    const uint i12 = r13 / nb12;
+    const uint r12 = r13 - i12 * nb12;
+    const uint i11 = r12 / ne10b;
+    const uint i10b = r12 - i11 * ne10b;
+
+    return i13*p.nb13 + i12*p.nb12 + i11*p.nb11 + i10b*p.nb10;
+}
+
+void main() {
+    const uint idx = get_idx();
+
+    if (idx >= p.ne) {
+        return;
+    }
+
+    const uint src_base = get_aoffset() + src0_block_idx(idx) * BLOCK_BYTES;
+    const uint dst_base = get_doffset() + dst_block_idx(idx) * BLOCK_BYTES;
+
+    [[unroll]] for (uint j = 0; j < BLOCK_BYTES; ++j) {
+        data_d[dst_base + j] = data_a[src_base + j];
+    }
+}

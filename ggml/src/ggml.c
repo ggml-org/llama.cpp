@@ -9,6 +9,7 @@
 
 // FIXME: required here for quantization functions
 #include "ggml-quants.h"
+#include "../rocmfp4/rocmfp4.h"
 
 #ifdef GGML_USE_CPU_HBM
 #include <hbwmalloc.h>
@@ -681,6 +682,22 @@ static const struct ggml_type_traits type_traits[GGML_TYPE_COUNT] = {
         .is_quantized             = true,
         .to_float                 = (ggml_to_float_t) dequantize_row_q4_0,
         .from_float_ref           = (ggml_from_float_t) quantize_row_q4_0_ref,
+    },
+    [GGML_TYPE_Q4_0_ROCMFP4] = {
+        .type_name                = "q4_0_rocmfp4",
+        .blck_size                = QK_ROCMFP4,
+        .type_size                = sizeof(block_rocmfp4),
+        .is_quantized             = true,
+        .to_float                 = (ggml_to_float_t) rocmfp4_dequantize_row_q4_0,
+        .from_float_ref           = (ggml_from_float_t) rocmfp4_quantize_row_q4_0_ref,
+    },
+    [GGML_TYPE_Q4_0_ROCMFP4_FAST] = {
+        .type_name                = "q4_0_rocmfp4_fast",
+        .blck_size                = QK_ROCMFP4,
+        .type_size                = sizeof(block_rocmfp4_fast),
+        .is_quantized             = true,
+        .to_float                 = (ggml_to_float_t) rocmfp4_dequantize_row_q4_0_fast,
+        .from_float_ref           = (ggml_from_float_t) rocmfp4_quantize_row_q4_0_fast_ref,
     },
     [GGML_TYPE_Q4_1] = {
         .type_name                = "q4_1",
@@ -1406,6 +1423,15 @@ enum ggml_type ggml_ftype_to_ggml_type(enum ggml_ftype ftype) {
         case GGML_FTYPE_MOSTLY_F16:           wtype = GGML_TYPE_F16;   break;
         case GGML_FTYPE_MOSTLY_BF16:          wtype = GGML_TYPE_BF16;  break;
         case GGML_FTYPE_MOSTLY_Q4_0:          wtype = GGML_TYPE_Q4_0;  break;
+        case GGML_FTYPE_MOSTLY_Q4_0_ROCMFP4:
+        case GGML_FTYPE_MOSTLY_Q4_0_ROCMFP4_LEAN:
+        case GGML_FTYPE_MOSTLY_Q4_0_ROCMFP4_COHERENT:
+            wtype = GGML_TYPE_Q4_0_ROCMFP4; break;
+        case GGML_FTYPE_MOSTLY_Q4_0_ROCMFP4_FAST:
+        case GGML_FTYPE_MOSTLY_Q4_0_ROCMFP4_FAST_COHERENT:
+        case GGML_FTYPE_MOSTLY_Q4_0_ROCMFP4_STRIX:
+        case GGML_FTYPE_MOSTLY_Q4_0_ROCMFP4_STRIX_LEAN:
+            wtype = GGML_TYPE_Q4_0_ROCMFP4_FAST; break;
         case GGML_FTYPE_MOSTLY_Q4_1:          wtype = GGML_TYPE_Q4_1;  break;
         case GGML_FTYPE_MOSTLY_Q1_0:          wtype = GGML_TYPE_Q1_0;  break;
         case GGML_FTYPE_MOSTLY_Q5_0:          wtype = GGML_TYPE_Q5_0;  break;
@@ -7692,6 +7718,12 @@ size_t ggml_quantize_chunk(
     switch (type) {
         case GGML_TYPE_Q1_0:    result = quantize_q1_0   (src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_Q4_0:    result = quantize_q4_0   (src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
+        case GGML_TYPE_Q4_0_ROCMFP4:
+            result = rocmfp4_quantize_q4_0(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix);
+            break;
+        case GGML_TYPE_Q4_0_ROCMFP4_FAST:
+            result = rocmfp4_quantize_q4_0_fast(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix);
+            break;
         case GGML_TYPE_Q4_1:    result = quantize_q4_1   (src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_Q5_0:    result = quantize_q5_0   (src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_Q5_1:    result = quantize_q5_1   (src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;

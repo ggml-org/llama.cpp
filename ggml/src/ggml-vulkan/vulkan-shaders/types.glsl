@@ -1715,6 +1715,35 @@ struct block_mxfp4
 #define A_TYPE block_mxfp4
 #endif
 
+#define QUANT_K_ROCMFP4 32
+#define QUANT_R_ROCMFP4 2
+
+struct block_rocmfp4
+{
+    uint8_t qs[QUANT_K_ROCMFP4/2];
+    uint8_t e[2];
+};
+
+struct block_rocmfp4_fast
+{
+    uint8_t qs[QUANT_K_ROCMFP4/2];
+    uint8_t e;
+};
+
+#if defined(DATA_A_ROCMFP4)
+#define QUANT_K QUANT_K_ROCMFP4
+#define QUANT_R QUANT_R_ROCMFP4
+#define QUANT_AUXF 1
+#define A_TYPE block_rocmfp4
+#endif
+
+#if defined(DATA_A_ROCMFP4_FAST)
+#define QUANT_K QUANT_K_ROCMFP4
+#define QUANT_R QUANT_R_ROCMFP4
+#define QUANT_AUXF 1
+#define A_TYPE block_rocmfp4_fast
+#endif
+
 #define QUANT_K_NVFP4 64
 #define QUANT_R_NVFP4 1
 
@@ -1764,9 +1793,19 @@ const int8_t kvalues_mxfp4_const[16] = {
 };
 
 shared int8_t kvalues_mxfp4[16];
+#endif
+
+#if defined(DATA_A_ROCMFP4) || defined(DATA_A_ROCMFP4_FAST)
+const int8_t kvalues_rocmfp4_const[16] = {
+    int8_t(0), int8_t(1), int8_t(2), int8_t(3), int8_t(4), int8_t(6), int8_t(8), int8_t(10),
+    int8_t(0), int8_t(-1), int8_t(-2), int8_t(-3), int8_t(-4), int8_t(-6), int8_t(-8), int8_t(-10),
+};
+
+shared int8_t kvalues_rocmfp4[16];
+#endif
 
 #if defined(DATA_A_NVFP4)
-// UE4M3 scale in NVFP4 blocks use only 7 bits; sign (bit 7) is always zero.
+// UE4M3 scale bytes use only 7 bits; sign (bit 7) is always zero.
 shared float ue4m3_fp32_lut[128];
 
 float ue4m3_to_fp32_build(uint u) {
@@ -1783,13 +1822,21 @@ float ue4m3_to_fp32_build(uint u) {
 }
 #endif
 
+#if defined(DATA_A_MXFP4) || defined(DATA_A_NVFP4) || defined(DATA_A_ROCMFP4) || defined(DATA_A_ROCMFP4_FAST)
 #define NEEDS_INIT_IQ_SHMEM
 void init_iq_shmem(uvec3 wgsize)
 {
     // copy the table into shared memory and sync
+#if defined(DATA_A_MXFP4) || defined(DATA_A_NVFP4)
     for (uint i = gl_LocalInvocationIndex.x; i < kvalues_mxfp4.length(); i += wgsize.x) {
         kvalues_mxfp4[i] = kvalues_mxfp4_const[i];
     }
+#endif
+#if defined(DATA_A_ROCMFP4) || defined(DATA_A_ROCMFP4_FAST)
+    for (uint i = gl_LocalInvocationIndex.x; i < kvalues_rocmfp4.length(); i += wgsize.x) {
+        kvalues_rocmfp4[i] = kvalues_rocmfp4_const[i];
+    }
+#endif
 #if defined(DATA_A_NVFP4)
     for (uint i = gl_LocalInvocationIndex.x; i < 128u; i += wgsize.x) {
         ue4m3_fp32_lut[i] = ue4m3_to_fp32_build(i);
@@ -1831,7 +1878,25 @@ float e8m0_to_fp32(uint8_t x) {
     return uintBitsToFloat(bits);
 }
 
-#if defined(DATA_A_NVFP4)
+#if defined(DATA_A_ROCMFP4) || defined(DATA_A_ROCMFP4_FAST)
+float ue4m3_to_fp32(uint8_t x) {
+    const uint u = uint(x);
+    if (u == 0u || u == 127u || u == 255u) {
+        return 0.0;
+    }
+
+    const uint exp = (u >> 3) & 15u;
+    const uint man = u & 7u;
+    if (exp == 0u) {
+        return float(man) * (1.0 / 1024.0);
+    }
+
+    // ROCmFP4 codebook values are stored at half scale, so return the
+    // already-halved UE4M3 value and keep shader call sites multiply-free.
+    const uint bits = (exp + 119u) << 23 | (man << 20);
+    return uintBitsToFloat(bits);
+}
+#elif defined(DATA_A_NVFP4)
 float ue4m3_to_fp32(uint8_t x) {
     return ue4m3_fp32_lut[uint(x)];
 }

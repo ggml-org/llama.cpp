@@ -1117,6 +1117,14 @@ GGML_TABLE_BEGIN(int8_t, kvalues_mxfp4, 16)
     0, 1, 2, 3, 4, 6, 8, 12, 0, -1, -2, -3, -4, -6, -8, -12,
 GGML_TABLE_END()
 
+// ROCmFP4 uses an E2M1-derived value set with the largest level retuned from
+// 12 to 10, plus dual half-block UE4M3 scales. Keeping this separate from
+// MXFP4 lets the experimental Strix Halo format evolve without changing stock
+// MXFP4/NVFP4 behavior.
+GGML_TABLE_BEGIN(int8_t, kvalues_rocmfp4, 16)
+    0, 1, 2, 3, 4, 6, 8, 10, 0, -1, -2, -3, -4, -6, -8, -10,
+GGML_TABLE_END()
+
 #define NGRID_IQ1S 2048
 #define IQ1S_DELTA 0.125f
 #define IQ1M_DELTA 0.125f
