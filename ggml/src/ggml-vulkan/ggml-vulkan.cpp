@@ -228,25 +228,21 @@ struct vk_command_pool {
 // Prevent simultaneous submissions to the same queue.
 // This could be per vk_queue if we stopped having two vk_queue structures
 // sharing the same vk::Queue.
-static std::mutex queue_mutex;
+
+struct vk_queue_handle {
+    vk::Queue queue;
+    std::mutex mutex;
+};
 
 struct vk_queue {
     uint32_t queue_family_index;
-    vk::Queue queue;
+    std::shared_ptr<vk_queue_handle> handle;
 
     vk_command_pool cmd_pool;
 
     vk::PipelineStageFlags stage_flags;
 
     bool transfer_only;
-
-    // copy everything except the cmd_pool
-    void copyFrom(vk_queue &other) {
-        queue_family_index = other.queue_family_index;
-        queue = other.queue;
-        stage_flags = other.stage_flags;
-        transfer_only = other.transfer_only;
-    }
 };
 
 static const char * ggml_backend_vk_buffer_type_name(ggml_backend_buffer_type_t buft);
@@ -618,8 +614,8 @@ struct vk_device_struct {
     uint32_t vendor_id;
     vk::DriverId driver_id;
     vk_device_architecture architecture;
-    vk_queue compute_queue;
-    vk_queue transfer_queue;
+    std::shared_ptr<vk_queue> compute_queue;
+    std::shared_ptr<vk_queue> transfer_queue;
     bool single_queue;
     bool support_async;
     bool async_use_transfer_queue;
@@ -907,8 +903,8 @@ struct vk_device_struct {
 
         ggml_vk_destroy_buffer(sync_staging);
 
-        compute_queue.cmd_pool.destroy(device);
-        transfer_queue.cmd_pool.destroy(device);
+        compute_queue->cmd_pool.destroy(device);
+        transfer_queue->cmd_pool.destroy(device);
 
         for (auto& pipeline : all_pipelines) {
             if (pipeline.expired()) {
@@ -2444,8 +2440,8 @@ static vk_command_buffer* ggml_vk_create_cmd_buffer(vk_device& device, vk_comman
 static void ggml_vk_submit(vk_context& ctx, vk::Fence fence) {
     if (ctx->seqs.empty()) {
         if (fence) {
-            std::lock_guard<std::mutex> guard(queue_mutex);
-            ctx->p->q->queue.submit({}, fence);
+            std::lock_guard<std::mutex> guard(ctx->p->q->handle->mutex);
+            ctx->p->q->handle->queue.submit({}, fence);
         }
         return;
     }
@@ -2514,8 +2510,8 @@ static void ggml_vk_submit(vk_context& ctx, vk::Fence fence) {
         }
     }
 
-    std::lock_guard<std::mutex> guard(queue_mutex);
-    ctx->p->q->queue.submit(submit_infos, fence);
+    std::lock_guard<std::mutex> guard(ctx->p->q->handle->mutex);
+    ctx->p->q->handle->queue.submit(submit_infos, fence);
 
     ctx->seqs.clear();
 }
@@ -2566,18 +2562,21 @@ static uint32_t ggml_vk_find_queue_family_index(std::vector<vk::QueueFamilyPrope
     abort();
 }
 
-static void ggml_vk_create_queue(vk_device& device, vk_queue& q, uint32_t queue_family_index, uint32_t queue_index, vk::PipelineStageFlags&& stage_flags, bool transfer_only) {
+static std::shared_ptr<vk_queue> ggml_vk_create_queue(vk_device& device, uint32_t queue_family_index, uint32_t queue_index, vk::PipelineStageFlags&& stage_flags, bool transfer_only) {
     VK_LOG_DEBUG("ggml_vk_create_queue()");
     std::lock_guard<std::recursive_mutex> guard(device->mutex);
 
-    q.queue_family_index = queue_family_index;
-    q.transfer_only = transfer_only;
+    auto q = std::make_shared<vk_queue>();
+    q->queue_family_index = queue_family_index;
+    q->transfer_only = transfer_only;
 
-    q.cmd_pool.init(device, &q);
+    q->handle = std::make_shared<vk_queue_handle>();
+    q->handle->queue = device->device.getQueue(queue_family_index, queue_index);
 
-    q.queue = device->device.getQueue(queue_family_index, queue_index);
+    q->cmd_pool.init(device, q.get());
 
-    q.stage_flags = stage_flags;
+    q->stage_flags = stage_flags;
+    return q;
 }
 
 static vk_context ggml_vk_create_context(ggml_backend_vk_context * ctx, vk_command_pool& p) {
@@ -2642,11 +2641,11 @@ static void ggml_vk_queue_command_pools_cleanup(vk_device& device) {
     // Arbitrary frequency to cleanup/reuse command buffers
     static constexpr uint32_t cleanup_frequency = 10;
 
-    if (device->compute_queue.cmd_pool.buffers_in_use() >= cleanup_frequency) {
-        ggml_vk_command_pool_cleanup(device, device->compute_queue.cmd_pool);
+    if (device->compute_queue->cmd_pool.buffers_in_use() >= cleanup_frequency) {
+        ggml_vk_command_pool_cleanup(device, device->compute_queue->cmd_pool);
     }
-    if (device->transfer_queue.cmd_pool.buffers_in_use() >= cleanup_frequency) {
-        ggml_vk_command_pool_cleanup(device, device->transfer_queue.cmd_pool);
+    if (device->transfer_queue->cmd_pool.buffers_in_use() >= cleanup_frequency) {
+        ggml_vk_command_pool_cleanup(device, device->transfer_queue->cmd_pool);
     }
 }
 
@@ -5695,7 +5694,7 @@ static vk_device ggml_vk_get_device(size_t idx) {
         device->device = device->physical_device.createDevice(device_create_info);
 
         // Queues
-        ggml_vk_create_queue(device, device->compute_queue, compute_queue_family_index, 0, { vk::PipelineStageFlagBits::eComputeShader | vk::PipelineStageFlagBits::eTransfer }, false);
+        device->compute_queue = ggml_vk_create_queue(device, compute_queue_family_index, 0, { vk::PipelineStageFlagBits::eComputeShader | vk::PipelineStageFlagBits::eTransfer }, false);
 
         // Shaders
         // Disable matmul tile sizes early if performance low or not supported
@@ -5773,13 +5772,16 @@ static vk_device ggml_vk_get_device(size_t idx) {
 
         if (!device->single_queue) {
             const uint32_t transfer_queue_index = compute_queue_family_index == transfer_queue_family_index ? 1 : 0;
-            ggml_vk_create_queue(device, device->transfer_queue, transfer_queue_family_index, transfer_queue_index, { vk::PipelineStageFlagBits::eTransfer }, true);
+            device->transfer_queue = ggml_vk_create_queue(device, transfer_queue_family_index, transfer_queue_index, { vk::PipelineStageFlagBits::eTransfer }, true);
 
             device->async_use_transfer_queue = prefers_transfer_queue || (getenv("GGML_VK_ASYNC_USE_TRANSFER_QUEUE") != nullptr);
         } else {
-            // TODO: Use pointer or reference to avoid copy
-            device->transfer_queue.copyFrom(device->compute_queue);
-            device->transfer_queue.cmd_pool.init(device, &device->transfer_queue);
+            device->transfer_queue = std::make_shared<vk_queue>();
+            device->transfer_queue->handle = device->compute_queue->handle;
+            device->transfer_queue->queue_family_index = device->compute_queue->queue_family_index;
+            device->transfer_queue->stage_flags = device->compute_queue->stage_flags;
+            device->transfer_queue->transfer_only = device->compute_queue->transfer_only;
+            device->transfer_queue->cmd_pool.init(device, device->transfer_queue.get());
 
             device->async_use_transfer_queue = false;
         }
@@ -6254,7 +6256,7 @@ static void ggml_vk_init(ggml_backend_vk_context * ctx, size_t idx) {
     ctx->fence = ctx->device->device.createFence({});
     ctx->almost_ready_fence = ctx->device->device.createFence({});
 
-    ctx->compute_cmd_pool.init(ctx->device, &ctx->device->compute_queue);
+    ctx->compute_cmd_pool.init(ctx->device, ctx->device->compute_queue.get());
     if (ctx->device->async_use_transfer_queue) {
         vk::SemaphoreTypeCreateInfo tci{ vk::SemaphoreType::eTimeline, 0 };
         vk::SemaphoreCreateInfo ci{};
@@ -6262,7 +6264,7 @@ static void ggml_vk_init(ggml_backend_vk_context * ctx, size_t idx) {
         ctx->transfer_semaphore.s = ctx->device->device.createSemaphore(ci);
         ctx->transfer_semaphore.value = 0;
 
-        ctx->transfer_cmd_pool.init(ctx->device, &ctx->device->transfer_queue);
+        ctx->transfer_cmd_pool.init(ctx->device, ctx->device->transfer_queue.get());
     }
 
     if (vk_perf_logger_enabled) {
@@ -7099,7 +7101,7 @@ static void ggml_vk_buffer_write_2d(vk_buffer& dst, size_t offset, const void * 
     } else {
         std::lock_guard<std::recursive_mutex> guard(dst->device->mutex);
 
-        vk_context subctx = ggml_vk_create_temporary_context(dst->device->transfer_queue.cmd_pool);
+        vk_context subctx = ggml_vk_create_temporary_context(dst->device->transfer_queue->cmd_pool);
         ggml_vk_ctx_begin(dst->device, subctx);
         bool ret = ggml_vk_buffer_write_2d_async(subctx, dst, offset, src, spitch, dpitch, width, height, true);
         GGML_ASSERT(ret);
@@ -7219,7 +7221,7 @@ static void ggml_vk_buffer_read_2d(vk_buffer& src, size_t offset, void * dst, si
     } else {
         std::lock_guard<std::recursive_mutex> guard(src->device->mutex);
 
-        vk_context subctx = ggml_vk_create_temporary_context(src->device->transfer_queue.cmd_pool);
+        vk_context subctx = ggml_vk_create_temporary_context(src->device->transfer_queue->cmd_pool);
         ggml_vk_ctx_begin(src->device, subctx);
         bool ret = ggml_vk_buffer_read_2d_async(subctx, src, offset, dst, spitch, dpitch, width, height, true);
         GGML_ASSERT(ret);
@@ -7256,7 +7258,7 @@ static void ggml_vk_buffer_copy(vk_buffer& dst, size_t dst_offset, vk_buffer& sr
         std::lock_guard<std::recursive_mutex> guard(src->device->mutex);
         VK_LOG_DEBUG("ggml_vk_buffer_copy(SINGLE_DEVICE, " << size << ")");
         // Copy within the device
-        vk_context subctx = ggml_vk_create_temporary_context(src->device->transfer_queue.cmd_pool);
+        vk_context subctx = ggml_vk_create_temporary_context(src->device->transfer_queue->cmd_pool);
         ggml_vk_ctx_begin(src->device, subctx);
         ggml_vk_buffer_copy_async(subctx, dst, dst_offset, src, src_offset, size);
         ggml_vk_ctx_end(subctx);
@@ -7299,7 +7301,7 @@ static void ggml_vk_buffer_memset(vk_buffer& dst, size_t offset, uint32_t c, siz
     }
 
     std::lock_guard<std::recursive_mutex> guard(dst->device->mutex);
-    vk_context subctx = ggml_vk_create_temporary_context(dst->device->transfer_queue.cmd_pool);
+    vk_context subctx = ggml_vk_create_temporary_context(dst->device->transfer_queue->cmd_pool);
     ggml_vk_ctx_begin(dst->device, subctx);
     subctx->s->buffer->buf.fillBuffer(dst->buffer, offset, size, c);
     ggml_vk_ctx_end(subctx);
@@ -14370,19 +14372,19 @@ static void ggml_vk_synchronize(ggml_backend_vk_context * ctx) {
                 1, &ctx->transfer_semaphore.value,
                 0, nullptr,
             };
-            vk::PipelineStageFlags stage = ctx->device->transfer_queue.stage_flags;
+            vk::PipelineStageFlags stage = ctx->device->transfer_queue->stage_flags;
             vk::SubmitInfo si{
                 1, &ctx->transfer_semaphore.s, &stage,
                 0, nullptr,
                 0, nullptr,
             };
             si.setPNext(&tl_info);
-            std::lock_guard<std::mutex> guard(queue_mutex);
-            ctx->device->compute_queue.queue.submit({ si }, ctx->fence);
+            std::lock_guard<std::mutex> guard(ctx->device->compute_queue->handle->mutex);
+            ctx->device->compute_queue->handle->queue.submit({ si }, ctx->fence);
             ctx->transfer_semaphore_last_submitted = ctx->transfer_semaphore.value;
         } else {
-            std::lock_guard<std::mutex> guard(queue_mutex);
-            ctx->device->compute_queue.queue.submit({}, ctx->fence);
+            std::lock_guard<std::mutex> guard(ctx->device->compute_queue->handle->mutex);
+            ctx->device->compute_queue->handle->queue.submit({}, ctx->fence);
         }
         ggml_vk_wait_for_fence(ctx);
         ctx->submit_pending = false;
@@ -14944,7 +14946,7 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
         vk::DebugUtilsLabelEXT dul = {};
         dul.pLabelName = "ggml_backend_vk_graph_compute";
         dul.color = std::array<float,4>{1.0f, 1.0f, 1.0f, 1.0f};
-        vk_instance.pfn_vkQueueBeginDebugUtilsLabelEXT(ctx->device->compute_queue.queue, reinterpret_cast<VkDebugUtilsLabelEXT*>(&dul));
+        vk_instance.pfn_vkQueueBeginDebugUtilsLabelEXT(ctx->device->compute_queue->handle->queue, reinterpret_cast<VkDebugUtilsLabelEXT*>(&dul));
     }
 
     ctx->prealloc_size_add_rms_partials_offset = 0;
