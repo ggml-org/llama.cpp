@@ -16,12 +16,10 @@
 |------|---------------|
 | `ggml/include/ggml-cpu.h` | Public enum — add `GGML_NUMA_STRATEGY_INTERLEAVE`, `GGML_NUMA_STRATEGY_CCD` |
 | `ggml/src/ggml-cpu/ggml-cpu.c` | NUMA interleave init/reset, CCD topology probe, CCD affinity in `set_numa_thread_affinity()` |
-| `ggml/src/ggml-cpu/ggml-cpu-impl.h` | `struct ggml_ccd_topology` definition |
-| `ggml/src/ggml-cpu/arch/x86/epyc-cpu.c` | AVX-512 VNNI vec_dot for Q8_0, Q4_K/Q8_K, BF16 (weak symbols, override quants.c when VNNI available) |
-| `ggml/src/ggml-cpu/quants.h` | Declare new AVX-512 vec_dot functions |
-| `ggml/src/ggml-cpu/CMakeLists.txt` | Add epyc-cpu.c to x86 sources |
+| `ggml/src/ggml-cpu/arch/x86/quants.c` | AVX-512 VNNI paths for Q8_0 and Q4_K (inline `#if defined(__AVX512VNNI__)` guards) |
+| `ggml/src/ggml-cpu/vec.cpp` | AVX-512 BF16 path (inline `#if defined(__AVX512BF16__)` guard) |
 
-**Why epyc-cpu.c uses weak symbols:** The CMake builds multiple CPU-backend variants (AVX2, AVX-512, etc.), each compiling all x86 sources with its own flags. Linking combines the variant objects. By marking the AVX-512 implementations in `epyc-cpu.c` as strong (normal) and the existing implementations in `quants.c` as `__attribute__((weak))`, the linker automatically picks the VNNI version when available. This is the same dispatch principle used by `mul_sum_i8_pairs_float` in `quants.c` lines 106-133.
+**Dispatch via inline `#ifdef`:** Follows the existing pattern in `quants.c` where `mul_sum_i8_pairs_float` (line 106) and `mul_sum_us8_pairs_float` (line 122) use `#if defined(__AVX512VNNI__)` to select the optimal path. Each CMake variant (AVX2, AVX512-VNNI, etc.) compiles `quants.c` with its own flags, so the VNNI variant automatically gets the VNNI path. No new file, no weak symbols, no CMake changes needed.
 
 ---
 
@@ -391,177 +389,144 @@ EOF
 ### Task 3: AVX-512 VNNI vec_dot for Q8_0
 
 **Files:**
-- Create: `ggml/src/ggml-cpu/arch/x86/epyc-cpu.c` — AVX-512 VNNI implementations
-- Modify: `ggml/src/ggml-cpu/quants.h` — declare AVX-512 functions
-- Modify: `ggml/src/ggml-cpu/arch/x86/quants.c:1170` — mark existing `ggml_vec_dot_q8_0_q8_0` as weak
+- Modify: `ggml/src/ggml-cpu/arch/x86/quants.c:1170-1236` — add `#if defined(__AVX512VNNI__)` path to `ggml_vec_dot_q8_0_q8_0`
 
-**Context:** `ggml_vec_dot_q8_0_q8_0` (line 1170 in quants.c) processes `block_q8_0` (32 INT8 + 1 fp16 scale). The AVX-512 version processes 64 bytes per DPBusD instruction. The AVX2 version loads 32 bytes via `_mm256_loadu_si256` and calls `mul_sum_i8_pairs_float`. The VNNI version loads 64 bytes via `_mm512_loadu_si512` and uses `_mm512_dpbusd_epi32`.
+**Context:** `ggml_vec_dot_q8_0_q8_0` (line 1170 in quants.c) currently has `#if defined(__AVX2__)` and `#elif defined(__AVX__)` paths. Add a new `#if defined(__AVX512VNNI__) && defined(__AVX512BW__) && defined(__AVX512VL__)` path before the AVX2 path. This is the exact same pattern used by `mul_sum_i8_pairs_float` (line 106).
 
-Dispatch: mark the existing `ggml_vec_dot_q8_0_q8_0` in quants.c as `__attribute__((weak))`. The strong definition in epyc-cpu.c (compiled only with `__AVX512VNNI__`) overrides it at link time.
+The existing AVX2 path loads 32 bytes via `_mm256_loadu_si256`. The VNNI path loads 64 bytes via `_mm512_loadu_si512` and uses `_mm512_dpbusd_epi32`. Each block is QK8_0=32 bytes, so the VNNI path processes 2 blocks per DPBusD call.
 
-**Reference — block_q8_0 structure:** Found in `ggml/include/ggml.h` or `ggml/src/ggml-cpu/quants.h`:
-```c
-#define QK8_0 32
-typedef struct {
-    ggml_aligned_buffer_m16b(qs, QK8_0);
-    ggml_fp16_t d;
-} block_q8_0 GGML_ALIGNED(32);
-```
+- [ ] **Step 1: Add AVX-512 VNNI path to ggml_vec_dot_q8_0_q8_0**
 
-- [ ] **Step 1: Create epyc-cpu.c with Q8_0 VNNI implementation**
+In `ggml/src/ggml-cpu/arch/x86/quants.c`, at line 1170, restructure the `#if defined(__AVX2__)` to be `#if defined(__AVX512VNNI__) && defined(__AVX512BW__) && defined(__AVX512VL__)` first, then `#elif defined(__AVX2__)` second.
 
-Create `ggml/src/ggml-cpu/arch/x86/epyc-cpu.c`:
+The VNNI path processes pairs of blocks (ib + 1 < nb) to fill a 64-byte load:
 
 ```c
-#include "ggml-common.h"
+#if defined(__AVX512VNNI__) && defined(__AVX512BW__) && defined(__AVX512VL__)
+    // AVX-512 VNNI: 64 INT8 pairs per DPBusD, 2 blocks of QK8_0 per iteration
+    __m512 acc = _mm512_setzero_ps();
+    int ib = 0;
 
-#if defined(__AVX512VNNI__) && defined(__AVX512BW__) && defined(__AVX512VL__) && defined(__AVX512F__)
-
-#include <immintrin.h>
-#include <string.h>
-#include <math.h>
-
-// Forward declarations from ggml types
-#include "ggml.h"
-
-//
-// Q8_0 dot product using AVX-512 VNNI
-//
-// Processes 64 INT8 pairs per _mm512_dpbusd_epi32 instruction.
-// 2 blocks of 32 = 64 elements processed per inner iteration.
-// Inner loop unrolls 4x for latency hiding.
-//
-
-void ggml_vec_dot_q8_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
-    const int qk = QK8_0;
-    const int nb = n / qk;
-
-    assert(n % qk == 0);
-    assert(nrc == 1);
-    UNUSED(nrc);
-
-    const block_q8_0 * GGML_RESTRICT x = vx;
-    const block_q8_0 * GGML_RESTRICT y = vy;
-
-    // Handle strided access (bx, by, bs)
-    if (bx == sizeof(block_q8_0) && by == sizeof(block_q8_0) && bs == sizeof(float)) {
-        // Fast path: contiguous blocks
-        __m512 acc = _mm512_setzero_ps();
-        int ib = 0;
+    // Horizontal sum helper for __m512 (8 FP32 elements)
+    static inline float hsum_ps_8(__m512 a) {
+        __m256 lo = _mm512_castps512_ps256(a);
+        __m256 hi = _mm512_extractf32x8_ps(a, 1);
+        a = _mm256_add_ps(lo, hi);
+        a = _mm256_add_ps(a, _mm256_permute2f128_ps(a, a, 1));
+        a = _mm256_hadd_ps(a, a);
+        return _mm256_cvtss_f32(a);
+    }
 
 #if defined(__clang__) && defined(__amd64__)
-        #pragma clang loop vectorize(enable) interleave(count=4)
-        #pragma clang loop unroll(count=2)
+    #pragma clang loop interleave(count=4) unroll(count=2)
 #endif
-        for (; ib + 1 < nb; ib += 2) {
-            float d0 = GGML_CPU_FP16_TO_FP32(x[ib].d) * GGML_CPU_FP16_TO_FP32(y[ib].d);
-            float d1 = GGML_CPU_FP16_TO_FP32(x[ib+1].d) * GGML_CPU_FP16_TO_FP32(y[ib+1].d);
+    for (; ib + 1 < nb; ib += 2) {
+        // Prefetch ahead — DDR5 latency ~100-150ns
+        __builtin_prefetch(&x[ib + 4], 0, 3);
+        __builtin_prefetch(&y[ib + 4], 0, 3);
 
-            const __m512i zx0 = _mm512_loadu_si512((const __m512i *)x[ib].qs);
-            const __m512i zy0 = _mm512_loadu_si512((const __m512i *)y[ib].qs);
-            const __m512i z_sum0 = _mm512_dpbusd_epi32(_mm512_setzero_si512(), zx0, zy0);
+        float d0 = GGML_CPU_FP16_TO_FP32(x[ib].d) * GGML_CPU_FP16_TO_FP32(y[ib].d);
+        float d1 = GGML_CPU_FP16_TO_FP32(x[ib+1].d) * GGML_CPU_FP16_TO_FP32(y[ib+1].d);
 
-            const __m512i zx1 = _mm512_loadu_si512((const __m512i *)x[ib+1].qs);
-            const __m512i zy1 = _mm512_loadu_si512((const __m512i *)y[ib+1].qs);
-            const __m512i z_sum1 = _mm512_dpbusd_epi32(_mm512_setzero_si512(), zx1, zy1);
+        // Each block_q8_0 is 32 INT8 + fp16 scale, aligned to 32 bytes.
+        // Two contiguous blocks = 64 bytes of qs data.
+        const __m512i zx0 = _mm512_loadu_si512((const __m512i *)x[ib].qs);
+        const __m512i zy0 = _mm512_loadu_si512((const __m512i *)y[ib].qs);
+        const __m512i z_sum0 = _mm512_dpbusd_epi32(_mm512_setzero_si512(), zx0, zy0);
 
-            __m512 sd = _mm512_set_ps(d1, d1, d1, d1, d0, d0, d0, d0);
-            acc = _mm512_fmadd_sd_ps(sd, _mm512_cvtepi32_ps(z_sum0), acc);
-            acc = _mm512_fmadd_sd_ps(sd, _mm512_cvtepi32_ps(z_sum1), acc);
-        }
+        const __m512i zx1 = _mm512_loadu_si512((const __m512i *)x[ib+1].qs);
+        const __m512i zy1 = _mm512_loadu_si512((const __m512i *)y[ib+1].qs);
+        const __m512i z_sum1 = _mm512_dpbusd_epi32(_mm512_setzero_si512(), zx1, zy1);
 
-        // Horizontal sum of __m512 (8 floats)
-        float sumf = hsum_float_16(acc);  // need to implement for AVX-512
-    } else {
-        // Strided path — fall back to generic
+        __m512 s0 = _mm512_set1_ps(d0);
+        __m512 s1 = _mm512_set1_ps(d1);
+        acc = _mm512_fmadd_ps(s0, _mm512_cvtepi32_ps(z_sum0), acc);
+        acc = _mm512_fmadd_ps(s1, _mm512_cvtepi32_ps(z_sum1), acc);
     }
 
-    // Remainder
-    for (int ib = (nb / 2) * 2; ib < nb; ++ib) {
-        int sumi = 0;
-        for (int j = 0; j < qk; j++) {
-            sumi += x[ib].qs[j] * y[ib].qs[j];
-        }
-        *s += sumi * GGML_CPU_FP16_TO_FP32(x[ib].d) * GGML_CPU_FP16_TO_FP32(y[ib].d);
+    float sumf = hsum_ps_8(acc);
+#elif defined(__AVX2__)
+    // Existing AVX2 path (unchanged)
+```
+
+Then the existing `#elif defined(__AVX__)` and the scalar fallback remain unchanged.
+
+**Critical alignment note:** `block_q8_0` has `GGML_ALIGNED(32)`. The `qs` array is 32 bytes. Two blocks' `qs` are NOT guaranteed to be contiguous in memory (each block struct has padding for the `d` field after `qs`). So `_mm512_loadu_si512((const __m512i *)x[ib].qs)` may read into `x[ib].d` or padding. The safe approach is to use two 256-bit loads per block and permute, or to load 64 bytes from `x[ib].qs` only if the blocks are guaranteed contiguous.
+
+**Safer implementation for Q8_0:** Since `sizeof(block_q8_0) = 34` (32 qs + 2 fp16 + padding to 32 alignment = 34 or 40 bytes), two blocks are NOT contiguous for a 64-byte load. The VNNI path should process one block per iteration with two 256-bit DPBusD calls:
+
+```c
+    for (; ib < nb; ++ib) {
+        float d = GGML_CPU_FP16_TO_FP32(x[ib].d) * GGML_CPU_FP16_TO_FP32(y[ib].d);
+        // 32 bytes of qs — load as two 128-bit chunks, sign-extend to 256-bit, DPBusD
+        const __m128i xl = _mm_loadu_si128((const __m128i *)x[ib].qs);
+        const __m128i xh = _mm_loadu_si128((const __m128i *)x[ib].qs + 1);
+        const __m128i yl = _mm_loadu_si128((const __m128i *)y[ib].qs);
+        const __m128i yh = _mm_loadu_si128((const __m128i *)y[ib].qs + 1);
+        // Use _mm256_dpbusd_epi32 on each 16-byte lane (16 INT8 pairs each)
+        __m256i zl = _mm256_dpbusd_epi32(_mm256_setzero_si256(), _mm256_cvtepu8_epi16(xl), _mm256_cvtepi8_epi16(yl));
+        __m256i zh = _mm256_dpbusd_epi32(_mm256_setzero_si256(), _mm256_cvtepu8_epi16(xh), _mm256_cvtepi8_epi16(yh));
+        __m256i sum = _mm256_add_epi32(zl, zh);
+        acc = _mm512_fmadd_ps(_mm512_set1_ps(d), _mm512_cvtepi32_ps(_mm256_broadcast_i32x4(sum)), acc);
     }
-
-    *s = sumf;
-}
 ```
 
-**Note:** The complete implementation needs these helper functions:
+**Actually the simplest path:** The existing `mul_sum_i8_pairs_float` already uses `_mm256_dpbusd_epi32` on 256-bit registers. The Q8_0 function already calls it. So the current AVX2 path with VNNI support is already fast for 256-bit. The gain from full 512-bit loads would require repacking the data. For now, keep the existing structure and just ensure the AVX-512 variant gets the `__AVX512VNNI__` path in `mul_sum_i8_pairs_float`.
 
-**hsum_float_16(__m512):** Manual reduce for the 8 FP32 elements in an m512:
-```c
-static inline float hsum_float_16(__m512 a) {
-    __m256 upper = _mm512_extractf32x8_ps(a, 1);
-    __m256 lower = _mm512_castsi256_si128(a);  // _mm512_extractf32x8_ps(a, 0)
-    a = _mm256_add_ps(upper, lower);
-    a = _mm256_add_ps(a, _mm256_permute2f128_ps(a, a, 1));
-    a = _mm256_hadd_ps(a, a);
-    return _mm256_cvtss_f32(a);
-}
-```
-
-**Strided path:** The existing `bx`, `by`, `bs` parameters in the vec_dot signature handle per-row strides in the matmul. For Q8_0, `bx == sizeof(block_q8_0)` and `by == sizeof(block_q8_0)` in the fast path. The strided path uses pointer arithmetic: `((const block_q8_0*)(((const char*)vx) + i*bx)))`. Follow the existing pattern in quants.c.
-
-**Scale application:** Use `_mm512_add_ps(_mm512_mul_ps(scale_vec, sum_vec), acc)` instead of non-existent `_mm512_fmadd_sd_ps`.
-
-**Prefetch distance:** 3 cache lines ahead (192 bytes), targeting DDR5 latency of ~100-150 ns.
-
-- [ ] **Step 2: Mark existing Q8_0 in quants.c as weak**
-
-In `ggml/src/ggml-cpu/arch/x86/quants.c`, change line 1170:
+**Decision:** Since the existing `ggml_vec_dot_q8_0_q8_0` already calls `mul_sum_i8_pairs_float` which already has `__AVX512VNNI__` support (line 106), the Q8_0 path is already VNNI-accelerated for 256-bit loads. The only improvement is to add a 512-bit path when blocks can be loaded contiguously. For this task, add the 512-bit path with a contiguous check:
 
 ```c
-// Before:
-void ggml_vec_dot_q8_0_q8_0(int n, float * GGML_RESTRICT s, ...
-
-// After:
-__attribute__((weak)) void ggml_vec_dot_q8_0_q8_0(int n, float * GGML_RESTRICT s, ...
+#if defined(__AVX512VNNI__) && defined(__AVX512BW__) && defined(__AVX512VL__)
+    // Fast path: only use 512-bit loads if we can verify contiguous qs data
+    // Since block_q8_0 is 34 bytes (32 qs + 2 d), blocks are NOT contiguous for qs.
+    // Fall through to AVX2 path which uses mul_sum_i8_pairs_float (already VNNI-accelerated).
+    // This path can be expanded later with repacked data.
 ```
 
-- [ ] **Step 3: Declare in quants.h**
+Given this analysis, Q8_0 is already well-served by the VNNI support in `mul_sum_i8_pairs_float`. Skip the dedicated 512-bit Q8_0 path — the AVX2 path with VNNI `mul_sum_i8_pairs_float` IS the optimal path for the current block layout.
 
-In `ggml/src/ggml-cpu/quants.h`, after line 45 (`ggml_vec_dot_q8_0_q8_0`), no additional declaration needed since the symbol is the same. The declaration at line 45 already covers both implementations.
+**Task 3 becomes:** Verify that `mul_sum_i8_pairs_float` with `__AVX512VNNI__` is correctly compiled and tested. No code change needed — just verify.
 
-- [ ] **Step 4: Verify build**
+- [ ] **Step 1: Verify VNNI path is active in mul_sum_i8_pairs_float**
+
+The function at quants.c:122 already has:
+```c
+#if __AVXVNNIINT8__
+    // Uses _mm256_dpbssd_epi32 (AVX-VNNI signed)
+#else
+    // Uses abs+sign + _mm256_dpbusd_epi32 (AVX512VNNI unsigned, line 108)
+```
+
+Confirm this compiles correctly for the AVX512-VNNI variant.
+
+- [ ] **Step 2: Verify build**
 
 ```bash
 cmake -B build_epyc -DGGML_CUDA=OFF -DGGML_NATIVE=ON -DLLAMA_BUILD_TESTS=ON -DLLAMA_BUILD_TOOLS=OFF -DLLAMA_BUILD_EXAMPLES=OFF 2>&1 | tail -5
-cmake --build build_epyc --config Release -j$(nproc) 2>&1 | grep -iE "(error|warn)" | head -10
+cmake --build build_epyc --config Release -j$(nproc) 2>&1 | grep -iE "(error|warn)" | head -5
 ```
 
-Expected: No link errors. The strong symbol from epyc-cpu.o (AVX-512 VNNI variant) overrides the weak symbol from quants.o.
-
-- [ ] **Step 5: Verify VNNI is active**
-
-```bash
-# Check that the symbol resolved to the VNNI version
-nm -C build_epyc/src/ggml/CMakeFiles/ggml-cpu-avx512-vnni.dir/arch/x86/epyc-cpu.c.o | grep vec_dot_q8_0
-# Should show 'T ggml_vec_dot_q8_0_q8_0' (strong symbol)
-```
-
-- [ ] **Step 6: Verify correctness**
+- [ ] **Step 3: Verify correctness**
 
 ```bash
 cd build_epyc && timeout 60 bin/test-backend-ops -b CPU0 -R "MUL_MAT(type=q8_0" 2>&1 | tail -10
 ```
 
-Expected: PASS — results match reference.
+Expected: PASS.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 4: Commit (if changes needed)**
+
+If no code changes were needed (VNNI already active via mul_sum_i8_pairs_float), skip the commit for this task. If any verification or minor optimization was made, commit with:
 
 ```bash
-git add ggml/src/ggml-cpu/arch/x86/epyc-cpu.c ggml/src/ggml-cpu/arch/x86/quants.c
+git add ggml/src/ggml-cpu/arch/x86/quants.c
 git commit -m "$(cat <<'EOF'
-cpu: add AVX-512 VNNI vec_dot for Q8_0
+cpu: verify Q8_0 vec_dot already uses AVX-512 VNNI via mul_sum_i8_pairs_float
 
-Uses _mm512_dpbusd_epi32 for 64 INT8 pairs per instruction.
-2x throughput per instruction vs AVX2 _mm256_maddubs_epi16.
-Discovered via weak symbol override — strong VNNI definition
-in epyc-cpu.c overrides weak AVX2 definition in quants.c.
-Includes __builtin_prefetch for DDR5 latency hiding.
+No code change needed — the existing AVX2 path dispatches to
+mul_sum_i8_pairs_float which has __AVX512VNNI__ guards (line 106).
+The AVX512-VNNI variant of quants.c automatically gets the
+_mm256_dpbusd_epi32 path.
 
 Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
 EOF
@@ -573,48 +538,44 @@ EOF
 ### Task 4: AVX-512 VNNI vec_dot for Q4_K
 
 **Files:**
-- Modify: `ggml/src/ggml-cpu/arch/x86/epyc-cpu.c` — add `ggml_vec_dot_q4_K_q8_K`
-- Modify: `ggml/src/ggml-cpu/arch/x86/quants.c:1900` — mark existing as weak
+- Modify: `ggml/src/ggml-cpu/arch/x86/quants.c:1900-2076` — add `#if defined(__AVX512VNNI__)` path to `ggml_vec_dot_q4_K_q8_K`
 
-**Context:** `ggml_vec_dot_q4_K_q8_K` (line 1900 in quants.c) processes `block_q4_K` (QK_K=256 elements per block, stored as 128 half-bytes + 12 bytes scales + 2 bytes dmin + 12 bytes bsums). The AVX-512 VNNI path:
+**Context:** `ggml_vec_dot_q4_K_q8_K` (line 1900) currently uses AVX2 `_mm256_maddubs_epi16` for the nibble multiply. The function already has AVX2 and AVX paths. Add a VNNI path that processes 64 elements per sub-block using `_mm512_dpbusd_epi32`.
 
-1. Load Q4_K data (16 bytes) → unpack low/high nibbles to two 32-byte INT8 vectors → sign-extend to 512-bit ZMM
-2. Load Q8_K data (32 bytes) → two 512-bit ZMM registers
-3. `_mm512_dpbusd_epi32()` for each nibble lane
-4. Scale extraction from `x[i].scales` (12 bytes, 4-bit compressed) — same bit-manipulation as AVX2 path
-5. Horizontal reduce with `_mm512_reduce_add_epi32()` (3-instruction shift/add tree)
+The key insight: Q4_K has 32 half-bytes (16 bytes) per sub-block of 64 elements (32 low + 32 high nibbles). Each nibble is paired with one Q8_K INT8 value. The Q8_K bsums correction (dmin) uses 256-bit operations regardless of the VNNI path.
 
-The inner loop processes QK_K/64 = 4 sub-blocks per Q4_K block. Each sub-block has 64 elements (32 low + 32 high nibbles) paired with 64 Q8_K INT8 values.
+- [ ] **Step 1: Add AVX-512 VNNI path to ggml_vec_dot_q4_K_q8_K**
 
-- [ ] **Step 1: Add Q4_K VNNI implementation to epyc-cpu.c**
-
-Following the same structure as the AVX2 path (quants.c:1919-1982) but with 512-bit operations:
+At line 1919 in quants.c (currently `#if defined __AVX2__`), add a new VNNI guard before AVX2:
 
 ```c
-#if defined(__AVX512VNNI__) && defined(__AVX512BW__) && defined(__AVX512VL__) && defined(__AVX512F__)
+#if defined(__AVX512VNNI__) && defined(__AVX512BW__) && defined(__AVX512VL__)
 
-void ggml_vec_dot_q4_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
-    assert(n % QK_K == 0);
-    assert(nrc == 1);
-    UNUSED(nrc); UNUSED(bx); UNUSED(by); UNUSED(bs);
+    // Helper: hsum for __m512i (8 int32 elements)
+    static inline float hsum_epi32_8(__m512i a) {
+        __m256i lo = _mm512_castsi512_si256(a);
+        __m256i hi = _mm512_extracti64x4_epi64(a, 1);
+        __m256i sum = _mm256_add_epi32(lo, hi);
+        sum = _mm256_add_epi32(sum, _mm256_shuffle_i32x4(sum, sum, 1));
+        sum = _mm256_add_epi32(sum, _mm256_shuffle_epi32(sum, 8));
+        sum = _mm256_add_epi32(sum, _mm256_shuffle_epi32(sum, 1));
+        return (float)_mm256_extract_epi32(sum, 0);
+    }
 
-    const block_q4_K * GGML_RESTRICT x = vx;
-    const block_q8_K * GGML_RESTRICT y = vy;
-    const int nb = n / QK_K;
+    // Copy scale shuffle table from quants.c (static, not externally visible)
+    // get_scale_shuffle_k4() is static in quants.c — replicate its 8-entry table here
+    // or use _mm256_shuffle_epi8 directly with inline shuffle masks.
+    // For now, use the existing AVX2 scale extraction, then VNNI for the multiply.
 
-    static const uint32_t kmask1 = 0x3f3f3f3f;
-    static const uint32_t kmask2 = 0x0f0f0f0f;
-    static const uint32_t kmask3 = 0x03030303;
-    uint32_t utmp[4];
-
+    const __m256i m4 = _mm256_set1_epi8(0xF);
     __m512 acc = _mm512_setzero_ps();
     __m128 acc_m = _mm_setzero_ps();
 
-    for (int i = 0; i < nb; ++i) {
+   for (int i = 0; i < nb; ++i) {
         const float d = y[i].d * GGML_CPU_FP16_TO_FP32(x[i].d);
         const float dmin = -y[i].d * GGML_CPU_FP16_TO_FP32(x[i].dmin);
 
-        // Scale extraction — same bit manipulation as AVX2
+        // Scale extraction — identical to AVX2 path
         memcpy(utmp, x[i].scales, 12);
         utmp[3] = ((utmp[2] >> 4) & kmask2) | (((utmp[1] >> 6) & kmask3) << 4);
         const uint32_t uaux = utmp[1] & kmask1;
@@ -622,15 +583,16 @@ void ggml_vec_dot_q4_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
         utmp[2] = uaux;
         utmp[0] &= kmask1;
 
-        // dmin correction (same as AVX2)
         const __m256i mins_and_scales = _mm256_cvtepu8_epi16(_mm_set_epi32(utmp[3], utmp[2], utmp[1], utmp[0]));
+
+        // dmin correction — AVX2 path (unchanged)
         const __m256i q8sums = _mm256_loadu_si256((const __m256i*)y[i].bsums);
         const __m128i q8s = _mm_hadd_epi16(_mm256_extracti128_si256(q8sums, 0), _mm256_extracti128_si256(q8sums, 1));
         const __m128i prod = _mm_madd_epi16(_mm256_extracti128_si256(mins_and_scales, 1), q8s);
         acc_m = _mm_fmadd_ps(_mm_set1_ps(dmin), _mm_cvtepi32_ps(prod), acc_m);
 
         const __m128i sc128 = _mm256_extracti128_si256(mins_and_scales, 0);
-        const __m256i scales_256 = MM256_SET_M128I(sc128, sc128);
+        const __m256i scales = MM256_SET_M128I(sc128, sc128);
 
         const uint8_t * GGML_RESTRICT q4 = x[i].qs;
         const int8_t  * GGML_RESTRICT q8 = y[i].qs;
@@ -640,97 +602,97 @@ void ggml_vec_dot_q4_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
         #pragma clang loop unroll(count=4)
 #endif
         for (int j = 0; j < QK_K/64; ++j) {
-            // Prefetch next sub-blocks
+            // Prefetch 3 cache lines ahead (DDR5 latency ~100-150 ns)
             __builtin_prefetch(q4 + 96, 0, 3);
             __builtin_prefetch(q8 + 96, 0, 3);
 
-            // Scales for this sub-block (reuse AVX2 shuffle logic)
-            const __m256i scale_l = _mm256_shuffle_epi8(scales_256, get_scale_shuffle_k4(2*j+0));
-            const __m256i scale_h = _mm256_shuffle_epi8(scales_256, get_scale_shuffle_k4(2*j+1));
+            const __m256i scale_l = _mm256_shuffle_epi8(scales, get_scale_shuffle_k4(2*j+0));
+            const __m256i scale_h = _mm256_shuffle_epi8(scales, get_scale_shuffle_k4(2*j+1));
 
-            // Load and unpack Q4_K nibbles (32 half-bytes = 64 INT4 values)
+            // Load 32 half-bytes of Q4 data (64 nibbles)
             const __m256i q4bits = _mm256_loadu_si256((const __m256i*)q4); q4 += 32;
-            const __m256i q4l = _mm256_and_si256(q4bits, _mm256_set1_epi8(0xF));
-            const __m256i q4h = _mm256_and_si256(_mm256_srli_epi16(q4bits, 4), _mm256_set1_epi8(0xF));
+            const __m256i q4l = _mm256_and_si256(q4bits, m4);
+            const __m256i q4h = _mm256_and_si256(_mm256_srli_epi16(q4bits, 4), m4);
 
-            // Sign-extend to 512-bit: 32 uint8 → 32 int8 → sign-extend to int16 → dpbusd
-            // _mm512_cvtepu8_epi16 loads 32 bytes from memory, so we need mem pointers
-            const __m512i q4l_512 = _mm512_cvtepu8_epi16(q4l);  // This needs a memory operand, see note
-            const __m512i q4h_512 = _mm512_cvtepu8_epi16(q4h);
+            // Load 64 bytes of Q8 data (one per nibble)
+            const __m512i q8_all = _mm512_loadu_si512((const __m512i*)q8); q8 += 64;
+            // Split into low/high 32-byte halves for low/high nibble multiplication
+            const __m256i q8l_256 = _mm512_castsi512_si256(q8_all);
+            const __m256i q8h_256 = _mm512_extracti64x4_epi64(q8_all);
 
-            // Load Q8_K (64 bytes = two 32-byte chunks)
-            const __m512i q8l = _mm512_loadu_si512((const __m512i*)q8); q8 += 64;  // 64 bytes for both nibbles
+            // DPBusD on 256-bit: each processes 16 INT8 pairs → 4 INT32
+            // q4 nibbles are unsigned [0,15], q8 is signed — use _mm256_dpbusd_epi32
+            const __m256i zero = _mm256_setzero_si256();
+            // Each 256-bit DPBusD handles 16 elements. Need 2 per 32 nibbles.
+            // Lower 16 nibbles of q4l:
+            const __m128i q4l_lo = _mm256_castsi256_si128(q4l);
+            const __m128i q4l_hi = _mm256_extracti128_si256(q4l, 1);
+            const __m128i q8l_lo = _mm256_castsi256_si128(q8l_256);
+            const __m128i q8l_hi = _mm256_extracti128_si256(q8l_256, 1);
 
-            // DPBusD: unsigned multiply + accumulate (q4 is unsigned 0-15, q8 is signed)
-            // Note: _mm512_dpbusd_epi32 expects unsigned x and signed y
-            __m512i sum_l = _mm512_dpbusd_epi32(_mm512_setzero_si512(), q4l_512, q8l_low32);
-            __m512i sum_h = _mm512_dpbusd_epi32(_mm512_setzero_si512(), q4h_512, q8l_high32);
+            __m256i s_l_lo = _mm256_dpbusd_epi32(zero, q4l_lo, q8l_lo);
+            __m256i s_l_hi = _mm256_dpbusd_epi32(zero, q4l_hi, q8l_hi);
+            __m256i sum_l = _mm256_add_epi32(s_l_lo, s_l_hi);
+
+            const __m128i q4h_lo = _mm256_castsi256_si128(q4h);
+            const __m128i q4h_hi = _mm256_extracti128_si256(q4h, 1);
+            const __m128i q8h_lo = _mm256_castsi256_si128(q8h_256);
+            const __m128i q8h_hi = _mm256_extracti128_si256(q8h_256, 1);
+
+            __m256i s_h_lo = _mm256_dpbusd_epi32(zero, q4h_lo, q8h_lo);
+            __m256i s_h_hi = _mm256_dpbusd_epi32(zero, q4h_hi, q8h_hi);
+            __m256i sum_h = _mm256_add_epi32(s_h_lo, s_h_hi);
 
             // Scale and accumulate
-            sum_l = _mm512_madd_epi16(scale_l_ext, sum_l);  // need to extend scales to 512-bit
-            sum_h = _mm512_madd_epi16(scale_h_ext, sum_h);
+            sum_l = _mm256_madd_epi16(scale_l, sum_l);
+            sum_h = _mm256_madd_epi16(scale_h, sum_h);
 
-            sumi = _mm512_add_epi32(sumi, _mm512_add_epi32(sum_l, sum_h));
+            // Add to 512-bit accumulator
+            sumi = _mm512_add_epi32(sumi, _mm512_cvtepi32_epi64(_mm256_add_epi32(sum_l, sum_h)));
         }
 
         __m512 vd = _mm512_set1_ps(d);
         acc = _mm512_fmadd_ps(vd, _mm512_cvtepi32_ps(sumi), acc);
     }
 
-    // Horizontal sum
-    float sumf = hsum_float_16(acc) + _mm_cvtss_f32(acc_m);
+    float sumf = hsum_ps_8(acc);
     acc_m = _mm_add_ps(acc_m, _mm_movehl_ps(acc_m, acc_m));
     acc_m = _mm_add_ss(acc_m, _mm_movehdup_ps(acc_m));
     *s = sumf + _mm_cvtss_f32(acc_m);
-}
+
+#elif defined __AVX2__
+    // Existing AVX2 path (unchanged)
 ```
 
-**Important implementation notes:**
-1. `_mm512_cvtepu8_epi16()` requires a **memory operand** — it loads 32 bytes from a pointer. Store the 256-bit unpacked nibbles to a `uint8_t tmp[32]` stack buffer, then call `_mm512_cvtepu8_epi16(tmp)`. This gives 64 zero-extended int16 from 32 uint8 nibbles.
-2. Q4 nibbles are unsigned [0,15], Q8_K values are signed [-128,127]. `_mm512_dpbusd_epi32(zero, unsigned_x, signed_y)` matches this exactly — no sign manipulation needed.
-3. Each sub-block (64 elements): 32 Q4 bytes → 64 nibbles. 64 Q8_K bytes. Two DPBusD calls per sub-block (low nibbles × first 32 Q8, high nibbles × next 32 Q8). Scale each with `_mm512_madd_epi16(scale_ext, dpbusd_result)`.
-4. Scale extension: the 256-bit `scale_l`/`scale_h` (16 int16 values) must be broadcast to 512-bit for the `_mm512_madd_epi16` multiply. Use `_mm512_broadcast_i32x4(_mm256_castsi256_si128(scale_l))` to tile the 4 scales across 64 int16 lanes.
-5. `get_scale_shuffle_k4()` is `static` in quants.c. Either: (a) copy the shuffle table to epyc-cpu.c, (b) move it to a shared header (`quants.h` or `common.h`), or (c) declare `extern const __m128i* get_scale_shuffle_k4(int)` in epyc-cpu.c. Option (a) is simplest — the table is small (8 entries of `__m128i`).
-6. The existing Q4_K path handles `dmin` correction with a separate `acc_m` (`__m128`). Keep this pattern — the dmin correction is AVX2-only (256-bit) since it deals with block minima.
+**Note on `get_scale_shuffle_k4()`:** This function returns `const __m128i*` shuffle masks. It's `static` in quants.c. Since the VNNI path is now inside quants.c, it can directly call `get_scale_shuffle_k4()` — no visibility issue.
 
-- [ ] **Step 2: Mark existing Q4_K in quants.c as weak**
+**Note on `_mm256_dpbusd_epi32` vs `_mm512_dpbusd_epi32`:** The VNNI path here uses 256-bit DPBusD (same as `mul_sum_i8_pairs_float`) since the nibble unpacking is naturally 256-bit. The gain over AVX2's `_mm256_maddubs_epi16` is that DPBusD goes directly to INT32 (no second add needed), saving 2 instructions per sub-block.
 
-In `ggml/src/ggml-cpu/arch/x86/quants.c`, change line 1900:
-
-```c
-// Before:
-void ggml_vec_dot_q4_K_q8_K(int n, ...
-
-// After:
-__attribute__((weak)) void ggml_vec_dot_q4_K_q8_K(int n, ...
-```
-
-- [ ] **Step 3: Verify build**
+- [ ] **Step 2: Verify build**
 
 ```bash
 cmake --build build_epyc --config Release -j$(nproc) 2>&1 | grep -iE "(error|warn)" | head -10
 ```
 
-- [ ] **Step 4: Verify correctness**
+- [ ] **Step 3: Verify correctness**
 
 ```bash
 cd build_epyc && timeout 60 bin/test-backend-ops -b CPU0 -R "MUL_MAT(type=q4_0\|type=q4_k" 2>&1 | tail -10
 ```
 
-Expected: PASS for Q4_K matmul tests.
+Expected: PASS for all Q4_0 and Q4_K matmul tests.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 4: Commit**
 
 ```bash
-git add ggml/src/ggml-cpu/arch/x86/epyc-cpu.c ggml/src/ggml-cpu/arch/x86/quants.c
+git add ggml/src/ggml-cpu/arch/x86/quants.c
 git commit -m "$(cat <<'EOF'
-cpu: add AVX-512 VNNI vec_dot for Q4_K
+cpu: add AVX-512 VNNI path for Q4_K vec_dot
 
-Uses _mm512_dpbusd_epi32 for nibble unpack + INT8 multiply.
-Processes 64 elements per sub-block with sign-extension from
-256-bit unpack to 512-bit DPBusD. Includes __builtin_prefetch
-for DDR5 latency hiding and AOCC loop unroll pragmas.
-Weak symbol override — VNNI version replaces AVX2 at link time.
+Uses _mm256_dpbusd_epi32 for direct INT8→INT32 multiply-add,
+eliminating the _mm256_maddubs_epi16 + add step. Nibble unpack
+stays 256-bit (natural width for 32 half-bytes). Scale extraction
+and dmin correction unchanged from AVX2 path.
 
 Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
 EOF
@@ -742,95 +704,62 @@ EOF
 ### Task 5: AVX-512 BF16 vec_dot
 
 **Files:**
-- Modify: `ggml/src/ggml-cpu/arch/x86/epyc-cpu.c` — add `ggml_vec_dot_bf16_bf16_avx512`
-- Modify: `ggml/src/ggml-cpu/quants.h` — declare BF16 function
+- Modify: `ggml/src/ggml-cpu/vec.cpp` — add `#if defined(__AVX512BF16__)` path to `ggml_vec_dot_bf16`
 
-**Context:** BF16 dot product uses `_mm512_cvtne2pack_sf2()` to convert 32 BF16 → 32 FP32, then either `_mm512_dpbf16_ps()` (if `__AVX512_BF16__`) or FMA accumulate. The existing `ggml_vec_dot_bf16` in vec.cpp processes FP32-converted values.
+**Context:** `ggml_vec_dot_bf16` in vec.cpp processes BF16 dot products. Add an AVX-512 path that uses `_mm512_cvtne2pack_ps` to convert 32 BF16→FP32 and FMA, or `_mm512_dpbf16_ps` if `__AVX512BF16__`.
 
-- [ ] **Step 1: Add BF16 VNNI implementation to epyc-cpu.c**
+- [ ] **Step 1: Add AVX-512 path to ggml_vec_dot_bf16**
+
+In `ggml/src/ggml-cpu/vec.cpp`, find `ggml_vec_dot_bf16` and add an `#if defined(__AVX512BF16__)` path before any existing SIMD path:
 
 ```c
-#if defined(__AVX512BW__) && defined(__AVX512F__)
-
-void ggml_vec_dot_bf16_bf16_avx512(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
-    assert(nrc == 1);
-    UNUSED(nrc);
-
-    const ggml_bf16_t * x = vx;
-    const ggml_bf16_t * y = vy;
-
+#if defined(__AVX512BF16__)
     __m512 acc = _mm512_setzero_ps();
     int i = 0;
-
-#if defined(__AVX512_BF16__)
-    // Direct BF16→FP32 multiply with dpbf16
     for (; i + 63 < n; i += 64) {
-        const __m512i zx = _mm512_i32gather_epi32(i / 2, y, 4);  // gather 32 bf16 values
-        // Actually: load 64 bf16_t (128 bytes), use dpbf16
-        const __m512i xb = _mm512_cvtepu16_epi32(_mm256_loadu_si256((const __m256i*)(x+i)));  // Wrong size, need proper load
-        const __m512i yb = _mm512_cvtepu16_epi32(_mm256_loadu_si256((const __m256i*)(y+i)));
-        acc = _mm512_dpbf16_ps(acc, _mm512_castsi512_ps(xb), _mm512_castsi512_ps(yb), 0x7f);
-    }
-#else
-    // Convert to FP32, then FMA
-    for (; i + 63 < n; i += 64) {
-        // Load 32 bf16 pairs, convert to FP32
         __m256i xb = _mm256_loadu_si256((const __m256i*)(x + i));
         __m256i yb = _mm256_loadu_si256((const __m256i*)(y + i));
-        __m512 xf = _mm512_cvtne2pack_ps(_mm512_cvtepu16_epi32(_mm256_castsi256_si128(xb)), _mm512_cvtepu16_epi32(_mm256_extracti128_si256(xb, 1)));
-        __m512 yf = _mm512_cvtne2pack_ps(_mm512_cvtepu16_epi32(_mm256_castsi256_si128(yb)), _mm512_cvtepu16_epi32(_mm256_extracti128_si256(yb, 1)));
+        // Split 256-bit into two 128-bit, extend to FP32, interleave
+        __m512 xf = _mm512_cvtne2pack_ps(
+            _mm512_cvtepi32_epi32(_mm512_cvtepu16_epi32(_mm256_castsi256_si128(xb))),
+            _mm512_cvtepi32_epi32(_mm512_cvtepu16_epi32(_mm256_extracti128_si256(xb, 1))));
+        __m512 yf = _mm512_cvtne2pack_ps(
+            _mm512_cvtepi32_epi32(_mm512_cvtepu16_epi32(_mm256_castsi256_si128(yb))),
+            _mm512_cvtepi32_epi32(_mm512_cvtepu16_epi32(_mm256_extracti128_si256(yb, 1))));
         acc = _mm512_fmadd_ps(xf, yf, acc);
     }
-#endif
-
-    float sumf = 0;
-    for (; i < n; i++) {
-        sumf += (float)GGML_CPU_FP16_TO_FP32(x[i]) * (float)GGML_CPU_FP16_TO_FP32(y[i]);
-    }
-
-    *s = hsum_float_16(acc) + sumf;
-}
-#endif
+    // hsum_ps_8 helper (same as Task 3)
+    float sumf = hsum_ps_8(acc);
+    for (; i < n; i++) sumf += (float)x[i] * (float)y[i];
+    *s = sumf;
+#elif defined(__AVX2__)
+    // Existing AVX2 path (unchanged)
 ```
 
-**Note:** BF16 load and conversion pattern:
-1. Load 32 bf16 (64 bytes) via `_mm256_loadu_si256()`
-2. Split to low/high 128-bit: `_mm256_castsi256_si128()` and `_mm256_extracti128_si256(xb, 1)`
-3. Zero-extend each to FP32: `_mm512_cvtepu16_epi32(low)` → 16 int32, `_mm512_cvtepu16_epi32(high)` → 16 int32
-4. Interleave: `_mm512_cvtne2pack_ps(low_f32, high_f32)` → 32 FP32 in one m512
-5. Same for Y, then `_mm512_fmadd_ps(xf, yf, acc)`
-
-For `__AVX512_BF16__`, the `_mm512_dpbf16_ps(acc, xb_ps, yb_ps, 0x7f)` directly multiplies 32 BF16 pairs and accumulates to FP32. The control word `0x7f` selects all 32 elements.
-
-- [ ] **Step 2: Declare in quants.h**
-
-```c
-// Add after line 45:
-void ggml_vec_dot_bf16_bf16_avx512(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc);
-```
-
-- [ ] **Step 3: Wire up via type_traits_cpu**
-
-The BF16 vec_dot in `type_traits_cpu` (line 387) currently points to `ggml_vec_dot_bf16`. For the AVX-512 BF16 variant, this should point to the new function. Same weak-symbol pattern:
-
-In `ggml/src/ggml-cpu/vec.cpp`, mark the existing `ggml_vec_dot_bf16` as weak if needed, or dispatch via `#if defined(__AVX512BF16__)` inline in the existing function.
-
-- [ ] **Step 4: Verify build**
+- [ ] **Step 2: Verify build**
 
 ```bash
 cmake --build build_epyc --config Release -j$(nproc) 2>&1 | grep -iE "(error|warn)" | head -10
 ```
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 3: Verify correctness**
 
 ```bash
-git add ggml/src/ggml-cpu/arch/x86/epyc-cpu.c ggml/src/ggml-cpu/quants.h
+cd build_epyc && timeout 60 bin/test-backend-ops -b CPU0 -R "bf16" 2>&1 | tail -10
+```
+
+Expected: PASS.
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add ggml/src/ggml-cpu/vec.cpp
 git commit -m "$(cat <<'EOF'
 cpu: add AVX-512 BF16 vec_dot
 
-Uses _mm512_cvtne2pack_ps for BF16→FP32 conversion or
-_mm512_dpbf16_ps when AVX512_BF16 is available.
-Processes 64 BF16 pairs per iteration vs 32 with AVX2.
+Uses _mm512_cvtne2pack_ps to convert 32 BF16→FP32 per iteration
+and _mm512_fmadd_ps for accumulation. Processes 64 BF16 pairs
+per iteration vs 32 with AVX2.
 
 Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
 EOF
@@ -839,94 +768,22 @@ EOF
 
 ---
 
-### Task 6: CMake Integration
-
-**Files:**
-- Modify: `ggml/src/ggml-cpu/CMakeLists.txt:248-253` — add epyc-cpu.c to x86 sources
-
-**Context:** The x86 sources are added at line 250-253 of CMakeLists.txt:
-```cmake
-        list(APPEND GGML_CPU_SOURCES
-            ggml-cpu/arch/x86/quants.c
-            ggml-cpu/arch/x86/repack.cpp
-            )
-```
-
-All x86 sources are compiled for each variant with the variant's flags. `epyc-cpu.c` uses AVX-512 intrinsics, so it must compile cleanly for all variants (guarded by `#if defined(__AVX512VNNI__)`).
-
-- [ ] **Step 1: Add epyc-cpu.c to x86 sources**
-
-In `ggml/src/ggml-cpu/CMakeLists.txt`, add `ggml-cpu/arch/x86/epyc-cpu.c` to the x86 source list:
-
-```cmake
-        list(APPEND GGML_CPU_SOURCES
-            ggml-cpu/arch/x86/quants.c
-            ggml-cpu/arch/x86/epyc-cpu.c
-            ggml-cpu/arch/x86/repack.cpp
-            )
-```
-
-- [ ] **Step 2: Ensure epyc-cpu.c compiles for non-AVX-512 variants**
-
-The entire content of `epyc-cpu.c` must be wrapped in:
-```c
-#if defined(__AVX512VNNI__) && defined(__AVX512BW__) && defined(__AVX512VL__) && defined(__AVX512F__)
-    // All function definitions
-#endif
-```
-
-For non-VNNI variants, the file compiles to an empty object. This is fine — the linker simply has no symbols to resolve from it.
-
-**Weak symbol portability:** `__attribute__((weak))` is GCC/Clang. For MSVC builds, use `#pragma comment(linker, "/ALTENTRY:ggml_vec_dot_q8_0_q8_0")` or a `#ifdef _MSC_VER` guard that uses the inline `#if defined(__AVX512VNNI__)` dispatch pattern instead of weak symbols. The plan targets Linux/gcc/clang first; MSVC support can be added later.
-
-- [ ] **Step 3: Full build with tests**
-
-```bash
-cmake -B build_epyc -DGGML_CUDA=OFF -DGGML_NATIVE=ON -DLLAMA_BUILD_TESTS=ON -DLLAMA_BUILD_TOOLS=OFF -DLLAMA_BUILD_EXAMPLES=OFF 2>&1 | grep -iE "(avx|vnni|epyc|warning)" | head -10
-cmake --build build_epyc --config Release -j$(nproc) 2>&1 | grep -iE "(error)" | head -5
-```
-
-- [ ] **Step 4: Run full quant test suite**
-
-```bash
-cd build_epyc && timeout 120 bin/test-backend-ops -b CPU0 -R "MUL_MAT" 2>&1 | tail -20
-```
-
-Expected: All MUL_MAT tests pass. Q8_0 and Q4_K use VNNI path; all others use existing AVX2 paths.
-
-- [ ] **Step 5: Verify symbol resolution**
-
-```bash
-# Check that VNNI symbols resolved correctly
-nm -C build_epyc/src/ggml/libggml-cpu.so | grep vec_dot_q8_0 | head -5
-nm -C build_epyc/src/ggml/libggml-cpu.so | grep vec_dot_q4_K | head -5
-```
-
-- [ ] **Step 6: Commit**
-
-```bash
-git add ggml/src/ggml-cpu/CMakeLists.txt ggml/src/ggml-cpu/arch/x86/epyc-cpu.c
-git commit -m "$(cat <<'EOF'
-cmake: integrate epyc-cpu.c into x86 backend build
-
-Adds AVX-512 VNNI source to the variant build system.
-Guards all content with __AVX512VNNI__ so non-VNNI variants
-compile an empty object. Weak symbol dispatch ensures VNNI
-implementations override AVX2 at link time.
-
-Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
-EOF
-)"
-```
-
----
-
-### Task 7: Integration Testing
+### Task 6: Integration Testing
 
 **Files:**
 - Test: `build_epyc/bin/test-backend-ops` — verify all quant types on CPU backend
 
-- [ ] **Step 1: Run comprehensive CPU tests**
+- [ ] **Step 1: Full clean build with all variants**
+
+```bash
+rm -rf build_epyc
+cmake -B build_epyc -DGGML_CUDA=OFF -DGGML_NATIVE=ON -DLLAMA_BUILD_TESTS=ON -DLLAMA_BUILD_TOOLS=OFF -DLLAMA_BUILD_EXAMPLES=OFF 2>&1 | grep -iE "(avx|vnni|bf16)" | head -10
+cmake --build build_epyc --config Release -j$(nproc) 2>&1 | grep -iE "(error)" | head -5
+```
+
+Expected: Clean build, no errors. AVX2, AVX512, AVX512_VNNI, AVX512_BF16 variants all compile.
+
+- [ ] **Step 2: Run full CPU test suite**
 
 ```bash
 cd build_epyc && timeout 180 bin/test-backend-ops -b CPU0 2>&1 | tail -30
@@ -934,44 +791,37 @@ cd build_epyc && timeout 180 bin/test-backend-ops -b CPU0 2>&1 | tail -30
 
 Expected: All tests pass. No regressions on any quant type.
 
-- [ ] **Step 2: Verify VNNI is active for Q8_0 and Q4_K**
+- [ ] **Step 3: Verify Q8_0 + Q4_K specifically**
 
 ```bash
-# The log should show AVX-512 VNNI variant being used
-cd build_epyc && LD_LIBRARY_PATH=src/ggml bin/test-backend-ops -b CPU0 -R "q8_0\|q4_K" 2>&1
+cd build_epyc && timeout 60 bin/test-backend-ops -b CPU0 -R "MUL_MAT(type=q8_0\|MUL_MAT(type=q4_k" 2>&1 | tail -10
 ```
 
-- [ ] **Step 3: Test NUMA interleave**
+Expected: PASS for all Q8_0 and Q4_K matmul tests.
+
+- [ ] **Step 4: Verify BF16**
 
 ```bash
-# Build a small test program or use existing tool to verify NUMA interleave
-# Check that set_mempolicy is called with MPOL_INTERLEAVE
-numactl --show
+cd build_epyc && timeout 60 bin/test-backend-ops -b CPU0 -R "bf16" 2>&1 | tail -10
 ```
 
-- [ ] **Step 4: Test CCD affinity**
-
-```bash
-# Run with GGML_NUMA_STRATEGY_CCD and verify log shows CCD detection
-# Verify thread pinning with taskset -pc <tid> on a running thread
-```
+Expected: PASS.
 
 - [ ] **Step 5: Regression test — build without AVX-512**
 
 ```bash
-cmake -B build_epyc_noavx512 -DGGML_CUDA=OFF -DGGML_NATIVE=OFF -DGGML_AVX512=OFF -DGGML_AVX2=ON -DLLAMA_BUILD_TESTS=ON -DLLAMA_BUILD_TOOLS=OFF -DLLAMA_BUILD_EXAMPLES=OFF
+cmake -B build_epyc_noavx512 -DGGML_CUDA=OFF -DGGML_NATIVE=OFF -DGGML_AVX2=ON -DLLAMA_BUILD_TESTS=ON -DLLAMA_BUILD_TOOLS=OFF -DLLAMA_BUILD_EXAMPLES=OFF
 cmake --build build_epyc_noavx512 --config Release -j$(nproc) 2>&1 | grep -iE "(error)" | head -5
-cd build_epyc_noavx512 && timeout 60 bin/test-backend-ops -b CPU0 -R "MUL_MAT(type=q8_0\|type=q4_k" 2>&1 | tail -10
+cd build_epyc_noavx512 && timeout 60 bin/test-backend-ops -b CPU0 -R "MUL_MAT(type=q8_0\|MUL_MAT(type=q4_k" 2>&1 | tail -10
 ```
 
-Expected: Builds cleanly with AVX2 only. Tests pass using the weak (AVX2) implementations.
+Expected: Builds cleanly with AVX2 only. All tests pass using AVX2 paths.
 
-- [ ] **Step 6: Final cleanup and commit**
+- [ ] **Step 6: Final cleanup**
 
 ```bash
-git status
-# Ensure all files are committed, no stray debug code
-git log --oneline -6  # Should show 6 commits: NUMA, CCD, Q8_0 VNNI, Q4_K VNNI, BF16, CMake
+rm -rf build_epyc_noavx512
+git log --oneline -5  # Should show: NUMA, CCD, Q4_K VNNI, BF16, integration
 ```
 
 ---
