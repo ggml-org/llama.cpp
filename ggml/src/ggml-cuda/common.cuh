@@ -365,8 +365,13 @@ static bool blackwell_mma_available(const int cc) {
 }
 
 static bool blackwell_wgmma_available(const int cc) {
+#ifdef GGML_CUDA_HAS_WGMMA
     return GGML_CUDA_CC_IS_NVIDIA(cc) && ggml_cuda_highest_compiled_arch(cc) >= GGML_CUDA_CC_BLACKWELL_WG &&
            ggml_cuda_highest_compiled_arch(cc) < GGML_CUDA_CC_RUBIN;
+#else
+    GGML_UNUSED(cc);
+    return false;
+#endif
 }
 
 static constexpr __device__ int ggml_cuda_get_physical_warp_size() {
