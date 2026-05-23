@@ -1,5 +1,7 @@
-import type { ContentPartType, ServerModelStatus, ServerRole } from '$lib/enums';
+import type { ContentPartType, FileTypeAudio, ServerModelStatus, ServerRole } from '$lib/enums';
 import type { ChatMessagePromptProgress, ChatRole } from './chat';
+
+export type AudioInputFormat = FileTypeAudio.WAV | FileTypeAudio.MP3;
 
 export interface ApiChatCompletionToolFunction {
 	name: string;
@@ -20,7 +22,7 @@ export interface ApiChatMessageContentPart {
 	};
 	input_audio?: {
 		data: string;
-		format: 'wav' | 'mp3';
+		format: AudioInputFormat;
 	};
 	input_video?: {
 		data: string;
@@ -203,6 +205,7 @@ export interface ApiLlamaCppServerProps {
 	/** @deprecated Use {@link ui_settings} instead */
 	webui_settings?: Record<string, string | number | boolean>;
 	ui_settings?: Record<string, string | number | boolean>;
+	cors_proxy_enabled?: boolean;
 }
 
 export interface ApiChatCompletionRequest {

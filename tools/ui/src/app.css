@@ -1,5 +1,7 @@
 @import 'tailwindcss';
-
+@source '.';
+@plugin '@tailwindcss/forms';
+@plugin '@tailwindcss/typography';
 @import 'tw-animate-css';
 
 @custom-variant dark (&:is(.dark *));
@@ -39,6 +41,9 @@
 	--sidebar-ring: oklch(0.708 0 0);
 	--code-background: oklch(0.985 0 0);
 	--code-foreground: oklch(0.145 0 0);
+	--font-mono:
+		ui-monospace, SFMono-Regular, 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas,
+		'Liberation Mono', Menlo, monospace;
 	--layer-popover: 1000000;
 
 	--chat-form-area-height: 8rem;
@@ -170,6 +175,10 @@
 
 	*::-webkit-scrollbar-thumb:hover {
 		background: hsl(var(--muted-foreground) / 0.5);
+	}
+
+	:where(code, pre, kbd, samp) {
+		font-family: var(--font-mono);
 	}
 }
 
