@@ -2025,6 +2025,20 @@ server_prompt * server_prompt_cache::alloc(const server_prompt & prompt, size_t 
     std::vector<uint8_t> state_data_tgt;
     std::vector<uint8_t> state_data_dft;
 
+    const size_t new_size = state_size_tgt + state_size_dft;
+
+    // if a single state exceeds the limit, skip caching to avoid OOM
+    if (limit_size > 0 && new_size > limit_size) {
+        SRV_WRN(" - single state (%.3f MiB) exceeds cache limit (%.3f MiB), skipping cache\n",
+                new_size / (1024.0 * 1024.0), limit_size / (1024.0 * 1024.0));
+        return nullptr;
+    }
+
+    // evict old entries before allocating to avoid exceeding the limit
+    if (limit_size > 0 && (size() + new_size > limit_size)) {
+        update();
+    }
+
     // check if we can allocate enough memory for the new state
     try {
         state_data_tgt.resize(state_size_tgt);
