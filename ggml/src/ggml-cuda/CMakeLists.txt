@@ -104,6 +104,70 @@ if (CUDAToolkit_FOUND)
     endif()
     message(STATUS "Using CMAKE_CUDA_ARCHITECTURES=${CMAKE_CUDA_ARCHITECTURES} CMAKE_CUDA_ARCHITECTURES_NATIVE=${CMAKE_CUDA_ARCHITECTURES_NATIVE}")
 
+    # Detect WGMMA PTX support (SM 100/120 warpgroup MMA).
+    # CUDA 13.2+ recognizes SM 120a but does not support wgmma PTX instructions.
+    # This try_compile test auto-detects support and defines GGML_CUDA_HAS_WGMMA.
+    if (CMAKE_CUDA_ARCHITECTURES MATCHES "1[02][01]a?")
+        include(CheckLanguage)
+        set(CMAKE_CUDA_ARCHITECTURES_SAVE "${CMAKE_CUDA_ARCHITECTURES}")
+        # Use the first Blackwell architecture for the test
+        if (CMAKE_CUDA_ARCHITECTURES MATCHES "12[01]a?")
+            set(CMAKE_CUDA_ARCHITECTURES "120a")
+        else()
+            set(CMAKE_CUDA_ARCHITECTURES "100a")
+        endif()
+
+        file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/check_wgmma/test.cu"
+            "__device__ void test_wgmma() {"
+            "    uint32_t d[64] = {};"
+            "    __shared__ alignas(16) uint8_t sa[64][32], sb[32][8];"
+            "    const uint32_t *a = reinterpret_cast<uint32_t*>(sa);"
+            "    const uint32_t *b = reinterpret_cast<uint32_t*>(sb);"
+            "    asm volatile("
+            "        \"wgmma.mma_sync.sync.aligned.m64n32h8.s32.s8.s8.s32 \""
+            "        \"{%%0<16>}, [%%1], [%%2], {%%3<16>}, %%4;\""
+            "        : \"+r\"(d[0]), \"+r\"(d[1]), \"+r\"(d[2]), \"+r\"(d[3]),"
+            "          \"+r\"(d[4]), \"+r\"(d[5]), \"+r\"(d[6]), \"+r\"(d[7]),"
+            "          \"+r\"(d[8]), \"+r\"(d[9]), \"+r\"(d[10]), \"+r\"(d[11]),"
+            "          \"+r\"(d[12]), \"+r\"(d[13]), \"+r\"(d[14]), \"+r\"(d[15]),"
+            "          \"+r\"(d[16]), \"+r\"(d[17]), \"+r\"(d[18]), \"+r\"(d[19]),"
+            "          \"+r\"(d[20]), \"+r\"(d[21]), \"+r\"(d[22]), \"+r\"(d[23]),"
+            "          \"+r\"(d[24]), \"+r\"(d[25]), \"+r\"(d[26]), \"+r\"(d[27]),"
+            "          \"+r\"(d[28]), \"+r\"(d[29]), \"+r\"(d[30]), \"+r\"(d[31]),"
+            "          \"+r\"(d[32]), \"+r\"(d[33]), \"+r\"(d[34]), \"+r\"(d[35]),"
+            "          \"+r\"(d[36]), \"+r\"(d[37]), \"+r\"(d[38]), \"+r\"(d[39]),"
+            "          \"+r\"(d[40]), \"+r\"(d[41]), \"+r\"(d[42]), \"+r\"(d[43]),"
+            "          \"+r\"(d[44]), \"+r\"(d[45]), \"+r\"(d[46]), \"+r\"(d[47]),"
+            "          \"+r\"(d[48]), \"+r\"(d[49]), \"+r\"(d[50]), \"+r\"(d[51]),"
+            "          \"+r\"(d[52]), \"+r\"(d[53]), \"+r\"(d[54]), \"+r\"(d[55]),"
+            "          \"+r\"(d[56]), \"+r\"(d[57]), \"+r\"(d[58]), \"+r\"(d[59]),"
+            "          \"+r\"(d[60]), \"+r\"(d[61]), \"+r\"(d[62]), \"+r\"(d[63])"
+            "        : \"l\"(reinterpret_cast<unsigned long long>(__cvta_generic_to_shared(a))),"
+            "          \"l\"(reinterpret_cast<unsigned long long>(__cvta_generic_to_shared(b))),"
+            "          \"r\"(0)"
+            "        : \"memory\");"
+            "}"
+            "int main() { return 0; }"
+            )
+
+        try_compile(GGML_CUDA_HAS_WGMMA_RESULT
+            "${CMAKE_CURRENT_BINARY_DIR}/check_wgmma"
+            "${CMAKE_CURRENT_BINARY_DIR}/check_wgmma"
+            SOURCES "${CMAKE_CURRENT_BINARY_DIR}/check_wgmma/test.cu"
+            COMPILE_DEFINITIONS -std=c++17
+            )
+
+        if (GGML_CUDA_HAS_WGMMA_RESULT)
+            message(STATUS "WGMMA PTX support detected for Blackwell")
+            set(GGML_CUDA_HAS_WGMMA ON CACHE INTERNAL "WGMMA PTX supported by this CUDA toolkit")
+        else()
+            message(STATUS "WGMMA PTX not yet supported by this CUDA toolkit (will use fallback)")
+            set(GGML_CUDA_HAS_WGMMA OFF CACHE INTERNAL "WGMMA PTX supported by this CUDA toolkit")
+        endif()
+
+        set(CMAKE_CUDA_ARCHITECTURES "${CMAKE_CUDA_ARCHITECTURES_SAVE}")
+    endif()
+
     file(GLOB   GGML_HEADERS_CUDA "*.cuh")
     list(APPEND GGML_HEADERS_CUDA "../../include/ggml-cuda.h")
 
@@ -133,6 +197,10 @@ if (CUDAToolkit_FOUND)
                              ${GGML_HEADERS_CUDA}
                              ${GGML_SOURCES_CUDA}
                             )
+
+    if (GGML_CUDA_HAS_WGMMA)
+        target_compile_definitions(ggml-cuda PUBLIC GGML_CUDA_HAS_WGMMA)
+    endif()
 
     add_compile_definitions(GGML_CUDA_PEER_MAX_BATCH_SIZE=${GGML_CUDA_PEER_MAX_BATCH_SIZE})
 
