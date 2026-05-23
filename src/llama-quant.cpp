@@ -106,10 +106,6 @@ static bool tensor_name_match_output_weight(const char * tensor_name) {
     return std::strcmp(tensor_name, "output.weight") == 0;
 }
 
-static bool tensor_name_is_mtp(const char * tensor_name) {
-    return strstr(tensor_name, "nextn.") != nullptr;
-}
-
 //
 // tensor categorization for quantization
 //
@@ -696,19 +692,7 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs, const llama_mod
 
         // if not manual - use the standard logic for choosing the quantization type based on the selected mixture
         if (!manual) {
-            if (qs.has_imatrix && tensor_name_is_mtp(tensor->name)) {
-                switch (default_type) {
-                    case GGML_TYPE_Q8_0:
-                    case GGML_TYPE_MXFP4:
-                        new_type = default_type; break;
-                    default:
-                        new_type = GGML_TYPE_Q4_0; break;
-                }
-                LLAMA_LOG_INFO("%s: %-36s - MTP layer, using %s without imatrix\n",
-                                __func__, tensor->name, ggml_type_name(new_type));
-            } else {
-                new_type = llama_tensor_get_type_impl(qs, new_type, tensor, params->ftype, tm.category);
-            }
+            new_type = llama_tensor_get_type_impl(qs, new_type, tensor, params->ftype, tm.category);
         }
 
         // incompatible tensor shapes are handled here - fallback to a compatible type
@@ -1056,6 +1040,26 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
 
         if (params->imatrix) {
             metadata[i].remapped_imatrix_name = remap_imatrix(tensor->name, mapped);
+
+            if (metadata[i].allows_quantization && imatrix_data) {
+                auto it = imatrix_data->find(metadata[i].remapped_imatrix_name);
+                if (it == imatrix_data->end()) {
+                    ggml_type fallback_type;
+                    switch (default_type) {
+                        case GGML_TYPE_Q8_0:
+                        case GGML_TYPE_MXFP4:
+                            fallback_type = default_type; break;
+                        default:
+                            fallback_type = GGML_TYPE_Q4_0; break;
+                    }
+                    if (metadata[i].target_type != fallback_type) {
+                        LLAMA_LOG_WARN("%s: %-36s - no imatrix entry found, using %s as fallback\n",
+                                        __func__, tensor->name, ggml_type_name(fallback_type));
+                        metadata[i].target_type = fallback_type;
+                        metadata[i].requires_imatrix = false;
+                    }
+                }
+            }
         } else if (metadata[i].allows_quantization && metadata[i].requires_imatrix) {
             if (params->dry_run) {
                 will_require_imatrix = true;
@@ -1194,7 +1198,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
                 const int64_t nelements = ggml_nelements(tensor);
 
                 const float * imatrix = nullptr;
-                if (imatrix_data && !tensor_name_is_mtp(tensor->name)) {
+                if (imatrix_data) {
                     auto it = imatrix_data->find(tm.remapped_imatrix_name);
                     if (it == imatrix_data->end()) {
                         LLAMA_LOG_INFO("\n====== %s: did not find weights for %s\n", __func__, tensor->name);
