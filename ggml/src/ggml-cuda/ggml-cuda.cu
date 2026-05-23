@@ -85,6 +85,7 @@
 #include <mutex>
 #include <cstdarg>
 #include <cstdio>
+#include <cstring>
 #include <cstdlib>
 #include <string>
 #include <vector>
@@ -204,6 +205,43 @@ static int ggml_cuda_parse_id(char devName[]) {
 }
 #endif // defined(GGML_USE_HIP)
 
+// Get the NUMA node associated with a GPU device by reading sysfs.
+// Returns -1 on any error (non-Linux, file not found, parse failure).
+#ifndef GGML_USE_HIP
+static int ggml_cuda_get_numa_node(int device_id) {
+    char pci_bus_id[256];
+    cudaError_t err = cudaDeviceGetPCIBusId(pci_bus_id, sizeof(pci_bus_id), device_id);
+    if (err != cudaSuccess) {
+        return -1;
+    }
+
+    // Parse BDF from "0000:XX:XX.X" or "00000000:XX:XX.X"
+    // The sysfs path always uses the 4-digit domain form: 0000:XX:XX.X
+    char bdf[16];
+    if (strlen(pci_bus_id) > 12) {
+        // 8-digit domain (e.g. "00000000:01:00.0") — strip to "0000:01:00.0"
+        strcpy(bdf, pci_bus_id + strlen(pci_bus_id) - 12);
+    } else {
+        strcpy(bdf, pci_bus_id);
+    }
+
+    FILE * f = fopen(("" + std::string("/sys/bus/pci/devices/") + bdf + "/numa_node").c_str(), "r");
+    if (!f) {
+        return -1;
+    }
+
+    int node = -1;
+    if (fscanf(f, "%d", &node) != 1) {
+        fclose(f);
+        return -1;
+    }
+    fclose(f);
+    return node;
+}
+#else
+static int ggml_cuda_get_numa_node(int) { return -1; }
+#endif
+
 static ggml_cuda_device_info ggml_cuda_init() {
     ggml_cuda_device_info info = {};
 
@@ -292,9 +330,10 @@ static ggml_cuda_device_info ggml_cuda_init() {
 #else
         info.devices[id].smpbo = prop.sharedMemPerBlockOptin;
         info.devices[id].cc = 100*prop.major + 10*prop.minor;
-        GGML_LOG_INFO("  Device %d: %s, compute capability %d.%d, VMM: %s, VRAM: %zu MiB\n",
+        const int numa_node = ggml_cuda_get_numa_node(id);
+        GGML_LOG_INFO("  Device %d: %s, compute capability %d.%d, VMM: %s, VRAM: %zu MiB, NUMA node: %d\n",
                       id, prop.name, prop.major, prop.minor, device_vmm ? "yes" : "no",
-                      (size_t)(prop.totalGlobalMem / (1024 * 1024)));
+                      (size_t)(prop.totalGlobalMem / (1024 * 1024)), numa_node);
         std::string device_name(prop.name);
         if (device_name == "NVIDIA GeForce MX450") {
             turing_devices_without_mma.push_back({ id, device_name });
@@ -325,6 +364,26 @@ static ggml_cuda_device_info ggml_cuda_init() {
         }
         GGML_LOG_INFO(
             "Consider compiling with CMAKE_CUDA_ARCHITECTURES=61-virtual;80-virtual and DGGML_CUDA_FORCE_MMQ to force the use of the Pascal code for Turing.\n");
+    }
+
+    // Log NUMA topology warnings for multi-GPU systems
+    if (info.device_count > 1) {
+        std::vector<int> numa_nodes;
+        for (int id = 0; id < info.device_count; ++id) {
+            numa_nodes.push_back(ggml_cuda_get_numa_node(id));
+        }
+        int first_node = numa_nodes[0];
+        bool multi_numa = false;
+        for (int id = 1; id < info.device_count; ++id) {
+            if (numa_nodes[id] != first_node && numa_nodes[id] >= 0) {
+                multi_numa = true;
+                break;
+            }
+        }
+        if (multi_numa) {
+            GGML_LOG_INFO("Devices span multiple NUMA nodes. For best performance, pin threads to the correct NUMA node.\n");
+            GGML_LOG_INFO("Example: numactl --cpunodebind=%d --membind=%d ./your_command\n", first_node, first_node);
+        }
     }
 
     for (int id = 0; id < info.device_count; ++id) {
