@@ -902,9 +902,7 @@ struct common_speculative_impl_ngram_mod : public common_speculative_impl {
 
         // EMA of the acceptance fraction (0.0 - 1.0); smooths out temporary dips
         // initialized to 1.0 (perfect acceptance) on new prompts
-        // reset triggers when ema_acc drops below 0.15 (~7 sustained zero-accept rounds with alpha=0.3)
-        int n_low = 0;
-
+        // reset triggers when ema_acc drops below 0.15 (~6 sustained zero-accept rounds with alpha=0.3)
         float ema_acc = 1.0f;
     };
 
