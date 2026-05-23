@@ -291,6 +291,7 @@ Here are some models known to work (w/ chat template override when needed):
 llama-server --jinja -fa -hf bartowski/Qwen2.5-7B-Instruct-GGUF:Q4_K_M
 llama-server --jinja -fa -hf bartowski/Mistral-Nemo-Instruct-2407-GGUF:Q6_K_L
 llama-server --jinja -fa -hf bartowski/Llama-3.3-70B-Instruct-GGUF:Q4_K_M
+llama-server --jinja -fa -hf ibm-granite/granite-4.1-3b-GGUF:Q4_K_M
 
 # Native support for DeepSeek R1 works best w/ our template override (official template is buggy, although we do work around it)
 

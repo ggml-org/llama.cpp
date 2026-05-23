@@ -600,6 +600,7 @@ class _Qwen35MtpMixin:
             if name.find("layers.") != -1:
                 assert bid is not None
                 name = name.replace(f"mtp.layers.{bid}", f"model.layers.{bid + n_layer}")
+                bid = bid + n_layer
             else:
                 remapper = {
                     "mtp.fc":                    "model.layers.{bid}.eh_proj",

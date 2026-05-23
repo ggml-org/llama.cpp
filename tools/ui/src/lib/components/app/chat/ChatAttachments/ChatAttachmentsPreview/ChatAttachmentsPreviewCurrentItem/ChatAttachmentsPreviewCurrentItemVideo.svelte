@@ -15,6 +15,7 @@
 
 		{#if videoSrc}
 			<video controls class="mb-4 w-full" src={videoSrc}>
+				<track kind="captions" src="" />
 				Your browser does not support the video element.
 			</video>
 		{:else}

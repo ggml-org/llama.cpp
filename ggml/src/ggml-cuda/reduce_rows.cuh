@@ -10,6 +10,8 @@ static __global__ void reduce_rows_f32(const float * __restrict__ x, float * __r
     const int num_unroll = 8;
     float     temp[num_unroll];
     float     sum_temp[num_unroll] = { 0.0f };
+
+    ggml_cuda_pdl_sync();
     for (int i = col; i < ncols;) {
         for (int j = 0; j < num_unroll; ++j) {
             if (i < ncols) {
