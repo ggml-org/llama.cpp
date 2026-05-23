@@ -106,6 +106,10 @@ static bool tensor_name_match_output_weight(const char * tensor_name) {
     return std::strcmp(tensor_name, "output.weight") == 0;
 }
 
+static bool tensor_name_is_mtp(const char * tensor_name) {
+    return strstr(tensor_name, "nextn.") != nullptr;
+}
+
 //
 // tensor categorization for quantization
 //
@@ -671,6 +675,23 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs, const llama_mod
 
     ggml_type new_type = default_type;
 
+    if (qs.has_imatrix && tensor_name_is_mtp(tensor->name)) {
+        switch (default_type) {
+            case GGML_TYPE_BF16:
+            case GGML_TYPE_F16:
+            case GGML_TYPE_F32:
+            case GGML_TYPE_Q8_0:
+            case GGML_TYPE_MXFP4:
+                new_type = default_type; break;
+            default:
+                new_type = GGML_TYPE_Q4_0; break;
+        }
+        LLAMA_LOG_INFO("%s: %-36s - MTP layer, using %s without imatrix\n",
+                        __func__, tensor->name, ggml_type_name(new_type));
+        new_type = tensor_type_fallback(qs, tensor, new_type);
+        return new_type;
+    }
+
     // get more optimal quantization type based on the tensor shape, layer, etc.
     if (!params->pure && ggml_is_quantized(default_type)) {
         // if the user provided tensor types - use those
@@ -1178,7 +1199,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
                 const int64_t nelements = ggml_nelements(tensor);
 
                 const float * imatrix = nullptr;
-                if (imatrix_data) {
+                if (imatrix_data && !tensor_name_is_mtp(tensor->name)) {
                     auto it = imatrix_data->find(tm.remapped_imatrix_name);
                     if (it == imatrix_data->end()) {
                         LLAMA_LOG_INFO("\n====== %s: did not find weights for %s\n", __func__, tensor->name);
