@@ -2556,6 +2556,17 @@ private:
                                     n_past = std::min(n_past, slot.alora_invocation_start - 1);
                                 }
 
+                                // clear stale cache if common prefix is too small
+                                if (slot.prompt.tokens.size() > 0 && (float)n_past / slot.prompt.tokens.size() < 0.25f) {
+                                    common_context_seq_rm(ctx_tgt, slot.id, -1, -1);
+                                    if (ctx_dft) {
+                                        common_context_seq_rm(ctx_dft.get(), slot.id, -1, -1);
+                                    }
+                                    slot.prompt.tokens.clear();
+                                    slot.prompt.checkpoints.clear();
+                                    n_past = 0;
+                                }
+
                                 const auto n_cache_reuse = slot.task->params.n_cache_reuse;
 
                                 const bool can_cache_reuse =

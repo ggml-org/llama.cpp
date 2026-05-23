@@ -2123,6 +2123,12 @@ bool server_prompt_cache::load(server_prompt & prompt, const server_tokens & tok
         prompt = std::move(*it_best);
 
         states.erase(it_best);
+        return true;
+    }
+
+    // no better cache entry found, return false if slot's data is a poor match so caller can clear the slot
+    if (!prompt.tokens.empty() && f_keep_best < 0.25f) {
+        return false;
     }
 
     return true;
