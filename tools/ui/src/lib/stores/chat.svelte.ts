@@ -14,12 +14,6 @@
 import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 import { DatabaseService } from '$lib/services/database.service';
 import { ChatService } from '$lib/services/chat.service';
-import { selectActiveStream } from '$lib/services/stream-discovery.service';
-import {
-	getStreamState,
-	clearStreamState,
-	resumeStreamIdentity
-} from '$lib/services/stream-resume.service';
 import { streamIdentity } from '$lib/utils/stream-identity';
 import { getAuthHeaders } from '$lib/utils/api-headers';
 import { conversationsStore } from '$lib/stores/conversations.svelte';
@@ -228,7 +222,7 @@ class ChatStore {
 			console.warn('probeServerStream JSON parse failed:', e);
 			return null;
 		}
-		return selectActiveStream(sessions);
+		return ChatService.selectActiveStream(sessions);
 	}
 
 	async attachServerStream(convId: string, streamId?: string): Promise<void> {
@@ -452,8 +446,8 @@ class ChatStore {
 			// the model is frozen at POST time, rebuild the exact conv::model identity from the
 			// persisted state so the lookup key matches what the server stored. null means a single
 			// model conv with no ::suffix, only guess from the dropdown with no persisted state
-			const localState = getStreamState(convId);
-			const streamId = resumeStreamIdentity(convId, localState, selectedModelName());
+			const localState = ChatService.getStreamState(convId);
+			const streamId = ChatService.resumeStreamIdentity(convId, localState, selectedModelName());
 
 			// primary path: ask the server which sessions exist for this identity
 			const serverTarget = await this.probeServerStream(streamId);
@@ -473,7 +467,7 @@ class ChatStore {
 			await this.attachServerStream(convId, streamId);
 			// if attachServerStream failed (session gone, TTL expired), clear the local state to avoid retrying forever
 			if (!this.chatStreamingStates.has(convId) && !this.chatLoadingStates.get(convId)) {
-				clearStreamState(convId);
+				ChatService.clearStreamState(convId);
 			}
 		} finally {
 			this.discoveringConvs.delete(convId);
@@ -664,7 +658,9 @@ class ChatStore {
 		// carried an explicit model), rebuild it per conv from the persisted state so a running
 		// session started with a model still matches. a single model conv stays a bare id, and
 		// the server response is mapped back to the bare id below for the sidebar set
-		const lookupIds = ids.map((id) => resumeStreamIdentity(id, getStreamState(id), null));
+		const lookupIds = ids.map((id) =>
+			ChatService.resumeStreamIdentity(id, ChatService.getStreamState(id), null)
+		);
 		let sessions: ApiStreamSession[];
 		try {
 			const resp = await fetch('./v1/streams/lookup', {

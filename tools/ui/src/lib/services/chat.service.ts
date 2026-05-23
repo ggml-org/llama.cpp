@@ -3,11 +3,6 @@ import { formatAttachmentText } from '$lib/utils/formatters';
 import { isAbortError } from '$lib/utils/abort';
 import { streamIdentity } from '$lib/utils/stream-identity';
 import {
-	saveStreamState,
-	clearStreamState,
-	resumeStream
-} from '$lib/services/stream-resume.service';
-import {
 	ATTACHMENT_LABEL_PDF_FILE,
 	ATTACHMENT_LABEL_MCP_PROMPT,
 	ATTACHMENT_LABEL_MCP_RESOURCE,
@@ -35,7 +30,8 @@ import {
 import type {
 	ApiChatMessageContentPart,
 	ApiChatMessageData,
-	ApiChatCompletionToolCall
+	ApiChatCompletionToolCall,
+	ApiStreamSession
 } from '$lib/types/api';
 import type {
 	AudioInputFormat,
@@ -61,6 +57,21 @@ function getAudioInputFormat(mimeType: string): AudioInputFormat {
 	}
 
 	return FileTypeAudio.MP3;
+}
+
+interface ResumableStreamState {
+	bytesReceived: number;
+	updatedAt: number;
+
+	// model frozen at POST time, lets a reload rebuild the exact conv::model identity the
+	// server keyed the session under. null when the POST carried no explicit model
+	model?: string | null;
+}
+
+const STREAM_RESUME_STORAGE_PREFIX = 'llamacpp.stream.resume.';
+
+function streamStorageKey(conversationId: string): string {
+	return STREAM_RESUME_STORAGE_PREFIX + conversationId;
 }
 
 export class ChatService {
@@ -505,6 +516,103 @@ export class ChatService {
 		}
 	}
 
+	/**
+	 * Pick the running session to splice into when discoverActiveStream lists candidates for a
+	 * conversation. Finalized sessions are not candidates: their final content was already written
+	 * to the DB by the original onComplete handler, so attaching to them would replay a buffer that
+	 * may not match what the DB holds. A continue session's buffer holds only the appended deltas,
+	 * not the pre continue prefix, so replaying it as a fresh generation would erase the original.
+	 *
+	 * Among running sessions we tie break on the most recent started_at, which covers the case of
+	 * multiple inferences left running on the same conversation.
+	 */
+	static selectActiveStream(
+		sessions: ApiStreamSession[] | null | undefined
+	): ApiStreamSession | null {
+		if (!Array.isArray(sessions) || sessions.length === 0) {
+			return null;
+		}
+		const running = sessions.filter((s) => !s.is_done);
+		if (running.length === 0) {
+			return null;
+		}
+		return running.reduce((best, cur) => (cur.started_at > best.started_at ? cur : best));
+	}
+
+	// persist the running byte count and the frozen model for a conversation, a later visit
+	// resumes the SSE replay at the right offset under the same conv::model identity
+	static saveStreamState(
+		conversationId: string,
+		bytesReceived: number,
+		model?: string | null
+	): void {
+		if (!conversationId) return;
+		try {
+			const state: ResumableStreamState = {
+				bytesReceived,
+				updatedAt: Date.now(),
+				model: model ?? null
+			};
+			localStorage.setItem(streamStorageKey(conversationId), JSON.stringify(state));
+		} catch {
+			// localStorage may be full or disabled, silently ignore
+		}
+	}
+
+	static getStreamState(conversationId: string): ResumableStreamState | null {
+		if (!conversationId) return null;
+		try {
+			const raw = localStorage.getItem(streamStorageKey(conversationId));
+			if (!raw) return null;
+			const parsed = JSON.parse(raw) as ResumableStreamState;
+			if (!parsed || typeof parsed.bytesReceived !== 'number') return null;
+			return parsed;
+		} catch {
+			return null;
+		}
+	}
+
+	static clearStreamState(conversationId: string): void {
+		if (!conversationId) return;
+		try {
+			localStorage.removeItem(streamStorageKey(conversationId));
+		} catch {
+			// nothing to do
+		}
+	}
+
+	/**
+	 * Rebuild the stream identity for a resume. The model persisted at POST time wins, including a
+	 * stored null which means the POST carried no explicit model so the identity stays the bare conv
+	 * id. Only fall back to the caller supplied current model when nothing was persisted.
+	 */
+	static resumeStreamIdentity(
+		conversationId: string,
+		state: ResumableStreamState | null,
+		fallbackModel: string | null
+	): string {
+		const model = state && state.model !== undefined ? state.model : fallbackModel;
+		return streamIdentity(conversationId, model);
+	}
+
+	/**
+	 * Reconnect to an interrupted stream for this conversation. Returns the fetch Response so the
+	 * existing SSE parser drains it like a fresh stream. The server returns 200 on success, 404 if
+	 * no session exists for the conv_id, and 400 if the offset is below the dropped prefix.
+	 */
+	static async resumeStream(
+		conversationId: string,
+		signal?: AbortSignal,
+		model?: string | null
+	): Promise<Response | null> {
+		if (!conversationId) return null;
+		const state = ChatService.getStreamState(conversationId);
+		const from = state?.bytesReceived ?? 0;
+		const id = streamIdentity(conversationId, model);
+		const url = `${API_STREAM.BASE}/${encodeURIComponent(id)}?from=${from}`;
+		return await fetch(url, { method: 'GET', signal, headers: getAuthHeaders() });
+	}
+
 	static async preEncode(
 		messages: ApiChatMessageData[] | (DatabaseMessage & { extra?: DatabaseMessageExtra[] })[],
 		model?: string | null,
@@ -628,7 +736,7 @@ export class ChatService {
 		let madeProgress = true;
 		const encoder = new TextEncoder();
 		if (conversationId) {
-			saveStreamState(conversationId, 0, streamModel);
+			ChatService.saveStreamState(conversationId, 0, streamModel);
 		}
 		onConnectionState?.(StreamConnectionState.STREAMING);
 
@@ -745,7 +853,7 @@ export class ChatService {
 					if (conversationId) {
 						const tailBytes = encoder.encode(chunk).byteLength;
 						bytesParsed = segmentStartOffset + segmentBytesRead - tailBytes;
-						saveStreamState(conversationId, bytesParsed, streamModel);
+						ChatService.saveStreamState(conversationId, bytesParsed, streamModel);
 					}
 
 					for (const line of lines) {
@@ -833,9 +941,11 @@ export class ChatService {
 				// it will be retransmitted from a clean line boundary. reuse the model the POST was
 				// originally tagged with, the dropdown may have changed since but the server side
 				// identity is frozen at POST time
-				const resumeResp = await resumeStream(conversationId, abortSignal, streamModel).catch(
-					() => null
-				);
+				const resumeResp = await ChatService.resumeStream(
+					conversationId,
+					abortSignal,
+					streamModel
+				).catch(() => null);
 				// an abort landing during the resume request is intentional, not a lost connection
 				if (abortSignal?.aborted) break;
 				if (!resumeResp || resumeResp.status !== 200) {
@@ -865,7 +975,7 @@ export class ChatService {
 				finalizeOpenToolCallBatch();
 
 				if (conversationId) {
-					clearStreamState(conversationId);
+					ChatService.clearStreamState(conversationId);
 				}
 
 				const finalToolCalls =
