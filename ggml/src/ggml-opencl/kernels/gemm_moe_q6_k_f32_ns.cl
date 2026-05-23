@@ -117,7 +117,7 @@ kernel void kernel_gemm_moe_q6_k_f32_ns(
     uint block_id_n = get_global_id(2); // n_tile
 
     // Boundary check
-    if (((get_global_id(0) + block_id_m * TILESIZE_M) >= ne01) || (block_id_n >= total_tiles[0])) {
+    if (block_id_n >= total_tiles[0]) {
         return;
     }
 
@@ -207,6 +207,10 @@ kernel void kernel_gemm_moe_q6_k_f32_ns(
 
         dotx16_reduce8(reg_a, shared_b, reg_c.lo, 0);
         dotx16_reduce8(reg_a, shared_b, reg_c.hi, 16);
+    }
+
+    if ((get_global_id(0) + block_id_m * TILESIZE_M) >= ne01) {
+        return;
     }
 
     // Load post router and share in LM
