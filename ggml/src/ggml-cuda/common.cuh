@@ -285,9 +285,9 @@ static const char * cu_get_error_str(CUresult err) {
 #    define BLACKWELL_MMA_AVAILABLE
 #endif // !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_BLACKWELL
 
-#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_BLACKWELL_WG && __CUDA_ARCH__ < GGML_CUDA_CC_RUBIN
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_BLACKWELL_WG && __CUDA_ARCH__ < GGML_CUDA_CC_RUBIN && defined(GGML_CUDA_HAS_WGMMA)
 #    define BLACKWELL_WGMMMA_AVAILABLE
-#endif // !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_BLACKWELL_WG
+#endif // !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_BLACKWELL_WG && defined(GGML_CUDA_HAS_WGMMA)
 
 #if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_AMPERE
 #define CP_ASYNC_AVAILABLE

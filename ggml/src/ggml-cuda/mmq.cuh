@@ -4137,6 +4137,258 @@ void mul_mat_q_case(ggml_backend_cuda_context & ctx, const mmq_args & args, cuda
     }
 }
 
+// ---------------------------------------------------------------------------------------------------------
+// WGMMA-based kernel for Blackwell (SM>=1000) — Q8_0 quantized matmul
+// Uses 128-thread warpgroups. Falls back to warp-level MMA when WGMMA PTX is unavailable.
+
+#ifdef BLACKWELL_WGMMMA_AVAILABLE
+
+template <int mmq_x, int mmq_y>
+static __device__ __forceinline__ void
+vec_dot_q8_0_wgmma(const int * __restrict__ tile_x, const int * __restrict__ tile_y, float * __restrict__ sum, const int k00) {
+    // WGMMA m64n32h8: 64 rows x 32 cols, K=8 INT8 per stage.
+    // Each warpgroup (128 threads) computes one 64xN tile.
+    // Process N dimension in 32-col chunks.
+    const int nwarps = mmq_get_nwarps_device();
+    const float *x_df = reinterpret_cast<const float *>(tile_x + 2 * MMQ_TILE_NE_K);
+
+    for (int n_base = 0; n_base < mmq_x; n_base += 32) {
+        ggml_cuda_wgmma::frag_c<64, 32> D;
+        D.zero();
+
+        for (int k = 0; k < MMQ_TILE_NE_K; k += 8) {
+            const int k_off = k00 + k;
+            const uint32_t *A = reinterpret_cast<const uint32_t *>(tile_x + k_off);
+            const uint32_t *B = reinterpret_cast<const uint32_t *>(tile_y + n_base * MMQ_TILE_Y_K + k_off);
+
+            ggml_cuda_wgmma::mma_sync<64, 32, 8>(D, A, B, true);
+            ggml_cuda_wgmma::commit_sync();
+        }
+        ggml_cuda_wgmma::wait_sync<0>();
+
+        // Write back: frag_c<64,32>::ne = 64. Map to 64x32 tile.
+        // PTX <16> vector: 16 regs per thread, 4 warps. Row-major distribution.
+        const float *Df = reinterpret_cast<const float *>(D.x);
+        for (int l = 0; l < ggml_cuda_wgmma::frag_c<64, 32>::ne; ++l) {
+            const int i = l % 64;
+            const int j = n_base + l / 64;
+            if (i < mmq_y && j < mmq_x) {
+                sum[j * mmq_y + i] += Df[l] * x_df[i * MMQ_MMA_TILE_X_K_Q8_0 + k00 / QI8_0];
+            }
+        }
+    }
+}
+
+template <ggml_type type, int mmq_x, bool need_check>
+__launch_bounds__(128, 2)
+static __global__ void mul_mat_q_wgmma(
+        const char * __restrict__ x, const int * __restrict__ y, const int32_t * __restrict__ ids_dst,
+        const int32_t * __restrict__ expert_bounds, float * __restrict__ dst, float * __restrict__ tmp_fixup,
+        const uint3 blocks_per_ne00, const int nrows_x, const int ncols_dst, const int stride_row_x, const int ncols_y, const int stride_col_dst,
+        const uint3 channel_ratio, const uint3 nchannels_y, const int stride_channel_x, const int stride_channel_y, const int stride_channel_dst,
+        const uint3 sample_ratio, const uint3 nsamples_y, const int stride_sample_x, const int stride_sample_y, const int stride_sample_dst,
+        const uint3 ntx) {
+
+    constexpr int qk    = ggml_cuda_type_traits<type>::qk;
+    constexpr int mmq_y = get_mmq_y_device();
+    const int nchannels_y_val = nchannels_y.z;
+    const int nsamples_y_val  = nsamples_y.z;
+    const int channel_ratio_val = channel_ratio.z;
+    const int sample_ratio_val  = sample_ratio.z;
+
+    const int nty  = (nrows_x   + mmq_y - 1) / mmq_y;
+    const int ntx_c = (ncols_dst + mmq_x - 1) / mmq_x;
+    const int ntzw = nchannels_y_val * nsamples_y_val;
+    const int ntiles_dst = ntx_c * nty * ntzw;
+    const int kbc = ntiles_dst * blocks_per_ne00.z;
+
+    extern __shared__ int ids_dst_shared[];
+    int *tile_y = ids_dst_shared + mmq_x;
+    int *tile_x = tile_y + GGML_PAD(mmq_x * MMQ_TILE_Y_K, 128);
+
+#pragma unroll
+    for (int j = threadIdx.x; j < mmq_x; j += 128) {
+        ids_dst_shared[j] = j;
+    }
+    __syncthreads();
+
+    for (int kb0t = blockIdx.x * qk; kb0t < kbc; kb0t += gridDim.x * qk) {
+        const int k_block = kb0t / ntiles_dst;
+        const int k_tile  = kb0t - k_block * ntiles_dst;
+        const int kz      = k_tile / (nty * ntx_c);
+        const int ktx     = (k_tile - kz * nty * ntx_c) / nty;
+        const int kty     = k_tile - kz * nty * ntx_c - ktx * nty;
+
+        const int i0  = kty * mmq_y;
+        const int j0  = ktx * mmq_x;
+        const int i_max = min(i0 + mmq_y, nrows_x);
+        const int kb0_start = k_block * qk;
+        const int kb0_stop  = (k_block + 1) * qk;
+
+        const int64_t k_z = kz / (channel_ratio_val * sample_ratio_val);
+        const int kchannel = (kz - k_z * channel_ratio_val * sample_ratio_val) / sample_ratio_val;
+        const int ks = kz - k_z * channel_ratio_val * sample_ratio_val - kchannel * sample_ratio_val;
+
+        const int64_t stride0 = k_z * stride_channel_x + kchannel * stride_sample_x + ks * stride_sample_x;
+        const int64_t stride2 = k_z * stride_channel_dst + kchannel * stride_sample_dst + ks * stride_sample_dst;
+        const int64_t offset_x = stride0 + ktx * mmq_x * stride_row_x;
+        const int64_t dst_offset = stride2 + j0 * stride_col_dst;
+
+        float sum[mmq_x] = {0.0f};
+        constexpr int sz = sizeof(block_q8_1_mmq) / sizeof(int);
+
+        for (int kb0 = kb0_start; kb0 < kb0_stop; kb0 += qk / 2) {
+            // Load X tile (same as regular mul_mat_q)
+            load_tiles_q8_0<mmq_y, need_check>(x, tile_x, offset_x + kb0, i_max, stride_row_x);
+            __syncthreads();
+
+            // Load Y tile (first half)
+            {
+                const int *by0 = y + (kb0 / (qk / 2)) * sz;
+#pragma unroll
+                for (int l0 = 0; l0 < mmq_x * MMQ_TILE_Y_K; l0 += 128) {
+                    const int l = l0 + threadIdx.x;
+                    tile_y[l] = by0[l];
+                }
+            }
+            __syncthreads();
+
+            vec_dot_q8_0_wgmma<mmq_x, mmq_y>(tile_x, tile_y, sum, 0);
+            __syncthreads();
+
+            // Load Y tile (second half)
+            {
+                const int *by0 = y + (kb0 / (qk / 2) + 1) * sz;
+#pragma unroll
+                for (int l0 = 0; l0 < mmq_x * MMQ_TILE_Y_K; l0 += 128) {
+                    const int l = l0 + threadIdx.x;
+                    tile_y[l] = by0[l];
+                }
+            }
+            __syncthreads();
+
+            vec_dot_q8_0_wgmma<mmq_x, mmq_y>(tile_x, tile_y, sum, MMQ_TILE_NE_K);
+            __syncthreads();
+        }
+
+        // Write back results
+        for (int j = threadIdx.x; j < mmq_x; j += 128) {
+            for (int i = 0; i < mmq_y; i += 1) {
+                const int ii = i0 + i;
+                const int jj = j0 + j;
+                if (!need_check || (ii < nrows_x && jj < ncols_dst)) {
+                    dst[dst_offset + jj * stride_col_dst + ii] = sum[j];
+                }
+            }
+        }
+        __syncthreads();
+    }
+}
+
+template <ggml_type type, int mmq_x>
+static void launch_mul_mat_q_wgmma(ggml_backend_cuda_context & ctx, const mmq_args & args, cudaStream_t stream) {
+    const int id = ggml_cuda_get_device();
+    const int nsm = ggml_cuda_info().devices[id].nsm;
+    const int mmq_y = get_mmq_y_device();
+
+    const dim3 block_dims(128, 1, 1);
+
+    // Shared memory: ids_dst[mmq_x] + tile_y[mmq_x*MMQ_TILE_Y_K] + tile_x[mmq_y*MMQ_MMA_TILE_X_K_Q8_0 + 2*MMQ_TILE_NE_K]
+    const size_t nbs_ids  = mmq_x * sizeof(int);
+    const size_t nbs_y    = GGML_PAD(mmq_x * MMQ_TILE_Y_K, 128) * sizeof(int);
+    const size_t nbs_x    = (mmq_y * MMQ_MMA_TILE_X_K_Q8_0 + 2 * MMQ_TILE_NE_K) * sizeof(int);
+    const size_t nbytes_shared = nbs_ids + nbs_y + nbs_x;
+
+    CUDA_SET_SHARED_MEMORY_LIMIT((mul_mat_q_wgmma<type, mmq_x, false>), nbytes_shared);
+    CUDA_SET_SHARED_MEMORY_LIMIT((mul_mat_q_wgmma<type, mmq_x,  true>), nbytes_shared);
+
+    const int nty  = (args.nrows_x   + mmq_y - 1) / mmq_y;
+    const int ntx_c = (args.ncols_max + mmq_x - 1) / mmq_x;
+    const int ntzw = args.nchannels_y * args.nsamples_y;
+    const int ntiles_dst = ntx_c * nty * ntzw;
+
+    const dim3 block_nums_stream_k(nsm, 1, 1);
+
+    const uint3 blocks_per_ne00_fd = init_fastdiv_values(args.ncols_x / ggml_cuda_type_traits<type>::qk);
+    const uint3 ntx_fd             = init_fastdiv_values(ntx_c);
+    const uint3 nchannels_y_fd     = init_fastdiv_values(args.nchannels_y);
+    const uint3 nsamples_y_fd      = init_fastdiv_values(args.nsamples_y);
+    const uint3 channel_ratio_fd   = init_fastdiv_values(args.nchannels_y / args.nchannels_x);
+    const uint3 sample_ratio_fd    = init_fastdiv_values(args.nsamples_y  / args.nsamples_x);
+
+    if (args.nrows_x % mmq_y == 0) {
+        mul_mat_q_wgmma<type, mmq_x, false><<<block_nums_stream_k, block_dims, nbytes_shared, stream>>>
+            (args.x, args.y, args.ids_dst, args.expert_bounds, args.dst, nullptr,
+             blocks_per_ne00_fd, args.nrows_x, args.ncols_dst, args.stride_row_x, args.ncols_y, args.nrows_dst,
+             channel_ratio_fd, nchannels_y_fd, args.stride_channel_x, args.stride_channel_y, args.stride_channel_dst,
+             sample_ratio_fd, nsamples_y_fd, args.stride_sample_x, args.stride_sample_y, args.stride_sample_dst,
+             ntx_fd);
+    } else {
+        mul_mat_q_wgmma<type, mmq_x, true><<<block_nums_stream_k, block_dims, nbytes_shared, stream>>>
+            (args.x, args.y, args.ids_dst, args.expert_bounds, args.dst, nullptr,
+             blocks_per_ne00_fd, args.nrows_x, args.ncols_dst, args.stride_row_x, args.ncols_y, args.nrows_dst,
+             channel_ratio_fd, nchannels_y_fd, args.stride_channel_x, args.stride_channel_y, args.stride_channel_dst,
+             sample_ratio_fd, nsamples_y_fd, args.stride_sample_x, args.stride_sample_y, args.stride_sample_dst,
+             ntx_fd);
+    }
+}
+
+template <ggml_type type>
+void mul_mat_q_wgmma_case(ggml_backend_cuda_context & ctx, const mmq_args & args, cudaStream_t stream) {
+    const int id = ggml_cuda_get_device();
+    const int cc = ggml_cuda_info().devices[id].cc;
+    const size_t smpbo = ggml_cuda_info().devices[id].smpbo;
+    const int mmq_y = get_mmq_y_host(cc);
+
+    int mmq_x_best = 0;
+    int ntiles_x_best = INT_MAX;
+
+    for (int mmq_x = 8; mmq_x <= 128 && ntiles_x_best > 1; mmq_x += 8) {
+        const size_t nbs_ids  = mmq_x * sizeof(int);
+        const size_t nbs_y    = GGML_PAD(mmq_x * MMQ_TILE_Y_K, 128) * sizeof(int);
+        const size_t nbs_x    = (mmq_y * MMQ_MMA_TILE_X_K_Q8_0 + 2 * MMQ_TILE_NE_K) * sizeof(int);
+        const size_t nbytes = nbs_ids + nbs_y + nbs_x;
+        if (nbytes > smpbo) continue;
+        const int ntiles_x = (args.ncols_max + mmq_x - 1) / mmq_x;
+        if (ntiles_x < ntiles_x_best) {
+            mmq_x_best = mmq_x;
+            ntiles_x_best = ntiles_x;
+        }
+    }
+
+    if (mmq_x_best == 0) {
+        mul_mat_q_case<type>(ctx, args, stream);
+        return;
+    }
+
+    switch (mmq_x_best) {
+        case   8: launch_mul_mat_q_wgmma<type,   8>(ctx, args, stream); break;
+        case  16: launch_mul_mat_q_wgmma<type,  16>(ctx, args, stream); break;
+        case  24: launch_mul_mat_q_wgmma<type,  24>(ctx, args, stream); break;
+        case  32: launch_mul_mat_q_wgmma<type,  32>(ctx, args, stream); break;
+        case  40: launch_mul_mat_q_wgmma<type,  40>(ctx, args, stream); break;
+        case  48: launch_mul_mat_q_wgmma<type,  48>(ctx, args, stream); break;
+        case  56: launch_mul_mat_q_wgmma<type,  56>(ctx, args, stream); break;
+        case  64: launch_mul_mat_q_wgmma<type,  64>(ctx, args, stream); break;
+        case  72: launch_mul_mat_q_wgmma<type,  72>(ctx, args, stream); break;
+        case  80: launch_mul_mat_q_wgmma<type,  80>(ctx, args, stream); break;
+        case  88: launch_mul_mat_q_wgmma<type,  88>(ctx, args, stream); break;
+        case  96: launch_mul_mat_q_wgmma<type,  96>(ctx, args, stream); break;
+        case 104: launch_mul_mat_q_wgmma<type, 104>(ctx, args, stream); break;
+        case 112: launch_mul_mat_q_wgmma<type, 112>(ctx, args, stream); break;
+        case 120: launch_mul_mat_q_wgmma<type, 120>(ctx, args, stream); break;
+        case 128: launch_mul_mat_q_wgmma<type, 128>(ctx, args, stream); break;
+        default:
+            fprintf(stderr, "wgmma_mmq_x_best=%d\n", mmq_x_best);
+            GGML_ABORT("fatal error");
+            break;
+    }
+}
+
+extern template void mul_mat_q_wgmma_case<GGML_TYPE_Q8_0>(ggml_backend_cuda_context & ctx, const mmq_args & args, cudaStream_t stream);
+
+#endif // BLACKWELL_WGMMMA_AVAILABLE
+
 #define DECL_MMQ_CASE(type)                                                        \
     template void mul_mat_q_case<type>(ggml_backend_cuda_context & ctx, const mmq_args & args, cudaStream_t stream) \
 

@@ -74,6 +74,19 @@ static void ggml_cuda_mul_mat_q_switch_type(ggml_backend_cuda_context & ctx, con
     }
 }
 
+#ifdef BLACKWELL_WGMMMA_AVAILABLE
+static void ggml_cuda_mul_mat_q_wgmma_switch_type(ggml_backend_cuda_context & ctx, const mmq_args & args, cudaStream_t stream) {
+    switch (args.type_x) {
+        case GGML_TYPE_Q8_0:
+            mul_mat_q_wgmma_case<GGML_TYPE_Q8_0>(ctx, args, stream);
+            break;
+        default:
+            ggml_cuda_mul_mat_q_switch_type(ctx, args, stream);
+            break;
+    }
+}
+#endif
+
 void ggml_cuda_mul_mat_q(
         ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, const ggml_tensor * ids, ggml_tensor * dst) {
     GGML_ASSERT(        src1->type == GGML_TYPE_F32);
@@ -123,6 +136,7 @@ void ggml_cuda_mul_mat_q(
 
     // TODO: tighter pool buffer size vs q8 path
     const bool use_native_fp4 = blackwell_mma_available(cc) && (src0->type == GGML_TYPE_MXFP4 || src0->type == GGML_TYPE_NVFP4);
+    const bool use_wgmma = blackwell_wgmma_available(cc) && !use_native_fp4;
 
     if (!ids) {
         const size_t nbytes_src1_q8_1 = ne13*ne12 * ne11*ne10_padded * sizeof(block_q8_1)/QK8_1 +
@@ -157,7 +171,14 @@ void ggml_cuda_mul_mat_q(
             ne02, ne12, s02, s12, s2,
             ne03, ne13, s03, s13, s3,
             use_stream_k, ne1};
-        ggml_cuda_mul_mat_q_switch_type(ctx, args, stream);
+#ifdef BLACKWELL_WGMMMA_AVAILABLE
+        if (use_wgmma) {
+            ggml_cuda_mul_mat_q_wgmma_switch_type(ctx, args, stream);
+        } else
+#endif
+        {
+            ggml_cuda_mul_mat_q_switch_type(ctx, args, stream);
+        }
         return;
     }
 
@@ -370,3 +391,7 @@ bool ggml_cuda_should_use_mmq(enum ggml_type type, int cc, int64_t ne11, int64_t
 
     return (!GGML_CUDA_CC_IS_CDNA(cc)) || ne11 < MMQ_DP4A_MAX_BATCH_SIZE;
 }
+
+#ifdef BLACKWELL_WGMMMA_AVAILABLE
+template void mul_mat_q_wgmma_case<GGML_TYPE_Q8_0>(ggml_backend_cuda_context & ctx, const mmq_args & args, cudaStream_t stream);
+#endif
