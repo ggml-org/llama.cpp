@@ -4148,9 +4148,15 @@ static __device__ __forceinline__ void
 vec_dot_q8_0_wgmma(const int * __restrict__ tile_x, const int * __restrict__ tile_y, float * __restrict__ sum, const int k00) {
     // WGMMA m64n32h8: 64 rows x 32 cols, K=8 INT8 per stage.
     // Each warpgroup (128 threads) computes one 64xN tile.
-    // Process N dimension in 32-col chunks.
-    const int nwarps = mmq_get_nwarps_device();
-    const float *x_df = reinterpret_cast<const float *>(tile_x + 2 * MMQ_TILE_NE_K);
+    //
+    // Shared memory layout (matches existing mmq kernel):
+    //   tile_x: [mmq_y * MMQ_MMA_TILE_X_K_Q8_0] quantized values + [mmq_y] float scales
+    //   tile_y[col]: [4] float scales + [MMQ_TILE_Y_K - 4] quantized values (block_q8_1_mmq format)
+    //
+    // X scales: x_df[row * MMQ_MMA_TILE_X_K_Q8_0 + k00/QI8_0]
+    // Y scales: y_df[col * MMQ_TILE_Y_K + k00/QI8_1] (first 4 floats of each col tile)
+    const float *x_df = reinterpret_cast<const float *>(tile_x + mmq_y * MMQ_MMA_TILE_X_K_Q8_0);
+    const float *y_df = reinterpret_cast<const float *>(tile_y);
 
     for (int n_base = 0; n_base < mmq_x; n_base += 32) {
         ggml_cuda_wgmma::frag_c<64, 32> D;
@@ -4158,22 +4164,27 @@ vec_dot_q8_0_wgmma(const int * __restrict__ tile_x, const int * __restrict__ til
 
         for (int k = 0; k < MMQ_TILE_NE_K; k += 8) {
             const int k_off = k00 + k;
+            // WGMMA reads INT8 tiles from shared memory.
+            // X tile: quantized values stored as int32 (1 int8 per int32 slot for alignment)
             const uint32_t *A = reinterpret_cast<const uint32_t *>(tile_x + k_off);
-            const uint32_t *B = reinterpret_cast<const uint32_t *>(tile_y + n_base * MMQ_TILE_Y_K + k_off);
+            // Y tile: quantized values start after scale (offset +4 from col base)
+            const uint32_t *B = reinterpret_cast<const uint32_t *>(tile_y + n_base * MMQ_TILE_Y_K + 4 + k_off);
 
             ggml_cuda_wgmma::mma_sync<64, 32, 8>(D, A, B, true);
             ggml_cuda_wgmma::commit_sync();
         }
         ggml_cuda_wgmma::wait_sync<0>();
 
-        // Write back: frag_c<64,32>::ne = 64. Map to 64x32 tile.
-        // PTX <16> vector: 16 regs per thread, 4 warps. Row-major distribution.
+        // Write back: each thread holds 64 uint32_t in the fragment.
+        // Apply per-row X scale and per-col Y scale.
         const float *Df = reinterpret_cast<const float *>(D.x);
         for (int l = 0; l < ggml_cuda_wgmma::frag_c<64, 32>::ne; ++l) {
             const int i = l % 64;
             const int j = n_base + l / 64;
             if (i < mmq_y && j < mmq_x) {
-                sum[j * mmq_y + i] += Df[l] * x_df[i * MMQ_MMA_TILE_X_K_Q8_0 + k00 / QI8_0];
+                const float dA = x_df[i * MMQ_MMA_TILE_X_K_Q8_0 + k00 / QI8_0];
+                const float dB = y_df[j * MMQ_TILE_Y_K + k00 / QI8_1];
+                sum[j * mmq_y + i] += Df[l] * dA * dB;
             }
         }
     }
@@ -4234,7 +4245,7 @@ static __global__ void mul_mat_q_wgmma(
         const int64_t offset_x = stride0 + ktx * mmq_x * stride_row_x;
         const int64_t dst_offset = stride2 + j0 * stride_col_dst;
 
-        float sum[mmq_x] = {0.0f};
+        float sum[mmq_x * mmq_y] = {0.0f};
         constexpr int sz = sizeof(block_q8_1_mmq) / sizeof(int);
 
         for (int kb0 = kb0_start; kb0 < kb0_stop; kb0 += qk / 2) {
@@ -4271,14 +4282,14 @@ static __global__ void mul_mat_q_wgmma(
             __syncthreads();
         }
 
-        // Write back results
-        for (int j = threadIdx.x; j < mmq_x; j += 128) {
-            for (int i = 0; i < mmq_y; i += 1) {
-                const int ii = i0 + i;
-                const int jj = j0 + j;
-                if (!need_check || (ii < nrows_x && jj < ncols_dst)) {
-                    dst[dst_offset + jj * stride_col_dst + ii] = sum[j];
-                }
+        // Write back results — each thread handles a subset of the mmq_x*mmq_y output.
+        for (int idx = threadIdx.x; idx < mmq_x * mmq_y; idx += 128) {
+            const int i = idx % mmq_y;
+            const int j = idx / mmq_y;
+            const int ii = i0 + i;
+            const int jj = j0 + j;
+            if (!need_check || (ii < nrows_x && jj < ncols_dst)) {
+                dst[dst_offset + jj * stride_col_dst + ii] = sum[idx];
             }
         }
         __syncthreads();
