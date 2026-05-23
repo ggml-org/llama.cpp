@@ -145,9 +145,9 @@ struct server_slot {
 
         SLT_INF(*this, "clearing prompt with %zu tokens\n", prompt.tokens.size());
 
-        llama_memory_seq_rm(llama_get_memory(ctx_tgt), id, -1, -1);
+        common_context_seq_rm(ctx_tgt, id, -1, -1);
         if (ctx_dft) {
-            llama_memory_seq_rm(llama_get_memory(ctx_dft), id, -1, -1);
+            common_context_seq_rm(ctx_dft, id, -1, -1);
         }
 
         prompt.tokens.clear();
@@ -238,8 +238,14 @@ struct server_slot {
                 (ggml_time_us() - t_start) / 1000.0, n_text, (int) prompt.tokens.size());
     }
 
+    bool need_embd() const {
+        GGML_ASSERT(task);
+        return task->need_embd() || (spec && common_speculative_need_embd(spec));
+    }
+
     // if the context does not have a memory module then all embeddings have to be computed within a single ubatch
     // also we cannot split if the pooling would require any past tokens
+    // (MTP supports splitting — uses task->need_embd() not need_embd())
     bool can_split() const {
         GGML_ASSERT(task);
 
@@ -511,12 +517,12 @@ struct server_slot {
     void copy_state_to(server_slot & other) const {
         GGML_ASSERT(state == SLOT_STATE_DONE_PROMPT);
 
-        llama_memory_seq_rm(llama_get_memory(ctx_tgt), other.id,     -1, -1);
-        llama_memory_seq_cp(llama_get_memory(ctx_tgt), id, other.id, -1, -1);
+        common_context_seq_rm(ctx_tgt, other.id,     -1, -1);
+        common_context_seq_cp(ctx_tgt, id, other.id, -1, -1);
 
         if (ctx_dft) {
-            llama_memory_seq_rm(llama_get_memory(ctx_dft), other.id,     -1, -1);
-            llama_memory_seq_cp(llama_get_memory(ctx_dft), id, other.id, -1, -1);
+            common_context_seq_rm(ctx_dft, other.id,     -1, -1);
+            common_context_seq_cp(ctx_dft, id, other.id, -1, -1);
         }
 
         other.n_decoded   = n_decoded;
@@ -775,7 +781,37 @@ private:
             }
 
             auto cparams = common_context_params_to_llama(params_dft);
+
+            const bool spec_mtp = std::find(params_base.speculative.types.begin(),
+                                            params_base.speculative.types.end(),
+                                            COMMON_SPECULATIVE_TYPE_DRAFT_MTP) != params_base.speculative.types.end();
+            if (spec_mtp) {
+                cparams.ctx_type = LLAMA_CONTEXT_TYPE_MTP;
+            }
+
+            // note: for small models maybe we can set this to the maximum possible draft from all speculative types
+            //       the extra memory for small models is likely negligible?
+            cparams.n_rs_seq = 0;
             ctx_dft.reset(llama_init_from_model(model_dft.get(), cparams));
+
+            ctx_dft_seq_rm_type = common_context_can_seq_rm(ctx_dft.get());
+
+            params_base.speculative.draft.ctx_tgt = ctx_tgt;
+            params_base.speculative.draft.ctx_dft = ctx_dft.get();
+        } else if (std::find(params_base.speculative.types.begin(), params_base.speculative.types.end(),
+                             COMMON_SPECULATIVE_TYPE_DRAFT_MTP) != params_base.speculative.types.end()) {
+            SRV_INF("creating MTP draft context against the target model '%s'\n",
+                    params_base.model.path.c_str());
+
+            auto cparams_mtp = common_context_params_to_llama(params_base);
+            cparams_mtp.ctx_type = LLAMA_CONTEXT_TYPE_MTP;
+            cparams_mtp.n_rs_seq = 0;
+
+            ctx_dft.reset(llama_init_from_model(model_tgt, cparams_mtp));
+            if (ctx_dft == nullptr) {
+                SRV_ERR("%s", "failed to create MTP context\n");
+                return false;
+            }
 
             ctx_dft_seq_rm_type = common_context_can_seq_rm(ctx_dft.get());
 
@@ -2194,12 +2230,12 @@ private:
 
                 SLT_WRN(slot, "slot context shift, n_keep = %d, n_left = %d, n_discard = %d\n", n_keep, n_left, n_discard);
 
-                llama_memory_seq_rm (llama_get_memory(ctx_tgt), slot.id, n_keep            , n_keep + n_discard);
-                llama_memory_seq_add(llama_get_memory(ctx_tgt), slot.id, n_keep + n_discard, slot.prompt.n_tokens(), -n_discard);
+                common_context_seq_rm (ctx_tgt, slot.id, n_keep            , n_keep + n_discard);
+                common_context_seq_add(ctx_tgt, slot.id, n_keep + n_discard, slot.prompt.n_tokens(), -n_discard);
 
                 if (ctx_dft) {
-                    llama_memory_seq_rm (llama_get_memory(ctx_dft.get()), slot.id, n_keep            , n_keep + n_discard);
-                    llama_memory_seq_add(llama_get_memory(ctx_dft.get()), slot.id, n_keep + n_discard, slot.prompt.tokens.pos_next(), -n_discard);
+                    common_context_seq_rm (ctx_dft.get(), slot.id, n_keep            , n_keep + n_discard);
+                    common_context_seq_add(ctx_dft.get(), slot.id, n_keep + n_discard, slot.prompt.tokens.pos_next(), -n_discard);
                 }
 
                 // add generated tokens to cache
@@ -2306,14 +2342,23 @@ private:
             slot.n_draft_total += draft.size();
 
             // TODO: avoid restoring the draft context and re-evaluating the drafted tokens when not needed [TAG_SPEC_AVOID_DRAFT_REEVAL]
-            if (ctx_dft) {
-                ckpt.load_dft(ctx_dft.get(), slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY | LLAMA_STATE_SEQ_FLAGS_ON_DEVICE);
+            const bool use_ckpt_dft = ctx_dft_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_FULL;
 
-                llama_memory_seq_rm(llama_get_memory(ctx_dft.get()), slot.id, ckpt.pos_max + 1, -1);
+            if (ctx_dft) {
+                if (use_ckpt_dft) {
+                    ckpt.load_dft(ctx_dft.get(), slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY | LLAMA_STATE_SEQ_FLAGS_ON_DEVICE);
+                }
+
+                common_context_seq_rm(ctx_dft.get(), slot.id, ckpt.pos_max + 1, -1);
             }
 
             if (!draft.empty()) {
-                const bool use_ckpt_tgt = ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_FULL;
+                const bool use_ckpt_tgt =
+                    ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_FULL ||
+                   (ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_RS && draft.size() > llama_n_rs_seq(ctx_tgt));
+
+                const bool use_ckpt_dft =
+                   (ctx_dft_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_RS && draft.size() > llama_n_rs_seq(ctx_dft.get()));
 
                 if (use_ckpt_tgt) {
                     //const int64_t t_start = ggml_time_us();
@@ -2327,6 +2372,10 @@ private:
                             ckpt.pos_min, ckpt.pos_max, slot.prompt.n_tokens(),
                             (float) ckpt.size() / 1024 / 1024,
                             (float) ckpt.data_dft.size() / 1024 / 1024);
+                }
+
+                if (use_ckpt_dft) {
+                    ckpt.update_dft(ctx_dft.get(), slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY | LLAMA_STATE_SEQ_FLAGS_ON_DEVICE);
                 }
             }
         }
@@ -2499,12 +2548,12 @@ private:
 
                                             const int64_t kv_shift = (int64_t) head_p - (int64_t) head_c;
 
-                                            llama_memory_seq_rm (llama_get_memory(ctx_tgt), slot.id, head_p, head_c);
-                                            llama_memory_seq_add(llama_get_memory(ctx_tgt), slot.id, head_c, head_c + n_match, kv_shift);
+                                            common_context_seq_rm (ctx_tgt, slot.id, head_p, head_c);
+                                            common_context_seq_add(ctx_tgt, slot.id, head_c, head_c + n_match, kv_shift);
 
                                             if (ctx_dft) {
-                                                llama_memory_seq_rm (llama_get_memory(ctx_dft.get()), slot.id, head_p, head_c);
-                                                llama_memory_seq_add(llama_get_memory(ctx_dft.get()), slot.id, head_c, head_c + n_match, kv_shift);
+                                                common_context_seq_rm (ctx_dft.get(), slot.id, head_p, head_c);
+                                                common_context_seq_add(ctx_dft.get(), slot.id, head_c, head_c + n_match, kv_shift);
                                             }
 
                                             for (size_t i = 0; i < n_match; i++) {
@@ -2667,18 +2716,10 @@ private:
 
                     SLT_TRC(slot, "cached n_tokens = %d, memory_seq_rm [%d, end)\n", slot.prompt.n_tokens(), p0);
 
-                    if (!llama_memory_seq_rm(llama_get_memory(ctx_tgt), slot.id, p0, -1)) {
-                        SLT_WRN(slot, "failed to truncate tokens with position >= %d - clearing the memory\n", p0);
-
-                        slot.prompt_clear(true);
-
-                        // there is no common part left
-                        slot.n_prompt_tokens_cache = 0;
-                    } else {
-                       if (ctx_dft && !llama_memory_seq_rm(llama_get_memory(ctx_dft.get()), slot.id, p0, -1)) {
-                           GGML_ABORT("failed to truncate draft context\n");
-                       }
-                   }
+                    common_context_seq_rm(ctx_tgt, slot.id, p0, -1);
+                    if (ctx_dft) {
+                        common_context_seq_rm(ctx_dft.get(), slot.id, p0, -1);
+                    }
 
                     // If using an alora, there may be uncached tokens that come
                     // before the invocation sequence. When this happens, the
@@ -2703,9 +2744,11 @@ private:
                     // checkpoints are created only if:
                     // - the model does not support partial sequence removal
                     // - the model uses SWA (and we are not using `swa_full`)
+                    // - the model supports partial sequence removal but only up to a fixed bound
                     do_checkpoint = do_checkpoint && (
-                            (ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_FULL) ||
-                            (n_swa > 0));
+                            ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_FULL ||
+                            ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_RS ||
+                            n_swa > 0);
 
                     bool has_mtmd = false;
 
@@ -2758,12 +2801,14 @@ private:
                             break;
                         }
 
-                        // embedding requires all tokens in the batch to be output
+                        // embedding requires all tokens in the batch to be output;
+                        // MTP also wants logits at every prompt position so the
+                        // streaming hook can mirror t_h_pre_norm into ctx_dft.
                         common_batch_add(batch,
                             cur_tok,
                             slot.prompt.tokens.pos_next(),
                             { slot.id },
-                            slot.task->need_embd());
+                            slot.need_embd());
                         slot.prompt.tokens.push_back(cur_tok);
 
                         slot.n_prompt_tokens_processed++;
@@ -2877,7 +2922,7 @@ private:
                 slot_batched->lora[alora_disabled_id].scale = alora_scale;
             }
 
-            llama_set_embeddings(ctx_tgt, slot_batched->task->need_embd());
+            llama_set_embeddings(ctx_tgt, slot_batched->need_embd());
         }
 
         if (batch.n_tokens == 0) {
@@ -3140,13 +3185,8 @@ private:
 
                 // verify and try to accept the draft
                 {
-                    const bool use_ckpt_tgt = ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_FULL;
-
-                    // only save the sampler sampler state if we use checkpoints
-                    common_sampler_ptr smpl_save;
-                    if (use_ckpt_tgt) {
-                        smpl_save.reset(common_sampler_clone(slot.smpl.get()));
-                    }
+                    // save the sampler sampler state in case we need to restore it
+                    common_sampler_ptr smpl_save(common_sampler_clone(slot.smpl.get()));
 
                     GGML_ASSERT(slot.spec_i_batch.size() == n_draft + 1);
                     auto accepted = common_sampler_sample_and_accept_n(slot.smpl.get(), slot.ctx_tgt, slot.spec_i_batch, slot.spec_draft);
@@ -3154,8 +3194,14 @@ private:
 
                     GGML_ASSERT(accepted.size() >= 1);
 
+                    const uint32_t n_rollback = slot.spec_draft.size() + 1 - accepted.size();
+
+                    const bool use_ckpt_tgt =
+                        ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_FULL ||
+                       (ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_RS && n_rollback > llama_n_rs_seq(ctx_tgt));
+
                     // check for partial draft acceptance
-                    if (accepted.size() < slot.spec_draft.size() + 1) {
+                    if (n_rollback > 0) {
                         if (use_ckpt_tgt) {
                             if (trace > 0) {
                                 SLT_INF(slot, "accepted %2zu/%2zu draft tokens (restore checkpoint)\n", accepted.size() - 1, slot.spec_draft.size());
@@ -3171,13 +3217,13 @@ private:
                             {
                                 ckpt.load_tgt(slot.ctx_tgt, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY | LLAMA_STATE_SEQ_FLAGS_ON_DEVICE);
 
-                                llama_memory_seq_rm(llama_get_memory(slot.ctx_tgt), slot.id, ckpt.pos_max + 1, -1);
+                                common_context_seq_rm(slot.ctx_tgt, slot.id, ckpt.pos_max + 1, -1);
                             }
 
                             if (slot.ctx_dft) {
                                 ckpt.load_dft(slot.ctx_dft, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY | LLAMA_STATE_SEQ_FLAGS_ON_DEVICE);
 
-                                llama_memory_seq_rm(llama_get_memory(slot.ctx_dft), slot.id, ckpt.pos_max + 1, -1);
+                                common_context_seq_rm(slot.ctx_dft, slot.id, ckpt.pos_max + 1, -1);
                             }
 
                             slot.prompt.tokens.keep_first(ckpt.n_tokens);
@@ -3200,7 +3246,6 @@ private:
 
                 const auto ids = std::move(slot.spec_draft);
 
-                slot.n_decoded += ids.size();
                 slot.t_token_generation = std::max<int64_t>(1, t_current - slot.t_start_generation) / 1e3;
 
                 // update how many tokens out of those tested were accepted
@@ -3213,9 +3258,9 @@ private:
                 slot.sampled = ids.back(); // last accepted token
                 SLT_DBG(slot, "add accepted tokens: sampled=%d, ids.size=%zu, n_draft=%zu\n", slot.sampled, ids.size(), n_draft);
 
-                llama_memory_seq_rm(llama_get_memory(slot.ctx_tgt), slot.id, slot.prompt.tokens.pos_next(), -1);
+                common_context_seq_rm(slot.ctx_tgt, slot.id, slot.prompt.tokens.pos_next(), -1);
                 if (slot.ctx_dft) {
-                    llama_memory_seq_rm(llama_get_memory(slot.ctx_dft), slot.id, slot.prompt.tokens.pos_next(), -1);
+                    common_context_seq_rm(slot.ctx_dft, slot.id, slot.prompt.tokens.pos_next(), -1);
                 }
 
                 for (size_t i = 0; i < ids.size(); ++i) {
@@ -3226,6 +3271,8 @@ private:
                     result.prob         = 1.0f; // set later
 
                     // TODO: set result.probs
+
+                    slot.n_decoded += 1;
 
                     if (!process_token(result, slot)) {
                         slot.print_timings();
