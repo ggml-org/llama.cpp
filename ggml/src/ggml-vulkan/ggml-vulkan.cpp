@@ -250,6 +250,32 @@ struct vk_queue {
     }
 };
 
+template<typename MapType, typename KeyType, typename CreateFunc>
+auto ggml_vk_get_or_create_pipeline(
+    std::shared_mutex& mutex,
+    MapType& cache,
+    const KeyType& key,
+    CreateFunc&& create_fn) -> typename MapType::mapped_type
+{
+    {
+        std::shared_lock<std::shared_mutex> read_guard(mutex);
+        auto it = cache.find(key);
+        if (it != cache.end()) {
+            return it->second;
+        }
+    }
+
+    std::unique_lock<std::shared_mutex> write_guard(mutex);
+    auto it = cache.find(key);
+    if (it != cache.end()) {
+        return it->second;
+    }
+
+    auto pipeline = create_fn();
+    cache[key] = pipeline;
+    return pipeline;
+}
+
 static const char * ggml_backend_vk_buffer_type_name(ggml_backend_buffer_type_t buft);
 static ggml_backend_buffer_t ggml_backend_vk_buffer_type_alloc_buffer(ggml_backend_buffer_type_t buft, size_t size);
 static size_t ggml_backend_vk_buffer_type_get_alignment(ggml_backend_buffer_type_t buft);
@@ -9293,24 +9319,12 @@ static void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx
 
     vk_pipeline pipeline = nullptr;
 
-    {
-        std::shared_lock<std::shared_mutex> read_guard(ctx->device->pipeline_mutex);
-        auto &pipelines = ctx->device->pipeline_flash_attn_f32_f16;
-        auto it = pipelines.find(fa_pipeline_state);
-        if (it != pipelines.end()) {
-            pipeline = it->second;
-        }
-    }
-    if (!pipeline) {
-        std::unique_lock<std::shared_mutex> write_guard(ctx->device->pipeline_mutex);
-        auto &pipelines = ctx->device->pipeline_flash_attn_f32_f16;
-        auto it = pipelines.find(fa_pipeline_state);
-        if (it != pipelines.end()) {
-            pipeline = it->second;
-        } else {
-            pipelines[fa_pipeline_state] = pipeline = std::make_shared<vk_pipeline_struct>();
-        }
-    }
+    pipeline = ggml_vk_get_or_create_pipeline(
+        ctx->device->pipeline_mutex,
+        ctx->device->pipeline_flash_attn_f32_f16,
+        fa_pipeline_state,
+        []() { return std::make_shared<vk_pipeline_struct>(); }
+    );
 
     assert(pipeline);
     // Compile early to initialize wg_denoms.
@@ -9366,24 +9380,13 @@ static void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx
 
     vk_pipeline pipeline_fa_mask_opt = nullptr;
     if (use_mask_opt) {
-        {
-            std::shared_lock<std::shared_mutex> read_guard(ctx->device->pipeline_mutex);
-            auto &pipelines = ctx->device->pipeline_fa_mask_opt;
-            auto it = pipelines.find({Br, Bc});
-            if (it != pipelines.end()) {
-                pipeline_fa_mask_opt = it->second;
-            }
-        }
-        if (!pipeline_fa_mask_opt) {
-            std::unique_lock<std::shared_mutex> write_guard(ctx->device->pipeline_mutex);
-            auto &pipelines = ctx->device->pipeline_fa_mask_opt;
-            auto it = pipelines.find({Br, Bc});
-            if (it != pipelines.end()) {
-                pipeline_fa_mask_opt = it->second;
-            } else {
-                pipelines[{Br, Bc}] = pipeline_fa_mask_opt = std::make_shared<vk_pipeline_struct>();
-            }
-        }
+        pipeline_fa_mask_opt = ggml_vk_get_or_create_pipeline(
+            ctx->device->pipeline_mutex,
+            ctx->device->pipeline_fa_mask_opt,
+            std::pair<uint32_t, uint32_t>{Br, Bc},
+            []() { return std::make_shared<vk_pipeline_struct>(); }
+        );
+
         assert(pipeline_fa_mask_opt);
         ggml_pipeline_request_descriptor_sets(ctx, pipeline_fa_mask_opt, 1);
 
@@ -9900,20 +9903,12 @@ static vk_pipeline ggml_vk_op_get_pipeline(ggml_backend_vk_context * ctx, const 
             vk_pipeline pipeline = nullptr;
 
             {
-                std::shared_lock<std::shared_mutex> read_guard(ctx->device->pipeline_mutex);
-                auto it = ctx->device->pipeline_solve_tri_f32.find(solve_tri_pipeline_state);
-                if (it != ctx->device->pipeline_solve_tri_f32.end()) {
-                    pipeline = it->second;
-                }
-            }
-            if (!pipeline) {
-                std::unique_lock<std::shared_mutex> write_guard(ctx->device->pipeline_mutex);
-                auto it = ctx->device->pipeline_solve_tri_f32.find(solve_tri_pipeline_state);
-                if (it != ctx->device->pipeline_solve_tri_f32.end()) {
-                    pipeline = it->second;
-                } else {
-                    ctx->device->pipeline_solve_tri_f32[solve_tri_pipeline_state] = pipeline = std::make_shared<vk_pipeline_struct>();
-                }
+                pipeline = ggml_vk_get_or_create_pipeline(
+                    ctx->device->pipeline_mutex,
+                    ctx->device->pipeline_solve_tri_f32,
+                    solve_tri_pipeline_state,
+                    []() { return std::make_shared<vk_pipeline_struct>(); }
+                );
             }
 
             return pipeline;
@@ -10055,20 +10050,12 @@ static vk_pipeline ggml_vk_op_get_pipeline(ggml_backend_vk_context * ctx, const 
             vk_pipeline pipeline = nullptr;
 
             {
-                std::shared_lock<std::shared_mutex> read_guard(ctx->device->pipeline_mutex);
-                auto it = pipelines->find(conv2d_pipeline_state);
-                if (it != pipelines->end()) {
-                    pipeline = it->second;
-                }
-            }
-            if (!pipeline) {
-                std::unique_lock<std::shared_mutex> write_guard(ctx->device->pipeline_mutex);
-                auto it = pipelines->find(conv2d_pipeline_state);
-                if (it != pipelines->end()) {
-                    pipeline = it->second;
-                } else {
-                    (*pipelines)[conv2d_pipeline_state] = pipeline = std::make_shared<vk_pipeline_struct>();
-                }
+                pipeline = ggml_vk_get_or_create_pipeline(
+                    ctx->device->pipeline_mutex,
+                    *pipelines,
+                    conv2d_pipeline_state,
+                    []() { return std::make_shared<vk_pipeline_struct>(); }
+                );
             }
 
             return pipeline;
