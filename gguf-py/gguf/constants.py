@@ -747,7 +747,7 @@ class MODEL_TENSOR(IntEnum):
     V_LAYER_OUT_SCALE    = auto()
     V_PRE_NORM           = auto()
     V_POST_NORM          = auto()
-    V_MM_PRE_NORM        = auto() # hunyuanocr
+    V_MM_PRE_NORM        = auto() # hunyuanvl
     V_MM_POST_NORM       = auto()
     V_MM_INP_NORM        = auto()
     V_MM_INP_PROJ        = auto() # gemma3
@@ -791,8 +791,8 @@ class MODEL_TENSOR(IntEnum):
     V_MM_GATE            = auto() # cogvlm
     V_TOK_BOI            = auto() # cogvlm
     V_TOK_EOI            = auto() # cogvlm
-    V_TOK_IMG_BEGIN      = auto() # hunyuanocr
-    V_TOK_IMG_END        = auto() # hunyuanocr
+    V_TOK_IMG_BEGIN      = auto() # hunyuanvl
+    V_TOK_IMG_END        = auto() # hunyuanvl
     V_STD_BIAS           = auto() # gemma4
     V_STD_SCALE          = auto() # gemma4
     V_SAM_POS_EMBD       = auto() # Deepseek-OCR
@@ -4273,7 +4273,6 @@ class VisionProjectorType:
     GLM4V = "glm4v"
     YOUTUVL = "youtuvl"
     NEMOTRON_V2_VL = "nemotron_v2_vl"
-    HUNYUANOCR     = "hunyuanocr"
     HUNYUANVL      = "hunyuanvl"
     MINICPMV4_6    = "minicpmv4_6"
     GRANITE_SPEECH = "granite_speech"  # audio

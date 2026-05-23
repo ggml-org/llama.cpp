@@ -176,7 +176,7 @@ llama_model_qwen35::graph::graph(const llama_model & model, const llm_graph_para
             cur = build_layer_attn(inp->get_attn(), cur, inp_pos, sections, il);
         }
 
-        if (il == n_transformer_layers - 1 && inp_out_ids) {
+        if (il == n_transformer_layers - 1 && inp_out_ids && cparams.embeddings_pre_norm_masked) {
             cur   = ggml_get_rows(ctx0, cur, inp_out_ids);
             inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
         }
@@ -210,6 +210,10 @@ llama_model_qwen35::graph::graph(const llama_model & model, const llm_graph_para
 
     cb(cur, "h_pre_norm", -1);
     res->t_h_pre_norm = cur;
+
+    if (!cparams.embeddings_pre_norm_masked && inp_out_ids) {
+        cur = ggml_get_rows(ctx0, cur, inp_out_ids);
+    }
 
     // Final norm
     cur = build_norm(cur, model.output_norm, nullptr, LLM_NORM_RMS, -1);
@@ -492,7 +496,8 @@ llama_model_qwen35::graph_mtp::graph_mtp(const llama_model & model, const llm_gr
     const int64_t n_embd_head = hparams.n_embd_head_v();
     GGML_ASSERT(n_embd_head == hparams.n_embd_head_k());
 
-    // The MTP block lives at the source file's original layer index.
+    // hparams.n_layer includes both main model layers and MTP layers. The MTP
+    // layer is stored immediately after the main layers in model.layers[].
     const int il = (int) hparams.n_layer - (int) hparams.nextn_predict_layers;
     const auto & layer = model.layers[il];
 
@@ -520,8 +525,9 @@ llama_model_qwen35::graph_mtp::graph_mtp(const llama_model & model, const llm_gr
 
     res->add_input(std::move(inp));
 
-    ggml_tensor * inp_pos = build_inp_pos();
-    auto * inp_attn       = build_attn_inp_kv();
+    ggml_tensor * inp_pos     = build_inp_pos();
+    ggml_tensor * inp_out_ids = build_inp_out_ids();
+    auto * inp_attn           = build_attn_inp_kv();
 
     ggml_tensor * h_norm = build_norm(h_input, layer.nextn.hnorm, nullptr, LLM_NORM_RMS, il);
     cb(h_norm, "mtp_hnorm", il);
@@ -609,6 +615,8 @@ llama_model_qwen35::graph_mtp::graph_mtp(const llama_model & model, const llm_gr
     // (In the trunk graph this is `t_h_pre_norm`; the MTP head reuses the same slot.)
     cb(cur, "h_pre_norm", -1);
     res->t_h_pre_norm = cur;
+
+    cur   = ggml_get_rows(ctx0, cur, inp_out_ids);
 
     ggml_tensor * head_norm_w = layer.nextn.shared_head_norm
             ? layer.nextn.shared_head_norm

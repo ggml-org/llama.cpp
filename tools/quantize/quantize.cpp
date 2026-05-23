@@ -672,7 +672,10 @@ static const char * get_ftype(const float bpw) {
     return quant_bpw.lower_bound(bpw)->second;
 }
 
-int main(int argc, char ** argv) {
+// satisfies -Wmissing-declarations
+int llama_quantize(int argc, char ** argv);
+
+int llama_quantize(int argc, char ** argv) {
     std::setlocale(LC_NUMERIC, "C");
     if (argc < 3) {
         usage(argv[0]);
