@@ -229,6 +229,9 @@ if (LLAMA_BUILD_COMMON AND LLAMA_BUILD_TOOLS)
 endif()
 
 if (LLAMA_BUILD_APP)
+    if (NOT LLAMA_BUILD_TOOLS)
+        message(FATAL_ERROR "LLAMA_BUILD_APP requires LLAMA_BUILD_TOOLS to be enabled")
+    endif()
     add_subdirectory(app)
 endif()
 
