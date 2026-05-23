@@ -238,6 +238,8 @@ struct ggml_sycl_device_info {
     std::array<float, GGML_SYCL_MAX_DEVICES> default_tensor_split = {};
 
     int max_work_group_sizes[GGML_SYCL_MAX_DEVICES] = {0};
+
+    bool ext_oneapi_level_zero = true; // sycl::backend::ext_oneapi_level_zero used by all enumerated GPU devices
 };
 
 const ggml_sycl_device_info & ggml_sycl_info();

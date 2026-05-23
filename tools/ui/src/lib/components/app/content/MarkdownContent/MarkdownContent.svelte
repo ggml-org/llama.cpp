@@ -28,7 +28,7 @@
 		SETTINGS_KEYS
 	} from '$lib/constants';
 	import { ColorMode, UrlProtocol } from '$lib/enums';
-	import { FileTypeText } from '$lib/enums/files';
+	import { FileTypeText } from '$lib/enums/files.enums';
 	import { highlightCode, detectIncompleteCodeBlock, type IncompleteCodeBlock } from '$lib/utils';
 	import '$styles/katex-custom.scss';
 	import githubDarkCss from 'highlight.js/styles/github-dark.css?inline';
@@ -742,9 +742,6 @@
 		padding: 0.125rem 0.375rem;
 		border-radius: 0.375rem;
 		font-size: 0.875rem;
-		font-family:
-			ui-monospace, SFMono-Regular, 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas,
-			'Liberation Mono', Menlo, monospace;
 	}
 
 	div :global(pre) {

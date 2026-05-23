@@ -20,11 +20,11 @@
  */
 
 import { browser } from '$app/environment';
-import { base } from '$app/paths';
 import { SETTINGS_KEYS } from '$lib/constants';
 import { MCPService } from '$lib/services/mcp.service';
 import { config, settingsStore } from '$lib/stores/settings.svelte';
 import { mcpResourceStore } from '$lib/stores/mcp-resources.svelte';
+import { serverStore } from '$lib/stores/server.svelte';
 import { mode } from 'mode-watcher';
 import {
 	parseMcpServerSettings,
@@ -43,7 +43,6 @@ import {
 	ToolCallType
 } from '$lib/enums';
 import {
-	CORS_PROXY_ENDPOINT,
 	DEFAULT_CACHE_TTL_MS,
 	DEFAULT_MCP_CONFIG,
 	EXPECTED_THEMED_ICON_PAIR_COUNT,
@@ -86,7 +85,6 @@ class MCPStore {
 	private _toolCount = $state(0);
 	private _connectedServers = $state<string[]>([]);
 	private _healthChecks = $state<Record<string, HealthCheckState>>({});
-	private _proxyAvailable = $state(false);
 
 	private connections = new Map<string, MCPConnection>();
 	private toolsIndex = new Map<string, string>();
@@ -96,27 +94,8 @@ class MCPStore {
 	private initPromise: Promise<boolean> | null = null;
 	private activeFlowCount = 0;
 
-	constructor() {
-		if (browser) {
-			this.probeProxy();
-		}
-	}
-
-	/**
-	 * Probes the CORS proxy endpoint to determine availability.
-	 * The endpoint is only registered when llama-server runs with --ui-mcp-proxy.
-	 */
-	async probeProxy(): Promise<void> {
-		try {
-			const response = await fetch(`${base}${CORS_PROXY_ENDPOINT}`, { method: 'HEAD' });
-			this._proxyAvailable = response.status !== 404;
-		} catch {
-			this._proxyAvailable = false;
-		}
-	}
-
 	get isProxyAvailable(): boolean {
-		return this._proxyAvailable;
+		return serverStore.props?.cors_proxy_enabled ?? false;
 	}
 
 	/**
@@ -168,7 +147,9 @@ class MCPStore {
 				enabled: Boolean((entry as { enabled?: unknown })?.enabled),
 				url,
 				name: (entry as { name?: string })?.name,
-				requestTimeoutSeconds: DEFAULT_MCP_CONFIG.requestTimeoutSeconds,
+				requestTimeoutSeconds:
+					(entry as { requestTimeoutSeconds?: number })?.requestTimeoutSeconds ??
+					DEFAULT_MCP_CONFIG.requestTimeoutSeconds,
 				headers: headers || undefined,
 				useProxy: Boolean((entry as { useProxy?: unknown })?.useProxy)
 			} satisfies MCPServerSettingsEntry;
@@ -554,7 +535,8 @@ class MCPStore {
 			url: serverData.url.trim(),
 			name: serverData.name,
 			headers: serverData.headers?.trim() || undefined,
-			requestTimeoutSeconds: DEFAULT_MCP_CONFIG.requestTimeoutSeconds,
+			requestTimeoutSeconds:
+				Number(config().mcpRequestTimeoutSeconds) || DEFAULT_MCP_CONFIG.requestTimeoutSeconds,
 			useProxy: serverData.useProxy
 		};
 		settingsStore.updateConfig(SETTINGS_KEYS.MCP_SERVERS, JSON.stringify([...servers, newServer]));

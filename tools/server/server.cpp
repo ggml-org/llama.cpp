@@ -71,7 +71,10 @@ static server_http_context::handler_t ex_wrapper(server_http_context::handler_t 
     };
 }
 
-int main(int argc, char ** argv) {
+// satisfies -Wmissing-declarations
+int llama_server(int argc, char ** argv);
+
+int llama_server(int argc, char ** argv) {
     std::setlocale(LC_NUMERIC, "C");
 
     // own arguments required by this example
@@ -86,7 +89,10 @@ int main(int argc, char ** argv) {
     llama_backend_init();
     llama_numa_init(params.numa);
 
-    common_params_print_info(params);
+    // router server never loads a model and must not touch the GPU
+    // skip device enumeration so the CUDA primary context stays uncreated
+    const bool is_router_server = params.model.path.empty();
+    common_params_print_info(params, !is_router_server);
 
     // validate batch size for embeddings
     // embeddings require all tokens to be processed in a single ubatch
@@ -126,7 +132,6 @@ int main(int argc, char ** argv) {
     server_routes routes(params, ctx_server);
     server_tools tools;
 
-    bool is_router_server = params.model.path.empty();
     std::optional<server_models_routes> models_routes{};
     if (is_router_server) {
         // setup server instances manager

@@ -14,12 +14,7 @@ endif()
 set(TARGET_SRCS "")
 set(UI_COMPILE_DEFS "")
 
-# Support both old (LLAMA_BUILD_WEBUI) and new (LLAMA_BUILD_UI) option names
-if(LLAMA_BUILD_WEBUI OR LLAMA_BUILD_UI)
-    if(LLAMA_BUILD_WEBUI AND NOT LLAMA_BUILD_UI)
-        message(DEPRECATION "LLAMA_BUILD_WEBUI is deprecated, use LLAMA_BUILD_UI instead")
-    endif()
-
+if(LLAMA_BUILD_UI)
     set(PUBLIC_ASSETS
         index.html
         bundle.js
@@ -125,19 +120,17 @@ if(LLAMA_BUILD_WEBUI OR LLAMA_BUILD_UI)
         endforeach()
 
         list(APPEND UI_COMPILE_DEFS
-            LLAMA_BUILD_WEBUI      # Deprecated: use LLAMA_BUILD_UI
             LLAMA_BUILD_UI
-            LLAMA_WEBUI_DEFAULT_ENABLED=1   # Deprecated: use LLAMA_UI_DEFAULT_ENABLED
             LLAMA_UI_DEFAULT_ENABLED=1
         )
         message(STATUS "UI: embedded with source: ${UI_SOURCE}")
     else()
         message(WARNING "UI: no source available. Neither local build (build/tools/ui/dist/) nor HF Bucket download succeeded.")
         message(WARNING "UI: building server without embedded UI. Set LLAMA_BUILD_UI=OFF to suppress this warning.")
-        list(APPEND UI_COMPILE_DEFS LLAMA_WEBUI_DEFAULT_ENABLED=0 LLAMA_UI_DEFAULT_ENABLED=0)
+        list(APPEND UI_COMPILE_DEFS LLAMA_UI_DEFAULT_ENABLED=0)
     endif()
 else()
-    list(APPEND UI_COMPILE_DEFS LLAMA_WEBUI_DEFAULT_ENABLED=0 LLAMA_UI_DEFAULT_ENABLED=0)
+    list(APPEND UI_COMPILE_DEFS LLAMA_UI_DEFAULT_ENABLED=0)
 endif()
 
 # Build the static library

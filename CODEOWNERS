@@ -26,6 +26,7 @@
 /common/fit.*                           @JohannesGaessler
 /common/jinja/                          @CISC
 /common/ngram-map.*                     @srogmann
+/conversion/                            @CISC
 /convert_*.py                           @CISC
 /docs/backend/snapdragon/               @ggml-org/ggml-hexagon
 /examples/batched.swift/                @ggerganov
@@ -48,7 +49,6 @@
 /examples/parallel/                     @ggerganov
 /examples/passkey/                      @ggerganov
 /examples/retrieval/                    @ggerganov
-/examples/save-load-state/              @ggerganov
 /examples/speculative-simple/           @ggerganov
 /examples/speculative/                  @ggerganov
 /ggml/cmake/                            @ggerganov

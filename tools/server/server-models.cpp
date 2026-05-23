@@ -14,6 +14,7 @@
 #include <mutex>
 #include <condition_variable>
 #include <cstring>
+#include <cstdlib>
 #include <atomic>
 #include <chrono>
 #include <queue>
@@ -159,6 +160,13 @@ void server_model_meta::update_args(common_preset_context & ctx_preset, std::str
     // TODO: maybe validate preset before rendering ?
     // render args
     args = preset.to_args(bin_path);
+
+    // unified binary dispatches by subcommand, re-inject it right after the
+    // binary path so the child starts as 'llama serve ...' not 'llama ...'
+    const char * app_cmd = std::getenv("LLAMA_APP_CMD");
+    if (app_cmd != nullptr && app_cmd[0] != '\0' && !bin_path.empty()) {
+        args.insert(args.begin() + 1, app_cmd);
+    }
 }
 
 void server_model_meta::update_caps() {
@@ -798,9 +806,10 @@ void server_models::load(const std::string & name) {
         std::thread log_thread([&]() {
             // read stdout/stderr and forward to main server log
             // also handle status report from child process
+            std::vector<char> vec_buf(128 * 1024); // large buffer for storing info
+            char * buffer = vec_buf.data();
             if (stdout_file) {
-                char buffer[128 * 1024]; // large buffer for storing info
-                while (fgets(buffer, sizeof(buffer), stdout_file) != nullptr) {
+                while (fgets(buffer, vec_buf.size(), stdout_file) != nullptr) {
                     LOG("[%5d] %s", port, buffer);
                     std::string str(buffer);
                     if (string_starts_with(buffer, CMD_CHILD_TO_ROUTER_READY)) {
@@ -1164,6 +1173,7 @@ void server_models_routes::init_routes() {
                 // Deprecated: use ui_settings instead (kept for backward compat)
                 {"webui_settings",  webui_settings},
                 {"build_info",     std::string(llama_build_info())},
+                {"cors_proxy_enabled", params.ui_mcp_proxy || params.webui_mcp_proxy},
             });
             return res;
         }

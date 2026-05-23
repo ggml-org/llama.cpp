@@ -42,6 +42,7 @@ export interface SettingsFieldConfig {
 	label: string;
 	type: SettingsFieldType;
 	isExperimental?: boolean;
+	isPositiveInteger?: boolean;
 	help?: string;
 	options?: Array<{ value: string; label: string; icon?: typeof Icon }>;
 }

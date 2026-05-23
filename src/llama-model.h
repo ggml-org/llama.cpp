@@ -533,6 +533,11 @@ struct llama_model {
     struct ggml_tensor * output_b        = nullptr;
     struct ggml_tensor * output_norm_enc = nullptr;
 
+
+    // NVFP4 per-tensor scale2, input_scale for LM head
+    struct ggml_tensor * output_s    = nullptr;
+    struct ggml_tensor * output_in_s = nullptr;
+
     // classifier
     struct ggml_tensor * cls       = nullptr;
     struct ggml_tensor * cls_b     = nullptr;

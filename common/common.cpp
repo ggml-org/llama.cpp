@@ -7,6 +7,7 @@
 #include "log.h"
 #include "llama.h"
 #include "sampling.h"
+#include "speculative.h"
 #include "unicode.h"
 
 #include <algorithm>
@@ -372,7 +373,7 @@ void common_init() {
     llama_log_set(common_log_default_callback, NULL);
 }
 
-void common_params_print_info(const common_params & params) {
+void common_params_print_info(const common_params & params, bool print_devices) {
 #ifdef NDEBUG
     const char * build_type = "";
 #else
@@ -381,12 +382,16 @@ void common_params_print_info(const common_params & params) {
     LOG_TRC("%s: build %d (%s) with %s for %s%s\n", __func__, llama_build_number(), llama_commit(), llama_compiler(), llama_build_target(), build_type);
 
     LOG_INF("log_info: verbosity = %d (adjust with the `-lv N` CLI arg)\n", common_log_get_verbosity_thold());
-    LOG_INF("device_info:\n");
-    for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
-        auto * dev = ggml_backend_dev_get(i);
-        size_t free, total;
-        ggml_backend_dev_memory(dev, &free, &total);
-        LOG_INF("  - %-8s: %s (%zu MiB, %zu MiB free)\n", ggml_backend_dev_name(dev), ggml_backend_dev_description(dev), total / 1024 / 1024, free / 1024 / 1024);
+
+    // device enumeration creates a primary context on CUDA backends, skip it when the caller does not own any device
+    if (print_devices) {
+        LOG_INF("device_info:\n");
+        for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
+            auto * dev = ggml_backend_dev_get(i);
+            size_t free, total;
+            ggml_backend_dev_memory(dev, &free, &total);
+            LOG_INF("  - %-8s: %s (%zu MiB, %zu MiB free)\n", ggml_backend_dev_name(dev), ggml_backend_dev_description(dev), total / 1024 / 1024, free / 1024 / 1024);
+        }
     }
     LOG_INF("%s\n", common_params_get_system_info(params).c_str());
 }
@@ -1155,7 +1160,7 @@ struct common_init_result::impl {
     std::vector<llama_sampler_seq_config> samplers_seq_config;
 };
 
-common_init_result::common_init_result(common_params & params) :
+common_init_result::common_init_result(common_params & params, bool model_only) :
     pimpl(new impl{}) {
     auto mparams = common_model_params_to_llama(params);
     auto cparams = common_context_params_to_llama(params);
@@ -1168,7 +1173,7 @@ common_init_result::common_init_result(common_params & params) :
             params.tensor_buft_overrides.data(),
             params.fit_params_target.data(),
             params.fit_params_min_ctx,
-            params.verbosity >= 4 ? GGML_LOG_LEVEL_DEBUG : GGML_LOG_LEVEL_ERROR);
+            params.verbosity >= LOG_LEVEL_DEBUG ? GGML_LOG_LEVEL_DEBUG : GGML_LOG_LEVEL_ERROR);
     }
 
     llama_model * model = llama_model_load_from_file(params.model.path.c_str(), mparams);
@@ -1177,6 +1182,10 @@ common_init_result::common_init_result(common_params & params) :
     }
 
     pimpl->model.reset(model);
+
+    if (model_only) {
+        return;
+    }
 
     const llama_vocab * vocab = llama_model_get_vocab(model);
 
@@ -1281,12 +1290,16 @@ std::vector<llama_adapter_lora_ptr> & common_init_result::lora() {
     return pimpl->lora;
 }
 
-common_init_result_ptr common_init_from_params(common_params & params) {
-    common_init_result_ptr res(new common_init_result(params));
+common_init_result_ptr common_init_from_params(common_params & params, bool model_only) {
+    common_init_result_ptr res(new common_init_result(params, model_only));
 
     llama_model * model = res->model();
     if (model == NULL) {
         LOG_ERR("%s: failed to load model '%s'\n", __func__, params.model.path.c_str());
+        return res;
+    }
+
+    if (model_only) {
         return res;
     }
 
@@ -1353,7 +1366,7 @@ common_init_result_ptr common_init_from_params(common_params & params) {
     }
 
     if (params.warmup) {
-        LOG_WRN("%s: warming up the model with an empty run - please wait ... (--no-warmup to disable)\n", __func__);
+        LOG_INF("%s: warming up the model with an empty run - please wait ... (--no-warmup to disable)\n", __func__);
 
         llama_set_warmup(lctx, true);
 
@@ -1435,6 +1448,12 @@ common_context_seq_rm_type common_context_can_seq_rm(llama_context * ctx) {
         goto done;
     }
 
+    if (llama_n_rs_seq(ctx) > 0) {
+        LOG_INF("%s: the context supports bounded partial sequence removal\n", __func__);
+        res = COMMON_CONTEXT_SEQ_RM_TYPE_RS;
+        goto done;
+    }
+
     // try to remove the last tokens
     if (!llama_memory_seq_rm(mem, 0, 1, -1)) {
         LOG_TRC("%s: the context does not support partial sequence removal\n", __func__);
@@ -1447,6 +1466,23 @@ done:
     llama_synchronize(ctx);
 
     return res;
+}
+
+void common_context_seq_rm(llama_context * ctx, llama_seq_id seq_id, llama_pos p0, llama_pos p1) {
+    auto * mem = llama_get_memory(ctx);
+    if (!llama_memory_seq_rm(mem, seq_id, p0, p1)) {
+        GGML_ABORT("%s", string_format("failed to remove sequence %d with p0=%d, p1=%d\n", seq_id, p0, p1).c_str());
+    }
+}
+
+void common_context_seq_cp(llama_context * ctx, llama_seq_id seq_id_src, llama_seq_id seq_id_dst, llama_pos p0, llama_pos p1) {
+    auto * mem = llama_get_memory(ctx);
+    llama_memory_seq_cp(mem, seq_id_src, seq_id_dst, p0, p1);
+}
+
+void common_context_seq_add(llama_context * ctx, llama_seq_id seq_id, llama_pos p0, llama_pos p1, llama_pos delta) {
+    auto * mem = llama_get_memory(ctx);
+    llama_memory_seq_add(mem, seq_id, p0, p1, delta);
 }
 
 void common_set_adapter_lora(struct llama_context * ctx, std::vector<common_adapter_lora_info> & lora) {
@@ -1505,6 +1541,7 @@ struct llama_context_params common_context_params_to_llama(const common_params &
 
     cparams.n_ctx             = params.n_ctx;
     cparams.n_seq_max         = params.n_parallel;
+    cparams.n_rs_seq          = params.speculative.need_n_rs_seq();
     cparams.n_batch           = params.n_batch;
     cparams.n_ubatch          = params.n_ubatch;
     cparams.n_threads         = params.cpuparams.n_threads;
@@ -2073,4 +2110,12 @@ void common_prompt_checkpoint::load_dft(
     if (n != data_dft.size()) {
         GGML_ABORT("checkpoint size mismatch: expected %zu, got %zu\n", data_dft.size(), n);
     }
+}
+
+void common_prompt_checkpoint::clear_tgt() {
+    data_tgt.clear();
+}
+
+void common_prompt_checkpoint::clear_dft() {
+    data_dft.clear();
 }

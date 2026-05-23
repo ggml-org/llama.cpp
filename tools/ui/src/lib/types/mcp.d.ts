@@ -1,5 +1,5 @@
-import type { MCPConnectionPhase, MCPLogLevel, HealthCheckStatus } from '$lib/enums/mcp';
-import type { ToolSource } from '$lib/enums/tools';
+import type { MCPConnectionPhase, MCPLogLevel, HealthCheckStatus } from '$lib/enums/mcp.enums';
+import type { ToolSource } from '$lib/enums/tools.enums';
 import type {
 	Client,
 	ClientCapabilities as SDKClientCapabilities,
@@ -135,6 +135,8 @@ export interface MCPConnection {
 	protocolVersion?: string;
 	instructions?: string;
 	connectionTimeMs: number;
+	/** Configured timeout for individual requests (tool calls, etc.) in milliseconds */
+	requestTimeoutMs: number;
 }
 
 /**

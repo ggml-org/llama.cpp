@@ -4,7 +4,6 @@
 #include "chat.h"
 #include "common.h"
 #include "download.h"
-#include "hf-cache.h"
 #include "json-schema-to-grammar.h"
 #include "log.h"
 #include "sampling.h"
@@ -337,11 +336,15 @@ static bool common_params_handle_remote_preset(common_params & params, llama_exa
 struct handle_model_result {
     bool found_mmproj = false;
     common_params_model mmproj;
+
+    bool found_mtp = false;
+    common_params_model mtp;
 };
 
 static handle_model_result common_params_handle_model(struct common_params_model & model,
                                                       const std::string          & bearer_token,
-                                                      bool                         offline) {
+                                                      bool                         offline,
+                                                      bool                         search_mtp = false) {
     handle_model_result result;
 
     if (!model.docker_repo.empty()) {
@@ -356,7 +359,7 @@ static handle_model_result common_params_handle_model(struct common_params_model
         common_download_opts opts;
         opts.bearer_token = bearer_token;
         opts.offline = offline;
-        auto download_result = common_download_model(model, opts, true);
+        auto download_result = common_download_model(model, opts, true, search_mtp);
 
         if (download_result.model_path.empty()) {
             throw std::runtime_error("failed to download model from Hugging Face");
@@ -368,6 +371,11 @@ static handle_model_result common_params_handle_model(struct common_params_model
         if (!download_result.mmproj_path.empty()) {
             result.found_mmproj = true;
             result.mmproj.path  = download_result.mmproj_path;
+        }
+
+        if (!download_result.mtp_path.empty()) {
+            result.found_mtp = true;
+            result.mtp.path  = download_result.mtp_path;
         }
     } else if (!model.url.empty()) {
         if (model.path.empty()) {
@@ -436,7 +444,11 @@ static bool parse_bool_value(const std::string & value) {
 //
 
 void common_params_handle_models(common_params & params, llama_example curr_ex) {
-    auto res = common_params_handle_model(params.model, params.hf_token, params.offline);
+    const bool spec_type_draft_mtp = std::find(params.speculative.types.begin(),
+                                         params.speculative.types.end(),
+                                         COMMON_SPECULATIVE_TYPE_DRAFT_MTP) != params.speculative.types.end();
+
+    auto res = common_params_handle_model(params.model, params.hf_token, params.offline, spec_type_draft_mtp);
     if (params.no_mmproj) {
         params.mmproj = {};
     } else if (res.found_mmproj && params.mmproj.path.empty() && params.mmproj.url.empty()) {
@@ -449,6 +461,14 @@ void common_params_handle_models(common_params & params, llama_example curr_ex) 
             common_params_handle_model(params.mmproj,    params.hf_token, params.offline);
             break;
         }
+    }
+    // when --spec-type mtp is set and no draft model was provided explicitly,
+    // fall back to the MTP head discovered alongside the -hf model
+    if (spec_type_draft_mtp && res.found_mtp &&
+        params.speculative.draft.mparams.path.empty() &&
+        params.speculative.draft.mparams.hf_repo.empty() &&
+        params.speculative.draft.mparams.url.empty()) {
+        params.speculative.draft.mparams.path = res.mtp.path;
     }
     common_params_handle_model(params.speculative.draft.mparams, params.hf_token, params.offline);
     common_params_handle_model(params.vocoder.model,             params.hf_token, params.offline);
@@ -516,7 +536,11 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
                 throw std::invalid_argument(string_format("error: invalid argument: %s", arg.c_str()));
             }
             if (!seen_args.insert(arg).second) {
-                LOG_WRN("DEPRECATED: argument '%s' specified multiple times, use comma-separated values instead (only last value will be used)\n", arg.c_str());
+                const bool skip = (arg == "--spec-type");
+
+                if (!skip) {
+                    LOG_WRN("DEPRECATED: argument '%s' specified multiple times, use comma-separated values instead (only last value will be used)\n", arg.c_str());
+                }
             }
             auto & tmp = arg_to_options[arg];
             auto opt = *tmp.first;
@@ -565,12 +589,6 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
     // parse the first time to get -hf option (used for remote preset)
     parse_cli_args();
 
-    // TODO: Remove later
-    try {
-        hf_cache::migrate_old_cache_to_hf_cache(params.hf_token, params.offline);
-    } catch (const std::exception & e) {
-        LOG_WRN("HF cache migration failed: %s\n", e.what());
-    }
     // export_graph_ops loads only metadata
     const bool skip_model_download = ctx_arg.ex == LLAMA_EXAMPLE_EXPORT_GRAPH_OPS;
 
@@ -879,7 +897,11 @@ bool common_params_to_map(int argc, char ** argv, llama_example ex, std::map<com
             throw std::invalid_argument(string_format("error: invalid argument: %s", arg.c_str()));
         }
         if (!seen_args.insert(arg).second) {
-            LOG_WRN("DEPRECATED: argument '%s' specified multiple times, use comma-separated values instead (only last value will be used)\n", arg.c_str());
+            const bool skip = (arg == "--spec-type");
+
+            if (!skip) {
+                LOG_WRN("DEPRECATED: argument '%s' specified multiple times, use comma-separated values instead (only last value will be used)\n", arg.c_str());
+            }
         }
         auto opt = *arg_to_options[arg];
         std::string val;
@@ -2787,7 +2809,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params, int value) {
             params.embd_normalize = value;
         }
-    ).set_examples({LLAMA_EXAMPLE_EMBEDDING, LLAMA_EXAMPLE_DEBUG}));
+    ).set_examples({LLAMA_EXAMPLE_EMBEDDING, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_DEBUG}));
     add_opt(common_arg(
         {"--embd-output-format"}, "FORMAT",
         "empty = default, \"array\" = [[],[]...], \"json\" = openai style, \"json+\" = same \"json\" + cosine similarity matrix, \"raw\" = plain whitespace-delimited output (one embedding per line)",
@@ -3342,7 +3364,8 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             " - 1: error\n"
             " - 2: warning\n"
             " - 3: info\n"
-            " - 4: debug\n"
+            " - 4: trace (more info)\n"
+            " - 5: debug\n"
             "(default: %d)\n", params.verbosity),
         [](common_params & params, int value) {
             params.verbosity = value;
@@ -3569,6 +3592,15 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SPEC_DRAFT_P_MIN"));
     add_opt(common_arg(
+        {"--spec-draft-backend-sampling"},
+        {"--no-spec-draft-backend-sampling"},
+        string_format("offload draft sampling to the backend (default: %s)",
+                      params.speculative.draft.backend_sampling ? "enabled" : "disabled"),
+        [](common_params & params, bool value) {
+            params.speculative.draft.backend_sampling = value;
+        }
+    ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SPEC_DRAFT_BACKEND_SAMPLING"));
+    add_opt(common_arg(
         {"--spec-draft-device", "-devd", "--device-draft"}, "<dev1,dev2,..>",
         "comma-separated list of devices to use for offloading the draft model (none = don't offload)\n"
         "use --list-devices to see a list of available devices",
@@ -3608,8 +3640,9 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         string_format("comma-separated list of types of speculative decoding to use (default: %s)\n",
             common_speculative_type_name_str(params.speculative.types).c_str()),
         [](common_params & params, const std::string & value) {
-            const auto enabled_types = string_split<std::string>(value, ',');
-            params.speculative.types = common_speculative_types_from_names(enabled_types);
+            const auto types_str = string_split<std::string>(value, ',');
+            auto types = common_speculative_types_from_names(types_str);
+            params.speculative.types.insert(params.speculative.types.end(), types.begin(), types.end());
         }
     ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SPEC_TYPE"));
     add_opt(common_arg(
@@ -4174,10 +4207,16 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         {"--spec-default"},
         string_format("enable default speculative decoding config"),
         [](common_params & params) {
-            params.speculative.types = { COMMON_SPECULATIVE_TYPE_NGRAM_MOD };
+            params.speculative.types.push_back(COMMON_SPECULATIVE_TYPE_NGRAM_MOD);
             params.speculative.ngram_mod.n_match = 24;
             params.speculative.ngram_mod.n_min = 48;
             params.speculative.ngram_mod.n_max = 64;
+
+            // TODO: not sure if this is a good config - explore more settings and potentially enable it
+            //params.speculative.types.push_back(COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V);
+            //params.speculative.ngram_map_k4v.size_n = 8;
+            //params.speculative.ngram_map_k4v.size_m = 24;
+            //params.speculative.ngram_map_k4v.min_hits = 2;
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
 
