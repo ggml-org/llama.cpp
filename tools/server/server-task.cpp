@@ -2055,6 +2055,7 @@ server_prompt * server_prompt_cache::alloc(const server_prompt & prompt, size_t 
             /*.drft =*/ std::move(state_data_dft),
         },
         /*.checkpoints =*/ prompt.checkpoints,
+        /*.score       =*/ prompt.score,
     });
 
     return &states.back();
@@ -2092,6 +2093,9 @@ bool server_prompt_cache::load(server_prompt & prompt, const server_tokens & tok
 
     if (it_best != states.end()) {
         SRV_INF(" - found better prompt with f_keep = %.3f, sim = %.3f\n", f_keep_best, sim_best);
+
+        // reward cache hit
+        it_best->score = std::min((uint8_t)(it_best->score + 1), (uint8_t)4);
 
         {
             auto & data = it_best->data.main;
@@ -2136,16 +2140,41 @@ bool server_prompt_cache::load(server_prompt & prompt, const server_tokens & tok
 }
 
 void server_prompt_cache::update() {
+    // second-chance eviction: decay score and rotate to back, evict when score <= 1
+    auto evict_one = [this]() {
+        if (states.size() <= 1) {
+            return;
+        }
+
+        // hard iteration cap to prevent infinite loops when all entries have max score
+        const size_t max_iter = states.size() * 5;
+        size_t iter = 0;
+
+        while (states.size() > 1) {
+            if (iter++ >= max_iter) {
+                SRV_WRN(" - cache size limit reached, removing oldest entry (size = %.3f MiB)\n", states.front().size() / (1024.0 * 1024.0));
+                states.pop_front();
+                return;
+            }
+
+            if (states.front().score <= 1) {
+                // score has decayed, safe to evict
+                SRV_WRN(" - cache limit reached, evicting unused/decayed entry (size = %.3f MiB)\n",
+                        states.front().size() / (1024.0 * 1024.0));
+                states.pop_front();
+                return;
+            }
+
+            // second chance: decay score and rotate to back
+            states.front().score--;
+            states.splice(states.end(), states, states.begin());
+        }
+    };
+
     if (limit_size > 0) {
         // always keep at least one state, regardless of the limits
         while (states.size() > 1 && size() > limit_size) {
-            if (states.empty()) {
-                break;
-            }
-
-            SRV_WRN(" - cache size limit reached, removing oldest entry (size = %.3f MiB)\n", states.front().size() / (1024.0 * 1024.0));
-
-            states.pop_front();
+            evict_one();
         }
     }
 
@@ -2157,14 +2186,7 @@ void server_prompt_cache::update() {
 
     if (limit_tokens > 0) {
         while (states.size() > 1 && n_tokens() > limit_tokens_cur) {
-            if (states.empty()) {
-                break;
-            }
-
-            SRV_WRN(" - cache token limit (%zu, est: %zu) reached, removing oldest entry (size = %.3f MiB)\n",
-                    limit_tokens, limit_tokens_cur, states.front().size() / (1024.0 * 1024.0));
-
-            states.pop_front();
+            evict_one();
         }
     }
 

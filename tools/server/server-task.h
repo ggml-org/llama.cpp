@@ -603,6 +603,9 @@ struct server_prompt {
 
     std::list<common_prompt_checkpoint> checkpoints;
 
+    // second-chance score for cache eviction, 1 = fresh/decayed, higher = more retained
+    uint8_t score = 1;
+
     size_t size() const {
         size_t res = 0;
 
