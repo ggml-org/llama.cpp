@@ -25,6 +25,7 @@
 #include "presets.hpp"
 #include "type.hpp"
 #include "sycl_hw.hpp"
+#include "fattn-buffers.hpp"
 
 namespace syclexp = sycl::ext::oneapi::experimental;
 
@@ -237,6 +238,8 @@ struct ggml_sycl_device_info {
     std::array<float, GGML_SYCL_MAX_DEVICES> default_tensor_split = {};
 
     int max_work_group_sizes[GGML_SYCL_MAX_DEVICES] = {0};
+
+    bool ext_oneapi_level_zero = true; // sycl::backend::ext_oneapi_level_zero used by all enumerated GPU devices
 };
 
 const ggml_sycl_device_info & ggml_sycl_info();
@@ -308,6 +311,10 @@ struct ggml_tensor_extra_gpu {
                         [GGML_SYCL_MAX_STREAMS]; // events for synchronizing multiple GPUs
   optimize_feature optimized_feature;
 };
+
+extern int g_ggml_sycl_enable_level_zero;
+void * ggml_sycl_malloc_device(size_t size, sycl::queue &q);
+void ggml_sycl_free_device(void *ptr, sycl::queue &q);
 
 void release_extra_gpu(ggml_tensor_extra_gpu * extra, std::vector<queue_ptr> streams={});
 
@@ -404,11 +411,15 @@ struct ggml_backend_sycl_context {
     std::unique_ptr<ggml_sycl_pool> pools[GGML_SYCL_MAX_DEVICES];
     std::unordered_map<sycl::queue *, std::unique_ptr<ggml_sycl_pool_alloc<uint8_t>>> scratchpad_map;
 
+    std::unique_ptr<ggml_sycl_fattn_kv_buffers> fattn_bufs[GGML_SYCL_MAX_DEVICES];
+
     std::unique_ptr<ggml_sycl_pool> host_pools[GGML_SYCL_MAX_DEVICES];
 
     static std::unique_ptr<ggml_sycl_pool> new_pool_for_device(queue_ptr qptr, int device);
 
     static std::unique_ptr<ggml_sycl_pool> new_pool_for_host(queue_ptr qptr, int device);
+
+    static std::unique_ptr<ggml_sycl_fattn_kv_buffers> new_fattn_kv_buffers(queue_ptr qptr, int device);
 
     ggml_sycl_pool & pool(int device) {
         if (pools[device] == nullptr) {
@@ -419,6 +430,17 @@ struct ggml_backend_sycl_context {
 
     ggml_sycl_pool & pool() {
         return pool(device);
+    }
+
+    ggml_sycl_fattn_kv_buffers & fattn_buffers(int device) {
+        if (fattn_bufs[device] == nullptr) {
+            fattn_bufs[device] = new_fattn_kv_buffers(stream(device, 0), device);
+        }
+        return *fattn_bufs[device];
+    }
+
+    ggml_sycl_fattn_kv_buffers & fattn_buffers() {
+        return fattn_buffers(device);
     }
 
 #ifdef GGML_SYCL_GRAPH

@@ -268,6 +268,7 @@ void llama_model_saver::add_kv_from_model() {
     // add_kv(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN,  ???);
     add_kv(LLM_KV_ATTENTION_SCALE,                   hparams.f_attention_scale);
     add_kv(LLM_KV_ATTENTION_OUTPUT_SCALE,            hparams.f_attn_out_scale);
+    add_kv(LLM_KV_ATTENTION_VALUE_SCALE,             hparams.f_attn_value_scale);
     add_kv(LLM_KV_ATTENTION_TEMPERATURE_LENGTH,      hparams.attn_temp_length);
     add_kv(LLM_KV_ATTENTION_TEMPERATURE_SCALE,       hparams.f_attn_temp_scale);
     add_kv(LLM_KV_ATTENTION_KEY_LENGTH_MLA,          hparams.n_embd_head_k_mla_impl);
@@ -392,6 +393,8 @@ void llama_model_saver::add_tensors_from_model() {
     add_tensor(model->output);
     add_tensor(model->output_b);
     add_tensor(model->output_norm_enc);
+    add_tensor(model->output_s);
+    add_tensor(model->output_in_s);
     add_tensor(model->cls);
     add_tensor(model->cls_b);
     add_tensor(model->cls_out);

@@ -92,6 +92,8 @@ struct llama_hparams {
     uint32_t moe_latent_size      = 0;
     uint32_t nextn_predict_layers = 0;
 
+    bool kv_only_nextn = false; // if true, only the last nextn_predict_layers blocks have a KV cache (MTP head arches)
+
     float f_norm_eps;
     float f_norm_rms_eps;
     float f_norm_group_eps;
@@ -165,6 +167,8 @@ struct llama_hparams {
     // grok-2
     float    f_attn_out_scale = 0.0f;
     uint32_t attn_temp_length = 0;
+
+    float    f_attn_value_scale = 0.0f;
 
     bool causal_attn   = true;
     bool use_alibi     = false;

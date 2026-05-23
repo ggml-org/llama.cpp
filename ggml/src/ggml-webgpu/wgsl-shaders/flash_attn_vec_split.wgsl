@@ -8,6 +8,18 @@ enable subgroups;
 #define KV_TYPE f16
 #endif
 
+#ifdef Q_F16
+#define Q_TYPE f16
+#else
+#define Q_TYPE f32
+#endif
+
+#ifdef DST_F16
+#define DST_TYPE f16
+#else
+#define DST_TYPE f32
+#endif
+
 #define HEAD_DIM_QK 64
 #define HEAD_DIM_V 64
 
@@ -89,7 +101,7 @@ struct Params {
     nwg: u32,
 };
 
-@group(0) @binding(0) var<storage, read_write> Q: array<f32>;
+@group(0) @binding(0) var<storage, read_write> Q: array<Q_TYPE>;
 #ifdef KV_OVERLAP
 #if defined(KV_Q4_0) || defined(KV_Q8_0)
 @group(0) @binding(1) var<storage, read_write> K: array<KV_TYPE>;
@@ -191,41 +203,41 @@ struct Params {
 @group(0) @binding(BLK_BINDING) var<storage, read_write> blk: array<u32>;
 #endif
 @group(0) @binding(TMP_BINDING) var<storage, read_write> tmp: array<f32>;
-@group(0) @binding(DST_BINDING) var<storage, read_write> dst: array<vec4<f32>>;
+@group(0) @binding(DST_BINDING) var<storage, read_write> dst: array<vec4<DST_TYPE>>;
 @group(0) @binding(PARAMS_BINDING) var<uniform> params: Params;
 
 // Just a very small float value.
 const FLOAT_MIN: f32 = -1.0e9;
 
-var<workgroup> q_shmem: array<f16, HEAD_DIM_QK>;
+var<workgroup> q_shmem: array<f32, HEAD_DIM_QK>;
 
 #ifndef KV_DIRECT
 const kv_shmem_size = KV_TILE * max(HEAD_DIM_QK, HEAD_DIM_V);
 // we can reuse the same shmem for K and V since we only need one at a time
-var<workgroup> kv_shmem: array<f16, kv_shmem_size>;
+var<workgroup> kv_shmem: array<f32, kv_shmem_size>;
 #endif
 
-var<workgroup> o_shmem: array<f16, HEAD_DIM_V>;
+var<workgroup> o_shmem: array<f32, HEAD_DIM_V>;
 
 #ifdef MASK
 // storage for mask values
-var<workgroup> mask_shmem: array<f16, KV_TILE>;
+var<workgroup> mask_shmem: array<f32, KV_TILE>;
 #endif
 
 // note that we reuse the same storage for both since we only need one at a time
-var<workgroup> inter_shmem: array<f16, KV_TILE>;
+var<workgroup> inter_shmem: array<f32, KV_TILE>;
 
 // Storage for row max and exp sum during online softmax
 fn calc_softmax_term(kv_idx: u32, slope: f32, has_bias: bool, apply_mask: bool) -> f32 {
     var v = select(FLOAT_MIN,
-                   f32(inter_shmem[kv_idx]) * params.scale,
+                   inter_shmem[kv_idx] * params.scale,
                    kv_idx < KV_TILE);
 #ifdef LOGIT_SOFTCAP
     v = params.logit_softcap * tanh(v);
 #endif
 #ifdef MASK
     if (apply_mask) {
-        var mask_val = select(0.0, f32(mask_shmem[kv_idx]), kv_idx < KV_TILE);
+        var mask_val = select(0.0, mask_shmem[kv_idx], kv_idx < KV_TILE);
         v += select(mask_val, slope * mask_val, has_bias);
     }
 #endif
@@ -289,10 +301,10 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
     // load the single Q row into shared memory
     for (var elem_idx = local_id.x; elem_idx < HEAD_DIM_QK; elem_idx += WG_SIZE) {
         let global_q_row_offset = q_head_offset + q_row_start * params.stride_q1;
-        q_shmem[elem_idx] = f16(select(
+        q_shmem[elem_idx] = select(
             0.0,
-            Q[global_q_row_offset + elem_idx],
-            q_row_start < params.seq_len_q));
+            f32(Q[global_q_row_offset + elem_idx]),
+            q_row_start < params.seq_len_q);
     }
 
     for (var kv_tile = iwg * KV_TILE; kv_tile < params.seq_len_kv; kv_tile += KV_TILE * params.nwg) {
@@ -308,7 +320,7 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
         let blk_state = blk_state_local;
         let skip_tile = blk_state == 0u;
         for (var elem_idx = local_id.x; elem_idx < KV_TILE; elem_idx += WG_SIZE) {
-            inter_shmem[elem_idx] = f16(0.0);
+            inter_shmem[elem_idx] = 0.0;
         }
 
       // load k tile into shared memory
@@ -331,8 +343,8 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
                   let q_packed = bitcast<u32>(vec2(q_0, q_1));
                   for (var k = 0u; k < 4u; k++) {
                       let q_byte = get_byte(q_packed, k);
-                      let q_hi = (f16((q_byte >> 4) & 0xF) - 8.0) * d;
-                      let q_lo = (f16(q_byte & 0xF) - 8.0) * d;
+                      let q_hi = (f32((q_byte >> 4) & 0xF) - 8.0) * f32(d);
+                      let q_lo = (f32(q_byte & 0xF) - 8.0) * f32(d);
                       let idx = block_k * BLOCK_SIZE + block_offset * 2u + j * 2u + k;
                       kv_shmem[row_offset + idx] = q_lo;
                       kv_shmem[row_offset + idx + 16u] = q_hi;
@@ -359,7 +371,7 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
                   let q_packed = bitcast<u32>(vec2(q_0, q_1));
                   for (var k = 0u; k < 4u; k++) {
                       let q_byte = get_byte_i32(q_packed, k);
-                      let q_val = f16(q_byte) * d;
+                      let q_val = f32(q_byte) * f32(d);
                       let idx = block_k * BLOCK_SIZE + block_offset * 2u + j * 2u + k;
                       kv_shmem[row_offset + idx] = q_val;
                   }
@@ -377,10 +389,10 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
           let in_bounds = global_k_row < params.seq_len_kv && (k_col + 3u) < HEAD_DIM_QK;
           let vec_idx = (global_k_row_offset + k_col) >> 2u;
           let k4 = select(vec4<KV_TYPE>(0.0), K[vec_idx], in_bounds);
-          kv_shmem[elem_idx + 0u] = f16(k4.x);
-          kv_shmem[elem_idx + 1u] = f16(k4.y);
-          kv_shmem[elem_idx + 2u] = f16(k4.z);
-          kv_shmem[elem_idx + 3u] = f16(k4.w);
+          kv_shmem[elem_idx + 0u] = f32(k4.x);
+          kv_shmem[elem_idx + 1u] = f32(k4.y);
+          kv_shmem[elem_idx + 2u] = f32(k4.z);
+          kv_shmem[elem_idx + 3u] = f32(k4.w);
       }
 #endif
 
@@ -401,20 +413,20 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
                         let q_off = i * 4u;
 
                         let qv = vec4<f32>(
-                            f32(q_shmem[q_off + 0u]),
-                            f32(q_shmem[q_off + 1u]),
-                            f32(q_shmem[q_off + 2u]),
-                            f32(q_shmem[q_off + 3u]));
+                            q_shmem[q_off + 0u],
+                            q_shmem[q_off + 1u],
+                            q_shmem[q_off + 2u],
+                            q_shmem[q_off + 3u]);
 #ifdef KV_DIRECT
                         let idx = k_head_offset + (kv_tile + kv_idx) * params.stride_k1 + (i * 4u);
                         let kv = vec4<f32>(K[idx >> 2u]);
 #else
                         let idx = kv_idx * HEAD_DIM_QK + (i * 4u);
                         let kv = vec4<f32>(
-                            f32(kv_shmem[idx + 0u]),
-                            f32(kv_shmem[idx + 1u]),
-                            f32(kv_shmem[idx + 2u]),
-                            f32(kv_shmem[idx + 3u]));
+                            kv_shmem[idx + 0u],
+                            kv_shmem[idx + 1u],
+                            kv_shmem[idx + 2u],
+                            kv_shmem[idx + 3u]);
 #endif
                         partial_sum += dot(qv, kv);
                     }
@@ -435,7 +447,7 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
 
                   let sum_bcast = subgroupShuffle(sum, num_of_threads * ty);
                   if (tx == 0u && kv_valid) {
-                      inter_shmem[kv_idx] = f16(sum_bcast);
+                      inter_shmem[kv_idx] = sum_bcast;
                   }
               }
           }
@@ -450,7 +462,7 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
               let global_k_col = kv_tile + elem_idx;
               let mask_in_bounds = q_row_start < params.seq_len_q && global_k_col < params.seq_len_kv;
               let mask_idx = mask_global_offset + global_k_col;
-              mask_shmem[elem_idx] = select(0.0, mask[mask_idx], mask_in_bounds);
+              mask_shmem[elem_idx] = select(0.0f, f32(mask[mask_idx]), mask_in_bounds);
           }
       }
 #else
@@ -483,7 +495,7 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
                                  kv_tile + kv_idx < params.seq_len_kv && kv_idx < KV_TILE);
               total_exp_term += subgroupAdd(cur_p);
               if (kv_idx < KV_TILE) {
-                  inter_shmem[kv_idx] = f16(cur_p);
+                  inter_shmem[kv_idx] = cur_p;
               }
           }
 
@@ -493,7 +505,7 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
           exp_sum = exp_sum * cur_exp + total_exp_term;
 
           for (var elem_idx = sg_inv_id; elem_idx < HEAD_DIM_V; elem_idx += subgroup_size) {
-              o_shmem[elem_idx] = f16(f32(o_shmem[elem_idx]) * cur_exp);
+              o_shmem[elem_idx] = o_shmem[elem_idx] * cur_exp;
           }
       }
 
@@ -517,8 +529,8 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
                   let q_packed = bitcast<u32>(vec2(q_0, q_1));
                   for (var k = 0u; k < 4u; k++) {
                       let q_byte = get_byte(q_packed, k);
-                      let q_hi = (f16((q_byte >> 4) & 0xF) - 8.0) * d;
-                      let q_lo = (f16(q_byte & 0xF) - 8.0) * d;
+                      let q_hi = (f32((q_byte >> 4) & 0xF) - 8.0) * f32(d);
+                      let q_lo = (f32(q_byte & 0xF) - 8.0) * f32(d);
                       let idx = block_k * BLOCK_SIZE + block_offset * 2u + j * 2u + k;
                       kv_shmem[row_offset + idx] = q_lo;
                       kv_shmem[row_offset + idx + 16u] = q_hi;
@@ -545,7 +557,7 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
                   let q_packed = bitcast<u32>(vec2(q_0, q_1));
                   for (var k = 0u; k < 4u; k++) {
                       let q_byte = get_byte_i32(q_packed, k);
-                      let q_val = f16(q_byte) * d;
+                      let q_val = f32(q_byte) * f32(d);
                       let idx = block_k * BLOCK_SIZE + block_offset * 2u + j * 2u + k;
                       kv_shmem[row_offset + idx] = q_val;
                   }
@@ -563,10 +575,10 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
           let in_bounds = global_v_row < params.seq_len_kv && (v_col + 3u) < HEAD_DIM_V;
           let vec_idx = (global_v_row_offset + v_col) >> 2u;
           let v4 = select(vec4<KV_TYPE>(0.0), V[vec_idx], in_bounds);
-          kv_shmem[elem_idx + 0u] = f16(v4.x);
-          kv_shmem[elem_idx + 1u] = f16(v4.y);
-          kv_shmem[elem_idx + 2u] = f16(v4.z);
-          kv_shmem[elem_idx + 3u] = f16(v4.w);
+          kv_shmem[elem_idx + 0u] = f32(v4.x);
+          kv_shmem[elem_idx + 1u] = f32(v4.y);
+          kv_shmem[elem_idx + 2u] = f32(v4.z);
+          kv_shmem[elem_idx + 3u] = f32(v4.w);
       }
 #endif
 
@@ -589,17 +601,17 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
                           continue;
                       }
 
-                      let p = f32(inter_shmem[kv_idx]);
+                      let p = inter_shmem[kv_idx];
 #ifdef KV_DIRECT
                       let v_idx = v_head_offset + v_row * params.stride_v1 + vec_col * 4u;
                       let v4 = vec4<f32>(V[v_idx >> 2u]);
 #else
                       let v_idx = kv_idx * HEAD_DIM_V + vec_col * 4u;
                       let v4 = vec4<f32>(
-                          f32(kv_shmem[v_idx + 0u]),
-                          f32(kv_shmem[v_idx + 1u]),
-                          f32(kv_shmem[v_idx + 2u]),
-                          f32(kv_shmem[v_idx + 3u]));
+                          kv_shmem[v_idx + 0u],
+                          kv_shmem[v_idx + 1u],
+                          kv_shmem[v_idx + 2u],
+                          kv_shmem[v_idx + 3u]);
 #endif
                       lo += p * v4;
                   }
@@ -630,10 +642,10 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
 
                   if (ty_pv == 0u) {
                       let elem_base = vec_col * 4u;
-                      o_shmem[elem_base + 0u] = f16(f32(o_shmem[elem_base + 0u]) + lo_x);
-                      o_shmem[elem_base + 1u] = f16(f32(o_shmem[elem_base + 1u]) + lo_y);
-                      o_shmem[elem_base + 2u] = f16(f32(o_shmem[elem_base + 2u]) + lo_z);
-                      o_shmem[elem_base + 3u] = f16(f32(o_shmem[elem_base + 3u]) + lo_w);
+                      o_shmem[elem_base + 0u] = o_shmem[elem_base + 0u] + lo_x;
+                      o_shmem[elem_base + 1u] = o_shmem[elem_base + 1u] + lo_y;
+                      o_shmem[elem_base + 2u] = o_shmem[elem_base + 2u] + lo_z;
+                      o_shmem[elem_base + 3u] = o_shmem[elem_base + 3u] + lo_w;
                   }
               }
           }
@@ -660,7 +672,7 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
         exp_sum = exp_sum * max_exp + sink_exp_sum;
 
         for (var elem_idx = sg_inv_id; elem_idx < HEAD_DIM_V; elem_idx += subgroup_size) {
-            o_shmem[elem_idx] = f16(f32(o_shmem[elem_idx]) * max_exp);
+            o_shmem[elem_idx] = o_shmem[elem_idx] * max_exp;
         }
     }
     workgroupBarrier();
@@ -681,7 +693,7 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
                 );
 
                 let dst_vec_index: u32 = (row_base + elem_base) >> 2u;
-                dst[dst_vec_index] = v;
+                dst[dst_vec_index] = vec4<DST_TYPE>(v);
             }
         } else {
             let rid = batch_idx * rows_per_batch + head_idx * params.seq_len_q + q_row_start;
