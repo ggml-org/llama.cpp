@@ -900,8 +900,12 @@ struct common_speculative_impl_ngram_mod : public common_speculative_impl {
         // length of the last drafted n-gram (number of tokens returned by draft)
         size_t n_draft_last = 0;
 
-        // consecutive accept rounds with low acceptance fraction (< 0.5)
+        // EMA of the acceptance fraction (0.0 - 1.0); smooths out temporary dips
+        // initialized to 1.0 (perfect acceptance) on new prompts
+        // reset triggers when ema_acc drops below 0.15 (~7 sustained zero-accept rounds with alpha=0.3)
         int n_low = 0;
+
+        float ema_acc = 1.0f;
     };
 
     std::vector<seq_info> sinfos;
@@ -934,6 +938,7 @@ struct common_speculative_impl_ngram_mod : public common_speculative_impl {
 
         sinfo.i_last = 0;
         sinfo.n_draft_last = 0;
+        sinfo.ema_acc = 1.0f;
 
         const size_t n = mod.get_n();
         if (prompt.size() < n) {
@@ -1038,22 +1043,19 @@ struct common_speculative_impl_ngram_mod : public common_speculative_impl {
 
         auto & sinfo = sinfos[seq_id];
 
-        // compute acceptance fraction if we have a recorded draft length
+        // update EMA of acceptance fraction and check for sustained low acceptance
         if (sinfo.n_draft_last > 0) {
-            const double f_acc = (double)n_accepted / (double)sinfo.n_draft_last;
-            if (f_acc < 0.25) {
-                sinfo.n_low++;
-                if (sinfo.n_low >= 5) {
-                    if (verbose) {
-                        LOG_WRN("%s: low acceptance streak (%d) - resetting ngram_mod\n", __func__, sinfo.n_low);
-                    }
+            const float f_acc = (float)n_accepted / (float)sinfo.n_draft_last;
+            sinfo.ema_acc = 0.7f * sinfo.ema_acc + 0.3f * f_acc;
 
-                    mod.reset();
-                    sinfo.n_low = 0;
-                    sinfo.i_last = 0;
+            if (sinfo.ema_acc < 0.15f) {
+                if (verbose) {
+                    LOG_WRN("%s: low EMA acceptance (%.3f) - resetting ngram_mod\n", __func__, sinfo.ema_acc);
                 }
-            } else {
-                sinfo.n_low = 0;
+
+                mod.reset();
+                sinfo.ema_acc = 1.0f;
+                sinfo.i_last = 0;
             }
         }
     }
