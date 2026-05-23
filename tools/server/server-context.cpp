@@ -836,19 +836,26 @@ private:
 
                     GGML_ASSERT(!params_base.fit_params_target.empty());
                     size_t total = 0;
+
+                    std::vector<ggml_backend_dev_t> tgt_devices = params.devices;
+
+                    if (tgt_devices.empty()) {
+                        for(size_t i = 0; i < ggml_backend_dev_count(); ++i) {
+                           tgt_devices.push_back(ggml_backend_dev_get(i));
+                        }
+                    }
+
                     for (size_t j = 0; j < devs.size(); ++j) {
                         const size_t bytes =
                             (measure_model_bytes ? dmd[j].mb.model : 0) +
                             dmd[j].mb.context +
                             dmd[j].mb.compute;
                         total += bytes;
-                        for (size_t i = 0; i < ggml_backend_dev_count(); i++) {
-                            if (ggml_backend_dev_get(i) == devs[j]) {
-                                if (i < params_base.fit_params_target.size()) {
-                                    SRV_DBG("[spec] adding %.2f MiB to fit_params_target for device %s\n",
-                                            bytes / (1024.0 * 1024.0), ggml_backend_dev_name(devs[j]));
-                                    params_base.fit_params_target[i] += bytes;
-                                }
+                        for (size_t i = 0; i < tgt_devices.size(); i++) {
+                            if (tgt_devices[i] == devs[j]) {
+                                SRV_DBG("[spec] adding %.2f MiB to fit_params_target for device %s\n",
+                                        bytes / (1024.0 * 1024.0), ggml_backend_dev_name(devs[j]));
+                                params_base.fit_params_target[i] += bytes;
                                 break;
                             }
                         }
