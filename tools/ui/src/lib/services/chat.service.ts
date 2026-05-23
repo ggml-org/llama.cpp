@@ -20,7 +20,8 @@ import {
 	SSE_LINE_SEPARATOR,
 	SSE_DATA_PREFIX,
 	SSE_DONE_MARKER,
-	STREAM_VISIBILITY_KICK_MS
+	STREAM_VISIBILITY_KICK_MS,
+	API_STREAM
 } from '$lib/constants';
 import {
 	AttachmentType,
@@ -28,7 +29,8 @@ import {
 	FileTypeAudio,
 	MessageRole,
 	MimeTypeAudio,
-	ReasoningFormat
+	ReasoningFormat,
+	StreamConnectionState
 } from '$lib/enums';
 import type {
 	ApiChatMessageContentPart,
@@ -38,8 +40,7 @@ import type {
 import type {
 	AudioInputFormat,
 	DatabaseMessageExtraMcpPrompt,
-	DatabaseMessageExtraMcpResource,
-	StreamConnectionState
+	DatabaseMessageExtraMcpResource
 } from '$lib/types';
 import { modelsStore } from '$lib/stores/models.svelte';
 import { settingsStore } from '../stores/settings.svelte';
@@ -495,7 +496,7 @@ export class ChatService {
 		if (!conversationId) return;
 		try {
 			const id = streamIdentity(conversationId, model);
-			await fetch(`./v1/stream/${encodeURIComponent(id)}`, {
+			await fetch(`${API_STREAM.BASE}/${encodeURIComponent(id)}`, {
 				method: 'DELETE',
 				headers: getAuthHeaders()
 			});
@@ -629,7 +630,7 @@ export class ChatService {
 		if (conversationId) {
 			saveStreamState(conversationId, 0, streamModel);
 		}
-		onConnectionState?.('streaming');
+		onConnectionState?.(StreamConnectionState.STREAMING);
 
 		let decoder = new TextDecoder();
 		let aggregatedContent = '';
@@ -731,7 +732,7 @@ export class ChatService {
 						lastByteAt = Date.now();
 						if (!madeProgress) {
 							madeProgress = true;
-							onConnectionState?.('streaming');
+							onConnectionState?.(StreamConnectionState.STREAMING);
 						}
 					}
 
@@ -820,12 +821,12 @@ export class ChatService {
 				if (!conversationId) break;
 
 				if (!madeProgress) {
-					onConnectionState?.('lost');
+					onConnectionState?.(StreamConnectionState.LOST);
 					onError?.(new Error('Stream resume produced no new bytes, giving up'));
 					break;
 				}
 
-				onConnectionState?.('resuming');
+				onConnectionState?.(StreamConnectionState.RESUMING);
 				madeProgress = false;
 
 				// the server resends starting at bytesParsed, discard any partial line we held
@@ -838,7 +839,7 @@ export class ChatService {
 				// an abort landing during the resume request is intentional, not a lost connection
 				if (abortSignal?.aborted) break;
 				if (!resumeResp || resumeResp.status !== 200) {
-					onConnectionState?.('lost');
+					onConnectionState?.(StreamConnectionState.LOST);
 					onError?.(new Error('Stream connection lost and could not be resumed'));
 					break;
 				}

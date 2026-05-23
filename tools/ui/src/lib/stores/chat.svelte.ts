@@ -59,10 +59,15 @@ import type {
 	ApiProcessingState,
 	ApiStreamSession,
 	DatabaseMessage,
-	DatabaseMessageExtra,
-	StreamConnectionState
+	DatabaseMessageExtra
 } from '$lib/types';
-import { ContinueIntentKind, ErrorDialogType, MessageRole, MessageType } from '$lib/enums';
+import {
+	ContinueIntentKind,
+	ErrorDialogType,
+	MessageRole,
+	MessageType,
+	StreamConnectionState
+} from '$lib/enums';
 
 interface ConversationStateEntry {
 	lastAccessed: number;
@@ -77,7 +82,7 @@ class ChatStore {
 	isReasoning = $state(false);
 	// resumable stream connection state for the active conversation
 	// streaming -> bytes flowing normally, resuming -> waiting on /v1/stream/:id reconnect, lost -> unrecoverable
-	streamConnectionState = $state<StreamConnectionState>('streaming');
+	streamConnectionState = $state<StreamConnectionState>(StreamConnectionState.STREAMING);
 	chatLoadingStates = new SvelteMap<string, boolean>();
 	chatReasoningStates = new SvelteMap<string, boolean>();
 	chatStreamingStates = new SvelteMap<

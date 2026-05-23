@@ -9,6 +9,7 @@
 
 import { streamIdentity } from '$lib/utils/stream-identity';
 import { getAuthHeaders } from '$lib/utils/api-headers';
+import { API_STREAM } from '$lib/constants';
 
 interface ResumableStreamState {
 	bytesReceived: number;
@@ -100,6 +101,6 @@ export async function resumeStream(
 	const state = getStreamState(conversationId);
 	const from = state?.bytesReceived ?? 0;
 	const id = streamIdentity(conversationId, model);
-	const url = `./v1/stream/${encodeURIComponent(id)}?from=${from}`;
+	const url = `${API_STREAM.BASE}/${encodeURIComponent(id)}?from=${from}`;
 	return await fetch(url, { method: 'GET', signal, headers: getAuthHeaders() });
 }
