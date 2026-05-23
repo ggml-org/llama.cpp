@@ -55,3 +55,14 @@ static __device__ __forceinline__ void cp_async_wait_all() {
     NO_DEVICE_CODE;
 #endif // CP_ASYNC_AVAILABLE
 }
+
+// Wait for all async copies except the last N stages.
+// Used for N-buffer pipelining: cp_async_wait_stage<1>() waits for all but the most recent stage.
+template <int N>
+static __device__ __forceinline__ void cp_async_wait_stage() {
+#ifdef CP_ASYNC_AVAILABLE
+    asm volatile("cp.async.wait_stage %0;" :: "n"(N) : "memory");
+#else
+    NO_DEVICE_CODE;
+#endif
+}
