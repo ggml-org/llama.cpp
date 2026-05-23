@@ -10,6 +10,7 @@ struct ggml_cuda_topk_moe_args {
     bool prob_bias{};
     bool norm{};
     bool scale{};
+    bool weights_overlap_logits{};
 };
 
 void ggml_cuda_op_topk_moe(ggml_backend_cuda_context &     ctx,

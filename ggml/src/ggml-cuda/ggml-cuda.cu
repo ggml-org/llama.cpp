@@ -3549,9 +3549,10 @@ static bool ggml_cuda_tensors_overlap(const ggml_tensor * a, const ggml_tensor *
     return b_start < a_end && a_start < b_end;
 }
 
-static bool ggml_cuda_topk_moe_weights_alias_logits(const ggml_tensor * logits, const ggml_tensor * weights) {
-    return ggml_cuda_tensors_overlap(weights, logits);
-}
+struct ggml_cuda_fusion_alias {
+    const ggml_tensor * dst;
+    const ggml_tensor * src;
+};
 
 // returns whether the write (out) nodes overwrite the read nodes in operation
 static bool ggml_cuda_check_fusion_memory_ranges(const ggml_cgraph * cgraph,
@@ -3559,12 +3560,22 @@ static bool ggml_cuda_check_fusion_memory_ranges(const ggml_cgraph * cgraph,
                                                  const int           node_count,
                                                  const int *         out_nodes,
                                                  const int           out_count,
-                                                 const bool          is_topk_moe = false) {
-    bool is_ok = true;
+                                                 const bool          is_topk_moe = false,
+                                                 const std::initializer_list<ggml_cuda_fusion_alias> handled_aliases = {}) {
     // exception for topk-moe, as each row is read entirely before writing
     if (ggml_nrows(cgraph->nodes[node_idx]) == 1 && is_topk_moe) {
         return true;
     }
+
+    const auto alias_is_handled = [&](const ggml_tensor * dst, const ggml_tensor * src) {
+        for (const auto & alias : handled_aliases) {
+            if (alias.dst == dst && alias.src == src) {
+                return true;
+            }
+        }
+
+        return false;
+    };
 
     for (int i = 0; i < out_count; ++i) {
         const ggml_tensor * dst = cgraph->nodes[out_nodes[i]];
@@ -3591,16 +3602,15 @@ static bool ggml_cuda_check_fusion_memory_ranges(const ggml_cgraph * cgraph,
                         }
                     }
 
-                    if (!found) {
-                        is_ok = false;
-                        break;
+                    if (!found && !alias_is_handled(dst, src)) {
+                        return false;
                     }
                 }
             }
         }
     }
 
-    return is_ok;
+    return true;
 }
 
 
@@ -3878,14 +3888,13 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
 
                 weights      = cgraph->nodes[i + ops.size() - 1];
                 out_nodes[1] = i + ops.size() - 1;
-
-                const bool topk_moe_memory_ok =
-                    ggml_cuda_check_fusion_memory_ranges(cgraph, i, ops.size(), out_nodes, 2, /*is_topk_moe=*/true) ||
-                    ggml_cuda_topk_moe_weights_alias_logits(logits, weights);
+                const ggml_cuda_fusion_alias weights_alias_logits = { weights, logits };
+                args.weights_overlap_logits = ggml_cuda_tensors_overlap(weights, logits);
 
                 if (ggml_can_fuse_subgraph(cgraph, i, ops.size(), ops.data(), out_nodes, 2) &&
                         ggml_cuda_should_use_topk_moe(node, logits, weights, ids) &&
-                        topk_moe_memory_ok) {
+                        ggml_cuda_check_fusion_memory_ranges(
+                            cgraph, i, ops.size(), out_nodes, 2, /*is_topk_moe=*/true, { weights_alias_logits })) {
                     ggml_cuda_op_topk_moe(*cuda_ctx, logits, weights, ids, clamp, scale, bias, args);
                     return ops.size() - 1;
                 }
@@ -3898,13 +3907,13 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
                 const ggml_tensor * softmax = cgraph->nodes[i + 4];
 
                 int out_nodes[2] = { i + 1, i + 5 };
-                const bool topk_moe_memory_ok =
-                    ggml_cuda_check_fusion_memory_ranges(cgraph, i, ops.size(), out_nodes, 2, /*is_topk_moe=*/true) ||
-                    ggml_cuda_topk_moe_weights_alias_logits(logits, weights);
+                const ggml_cuda_fusion_alias weights_alias_logits = { weights, logits };
+                args.weights_overlap_logits = ggml_cuda_tensors_overlap(weights, logits);
 
                 if (ggml_can_fuse_subgraph(cgraph, i, ops.size(), ops.data(), out_nodes, 2) &&
                         ggml_cuda_should_use_topk_moe(softmax, logits, weights, ids) &&
-                        topk_moe_memory_ok) {
+                        ggml_cuda_check_fusion_memory_ranges(
+                            cgraph, i, ops.size(), out_nodes, 2, /*is_topk_moe=*/true, { weights_alias_logits })) {
                     ggml_cuda_op_topk_moe(*cuda_ctx, logits, weights, ids, clamp, scale, bias, args);
                     return ops.size() - 1;
                 }
