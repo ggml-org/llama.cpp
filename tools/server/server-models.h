@@ -129,12 +129,43 @@ private:
     // if true, the next get_meta() will trigger a reload of model list
     bool need_reload = false;
 
-    // maps a conversation id to the model name that currently serves its stream session, so the
-    // resumable stream routes can go straight to the owning child instead of polling every one.
-    // populated when proxy_request forwards a POST carrying an X-Conversation-Id, the entry is
-    // best effort: if it is stale the child simply answers not found and the client recovers
-    std::mutex                                   conv_model_mu;
-    std::unordered_map<std::string, std::string> conv_model_map;
+    // conv_id -> model name that currently serves its stream session, lets the resumable stream
+    // routes go straight to the owning child instead of polling every one. populated when
+    // proxy_request forwards a POST carrying an X-Conversation-Id. best effort: a stale entry just
+    // makes the child answer not found and the client recovers. owns its lock, one mutex per struct
+    struct conv_model_tracker {
+        void remember(const std::string & conv_id, const std::string & model) {
+            if (conv_id.empty() || model.empty()) {
+                return;
+            }
+            std::lock_guard<std::mutex> lock(mu);
+            map[conv_id] = model;
+        }
+
+        std::optional<std::string> lookup(const std::string & conv_id) {
+            if (conv_id.empty()) {
+                return std::nullopt;
+            }
+            std::lock_guard<std::mutex> lock(mu);
+            auto it = map.find(conv_id);
+            if (it == map.end()) {
+                return std::nullopt;
+            }
+            return it->second;
+        }
+
+        void forget(const std::string & conv_id) {
+            if (conv_id.empty()) {
+                return;
+            }
+            std::lock_guard<std::mutex> lock(mu);
+            map.erase(conv_id);
+        }
+
+      private:
+        std::mutex                                   mu;
+        std::unordered_map<std::string, std::string> map;
+    };
 
     common_preset_context ctx_preset;
 
@@ -155,6 +186,9 @@ private:
     void notify_sse(const std::string & event, const std::string & model_id, const json & data = nullptr);
 
 public:
+    // conv_id -> model tracker for the resumable stream routes, owns its lock
+    conv_model_tracker conv_models;
+
     server_models(const common_params & params, int argc, char ** argv);
 
     server_response sse; // for real-time updates via SSE endpoint
@@ -225,12 +259,6 @@ public:
     //     state = ready       -> payload = model_info (json), or {} if wakeup from sleeping
     //     state = sleeping    -> payload = {}
     void handle_child_state(const std::string & name, const std::string & raw_input);
-
-    // conv_id -> model name tracking for the resumable stream routes (thread-safe)
-    // remember is called when a POST is routed to a child, lookup/forget by the stream routes
-    void                       remember_conv_model(const std::string & conv_id, const std::string & model);
-    std::optional<std::string> lookup_conv_model(const std::string & conv_id);
-    void                       forget_conv_model(const std::string & conv_id);
 };
 
 struct server_child {

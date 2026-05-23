@@ -1369,34 +1369,6 @@ void server_models::handle_child_state(const std::string & name, const std::stri
     }
 }
 
-void server_models::remember_conv_model(const std::string & conv_id, const std::string & model) {
-    if (conv_id.empty() || model.empty()) {
-        return;
-    }
-    std::lock_guard<std::mutex> lock(conv_model_mu);
-    conv_model_map[conv_id] = model;
-}
-
-std::optional<std::string> server_models::lookup_conv_model(const std::string & conv_id) {
-    if (conv_id.empty()) {
-        return std::nullopt;
-    }
-    std::lock_guard<std::mutex> lock(conv_model_mu);
-    auto it = conv_model_map.find(conv_id);
-    if (it == conv_model_map.end()) {
-        return std::nullopt;
-    }
-    return it->second;
-}
-
-void server_models::forget_conv_model(const std::string & conv_id) {
-    if (conv_id.empty()) {
-        return;
-    }
-    std::lock_guard<std::mutex> lock(conv_model_mu);
-    conv_model_map.erase(conv_id);
-}
-
 //
 // server_child
 //
@@ -1643,7 +1615,7 @@ static std::optional<server_model_meta> resolve_child_for_conv(
     if (conversation_id.empty()) {
         return std::nullopt;
     }
-    auto tracked = models.lookup_conv_model(conversation_id);
+    auto tracked = models.conv_models.lookup(conversation_id);
     if (!tracked.has_value()) {
         return std::nullopt;
     }
@@ -1707,7 +1679,7 @@ void server_models_routes::init_routes() {
         // the GET and DELETE routes receive in their path, no parsing either side
         std::string conv_id = stream_conv_id_from_headers(req.headers);
         if (!conv_id.empty()) {
-            models.remember_conv_model(conv_id, name);
+            models.conv_models.remember(conv_id, name);
         }
         return models.proxy_request(req, method, name, true); // update last usage for POST request only
     };
@@ -2028,7 +2000,7 @@ void server_models_routes::init_routes() {
             (void) resp; // best effort, 404 and network errors are equivalent to no op
         }
         // drop the tracking entry, the session is being torn down
-        models.forget_conv_model(conv_id);
+        models.conv_models.forget(conv_id);
         res->status = 204;
         res->content_type = "application/json";
         return res;
