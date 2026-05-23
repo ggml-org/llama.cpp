@@ -1224,18 +1224,17 @@ namespace ggml_cuda_wgmma {
                 : "memory");
         }
 
-        // m16n16h4: 16x16 output, K=4 INT8. Two m16n8h4 passes, advancing B by 8.
+        // m16n16h4: 16x16 output, K=4 INT8. 8 uint32_t accumulator (one warp).
         else if constexpr (M == 16 && N == 16 && K == 4) {
-            for (int pass = 0; pass < 2; ++pass) {
-                asm volatile(
-                    "wgmma.mma_sync.sync.aligned.m16n8h4.s32.s8.s8.s32 "
-                    "{%0, %1, %2, %3}, [%4], [%5], {%0, %1, %2, %3}, %6;"
-                    : "+r"(D.x[0]), "+r"(D.x[1]), "+r"(D.x[2]), "+r"(D.x[3])
-                    : "l"(reinterpret_cast<uint64_t>(__cvta_generic_to_shared(A))),
-                      "l"(reinterpret_cast<uint64_t>(__cvta_generic_to_shared(B + pass * 8))),
-                      "r"(pass == 0 ? (scale_d ? 1 : 0) : 1)
-                    : "memory");
-            }
+            asm volatile(
+                "wgmma.mma_sync.sync.aligned.m16n16h4.s32.s8.s8.s32 "
+                "{%0, %1, %2, %3, %4, %5, %6, %7}, [%8], [%9], {%0, %1, %2, %3, %4, %5, %6, %7}, %10;"
+                : "+r"(D.x[0]), "+r"(D.x[1]), "+r"(D.x[2]), "+r"(D.x[3]),
+                  "+r"(D.x[4]), "+r"(D.x[5]), "+r"(D.x[6]), "+r"(D.x[7])
+                : "l"(reinterpret_cast<uint64_t>(__cvta_generic_to_shared(A))),
+                  "l"(reinterpret_cast<uint64_t>(__cvta_generic_to_shared(B))),
+                  "r"(scale_d ? 1 : 0)
+                : "memory");
         }
 
         // m64n16h8: 64x16 output, K=8 INT8. Warpgroup-wide, 32 uint32_t accumulator.
@@ -1258,50 +1257,76 @@ namespace ggml_cuda_wgmma {
                 : "memory");
         }
 
-        // m64n32h8: 64x32 output, K=8 INT8. Two m64n16h8 passes, advancing B by 16.
+        // m64n32h8: 64x32 output, K=8 INT8. Warpgroup-wide, 64 uint32_t accumulator.
         else if constexpr (M == 64 && N == 32 && K == 8) {
-            for (int pass = 0; pass < 2; ++pass) {
-                uint32_t *dx = D.x;
-                const uint32_t *Bptr = B + pass * 16;
-                asm volatile(
-                    "wgmma.mma_sync.sync.aligned.m64n16h8.s32.s8.s8.s32 "
-                    "{%0<16>}, [%1], [%2], {%3<16>}, %4;"
-                    : "+r"(dx[0]), "+r"(dx[1]), "+r"(dx[2]), "+r"(dx[3]),
-                      "+r"(dx[4]), "+r"(dx[5]), "+r"(dx[6]), "+r"(dx[7]),
-                      "+r"(dx[8]), "+r"(dx[9]), "+r"(dx[10]), "+r"(dx[11]),
-                      "+r"(dx[12]), "+r"(dx[13]), "+r"(dx[14]), "+r"(dx[15]),
-                      "+r"(dx[16]), "+r"(dx[17]), "+r"(dx[18]), "+r"(dx[19]),
-                      "+r"(dx[20]), "+r"(dx[21]), "+r"(dx[22]), "+r"(dx[23]),
-                      "+r"(dx[24]), "+r"(dx[25]), "+r"(dx[26]), "+r"(dx[27]),
-                      "+r"(dx[28]), "+r"(dx[29]), "+r"(dx[30]), "+r"(dx[31])
-                    : "l"(reinterpret_cast<uint64_t>(__cvta_generic_to_shared(A))),
-                      "l"(reinterpret_cast<uint64_t>(__cvta_generic_to_shared(Bptr))),
-                      "r"(pass == 0 ? (scale_d ? 1 : 0) : 1)
-                    : "memory");
-            }
+            uint32_t *dx = D.x;
+            asm volatile(
+                "wgmma.mma_sync.sync.aligned.m64n32h8.s32.s8.s8.s32 "
+                "{%0<16>}, [%1], [%2], {%3<16>}, %4;"
+                : "+r"(dx[0]), "+r"(dx[1]), "+r"(dx[2]), "+r"(dx[3]),
+                  "+r"(dx[4]), "+r"(dx[5]), "+r"(dx[6]), "+r"(dx[7]),
+                  "+r"(dx[8]), "+r"(dx[9]), "+r"(dx[10]), "+r"(dx[11]),
+                  "+r"(dx[12]), "+r"(dx[13]), "+r"(dx[14]), "+r"(dx[15]),
+                  "+r"(dx[16]), "+r"(dx[17]), "+r"(dx[18]), "+r"(dx[19]),
+                  "+r"(dx[20]), "+r"(dx[21]), "+r"(dx[22]), "+r"(dx[23]),
+                  "+r"(dx[24]), "+r"(dx[25]), "+r"(dx[26]), "+r"(dx[27]),
+                  "+r"(dx[28]), "+r"(dx[29]), "+r"(dx[30]), "+r"(dx[31]),
+                  "+r"(dx[32]), "+r"(dx[33]), "+r"(dx[34]), "+r"(dx[35]),
+                  "+r"(dx[36]), "+r"(dx[37]), "+r"(dx[38]), "+r"(dx[39]),
+                  "+r"(dx[40]), "+r"(dx[41]), "+r"(dx[42]), "+r"(dx[43]),
+                  "+r"(dx[44]), "+r"(dx[45]), "+r"(dx[46]), "+r"(dx[47]),
+                  "+r"(dx[48]), "+r"(dx[49]), "+r"(dx[50]), "+r"(dx[51]),
+                  "+r"(dx[52]), "+r"(dx[53]), "+r"(dx[54]), "+r"(dx[55]),
+                  "+r"(dx[56]), "+r"(dx[57]), "+r"(dx[58]), "+r"(dx[59]),
+                  "+r"(dx[60]), "+r"(dx[61]), "+r"(dx[62]), "+r"(dx[63])
+                : "l"(reinterpret_cast<uint64_t>(__cvta_generic_to_shared(A))),
+                  "l"(reinterpret_cast<uint64_t>(__cvta_generic_to_shared(B))),
+                  "r"(scale_d ? 1 : 0)
+                : "memory");
         }
 
-        // m64n64h8: 64x64 output, K=8 INT8. Four m64n16h8 passes, advancing B by 16 each.
+        // m64n64h8: 64x64 output, K=8 INT8. Warpgroup-wide, 128 uint32_t accumulator.
         else if constexpr (M == 64 && N == 64 && K == 8) {
-            for (int pass = 0; pass < 4; ++pass) {
-                uint32_t *dx = D.x;
-                const uint32_t *Bptr = B + pass * 16;
-                asm volatile(
-                    "wgmma.mma_sync.sync.aligned.m64n16h8.s32.s8.s8.s32 "
-                    "{%0<16>}, [%1], [%2], {%3<16>}, %4;"
-                    : "+r"(dx[0]), "+r"(dx[1]), "+r"(dx[2]), "+r"(dx[3]),
-                      "+r"(dx[4]), "+r"(dx[5]), "+r"(dx[6]), "+r"(dx[7]),
-                      "+r"(dx[8]), "+r"(dx[9]), "+r"(dx[10]), "+r"(dx[11]),
-                      "+r"(dx[12]), "+r"(dx[13]), "+r"(dx[14]), "+r"(dx[15]),
-                      "+r"(dx[16]), "+r"(dx[17]), "+r"(dx[18]), "+r"(dx[19]),
-                      "+r"(dx[20]), "+r"(dx[21]), "+r"(dx[22]), "+r"(dx[23]),
-                      "+r"(dx[24]), "+r"(dx[25]), "+r"(dx[26]), "+r"(dx[27]),
-                      "+r"(dx[28]), "+r"(dx[29]), "+r"(dx[30]), "+r"(dx[31])
-                    : "l"(reinterpret_cast<uint64_t>(__cvta_generic_to_shared(A))),
-                      "l"(reinterpret_cast<uint64_t>(__cvta_generic_to_shared(Bptr))),
-                      "r"(pass == 0 ? (scale_d ? 1 : 0) : 1)
-                    : "memory");
-            }
+            uint32_t *dx = D.x;
+            asm volatile(
+                "wgmma.mma_sync.sync.aligned.m64n64h8.s32.s8.s8.s32 "
+                "{%0<16>}, [%1], [%2], {%3<16>}, %4;"
+                : "+r"(dx[0]), "+r"(dx[1]), "+r"(dx[2]), "+r"(dx[3]),
+                  "+r"(dx[4]), "+r"(dx[5]), "+r"(dx[6]), "+r"(dx[7]),
+                  "+r"(dx[8]), "+r"(dx[9]), "+r"(dx[10]), "+r"(dx[11]),
+                  "+r"(dx[12]), "+r"(dx[13]), "+r"(dx[14]), "+r"(dx[15]),
+                  "+r"(dx[16]), "+r"(dx[17]), "+r"(dx[18]), "+r"(dx[19]),
+                  "+r"(dx[20]), "+r"(dx[21]), "+r"(dx[22]), "+r"(dx[23]),
+                  "+r"(dx[24]), "+r"(dx[25]), "+r"(dx[26]), "+r"(dx[27]),
+                  "+r"(dx[28]), "+r"(dx[29]), "+r"(dx[30]), "+r"(dx[31]),
+                  "+r"(dx[32]), "+r"(dx[33]), "+r"(dx[34]), "+r"(dx[35]),
+                  "+r"(dx[36]), "+r"(dx[37]), "+r"(dx[38]), "+r"(dx[39]),
+                  "+r"(dx[40]), "+r"(dx[41]), "+r"(dx[42]), "+r"(dx[43]),
+                  "+r"(dx[44]), "+r"(dx[45]), "+r"(dx[46]), "+r"(dx[47]),
+                  "+r"(dx[48]), "+r"(dx[49]), "+r"(dx[50]), "+r"(dx[51]),
+                  "+r"(dx[52]), "+r"(dx[53]), "+r"(dx[54]), "+r"(dx[55]),
+                  "+r"(dx[56]), "+r"(dx[57]), "+r"(dx[58]), "+r"(dx[59]),
+                  "+r"(dx[60]), "+r"(dx[61]), "+r"(dx[62]), "+r"(dx[63]),
+                  "+r"(dx[64]), "+r"(dx[65]), "+r"(dx[66]), "+r"(dx[67]),
+                  "+r"(dx[68]), "+r"(dx[69]), "+r"(dx[70]), "+r"(dx[71]),
+                  "+r"(dx[72]), "+r"(dx[73]), "+r"(dx[74]), "+r"(dx[75]),
+                  "+r"(dx[76]), "+r"(dx[77]), "+r"(dx[78]), "+r"(dx[79]),
+                  "+r"(dx[80]), "+r"(dx[81]), "+r"(dx[82]), "+r"(dx[83]),
+                  "+r"(dx[84]), "+r"(dx[85]), "+r"(dx[86]), "+r"(dx[87]),
+                  "+r"(dx[88]), "+r"(dx[89]), "+r"(dx[90]), "+r"(dx[91]),
+                  "+r"(dx[92]), "+r"(dx[93]), "+r"(dx[94]), "+r"(dx[95]),
+                  "+r"(dx[96]), "+r"(dx[97]), "+r"(dx[98]), "+r"(dx[99]),
+                  "+r"(dx[100]), "+r"(dx[101]), "+r"(dx[102]), "+r"(dx[103]),
+                  "+r"(dx[104]), "+r"(dx[105]), "+r"(dx[106]), "+r"(dx[107]),
+                  "+r"(dx[108]), "+r"(dx[109]), "+r"(dx[110]), "+r"(dx[111]),
+                  "+r"(dx[112]), "+r"(dx[113]), "+r"(dx[114]), "+r"(dx[115]),
+                  "+r"(dx[116]), "+r"(dx[117]), "+r"(dx[118]), "+r"(dx[119]),
+                  "+r"(dx[120]), "+r"(dx[121]), "+r"(dx[122]), "+r"(dx[123]),
+                  "+r"(dx[124]), "+r"(dx[125]), "+r"(dx[126]), "+r"(dx[127])
+                : "l"(reinterpret_cast<uint64_t>(__cvta_generic_to_shared(A))),
+                  "l"(reinterpret_cast<uint64_t>(__cvta_generic_to_shared(B))),
+                  "r"(scale_d ? 1 : 0)
+                : "memory");
         }
     }
 
