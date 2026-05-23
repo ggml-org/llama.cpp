@@ -214,8 +214,27 @@ ggml_tensor * llama_model_qwen3next::graph::build_layer_attn(
     // Order: joint QG projection, QG split, Q norm, KV projection, K norm, RoPE, attention
 
     // Qwen3Next uses a single Q projection that outputs query + gate
-    ggml_tensor * Qcur_full = build_lora_mm(model.layers[il].wq, cur);
+    ggml_tensor * Qcur_full;
+    ggml_tensor * Kcur;
+    ggml_tensor * Vcur;
+    if (model.layers[il].wqkv) {
+        ggml_tensor * qkv = build_lora_mm(model.layers[il].wqkv, cur);
+        cb(qkv, "wqkv", il);
+        const int64_t q_dim = n_embd_head * n_head * 2;
+        const int64_t k_dim = n_embd_head * n_head_kv;
+        const int64_t v_dim = n_embd_head * n_head_kv;
+        const size_t  esize = ggml_element_size(qkv);
+        Qcur_full = ggml_cont(ctx0, ggml_view_2d(ctx0, qkv, q_dim, n_tokens, qkv->nb[1], 0));
+        Kcur      = ggml_cont(ctx0, ggml_view_2d(ctx0, qkv, k_dim, n_tokens, qkv->nb[1], q_dim * esize));
+        Vcur      = ggml_cont(ctx0, ggml_view_2d(ctx0, qkv, v_dim, n_tokens, qkv->nb[1], (q_dim + k_dim) * esize));
+    } else {
+        Qcur_full = build_lora_mm(model.layers[il].wq, cur);
+        Kcur      = build_lora_mm(model.layers[il].wk, cur);
+        Vcur      = build_lora_mm(model.layers[il].wv, cur);
+    }
     cb(Qcur_full, "Qcur_full", il);
+    cb(Kcur, "Kcur", il);
+    cb(Vcur, "Vcur", il);
 
     Qcur_full = ggml_reshape_4d(ctx0, Qcur_full, n_embd_head * 2, n_head, n_tokens, 1);
 
@@ -229,12 +248,6 @@ ggml_tensor * llama_model_qwen3next::graph::build_layer_attn(
         ggml_view_4d(ctx0, Qcur_full, n_embd_head, n_head, n_tokens, 1,
                      Qcur_full->nb[1], Qcur_full->nb[2], Qcur_full->nb[3], n_embd_head * ggml_element_size(Qcur_full));
     cb(gate, "gate", il);
-
-    ggml_tensor * Kcur = build_lora_mm(model.layers[il].wk, cur);
-    cb(Kcur, "Kcur", il);
-
-    ggml_tensor * Vcur = build_lora_mm(model.layers[il].wv, cur);
-    cb(Vcur, "Vcur", il);
 
     Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
     Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);

@@ -153,6 +153,11 @@ def parse_args() -> argparse.Namespace:
         help="Store tensors dequantized from FP8 as Q8_0 instead of BF16/F16.",
     )
 
+    parser.add_argument(
+        "--fuse-qkv", action="store_true",
+        help="Fuse separate Q, K, V weight tensors into a single QKV tensor.",
+    )
+
     args = parser.parse_args()
     if not args.print_supported_models and args.model is None:
         parser.error("the following arguments are required: model")
@@ -270,6 +275,7 @@ def main() -> None:
                                      sentence_transformers_dense_modules=args.sentence_transformers_dense_modules,
                                      fuse_gate_up_exps=args.fuse_gate_up_exps,
                                      fp8_as_q8=args.fp8_as_q8,
+                                     fuse_qkv=args.fuse_qkv,
                                      )
 
         if args.vocab_only:
