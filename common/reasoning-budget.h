@@ -3,6 +3,7 @@
 #include "llama.h"
 
 #include <cstdint>
+#include <set>
 #include <vector>
 
 enum common_reasoning_budget_state {
@@ -28,6 +29,7 @@ enum common_reasoning_budget_state {
 //   start_tokens   - token sequence that activates counting
 //   end_tokens     - token sequence for natural deactivation
 //   forced_tokens  - token sequence forced when budget expires
+//   blocked_tokens - tokens that should be disallowed during reasoning
 //   budget         - max tokens allowed in the reasoning block
 //   initial_state  - initial state
 //
@@ -36,6 +38,7 @@ struct llama_sampler * common_reasoning_budget_init(
         const std::vector<llama_token> & start_tokens,
         const std::vector<llama_token> & end_tokens,
         const std::vector<llama_token> & forced_tokens,
+        const std::set<llama_token>    & blocked_tokens,
         int32_t                          budget,
         common_reasoning_budget_state    initial_state = REASONING_BUDGET_IDLE);
 

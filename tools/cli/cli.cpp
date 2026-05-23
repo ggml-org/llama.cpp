@@ -104,6 +104,8 @@ struct cli_context {
 
                 task.params.sampling.reasoning_budget_tokens = defaults.sampling.reasoning_budget_tokens;
                 task.params.sampling.generation_prompt = chat_params.generation_prompt;
+                task.params.sampling.reasoning_block_tool_start = defaults.sampling.reasoning_block_tool_start;
+                task.params.sampling.tool_call_start = chat_params.tool_start_tag;
 
                 if (!chat_params.thinking_start_tag.empty()) {
                     task.params.sampling.reasoning_budget_start =

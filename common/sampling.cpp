@@ -292,13 +292,23 @@ struct common_sampler * common_sampler_init(const struct llama_model * model, st
         }
     }
 
-    // reasoning budget sampler (skip when budget is unlimited unless a lazy grammar is active, which needs rbudget for thinking-block suppression)
-    if (!params.reasoning_budget_start.empty() && !params.reasoning_budget_end.empty() && (params.grammar_lazy || params.reasoning_budget_tokens >= 0)) {
+    // reasoning budget sampler (skip when budget is unlimited unless a lazy grammar is active, which needs rbudget for
+    // thinking-block suppression, or we are forcing blocking tool-start tokens)
+    if (!params.reasoning_budget_start.empty() && !params.reasoning_budget_end.empty() && (params.grammar_lazy || params.reasoning_budget_tokens >= 0 || params.reasoning_block_tool_start)) {
+        std::set<llama_token> blocked_tokens;
+        if (params.reasoning_block_tool_start && !params.tool_call_start.empty()) {
+            auto tstart = params.tool_call_start;
+            auto tstart_tokens = common_tokenize(vocab, tstart, true, false);
+            if (!tstart_tokens.empty()) {
+                blocked_tokens.insert(tstart_tokens[0]);
+            }
+        }
         rbudget = common_reasoning_budget_init(
             vocab,
             params.reasoning_budget_start,
             params.reasoning_budget_end,
             params.reasoning_budget_forced,
+            blocked_tokens,
             params.reasoning_budget_tokens < 0 ? INT_MAX : params.reasoning_budget_tokens);
 
         for (const auto & token : prefill_tokens) {

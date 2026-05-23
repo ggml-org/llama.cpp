@@ -90,54 +90,61 @@ json task_params::to_json(bool only_metrics) const {
         grammar_triggers.push_back(ct.to_json());
     }
 
-    return json {
-        {"seed",                      sampling.seed},
-        {"temperature",               sampling.temp},
-        {"dynatemp_range",            sampling.dynatemp_range},
-        {"dynatemp_exponent",         sampling.dynatemp_exponent},
-        {"top_k",                     sampling.top_k},
-        {"top_p",                     sampling.top_p},
-        {"min_p",                     sampling.min_p},
-        {"top_n_sigma",               sampling.top_n_sigma},
-        {"xtc_probability",           sampling.xtc_probability},
-        {"xtc_threshold",             sampling.xtc_threshold},
-        {"typical_p",                 sampling.typ_p},
-        {"repeat_last_n",             sampling.penalty_last_n},
-        {"repeat_penalty",            sampling.penalty_repeat},
-        {"presence_penalty",          sampling.penalty_present},
-        {"frequency_penalty",         sampling.penalty_freq},
-        {"dry_multiplier",            sampling.dry_multiplier},
-        {"dry_base",                  sampling.dry_base},
-        {"dry_allowed_length",        sampling.dry_allowed_length},
-        {"dry_penalty_last_n",        sampling.dry_penalty_last_n},
-        {"dry_sequence_breakers",     sampling.dry_sequence_breakers},
-        {"mirostat",                  sampling.mirostat},
-        {"mirostat_tau",              sampling.mirostat_tau},
-        {"mirostat_eta",              sampling.mirostat_eta},
-        {"stop",                      antiprompt},
-        {"max_tokens",                n_predict},
-        {"n_predict",                 n_predict}, // TODO: deduplicate?
-        {"n_keep",                    n_keep},
-        {"n_discard",                 n_discard},
-        {"ignore_eos",                sampling.ignore_eos},
-        {"stream",                    stream},
-        {"logit_bias",                format_logit_bias(sampling.logit_bias)},
-        {"n_probs",                   sampling.n_probs},
-        {"min_keep",                  sampling.min_keep},
-        {"grammar",                   common_grammar_value(sampling.grammar)},
-        {"grammar_lazy",              sampling.grammar_lazy},
-        {"grammar_triggers",          grammar_triggers},
-        {"preserved_tokens",          sampling.preserved_tokens},
-        {"chat_format",               common_chat_format_name(chat_parser_params.format)},
-        {"reasoning_format",          common_reasoning_format_name(chat_parser_params.reasoning_format)},
-        {"reasoning_in_content",      chat_parser_params.reasoning_in_content},
-        {"generation_prompt",         chat_parser_params.generation_prompt},
-        {"samplers",                  samplers},
-        {"speculative.types",         common_speculative_type_name_str(speculative.types)},
-        {"timings_per_token",         timings_per_token},
-        {"post_sampling_probs",       post_sampling_probs},
-        {"backend_sampling",          sampling.backend_sampling},
-        {"lora",                      lora},
+    return json{
+        { "seed",                        sampling.seed                                                     },
+        { "temperature",                 sampling.temp                                                     },
+        { "dynatemp_range",              sampling.dynatemp_range                                           },
+        { "dynatemp_exponent",           sampling.dynatemp_exponent                                        },
+        { "top_k",                       sampling.top_k                                                    },
+        { "top_p",                       sampling.top_p                                                    },
+        { "min_p",                       sampling.min_p                                                    },
+        { "top_n_sigma",                 sampling.top_n_sigma                                              },
+        { "xtc_probability",             sampling.xtc_probability                                          },
+        { "xtc_threshold",               sampling.xtc_threshold                                            },
+        { "typical_p",                   sampling.typ_p                                                    },
+        { "repeat_last_n",               sampling.penalty_last_n                                           },
+        { "repeat_penalty",              sampling.penalty_repeat                                           },
+        { "presence_penalty",            sampling.penalty_present                                          },
+        { "frequency_penalty",           sampling.penalty_freq                                             },
+        { "dry_multiplier",              sampling.dry_multiplier                                           },
+        { "dry_base",                    sampling.dry_base                                                 },
+        { "dry_allowed_length",          sampling.dry_allowed_length                                       },
+        { "dry_penalty_last_n",          sampling.dry_penalty_last_n                                       },
+        { "dry_sequence_breakers",       sampling.dry_sequence_breakers                                    },
+        { "mirostat",                    sampling.mirostat                                                 },
+        { "mirostat_tau",                sampling.mirostat_tau                                             },
+        { "mirostat_eta",                sampling.mirostat_eta                                             },
+        { "stop",                        antiprompt                                                        },
+        { "max_tokens",                  n_predict                                                         },
+        { "n_predict",                   n_predict                                                         }, // TODO: deduplicate?
+        { "n_keep",                      n_keep                                                            },
+        { "n_discard",                   n_discard                                                         },
+        { "ignore_eos",                  sampling.ignore_eos                                               },
+        { "stream",                      stream                                                            },
+        { "logit_bias",                  format_logit_bias(sampling.logit_bias)                            },
+        { "n_probs",                     sampling.n_probs                                                  },
+        { "min_keep",                    sampling.min_keep                                                 },
+        { "grammar",                     common_grammar_value(sampling.grammar)                            },
+        { "grammar_lazy",                sampling.grammar_lazy                                             },
+        { "grammar_triggers",            grammar_triggers                                                  },
+        { "preserved_tokens",            sampling.preserved_tokens                                         },
+        { "chat_format",                 common_chat_format_name(chat_parser_params.format)                },
+        { "reasoning_format",            common_reasoning_format_name(chat_parser_params.reasoning_format) },
+        { "reasoning_in_content",        chat_parser_params.reasoning_in_content                           },
+        { "generation_prompt",           chat_parser_params.generation_prompt                              },
+        { "samplers",                    samplers                                                          },
+        { "speculative.types",           common_speculative_type_name_str(speculative.types)               },
+        { "timings_per_token",           timings_per_token                                                 },
+        { "post_sampling_probs",         post_sampling_probs                                               },
+        { "backend_sampling",            sampling.backend_sampling                                         },
+        { "lora",                        lora                                                              },
+        { "reasoning_start",             sampling.reasoning_budget_start                                   },
+        { "reasoning_end",               sampling.reasoning_budget_end                                     },
+        { "reasoning_budget_force_tool", sampling.reasoning_budget_force_tool                              },
+        { "reasoning_budget_message",    sampling.reasoning_budget_message                                 },
+        { "reasoning_budget_forced",     sampling.reasoning_budget_forced                                  },
+        { "reasoning_budget_tokens",     sampling.reasoning_budget_tokens                                  },
+        { "reasoning_block_tool_start",  sampling.reasoning_block_tool_start                               }
     };
 }
 
@@ -500,6 +507,8 @@ task_params server_task::params_from_json_cmpl(
         const auto    tool_start_tag            = json_value(data, "reasoning_budget_tool_start_tag", std::string());
         const auto    message                   = json_value(data, "reasoning_budget_message", std::string());
         const auto    reasoning_force_tool                    = json_value(data, "reasoning_budget_force_tool", false);
+        const auto    reasoning_block_tool_start              = json_value(data, "reasoning_block_tool_start", false);
+
         params.sampling.reasoning_budget_tokens = budget;
 
         if (!start_tag.empty()) {
@@ -512,13 +521,16 @@ task_params server_task::params_from_json_cmpl(
                 end_forced_msg += tool_start_tag;
             }
             params.sampling.reasoning_budget_forced = common_tokenize(vocab, end_forced_msg, false, true);
+            params.sampling.reasoning_block_tool_start = reasoning_block_tool_start;
+            params.sampling.tool_call_start = tool_start_tag;
 
-            SRV_DBG("reasoning budget: tokens=%d, generation_prompt='%s', start=%zu toks, end=%zu toks, forced=%zu toks, tool_forced='%s'\n",
+            SRV_DBG("reasoning budget: tokens=%d, generation_prompt='%s', start=%zu toks, end=%zu toks, forced=%zu toks, tool_forced='%s', block_tool_start='%s'\n",
                 budget, params.sampling.generation_prompt.c_str(),
                 params.sampling.reasoning_budget_start.size(),
                 params.sampling.reasoning_budget_end.size(),
                 params.sampling.reasoning_budget_forced.size(),
-                reasoning_force_tool ? "true" : "false"
+                reasoning_force_tool ? "true" : "false",
+                reasoning_block_tool_start ? "true" : "false"
             );
         }
     }

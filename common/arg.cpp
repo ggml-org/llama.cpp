@@ -3200,6 +3200,16 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_THINK_BUDGET_FORCE_TOOL"));
     add_opt(common_arg(
+        {"--reasoning-block-tool-call-start"},
+        {"--no-reasoning-block-tool-call-start"},
+        string_format(
+            "after the thinking block is closed, if the close is forced by the thinking budget (default: disabled)"
+        ),
+        [](common_params & params, bool value) {
+            params.sampling.reasoning_block_tool_start = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_THINK_PREVENT_TOOL_CALL"));
+    add_opt(common_arg(
         {"--chat-template"}, "JINJA_TEMPLATE",
         string_format(
             "set custom jinja chat template (default: template taken from model's metadata)\n"

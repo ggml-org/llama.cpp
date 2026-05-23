@@ -929,7 +929,7 @@ static common_chat_params common_chat_params_init_ministral_3(const common_chat_
     data.thinking_start_tag = "[THINK]";
     data.thinking_end_tag   = "[/THINK]";
     data.tool_start_tag     = "[TOOL_CALLS]";
-    
+
     data.prompt            = common_chat_template_direct_apply_impl(tmpl, inputs, /* messages_override = */ adjusted_messages);
     data.generation_prompt = common_chat_template_generation_prompt_impl(tmpl, inputs, /* messages_override = */ adjusted_messages);
     data.format            = COMMON_CHAT_FORMAT_PEG_NATIVE;
