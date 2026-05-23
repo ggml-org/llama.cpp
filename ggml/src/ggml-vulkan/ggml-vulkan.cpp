@@ -50,6 +50,7 @@ DispatchLoaderDynamic & ggml_vk_default_dispatcher();
 #include <set>
 #include <unordered_map>
 #include <mutex>
+#include <shared_mutex>
 #include <future>
 #include <thread>
 
@@ -601,6 +602,7 @@ static constexpr std::initializer_list<std::array<int, 3>> rms_norm_mul_rope_vie
 
 struct vk_device_struct {
     std::recursive_mutex mutex;
+    mutable std::shared_mutex pipeline_mutex;
 
     vk::PhysicalDevice physical_device;
     vk::PhysicalDeviceProperties properties;
@@ -9292,7 +9294,15 @@ static void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx
     vk_pipeline pipeline = nullptr;
 
     {
-        std::lock_guard<std::recursive_mutex> guard(ctx->device->mutex);
+        std::shared_lock<std::shared_mutex> read_guard(ctx->device->pipeline_mutex);
+        auto &pipelines = ctx->device->pipeline_flash_attn_f32_f16;
+        auto it = pipelines.find(fa_pipeline_state);
+        if (it != pipelines.end()) {
+            pipeline = it->second;
+        }
+    }
+    if (!pipeline) {
+        std::unique_lock<std::shared_mutex> write_guard(ctx->device->pipeline_mutex);
         auto &pipelines = ctx->device->pipeline_flash_attn_f32_f16;
         auto it = pipelines.find(fa_pipeline_state);
         if (it != pipelines.end()) {
@@ -9356,13 +9366,23 @@ static void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx
 
     vk_pipeline pipeline_fa_mask_opt = nullptr;
     if (use_mask_opt) {
-        std::lock_guard<std::recursive_mutex> guard(ctx->device->mutex);
-        auto &pipelines = ctx->device->pipeline_fa_mask_opt;
-        auto it = pipelines.find({Br, Bc});
-        if (it != pipelines.end()) {
-            pipeline_fa_mask_opt = it->second;
-        } else {
-            pipelines[{Br, Bc}] = pipeline_fa_mask_opt = std::make_shared<vk_pipeline_struct>();
+        {
+            std::shared_lock<std::shared_mutex> read_guard(ctx->device->pipeline_mutex);
+            auto &pipelines = ctx->device->pipeline_fa_mask_opt;
+            auto it = pipelines.find({Br, Bc});
+            if (it != pipelines.end()) {
+                pipeline_fa_mask_opt = it->second;
+            }
+        }
+        if (!pipeline_fa_mask_opt) {
+            std::unique_lock<std::shared_mutex> write_guard(ctx->device->pipeline_mutex);
+            auto &pipelines = ctx->device->pipeline_fa_mask_opt;
+            auto it = pipelines.find({Br, Bc});
+            if (it != pipelines.end()) {
+                pipeline_fa_mask_opt = it->second;
+            } else {
+                pipelines[{Br, Bc}] = pipeline_fa_mask_opt = std::make_shared<vk_pipeline_struct>();
+            }
         }
         assert(pipeline_fa_mask_opt);
         ggml_pipeline_request_descriptor_sets(ctx, pipeline_fa_mask_opt, 1);
@@ -9880,7 +9900,14 @@ static vk_pipeline ggml_vk_op_get_pipeline(ggml_backend_vk_context * ctx, const 
             vk_pipeline pipeline = nullptr;
 
             {
-                std::lock_guard<std::recursive_mutex> guard(ctx->device->mutex);
+                std::shared_lock<std::shared_mutex> read_guard(ctx->device->pipeline_mutex);
+                auto it = ctx->device->pipeline_solve_tri_f32.find(solve_tri_pipeline_state);
+                if (it != ctx->device->pipeline_solve_tri_f32.end()) {
+                    pipeline = it->second;
+                }
+            }
+            if (!pipeline) {
+                std::unique_lock<std::shared_mutex> write_guard(ctx->device->pipeline_mutex);
                 auto it = ctx->device->pipeline_solve_tri_f32.find(solve_tri_pipeline_state);
                 if (it != ctx->device->pipeline_solve_tri_f32.end()) {
                     pipeline = it->second;
@@ -10028,7 +10055,14 @@ static vk_pipeline ggml_vk_op_get_pipeline(ggml_backend_vk_context * ctx, const 
             vk_pipeline pipeline = nullptr;
 
             {
-                std::lock_guard<std::recursive_mutex> guard(ctx->device->mutex);
+                std::shared_lock<std::shared_mutex> read_guard(ctx->device->pipeline_mutex);
+                auto it = pipelines->find(conv2d_pipeline_state);
+                if (it != pipelines->end()) {
+                    pipeline = it->second;
+                }
+            }
+            if (!pipeline) {
+                std::unique_lock<std::shared_mutex> write_guard(ctx->device->pipeline_mutex);
                 auto it = pipelines->find(conv2d_pipeline_state);
                 if (it != pipelines->end()) {
                     pipeline = it->second;
