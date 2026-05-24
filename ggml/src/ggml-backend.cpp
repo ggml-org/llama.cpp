@@ -2372,11 +2372,80 @@ ggml_backend_buffer_t ggml_backend_cpu_buffer_from_ptr(void * ptr, size_t size) 
 
 // --- Pinned CPU buffer type ---
 // Page-locked memory suitable for GPU DMA / TMA transfers from system RAM.
+// Allocation is inlined here to avoid depending on ggml-cpu from ggml-base.
 
-#include "ggml-cpu/pinned.h"
+#if defined(__gnu_linux__)
+    #include <sys/mman.h>
+    #include <unistd.h>
+    // Ensure posix_memalign is visible
+    #if !defined(_GNU_SOURCE)
+    #define _GNU_SOURCE
+    #endif
+#endif
+
+static void * ggml_backend_cpu_pinned_alloc_impl(size_t size) {
+    void * ptr = NULL;
+
+#if defined(__gnu_linux__)
+    ptr = mmap(NULL, size, PROT_READ | PROT_WRITE,
+               MAP_SHARED | MAP_ANONYMOUS | MAP_LOCKED, -1, 0);
+    if (ptr != MAP_FAILED) {
+        GGML_LOG_INFO("pinned: mmap(MAP_LOCKED) %zu bytes\n", size);
+        return ptr;
+    }
+
+    if (posix_memalign(&ptr, 4096, size) == 0) {
+        if (mlock(ptr, size) == 0) {
+            GGML_LOG_INFO("pinned: posix_memalign + mlock %zu bytes\n", size);
+            return ptr;
+        }
+        free(ptr);
+        ptr = NULL;
+    }
+
+    GGML_LOG_WARN("pinned: MAP_LOCKED and mlock failed, using malloc (pages not locked)\n");
+    ptr = malloc(size);
+    if (ptr) return ptr;
+
+#elif defined(_WIN32)
+    ptr = VirtualAlloc(NULL, size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+    if (ptr && VirtualLock(ptr, size)) {
+        GGML_LOG_INFO("pinned: VirtualLock %zu bytes\n", size);
+        return ptr;
+    }
+    if (ptr) VirtualFree(ptr, 0, MEM_RELEASE);
+
+    GGML_LOG_WARN("pinned: VirtualLock failed, using malloc\n");
+    ptr = malloc(size);
+    if (ptr) return ptr;
+#else
+    GGML_LOG_WARN("pinned: platform not supported, using malloc\n");
+    ptr = malloc(size);
+#endif
+
+    if (!ptr) {
+        GGML_LOG_ERROR("pinned: allocation failed for %zu bytes\n", size);
+    }
+    return ptr;
+}
+
+static void ggml_backend_cpu_pinned_free_impl(void * ptr, size_t size) {
+    if (!ptr) return;
+
+#if defined(__gnu_linux__)
+    if (munmap(ptr, size) == 0) return;
+    free(ptr);
+#elif defined(_WIN32)
+    if (!VirtualFree(ptr, 0, MEM_RELEASE)) {
+        free(ptr);
+    }
+#else
+    free(ptr);
+#endif
+}
 
 static void ggml_backend_cpu_pinned_buffer_free_buffer(ggml_backend_buffer_t buffer) {
-    ggml_cpu_pinned_free(buffer->context, buffer->size);
+    ggml_backend_cpu_pinned_free_impl(buffer->context, buffer->size);
 }
 
 static const struct ggml_backend_buffer_i ggml_backend_cpu_pinned_buffer_i = {
@@ -2399,7 +2468,7 @@ static const char * ggml_backend_cpu_pinned_buffer_type_get_name(ggml_backend_bu
 }
 
 static ggml_backend_buffer_t ggml_backend_cpu_pinned_buffer_type_alloc_buffer(ggml_backend_buffer_type_t buft, size_t size) {
-    void * data = ggml_cpu_pinned_alloc(size);
+    void * data = ggml_backend_cpu_pinned_alloc_impl(size);
     if (data == NULL) {
         GGML_LOG_ERROR("%s: failed to allocate pinned buffer of size %zu\n", __func__, size);
         return NULL;

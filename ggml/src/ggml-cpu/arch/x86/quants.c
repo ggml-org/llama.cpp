@@ -1952,7 +1952,7 @@ void ggml_vec_dot_q4_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
         __m256i sumi = _mm256_setzero_si256();
 
 #if defined(__clang__) && defined(__amd64__)
-        #pragma clang loop unroll(count=4)
+        #pragma clang loop unroll(full)
 #endif
         for (int j = 0; j < QK_K/64; ++j) {
 
