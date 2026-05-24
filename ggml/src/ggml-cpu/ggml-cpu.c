@@ -843,7 +843,7 @@ static void ggml_probe_ccd_topology(void) {}
 // then forms pairs from first and last CCDs for NUMA symmetry.
 // Returns number of pairs found (0 on non-Linux or when CCD topology not probed).
 int ggml_cpu_probe_ccd_pairs(struct ggml_cpu_ccd_pair pairs[], int max_pairs) {
-    if (!pairs || max_pairs < 1 || (int)g_state.ccd.n_ccds < 4) {
+    if (!pairs || max_pairs < 2 || (int)g_state.ccd.n_ccds < 4) {
         return 0;  // CCD topology not probed, or not enough CCDs
     }
 
