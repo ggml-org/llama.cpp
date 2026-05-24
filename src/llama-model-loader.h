@@ -14,8 +14,17 @@
 #include <map>
 #include <stdexcept>
 #include <unordered_map>
+#include <vector>
 
-using llama_buf_map = std::unordered_map<uint32_t, ggml_backend_buffer_t>;
+struct llama_mapping_range {
+    size_t first;
+    size_t last;
+};
+struct llama_buf_map_entry {
+    llama_mapping_range   range;
+    ggml_backend_buffer_t buffer;
+};
+using llama_buf_map = std::unordered_map<uint32_t, std::vector<llama_buf_map_entry>>;
 
 // lists of buffer types used for each layer
 using buft_list_t = std::vector<std::pair<ggml_backend_dev_t, ggml_backend_buffer_type_t>>;
@@ -188,7 +197,7 @@ struct llama_model_loader {
 
     void init_mappings(bool prefetch = true, llama_mlocks * mlock_mmaps = nullptr);
 
-    void get_mapping_range(size_t * first, size_t * last, void ** addr, int idx, ggml_context * ctx) const;
+    std::vector<llama_mapping_range> get_mapping_ranges(void ** addr, int idx, ggml_context * ctx) const;
 
     // for backwards compatibility, does not support ggml-backend
     void load_data_for(struct ggml_tensor * cur) const;
