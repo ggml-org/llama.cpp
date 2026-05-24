@@ -698,6 +698,10 @@ struct common_params {
     llama_progress_callback load_progress_callback = NULL;
     void *                  load_progress_callback_user_data = NULL;
     bool no_alloc = false; // Don't allocate model buffers
+    
+    int thinking_chunk = 500; // the LLM thinking is save every 'chunk' generated tokens
+    std::string thinking_filename = ""; // output filename for LLM thinking 
+    std::string answer_filename = ""; // output filename for LLM answer
 };
 
 // call once at the start of a program if it uses libcommon

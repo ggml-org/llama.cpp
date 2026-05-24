@@ -77,7 +77,7 @@ struct cli_context {
         verbose_prompt = params.verbose_prompt;
     }
 
-    std::string generate_completion(result_timings & out_timings) {
+    std::string generate_completion(result_timings & out_timings, const common_params & params) {
         server_response_reader rd = ctx_server.get_response_reader();
         auto chat_params = format_chat();
         {
@@ -131,6 +131,21 @@ struct cli_context {
         console::spinner::stop();
         std::string curr_content;
         bool is_thinking = false;
+        
+        int thinking_counter = 0;
+        std::vector<std::string> thinking_array;
+        std::ofstream thinkingFileClear;
+        std::ofstream thinkingFile;
+        if (!params.thinking_filename.empty()) {
+            thinking_array.resize(params.thinking_chunk);
+        
+            thinkingFileClear.open(params.thinking_filename, std::ios::out | std::ios::trunc); // thinking file is now empty
+            if (thinkingFileClear.is_open()) {
+                thinkingFileClear.close(); 
+            }
+            
+            thinkingFile.open(params.thinking_filename, std::ios_base::app); // now it's possible to append text to the thinking file
+        }
 
         while (result) {
             if (should_stop()) {
@@ -156,8 +171,16 @@ struct cli_context {
                             is_thinking = false;
                         }
                         curr_content += diff.content_delta;
-                        console::log("%s", diff.content_delta.c_str());
-                        console::flush();
+                        
+                        if (is_thinking && params.thinking_filename.empty()) {
+                            console::log("%s", diff.content_delta.c_str());
+                            console::flush();
+                        }
+                        
+                        if (!is_thinking && params.answer_filename.empty()) {
+                            console::log("%s", diff.content_delta.c_str());
+                            console::flush();
+                        }   
                     }
                     if (!diff.reasoning_content_delta.empty()) {
                         console::set_display(DISPLAY_TYPE_REASONING);
@@ -165,8 +188,38 @@ struct cli_context {
                             console::log("[Start thinking]\n");
                         }
                         is_thinking = true;
-                        console::log("%s", diff.reasoning_content_delta.c_str());
-                        console::flush();
+                        
+                        if (!params.thinking_filename.empty()) {
+                            thinking_array[thinking_counter] = diff.reasoning_content_delta.c_str();
+                            thinking_counter++;
+                            if (thinking_counter == params.thinking_chunk) {
+                                for(int i=0; i < params.thinking_chunk; ++i) {
+                                    if (thinkingFile.is_open()) {
+                                        thinkingFile << thinking_array[i];
+                                        thinkingFile.flush();
+                                    }
+                                    else {
+                                        console::log("thinking file is not open");
+                                    }
+                                }
+                            
+                                // print a log message to the screen indicating the time of the last backup
+                                auto now = std::chrono::system_clock::now();
+                                std::time_t now_c = std::chrono::system_clock::to_time_t(now);
+                                std::ostringstream oss;
+                                oss << std::put_time(std::localtime(&now_c), "%T");
+                                console::log("Backup at ");
+                                console::log("%s", oss.str().c_str());
+                                console::log("\n");
+                                console::flush();
+                            
+                                thinking_counter = 0;
+                            }
+                        }
+                        else { 
+                            console::log("%s", diff.reasoning_content_delta.c_str());
+                            console::flush();
+                        }
                     }
                 }
             }
@@ -177,6 +230,34 @@ struct cli_context {
             }
             result = rd.next(should_stop);
         }
+        
+        // save the answer to a file
+        if (!params.answer_filename.empty()) {
+            std::ofstream answerFile(params.answer_filename);
+            if (answerFile.is_open()) {
+                answerFile << curr_content;
+                answerFile.flush();
+                answerFile.close();
+            }
+            else {
+                console::log("answer file is not open");
+            }        
+        }
+        
+        // save the last part of the thinking to a file
+        if (!params.thinking_filename.empty()) {
+            if (thinkingFile.is_open()) {
+                for(int i=0; i < thinking_counter; ++i) {
+                    thinkingFile << thinking_array[i];
+                    thinkingFile.flush();
+                }
+                thinkingFile.close();
+            }
+            else {
+                console::log("thinking file is not open");
+            }
+        }
+        
         g_is_interrupted.store(false);
         // server_response_reader automatically cancels pending tasks upon destruction
         return curr_content;
@@ -622,7 +703,7 @@ int llama_cli(int argc, char ** argv) {
             cur_msg.clear();
         }
         result_timings timings;
-        std::string assistant_content = ctx_cli.generate_completion(timings);
+        std::string assistant_content = ctx_cli.generate_completion(timings, params);
         ctx_cli.messages.push_back({
             {"role",    "assistant"},
             {"content", assistant_content}

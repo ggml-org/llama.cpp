@@ -4143,6 +4143,32 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             //params.speculative.ngram_map_k4v.min_hits = 2;
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
+    
+    add_opt(common_arg(
+        {"-st", "--save-thinking"}, "FNAME",
+        "Save the model’s thinking to a file while it elaborates the final answer.\n"
+        "It uses the value provided by the --set-thinking-chunk argument to create a backup every thinking_chunk tokens. If that argument is not provided, the default value is 500.",
+        [](common_params & params, const std::string & filename) {
+            params.thinking_filename = filename;
+        }
+    ));
+    add_opt(common_arg(
+        {"-stc", "--set-thinking-chunk"}, "N",
+        "It establishes the value used to create a backup every N generated tokens. Its default value is 500.",
+        [](common_params & params, int value) {
+            if (value <= 0) {
+                throw std::invalid_argument("invalid value: cannot be equal or less than 0");
+            }
+            params.thinking_chunk = value;
+        }
+    ));
+    add_opt(common_arg(
+        {"-sa", "--save-answer"}, "FNAME",
+        "Save the final answer to a file.\n",
+        [](common_params & params, const std::string & filename) {
+            params.answer_filename = filename;
+        }
+    ));
 
     return ctx_arg;
 }
