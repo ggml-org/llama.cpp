@@ -68,7 +68,9 @@ COPY . .
 RUN bash -c "source ${OpenVINO_DIR}/setupvars.sh && \
     cmake -B build/ReleaseOV -G Ninja \
         -DCMAKE_BUILD_TYPE=Release \
-        -DGGML_OPENVINO=ON && \
+        -DGGML_OPENVINO=ON \
+        -DGGML_BACKEND_DL=ON \
+        -DGGML_CPU_ALL_VARIANTS=ON && \
     cmake --build build/ReleaseOV -j$(nproc)"
 
 # Copy all necessary libraries
