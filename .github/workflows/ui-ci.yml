@@ -11,14 +11,14 @@ on:
     branches:
       - master
     paths: [
-      '.github/workflows/ui-ci.yml',
+      '.github/workflows/ui-*.yml',
       'tools/ui/**.*',
       'tools/server/tests/**.*'
     ]
   pull_request:
     types: [opened, synchronize, reopened]
     paths: [
-      '.github/workflows/ui-ci.yml',
+      '.github/workflows/ui-*.yml',
       'tools/ui/**.*',
       'tools/server/tests/**.*'
     ]
@@ -41,7 +41,7 @@ jobs:
   ui-checks:
     name: UI Checks
     needs: ui-build
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, fast]
     continue-on-error: true
     steps:
       - name: Checkout code
