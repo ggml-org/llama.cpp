@@ -648,29 +648,6 @@ class ModelBase:
         raw = np.concatenate([d_grouped, qs_grouped], axis=-1).reshape(out_features, n_super * 36)
         return raw, [out_features, n_super * 64]
 
-    def _remap_nvfp4_tensor_name(self, name: str) -> str:
-        # _generate_nvfp4_tensors() repacks and writes tensors before
-        # modify_tensors() can rename them, and we want to
-        # Remap NVFP4 MTP layers too so they don't fail.
-        if not name.startswith(("mtp.layers.", "model.mtp.layers.")):
-            return name
-
-        n_layer = self.hparams.get("num_hidden_layers")
-        if not isinstance(n_layer, int):
-            return name
-
-        bid = None
-        for part in name.split("."):
-            if part.isdecimal():
-                bid = int(part)
-                break
-
-        if bid is None:
-            return name
-        if name.startswith("mtp.layers."):
-            return name.replace(f"mtp.layers.{bid}", f"model.layers.{bid + n_layer}", 1)
-        return name.replace(f"model.mtp.layers.{bid}", f"model.layers.{bid + n_layer}", 1)
-
     def _repack_nvfp4(self, name: str, weight: Tensor, scale: Tensor, scale2: Tensor, input_scale: Tensor):
         new_name = self.map_tensor_name(name)
 
@@ -715,8 +692,6 @@ class ModelBase:
                 consumed.append(scale2_name)
             if input_scale_name in self.model_tensors:
                 consumed.append(input_scale_name)
-
-            name = self._remap_nvfp4_tensor_name(name)
 
             # Check if this is a per-expert tensor
             m = re.search(r'\.experts\.(\d+)\.(gate_proj|up_proj|down_proj)\.weight$', name)
