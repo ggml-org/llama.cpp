@@ -2369,3 +2369,57 @@ ggml_backend_buffer_t ggml_backend_cpu_buffer_from_ptr(void * ptr, size_t size) 
     GGML_ASSERT((uintptr_t)ptr % TENSOR_ALIGNMENT == 0 && "buffer pointer must be aligned");
     return ggml_backend_buffer_init(ggml_backend_cpu_buffer_from_ptr_type(), ggml_backend_cpu_buffer_from_ptr_i, ptr, size);
 }
+
+// --- Pinned CPU buffer type ---
+// Page-locked memory suitable for GPU DMA / TMA transfers from system RAM.
+
+#include "ggml-cpu/pinned.h"
+
+static void ggml_backend_cpu_pinned_buffer_free_buffer(ggml_backend_buffer_t buffer) {
+    ggml_cpu_pinned_free(buffer->context, buffer->size);
+}
+
+static const struct ggml_backend_buffer_i ggml_backend_cpu_pinned_buffer_i = {
+    /* .free_buffer     = */ ggml_backend_cpu_pinned_buffer_free_buffer,
+    /* .get_base        = */ ggml_backend_cpu_buffer_get_base,
+    /* .init_tensor     = */ NULL,
+    /* .memset_tensor   = */ ggml_backend_cpu_buffer_memset_tensor,
+    /* .set_tensor      = */ ggml_backend_cpu_buffer_set_tensor,
+    /* .get_tensor      = */ ggml_backend_cpu_buffer_get_tensor,
+    /* .set_tensor_2d   = */ NULL,
+    /* .get_tensor_2d   = */ NULL,
+    /* .cpy_tensor      = */ ggml_backend_cpu_buffer_cpy_tensor,
+    /* .clear           = */ ggml_backend_cpu_buffer_clear,
+    /* .reset           = */ NULL,
+};
+
+static const char * ggml_backend_cpu_pinned_buffer_type_get_name(ggml_backend_buffer_type_t buft) {
+    return "CPU_Pinned";
+    GGML_UNUSED(buft);
+}
+
+static ggml_backend_buffer_t ggml_backend_cpu_pinned_buffer_type_alloc_buffer(ggml_backend_buffer_type_t buft, size_t size) {
+    void * data = ggml_cpu_pinned_alloc(size);
+    if (data == NULL) {
+        GGML_LOG_ERROR("%s: failed to allocate pinned buffer of size %zu\n", __func__, size);
+        return NULL;
+    }
+    return ggml_backend_buffer_init(buft, ggml_backend_cpu_pinned_buffer_i, data, size);
+}
+
+ggml_backend_buffer_type_t ggml_backend_cpu_pinned_buffer_type(void) {
+    static struct ggml_backend_buffer_type ggml_backend_cpu_pinned_buffer_type = {
+        /* .iface   = */ {
+            /* .get_name         = */ ggml_backend_cpu_pinned_buffer_type_get_name,
+            /* .alloc_buffer     = */ ggml_backend_cpu_pinned_buffer_type_alloc_buffer,
+            /* .get_alignment    = */ ggml_backend_cpu_buffer_type_get_alignment,
+            /* .get_max_size     = */ NULL, // defaults to SIZE_MAX
+            /* .get_alloc_size   = */ NULL, // defaults to ggml_nbytes
+            /* .is_host          = */ ggml_backend_cpu_buffer_type_is_host,
+        },
+        /* .device  = */ NULL,
+        /* .context = */ NULL,
+    };
+
+    return &ggml_backend_cpu_pinned_buffer_type;
+}
