@@ -7,6 +7,7 @@
 
 #include <sys/mman.h>
 #include <unistd.h>
+#include <dispatch/dispatch.h>
 
 #include <algorithm>
 #include <atomic>
@@ -129,19 +130,6 @@ ggml_tensor * llama_moe_offloader::bind_pool(int           layer_idx,
     pool_to_layer[pool.tensor]         = &layer;
     layer.name_to_pool_idx[orig->name] = pool_idx;
 
-    // (requires --no-mmap + --override-tensor =CPU).
-    if (file_offset != 0 && orig->data != nullptr) {
-        const size_t page = (size_t) sysconf(_SC_PAGESIZE);
-        uintptr_t    base = (uintptr_t) orig->data;
-        uintptr_t    lo   = (base + page - 1) & ~(uintptr_t) (page - 1);
-        uintptr_t    hi   = (base + (size_t) layer.n_expert * pool.stride) & ~(uintptr_t) (page - 1);
-        if (hi > lo) {
-            if (madvise((void *) lo, hi - lo, MADV_FREE) != 0) {
-                fprintf(stderr, "moe L%d %s madvise MADV_FREE failed: %s\n", layer_idx, orig->name, strerror(errno));
-            }
-        }
-    }
-
     layer.pools.push_back(pool);
 
     return layer.pools.back().tensor;
@@ -218,7 +206,17 @@ bool llama_moe_offloader::pread_pool(moe_layer & layer, size_t pool_idx, int32_t
     return true;
 }
 
+struct moe_pread_task {
+    moe_layer * layer;
+    size_t      pool_idx;
+    int32_t     expert_id;
+    int64_t     dst_slot;
+};
+
 void llama_moe_offloader::resolve(moe_layer & layer, const int32_t * ids, int32_t * out, int n) {
+    std::vector<moe_pread_task> tasks;
+    tasks.reserve((size_t) n * layer.pools.size());
+
     std::fill(layer.in_use.begin(), layer.in_use.end(), 0);
 
     for (int i = 0; i < n; ++i) {
@@ -244,21 +242,42 @@ void llama_moe_offloader::resolve(moe_layer & layer, const int32_t * ids, int32_
                 layer.expert_to_slot[(size_t) old_e] = -1;
             }
 
-            for (size_t pi = 0; pi < layer.pools.size(); ++pi) {
-                if (!pread_pool(layer, pi, e, victim)) {
-                    GGML_ABORT("moe_offloader: pread failed");
-                }
-            }
-
             layer.expert_to_slot[(size_t) e]      = slot;
             layer.slot_to_expert[(size_t) victim] = e;
             layer.lru_clock[victim]               = ++layer.lru_time;
             layer.total_misses++;
+
+            for (size_t pi = 0; pi < layer.pools.size(); ++pi) {
+                tasks.push_back({ &layer, pi, e, victim });
+            }
         }
 
         layer.in_use[(size_t) slot] = 1;
         out[i]                      = slot;
     }
+
+    if (tasks.empty()) {
+        return;
+    }
+
+    if (tasks.size() == 1) {
+        if (!pread_pool(*tasks[0].layer, tasks[0].pool_idx, tasks[0].expert_id, tasks[0].dst_slot)) {
+            GGML_ABORT("moe_offloader: pread failed");
+        }
+    } else {
+        __block bool failed = false;
+        dispatch_apply(tasks.size(), DISPATCH_APPLY_AUTO, ^(size_t i) {
+            const moe_pread_task & t = tasks[i];
+            if (!pread_pool(*t.layer, t.pool_idx, t.expert_id, t.dst_slot)) {
+                failed = true;
+            }
+        });
+        if (failed) {
+            GGML_ABORT("moe_offloader: parallel pread failed");
+        }
+    }
+
+    std::atomic_thread_fence(std::memory_order_release);
 }
 
 void llama_moe_offloader::sidecar_loop() {

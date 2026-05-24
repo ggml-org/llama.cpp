@@ -288,6 +288,11 @@ extern "C" {
         ggml_backend_buffer_type_t buft;
     };
 
+    typedef struct llama_moe_params {
+        int32_t n_slots;
+        int32_t n_layers;
+    } llama_moe_params;
+
     struct llama_model_params {
         // NULL-terminated list of devices to use for offloading (if NULL, all available devices are used)
         ggml_backend_dev_t * devices;
@@ -324,17 +329,14 @@ extern "C" {
         bool use_extra_bufts; // use extra buffer types (used for weight repacking)
         bool no_host;         // bypass host buffer allowing extra buffers to be used
         bool no_alloc;        // only load metadata and simulate memory allocations
+
+        llama_moe_params moe;
     };
 
     struct llama_sampler_seq_config {
         llama_seq_id           seq_id;
         struct llama_sampler * sampler;
     };
-
-    typedef struct llama_moe_params {
-        int32_t n_slots;
-        int32_t n_layers;
-    } llama_moe_params;
 
     // NOTE: changing the default values of parameters marked as [EXPERIMENTAL] may cause crashes or incorrect results in certain configurations
     //       https://github.com/ggml-org/llama.cpp/pull/7544

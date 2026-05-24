@@ -978,6 +978,10 @@ llama_model::~llama_model() {
     for (int fd : moe_duped_fds) {
         close(fd);
     }
+
+    if (moe_ctx_skip) {
+        ggml_free(moe_ctx_skip);
+    }
 #endif
 }
 
@@ -1276,6 +1280,38 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
 
         layers.resize(n_layer);
 
+        for (const auto & [name, w] : ml.weights_map) {
+            GGML_UNUSED(w);
+
+            // TODO: come up with a better way, same for layer_idx parsing
+            if (name.find("_exps.") == std::string::npos) {
+                continue;
+            }
+
+            if (params.moe.n_slots <= 0) {
+                continue;
+            }
+
+            int layer_idx = -1;
+            sscanf(name.c_str(), "blk.%d.", &layer_idx);
+            if (layer_idx < 0 || layer_idx >= params.moe.n_layers) {
+                continue;
+            }
+
+            ml.skip_tensor_set.insert(name);
+        }
+
+        if (!ml.skip_tensor_set.empty()) {
+            const size_t n_skip = ml.skip_tensor_set.size();
+
+            ggml_init_params p{};
+            p.mem_size   = ggml_tensor_overhead() * (n_skip + 32);
+            p.mem_buffer = nullptr;
+            p.no_alloc   = true;
+
+            ml.ctx_skip = ggml_init(p);
+        }
+
         // call the per-model loading function
         load_arch_tensors(ml);
 
@@ -1451,12 +1487,22 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
     }
 #endif
 
+    // pass ownership to model
+    moe_ctx_skip = ml.ctx_skip;
+    ml.ctx_skip  = nullptr;
+
     GGML_ASSERT(!(output && tok_embd &&
             strcmp(output->name, tok_embd->name) == 0 &&
             output->type == GGML_TYPE_NVFP4));
     // populate tensors_by_name
     for (auto & [_, ctx_ptr] : ml.ctx_map) {
         for (auto * cur = ggml_get_first_tensor(ctx_ptr.get()); cur != NULL; cur = ggml_get_next_tensor(ctx_ptr.get(), cur)) {
+            tensors_by_name.emplace_back(ggml_get_name(cur), cur);
+        }
+    }
+
+    if (moe_ctx_skip) {
+        for (auto * cur = ggml_get_first_tensor(moe_ctx_skip); cur != NULL; cur = ggml_get_next_tensor(moe_ctx_skip, cur)) {
             tensors_by_name.emplace_back(ggml_get_name(cur), cur);
         }
     }
@@ -2176,6 +2222,7 @@ llama_model_params llama_model_default_params() {
         /*.use_extra_bufts             =*/ true,
         /*.no_host                     =*/ false,
         /*.no_alloc                    =*/ false,
+        /*.moe                         =*/ {0, 0},
     };
 
     return result;

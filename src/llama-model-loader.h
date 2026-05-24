@@ -14,6 +14,7 @@
 #include <map>
 #include <stdexcept>
 #include <unordered_map>
+#include <unordered_set>
 
 using llama_buf_map = std::unordered_map<uint32_t, ggml_backend_buffer_t>;
 
@@ -90,6 +91,9 @@ struct llama_model_loader {
     llama_fver  fver;
 
     llama_mmaps mappings;
+
+    std::unordered_set<std::string> skip_tensor_set;
+    ggml_context *                  ctx_skip = nullptr;
 
     std::map<std::string, llama_tensor_weight, weight_name_comparer> weights_map;
     std::unordered_map<std::string, llama_model_kv_override> kv_overrides;

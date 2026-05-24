@@ -590,6 +590,7 @@ struct llama_model {
     // for moe disk offloader
     std::vector<int>                                      moe_duped_fds;
     std::unordered_map<std::string, llm_tensor_file_info> moe_file_idx;
+    ggml_context *                                        moe_ctx_skip = nullptr;
 
     explicit llama_model(const llama_model_params & params);
     virtual ~llama_model();
