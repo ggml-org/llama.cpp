@@ -6,7 +6,6 @@
 #include "ggml-cpp.h"
 
 #include <algorithm>
-#include <atomic>
 #include <cassert>
 #include <cmath>
 #include <cstddef>
