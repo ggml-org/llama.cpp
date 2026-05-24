@@ -70,13 +70,11 @@ int g_ggml_sycl_enable_flash_attention = 1;
 static ggml_sycl_device_info ggml_sycl_init() {
     ggml_sycl_device_info info = {};
 
-    info.device_count = dpct::dev_mgr::instance().device_count();
-    if (info.device_count == 0) {
-        GGML_LOG_ERROR("%s: failed to initialize: %s\n", GGML_SYCL_NAME, __func__);
+    const int discovered_devices = dpct::dev_mgr::instance().device_count();
+    if (discovered_devices == 0) {
+        GGML_LOG_WARN("%s: no SYCL devices discovered by the runtime\n", GGML_SYCL_NAME);
         return info;
     }
-
-    GGML_ASSERT(info.device_count <= GGML_SYCL_MAX_DEVICES);
 
     int64_t total_vram = 0;
 /* This is a bit misleading;  reserved for later */
@@ -85,27 +83,40 @@ static ggml_sycl_device_info ggml_sycl_init() {
 // #else
 //     GGML_LOG_INFO("%s: SYCL_USE_XMX: no\n", __func__);
 // #endif
-    for (int i = 0; i < info.device_count; ++i) {
+    for (int i = 0; i < discovered_devices; ++i) {
         info.devices[i].vmm = 0;
         dpct::device_info prop;
         sycl::device device = dpct::dev_mgr::instance().get_device(i);
 
+        if (!device.is_gpu()) {
+            continue;
+        }
+
         SYCL_CHECK(CHECK_TRY_ERROR(dpct::get_device_info(
             prop, device)));
 
-        info.default_tensor_split[i] = total_vram;
+        GGML_ASSERT(info.device_count < GGML_SYCL_MAX_DEVICES);
+
+        const int gpu_index = info.device_count++;
+
+        info.default_tensor_split[gpu_index] = total_vram;
         total_vram += prop.get_global_mem_size();
 
-        info.devices[i].cc =
+        info.devices[gpu_index].cc =
             100 * prop.get_major_version() + 10 * prop.get_minor_version();
-        info.devices[i].nsm = prop.get_max_compute_units() / 16; //16: Number of Xe Cores
-        info.devices[i].opt_feature.reorder = device.ext_oneapi_architecture_is(syclex::arch_category::intel_gpu);
-        info.devices[i].smpbo = prop.get_local_mem_size();
-        info.devices[i].warp_size = WARP_SIZE;
+        info.devices[gpu_index].nsm = prop.get_max_compute_units() / 16; //16: Number of Xe Cores
+        info.devices[gpu_index].opt_feature.reorder = device.ext_oneapi_architecture_is(syclex::arch_category::intel_gpu);
+        info.devices[gpu_index].smpbo = prop.get_local_mem_size();
+        info.devices[gpu_index].warp_size = WARP_SIZE;
 
-        info.max_work_group_sizes[i] = prop.get_max_work_group_size();
-        info.devices[i].max_wg_per_cu = info.max_work_group_sizes[i] / prop.get_max_compute_units();
+        info.max_work_group_sizes[gpu_index] = prop.get_max_work_group_size();
+        info.devices[gpu_index].max_wg_per_cu = info.max_work_group_sizes[gpu_index] / prop.get_max_compute_units();
 
+    }
+
+    if (info.device_count == 0) {
+        GGML_LOG_WARN("%s: no usable SYCL GPU devices found; leaving SYCL backend disabled\n", GGML_SYCL_NAME);
+        return info;
     }
 
     for (int id = 0; id < info.device_count; ++id) {
@@ -165,7 +176,7 @@ static void print_device_opt_feature(int device_count) {
 }
 void ggml_backend_sycl_print_sycl_devices() {
     GGML_SYCL_DEBUG("[SYCL] call ggml_backend_sycl_print_sycl_devices\n");
-    int device_count = dpct::dev_mgr::instance().device_count();
+    int device_count = ggml_sycl_info().device_count;
     std::map<std::string, size_t> DeviceNums;
     GGML_LOG_INFO("Found %d SYCL devices:\n", device_count);
 
@@ -293,16 +304,22 @@ static void ggml_check_sycl() try {
         }
 #endif
         if (CHECK_TRY_ERROR(g_all_sycl_device_count =
-                            dpct::dev_mgr::instance().device_count()) != 0) {
+                            ggml_sycl_info().device_count) != 0) {
             initialized = true;
             g_sycl_loaded = false;
             return;
         }
         GGML_ASSERT(g_all_sycl_device_count <= GGML_SYCL_MAX_DEVICES);
 
+        if (g_all_sycl_device_count == 0) {
+            GGML_LOG_WARN("%s: no usable SYCL GPU devices found; CPU fallback remains available\n", __func__);
+        }
+
         initialized = true;
-        g_sycl_loaded = true;
-        ggml_backend_sycl_print_sycl_devices();
+        g_sycl_loaded = g_all_sycl_device_count > 0;
+        if (g_sycl_loaded) {
+            ggml_backend_sycl_print_sycl_devices();
+        }
     }
 }
 catch (sycl::exception const &exc) {

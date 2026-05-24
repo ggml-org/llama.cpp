@@ -1,0 +1,12 @@
+{
+  "last_session_id": "557e2ce6-a4bb-43ae-8a4a-a5c320ed4acb",
+  "last_event_key": "557e2ce6-a4bb-43ae-8a4a-a5c320ed4acb:transcript:3144e6477903a71a81cb4829f07290934a91bb6714f7ada5e443ee9cd90551af",
+  "last_prompted_session_id": "",
+  "last_reason": "short-session",
+  "last_prompted_at": "",
+  "last_user_message_count": 0,
+  "last_actionable_message_count": 0,
+  "deep_interview_lock_active": false,
+  "deep_interview_lock_source": "/run/media/fellypemelo/c9a80862-8eea-4c5c-9fd2-21fd91615c57/Programas/llama-cpp-turboquant-SYCL/.omg/state/deep-interview.json",
+  "updated_at": "2026-05-15T11:13:09.749Z"
+}
