@@ -5,7 +5,7 @@ on:
 
 jobs:
   linux:
-    runs-on: [self-hosted, Linux, fast]
+    runs-on: [self-hosted, Linux, CPU]
     steps:
       - uses: actions/checkout@v6
         with:
