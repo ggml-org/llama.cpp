@@ -1,6 +1,11 @@
 #pragma once
 
 #include "ggml.h"
+#include "ggml-backend.h"
+#include "llama.h"
+#include "../src/llama-ext.h"
+
+#include <vector>
 
 enum common_params_fit_status {
     COMMON_PARAMS_FIT_STATUS_SUCCESS = 0, // found allocations that are projected to fit
@@ -30,3 +35,14 @@ void common_fit_print(
                 struct llama_context_params * cparams);
 
 void common_memory_breakdown_print(const struct llama_context * ctx);
+
+// Load a model + context with no_alloc and return the per-device memory breakdown.
+std::vector<llama_device_memory_data> common_get_device_memory_data(
+                                  const char   * path_model,
+        const struct llama_model_params         * mparams,
+        const struct llama_context_params       * cparams,
+        std::vector<ggml_backend_dev_t>         & devs,
+                                      uint32_t  & hp_ngl,
+                                      uint32_t  & hp_n_ctx_train,
+                                      uint32_t  & hp_n_expert,
+                           enum ggml_log_level    log_level);
