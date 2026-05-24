@@ -11,6 +11,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdio>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -26,7 +27,8 @@ static void test_reasoning_budget(
     int32_t budget,
     common_reasoning_budget_state initial_state,
     size_t expected_force_start,   // token index where forcing should start (SIZE_MAX = never)
-    size_t expected_force_end      // token index where forcing should end (after this, no more forcing)
+    size_t expected_force_end,     // token index where forcing should end (after this, no more forcing)
+    const std::set<llama_token> & blocked_tokens = {}
 ) {
     // Find the maximum token ID to ensure our vocab covers all tokens
     llama_token max_token = 0;
@@ -43,6 +45,7 @@ static void test_reasoning_budget(
         start_tokens,
         end_tokens,
         forced_tokens,
+        blocked_tokens,
         budget,
         initial_state
     );
@@ -152,7 +155,7 @@ static void test_reasoning_budget_clone_mid_counting() {
     const std::vector<llama_token> end = {101};
     const std::vector<llama_token> forced = {102, 101};
 
-    auto * sampler = common_reasoning_budget_init(nullptr, start, end, forced, 2, REASONING_BUDGET_IDLE);
+    auto * sampler = common_reasoning_budget_init(nullptr, start, end, forced, {}, 2, REASONING_BUDGET_IDLE);
 
     llama_sampler_accept(sampler, 100); // COUNTING, remaining=2
     llama_sampler_accept(sampler, 50);  // COUNTING, remaining=1
@@ -171,7 +174,7 @@ static void test_reasoning_budget_clone_mid_forcing() {
     const std::vector<llama_token> end = {101};
     const std::vector<llama_token> forced = {102, 101};
 
-    auto * sampler = common_reasoning_budget_init(nullptr, start, end, forced, 0, REASONING_BUDGET_FORCING);
+    auto * sampler = common_reasoning_budget_init(nullptr, start, end, forced, {}, 0, REASONING_BUDGET_FORCING);
 
     GGML_ASSERT(get_forced_token(sampler, 102) == 102);
     llama_sampler_accept(sampler, 102); // advance to the second forced token
@@ -182,6 +185,74 @@ static void test_reasoning_budget_clone_mid_forcing() {
 
     llama_sampler_free(clone);
     llama_sampler_free(sampler);
+}
+
+// Verify that tokens in `blocked_tokens` are suppressed only while we are
+// counting down the reasoning budget. In IDLE / DONE the sampler must
+// passthrough (blocked tokens stay finite); in COUNTING they get -INFINITY.
+static void test_reasoning_budget_blocked_tokens() {
+    const std::vector<llama_token> start   = {100};
+    const std::vector<llama_token> end     = {101};
+    const std::vector<llama_token> forced  = {102, 101};
+    const std::set<llama_token>    blocked = {200, 201};
+    const llama_token              max_token = 250;
+
+    auto * sampler = common_reasoning_budget_init(nullptr, start, end, forced, blocked, 10, REASONING_BUDGET_IDLE);
+
+    auto check = [&](bool expect_blocked, const char * label) {
+        std::vector<llama_token_data> cur;
+        cur.reserve((size_t) max_token + 1);
+        for (size_t i = 0; i <= (size_t) max_token; i++) {
+            cur.emplace_back(llama_token_data{(llama_token) i, logf((float) (i + 1)), 0.0f});
+        }
+        llama_token_data_array cur_p = { cur.data(), cur.size(), -1, false };
+        llama_sampler_apply(sampler, &cur_p);
+
+        for (llama_token t : {200, 201}) {
+            const bool is_blocked = !std::isfinite(cur[t].logit);
+            if (is_blocked != expect_blocked) {
+                fprintf(stderr, "blocked_tokens test FAILED at '%s': token %d expected blocked=%d, got blocked=%d\n",
+                        label, (int) t, expect_blocked ? 1 : 0, is_blocked ? 1 : 0);
+                GGML_ASSERT(false && "blocked token logit mismatch");
+            }
+        }
+        // a non-blocked, non-forced token should remain finite outside FORCING
+        GGML_ASSERT(std::isfinite(cur[50].logit) && "non-blocked token was unexpectedly masked");
+    };
+
+    // IDLE: passthrough — blocked tokens must not be touched yet
+    check(false, "IDLE before start");
+
+    // Enter COUNTING via the start token
+    llama_sampler_accept(sampler, 100);
+    check(true, "COUNTING after start");
+
+    // Still COUNTING after a normal token inside the reasoning block
+    llama_sampler_accept(sampler, 50);
+    check(true, "COUNTING mid-block");
+
+    // Natural end → DONE, blocking must stop
+    llama_sampler_accept(sampler, 101);
+    check(false, "DONE after natural end");
+
+    llama_sampler_free(sampler);
+
+    // Sanity: with an empty blocked set, COUNTING still passes everything through.
+    auto * sampler_empty = common_reasoning_budget_init(nullptr, start, end, forced, {}, 10, REASONING_BUDGET_IDLE);
+    llama_sampler_accept(sampler_empty, 100); // COUNTING
+    {
+        std::vector<llama_token_data> cur;
+        cur.reserve((size_t) max_token + 1);
+        for (size_t i = 0; i <= (size_t) max_token; i++) {
+            cur.emplace_back(llama_token_data{(llama_token) i, logf((float) (i + 1)), 0.0f});
+        }
+        llama_token_data_array cur_p = { cur.data(), cur.size(), -1, false };
+        llama_sampler_apply(sampler_empty, &cur_p);
+        for (size_t i = 0; i < cur.size(); i++) {
+            GGML_ASSERT(std::isfinite(cur[i].logit) && "empty blocked set should not mask any token");
+        }
+    }
+    llama_sampler_free(sampler_empty);
 }
 
 // UTF-8 boundary detection unit test
@@ -312,8 +383,9 @@ int main(void) {
 
     test_reasoning_budget_clone_mid_counting();
     test_reasoning_budget_clone_mid_forcing();
+    test_reasoning_budget_blocked_tokens();
 
-    printf("OK (8 tests passed)\n");
+    printf("OK (9 tests passed)\n");
 
     printf("Testing UTF-8 boundary detection... ");
     test_utf8_boundary_detection();

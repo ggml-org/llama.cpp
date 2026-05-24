@@ -297,6 +297,8 @@ struct server_chat_params {
     int  reasoning_budget = -1;
     std::string reasoning_budget_message;
     std::string media_path;
+    bool reasoning_budget_force_tool = false;
+    bool reasoning_block_tool_start = false;
     bool force_pure_content = false;
 };
 
