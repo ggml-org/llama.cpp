@@ -93,6 +93,10 @@ add_library(${TARGET} STATIC ${UI_CPP} ${UI_H})
 target_compile_features(${TARGET} PRIVATE cxx_std_17)
 add_dependencies(${TARGET} llama-ui-assets)
 
+if (BUILD_SHARED_LIBS)
+    set_target_properties(${TARGET} PROPERTIES POSITION_INDEPENDENT_CODE ON)
+endif()
+
 target_include_directories(${TARGET} PUBLIC
     ${CMAKE_CURRENT_BINARY_DIR}
 )
