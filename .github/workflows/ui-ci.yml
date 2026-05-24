@@ -93,7 +93,7 @@ jobs:
   e2e-tests:
     name: E2E Tests
     needs: ui-build
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, fast]
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
