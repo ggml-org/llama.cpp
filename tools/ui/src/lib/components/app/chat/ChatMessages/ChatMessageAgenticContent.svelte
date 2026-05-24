@@ -307,7 +307,7 @@
 			</div>
 		</CollapsibleContentBlock>
 	{:else if section.type === AgenticSectionType.REASONING}
-		{@const reasoningPreview = formatReasoningPreview(section.content)}
+		{@const { preview: reasoningPreview, overflow: reasoningOverflow } = formatReasoningPreview(section.content)}
 		{@const reasoningSubtitle = isReasoningInterrupted
 			? hasReasoningError
 				? 'Error'
@@ -321,6 +321,7 @@
 			title="Reasoning"
 			subtitle={reasoningSubtitle}
 			preview={reasoningPreview}
+			overflow={reasoningOverflow}
 			onToggle={() => toggleExpanded(index, section)}
 		>
 			<div class="pt-3">
@@ -330,7 +331,7 @@
 			</div>
 		</CollapsibleContentBlock>
 	{:else if section.type === AgenticSectionType.REASONING_PENDING}
-		{@const reasoningPreview = formatReasoningPreview(section.content)}
+		{@const { preview: reasoningPreview, overflow: reasoningOverflow } = formatReasoningPreview(section.content)}
 		{@const reasoningTitle = isStreaming ? 'Reasoning...' : 'Reasoning'}
 		{@const reasoningSubtitle = isStreaming ? '' : (hasReasoningError ? 'Error' : 'Cancelled')}
 
@@ -341,6 +342,7 @@
 			title={reasoningTitle}
 			subtitle={reasoningSubtitle}
 			preview={reasoningPreview}
+			overflow={reasoningOverflow}
 			{isStreaming}
 			onToggle={() => toggleExpanded(index, section)}
 		>

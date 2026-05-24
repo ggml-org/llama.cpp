@@ -4,6 +4,7 @@ import {
 	SECONDS_PER_HOUR,
 	SHORT_DURATION_THRESHOLD,
 	MEDIUM_DURATION_THRESHOLD,
+	MAX_PREVIEW_LENGTH,
 	STRIP_MARKDOWN_PATTERNS
 } from '$lib/constants';
 
@@ -154,48 +155,33 @@ export function formatAttachmentText(
 }
 
 /**
- * Strips markdown formatting (code blocks, bold, italic, links, etc.)
- * and emoji characters from text, leaving plain readable content.
- * Do note that the regex array isn't an exhaustive list 
- * 
- * @param text - Raw text that may contain markdown or emoji
- * @returns Plain text with all formatting and emoji removed
- */
-function stripMarkdownAndEmoji(text: string): string {
-	let result = text;
-
-	for (const [pattern, replacement] of STRIP_MARKDOWN_PATTERNS) {
-		result = result.replace(pattern, replacement as string);
-	}
-
-	return result.trim();
-}
-
-/**
- * Derives a compact preview string from reasoning content for use in collapsed UI.
- *
- * Edge cases handled:
- * - Markdown and emoji are stripped before processing
- * - If the first non-empty line is shorter than 30 characters,
- *   the second non-empty line is appended with a " - " separator
- * - Returns empty string if no content remains after stripping
+ * Strips markdown per line and returns the last non-empty cleaned line
+ * as a compact preview, along with a count of characters that overflow
+ * beyond MAX_PREVIEW_LENGTH.
  *
  * @param content - Raw reasoning content (may contain markdown/emoji)
- * @returns A short, clean preview string
+ * @returns Object with `preview` string (truncated) and `overflow` count
  */
-export function formatReasoningPreview(content: string): string {
-	if (!content) return '';
+export function formatReasoningPreview(content: string): { preview: string; overflow: number } {
+	if (!content) return { preview: '', overflow: 0 };
 
-	const clean = stripMarkdownAndEmoji(content);
-	const lines = clean.split('\n').filter((l) => l.trim().length > 0);
-
-	if (lines.length === 0) return '';
-
-	let preview = lines[0].trim();
-
-	if (preview.length < 30 && lines.length > 1) {
-		preview = preview + ' - ' + lines[1].trim();
+	const lines = content.split('\n');
+	let lastLine = '';
+	for (let i = 0; i < lines.length; i++) {
+		let cleaned = lines[i];
+		for (const [pattern, replacement] of STRIP_MARKDOWN_PATTERNS) {
+			cleaned = cleaned.replace(pattern, replacement as string);
+		}
+		cleaned = cleaned.trim();
+		if (cleaned.length > 0) {
+			lastLine = cleaned;
+		}
 	}
 
-	return preview;
+	const fullLength = lastLine.length;
+	const overflow = Math.max(0, fullLength - MAX_PREVIEW_LENGTH);
+	if (fullLength > MAX_PREVIEW_LENGTH) {
+		lastLine = lastLine.slice(0, MAX_PREVIEW_LENGTH) + '...';
+	}
+	return { preview: lastLine, overflow };
 }

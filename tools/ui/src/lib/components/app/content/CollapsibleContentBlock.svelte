@@ -4,6 +4,7 @@
 	import { buttonVariants } from '$lib/components/ui/button/index.js';
 	import { Card } from '$lib/components/ui/card';
 	import { createAutoScrollController } from '$lib/hooks/use-auto-scroll.svelte';
+	import { useThrottle } from '$lib/hooks/use-throttle.svelte';
 	import type { Snippet } from 'svelte';
 	import type { Component } from 'svelte';
 
@@ -15,6 +16,7 @@
 		title: string;
 		subtitle?: string;
 		preview?: string;
+		overflow?: number;
 		isStreaming?: boolean;
 		onToggle?: () => void;
 		children: Snippet;
@@ -28,12 +30,21 @@
 		title,
 		subtitle,
 		preview,
+		overflow = 0,
 		isStreaming = false,
 		onToggle,
 		children
 	}: Props = $props();
 
 	let contentContainer: HTMLDivElement | undefined = $state();
+
+	let previewKey = useThrottle(() => preview ?? '', 500);
+	let displayedPreview = $state('');
+
+	$effect(() => {
+		previewKey.key;
+		displayedPreview = preview ?? '';
+	});
 
 	const autoScroll = createAutoScrollController();
 
@@ -60,9 +71,7 @@
 	class={className}
 >
 	<Card class="gap-0 border-muted bg-muted/30 py-0">
-		<Collapsible.Trigger
-			class="flex w-full cursor-pointer items-start justify-between gap-2 p-3"
-		>
+		<Collapsible.Trigger class="flex w-full cursor-pointer items-start justify-between gap-2 p-3">
 			<div class="flex min-w-0 items-center gap-2">
 				<div class="flex items-center gap-2 text-muted-foreground">
 					{#if IconComponent}
@@ -77,7 +86,14 @@
 				</div>
 
 				{#if preview}
-					<div class="truncate text-xs w-3/4 text-muted-foreground/80">{preview}</div>
+					<div class="flex min-w-0 items-baseline justify-between gap-2">
+						<div class="w-3/4 truncate text-xs text-muted-foreground/80">
+							{displayedPreview}
+						</div>
+						{#if overflow > 0}
+							<span class="shrink-0 text-xs text-muted-foreground/60">{overflow}+ chars</span>
+						{/if}
+					</div>
 				{/if}
 			</div>
 
