@@ -31,6 +31,8 @@ extern "C" {
         GGML_NUMA_STRATEGY_ISOLATE    = 2,
         GGML_NUMA_STRATEGY_NUMACTL    = 3,
         GGML_NUMA_STRATEGY_MIRROR     = 4,
+        GGML_NUMA_STRATEGY_INTERLEAVE = 5,
+        GGML_NUMA_STRATEGY_CCD        = 6,
         GGML_NUMA_STRATEGY_COUNT
     };
 

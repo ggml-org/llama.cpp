@@ -676,6 +676,40 @@ static uint32_t ggml_get_numa_affinity(void) {
 }
 #endif
 
+// MPOL constants — defined inline to avoid libnuma dependency
+#ifndef MPOL_DEFAULT
+#define MPOL_DEFAULT    0
+#endif
+#ifndef MPOL_INTERLEAVE
+#define MPOL_INTERLEAVE 1
+#endif
+
+// set_mempolicy syscall number fallback
+#ifndef SYS_set_mempolicy
+#define GGML_SYS_SET_MEMPOLICY 279
+#else
+#define GGML_SYS_SET_MEMPOLICY SYS_set_mempolicy
+#endif
+
+#if defined(__gnu_linux__)
+static void ggml_cpu_set_numa_interleave(uint32_t n_nodes) {
+    if (n_nodes < 2) {
+        GGML_LOG_INFO("NUMA: interleave skipped (only %d node detected)\n", n_nodes);
+        return;
+    }
+    unsigned long nodemask = (1UL << n_nodes) - 1;
+    void *nmask = &nodemask;
+    long ret = syscall(GGML_SYS_SET_MEMPOLICY, MPOL_INTERLEAVE, nmask, n_nodes * 8);
+    if (ret == 0) {
+        GGML_LOG_INFO("NUMA: interleaving malloc across %d nodes via set_mempolicy(INTERLEAVE)\n", n_nodes);
+    } else {
+        GGML_LOG_WARN("NUMA: set_mempolicy(INTERLEAVE) failed: %s\n", strerror((int)-ret));
+    }
+}
+#else
+static void ggml_cpu_set_numa_interleave(uint32_t n_nodes) { UNUSED(n_nodes); }
+#endif
+
 void ggml_numa_init(enum ggml_numa_strategy numa_flag) {
     if (g_state.numa.n_nodes > 0) {
         fprintf(stderr, "ggml_numa_init: NUMA already initialized\n");
@@ -746,6 +780,11 @@ void ggml_numa_init(enum ggml_numa_strategy numa_flag) {
             }
         }
         GGML_PRINT_DEBUG("\n");
+    }
+
+    // Apply interleave policy if requested
+    if (numa_flag == GGML_NUMA_STRATEGY_INTERLEAVE && g_state.numa.n_nodes > 1) {
+        ggml_cpu_set_numa_interleave(g_state.numa.n_nodes);
     }
 
     if (ggml_is_numa()) {
