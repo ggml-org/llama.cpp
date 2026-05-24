@@ -22,6 +22,7 @@
 	} from '$lib/types';
 	import {
 		deriveAgenticSections,
+		formatReasoningPreview,
 		formatJsonPretty,
 		parseToolResultWithImages,
 		type AgenticSection,
@@ -31,7 +32,8 @@
 		agenticPendingPermissionRequest,
 		agenticResolvePermission,
 		agenticPendingContinueRequest,
-		agenticResolveContinue
+		agenticResolveContinue,
+		agenticLastError
 	} from '$lib/stores/agentic.svelte';
 	import { config } from '$lib/stores/settings.svelte';
 
@@ -55,6 +57,18 @@
 
 	const showToolCallInProgress = $derived(config().showToolCallInProgress as boolean);
 	const showThoughtInProgress = $derived(config().showThoughtInProgress as boolean);
+
+	const hasReasoningError = $derived(
+		isLastAssistantMessage ? !!agenticLastError(message.convId) : false
+	);
+
+	const isReasoningInterrupted = $derived(
+		isLastAssistantMessage &&
+			!isStreaming &&
+			!!message.reasoningContent &&
+			!message.content?.trim() &&
+			!message.toolCalls
+	);
 
 	let permissionDismissed = $state(false);
 
@@ -293,11 +307,20 @@
 			</div>
 		</CollapsibleContentBlock>
 	{:else if section.type === AgenticSectionType.REASONING}
+		{@const reasoningPreview = formatReasoningPreview(section.content)}
+		{@const reasoningSubtitle = isReasoningInterrupted
+			? hasReasoningError
+				? 'Error'
+				: 'Cancelled'
+			: (isStreaming ? '' : undefined)}
+
 		<CollapsibleContentBlock
 			open={isExpanded(index, section)}
 			class="my-2"
 			icon={Brain}
 			title="Reasoning"
+			subtitle={reasoningSubtitle}
+			preview={reasoningPreview}
 			onToggle={() => toggleExpanded(index, section)}
 		>
 			<div class="pt-3">
@@ -307,8 +330,9 @@
 			</div>
 		</CollapsibleContentBlock>
 	{:else if section.type === AgenticSectionType.REASONING_PENDING}
+		{@const reasoningPreview = formatReasoningPreview(section.content)}
 		{@const reasoningTitle = isStreaming ? 'Reasoning...' : 'Reasoning'}
-		{@const reasoningSubtitle = isStreaming ? '' : 'incomplete'}
+		{@const reasoningSubtitle = isStreaming ? '' : (hasReasoningError ? 'Error' : 'Cancelled')}
 
 		<CollapsibleContentBlock
 			open={isExpanded(index, section)}
@@ -316,6 +340,7 @@
 			icon={Brain}
 			title={reasoningTitle}
 			subtitle={reasoningSubtitle}
+			preview={reasoningPreview}
 			{isStreaming}
 			onToggle={() => toggleExpanded(index, section)}
 		>

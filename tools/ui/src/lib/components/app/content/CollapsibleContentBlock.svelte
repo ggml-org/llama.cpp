@@ -14,6 +14,7 @@
 		iconClass?: string;
 		title: string;
 		subtitle?: string;
+		preview?: string;
 		isStreaming?: boolean;
 		onToggle?: () => void;
 		children: Snippet;
@@ -26,6 +27,7 @@
 		iconClass = 'h-4 w-4',
 		title,
 		subtitle,
+		preview,
 		isStreaming = false,
 		onToggle,
 		children
@@ -58,16 +60,24 @@
 	class={className}
 >
 	<Card class="gap-0 border-muted bg-muted/30 py-0">
-		<Collapsible.Trigger class="flex w-full cursor-pointer items-center justify-between p-3">
-			<div class="flex items-center gap-2 text-muted-foreground">
-				{#if IconComponent}
-					<IconComponent class={iconClass} />
-				{/if}
+		<Collapsible.Trigger
+			class="flex w-full cursor-pointer items-start justify-between gap-2 p-3"
+		>
+			<div class="flex min-w-0 items-center gap-2">
+				<div class="flex items-center gap-2 text-muted-foreground">
+					{#if IconComponent}
+						<IconComponent class={iconClass} />
+					{/if}
 
-				<span class="font-mono text-sm font-medium">{title}</span>
+					<span class="font-mono text-sm font-medium">{title}</span>
 
-				{#if subtitle}
-					<span class="text-xs italic">{subtitle}</span>
+					{#if subtitle}
+						<span class="text-xs italic">{subtitle}</span>
+					{/if}
+				</div>
+
+				{#if preview}
+					<div class="truncate text-xs text-muted-foreground/80">{preview}</div>
 				{/if}
 			</div>
 

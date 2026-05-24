@@ -3,7 +3,8 @@ import {
 	SECONDS_PER_MINUTE,
 	SECONDS_PER_HOUR,
 	SHORT_DURATION_THRESHOLD,
-	MEDIUM_DURATION_THRESHOLD
+	MEDIUM_DURATION_THRESHOLD,
+	STRIP_MARKDOWN_PATTERNS
 } from '$lib/constants';
 
 /**
@@ -150,4 +151,51 @@ export function formatAttachmentText(
 ): string {
 	const header = extra ? `${name} (${extra})` : name;
 	return `\n\n--- ${label}: ${header} ---\n${content}`;
+}
+
+/**
+ * Strips markdown formatting (code blocks, bold, italic, links, etc.)
+ * and emoji characters from text, leaving plain readable content.
+ * Do note that the regex array isn't an exhaustive list 
+ * 
+ * @param text - Raw text that may contain markdown or emoji
+ * @returns Plain text with all formatting and emoji removed
+ */
+function stripMarkdownAndEmoji(text: string): string {
+	let result = text;
+
+	for (const [pattern, replacement] of STRIP_MARKDOWN_PATTERNS) {
+		result = result.replace(pattern, replacement as string);
+	}
+
+	return result.trim();
+}
+
+/**
+ * Derives a compact preview string from reasoning content for use in collapsed UI.
+ *
+ * Edge cases handled:
+ * - Markdown and emoji are stripped before processing
+ * - If the first non-empty line is shorter than 30 characters,
+ *   the second non-empty line is appended with a " - " separator
+ * - Returns empty string if no content remains after stripping
+ *
+ * @param content - Raw reasoning content (may contain markdown/emoji)
+ * @returns A short, clean preview string
+ */
+export function formatReasoningPreview(content: string): string {
+	if (!content) return '';
+
+	const clean = stripMarkdownAndEmoji(content);
+	const lines = clean.split('\n').filter((l) => l.trim().length > 0);
+
+	if (lines.length === 0) return '';
+
+	let preview = lines[0].trim();
+
+	if (preview.length < 30 && lines.length > 1) {
+		preview = preview + ' - ' + lines[1].trim();
+	}
+
+	return preview;
 }
