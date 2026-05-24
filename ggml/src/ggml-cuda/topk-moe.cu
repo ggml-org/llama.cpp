@@ -351,6 +351,13 @@ void ggml_cuda_op_topk_moe(ggml_backend_cuda_context &     ctx,
     GGML_ASSERT(ids->nb[1] / ggml_type_size(ids->type) == (size_t) n_experts);
 
     const int n_expert_used = weights->ne[1];
+    const size_t n_weights = (size_t) n_rows * n_expert_used;
+
+    ggml_cuda_pool_alloc<float> weights_tmp_alloc;
+    float * weights_out_d = weights_d;
+    if (args.weights_overlap_logits) {
+        weights_out_d = weights_tmp_alloc.alloc(ctx.pool(), n_weights);
+    }
 
     const bool with_norm = clamp != nullptr;
 
@@ -365,11 +372,15 @@ void ggml_cuda_op_topk_moe(ggml_backend_cuda_context &     ctx,
     config.delayed_softmax = args.delayed_softmax;
 
     if (bias) {
-        launch_topk_moe_cuda<true>(ctx, logits_d, weights_d, ids_d, bias_d, n_rows, n_experts, n_expert_used, clamp_val,
+        launch_topk_moe_cuda<true>(ctx, logits_d, weights_out_d, ids_d, bias_d, n_rows, n_experts, n_expert_used, clamp_val,
                              scale_val, config);
     } else {
-        launch_topk_moe_cuda<false>(ctx, logits_d, weights_d, ids_d, bias_d, n_rows, n_experts, n_expert_used, clamp_val,
+        launch_topk_moe_cuda<false>(ctx, logits_d, weights_out_d, ids_d, bias_d, n_rows, n_experts, n_expert_used, clamp_val,
                              scale_val, config);
+    }
+
+    if (args.weights_overlap_logits) {
+        CUDA_CHECK(cudaMemcpyAsync(weights_d, weights_out_d, n_weights * sizeof(float), cudaMemcpyDeviceToDevice, ctx.stream()));
     }
 }
 
