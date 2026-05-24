@@ -871,6 +871,23 @@ static bool is_op_unsupported_case(const ggml_tensor * op) {
             // ERR = 0.000000197 > 0.000000100   GET_ROWS(type=q5_K,n=256,m=5,r=4,be1=1,be2=1,v=0)
             return true;
         }
+
+        // Keep the MoE routing weights gather on CPU for GPU runs. Splitting
+        // only at the later SUM/CLAMP/DIV nodes still leaves this routing path
+        // numerically unstable for arctic-style MoE graphs.
+        if (ggml_openvino_get_device_name() == "GPU" &&
+            strncmp(op->name, "ffn_moe_weights", sizeof("ffn_moe_weights") - 1) == 0) {
+            return true;
+        }
+        break;
+    }
+    case GGML_OP_RESHAPE: {
+        if (ggml_openvino_get_device_name() == "GPU") {
+            if (strncmp(op->name, "ffn_moe_weights", sizeof("ffn_moe_weights") - 1) == 0 ||
+                strncmp(op->name, "ffn_norm_exps", sizeof("ffn_norm_exps") - 1) == 0) {
+                return true;
+            }
+        }
         break;
     }
     case GGML_OP_ADD:
