@@ -493,6 +493,9 @@ static int get_row_f32_mc_cacheline_aligned(struct ggml_et_get_rows_params* para
     return 0;
 }
 
+static inline size_t tensor_bytes(const struct ggml_tensor *t) {
+    return (size_t)t->ne[0] * t->ne[1] * t->ne[2] * t->ne[3] * t->nb[0];
+}
 
 int entry_point(struct ggml_et_get_rows_params* params, void* env) {
     kernel_environment_t* kernel_env = (kernel_environment_t*)env;
@@ -534,6 +537,11 @@ int entry_point(struct ggml_et_get_rows_params* params, void* env) {
     void* src0_data = src0->data;
     int32_t* src1_data = (int32_t*)src1->data;
     float* dst_data = (float*)dst->data;
+    evict_region_past_l2(src0_data, tensor_bytes(src0));
+    evict_region_past_l2(src1_data, tensor_bytes(src1));
+    evict_region_past_l2(dst_data, tensor_bytes(dst));
+    
+
 
     if (!src0_data || !src1_data || !dst_data) {
         return -1; // Null data pointer
@@ -550,6 +558,7 @@ int entry_point(struct ggml_et_get_rows_params* params, void* env) {
     const int64_t ne13 = src1->ne[3];  // Outer batch dimension for indices
 
     const int64_t total_rows_to_extract = ne10 * ne11 * ne12 * ne13;
+    et_barrier(ET_BARRIER_GLOBAL);
 
     // Naive single-threaded implementation - process all rows sequentially
     // XXX: Do we really need a single-threaded implementation?
