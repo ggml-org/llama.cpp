@@ -160,6 +160,8 @@
 						<Input
 							id="api-key-input"
 							placeholder="Enter your API key..."
+							type="password"
+							autocomplete="off"
 							bind:value={apiKeyInput}
 							onkeydown={handleApiKeyKeydown}
 							class="w-full pr-10 {apiKeyState === 'error'

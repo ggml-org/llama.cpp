@@ -79,7 +79,8 @@
 			<div class="relative w-full">
 				<Input
 					id={field.key}
-					type={field.isPositiveInteger ? 'number' : 'text'}
+					type={field.isPositiveInteger ? 'number' : field.key === SETTINGS_KEYS.API_KEY ? 'password' : 'text'}
+					autocomplete={field.key === SETTINGS_KEYS.API_KEY ? 'off' : undefined}
 					{...field.isPositiveInteger ? { min: '1', step: '1' } : {}}
 					value={currentValue}
 					oninput={(e) => {
