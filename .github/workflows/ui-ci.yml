@@ -43,9 +43,7 @@ jobs:
   ui-checks:
     name: UI Checks
     needs: ui-build
-    # TODO: cannot move to self-hosted runner because the Playwright browsers require sudo to install
-    #       figure out how to fix that - maybe provision runners with already installed browsers and do not do the install step?
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, PLAYWRIGHT]
     continue-on-error: true
     steps:
       - name: Checkout code
@@ -54,17 +52,8 @@ jobs:
           fetch-depth: 0
           ref: ${{ github.event.inputs.sha || github.event.pull_request.head.sha || github.sha || github.head_ref || github.ref_name }}
 
-      - name: Setup Node.js
-        id: node
-        uses: actions/setup-node@v6
-        with:
-          node-version: "24"
-          cache: "npm"
-          cache-dependency-path: "tools/ui/package-lock.json"
-
       - name: Install dependencies
         id: setup
-        if: ${{ steps.node.conclusion == 'success' }}
         run: npm ci
         working-directory: tools/ui
 
@@ -78,26 +67,20 @@ jobs:
         run: npm run lint
         working-directory: tools/ui
 
-      - name: Install Playwright browsers
-        id: playwright
-        if: ${{ always() && steps.setup.conclusion == 'success' }}
-        run: npx playwright install --with-deps
-        working-directory: tools/ui
-
       - name: Run Client tests
-        if: ${{ always() && steps.playwright.conclusion == 'success' }}
+        if: ${{ always() }}
         run: npm run test:client
         working-directory: tools/ui
 
       - name: Run Unit tests
-        if: ${{ always() && steps.playwright.conclusion == 'success' }}
+        if: ${{ always() }}
         run: npm run test:unit
         working-directory: tools/ui
 
   e2e-tests:
     name: E2E Tests
     needs: ui-build
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, PLAYWRIGHT]
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
@@ -105,17 +88,8 @@ jobs:
           fetch-depth: 0
           ref: ${{ github.event.inputs.sha || github.event.pull_request.head.sha || github.sha || github.head_ref || github.ref_name }}
 
-      - name: Setup Node.js
-        id: node
-        uses: actions/setup-node@v6
-        with:
-          node-version: "24"
-          cache: "npm"
-          cache-dependency-path: "tools/ui/package-lock.json"
-
       - name: Install dependencies
         id: setup
-        if: ${{ steps.node.conclusion == 'success' }}
         run: npm ci
         working-directory: tools/ui
 
@@ -124,23 +98,17 @@ jobs:
         run: npm run build
         working-directory: tools/ui
 
-      - name: Install Playwright browsers
-        id: playwright
-        if: ${{ always() && steps.setup.conclusion == 'success' }}
-        run: npx playwright install --with-deps
-        working-directory: tools/ui
-
       - name: Build Storybook
-        if: ${{ always() && steps.playwright.conclusion == 'success' }}
+        if: ${{ always() }}
         run: npm run build-storybook
         working-directory: tools/ui
 
       - name: Run UI tests
-        if: ${{ always() && steps.playwright.conclusion == 'success' }}
+        if: ${{ always() }}
         run: npm run test:ui -- --testTimeout=60000
         working-directory: tools/ui
 
       - name: Run E2E tests
-        if: ${{ always() && steps.playwright.conclusion == 'success' }}
+        if: ${{ always() }}
         run: npm run test:e2e
         working-directory: tools/ui
