@@ -1374,6 +1374,9 @@ class TextModel(ModelBase):
         if chkhsh == "0fe1cf6eda062318a1af7270f3331a85c539a01778ff948e24388e949c5282f4":
             # ref: https://huggingface.co/evilfreelancer/ruGPT3XL
             res = "gpt-2"
+        if chkhsh == "6990f1358c92b6cef7c08ef650117ed3617d123618eaac0fc8e0be73a880aa52":
+            # ref: https://huggingface.co/moonshotai/Kimi-K2.5
+            res = "kimi-k25"
         if chkhsh == "0ef9807a4087ebef797fc749390439009c3b9eda9ad1a097abbe738f486c01e5":
             # ref: https://huggingface.co/meta-llama/Meta-Llama-3-8B
             res = "llama-bpe"
