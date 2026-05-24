@@ -1332,9 +1332,7 @@ private:
                     ret->prompt_save(*prompt_cache);
                 }
 
-                if (!ret->prompt_load(*prompt_cache, task.tokens)) {
-                    ret->prompt_clear(false);
-                }
+                ret->prompt_load(*prompt_cache, task.tokens);
 
                 prompt_cache->update();
 
