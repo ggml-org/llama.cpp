@@ -882,6 +882,16 @@ static void test_failure_left_recursion() {
     fprintf(stderr, "  ✅︎ Passed\n");
 }
 
+static void test_failure_invalid_repeat_range() {
+    fprintf(stderr, "⚫ Testing invalid repeat range:\n");
+
+    // max < min should be rejected
+    assert(test_build_grammar_fails(R"""(root ::= "a"{5,0})"""));
+    assert(test_build_grammar_fails(R"""(root ::= "a"{10,3})"""));
+
+    fprintf(stderr, "  ✅︎ Passed\n");
+}
+
 static void test_failure_missing_root_symbol() {
     fprintf(stderr, "⚫ Testing missing root symbol:\n");
 
@@ -1485,6 +1495,7 @@ int main() {
     test_failure_missing_root();
     test_failure_missing_reference();
     test_failure_left_recursion();
+    test_failure_invalid_repeat_range();
     test_failure_missing_root_symbol();
     test_custom_root_symbol_check();
     test_json_schema();

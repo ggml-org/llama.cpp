@@ -464,6 +464,9 @@ const char * llama_grammar_parser::parse_sequence(
         if (last_sym_start == rule.size()) {
             throw std::runtime_error(std::string("expecting preceding item to */+/?/{ at ") + pos);
         }
+        if (!no_max && max_times < min_times) {
+            throw std::runtime_error(std::string("max repetition must be >= min repetition at ") + pos);
+        }
 
         // apply transformation to previous symbol (last_sym_start to end) according to
         // the following rewrite rules:
