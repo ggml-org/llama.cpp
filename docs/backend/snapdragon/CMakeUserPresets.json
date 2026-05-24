@@ -33,8 +33,8 @@
         "name": "arm64-windows-snapdragon",
         "inherits": [ "base", "arm64-windows-llvm" ],
         "cacheVariables": {
-            "CMAKE_C_FLAGS":   "-march=armv8.7a+fp16 -fvectorize -ffp-model=fast -flto -D_GNU_SOURCE",
-            "CMAKE_CXX_FLAGS": "-march=armv8.7a+fp16 -fvectorize -ffp-model=fast -flto -D_GNU_SOURCE",
+            "CMAKE_C_FLAGS":   "-march=armv8.7a+fp16+dotprod+i8mm -fvectorize -ffp-model=fast -flto -D_GNU_SOURCE",
+            "CMAKE_CXX_FLAGS": "-march=armv8.7a+fp16+dotprod+i8mm -fvectorize -ffp-model=fast -flto -D_GNU_SOURCE",
             "CMAKE_C_FLAGS_RELEASE":          "-O3 -DNDEBUG",
             "CMAKE_CXX_FLAGS_RELEASE":        "-O3 -DNDEBUG",
             "CMAKE_C_FLAGS_RELWITHDEBINFO":   "-O3 -DNDEBUG -g",

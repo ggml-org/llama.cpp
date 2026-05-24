@@ -7,10 +7,10 @@ $ErrorActionPreference = "Stop"
 $BaseDir = "C:\Qualcomm"
 
 # SDK 1: Hexagon
-$HexagonUrl     = "https://github.com/snapdragon-toolchain/hexagon-sdk/releases/download/v6.4.0.2/hexagon-sdk-v6.4.0.2-arm64-wos.tar.xz"
+$HexagonUrl     = "https://github.com/snapdragon-toolchain/hexagon-sdk/releases/download/v6.6.0.0/hexagon-sdk-v6.6.0.0-arm64-wos.tar.xz"
 $HexagonParent  = Join-Path $BaseDir "Hexagon_SDK"
-$HexagonSdkVersion   = "6.4.0.2"
-$HexagonToolsVersion = "19.0.04"
+$HexagonSdkVersion   = "6.6.0.0"
+$HexagonToolsVersion = "19.0.07"
 $HexagonSdkTarget    = Join-Path $HexagonParent $HexagonSdkVersion
 $HexagonToolsTarget  = Join-Path $HexagonSdkTarget "\tools\HEXAGON_Tools\$HexagonToolsVersion"
 

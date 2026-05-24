@@ -28,15 +28,15 @@ c:\Qualcomm\OpenCL_SDK\2.3.2
 
 Either use the trimmed down version (optimized for CI) from
 
-    https://github.com/snapdragon-toolchain/hexagon-sdk/releases/download/v6.4.0.2/hexagon-sdk-v6.4.0.2-arm64-wos.tar.xz
+    https://github.com/snapdragon-toolchain/hexagon-sdk/releases/download/v6.6.0.0/hexagon-sdk-v6.6.0.0-arm64-wos.tar.xz
 
 Or download the complete official version from
 
-    https://softwarecenter.qualcomm.com/catalog/item/Hexagon_SDK?version=6.4.0.2
+    https://softwarecenter.qualcomm.com/catalog/item/Hexagon_SDK?version=6.6.0.0
 
 Unzip/untar the archive into
 ```
-c:\Qualcomm\Hexagon_SDK\6.4.0.2
+c:\Qualcomm\Hexagon_SDK\6.6.0.0
 ```
 
 ## Install the latest Adreno GPU driver
@@ -123,10 +123,10 @@ The overall Hexagon backend build procedure for Windows on Snapdragon is the sam
 However, additional settings are required for generating and signing HTP Ops libraries.
 ```
 > $env:OPENCL_SDK_ROOT="C:\Qualcomm\OpenCL_SDK\2.3.2"
-> $env:HEXAGON_SDK_ROOT="C:\Qualcomm\Hexagon_SDK\6.4.0.2"
-> $env:HEXAGON_TOOLS_ROOT="C:\Qualcomm\Hexagon_SDK\6.4.0.2\tools\HEXAGON_Tools\19.0.04"
+> $env:HEXAGON_SDK_ROOT="C:\Qualcomm\Hexagon_SDK\6.6.0.0"
+> $env:HEXAGON_TOOLS_ROOT="C:\Qualcomm\Hexagon_SDK\6.6.0.0\tools\HEXAGON_Tools\19.0.07"
 > $env:HEXAGON_HTP_CERT="c:\Users\MyUsers\Certs\ggml-htp-v1.pfx"
-> $env:WINDOWS_SDK_BIN="C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\arm64"
+> $env:WINDOWS_SDK_BIN="C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0"
 
 > cmake --preset arm64-windows-snapdragon-release -B build-wos
 ...
