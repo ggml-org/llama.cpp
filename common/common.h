@@ -699,7 +699,7 @@ struct common_params {
     void *                  load_progress_callback_user_data = NULL;
     bool no_alloc = false; // Don't allocate model buffers
     
-    int thinking_chunk = 500; // the LLM thinking is save every 'chunk' generated tokens
+    int thinking_chunk = 500; // the LLM thinking is saved every 'thinking_chunk' of generated tokens
     std::string thinking_filename = ""; // output filename for LLM thinking 
     std::string answer_filename = ""; // output filename for LLM answer
 };
