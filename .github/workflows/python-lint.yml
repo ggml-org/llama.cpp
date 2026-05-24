@@ -29,7 +29,7 @@ jobs:
       - name: Set up Python environment
         uses: actions/setup-python@v6
         with:
-          python-version: "3.13"
+          python-version: "3.11"
       - name: flake8 Lint
         uses: py-actions/flake8@84ec6726560b6d5bd68f2a5bed83d62b52bb50ba # v2
         with:
