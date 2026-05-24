@@ -43,9 +43,9 @@ if(CMAKE_CROSSCOMPILING)
     message(STATUS "UI: building llama-ui-embed with host compiler ${HOST_CXX_COMPILER}")
 
     if(CMAKE_HOST_WIN32)
-        set(LLAMA_UI_EMBED_EXE "${CMAKE_CURRENT_BINARY_DIR}/llama-ui-embed.exe")
+        set(LLAMA_UI_EMBED_EXE "${CMAKE_CURRENT_BINARY_DIR}/llama-ui-embed-host.exe")
     else()
-        set(LLAMA_UI_EMBED_EXE "${CMAKE_CURRENT_BINARY_DIR}/llama-ui-embed")
+        set(LLAMA_UI_EMBED_EXE "${CMAKE_CURRENT_BINARY_DIR}/llama-ui-embed-host")
     endif()
 
     add_custom_command(
@@ -56,6 +56,8 @@ if(CMAKE_CROSSCOMPILING)
         COMMENT "Building llama-ui-embed (host)"
         VERBATIM
     )
+
+    # phony target to tie it into the dependency graph
     add_custom_target(llama-ui-embed DEPENDS "${LLAMA_UI_EMBED_EXE}")
 else()
     add_executable(llama-ui-embed embed.cpp)
