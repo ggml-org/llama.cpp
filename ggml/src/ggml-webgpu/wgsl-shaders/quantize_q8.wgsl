@@ -72,7 +72,7 @@ fn main(
     let src11_wg_idx = wg_linear % wg_per_vec;
     let src1_idx_base = params.offset_src1 + src13_idx * params.stride_13 + src12_idx * params.stride_12;
     let src1_idx_vec4_base = src1_idx_base / 4u;
-    
+
     let blocks_per_row = params.ne0 / 32u;
     let blocks_per_wg = (WG_SIZE * 4u) / 32u;
     let src1q_idx_base = (src13_idx * params.ne2 + src12_idx) * blocks_per_row;
@@ -83,7 +83,7 @@ fn main(
     var q4 = vec4<f32>(0.0);
     var q4_quants = 0u;
     var thread_amax = 0.0;
-    
+
     let src11_vec4_idx = src11_wg_idx * WG_SIZE + thread_id;
     let is_valid = src11_vec4_idx < num_vec4;
 
@@ -111,7 +111,7 @@ fn main(
 #if defined(MUL_ACC_Q4_0) || defined(MUL_ACC_Q4_1) || defined(MUL_ACC_Q4_K)
     let q4_quants_sum = dot4I8Packed(q4_quants, 0x01010101u);
     let s = f16(d * f32(cluster_add_i4x8(q4_quants_sum)));
-    
+
     if (is_valid) {
         if (qs_idx == 0u) {
             src1q[src1q_idx].s = s;
@@ -133,21 +133,21 @@ fn main(
     }
 
     workgroupBarrier();
-    
+
     if (is_valid) {
         let amax = max(
                     max(
-                        max(partial_amaxs[cluster_id][0], partial_amaxs[cluster_id][1]), max(partial_amaxs[cluster_id][2], partial_amaxs[cluster_id][3])), 
+                        max(partial_amaxs[cluster_id][0], partial_amaxs[cluster_id][1]), max(partial_amaxs[cluster_id][2], partial_amaxs[cluster_id][3])),
                     max(
                         max(partial_amaxs[cluster_id][4], partial_amaxs[cluster_id][5]), max(partial_amaxs[cluster_id][6], partial_amaxs[cluster_id][7]))
                 );
-        
+
         d = amax / 127.0;
         let id = select(0.0f, 1.0f / d, d > 0.0f);
-        
+
         q4_quants = pack4xI8(vec4<i32>(round(q4 * id)));
         src1q[src1q_idx].qs[qs_idx] = q4_quants;
-        
+
         if (qs_idx == 0u) {
             src1q[src1q_idx].d = f16(d);
         }
@@ -161,12 +161,12 @@ fn main(
 
     if (is_valid) {
         if (qs_idx == 0u) {
-            let s = d * f32(partial_sums[cluster_id][0] + partial_sums[cluster_id][1] + partial_sums[cluster_id][2] + partial_sums[cluster_id][3] 
+            let s = d * f32(partial_sums[cluster_id][0] + partial_sums[cluster_id][1] + partial_sums[cluster_id][2] + partial_sums[cluster_id][3]
                                     + partial_sums[cluster_id][4] + partial_sums[cluster_id][5] + partial_sums[cluster_id][6] + partial_sums[cluster_id][7]);
             src1q[src1q_idx].s = f16(s);
         }
     }
-    
+
 #endif
 #endif
 

@@ -120,7 +120,7 @@ fn mul_q8_1(row_sum: i32, da: f32, b_ds: B_DS_TYPE) -> f32 {
 fn mmvq_dot_product(a_byte_base: u32, b_inner_id: u32, b_repacked: vec2<u32>, b_ds: B_DS_TYPE) -> f32 {
     var row_sum = 0;
     let a_repacked = repack_a(a_byte_base, b_inner_id);
-    
+
     row_sum += dot4I8Packed(a_repacked[0], b_repacked[0]);
     row_sum += dot4I8Packed(a_repacked[1], b_repacked[1]);
 
@@ -131,14 +131,14 @@ fn accumulate_vec_q_dot(thread_id: u32, row_base: u32, src0_batch_offset: u32, s
     var acc: array<f32, OUTPUTS_PER_WG>;
 
     let num_blocks = params.k / BLOCK_SIZE;
-    
+
     for (var block = thread_id / THREADS_PER_BLOCK; block < num_blocks; block += WG_SIZE / THREADS_PER_BLOCK) {
         let b_inner_id = thread_id % THREADS_PER_BLOCK;
         let b_block_idx = src1q_idx_base + block;
 
         let b_repacked = repack_b_qs(b_block_idx, b_inner_id);
         let b_ds = repack_b_dm(b_block_idx);
-        
+
         for (var row = 0u; row < OUTPUTS_PER_WG; row++) {
             let output_row = row_base + row;
             if (output_row < params.m) {
