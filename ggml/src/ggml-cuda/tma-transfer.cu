@@ -42,7 +42,8 @@ bool ggml_tma_init_transfer(ggml_tma_transfer_t * out,
     size_t elem_size,
     void * stream) {
 
-    if (!out || !src_pinned || !dst_vram || num_elements == 0) {
+    if (!out) return false;
+    if (!src_pinned || !dst_vram || num_elements == 0) {
         *out = nullptr;
         return false;
     }
