@@ -161,9 +161,6 @@ bool llama_moe_offloader::hook(void *                     user_data,
     moe_layer & layer = *it->second;
 
     out->msg_tensor   = layer.msg_tensor;
-    out->off_req      = MOE_OFF_REQ;
-    out->off_selected = MOE_OFF_SELECTED;
-    out->off_remapped = MOE_OFF_REMAPPED;
     out->event        = layer.shared_event;
 
     int n = (int) (src2->ne[0] * src2->ne[1]);

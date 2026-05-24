@@ -2326,8 +2326,8 @@ int ggml_metal_op_mul_mat_id(ggml_metal_op_t ctx, int idx) {
             if (!mi.reuse) {
                 auto pipeline = ggml_metal_library_get_pipeline_moe_interceptor(lib);
 
-                ggml_metal_buffer_id b_req  = { moe_base.metal, moe_base.offs + mi.off_req };
-                ggml_metal_buffer_id b_msel = { moe_base.metal, moe_base.offs + mi.off_selected };
+                ggml_metal_buffer_id b_req  = { moe_base.metal, moe_base.offs + MOE_OFF_REQ };
+                ggml_metal_buffer_id b_msel = { moe_base.metal, moe_base.offs + MOE_OFF_SELECTED };
                 uint32_t             n_u    = (uint32_t) mi.n;
 
                 ggml_metal_encoder_set_pipeline(enc, pipeline);
@@ -2342,7 +2342,7 @@ int ggml_metal_op_mul_mat_id(ggml_metal_op_t ctx, int idx) {
             }
 
             bid_src2.metal = moe_base.metal;
-            bid_src2.offs  = moe_base.offs + mi.off_remapped;
+            bid_src2.offs  = moe_base.offs + MOE_OFF_REMAPPED;
         }
     }
 

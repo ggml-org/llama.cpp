@@ -16,13 +16,7 @@
 
 #include "ggml-metal.h"
 
-// Shared memory layout (MTLStorageModeShared).
-static constexpr int    MOE_MAX_IDS      = 4096;
-static constexpr size_t MOE_OFF_REQ      = 0;                                   // atomic_uint: request seq
-static constexpr size_t MOE_OFF_N        = 8;                                   // int32:       id count
-static constexpr size_t MOE_OFF_SELECTED = 16;                                  // int32[n]:    expert ids (GPU writes)
-static constexpr size_t MOE_OFF_REMAPPED = MOE_OFF_SELECTED + MOE_MAX_IDS * 4;  // int32[n]:    slot ids (CPU writes)
-static constexpr size_t MOE_MSG_NBYTES   = MOE_OFF_REMAPPED + MOE_MAX_IDS * 4;
+
 
 struct moe_pool {
     ggml_tensor *         tensor      = nullptr;

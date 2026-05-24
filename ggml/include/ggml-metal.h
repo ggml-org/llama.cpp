@@ -63,13 +63,18 @@ GGML_BACKEND_API void                       ggml_backend_metal_event_free(ggml_b
 GGML_BACKEND_API void   ggml_backend_metal_event_signal(ggml_backend_metal_event_t event, uint64_t value);
 GGML_BACKEND_API void * ggml_backend_metal_event_raw(ggml_backend_metal_event_t event);
 
+// Shared memory layout (MTLStorageModeShared).
+const int    MOE_MAX_IDS      = 4096;
+const size_t MOE_OFF_REQ      = 0;                                   // atomic_uint: request seq
+const size_t MOE_OFF_N        = 8;                                   // int32:       id count
+const size_t MOE_OFF_SELECTED = 16;                                  // int32[n]:    expert ids (GPU writes)
+const size_t MOE_OFF_REMAPPED = MOE_OFF_SELECTED + MOE_MAX_IDS * 4;  // int32[n]:    slot ids (CPU writes)
+const size_t MOE_MSG_NBYTES   = MOE_OFF_REMAPPED + MOE_MAX_IDS * 4;
+
 struct ggml_metal_moe_intercept {
     int                        n;
     uint32_t                   seq;
     const struct ggml_tensor * msg_tensor;
-    size_t                     off_req;
-    size_t                     off_selected;
-    size_t                     off_remapped;
     ggml_backend_metal_event_t event;
     bool                       reuse;
 };
