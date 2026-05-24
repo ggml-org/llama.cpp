@@ -50,6 +50,7 @@
 		onclick={scrollToBottom}
 		variant="secondary"
 		size="icon"
+		disabled={!show}
 		class="pointer-events-all absolute h-10 w-10 rounded-full bg-background/80 shadow-lg backdrop-blur-sm transition-all duration-200 hover:bg-muted/80"
 		style="bottom: {buttonBottom}; transform: translateY({show ? '0' : '2rem'}); opacity: {show
 			? 1
