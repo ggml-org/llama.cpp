@@ -570,6 +570,12 @@ __kernel void flash_attn_f32_f16(
 #endif
 }
 
+// Note: REQD_SUBGROUP_SIZE_64 intentionally omitted. Adding it routes the
+// X2 driver (and X1, per hp-hamoa) to its slower $fallback kernel variant
+// for sibling kernels in the same program — measured -5% on Llama-3.2-3B
+// _q1_vec at d=8192. At WG=Q1_WG_SIZE=64 the Adreno default sg=64, so
+// sub_group_reduce_max/add and sub_group_barrier produce correct WG-wide
+// semantics without the explicit attribute (TBO 2564/2564).
 __kernel void flash_attn_f32_f16_q1(
     const global void * q_void, ulong q_offset,
     const global void * k_void, ulong k_offset,
@@ -630,7 +636,7 @@ __kernel void flash_attn_f32_f16_q1(
     for (int i = tid; i < DK_VEC; i += Q1_WG_SIZE) {
         q_shared[i] = CONVERT_Q_ACC4(q_ptr[i]);
     }
-    barrier(CLK_LOCAL_MEM_FENCE);
+    sub_group_barrier(CLK_LOCAL_MEM_FENCE);
 
     float slope = get_alibi_slope(max_bias, head_idx, n_head_log2, m0, m1);
 
@@ -659,15 +665,7 @@ __kernel void flash_attn_f32_f16_q1(
         m_i = max(m_i, score);
     }
 
-    __local ACC_TYPE local_m[Q1_WG_SIZE];
-    local_m[tid] = m_i;
-    barrier(CLK_LOCAL_MEM_FENCE);
-    FA_UNROLL
-    for (int s = Q1_WG_SIZE / 2; s > 0; s >>= 1) {
-        if (tid < s) local_m[tid] = max(local_m[tid], local_m[tid + s]);
-        barrier(CLK_LOCAL_MEM_FENCE);
-    }
-    const ACC_TYPE m_final = local_m[0];
+    const ACC_TYPE m_final = sub_group_reduce_max(m_i);
 
     ACC_TYPE4 o_acc[DV_VEC];
     FA_UNROLL
@@ -700,19 +698,12 @@ __kernel void flash_attn_f32_f16_q1(
         }
     }
 
-    __local ACC_TYPE local_l[Q1_WG_SIZE];
     __local ACC_TYPE4 local_o_comp[Q1_WG_SIZE];
-    local_l[tid] = l_i;
-    barrier(CLK_LOCAL_MEM_FENCE);
-    FA_UNROLL
-    for (int s = Q1_WG_SIZE / 2; s > 0; s >>= 1) {
-        if (tid < s) local_l[tid] += local_l[tid + s];
-        barrier(CLK_LOCAL_MEM_FENCE);
-    }
+    const ACC_TYPE l_red = sub_group_reduce_add(l_i);
 
     const ulong o_row_offset = batch_idx * o_nb3 + head_idx * o_nb1;
     global O_DATA_TYPE4 *o_row = (global O_DATA_TYPE4 *)(o_base + o_row_offset);
-    ACC_TYPE l_final = local_l[0];
+    ACC_TYPE l_final = l_red;
 
     if (sinks_ptr != NULL) {
         l_final += exp(sinks_ptr[head_idx] - m_final);
@@ -722,11 +713,11 @@ __kernel void flash_attn_f32_f16_q1(
         const ACC_TYPE l_inv = 1.0f / l_final;
         for (int i = 0; i < DV_VEC; i++) {
             local_o_comp[tid] = o_acc[i];
-            barrier(CLK_LOCAL_MEM_FENCE);
+            sub_group_barrier(CLK_LOCAL_MEM_FENCE);
             FA_UNROLL
             for (int s = Q1_WG_SIZE / 2; s > 0; s >>= 1) {
                 if (tid < s) local_o_comp[tid] += local_o_comp[tid + s];
-                barrier(CLK_LOCAL_MEM_FENCE);
+                sub_group_barrier(CLK_LOCAL_MEM_FENCE);
             }
             if (tid == 0) {
                 o_row[i] = CONVERT_O_DATA4(local_o_comp[0] * l_inv);
@@ -2180,7 +2171,7 @@ __kernel void flash_attn_f32_f16_q1_split(
     for (int i = tid; i < DK_VEC; i += Q1_WG_SIZE) {
         q_shared[i] = CONVERT_Q_ACC4(q_ptr[i]);
     }
-    barrier(CLK_LOCAL_MEM_FENCE);
+    sub_group_barrier(CLK_LOCAL_MEM_FENCE);
 
     const float slope = get_alibi_slope(max_bias, head_idx, n_head_log2, m0, m1);
 
@@ -2205,15 +2196,7 @@ __kernel void flash_attn_f32_f16_q1_split(
         m_i = max(m_i, score);
     }
 
-    __local ACC_TYPE local_m[Q1_WG_SIZE];
-    local_m[tid] = m_i;
-    barrier(CLK_LOCAL_MEM_FENCE);
-    #pragma unroll
-    for (int s = Q1_WG_SIZE / 2; s > 0; s >>= 1) {
-        if (tid < s) local_m[tid] = max(local_m[tid], local_m[tid + s]);
-        barrier(CLK_LOCAL_MEM_FENCE);
-    }
-    const ACC_TYPE m_c = local_m[0];
+    const ACC_TYPE m_c = sub_group_reduce_max(m_i);
 
     // Pass 1b — softmax-weighted V accumulate.
     ACC_TYPE4 o_acc[DV_VEC];
@@ -2247,16 +2230,8 @@ __kernel void flash_attn_f32_f16_q1_split(
         }
     }
 
-    __local ACC_TYPE  local_l[Q1_WG_SIZE];
     __local ACC_TYPE4 local_o[Q1_WG_SIZE];
-    local_l[tid] = l_i;
-    barrier(CLK_LOCAL_MEM_FENCE);
-    #pragma unroll
-    for (int s = Q1_WG_SIZE / 2; s > 0; s >>= 1) {
-        if (tid < s) local_l[tid] += local_l[tid + s];
-        barrier(CLK_LOCAL_MEM_FENCE);
-    }
-    const ACC_TYPE l_c = local_l[0];
+    const ACC_TYPE l_c = sub_group_reduce_add(l_i);
 
     if (tid == 0) {
         rec[0] = (float) m_c;
@@ -2264,11 +2239,11 @@ __kernel void flash_attn_f32_f16_q1_split(
     }
     for (int i = 0; i < DV_VEC; ++i) {
         local_o[tid] = o_acc[i];
-        barrier(CLK_LOCAL_MEM_FENCE);
+        sub_group_barrier(CLK_LOCAL_MEM_FENCE);
         #pragma unroll
         for (int s = Q1_WG_SIZE / 2; s > 0; s >>= 1) {
             if (tid < s) local_o[tid] += local_o[tid + s];
-            barrier(CLK_LOCAL_MEM_FENCE);
+            sub_group_barrier(CLK_LOCAL_MEM_FENCE);
         }
         if (tid == 0) {
             rec_o[i] = local_o[0];

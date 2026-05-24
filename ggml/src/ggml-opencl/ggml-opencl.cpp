@@ -13493,18 +13493,18 @@ static void ggml_cl_flash_attn(ggml_backend_t backend, const ggml_tensor * q, co
                 kernel = backend_ctx->fa.f32_q8_0_q1.at(dk_dv);
             }
         } else if (use_native_q4_0_q1) {
-            // q4_0 vec kernel now uses per-lane dp4a (cl_khr_integer_dot_product)
-            // — closes most of the gap vs legacy q1 at short ctx (was -45%
-            // pre-dp4a) but still measures -10/-11% behind legacy on the
-            // canonical target (Qwen3.6-A3B MXFP4 / q4_0 KV) at both short
-            // and long context. q8_0 vec wins because q8_0 KV exposes the
-            // o_acc spill more sharply than q4_0; for q4_0 the legacy q1
-            // path's lower per-WG overhead still wins on MoE-bound models.
-            // Keep dispatch on legacy q1 until vec beats it on a real target;
-            // opt-in via GGML_OPENCL_FA_Q4_VEC=1 for measurement.
+            // q4_0 vec kernel uses per-lane dp4a (cl_khr_integer_dot_product)
+            // and DV-split across subgroups. The earlier "-10/-11% on
+            // Qwen3.6-A3B MXFP4 / q4_0 KV" caveat was stale: re-measured
+            // 2026-05-23 on X1-85 across four DV=256 targets (gemma-3-4b,
+            // gemma-2-2b, Qwen3.5-9B, Qwen3.6-A3B MXFP4) the vec kernel
+            // wins +25 to +71% end-to-end vs legacy q1; Qwen3.6-A3B at
+            // per-FA-call profile is 3.6× faster (11.0 → 3.04 ms/call).
+            // Default-on for DV>=256. Opt-out via GGML_OPENCL_FA_Q4_VEC=0
+            // for diagnosis if a regression surfaces on an untested shape.
             const char * q4vec_env = getenv("GGML_OPENCL_FA_Q4_VEC");
-            const bool   q4vec_opt_in = (q4vec_env != NULL) && (q4vec_env[0] != '0');
-            if (q4vec_opt_in && d_head_v >= 256 &&
+            const bool   q4vec_off = (q4vec_env != NULL) && (q4vec_env[0] == '0');
+            if (!q4vec_off && d_head_v >= 256 &&
                 backend_ctx->fa.f32_q4_0_q1_vec.count(dk_dv) > 0) {
                 kernel = backend_ctx->fa.f32_q4_0_q1_vec.at(dk_dv);
                 use_q1_vec = true;
@@ -13704,28 +13704,19 @@ static void ggml_cl_flash_attn(ggml_backend_t backend, const ggml_tensor * q, co
             // already compiled per (dk, dv). Without the DK=128 branch f16 KV
             // decode on these models falls to the spilling non-MQ split and
             // pays a GQA-replay on K reads — structurally slower than the q8_0
-            // path on the same model. WG=256 fits at DK=128 (less per-thread
-            // state than DK=256); if the kernel didn't compile or doesn't fit,
-            // `count(dk_dv) > 0` skips dispatch. n_q==1 only for now.
+            // path on the same model. K-image variant available for DK=DV=128
+            // (opt-in via GGML_OPENCL_FA_K_IMG=1) — adds ~1-3% per-FA-call on
+            // X1-85, dominated by ~15% thermal envelope; not default-on.
+            // n_q==1 only for now.
             } else if (nq1_only && is_mixed && gqa_ratio_dispatch == 4 &&
                 ((d_head_q == 256 && d_head_v == 256) ||
                  (d_head_q == 128 && d_head_v == 128)) &&
                 backend_ctx->fa.f32_f16_q1_vec_mq_split.count(dk_dv) > 0) {
-                fd_k_split = backend_ctx->fa.f32_f16_q1_vec_mq_split.at(dk_dv);
-                use_fd_mq  = true;
-            // f16 KV — dense 7-8B class (Mistral-7B / Qwen3-8B / Llama-3-8B),
-            // DK=DV=128 GQA=4. Plain q1_split is 3.5x slower per layer than
-            // FA=0's image-fed l4_x8_gqa_r4_img KQ. MQ closes +60-90% of that
-            // end-to-end at d=8k on X1-85 (Mistral 2.90→5.49, Qwen3-8B 2.37→3.80,
-            // Llama-3-8B 2.56→4.68 t/s). K-image adds ~1-3% per-FA-call further,
-            // opt-in via GGML_OPENCL_FA_K_IMG=1 (mirrors the g8 dispatch).
-            } else if (nq1_only && is_mixed && gqa_ratio_dispatch == 4 &&
-                d_head_q == 128 && d_head_v == 128 &&
-                backend_ctx->fa.f32_f16_q1_vec_mq_split.count(dk_dv) > 0) {
-                const bool k_img_on = getenv("GGML_OPENCL_FA_K_IMG") != NULL &&
-                                      getenv("GGML_OPENCL_FA_K_IMG")[0] != '0';
-                if (k_img_on &&
-                    backend_ctx->fa.f32_f16_q1_vec_mq_split_k_img.count(dk_dv) > 0) {
+                const bool k_img_on = d_head_q == 128 && d_head_v == 128 &&
+                                      getenv("GGML_OPENCL_FA_K_IMG") != NULL &&
+                                      getenv("GGML_OPENCL_FA_K_IMG")[0] != '0' &&
+                                      backend_ctx->fa.f32_f16_q1_vec_mq_split_k_img.count(dk_dv) > 0;
+                if (k_img_on) {
                     fd_k_split   = backend_ctx->fa.f32_f16_q1_vec_mq_split_k_img.at(dk_dv);
                     use_fd_mq    = true;
                     use_fa_k_img = true;
