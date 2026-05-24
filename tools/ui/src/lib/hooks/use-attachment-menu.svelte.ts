@@ -4,6 +4,7 @@ import { AttachmentAction } from '$lib/enums';
 export interface AttachmentModalityFlags {
 	hasVisionModality: boolean;
 	hasAudioModality: boolean;
+	hasVideoModality: boolean;
 	hasMcpPromptsSupport: boolean;
 	hasMcpResourcesSupport: boolean;
 }

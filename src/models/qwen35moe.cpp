@@ -199,7 +199,7 @@ llama_model_qwen35moe::graph::graph(const llama_model & model, const llm_graph_p
             cur = build_layer_attn(inp->get_attn(), cur, inp_pos, sections, il);
         }
 
-        if (il == n_transformer_layers - 1 && inp_out_ids) {
+        if (il == n_transformer_layers - 1 && inp_out_ids && cparams.embeddings_pre_norm_masked) {
             cur   = ggml_get_rows(ctx0, cur, inp_out_ids);
             inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
         }
@@ -233,6 +233,10 @@ llama_model_qwen35moe::graph::graph(const llama_model & model, const llm_graph_p
 
     cb(cur, "h_pre_norm", -1);
     res->t_h_pre_norm = cur;
+
+    if (!cparams.embeddings_pre_norm_masked && inp_out_ids) {
+        cur = ggml_get_rows(ctx0, cur, inp_out_ids);
+    }
 
     // Final norm
     cur = build_norm(cur, model.output_norm, nullptr, LLM_NORM_RMS, -1);
@@ -584,8 +588,10 @@ llama_model_qwen35moe::graph_mtp::graph_mtp(const llama_model & model, const llm
 
     res->add_input(std::move(inp));
 
-    ggml_tensor * inp_pos = build_inp_pos();
-    auto * inp_attn       = build_attn_inp_kv();
+    ggml_tensor * inp_pos     = build_inp_pos();
+    ggml_tensor * inp_out_ids = build_inp_out_ids();
+    auto * inp_attn           = build_attn_inp_kv();
+
 
     ggml_tensor * h_norm = build_norm(h_input, layer.nextn.hnorm, nullptr, LLM_NORM_RMS, il);
     cb(h_norm, "mtp_hnorm", il);
@@ -596,7 +602,7 @@ llama_model_qwen35moe::graph_mtp::graph_mtp(const llama_model & model, const llm
     ggml_tensor * concat = ggml_concat(ctx0, e_norm, h_norm, /*dim=*/ 0);
     cb(concat, "mtp_concat", il);
 
-    ggml_tensor * cur = build_lora_mm(layer.nextn.eh_proj, concat);
+    ggml_tensor * cur = build_lora_mm(layer.nextn.eh_proj, concat, layer.nextn.eh_proj_s);
     cb(cur, "mtp_eh_proj", il);
 
     ggml_tensor * inpSA = cur;
@@ -706,6 +712,8 @@ llama_model_qwen35moe::graph_mtp::graph_mtp(const llama_model & model, const llm
     cb(cur, "h_pre_norm", -1);
     res->t_h_pre_norm = cur;
 
+    cur   = ggml_get_rows(ctx0, cur, inp_out_ids);
+
     ggml_tensor * head_norm_w = layer.nextn.shared_head_norm
             ? layer.nextn.shared_head_norm
             : model.output_norm;
@@ -714,8 +722,9 @@ llama_model_qwen35moe::graph_mtp::graph_mtp(const llama_model & model, const llm
     cb(cur, "mtp_shared_head_norm", -1);
 
     ggml_tensor * head_w = layer.nextn.shared_head_head ? layer.nextn.shared_head_head : model.output;
+    ggml_tensor * head_s = layer.nextn.shared_head_head ? layer.nextn.shared_head_head_s : model.output_s;
     GGML_ASSERT(head_w && "QWEN35MOE MTP: missing LM head (nextn.shared_head_head or model.output)");
-    cur = build_lora_mm(head_w, cur);
+    cur = build_lora_mm(head_w, cur, head_s);
     cb(cur, "result_output", -1);
 
     res->t_logits = cur;

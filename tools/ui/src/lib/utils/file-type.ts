@@ -1,5 +1,6 @@
 import {
 	AUDIO_FILE_TYPES,
+	VIDEO_FILE_TYPES,
 	IMAGE_FILE_TYPES,
 	PDF_FILE_TYPES,
 	TEXT_FILE_TYPES
@@ -12,12 +13,17 @@ import {
 	FileTypeCategory,
 	MimeTypeApplication,
 	MimeTypeAudio,
+	MimeTypeVideo,
 	MimeTypeImage,
 	MimeTypeText
 } from '$lib/enums';
 
+function normalizeMimeType(mimeType: string): string {
+	return mimeType.trim().toLowerCase();
+}
+
 export function getFileTypeCategory(mimeType: string): FileTypeCategory | null {
-	switch (mimeType) {
+	switch (normalizeMimeType(mimeType)) {
 		// Images
 		case MimeTypeImage.JPEG:
 		case MimeTypeImage.PNG:
@@ -31,9 +37,18 @@ export function getFileTypeCategory(mimeType: string): FileTypeCategory | null {
 		case MimeTypeAudio.MP3:
 		case MimeTypeAudio.MP4:
 		case MimeTypeAudio.WAV:
+		case MimeTypeAudio.WAVE:
+		case MimeTypeAudio.X_WAV:
+		case MimeTypeAudio.X_WAVE:
+		case MimeTypeAudio.X_PN_WAV:
 		case MimeTypeAudio.WEBM:
 		case MimeTypeAudio.WEBM_OPUS:
 			return FileTypeCategory.AUDIO;
+
+		// Video
+		case MimeTypeVideo.MP4:
+		case MimeTypeVideo.OGG:
+			return FileTypeCategory.VIDEO;
 
 		// PDF
 		case MimeTypeApplication.PDF:
@@ -176,6 +191,12 @@ export function getFileTypeByExtension(filename: string): string | null {
 	for (const [key, type] of Object.entries(AUDIO_FILE_TYPES)) {
 		if ((type.extensions as readonly string[]).includes(extension)) {
 			return `${FileTypeCategory.AUDIO}:${key}`;
+		}
+	}
+
+	for (const [key, type] of Object.entries(VIDEO_FILE_TYPES)) {
+		if ((type.extensions as readonly string[]).includes(extension)) {
+			return `${FileTypeCategory.VIDEO}:${key}`;
 		}
 	}
 

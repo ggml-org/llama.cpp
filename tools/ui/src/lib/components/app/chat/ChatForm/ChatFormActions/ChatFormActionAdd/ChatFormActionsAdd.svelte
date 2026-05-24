@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { IsMobile } from '$lib/hooks/is-mobile.svelte';
+	import { isMobile } from '$lib/stores/viewport.svelte';
 	import ChatFormActionAddDropdown from './ChatFormActionAddDropdown.svelte';
 	import ChatFormActionAddSheet from './ChatFormActionAddSheet.svelte';
 	import ChatFormActionAddButton from './ChatFormActionAddButton.svelte';
@@ -7,6 +7,7 @@
 	interface Props {
 		disabled?: boolean;
 		hasAudioModality?: boolean;
+		hasVideoModality?: boolean;
 		hasMcpPromptsSupport?: boolean;
 		hasMcpResourcesSupport?: boolean;
 		hasVisionModality?: boolean;
@@ -20,6 +21,7 @@
 	let {
 		disabled = false,
 		hasAudioModality = false,
+		hasVideoModality = false,
 		hasMcpPromptsSupport = false,
 		hasMcpResourcesSupport = false,
 		hasVisionModality = false,
@@ -29,14 +31,13 @@
 		onMcpSettingsClick,
 		onSystemPromptClick
 	}: Props = $props();
-
-	const isMobile = new IsMobile();
 </script>
 
 {#if isMobile.current}
 	<ChatFormActionAddSheet
 		{disabled}
 		{hasAudioModality}
+		{hasVideoModality}
 		{hasVisionModality}
 		{hasMcpPromptsSupport}
 		{hasMcpResourcesSupport}
@@ -52,6 +53,7 @@
 	<ChatFormActionAddDropdown
 		{disabled}
 		{hasAudioModality}
+		{hasVideoModality}
 		{hasVisionModality}
 		{hasMcpPromptsSupport}
 		{hasMcpResourcesSupport}
