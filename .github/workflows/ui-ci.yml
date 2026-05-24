@@ -12,6 +12,7 @@ on:
       - master
     paths: [
       '.github/workflows/ui-ci.yml',
+      '.github/workflows/ui-build.yml',
       'tools/ui/**.*',
       'tools/server/tests/**.*'
     ]
@@ -19,6 +20,7 @@ on:
     types: [opened, synchronize, reopened]
     paths: [
       '.github/workflows/ui-ci.yml',
+      '.github/workflows/ui-build.yml',
       'tools/ui/**.*',
       'tools/server/tests/**.*'
     ]
@@ -41,6 +43,8 @@ jobs:
   ui-checks:
     name: UI Checks
     needs: ui-build
+    # TODO: cannot move to self-hosted runner because the Playwright browsers require sudo to install
+    #       figure out how to fix that - maybe provision runners with already installed browsers and do not do the install step?
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
