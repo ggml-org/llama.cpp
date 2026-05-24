@@ -33,6 +33,7 @@ else()
     if (GGML_RPC)
         add_subdirectory(rpc)
     endif()
+    add_subdirectory(pcie-bench)
     if (NOT GGML_BACKEND_DL)
         # these examples use the backends directly and cannot be built with dynamic loading
         add_subdirectory(cvector-generator)
