@@ -620,9 +620,9 @@ struct server_prompt_cache {
 
     size_t n_tokens() const;
 
-    server_prompt * alloc(const server_prompt & prompt, size_t state_size_main, size_t state_size_drft);
+    server_prompt * alloc(const server_prompt & prompt, size_t state_size_main, size_t state_size_drft, size_t state_size_ckpt);
 
     bool load(server_prompt & prompt, const server_tokens & tokens_new, llama_context * ctx_main, llama_context * ctx_drft, int32_t id_slot);
 
-    void update();
+    void update(size_t new_alloc_size = 0, int new_alloc_tokens = 0);
 };
