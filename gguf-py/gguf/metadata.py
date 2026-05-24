@@ -273,6 +273,23 @@ class Metadata:
             set[Literal["basename", "size_label", "finetune", "version", "type"]]
         ] = [set() for _ in name_parts]
 
+        def get_size_label_params(label: str) -> float:
+            return float(label[:-1]) * pow(1000, " KMBT".find(label[-1]))
+
+        def is_active_params_label(label: str) -> bool:
+            return re.fullmatch(r'A\d+([._]\d+)?[KMBT][\d]?', label, re.IGNORECASE) is not None
+
+        def normalize_size_label(label: str) -> str:
+            label = label.replace("_", ".")
+            # Handle weird bloom-7b1 notation
+            if label[-1].isdecimal():
+                label = label[:-2] + "." + label[-1] + label[-2]
+            # Normalize the size suffixes
+            if len(label) > 1 and label[-2].isdecimal():
+                if label[-1] in "kmbt":
+                    label = label[:-1] + label[-1].upper()
+            return label
+
         # Annotate the name
         for i, part in enumerate(name_parts):
             # Version
@@ -284,24 +301,28 @@ class Metadata:
                 name_parts[i] = part.upper()
             # Model size
             elif i > 0 and re.fullmatch(r'(([A]|\d+[x])?\d+([._]\d+)?[KMBT][\d]?|small|mini|medium|large|x?xl)', part, re.IGNORECASE):
-                part = part.replace("_", ".")
-                # Handle weird bloom-7b1 notation
-                if part[-1].isdecimal():
-                    part = part[:-2] + "." + part[-1] + part[-2]
-                # Normalize the size suffixes
-                if len(part) > 1 and part[-2].isdecimal():
-                    if part[-1] in "kmbt":
-                        part = part[:-1] + part[-1].upper()
+                part = normalize_size_label(part)
                 if total_params != 0:
                     try:
-                        label_params = float(part[:-1]) * pow(1000, " KMBT".find(part[-1]))
+                        label_params = get_size_label_params(part)
+                        next_part = normalize_size_label(name_parts[i + 1]) if i + 1 < len(name_parts) else None
+                        # MoE models may encode both total and active parameters, e.g. 26B-A4B.
+                        # When converting an mmproj, total_params can match the active parameter
+                        # count, so keep the preceding total parameter count as part of the size label.
+                        followed_by_matching_active_params = (
+                            next_part is not None
+                            and is_active_params_label(next_part)
+                            and abs(get_size_label_params(next_part[1:]) - abs(total_params)) <= 7 * abs(total_params) // 8
+                        )
                         # Only use it as a size label if it's close or bigger than the model size
                         # Note that LoRA adapters don't necessarily include all layers,
                         # so this is why bigger label sizes are accepted.
                         # Do not use the size label when it's smaller than 1/8 of the model size
-                        if (total_params < 0 and label_params < abs(total_params) // 8) or (
-                            # Check both directions when the current model isn't a LoRA adapter
-                            total_params > 0 and abs(label_params - total_params) > 7 * total_params // 8
+                        if not followed_by_matching_active_params and (
+                            (total_params < 0 and label_params < abs(total_params) // 8) or (
+                                # Check both directions when the current model isn't a LoRA adapter
+                                total_params > 0 and abs(label_params - total_params) > 7 * total_params // 8
+                            )
                         ):
                             # Likely a context length
                             name_types[i].add("finetune")

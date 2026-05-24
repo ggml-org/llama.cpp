@@ -62,6 +62,11 @@ class TestMetadataMethod(unittest.TestCase):
         self.assertEqual(gguf.Metadata.get_model_id_components("Qwen2-57B-A14B-Instruct"),
                          ('Qwen2-57B-A14B-Instruct', None, 'Qwen2', 'Instruct', None, '57B-A14B'))
 
+        # MoE mmproj exports can have total_params close to the active parameter count.
+        # Keep the full total-and-active size label instead of treating the total size as a finetune.
+        self.assertEqual(gguf.Metadata.get_model_id_components("google/gemma-4-26B-A4B-it", 4 * 10**9),
+                         ('gemma-4-26B-A4B-it', 'google', 'gemma-4', 'it', None, '26B-A4B'))
+
         # Check that it can handle a real model id with no version code
         # Note that 4k in this string is non standard and microsoft were referring to context length rather than weight count
         self.assertEqual(gguf.Metadata.get_model_id_components("microsoft/Phi-3-mini-4k-instruct", 4 * 10**9),
