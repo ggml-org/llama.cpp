@@ -889,6 +889,9 @@ int ggml_cpu_probe_ccd_pairs(struct ggml_cpu_ccd_pair pairs[], int max_pairs) {
 int ggml_cpu_init_dual_threadpool(struct ggml_threadpool_params params_out[],
                                    int count, int threads_per_pair,
                                    enum ggml_sched_priority prio, uint32_t poll) {
+    if (threads_per_pair < 1) {
+        return 0;  // invalid thread count
+    }
     struct ggml_cpu_ccd_pair pairs[GGML_NUMA_MAX_NODES];
     int num_pairs = ggml_cpu_probe_ccd_pairs(pairs, GGML_NUMA_MAX_NODES);
     if (num_pairs < 2 || count < 2 || !params_out) {
