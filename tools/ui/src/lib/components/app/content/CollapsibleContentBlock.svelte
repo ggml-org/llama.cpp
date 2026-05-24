@@ -77,7 +77,7 @@
 				</div>
 
 				{#if preview}
-					<div class="truncate text-xs text-muted-foreground/80">{preview}</div>
+					<div class="truncate text-xs w-3/4 text-muted-foreground/80">{preview}</div>
 				{/if}
 			</div>
 
