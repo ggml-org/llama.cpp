@@ -85,6 +85,12 @@
 #include <string>
 #include <vector>
 
+#if defined(_WIN32)
+#include <windows.h>
+#else
+#include <dlfcn.h>
+#endif
+
 static_assert(sizeof(half) == sizeof(ggml_fp16_t), "wrong fp16 size");
 
 #define GGML_LOG_WARN_ONCE(str) \
@@ -4955,10 +4961,69 @@ static bool ggml_backend_cuda_get_available_uma_memory(long * available_memory_k
 }
 #endif // defined(__linux__)
 
+// Read VRAM without creating a primary context.
+// cudaMemGetInfo materializes a context that permanently costs some vram.
+#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
+
+typedef int (*ggml_nvml_init_fn)(void);
+typedef int (*ggml_nvml_handle_fn)(const char *, void **);
+typedef int (*ggml_nvml_mem_fn)(void *, void *);
+
+struct ggml_cuda_nvml {
+    ggml_nvml_handle_fn get_handle = nullptr;
+    ggml_nvml_mem_fn    get_mem    = nullptr;
+    bool                ready      = false;
+
+    ggml_cuda_nvml() {
+#if defined(_WIN32)
+        HMODULE lib = LoadLibraryA("nvml.dll");
+        if (!lib) {
+            return;
+        }
+        auto init  = (ggml_nvml_init_fn)   GetProcAddress(lib, "nvmlInit_v2");
+        get_handle = (ggml_nvml_handle_fn) GetProcAddress(lib, "nvmlDeviceGetHandleByPciBusId_v2");
+        get_mem    = (ggml_nvml_mem_fn)    GetProcAddress(lib, "nvmlDeviceGetMemoryInfo");
+#else
+        void * lib = dlopen("libnvidia-ml.so.1", RTLD_NOW | RTLD_LOCAL);
+        if (!lib) {
+            lib = dlopen("libnvidia-ml.so", RTLD_NOW | RTLD_LOCAL);
+        }
+        if (!lib) {
+            return;
+        }
+        auto init  = (ggml_nvml_init_fn)   dlsym(lib, "nvmlInit_v2");
+        get_handle = (ggml_nvml_handle_fn) dlsym(lib, "nvmlDeviceGetHandleByPciBusId_v2");
+        get_mem    = (ggml_nvml_mem_fn)    dlsym(lib, "nvmlDeviceGetMemoryInfo");
+#endif
+        if (!init || !get_handle || !get_mem) {
+            return;
+        }
+        ready = (init() == 0);
+    }
+};
+
+static bool ggml_cuda_nvml_get_memory(const std::string & pci_bus_id, size_t * free, size_t * total) {
+    static ggml_cuda_nvml nvml;
+    if (!nvml.ready || pci_bus_id.empty()) {
+        return false;
+    }
+    void * dev = nullptr;
+    if (nvml.get_handle(pci_bus_id.c_str(), &dev) != 0) {
+        return false;
+    }
+    struct { uint64_t total; uint64_t free; uint64_t used; } info = {};
+    if (nvml.get_mem(dev, &info) != 0) {
+        return false;
+    }
+    *total = (size_t) info.total;
+    *free  = (size_t) info.free;
+    return true;
+}
+
+#endif // !GGML_USE_HIP && !GGML_USE_MUSA
+
 static void ggml_backend_cuda_device_get_memory(ggml_backend_dev_t dev, size_t * free, size_t * total) {
     ggml_backend_cuda_device_context * ctx = (ggml_backend_cuda_device_context *)dev->context;
-    ggml_cuda_set_device(ctx->device);
-    CUDA_CHECK(cudaMemGetInfo(free, total));
 
 // ref: https://github.com/ggml-org/llama.cpp/pull/17368
 #if defined(__linux__)
@@ -4972,17 +5037,28 @@ static void ggml_backend_cuda_device_get_memory(ggml_backend_dev_t dev, size_t *
 
     if (is_uma) {
         // For UMA systems (like DGX Spark), use system memory info
+        *total = prop.totalGlobalMem;
         long available_memory_kb = 0;
         long free_swap_kb = 0;
 
         if (ggml_backend_cuda_get_available_uma_memory(&available_memory_kb, &free_swap_kb) && available_memory_kb > 0) {
             *free = (size_t)available_memory_kb * 1024;
-        } else {
-            GGML_LOG_ERROR("%s: /proc/meminfo reading failed, using cudaMemGetInfo\n", __func__);
+            GGML_LOG_DEBUG("%s: %s: using UMA /proc/meminfo path\n", __func__, ctx->name.c_str());
+            return;
         }
     }
 #endif // defined(__linux__)
 
+#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
+    if (ggml_cuda_nvml_get_memory(ctx->pci_bus_id, free, total)) {
+        GGML_LOG_DEBUG("%s: %s: using NVML context-free path\n", __func__, ctx->name.c_str());
+        return;
+    }
+#endif
+
+    GGML_LOG_DEBUG("%s: %s: using cudaMemGetInfo fallback\n", __func__, ctx->name.c_str());
+    ggml_cuda_set_device(ctx->device);
+    CUDA_CHECK(cudaMemGetInfo(free, total));
 }
 
 static enum ggml_backend_dev_type ggml_backend_cuda_device_get_type(ggml_backend_dev_t dev) {
