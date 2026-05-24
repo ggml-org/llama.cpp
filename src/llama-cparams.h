@@ -43,6 +43,10 @@ struct llama_cparams {
     bool kv_unified;
     bool pipeline_parallel;
 
+    // Pipeline configuration for hybrid CPU+GPU prefill
+    int32_t pipeline_depth;         // 0 = disabled, 3 = CPU+TMA+GPU
+    int32_t pipeline_split_size;    // layers per split group (default 8)
+
     enum llama_context_type ctx_type;
     enum llama_pooling_type pooling_type;
 

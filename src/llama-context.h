@@ -9,6 +9,7 @@
 
 #include "ggml-cpp.h"
 #include "ggml-opt.h"
+#include "ggml-backend-pipeline.h"
 
 #include <map>
 #include <vector>
@@ -325,6 +326,10 @@ private:
     std::vector<swap_info> output_swaps;
 
     ggml_backend_sched_ptr sched;
+
+    // Pipelined prefill scheduler (optional, created when cparams.pipeline_depth > 0)
+    ggml_backend_sched_pipelined_t sched_pipeline = nullptr;
+    ggml_threadpool_t cpu_tp_pipeline[2] = {nullptr, nullptr};
 
     bool sched_need_reserve = true;
 

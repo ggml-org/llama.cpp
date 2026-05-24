@@ -1,6 +1,7 @@
 #include "llama-context.h"
 
 #include "ggml.h"
+#include "ggml-backend-pipeline.h"
 #include "llama-arch.h"
 #include "llama-graph.h"
 #include "llama-impl.h"
@@ -184,6 +185,10 @@ llama_context::llama_context(
 
     cparams.op_offload = params.op_offload;
     cparams.kv_unified = params.kv_unified;
+
+    // Pipeline configuration for hybrid CPU+GPU prefill
+    cparams.pipeline_depth = params.pipeline_depth;
+    cparams.pipeline_split_size = params.pipeline_split_size;
 
     // initialized later
     cparams.pipeline_parallel = false;
@@ -389,6 +394,10 @@ llama_context::llama_context(
 }
 
 llama_context::~llama_context() {
+    if (sched_pipeline) {
+        ggml_backend_sched_pipelined_free(sched_pipeline);
+        sched_pipeline = nullptr;
+    }
     if (!model.hparams.no_alloc) {
         for (size_t i = 0; i < backend_ptrs.size(); ++i) {
             ggml_backend_t             backend = backend_ptrs[i];
@@ -2229,6 +2238,41 @@ ggml_status llama_context::graph_compute(
     // set the number of threads for all the backends
     for (const auto & set_n_threads_fn : set_n_threads_fns) {
         set_n_threads_fn.second(set_n_threads_fn.first, n_threads);
+    }
+
+    // Pipeline path for large batch prefill
+    if (batched && cparams.pipeline_depth > 0 && cparams.pipeline_split_size > 0) {
+        // Lazy init of pipeline scheduler on first prefill
+        if (!sched_pipeline) {
+            ggml_backend_t gpu_be = nullptr;
+            int n_be = ggml_backend_sched_get_n_backends(sched.get());
+            for (int i = 0; i < n_be; i++) {
+                ggml_backend_t be = ggml_backend_sched_get_backend(sched.get(), i);
+                auto dev = ggml_backend_get_device(be);
+                if (dev && ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_GPU) {
+                    gpu_be = be;
+                    break;
+                }
+            }
+            if (gpu_be) {
+                sched_pipeline = ggml_backend_sched_pipelined_init(
+                    sched.get(),
+                    cparams.pipeline_depth,
+                    cparams.pipeline_split_size,
+                    n_threads,
+                    GGML_SCHED_PRIO_NORMAL,
+                    1,  // poll
+                    gpu_be);
+            }
+        }
+
+        if (sched_pipeline) {
+            auto status = ggml_backend_sched_pipelined_compute(sched_pipeline, gf);
+            if (status != GGML_STATUS_SUCCESS) {
+                LLAMA_LOG_ERROR("%s: pipelined compute failed with error %d\n", __func__, status);
+            }
+            return status;
+        }
     }
 
     auto status = ggml_backend_sched_graph_compute_async(sched.get(), gf);

@@ -387,6 +387,10 @@ extern "C" {
         // note: the samplers must be sampler chains (i.e. use llama_sampler_chain_init)
         struct llama_sampler_seq_config * samplers;
         size_t                            n_samplers;
+
+        // Pipeline configuration for hybrid CPU+GPU prefill (opt-in)
+        int32_t pipeline_depth;         // 0 = disabled, 3 = CPU+TMA+GPU
+        int32_t pipeline_split_size;    // layers per split group (default 8)
     };
 
     struct llama_model_tensor_override {
