@@ -306,7 +306,7 @@ static void evict_region_past_l2_local(const void *addr, size_t bytes) {
     //     evict_past_l2((const void *)(base + off * CL), batch, CL);
     // }
 
-    cache_ops_priv_evict_sw(0, /*to_L2*/2, 0, 0, CL);
+    cache_ops_priv_evict_sw(0, /*to_L2*/3, 0, 0, CL);
 
 
 
@@ -326,12 +326,6 @@ int entry_point(struct ggml_et_uberkernel_params * params, void * env) {
         return -1;
     }
 
-    // Enable L1 SCP once upfront - _me kernels need it, and the enable is a
-    // one-shot operation that hangs if issued twice.
-    
-    setup_cache_scp();
-    //FIXME: 
-
     struct ggml_et_uberkernel_inst * insts =
         (struct ggml_et_uberkernel_inst *)(uintptr_t) params->insts;
     uint8_t * params_blob = (uint8_t *)(uintptr_t) params->params_blob;
@@ -346,18 +340,17 @@ int entry_point(struct ggml_et_uberkernel_params * params, void * env) {
         void * inst_params = params_blob + inst->params_offset;
         int rc = -1;
         
-        // et_barrier(ET_BARRIER_GLOBAL);
-        // et_barrier_global(32ULL);
+        et_barrier_global(32ULL);
 
         switch (inst->kernel_id) {
     
-            // case GGML_ET_UBERKERNEL_KERNEL_EL_MAP_F32: {
-            //     struct ggml_et_binary_params *p = (struct ggml_et_binary_params *) inst_params;
-            //     // evict_region_past_l2_local(p->src0.data, tensor_bytes(&p->src0));
-            //     // evict_region_past_l2_local(p->src1.data, tensor_bytes(&p->src1));
-            //     rc = el_map_f32_entry(p, env);
-            //     break;
-            // }
+            case GGML_ET_UBERKERNEL_KERNEL_EL_MAP_F32: {
+                struct ggml_et_binary_params *p = (struct ggml_et_binary_params *) inst_params;
+                // evict_region_past_l2_local(p->src0.data, tensor_bytes(&p->src0));
+                // evict_region_past_l2_local(p->src1.data, tensor_bytes(&p->src1));
+                rc = el_map_f32_entry(p, env);
+                break;
+            }
             
             case GGML_ET_UBERKERNEL_KERNEL_UNARY_F32: {
                 struct uber_unary_params *p = (struct uber_unary_params *) inst_params;
@@ -367,23 +360,29 @@ int entry_point(struct ggml_et_uberkernel_params * params, void * env) {
                 break;
             }
 
-            // case GGML_ET_UBERKERNEL_KERNEL_CPY_F32_F16: {
-            //     struct uber_unary_params *p = (struct uber_unary_params *) inst_params;
-            //     rc = cpy_f32_f16_entry((struct ggml_et_cont_params *) inst_params, env);
-            //     break;
-            // }
+            case GGML_ET_UBERKERNEL_KERNEL_CPY_F32_F16: {
+                struct uber_unary_params *p = (struct uber_unary_params *) inst_params;
+                evict_region_past_l2(p->src0.data, tensor_bytes(&p->src0));
+                rc = cpy_f32_f16_entry((struct ggml_et_cont_params *) inst_params, env);
+                break;
+            }
 
-            // case GGML_ET_UBERKERNEL_KERNEL_GET_ROWS_F32: {
-            //     struct uber_get_rows_params *p = (struct uber_get_rows_params *) inst_params;
-            //     rc = get_rows_f32_entry((struct ggml_et_get_rows_params *) inst_params, env);
-            //     break;
-            // }
+            case GGML_ET_UBERKERNEL_KERNEL_GET_ROWS_F32: {
+                struct uber_get_rows_params *p = (struct uber_get_rows_params *) inst_params;
+                // evict_region_past_l2_local(p->src0.data, tensor_bytes(&p->src0));
+                // evict_region_past_l2_local(p->src1.data, tensor_bytes(&p->src1));
+                // evict_region_past_l2(p->dst.data, tensor_bytes(&p->dst));
+                rc = get_rows_f32_entry((struct ggml_et_get_rows_params *) inst_params, env);
+                break;
+            }
 
-            // case GGML_ET_UBERKERNEL_KERNEL_CONT_F32: {
-            //     struct uber_cont_params *p = (struct uber_cont_params *) inst_params;
-            //     rc = cont_f32_entry((struct ggml_et_cont_params *) inst_params, env);
-            //     break;
-            // }
+            case GGML_ET_UBERKERNEL_KERNEL_CONT_F32: {
+                struct uber_cont_params *p = (struct uber_cont_params *) inst_params;
+                // evict_region_past_l2_local(p->src0.data, tensor_bytes(&p->src0));
+                // evict_region_past_l2(p->dst.data, tensor_bytes(&p->dst));
+                rc = cont_f32_entry((struct ggml_et_cont_params *) inst_params, env);
+                break;
+            }
 
             case GGML_ET_UBERKERNEL_KERNEL_GLU_F32: {
                 struct uber_glu_params *p = (struct uber_glu_params *) inst_params;
@@ -391,7 +390,6 @@ int entry_point(struct ggml_et_uberkernel_params * params, void * env) {
                 break;
             }
 
-            
             case GGML_ET_UBERKERNEL_KERNEL_ROPE_F32: {
                 struct uber_rope_params *p = (struct uber_rope_params *) inst_params;
                 rc = rope_f32_entry((struct ggml_et_rope_params *) inst_params, env);
@@ -552,6 +550,7 @@ int entry_point(struct ggml_et_uberkernel_params * params, void * env) {
                 rc = rwkv_wkv6_f32_entry((struct ggml_et_rwkv_wkv6_params *) inst_params, env);
                 break;
             }
+
             case GGML_ET_UBERKERNEL_KERNEL_RWKV_WKV7_F32: {
                 rc = rwkv_wkv7_f32_entry((struct ggml_et_rwkv_wkv7_params *) inst_params, env);
                 break;
@@ -598,7 +597,6 @@ int entry_point(struct ggml_et_uberkernel_params * params, void * env) {
             return rc;
         }
 
-        et_barrier(ET_BARRIER_GLOBAL);
     }
 
     return 0;

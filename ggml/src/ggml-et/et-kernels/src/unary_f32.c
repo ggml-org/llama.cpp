@@ -491,11 +491,11 @@ int entry_point(struct ggml_et_unary_params* params, void* env) {
     }
 
     float* src0_data = (float*)src0->data;
-    evict_region_past_l2(src0->data, tensor_bytes(src0));
+    // evict_region_past_l2(src0->data, tensor_bytes(src0));
     float* dst_data = (float*)dst->data;
-    evict_region_past_l2(dst->data, tensor_bytes(dst));
+    // evict_region_past_l2(dst->data, tensor_bytes(dst));
+    // et_barrier_global(32ULL);
     
-    et_barrier_global(32ULL);
 
     if (!src0_data || !dst_data) {
         return -1;

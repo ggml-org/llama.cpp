@@ -44,6 +44,10 @@ static inline void scalar_copy_f32(float* dst, const float* src, int32_t n) {
     }
 }
 
+// static inline size_t tensor_bytes(const struct ggml_tensor *t) {
+//     return (size_t)t->ne[0] * t->ne[1] * t->ne[2] * t->ne[3] * t->nb[0];
+// }
+
 
 int entry_point(struct ggml_et_cont_params* params, void* env) {
     kernel_environment_t* kernel_env = (kernel_environment_t*)env;
@@ -72,6 +76,7 @@ int entry_point(struct ggml_et_cont_params* params, void* env) {
 
     float* src0_data = (float*)src0->data;
     float* dst_data = (float*)dst->data;
+    // evict_region_past_l2(src0_data, tensor_bytes(src0));
 
     if (!src0_data || !dst_data) {
         return -1;
