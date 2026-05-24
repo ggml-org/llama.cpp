@@ -202,12 +202,16 @@ struct llama_layer_shortconv {
 };
 
 struct llama_layer_nextn {
-    struct ggml_tensor * eh_proj          = nullptr;
-    struct ggml_tensor * embed_tokens     = nullptr;
-    struct ggml_tensor * enorm            = nullptr;
-    struct ggml_tensor * hnorm            = nullptr;
-    struct ggml_tensor * shared_head_head = nullptr;
-    struct ggml_tensor * shared_head_norm = nullptr;
+    struct ggml_tensor * eh_proj               = nullptr;
+    struct ggml_tensor * eh_proj_s             = nullptr;
+    struct ggml_tensor * eh_proj_in_s          = nullptr;
+    struct ggml_tensor * embed_tokens          = nullptr;
+    struct ggml_tensor * enorm                 = nullptr;
+    struct ggml_tensor * hnorm                 = nullptr;
+    struct ggml_tensor * shared_head_head      = nullptr;
+    struct ggml_tensor * shared_head_head_s    = nullptr;
+    struct ggml_tensor * shared_head_head_in_s = nullptr;
+    struct ggml_tensor * shared_head_norm      = nullptr;
 };
 
 struct llama_layer {
