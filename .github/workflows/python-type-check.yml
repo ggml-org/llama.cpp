@@ -30,7 +30,7 @@ jobs:
       - name: Set up Python environment
         uses: actions/setup-python@v6
         with:
-          python-version: "3.11"
+          python-version: "3.13"
           pip-install: -r requirements/requirements-all.txt ty==0.0.35
       # - name: Type-check with Pyright
       #   uses: jakebailey/pyright-action@v2
