@@ -1025,6 +1025,14 @@ void ggml_metal_event_encode_wait(ggml_metal_event_t ev, ggml_metal_cmd_buf_t cm
     [cmd_buf encodeWaitForEvent:event value:atomic_load_explicit(&ev->value, memory_order_relaxed)];
 }
 
+void ggml_metal_event_cpu_signal(ggml_metal_event_t ev, uint64_t value) {
+    ((id<MTLSharedEvent>)ev->obj).signaledValue = value;
+}
+
+void *ggml_metal_event_get_obj(ggml_metal_event_t ev) {
+    return ev->obj;
+}
+
 ggml_metal_event_t ggml_metal_device_event_init(ggml_metal_device_t dev) {
     id<MTLSharedEvent> event = [dev->mtl_device newSharedEvent];
 

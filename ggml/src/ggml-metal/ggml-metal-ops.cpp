@@ -2338,7 +2338,7 @@ int ggml_metal_op_mul_mat_id(ggml_metal_op_t ctx, int idx) {
                 ggml_metal_encoder_set_bytes(enc, &mi.seq, sizeof(mi.seq), 4);
                 ggml_metal_encoder_dispatch_threadgroups(enc, 1, 1, 1, 32, 1, 1);
 
-                ggml_metal_encoder_wait_for_event(enc, mi.event, mi.event_value);
+                ggml_metal_encoder_wait_for_event(enc, ggml_backend_metal_event_raw(mi.event), mi.seq);
             }
 
             bid_src2.metal = moe_base.metal;

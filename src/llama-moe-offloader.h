@@ -16,18 +16,6 @@
 
 #include "ggml-metal.h"
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
-void * llama_moe_offloader_create_shared_event(ggml_backend_t backend);
-void   llama_moe_offloader_signal_event(void * event, uint64_t value);
-void   llama_moe_offloader_release_event(void * event);
-
-#ifdef __cplusplus
-}
-#endif
-
 // Shared memory layout (MTLStorageModeShared).
 static constexpr int    MOE_MAX_IDS      = 4096;
 static constexpr size_t MOE_OFF_REQ      = 0;                                   // atomic_uint: request seq
@@ -68,9 +56,9 @@ struct moe_layer {
     uint8_t *             mapped     = nullptr;  // == msg_tensor->data
 
     // gpu-cpu sync
-    void *                shared_event = nullptr;
-    std::atomic<uint32_t> next_seq{ 0 };
-    std::atomic<uint32_t> last_processed{ 0 };
+    ggml_backend_metal_event_t shared_event = nullptr;
+    std::atomic<uint32_t>      next_seq{ 0 };
+    std::atomic<uint32_t>      last_processed{ 0 };
 
     // reuse detection for gate_up/down etc.
     const ggml_tensor * last_src2      = nullptr;

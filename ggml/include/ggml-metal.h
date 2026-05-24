@@ -56,6 +56,13 @@ GGML_BACKEND_API void ggml_backend_metal_capture_next_compute(ggml_backend_t bac
 
 GGML_BACKEND_API ggml_backend_reg_t ggml_backend_metal_reg(void);
 
+typedef struct ggml_backend_metal_event * ggml_backend_metal_event_t;
+
+GGML_BACKEND_API ggml_backend_metal_event_t ggml_backend_metal_event_new(ggml_backend_t backend);
+GGML_BACKEND_API void                       ggml_backend_metal_event_free(ggml_backend_metal_event_t event);
+GGML_BACKEND_API void   ggml_backend_metal_event_signal(ggml_backend_metal_event_t event, uint64_t value);
+GGML_BACKEND_API void * ggml_backend_metal_event_raw(ggml_backend_metal_event_t event);
+
 struct ggml_metal_moe_intercept {
     int                        n;
     uint32_t                   seq;
@@ -63,8 +70,7 @@ struct ggml_metal_moe_intercept {
     size_t                     off_req;
     size_t                     off_selected;
     size_t                     off_remapped;
-    void *                     event;
-    uint64_t                   event_value;
+    ggml_backend_metal_event_t event;
     bool                       reuse;
 };
 

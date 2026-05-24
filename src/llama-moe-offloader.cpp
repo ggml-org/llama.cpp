@@ -1,3 +1,5 @@
+#if defined(__APPLE__) && defined(GGML_USE_METAL)
+
 #include "llama-moe-offloader.h"
 
 #include "ggml-backend.h"
@@ -21,7 +23,7 @@ moe_layer::~moe_layer() {
     ggml_backend_buffer_free(msg_buf);
     ggml_free(msg_ctx);
     if (shared_event) {
-        llama_moe_offloader_release_event(shared_event);
+        ggml_backend_metal_event_free(shared_event);
     }
 }
 
@@ -90,7 +92,7 @@ ggml_tensor * llama_moe_offloader::bind_pool(int           layer_idx,
             memset(layer->mapped, 0, MOE_MSG_NBYTES);
         }
 
-        layer->shared_event = llama_moe_offloader_create_shared_event(backend);
+        layer->shared_event = ggml_backend_metal_event_new(backend);
 
         sidecar_layers.push_back(layer.get());
         layer_ptr = std::move(layer);
@@ -173,7 +175,6 @@ bool llama_moe_offloader::hook(void *                     user_data,
     if (layer.last_src2 == src2 && layer.last_src2_uses < expected_uses) {
         out->reuse       = true;
         out->seq         = layer.last_src2_seq;
-        out->event_value = layer.last_src2_seq;
         layer.last_src2_uses++;
     } else {
         out->reuse                              = false;
@@ -182,7 +183,6 @@ bool llama_moe_offloader::hook(void *                     user_data,
         layer.last_src2_seq                     = seq;
         layer.last_src2_uses                    = 1;
         out->seq                                = seq;
-        out->event_value                        = seq;
         *(int32_t *) (layer.mapped + MOE_OFF_N) = n;
     }
 
@@ -299,7 +299,7 @@ void llama_moe_offloader::sidecar_loop() {
             memcpy(layer.mapped + MOE_OFF_REMAPPED, remap_buf.data(), (size_t) n_ids * sizeof(int32_t));
 
             layer.last_processed.store(req, std::memory_order_relaxed);
-            llama_moe_offloader_signal_event(layer.shared_event, (uint64_t) req);
+            ggml_backend_metal_event_signal(layer.shared_event, (uint64_t) req);
 
             any = true;
         }
@@ -333,3 +333,5 @@ void llama_moe_offloader::clear() {
     sidecar_layers.clear();
     pool_to_layer.clear();
 }
+
+#endif

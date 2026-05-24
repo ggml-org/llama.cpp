@@ -573,6 +573,34 @@ void ggml_backend_metal_set_moe_handler(ggml_backend_t backend, struct ggml_meta
     ggml_metal_set_moe_handler(ctx, moe_handler);
 }
 
+struct ggml_backend_metal_event {
+    ggml_metal_device_t dev;
+    ggml_metal_event_t  ev;
+};
+
+ggml_backend_metal_event_t ggml_backend_metal_event_new(ggml_backend_t backend) {
+    GGML_ASSERT(ggml_backend_is_metal(backend));
+    ggml_metal_device_t dev = (ggml_metal_device_t) backend->device->context;
+
+    auto * e = new ggml_backend_metal_event;
+    e->dev   = dev;
+    e->ev    = ggml_metal_device_event_init(dev);
+    return e;
+}
+
+void ggml_backend_metal_event_free(ggml_backend_metal_event_t event) {
+    ggml_metal_device_event_free(event->dev, event->ev);
+    delete event;
+}
+
+void ggml_backend_metal_event_signal(ggml_backend_metal_event_t event, uint64_t value) {
+    ggml_metal_event_cpu_signal(event->ev, value);
+}
+
+void * ggml_backend_metal_event_raw(ggml_backend_metal_event_t event) {
+    return ggml_metal_event_get_obj(event->ev);
+}
+
 static ggml_backend_i ggml_backend_metal_i = {
     /* .get_name                = */ ggml_backend_metal_name,
     /* .free                    = */ ggml_backend_metal_free,
