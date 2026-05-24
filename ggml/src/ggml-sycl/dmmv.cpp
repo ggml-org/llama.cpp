@@ -3,6 +3,13 @@
 #include "dequantize.hpp"
 #include "presets.hpp"
 
+#if defined(__INTEL_LLVM_COMPILER)
+    #if __has_include(<sycl/ext/oneapi/bfloat16.hpp>)
+        #include <sycl/ext/oneapi/bfloat16.hpp>
+        #define GGML_SYCL_DMMV_HAS_BF16
+    #endif
+#endif
+
 static void convert_f16(const void * vx, const int64_t ib, const int iqs, dfloat2 & v){
     const sycl::half *x = (const sycl::half *)vx;
 
@@ -10,6 +17,16 @@ static void convert_f16(const void * vx, const int64_t ib, const int iqs, dfloat
     v.x() = x[ib + iqs + 0];
     v.y() = x[ib + iqs + 1];
 }
+
+#ifdef GGML_SYCL_DMMV_HAS_BF16
+static void convert_bf16(const void * vx, const int64_t ib, const int iqs, dfloat2 & v){
+    const sycl::ext::oneapi::bfloat16 *x = (const sycl::ext::oneapi::bfloat16 *)vx;
+
+    // automatic bfloat16 -> float type cast if dfloat == float
+    v.x() = x[ib + iqs + 0];
+    v.y() = x[ib + iqs + 1];
+}
+#endif
 
 static void convert_f32(const void * vx, const int64_t ib, const int iqs, dfloat2 & v){
     const float * x = (const float *) vx;
@@ -216,6 +233,28 @@ static void convert_mul_mat_vec_f16_sycl(const void *vx, const dfloat *y,
             });
     }
 }
+
+#ifdef GGML_SYCL_DMMV_HAS_BF16
+static void convert_mul_mat_vec_bf16_sycl(const void *vx, const dfloat *y,
+                                          float *dst, const int ncols,
+                                          const int nrows,
+                                          dpct::queue_ptr stream) {
+    // The qk=1 kernel iterates with stride 2*GGML_SYCL_DMMV_X, so ncols must be a
+    // multiple of that — not just GGML_SYCL_DMMV_X — to avoid out-of-bounds reads.
+    GGML_ASSERT(ncols % (2*GGML_SYCL_DMMV_X) == 0);
+    const int block_num_y = (nrows + GGML_SYCL_MMV_Y - 1) / GGML_SYCL_MMV_Y;
+    const sycl::range<3> block_nums(1, 1, block_num_y);
+    const sycl::range<3> block_dims(1, GGML_SYCL_MMV_Y, WARP_SIZE);
+    {
+        stream->parallel_for(
+            sycl::nd_range<3>(block_nums * block_dims, block_dims),
+            [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
+                dequantize_mul_mat_vec<1, 1, convert_bf16>(vx, y, dst, ncols,
+                                                           nrows, item_ct1);
+            });
+    }
+}
+#endif
 
 /*
 DPCT1110:4: The total declared local variable size in device function
@@ -1497,7 +1536,8 @@ void ggml_sycl_op_dequantize_mul_mat_vec(
     bool src1_convert_f16 =
         src0->type == GGML_TYPE_Q4_0 || src0->type == GGML_TYPE_Q4_1 ||
         src0->type == GGML_TYPE_Q5_0 || src0->type == GGML_TYPE_Q5_1 ||
-        src0->type == GGML_TYPE_Q8_0 || src0->type == GGML_TYPE_F16;
+        src0->type == GGML_TYPE_Q8_0 || src0->type == GGML_TYPE_F16 ||
+        src0->type == GGML_TYPE_BF16;
 
     if (src1_convert_f16) {
         scope_op_debug_print scope_dbg_print(__func__, "/to_fp16_sycl", dst, /*num_src=*/2,
@@ -1565,6 +1605,11 @@ void ggml_sycl_op_dequantize_mul_mat_vec(
         case GGML_TYPE_F16:
             convert_mul_mat_vec_f16_sycl(src0_dd_i, src1_dfloat, dst_dd_i, ne00, row_diff, stream);
             break;
+#ifdef GGML_SYCL_DMMV_HAS_BF16
+        case GGML_TYPE_BF16:
+            convert_mul_mat_vec_bf16_sycl(src0_dd_i, src1_dfloat, dst_dd_i, ne00, row_diff, stream);
+            break;
+#endif
         default:
             printf("ggml_sycl_op_dequantize_mul_mat_vec unsupported GGML_TYPE %d\n", src0->type);
             GGML_ABORT("fatal error");

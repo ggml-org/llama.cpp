@@ -54,8 +54,13 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  ui-build:
+    name: Build Web UI
+    uses: ./.github/workflows/ui-build.yml
+
   server:
     runs-on: ubuntu-latest
+    needs: ui-build
 
     name: server (${{ matrix.wf_name }})
     strategy:
@@ -92,6 +97,12 @@ jobs:
         with:
           fetch-depth: 0
           ref: ${{ github.event.inputs.sha || github.event.pull_request.head.sha || github.sha || github.head_ref || github.ref_name }}
+
+      - name: Download built UI
+        uses: actions/download-artifact@v7
+        with:
+          name: ui-build
+          path: tools/ui/dist
 
       - name: Build
         id: cmake_build
@@ -134,6 +145,11 @@ jobs:
         with:
           fetch-depth: 0
           ref: ${{ github.event.inputs.sha || github.event.pull_request.head.sha || github.sha || github.head_ref || github.ref_name }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
 
       - name: Build
         id: cmake_build

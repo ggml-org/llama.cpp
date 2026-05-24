@@ -537,6 +537,63 @@ static void dequantize_block_q5_K(const void * __restrict__ vx, dst_t * __restri
 #endif
 }
 
+template <typename dst_t>
+static void dequantize_block_q5_K_reorder(const void * __restrict__ vx, dst_t * __restrict__ yy,
+                                          uint8_t * scales_local, const sycl::nd_item<3> & item_ct1, int64_t n_blocks) {
+    const int64_t ib = item_ct1.get_group(2);
+
+#if QK_K == 256
+    // assume 64 threads
+    const int64_t tid = item_ct1.get_local_id(2);
+    const int64_t il  = tid / 16;   // 0...3
+    const int64_t ir  = tid % 16;   // 0...15
+    const int64_t is  = 2 * il;
+
+    dst_t * y = yy + ib * QK_K + 64 * il + 2 * ir;
+
+    const uint8_t * base = static_cast<const uint8_t *>(vx);
+
+    // Reordered layout: [qs (QK_K/2 per block)] [qh (QK_K/8 per block)] [scales (K_SCALE_SIZE per block)] [dm (half2 per block)]
+    const size_t qs_offset     = ib * (QK_K / 2);
+    const size_t qh_offset     = n_blocks * (QK_K / 2) + ib * (QK_K / 8);
+    const size_t scales_offset = n_blocks * (QK_K / 2) + n_blocks * (QK_K / 8) + ib * K_SCALE_SIZE;
+    const size_t dm_offset     = n_blocks * (QK_K / 2) + n_blocks * (QK_K / 8) + n_blocks * K_SCALE_SIZE + ib * sizeof(ggml_half2);
+
+    const uint8_t *  qs_ptr     = base + qs_offset;
+    const uint8_t *  qh_ptr     = base + qh_offset;
+    const uint8_t *  scales_ptr = base + scales_offset;
+    const ggml_half2 dm_values  = *reinterpret_cast<const ggml_half2 *>(base + dm_offset);
+
+    const float dall = dm_values.x();
+    const float dmin = dm_values.y();
+
+    const uint8_t * ql = qs_ptr + 32 * il + 2 * ir;
+    const uint8_t * qh = qh_ptr + 2 * ir;
+
+    if (tid < K_SCALE_SIZE) {
+        scales_local[tid] = scales_ptr[tid];
+    }
+
+    item_ct1.barrier(sycl::access::fence_space::local_space);
+
+    uint8_t sc, m;
+    get_scale_min_k4(is + 0, scales_local, sc, m);
+    const float d1 = dall * sc; const float m1 = dmin * m;
+    get_scale_min_k4(is + 1, scales_local, sc, m);
+    const float d2 = dall * sc; const float m2 = dmin * m;
+
+    uint8_t hm  = 1 << (2 * il);
+    y[ 0] = d1 * ((ql[ 0] & 0xF) + (qh[ 0] & hm ? 16 : 0)) - m1;
+    y[ 1] = d1 * ((ql[ 1] & 0xF) + (qh[ 1] & hm ? 16 : 0)) - m1;
+    hm <<= 1;
+    y[32] = d2 * ((ql[ 0] >>  4) + (qh[ 0] & hm ? 16 : 0)) - m2;
+    y[33] = d2 * ((ql[ 1] >>  4) + (qh[ 1] & hm ? 16 : 0)) - m2;
+#else
+    GGML_UNUSED(ib); GGML_UNUSED(tid); GGML_UNUSED(yy); GGML_UNUSED(scales_local); GGML_UNUSED(n_blocks);
+    GGML_ABORT("Q5_K reorder dequantize not supported for QK_K != 256");
+#endif
+}
+
 template<typename dst_t>
 static void dequantize_block_q6_K(const void * __restrict__ vx, dst_t * __restrict__ yy,
                                   const sycl::nd_item<3> &item_ct1) {

@@ -1141,10 +1141,6 @@ void llama_model_base::load_hparams(llama_model_loader & ml) {
         ml.get_key(LLM_KV_ROPE_DIMENSION_COUNT_SWA, hparams.n_rot_swa, false);
     }
 
-    // for differentiating model types
-    uint32_t n_vocab = 0;
-    ml.get_key(LLM_KV_VOCAB_SIZE, n_vocab, false) || ml.get_arr_n(LLM_KV_TOKENIZER_LIST, n_vocab, false);
-
     // for classifier models
     ml.get_arr(LLM_KV_CLASSIFIER_OUTPUT_LABELS, classifier_labels, false);
     if (!classifier_labels.empty()) {
@@ -1348,6 +1344,12 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
             if (!layer.ssm_beta_s && layer.ssm_beta) {
                 layer.ssm_beta_s = create_tensor(tn(LLM_TENSOR_SSM_BETA, "scale", i), {1}, TENSOR_NOT_REQUIRED);
             }
+            if (!layer.nextn.eh_proj_s && layer.nextn.eh_proj) {
+                layer.nextn.eh_proj_s = create_tensor(tn(LLM_TENSOR_NEXTN_EH_PROJ, "scale", i), {1}, TENSOR_NOT_REQUIRED);
+            }
+            if (!layer.nextn.shared_head_head_s && layer.nextn.shared_head_head) {
+                layer.nextn.shared_head_head_s = create_tensor(tn(LLM_TENSOR_NEXTN_SHARED_HEAD_HEAD, "scale", i), {1}, TENSOR_NOT_REQUIRED);
+            }
 
             // input scales
             if (!layer.wq_in_s && layer.wq) {
@@ -1407,11 +1409,30 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
             if (!layer.ssm_beta_in_s && layer.ssm_beta) {
                 layer.ssm_beta_in_s = create_tensor(tn(LLM_TENSOR_SSM_BETA, "input_scale", i), {1}, TENSOR_NOT_REQUIRED);
             }
+            if (!layer.nextn.eh_proj_in_s && layer.nextn.eh_proj) {
+                layer.nextn.eh_proj_in_s = create_tensor(tn(LLM_TENSOR_NEXTN_EH_PROJ, "input_scale", i), {1}, TENSOR_NOT_REQUIRED);
+            }
+            if (!layer.nextn.shared_head_head_in_s && layer.nextn.shared_head_head) {
+                layer.nextn.shared_head_head_in_s = create_tensor(tn(LLM_TENSOR_NEXTN_SHARED_HEAD_HEAD, "input_scale", i), {1}, TENSOR_NOT_REQUIRED);
+            }
+        }
+        // output scales
+        if (output && output->type == GGML_TYPE_NVFP4) {
+            // weight scale
+            if (!output_s) {
+                output_s = create_tensor(tn(LLM_TENSOR_OUTPUT, "scale"), {1}, TENSOR_NOT_REQUIRED);
+            }
+            // input scale
+            if (!output_in_s) {
+                output_in_s = create_tensor(tn(LLM_TENSOR_OUTPUT, "input_scale"), {1}, TENSOR_NOT_REQUIRED);
+            }
         }
     }
-
     ml.done_getting_tensors();
 
+    GGML_ASSERT(!(output && tok_embd &&
+            strcmp(output->name, tok_embd->name) == 0 &&
+            output->type == GGML_TYPE_NVFP4));
     // populate tensors_by_name
     for (auto & [_, ctx_ptr] : ml.ctx_map) {
         for (auto * cur = ggml_get_first_tensor(ctx_ptr.get()); cur != NULL; cur = ggml_get_next_tensor(ctx_ptr.get(), cur)) {
@@ -1948,6 +1969,12 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
         // checks
         default:
             {
+                // The MTP head is dense-attention only on hybrid Qwen3.5/3.6, so use a plain
+                // attention KV cache for the MTP context instead of the hybrid wrapper.
+                const bool mtp_on_hybrid_qwen35 =
+                    params.ctx_type == LLAMA_CONTEXT_TYPE_MTP &&
+                    (arch == LLM_ARCH_QWEN35 || arch == LLM_ARCH_QWEN35MOE);
+
                 if (llm_arch_is_recurrent(arch)) {
                     res = new llama_memory_recurrent(
                             *this,
@@ -1956,8 +1983,9 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                             cparams.offload_kqv,
                             std::max((uint32_t) 1, cparams.n_seq_max),
                             cparams.n_seq_max,
+                            cparams.n_rs_seq,
                             nullptr);
-                } else if (llm_arch_is_hybrid(arch)) {
+                } else if (llm_arch_is_hybrid(arch) && !mtp_on_hybrid_qwen35) {
                     // The main difference between hybrid architectures is the
                     // layer filters, so pick the right one here
                     llama_memory_hybrid::layer_filter_cb filter_attn = nullptr;
@@ -1971,6 +1999,14 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                         };
                         filter_recr = [&](int32_t il) {
                             return hparams.is_recurrent(il) && hparams.n_ff(il) == 0;
+                        };
+                    } else if (arch == LLM_ARCH_QWEN35 || arch == LLM_ARCH_QWEN35MOE) {
+                        const uint32_t n_main = hparams.n_layer - hparams.nextn_predict_layers;
+                        filter_attn = [&, n_main](int32_t il) {
+                            return (uint32_t)il < n_main && !hparams.is_recurrent(il);
+                        };
+                        filter_recr = [&, n_main](int32_t il) {
+                            return (uint32_t)il < n_main && hparams.is_recurrent(il);
                         };
                     }
 
@@ -1989,6 +2025,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                             /* recurrent_type_s  */ GGML_TYPE_F32,
                             /* recurrent_rs_size */ std::max((uint32_t) 1, cparams.n_seq_max),
                             /* n_seq_max         */ cparams.n_seq_max,
+                            /* n_rs_seq          */ cparams.n_rs_seq,
                             /* offload           */ cparams.offload_kqv,
                             /* unified           */ cparams.kv_unified,
                             /* filter_attn       */ std::move(filter_attn),
@@ -2007,6 +2044,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                             /* recurrent_type_v  */ GGML_TYPE_F32,
                             /* recurrent_kv_size */ std::max((uint32_t) 1, cparams.n_seq_max),
                             /* n_seq_max         */ cparams.n_seq_max,
+                            /* n_rs_seq          */ cparams.n_rs_seq,
                             /* offload           */ cparams.offload_kqv,
                             /* unified           */ cparams.kv_unified,
                             /* filter_attn       */ std::move(filter_attn),
@@ -2014,6 +2052,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                     }
                 } else {
                     llama_memory_i::layer_reuse_cb reuse = nullptr;
+                    llama_kv_cache::layer_filter_cb filter = nullptr;
 
                     if (arch == LLM_ARCH_GEMMA3N || arch == LLM_ARCH_GEMMA4) {
                         reuse = [&](int32_t il) {
@@ -2023,6 +2062,11 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
 
                             return -1;
                         };
+                    }
+
+                    if (mtp_on_hybrid_qwen35) {
+                        const uint32_t n_main = hparams.n_layer - hparams.nextn_predict_layers;
+                        filter = [n_main](int32_t il) { return (uint32_t)il >= n_main; };
                     }
 
                     if (hparams.swa_type != LLAMA_SWA_TYPE_NONE) {
@@ -2040,7 +2084,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                                 cparams.n_seq_max,
                                 cparams.n_ubatch,
                                 1,
-                                nullptr,
+                                filter,
                                 reuse);
                     } else {
                         GGML_ASSERT(!hparams.is_swa_any());
@@ -2057,7 +2101,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                                 1,
                                 hparams.n_swa,
                                 hparams.swa_type,
-                                nullptr,
+                                filter,
                                 nullptr);
                     }
                 }
@@ -2159,6 +2203,7 @@ int32_t llama_model_n_head_kv(const llama_model * model) {
 int32_t llama_model_n_swa(const llama_model * model) {
     return model->hparams.n_swa;
 }
+
 
 uint32_t llama_model_n_cls_out(const struct llama_model * model) {
     return model->hparams.n_cls_out;
