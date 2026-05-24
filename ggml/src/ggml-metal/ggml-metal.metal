@@ -5329,7 +5329,7 @@ kernel void kernel_roll_f32(
     }
 }
 
-kernel void kernel_out_prod_f32(
+kernel void kernel_out_prod_f32_f32(
     constant ggml_metal_kargs_out_prod & args,
     device  const char * src0,
     device  const char * src1,
@@ -5406,6 +5406,101 @@ kernel void kernel_out_prod_f32(
 
     #undef BLOCK_SIZE
 }
+
+template<typename q_t, void (*dequantize_func)(device const q_t *, short nl, thread float4x4 &)>
+kernel void kernel_out_prod_q_f32(
+    constant ggml_metal_kargs_out_prod & args,
+    device  const char * src0,
+    device  const char * src1,
+    device        char * dst,
+    threadgroup  char * shmem,
+    uint3 tgpig[[threadgroup_position_in_grid]],
+    uint3 tpitg[[thread_position_in_threadgroup]]) {
+    #define BLOCK_SIZE 32
+
+    const int64_t i3 = tgpig.z;
+    const int64_t i2 = tgpig.y;
+    const int64_t i1 = tgpig.x;
+
+    const int64_t m_start = i1 * BLOCK_SIZE;
+    const int64_t n_start = i2 * BLOCK_SIZE;
+
+    if (i3 >= args.ne2 * args.ne3 || n_start >= args.ne1 || m_start >= args.ne0) {
+        return;
+    }
+
+    const int64_t i3_3d = i3 % args.ne2;
+    const int64_t i3_4d = i3 / args.ne2;
+
+    // GQA broadcast
+    const int64_t dps2 = args.ne2 / args.ne02;
+    const int64_t dps3 = args.ne3 / args.ne03;
+
+    const int64_t i3_3d_src0 = i3_3d / dps2;
+    const int64_t i3_4d_src0 = i3_4d / dps3;
+
+    device const char * src0_base = src0 + i1*args.nb00 + i3_3d_src0*args.nb02 + i3_4d_src0*args.nb03;
+    device const char * src1_base = src1 + n_start*args.nb10 + i3_3d*args.nb12      + i3_4d*args.nb13;
+    device       char * dst_base  = dst  + m_start*args.nb0  + n_start*args.nb1 + i3_3d*args.nb2 + i3_4d*args.nb3;
+
+    threadgroup float * shmem_A = (threadgroup float *)shmem;
+    threadgroup float * shmem_B = (threadgroup float *)(shmem + BLOCK_SIZE*sizeof(float));
+    float thread_result[BLOCK_SIZE];
+    for (uint i = 0; i < BLOCK_SIZE; ++i) {
+        thread_result[i] = 0.0f;
+    }
+
+    for (int64_t b = 0; b < args.ne01; ++b) {
+        if (m_start + tpitg.x < args.ne0) {
+            if (tpitg.x < 2) {
+                float4x4 temp;
+                device const q_t * src0_row = (device const q_t *)(src0_base + b*args.nb01);
+                dequantize_func(src0_row, tpitg.x, temp);
+                ((threadgroup float4x4 *)shmem_A)[tpitg.x] = temp;
+            }
+        } 
+        
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        if (m_start + tpitg.x >= args.ne0) {
+            shmem_A[tpitg.x] = 0.0f;
+        }
+
+        if (n_start + tpitg.x < args.ne1) {
+            shmem_B[tpitg.x] = *(device const float *)(src1_base + tpitg.x*args.nb10 + b*args.nb11);
+        } else {
+            shmem_B[tpitg.x] = 0.0f;
+        }
+
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        const float cur_A = shmem_A[tpitg.x];
+
+        #pragma unroll(BLOCK_SIZE)
+        for (uint col = 0; col < BLOCK_SIZE; ++col) {
+            thread_result[col] += cur_A * shmem_B[col];
+        }
+    
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+    
+    if (m_start + tpitg.x < args.ne0) {
+        for (uint col = 0; col < BLOCK_SIZE; ++col) {
+            if (n_start + col < args.ne1) {
+                *(device float *)(dst_base + tpitg.x*args.nb0 + col*args.nb1) = thread_result[col];
+            }
+        }
+    }
+
+    #undef BLOCK_SIZE
+}
+
+typedef decltype(kernel_out_prod_q_f32<block_q4_0, dequantize_q4_0>) kernel_out_prod_q4_0_f32;
+
+template [[host_name("kernel_out_prod_q4_0_f32")]]  kernel kernel_out_prod_q4_0_f32 kernel_out_prod_q_f32<block_q4_0, dequantize_q4_0>;
+template [[host_name("kernel_out_prod_q4_1_f32")]]  kernel kernel_out_prod_q4_0_f32 kernel_out_prod_q_f32<block_q4_1, dequantize_q4_1>;
+template [[host_name("kernel_out_prod_q8_0_f32")]]  kernel kernel_out_prod_q4_0_f32 kernel_out_prod_q_f32<block_q8_0, dequantize_q8_0>;
+template [[host_name("kernel_out_prod_mxfp4_f32")]] kernel kernel_out_prod_q4_0_f32 kernel_out_prod_q_f32<block_mxfp4, dequantize_mxfp4>;
 
 template <typename T>
 kernel void kernel_pad_impl(

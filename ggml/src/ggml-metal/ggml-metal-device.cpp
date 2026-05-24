@@ -2060,15 +2060,19 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_count_equal(ggml
 
 ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_out_prod(ggml_metal_library_t lib, const ggml_tensor *  op) {
     GGML_ASSERT(op->op == GGML_OP_OUT_PROD);
-    GGML_ASSERT(op->src[0]->type == GGML_TYPE_F32);
+    GGML_ASSERT(op->src[0]->type == GGML_TYPE_F32 ||
+                op->src[0]->type == GGML_TYPE_Q4_0 || op->src[0]->type == GGML_TYPE_Q4_1 ||
+                op->src[0]->type == GGML_TYPE_Q8_0 || op->src[0]->type == GGML_TYPE_MXFP4);
     GGML_ASSERT(op->src[1]->type == GGML_TYPE_F32);
+        
+    char base[256];
 
-    const char * name = "kernel_out_prod_f32";
+    snprintf(base, 256, "kernel_out_prod_%s_f32", ggml_type_name(op->src[0]->type));
 
-    ggml_metal_pipeline_with_params res = ggml_metal_library_get_pipeline(lib, name);
+    ggml_metal_pipeline_with_params res = ggml_metal_library_get_pipeline(lib, base);
 
     if (!res.pipeline) {
-        res = ggml_metal_library_compile_pipeline(lib, name, name, nullptr);
+        res = ggml_metal_library_compile_pipeline(lib, base, base, nullptr);
     }
 
     res.nsg = 1;
