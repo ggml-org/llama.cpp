@@ -57,7 +57,7 @@ env:
 jobs:
   determine-tag:
     name: Determine tag name
-    runs-on: ubuntu-slim
+    runs-on: [self-hosted, fast]
     outputs:
       tag_name: ${{ steps.tag.outputs.name }}
     steps:
@@ -86,7 +86,7 @@ jobs:
           HF_UI_VERSION: ${{ needs.determine-tag.outputs.tag_name }}
         run: |
           nvidia-smi
-          GG_BUILD_CUDA=1 bash ./ci/run.sh ~/results/llama.cpp /mnt/llama.cpp
+          GG_BUILD_CUDA=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
 
   ggml-ci-nvidia-vulkan-cm:
     needs: determine-tag
@@ -103,7 +103,7 @@ jobs:
           HF_UI_VERSION: ${{ needs.determine-tag.outputs.tag_name }}
         run: |
           vulkaninfo --summary
-          GG_BUILD_VULKAN=1 GGML_VK_DISABLE_COOPMAT2=1 bash ./ci/run.sh ~/results/llama.cpp /mnt/llama.cpp
+          GG_BUILD_VULKAN=1 GGML_VK_DISABLE_COOPMAT2=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
 
   ggml-ci-nvidia-vulkan-cm2:
     needs: determine-tag
@@ -120,10 +120,11 @@ jobs:
           HF_UI_VERSION: ${{ needs.determine-tag.outputs.tag_name }}
         run: |
           vulkaninfo --summary
-          GG_BUILD_VULKAN=1 bash ./ci/run.sh ~/results/llama.cpp /mnt/llama.cpp
+          GG_BUILD_VULKAN=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
 
   ggml-ci-nvidia-webgpu:
-    runs-on: [self-hosted, Linux, NVIDIA]
+    needs: determine-tag
+    runs-on: [self-hosted, Linux, NVIDIA, X64]
 
     steps:
       - name: Clone
@@ -149,10 +150,11 @@ jobs:
           GG_BUILD_WEBGPU=1 \
           GG_BUILD_WEBGPU_DAWN_PREFIX="$GITHUB_WORKSPACE/dawn" \
           GG_BUILD_WEBGPU_DAWN_DIR="$GITHUB_WORKSPACE/dawn/lib64/cmake/Dawn" \
-            bash ./ci/run.sh ~/results/llama.cpp /mnt/llama.cpp
+            bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
 
   # TODO: provision AMX-compatible machine
   #ggml-ci-cpu-amx:
+  #  needs: determine-tag
   #  runs-on: [self-hosted, Linux, CPU, AMX]
 
   #  steps:
@@ -163,10 +165,11 @@ jobs:
   #    - name: Test
   #      id: ggml-ci
   #      run: |
-  #        bash ./ci/run.sh ~/results/llama.cpp /mnt/llama.cpp
+  #        bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
 
   # TODO: provision AMD GPU machine
   # ggml-ci-amd-vulkan:
+  #   needs: determine-tag
   #   runs-on: [self-hosted, Linux, AMD]
 
   #   steps:
@@ -178,10 +181,11 @@ jobs:
   #       id: ggml-ci
   #       run: |
   #         vulkaninfo --summary
-  #         GG_BUILD_VULKAN=1 bash ./ci/run.sh ~/results/llama.cpp /mnt/llama.cpp
+  #         GG_BUILD_VULKAN=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
 
   # TODO: provision AMD GPU machine
   # ggml-ci-amd-rocm:
+  #   needs: determine-tag
   #   runs-on: [self-hosted, Linux, AMD]
 
   #   steps:
@@ -193,7 +197,7 @@ jobs:
   #       id: ggml-ci
   #       run: |
   #         amd-smi static
-  #         GG_BUILD_ROCM=1 GG_BUILD_AMDGPU_TARGETS="gfx1101" bash ./ci/run.sh ~/results/llama.cpp /mnt/llama.cpp
+  #         GG_BUILD_ROCM=1 GG_BUILD_AMDGPU_TARGETS="gfx1101" bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
 
   ggml-ci-mac-metal:
     needs: determine-tag
@@ -337,4 +341,66 @@ jobs:
           HF_UI_VERSION: ${{ needs.determine-tag.outputs.tag_name }}
         run: |
           source ./openvino_toolkit/setupvars.sh
-          GG_BUILD_OPENVINO=1 GGML_OPENVINO_DEVICE=GPU GG_BUILD_LOW_PERF=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
+          GG_BUILD_OPENVINO=1 GGML_OPENVINO_DEVICE=GPU GG_BUILD_LOW_PERF=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
+
+  ggml-ci-arm64-cpu-low-perf:
+    needs: determine-tag
+    runs-on: [self-hosted, Linux, ARM64]
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
+
+      - name: Test
+        id: ggml-ci
+        run: |
+          LLAMA_ARG_THREADS=$(nproc) GG_BUILD_LOW_PERF=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
+
+  ggml-ci-arm64-cpu-high-perf:
+    needs: determine-tag
+    runs-on: [self-hosted, Linux, ARM64]
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
+
+      - name: Test
+        id: ggml-ci
+        run: |
+          LLAMA_ARG_THREADS=$(nproc) GG_BUILD_HIGH_PERF=1 GG_BUILD_NO_SVE=1 GG_BUILD_NO_BF16=1 GG_BUILD_EXTRA_TESTS_0=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
+
+# TODO: not sure how to detect ARM flags on DGX Spark. currently get this error during cmake:
+#         CMake Warning at ggml/src/ggml-cpu/CMakeLists.txt:147 (message):
+#           ARM -march/-mcpu not found, -mcpu=native will be used
+#
+#       if we resolve this, we should be able to offload these jobs to the self-hosted runners
+#
+#  ggml-ci-arm64-cpu-high-perf-sve:
+#    needs: determine-tag
+#    runs-on: [self-hosted, Linux, NVIDIA, ARM64]
+#
+#    steps:
+#      - name: Clone
+#        id: checkout
+#        uses: actions/checkout@v6
+#
+#      - name: Test
+#        id: ggml-ci
+#        run: |
+#          LLAMA_ARG_THREADS=$(nproc) GG_BUILD_NO_BF16=1 GG_BUILD_EXTRA_TESTS_0=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
+#
+#  ggml-ci-arm64-cpu-kleidiai:
+#    needs: determine-tag
+#    runs-on: [self-hosted, Linux, NVIDIA, ARM64]
+#
+#    steps:
+#      - name: Clone
+#        id: checkout
+#        uses: actions/checkout@v6
+#
+#      - name: Test
+#        id: ggml-ci
+#        run: |
+#          GG_BUILD_KLEIDIAI=1 GG_BUILD_EXTRA_TESTS_0=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp

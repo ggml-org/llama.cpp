@@ -931,31 +931,32 @@ jobs:
         run: |
           LLAMA_ARG_THREADS=$(nproc) GG_BUILD_LOW_PERF=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
 
-  ggml-ci-arm64-cpu-low-perf:
-    runs-on: ubuntu-22.04-arm
-
-    steps:
-      - name: Clone
-        id: checkout
-        uses: actions/checkout@v6
-
-      - name: ccache
-        uses: ggml-org/ccache-action@v1.2.21
-        with:
-          key: ggml-ci-arm64-cpu-low-perf
-          evict-old-files: 1d
-          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
-
-      - name: Dependencies
-        id: depends
-        run: |
-          sudo apt-get update
-          sudo apt-get install build-essential
-
-      - name: Test
-        id: ggml-ci
-        run: |
-          LLAMA_ARG_THREADS=$(nproc) GG_BUILD_LOW_PERF=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
+# note: moved to build-self-hosted.yml - can remove from here when everything is stable
+#  ggml-ci-arm64-cpu-low-perf:
+#    runs-on: ubuntu-22.04-arm
+#
+#    steps:
+#      - name: Clone
+#        id: checkout
+#        uses: actions/checkout@v6
+#
+#      - name: ccache
+#        uses: ggml-org/ccache-action@v1.2.21
+#        with:
+#          key: ggml-ci-arm64-cpu-low-perf
+#          evict-old-files: 1d
+#          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+#
+#      - name: Dependencies
+#        id: depends
+#        run: |
+#          sudo apt-get update
+#          sudo apt-get install build-essential
+#
+#      - name: Test
+#        id: ggml-ci
+#        run: |
+#          LLAMA_ARG_THREADS=$(nproc) GG_BUILD_LOW_PERF=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
 
   ggml-ci-x64-cpu-high-perf:
     runs-on: ubuntu-22.04
@@ -983,31 +984,32 @@ jobs:
         run: |
           LLAMA_ARG_THREADS=$(nproc) GG_BUILD_HIGH_PERF=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
 
-  ggml-ci-arm64-cpu-high-perf:
-    runs-on: ubuntu-22.04-arm
-
-    steps:
-      - name: Clone
-        id: checkout
-        uses: actions/checkout@v6
-
-      - name: ccache
-        uses: ggml-org/ccache-action@v1.2.21
-        with:
-          key: ggml-ci-arm64-cpu-high-perf
-          evict-old-files: 1d
-          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
-
-      - name: Dependencies
-        id: depends
-        run: |
-          sudo apt-get update
-          sudo apt-get install build-essential
-
-      - name: Test
-        id: ggml-ci
-        run: |
-          LLAMA_ARG_THREADS=$(nproc) GG_BUILD_HIGH_PERF=1 GG_BUILD_NO_SVE=1 GG_BUILD_NO_BF16=1 GG_BUILD_EXTRA_TESTS_0=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
+# note: moved to build-self-hosted.yml - can remove from here when everything is stable
+#  ggml-ci-arm64-cpu-high-perf:
+#    runs-on: ubuntu-22.04-arm
+#
+#    steps:
+#      - name: Clone
+#        id: checkout
+#        uses: actions/checkout@v6
+#
+#      - name: ccache
+#        uses: ggml-org/ccache-action@v1.2.21
+#        with:
+#          key: ggml-ci-arm64-cpu-high-perf
+#          evict-old-files: 1d
+#          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+#
+#      - name: Dependencies
+#        id: depends
+#        run: |
+#          sudo apt-get update
+#          sudo apt-get install build-essential
+#
+#      - name: Test
+#        id: ggml-ci
+#        run: |
+#          LLAMA_ARG_THREADS=$(nproc) GG_BUILD_HIGH_PERF=1 GG_BUILD_NO_SVE=1 GG_BUILD_NO_BF16=1 GG_BUILD_EXTRA_TESTS_0=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
 
   ggml-ci-arm64-cpu-high-perf-sve:
     runs-on: ubuntu-22.04-arm
