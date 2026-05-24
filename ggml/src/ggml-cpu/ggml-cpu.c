@@ -5,6 +5,7 @@
 #include "ggml-backend.h"
 #include "traits.h"
 #include "ggml-cpu-impl.h"
+#include "ggml-cpu.h"
 #include "ggml-impl.h"
 #include "quants.h"
 #include "ggml-threading.h"
@@ -836,6 +837,84 @@ static void ggml_probe_ccd_topology(void) {
 #else
 static void ggml_probe_ccd_topology(void) {}
 #endif
+
+#if defined(__gnu_linux__)
+// Probe CCD pairs from sysfs. Groups CPUs by L3 cache domain,
+// then forms pairs from first and last CCDs for NUMA symmetry.
+// Returns number of pairs found (0 on non-Linux or when CCD topology not probed).
+int ggml_cpu_probe_ccd_pairs(struct ggml_cpu_ccd_pair pairs[], int max_pairs) {
+    if (!pairs || max_pairs < 1 || (int)g_state.ccd.n_ccds < 4) {
+        return 0;  // CCD topology not probed, or not enough CCDs
+    }
+
+    const struct ggml_ccd_topology * ccd = &g_state.ccd;
+
+    // Pair 0: first two CCDs (NUMA node 0)
+    pairs[0].ccd_indices[0] = 0;
+    pairs[0].ccd_indices[1] = 1;
+    pairs[0].thread_count = 0;
+    for (uint32_t t = 0; t < ccd->total_threads; t++) {
+        uint32_t cpu = ccd->ccd_threads[t];
+        uint32_t ccd_id = ccd->ccd_for_cpu[cpu];
+        if (ccd_id == 0 || ccd_id == 1) {
+            pairs[0].threads[pairs[0].thread_count++] = cpu;
+        }
+    }
+
+    // Pair 1: last two CCDs (NUMA node 1)
+    uint32_t ccd_max = ccd->n_ccds - 1;
+    pairs[1].ccd_indices[0] = (int)ccd_max - 1;
+    pairs[1].ccd_indices[1] = (int)ccd_max;
+    pairs[1].thread_count = 0;
+    for (uint32_t t = 0; t < ccd->total_threads; t++) {
+        uint32_t cpu = ccd->ccd_threads[t];
+        uint32_t ccd_id = ccd->ccd_for_cpu[cpu];
+        if (ccd_id == ccd_max - 1 || ccd_id == ccd_max) {
+            pairs[1].threads[pairs[1].thread_count++] = cpu;
+        }
+    }
+
+    return 2;
+}
+#else
+int ggml_cpu_probe_ccd_pairs(struct ggml_cpu_ccd_pair pairs[], int max_pairs) {
+    (void)pairs; (void)max_pairs;
+    return 0;
+}
+#endif
+
+// Initialize two threadpools with CCD pair affinity.
+// Returns number of pools initialized (0 or 2).
+// Each pool gets threads_per_pair threads from its CCD pair.
+int ggml_cpu_init_dual_threadpool(struct ggml_threadpool_params params_out[],
+                                   int count, int threads_per_pair,
+                                   enum ggml_sched_priority prio, uint32_t poll) {
+    struct ggml_cpu_ccd_pair pairs[GGML_NUMA_MAX_NODES];
+    int num_pairs = ggml_cpu_probe_ccd_pairs(pairs, GGML_NUMA_MAX_NODES);
+    if (num_pairs < 2 || count < 2 || !params_out) {
+        return 0;
+    }
+
+    for (int p = 0; p < 2; p++) {
+        memset(&params_out[p], 0, sizeof(struct ggml_threadpool_params));
+        int nt = threads_per_pair < (int)pairs[p].thread_count ? threads_per_pair : (int)pairs[p].thread_count;
+        params_out[p].n_threads = nt;
+        params_out[p].prio = prio;
+        params_out[p].poll = poll;
+        params_out[p].strict_cpu = true;
+        params_out[p].paused = false;
+
+        // Fill cpumask from the CCD pair's threads
+        for (int t = 0; t < nt && t < (int)pairs[p].thread_count; t++) {
+            uint32_t cpu = pairs[p].threads[t];
+            if (cpu < GGML_MAX_N_THREADS) {
+                params_out[p].cpumask[cpu] = true;
+            }
+        }
+    }
+
+    return 2;
+}
 
 void ggml_numa_init(enum ggml_numa_strategy numa_flag) {
     if (g_state.numa.n_nodes > 0) {

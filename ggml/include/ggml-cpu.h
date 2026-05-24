@@ -65,6 +65,23 @@ extern "C" {
     GGML_BACKEND_API void                          ggml_threadpool_print_timings (struct ggml_threadpool * threadpool);
     GGML_BACKEND_API void                          ggml_threadpool_reset_timings (struct ggml_threadpool * threadpool);
 
+    // Dual CCD threadpool support for pipelined prefill
+    #ifndef GGML_NUMA_MAX_CPUS
+    #define GGML_NUMA_MAX_CPUS 512
+    #define GGML_NUMA_MAX_NODES 8
+    #endif
+
+    struct ggml_cpu_ccd_pair {
+        int ccd_indices[2];
+        uint32_t threads[GGML_NUMA_MAX_CPUS];
+        uint32_t thread_count;
+    };
+
+    GGML_BACKEND_API int ggml_cpu_probe_ccd_pairs(struct ggml_cpu_ccd_pair pairs[], int max_pairs);
+    GGML_BACKEND_API int ggml_cpu_init_dual_threadpool(struct ggml_threadpool_params params_out[],
+                                                         int count, int threads_per_pair,
+                                                         enum ggml_sched_priority prio, uint32_t poll);
+
     // ggml_graph_plan() has to be called before ggml_graph_compute()
     // when plan.work_size > 0, caller must allocate memory for plan.work_data
     GGML_BACKEND_API struct ggml_cplan ggml_graph_plan(
