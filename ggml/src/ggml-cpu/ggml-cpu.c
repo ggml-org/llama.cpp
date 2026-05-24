@@ -582,8 +582,21 @@ struct ggml_numa_nodes {
 // ggml state
 //
 
+#if defined(__gnu_linux__)
+struct ggml_ccd_topology {
+    uint32_t n_ccds;
+    uint32_t ccd_threads[GGML_NUMA_MAX_CPUS];        // thread IDs, CCD-ordered, primaries first
+    uint32_t ccd_thread_count[GGML_NUMA_MAX_CPUS];   // thread count per CCD
+    uint32_t ccd_for_cpu[GGML_NUMA_MAX_CPUS];        // CPU -> CCD ID mapping
+    uint32_t total_threads;                          // total valid threads in ccd_threads[]
+};
+#endif
+
 struct ggml_state {
     struct ggml_numa_nodes numa;
+#if defined(__gnu_linux__)
+    struct ggml_ccd_topology ccd;
+#endif
 };
 
 static struct ggml_state g_state = {0};
@@ -710,6 +723,120 @@ static void ggml_cpu_set_numa_interleave(uint32_t n_nodes) {
 static void ggml_cpu_set_numa_interleave(uint32_t n_nodes) { UNUSED(n_nodes); }
 #endif
 
+#if defined(__gnu_linux__)
+static void ggml_probe_ccd_topology(void) {
+    char path[256];
+    char buf[256];
+    int rv;
+    uint32_t n_ccds = 0;
+    uint32_t c;
+
+    memset(g_state.ccd.ccd_for_cpu, 0xFF, sizeof(g_state.ccd.ccd_for_cpu));
+    g_state.ccd.n_ccds = 0;
+    g_state.ccd.total_threads = 0;
+
+    // Phase 1: read core_defaults for each CPU (L3 cache domain = CCD ID)
+    for (c = 0; c < g_state.numa.total_cpus; c++) {
+        rv = snprintf(path, sizeof(path),
+            "/sys/devices/system/cpu/cpu%u/topology/core_defaults", c);
+        GGML_ASSERT(rv > 0 && (unsigned)rv < sizeof(path));
+        FILE *f = fopen(path, "r");
+        if (!f) continue;
+        if (fgets(buf, sizeof(buf), f)) {
+            int ccd_id = atoi(buf);
+            if (ccd_id >= 0) {
+                g_state.ccd.ccd_for_cpu[c] = (uint32_t)ccd_id;
+                if ((uint32_t)(ccd_id + 1) > n_ccds) n_ccds = (uint32_t)(ccd_id + 1);
+            }
+        }
+        fclose(f);
+    }
+
+    if (n_ccds == 0) {
+        GGML_LOG_WARN("CCD: core_defaults not available, CCD affinity disabled\n");
+        return;
+    }
+    g_state.ccd.n_ccds = n_ccds;
+
+    // Phase 2: identify SMT siblings — read thread_siblings_list per CPU
+    // Mark the higher CPU ID in each sibling pair as a sibling (secondary)
+    bool is_sibling[GGML_NUMA_MAX_CPUS] = {false};
+
+    for (c = 0; c < g_state.numa.total_cpus; c++) {
+        rv = snprintf(path, sizeof(path),
+            "/sys/devices/system/cpu/cpu%u/topology/thread_siblings_list", c);
+        GGML_ASSERT(rv > 0 && (unsigned)rv < sizeof(path));
+        FILE *f = fopen(path, "r");
+        if (!f) continue;
+        if (fgets(buf, sizeof(buf), f)) {
+            // Format: "0,2" or "0-3" — parse individual IDs
+            char tmp[256];
+            strcpy(tmp, buf);
+            char *saveptr = NULL;
+            char *token = strtok_r(tmp, ",- ", &saveptr);
+            while (token) {
+                int sibling_id = atoi(token);
+                if (sibling_id > (int)c) {
+                    if ((uint32_t)sibling_id < GGML_NUMA_MAX_CPUS) {
+                        is_sibling[(uint32_t)sibling_id] = true;
+                    }
+                }
+                token = strtok_r(NULL, ",- ", &saveptr);
+            }
+        }
+        fclose(f);
+    }
+
+    // Phase 3: build ccd_threads array — primaries first, then siblings, grouped by CCD
+    {
+        uint32_t primary_count[GGML_NUMA_MAX_CPUS] = {0};
+        uint32_t sibling_count[GGML_NUMA_MAX_CPUS] = {0};
+        uint32_t ccd;
+
+        // Count primaries and siblings per CCD
+        for (c = 0; c < g_state.numa.total_cpus; c++) {
+            uint32_t ccd_id = g_state.ccd.ccd_for_cpu[c];
+            if (ccd_id >= n_ccds) continue;
+            if (is_sibling[c]) {
+                sibling_count[ccd_id]++;
+            } else {
+                primary_count[ccd_id]++;
+            }
+        }
+
+        // Fill array: all primaries CCD by CCD, then all siblings CCD by CCD
+        uint32_t idx = 0;
+        for (ccd = 0; ccd < n_ccds; ccd++) {
+            for (c = 0; c < g_state.numa.total_cpus; c++) {
+                if (g_state.ccd.ccd_for_cpu[c] == ccd && !is_sibling[c]) {
+                    g_state.ccd.ccd_threads[idx++] = c;
+                }
+            }
+        }
+        for (ccd = 0; ccd < n_ccds; ccd++) {
+            for (c = 0; c < g_state.numa.total_cpus; c++) {
+                if (g_state.ccd.ccd_for_cpu[c] == ccd && is_sibling[c]) {
+                    g_state.ccd.ccd_threads[idx++] = c;
+                }
+            }
+        }
+        g_state.ccd.total_threads = idx;
+
+        // Per-CCD thread counts
+        for (ccd = 0; ccd < n_ccds; ccd++) {
+            g_state.ccd.ccd_thread_count[ccd] = primary_count[ccd] + sibling_count[ccd];
+        }
+    }
+
+    GGML_LOG_INFO("CCD: detected %u CCDs, %u total threads (primaries first)\n", n_ccds, g_state.ccd.total_threads);
+    for (c = 0; c < n_ccds; c++) {
+        GGML_LOG_INFO("  CCD %u: %u threads\n", c, g_state.ccd.ccd_thread_count[c]);
+    }
+}
+#else
+static void ggml_probe_ccd_topology(void) {}
+#endif
+
 void ggml_numa_init(enum ggml_numa_strategy numa_flag) {
     if (g_state.numa.n_nodes > 0) {
         fprintf(stderr, "ggml_numa_init: NUMA already initialized\n");
@@ -785,6 +912,11 @@ void ggml_numa_init(enum ggml_numa_strategy numa_flag) {
     // Apply interleave policy if requested
     if (numa_flag == GGML_NUMA_STRATEGY_INTERLEAVE && g_state.numa.n_nodes > 1) {
         ggml_cpu_set_numa_interleave(g_state.numa.n_nodes);
+    }
+
+    // Probe CCD topology if CCD strategy is requested
+    if (numa_flag == GGML_NUMA_STRATEGY_CCD) {
+        ggml_probe_ccd_topology();
     }
 
     if (ggml_is_numa()) {
@@ -2208,7 +2340,7 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
 // Android's libc implementation "bionic" does not support setting affinity
 #if defined(__gnu_linux__)
 static void set_numa_thread_affinity(int thread_n) {
-    if (!ggml_is_numa()) {
+    if (!ggml_is_numa() && g_state.numa.numa_strategy != GGML_NUMA_STRATEGY_CCD) {
         return;
     }
 
@@ -2230,6 +2362,23 @@ static void set_numa_thread_affinity(int thread_n) {
             rv = pthread_setaffinity_np(pthread_self(), setsize, &g_state.numa.cpuset);
             if (rv) {
                 fprintf(stderr, "warning: pthread_setaffinity_np() failed: %s\n",strerror(rv));
+            }
+            return;
+        case GGML_NUMA_STRATEGY_CCD:
+            {
+                cpu_set_t * ccd_cpus;
+                if (g_state.ccd.n_ccds == 0 || (uint32_t)thread_n >= g_state.ccd.total_threads) {
+                    return;  // no CCD data or thread out of range
+                }
+                uint32_t target_cpu = g_state.ccd.ccd_threads[(uint32_t)thread_n];
+                ccd_cpus = CPU_ALLOC(g_state.numa.total_cpus);
+                CPU_ZERO_S(setsize, ccd_cpus);
+                CPU_SET_S(target_cpu, setsize, ccd_cpus);
+                rv = pthread_setaffinity_np(pthread_self(), setsize, ccd_cpus);
+                if (rv) {
+                    fprintf(stderr, "warning: pthread_setaffinity_np(CCD) failed: %s\n", strerror(rv));
+                }
+                CPU_FREE(ccd_cpus);
             }
             return;
         default:
