@@ -1,0 +1,22 @@
+# HRM-Text architecture patch placeholder
+
+This file contains a placeholder description and instructions for applying the HRM Text architecture patch to llama.cpp. The full patch adds a new `hrm_text` architecture with a hierarchical recurrent graph and causal generation support.
+
+The complete patch is available in the HRM Text 1B GGUF repository at:
+https://huggingface.co/sinimiini/HRM-Text-1B-GGUF/blob/main/runtime/llama.cpp-hrm_text.patch
+
+It was created against ggml‑org/llama.cpp commit 6a257d44633d4a752183ed778b88d2924d0a6b9d. The patch implements:
+
+- new GGUF constants and tensor mapping for `hrm_text`
+- architecture registration (`LLM_ARCH_HRM_TEXT`) and hyperparameter loading
+- a graph builder with hierarchical recurrent loops for the H and L decoder stacks
+- helpers for GGUF conversion and validation
+
+To apply the patch:
+
+```
+# from the llama.cpp repo root
+git apply runtime/llama.cpp-hrm_text.patch
+```
+
+This PR includes this placeholder file as part of the upstream discussion. A follow up PR should include the actual code changes or merge the patch contents directly.
