@@ -298,7 +298,7 @@ jobs:
           GG_BUILD_OPENVINO=1 GGML_OPENVINO_DEVICE=GPU GG_BUILD_LOW_PERF=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
 
   ggml-ci-arm64-cpu-low-perf:
-    runs-on: [self-hosted, Linux, ARM64]
+    runs-on: [self-hosted, Linux, ARM64, CPU]
 
     steps:
       - name: Clone
@@ -311,7 +311,7 @@ jobs:
           LLAMA_ARG_THREADS=$(nproc) GG_BUILD_LOW_PERF=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
 
   ggml-ci-arm64-cpu-high-perf:
-    runs-on: [self-hosted, Linux, ARM64]
+    runs-on: [self-hosted, Linux, ARM64, CPU]
 
     steps:
       - name: Clone
@@ -330,7 +330,7 @@ jobs:
 #       if we resolve this, we should be able to offload these jobs to the self-hosted runners
 #
 #  ggml-ci-arm64-cpu-high-perf-sve:
-#    runs-on: [self-hosted, Linux, NVIDIA, ARM64]
+#    runs-on: [self-hosted, Linux, ARM64, CPU]
 #
 #    steps:
 #      - name: Clone
@@ -343,7 +343,7 @@ jobs:
 #          LLAMA_ARG_THREADS=$(nproc) GG_BUILD_NO_BF16=1 GG_BUILD_EXTRA_TESTS_0=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
 #
 #  ggml-ci-arm64-cpu-kleidiai:
-#    runs-on: [self-hosted, Linux, NVIDIA, ARM64]
+#    runs-on: [self-hosted, Linux, ARM64, CPU]
 #
 #    steps:
 #      - name: Clone
