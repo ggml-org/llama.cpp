@@ -36,6 +36,23 @@ static std::string_view trim(std::string_view sv) {
     return trim_trailing_space(trim_leading_space(sv, 1));
 }
 
+// Strip at most one bounding formatting newline (handles both \n and \r\n)
+static std::string_view trim_bounding_newlines(std::string_view sv) {
+    if (sv.size() >= 2 && sv[0] == '\r' && sv[1] == '\n') {
+        sv.remove_prefix(2);
+    } else if (sv.size() >= 1 && sv[0] == '\n') {
+        sv.remove_prefix(1);
+    }
+
+    if (sv.size() >= 2 && sv[sv.size() - 2] == '\r' && sv.back() == '\n') {
+        sv.remove_suffix(2);
+    } else if (sv.size() >= 1 && sv.back() == '\n') {
+        sv.remove_suffix(1);
+    }
+
+    return sv;
+}
+
 // Count the number of unclosed '{' braces in a JSON-like string,
 // properly skipping braces inside quoted strings.
 static int json_brace_depth(const std::string & s) {
@@ -338,7 +355,7 @@ void common_chat_peg_mapper::map(const common_peg_ast_node & node) {
     }
 
     if ((is_arg_value || is_arg_string_value) && current_tool) {
-        std::string value_content = std::string(trim_trailing_space(trim_leading_space(node.text, 1), 1));
+        std::string value_content = std::string(trim_bounding_newlines(node.text));
 
         std::string value_to_add;
         if (value_content.empty() && is_arg_string_value) {
