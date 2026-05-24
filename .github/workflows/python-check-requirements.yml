@@ -28,6 +28,6 @@ jobs:
       - name: Set up Python environment
         uses: actions/setup-python@v6
         with:
-          python-version: "3.13"
+          python-version: "3.11"
       - name: Run check-requirements.sh script
         run:  bash scripts/check-requirements.sh
