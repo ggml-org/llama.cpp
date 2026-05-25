@@ -1,8 +1,4 @@
-name: CI (UI, self-hosted)
-
-# these are the same as ui-ci.yml, but with self-hosted runners
-# the runners come with pre-installed Playwright browsers version: 1.56.1
-# the jobs are much lighter because they don't need to install node and playwright browsers
+name: UI
 
 on:
   workflow_dispatch:
@@ -15,7 +11,7 @@ on:
     branches:
       - master
     paths: [
-      '.github/workflows/ui-ci-self-hosted.yml',
+      '.github/workflows/ui.yml',
       '.github/workflows/ui-build.yml',
       'tools/ui/**.*',
       'tools/server/tests/**.*'
@@ -23,7 +19,7 @@ on:
   pull_request:
     types: [opened, synchronize, reopened]
     paths: [
-      '.github/workflows/ui-ci-self-hosted.yml',
+      '.github/workflows/ui.yml',
       '.github/workflows/ui-build.yml',
       'tools/ui/**.*',
       'tools/server/tests/**.*'
@@ -45,9 +41,9 @@ jobs:
     uses: ./.github/workflows/ui-build.yml
 
   ui-checks:
-    name: UI Checks
+    name: Checks
     needs: ui-build
-    runs-on: [self-hosted, PLAYWRIGHT]
+    runs-on: ubuntu-latest
     continue-on-error: true
     steps:
       - name: Checkout code
@@ -56,8 +52,17 @@ jobs:
           fetch-depth: 0
           ref: ${{ github.event.inputs.sha || github.event.pull_request.head.sha || github.sha || github.head_ref || github.ref_name }}
 
+      - name: Setup Node.js
+        id: node
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: "npm"
+          cache-dependency-path: "tools/ui/package-lock.json"
+
       - name: Install dependencies
         id: setup
+        if: ${{ steps.node.conclusion == 'success' }}
         run: npm ci
         working-directory: tools/ui
 
@@ -71,20 +76,26 @@ jobs:
         run: npm run lint
         working-directory: tools/ui
 
+      - name: Install Playwright browsers
+        id: playwright
+        if: ${{ always() && steps.setup.conclusion == 'success' }}
+        run: npx playwright install --with-deps
+        working-directory: tools/ui
+
       - name: Run Client tests
-        if: ${{ always() }}
+        if: ${{ always() && steps.playwright.conclusion == 'success' }}
         run: npm run test:client
         working-directory: tools/ui
 
       - name: Run Unit tests
-        if: ${{ always() }}
+        if: ${{ always() && steps.playwright.conclusion == 'success' }}
         run: npm run test:unit
         working-directory: tools/ui
 
   e2e-tests:
     name: E2E Tests
     needs: ui-build
-    runs-on: [self-hosted, PLAYWRIGHT]
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
@@ -92,8 +103,17 @@ jobs:
           fetch-depth: 0
           ref: ${{ github.event.inputs.sha || github.event.pull_request.head.sha || github.sha || github.head_ref || github.ref_name }}
 
+      - name: Setup Node.js
+        id: node
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: "npm"
+          cache-dependency-path: "tools/ui/package-lock.json"
+
       - name: Install dependencies
         id: setup
+        if: ${{ steps.node.conclusion == 'success' }}
         run: npm ci
         working-directory: tools/ui
 
@@ -102,17 +122,23 @@ jobs:
         run: npm run build
         working-directory: tools/ui
 
+      - name: Install Playwright browsers
+        id: playwright
+        if: ${{ always() && steps.setup.conclusion == 'success' }}
+        run: npx playwright install --with-deps
+        working-directory: tools/ui
+
       - name: Build Storybook
-        if: ${{ always() }}
+        if: ${{ always() && steps.playwright.conclusion == 'success' }}
         run: npm run build-storybook
         working-directory: tools/ui
 
       - name: Run UI tests
-        if: ${{ always() }}
+        if: ${{ always() && steps.playwright.conclusion == 'success' }}
         run: npm run test:ui -- --testTimeout=60000
         working-directory: tools/ui
 
       - name: Run E2E tests
-        if: ${{ always() }}
+        if: ${{ always() && steps.playwright.conclusion == 'success' }}
         run: npm run test:e2e
         working-directory: tools/ui
