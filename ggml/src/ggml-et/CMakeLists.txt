@@ -93,8 +93,8 @@ set(UBERKERNEL_SUPPORTED_KERNELS
     cumsum_f32
     diag_f32
     # fill_f32         # gemma4: MoE fill
-    # flash_attn_ext_f16_me  # gemma4
-    # flash_attn_ext_f32     # gemma4
+    flash_attn_ext_f16_me  # gemma4
+    flash_attn_ext_f32     # gemma4
     gated_delta_net_f32
     glu_f32          # gemma4: geglu
     group_norm_f32
