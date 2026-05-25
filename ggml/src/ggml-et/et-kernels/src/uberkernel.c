@@ -479,10 +479,10 @@ int entry_point(struct ggml_et_uberkernel_params * params, void * env) {
             }
 
             // fill: no input to evict (writes dst from scalar constant)
-            // case GGML_ET_UBERKERNEL_KERNEL_FILL_F32: { // gemma4: MoE fill
-            //     rc = fill_f32_entry((struct ggml_et_fill_params *) inst_params, env);
-            //     break;
-            // }
+            case GGML_ET_UBERKERNEL_KERNEL_FILL_F32: { // gemma4: MoE fill
+                rc = fill_f32_entry((struct ggml_et_fill_params *) inst_params, env);
+                break;
+            }
             // set: src1 written into dst view — evict src1
             case GGML_ET_UBERKERNEL_KERNEL_SET_F32: {
                 struct uber_get_rows_params *p = (struct uber_get_rows_params *) inst_params;
