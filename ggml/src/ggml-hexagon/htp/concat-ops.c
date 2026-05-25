@@ -67,13 +67,12 @@ static void concat_2d_f32_transposed(unsigned int nth, unsigned int ith, void * 
         HVX_Vector * vtcm_tmp = (HVX_Vector *)(spad1_base + src1_ne0_padded * spad1_stride);
 
         for (uint32_t j = 0; j < src1_ne0_padded; j += 32) {
-            #pragma unroll(2)
+            #pragma unroll(4)
             for (uint32_t ii = 0; ii < current_block_i; ii++) {
                 size_t rt = (size_t)(spad1_base + j * spad1_stride + ii * sizeof(float));
-                Q6_vgather_ARMVw(vtcm_tmp, rt, mu, vv);
-                HVX_Vector v = *vtcm_tmp;
+                Q6_vgather_ARMVw(&vtcm_tmp[ii], rt, mu, vv);
                 uint8_t * dst_ptr = spad0_base + ii * spad0_row_bytes + (src0_ne0 + j) * sizeof(float);
-                hvx_vmemu(dst_ptr) = v;
+                hvx_vmemu(dst_ptr) = vtcm_tmp[ii];
             }
         }
 
@@ -135,13 +134,12 @@ static void concat_2d_f16_transposed(unsigned int nth, unsigned int ith, void * 
         HVX_Vector * vtcm_tmp = (HVX_Vector *)(spad1_base + src1_ne0_padded * spad1_stride);
 
         for (uint32_t j = 0; j < src1_ne0_padded; j += 64) {
-            #pragma unroll(2)
+            #pragma unroll(4)
             for (uint32_t ii = 0; ii < current_block_i; ii++) {
                 size_t rt = (size_t)(spad1_base + j * spad1_stride + ii * sizeof(__fp16));
-                Q6_vgather_ARMVh(vtcm_tmp, rt, mu, vv);
-                HVX_Vector v = *vtcm_tmp;
+                Q6_vgather_ARMVh(&vtcm_tmp[ii], rt, mu, vv);
                 uint8_t * dst_ptr = spad0_base + ii * spad0_row_bytes + (src0_ne0 + j) * sizeof(__fp16);
-                hvx_vmemu(dst_ptr) = v;
+                hvx_vmemu(dst_ptr) = vtcm_tmp[ii];
             }
         }
 
@@ -249,7 +247,7 @@ int op_concat(struct htp_ops_context * octx) {
         uint32_t spad0_row_bytes = hex_round_up((src0->ne[0] + src1_ne0_padded) * type_size, VLEN);
 
         octx->src0_spad.size_per_thread = block_i * spad0_row_bytes;
-        octx->src1_spad.size_per_thread = src1_ne0_padded * spad1_stride + VLEN;
+        octx->src1_spad.size_per_thread = src1_ne0_padded * spad1_stride + block_i * VLEN;
 
         octx->src0_spad.size = n_threads * octx->src0_spad.size_per_thread;
         octx->src1_spad.size = n_threads * octx->src1_spad.size_per_thread;
