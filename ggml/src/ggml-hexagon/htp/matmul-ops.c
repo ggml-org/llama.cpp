@@ -3470,7 +3470,7 @@ int op_matmul(struct htp_ops_context * octx) {
     // HMX supports F16, Q4_0, Q8_0, IQ4_NL, MXFP4 weights.
     // Other types fall back to HVX.
     uint32_t wtype = src0->type;
-    if (wtype != HTP_TYPE_F16 && wtype != HTP_TYPE_Q4_0 && wtype != HTP_TYPE_Q8_0 && wtype != HTP_TYPE_IQ4_NL && wtype != HTP_TYPE_MXFP4) {
+    if (wtype != HTP_TYPE_F16 && wtype != HTP_TYPE_Q4_0 && wtype != HTP_TYPE_Q4_1 && wtype != HTP_TYPE_Q8_0 && wtype != HTP_TYPE_IQ4_NL && wtype != HTP_TYPE_MXFP4) {
         return op_matmul_hvx(octx);
     }
 
