@@ -25,13 +25,12 @@
 	name="ForkIconSingleTabStop"
 	args={{ conversation: mockForkedConversation, depth: 1 }}
 	play={async ({ canvas, userEvent }) => {
+		const row = await canvas.findByRole('button', { name: /Forked Conversation/ });
 		const forkIcon = await canvas.findByRole('link');
 
-		forkIcon.focus();
-		await expect(forkIcon).toHaveFocus();
-
+		row.focus();
 		await userEvent.tab();
 
-		await expect(forkIcon).not.toHaveFocus();
+		await expect(forkIcon).toHaveFocus();
 	}}
 />

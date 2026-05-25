@@ -15,16 +15,20 @@
 </script>
 
 <Story
+	asChild
 	name="SingleTabStop"
-	args={{ icon: Copy, tooltip: 'Copy', onclick: () => {} }}
 	play={async ({ canvas, userEvent }) => {
-		const button = await canvas.findByRole('button', { name: 'Copy' });
+		const before = await canvas.findByRole('button', { name: 'before' });
+		const target = await canvas.findByRole('button', { name: 'Copy' });
 
-		button.focus();
-		await expect(button).toHaveFocus();
-
+		before.focus();
 		await userEvent.tab();
 
-		await expect(button).not.toHaveFocus();
+		await expect(target).toHaveFocus();
 	}}
-/>
+>
+	<div>
+		<button type="button">before</button>
+		<ActionIcon icon={Copy} tooltip="Copy" onclick={() => {}} />
+	</div>
+</Story>
