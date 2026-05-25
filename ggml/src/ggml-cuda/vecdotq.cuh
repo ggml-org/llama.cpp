@@ -1127,7 +1127,7 @@ static __device__ __forceinline__ float vec_dot_q4_K_q8_1_x4(
 
     // Packed Q4 values for this 64-element chunk.
     // v_lo contains the first 32 Q4 values.
-    // v_hi contains the second 32 Q4 values.    
+    // v_hi contains the second 32 Q4 values.
     uint4 v_lo;
     uint4 v_hi;
     // For each Q4 subblock, load low and high halves of Q8 data.
@@ -1175,7 +1175,7 @@ static __device__ __forceinline__ float vec_dot_q4_K_q8_1_x4(
 #pragma unroll
     // Loop through Q4 blocks (typically 2).
     for (int i = 0; i < QR4_K; ++i) {
-        
+    
         //subblock index inside the Q4_K block.
         const int subblock = subblock0 + i;
 
