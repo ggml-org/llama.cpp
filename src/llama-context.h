@@ -329,6 +329,7 @@ private:
 
     // Pipelined prefill scheduler (optional, created when cparams.pipeline_depth > 0)
     ggml_backend_sched_pipelined_t sched_pipeline = nullptr;
+    bool sched_pipeline_init_attempted = false;
 
     bool sched_need_reserve = true;
 
