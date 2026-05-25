@@ -81,7 +81,7 @@ set(KERNELS
 )
 
 set(UBERKERNEL_SUPPORTED_KERNELS
-    # el_map_f32       # gemma4
+    el_map_f32       # gemma4
     # unary_f32        # gemma4: tanh (logit softcapping)
 
     # cpy_f32_f16

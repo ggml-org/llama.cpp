@@ -344,11 +344,11 @@ int entry_point(struct ggml_et_uberkernel_params * params, void * env) {
 
         switch (inst->kernel_id) {
     
-            // case GGML_ET_UBERKERNEL_KERNEL_EL_MAP_F32: { // gemma4
-            //     struct ggml_et_binary_params *p = (struct ggml_et_binary_params *) inst_params;
-            //     rc = el_map_f32_entry(p, env);
-            //     break;
-            // }
+            case GGML_ET_UBERKERNEL_KERNEL_EL_MAP_F32: { // gemma4
+                struct ggml_et_binary_params *p = (struct ggml_et_binary_params *) inst_params;
+                rc = el_map_f32_entry(p, env);
+                break;
+            }
 
             // case GGML_ET_UBERKERNEL_KERNEL_UNARY_F32: { // gemma4: tanh (logit softcapping)
             //     struct uber_unary_params *p = (struct uber_unary_params *) inst_params;
