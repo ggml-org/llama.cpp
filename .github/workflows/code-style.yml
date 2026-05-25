@@ -15,7 +15,7 @@ concurrency:
 
 jobs:
   model-naming:
-    runs-on: [self-hosted, fast, ARM64]
+    runs-on: [self-hosted, fast]
     steps:
       - uses: actions/checkout@v6
       - name: Check model naming conventions

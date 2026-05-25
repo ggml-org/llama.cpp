@@ -5,8 +5,7 @@ on:
 
 jobs:
   build:
-    name: Build static output
-    runs-on: [self-hosted, fast, ARM64]
+    runs-on: [self-hosted, fast]
     env:
       BRANCH_NAME: ${{ github.head_ref || github.ref_name }}
 

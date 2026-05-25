@@ -21,7 +21,7 @@ concurrency:
 
 jobs:
   flake8-lint:
-    runs-on: [self-hosted, fast, ARM64]
+    runs-on: [self-hosted, fast]
     name: Lint
     steps:
       - name: Check out source repository

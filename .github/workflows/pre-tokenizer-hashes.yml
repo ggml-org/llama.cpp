@@ -12,7 +12,7 @@ on:
 
 jobs:
     pre-tokenizer-hashes:
-        runs-on: [self-hosted, fast, ARM64]
+        runs-on: [self-hosted, fast]
 
         steps:
         - name: Checkout repository

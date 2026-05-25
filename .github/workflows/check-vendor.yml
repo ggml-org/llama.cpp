@@ -19,7 +19,7 @@ on:
 
 jobs:
   check-vendor:
-    runs-on: [self-hosted, fast, ARM64]
+    runs-on: [self-hosted, fast]
 
     steps:
       - name: Checkout
