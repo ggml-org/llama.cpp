@@ -350,11 +350,11 @@ int entry_point(struct ggml_et_uberkernel_params * params, void * env) {
                 break;
             }
 
-            // case GGML_ET_UBERKERNEL_KERNEL_UNARY_F32: { // gemma4: tanh (logit softcapping)
-            //     struct uber_unary_params *p = (struct uber_unary_params *) inst_params;
-            //     rc = unary_f32_entry((struct ggml_et_unary_params *) inst_params, env);
-            //     break;
-            // }
+            case GGML_ET_UBERKERNEL_KERNEL_UNARY_F32: { // gemma4: tanh (logit softcapping)
+                struct uber_unary_params *p = (struct uber_unary_params *) inst_params;
+                rc = unary_f32_entry((struct ggml_et_unary_params *) inst_params, env);
+                break;
+            }
 
             // case GGML_ET_UBERKERNEL_KERNEL_CPY_F32_F16: {
             //     struct uber_unary_params *p = (struct uber_unary_params *) inst_params;
@@ -394,12 +394,13 @@ int entry_point(struct ggml_et_uberkernel_params * params, void * env) {
                 rc = rms_norm_f32_entry((struct ggml_et_rms_norm_params *) inst_params, env);
                 break;
             }
-            // case GGML_ET_UBERKERNEL_KERNEL_RMS_NORM_MUL_F32: { // gemma4 -- BREAKS OUTPUT
-            //     struct uber_rms_norm_mul_params *p = (struct uber_rms_norm_mul_params *) inst_params;
-            //     evict_region_past_l2(p->src0.data, tensor_bytes(&p->src0));
-            //     rc = rms_norm_mul_f32_entry((struct ggml_et_rms_norm_mul_params *) inst_params, env);
-            //     break;
-            // }
+            case GGML_ET_UBERKERNEL_KERNEL_RMS_NORM_MUL_F32: { // gemma4 -- BREAKS OUTPUT
+                struct uber_rms_norm_mul_params *p = (struct uber_rms_norm_mul_params *) inst_params;
+                evict_region_past_l2(p->src0.data, tensor_bytes(&p->src0));
+                evict_region_past_l2(p->src1.data, tensor_bytes(&p->src1));
+                rc = rms_norm_mul_f32_entry((struct ggml_et_rms_norm_mul_params *) inst_params, env);
+                break;
+            }
 
             case GGML_ET_UBERKERNEL_KERNEL_SOFTMAX_F32: { // gemma4
                 struct uber_softmax_params *p = (struct uber_softmax_params *) inst_params;
@@ -407,14 +408,14 @@ int entry_point(struct ggml_et_uberkernel_params * params, void * env) {
                 break;
             }
 
-            // case GGML_ET_UBERKERNEL_KERNEL_SET_ROWS_F32: {
-            //     struct uber_set_rows_params *p = (struct uber_set_rows_params *) inst_params;
-            //     evict_region_past_l2(p->src0.data, tensor_bytes(&p->src0));
-            //     // evict_region_past_l2_local(p->src1.data, tensor_bytes(&p->src1));
-            //     rc = set_rows_f32_impl((struct uber_set_rows_params *) inst_params, env);
-            //     // rc = set_rows_f32_entry((struct ggml_et_set_rows_params *) inst_params, env);
-            //     break;
-            // }
+            case GGML_ET_UBERKERNEL_KERNEL_SET_ROWS_F32: {
+                struct uber_set_rows_params *p = (struct uber_set_rows_params *) inst_params;
+                evict_region_past_l2(p->src0.data, tensor_bytes(&p->src0));
+                // evict_region_past_l2_local(p->src1.data, tensor_bytes(&p->src1));
+                rc = set_rows_f32_impl((struct uber_set_rows_params *) inst_params, env);
+                // rc = set_rows_f32_entry((struct ggml_et_set_rows_params *) inst_params, env);
+                break;
+            }
 
             // Single-source ops (src0 → dst)
             case GGML_ET_UBERKERNEL_KERNEL_SQR_F32: {
