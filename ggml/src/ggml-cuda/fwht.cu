@@ -1,7 +1,7 @@
 #include "common.cuh"
 #include "fwht.cuh"
 
-template <size_t N> __global__ void fwht_cuda(const float * src, float * dst, const int64_t n_rows, const float scale) {
+template <int N> __launch_bounds__(4*WARP_SIZE, 1) __global__ void fwht_cuda(const float * src, float * dst, const int64_t n_rows, const float scale) {
     const int64_t r = (int64_t) blockIdx.x * blockDim.y + threadIdx.y;
 
     if (r >= n_rows) {
@@ -11,15 +11,16 @@ template <size_t N> __global__ void fwht_cuda(const float * src, float * dst, co
     src += r * N;
     dst += r * N;
 
-    static constexpr size_t el_w = N / WARP_SIZE;
-    float                   reg[el_w];
-    const int               lane = threadIdx.x;
+    static constexpr int el_w = N / WARP_SIZE;
+    float     reg[el_w];
+    const int lane = threadIdx.x;
 
 #pragma unroll
     for (int i = 0; i < el_w; ++i) {
         reg[i] = src[i * WARP_SIZE + lane] * scale;
     }
 
+#pragma unroll
     for (int h = 1; h < WARP_SIZE; h *= 2) {
 #pragma unroll
         for (int j = 0; j < el_w; j++) {
@@ -30,9 +31,12 @@ template <size_t N> __global__ void fwht_cuda(const float * src, float * dst, co
         }
     }
 
+#pragma unroll
     for (int h = WARP_SIZE; h < N; h *= 2) {
         const int step = h / WARP_SIZE;
+#pragma unroll
         for (int j = 0; j < el_w; j += 2 * step) {
+#pragma unroll
             for (int k = 0; k < step; k++) {
                 const float x = reg[j + k];
                 const float y = reg[j + k + step];
