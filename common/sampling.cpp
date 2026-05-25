@@ -193,13 +193,13 @@ std::string common_params_sampling::print() const {
 //  ENGINE - SAFETY GUARD CLAUSES (SAMPLING SANITIZATION)
 void common_params_sampling_validate(struct common_params_sampling & params) {  
     if (params.mirostat == 1 || params.mirostat == 2) {
-        if (params.mirostat_ent <= 0.0f) {
-            std::fprintf(stderr, "%s: warning: 'mirostat_ent' deve ser positivo (recebido %.2f). Resetando para o padrão (5.0).\n", __func__, params.mirostat_ent);
-            params.mirostat_ent = 5.0f;
+        if (params.mirostat_tau < 0.0f) {
+            std::fprintf(stderr, "%s: warning: 'mirostat_tau' deve ser positivo (recebido %.2f). Resetando para o padrão (5.0).\n", __func__, params.mirostat_tau);
+            params.mirostat_tau = 5.0f;
         }
-        if (params.mirostat_lr <= 0.0f) {
-            std::fprintf(stderr, "%s: warning: 'mirostat_lr' deve ser positivo (recebido %.2f). Resetando para o padrão (0.1).\n", __func__, params.mirostat_lr);
-            params.mirostat_lr = 0.1f;
+        if (params.mirostat_eta < 0.0f) {
+            std::fprintf(stderr, "%s: warning: 'mirostat_eta' deve ser positivo (recebido %.2f). Resetando para o padrão (0.1).\n", __func__, params.mirostat_eta);
+            params.mirostat_eta = 0.1f;
         }
     }
     if (params.penalty_last_n < -1) {
