@@ -6,6 +6,7 @@
 include(CMakeFindDependencyMacro)
 find_dependency(Threads)
 if (NOT GGML_SHARED_LIB)
+    set(GGML_BASE_INTERFACE_LINK_LIBRARIES "")
     set(GGML_CPU_INTERFACE_LINK_LIBRARIES "")
     set(GGML_CPU_INTERFACE_LINK_OPTIONS   "")
 
@@ -20,7 +21,15 @@ if (NOT GGML_SHARED_LIB)
 
     if (GGML_OPENMP_ENABLED)
         find_dependency(OpenMP)
-        list(APPEND GGML_CPU_INTERFACE_LINK_LIBRARIES OpenMP::OpenMP_C OpenMP::OpenMP_CXX)
+        set(GGML_OPENMP_INTERFACE_LINK_LIBRARIES "")
+        if (TARGET OpenMP::OpenMP_C)
+            list(APPEND GGML_OPENMP_INTERFACE_LINK_LIBRARIES OpenMP::OpenMP_C)
+        endif()
+        if (TARGET OpenMP::OpenMP_CXX)
+            list(APPEND GGML_OPENMP_INTERFACE_LINK_LIBRARIES OpenMP::OpenMP_CXX)
+        endif()
+        list(APPEND GGML_BASE_INTERFACE_LINK_LIBRARIES ${GGML_OPENMP_INTERFACE_LINK_LIBRARIES})
+        list(APPEND GGML_CPU_INTERFACE_LINK_LIBRARIES ${GGML_OPENMP_INTERFACE_LINK_LIBRARIES})
     endif()
 
     if (GGML_CPU_HBM)
@@ -122,7 +131,8 @@ if(NOT TARGET ggml::ggml)
     add_library(ggml::ggml-base UNKNOWN IMPORTED)
     set_target_properties(ggml::ggml-base
         PROPERTIES
-            IMPORTED_LOCATION "${GGML_BASE_LIBRARY}")
+            IMPORTED_LOCATION "${GGML_BASE_LIBRARY}"
+            INTERFACE_LINK_LIBRARIES "${GGML_BASE_INTERFACE_LINK_LIBRARIES}")
 
     set(_ggml_all_targets "")
     if (NOT GGML_BACKEND_DL)
