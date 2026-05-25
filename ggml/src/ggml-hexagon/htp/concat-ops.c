@@ -67,6 +67,7 @@ static void concat_2d_f32_transposed(unsigned int nth, unsigned int ith, void * 
         HVX_Vector * vtcm_tmp = (HVX_Vector *)(spad1_base + src1_ne0_padded * spad1_stride);
 
         for (uint32_t j = 0; j < src1_ne0_padded; j += 32) {
+            #pragma unroll(2)
             for (uint32_t ii = 0; ii < current_block_i; ii++) {
                 size_t rt = (size_t)(spad1_base + j * spad1_stride + ii * sizeof(float));
                 Q6_vgather_ARMVw(vtcm_tmp, rt, mu, vv);
@@ -134,6 +135,7 @@ static void concat_2d_f16_transposed(unsigned int nth, unsigned int ith, void * 
         HVX_Vector * vtcm_tmp = (HVX_Vector *)(spad1_base + src1_ne0_padded * spad1_stride);
 
         for (uint32_t j = 0; j < src1_ne0_padded; j += 64) {
+            #pragma unroll(2)
             for (uint32_t ii = 0; ii < current_block_i; ii++) {
                 size_t rt = (size_t)(spad1_base + j * spad1_stride + ii * sizeof(__fp16));
                 Q6_vgather_ARMVh(vtcm_tmp, rt, mu, vv);
