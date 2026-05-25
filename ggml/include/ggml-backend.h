@@ -221,6 +221,8 @@ extern "C" {
         const char * value;
     };
     typedef struct ggml_backend_feature * (*ggml_backend_get_features_t)(ggml_backend_reg_t reg);
+    // Per-device attributes (e.g. CUDA compute capability, ROCm gfx target). NULL-terminated, or NULL.
+    typedef struct ggml_backend_feature * (*ggml_backend_dev_get_attributes_t)(ggml_backend_dev_t device);
 
     //
     // Backend registry

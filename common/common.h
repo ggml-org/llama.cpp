@@ -527,6 +527,8 @@ struct common_params {
 
     bool usage             = false; // print usage
     bool completion        = false; // print source-able completion script
+    bool list_devices      = false; // print list of available devices and exit
+    std::string list_devices_format = "text"; // text or json
     bool use_color         = false; // use color to distinguish generations and inputs
     bool special           = false; // enable special token output
     bool interactive       = false; // interactive mode

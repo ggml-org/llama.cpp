@@ -589,6 +589,10 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
     // parse the first time to get -hf option (used for remote preset)
     parse_cli_args();
 
+    if (params.list_devices) {
+        return true;
+    }
+
     // export_graph_ops loads only metadata
     const bool skip_model_download = ctx_arg.ex == LLAMA_EXAMPLE_EXPORT_GRAPH_OPS;
 
@@ -861,6 +865,98 @@ static void add_rpc_devices(const std::string & servers) {
     }
 }
 
+static void common_params_print_list_devices(const std::string & format) {
+    ggml_backend_load_all();
+
+    if (format != "json") {
+        printf("Available devices:\n");
+        for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
+            auto * dev = ggml_backend_dev_get(i);
+            if (ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_CPU) continue;
+            size_t free, total;
+            ggml_backend_dev_memory(dev, &free, &total);
+            printf("  %s: %s (%zu MiB, %zu MiB free)\n",
+                   ggml_backend_dev_name(dev), ggml_backend_dev_description(dev),
+                   total / 1024 / 1024, free / 1024 / 1024);
+        }
+        return;
+    }
+
+    auto type_str = [](enum ggml_backend_dev_type t) {
+        switch (t) {
+            case GGML_BACKEND_DEVICE_TYPE_CPU:   return "CPU";
+            case GGML_BACKEND_DEVICE_TYPE_GPU:   return "GPU";
+            case GGML_BACKEND_DEVICE_TYPE_IGPU:  return "IGPU";
+            case GGML_BACKEND_DEVICE_TYPE_ACCEL: return "ACCEL";
+            case GGML_BACKEND_DEVICE_TYPE_META:  return "META";
+        }
+        return "UNKNOWN";
+    };
+    auto str_or_null = [](const char * s) { return s ? json(s) : json(nullptr); };
+
+    json doc;
+    doc["schema_version"] = 1;
+    doc["devices"]  = json::array();
+    doc["backends"] = json::array();
+
+    for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
+        ggml_backend_dev_t dev = ggml_backend_dev_get(i);
+
+        ggml_backend_dev_props props;
+        ggml_backend_dev_get_props(dev, &props);
+
+        ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(dev);
+
+        json attrs = json::object();
+        if (reg) {
+            auto get_attrs = (ggml_backend_dev_get_attributes_t)
+                ggml_backend_reg_get_proc_address(reg, "ggml_backend_dev_get_attributes");
+            if (get_attrs) {
+                for (auto * f = get_attrs(dev); f && f->name; ++f) {
+                    attrs[f->name] = f->value ? f->value : "";
+                }
+            }
+        }
+
+        doc["devices"].push_back({
+            { "index",        i },
+            { "backend",      reg ? json(ggml_backend_reg_name(reg)) : json(nullptr) },
+            { "name",         str_or_null(props.name) },
+            { "description",  str_or_null(props.description) },
+            { "type",         type_str(props.type) },
+            { "device_id",    str_or_null(props.device_id) },
+            { "memory_total", props.memory_total },
+            { "memory_free",  props.memory_free },
+            { "caps", {
+                { "async",                props.caps.async },
+                { "host_buffer",          props.caps.host_buffer },
+                { "buffer_from_host_ptr", props.caps.buffer_from_host_ptr },
+                { "events",               props.caps.events },
+            } },
+            { "attributes",   attrs },
+        });
+    }
+
+    for (size_t i = 0; i < ggml_backend_reg_count(); ++i) {
+        ggml_backend_reg_t reg = ggml_backend_reg_get(i);
+        if (!reg) continue;
+        json features = json::object();
+        auto get_features = (ggml_backend_get_features_t)
+            ggml_backend_reg_get_proc_address(reg, "ggml_backend_get_features");
+        if (get_features) {
+            for (auto * f = get_features(reg); f && f->name; ++f) {
+                features[f->name] = f->value ? f->value : "";
+            }
+        }
+        doc["backends"].push_back({
+            { "name",     ggml_backend_reg_name(reg) },
+            { "features", features },
+        });
+    }
+
+    printf("%s\n", doc.dump(2).c_str());
+}
+
 bool common_params_to_map(int argc, char ** argv, llama_example ex, std::map<common_arg, std::string> & out_map) {
     common_params dummy_params;
     common_params_context ctx_arg = common_params_parser_init(dummy_params, ex, nullptr);
@@ -943,6 +1039,10 @@ bool common_params_parse(int argc, char ** argv, common_params & params, llama_e
         }
         if (ctx_arg.params.completion) {
             common_params_print_completion(ctx_arg);
+            exit(0);
+        }
+        if (ctx_arg.params.list_devices) {
+            common_params_print_list_devices(ctx_arg.params.list_devices_format);
             exit(0);
         }
         params.lr.init();
@@ -2303,23 +2403,19 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_env("LLAMA_ARG_DEVICE"));
     add_opt(common_arg(
         {"--list-devices"},
-        "print list of available devices and exit",
-        [](common_params &) {
-            ggml_backend_load_all();
-            std::vector<ggml_backend_dev_t> devices;
-            for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
-                auto * dev = ggml_backend_dev_get(i);
-                if (ggml_backend_dev_type(dev) != GGML_BACKEND_DEVICE_TYPE_CPU) {
-                    devices.push_back(dev);
-                }
+        "print list of available devices and exit (see --list-devices-format)",
+        [](common_params & params) {
+            params.list_devices = true;
+        }
+    ));
+    add_opt(common_arg(
+        {"--list-devices-format"}, "FORMAT",
+        "output format for --list-devices: text (default) or json",
+        [](common_params & params, const std::string & value) {
+            if (value != "text" && value != "json") {
+                throw std::invalid_argument("--list-devices-format must be \"text\" or \"json\"");
             }
-            printf("Available devices:\n");
-            for (auto * dev : devices) {
-                size_t free, total;
-                ggml_backend_dev_memory(dev, &free, &total);
-                printf("  %s: %s (%zu MiB, %zu MiB free)\n", ggml_backend_dev_name(dev), ggml_backend_dev_description(dev), total / 1024 / 1024, free / 1024 / 1024);
-            }
-            exit(0);
+            params.list_devices_format = value;
         }
     ));
     add_opt(common_arg(

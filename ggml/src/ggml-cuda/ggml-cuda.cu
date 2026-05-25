@@ -77,6 +77,7 @@
 #include <cfloat>
 #include <initializer_list>
 #include <limits>
+#include <list>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -4875,6 +4876,8 @@ struct ggml_backend_cuda_device_context {
     std::string description;
     std::string pci_bus_id;
     int op_offload_min_batch_size;
+    std::list<std::string>            attr_strs; // backing storage; list so c_str() stays stable
+    std::vector<ggml_backend_feature> attrs;
 };
 
 static const char * ggml_backend_cuda_device_get_name(ggml_backend_dev_t dev) {
@@ -5584,6 +5587,11 @@ static ggml_backend_feature * ggml_backend_cuda_get_features(ggml_backend_reg_t 
     GGML_UNUSED(reg);
 }
 
+static ggml_backend_feature * ggml_backend_cuda_device_get_attributes(ggml_backend_dev_t dev) {
+    ggml_backend_cuda_device_context * ctx = (ggml_backend_cuda_device_context *)dev->context;
+    return ctx->attrs.empty() ? nullptr : ctx->attrs.data();
+}
+
 static void * ggml_backend_cuda_reg_get_proc_address(ggml_backend_reg_t reg, const char * name) {
     GGML_UNUSED(reg);
     if (strcmp(name, "ggml_backend_comm_init") == 0) {
@@ -5606,6 +5614,9 @@ static void * ggml_backend_cuda_reg_get_proc_address(ggml_backend_reg_t reg, con
     }
     if (strcmp(name, "ggml_backend_get_features") == 0) {
         return (void *)ggml_backend_cuda_get_features;
+    }
+    if (strcmp(name, "ggml_backend_dev_get_attributes") == 0) {
+        return (void *)ggml_backend_cuda_device_get_attributes;
     }
     return nullptr;
 }
@@ -5645,6 +5656,26 @@ ggml_backend_reg_t ggml_backend_cuda_reg() {
                     c = std::tolower(c);
                 }
                 dev_ctx->op_offload_min_batch_size = min_batch_size;
+
+                auto add_attr = [&](const char * key, std::string value) {
+                    dev_ctx->attr_strs.push_back(key);
+                    const char * k = dev_ctx->attr_strs.back().c_str();
+                    dev_ctx->attr_strs.push_back(std::move(value));
+                    const char * v = dev_ctx->attr_strs.back().c_str();
+                    dev_ctx->attrs.push_back({ k, v });
+                };
+#if defined(GGML_USE_HIP)
+                if (prop.gcnArchName[0]) {
+                    add_attr("gfx_target", prop.gcnArchName);
+                }
+#elif !defined(GGML_USE_MUSA)
+                if (prop.major > 0) {
+                    add_attr("compute_capability", std::to_string(prop.major) + "." + std::to_string(prop.minor));
+                }
+#endif
+                if (!dev_ctx->attrs.empty()) {
+                    dev_ctx->attrs.push_back({ nullptr, nullptr });
+                }
 
                 ggml_backend_dev_t dev = new ggml_backend_device {
                     /* .iface   = */ ggml_backend_cuda_device_interface,
