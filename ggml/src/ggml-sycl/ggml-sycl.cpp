@@ -73,6 +73,7 @@ int g_ggml_sycl_disable_dnn = 0;
 int g_ggml_sycl_prioritize_dmmv = 0;
 int g_ggml_sycl_use_async_mem_op = 0;
 int g_ggml_sycl_use_async_mem_op_requested = 1;
+int g_ggml_sycl_enable_level_zero = -1;
 int g_ggml_sycl_enable_flash_attention = 1;
 
 static inline int get_sycl_env(const char *env_name, int default_val);
@@ -85,9 +86,6 @@ static ggml_sycl_device_info ggml_sycl_init() {
         GGML_LOG_ERROR("%s: failed to initialize: %s\n", GGML_SYCL_NAME, __func__);
         return info;
     }
-
-    // Make sure env can't override the device detection (if devices do not have it, that's it).
-    info.ext_oneapi_level_zero = get_sycl_env("GGML_SYCL_ENABLE_LEVEL_ZERO", info.ext_oneapi_level_zero);
 
     GGML_ASSERT(info.device_count <= GGML_SYCL_MAX_DEVICES);
 
@@ -128,6 +126,15 @@ static ggml_sycl_device_info ggml_sycl_init() {
             info.ext_oneapi_level_zero = false;
         }
     }
+
+#ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO
+    // Device allocations can happen before ggml_check_sycl() runs, so keep the
+    // low-level Level Zero gate initialized with the cached device info.
+    g_ggml_sycl_enable_level_zero =
+        info.ext_oneapi_level_zero && get_sycl_env("GGML_SYCL_ENABLE_LEVEL_ZERO", 1);
+#else
+    g_ggml_sycl_enable_level_zero = 0;
+#endif
 
     for (int id = 0; id < info.device_count; ++id) {
         info.default_tensor_split[id] /= total_vram;
@@ -284,7 +291,7 @@ static void ggml_check_sycl() try {
         GGML_LOG_INFO("  GGML_SYCL_DISABLE_GRAPH: graph disabled by compile flag\n");
 #endif
 #ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO
-        GGML_LOG_INFO("  GGML_SYCL_ENABLE_LEVEL_ZERO: %d\n", ggml_sycl_info().ext_oneapi_level_zero);
+        GGML_LOG_INFO("  GGML_SYCL_ENABLE_LEVEL_ZERO: %d\n", g_ggml_sycl_enable_level_zero);
 #else
         GGML_LOG_INFO("  GGML_SYCL_ENABLE_LEVEL_ZERO: Level Zero disabled by compile flag\n");
 #endif
@@ -550,7 +557,7 @@ static void dev2dev_memcpy(sycl::queue &q_dst, sycl::queue &q_src, void *ptr_dst
                     const void *ptr_src, size_t size) {
 #ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO
     // Use Level Zero direct copy for dGPU-to-dGPU transfers.
-    const bool l0_copy_supported = ggml_sycl_info().ext_oneapi_level_zero &&
+    const bool l0_copy_supported = g_ggml_sycl_enable_level_zero &&
         ggml_sycl_is_l0_discrete_gpu(q_dst) && ggml_sycl_is_l0_discrete_gpu(q_src);
     if (l0_copy_supported) {
         auto ze_ctx = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(q_dst.get_context());

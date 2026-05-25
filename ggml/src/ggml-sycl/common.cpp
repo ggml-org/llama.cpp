@@ -86,7 +86,8 @@ int64_t downsample_sycl_global_range(int64_t accumulate_block_num, int64_t block
 
 #ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO
 static bool ggml_sycl_use_level_zero_device_alloc(sycl::queue &q) {
-    return ggml_sycl_info().ext_oneapi_level_zero &&
+    GGML_ASSERT(g_ggml_sycl_enable_level_zero != -1); // sentinel to remove
+    return g_ggml_sycl_enable_level_zero &&
         q.get_device().is_gpu() &&
         q.get_backend() == sycl::backend::ext_oneapi_level_zero;
 }
@@ -94,7 +95,6 @@ static bool ggml_sycl_use_level_zero_device_alloc(sycl::queue &q) {
 
 // Use Level Zero zeMemAllocDevice to avoid sycl::malloc_device triggering
 // DMA-buf/TTM system RAM staging in the xe kernel driver during multi-GPU inference.
-// The decision is read from ggml_sycl_info() because large buffers can be early.
 void * ggml_sycl_malloc_device(size_t size, sycl::queue &q) {
 #ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO
     if (ggml_sycl_use_level_zero_device_alloc(q)) {
