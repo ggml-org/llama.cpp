@@ -601,6 +601,9 @@ static int execute_op(struct htp_ops_context * octx) {
         case HTP_OP_PAD:
             return op_pad(octx);
 
+        case HTP_OP_CONCAT:
+            return op_concat(octx);
+
         case HTP_OP_GATED_DELTA_NET:
             return op_gated_delta_net(octx);
 
