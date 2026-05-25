@@ -103,13 +103,23 @@ enum ggml_status ggml_backend_sched_pipelined_compute(
         return ggml_backend_sched_graph_compute_async(sched->base, gf);
     }
 
-    // Lazily cache the CPU backend
+    // Lazily find and cache the CPU backend.
+    // Backend order is [GPU..., CPU] — CPU is NOT at index 0 when offloading.
     if (!sched->cpu_backend) {
-        sched->cpu_backend = ggml_backend_sched_get_backend(sched->base, 0);
+        int n_be = ggml_backend_sched_get_n_backends(sched->base);
+        for (int i = 0; i < n_be; i++) {
+            ggml_backend_t be = ggml_backend_sched_get_backend(sched->base, i);
+            if (ggml_backend_is_cpu(be)) {
+                sched->cpu_backend = be;
+                break;
+            }
+        }
     }
 
-    // Set threadpool for this iteration (rotates between CCD pairs)
-    ggml_backend_cpu_set_threadpool(sched->cpu_backend, sched->cpu_tp[sched->active_pool]);
+    if (sched->cpu_backend) {
+        // Set threadpool for this iteration (rotates between CCD pairs)
+        ggml_backend_cpu_set_threadpool(sched->cpu_backend, sched->cpu_tp[sched->active_pool]);
+    }
 
     // Let the base scheduler handle alloc/compute state machine normally.
     // Calling alloc_graph manually would corrupt is_alloc across batches.
