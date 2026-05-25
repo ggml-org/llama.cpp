@@ -3864,6 +3864,7 @@ template<typename T, int BASE=10> std::string vec_to_str(std::vector<T> v) {
 }
 
 static void ggml_hexagon_init(ggml_backend_reg * reg) {
+    // Basic sanity checks to make sure definitions match
     static_assert((unsigned int) HTP_TYPE_Q4_0 == (unsigned int) GGML_TYPE_Q4_0,
                   "please update hexagon_type to match ggml_type");
     static_assert((unsigned int) HTP_TYPE_Q4_1 == (unsigned int) GGML_TYPE_Q4_1,
