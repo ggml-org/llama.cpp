@@ -226,37 +226,6 @@ jobs:
           wget https://huggingface.co/ggml-org/models/resolve/main/tinyllamas/stories260K-be.gguf
           ./bin/llama-completion -m stories260K-be.gguf -p "One day, Lily met a Shoggoth" -n 500 -c 256
 
-  ubuntu-latest-rpc:
-    runs-on: ubuntu-latest
-
-    continue-on-error: true
-
-    steps:
-      - name: Clone
-        id: checkout
-        uses: actions/checkout@v6
-
-      - name: Dependencies
-        id: depends
-        run: |
-          sudo apt-get update
-          sudo apt-get install build-essential libssl-dev ninja-build
-
-      - name: Build
-        id: cmake_build
-        run: |
-          cmake -B build \
-            -G "Ninja" \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DGGML_RPC=ON
-          time cmake --build build --config Release -j $(nproc)
-
-      - name: Test
-        id: cmake_test
-        run: |
-          cd build
-          ctest -L main --verbose
-
   ubuntu-24-vulkan:
     strategy:
       matrix:
@@ -295,36 +264,6 @@ jobs:
         id: cmake_build
         run: |
           time cmake --build build -j $(nproc)
-
-  ubuntu-22-musa:
-    runs-on: ubuntu-22.04
-    container: mthreads/musa:rc4.3.0-devel-ubuntu22.04-amd64
-
-    steps:
-      - name: Clone
-        id: checkout
-        uses: actions/checkout@v6
-
-      - name: Dependencies
-        id: depends
-        run: |
-          apt-get update
-          apt-get install -y build-essential git cmake libssl-dev
-
-      - name: ccache
-        uses: ggml-org/ccache-action@v1.2.21
-        with:
-          key: ubuntu-22-musa
-          evict-old-files: 1d
-          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
-
-      - name: Build with native CMake MUSA support
-        id: cmake_build
-        run: |
-          cmake -B build -S . \
-            -DGGML_MUSA=ON
-          time cmake --build build --config Release -j $(nproc)
-
 
   windows-latest:
     runs-on: windows-2025
@@ -532,77 +471,6 @@ jobs:
           set /A NINJA_JOBS=%NUMBER_OF_PROCESSORS%-1
           cmake --build build --config Release -j %NINJA_JOBS% -t ggml
           cmake --build build --config Release
-
-
-  ubuntu-cpu-riscv64-native:
-    runs-on: ubuntu-24.04-riscv
-
-    steps:
-      - name: Install dependencies
-        run: |
-          # Install necessary packages
-          sudo apt-get update
-          sudo apt-get install -y libssl-dev
-
-          # Set gcc-14 and g++-14 as the default compilers
-          sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-14 100
-          sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-14 100
-
-          git lfs install
-
-      - name: Check environment
-        run: |
-          uname -a
-          gcc --version
-          g++ --version
-          ldd --version
-          cmake --version
-          rustc --version
-
-      - name: Clone
-        id: checkout
-        uses: actions/checkout@v6
-
-      - name: ccache
-        uses: ggml-org/ccache-action@afde29e5b5422e5da23cb1f639e8baecadeadfc3 # https://github.com/ggml-org/ccache-action/pull/1
-        with:
-          key: ubuntu-cpu-riscv64-native
-          evict-old-files: 1d
-          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
-
-      - name: Build
-        id: cmake_build
-        run: |
-          cmake -B build \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DGGML_OPENMP=OFF \
-            -DLLAMA_BUILD_EXAMPLES=ON \
-            -DLLAMA_BUILD_TOOLS=ON \
-            -DLLAMA_BUILD_TESTS=ON \
-            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
-            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
-            -DGGML_RPC=ON \
-            -DCMAKE_C_COMPILER=riscv64-linux-gnu-gcc-14 \
-            -DCMAKE_CXX_COMPILER=riscv64-linux-gnu-g++-14
-
-          time cmake --build build --config Release -j $(nproc)
-
-      - name: Test
-        id: cmake_test
-        run: |
-          cd build
-          ctest -L main --verbose --timeout 900
-
-      - name: Test llama2c conversion
-        id: llama2c_test
-        run: |
-          cd build
-          echo "Fetch tokenizer"
-          wget https://huggingface.co/karpathy/tinyllamas/resolve/main/stories260K/tok512.bin
-          echo "Fetch llama2c model"
-          wget https://huggingface.co/karpathy/tinyllamas/resolve/main/stories260K/stories260K.bin
-          ./bin/llama-convert-llama2c-to-ggml --copy-vocab-from-model ./tok512.bin --llama2c-model stories260K.bin --llama2c-output-model stories260K.gguf
-          ./bin/llama-completion -m stories260K.gguf -p "One day, Lily met a Shoggoth" -n 500 -c 256
 
 # TODO: simplify the following workflows using a matrix
 # TODO: run lighter CI on PRs and the full CI only on master (if needed)

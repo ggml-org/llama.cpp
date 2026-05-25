@@ -136,3 +136,32 @@ jobs:
             -DGPU_TARGETS="gfx1100"  `
             -DGGML_RPC=ON
           cmake --build build -j ${env:NUMBER_OF_PROCESSORS}
+
+  ubuntu-22-musa:
+    runs-on: ubuntu-22.04
+    container: mthreads/musa:rc4.3.0-devel-ubuntu22.04-amd64
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
+
+      - name: Dependencies
+        id: depends
+        run: |
+          apt-get update
+          apt-get install -y build-essential git cmake libssl-dev
+
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.21
+        with:
+          key: ubuntu-22-musa
+          evict-old-files: 1d
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+
+      - name: Build with native CMake MUSA support
+        id: cmake_build
+        run: |
+          cmake -B build -S . \
+            -DGGML_MUSA=ON
+          time cmake --build build --config Release -j $(nproc)
