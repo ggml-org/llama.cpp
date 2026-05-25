@@ -61,7 +61,15 @@ struct lhs_packing_info {
         size_t m_idx_start, const void * lhs, size_t lhs_stride, void * lhs_packed);
 };
 
+enum rhs_repack_mode {
+    RHS_REPACK_PER_KERNEL,  // hybrid execution uses a separate packed RHS per kernel
+    RHS_REPACK_SHARED,      // hybrid execution may share one packed RHS across kernels
+    RHS_REPACK_SINGLE_ONLY, // one packed RHS, no hybrid fallback kernel
+};
+
 struct rhs_packing_info {
+    rhs_repack_mode repack_mode;
+
     size_t (*packed_stride)(size_t k, size_t nr, size_t kr, size_t bl);
 
     void (*to_float)(const void *packed_data, int32_t row_idx, int64_t nc, float *out,

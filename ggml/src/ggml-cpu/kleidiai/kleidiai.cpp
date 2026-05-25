@@ -155,10 +155,10 @@ static size_t detect_num_smcus() {
             }
         }
     }
-    return 1;
+    return 0;
 
 #else
-    return 1;
+    return 0;
 #endif
 }
 
@@ -190,7 +190,6 @@ static void init_kleidiai_context(void) {
         const char *env_sme     = getenv("GGML_KLEIDIAI_SME");
         const char *env_threads = getenv("GGML_TOTAL_THREADS");
 
-        const bool cpu_has_sme = ggml_cpu_has_sme();
         size_t detected_smcus = 0;
 
         ctx.features  = (ggml_cpu_has_dotprod()     ? CPU_FEATURE_DOTPROD : CPU_FEATURE_NONE) |
@@ -206,51 +205,41 @@ static void init_kleidiai_context(void) {
         }
 
         // SME policy:
-        // - If CPU doesn't support SME: SME always off.
-        // - Else:
-        //   - env unset => auto-detect cores; enable if detected > 0.
-        //   - env=0     => force off.
-        //   - env>0     => force N cores (skip detection).
+        // - env unset => auto-detect SMCUs; enable SME only if detected > 0.
+        // - env=0     => force off.
+        // - env>0     => force N cores, if the binary was built with SME.
         int sme_cores = 0;
         bool sme_env_ok = false;
         bool sme_env_set = (env_sme != nullptr);
 
-        if (!cpu_has_sme) {
-            if (sme_env_set) {
-                bool ok = false;
-                int req = parse_uint_env(env_sme, "GGML_KLEIDIAI_SME", &ok);
-                if (ok && req > 0) {
-                    GGML_LOG_WARN("kleidiai: GGML_KLEIDIAI_SME=%d but SME is not supported on this CPU; disabling SME\n", req);
-                }
-            }
-            sme_cores = 0;
-        } else {
-            if (sme_env_set) {
-                bool ok = false;
-                int v = parse_uint_env(env_sme, "GGML_KLEIDIAI_SME", &ok);
-                sme_env_ok = ok;
+        if (sme_env_set) {
+            bool ok = false;
+            int v = parse_uint_env(env_sme, "GGML_KLEIDIAI_SME", &ok);
+            sme_env_ok = ok;
 
-                if (!ok) {
-                    GGML_LOG_WARN("kleidiai: GGML_KLEIDIAI_SME set but parsing failed; falling back to runtime SME-core detection\n");
-                    detected_smcus = detect_num_smcus();
-                    sme_cores = detected_smcus > 0 ? (int)detected_smcus : 0;
-                } else if (v == 0) {
-                    sme_cores = 0;
-                } else {
-                    sme_cores = v;
-                }
-            } else {
+            if (!ok) {
+                GGML_LOG_WARN("kleidiai: GGML_KLEIDIAI_SME set but parsing failed; falling back to runtime SME-core detection\n");
                 detected_smcus = detect_num_smcus();
                 sme_cores = detected_smcus > 0 ? (int)detected_smcus : 0;
+            } else if (v == 0) {
+                sme_cores = 0;
+            } else if (!ggml_cpu_has_sme()) {
+                GGML_LOG_WARN("kleidiai: GGML_KLEIDIAI_SME=%d but the binary was not built with SME; disabling SME\n", v);
+                sme_cores = 0;
+            } else {
+                sme_cores = v;
             }
+        } else {
+            detected_smcus = detect_num_smcus();
+            sme_cores = detected_smcus > 0 ? (int)detected_smcus : 0;
+        }
 
-            if (!sme_env_set && sme_cores == 0) {
-                GGML_LOG_WARN("kleidiai: SME supported but runtime SME-core detection returned 0; falling back to NEON\n");
-            }
+        if (!sme_env_set && ggml_cpu_has_sme() && sme_cores == 0) {
+            GGML_LOG_WARN("kleidiai: runtime SME-core detection returned 0; falling back to NEON\n");
+        }
 
-            if (sme_cores > 0) {
-                ctx.features |= CPU_FEATURE_SME;
-            }
+        if (sme_cores > 0) {
+            ctx.features |= CPU_FEATURE_SME;
         }
         ctx.kernels_q4  = ggml_kleidiai_select_kernels_q4_0(ctx.features);
         ctx.kernels_q8  = ggml_kleidiai_select_kernels_q8_0(ctx.features);
@@ -375,11 +364,16 @@ static int kleidiai_collect_kernel_chain_common(
     }
     out[count++] = primary;
 
+    if (primary->rhs_info.repack_mode == RHS_REPACK_SINGLE_ONLY) {
+        return count;
+    }
+
     if ((primary->required_cpu & CPU_FEATURE_SME) == CPU_FEATURE_SME) {
         const cpu_feature fallback_mask = static_cast<cpu_feature>(features & ~CPU_FEATURE_SME);
         if (fallback_mask != CPU_FEATURE_NONE) {
             ggml_kleidiai_kernels * fallback = select_fallback(fallback_mask);
             if (fallback && fallback != primary &&
+                fallback->rhs_info.repack_mode != RHS_REPACK_SINGLE_ONLY &&
                 fallback->lhs_type == primary->lhs_type &&
                 fallback->rhs_type == primary->rhs_type &&
                 fallback->op_type  == primary->op_type) {
