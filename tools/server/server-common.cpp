@@ -1120,11 +1120,18 @@ json oaicompat_chat_params_parse(
         });
     }
 
-    // Reasoning budget: pass parameters through to sampling layer
+    // Reasoning budget: pass parameters through to sampling layer.
+    // The CLI flag (--reasoning-budget) acts as a hard ceiling enforced by
+    // the server admin. The request body may lower the budget but cannot
+    // raise it past the cap, so `--reasoning-budget 0` reliably forbids
+    // thinking regardless of what the client asks for. -1 means unrestricted.
     {
         int reasoning_budget = opt.reasoning_budget;
-        if (reasoning_budget == -1 && body.contains("thinking_budget_tokens")) {
-            reasoning_budget = json_value(body, "thinking_budget_tokens", -1);
+        if (body.contains("thinking_budget_tokens")) {
+            int requested = json_value(body, "thinking_budget_tokens", -1);
+            if (requested >= 0 && (reasoning_budget < 0 || requested < reasoning_budget)) {
+                reasoning_budget = requested;
+            }
         }
 
         if (!chat_params.thinking_end_tag.empty()) {
