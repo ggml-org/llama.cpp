@@ -5,7 +5,7 @@
 
 1. Prepare Toolchain For RISCV
 ~~~
-wget https://archive.spacemit.com/toolchain/spacemit-toolchain-linux-glibc-x86_64-v1.1.2.tar.xz
+wget https://github.com/spacemit-com/toolchain/releases/download/v1.2.4/spacemit-toolchain-linux-glibc-x86_64-v1.2.4.tar.xz
 ~~~
 
 2. Build
