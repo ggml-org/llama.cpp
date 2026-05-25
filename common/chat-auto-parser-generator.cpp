@@ -489,23 +489,29 @@ common_peg_parser analyze_tools::build_tool_parser_tag_tagged(parser_build_conte
     std::string trigger_marker       = !format.section_start.empty() ? format.section_start : format.per_call_start;
     auto        content_before_tools = trigger_marker.empty() ? p.eps() : p.until(trigger_marker);
 
-    // Qwen3.5 XML tools are frequently emitted inside <think>...</think> blocks.  Treat
-    // <think> as a mode switch: text inside it is reasoning, text outside it is content,
-    // and valid tool calls can appear in either mode.  This is intentionally limited to
-    // the XML tagged-argument format used by Qwen (<tool_call><function=...><parameter=...>)
-    // to avoid changing semantics for other templates that may mention tool markers in
-    // reasoning text.
+    // Treat tag-based reasoning markers as mode switches rather than containers that
+    // hide tools. Text inside the reasoning markers is emitted as reasoning_content,
+    // text outside is emitted as content, and valid tool calls can appear in either
+    // mode. This path applies to tagged-argument tool formats, such as:
+    //
+    //   <tool_call>
+    //   <function=name>
+    //   <parameter=arg>value</parameter>
+    //   </function>
+    //   </tool_call>
+    //
+    // Use a specific tool boundary that includes the function-name prefix when
+    // possible, so prose such as "I might call <tool_call> later" remains text.
     if (ctx.extracting_reasoning && ctx.reasoning &&
-        trim_whitespace(ctx.reasoning->start) == "<think>" &&
-        trim_whitespace(ctx.reasoning->end) == "</think>" &&
+        !trim_whitespace(ctx.reasoning->start).empty() &&
+        !trim_whitespace(ctx.reasoning->end).empty() &&
         format.section_start.empty() &&
-        trim_whitespace(format.per_call_start) == "<tool_call>" &&
-        trim_whitespace(format.per_call_end) == "</tool_call>") {
+        !trim_whitespace(format.per_call_start).empty() &&
+        !trim_whitespace(format.per_call_end).empty()) {
         const std::string think_start = trim_whitespace(ctx.reasoning->start);
         const std::string think_end   = trim_whitespace(ctx.reasoning->end);
-        // Use the more specific Qwen XML tool prefix as the text boundary so that
-        // prose such as "I might call <tool_call> later" remains reasoning text.
-        const std::string tool_start  = trim_whitespace(format.per_call_start) + "\n" + function.name_prefix;
+        const std::string tool_start  = trim_whitespace(format.per_call_start) +
+            (function.name_prefix.empty() ? "" : "\n" + function.name_prefix);
 
         auto in_think_boundary = p.choice({
             p.literal(tool_start),
