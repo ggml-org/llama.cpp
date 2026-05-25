@@ -39,10 +39,11 @@
 	let contentContainer: HTMLDivElement | undefined = $state();
 
 	let previewKey = useThrottle(() => preview ?? '', 500);
-	let displayedPreview = $state('');
+	let displayedPreview = $state(preview ?? '');
 
 	$effect(() => {
 		previewKey.key;
+
 		displayedPreview = preview ?? '';
 	});
 
