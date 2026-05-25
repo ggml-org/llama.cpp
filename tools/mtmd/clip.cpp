@@ -1283,7 +1283,18 @@ struct clip_model_loader {
                     } break;
                 case PROJECTOR_TYPE_NEMOTRON_V2_VL:
                     {
+                        // Nemotron Nano Omni uses InternVL-style dynamic high-res tiling
+                        // (RADIO encoder, 512px tiles, up to 12 tiles + 1 thumbnail =
+                        // 13312 max patches per the HF preprocessor_config). The original
+                        // port wired only the projector and a single fixed tile; populate
+                        // the llava-uhd resolution candidates so the image is actually tiled.
+                        hparams.preproc_min_tiles = 1;
+                        hparams.preproc_max_tiles = 12;
                         get_u32(KEY_PROJ_SCALE_FACTOR, hparams.n_merge, false);
+                        get_u32(KEY_PREPROC_MIN_TILES, hparams.preproc_min_tiles, false);
+                        get_u32(KEY_PREPROC_MAX_TILES, hparams.preproc_max_tiles, false);
+                        GGML_ASSERT(hparams.preproc_min_tiles <= hparams.preproc_max_tiles && hparams.preproc_max_tiles < INT32_MAX);
+                        set_internvl_dhr_res_candidates(model);
                     } break;
                 case PROJECTOR_TYPE_IDEFICS3:
                     {
