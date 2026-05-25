@@ -77,9 +77,6 @@ OutputVector translate_view(const NodeContext & context) {
     int slice_dim = diff_dims[0];
     int64_t dim_size = static_cast<int64_t>(src_ov_shape[slice_dim]);
 
-    size_t stride_at_dim = (slice_dim < static_cast<int>(ndims) - 1) ?
-        src_stride[slice_dim + 1] : src_stride[slice_dim];
-
     size_t ov_stride_for_dim = 1;
     for (size_t i = slice_dim + 1; i < ndims; ++i) {
         ov_stride_for_dim *= src_ov_shape[i];
