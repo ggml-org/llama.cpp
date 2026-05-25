@@ -111,7 +111,7 @@ set(UBERKERNEL_SUPPORTED_KERNELS
     pad_f32
     repeat_f32
     rms_norm_f32      # gemma4
-    rms_norm_mul_f32  # gemma4 -- BREAKS OUTPUT
+    # rms_norm_mul_f32  # gemma4 -- BREAKS OUTPUT
     rope_f32          # gemma4
     rwkv_wkv6_f32
     rwkv_wkv7_f32

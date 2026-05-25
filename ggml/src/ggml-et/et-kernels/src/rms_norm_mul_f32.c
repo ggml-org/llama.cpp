@@ -16,6 +16,9 @@ struct ggml_et_rms_norm_mul_params {
     float eps;                // Epsilon for numerical stability
 };
 
+static inline size_t tensor_bytes(const struct ggml_tensor *t) {
+    return (size_t)t->ne[0] * t->ne[1] * t->ne[2] * t->ne[3] * t->nb[0];
+}
 
 int entry_point(struct ggml_et_rms_norm_mul_params* params, void* env) {
     kernel_environment_t* kernel_env = (kernel_environment_t*)env;
@@ -38,6 +41,7 @@ int entry_point(struct ggml_et_rms_norm_mul_params* params, void* env) {
     struct ggml_tensor* src0 = &params->src0;
     struct ggml_tensor* src1 = &params->src1;
     struct ggml_tensor* dst = &params->dst;
+
     float eps = params->eps;
 
     if (src0->type != GGML_TYPE_F32 || src1->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32) {
@@ -145,13 +149,19 @@ int entry_point(struct ggml_et_rms_norm_mul_params* params, void* env) {
                         : "f12", "f14", "f15"
                     );
                 }
-
+#ifdef ET_UBERKERNEL
+                FENCE;
+                evict_region_past_l2(dst_ptr, (size_t)ne0 * sizeof(float));
+                WAIT_CACHEOPS;
+                FENCE;
+#endif
                 __asm__ volatile("mova.m.x %0" :: "r"(saved_mask));
                 }
             }
         }
     } else {
         // Intra-row: threads within each shire cooperate on rows via L2 SCP.
+        // L2 SCP + barrier are shire-local, so use shire-local thread index.
         int shire_tid = thread_id % shire_threads;
         int threads_per_row = shire_threads / total_rows;
         int my_row    = shire_tid / threads_per_row;
@@ -268,6 +278,12 @@ int entry_point(struct ggml_et_rms_norm_mul_params* params, void* env) {
                     : "f12", "f14", "f15"
                 );
             }
+#ifdef ET_UBERKERNEL
+            FENCE;
+            evict_region_past_l2(dst_ptr + my_start, (size_t)(my_end - my_start) * sizeof(float));
+            WAIT_CACHEOPS;
+            FENCE;
+#endif
         }
 
         __asm__ volatile("mova.m.x %0" :: "r"(saved_mask));
