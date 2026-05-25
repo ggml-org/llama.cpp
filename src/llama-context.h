@@ -329,7 +329,7 @@ private:
 
     // Pipelined prefill scheduler (optional, created when cparams.pipeline_depth > 0)
     ggml_backend_sched_pipelined_t sched_pipeline = nullptr;
-    ggml_threadpool_t cpu_tp_pipeline[2] = {nullptr, nullptr};
+    ggml_threadpool_t cpu_tp_pipeline[2] = {nullptr, nullptr}; // reserved for future direct threadpool management
 
     bool sched_need_reserve = true;
 

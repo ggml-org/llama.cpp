@@ -2263,6 +2263,8 @@ ggml_status llama_context::graph_compute(
                     GGML_SCHED_PRIO_NORMAL,
                     1,  // poll
                     gpu_be);
+            } else {
+                LLAMA_LOG_WARN("%s: pipeline prefill requested but no GPU backend found, falling back to sequential\n", __func__);
             }
         }
 
@@ -3334,6 +3336,8 @@ llama_context_params llama_context_default_params() {
         /*.kv_unified                  =*/ false,
         /*.sampler                     =*/ nullptr,
         /*.n_sampler                   =*/ 0,
+        /*.pipeline_depth              =*/ 0,
+        /*.pipeline_split_size         =*/ 8,
     };
 
     return result;
