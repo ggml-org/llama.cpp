@@ -76,7 +76,19 @@ int g_ggml_sycl_use_async_mem_op_requested = 1;
 int g_ggml_sycl_enable_level_zero = 0;
 int g_ggml_sycl_enable_flash_attention = 1;
 
-static inline int get_sycl_env(const char *env_name, int default_val);
+static inline int get_sycl_env(const char *env_name, int default_val) {
+    char *user_device_string = getenv(env_name);
+    int user_number = default_val;
+
+    unsigned n;
+    if (user_device_string != NULL &&
+        sscanf(user_device_string, " %u", &n) == 1) {
+        user_number = (int)n;
+    } else {
+        user_number = default_val;
+    }
+    return user_number;
+}
 
 static ggml_sycl_device_info ggml_sycl_init() {
     ggml_sycl_device_info info = {};
@@ -221,20 +233,6 @@ void ggml_backend_sycl_print_sycl_devices() {
     }
 
     print_device_opt_feature(device_count);
-}
-
-static inline int get_sycl_env(const char *env_name, int default_val) {
-    char *user_device_string = getenv(env_name);
-    int user_number = default_val;
-
-    unsigned n;
-    if (user_device_string != NULL &&
-        sscanf(user_device_string, " %u", &n) == 1) {
-        user_number = (int)n;
-    } else {
-        user_number = default_val;
-    }
-    return user_number;
 }
 
 static void ggml_check_sycl() try {
