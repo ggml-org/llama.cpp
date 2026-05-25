@@ -7,6 +7,9 @@
 
 #include "ggml.h"
 
+//Llama ENGINE
+#include <cstdio>
+
 #include <algorithm>
 #include <cctype>
 #include <climits>
@@ -188,24 +191,22 @@ std::string common_params_sampling::print() const {
 
 
 //  ENGINE - SAFETY GUARD CLAUSES (SAMPLING SANITIZATION)
-
-void common_params_sampling_validate(struct common_params_sampling & params) {
+void common_params_sampling_validate(struct common_params_sampling & params) {  
     if (params.mirostat == 1 || params.mirostat == 2) {
         if (params.mirostat_ent <= 0.0f) {
-            fprintf(stderr, "%s: warning: 'mirostat_ent' deve ser positivo (recebido %.2f). Resetando para o padrão (5.0).\n", __func__, params.mirostat_ent);
+            std::fprintf(stderr, "%s: warning: 'mirostat_ent' deve ser positivo (recebido %.2f). Resetando para o padrão (5.0).\n", __func__, params.mirostat_ent);
             params.mirostat_ent = 5.0f;
         }
         if (params.mirostat_lr <= 0.0f) {
-            fprintf(stderr, "%s: warning: 'mirostat_lr' deve ser positivo (recebido %.2f). Resetando para o padrão (0.1).\n", __func__, params.mirostat_lr);
+            std::fprintf(stderr, "%s: warning: 'mirostat_lr' deve ser positivo (recebido %.2f). Resetando para o padrão (0.1).\n", __func__, params.mirostat_lr);
             params.mirostat_lr = 0.1f;
         }
     }
     if (params.penalty_last_n < -1) {
-        fprintf(stderr, "%s: warning: 'penalty_last_n' inválido (recebido %d). Desativando penalidade (0).\n", __func__, params.penalty_last_n);
+        std::fprintf(stderr, "%s: warning: 'penalty_last_n' inválido (recebido %d). Desativando penalidade (0).\n", __func__, params.penalty_last_n);
         params.penalty_last_n = 0;
     }
 }
-
     struct common_sampler * common_sampler_init(const struct llama_model * model, struct common_params_sampling & params) {
     
 
