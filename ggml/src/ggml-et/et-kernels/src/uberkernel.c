@@ -551,16 +551,16 @@ int entry_point(struct ggml_et_uberkernel_params * params, void * env) {
 
             // MUL_MAT: evict src1 (activations); src0=weights is
             //  read-only so never stale from a prior uberkernel op
-            // case GGML_ET_UBERKERNEL_KERNEL_MUL_MAT_F16: { // gemma4
-            //     struct ggml_et_binary_params *p = (struct ggml_et_binary_params *) inst_params;
-            //     rc = mul_mat_f16_entry(p, env);
-            //     break;
-            // }
-            // case GGML_ET_UBERKERNEL_KERNEL_MUL_MAT_F16_MATRIX_ENGINE: { // gemma4
-            //     struct ggml_et_binary_params *p = (struct ggml_et_binary_params *) inst_params;
-            //     rc = mul_mat_f16_matrix_engine_entry(p, env);
-            //     break;
-            // }
+            case GGML_ET_UBERKERNEL_KERNEL_MUL_MAT_F16: { // gemma4
+                struct ggml_et_binary_params *p = (struct ggml_et_binary_params *) inst_params;
+                rc = mul_mat_f16_entry(p, env);
+                break;
+            }
+            case GGML_ET_UBERKERNEL_KERNEL_MUL_MAT_F16_MATRIX_ENGINE: { // gemma4
+                struct ggml_et_binary_params *p = (struct ggml_et_binary_params *) inst_params;
+                rc = mul_mat_f16_matrix_engine_entry(p, env);
+                break;
+            }
             case GGML_ET_UBERKERNEL_KERNEL_MUL_MAT_F32: { // gemma4
                 struct ggml_et_binary_params *p = (struct ggml_et_binary_params *) inst_params;
                 rc = mul_mat_f32_entry(p, env);
