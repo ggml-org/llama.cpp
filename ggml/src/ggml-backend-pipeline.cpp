@@ -60,6 +60,7 @@ ggml_backend_sched_pipelined_t ggml_backend_sched_pipelined_init(
     for (int i = 0; i < sched->num_tp; i++) {
         sched->cpu_tp[i] = ggml_threadpool_new(&sched->tp_params[i]);
         if (!sched->cpu_tp[i]) {
+            for (int j = 0; j < i; j++) ggml_threadpool_free(sched->cpu_tp[j]);
             delete sched;
             return nullptr;
         }
@@ -67,7 +68,12 @@ ggml_backend_sched_pipelined_t ggml_backend_sched_pipelined_init(
 
     // Fallback: if dual pool fails, use single pool
     if (sched->num_tp < 2) {
+        // Free any threadpools created in the failed dual-init loop
+        for (int j = 0; j < sched->num_tp; j++) {
+            if (sched->cpu_tp[j]) ggml_threadpool_free(sched->cpu_tp[j]);
+        }
         sched->num_tp = 1;
+        sched->cpu_tp[0] = nullptr;
         memset(&sched->tp_params[0], 0, sizeof(ggml_threadpool_params));
         sched->tp_params[0].n_threads = n_threads;
         sched->tp_params[0].prio = prio;
@@ -117,8 +123,10 @@ enum ggml_status ggml_backend_sched_pipelined_compute(
     }
 
     if (sched->cpu_backend) {
-        // Set threadpool for this iteration (rotates between CCD pairs)
-        ggml_backend_cpu_set_threadpool(sched->cpu_backend, sched->cpu_tp[sched->active_pool]);
+        ggml_threadpool_t tp = sched->cpu_tp[sched->active_pool];
+        // Resume before setting — rotation can swap in a previously-paused pool
+        ggml_threadpool_resume(tp);
+        ggml_backend_cpu_set_threadpool(sched->cpu_backend, tp);
     }
 
     // Let the base scheduler handle alloc/compute state machine normally.
