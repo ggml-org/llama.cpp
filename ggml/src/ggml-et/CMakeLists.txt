@@ -123,7 +123,7 @@ set(UBERKERNEL_SUPPORTED_KERNELS
     sqr_f32
     ssm_conv_f32
     ssm_scan_f32
-    # sum_rows_f32      # gemma4: MoE weight normalization
+    sum_rows_f32      # gemma4: MoE weight normalization
     tri_f32
 )
 

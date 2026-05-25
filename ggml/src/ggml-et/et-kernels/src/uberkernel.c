@@ -427,11 +427,11 @@ int entry_point(struct ggml_et_uberkernel_params * params, void * env) {
                 rc = scale_f32_entry((struct ggml_et_scale_params *) inst_params, env);
                 break;
             }
-            // case GGML_ET_UBERKERNEL_KERNEL_SUM_ROWS_F32: { // gemma4: MoE weight normalization
-            //     struct uber_unary_params *p = (struct uber_unary_params *) inst_params;
-            //     rc = sum_rows_f32_entry((struct ggml_et_sum_rows_params *) inst_params, env);
-            //     break;
-            // }
+            case GGML_ET_UBERKERNEL_KERNEL_SUM_ROWS_F32: { // gemma4: MoE weight normalization
+                struct uber_unary_params *p = (struct uber_unary_params *) inst_params;
+                rc = sum_rows_f32_entry((struct ggml_et_sum_rows_params *) inst_params, env);
+                break;
+            }
             case GGML_ET_UBERKERNEL_KERNEL_CUMSUM_F32: {
                 struct uber_unary_params *p = (struct uber_unary_params *) inst_params;
                 rc = cumsum_f32_entry((struct ggml_et_cumsum_params *) inst_params, env);
