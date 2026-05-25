@@ -1012,7 +1012,7 @@ private:
         // all sequences share a single KV cache. to prevent collective exhaustion of
         // the shared context, divide by the number of parallel slots
         if (params_base.kv_unified && params_base.n_parallel > 1) {
-            n_ctx_slot = n_ctx / params_base.n_parallel;
+            n_ctx_slot = std::max(1, n_ctx / params_base.n_parallel);
         }
 
         if (n_ctx_slot > n_ctx_train) {
