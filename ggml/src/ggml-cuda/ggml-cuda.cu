@@ -844,12 +844,13 @@ static size_t ggml_backend_cuda_buffer_type_get_alloc_size(ggml_backend_buffer_t
 }
 
 static const ggml_backend_buffer_type_i ggml_backend_cuda_buffer_type_interface = {
-    /* .get_name         = */ ggml_backend_cuda_buffer_type_get_name,
-    /* .alloc_buffer     = */ ggml_backend_cuda_buffer_type_alloc_buffer,
-    /* .get_alignment    = */ ggml_backend_cuda_buffer_type_get_alignment,
-    /* .get_max_size     = */ NULL, // defaults to SIZE_MAX
-    /* .get_alloc_size   = */ ggml_backend_cuda_buffer_type_get_alloc_size,
-    /* .is_host          = */ NULL,
+    /* .get_name       = */ ggml_backend_cuda_buffer_type_get_name,
+    /* .alloc_buffer   = */ ggml_backend_cuda_buffer_type_alloc_buffer,
+    /* .alloc_buffer_n = */ NULL,
+    /* .get_alignment  = */ ggml_backend_cuda_buffer_type_get_alignment,
+    /* .get_max_size   = */ NULL, // defaults to SIZE_MAX
+    /* .get_alloc_size = */ ggml_backend_cuda_buffer_type_get_alloc_size,
+    /* .is_host        = */ NULL,
 };
 
 ggml_backend_buffer_type_t ggml_backend_cuda_buffer_type(int device) {
@@ -1163,12 +1164,13 @@ static bool ggml_backend_cuda_split_buffer_type_is_host(ggml_backend_buffer_type
 }
 
 static const ggml_backend_buffer_type_i ggml_backend_cuda_split_buffer_type_interface = {
-    /* .get_name         = */ ggml_backend_cuda_split_buffer_type_get_name,
-    /* .alloc_buffer     = */ ggml_backend_cuda_split_buffer_type_alloc_buffer,
-    /* .get_alignment    = */ ggml_backend_cuda_split_buffer_type_get_alignment,
-    /* .get_max_size     = */ NULL, // defaults to SIZE_MAX
-    /* .get_alloc_size   = */ ggml_backend_cuda_split_buffer_type_get_alloc_size,
-    /* .is_host          = */ ggml_backend_cuda_split_buffer_type_is_host,
+    /* .get_name       = */ ggml_backend_cuda_split_buffer_type_get_name,
+    /* .alloc_buffer   = */ ggml_backend_cuda_split_buffer_type_alloc_buffer,
+    /* .alloc_buffer_n = */ NULL,
+    /* .get_alignment  = */ ggml_backend_cuda_split_buffer_type_get_alignment,
+    /* .get_max_size   = */ NULL, // defaults to SIZE_MAX
+    /* .get_alloc_size = */ ggml_backend_cuda_split_buffer_type_get_alloc_size,
+    /* .is_host        = */ ggml_backend_cuda_split_buffer_type_is_host,
 };
 
 // Communication context for multi-GPU AllReduce during tensor parallelism.
@@ -1568,12 +1570,13 @@ static ggml_backend_buffer_t ggml_backend_cuda_host_buffer_type_alloc_buffer(ggm
 ggml_backend_buffer_type_t ggml_backend_cuda_host_buffer_type() {
     static struct ggml_backend_buffer_type ggml_backend_cuda_buffer_type_host = {
         /* .iface    = */ {
-            /* .get_name         = */ ggml_backend_cuda_host_buffer_type_name,
-            /* .alloc_buffer     = */ ggml_backend_cuda_host_buffer_type_alloc_buffer,
-            /* .get_alignment    = */ ggml_backend_cpu_buffer_type()->iface.get_alignment,
-            /* .get_max_size     = */ NULL, // defaults to SIZE_MAX
-            /* .get_alloc_size   = */ ggml_backend_cpu_buffer_type()->iface.get_alloc_size,
-            /* .is_host          = */ ggml_backend_cpu_buffer_type()->iface.is_host,
+            /* .get_name       = */ ggml_backend_cuda_host_buffer_type_name,
+            /* .alloc_buffer   = */ ggml_backend_cuda_host_buffer_type_alloc_buffer,
+            /* .alloc_buffer_n = */ NULL,
+            /* .get_alignment  = */ ggml_backend_cpu_buffer_type()->iface.get_alignment,
+            /* .get_max_size   = */ NULL, // defaults to SIZE_MAX
+            /* .get_alloc_size = */ ggml_backend_cpu_buffer_type()->iface.get_alloc_size,
+            /* .is_host        = */ ggml_backend_cpu_buffer_type()->iface.is_host,
         },
         /* .device   = */ ggml_backend_reg_dev_get(ggml_backend_cuda_reg(), 0),
         /* .context  = */ nullptr,
