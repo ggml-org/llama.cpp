@@ -86,10 +86,14 @@
 #include <vector>
 
 #if defined(_WIN32)
+#define WIN32_LEAN_AND_MEAN
+#ifndef NOMINMAX
+    #define NOMINMAX
+#endif
 #include <windows.h>
 #else
 #include <dlfcn.h>
-#endif
+#endif // defined(_WIN32)
 
 static_assert(sizeof(half) == sizeof(ggml_fp16_t), "wrong fp16 size");
 
@@ -4994,7 +4998,7 @@ struct ggml_cuda_nvml {
         auto init  = (ggml_nvml_init_fn)   dlsym(lib, "nvmlInit_v2");
         get_handle = (ggml_nvml_handle_fn) dlsym(lib, "nvmlDeviceGetHandleByPciBusId_v2");
         get_mem    = (ggml_nvml_mem_fn)    dlsym(lib, "nvmlDeviceGetMemoryInfo");
-#endif
+#endif // defined(_WIN32)
         if (!init || !get_handle || !get_mem) {
             return;
         }
@@ -5051,12 +5055,12 @@ static void ggml_backend_cuda_device_get_memory(ggml_backend_dev_t dev, size_t *
 
 #if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
     if (ggml_cuda_nvml_get_memory(ctx->pci_bus_id, free, total)) {
-        GGML_LOG_DEBUG("%s: %s: using NVML context-free path\n", __func__, ctx->name.c_str());
+        GGML_LOG_DEBUG("%s: %s: using NVML path\n", __func__, ctx->name.c_str());
         return;
     }
-#endif
+#endif // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
 
-    GGML_LOG_DEBUG("%s: %s: using cudaMemGetInfo fallback\n", __func__, ctx->name.c_str());
+    GGML_LOG_DEBUG("%s: %s: using cudaMemGetInfo fallback - this results in eager memory allocation\n", __func__, ctx->name.c_str());
     ggml_cuda_set_device(ctx->device);
     CUDA_CHECK(cudaMemGetInfo(free, total));
 }
