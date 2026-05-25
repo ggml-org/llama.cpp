@@ -115,7 +115,7 @@ set(UBERKERNEL_SUPPORTED_KERNELS
     # rope_f32          # gemma4
     rwkv_wkv6_f32
     rwkv_wkv7_f32
-    # scale_f32         # gemma4
+    scale_f32         # gemma4
     set_f32
     # set_rows_f32
     # softmax_f32       # gemma4
