@@ -65,6 +65,9 @@ static void get_rows_thread_f32_f32_dma(unsigned int nth, unsigned int ith, void
 
     const uint32_t dr  = grctx->tasks_per_thread;
     const uint32_t ir0 = dr * ith;
+    if (ir0 >= grctx->total_tasks) {
+        return;
+    }
     const uint32_t ir1 = MIN(ir0 + dr, grctx->total_tasks);
 
     const bool is_i32 = (octx->src[1]->type == HTP_TYPE_I32);
@@ -106,6 +109,9 @@ static void get_rows_thread_f32_f32_hvx(unsigned int nth, unsigned int ith, void
 
     const uint32_t dr  = grctx->tasks_per_thread;
     const uint32_t ir0 = dr * ith;
+    if (ir0 >= grctx->total_tasks) {
+        return;
+    }
     const uint32_t ir1 = MIN(ir0 + dr, grctx->total_tasks);
 
     const bool is_i32 = (octx->src[1]->type == HTP_TYPE_I32);

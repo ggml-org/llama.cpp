@@ -64,6 +64,7 @@ static void cpy_thread_##NAME##_sameshape(unsigned int nth, unsigned int ith, vo
     const uint32_t dr  = ct->src0_nrows_per_thread;                                                            \
     const uint32_t ir0 = dr * ith;                                                                             \
     const uint32_t ir1 = (ir0 + dr) < nr ? (ir0 + dr) : nr;                                                    \
+    if (ir0 >= nr) return;                                                                                     \
     for (uint32_t i03 = 0; i03 < ne03; i03++) {                                                                \
         for (uint32_t i02 = 0; i02 < ne02; i02++) {                                                            \
             _Pragma("unroll(4)")                                                                               \
@@ -88,6 +89,7 @@ static void cpy_thread_##NAME##_reshape(unsigned int nth, unsigned int ith, void
     const uint32_t dr  = ct->src0_nrows_per_thread;                                                            \
     const uint32_t ir0 = dr * ith;                                                                             \
     const uint32_t ir1 = (ir0 + dr) < nr ? (ir0 + dr) : nr;                                                    \
+    if (ir0 >= nr) return;                                                                                     \
     const bool src0_contig = (nb00 == ELEM_SIZE)   &&                                                          \
                              (nb01 == ne00 * nb00) &&                                                          \
                              (nb02 == ne01 * nb01) &&                                                          \
@@ -189,6 +191,7 @@ static void cpy_thread_f16_f32_sameshape(unsigned int nth, unsigned int ith, voi
     const uint32_t dr  = ct->src0_nrows_per_thread;
     const uint32_t ir0 = dr * ith;
     const uint32_t ir1 = (ir0 + dr) < nr ? (ir0 + dr) : nr;
+    if (ir0 >= nr) return;
 
     // copy by rows
     for (uint32_t i03 = 0; i03 < ne03; i03++) {
@@ -213,6 +216,7 @@ static void cpy_thread_f32_f16_sameshape(unsigned int nth, unsigned int ith, voi
     const uint32_t dr  = ct->src0_nrows_per_thread;
     const uint32_t ir0 = dr * ith;
     const uint32_t ir1 = (ir0 + dr) < nr ? (ir0 + dr) : nr;
+    if (ir0 >= nr) return;
 
     // copy by rows
     for (uint32_t i03 = 0; i03 < ne03; i03++) {
