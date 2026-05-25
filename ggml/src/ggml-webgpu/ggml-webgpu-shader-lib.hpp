@@ -52,7 +52,7 @@
 #define WEBGPU_MUL_MAT_VEC_LEGACY_Q_OUTPUTS_PER_WG 4
 #define WEBGPU_MUL_MAT_VEC_K_Q_OUTPUTS_PER_WG      4
 
-// default size for legacy matrix multiplication
+// default size for reg-tile matrix multiplication
 #define WEBGPU_MUL_MAT_WG_SIZE 256
 
 // Same hash combine function as in boost
@@ -851,24 +851,6 @@ inline ggml_webgpu_flash_attn_decisions ggml_webgpu_flash_attn_get_decisions(
 
 /** Matrix Multiplication **/
 
-struct ggml_webgpu_legacy_mul_mat_pipeline_key {
-    ggml_type src0_type;
-    ggml_type src1_type;
-
-    bool operator==(const ggml_webgpu_legacy_mul_mat_pipeline_key & other) const {
-        return src0_type == other.src0_type && src1_type == other.src1_type;
-    }
-};
-
-struct ggml_webgpu_legacy_mul_mat_pipeline_key_hash {
-    size_t operator()(const ggml_webgpu_legacy_mul_mat_pipeline_key & key) const {
-        size_t seed = 0;
-        ggml_webgpu_hash_combine(seed, key.src0_type);
-        ggml_webgpu_hash_combine(seed, key.src1_type);
-        return seed;
-    }
-};
-
 struct ggml_webgpu_mul_mat_vec_pipeline_key {
     ggml_type src0_type;
     ggml_type src1_type;
@@ -1117,10 +1099,6 @@ class ggml_webgpu_shader_lib {
                        webgpu_pipeline,
                        ggml_webgpu_flash_attn_blk_pipeline_key_hash>
         flash_attn_blk_pipelines;
-    std::unordered_map<ggml_webgpu_legacy_mul_mat_pipeline_key,
-                       webgpu_pipeline,
-                       ggml_webgpu_legacy_mul_mat_pipeline_key_hash>
-        mul_mat_legacy_pipelines;  // legacy mul_mat (non-subgroup/non-regtile/non-vec)
     std::unordered_map<ggml_webgpu_mul_mat_vec_pipeline_key, webgpu_pipeline, ggml_webgpu_mul_mat_vec_pipeline_key_hash>
         mul_mat_vec_pipelines;     // fast mat-vec (n==1)
     std::unordered_map<ggml_webgpu_mul_mat_pipeline_key, webgpu_pipeline, ggml_webgpu_mul_mat_pipeline_key_hash>
@@ -2093,100 +2071,6 @@ class ggml_webgpu_shader_lib {
         pipeline.context            = decisions;
         mul_mat_fast_pipelines[key] = pipeline;
         return mul_mat_fast_pipelines[key];
-    }
-
-    webgpu_pipeline get_mul_mat_legacy_pipeline(const ggml_webgpu_shader_lib_context & context) {
-        ggml_webgpu_legacy_mul_mat_pipeline_key key = {};
-        key.src0_type                               = context.src0->type;
-        key.src1_type                               = context.src1->type;
-
-        auto it = mul_mat_legacy_pipelines.find(key);
-        if (it != mul_mat_legacy_pipelines.end()) {
-            return it->second;
-        }
-
-        std::vector<std::string> defines;
-        std::string              variant = "mul_mat";
-
-        switch (context.src1->type) {
-            case GGML_TYPE_F32:
-                defines.push_back("SRC1_TYPE=f32");
-                variant += "_f32";
-                break;
-            case GGML_TYPE_F16:
-                defines.push_back("SRC1_TYPE=f16");
-                variant += "_f16";
-                break;
-            default:
-                GGML_ABORT("Unsupported src1 type for mul_mat legacy shader");
-        }
-
-        const struct ggml_type_traits * src0_traits = ggml_get_type_traits(context.src0->type);
-        const char *                    src0_name   = src0_traits->type_name;
-
-        switch (context.src0->type) {
-            case GGML_TYPE_F32:
-                defines.push_back("SRC0_TYPE=f32");
-                defines.push_back("FLOAT");
-                variant += "_f32";
-                break;
-            case GGML_TYPE_F16:
-                defines.push_back("SRC0_TYPE=f16");
-                defines.push_back("FLOAT");
-                variant += "_f16";
-                break;
-            default:
-                {
-                    std::string type_upper = src0_name;
-                    std::transform(type_upper.begin(), type_upper.end(), type_upper.begin(), ::toupper);
-
-                    switch (context.src0->type) {
-                        case GGML_TYPE_Q4_0:
-                        case GGML_TYPE_Q5_0:
-                        case GGML_TYPE_Q8_0:
-                        case GGML_TYPE_Q3_K:
-                        case GGML_TYPE_Q6_K:
-                        case GGML_TYPE_IQ2_XXS:
-                        case GGML_TYPE_IQ2_XS:
-                        case GGML_TYPE_IQ2_S:
-                        case GGML_TYPE_IQ3_XXS:
-                        case GGML_TYPE_IQ3_S:
-                        case GGML_TYPE_IQ1_S:
-                        case GGML_TYPE_IQ4_NL:
-                        case GGML_TYPE_MXFP4:
-                            {
-                                // Quantized types using u32 buffers for portability.
-                                defines.push_back("SRC0_TYPE=u32");
-                                defines.push_back("U32_DEQUANT_HELPERS");
-                                break;
-                            }
-                        default:
-                            {
-                                defines.push_back(std::string("SRC0_TYPE=") + src0_name);
-                            }
-                    }
-
-                    defines.push_back("BYTE_HELPERS");
-                    defines.push_back(type_upper + "_T");
-                    defines.push_back(type_upper);
-                    defines.push_back(type_upper + "_SCALE_MIN");
-                    defines.push_back(type_upper + "_TABLES");
-                    defines.push_back(type_upper + "_GRID");
-
-                    variant += std::string("_") + src0_name;
-                    break;
-                }
-        }
-
-        auto processed = preprocessor.preprocess(wgsl_mul_mat, defines);
-
-        auto decisions     = std::make_shared<ggml_webgpu_generic_shader_decisions>();
-        decisions->wg_size = WEBGPU_MUL_MAT_WG_SIZE;
-
-        webgpu_pipeline pipeline      = ggml_webgpu_create_pipeline(device, processed, variant);
-        pipeline.context              = decisions;
-        mul_mat_legacy_pipelines[key] = pipeline;
-        return mul_mat_legacy_pipelines[key];
     }
 
     webgpu_pipeline get_mul_mat_id_gather_pipeline(const ggml_webgpu_shader_lib_context & context) {
