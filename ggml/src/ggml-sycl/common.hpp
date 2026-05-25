@@ -61,7 +61,6 @@ extern int g_ggml_sycl_debug;
 extern int g_ggml_sycl_disable_optimize;
 extern int g_ggml_sycl_prioritize_dmmv;
 extern int g_ggml_sycl_enable_flash_attention;
-extern int g_ggml_sycl_enable_level_zero;
 
 
 #if defined(__clang__) && __has_builtin(__builtin_expect)
@@ -313,6 +312,7 @@ struct ggml_tensor_extra_gpu {
   optimize_feature optimized_feature;
 };
 
+extern int g_ggml_sycl_enable_level_zero;
 void * ggml_sycl_malloc_device(size_t size, sycl::queue &q);
 void ggml_sycl_free_device(void *ptr, sycl::queue &q);
 
