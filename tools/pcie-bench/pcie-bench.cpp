@@ -1,4 +1,5 @@
 #include "ggml-cpu/pinned.h"
+#include "ggml-cuda/tma-transfer.h"
 #include <cuda_runtime.h>
 #include <cstdio>
 #include <cstdlib>
@@ -158,6 +159,75 @@ static void bench_layer_overlap(size_t layer_size_mb, int num_layers) {
     printf("  Overlap efficiency: %.0f%% (perfect = 100%% hidden transfer)\n", overlap_pct);
 }
 
+static void bench_tma_kv_prefill(size_t buffer_size, int iterations) {
+    void * pinned = ggml_cpu_pinned_alloc(buffer_size);
+    if (!pinned) {
+        fprintf(stderr, "tma-kv-prefill: failed to alloc pinned %zu bytes\n", buffer_size);
+        return;
+    }
+
+    // Fill with data to ensure pages are touched
+    memset(pinned, 0xAA, buffer_size);
+
+    void * d_vram = nullptr;
+    cudaError_t err = cudaMalloc(&d_vram, buffer_size);
+    if (err != cudaSuccess) {
+        fprintf(stderr, "tma-kv-prefill: cudaMalloc failed: %s\n", cudaGetErrorString(err));
+        ggml_cpu_pinned_free(pinned, buffer_size);
+        return;
+    }
+
+    cudaStream_t stream;
+    cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking);
+
+    ggml_tma_transfer_t transfer = nullptr;
+    size_t num_elements = buffer_size / 2;
+    size_t elem_size = 2;  // 16-byte TMA elements (2 * 8 = 16)
+    bool tma_ok = ggml_tma_init_transfer(&transfer,
+        pinned, d_vram, num_elements, elem_size, (void *)stream);
+
+    const char * method = tma_ok ? "TMA" : "cudaMemcpyAsync";
+    printf("TMA KV Prefill: %zu bytes (%.1f GB), method=%s, iterations=%d\n",
+           buffer_size, buffer_size / (1024.0*1024.0*1024.0), method, iterations);
+
+    cudaEvent_t start, stop;
+    cudaEventCreate(&start);
+    cudaEventCreate(&stop);
+
+    // Warmup
+    if (tma_ok) {
+        ggml_tma_launch_transfer(transfer);
+    } else {
+        cudaMemcpyAsync(d_vram, pinned, buffer_size, cudaMemcpyHostToDevice, stream);
+    }
+    cudaStreamSynchronize(stream);
+
+    // Benchmark
+    cudaEventRecord(start, stream);
+    for (int i = 0; i < iterations; i++) {
+        if (tma_ok) {
+            ggml_tma_launch_transfer(transfer);
+        } else {
+            cudaMemcpyAsync(d_vram, pinned, buffer_size, cudaMemcpyHostToDevice, stream);
+        }
+    }
+    cudaEventRecord(stop, stream);
+    cudaEventSynchronize(stop);
+
+    float ms = 0;
+    cudaEventElapsedTime(&ms, start, stop);
+    double bandwidth = (double)(iterations * buffer_size) / (ms * 1e6);  // GB/s
+    printf("  Total time: %.1f ms\n", ms);
+    printf("  Bandwidth:  %.1f GB/s (PCIe Gen5 x16 theoretical: ~63 GB/s)\n", bandwidth);
+
+    ggml_tma_free_transfer(transfer);
+    cudaEventDestroy(start);
+    cudaEventDestroy(stop);
+    cudaStreamDestroy(stream);
+    cudaFree(d_vram);
+    ggml_cpu_pinned_free(pinned, buffer_size);
+}
+
 int main(int argc, char** argv) {
     int device = 0;
     size_t buffer_size_mb = 1024;  // default 1GB
@@ -174,8 +244,9 @@ int main(int argc, char** argv) {
         {"iter",     required_argument, NULL, 'n'},
         {"layer",    required_argument, NULL, 'l'},
         {"layers",   required_argument, NULL, 'L'},
-        {"raw",      no_argument,       NULL, 'r'},
-        {"overlap",  no_argument,       NULL, 'o'},
+        {"raw",             no_argument,       NULL, 'r'},
+        {"overlap",         no_argument,       NULL, 'o'},
+        {"tma-kv-prefill",  optional_argument, NULL, 't'},
         {NULL, 0, NULL, 0}
     };
 
@@ -190,16 +261,35 @@ int main(int argc, char** argv) {
             case 'L': num_layers = atoi(optarg); break;
             case 'r': mode = "raw"; break;
             case 'o': mode = "overlap"; break;
+            case 't':
+                mode = "tma-kv-prefill";
+                {
+                    size_t kv_size = 4 * 1024 * 1024 * 1024;  // 4 GB default
+                    const char * size_arg = optarg;
+                    if (size_arg && size_arg[0] != '-') {
+                        char * end;
+                        double val = strtod(size_arg, &end);
+                        if (*end == 'G' || *end == 'g') val *= 1024.0*1024.0*1024.0;
+                        else if (*end == 'M' || *end == 'm') val *= 1024.0*1024.0;
+                        else if (*end == 'K' || *end == 'k') val *= 1024.0;
+                        else val = atof(size_arg) * 1024.0 * 1024.0;  // treat plain number as MB
+                        kv_size = (size_t)val;
+                    }
+                    bench_tma_kv_prefill(kv_size, iterations);
+                    return 0;
+                }
             default:
-                fprintf(stderr, "Usage: %s [--raw|--overlap] [options]\n", argv[0]);
-                fprintf(stderr, "  --raw       Raw PCIe bandwidth test (default)\n");
-                fprintf(stderr, "  --overlap   Layer transfer overlap test\n");
-                fprintf(stderr, "  -s MB       Buffer size in MB (default: 1024)\n");
-                fprintf(stderr, "  -w N        Warmup iterations (default: 10)\n");
-                fprintf(stderr, "  -n N        Timed iterations (default: 50)\n");
-                fprintf(stderr, "  -l MB       Layer size for overlap test (default: 256)\n");
-                fprintf(stderr, "  -L N        Number of layers (default: 20)\n");
-                fprintf(stderr, "  -d N        GPU device (default: 0)\n");
+                fprintf(stderr, "Usage: %s [--raw|--overlap|--tma-kv-prefill] [options]\n", argv[0]);
+                fprintf(stderr, "  --raw             Raw PCIe bandwidth test (default)\n");
+                fprintf(stderr, "  --overlap         Layer transfer overlap test\n");
+                fprintf(stderr, "  --tma-kv-prefill  TMA KV cache prefill benchmark\n");
+                fprintf(stderr, "                     Optional size: 8G, 4096M, 4G (default 4G)\n");
+                fprintf(stderr, "  -s MB             Buffer size in MB (default: 1024)\n");
+                fprintf(stderr, "  -w N              Warmup iterations (default: 10)\n");
+                fprintf(stderr, "  -n N              Timed iterations (default: 50)\n");
+                fprintf(stderr, "  -l MB             Layer size for overlap test (default: 256)\n");
+                fprintf(stderr, "  -L N              Number of layers (default: 20)\n");
+                fprintf(stderr, "  -d N              GPU device (default: 0)\n");
                 return 1;
         }
     }
