@@ -89,7 +89,7 @@ set(UBERKERNEL_SUPPORTED_KERNELS
     # cont_f32
 
     concat_f32
-    # cont_f16         # gemma4: MoE cont
+    cont_f16         # gemma4: MoE cont
     cumsum_f32
     diag_f32
     # fill_f32         # gemma4: MoE fill

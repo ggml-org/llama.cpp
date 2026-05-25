@@ -472,11 +472,11 @@ int entry_point(struct ggml_et_uberkernel_params * params, void * env) {
                 rc = pad_f32_entry((struct ggml_et_pad_params *) inst_params, env);
                 break;
             }
-            // case GGML_ET_UBERKERNEL_KERNEL_CONT_F16: { // gemma4: MoE cont
-            //     struct uber_unary_params *p = (struct uber_unary_params *) inst_params;
-            //     rc = cont_f16_entry((struct ggml_et_cont_params *) inst_params, env);
-            //     break;
-            // }
+            case GGML_ET_UBERKERNEL_KERNEL_CONT_F16: { // gemma4: MoE cont
+                struct uber_unary_params *p = (struct uber_unary_params *) inst_params;
+                rc = cont_f16_entry((struct ggml_et_cont_params *) inst_params, env);
+                break;
+            }
 
             // fill: no input to evict (writes dst from scalar constant)
             // case GGML_ET_UBERKERNEL_KERNEL_FILL_F32: { // gemma4: MoE fill
