@@ -62,6 +62,15 @@ class Lfm2AudioDecoderModelConverter:
                 "depthformer_n_embd",
                 config_json["depthformer"]["dim"],
             )
+            # interleaved modality cadence; fall back to runtime defaults if absent
+            self.gguf_writer.add_uint32(
+                "interleaved_n_text",
+                config_json.get("interleaved_n_text", 6),
+            )
+            self.gguf_writer.add_uint32(
+                "interleaved_n_audio",
+                config_json.get("interleaved_n_audio", 12),
+            )
 
     def load_tensors(self, path, predicate):
         tensors = {}

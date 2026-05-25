@@ -209,6 +209,15 @@ struct audio_decoder_ggml_ctx {
         return std::make_pair(t, data);
     }
 
+    // read an optional u32 hyperparameter, falling back if the key is absent
+    uint32_t get_hparam_u32(const char * key, uint32_t fallback) const {
+        auto key_id = gguf_find_key(ctx_gguf, key);
+        if (key_id < 0) {
+            return fallback;
+        }
+        return gguf_get_val_u32(ctx_gguf, key_id);
+    }
+
     ggml_tensor * get_weight(const char * fmt, ...) {
         std::vector<char> str(128);
         va_list           va;
@@ -674,9 +683,10 @@ class audio_decoder_lfm25 : public mtmd_audio_decoder {
     // output modality switch
     std::vector<mtmd_output_modality> modalities;
 
-    static constexpr auto interleaved_n_text  = 6;
-    static constexpr auto interleaved_n_audio = 12;
-    int                   modality_left       = INT_MAX;
+    // interleaved modality cadence, read from gguf with fallback defaults
+    int interleaved_n_text  = 6;
+    int interleaved_n_audio = 12;
+    int modality_left       = INT_MAX;
 
     // sampling
     llama_sampler_ptr smpl;
@@ -687,6 +697,9 @@ class audio_decoder_lfm25 : public mtmd_audio_decoder {
                         bool                use_gpu) :
         ctx(use_gpu) {
         ctx.load_gguf(vocoder_path.c_str());
+
+        interleaved_n_text  = ctx.get_hparam_u32("interleaved_n_text", interleaved_n_text);
+        interleaved_n_audio = ctx.get_hparam_u32("interleaved_n_audio", interleaved_n_audio);
 
         decoder_model.init(ctx);
 
