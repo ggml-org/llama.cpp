@@ -86,7 +86,6 @@ int64_t downsample_sycl_global_range(int64_t accumulate_block_num, int64_t block
 
 #ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO
 static bool ggml_sycl_use_level_zero_device_alloc(sycl::queue &q) {
-    GGML_ASSERT(g_ggml_sycl_enable_level_zero != -1); // sentinel to remove
     return g_ggml_sycl_enable_level_zero &&
         q.get_device().is_gpu() &&
         q.get_backend() == sycl::backend::ext_oneapi_level_zero;

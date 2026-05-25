@@ -73,7 +73,7 @@ int g_ggml_sycl_disable_dnn = 0;
 int g_ggml_sycl_prioritize_dmmv = 0;
 int g_ggml_sycl_use_async_mem_op = 0;
 int g_ggml_sycl_use_async_mem_op_requested = 1;
-int g_ggml_sycl_enable_level_zero = -1;
+int g_ggml_sycl_enable_level_zero = 1;
 int g_ggml_sycl_enable_flash_attention = 1;
 
 static inline int get_sycl_env(const char *env_name, int default_val);
