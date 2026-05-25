@@ -560,16 +560,16 @@ int entry_point(struct ggml_et_uberkernel_params * params, void * env) {
             //     rc = mul_mat_f16_matrix_engine_entry(p, env);
             //     break;
             // }
-            // case GGML_ET_UBERKERNEL_KERNEL_MUL_MAT_F32: { // gemma4
-            //     struct ggml_et_binary_params *p = (struct ggml_et_binary_params *) inst_params;
-            //     rc = mul_mat_f32_entry(p, env);
-            //     break;
-            // }
-            // case GGML_ET_UBERKERNEL_KERNEL_MUL_MAT_F32_MATRIX_ENGINE: { // gemma4
-            //     struct ggml_et_binary_params *p = (struct ggml_et_binary_params *) inst_params;
-            //     rc = mul_mat_f32_matrix_engine_entry(p, env);
-            //     break;
-            // }
+            case GGML_ET_UBERKERNEL_KERNEL_MUL_MAT_F32: { // gemma4
+                struct ggml_et_binary_params *p = (struct ggml_et_binary_params *) inst_params;
+                rc = mul_mat_f32_entry(p, env);
+                break;
+            }
+            case GGML_ET_UBERKERNEL_KERNEL_MUL_MAT_F32_MATRIX_ENGINE: { // gemma4
+                struct ggml_et_binary_params *p = (struct ggml_et_binary_params *) inst_params;
+                rc = mul_mat_f32_matrix_engine_entry(p, env);
+                break;
+            }
             // case GGML_ET_UBERKERNEL_KERNEL_MUL_MAT_Q8_0: { // gemma4
             //     struct ggml_et_mm_q8_params *p = (struct ggml_et_mm_q8_params *) inst_params;
             //     rc = mul_mat_Q8_0_entry(p, env);
