@@ -115,7 +115,7 @@ static ggml_backend_buffer_t ggml_backend_buft_alloc_buffer_n_default(ggml_backe
 
             buffers = (ggml_backend_buffer_t *) realloc(buffers, sizeof(ggml_backend_buffer_t) * (n_buffers + 1));
             buffers[n_buffers++] = buffer;
-            cur_buf_size = 0;
+            cur_buf_size = this_size;
             first = i;
         } else if (i < n_tensors) {
             cur_buf_size += this_size;
