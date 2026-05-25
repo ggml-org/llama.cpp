@@ -1391,7 +1391,6 @@ void GgmlOvDecoder::compute_node_dynamic_dims() {
             m_node_dynamic_dims[node] = -1;
             if (m_node_dynamic_dims[node->src[1]] != -1) {
                 auto dynamic_dim_idx = m_node_dynamic_dims[node->src[1]];
-                auto dynamic_dim_value = node->src[1]->ne[dynamic_dim_idx];
                 if (dynamic_dim_idx == 0) {
                     m_node_dynamic_dims[node] = 1;
                 } else {
