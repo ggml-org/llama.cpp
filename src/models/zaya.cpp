@@ -177,11 +177,12 @@ llama_model_zaya::graph::graph(const llama_model & model, const llm_graph_params
         const int64_t n_gqa     = n_head / n_head_kv;
 
         ggml_tensor * hidden_states = apply_res_scale(inpL, layer.res_scale_hs, layer.res_scale_hs_b, "res_scale_hs", il);
+        // residual_in_fp32 = true in config
         if (residual != nullptr) {
             residual = apply_res_scale(residual, layer.res_scale_res, layer.res_scale_res_b, "res_scale_res", il);
-            residual = ggml_add(ctx0, hidden_states, residual);
+            residual = ggml_add(ctx0, ggml_cast(ctx0, hidden_states, GGML_TYPE_F32), ggml_cast(ctx0, residual, GGML_TYPE_F32));
         } else {
-            residual = hidden_states;
+            residual = ggml_cast(ctx0, hidden_states, GGML_TYPE_F32);
         }
         cb(residual, "residual", il);
 
@@ -415,11 +416,12 @@ llama_model_zaya::graph::graph(const llama_model & model, const llm_graph_params
     }
 
     ggml_tensor * final_hidden = apply_res_scale(inpL, model.zaya_res_scale_hs, model.zaya_res_scale_hs_b, "final_res_scale_hs", -1);
+    // residual_in_fp32 = true in config
     if (residual != nullptr) {
         residual = apply_res_scale(residual, model.zaya_res_scale_res, model.zaya_res_scale_res_b, "final_res_scale_res", -1);
-        cur = ggml_add(ctx0, final_hidden, residual);
+        cur = ggml_add(ctx0, ggml_cast(ctx0, final_hidden, GGML_TYPE_F32), ggml_cast(ctx0, residual, GGML_TYPE_F32));
     } else {
-        cur = final_hidden;
+        cur = ggml_cast(ctx0, final_hidden, GGML_TYPE_F32);
     }
     cb(cur, "final_residual", -1);
 
