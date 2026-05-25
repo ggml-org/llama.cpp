@@ -11,7 +11,9 @@
 
 class AudioPlayback {
 public:
-    AudioPlayback(int sample_rate) : sample_rate_(sample_rate) {}
+    AudioPlayback(int sample_rate) : sample_rate_(sample_rate) {
+        buffer_.resize(max_capacity_);
+    }
     ~AudioPlayback() { stop(); }
 
     bool start() {
@@ -63,10 +65,6 @@ public:
             // Write in two parts if it wraps around
             size_t space_until_end = max_capacity_ - tail_;
             size_t first_write = std::min(to_write, space_until_end);
-
-            if (buffer_.size() < max_capacity_) {
-                buffer_.resize(max_capacity_);
-            }
 
             std::copy(samples.begin() + samples_added, samples.begin() + samples_added + first_write, buffer_.begin() + tail_);
 
