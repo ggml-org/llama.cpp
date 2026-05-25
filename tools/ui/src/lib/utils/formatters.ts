@@ -5,7 +5,9 @@ import {
 	SHORT_DURATION_THRESHOLD,
 	MEDIUM_DURATION_THRESHOLD,
 	MAX_PREVIEW_LENGTH,
-	STRIP_MARKDOWN_PATTERNS
+	STRIP_BLOCK_MARKDOWN_PATTERNS,
+	STRIP_INLINE_MARKDOWN_PATTERNS,
+	NEWLINE_SEPARATOR
 } from '$lib/constants';
 
 /**
@@ -164,20 +166,30 @@ export function formatAttachmentText(
  */
 export function formatReasoningPreview(content: string): { preview: string; overflow: number } {
 	if (!content) return { preview: '', overflow: 0 };
-
-	const lines = content.split('\n');
+	// 1. Strip Block-Level Markdown Globally (Fastest)
+	// This removes fenced code blocks, HTML, and bold from the entire stream at once
+	let cleanedContent = content;
+	for (const [pattern, replacement] of STRIP_BLOCK_MARKDOWN_PATTERNS) {
+		cleanedContent = cleanedContent.replace(pattern, replacement as string);
+	}
+	// 2. Split and iterate BACKWARDS to find the last non-empty line
+	const lines = cleanedContent.split(NEWLINE_SEPARATOR);
 	let lastLine = '';
-	for (let i = 0; i < lines.length; i++) {
-		let cleaned = lines[i];
-		for (const [pattern, replacement] of STRIP_MARKDOWN_PATTERNS) {
-			cleaned = cleaned.replace(pattern, replacement as string);
+	// Optimization: Start from the end. If the model outputs 1000 lines,
+	// but the answer is on line 990, we stop here instead of scanning all 1000.
+	for (let i = lines.length - 1; i >= 0; i--) {
+		let line = lines[i];
+		// Apply Inline Patterns (Lists, Code, Quotes) only to this specific line
+		for (const [pattern, replacement] of STRIP_INLINE_MARKDOWN_PATTERNS) {
+			line = line.replace(pattern, replacement as string);
 		}
-		cleaned = cleaned.trim();
-		if (cleaned.length > 0) {
-			lastLine = cleaned;
+		const trimmed = line.trim();
+		if (trimmed.length > 0) {
+			lastLine = trimmed;
+			break; // Found the most recent content, exit loop immediately
 		}
 	}
-
+	if (!lastLine) return { preview: '', overflow: 0 };
 	const fullLength = lastLine.length;
 	const overflow = Math.max(0, fullLength - MAX_PREVIEW_LENGTH);
 	if (fullLength > MAX_PREVIEW_LENGTH) {
