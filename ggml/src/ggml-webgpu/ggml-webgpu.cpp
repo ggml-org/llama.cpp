@@ -211,7 +211,7 @@ struct webgpu_global_context_struct {
     wgpu::Buffer    memset_params_buf;
     webgpu_pipeline memset_pipeline;
 
-    uint32_t vendor_id;
+    std::string vendor;
 
     // TODO: We should rework the CPU profiling time handling to make it more useful. ref: https://github.com/ggml-org/llama.cpp/pull/22050
 #ifdef GGML_WEBGPU_CPU_PROFILE
@@ -1447,30 +1447,8 @@ static webgpu_encoded_op ggml_webgpu_mul_mat(webgpu_context & ctx,
     bool is_vec = (dst->ne[1] == 1);
 
     // use MMVQ path for mat-vec
-    bool use_mmvq = false;
-    if (is_vec) {
-        bool supports_dp4a = ctx->global_ctx->vendor_id == 0x1002 || ctx->global_ctx->vendor_id == 0x8086 ||
-                             ctx->global_ctx->vendor_id == 0x10DE;
-        if (supports_dp4a && ctx->global_ctx->capabilities.supports_dot_product) {
-            switch (src1->type) {
-                case GGML_TYPE_F32:
-                    switch (src0->type) {
-                        case GGML_TYPE_Q4_0:
-                        case GGML_TYPE_Q4_1:
-                        case GGML_TYPE_Q8_0:
-                        case GGML_TYPE_Q2_K:
-                        case GGML_TYPE_Q4_K:
-                            use_mmvq = src0->ne[0] % 4 == 0;
-                            break;
-                        default:
-                            break;
-                    }
-                    break;
-                default:
-                    break;
-            }
-        }
-    }
+    bool use_mmvq = ggml_webgpu_can_use_mmvq(src0, src1, ctx->global_ctx->capabilities.supports_dot_product,
+                                             ctx->global_ctx->vendor);
 
     ggml_webgpu_shader_lib_context shader_lib_ctx = {};
 
@@ -1485,7 +1463,8 @@ static webgpu_encoded_op ggml_webgpu_mul_mat(webgpu_context & ctx,
     shader_lib_ctx.sg_mat_k                 = ctx->global_ctx->capabilities.sg_mat_k;
     shader_lib_ctx.min_subgroup_size        = ctx->global_ctx->capabilities.min_subgroup_size;
     shader_lib_ctx.max_subgroup_size        = ctx->global_ctx->capabilities.max_subgroup_size;
-    shader_lib_ctx.use_mmvq                 = use_mmvq;
+    shader_lib_ctx.supports_dot_product     = ctx->global_ctx->capabilities.supports_dot_product;
+    shader_lib_ctx.vendor                   = ctx->global_ctx->vendor;
 
     // Get or create pipeline
     webgpu_pipeline                   pipeline;
@@ -3630,23 +3609,17 @@ static size_t ggml_backend_webgpu_buffer_type_get_alloc_size(ggml_backend_buffer
             break;
         case GGML_OP_MUL_MAT:
             {
-                const ggml_tensor * src0          = tensor->src[0];
-                const ggml_tensor * src1          = tensor->src[1];
-                bool                supports_dp4a = ctx->webgpu_global_ctx->vendor_id == 0x1002 ||
-                                                    ctx->webgpu_global_ctx->vendor_id == 0x8086 ||
-                                                    ctx->webgpu_global_ctx->vendor_id == 0x10DE;
-                if (supports_dp4a && ctx->webgpu_global_ctx->capabilities.supports_dot_product) {
-                    if (src0 && src1 &&
-                        (src0->type == GGML_TYPE_Q8_0 || src0->type == GGML_TYPE_Q4_0 || src0->type == GGML_TYPE_Q4_1 ||
-                         src0->type == GGML_TYPE_Q2_K || src0->type == GGML_TYPE_Q4_K) &&
-                        src1->type == GGML_TYPE_F32 && src0->ne[0] % 4 == 0) {
-                        const size_t q8_src1_size =
-                            src1->ne[3] * src1->ne[2] * (36 /* sizeof(q8_1) */ * (src1->ne[0] / /* block_size */ 32));
-                        res = ROUNDUP_POW2(
-                            res + q8_src1_size +
-                                ctx->webgpu_global_ctx->capabilities.limits.minStorageBufferOffsetAlignment,
-                            WEBGPU_STORAGE_BUF_BINDING_MULT);
-                    }
+                const ggml_tensor * src0 = tensor->src[0];
+                const ggml_tensor * src1 = tensor->src[1];
+                bool                use_mmvq =
+                    ggml_webgpu_can_use_mmvq(src0, src1, ctx->webgpu_global_ctx->capabilities.supports_dot_product,
+                                             ctx->webgpu_global_ctx->vendor);
+                if (use_mmvq) {
+                    const size_t q8_src1_size =
+                        src1->ne[3] * src1->ne[2] * (36 /* sizeof(q8_1) */ * (src1->ne[0] / /* block_size */ 32));
+                    res = ROUNDUP_POW2(res + q8_src1_size +
+                                           ctx->webgpu_global_ctx->capabilities.limits.minStorageBufferOffsetAlignment,
+                                       WEBGPU_STORAGE_BUF_BINDING_MULT);
                 }
             }
             break;
@@ -3775,6 +3748,7 @@ static bool create_webgpu_device(ggml_backend_webgpu_reg_context * ctx) {
     ctx->webgpu_global_ctx->adapter.GetInfo(&info);
     ctx->webgpu_global_ctx->command_submit_batch_size = ggml_backend_webgpu_get_command_submit_batch_size();
     ctx->webgpu_global_ctx->max_inflight_batches      = ggml_backend_webgpu_get_max_inflight_batches();
+    ctx->webgpu_global_ctx->vendor                    = info.vendor;
     wgpu::SupportedFeatures features;
     ctx->webgpu_global_ctx->adapter.GetFeatures(&features);
     // we require f16 support
@@ -3784,17 +3758,6 @@ static bool create_webgpu_device(ggml_backend_webgpu_reg_context * ctx) {
     // for dot4I8packed
     ctx->webgpu_global_ctx->capabilities.supports_dot_product = ctx->webgpu_global_ctx->instance.HasWGSLLanguageFeature(
         wgpu::WGSLLanguageFeatureName::Packed4x8IntegerDotProduct);
-    // vendor id (ref. https://pcisig.com/membership/member-companies)
-    auto vendor = std::string_view(info.vendor.data, info.vendor.length);
-    if (vendor == "amd") {
-        ctx->webgpu_global_ctx->vendor_id = 0x1002;
-    } else if (vendor == "apple") {
-        ctx->webgpu_global_ctx->vendor_id = 0x106B;
-    } else if (vendor == "intel") {
-        ctx->webgpu_global_ctx->vendor_id = 0x8086;
-    } else if (vendor == "nvidia") {
-        ctx->webgpu_global_ctx->vendor_id = 0x10DE;
-    }
 
     bool valid_subgroup_matrix_config = false;
 #ifndef __EMSCRIPTEN__

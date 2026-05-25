@@ -93,7 +93,8 @@ struct ggml_webgpu_shader_lib_context {
     uint32_t sg_mat_k                 = 0;
     uint32_t min_subgroup_size        = 0;
     uint32_t max_subgroup_size        = 0;
-    bool     use_mmvq                 = false;
+    bool     supports_dot_product     = false;
+    std::string vendor;
 };
 
 struct webgpu_pipeline {
@@ -1051,6 +1052,36 @@ struct ggml_webgpu_soft_max_pipeline_key_hash {
     }
 };
 
+/** MMVQ **/
+
+inline bool ggml_webgpu_can_use_mmvq(const ggml_tensor * src0,
+                                     const ggml_tensor * src1,
+                                     bool                supports_dot_product,
+                                     const std::string & vendor) {
+    if (src1->ne[1] == 1) {
+        bool supports_dp4a = vendor == "amd" || vendor == "intel" || vendor == "nvidia";
+        if (supports_dp4a && supports_dot_product) {
+            switch (src1->type) {
+                case GGML_TYPE_F32:
+                    switch (src0->type) {
+                        case GGML_TYPE_Q4_0:
+                        case GGML_TYPE_Q4_1:
+                        case GGML_TYPE_Q8_0:
+                        case GGML_TYPE_Q2_K:
+                        case GGML_TYPE_Q4_K:
+                            return src0->ne[0] % 4 == 0;
+                        default:
+                            break;
+                    }
+                    break;
+                default:
+                    break;
+            }
+        }
+    }
+    return false;
+}
+
 class ggml_webgpu_shader_lib {
     wgpu::Device           device;
     pre_wgsl::Preprocessor preprocessor;
@@ -1788,7 +1819,8 @@ class ggml_webgpu_shader_lib {
                           (context.src0->type == GGML_TYPE_F32 || context.src0->type == GGML_TYPE_F16)) ?
                                                        1 :
                                                        0;
-        key.use_mmvq                             = context.use_mmvq;
+        key.use_mmvq                             =
+            ggml_webgpu_can_use_mmvq(context.src0, context.src1, context.supports_dot_product, context.vendor);
 
         auto it = mul_mat_vec_pipelines.find(key);
         if (it != mul_mat_vec_pipelines.end()) {
