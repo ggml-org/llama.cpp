@@ -1,0 +1,114 @@
+name: CI (riscv)
+
+on:
+  workflow_dispatch: # allows manual triggering
+  push:
+    branches:
+      - master
+    paths: [
+      '.github/workflows/build-riscv.yml',
+      '**/CMakeLists.txt',
+      '**/.cmake',
+      '**/*.h',
+      '**/*.hpp',
+      '**/*.c',
+      '**/*.cpp'
+    ]
+
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths: [
+      '.github/workflows/build-riscv.yml',
+      'ggml/src/ggml-cpu/arch/riscv/**'
+    ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}
+  cancel-in-progress: true
+
+env:
+  GGML_NLOOP: 3
+  GGML_N_THREADS: 1
+  LLAMA_LOG_COLORS: 1
+  LLAMA_LOG_PREFIX: 1
+  LLAMA_LOG_TIMESTAMPS: 1
+
+jobs:
+  ubuntu-riscv64-native-sanitizer:
+    runs-on: ubuntu-24.04-riscv
+
+    continue-on-error: true
+
+    strategy:
+      matrix:
+        sanitizer: [ADDRESS, THREAD, UNDEFINED]
+        build_type: [Debug]
+
+    steps:
+      - name: Install dependencies
+        run: |
+          # Set gcc-14 and g++-14 as the default compilers
+          sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-14 100
+          sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-14 100
+
+          git lfs install
+
+      - name: GCC version check
+        run: |
+          gcc --version
+          g++ --version
+
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
+
+      - name: ccache
+        uses: ggml-org/ccache-action@afde29e5b5422e5da23cb1f639e8baecadeadfc3 # https://github.com/ggml-org/ccache-action/pull/1
+        with:
+          key: ubuntu-riscv64-native-sanitizer-${{ matrix.sanitizer }}-${{ matrix.build_type }}
+          evict-old-files: 1d
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+
+      - name: Build
+        id: cmake_build
+        if: ${{ matrix.sanitizer != 'THREAD' }}
+        run: |
+          cmake -B build \
+            -DLLAMA_OPENSSL=OFF \
+            -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
+            -DGGML_OPENMP=ON \
+            -DLLAMA_BUILD_EXAMPLES=ON \
+            -DLLAMA_BUILD_TOOLS=ON \
+            -DLLAMA_BUILD_TESTS=OFF \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DLLAMA_SANITIZE_${{ matrix.sanitizer }}=ON \
+            -DCMAKE_C_COMPILER=riscv64-linux-gnu-gcc-14 \
+            -DCMAKE_CXX_COMPILER=riscv64-linux-gnu-g++-14
+
+          cmake --build build --config ${{ matrix.build_type }} -j $(nproc)
+
+      - name: Build (no OpenMP)
+        id: cmake_build_no_openmp
+        if: ${{ matrix.sanitizer == 'THREAD' }}
+        run: |
+          cmake -B build \
+            -DLLAMA_OPENSSL=OFF \
+            -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
+            -DGGML_OPENMP=OFF \
+            -DLLAMA_BUILD_EXAMPLES=ON \
+            -DLLAMA_BUILD_TOOLS=ON \
+            -DLLAMA_BUILD_TESTS=OFF \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DLLAMA_SANITIZE_${{ matrix.sanitizer }}=ON \
+            -DCMAKE_C_COMPILER=riscv64-linux-gnu-gcc-14 \
+            -DCMAKE_CXX_COMPILER=riscv64-linux-gnu-g++-14
+
+          cmake --build build --config ${{ matrix.build_type }} -j $(nproc)
+
+      - name: Test
+        id: cmake_test
+        run: |
+          cd build
+          ctest -L main --verbose --timeout 900

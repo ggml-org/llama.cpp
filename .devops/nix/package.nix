@@ -16,8 +16,9 @@
   rocmPackages,
   vulkan-headers,
   vulkan-loader,
-  curl,
+  openssl,
   shaderc,
+  spirv-headers,
   useBlas ?
     builtins.all (x: !x) [
       useCuda
@@ -41,6 +42,7 @@
   effectiveStdenv ? if useCuda then cudaPackages.backendStdenv else stdenv,
   enableStatic ? effectiveStdenv.hostPlatform.isStatic,
   precompileMetalShaders ? false,
+  useWebUi ? true,
 }:
 
 let
@@ -101,6 +103,7 @@ let
     vulkan-headers
     vulkan-loader
     shaderc
+    spirv-headers
   ];
 in
 
@@ -159,11 +162,13 @@ effectiveStdenv.mkDerivation (finalAttrs: {
     ++ optionals useMpi [ mpi ]
     ++ optionals useRocm rocmBuildInputs
     ++ optionals useBlas [ blas ]
-    ++ optionals useVulkan vulkanBuildInputs;
+    ++ optionals useVulkan vulkanBuildInputs
+    ++ [ openssl ];
 
   cmakeFlags =
     [
       (cmakeBool "LLAMA_BUILD_SERVER" true)
+      (cmakeBool "LLAMA_BUILD_WEBUI" useWebUi)
       (cmakeBool "BUILD_SHARED_LIBS" (!enableStatic))
       (cmakeBool "CMAKE_SKIP_BUILD_RPATH" true)
       (cmakeBool "GGML_NATIVE" false)

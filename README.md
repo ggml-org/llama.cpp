@@ -17,6 +17,7 @@ LLM inference in C/C++
 
 ## Hot topics
 
+- **Hugging Face cache migration: models downloaded with `-hf` are now stored in the standard Hugging Face cache directory, enabling sharing with other HF tools.**
 - **[guide : using the new WebUI of llama.cpp](https://github.com/ggml-org/llama.cpp/discussions/16938)**
 - [guide : running gpt-oss with llama.cpp](https://github.com/ggml-org/llama.cpp/discussions/15396)
 - [[FEEDBACK] Better packaging for llama.cpp to support downstream consumers 🤗](https://github.com/ggml-org/llama.cpp/discussions/15313)
@@ -26,6 +27,7 @@ LLM inference in C/C++
 - Vim/Neovim plugin for FIM completions: https://github.com/ggml-org/llama.vim
 - Hugging Face Inference Endpoints now support GGUF out of the box! https://github.com/ggml-org/llama.cpp/discussions/9669
 - Hugging Face GGUF editor: [discussion](https://github.com/ggml-org/llama.cpp/discussions/9268) | [tool](https://huggingface.co/spaces/CISCai/gguf-editor)
+- WebGPU support is now available in the browser, see a blog/demo introducing it [here](https://reeselevine.github.io/llamas-on-the-web/).
 
 ----
 
@@ -171,6 +173,7 @@ Instructions for adding support for new models: [HOWTO-add-model.md](docs/develo
 - JavaScript/Wasm (works in browser): [tangledgroup/llama-cpp-wasm](https://github.com/tangledgroup/llama-cpp-wasm)
 - Typescript/Wasm (nicer API, available on npm): [ngxson/wllama](https://github.com/ngxson/wllama)
 - Ruby: [yoshoku/llama_cpp.rb](https://github.com/yoshoku/llama_cpp.rb)
+- Ruby: [docusealco/rllama](https://github.com/docusealco/rllama)
 - Rust (more features): [edgenai/llama_cpp-rs](https://github.com/edgenai/llama_cpp-rs)
 - Rust (nicer API): [mdrokz/rust-llama.cpp](https://github.com/mdrokz/rust-llama.cpp)
 - Rust (more direct bindings): [utilityai/llama-cpp-rs](https://github.com/utilityai/llama-cpp-rs)
@@ -241,7 +244,7 @@ Instructions for adding support for new models: [HOWTO-add-model.md](docs/develo
 <details>
 <summary>Tools</summary>
 
-- [akx/ggify](https://github.com/akx/ggify) – download PyTorch models from HuggingFace Hub and convert them to GGML
+- [akx/ggify](https://github.com/akx/ggify) – download PyTorch models from Hugging Face Hub and convert them to GGML
 - [akx/ollama-dl](https://github.com/akx/ollama-dl) – download models from the Ollama library to be used directly with llama.cpp
 - [crashr/gppm](https://github.com/crashr/gppm) – launch llama.cpp instances utilizing NVIDIA Tesla P40 or P100 GPUs with reduced idle power consumption
 - [gpustack/gguf-parser](https://github.com/gpustack/gguf-parser-go/tree/main/cmd/gguf-parser) - review/check the GGUF file and estimate the memory usage
@@ -278,7 +281,8 @@ Instructions for adding support for new models: [HOWTO-add-model.md](docs/develo
 | [Metal](docs/build.md#metal-build) | Apple Silicon |
 | [BLAS](docs/build.md#blas-build) | All |
 | [BLIS](docs/backend/BLIS.md) | All |
-| [SYCL](docs/backend/SYCL.md) | Intel and Nvidia GPU |
+| [SYCL](docs/backend/SYCL.md) | Intel GPU |
+| [OpenVINO [In Progress]](docs/backend/OPENVINO.md) | Intel CPUs, GPUs, and NPUs |
 | [MUSA](docs/build.md#musa) | Moore Threads GPU |
 | [CUDA](docs/build.md#cuda) | Nvidia GPU |
 | [HIP](docs/build.md#hip) | AMD GPU |
@@ -287,7 +291,7 @@ Instructions for adding support for new models: [HOWTO-add-model.md](docs/develo
 | [CANN](docs/build.md#cann) | Ascend NPU |
 | [OpenCL](docs/backend/OPENCL.md) | Adreno GPU |
 | [IBM zDNN](docs/backend/zDNN.md) | IBM Z & LinuxONE |
-| [WebGPU [In Progress]](docs/build.md#webgpu) | All |
+| [WebGPU](docs/build.md#webgpu) | All |
 | [RPC](https://github.com/ggml-org/llama.cpp/tree/master/tools/rpc) | All |
 | [Hexagon [In Progress]](docs/backend/snapdragon/README.md) | Snapdragon |
 | [VirtGPU](docs/backend/VirtGPU.md) | VirtGPU APIR |
@@ -299,13 +303,13 @@ The [Hugging Face](https://huggingface.co) platform hosts a [number of LLMs](htt
 - [Trending](https://huggingface.co/models?library=gguf&sort=trending)
 - [LLaMA](https://huggingface.co/models?sort=trending&search=llama+gguf)
 
-You can either manually download the GGUF file or directly use any `llama.cpp`-compatible models from [Hugging Face](https://huggingface.co/) or other model hosting sites, such as [ModelScope](https://modelscope.cn/), by using this CLI argument: `-hf <user>/<model>[:quant]`. For example:
+You can either manually download the GGUF file or directly use any `llama.cpp`-compatible models from [Hugging Face](https://huggingface.co/) or other model hosting sites, by using this CLI argument: `-hf <user>/<model>[:quant]`. For example:
 
 ```sh
 llama-cli -hf ggml-org/gemma-3-1b-it-GGUF
 ```
 
-By default, the CLI would download from Hugging Face, you can switch to other options with the environment variable `MODEL_ENDPOINT`. For example, you may opt to downloading model checkpoints from ModelScope or other model sharing communities by setting the environment variable, e.g. `MODEL_ENDPOINT=https://www.modelscope.cn/`.
+By default, the CLI would download from Hugging Face, you can switch to other options with the environment variable `MODEL_ENDPOINT`. The `MODEL_ENDPOINT` must point to a Hugging Face compatible API endpoint.
 
 After downloading a model, use the CLI tools to run it locally - see below.
 
@@ -527,6 +531,7 @@ To learn more about model quantization, [read this documentation](tools/quantize
 - [How to build](docs/build.md)
 - [Running on Docker](docs/docker.md)
 - [Build on Android](docs/android.md)
+- [Multi-GPU usage](docs/multi-gpu.md)
 - [Performance troubleshooting](docs/development/token_generation_performance_tips.md)
 - [GGML tips & tricks](https://github.com/ggml-org/llama.cpp/wiki/GGML-Tips-&-Tricks)
 

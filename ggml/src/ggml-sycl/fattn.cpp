@@ -34,6 +34,7 @@
     FATTN_VEC_CASE( 64, type_K, type_V)       \
     FATTN_VEC_CASE(128, type_K, type_V)       \
     FATTN_VEC_CASE(256, type_K, type_V)       \
+    FATTN_VEC_CASE(512, type_K, type_V)       \
 
 static void ggml_sycl_flash_attn_ext_vec(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     ggml_tensor * Q = dst->src[0];
@@ -141,6 +142,7 @@ static best_fattn_kernel ggml_sycl_get_best_fattn_kernel(const int device, const
         case 128:
         case 112:
         case 256:
+        case 512:
             if (V->ne[0] != K->ne[0]) {
                 return BEST_FATTN_KERNEL_NONE;
             }
@@ -185,7 +187,7 @@ static best_fattn_kernel ggml_sycl_get_best_fattn_kernel(const int device, const
     }
 
     // For small batch sizes the vector kernel may be preferable over the kernels optimized for large batch sizes:
-    const bool can_use_vector_kernel = Q->ne[0] <= 256 && Q->ne[0] % 64 == 0 && K->ne[1] % FATTN_KQ_STRIDE == 0;
+    const bool can_use_vector_kernel = Q->ne[0] <= 512 && Q->ne[0] % 64 == 0 && K->ne[1] % FATTN_KQ_STRIDE == 0;
 
     // Todo: Use the XMX kernel if possible:
 

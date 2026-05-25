@@ -5,6 +5,8 @@ include_directories(${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})
 set(TARGET server-context)
 
 add_library(${TARGET} STATIC
+    server-chat.cpp
+    server-chat.h
     server-task.cpp
     server-task.h
     server-queue.cpp
@@ -13,6 +15,8 @@ add_library(${TARGET} STATIC
     server-common.h
     server-context.cpp
     server-context.h
+    server-tools.cpp
+    server-tools.h
 )
 
 if (BUILD_SHARED_LIBS)
@@ -21,42 +25,35 @@ endif()
 
 target_include_directories(${TARGET} PRIVATE ../mtmd)
 target_include_directories(${TARGET} PRIVATE ${CMAKE_SOURCE_DIR})
-target_link_libraries(${TARGET} PUBLIC common mtmd ${CMAKE_THREAD_LIBS_INIT})
+target_link_libraries(${TARGET} PUBLIC llama-common mtmd ${CMAKE_THREAD_LIBS_INIT})
 
+# llama-server-impl: server logic, reusable by app
 
-# llama-server executable
+set(TARGET llama-server-impl)
 
-set(TARGET llama-server)
-
-set(TARGET_SRCS
+add_library(${TARGET}
     server.cpp
     server-http.cpp
     server-http.h
     server-models.cpp
     server-models.h
 )
-set(PUBLIC_ASSETS
-    index.html.gz
-    loading.html
-)
+set_target_properties(${TARGET} PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
 
-foreach(asset ${PUBLIC_ASSETS})
-    set(input "${CMAKE_CURRENT_SOURCE_DIR}/public/${asset}")
-    set(output "${CMAKE_CURRENT_BINARY_DIR}/${asset}.hpp")
-    list(APPEND TARGET_SRCS ${output})
-    add_custom_command(
-        DEPENDS "${input}"
-        OUTPUT "${output}"
-        COMMAND "${CMAKE_COMMAND}" "-DINPUT=${input}" "-DOUTPUT=${output}" -P "${PROJECT_SOURCE_DIR}/scripts/xxd.cmake"
-    )
-    set_source_files_properties(${output} PROPERTIES GENERATED TRUE)
-endforeach()
+target_include_directories(${TARGET} PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_include_directories(${TARGET} PRIVATE ../mtmd ${CMAKE_SOURCE_DIR})
+target_link_libraries(${TARGET} PUBLIC server-context llama-ui cpp-httplib ${CMAKE_THREAD_LIBS_INIT})
 
-add_executable(${TARGET} ${TARGET_SRCS})
+if(LLAMA_TOOLS_INSTALL)
+    install(TARGETS ${TARGET} LIBRARY)
+endif()
+
+# llama-server executable
+
+set(TARGET llama-server)
+
+add_executable(${TARGET} main.cpp)
 install(TARGETS ${TARGET} RUNTIME)
 
-target_include_directories(${TARGET} PRIVATE ../mtmd)
-target_include_directories(${TARGET} PRIVATE ${CMAKE_SOURCE_DIR})
-target_link_libraries(${TARGET} PRIVATE server-context PUBLIC common cpp-httplib ${CMAKE_THREAD_LIBS_INIT})
-
+target_link_libraries(${TARGET} PRIVATE llama-server-impl)
 target_compile_features(${TARGET} PRIVATE cxx_std_17)

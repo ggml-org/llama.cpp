@@ -16,8 +16,7 @@ import random
 import unicodedata
 
 from pathlib import Path
-from typing import Any, Iterator, cast
-from typing_extensions import Buffer
+from typing import Any, Iterator
 
 import cffi
 from transformers import AutoTokenizer, PreTrainedTokenizer
@@ -114,7 +113,7 @@ class LibLlamaModel:
         while num < 0 and len(self.text_buff) < (16 << 20):
             self.text_buff = self.ffi.new("uint8_t[]", -2 * num)
             num = self.lib.llama_detokenize(self.model, self.token_ids, len(ids), self.text_buff, len(self.text_buff), remove_special, unparse_special)
-        return str(cast(Buffer, self.ffi.buffer(self.text_buff, num)), encoding="utf-8", errors="replace")  # replace errors with '\uFFFD'
+        return str(self.ffi.buffer(self.text_buff, num), encoding="utf-8", errors="replace")  # replace errors with '\uFFFD' # pyright: ignore[reportArgumentType]
 
 
 class Tokenizer:
@@ -129,7 +128,7 @@ class Tokenizer:
 class TokenizerGroundtruth (Tokenizer):
 
     def __init__(self, dir_tokenizer: str):
-        self.model: PreTrainedTokenizer = AutoTokenizer.from_pretrained(dir_tokenizer)
+        self.model: PreTrainedTokenizer = AutoTokenizer.from_pretrained(dir_tokenizer)  # ty: ignore[invalid-assignment]
         # guess BOS and EOS
         ids = self.encode("a")
         assert 1 <= len(ids) <= 3
@@ -143,7 +142,7 @@ class TokenizerGroundtruth (Tokenizer):
         self.vocab = list(sorted(self.vocab))
         # tokens and lists
         self.special_tokens = list(self.model.all_special_tokens)
-        self.added_tokens   = self.model.batch_decode(self.model.added_tokens_encoder.values(), skip_special_tokens=False)
+        self.added_tokens   = self.model.batch_decode(list(self.model.added_tokens_encoder.values()), skip_special_tokens=False)
         self.bos_token = self.model.bos_token
         self.eos_token = self.model.eos_token
 
@@ -151,7 +150,7 @@ class TokenizerGroundtruth (Tokenizer):
         return self.model.encode(text, add_special_tokens=True)
 
     def decode(self, ids: list[int]) -> str:
-        return self.model.decode(ids, skip_special_tokens=False)
+        return self.model.decode(ids, skip_special_tokens=False)  # ty: ignore[invalid-return-type]
 
 
 class TokenizerLlamaCpp (Tokenizer):
@@ -438,7 +437,7 @@ def compare_tokenizers(tokenizer1: TokenizerGroundtruth, tokenizer2: TokenizerLl
     decode_errors = 0
     MAX_ERRORS = 10
 
-    logger.info("%s: %s" % (generator.__qualname__, "ini"))
+    logger.info("%s: %s" % (getattr(generator, "__qualname__", ""), "ini"))
     for text in generator:
         # print(repr(text), text.encode())
         # print(repr(text), hex(ord(text[0])), text.encode())
@@ -477,7 +476,7 @@ def compare_tokenizers(tokenizer1: TokenizerGroundtruth, tokenizer2: TokenizerLl
             break
 
     t_total = time.perf_counter() - t_start
-    logger.info(f"{generator.__qualname__}: end,  {t_encode1=:.3f} {t_encode2=:.3f}  {t_decode1=:.3f} {t_decode2=:.3f}  {t_total=:.3f}")
+    logger.info(f"{getattr(generator, '__qualname__', '')}: end,  {t_encode1=:.3f} {t_encode2=:.3f}  {t_decode1=:.3f} {t_decode2=:.3f}  {t_total=:.3f}")
 
 
 def main(argv: list[str] | None = None):

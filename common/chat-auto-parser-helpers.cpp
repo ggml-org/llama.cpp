@@ -1,9 +1,11 @@
 #include "chat-auto-parser-helpers.h"
 
 #include "chat-auto-parser.h"
+#include "chat-peg-parser.h"
 #include "chat.h"
 #include "log.h"
 #include "nlohmann/json.hpp"
+#include "peg-parser.h"
 
 #include <cctype>
 #include <numeric>
@@ -186,6 +188,21 @@ diff_split calculate_diff_split(const std::string & left, const std::string & ri
         result.suffix = "";
         // pick prefix = all as representation
     }
+
+    // When left has no unique content (result.left is empty), left is entirely
+    // shared with right. The simultaneous prefix/suffix segment matching can
+    // incorrectly consume trailing segments of left as suffix when those same
+    // segments also appear at the end of right (e.g. "\n" at the end of both
+    // the shared content and the generation prompt). This rotates the diff.
+    // Fix: if left is a prefix of right, enforce that directly.
+    if (result.left.empty() && !result.right.empty() &&
+            left.size() <= right.size() &&
+            right.substr(0, left.size()) == left) {
+        result.prefix = left;
+        result.suffix = "";
+        result.right  = right.substr(left.size());
+    }
+
     return result;
 }
 
@@ -293,8 +310,10 @@ std::vector<segment> prune_whitespace_segments(const std::vector<segment> & segm
 
 namespace autoparser {
 
+static const std::string ERR_TMPL = "#**ERROR**#";
+
 std::string apply_template(const common_chat_template & tmpl, const template_params & params) {
-    templates_params tmpl_params;
+    generation_params tmpl_params;
     tmpl_params.messages              = params.messages;
     tmpl_params.tools                 = params.tools;
     tmpl_params.add_generation_prompt = params.add_generation_prompt;
@@ -309,7 +328,7 @@ std::string apply_template(const common_chat_template & tmpl, const template_par
         return common_chat_template_direct_apply(tmpl, tmpl_params);
     } catch (const std::exception & e) {
         LOG_DBG("Template application failed: %s\n", e.what());
-        return "";
+        return ERR_TMPL;
     }
 }
 
@@ -330,7 +349,7 @@ std::optional<compare_variants_result> compare_variants(
     std::string output_B = apply_template(tmpl, params_B);
 
     // Check for template application failures
-    if (output_A.empty() || output_B.empty()) {
+    if (output_A == ERR_TMPL || output_B == ERR_TMPL) {
         return std::nullopt;
     }
 

@@ -12,6 +12,8 @@ int main(int argc, char ** argv){
 
     common_params params;
 
+    common_init();
+
     if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_LOOKUP)) {
         return 1;
     }
@@ -35,9 +37,9 @@ int main(int argc, char ** argv){
 
     common_ngram_cache ngram_cache;
     common_ngram_cache_update(ngram_cache, LLAMA_NGRAM_STATIC, LLAMA_NGRAM_STATIC, inp, inp.size(), true);
-    fprintf(stderr, "%s: hashing done, writing file to %s\n", __func__, params.speculative.lookup_cache_static.c_str());
+    fprintf(stderr, "%s: hashing done, writing file to %s\n", __func__, params.speculative.ngram_cache.lookup_cache_static.c_str());
 
-    common_ngram_cache_save(ngram_cache, params.speculative.lookup_cache_static);
+    common_ngram_cache_save(ngram_cache, params.speculative.ngram_cache.lookup_cache_static);
 
     return 0;
 }

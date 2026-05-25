@@ -5,6 +5,7 @@
 - [News](#news)
 - [OS](#os)
 - [Hardware](#hardware)
+- [Performance Reference](#performance-reference)
 - [Docker](#docker)
 - [Linux](#linux)
 - [Windows](#windows)
@@ -31,6 +32,8 @@ SYCL cross-platform capabilities enable support for other vendor GPUs as well.
 
 ## Recommended Release
 
+### Windows
+
 The following releases are verified and recommended:
 
 |Commit ID|Tag|Release|Verified  Platform| Update date|
@@ -39,8 +42,20 @@ The following releases are verified and recommended:
 |3bcd40b3c593d14261fb2abfabad3c0fb5b9e318|b4040 |[llama-b4040-bin-win-sycl-x64.zip](https://github.com/ggml-org/llama.cpp/releases/download/b4040/llama-b4040-bin-win-sycl-x64.zip) |Arc A770/Linux/oneAPI 2024.1<br>MTL Arc GPU/Windows 11/oneAPI 2024.1| 2024-11-19|
 |fb76ec31a9914b7761c1727303ab30380fd4f05c|b3038 |[llama-b3038-bin-win-sycl-x64.zip](https://github.com/ggml-org/llama.cpp/releases/download/b3038/llama-b3038-bin-win-sycl-x64.zip) |Arc A770/Linux/oneAPI 2024.1<br>MTL Arc GPU/Windows 11/oneAPI 2024.1||
 
+### Ubuntu 24.04
+
+The release packages for Ubuntu 24.04 x64 (FP32/FP16) only include the binary files of the llama.cpp SYCL backend. They require the target machine to have pre-installed Intel GPU drivers and oneAPI packages that are the same version as the build package. To get the version and installation info, refer to release.yml: ubuntu-24-sycl -> Download & Install oneAPI.
+
+It is recommended to use them with Intel Docker.
+
+The packages for FP32 and FP16 would have different accuracy and performance on LLMs. Please choose it acording to the test result.
 
 ## News
+
+- 2026.04-05
+  - Optimize mul_mat by reorder feature for data type: Q4_K, Q5_K, Q6_K, Q8_0.
+  - Fused MoE.
+  - Upgrate CI and built package for oneAPI 2025.3.3, support Ubuntu 24.04 built package.
 
 - 2026.03
   - Support Flash-Attention: less memory usage, performance impact depends on LLM.
@@ -134,6 +149,13 @@ On older Intel GPUs, you may try [OpenCL](/docs/backend/OPENCL.md) although the 
 ### Other Vendor GPU
 
 NA
+
+## Performance Reference
+
+
+To get the supported LLMs, GPUs, and performance reference, please check [Performance of llama.cpp on Intel GPU with SYCL backend](https://github.com/ggml-org/llama.cpp/discussions/23313).
+
+You could update your test result in it directly.
 
 ## Docker
 
@@ -229,6 +251,7 @@ Upon a successful installation, SYCL is enabled for the available intel devices,
 
 |Verified release|
 |-|
+|2025.3.3 |
 |2025.2.1|
 |2025.1|
 |2024.1|
@@ -337,6 +360,12 @@ Choose one of following methods to run.
 
 ```sh
 ./examples/sycl/test.sh
+```
+
+- Run llama-server:
+
+```sh
+./examples/sycl/start-svr.sh -m PATH/MODEL_FILE
 ```
 
 2. Command line
@@ -627,8 +656,16 @@ Choose one of following methods to run.
 
 1. Script
 
+- Run test:
+
 ```
 examples\sycl\win-test.bat
+```
+
+- Run llama-server:
+
+```
+examples\sycl\win-start-svr.bat -m PATH\MODEL_FILE
 ```
 
 2. Command line
@@ -689,6 +726,8 @@ use 1 SYCL GPUs: [0] with Max compute units:512
 | GGML_SYCL_F16      | OFF *(default)* \|ON *(optional)*     | Enable FP16 build with SYCL code path. (1.) |
 | GGML_SYCL_GRAPH    | OFF *(default)* \|ON *(Optional)*     | Enable build with [SYCL Graph extension](https://github.com/intel/llvm/blob/sycl/sycl/doc/extensions/experimental/sycl_ext_oneapi_graph.asciidoc). |
 | GGML_SYCL_DNN      | ON *(default)* \|OFF *(Optional)*     | Enable build with oneDNN.                   |
+| GGML_SYCL_HOST_MEM_FALLBACK | ON *(default)* \|OFF *(Optional)* | Allow host memory fallback when device memory is full during quantized weight reorder. Enables inference to continue at reduced speed (reading over PCIe) instead of failing. Requires Linux kernel 6.8+. |
+| GGML_SYCL_SUPPORT_LEVEL_ZERO | ON *(default)* \|OFF *(Optional)* | Enable Level Zero API for device memory allocation. Requires Level Zero headers/library at build time and Intel GPU driver (Level Zero runtime) at run time. Reduces system RAM usage during multi-GPU inference. |
 | CMAKE_C_COMPILER   | `icx` *(Linux)*, `icx/cl` *(Windows)* | Set `icx` compiler for SYCL code path.      |
 | CMAKE_CXX_COMPILER | `icpx` *(Linux)*, `icx` *(Windows)*   | Set `icpx/icx` compiler for SYCL code path. |
 
@@ -702,9 +741,18 @@ use 1 SYCL GPUs: [0] with Max compute units:512
 | GGML_SYCL_ENABLE_FLASH_ATTN | 1 (default) or 0| Enable Flash-Attention. It can reduce memory usage. The performance impact depends on the LLM.|
 | GGML_SYCL_DISABLE_OPT | 0 (default) or 1 | Disable optimize features for Intel GPUs. (Recommended to 1 for intel devices older than Gen 10) |
 | GGML_SYCL_DISABLE_GRAPH | 0 or 1 (default) | Disable running computations through SYCL Graphs feature. Disabled by default because SYCL Graph is still on development, no better performance. |
+| GGML_SYCL_ENABLE_LEVEL_ZERO | 1 (default) or 0 | Use Level Zero API for device memory allocation instead of SYCL. Reduces system RAM usage on Intel dGPUs by avoiding DMA-buf/TTM host memory staging. Requires GGML_SYCL_SUPPORT_LEVEL_ZERO=ON at build time. |
 | GGML_SYCL_DISABLE_DNN | 0 (default) or 1 | Disable running computations through oneDNN and always use oneMKL. |
 | ZES_ENABLE_SYSMAN | 0 (default) or 1 | Support to get free memory of GPU by sycl::aspect::ext_intel_free_memory.<br>Recommended to use when --split-mode = layer |
-| UR_L0_ENABLE_RELAXED_ALLOCATION_LIMITS | 0 (default) or 1 | Support malloc device memory more than 4GB.|
+| UR_L0_ENABLE_RELAXED_ALLOCATION_LIMITS | 0 (default) or 1 | Allow SYCL/Unified Runtime Level Zero device allocations larger than 4 GiB. llama.cpp's direct Level Zero allocation path requests the relaxed maximum-size limit itself when GGML_SYCL_ENABLE_LEVEL_ZERO=1. |
+
+## Compile-time Flags
+
+Pass these via `CXXFLAGS` or add a one-off `#define` to enable a flag on the spot.
+
+| Name            | Function                                                                         |
+|-----------------|----------------------------------------------------------------------------------|
+| DEBUG_SYCL_POOL | Enable device memory pool logging on teardown. Useful for profiling allocations. |
 
 ## Design Rule
 
@@ -780,7 +828,7 @@ use 1 SYCL GPUs: [0] with Max compute units:512
 
 - `ggml_backend_sycl_buffer_type_alloc_buffer: can't allocate 5000000000 Bytes of memory on device`
 
-  You need to enable to support 4GB memory malloc by:
+  With the default `GGML_SYCL_ENABLE_LEVEL_ZERO=1`, llama.cpp requests Level Zero's relaxed maximum-size allocation limit directly. If Level Zero support is disabled at build time or runtime and the allocation goes through SYCL/Unified Runtime instead, enable support for allocations larger than 4 GiB by:
   ```
     export UR_L0_ENABLE_RELAXED_ALLOCATION_LIMITS=1
     set UR_L0_ENABLE_RELAXED_ALLOCATION_LIMITS=1

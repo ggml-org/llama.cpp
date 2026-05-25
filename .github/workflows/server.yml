@@ -1,4 +1,3 @@
-# Server build and tests
 name: Server
 
 on:
@@ -15,10 +14,34 @@ on:
   push:
     branches:
       - master
-    paths: ['.github/workflows/server.yml', '**/CMakeLists.txt', '**/Makefile', '**/*.h', '**/*.hpp', '**/*.c', '**/*.cpp', '**/*.cu', '**/*.swift', '**/*.m', 'tools/server/**.*']
+    paths: [
+      '.github/workflows/server.yml',
+      '**/CMakeLists.txt',
+      '**/Makefile',
+      '**/*.h',
+      '**/*.hpp',
+      '**/*.c',
+      '**/*.cpp',
+      '**/*.cu',
+      '**/*.swift',
+      '**/*.m',
+      'tools/server/**.*'
+    ]
   pull_request:
     types: [opened, synchronize, reopened]
-    paths: ['.github/workflows/server.yml', '**/CMakeLists.txt', '**/Makefile', '**/*.h', '**/*.hpp', '**/*.c', '**/*.cpp', '**/*.cu', '**/*.swift', '**/*.m', 'tools/server/**.*']
+    paths: [
+      '.github/workflows/server.yml',
+      '**/CMakeLists.txt',
+      '**/Makefile',
+      '**/*.h',
+      '**/*.hpp',
+      '**/*.c',
+      '**/*.cpp',
+      '**/*.cu',
+      '**/*.swift',
+      '**/*.m',
+      'tools/server/**.*'
+    ]
 
 env:
   LLAMA_LOG_COLORS: 1
@@ -31,20 +54,26 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  ui-build:
+    name: Build Web UI
+    uses: ./.github/workflows/ui-build.yml
+
   server:
     runs-on: ubuntu-latest
+    needs: ui-build
 
+    name: server (${{ matrix.wf_name }})
     strategy:
       matrix:
-        sanitizer: [ADDRESS, UNDEFINED] # THREAD is very slow
-        build_type: [RelWithDebInfo]
+        build_type: [Release]
+        wf_name: ["default"]
         include:
           - build_type: Release
-            sanitizer: ""
             extra_args: ""
+            wf_name:    "default"
           - build_type: Release
-            sanitizer: ""
             extra_args: "LLAMA_ARG_BACKEND_SAMPLING=1"
+            wf_name:    "backend-sampling"
       fail-fast: false
 
     steps:
@@ -69,18 +98,18 @@ jobs:
           fetch-depth: 0
           ref: ${{ github.event.inputs.sha || github.event.pull_request.head.sha || github.sha || github.head_ref || github.ref_name }}
 
+      - name: Download built UI
+        uses: actions/download-artifact@v7
+        with:
+          name: ui-build
+          path: tools/ui/dist
+
       - name: Build
         id: cmake_build
         run: |
           cmake -B build \
             -DLLAMA_BUILD_BORINGSSL=ON \
-            -DGGML_SCHED_NO_REALLOC=ON \
-            -DGGML_SANITIZE_ADDRESS=${{ matrix.sanitizer == 'ADDRESS' }} \
-            -DGGML_SANITIZE_THREAD=${{ matrix.sanitizer == 'THREAD' }} \
-            -DGGML_SANITIZE_UNDEFINED=${{ matrix.sanitizer == 'UNDEFINED' }} \
-            -DLLAMA_SANITIZE_ADDRESS=${{ matrix.sanitizer == 'ADDRESS' }} \
-            -DLLAMA_SANITIZE_THREAD=${{ matrix.sanitizer == 'THREAD' }} \
-            -DLLAMA_SANITIZE_UNDEFINED=${{ matrix.sanitizer == 'UNDEFINED' }}
+            -DGGML_SCHED_NO_REALLOC=ON
           cmake --build build --config ${{ matrix.build_type }} -j $(nproc) --target llama-server
 
       - name: Python setup
@@ -116,6 +145,11 @@ jobs:
         with:
           fetch-depth: 0
           ref: ${{ github.event.inputs.sha || github.event.pull_request.head.sha || github.sha || github.head_ref || github.ref_name }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
 
       - name: Build
         id: cmake_build

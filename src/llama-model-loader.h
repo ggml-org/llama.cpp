@@ -125,6 +125,7 @@ struct llama_model_loader {
         void * set_tensor_data_ud,
         const std::string & fname,
         std::vector<std::string> & splits, // optional, only need if the split does not follow naming scheme
+        FILE * file,
         bool use_mmap,
         bool use_direct_io,
         bool check_tensors,
@@ -183,7 +184,7 @@ struct llama_model_loader {
 
     struct ggml_tensor * create_tensor_as_view(struct ggml_context * ctx, struct ggml_tensor * base, const std::string & name, const std::initializer_list<int64_t> & ne, size_t offset, bool required = true);
 
-    void done_getting_tensors() const;
+    void done_getting_tensors(bool partial = false) const;
 
     void init_mappings(bool prefetch = true, llama_mlocks * mlock_mmaps = nullptr);
 

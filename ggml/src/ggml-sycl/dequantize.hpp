@@ -14,6 +14,7 @@
 #define GGML_SYCL_DEQUANTIZE_HPP
 
 #include "common.hpp"
+#include "convert.hpp"
 
 typedef void (*dequantize_kernel_t)(const void * vx, const int64_t ib, const int iqs, dfloat2 & v);
 typedef void (*dequantize_kernel_t_reorder)(const void *d, const int64_t ib, const void *qs,
@@ -143,6 +144,22 @@ static __dpct_inline__ void dequantize_q5_1(const void *vx, const int64_t ib,
 #endif // GGML_SYCL_F16
 }
 
+static __dpct_inline__ void dequantize_q8_0_reorder(const void *d_ptr, const int64_t ib, const void *qs,
+                                            const int iqs, dfloat2 &v) {
+    const dfloat d = (const dfloat)*((const sycl::half*)d_ptr + ib);
+
+    v.x() = ((const int8_t *)qs)[iqs + 0];
+    v.y() = ((const int8_t *)qs)[iqs + 1];
+
+#ifdef GGML_SYCL_F16
+    v.s0() *= d;
+    v.s1() *= d;
+#else
+    v.x() *= d;
+    v.y() *= d;
+#endif // GGML_SYCL_F16
+}
+
 static __dpct_inline__ void dequantize_q8_0(const void *vx, const int64_t ib,
                                             const int iqs, dfloat2 &v) {
     const block_q8_0 * x = (const block_q8_0 *) vx;
@@ -218,6 +235,34 @@ static void dequantize_block_q4_0_reorder(const void * __restrict__ vx, dst_t * 
         int vq = qs[l];
         y_ptr[l + 0] = d * ((vq & 0xF) - 8);
         y_ptr[l + 16] = d * ((vq >> 4) - 8);
+    }
+
+}
+
+// Dequantize Q8_0 from reorder layout: [all qs (k bytes)][all d values]
+// Each thread handles one block of QK8_0 elements.
+template<typename dst_t>
+static void dequantize_block_q8_0_reorder(const void * __restrict__ vx, dst_t * __restrict__ yy, int64_t k,
+                                  const sycl::nd_item<3> &item_ct1) {
+
+    const int64_t i = item_ct1.get_group(2);
+    const int64_t tid = item_ct1.get_local_id(2);
+    const int lane_ib = i * WARP_SIZE + tid;
+
+    if (lane_ib >= k / QK8_0) {
+        return;
+    }
+
+    dst_t * y_ptr = yy + lane_ib * QK8_0;
+
+    auto qs = (const int8_t*)vx + lane_ib * QK8_0;
+    auto s_ptr = (const sycl::half*)((const uint8_t*)vx + k) + lane_ib;
+
+    const float d = float(*s_ptr);
+
+#pragma unroll
+    for (int l = 0; l < QK8_0; ++l) {
+        y_ptr[l] = d * qs[l];
     }
 
 }
@@ -489,6 +534,63 @@ static void dequantize_block_q5_K(const void * __restrict__ vx, dst_t * __restri
     dst_t * y = yy + i*QK_K + tid;
     y[ 0] = d * x[i].scales[is+0] * ((q & 0xF) - ((h >> 0) & 1 ? 0 : 16));
     y[32] = d * x[i].scales[is+2] * ((q >>  4) - ((h >> 4) & 1 ? 0 : 16));
+#endif
+}
+
+template <typename dst_t>
+static void dequantize_block_q5_K_reorder(const void * __restrict__ vx, dst_t * __restrict__ yy,
+                                          uint8_t * scales_local, const sycl::nd_item<3> & item_ct1, int64_t n_blocks) {
+    const int64_t ib = item_ct1.get_group(2);
+
+#if QK_K == 256
+    // assume 64 threads
+    const int64_t tid = item_ct1.get_local_id(2);
+    const int64_t il  = tid / 16;   // 0...3
+    const int64_t ir  = tid % 16;   // 0...15
+    const int64_t is  = 2 * il;
+
+    dst_t * y = yy + ib * QK_K + 64 * il + 2 * ir;
+
+    const uint8_t * base = static_cast<const uint8_t *>(vx);
+
+    // Reordered layout: [qs (QK_K/2 per block)] [qh (QK_K/8 per block)] [scales (K_SCALE_SIZE per block)] [dm (half2 per block)]
+    const size_t qs_offset     = ib * (QK_K / 2);
+    const size_t qh_offset     = n_blocks * (QK_K / 2) + ib * (QK_K / 8);
+    const size_t scales_offset = n_blocks * (QK_K / 2) + n_blocks * (QK_K / 8) + ib * K_SCALE_SIZE;
+    const size_t dm_offset     = n_blocks * (QK_K / 2) + n_blocks * (QK_K / 8) + n_blocks * K_SCALE_SIZE + ib * sizeof(ggml_half2);
+
+    const uint8_t *  qs_ptr     = base + qs_offset;
+    const uint8_t *  qh_ptr     = base + qh_offset;
+    const uint8_t *  scales_ptr = base + scales_offset;
+    const ggml_half2 dm_values  = *reinterpret_cast<const ggml_half2 *>(base + dm_offset);
+
+    const float dall = dm_values.x();
+    const float dmin = dm_values.y();
+
+    const uint8_t * ql = qs_ptr + 32 * il + 2 * ir;
+    const uint8_t * qh = qh_ptr + 2 * ir;
+
+    if (tid < K_SCALE_SIZE) {
+        scales_local[tid] = scales_ptr[tid];
+    }
+
+    item_ct1.barrier(sycl::access::fence_space::local_space);
+
+    uint8_t sc, m;
+    get_scale_min_k4(is + 0, scales_local, sc, m);
+    const float d1 = dall * sc; const float m1 = dmin * m;
+    get_scale_min_k4(is + 1, scales_local, sc, m);
+    const float d2 = dall * sc; const float m2 = dmin * m;
+
+    uint8_t hm  = 1 << (2 * il);
+    y[ 0] = d1 * ((ql[ 0] & 0xF) + (qh[ 0] & hm ? 16 : 0)) - m1;
+    y[ 1] = d1 * ((ql[ 1] & 0xF) + (qh[ 1] & hm ? 16 : 0)) - m1;
+    hm <<= 1;
+    y[32] = d2 * ((ql[ 0] >>  4) + (qh[ 0] & hm ? 16 : 0)) - m2;
+    y[33] = d2 * ((ql[ 1] >>  4) + (qh[ 1] & hm ? 16 : 0)) - m2;
+#else
+    GGML_UNUSED(ib); GGML_UNUSED(tid); GGML_UNUSED(yy); GGML_UNUSED(scales_local); GGML_UNUSED(n_blocks);
+    GGML_ABORT("Q5_K reorder dequantize not supported for QK_K != 256");
 #endif
 }
 
@@ -837,5 +939,37 @@ static void dequantize_block_mxfp4(const void * __restrict__ vx, dst_t * __restr
         y[j+16] = d * kvalues_mxfp4[q4[j] >>  4]*0.5f;
     }
 }
+
+
+template <typename dst_t>
+static void dequantize_block_nvfp4(
+        const void * __restrict__ vx,
+        dst_t * __restrict__ yy,
+        const int64_t ne) {
+    auto          item_ct1 = sycl::ext::oneapi::this_work_item::get_nd_item<3>();
+    const int64_t i        = item_ct1.get_group(2);
+    const int     tid      = item_ct1.get_local_id(2);
+
+    const int64_t base = i * QK_NVFP4;
+    if (base >= ne) {
+        return;
+    }
+
+    const block_nvfp4 * x = (const block_nvfp4 *) vx;
+    const block_nvfp4 & xb = x[i];
+
+    const int sub = tid / (QK_NVFP4_SUB / 2);
+    const int j = tid % (QK_NVFP4_SUB / 2);
+
+    const float d = ggml_sycl_ue4m3_to_fp32(xb.d[sub]);
+    const uint8_t q = xb.qs[sub * (QK_NVFP4_SUB / 2) + j];
+
+    const int64_t y0 = base + sub * QK_NVFP4_SUB + j;
+    const int64_t y1 = y0 + QK_NVFP4_SUB / 2;
+
+    yy[y0] = ggml_sycl_cast<dst_t>(d * kvalues_mxfp4[q & 0x0F]);
+    yy[y1] = ggml_sycl_cast<dst_t>(d * kvalues_mxfp4[q >> 4]);
+}
+
 
 #endif // GGML_SYCL_DEQUANTIZE_HPP

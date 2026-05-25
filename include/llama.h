@@ -153,6 +153,8 @@ extern "C" {
         LLAMA_FTYPE_MOSTLY_TQ1_0         = 36, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_TQ2_0         = 37, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_MXFP4_MOE     = 38, // except 1d tensors
+        LLAMA_FTYPE_MOSTLY_NVFP4         = 39, // except 1d tensors
+        LLAMA_FTYPE_MOSTLY_Q1_0          = 40, // except 1d tensors
 
         LLAMA_FTYPE_GUESSED = 1024, // not specified in the model file
     };
@@ -190,9 +192,15 @@ extern "C" {
     LLAMA_API const char * llama_flash_attn_type_name(enum llama_flash_attn_type flash_attn_type);
 
     enum llama_split_mode {
-        LLAMA_SPLIT_MODE_NONE  = 0, // single GPU
-        LLAMA_SPLIT_MODE_LAYER = 1, // split layers and KV across GPUs
-        LLAMA_SPLIT_MODE_ROW   = 2, // split layers and KV across GPUs, use tensor parallelism if supported
+        LLAMA_SPLIT_MODE_NONE   = 0, // single GPU
+        LLAMA_SPLIT_MODE_LAYER  = 1, // split layers and KV across GPUs
+        LLAMA_SPLIT_MODE_ROW    = 2, // split layers and KV across GPUs, use tensor parallelism if supported
+        LLAMA_SPLIT_MODE_TENSOR = 3,
+    };
+
+    enum llama_context_type {
+        LLAMA_CONTEXT_TYPE_DEFAULT = 0,
+        LLAMA_CONTEXT_TYPE_MTP     = 1,
     };
 
     // TODO: simplify (https://github.com/ggml-org/llama.cpp/pull/9294#pullrequestreview-2286561979)
@@ -330,9 +338,11 @@ extern "C" {
         uint32_t n_batch;           // logical maximum batch size that can be submitted to llama_decode
         uint32_t n_ubatch;          // physical maximum batch size
         uint32_t n_seq_max;         // max number of sequences (i.e. distinct states for recurrent models)
+        uint32_t n_rs_seq;          // number of recurrent-state snapshots per seq for rollback (0 = no rollback) [EXPERIMENTAL]
         int32_t  n_threads;         // number of threads to use for generation
         int32_t  n_threads_batch;   // number of threads to use for batch processing
 
+        enum llama_context_type      ctx_type;          // set the context type (e.g. MTP)
         enum llama_rope_scaling_type rope_scaling_type; // RoPE scaling type, from `enum llama_rope_scaling_type`
         enum llama_pooling_type      pooling_type;      // whether to pool (sum) embedding results by sequence id
         enum llama_attention_type    attention_type;    // attention type to use for embeddings
@@ -379,22 +389,33 @@ extern "C" {
         size_t                            n_samplers;
     };
 
+    struct llama_model_tensor_override {
+        const char * pattern;
+        enum ggml_type type;
+    };
+
+    struct llama_model_imatrix_data {
+        const char * name;
+        const float * data;
+        size_t size;
+    };
+
     // model quantization parameters
     typedef struct llama_model_quantize_params {
-        int32_t nthread;                      // number of threads to use for quantizing, if <=0 will use std::thread::hardware_concurrency()
-        enum llama_ftype ftype;               // quantize to this llama_ftype
-        enum ggml_type output_tensor_type;    // output tensor type
-        enum ggml_type token_embedding_type;  // token embeddings tensor type
-        bool allow_requantize;                // allow quantizing non-f32/f16 tensors
-        bool quantize_output_tensor;          // quantize output.weight
-        bool only_copy;                       // only copy tensors - ftype, allow_requantize and quantize_output_tensor are ignored
-        bool pure;                            // quantize all tensors to the default type
-        bool keep_split;                      // quantize to the same number of shards
-        bool dry_run;                         // calculate and show the final quantization size without performing quantization
-        void * imatrix;                       // pointer to importance matrix data
-        void * kv_overrides;                  // pointer to vector containing overrides
-        void * tensor_types;                  // pointer to vector containing tensor types
-        void * prune_layers;                  // pointer to vector containing layer indices to prune
+        int32_t nthread;                                            // number of threads to use for quantizing, if <=0 will use std::thread::hardware_concurrency()
+        enum llama_ftype ftype;                                     // quantize to this llama_ftype
+        enum ggml_type output_tensor_type;                          // output tensor type
+        enum ggml_type token_embedding_type;                        // token embeddings tensor type
+        bool allow_requantize;                                      // allow quantizing non-f32/f16 tensors
+        bool quantize_output_tensor;                                // quantize output.weight
+        bool only_copy;                                             // only copy tensors - ftype, allow_requantize and quantize_output_tensor are ignored
+        bool pure;                                                  // quantize all tensors to the default type
+        bool keep_split;                                            // quantize to the same number of shards
+        bool dry_run;                                               // calculate and show the final quantization size without performing quantization
+        const struct llama_model_imatrix_data * imatrix;            // pointer to importance matrix data
+        const struct llama_model_kv_override * kv_overrides;        // pointer to kv overrides
+        const struct llama_model_tensor_override * tt_overrides;    // pointer to tensor overrides
+        const int32_t * prune_layers;                               // pointer to layer indices to prune
     } llama_model_quantize_params;
 
     typedef struct llama_logit_bias {
@@ -464,6 +485,11 @@ extern "C" {
                              const char * path_model,
               struct llama_model_params   params);
 
+    // Load a model from an open FILE pointer
+    LLAMA_API struct llama_model * llama_model_load_from_file_ptr(
+                                   FILE * file,
+              struct llama_model_params   params);
+
     // Load a model from multiple splits (support custom naming scheme)
     // The paths must be in the correct order
     LLAMA_API struct llama_model * llama_model_load_from_splits(
@@ -492,27 +518,6 @@ extern "C" {
     // Frees all allocated memory
     LLAMA_API void llama_free(struct llama_context * ctx);
 
-    enum llama_params_fit_status {
-        LLAMA_PARAMS_FIT_STATUS_SUCCESS = 0, // found allocations that are projected to fit
-        LLAMA_PARAMS_FIT_STATUS_FAILURE = 1, // could not find allocations that are projected to fit
-        LLAMA_PARAMS_FIT_STATUS_ERROR   = 2, // a hard error occurred, e.g. because no model could be found at the specified path
-    };
-
-    // fits mparams and cparams to free device memory (assumes system memory is unlimited)
-    //   - returns true if the parameters could be successfully modified to fit device memory
-    //   - this function is NOT thread safe because it modifies the global llama logger state
-    //   - only parameters that have the same value as in llama_default_model_params are modified
-    //     with the exception of the context size which is modified if and only if equal to 0
-    LLAMA_API enum llama_params_fit_status llama_params_fit(
-                                   const char   * path_model,
-                    struct llama_model_params   * mparams,
-                    struct llama_context_params * cparams,
-                                          float * tensor_split,          // writable buffer for tensor split, needs at least llama_max_devices elements
-        struct llama_model_tensor_buft_override * tensor_buft_overrides, // writable buffer for overrides, needs at least llama_max_tensor_buft_overrides elements
-                                         size_t * margins,               // margins of memory to leave per device in bytes
-                                       uint32_t   n_ctx_min,             // minimum context size to set when trying to reduce memory use
-                            enum ggml_log_level   log_level);            // minimum log level to print during fitting, lower levels go to debug log
-
     LLAMA_API int64_t llama_time_us(void);
 
     LLAMA_API size_t llama_max_devices(void);
@@ -532,6 +537,7 @@ extern "C" {
     LLAMA_API uint32_t llama_n_batch    (const struct llama_context * ctx);
     LLAMA_API uint32_t llama_n_ubatch   (const struct llama_context * ctx);
     LLAMA_API uint32_t llama_n_seq_max  (const struct llama_context * ctx);
+    LLAMA_API uint32_t llama_n_rs_seq   (const struct llama_context * ctx);
 
     DEPRECATED(LLAMA_API int32_t llama_n_ctx_train(const struct llama_model * model), "use llama_model_n_ctx_train instead");
     DEPRECATED(LLAMA_API int32_t llama_n_embd     (const struct llama_model * model), "use llama_model_n_embd instead");
@@ -635,7 +641,6 @@ extern "C" {
 
     // Load a LoRA adapter from file
     // The adapter is valid as long as the associated model is not freed
-    // All adapters must be loaded before context creation
     LLAMA_API struct llama_adapter_lora * llama_adapter_lora_init(
             struct llama_model * model,
             const char * path_lora);
@@ -659,9 +664,8 @@ extern "C" {
     LLAMA_API int32_t llama_adapter_meta_val_str_by_index(const struct llama_adapter_lora * adapter, int32_t i, char * buf, size_t buf_size);
 
     // Manually free a LoRA adapter
-    // NOTE: loaded adapters will be free when the associated model is deleted
-    LLAMA_API DEPRECATED(void llama_adapter_lora_free(struct llama_adapter_lora * adapter),
-            "adapters are now freed together with the associated model");
+    // NOTE: loaded adapters that are not manually freed will be freed when the associated model is deleted
+    LLAMA_API void llama_adapter_lora_free(struct llama_adapter_lora * adapter);
 
     // Get the invocation tokens if the current lora is an alora
     LLAMA_API uint64_t            llama_adapter_get_alora_n_invocation_tokens(const struct llama_adapter_lora * adapter);
@@ -862,11 +866,17 @@ extern "C" {
                           size_t   n_token_capacity,
                           size_t * n_token_count_out);
 
+#define LLAMA_STATE_SEQ_FLAGS_NONE 0
+
 // for backwards-compat
 #define LLAMA_STATE_SEQ_FLAGS_SWA_ONLY 1
 
 // work only with partial states, such as SWA KV cache or recurrent cache (e.g. Mamba)
 #define LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY 1
+
+// Keeps the tensor data on device buffers (i.e. not accessible in host memory, but faster save/load).
+// Getting the state for a seq_id with this flag invalidates all prior states gotten for that seq_id with this flag.
+#define LLAMA_STATE_SEQ_FLAGS_ON_DEVICE 2
 
     typedef uint32_t llama_state_seq_flags;
 
@@ -1528,9 +1538,6 @@ extern "C" {
     LLAMA_API struct llama_perf_sampler_data llama_perf_sampler      (const struct llama_sampler * chain);
     LLAMA_API void                           llama_perf_sampler_print(const struct llama_sampler * chain);
     LLAMA_API void                           llama_perf_sampler_reset(      struct llama_sampler * chain);
-
-    // print a breakdown of per-device memory use via LLAMA_LOG:
-    LLAMA_API void llama_memory_breakdown_print(const struct llama_context * ctx);
 
     //
     // training

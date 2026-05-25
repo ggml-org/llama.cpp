@@ -89,7 +89,10 @@ struct llama_hparams {
     bool     expert_weights_norm  = false;
     uint32_t expert_gating_func   = LLAMA_EXPERT_GATING_FUNC_TYPE_NONE;
     uint32_t moe_every_n_layers   = 0;
+    uint32_t moe_latent_size      = 0;
     uint32_t nextn_predict_layers = 0;
+
+    bool kv_only_nextn = false; // if true, only the last nextn_predict_layers blocks have a KV cache (MTP head arches)
 
     float f_norm_eps;
     float f_norm_rms_eps;
@@ -115,6 +118,7 @@ struct llama_hparams {
     float    rope_freq_base_train_swa  = 10000.0f;
     float    rope_freq_scale_train;
     float    rope_freq_scale_train_swa = 1.0f;
+    float    rope_scaling_alpha        = 0.0f;  // NTK-aware alpha for XDRoPE
 
     uint32_t n_ctx_orig_yarn;
     float    rope_yarn_log_mul = 0.0f;
@@ -164,6 +168,8 @@ struct llama_hparams {
     float    f_attn_out_scale = 0.0f;
     uint32_t attn_temp_length = 0;
 
+    float    f_attn_value_scale = 0.0f;
+
     bool causal_attn   = true;
     bool use_alibi     = false;
     bool attn_soft_cap = false;
@@ -207,6 +213,9 @@ struct llama_hparams {
 
     // qwen3vl deepstack
     uint32_t n_deepstack_layers = 0;
+
+    // gemma4 per-layer embedding
+    uint32_t n_embd_per_layer = 0;
 
     // needed by encoder-decoder models (e.g. T5, FLAN-T5)
     // ref: https://github.com/ggml-org/llama.cpp/pull/8141

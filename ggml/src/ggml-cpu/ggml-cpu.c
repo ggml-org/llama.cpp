@@ -50,6 +50,10 @@
 #include "llamafile/sgemm.h"
 #endif
 
+#ifdef GGML_USE_CPU_RISCV64_SPACEMIT
+#    include "spacemit/ime.h"
+#endif
+
 // Note: once we move threading into a separate C++ file
 // will use std::hardware_destructive_interference_size instead of hardcoding it here
 // and we'll use C++ attribute syntax.
@@ -217,6 +221,12 @@ static const struct ggml_type_traits_cpu type_traits_cpu[GGML_TYPE_COUNT] = {
         .vec_dot_type             = GGML_TYPE_F16,
         .nrows                    = 1,
     },
+    [GGML_TYPE_Q1_0] = {
+        .from_float               = quantize_row_q1_0,
+        .vec_dot                  = ggml_vec_dot_q1_0_q8_0,
+        .vec_dot_type             = GGML_TYPE_Q8_0,
+        .nrows                    = 1,
+    },
     [GGML_TYPE_Q4_0] = {
         .from_float               = quantize_row_q4_0,
         .vec_dot                  = ggml_vec_dot_q4_0_q8_0,
@@ -267,6 +277,12 @@ static const struct ggml_type_traits_cpu type_traits_cpu[GGML_TYPE_COUNT] = {
     [GGML_TYPE_MXFP4] = {
         .from_float               = quantize_row_mxfp4,
         .vec_dot                  = ggml_vec_dot_mxfp4_q8_0,
+        .vec_dot_type             = GGML_TYPE_Q8_0,
+        .nrows                    = 1,
+    },
+    [GGML_TYPE_NVFP4] = {
+        .from_float               = quantize_row_nvfp4,
+        .vec_dot                  = ggml_vec_dot_nvfp4_q8_0,
         .vec_dot_type             = GGML_TYPE_Q8_0,
         .nrows                    = 1,
     },
@@ -1232,6 +1248,12 @@ void ggml_compute_forward_mul_mat(
 
     const struct ggml_tensor * src0 = dst->src[0];
     const struct ggml_tensor * src1 = dst->src[1];
+
+    const int32_t hint = ggml_get_op_params_i32(dst, 1);
+    if (hint == GGML_HINT_SRC0_IS_HADAMARD && !params->use_ref) {
+        ggml_compute_forward_fwht(params, dst);
+        return;
+    }
 
     GGML_TENSOR_BINARY_OP_LOCALS
 
@@ -2344,11 +2366,15 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
         case GGML_OP_FLASH_ATTN_BACK:
         case GGML_OP_SSM_CONV:
         case GGML_OP_SSM_SCAN:
+            {
+                n_tasks = n_threads;
+            } break;
         case GGML_OP_RWKV_WKV6:
         case GGML_OP_GATED_LINEAR_ATTN:
         case GGML_OP_RWKV_WKV7:
             {
-                n_tasks = n_threads;
+                const int64_t n_heads = node->src[1]->ne[1];
+                n_tasks = MIN(n_threads, n_heads);
             } break;
         case GGML_OP_WIN_PART:
         case GGML_OP_WIN_UNPART:
@@ -2865,8 +2891,12 @@ struct ggml_cplan ggml_graph_plan(
                         const int64_t ne11 = node->src[1]->ne[1]; // H
                         const int64_t ne12 = node->src[1]->ne[2]; // Channels In
 
-                        cur += sizeof(ggml_fp16_t)*ne00*ne01*ne02*ne03;
-                        cur += sizeof(ggml_fp16_t)*ne10*ne11*ne12;
+                        GGML_ASSERT(node->src[0]->type == GGML_TYPE_F16 || node->src[0]->type == GGML_TYPE_F32);
+                        GGML_ASSERT(node->src[1]->type == GGML_TYPE_F32);
+
+                        cur += ggml_type_size(node->src[0]->type) * ne00 * ne01 * ne02 * ne03;
+                        cur += ggml_type_size(node->src[0]->type) * ne10 * ne11 * ne12;
+
                     } break;
                 case GGML_OP_TOP_K:
                     {
@@ -2913,7 +2943,9 @@ struct ggml_cplan ggml_graph_plan(
                 case GGML_OP_GATED_DELTA_NET:
                     {
                         const int64_t S_v = node->src[2]->ne[0];
-                        cur = S_v * sizeof(float) * n_tasks;
+                        const int64_t K   = node->src[5]->ne[1];  // state is (D, K, n_seqs)
+                        const int64_t per_thread = S_v + (K > 1 ? S_v * S_v : 0);
+                        cur = per_thread * sizeof(float) * n_tasks;
                     } break;
                 case GGML_OP_COUNT:
                     {
@@ -2939,6 +2971,45 @@ struct ggml_cplan ggml_graph_plan(
     return cplan;
 }
 
+
+// Try to fuse the current node with subsequent nodes for better performance.
+// Returns the number of nodes skipped by fusion (>=1), or 0 if no fusion was applied.
+static bool ggml_cpu_disable_fusion = false;  // initialized once in ggml_cpu_init(), read-only afterwards
+
+static int ggml_cpu_try_fuse_ops(
+        const struct ggml_cgraph * cgraph,
+        const int node_n,
+        const struct ggml_compute_params * params,
+        const struct ggml_cplan * cplan) {
+
+    if (ggml_cpu_disable_fusion || cplan->use_ref) {
+        return 0;
+    }
+
+    struct ggml_tensor * node = cgraph->nodes[node_n];
+
+    if (node->op == GGML_OP_RMS_NORM) {
+        // RMS_NORM + MUL fusion
+        const enum ggml_op fuse_ops[] = { GGML_OP_RMS_NORM, GGML_OP_MUL };
+        if (ggml_can_fuse(cgraph, node_n, fuse_ops, 2)) {
+            struct ggml_tensor * mul_node = cgraph->nodes[node_n + 1];
+            const struct ggml_tensor * mul_w = (mul_node->src[0] == node)
+                ? mul_node->src[1] : mul_node->src[0];
+            if (node->src[0]->type  == GGML_TYPE_F32 &&
+                mul_node->type      == GGML_TYPE_F32 &&
+                mul_w->type         == GGML_TYPE_F32 &&
+                mul_w->ne[0]        == node->ne[0]   &&
+                mul_w->nb[0]        == sizeof(float)) {
+
+                ggml_compute_forward_rms_norm_mul_fused(params, node, mul_node);
+                return 1;
+            }
+        }
+    }
+
+    return 0;
+}
+
 static thread_ret_t ggml_graph_compute_thread(void * data) {
     struct ggml_compute_state * state = (struct ggml_compute_state *) data;
     struct ggml_threadpool    * tp    = state->threadpool;
@@ -2946,7 +3017,11 @@ static thread_ret_t ggml_graph_compute_thread(void * data) {
     const struct ggml_cgraph * cgraph = tp->cgraph;
     const struct ggml_cplan  * cplan  = tp->cplan;
 
+#ifdef GGML_USE_CPU_RISCV64_SPACEMIT
+    ggml_backend_cpu_riscv64_spacemit_set_numa_thread_affinity(state->ith);
+#else
     set_numa_thread_affinity(state->ith);
+#endif
 
     struct ggml_compute_params params = {
         /*.ith        =*/ state->ith,
@@ -2975,7 +3050,14 @@ static thread_ret_t ggml_graph_compute_thread(void * data) {
             continue;
         }
 
-        ggml_compute_forward(&params, node);
+        // TODO: move fused-op detection into ggml_graph_plan so fusion decisions are made once at planning time
+        // Try fused ops, fall back to normal compute
+        const int n_fused = ggml_cpu_try_fuse_ops(cgraph, node_n, &params, cplan);
+        if (n_fused > 0) {
+            node_n += n_fused;
+        } else {
+            ggml_compute_forward(&params, node);
+        }
 
         if (state->ith == 0 && cplan->abort_callback &&
                 cplan->abort_callback(cplan->abort_callback_data)) {
@@ -2995,6 +3077,10 @@ static thread_ret_t ggml_graph_compute_thread(void * data) {
 #endif
 
     ggml_barrier(state->threadpool);
+
+#ifdef GGML_USE_CPU_RISCV64_SPACEMIT
+    ggml_backend_cpu_riscv64_spacemit_clear_numa_thread_affinity_threaded(state->ith);
+#endif
 
     return 0;
 }
@@ -3736,6 +3822,11 @@ void ggml_cpu_init(void) {
 #if defined(__riscv)
         ggml_init_riscv_arch_features();
 #endif
+
+        {
+            const char * env = getenv("GGML_CPU_DISABLE_FUSION");
+            ggml_cpu_disable_fusion = (env != NULL && atoi(env) == 1);
+        }
 
         is_first_call = false;
     }

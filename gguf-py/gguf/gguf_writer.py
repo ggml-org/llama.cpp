@@ -139,10 +139,13 @@ class GGUFWriter:
                 size = prod(shape)
 
                 if "_exps." in name:
-                    expert_count = shape[-2 if ".bias" in name else -3]
-                    expert_params += (size // expert_count)
-                    expert_sum += expert_count
-                    n_expert_tensors += 1
+                    if len(shape) >= 3:
+                        expert_count = shape[-2 if ".bias" in name else -3]
+                        expert_params += (size // expert_count)
+                        expert_sum += expert_count
+                        n_expert_tensors += 1
+                    else:
+                        shared_params += size
                 else:
                     shared_params += size
 
@@ -422,8 +425,7 @@ class GGUFWriter:
         fout = self.fout[file_id]
 
         # pop the first tensor info
-        # TODO: cleaner way to get the first key
-        first_tensor_name = [name for name, _ in zip(self.tensors[file_id].keys(), range(1))][0]
+        first_tensor_name = next(iter(self.tensors[file_id]))
         ti = self.tensors[file_id].pop(first_tensor_name)
         assert ti.nbytes == tensor.nbytes
 
@@ -797,6 +799,7 @@ class GGUFWriter:
     def add_shared_kv_layers(self, value: int) -> None:
         self.add_uint32(Keys.Attention.SHARED_KV_LAYERS.format(arch=self.arch), value)
 
+    # if input is array, true means SWA and false means full_attention for each layer
     def add_sliding_window_pattern(self, value: int | Sequence[bool]) -> None:
         key = Keys.Attention.SLIDING_WINDOW_PATTERN.format(arch=self.arch)
         if isinstance(value, int):
@@ -858,6 +861,9 @@ class GGUFWriter:
 
     def add_moe_every_n_layers(self, value: int) -> None:
         self.add_uint32(Keys.LLM.MOE_EVERY_N_LAYERS.format(arch=self.arch), value)
+
+    def add_moe_latent_size(self, value: int) -> None:
+        self.add_uint32(Keys.LLM.MOE_LATENT_SIZE.format(arch=self.arch), value)
 
     def add_nextn_predict_layers(self, count: int) -> None:
         self.add_uint32(Keys.LLM.NEXTN_PREDICT_LAYERS.format(arch=self.arch), count)
@@ -937,6 +943,9 @@ class GGUFWriter:
     def add_attn_output_scale(self, value: float) -> None:
         self.add_float32(Keys.Attention.OUTPUT_SCALE.format(arch=self.arch), value)
 
+    def add_attn_value_scale(self, value: float) -> None:
+        self.add_float32(Keys.Attention.VALUE_SCALE.format(arch=self.arch), value)
+
     def add_attn_temperature_length(self, value: int) -> None:
         self.add_uint32(Keys.Attention.TEMPERATURE_LENGTH.format(arch=self.arch), value)
 
@@ -966,6 +975,9 @@ class GGUFWriter:
 
     def add_rope_scaling_factor(self, value: float) -> None:
         self.add_float32(Keys.Rope.SCALING_FACTOR.format(arch=self.arch), value)
+
+    def add_rope_scaling_alpha(self, value: float) -> None:
+        self.add_float32(Keys.Rope.SCALING_ALPHA.format(arch=self.arch), value)
 
     def add_rope_scaling_attn_factors(self, value: float) -> None:
         self.add_float32(Keys.Rope.SCALING_ATTN_FACTOR.format(arch=self.arch), value)
@@ -1139,6 +1151,9 @@ class GGUFWriter:
     def add_vision_head_count(self, value: int) -> None:
         self.add_uint32(Keys.ClipVision.Attention.HEAD_COUNT, value)
 
+    def add_vision_head_count_kv(self, value: int) -> None:
+        self.add_uint32(Keys.ClipVision.Attention.HEAD_COUNT_KV, value)
+
     def add_vision_attention_layernorm_eps(self, value: float) -> None:
         self.add_float32(Keys.ClipVision.Attention.LAYERNORM_EPS, value)
 
@@ -1150,6 +1165,12 @@ class GGUFWriter:
 
     def add_vision_min_pixels(self, value: int) -> None:
         self.add_uint32(Keys.ClipVision.IMAGE_MIN_PIXELS, value)
+
+    def add_vision_preproc_max_tiles(self, value: int) -> None:
+        self.add_uint32(Keys.ClipVision.PREPROC_MAX_TILES, value)
+
+    def add_vision_preproc_min_tiles(self, value: int) -> None:
+        self.add_uint32(Keys.ClipVision.PREPROC_MIN_TILES, value)
 
     def add_vision_preproc_image_size(self, value: int) -> None:
         self.add_uint32(Keys.ClipVision.PREPROC_IMAGE_SIZE, value)
@@ -1204,8 +1225,20 @@ class GGUFWriter:
     def add_vision_is_deepstack_layers(self, layers: Sequence[bool]) -> None:
         self.add_array(Keys.ClipVision.IS_DEEPSTACK_LAYERS, layers)
 
+    def add_vision_wa_pattern_mode(self, modes: Sequence[int]) -> None:
+        self.add_array(Keys.ClipVision.WA_PATTERN_MODE, modes)
+
     def add_vision_window_size(self, value: int) -> None:
         self.add_uint32(Keys.ClipVision.WINDOW_SIZE, value)
+
+    def add_vision_sam_layers_count(self, value: int) -> None:
+        self.add_uint32(Keys.ClipVision.SAM.BLOCK_COUNT, value)
+
+    def add_vision_sam_embedding_length(self, value: int) -> None:
+        self.add_uint32(Keys.ClipVision.SAM.EMBEDDING_LENGTH, value)
+
+    def add_vision_sam_head_count(self, value: int) -> None:
+        self.add_uint32(Keys.ClipVision.SAM.HEAD_COUNT, value)
 
     # audio models
 
@@ -1235,6 +1268,24 @@ class GGUFWriter:
 
     def add_audio_stack_factor(self, value: int) -> None:
         self.add_uint32(Keys.ClipAudio.Projector.STACK_FACTOR, value)
+
+    def add_audio_chunk_size(self, value: int) -> None:
+        self.add_uint32(Keys.ClipAudio.CHUNK_SIZE, value)
+
+    def add_audio_conv_kernel_size(self, value: int) -> None:
+        self.add_uint32(Keys.ClipAudio.CONV_KERNEL_SIZE, value)
+
+    def add_audio_max_pos_emb(self, value: int) -> None:
+        self.add_uint32(Keys.ClipAudio.MAX_POS_EMB, value)
+
+    def add_audio_projector_window_size(self, value: int) -> None:
+        self.add_uint32(Keys.ClipAudio.Projector.WINDOW_SIZE, value)
+
+    def add_audio_projector_downsample_rate(self, value: int) -> None:
+        self.add_uint32(Keys.ClipAudio.Projector.DOWNSAMPLE_RATE, value)
+
+    def add_audio_projector_head_count(self, value: int) -> None:
+        self.add_uint32(Keys.ClipAudio.Projector.HEAD_COUNT, value)
 
     def add_xielu_alpha_p(self, values: Sequence[float]):
         self.add_array(Keys.xIELU.ALPHA_P, values)
@@ -1295,7 +1346,7 @@ class GGUFWriter:
         else:
             raise ValueError("Invalid GGUF metadata value type or value")
 
-        return kv_data
+        return bytes(kv_data)
 
     @staticmethod
     def format_n_bytes_to_str(num: int) -> str:

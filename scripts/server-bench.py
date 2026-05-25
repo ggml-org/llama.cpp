@@ -189,6 +189,7 @@ def benchmark(
 
         data: list[dict] = []
 
+        assert isinstance(prompts, list)
         for i, p in enumerate(prompts):
             if seed_offset >= 0:
                 random.seed(3 * (seed_offset + 1000 * i) + 1)

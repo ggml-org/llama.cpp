@@ -1,6 +1,7 @@
 #pragma once
 
 #include "llama.h"
+#include "llama-ext.h"
 #include "llama-cparams.h"
 #include "llama-graph.h"
 #include "llama-adapter.h"
@@ -22,16 +23,20 @@ class llama_io_write_i;
 struct llama_memory_i;
 struct llama_memory_context_i;
 
-// "memory" as in physical memory for a buffer type, in bytes
-struct llama_memory_breakdown_data {
-    size_t model   = 0; // memory allocated for the model
-    size_t context = 0; // memory allocated for the context
-    size_t compute = 0; // memory allocated for temporary compute buffers
+// stores copy of the memory in device buffer. used for fast state save/load
+struct llama_memory_buffer {
+    int n_tensors = 0;
+    size_t total_size = 0;
 
-    size_t total() const {
-        return model + context + compute;
-    }
+    ggml_backend_buffer_ptr buf;
+
+    ggml_context_ptr ctx;
+
+    std::vector<ggml_tensor *> org;
+    std::vector<ggml_tensor *> cpy;
 };
+
+using llama_memory_buffers = std::map<ggml_backend_buffer_type_t, llama_memory_buffer>;
 
 struct llama_context {
     // init scheduler and compute buffers, reserve worst-case graphs
@@ -79,6 +84,9 @@ struct llama_context {
     float * get_embeddings_ith(int32_t i);
     float * get_embeddings_seq(llama_seq_id seq_id);
 
+    float * get_embeddings_pre_norm();
+    float * get_embeddings_pre_norm_ith(int32_t i);
+
     llama_token * get_sampled_tokens() const;
     llama_token   get_sampled_token_ith(int32_t idx);
 
@@ -102,6 +110,7 @@ struct llama_context {
     void set_abort_callback(bool (*abort_callback)(void * data), void * abort_callback_data);
 
     void set_embeddings (bool value);
+    void set_embeddings_pre_norm(bool value, bool masked);
     void set_causal_attn(bool value);
     void set_warmup(bool value);
 
@@ -138,6 +147,7 @@ struct llama_context {
     size_t state_set_data(const uint8_t * src, size_t size);
 
     size_t state_seq_get_size(llama_seq_id seq_id, llama_state_seq_flags flags);
+
     size_t state_seq_get_data(llama_seq_id seq_id,       uint8_t * dst, size_t size, llama_state_seq_flags flags);
     size_t state_seq_set_data(llama_seq_id seq_id, const uint8_t * src, size_t size, llama_state_seq_flags flags);
 
@@ -172,7 +182,7 @@ struct llama_context {
     llama_perf_context_data perf_get_data() const;
     void perf_reset();
 
-    std::map<ggml_backend_buffer_type_t, llama_memory_breakdown_data> memory_breakdown() const;
+    llama_memory_breakdown memory_breakdown() const;
 
     //
     // training
@@ -272,6 +282,11 @@ private:
     // populated only when pooling_type == LLAMA_POOLING_TYPE_NONE
     buffer_view<float> embd = {nullptr, 0};
 
+    // hidden state before the final output norm (2-dimensional array: [n_outputs][n_embd])
+    // populated only when cparams.embeddings_pre_norm is enabled and the model graph
+    // sets llm_graph_result::t_h_pre_norm
+    buffer_view<float> embd_pre_norm = {nullptr, 0};
+
     struct sampling_info {
         // !samplers.empty() to check if any samplers are active
         std::map<llama_seq_id, llama_sampler *> samplers;
@@ -337,6 +352,9 @@ private:
 
     // host buffer for the model output (logits and embeddings)
     ggml_backend_buffer_ptr buf_output;
+
+    // keep copies of the per-sequence memory on the device
+    std::map<llama_seq_id, llama_memory_buffers> mem_storage;
 
     bool has_evaluated_once = false;
 
