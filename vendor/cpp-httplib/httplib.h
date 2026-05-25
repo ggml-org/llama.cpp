@@ -8,8 +8,8 @@
 #ifndef CPPHTTPLIB_HTTPLIB_H
 #define CPPHTTPLIB_HTTPLIB_H
 
-#define CPPHTTPLIB_VERSION "0.45.0"
-#define CPPHTTPLIB_VERSION_NUM "0x002d00"
+#define CPPHTTPLIB_VERSION "0.45.1"
+#define CPPHTTPLIB_VERSION_NUM "0x002d01"
 
 #ifdef _WIN32
 #if defined(_WIN32_WINNT) && _WIN32_WINNT < 0x0A00
@@ -339,15 +339,25 @@ using socket_t = int;
 #include <utility>
 
 // On macOS with a TLS backend, enable Keychain root certificates by default
-// unless the user explicitly opts out.
+// unless the user explicitly opts out. Not enabled on iOS/tvOS/watchOS since
+// the SecTrustSettings APIs used to enumerate anchor certificates are macOS
+// only; on those platforms the user must provide a CA bundle explicitly.
 #if defined(__APPLE__) && defined(__clang__) &&                                \
     !defined(CPPHTTPLIB_DISABLE_MACOSX_AUTOMATIC_ROOT_CERTIFICATES) &&         \
     (defined(CPPHTTPLIB_OPENSSL_SUPPORT) ||                                    \
      defined(CPPHTTPLIB_MBEDTLS_SUPPORT) ||                                    \
      defined(CPPHTTPLIB_WOLFSSL_SUPPORT))
+#if TARGET_OS_OSX
 #ifndef CPPHTTPLIB_USE_CERTS_FROM_MACOSX_KEYCHAIN
 #define CPPHTTPLIB_USE_CERTS_FROM_MACOSX_KEYCHAIN
 #endif
+#endif
+#endif
+
+#if defined(CPPHTTPLIB_USE_CERTS_FROM_MACOSX_KEYCHAIN) &&                      \
+    defined(__APPLE__) && !TARGET_OS_OSX
+#error                                                                         \
+    "CPPHTTPLIB_USE_CERTS_FROM_MACOSX_KEYCHAIN is only supported on macOS. On iOS/tvOS/watchOS, supply a CA bundle via set_ca_cert_path()."
 #endif
 
 // On Windows, enable Schannel certificate verification by default
@@ -382,7 +392,7 @@ using socket_t = int;
 #endif // _WIN32
 
 #ifdef CPPHTTPLIB_USE_CERTS_FROM_MACOSX_KEYCHAIN
-#if TARGET_OS_MAC
+#if TARGET_OS_OSX
 #include <Security/Security.h>
 #endif
 #endif
@@ -430,7 +440,7 @@ using socket_t = int;
 #endif
 #endif // _WIN32
 #ifdef CPPHTTPLIB_USE_CERTS_FROM_MACOSX_KEYCHAIN
-#if TARGET_OS_MAC
+#if TARGET_OS_OSX
 #include <Security/Security.h>
 #endif
 #endif
@@ -473,7 +483,7 @@ using socket_t = int;
 #endif
 #endif // _WIN32
 #ifdef CPPHTTPLIB_USE_CERTS_FROM_MACOSX_KEYCHAIN
-#if TARGET_OS_MAC
+#if TARGET_OS_OSX
 #include <Security/Security.h>
 #endif
 #endif
@@ -1597,7 +1607,7 @@ private:
   std::regex regex_;
 };
 
-int close_socket(socket_t sock);
+int close_socket(socket_t sock) noexcept;
 
 ssize_t write_headers(Stream &strm, const Headers &headers);
 
@@ -1734,7 +1744,7 @@ public:
 
   bool is_running() const;
   void wait_until_ready() const;
-  void stop();
+  void stop() noexcept;
   void decommission();
 
   std::function<TaskQueue *(void)> new_task_queue;
@@ -3027,8 +3037,6 @@ bool parse_range_header(const std::string &s, Ranges &ranges);
 
 bool parse_accept_header(const std::string &s,
                          std::vector<std::string> &content_types);
-
-int close_socket(socket_t sock);
 
 ssize_t send_socket(socket_t sock, const void *ptr, size_t size, int flags);
 
