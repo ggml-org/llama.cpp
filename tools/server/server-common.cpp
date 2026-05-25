@@ -1121,10 +1121,13 @@ json oaicompat_chat_params_parse(
     }
 
     // Reasoning budget: pass parameters through to sampling layer.
-    // The CLI flag (--reasoning-budget) acts as a hard ceiling enforced by
+    // The CLI flag (--reasoning-budget) is the hard ceiling chosed by
     // the server admin. The request body may lower the budget but cannot
-    // raise it past the cap, so `--reasoning-budget 0` reliably forbids
-    // thinking regardless of what the client asks for. -1 means unrestricted.
+    // raise it past the cap.
+    // The exhaustion message follows a different rule: it's a quality knob,
+    // not a policy lever, so the admin's choice still wins when set, but if
+    // the server was started without --reasoning-budget-message the client
+    // may supply its own via `thinking_budget_message`.
     {
         int reasoning_budget = opt.reasoning_budget;
         if (body.contains("thinking_budget_tokens")) {
@@ -1134,11 +1137,16 @@ json oaicompat_chat_params_parse(
             }
         }
 
+        std::string reasoning_budget_message = opt.reasoning_budget_message;
+        if (reasoning_budget_message.empty() && body.contains("thinking_budget_message")) {
+            reasoning_budget_message = json_value(body, "thinking_budget_message", std::string());
+        }
+
         if (!chat_params.thinking_end_tag.empty()) {
             llama_params["reasoning_budget_tokens"] = reasoning_budget;
             llama_params["reasoning_budget_start_tag"] = chat_params.thinking_start_tag;
             llama_params["reasoning_budget_end_tag"] = chat_params.thinking_end_tag;
-            llama_params["reasoning_budget_message"] = opt.reasoning_budget_message;
+            llama_params["reasoning_budget_message"] = reasoning_budget_message;
             llama_params["reasoning_control"] = json_value(body, "reasoning_control", false);
         }
     }
