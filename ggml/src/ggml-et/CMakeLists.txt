@@ -96,7 +96,7 @@ set(UBERKERNEL_SUPPORTED_KERNELS
     # flash_attn_ext_f16_me  # gemma4
     # flash_attn_ext_f32     # gemma4
     gated_delta_net_f32
-    # glu_f32          # gemma4: geglu
+    glu_f32          # gemma4: geglu
     group_norm_f32
     im2col
     l2_norm_f32

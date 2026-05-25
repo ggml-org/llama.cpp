@@ -377,11 +377,11 @@ int entry_point(struct ggml_et_uberkernel_params * params, void * env) {
             //     break;
             // }
 
-            // case GGML_ET_UBERKERNEL_KERNEL_GLU_F32: { // gemma4: geglu
-            //     struct uber_glu_params *p = (struct uber_glu_params *) inst_params;
-            //     rc = glu_f32_entry((struct ggml_et_glu_params *) inst_params, env);
-            //     break;
-            // }
+            case GGML_ET_UBERKERNEL_KERNEL_GLU_F32: { // gemma4: geglu
+                struct uber_glu_params *p = (struct uber_glu_params *) inst_params;
+                rc = glu_f32_entry((struct ggml_et_glu_params *) inst_params, env);
+                break;
+            }
 
             case GGML_ET_UBERKERNEL_KERNEL_ROPE_F32: { // gemma4
                 struct uber_rope_params *p = (struct uber_rope_params *) inst_params;
