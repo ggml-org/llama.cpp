@@ -8,6 +8,8 @@
 #include "nlohmann/json.hpp"
 #include "peg-parser.h"
 
+#include <algorithm>
+#include <numeric>
 #include <stdexcept>
 #include <string>
 
@@ -405,22 +407,42 @@ common_peg_parser analyze_tools::build_tool_parser_tag_tagged(parser_build_conte
             }
         }
 
-        // Build required arg sequence in definition order
-        common_peg_parser args_seq = p.eps();
-        for (size_t i = 0; i < required_parsers.size(); i++) {
-            if (i > 0) {
-                args_seq = args_seq + p.space();
-            }
-            args_seq = args_seq + required_parsers[i];
-        }
-
-        // Build optional args with flexible ordering
+        common_peg_parser optional_args = p.eps();
         if (!optional_parsers.empty()) {
             common_peg_parser any_opt = p.choice();
             for (const auto & opt : optional_parsers) {
                 any_opt |= opt;
             }
-            args_seq = args_seq + p.repeat(p.space() + any_opt, 0, -1);
+            optional_args = p.repeat(any_opt + p.space(), 0, -1);
+        }
+
+        // Build required args in any order. Tagged arguments carry their
+        // parameter name in-band, so the model should not have to emit required
+        // arguments in schema/property order.
+        common_peg_parser args_seq = p.eps();
+        constexpr size_t max_required_permutations = 6;
+        if (required_parsers.empty()) {
+            args_seq = optional_args;
+        } else if (required_parsers.size() <= max_required_permutations) {
+            std::vector<size_t> order(required_parsers.size());
+            std::iota(order.begin(), order.end(), 0);
+
+            common_peg_parser required_orders = p.choice();
+            do {
+                common_peg_parser seq = optional_args;
+                for (size_t idx : order) {
+                    seq = seq + required_parsers[idx] + p.space() + optional_args;
+                }
+                required_orders |= seq;
+            } while (std::next_permutation(order.begin(), order.end()));
+
+            args_seq = required_orders;
+        } else {
+            // Avoid factorial grammar growth for unusually large schemas.
+            args_seq = optional_args;
+            for (const auto & required : required_parsers) {
+                args_seq = args_seq + required + p.space() + optional_args;
+            }
         }
 
         if (!arguments.start.empty()) {

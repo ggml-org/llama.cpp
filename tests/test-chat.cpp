@@ -495,6 +495,32 @@ static common_chat_tool write_tool{
         "required": ["file", "content"]
     })",
 };
+static common_chat_tool edit_snake_tool{
+    /* .name = */ "edit",
+    /* .description = */ "edit a file",
+    /* .parameters = */ R"({
+        "type": "object",
+        "properties": {
+            "file": {
+                "type": "string",
+                "description": "File path."
+            },
+            "new_string": {
+                "type": "string",
+                "description": "Replacement text."
+            },
+            "old_string": {
+                "type": "string",
+                "description": "Exact text to replace."
+            },
+            "replace_all": {
+                "type": "boolean",
+                "description": "Replace every occurrence."
+            }
+        },
+        "required": ["file", "old_string", "new_string"]
+    })",
+};
 
 static common_chat_tool html_tool{
     /* .name = */ "html",
@@ -1923,6 +1949,47 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
         })
             .expect_tool_calls({
                 { "python", "{\"code\": \"def hello():\\n    print(\\\"Hello, world!\\\")\\n\\nhello()\"}", {} },
+            })
+            .run();
+
+        tst.test(
+               "<tool_call>\n"
+               "<function=edit>\n"
+               "<parameter=file>\n"
+               "/workspace/jsonlfilter/test_parse.go\n"
+               "</parameter>\n"
+               "<parameter=old_string>\n"
+               "package main\n"
+               "\n"
+               "import \"testing\"\n"
+               "\n"
+               "func TestDebug(t *testing.T) {\n"
+               "\tline := `{name:Jette,status:sleepy}`\n"
+               "\tt.Logf(\"Status: %q\\n\", result[\"status\"])\n"
+               "}\n"
+               "</parameter>\n"
+               "<parameter=new_string>\n"
+               "package main\n"
+               "\n"
+               "import (\n"
+               "\t\"strings\"\n"
+               "\t\"testing\"\n"
+               ")\n"
+               "\n"
+               "func TestDebug(t *testing.T) {\n"
+               "\tline := `{name:Jette,status:sleepy}`\n"
+               "\tt.Logf(\"Status: %q\\n\", result[\"status\"])\n"
+               "}\n"
+               "</parameter>\n"
+               "</function>\n"
+               "</tool_call>")
+            .enable_thinking(false)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({
+                edit_snake_tool
+        })
+            .expect_tool_calls({
+                { "edit", R"({"file":"/workspace/jsonlfilter/test_parse.go","old_string":"package main\n\nimport \"testing\"\n\nfunc TestDebug(t *testing.T) {\n\tline := `{name:Jette,status:sleepy}`\n\tt.Logf(\"Status: %q\\n\", result[\"status\"])\n}","new_string":"package main\n\nimport (\n\t\"strings\"\n\t\"testing\"\n)\n\nfunc TestDebug(t *testing.T) {\n\tline := `{name:Jette,status:sleepy}`\n\tt.Logf(\"Status: %q\\n\", result[\"status\"])\n}"})", {} },
             })
             .run();
 
