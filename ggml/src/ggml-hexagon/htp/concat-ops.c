@@ -220,9 +220,9 @@ int op_concat(struct htp_ops_context * octx) {
 
     bool is_2d = dst->ne[2] == 1 && dst->ne[3] == 1;
 
-    const uint32_t type_size  = (dst->type == HTP_TYPE_F32 || dst->type == HTP_TYPE_I32) ? 4 : 2;
-    bool is_src1_transposed   = (src1->nb[1] == type_size);
-    bool is_src0_untransposed = (src0->nb[0] == type_size);
+    const uint32_t type_size = (dst->type == HTP_TYPE_F32 || dst->type == HTP_TYPE_I32) ? 4 : 2;
+    bool is_src1_transposed  = (src1->nb[0] > src1->nb[1]);
+    bool is_src0_transposed  = (src0->nb[0] > src0->nb[1]);
 
     uint32_t n_threads = octx->n_threads;
     struct htp_concat_context cctx;
@@ -234,7 +234,7 @@ int op_concat(struct htp_ops_context * octx) {
 
     void (*worker_func)(unsigned int, unsigned int, void *) = concat_generic;
 
-    if (dim == 0 && is_2d && is_src1_transposed && is_src0_untransposed) {
+    if (dim == 0 && is_2d && is_src1_transposed && !is_src0_transposed) {
         uint32_t block_i = (type_size == 4) ? 32 : 64;
 
         cctx.nrows_per_thread = hmx_ceil_div(dst->ne[1], n_threads);
