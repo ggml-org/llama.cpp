@@ -1283,18 +1283,16 @@ struct clip_model_loader {
                     } break;
                 case PROJECTOR_TYPE_NEMOTRON_V2_VL:
                     {
-                        // Nemotron Nano Omni uses InternVL-style dynamic high-res tiling
-                        // (RADIO encoder, 512px tiles, up to 12 tiles + 1 thumbnail =
-                        // 13312 max patches per the HF preprocessor_config). The original
-                        // port wired only the projector and a single fixed tile; populate
-                        // the llava-uhd resolution candidates so the image is actually tiled.
-                        hparams.preproc_min_tiles = 1;
-                        hparams.preproc_max_tiles = 12;
+                        // Nemotron Nano Omni uses native-aspect dynamic resolution (no tiling):
+                        // one image resized within a visual-patch budget, with the C-RADIOv4
+                        // encoder's position embeddings interpolated to the patch grid in-graph.
+                        // Budget: 1024..13312 visual patches (16px) => 512^2 .. ~1846^2.
+                        // ref: image_processing.py in nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning
                         get_u32(KEY_PROJ_SCALE_FACTOR, hparams.n_merge, false);
-                        get_u32(KEY_PREPROC_MIN_TILES, hparams.preproc_min_tiles, false);
-                        get_u32(KEY_PREPROC_MAX_TILES, hparams.preproc_max_tiles, false);
-                        GGML_ASSERT(hparams.preproc_min_tiles <= hparams.preproc_max_tiles && hparams.preproc_max_tiles < INT32_MAX);
-                        set_internvl_dhr_res_candidates(model);
+                        hparams.image_min_pixels = 1024  * 16 * 16; // 262144  (512^2)
+                        hparams.image_max_pixels = 13312 * 16 * 16; // 3407872 (~1846^2)
+                        get_u32(KEY_IMAGE_MIN_PIXELS, hparams.image_min_pixels, false);
+                        get_u32(KEY_IMAGE_MAX_PIXELS, hparams.image_max_pixels, false);
                     } break;
                 case PROJECTOR_TYPE_IDEFICS3:
                     {

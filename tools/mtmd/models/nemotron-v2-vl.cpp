@@ -9,8 +9,10 @@ ggml_cgraph * clip_graph_nemotron_v2_vl::build() {
 
     ggml_tensor * inp = build_inp();
 
-    // add position embeddings (pre-downsampled during GGUF conversion for fixed 512x512 input)
-    inp = ggml_add(ctx0, inp, model.position_embeddings);
+    // add position embeddings, bicubic-interpolated from the baked 32x32 (512px) grid to the
+    // input's patch grid (a no-op when the input is 512x512, matching the original behavior).
+    ggml_tensor * pos_embd = resize_position_embeddings(GGML_SCALE_MODE_BICUBIC);
+    inp = ggml_add(ctx0, inp, pos_embd);
     cb(inp, "inp_pos", -1);
 
     inp = ggml_concat(ctx0, model.class_embedding, inp, 1);

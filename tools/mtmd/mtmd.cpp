@@ -448,9 +448,14 @@ struct mtmd_context {
                 } break;
             case PROJECTOR_TYPE_NEMOTRON_V2_VL:
                 {
-                    // InternVL-style dynamic tiling (see clip.cpp hparams) instead of a
-                    // single fixed 512px tile, so full-resolution pages stay legible.
-                    image_preproc = std::make_unique<mtmd_image_preprocessor_internvl>(ctx_v);
+                    // <img> ... (image embeddings) ... </img>
+                    // native-aspect dynamic resolution (no tiling); the position embeddings
+                    // are interpolated to the input patch grid in the graph.
+                    // ref: processing.py / image_processing.py in
+                    // nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning
+                    img_beg = "<img>";
+                    img_end = "</img>";
+                    image_preproc = std::make_unique<mtmd_image_preprocessor_dyn_size>(ctx_v);
                 } break;
             case PROJECTOR_TYPE_LFM2:
                 {
@@ -1093,11 +1098,8 @@ int32_t mtmd_encode(mtmd_context * ctx, const mtmd_image_tokens * image_tokens) 
     if (clip_is_llava(ctx_clip)
         || proj_type == PROJECTOR_TYPE_MINICPMV
         || proj_type == PROJECTOR_TYPE_GLM_EDGE
-        || proj_type == PROJECTOR_TYPE_INTERNVL
-        || proj_type == PROJECTOR_TYPE_NEMOTRON_V2_VL) {
+        || proj_type == PROJECTOR_TYPE_INTERNVL) {
         // TODO @ngxson : llava does not support batched encoding ; this should be fixed inside clip_image_batch_encode()
-        // NEMOTRON_V2_VL produces multiple tiles (InternVL-style dynamic tiling), so it must
-        // be encoded slice-by-slice rather than as a single batch.
         const auto & entries = image_tokens->batch_f32.entries;
         for (size_t i = 0; i < entries.size(); i++) {
             int n_tokens_per_image = clip_n_output_tokens(ctx_clip, entries[i].get());
