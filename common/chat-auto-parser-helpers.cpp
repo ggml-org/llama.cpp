@@ -310,6 +310,8 @@ std::vector<segment> prune_whitespace_segments(const std::vector<segment> & segm
 
 namespace autoparser {
 
+static const std::string ERR_TMPL = "#**ERROR**#";
+
 std::string apply_template(const common_chat_template & tmpl, const template_params & params) {
     generation_params tmpl_params;
     tmpl_params.messages              = params.messages;
@@ -326,7 +328,7 @@ std::string apply_template(const common_chat_template & tmpl, const template_par
         return common_chat_template_direct_apply(tmpl, tmpl_params);
     } catch (const std::exception & e) {
         LOG_DBG("Template application failed: %s\n", e.what());
-        return "";
+        return ERR_TMPL;
     }
 }
 
@@ -347,7 +349,7 @@ std::optional<compare_variants_result> compare_variants(
     std::string output_B = apply_template(tmpl, params_B);
 
     // Check for template application failures
-    if (output_A.empty() || output_B.empty()) {
+    if (output_A == ERR_TMPL || output_B == ERR_TMPL) {
         return std::nullopt;
     }
 
