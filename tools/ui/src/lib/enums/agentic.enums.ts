@@ -16,3 +16,12 @@ export enum AgenticSectionType {
 	REASONING = 'reasoning',
 	REASONING_PENDING = 'reasoning_pending'
 }
+
+/**
+ * How a Continue click on an assistant message resumes generation.
+ */
+export enum ContinueIntentKind {
+	APPEND_TEXT = 'append_text',
+	RERUN_TURN = 'rerun_turn',
+	NEXT_TURN = 'next_turn'
+}
