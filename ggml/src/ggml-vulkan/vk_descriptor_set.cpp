@@ -177,7 +177,7 @@ void DescriptorManager::write_buffers(vk::DescriptorSet set,
         write.dstArrayElement = 0;
         write.descriptorCount = 1;
         write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        write.pBufferInfo = &buffer_infos[i];
+        write.pBufferInfo = reinterpret_cast<const VkDescriptorBufferInfo*>(&buffer_infos.data()[i]);
         writes.push_back(write);
     }
 

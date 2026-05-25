@@ -73,7 +73,7 @@ void PipelineCache::save() {
 
 void PipelineCache::merge(vk::ArrayProxy<const vk::PipelineCache> caches) {
     if (caches.empty()) return;
-    std::vector<VkPipelineCache> vk_caches;
+    std::vector<vk::PipelineCache> vk_caches;
     vk_caches.reserve(caches.size());
     for (auto& c : caches) {
         vk_caches.push_back(c);

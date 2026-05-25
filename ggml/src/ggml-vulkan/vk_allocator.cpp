@@ -137,7 +137,9 @@ size_t VkAllocator::defragment() {
     if (!_allocator) return 0;
     // Run defragmentation if possible
     size_t bytes_moved = 0;
-    vmaDefragmentationBegin(_allocator, nullptr);
+    VmaDefragmentationContext defrag_ctx;
+    vmaBeginDefragmentation(_allocator, nullptr, &defrag_ctx);
+    vmaEndDefragmentation(_allocator, defrag_ctx, nullptr);
     return bytes_moved;
 }
 

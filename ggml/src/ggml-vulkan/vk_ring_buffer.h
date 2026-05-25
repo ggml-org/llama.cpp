@@ -4,6 +4,8 @@
 #include "vk_allocator.h"
 #include <cstdint>
 #include <atomic>
+#include <deque>
+#include <mutex>
 
 namespace ggml_vk {
 
@@ -16,6 +18,7 @@ public:
         uint64_t offset{};
         uint64_t size{};
         void* mapped_ptr{};
+        uint64_t fence_value{};
     };
 
     StagingRingBuffer(VkAllocator* allocator,
@@ -31,6 +34,10 @@ public:
     // Allocate a chunk from the ring. Blocks if no space available.
     // Call finish() after the GPU work using this allocation completes.
     [[nodiscard]] Allocation allocate(uint64_t size, uint64_t alignment = 256);
+
+    // Try to allocate a chunk from the ring without blocking.
+    // Returns Allocation{} (size==0) if there is no space.
+    [[nodiscard]] Allocation try_allocate(uint64_t size, uint64_t alignment = 256);
 
     // Signal that the GPU has finished using the given fence value.
     // This advances the tail pointer.
@@ -51,22 +58,22 @@ private:
     vk::Buffer _buffer{};
     VmaAllocation _vma_allocation{};
     void* _mapped_ptr{};
+    bool _owns_map = false;
     uint64_t _total_size{};
     bool _host_to_device{};
 
     // Ring buffer state
-    std::atomic<uint64_t> _head{0};   // next write position
-    std::atomic<uint64_t> _tail{0};   // next free position (all before this are free)
+    std::atomic<uint64_t> _head{0};   // next write position (monotonic)
+    std::atomic<uint64_t> _tail{0};   // next free position (monotonic)
     std::atomic<uint64_t> _fence_counter{0};
 
     // Per-allocation fence tracking
     // We store fence values for outstanding allocations
     struct FenceEntry {
-        uint64_t offset;
-        uint64_t size;
+        uint64_t end;          // logical end position (_head after allocation)
         uint64_t fence_value;
     };
-    std::vector<FenceEntry> _outstanding;
+    std::deque<FenceEntry> _outstanding;
     std::mutex _mutex;
 };
 

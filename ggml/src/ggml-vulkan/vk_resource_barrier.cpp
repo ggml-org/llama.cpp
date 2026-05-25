@@ -43,6 +43,11 @@ VkAccessFlags2 usage_to_access(ResourceBarrier::Usage usage) {
     }
 }
 
+static constexpr VkAccessFlags2 kWriteAccess =
+    VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT |
+    VK_ACCESS_2_TRANSFER_WRITE_BIT |
+    VK_ACCESS_2_HOST_WRITE_BIT;
+
 } // namespace
 
 void ResourceBarrier::record(VkBuffer buffer, uint64_t offset, uint64_t size, Usage usage) {
@@ -51,58 +56,50 @@ void ResourceBarrier::record(VkBuffer buffer, uint64_t offset, uint64_t size, Us
     BufferKey key{buffer, aligned_offset};
 
     auto& state = _states[key];
-    VkPipelineStageFlags2 new_stage = usage_to_stage(usage);
-    VkAccessFlags2 new_access = usage_to_access(usage);
-    bool is_write = (usage == Usage::kComputeWrite ||
-                     usage == Usage::kCopyDest ||
-                     usage == Usage::kHostWrite);
+    VkPipelineStageFlags2 stage = usage_to_stage(usage);
+    VkAccessFlags2 access = usage_to_access(usage);
+    bool is_write = (access & kWriteAccess) != 0;
 
-    if (state.stage == 0) {
-        // First time seeing this buffer
+    if (state.after_stage == 0 && state.before_stage == 0) {
+        // First time seeing this buffer in the current graph
         _ordered_keys.push_back(key);
-        state.stage = new_stage;
-        state.access = new_access;
-        state.written = is_write;
-    } else {
-        // Combine: we need barrier if prior was write OR new is write
-        state.stage |= new_stage;
-        state.access |= new_access;
-        state.written = state.written || is_write;
     }
+
+    state.after_stage |= stage;
+    state.after_access |= access;
+    state.written = state.written || is_write;
 }
 
 void ResourceBarrier::emit(VkCommandBuffer cmd_buffer) {
     if (_states.empty()) return;
 
-    // For simplicity, we emit a single full barrier per recorded buffer.
-    // A more advanced implementation would track per-buffer transitions
-    // and only emit barriers for actual conflicts.
     std::vector<VkBufferMemoryBarrier2> barriers;
     barriers.reserve(_ordered_keys.size());
 
     for (const auto& key : _ordered_keys) {
-        const auto& state = _states[key];
+        auto& state = _states[key];
 
-        // If this buffer was written, ensure all subsequent reads see the write
-        if (state.written) {
+        // Only emit a barrier if the buffer was written and the state actually changed
+        if (state.written && state.after_stage != 0 &&
+            (state.before_stage != 0 || state.before_access != 0)) {
             VkBufferMemoryBarrier2 barrier{};
             barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
-            barrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
-                                   VK_PIPELINE_STAGE_2_TRANSFER_BIT;
-            barrier.srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT |
-                                    VK_ACCESS_2_TRANSFER_WRITE_BIT;
-            barrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
-                                   VK_PIPELINE_STAGE_2_TRANSFER_BIT |
-                                   VK_PIPELINE_STAGE_2_HOST_BIT;
-            barrier.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT |
-                                    VK_ACCESS_2_SHADER_WRITE_BIT |
-                                    VK_ACCESS_2_TRANSFER_READ_BIT |
-                                    VK_ACCESS_2_HOST_READ_BIT;
+            barrier.srcStageMask = state.before_stage;
+            barrier.srcAccessMask = state.before_access;
+            barrier.dstStageMask = state.after_stage;
+            barrier.dstAccessMask = state.after_access;
             barrier.buffer = key.buffer;
             barrier.offset = key.offset;
             barrier.size = VK_WHOLE_SIZE;
             barriers.push_back(barrier);
         }
+
+        // Promote current after state to before state for the next emit
+        state.before_stage = state.after_stage;
+        state.before_access = state.after_access;
+        state.after_stage = 0;
+        state.after_access = 0;
+        state.written = false;
     }
 
     if (!barriers.empty()) {
@@ -113,9 +110,6 @@ void ResourceBarrier::emit(VkCommandBuffer cmd_buffer) {
 
         vkCmdPipelineBarrier2(cmd_buffer, &dep_info);
     }
-
-    // Reset for next batch
-    reset();
 }
 
 void ResourceBarrier::reset() {

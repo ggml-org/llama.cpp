@@ -83,6 +83,7 @@ DispatchLoaderDynamic & ggml_vk_default_dispatcher();
 #include "vk_ring_buffer.h"
 #include "vk_resource_barrier.h"
 #include "vk_descriptor_set.h"
+#include "vk_mem_alloc.h"
 
 #include "ggml-vulkan-shaders.hpp"
 
@@ -2190,6 +2191,14 @@ static void ggml_vk_wait_for_fence(ggml_backend_vk_context * ctx) {
         }
     }
     ctx->device->device.resetFences({ ctx->fence });
+
+    // Release ring-buffer allocations now that GPU work is complete
+    if (ctx->upload_ring) {
+        ctx->upload_ring->finish(ctx->upload_ring->current_fence());
+    }
+    if (ctx->readback_ring) {
+        ctx->readback_ring->finish(ctx->readback_ring->current_fence());
+    }
 }
 
 // variables to track number of compiles in progress
@@ -2913,7 +2922,7 @@ static bool ggml_vk_create_buffer_vma(vk_device& device, size_t size, vk_buffer&
         // Store VMA allocation handle in device_memory (reuse field as opaque handle)
         // We overload device_memory to store the VmaAllocation pointer.
         // ggml_vk_destroy_buffer will detect VMA-backed buffers and use vmaDestroyBuffer.
-        buf->device_memory = reinterpret_cast<vk::DeviceMemory>(alloc.allocation);
+        buf->device_memory = vk::DeviceMemory(reinterpret_cast<VkDeviceMemory>(alloc.allocation));
 
         device->memory_logger->log_allocation(buf, size);
         return true;
@@ -6949,22 +6958,20 @@ static void ggml_vk_dispatch_pipeline(ggml_backend_vk_context* ctx, vk_context& 
     GGML_ASSERT(pipeline->parameter_count == descriptor_buffer_infos.size());
     GGML_ASSERT(pipeline->push_constant_size == push_constant_size(push_constants));
 
-    // Emit resource barriers for write-after-read/write-after-write dependencies
-    ctx->resource_barrier.emit(subctx->s->buffer->buf);
-
-    // Record buffer usages for next barrier
+    // Record buffer usages for barrier emission
     for (const auto& info : descriptor_buffer_infos) {
         ctx->resource_barrier.record(
             info.buffer, info.offset, info.range,
             ggml_vk::ResourceBarrier::Usage::kComputeWrite);
     }
 
+    // Emit resource barriers for write-after-read/write-after-write dependencies
+    ctx->resource_barrier.emit(subctx->s->buffer->buf);
+
     // Use descriptor manager if available, otherwise fall back to inline descriptors
     if (ctx->device->desc_manager) {
         vk::DescriptorSet desc_set = ctx->device->desc_manager->allocate_set(ctx->device->dsl);
-        ctx->device->desc_manager->write_buffers(desc_set, 0,
-            vk::ArrayProxy<const vk::DescriptorBufferInfo>(
-                descriptor_buffer_infos.begin(), descriptor_buffer_infos.size()));
+        ctx->device->desc_manager->write_buffers(desc_set, 0, descriptor_buffer_infos);
 
         subctx->s->buffer->buf.pushConstants(pipeline->layout, vk::ShaderStageFlagBits::eCompute, 0, push_constant_size(push_constants), push_constant_data(push_constants));
         subctx->s->buffer->buf.bindPipeline(vk::PipelineBindPoint::eCompute, pipeline->pipeline);
@@ -7163,28 +7170,45 @@ static void ggml_vk_buffer_write_nc_async(ggml_backend_vk_context * ctx, vk_cont
     }
 
     // Staging buffer required
-    vk_buffer& staging = ctx->device->sync_staging;
     const uint64_t copy_size = ts*ne/bs;
-    ggml_vk_ensure_sync_staging_buffer(ctx->device, copy_size);
-    VkBufferCopy buf_copy{ 0, offset, copy_size };
+    vk::Buffer staging_buf{};
+    uint64_t staging_off = 0;
+    void * staging_ptr = nullptr;
+
+    if (ctx->upload_ring) {
+        auto alloc = ctx->upload_ring->try_allocate(copy_size);
+        if (alloc.size > 0) {
+            staging_buf = alloc.buffer;
+            staging_off = alloc.offset;
+            staging_ptr = alloc.mapped_ptr;
+        }
+    }
+
+    if (!staging_ptr) {
+        ggml_vk_ensure_sync_staging_buffer(ctx->device, copy_size);
+        staging_buf = ctx->device->sync_staging->buffer;
+        staging_ptr = ctx->device->sync_staging->ptr;
+    }
+
+    VkBufferCopy buf_copy{ staging_off, offset, copy_size };
 
     ggml_vk_sync_buffers(ctx, subctx);
-    vkCmdCopyBuffer(subctx->s->buffer->buf, (VkBuffer)staging->buffer, (VkBuffer)dst->buffer, 1, &buf_copy);
+    vkCmdCopyBuffer(subctx->s->buffer->buf, (VkBuffer)staging_buf, (VkBuffer)dst->buffer, 1, &buf_copy);
 
     for (uint64_t i3 = 0; i3 < ne3; i3++) {
         for (uint64_t i2 = 0; i2 < ne2; i2++) {
             // Find longest contiguous slice
             if (ne1*nb1 == dstnb2) {
-                deferred_memcpy((uint8_t *)staging->ptr + i3*dstnb3 + i2*dstnb2, (const uint8_t *) tensor->data + buf_offset + i3*nb3 + i2*nb2, dstnb2, &subctx->in_memcpys);
+                deferred_memcpy((uint8_t *)staging_ptr + i3*dstnb3 + i2*dstnb2, (const uint8_t *) tensor->data + buf_offset + i3*nb3 + i2*nb2, dstnb2, &subctx->in_memcpys);
             } else {
                 for (uint64_t i1 = 0; i1 < ne1; i1++) {
                     if (ne0*nb0/bs == dstnb1) {
-                        deferred_memcpy((uint8_t *)staging->ptr + i3*dstnb3 + i2*dstnb2 + i1*dstnb1, (const uint8_t *) tensor->data + buf_offset + i3*nb3 + i2*nb2 + i1*nb1, dstnb1, &subctx->in_memcpys);
+                        deferred_memcpy((uint8_t *)staging_ptr + i3*dstnb3 + i2*dstnb2 + i1*dstnb1, (const uint8_t *) tensor->data + buf_offset + i3*nb3 + i2*nb2 + i1*nb1, dstnb1, &subctx->in_memcpys);
                     } else {
                         const uint64_t s_off = buf_offset + i3*nb3 + i2*nb2 + i1*nb1;
                         const uint64_t d_off = i3*dstnb3 + i2*dstnb2 + i1*dstnb1;
                         for (uint64_t i0 = 0; i0 < ne0; i0++) {
-                            deferred_memcpy((uint8_t *)staging->ptr + d_off + i0*dstnb0, (const uint8_t *) tensor->data + s_off + i0*nb0, dstnb0, &subctx->in_memcpys);
+                            deferred_memcpy((uint8_t *)staging_ptr + d_off + i0*dstnb0, (const uint8_t *) tensor->data + s_off + i0*nb0, dstnb0, &subctx->in_memcpys);
                         }
                     }
                 }
@@ -7193,7 +7217,7 @@ static void ggml_vk_buffer_write_nc_async(ggml_backend_vk_context * ctx, vk_cont
     }
 }
 
-static bool ggml_vk_buffer_write_2d_async(vk_context subctx, vk_buffer& dst, size_t offset, const void * src, size_t spitch, size_t dpitch, size_t width, size_t height, bool sync_staging = false) {
+static bool ggml_vk_buffer_write_2d_async(vk_context subctx, vk_buffer& dst, size_t offset, const void * src, size_t spitch, size_t dpitch, size_t width, size_t height, bool sync_staging = false, ggml_backend_vk_context * ctx = nullptr) {
     VK_LOG_DEBUG("ggml_vk_buffer_write_2d_async(" << width << ", " << height << ")");
     // Check if src is pinned memory
     vk_buffer buf = nullptr;
@@ -7230,40 +7254,55 @@ static bool ggml_vk_buffer_write_2d_async(vk_context subctx, vk_buffer& dst, siz
 
     // Staging buffer required
     const size_t staging_size = width * height;
-    ggml_vk_ensure_sync_staging_buffer(dst->device, staging_size);
+    vk::Buffer staging_buf{};
+    uint64_t staging_off = 0;
+    void * staging_ptr = nullptr;
 
-    vk_buffer& staging_buffer = dst->device->sync_staging;
+    if (ctx && ctx->upload_ring) {
+        auto alloc = ctx->upload_ring->try_allocate(staging_size);
+        if (alloc.size > 0) {
+            staging_buf = alloc.buffer;
+            staging_off = alloc.offset;
+            staging_ptr = alloc.mapped_ptr;
+        }
+    }
+
+    if (!staging_ptr) {
+        ggml_vk_ensure_sync_staging_buffer(dst->device, staging_size);
+        staging_buf = dst->device->sync_staging->buffer;
+        staging_ptr = dst->device->sync_staging->ptr;
+    }
 
     std::vector<vk::BufferCopy> slices(1);
     if (width == dpitch) {
-        slices[0].srcOffset = 0;
+        slices[0].srcOffset = staging_off;
         slices[0].dstOffset = offset;
         slices[0].size = staging_size;
     } else {
         slices.resize(height);
         for (size_t i = 0; i < height; i++) {
-            slices[i].srcOffset = i * width;
+            slices[i].srcOffset = staging_off + i * width;
             slices[i].dstOffset = offset + i * dpitch;
             slices[i].size = width;
         }
     }
 
     ggml_vk_sync_buffers(nullptr, subctx);
-    subctx->s->buffer->buf.copyBuffer((VkBuffer)staging_buffer->buffer, (VkBuffer)dst->buffer, slices);
+    subctx->s->buffer->buf.copyBuffer((VkBuffer)staging_buf, (VkBuffer)dst->buffer, slices);
 
     if (width == spitch) {
-        deferred_memcpy((uint8_t *)staging_buffer->ptr, src, staging_size, &subctx->in_memcpys);
+        deferred_memcpy((uint8_t *)staging_ptr, src, staging_size, &subctx->in_memcpys);
     } else {
         for (size_t i = 0; i < height; i++) {
-            deferred_memcpy((uint8_t *)staging_buffer->ptr + i * width, (const uint8_t *) src + i * spitch, width, &subctx->in_memcpys);
+            deferred_memcpy((uint8_t *)staging_ptr + i * width, (const uint8_t *) src + i * spitch, width, &subctx->in_memcpys);
         }
     }
     return true;
 }
 
-static bool ggml_vk_buffer_write_async(vk_context subctx, vk_buffer& dst, size_t offset, const void * src, size_t size, bool sync_staging = false) {
+static bool ggml_vk_buffer_write_async(vk_context subctx, vk_buffer& dst, size_t offset, const void * src, size_t size, bool sync_staging = false, ggml_backend_vk_context * ctx = nullptr) {
     VK_LOG_DEBUG("ggml_vk_buffer_write_async(" << size << ")");
-    return ggml_vk_buffer_write_2d_async(subctx, dst, offset, src, size, size, size, 1, sync_staging);
+    return ggml_vk_buffer_write_2d_async(subctx, dst, offset, src, size, size, size, 1, sync_staging, ctx);
 }
 
 static void ggml_vk_buffer_write_2d(vk_buffer& dst, size_t offset, const void * src, size_t spitch, size_t dpitch, size_t width, size_t height) {
@@ -7304,7 +7343,7 @@ static void ggml_vk_buffer_write(vk_buffer& dst, size_t offset, const void * src
     ggml_vk_buffer_write_2d(dst, offset, src, size, size, size, 1);
 }
 
-static bool ggml_vk_buffer_read_2d_async(vk_context subctx, vk_buffer& src, size_t offset, void * dst, size_t spitch, size_t dpitch, size_t width, size_t height, bool sync_staging = false) {
+static bool ggml_vk_buffer_read_2d_async(vk_context subctx, vk_buffer& src, size_t offset, void * dst, size_t spitch, size_t dpitch, size_t width, size_t height, bool sync_staging = false, ggml_backend_vk_context * ctx = nullptr) {
     VK_LOG_DEBUG("ggml_vk_buffer_read_2d_async(offset=" << offset << ", width=" << width << ", height=" << height << ")");
     GGML_ASSERT(width > 0);
     GGML_ASSERT(height > 0);
@@ -7348,39 +7387,54 @@ static bool ggml_vk_buffer_read_2d_async(vk_context subctx, vk_buffer& src, size
 
     // Fall back to staging buffer
     const size_t staging_size = width * height;
-    ggml_vk_ensure_sync_staging_buffer(src->device, staging_size);
+    vk::Buffer staging_buf{};
+    uint64_t staging_off = 0;
+    void * staging_ptr = nullptr;
 
-    vk_buffer& staging_buffer = src->device->sync_staging;
+    if (ctx && ctx->readback_ring) {
+        auto alloc = ctx->readback_ring->try_allocate(staging_size);
+        if (alloc.size > 0) {
+            staging_buf = alloc.buffer;
+            staging_off = alloc.offset;
+            staging_ptr = alloc.mapped_ptr;
+        }
+    }
+
+    if (!staging_ptr) {
+        ggml_vk_ensure_sync_staging_buffer(src->device, staging_size);
+        staging_buf = src->device->sync_staging->buffer;
+        staging_ptr = src->device->sync_staging->ptr;
+    }
 
     std::vector<vk::BufferCopy> staging_slices(1);
     if (width == spitch) {
         staging_slices[0].srcOffset = offset;
-        staging_slices[0].dstOffset = 0;
+        staging_slices[0].dstOffset = staging_off;
         staging_slices[0].size = staging_size;
     } else {
         staging_slices.resize(height);
         for (size_t i = 0; i < height; i++) {
             staging_slices[i].srcOffset = offset + i * spitch;
-            staging_slices[i].dstOffset = i * width;
+            staging_slices[i].dstOffset = staging_off + i * width;
             staging_slices[i].size = width;
         }
     }
 
     ggml_vk_sync_buffers(nullptr, subctx);
-    subctx->s->buffer->buf.copyBuffer(src->buffer, staging_buffer->buffer, staging_slices);
+    subctx->s->buffer->buf.copyBuffer(src->buffer, (VkBuffer)staging_buf, staging_slices);
 
     if (width == dpitch) {
-        deferred_memcpy(dst, staging_buffer->ptr, staging_size, &subctx->out_memcpys);
+        deferred_memcpy(dst, staging_ptr, staging_size, &subctx->out_memcpys);
     } else {
         for (size_t i = 0; i < height; i++) {
-            deferred_memcpy((uint8_t *) dst + i * dpitch, (const uint8_t *) staging_buffer->ptr + i * width, width, &subctx->out_memcpys);
+            deferred_memcpy((uint8_t *) dst + i * dpitch, (const uint8_t *) staging_ptr + i * width, width, &subctx->out_memcpys);
         }
     }
     return true;
 }
 
-static bool ggml_vk_buffer_read_async(vk_context subctx, vk_buffer& src, size_t offset, void * dst, size_t size, bool sync_staging = false) {
-    return ggml_vk_buffer_read_2d_async(subctx, src, offset, dst, size, size, size, 1, sync_staging);
+static bool ggml_vk_buffer_read_async(vk_context subctx, vk_buffer& src, size_t offset, void * dst, size_t size, bool sync_staging = false, ggml_backend_vk_context * ctx = nullptr) {
+    return ggml_vk_buffer_read_2d_async(subctx, src, offset, dst, size, size, size, 1, sync_staging, ctx);
 }
 
 static void ggml_vk_buffer_read_2d(vk_buffer& src, size_t offset, void * dst, size_t spitch, size_t dpitch, size_t width, size_t height) {
@@ -14363,7 +14417,7 @@ static void ggml_backend_vk_set_tensor_2d_async(ggml_backend_t backend, ggml_ten
 
     auto dst_offset = vk_tensor_offset(tensor) + tensor->view_offs + offset;
 
-    bool ret = ggml_vk_buffer_write_2d_async(cpy_ctx, buf, dst_offset, data, stride_data, stride_tensor, size, n_copies);
+    bool ret = ggml_vk_buffer_write_2d_async(cpy_ctx, buf, dst_offset, data, stride_data, stride_tensor, size, n_copies, false, ctx);
 
     if (!ret) {
         const size_t staging_size = size * n_copies;
@@ -14419,7 +14473,7 @@ static void ggml_backend_vk_get_tensor_2d_async(ggml_backend_t backend, const gg
     vk_buffer buf = buf_ctx->dev_buffer;
 
     auto src_offset = vk_tensor_offset(tensor) + tensor->view_offs + offset;
-    bool ret = ggml_vk_buffer_read_2d_async(compute_ctx, buf, src_offset, data, stride_tensor, stride_data, size, n_copies);
+    bool ret = ggml_vk_buffer_read_2d_async(compute_ctx, buf, src_offset, data, stride_tensor, stride_data, size, n_copies, false, ctx);
 
     if (!ret) {
         const size_t staging_size = size * n_copies;
@@ -14513,7 +14567,7 @@ static bool ggml_backend_vk_cpy_tensor_async(ggml_backend_t backend_src, ggml_ba
 
         return ggml_vk_buffer_write_async(cpy_ctx, dst_buf,
                                           vk_tensor_offset(dst) + dst->view_offs,
-                                          src->data, ggml_nbytes(src));
+                                          src->data, ggml_nbytes(src), false, ctx);
     }
 
     GGML_UNUSED(backend_src);
@@ -15447,9 +15501,6 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
     if (!vk_perf_logger_enabled && !ctx->compute_ctx.expired()) {
         compute_ctx = ctx->compute_ctx.lock();
         ggml_vk_ctx_end(compute_ctx);
-
-        // Flush final resource barriers
-        ctx->resource_barrier.emit(compute_ctx->s->buffer->buf);
 
         ggml_vk_submit(compute_ctx, ctx->device->fence);
         VK_CHECK(ctx->device->device.waitForFences({ ctx->device->fence }, true, UINT64_MAX), "ggml_vk_graph_compute waitForFences");

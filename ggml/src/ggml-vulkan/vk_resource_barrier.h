@@ -23,8 +23,10 @@ public:
     };
 
     struct BufferState {
-        VkPipelineStageFlags2 stage{0};
-        VkAccessFlags2 access{0};
+        VkPipelineStageFlags2 before_stage{0};
+        VkAccessFlags2 before_access{0};
+        VkPipelineStageFlags2 after_stage{0};
+        VkAccessFlags2 after_access{0};
         bool written{false};
     };
 
