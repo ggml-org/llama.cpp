@@ -676,6 +676,7 @@ struct vk_device_struct {
     uint64_t suballocation_block_size;
     uint64_t min_imported_host_pointer_alignment;
     bool external_memory_host {};
+    bool external_memory_dma_buf {};
     bool fp16;
     bool bf16;
     bool pipeline_robustness;
@@ -980,30 +981,7 @@ struct vk_device_struct {
 
     std::unique_ptr<vk_memory_logger> memory_logger;
 
-    ~vk_device_struct() {
-        VK_LOG_DEBUG("destroy device " << name);
-
-        device.destroyFence(fence);
-
-        ggml_vk_destroy_buffer(sync_staging);
-
-        compute_queue.cmd_pool.destroy(device);
-        transfer_queue.cmd_pool.destroy(device);
-
-        for (auto& pipeline : all_pipelines) {
-            if (pipeline.expired()) {
-                continue;
-            }
-
-            vk_pipeline pl = pipeline.lock();
-            ggml_vk_destroy_pipeline(device, pl);
-        }
-        all_pipelines.clear();
-
-        device.destroyDescriptorSetLayout(dsl);
-
-        device.destroy();
-    }
+    ~vk_device_struct();
 };
 
 void vk_command_pool::init(vk_device& device, vk_queue *q_) {
@@ -1042,6 +1020,25 @@ struct vk_buffer_struct {
         device->device.destroyBuffer(buffer);
     }
 };
+
+#ifdef __linux__
+enum vk_d2d_method {
+    D2D_UNTESTED,
+    D2D_DMABUF_P2P,
+    D2D_DMABUF_GTT,
+    D2D_SHARED_STAGING,
+    D2D_STAGING,
+};
+
+struct vk_d2d_path {
+    vk_d2d_method method = D2D_UNTESTED;
+    bool reverse_direction = false;
+    vk_buffer buf_a;
+    vk_buffer buf_b;
+    void * host_ptr = nullptr;
+    size_t size = 0;
+};
+#endif
 
 struct vk_subbuffer {
     vk_buffer buffer;
@@ -2270,10 +2267,86 @@ struct vk_instance_t {
     std::vector<size_t> device_indices;
     std::vector<bool>   device_supports_membudget;
     vk_device devices[GGML_VK_MAX_DEVICES];
+
+    ~vk_instance_t();
 };
+
+#ifdef __linux__
+static std::mutex vk_d2d_cache_mutex;
+static std::map<std::pair<vk_device_struct*, vk_device_struct*>, vk_d2d_path> vk_d2d_cache;
+#endif
 
 static bool vk_instance_initialized = false;
 static vk_instance_t vk_instance;
+
+vk_instance_t::~vk_instance_t() {
+#ifdef __linux__
+    {
+        std::lock_guard<std::mutex> guard(vk_d2d_cache_mutex);
+        for (auto& entry : vk_d2d_cache) {
+            if (entry.second.host_ptr) {
+                free(entry.second.host_ptr);
+                entry.second.host_ptr = nullptr;
+            }
+            if (entry.second.buf_a) {
+                entry.second.buf_a->size = 0;
+            }
+            if (entry.second.buf_b) {
+                entry.second.buf_b->size = 0;
+            }
+        }
+        vk_d2d_cache.clear();
+    }
+#endif
+}
+
+vk_device_struct::~vk_device_struct() {
+    VK_LOG_DEBUG("destroy device " << name);
+
+#ifdef __linux__
+    {
+        std::lock_guard<std::mutex> guard(vk_d2d_cache_mutex);
+        for (auto it = vk_d2d_cache.begin(); it != vk_d2d_cache.end(); ) {
+            if (it->first.first == this || it->first.second == this) {
+                if (it->second.host_ptr) {
+                    free(it->second.host_ptr);
+                    it->second.host_ptr = nullptr;
+                }
+                if (it->second.buf_a) {
+                    it->second.buf_a->size = 0;
+                }
+                if (it->second.buf_b) {
+                    it->second.buf_b->size = 0;
+                }
+                it = vk_d2d_cache.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
+#endif
+
+    device.destroyFence(fence);
+
+    ggml_vk_destroy_buffer(sync_staging);
+
+    compute_queue.cmd_pool.destroy(device);
+    transfer_queue.cmd_pool.destroy(device);
+
+    for (auto& pipeline : all_pipelines) {
+        if (pipeline.expired()) {
+            continue;
+        }
+
+        vk_pipeline pl = pipeline.lock();
+        ggml_vk_destroy_pipeline(device, pl);
+    }
+    all_pipelines.clear();
+
+    device.destroyDescriptorSetLayout(dsl);
+
+    device.destroy();
+}
 
 #ifdef GGML_VULKAN_CHECK_RESULTS
 static size_t vk_skip_checks;
@@ -3185,6 +3258,258 @@ static void ggml_vk_destroy_buffer(vk_buffer& buf) {
 
     buf.reset();
 }
+
+#ifdef __linux__
+#include <unistd.h>
+
+static vk_buffer ggml_vk_create_buffer_dma_buf_export(vk_device& device, size_t size, bool device_local) {
+    vk_buffer buf = std::make_shared<vk_buffer_struct>();
+
+    vk::BufferUsageFlags usage_flags = vk::BufferUsageFlagBits::eTransferSrc | vk::BufferUsageFlagBits::eTransferDst;
+
+    vk::ExternalMemoryBufferCreateInfo external_memory_bci;
+    external_memory_bci.handleTypes = vk::ExternalMemoryHandleTypeFlagBits::eDmaBufEXT;
+
+    vk::BufferCreateInfo buffer_create_info{
+        vk::BufferCreateFlags(),
+        size,
+        usage_flags,
+        vk::SharingMode::eExclusive,
+        0,
+        nullptr,
+    };
+    buffer_create_info.setPNext(&external_memory_bci);
+
+    try {
+        buf->buffer = device->device.createBuffer(buffer_create_info);
+    } catch (const vk::SystemError& e) {
+        VK_LOG_DEBUG("ggml_vk_create_buffer_dma_buf_export: createBuffer failed: " << e.what());
+        return {};
+    }
+
+    vk::MemoryRequirements mem_req = device->device.getBufferMemoryRequirements(buf->buffer);
+    vk::PhysicalDeviceMemoryProperties mem_props = device->physical_device.getMemoryProperties();
+
+    vk::MemoryPropertyFlags req_flags;
+    if (device_local) {
+        req_flags = vk::MemoryPropertyFlagBits::eDeviceLocal;
+    } else {
+        req_flags = vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent;
+    }
+
+    const std::vector<uint32_t> memory_type_indices = ggml_vk_find_memory_properties(&mem_props, &mem_req, req_flags);
+    if (memory_type_indices.empty()) {
+        VK_LOG_DEBUG("ggml_vk_create_buffer_dma_buf_export: no suitable memory type");
+        device->device.destroyBuffer(buf->buffer);
+        return {};
+    }
+
+    // For GTT, prefer non-device-local host-visible memory
+    uint32_t chosen_idx = memory_type_indices[0];
+    if (!device_local) {
+        for (uint32_t idx : memory_type_indices) {
+            if (!(mem_props.memoryTypes[idx].propertyFlags & vk::MemoryPropertyFlagBits::eDeviceLocal)) {
+                chosen_idx = idx;
+                break;
+            }
+        }
+    }
+
+    vk::ExportMemoryAllocateInfo export_info;
+    export_info.handleTypes = vk::ExternalMemoryHandleTypeFlagBits::eDmaBufEXT;
+
+    vk::MemoryAllocateInfo alloc_info;
+    alloc_info.allocationSize = mem_req.size;
+    alloc_info.memoryTypeIndex = chosen_idx;
+    alloc_info.setPNext(&export_info);
+
+    try {
+        buf->device_memory = device->device.allocateMemory(alloc_info);
+    } catch (const vk::SystemError& e) {
+        VK_LOG_DEBUG("ggml_vk_create_buffer_dma_buf_export: allocateMemory failed: " << e.what());
+        device->device.destroyBuffer(buf->buffer);
+        return {};
+    }
+
+    buf->memory_property_flags = mem_props.memoryTypes[chosen_idx].propertyFlags;
+    buf->ptr = nullptr;
+
+    device->device.bindBufferMemory(buf->buffer, buf->device_memory, 0);
+    buf->device = device;
+    buf->size = size;
+
+    device->memory_logger->log_allocation(buf, size);
+
+    return buf;
+}
+
+static int ggml_vk_export_dma_buf_fd(vk_device& device, vk_buffer& buf) {
+    vk::MemoryGetFdInfoKHR fd_info;
+    fd_info.memory = buf->device_memory;
+    fd_info.handleType = vk::ExternalMemoryHandleTypeFlagBits::eDmaBufEXT;
+
+    try {
+        return device->device.getMemoryFdKHR(fd_info);
+    } catch (const vk::SystemError& e) {
+        VK_LOG_DEBUG("ggml_vk_export_dma_buf_fd: getMemoryFdKHR failed: " << e.what());
+        return -1;
+    }
+}
+
+static vk_buffer ggml_vk_import_dma_buf_fd(vk_device& device, int fd, size_t size, vk::MemoryPropertyFlags req_flags) {
+    vk_buffer buf = std::make_shared<vk_buffer_struct>();
+
+    vk::ExternalMemoryBufferCreateInfo external_memory_bci;
+    external_memory_bci.handleTypes = vk::ExternalMemoryHandleTypeFlagBits::eDmaBufEXT;
+
+    vk::BufferCreateInfo buffer_create_info{
+        vk::BufferCreateFlags(),
+        size,
+        vk::BufferUsageFlagBits::eTransferSrc | vk::BufferUsageFlagBits::eTransferDst,
+        vk::SharingMode::eExclusive,
+        0,
+        nullptr,
+    };
+    buffer_create_info.setPNext(&external_memory_bci);
+
+    try {
+        buf->buffer = device->device.createBuffer(buffer_create_info);
+    } catch (const vk::SystemError& e) {
+        VK_LOG_DEBUG("ggml_vk_import_dma_buf_fd: createBuffer failed: " << e.what());
+        close(fd);
+        return {};
+    }
+
+    vk::MemoryRequirements mem_req = device->device.getBufferMemoryRequirements(buf->buffer);
+    vk::PhysicalDeviceMemoryProperties mem_props = device->physical_device.getMemoryProperties();
+
+    vk::MemoryFdPropertiesKHR fd_props;
+    try {
+        fd_props = device->device.getMemoryFdPropertiesKHR(vk::ExternalMemoryHandleTypeFlagBits::eDmaBufEXT, fd);
+    } catch (const vk::SystemError& e) {
+        VK_LOG_DEBUG("ggml_vk_import_dma_buf_fd: getMemoryFdPropertiesKHR failed: " << e.what());
+        device->device.destroyBuffer(buf->buffer);
+        close(fd);
+        return {};
+    }
+
+    uint32_t memory_type_idx;
+    for (memory_type_idx = 0; memory_type_idx < mem_props.memoryTypeCount; ++memory_type_idx) {
+        if (!(fd_props.memoryTypeBits & (1u << memory_type_idx))) {
+            continue;
+        }
+        if (!(mem_req.memoryTypeBits & (1u << memory_type_idx))) {
+            continue;
+        }
+        if ((mem_props.memoryTypes[memory_type_idx].propertyFlags & req_flags) == req_flags) {
+            break;
+        }
+    }
+    if (memory_type_idx == mem_props.memoryTypeCount) {
+        VK_LOG_DEBUG("ggml_vk_import_dma_buf_fd: no suitable memory type");
+        device->device.destroyBuffer(buf->buffer);
+        close(fd);
+        return {};
+    }
+
+    vk::ImportMemoryFdInfoKHR import_info;
+    import_info.handleType = vk::ExternalMemoryHandleTypeFlagBits::eDmaBufEXT;
+    import_info.fd = fd;
+
+    vk::MemoryAllocateInfo alloc_info;
+    alloc_info.allocationSize = mem_req.size;
+    alloc_info.memoryTypeIndex = memory_type_idx;
+    alloc_info.setPNext(&import_info);
+
+    try {
+        buf->device_memory = device->device.allocateMemory(alloc_info);
+    } catch (const vk::SystemError& e) {
+        VK_LOG_DEBUG("ggml_vk_import_dma_buf_fd: allocateMemory failed: " << e.what());
+        device->device.destroyBuffer(buf->buffer);
+        close(fd);
+        return {};
+    }
+    // fd is consumed by successful import — do not close
+
+    buf->memory_property_flags = mem_props.memoryTypes[memory_type_idx].propertyFlags;
+    buf->ptr = nullptr;
+
+    device->device.bindBufferMemory(buf->buffer, buf->device_memory, 0);
+    buf->device = device;
+    buf->size = size;
+
+    device->memory_logger->log_allocation(buf, size);
+
+    return buf;
+}
+
+static bool ggml_vk_d2d_try_dma_buf(vk_device& exporter, vk_device& importer, size_t size, bool device_local,
+                                     vk_buffer& out_export_buf, vk_buffer& out_import_buf) {
+    out_export_buf = ggml_vk_create_buffer_dma_buf_export(exporter, size, device_local);
+    if (!out_export_buf) {
+        return false;
+    }
+
+    int fd = ggml_vk_export_dma_buf_fd(exporter, out_export_buf);
+    if (fd < 0) {
+        ggml_vk_destroy_buffer(out_export_buf);
+        return false;
+    }
+
+    vk::MemoryPropertyFlags import_flags = device_local
+        ? vk::MemoryPropertyFlagBits::eDeviceLocal
+        : (vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
+
+    out_import_buf = ggml_vk_import_dma_buf_fd(importer, fd, size, import_flags);
+    if (!out_import_buf) {
+        ggml_vk_destroy_buffer(out_export_buf);
+        return false;
+    }
+
+    return true;
+}
+
+static bool ggml_vk_d2d_try_shared_staging(vk_device& dev_a, vk_device& dev_b, size_t size,
+                                            vk_buffer& out_buf_a, vk_buffer& out_buf_b, void*& out_host_ptr) {
+    if (!dev_a->external_memory_host || !dev_b->external_memory_host) {
+        return false;
+    }
+
+    uint64_t align = std::max(dev_a->min_imported_host_pointer_alignment, dev_b->min_imported_host_pointer_alignment);
+    size_t alloc_size = (size + align - 1) & ~(align - 1);
+
+    void * ptr = nullptr;
+    if (posix_memalign(&ptr, align, alloc_size) != 0 || ptr == nullptr) {
+        return false;
+    }
+
+    const vk::MemoryPropertyFlags flags = vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent | vk::MemoryPropertyFlagBits::eHostCached;
+
+    try {
+        out_buf_a = ggml_vk_create_buffer(dev_a, alloc_size, {flags}, ptr);
+    } catch (const vk::SystemError&) {
+        out_buf_a = {};
+    }
+    if (!out_buf_a) {
+        free(ptr);
+        return false;
+    }
+
+    try {
+        out_buf_b = ggml_vk_create_buffer(dev_b, alloc_size, {flags}, ptr);
+    } catch (const vk::SystemError&) {
+        out_buf_b = {};
+    }
+    if (!out_buf_b) {
+        ggml_vk_destroy_buffer(out_buf_a);
+        free(ptr);
+        return false;
+    }
+
+    out_host_ptr = ptr;
+    return true;
+}
+#endif
 
 static vk_subbuffer ggml_vk_subbuffer(const ggml_backend_vk_context* ctx, const vk_buffer& buf, size_t offset = 0) {
     return { buf, offset, ggml_vk_get_max_buffer_range(ctx, buf, offset) };
@@ -5682,6 +6007,10 @@ static vk_device ggml_vk_get_device(size_t idx) {
         device->shader_64b_indexing = false;
         bool bfloat16_support = false;
         bool dot2_f16_support = false;
+#ifdef __linux__
+        bool dma_buf_support = false;
+        bool external_memory_fd_support = false;
+#endif
 
         for (const auto& properties : ext_props) {
             if (strcmp("VK_KHR_maintenance4", properties.extensionName) == 0) {
@@ -5734,6 +6063,12 @@ static vk_device ggml_vk_get_device(size_t idx) {
                 device->memory_priority = true;
             } else if (strcmp("VK_EXT_external_memory_host", properties.extensionName) == 0) {
                 device->external_memory_host = true;
+#ifdef __linux__
+            } else if (strcmp("VK_EXT_external_memory_dma_buf", properties.extensionName) == 0) {
+                dma_buf_support = true;
+            } else if (strcmp("VK_KHR_external_memory_fd", properties.extensionName) == 0) {
+                external_memory_fd_support = true;
+#endif
 #if defined(VK_EXT_shader_64bit_indexing)
             } else if (strcmp("VK_EXT_shader_64bit_indexing", properties.extensionName) == 0) {
                 device->shader_64b_indexing = true;
@@ -5908,6 +6243,10 @@ static vk_device ggml_vk_get_device(size_t idx) {
 
         device->min_imported_host_pointer_alignment = external_memory_host_props.minImportedHostPointerAlignment;
 
+#ifdef __linux__
+        device->external_memory_dma_buf = dma_buf_support && external_memory_fd_support;
+#endif
+
         device->max_workgroup_size_log2 = uint32_t(log2f(float(device->properties.limits.maxComputeWorkGroupInvocations)));
 
         std::vector<vk::QueueFamilyProperties> queue_family_props = device->physical_device.getQueueFamilyProperties();
@@ -6061,6 +6400,13 @@ static vk_device ggml_vk_get_device(size_t idx) {
         if (device->external_memory_host) {
             device_extensions.push_back("VK_EXT_external_memory_host");
         }
+
+#ifdef __linux__
+        if (device->external_memory_dma_buf) {
+            device_extensions.push_back("VK_EXT_external_memory_dma_buf");
+            device_extensions.push_back("VK_KHR_external_memory_fd");
+        }
+#endif
 
 #if defined(VK_EXT_shader_64bit_indexing)
         VkPhysicalDeviceShader64BitIndexingFeaturesEXT shader_64bit_indexing_features {};
@@ -7987,6 +8333,232 @@ static void ggml_vk_buffer_read(vk_buffer& src, size_t offset, void * dst, size_
     ggml_vk_buffer_read_2d(src, offset, dst, size, size, size, 1);
 }
 
+#ifdef __linux__
+static bool ggml_vk_d2d_test_copy(vk_device& device, vk_buffer& shared_buf, size_t size) {
+    vk_buffer tmp;
+    try {
+        tmp = ggml_vk_create_buffer(device, size,
+            {vk::MemoryPropertyFlagBits::eDeviceLocal,
+             vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent});
+    } catch (...) {
+        return false;
+    }
+    if (!tmp) {
+        return false;
+    }
+
+    std::lock_guard<std::recursive_mutex> guard(device->mutex);
+    vk_context subctx = ggml_vk_create_temporary_context(device->transfer_queue.cmd_pool);
+    ggml_vk_ctx_begin(device, subctx);
+    VkBufferCopy bc{ 0, 0, size };
+    vkCmdCopyBuffer(subctx->s->buffer->buf, (VkBuffer)shared_buf->buffer, (VkBuffer)tmp->buffer, 1, &bc);
+    ggml_vk_ctx_end(subctx);
+    try {
+        ggml_vk_submit(subctx, device->fence);
+        VK_CHECK(device->device.waitForFences({ device->fence }, true, UINT64_MAX), "d2d test copy waitForFences");
+        device->device.resetFences({ device->fence });
+        ggml_vk_queue_command_pools_cleanup(device);
+        ggml_vk_destroy_buffer(tmp);
+        return true;
+    } catch (...) {
+        try {
+            device->device.resetFences({ device->fence });
+            ggml_vk_queue_command_pools_cleanup(device);
+        } catch (...) {}
+        ggml_vk_destroy_buffer(tmp);
+        return false;
+    }
+}
+
+static const size_t VK_D2D_PROBE_SIZE = 4096;
+
+static vk_d2d_path ggml_vk_probe_d2d_path(vk_device& src_dev, vk_device& dst_dev) {
+    VK_LOG_DEBUG("ggml_vk_probe_d2d_path(" << src_dev->name << " -> " << dst_dev->name << ")");
+    vk_d2d_path path;
+
+    bool src_nvidia = src_dev->vendor_id == 0x10de;
+    bool dst_nvidia = dst_dev->vendor_id == 0x10de;
+    bool cross_vendor_nvidia = src_nvidia != dst_nvidia;
+
+    // 1. dmabuf_p2p — skip if cross-vendor NVIDIA
+    if (src_dev->external_memory_dma_buf && dst_dev->external_memory_dma_buf && !cross_vendor_nvidia) {
+        // Try src exports VRAM, dst imports (read direction)
+        vk_buffer exp_buf, imp_buf;
+        if (ggml_vk_d2d_try_dma_buf(src_dev, dst_dev, VK_D2D_PROBE_SIZE, true, exp_buf, imp_buf)) {
+            if (ggml_vk_d2d_test_copy(dst_dev, imp_buf, VK_D2D_PROBE_SIZE)) {
+                path.method = D2D_DMABUF_P2P;
+                path.reverse_direction = false;
+                path.buf_a = exp_buf;
+                path.buf_b = imp_buf;
+                path.size = VK_D2D_PROBE_SIZE;
+                GGML_LOG_DEBUG("ggml_vulkan: d2d %s -> %s: dmabuf_p2p (src exports VRAM)\n",
+                              src_dev->name.c_str(), dst_dev->name.c_str());
+                return path;
+            }
+            ggml_vk_destroy_buffer(exp_buf);
+            ggml_vk_destroy_buffer(imp_buf);
+        }
+
+        // Try dst exports VRAM, src imports (write direction)
+        if (ggml_vk_d2d_try_dma_buf(dst_dev, src_dev, VK_D2D_PROBE_SIZE, true, exp_buf, imp_buf)) {
+            if (ggml_vk_d2d_test_copy(src_dev, imp_buf, VK_D2D_PROBE_SIZE)) {
+                path.method = D2D_DMABUF_P2P;
+                path.reverse_direction = true;
+                path.buf_a = exp_buf;
+                path.buf_b = imp_buf;
+                path.size = VK_D2D_PROBE_SIZE;
+                GGML_LOG_DEBUG("ggml_vulkan: d2d %s -> %s: dmabuf_p2p (dst exports VRAM)\n",
+                              src_dev->name.c_str(), dst_dev->name.c_str());
+                return path;
+            }
+            ggml_vk_destroy_buffer(exp_buf);
+            ggml_vk_destroy_buffer(imp_buf);
+        }
+    }
+
+    // 2. dmabuf_gtt
+    if (src_dev->external_memory_dma_buf && dst_dev->external_memory_dma_buf) {
+        vk_buffer exp_buf, imp_buf;
+        // Try src exports GTT
+        if (ggml_vk_d2d_try_dma_buf(src_dev, dst_dev, VK_D2D_PROBE_SIZE, false, exp_buf, imp_buf)) {
+            if (ggml_vk_d2d_test_copy(src_dev, exp_buf, VK_D2D_PROBE_SIZE) &&
+                ggml_vk_d2d_test_copy(dst_dev, imp_buf, VK_D2D_PROBE_SIZE)) {
+                path.method = D2D_DMABUF_GTT;
+                path.reverse_direction = false;
+                path.buf_a = exp_buf;
+                path.buf_b = imp_buf;
+                path.size = VK_D2D_PROBE_SIZE;
+                GGML_LOG_DEBUG("ggml_vulkan: d2d %s -> %s: dmabuf_gtt (src exports GTT)\n",
+                              src_dev->name.c_str(), dst_dev->name.c_str());
+                return path;
+            }
+            ggml_vk_destroy_buffer(exp_buf);
+            ggml_vk_destroy_buffer(imp_buf);
+        }
+
+        // Try dst exports GTT
+        if (ggml_vk_d2d_try_dma_buf(dst_dev, src_dev, VK_D2D_PROBE_SIZE, false, exp_buf, imp_buf)) {
+            if (ggml_vk_d2d_test_copy(dst_dev, exp_buf, VK_D2D_PROBE_SIZE) &&
+                ggml_vk_d2d_test_copy(src_dev, imp_buf, VK_D2D_PROBE_SIZE)) {
+                path.method = D2D_DMABUF_GTT;
+                path.reverse_direction = true;
+                path.buf_a = exp_buf;
+                path.buf_b = imp_buf;
+                path.size = VK_D2D_PROBE_SIZE;
+                GGML_LOG_DEBUG("ggml_vulkan: d2d %s -> %s: dmabuf_gtt (dst exports GTT)\n",
+                              src_dev->name.c_str(), dst_dev->name.c_str());
+                return path;
+            }
+            ggml_vk_destroy_buffer(exp_buf);
+            ggml_vk_destroy_buffer(imp_buf);
+        }
+    }
+
+    // 3. shared_staging
+    {
+        vk_buffer buf_a, buf_b;
+        void * host_ptr = nullptr;
+        if (ggml_vk_d2d_try_shared_staging(src_dev, dst_dev, VK_D2D_PROBE_SIZE, buf_a, buf_b, host_ptr)) {
+            if (ggml_vk_d2d_test_copy(src_dev, buf_a, VK_D2D_PROBE_SIZE) &&
+                ggml_vk_d2d_test_copy(dst_dev, buf_b, VK_D2D_PROBE_SIZE)) {
+                path.method = D2D_SHARED_STAGING;
+                path.buf_a = buf_a;
+                path.buf_b = buf_b;
+                path.host_ptr = host_ptr;
+                path.size = VK_D2D_PROBE_SIZE;
+                GGML_LOG_DEBUG("ggml_vulkan: d2d %s -> %s: shared_staging\n",
+                              src_dev->name.c_str(), dst_dev->name.c_str());
+                return path;
+            }
+            ggml_vk_destroy_buffer(buf_a);
+            ggml_vk_destroy_buffer(buf_b);
+            free(host_ptr);
+        }
+    }
+
+    // 4. Fallback
+    path.method = D2D_STAGING;
+    GGML_LOG_DEBUG("ggml_vulkan: d2d %s -> %s: staging (fallback)\n",
+                  src_dev->name.c_str(), dst_dev->name.c_str());
+    return path;
+}
+
+static bool ggml_vk_d2d_grow_path(vk_d2d_path& path, vk_device& src_dev, vk_device& dst_dev, size_t needed) {
+    VK_LOG_DEBUG("ggml_vk_d2d_grow_path(" << needed << ", current=" << path.size << ")");
+
+    vk_buffer new_buf_a, new_buf_b;
+    void * new_host_ptr = nullptr;
+    bool ok = false;
+
+    switch (path.method) {
+    case D2D_DMABUF_P2P: {
+        vk_device& exporter = path.reverse_direction ? dst_dev : src_dev;
+        vk_device& importer = path.reverse_direction ? src_dev : dst_dev;
+        ok = ggml_vk_d2d_try_dma_buf(exporter, importer, needed, true, new_buf_a, new_buf_b);
+        break;
+    }
+    case D2D_DMABUF_GTT: {
+        vk_device& exporter = path.reverse_direction ? dst_dev : src_dev;
+        vk_device& importer = path.reverse_direction ? src_dev : dst_dev;
+        ok = ggml_vk_d2d_try_dma_buf(exporter, importer, needed, false, new_buf_a, new_buf_b);
+        break;
+    }
+    case D2D_SHARED_STAGING:
+        ok = ggml_vk_d2d_try_shared_staging(src_dev, dst_dev, needed, new_buf_a, new_buf_b, new_host_ptr);
+        break;
+    default:
+        return false;
+    }
+
+    if (!ok) {
+        return false;
+    }
+
+    // Destroy old buffers
+    ggml_vk_destroy_buffer(path.buf_a);
+    ggml_vk_destroy_buffer(path.buf_b);
+    if (path.host_ptr) {
+        free(path.host_ptr);
+    }
+
+    path.buf_a = new_buf_a;
+    path.buf_b = new_buf_b;
+    path.host_ptr = new_host_ptr;
+    path.size = needed;
+    return true;
+}
+
+static vk_d2d_path& ggml_vk_get_d2d_path(vk_device& src_dev, vk_device& dst_dev, size_t size) {
+    std::lock_guard<std::mutex> guard(vk_d2d_cache_mutex);
+    auto key = std::make_pair(src_dev.get(), dst_dev.get());
+    auto it = vk_d2d_cache.find(key);
+
+    if (it == vk_d2d_cache.end()) {
+        vk_d2d_cache[key] = ggml_vk_probe_d2d_path(src_dev, dst_dev);
+        it = vk_d2d_cache.find(key);
+    }
+
+    vk_d2d_path& path = it->second;
+
+    if (path.method != D2D_STAGING && path.size < size) {
+        if (!ggml_vk_d2d_grow_path(path, src_dev, dst_dev, size)) {
+            GGML_LOG_WARN("ggml_vulkan: d2d grow failed for %s -> %s, falling back to staging\n",
+                         src_dev->name.c_str(), dst_dev->name.c_str());
+            ggml_vk_destroy_buffer(path.buf_a);
+            ggml_vk_destroy_buffer(path.buf_b);
+            if (path.host_ptr) {
+                free(path.host_ptr);
+                path.host_ptr = nullptr;
+            }
+            path.method = D2D_STAGING;
+            path.size = 0;
+        }
+    }
+
+    return path;
+}
+#endif
+
 static void ggml_vk_buffer_copy_async(vk_context& ctx, vk_buffer& dst, size_t dst_offset, vk_buffer& src, size_t src_offset, size_t size) {
     VK_LOG_DEBUG("ggml_vk_buffer_copy_async(" << size << ")");
     // Make sure both buffers are on same device
@@ -8012,12 +8584,25 @@ static void ggml_vk_buffer_copy(vk_buffer& dst, size_t dst_offset, vk_buffer& sr
         ggml_vk_queue_command_pools_cleanup(src->device);
     } else {
         VK_LOG_DEBUG("ggml_vk_buffer_copy(MULTI_DEVICE, " << size << ")");
-        // Copy device to device
-        ggml_vk_ensure_sync_staging_buffer(src->device, size);
+#ifdef __linux__
+        vk_d2d_path& path = ggml_vk_get_d2d_path(src->device, dst->device, size);
 
-        // Copy to src staging buffer
+        if (path.method != D2D_STAGING) {
+            // buf_a is on the src-side device, buf_b is on the dst-side device
+            // For reverse_direction (dst exports), buf_a is on dst_dev and buf_b is on src_dev
+            vk_buffer& src_side_buf = path.reverse_direction ? path.buf_b : path.buf_a;
+            vk_buffer& dst_side_buf = path.reverse_direction ? path.buf_a : path.buf_b;
+
+            // Hop 1: src GPU copies VRAM -> shared buffer (same-device copy on src)
+            ggml_vk_buffer_copy(src_side_buf, 0, src, src_offset, size);
+            // Hop 2: dst GPU copies shared buffer -> VRAM (same-device copy on dst)
+            ggml_vk_buffer_copy(dst, dst_offset, dst_side_buf, 0, size);
+            return;
+        }
+#endif
+        // Fallback: staging with CPU memcpy
+        ggml_vk_ensure_sync_staging_buffer(src->device, size);
         ggml_vk_buffer_copy(src->device->sync_staging, 0, src, src_offset, size);
-        // Copy to dst buffer
         ggml_vk_buffer_write(dst, dst_offset, src->device->sync_staging->ptr, size);
     }
 }
