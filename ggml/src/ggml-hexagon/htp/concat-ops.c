@@ -13,6 +13,9 @@ struct htp_concat_context {
     struct htp_ops_context * octx;
     uint32_t dim;
     uint32_t nrows_per_thread;
+    struct fastdiv_values div_ne0;
+    struct fastdiv_values div_ne1;
+    struct fastdiv_values div_ne2;
 };
 
 static void concat_2d_f32_transposed(unsigned int nth, unsigned int ith, void * data) {
@@ -38,7 +41,6 @@ static void concat_2d_f32_transposed(unsigned int nth, unsigned int ith, void * 
 
     const uint32_t block_i = 32;
     const uint32_t spad1_stride = block_i * sizeof(float);
-
 
     int32_t offsets[32] __attribute__((aligned(128)));
     for(int k=0; k<32; k++) {
@@ -169,10 +171,15 @@ static void concat_generic(unsigned int nth, unsigned int ith, void * data) {
 
     // Naive scalar element-wise copy
     for (uint32_t idx = start_idx; idx < end_idx; idx++) {
-        uint32_t i0 = idx % ne[0];
-        uint32_t i1 = (idx / ne[0]) % ne[1];
-        uint32_t i2 = (idx / (ne[0] * ne[1])) % ne[2];
-        uint32_t i3 = idx / (ne[0] * ne[1] * ne[2]);
+        uint32_t idx_div_ne0 = fastdiv(idx, &cctx->div_ne0);
+        uint32_t i0 = idx - idx_div_ne0 * ne[0];
+
+        uint32_t idx_div_ne01 = fastdiv(idx_div_ne0, &cctx->div_ne1);
+        uint32_t i1 = idx_div_ne0 - idx_div_ne01 * ne[1];
+
+        uint32_t idx_div_ne012 = fastdiv(idx_div_ne01, &cctx->div_ne2);
+        uint32_t i2 = idx_div_ne01 - idx_div_ne012 * ne[2];
+        uint32_t i3 = idx_div_ne012;
 
         uint8_t * dst_ptr = (uint8_t *)dst->data + i3 * dst->nb[3] + i2 * dst->nb[2] + i1 * dst->nb[1] + i0 * dst->nb[0];
 
@@ -221,6 +228,9 @@ int op_concat(struct htp_ops_context * octx) {
     struct htp_concat_context cctx;
     cctx.octx = octx;
     cctx.dim = dim;
+    cctx.div_ne0 = init_fastdiv_values(dst->ne[0]);
+    cctx.div_ne1 = init_fastdiv_values(dst->ne[1]);
+    cctx.div_ne2 = init_fastdiv_values(dst->ne[2]);
 
     void (*worker_func)(unsigned int, unsigned int, void *) = concat_generic;
 
