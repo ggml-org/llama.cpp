@@ -73,7 +73,7 @@ int g_ggml_sycl_disable_dnn = 0;
 int g_ggml_sycl_prioritize_dmmv = 0;
 int g_ggml_sycl_use_async_mem_op = 0;
 int g_ggml_sycl_use_async_mem_op_requested = 1;
-int g_ggml_sycl_enable_level_zero = 1;
+int g_ggml_sycl_enable_level_zero = 0;
 int g_ggml_sycl_enable_flash_attention = 1;
 
 static inline int get_sycl_env(const char *env_name, int default_val);
@@ -120,25 +120,25 @@ static ggml_sycl_device_info ggml_sycl_init() {
 
         // Only check GPU devices; CPU devices use OpenCL and would otherwise
         // disable Level Zero for the GPUs on systems without ONEAPI_DEVICE_SELECTOR set.
-        if (info.ext_oneapi_level_zero && device.is_gpu() &&
-            device.default_queue().get_backend() != sycl::backend::ext_oneapi_level_zero) {
+        if (device.is_gpu() && device.default_queue().get_backend() != sycl::backend::ext_oneapi_level_zero) {
             GGML_LOG_WARN("SYCL GPU device %d does not use Level Zero backend, disabling Level Zero memory API\n", i);
             info.ext_oneapi_level_zero = false;
         }
     }
 
+    for (int id = 0; id < info.device_count; ++id) {
+        info.default_tensor_split[id] /= total_vram;
+    }
+
 #ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO
-    // Device allocations can happen before ggml_check_sycl() runs, so keep the
-    // low-level Level Zero gate initialized with the cached device info.
+    // Large buffers can be allocated before ggml_check_sycl(), which initialized other
+    // g_ggml_sycl_enable_*, so we make this call here, as early as we can.
     g_ggml_sycl_enable_level_zero =
         info.ext_oneapi_level_zero && get_sycl_env("GGML_SYCL_ENABLE_LEVEL_ZERO", 1);
 #else
     g_ggml_sycl_enable_level_zero = 0;
 #endif
 
-    for (int id = 0; id < info.device_count; ++id) {
-        info.default_tensor_split[id] /= total_vram;
-    }
     return info;
 }
 
