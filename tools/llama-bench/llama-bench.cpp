@@ -348,6 +348,8 @@ struct cmd_params {
     std::vector<bool>                no_host;
     std::vector<size_t>              fit_params_target;
     std::vector<uint32_t>            fit_params_min_ctx;
+    int                              pipeline_depth;
+    int                              pipeline_split_size;
     ggml_numa_strategy               numa;
     int                              reps;
     ggml_sched_priority              prio;
@@ -392,6 +394,8 @@ static const cmd_params cmd_params_defaults = {
     /* no_host              */ { false },
     /* fit_params_target    */ { 0 },
     /* fit_params_min_ctx   */ { 0 },
+    /* pipeline_depth       */ 0,
+    /* pipeline_split_size  */ 8,
     /* numa                 */ GGML_NUMA_STRATEGY_DISABLED,
     /* reps                 */ 5,
     /* prio                 */ GGML_SCHED_PRIO_NORMAL,
@@ -411,6 +415,8 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("  --numa <distribute|isolate|numactl|interleave|ccd>   numa mode (default: disabled)\n");
     printf("  -r, --repetitions <n>                       number of times to repeat each test (default: %d)\n", cmd_params_defaults.reps);
     printf("  --prio <-1|0|1|2|3>                         process/thread priority (default: %d)\n", cmd_params_defaults.prio);
+    printf("  --pipeline-depth <0|3>                         pipelined prefill depth, 0=disabled (default: %d)\n", cmd_params_defaults.pipeline_depth);
+    printf("  --pipeline-split-size <N>                      layers per pipeline split (default: %d)\n", cmd_params_defaults.pipeline_split_size);
     printf("  --delay <0...N> (seconds)                   delay between each test (default: %d)\n", cmd_params_defaults.delay);
     printf("  -o, --output <csv|json|jsonl|md|sql>        output format printed to stdout (default: %s)\n", output_format_str(cmd_params_defaults.output_format));
     printf("  -oe, --output-err <csv|json|jsonl|md|sql>   output format printed to stderr (default: %s)\n", output_format_str(cmd_params_defaults.output_format_stderr));
@@ -950,6 +956,18 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                     break;
                 }
                 params.prio = (enum ggml_sched_priority) std::stoi(argv[i]);
+            } else if (arg == "--pipeline-depth") {
+                if (++i >= argc) {
+                    invalid_param = true;
+                    break;
+                }
+                params.pipeline_depth = std::stoi(argv[i]);
+            } else if (arg == "--pipeline-split-size") {
+                if (++i >= argc) {
+                    invalid_param = true;
+                    break;
+                }
+                params.pipeline_split_size = std::stoi(argv[i]);
             } else if (arg == "--delay") {
                 if (++i >= argc) {
                     invalid_param = true;
@@ -1153,6 +1171,8 @@ struct cmd_params_instance {
     bool               no_host;
     size_t             fit_target;
     uint32_t           fit_min_ctx;
+    int                pipeline_depth;
+    int                pipeline_split_size;
 
     llama_model_params to_llama_mparams() const {
         llama_model_params mparams = llama_model_default_params();
@@ -1230,6 +1250,8 @@ struct cmd_params_instance {
         cparams.embeddings      = embeddings;
         cparams.op_offload      = !no_op_offload;
         cparams.swa_full        = false;
+        cparams.pipeline_depth      = pipeline_depth;
+        cparams.pipeline_split_size = pipeline_split_size;
 
         return cparams;
     }
@@ -1299,6 +1321,8 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .no_host      = */ noh,
                 /* .fit_target   = */ fpt,
                 /* .fit_min_ctx  = */ fpc,
+                /* .pipeline_depth      = */ params.pipeline_depth,
+                /* .pipeline_split_size = */ params.pipeline_split_size,
             };
             instances.push_back(instance);
         }
@@ -1336,6 +1360,8 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .no_host      = */ noh,
                 /* .fit_target   = */ fpt,
                 /* .fit_min_ctx  = */ fpc,
+                /* .pipeline_depth      = */ params.pipeline_depth,
+                /* .pipeline_split_size = */ params.pipeline_split_size,
             };
             instances.push_back(instance);
         }
@@ -1373,6 +1399,8 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .no_host      = */ noh,
                 /* .fit_target   = */ fpt,
                 /* .fit_min_ctx  = */ fpc,
+                /* .pipeline_depth      = */ params.pipeline_depth,
+                /* .pipeline_split_size = */ params.pipeline_split_size,
             };
             instances.push_back(instance);
         }

@@ -1311,6 +1311,28 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_UBATCH"));
     add_opt(common_arg(
+        {"--pipeline-depth"}, "N",
+        string_format("pipelined prefill depth: 0=disabled, 3=CPU+TMA+GPU (default: %d)", params.pipeline_depth),
+        [](common_params & params, int value) {
+            if (value < 0 || value > 3) {
+                string_format("error: --pipeline-depth must be 0-3, got %d\n", value);
+                return;
+            }
+            params.pipeline_depth = value;
+        }
+    ).set_env("LLAMA_ARG_PIPELINE_DEPTH").set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
+    add_opt(common_arg(
+        {"--pipeline-split-size"}, "N",
+        string_format("layers per pipeline split group (default: %d)", params.pipeline_split_size),
+        [](common_params & params, int value) {
+            if (value < 1) {
+                string_format("error: --pipeline-split-size must be >= 1, got %d\n", value);
+                return;
+            }
+            params.pipeline_split_size = value;
+        }
+    ).set_env("LLAMA_ARG_PIPELINE_SPLIT_SIZE").set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
+    add_opt(common_arg(
         {"--keep"}, "N",
         string_format("number of tokens to keep from the initial prompt (default: %d, -1 = all)", params.n_keep),
         [](common_params & params, int value) {
