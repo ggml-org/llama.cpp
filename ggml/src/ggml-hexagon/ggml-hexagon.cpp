@@ -3293,7 +3293,6 @@ static bool ggml_hexagon_supported_concat(const struct ggml_hexagon_session * se
         return false;
     }
 
-    // We check types for our supported inputs
     for (int i = 0; i < GGML_MAX_SRC; ++i) {
         const struct ggml_tensor * src = op->src[i];
         if (!src) {

@@ -54,16 +54,15 @@ static void concat_2d_f32_transposed(unsigned int nth, unsigned int ith, void * 
     for (uint32_t i = start_i; i < end_i; i += block_i) {
         uint32_t current_block_i = (end_i - i < block_i) ? (end_i - i) : block_i;
 
-        uint32_t src0_row_bytes = src0_ne0 * sizeof(float);
-        uint8_t * src0_ptr = (uint8_t *)src0->data + i * src0->nb[1];
-        dma_queue_push(q, dma_make_ptr(spad0_base, src0_ptr), spad0_row_bytes, src0->nb[1], src0_row_bytes, current_block_i);
-
         uint32_t src1_width_bytes = current_block_i * sizeof(float);
         uint8_t * src1_ptr = (uint8_t *)src1->data + i * src1->nb[1];
         dma_queue_push(q, dma_make_ptr(spad1_base, src1_ptr), spad1_stride, src1->nb[0], src1_width_bytes, src1_ne0);
 
-        dma_queue_pop(q);
-        dma_queue_pop(q);
+        uint32_t src0_row_bytes = src0_ne0 * sizeof(float);
+        uint8_t * src0_ptr = (uint8_t *)src0->data + i * src0->nb[1];
+        dma_queue_push(q, dma_make_ptr(spad0_base, src0_ptr), spad0_row_bytes, src0->nb[1], src0_row_bytes, current_block_i);
+
+        dma_queue_pop(q); // src1
 
         HVX_Vector * vtcm_tmp = (HVX_Vector *)(spad1_base + src1_ne0_padded * spad1_stride);
 
@@ -76,6 +75,8 @@ static void concat_2d_f32_transposed(unsigned int nth, unsigned int ith, void * 
                 hvx_vmemu(dst_ptr) = v;
             }
         }
+
+        dma_queue_pop(q); // src0
 
         uint8_t * dst_ptr = (uint8_t *)dst->data + i * dst->nb[1];
         dma_queue_push(q, dma_make_ptr(dst_ptr, spad0_base), dst->nb[1], spad0_row_bytes, (src0_ne0 + src1_ne0) * sizeof(float), current_block_i);
@@ -108,7 +109,6 @@ static void concat_2d_f16_transposed(unsigned int nth, unsigned int ith, void * 
     const uint32_t block_i = 64;
     const uint32_t spad1_stride = block_i * sizeof(__fp16);
 
-
     int16_t offsets[64] __attribute__((aligned(128)));
     for(int k=0; k<64; k++) {
         offsets[k] = k * spad1_stride;
@@ -121,16 +121,15 @@ static void concat_2d_f16_transposed(unsigned int nth, unsigned int ith, void * 
     for (uint32_t i = start_i; i < end_i; i += block_i) {
         uint32_t current_block_i = (end_i - i < block_i) ? (end_i - i) : block_i;
 
-        uint32_t src0_row_bytes = src0_ne0 * sizeof(__fp16);
-        uint8_t * src0_ptr = (uint8_t *)src0->data + i * src0->nb[1];
-        dma_queue_push(q, dma_make_ptr(spad0_base, src0_ptr), spad0_row_bytes, src0->nb[1], src0_row_bytes, current_block_i);
-
         uint32_t src1_width_bytes = current_block_i * sizeof(__fp16);
         uint8_t * src1_ptr = (uint8_t *)src1->data + i * src1->nb[1];
         dma_queue_push(q, dma_make_ptr(spad1_base, src1_ptr), spad1_stride, src1->nb[0], src1_width_bytes, src1_ne0);
 
-        dma_queue_pop(q);
-        dma_queue_pop(q);
+        uint32_t src0_row_bytes = src0_ne0 * sizeof(__fp16);
+        uint8_t * src0_ptr = (uint8_t *)src0->data + i * src0->nb[1];
+        dma_queue_push(q, dma_make_ptr(spad0_base, src0_ptr), spad0_row_bytes, src0->nb[1], src0_row_bytes, current_block_i);
+
+        dma_queue_pop(q); // src1
 
         HVX_Vector * vtcm_tmp = (HVX_Vector *)(spad1_base + src1_ne0_padded * spad1_stride);
 
@@ -143,6 +142,8 @@ static void concat_2d_f16_transposed(unsigned int nth, unsigned int ith, void * 
                 hvx_vmemu(dst_ptr) = v;
             }
         }
+
+        dma_queue_pop(q); // src0
 
         uint8_t * dst_ptr = (uint8_t *)dst->data + i * dst->nb[1];
         dma_queue_push(q, dma_make_ptr(dst_ptr, spad0_base), dst->nb[1], spad0_row_bytes, (src0_ne0 + src1_ne0) * sizeof(__fp16), current_block_i);
