@@ -215,6 +215,30 @@ void ggml_metal_rsets_free(ggml_metal_rsets_t rsets);
 // device
 //
 
+enum ggml_metal_device_id {
+    GGML_METAL_DEVICE_GENERIC = 0,
+
+    GGML_METAL_DEVICE_M1,
+    GGML_METAL_DEVICE_M1_PRO,
+    GGML_METAL_DEVICE_M1_MAX,
+    GGML_METAL_DEVICE_M1_ULTRA,
+    GGML_METAL_DEVICE_M2,
+    GGML_METAL_DEVICE_M2_PRO,
+    GGML_METAL_DEVICE_M2_MAX,
+    GGML_METAL_DEVICE_M2_ULTRA,
+    GGML_METAL_DEVICE_M3,
+    GGML_METAL_DEVICE_M3_PRO,
+    GGML_METAL_DEVICE_M3_MAX,
+    GGML_METAL_DEVICE_M3_ULTRA,
+    GGML_METAL_DEVICE_M4,
+    GGML_METAL_DEVICE_M4_PRO,
+    GGML_METAL_DEVICE_M4_MAX,
+    GGML_METAL_DEVICE_M5,
+    GGML_METAL_DEVICE_M5_PRO,
+    GGML_METAL_DEVICE_M5_MAX,
+    GGML_METAL_DEVICE_M5_ULTRA,
+};
+
 struct ggml_metal_device_props {
     int device;
     char name[128];
@@ -233,6 +257,8 @@ struct ggml_metal_device_props {
     bool use_shared_buffers;
 
     bool supports_gpu_family_apple7;
+
+    enum ggml_metal_device_id device_id;
 
     int op_offload_min_batch_size;
 };
