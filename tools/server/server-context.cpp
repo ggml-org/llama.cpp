@@ -1007,6 +1007,14 @@ private:
         const int n_ctx_train = llama_model_n_ctx_train(model_tgt);
 
         int n_ctx_slot = llama_n_ctx_seq(ctx_tgt);
+
+        // when kv_unified is enabled, n_ctx_seq returns the full context size because
+        // all sequences share a single KV cache. to prevent collective exhaustion of
+        // the shared context, divide by the number of parallel slots
+        if (params_base.kv_unified && params_base.n_parallel > 1) {
+            n_ctx_slot = n_ctx / params_base.n_parallel;
+        }
+
         if (n_ctx_slot > n_ctx_train) {
             SRV_WRN("the slot context (%d) exceeds the training context of the model (%d) - capping\n", n_ctx_slot, n_ctx_train);
             n_ctx_slot = n_ctx_train;
