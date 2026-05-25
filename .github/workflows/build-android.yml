@@ -73,6 +73,11 @@ jobs:
           fetch-depth: 0
           lfs: false
 
+      - name: Dependencies
+        run: |
+          apt-get update
+          apt-get install -y build-essential
+
       - name: Build
         id: ndk_build
         run: |
