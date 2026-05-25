@@ -3156,6 +3156,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         {"--reasoning-format"}, "FORMAT",
         "controls whether thought tags are allowed and/or extracted from the response, and in which format they're returned; one of:\n"
         "- none: leaves thoughts unparsed in `message.content`\n"
+        "- auto: same behavior as `deepseek`, recommended default\n"
         "- deepseek: puts thoughts in `message.reasoning_content`\n"
         "- deepseek-legacy: keeps `<think>` tags in `message.content` while also populating `message.reasoning_content`\n"
         "(default: auto)",
