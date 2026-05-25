@@ -19,7 +19,7 @@ on:
 
 jobs:
   check-vendor:
-    runs-on: ubuntu-slim
+    runs-on: [self-hosted, fast]
 
     steps:
       - name: Checkout

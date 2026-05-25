@@ -15,7 +15,7 @@ concurrency:
 
 jobs:
   editorconfig:
-    runs-on: ubuntu-slim
+    runs-on: [self-hosted, fast]
     steps:
       - uses: actions/checkout@v6
       - uses: editorconfig-checker/action-editorconfig-checker@840e866d93b8e032123c23bac69dece044d4d84c # v2.2.0

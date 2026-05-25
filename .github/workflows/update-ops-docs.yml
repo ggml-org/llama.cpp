@@ -3,18 +3,20 @@ name: Update Operations Documentation
 on:
     push:
         paths:
+            - '.github/workflows/update-ops-docs.yml'
             - 'docs/ops.md'
             - 'docs/ops/**'
             - 'scripts/create_ops_docs.py'
     pull_request:
         paths:
+            - '.github/workflows/update-ops-docs.yml'
             - 'docs/ops.md'
             - 'docs/ops/**'
             - 'scripts/create_ops_docs.py'
 
 jobs:
     update-ops-docs:
-        runs-on: ubuntu-slim
+        runs-on: [self-hosted, fast, ARM64]
 
         steps:
         - name: Checkout repository
