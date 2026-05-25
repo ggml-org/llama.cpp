@@ -85,7 +85,7 @@ set(UBERKERNEL_SUPPORTED_KERNELS
     # unary_f32        # gemma4: tanh (logit softcapping)
 
     # cpy_f32_f16
-    # get_rows_f32     # gemma4: embeddings + MoE weights
+    get_rows_f32     # gemma4: embeddings + MoE weights
     # cont_f32
 
     concat_f32

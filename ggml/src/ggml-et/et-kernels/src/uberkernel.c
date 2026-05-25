@@ -363,11 +363,11 @@ int entry_point(struct ggml_et_uberkernel_params * params, void * env) {
             //     break;
             // }
 
-            // case GGML_ET_UBERKERNEL_KERNEL_GET_ROWS_F32: { // gemma4: embeddings + MoE weights
-            //     struct uber_get_rows_params *p = (struct uber_get_rows_params *) inst_params;
-            //     rc = get_rows_f32_entry((struct ggml_et_get_rows_params *) inst_params, env);
-            //     break;
-            // }
+            case GGML_ET_UBERKERNEL_KERNEL_GET_ROWS_F32: { // gemma4: embeddings + MoE weights
+                struct uber_get_rows_params *p = (struct uber_get_rows_params *) inst_params;
+                rc = get_rows_f32_entry((struct ggml_et_get_rows_params *) inst_params, env);
+                break;
+            }
 
             // case GGML_ET_UBERKERNEL_KERNEL_CONT_F32: {
             //     struct uber_cont_params *p = (struct uber_cont_params *) inst_params;
