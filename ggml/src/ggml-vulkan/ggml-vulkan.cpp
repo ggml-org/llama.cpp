@@ -98,6 +98,10 @@ typedef struct VkPhysicalDeviceShaderBfloat16FeaturesKHR {
 } VkPhysicalDeviceShaderBfloat16FeaturesKHR;
 #endif
 
+#ifndef VK_KHR_INTERNALLY_SYNCHRONIZED_QUEUES_EXTENSION_NAME
+#define VK_KHR_INTERNALLY_SYNCHRONIZED_QUEUES_EXTENSION_NAME "VK_KHR_internally_synchronized_queues"
+#endif
+
 #define ROUNDUP_POW2(M, N) (((M) + (N) - 1) & ~((N) - 1))
 #define CEIL_DIV(M, N) (((M) + (N)-1) / (N))
 static bool is_pow2(uint32_t x) { return x > 1 && (x & (x-1)) == 0; }
@@ -226,12 +230,25 @@ struct vk_command_pool {
 };
 
 // Prevent simultaneous submissions to the same queue.
-// This could be per vk_queue if we stopped having two vk_queue structures
-// sharing the same vk::Queue.
-
 struct vk_queue_handle {
     vk::Queue queue;
+    virtual void submit(vk::ArrayProxy<const vk::SubmitInfo> submits, vk::Fence fence) = 0;
+    virtual ~vk_queue_handle() = default;
+};
+
+struct vk_queue_handle_synchronized : vk_queue_handle {
     std::mutex mutex;
+    void submit(vk::ArrayProxy<const vk::SubmitInfo> submits, vk::Fence fence) override {
+        std::lock_guard<std::mutex> guard(mutex);
+        queue.submit(submits, fence);
+    }
+};
+
+struct vk_queue_handle_unsynchronized : vk_queue_handle {
+    void submit(vk::ArrayProxy<const vk::SubmitInfo> submits, vk::Fence fence) override {
+        // Driver guarantees internal synchronization via VK_KHR_internally_synchronized_queues
+        queue.submit(submits, fence);
+    }
 };
 
 struct vk_queue {
@@ -619,6 +636,7 @@ struct vk_device_struct {
     bool single_queue;
     bool support_async;
     bool async_use_transfer_queue;
+    bool has_internally_synchronized_queues = false;
     uint32_t subgroup_size;
     uint32_t subgroup_size_log2;
     uint32_t shader_core_count;
@@ -2440,8 +2458,7 @@ static vk_command_buffer* ggml_vk_create_cmd_buffer(vk_device& device, vk_comman
 static void ggml_vk_submit(vk_context& ctx, vk::Fence fence) {
     if (ctx->seqs.empty()) {
         if (fence) {
-            std::lock_guard<std::mutex> guard(ctx->p->q->handle->mutex);
-            ctx->p->q->handle->queue.submit({}, fence);
+            ctx->p->q->handle->submit({}, fence);
         }
         return;
     }
@@ -2510,8 +2527,7 @@ static void ggml_vk_submit(vk_context& ctx, vk::Fence fence) {
         }
     }
 
-    std::lock_guard<std::mutex> guard(ctx->p->q->handle->mutex);
-    ctx->p->q->handle->queue.submit(submit_infos, fence);
+    ctx->p->q->handle->submit(submit_infos, fence);
 
     ctx->seqs.clear();
 }
@@ -2570,12 +2586,34 @@ static std::shared_ptr<vk_queue> ggml_vk_create_queue(vk_device& device, uint32_
     q->queue_family_index = queue_family_index;
     q->transfer_only = transfer_only;
 
-    q->handle = std::make_shared<vk_queue_handle>();
-    q->handle->queue = device->device.getQueue(queue_family_index, queue_index);
+    std::shared_ptr<vk_queue_handle> h;
+    vk::DeviceQueueInfo2 queue_info2{};
+    queue_info2.queueFamilyIndex = queue_family_index;
+    queue_info2.queueIndex = queue_index;
+
+    if (device->has_internally_synchronized_queues) {
+        h = std::make_shared<vk_queue_handle_unsynchronized>();
+        queue_info2.flags = vk::DeviceQueueCreateFlagBits::eInternallySynchronizedKHR;
+    } else {
+        h = std::make_shared<vk_queue_handle_synchronized>();
+    }
+
+    h->queue = device->device.getQueue2(queue_info2);
+    q->handle = h;
 
     q->cmd_pool.init(device, q.get());
 
     q->stage_flags = stage_flags;
+    return q;
+}
+
+static std::shared_ptr<vk_queue> ggml_vk_create_aliased_queue(vk_device& device, std::shared_ptr<vk_queue> source, vk::PipelineStageFlags stage_flags, bool transfer_only) {
+    auto q = std::make_shared<vk_queue>();
+    q->handle = source->handle;
+    q->queue_family_index = source->queue_family_index;
+    q->stage_flags = stage_flags;
+    q->transfer_only = transfer_only;
+    q->cmd_pool.init(device, q.get());
     return q;
 }
 
@@ -5137,6 +5175,9 @@ static vk_device ggml_vk_get_device(size_t idx) {
             } else if (strcmp("VK_EXT_shader_64bit_indexing", properties.extensionName) == 0) {
                 device->shader_64b_indexing = true;
 #endif
+            } else if (strcmp(VK_KHR_INTERNALLY_SYNCHRONIZED_QUEUES_EXTENSION_NAME, properties.extensionName) == 0) {
+                device->has_internally_synchronized_queues = true;
+                VK_LOG_INFO("ggml_vulkan: internally synchronized queues supported");
             }
         }
 
@@ -5309,16 +5350,23 @@ static vk_device ggml_vk_get_device(size_t idx) {
         device->single_queue = compute_queue_family_index == transfer_queue_family_index && queue_family_props[compute_queue_family_index].queueCount == 1;
 
         std::vector<vk::DeviceQueueCreateInfo> device_queue_create_infos;
+        vk::DeviceQueueCreateFlags queue_flags = device->has_internally_synchronized_queues ?
+                                                vk::DeviceQueueCreateFlagBits::eInternallySynchronizedKHR :
+                                                vk::DeviceQueueCreateFlags();
+
         if (compute_queue_family_index != transfer_queue_family_index) {
-            device_queue_create_infos.push_back({vk::DeviceQueueCreateFlags(), compute_queue_family_index, 1, priorities});
-            device_queue_create_infos.push_back({vk::DeviceQueueCreateFlags(), transfer_queue_family_index, 1, priorities + 1});
+            device_queue_create_infos.push_back({queue_flags, compute_queue_family_index, 1, priorities});
+            device_queue_create_infos.push_back({queue_flags, transfer_queue_family_index, 1, priorities + 1});
         } else if(!device->single_queue) {
-            device_queue_create_infos.push_back({vk::DeviceQueueCreateFlags(), compute_queue_family_index, 2, priorities});
+            device_queue_create_infos.push_back({queue_flags, compute_queue_family_index, 2, priorities});
         } else {
-            device_queue_create_infos.push_back({vk::DeviceQueueCreateFlags(), compute_queue_family_index, 1, priorities});
+            device_queue_create_infos.push_back({queue_flags, compute_queue_family_index, 1, priorities});
         }
         vk::DeviceCreateInfo device_create_info{};
         std::vector<const char *> device_extensions;
+        if (device->has_internally_synchronized_queues) {
+            device_extensions.push_back(VK_KHR_INTERNALLY_SYNCHRONIZED_QUEUES_EXTENSION_NAME);
+        }
         vk::PhysicalDeviceFeatures device_features = device->physical_device.getFeatures();
 
         VkPhysicalDeviceFeatures2 device_features2;
@@ -5776,12 +5824,7 @@ static vk_device ggml_vk_get_device(size_t idx) {
 
             device->async_use_transfer_queue = prefers_transfer_queue || (getenv("GGML_VK_ASYNC_USE_TRANSFER_QUEUE") != nullptr);
         } else {
-            device->transfer_queue = std::make_shared<vk_queue>();
-            device->transfer_queue->handle = device->compute_queue->handle;
-            device->transfer_queue->queue_family_index = device->compute_queue->queue_family_index;
-            device->transfer_queue->stage_flags = device->compute_queue->stage_flags;
-            device->transfer_queue->transfer_only = device->compute_queue->transfer_only;
-            device->transfer_queue->cmd_pool.init(device, device->transfer_queue.get());
+            device->transfer_queue = ggml_vk_create_aliased_queue(device, device->compute_queue, { vk::PipelineStageFlagBits::eTransfer }, true);
 
             device->async_use_transfer_queue = false;
         }
@@ -14379,12 +14422,10 @@ static void ggml_vk_synchronize(ggml_backend_vk_context * ctx) {
                 0, nullptr,
             };
             si.setPNext(&tl_info);
-            std::lock_guard<std::mutex> guard(ctx->device->compute_queue->handle->mutex);
-            ctx->device->compute_queue->handle->queue.submit({ si }, ctx->fence);
+            ctx->device->compute_queue->handle->submit({ si }, ctx->fence);
             ctx->transfer_semaphore_last_submitted = ctx->transfer_semaphore.value;
         } else {
-            std::lock_guard<std::mutex> guard(ctx->device->compute_queue->handle->mutex);
-            ctx->device->compute_queue->handle->queue.submit({}, ctx->fence);
+            ctx->device->compute_queue->handle->submit({}, ctx->fence);
         }
         ggml_vk_wait_for_fence(ctx);
         ctx->submit_pending = false;
