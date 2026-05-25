@@ -131,8 +131,8 @@ static ggml_sycl_device_info ggml_sycl_init() {
     }
 
 #ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO
-    // Large buffers can be allocated before ggml_check_sycl(), which initialized other
-    // g_ggml_sycl_enable_*, so we make this call here, as early as we can.
+    // Large buffers can be allocated before ggml_check_sycl() initializes other
+    // g_ggml_sycl_enable_* globals, so initialize this one as early as we can.
     g_ggml_sycl_enable_level_zero =
         info.ext_oneapi_level_zero && get_sycl_env("GGML_SYCL_ENABLE_LEVEL_ZERO", 1);
 #else
