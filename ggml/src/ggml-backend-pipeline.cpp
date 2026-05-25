@@ -103,30 +103,16 @@ enum ggml_status ggml_backend_sched_pipelined_compute(
         return ggml_backend_sched_graph_compute_async(sched->base, gf);
     }
 
-    // Allocate the graph (creates splits)
-    if (!ggml_backend_sched_alloc_graph(sched->base, gf)) {
-        return GGML_STATUS_FAILED;
-    }
-
-    // Get CPU backend from scheduler
+    // Lazily cache the CPU backend
     if (!sched->cpu_backend) {
         sched->cpu_backend = ggml_backend_sched_get_backend(sched->base, 0);
     }
 
-    int n_splits = ggml_backend_sched_get_n_splits(sched->base);
-    if (n_splits <= 1) {
-        // No benefit to pipelining with 0-1 splits
-        return ggml_backend_sched_graph_compute_async(sched->base, gf);
-    }
-
-    // Current behavior: dual CCD threadpool rotation per call, providing
-    // NUMA-local execution. Full async 3-stage pipeline (CPU compute ->
-    // TMA transfer -> GPU compute overlap) requires access to the scheduler's
-    // internal split data (private to ggml-backend.cpp) and is deferred.
-
-    // Set threadpool for CPU backend using the direct API
+    // Set threadpool for this iteration (rotates between CCD pairs)
     ggml_backend_cpu_set_threadpool(sched->cpu_backend, sched->cpu_tp[sched->active_pool]);
 
+    // Let the base scheduler handle alloc/compute state machine normally.
+    // Calling alloc_graph manually would corrupt is_alloc across batches.
     enum ggml_status status = ggml_backend_sched_graph_compute_async(sched->base, gf);
 
     // Rotate pool for next call
