@@ -1,4 +1,5 @@
 #include "vk_resource_barrier.h"
+#include <algorithm>
 #include <cstring>
 
 namespace ggml_vk {
@@ -51,9 +52,7 @@ static constexpr VkAccessFlags2 kWriteAccess =
 } // namespace
 
 void ResourceBarrier::record(VkBuffer buffer, uint64_t offset, uint64_t size, Usage usage) {
-    // Round offset down to alignment for tracking granularity
-    uint64_t aligned_offset = offset & ~uint64_t(255);
-    BufferKey key{buffer, aligned_offset};
+    BufferKey key{buffer, offset};
 
     auto& state = _states[key];
     VkPipelineStageFlags2 stage = usage_to_stage(usage);
@@ -68,6 +67,7 @@ void ResourceBarrier::record(VkBuffer buffer, uint64_t offset, uint64_t size, Us
     state.after_stage |= stage;
     state.after_access |= access;
     state.written = state.written || is_write;
+    state.after_size = std::max(state.after_size, size);
 }
 
 void ResourceBarrier::emit(VkCommandBuffer cmd_buffer) {
@@ -79,9 +79,13 @@ void ResourceBarrier::emit(VkCommandBuffer cmd_buffer) {
     for (const auto& key : _ordered_keys) {
         auto& state = _states[key];
 
-        // Only emit a barrier if the buffer was written and the state actually changed
-        if (state.written && state.after_stage != 0 &&
-            (state.before_stage != 0 || state.before_access != 0)) {
+        bool prev_has_access = state.before_stage != 0 || state.before_access != 0;
+        bool curr_has_access = state.after_stage != 0 || state.after_access != 0;
+        bool prev_is_write = (state.before_access & kWriteAccess) != 0;
+        bool curr_is_write = state.written;
+        bool needs_barrier = (prev_is_write || curr_is_write) && prev_has_access && curr_has_access;
+
+        if (needs_barrier) {
             VkBufferMemoryBarrier2 barrier{};
             barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
             barrier.srcStageMask = state.before_stage;
@@ -90,15 +94,19 @@ void ResourceBarrier::emit(VkCommandBuffer cmd_buffer) {
             barrier.dstAccessMask = state.after_access;
             barrier.buffer = key.buffer;
             barrier.offset = key.offset;
-            barrier.size = VK_WHOLE_SIZE;
-            barriers.push_back(barrier);
+            barrier.size = std::max(state.before_size, state.after_size);
+            if (barrier.size > 0) {
+                barriers.push_back(barrier);
+            }
         }
 
         // Promote current after state to before state for the next emit
         state.before_stage = state.after_stage;
         state.before_access = state.after_access;
+        state.before_size = state.after_size;
         state.after_stage = 0;
         state.after_access = 0;
+        state.after_size = 0;
         state.written = false;
     }
 

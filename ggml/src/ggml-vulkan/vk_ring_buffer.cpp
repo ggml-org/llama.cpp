@@ -1,6 +1,7 @@
 #include "vk_ring_buffer.h"
 #include "vk_mem_alloc.h"
 #include <algorithm>
+#include <chrono>
 #include <stdexcept>
 #include <thread>
 
@@ -60,6 +61,10 @@ StagingRingBuffer::Allocation StagingRingBuffer::allocate(uint64_t size, uint64_
     uint64_t aligned_size = (size + alignment - 1) & ~(alignment - 1);
 
     std::unique_lock<std::mutex> lock(_mutex);
+    uint64_t spin_count = 0;
+    auto start_time = std::chrono::steady_clock::now();
+    constexpr auto k_timeout = std::chrono::seconds(30);
+
     while (true) {
         uint64_t head = _head.load(std::memory_order_relaxed);
         uint64_t tail = _tail.load(std::memory_order_relaxed);
@@ -91,9 +96,23 @@ StagingRingBuffer::Allocation StagingRingBuffer::allocate(uint64_t size, uint64_
             return alloc;
         }
 
-        // Not enough space, wait for GPU
+        // Not enough space, wait for GPU with timeout and backoff.
         lock.unlock();
-        std::this_thread::yield();
+        ++spin_count;
+        if (spin_count > 1000) {
+            auto elapsed = std::chrono::steady_clock::now() - start_time;
+            if (elapsed > k_timeout) {
+                throw std::runtime_error("StagingRingBuffer::allocate() timed out waiting for GPU");
+            }
+            // Exponential backoff: 1us, 10us, 100us, 1ms, 10ms, capped at 100ms.
+            uint64_t sleep_us = 1;
+            for (uint64_t i = 0; i < std::min(spin_count - 1000, uint64_t(5)); ++i) {
+                sleep_us *= 10;
+            }
+            std::this_thread::sleep_for(std::chrono::microseconds(std::min(sleep_us, uint64_t(100000))));
+        } else {
+            std::this_thread::yield();
+        }
         lock.lock();
     }
 }

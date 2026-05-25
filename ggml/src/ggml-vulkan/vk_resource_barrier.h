@@ -27,6 +27,8 @@ public:
         VkAccessFlags2 before_access{0};
         VkPipelineStageFlags2 after_stage{0};
         VkAccessFlags2 after_access{0};
+        uint64_t before_size{0};
+        uint64_t after_size{0};
         bool written{false};
     };
 
@@ -48,7 +50,7 @@ public:
     [[nodiscard]] size_t tracked_count() const { return _states.size(); }
 
 private:
-    // Buffer key: buffer handle + offset rounded to 256-byte alignment
+    // Buffer key: buffer handle + exact offset
     struct BufferKey {
         VkBuffer buffer;
         uint64_t offset;

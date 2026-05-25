@@ -32,6 +32,7 @@ private:
     vk::Device _device;
     std::string _cache_file_path;
     vk::PipelineCache _cache{};
+    VkPipelineCacheHeaderVersionOne _header{};
 };
 
 } // namespace ggml_vk

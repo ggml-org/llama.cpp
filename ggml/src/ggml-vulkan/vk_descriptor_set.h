@@ -38,6 +38,12 @@ public:
                        uint64_t offset,
                        uint64_t range);
 
+    // Unregister a buffer and return its bindless index to the free list.
+    void unregister_buffer(uint32_t index);
+
+    // Reset the bindless array, reclaiming all indices. Call only when no buffers are in use.
+    void reset_bindless();
+
     // Returns the bindless descriptor set (set=0, bound once per command buffer).
     [[nodiscard]] vk::DescriptorSet bindless_set() const { return _bindless_set; }
     [[nodiscard]] vk::DescriptorSetLayout bindless_layout() const { return _bindless_layout; }
@@ -64,6 +70,7 @@ private:
     vk::DescriptorSet _bindless_set{};
     uint32_t _max_bindless_buffers{};
     uint32_t _bindless_count{0};
+    std::vector<uint32_t> _bindless_free_list;
 
     // Per-dispatch
     std::vector<vk::DescriptorPool> _pools;

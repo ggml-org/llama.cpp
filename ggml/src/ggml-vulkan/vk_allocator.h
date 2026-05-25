@@ -51,7 +51,6 @@ public:
 
     [[nodiscard]] VmaAllocator handle() const { return _allocator; }
 
-    size_t defragment();
 
 private:
     VmaAllocator _allocator{};

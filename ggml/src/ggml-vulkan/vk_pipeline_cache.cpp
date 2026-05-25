@@ -13,12 +13,11 @@ PipelineCache::PipelineCache(vk::Device device,
     , _cache_file_path(cache_file_path) {
 
     // Build a header to validate cache compatibility
-    VkPipelineCacheHeaderVersionOne header{};
-    header.headerSize = sizeof(VkPipelineCacheHeaderVersionOne);
-    header.headerVersion = VK_PIPELINE_CACHE_HEADER_VERSION_ONE;
-    header.vendorID = props.vendorID;
-    header.deviceID = props.deviceID;
-    memcpy(header.pipelineCacheUUID, props.pipelineCacheUUID, VK_UUID_SIZE);
+    _header.headerSize = sizeof(VkPipelineCacheHeaderVersionOne);
+    _header.headerVersion = VK_PIPELINE_CACHE_HEADER_VERSION_ONE;
+    _header.vendorID = props.vendorID;
+    _header.deviceID = props.deviceID;
+    memcpy(_header.pipelineCacheUUID, props.pipelineCacheUUID, VK_UUID_SIZE);
 
     // Try to load cache from disk
     std::vector<uint8_t> cache_data;
@@ -26,14 +25,14 @@ PipelineCache::PipelineCache(vk::Device device,
         std::ifstream file(cache_file_path, std::ios::binary | std::ios::ate);
         if (file.good()) {
             std::streamsize size = file.tellg();
-            if (size > static_cast<std::streamsize>(sizeof(VkPipelineCacheHeaderVersionOne))) {
+            if (size >= static_cast<std::streamsize>(sizeof(VkPipelineCacheHeaderVersionOne))) {
                 file.seekg(0);
                 cache_data.resize(static_cast<size_t>(size));
                 file.read(reinterpret_cast<char*>(cache_data.data()), size);
 
                 // Validate header
                 auto* file_header = reinterpret_cast<VkPipelineCacheHeaderVersionOne*>(cache_data.data());
-                if (memcmp(file_header, &header, sizeof(header)) != 0) {
+                if (memcmp(file_header, &_header, sizeof(_header)) != 0) {
                     // Incompatible cache; discard
                     cache_data.clear();
                 }
@@ -43,8 +42,9 @@ PipelineCache::PipelineCache(vk::Device device,
 
     vk::PipelineCacheCreateInfo create_info{};
     if (!cache_data.empty()) {
-        create_info.initialDataSize = cache_data.size();
-        create_info.pInitialData = cache_data.data();
+        // Strip our validation header before passing to Vulkan
+        create_info.initialDataSize = cache_data.size() - sizeof(VkPipelineCacheHeaderVersionOne);
+        create_info.pInitialData = cache_data.data() + sizeof(VkPipelineCacheHeaderVersionOne);
     }
 
     _cache = _device.createPipelineCache(create_info);
@@ -66,6 +66,8 @@ void PipelineCache::save() {
     // Prepend header for compatibility validation
     std::ofstream file(_cache_file_path, std::ios::binary | std::ios::trunc);
     if (file.good()) {
+        file.write(reinterpret_cast<const char*>(&_header),
+                   static_cast<std::streamsize>(sizeof(_header)));
         file.write(reinterpret_cast<const char*>(data.data()),
                    static_cast<std::streamsize>(data.size()));
     }
@@ -73,12 +75,7 @@ void PipelineCache::save() {
 
 void PipelineCache::merge(vk::ArrayProxy<const vk::PipelineCache> caches) {
     if (caches.empty()) return;
-    std::vector<vk::PipelineCache> vk_caches;
-    vk_caches.reserve(caches.size());
-    for (auto& c : caches) {
-        vk_caches.push_back(c);
-    }
-    _device.mergePipelineCaches(_cache, vk_caches);
+    _device.mergePipelineCaches(_cache, caches);
 }
 
 } // namespace ggml_vk

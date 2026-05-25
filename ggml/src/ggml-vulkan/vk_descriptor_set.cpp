@@ -92,9 +92,15 @@ DescriptorManager::~DescriptorManager() {
 uint32_t DescriptorManager::register_buffer(vk::Buffer buffer,
                                             uint64_t offset,
                                             uint64_t range) {
-    uint32_t index = _bindless_count++;
-    if (index >= _max_bindless_buffers) {
-        throw std::runtime_error("DescriptorManager: bindless buffer limit exceeded");
+    uint32_t index;
+    if (!_bindless_free_list.empty()) {
+        index = _bindless_free_list.back();
+        _bindless_free_list.pop_back();
+    } else {
+        index = _bindless_count++;
+        if (index >= _max_bindless_buffers) {
+            throw std::runtime_error("DescriptorManager: bindless buffer limit exceeded");
+        }
     }
 
     VkDescriptorBufferInfo buf_info{};
@@ -134,6 +140,36 @@ void DescriptorManager::update_buffer(uint32_t index,
     write.pBufferInfo = &buf_info;
 
     vkUpdateDescriptorSets(_device, 1, &write, 0, nullptr);
+}
+
+void DescriptorManager::unregister_buffer(uint32_t index) {
+    if (index >= _max_bindless_buffers) {
+        throw std::runtime_error("DescriptorManager: invalid bindless index");
+    }
+
+    // Clear the descriptor slot to avoid stale references.
+    VkDescriptorBufferInfo buf_info{};
+    buf_info.buffer = VK_NULL_HANDLE;
+    buf_info.offset = 0;
+    buf_info.range = 0;
+
+    VkWriteDescriptorSet write{};
+    write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    write.dstSet = _bindless_set;
+    write.dstBinding = 0;
+    write.dstArrayElement = index;
+    write.descriptorCount = 1;
+    write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    write.pBufferInfo = &buf_info;
+
+    vkUpdateDescriptorSets(_device, 1, &write, 0, nullptr);
+    _bindless_free_list.push_back(index);
+}
+
+void DescriptorManager::reset_bindless() {
+    _bindless_count = 0;
+    _bindless_free_list.clear();
+    _bindless_free_list.shrink_to_fit();
 }
 
 vk::DescriptorSet DescriptorManager::allocate_set(vk::DescriptorSetLayout layout) {
