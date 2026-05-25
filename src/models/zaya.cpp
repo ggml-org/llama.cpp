@@ -356,7 +356,7 @@ llama_model_zaya::graph::graph(const llama_model & model, const llm_graph_params
             router_h = ggml_add(ctx0, router_h, layer.zaya_router_down_b);
             cb(router_h, "router_down", il);
 
-            if (prev_router != nullptr && layer.zaya_router_eda_scale != nullptr) {
+            if (il != 1 && prev_router != nullptr && layer.zaya_router_eda_scale != nullptr) {
                 router_h = ggml_add(ctx0, router_h, ggml_mul(ctx0, prev_router, layer.zaya_router_eda_scale));
                 cb(router_h, "router_eda", il);
             }
