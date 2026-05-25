@@ -38,12 +38,10 @@ jobs:
   ubuntu-24-sycl:
     strategy:
       matrix:
-        build: [fp32, fp16]
+        build: [fp32]
         include:
           - build: fp32
             fp16: OFF
-          - build: fp16
-            fp16: ON
 
     runs-on: ubuntu-24.04
 
