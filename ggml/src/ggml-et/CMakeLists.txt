@@ -118,7 +118,7 @@ set(UBERKERNEL_SUPPORTED_KERNELS
     scale_f32         # gemma4
     set_f32
     # set_rows_f32
-    # softmax_f32       # gemma4
+    softmax_f32       # gemma4
     solve_tri_f32
     sqr_f32
     ssm_conv_f32
