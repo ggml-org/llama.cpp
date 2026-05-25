@@ -265,9 +265,6 @@ jobs:
           - build: 'llvm-arm64'
             arch: 'arm64'
             defines: '-G "Ninja Multi-Config" -D CMAKE_TOOLCHAIN_FILE=cmake/arm64-windows-llvm.cmake -DGGML_NATIVE=OFF -DLLAMA_BUILD_SERVER=ON'
-          - build: 'llvm-arm64-opencl-adreno'
-            arch: 'arm64'
-            defines: '-G "Ninja Multi-Config" -D CMAKE_TOOLCHAIN_FILE=cmake/arm64-windows-llvm.cmake -DCMAKE_PREFIX_PATH="$env:RUNNER_TEMP/opencl-arm64-release" -DGGML_OPENCL=ON -DGGML_OPENCL_USE_ADRENO_KERNELS=ON'
 
     steps:
       - name: Clone
@@ -308,26 +305,6 @@ jobs:
         id: install_ninja
         run: |
           choco install ninja
-
-      - name: Install OpenCL Headers and Libs
-        id: install_opencl
-        if: ${{ matrix.build == 'llvm-arm64-opencl-adreno' }}
-        run: |
-          git clone https://github.com/KhronosGroup/OpenCL-Headers
-          cd OpenCL-Headers
-          cmake -B build `
-            -DBUILD_TESTING=OFF `
-            -DOPENCL_HEADERS_BUILD_TESTING=OFF `
-            -DOPENCL_HEADERS_BUILD_CXX_TESTS=OFF `
-            -DCMAKE_INSTALL_PREFIX="$env:RUNNER_TEMP/opencl-arm64-release"
-          cmake --build build --target install
-          git clone https://github.com/KhronosGroup/OpenCL-ICD-Loader
-          cd OpenCL-ICD-Loader
-          cmake -B build-arm64-release `
-            -A arm64 `
-            -DCMAKE_PREFIX_PATH="$env:RUNNER_TEMP/opencl-arm64-release" `
-            -DCMAKE_INSTALL_PREFIX="$env:RUNNER_TEMP/opencl-arm64-release"
-          cmake --build build-arm64-release --target install --config release
 
       - name: Build
         id: cmake_build
