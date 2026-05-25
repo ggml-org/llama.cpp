@@ -78,6 +78,12 @@ DispatchLoaderDynamic & ggml_vk_default_dispatcher();
 #include "ggml-impl.h"
 #include "ggml-backend-impl.h"
 
+#include "vk_allocator.h"
+#include "vk_pipeline_cache.h"
+#include "vk_ring_buffer.h"
+#include "vk_resource_barrier.h"
+#include "vk_descriptor_set.h"
+
 #include "ggml-vulkan-shaders.hpp"
 
 // remove this once it's more widely available in the SDK
@@ -900,6 +906,15 @@ struct vk_device_struct {
 
     std::unique_ptr<vk_memory_logger> memory_logger;
 
+    // New: VMA allocator
+    std::unique_ptr<ggml_vk::VkAllocator> vma_allocator;
+
+    // New: pipeline cache
+    std::unique_ptr<ggml_vk::PipelineCache> pipeline_cache;
+
+    // New: descriptor manager (bindless)
+    std::unique_ptr<ggml_vk::DescriptorManager> desc_manager;
+
     ~vk_device_struct() {
         VK_LOG_DEBUG("destroy device " << name);
 
@@ -921,6 +936,11 @@ struct vk_device_struct {
         all_pipelines.clear();
 
         device.destroyDescriptorSetLayout(dsl);
+
+        // New modules are destroyed before device (via unique_ptr destructors)
+        desc_manager.reset();
+        pipeline_cache.reset();
+        vma_allocator.reset();
 
         device.destroy();
     }
@@ -949,6 +969,7 @@ struct vk_buffer_struct {
     void * ptr;
     size_t size = 0;
     vk::DeviceAddress bda_addr {};
+    bool vma_allocated = false;  // true if VMA-allocated (device_memory is VmaAllocation)
 
     vk_device device;
 
@@ -958,8 +979,13 @@ struct vk_buffer_struct {
         }
         VK_LOG_DEBUG("~vk_buffer_struct(" << buffer << ", " << size << ")");
 
-        device->device.freeMemory(device_memory);
-        device->device.destroyBuffer(buffer);
+        if (vma_allocated && device && device->vma_allocator) {
+            ggml_vk::AllocatedBuffer alloc{buffer, reinterpret_cast<VmaAllocation>(static_cast<VkDeviceMemory>(device_memory))};
+            device->vma_allocator->destroy_buffer(alloc);
+        } else {
+            device->device.freeMemory(device_memory);
+            device->device.destroyBuffer(buffer);
+        }
     }
 };
 
@@ -1962,6 +1988,15 @@ struct ggml_backend_vk_context {
     vk_command_pool compute_cmd_pool;
     vk_command_pool transfer_cmd_pool;
 
+    // New: resource barrier tracker for single-submit graphs
+    ggml_vk::ResourceBarrier resource_barrier;
+
+    // New: upload ring buffer for host->device staging
+    std::unique_ptr<ggml_vk::StagingRingBuffer> upload_ring;
+
+    // New: readback ring buffer for device->host staging
+    std::unique_ptr<ggml_vk::StagingRingBuffer> readback_ring;
+
     // number of additional consecutive nodes that are being fused with the
     // node currently being processed
     int num_additional_fused_ops {};
@@ -2308,7 +2343,9 @@ static void ggml_vk_create_pipeline_func(vk_device& device, vk_pipeline& pipelin
 #endif
 
     try {
-        pipeline->pipeline = device->device.createComputePipeline(VK_NULL_HANDLE, compute_pipeline_create_info).value;
+        // Use pipeline cache if available
+        vk::PipelineCache pipeline_cache = device->pipeline_cache ? device->pipeline_cache->handle() : VK_NULL_HANDLE;
+        pipeline->pipeline = device->device.createComputePipeline(pipeline_cache, compute_pipeline_create_info).value;
     } catch (const vk::SystemError& e) {
         std::cerr << "ggml_vulkan: Compute pipeline creation failed for " << pipeline->name << std::endl;
         std::cerr << "ggml_vulkan: " << e.what() << std::endl;
@@ -2831,8 +2868,69 @@ static vk_buffer ggml_vk_create_buffer_check(vk_device& device, size_t size, vk:
     }
 }
 
+// VMA-backed buffer creation. Returns true on success.
+static bool ggml_vk_create_buffer_vma(vk_device& device, size_t size, vk_buffer& buf) {
+    if (!device->vma_allocator || size == 0) return false;
+
+    try {
+        vk::BufferUsageFlags usage = vk::BufferUsageFlagBits::eStorageBuffer |
+                                      vk::BufferUsageFlagBits::eTransferSrc |
+                                      vk::BufferUsageFlagBits::eTransferDst;
+        if (device->buffer_device_address) {
+            usage |= vk::BufferUsageFlagBits::eShaderDeviceAddress;
+        }
+
+        ggml_vk::AccessType access = ggml_vk::AccessType::kNone;
+        if (device->prefer_host_memory || device->uma) {
+            access = ggml_vk::AccessType::kUpload;  // host-visible via VMA
+        }
+
+        auto alloc = device->vma_allocator->allocate_buffer(size, usage, access);
+        if (!alloc.buffer) return false;
+
+        buf = std::make_shared<vk_buffer_struct>();
+        buf->buffer = alloc.buffer;
+        buf->device = device;
+        buf->size = size;
+        buf->vma_allocated = true;
+
+        // Map if host-visible
+        VmaAllocationInfo alloc_info{};
+        vmaGetAllocationInfo(device->vma_allocator->handle(), alloc.allocation, &alloc_info);
+        if (alloc_info.pMappedData) {
+            buf->ptr = alloc_info.pMappedData;
+            buf->memory_property_flags = vk::MemoryPropertyFlagBits::eHostVisible |
+                                          vk::MemoryPropertyFlagBits::eHostCoherent;
+        } else {
+            buf->memory_property_flags = vk::MemoryPropertyFlagBits::eDeviceLocal;
+        }
+
+        if (device->buffer_device_address) {
+            vk::BufferDeviceAddressInfo addr_info(buf->buffer);
+            buf->bda_addr = device->device.getBufferAddress(addr_info);
+        }
+
+        // Store VMA allocation handle in device_memory (reuse field as opaque handle)
+        // We overload device_memory to store the VmaAllocation pointer.
+        // ggml_vk_destroy_buffer will detect VMA-backed buffers and use vmaDestroyBuffer.
+        buf->device_memory = reinterpret_cast<vk::DeviceMemory>(alloc.allocation);
+
+        device->memory_logger->log_allocation(buf, size);
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
 static vk_buffer ggml_vk_create_buffer_device(vk_device& device, size_t size) {
     vk_buffer buf;
+
+    // Try VMA first
+    if (ggml_vk_create_buffer_vma(device, size, buf)) {
+        return buf;
+    }
+
+    // Fallback to original manual allocation path
     try {
         if (device->prefer_host_memory) {
             buf = ggml_vk_create_buffer(device, size, {vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,
@@ -6269,6 +6367,65 @@ static void ggml_vk_init(ggml_backend_vk_context * ctx, size_t idx) {
         ctx->perf_logger = std::unique_ptr<vk_perf_logger>(new vk_perf_logger());
     }
 
+    // --- Initialize new Vulkan modules ---
+
+    // VMA allocator (shared across contexts on the same device)
+    if (!ctx->device->vma_allocator) {
+        try {
+            ctx->device->vma_allocator = std::make_unique<ggml_vk::VkAllocator>(
+                vk_instance.instance,
+                ctx->device->physical_device,
+                ctx->device->device,
+                ctx->device->buffer_device_address);
+        } catch (...) {
+            // VMA initialization failed; fall back to manual allocation
+        }
+    }
+
+    // Pipeline cache (shared across contexts)
+    if (!ctx->device->pipeline_cache) {
+        try {
+            std::string cache_path = "ggml-vk-pipeline-cache-" + std::to_string(idx) + ".bin";
+            ctx->device->pipeline_cache = std::make_unique<ggml_vk::PipelineCache>(
+                ctx->device->device,
+                ctx->device->properties,
+                cache_path);
+        } catch (...) {
+            // Cache creation failed; pipelines compile without caching
+        }
+    }
+
+    // Descriptor manager (shared across contexts)
+    if (!ctx->device->desc_manager) {
+        try {
+            ctx->device->desc_manager = std::make_unique<ggml_vk::DescriptorManager>(
+                ctx->device->device,
+                262144,   // max bindless buffers
+                65536);   // max per-dispatch sets
+        } catch (...) {
+            // Descriptor manager failed; fall back to inline descriptors
+        }
+    }
+
+    // Upload ring buffer (per-context, 64 MB)
+    if (ctx->device->vma_allocator) {
+        try {
+            ctx->upload_ring = std::make_unique<ggml_vk::StagingRingBuffer>(
+                ctx->device->vma_allocator.get(),
+                ctx->device->device,
+                64ull * 1024 * 1024,
+                true);  // host-to-device
+        } catch (...) {}
+
+        try {
+            ctx->readback_ring = std::make_unique<ggml_vk::StagingRingBuffer>(
+                ctx->device->vma_allocator.get(),
+                ctx->device->device,
+                64ull * 1024 * 1024,
+                false); // device-to-host
+        } catch (...) {}
+    }
+
 #ifdef GGML_VULKAN_CHECK_RESULTS
     const char* skip_checks = getenv("GGML_VULKAN_SKIP_CHECKS");
     vk_skip_checks = (skip_checks == NULL ? 0 : atoi(skip_checks));
@@ -6788,23 +6945,45 @@ static void ggml_vk_dispatch_pipeline(ggml_backend_vk_context* ctx, vk_context& 
     GGML_ASSERT(wg0 <= ctx->device->properties.limits.maxComputeWorkGroupCount[0] &&
                 wg1 <= ctx->device->properties.limits.maxComputeWorkGroupCount[1] &&
                 wg2 <= ctx->device->properties.limits.maxComputeWorkGroupCount[2]);
-    GGML_ASSERT(ctx->descriptor_set_idx < ctx->descriptor_sets.size());
     GGML_ASSERT(descriptor_buffer_infos.size() <= MAX_PARAMETER_COUNT);
     GGML_ASSERT(pipeline->parameter_count == descriptor_buffer_infos.size());
     GGML_ASSERT(pipeline->push_constant_size == push_constant_size(push_constants));
 
-    vk::DescriptorSet& descriptor_set = ctx->descriptor_sets[ctx->descriptor_set_idx++];
-    vk::WriteDescriptorSet write_descriptor_set{ descriptor_set, 0, 0, pipeline->parameter_count, vk::DescriptorType::eStorageBuffer, nullptr, descriptor_buffer_infos.begin() };
-    ctx->device->device.updateDescriptorSets({ write_descriptor_set }, {});
+    // Emit resource barriers for write-after-read/write-after-write dependencies
+    ctx->resource_barrier.emit(subctx->s->buffer->buf);
 
-    subctx->s->buffer->buf.pushConstants(pipeline->layout, vk::ShaderStageFlagBits::eCompute, 0, push_constant_size(push_constants), push_constant_data(push_constants));
-    subctx->s->buffer->buf.bindPipeline(vk::PipelineBindPoint::eCompute, pipeline->pipeline);
-    subctx->s->buffer->buf.bindDescriptorSets(vk::PipelineBindPoint::eCompute,
-                                pipeline->layout,
-                                0,
-                                { descriptor_set },
-                                {});
-    subctx->s->buffer->buf.dispatch(wg0, wg1, wg2);
+    // Record buffer usages for next barrier
+    for (const auto& info : descriptor_buffer_infos) {
+        ctx->resource_barrier.record(
+            info.buffer, info.offset, info.range,
+            ggml_vk::ResourceBarrier::Usage::kComputeWrite);
+    }
+
+    // Use descriptor manager if available, otherwise fall back to inline descriptors
+    if (ctx->device->desc_manager) {
+        vk::DescriptorSet desc_set = ctx->device->desc_manager->allocate_set(ctx->device->dsl);
+        ctx->device->desc_manager->write_buffers(desc_set, 0,
+            vk::ArrayProxy<const vk::DescriptorBufferInfo>(
+                descriptor_buffer_infos.begin(), descriptor_buffer_infos.size()));
+
+        subctx->s->buffer->buf.pushConstants(pipeline->layout, vk::ShaderStageFlagBits::eCompute, 0, push_constant_size(push_constants), push_constant_data(push_constants));
+        subctx->s->buffer->buf.bindPipeline(vk::PipelineBindPoint::eCompute, pipeline->pipeline);
+        subctx->s->buffer->buf.bindDescriptorSets(vk::PipelineBindPoint::eCompute,
+                                    pipeline->layout, 0, { desc_set }, {});
+        subctx->s->buffer->buf.dispatch(wg0, wg1, wg2);
+    } else {
+        // Original inline descriptor path
+        GGML_ASSERT(ctx->descriptor_set_idx < ctx->descriptor_sets.size());
+        vk::DescriptorSet& descriptor_set = ctx->descriptor_sets[ctx->descriptor_set_idx++];
+        vk::WriteDescriptorSet write_descriptor_set{ descriptor_set, 0, 0, pipeline->parameter_count, vk::DescriptorType::eStorageBuffer, nullptr, descriptor_buffer_infos.begin() };
+        ctx->device->device.updateDescriptorSets({ write_descriptor_set }, {});
+
+        subctx->s->buffer->buf.pushConstants(pipeline->layout, vk::ShaderStageFlagBits::eCompute, 0, push_constant_size(push_constants), push_constant_data(push_constants));
+        subctx->s->buffer->buf.bindPipeline(vk::PipelineBindPoint::eCompute, pipeline->pipeline);
+        subctx->s->buffer->buf.bindDescriptorSets(vk::PipelineBindPoint::eCompute,
+                                    pipeline->layout, 0, { descriptor_set }, {});
+        subctx->s->buffer->buf.dispatch(wg0, wg1, wg2);
+    }
 }
 
 static void ggml_vk_end_submission(vk_submission& s, std::vector<vk_semaphore> wait_semaphores, std::vector<vk_semaphore> signal_semaphores) {
@@ -13694,16 +13873,11 @@ static bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_cgraph * cgr
     last_node = true;
 #endif
 
-    if (submit || last_node) {
+    if (last_node) {
         ggml_vk_ctx_end(compute_ctx);
 
         // TODO probably it'd be better to pass a exit_node flag to ggml_vk_compute_forward
-        if (last_node) {
-            compute_ctx->exit_tensor_idx = node_idx_begin;
-        }
-        else {
-            compute_ctx->exit_tensor_idx = -1;
-        }
+        compute_ctx->exit_tensor_idx = node_idx_begin;
 
         ctx->compute_ctx.reset();
 
@@ -13839,6 +14013,15 @@ static void ggml_vk_cleanup(ggml_backend_vk_context * ctx) {
 
         ctx->transfer_cmd_pool.destroy(ctx->device->device);
     }
+    // Save pipeline cache before cleanup
+    if (ctx->device->pipeline_cache) {
+        ctx->device->pipeline_cache->save();
+    }
+
+    // Destroy ring buffers
+    ctx->upload_ring.reset();
+    ctx->readback_ring.reset();
+
     if (vk_perf_logger_enabled) {
         ctx->perf_logger->print_timings(true);
     }
@@ -14961,7 +15144,6 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
     // Reserve tensor context space for all nodes
     ctx->tensor_ctxs.resize(cgraph->n_nodes);
 
-    bool first_node_in_batch = true; // true if next node will be first node in a batch
     int submit_node_idx = 0; // index to first node in a batch
 
     ggml_vk_submit_transfer_ctx(ctx);
@@ -15008,24 +15190,17 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
         ggml_vk_sync_buffers(ctx, compute_ctx);
     }
 
-    // Submit after enough work has accumulated, to overlap CPU cmdbuffer generation with GPU execution.
-    // Estimate the amount of matmul work by looking at the weight matrix size, and submit every 100MB
-    // (and scaled down based on model size, so smaller models submit earlier).
-    // Also submit at least every 100 nodes, in case there are workloads without as much matmul.
-    int nodes_per_submit = 100;
+    // Single-submission graph execution: accumulate all dispatches into one command buffer
+    // and submit once at the end. ResourceBarrier tracks buffer dependencies and inserts
+    // pipeline barriers between dispatches.
+    ctx->resource_barrier.reset();
     int submitted_nodes = 0;
-    int submit_count = 0;
-    uint64_t mul_mat_bytes = 0;
     uint64_t total_mul_mat_bytes = 0;
-    uint64_t mul_mat_bytes_per_submit = std::min(uint64_t(100*1000*1000), ctx->last_total_mul_mat_bytes / 40u);
     for (int i = 0; i < cgraph->n_nodes; i++) {
-        if (first_node_in_batch) {
-            submit_node_idx = i;
-        }
+        submit_node_idx = i;
 
         if (cgraph->nodes[i]->op == GGML_OP_MUL_MAT || cgraph->nodes[i]->op == GGML_OP_MUL_MAT_ID) {
             auto bytes = ggml_nbytes(cgraph->nodes[i]->src[0]);
-            mul_mat_bytes += bytes;
             total_mul_mat_bytes += bytes;
         }
 
@@ -15236,12 +15411,9 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
             }
         }
 
-        // Signal the almost_ready fence when the graph is mostly complete (< 20% remaining)
-        bool almost_ready = (cgraph->n_nodes - i) < cgraph->n_nodes / 5;
-        bool submit = (submitted_nodes >= nodes_per_submit) ||
-                      (mul_mat_bytes_per_submit != 0 && mul_mat_bytes >= mul_mat_bytes_per_submit) ||
-                      (i + ctx->num_additional_fused_ops >= last_node) ||
-                      (almost_ready && !ctx->almost_ready_fence_pending);
+        // Single-submit: always pass submit=false to avoid mid-graph submissions
+        bool almost_ready = false;  // deprecated in single-submit mode
+        bool submit = false;        // never submit mid-graph
 
         bool enqueued = ggml_vk_build_graph(ctx, cgraph, i, cgraph->nodes[submit_node_idx], submit_node_idx, i + ctx->num_additional_fused_ops >= last_node, almost_ready, submit);
 
@@ -15262,29 +15434,33 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
 
         if (enqueued) {
             ++submitted_nodes;
-
-#ifndef GGML_VULKAN_CHECK_RESULTS
-            if (first_node_in_batch) {
-                first_node_in_batch = false;
-            }
-#endif
         }
 
-        if (submit && enqueued) {
-            first_node_in_batch = true;
-            submitted_nodes = 0;
-            mul_mat_bytes = 0;
-            if (submit_count < 3) {
-                mul_mat_bytes_per_submit *= 2;
-            }
-            submit_count++;
-        }
         i += ctx->num_additional_fused_ops;
         ctx->num_additional_fused_ops = 0;
         ctx->fused_ops_write_mask = 0;
     }
 
     ctx->last_total_mul_mat_bytes = total_mul_mat_bytes;
+
+    // Final single submission: submit all accumulated work at once
+    if (!vk_perf_logger_enabled && !ctx->compute_ctx.expired()) {
+        compute_ctx = ctx->compute_ctx.lock();
+        ggml_vk_ctx_end(compute_ctx);
+
+        // Flush final resource barriers
+        ctx->resource_barrier.emit(compute_ctx->s->buffer->buf);
+
+        ggml_vk_submit(compute_ctx, ctx->device->fence);
+        VK_CHECK(ctx->device->device.waitForFences({ ctx->device->fence }, true, UINT64_MAX), "ggml_vk_graph_compute waitForFences");
+        ctx->device->device.resetFences({ ctx->device->fence });
+        ctx->compute_ctx.reset();
+    }
+
+    // Reset descriptor pools for next graph
+    if (ctx->device->desc_manager) {
+        ctx->device->desc_manager->reset_pools();
+    }
 
     if (vk_perf_logger_enabled) {
         // End the command buffer and submit/wait

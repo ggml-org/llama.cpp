@@ -61,6 +61,11 @@ if (Vulkan_FOUND)
 
     ggml_add_backend_library(ggml-vulkan
                              ggml-vulkan.cpp
+                             vk_allocator.cpp
+                             vk_pipeline_cache.cpp
+                             vk_ring_buffer.cpp
+                             vk_resource_barrier.cpp
+                             vk_descriptor_set.cpp
                              ../../include/ggml-vulkan.h
                             )
 
