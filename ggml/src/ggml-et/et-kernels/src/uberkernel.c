@@ -512,11 +512,11 @@ int entry_point(struct ggml_et_uberkernel_params * params, void * env) {
             }
 
             // Three-source ops
-            // case GGML_ET_UBERKERNEL_KERNEL_MUL_MAT_ID_F32: { // gemma4
-            //     struct uber_mul_mat_id_params *p = (struct uber_mul_mat_id_params *) inst_params;
-            //     rc = mul_mat_id_f32_entry((struct ggml_et_mul_mat_id_params *) inst_params, env);
-            //     break;
-            // }
+            case GGML_ET_UBERKERNEL_KERNEL_MUL_MAT_ID_F32: { // gemma4
+                struct uber_mul_mat_id_params *p = (struct uber_mul_mat_id_params *) inst_params;
+                rc = mul_mat_id_f32_entry((struct ggml_et_mul_mat_id_params *) inst_params, env);
+                break;
+            }
             case GGML_ET_UBERKERNEL_KERNEL_FLASH_ATTN_EXT_F32: { // gemma4
                 struct uber_flash_attn_ext_params *p = (struct uber_flash_attn_ext_params *) inst_params;
                 rc = flash_attn_ext_f32_entry((struct ggml_et_flash_attn_ext_params *) inst_params, env);
