@@ -458,11 +458,20 @@ common_peg_parser analyze_tools::build_tool_parser_tag_tagged(parser_build_conte
 
     if (!format.per_call_start.empty()) {
         auto wrapped_call = format.per_call_start + p.space() + tool_choice + p.space() + format.per_call_end;
-        tool_call_item = p.trigger_rule("tool-call", wrapped_call + p.space());
+        if (format.section_start.empty()) {
+            // Lazy grammars are activated from the first tool-call marker in the
+            // generated suffix. The trigger grammar must validate the tool call,
+            // but it should not require the tool call to be the last segment in
+            // the completion. Tagged tool calls can appear inside reasoning
+            // blocks, followed by </think>, content, or more segments that the
+            // full parser will handle afterwards.
+            p.trigger_rule("tool-call", wrapped_call + p.rest());
+        }
+        tool_call_item = wrapped_call + p.space();
         if (inputs.parallel_tool_calls) {
-            tool_calls = p.trigger_rule("tool-call", wrapped_call + p.zero_or_more(p.space() + wrapped_call) + p.space());
+            tool_calls = wrapped_call + p.zero_or_more(p.space() + wrapped_call) + p.space();
         } else {
-            tool_calls = p.trigger_rule("tool-call", wrapped_call + p.space());
+            tool_calls = wrapped_call + p.space();
         }
         if (!format.section_start.empty()) {
             tool_calls = p.trigger_rule("tool-calls",
