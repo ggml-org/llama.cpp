@@ -59,6 +59,10 @@ ggml_backend_sched_pipelined_t ggml_backend_sched_pipelined_init(
 
     for (int i = 0; i < sched->num_tp; i++) {
         sched->cpu_tp[i] = ggml_threadpool_new(&sched->tp_params[i]);
+        if (!sched->cpu_tp[i]) {
+            delete sched;
+            return nullptr;
+        }
     }
 
     // Fallback: if dual pool fails, use single pool
@@ -69,9 +73,15 @@ ggml_backend_sched_pipelined_t ggml_backend_sched_pipelined_init(
         sched->tp_params[0].prio = prio;
         sched->tp_params[0].poll = poll;
         sched->cpu_tp[0] = ggml_threadpool_new(&sched->tp_params[0]);
+        if (!sched->cpu_tp[0]) {
+            delete sched;
+            return nullptr;
+        }
     }
 
-    // Initialize backend events for synchronization
+    // Initialize backend events for pipeline synchronization.
+    // These are used for the full async TMA pipeline (deferred);
+    // currently only threadpool rotation is active.
     if (gpu_backend) {
         sched->gpu_device = ggml_backend_get_device(gpu_backend);
         if (sched->gpu_device) {
@@ -109,11 +119,10 @@ enum ggml_status ggml_backend_sched_pipelined_compute(
         return ggml_backend_sched_graph_compute_async(sched->base, gf);
     }
 
-    // Pipeline execution with threadpool rotation.
-    // The dual CCD pools provide NUMA-local execution per split.
-    // Full async TMA integration requires access to the scheduler's
-    // internal split data (private to ggml-backend.cpp) and will be
-    // implemented once the internal API is available.
+    // Current behavior: dual CCD threadpool rotation per call, providing
+    // NUMA-local execution. Full async 3-stage pipeline (CPU compute ->
+    // TMA transfer -> GPU compute overlap) requires access to the scheduler's
+    // internal split data (private to ggml-backend.cpp) and is deferred.
 
     // Set threadpool for CPU backend using the direct API
     ggml_backend_cpu_set_threadpool(sched->cpu_backend, sched->cpu_tp[sched->active_pool]);

@@ -82,19 +82,14 @@ void ggml_tma_launch_transfer(ggml_tma_transfer_t transfer) {
 
     size_t bytes = transfer->num_elements * transfer->elem_size;
 
-    if (transfer->use_tma) {
-        // TODO: launch ggml_tma_kv_transfer_kernel for SM 100+.
-        // The kernel is guarded by #if __CUDA_ARCH__ >= 1000 and will
-        // only be compiled for Blackwell targets. The host-side launch
-        // is gated by the use_tma runtime flag, which is currently
-        // always false (conservative default until TMA is verified).
-        GGML_UNUSED(transfer);
+    // TMA kernel launch gated by use_tma flag (SM 100+, deferred).
+    // Currently always uses cudaMemcpyAsync on dedicated stream.
+    if (!transfer->use_tma) {
+        cudaMemcpyAsync(transfer->dst_vram, transfer->src_pinned, bytes,
+                        cudaMemcpyHostToDevice, transfer->stream);
+        return;
     }
-
-    // Fallback: async memcpy from pinned RAM to VRAM.
-    // This is the active path for all current configurations.
-    cudaMemcpyAsync(transfer->dst_vram, transfer->src_pinned, bytes,
-                    cudaMemcpyHostToDevice, transfer->stream);
+    // TODO: launch ggml_tma_kv_transfer_kernel when TMA verified on live hardware
 }
 
 void ggml_tma_free_transfer(ggml_tma_transfer_t transfer) {
