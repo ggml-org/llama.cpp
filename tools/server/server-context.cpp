@@ -822,6 +822,8 @@ private:
                 auto cparams_dft = common_context_params_to_llama(params_dft);
                 if (spec_mtp) {
                     cparams_dft.ctx_type = LLAMA_CONTEXT_TYPE_MTP;
+                    cparams_dft.type_k   = params_base.speculative.draft.cache_type_k;
+                    cparams_dft.type_v   = params_base.speculative.draft.cache_type_v;
                 }
                 cparams_dft.n_rs_seq = 0;
 
@@ -940,6 +942,8 @@ private:
 
             auto cparams_mtp = common_context_params_to_llama(params_base);
             cparams_mtp.ctx_type = LLAMA_CONTEXT_TYPE_MTP;
+            cparams_mtp.type_k   = params_base.speculative.draft.cache_type_k;
+            cparams_mtp.type_v   = params_base.speculative.draft.cache_type_v;
             cparams_mtp.n_rs_seq = 0;
 
             ctx_dft.reset(llama_init_from_model(model_tgt, cparams_mtp));
