@@ -82,31 +82,31 @@ set(KERNELS
 
 set(UBERKERNEL_SUPPORTED_KERNELS
     el_map_f32       # gemma4
-    # unary_f32        # gemma4: tanh (logit softcapping)
+    unary_f32        # gemma4: tanh (logit softcapping)
 
     # cpy_f32_f16
     get_rows_f32     # gemma4: embeddings + MoE weights
     # cont_f32
 
     concat_f32
-    # cont_f16         # gemma4: MoE cont
+    cont_f16         # gemma4: MoE cont
     cumsum_f32
     diag_f32
-    # fill_f32         # gemma4: MoE fill
-    # flash_attn_ext_f16_me  # gemma4
-    # flash_attn_ext_f32     # gemma4
+    fill_f32         # gemma4: MoE fill
+    flash_attn_ext_f16_me  # gemma4
+    flash_attn_ext_f32     # gemma4
     gated_delta_net_f32
     glu_f32          # gemma4: geglu
     group_norm_f32
     im2col
     l2_norm_f32
-    # mul_mat_f16              # gemma4
-    # mul_mat_f16_matrix_engine  # gemma4
-    # mul_mat_f32              # gemma4
-    # mul_mat_f32_matrix_engine  # gemma4
-    # mul_mat_id_f32           # gemma4
-    # mul_mat_Q4_0             # gemma4
-    # mul_mat_Q8_0             # gemma4
+    mul_mat_f16              # gemma4
+    mul_mat_f16_matrix_engine  # gemma4
+    mul_mat_f32              # gemma4
+    mul_mat_f32_matrix_engine  # gemma4
+    mul_mat_id_f32           # gemma4
+    mul_mat_Q4_0             # gemma4
+    mul_mat_Q8_0             # gemma4
     norm_f32
     pad_f32
     repeat_f32
@@ -123,7 +123,7 @@ set(UBERKERNEL_SUPPORTED_KERNELS
     sqr_f32
     ssm_conv_f32
     ssm_scan_f32
-    # sum_rows_f32      # gemma4: MoE weight normalization
+    sum_rows_f32      # gemma4: MoE weight normalization
     tri_f32
 )
 
