@@ -140,10 +140,6 @@ jobs:
             os: ubuntu-22.04
           - build: 'arm64'
             os: ubuntu-24.04-arm
-          - build: 's390x'
-            os: ubuntu-24.04-s390x
-          - build: 'ppc64le'
-            os: ubuntu-24.04-ppc64le
 
     runs-on: ${{ matrix.os }}
 
@@ -153,7 +149,6 @@ jobs:
         uses: actions/checkout@v6
 
       - name: ccache
-        if: ${{ matrix.build != 's390x' && matrix.build != 'ppc64le' }}
         uses: ggml-org/ccache-action@v1.2.21
         with:
           key: ubuntu-cpu-${{ matrix.build }}
@@ -183,14 +178,6 @@ jobs:
           python3 -m pip install --upgrade pip setuptools
           pip3 install ./gguf-py
 
-      - name: Swap Endianness
-        id: endianness
-        if: ${{ matrix.build == 's390x' }}
-        run: |
-          for f in models/*.gguf; do
-            echo YES | python3 gguf-py/gguf/scripts/gguf_convert_endian.py $f big
-          done
-
       - name: Build
         id: cmake_build
         run: |
@@ -207,7 +194,6 @@ jobs:
 
       - name: Test llama2c conversion
         id: llama2c_test
-        if: ${{ matrix.build != 's390x' }}
         run: |
           cd build
           echo "Fetch tokenizer"
@@ -216,15 +202,6 @@ jobs:
           wget https://huggingface.co/karpathy/tinyllamas/resolve/main/stories260K/stories260K.bin
           ./bin/llama-convert-llama2c-to-ggml --copy-vocab-from-model ./tok512.bin --llama2c-model stories260K.bin --llama2c-output-model stories260K.gguf
           ./bin/llama-completion -m stories260K.gguf -p "One day, Lily met a Shoggoth" -n 500 -c 256
-
-      - name: Test llama2c (s390x)
-        id: llama2c_test_s390x
-        if: ${{ matrix.build == 's390x' }}
-        run: |
-          cd build
-          echo "Fetch llama2c big-endian model"
-          wget https://huggingface.co/ggml-org/models/resolve/main/tinyllamas/stories260K-be.gguf
-          ./bin/llama-completion -m stories260K-be.gguf -p "One day, Lily met a Shoggoth" -n 500 -c 256
 
   ubuntu-24-vulkan:
     strategy:
