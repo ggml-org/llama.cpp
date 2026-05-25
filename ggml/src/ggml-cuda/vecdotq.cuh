@@ -1175,7 +1175,7 @@ static __device__ __forceinline__ float vec_dot_q4_K_q8_1_x4(
 #pragma unroll
     // Loop through Q4 blocks (typically 2).
     for (int i = 0; i < QR4_K; ++i) {
-    
+
         //subblock index inside the Q4_K block.
         const int subblock = subblock0 + i;
 
