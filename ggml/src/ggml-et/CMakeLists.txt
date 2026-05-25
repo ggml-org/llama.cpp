@@ -104,7 +104,7 @@ set(UBERKERNEL_SUPPORTED_KERNELS
     mul_mat_f16_matrix_engine  # gemma4
     mul_mat_f32              # gemma4
     mul_mat_f32_matrix_engine  # gemma4
-    # mul_mat_id_f32           # gemma4
+    mul_mat_id_f32           # gemma4
     mul_mat_Q4_0             # gemma4
     mul_mat_Q8_0             # gemma4
     norm_f32
