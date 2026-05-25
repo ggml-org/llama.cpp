@@ -121,6 +121,21 @@ public:
     const int64_t n_embd = 0;
 };
 
+class llm_graph_input_mtp : public llm_graph_input_i {
+public:
+    llm_graph_input_mtp(int64_t n_embd) : n_embd(n_embd) {}
+    virtual ~llm_graph_input_mtp() = default;
+
+    void set_input(const llama_ubatch * ubatch) override;
+
+    bool can_reuse(const llm_graph_params & params) override;
+
+    ggml_tensor * tokens = nullptr; // I32 [n_batch]
+    ggml_tensor * h      = nullptr; // F32 [n_embd, n_batch]
+
+    const int64_t n_embd = 0;
+};
+
 class llm_graph_input_pos : public llm_graph_input_i {
 public:
     llm_graph_input_pos(uint32_t n_pos_per_embd) : n_pos_per_embd(n_pos_per_embd) {}

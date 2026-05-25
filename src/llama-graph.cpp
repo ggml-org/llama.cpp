@@ -102,6 +102,36 @@ bool llm_graph_input_embd::can_reuse(const llm_graph_params & params) {
     return res;
 }
 
+void llm_graph_input_mtp::set_input(const llama_ubatch * ubatch) {
+    const int64_t n_tokens = ubatch->n_tokens;
+
+    if (tokens) {
+        if (ubatch->token) {
+            ggml_backend_tensor_set(tokens, ubatch->token, 0, n_tokens*ggml_element_size(tokens));
+        } else {
+            // embd-only batch (e.g. image): no next-token ids exist, so feed a valid
+            // placeholder to keep the e-branch get_rows in bounds
+            std::vector<int32_t> placeholder(n_tokens, 0);
+            ggml_backend_tensor_set(tokens, placeholder.data(), 0, n_tokens*ggml_element_size(tokens));
+        }
+    }
+
+    if (h && ubatch->embd) {
+        GGML_ASSERT(n_embd == h->ne[0]);
+
+        ggml_backend_tensor_set(h, ubatch->embd, 0, n_tokens*n_embd*ggml_element_size(h));
+    }
+}
+
+bool llm_graph_input_mtp::can_reuse(const llm_graph_params & params) {
+    bool res = true;
+
+    res &= tokens && tokens->ne[0] == params.ubatch.n_tokens;
+    res &= h      && h->ne[1]      == params.ubatch.n_tokens;
+
+    return res;
+}
+
 void llm_graph_input_pos::set_input(const llama_ubatch * ubatch) {
     if (ubatch->pos && pos) {
         const int64_t n_tokens = ubatch->n_tokens;
