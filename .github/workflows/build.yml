@@ -267,56 +267,6 @@ jobs:
           wget https://huggingface.co/ggml-org/models/resolve/main/tinyllamas/stories260K-be.gguf
           ./bin/llama-completion -m stories260K-be.gguf -p "One day, Lily met a Shoggoth" -n 500 -c 256
 
-  android-arm64:
-    runs-on: ubuntu-latest
-
-    env:
-      NDK_VERSION: "29.0.14206865"
-
-    steps:
-      - name: Clone
-        id: checkout
-        uses: actions/checkout@v6
-
-      - name: ccache
-        uses: ggml-org/ccache-action@v1.2.21
-        with:
-          key: android-arm64
-          evict-old-files: 1d
-          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
-
-      - name: Set up JDK
-        uses: actions/setup-java@v5
-        with:
-          java-version: 17
-          distribution: temurin
-
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4.0.1
-        with:
-          log-accepted-android-sdk-licenses: false
-
-      - name: Install NDK
-        run: |
-          sdkmanager "ndk;${{ env.NDK_VERSION }}"
-          echo "ANDROID_NDK=${ANDROID_SDK_ROOT}/ndk/${{ env.NDK_VERSION }}" >> $GITHUB_ENV
-
-      - name: Build
-        id: cmake_build
-        run: |
-          cmake -B build \
-            -DCMAKE_TOOLCHAIN_FILE=${ANDROID_NDK}/build/cmake/android.toolchain.cmake \
-            -DANDROID_ABI=arm64-v8a \
-            -DANDROID_PLATFORM=android-28 \
-            -DLLAMA_FATAL_WARNINGS=ON \
-            -DGGML_BACKEND_DL=ON \
-            -DGGML_NATIVE=OFF \
-            -DGGML_CPU_ALL_VARIANTS=ON \
-            -DGGML_OPENMP=OFF \
-            -DLLAMA_BUILD_BORINGSSL=ON \
-            -DGGML_RPC=ON
-          time cmake --build build --config Release -j $(nproc)
-
   ubuntu-latest-rpc:
     runs-on: ubuntu-latest
 
@@ -494,38 +444,6 @@ jobs:
             -DEMDAWNWEBGPU_DIR=emdawnwebgpu_pkg
 
           time cmake --build build-wasm --config Release --target test-backend-ops -j $(nproc)
-
-  ubuntu-22-hip:
-    runs-on: ubuntu-22.04
-    container: rocm/dev-ubuntu-22.04:6.1.2
-
-    steps:
-      - name: Clone
-        id: checkout
-        uses: actions/checkout@v6
-
-      - name: Dependencies
-        id: depends
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential git cmake rocblas-dev hipblas-dev libssl-dev rocwmma-dev
-
-      - name: ccache
-        uses: ggml-org/ccache-action@v1.2.21
-        with:
-          key: ubuntu-22-hip
-          evict-old-files: 1d
-          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
-
-      - name: Build with native CMake HIP support
-        id: cmake_build
-        run: |
-          cmake -B build -S . \
-            -DCMAKE_HIP_COMPILER="$(hipconfig -l)/clang" \
-            -DGGML_HIP_ROCWMMA_FATTN=ON \
-            -DGPU_TARGETS="gfx1030" \
-            -DGGML_HIP=ON
-          cmake --build build --config Release -j $(nproc)
 
   ubuntu-22-musa:
     runs-on: ubuntu-22.04
@@ -764,74 +682,6 @@ jobs:
           cmake --build build --config Release -j %NINJA_JOBS% -t ggml
           cmake --build build --config Release
 
-
-  windows-latest-hip:
-    runs-on: windows-2022
-
-    env:
-      # Make sure this is in sync with build-cache.yml
-      HIPSDK_INSTALLER_VERSION: "26.Q1"
-
-    steps:
-      - name: Clone
-        id: checkout
-        uses: actions/checkout@v6
-
-      - name: Grab rocWMMA package
-        id: grab_rocwmma
-        run: |
-          curl -o rocwmma.deb "https://repo.radeon.com/rocm/apt/7.2.1/pool/main/r/rocwmma-dev/rocwmma-dev_2.2.0.70201-81~24.04_amd64.deb"
-          7z x rocwmma.deb
-          7z x data.tar
-
-      - name: Use ROCm Installation Cache
-        uses: actions/cache@v5
-        id: cache-rocm
-        with:
-          path: C:\Program Files\AMD\ROCm
-          key: rocm-${{ env.HIPSDK_INSTALLER_VERSION }}-${{ runner.os }}
-
-      - name: Setup ROCm
-        if: steps.cache-rocm.outputs.cache-hit != 'true'
-        uses: ./.github/actions/windows-setup-rocm
-        with:
-          version: ${{ env.HIPSDK_INSTALLER_VERSION }}
-
-      - name: Verify ROCm
-        id: verify
-        run: |
-          # Find and test ROCm installation
-          $clangPath = Get-ChildItem 'C:\Program Files\AMD\ROCm\*\bin\clang.exe' | Select-Object -First 1
-          if (-not $clangPath) {
-            Write-Error "ROCm installation not found"
-            exit 1
-          }
-          & $clangPath.FullName --version
-
-      - name: Install ccache
-        uses: ggml-org/ccache-action@v1.2.21
-        with:
-          key: ${{ github.job }}
-          evict-old-files: 1d
-          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
-
-      - name: Build
-        id: cmake_build
-        run: |
-          $env:HIP_PATH=$(Resolve-Path 'C:\Program Files\AMD\ROCm\*\bin\clang.exe' | split-path | split-path)
-          $env:CMAKE_PREFIX_PATH="${env:HIP_PATH}"
-          cmake -G "Unix Makefiles" -B build -S . `
-            -DCMAKE_C_COMPILER="${env:HIP_PATH}\bin\clang.exe" `
-            -DCMAKE_CXX_COMPILER="${env:HIP_PATH}\bin\clang++.exe" `
-            -DCMAKE_CXX_FLAGS="-I$($PWD.Path.Replace('\', '/'))/opt/rocm-7.2.1/include/" `
-            -DCMAKE_BUILD_TYPE=Release `
-            -DLLAMA_BUILD_BORINGSSL=ON `
-            -DROCM_DIR="${env:HIP_PATH}" `
-            -DGGML_HIP=ON `
-            -DGGML_HIP_ROCWMMA_FATTN=ON `
-            -DGPU_TARGETS="gfx1100"  `
-            -DGGML_RPC=ON
-          cmake --build build -j ${env:NUMBER_OF_PROCESSORS}
 
   ubuntu-cpu-riscv64-native:
     runs-on: ubuntu-24.04-riscv
