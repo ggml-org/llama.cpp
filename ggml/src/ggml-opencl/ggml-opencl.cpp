@@ -534,7 +534,8 @@ struct ggml_backend_opencl_context {
     cl_kernel kernel_tri;
     cl_kernel kernel_fill;
     cl_kernel kernel_clamp;
-    cl_kernel kernel_geglu, kernel_reglu, kernel_swiglu, kernel_swiglu_oai, kernel_geglu_erf, kernel_geglu_quick, kernel_geglu_f16, kernel_reglu_f16, kernel_swiglu_f16, kernel_geglu_erf_f16, kernel_geglu_quick_f16;
+    cl_kernel kernel_geglu, kernel_reglu, kernel_swiglu, kernel_swiglu_oai, kernel_geglu_erf, kernel_geglu_quick,
+              kernel_geglu_f16, kernel_reglu_f16, kernel_swiglu_f16, kernel_geglu_erf_f16, kernel_geglu_quick_f16;
     cl_kernel kernel_norm, kernel_norm_mul_add;
     cl_kernel kernel_rms_norm, kernel_rms_norm_mul;
     cl_kernel kernel_l2_norm_f32;
@@ -977,8 +978,8 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx) {
     auto opencl_c_std =
         std::string("CL") + std::to_string(backend_ctx->opencl_c_version.major) + "." + std::to_string(backend_ctx->opencl_c_version.minor);
     std::string compile_opts = std::string("-cl-std=") + opencl_c_std +
-                                " -cl-mad-enable -cl-unsafe-math-optimizations"
-                                " -cl-finite-math-only -cl-fast-relaxed-math";
+                               " -cl-mad-enable -cl-unsafe-math-optimizations"
+                               " -cl-finite-math-only -cl-fast-relaxed-math";
 
     if (backend_ctx->adreno_use_large_buffer) {
         compile_opts += " -qcom-enable-large-buffer ";
@@ -2130,7 +2131,7 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx) {
         const std::string kernel_src = read_file("div.cl");
 #endif
         std::string compile_opts = std::string("-cl-std=") + opencl_c_std +
-                                " -cl-mad-enable -cl-finite-math-only ";
+                               " -cl-mad-enable -cl-finite-math-only ";
 
         backend_ctx->program_div =
             build_program_from_source(backend_ctx->context, backend_ctx->device, kernel_src.c_str(), compile_opts);
@@ -2768,9 +2769,9 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx) {
     // gemv_noshuffle_general
     {
         std::string CL_gemv_compile_opts = std::string("-cl-std=") + opencl_c_std +
-                                        " -cl-mad-enable "
-                                        " -DSIMDGROUP_WIDTH=" +
-                                        std::to_string(backend_ctx->adreno_wave_size);
+                                       " -cl-mad-enable "
+                                       " -DSIMDGROUP_WIDTH=" +
+                                       std::to_string(backend_ctx->adreno_wave_size);
         if (backend_ctx->has_vector_subgroup_broadcast) {
             CL_gemv_compile_opts += " -DVECTOR_SUB_GROUP_BROADCAST ";
         }
@@ -2904,7 +2905,7 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx) {
     // gemv_noshuffle_q4_1_f32
     {
         std::string CL_gemv_compile_opts = std::string("-cl-std=") + opencl_c_std +
-                                        " -cl-mad-enable ";
+                                       " -cl-mad-enable ";
         if (backend_ctx->has_vector_subgroup_broadcast) {
             CL_gemv_compile_opts += " -DVECTOR_SUB_GROUP_BROADCAT ";
         }
@@ -2943,7 +2944,7 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx) {
     // gemv_noshuffle_iq4_nl_f32
     {
         std::string CL_gemv_compile_opts = std::string("-cl-std=") + opencl_c_std +
-                                        " -cl-mad-enable ";
+                                       " -cl-mad-enable ";
         if (backend_ctx->has_vector_subgroup_broadcast) {
             CL_gemv_compile_opts += " -DVECTOR_SUB_GROUP_BROADCAST ";
         }
@@ -2982,9 +2983,9 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx) {
     // gemv_noshuffle_general_q8_0_f32
     {
         std::string CL_gemv_compile_opts = std::string("-cl-std=") + opencl_c_std +
-                                        " -cl-mad-enable "
-                                        " -DSIMDGROUP_WIDTH=" +
-                                        std::to_string(backend_ctx->adreno_wave_size);
+                                       " -cl-mad-enable "
+                                       " -DSIMDGROUP_WIDTH=" +
+                                       std::to_string(backend_ctx->adreno_wave_size);
         if (backend_ctx->has_vector_subgroup_broadcast) {
             CL_gemv_compile_opts += " -DVECTOR_SUB_GROUP_BROADCAT ";
         }
@@ -3023,7 +3024,7 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx) {
     // gemv_noshuffle_q4_k_f32
     {
         std::string CL_gemv_compile_opts = std::string("-cl-std=") + opencl_c_std +
-                                        " -cl-mad-enable ";
+                                       " -cl-mad-enable ";
         if (backend_ctx->has_vector_subgroup_broadcast) {
             CL_gemv_compile_opts += " -DVECTOR_SUB_GROUP_BROADCAST ";
         }
@@ -3398,7 +3399,7 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx) {
 #endif
 
         std::string CL_gemv_compile_opts = std::string("-cl-std=") + opencl_c_std +
-                                        " -cl-mad-enable ";
+                                       " -cl-mad-enable ";
         if (backend_ctx->has_vector_subgroup_broadcast) {
             CL_gemv_compile_opts += " -DVECTOR_SUB_GROUP_BROADCAT ";
         }
@@ -3429,7 +3430,7 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx) {
     // gemv_noshuffle_q5_k_f32
     {
         std::string CL_gemv_compile_opts = std::string("-cl-std=") + opencl_c_std +
-                                        " -cl-mad-enable ";
+                                       " -cl-mad-enable ";
         if (backend_ctx->has_vector_subgroup_broadcast) {
             CL_gemv_compile_opts += " -DVECTOR_SUB_GROUP_BROADCAST ";
         }
@@ -3699,11 +3700,11 @@ static std::vector<ggml_backend_device> ggml_opencl_probe_devices(ggml_backend_r
     if (found_devices.size()) {
         auto * dev_ctx = static_cast<ggml_backend_opencl_device_context *>(found_devices.front().context);
         GGML_LOG_INFO("ggml_opencl: default device: '%s (%s)'\n", dev_ctx->device_name.c_str(),
-                        dev_ctx->device_version.c_str());
+                      dev_ctx->device_version.c_str());
 
         if (dev_ctx->device_type != CL_DEVICE_TYPE_GPU) {
             GGML_LOG_WARN("ggml_opencl: warning, the default device is not a GPU: '%s'.\n",
-                        dev_ctx->device_name.c_str());
+                          dev_ctx->device_name.c_str());
         }
     }
 
@@ -3902,7 +3903,7 @@ static ggml_backend_opencl_context * ggml_cl_init(ggml_backend_dev_t dev) {
         backend_ctx->non_uniform_workgroups = false;
 #if CL_TARGET_OPENCL_VERSION >= 300
         CL_CHECK(clGetDeviceInfo(device, CL_DEVICE_NON_UNIFORM_WORK_GROUP_SUPPORT, sizeof(cl_bool),
-                                &backend_ctx->non_uniform_workgroups, 0));
+                                 &backend_ctx->non_uniform_workgroups, 0));
 #endif
     } else {
         GGML_ASSERT(opencl_c_version.major == 2);
@@ -3921,17 +3922,17 @@ static ggml_backend_opencl_context * ggml_cl_init(ggml_backend_dev_t dev) {
 
 #ifdef GGML_OPENCL_USE_ADRENO_KERNELS
     backend_ctx->adreno_xmem_gemm_enabled = getenv("GGML_OPENCL_ADRENO_XMEM_GEMM") != nullptr &&
-                                            backend_ctx->gpu_family == GPU_FAMILY::ADRENO;
+                                             backend_ctx->gpu_family == GPU_FAMILY::ADRENO;
     if (getenv("GGML_OPENCL_ADRENO_XMEM_GEMM") != nullptr) {
         GGML_LOG_INFO("ggml_opencl: Adreno xmem F16xF32 GEMM %s\n",
-                    backend_ctx->adreno_xmem_gemm_enabled ?
-                    "enabled (temporary weight prepack)" : "requested but unsupported by this driver");
+                      backend_ctx->adreno_xmem_gemm_enabled ?
+                      "enabled (temporary weight prepack)" : "requested but unsupported by this driver");
     }
 #endif // GGML_OPENCL_USE_ADRENO_KERNELS
 
     // determine whether to use large buffer for Adreno
     backend_ctx->adreno_use_large_buffer = getenv("GGML_OPENCL_ADRENO_USE_LARGE_BUFFER") != nullptr &&
-                                            backend_ctx->gpu_family == GPU_FAMILY::ADRENO;
+                                           backend_ctx->gpu_family == GPU_FAMILY::ADRENO;
     if (backend_ctx->adreno_use_large_buffer) {
         if (!backend_ctx->adreno_has_large_buffer) {
             GGML_LOG_INFO("ggml_opencl: Adreno large buffer requested but not supported by driver, will use regular buffer\n");
@@ -3971,15 +3972,15 @@ static ggml_backend_opencl_context * ggml_cl_init(ggml_backend_dev_t dev) {
     size_t max_B_d_bytes   = MIN(required_B_d_bytes, backend_ctx->max_alloc_size);
     if (required_A_q_d_bytes > backend_ctx->max_alloc_size) {
         GGML_LOG_WARN("ggml_opencl: A_q_d buffer size reduced from %zu to %zu due to device limitations.\n",
-                    required_A_q_d_bytes, max_A_q_d_bytes);
+                      required_A_q_d_bytes, max_A_q_d_bytes);
     }
     if (required_A_s_d_bytes > backend_ctx->max_alloc_size) {
         GGML_LOG_WARN("ggml_opencl: A_s_d buffer size reduced from %zu to %zu due to device limitations.\n",
-                    required_A_s_d_bytes, max_A_s_d_bytes);
+                      required_A_s_d_bytes, max_A_s_d_bytes);
     }
     if (required_B_d_bytes > backend_ctx->max_alloc_size) {
         GGML_LOG_WARN("ggml_opencl: B_d buffer size reduced from %zu to %zu due to device limitations.\n",
-                    required_B_d_bytes, max_B_d_bytes);
+                      required_B_d_bytes, max_B_d_bytes);
     }
 
     backend_ctx->prealloc_quant_trans.allocate(context, max_A_q_d_bytes);
@@ -4776,7 +4777,7 @@ inline bool use_adreno_kernels(const ggml_backend_opencl_context *backend_ctx, c
     int64_t threshold_ne0 = 512;
     int64_t threshold_ne1 = 512;
     if (!backend_ctx->adreno_cl_compiler_version.newer_than_or_same(E031, 38, 11, 0) &&
-        backend_ctx->adreno_cl_compiler_version.type != DX) {
+         backend_ctx->adreno_cl_compiler_version.type != DX) {
         threshold_ne0 = 128;
         threshold_ne1 = 128;
     }
@@ -4891,8 +4892,8 @@ static bool ggml_opencl_supports_op(ggml_backend_dev_t dev, const struct ggml_te
         case GGML_OP_DIV:
         case GGML_OP_SUB:
             return (op->src[0]->type == op->src[1]->type) &&
-                    (op->src[0]->type == op->type) &&
-                    (op->src[0]->type == GGML_TYPE_F32 || op->src[0]->type == GGML_TYPE_F16);
+                   (op->src[0]->type == op->type) &&
+                   (op->src[0]->type == GGML_TYPE_F32 || op->src[0]->type == GGML_TYPE_F16);
         case GGML_OP_ADD_ID:
             return op->src[0]->type == GGML_TYPE_F32;
         case GGML_OP_SQR:
@@ -4957,12 +4958,12 @@ static bool ggml_opencl_supports_op(ggml_backend_dev_t dev, const struct ggml_te
             ggml_scale_mode mode = (ggml_scale_mode)(ggml_get_op_params_i32(op, 0) & 0xFF);
             const bool antialias = (ggml_scale_mode)(ggml_get_op_params_i32(op, 0) & GGML_SCALE_FLAG_ANTIALIAS);
             return op->src[0]->type == GGML_TYPE_F32 && op->type == GGML_TYPE_F32 &&
-                    (mode == GGML_SCALE_MODE_NEAREST || mode == GGML_SCALE_MODE_BILINEAR) && !antialias;
+                   (mode == GGML_SCALE_MODE_NEAREST || mode == GGML_SCALE_MODE_BILINEAR) && !antialias;
         }
         case GGML_OP_CONV_2D:
             return (op->src[0]->type == GGML_TYPE_F16 && op->src[1]->type == GGML_TYPE_F16 && op->type == GGML_TYPE_F16) ||
-                    (op->src[0]->type == GGML_TYPE_F32 && op->src[1]->type == GGML_TYPE_F32 && op->type == GGML_TYPE_F32) ||
-                    (op->src[0]->type == GGML_TYPE_F16 && op->src[1]->type == GGML_TYPE_F32 && op->type == GGML_TYPE_F32);
+                   (op->src[0]->type == GGML_TYPE_F32 && op->src[1]->type == GGML_TYPE_F32 && op->type == GGML_TYPE_F32) ||
+                   (op->src[0]->type == GGML_TYPE_F16 && op->src[1]->type == GGML_TYPE_F32 && op->type == GGML_TYPE_F32);
         case GGML_OP_SSM_CONV:
             return (op->src[0]->type == GGML_TYPE_F32 && op->src[1]->type == GGML_TYPE_F32 && op->type == GGML_TYPE_F32);
         case GGML_OP_GATED_DELTA_NET:
@@ -4986,11 +4987,11 @@ static bool ggml_opencl_supports_op(ggml_backend_dev_t dev, const struct ggml_te
             } else if (op->src[0]->type == GGML_TYPE_F32) {
                 return op->src[1]->type == GGML_TYPE_F32;
             } else if (op->src[0]->type == GGML_TYPE_Q4_0  || op->src[0]->type == GGML_TYPE_Q4_1 ||
-                        op->src[0]->type == GGML_TYPE_MXFP4 ||
-                        op->src[0]->type == GGML_TYPE_IQ4_NL ||
-                        op->src[0]->type == GGML_TYPE_Q4_K  ||
-                        op->src[0]->type == GGML_TYPE_Q5_K  ||
-                        op->src[0]->type == GGML_TYPE_Q6_K) {
+                       op->src[0]->type == GGML_TYPE_MXFP4 ||
+                       op->src[0]->type == GGML_TYPE_IQ4_NL ||
+                       op->src[0]->type == GGML_TYPE_Q4_K  ||
+                       op->src[0]->type == GGML_TYPE_Q5_K  ||
+                       op->src[0]->type == GGML_TYPE_Q6_K) {
                 return op->src[1]->type == GGML_TYPE_F32 && ggml_is_contiguous(op->src[0]) && ggml_is_contiguous(op->src[1]);
             } else if (op->src[0]->type == GGML_TYPE_Q8_0) {
                 return op->src[1]->type == GGML_TYPE_F32;
@@ -8083,14 +8084,14 @@ static bool ggml_cl_can_mul_mat(const struct ggml_tensor * src0, const struct gg
     // TODO: find the optimal values for these
     return (src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16 || ggml_is_quantized(src0->type)) &&
             src1->type == GGML_TYPE_F32 &&
-            dst->type == GGML_TYPE_F32 &&
+             dst->type == GGML_TYPE_F32 &&
             (ne0 >= 32 && ne1 >= 32 && ne10 >= 32);
 }
 
 // Copy a noncontiguous tensor to contiguous tensor. ne[] remains the same but
 // nb[] is recalculated such that tensor is contiguous.
 static void ggml_cl_copy_to_contiguous(ggml_backend_t backend, const ggml_tensor * src, cl_mem dst,
-                                        cl_ulong &nb0, cl_ulong &nb1, cl_ulong &nb2, cl_ulong &nb3) {
+                                       cl_ulong &nb0, cl_ulong &nb1, cl_ulong &nb2, cl_ulong &nb3) {
     ggml_backend_opencl_context *backend_ctx = (ggml_backend_opencl_context *)backend->context;
 
     const int tensor_type_size = ggml_type_size(src->type);
