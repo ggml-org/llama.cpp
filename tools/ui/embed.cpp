@@ -9,10 +9,19 @@
 #include <fstream>
 #include <string>
 #include <vector>
+#include <cstdint>
 
-// Header-only mode: XXH_INLINE_ALL makes all functions inline
-#define XXH_INLINE_ALL
-#include "xxhash.h"
+// Computes FNV-1a hash of the data
+static uint64_t fnv_hash(const uint8_t * data, size_t len) {
+    const uint64_t fnv_prime = 0x100000001b3ULL;
+    uint64_t hash = 0xcbf29ce484222325ULL;
+
+    for (size_t i = 0; i < len; ++i) {
+        hash ^= data[i];
+        hash *= fnv_prime;
+    }
+    return hash;
+}
 
 static bool read_file(const std::string & path, std::vector<unsigned char> & out) {
     std::ifstream f(path, std::ios::binary | std::ios::ate);
@@ -109,15 +118,14 @@ int main(int argc, char ** argv) {
     if (n_assets > 0) {
         for (int i = 0; i < n_assets; i++) {
             const char * path = argv[3 + i * 2 + 1];
-
             std::vector<unsigned char> bytes;
             if (!read_file(path, bytes)) {
                 return 1;
             }
-            const auto hash = XXH64(bytes.data(), bytes.size(), 0);
-
             cpp += fmt("static const unsigned char asset_%d_data[] = {", i);
             append_bytes_hex(cpp, bytes);
+            const auto hash = fnv_hash(bytes.data(), bytes.size());
+
             cpp += fmt("};\nstatic const size_t        asset_%d_size = %lu;\n",
                        i, static_cast<unsigned long>(bytes.size()));
             cpp += fmt("static const char        asset_%d_etag[] = \"\\\"0x%016lx\\\"\";\n\n",
