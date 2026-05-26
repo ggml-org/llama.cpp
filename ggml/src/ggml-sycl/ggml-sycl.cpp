@@ -76,6 +76,7 @@ int g_ggml_sycl_use_async_mem_op_requested = 1;
 int g_ggml_sycl_enable_level_zero = 0;
 int g_ggml_sycl_enable_flash_attention = 1;
 
+
 static ggml_sycl_device_info ggml_sycl_init() {
     ggml_sycl_device_info info = {};
 
