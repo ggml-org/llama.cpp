@@ -807,18 +807,18 @@ std::vector<common_sampler_type> common_sampler_types_from_names(const std::vect
             return std::tolower(c);
         });
         // check canonical names
-        auto sampler = sampler_canonical_name_map.find(name);
+        auto sampler = sampler_canonical_name_map.find(name_lower);
         if (sampler != sampler_canonical_name_map.end()) {
             samplers.push_back(sampler->second);
             continue;
         }
         // check alternative names
-        sampler = sampler_alt_name_map.find(name);
+        sampler = sampler_alt_name_map.find(name_lower);
         if (sampler != sampler_alt_name_map.end()) {
             samplers.push_back(sampler->second);
             continue;
         }
-        LOG_WRN("%s: unable to match sampler by name '%s'\n", __func__, name.c_str());
+        LOG_WRN("%s: unable to match sampler by name '%s'\n", __func__, name_lower.c_str());
     }
 
     return samplers;
