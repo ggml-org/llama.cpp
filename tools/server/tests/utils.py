@@ -676,7 +676,3 @@ def download_file(url: str, output_file_path: str | None = None) -> str:
     else:
         print(f"File already exists at {output_file}")
     return output_file
-
-
-def is_slow_test_allowed():
-    return os.environ.get("SLOW_TESTS") == "1" or os.environ.get("SLOW_TESTS") == "ON"

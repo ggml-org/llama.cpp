@@ -57,7 +57,7 @@ def test_invalid_input_extra_req(input_extra):
     assert "error" in res.body
 
 
-@pytest.mark.skipif(not is_slow_test_allowed(), reason="skipping slow test")
+@pytest.mark.slow
 def test_with_qwen_model():
     global server
     server.model_file = None
