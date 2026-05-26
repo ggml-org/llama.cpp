@@ -264,6 +264,7 @@ static void ggml_check_sycl() try {
         g_ggml_sycl_disable_optimize = ggml_sycl_get_env("GGML_SYCL_DISABLE_OPT", 0);
         g_ggml_sycl_disable_graph = ggml_sycl_get_env("GGML_SYCL_DISABLE_GRAPH", 1);
         g_ggml_sycl_disable_dnn = ggml_sycl_get_env("GGML_SYCL_DISABLE_DNN", 0);
+        g_ggml_sycl_enable_vmm = ggml_sycl_get_env("GGML_SYCL_ENABLE_VMM", 1);
         g_ggml_sycl_prioritize_dmmv = ggml_sycl_get_env("GGML_SYCL_PRIORITIZE_DMMV", 0);
 
 #ifdef SYCL_FLASH_ATTN
