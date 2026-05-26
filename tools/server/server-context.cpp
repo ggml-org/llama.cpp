@@ -510,6 +510,7 @@ struct server_slot {
             res["n_prompt_tokens"]           = (int32_t) prompt.tokens.size();
             res["n_prompt_tokens_processed"] = n_prompt_tokens_processed;
             res["n_prompt_tokens_cache"]     = n_prompt_tokens_cache;
+            res["n_prompt_tokens_target"]    = ptask->n_tokens();
             res["params"] = ptask->params.to_json(only_metrics);
             res["next_token"] = {
                 {
