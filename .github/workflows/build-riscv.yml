@@ -58,6 +58,8 @@ jobs:
           ldd --version
           cmake --version
           rustc --version
+          env
+          echo "nproc=$(nproc)"
 
       - name: Clone
         id: checkout
