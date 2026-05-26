@@ -5337,6 +5337,7 @@ kernel void kernel_out_prod_f32_f32(
     threadgroup  char * shmem,
     uint3 tgpig[[threadgroup_position_in_grid]],
     uint3 tpitg[[thread_position_in_threadgroup]]) {
+    // should match the tile size used in ggml_metal_library_get_pipeline_out_prod
     #define BLOCK_SIZE 32
 
     const int64_t i3 = tgpig.z;
@@ -5416,6 +5417,7 @@ kernel void kernel_out_prod_q_f32(
     threadgroup  char * shmem,
     uint3 tgpig[[threadgroup_position_in_grid]],
     uint3 tpitg[[thread_position_in_threadgroup]]) {
+    // should match the tile size used in ggml_metal_library_get_pipeline_out_prod
     #define BLOCK_SIZE 32
 
     const int64_t i3 = tgpig.z;
@@ -5452,7 +5454,7 @@ kernel void kernel_out_prod_q_f32(
 
     for (int64_t b = 0; b < args.ne01; ++b) {
         if (m_start + tpitg.x < args.ne0) {
-            if (tpitg.x < 2) {
+            if (tpitg.x < 2) { // extract 16 * 2 elements
                 float4x4 temp;
                 device const q_t * src0_row = (device const q_t *)(src0_base + b*args.nb01);
                 dequantize_func(src0_row, tpitg.x, temp);
