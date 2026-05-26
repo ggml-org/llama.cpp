@@ -39,6 +39,20 @@
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
 
+static bool ov_cache_enabled() {
+    static const bool enabled = []() {
+        const char * env = getenv("GGML_OPENVINO_ENABLE_CACHE");
+        fprintf(stderr, "GGML OpenVINO: GGML_OPENVINO_ENABLE_CACHE=%s\n", env ? env : "(not set)");
+        if (env && std::string(env) == "NO") {
+            fprintf(stderr, "GGML OpenVINO: decoder cache DISABLED\n");
+            return false;
+        }
+        fprintf(stderr, "GGML OpenVINO: decoder cache ENABLED\n");
+        return true;
+    }();
+    return enabled;
+}
+
 enum ggml_status ov_graph_compute(ggml_cgraph * cgraph, ggml_backend_t backend) {
     ggml_backend_openvino_context * ctx = (ggml_backend_openvino_context *) backend->context;
     try {
@@ -185,7 +199,8 @@ enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, std::shared_ptr<
     std::tie(m_params, c_params) = GgmlOvDecoder::compute_llm_params(cgraph, is_static);
 
     graph_key key(cgraph);
-    bool cache_hit;
+    const bool cache_enabled = ov_cache_enabled();
+    bool cache_hit = false;
 
     int64_t decoder_end_time;
     int64_t conversion_end_time;
@@ -196,7 +211,7 @@ enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, std::shared_ptr<
         std::shared_ptr<decoder_runtime_ctx> entry;
         ModelParams old_m_params;
 
-        {
+        if (cache_enabled) {
             std::lock_guard<std::mutex> map_lock(r_ctx->ctx_mutex);
             auto it = r_ctx->decoder_cache.find(key);
             cache_hit = it != r_ctx->decoder_cache.end();
@@ -207,6 +222,10 @@ enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, std::shared_ptr<
                 entry = std::make_shared<decoder_runtime_ctx>(mutex);
                 r_ctx->decoder_cache[key] = entry;
             }
+        } else {
+            auto mutex = std::make_shared<std::mutex>();
+            entry = std::make_shared<decoder_runtime_ctx>(mutex);
+            cache_hit = false;
         }
 
         std::lock_guard<std::mutex> lock(*(entry->mutex));
@@ -219,6 +238,9 @@ enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, std::shared_ptr<
             }
         }
 
+        std::vector<std::string> ov_input_names;
+        std::vector<std::string> ov_output_names;
+
         if (cache_hit) {
             std::map<std::string, std::shared_ptr<ov::Node>> model_weights;
             ggml_decoder->set_compute_params(c_params);
@@ -230,6 +252,8 @@ enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, std::shared_ptr<
             {
                 std::lock_guard<std::mutex> map_lock(r_ctx->ctx_mutex);
                 infer_request = r_ctx->infer_request_cache.at(key);
+                ov_input_names = r_ctx->ov_input_names_cache.at(key);
+                ov_output_names = r_ctx->ov_output_names_cache.at(key);
             }
 
             if (stateful) {
@@ -274,7 +298,7 @@ enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, std::shared_ptr<
             conversion_end_time = decoder_end_time;
             compile_end_time = decoder_end_time;
         } else {
-            {
+            if (cache_enabled) {
                 std::lock_guard<std::mutex> map_lock(r_ctx->ctx_mutex);
                 r_ctx->infer_request_cache.erase(key);
             }
@@ -309,8 +333,6 @@ enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, std::shared_ptr<
             infer_request = std::make_shared<ov::InferRequest>(compiled_model.create_infer_request());
             entry->ptr = ggml_decoder;
 
-            std::vector<std::string> ov_input_names;
-            std::vector<std::string> ov_output_names;
             for (const auto & ov_param : model->get_parameters()) {
                 ov_input_names.push_back(ov_param->get_friendly_name());
             }
@@ -318,14 +340,14 @@ enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, std::shared_ptr<
                 ov_output_names.push_back(ov_output->get_friendly_name());
             }
 
-            {
+            if (cache_enabled) {
                 std::lock_guard<std::mutex> map_lock(r_ctx->ctx_mutex);
                 r_ctx->infer_request_cache[key] = infer_request;
-                r_ctx->ov_input_names_cache[key] = std::move(ov_input_names);
-                r_ctx->ov_output_names_cache[key] = std::move(ov_output_names);
+                r_ctx->ov_input_names_cache[key] = ov_input_names;
+                r_ctx->ov_output_names_cache[key] = ov_output_names;
             }
 
-            if (stateful) {
+            if (stateful && cache_enabled) {
                 const auto * inp_pos = get_inp_pos_tensor(cgraph);
                 auto pos_shape = ggml_decoder->get_shape(inp_pos);
                 r_ctx->stateful_kv_size = pos_shape[3];
@@ -334,14 +356,6 @@ enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, std::shared_ptr<
                     r_ctx->kv_state_input_name_map[pair.first+pair.second] = pair.first;
                 }
             }
-        }
-
-        std::vector<std::string> ov_input_names;
-        std::vector<std::string> ov_output_names;
-        {
-            std::lock_guard<std::mutex> map_lock(r_ctx->ctx_mutex);
-            ov_input_names = r_ctx->ov_input_names_cache[key];
-            ov_output_names = r_ctx->ov_output_names_cache[key];
         }
 
         for (size_t i = 0; i < ov_input_names.size(); i++) {
@@ -425,7 +439,8 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph, std::shared_ptr<o
     const auto * inp_pos = get_inp_pos_tensor(cgraph);
     const auto is_prefill = get_is_prefill(inp_pos);
     graph_key key(cgraph);
-    bool cache_hit;
+    const bool cache_enabled = ov_cache_enabled();
+    bool cache_hit = false;
 
     int64_t decoder_end_time;
     int64_t conversion_end_time;
@@ -435,7 +450,7 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph, std::shared_ptr<o
     std::shared_ptr<decoder_runtime_ctx> entry;
     ModelParams old_m_params;
 
-    {
+    if (cache_enabled) {
         std::lock_guard<std::mutex> map_lock(r_ctx->ctx_mutex);
         auto it = r_ctx->decoder_cache.find(key);
         cache_hit = it != r_ctx->decoder_cache.end();
@@ -446,6 +461,10 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph, std::shared_ptr<o
             entry = std::make_shared<decoder_runtime_ctx>(mutex);
             r_ctx->decoder_cache[key] = entry;
         }
+    } else {
+        auto mutex = std::make_shared<std::mutex>();
+        entry = std::make_shared<decoder_runtime_ctx>(mutex);
+        cache_hit = false;
     }
 
     std::lock_guard<std::mutex> lock(*(entry->mutex));
@@ -455,6 +474,9 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph, std::shared_ptr<o
         old_m_params = ggml_decoder->get_model_params();
         cache_hit = old_m_params.can_reuse_statically(m_params);
     }
+
+    std::vector<std::string> ov_input_names_local;
+    std::vector<std::string> ov_output_names_local;
 
     if (cache_hit) {
         std::map<std::string, std::shared_ptr<ov::Node>> model_weights;
@@ -469,13 +491,15 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph, std::shared_ptr<o
             std::lock_guard<std::mutex> map_lock(r_ctx->ctx_mutex);
             infer_request =
                 is_prefill ? r_ctx->infer_request_cache_prefill.at(key) : r_ctx->infer_request_cache.at(key);
+            ov_input_names_local = r_ctx->ov_input_names_cache.at(key);
+            ov_output_names_local = r_ctx->ov_output_names_cache.at(key);
         }
 
         decoder_end_time = ggml_time_us();
         conversion_end_time = decoder_end_time;
         compile_end_time = decoder_end_time;
     } else {
-        {
+        if (cache_enabled) {
             std::lock_guard<std::mutex> map_lock(r_ctx->ctx_mutex);
             r_ctx->infer_request_cache.erase(key);
             r_ctx->infer_request_cache_prefill.erase(key);
@@ -532,30 +556,20 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph, std::shared_ptr<o
         infer_request = is_prefill ? infer_request_prefill : infer_request_decode;
         entry->ptr = ggml_decoder;
 
-        std::vector<std::string> ov_input_names;
-        std::vector<std::string> ov_output_names;
         for (const auto & ov_param : model->get_parameters()) {
-            ov_input_names.push_back(ov_param->get_friendly_name());
+            ov_input_names_local.push_back(ov_param->get_friendly_name());
         }
         for (const auto & ov_output : model->get_results()) {
-            ov_output_names.push_back(ov_output->get_friendly_name());
+            ov_output_names_local.push_back(ov_output->get_friendly_name());
         }
 
-        {
+        if (cache_enabled) {
             std::lock_guard<std::mutex> map_lock(r_ctx->ctx_mutex);
             r_ctx->infer_request_cache_prefill[key] = infer_request_prefill;
             r_ctx->infer_request_cache[key] = infer_request_decode;
-            r_ctx->ov_input_names_cache[key] = std::move(ov_input_names);
-            r_ctx->ov_output_names_cache[key] = std::move(ov_output_names);
+            r_ctx->ov_input_names_cache[key] = ov_input_names_local;
+            r_ctx->ov_output_names_cache[key] = ov_output_names_local;
         }
-    }
-
-    std::vector<std::string> ov_input_names_local;
-    std::vector<std::string> ov_output_names_local;
-    {
-        std::lock_guard<std::mutex> map_lock(r_ctx->ctx_mutex);
-        ov_input_names_local = r_ctx->ov_input_names_cache[key];
-        ov_output_names_local = r_ctx->ov_output_names_cache[key];
     }
 
     if (is_prefill) {
