@@ -133,7 +133,7 @@ jobs:
         run: |
           cd tools/server/tests
           export ${{ matrix.extra_args }}
-          SLOW_TESTS=1 pytest -v -x
+          pytest -v -x
 
   server-windows:
     runs-on: windows-2022
@@ -177,5 +177,4 @@ jobs:
         if: ${{ (github.event.schedule || github.event.inputs.slow_tests == 'true') && matrix.build_type == 'Release' }}
         run: |
           cd tools/server/tests
-          $env:SLOW_TESTS = "1"
           pytest -v -x

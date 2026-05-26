@@ -66,7 +66,7 @@ def test_lora_per_request():
         assert match_regex(re_test, res.body["content"])
 
 
-@pytest.mark.skipif(not is_slow_test_allowed(), reason="skipping slow test")
+@pytest.mark.slow
 def test_with_big_model():
     server = ServerProcess()
     server.model_hf_repo = "bartowski/Meta-Llama-3.1-8B-Instruct-GGUF"
