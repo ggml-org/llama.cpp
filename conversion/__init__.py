@@ -215,6 +215,7 @@ TEXT_MODEL_MAP: dict[str, str] = {
     "T5EncoderModel": "t5",
     "T5ForConditionalGeneration": "t5",
     "T5WithLMHeadModel": "t5",
+    "TalkieForCausalLM": "talkie",
     "UMT5ForConditionalGeneration": "t5",
     "UMT5Model": "t5",
     "UltravoxModel": "ultravox",
