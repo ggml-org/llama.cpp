@@ -63,12 +63,13 @@ jobs:
         id: checkout
         uses: actions/checkout@v6
 
-      - name: ccache
-        uses: ggml-org/ccache-action@afde29e5b5422e5da23cb1f639e8baecadeadfc3 # https://github.com/ggml-org/ccache-action/pull/1
-        with:
-          key: ubuntu-cpu-riscv64-native
-          evict-old-files: 1d
-          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+      # note: sparing some ccache since these jobs run on dedicated runners that are not part of the organitzation
+      #- name: ccache
+      #  uses: ggml-org/ccache-action@afde29e5b5422e5da23cb1f639e8baecadeadfc3 # https://github.com/ggml-org/ccache-action/pull/1
+      #  with:
+      #    key: ubuntu-cpu-riscv64-native
+      #    evict-old-files: 1d
+      #    save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
       - name: Build
         id: cmake_build
@@ -132,12 +133,13 @@ jobs:
         id: checkout
         uses: actions/checkout@v6
 
-      - name: ccache
-        uses: ggml-org/ccache-action@afde29e5b5422e5da23cb1f639e8baecadeadfc3 # https://github.com/ggml-org/ccache-action/pull/1
-        with:
-          key: ubuntu-riscv64-native-sanitizer-${{ matrix.sanitizer }}-${{ matrix.build_type }}
-          evict-old-files: 1d
-          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+      # note: sparing some ccache since these jobs run on dedicated runners that are not part of the organitzation
+      #- name: ccache
+      #  uses: ggml-org/ccache-action@afde29e5b5422e5da23cb1f639e8baecadeadfc3 # https://github.com/ggml-org/ccache-action/pull/1
+      #  with:
+      #    key: ubuntu-riscv64-native-sanitizer-${{ matrix.sanitizer }}-${{ matrix.build_type }}
+      #    evict-old-files: 1d
+      #    save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
       - name: Build
         id: cmake_build
