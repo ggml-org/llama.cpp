@@ -38,7 +38,7 @@ env:
 jobs:
 
   check_release:
-    runs-on: ubuntu-slim
+    runs-on: [self-hosted, fast]
 
     outputs:
       should_release: ${{ steps.check.outputs.should_release }}
