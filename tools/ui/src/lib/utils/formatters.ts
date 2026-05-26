@@ -5,8 +5,8 @@ import {
 	SHORT_DURATION_THRESHOLD,
 	MEDIUM_DURATION_THRESHOLD,
 	MAX_PREVIEW_LENGTH,
-	STRIP_BLOCK_MARKDOWN_PATTERNS,
-	STRIP_INLINE_MARKDOWN_PATTERNS,
+	STRIP_MARKDOWN_INLINE_REGEX,
+	STRIP_MARKDOWN_CAPTURE_PATTERNS,
 	NEWLINE_SEPARATOR
 } from '$lib/constants';
 
@@ -156,44 +156,32 @@ export function formatAttachmentText(
 	return `\n\n--- ${label}: ${header} ---\n${content}`;
 }
 
-/**
- * Strips markdown per line and returns the last non-empty cleaned line
- * as a compact preview, along with a count of characters that overflow
- * beyond MAX_PREVIEW_LENGTH.
- *
- * @param content - Raw reasoning content (may contain markdown/emoji)
- * @returns Object with `preview` string (truncated) and `overflow` count
- */
 export function formatReasoningPreview(content: string): { preview: string; overflow: number } {
 	if (!content) return { preview: '', overflow: 0 };
-	// 1. Strip Block-Level Markdown Globally (Fastest)
-	// This removes fenced code blocks, HTML, and bold from the entire stream at once
-	let cleanedContent = content;
-	for (const [pattern, replacement] of STRIP_BLOCK_MARKDOWN_PATTERNS) {
-		cleanedContent = cleanedContent.replace(pattern, replacement as string);
-	}
-	// 2. Split and iterate BACKWARDS to find the last non-empty line
-	const lines = cleanedContent.split(NEWLINE_SEPARATOR);
+	
+	const lines = content.split(NEWLINE_SEPARATOR);
 	let lastLine = '';
-	// Optimization: Start from the end. If the model outputs 1000 lines,
-	// but the answer is on line 990, we stop here instead of scanning all 1000.
+	
 	for (let i = lines.length - 1; i >= 0; i--) {
-		let line = lines[i];
-		// Apply Inline Patterns (Lists, Code, Quotes) only to this specific line
-		for (const [pattern, replacement] of STRIP_INLINE_MARKDOWN_PATTERNS) {
-			line = line.replace(pattern, replacement as string);
+		let cleaned = lines[i].trim();
+		if (!cleaned) continue;
+
+		cleaned = cleaned.replace(STRIP_MARKDOWN_INLINE_REGEX, '');
+		for (const [pattern, replacement] of STRIP_MARKDOWN_CAPTURE_PATTERNS) {
+			cleaned = cleaned.replace(pattern, replacement);
 		}
-		const trimmed = line.trim();
-		if (trimmed.length > 0) {
-			lastLine = trimmed;
-			break; // Found the most recent content, exit loop immediately
+		
+		if (cleaned.length > 0) {
+			lastLine = cleaned;
+			break;
 		}
 	}
-	if (!lastLine) return { preview: '', overflow: 0 };
+	
 	const fullLength = lastLine.length;
 	const overflow = Math.max(0, fullLength - MAX_PREVIEW_LENGTH);
 	if (fullLength > MAX_PREVIEW_LENGTH) {
 		lastLine = lastLine.slice(0, MAX_PREVIEW_LENGTH) + '...';
 	}
+	
 	return { preview: lastLine, overflow };
 }
