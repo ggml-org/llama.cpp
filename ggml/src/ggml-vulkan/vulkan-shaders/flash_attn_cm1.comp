@@ -58,11 +58,7 @@ const uint vsh_stride = v_cols;
 shared FLOAT_TYPEV4 kvsh[(kvsh_stride >= vsh_stride) ? (Bc * kvsh_stride) : (Bc * vsh_stride)];
 
 const uint32_t osh_stride = row_split * MatBr / 4;
-#if defined(BFLOAT16)
-shared vec4 pvsh[MatBc * osh_stride];
-#else
-shared FLOAT_TYPEV4 pvsh[MatBc * osh_stride];
-#endif
+shared O_TYPEV4 pvsh[MatBc * osh_stride];
 
 shared ACC_TYPE slope[Br];
 
@@ -107,7 +103,7 @@ void main() {
     O_TYPEV4 Of[rows_per_thread][d_per_thread];
     [[unroll]] for (uint32_t r = 0; r < rows_per_thread; ++r) {
         [[unroll]] for (uint32_t d = 0; d < d_per_thread; ++d) {
-            Of[r][d] = FLOAT_TYPEV4(0.0);
+            Of[r][d] = O_TYPEV4(0.0);
         }
     }
 
@@ -373,11 +369,7 @@ void main() {
         [[unroll]] for (uint32_t d0 = 0; d0 < HSV / 4; d0 += threads_per_rowgroup) {
             const uint d_local = d0 / threads_per_rowgroup;
             [[unroll]] for (uint32_t r = 0; r < rows_per_thread; ++r) {
-#if defined(BFLOAT16)
-                Of[r][d_local] *= eMf[r];
-#else
-                Of[r][d_local] = FLOAT_TYPE(eMf[r]) * Of[r][d_local];
-#endif
+                Of[r][d_local] = O_TYPE(eMf[r]) * Of[r][d_local];
             }
         }
 
@@ -432,11 +424,7 @@ void main() {
         [[unroll]] for (uint32_t hsv_tile = 0; hsv_tile < num_hsv_tiles; ++hsv_tile) {
             const uint hsv_offset = (hsv_tile * row_split + gl_SubgroupID) * 16;
 
-#if defined(BFLOAT16)
-            coopmat<float, gl_ScopeSubgroup, MatBc, MatBr, gl_MatrixUseAccumulator> PVMat = coopmat<float, gl_ScopeSubgroup, MatBc, MatBr, gl_MatrixUseAccumulator>(0);
-#else
-            coopmat<FLOAT_TYPE, gl_ScopeSubgroup, MatBc, MatBr, gl_MatrixUseAccumulator> PVMat = coopmat<FLOAT_TYPE, gl_ScopeSubgroup, MatBc, MatBr, gl_MatrixUseAccumulator>(0);
-#endif
+            coopmat<O_TYPE, gl_ScopeSubgroup, MatBc, MatBr, gl_MatrixUseAccumulator> PVMat = coopmat<O_TYPE, gl_ScopeSubgroup, MatBc, MatBr, gl_MatrixUseAccumulator>(0);
 
             // Preload V tiles for [Bc, 16 * num subgroups]
             const uint v_rows = Bc;
@@ -603,11 +591,7 @@ void main() {
 
                 [[unroll]] for (uint32_t d0 = 0; d0 < HSV / 4; d0 += threads_per_rowgroup) {
                     const uint d_local = d0 / threads_per_rowgroup;
-#if defined(BFLOAT16)
-                    Of[r][d_local] *= ms;
-#else
-                    Of[r][d_local] *= FLOAT_TYPE(ms);
-#endif
+                    Of[r][d_local] *= O_TYPE(ms);
                 }
             } else {
                 vs = exp(sink - Mf[r]);
@@ -625,13 +609,9 @@ void main() {
     [[unroll]] for (uint32_t d0 = 0; d0 < HSV / 4; d0 += threads_per_rowgroup) {
         const uint d_local = d0 / threads_per_rowgroup;
         [[unroll]] for (uint32_t r = 0; r < rows_per_thread; ++r) {
-#if defined(BFLOAT16)
-            Of[r][d_local] *= Lfrcp[r];
-#else
-            Of[r][d_local] *= FLOAT_TYPE(Lfrcp[r]);
+            Of[r][d_local] *= O_TYPE(Lfrcp[r]);
 #if defined(FLOAT_TYPE_MAX)
             Of[r][d_local] = clamp(Of[r][d_local], -FLOAT_TYPE_MAX, FLOAT_TYPE_MAX);
-#endif
 #endif
         }
     }
