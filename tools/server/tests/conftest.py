@@ -15,15 +15,12 @@ def stop_server_after_each_test():
         server.stop()
 
 
-@pytest.fixture(scope="module", autouse=True)
-def do_something():
-    # this will be run once per test session, before any tests
-    ServerPreset.load_all()
-
-
-@pytest.fixture
+@pytest.fixture(scope="session")
 def server_factory():
     """Factory: returns a fresh, configured (but not started) ServerProcess."""
+    # Pre-caches all preset models once per test session, before any tests using the fixture
+    ServerPreset.load_all()
+
     def _build(preset="tinyllama2", **overrides):
         s = getattr(ServerPreset, preset)()
         for k, v in overrides.items():
