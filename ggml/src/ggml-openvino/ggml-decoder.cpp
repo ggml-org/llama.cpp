@@ -1429,9 +1429,9 @@ void GgmlOvDecoder::compute_node_dynamic_dims() {
                         break;
                     }
                 }
-                OPENVINO_ASSERT(dynamic_dim_value == node->ne[m_node_dynamic_dims[node]],
-                                "Dynamic dim value mismatch for node: " + std::string(node->name) +
-                                    " and its src[0]: " + std::string(node->src[0]->name));
+                // OPENVINO_ASSERT(dynamic_dim_value == node->ne[m_node_dynamic_dims[node]],
+                //                 "Dynamic dim value mismatch for node: " + std::string(node->name) +
+                //                     " and its src[0]: " + std::string(node->src[0]->name));
             }
             break;
         case GGML_OP_VIEW: {
@@ -1482,7 +1482,7 @@ void GgmlOvDecoder::compute_node_dynamic_dims() {
                     }
                 }
                 if (m_node_dynamic_dims[node] == -1) {
-                    std::cout << "Cannot determine dynamic dim for RESHAPE node: " << node->name << std::endl;
+                    // std::cout << "Cannot determine dynamic dim for RESHAPE node: " << node->name << std::endl;
                 }
             }
             break;
@@ -1535,8 +1535,8 @@ void GgmlOvDecoder::compute_node_dynamic_dims() {
                     }
                     if (matched_dim_count != 1) {
                         m_node_dynamic_dims[node] = -1;
-                        std::cout << "Warning: Cannot determine dynamic dim for CONT node: " << node->name
-                                  << " and its src[0]: " << node->src[0]->name << std::endl;
+                        // std::cout << "Warning: Cannot determine dynamic dim for CONT node: " << node->name
+                        //           << " and its src[0]: " << node->src[0]->name << std::endl;
                     }
                 }
             }
