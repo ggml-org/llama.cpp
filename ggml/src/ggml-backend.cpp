@@ -1542,11 +1542,11 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
     GGML_ASSERT(sched);
     struct ggml_backend_sched_split * splits = sched->splits;
 
-    ggml_tensor * prev_ids_tensor = nullptr;
     std::vector<int32_t> ids;
     std::vector<ggml_bitset_t> used_ids;
 
     for (int split_id = 0; split_id < sched->n_splits; split_id++) {
+        ggml_tensor * prev_ids_tensor = nullptr;
         struct ggml_backend_sched_split * split = &splits[split_id];
         int split_backend_id = split->backend_id;
         ggml_backend_t split_backend = sched->backends[split_backend_id];
@@ -1639,6 +1639,7 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                     while (!ggml_bitset_get(used_ids.data(), id)) {
                         id++;
                     }
+                    if (id >= n_expert) { continue; }
                     int32_t first_id = id;
                     int32_t last_id = first_id;
 
@@ -1675,6 +1676,10 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
         }
 
         if (!sched->callback_eval) {
+            // Ensure async host-to-device expert copies complete before graph compute
+            if (!split_backend->iface.cpy_tensor_async) {
+                ggml_backend_synchronize(split_backend);
+            }
             enum ggml_status ec = ggml_backend_graph_compute_async(split_backend, &split->graph);
             if (ec != GGML_STATUS_SUCCESS) {
                 return ec;
@@ -1906,10 +1911,12 @@ void ggml_backend_sched_synchronize(ggml_backend_sched_t sched) {
     for (int i = 0; i < sched->n_backends; i++) {
         ggml_backend_synchronize(sched->backends[i]);
     }
-    if (!sched->is_alloc) {
+    if (!sched->is_alloc || sched->n_copies > 1) {
         // if the graph is not already allocated, always use copy 0 after a synchronization
         // this ensures that during generation the same copy is used every time,
         // which avoids changes in the graph that could cause CUDA or other graphs to be disabled
+        // additionally, when multiple copy slots exist (n_copies > 1), reset on every sync
+        // to prevent copy slot exhaustion and stale expert weight reuse during decode
         sched->next_copy = 0;
     }
 }
