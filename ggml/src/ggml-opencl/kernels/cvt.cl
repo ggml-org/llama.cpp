@@ -220,6 +220,10 @@ kernel void kernel_convert_block_q4_0_trans4_ns(
     uint i01 = get_global_id(0);
     uint i02 = get_global_id(2);
 
+    if (i01 >= ne01) {
+        return;
+    }
+
     uint ne00_blk = ne00 / QK4_0;
     uint src_blk_offset = i00 + i01 * ne00_blk + i02 * ne00_blk * ne01;
     uint dst_blk_offset = i01 + i00 * ne01 + i02 * ne00_blk * ne01;
@@ -262,6 +266,10 @@ kernel void kernel_restore_block_q4_0_trans4_ns(
     uint i00 = get_global_id(1);
     uint i01 = get_global_id(0);
     uint i02 = get_global_id(2);
+
+    if (i01 >= ne01) {
+        return;
+    }
 
     uint ne00_blk = ne00 / QK4_0;
     uint dst_blk_offset = i00 + i01 * ne00_blk + i02 * ne00_blk * ne01;
@@ -401,6 +409,10 @@ kernel void kernel_convert_block_q4_1_trans4_ns(
     uint i01 = get_global_id(0);
     uint i02 = get_global_id(2);
 
+    if (i01 >= ne01) {
+        return;
+    }
+
     uint ne00_blk = ne00 / QK4_1;
     uint src_blk_offset = i00 + i01 * ne00_blk + i02 * ne00_blk * ne01;
     uint dst_blk_offset = i01 + i00 * ne01 + i02 * ne00_blk * ne01;
@@ -445,6 +457,10 @@ kernel void kernel_restore_block_q4_1_trans4_ns(
     int i00 = get_global_id(1);
     uint i01 = get_global_id(0);
     uint i02 = get_global_id(2);
+
+    if (i01 >= ne01) {
+        return;
+    }
 
     uint ne00_blk = ne00 / QK4_1;
     uint dst_blk_offset = i00 + i01 * ne00_blk + i02 * ne00_blk * ne01;
@@ -491,6 +507,10 @@ kernel void kernel_convert_block_q5_0_trans4_ns(
     uint i01 = get_global_id(0);
     uint i02 = get_global_id(2);
 
+    if (i01 >= ne01) {
+        return;
+    }
+
     uint ne00_blk = ne00 / QK5_0;
     uint src_blk_offset = i00 + i01 * ne00_blk + i02 * ne00_blk * ne01;
     uint dst_blk_offset = i01 + i00 * ne01 + i02 * ne00_blk * ne01;
@@ -535,6 +555,10 @@ kernel void kernel_restore_block_q5_0_trans4_ns(
     int i00 = get_global_id(1);
     uint i01 = get_global_id(0);
     uint i02 = get_global_id(2);
+
+    if (i01 >= ne01) {
+        return;
+    }
 
     uint ne00_blk = ne00 / QK5_0;
     uint dst_blk_offset = i00 + i01 * ne00_blk + i02 * ne00_blk * ne01;
@@ -583,6 +607,10 @@ kernel void kernel_convert_block_q5_1_trans4_ns(
     uint i01 = get_global_id(0);
     uint i02 = get_global_id(2);
 
+    if (i01 >= ne01) {
+        return;
+    }
+
     uint ne00_blk = ne00 / QK5_1;
     uint src_blk_offset = i00 + i01 * ne00_blk + i02 * ne00_blk * ne01;
     uint dst_blk_offset = i01 + i00 * ne01 + i02 * ne00_blk * ne01;
@@ -629,6 +657,10 @@ kernel void kernel_restore_block_q5_1_trans4_ns(
     int i00 = get_global_id(1);
     uint i01 = get_global_id(0);
     uint i02 = get_global_id(2);
+
+    if (i01 >= ne01) {
+        return;
+    }
 
     uint ne00_blk = ne00 / QK5_1;
     uint dst_blk_offset = i00 + i01 * ne00_blk + i02 * ne00_blk * ne01;
@@ -678,6 +710,10 @@ kernel void kernel_convert_block_q4_k_trans4_ns(
     uint i00 = get_global_id(1);
     uint i01 = get_global_id(0);
     uint i02 = get_global_id(2);
+
+    if (i01 >= ne01) {
+        return;
+    }
 
     uint ne00_blk = ne00 / QK_K;
     uint src_blk_offset = i00 + i01 * ne00_blk + i02 * ne00_blk * ne01;
@@ -732,6 +768,10 @@ kernel void kernel_restore_block_q4_k_trans4_ns(
     uint i01 = get_global_id(0);  // row index
     uint i02 = get_global_id(2);  // batch index
 
+    if (i01 >= ne01) {
+        return;
+    }
+
     uint ne00_blk = ne00 / QK_K;
 
     uint src_blk_offset = i01 + i00 * ne01 + i02 * ne00_blk * ne01;
@@ -783,6 +823,10 @@ kernel void kernel_convert_block_q5_k_trans4_ns(
     uint i00 = get_global_id(1);
     uint i01 = get_global_id(0);
     uint i02 = get_global_id(2);
+
+    if (i01 >= ne01) {
+        return;
+    }
 
     uint ne00_blk = ne00 / QK_K;
     uint src_blk_offset = i00 + i01 * ne00_blk + i02 * ne00_blk * ne01;
@@ -850,6 +894,10 @@ kernel void kernel_restore_block_q5_k_trans4_ns(
     uint i01 = get_global_id(0);  // row index
     uint i02 = get_global_id(2);  // batch index
 
+    if (i01 >= ne01) {
+        return;
+    }
+
     uint ne00_blk = ne00 / QK_K;
 
     uint src_blk_offset = i01 + i00 * ne01 + i02 * ne00_blk * ne01;
@@ -915,6 +963,10 @@ kernel void kernel_convert_block_q6_k_trans4_ns(
     uint i00 = get_global_id(1);
     uint i01 = get_global_id(0);
     uint i02 = get_global_id(2);
+
+    if (i01 >= ne01) {
+        return;
+    }
 
     uint ne00_blk = ne00 / QK_K;
 
@@ -992,6 +1044,10 @@ kernel void kernel_restore_block_q6_k_trans4_ns(
     uint i00 = get_global_id(1);  // block index along K
     uint i01 = get_global_id(0);  // row index
     uint i02 = get_global_id(2);  // batch index
+
+    if (i01 >= ne01) {
+        return;
+    }
 
     uint ne00_blk = ne00 / QK_K;
 
@@ -1147,6 +1203,10 @@ kernel void kernel_convert_block_mxfp4_trans4_ns(
     uint i01 = get_global_id(0);
     uint i02 = get_global_id(2);
 
+    if (i01 >= ne01) {
+        return;
+    }
+
     uint ne00_blk = ne00 / QK_MXFP4;
     uint src_blk_offset = i00 + i01 * ne00_blk + i02 * ne00_blk * ne01;
     uint dst_blk_offset = i01 + i00 * ne01 + i02 * ne00_blk * ne01;
@@ -1189,6 +1249,10 @@ kernel void kernel_restore_block_mxfp4_trans4_ns(
     uint i00 = get_global_id(1);
     uint i01 = get_global_id(0);
     uint i02 = get_global_id(2);
+
+    if (i01 >= ne01) {
+        return;
+    }
 
     uint ne00_blk = ne00 / QK_MXFP4;
     uint dst_blk_offset = i00 + i01 * ne00_blk + i02 * ne00_blk * ne01;
