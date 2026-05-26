@@ -207,7 +207,7 @@ static void hvx_fast_norm_f32(const uint8_t * restrict src,
 
     // scale = rsqrt(variance + epsilon),  mean_x broadcast for subtraction
     HVX_Vector scale_v  = hvx_vec_rsqrt_f32(Q6_Vsf_equals_Vqf32(var_epsilon_v));
-    HVX_Vector mean_x_b = hvx_vec_splat_f32(hvx_vec_get_f32(Q6_Vsf_equals_Vqf32(mean_x_v)));
+    HVX_Vector mean_x_b = hvx_vec_repl_f32(Q6_Vsf_equals_Vqf32(mean_x_v));
 
     #pragma unroll(4)
     for (int i = 0; i < nvec; i++) {
