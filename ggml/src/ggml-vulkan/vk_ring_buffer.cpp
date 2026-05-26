@@ -51,14 +51,14 @@ StagingRingBuffer::~StagingRingBuffer() {
 }
 
 StagingRingBuffer::Allocation StagingRingBuffer::allocate(uint64_t size, uint64_t alignment) {
-    if (size > _total_size) [[unlikely]] {
-        // allocation exceeds total size
-        return Allocation{};
-    }
-
     // Align size
     alignment = std::max<uint64_t>(alignment, 256);
     uint64_t aligned_size = (size + alignment - 1) & ~(alignment - 1);
+
+    if (aligned_size > _total_size) [[unlikely]] {
+        // allocation exceeds total size after alignment
+        return Allocation{};
+    }
 
     std::unique_lock<std::mutex> lock(_mutex);
     uint64_t spin_count = 0;
@@ -83,7 +83,7 @@ StagingRingBuffer::Allocation StagingRingBuffer::allocate(uint64_t size, uint64_
 
         if (aligned_head + aligned_size <= tail + _total_size) {
             // Enough space
-            _head.store(aligned_head + aligned_size, std::memory_order_release);
+            _head.store(aligned_head + aligned_size, std::memory_order_relaxed);
 
             Allocation alloc{};
             alloc.buffer = _buffer;
@@ -118,12 +118,12 @@ StagingRingBuffer::Allocation StagingRingBuffer::allocate(uint64_t size, uint64_
 }
 
 StagingRingBuffer::Allocation StagingRingBuffer::try_allocate(uint64_t size, uint64_t alignment) {
-    if (size > _total_size) [[unlikely]] {
-        return Allocation{};
-    }
-
     alignment = std::max<uint64_t>(alignment, 256);
     uint64_t aligned_size = (size + alignment - 1) & ~(alignment - 1);
+
+    if (aligned_size > _total_size) [[unlikely]] {
+        return Allocation{};
+    }
 
     std::lock_guard<std::mutex> lock(_mutex);
     uint64_t head = _head.load(std::memory_order_relaxed);
@@ -138,7 +138,7 @@ StagingRingBuffer::Allocation StagingRingBuffer::try_allocate(uint64_t size, uin
     }
 
     if (aligned_head + aligned_size <= tail + _total_size) {
-        _head.store(aligned_head + aligned_size, std::memory_order_release);
+        _head.store(aligned_head + aligned_size, std::memory_order_relaxed);
 
         Allocation alloc{};
         alloc.buffer = _buffer;
@@ -164,7 +164,7 @@ void StagingRingBuffer::finish(uint64_t fence_value) {
         new_tail = _outstanding.front().end;
         _outstanding.pop_front();
     }
-    _tail.store(new_tail, std::memory_order_release);
+    _tail.store(new_tail, std::memory_order_relaxed);
 }
 
 uint64_t StagingRingBuffer::advance_fence() {

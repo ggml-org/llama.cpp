@@ -80,7 +80,7 @@ DescriptorManager::~DescriptorManager() {
             vkDestroyDescriptorPool(_device, pool, nullptr);
         }
     }
-    if (_bindless_set) {
+    if (_bindless_pool) {
         // Sets are freed implicitly when pool is destroyed
         vkDestroyDescriptorPool(_device, _bindless_pool, nullptr);
     }
@@ -97,10 +97,10 @@ uint32_t DescriptorManager::register_buffer(vk::Buffer buffer,
         index = _bindless_free_list.back();
         _bindless_free_list.pop_back();
     } else {
-        index = _bindless_count++;
-        if (index >= _max_bindless_buffers) {
+        if (_bindless_count >= _max_bindless_buffers) {
             throw std::runtime_error("DescriptorManager: bindless buffer limit exceeded");
         }
+        index = _bindless_count++;
     }
 
     VkDescriptorBufferInfo buf_info{};
@@ -167,6 +167,25 @@ void DescriptorManager::unregister_buffer(uint32_t index) {
 }
 
 void DescriptorManager::reset_bindless() {
+    // Null out all active bindless descriptor slots to avoid stale VkBuffer references.
+    // Only safe to call when no GPU work is in flight referencing these slots.
+    VkDescriptorBufferInfo null_info{};
+    null_info.buffer = VK_NULL_HANDLE;
+    null_info.offset = 0;
+    null_info.range = 0;
+
+    for (uint32_t i = 0; i < _bindless_count; ++i) {
+        VkWriteDescriptorSet write{};
+        write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        write.dstSet = _bindless_set;
+        write.dstBinding = 0;
+        write.dstArrayElement = i;
+        write.descriptorCount = 1;
+        write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        write.pBufferInfo = &null_info;
+        vkUpdateDescriptorSets(_device, 1, &write, 0, nullptr);
+    }
+
     _bindless_count = 0;
     _bindless_free_list.clear();
     _bindless_free_list.shrink_to_fit();
@@ -202,10 +221,21 @@ vk::DescriptorSet DescriptorManager::allocate_set(vk::DescriptorSetLayout layout
 void DescriptorManager::write_buffers(vk::DescriptorSet set,
                                        uint32_t first_binding,
                                        vk::ArrayProxy<const vk::DescriptorBufferInfo> buffer_infos) {
-    std::vector<VkWriteDescriptorSet> writes;
-    writes.reserve(buffer_infos.size());
-
+    // Build VkDescriptorBufferInfo array avoiding reinterpret_cast on vk:: types
+    std::vector<VkDescriptorBufferInfo> vk_buffer_infos;
+    vk_buffer_infos.reserve(buffer_infos.size());
     for (uint32_t i = 0; i < buffer_infos.size(); i++) {
+        VkDescriptorBufferInfo info{};
+        info.buffer = static_cast<VkBuffer>(buffer_infos.data()[i].buffer);
+        info.offset = buffer_infos.data()[i].offset;
+        info.range = buffer_infos.data()[i].range;
+        vk_buffer_infos.push_back(info);
+    }
+
+    std::vector<VkWriteDescriptorSet> writes;
+    writes.reserve(vk_buffer_infos.size());
+
+    for (uint32_t i = 0; i < vk_buffer_infos.size(); i++) {
         VkWriteDescriptorSet write{};
         write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         write.dstSet = set;
@@ -213,7 +243,7 @@ void DescriptorManager::write_buffers(vk::DescriptorSet set,
         write.dstArrayElement = 0;
         write.descriptorCount = 1;
         write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        write.pBufferInfo = reinterpret_cast<const VkDescriptorBufferInfo*>(&buffer_infos.data()[i]);
+        write.pBufferInfo = &vk_buffer_infos[i];
         writes.push_back(write);
     }
 

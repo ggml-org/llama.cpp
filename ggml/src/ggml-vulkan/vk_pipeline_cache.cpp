@@ -1,5 +1,6 @@
 #include "vk_pipeline_cache.h"
 
+#include <cstdio>
 #include <fstream>
 #include <vector>
 #include <cstring>
@@ -52,7 +53,11 @@ PipelineCache::PipelineCache(vk::Device device,
 
 PipelineCache::~PipelineCache() {
     if (_cache) {
-        save();
+        try {
+            save();
+        } catch (...) {
+            // Ignore save errors during destruction (e.g. device lost)
+        }
         _device.destroyPipelineCache(_cache);
     }
 }
@@ -63,13 +68,26 @@ void PipelineCache::save() {
     auto data = _device.getPipelineCacheData(_cache);
     if (data.empty()) return;
 
-    // Prepend header for compatibility validation
-    std::ofstream file(_cache_file_path, std::ios::binary | std::ios::trunc);
-    if (file.good()) {
+    // Write to a temporary file first, then atomically rename to avoid
+    // cache corruption if the process crashes or disk fills during write.
+    std::string tmp_path = _cache_file_path + ".tmp";
+    {
+        std::ofstream file(tmp_path, std::ios::binary | std::ios::trunc);
+        if (!file.good()) return;
         file.write(reinterpret_cast<const char*>(&_header),
                    static_cast<std::streamsize>(sizeof(_header)));
         file.write(reinterpret_cast<const char*>(data.data()),
                    static_cast<std::streamsize>(data.size()));
+        file.flush();
+        if (!file.good()) {
+            file.close();
+            std::remove(tmp_path.c_str());
+            return;
+        }
+    }
+    // Atomic rename (on Windows, rename() replaces existing file)
+    if (std::rename(tmp_path.c_str(), _cache_file_path.c_str()) != 0) {
+        std::remove(tmp_path.c_str());
     }
 }
 

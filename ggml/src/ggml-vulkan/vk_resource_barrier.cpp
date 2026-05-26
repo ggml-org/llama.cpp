@@ -52,6 +52,11 @@ static constexpr VkAccessFlags2 kWriteAccess =
 } // namespace
 
 void ResourceBarrier::record(VkBuffer buffer, uint64_t offset, uint64_t size, Usage usage) {
+    // NOTE: State is keyed by {buffer, offset} only. Adjacent non-overlapping regions
+    // of the same buffer with different offsets are merged, which can introduce
+    // unnecessary execution dependencies (e.g. read at offset 0 and write at offset
+    // 256 will still generate a barrier). Consider keying by {buffer, offset, size}
+    // with overlap detection for finer-grained barrier merging.
     BufferKey key{buffer, offset};
 
     auto& state = _states[key];
@@ -64,10 +69,12 @@ void ResourceBarrier::record(VkBuffer buffer, uint64_t offset, uint64_t size, Us
         _ordered_keys.push_back(key);
     }
 
-    state.after_stage |= stage;
-    state.after_access |= access;
-    state.written = state.written || is_write;
-    state.after_size = std::max(state.after_size, size);
+    // VK_WHOLE_SIZE (~0ULL) means "entire buffer"; propagate it correctly.
+    if (state.after_size == VK_WHOLE_SIZE || size == VK_WHOLE_SIZE) {
+        state.after_size = VK_WHOLE_SIZE;
+    } else {
+        state.after_size = std::max(state.after_size, size);
+    }
 }
 
 void ResourceBarrier::emit(VkCommandBuffer cmd_buffer) {
@@ -95,9 +102,7 @@ void ResourceBarrier::emit(VkCommandBuffer cmd_buffer) {
             barrier.buffer = key.buffer;
             barrier.offset = key.offset;
             barrier.size = std::max(state.before_size, state.after_size);
-            if (barrier.size > 0) {
-                barriers.push_back(barrier);
-            }
+            barriers.push_back(barrier);
         }
 
         // Promote current after state to before state for the next emit
@@ -123,6 +128,9 @@ void ResourceBarrier::emit(VkCommandBuffer cmd_buffer) {
 void ResourceBarrier::reset() {
     _states.clear();
     _ordered_keys.clear();
+    // Release memory retained by the hash map after peak usage.
+    _states.rehash(0);
+    _ordered_keys.shrink_to_fit();
 }
 
 } // namespace ggml_vk

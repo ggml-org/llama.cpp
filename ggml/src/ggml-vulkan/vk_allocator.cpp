@@ -80,10 +80,12 @@ AllocatedBuffer VkAllocator::allocate_buffer(size_t byte_size,
     }
 
     AllocatedBuffer result;
+    VkBuffer vk_buf = VK_NULL_HANDLE;
     VkResult res = vmaCreateBuffer(
         _allocator, &buffer_info, &alloc_info,
-        &reinterpret_cast<VkBuffer&>(result.buffer),
+        &vk_buf,
         &result.allocation, nullptr);
+    result.buffer = vk_buf;
     if (res != VK_SUCCESS) {
         throw vk::OutOfDeviceMemoryError("VMA allocate_buffer failed");
     }
@@ -92,7 +94,7 @@ AllocatedBuffer VkAllocator::allocate_buffer(size_t byte_size,
 
 void VkAllocator::destroy_buffer(AllocatedBuffer const& buf) {
     if (buf.buffer) {
-        vmaDestroyBuffer(_allocator, buf.buffer, buf.allocation);
+        vmaDestroyBuffer(_allocator, static_cast<VkBuffer>(buf.buffer), buf.allocation);
     }
 }
 
@@ -117,10 +119,12 @@ AllocatedImage VkAllocator::allocate_image(vk::ImageType dimension,
     alloc_info.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
 
     AllocatedImage result;
+    VkImage vk_img = VK_NULL_HANDLE;
     VkResult res = vmaCreateImage(
         _allocator, &image_info, &alloc_info,
-        &reinterpret_cast<VkImage&>(result.image),
+        &vk_img,
         &result.allocation, nullptr);
+    result.image = vk_img;
     if (res != VK_SUCCESS) {
         throw vk::OutOfDeviceMemoryError("VMA allocate_image failed");
     }
@@ -129,7 +133,7 @@ AllocatedImage VkAllocator::allocate_image(vk::ImageType dimension,
 
 void VkAllocator::destroy_image(AllocatedImage const& img) {
     if (img.image) {
-        vmaDestroyImage(_allocator, img.image, img.allocation);
+        vmaDestroyImage(_allocator, static_cast<VkImage>(img.image), img.allocation);
     }
 }
 

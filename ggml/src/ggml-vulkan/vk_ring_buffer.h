@@ -11,6 +11,11 @@ namespace ggml_vk {
 
 // Staging ring buffer for efficient host↔device transfers.
 // Uses a circular buffer with fence-based tracking to avoid stalls.
+//
+// NOTE: For non-HOST_COHERENT memory types, callers must manually flush/invalidate
+// mapped memory ranges via VMA (vmaFlushAllocation / vmaInvalidateAllocation) before
+// GPU access. The Allocation struct contains the buffer and offset needed to identify
+// the flushed range. Use _allocator->handle() to obtain the VmaAllocator.
 class StagingRingBuffer {
 public:
     struct Allocation {
@@ -44,7 +49,7 @@ public:
     void finish(uint64_t fence_value);
 
     // Get current fence value (monotonically increasing)
-    [[nodiscard]] uint64_t current_fence() const { return _fence_counter.load(); }
+    [[nodiscard]] uint64_t current_fence() const { return _fence_counter.load(std::memory_order_relaxed); }
 
     // Advance fence and return new value (for use with timeline semaphores)
     [[nodiscard]] uint64_t advance_fence();
