@@ -175,5 +175,5 @@ jobs:
       - name: Test
         id: cmake_test
         run: |
-          cd build
+          cd build-wasm
           ctest -L main --verbose --timeout 900
