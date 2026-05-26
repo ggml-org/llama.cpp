@@ -6,7 +6,19 @@ void llama_model_qwen35moe::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_EXPERT_SHARED_FEED_FORWARD_LENGTH, hparams.n_ff_shexp, false);
     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS,       hparams.f_norm_rms_eps);
 
-    ml.get_key_or_arr(LLM_KV_ROPE_DIMENSION_SECTIONS,    hparams.rope_sections, 4, true);
+    // Qwen 3.6 MoE uses 3 MRoPE sections (Q/K/V); pad to 4 for compatibility
+    {
+        std::fill(hparams.rope_sections.begin(), hparams.rope_sections.end(), 0);
+        const std::string key = ml.llm_kv(LLM_KV_ROPE_DIMENSION_SECTIONS);
+        const int kid = gguf_find_key(ml.metadata, key.c_str());
+        if (kid >= 0 && gguf_get_kv_type(ml.metadata, kid) == GGUF_TYPE_ARRAY) {
+            const size_t n = gguf_get_arr_n(ml.metadata, kid);
+            const int32_t * data = (const int32_t *) gguf_get_arr_data(ml.metadata, kid);
+            for (size_t i = 0; i < n && i < hparams.rope_sections.size(); i++) {
+                hparams.rope_sections[i] = data[i];
+            }
+        }
+    }
 
     // Load linear attention (gated delta net) parameters
     ml.get_key(LLM_KV_SSM_CONV_KERNEL,    hparams.ssm_d_conv);
