@@ -93,7 +93,7 @@ jobs:
         id: cache-rocm
         with:
           path: C:\Program Files\AMD\ROCm
-          key: rocm-${{ env.HIPSDK_INSTALLER_VERSION }}-${{ runner.os }}
+          key: cache-gha-rocm-${{ env.HIPSDK_INSTALLER_VERSION }}-${{ runner.os }}
 
       - name: Setup ROCm
         if: steps.cache-rocm.outputs.cache-hit != 'true'
