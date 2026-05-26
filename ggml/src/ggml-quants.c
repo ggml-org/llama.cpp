@@ -343,6 +343,50 @@ void quantize_row_mxfp4_ref(const float * GGML_RESTRICT x, block_mxfp4 * GGML_RE
     }
 }
 
+// Find the optimal UE4M3 micro-scale for a sub-block: starting from E2M1 max,
+// iterate over the adjacent codes to minimize the squared reconstruction error.
+static inline uint8_t best_scale_nvfp4(const float * GGML_RESTRICT xb, int n) {
+    static const int try_offsets[3] = { 0, -1, 1 };
+
+    // largest absolute input value
+    float amax = 0.0f;
+    for (int j = 0; j < n; j++) {
+        if (amax < fabsf(xb[j])) {
+            amax = fabsf(xb[j]);
+        }
+    }
+
+    // UE4M3 scale: amax / 6.0 maps the max E2M1 value (6.0) to amax
+    const int first_code = (int) ggml_fp32_to_ue4m3(amax / 6.0f);
+
+    // best sum of squared errors
+    float best_sse  = FLT_MAX;
+    int   best_code = 0;
+    for (int t = 0; t < 3; t++) {
+        const int code = first_code + try_offsets[t];
+
+        // skip underflow/overflow scale codes
+        if (code < 0 || code > 0x7E) {
+            continue;
+        }
+        const float d = ggml_ue4m3_to_fp32((uint8_t) code);
+
+        float sse = 0.0f;
+        for (int j = 0; j < n; j++) {
+            // find the best code, reconstruct, collect the squared error
+            const int   l    = best_index_mxfp4(xb[j], d);
+            const float diff = xb[j] - d*kvalues_mxfp4[l];
+            sse += diff*diff;
+        }
+        if (sse < best_sse) {
+            best_sse  = sse;
+            best_code = code;
+        }
+    }
+
+    return (uint8_t) best_code;
+}
+
 void quantize_row_nvfp4_ref(const float * GGML_RESTRICT x, block_nvfp4 * GGML_RESTRICT y, int64_t k) {
     static const int qk = QK_NVFP4;
     static const int qk_sub = QK_NVFP4_SUB;
@@ -356,15 +400,7 @@ void quantize_row_nvfp4_ref(const float * GGML_RESTRICT x, block_nvfp4 * GGML_RE
         for (int s = 0; s < n_sub; s++) {
             const float * xb = x + i*qk + s*qk_sub;
 
-            float amax = 0.0f;
-            for (int j = 0; j < qk_sub; j++) {
-                if (amax < fabsf(xb[j])) {
-                    amax = fabsf(xb[j]);
-                }
-            }
-
-            // UE4M3 scale: amax / 6.0 maps the max E2M1 value (6.0) to amax
-            const uint8_t ue = ggml_fp32_to_ue4m3(amax / 6.0f);
+            const uint8_t ue = best_scale_nvfp4(xb, qk_sub);
             y[i].d[s] = ue;
             const float d = ggml_ue4m3_to_fp32(ue);
 
