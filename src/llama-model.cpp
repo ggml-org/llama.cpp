@@ -44,6 +44,8 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
             return new llama_model_llama_embed(params);
         case LLM_ARCH_MAINCODER:
             return new llama_model_maincoder(params);
+        case LLM_ARCH_TALKIE:
+            return new llama_model_talkie(params);
         case LLM_ARCH_DECI:
             return new llama_model_deci(params);
         case LLM_ARCH_BAICHUAN:
@@ -1334,6 +1336,12 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
             if (!layer.ssm_beta_s && layer.ssm_beta) {
                 layer.ssm_beta_s = create_tensor(tn(LLM_TENSOR_SSM_BETA, "scale", i), {1}, TENSOR_NOT_REQUIRED);
             }
+            if (!layer.nextn.eh_proj_s && layer.nextn.eh_proj) {
+                layer.nextn.eh_proj_s = create_tensor(tn(LLM_TENSOR_NEXTN_EH_PROJ, "scale", i), {1}, TENSOR_NOT_REQUIRED);
+            }
+            if (!layer.nextn.shared_head_head_s && layer.nextn.shared_head_head) {
+                layer.nextn.shared_head_head_s = create_tensor(tn(LLM_TENSOR_NEXTN_SHARED_HEAD_HEAD, "scale", i), {1}, TENSOR_NOT_REQUIRED);
+            }
 
             // input scales
             if (!layer.wq_in_s && layer.wq) {
@@ -1392,6 +1400,12 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
             }
             if (!layer.ssm_beta_in_s && layer.ssm_beta) {
                 layer.ssm_beta_in_s = create_tensor(tn(LLM_TENSOR_SSM_BETA, "input_scale", i), {1}, TENSOR_NOT_REQUIRED);
+            }
+            if (!layer.nextn.eh_proj_in_s && layer.nextn.eh_proj) {
+                layer.nextn.eh_proj_in_s = create_tensor(tn(LLM_TENSOR_NEXTN_EH_PROJ, "input_scale", i), {1}, TENSOR_NOT_REQUIRED);
+            }
+            if (!layer.nextn.shared_head_head_in_s && layer.nextn.shared_head_head) {
+                layer.nextn.shared_head_head_in_s = create_tensor(tn(LLM_TENSOR_NEXTN_SHARED_HEAD_HEAD, "input_scale", i), {1}, TENSOR_NOT_REQUIRED);
             }
         }
         // output scales
@@ -2341,6 +2355,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_QWEN3NEXT:
         case LLM_ARCH_MIMO2:
         case LLM_ARCH_STEP35:
+        case LLM_ARCH_TALKIE:
             return LLAMA_ROPE_TYPE_NEOX;
 
         case LLM_ARCH_QWEN2VL:
