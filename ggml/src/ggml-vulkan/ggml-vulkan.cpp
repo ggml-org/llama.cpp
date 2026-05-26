@@ -5143,6 +5143,7 @@ static vk_device ggml_vk_get_device(size_t idx) {
         bool pipeline_robustness = false;
         bool coopmat2_support = false;
         bool pipeline_executable_properties_support = false;
+        bool internally_sync_support = false;
         device->coopmat_support = false;
         device->integer_dot_product = false;
         device->shader_64b_indexing = false;
@@ -5198,7 +5199,7 @@ static vk_device ggml_vk_get_device(size_t idx) {
                 device->shader_64b_indexing = true;
 #endif
             } else if (strcmp(VK_KHR_INTERNALLY_SYNCHRONIZED_QUEUES_EXTENSION_NAME, properties.extensionName) == 0) {
-                device->has_internally_synchronized_queues = true;
+                internally_sync_support = true;
                 GGML_LOG_INFO("ggml_vulkan: internally synchronized queues supported");
             }
         }
@@ -5412,7 +5413,7 @@ static vk_device ggml_vk_get_device(size_t idx) {
         sync_query_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_INTERNALLY_SYNCHRONIZED_QUEUES_FEATURES_KHR;
         sync_query_features.pNext = nullptr;
         sync_query_features.internallySynchronizedQueues = VK_FALSE;
-        if (device->has_internally_synchronized_queues) {
+        if (internally_sync_support) {
             last_struct->pNext = (VkBaseOutStructure *)&sync_query_features;
             last_struct = (VkBaseOutStructure *)&sync_query_features;
         }
