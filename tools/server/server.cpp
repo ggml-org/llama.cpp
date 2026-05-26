@@ -104,10 +104,9 @@ int llama_server(int argc, char ** argv) {
     }
 
     if (params.n_parallel < 0) {
-        SRV_INF("%s", "n_parallel is set to auto, using n_parallel = 4 and kv_unified = true\n");
+        SRV_INF("%s", "n_parallel is set to auto, using n_parallel = 4\n");
 
         params.n_parallel = 4;
-        params.kv_unified = true;
     }
 
     // for consistency between server router mode and single-model mode, we set the same model name as alias
