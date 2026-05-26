@@ -103,16 +103,19 @@ typedef struct VkPhysicalDeviceShaderBfloat16FeaturesKHR {
 #define VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_INTERNALLY_SYNCHRONIZED_QUEUES_FEATURES_KHR ((VkStructureType)1000504000)
 #define VK_DEVICE_QUEUE_CREATE_INTERNALLY_SYNCHRONIZED_BIT_KHR ((VkDeviceQueueCreateFlagBits)0x00000004)
 
+// Compile-time constant guaranteed; no runtime initialization overhead
+static constexpr vk::DeviceQueueCreateFlagBits eInternallySynchronizedKHR =
+    static_cast<vk::DeviceQueueCreateFlagBits>(0x00000004);
+
 typedef struct VkPhysicalDeviceInternallySynchronizedQueuesFeaturesKHR {
     VkStructureType    sType;
-    void*              pNext;
+    void* pNext;
     VkBool32           internallySynchronizedQueues;
 } VkPhysicalDeviceInternallySynchronizedQueuesFeaturesKHR;
-
-namespace vk {
-    static const DeviceQueueCreateFlagBits eInternallySynchronizedKHR =
-        static_cast<DeviceQueueCreateFlagBits>(0x00000004);
-}
+#else
+// Safe compile-time alias to keep downstream code uniform
+static constexpr vk::DeviceQueueCreateFlagBits eInternallySynchronizedKHR =
+    vk::DeviceQueueCreateFlagBits::eInternallySynchronizedKHR;
 #endif
 
 #define ROUNDUP_POW2(M, N) (((M) + (N) - 1) & ~((N) - 1))
