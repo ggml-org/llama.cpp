@@ -368,7 +368,7 @@ static void ggml_zendnn_compute_forward_mul_mat_id(
                               src0->type,
                               src0->type == GGML_TYPE_Q8_0 ? GGML_TYPE_F32 : vec_dot_type,
                               dst->type)) {
-            GGML_ABORT("%s: ZenDNN sgemm failed\n", __func__);
+            GGML_ABORT("%s: ZenDNN gemm failed\n", __func__);
         }
 
         // scatter output rows to destination
