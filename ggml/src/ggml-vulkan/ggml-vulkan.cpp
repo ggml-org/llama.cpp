@@ -115,7 +115,7 @@ typedef struct VkPhysicalDeviceInternallySynchronizedQueuesFeaturesKHR {
 #else
 // Safe compile-time alias to keep downstream code uniform
 static constexpr vk::DeviceQueueCreateFlagBits eInternallySynchronizedKHR =
-    eInternallySynchronizedKHR;
+    vk::DeviceQueueCreateFlagBits::eInternallySynchronizedKHR;
 #endif
 
 #define ROUNDUP_POW2(M, N) (((M) + (N) - 1) & ~((N) - 1))
