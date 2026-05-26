@@ -5177,7 +5177,7 @@ static vk_device ggml_vk_get_device(size_t idx) {
 #endif
             } else if (strcmp(VK_KHR_INTERNALLY_SYNCHRONIZED_QUEUES_EXTENSION_NAME, properties.extensionName) == 0) {
                 device->has_internally_synchronized_queues = true;
-                VK_LOG_INFO("ggml_vulkan: internally synchronized queues supported");
+                GGML_LOG_INFO("ggml_vulkan: internally synchronized queues supported");
             }
         }
 
