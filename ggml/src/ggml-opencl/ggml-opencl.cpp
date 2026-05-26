@@ -17190,7 +17190,6 @@ static void ggml_cl_gated_delta_net(ggml_backend_t backend, ggml_tensor * dst) {
         case 128: si = 3; break;
         default:
             GGML_ASSERT(false && "ggml_cl_gated_delta_net: unsupported S_v");
-            return;
     }
 
     const int kda = (src_g->ne[0] == (int64_t) S_v) ? 1 : 0;
