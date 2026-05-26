@@ -28,10 +28,10 @@ It's possible to override some scenario steps values with environment variables:
 | variable                 | description                                                                                    |
 |--------------------------|------------------------------------------------------------------------------------------------|
 | `PORT`                   | `context.server_port` to set the listening port of the server during scenario, default: `8080` |
-| `LLAMA_SERVER_BIN_PATH`  | to change the server binary path, default: `../../../build/bin/llama-server`                         |
+| `LLAMA_SERVER_BIN_PATH`  | to change the server binary path, default: `<repo_root>/build/bin/llama-server`                         |
 | `DEBUG`                  | to enable steps and server verbose mode `--verbose`                                       |
 | `N_GPU_LAYERS`           | number of model layers to offload to VRAM `-ngl --n-gpu-layers`                                |
-| `LLAMA_CACHE`            | by default server tests re-download models to the `tmp` subfolder. Set this to your cache (e.g. `$HOME/Library/Caches/llama.cpp` on Mac or `$HOME/.cache/llama.cpp` on Unix) to avoid this |
+| `LLAMA_CACHE`            | by default server tests re-download models to the `<repo_root>/tools/server/tests/tmp` subfolder. Set this to your cache (e.g. `$HOME/Library/Caches/llama.cpp` on Mac or `$HOME/.cache/llama.cpp` on Unix) to avoid this |
 
 To run slow tests (will download many models, make sure to set `LLAMA_CACHE` if needed):
 

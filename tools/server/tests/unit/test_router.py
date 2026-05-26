@@ -217,7 +217,7 @@ def test_router_reload_models():
     """POST /models/reload re-reads the INI preset and updates the model list."""
     global server
 
-    preset_path = os.path.join(TMP_DIR, "test_reload.ini")
+    preset_path = os.path.join(TESTS_TMP_DIR, "test_reload.ini")
 
     # Initial preset: two models
     with open(preset_path, "w") as f:

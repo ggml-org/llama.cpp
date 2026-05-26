@@ -7,7 +7,7 @@ server = ServerPreset.tinyllama2()
 def create_server():
     global server
     server = ServerPreset.tinyllama2()
-    server.slot_save_path = "./tmp"
+    server.slot_save_path = TESTS_TMP_DIR
     server.temperature = 0.0
 
 

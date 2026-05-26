@@ -818,7 +818,7 @@ def test_anthropic_thinking_history_in_count_tokens():
     """Test that interleaved thinking blocks in conversation history are not dropped during conversion."""
     global server
     server.jinja = True
-    server.chat_template_file = '../../../models/templates/Qwen-Qwen3-0.6B.jinja'
+    server.chat_template_file = f'{LLAMA_CPP_ROOT}/models/templates/Qwen-Qwen3-0.6B.jinja'
     server.start()
 
     tool = {
@@ -887,7 +887,7 @@ def test_anthropic_thinking_history_in_template():
     """Test that reasoning_content from converted interleaved thinking blocks renders in the prompt."""
     global server
     server.jinja = True
-    server.chat_template_file = '../../../models/templates/Qwen-Qwen3-0.6B.jinja'
+    server.chat_template_file = f'{LLAMA_CPP_ROOT}/models/templates/Qwen-Qwen3-0.6B.jinja'
     server.start()
 
     reasoning_1 = "I should check the project structure first."

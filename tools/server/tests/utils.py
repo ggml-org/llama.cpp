@@ -6,7 +6,6 @@
 import subprocess
 import os
 
-TMP_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tmp")
 import re
 import json
 from json import JSONDecodeError
@@ -14,6 +13,7 @@ import sys
 import requests
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
 from typing import (
     Any,
     Callable,
@@ -30,6 +30,10 @@ import wget
 
 
 DEFAULT_HTTP_TIMEOUT = 60
+LLAMA_CPP_ROOT = Path(__file__).resolve().parents[3]
+
+
+TESTS_TMP_DIR = str(LLAMA_CPP_ROOT / "tools/server/tests/tmp")
 
 
 class ServerResponse:
@@ -126,7 +130,7 @@ class ServerProcess:
     def start(self, timeout_seconds: int = DEFAULT_HTTP_TIMEOUT) -> None:
         env = {**os.environ}
         if "LLAMA_CACHE" not in os.environ:
-            env["LLAMA_CACHE"] = "tmp"
+            env["LLAMA_CACHE"] = TESTS_TMP_DIR
         if self.external_server:
             print(f"[external_server]: Assuming external server running on {self.server_host}:{self.server_port}")
             return
@@ -135,9 +139,9 @@ class ServerProcess:
         elif "LLAMA_SERVER_BIN_PATH" in os.environ:
             server_path = os.environ["LLAMA_SERVER_BIN_PATH"]
         elif os.name == "nt":
-            server_path = "../../../build/bin/Release/llama-server.exe"
+            server_path = str(LLAMA_CPP_ROOT / "build/bin/Release/llama-server.exe")
         else:
-            server_path = "../../../build/bin/llama-server"
+            server_path = str(LLAMA_CPP_ROOT / "build/bin/llama-server")
         server_args = [
             "--host",
             self.server_host,
@@ -668,7 +672,7 @@ def download_file(url: str, output_file_path: str | None = None) -> str:
     Returns the local path of the downloaded file.
     """
     file_name = url.split('/').pop()
-    output_file = f'./tmp/{file_name}' if output_file_path is None else output_file_path
+    output_file = f'{TESTS_TMP_DIR}/{file_name}' if output_file_path is None else output_file_path
     if not os.path.exists(output_file):
         print(f"Downloading {url} to {output_file}")
         wget.download(url, out=output_file)

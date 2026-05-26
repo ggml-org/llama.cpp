@@ -144,7 +144,7 @@ def do_test_completion_with_required_tool_tiny(server: ServerProcess, tool: dict
 #     # server = ServerPreset.stories15m_moe()
 #     server.jinja = True
 #     server.n_predict = n_predict
-#     server.chat_template_file = f'../../../models/templates/{template_name}.jinja'
+#     server.chat_template_file = f'{LLAMA_CPP_ROOT}/models/templates/{template_name}.jinja'
 #     server.start()
 #     do_test_completion_with_required_tool_tiny(server, tool, argument_key, n_predict, stream=stream == CompletionMode.STREAMED, temperature=0.0, top_k=1, top_p=1.0)
 
@@ -187,7 +187,7 @@ def do_test_completion_with_required_tool_tiny(server: ServerProcess, tool: dict
 #     # server = ServerPreset.stories15m_moe()
 #     server.jinja = True
 #     server.n_predict = n_predict
-#     server.chat_template_file = f'../../../models/templates/{template_name}.jinja'
+#     server.chat_template_file = f'{LLAMA_CPP_ROOT}/models/templates/{template_name}.jinja'
 #     server.start(timeout_seconds=TIMEOUT_START_SLOW)
 #     do_test_completion_with_required_tool_tiny(server, tool, argument_key, n_predict, stream=stream == CompletionMode.STREAMED)
 
@@ -256,7 +256,7 @@ def test_completion_with_required_tool_real_model(tool: dict, argument_key: str 
     server.model_hf_file = None
     if isinstance(template_override, tuple):
         (template_hf_repo, template_variant) = template_override
-        server.chat_template_file = f"../../../models/templates/{template_hf_repo.replace('/', '-') + ('-' + template_variant if template_variant else '')}.jinja"
+        server.chat_template_file = f"{LLAMA_CPP_ROOT}/models/templates/{template_hf_repo.replace('/', '-') + ('-' + template_variant if template_variant else '')}.jinja"
         assert os.path.exists(server.chat_template_file), f"Template file {server.chat_template_file} does not exist. Run `python scripts/get_chat_template.py {template_hf_repo} {template_variant} > {server.chat_template_file}` to download the template."
     elif isinstance(template_override, str):
         server.chat_template = template_override
@@ -314,7 +314,7 @@ def test_completion_without_tool_call_fast(template_name: str, n_predict: int, t
     global server
     server.n_predict = n_predict
     server.jinja = True
-    server.chat_template_file = f'../../../models/templates/{template_name}.jinja'
+    server.chat_template_file = f'{LLAMA_CPP_ROOT}/models/templates/{template_name}.jinja'
     server.start()
     do_test_completion_without_tool_call(server, n_predict, tools, tool_choice, stream=stream == CompletionMode.STREAMED)
 
@@ -336,7 +336,7 @@ def test_completion_without_tool_call_slow(template_name: str, n_predict: int, t
     global server
     server.n_predict = n_predict
     server.jinja = True
-    server.chat_template_file = f'../../../models/templates/{template_name}.jinja'
+    server.chat_template_file = f'{LLAMA_CPP_ROOT}/models/templates/{template_name}.jinja'
     server.start(timeout_seconds=TIMEOUT_START_SLOW)
     do_test_completion_without_tool_call(server, n_predict, tools, tool_choice, stream=stream == CompletionMode.STREAMED)
 
@@ -393,7 +393,7 @@ def test_weather(hf_repo: str, template_override: str | Tuple[str, str | None] |
     server.model_hf_file = None
     if isinstance(template_override, tuple):
         (template_hf_repo, template_variant) = template_override
-        server.chat_template_file = f"../../../models/templates/{template_hf_repo.replace('/', '-') + ('-' + template_variant if template_variant else '')}.jinja"
+        server.chat_template_file = f"{LLAMA_CPP_ROOT}/models/templates/{template_hf_repo.replace('/', '-') + ('-' + template_variant if template_variant else '')}.jinja"
         assert os.path.exists(server.chat_template_file), f"Template file {server.chat_template_file} does not exist. Run `python scripts/get_chat_template.py {template_hf_repo} {template_variant} > {server.chat_template_file}` to download the template."
     elif isinstance(template_override, str):
         server.chat_template = template_override
@@ -452,7 +452,7 @@ def test_calc_result(result_override: str | None, n_predict: int, hf_repo: str, 
     server.model_hf_file = None
     if isinstance(template_override, tuple):
         (template_hf_repo, template_variant) = template_override
-        server.chat_template_file = f"../../../models/templates/{template_hf_repo.replace('/', '-') + ('-' + template_variant if template_variant else '')}.jinja"
+        server.chat_template_file = f"{LLAMA_CPP_ROOT}/models/templates/{template_hf_repo.replace('/', '-') + ('-' + template_variant if template_variant else '')}.jinja"
         assert os.path.exists(server.chat_template_file), f"Template file {server.chat_template_file} does not exist. Run `python scripts/get_chat_template.py {template_hf_repo} {template_variant} > {server.chat_template_file}` to download the template."
     elif isinstance(template_override, str):
         server.chat_template = template_override
@@ -540,7 +540,7 @@ def test_thoughts(n_predict: int, reasoning_format: Literal['deepseek', 'none'] 
     server.model_hf_file = None
     if isinstance(template_override, tuple):
         (template_hf_repo, template_variant) = template_override
-        server.chat_template_file = f"../../../models/templates/{template_hf_repo.replace('/', '-') + ('-' + template_variant if template_variant else '')}.jinja"
+        server.chat_template_file = f"{LLAMA_CPP_ROOT}/models/templates/{template_hf_repo.replace('/', '-') + ('-' + template_variant if template_variant else '')}.jinja"
         assert os.path.exists(server.chat_template_file), f"Template file {server.chat_template_file} does not exist. Run `python scripts/get_chat_template.py {template_hf_repo} {template_variant} > {server.chat_template_file}` to download the template."
     elif isinstance(template_override, str):
         server.chat_template = template_override
@@ -613,7 +613,7 @@ def test_hello_world(hf_repo: str, template_override: str | Tuple[str, str | Non
     server.model_hf_file = None
     if isinstance(template_override, tuple):
         (template_hf_repo, template_variant) = template_override
-        server.chat_template_file = f"../../../models/templates/{template_hf_repo.replace('/', '-') + ('-' + template_variant if template_variant else '')}.jinja"
+        server.chat_template_file = f"{LLAMA_CPP_ROOT}/models/templates/{template_hf_repo.replace('/', '-') + ('-' + template_variant if template_variant else '')}.jinja"
         assert os.path.exists(server.chat_template_file), f"Template file {server.chat_template_file} does not exist. Run `python scripts/get_chat_template.py {template_hf_repo} {template_variant} > {server.chat_template_file}` to download the template."
     elif isinstance(template_override, str):
         server.chat_template = template_override

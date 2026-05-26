@@ -163,7 +163,7 @@ def test_chat_template():
 def test_chat_template_assistant_prefill(prefill, re_prefill):
     global server
     server.jinja = True
-    server.chat_template_file = "../../../models/templates/meta-llama-Llama-3.1-8B-Instruct.jinja"
+    server.chat_template_file = f'{LLAMA_CPP_ROOT}/models/templates/meta-llama-Llama-3.1-8B-Instruct.jinja'
     server.debug = True  # to get the "__verbose" object in the response
     server.start()
     res = server.make_request("POST", "/chat/completions", data={
@@ -184,7 +184,7 @@ def test_chat_template_continue_final_message_vllm_compat():
     Both must produce the same prompt."""
     global server
     server.jinja = True
-    server.chat_template_file = "../../../models/templates/meta-llama-Llama-3.1-8B-Instruct.jinja"
+    server.chat_template_file = f'{LLAMA_CPP_ROOT}/models/templates/meta-llama-Llama-3.1-8B-Instruct.jinja'
     server.debug = True
     server.start()
     res = server.make_request("POST", "/chat/completions", data={
