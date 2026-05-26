@@ -75,6 +75,9 @@ struct htp_rope_context {
     size_t theta_cache_offset;
     uint32_t src0_nrows;
 
+    struct fastdiv_values div_ne2_ne1;
+    struct fastdiv_values div_ne1;
+
     uint64_t t_start;
 };
 
@@ -348,13 +351,19 @@ static void rope_job_f32(unsigned int nth, unsigned int ith, void * data) {
     const int32_t * pos = (const int32_t *) src1->data;
     const float * freq_factors = src2 ? (const float *) src2->data : NULL;
 
-    uint32_t ir = 0;
+    const uint32_t i3_start = fastdiv(src0_start_row, &rctx->div_ne2_ne1);
+    const uint32_t rem      = fastmodulo(src0_start_row, ne2 * ne1, &rctx->div_ne2_ne1);
+    const uint32_t i2_start = fastdiv(rem, &rctx->div_ne1);
+    const uint32_t i1_start = fastmodulo(rem, ne1, &rctx->div_ne1);
+
+    uint32_t ir = src0_start_row;
     uint32_t prev_i2 = (uint32_t) -1;
 
-    for (uint32_t i3 = 0; i3 < ne3; i3++) { // batch
-        for (uint32_t i2 = 0; i2 < ne2; i2++) { // seq-len
-            for (uint32_t i1 = 0; i1 < ne1; ) { // attn-heads
-                if (ir < src0_start_row) { ir++; i1++; continue; }
+    for (uint32_t i3 = i3_start; i3 < ne3; i3++) { // batch
+        const uint32_t i2_init = (i3 == i3_start) ? i2_start : 0;
+        for (uint32_t i2 = i2_init; i2 < ne2; i2++) { // seq-len
+            const uint32_t i1_init = (i3 == i3_start && i2 == i2_start) ? i1_start : 0;
+            for (uint32_t i1 = i1_init; i1 < ne1; ) { // attn-heads
                 if (ir >= src0_end_row) goto done;
 
                 // Rows in this block
@@ -545,6 +554,11 @@ static int execute_op_rope_f32(struct htp_ops_context * octx) {
 
     rctx.src0_nrows = src0_nrows;
     rctx.src0_nrows_per_thread = (src0_nrows + n_threads - 1) / n_threads;
+
+    if (src0_nrows > 0) {
+        rctx.div_ne2_ne1 = init_fastdiv_values(dst->ne[2] * dst->ne[1]);
+        rctx.div_ne1     = init_fastdiv_values(dst->ne[1]);
+    }
 
     FARF(HIGH, "rope-f32 n-rows %u n-dims %d ne0 %u ext-factor %.6f theta-scale %.6f attn-factor %.6f\n", rctx.src0_nrows, rctx.n_dims, ne0,
          rctx.ext_factor, rctx.theta_scale, rctx.attn_factor);
