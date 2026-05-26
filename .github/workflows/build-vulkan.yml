@@ -68,7 +68,7 @@ jobs:
         id: cache-sdk
         with:
           path: ./vulkan_sdk
-          key: vulkan-sdk-${{ env.VULKAN_SDK_VERSION }}-${{ runner.os }}
+          key: cache-gha-vulkan-sdk-${{ env.VULKAN_SDK_VERSION }}-${{ runner.os }}
 
       - name: Setup Vulkan SDK
         if: steps.cache-sdk.outputs.cache-hit != 'true'
