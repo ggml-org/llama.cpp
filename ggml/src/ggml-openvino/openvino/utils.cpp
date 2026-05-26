@@ -17,7 +17,6 @@
 #include <openvino/op/reshape.hpp>
 #include <openvino/op/shape_of.hpp>
 #include <openvino/op/sin.hpp>
-#include <openvino/op/split.hpp>
 #include <openvino/op/squeeze.hpp>
 #include <openvino/op/subtract.hpp>
 #include <openvino/op/transpose.hpp>
@@ -269,93 +268,6 @@ ov::Output<ov::Node> process_view_input_new(const NodeContext & context, int inp
     if (view_input_size == 0) {
         // No view inputs, return the input as is
         return input;
-    }
-
-    // If translate_view already resolved this VIEW (produced a Slice), the input
-    // will already have the expected shape — skip re-slicing.
-    auto expected_ov_shape = context.get_view_input_ov_shape(input_index, 0);
-    auto actual_shape = input.get_partial_shape();
-    if (expected_ov_shape.rank().is_static() && actual_shape.rank().is_static() &&
-        expected_ov_shape.rank() == actual_shape.rank()) {
-        bool shapes_match = true;
-        for (int64_t i = 0; i < expected_ov_shape.rank().get_length(); ++i) {
-            if (expected_ov_shape[i].is_static() && actual_shape[i].is_static() &&
-                expected_ov_shape[i] != actual_shape[i]) {
-                shapes_match = false;
-                break;
-            }
-        }
-        if (shapes_match) {
-            return input;
-        }
-    }
-
-    // In static mode, use Split instead of Slice for single-dimension reductions.
-    // This ensures NPUW's FOLD doesn't parametrize per-layer slice indices (which
-    // would introduce dynamic shapes). A shared Split node sits outside the repeated
-    // subgraph boundary; each layer receives one of its output ports.
-    if (context.is_static() && view_input_size == 1) {
-        auto view_stride_v = context.get_view_input_stride(input_index, 0);
-        auto view_src_stride_v = context.get_view_input_src_stride(input_index, 0);
-        auto view_ggml_shape = context.get_view_input_ggml_shape(input_index, 0);
-        auto view_src_ggml_shape = context.get_view_input_src_ggml_shape(input_index, 0);
-        auto view_offset = context.get_view_input_offset(input_index, 0);
-        auto view_src_offset = context.get_view_input_src_offset(input_index, 0);
-
-        size_t ndims = view_ggml_shape.size();
-        std::vector<int> diff_dims;
-        if (view_src_ggml_shape.size() == ndims) {
-            for (size_t i = 0; i < ndims; ++i) {
-                if (view_ggml_shape[i] != view_src_ggml_shape[i]) {
-                    diff_dims.push_back(static_cast<int>(i));
-                }
-            }
-        }
-
-        if (diff_dims.size() == 1) {
-            int split_dim = diff_dims[0];
-            int64_t num_splits = static_cast<int64_t>(view_src_ggml_shape[split_dim]);
-            int64_t chunk_size = static_cast<int64_t>(view_ggml_shape[split_dim]);
-
-            // Only apply when slicing exactly 1 element from a multi-element dimension
-            if (chunk_size == 1 && num_splits > 1) {
-                // Check suffix strides match (dimensions after split_dim)
-                bool suffix_ok = view_stride_v.size() == view_src_stride_v.size();
-                if (suffix_ok) {
-                    for (size_t i = static_cast<size_t>(split_dim) + 1; i < ndims; ++i) {
-                        if (view_stride_v[i] != view_src_stride_v[i]) {
-                            suffix_ok = false;
-                            break;
-                        }
-                    }
-                }
-
-                if (suffix_ok && view_src_stride_v[split_dim] > 0) {
-                    size_t relative_offset = view_offset >= view_src_offset ?
-                        view_offset - view_src_offset : 0;
-                    int64_t split_index = static_cast<int64_t>(
-                        relative_offset / view_src_stride_v[split_dim]);
-
-                    if (split_index >= 0 && split_index < num_splits) {
-                        auto src_node = input.get_node_shared_ptr();
-                        std::string rt_key = "split_dim_" + std::to_string(split_dim);
-                        auto & rt_info = src_node->get_rt_info();
-
-                        if (rt_info.find(rt_key) == rt_info.end()) {
-                            auto axis_const = ov::op::v0::Constant::create(
-                                ov::element::i64, {}, {static_cast<int64_t>(split_dim)});
-                            auto split_node = std::make_shared<ov::op::v1::Split>(
-                                input, axis_const, static_cast<size_t>(num_splits));
-                            split_node->set_friendly_name(src_node->get_friendly_name() + "_split");
-                            rt_info[rt_key] = split_node;
-                        }
-
-                        auto split_node = rt_info[rt_key].as<std::shared_ptr<ov::op::v1::Split>>();
-                        return split_node->output(static_cast<size_t>(split_index));
-                    }
-                }
-            }
-        }
     }
 
     // Lambda function to process a single view operation

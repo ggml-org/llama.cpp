@@ -4,7 +4,6 @@
 
 #include <memory>
 #include <openvino/core/node_output.hpp>
-#include <openvino/op/clamp.hpp>
 #include <openvino/op/constant.hpp>
 #include <openvino/op/gelu.hpp>
 #include <openvino/op/multiply.hpp>
@@ -50,16 +49,6 @@ OutputVector translate_glu_geglu(const NodeContext & context) {
         std::swap(src0, src1);
     }
 
-    if (context.is_static()) {
-        // TODO: Temporary solution for NPU accuracy issue due to fp16 overflow
-       // To be removed once permanent solution is implemented
-       // Justification:
-        // For |x| > 5, GELU(x) ≈ max(x, 0)  (behaves like ReLU)
-        // So Clamp(-10, 10) only affects values where GELU would return ≈ x anyway.
-        // The only loss: values > 10 get mapped to 10 instead of x.
-        // In practice, FFN intermediates rarely exceed 10 after GEGLU gating.
-        src0 = std::make_shared<ov::op::v0::Clamp>(src0, -10.0, 10.0);
-    }
     auto gelu = std::make_shared<ov::op::v7::Gelu>(src0);
     auto res = std::make_shared<ov::op::v1::Multiply>(gelu, src1);
 

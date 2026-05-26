@@ -125,16 +125,6 @@ public:
         if (view_input_size > 0) {
             // This is a VIEW input, get the base tensor name (last element in the chain)
             std::string base_name = m_decoder->get_view_input_src_name(m_node_idx, m_input_names[idx], view_input_size - 1);
-            // Check if the VIEW has been resolved (translate_view produced a Slice)
-            auto view_it = m_tensor_map->find(m_input_names[idx]);
-            if (!base_name.empty() && view_it != m_tensor_map->end()) {
-                auto base_it = m_tensor_map->find(base_name);
-                if (base_it != m_tensor_map->end() &&
-                    view_it->second.get_node_shared_ptr() != base_it->second.get_node_shared_ptr()) {
-                    return view_it->second;
-                }
-                return base_it->second;
-            }
             if (!base_name.empty()) {
                 return m_tensor_map->at(base_name);
             }
