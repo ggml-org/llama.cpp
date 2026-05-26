@@ -6,7 +6,7 @@ export {
 	AttachmentItemVisibleWhen
 } from './attachment.enums';
 
-export { AgenticSectionType, ToolCallType } from './agentic.enums';
+export { AgenticSectionType, ContinueIntentKind, ToolCallType } from './agentic.enums';
 
 export {
 	ChatMessageStatsView,
