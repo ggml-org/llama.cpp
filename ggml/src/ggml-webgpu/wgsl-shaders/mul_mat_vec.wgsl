@@ -3,10 +3,18 @@ enable subgroups;
 #endif
 enable f16;
 
+#ifdef MMVQ
+requires packed_4x8_integer_dot_product;
+#endif
+
 #define DECLARE_BYTE_LOADERS_SRC0
 #include "common_decls.tmpl"
 
+#ifdef MMVQ
+#include "mul_mat_vec_q_acc.tmpl"
+#else
 #include "mul_mat_vec_acc.tmpl"
+#endif
 
 struct MulMatParams {
     offset_src0: u32,
@@ -28,9 +36,14 @@ struct MulMatParams {
 };
 
 @group(0) @binding(0) var<storage, read_write> src0: array<SRC0_TYPE>;
-@group(0) @binding(1) var<storage, read_write> src1: array<SRC1_TYPE>;
-@group(0) @binding(2) var<storage, read_write> dst: array<f32>;
 
+#ifdef MMVQ
+@group(0) @binding(1) var<storage, read_write> src1q: array<q8_1>;
+#else
+@group(0) @binding(1) var<storage, read_write> src1: array<SRC1_TYPE>;
+#endif
+
+@group(0) @binding(2) var<storage, read_write> dst: array<f32>;
 // "mul_mat_vec_acc.tmpl" requires params.k, params.m, params.stride_01
 @group(0) @binding(3) var<uniform> params: MulMatParams;
 
@@ -75,10 +88,15 @@ fn main(
     let src12_idx = dst2_idx;
 
     let src0_batch_offset = params.offset_src0 + src03_idx * params.stride_03 + src02_idx * params.stride_02;
-    let src1_idx_base = params.offset_src1 + src13_idx * params.stride_13 + src12_idx * params.stride_12;
     let dst_idx_base = params.offset_dst + dst3_idx * dst3_stride + dst2_idx * dst2_stride + row_base;
 
+#ifdef MMVQ
+    let src1q_idx_base = (src13_idx * params.bs02 * params.broadcast2 + src12_idx) * (params.k / 32u);
+    let acc = accumulate_vec_q_dot(thread_id, row_base, src0_batch_offset, src1q_idx_base);
+#else
+    let src1_idx_base = params.offset_src1 + src13_idx * params.stride_13 + src12_idx * params.stride_12;
     let acc = accumulate_vec_dot(thread_id, row_base, src0_batch_offset, src1_idx_base);
+#endif
 
 #ifdef USE_SUBGROUP_REDUCTION
     for (var row = 0u; row < OUTPUTS_PER_WG; row++) {
