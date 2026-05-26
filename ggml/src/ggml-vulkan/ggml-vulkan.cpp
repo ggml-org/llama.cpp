@@ -2629,6 +2629,7 @@ static std::unique_ptr<vk_queue> ggml_vk_create_queue(vk_device& device, uint32_
 }
 
 static std::unique_ptr<vk_queue> ggml_vk_create_aliased_queue(vk_device& device, const std::unique_ptr<vk_queue>& source, vk::PipelineStageFlags stage_flags, bool transfer_only) {
+    std::lock_guard<std::recursive_mutex> guard(device->mutex);
     auto q = std::make_unique<vk_queue>();
     q->handle = source->handle;
     q->queue_family_index = source->queue_family_index;
