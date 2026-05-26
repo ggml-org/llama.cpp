@@ -3360,7 +3360,6 @@ static void matvec_2d(unsigned int nth, unsigned int ith, void * data) {
 
     const uint32_t src0_start_row  = src0_nrows_per_thread * ith;
     const uint32_t src0_end_row    = MIN(src0_start_row + src0_nrows_per_thread, src0_nrows);
-    const uint32_t src0_end_row_x4 = src0_start_row + ((src0_end_row - src0_start_row) & ~3U);
 
     // no work for this thread
     if (src0_start_row >= src0_end_row) {
@@ -3390,48 +3389,89 @@ static void matvec_2d(unsigned int nth, unsigned int ith, void * data) {
     const uint8_t * restrict src1_col = (const uint8_t *) src1_data;
     float * restrict dst_col          = (float *) dst->data;
 
-    // Prefill spad with 4x src0 rows
-    #pragma unroll(4)
-    for (uint32_t ir0 = src0_start_row; ir0 < src0_end_row_x4; ir0 += 4) {
-        const uint32_t is0 = (ir0 - src0_start_row);
-        if (is0 >= MM_SPAD_SRC0_NROWS) {
-            break;
-        }
-        dma_queue_push_ddr_to_vtcm(dma_queue, dma_make_ptr(spad_src0 + is0 * src0_stride, src0_row + ir0 * src0_row_size),
-                       src0_stride, src0_row_size, 4);
-    }
+    if (mmctx->vec_dot_4x1 != NULL) {
+        const uint32_t src0_end_row_x4 = src0_start_row + ((src0_end_row - src0_start_row) & ~3U);
 
-    // Process src0 rows
-    for (uint32_t ir0 = src0_start_row; ir0 < src0_end_row_x4; ir0 += 4) {
-        const uint8_t * ss0 = dma_queue_pop(dma_queue).dst;
-        mmctx->vec_dot_4x1(ne00, &tmp[ir0 - src0_start_row], ss0, ss0 + src0_stride, ss0 + 2 * src0_stride, ss0 + 3 * src0_stride, src1_col);
-
-        // Prefetch next (n + spad_nrows) row
-        const uint32_t pr0 = (ir0 + MM_SPAD_SRC0_NROWS);
-        const uint32_t is0 = (pr0 - src0_start_row) % MM_SPAD_SRC0_NROWS;
-        if (pr0 < src0_end_row_x4) {
-            dma_queue_push_ddr_to_vtcm(dma_queue, dma_make_ptr(spad_src0 + is0 * src0_stride, src0_row + pr0 * src0_row_size),
+        // Prefill spad with 4x src0 rows
+        #pragma unroll(4)
+        for (uint32_t ir0 = src0_start_row; ir0 < src0_end_row_x4; ir0 += 4) {
+            const uint32_t is0 = (ir0 - src0_start_row);
+            if (is0 >= MM_SPAD_SRC0_NROWS) {
+                break;
+            }
+            dma_queue_push_ddr_to_vtcm(dma_queue, dma_make_ptr(spad_src0 + is0 * src0_stride, src0_row + ir0 * src0_row_size),
                            src0_stride, src0_row_size, 4);
         }
-    }
 
-    // Process leftovers
-    uint32_t ir0 = src0_end_row_x4;
-    if (ir0 + 2 <= src0_end_row) {
-        const uint32_t is0 = (ir0 - src0_start_row) % MM_SPAD_SRC0_NROWS;
-        dma_queue_push_ddr_to_vtcm(dma_queue, dma_make_ptr(spad_src0 + is0 * src0_stride, src0_row + ir0 * src0_row_size),
-                       src0_stride, src0_row_size, 2);
-        const uint8_t * ss0 = dma_queue_pop(dma_queue).dst;
-        mmctx->vec_dot_2x1(ne00, &tmp[ir0 - src0_start_row], ss0, ss0 + src0_stride, src1_col);
-        ir0 += 2;
-    }
-    if (ir0 < src0_end_row) {
-        const uint32_t is0 = (ir0 - src0_start_row) % MM_SPAD_SRC0_NROWS;
-        dma_queue_push_ddr_to_vtcm(dma_queue, dma_make_ptr(spad_src0 + is0 * src0_stride, src0_row + ir0 * src0_row_size),
-                       src0_stride, src0_row_size, 1);
-        const uint8_t * ss0 = dma_queue_pop(dma_queue).dst;
-        mmctx->vec_dot_1x1(ne00, &tmp[ir0 - src0_start_row], ss0, src1_col);
-        ir0 += 1;
+        // Process src0 rows
+        for (uint32_t ir0 = src0_start_row; ir0 < src0_end_row_x4; ir0 += 4) {
+            const uint8_t * ss0 = dma_queue_pop(dma_queue).dst;
+            mmctx->vec_dot_4x1(ne00, &tmp[ir0 - src0_start_row], ss0, ss0 + src0_stride, ss0 + 2 * src0_stride, ss0 + 3 * src0_stride, src1_col);
+
+            // Prefetch next (n + spad_nrows) row
+            const uint32_t pr0 = (ir0 + MM_SPAD_SRC0_NROWS);
+            const uint32_t is0 = (pr0 - src0_start_row) % MM_SPAD_SRC0_NROWS;
+            if (pr0 < src0_end_row_x4) {
+                dma_queue_push_ddr_to_vtcm(dma_queue, dma_make_ptr(spad_src0 + is0 * src0_stride, src0_row + pr0 * src0_row_size),
+                               src0_stride, src0_row_size, 4);
+            }
+        }
+
+        // Process leftovers
+        uint32_t ir0 = src0_end_row_x4;
+        if (ir0 + 2 <= src0_end_row) {
+            const uint32_t is0 = (ir0 - src0_start_row) % MM_SPAD_SRC0_NROWS;
+            dma_queue_push_ddr_to_vtcm(dma_queue, dma_make_ptr(spad_src0 + is0 * src0_stride, src0_row + ir0 * src0_row_size),
+                           src0_stride, src0_row_size, 2);
+            const uint8_t * ss0 = dma_queue_pop(dma_queue).dst;
+            mmctx->vec_dot_2x1(ne00, &tmp[ir0 - src0_start_row], ss0, ss0 + src0_stride, src1_col);
+            ir0 += 2;
+        }
+        if (ir0 < src0_end_row) {
+            const uint32_t is0 = (ir0 - src0_start_row) % MM_SPAD_SRC0_NROWS;
+            dma_queue_push_ddr_to_vtcm(dma_queue, dma_make_ptr(spad_src0 + is0 * src0_stride, src0_row + ir0 * src0_row_size),
+                           src0_stride, src0_row_size, 1);
+            const uint8_t * ss0 = dma_queue_pop(dma_queue).dst;
+            mmctx->vec_dot_1x1(ne00, &tmp[ir0 - src0_start_row], ss0, src1_col);
+            ir0 += 1;
+        }
+    } else {
+        const uint32_t src0_end_row_x2 = src0_start_row + ((src0_end_row - src0_start_row) & ~1U);
+
+        // Prefill spad with 2x src0 rows
+        #pragma unroll(2)
+        for (uint32_t ir0 = src0_start_row; ir0 < src0_end_row_x2; ir0 += 2) {
+            const uint32_t is0 = (ir0 - src0_start_row);
+            if (is0 >= MM_SPAD_SRC0_NROWS) {
+                break;
+            }
+            dma_queue_push_ddr_to_vtcm(dma_queue, dma_make_ptr(spad_src0 + is0 * src0_stride, src0_row + ir0 * src0_row_size),
+                           src0_stride, src0_row_size, 2);
+        }
+
+        // Process src0 rows
+        for (uint32_t ir0 = src0_start_row; ir0 < src0_end_row_x2; ir0 += 2) {
+            const uint8_t * ss0 = dma_queue_pop(dma_queue).dst;
+            mmctx->vec_dot_2x1(ne00, &tmp[ir0 - src0_start_row], ss0, ss0 + src0_stride, src1_col);
+
+            // Prefetch next (n + spad_nrows) row
+            const uint32_t pr0 = (ir0 + MM_SPAD_SRC0_NROWS);
+            const uint32_t is0 = (pr0 - src0_start_row) % MM_SPAD_SRC0_NROWS;
+            if (pr0 < src0_end_row_x2) {
+                dma_queue_push_ddr_to_vtcm(dma_queue, dma_make_ptr(spad_src0 + is0 * src0_stride, src0_row + pr0 * src0_row_size),
+                               src0_stride, src0_row_size, 2);
+            }
+        }
+
+        // Process the last row (if any)
+        if (src0_end_row != src0_end_row_x2) {
+            const uint32_t ir0 = src0_end_row_x2;
+            const uint32_t is0 = (ir0 - src0_start_row);
+            dma_queue_push_ddr_to_vtcm(dma_queue, dma_make_ptr(spad_src0 + is0 * src0_stride, src0_row + ir0 * src0_row_size),
+                           src0_stride, src0_row_size, 1);
+            const uint8_t * ss0 = dma_queue_pop(dma_queue).dst;
+            mmctx->vec_dot_1x1(ne00, &tmp[ir0 - src0_start_row], ss0, src1_col);
+        }
     }
 
     hvx_copy_f32_ua((uint8_t *) &dst_col[src0_start_row], (uint8_t *) tmp, src0_end_row - src0_start_row);
