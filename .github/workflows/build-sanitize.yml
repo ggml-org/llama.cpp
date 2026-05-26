@@ -28,7 +28,7 @@ env:
 
 jobs:
   ctest:
-    runs-on: [self-hosted, CPU, Linux]
+    runs-on: [self-hosted, X64, CPU, Linux]
 
     continue-on-error: true
 
@@ -60,6 +60,7 @@ jobs:
         if: ${{ matrix.sanitizer == 'UNDEFINED' }}
         run: |
           cmake -B build \
+            -DCMAKE_BUILD_TYPE=Debug \
             -DLLAMA_FATAL_WARNINGS=ON \
             -DLLAMA_SANITIZE_${{ matrix.sanitizer }}=ON \
             -DGGML_SANITIZE_${{ matrix.sanitizer }}=ON
@@ -71,6 +72,7 @@ jobs:
         if: ${{ matrix.sanitizer != 'THREAD' }}
         run: |
           cmake -B build \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
             -DLLAMA_SANITIZE_${{ matrix.sanitizer }}=ON \
             -DGGML_SANITIZE_${{ matrix.sanitizer }}=ON
 
@@ -81,6 +83,7 @@ jobs:
         if: ${{ matrix.sanitizer == 'THREAD' }}
         run: |
           cmake -B build \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
             -DLLAMA_SANITIZE_${{ matrix.sanitizer }}=ON \
             -DGGML_SANITIZE_${{ matrix.sanitizer }}=ON \
             -DGGML_OPENMP=OFF

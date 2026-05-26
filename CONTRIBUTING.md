@@ -63,6 +63,7 @@ After submitting your PR:
 - Optionally pick a `<module>` from here: https://github.com/ggml-org/llama.cpp/wiki/Modules
 - Let other maintainers merge their own PRs
 - When merging a PR, make sure you have a good understanding of the changes
+- If a PR does not warrant a new release, add `[no release]` in the squashed commit to spare CI resources
 - Be mindful of maintenance: most of the work going into a feature happens after the PR is merged. If the PR author is not committed to contribute long-term, someone else needs to take responsibility (you)
 
 Maintainers reserve the right to decline review or close pull requests for any reason, without any questions, particularly under any of the following conditions:

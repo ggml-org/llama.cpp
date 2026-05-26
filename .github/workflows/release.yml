@@ -1,5 +1,11 @@
 name: Release
 
+# Skip this workflow on push to master if the commit message contains [no release]
+if: |
+  github.event_name != 'push' ||
+  github.ref != 'refs/heads/master' ||
+  !contains(github.event.head_commit.message, '[no release]')
+
 on:
   workflow_dispatch: # allows manual triggering
     inputs:
