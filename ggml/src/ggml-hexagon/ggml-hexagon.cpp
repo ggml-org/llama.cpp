@@ -802,7 +802,7 @@ static void repack_q4_1_q4x4x2(ggml_tensor * t, const void * data, size_t size) 
 
     size_t row_size    = ggml_row_size(t->type, t->ne[0]);
     size_t row_size_pd = ggml_row_size(t->type, hex_round_up(t->ne[0], QK_Q4_0x4x2));
-    size_t row_size_rp = row_size * 2;
+    size_t row_size_rp = row_size_pd;  // scratch must hold one full padded tile (qblk_size/2 quants + scales)
 
     const size_t total_tensor_size = (size_t)nrows * row_size;
     const size_t n_bytes_to_copy = size < total_tensor_size ? size : total_tensor_size;
@@ -850,7 +850,7 @@ static void repack_q4x4x2_q4_1(void * data, const ggml_tensor * t, size_t size) 
 
     size_t row_size    = ggml_row_size(t->type, t->ne[0]);
     size_t row_size_pd = ggml_row_size(t->type, hex_round_up(t->ne[0], QK_Q4_0x4x2));
-    size_t row_size_rp = row_size * 2;
+    size_t row_size_rp = row_size_pd;  // scratch must hold one full padded tile (qblk_size/2 quants + scales)
 
     const size_t total_tensor_size = (size_t)nrows * row_size;
     const size_t n_bytes_to_copy = size < total_tensor_size ? size : total_tensor_size;
@@ -866,6 +866,8 @@ static void repack_q4x4x2_q4_1(void * data, const ggml_tensor * t, size_t size) 
 
     HEX_VERBOSE("ggml-hex: repack-q4x4x2-q4_1 %s : data %p size %zu dims %ldx%ld row-size %zu\n", t->name, data, size,
                 t->ne[0], nrows, row_size);
+
+    memset(buf_rp, 0, row_size_rp);  // clear-out padded buffer to make sure the tail is all zeros
 
     for (int64_t i = 0; i < n_full_rows; i++) {
         const uint8_t * src = (const uint8_t *) t->data + (i * row_size);
