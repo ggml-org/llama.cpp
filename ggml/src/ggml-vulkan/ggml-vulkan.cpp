@@ -5386,6 +5386,32 @@ static vk_device ggml_vk_get_device(size_t idx) {
 
         last_struct = (VkBaseOutStructure *)&vk12_features;
 
+        VkPhysicalDeviceInternallySynchronizedQueuesFeaturesKHR sync_query_features;
+        sync_query_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_INTERNALLY_SYNCHRONIZED_QUEUES_FEATURES_KHR;
+        sync_query_features.pNext = nullptr;
+        if (device->has_internally_synchronized_queues) {
+            last_struct->pNext = (VkBaseOutStructure *)&sync_query_features;
+            last_struct = (VkBaseOutStructure *)&sync_query_features;
+        }
+
+        vkGetPhysicalDeviceFeatures2((VkPhysicalDevice)device->physical_device, &device_features2);
+        if (device->has_internally_synchronized_queues) {
+            device->has_internally_synchronized_queues = sync_query_features.internallySynchronizedQueues == VK_TRUE;
+            vk12_features.pNext = nullptr;
+            last_struct = (VkBaseOutStructure *)&vk12_features;
+        }
+
+        VkPhysicalDeviceInternallySynchronizedQueuesFeaturesKHR vk_internally_sync_features;
+        vk_internally_sync_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_INTERNALLY_SYNCHRONIZED_QUEUES_FEATURES_KHR;
+        vk_internally_sync_features.pNext = nullptr;
+        vk_internally_sync_features.internallySynchronizedQueues = VK_FALSE;
+
+        if (device->has_internally_synchronized_queues) {
+            vk_internally_sync_features.internallySynchronizedQueues = VK_TRUE;
+            last_struct->pNext = (VkBaseOutStructure *)&vk_internally_sync_features;
+            last_struct = (VkBaseOutStructure *)&vk_internally_sync_features;
+        }
+
         VkPhysicalDevicePipelineRobustnessFeaturesEXT pl_robustness_features;
         pl_robustness_features.pNext = nullptr;
         pl_robustness_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PIPELINE_ROBUSTNESS_FEATURES_EXT;
