@@ -37,7 +37,7 @@ concurrency:
 
 jobs:
   server:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, CPU, Linux, llama-server]
 
     strategy:
       matrix:
@@ -46,19 +46,19 @@ jobs:
       fail-fast: false
 
     steps:
-      - name: Dependencies
-        id: depends
-        run: |
-          sudo apt-get update
-          sudo apt-get -y install \
-            build-essential \
-            xxd \
-            git \
-            cmake \
-            curl \
-            wget \
-            language-pack-en \
-            libssl-dev
+      #- name: Dependencies
+      #  id: depends
+      #  run: |
+      #    sudo apt-get update
+      #    sudo apt-get -y install \
+      #      build-essential \
+      #      xxd \
+      #      git \
+      #      cmake \
+      #      curl \
+      #      wget \
+      #      language-pack-en \
+      #      libssl-dev
 
       - name: Clone
         id: checkout
