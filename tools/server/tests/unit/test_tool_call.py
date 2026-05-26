@@ -11,20 +11,17 @@ from utils import *
 from enum import Enum
 from typing import TypedDict
 
-server: ServerProcess
-
 TIMEOUT_START_SLOW = 15 * 60 # this is needed for real model tests
 TIMEOUT_HTTP_REQUEST = 60
-
-@pytest.fixture(autouse=True)
-def create_server():
-    global server
-    server = ServerPreset.tinyllama2()
-    server.model_alias = "tinyllama-2-tool-call"
-    server.server_port = 8081
-    server.n_slots = 1
-    server.n_ctx = 8192
-    server.n_batch = 2048
+@pytest.fixture
+def server(server_factory):
+    s = server_factory('tinyllama2')
+    s.model_alias = "tinyllama-2-tool-call"
+    s.server_port = 8081
+    s.n_slots = 1
+    s.n_ctx = 8192
+    s.n_batch = 2048
+    return s
 
 class CompletionMode(Enum):
     NORMAL = "normal"
@@ -246,8 +243,7 @@ def do_test_completion_with_required_tool_tiny(server: ServerProcess, tool: dict
     (TEST_TOOL,    "success",  "bartowski/DeepSeek-R1-Distill-Qwen-7B-GGUF:Q4_K_M", None),
     (PYTHON_TOOL,  "code",     "bartowski/DeepSeek-R1-Distill-Qwen-7B-GGUF:Q4_K_M", None),
 ])
-def test_completion_with_required_tool_real_model(tool: dict, argument_key: str | None, hf_repo: str, template_override: str | Tuple[str, str | None] | None, stream: CompletionMode):
-    global server
+def test_completion_with_required_tool_real_model(server, tool: dict, argument_key: str | None, hf_repo: str, template_override: str | Tuple[str, str | None] | None, stream: CompletionMode):
     n_predict = 512
     server.jinja = True
     server.n_ctx = 8192
@@ -310,8 +306,7 @@ def do_test_completion_without_tool_call(server: ServerProcess, n_predict: int, 
     ("meta-llama-Llama-3.3-70B-Instruct",         128, [TEST_TOOL],   None),
     ("meta-llama-Llama-3.3-70B-Instruct",         128, [PYTHON_TOOL], 'none'),
 ])
-def test_completion_without_tool_call_fast(template_name: str, n_predict: int, tools: list[dict], tool_choice: str | None, stream: CompletionMode):
-    global server
+def test_completion_without_tool_call_fast(server, template_name: str, n_predict: int, tools: list[dict], tool_choice: str | None, stream: CompletionMode):
     server.n_predict = n_predict
     server.jinja = True
     server.chat_template_file = f'{LLAMA_CPP_ROOT}/models/templates/{template_name}.jinja'
@@ -332,8 +327,7 @@ def test_completion_without_tool_call_fast(template_name: str, n_predict: int, t
     ("meta-llama-Llama-3.2-3B-Instruct",              256, [TEST_TOOL],   None),
     ("meta-llama-Llama-3.2-3B-Instruct",              256, [PYTHON_TOOL], 'none'),
 ])
-def test_completion_without_tool_call_slow(template_name: str, n_predict: int, tools: list[dict], tool_choice: str | None, stream: CompletionMode):
-    global server
+def test_completion_without_tool_call_slow(server, template_name: str, n_predict: int, tools: list[dict], tool_choice: str | None, stream: CompletionMode):
     server.n_predict = n_predict
     server.jinja = True
     server.chat_template_file = f'{LLAMA_CPP_ROOT}/models/templates/{template_name}.jinja'
@@ -383,8 +377,7 @@ def test_completion_without_tool_call_slow(template_name: str, n_predict: int, t
 
     # ("bartowski/Llama-3.2-1B-Instruct-GGUF:Q4_K_M", ("meta-llama/Llama-3.2-3B-Instruct", None)),
 ])
-def test_weather(hf_repo: str, template_override: str | Tuple[str, str | None] | None, stream: CompletionMode):
-    global server
+def test_weather(server, hf_repo: str, template_override: str | Tuple[str, str | None] | None, stream: CompletionMode):
     n_predict = 512
     server.jinja = True
     server.n_ctx = 8192
@@ -443,8 +436,7 @@ def do_test_weather(server: ServerProcess, **kwargs):
     # (None,                                           128,  "bartowski/Meta-Llama-3.1-8B-Instruct-GGUF:Q4_K_M",  None),
     # ("[\\s\\S]*?\\*\\*\\s*0.5($|\\*\\*)",            8192, "bartowski/DeepSeek-R1-Distill-Qwen-7B-GGUF:Q4_K_M", None),
 ])
-def test_calc_result(result_override: str | None, n_predict: int, hf_repo: str, template_override: str | Tuple[str, str | None] | None, stream: CompletionMode):
-    global server
+def test_calc_result(server, result_override: str | None, n_predict: int, hf_repo: str, template_override: str | Tuple[str, str | None] | None, stream: CompletionMode):
     server.jinja = True
     server.n_ctx = 8192 * 2
     server.n_predict = n_predict
@@ -530,8 +522,7 @@ def do_test_calc_result(server: ServerProcess, result_override: str | None, n_pr
     # (1024, 'none',      CompletionMode.NORMAL,   None, "^(<think>\\s*)?I need[\\s\\S]*?</think>\\s*To find[\\s\\S]*",                 "bartowski/DeepSeek-R1-Distill-Qwen-7B-GGUF:Q4_K_M", None),
     # (128,  'deepseek',  None, "^Okay, let me figure out the sum of 102 and 7[\\s\\S]*",                      "bartowski/Qwen_QwQ-32B-GGUF:Q4_K_M",                None),
 ])
-def test_thoughts(n_predict: int, reasoning_format: Literal['deepseek', 'none'] | None, expect_content: str | None, expect_reasoning_content: str | None, hf_repo: str, template_override: str | Tuple[str, str | None] | None, stream: CompletionMode):
-    global server
+def test_thoughts(server, n_predict: int, reasoning_format: Literal['deepseek', 'none'] | None, expect_content: str | None, expect_reasoning_content: str | None, hf_repo: str, template_override: str | Tuple[str, str | None] | None, stream: CompletionMode):
     server.reasoning_format = reasoning_format
     server.jinja = True
     server.n_ctx = 8192 * 2
@@ -603,8 +594,7 @@ def test_thoughts(n_predict: int, reasoning_format: Literal['deepseek', 'none'] 
     ("bartowski/gemma-2-2b-it-GGUF:Q4_K_M",              None),
     ("bartowski/gemma-2-2b-it-GGUF:Q4_K_M",              "chatml"),
 ])
-def test_hello_world(hf_repo: str, template_override: str | Tuple[str, str | None] | None, stream: CompletionMode):
-    global server
+def test_hello_world(server, hf_repo: str, template_override: str | Tuple[str, str | None] | None, stream: CompletionMode):
     n_predict = 512 # High because of DeepSeek R1
     server.jinja = True
     server.n_ctx = 8192

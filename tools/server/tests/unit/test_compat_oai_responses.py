@@ -2,15 +2,13 @@ import pytest
 from openai import OpenAI
 from utils import *
 
-server: ServerProcess
 
-@pytest.fixture(autouse=True)
-def create_server():
-    global server
-    server = ServerPreset.tinyllama2()
+@pytest.fixture
+def server(server_factory):
+    return server_factory("tinyllama2")
 
-def test_responses_with_openai_library():
-    global server
+
+def test_responses_with_openai_library(server):
     server.start()
     client = OpenAI(api_key="dummy", base_url=f"http://{server.server_host}:{server.server_port}/v1")
     res = client.responses.create(
@@ -27,8 +25,8 @@ def test_responses_with_openai_library():
     assert res.output[0].id.startswith("msg_")
     assert match_regex("(Suddenly)+", res.output_text)
 
-def test_responses_stream_with_openai_library():
-    global server
+
+def test_responses_stream_with_openai_library(server):
     server.start()
     client = OpenAI(api_key="dummy", base_url=f"http://{server.server_host}:{server.server_port}/v1")
     stream = client.responses.create(

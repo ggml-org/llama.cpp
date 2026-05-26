@@ -2,14 +2,10 @@ import pytest
 from openai import OpenAI
 from utils import *
 
-server: ServerProcess
 
-@pytest.fixture(autouse=True)
-def create_server():
-    global server
-    server = ServerPreset.tinyllama2()
-
-
+@pytest.fixture
+def server(server_factory):
+    return server_factory('tinyllama2')
 @pytest.mark.parametrize(
     "model,system_prompt,user_prompt,max_tokens,re_content,n_prompt,n_predicted,finish_reason,jinja,chat_template",
     [
@@ -25,8 +21,7 @@ def create_server():
         (None, "Book", [{"type": "text", "text": "What is"}, {"type": "text", "text": "the best book"}], 8, "Whillicter", 79, 8, "length", True, None),
     ]
 )
-def test_chat_completion(model, system_prompt, user_prompt, max_tokens, re_content, n_prompt, n_predicted, finish_reason, jinja, chat_template):
-    global server
+def test_chat_completion(server, model, system_prompt, user_prompt, max_tokens, re_content, n_prompt, n_predicted, finish_reason, jinja, chat_template):
     server.jinja = jinja
     server.chat_template = chat_template
     server.start()
@@ -51,8 +46,7 @@ def test_chat_completion(model, system_prompt, user_prompt, max_tokens, re_conte
     assert choice["finish_reason"] == finish_reason
 
 
-def test_chat_completion_cached_tokens():
-    global server
+def test_chat_completion_cached_tokens(server):
     server.n_slots = 1
     server.start()
     seq = [
@@ -79,8 +73,7 @@ def test_chat_completion_cached_tokens():
         ("You are a coding assistant.", "Write the fibonacci function in c++.", 128, "(Aside|she|felter|alonger)+", 104, 128, "length"),
     ]
 )
-def test_chat_completion_stream(system_prompt, user_prompt, max_tokens, re_content, n_prompt, n_predicted, finish_reason):
-    global server
+def test_chat_completion_stream(server, system_prompt, user_prompt, max_tokens, re_content, n_prompt, n_predicted, finish_reason):
     server.model_alias = "llama-test-model"
     server.start()
     res = server.make_stream_request("POST", "/chat/completions", data={
@@ -119,8 +112,7 @@ def test_chat_completion_stream(system_prompt, user_prompt, max_tokens, re_conte
             assert data["usage"]["completion_tokens"] == n_predicted
 
 
-def test_chat_completion_with_openai_library():
-    global server
+def test_chat_completion_with_openai_library(server):
     server.start()
     client = OpenAI(api_key="dummy", base_url=f"http://{server.server_host}:{server.server_port}/v1")
     res = client.chat.completions.create(
@@ -139,8 +131,7 @@ def test_chat_completion_with_openai_library():
     assert match_regex("(Suddenly)+", res.choices[0].message.content)
 
 
-def test_chat_template():
-    global server
+def test_chat_template(server):
     server.chat_template = "llama3"
     server.debug = True  # to get the "__verbose" object in the response
     server.start()
@@ -160,8 +151,7 @@ def test_chat_template():
     ("Whill", "Whill"),
     ([{"type": "text", "text": "Wh"}, {"type": "text", "text": "ill"}], "Wh\n\nill"),
 ])
-def test_chat_template_assistant_prefill(prefill, re_prefill):
-    global server
+def test_chat_template_assistant_prefill(server, prefill, re_prefill):
     server.jinja = True
     server.chat_template_file = f'{LLAMA_CPP_ROOT}/models/templates/meta-llama-Llama-3.1-8B-Instruct.jinja'
     server.debug = True  # to get the "__verbose" object in the response
@@ -179,10 +169,9 @@ def test_chat_template_assistant_prefill(prefill, re_prefill):
     assert res.body["__verbose"]["prompt"].endswith(f"<|start_header_id|>user<|end_header_id|>\n\nWhat is the best book<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n{re_prefill}")
 
 
-def test_chat_template_continue_final_message_vllm_compat():
+def test_chat_template_continue_final_message_vllm_compat(server):
     """continue_final_message is the vLLM/transformers explicit alias for the prefill_assistant heuristic.
     Both must produce the same prompt."""
-    global server
     server.jinja = True
     server.chat_template_file = f'{LLAMA_CPP_ROOT}/models/templates/meta-llama-Llama-3.1-8B-Instruct.jinja'
     server.debug = True
@@ -202,9 +191,8 @@ def test_chat_template_continue_final_message_vllm_compat():
     assert res.body["__verbose"]["prompt"].endswith("<|start_header_id|>user<|end_header_id|>\n\nWhat is the best book<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\nWhill")
 
 
-def test_chat_template_continue_final_message_mutual_exclusion():
+def test_chat_template_continue_final_message_mutual_exclusion(server):
     """add_generation_prompt and continue_final_message both set to true must be rejected"""
-    global server
     server.chat_template = "llama3"
     server.start()
     res = server.make_request("POST", "/chat/completions", data={
@@ -219,8 +207,7 @@ def test_chat_template_continue_final_message_mutual_exclusion():
     assert res.status_code == 400
 
 
-def test_apply_chat_template():
-    global server
+def test_apply_chat_template(server):
     server.chat_template = "command-r"
     server.start()
     res = server.make_request("POST", "/apply-template", data={
@@ -245,8 +232,7 @@ def test_apply_chat_template():
     ({"type": "json_object", "schema": {"type": 123}}, 0, None),
     ({"type": "json_object", "schema": {"type": "hiccup"}}, 0, None),
 ])
-def test_completion_with_response_format(response_format: dict, n_predicted: int, re_content: str | None):
-    global server
+def test_completion_with_response_format(server, response_format: dict, n_predicted: int, re_content: str | None):
     server.start()
     res = server.make_request("POST", "/chat/completions", data={
         "max_tokens": n_predicted,
@@ -269,8 +255,7 @@ def test_completion_with_response_format(response_format: dict, n_predicted: int
     (False, {"const": "42"}, 6, "\"42\""),
     (True, {"const": "42"}, 6, "\"42\""),
 ])
-def test_completion_with_json_schema(jinja: bool, json_schema: dict, n_predicted: int, re_content: str):
-    global server
+def test_completion_with_json_schema(server, jinja: bool, json_schema: dict, n_predicted: int, re_content: str):
     server.jinja = jinja
     server.debug = True
     server.start()
@@ -291,8 +276,7 @@ def test_completion_with_json_schema(jinja: bool, json_schema: dict, n_predicted
     (False, 'root ::= "a"{5,5}', 6, "a{5,5}"),
     (True, 'root ::= "a"{5,5}', 6, "a{5,5}"),
 ])
-def test_completion_with_grammar(jinja: bool, grammar: str, n_predicted: int, re_content: str):
-    global server
+def test_completion_with_grammar(server, jinja: bool, grammar: str, n_predicted: int, re_content: str):
     server.jinja = jinja
     server.start()
     res = server.make_request("POST", "/chat/completions", data={
@@ -318,8 +302,7 @@ def test_completion_with_grammar(jinja: bool, grammar: str, n_predicted: int, re
     [{"role": "system", "content": "test"}, {}],
     [{"role": "user", "content": "test"}, {"role": "assistant", "content": "test"}, {"role": "assistant", "content": "test"}],
 ])
-def test_invalid_chat_completion_req(messages):
-    global server
+def test_invalid_chat_completion_req(server, messages):
     server.start()
     res = server.make_request("POST", "/chat/completions", data={
         "messages": messages,
@@ -328,8 +311,7 @@ def test_invalid_chat_completion_req(messages):
     assert "error" in res.body
 
 
-def test_chat_completion_with_timings_per_token():
-    global server
+def test_chat_completion_with_timings_per_token(server):
     server.start()
     res = server.make_stream_request("POST", "/chat/completions", data={
         "max_tokens": 10,
@@ -358,8 +340,7 @@ def test_chat_completion_with_timings_per_token():
     assert stats_received
 
 
-def test_logprobs():
-    global server
+def test_logprobs(server):
     server.start()
     client = OpenAI(api_key="dummy", base_url=f"http://{server.server_host}:{server.server_port}/v1")
     res = client.chat.completions.create(
@@ -385,8 +366,7 @@ def test_logprobs():
     assert aggregated_text == output_text
 
 
-def test_logprobs_stream():
-    global server
+def test_logprobs_stream(server):
     server.start()
     client = OpenAI(api_key="dummy", base_url=f"http://{server.server_host}:{server.server_port}/v1")
     res = client.chat.completions.create(
@@ -426,8 +406,7 @@ def test_logprobs_stream():
     assert aggregated_text == output_text
 
 
-def test_logit_bias():
-    global server
+def test_logit_bias(server):
     server.start()
 
     exclude = ["i", "I", "the", "The", "to", "a", "an", "be", "is", "was", "but", "But", "and", "And", "so", "So", "you", "You", "he", "He", "she", "She", "we", "We", "they", "They", "it", "It", "his", "His", "her", "Her", "book", "Book"]
@@ -454,8 +433,7 @@ def test_logit_bias():
     assert output_text
     assert all(output_text.find(" " + tok + " ") == -1 for tok in exclude)
 
-def test_context_size_exceeded():
-    global server
+def test_context_size_exceeded(server):
     server.start()
     res = server.make_request("POST", "/chat/completions", data={
         "messages": [
@@ -472,8 +450,7 @@ def test_context_size_exceeded():
     assert res.body["error"]["n_ctx"] == server.n_ctx // server.n_slots
 
 
-def test_context_size_exceeded_stream():
-    global server
+def test_context_size_exceeded_stream(server):
     server.start()
     try:
         for _ in server.make_stream_request("POST", "/chat/completions", data={
@@ -501,8 +478,7 @@ def test_context_size_exceeded_stream():
         (64, 2, True),
     ]
 )
-def test_return_progress(n_batch, batch_count, reuse_cache):
-    global server
+def test_return_progress(server, n_batch, batch_count, reuse_cache):
     server.n_batch = n_batch
     server.n_ctx = 256
     server.n_slots = 1
@@ -551,8 +527,7 @@ def test_return_progress(n_batch, batch_count, reuse_cache):
     assert total_batch_count == batch_count
 
 
-def test_chat_completions_multiple_choices():
-    global server
+def test_chat_completions_multiple_choices(server):
     server.start()
     # make sure cache can be reused across multiple choices and multiple requests
     # ref: https://github.com/ggml-org/llama.cpp/pull/18663

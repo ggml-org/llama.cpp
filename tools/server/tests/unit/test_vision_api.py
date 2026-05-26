@@ -3,8 +3,6 @@ from utils import *
 import base64
 import requests
 
-server: ServerProcess
-
 def get_img_url(id: str) -> str:
     IMG_URL_0 = "https://huggingface.co/ggml-org/tinygemma3-GGUF/resolve/main/test/11_truck.png"
     IMG_URL_1 = "https://huggingface.co/ggml-org/tinygemma3-GGUF/resolve/main/test/91_cat.png"
@@ -34,14 +32,12 @@ def get_img_url(id: str) -> str:
 JSON_MULTIMODAL_KEY = "multimodal_data"
 JSON_PROMPT_STRING_KEY = "prompt_string"
 
-@pytest.fixture(autouse=True)
-def create_server():
-    global server
+@pytest.fixture
+def server(server_factory):
     os.environ['LLAMA_MEDIA_MARKER'] = '<__media__>'
-    server = ServerPreset.tinygemma3()
+    return server_factory('tinygemma3')
 
-def test_models_supports_multimodal_capability():
-    global server
+def test_models_supports_multimodal_capability(server):
     server.start()
     res = server.make_request("GET", "/models", data={})
     assert res.status_code == 200
@@ -50,8 +46,7 @@ def test_models_supports_multimodal_capability():
     assert "completion" in model_info["capabilities"]
     assert "multimodal" in model_info["capabilities"]
 
-def test_v1_models_supports_multimodal_capability():
-    global server
+def test_v1_models_supports_multimodal_capability(server):
     server.start()
     res = server.make_request("GET", "/v1/models", data={})
     assert res.status_code == 200
@@ -74,8 +69,7 @@ def test_v1_models_supports_multimodal_capability():
         # TODO @ngxson : test with multiple images, no images and with audio
     ]
 )
-def test_vision_chat_completion(prompt, image_url, success, re_content):
-    global server
+def test_vision_chat_completion(server, prompt, image_url, success, re_content):
     server.start()
     res = server.make_request("POST", "/chat/completions", data={
         "temperature": 0.0,
@@ -108,8 +102,7 @@ def test_vision_chat_completion(prompt, image_url, success, re_content):
         ("What is this:\n",             "",                     False, None), # empty string
     ]
 )
-def test_vision_completion(prompt, image_data, success, re_content):
-    global server
+def test_vision_completion(server, prompt, image_data, success, re_content):
     server.start()
     res = server.make_request("POST", "/completions", data={
         "temperature": 0.0,
@@ -137,8 +130,7 @@ def test_vision_completion(prompt, image_data, success, re_content):
         ("What is this:\n",             "base64",               False), # non-image data
     ]
 )
-def test_vision_embeddings(prompt, image_data, success):
-    global server
+def test_vision_embeddings(server, prompt, image_data, success):
     server.server_embeddings = True
     server.n_batch = 512
     server.start()

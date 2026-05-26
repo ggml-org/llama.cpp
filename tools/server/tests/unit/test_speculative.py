@@ -3,27 +3,25 @@ from utils import *
 
 # We use a F16 MOE gguf as main model, and q4_0 as draft model
 
-server = ServerPreset.stories15m_moe()
-
 MODEL_DRAFT_FILE_URL = "https://huggingface.co/ggml-org/tiny-llamas/resolve/main/stories15M-q4_0.gguf"
 
-def create_server():
-    global server
-    server = ServerPreset.stories15m_moe()
+
+def _build_server(server_factory):
+    s = server_factory("stories15m_moe")
     # set default values
-    server.model_draft = download_file(MODEL_DRAFT_FILE_URL)
-    server.draft_min = 4
-    server.draft_max = 8
-    server.fa = "off"
+    s.model_draft = download_file(MODEL_DRAFT_FILE_URL)
+    s.draft_min = 4
+    s.draft_max = 8
+    s.fa = "off"
+    return s
 
 
-@pytest.fixture(autouse=True)
-def fixture_create_server():
-    return create_server()
+@pytest.fixture
+def server(server_factory):
+    return _build_server(server_factory)
 
 
-def test_with_and_without_draft():
-    global server
+def test_with_and_without_draft(server, server_factory):
     server.model_draft = None  # disable draft model
     server.start()
     res = server.make_request("POST", "/completion", data={
@@ -37,7 +35,7 @@ def test_with_and_without_draft():
     server.stop()
 
     # create new server with draft model
-    create_server()
+    server = _build_server(server_factory)
     server.start()
     res = server.make_request("POST", "/completion", data={
         "prompt": "I believe the meaning of life is",
@@ -51,8 +49,7 @@ def test_with_and_without_draft():
     assert content_no_draft == content_draft
 
 
-def test_different_draft_min_draft_max():
-    global server
+def test_different_draft_min_draft_max(server):
     test_values = [
         (1, 2),
         (1, 4),
@@ -78,8 +75,7 @@ def test_different_draft_min_draft_max():
         last_content = res.body["content"]
 
 
-def test_slot_ctx_not_exceeded():
-    global server
+def test_slot_ctx_not_exceeded(server):
     server.n_ctx = 256
     server.start()
     res = server.make_request("POST", "/completion", data={
@@ -92,8 +88,7 @@ def test_slot_ctx_not_exceeded():
     assert len(res.body["content"]) > 0
 
 
-def test_with_ctx_shift():
-    global server
+def test_with_ctx_shift(server):
     server.n_ctx = 256
     server.enable_ctx_shift = True
     server.start()
@@ -114,8 +109,7 @@ def test_with_ctx_shift():
     (1, 2),
     (2, 2),
 ])
-def test_multi_requests_parallel(n_slots: int, n_requests: int):
-    global server
+def test_multi_requests_parallel(server, n_slots: int, n_requests: int):
     server.n_slots = n_slots
     server.start()
     tasks = []

@@ -5,9 +5,6 @@ import requests
 
 from utils import *
 
-server: ServerProcess
-
-
 def get_test_image_base64() -> str:
     """Get a test image in base64 format"""
     # Use the same test image as test_vision_api.py
@@ -15,22 +12,20 @@ def get_test_image_base64() -> str:
     response = requests.get(IMG_URL)
     response.raise_for_status()
     return base64.b64encode(response.content).decode("utf-8")
-
-@pytest.fixture(autouse=True)
-def create_server():
-    global server
-    server = ServerPreset.tinyllama2()
-    server.model_alias = "tinyllama-2-anthropic"
-    server.server_port = 8082
-    server.n_slots = 1
-    server.n_ctx = 8192
-    server.n_batch = 2048
+@pytest.fixture
+def server(server_factory):
+    s = server_factory('tinyllama2')
+    s.model_alias = "tinyllama-2-anthropic"
+    s.server_port = 8082
+    s.n_slots = 1
+    s.n_ctx = 8192
+    s.n_batch = 2048
+    return s
 
 
 @pytest.fixture
 def vision_server():
     """Separate fixture for vision tests that require multimodal support"""
-    global server
     server = ServerPreset.tinygemma3()
     server.offline = False  # Allow downloading the model
     server.model_alias = "tinygemma3-anthropic"
@@ -41,7 +36,7 @@ def vision_server():
 
 # Basic message tests
 
-def test_anthropic_messages_basic():
+def test_anthropic_messages_basic(server):
     """Test basic Anthropic messages endpoint"""
     server.start()
 
@@ -74,7 +69,7 @@ def test_anthropic_messages_basic():
     assert "timings" not in res.body, "Anthropic API should not include timings field"
 
 
-def test_anthropic_messages_with_system():
+def test_anthropic_messages_with_system(server):
     """Test messages with system prompt"""
     server.start()
 
@@ -92,7 +87,7 @@ def test_anthropic_messages_with_system():
     assert len(res.body["content"]) > 0
 
 
-def test_anthropic_messages_multipart_content():
+def test_anthropic_messages_multipart_content(server):
     """Test messages with multipart content blocks"""
     server.start()
 
@@ -114,7 +109,7 @@ def test_anthropic_messages_multipart_content():
     assert res.body["type"] == "message"
 
 
-def test_anthropic_messages_conversation():
+def test_anthropic_messages_conversation(server):
     """Test multi-turn conversation"""
     server.start()
 
@@ -134,7 +129,7 @@ def test_anthropic_messages_conversation():
 
 # Streaming tests
 
-def test_anthropic_messages_streaming():
+def test_anthropic_messages_streaming(server):
     """Test streaming messages"""
     server.start()
 
@@ -208,7 +203,7 @@ def test_anthropic_messages_streaming():
 
 # Token counting tests
 
-def test_anthropic_count_tokens():
+def test_anthropic_count_tokens(server):
     """Test token counting endpoint"""
     server.start()
 
@@ -227,7 +222,7 @@ def test_anthropic_count_tokens():
     assert "output_tokens" not in res.body
 
 
-def test_anthropic_count_tokens_with_system():
+def test_anthropic_count_tokens_with_system(server):
     """Test token counting with system prompt"""
     server.start()
 
@@ -243,7 +238,7 @@ def test_anthropic_count_tokens_with_system():
     assert res.body["input_tokens"] > 0
 
 
-def test_anthropic_count_tokens_no_max_tokens():
+def test_anthropic_count_tokens_no_max_tokens(server):
     """Test that count_tokens doesn't require max_tokens"""
     server.start()
 
@@ -261,7 +256,7 @@ def test_anthropic_count_tokens_no_max_tokens():
 
 # Tool use tests
 
-def test_anthropic_tool_use_basic():
+def test_anthropic_tool_use_basic(server):
     """Test basic tool use"""
     server.jinja = True
     server.start()
@@ -308,7 +303,7 @@ def test_anthropic_tool_use_basic():
         assert isinstance(tool_block["input"], dict)
 
 
-def test_anthropic_tool_result():
+def test_anthropic_tool_result(server):
     """Test sending tool results back
 
     This test verifies that tool_result blocks are properly converted to
@@ -356,7 +351,7 @@ def test_anthropic_tool_result():
     assert res.body["content"][0]["type"] == "text"
 
 
-def test_anthropic_tool_result_with_text():
+def test_anthropic_tool_result_with_text(server):
     """Test tool result mixed with text content
 
     This tests the edge case where a user message contains both text and
@@ -402,7 +397,7 @@ def test_anthropic_tool_result_with_text():
     assert len(res.body["content"]) > 0
 
 
-def test_anthropic_tool_result_error():
+def test_anthropic_tool_result_error(server):
     """Test tool result with error flag"""
     server.jinja = True
     server.start()
@@ -441,7 +436,7 @@ def test_anthropic_tool_result_error():
     assert res.body["type"] == "message"
 
 
-def test_anthropic_tool_streaming():
+def test_anthropic_tool_streaming(server):
     """Test streaming with tool use"""
     server.jinja = True
     server.start()
@@ -496,7 +491,7 @@ def test_anthropic_tool_streaming():
 
 # Vision/multimodal tests
 
-def test_anthropic_vision_format_accepted():
+def test_anthropic_vision_format_accepted(server):
     """Test that Anthropic vision format is accepted (format validation only)"""
     server.start()
 
@@ -533,9 +528,8 @@ def test_anthropic_vision_format_accepted():
     assert "image input is not supported" in res.body.get("error", {}).get("message", "").lower()
 
 
-def test_anthropic_vision_base64_with_multimodal_model(vision_server):
+def test_anthropic_vision_base64_with_multimodal_model(server, vision_server):
     """Test vision with base64 image using Anthropic format with multimodal model"""
-    global server
     server = vision_server
     server.start()
 
@@ -576,7 +570,7 @@ def test_anthropic_vision_base64_with_multimodal_model(vision_server):
 
 # Parameter tests
 
-def test_anthropic_stop_sequences():
+def test_anthropic_stop_sequences(server):
     """Test stop_sequences parameter"""
     server.start()
 
@@ -593,7 +587,7 @@ def test_anthropic_stop_sequences():
     assert res.body["type"] == "message"
 
 
-def test_anthropic_temperature():
+def test_anthropic_temperature(server):
     """Test temperature parameter"""
     server.start()
 
@@ -610,7 +604,7 @@ def test_anthropic_temperature():
     assert res.body["type"] == "message"
 
 
-def test_anthropic_top_p():
+def test_anthropic_top_p(server):
     """Test top_p parameter"""
     server.start()
 
@@ -627,7 +621,7 @@ def test_anthropic_top_p():
     assert res.body["type"] == "message"
 
 
-def test_anthropic_top_k():
+def test_anthropic_top_k(server):
     """Test top_k parameter (llama.cpp specific)"""
     server.start()
 
@@ -646,7 +640,7 @@ def test_anthropic_top_k():
 
 # Error handling tests
 
-def test_anthropic_missing_messages():
+def test_anthropic_missing_messages(server):
     """Test error when messages are missing"""
     server.start()
 
@@ -660,7 +654,7 @@ def test_anthropic_missing_messages():
     assert res.status_code >= 400
 
 
-def test_anthropic_empty_messages():
+def test_anthropic_empty_messages(server):
     """Test permissive handling of empty messages array"""
     server.start()
 
@@ -678,7 +672,7 @@ def test_anthropic_empty_messages():
 
 # Content block index tests
 
-def test_anthropic_streaming_content_block_indices():
+def test_anthropic_streaming_content_block_indices(server):
     """Test that content block indices are correct in streaming"""
     server.jinja = True
     server.start()
@@ -725,7 +719,7 @@ def test_anthropic_streaming_content_block_indices():
 
 # Extended features tests
 
-def test_anthropic_thinking():
+def test_anthropic_thinking(server):
     """Test extended thinking parameter"""
     server.jinja = True
     server.start()
@@ -746,7 +740,7 @@ def test_anthropic_thinking():
     assert res.body["type"] == "message"
 
 
-def test_anthropic_metadata():
+def test_anthropic_metadata(server):
     """Test metadata parameter"""
     server.start()
 
@@ -767,7 +761,7 @@ def test_anthropic_metadata():
 
 # Compatibility tests
 
-def test_anthropic_vs_openai_different_response_format():
+def test_anthropic_vs_openai_different_response_format(server):
     """Verify Anthropic format is different from OpenAI format"""
     server.start()
 
@@ -814,9 +808,8 @@ def test_anthropic_vs_openai_different_response_format():
 # The next two tests cover the input path (conversation history):
 # Client sends thinking blocks -> convert_anthropic_to_oai -> reasoning_content -> template
 
-def test_anthropic_thinking_history_in_count_tokens():
+def test_anthropic_thinking_history_in_count_tokens(server):
     """Test that interleaved thinking blocks in conversation history are not dropped during conversion."""
-    global server
     server.jinja = True
     server.chat_template_file = f'{LLAMA_CPP_ROOT}/models/templates/Qwen-Qwen3-0.6B.jinja'
     server.start()
@@ -883,9 +876,8 @@ def test_anthropic_thinking_history_in_count_tokens():
         f"Expected more tokens with thinking ({res_with.body['input_tokens']}) than without ({res_without.body['input_tokens']})"
 
 
-def test_anthropic_thinking_history_in_template():
+def test_anthropic_thinking_history_in_template(server):
     """Test that reasoning_content from converted interleaved thinking blocks renders in the prompt."""
-    global server
     server.jinja = True
     server.chat_template_file = f'{LLAMA_CPP_ROOT}/models/templates/Qwen-Qwen3-0.6B.jinja'
     server.start()
@@ -946,9 +938,8 @@ def test_anthropic_thinking_history_in_template():
 
 @pytest.mark.slow
 @pytest.mark.parametrize("stream", [False, True])
-def test_anthropic_thinking_with_reasoning_model(stream):
+def test_anthropic_thinking_with_reasoning_model(server, stream):
     """Test that thinking content blocks are properly returned for reasoning models"""
-    global server
     server = ServerProcess()
     server.model_hf_repo = "bartowski/DeepSeek-R1-Distill-Qwen-7B-GGUF"
     server.model_hf_file = "DeepSeek-R1-Distill-Qwen-7B-Q4_K_M.gguf"

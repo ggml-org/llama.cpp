@@ -1,16 +1,13 @@
 import pytest
 from utils import *
 
-server: ServerProcess
 
-@pytest.fixture(autouse=True)
-def create_server():
-    global server
-    server = ServerPreset.router()
+@pytest.fixture
+def server(server_factory):
+    return server_factory('router')
 
 
-def test_router_props():
-    global server
+def test_router_props(server):
     server.models_max = 2
     server.no_models_autoload = True
     server.start()
@@ -29,8 +26,7 @@ def test_router_props():
         ("non-existent/model", False),
     ]
 )
-def test_router_chat_completion_stream(model: str, success: bool):
-    global server
+def test_router_chat_completion_stream(server, model: str, success: bool):
     server.start()
     content = ""
     ex: ServerError | None = None
@@ -62,13 +58,13 @@ def test_router_chat_completion_stream(model: str, success: bool):
         assert content == ""
 
 
-def _get_model_ids(is_reload: bool) -> set[str]:
+def _get_model_ids(server, is_reload: bool) -> set[str]:
     res = server.make_request("GET", "/models" + ("?reload=1" if is_reload else ""))
     assert res.status_code == 200
     return {item["id"] for item in res.body.get("data", [])}
 
 
-def _get_model_status(model_id: str) -> str:
+def _get_model_status(server, model_id: str) -> str:
     res = server.make_request("GET", "/models")
     assert res.status_code == 200
     for item in res.body.get("data", []):
@@ -77,11 +73,11 @@ def _get_model_status(model_id: str) -> str:
     raise AssertionError(f"Model {model_id} not found in /models response")
 
 
-def _wait_for_model_status(model_id: str, desired: set[str], timeout: int = 60) -> str:
+def _wait_for_model_status(server, model_id: str, desired: set[str], timeout: int = 60) -> str:
     deadline = time.time() + timeout
     last_status = None
     while time.time() < deadline:
-        last_status = _get_model_status(model_id)
+        last_status = _get_model_status(server, model_id)
         if last_status in desired:
             return last_status
         time.sleep(1)
@@ -91,7 +87,7 @@ def _wait_for_model_status(model_id: str, desired: set[str], timeout: int = 60) 
 
 
 def _load_model_and_wait(
-    model_id: str, timeout: int = 60, headers: dict | None = None
+    server, model_id: str, timeout: int = 60, headers: dict | None = None
 ) -> None:
     load_res = server.make_request(
         "POST", "/models/load", data={"model": model_id}, headers=headers
@@ -99,24 +95,22 @@ def _load_model_and_wait(
     assert load_res.status_code == 200
     assert isinstance(load_res.body, dict)
     assert load_res.body.get("success") is True
-    _wait_for_model_status(model_id, {"loaded"}, timeout=timeout)
+    _wait_for_model_status(server, model_id, {"loaded"}, timeout=timeout)
 
 
-def test_router_unload_model():
-    global server
+def test_router_unload_model(server):
     server.start()
     model_id = "ggml-org/tinygemma3-GGUF:Q8_0"
 
-    _load_model_and_wait(model_id)
+    _load_model_and_wait(server, model_id)
 
     unload_res = server.make_request("POST", "/models/unload", data={"model": model_id})
     assert unload_res.status_code == 200
     assert unload_res.body.get("success") is True
-    _wait_for_model_status(model_id, {"unloaded"})
+    _wait_for_model_status(server, model_id, {"unloaded"})
 
 
-def test_router_models_max_evicts_lru():
-    global server
+def test_router_models_max_evicts_lru(server):
     server.models_max = 2
     server.start()
 
@@ -129,23 +123,22 @@ def test_router_models_max_evicts_lru():
     # Load only the first 2 models to fill the cache
     first, second, third = candidate_models[:3]
 
-    _load_model_and_wait(first, timeout=120)
-    _load_model_and_wait(second, timeout=120)
+    _load_model_and_wait(server, first, timeout=120)
+    _load_model_and_wait(server, second, timeout=120)
 
     # Verify both models are loaded
-    assert _get_model_status(first) == "loaded"
-    assert _get_model_status(second) == "loaded"
+    assert _get_model_status(server, first) == "loaded"
+    assert _get_model_status(server, second) == "loaded"
 
     # Load the third model - this should trigger LRU eviction of the first model
-    _load_model_and_wait(third, timeout=120)
+    _load_model_and_wait(server, third, timeout=120)
 
     # Verify eviction: third is loaded, first was evicted
-    assert _get_model_status(third) == "loaded"
-    assert _get_model_status(first) == "unloaded"
+    assert _get_model_status(server, third) == "loaded"
+    assert _get_model_status(server, first) == "unloaded"
 
 
-def test_router_no_models_autoload():
-    global server
+def test_router_no_models_autoload(server):
     server.no_models_autoload = True
     server.start()
     model_id = "ggml-org/tinygemma3-GGUF:Q8_0"
@@ -162,7 +155,7 @@ def test_router_no_models_autoload():
     assert res.status_code == 400
     assert "error" in res.body
 
-    _load_model_and_wait(model_id)
+    _load_model_and_wait(server, model_id)
 
     success_res = server.make_request(
         "POST",
@@ -177,8 +170,7 @@ def test_router_no_models_autoload():
     assert "error" not in success_res.body
 
 
-def test_router_api_key_required():
-    global server
+def test_router_api_key_required(server):
     server.api_key = "sk-router-secret"
     server.start()
 
@@ -197,7 +189,7 @@ def test_router_api_key_required():
     assert res.status_code == 401
     assert res.body.get("error", {}).get("type") == "authentication_error"
 
-    _load_model_and_wait(model_id, headers=auth_headers)
+    _load_model_and_wait(server, model_id, headers=auth_headers)
 
     authed = server.make_request(
         "POST",
@@ -213,10 +205,8 @@ def test_router_api_key_required():
     assert "error" not in authed.body
 
 
-def test_router_reload_models():
+def test_router_reload_models(server):
     """POST /models/reload re-reads the INI preset and updates the model list."""
-    global server
-
     preset_path = os.path.join(TESTS_TMP_DIR, "test_reload.ini")
 
     # Initial preset: two models
@@ -232,7 +222,7 @@ def test_router_reload_models():
     server.models_preset = preset_path
     server.start()
 
-    ids = _get_model_ids(is_reload=False)
+    ids = _get_model_ids(server, is_reload=False)
     assert "model-reload-a" in ids
     assert "model-reload-b" in ids
 
@@ -247,7 +237,7 @@ def test_router_reload_models():
         )
 
     try:
-        ids = _get_model_ids(is_reload=True)
+        ids = _get_model_ids(server, is_reload=True)
         assert "model-reload-a" not in ids, "removed model should no longer appear"
         assert "model-reload-b" in ids, "unchanged model should still appear"
         assert "model-reload-c" in ids, "newly added model should appear"

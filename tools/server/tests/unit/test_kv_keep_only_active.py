@@ -3,8 +3,6 @@ import tempfile
 import pytest
 from utils import *
 
-server = ServerPreset.tinyllama2()
-
 class LogReader:
     def __init__(self, path):
         self.path = path
@@ -15,21 +13,19 @@ class LogReader:
             content = f.read()
             self.pos = f.tell()
         return content
-
-@pytest.fixture(autouse=True)
-def create_server():
-    global server
-    server = ServerPreset.tinyllama2()
-    server.n_slots = 2
-    server.n_predict = 4
-    server.temperature = 0.0
-    server.server_slots = True
-    server.cache_ram = 100
-    server.kv_unified = True
-    server.debug = True
-    fd, server.log_path = tempfile.mkstemp(suffix='.log')
+@pytest.fixture
+def server(server_factory):
+    s = server_factory('tinyllama2')
+    s.n_slots = 2
+    s.n_predict = 4
+    s.temperature = 0.0
+    s.server_slots = True
+    s.cache_ram = 100
+    s.kv_unified = True
+    s.debug = True
+    fd, s.log_path = tempfile.mkstemp(suffix='.log')
     os.close(fd)
-    yield
+    return s
 
 
 LONG_PROMPT = (
@@ -42,8 +38,7 @@ LONG_PROMPT = (
 
 
 # idle slot cleared on launch should restore from cache-ram
-def test_clear_and_restore():
-    global server
+def test_clear_and_restore(server):
     server.start()
     log = LogReader(server.log_path)
 
@@ -89,8 +84,7 @@ def test_clear_and_restore():
     assert "__TEST_TAG_CACHE_IDLE_SLOT__" not in log.drain()
 
 
-def test_disabled_with_flag():
-    global server
+def test_disabled_with_flag(server):
     server.no_cache_idle_slots = True
     server.start()
     log = LogReader(server.log_path)

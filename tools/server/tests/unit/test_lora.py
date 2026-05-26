@@ -1,15 +1,12 @@
 import pytest
 from utils import *
 
-server = ServerPreset.stories15m_moe()
-
 LORA_FILE_URL = "https://huggingface.co/ggml-org/stories15M_MOE/resolve/main/moe_shakespeare15M.gguf"
-
-@pytest.fixture(autouse=True)
-def create_server():
-    global server
-    server = ServerPreset.stories15m_moe()
-    server.lora_files = [download_file(LORA_FILE_URL)]
+@pytest.fixture
+def server(server_factory):
+    s = server_factory('stories15m_moe')
+    s.lora_files = [download_file(LORA_FILE_URL)]
+    return s
 
 
 @pytest.mark.parametrize("scale,re_content", [
@@ -18,8 +15,7 @@ def create_server():
     # with lora, the model should behave like a Shakespearean text generator
     (1.0, "(eye|love|glass|sun)+"),
 ])
-def test_lora(scale: float, re_content: str):
-    global server
+def test_lora(server, scale: float, re_content: str):
     server.start()
     res_lora_control = server.make_request("POST", "/lora-adapters", data=[
         {"id": 0, "scale": scale}
@@ -32,8 +28,7 @@ def test_lora(scale: float, re_content: str):
     assert match_regex(re_content, res.body["content"])
 
 
-def test_lora_per_request():
-    global server
+def test_lora_per_request(server):
     server.n_slots = 4
     server.start()
 

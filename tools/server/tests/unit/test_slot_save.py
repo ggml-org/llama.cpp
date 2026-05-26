@@ -1,18 +1,16 @@
 import pytest
 from utils import *
 
-server = ServerPreset.tinyllama2()
 
-@pytest.fixture(autouse=True)
-def create_server():
-    global server
-    server = ServerPreset.tinyllama2()
-    server.slot_save_path = TESTS_TMP_DIR
-    server.temperature = 0.0
+@pytest.fixture
+def server(server_factory):
+    s = server_factory('tinyllama2')
+    s.slot_save_path = TESTS_TMP_DIR
+    s.temperature = 0.0
+    return s
 
 
-def test_slot_save_restore():
-    global server
+def test_slot_save_restore(server):
     server.start()
 
     # First prompt in slot 1 should be fully processed
@@ -70,8 +68,7 @@ def test_slot_save_restore():
     assert res.body["timings"]["prompt_n"] == 1
 
 
-def test_slot_erase():
-    global server
+def test_slot_erase(server):
     server.start()
 
     res = server.make_request("POST", "/completion", data={

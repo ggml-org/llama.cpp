@@ -6,22 +6,16 @@ import random
 from openai import OpenAI
 from utils import *
 
-server = ServerPreset.tinyllama2()
-
 JSON_MULTIMODAL_KEY = "multimodal_data"
 JSON_PROMPT_STRING_KEY = "prompt_string"
-
-@pytest.fixture(autouse=True)
-def create_server():
-    global server
-    server = ServerPreset.tinyllama2()
-
+@pytest.fixture
+def server(server_factory):
+    return server_factory('tinyllama2')
 @pytest.mark.parametrize("prompt,n_predict,re_content,n_prompt,n_predicted,truncated,return_tokens", [
     ("I believe the meaning of life is", 8, "(going|bed)+", 18, 8, False, False),
     ("Write a joke about AI from a very long prompt which will not be truncated", 64, "(princesses|everyone|kids|Anna|forest)+", 46, 64, False, True),
 ])
-def test_completion(prompt: str, n_predict: int, re_content: str, n_prompt: int, n_predicted: int, truncated: bool, return_tokens: bool):
-    global server
+def test_completion(server, prompt: str, n_predict: int, re_content: str, n_prompt: int, n_predicted: int, truncated: bool, return_tokens: bool):
     server.start()
     res = server.make_request("POST", "/completion", data={
         "n_predict": n_predict,
@@ -45,8 +39,7 @@ def test_completion(prompt: str, n_predict: int, re_content: str, n_prompt: int,
     ("I believe the meaning of life is", 8, "(going|bed)+", 18, 8, False),
     ("Write a joke about AI from a very long prompt which will not be truncated", 64, "(princesses|everyone|kids|Anna|forest)+", 46, 64, False),
 ])
-def test_completion_stream(prompt: str, n_predict: int, re_content: str, n_prompt: int, n_predicted: int, truncated: bool):
-    global server
+def test_completion_stream(server, prompt: str, n_predict: int, re_content: str, n_prompt: int, n_predicted: int, truncated: bool):
     server.start()
     res = server.make_stream_request("POST", "/completion", data={
         "n_predict": n_predict,
@@ -73,8 +66,7 @@ def test_completion_stream(prompt: str, n_predict: int, re_content: str, n_promp
             content += data["content"]
 
 
-def test_completion_stream_vs_non_stream():
-    global server
+def test_completion_stream_vs_non_stream(server):
     server.start()
     res_stream = server.make_stream_request("POST", "/completion", data={
         "n_predict": 8,
@@ -91,8 +83,7 @@ def test_completion_stream_vs_non_stream():
     assert content_stream == res_non_stream.body["content"]
 
 
-def test_completion_with_openai_library():
-    global server
+def test_completion_with_openai_library(server):
     server.start()
     client = OpenAI(api_key="dummy", base_url=f"http://{server.server_host}:{server.server_port}/v1")
     res = client.completions.create(
@@ -106,8 +97,7 @@ def test_completion_with_openai_library():
     assert match_regex("(going|bed)+", res.choices[0].text)
 
 
-def test_completion_stream_with_openai_library():
-    global server
+def test_completion_stream_with_openai_library(server):
     server.start()
     client = OpenAI(api_key="dummy", base_url=f"http://{server.server_host}:{server.server_port}/v1")
     res = client.completions.create(
@@ -127,8 +117,7 @@ def test_completion_stream_with_openai_library():
 
 # Test case from https://github.com/ggml-org/llama.cpp/issues/13780
 @pytest.mark.slow
-def test_completion_stream_with_openai_library_stops():
-    global server
+def test_completion_stream_with_openai_library_stops(server):
     server.model_hf_repo = "bartowski/Phi-3.5-mini-instruct-GGUF:Q4_K_M"
     server.model_hf_file = None
     server.start()
@@ -150,8 +139,7 @@ def test_completion_stream_with_openai_library_stops():
 
 
 @pytest.mark.parametrize("n_slots", [1, 2])
-def test_consistent_result_same_seed(n_slots: int):
-    global server
+def test_consistent_result_same_seed(server, n_slots: int):
     server.n_slots = n_slots
     server.start()
     last_res = None
@@ -168,8 +156,7 @@ def test_consistent_result_same_seed(n_slots: int):
 
 
 @pytest.mark.parametrize("n_slots", [1, 2])
-def test_different_result_different_seed(n_slots: int):
-    global server
+def test_different_result_different_seed(server, n_slots: int):
     server.n_slots = n_slots
     server.start()
     last_res = None
@@ -188,8 +175,7 @@ def test_different_result_different_seed(n_slots: int):
 # @pytest.mark.parametrize("temperature", [0.0, 1.0])
 @pytest.mark.parametrize("n_batch", [16, 32])
 @pytest.mark.parametrize("temperature", [0.0])
-def test_consistent_result_different_batch_size(n_batch: int, temperature: float):
-    global server
+def test_consistent_result_different_batch_size(server, n_batch: int, temperature: float):
     server.n_batch = n_batch
     server.start()
     last_res = None
@@ -206,8 +192,7 @@ def test_consistent_result_different_batch_size(n_batch: int, temperature: float
 
 
 @pytest.mark.skip(reason="This test fails on linux, need to be fixed")
-def test_cache_vs_nocache_prompt():
-    global server
+def test_cache_vs_nocache_prompt(server):
     server.start()
     res_cache = server.make_request("POST", "/completion", data={
         "prompt": "I believe the meaning of life is",
@@ -224,8 +209,7 @@ def test_cache_vs_nocache_prompt():
     assert res_cache.body["content"] == res_no_cache.body["content"]
 
 
-def test_nocache_long_input_prompt():
-    global server
+def test_nocache_long_input_prompt(server):
     server.start()
     res = server.make_request("POST", "/completion", data={
         "prompt": "I believe the meaning of life is"*32,
@@ -235,8 +219,7 @@ def test_nocache_long_input_prompt():
     })
     assert res.status_code == 400
 
-def test_json_prompt_no_mtmd():
-    global server
+def test_json_prompt_no_mtmd(server):
     server.start()
     res = server.make_request("POST", "/completion", data={
         "prompt": { JSON_PROMPT_STRING_KEY: "I believe the meaning of life is" },
@@ -246,8 +229,7 @@ def test_json_prompt_no_mtmd():
     })
     assert res.status_code == 200
 
-def test_json_prompt_mtm_error_when_not_supported():
-    global server
+def test_json_prompt_mtm_error_when_not_supported(server):
     server.start()
     res = server.make_request("POST", "/completion", data={
         "prompt": { JSON_PROMPT_STRING_KEY: "I believe the meaning of life is <__media__>", JSON_MULTIMODAL_KEY: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=" },
@@ -258,8 +240,7 @@ def test_json_prompt_mtm_error_when_not_supported():
     # MTMD is disabled on this model, so this should fail.
     assert res.status_code != 200
 
-def test_completion_with_tokens_input():
-    global server
+def test_completion_with_tokens_input(server):
     server.temperature = 0.0
     server.start()
     prompt_str = "I believe the meaning of life is"
@@ -324,8 +305,7 @@ def test_completion_with_tokens_input():
     (4, 2), # some slots must be idle
     (4, 6),
 ])
-def test_completion_parallel_slots(n_slots: int, n_requests: int):
-    global server
+def test_completion_parallel_slots(server, n_slots: int, n_requests: int):
     server.n_slots = n_slots
     server.temperature = 0.0
     server.start()
@@ -379,8 +359,7 @@ def test_completion_parallel_slots(n_slots: int, n_requests: int):
         (256, 4, [90, 90, 40, 75], [True,  True,  True,  True]),
     ],
 )
-def test_completion_unified(n_ctx, n_slots, n_predict_vals, expected_success):
-    global server
+def test_completion_unified(server, n_ctx, n_slots, n_predict_vals, expected_success):
     server.n_slots = n_slots
     server.kv_unified = True
     server.n_ctx = n_ctx
@@ -408,10 +387,8 @@ def test_completion_unified(n_ctx, n_slots, n_predict_vals, expected_success):
         ("I believe the meaning of life is", 32, ["content", "generation_settings/n_predict", "prompt"]),
     ],
 )
-def test_completion_response_fields(
-    prompt: str, n_predict: int, response_fields: list[str]
+def test_completion_response_fields(server, prompt: str, n_predict: int, response_fields: list[str]
 ):
-    global server
     server.start()
     res = server.make_request(
         "POST",
@@ -435,8 +412,7 @@ def test_completion_response_fields(
         assert "generation_settings" in res.body
 
 
-def test_n_probs():
-    global server
+def test_n_probs(server):
     server.start()
     res = server.make_request("POST", "/completion", data={
         "prompt": "I believe the meaning of life is",
@@ -460,8 +436,7 @@ def test_n_probs():
             assert "bytes" in prob and type(prob["bytes"]) == list
 
 
-def test_n_probs_stream():
-    global server
+def test_n_probs_stream(server):
     server.start()
     res = server.make_stream_request("POST", "/completion", data={
         "prompt": "I believe the meaning of life is",
@@ -487,8 +462,7 @@ def test_n_probs_stream():
                     assert "bytes" in prob and type(prob["bytes"]) == list
 
 
-def test_n_probs_post_sampling():
-    global server
+def test_n_probs_post_sampling(server):
     server.start()
     res = server.make_request("POST", "/completion", data={
         "prompt": "Today was the day. Today I would finally become a",
@@ -524,9 +498,8 @@ def test_n_probs_post_sampling():
             # if the ones we did get already sum to 1.0.
             assert sum(p["prob"] for p in tok["top_probs"]) == pytest.approx(1.0)
 
-def test_n_probs_post_backend_sampling():
+def test_n_probs_post_backend_sampling(server):
     """Verify that the same probabilities are returned with and without backend sampling."""
-    global server
     server.backend_sampling = True
     server.start()
 
@@ -569,8 +542,7 @@ def test_n_probs_post_backend_sampling():
             verify_token(aa, bb)
 
 @pytest.mark.parametrize("tokenize,openai_style", [(False, False), (False, True), (True, False), (True, True)])
-def test_logit_bias(tokenize, openai_style):
-    global server
+def test_logit_bias(server, tokenize, openai_style):
     server.start()
 
     exclude = ["i", "I", "the", "The", "to", "a", "an", "be", "is", "was", "but", "But", "and", "And", "so", "So", "you", "You", "he", "He", "she", "She", "we", "We", "they", "They", "it", "It", "his", "His", "her", "Her", "book", "Book"]
@@ -601,8 +573,7 @@ def test_logit_bias(tokenize, openai_style):
     assert all(output_text.find(" " + tok + " ") == -1 for tok in exclude)
 
 
-def test_cancel_request():
-    global server
+def test_cancel_request(server):
     server.n_ctx = 4096
     server.n_predict = -1
     server.n_slots = 1
@@ -624,8 +595,7 @@ def test_cancel_request():
 # this test exercises the host-memory prompt cache
 # ref: https://github.com/ggml-org/llama.cpp/pull/16391
 # ref: https://github.com/ggml-org/llama.cpp/pull/17078
-def test_completion_prompt_cache():
-    global server
+def test_completion_prompt_cache(server):
     server.n_slots = 2
     server.kv_unified = True
     server.start()

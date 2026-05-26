@@ -19,3 +19,14 @@ def stop_server_after_each_test():
 def do_something():
     # this will be run once per test session, before any tests
     ServerPreset.load_all()
+
+
+@pytest.fixture
+def server_factory():
+    """Factory: returns a fresh, configured (but not started) ServerProcess."""
+    def _build(preset="tinyllama2", **overrides):
+        s = getattr(ServerPreset, preset)()
+        for k, v in overrides.items():
+            setattr(s, k, v)
+        return s
+    return _build

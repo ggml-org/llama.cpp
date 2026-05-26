@@ -1,18 +1,14 @@
 import pytest
 from utils import *
 
-server = ServerPreset.tinyllama2()
+
+@pytest.fixture
+def server(server_factory):
+    return server_factory("tinyllama2")
 
 
-@pytest.fixture(autouse=True)
-def create_server():
-    global server
-    server = ServerPreset.tinyllama2()
-
-
-def test_ignore_eos_populates_logit_bias():
+def test_ignore_eos_populates_logit_bias(server):
     """ignore_eos=true must add EOG logit biases to generation_settings."""
-    global server
     server.start()
     res = server.make_request("POST", "/completion", data={
         "n_predict": 8,
@@ -28,9 +24,8 @@ def test_ignore_eos_populates_logit_bias():
         assert entry["bias"] is None  # null in JSON represents -inf
 
 
-def test_ignore_eos_false_no_logit_bias():
+def test_ignore_eos_false_no_logit_bias(server):
     """ignore_eos=false (default) must NOT add EOG logit biases."""
-    global server
     server.start()
     res = server.make_request("POST", "/completion", data={
         "n_predict": 8,

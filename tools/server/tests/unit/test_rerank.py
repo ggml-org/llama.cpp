@@ -1,15 +1,10 @@
 import pytest
 from utils import *
 
-server = ServerPreset.jina_reranker_tiny()
 
-
-@pytest.fixture(autouse=True)
-def create_server():
-    global server
-    server = ServerPreset.jina_reranker_tiny()
-
-
+@pytest.fixture
+def server(server_factory):
+    return server_factory('jina_reranker_tiny')
 TEST_DOCUMENTS = [
     "A machine is a physical system that uses power to apply forces and control movement to perform an action. The term is commonly applied to artificial devices, such as those employing engines or motors, but also to natural biological macromolecules, such as molecular machines.",
     "Learning is the process of acquiring new understanding, knowledge, behaviors, skills, values, attitudes, and preferences. The ability to learn is possessed by humans, non-human animals, and some machines; there is also evidence for some kind of learning in certain plants.",
@@ -18,8 +13,7 @@ TEST_DOCUMENTS = [
 ]
 
 
-def test_rerank():
-    global server
+def test_rerank(server):
     server.start()
     res = server.make_request("POST", "/rerank", data={
         "query": "Machine learning is",
@@ -41,8 +35,7 @@ def test_rerank():
     assert least_relevant["index"] == 3
 
 
-def test_rerank_tei_format():
-    global server
+def test_rerank_tei_format(server):
     server.start()
     res = server.make_request("POST", "/rerank", data={
         "query": "Machine learning is",
@@ -70,8 +63,7 @@ def test_rerank_tei_format():
     123,
     [1, 2, 3],
 ])
-def test_invalid_rerank_req(documents):
-    global server
+def test_invalid_rerank_req(server, documents):
     server.start()
     res = server.make_request("POST", "/rerank", data={
         "query": "Machine learning is",
@@ -88,8 +80,7 @@ def test_invalid_rerank_req(documents):
         ("Which city?", "Machine learning is ", "Paris, capitale de la", 26),
     ]
 )
-def test_rerank_usage(query, doc1, doc2, n_tokens):
-    global server
+def test_rerank_usage(server, query, doc1, doc2, n_tokens):
     server.start()
 
     res = server.make_request("POST", "/rerank", data={
@@ -110,8 +101,7 @@ def test_rerank_usage(query, doc1, doc2, n_tokens):
     (4, 4),
     (99, len(TEST_DOCUMENTS)),    # higher than available docs
 ])
-def test_rerank_top_n(top_n, expected_len):
-    global server
+def test_rerank_top_n(server, top_n, expected_len):
     server.start()
     data = {
         "query": "Machine learning is",
@@ -131,8 +121,7 @@ def test_rerank_top_n(top_n, expected_len):
     (4, 4),
     (99, len(TEST_DOCUMENTS)),    # higher than available docs
 ])
-def test_rerank_tei_top_n(top_n, expected_len):
-    global server
+def test_rerank_tei_top_n(server, top_n, expected_len):
     server.start()
     data = {
         "query": "Machine learning is",

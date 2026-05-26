@@ -1,18 +1,15 @@
 import pytest
 from utils import *
 
-server: ServerProcess
+
+@pytest.fixture
+def server(server_factory):
+    s = server_factory('tinyllama2')
+    s.gcp_compat = True
+    return s
 
 
-@pytest.fixture(autouse=True)
-def create_server():
-    global server
-    server = ServerPreset.tinyllama2()
-    server.gcp_compat = True
-
-
-def test_gcp_predict_camel_case():
-    global server
+def test_gcp_predict_camel_case(server):
     server.start()
     res = server.make_request("POST", "/predict", data={
         "instances": [
@@ -35,8 +32,7 @@ def test_gcp_predict_camel_case():
     assert len(prediction["choices"][0]["message"]["content"]) > 0
 
 
-def test_gcp_predict_multiple_instances():
-    global server
+def test_gcp_predict_multiple_instances(server):
     server.n_slots = 2
     server.start()
     res = server.make_request("POST", "/predict", data={

@@ -13,14 +13,13 @@ import datetime
 from utils import *
 from typing import Literal
 
-server: ServerProcess
 
-@pytest.fixture(autouse=True)
-def create_server():
-    global server
-    server = ServerPreset.tinyllama2()
-    server.model_alias = "tinyllama-2"
-    server.n_slots = 1
+@pytest.fixture
+def server(server_factory):
+    s = server_factory('tinyllama2')
+    s.model_alias = "tinyllama-2"
+    s.n_slots = 1
+    return s
 
 
 @pytest.mark.parametrize("tools", [None, [], [TEST_TOOL]])
@@ -38,8 +37,7 @@ def create_server():
     ("CohereForAI-c4ai-command-r7b-12-2024-tool_use","auto", "<|START_OF_TURN_TOKEN|><|CHATBOT_TOKEN|>"),
     ("CohereForAI-c4ai-command-r7b-12-2024-tool_use", "off", "<|START_OF_TURN_TOKEN|><|CHATBOT_TOKEN|><|START_THINKING|><|END_THINKING|>"),
 ])
-def test_reasoning(template_name: str, reasoning: Literal['on', 'off', 'auto'] | None, expected_end: str, tools: list[dict]):
-    global server
+def test_reasoning(server, template_name: str, reasoning: Literal['on', 'off', 'auto'] | None, expected_end: str, tools: list[dict]):
     server.jinja = True
     server.reasoning = reasoning
     server.chat_template_file = f'{LLAMA_CPP_ROOT}/models/templates/{template_name}.jinja'
@@ -62,8 +60,7 @@ def test_reasoning(template_name: str, reasoning: Literal['on', 'off', 'auto'] |
     ("meta-llama-Llama-3.3-70B-Instruct",    "%d %b %Y"),
     ("fireworks-ai-llama-3-firefunction-v2", "%b %d %Y"),
 ])
-def test_date_inside_prompt(template_name: str, format: str, tools: list[dict]):
-    global server
+def test_date_inside_prompt(server, template_name: str, format: str, tools: list[dict]):
     server.jinja = True
     server.chat_template_file = f'{LLAMA_CPP_ROOT}/models/templates/{template_name}.jinja'
     server.start()
@@ -85,8 +82,7 @@ def test_date_inside_prompt(template_name: str, format: str, tools: list[dict]):
 @pytest.mark.parametrize("template_name,expected_generation_prompt", [
     ("meta-llama-Llama-3.3-70B-Instruct",    "<|start_header_id|>assistant<|end_header_id|>"),
 ])
-def test_add_generation_prompt(template_name: str, expected_generation_prompt: str, add_generation_prompt: bool):
-    global server
+def test_add_generation_prompt(server, template_name: str, expected_generation_prompt: str, add_generation_prompt: bool):
     server.jinja = True
     server.chat_template_file = f'{LLAMA_CPP_ROOT}/models/templates/{template_name}.jinja'
     server.start()

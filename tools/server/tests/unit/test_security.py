@@ -2,29 +2,24 @@ import pytest
 from openai import OpenAI
 from utils import *
 
-server = ServerPreset.tinyllama2()
-
 TEST_API_KEY = "sk-this-is-the-secret-key"
-
-@pytest.fixture(autouse=True)
-def create_server():
-    global server
-    server = ServerPreset.tinyllama2()
-    server.api_key = TEST_API_KEY
+@pytest.fixture
+def server(server_factory):
+    s = server_factory('tinyllama2')
+    s.api_key = TEST_API_KEY
+    return s
 
 
 @pytest.mark.parametrize("endpoint", ["/health", "/models"])
-def test_access_public_endpoint(endpoint: str):
-    global server
+def test_access_public_endpoint(server, endpoint: str):
     server.start()
     res = server.make_request("GET", endpoint)
     assert res.status_code == 200
     assert "error" not in res.body
 
 
-def test_access_static_assets_without_api_key():
+def test_access_static_assets_without_api_key(server):
     """Static web UI assets should not require API key authentication (issue #21229)"""
-    global server
     server.start()
     for path in ["/", "/bundle.js", "/bundle.css"]:
         res = server.make_request("GET", path)
@@ -32,8 +27,7 @@ def test_access_static_assets_without_api_key():
 
 
 @pytest.mark.parametrize("api_key", [None, "invalid-key"])
-def test_incorrect_api_key(api_key: str):
-    global server
+def test_incorrect_api_key(server, api_key: str):
     server.start()
     res = server.make_request("POST", "/completions", data={
         "prompt": "I believe the meaning of life is",
@@ -45,8 +39,7 @@ def test_incorrect_api_key(api_key: str):
     assert res.body["error"]["type"] == "authentication_error"
 
 
-def test_correct_api_key():
-    global server
+def test_correct_api_key(server):
     server.start()
     res = server.make_request("POST", "/completions", data={
         "prompt": "I believe the meaning of life is",
@@ -58,8 +51,7 @@ def test_correct_api_key():
     assert "content" in res.body
 
 
-def test_correct_api_key_anthropic_header():
-    global server
+def test_correct_api_key_anthropic_header(server):
     server.start()
     res = server.make_request("POST", "/completions", data={
         "prompt": "I believe the meaning of life is",
@@ -71,8 +63,7 @@ def test_correct_api_key_anthropic_header():
     assert "content" in res.body
 
 
-def test_openai_library_correct_api_key():
-    global server
+def test_openai_library_correct_api_key(server):
     server.start()
     client = OpenAI(api_key=TEST_API_KEY, base_url=f"http://{server.server_host}:{server.server_port}")
     res = client.chat.completions.create(
@@ -92,8 +83,7 @@ def test_openai_library_correct_api_key():
     ("web.mydomain.fr", "Access-Control-Allow-Methods", "GET, POST"),
     ("web.mydomain.fr", "Access-Control-Allow-Headers", "*"),
 ])
-def test_cors_options(origin: str, cors_header: str, cors_header_value: str):
-    global server
+def test_cors_options(server, origin: str, cors_header: str, cors_header_value: str):
     server.start()
     res = server.make_request("OPTIONS", "/completions", headers={
         "Origin": origin,
@@ -115,7 +105,7 @@ def test_cors_options(origin: str, cors_header: str, cors_header_value: str):
         (f"{LLAMA_CPP_ROOT}/tools", "file://../mtmd/test-1.jpeg", False), # no directory traversal
     ]
 )
-def test_local_media_file(media_path, image_url, success,):
+def test_local_media_file(server, media_path, image_url, success,):
     server = ServerPreset.tinygemma3()
     server.media_path = media_path
     server.start()

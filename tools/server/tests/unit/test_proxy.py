@@ -1,17 +1,13 @@
 import pytest
 from utils import *
 
-server = ServerPreset.tinyllama2()
+
+@pytest.fixture
+def server(server_factory):
+    return server_factory("tinyllama2")
 
 
-@pytest.fixture(autouse=True)
-def create_server():
-    global server
-    server = ServerPreset.tinyllama2()
-
-
-def test_mcp_no_proxy():
-    global server
+def test_mcp_no_proxy(server):
     server.webui_mcp_proxy = False
     server.start()
 
@@ -19,8 +15,7 @@ def test_mcp_no_proxy():
     assert res.status_code == 404
 
 
-def test_mcp_proxy():
-    global server
+def test_mcp_proxy(server):
     server.webui_mcp_proxy = True
     server.start()
 
@@ -30,8 +25,7 @@ def test_mcp_proxy():
     assert "Example Domain" in res.text
 
 
-def test_mcp_proxy_custom_port():
-    global server
+def test_mcp_proxy_custom_port(server):
     server.webui_mcp_proxy = True
     server.start()
 

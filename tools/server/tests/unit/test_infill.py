@@ -1,16 +1,11 @@
 import pytest
 from utils import *
 
-server = ServerPreset.tinyllama_infill()
 
-@pytest.fixture(autouse=True)
-def create_server():
-    global server
-    server = ServerPreset.tinyllama_infill()
-
-
-def test_infill_without_input_extra():
-    global server
+@pytest.fixture
+def server(server_factory):
+    return server_factory('tinyllama_infill')
+def test_infill_without_input_extra(server):
     server.start()
     res = server.make_request("POST", "/infill", data={
         "input_prefix": "#include <cstdio>\n#include \"llama.h\"\n\nint main() {\n",
@@ -21,8 +16,7 @@ def test_infill_without_input_extra():
     assert match_regex("(Ann|small|shiny|Daddy|Jimmy)+", res.body["content"])
 
 
-def test_infill_with_input_extra():
-    global server
+def test_infill_with_input_extra(server):
     server.start()
     res = server.make_request("POST", "/infill", data={
         "input_extra": [{
@@ -44,8 +38,7 @@ def test_infill_with_input_extra():
     {"filename": 123, "text": "abc"},
     {"filename": 123, "text": 456},
 ])
-def test_invalid_input_extra_req(input_extra):
-    global server
+def test_invalid_input_extra_req(server, input_extra):
     server.start()
     res = server.make_request("POST", "/infill", data={
         "input_extra": [input_extra],
@@ -58,8 +51,7 @@ def test_invalid_input_extra_req(input_extra):
 
 
 @pytest.mark.slow
-def test_with_qwen_model():
-    global server
+def test_with_qwen_model(server):
     server.model_file = None
     server.model_hf_repo = "ggml-org/Qwen2.5-Coder-1.5B-IQ3_XXS-GGUF"
     server.model_hf_file = "qwen2.5-coder-1.5b-iq3_xxs-imat.gguf"

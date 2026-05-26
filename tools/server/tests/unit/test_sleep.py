@@ -2,17 +2,13 @@ import pytest
 import time
 from utils import *
 
-server = ServerPreset.tinyllama2()
+
+@pytest.fixture
+def server(server_factory):
+    return server_factory("tinyllama2")
 
 
-@pytest.fixture(autouse=True)
-def create_server():
-    global server
-    server = ServerPreset.tinyllama2()
-
-
-def test_server_sleep():
-    global server
+def test_server_sleep(server):
     server.sleep_idle_seconds = 1
     server.start()
 

@@ -2,24 +2,19 @@ import pytest
 import requests
 from utils import *
 
-server = ServerPreset.tinyllama2()
+
+@pytest.fixture
+def server(server_factory):
+    return server_factory("tinyllama2")
 
 
-@pytest.fixture(autouse=True)
-def create_server():
-    global server
-    server = ServerPreset.tinyllama2()
-
-
-def test_server_start_simple():
-    global server
+def test_server_start_simple(server):
     server.start()
     res = server.make_request("GET", "/health")
     assert res.status_code == 200
 
 
-def test_server_props():
-    global server
+def test_server_props(server):
     server.start()
     res = server.make_request("GET", "/props")
     assert res.status_code == 200
@@ -31,8 +26,7 @@ def test_server_props():
     assert default_val["params"]["seed"] == server.seed
 
 
-def test_server_models():
-    global server
+def test_server_models(server):
     server.start()
     res = server.make_request("GET", "/models")
     assert res.status_code == 200
@@ -40,9 +34,7 @@ def test_server_models():
     assert res.body["data"][0]["id"] == server.model_alias
 
 
-def test_server_slots():
-    global server
-
+def test_server_slots(server):
     # without slots endpoint enabled, this should return error
     server.server_slots = False
     server.start()
@@ -63,8 +55,7 @@ def test_server_slots():
     assert "params" not in res.body[0]
 
 
-def test_load_split_model():
-    global server
+def test_load_split_model(server):
     server.offline = False
     server.model_hf_repo = "ggml-org/models"
     server.model_hf_file = "tinyllamas/split/stories15M-q8_0-00001-of-00003.gguf"
@@ -79,8 +70,7 @@ def test_load_split_model():
     assert match_regex("(little|girl)+", res.body["content"])
 
 
-def test_no_webui():
-    global server
+def test_no_webui(server):
     # default: webui enabled
     server.start()
     url = f"http://{server.server_host}:{server.server_port}"
@@ -96,8 +86,7 @@ def test_no_webui():
     assert res.status_code == 404
 
 
-def test_server_model_aliases_and_tags():
-    global server
+def test_server_model_aliases_and_tags(server):
     server.model_alias = "tinyllama-2,fim,code"
     server.model_tags = "chat,fim,small"
     server.start()

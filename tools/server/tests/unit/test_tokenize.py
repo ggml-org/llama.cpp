@@ -1,17 +1,13 @@
 import pytest
 from utils import *
 
-server = ServerPreset.tinyllama2()
+
+@pytest.fixture
+def server(server_factory):
+    return server_factory("tinyllama2")
 
 
-@pytest.fixture(autouse=True)
-def create_server():
-    global server
-    server = ServerPreset.tinyllama2()
-
-
-def test_tokenize_detokenize():
-    global server
+def test_tokenize_detokenize(server):
     server.start()
     # tokenize
     content = "What is the capital of France ?"
@@ -28,8 +24,7 @@ def test_tokenize_detokenize():
     assert res_detok.body["content"].strip() == content
 
 
-def test_tokenize_with_bos():
-    global server
+def test_tokenize_with_bos(server):
     server.start()
     # tokenize
     content = "What is the capital of France ?"
@@ -42,8 +37,7 @@ def test_tokenize_with_bos():
     assert res_tok.body["tokens"][0] == bosId
 
 
-def test_tokenize_with_pieces():
-    global server
+def test_tokenize_with_pieces(server):
     server.start()
     # tokenize
     content = "This is a test string with unicode 媽 and emoji 🤗"

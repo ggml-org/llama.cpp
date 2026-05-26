@@ -4,18 +4,12 @@ import pytest
 from openai import OpenAI
 from utils import *
 
-server = ServerPreset.bert_bge_small()
-
 EPSILON = 1e-3
+@pytest.fixture
+def server(server_factory):
+    return server_factory('bert_bge_small')
 
-@pytest.fixture(autouse=True)
-def create_server():
-    global server
-    server = ServerPreset.bert_bge_small()
-
-
-def test_embedding_single():
-    global server
+def test_embedding_single(server):
     server.pooling = 'last'
     server.start()
     res = server.make_request("POST", "/v1/embeddings", data={
@@ -30,8 +24,7 @@ def test_embedding_single():
     assert abs(sum([x ** 2 for x in res.body['data'][0]['embedding']]) - 1) < EPSILON
 
 
-def test_embedding_multiple():
-    global server
+def test_embedding_multiple(server):
     server.pooling = 'last'
     server.start()
     res = server.make_request("POST", "/v1/embeddings", data={
@@ -49,7 +42,7 @@ def test_embedding_multiple():
         assert len(d['embedding']) > 1
 
 
-def test_embedding_multiple_with_fa():
+def test_embedding_multiple_with_fa(server):
     server = ServerPreset.bert_bge_small_with_fa()
     server.pooling = 'last'
     server.start()
@@ -85,8 +78,7 @@ def test_embedding_multiple_with_fa():
         ([[12, 34, 56], [12, "string", 34, 56]], True),
     ]
 )
-def test_embedding_mixed_input(input, is_multi_prompt: bool):
-    global server
+def test_embedding_mixed_input(server, input, is_multi_prompt: bool):
     server.start()
     res = server.make_request("POST", "/v1/embeddings", data={"input": input})
     assert res.status_code == 200
@@ -101,8 +93,7 @@ def test_embedding_mixed_input(input, is_multi_prompt: bool):
         assert len(data[0]['embedding']) > 1
 
 
-def test_embedding_pooling_mean():
-    global server
+def test_embedding_pooling_mean(server):
     server.pooling = 'mean'
     server.start()
     res = server.make_request("POST", "/v1/embeddings", data={
@@ -117,8 +108,7 @@ def test_embedding_pooling_mean():
     assert abs(sum([x ** 2 for x in res.body['data'][0]['embedding']]) - 1) < EPSILON
 
 
-def test_embedding_pooling_mean_multiple():
-    global server
+def test_embedding_pooling_mean_multiple(server):
     server.pooling = 'mean'
     server.start()
     res = server.make_request("POST", "/v1/embeddings", data={
@@ -135,8 +125,7 @@ def test_embedding_pooling_mean_multiple():
         assert len(d['embedding']) > 1
 
 
-def test_embedding_pooling_none():
-    global server
+def test_embedding_pooling_none(server):
     server.pooling = 'none'
     server.start()
     res = server.make_request("POST", "/embeddings", data={
@@ -151,8 +140,7 @@ def test_embedding_pooling_none():
         assert abs(sum([x ** 2 for x in x]) - 1) > EPSILON
 
 
-def test_embedding_pooling_none_oai():
-    global server
+def test_embedding_pooling_none_oai(server):
     server.pooling = 'none'
     server.start()
     res = server.make_request("POST", "/v1/embeddings", data={
@@ -164,8 +152,7 @@ def test_embedding_pooling_none_oai():
     assert "error" in res.body
 
 
-def test_embedding_openai_library_single():
-    global server
+def test_embedding_openai_library_single(server):
     server.pooling = 'last'
     server.start()
     client = OpenAI(api_key="dummy", base_url=f"http://{server.server_host}:{server.server_port}/v1")
@@ -174,8 +161,7 @@ def test_embedding_openai_library_single():
     assert len(res.data[0].embedding) > 1
 
 
-def test_embedding_openai_library_multiple():
-    global server
+def test_embedding_openai_library_multiple(server):
     server.pooling = 'last'
     server.start()
     client = OpenAI(api_key="dummy", base_url=f"http://{server.server_host}:{server.server_port}/v1")
@@ -190,8 +176,7 @@ def test_embedding_openai_library_multiple():
         assert len(d.embedding) > 1
 
 
-def test_embedding_error_prompt_too_long():
-    global server
+def test_embedding_error_prompt_too_long(server):
     server.pooling = 'last'
     server.start()
     res = server.make_request("POST", "/v1/embeddings", data={
@@ -201,7 +186,7 @@ def test_embedding_error_prompt_too_long():
     assert "too large" in res.body["error"]["message"]
 
 
-def test_same_prompt_give_same_result():
+def test_same_prompt_give_same_result(server):
     server.pooling = 'last'
     server.start()
     res = server.make_request("POST", "/v1/embeddings", data={
@@ -229,8 +214,7 @@ def test_same_prompt_give_same_result():
         ("This is a test", 6),
     ]
 )
-def test_embedding_usage_single(content, n_tokens):
-    global server
+def test_embedding_usage_single(server, content, n_tokens):
     server.start()
     res = server.make_request("POST", "/v1/embeddings", data={"input": content})
     assert res.status_code == 200
@@ -238,8 +222,7 @@ def test_embedding_usage_single(content, n_tokens):
     assert res.body['usage']['prompt_tokens'] == n_tokens
 
 
-def test_embedding_usage_multiple():
-    global server
+def test_embedding_usage_multiple(server):
     server.start()
     res = server.make_request("POST", "/v1/embeddings", data={
         "input": [
@@ -252,7 +235,7 @@ def test_embedding_usage_multiple():
     assert res.body['usage']['prompt_tokens'] == 2 * 9
 
 
-def test_embedding_openai_library_base64():
+def test_embedding_openai_library_base64(server):
     server.start()
     test_input = "Test base64 embedding output"
 
