@@ -59,6 +59,20 @@ bool gpu_has_xmx(sycl::device &dev) {
     return dev.has(sycl::aspect::ext_intel_matrix);
 }
 
+static int ggml_sycl_get_env(const char *env_name, int default_val) {
+    char *user_device_string = getenv(env_name);
+    int user_number = default_val;
+
+    unsigned n;
+    if (user_device_string != NULL &&
+        sscanf(user_device_string, " %u", &n) == 1) {
+        user_number = (int)n;
+    } else {
+        user_number = default_val;
+    }
+    return user_number;
+}
+
 int64_t downsample_sycl_global_range(int64_t accumulate_block_num, int64_t block_size) {
   const int64_t max_range = std::numeric_limits<int>::max();
   int64_t sycl_down_blk_size = block_size;
