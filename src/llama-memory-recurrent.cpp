@@ -695,6 +695,11 @@ bool llama_memory_recurrent::find_slot(const llama_ubatch & ubatch) {
     return n >= n_seqs;
 }
 
+void llama_memory_recurrent::set_n_kv_max(uint32_t) {
+    // Recurrent (SSM) layers do not use KV cache in the traditional sense.
+    // RingBuffer only applies to attention (FA) layers.
+}
+
 bool llama_memory_recurrent::get_can_shift() const {
     // shifting the pos is trivial for recurrent models
     return true;

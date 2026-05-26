@@ -217,6 +217,10 @@ llama_memory_context_ptr llama_kv_cache_iswa::init_update(llama_context * lctx, 
     return std::make_unique<llama_kv_cache_iswa_context>(this, lctx, optimize);
 }
 
+void llama_kv_cache_iswa::set_n_kv_max(uint32_t) {
+    // ISWA uses sliding window, RingBuffer not applicable
+}
+
 bool llama_kv_cache_iswa::get_can_shift() const {
     return kv_base->get_can_shift() &&
            kv_swa->get_can_shift() &&

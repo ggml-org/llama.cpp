@@ -3792,6 +3792,12 @@ bool llama_memory_can_shift(llama_memory_t mem) {
     return mem->get_can_shift();
 }
 
+void llama_memory_set_n_kv_max(llama_memory_t mem, uint32_t n_kv_max) {
+    if (mem) {
+        mem->set_n_kv_max(n_kv_max);
+    }
+}
+
 // llama state API
 
 // deprecated

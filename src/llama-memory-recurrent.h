@@ -60,6 +60,7 @@ public:
     bool find_slot(const llama_ubatch & ubatch);
 
     bool get_can_shift() const override;
+    void set_n_kv_max(uint32_t n) override;
 
     // state write/load
 

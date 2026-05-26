@@ -133,6 +133,10 @@ llama_memory_context_ptr llama_memory_hybrid_iswa::init_update(llama_context * l
     return std::make_unique<llama_memory_hybrid_iswa_context>(this, lctx, optimize);
 }
 
+void llama_memory_hybrid_iswa::set_n_kv_max(uint32_t) {
+    mem_attn->set_n_kv_max(0);  // no-op for ISWA
+}
+
 bool llama_memory_hybrid_iswa::get_can_shift() const {
     // Shifting is trivially supported for recurrent
     return mem_attn->get_can_shift();

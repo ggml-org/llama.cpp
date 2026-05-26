@@ -127,6 +127,10 @@ llama_memory_context_ptr llama_memory_hybrid::init_update(llama_context * lctx, 
     return std::make_unique<llama_memory_hybrid_context>(this, lctx, optimize);
 }
 
+void llama_memory_hybrid::set_n_kv_max(uint32_t n) {
+    mem_attn->set_n_kv_max(n);
+}
+
 bool llama_memory_hybrid::get_can_shift() const {
     // Shifting is trivially supported for recurrent
     return mem_attn->get_can_shift();

@@ -96,6 +96,9 @@ struct llama_memory_i {
     // getters
     virtual bool get_can_shift() const = 0;
 
+    // QN1 RingBuffer: cap KV cache to last n_kv_max positions
+    virtual void set_n_kv_max(uint32_t n) = 0;
+
     //
     // ops
     //

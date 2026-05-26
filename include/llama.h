@@ -768,6 +768,12 @@ extern "C" {
     // Check if the memory supports shifting
     LLAMA_API bool llama_memory_can_shift(llama_memory_t mem);
 
+    // QN1 RingBuffer: cap KV cache view to last N positions, O(1) decode
+    // Set n_kv_max=0 to disable, n_kv_max>0 to cap
+    LLAMA_API void llama_memory_set_n_kv_max(
+            llama_memory_t mem,
+            uint32_t     n_kv_max);
+
     //
     // State / sessions
     //

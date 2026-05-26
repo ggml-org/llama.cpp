@@ -1122,6 +1122,10 @@ ggml_type llama_kv_cache::type_k() const {
     return layers[0].k->type;
 }
 
+void llama_kv_cache::set_n_kv_max(uint32_t n) {
+    n_kv_max = n;
+}
+
 ggml_type llama_kv_cache::type_v() const {
     return layers[0].v->type;
 }
@@ -1139,6 +1143,11 @@ uint32_t llama_kv_cache::get_n_kv(const slot_info & sinfo) const {
         result = std::max(std::min(cells.size(), std::max(n_pad_cur, GGML_PAD(cells.used_max_p1(), n_pad_cur))), result);
     }
 
+    // QN1 RingBuffer: cap KV window
+    if (n_kv_max > 0 && result > n_kv_max) {
+        result = n_kv_max;
+    }
+
     return result;
 }
 
@@ -1154,12 +1163,21 @@ ggml_tensor * llama_kv_cache::get_k(ggml_context * ctx, int32_t il, uint32_t n_k
 
     const uint32_t ns = sinfo.s1 - sinfo.s0 + 1;
 
+    // QN1 RingBuffer: when n_kv_max caps the view, skip old slots
+    uint32_t slot_offset = sinfo.s0;
+    if (n_kv_max > 0) {
+        const uint32_t cells_used = v_cells[sinfo.strm[0]].used_max_p1();
+        if (cells_used > n_kv_max) {
+            slot_offset = sinfo.s0 + (cells_used - n_kv_max);
+        }
+    }
+
     return ggml_view_4d(ctx, k,
             hparams.n_embd_head_k(il), hparams.n_head_kv(il), n_kv, ns,
             ggml_row_size(k->type, hparams.n_embd_head_k(il)),
             ggml_row_size(k->type, n_embd_k_gqa),
             ggml_row_size(k->type, n_embd_k_gqa*kv_size),
-            ggml_row_size(k->type, n_embd_k_gqa*kv_size)*sinfo.s0);
+            ggml_row_size(k->type, n_embd_k_gqa*kv_size)*slot_offset);
 }
 
 ggml_tensor * llama_kv_cache::get_v(ggml_context * ctx, int32_t il, uint32_t n_kv, const slot_info & sinfo) const {
@@ -1175,6 +1193,15 @@ ggml_tensor * llama_kv_cache::get_v(ggml_context * ctx, int32_t il, uint32_t n_k
 
     const uint32_t ns = sinfo.s1 - sinfo.s0 + 1;
 
+    // QN1 RingBuffer: when n_kv_max caps the view, skip old slots
+    uint32_t slot_offset = sinfo.s0;
+    if (n_kv_max > 0) {
+        const uint32_t cells_used = v_cells[sinfo.strm[0]].used_max_p1();
+        if (cells_used > n_kv_max) {
+            slot_offset = sinfo.s0 + (cells_used - n_kv_max);
+        }
+    }
+
     if (!v_trans) {
         // note: v->nb[1] <= v->nb[2]
         return ggml_view_4d(ctx, v,
@@ -1182,7 +1209,7 @@ ggml_tensor * llama_kv_cache::get_v(ggml_context * ctx, int32_t il, uint32_t n_k
                 ggml_row_size(v->type, hparams.n_embd_head_v(il)),          // v->nb[1]
                 ggml_row_size(v->type, n_embd_v_gqa),                   // v->nb[2]
                 ggml_row_size(v->type, n_embd_v_gqa*kv_size),           // v->nb[3]
-                ggml_row_size(v->type, n_embd_v_gqa*kv_size)*sinfo.s0);
+                ggml_row_size(v->type, n_embd_v_gqa*kv_size)*slot_offset);
     }
 
     // note: v->nb[1] > v->nb[2]
@@ -1191,7 +1218,7 @@ ggml_tensor * llama_kv_cache::get_v(ggml_context * ctx, int32_t il, uint32_t n_k
             ggml_row_size(v->type, kv_size*hparams.n_embd_head_v(il)),  // v->nb[1]
             ggml_row_size(v->type, kv_size),                        // v->nb[2]
             ggml_row_size(v->type, kv_size*n_embd_v_gqa),           // v->nb[3]
-            ggml_row_size(v->type, kv_size*n_embd_v_gqa)*sinfo.s0);
+            ggml_row_size(v->type, kv_size*n_embd_v_gqa)*slot_offset);
 }
 
 ggml_tensor * llama_kv_cache::cpy_k(ggml_context * ctx, ggml_tensor * k_cur, ggml_tensor * k_idxs, int32_t il, const slot_info & sinfo) const {
