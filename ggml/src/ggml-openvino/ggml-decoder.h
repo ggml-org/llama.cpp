@@ -206,6 +206,10 @@ public:
 
     virtual bool is_stateful() const override { return m_is_stateful; }
 
+    int get_static_n_tokens() const {
+        return m_is_prefill ? m_prefill_chunk_size : 1;
+    }
+
     virtual bool is_splited_model() const override {
         return m_model_is_splitted;
     }
