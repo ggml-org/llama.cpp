@@ -1159,23 +1159,8 @@ struct ggml_tensor * llama_model_loader::create_tensor(
                 std::regex pattern(overrides->pattern);
                 if (std::regex_search(tensor_name, pattern)) {
                     if (overrides->buft == ggml_backend_cpu_buffer_type()) {
-                        // skip repack/extra CPU bufts, they reorder quantized data and
-                        // are incompatible with non-CPU compute backends reading the same tensor
-                        for (const auto & cur : *buft_list_cpu) {
-                            const char * name = ggml_backend_buft_name(cur.second);
-                            if (name && strstr(name, "REPACK")) {
-                                continue;
-                            }
-                            // mimic select_weight_buft op-support check
-                            if (!weight_buft_supported(hparams, t_meta, op, cur.second, cur.first)) {
-                                continue;
-                            }
-                            buft = cur.second;
-                            break;
-                        }
-                        if (!buft) {
-                            buft = select_weight_buft(hparams, t_meta, op, buft_list_cpu);  // fallback
-                        }
+                        // when overriding to a CPU buffer, consider the extra buffer types
+                        buft = select_weight_buft(hparams, t_meta, op, buft_list_cpu);
                         if (use_mmap) {
                             static std::once_flag once;
                             std::call_once(once, [] {
