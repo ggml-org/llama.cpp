@@ -655,118 +655,120 @@ jobs:
           path: cudart-llama-bin-win-cuda-${{ matrix.cuda }}-x64.zip
           name: cudart-llama-bin-win-cuda-${{ matrix.cuda }}-x64.zip
 
-  windows-sycl:
-
-    runs-on: windows-2022
-
-    defaults:
-      run:
-        shell: bash
-
-    env:
-      WINDOWS_BASEKIT_URL: https://registrationcenter-download.intel.com/akdlm/IRC_NAS/b60765d1-2b85-4e85-86b6-cb0e9563a699/intel-deep-learning-essentials-2025.3.3.18_offline.exe
-      WINDOWS_DPCPP_MKL: intel.oneapi.win.cpp-dpcpp-common:intel.oneapi.win.mkl.devel:intel.oneapi.win.dnnl:intel.oneapi.win.tbb.devel
-      LEVEL_ZERO_SDK_URL: https://github.com/oneapi-src/level-zero/releases/download/v1.28.2/level-zero-win-sdk-1.28.2.zip
-      ONEAPI_ROOT: "C:/Program Files (x86)/Intel/oneAPI"
-      ONEAPI_INSTALLER_VERSION: "2025.3.3"
-
-    steps:
-      - name: Clone
-        id: checkout
-        uses: actions/checkout@v6
-
-      - name: Use oneAPI Installation Cache
-        uses: actions/cache@v5
-        id: cache-sycl
-        with:
-          path: ${{ env.ONEAPI_ROOT }}
-          key: oneAPI-${{ env.ONEAPI_INSTALLER_VERSION }}-${{ runner.os }}
-
-      - name: Download & Install oneAPI
-        shell: bash
-        if: steps.cache-sycl.outputs.cache-hit != 'true'
-        run: |
-          scripts/install-oneapi.bat $WINDOWS_BASEKIT_URL $WINDOWS_DPCPP_MKL
-
-      - name: Install Level Zero SDK
-        shell: pwsh
-        run: |
-          Invoke-WebRequest -Uri "${{ env.LEVEL_ZERO_SDK_URL }}" -OutFile "level-zero-win-sdk.zip"
-          Expand-Archive -Path "level-zero-win-sdk.zip" -DestinationPath "C:/level-zero-sdk" -Force
-          "LEVEL_ZERO_V1_SDK_PATH=C:/level-zero-sdk" | Out-File -FilePath $env:GITHUB_ENV -Append
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: "24"
-          cache: "npm"
-          cache-dependency-path: "tools/ui/package-lock.json"
-
-      - name: ccache
-        uses: ggml-org/ccache-action@v1.2.21
-        with:
-          key: windows-latest-sycl
-          variant: ccache
-          evict-old-files: 1d
-
-      - name: Build
-        id: cmake_build
-        shell: cmd
-        run: |
-          call "C:\Program Files (x86)\Intel\oneAPI\setvars.bat" intel64 --force
-          cmake -G "Ninja" -B build ^
-            -DCMAKE_C_COMPILER=cl -DCMAKE_CXX_COMPILER=icx ^
-            -DCMAKE_BUILD_TYPE=Release ^
-            -DGGML_BACKEND_DL=ON -DBUILD_SHARED_LIBS=ON ^
-            -DGGML_CPU=OFF -DGGML_SYCL=ON ^
-            -DLLAMA_BUILD_BORINGSSL=ON
-          cmake --build build --target ggml-sycl -j
-
-      - name: Build the release package
-        id: pack_artifacts
-        run: |
-          echo "cp oneAPI running time dll files in ${{ env.ONEAPI_ROOT }} to ./build/bin"
-
-          cp "${{ env.ONEAPI_ROOT }}/mkl/latest/bin/mkl_sycl_blas.5.dll" ./build/bin
-          cp "${{ env.ONEAPI_ROOT }}/mkl/latest/bin/mkl_core.2.dll" ./build/bin
-          cp "${{ env.ONEAPI_ROOT }}/mkl/latest/bin/mkl_tbb_thread.2.dll" ./build/bin
-
-          cp "${{ env.ONEAPI_ROOT }}/compiler/latest/bin/ur_adapter_level_zero.dll" ./build/bin
-          cp "${{ env.ONEAPI_ROOT }}/compiler/latest/bin/ur_adapter_level_zero_v2.dll" ./build/bin
-          cp "${{ env.ONEAPI_ROOT }}/compiler/latest/bin/ur_adapter_opencl.dll" ./build/bin
-          cp "${{ env.ONEAPI_ROOT }}/compiler/latest/bin/ur_loader.dll" ./build/bin
-          cp "${{ env.ONEAPI_ROOT }}/compiler/latest/bin/ur_win_proxy_loader.dll" ./build/bin
-          ZE_LOADER_DLL=$(find "${{ env.ONEAPI_ROOT }}" "$LEVEL_ZERO_V1_SDK_PATH" -iname ze_loader.dll -print -quit 2>/dev/null || true)
-          if [ -n "$ZE_LOADER_DLL" ]; then
-            echo "Using Level Zero loader: $ZE_LOADER_DLL"
-            cp "$ZE_LOADER_DLL" ./build/bin
-          else
-            echo "Level Zero loader DLL not found in oneAPI or SDK; relying on system driver/runtime"
-          fi
-
-          cp "${{ env.ONEAPI_ROOT }}/compiler/latest/bin/sycl8.dll" ./build/bin
-          cp "${{ env.ONEAPI_ROOT }}/compiler/latest/bin/svml_dispmd.dll" ./build/bin
-          cp "${{ env.ONEAPI_ROOT }}/compiler/latest/bin/libmmd.dll" ./build/bin
-          cp "${{ env.ONEAPI_ROOT }}/compiler/latest/bin/libiomp5md.dll" ./build/bin
-          cp "${{ env.ONEAPI_ROOT }}/compiler/latest/bin/sycl-ls.exe" ./build/bin
-          cp "${{ env.ONEAPI_ROOT }}/compiler/latest/bin/libsycl-fallback-bfloat16.spv" ./build/bin
-          cp "${{ env.ONEAPI_ROOT }}/compiler/latest/bin/libsycl-native-bfloat16.spv" ./build/bin
-
-          cp "${{ env.ONEAPI_ROOT }}/dnnl/latest/bin/dnnl.dll" ./build/bin
-          cp "${{ env.ONEAPI_ROOT }}/tbb/latest/bin/tbb12.dll" ./build/bin
-
-          cp "${{ env.ONEAPI_ROOT }}/tcm/latest/bin/tcm.dll" ./build/bin
-          cp "${{ env.ONEAPI_ROOT }}/tcm/latest/bin/libhwloc-15.dll" ./build/bin
-          cp "${{ env.ONEAPI_ROOT }}/umf/latest/bin/umf.dll" ./build/bin
-
-          echo "cp oneAPI running time dll files to ./build/bin done"
-          7z a -snl llama-bin-win-sycl-x64.zip ./build/bin/*
-
-      - name: Upload the release package
-        uses: actions/upload-artifact@v6
-        with:
-          path: llama-bin-win-sycl-x64.zip
-          name: llama-bin-win-sycl-x64.zip
+# TODO: this build is disabled to save Github Actions resources
+#       in order to enable it again, we have to provision dedicated runners  to run it
+#  windows-sycl:
+#
+#    runs-on: windows-2022
+#
+#    defaults:
+#      run:
+#        shell: bash
+#
+#    env:
+#      WINDOWS_BASEKIT_URL: https://registrationcenter-download.intel.com/akdlm/IRC_NAS/b60765d1-2b85-4e85-86b6-cb0e9563a699/intel-deep-learning-essentials-2025.3.3.18_offline.exe
+#      WINDOWS_DPCPP_MKL: intel.oneapi.win.cpp-dpcpp-common:intel.oneapi.win.mkl.devel:intel.oneapi.win.dnnl:intel.oneapi.win.tbb.devel
+#      LEVEL_ZERO_SDK_URL: https://github.com/oneapi-src/level-zero/releases/download/v1.28.2/level-zero-win-sdk-1.28.2.zip
+#      ONEAPI_ROOT: "C:/Program Files (x86)/Intel/oneAPI"
+#      ONEAPI_INSTALLER_VERSION: "2025.3.3"
+#
+#    steps:
+#      - name: Clone
+#        id: checkout
+#        uses: actions/checkout@v6
+#
+#      - name: Use oneAPI Installation Cache
+#        uses: actions/cache@v5
+#        id: cache-sycl
+#        with:
+#          path: ${{ env.ONEAPI_ROOT }}
+#          key: oneAPI-${{ env.ONEAPI_INSTALLER_VERSION }}-${{ runner.os }}
+#
+#      - name: Download & Install oneAPI
+#        shell: bash
+#        if: steps.cache-sycl.outputs.cache-hit != 'true'
+#        run: |
+#          scripts/install-oneapi.bat $WINDOWS_BASEKIT_URL $WINDOWS_DPCPP_MKL
+#
+#      - name: Install Level Zero SDK
+#        shell: pwsh
+#        run: |
+#          Invoke-WebRequest -Uri "${{ env.LEVEL_ZERO_SDK_URL }}" -OutFile "level-zero-win-sdk.zip"
+#          Expand-Archive -Path "level-zero-win-sdk.zip" -DestinationPath "C:/level-zero-sdk" -Force
+#          "LEVEL_ZERO_V1_SDK_PATH=C:/level-zero-sdk" | Out-File -FilePath $env:GITHUB_ENV -Append
+#
+#      - name: Setup Node.js
+#        uses: actions/setup-node@v6
+#        with:
+#          node-version: "24"
+#          cache: "npm"
+#          cache-dependency-path: "tools/ui/package-lock.json"
+#
+#      - name: ccache
+#        uses: ggml-org/ccache-action@v1.2.21
+#        with:
+#          key: windows-latest-sycl
+#          variant: ccache
+#          evict-old-files: 1d
+#
+#      - name: Build
+#        id: cmake_build
+#        shell: cmd
+#        run: |
+#          call "C:\Program Files (x86)\Intel\oneAPI\setvars.bat" intel64 --force
+#          cmake -G "Ninja" -B build ^
+#            -DCMAKE_C_COMPILER=cl -DCMAKE_CXX_COMPILER=icx ^
+#            -DCMAKE_BUILD_TYPE=Release ^
+#            -DGGML_BACKEND_DL=ON -DBUILD_SHARED_LIBS=ON ^
+#            -DGGML_CPU=OFF -DGGML_SYCL=ON ^
+#            -DLLAMA_BUILD_BORINGSSL=ON
+#          cmake --build build --target ggml-sycl -j
+#
+#      - name: Build the release package
+#        id: pack_artifacts
+#        run: |
+#          echo "cp oneAPI running time dll files in ${{ env.ONEAPI_ROOT }} to ./build/bin"
+#
+#          cp "${{ env.ONEAPI_ROOT }}/mkl/latest/bin/mkl_sycl_blas.5.dll" ./build/bin
+#          cp "${{ env.ONEAPI_ROOT }}/mkl/latest/bin/mkl_core.2.dll" ./build/bin
+#          cp "${{ env.ONEAPI_ROOT }}/mkl/latest/bin/mkl_tbb_thread.2.dll" ./build/bin
+#
+#          cp "${{ env.ONEAPI_ROOT }}/compiler/latest/bin/ur_adapter_level_zero.dll" ./build/bin
+#          cp "${{ env.ONEAPI_ROOT }}/compiler/latest/bin/ur_adapter_level_zero_v2.dll" ./build/bin
+#          cp "${{ env.ONEAPI_ROOT }}/compiler/latest/bin/ur_adapter_opencl.dll" ./build/bin
+#          cp "${{ env.ONEAPI_ROOT }}/compiler/latest/bin/ur_loader.dll" ./build/bin
+#          cp "${{ env.ONEAPI_ROOT }}/compiler/latest/bin/ur_win_proxy_loader.dll" ./build/bin
+#          ZE_LOADER_DLL=$(find "${{ env.ONEAPI_ROOT }}" "$LEVEL_ZERO_V1_SDK_PATH" -iname ze_loader.dll -print -quit 2>/dev/null || true)
+#          if [ -n "$ZE_LOADER_DLL" ]; then
+#            echo "Using Level Zero loader: $ZE_LOADER_DLL"
+#            cp "$ZE_LOADER_DLL" ./build/bin
+#          else
+#            echo "Level Zero loader DLL not found in oneAPI or SDK; relying on system driver/runtime"
+#          fi
+#
+#          cp "${{ env.ONEAPI_ROOT }}/compiler/latest/bin/sycl8.dll" ./build/bin
+#          cp "${{ env.ONEAPI_ROOT }}/compiler/latest/bin/svml_dispmd.dll" ./build/bin
+#          cp "${{ env.ONEAPI_ROOT }}/compiler/latest/bin/libmmd.dll" ./build/bin
+#          cp "${{ env.ONEAPI_ROOT }}/compiler/latest/bin/libiomp5md.dll" ./build/bin
+#          cp "${{ env.ONEAPI_ROOT }}/compiler/latest/bin/sycl-ls.exe" ./build/bin
+#          cp "${{ env.ONEAPI_ROOT }}/compiler/latest/bin/libsycl-fallback-bfloat16.spv" ./build/bin
+#          cp "${{ env.ONEAPI_ROOT }}/compiler/latest/bin/libsycl-native-bfloat16.spv" ./build/bin
+#
+#          cp "${{ env.ONEAPI_ROOT }}/dnnl/latest/bin/dnnl.dll" ./build/bin
+#          cp "${{ env.ONEAPI_ROOT }}/tbb/latest/bin/tbb12.dll" ./build/bin
+#
+#          cp "${{ env.ONEAPI_ROOT }}/tcm/latest/bin/tcm.dll" ./build/bin
+#          cp "${{ env.ONEAPI_ROOT }}/tcm/latest/bin/libhwloc-15.dll" ./build/bin
+#          cp "${{ env.ONEAPI_ROOT }}/umf/latest/bin/umf.dll" ./build/bin
+#
+#          echo "cp oneAPI running time dll files to ./build/bin done"
+#          7z a -snl llama-bin-win-sycl-x64.zip ./build/bin/*
+#
+#      - name: Upload the release package
+#        uses: actions/upload-artifact@v6
+#        with:
+#          path: llama-bin-win-sycl-x64.zip
+#          name: llama-bin-win-sycl-x64.zip
 
   ubuntu-24-sycl:
 
@@ -1249,7 +1251,7 @@ jobs:
       - windows
       - windows-cpu
       - windows-cuda
-      - windows-sycl
+      #- windows-sycl
       - windows-hip
       - ubuntu-22-rocm
       - ubuntu-cpu
