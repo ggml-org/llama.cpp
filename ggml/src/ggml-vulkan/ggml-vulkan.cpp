@@ -5420,11 +5420,11 @@ static vk_device ggml_vk_get_device(size_t idx) {
         last_struct = (VkBaseOutStructure *)&vk12_features;
 
         if (device->has_internally_synchronized_queues) {
+            // Reset pNext after the earlier feature probe before reusing this struct in the create chain.
+            device->sync_query_features.pNext = nullptr;
             last_struct->pNext = (VkBaseOutStructure *)&device->sync_query_features;
             last_struct = (VkBaseOutStructure *)&device->sync_query_features;
         }
-
-        vkGetPhysicalDeviceFeatures2((VkPhysicalDevice)device->physical_device, &device_features2);
 
         VkPhysicalDevicePipelineRobustnessFeaturesEXT pl_robustness_features;
         pl_robustness_features.pNext = nullptr;
