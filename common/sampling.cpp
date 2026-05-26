@@ -804,7 +804,7 @@ std::vector<common_sampler_type> common_sampler_types_from_names(const std::vect
         // transform the given sampler name to lowercase before checking
         std::string name_lower = name;
         std::transform(name.begin(), name.end(), name_lower.begin(), [](char c){
-            return std::tolower(c);
+            return std::tolower(static_cast<unsigned char>(c));
         });
         // check canonical names
         auto sampler = sampler_canonical_name_map.find(name_lower);
