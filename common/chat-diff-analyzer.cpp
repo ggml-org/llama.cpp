@@ -8,6 +8,9 @@
 #include "peg-parser.h"
 
 #include <algorithm>
+#include <cctype>
+#include <ostream>
+#include <sstream>
 
 #define ANSI_RESET  "\033[0m"
 #define ANSI_PURPLE "\033[1m\x1b[38;5;126m"
@@ -23,6 +26,7 @@ static const std::string FUN_SECOND = "SSS_SECOND_FUN_S";
 static const std::string ARG_FIRST = "AA_ARG_FST_AA";
 static const std::string ARG_SECOND = "BB_ARG_SND_BB";
 static const std::string USER_MSG = "U_USER_MSG Hello END_U";
+static const std::string USER_MSG_TWO = "V_USER_MSG Hello END_V";
 static const std::string ASSISTANT_MSG = "A_ASST_MSG I can help END_A";
 static const std::string THINKING_CONTENT = "REASON_PART I am thinking END_R";
 static const std::string CALL_ID_001 = "call00001";
@@ -71,6 +75,7 @@ static std::vector<std::function<void(const common_chat_template & tmpl, autopar
               analysis.content.end   = "<|END_OF_TURN_TOKEN|>";
               analysis.preserved_tokens.push_back("<|CHATBOT_TOKEN|>");
               analysis.preserved_tokens.push_back("<|END_OF_TURN_TOKEN|>");
+              analysis.user_start = "<|START_OF_TURN_TOKEN|><|USER_TOKEN|>";
               LOG_DBG(ANSI_ORANGE "[Patch: Cohere Command R+]\n" ANSI_RESET);
           }
       },
@@ -108,7 +113,59 @@ static std::vector<std::function<void(const common_chat_template & tmpl, autopar
               analysis.tools.function.close        = "```";
               LOG_DBG(ANSI_ORANGE "[Patch: DeepSeek-R1-Distill-Qwen]\n" ANSI_RESET);
           }
-      }
+      },
+      // Nemotron Nano v2
+      [](const common_chat_template & tmpl, autoparser & analysis) -> void {
+          if (tmpl.src.find("<SPECIAL_10>") != std::string::npos && tmpl.src.find("<SPECIAL_11>") != std::string::npos &&
+              tmpl.src.find("<SPECIAL_12>") != std::string::npos && tmpl.src.find("<TOOL_RESPONSE>") != std::string::npos) {
+
+              analysis.tools.format.mode           = tool_format::JSON_NATIVE;
+              analysis.tools.format.section_start  = "";
+              analysis.tools.format.section_end    = "";
+              analysis.tools.format.per_call_start = "<TOOLCALL>";
+              analysis.tools.format.per_call_end   = "</TOOLCALL>";
+              analysis.content.mode                = content_mode::PLAIN;
+              analysis.content.start               = "";
+              analysis.content.end                 = "";
+              analysis.reasoning.mode              = reasoning_mode::TAG_BASED;
+              analysis.reasoning.start             = "<think>\n\n";
+              analysis.reasoning.end               = "</think>";
+              analysis.assistant_start             = "<SPECIAL_11>Assistant";
+              analysis.user_start                  = "<SPECIAL_11>User";
+              analysis.preserved_tokens.clear();
+              analysis.preserved_tokens.push_back("<SPECIAL_12>");
+              analysis.preserved_tokens.push_back("<SPECIAL_11>");
+              analysis.preserved_tokens.push_back("</think>");
+              analysis.preserved_tokens.push_back("<TOOLCALL>");
+              analysis.preserved_tokens.push_back("</TOOLCALL>");
+              LOG_DBG(ANSI_ORANGE "[Patch: Nemotron Nano v2]\n" ANSI_RESET);
+          }
+      },
+      // Fireworks
+      [](const common_chat_template & tmpl, autoparser & analysis) -> void {
+          if (tmpl.src.find("{%- set system_prompt = '<|start_header_id|>' + 'system' + '<|end_header_id|>\\n\\n'"
+            " + message['content'] | trim + '\\n' + system_prompt_suffix + '<|eot_id|>' -%}") != std::string::npos) {
+              analysis.assistant_start             = "<|start_header_id|>assistant<|end_header_id|>";
+              analysis.user_start                  = "<|start_header_id|>user<|end_header_id|>";
+              LOG_DBG(ANSI_ORANGE "[Patch: Fireworks v2]\n" ANSI_RESET);
+          }
+      },
+      // Solar Open
+      [](const common_chat_template & tmpl, autoparser & analysis) -> void {
+          if (tmpl.src.find("<|begin|>assistant<|think|><|end|>") != std::string::npos) {
+              analysis.assistant_start             = "<|begin|>assistant";
+              LOG_DBG(ANSI_ORANGE "[Patch: Solar Open]\n" ANSI_RESET);
+          }
+      },
+      // Apriel 1.6
+      [](const common_chat_template & tmpl, autoparser & analysis) -> void {
+          if (tmpl.src.find("if not loop.last and '[BEGIN FINAL RESPONSE]' in asst_text") != std::string::npos) {
+              analysis.user_start                  = "<|begin_user|>";
+              analysis.assistant_start             = "<|begin_assistant|>";
+              LOG_DBG(ANSI_ORANGE "[Patch: Apriel 1.6]\n" ANSI_RESET);
+          }
+      },
+
     });
 
 // Common JSON structures
@@ -166,6 +223,8 @@ void autoparser::analyze_template(const common_chat_template & tmpl) {
     reasoning = analyze_reasoning(tmpl, jinja_caps.supports_tool_calls);
     content = analyze_content(tmpl, reasoning);
     tools = analyze_tools(jinja_caps.supports_tool_calls ? analyze_tools(tmpl, jinja_caps, reasoning) : analyze_tools());
+    assistant_start = detect_assistant_start_marker(tmpl);
+    user_start = detect_user_start_marker(tmpl);
     collect_preserved_tokens();
 
     for (auto & workaround : workarounds) {
@@ -173,6 +232,8 @@ void autoparser::analyze_template(const common_chat_template & tmpl) {
     }
 
     LOG_DBG("\n--- Reasoning & Content Structure ---\n");
+    LOG_DBG("user_msg_start: %s\n", user_start.c_str());
+    LOG_DBG("assistant_msg_start: %s\n", assistant_start.c_str());
     LOG_DBG("reasoning_mode: %s\n", mode_to_str(reasoning.mode).c_str());
     LOG_DBG("reasoning_start: '%s'\n", reasoning.start.c_str());
     LOG_DBG("reasoning_end: '%s'\n", reasoning.end.c_str());
@@ -243,6 +304,120 @@ void autoparser::collect_preserved_tokens() {
     add_token(tools.arguments.value_suffix);
     add_token(tools.call_id.prefix);
     add_token(tools.call_id.suffix);
+}
+
+std::string autoparser::detect_assistant_start_marker(const common_chat_template & tmpl) {
+    json user_msg = json{
+        { "role",    "user"   },
+        { "content", USER_MSG }
+    };
+
+    json assistant_no_reasoning = json{
+        { "role",    "assistant"   },
+        { "content", ASSISTANT_MSG }
+    };
+
+    template_params params;
+    params.messages              = json::array({ user_msg });
+    params.add_generation_prompt = false;
+    params.enable_thinking       = true;
+
+    auto comparison = compare_variants(
+        tmpl, params, [&](template_params & p) {
+            p.messages = json::array({ user_msg, assistant_no_reasoning });
+        }
+    );
+
+    if (!comparison) {
+        LOG_DBG(ANSI_ORANGE "%s: Template application failed, skipping assistant start detection\n" ANSI_RESET, __func__);
+        return "";
+    }
+
+    auto usermsg = comparison->diff.right;
+    if (usermsg.find(ASSISTANT_MSG) == std::string::npos) {
+        LOG_DBG(ANSI_ORANGE "%s: Did not find assistant message in assistant message block, skipping detection\n" ANSI_RESET, __func__);
+    }
+
+    auto ast_prefix = usermsg.substr(0, usermsg.find(ASSISTANT_MSG));
+    if (!reasoning.start.empty() && ast_prefix.find(trim_whitespace(reasoning.start)) != std::string::npos) {
+        ast_prefix = ast_prefix.substr(0, ast_prefix.find(trim_whitespace(reasoning.start)));
+    }
+    if (!reasoning.end.empty() && ast_prefix.find(trim_whitespace(reasoning.end)) != std::string::npos) {
+        ast_prefix = ast_prefix.substr(0, ast_prefix.find(trim_whitespace(reasoning.end)));
+    }
+    return trim_whitespace(ast_prefix);
+}
+
+std::string autoparser::detect_user_start_marker(const common_chat_template & tmpl) {
+    json user_msg = json{
+        { "role",    "user"   },
+        { "content", USER_MSG }
+    };
+
+    json assistant = json{
+        { "role",    "assistant"   },
+        { "content", ASSISTANT_MSG }
+    };
+
+    json user_msg_two = json{
+        { "role",    "user"       },
+        { "content", USER_MSG_TWO }
+    };
+
+    template_params params;
+    params.messages              = json::array({});
+    params.add_generation_prompt = false;
+    params.enable_thinking       = true;
+
+    auto comparison = compare_variants(
+        tmpl, params, [&](template_params & p) {
+            p.messages = json::array({ user_msg });
+        }
+    );
+
+    if (!comparison) {
+        LOG_DBG(ANSI_ORANGE "%s: Template application failed, unsupported empty messages? trying complex variant\n" ANSI_RESET, __func__);
+        params.messages = json::array({ user_msg_two, assistant });
+        comparison = compare_variants(
+            tmpl, params, [&](template_params & p) {
+                p.messages = json::array({ user_msg_two, assistant, user_msg });
+            }
+        );
+        if (!comparison) {
+            LOG_DBG(ANSI_ORANGE "%s: Template application failed for reserve variant, aborting\n" ANSI_RESET, __func__);
+            return "";
+        }
+    }
+
+    auto usermsg = comparison->diff.right;
+    if (usermsg.find(USER_MSG) == std::string::npos) {
+        LOG_DBG(ANSI_ORANGE "%s: Did not find user message in user message block, aborting detection\n" ANSI_RESET, __func__);
+    }
+
+    if (usermsg.find(ASSISTANT_MSG) != std::string::npos) {
+        usermsg = usermsg.substr(usermsg.find(ASSISTANT_MSG) + ASSISTANT_MSG.size());
+    }
+
+    auto candidate = usermsg.substr(0, usermsg.find(USER_MSG));
+    auto candidate_split = segmentize_markers(candidate);
+    std::stringstream result;
+    bool encountered_marker = false;
+    for (const auto & mrk : candidate_split) {
+        std::string lower_mrk = std::string(mrk.value);
+        std::transform(lower_mrk.begin(), lower_mrk.end(), lower_mrk.begin(),
+            [](unsigned char c) { return std::tolower(c); });
+        // heuristic to weed out potential end markers, but only at the start
+        if (mrk.type == segment_type::MARKER && !encountered_marker &&
+            (lower_mrk.find("end") != std::string::npos || lower_mrk.find("close") != std::string::npos)) {
+            continue;
+        }
+        if (mrk.type == segment_type::TEXT && !encountered_marker && trim_whitespace(mrk.value).empty()) {
+            continue;
+        }
+        encountered_marker |= mrk.type == segment_type::MARKER;
+        result << mrk.value;
+    }
+    return trim_whitespace(result.str());
 }
 
 analyze_reasoning::analyze_reasoning(const common_chat_template & tmpl, bool supports_tools)

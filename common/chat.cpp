@@ -90,6 +90,45 @@ std::string common_chat_msg::render_content(const std::string & delimiter) const
     return text;
 }
 
+std::vector<common_chat_msg_span> common_chat_split_by_role(const std::string & prompt, const std::vector<common_chat_msg_delimiter> & delims) {
+    if (delims.empty() || prompt.empty()) {
+        return {};
+    }
+
+    auto parser = build_peg_parser([&](common_peg_parser_builder & p) {
+        std::vector<std::string>       all_delims;
+        std::vector<common_peg_parser> tagged_messages;
+
+        all_delims.reserve(delims.size());
+        tagged_messages.reserve(delims.size());
+        for (const auto & d : delims) {
+            all_delims.push_back(d.delimiter);
+        }
+
+        auto any_delim = p.until_one_of(all_delims);
+        for (const auto & d : delims) {
+            tagged_messages.push_back(p.tag(d.role, p.literal(d.delimiter) + any_delim));
+        }
+
+        return any_delim + p.zero_or_more(p.choice(tagged_messages)) + p.end();
+    });
+
+    common_peg_parse_context ctx(prompt);
+    const auto result = parser.parse(ctx);
+    if (!result.success()) {
+        return {};
+    }
+
+    std::vector<common_chat_msg_span> spans;
+    ctx.ast.visit(result, [&](const common_peg_ast_node & node) {
+        if (!node.tag.empty()) {
+            spans.push_back({ node.tag, node.start, node.end - node.start });
+        }
+    });
+
+    return spans;
+}
+
 json common_chat_msg::to_json_oaicompat(bool concat_typed_text) const {
     if (!content.empty() && !content_parts.empty()) {
         throw std::runtime_error("Cannot specify both content and content_parts");
@@ -1042,6 +1081,14 @@ static common_chat_params common_chat_params_init_gpt_oss(const common_chat_temp
 
     data.prompt            = prompt;
     data.generation_prompt = common_chat_template_generation_prompt_impl(tmpl, inputs, /* messages_override= */ adjusted_messages);
+    data.message_spans = common_chat_split_by_role(prompt, {
+        { "assistant", "<|start|>assistant" },
+        { "user",      "<|start|>user"      },
+        { "system",    "<|start|>developer" },
+        { "system",    "<|start|>system"    },
+        { "tool",      "<|start|>functions" },
+    });
+
     data.format            = COMMON_CHAT_FORMAT_PEG_NATIVE;
     data.supports_thinking = true;
 
@@ -1180,6 +1227,11 @@ static common_chat_params common_chat_params_init_gemma4(const common_chat_templ
         data.generation_prompt = "<|turn>model\n";
         data.prompt += data.generation_prompt;
     }
+
+    data.message_spans = common_chat_split_by_role(data.prompt, {
+        { "user",      "<|turn>user\n"  },
+        { "assistant", "<|turn>model\n" },
+    });
 
     data.format            = COMMON_CHAT_FORMAT_PEG_GEMMA4;
     data.supports_thinking  = true;
@@ -2393,6 +2445,19 @@ static common_chat_params common_chat_templates_apply_jinja(const struct common_
         struct autoparser::autoparser autoparser;
         autoparser.analyze_template(tmpl);
         auto auto_params = autoparser::peg_generator::generate_parser(tmpl, params, autoparser);
+
+        std::vector<common_chat_msg_delimiter> delimiters;
+        if (!autoparser.assistant_start.empty()) {
+            delimiters.push_back({ "assistant", autoparser.assistant_start });
+        }
+        if (!autoparser.user_start.empty()) {
+            delimiters.push_back({ "user", autoparser.user_start });
+        }
+
+        if (!delimiters.empty()) {
+            auto_params.message_spans = common_chat_split_by_role(auto_params.prompt, delimiters);
+        }
+
         auto_params.supports_thinking = autoparser.reasoning.mode != autoparser::reasoning_mode::NONE;
         if (auto_params.supports_thinking) {
             auto_params.thinking_start_tag = trim_whitespace(autoparser.reasoning.start);

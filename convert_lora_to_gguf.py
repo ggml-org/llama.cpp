@@ -208,6 +208,16 @@ class LoraTorchTensor:
     def to(self, *args, **kwargs):
         return LoraTorchTensor(self._lora_A.to(*args, **kwargs), self._lora_B.to(*args, **kwargs))
 
+    def __mul__(self, other) -> LoraTorchTensor:
+        # Only output-side multiplication for now
+        # W = B @ A, so M_out * W == (M_out * B) @ A
+        if not isinstance(other, (int, float)) and other.shape and other.shape[-1] != 1:
+            raise NotImplementedError
+        return LoraTorchTensor(self._lora_A, self._lora_B * other)
+
+    def __rmul__(self, other) -> LoraTorchTensor:
+        return self * other
+
     @classmethod
     def __torch_function__(cls, func: Callable, types, args=(), kwargs=None):
         del types  # unused

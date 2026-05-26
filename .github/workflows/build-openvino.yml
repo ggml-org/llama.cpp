@@ -84,7 +84,7 @@ jobs:
         id: cache-openvino
         with:
           path: ./openvino_toolkit
-          key: openvino-toolkit-v${{ env.OPENVINO_VERSION_FULL }}-${{ runner.os }}
+          key: cache-gha-openvino-toolkit-v${{ env.OPENVINO_VERSION_FULL }}-${{ runner.os }}
 
       - name: Setup OpenVINO Toolkit
         if: steps.cache-openvino.outputs.cache-hit != 'true'
