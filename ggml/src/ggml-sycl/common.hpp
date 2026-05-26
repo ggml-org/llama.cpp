@@ -641,6 +641,8 @@ constexpr size_t ceil_div(const size_t m, const size_t n) {
 
 bool gpu_has_xmx(sycl::device &dev);
 
+int ggml_sycl_get_env(const char *env_name, int default_val);
+
 template <int N, class T> std::string debug_get_array_str(const std::string & prefix, const T array[N]) {
     if (LIKELY(!g_ggml_sycl_debug)) {
         return "";

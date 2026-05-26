@@ -59,7 +59,7 @@ bool gpu_has_xmx(sycl::device &dev) {
     return dev.has(sycl::aspect::ext_intel_matrix);
 }
 
-static int ggml_sycl_get_env(const char *env_name, int default_val) {
+int ggml_sycl_get_env(const char *env_name, int default_val) {
     char *user_device_string = getenv(env_name);
     int user_number = default_val;
 

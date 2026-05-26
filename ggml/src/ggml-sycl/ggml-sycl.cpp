@@ -76,20 +76,6 @@ int g_ggml_sycl_use_async_mem_op_requested = 1;
 int g_ggml_sycl_enable_level_zero = 0;
 int g_ggml_sycl_enable_flash_attention = 1;
 
-static inline int get_sycl_env(const char *env_name, int default_val) {
-    char *user_device_string = getenv(env_name);
-    int user_number = default_val;
-
-    unsigned n;
-    if (user_device_string != NULL &&
-        sscanf(user_device_string, " %u", &n) == 1) {
-        user_number = (int)n;
-    } else {
-        user_number = default_val;
-    }
-    return user_number;
-}
-
 static ggml_sycl_device_info ggml_sycl_init() {
     ggml_sycl_device_info info = {};
 
@@ -156,7 +142,7 @@ static ggml_sycl_device_info ggml_sycl_init() {
     // Large buffers can be allocated before ggml_check_sycl() initializes other
     // g_ggml_sycl_enable_* globals, so initialize this one as early as we can.
     g_ggml_sycl_enable_level_zero =
-        info.ext_oneapi_level_zero && get_sycl_env("GGML_SYCL_ENABLE_LEVEL_ZERO", 1);
+        info.ext_oneapi_level_zero && ggml_sycl_get_env("GGML_SYCL_ENABLE_LEVEL_ZERO", 1);
 #else
     g_ggml_sycl_enable_level_zero = 0;
 #endif
@@ -249,14 +235,14 @@ static void ggml_check_sycl() try {
     static bool initialized = false;
 
     if (!initialized) {
-        g_ggml_sycl_debug = get_sycl_env("GGML_SYCL_DEBUG", 0);
-        g_ggml_sycl_disable_optimize = get_sycl_env("GGML_SYCL_DISABLE_OPT", 0);
-        g_ggml_sycl_disable_graph = get_sycl_env("GGML_SYCL_DISABLE_GRAPH", 1);
-        g_ggml_sycl_disable_dnn = get_sycl_env("GGML_SYCL_DISABLE_DNN", 0);
-        g_ggml_sycl_prioritize_dmmv = get_sycl_env("GGML_SYCL_PRIORITIZE_DMMV", 0);
+        g_ggml_sycl_debug = ggml_sycl_get_env("GGML_SYCL_DEBUG", 0);
+        g_ggml_sycl_disable_optimize = ggml_sycl_get_env("GGML_SYCL_DISABLE_OPT", 0);
+        g_ggml_sycl_disable_graph = ggml_sycl_get_env("GGML_SYCL_DISABLE_GRAPH", 1);
+        g_ggml_sycl_disable_dnn = ggml_sycl_get_env("GGML_SYCL_DISABLE_DNN", 0);
+        g_ggml_sycl_prioritize_dmmv = ggml_sycl_get_env("GGML_SYCL_PRIORITIZE_DMMV", 0);
 
 #ifdef SYCL_FLASH_ATTN
-        g_ggml_sycl_enable_flash_attention = get_sycl_env("GGML_SYCL_ENABLE_FLASH_ATTN", 1);
+        g_ggml_sycl_enable_flash_attention = ggml_sycl_get_env("GGML_SYCL_ENABLE_FLASH_ATTN", 1);
 #else
         g_ggml_sycl_enable_flash_attention = 0;
 #endif
@@ -309,7 +295,7 @@ static void ggml_check_sycl() try {
         GGML_LOG_INFO("  GGML_SYCL_DISABLE_DNN: DNN disabled by compile flag\n");
 #endif
         GGML_LOG_INFO("  GGML_SYCL_PRIORITIZE_DMMV: %d\n", g_ggml_sycl_prioritize_dmmv);
-        g_ggml_sycl_use_async_mem_op_requested = get_sycl_env("GGML_SYCL_USE_ASYNC_MEM_OP", 1);
+        g_ggml_sycl_use_async_mem_op_requested = ggml_sycl_get_env("GGML_SYCL_USE_ASYNC_MEM_OP", 1);
         GGML_LOG_INFO("  GGML_SYCL_USE_ASYNC_MEM_OP: %d\n", g_ggml_sycl_use_async_mem_op_requested);
 
 #ifdef SYCL_FLASH_ATTN
