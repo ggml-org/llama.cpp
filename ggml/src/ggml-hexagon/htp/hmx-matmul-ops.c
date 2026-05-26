@@ -659,6 +659,8 @@ static void dequantize_x4x2_weight_chunk_to_fp16_tiles(
 
 // --- End x4x2 dequantizers ---
 
+#pragma clang diagnostic ignored "-Wbackend-plugin" // spurios warning for hmx intrinsics
+
 // requires external HMX lock
 static void core_dot_chunk_fp16(__fp16 *restrict output, const __fp16 *restrict activation, const __fp16 *restrict weight, const __fp16 *restrict scales,
                                 int n_row_tiles, int n_col_tiles, int n_dot_tiles) {
