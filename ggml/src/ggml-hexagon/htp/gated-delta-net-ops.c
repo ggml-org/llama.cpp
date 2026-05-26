@@ -770,8 +770,8 @@ static void gated_delta_net_f32_tg_thread(unsigned int nth, unsigned int ith, vo
 
         if (spad) {
             dma_queue_push(dma, dma_make_ptr(spad, s_in),
-                            S_v * sizeof(float), S_v * sizeof(float),
-                            S_v * sizeof(float), S_v);
+                           S_v * sizeof(float), S_v * sizeof(float),
+                           S_v * sizeof(float), S_v);
             dma_queue_pop(dma);
             s_work = (float *) spad;
         } else {
@@ -809,7 +809,7 @@ static void gated_delta_net_f32_tg_thread(unsigned int nth, unsigned int ith, vo
                 float * row6 = s_work + (uint64_t) (j + 6) * S_v;
                 float * row7 = s_work + (uint64_t) (j + 7) * S_v;
                 gdn_mul_dot8_f32(row0, row1, row2, row3, row4, row5, row6, row7,
-                                local_gate, local_k, S_v, local_sums);
+                                 local_gate, local_k, S_v, local_sums);
                 float local_delta_b[8] __attribute__((aligned(128)));
                 for (uint32_t r = 0; r < 8; ++r) {
                     local_delta_b[r] = (v_t[j + r] - local_sums[r]) * beta_val;
@@ -890,8 +890,8 @@ static void gated_delta_net_f32_tg_thread(unsigned int nth, unsigned int ith, vo
 
         if (spad) {
             dma_queue_push(dma, dma_make_ptr(s_out, spad),
-                            S_v * sizeof(float), S_v * sizeof(float),
-                            S_v * sizeof(float), S_v);
+                           S_v * sizeof(float), S_v * sizeof(float),
+                           S_v * sizeof(float), S_v);
             dma_queue_pop(dma);
         }
     }
