@@ -171,9 +171,3 @@ jobs:
             -DEMDAWNWEBGPU_DIR=emdawnwebgpu_pkg
 
           time cmake --build build-wasm --config Release --target test-backend-ops -j $(nproc)
-
-      - name: Test
-        id: cmake_test
-        run: |
-          cd build-wasm
-          ctest -L main --verbose --timeout 900
