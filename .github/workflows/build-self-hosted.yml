@@ -297,8 +297,8 @@ jobs:
           source ./openvino_toolkit/setupvars.sh
           GG_BUILD_OPENVINO=1 GGML_OPENVINO_DEVICE=GPU GG_BUILD_LOW_PERF=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
 
-  ggml-ci-arm64-cpu-low-perf:
-    runs-on: [self-hosted, Linux, ARM64, CPU]
+  ggml-ci-cpu-low-perf:
+    runs-on: [self-hosted, CPU]
 
     steps:
       - name: Clone
@@ -310,8 +310,8 @@ jobs:
         run: |
           LLAMA_ARG_THREADS=$(nproc) GG_BUILD_LOW_PERF=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
 
-  ggml-ci-arm64-cpu-high-perf:
-    runs-on: [self-hosted, Linux, ARM64, CPU]
+  ggml-ci-cpu-high-perf:
+    runs-on: [self-hosted, CPU]
 
     steps:
       - name: Clone

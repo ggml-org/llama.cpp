@@ -1622,6 +1622,9 @@ class TextModel(ModelBase):
         if chkhsh == "62f6fb0a6fd5098caeabb19b07a5c1099cafc8b9c40eab6ea89ece4ec02fbc57":
             # ref: https://huggingface.co/sarvamai/sarvam-30b
             res = "sarvam-moe"
+        if chkhsh == "f728162c1315c26e40249849799b4ba3fe584c32084b4795b03eb295e63cb5af":
+            # ref: https://huggingface.co/lewtun/talkie-1930-13b-it-hf
+            res = "talkie"
 
         if res is None:
             logger.warning("\n")
