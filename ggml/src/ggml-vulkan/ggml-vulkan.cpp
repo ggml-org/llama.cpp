@@ -2301,7 +2301,16 @@ vk_instance_t::~vk_instance_t() {
     {
         std::lock_guard<std::mutex> guard(vk_d2d_cache_mutex);
         for (auto& entry : vk_d2d_cache) {
-            ggml_vk_d2d_destroy_shared_semaphore(entry.second);
+            // Neutralize entries without Vulkan API calls — device.destroy()
+            // in each device's destructor will implicitly free associated resources.
+            // Explicit Vulkan calls here are unsafe because the validation layer's
+            // static data may already be destroyed.
+            entry.second.async_capable = false;
+            entry.second.sem_src = VK_NULL_HANDLE;
+            entry.second.sem_dst = VK_NULL_HANDLE;
+            entry.second.hop1_fence = VK_NULL_HANDLE;
+            entry.second.hop1_fence_pending = false;
+            entry.second.hop1_cmd_pool.pool = nullptr;
             if (entry.second.host_ptr) {
                 free(entry.second.host_ptr);
                 entry.second.host_ptr = nullptr;
@@ -3574,14 +3583,20 @@ static bool ggml_vk_d2d_check_timeline_semaphore_export(vk_device& dev) {
     ext_sem_info.handleType = vk::ExternalSemaphoreHandleTypeFlagBits::eOpaqueFd;
     ext_sem_info.pNext = &sem_type;
 
-    vk::ExternalSemaphoreProperties ext_sem_props = dev->physical_device.getExternalSemaphoreProperties(ext_sem_info);
+    vk::ExternalSemaphoreProperties props = dev->physical_device.getExternalSemaphoreProperties(ext_sem_info);
 
-    return (ext_sem_props.externalSemaphoreFeatures & vk::ExternalSemaphoreFeatureFlagBits::eExportable) &&
-           (ext_sem_props.externalSemaphoreFeatures & vk::ExternalSemaphoreFeatureFlagBits::eImportable);
+    return (props.externalSemaphoreFeatures & vk::ExternalSemaphoreFeatureFlagBits::eExportable) &&
+           (props.externalSemaphoreFeatures & vk::ExternalSemaphoreFeatureFlagBits::eImportable);
 }
 
 static bool ggml_vk_d2d_create_shared_semaphore(vk_device& src_dev, vk_device& dst_dev, vk_d2d_path& path) {
     if (!src_dev->external_semaphore_fd || !dst_dev->external_semaphore_fd) {
+        return false;
+    }
+
+    bool src_nvidia = src_dev->vendor_id == VK_VENDOR_ID_NVIDIA;
+    bool dst_nvidia = dst_dev->vendor_id == VK_VENDOR_ID_NVIDIA;
+    if (src_nvidia != dst_nvidia) {
         return false;
     }
 
@@ -3594,9 +3609,7 @@ static bool ggml_vk_d2d_create_shared_semaphore(vk_device& src_dev, vk_device& d
     vk::ExportSemaphoreCreateInfo export_ci;
     export_ci.handleTypes = vk::ExternalSemaphoreHandleTypeFlagBits::eOpaqueFd;
 
-    vk::SemaphoreTypeCreateInfo type_ci;
-    type_ci.semaphoreType = vk::SemaphoreType::eTimeline;
-    type_ci.initialValue = 0;
+    vk::SemaphoreTypeCreateInfo type_ci{ vk::SemaphoreType::eTimeline, 0 };
     type_ci.pNext = &export_ci;
 
     vk::SemaphoreCreateInfo sem_ci;
@@ -3659,14 +3672,24 @@ static bool ggml_vk_d2d_create_shared_semaphore(vk_device& src_dev, vk_device& d
     }
     // fd ownership transferred to driver on successful import
 
+    try {
+        path.hop1_cmd_pool.init(src_dev, &src_dev->transfer_queue);
+        path.hop1_fence = src_dev->device.createFence({});
+    } catch (const vk::SystemError& e) {
+        VK_LOG_DEBUG("ggml_vk_d2d_create_shared_semaphore: cmd pool/fence creation failed: " << e.what());
+        if (path.hop1_cmd_pool.pool) {
+            path.hop1_cmd_pool.destroy(src_dev->device);
+        }
+        dst_dev->device.destroySemaphore(dst_sem);
+        src_dev->device.destroySemaphore(src_sem);
+        return false;
+    }
+
     path.sem_src = src_sem;
     path.sem_dst = dst_sem;
     path.sem_value = 0;
     path.sem_src_device = src_dev.get();
     path.sem_dst_device = dst_dev.get();
-
-    path.hop1_cmd_pool.init(src_dev, &src_dev->transfer_queue);
-    path.hop1_fence = src_dev->device.createFence({});
     path.hop1_fence_pending = false;
     path.hop1_device = src_dev.get();
 
@@ -8799,7 +8822,9 @@ static bool ggml_vk_buffer_copy_async_d2d(
         path.hop1_fence_pending = true;
     }
 
-    // Hop 2: record into dst compute context — waits on semaphore, copies shared buffer -> VRAM
+    // Hop 2: start a new submission in the dst compute context so this copy
+    // waits only for its own hop1, not for later hop1s that overwrite the shared buffer.
+    ggml_vk_ctx_begin(dst->device, dst_compute_ctx);
     dst_compute_ctx->s->wait_semaphores.push_back({ path.sem_dst, signal_value });
 
     VkBufferCopy bc2{ 0, dst_offset, size };
