@@ -121,13 +121,84 @@ static __attribute__((noinline)) void rope_cache_init(const float    theta_base,
                             float *        cache,
                             const float    theta_scale) {
     // ref: https://github.com/jquesnelle/yarn/blob/master/scaled_rope/LlamaYaRNScaledRotaryEmbedding.py
-    float theta = theta_base;
+#if __HVX_ARCH__ >= 79
+    const bool is_v79_or_newer = true;
+#else
+    const bool is_v79_or_newer = false;
+#endif
 
-    for (uint32_t i0 = 0; i0 < ne0; i0 += 2) {
-        const float ff = freq_factors ? freq_factors[i0 / 2] : 1.0f;
-        rope_yarn_one(theta / ff, freq_scale, corr_dims, i0, ext_factor, mscale, cache);
+    if (is_v79_or_newer && ext_factor == 0.0f) {
+        // Fast path: fully vectorized
+        // We process 32 pairs (64 elements) per iteration.
+        const uint32_t n_blocks = ne0 / 64;
 
-        theta *= theta_scale;
+        // Initialize theta scale powers: [1.0f, theta_scale, theta_scale^2, ..., theta_scale^31]
+        float __attribute__((aligned(128))) theta_powers[32];
+        theta_powers[0] = 1.0f;
+        for (int j = 1; j < 32; j++) {
+            theta_powers[j] = theta_powers[j - 1] * theta_scale;
+        }
+        HVX_Vector v_theta_powers = hvx_vmem(theta_powers);
+
+        HVX_Vector v_freq_scale = hvx_vec_splat_f32(freq_scale);
+        HVX_Vector v_mscale = hvx_vec_splat_f32(mscale);
+
+        // Base theta starts at theta_base
+        float theta_block = theta_base;
+        // The scale factor for the next block is theta_scale^32
+        float theta_scale_32 = 1.0f;
+        for (int j = 0; j < 32; j++) {
+            theta_scale_32 *= theta_scale;
+        }
+
+        for (uint32_t b = 0; b < n_blocks; b++) {
+            uint32_t i0 = b * 64;
+            HVX_Vector v_theta_base = hvx_vec_splat_f32(theta_block);
+            HVX_Vector v_theta = hvx_vec_mul_f32_f32(v_theta_base, v_theta_powers);
+
+            if (freq_factors) {
+                // Load 32 elements of freq_factors
+                HVX_Vector v_ff = hvx_vmemu(freq_factors + i0 / 2);
+                HVX_Vector v_inv_ff = hvx_vec_inverse_f32(v_ff);
+                v_theta = hvx_vec_mul_f32_f32(v_theta, v_inv_ff);
+            }
+
+            HVX_Vector v_theta_final = hvx_vec_mul_f32_f32(v_theta, v_freq_scale);
+
+            HVX_Vector vcos = hvx_vec_cos_f32(v_theta_final);
+            HVX_Vector vsin = hvx_vec_sin_f32(v_theta_final);
+
+            vcos = hvx_vec_mul_f32_f32(vcos, v_mscale);
+            vsin = hvx_vec_mul_f32_f32(vsin, v_mscale);
+
+            HVX_VectorPair vstore = Q6_W_vshuff_VVR(vsin, vcos, -4);
+
+            if (((uintptr_t)cache) % 128 == 0) {
+                hvx_vmem(cache + i0 + 0)  = Q6_V_lo_W(vstore);
+                hvx_vmem(cache + i0 + 32) = Q6_V_hi_W(vstore);
+            } else {
+                hvx_vec_store_u(cache + i0 + 0,  32 * sizeof(float), Q6_V_lo_W(vstore));
+                hvx_vec_store_u(cache + i0 + 32, 32 * sizeof(float), Q6_V_hi_W(vstore));
+            }
+
+            theta_block *= theta_scale_32;
+        }
+
+        // Leftovers
+        float theta = theta_block;
+        for (uint32_t i0 = n_blocks * 64; i0 < ne0; i0 += 2) {
+            const float ff = freq_factors ? freq_factors[i0 / 2] : 1.0f;
+            rope_yarn_one(theta / ff, freq_scale, corr_dims, i0, ext_factor, mscale, cache);
+            theta *= theta_scale;
+        }
+    } else {
+        // Fallback to original scalar loop
+        float theta = theta_base;
+        for (uint32_t i0 = 0; i0 < ne0; i0 += 2) {
+            const float ff = freq_factors ? freq_factors[i0 / 2] : 1.0f;
+            rope_yarn_one(theta / ff, freq_scale, corr_dims, i0, ext_factor, mscale, cache);
+            theta *= theta_scale;
+        }
     }
 }
 
