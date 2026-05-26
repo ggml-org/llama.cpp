@@ -355,7 +355,7 @@ static void ggml_zendnn_compute_forward_mul_mat_id(
         }
 
         // batched gemm for all tokens in this expert
-        if (!ggml_zendnn_sgemm(ctx,
+        if (!ggml_zendnn_gemm(ctx,
                               ne01,       // m
                               cne1,       // n
                               ne10,       // k
