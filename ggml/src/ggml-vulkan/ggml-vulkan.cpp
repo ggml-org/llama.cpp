@@ -115,7 +115,7 @@ typedef struct VkPhysicalDeviceInternallySynchronizedQueuesFeaturesKHR {
 #else
 // Safe compile-time alias to keep downstream code uniform
 static constexpr vk::DeviceQueueCreateFlagBits eInternallySynchronizedKHR =
-    vk::DeviceQueueCreateFlagBits::eInternallySynchronizedKHR;
+    eInternallySynchronizedKHR;
 #endif
 
 #define ROUNDUP_POW2(M, N) (((M) + (N) - 1) & ~((N) - 1))
@@ -2614,7 +2614,7 @@ static std::unique_ptr<vk_queue> ggml_vk_create_queue(vk_device& device, uint32_
 
     if (device->has_internally_synchronized_queues) {
         h = std::make_shared<vk_queue_handle_unsynchronized>();
-        queue_info2.flags = vk::DeviceQueueCreateFlagBits::eInternallySynchronizedKHR;
+        queue_info2.flags = eInternallySynchronizedKHR;
     } else {
         h = std::make_shared<vk_queue_handle_synchronized>();
     }
@@ -5374,7 +5374,7 @@ static vk_device ggml_vk_get_device(size_t idx) {
 
         std::vector<vk::DeviceQueueCreateInfo> device_queue_create_infos;
         vk::DeviceQueueCreateFlags queue_flags = device->has_internally_synchronized_queues ?
-                                                vk::DeviceQueueCreateFlagBits::eInternallySynchronizedKHR :
+                                                eInternallySynchronizedKHR :
                                                 vk::DeviceQueueCreateFlags();
 
         if (compute_queue_family_index != transfer_queue_family_index) {
