@@ -138,6 +138,13 @@ jobs:
         id: checkout
         uses: actions/checkout@v6
 
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.21
+        with:
+          key: ubuntu-24-webgpu-wasm
+          evict-old-files: 1d
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+
       - name: Install Emscripten
         run: |
           git clone https://github.com/emscripten-core/emsdk.git
