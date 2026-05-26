@@ -644,8 +644,8 @@ struct vk_device_struct {
     uint32_t vendor_id;
     vk::DriverId driver_id;
     vk_device_architecture architecture;
-    std::shared_ptr<vk_queue> compute_queue;
-    std::shared_ptr<vk_queue> transfer_queue;
+    std::unique_ptr<vk_queue> compute_queue;
+    std::unique_ptr<vk_queue> transfer_queue;
     bool single_queue;
     bool support_async;
     bool async_use_transfer_queue;
@@ -936,6 +936,11 @@ struct vk_device_struct {
 
         if (compute_queue) compute_queue->cmd_pool.destroy(device);
         if (transfer_queue) transfer_queue->cmd_pool.destroy(device);
+
+        // Explicitly clear to ensure queues drop their shared_ptrs to handles
+        // before the Vulkan logical device instance is destroyed
+        compute_queue.reset();
+        transfer_queue.reset();
 
         for (auto& pipeline : all_pipelines) {
             if (pipeline.expired()) {
@@ -2591,11 +2596,11 @@ static uint32_t ggml_vk_find_queue_family_index(std::vector<vk::QueueFamilyPrope
     abort();
 }
 
-static std::shared_ptr<vk_queue> ggml_vk_create_queue(vk_device& device, uint32_t queue_family_index, uint32_t queue_index, vk::PipelineStageFlags&& stage_flags, bool transfer_only) {
+static std::unique_ptr<vk_queue> ggml_vk_create_queue(vk_device& device, uint32_t queue_family_index, uint32_t queue_index, vk::PipelineStageFlags&& stage_flags, bool transfer_only) {
     VK_LOG_DEBUG("ggml_vk_create_queue()");
     std::lock_guard<std::recursive_mutex> guard(device->mutex);
 
-    auto q = std::make_shared<vk_queue>();
+    auto q = std::make_unique<vk_queue>();
     q->queue_family_index = queue_family_index;
     q->transfer_only = transfer_only;
 
@@ -2620,8 +2625,8 @@ static std::shared_ptr<vk_queue> ggml_vk_create_queue(vk_device& device, uint32_
     return q;
 }
 
-static std::shared_ptr<vk_queue> ggml_vk_create_aliased_queue(vk_device& device, std::shared_ptr<vk_queue> source, vk::PipelineStageFlags stage_flags, bool transfer_only) {
-    auto q = std::make_shared<vk_queue>();
+static std::unique_ptr<vk_queue> ggml_vk_create_aliased_queue(vk_device& device, const std::unique_ptr<vk_queue>& source, vk::PipelineStageFlags stage_flags, bool transfer_only) {
+    auto q = std::make_unique<vk_queue>();
     q->handle = source->handle;
     q->queue_family_index = source->queue_family_index;
     q->stage_flags = stage_flags;
