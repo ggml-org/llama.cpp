@@ -1034,10 +1034,20 @@ enum vk_d2d_method {
 struct vk_d2d_path {
     vk_d2d_method method = D2D_UNTESTED;
     bool reverse_direction = false;
-    vk_buffer buf_a;
-    vk_buffer buf_b;
-    void * host_ptr = nullptr;
     size_t size = 0;
+
+    static constexpr size_t POOL_SIZE = 2;
+
+    struct slot {
+        vk_buffer buf_a;
+        vk_buffer buf_b;
+        void * host_ptr = nullptr;
+        uint64_t hop2_done = 0;
+    };
+
+    slot slots[POOL_SIZE];
+    size_t num_slots = 0;
+    size_t pool_idx = 0;
 
     bool async_capable = false;
     vk::Semaphore sem_src = VK_NULL_HANDLE;
@@ -2294,6 +2304,8 @@ static vk_instance_t vk_instance;
 
 #ifdef __linux__
 static void ggml_vk_d2d_destroy_shared_semaphore(vk_d2d_path& path);
+static bool ggml_vk_d2d_grow_slot(vk_d2d_path& path, vk_device& src_dev, vk_device& dst_dev,
+                                   size_t needed, vk_d2d_path::slot& s);
 #endif
 
 vk_instance_t::~vk_instance_t() {
@@ -2311,15 +2323,17 @@ vk_instance_t::~vk_instance_t() {
             entry.second.hop1_fence = VK_NULL_HANDLE;
             entry.second.hop1_fence_pending = false;
             entry.second.hop1_cmd_pool.pool = nullptr;
-            if (entry.second.host_ptr) {
-                free(entry.second.host_ptr);
-                entry.second.host_ptr = nullptr;
-            }
-            if (entry.second.buf_a) {
-                entry.second.buf_a->size = 0;
-            }
-            if (entry.second.buf_b) {
-                entry.second.buf_b->size = 0;
+            for (auto& s : entry.second.slots) {
+                if (s.host_ptr) {
+                    free(s.host_ptr);
+                    s.host_ptr = nullptr;
+                }
+                if (s.buf_a) {
+                    s.buf_a->size = 0;
+                }
+                if (s.buf_b) {
+                    s.buf_b->size = 0;
+                }
             }
         }
         vk_d2d_cache.clear();
@@ -2336,15 +2350,17 @@ vk_device_struct::~vk_device_struct() {
         for (auto it = vk_d2d_cache.begin(); it != vk_d2d_cache.end(); ) {
             if (it->first.first == this || it->first.second == this) {
                 ggml_vk_d2d_destroy_shared_semaphore(it->second);
-                if (it->second.host_ptr) {
-                    free(it->second.host_ptr);
-                    it->second.host_ptr = nullptr;
-                }
-                if (it->second.buf_a) {
-                    it->second.buf_a->size = 0;
-                }
-                if (it->second.buf_b) {
-                    it->second.buf_b->size = 0;
+                for (auto& s : it->second.slots) {
+                    if (s.host_ptr) {
+                        free(s.host_ptr);
+                        s.host_ptr = nullptr;
+                    }
+                    if (s.buf_a) {
+                        s.buf_a->size = 0;
+                    }
+                    if (s.buf_b) {
+                        s.buf_b->size = 0;
+                    }
                 }
                 it = vk_d2d_cache.erase(it);
             } else {
@@ -3695,8 +3711,16 @@ static bool ggml_vk_d2d_create_shared_semaphore(vk_device& src_dev, vk_device& d
 
     path.async_capable = true;
 
-    GGML_LOG_DEBUG("ggml_vulkan: d2d %s -> %s: async semaphore created\n",
-                  src_dev->name.c_str(), dst_dev->name.c_str());
+    // Allocate additional pool slots for double buffering
+    for (size_t i = path.num_slots; i < vk_d2d_path::POOL_SIZE; i++) {
+        if (!ggml_vk_d2d_grow_slot(path, src_dev, dst_dev, path.size, path.slots[i])) {
+            break;
+        }
+        path.num_slots = i + 1;
+    }
+
+    GGML_LOG_DEBUG("ggml_vulkan: d2d %s -> %s: async semaphore created (%zu pool slots)\n",
+                  src_dev->name.c_str(), dst_dev->name.c_str(), path.num_slots);
     return true;
 }
 #endif
@@ -8589,8 +8613,9 @@ static vk_d2d_path ggml_vk_probe_d2d_path(vk_device& src_dev, vk_device& dst_dev
             if (ggml_vk_d2d_test_copy(dst_dev, imp_buf, VK_D2D_PROBE_SIZE)) {
                 path.method = D2D_DMABUF_P2P;
                 path.reverse_direction = false;
-                path.buf_a = exp_buf;
-                path.buf_b = imp_buf;
+                path.slots[0].buf_a = exp_buf;
+                path.slots[0].buf_b = imp_buf;
+                path.num_slots = 1;
                 path.size = VK_D2D_PROBE_SIZE;
                 GGML_LOG_DEBUG("ggml_vulkan: d2d %s -> %s: dmabuf_p2p (src exports VRAM)\n",
                               src_dev->name.c_str(), dst_dev->name.c_str());
@@ -8606,8 +8631,9 @@ static vk_d2d_path ggml_vk_probe_d2d_path(vk_device& src_dev, vk_device& dst_dev
             if (ggml_vk_d2d_test_copy(src_dev, imp_buf, VK_D2D_PROBE_SIZE)) {
                 path.method = D2D_DMABUF_P2P;
                 path.reverse_direction = true;
-                path.buf_a = exp_buf;
-                path.buf_b = imp_buf;
+                path.slots[0].buf_a = exp_buf;
+                path.slots[0].buf_b = imp_buf;
+                path.num_slots = 1;
                 path.size = VK_D2D_PROBE_SIZE;
                 GGML_LOG_DEBUG("ggml_vulkan: d2d %s -> %s: dmabuf_p2p (dst exports VRAM)\n",
                               src_dev->name.c_str(), dst_dev->name.c_str());
@@ -8628,8 +8654,9 @@ static vk_d2d_path ggml_vk_probe_d2d_path(vk_device& src_dev, vk_device& dst_dev
                 ggml_vk_d2d_test_copy(dst_dev, imp_buf, VK_D2D_PROBE_SIZE)) {
                 path.method = D2D_DMABUF_GTT;
                 path.reverse_direction = false;
-                path.buf_a = exp_buf;
-                path.buf_b = imp_buf;
+                path.slots[0].buf_a = exp_buf;
+                path.slots[0].buf_b = imp_buf;
+                path.num_slots = 1;
                 path.size = VK_D2D_PROBE_SIZE;
                 GGML_LOG_DEBUG("ggml_vulkan: d2d %s -> %s: dmabuf_gtt (src exports GTT)\n",
                               src_dev->name.c_str(), dst_dev->name.c_str());
@@ -8646,8 +8673,9 @@ static vk_d2d_path ggml_vk_probe_d2d_path(vk_device& src_dev, vk_device& dst_dev
                 ggml_vk_d2d_test_copy(src_dev, imp_buf, VK_D2D_PROBE_SIZE)) {
                 path.method = D2D_DMABUF_GTT;
                 path.reverse_direction = true;
-                path.buf_a = exp_buf;
-                path.buf_b = imp_buf;
+                path.slots[0].buf_a = exp_buf;
+                path.slots[0].buf_b = imp_buf;
+                path.num_slots = 1;
                 path.size = VK_D2D_PROBE_SIZE;
                 GGML_LOG_DEBUG("ggml_vulkan: d2d %s -> %s: dmabuf_gtt (dst exports GTT)\n",
                               src_dev->name.c_str(), dst_dev->name.c_str());
@@ -8667,9 +8695,10 @@ static vk_d2d_path ggml_vk_probe_d2d_path(vk_device& src_dev, vk_device& dst_dev
             if (ggml_vk_d2d_test_copy(src_dev, buf_a, VK_D2D_PROBE_SIZE) &&
                 ggml_vk_d2d_test_copy(dst_dev, buf_b, VK_D2D_PROBE_SIZE)) {
                 path.method = D2D_SHARED_STAGING;
-                path.buf_a = buf_a;
-                path.buf_b = buf_b;
-                path.host_ptr = host_ptr;
+                path.slots[0].buf_a = buf_a;
+                path.slots[0].buf_b = buf_b;
+                path.slots[0].host_ptr = host_ptr;
+                path.num_slots = 1;
                 path.size = VK_D2D_PROBE_SIZE;
                 GGML_LOG_DEBUG("ggml_vulkan: d2d %s -> %s: shared_staging\n",
                               src_dev->name.c_str(), dst_dev->name.c_str());
@@ -8689,9 +8718,8 @@ static vk_d2d_path ggml_vk_probe_d2d_path(vk_device& src_dev, vk_device& dst_dev
     return path;
 }
 
-static bool ggml_vk_d2d_grow_path(vk_d2d_path& path, vk_device& src_dev, vk_device& dst_dev, size_t needed) {
-    VK_LOG_DEBUG("ggml_vk_d2d_grow_path(" << needed << ", current=" << path.size << ")");
-
+static bool ggml_vk_d2d_grow_slot(vk_d2d_path& path, vk_device& src_dev, vk_device& dst_dev,
+                                   size_t needed, vk_d2d_path::slot& s) {
     vk_buffer new_buf_a, new_buf_b;
     void * new_host_ptr = nullptr;
     bool ok = false;
@@ -8720,6 +8748,21 @@ static bool ggml_vk_d2d_grow_path(vk_d2d_path& path, vk_device& src_dev, vk_devi
         return false;
     }
 
+    ggml_vk_destroy_buffer(s.buf_a);
+    ggml_vk_destroy_buffer(s.buf_b);
+    if (s.host_ptr) {
+        free(s.host_ptr);
+    }
+
+    s.buf_a = new_buf_a;
+    s.buf_b = new_buf_b;
+    s.host_ptr = new_host_ptr;
+    return true;
+}
+
+static bool ggml_vk_d2d_grow_path(vk_d2d_path& path, vk_device& src_dev, vk_device& dst_dev, size_t needed) {
+    VK_LOG_DEBUG("ggml_vk_d2d_grow_path(" << needed << ", current=" << path.size << ")");
+
     // Wait for any in-flight hop1 before destroying old buffers
     if (path.hop1_fence_pending && path.hop1_device) {
         VK_CHECK(path.hop1_device->device.waitForFences({ path.hop1_fence }, true, UINT64_MAX),
@@ -8728,16 +8771,12 @@ static bool ggml_vk_d2d_grow_path(vk_d2d_path& path, vk_device& src_dev, vk_devi
         path.hop1_fence_pending = false;
     }
 
-    // Destroy old buffers
-    ggml_vk_destroy_buffer(path.buf_a);
-    ggml_vk_destroy_buffer(path.buf_b);
-    if (path.host_ptr) {
-        free(path.host_ptr);
+    for (size_t i = 0; i < path.num_slots; i++) {
+        if (!ggml_vk_d2d_grow_slot(path, src_dev, dst_dev, needed, path.slots[i])) {
+            return false;
+        }
     }
 
-    path.buf_a = new_buf_a;
-    path.buf_b = new_buf_b;
-    path.host_ptr = new_host_ptr;
     path.size = needed;
     return true;
 }
@@ -8758,12 +8797,15 @@ static vk_d2d_path& ggml_vk_get_d2d_path(vk_device& src_dev, vk_device& dst_dev,
         if (!ggml_vk_d2d_grow_path(path, src_dev, dst_dev, size)) {
             GGML_LOG_WARN("ggml_vulkan: d2d grow failed for %s -> %s, falling back to staging\n",
                          src_dev->name.c_str(), dst_dev->name.c_str());
-            ggml_vk_destroy_buffer(path.buf_a);
-            ggml_vk_destroy_buffer(path.buf_b);
-            if (path.host_ptr) {
-                free(path.host_ptr);
-                path.host_ptr = nullptr;
+            for (size_t i = 0; i < path.num_slots; i++) {
+                ggml_vk_destroy_buffer(path.slots[i].buf_a);
+                ggml_vk_destroy_buffer(path.slots[i].buf_b);
+                if (path.slots[i].host_ptr) {
+                    free(path.slots[i].host_ptr);
+                    path.slots[i].host_ptr = nullptr;
+                }
             }
+            path.num_slots = 0;
             path.method = D2D_STAGING;
             path.size = 0;
         }
@@ -8792,9 +8834,6 @@ static bool ggml_vk_buffer_copy_async_d2d(
         return false;
     }
 
-    vk_buffer& src_side_buf = path.reverse_direction ? path.buf_b : path.buf_a;
-    vk_buffer& dst_side_buf = path.reverse_direction ? path.buf_a : path.buf_b;
-
     // Wait for any previous hop1 on this path to complete (command buffer reuse)
     if (path.hop1_fence_pending) {
         VK_CHECK(path.hop1_device->device.waitForFences({ path.hop1_fence }, true, UINT64_MAX),
@@ -8804,31 +8843,49 @@ static bool ggml_vk_buffer_copy_async_d2d(
         ggml_vk_command_pool_cleanup(src->device, path.hop1_cmd_pool);
     }
 
-    uint64_t signal_value = ++path.sem_value;
+    // Pick next pool slot (round-robin)
+    size_t slot_idx = path.pool_idx;
+    path.pool_idx = (path.pool_idx + 1) % path.num_slots;
+    vk_d2d_path::slot& slot = path.slots[slot_idx];
 
-    // Hop 1: src device copies VRAM -> shared buffer, signals semaphore
+    vk_buffer& src_side_buf = path.reverse_direction ? slot.buf_b : slot.buf_a;
+    vk_buffer& dst_side_buf = path.reverse_direction ? slot.buf_a : slot.buf_b;
+
+    // Two sem values per copy: hop1_signal for hop1→hop2, hop2_signal for hop2→next reuse
+    uint64_t hop1_signal = path.sem_value + 1;
+    uint64_t hop2_signal = path.sem_value + 2;
+    path.sem_value = hop2_signal;
+
+    // Hop 1: src device copies VRAM -> shared buffer
+    // Wait for previous hop2 on this slot to finish reading before overwriting
     {
         std::lock_guard<std::recursive_mutex> guard(src->device->mutex);
         vk_context hop1_ctx = ggml_vk_create_temporary_context(path.hop1_cmd_pool);
         ggml_vk_ctx_begin(src->device, hop1_ctx);
 
+        if (slot.hop2_done > 0) {
+            hop1_ctx->s->wait_semaphores.push_back({ path.sem_src, slot.hop2_done });
+        }
+
         VkBufferCopy bc{ src_offset, 0, size };
         vkCmdCopyBuffer(hop1_ctx->s->buffer->buf, (VkBuffer)src->buffer, (VkBuffer)src_side_buf->buffer, 1, &bc);
 
-        hop1_ctx->s->signal_semaphores.push_back({ path.sem_src, signal_value });
+        hop1_ctx->s->signal_semaphores.push_back({ path.sem_src, hop1_signal });
 
         ggml_vk_ctx_end(hop1_ctx);
         ggml_vk_submit(hop1_ctx, path.hop1_fence);
         path.hop1_fence_pending = true;
     }
 
-    // Hop 2: start a new submission in the dst compute context so this copy
-    // waits only for its own hop1, not for later hop1s that overwrite the shared buffer.
+    // Hop 2: new submission in dst compute context — wait for hop1, signal when done reading
     ggml_vk_ctx_begin(dst->device, dst_compute_ctx);
-    dst_compute_ctx->s->wait_semaphores.push_back({ path.sem_dst, signal_value });
+    dst_compute_ctx->s->wait_semaphores.push_back({ path.sem_dst, hop1_signal });
 
     VkBufferCopy bc2{ 0, dst_offset, size };
     vkCmdCopyBuffer(dst_compute_ctx->s->buffer->buf, (VkBuffer)dst_side_buf->buffer, (VkBuffer)dst->buffer, 1, &bc2);
+
+    dst_compute_ctx->s->signal_semaphores.push_back({ path.sem_dst, hop2_signal });
+    slot.hop2_done = hop2_signal;
 
     return true;
 }
@@ -8865,12 +8922,10 @@ static void ggml_vk_buffer_copy(vk_buffer& dst, size_t dst_offset, vk_buffer& sr
         if (path.method != D2D_STAGING) {
             // buf_a is on the src-side device, buf_b is on the dst-side device
             // For reverse_direction (dst exports), buf_a is on dst_dev and buf_b is on src_dev
-            vk_buffer& src_side_buf = path.reverse_direction ? path.buf_b : path.buf_a;
-            vk_buffer& dst_side_buf = path.reverse_direction ? path.buf_a : path.buf_b;
+            vk_buffer& src_side_buf = path.reverse_direction ? path.slots[0].buf_b : path.slots[0].buf_a;
+            vk_buffer& dst_side_buf = path.reverse_direction ? path.slots[0].buf_a : path.slots[0].buf_b;
 
-            // Hop 1: src GPU copies VRAM -> shared buffer (same-device copy on src)
             ggml_vk_buffer_copy(src_side_buf, 0, src, src_offset, size);
-            // Hop 2: dst GPU copies shared buffer -> VRAM (same-device copy on dst)
             ggml_vk_buffer_copy(dst, dst_offset, dst_side_buf, 0, size);
             return;
         }
