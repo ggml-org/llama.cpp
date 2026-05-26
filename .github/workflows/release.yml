@@ -37,8 +37,7 @@ env:
 
 jobs:
 
-  macOS-cpu:
-
+  macos-cpu:
     strategy:
       matrix:
         include:
@@ -76,7 +75,7 @@ jobs:
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.21
         with:
-          key: macOS-latest-${{ matrix.arch }}
+          key: macos-latest-${{ matrix.arch }}
           evict-old-files: 1d
 
       - name: Build
@@ -1261,7 +1260,7 @@ jobs:
       - ubuntu-24-openvino
       #- ubuntu-24-sycl
       - android-arm64
-      - macOS-cpu
+      - macos-cpu
       - ios-xcode-build
       #- openEuler-cann
       - ui-build
