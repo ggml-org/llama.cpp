@@ -1,11 +1,5 @@
 name: Release
 
-# Skip this workflow on push to master if the commit message contains [no release]
-if: |
-  github.event_name != 'push' ||
-  github.ref != 'refs/heads/master' ||
-  !contains(github.event.head_commit.message, '[no release]')
-
 on:
   workflow_dispatch: # allows manual triggering
     inputs:
@@ -43,7 +37,30 @@ env:
 
 jobs:
 
+  check_release:
+    runs-on: ubuntu-slim
+
+    outputs:
+      should_release: ${{ steps.check.outputs.should_release }}
+
+    steps:
+      - id: check
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "should_release=true" >> $GITHUB_OUTPUT
+          elif [[ "${{ github.event_name }}" == "push" && "${{ github.ref }}" == "refs/heads/master" ]]; then
+            if echo "${{ github.event.head_commit.message }}" | grep -q '\[no release\]'; then
+              echo "should_release=false" >> $GITHUB_OUTPUT
+            else
+              echo "should_release=true" >> $GITHUB_OUTPUT
+            fi
+          else
+            echo "should_release=false" >> $GITHUB_OUTPUT
+          fi
+
   macos-cpu:
+    needs: [check_release]
+    if: ${{ needs.check_release.outputs.should_release == 'true' }}
     strategy:
       matrix:
         include:
@@ -114,6 +131,8 @@ jobs:
           name: llama-bin-macos-${{ matrix.build }}.tar.gz
 
   ubuntu-cpu:
+    needs: [check_release]
+    if: ${{ needs.check_release.outputs.should_release == 'true' }}
     strategy:
       matrix:
         include:
@@ -190,6 +209,8 @@ jobs:
           name: llama-bin-ubuntu-${{ matrix.build }}.tar.gz
 
   ubuntu-vulkan:
+    needs: [check_release]
+    if: ${{ needs.check_release.outputs.should_release == 'true' }}
 
     strategy:
       matrix:
@@ -266,6 +287,8 @@ jobs:
           name: llama-bin-ubuntu-vulkan-${{ matrix.build }}.tar.gz
 
   android-arm64:
+    needs: [check_release]
+    if: ${{ needs.check_release.outputs.should_release == 'true' }}
 
     runs-on: ubuntu-latest
 
@@ -343,6 +366,8 @@ jobs:
           name: llama-bin-android-arm64.tar.gz
 
   ubuntu-24-openvino:
+    needs: [check_release]
+    if: ${{ needs.check_release.outputs.should_release == 'true' }}
 
     runs-on: ubuntu-24.04
 
@@ -431,6 +456,8 @@ jobs:
           name: llama-bin-ubuntu-openvino-${{ env.OPENVINO_VERSION_MAJOR }}-x64.tar.gz
 
   windows-cpu:
+    needs: [check_release]
+    if: ${{ needs.check_release.outputs.should_release == 'true' }}
 
     runs-on: windows-2025
 
@@ -491,6 +518,8 @@ jobs:
           name: llama-bin-win-cpu-${{ matrix.arch }}.zip
 
   windows:
+    needs: [check_release]
+    if: ${{ needs.check_release.outputs.should_release == 'true' }}
 
     runs-on: windows-2025
 
@@ -581,6 +610,8 @@ jobs:
           name: llama-bin-win-${{ matrix.backend }}-${{ matrix.arch }}.zip
 
   windows-cuda:
+    needs: [check_release]
+    if: ${{ needs.check_release.outputs.should_release == 'true' }}
 
     runs-on: windows-2022
 
@@ -869,6 +900,8 @@ jobs:
 #          name: llama-bin-ubuntu-sycl-${{ matrix.build }}-x64.tar.gz
 
   ubuntu-22-rocm:
+    needs: [check_release]
+    if: ${{ needs.check_release.outputs.should_release == 'true' }}
 
     runs-on: ubuntu-22.04
 
@@ -980,6 +1013,8 @@ jobs:
           name: llama-bin-ubuntu-rocm-${{ env.ROCM_VERSION_SHORT }}-${{ matrix.build }}.tar.gz
 
   windows-hip:
+    needs: [check_release]
+    if: ${{ needs.check_release.outputs.should_release == 'true' }}
 
     runs-on: windows-2022
 
@@ -1094,6 +1129,8 @@ jobs:
           name: llama-bin-win-hip-${{ matrix.name }}-x64.zip
 
   ios-xcode-build:
+    needs: [check_release]
+    if: ${{ needs.check_release.outputs.should_release == 'true' }}
     runs-on: macos-15
 
     steps:
@@ -1242,6 +1279,8 @@ jobs:
 #          name: llama-bin-${{ matrix.chip_type }}-openEuler-${{ matrix.arch }}${{ matrix.use_acl_graph == 'on' && '-aclgraph' || '' }}.tar.gz
 
   ui-build:
+    needs: [check_release]
+    if: ${{ needs.check_release.outputs.should_release == 'true' }}
     uses: ./.github/workflows/ui-build.yml
 
   release:
