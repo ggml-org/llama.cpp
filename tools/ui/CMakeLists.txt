@@ -51,6 +51,7 @@ if(CMAKE_CROSSCOMPILING)
     add_custom_command(
         OUTPUT  "${LLAMA_UI_EMBED_EXE}"
         COMMAND "${HOST_CXX_COMPILER}" -O2 -std=c++17
+                -I"${PROJECT_SOURCE_DIR}/examples/gguf-hash/deps/xxhash"
                 -o "${LLAMA_UI_EMBED_EXE}" "${CMAKE_CURRENT_SOURCE_DIR}/embed.cpp"
         DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/embed.cpp"
         COMMENT "Building llama-ui-embed (host)"
@@ -62,6 +63,7 @@ if(CMAKE_CROSSCOMPILING)
 else()
     add_executable(llama-ui-embed embed.cpp)
     target_compile_features(llama-ui-embed PRIVATE cxx_std_17)
+    target_include_directories(llama-ui-embed PRIVATE ${PROJECT_SOURCE_DIR}/examples/gguf-hash/deps/xxhash)
     set_target_properties(llama-ui-embed PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
     )

@@ -10,6 +10,10 @@
 #include <string>
 #include <vector>
 
+// Header-only mode: XXH_INLINE_ALL makes all functions inline
+#define XXH_INLINE_ALL
+#include "xxhash.h"
+
 static bool read_file(const std::string & path, std::vector<unsigned char> & out) {
     std::ifstream f(path, std::ios::binary | std::ios::ate);
     if (!f) {
@@ -95,6 +99,7 @@ int main(int argc, char ** argv) {
         "    const char *          name;\n"
         "    const unsigned char * data;\n"
         "    size_t                size;\n"
+        "    const char *          etag;\n"
         "};\n\n"
         "const llama_ui_asset * llama_ui_find_asset(const char * name);\n";
 
@@ -104,20 +109,25 @@ int main(int argc, char ** argv) {
     if (n_assets > 0) {
         for (int i = 0; i < n_assets; i++) {
             const char * path = argv[3 + i * 2 + 1];
+
             std::vector<unsigned char> bytes;
             if (!read_file(path, bytes)) {
                 return 1;
             }
+            const auto hash = XXH64(bytes.data(), bytes.size(), 0);
+
             cpp += fmt("static const unsigned char asset_%d_data[] = {", i);
             append_bytes_hex(cpp, bytes);
-            cpp += fmt("};\nstatic const size_t        asset_%d_size = %lu;\n\n",
+            cpp += fmt("};\nstatic const size_t        asset_%d_size = %lu;\n",
                        i, static_cast<unsigned long>(bytes.size()));
+            cpp += fmt("static const char        asset_%d_etag[] = \"\\\"0x%016lx\\\"\";\n\n",
+                       i, static_cast<unsigned long>(hash));
         }
 
         cpp += "static const llama_ui_asset g_assets[] = {\n";
         for (int i = 0; i < n_assets; i++) {
-            const char * name = argv[3 + i * 2];
-            cpp += fmt("    { \"%s\", asset_%d_data, asset_%d_size },\n", name, i, i);
+            cpp += fmt("    { \"%s\", asset_%d_data, asset_%d_size, asset_%d_etag },\n",
+                       argv[3 + i * 2], i, i, i);
         }
         cpp += "};\n\n";
 
