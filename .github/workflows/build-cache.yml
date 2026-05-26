@@ -28,7 +28,7 @@ jobs:
         id: cache-sdk
         with:
           path: ./vulkan_sdk
-          key: vulkan-sdk-${{ env.VULKAN_SDK_VERSION }}-${{ runner.os }}
+          key: cache-gha-vulkan-sdk-${{ env.VULKAN_SDK_VERSION }}-${{ runner.os }}
 
       - name: Setup Vulkan SDK
         if: steps.cache-sdk.outputs.cache-hit != 'true'
@@ -54,7 +54,7 @@ jobs:
   #      id: cache-toolchain
   #      with:
   #        path: ./spacemit_toolchain
-  #        key: spacemit-ime-toolchain-v${{ env.SPACEMIT_IME_TOOLCHAIN_VERSION }}-${{ runner.os }}
+  #        key: cache-gha-spacemit-ime-toolchain-v${{ env.SPACEMIT_IME_TOOLCHAIN_VERSION }}-${{ runner.os }}
 
   #    - name: Setup SpacemiT Toolchain
   #      if: steps.cache-toolchain.outputs.cache-hit != 'true'
@@ -81,7 +81,7 @@ jobs:
         id: cache-openvino
         with:
           path: ./openvino_toolkit
-          key: openvino-toolkit-v${{ env.OPENVINO_VERSION_FULL }}-${{ runner.os }}
+          key: cache-gha-openvino-toolkit-v${{ env.OPENVINO_VERSION_FULL }}-${{ runner.os }}
 
       - name: Setup OpenVINO Toolkit
         if: steps.cache-openvino.outputs.cache-hit != 'true'
@@ -108,7 +108,7 @@ jobs:
         id: cache-rocm
         with:
           path: C:\Program Files\AMD\ROCm
-          key: rocm-${{ env.HIPSDK_INSTALLER_VERSION }}-${{ runner.os }}
+          key: cache-gha-rocm-${{ env.HIPSDK_INSTALLER_VERSION }}-${{ runner.os }}
 
       - name: Setup ROCm
         if: steps.cache-rocm.outputs.cache-hit != 'true'

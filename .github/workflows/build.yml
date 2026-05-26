@@ -60,78 +60,6 @@ jobs:
   build-cmake-pkg:
     uses: ./.github/workflows/build-cmake-pkg.yml
 
-  macOS-latest-arm64:
-    runs-on: macos-latest
-
-    steps:
-      - name: Clone
-        id: checkout
-        uses: actions/checkout@v6
-
-      - name: ccache
-        uses: ggml-org/ccache-action@v1.2.21
-        with:
-          key: macOS-latest-arm64
-          evict-old-files: 1d
-          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
-
-      - name: Build
-        id: cmake_build
-        run: |
-          sysctl -a
-          cmake -B build \
-            -DCMAKE_BUILD_RPATH="@loader_path" \
-            -DLLAMA_FATAL_WARNINGS=ON \
-            -DLLAMA_BUILD_BORINGSSL=ON \
-            -DGGML_METAL_USE_BF16=ON \
-            -DGGML_METAL_EMBED_LIBRARY=OFF \
-            -DGGML_METAL_SHADER_DEBUG=ON \
-            -DGGML_RPC=ON
-          time cmake --build build --config Release -j $(sysctl -n hw.logicalcpu)
-          leaks -atExit -- ./build/bin/test-thread-safety -hf ggml-org/gemma-3-270m-qat-GGUF -ngl 99 -p "$(printf 'hello %.0s' {1..128})" -n 16 -c 512 -ub 32 -np 2 -t 2 -lv 1
-
-      - name: Test
-        id: cmake_test
-        run: |
-          cd build
-          ctest -L main -E "test-llama-archs" --verbose --timeout 900
-
-  macOS-latest-x64:
-    runs-on: macos-15-intel
-
-    steps:
-      - name: Clone
-        id: checkout
-        uses: actions/checkout@v6
-
-      - name: ccache
-        uses: ggml-org/ccache-action@v1.2.21
-        with:
-          key: macOS-latest-x64
-          evict-old-files: 1d
-          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
-
-      - name: Build
-        id: cmake_build
-        run: |
-          sysctl -a
-          # Metal is disabled due to intermittent failures with Github runners not having a GPU:
-          # https://github.com/ggml-org/llama.cpp/actions/runs/8635935781/job/23674807267#step:5:2313
-          cmake -B build \
-            -DCMAKE_BUILD_RPATH="@loader_path" \
-            -DLLAMA_FATAL_WARNINGS=ON \
-            -DLLAMA_BUILD_BORINGSSL=ON \
-            -DGGML_METAL=OFF \
-            -DGGML_RPC=ON \
-            -DCMAKE_OSX_DEPLOYMENT_TARGET=13.3
-          time cmake --build build --config Release -j $(sysctl -n hw.logicalcpu)
-
-      - name: Test
-        id: cmake_test
-        run: |
-          cd build
-          ctest -L main --verbose --timeout 900
-
   ubuntu-cpu:
     strategy:
       matrix:
@@ -428,31 +356,33 @@ jobs:
 
 # TODO: simplify the following workflows using a matrix
 # TODO: run lighter CI on PRs and the full CI only on master (if needed)
-  ggml-ci-x64-cpu-low-perf:
-    runs-on: ubuntu-22.04
 
-    steps:
-      - name: Clone
-        id: checkout
-        uses: actions/checkout@v6
-
-      - name: ccache
-        uses: ggml-org/ccache-action@v1.2.21
-        with:
-          key: ggml-ci-x64-cpu-low-perf
-          evict-old-files: 1d
-          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
-
-      - name: Dependencies
-        id: depends
-        run: |
-          sudo apt-get update
-          sudo apt-get install build-essential
-
-      - name: Test
-        id: ggml-ci
-        run: |
-          LLAMA_ARG_THREADS=$(nproc) GG_BUILD_LOW_PERF=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
+# note: moved to build-self-hosted.yml - can remove from here when everything is stable
+#  ggml-ci-x64-cpu-low-perf:
+#    runs-on: ubuntu-22.04
+#
+#    steps:
+#      - name: Clone
+#        id: checkout
+#        uses: actions/checkout@v6
+#
+#      - name: ccache
+#        uses: ggml-org/ccache-action@v1.2.21
+#        with:
+#          key: ggml-ci-x64-cpu-low-perf
+#          evict-old-files: 1d
+#          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+#
+#      - name: Dependencies
+#        id: depends
+#        run: |
+#          sudo apt-get update
+#          sudo apt-get install build-essential
+#
+#      - name: Test
+#        id: ggml-ci
+#        run: |
+#          LLAMA_ARG_THREADS=$(nproc) GG_BUILD_LOW_PERF=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
 
 # note: moved to build-self-hosted.yml - can remove from here when everything is stable
 #  ggml-ci-arm64-cpu-low-perf:
@@ -481,31 +411,32 @@ jobs:
 #        run: |
 #          LLAMA_ARG_THREADS=$(nproc) GG_BUILD_LOW_PERF=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
 
-  ggml-ci-x64-cpu-high-perf:
-    runs-on: ubuntu-22.04
-
-    steps:
-      - name: Clone
-        id: checkout
-        uses: actions/checkout@v6
-
-      - name: ccache
-        uses: ggml-org/ccache-action@v1.2.21
-        with:
-          key: ggml-ci-x64-cpu-high-perf
-          evict-old-files: 1d
-          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
-
-      - name: Dependencies
-        id: depends
-        run: |
-          sudo apt-get update
-          sudo apt-get install build-essential
-
-      - name: Test
-        id: ggml-ci
-        run: |
-          LLAMA_ARG_THREADS=$(nproc) GG_BUILD_HIGH_PERF=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
+# note: moved to build-self-hosted.yml - can remove from here when everything is stable
+#  ggml-ci-x64-cpu-high-perf:
+#    runs-on: ubuntu-22.04
+#
+#    steps:
+#      - name: Clone
+#        id: checkout
+#        uses: actions/checkout@v6
+#
+#      - name: ccache
+#        uses: ggml-org/ccache-action@v1.2.21
+#        with:
+#          key: ggml-ci-x64-cpu-high-perf
+#          evict-old-files: 1d
+#          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+#
+#      - name: Dependencies
+#        id: depends
+#        run: |
+#          sudo apt-get update
+#          sudo apt-get install build-essential
+#
+#      - name: Test
+#        id: ggml-ci
+#        run: |
+#          LLAMA_ARG_THREADS=$(nproc) GG_BUILD_HIGH_PERF=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
 
 # note: moved to build-self-hosted.yml - can remove from here when everything is stable
 #  ggml-ci-arm64-cpu-high-perf:
@@ -585,51 +516,3 @@ jobs:
          id: ggml-ci
          run: |
            GG_BUILD_KLEIDIAI=1 GG_BUILD_EXTRA_TESTS_0=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
-
-  ggml-ci-arm64-cpu-kleidiai-graviton4:
-     runs-on: ah-ubuntu_22_04-c8g_8x
-
-     steps:
-       - name: Clone
-         id: checkout
-         uses: actions/checkout@v6
-
-       - name: Dependencies
-         id: depends
-         run: |
-           set -euxo pipefail
-           sudo apt-get update
-           sudo DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a \
-           apt-get install -y \
-            build-essential \
-            python3-venv \
-            gpg \
-            wget \
-            time \
-            git-lfs
-
-           git lfs install
-
-           # install the latest cmake
-           sudo install -d /usr/share/keyrings
-           wget -O - https://apt.kitware.com/keys/kitware-archive-latest.asc \
-            | gpg --dearmor \
-            | sudo tee /usr/share/keyrings/kitware-archive-keyring.gpg >/dev/null
-           echo 'deb [signed-by=/usr/share/keyrings/kitware-archive-keyring.gpg] https://apt.kitware.com/ubuntu/ jammy main' \
-            | sudo tee /etc/apt/sources.list.d/kitware.list
-           sudo apt-get update
-           sudo apt-get install -y cmake
-
-       - name: ccache
-         uses: ggml-org/ccache-action@v1.2.21
-         with:
-           key: ggml-ci-arm64-cpu-kleidiai-graviton4
-           evict-old-files: 1d
-           save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
-
-       - name: Test
-         id: ggml-ci
-         run: |
-           GG_BUILD_KLEIDIAI=1 \
-           GG_BUILD_EXTRA_TESTS_0=1 \
-           bash ./ci/run.sh ./tmp/results ./tmp/mnt
