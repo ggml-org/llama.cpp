@@ -934,8 +934,8 @@ struct vk_device_struct {
 
         ggml_vk_destroy_buffer(sync_staging);
 
-        compute_queue->cmd_pool.destroy(device);
-        transfer_queue->cmd_pool.destroy(device);
+        if (compute_queue) compute_queue->cmd_pool.destroy(device);
+        if (transfer_queue) transfer_queue->cmd_pool.destroy(device);
 
         for (auto& pipeline : all_pipelines) {
             if (pipeline.expired()) {
