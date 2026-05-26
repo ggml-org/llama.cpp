@@ -666,11 +666,10 @@ struct ggml_backend_opencl_context {
     cl_kernel kernel_mul_mm_iq4_nl_f32_l4_lm;
 
     std::vector<ProfilingInfo> profiling_info;
+    std::vector<ProfilingInfo> profiling_results;
 
-    void write_profiling_info() {
-        FILE * fperf = fopen("cl_profiling.csv", "w");
-        if (!fperf) {
-            GGML_LOG_ERROR("Failed to open cl_profiling.csv\n");
+    void flush_profiling_batch() {
+        if (profiling_info.empty()) {
             return;
         }
 
@@ -694,6 +693,7 @@ struct ggml_backend_opencl_context {
             CL_CHECK(clGetEventProfilingInfo(
                 info.evt, CL_PROFILING_COMMAND_COMPLETE, sizeof(cl_ulong), &cmd_complete, NULL));
             CL_CHECK(clReleaseEvent(info.evt));
+            info.evt = nullptr;
 
             char kernel_name[512];
             CL_CHECK(clGetKernelInfo(info.kernel, CL_KERNEL_FUNCTION_NAME,
@@ -711,10 +711,26 @@ struct ggml_backend_opencl_context {
             info.cmd_complete_duration_ns   = cmd_complete  - cmd_end;
             info.cmd_total_duration_ns      = cmd_complete  - cmd_queued;
         }
+        profiling_results.insert(profiling_results.end(),
+            std::make_move_iterator(profiling_info.begin()),
+            std::make_move_iterator(profiling_info.end()));
+        profiling_info.clear();
+    }
+
+    void write_profiling_info() {
+        if (profiling_results.empty()) {
+            return;
+        }
 
         // Dump a csv
+        FILE * fperf = fopen("cl_profiling.csv", "w");
+        if (!fperf) {
+            GGML_LOG_ERROR("Failed to open cl_profiling.csv\n");
+            return;
+        }
+
         fprintf(fperf, "op name, kernel name, exec duration (ms), global size, local size, output size\n");
-        for (const ProfilingInfo & info : profiling_info) {
+        for (const ProfilingInfo & info : profiling_results) {
             fprintf(fperf, "%s,%s,%f,%zux%zux%zu,%zux%zux%zu,%zux%zux%zux%zu\n",
                 info.op_name.c_str(), info.kernel_name.c_str(),
                 info.cmd_duration_ns/1.e6f,
@@ -725,14 +741,14 @@ struct ggml_backend_opencl_context {
         fclose(fperf);
 
         // Dump a simple chrome trace
-        FILE* ftrace = fopen("cl_trace.json", "w");
+        FILE * ftrace = fopen("cl_trace.json", "w");
         if (!ftrace) {
             GGML_LOG_ERROR("Failed to open cl_trace.json\n");
             return;
         }
 
         fprintf(ftrace, "[\n");
-        for (const ProfilingInfo & info : profiling_info) {
+        for (const ProfilingInfo & info : profiling_results) {
             fprintf(ftrace, "{\"name\": \"%s\", \"cat\": \"OpenCL\", \"ph\": \"B\", \"ts\": %" PRIu64 ", \"pid\": \"\", \"tid\": \"Host\"},\n",
                 info.kernel_name.c_str(), info.cmd_queued/1000);
             fprintf(ftrace, "{\"name\": \"%s\", \"cat\": \"OpenCL\", \"ph\": \"E\", \"ts\": %" PRIu64 ", \"pid\": \"\", \"tid\": \"Host\"},\n",
@@ -743,6 +759,7 @@ struct ggml_backend_opencl_context {
             fprintf(ftrace, "{\"name\": \"%s\", \"cat\": \"OpenCL\", \"ph\": \"E\", \"ts\": %" PRIu64 ", \"pid\": \"\", \"tid\": \"Device\"},\n",
                 info.kernel_name.c_str(), info.cmd_end/1000);
         }
+        fprintf(ftrace, "]\n");
         fclose(ftrace);
     }
 
@@ -763,6 +780,9 @@ struct ggml_backend_opencl_context {
 
         profiling_info.emplace_back();
         populateProfilingInfo(profiling_info.back(), evt, kernel, work_dim, global_work_size, local_work_size, tensor);
+        if (profiling_info.size() >= 2048) {
+            flush_profiling_batch();
+        }
 #else
         GGML_UNUSED(tensor);
         CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, work_dim, NULL, global_work_size, local_work_size, 0, NULL, NULL));
@@ -809,7 +829,7 @@ struct ggml_backend_opencl_context {
         if (ref_count == 0) {
 #ifdef GGML_OPENCL_PROFILING
             write_profiling_info();
-            profiling_info.clear();
+            profiling_results.clear();
 #endif
         }
     }
@@ -4788,7 +4808,7 @@ inline bool use_adreno_kernels(const ggml_backend_opencl_context *backend_ctx, c
 inline bool use_adreno_moe_kernels(const ggml_backend_opencl_context *backend_ctx, const ggml_tensor *tensor) {
     GGML_UNUSED(backend_ctx);
     int ne01 = tensor->ne[1];
-    return (((strstr(tensor->name, "ffn") != NULL) && (strstr(tensor->name, "exps") != NULL)) || (strstr(tensor->name, "as") != NULL)) && (ne01 % 64 == 0);
+    return (((strstr(tensor->name, "ffn") != NULL) && (strstr(tensor->name, "exps") != NULL)) || (strstr(tensor->name, "as") != NULL)) && (ne01 % 32 == 0);
 }
 
 inline bool enable_adreno_trans_weight(const ggml_backend_opencl_context *backend_ctx, const ggml_tensor *tensor) {
@@ -14401,7 +14421,7 @@ static void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0,
                     CL_CHECK(status);
 
                     // set thread grid
-                    global_size[0] = static_cast<size_t>(ne01);
+                    global_size[0] = static_cast<size_t>(((ne01 + 63) / 64) * 64);
                     global_size[1] = 4;
                     global_size[2] = static_cast<size_t>(ne20);
                     local_size[1] = 4;
@@ -14617,7 +14637,7 @@ static void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0,
                     CL_CHECK(status);
 
                     // set thread grid
-                    global_size[0] = static_cast<size_t>(ne01);
+                    global_size[0] = static_cast<size_t>(((ne01 + 63) / 64) * 64);
                     global_size[1] = 4;
                     global_size[2] = static_cast<size_t>(ne20);
                     local_size[1] = 4;
@@ -14793,7 +14813,7 @@ static void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0,
                     CL_CHECK(status);
 
                     // set thread grid
-                    global_size[0] = static_cast<size_t>(ne01);
+                    global_size[0] = static_cast<size_t>(((ne01 + 63) / 64) * 64);
                     global_size[1] = 4;
                     global_size[2] = static_cast<size_t>(ne20);
                     local_size[1] = 4;
@@ -14969,7 +14989,7 @@ static void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0,
                     CL_CHECK(status);
 
                     // set thread grid
-                    global_size[0] = static_cast<size_t>(ne01);
+                    global_size[0] = static_cast<size_t>(((ne01 + 63) / 64) * 64);
                     global_size[1] = 4;
                     global_size[2] = static_cast<size_t>(ne20);
                     local_size[1] = 4;
@@ -15222,7 +15242,7 @@ static void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0,
                     CL_CHECK(status);
 
                     // set thread grid
-                    global_size[0] = static_cast<size_t>(ne01);
+                    global_size[0] = static_cast<size_t>(((ne01 + 63) / 64) * 64);
                     global_size[1] = 4;
                     global_size[2] = static_cast<size_t>(ne20);
                     local_size[1] = 4;
@@ -15395,7 +15415,7 @@ static void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0,
                     CL_CHECK(status);
 
                     // set thread grid
-                    global_size[0] = static_cast<size_t>(ne01);
+                    global_size[0] = static_cast<size_t>(((ne01 + 63) / 64) * 64);
                     global_size[1] = 4;
                     global_size[2] = static_cast<size_t>(ne20);
                     local_size[1] = 4;
@@ -15573,7 +15593,7 @@ static void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0,
                     CL_CHECK(status);
 
                     // set thread grid
-                    global_size[0] = static_cast<size_t>(ne01);
+                    global_size[0] = static_cast<size_t>(((ne01 + 63) / 64) * 64);
                     global_size[1] = 4;
                     global_size[2] = static_cast<size_t>(ne20);
                     local_size[1] = 4;
@@ -15748,7 +15768,7 @@ static void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0,
                     CL_CHECK(status);
 
                     // set thread grid
-                    global_size[0] = static_cast<size_t>(ne01);
+                    global_size[0] = static_cast<size_t>(((ne01 + 63) / 64) * 64);
                     global_size[1] = 4;
                     global_size[2] = static_cast<size_t>(ne20);
                     local_size[1] = 4;
