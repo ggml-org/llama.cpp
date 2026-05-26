@@ -3051,6 +3051,11 @@ void clip_image_size_free(struct clip_image_size * load_image_size) {
 }
 void clip_image_u8_free(struct clip_image_u8  * img) { delete img; }
 void clip_image_f32_free(struct clip_image_f32 * img) { delete img; }
+void clip_image_set_append_token(struct clip_image_f32 * img, int token_type) {
+    if (img) {
+        img->append_token = (clip_image_f32::clip_append_token_type)token_type;
+    }
+}
 void clip_image_u8_batch_free(struct clip_image_u8_batch * batch) { delete batch; }
 void clip_image_f32_batch_free(struct clip_image_f32_batch * batch) { delete batch; }
 
@@ -3385,13 +3390,19 @@ int clip_n_output_tokens(const struct clip_ctx * ctx, struct clip_image_f32 * im
                 // Per-tile output token count: each projector block outputs
                 // query_side^2 tokens per window × n^2 windows.
                 // For 384×384 input: n = 24/8 = 3, query_side = 4 → 144.
-                // The +1 image_newline row / newline column logic runs in
-                // mtmd_encode's pack_and_unpad path, not here.
                 const int window_side = ctx->model.hparams.downsample_window_side;
                 const int query_side  = ctx->model.hparams.downsample_query_side;
                 const int side        = img->nx / params.patch_size;
                 const int n           = side / window_side;
                 n_patches             = (query_side * n) * (query_side * n);
+
+                // Add newline tokens based on append_token field.
+                if (img->append_token == clip_image_f32::CLIP_APPEND_TOKEN_NEWLINE_ROWWISE) {
+                    // For single-tile case: append 1 newline row.
+                    // For multi-tile rowwise: handled by caller, but here we
+                    // report the per-tile count including one trailing newline.
+                    n_patches += 1;
+                }
             } break;
         default:
             GGML_ABORT("unsupported projector type");
@@ -4344,84 +4355,6 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
         LOG_INF("=== END MTMD_DEBUG_EMBEDDINGS ===\n\n");
     }
 
-    return true;
-}
-
-size_t clip_n_assembled_output_tokens(clip_ctx * ctx, const clip_image_f32_batch * batch) {
-    GGML_ASSERT(batch != nullptr);
-    switch (ctx->proj_type()) {
-        case PROJECTOR_TYPE_GRANITE4_VISION:
-            return granite4_vision_n_assembled_output_tokens(ctx, batch);
-        // No assembler: flat sum of per-entry token counts.
-        default:
-            break;
-    }
-    size_t n = 0;
-    for (const auto & e : batch->entries) {
-        n += clip_n_output_tokens(ctx, e.get());
-    }
-    return n;
-}
-
-bool clip_image_assemble(clip_ctx * ctx, const int n_threads,
-                         const float * per_tile_embd,
-                         int n_tiles,
-                         int grid_x, int grid_y,
-                         float * out_embd) {
-    // Factory: each model that needs post-encode assembly registers a
-    // clip_assembler subclass and adds a one-line case here.
-    std::unique_ptr<clip_assembler> builder;
-    switch (ctx->proj_type()) {
-        case PROJECTOR_TYPE_GRANITE4_VISION:
-            builder = std::make_unique<clip_assembler_granite4_vision>(
-                ctx, per_tile_embd, n_tiles, grid_x, grid_y);
-            break;
-        default:
-            return false;
-    }
-    GGML_ASSERT(out_embd != nullptr);
-
-    // Build the cgraph in a fresh ggml context backed by the shared
-    // compute-meta buffer.
-    struct ggml_init_params params = {
-        /*.mem_size   =*/ ctx->buf_compute_meta.size(),
-        /*.mem_buffer =*/ ctx->buf_compute_meta.data(),
-        /*.no_alloc   =*/ true,
-    };
-    ggml_context_ptr ctx0_ptr(ggml_init(params));
-    ggml_context * ctx0 = ctx0_ptr.get();
-    GGML_ASSERT(ctx0 != nullptr);
-    ggml_cgraph * gf = ggml_new_graph_custom(ctx0, ctx->max_nodes, false);
-
-    ggml_tensor * out = builder->build(ctx0, gf);
-
-    // Allocate buffers for this graph on the sched.
-    ggml_backend_sched_reset(ctx->sched.get());
-    if (!ggml_backend_sched_alloc_graph(ctx->sched.get(), gf)) {
-        LOG_ERR("%s: ggml_backend_sched_alloc_graph failed\n", __func__);
-        return false;
-    }
-
-    builder->set_inputs(gf);
-
-    // Thread count on the CPU backend (matches clip_image_batch_encode).
-    ggml_backend_dev_t dev = ggml_backend_get_device(ctx->backend_cpu);
-    ggml_backend_reg_t reg = dev ? ggml_backend_dev_backend_reg(dev) : nullptr;
-    if (reg) {
-        auto set_n_threads_fn = (ggml_backend_set_n_threads_t)
-            ggml_backend_reg_get_proc_address(reg, "ggml_backend_set_n_threads");
-        if (set_n_threads_fn) {
-            set_n_threads_fn(ctx->backend_cpu, n_threads);
-        }
-    }
-
-    auto status = ggml_backend_sched_graph_compute(ctx->sched.get(), gf);
-    if (status != GGML_STATUS_SUCCESS) {
-        LOG_ERR("%s: ggml_backend_sched_graph_compute failed (%d)\n", __func__, status);
-        return false;
-    }
-
-    ggml_backend_tensor_get(out, out_embd, 0, ggml_nbytes(out));
     return true;
 }
 

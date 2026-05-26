@@ -94,6 +94,9 @@ size_t clip_image_f32_batch_nx(const struct clip_image_f32_batch * batch, int id
 size_t clip_image_f32_batch_ny(const struct clip_image_f32_batch * batch, int idx); // equivalent to batch[idx]->ny
 struct clip_image_f32 * clip_image_f32_get_img(const struct clip_image_f32_batch * batch, int idx); // equivalent to batch[idx]->data
 
+// Set the append_token field of a clip_image_f32 (for newline injection models).
+void clip_image_set_append_token(struct clip_image_f32 * img, int token_type);
+
 /**
  * Build image from pixels decoded by other libraries instead of stb_image.h for better performance.
  * The memory layout is RGBRGBRGB..., input buffer length must be 3*nx*ny bytes
@@ -102,27 +105,6 @@ void clip_build_img_from_pixels(const unsigned char * rgb_pixels, int nx, int ny
 
 bool clip_image_encode      (struct clip_ctx * ctx, int n_threads, struct clip_image_f32 * img, float * vec);
 bool clip_image_batch_encode(struct clip_ctx * ctx, int n_threads, const struct clip_image_f32_batch * imgs, float * vec);
-
-// Some projector types perform an additional assembly pass over per-tile
-// encoder outputs (e.g. llava-next-style pack-and-unpad with a learned
-// newline embedding). For those projectors, clip_image_assemble runs the
-// model-specific assembler graph and writes the final embeddings to out_embd.
-// For projectors with no assembler, returns false without writing anything.
-// per_tile_embd is laid out as (n_mmproj_embd, n_per_tile, n_tiles) with the
-// embedding dim innermost; n_per_tile is inferred from the model's per-tile
-// output size for an entry of the batch that produced per_tile_embd.
-bool clip_image_assemble(struct clip_ctx * ctx, int n_threads,
-                         const float * per_tile_embd,
-                         int n_tiles,
-                         int grid_x, int grid_y,
-                         float * out_embd);
-
-// For projectors with an assembler, returns the final token count after
-// assembly given the preprocessed tile batch. For projectors without an
-// assembler, returns the unmodified flat per-tile token count (sum over
-// entries of clip_n_output_tokens).
-size_t clip_n_assembled_output_tokens(struct clip_ctx * ctx,
-                                      const struct clip_image_f32_batch * batch);
 
 bool clip_is_llava(const struct clip_ctx * ctx);
 // note for contributor: this clip_is_(model) pattern is deprecated

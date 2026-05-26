@@ -435,6 +435,13 @@ struct clip_image_f32 {
     int ny;
 
     std::vector<float> buf;
+
+    // Indicates what token (if any) should be appended after encoding this tile.
+    // Used by models like Granite 4 Vision that inject learned newline embeddings.
+    enum clip_append_token_type {
+        CLIP_APPEND_TOKEN_NONE = 0,
+        CLIP_APPEND_TOKEN_NEWLINE_ROWWISE = 1, // Append newline after each row
+    } append_token = CLIP_APPEND_TOKEN_NONE;
 };
 
 //

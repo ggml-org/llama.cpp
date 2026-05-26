@@ -193,40 +193,18 @@ struct clip_graph_kimik25 : clip_graph {
 };
 
 struct clip_graph_granite4_vision : clip_graph {
-    clip_graph_granite4_vision(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
+    clip_graph_granite4_vision(clip_ctx * ctx, const clip_image_f32 & img)
+        : clip_graph(ctx, img),
+          append_token_type((clip_image_f32::clip_append_token_type)img.append_token) {}
+
     ggml_cgraph * build() override;
+
+private:
+    // The graph is per-tile since only batch-size 1 is supported in clip. As
+    // such, this value is set at construct time based on the tile that will be
+    // encoded, then used during build to determine how to handle newlines.
+    clip_image_f32::clip_append_token_type append_token_type;
+
+    ggml_tensor * build_newline_row(ggml_context * ctx0);
+    ggml_tensor * append_rowwise_newlines(ggml_context * ctx0, ggml_tensor * tile_output);
 };
-
-// --- Granite Vision 4 assembler ---
-//
-// Per-tile encoder outputs are reshaped (pack-and-unpad) and interleaved with
-// a learned, base-scaled newline embedding to produce the final image-token
-// sequence. The cgraph is a single ggml_get_rows over a virtual buffer formed
-// by concatenating the per-tile encoder outputs with the K-tiled, base-scaled
-// newline row. All model-specific knowledge (n_per_tile inference, gather
-// index construction, input tensor names) lives on the class below.
-
-struct clip_assembler_granite4_vision : clip_assembler {
-    const clip_model & model;
-    const float *      per_tile_embd; // borrowed, caller-owned lifetime
-    int                n_tiles;
-    int                grid_x;
-    int                grid_y;
-    int                n_per_tile;
-    int                n_mmproj_embd;
-    std::vector<int32_t> gather_idx;  // computed in constructor
-
-    clip_assembler_granite4_vision(const clip_ctx * ctx,
-                                   const float * per_tile_embd,
-                                   int n_tiles, int grid_x, int grid_y);
-
-    ggml_tensor * build(ggml_context * ctx0, ggml_cgraph * gf) override;
-    void set_inputs(ggml_cgraph * gf) override;
-};
-
-// Final assembled token count for a preprocessed tile batch. Called before
-// per-tile encoding (from add_media), so kept as a free function rather than
-// a method on the assembler class.
-size_t granite4_vision_n_assembled_output_tokens(
-        const clip_ctx * ctx,
-        const clip_image_f32_batch * batch);

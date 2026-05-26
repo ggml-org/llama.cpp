@@ -802,6 +802,24 @@ struct mtmd_tokenizer {
                 return 2;
             }
 
+            // Annotate llava-next style tiles so clip_n_output_tokens accounts
+            // for per-tile newline injection.
+            if (ctx->proj_type_v() == PROJECTOR_TYPE_GRANITE4_VISION) {
+                if (batch_f32.entries.size() == 1) {
+                    // Single-tile (overview only): append one newline row.
+                    clip_image_set_append_token(batch_f32.entries[0].get(),
+                        clip_image_f32::CLIP_APPEND_TOKEN_NEWLINE_ROWWISE);
+                } else {
+                    // Multi-tile: overview gets no newline, grid tiles get one.
+                    clip_image_set_append_token(batch_f32.entries[0].get(),
+                        clip_image_f32::CLIP_APPEND_TOKEN_NONE);
+                    for (size_t i = 1; i < batch_f32.entries.size(); ++i) {
+                        clip_image_set_append_token(batch_f32.entries[i].get(),
+                            clip_image_f32::CLIP_APPEND_TOKEN_NEWLINE_ROWWISE);
+                    }
+                }
+            }
+
             // handle llava-uhd style preprocessing
             const bool has_tiling_grid = batch_f32.grid_x > 0 && batch_f32.grid_y > 0;
             if (
@@ -866,9 +884,11 @@ struct mtmd_tokenizer {
                 }
 
             } else {
-                // Final token count accounts for any model-specific assembler
-                // (e.g. Granite Vision 4 pack-and-unpad with newline injection).
-                const size_t n_tokens = clip_n_assembled_output_tokens(ctx->ctx_v, &batch_f32);
+
+                size_t n_tokens = 0;
+                for (const auto & e : batch_f32.entries) {
+                    n_tokens += clip_n_output_tokens(ctx->ctx_v, e.get());
+                }
 
                 mtmd_image_tokens_ptr image_tokens(new mtmd_image_tokens);
                 if (mtmd_decode_use_mrope(ctx)) {
@@ -1100,40 +1120,22 @@ int32_t mtmd_encode(mtmd_context * ctx, const mtmd_image_tokens * image_tokens) 
     ctx->image_embd_v.resize(image_tokens->n_tokens() * n_mmproj_embd);
     bool ok = false;
 
-    if (proj_type == PROJECTOR_TYPE_GRANITE4_VISION) {
-        // Per-tile encode, then hand off to the model-owned assembler graph
-        // (pack-and-unpad + scaled image_newline injection).
-        const auto & entries = image_tokens->batch_f32.entries;
-        const int n_per_tile = clip_n_output_tokens(ctx_clip, entries[0].get());
-        std::vector<float> per_tile(entries.size() * n_per_tile * n_mmproj_embd);
-        for (size_t i = 0; i < entries.size(); i++) {
-            if (!clip_image_encode(ctx_clip, ctx->n_threads, entries[i].get(),
-                                   per_tile.data() + i * n_mmproj_embd * n_per_tile)) {
-                return 1;
-            }
-        }
-        ok = clip_image_assemble(ctx_clip, ctx->n_threads,
-                                 per_tile.data(),
-                                 (int) entries.size(),
-                                 (int) image_tokens->batch_f32.grid_x,
-                                 (int) image_tokens->batch_f32.grid_y,
-                                 ctx->image_embd_v.data());
-        return ok ? 0 : 1;
-    }
-
     if (clip_is_llava(ctx_clip)
         || proj_type == PROJECTOR_TYPE_MINICPMV
         || proj_type == PROJECTOR_TYPE_GLM_EDGE
-        || proj_type == PROJECTOR_TYPE_INTERNVL) {
+        || proj_type == PROJECTOR_TYPE_INTERNVL
+        || proj_type == PROJECTOR_TYPE_GRANITE4_VISION) {
         // TODO @ngxson : llava does not support batched encoding ; this should be fixed inside clip_image_batch_encode()
         const auto & entries = image_tokens->batch_f32.entries;
+        size_t offset = 0;
         for (size_t i = 0; i < entries.size(); i++) {
             int n_tokens_per_image = clip_n_output_tokens(ctx_clip, entries[i].get());
             ok = clip_image_encode(
                 ctx_clip,
                 ctx->n_threads,
                 entries[i].get(),
-                ctx->image_embd_v.data() + i*n_mmproj_embd*n_tokens_per_image);
+                ctx->image_embd_v.data() + offset*n_mmproj_embd);
+            offset += n_tokens_per_image;
         }
     } else {
         ok = clip_image_batch_encode(
