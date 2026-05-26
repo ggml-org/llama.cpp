@@ -761,7 +761,7 @@ std::string common_sampler_type_to_str(enum common_sampler_type cnstr) {
     }
 }
 
-std::vector<common_sampler_type> common_sampler_types_from_names(const std::vector<std::string> & names, bool allow_alt_names) {
+std::vector<common_sampler_type> common_sampler_types_from_names(const std::vector<std::string> & names) {
     std::unordered_map<std::string, common_sampler_type> sampler_canonical_name_map {
         { "dry",         COMMON_SAMPLER_TYPE_DRY },
         { "top_k",       COMMON_SAMPLER_TYPE_TOP_K },
@@ -776,37 +776,43 @@ std::vector<common_sampler_type> common_sampler_types_from_names(const std::vect
         { "adaptive_p",  COMMON_SAMPLER_TYPE_ADAPTIVE_P },
     };
 
-    // since samplers names are written multiple ways
-    // make it ready for both system names and input names
+    // samplers names can be written multiple ways; we support these alternative names
     std::unordered_map<std::string, common_sampler_type> sampler_alt_name_map {
         { "top-k",       COMMON_SAMPLER_TYPE_TOP_K },
+        { "topk",        COMMON_SAMPLER_TYPE_TOP_K },
         { "top-p",       COMMON_SAMPLER_TYPE_TOP_P },
+        { "topp",        COMMON_SAMPLER_TYPE_TOP_P },
         { "top-n-sigma", COMMON_SAMPLER_TYPE_TOP_N_SIGMA },
-        { "nucleus",     COMMON_SAMPLER_TYPE_TOP_P },
-        { "typical-p",   COMMON_SAMPLER_TYPE_TYPICAL_P },
-        { "typical",     COMMON_SAMPLER_TYPE_TYPICAL_P },
+        { "top-nsigma",  COMMON_SAMPLER_TYPE_TOP_N_SIGMA },
         { "typ-p",       COMMON_SAMPLER_TYPE_TYPICAL_P },
-        { "typ",         COMMON_SAMPLER_TYPE_TYPICAL_P },
+        { "typp",        COMMON_SAMPLER_TYPE_TYPICAL_P },
         { "min-p",       COMMON_SAMPLER_TYPE_MIN_P },
+        { "minp",        COMMON_SAMPLER_TYPE_MIN_P },
         { "temp",        COMMON_SAMPLER_TYPE_TEMPERATURE },
         { "adaptive-p",  COMMON_SAMPLER_TYPE_ADAPTIVE_P },
+        { "adaptivep",   COMMON_SAMPLER_TYPE_ADAPTIVE_P },
     };
 
     std::vector<common_sampler_type> samplers;
     samplers.reserve(names.size());
 
     for (const auto & name : names) {
+        // transform the given sampler name to lowercase before checking
+        std::string name_lower = name;
+        std::transform(name.begin(), name.end(), name_lower.begin(), [](char c){
+            return std::tolower(c);
+        });
+        // check canonical names
         auto sampler = sampler_canonical_name_map.find(name);
         if (sampler != sampler_canonical_name_map.end()) {
             samplers.push_back(sampler->second);
             continue;
         }
-        if (allow_alt_names) {
-            sampler = sampler_alt_name_map.find(name);
-            if (sampler != sampler_alt_name_map.end()) {
-                samplers.push_back(sampler->second);
-                continue;
-            }
+        // check alternative names
+        sampler = sampler_alt_name_map.find(name);
+        if (sampler != sampler_alt_name_map.end()) {
+            samplers.push_back(sampler->second);
+            continue;
         }
         LOG_WRN("%s: unable to match sampler by name '%s'\n", __func__, name.c_str());
     }

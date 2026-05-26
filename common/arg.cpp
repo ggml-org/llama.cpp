@@ -1614,7 +1614,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         string_format("samplers that will be used for generation in the order, separated by \';\'\n(default: %s)", sampler_type_names.c_str()),
         [](common_params & params, const std::string & value) {
             const auto sampler_names = string_split<std::string>(value, ';');
-            params.sampling.samplers = common_sampler_types_from_names(sampler_names, true);
+            params.sampling.samplers = common_sampler_types_from_names(sampler_names);
             params.sampling.user_sampling_config |= common_params_sampling_config::COMMON_PARAMS_SAMPLING_CONFIG_SAMPLERS;
         }
     ).set_sampling());
