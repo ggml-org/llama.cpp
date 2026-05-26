@@ -454,13 +454,24 @@ common_peg_parser analyze_tools::build_tool_parser_tag_tagged(parser_build_conte
     auto require_tools = inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED;
 
     common_peg_parser tool_calls = p.eps();
+    common_peg_parser tool_call_item = p.eps();
 
     if (!format.per_call_start.empty()) {
         auto wrapped_call = format.per_call_start + p.space() + tool_choice + p.space() + format.per_call_end;
+        if (format.section_start.empty()) {
+            // Lazy grammars are activated from the first tool-call marker in the
+            // generated suffix. The trigger grammar must validate the tool call,
+            // but it should not require the tool call to be the last segment in
+            // the completion. Tagged tool calls can appear inside reasoning
+            // blocks, followed by </think>, content, or more segments that the
+            // full parser will handle afterwards.
+            p.trigger_rule("tool-call", wrapped_call + p.rest());
+        }
+        tool_call_item = wrapped_call + p.space();
         if (inputs.parallel_tool_calls) {
-            tool_calls = p.trigger_rule("tool-call", wrapped_call + p.zero_or_more(p.space() + wrapped_call) + p.space());
+            tool_calls = wrapped_call + p.zero_or_more(p.space() + wrapped_call) + p.space();
         } else {
-            tool_calls = p.trigger_rule("tool-call", wrapped_call + p.space());
+            tool_calls = wrapped_call + p.space();
         }
         if (!format.section_start.empty()) {
             tool_calls = p.trigger_rule("tool-calls",
@@ -486,6 +497,55 @@ common_peg_parser analyze_tools::build_tool_parser_tag_tagged(parser_build_conte
 
     std::string trigger_marker       = !format.section_start.empty() ? format.section_start : format.per_call_start;
     auto        content_before_tools = trigger_marker.empty() ? p.eps() : p.until(trigger_marker);
+
+    // Treat tag-based reasoning markers as mode switches rather than containers that
+    // hide tools. Text inside the reasoning markers is emitted as reasoning_content,
+    // text outside is emitted as content, and valid tool calls can appear in either
+    // mode. This path applies to tagged-argument tool formats, such as:
+    //
+    //   <tool_call>
+    //   <function=name>
+    //   <parameter=arg>value</parameter>
+    //   </function>
+    //   </tool_call>
+    //
+    // Use a specific tool boundary that includes the function-name prefix when
+    // possible, so prose such as "I might call <tool_call> later" remains text.
+    if (ctx.extracting_reasoning && ctx.reasoning &&
+        !trim_whitespace(ctx.reasoning->start).empty() &&
+        !trim_whitespace(ctx.reasoning->end).empty() &&
+        format.section_start.empty() &&
+        !trim_whitespace(format.per_call_start).empty() &&
+        !trim_whitespace(format.per_call_end).empty()) {
+        const std::string think_start = trim_whitespace(ctx.reasoning->start);
+        const std::string think_end   = trim_whitespace(ctx.reasoning->end);
+        const std::string tool_start  = trim_whitespace(format.per_call_start) +
+            (function.name_prefix.empty() ? "" : "\n" + function.name_prefix);
+
+        auto in_think_boundary = p.choice({
+            p.literal(tool_start),
+            p.literal(think_end),
+        });
+        auto root_boundary = p.choice({
+            p.literal(think_start),
+            p.literal(think_end),
+            p.literal(tool_start),
+        });
+
+        auto reasoning_chunk = p.reasoning(
+            p.negate(in_think_boundary) + p.any() + p.until_one_of({ tool_start, think_end }));
+        auto content_chunk = p.content(
+            p.negate(root_boundary) + p.any() + p.until_one_of({ think_start, think_end, tool_start }));
+
+        auto stale_think_end = p.literal(think_end) + p.space();
+        auto think_block =
+            p.literal(think_start) + p.space() +
+            p.zero_or_more(p.choice({ tool_call_item, reasoning_chunk })) +
+            p.optional(stale_think_end);
+
+        return p.zero_or_more(p.choice({ think_block, tool_call_item, stale_think_end, content_chunk })) + p.end();
+    }
+
     return ctx.reasoning_parser + p.optional(p.content(content_before_tools)) + tool_calls + p.end();
 }
 

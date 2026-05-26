@@ -477,6 +477,24 @@ static common_chat_tool python_tool{
         "required": ["code"]
     })",
 };
+static common_chat_tool write_tool{
+    /* .name = */ "write",
+    /* .description = */ "write a file",
+    /* .parameters = */ R"({
+        "type": "object",
+        "properties": {
+            "file": {
+                "type": "string",
+                "description": "File path."
+            },
+            "content": {
+                "type": "string",
+                "description": "Full replacement file content."
+            }
+        },
+        "required": ["file", "content"]
+    })",
+};
 
 static common_chat_tool html_tool{
     /* .name = */ "html",
@@ -1919,7 +1937,8 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .expect_content(R"({"amount": 123.45, "date": "2025-12-03"})")
             .run();
 
-        // tool call segment in reasoning
+        // Qwen3.5 can emit tool calls inside <think>. Treat <think> as a
+        // reasoning/content mode switch, not as a container that hides tools.
         tst.test(
                "Let's call a tool: <tool_call>\n"
                "<function=python>\n"
@@ -1946,19 +1965,42 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .tools({
                 python_tool
         })
-            .expect_reasoning(
-                "Let's call a tool: <tool_call>\n"
-                "<function=python>\n"
-                "<parameter=code>\n"
-                "def hello():\n"
-                "    print(\"Not the real call!\")\n"
-                "\n"
-                "hello()\n"
-                "</parameter>\n"
-                "</function>\n"
-                "</tool_call>")
+            .expect_reasoning("Let's call a tool:")
             .expect_tool_calls({
+                { "python", "{\"code\": \"def hello():\\n    print(\\\"Not the real call!\\\")\\n\\nhello()\"}", {} },
                 { "python", "{\"code\": \"def hello():\\n    print(\\\"Hello, world!\\\")\\n\\nhello()\"}", {} },
+            })
+            .run();
+
+        tst.test(
+               "Need to write a debug file.\n"
+               "<tool_call>\n"
+               "<function=write>\n"
+               "<parameter=file>\n"
+               "/workspace/jsonlfilter/debug_test.go\n"
+               "</parameter>\n"
+               "<parameter=content>\n"
+               "package main\n"
+               "\n"
+               "func main() {\n"
+               "    line := `{name:Jette,status:sleepy}`\n"
+               "    fmt.Printf(\"Status: %q\\n\", result[\"status\"])\n"
+               "}\n"
+               "\n"
+               "</parameter>\n"
+               "</function>\n"
+               "</tool_call>\n"
+               "</think>\n"
+               "Done.")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({
+                write_tool
+        })
+            .expect_reasoning("Need to write a debug file.")
+            .expect_content("Done.")
+            .expect_tool_calls({
+                { "write", R"({"file":"/workspace/jsonlfilter/debug_test.go","content":"package main\n\nfunc main() {\n    line := `{name:Jette,status:sleepy}`\n    fmt.Printf(\"Status: %q\\n\", result[\"status\"])\n}\n"})", {} },
             })
             .run();
 
@@ -2417,7 +2459,8 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .expect_content(R"({"amount": 123.45, "date": "2025-12-03"})")
             .run();
 
-        // tool call segment in reasoning
+        // Qwen3.5 can emit tool calls inside <think>. Treat <think> as a
+        // reasoning/content mode switch, not as a container that hides tools.
         tst.test(
                "Let's call a tool: <tool_call>\n"
                "<function=python>\n"
@@ -2445,17 +2488,9 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .tools({
                 python_tool
         })
-            .expect_reasoning("Let's call a tool: <tool_call>\n"
-               "<function=python>\n"
-               "<parameter=code>\n"
-               "def hello():\n"
-               "    print(\"Not the real call!\")\n"
-               "\n"
-               "hello()\n"
-               "</parameter>\n"
-               "</function>\n"
-               "</tool_call>\n")
+            .expect_reasoning("Let's call a tool:")
             .expect_tool_calls({
+                { "python", "{\"code\": \"def hello():\\n    print(\\\"Not the real call!\\\")\\n\\nhello()\"}", {} },
                 { "python", "{\"code\": \"def hello():\\n    print(\\\"Hello, world!\\\")\\n\\nhello()\"}", {} },
             })
             .run();
