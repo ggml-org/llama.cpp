@@ -25,11 +25,11 @@ if ($null -ne $env:SCHED) {
 }
 
 if ($null -ne $env:PROF) {
-    $env:GGML_HEXAGON_PROFILE=$env:PROF; $env:GGML_HEXAGON_OPSYNC=1
+    $env:GGML_HEXAGON_PROFILE=$env:PROF
 }
 
-if ($null -ne $env:OPMASK) {
-    $env:GGML_HEXAGON_OPMASK=$env:OPMASK
+if ($null -ne $env:OPSTAGE) {
+    $env:GGML_HEXAGON_OPSTAGE=$env:OPSTAGE
 }
 
 if ($null -ne $env:NHVX) {
@@ -49,5 +49,5 @@ $env:ADSP_LIBRARY_PATH="$basedir\lib"
 & "$basedir\bin\llama-completion.exe" `
     --no-mmap -m $basedir\..\..\gguf\$model `
     --poll 1000 -t 6 --cpu-mask 0xfc --cpu-strict 1 `
-    --ctx-size 8192 --batch-size 256 -fa on `
+    --ctx-size 8192 --ubatch-size 1024 -fa on `
     -ngl 99 -no-cnv --device $device $cli_opts

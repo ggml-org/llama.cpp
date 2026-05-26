@@ -49,7 +49,7 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
-    if (params.speculative.mparams_dft.path.empty()) {
+    if (params.speculative.draft.mparams.path.empty()) {
         LOG_ERR("%s: --model-draft is required\n", __func__);
         return 1;
     }
@@ -58,7 +58,7 @@ int main(int argc, char ** argv) {
     const int n_seq_dft = params.n_parallel;
 
     // probability threshold for splitting a draft branch (only for n_seq_dft > 1)
-    const float p_draft_split = params.speculative.p_split;
+    const float p_draft_split = params.speculative.draft.p_split;
 
     std::default_random_engine rng(params.sampling.seed == LLAMA_DEFAULT_SEED ? std::random_device()() : params.sampling.seed);
     std::uniform_real_distribution<> u_dist;
@@ -80,15 +80,15 @@ int main(int argc, char ** argv) {
     ctx_tgt   = llama_init_tgt->context();
 
     // load the draft model
-    params.devices = params.speculative.devices;
-    params.model = params.speculative.mparams_dft;
-    params.n_gpu_layers = params.speculative.n_gpu_layers;
-    if (params.speculative.cpuparams.n_threads > 0) {
-        params.cpuparams.n_threads = params.speculative.cpuparams.n_threads;
+    params.devices = params.speculative.draft.devices;
+    params.model = params.speculative.draft.mparams;
+    params.n_gpu_layers = params.speculative.draft.n_gpu_layers;
+    if (params.speculative.draft.cpuparams.n_threads > 0) {
+        params.cpuparams.n_threads = params.speculative.draft.cpuparams.n_threads;
     }
 
-    params.cpuparams_batch.n_threads = params.speculative.cpuparams_batch.n_threads;
-    params.tensor_buft_overrides     = params.speculative.tensor_buft_overrides;
+    params.cpuparams_batch.n_threads = params.speculative.draft.cpuparams_batch.n_threads;
+    params.tensor_buft_overrides     = params.speculative.draft.tensor_buft_overrides;
 
     auto llama_init_dft = common_init_from_params(params);
 
@@ -110,13 +110,21 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
-    if (
-        llama_vocab_get_add_bos(vocab_tgt) != llama_vocab_get_add_bos(vocab_dft) ||
-        llama_vocab_get_add_eos(vocab_tgt) != llama_vocab_get_add_eos(vocab_dft) ||
-        llama_vocab_bos(vocab_tgt) != llama_vocab_bos(vocab_dft) ||
-        llama_vocab_eos(vocab_tgt) != llama_vocab_eos(vocab_dft)
-    ) {
-        LOG_ERR("%s: draft model special tokens must match target model to use speculation\n", __func__);
+    if (llama_vocab_get_add_bos(vocab_tgt) != llama_vocab_get_add_bos(vocab_dft) ||
+        (llama_vocab_get_add_bos(vocab_tgt) && llama_vocab_bos(vocab_tgt) != llama_vocab_bos(vocab_dft))) {
+        LOG_ERR("%s: draft model bos tokens must match target model to use speculation. add: %d - %d, id: %d - %d)\n",
+                __func__,
+                llama_vocab_get_add_bos(vocab_tgt), llama_vocab_get_add_bos(vocab_dft),
+                llama_vocab_bos(vocab_tgt), llama_vocab_bos(vocab_dft));
+        return 1;
+    }
+
+    if (llama_vocab_get_add_eos(vocab_tgt) != llama_vocab_get_add_eos(vocab_dft) ||
+        (llama_vocab_get_add_eos(vocab_tgt) && llama_vocab_eos(vocab_tgt) != llama_vocab_eos(vocab_dft))) {
+        LOG_ERR("%s: draft model eos tokens must match target model to use speculation. add: %d - %d, id: %d - %d)\n",
+                __func__,
+                llama_vocab_get_add_eos(vocab_tgt), llama_vocab_get_add_eos(vocab_dft),
+                llama_vocab_eos(vocab_tgt), llama_vocab_eos(vocab_dft));
         return 1;
     }
 
@@ -137,11 +145,12 @@ int main(int argc, char ** argv) {
         for (int i = SPEC_VOCAB_CHECK_START_TOKEN_ID; i < std::min(n_vocab_tgt, n_vocab_dft); ++i) {
             const char * token_text_tgt = llama_vocab_get_text(vocab_tgt, i);
             const char * token_text_dft = llama_vocab_get_text(vocab_dft, i);
+
             if (std::strcmp(token_text_tgt, token_text_dft) != 0) {
                 LOG_ERR("%s: draft model vocab must match target model to use speculation but ", __func__);
                 LOG_ERR("token %d content differs - target '%s', draft '%s'\n", i,
-                        common_token_to_piece(ctx_tgt, i).c_str(),
-                        common_token_to_piece(ctx_dft, i).c_str());
+                        common_token_to_piece(vocab_tgt, i).c_str(),
+                        common_token_to_piece(vocab_dft, i).c_str());
                 return 1;
             }
         }
@@ -183,7 +192,7 @@ int main(int argc, char ** argv) {
     //GGML_ASSERT(n_vocab == llama_vocab_n_tokens(model_dft));
 
     // how many tokens to draft each time
-    int n_draft = params.speculative.n_max;
+    int n_draft = params.speculative.draft.n_max;
 
     int n_predict = 0;
     int n_drafted = 0;

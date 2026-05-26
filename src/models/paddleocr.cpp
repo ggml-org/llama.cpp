@@ -1,6 +1,10 @@
 #include "models.h"
 
-llm_build_paddleocr::llm_build_paddleocr(const llama_model & model, const llm_graph_params & params) :
+std::unique_ptr<llm_graph_context> llama_model_paddleocr::build_arch_graph(const llm_graph_params & params) const {
+    return std::make_unique<graph>(*this, params);
+}
+
+llama_model_paddleocr::graph::graph(const llama_model & model, const llm_graph_params & params) :
     llm_graph_context(params) {
 
     // NOTE: same with qwen2vl.cpp, but bias tensors are optional
@@ -94,7 +98,7 @@ llm_build_paddleocr::llm_build_paddleocr(const llama_model & model, const llm_gr
     res->t_embd = cur;
 
     // lm_head
-    cur = build_lora_mm(model.output, cur);
+    cur = build_lora_mm(model.output, cur, model.output_s);
 
     cb(cur, "result_output", -1);
     res->t_logits = cur;

@@ -46,6 +46,7 @@ void unpack_32_4(const uint8_t * data, uint8_t * dst) {
 
 // Extracts (weight, scales, zp) from Q4_0 tensors.
 // Data layout is: |16 bit scale|32 x 4bit weights|.
+// When zp_arr is empty (symmetric), weights are stored as signed i4 (value - 8).
 void extract_q4_0_data(const ggml_tensor * tensor,
                        ov::Tensor & weights_arr,
                        ov::Tensor & scales_arr,
@@ -55,28 +56,32 @@ void extract_q4_0_data(const ggml_tensor * tensor,
     auto * data = static_cast<uint8_t *>(tensor->data);
     auto * weights = static_cast<uint8_t *>(weights_arr.data());
     auto * scales = scales_arr.data<ov::element_type_traits<ov::element::f16>::value_type>();
-    auto * zp = static_cast<uint8_t *>(zp_arr.data());
 
-    bool is_scalar_zp = (zp_arr.get_size() == 1);  // Symmetric quantization
+    bool is_symmetric = (weights_arr.get_element_type() == ov::element::i4);  // Signed i4 path
 
-    // For Q4_0, zero point is always 8
-    if (is_scalar_zp) {
-        zp[0] = 8 | (8 << 4);  // Pack two 4-bit values
-    }
-
-    ov::parallel_for(scales_arr.get_size(), [&](size_t i) {
-        scales[i] = ov::float16::from_bits(*((uint16_t *) (data + i * bytes_per_block)));
-        // For asymmetric quantization, compute per-block zero points
-        if (!is_scalar_zp) {
+    if (!is_symmetric) {
+        auto * zp = static_cast<uint8_t *>(zp_arr.data());
+        ov::parallel_for(scales_arr.get_size(), [&](size_t i) {
+            scales[i] = ov::float16::from_bits(*((uint16_t *) (data + i * bytes_per_block)));
             // Pack two 4-bit zero points per byte
             if (i % 2 == 0) {
                 zp[i / 2] = 8;          // Lower nibble
             } else {
                 zp[i / 2] |= (8 << 4);  // Upper nibble
             }
-        }
-        unpack_32_4(data + i * bytes_per_block + 2, weights + i * 16);
-    });
+            unpack_32_4(data + i * bytes_per_block + 2, weights + i * 16);
+        });
+    } else {
+        // Symmetric: unpack as u4 then convert to i4 by subtracting 8 (XOR each nibble)
+        ov::parallel_for(scales_arr.get_size(), [&](size_t i) {
+            scales[i] = ov::float16::from_bits(*((uint16_t *) (data + i * bytes_per_block)));
+            unpack_32_4(data + i * bytes_per_block + 2, weights + i * 16);
+            // Convert u4 to i4: subtract 8 from each nibble. XOR 0x88 flips each nibble by 8.
+            for (int j = 0; j < 16; ++j) {
+                weights[i * 16 + j] ^= 0x88;
+            }
+        });
+    }
 }
 
 // Extracts (weight, scales, zp) from Q4_1 tensors.
@@ -123,6 +128,7 @@ void extract_q4_1_data(const ggml_tensor * tensor,
 
 // Extracts (weight, scales, zp) from Q8_0 tensors.
 // Data layout is: |16 bit scale|32 x 8bit weights|.
+// When zp_arr is empty (symmetric), weights are stored as signed i8 directly.
 void extract_q8_0_data(const ggml_tensor * tensor,
                        ov::Tensor & weights_arr,
                        ov::Tensor & scales_arr,
@@ -133,29 +139,30 @@ void extract_q8_0_data(const ggml_tensor * tensor,
     auto * data = static_cast<uint8_t *>(tensor->data);
     auto * weights = static_cast<uint8_t *>(weights_arr.data());
     auto * scales = scales_arr.data<ov::element_type_traits<ov::element::f16>::value_type>();
-    auto * zp = static_cast<uint8_t *>(zp_arr.data());
 
-    bool is_scalar_zp = (zp_arr.get_size() == 1);  // Symmetric quantization
+    bool is_symmetric = (weights_arr.get_element_type() == ov::element::i8);  // Signed i8 path
 
-    // For Q8_0, zero point is always 128
-    if (is_scalar_zp) {
-        zp[0] = 128;
-    }
-
-    ov::parallel_for(scales_arr.get_size(), [&](size_t i) {
-        uint8_t * block_data = data + i * bytes_per_block;
-        scales[i] = ov::float16::from_bits(*(uint16_t *) block_data);
-        // For asymmetric quantization, store per-block zero points
-        if (!is_scalar_zp) {
+    if (!is_symmetric) {
+        auto * zp = static_cast<uint8_t *>(zp_arr.data());
+        ov::parallel_for(scales_arr.get_size(), [&](size_t i) {
+            uint8_t * block_data = data + i * bytes_per_block;
+            scales[i] = ov::float16::from_bits(*(uint16_t *) block_data);
             zp[i] = 128;
-        }
-        for (size_t j = 0; j < weights_per_block; ++j) {
-            uint8_t x = block_data[j + 2];  // j+2 to skip the scale bytes.
-            // Original data is in int8_t, so we add a bias of -128 and invert the first bit.
-            x ^= 1 << 7;
-            weights[i * weights_per_block + j] = x;
-        }
-    });
+            for (size_t j = 0; j < weights_per_block; ++j) {
+                uint8_t x = block_data[j + 2];
+                x ^= 1 << 7;  // Convert int8 to uint8 by flipping sign bit
+                weights[i * weights_per_block + j] = x;
+            }
+        });
+    } else {
+        // Symmetric: store original int8 values directly (no unsigned bias)
+        ov::parallel_for(scales_arr.get_size(), [&](size_t i) {
+            uint8_t * block_data = data + i * bytes_per_block;
+            scales[i] = ov::float16::from_bits(*(uint16_t *) block_data);
+            // Copy int8 weights as-is (the tensor element type is i8)
+            memcpy(weights + i * weights_per_block, block_data + 2, weights_per_block);
+        });
+    }
 }
 
 void unpack_256_4(const uint8_t * data, uint8_t * dst) {
@@ -256,44 +263,62 @@ void extract_q6_k_data(const ggml_tensor * tensor,
     auto * data = static_cast<uint8_t *>(tensor->data);
     auto * weights = static_cast<uint8_t *>(weights_arr.data());
     auto * scales = scales_arr.data<ov::element_type_traits<ov::element::f16>::value_type>();
-    auto * zp = static_cast<uint8_t *>(zp_arr.data());
 
-    bool is_scalar_zp = (zp_arr.get_size() == 1);  // Symmetric quantization
+    bool is_symmetric = (weights_arr.get_element_type() == ov::element::i8);  // Signed i8 path
 
-    // For Q6_K, zero point is always 32
-    if (is_scalar_zp) {
-        zp[0] = 32;
-    }
-
-    ov::parallel_for(n_super_block, [&](size_t i) {
-        uint8_t * block_data = data + i * bytes_per_block;
-
-        float scale_factor =
-            static_cast<float>(ov::float16::from_bits(*((uint16_t *) block_data + 104)));  // (128+64+16)/2
-
-        for (size_t j = 0; j < 16; j++) {
-            scales[j + i * 16] =
-                ov::float16(scale_factor * static_cast<float>(*((int8_t *) (block_data + 128 + 64 + j))));
-            // For asymmetric quantization, store per-block zero points
-            if (!is_scalar_zp) {
+    if (!is_symmetric) {
+        auto * zp = static_cast<uint8_t *>(zp_arr.data());
+        ov::parallel_for(n_super_block, [&](size_t i) {
+            uint8_t * block_data = data + i * bytes_per_block;
+            float scale_factor = static_cast<float>(ov::float16::from_bits(*((uint16_t *) block_data + 104)));
+            for (size_t j = 0; j < 16; j++) {
+                scales[j + i * 16] =
+                    ov::float16(scale_factor * static_cast<float>(*((int8_t *) (block_data + 128 + 64 + j))));
                 zp[j + i * 16] = 32;
             }
-        }
-
-        uint8_t * ql = block_data;
-        uint8_t * qh = block_data + 128;
-
-        for (int64_t j = 0; j < 32; ++j) {
-            weights[i * 256 + j] = (ql[j] & 0xF) | (((qh[j] >> 0) & 3) << 4);
-            weights[i * 256 + j + 32] = (ql[32 + j] & 0xF) | (((qh[j] >> 2) & 3) << 4);
-            weights[i * 256 + j + 64] = (ql[j] >> 4) | (((qh[j] >> 4) & 3) << 4);
-            weights[i * 256 + j + 96] = (ql[32 + j] >> 4) | (((qh[j] >> 6) & 3) << 4);
-            weights[i * 256 + j + 128] = (ql[64 + j] & 0xF) | (((qh[32 + j] >> 0) & 3) << 4);
-            weights[i * 256 + j + 160] = (ql[96 + j] & 0xF) | (((qh[32 + j] >> 2) & 3) << 4);
-            weights[i * 256 + j + 192] = (ql[64 + j] >> 4) | (((qh[32 + j] >> 4) & 3) << 4);
-            weights[i * 256 + j + 224] = (ql[96 + j] >> 4) | (((qh[32 + j] >> 6) & 3) << 4);
-        }
-    });
+            uint8_t * ql = block_data;
+            uint8_t * qh = block_data + 128;
+            for (int64_t j = 0; j < 32; ++j) {
+                weights[i * 256 + j] = (ql[j] & 0xF) | (((qh[j] >> 0) & 3) << 4);
+                weights[i * 256 + j + 32] = (ql[32 + j] & 0xF) | (((qh[j] >> 2) & 3) << 4);
+                weights[i * 256 + j + 64] = (ql[j] >> 4) | (((qh[j] >> 4) & 3) << 4);
+                weights[i * 256 + j + 96] = (ql[32 + j] >> 4) | (((qh[j] >> 6) & 3) << 4);
+                weights[i * 256 + j + 128] = (ql[64 + j] & 0xF) | (((qh[32 + j] >> 0) & 3) << 4);
+                weights[i * 256 + j + 160] = (ql[96 + j] & 0xF) | (((qh[32 + j] >> 2) & 3) << 4);
+                weights[i * 256 + j + 192] = (ql[64 + j] >> 4) | (((qh[32 + j] >> 4) & 3) << 4);
+                weights[i * 256 + j + 224] = (ql[96 + j] >> 4) | (((qh[32 + j] >> 6) & 3) << 4);
+            }
+        });
+    } else {
+        // Symmetric: subtract 32 from each weight to store as signed i8
+        ov::parallel_for(n_super_block, [&](size_t i) {
+            uint8_t * block_data = data + i * bytes_per_block;
+            float scale_factor = static_cast<float>(ov::float16::from_bits(*((uint16_t *) block_data + 104)));
+            for (size_t j = 0; j < 16; j++) {
+                scales[j + i * 16] =
+                    ov::float16(scale_factor * static_cast<float>(*((int8_t *) (block_data + 128 + 64 + j))));
+            }
+            uint8_t * ql = block_data;
+            uint8_t * qh = block_data + 128;
+            auto * signed_weights = reinterpret_cast<int8_t *>(weights);
+            for (int64_t j = 0; j < 32; ++j) {
+                signed_weights[i * 256 + j] = static_cast<int8_t>((ql[j] & 0xF) | (((qh[j] >> 0) & 3) << 4)) - 32;
+                signed_weights[i * 256 + j + 32] =
+                    static_cast<int8_t>((ql[32 + j] & 0xF) | (((qh[j] >> 2) & 3) << 4)) - 32;
+                signed_weights[i * 256 + j + 64] = static_cast<int8_t>((ql[j] >> 4) | (((qh[j] >> 4) & 3) << 4)) - 32;
+                signed_weights[i * 256 + j + 96] =
+                    static_cast<int8_t>((ql[32 + j] >> 4) | (((qh[j] >> 6) & 3) << 4)) - 32;
+                signed_weights[i * 256 + j + 128] =
+                    static_cast<int8_t>((ql[64 + j] & 0xF) | (((qh[32 + j] >> 0) & 3) << 4)) - 32;
+                signed_weights[i * 256 + j + 160] =
+                    static_cast<int8_t>((ql[96 + j] & 0xF) | (((qh[32 + j] >> 2) & 3) << 4)) - 32;
+                signed_weights[i * 256 + j + 192] =
+                    static_cast<int8_t>((ql[64 + j] >> 4) | (((qh[32 + j] >> 4) & 3) << 4)) - 32;
+                signed_weights[i * 256 + j + 224] =
+                    static_cast<int8_t>((ql[96 + j] >> 4) | (((qh[32 + j] >> 6) & 3) << 4)) - 32;
+            }
+        });
+    }
 }
 
 static inline void get_scale_min_k4(int j, const uint8_t * q, uint8_t * d, uint8_t * m) {
@@ -389,11 +414,10 @@ ov::Output<ov::Node> make_int8_weights(ov::Tensor & weight,
                                        size_t group_size,
                                        bool use_bias) {
     ov::Shape orig_shape = weight.get_shape();
+    bool is_signed = (weight.get_element_type() == ov::element::i8);  // Symmetric: signed weights, no ZP
 
     // Expand dimensions for scales and zp/bias
     auto scale_shape = scales.get_shape();
-    auto zp_shape = zp.get_shape();
-    bool is_scalar_zp = zp_shape.empty();  // Symmetric quantization
 
     ov::Shape packed_shape = {orig_shape[0], orig_shape[1] / group_size, group_size};
 
@@ -403,37 +427,48 @@ ov::Output<ov::Node> make_int8_weights(ov::Tensor & weight,
     } else {
         scale_shape.push_back(1);
         scales.set_shape(scale_shape);
-        // For symmetric quantization, zp remains scalar (don't resize)
-        if (!is_scalar_zp) {
+        if (!is_signed && zp.get_size() > 0) {
+            auto zp_shape = zp.get_shape();
             zp_shape.push_back(1);
             zp.set_shape(zp_shape);
         }
     }
 
-    // Create graph nodes
-    auto weights_node = std::make_shared<ov::op::v0::Constant>(ov::element::u8, packed_shape,
-                                                               static_cast<uint8_t *>(weight.data()), nullptr);
-    weights_node->get_rt_info()["__gguf_tensor_holder"] = weight;
     auto scales_f16 = std::make_shared<ov::op::v0::Constant>(scales);
-    auto weights_f16 = std::make_shared<ov::op::v0::Convert>(weights_node, ov::element::f16);
 
     ov::Output<ov::Node> result;
-    if (use_bias && !is_scalar_zp) {
-        // Bias path: w * s + b (zp tensor holds f16 bias values)
-        auto bias_f16 = std::make_shared<ov::op::v0::Constant>(zp);
-        auto w_s = std::make_shared<ov::op::v1::Multiply>(weights_f16, scales_f16, ov::op::AutoBroadcastType::NUMPY);
-        result = std::make_shared<ov::op::v1::Add>(w_s, bias_f16, ov::op::AutoBroadcastType::NUMPY);
+    if (is_signed) {
+        // Signed path: q * s (no zero point subtraction needed)
+        auto weights_node = std::make_shared<ov::op::v0::Constant>(ov::element::i8, packed_shape,
+                                                                   static_cast<uint8_t *>(weight.data()), nullptr);
+        weights_node->get_rt_info()["__gguf_tensor_holder"] = weight;
+        auto weights_f16 = std::make_shared<ov::op::v0::Convert>(weights_node, ov::element::f16);
+        result = std::make_shared<ov::op::v1::Multiply>(weights_f16, scales_f16, ov::op::AutoBroadcastType::NUMPY);
     } else {
-        // Zero point path: (w - zp) * s
-        auto zero_point = std::make_shared<ov::op::v0::Constant>(zp);
-        float zp_value;
-        if (ov::op::util::get_single_value(zero_point, zp_value)) {
-            zero_point = ov::op::v0::Constant::create(zero_point->get_element_type(), {}, {zp_value});
+        // Unsigned path
+        auto weights_node = std::make_shared<ov::op::v0::Constant>(ov::element::u8, packed_shape,
+                                                                   static_cast<uint8_t *>(weight.data()), nullptr);
+        weights_node->get_rt_info()["__gguf_tensor_holder"] = weight;
+        auto weights_f16 = std::make_shared<ov::op::v0::Convert>(weights_node, ov::element::f16);
+
+        if (use_bias && zp.get_size() > 0) {
+            // Bias path: w * s + b (zp tensor holds f16 bias values)
+            auto bias_f16 = std::make_shared<ov::op::v0::Constant>(zp);
+            auto w_s =
+                std::make_shared<ov::op::v1::Multiply>(weights_f16, scales_f16, ov::op::AutoBroadcastType::NUMPY);
+            result = std::make_shared<ov::op::v1::Add>(w_s, bias_f16, ov::op::AutoBroadcastType::NUMPY);
+        } else {
+            // Zero point path: (w - zp) * s
+            auto zero_point = std::make_shared<ov::op::v0::Constant>(zp);
+            float zp_value;
+            if (ov::op::util::get_single_value(zero_point, zp_value)) {
+                zero_point = ov::op::v0::Constant::create(zero_point->get_element_type(), {}, {zp_value});
+            }
+            auto zero_point_f16 = std::make_shared<ov::op::v0::Convert>(zero_point, ov::element::f16);
+            auto w_zp =
+                std::make_shared<ov::op::v1::Subtract>(weights_f16, zero_point_f16, ov::op::AutoBroadcastType::NUMPY);
+            result = std::make_shared<ov::op::v1::Multiply>(w_zp, scales_f16, ov::op::AutoBroadcastType::NUMPY);
         }
-        auto zero_point_f16 = std::make_shared<ov::op::v0::Convert>(zero_point, ov::element::f16);
-        auto w_zp =
-            std::make_shared<ov::op::v1::Subtract>(weights_f16, zero_point_f16, ov::op::AutoBroadcastType::NUMPY);
-        result = std::make_shared<ov::op::v1::Multiply>(w_zp, scales_f16, ov::op::AutoBroadcastType::NUMPY);
     }
 
     if (packed_shape.size() != 2) {
@@ -452,11 +487,10 @@ ov::Output<ov::Node> make_int4_weights(ov::Tensor & weight,
                                        size_t group_size,
                                        bool use_bias) {
     ov::Shape orig_weight_shape = weight.get_shape();
+    bool is_signed = (weight.get_element_type() == ov::element::i4);  // Symmetric: signed weights, no ZP
 
     // Expand dimensions for scales and zp/bias
     ov::Shape scale_shape = scales.get_shape();
-    auto zp_shape = zp.get_shape();
-    bool is_scalar_zp = zp_shape.empty();  // Symmetric quantization
 
     // Create INT4 weight tensor
     ov::Shape packed_shape = {orig_weight_shape[0], orig_weight_shape[1] / group_size, group_size};
@@ -467,36 +501,48 @@ ov::Output<ov::Node> make_int4_weights(ov::Tensor & weight,
     } else {
         scale_shape.push_back(1);
         scales.set_shape(scale_shape);
-        // For symmetric quantization, zp remains scalar (don't resize)
-        if (!is_scalar_zp) {
+        if (!is_signed && zp.get_size() > 0) {
+            auto zp_shape = zp.get_shape();
             zp_shape.push_back(1);
             zp.set_shape(zp_shape);
         }
     }
 
-    auto weights_node = std::make_shared<ov::op::v0::Constant>(ov::element::u4, packed_shape,
-                                                               static_cast<uint8_t *>(weight.data()), nullptr);
-    weights_node->get_rt_info()["__gguf_tensor_holder"] = weight;
-    auto weights_f16 = std::make_shared<ov::op::v0::Convert>(weights_node, ov::element::f16);
     auto scales_f16 = std::make_shared<ov::op::v0::Constant>(scales);
 
     ov::Output<ov::Node> result;
-    if (use_bias && !is_scalar_zp) {
-        // Bias path: w * s + b (zp tensor holds f16 bias values)
-        auto bias_f16 = std::make_shared<ov::op::v0::Constant>(zp);
-        auto w_s = std::make_shared<ov::op::v1::Multiply>(weights_f16, scales_f16, ov::op::AutoBroadcastType::NUMPY);
-        result = std::make_shared<ov::op::v1::Add>(w_s, bias_f16, ov::op::AutoBroadcastType::NUMPY);
+    if (is_signed) {
+        // Signed path: q * s (no zero point subtraction needed)
+        auto weights_node = std::make_shared<ov::op::v0::Constant>(ov::element::i4, packed_shape,
+                                                                   static_cast<uint8_t *>(weight.data()), nullptr);
+        weights_node->get_rt_info()["__gguf_tensor_holder"] = weight;
+        auto weights_f16 = std::make_shared<ov::op::v0::Convert>(weights_node, ov::element::f16);
+        result = std::make_shared<ov::op::v1::Multiply>(weights_f16, scales_f16, ov::op::AutoBroadcastType::NUMPY);
     } else {
-        // Zero point path: (w - zp) * s
-        auto zero_points_node = std::make_shared<ov::op::v0::Constant>(zp);
-        float zp_value;
-        if (ov::op::util::get_single_value(zero_points_node, zp_value)) {
-            zero_points_node = ov::op::v0::Constant::create(zero_points_node->get_element_type(), {}, {zp_value});
+        // Unsigned path
+        auto weights_node = std::make_shared<ov::op::v0::Constant>(ov::element::u4, packed_shape,
+                                                                   static_cast<uint8_t *>(weight.data()), nullptr);
+        weights_node->get_rt_info()["__gguf_tensor_holder"] = weight;
+        auto weights_f16 = std::make_shared<ov::op::v0::Convert>(weights_node, ov::element::f16);
+
+        if (use_bias && zp.get_size() > 0) {
+            // Bias path: w * s + b (zp tensor holds f16 bias values)
+            auto bias_f16 = std::make_shared<ov::op::v0::Constant>(zp);
+            auto w_s =
+                std::make_shared<ov::op::v1::Multiply>(weights_f16, scales_f16, ov::op::AutoBroadcastType::NUMPY);
+            result = std::make_shared<ov::op::v1::Add>(w_s, bias_f16, ov::op::AutoBroadcastType::NUMPY);
+        } else {
+            // Zero point path: (w - zp) * s
+            auto zero_points_node = std::make_shared<ov::op::v0::Constant>(zp);
+            float zp_value;
+            if (ov::op::util::get_single_value(zero_points_node, zp_value)) {
+                zero_points_node = ov::op::v0::Constant::create(zero_points_node->get_element_type(), {}, {zp_value});
+            }
+            auto zero_points_f16 = std::make_shared<ov::op::v0::Convert>(zero_points_node, ov::element::f16);
+            auto w_zp =
+                std::make_shared<ov::op::v1::Subtract>(weights_f16, zero_points_f16, ov::op::AutoBroadcastType::NUMPY);
+            result = std::make_shared<ov::op::v1::Multiply>(w_zp, scales_f16, ov::op::AutoBroadcastType::NUMPY);
         }
-        auto zero_points_f16 = std::make_shared<ov::op::v0::Convert>(zero_points_node, ov::element::f16);
-        auto w_zp =
-            std::make_shared<ov::op::v1::Subtract>(weights_f16, zero_points_f16, ov::op::AutoBroadcastType::NUMPY);
-        result = std::make_shared<ov::op::v1::Multiply>(w_zp, scales_f16, ov::op::AutoBroadcastType::NUMPY);
     }
 
     if (packed_shape.size() != 2) {
@@ -699,24 +745,32 @@ OvWeight process_weight_tensor(const ggml_tensor * tensor, const void * data, vo
 
     // Quantized path (normal extraction or quantized requant)
     // Create weight/scale/zp tensors - shared between both paths
-    ov::element::Type weight_type = layout.is_u4 ? ov::element::u4 : ov::element::u8;
+    // For symmetric quantization, use signed types (i4/i8) and no ZP tensor
+    ov::element::Type weight_type = layout.is_symmetric ? (layout.is_u4 ? ov::element::i4 : ov::element::i8) :
+                                                          (layout.is_u4 ? ov::element::u4 : ov::element::u8);
     ov::Shape scale_shape = {node_shape[0], node_shape[1] / layout.weights_per_block};
-    ov::Shape zp_shape = layout.is_symmetric ? ov::Shape{} : scale_shape;
 
     if (output_base_ptr) {
         uint8_t * buf_base = static_cast<uint8_t *>(output_base_ptr);
         result.weights = ov::Tensor(weight_type, node_shape, buf_base + layout.weights_offset);
         result.scales = ov::Tensor(ov::element::f16, scale_shape, buf_base + layout.scales_offset);
-        result.zp = ov::Tensor(weight_type, zp_shape, buf_base + layout.zp_offset);
+        if (!layout.is_symmetric) {
+            ov::element::Type zp_type = layout.is_u4 ? ov::element::u4 : ov::element::u8;
+            result.zp = ov::Tensor(zp_type, scale_shape, buf_base + layout.zp_offset);
+        }
+        // else: result.zp remains default-constructed (empty) for symmetric
     } else {
         result.weights = ov::Tensor(weight_type, node_shape);
         result.scales = ov::Tensor(ov::element::f16, scale_shape);
-        if (use_bias && !layout.is_symmetric) {
-            // bias only has effect for asymmetric quant
-            result.zp = ov::Tensor(ov::element::f16, zp_shape);
-        } else {
-            result.zp = ov::Tensor(weight_type, zp_shape);
+        if (!layout.is_symmetric) {
+            if (use_bias) {
+                result.zp = ov::Tensor(ov::element::f16, scale_shape);
+            } else {
+                ov::element::Type zp_type = layout.is_u4 ? ov::element::u4 : ov::element::u8;
+                result.zp = ov::Tensor(zp_type, scale_shape);
+            }
         }
+        // else: result.zp remains default-constructed (empty) for symmetric
     }
 
     if (layout.is_requant && layout.requant_type.has_value()) {
@@ -741,59 +795,75 @@ void quantize_q4_0(const float * x,
 
     auto * weights = static_cast<uint8_t *>(weights_arr.data());
     auto * scales = scales_arr.data<ov::element_type_traits<ov::element::f16>::value_type>();
-    auto * zp = static_cast<uint8_t *>(zp_arr.data());
-    bool is_scalar_zp = (zp_arr.get_size() == 1);  // Symmetric quantization
+    bool is_symmetric = (weights_arr.get_element_type() == ov::element::i4);  // Signed i4 path
 
-    // For Q4_0, zero point is always 8
-    if (is_scalar_zp) {
-        zp[0] = 8 | (8 << 4);  // Pack two 4-bit values
-    }
-
-    for (int i = 0; i < nb; i++) {
-        float amax = 0.0f;  // absolute max
-        float max = 0.0f;
-
-        for (int j = 0; j < qk; j++) {
-            const float v = x[i * qk + j];
-            if (amax < fabsf(v)) {
-                amax = fabsf(v);
-                max = v;
+    if (!is_symmetric) {
+        auto * zp = static_cast<uint8_t *>(zp_arr.data());
+        for (int i = 0; i < nb; i++) {
+            float amax = 0.0f;
+            float max = 0.0f;
+            for (int j = 0; j < qk; j++) {
+                const float v = x[i * qk + j];
+                if (amax < fabsf(v)) {
+                    amax = fabsf(v);
+                    max = v;
+                }
             }
-        }
-
-        const float d = max / -8;
-
-        if (d == 0) {
-            scales[i] = ov::float16(1.0f);
-            // zp is already set to 8 for symmetric, or set per-block for asymmetric
-            if (!is_scalar_zp) {
+            const float d = max / -8;
+            if (d == 0) {
+                scales[i] = ov::float16(1.0f);
                 if (i % 2 == 0) {
                     zp[i / 2] = 8;
                 } else {
                     zp[i / 2] |= (8 << 4);
                 }
+                memset(weights + i * qk / 2, 8 | (8 << 4), qk / 2);
+                continue;
             }
-            memset(weights + i * qk / 2, 8 | (8 << 4), qk / 2);
-            continue;
-        }
-
-        const float id = 1.0f / d;
-        scales[i] = ov::float16(d);
-        // For asymmetric quantization, store per-block zero points
-        if (!is_scalar_zp) {
+            const float id = 1.0f / d;
+            scales[i] = ov::float16(d);
             if (i % 2 == 0) {
                 zp[i / 2] = 8;
             } else {
                 zp[i / 2] |= (8 << 4);
             }
+            for (int j = 0; j < qk / 2; ++j) {
+                const float x0 = x[i * qk + 2 * j] * id;
+                const float x1 = x[i * qk + 2 * j + 1] * id;
+                const uint8_t xi0 = MIN(15, (int8_t) (x0 + 8.5f));
+                const uint8_t xi1 = MIN(15, (int8_t) (x1 + 8.5f));
+                weights[i * qk / 2 + j] = xi0 | (xi1 << 4);
+            }
         }
-
-        for (int j = 0; j < qk / 2; ++j) {
-            const float x0 = x[i * qk + 2 * j] * id;
-            const float x1 = x[i * qk + 2 * j + 1] * id;
-            const uint8_t xi0 = MIN(15, (int8_t) (x0 + 8.5f));
-            const uint8_t xi1 = MIN(15, (int8_t) (x1 + 8.5f));
-            weights[i * qk / 2 + j] = xi0 | (xi1 << 4);
+    } else {
+        // Symmetric: produce signed i4 values in [-8, 7]
+        for (int i = 0; i < nb; i++) {
+            float amax = 0.0f;
+            float max = 0.0f;
+            for (int j = 0; j < qk; j++) {
+                const float v = x[i * qk + j];
+                if (amax < fabsf(v)) {
+                    amax = fabsf(v);
+                    max = v;
+                }
+            }
+            const float d = max / -8;
+            if (d == 0) {
+                scales[i] = ov::float16(1.0f);
+                // i4 value 0 packed: 0x00
+                memset(weights + i * qk / 2, 0, qk / 2);
+                continue;
+            }
+            const float id = 1.0f / d;
+            scales[i] = ov::float16(d);
+            for (int j = 0; j < qk / 2; ++j) {
+                const float x0 = x[i * qk + 2 * j] * id;
+                const float x1 = x[i * qk + 2 * j + 1] * id;
+                // Signed i4: range [-8, 7]. Quantize as round(x*id), then pack as 4-bit two's complement.
+                int8_t si0 = (int8_t) std::max(-8, std::min(7, (int) roundf(x0)));
+                int8_t si1 = (int8_t) std::max(-8, std::min(7, (int) roundf(x1)));
+                weights[i * qk / 2 + j] = (si0 & 0x0F) | ((si1 & 0x0F) << 4);
+            }
         }
     }
 }
@@ -809,36 +879,42 @@ void quantize_q8_0(const float * x,
 
     auto * weights = static_cast<uint8_t *>(weights_arr.data());
     auto * scales = scales_arr.data<ov::element_type_traits<ov::element::f16>::value_type>();
-    auto * zp = static_cast<uint8_t *>(zp_arr.data());
-    bool is_scalar_zp = (zp_arr.get_size() == 1);  // Symmetric quantization
+    bool is_symmetric = (weights_arr.get_element_type() == ov::element::i8);  // Signed i8 path
 
-    // For Q8_0, zero point is always 128
-    if (is_scalar_zp) {
-        zp[0] = 128;
-    }
-
-    for (int i = 0; i < nb; i++) {
-        float amax = 0.0f;  // absolute max
-
-        for (int j = 0; j < qk; j++) {
-            const float v = x[i * qk + j];
-            if (amax < fabsf(v)) {
-                amax = fabsf(v);
+    if (!is_symmetric) {
+        auto * zp = static_cast<uint8_t *>(zp_arr.data());
+        for (int i = 0; i < nb; i++) {
+            float amax = 0.0f;
+            for (int j = 0; j < qk; j++) {
+                const float v = x[i * qk + j];
+                amax = std::max(amax, fabsf(v));
+            }
+            const float d = amax / 127.0f;
+            const float id = d ? 1.0f / d : 0.0f;
+            scales[i] = ov::float16(d);
+            zp[i] = 128;
+            for (int j = 0; j < qk; ++j) {
+                const float x0 = x[i * qk + j] * id;
+                const int8_t xi0 = roundf(x0);
+                weights[i * qk + j] = (uint8_t) (xi0 + 128);
             }
         }
-
-        const float d = amax / 127.0f;
-        const float id = d ? 1.0f / d : 0.0f;
-        scales[i] = ov::float16(d);
-        // For asymmetric quantization, store per-block zero points
-        if (!is_scalar_zp) {
-            zp[i] = 128;
-        }
-
-        for (int j = 0; j < qk; ++j) {
-            const float x0 = x[i * qk + j] * id;
-            const int8_t xi0 = roundf(x0);
-            weights[i * qk + j] = (uint8_t) (xi0 + 128);
+    } else {
+        // Symmetric: store signed int8 values directly
+        auto * signed_weights = reinterpret_cast<int8_t *>(weights);
+        for (int i = 0; i < nb; i++) {
+            float amax = 0.0f;
+            for (int j = 0; j < qk; j++) {
+                const float v = x[i * qk + j];
+                amax = std::max(amax, fabsf(v));
+            }
+            const float d = amax / 127.0f;
+            const float id = d ? 1.0f / d : 0.0f;
+            scales[i] = ov::float16(d);
+            for (int j = 0; j < qk; ++j) {
+                const float x0 = x[i * qk + j] * id;
+                signed_weights[i * qk + j] = (int8_t) roundf(x0);
+            }
         }
     }
 }
@@ -861,12 +937,8 @@ void quantize_q8_1(const float * x,
 
         for (int j = 0; j < qk; j++) {
             const float v = x[i * qk + j];
-            if (v < min) {
-                min = v;
-            }
-            if (v > max) {
-                max = v;
-            }
+            min = std::min(v, min);
+            max = std::max(v, max);
         }
 
         const float d = (max - min) / ((1 << 8) - 1);

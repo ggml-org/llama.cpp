@@ -67,7 +67,7 @@ jobs:
         id: ggml-ci
         run: |
           nvidia-smi
-          GG_BUILD_CUDA=1 bash ./ci/run.sh ~/results/llama.cpp /mnt/llama.cpp
+          GG_BUILD_CUDA=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
 
   ggml-ci-nvidia-vulkan-cm:
     runs-on: [self-hosted, Linux, NVIDIA]
@@ -81,7 +81,7 @@ jobs:
         id: ggml-ci
         run: |
           vulkaninfo --summary
-          GG_BUILD_VULKAN=1 GGML_VK_DISABLE_COOPMAT2=1 bash ./ci/run.sh ~/results/llama.cpp /mnt/llama.cpp
+          GG_BUILD_VULKAN=1 GGML_VK_DISABLE_COOPMAT2=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
 
   ggml-ci-nvidia-vulkan-cm2:
     runs-on: [self-hosted, Linux, NVIDIA, COOPMAT2]
@@ -95,37 +95,36 @@ jobs:
         id: ggml-ci
         run: |
           vulkaninfo --summary
-          GG_BUILD_VULKAN=1 bash ./ci/run.sh ~/results/llama.cpp /mnt/llama.cpp
+          GG_BUILD_VULKAN=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
 
-  # TODO: investigate slight precision issues in some operations for test-backend-ops on the WebGPU backend.
-  #ggml-ci-nvidia-webgpu:
-  #  runs-on: [self-hosted, Linux, NVIDIA]
+  ggml-ci-nvidia-webgpu:
+    runs-on: [self-hosted, Linux, NVIDIA, X64]
 
-  #  steps:
-  #    - name: Clone
-  #      id: checkout
-  #      uses: actions/checkout@v6
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
 
-  #    - name: Dawn Dependency
-  #      id: dawn-depends
-  #      run: |
-  #        DAWN_VERSION="v20260317.182325"
-  #        DAWN_OWNER="google"
-  #        DAWN_REPO="dawn"
-  #        DAWN_ASSET_NAME="Dawn-18eb229ef5f707c1464cc581252e7603c73a3ef0-ubuntu-latest-Release"
-  #        echo "Fetching release asset from https://github.com/google/dawn/releases/download/${DAWN_VERSION}/${DAWN_ASSET_NAME}.tar.gz"
-  #        curl -L -o artifact.tar.gz \
-  #          "https://github.com/google/dawn/releases/download/${DAWN_VERSION}/${DAWN_ASSET_NAME}.tar.gz"
-  #        mkdir dawn
-  #        tar -xvf artifact.tar.gz -C dawn --strip-components=1
+      - name: Dawn Dependency
+        id: dawn-depends
+        run: |
+          DAWN_VERSION="v20260317.182325"
+          DAWN_OWNER="google"
+          DAWN_REPO="dawn"
+          DAWN_ASSET_NAME="Dawn-18eb229ef5f707c1464cc581252e7603c73a3ef0-ubuntu-latest-Release"
+          echo "Fetching release asset from https://github.com/google/dawn/releases/download/${DAWN_VERSION}/${DAWN_ASSET_NAME}.tar.gz"
+          curl -L -o artifact.tar.gz \
+            "https://github.com/google/dawn/releases/download/${DAWN_VERSION}/${DAWN_ASSET_NAME}.tar.gz"
+          mkdir dawn
+          tar -xvf artifact.tar.gz -C dawn --strip-components=1
 
-  #    - name: Test
-  #      id: ggml-ci
-  #      run: |
-  #        GG_BUILD_WEBGPU=1 \
-  #        GG_BUILD_WEBGPU_DAWN_PREFIX="$GITHUB_WORKSPACE/dawn" \
-  #        GG_BUILD_WEBGPU_DAWN_DIR="$GITHUB_WORKSPACE/dawn/lib64/cmake/Dawn" \
-  #          bash ./ci/run.sh ~/results/llama.cpp /mnt/llama.cpp
+      - name: Test
+        id: ggml-ci
+        run: |
+          GG_BUILD_WEBGPU=1 \
+          GG_BUILD_WEBGPU_DAWN_PREFIX="$GITHUB_WORKSPACE/dawn" \
+          GG_BUILD_WEBGPU_DAWN_DIR="$GITHUB_WORKSPACE/dawn/lib64/cmake/Dawn" \
+            bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
 
   # TODO: provision AMX-compatible machine
   #ggml-ci-cpu-amx:
@@ -139,7 +138,7 @@ jobs:
   #    - name: Test
   #      id: ggml-ci
   #      run: |
-  #        bash ./ci/run.sh ~/results/llama.cpp /mnt/llama.cpp
+  #        bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
 
   # TODO: provision AMD GPU machine
   # ggml-ci-amd-vulkan:
@@ -154,7 +153,7 @@ jobs:
   #       id: ggml-ci
   #       run: |
   #         vulkaninfo --summary
-  #         GG_BUILD_VULKAN=1 bash ./ci/run.sh ~/results/llama.cpp /mnt/llama.cpp
+  #         GG_BUILD_VULKAN=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
 
   # TODO: provision AMD GPU machine
   # ggml-ci-amd-rocm:
@@ -169,7 +168,7 @@ jobs:
   #       id: ggml-ci
   #       run: |
   #         amd-smi static
-  #         GG_BUILD_ROCM=1 GG_BUILD_AMDGPU_TARGETS="gfx1101" bash ./ci/run.sh ~/results/llama.cpp /mnt/llama.cpp
+  #         GG_BUILD_ROCM=1 GG_BUILD_AMDGPU_TARGETS="gfx1101" bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
 
   ggml-ci-mac-metal:
     runs-on: [self-hosted, macOS, ARM64]
@@ -265,6 +264,10 @@ jobs:
   ggml-ci-intel-openvino-gpu-low-perf:
     runs-on: [self-hosted, Linux, Intel, OpenVINO]
 
+    concurrency:
+      group: openvino-gpu-${{ github.head_ref || github.ref }}
+      cancel-in-progress: false
+
     env:
       # Sync versions in build.yml, build-self-hosted.yml, release.yml, build-cache.yml, .devops/openvino.Dockerfile
       OPENVINO_VERSION_MAJOR: "2026.0"
@@ -292,4 +295,62 @@ jobs:
         id: ggml-ci
         run: |
           source ./openvino_toolkit/setupvars.sh
-          GG_BUILD_OPENVINO=1 GGML_OPENVINO_DEVICE=GPU GG_BUILD_LOW_PERF=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
+          GG_BUILD_OPENVINO=1 GGML_OPENVINO_DEVICE=GPU GG_BUILD_LOW_PERF=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
+
+  ggml-ci-arm64-cpu-low-perf:
+    runs-on: [self-hosted, Linux, ARM64, CPU]
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
+
+      - name: Test
+        id: ggml-ci
+        run: |
+          LLAMA_ARG_THREADS=$(nproc) GG_BUILD_LOW_PERF=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
+
+  ggml-ci-arm64-cpu-high-perf:
+    runs-on: [self-hosted, Linux, ARM64, CPU]
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
+
+      - name: Test
+        id: ggml-ci
+        run: |
+          LLAMA_ARG_THREADS=$(nproc) GG_BUILD_HIGH_PERF=1 GG_BUILD_NO_SVE=1 GG_BUILD_NO_BF16=1 GG_BUILD_EXTRA_TESTS_0=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
+
+# TODO: not sure how to detect ARM flags on DGX Spark. currently get this error during cmake:
+#         CMake Warning at ggml/src/ggml-cpu/CMakeLists.txt:147 (message):
+#           ARM -march/-mcpu not found, -mcpu=native will be used
+#
+#       if we resolve this, we should be able to offload these jobs to the self-hosted runners
+#
+#  ggml-ci-arm64-cpu-high-perf-sve:
+#    runs-on: [self-hosted, Linux, ARM64, CPU]
+#
+#    steps:
+#      - name: Clone
+#        id: checkout
+#        uses: actions/checkout@v6
+#
+#      - name: Test
+#        id: ggml-ci
+#        run: |
+#          LLAMA_ARG_THREADS=$(nproc) GG_BUILD_NO_BF16=1 GG_BUILD_EXTRA_TESTS_0=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
+#
+#  ggml-ci-arm64-cpu-kleidiai:
+#    runs-on: [self-hosted, Linux, ARM64, CPU]
+#
+#    steps:
+#      - name: Clone
+#        id: checkout
+#        uses: actions/checkout@v6
+#
+#      - name: Test
+#        id: ggml-ci
+#        run: |
+#          GG_BUILD_KLEIDIAI=1 GG_BUILD_EXTRA_TESTS_0=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp

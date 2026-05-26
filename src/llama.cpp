@@ -71,12 +71,18 @@ bool llama_supports_mlock(void) {
 }
 
 bool llama_supports_gpu_offload(void) {
+    if (!ggml_backend_reg_count()) {
+        ggml_backend_load_all();
+    }
     return ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_GPU) != nullptr ||
            ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_IGPU) != nullptr ||
            llama_supports_rpc();
 }
 
 bool llama_supports_rpc(void) {
+    if (!ggml_backend_reg_count()) {
+        ggml_backend_load_all();
+    }
     return ggml_backend_reg_by_name("RPC") != nullptr;
 }
 
@@ -88,6 +94,10 @@ void llama_backend_init(void) {
         struct ggml_init_params params = { 0, NULL, false };
         struct ggml_context * ctx = ggml_init(params);
         ggml_free(ctx);
+    }
+
+    if (!ggml_backend_reg_count()) {
+        ggml_backend_load_all();
     }
 }
 
@@ -111,113 +121,8 @@ int64_t llama_time_us(void) {
     return ggml_time_us();
 }
 
-// Returns 0 on success, -1 on error, and -2 on cancellation via llama_progress_callback
-static int llama_model_load(struct gguf_context * metadata, llama_model_set_tensor_data_t set_tensor_data, void * set_tensor_data_ud,
-        const std::string & fname, std::vector<std::string> & splits, FILE * file, llama_model & model, llama_model_params & params) {
-    // loading time will be recalculated after the first eval, so
-    // we take page faults deferred by mmap() into consideration
-    model.t_load_us = 0;
-    time_meas tm(model.t_load_us);
-
-    model.t_start_us = tm.t_start_us;
-
-    try {
-        llama_model_loader ml(metadata, set_tensor_data, set_tensor_data_ud, fname, splits, file, params.use_mmap, params.use_direct_io,
-            params.check_tensors, params.no_alloc, params.kv_overrides, params.tensor_buft_overrides);
-
-        ml.print_info();
-
-        model.hparams.vocab_only = params.vocab_only;
-        model.hparams.no_alloc   = params.no_alloc;
-
-        try {
-            model.load_arch(ml);
-        } catch(const std::exception & e) {
-            throw std::runtime_error("error loading model architecture: " + std::string(e.what()));
-        }
-        try {
-            model.load_hparams(ml);
-        } catch(const std::exception & e) {
-            throw std::runtime_error("error loading model hyperparameters: " + std::string(e.what()));
-        }
-        if (model.arch == LLM_ARCH_CLIP) {
-            throw std::runtime_error("CLIP cannot be used as main model, use it with --mmproj instead");
-        }
-        try {
-            model.load_vocab(ml);
-        } catch(const std::exception & e) {
-            throw std::runtime_error("error loading model vocabulary: " + std::string(e.what()));
-        }
-
-        model.load_stats(ml);
-        model.print_info();
-
-        if (params.vocab_only) {
-            LLAMA_LOG_INFO("%s: vocab only - skipping tensors\n", __func__);
-            return 0;
-        }
-
-        if (!model.load_tensors(ml)) {
-            return -2;
-        }
-    } catch (const std::exception & err) {
-        LLAMA_LOG_ERROR("%s: error loading model: %s\n", __func__, err.what());
-        return -1;
-    }
-
-    return 0;
-}
-
-static struct llama_model * llama_model_load_from_file_impl(
-        struct gguf_context * metadata,
-        llama_model_set_tensor_data_t set_tensor_data,
-        void * set_tensor_data_ud,
-        const std::string & path_model,
-        std::vector<std::string> & splits,
-        FILE * file,
-        struct llama_model_params params) {
-    {
-        int n_sources_defined = 0;
-        if (metadata != nullptr) {
-            n_sources_defined++;
-        }
-        if (!path_model.empty()) {
-            n_sources_defined++;
-        }
-        if (file != nullptr) {
-            n_sources_defined++;
-        }
-        if (n_sources_defined != 1) {
-            LLAMA_LOG_ERROR("%s: exactly one out metadata, path_model, and file must be defined\n", __func__);
-            return nullptr;
-        }
-    }
-    ggml_time_init();
-
-    if (!params.vocab_only && ggml_backend_reg_count() == 0) {
-        LLAMA_LOG_ERROR("%s: no backends are loaded. hint: use ggml_backend_load() or ggml_backend_load_all() to load a backend before calling this function\n", __func__);
-        return nullptr;
-    }
-
-    unsigned cur_percentage = 0;
-    if (params.progress_callback == NULL) {
-        params.progress_callback_user_data = &cur_percentage;
-        params.progress_callback = [](float progress, void * ctx) {
-            unsigned * cur_percentage_p = (unsigned *) ctx;
-            unsigned percentage = (unsigned) (100 * progress);
-            while (percentage > *cur_percentage_p) {
-                *cur_percentage_p = percentage;
-                LLAMA_LOG_CONT(".");
-                if (percentage >= 100) {
-                    LLAMA_LOG_CONT("\n");
-                }
-            }
-            return true;
-        };
-    }
-
-    llama_model * model = new llama_model(params);
-
+// returns true on success
+static bool llama_prepare_model_devices(const llama_model_params & params, llama_model * model) {
     // create list of devices to use with this model
     if (params.devices) {
         if (params.split_mode == LLAMA_SPLIT_MODE_TENSOR) {
@@ -227,7 +132,7 @@ static struct llama_model * llama_model_load_from_file_impl(
             }
             if (n_devs == 0) {
                 LLAMA_LOG_ERROR("%s: LLAMA_SPLIT_MODE_TENSOR needs >= 1 devices\n", __func__);
-                return nullptr;
+                return false;
             }
             LLAMA_LOG_INFO("%s: creating a Meta device with %zu devices\n", __func__, n_devs);
             for (size_t i = 0; i < n_devs; ++i) {
@@ -265,7 +170,7 @@ static struct llama_model * llama_model_load_from_file_impl(
             }
             if (devs.empty()) {
                 LLAMA_LOG_ERROR("%s: LLAMA_SPLIT_MODE_TENSOR needs >= 1 devices\n", __func__);
-                return nullptr;
+                return false;
             }
 
             LLAMA_LOG_INFO("%s: creating a Meta device for tensor parallelism from %zu devices:\n", __func__, devs.size());
@@ -347,8 +252,7 @@ static struct llama_model * llama_model_load_from_file_impl(
         } else {
             if (params.main_gpu >= (int)model->devices.size()) {
                 LLAMA_LOG_ERROR("%s: invalid value for main_gpu: %d (available devices: %zu)\n", __func__, params.main_gpu, model->devices.size());
-                llama_model_free(model);
-                return nullptr;
+                return false;
             }
             llama_device main_gpu = model->devices[params.main_gpu];
             model->devices.clear();
@@ -365,7 +269,121 @@ static struct llama_model * llama_model_load_from_file_impl(
                 props.memory_free/1024/1024);
     }
 
-    const int status = llama_model_load(metadata, set_tensor_data, set_tensor_data_ud, path_model, splits, file, *model, params);
+    return true;
+}
+
+// Returns 0 on success, -1 on error, and -2 on cancellation via llama_progress_callback
+static std::pair<int, llama_model *> llama_model_load(struct gguf_context * metadata, llama_model_set_tensor_data_t set_tensor_data, void * set_tensor_data_ud,
+        const std::string & fname, std::vector<std::string> & splits, FILE * file, llama_model_params & params) {
+    try {
+        llama_model_loader ml(metadata, set_tensor_data, set_tensor_data_ud, fname, splits, file, params.use_mmap, params.use_direct_io,
+            params.check_tensors, params.no_alloc, params.kv_overrides, params.tensor_buft_overrides);
+
+        ml.print_info();
+        std::unique_ptr<llama_model> model_ptr(llama_model_create(ml, params));
+
+        bool ok = llama_prepare_model_devices(params, model_ptr.get());
+        if (!ok) {
+            return {-1, nullptr};
+        }
+
+        auto * model = dynamic_cast<llama_model_base *>(model_ptr.get());
+        if (model == nullptr) {
+            GGML_ABORT("fatal error: model does not implement llama_model_base");
+        }
+
+        // loading time will be recalculated after the first eval, so
+        // we take page faults deferred by mmap() into consideration
+        model->t_load_us = 0;
+        time_meas tm(model->t_load_us);
+
+        model->t_start_us = tm.t_start_us;
+
+        model->hparams.vocab_only = params.vocab_only;
+        model->hparams.no_alloc   = params.no_alloc;
+
+        try {
+            model->load_hparams(ml);
+        } catch(const std::exception & e) {
+            throw std::runtime_error("error loading model hyperparameters: " + std::string(e.what()));
+        }
+        if (model->arch == LLM_ARCH_CLIP) {
+            throw std::runtime_error("CLIP cannot be used as main model, use it with --mmproj instead");
+        }
+        try {
+            model->load_vocab(ml);
+        } catch(const std::exception & e) {
+            throw std::runtime_error("error loading model vocabulary: " + std::string(e.what()));
+        }
+
+        model->load_stats(ml);
+        model->print_info();
+
+        if (params.vocab_only) {
+            LLAMA_LOG_INFO("%s: vocab only - skipping tensors\n", __func__);
+            return {0, model_ptr.release()};
+        }
+
+        if (!model->load_tensors(ml)) {
+            return {-2, nullptr};
+        }
+
+        return {0, model_ptr.release()};
+    } catch (const std::exception & err) {
+        LLAMA_LOG_ERROR("%s: error loading model: %s\n", __func__, err.what());
+        return {-1, nullptr};
+    }
+}
+
+static struct llama_model * llama_model_load_from_file_impl(
+        struct gguf_context * metadata,
+        llama_model_set_tensor_data_t set_tensor_data,
+        void * set_tensor_data_ud,
+        const std::string & path_model,
+        std::vector<std::string> & splits,
+        FILE * file,
+        struct llama_model_params params) {
+    {
+        int n_sources_defined = 0;
+        if (metadata != nullptr) {
+            n_sources_defined++;
+        }
+        if (!path_model.empty()) {
+            n_sources_defined++;
+        }
+        if (file != nullptr) {
+            n_sources_defined++;
+        }
+        if (n_sources_defined != 1) {
+            LLAMA_LOG_ERROR("%s: exactly one out metadata, path_model, and file must be defined\n", __func__);
+            return nullptr;
+        }
+    }
+    ggml_time_init();
+
+    if (!params.vocab_only && ggml_backend_reg_count() == 0) {
+        LLAMA_LOG_ERROR("%s: no backends are loaded. hint: use ggml_backend_load() or ggml_backend_load_all() to load a backend before calling this function\n", __func__);
+        return nullptr;
+    }
+
+    unsigned cur_percentage = 0;
+    if (params.progress_callback == NULL) {
+        params.progress_callback_user_data = &cur_percentage;
+        params.progress_callback = [](float progress, void * ctx) {
+            unsigned * cur_percentage_p = (unsigned *) ctx;
+            unsigned percentage = (unsigned) (100 * progress);
+            while (percentage > *cur_percentage_p) {
+                *cur_percentage_p = percentage;
+                LLAMA_LOG_CONT(".");
+                if (percentage >= 100) {
+                    LLAMA_LOG_CONT("\n");
+                }
+            }
+            return true;
+        };
+    }
+
+    const auto [status, model] = llama_model_load(metadata, set_tensor_data, set_tensor_data_ud, path_model, splits, file, params);
     GGML_ASSERT(status <= 0);
     if (status < 0) {
         if (status == -1) {
@@ -374,7 +392,9 @@ static struct llama_model * llama_model_load_from_file_impl(
             LLAMA_LOG_INFO("%s: cancelled model load\n", __func__);
         }
 
-        llama_model_free(model);
+        if (model) {
+            llama_model_free(model);
+        }
         return nullptr;
     }
 

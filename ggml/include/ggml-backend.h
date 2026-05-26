@@ -169,7 +169,7 @@ extern "C" {
         // device type
         enum ggml_backend_dev_type type;
         // device id
-        //   for PCI devices, this should be the PCI bus id formatted as "domain:bus:device.function" (e.g. "0000:01:00.0")
+        //   for PCI devices, this should be the lower-case PCI bus id formatted as "domain:bus:device.function" (e.g. "0000:c1:00.0")
         //   if the id is unknown, this should be NULL
         const char * device_id;
         // device capabilities
