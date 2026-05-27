@@ -109,8 +109,7 @@ void llm_graph_input_token_embd::set_input(const llama_ubatch * ubatch) {
         if (ubatch->token) {
             ggml_backend_tensor_set(tokens, ubatch->token, 0, n_tokens*ggml_element_size(tokens));
         } else {
-            // embd-only batch (e.g. image): no next-token ids exist, so feed a valid
-            // placeholder to keep the e-branch get_rows in bounds
+            // TODO: multi-modal embeddings is not used for now
             std::vector<int32_t> placeholder(n_tokens, 0);
             ggml_backend_tensor_set(tokens, placeholder.data(), 0, n_tokens*ggml_element_size(tokens));
         }
