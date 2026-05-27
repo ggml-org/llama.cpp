@@ -2419,9 +2419,9 @@ struct test_set_rows : public test_case {
     double max_nmse_err(ggml_backend_t backend) override {
         ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(ggml_backend_get_device(backend));
         if (strcmp(ggml_backend_reg_name(reg), "WebGPU") == 0 && ggml_is_quantized(type)) {
-            return std::max(max_nmse_err(), 2e-7);
+            return std::max(test_case::max_nmse_err(backend), 2e-7);
         }
-        return max_nmse_err();
+        return test_case::max_nmse_err(backend);
     }
 };
 
