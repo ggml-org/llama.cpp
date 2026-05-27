@@ -5401,15 +5401,6 @@ static vk_device ggml_vk_get_device(size_t idx) {
         vk12_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
         vk11_features.pNext = &vk12_features;
 
-        VkPhysicalDeviceInternallySynchronizedQueuesFeaturesKHR sync_query_features{};
-        sync_query_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_INTERNALLY_SYNCHRONIZED_QUEUES_FEATURES_KHR;
-        sync_query_features.pNext = nullptr;
-        sync_query_features.internallySynchronizedQueues = VK_FALSE;
-
-        if (internally_sync_support) {
-            vk12_features.pNext = &sync_query_features;
-        }
-
         last_struct = (VkBaseOutStructure *)&vk12_features;
 
         VkPhysicalDeviceInternallySynchronizedQueuesFeaturesKHR sync_enable_features{};
