@@ -5370,18 +5370,6 @@ static vk_device ggml_vk_get_device(size_t idx) {
         device->single_queue = compute_queue_family_index == transfer_queue_family_index && queue_family_props[compute_queue_family_index].queueCount == 1;
 
         std::vector<vk::DeviceQueueCreateInfo> device_queue_create_infos;
-        vk::DeviceQueueCreateFlags queue_flags = device->has_internally_synchronized_queues ?
-                                                eInternallySynchronizedKHR :
-                                                vk::DeviceQueueCreateFlags();
-
-        if (compute_queue_family_index != transfer_queue_family_index) {
-            device_queue_create_infos.push_back({queue_flags, compute_queue_family_index, 1, priorities});
-            device_queue_create_infos.push_back({queue_flags, transfer_queue_family_index, 1, priorities + 1});
-        } else if(!device->single_queue) {
-            device_queue_create_infos.push_back({queue_flags, compute_queue_family_index, 2, priorities});
-        } else {
-            device_queue_create_infos.push_back({queue_flags, compute_queue_family_index, 1, priorities});
-        }
         vk::DeviceCreateInfo device_create_info{};
         std::vector<const char *> device_extensions;
         vk::PhysicalDeviceFeatures device_features = device->physical_device.getFeatures();
@@ -5521,6 +5509,21 @@ static vk_device ggml_vk_get_device(size_t idx) {
         vkGetPhysicalDeviceFeatures2(device->physical_device, &device_features2);
 
         device->has_internally_synchronized_queues = internally_synchronized_queues_features.internallySynchronizedQueues;
+
+        // Build queue create infos only after querying whether internally synchronized queues are enabled.
+        // getQueue2() later uses the same flag, so creation/retrieval must stay consistent.
+        vk::DeviceQueueCreateFlags queue_flags = device->has_internally_synchronized_queues ?
+                                                eInternallySynchronizedKHR :
+                                                vk::DeviceQueueCreateFlags();
+
+        if (compute_queue_family_index != transfer_queue_family_index) {
+            device_queue_create_infos.push_back({queue_flags, compute_queue_family_index, 1, priorities});
+            device_queue_create_infos.push_back({queue_flags, transfer_queue_family_index, 1, priorities + 1});
+        } else if(!device->single_queue) {
+            device_queue_create_infos.push_back({queue_flags, compute_queue_family_index, 2, priorities});
+        } else {
+            device_queue_create_infos.push_back({queue_flags, compute_queue_family_index, 1, priorities});
+        }
 
         device->pipeline_executable_properties_support = pipeline_executable_properties_support;
 
