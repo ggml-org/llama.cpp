@@ -5406,7 +5406,7 @@ static vk_device ggml_vk_get_device(size_t idx) {
         VkPhysicalDeviceInternallySynchronizedQueuesFeaturesKHR sync_enable_features{};
         sync_enable_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_INTERNALLY_SYNCHRONIZED_QUEUES_FEATURES_KHR;
         sync_enable_features.pNext = nullptr;
-        sync_enable_features.internallySynchronizedQueues = VK_TRUE;
+        sync_enable_features.internallySynchronizedQueues = VK_FALSE;
 
         if (internally_sync_support ) {
             last_struct->pNext = (VkBaseOutStructure *)&sync_enable_features;
