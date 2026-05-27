@@ -147,7 +147,7 @@ float16_t dequantFuncQ2_K(const in decodeBufQ2_K bl, const in uint blockCoords[2
     return ret;
 }
 
-layout(buffer_reference, std430, buffer_reference_align = 2) buffer decodeBufQ3_K {
+layout(buffer_reference, std430, buffer_reference_align = 4) buffer decodeBufQ3_K {
    block_q3_K block;
 };
 
@@ -399,7 +399,7 @@ float16_t dequantFuncQ5_K(const in decodeBufQ5_K bl, const in uint blockCoords[2
     return float16_t(ret);
 }
 
-layout(buffer_reference, std430, buffer_reference_align = 2) buffer decodeBufQ6_K {
+layout(buffer_reference, std430, buffer_reference_align = 4) buffer decodeBufQ6_K {
    block_q6_K block;
 };
 
