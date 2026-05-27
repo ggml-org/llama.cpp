@@ -638,8 +638,9 @@ jobs:
         uses: ggml-org/ccache-action@v1.2.21
         with:
           key: release-windows-2022-x64-cuda-${{ matrix.cuda }}
+          max-size: "1000MB"
           variant: ccache
-          evict-old-files: 1d
+          evict-old-files: job # keep only the latest cache
 
       - name: Install Cuda Toolkit
         uses: ./.github/actions/windows-setup-cuda
@@ -1065,7 +1066,8 @@ jobs:
         uses: ggml-org/ccache-action@v1.2.21
         with:
           key: release-windows-2022-x64-hip-${{ env.HIPSDK_INSTALLER_VERSION }}-${{ matrix.name }}
-          evict-old-files: 1d
+          max-size: "1000MB"
+          evict-old-files: job # keep only the latest cache
 
       - name: Install ROCm
         if: steps.cache-rocm.outputs.cache-hit != 'true'

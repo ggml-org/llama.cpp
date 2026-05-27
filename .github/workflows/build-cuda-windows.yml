@@ -34,10 +34,10 @@ jobs:
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.21
         with:
-          # note: this cache key is the same as in release.yml !
           key: release-windows-2022-x64-cuda-${{ matrix.cuda }}
+          max-size: "1000MB"
           variant: ccache
-          evict-old-files: 1d
+          evict-old-files: job # keep only the latest cache
           save: true # always save the cache since we are running this manually
           #save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
@@ -123,9 +123,9 @@ jobs:
       - name: Install ccache
         uses: ggml-org/ccache-action@v1.2.21
         with:
-          # note: this cache key is the same as in release.yml !
           key: release-windows-2022-x64-hip-${{ env.HIPSDK_INSTALLER_VERSION }}-${{ matrix.name }}
-          evict-old-files: 1d
+          max-size: "1000MB"
+          evict-old-files: job # keep only the latest cache
           save: true # always save the cache since we are running this manually
           #save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
