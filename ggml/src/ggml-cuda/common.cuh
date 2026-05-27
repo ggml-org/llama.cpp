@@ -1564,38 +1564,23 @@ static bool ggml_cuda_kernel_can_use_pdl(const void * kernel) {
     struct cache_key_hash {
         // MurmurHash3 mixing function for better hash distribution (vs. just std::hash which in some implementations simply returns the identity)
         static std::size_t hash_mix(std::size_t x) {
-            // 64-bit path
-            if constexpr (sizeof(std::size_t) >= 8) {
-                std::uint64_t y = x;
-                const std::uint64_t m = 0xe9846af9b1a615d;
+            std::uint64_t y = x;
+            const std::uint64_t m = 0xe9846af9b1a615d;
 
-                y ^= y >> 32;
-                y *= m;
-                y ^= y >> 32;
-                y *= m;
-                y ^= y >> 28;
+            y ^= y >> 32;
+            y *= m;
+            y ^= y >> 32;
+            y *= m;
+            y ^= y >> 28;
 
-                return static_cast<std::size_t>(y);
-            } else {
-                // 32-bit path
-                std::uint32_t y = x;
-                const std::uint32_t m1 = 0x21f0aaad;
-                const std::uint32_t m2 = 0x735a2d97;
-
-                y ^= y >> 16;
-                y *= m1;
-                y ^= y >> 15;
-                y *= m2;
-                y ^= y >> 15;
-
-                return static_cast<std::size_t>(y);
-            }
+            return static_cast<std::size_t>(y);
         }
 
         std::size_t operator()(const cache_key & key) const {
-            std::size_t h = 0;
-            h = hash_mix(h + std::hash<int>{}(key.device));
-            h = hash_mix(h + std::hash<const void *>{}(key.kernel));
+            // Use a nonzero seed to avoid mapping all-zero keys to zero
+            std::size_t h = 42;
+            h = hash_mix(h + key.device);
+            h = hash_mix(h + reinterpret_cast<std::size_t>(key.kernel));
             return h;
         }
     };
