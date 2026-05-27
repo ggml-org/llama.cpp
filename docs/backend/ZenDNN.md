@@ -72,10 +72,13 @@ The ZenDNN backend accelerates **matrix multiplication (MUL_MAT)** and **expert-
 |:----------------------:|:-------:|:---------------------------------------------:|
 | FP32                   | Support | Full precision floating point                 |
 | BF16                   | Support | BFloat16 (best performance on Zen 4/Zen 5)    |
+| Q8_0                   | Support | Quantized 8-bit weights accelerated through ZenDNN MulMat branch |
 
 *Notes:*
 
 - **BF16** provides best performance on Zen 4 and Zen 5 EPYC™ processors (Genoa, Turin).
+- **Q8_0** support is available for quantized model weights in supported ZenDNN Mul Mat branch.
+- Other quantization formats may fall back to the standard CPU backend unless explicitly supported by the ZenDNN backend.
 
 ## Linux
 
@@ -140,6 +143,15 @@ Download LLaMA 3.1 8B Instruct BF16 model:
 huggingface-cli download meta-llama/Llama-3.1-8B-Instruct-GGUF --local-dir models/
 ```
 
+You can also use a Q8_0 GGUF model:
+
+```sh
+# Download a Q8_0 GGUF model from Hugging Face
+huggingface-cli download meta-llama/Llama-3.1-8B-Instruct-GGUF \
+    Llama-3.1-8B-Instruct-Q8_0.gguf \
+    --local-dir models/
+```
+
 #### 2. Start Server
 
 Run llama.cpp server with ZenDNN acceleration:
@@ -176,6 +188,17 @@ export ZENDNNL_MATMUL_ALGO=1    # Blocked AOCL DLP algo (recommended)
 
 For more details on available algorithms, see the [ZenDNN MatMul Algorithm Documentation](https://github.com/amd/ZenDNN/blob/a18adf8c605fb5f5e52cefd7eda08a7b18febbaf/docs/runtime_env.md#algorithm-details).
 
+### Q8_0 Performance Notes
+
+Q8_0 support is mainly beneficial for prompt processing / prefill workloads where large matrix multiplications dominate execution. Token generation performance may remain close to the standard CPU backend depending on the model, batch size, number of threads, and CPU topology.
+
+For best results with Q8_0 models:
+
+- Use a supported AMD Zen-based CPU.
+- Use `ZENDNNL_MATMUL_ALGO=1`.
+- Use sufficiently large prompt/batch workloads to expose matrix multiplication acceleration.
+- Enable profiling or logging to verify that ZenDNN MatMul kernels are being used.
+
 ### Profiling and Debugging
 
 For detailed profiling and logging options, refer to the [ZenDNN Logging Documentation](https://github.com/amd/ZenDNN/blob/a18adf8c605fb5f5e52cefd7eda08a7b18febbaf/docs/logging.md).
@@ -184,6 +207,7 @@ For detailed profiling and logging options, refer to the [ZenDNN Logging Documen
 
 - **Limited operation support**: Currently matrix multiplication (MUL_MAT) and expert-based matrix multiplication (MUL_MAT_ID) are accelerated via ZenDNN. Other operations fall back to the standard CPU backend. Future updates may expand supported operations.
 - **BF16 support**: BF16 operations require AMD Zen 4 or Zen 5 architecture (EPYC 9004/9005 series). On older CPUs, operations will use FP32.
+- **Q8_0 support scope**: Q8_0 acceleration is available for supported matrix multiplication paths. Other quantization formats may still fall back to the standard CPU backend.
 - **NUMA awareness**: For multi-socket systems, manual NUMA binding may be required for optimal performance.
 
 ## Q&A
@@ -202,7 +226,7 @@ A: ZenDNN is optimized specifically for AMD processors. While it may work on oth
 
 **Q: Does ZenDNN support quantized models?**
 
-A: Currently, ZenDNN primarily supports FP32 and BF16 data types. Quantized model support is not available at this time.
+A: Yes. The ZenDNN backend supports Q8_0 quantized models for supported matrix multiplication operations. FP32 and BF16 are also supported. Other quantization formats may fall back to the standard CPU backend unless explicitly supported by the ZenDNN backend.
 
 **Q: Why is my inference not faster with ZenDNN?**
 
