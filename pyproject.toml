@@ -32,7 +32,10 @@ llama-convert-llama-ggml-to-gguf = "convert_llama_ggml_to_gguf:main"
 llama-ggml-vk-generate-shaders = "ggml_vk_generate_shaders:main"
 
 [tool.poetry]
-packages = [{ include = "*.py", from = "." }]
+packages = [
+    { include = "*.py", from = "." },
+    { include = "conversion", from = "." },
+]
 
 [tool.poetry.dependencies]
 torch = [
