@@ -497,9 +497,9 @@ static void dequantize_x4x2_worker_loop_##suffix(unsigned int n, unsigned int i,
     }                                                                                                          \
 }
 
-DEFINE_DEQUANTIZE_Q4_TASK(q4_0, q4_0_to_fp16_lut, q4_0, HMX_X4X2_DBLK_SIZE, (int)sizeof(__fp16))
+DEFINE_DEQUANTIZE_Q4_TASK(q4_0,   q4_0_to_fp16_lut,   q4_0, HMX_X4X2_DBLK_SIZE, (int)sizeof(__fp16))
+DEFINE_DEQUANTIZE_Q4_TASK(q4_1,   q4_1_to_fp16_lut,   q4_1, 32, 4)
 DEFINE_DEQUANTIZE_Q4_TASK(iq4_nl, iq4_nl_to_fp16_lut, q4_0, HMX_X4X2_DBLK_SIZE, (int)sizeof(__fp16))
-DEFINE_DEQUANTIZE_Q4_TASK(q4_1, q4_1_to_fp16_lut, q4_1, 32, 4)
 
 static void dequantize_x4x2_weight_to_fp16_tiles_task_mxfp4(
         const x4x2_dequantize_state_t *state,
@@ -684,13 +684,14 @@ static void dequantize_x4x2_worker_loop_q8_0(unsigned int n, unsigned int i, voi
 static void dequantize_x4x2_weight_chunk_to_fp16_tiles(
         struct htp_context *ctx, __fp16 *vtcm_dst,
         const void *vtcm_src, int n_cols, int k_block,
-        size_t row_stride, int weight_type) {
+        size_t row_stride, int weight_type,
+        int n_k_tiles, struct fastdiv_values n_k_tiles_div,
+        worker_callback_t dequant_worker_fn) {
 
     assert(n_cols  % HMX_FP16_TILE_N_COLS == 0);
     assert(k_block % HMX_FP16_TILE_N_COLS == 0);
 
     size_t n_col_tiles = n_cols / HMX_FP16_TILE_N_COLS;
-    size_t n_k_tiles   = k_block / HMX_FP16_TILE_N_COLS;
     size_t n_tot_tiles = n_col_tiles * n_k_tiles;
 
     size_t n_tiles_per_task = hmx_ceil_div(n_tot_tiles, ctx->n_threads);
@@ -706,27 +707,9 @@ static void dequantize_x4x2_weight_chunk_to_fp16_tiles(
     state.row_stride       = row_stride;
     state.weight_type      = weight_type;
     state.n_k_tiles        = n_k_tiles;
-    state.n_k_tiles_div    = init_fastdiv_values(n_k_tiles);
+    state.n_k_tiles_div    = n_k_tiles_div;
 
-    switch (weight_type) {
-        case HTP_TYPE_Q4_0:
-            worker_pool_run_func(ctx->worker_pool, dequantize_x4x2_worker_loop_q4_0, &state, ctx->n_threads);
-            break;
-        case HTP_TYPE_IQ4_NL:
-            worker_pool_run_func(ctx->worker_pool, dequantize_x4x2_worker_loop_iq4_nl, &state, ctx->n_threads);
-            break;
-        case HTP_TYPE_Q4_1:
-            worker_pool_run_func(ctx->worker_pool, dequantize_x4x2_worker_loop_q4_1, &state, ctx->n_threads);
-            break;
-        case HTP_TYPE_MXFP4:
-            worker_pool_run_func(ctx->worker_pool, dequantize_x4x2_worker_loop_mxfp4, &state, ctx->n_threads);
-            break;
-        case HTP_TYPE_Q8_0:
-            worker_pool_run_func(ctx->worker_pool, dequantize_x4x2_worker_loop_q8_0, &state, ctx->n_threads);
-            break;
-        default:
-            assert(false);
-    }
+    worker_pool_run_func(ctx->worker_pool, dequant_worker_fn, &state, ctx->n_threads);
 }
 
 // --- End x4x2 dequantizers ---
@@ -1023,6 +1006,20 @@ int hmx_matmul_q_f32(struct htp_context *ctx, float *restrict dst, const float *
         return -1;
     }
 
+    worker_callback_t dequant_worker_fn = NULL;
+    switch (weight_type) {
+        case HTP_TYPE_Q4_0:   dequant_worker_fn = dequantize_x4x2_worker_loop_q4_0; break;
+        case HTP_TYPE_IQ4_NL: dequant_worker_fn = dequantize_x4x2_worker_loop_iq4_nl; break;
+        case HTP_TYPE_Q4_1:   dequant_worker_fn = dequantize_x4x2_worker_loop_q4_1; break;
+        case HTP_TYPE_MXFP4:  dequant_worker_fn = dequantize_x4x2_worker_loop_mxfp4; break;
+        case HTP_TYPE_Q8_0:   dequant_worker_fn = dequantize_x4x2_worker_loop_q8_0; break;
+        default:
+            return -1;
+    }
+
+    const int n_k_tiles = k / HMX_FP16_TILE_N_COLS;
+    const struct fastdiv_values n_k_tiles_div = init_fastdiv_values(n_k_tiles);
+
     // --- Dynamic VTCM layout ---
     const size_t vec_dot_size = k * sizeof(__fp16);
     const size_t vtcm_budget  = ctx->vtcm_size;
@@ -1115,7 +1112,7 @@ int hmx_matmul_q_f32(struct htp_context *ctx, float *restrict dst, const float *
         {
             // B0: wait for DMA, dequant weight chunk 0
             dma_queue_pop(ctx->dma[0]);
-            dequantize_x4x2_weight_chunk_to_fp16_tiles(ctx, vtcm_weight_bufs[0], vtcm_qweight, n_cols_A0, k, row_stride, weight_type);
+            dequantize_x4x2_weight_chunk_to_fp16_tiles(ctx, vtcm_weight_bufs[0], vtcm_qweight, n_cols_A0, k, row_stride, weight_type, n_k_tiles, n_k_tiles_div, dequant_worker_fn);
 
             // A1: issue DMA for weight chunk 1
             const size_t n_cols_A1 = hex_smin(n - 1 * n_chunk_n_cols, n_chunk_n_cols);
@@ -1134,7 +1131,7 @@ int hmx_matmul_q_f32(struct htp_context *ctx, float *restrict dst, const float *
             // B1: DMA pop + dequant (runs in parallel with C0 on HMX worker)
             if (1 < n_chunk_cnt) {
                 dma_queue_pop(ctx->dma[0]);
-                dequantize_x4x2_weight_chunk_to_fp16_tiles(ctx, vtcm_weight_bufs[1], vtcm_qweight, n_cols_A1, k, row_stride, weight_type);
+                dequantize_x4x2_weight_chunk_to_fp16_tiles(ctx, vtcm_weight_bufs[1], vtcm_qweight, n_cols_A1, k, row_stride, weight_type, n_k_tiles, n_k_tiles_div, dequant_worker_fn);
             }
         }
 
@@ -1176,7 +1173,7 @@ int hmx_matmul_q_f32(struct htp_context *ctx, float *restrict dst, const float *
             // B_{i+2}: DMA pop + dequant (multi-thread HVX, parallel with C_{i+1})
             if (i + 2 < n_chunk_cnt) {
                 dma_queue_pop(ctx->dma[0]);
-                dequantize_x4x2_weight_chunk_to_fp16_tiles(ctx, vtcm_weight_bufs[(i + 2) % 2], vtcm_qweight, n_cols_p2, k, row_stride, weight_type);
+                dequantize_x4x2_weight_chunk_to_fp16_tiles(ctx, vtcm_weight_bufs[(i + 2) % 2], vtcm_qweight, n_cols_p2, k, row_stride, weight_type, n_k_tiles, n_k_tiles_div, dequant_worker_fn);
             }
         }
     }
