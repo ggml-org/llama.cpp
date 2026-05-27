@@ -5841,8 +5841,12 @@ static vk_device ggml_vk_get_device(size_t idx) {
 
         ggml_vk_load_shaders(device);
 
-        // Only use transfer queue on AMD non-GCN, when the graphics queue is not enabled
-        const bool prefers_transfer_queue = device->vendor_id == VK_VENDOR_ID_AMD && device->architecture != AMD_GCN && !allow_graphics_queue;
+        // Prefer a dedicated transfer queue on AMD dGPUs (non-GCN) when graphics queue use is disabled.
+        const bool prefers_transfer_queue =
+            device->vendor_id == VK_VENDOR_ID_AMD &&
+            device->architecture != AMD_GCN &&
+            !device->uma &&
+            !allow_graphics_queue;
 
         if (!device->single_queue) {
             const uint32_t transfer_queue_index = compute_queue_family_index == transfer_queue_family_index ? 1 : 0;
