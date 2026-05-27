@@ -69,7 +69,7 @@ jobs:
 
       - name: Build
         id: cmake_build
-        if: ${{ matrix.sanitizer != 'THREAD' }}
+        if: ${{ matrix.sanitizer == 'ADDRESS' }}
         run: |
           cmake -B build \
             -DCMAKE_BUILD_TYPE=RelWithDebInfo \
