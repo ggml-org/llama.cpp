@@ -74,7 +74,7 @@ static inline float op_log(float x) {
 }
 
 static inline float op_expm1(float x) {
-    return expf(x) - 1.0f;
+    return expm1f(x);
 }
 
 static inline float op_softplus(float x) {
