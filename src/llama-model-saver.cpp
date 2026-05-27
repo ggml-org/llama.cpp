@@ -228,7 +228,7 @@ void llama_model_saver::add_kv_from_model() {
     add_kv(LLM_KV_EXPERTS_PER_GROUP,                 hparams.n_group_experts);
     add_kv(LLM_KV_MOE_EVERY_N_LAYERS,                hparams.moe_every_n_layers);
     add_kv(LLM_KV_NEXTN_PREDICT_LAYERS,              hparams.nextn_predict_layers);
-    add_kv(LLM_KV_NUM_DEEPSTACK_LAYERS,              hparams.deepstack_layers_arr);
+    add_kv(LLM_KV_DEEPSTACK_LAYERS,                  hparams.deepstack_layers_arr);
     add_kv(LLM_KV_POOLING_TYPE,                      uint32_t(hparams.pooling_type));
     add_kv(LLM_KV_LOGIT_SCALE,                       hparams.f_logit_scale);
     add_kv(LLM_KV_DECODER_START_TOKEN_ID,            hparams.dec_start_token_id);
