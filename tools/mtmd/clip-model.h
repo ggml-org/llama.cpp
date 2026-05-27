@@ -105,15 +105,6 @@ struct clip_hparams {
     std::vector<int32_t> proj_spatial_offsets; // Ordered list of per-projector spatial offsets
     int32_t downsample_query_side;
     int32_t downsample_window_side;
-    // Multiplier applied to the base stream (stream targeting the lowest
-    // llm_layer) before concatenation into the mmproj output.  Needed
-    // because the shared Granite LLM graph scales t_inp_embd by
-    // f_embedding_scale (12.0) for ALL positions, while Granite Vision
-    // 4.1's HF forward zeroes inputs_embeds at image positions BEFORE
-    // the multiplier -- so the base stream has to enter the LLM graph
-    // pre-divided.  Defaults to 1.0 if the mmproj was produced before
-    // this KV was added.
-    float base_stream_scale = 1.0f;
 
     // audio
     int32_t n_mel_bins = 0; // whisper preprocessor

@@ -251,8 +251,7 @@ ggml_tensor * clip_graph_granite4_vision::build_newline_row(ggml_context * ctx0)
 
     // Build newline_row[k*projection_dim + d] = nl[d] * (k == 0 ? base : 1.0)
     ggml_tensor * nl = model.image_newline; // (projection_dim,)
-    ggml_tensor * nl_first = ggml_scale(ctx0, nl, model.hparams.base_stream_scale);
-    ggml_tensor * nl_first_2d = ggml_reshape_2d(ctx0, nl_first, projection_dim, 1);
+    ggml_tensor * nl_first_2d = ggml_reshape_2d(ctx0, nl, projection_dim, 1);
     ggml_tensor * nl_row_2d;
     if (K == 1) {
         nl_row_2d = nl_first_2d;
@@ -349,15 +348,10 @@ ggml_cgraph * clip_graph_granite4_vision::build() {
             qformer_eps);
     }
 
-    // Concatenate the projector activations in the correct order, and apply the
-    // base stream multiplier to invert the embedding multipler that gets
-    // applied on the LLM side.
+    // Concatenate the projector activations in the correct order
     ggml_tensor * mmproj = nullptr;
     for (int k = 0; k < projector_count; ++k) {
         ggml_tensor * s = ggml_cont(ctx0, streams[k]);
-        if (k == 0 && hparams.base_stream_scale != 1.0f) {
-            s = ggml_scale_inplace(ctx0, s, hparams.base_stream_scale);
-        }
         mmproj = (k == 0) ? s : ggml_concat(ctx0, mmproj, s, 0);
     }
     // --- Stage 1d: Append newline tokens if append_token is set ---

@@ -433,12 +433,6 @@ class Granite4VisionMmprojModel(MmprojModel):
         # Set the spatial offests per projector
         self.gguf_writer.add_vision_spatial_offsets(self._spatial_offsets)
 
-        # The granite LLM will scale the first embedding input by
-        # embedding_multiplier, so the mmproj needs to invert that scale for its
-        # output so that the resulting injection works as expected.
-        if (embed_mult := self.global_config.get("text_config", {}).get("embedding_multiplier")) is not None:
-            self.gguf_writer.add_embedding_scale(embed_mult)
-
         # Add flattened image grind pinpoints (resolution candidates internally)
         if pinpoints := self.global_config.get("image_grid_pinpoints"):
             # Flatten with h, w -> w, h inversion

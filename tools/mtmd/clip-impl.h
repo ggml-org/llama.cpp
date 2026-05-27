@@ -73,8 +73,6 @@
 #define KEY_A_PROJ_WINDOW_SIZE     "clip.audio.projector.window_size"
 #define KEY_A_PROJ_DOWNSAMPLE_RATE "clip.audio.projector.downsample_rate"
 #define KEY_A_PROJ_HEAD_COUNT      "clip.audio.projector.head_count"
-// shared with LLM (align to llama-arch.* w/ arch=clip)
-#define KEY_LLM_KV_EMBEDDING_SCALE "clip.embedding_scale"
 
 //
 // tensor name constants
