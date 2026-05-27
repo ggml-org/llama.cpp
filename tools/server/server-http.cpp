@@ -5,9 +5,9 @@
 
 #include <cpp-httplib/httplib.h>
 
-#include <cstdlib>
 #include <functional>
 #include <future>
+#include <memory>
 #include <string>
 #include <thread>
 
@@ -21,7 +21,7 @@ public:
 };
 
 server_http_context::server_http_context()
-    : pimpl(std::make_unique<server_http_context::Impl>())
+    : pimpl(std::make_unique<Impl>())
 {}
 
 server_http_context::~server_http_context() = default;
@@ -96,13 +96,13 @@ bool server_http_context::init(const common_params & params) {
 #ifdef CPPHTTPLIB_OPENSSL_SUPPORT
     if (!params.ssl_file_key.empty() && !params.ssl_file_cert.empty()) {
         SRV_INF("running with SSL: key = %s, cert = %s\n", params.ssl_file_key.c_str(), params.ssl_file_cert.c_str());
-        srv.reset(
-            new httplib::SSLServer(params.ssl_file_cert.c_str(), params.ssl_file_key.c_str())
+        srv = std::make_unique<httplib::SSLServer>(
+            params.ssl_file_cert.c_str(), params.ssl_file_key.c_str()
         );
         is_ssl = true;
     } else {
         SRV_INF("%s", "running without SSL\n");
-        srv.reset(new httplib::Server());
+        srv = std::make_unique<httplib::Server>();
     }
 #else
     if (params.ssl_file_key != "" && params.ssl_file_cert != "") {
