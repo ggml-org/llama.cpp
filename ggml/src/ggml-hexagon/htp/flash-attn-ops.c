@@ -446,7 +446,7 @@ static void flash_attn_ext_f16_thread(unsigned int nth, unsigned int ith, void *
             // Process in sub-blocks of 32 (VLEN_FP32)
             HVX_Vector sb_scores[FLASH_ATTN_BLOCK_SIZE / VLEN_FP32];
             HVX_Vector v_max = hvx_vec_splat_f32(-INFINITY);
-            for (uint32_t iv = 0; ic + VLEN_FP32 <= current_block_size; ic += VLEN_FP32, ++iv) {
+            for (uint32_t iv = 0; ic < current_block_size; ic += VLEN_FP32, ++iv) {
                 // 1. Compute scores
                 HVX_Vector scores = hvx_dot_f16_f16_aa_rx32(q_ptr_vtcm, k_base + ic * factx->size_k_row_padded, factx->size_k_row_padded, DK, factx->scale);
 
@@ -479,6 +479,13 @@ static void flash_attn_ext_f16_thread(unsigned int nth, unsigned int ith, void *
                     #endif
                 }
 
+                // Mask out invalid lanes for leftover handling
+                uint32_t valid_lanes = current_block_size - ic;
+                if (valid_lanes < VLEN_FP32) {
+                    HVX_VectorPred valid_pred = Q6_Q_vsetq_R(valid_lanes * 4); // 4 bytes per fp32 lane
+                    scores = Q6_V_vmux_QVV(valid_pred, scores, hvx_vec_splat_f32(-INFINITY));
+                }
+
                 sb_scores[iv] = scores;
                 v_max = hvx_vec_reduce_max2_f32(scores, v_max); // All lanes have block max
             }
@@ -493,7 +500,7 @@ static void flash_attn_ext_f16_thread(unsigned int nth, unsigned int ith, void *
                 hvx_scale_vec_f32_aa((uint8_t *) VKQ32, (const uint8_t *) VKQ32, DV, ms_vec);
 
                 HVX_Vector p_sum_vec = hvx_vec_splat_f32(0.0f);
-                for (uint32_t ic2 = 0, iv = 0; ic2 + VLEN_FP32 <= current_block_size; ic2 += VLEN_FP32, ++iv) {
+                for (uint32_t ic2 = 0, iv = 0; ic2 < current_block_size; ic2 += VLEN_FP32, ++iv) {
                     HVX_Vector scores = sb_scores[iv];
                     HVX_Vector scores_shifted = HVX_OP_SUB_F32(scores, M_vec);
                     HVX_Vector P = hvx_vec_exp_f32(scores_shifted);
@@ -508,67 +515,33 @@ static void flash_attn_ext_f16_thread(unsigned int nth, unsigned int ith, void *
                     hvx_vec_store_a(P_arr, 128, P);
 
                     for (uint32_t j = 0; j < VLEN_FP32; j += 2) {
+                        const uint32_t cur_ic = ic2 + j;
+                        if (cur_ic >= current_block_size) {
+                            break;
+                        }
+
+                        if (cur_ic + 1 == current_block_size) {
+                            // Odd leftover, process single row
+                            if (P_arr[j] != 0.0f) {
+                                const uint8_t * v_ptr = v_base + cur_ic * factx->size_v_row_padded;
+                                hvx_mad_f32_f16_aa(VKQ32, v_ptr, (p_arr + j), DV);
+                            }
+                            break;
+                        }
+
                         // Avoid NaN * 0.0 = NaN for uninitialized V cache rows.
                         // Check the f32 values to safely avoid strict aliasing violations.
                         if (P_arr[j] == 0.0f && P_arr[j + 1] == 0.0f) {
                             continue;
                         }
 
-                        const uint32_t  cur_ic = ic2 + j;
-                        const uint8_t * v_ptr  = v_base + cur_ic * factx->size_v_row_padded;
+                        const uint8_t * v_ptr = v_base + cur_ic * factx->size_v_row_padded;
                         hvx_mad_f32_f16_aa_rx2(VKQ32, v_ptr, v_ptr + factx->size_v_row_padded, (p_arr + j), (p_arr + j + 1), DV);
                     }
                 }
 
                 p_sum_vec = hvx_vec_reduce_sum_f32(p_sum_vec);
                 S_vec = HVX_OP_ADD_F32(HVX_OP_MUL_F32(S_vec, ms_vec), p_sum_vec);
-            }
-
-            if (ic < current_block_size) {
-                // Sync scalars for leftover/next block if needed
-                float M = hvx_vec_get_f32(M_vec);
-                float S = hvx_vec_get_f32(S_vec);
-
-                // Leftover
-                for (; ic < current_block_size; ++ic) {
-                    float s_val;
-                    const uint8_t * k_ptr = k_base + ic * factx->size_k_row_padded;
-                    hvx_dot_f16_f16_aa(&s_val, q_ptr_vtcm, k_ptr, DK, factx->scale);
-                    if (factx->logit_softcap != 0.0f) {
-                        s_val = factx->logit_softcap * tanhf(s_val);
-                    }
-
-                    if (mask) {
-                        const float m_val = m_base[ic];
-                        s_val += slope * m_val;
-                    }
-
-                    const float Mold = M;
-                    __fp16 vs = 1.0f;
-
-                    if (s_val > M) {
-                        M = s_val;
-                        HVX_Vector diff_vec = hvx_vec_splat_f32(Mold - M);
-                        HVX_Vector ms_vec   = hvx_vec_exp_f32(diff_vec);
-                        hvx_scale_vec_f32_aa((uint8_t *) VKQ32, (const uint8_t *) VKQ32, DV, ms_vec);
-
-                        float ms = hvx_vec_get_f32(ms_vec);
-                        S = S * ms + vs;
-                    } else {
-                        HVX_Vector diff_vec = hvx_vec_splat_f32(s_val - M);
-                        vs = hvx_vec_get_f32(hvx_vec_exp_f32(diff_vec));
-                        S += vs;
-                    }
-
-                    const uint8_t * v_ptr = v_base + ic * factx->size_v_row_padded;
-
-                    if (vs != 0.0f) {
-                        hvx_mad_f32_f16_aa(VKQ32, v_ptr, &vs, DV);
-                    }
-                }
-
-                M_vec = hvx_vec_splat_f32(M);
-                S_vec = hvx_vec_splat_f32(S);
             }
 
             // Issue DMA for next+1 block (if exists)
