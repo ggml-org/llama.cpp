@@ -148,10 +148,6 @@ jobs:
           evict-old-files: 1d
           save: true
 
-      - name: Install Ninja
-        run: |
-          choco install ninja
-
       - name: Build
         id: cmake_build
         shell: cmd
@@ -161,7 +157,8 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release ^
             -DLLAMA_BUILD_BORINGSSL=ON ^
             -DGGML_SCHED_NO_REALLOC=ON
-          cmake --build build --config Release -j ${env:NUMBER_OF_PROCESSORS} --target llama-server
+          set /A NINJA_JOBS=%NUMBER_OF_PROCESSORS%-1
+          cmake --build build --config Release -j %NINJA_JOBS% --target llama-server
 
       - name: Python setup
         id: setup_python
