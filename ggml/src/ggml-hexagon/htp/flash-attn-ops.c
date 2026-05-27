@@ -460,15 +460,23 @@ static void flash_attn_ext_f16_thread(unsigned int nth, unsigned int ith, void *
                 if (mask) {
                     const __fp16 * mp = m_base + ic;
                     HVX_Vector m_vals_f16 = *(const HVX_UVector *) mp;
-#if __HVX_ARCH__ >= 79
-                    HVX_VectorPair m_vals_f32_pair = Q6_Wsf_vmpy_VhfVhf(Q6_Vh_vshuff_Vh(m_vals_f16), slope_vec);
-                    HVX_Vector add_val = Q6_V_lo_W(m_vals_f32_pair);
-                    scores = Q6_Vsf_vadd_VsfVsf(add_val, scores);
-#else
-                    HVX_VectorPair m_vals_f32_pair = Q6_Wqf32_vmpy_VhfVhf(Q6_Vh_vshuff_Vh(m_vals_f16), slope_vec);
-                    HVX_Vector add_val = Q6_V_lo_W(m_vals_f32_pair);
-                    scores = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_Vqf32Vsf(add_val, scores));
-#endif
+
+                    // Multiplying -INFINITY (0xFC00) by a slope in VhfVhf instructions can incorrectly produce NaN on v79.
+                    // Clamp -INFINITY to the max negative fp16 finite value (-65504.0f).
+                    HVX_Vector vinf = Q6_Vh_vsplat_R(0xFC00);
+                    HVX_Vector vmin = Q6_Vh_vsplat_R(0xFBFF);
+                    HVX_VectorPred is_inf = Q6_Q_vcmp_eq_VhVh(m_vals_f16, vinf);
+                    m_vals_f16 = Q6_V_vmux_QVV(is_inf, vmin, m_vals_f16);
+
+                    #if __HVX_ARCH__ >= 79
+                        HVX_VectorPair m_vals_f32_pair = Q6_Wsf_vmpy_VhfVhf(Q6_Vh_vshuff_Vh(m_vals_f16), slope_vec);
+                        HVX_Vector add_val = Q6_V_lo_W(m_vals_f32_pair);
+                        scores = Q6_Vsf_vadd_VsfVsf(add_val, scores);
+                    #else
+                        HVX_VectorPair m_vals_f32_pair = Q6_Wqf32_vmpy_VhfVhf(Q6_Vh_vshuff_Vh(m_vals_f16), slope_vec);
+                        HVX_Vector add_val = Q6_V_lo_W(m_vals_f32_pair);
+                        scores = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_Vqf32Vsf(add_val, scores));
+                    #endif
                 }
 
                 sb_scores[iv] = scores;
@@ -496,7 +504,16 @@ static void flash_attn_ext_f16_thread(unsigned int nth, unsigned int ith, void *
                     __fp16 __attribute__((aligned(VLEN))) p_arr[VLEN_FP16];
                     hvx_vec_f32_to_f16_a(p_arr, P, hvx_vec_splat_f32(0));
 
+                    float __attribute__((aligned(128))) P_arr[VLEN_FP32];
+                    hvx_vec_store_a(P_arr, 128, P);
+
                     for (uint32_t j = 0; j < VLEN_FP32; j += 2) {
+                        // Avoid NaN * 0.0 = NaN for uninitialized V cache rows.
+                        // Check the f32 values to safely avoid strict aliasing violations.
+                        if (P_arr[j] == 0.0f && P_arr[j + 1] == 0.0f) {
+                            continue;
+                        }
+
                         const uint32_t  cur_ic = ic2 + j;
                         const uint8_t * v_ptr  = v_base + cur_ic * factx->size_v_row_padded;
                         hvx_mad_f32_f16_aa_rx2(VKQ32, v_ptr, v_ptr + factx->size_v_row_padded, (p_arr + j), (p_arr + j + 1), DV);
@@ -545,7 +562,9 @@ static void flash_attn_ext_f16_thread(unsigned int nth, unsigned int ith, void *
 
                     const uint8_t * v_ptr = v_base + ic * factx->size_v_row_padded;
 
-                    hvx_mad_f32_f16_aa(VKQ32, v_ptr, &vs, DV);
+                    if (vs != 0.0f) {
+                        hvx_mad_f32_f16_aa(VKQ32, v_ptr, &vs, DV);
+                    }
                 }
 
                 M_vec = hvx_vec_splat_f32(M);
