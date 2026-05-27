@@ -131,7 +131,7 @@ jobs:
           SLOW_TESTS=1 pytest -v -x
 
   server-windows:
-    runs-on: windows-2022
+    runs-on: windows-2025
 
     steps:
       - name: Clone
