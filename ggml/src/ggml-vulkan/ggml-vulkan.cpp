@@ -5520,7 +5520,7 @@ static vk_device ggml_vk_get_device(size_t idx) {
 
         vkGetPhysicalDeviceFeatures2(device->physical_device, &device_features2);
 
-        device->has_internally_synchronized_queues = (internally_sync_support && sync_query_features.internallySynchronizedQueues == VK_TRUE);
+        device->has_internally_synchronized_queues = sync_enable_features.internallySynchronizedQueues;
 
         device->pipeline_executable_properties_support = pipeline_executable_properties_support;
 
