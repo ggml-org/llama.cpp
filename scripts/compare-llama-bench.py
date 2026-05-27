@@ -351,7 +351,7 @@ class LlamaBenchDataSQLite3(LlamaBenchData):
 
             if self.build_len_min != self.build_len_max:
                 logger.warning("Data contains commit hashes of differing lengths. It's possible that the wrong commits will be compared. "
-                               "Try purging the the database of old commits.")
+                               "Try purging the database of old commits.")
                 self.cursor.execute(f"UPDATE {self.table_name} SET build_commit = SUBSTRING(build_commit, 1, {self.build_len_min});")
 
             builds = self.cursor.execute(f"SELECT DISTINCT build_commit FROM {self.table_name};").fetchall()
