@@ -651,7 +651,6 @@ struct vk_device_struct {
     bool support_async;
     bool async_use_transfer_queue;
     bool has_internally_synchronized_queues = false;
-    VkPhysicalDeviceInternallySynchronizedQueuesFeaturesKHR sync_query_features {};
     uint32_t subgroup_size;
     uint32_t subgroup_size_log2;
     uint32_t shader_core_count;
@@ -5199,19 +5198,7 @@ static vk_device ggml_vk_get_device(size_t idx) {
 #endif
             } else if (strcmp(VK_KHR_INTERNALLY_SYNCHRONIZED_QUEUES_EXTENSION_NAME, properties.extensionName) == 0) {
                 internally_sync_support = true;
-                GGML_LOG_INFO("ggml_vulkan: internally synchronized queues supported");
             }
-        }
-        if (internally_sync_support) {
-            device->sync_query_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_INTERNALLY_SYNCHRONIZED_QUEUES_FEATURES_KHR;
-            device->sync_query_features.pNext = nullptr;
-
-            VkPhysicalDeviceFeatures2 device_features2{};
-            device_features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
-            device_features2.pNext = &device->sync_query_features;
-            vkGetPhysicalDeviceFeatures2((VkPhysicalDevice)device->physical_device, &device_features2);
-
-            device->has_internally_synchronized_queues = (device->sync_query_features.internallySynchronizedQueues == VK_TRUE);
         }
 
         vk::PhysicalDeviceProperties2 props2;
@@ -5417,13 +5404,25 @@ static vk_device ggml_vk_get_device(size_t idx) {
         vk12_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
         vk11_features.pNext = &vk12_features;
 
+        VkPhysicalDeviceInternallySynchronizedQueuesFeaturesKHR sync_query_features{};
+        sync_query_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_INTERNALLY_SYNCHRONIZED_QUEUES_FEATURES_KHR;
+        sync_query_features.pNext = nullptr;
+        sync_query_features.internallySynchronizedQueues = VK_FALSE;
+
+        if (internally_sync_support) {
+            vk12_features.pNext = &sync_query_features;
+        }
+
         last_struct = (VkBaseOutStructure *)&vk12_features;
 
+        VkPhysicalDeviceInternallySynchronizedQueuesFeaturesKHR sync_enable_features{};
+        sync_enable_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_INTERNALLY_SYNCHRONIZED_QUEUES_FEATURES_KHR;
+        sync_enable_features.pNext = nullptr;
+        sync_enable_features.internallySynchronizedQueues = VK_TRUE;
+
         if (device->has_internally_synchronized_queues) {
-            // Reset pNext after the earlier feature probe before reusing this struct in the create chain.
-            device->sync_query_features.pNext = nullptr;
-            last_struct->pNext = (VkBaseOutStructure *)&device->sync_query_features;
-            last_struct = (VkBaseOutStructure *)&device->sync_query_features;
+            last_struct->pNext = (VkBaseOutStructure *)&sync_enable_features;
+            last_struct = (VkBaseOutStructure *)&sync_enable_features;
         }
 
         VkPhysicalDevicePipelineRobustnessFeaturesEXT pl_robustness_features;
@@ -5531,6 +5530,8 @@ static vk_device ggml_vk_get_device(size_t idx) {
 #endif
 
         vkGetPhysicalDeviceFeatures2(device->physical_device, &device_features2);
+
+        device->has_internally_synchronized_queues = (internally_sync_support && sync_query_features.internallySynchronizedQueues == VK_TRUE);
 
         device->pipeline_executable_properties_support = pipeline_executable_properties_support;
 
