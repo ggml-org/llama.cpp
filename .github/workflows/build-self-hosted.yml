@@ -55,7 +55,7 @@ env:
   LLAMA_LOG_TIMESTAMPS: 1
 
 jobs:
-  nvidia-cuda:
+  gpu-cuda:
     runs-on: [self-hosted, Linux, NVIDIA]
 
     steps:
@@ -69,7 +69,7 @@ jobs:
           nvidia-smi
           GG_BUILD_CUDA=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
 
-  nvidia-vulkan-cm:
+  gpu-vulkan-nvidia-cm:
     runs-on: [self-hosted, Linux, NVIDIA]
 
     steps:
@@ -83,7 +83,7 @@ jobs:
           vulkaninfo --summary
           GG_BUILD_VULKAN=1 GGML_VK_DISABLE_COOPMAT2=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
 
-  nvidia-vulkan-cm2:
+  gpu-vulkan-nvidia-cm2:
     runs-on: [self-hosted, Linux, NVIDIA, COOPMAT2]
 
     steps:
@@ -97,7 +97,7 @@ jobs:
           vulkaninfo --summary
           GG_BUILD_VULKAN=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
 
-  nvidia-webgpu:
+  gpu-webgpu-nvidia:
     runs-on: [self-hosted, Linux, NVIDIA, X64]
 
     steps:
@@ -170,7 +170,7 @@ jobs:
   #         amd-smi static
   #         GG_BUILD_ROCM=1 GG_BUILD_AMDGPU_TARGETS="gfx1101" bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
 
-  mac-metal:
+  gpu-metal:
     runs-on: [self-hosted, macOS, ARM64]
 
     steps:
@@ -183,7 +183,7 @@ jobs:
         run: |
           GG_BUILD_METAL=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
 
-  mac-webgpu:
+  gpu-webgpu-apple:
     runs-on: [self-hosted, macOS, ARM64]
 
     steps:
@@ -210,7 +210,7 @@ jobs:
           GG_BUILD_WEBGPU=1 GG_BUILD_WEBGPU_DAWN_PREFIX="$GITHUB_WORKSPACE/dawn" \
             bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
 
-  mac-vulkan:
+  gpu-vulkan:
     runs-on: [self-hosted, macOS, ARM64]
 
     steps:
@@ -224,7 +224,7 @@ jobs:
           vulkaninfo --summary
           GG_BUILD_VULKAN=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
 
-  linux-intel-vulkan:
+  gpu-vulkan-intel-linux:
     runs-on: [self-hosted, Linux, Intel]
 
     steps:
@@ -240,7 +240,7 @@ jobs:
           vulkaninfo --summary
           GG_BUILD_VULKAN=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
 
-  win-intel-vulkan:
+  gpu-vulkan-intel-windows:
     runs-on: [self-hosted, Windows, X64, Intel]
 
     steps:
@@ -261,7 +261,7 @@ jobs:
           # a valid python environment for testing
           LLAMA_FATAL_WARNINGS=OFF GG_BUILD_NINJA=1 GG_BUILD_VULKAN=1 GG_BUILD_LOW_PERF=1 ./ci/run.sh ./results/llama.cpp ./mnt/llama.cpp
 
-  intel-openvino-gpu-low-perf:
+  cpu-openvino-low-perf:
     runs-on: [self-hosted, Linux, Intel, OpenVINO]
 
     concurrency:
@@ -297,7 +297,7 @@ jobs:
           source ./openvino_toolkit/setupvars.sh
           GG_BUILD_OPENVINO=1 GGML_OPENVINO_DEVICE=GPU GG_BUILD_LOW_PERF=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
 
-  cpu-low-perf:
+  cpu-any-low-perf:
     runs-on: [self-hosted, CPU]
 
     steps:
@@ -310,7 +310,7 @@ jobs:
         run: |
           LLAMA_ARG_THREADS=$(nproc) GG_BUILD_LOW_PERF=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
 
-  cpu-high-perf:
+  cpu-any-high-perf:
     runs-on: [self-hosted, CPU]
 
     steps:
@@ -323,7 +323,7 @@ jobs:
         run: |
           LLAMA_ARG_THREADS=$(nproc) GG_BUILD_HIGH_PERF=1 GG_BUILD_NO_SVE=1 GG_BUILD_NO_BF16=1 GG_BUILD_EXTRA_TESTS_0=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
 
-  cpu-high-perf-arm64-graviton4:
+  cpu-arm64-graviton4:
     runs-on: ah-ubuntu_22_04-c8g_8x
 
     steps:
@@ -362,7 +362,7 @@ jobs:
         run: |
           LLAMA_ARG_THREADS=$(nproc) GG_BUILD_NO_BF16=1 GG_BUILD_EXTRA_TESTS_0=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
 
-  cpu-high-perf-arm64-graviton4-kleidiai:
+  cpu-arm64-graviton4-kleidiai:
     runs-on: ah-ubuntu_22_04-c8g_8x
 
     steps:
