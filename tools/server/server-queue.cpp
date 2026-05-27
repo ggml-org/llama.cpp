@@ -377,34 +377,43 @@ bool server_response_reader::has_next() const {
 // note: if one error is received, it will stop further processing and return error result
 server_task_result_ptr server_response_reader::next(const std::function<bool()> & should_stop) {
     while (true) {
-        server_task_result_ptr result = queue_results.recv_with_timeout(id_tasks, polling_interval_seconds);
+        server_task_result_ptr result = next_with_timeout(should_stop, polling_interval_seconds);
         if (result == nullptr) {
-            // timeout, check stop condition
             if (should_stop()) {
-                SRV_WRN("%s", "stopping wait for next result due to should_stop condition (adjust the --timeout argument if needed)\n");
-                SRV_WRN("%s", "ref: https://github.com/ggml-org/llama.cpp/pull/22907\n");
                 return nullptr;
             }
-        } else {
-            if (result->is_error()) {
-                stop(); // cancel remaining tasks
-                SRV_DBG("%s", "received error result, stopping further processing\n");
-                return result;
-            }
-            if (!states.empty()) {
-                // update the generation state if needed
-                const size_t idx = result->index;
-                GGML_ASSERT(idx < states.size());
-                result->update(states[idx]);
-            }
-            if (result->is_stop()) {
-                received_count++;
-            }
-            return result;
+            continue;
         }
+        return result;
     }
 
     // should not reach here
+}
+
+server_task_result_ptr server_response_reader::next_with_timeout(const std::function<bool()> & should_stop, int timeout_seconds) {
+    server_task_result_ptr result = queue_results.recv_with_timeout(id_tasks, timeout_seconds);
+    if (result == nullptr) {
+        if (should_stop()) {
+            SRV_WRN("%s", "stopping wait for next result due to should_stop condition (adjust the --timeout argument if needed)\n");
+            SRV_WRN("%s", "ref: https://github.com/ggml-org/llama.cpp/pull/22907\n");
+        }
+        return nullptr;
+    }
+    if (result->is_error()) {
+        stop(); // cancel remaining tasks
+        SRV_DBG("%s", "received error result, stopping further processing\n");
+        return result;
+    }
+    if (!states.empty()) {
+        // update the generation state if needed
+        const size_t idx = result->index;
+        GGML_ASSERT(idx < states.size());
+        result->update(states[idx]);
+    }
+    if (result->is_stop()) {
+        received_count++;
+    }
+    return result;
 }
 
 server_response_reader::batch_response server_response_reader::wait_for_all(const std::function<bool()> & should_stop) {

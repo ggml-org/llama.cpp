@@ -3693,35 +3693,86 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
     bool stream = json_value(data, "stream", false);
 
     if (!stream) {
-        // non-stream, wait for the results
-        auto all_results = rd.wait_for_all(req.should_stop);
-        if (all_results.is_terminated) {
-            return res; // connection is closed
-        } else if (all_results.error) {
-            res->error(all_results.error->to_json());
-            return res;
-        } else {
-            json arr = json::array();
-            for (auto & res : all_results.results) {
-                GGML_ASSERT(dynamic_cast<server_task_result_cmpl_final*>(res.get()) != nullptr);
-                arr.push_back(res->to_json());
-            }
-            GGML_ASSERT(!arr.empty() && "empty results");
-            if (arr.size() == 1) {
-                // if single request, return single object instead of array
-                res->ok(arr[0]);
-            } else if (res_type == TASK_RESPONSE_TYPE_OAI_CHAT || res_type == TASK_RESPONSE_TYPE_OAI_CMPL) {
-                // if multiple results in OAI format, we need to re-format them
-                json & choices = arr[0]["choices"];
-                for (size_t i = 1; i < arr.size(); i++) {
-                    choices.push_back(std::move(arr[i]["choices"][0]));
+        // Non-streaming responses can spend a long time in prompt processing before
+        // any model result is available. Send a chunked JSON response immediately,
+        // then emit JSON whitespace keepalives until the final JSON object is ready.
+        auto results = std::make_shared<std::vector<server_task_result_ptr>>(rd.id_tasks.size());
+        auto sent_first_byte = std::make_shared<bool>(false);
+
+        res->status = 200;
+        res->content_type = "application/json; charset=utf-8";
+        res->headers["X-Accel-Buffering"] = "no";
+        res->next = [res_this = res.get(), res_type, &req, results, sent_first_byte](std::string & output) -> bool {
+            static constexpr int keepalive_interval_seconds = 1;
+
+            try {
+                if (req.should_stop()) {
+                    return false;
                 }
-                res->ok(arr[0]);
-            } else {
-                // multi-results, non-OAI compat
-                res->ok(arr);
+
+                if (!*sent_first_byte) {
+                    *sent_first_byte = true;
+                    output = " ";
+                    return true;
+                }
+
+                server_response_reader & rd = res_this->rd;
+
+                while (rd.has_next()) {
+                    auto result = rd.next_with_timeout(req.should_stop, keepalive_interval_seconds);
+                    if (result == nullptr) {
+                        if (req.should_stop()) {
+                            return false;
+                        }
+
+                        output = " ";
+                        return true;
+                    }
+
+                    if (result->is_error()) {
+                        output = safe_json_to_str({{ "error", result->to_json() }});
+                        return false;
+                    }
+
+                    const size_t idx = result->index;
+                    GGML_ASSERT(idx < results->size() && "index out of range");
+                    GGML_ASSERT((*results)[idx] == nullptr && "duplicate result received");
+                    (*results)[idx] = std::move(result);
+                }
+
+                json arr = json::array();
+                for (auto & result : *results) {
+                    GGML_ASSERT(result != nullptr);
+                    GGML_ASSERT(dynamic_cast<server_task_result_cmpl_final*>(result.get()) != nullptr);
+                    arr.push_back(result->to_json());
+                }
+
+                GGML_ASSERT(!arr.empty() && "empty results");
+                if (arr.size() == 1) {
+                    // if single request, return single object instead of array
+                    output = safe_json_to_str(arr[0]);
+                } else if (res_type == TASK_RESPONSE_TYPE_OAI_CHAT || res_type == TASK_RESPONSE_TYPE_OAI_CMPL) {
+                    // if multiple results in OAI format, we need to re-format them
+                    json & choices = arr[0]["choices"];
+                    for (size_t i = 1; i < arr.size(); i++) {
+                        choices.push_back(std::move(arr[i]["choices"][0]));
+                    }
+                    output = safe_json_to_str(arr[0]);
+                } else {
+                    // multi-results, non-OAI compat
+                    output = safe_json_to_str(arr);
+                }
+
+                return false;
+            } catch (const std::exception & e) {
+                output = safe_json_to_str({{
+                    "error",
+                    format_error_response(e.what(), ERROR_TYPE_SERVER)
+                }});
+                return false;
             }
-        }
+        };
+    }
     } else {
         // in streaming mode, the first error must be treated as non-stream response
         // this is to match the OAI API behavior
