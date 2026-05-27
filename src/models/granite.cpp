@@ -7,8 +7,8 @@ void llama_model_granite::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_EMBEDDING_SCALE,             hparams.f_embedding_scale, false);
     ml.get_key(LLM_KV_ATTENTION_SCALE,             hparams.f_attention_scale, false);
 
-    // Granite4 Vision uses array deepstack_layers
-    ml.get_arr(LLM_KV_DEEPSTACK_LAYERS, hparams.deepstack_layers_arr, false);
+    // Granite4 Vision uses array deepstack_mapping
+    ml.get_arr(LLM_KV_DEEPSTACK_MAPPING, hparams.deepstack_mapping_arr, false);
 
     // Granite uses rope_finetuned as a switch for rope, so default to true
     bool rope_finetuned = true;
@@ -129,7 +129,7 @@ llama_model_granite::graph::graph(
         // pure-text requests the input embedding carries zeros at those
         // offsets (see build_inp_embd's zero-pad of the token branch), so
         // the add is a no-op.
-        const auto & deepstack_emb_idx = hparams.deepstack_layers_arr[il];
+        const auto & deepstack_emb_idx = hparams.deepstack_mapping_arr[il];
         if (il > 0 && deepstack_emb_idx >= 0) {
             // Note: il == 0 uses the stream at offset 0, which is already
             // inpL (= base == stream at llm_layer 0 for granite vision 4.1).

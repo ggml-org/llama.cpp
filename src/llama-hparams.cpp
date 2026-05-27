@@ -76,7 +76,7 @@ uint32_t llama_hparams::n_embd_inp() const {
 
     // Count the unique deepstack input indices
     std::unordered_set<uint32_t> unique_deepstack_idxs;
-    for (const auto val : deepstack_layers_arr) {
+    for (const auto val : deepstack_mapping_arr) {
         if (val >= 0) {
             unique_deepstack_idxs.insert(val);
         }

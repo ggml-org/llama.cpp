@@ -50,14 +50,14 @@ class GraniteModel(LlamaModel):
         # If being used as the base for Granite4 Vision, add deepstack_layer_arr
         if self.hparams.get("spatial_target_layers") or self.hparams.get("deepstack_layer_map"):
             normalized_projector_map = Granite4VisionMmprojModel.get_normalized_projector_map(self.hparams)
-            deepstack_layer_arr = [-1 for _ in range(self.block_count)] # Populate with -1 sentinels
+            deepstack_mapping_arr = [-1 for _ in range(self.block_count)] # Populate with -1 sentinels
             for proj_idx, (_, llm_layer, _, _) in enumerate(normalized_projector_map):
                 # Skip the first projector which is handled as the base embedding
                 # stream like normal
                 if proj_idx == 0:
                     continue
-                deepstack_layer_arr[llm_layer] = proj_idx
-            self.gguf_writer.add_deepstack_layers(deepstack_layer_arr)
+                deepstack_mapping_arr[llm_layer] = proj_idx
+            self.gguf_writer.add_deepstack_mapping(deepstack_mapping_arr)
 
     @classmethod
     def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:

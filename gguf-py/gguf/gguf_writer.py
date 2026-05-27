@@ -959,9 +959,9 @@ class GGUFWriter:
         """Add scalar deepstack layer count (qwen3vl format)"""
         self.add_uint32(Keys.LLM.NUM_DEEPSTACK_LAYERS.format(arch=self.arch), count)
 
-    def add_deepstack_layers(self, layers: Sequence[int]) -> None:
+    def add_deepstack_mapping(self, layers: Sequence[int]) -> None:
         """Add per-layer deepstack projector indices (Granite4 Vision format)"""
-        self.add_array(Keys.LLM.DEEPSTACK_LAYERS.format(arch=self.arch), list(layers))
+        self.add_array(Keys.LLM.DEEPSTACK_MAPPING.format(arch=self.arch), list(layers))
 
     def add_rope_dimension_count(self, count: int) -> None:
         self.add_uint32(Keys.Rope.DIMENSION_COUNT.format(arch=self.arch), count)

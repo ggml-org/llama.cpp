@@ -1062,9 +1062,9 @@ void llama_model_base::load_hparams(llama_model_loader & ml) {
     ml.get_key_or_arr(LLM_KV_FEED_FORWARD_LENGTH,  hparams.n_ff_arr,   hparams.n_layer, false);
     ml.get_key_or_arr(LLM_KV_ATTENTION_HEAD_COUNT, hparams.n_head_arr, hparams.n_layer, false);
 
-    // Populate deepstack_layers_arr - initialized to -1 (no deepstack)
+    // Populate deepstack_mapping_arr - initialized to -1 (no deepstack)
     // Model-specific code will populate if needed
-    std::fill(hparams.deepstack_layers_arr.begin(), hparams.deepstack_layers_arr.end(), -1);
+    std::fill(hparams.deepstack_mapping_arr.begin(), hparams.deepstack_mapping_arr.end(), -1);
 
     // n_head_kv is optional, default to n_head
     hparams.n_head_kv_arr = hparams.n_head_arr;
@@ -1720,11 +1720,11 @@ void llama_model::print_info() const {
         LLAMA_LOG_INFO("%s: n_ctx_orig_yarn       = %u\n",     __func__, hparams.n_ctx_orig_yarn);
         LLAMA_LOG_INFO("%s: rope_yarn_log_mul     = %.4f\n",   __func__, hparams.rope_yarn_log_mul);
         LLAMA_LOG_INFO("%s: rope_finetuned        = %s\n",     __func__, hparams.rope_finetuned ? "yes" : "unknown");
-        if (std::any_of(hparams.deepstack_layers_arr.begin(),
-                        hparams.deepstack_layers_arr.end(),
+        if (std::any_of(hparams.deepstack_mapping_arr.begin(),
+                        hparams.deepstack_mapping_arr.end(),
                         [](const auto & entry) { return entry >= 0; })) {
-            LLAMA_LOG_INFO("%s: deepstack_layers_arr = %s\n", __func__,
-                           print_f([&](uint32_t il) { return hparams.deepstack_layers_arr[il]; },
+            LLAMA_LOG_INFO("%s: deepstack_mapping_arr = %s\n", __func__,
+                           print_f([&](uint32_t il) { return hparams.deepstack_mapping_arr[il]; },
                            hparams.n_layer).c_str());
         }
         // MRoPE (Multi-axis Rotary Position Embedding) sections

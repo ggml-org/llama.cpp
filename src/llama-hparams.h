@@ -214,7 +214,7 @@ struct llama_hparams {
     // deepstack layer array (qwen3vl, Granite4 Vision)
     // -1  => no deepstack
     // >=0 => input embedding index for deepstack injection
-    std::array<int32_t, LLAMA_MAX_LAYERS> deepstack_layers_arr;
+    std::array<int32_t, LLAMA_MAX_LAYERS> deepstack_mapping_arr;
 
     // gemma4 per-layer embedding
     uint32_t n_embd_per_layer = 0;

@@ -9,7 +9,7 @@ void llama_model_qwen3vl::load_arch_hparams(llama_model_loader & ml) {
     if (ml.get_key(LLM_KV_NUM_DEEPSTACK_LAYERS, n_deepstack_layers, false)) {
         // Create 1:1 mapping: layer i gets projector i+1
         for (int32_t i = 0; i < (int32_t)n_deepstack_layers; ++i) {
-            hparams.deepstack_layers_arr[i] = i + 1;
+            hparams.deepstack_mapping_arr[i] = i + 1;
         }
     }
     switch (hparams.n_layer) {
@@ -149,7 +149,7 @@ llama_model_qwen3vl::graph::graph(const llama_model & model, const llm_graph_par
         cur = build_cvec(cur, il);
         cb(cur, "l_out", il);
 
-        const auto & deepstack_emb_idx = hparams.deepstack_layers_arr[il];
+        const auto & deepstack_emb_idx = hparams.deepstack_mapping_arr[il];
         if (deepstack_emb_idx >= 0) {
             ggml_tensor * ds = ggml_view_2d(ctx0, res->t_inp_embd, n_embd, n_tokens, res->t_inp_embd->nb[1], deepstack_emb_idx * n_embd * sizeof(float));
             cur = ggml_add(ctx0, cur, ds);
