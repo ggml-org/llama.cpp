@@ -1562,7 +1562,7 @@ static bool ggml_cuda_kernel_can_use_pdl(const void * kernel) {
     };
 
     struct cache_key_hash {
-        // MurmurHash3 mixing function for better hash distribution
+        // MurmurHash3 mixing function for better hash distribution (vs. just std::hash which in some implementations simply returns the identity)
         static std::size_t hash_mix(std::size_t x) {
             // 64-bit path
             if constexpr (sizeof(std::size_t) >= 8) {
