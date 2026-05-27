@@ -327,7 +327,11 @@ bool server_http_context::init(const common_params & params) {
             }
         } else {
 #if defined(LLAMA_UI_HAS_ASSETS)
-            auto serve_asset = [](const std::string & name, const char * mime, bool with_isolation_headers) {
+            // Embedded assets are immutable for a given binary, so cache aggressively.
+            // This is essential for PWA/service worker caching to work correctly.
+            // The service worker and manifest must use no-cache so the browser
+            // always checks for updates (these files tell the SW what to cache).
+            auto serve_asset_cached = [](const std::string & name, const char * mime, bool with_isolation_headers) {
                 return [name, mime, with_isolation_headers](const httplib::Request & req, httplib::Response & res) {
                     const llama_ui_asset * a = llama_ui_find_asset(name.c_str());
                     if (!a) {
@@ -346,25 +350,43 @@ bool server_http_context::init(const common_params & params) {
                         res.set_header("Cross-Origin-Embedder-Policy", "require-corp");
                         res.set_header("Cross-Origin-Opener-Policy", "same-origin");
                     }
+                    res.set_header("Cache-Control", "public, max-age=31536000, immutable");
                     res.set_content(reinterpret_cast<const char*>(a->data), a->size, mime);
                     return false;
                 };
             };
 
-            srv->Get(params.api_prefix + "/",                               serve_asset("index.html",                   "text/html; charset=utf-8",                 true));
-            srv->Get(params.api_prefix + "/bundle.js",                      serve_asset("bundle.js",                    "application/javascript; charset=utf-8",    false));
-            srv->Get(params.api_prefix + "/bundle.css",                     serve_asset("bundle.css",                   "text/css; charset=utf-8",                  false));
-            srv->Get(params.api_prefix + "/favicon.ico",                    serve_asset("favicon.ico",                  "image/x-icon",                             false));
-            srv->Get(params.api_prefix + "/favicon.svg",                    serve_asset("favicon.svg",                  "image/svg+xml",                            false));
-            srv->Get(params.api_prefix + "/pwa-64x64.png",                  serve_asset("pwa-64x64.png",                "image/png",                                false));
-            srv->Get(params.api_prefix + "/pwa-192x192.png",                serve_asset("pwa-192x192.png",              "image/png",                                false));
-            srv->Get(params.api_prefix + "/pwa-512x512.png",                serve_asset("pwa-512x512.png",              "image/png",                                false));
-            srv->Get(params.api_prefix + "/maskable-icon-512x512.png",      serve_asset("maskable-icon-512x512.png",    "image/png",                                false));
-            srv->Get(params.api_prefix + "/apple-touch-icon-180x180.png",   serve_asset("apple-touch-icon-180x180.png", "image/png",                                false));
-            srv->Get(params.api_prefix + "/manifest.webmanifest",           serve_asset("manifest.webmanifest",        "application/manifest+json",                false));
-            srv->Get(params.api_prefix + "/sw.js",                          serve_asset("sw.js",                       "application/javascript; charset=utf-8",    false));
-            srv->Get(params.api_prefix + "/version.json",                   serve_asset("version.json",                 "application/json",                         false));
-            srv->Get(params.api_prefix + "/workbox.js",                     serve_asset("workbox.js",                   "application/javascript; charset=utf-8",    false));
+            auto serve_asset_nocache = [](const std::string & name, const char * mime, bool with_isolation_headers) {
+                return [name, mime, with_isolation_headers](const httplib::Request & /*req*/, httplib::Response & res) {
+                    const llama_ui_asset * a = llama_ui_find_asset(name.c_str());
+                    if (!a) {
+                        res.status = 404;
+                        return false;
+                    }
+                    if (with_isolation_headers) {
+                        res.set_header("Cross-Origin-Embedder-Policy", "require-corp");
+                        res.set_header("Cross-Origin-Opener-Policy", "same-origin");
+                    }
+                    res.set_header("Cache-Control", "no-cache");
+                    res.set_content(reinterpret_cast<const char*>(a->data), a->size, mime);
+                    return false;
+                };
+            };
+
+            srv->Get(params.api_prefix + "/",                               serve_asset_cached("index.html",                   "text/html; charset=utf-8",                 true));
+            srv->Get(params.api_prefix + "/bundle.js",                      serve_asset_cached("bundle.js",                    "application/javascript; charset=utf-8",    false));
+            srv->Get(params.api_prefix + "/bundle.css",                     serve_asset_cached("bundle.css",                   "text/css; charset=utf-8",                  false));
+            srv->Get(params.api_prefix + "/favicon.ico",                    serve_asset_cached("favicon.ico",                  "image/x-icon",                             false));
+            srv->Get(params.api_prefix + "/favicon.svg",                    serve_asset_cached("favicon.svg",                  "image/svg+xml",                            false));
+            srv->Get(params.api_prefix + "/pwa-64x64.png",                  serve_asset_cached("pwa-64x64.png",                "image/png",                                false));
+            srv->Get(params.api_prefix + "/pwa-192x192.png",                serve_asset_cached("pwa-192x192.png",              "image/png",                                false));
+            srv->Get(params.api_prefix + "/pwa-512x512.png",                serve_asset_cached("pwa-512x512.png",              "image/png",                                false));
+            srv->Get(params.api_prefix + "/maskable-icon-512x512.png",      serve_asset_cached("maskable-icon-512x512.png",    "image/png",                                false));
+            srv->Get(params.api_prefix + "/apple-touch-icon-180x180.png",   serve_asset_cached("apple-touch-icon-180x180.png", "image/png",                                false));
+            srv->Get(params.api_prefix + "/manifest.webmanifest",           serve_asset_nocache("manifest.webmanifest",        "application/manifest+json",                false));
+            srv->Get(params.api_prefix + "/sw.js",                          serve_asset_nocache("sw.js",                       "application/javascript; charset=utf-8",    false));
+            srv->Get(params.api_prefix + "/version.json",                   serve_asset_cached("version.json",                 "application/json",                         false));
+            srv->Get(params.api_prefix + "/workbox.js",                     serve_asset_cached("workbox.js",                   "application/javascript; charset=utf-8",    false));
 #endif
         }
     }
