@@ -1,4 +1,5 @@
 #include "server-context.h"
+#include "ggml.h"
 #include "server-chat.h"
 #include "server-common.h"
 #include "server-http.h"
@@ -3592,6 +3593,8 @@ server_context_meta server_context::get_meta() const {
         /* json_webui_settings    */ impl->json_webui_settings,  // Deprecated
         /* slot_n_ctx             */ impl->get_slot_n_ctx(),
         /* pooling_type           */ llama_pooling_type(impl->ctx_tgt),
+        /* cache_type_k           */ impl->params_base.cache_type_k,
+        /* cache_type_v           */ impl->params_base.cache_type_v,
 
         /* chat_params            */ impl->chat_params,
         /* chat_template_caps     */ common_chat_templates_get_caps(impl->chat_params.tmpls.get()),
@@ -4188,6 +4191,8 @@ void server_routes::init_routes() {
                 {"video",  meta->has_inp_video},
                 {"audio",  meta->has_inp_audio},
             } },
+            { "cache_type_k",                std::string(ggml_type_name(meta->cache_type_k)) },
+            { "cache_type_v",                std::string(ggml_type_name(meta->cache_type_v)) },
             { "media_marker",                get_media_marker() },
             { "endpoint_slots",              params.endpoint_slots },
             { "endpoint_props",              params.endpoint_props },
