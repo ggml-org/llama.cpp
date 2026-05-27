@@ -323,7 +323,7 @@ jobs:
         run: |
           LLAMA_ARG_THREADS=$(nproc) GG_BUILD_HIGH_PERF=1 GG_BUILD_NO_SVE=1 GG_BUILD_NO_BF16=1 GG_BUILD_EXTRA_TESTS_0=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
 
-  arm64-cpu-high-perf-sve-graviton4:
+  cpu-high-perf-arm64-graviton4:
     runs-on: ah-ubuntu_22_04-c8g_8x
 
     steps:
@@ -331,12 +331,38 @@ jobs:
         id: checkout
         uses: actions/checkout@v6
 
+      - name: Dependencies
+        id: depends
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a \
+          apt-get install -y \
+          build-essential \
+          python3-venv \
+          gpg \
+          wget \
+          time \
+          git-lfs
+
+          git lfs install
+
+          # install the latest cmake
+          sudo install -d /usr/share/keyrings
+          wget -O - https://apt.kitware.com/keys/kitware-archive-latest.asc \
+            | gpg --dearmor \
+            | sudo tee /usr/share/keyrings/kitware-archive-keyring.gpg >/dev/null
+          echo 'deb [signed-by=/usr/share/keyrings/kitware-archive-keyring.gpg] https://apt.kitware.com/ubuntu/ jammy main' \
+            | sudo tee /etc/apt/sources.list.d/kitware.list
+          sudo apt-get update
+          sudo apt-get install -y cmake
+
       - name: Test
         id: ggml-ci
         run: |
           LLAMA_ARG_THREADS=$(nproc) GG_BUILD_NO_BF16=1 GG_BUILD_EXTRA_TESTS_0=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
 
-  arm64-cpu-kleidiai-graviton4:
+  cpu-high-perf-arm64-graviton4-kleidiai:
     runs-on: ah-ubuntu_22_04-c8g_8x
 
     steps:
