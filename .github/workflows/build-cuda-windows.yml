@@ -34,7 +34,8 @@ jobs:
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.21
         with:
-          key: cuda-windows-2022-x64-cuda-${{ matrix.cuda }}
+          # note: this cache key is the same as in release.yml !
+          key: release-windows-2022-x64-cuda-${{ matrix.cuda }}
           variant: ccache
           evict-old-files: 1d
           save: true # always save the cache since we are running this manually
@@ -122,7 +123,8 @@ jobs:
       - name: Install ccache
         uses: ggml-org/ccache-action@v1.2.21
         with:
-          key: cuda-windows-2022-x64-hip-${{ env.HIPSDK_INSTALLER_VERSION }}-${{ matrix.name }}-x64
+          # note: this cache key is the same as in release.yml !
+          key: release-windows-2022-x64-hip-${{ env.HIPSDK_INSTALLER_VERSION }}-${{ matrix.name }}
           evict-old-files: 1d
           save: true # always save the cache since we are running this manually
           #save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
