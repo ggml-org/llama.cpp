@@ -188,45 +188,44 @@ next_nc:
 // In x4x2, sub-blocks 0..3 use lower nibbles, sub-blocks 4..7 use upper nibbles
 // of the same 32 packed bytes.
 static inline HVX_Vector dequantize_x4x2_q4_0_group_hvx(const uint8_t *packed_32, bool upper_nibbles, const __fp16 *scale, const HVX_Vector vlut_cvt) {
+    (void)vlut_cvt;
     HVX_Vector vq = hvx_vmemu(packed_32);
     const HVX_Vector mask_h4 = Q6_Vb_vsplat_R(0x0F);
+    const HVX_Vector i8 = Q6_Vb_vsplat_R(8);
     HVX_Vector v_scales = hvx_vec_repl_f16(hvx_vmemu(scale));
-    // q4x4x2 stores two int4 values per byte. Keep only the selected nibble.
-    HVX_Vector v_quants =  Q6_Vub_vlsr_VubR(vq, 4 * upper_nibbles);
+
+    HVX_Vector v_quants = Q6_Vub_vlsr_VubR(vq, 4 * upper_nibbles);
     v_quants = Q6_V_vand_VV(v_quants, mask_h4);
-    // Shuffle before LUT
-    v_quants = Q6_Vb_vshuff_Vb(v_quants);
-    // Use standard vlut16 (not _nomatch) to avoid stale-register NaN.
-    // _nomatch retains the previous destination-register value for colliding
-    // indices, but the C intrinsic doesn't model the implicit read so the
-    // compiler may allocate a register containing garbage/NaN.
-    HVX_VectorPair vp = Q6_Wh_vlut16_VbVhR(v_quants, vlut_cvt, 0);
-    HVX_Vector v_hf = Q6_V_lo_W(vp);
+
+    HVX_Vector v_int8 = Q6_Vb_vsub_VbVb(v_quants, i8);
+    HVX_Vector v0     = Q6_V_lo_W(Q6_Wh_vunpack_Vb(v_int8));
+    HVX_Vector v_hf   = Q6_Vhf_equals_Vh(v0);
 
     return Q6_Vhf_equals_Vqf16(Q6_Vqf16_vmpy_VhfVhf(v_hf, v_scales));
 }
 
 // Batch-dequantize 4 contiguous x4x2 Q4_0 groups (4x32 = 128 packed bytes) using
-// full HVX vector width.  One vmemu + one vlut16 replaces 4 separate calls.
+// full HVX vector width.
 // Output: vector_x2 each hold 32 FP16 values in the first 64 bytes.
 static inline HVX_Vector_x2 dequantize_x4x2_q4_0_x4groups_hvx(
             const uint8_t *packed_128, bool upper_nibbles,
             const __fp16 *scales_4, const HVX_Vector vlut_cvt) {
-    // Load all 128 packed bytes (4 contiguous 32-byte groups)
+    (void)vlut_cvt;
     HVX_Vector vq = hvx_vmemu(packed_128);
     const HVX_Vector mask_h4 = Q6_Vb_vsplat_R(0x0F);
+    const HVX_Vector i8 = Q6_Vb_vsplat_R(8);
     HVX_Vector v_quants = Q6_Vub_vlsr_VubR(vq, 4 * upper_nibbles);
     v_quants = Q6_V_vand_VV(v_quants, mask_h4);
 
-    // Shuffle before LUT
-    v_quants = Q6_Vb_vshuff_Vb(v_quants);
+    HVX_Vector v_int8 = Q6_Vb_vsub_VbVb(v_quants, i8);
 
-    // Full-width vlut16: 128 byte lookups -> 128 fp16 results in a VectorPair
-    HVX_VectorPair vp = Q6_Wh_vlut16_VbVhR(v_quants, vlut_cvt, 0);
-    HVX_Vector v_lo = Q6_V_lo_W(vp);  // [group0: 32 fp16 | group1: 32 fp16]
-    HVX_Vector v_hi = Q6_V_hi_W(vp);  // [group2: 32 fp16 | group3: 32 fp16]
+    HVX_VectorPair vp_int16 = Q6_Wh_vunpack_Vb(v_int8);
+    HVX_Vector v_lo = Q6_V_lo_W(vp_int16);
+    HVX_Vector v_hi = Q6_V_hi_W(vp_int16);
 
-    // Build per-group scale vectors: first 64 bytes use scale_a, last 64 use scale_b
+    v_lo = Q6_Vhf_equals_Vh(v_lo);
+    v_hi = Q6_Vhf_equals_Vh(v_hi);
+
     HVX_Vector vscale = hvx_vmemu(scales_4);
     HVX_Vector v_sc01 = hvx_vec_repl_2x_f16(vscale);
     HVX_Vector v_sc23 = hvx_vec_repl_2x_f16(Q6_V_vror_VR(vscale, 4));
@@ -234,13 +233,12 @@ static inline HVX_Vector_x2 dequantize_x4x2_q4_0_x4groups_hvx(
     v_lo = Q6_Vhf_equals_Vqf16(Q6_Vqf16_vmpy_VhfVhf(v_lo, v_sc01));
     v_hi = Q6_Vhf_equals_Vqf16(Q6_Vqf16_vmpy_VhfVhf(v_hi, v_sc23));
 
-    // Extract individual groups: scatter uses q_mask64 so only first 64 bytes matter
-    HVX_Vector_x2 r = { v_lo,/* group1 already in [0:63] */
-                        v_hi /* group2 already in [0:63] */ };
+    HVX_Vector_x2 r = { v_lo, v_hi };
     return r;
 }
 
 static inline HVX_Vector dequantize_x4x2_q4_1_group_hvx(const uint8_t *packed_32, bool upper_nibbles, const __fp16 *scale_offset, const HVX_Vector vlut_cvt) {
+    (void)vlut_cvt;
     HVX_Vector vq = hvx_vmemu(packed_32);
     const HVX_Vector mask_h4 = Q6_Vb_vsplat_R(0x0F);
     HVX_Vector v_dm = hvx_vmemu(scale_offset);
@@ -249,9 +247,9 @@ static inline HVX_Vector dequantize_x4x2_q4_1_group_hvx(const uint8_t *packed_32
 
     HVX_Vector v_quants =  Q6_Vub_vlsr_VubR(vq, 4 * upper_nibbles);
     v_quants = Q6_V_vand_VV(v_quants, mask_h4);
-    v_quants = Q6_Vb_vshuff_Vb(v_quants);
-    HVX_VectorPair vp = Q6_Wh_vlut16_VbVhR(v_quants, vlut_cvt, 0);
-    HVX_Vector v_hf = Q6_V_lo_W(vp);
+
+    HVX_Vector v0   = Q6_V_lo_W(Q6_Wh_vunpack_Vb(v_quants));
+    HVX_Vector v_hf = Q6_Vhf_equals_Vh(v0);
 
     return Q6_Vhf_equals_Vqf16(Q6_Vqf16_vadd_Vqf16Vhf(Q6_Vqf16_vmpy_VhfVhf(v_hf, v_scales), v_offsets));
 }
@@ -259,16 +257,18 @@ static inline HVX_Vector dequantize_x4x2_q4_1_group_hvx(const uint8_t *packed_32
 static inline HVX_Vector_x2 dequantize_x4x2_q4_1_x4groups_hvx(
             const uint8_t *packed_128, bool upper_nibbles,
             const __fp16 *scales_offsets_4, const HVX_Vector vlut_cvt) {
+    (void)vlut_cvt;
     HVX_Vector vq = hvx_vmemu(packed_128);
     const HVX_Vector mask_h4 = Q6_Vb_vsplat_R(0x0F);
     HVX_Vector v_quants = Q6_Vub_vlsr_VubR(vq, 4 * upper_nibbles);
     v_quants = Q6_V_vand_VV(v_quants, mask_h4);
 
-    v_quants = Q6_Vb_vshuff_Vb(v_quants);
+    HVX_VectorPair vp_int16 = Q6_Wh_vunpack_Vb(v_quants);
+    HVX_Vector v_lo = Q6_V_lo_W(vp_int16);
+    HVX_Vector v_hi = Q6_V_hi_W(vp_int16);
 
-    HVX_VectorPair vp = Q6_Wh_vlut16_VbVhR(v_quants, vlut_cvt, 0);
-    HVX_Vector v_lo = Q6_V_lo_W(vp);
-    HVX_Vector v_hi = Q6_V_hi_W(vp);
+    v_lo = Q6_Vhf_equals_Vh(v_lo);
+    v_hi = Q6_Vhf_equals_Vh(v_hi);
 
     HVX_Vector vscale_offset = hvx_vmemu(scales_offsets_4);
     HVX_VectorPair dm_deal = Q6_W_vdeal_VVR(vscale_offset, vscale_offset, -2);
@@ -283,6 +283,45 @@ static inline HVX_Vector_x2 dequantize_x4x2_q4_1_x4groups_hvx(
 
     v_lo = Q6_Vhf_equals_Vqf16(Q6_Vqf16_vadd_Vqf16Vhf(Q6_Vqf16_vmpy_VhfVhf(v_lo, v_sc01), v_os01));
     v_hi = Q6_Vhf_equals_Vqf16(Q6_Vqf16_vadd_Vqf16Vhf(Q6_Vqf16_vmpy_VhfVhf(v_hi, v_sc23), v_os23));
+
+    HVX_Vector_x2 r = { v_lo, v_hi };
+    return r;
+}
+
+// LUT-based dequantizers for non-linear IQ4_NL format.
+static inline HVX_Vector dequantize_x4x2_iq4_nl_group_hvx(const uint8_t *packed_32, bool upper_nibbles, const __fp16 *scale, const HVX_Vector vlut_cvt) {
+    HVX_Vector vq = hvx_vmemu(packed_32);
+    const HVX_Vector mask_h4 = Q6_Vb_vsplat_R(0x0F);
+    HVX_Vector v_scales = hvx_vec_repl_f16(hvx_vmemu(scale));
+    HVX_Vector v_quants =  Q6_Vub_vlsr_VubR(vq, 4 * upper_nibbles);
+    v_quants = Q6_V_vand_VV(v_quants, mask_h4);
+    v_quants = Q6_Vb_vshuff_Vb(v_quants);
+    HVX_VectorPair vp = Q6_Wh_vlut16_VbVhR(v_quants, vlut_cvt, 0);
+    HVX_Vector v_hf = Q6_V_lo_W(vp);
+
+    return Q6_Vhf_equals_Vqf16(Q6_Vqf16_vmpy_VhfVhf(v_hf, v_scales));
+}
+
+static inline HVX_Vector_x2 dequantize_x4x2_iq4_nl_x4groups_hvx(
+            const uint8_t *packed_128, bool upper_nibbles,
+            const __fp16 *scales_4, const HVX_Vector vlut_cvt) {
+    HVX_Vector vq = hvx_vmemu(packed_128);
+    const HVX_Vector mask_h4 = Q6_Vb_vsplat_R(0x0F);
+    HVX_Vector v_quants = Q6_Vub_vlsr_VubR(vq, 4 * upper_nibbles);
+    v_quants = Q6_V_vand_VV(v_quants, mask_h4);
+
+    v_quants = Q6_Vb_vshuff_Vb(v_quants);
+
+    HVX_VectorPair vp = Q6_Wh_vlut16_VbVhR(v_quants, vlut_cvt, 0);
+    HVX_Vector v_lo = Q6_V_lo_W(vp);
+    HVX_Vector v_hi = Q6_V_hi_W(vp);
+
+    HVX_Vector vscale = hvx_vmemu(scales_4);
+    HVX_Vector v_sc01 = hvx_vec_repl_2x_f16(vscale);
+    HVX_Vector v_sc23 = hvx_vec_repl_2x_f16(Q6_V_vror_VR(vscale, 4));
+
+    v_lo = Q6_Vhf_equals_Vqf16(Q6_Vqf16_vmpy_VhfVhf(v_lo, v_sc01));
+    v_hi = Q6_Vhf_equals_Vqf16(Q6_Vqf16_vmpy_VhfVhf(v_hi, v_sc23));
 
     HVX_Vector_x2 r = { v_lo, v_hi };
     return r;
@@ -499,7 +538,7 @@ static void dequantize_x4x2_worker_loop_##suffix(unsigned int n, unsigned int i,
 
 DEFINE_DEQUANTIZE_Q4_TASK(q4_0,   q4_0_to_fp16_lut,   q4_0, HMX_X4X2_DBLK_SIZE, (int)sizeof(__fp16))
 DEFINE_DEQUANTIZE_Q4_TASK(q4_1,   q4_1_to_fp16_lut,   q4_1, 32, 4)
-DEFINE_DEQUANTIZE_Q4_TASK(iq4_nl, iq4_nl_to_fp16_lut, q4_0, HMX_X4X2_DBLK_SIZE, (int)sizeof(__fp16))
+DEFINE_DEQUANTIZE_Q4_TASK(iq4_nl, iq4_nl_to_fp16_lut, iq4_nl, HMX_X4X2_DBLK_SIZE, (int)sizeof(__fp16))
 
 static void dequantize_x4x2_weight_to_fp16_tiles_task_mxfp4(
         const x4x2_dequantize_state_t *state,
