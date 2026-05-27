@@ -25,36 +25,65 @@ float16_t dequantFuncQ1_0(const in decodeBufQ1_0 bl, const in uint blockCoords[2
     return bit != 0u ? d : -d;
 }
 
+#ifdef A_TYPE_REPACKED
+layout(buffer_reference, std430, buffer_reference_align = 16) buffer decodeBufQ4_0 {
+   uint32_t qs[4];
+};
+#else
 layout(buffer_reference, std430, buffer_reference_align = 2) buffer decodeBufQ4_0 {
    block_q4_0_packed16 block;
 };
+#endif
 
 float16_t dequantFuncQ4_0(const in decodeBufQ4_0 bl, const in uint blockCoords[2], const in uint coordInBlock[2])
 {
-    const float16_t d = bl.block.d;
     const uint idx = coordInBlock[1];
+#ifdef A_TYPE_REPACKED
+    const uint ib = pos_a + blockCoords[0] * (p.stride_a / QUANT_K) + blockCoords[1];
+    const float16_t d = data_a_deltas[p.deltas_offset + ib];
+    uint32_t qs = bl.qs[(idx & 0xC) >> 2];
     const uint shift = (idx & 0x10) >> 2;
+    qs >>= ((idx & 3) * 8 + shift);
+#else
+    const float16_t d = bl.block.d;
     uint32_t qs = uint32_t(bl.block.qs[(idx & 0xE) >> 1]);
+    const uint shift = (idx & 0x10) >> 2;
     qs >>= shift;
     qs &= 0x0F0F;
     qs = unpack8(qs)[idx & 1];
+#endif
+    qs &= 0xF;
     float16_t ret = (float16_t(qs) - float16_t(8)) * d;
     return ret;
 }
 
+#ifdef A_TYPE_REPACKED
+layout(buffer_reference, std430, buffer_reference_align = 16) buffer decodeBufQ4_1 {
+   uint32_t qs[4];
+};
+#else
 layout(buffer_reference, std430, buffer_reference_align = 4) buffer decodeBufQ4_1 {
    block_q4_1 block;
 };
+#endif
 
 float16_t dequantFuncQ4_1(const in decodeBufQ4_1 bl, const in uint blockCoords[2], const in uint coordInBlock[2])
 {
-    const float16_t d = bl.block.d;
-    const float16_t m = bl.block.m;
     const uint idx = coordInBlock[1];
     const uint iqs = idx & 0xF;
     const uint shift = (idx & 0x10) >> 2;
+#ifdef A_TYPE_REPACKED
+    const uint ib = pos_a + blockCoords[0] * (p.stride_a / QUANT_K) + blockCoords[1];
+    const float16_t d = data_a_deltas[p.deltas_offset + ib * 2];
+    const float16_t m = data_a_deltas[p.deltas_offset + ib * 2 + 1];
+    uint32_t qs = bl.qs[(idx & 0xC) >> 2];
+    qs >>= ((iqs & 3) * 8 + shift);
+#else
+    const float16_t d = bl.block.d;
+    const float16_t m = bl.block.m;
     uint32_t qs = bl.block.qs[iqs];
     qs >>= shift;
+#endif
     qs &= 0xF;
     float16_t ret = float16_t(qs) * d + m;
     return ret;
@@ -105,18 +134,28 @@ float16_t dequantFuncQ5_1(const in decodeBufQ5_1 bl, const in uint blockCoords[2
     return ret;
 }
 
+#ifdef A_TYPE_REPACKED
+layout(buffer_reference, std430, buffer_reference_align = 16) buffer decodeBufQ8_0 {
+   int32_t qs[8];
+};
+#else
 layout(buffer_reference, std430, buffer_reference_align = 2) buffer decodeBufQ8_0 {
    block_q8_0_packed16 block;
 };
+#endif
 
 float16_t dequantFuncQ8_0(const in decodeBufQ8_0 bl, const in uint blockCoords[2], const in uint coordInBlock[2])
 {
-    const float16_t d = bl.block.d;
     const uint idx = coordInBlock[1];
     const uint iqs = idx;
-
-    // Load 16b and select the byte for this element
+#ifdef A_TYPE_REPACKED
+    const uint ib = pos_a + blockCoords[0] * (p.stride_a / QUANT_K) + blockCoords[1];
+    const float16_t d = data_a_deltas[p.deltas_offset + ib];
+    int32_t qs = unpack8(bl.qs[(iqs & 0x1C) >> 2])[iqs & 3];
+#else
+    const float16_t d = bl.block.d;
     int32_t qs = unpack8(bl.block.qs[(iqs & 0x1E) >> 1])[iqs & 1];
+#endif
     float16_t ret = float16_t(qs) * d;
     return ret;
 }
@@ -660,18 +699,32 @@ float16_t dequantFuncIQ4_XS(const in decodeBufIQ4_XS bl, const in uint blockCoor
 #endif
 
 #if defined(DATA_A_IQ4_NL)
+#ifdef A_TYPE_REPACKED
+layout(buffer_reference, std430, buffer_reference_align = 16) buffer decodeBufIQ4_NL {
+   uint32_t qs[4];
+};
+#else
 layout(buffer_reference, std430, buffer_reference_align = 2) buffer decodeBufIQ4_NL {
    block_iq4_nl block;
 };
+#endif
 
 float16_t dequantFuncIQ4_NL(const in decodeBufIQ4_NL bl, const in uint blockCoords[2], const in uint coordInBlock[2])
 {
-    const float16_t d = bl.block.d;
     const uint idx = coordInBlock[1];
+#ifdef A_TYPE_REPACKED
+    const uint ib = pos_a + blockCoords[0] * (p.stride_a / QUANT_K) + blockCoords[1];
+    const float16_t d = data_a_deltas[p.deltas_offset + ib];
+    uint32_t qs = bl.qs[(idx & 0xC) >> 2];
+    const uint shift = (idx & 0x10) >> 2;
+    qs >>= ((idx & 3) * 8 + shift);
+#else
+    const float16_t d = bl.block.d;
     const uint iqs = idx & 0xF;
     const uint shift = (idx & 0x10) >> 2;
     uint32_t qs = bl.block.qs[iqs];
     qs >>= shift;
+#endif
     qs &= 0xF;
     float16_t ret = float16_t(kvalues_iq4nl[qs]) * d;
     return ret;
@@ -679,18 +732,31 @@ float16_t dequantFuncIQ4_NL(const in decodeBufIQ4_NL bl, const in uint blockCoor
 #endif
 
 #if defined(DATA_A_MXFP4)
+#ifdef A_TYPE_REPACKED
+layout(buffer_reference, std430, buffer_reference_align = 16) buffer decodeBufMXFP4 {
+   uint32_t qs[4];
+};
+#else
 layout(buffer_reference, std430, buffer_reference_align = 2) buffer decodeBufMXFP4 {
    block_mxfp4 block;
 };
+#endif
 
 float16_t dequantFuncMXFP4(const in decodeBufMXFP4 bl, const in uint blockCoords[2], const in uint coordInBlock[2])
 {
-    const float d = e8m0_to_fp32(bl.block.e);
     const uint idx = coordInBlock[1];
     const uint iqs = idx & 0xF;
     const uint shift = (idx & 0x10) >> 2;
+#ifdef A_TYPE_REPACKED
+    const uint ib = pos_a + blockCoords[0] * (p.stride_a / QUANT_K) + blockCoords[1];
+    const float d = e8m0_to_fp32(data_a_scales[p.deltas_offset + ib]);
+    uint32_t qs = bl.qs[(iqs & 0xC) >> 2];
+    qs >>= ((iqs & 3) * 8 + shift);
+#else
+    const float d = e8m0_to_fp32(bl.block.e);
     uint32_t qs = bl.block.qs[iqs];
     qs >>= shift;
+#endif
     qs &= 0xF;
     float16_t ret = float16_t(kvalues_mxfp4[qs] * d * 0.5);
     return ret;

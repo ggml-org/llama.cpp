@@ -11,18 +11,35 @@
 // 4-byte loads for Q4_1 blocks (20 bytes)
 void block_a_to_shmem(const uint buf_ib, const uint ib, const uint iqs) {
 #ifdef DATA_A_Q4_0
+#if defined(A_TYPE_REPACKED)
+    buf_a[buf_ib].qs[iqs] = data_a_quants32[ib * 4 + iqs];
+#else
     buf_a[buf_ib].qs[iqs] = pack32(u16vec2(data_a_packed16[ib].qs[iqs * 2],
                                            data_a_packed16[ib].qs[iqs * 2 + 1]));
+#endif
 
     if (iqs == 0) {
+#if defined(A_TYPE_REPACKED)
+        buf_a[buf_ib].dm = FLOAT_TYPE(data_a_deltas[p.deltas_offset + ib]);
+#else
         buf_a[buf_ib].dm = FLOAT_TYPE(data_a_packed16[ib].d);
+#endif
     }
 #else // DATA_A_Q4_1
+#if defined(A_TYPE_REPACKED)
+    buf_a[buf_ib].qs[iqs] = data_a_quants32[ib * 4 + iqs];
+
+    if (iqs == 0) {
+        buf_a[buf_ib].dm = FLOAT_TYPEV2(data_a_deltas[p.deltas_offset + ib * 2],
+                                         data_a_deltas[p.deltas_offset + ib * 2 + 1]);
+    }
+#else
     buf_a[buf_ib].qs[iqs] = data_a_packed32[ib].qs[iqs];
 
     if (iqs == 0) {
         buf_a[buf_ib].dm = FLOAT_TYPEV2(data_a_packed32[ib].dm);
     }
+#endif
 #endif
 }
 
@@ -115,12 +132,20 @@ ACC_TYPE mmq_dot_product(const uint ib_a) {
 #if defined(DATA_A_Q8_0)
 // 2-byte loads for Q8_0 blocks (34 bytes)
 void block_a_to_shmem(const uint buf_ib, const uint ib, const uint iqs) {
+#if defined(A_TYPE_REPACKED)
+    buf_a[buf_ib].qs[iqs] = int32_t(data_a_quants32[ib * 8 + iqs]);
+
+    if (iqs == 0) {
+        buf_a[buf_ib].dm = FLOAT_TYPE(data_a_deltas[p.deltas_offset + ib]);
+    }
+#else
     buf_a[buf_ib].qs[iqs] = pack32(i16vec2(data_a_packed16[ib].qs[iqs * 2],
                                            data_a_packed16[ib].qs[iqs * 2 + 1]));
 
     if (iqs == 0) {
         buf_a[buf_ib].dm = FLOAT_TYPE(data_a_packed16[ib].d);
     }
+#endif
 }
 
 void block_a_to_registers(const uint reg_ib, const uint buf_ib) {
@@ -147,10 +172,14 @@ ACC_TYPE mmq_dot_product(const uint ib_a) {
 #if defined(DATA_A_MXFP4)
 // 1-byte loads for mxfp4 blocks (17 bytes)
 void block_a_to_shmem(const uint buf_ib, const uint ib, const uint iqs) {
+#if defined(A_TYPE_REPACKED)
+    const uint32_t qs = data_a_quants32[ib * 4 + iqs];
+#else
     const uint32_t qs = pack32(u8vec4(data_a[ib].qs[iqs * 4    ],
                                       data_a[ib].qs[iqs * 4 + 1],
                                       data_a[ib].qs[iqs * 4 + 2],
                                       data_a[ib].qs[iqs * 4 + 3]));
+#endif
 
     const u8vec4 i_a0 = unpack8( qs       & 0x0F0F0F0F);
     const u8vec4 i_a1 = unpack8((qs >> 4) & 0x0F0F0F0F);
@@ -159,7 +188,11 @@ void block_a_to_shmem(const uint buf_ib, const uint ib, const uint iqs) {
     buf_a[buf_ib].qs[iqs + 4] = pack32(i8vec4(kvalues_mxfp4[i_a1.x], kvalues_mxfp4[i_a1.y], kvalues_mxfp4[i_a1.z], kvalues_mxfp4[i_a1.w]));
 
     if (iqs == 0) {
+#if defined(A_TYPE_REPACKED)
+        buf_a[buf_ib].d = FLOAT_TYPE(e8m0_to_fp32(uint8_t(data_a_quants[p.deltas_offset + ib])) * 0.5);
+#else
         buf_a[buf_ib].d = FLOAT_TYPE(e8m0_to_fp32(data_a[ib].e) * 0.5);
+#endif
     }
 }
 
