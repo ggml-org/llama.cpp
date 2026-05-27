@@ -161,7 +161,7 @@ fn quantize_block_word(src_block: u32, j: u32, id: f32) -> u32 {
 #endif
 }
 
-fn quantize_block_to_dst(src_block: u32, dst_word_idx: u32, block_byte_offset: u32) {
+fn quantize_block(src_block: u32, dst_word_idx: u32, block_byte_offset: u32) {
     let params = quantize_block_params(src_block);
     let d = params.x;
     let id = params.y;
@@ -220,9 +220,9 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     let dst_word_idx = dst_block_byte / 4u;
 #ifdef PAIR_BLOCKS
-    quantize_block_to_dst(src_block, dst_word_idx, 0u);
-    quantize_block_to_dst(src_block + BLOCK_SIZE, dst_word_idx, BLOCK_BYTES);
+    quantize_block(src_block, dst_word_idx, 0u);
+    quantize_block(src_block + BLOCK_SIZE, dst_word_idx, BLOCK_BYTES);
 #else
-    quantize_block_to_dst(src_block, dst_word_idx, dst_block_byte & 3u);
+    quantize_block(src_block, dst_word_idx, dst_block_byte & 3u);
 #endif
 }
