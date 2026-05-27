@@ -148,10 +148,14 @@ jobs:
           evict-old-files: 1d
           save: true
 
+      - name: Install Ninja
+        run: |
+          choco install ninja
+
       - name: Build
         id: cmake_build
         run: |
-          cmake -B build ^
+          cmake -B build -G "Ninja Multi-Config" ^
             -DCMAKE_TOOLCHAIN_FILE=cmake/x64-windows-llvm.cmake ^
             -DCMAKE_BUILD_TYPE=Release ^
             -DLLAMA_BUILD_BORINGSSL=ON ^
