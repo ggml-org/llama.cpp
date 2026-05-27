@@ -31,6 +31,7 @@
 #else
 #define A_TYPE float16_t
 #endif
+#define A_TYPE_PACKED32 f16vec2
 #endif
 
 #if defined(DATA_A_BF16)
@@ -44,6 +45,7 @@
 #else
 #define A_TYPE uint16_t
 #endif
+#define A_TYPE_PACKED32 uint32_t
 #endif
 
 #define QUANT_K_Q4_0 32
