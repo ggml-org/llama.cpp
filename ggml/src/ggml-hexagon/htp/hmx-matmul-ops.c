@@ -428,7 +428,7 @@ static void dequantize_x4x2_weight_to_fp16_tiles_task(
             unsigned row_offset = ct * HMX_FP16_TILE_N_COLS * row_stride;
 
             if (is_q4_1) {
-                for (int r = 0; r < HMX_FP16_TILE_N_ROWS; r += 2, row1 += 2) {
+                for (int r = 0; r < HMX_FP16_TILE_N_ROWS; r += 2) {
                     const uint8_t *r0 = vtcm_src + row_offset; row_offset += row_stride;
                     const uint8_t *r1 = vtcm_src + row_offset; row_offset += row_stride;
 
@@ -443,7 +443,7 @@ static void dequantize_x4x2_weight_to_fp16_tiles_task(
                     v_off = Q6_Vw_vadd_VwVw(v_off, v_scat_step);
                 }
             } else {
-                for (int r = 0; r < HMX_FP16_TILE_N_ROWS; r += 2, row1 += 2) {
+                for (int r = 0; r < HMX_FP16_TILE_N_ROWS; r += 2) {
                     const uint8_t *r0 = vtcm_src + row_offset; row_offset += row_stride;
                     const uint8_t *r1 = vtcm_src + row_offset; row_offset += row_stride;
 
