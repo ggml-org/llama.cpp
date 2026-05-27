@@ -71,7 +71,6 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
 
-    // getting the row from gid
     let elems_per_row = params.ne0 / VEC_SIZE;
     var i = gid.x / elems_per_row;
 
@@ -86,14 +85,12 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let i_idx0 = i_src1;
 
 #ifdef I64_IDX
-    let idx_high = (params.offset_idx + i_idx0 * params.stride_idx0 + i_idx1 * params.stride_idx1 + i_idx2 * params.stride_idx2) * 2;
-
+    let idx_high = (params.offset_idx + i_idx0 * params.stride_idx0 + i_idx1 * params.stride_idx1 + i_idx2 * params.stride_idx2) * 2u;
     let idx_val = idx[idx_high];
-    let idx_low_val = idx[idx_high + 1];
+    let idx_low_val = idx[idx_high + 1u];
 
-    if (idx_low_val != 0) {
-        // Upper bits of index are not zero, output will be incorrect
-        atomicStore(&error, 1);
+    if (idx_low_val != 0u) {
+        atomicStore(&error, 1u);
         return;
     }
 #else
@@ -104,6 +101,6 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let i_dst_row = params.offset_dst + idx_val * params.stride_dst1 + i_src2 * params.stride_dst2 + i_src3 * params.stride_dst3;
     let i_src_row = params.offset_src + i_src1 * params.stride_src1 + i_src2 * params.stride_src2 + i_src3 * params.stride_src3;
 
-    let col_idx = (gid.x % elems_per_row);
-    dst[i_dst_row/VEC_SIZE + col_idx] = DST_TYPE(src[i_src_row/VEC_SIZE + col_idx]);
+    let col_idx = gid.x % elems_per_row;
+    dst[i_dst_row / VEC_SIZE + col_idx] = DST_TYPE(src[i_src_row / VEC_SIZE + col_idx]);
 }

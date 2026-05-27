@@ -185,6 +185,7 @@ struct ggml_webgpu_set_rows_pipeline_key_hash {
 struct ggml_webgpu_set_rows_shader_decisions {
     bool     vec4;
     bool     i64_idx;
+    bool     quantized;
     uint32_t wg_size;
 };
 
@@ -1266,7 +1267,8 @@ class ggml_webgpu_shader_lib {
     webgpu_pipeline get_set_rows_pipeline(const ggml_webgpu_shader_lib_context & context) {
         ggml_webgpu_set_rows_pipeline_key key = {};
         key.dst_type                          = context.dst->type;
-        key.vec4                              = context.src0->ne[0] % 4 == 0;
+        key.vec4                              = (context.dst->type == GGML_TYPE_F32 || context.dst->type == GGML_TYPE_F16) &&
+                  context.src0->ne[0] % 4 == 0;
         key.i64_idx                           = context.src1->type == GGML_TYPE_I64;
 
         auto it = set_rows_pipelines.find(key);
@@ -1286,6 +1288,14 @@ class ggml_webgpu_shader_lib {
                 defines.push_back("DST_F16");
                 variant += "_dstf16";
                 break;
+            case GGML_TYPE_Q8_0:
+                defines.push_back("DST_Q8_0");
+                variant += "_dstq8_0";
+                break;
+            case GGML_TYPE_Q4_0:
+                defines.push_back("DST_Q4_0");
+                variant += "_dstq4_0";
+                break;
             default:
                 GGML_ABORT("Unsupported dst type for set_rows shader");
         }
@@ -1301,10 +1311,13 @@ class ggml_webgpu_shader_lib {
 
         defines.push_back(std::string("WG_SIZE=") + std::to_string(context.max_wg_size));
 
-        auto processed                  = preprocessor.preprocess(wgsl_set_rows, defines);
+        const bool quantized            = context.dst->type == GGML_TYPE_Q8_0 || context.dst->type == GGML_TYPE_Q4_0;
+        const auto & shader_source      = quantized ? wgsl_set_rows_quant : wgsl_set_rows;
+        auto processed                  = preprocessor.preprocess(shader_source, defines);
         auto decisions                  = std::make_shared<ggml_webgpu_set_rows_shader_decisions>();
         decisions->vec4                 = key.vec4;
         decisions->i64_idx              = key.i64_idx;
+        decisions->quantized            = quantized;
         decisions->wg_size              = context.max_wg_size;
         set_rows_pipelines[key]         = ggml_webgpu_create_pipeline(device, processed, variant);
         set_rows_pipelines[key].context = decisions;
