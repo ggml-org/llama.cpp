@@ -157,6 +157,7 @@ models = [
     {"name": "f2llmv2",          "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/codefuse-ai/F2LLM-v2-4B", },
     {"name": "sarvam-moe",       "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/sarvamai/sarvam-30b", },
     {"name": "talkie",           "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/lewtun/talkie-1930-13b-it-hf", },
+    {"name": "minicpm5",         "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/openbmb/MiniCPM5-1B"},
 ]
 
 # some models are known to be broken upstream, so we will skip them as exceptions

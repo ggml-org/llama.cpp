@@ -52,9 +52,9 @@ concurrency:
 env:
   GGML_NLOOP: 3
   GGML_N_THREADS: 1
-  LLAMA_LOG_COLORS: 1
-  LLAMA_LOG_PREFIX: 1
-  LLAMA_LOG_TIMESTAMPS: 1
+  LLAMA_ARG_LOG_COLORS: 1
+  LLAMA_ARG_LOG_PREFIX: 1
+  LLAMA_ARG_LOG_TIMESTAMPS: 1
 
 jobs:
   build-cmake-pkg:
@@ -181,16 +181,16 @@ jobs:
     strategy:
       matrix:
         include:
-          - build: 'cpu-x64 (static)'
+          - build: 'x64-cpu-static'
             arch: 'x64'
             defines: '-G "Ninja Multi-Config" -D CMAKE_TOOLCHAIN_FILE=cmake/x64-windows-llvm.cmake -DGGML_NATIVE=OFF -DLLAMA_BUILD_SERVER=ON -DGGML_RPC=ON -DBUILD_SHARED_LIBS=OFF'
-          - build: 'openblas-x64'
+          - build: 'x64-openblas'
             arch: 'x64'
             defines: '-G "Ninja Multi-Config" -D CMAKE_TOOLCHAIN_FILE=cmake/x64-windows-llvm.cmake -DGGML_NATIVE=OFF -DLLAMA_BUILD_SERVER=ON -DGGML_RPC=ON -DGGML_BACKEND_DL=ON -DGGML_CPU_ALL_VARIANTS=ON -DGGML_OPENMP=OFF -DGGML_BLAS=ON -DGGML_BLAS_VENDOR=OpenBLAS -DBLAS_INCLUDE_DIRS="$env:RUNNER_TEMP/openblas/include" -DBLAS_LIBRARIES="$env:RUNNER_TEMP/openblas/lib/openblas.lib"'
-          - build: 'vulkan-x64'
+          - build: 'x64-vulkan'
             arch: 'x64'
-            defines: '-DCMAKE_BUILD_TYPE=Release -DGGML_NATIVE=OFF -DLLAMA_BUILD_SERVER=ON -DGGML_RPC=ON -DGGML_BACKEND_DL=ON -DGGML_CPU_ALL_VARIANTS=ON -DGGML_VULKAN=ON'
-          - build: 'llvm-arm64'
+            defines: '-G "Ninja Multi-Config" -D CMAKE_TOOLCHAIN_FILE=cmake/x64-windows-llvm.cmake -DCMAKE_BUILD_TYPE=Release -DGGML_NATIVE=OFF -DLLAMA_BUILD_SERVER=ON -DGGML_RPC=ON -DGGML_BACKEND_DL=ON -DGGML_CPU_ALL_VARIANTS=ON -DGGML_VULKAN=ON'
+          - build: 'arm64'
             arch: 'arm64'
             defines: '-G "Ninja Multi-Config" -D CMAKE_TOOLCHAIN_FILE=cmake/arm64-windows-llvm.cmake -DGGML_NATIVE=OFF -DLLAMA_BUILD_SERVER=ON'
 
@@ -209,7 +209,7 @@ jobs:
 
       - name: Download OpenBLAS
         id: get_openblas
-        if: ${{ matrix.build == 'openblas-x64' }}
+        if: ${{ matrix.build == 'x64-openblas' }}
         run: |
           curl.exe -o $env:RUNNER_TEMP/openblas.zip -L "https://github.com/xianyi/OpenBLAS/releases/download/v${env:OPENBLAS_VERSION}/OpenBLAS-${env:OPENBLAS_VERSION}-x64.zip"
           curl.exe -o $env:RUNNER_TEMP/OpenBLAS.LICENSE.txt -L "https://github.com/xianyi/OpenBLAS/raw/v${env:OPENBLAS_VERSION}/LICENSE"
@@ -222,7 +222,7 @@ jobs:
 
       - name: Install Vulkan SDK
         id: get_vulkan
-        if: ${{ matrix.build == 'vulkan-x64' }}
+        if: ${{ matrix.build == 'x64-vulkan' }}
         run: |
           curl.exe -o $env:RUNNER_TEMP/VulkanSDK-Installer.exe -L "https://sdk.lunarg.com/sdk/download/${env:VULKAN_VERSION}/windows/vulkansdk-windows-X64-${env:VULKAN_VERSION}.exe"
           & "$env:RUNNER_TEMP\VulkanSDK-Installer.exe" --accept-licenses --default-answer --confirm-command install
@@ -243,7 +243,7 @@ jobs:
 
       - name: Add libopenblas.dll
         id: add_libopenblas_dll
-        if: ${{ matrix.build == 'openblas-x64' }}
+        if: ${{ matrix.build == 'x64-openblas' }}
         run: |
           cp $env:RUNNER_TEMP/openblas/bin/libopenblas.dll ./build/bin/Release/openblas.dll
           cp $env:RUNNER_TEMP/OpenBLAS.LICENSE.txt ./build/bin/Release/OpenBLAS-${env:OPENBLAS_VERSION}.txt
@@ -353,166 +353,3 @@ jobs:
           set /A NINJA_JOBS=%NUMBER_OF_PROCESSORS%-1
           cmake --build build --config Release -j %NINJA_JOBS% -t ggml
           cmake --build build --config Release
-
-# TODO: simplify the following workflows using a matrix
-# TODO: run lighter CI on PRs and the full CI only on master (if needed)
-
-# note: moved to build-self-hosted.yml - can remove from here when everything is stable
-#  ggml-ci-x64-cpu-low-perf:
-#    runs-on: ubuntu-22.04
-#
-#    steps:
-#      - name: Clone
-#        id: checkout
-#        uses: actions/checkout@v6
-#
-#      - name: ccache
-#        uses: ggml-org/ccache-action@v1.2.21
-#        with:
-#          key: ggml-ci-x64-cpu-low-perf
-#          evict-old-files: 1d
-#          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
-#
-#      - name: Dependencies
-#        id: depends
-#        run: |
-#          sudo apt-get update
-#          sudo apt-get install build-essential
-#
-#      - name: Test
-#        id: ggml-ci
-#        run: |
-#          LLAMA_ARG_THREADS=$(nproc) GG_BUILD_LOW_PERF=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
-
-# note: moved to build-self-hosted.yml - can remove from here when everything is stable
-#  ggml-ci-arm64-cpu-low-perf:
-#    runs-on: ubuntu-22.04-arm
-#
-#    steps:
-#      - name: Clone
-#        id: checkout
-#        uses: actions/checkout@v6
-#
-#      - name: ccache
-#        uses: ggml-org/ccache-action@v1.2.21
-#        with:
-#          key: ggml-ci-arm64-cpu-low-perf
-#          evict-old-files: 1d
-#          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
-#
-#      - name: Dependencies
-#        id: depends
-#        run: |
-#          sudo apt-get update
-#          sudo apt-get install build-essential
-#
-#      - name: Test
-#        id: ggml-ci
-#        run: |
-#          LLAMA_ARG_THREADS=$(nproc) GG_BUILD_LOW_PERF=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
-
-# note: moved to build-self-hosted.yml - can remove from here when everything is stable
-#  ggml-ci-x64-cpu-high-perf:
-#    runs-on: ubuntu-22.04
-#
-#    steps:
-#      - name: Clone
-#        id: checkout
-#        uses: actions/checkout@v6
-#
-#      - name: ccache
-#        uses: ggml-org/ccache-action@v1.2.21
-#        with:
-#          key: ggml-ci-x64-cpu-high-perf
-#          evict-old-files: 1d
-#          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
-#
-#      - name: Dependencies
-#        id: depends
-#        run: |
-#          sudo apt-get update
-#          sudo apt-get install build-essential
-#
-#      - name: Test
-#        id: ggml-ci
-#        run: |
-#          LLAMA_ARG_THREADS=$(nproc) GG_BUILD_HIGH_PERF=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
-
-# note: moved to build-self-hosted.yml - can remove from here when everything is stable
-#  ggml-ci-arm64-cpu-high-perf:
-#    runs-on: ubuntu-22.04-arm
-#
-#    steps:
-#      - name: Clone
-#        id: checkout
-#        uses: actions/checkout@v6
-#
-#      - name: ccache
-#        uses: ggml-org/ccache-action@v1.2.21
-#        with:
-#          key: ggml-ci-arm64-cpu-high-perf
-#          evict-old-files: 1d
-#          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
-#
-#      - name: Dependencies
-#        id: depends
-#        run: |
-#          sudo apt-get update
-#          sudo apt-get install build-essential
-#
-#      - name: Test
-#        id: ggml-ci
-#        run: |
-#          LLAMA_ARG_THREADS=$(nproc) GG_BUILD_HIGH_PERF=1 GG_BUILD_NO_SVE=1 GG_BUILD_NO_BF16=1 GG_BUILD_EXTRA_TESTS_0=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
-
-  ggml-ci-arm64-cpu-high-perf-sve:
-    runs-on: ubuntu-22.04-arm
-
-    steps:
-      - name: Clone
-        id: checkout
-        uses: actions/checkout@v6
-
-      - name: ccache
-        uses: ggml-org/ccache-action@v1.2.21
-        with:
-          key: ggml-ci-arm64-cpu-high-perf-sve
-          evict-old-files: 1d
-          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
-
-      - name: Dependencies
-        id: depends
-        run: |
-          sudo apt-get update
-          sudo apt-get install build-essential
-
-      - name: Test
-        id: ggml-ci
-        run: |
-          LLAMA_ARG_THREADS=$(nproc) GG_BUILD_NO_BF16=1 GG_BUILD_EXTRA_TESTS_0=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
-
-  ggml-ci-arm64-cpu-kleidiai:
-     runs-on: ubuntu-22.04-arm
-
-     steps:
-       - name: Clone
-         id: checkout
-         uses: actions/checkout@v6
-
-       - name: ccache
-         uses: ggml-org/ccache-action@v1.2.21
-         with:
-           key: ggml-ci-arm64-cpu-kleidiai
-           evict-old-files: 1d
-           save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
-
-       - name: Dependencies
-         id: depends
-         run: |
-           sudo apt-get update
-           sudo apt-get install -y build-essential
-
-       - name: Test
-         id: ggml-ci
-         run: |
-           GG_BUILD_KLEIDIAI=1 GG_BUILD_EXTRA_TESTS_0=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
