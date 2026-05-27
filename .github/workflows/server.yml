@@ -154,6 +154,7 @@ jobs:
 
       - name: Build
         id: cmake_build
+        shell: cmd
         run: |
           cmake -B build -G "Ninja Multi-Config" ^
             -DCMAKE_TOOLCHAIN_FILE=cmake/x64-windows-llvm.cmake ^
