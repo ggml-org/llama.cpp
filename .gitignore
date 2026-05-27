@@ -160,3 +160,5 @@ a.out.*
 
 AGENTS.local.md
 .pi/SYSTEM.md
+
+tools/ui/dev-dist/

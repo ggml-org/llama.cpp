@@ -1,6 +1,8 @@
 // See https://svelte.dev/docs/kit/types#app.d.ts
 // for information about these interfaces
 
+import 'vite-plugin-pwa/pwa-assets';
+
 // Import chat types from dedicated module
 
 import type {

@@ -13,7 +13,8 @@
 		DialogConversationTitleUpdate,
 		SidebarNavigation
 	} from '$lib/components/app';
-	import { PwaWrapper } from '$lib/components/app/misc';
+	import { pwaAssetsHead } from 'virtual:pwa-assets/head';
+	import { useRegisterSW } from 'virtual:pwa-register/svelte';
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
 	import * as Sidebar from '$lib/components/ui/sidebar/index.js';
 	import * as Tooltip from '$lib/components/ui/tooltip';
@@ -233,66 +234,122 @@
 			}
 		);
 	});
+
+	// Service worker registration and update prompt
+	const { offlineReady, needRefresh, updateServiceWorker } = useRegisterSW({
+		onRegisteredSW(swUrl, r) {
+			if (import.meta.env.DEV) {
+				// In dev mode, periodically check for SW updates
+				setInterval(async () => {
+					if (r.installing || !navigator?.onLine) return;
+					try {
+						const resp = await fetch(swUrl, {
+							cache: 'no-store',
+							headers: { cache: 'no-store', 'cache-control': 'no-cache' }
+						});
+						if (resp?.status === 200) {
+							await r.update();
+						}
+					} catch {
+						// SW check failed, skip
+					}
+				}, 60000); // every minute in dev
+			}
+		},
+		onRegisterError(error) {
+			console.error('[PWA] SW registration error:', error);
+		}
+	});
 </script>
 
 <svelte:head>
+	{#if pwaAssetsHead.themeColor}
+		<meta name="theme-color" content={pwaAssetsHead.themeColor.content} />
+	{/if}
+
 	{#if config().customCss}
 		<style use:customCss></style>
 	{/if}
+
+	{#each pwaAssetsHead.links as link}
+		<link {...link} />
+	{/each}
+
+	<meta name="apple-mobile-web-app-capable" content="yes" />
+	<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+	<meta name="apple-mobile-web-app-title" content="llama.cpp" />
 </svelte:head>
 
-<PwaWrapper>
-	<Tooltip.Provider delayDuration={TOOLTIP_DELAY_DURATION}>
-		<ModeWatcher />
+<!-- PWA update prompt -->
+<!-- {#if needRefresh}
+	<div
+		class="fixed right-4 bottom-4 z-[9999] max-w-sm rounded-lg border border-zinc-200 bg-white p-4 shadow-lg dark:border-zinc-700 dark:bg-zinc-800"
+	>
+		<p class="mb-2 text-sm font-medium">Update available</p>
+		<p class="mb-3 text-xs text-zinc-500 dark:text-zinc-400">
+			A new version is available. Reload to update.
+		</p>
+		<div class="flex gap-2">
+			<button
+				onclick={() => updateServiceWorker(true)}
+				class="rounded bg-blue-600 px-3 py-1 text-xs text-white hover:bg-blue-700"
+			>
+				Reload
+			</button>
+		</div>
+	</div>
+{/if} -->
 
-		<Toaster richColors />
+<Tooltip.Provider delayDuration={TOOLTIP_DELAY_DURATION}>
+	<ModeWatcher />
 
-		<DialogConversationTitleUpdate
-			bind:open={titleUpdateDialogOpen}
-			currentTitle={titleUpdateCurrentTitle}
-			newTitle={titleUpdateNewTitle}
-			onConfirm={handleTitleUpdateConfirm}
-			onCancel={handleTitleUpdateCancel}
-		/>
+	<Toaster richColors />
 
-        <Sidebar.Provider bind:open={sidebarOpen}>
-	    	<div class="flex h-screen w-full">
-		    	<Sidebar.Root variant="floating" class="h-full"
-			    	><SidebarNavigation bind:this={chatSidebar} /></Sidebar.Root
-			    >
+	<DialogConversationTitleUpdate
+		bind:open={titleUpdateDialogOpen}
+		currentTitle={titleUpdateCurrentTitle}
+		newTitle={titleUpdateNewTitle}
+		onConfirm={handleTitleUpdateConfirm}
+		onCancel={handleTitleUpdateCancel}
+	/>
 
-				{#if !(alwaysShowSidebarOnDesktop && isDesktop) && !(panelNav.isSettingsRoute && !isDesktop)}
-					{#if mounted}
-						<div in:fade={{ duration: 200 }}>
-							<Sidebar.Trigger
-								class="transition-left absolute left-0 z-[900] duration-200 ease-linear {sidebarOpen
-									? 'left-[calc(var(--sidebar-width)+0.75rem)] max-md:hidden'
-									: 'left-0!'}"
-								style="translate: 1rem 1rem;"
-							/>
-						</div>
-					{/if}
+	<Sidebar.Provider bind:open={sidebarOpen}>
+		<div class="flex h-screen w-full">
+			<Sidebar.Root variant="floating" class="h-full"
+				><SidebarNavigation bind:this={chatSidebar} /></Sidebar.Root
+			>
+
+			{#if !(alwaysShowSidebarOnDesktop && isDesktop) && !(panelNav.isSettingsRoute && !isDesktop)}
+				{#if mounted}
+					<div in:fade={{ duration: 200 }}>
+						<Sidebar.Trigger
+							class="transition-left absolute left-0 z-[900] duration-200 ease-linear {sidebarOpen
+								? 'left-[calc(var(--sidebar-width)+0.75rem)] max-md:hidden'
+								: 'left-0!'}"
+							style="translate: 1rem 1rem;"
+						/>
+					</div>
 				{/if}
+			{/if}
 
-				{#if isDesktop && !alwaysShowSidebarOnDesktop}
-					<DesktopIconStrip
-						{sidebarOpen}
-						onSearchClick={() => {
-							if (chatSidebar?.activateSearchMode) {
-								chatSidebar.activateSearchMode();
-							}
+			{#if isDesktop && !alwaysShowSidebarOnDesktop}
+				<DesktopIconStrip
+					{sidebarOpen}
+					onSearchClick={() => {
+						if (chatSidebar?.activateSearchMode) {
+							chatSidebar.activateSearchMode();
+						}
 
-							sidebarOpen = true;
-						}}
-					/>
-				{/if}
+						sidebarOpen = true;
+					}}
+				/>
+			{/if}
 
-				<Sidebar.Inset class="flex flex-1 flex-col overflow-hidden">
-					{@render children?.()}
-				</Sidebar.Inset>
-			</div>
-		</Sidebar.Provider>
-	</Tooltip.Provider>
-</PwaWrapper>
+			<Sidebar.Inset class="flex flex-1 flex-col overflow-hidden">
+				{@render children?.()}
+			</Sidebar.Inset>
+		</div>
+	</Sidebar.Provider>
+</Tooltip.Provider>
 
 <svelte:window onkeydown={handleKeydown} bind:innerHeight bind:innerWidth />

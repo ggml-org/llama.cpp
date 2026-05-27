@@ -1,5 +1,6 @@
 import tailwindcss from '@tailwindcss/vite';
 import { sveltekit } from '@sveltejs/kit/vite';
+import { SvelteKitPWA } from '@vite-pwa/sveltekit';
 import { dirname, resolve } from 'path';
 import { fileURLToPath } from 'url';
 
@@ -37,7 +38,97 @@ export default defineConfig({
 		minify: true
 	},
 
-	plugins: [tailwindcss(), sveltekit(), devtoolsJson(), llamaCppBuildPlugin()],
+	plugins: [
+		tailwindcss(),
+		sveltekit(),
+		SvelteKitPWA({
+			// Strategy: generateSW - the plugin generates a service worker automatically
+			// using Workbox. For a custom SW, use 'injectManifest' instead.
+			// Manifest configuration
+			manifest: {
+				name: 'llama-ui',
+				short_name: 'llama-ui',
+				description: 'Local AI chat interface powered by llama.cpp',
+				start_url: './',
+				display: 'standalone',
+				background_color: '#ffffff',
+				theme_color: '#ffffff',
+				icons: [
+					{
+						src: 'pwa-64x64.png',
+						sizes: '64x64',
+						type: 'image/png'
+					},
+					{
+						src: 'pwa-192x192.png',
+						sizes: '192x192',
+						type: 'image/png'
+					},
+					{
+						src: 'pwa-512x512.png',
+						sizes: '512x512',
+						type: 'image/png'
+					},
+					{
+						src: 'maskable-icon-512x512.png',
+						sizes: '512x512',
+						type: 'image/png',
+						purpose: 'maskable'
+					}
+				]
+			},
+
+			// Workbox configuration for generateSW strategy
+			workbox: {
+				globPatterns: ['**/*.{js,css,html,ico,svg,png,webp,woff,woff2}'],
+
+				maximumFileSizeToCacheInBytes: 10 * 1024 * 1024, // 10 MB
+
+				// Runtime caching for API calls - use NetworkFirst so APIs are always fresh
+				runtimeCaching: [
+					{
+						urlPattern: /\/v1\/.*/,
+						handler: 'NetworkFirst',
+						options: {
+							cacheName: 'api-cache',
+							expiration: {
+								maxEntries: 50,
+								maxAgeSeconds: 60 * 60 * 24 // 24 hours
+							}
+						}
+					},
+					{
+						urlPattern: /\/(health|props|models|tools|slots|cors-proxy).*/,
+						handler: 'NetworkFirst',
+						options: {
+							cacheName: 'api-cache',
+							expiration: {
+								maxEntries: 50,
+								maxAgeSeconds: 60 * 60 * 24
+							}
+						}
+					}
+				]
+			},
+
+			// Dev options - enable SW in development mode for testing
+			devOptions: {
+				enabled: true,
+				suppressWarnings: true,
+				type: 'module',
+
+				navigateFallback: '/index.html'
+			},
+
+			// SvelteKit-specific options
+			kit: {
+				// Include version file for proper cache invalidation
+				includeVersionFile: true
+			}
+		}),
+		devtoolsJson(),
+		llamaCppBuildPlugin()
+	],
 
 	test: {
 		projects: [

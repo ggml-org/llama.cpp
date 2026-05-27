@@ -1,12 +1,4 @@
-import {
-	readFileSync,
-	writeFileSync,
-	existsSync,
-	readdirSync,
-	copyFileSync,
-	rmSync,
-	unlinkSync
-} from 'fs';
+import { readFileSync, writeFileSync, existsSync, readdirSync, copyFileSync, rmSync } from 'fs';
 import { resolve } from 'path';
 import type { Plugin } from 'vite';
 
@@ -33,16 +25,6 @@ export function llamaCppBuildPlugin(): Plugin {
 					if (!existsSync(indexPath)) return;
 
 					let content = readFileSync(indexPath, 'utf-8');
-
-					// Inline favicon as base64 data URL
-					const faviconPath = resolve('static/favicon.svg');
-					if (existsSync(faviconPath)) {
-						const faviconContent = readFileSync(faviconPath, 'utf-8');
-						const faviconBase64 = Buffer.from(faviconContent).toString('base64');
-						const faviconDataUrl = `data:image/svg+xml;base64,${faviconBase64}`;
-						content = content.replace(/href="[^"]*favicon\.svg"/g, `href="${faviconDataUrl}"`);
-						console.log('✓ Inlined favicon.svg as base64 data URL');
-					}
 
 					content = content.replace(/\r/g, '');
 					content = GUIDE_FOR_FRONTEND + '\n' + content;
@@ -84,17 +66,25 @@ export function llamaCppBuildPlugin(): Plugin {
 						}
 					}
 
-					// Cleanup: remove _app directory, favicon.svg, and legacy index.html.gz
+					// Fix sw.js: rewrite _app paths and favicon.svg → favicon.ico
+					const swPath = resolve(outDir, 'sw.js');
+					if (existsSync(swPath)) {
+						let swContent = readFileSync(swPath, 'utf-8');
+						swContent = swContent.replace(/\/_app\/immutable\/bundle\.[^"]+\.js/g, './bundle.js');
+						swContent = swContent.replace(
+							/\/_app\/immutable\/assets\/bundle\.[^"]+\.css/g,
+							'./bundle.css'
+						);
+						swContent = swContent.replace(/"favicon\.svg"/g, '"favicon.ico"');
+						writeFileSync(swPath, swContent, 'utf-8');
+						console.log('✓ Fixed sw.js precache paths');
+					}
+
+					// Cleanup: remove _app directory (static assets kept for server)
 					const appDir = resolve(outDir, '_app');
 					if (existsSync(appDir)) {
 						rmSync(appDir, { recursive: true, force: true });
 						console.log('✓ Removed _app directory');
-					}
-
-					const faviconOut = resolve(outDir, 'favicon.svg');
-					if (existsSync(faviconOut)) {
-						unlinkSync(faviconOut);
-						console.log('✓ Removed favicon.svg');
 					}
 				} catch (error) {
 					console.error('Failed to process build output:', error);

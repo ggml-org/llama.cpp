@@ -183,6 +183,15 @@ bool server_http_context::init(const common_params & params) {
             "/index.html",
             "/bundle.js",
             "/bundle.css",
+            // PWA assets
+            "/favicon.ico",
+            "/pwa-64x64.png",
+            "/pwa-192x192.png",
+            "/pwa-512x512.png",
+            "/maskable-icon-512x512.png",
+            "/apple-touch-icon-180x180.png",
+            "/manifest.webmanifest",
+            "/sw.js",
         };
 
         // If API key is not set, skip validation
@@ -190,8 +199,8 @@ bool server_http_context::init(const common_params & params) {
             return true;
         }
 
-        // If path is public or is static file, skip validation
-        if (public_endpoints.find(req.path) != public_endpoints.end() || req.path == "/" || req.path == "/sw.js" || req.path == "/manifest.webmanifest") {
+        // If path is public, skip validation
+        if (public_endpoints.find(req.path) != public_endpoints.end()) {
             return true;
         }
 
@@ -339,9 +348,17 @@ bool server_http_context::init(const common_params & params) {
                 };
             };
 
-            srv->Get(params.api_prefix + "/",           serve_asset("index.html", "text/html; charset=utf-8",              true));
-            srv->Get(params.api_prefix + "/bundle.js",  serve_asset("bundle.js",  "application/javascript; charset=utf-8", false));
-            srv->Get(params.api_prefix + "/bundle.css", serve_asset("bundle.css", "text/css; charset=utf-8",               false));
+            srv->Get(params.api_prefix + "/",                     serve_asset("index.html",             "text/html; charset=utf-8",              true));
+            srv->Get(params.api_prefix + "/bundle.js",            serve_asset("bundle.js",            "application/javascript; charset=utf-8", false));
+            srv->Get(params.api_prefix + "/bundle.css",           serve_asset("bundle.css",           "text/css; charset=utf-8",               false));
+            srv->Get(params.api_prefix + "/favicon.ico",          serve_asset("favicon.ico",          "image/x-icon",                        false));
+            srv->Get(params.api_prefix + "/pwa-64x64.png",        serve_asset("pwa-64x64.png",        "image/png",                           false));
+            srv->Get(params.api_prefix + "/pwa-192x192.png",      serve_asset("pwa-192x192.png",      "image/png",                           false));
+            srv->Get(params.api_prefix + "/pwa-512x512.png",      serve_asset("pwa-512x512.png",      "image/png",                           false));
+            srv->Get(params.api_prefix + "/maskable-icon-512x512.png", serve_asset("maskable-icon-512x512.png", "image/png",               false));
+            srv->Get(params.api_prefix + "/apple-touch-icon-180x180.png", serve_asset("apple-touch-icon-180x180.png", "image/png",            false));
+            srv->Get(params.api_prefix + "/manifest.webmanifest", serve_asset("manifest.webmanifest", "application/manifest+json",           false));
+            srv->Get(params.api_prefix + "/sw.js",                serve_asset("sw.js",                "application/javascript; charset=utf-8", false));
 #endif
         }
     }
