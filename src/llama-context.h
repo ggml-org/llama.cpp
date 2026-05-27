@@ -233,7 +233,7 @@ private:
 
     // async-copy enabled layer-input tensors (per cparams.output_layer_inp)
     // from backend into host-side embd_layer_inp buffers
-    void extract_layer_inputs(const llm_graph_result * res);
+    void extract_layer_inputs(const llm_graph_result * res, size_t token_offset, size_t n_tokens);
 
     //
     // graph
@@ -365,7 +365,7 @@ private:
 
     // host buffer for output layer input embeddings, per layer
     // populated when cparams.output_layer_inp[il] is true
-    std::vector<std::vector<float>> embd_layer_inp;
+    std::vector<buffer_view<float>> embd_layer_inp;
 
     // keep copies of the per-sequence memory on the device
     std::map<llama_seq_id, llama_memory_buffers> mem_storage;

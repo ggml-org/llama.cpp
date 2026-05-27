@@ -1279,10 +1279,10 @@ void llama_context::set_output_layer_inp(uint32_t layer_id, bool enable) {
 }
 
 float * llama_context::get_output_layer_inp(uint32_t layer_id) {
-    if (layer_id >= embd_layer_inp.size() || embd_layer_inp[layer_id].empty()) {
+    if (layer_id >= embd_layer_inp.size() || !embd_layer_inp[layer_id].has_data()) {
         return nullptr;
     }
-    return embd_layer_inp[layer_id].data();
+    return embd_layer_inp[layer_id].data;
 }
 
 llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, llm_graph_type gtype, llama_memory_context_i * mctx, ggml_status & ret) {
@@ -1979,7 +1979,7 @@ int llama_context::decode(const llama_batch & batch_inp) {
             }
         }
 
-        extract_layer_inputs(res);
+        extract_layer_inputs(res, n_tokens_prev, ubatch.n_tokens);
 
         // extract nextn embeddings before
         // only meaningful in LLAMA_POOLING_TYPE_NONE (per-token); other pooling modes are ignored.
@@ -2099,6 +2099,7 @@ uint32_t llama_context::output_reserve(int32_t n_outputs) {
 
     size_t backend_float_count = 0;
     size_t backend_token_count = 0;
+    size_t embd_layer_inp_float_count = 0;
 
     logits.size     = has_logits     ? n_vocab*n_outputs_max     : 0;
     embd.size       = has_embd       ? n_embd_out*n_outputs_max  : 0;
@@ -2108,6 +2109,12 @@ uint32_t llama_context::output_reserve(int32_t n_outputs) {
         // unmasked: nextn row exists for every token in the batch, not just
         // those flagged via batch.logits[i] -> size by token count instead.
         embd_nextn.size = (size_t) n_embd_out * n_batch;
+    }
+
+    for (bool enabled : cparams.output_layer_inp) {
+        if (enabled) {
+            embd_layer_inp_float_count += (size_t) n_embd * n_batch;
+        }
     }
 
     // Allocate backend sampling output buffers if there are backend samplers configured.
@@ -2124,8 +2131,8 @@ uint32_t llama_context::output_reserve(int32_t n_outputs) {
 
     const size_t prev_size = buf_output ? ggml_backend_buffer_get_size(buf_output.get()) : 0;
     const size_t new_size  =
-        (logits.size + embd.size + embd_nextn.size + backend_float_count) * sizeof(float) +
-        (                                               backend_token_count) * sizeof(llama_token);
+        (logits.size + embd.size + embd_nextn.size + embd_layer_inp_float_count + backend_float_count) * sizeof(float) +
+        (                                                                                  backend_token_count) * sizeof(llama_token);
 
     // alloc only when more than the current capacity is required
     // TODO: also consider shrinking the buffer
@@ -2142,6 +2149,9 @@ uint32_t llama_context::output_reserve(int32_t n_outputs) {
             logits.data = nullptr;
             embd.data = nullptr;
             embd_nextn.data = nullptr;
+            for (auto & layer_inp : embd_layer_inp) {
+                layer_inp = {nullptr, 0};
+            }
         }
 
         auto * buft = ggml_backend_cpu_buffer_type();
@@ -2172,6 +2182,15 @@ uint32_t llama_context::output_reserve(int32_t n_outputs) {
 
     embd_nextn = has_embd_nextn ? buffer_view<float>{(float *) (base + offset), embd_nextn.size} : buffer_view<float>{nullptr, 0};
     offset += embd_nextn.size * sizeof(float);
+
+    for (uint32_t il = 0; il < embd_layer_inp.size(); ++il) {
+        if (cparams.output_layer_inp[il]) {
+            embd_layer_inp[il] = buffer_view<float>{(float *) (base + offset), (size_t) n_embd * n_batch};
+            offset += embd_layer_inp[il].size * sizeof(float);
+        } else {
+            embd_layer_inp[il] = buffer_view<float>{nullptr, 0};
+        }
+    }
 
     if (has_sampling) {
         sampling.logits = {(float *) (base + offset), (size_t)(n_vocab*n_outputs_max)};
@@ -2219,9 +2238,12 @@ uint32_t llama_context::output_reserve(int32_t n_outputs) {
     return n_outputs_max;
 }
 
-void llama_context::extract_layer_inputs(const llm_graph_result * res) {
+void llama_context::extract_layer_inputs(const llm_graph_result * res, size_t token_offset, size_t n_tokens) {
     for (uint32_t il = 0; il < cparams.output_layer_inp.size(); ++il) {
         if (!cparams.output_layer_inp[il]) {
+            continue;
+        }
+        if (!embd_layer_inp[il].has_data()) {
             continue;
         }
         ggml_tensor * t = res->get_layer_inp((int) il);
@@ -2229,10 +2251,17 @@ void llama_context::extract_layer_inputs(const llm_graph_result * res) {
             continue;
         }
         const size_t nbytes = ggml_nbytes(t);
-        embd_layer_inp[il].resize(nbytes / sizeof(float));
+        const size_t nfloats = nbytes / sizeof(float);
+        GGML_ASSERT(n_tokens > 0);
+        GGML_ASSERT(nfloats % n_tokens == 0);
+
+        const size_t row_floats = nfloats / n_tokens;
+        const size_t dst_offset = token_offset * row_floats;
+        GGML_ASSERT(dst_offset + nfloats <= embd_layer_inp[il].size);
+
         ggml_backend_t backend = ggml_backend_sched_get_tensor_backend(sched.get(), t);
         GGML_ASSERT(backend != nullptr);
-        ggml_backend_tensor_get_async(backend, t, embd_layer_inp[il].data(), 0, nbytes);
+        ggml_backend_tensor_get_async(backend, t, embd_layer_inp[il].data + dst_offset, 0, nbytes);
     }
 }
 

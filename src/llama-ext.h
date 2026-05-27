@@ -110,7 +110,7 @@ LLAMA_API llama_context * llama_get_ctx_other(struct llama_context * ctx);
 // set if the layer input embeddings should be outputed
 LLAMA_API void llama_set_output_layer_inp(struct llama_context * ctx, uint32_t layer_id, bool enable);
 
-// read back the input embeddings of the specified layer for the most recent ubatch
+// read back the input embeddings of the specified layer for the most recent decode batch
 // the layer must have been enabled via llama_set_output_layer_inp
 LLAMA_API float * llama_get_output_layer_inp(struct llama_context * ctx, uint32_t layer_id);
 

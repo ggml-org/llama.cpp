@@ -433,6 +433,7 @@ struct common_speculative_impl_draft_eagle3 : public common_speculative_impl {
 
     // scratch buffer for concatenated target features [n_tokens, n_embd_enc]
     std::vector<float> features_buf;
+    std::vector<float> g_embd_buf;
 
     common_speculative_impl_draft_eagle3(const common_params_speculative & params, uint32_t n_seq)
         : common_speculative_impl(COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3, n_seq)
@@ -570,25 +571,39 @@ struct common_speculative_impl_draft_eagle3 : public common_speculative_impl {
             }
         }
 
-        llama_batch enc_batch = {
-            /*.n_tokens =*/ n_tokens,
-            /*.token    =*/ nullptr,
-            /*.embd     =*/ features_buf.data(),
-            /*.pos      =*/ nullptr,
-            /*.n_seq_id =*/ nullptr,
-            /*.seq_id   =*/ nullptr,
-            /*.logits   =*/ nullptr,
-        };
-        int rc = llama_encode(ctx_dft, enc_batch);
-        if (rc != 0) {
-            LOG_ERR("%s: llama_encode(ctx_dft) failed rc=%d (n_tokens=%d)\n",
-                    __func__, rc, (int) n_tokens);
-            return false;
+        g_embd_buf.resize((size_t) n_tokens * n_embd_dec);
+
+        // llama_encode() requires the full encoder batch to fit in n_ubatch.
+        // Allow batch > ubatch: eagle3's per-token encoder can be chunked safely.
+        const int32_t n_ubatch_dft = (int32_t) llama_n_ubatch(ctx_dft);
+        for (int32_t i = 0; i < n_tokens; i += n_ubatch_dft) {
+            const int32_t n_chunk = std::min(n_ubatch_dft, n_tokens - i);
+
+            llama_batch enc_batch = {
+                /*.n_tokens =*/ n_chunk,
+                /*.token    =*/ nullptr,
+                /*.embd     =*/ features_buf.data() + (size_t) i * n_embd_enc,
+                /*.pos      =*/ nullptr,
+                /*.n_seq_id =*/ nullptr,
+                /*.seq_id   =*/ nullptr,
+                /*.logits   =*/ nullptr,
+            };
+            const int32_t rc = llama_encode(ctx_dft, enc_batch);
+            if (rc != 0) {
+                LOG_ERR("%s: llama_encode(ctx_dft) failed rc=%d (n_tokens=%d, offset=%d)\n",
+                        __func__, rc, (int) n_chunk, (int) i);
+                return false;
+            }
+
+            // g_embd has shape [n_chunk, n_embd_dec] in ctx_dft's pre-norm embeddings buffer.
+            const float * g_embd_chunk = llama_get_embeddings_pre_norm(ctx_dft);
+            GGML_ASSERT(g_embd_chunk && "EAGLE3 encoder produced no output.");
+            std::memcpy(g_embd_buf.data() + (size_t) i * n_embd_dec,
+                        g_embd_chunk,
+                        (size_t) n_chunk * n_embd_dec * sizeof(float));
         }
 
-        // g_embd has shape [n_tokens, n_embd_dec] in ctx_dft's pre-norm embeddings buffer
-        const float * g_embd = llama_get_embeddings_pre_norm(ctx_dft);
-        GGML_ASSERT(g_embd && "EAGLE3 encoder produced no output.");
+        const float * g_embd = g_embd_buf.data();
 
         const size_t row_bytes = (size_t) n_embd_dec * sizeof(float);
 
@@ -649,7 +664,7 @@ struct common_speculative_impl_draft_eagle3 : public common_speculative_impl {
         }
 
         if (batch.n_tokens > 0) {
-            rc = llama_decode(ctx_dft, batch);
+            const int32_t rc = llama_decode(ctx_dft, batch);
             if (rc != 0) {
                 LOG_ERR("%s: llama_decode(ctx_dft) failed rc=%d (n_tokens=%d, ubatch_pos[0]=%d)\n",
                         __func__, rc, (int) batch.n_tokens, (int) batch_in.pos[0]);
