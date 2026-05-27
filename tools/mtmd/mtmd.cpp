@@ -502,13 +502,6 @@ struct mtmd_context {
                 } break;
             case PROJECTOR_TYPE_GRANITE4_VISION:
                 {
-                    // Granite Vision 4.1 uses a single "<image>" token to
-                    // mark image positions; see modeling.py::get_image_token_mask.
-                    // LlavaNext-style multi-tile splitting drives off the
-                    // image_grid_pinpoints mirrored into
-                    // hparams.image_res_candidates by the mmproj loader.
-                    // Per-tile encoder loop + pack_and_unpad happens inside
-                    // mtmd_encode (PROJECTOR_TYPE_GRANITE4_VISION branch).
                     img_beg = "<image>";
                     img_end = "";
                     image_preproc = std::make_unique<mtmd_image_preprocessor_llava_uhd>(ctx_v);
