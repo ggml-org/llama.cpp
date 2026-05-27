@@ -1564,7 +1564,7 @@ static bool ggml_cuda_kernel_can_use_pdl(const void * kernel) {
     struct cache_key_hash {
         // MurmurHash3 mixing function for better hash distribution (vs. just std::hash which in some implementations simply returns the identity)
         static std::size_t hash_mix(std::size_t x) {
-            std::uint64_t y = x;
+            std::uint64_t       y = x;
             const std::uint64_t m = 0xe9846af9b1a615d;
 
             y ^= y >> 32;
@@ -1579,8 +1579,8 @@ static bool ggml_cuda_kernel_can_use_pdl(const void * kernel) {
         std::size_t operator()(const cache_key & key) const {
             // Use a nonzero seed to avoid mapping all-zero keys to zero
             std::size_t h = 42;
-            h = hash_mix(h + key.device);
-            h = hash_mix(h + reinterpret_cast<std::size_t>(key.kernel));
+            h             = hash_mix(h + key.device);
+            h             = hash_mix(h + reinterpret_cast<std::size_t>(key.kernel));
             return h;
         }
     };
