@@ -32,8 +32,8 @@ using namespace metal;
 // ref: https://developer.apple.com/metal/Metal-Shading-Language-Specification.pdf
 //
 // cmd:
-//   .../usr/bin/metal -dM -E -c                             ggml/src/ggml-metal/ggml-metal.metal
-//   .../usr/bin/metal -dM -E -c -target air64-apple-ios14.0 ggml/src/ggml-metal/ggml-metal.metal
+//   .../usr/bin/metal -dM -E -c                             ggml/src/ggml-metal/kernels/misc.metal
+//   .../usr/bin/metal -dM -E -c -target air64-apple-ios14.0 ggml/src/ggml-metal/kernels/misc.metal
 //
 #if __METAL_VERSION__ < 310 && defined(GGML_METAL_HAS_BF16)
 #undef GGML_METAL_HAS_BF16

@@ -94,8 +94,83 @@ int ggml_metal_pipeline_max_theads_per_threadgroup(struct ggml_metal_pipeline_wi
     return pipeline.pipeline->obj.maxTotalThreadsPerThreadgroup;
 }
 
+//
+// MTLLibrary collection (8 op-source libraries compiled separately)
+//
+
+enum ggml_metal_lib_kind {
+    GGML_METAL_LIB_FA = 0,
+    GGML_METAL_LIB_MUL_MV,
+    GGML_METAL_LIB_MUL_MM,
+    GGML_METAL_LIB_QUANTIZE,
+    GGML_METAL_LIB_NORM,
+    GGML_METAL_LIB_ACTIVATION,
+    GGML_METAL_LIB_RECURRENT,
+    GGML_METAL_LIB_MISC,
+    GGML_METAL_LIB_COUNT,
+};
+
+static const char * const k_lib_names[GGML_METAL_LIB_COUNT] = {
+    "fa", "mul-mv", "mul-mm", "quantize", "norm", "activation", "recurrent", "misc",
+};
+
+// Dispatch a kernel name (e.g. "kernel_flash_attn_ext_f16_dk128_dv128") to the
+// op-source library that owns it.
+// All host_name-decorated kernels share the "kernel_" prefix; everything else
+// (including the dummy_kernel used by init_from_source) falls through to MISC,
+// but those code paths set single_library and never consult this dispatcher.
+static enum ggml_metal_lib_kind ggml_metal_lib_kind_for_kernel(const char * name) {
+    if (strncmp(name, "kernel_", 7) != 0) {
+        return GGML_METAL_LIB_MISC;
+    }
+    const char * s = name + 7;
+
+    if (strncmp(s, "flash_attn", 10) == 0) return GGML_METAL_LIB_FA;
+
+    // mul_mm must be checked before mul_mv so mul_mv doesn't swallow it
+    if (strncmp(s, "mul_mm",  6) == 0) return GGML_METAL_LIB_MUL_MM;
+    if (strncmp(s, "mul_mv",  6) == 0) return GGML_METAL_LIB_MUL_MV;
+
+    if (strncmp(s, "cpy_",      4) == 0) return GGML_METAL_LIB_QUANTIZE;
+    if (strncmp(s, "concat",    6) == 0) return GGML_METAL_LIB_QUANTIZE;
+    if (strncmp(s, "get_rows_", 9) == 0) return GGML_METAL_LIB_QUANTIZE;
+    if (strncmp(s, "set_rows_", 9) == 0) return GGML_METAL_LIB_QUANTIZE;
+
+    if (strncmp(s, "soft_max",    8) == 0) return GGML_METAL_LIB_NORM;
+    if (strncmp(s, "rms_norm",    8) == 0) return GGML_METAL_LIB_NORM;
+    if (strncmp(s, "l2_norm",     7) == 0) return GGML_METAL_LIB_NORM;
+    if (strncmp(s, "group_norm", 10) == 0) return GGML_METAL_LIB_NORM;
+    if (strncmp(s, "norm_",       5) == 0) return GGML_METAL_LIB_NORM;
+
+    // solve_tri must be checked before tri_ (activation) so it doesn't fall through to MISC
+    if (strncmp(s, "solve_tri",   9) == 0) return GGML_METAL_LIB_RECURRENT;
+    if (strncmp(s, "ssm_",        4) == 0) return GGML_METAL_LIB_RECURRENT;
+    if (strncmp(s, "rwkv_",       5) == 0) return GGML_METAL_LIB_RECURRENT;
+    if (strncmp(s, "gated_delta", 11) == 0) return GGML_METAL_LIB_RECURRENT;
+
+    if (strncmp(s, "unary_",      6) == 0) return GGML_METAL_LIB_ACTIVATION;
+    if (strncmp(s, "bin_",        4) == 0) return GGML_METAL_LIB_ACTIVATION;
+    if (strncmp(s, "add_id",      6) == 0) return GGML_METAL_LIB_ACTIVATION;
+    if (strncmp(s, "op_sum",      6) == 0) return GGML_METAL_LIB_ACTIVATION;
+    if (strncmp(s, "sum_rows",    8) == 0) return GGML_METAL_LIB_ACTIVATION;
+    if (strncmp(s, "cumsum",      6) == 0) return GGML_METAL_LIB_ACTIVATION;
+    if (strncmp(s, "tri_",        4) == 0) return GGML_METAL_LIB_ACTIVATION;
+    if (strncmp(s, "repeat",      6) == 0) return GGML_METAL_LIB_ACTIVATION;
+    if (strncmp(s, "reglu_",      6) == 0) return GGML_METAL_LIB_ACTIVATION;
+    if (strncmp(s, "geglu_",      6) == 0) return GGML_METAL_LIB_ACTIVATION;
+    if (strncmp(s, "swiglu_",     7) == 0) return GGML_METAL_LIB_ACTIVATION;
+
+    // fallback: rope / im2col / conv / upscale / pad / argsort / argmax / pool /
+    // opt_step / memset / count_equal / diag / arange / roll / timestep_embedding / top_k
+    return GGML_METAL_LIB_MISC;
+}
+
 struct ggml_metal_library {
-    id<MTLLibrary> obj;
+    // Per-kind compiled libraries. When single_library is true, the whole library
+    // (e.g. a pre-compiled default.metallib or a from-source build) lives at
+    // objs[0] and the remaining slots are nil.
+    id<MTLLibrary> objs[GGML_METAL_LIB_COUNT];
+    bool single_library; // true: combined library at objs[0]; false: per-kind libs in objs[*]
 
     ggml_metal_device_t dev;
     ggml_metal_pipelines_t pipelines; // cache of compiled pipelines
@@ -104,159 +179,279 @@ struct ggml_metal_library {
 };
 
 ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
-    id<MTLLibrary> library = nil;
     id<MTLDevice> device = ggml_metal_device_get_obj(dev);
 
-    // load library
-    //
-    // - first check if the library is embedded
-    // - then check if the library is in the bundle
-    // - if not found, load the source and compile it
-    // - if that fails, return NULL
-    //
-    // TODO: move to a function
-    {
-        const int64_t t_start = ggml_time_us();
+    ggml_metal_library_t res = calloc(1, sizeof(struct ggml_metal_library));
+    res->dev       = dev;
+    res->pipelines = ggml_metal_pipelines_init();
+    res->lock      = [NSLock new];
 
-        NSError * error = nil;
-        NSString * src = nil;
+    // shared MTLCompileOptions preprocessor macros (matches the build-time defines)
+    NSMutableDictionary * prep = [NSMutableDictionary dictionary];
+    if (ggml_metal_device_get_props(dev)->has_bfloat) {
+        [prep setObject:@"1" forKey:@"GGML_METAL_HAS_BF16"];
+    }
+    if (ggml_metal_device_get_props(dev)->has_tensor) {
+        [prep setObject:@"1" forKey:@"GGML_METAL_HAS_TENSOR"];
+    }
+#if GGML_METAL_EMBED_LIBRARY
+    [prep setObject:@"1" forKey:@"GGML_METAL_EMBED_LIBRARY"];
+#endif
+
+    const int64_t t_start = ggml_time_us();
 
 #if GGML_METAL_EMBED_LIBRARY
-        GGML_LOG_INFO("%s: using embedded metal library\n", __func__);
+    GGML_LOG_INFO("%s: using embedded metal library\n", __func__);
 
-        extern const char ggml_metallib_start[];
-        extern const char ggml_metallib_end[];
+    // 8 pairs of start/end symbols emitted by CMake (see CMakeLists.txt)
+    extern const char ggml_metallib_fa_start[];          extern const char ggml_metallib_fa_end[];
+    extern const char ggml_metallib_mul_mv_start[];      extern const char ggml_metallib_mul_mv_end[];
+    extern const char ggml_metallib_mul_mm_start[];      extern const char ggml_metallib_mul_mm_end[];
+    extern const char ggml_metallib_quantize_start[];    extern const char ggml_metallib_quantize_end[];
+    extern const char ggml_metallib_norm_start[];        extern const char ggml_metallib_norm_end[];
+    extern const char ggml_metallib_activation_start[];  extern const char ggml_metallib_activation_end[];
+    extern const char ggml_metallib_recurrent_start[];   extern const char ggml_metallib_recurrent_end[];
+    extern const char ggml_metallib_misc_start[];        extern const char ggml_metallib_misc_end[];
 
-        src = [[NSString alloc] initWithBytes:ggml_metallib_start length:(ggml_metallib_end-ggml_metallib_start) encoding:NSUTF8StringEncoding];
-#else
+    NSString ** src_per_kind = calloc(GGML_METAL_LIB_COUNT, sizeof(NSString *));
+    src_per_kind[GGML_METAL_LIB_FA]         = [[NSString alloc] initWithBytes:ggml_metallib_fa_start         length:(ggml_metallib_fa_end         - ggml_metallib_fa_start)         encoding:NSUTF8StringEncoding];
+    src_per_kind[GGML_METAL_LIB_MUL_MV]     = [[NSString alloc] initWithBytes:ggml_metallib_mul_mv_start     length:(ggml_metallib_mul_mv_end     - ggml_metallib_mul_mv_start)     encoding:NSUTF8StringEncoding];
+    src_per_kind[GGML_METAL_LIB_MUL_MM]     = [[NSString alloc] initWithBytes:ggml_metallib_mul_mm_start     length:(ggml_metallib_mul_mm_end     - ggml_metallib_mul_mm_start)     encoding:NSUTF8StringEncoding];
+    src_per_kind[GGML_METAL_LIB_QUANTIZE]   = [[NSString alloc] initWithBytes:ggml_metallib_quantize_start   length:(ggml_metallib_quantize_end   - ggml_metallib_quantize_start)   encoding:NSUTF8StringEncoding];
+    src_per_kind[GGML_METAL_LIB_NORM]       = [[NSString alloc] initWithBytes:ggml_metallib_norm_start       length:(ggml_metallib_norm_end       - ggml_metallib_norm_start)       encoding:NSUTF8StringEncoding];
+    src_per_kind[GGML_METAL_LIB_ACTIVATION] = [[NSString alloc] initWithBytes:ggml_metallib_activation_start length:(ggml_metallib_activation_end - ggml_metallib_activation_start) encoding:NSUTF8StringEncoding];
+    src_per_kind[GGML_METAL_LIB_RECURRENT]  = [[NSString alloc] initWithBytes:ggml_metallib_recurrent_start  length:(ggml_metallib_recurrent_end  - ggml_metallib_recurrent_start)  encoding:NSUTF8StringEncoding];
+    src_per_kind[GGML_METAL_LIB_MISC]       = [[NSString alloc] initWithBytes:ggml_metallib_misc_start       length:(ggml_metallib_misc_end       - ggml_metallib_misc_start)       encoding:NSUTF8StringEncoding];
 
-#ifdef SWIFT_PACKAGE
-        NSBundle * bundle = SWIFTPM_MODULE_BUNDLE;
-#else
-        NSBundle * bundle = [NSBundle bundleForClass:[GGMLMetalClass class]];
-#endif
+    int64_t * t_per_lib = calloc(GGML_METAL_LIB_COUNT, sizeof(int64_t));
+    NSError ** err_per_lib = calloc(GGML_METAL_LIB_COUNT, sizeof(NSError *));
+    __block bool any_failure = false;
 
-        NSString * path_lib = [bundle pathForResource:@"default" ofType:@"metallib"];
-        if (path_lib == nil) {
-            // Try to find the resource in the directory where the current binary located.
-            NSString * bin_cur = [[NSProcessInfo processInfo] arguments][0];
-            NSString * bin_dir = [bin_cur stringByDeletingLastPathComponent];
+    dispatch_group_t group = dispatch_group_create();
+    dispatch_queue_t queue = dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0);
 
-            NSString * path_lib_default = [NSString pathWithComponents:@[bin_dir, @"default.metallib"]];
-            if ([[NSFileManager defaultManager] isReadableFileAtPath:path_lib_default]) {
-                GGML_LOG_INFO("%s: found '%s'\n", __func__, [path_lib_default UTF8String]);
+    for (int kind = 0; kind < GGML_METAL_LIB_COUNT; ++kind) {
+        dispatch_group_async(group, queue, ^{
+            const int64_t t0 = ggml_time_us();
+            NSError * error = nil;
+            id<MTLLibrary> lib = nil;
 
-                NSDictionary * atts = [[NSFileManager defaultManager] attributesOfItemAtPath:path_lib_default error:&error];
-                if (atts && atts[NSFileType] == NSFileTypeSymbolicLink) {
-                    // Optionally, if this is a symlink, try to resolve it.
-                    path_lib_default = [[NSFileManager defaultManager] destinationOfSymbolicLinkAtPath:path_lib_default error:&error];
-                    if (path_lib_default && [path_lib_default length] > 0 && ![[path_lib_default substringToIndex:1] isEqualToString:@"/"]) {
-                        // It is a relative path, adding the binary directory as directory prefix.
-                        path_lib_default = [NSString pathWithComponents:@[bin_dir, path_lib_default]];
-                    }
-                    if (!path_lib_default || ![[NSFileManager defaultManager] isReadableFileAtPath:path_lib_default]) {
-                        // Link to the resource could not be resolved.
-                        path_lib_default = nil;
-                    } else {
-                        GGML_LOG_INFO("%s: symlink resolved '%s'\n", __func__, [path_lib_default UTF8String]);
-                    }
-                }
-            } else {
-                // The resource couldn't be found in the binary's directory.
-                path_lib_default = nil;
-            }
-
-            path_lib = path_lib_default;
-        }
-
-        if (path_lib != nil) {
-            // pre-compiled library found
-            NSURL * libURL = [NSURL fileURLWithPath:path_lib];
-            GGML_LOG_INFO("%s: loading '%s'\n", __func__, [path_lib UTF8String]);
-
-            library = [device newLibraryWithURL:libURL error:&error];
-            if (error) {
-                GGML_LOG_ERROR("%s: error: %s\n", __func__, [[error description] UTF8String]);
-                return nil;
-            }
-        } else {
-            GGML_LOG_INFO("%s: default.metallib not found, loading from source\n", __func__);
-
-            NSString * path_source;
-            NSString * path_resource = [[NSProcessInfo processInfo].environment objectForKey:@"GGML_METAL_PATH_RESOURCES"];
-
-            GGML_LOG_INFO("%s: GGML_METAL_PATH_RESOURCES = %s\n", __func__, path_resource ? [path_resource UTF8String] : "nil");
-
-            if (path_resource) {
-                path_source = [path_resource stringByAppendingPathComponent:@"ggml-metal.metal"];
-            } else {
-                path_source = [bundle pathForResource:@"ggml-metal" ofType:@"metal"];
-            }
-
-            if (path_source == nil) {
-                GGML_LOG_WARN("%s: error: could not use bundle path to find ggml-metal.metal, falling back to trying cwd\n", __func__);
-                path_source = @"ggml-metal.metal";
-            }
-
-            GGML_LOG_INFO("%s: loading '%s'\n", __func__, [path_source UTF8String]);
-
-            src = [NSString stringWithContentsOfFile:path_source encoding:NSUTF8StringEncoding error:&error];
-            if (error) {
-                GGML_LOG_ERROR("%s: error: %s\n", __func__, [[error description] UTF8String]);
-                return nil;
-            }
-        }
-#endif
-
-        if (!library) {
             @autoreleasepool {
-                // dictionary of preprocessor macros
-                NSMutableDictionary * prep = [NSMutableDictionary dictionary];
-
-                if (ggml_metal_device_get_props(dev)->has_bfloat) {
-                    [prep setObject:@"1" forKey:@"GGML_METAL_HAS_BF16"];
-                }
-
-                if (ggml_metal_device_get_props(dev)->has_tensor) {
-                    [prep setObject:@"1" forKey:@"GGML_METAL_HAS_TENSOR"];
-                }
-
-#if GGML_METAL_EMBED_LIBRARY
-                [prep setObject:@"1" forKey:@"GGML_METAL_EMBED_LIBRARY"];
-#endif
-
                 MTLCompileOptions * options = [MTLCompileOptions new];
                 options.preprocessorMacros = prep;
 
-                //[options setFastMathEnabled:false];
-
-                library = [device newLibraryWithSource:src options:options error:&error];
-                if (error) {
-                    GGML_LOG_ERROR("%s: error: %s\n", __func__, [[error description] UTF8String]);
-                    return nil;
-                }
+                lib = [device newLibraryWithSource:src_per_kind[kind] options:options error:&error];
 
 #if !__has_feature(objc_arc)
                 [options release];
 #endif
             }
-        }
 
-#if GGML_METAL_EMBED_LIBRARY
-        [src release];
-#endif // GGML_METAL_EMBED_LIBRARY
+            t_per_lib[kind] = ggml_time_us() - t0;
 
-        GGML_LOG_INFO("%s: loaded in %.3f sec\n", __func__, (ggml_time_us() - t_start) / 1e6);
+            if (!lib) {
+                err_per_lib[kind] = [error retain];
+                any_failure = true;
+                return;
+            }
+
+            res->objs[kind] = lib;
+        });
     }
+    dispatch_group_wait(group, DISPATCH_TIME_FOREVER);
 
-    ggml_metal_library_t res = calloc(1, sizeof(struct ggml_metal_library));
+    for (int kind = 0; kind < GGML_METAL_LIB_COUNT; ++kind) {
+        [src_per_kind[kind] release];
+    }
+    free(src_per_kind);
 
-    res->obj       = library;
-    res->dev       = dev;
-    res->pipelines = ggml_metal_pipelines_init();
-    res->lock      = [NSLock new];
+    if (any_failure) {
+        for (int kind = 0; kind < GGML_METAL_LIB_COUNT; ++kind) {
+            if (err_per_lib[kind]) {
+                GGML_LOG_ERROR("%s: failed to compile '%s' library: %s\n", __func__,
+                               k_lib_names[kind], [[err_per_lib[kind] description] UTF8String]);
+                [err_per_lib[kind] release];
+            }
+        }
+        free(err_per_lib);
+        free(t_per_lib);
+        ggml_metal_library_free(res);
+        return NULL;
+    }
+    free(err_per_lib);
+
+    const int64_t t_total = ggml_time_us() - t_start;
+    int64_t t_max = 0;
+    for (int kind = 0; kind < GGML_METAL_LIB_COUNT; ++kind) {
+        GGML_LOG_DEBUG("%s: compiled '%s' library in %.3f sec\n",
+                       __func__, k_lib_names[kind], t_per_lib[kind] / 1e6);
+        if (t_per_lib[kind] > t_max) t_max = t_per_lib[kind];
+    }
+    free(t_per_lib);
+    GGML_LOG_INFO("%s: loaded %d libraries from embedded data in %.3f sec (max single = %.3f sec)\n",
+                  __func__, GGML_METAL_LIB_COUNT, t_total / 1e6, t_max / 1e6);
 
     return res;
+#else
+#ifdef SWIFT_PACKAGE
+    NSBundle * bundle = SWIFTPM_MODULE_BUNDLE;
+#else
+    NSBundle * bundle = [NSBundle bundleForClass:[GGMLMetalClass class]];
+#endif
+
+    NSError * error = nil;
+    NSString * path_lib = [bundle pathForResource:@"default" ofType:@"metallib"];
+    if (path_lib == nil) {
+        // Try to find the resource in the directory where the current binary located.
+        NSString * bin_cur = [[NSProcessInfo processInfo] arguments][0];
+        NSString * bin_dir = [bin_cur stringByDeletingLastPathComponent];
+
+        NSString * path_lib_default = [NSString pathWithComponents:@[bin_dir, @"default.metallib"]];
+        if ([[NSFileManager defaultManager] isReadableFileAtPath:path_lib_default]) {
+            GGML_LOG_INFO("%s: found '%s'\n", __func__, [path_lib_default UTF8String]);
+
+            NSDictionary * atts = [[NSFileManager defaultManager] attributesOfItemAtPath:path_lib_default error:&error];
+            if (atts && atts[NSFileType] == NSFileTypeSymbolicLink) {
+                // Optionally, if this is a symlink, try to resolve it.
+                path_lib_default = [[NSFileManager defaultManager] destinationOfSymbolicLinkAtPath:path_lib_default error:&error];
+                if (path_lib_default && [path_lib_default length] > 0 && ![[path_lib_default substringToIndex:1] isEqualToString:@"/"]) {
+                    // It is a relative path, adding the binary directory as directory prefix.
+                    path_lib_default = [NSString pathWithComponents:@[bin_dir, path_lib_default]];
+                }
+                if (!path_lib_default || ![[NSFileManager defaultManager] isReadableFileAtPath:path_lib_default]) {
+                    // Link to the resource could not be resolved.
+                    path_lib_default = nil;
+                } else {
+                    GGML_LOG_INFO("%s: symlink resolved '%s'\n", __func__, [path_lib_default UTF8String]);
+                }
+            }
+        } else {
+            // The resource couldn't be found in the binary's directory.
+            path_lib_default = nil;
+        }
+
+        path_lib = path_lib_default;
+    }
+
+    if (path_lib != nil) {
+        // pre-compiled library found: a single combined default.metallib
+        NSURL * libURL = [NSURL fileURLWithPath:path_lib];
+        GGML_LOG_INFO("%s: loading '%s'\n", __func__, [path_lib UTF8String]);
+
+        res->objs[0]        = [device newLibraryWithURL:libURL error:&error];
+        res->single_library = true;
+        if (error) {
+            GGML_LOG_ERROR("%s: error: %s\n", __func__, [[error description] UTF8String]);
+            ggml_metal_library_free(res);
+            return NULL;
+        }
+
+        GGML_LOG_INFO("%s: loaded in %.3f sec\n", __func__, (ggml_time_us() - t_start) / 1e6);
+        return res;
+    }
+
+    // no pre-compiled metallib: fall back to compiling each kernel source separately
+    GGML_LOG_INFO("%s: default.metallib not found, loading kernel sources\n", __func__);
+
+    NSString * path_resource = [[NSProcessInfo processInfo].environment objectForKey:@"GGML_METAL_PATH_RESOURCES"];
+    GGML_LOG_INFO("%s: GGML_METAL_PATH_RESOURCES = %s\n", __func__, path_resource ? [path_resource UTF8String] : "nil");
+
+    int64_t * t_per_lib = calloc(GGML_METAL_LIB_COUNT, sizeof(int64_t));
+    NSError ** err_per_lib = calloc(GGML_METAL_LIB_COUNT, sizeof(NSError *));
+    __block bool any_failure = false;
+
+    dispatch_group_t group = dispatch_group_create();
+    dispatch_queue_t queue = dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0);
+
+    for (int kind = 0; kind < GGML_METAL_LIB_COUNT; ++kind) {
+        NSString * rel = [NSString stringWithFormat:@"kernels/%s.metal", k_lib_names[kind]];
+
+        NSString * path_source = nil;
+        if (path_resource) {
+            path_source = [path_resource stringByAppendingPathComponent:rel];
+        } else {
+            NSString * stem = [NSString stringWithFormat:@"kernels/%s", k_lib_names[kind]];
+            path_source = [bundle pathForResource:stem ofType:@"metal"];
+        }
+
+        if (path_source == nil || ![[NSFileManager defaultManager] isReadableFileAtPath:path_source]) {
+            GGML_LOG_WARN("%s: could not locate %s in bundle, falling back to cwd\n", __func__, [rel UTF8String]);
+            path_source = rel;
+        }
+
+        GGML_LOG_INFO("%s: loading '%s'\n", __func__, [path_source UTF8String]);
+
+        NSString * path_capture = [path_source copy];
+
+        dispatch_group_async(group, queue, ^{
+            const int64_t t0 = ggml_time_us();
+
+            NSError * file_err = nil;
+            NSString * src = [NSString stringWithContentsOfFile:path_capture encoding:NSUTF8StringEncoding error:&file_err];
+            if (!src || file_err) {
+                err_per_lib[kind] = [file_err retain];
+                any_failure = true;
+                [path_capture release];
+                return;
+            }
+
+            NSError * compile_err = nil;
+            id<MTLLibrary> lib = nil;
+
+            @autoreleasepool {
+                MTLCompileOptions * options = [MTLCompileOptions new];
+                options.preprocessorMacros = prep;
+
+                lib = [device newLibraryWithSource:src options:options error:&compile_err];
+
+#if !__has_feature(objc_arc)
+                [options release];
+#endif
+            }
+
+            t_per_lib[kind] = ggml_time_us() - t0;
+
+            if (!lib) {
+                err_per_lib[kind] = [compile_err retain];
+                any_failure = true;
+                [path_capture release];
+                return;
+            }
+
+            res->objs[kind] = lib;
+            [path_capture release];
+        });
+    }
+    dispatch_group_wait(group, DISPATCH_TIME_FOREVER);
+
+    if (any_failure) {
+        for (int kind = 0; kind < GGML_METAL_LIB_COUNT; ++kind) {
+            if (err_per_lib[kind]) {
+                GGML_LOG_ERROR("%s: failed to compile '%s' library: %s\n", __func__,
+                               k_lib_names[kind], [[err_per_lib[kind] description] UTF8String]);
+                [err_per_lib[kind] release];
+            }
+        }
+        free(err_per_lib);
+        free(t_per_lib);
+        ggml_metal_library_free(res);
+        return NULL;
+    }
+    free(err_per_lib);
+
+    const int64_t t_total = ggml_time_us() - t_start;
+    int64_t t_max = 0;
+    for (int kind = 0; kind < GGML_METAL_LIB_COUNT; ++kind) {
+        GGML_LOG_DEBUG("%s: compiled '%s' library in %.3f sec\n",
+                       __func__, k_lib_names[kind], t_per_lib[kind] / 1e6);
+        if (t_per_lib[kind] > t_max) t_max = t_per_lib[kind];
+    }
+    free(t_per_lib);
+    GGML_LOG_INFO("%s: loaded %d libraries from source in %.3f sec (max single = %.3f sec)\n",
+                  __func__, GGML_METAL_LIB_COUNT, t_total / 1e6, t_max / 1e6);
+
+    return res;
+#endif
 }
 
 ggml_metal_library_t ggml_metal_library_init_from_source(ggml_metal_device_t dev, const char * source, bool verbose) {
@@ -318,10 +513,11 @@ ggml_metal_library_t ggml_metal_library_init_from_source(ggml_metal_device_t dev
         return NULL;
     }
 
-    res->obj       = library;
-    res->dev       = dev;
-    res->pipelines = ggml_metal_pipelines_init();
-    res->lock      = [NSLock new];
+    res->objs[0]        = library;
+    res->single_library = true;
+    res->dev            = dev;
+    res->pipelines      = ggml_metal_pipelines_init();
+    res->lock           = [NSLock new];
 
     return res;
 }
@@ -331,8 +527,11 @@ void ggml_metal_library_free(ggml_metal_library_t lib) {
         return;
     }
 
-    if (lib->obj) {
-        [lib->obj release];
+    for (int kind = 0; kind < GGML_METAL_LIB_COUNT; ++kind) {
+        if (lib->objs[kind]) {
+            [lib->objs[kind] release];
+            lib->objs[kind] = nil;
+        }
     }
 
     ggml_metal_pipelines_free(lib->pipelines);
@@ -393,11 +592,22 @@ struct ggml_metal_pipeline_with_params ggml_metal_library_compile_pipeline(ggml_
 
         GGML_LOG_DEBUG("%s: compiling pipeline: base = '%s', name = '%s'\n", __func__, base, name);
 
+        // pick the op-source library that owns this kernel (single_library mode keeps everything at objs[0])
+        const int lib_idx = lib->single_library ? 0 : (int) ggml_metal_lib_kind_for_kernel(base);
+        id<MTLLibrary> mtl_lib = lib->objs[lib_idx];
+        if (!mtl_lib) {
+            [lib->lock unlock];
+
+            GGML_LOG_ERROR("%s: no library available for kernel: base = '%s', name = '%s'\n", __func__, base, name);
+
+            return res;
+        }
+
         id<MTLFunction> mtl_function;
         if (!cv) {
-            mtl_function = [lib->obj newFunctionWithName:base_func];
+            mtl_function = [mtl_lib newFunctionWithName:base_func];
         } else {
-            mtl_function = [lib->obj newFunctionWithName:base_func constantValues:cv->obj error:&error];
+            mtl_function = [mtl_lib newFunctionWithName:base_func constantValues:cv->obj error:&error];
         }
         if (!mtl_function) {
             [lib->lock unlock];
