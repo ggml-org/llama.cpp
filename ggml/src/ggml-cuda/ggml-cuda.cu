@@ -288,6 +288,11 @@ static ggml_cuda_device_info ggml_cuda_init() {
                       (size_t)(prop.totalGlobalMem / (1024 * 1024)));
 #else
         info.devices[id].smpbo = prop.sharedMemPerBlockOptin;
+        if (info.devices[id].smpbo == 0 || info.devices[id].smpbo > 1024*1024) {
+            GGML_LOG_WARN("%s: device %d reported invalid sharedMemPerBlockOptin=%zu, falling back to sharedMemPerBlock=%zu\n",
+                    __func__, id, info.devices[id].smpbo, (size_t) prop.sharedMemPerBlock);
+            info.devices[id].smpbo = prop.sharedMemPerBlock;
+        }
         info.devices[id].cc = 100*prop.major + 10*prop.minor;
         GGML_LOG_INFO("  Device %d: %s, compute capability %d.%d, VMM: %s, VRAM: %zu MiB\n",
                       id, prop.name, prop.major, prop.minor, device_vmm ? "yes" : "no",
