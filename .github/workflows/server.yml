@@ -54,10 +54,10 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  server:
+  ubuntu:
     runs-on: ubuntu-latest
 
-    name: server (${{ matrix.wf_name }})
+    name: ubuntu (${{ matrix.wf_name }})
     strategy:
       matrix:
         build_type: [Release]
@@ -130,8 +130,8 @@ jobs:
           export ${{ matrix.extra_args }}
           SLOW_TESTS=1 pytest -v -x
 
-  server-windows:
-    runs-on: windows-2022
+  windows:
+    runs-on: windows-2025
 
     steps:
       - name: Clone
@@ -150,9 +150,15 @@ jobs:
 
       - name: Build
         id: cmake_build
+        shell: cmd
         run: |
-          cmake -B build -DLLAMA_BUILD_BORINGSSL=ON -DGGML_SCHED_NO_REALLOC=ON
-          cmake --build build --config Release -j ${env:NUMBER_OF_PROCESSORS} --target llama-server
+          cmake -B build -G "Ninja Multi-Config" ^
+            -DCMAKE_TOOLCHAIN_FILE=cmake/x64-windows-llvm.cmake ^
+            -DCMAKE_BUILD_TYPE=Release ^
+            -DLLAMA_BUILD_BORINGSSL=ON ^
+            -DGGML_SCHED_NO_REALLOC=ON
+          set /A NINJA_JOBS=%NUMBER_OF_PROCESSORS%-1
+          cmake --build build --config Release -j %NINJA_JOBS% --target llama-server
 
       - name: Python setup
         id: setup_python
