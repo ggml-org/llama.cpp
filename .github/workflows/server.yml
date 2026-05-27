@@ -54,10 +54,10 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  server:
+  ubuntu:
     runs-on: ubuntu-latest
 
-    name: server (${{ matrix.wf_name }})
+    name: ubuntu (${{ matrix.wf_name }})
     strategy:
       matrix:
         build_type: [Release]
@@ -130,7 +130,7 @@ jobs:
           export ${{ matrix.extra_args }}
           SLOW_TESTS=1 pytest -v -x
 
-  server-windows:
+  windows:
     runs-on: windows-2025
 
     steps:
