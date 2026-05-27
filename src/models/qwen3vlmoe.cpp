@@ -4,6 +4,15 @@ void llama_model_qwen3vlmoe::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key_or_arr(LLM_KV_ROPE_DIMENSION_SECTIONS, hparams.rope_sections, 4, true);
     ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH, hparams.n_ff_exp, false);
     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
+
+    // qwen3vlmoe uses scalar n_deepstack_layers
+    uint32_t n_deepstack_layers = 0;
+    if (ml.get_key(LLM_KV_NUM_DEEPSTACK_LAYERS, n_deepstack_layers, false)) {
+        // Create 1:1 mapping: layer i gets projector i+1
+        for (int32_t i = 0; i < (int32_t)n_deepstack_layers; ++i) {
+            hparams.deepstack_layers_arr[i] = i + 1;
+        }
+    }
     switch (hparams.n_layer) {
         case 48: type = LLM_TYPE_30B_A3B; break;
         case 94: type = LLM_TYPE_235B_A22B; break;
