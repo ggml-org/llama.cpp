@@ -4,7 +4,6 @@
 
 #include <algorithm>
 #include <cassert>
-#include <unordered_set>
 
 void llama_hparams::set_swa_pattern(uint32_t n_pattern, bool dense_first) {
     if (dense_first) {
