@@ -323,14 +323,13 @@ bool server_http_context::init(const common_params & params) {
                         res.status = 404;
                         return false;
                     }
+                    res.set_header("ETag", a->etag);
                     // Check If-None-Match for conditional GET (304 Not Modified)
                     if (const std::string & inm = req.get_header_value("If-None-Match");
                         !inm.empty() && inm == a->etag) {
                         res.status = 304;
-                        res.set_header("ETag", a->etag);
                         return false;
                     }
-                    res.set_header("ETag", a->etag);
                     if (with_isolation_headers) {
                         // COEP and COOP headers, required by pyodide (python interpreter)
                         res.set_header("Cross-Origin-Embedder-Policy", "require-corp");
