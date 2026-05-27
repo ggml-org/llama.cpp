@@ -55,7 +55,7 @@ jobs:
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.21
         with:
-          key: ${{ matrix.os }}-vulkan
+          key: vulkan-${{ matrix.os }}
           variant: ccache
           evict-old-files: 1d
           save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
@@ -94,7 +94,7 @@ jobs:
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.21
         with:
-          key: ubuntu-24.04-vulkan-llvmpipe
+          key: vulkan-ubuntu-24.04-llvmpipe
           evict-old-files: 1d
           save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 

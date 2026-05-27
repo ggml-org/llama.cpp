@@ -100,7 +100,7 @@ jobs:
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.21
         with:
-          key: ${{ matrix.os }}-${{ matrix.arch }}
+          key: release-${{ matrix.os }}-${{ matrix.arch }}
           evict-old-files: 1d
 
       - name: Build
@@ -165,7 +165,7 @@ jobs:
         if: ${{ matrix.build != 's390x' }}
         uses: ggml-org/ccache-action@v1.2.21
         with:
-          key: ${{ matrix.os }}-cpu
+          key: release-${{ matrix.os }}-cpu
           evict-old-files: 1d
 
       - name: Dependencies
@@ -241,7 +241,7 @@ jobs:
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.21
         with:
-          key: ${{ matrix.os }}-vulkan
+          key: release-${{ matrix.os }}-vulkan
           evict-old-files: 1d
 
       - name: Dependencies
@@ -314,7 +314,7 @@ jobs:
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.21
         with:
-          key: android-arm64
+          key: release-android-arm64
           evict-old-files: 1d
 
       - name: Set up JDK
@@ -402,7 +402,7 @@ jobs:
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.21
         with:
-          key: ubuntu-24.04-openvino-release-no-preset-v1
+          key: release-ubuntu-24.04-openvino-release-no-preset-v1
           evict-old-files: 1d
 
       - name: Dependencies
@@ -485,7 +485,7 @@ jobs:
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.21
         with:
-          key: windows-2025-cpu-${{ matrix.arch }}
+          key: release-windows-2025-${{ matrix.arch }}-cpu
           variant: ccache
           evict-old-files: 1d
 
@@ -556,7 +556,7 @@ jobs:
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.21
         with:
-          key: windows-2025-${{ matrix.backend }}-${{ matrix.arch }}
+          key: release-windows-2025-${{ matrix.arch }}-${{ matrix.backend }}
           variant: ccache
           evict-old-files: 1d
 
@@ -636,7 +636,7 @@ jobs:
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.21
         with:
-          key: windows-2022-cuda-${{ matrix.cuda }}
+          key: release-windows-2022-x64-cuda-${{ matrix.cuda }}
           variant: ccache
           evict-old-files: 1d
 
@@ -744,7 +744,7 @@ jobs:
 #      - name: ccache
 #        uses: ggml-org/ccache-action@v1.2.21
 #        with:
-#          key: windows-2022-sycl
+#          key: release-windows-2022-x64-sycl
 #          variant: ccache
 #          evict-old-files: 1d
 #
@@ -866,7 +866,7 @@ jobs:
 #      - name: ccache
 #        uses: ggml-org/ccache-action@v1.2.21
 #        with:
-#          key: ubuntu-24.04-sycl
+#          key: release-ubuntu-24.04-sycl
 #          evict-old-files: 1d
 #          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 #
@@ -936,7 +936,7 @@ jobs:
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.21
         with:
-          key: ubuntu-22.04-rocm-${{ matrix.ROCM_VERSION }}
+          key: release-ubuntu-22.04-rocm-${{ matrix.ROCM_VERSION }}
           evict-old-files: 1d
 
       - name: Dependencies
@@ -1058,7 +1058,7 @@ jobs:
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.21
         with:
-          key: windows-2022-hip-${{ env.HIPSDK_INSTALLER_VERSION }}-${{ matrix.name }}-x64
+          key: release-windows-2022-x64-hip-${{ env.HIPSDK_INSTALLER_VERSION }}-${{ matrix.name }}
           evict-old-files: 1d
 
       - name: Install ROCm

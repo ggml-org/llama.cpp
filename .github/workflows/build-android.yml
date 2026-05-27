@@ -32,7 +32,7 @@ env:
   LLAMA_ARG_LOG_TIMESTAMPS: 1
 
 jobs:
-  android:
+  default:
     runs-on: ubuntu-latest
 
     steps:
@@ -58,7 +58,7 @@ jobs:
           cd examples/llama.android
           ./gradlew build --no-daemon
 
-  android-ndk:
+  ndk:
     runs-on: ubuntu-latest
     container:
       image: 'ghcr.io/snapdragon-toolchain/arm64-android:v0.3'
@@ -92,7 +92,7 @@ jobs:
           name: llama-cpp-android-arm64-cpu
           path: pkg-adb/llama.cpp
 
-  android-arm64:
+  arm64:
     runs-on: ubuntu-latest
 
     env:
@@ -106,7 +106,7 @@ jobs:
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.21
         with:
-          key: android-arm64
+          key: android-ubuntu-arm64
           evict-old-files: 1d
           save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 

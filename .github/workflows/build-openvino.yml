@@ -67,7 +67,7 @@ jobs:
         if: runner.environment == 'github-hosted'
         uses: ggml-org/ccache-action@v1.2.21
         with:
-          key: ubuntu-24.04-openvino-${{ matrix.variant }}-no-preset-v1
+          key: openvino-ubuntu-24.04-${{ matrix.variant }}-no-preset-v1
           evict-old-files: 1d
           save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 

@@ -6,7 +6,7 @@ on:
     branches:
       - master
     paths: [
-      '.github/workflows/build-hip.yml',
+      '.github/workflows/build-cuda-ubuntu.yml',
       '**/CMakeLists.txt',
       '**/.cmake',
       '**/*.h',
@@ -20,7 +20,7 @@ on:
   pull_request:
     types: [opened, synchronize, reopened]
     paths: [
-      '.github/workflows/build-hip.yml',
+      '.github/workflows/build-cuda-ubuntu.yml',
       'ggml/src/ggml-cuda/**'
     ]
 
@@ -55,7 +55,7 @@ jobs:
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.21
         with:
-          key: ubuntu-24.04-cuda
+          key: cuda-ubuntu-24.04-cuda
           evict-old-files: 1d
           save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
@@ -90,7 +90,7 @@ jobs:
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.21
         with:
-          key: ubuntu-22.04-hip
+          key: cuda-ubuntu-22.04-hip
           evict-old-files: 1d
           save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
@@ -122,7 +122,7 @@ jobs:
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.21
         with:
-          key: ubuntu-22.04-musa
+          key: cuda-ubuntu-22.04-musa
           evict-old-files: 1d
           save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
