@@ -15,6 +15,10 @@
 #include <string_view>
 #include <stdexcept>
 
+#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
+#include <openssl/err.h>
+#endif
+
 namespace nl = nlohmann;
 
 #if defined(_WIN32)
@@ -222,7 +226,14 @@ static nl::json api_get(const std::string & url,
 
         throw std::runtime_error("GET failed (" + std::to_string(res->status) + "): " + body);
     } else {
-        throw std::runtime_error("HTTPLIB failed: " + httplib::to_string(res.error()));
+        // surface the backend SSL reason so transport failures are diagnosable instead of opaque
+        char ssl_reason[256] = "n/a";
+#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
+        ERR_error_string_n((unsigned long) res.ssl_backend_error(), ssl_reason, sizeof(ssl_reason));
+#endif
+        throw std::runtime_error(string_format("HTTPLIB failed: %s [ssl_err:%d backend:0x%lx reason:%s]",
+            httplib::to_string(res.error()).c_str(), res.ssl_error(),
+            (unsigned long) res.ssl_backend_error(), ssl_reason));
     }
 }
 

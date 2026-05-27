@@ -91,6 +91,15 @@ static std::pair<httplib::Client, common_http_url> common_http_client(const std:
 
     cli.set_follow_location(true);
 
+    // bound each phase so a stalled handshake or a dead socket fails fast instead of blocking on
+    // the httplib default of 300 seconds
+    constexpr int connection_timeout_sec = 15;
+    constexpr int read_timeout_sec       = 30;
+    constexpr int write_timeout_sec      = 30;
+    cli.set_connection_timeout(connection_timeout_sec, 0);
+    cli.set_read_timeout(read_timeout_sec, 0);
+    cli.set_write_timeout(write_timeout_sec, 0);
+
     return { std::move(cli), std::move(parts) };
 }
 
