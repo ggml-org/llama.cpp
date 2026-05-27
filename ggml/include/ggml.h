@@ -695,7 +695,9 @@ extern "C" {
 
         void * extra; // extra things e.g. for ggml-cuda.cu
 
-        char padding[8];
+        char padding[16];
+        // add a struct ggml_tensor * named org_src, initialized to NULL, for keeping track of original source tensors in case of in-place operations
+        struct ggml_tensor * org_src;
     };
 
     static const size_t GGML_TENSOR_SIZE = sizeof(struct ggml_tensor);
