@@ -11,8 +11,8 @@ FLOAT_TYPE get_dm(uint ib) {
 #endif
 
 #if defined(DATA_A_Q4_1) || defined(DATA_A_Q5_1)
-FLOAT_TYPE_VEC2 get_dm(uint ib) {
-    return FLOAT_TYPE_VEC2(data_a_packed32[ib].dm);
+FLOAT_TYPEV2 get_dm(uint ib) {
+    return FLOAT_TYPEV2(data_a_packed32[ib].dm);
 }
 #endif
 
@@ -23,9 +23,9 @@ FLOAT_TYPE get_dm(uint ib) {
 #endif
 
 #if defined(DATA_A_Q2_K)
-FLOAT_TYPE_VEC2 get_dm(uint ib) {
+FLOAT_TYPEV2 get_dm(uint ib) {
     const uint ib_k = ib / 8;
-    return FLOAT_TYPE_VEC2(data_a_packed32[ib_k].dm);
+    return FLOAT_TYPEV2(data_a_packed32[ib_k].dm);
 }
 #endif
 
@@ -296,15 +296,24 @@ vec2 get_dm_scale(uint ib, uint iqs) {
     const uint ib_k = ib / 8;
     const uint iqs_k = (ib % 8) * 8 + iqs;
     const uint is = iqs_k / 8;
-    u8vec2 scale_dm;
-    if (is < 4) {
-        scale_dm = u8vec2(data_a[ib_k].scales[is] & 0x3F, data_a[ib_k].scales[is + 4] & 0x3F);
-    } else {
-        scale_dm = u8vec2((data_a[ib_k].scales[is+4] & 0xF) | ((data_a[ib_k].scales[is-4] & 0xC0) >> 2),
-                          (data_a[ib_k].scales[is+4] >>  4) | ((data_a[ib_k].scales[is  ] & 0xC0) >> 2));
-    }
 
-    return FLOAT_TYPE_VEC2(data_a_packed32[ib_k].dm) * FLOAT_TYPE_VEC2(scale_dm);
+    const uvec3 scales = uvec3(data_a_packed32[ib_k].scales[0],
+                               data_a_packed32[ib_k].scales[1],
+                               data_a_packed32[ib_k].scales[2]);
+    const uint scalesoffs = (is & 3) * 8;
+
+    const uint scidx0 = (is < 4) ? 0 : 2;
+    const uint scidxshift0 = scalesoffs;
+    const uint scidxshift1 = (is < 4) ? scalesoffs : scalesoffs + 2;
+    const uint mbidx0 = (is < 4) ? 1 : 2;
+    const uint mbidxshift0 = (is < 4) ? scalesoffs : scalesoffs + 4;
+    const uint mbidxshift1 = (is < 4) ? scalesoffs : scalesoffs + 2;
+
+    const uint8_t sc    = uint8_t(((scales[scidx0] >> scidxshift0) & 0xF) | ((scales[0] >> scidxshift1) & 0x30));
+    const uint8_t mbyte = uint8_t(((scales[mbidx0] >> mbidxshift0) & 0xF) | ((scales[1] >> mbidxshift1) & 0x30));
+    u8vec2 scale_dm = u8vec2(sc, mbyte);
+
+    return FLOAT_TYPEV2(data_a_packed32[ib_k].dm) * FLOAT_TYPEV2(scale_dm);
 }
 
 FLOAT_TYPE mmvq_dot_product(const uint ib_a, const uint iqs) {
@@ -422,7 +431,7 @@ vec2 get_dm(uint ib, uint iqs) {
     const float dl = d * float(2 * bitfieldExtract(qh, 12, 3) + 1);
 
     // the -1 cancels out the bias in iq1s_grid_gpu
-    return FLOAT_TYPE_VEC2(dl, dl * (delta - 1));
+    return FLOAT_TYPEV2(dl, dl * (delta - 1));
 }
 
 FLOAT_TYPE mmvq_dot_product(const uint ib_a, const uint iqs) {

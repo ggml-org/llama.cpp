@@ -68,11 +68,13 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
+    ggml_backend_load_all();
+
     LOG_INF("%s: loading model: %s\n", __func__, params.model.path.c_str());
 
     mtmd::context_ptr ctx_mtmd;
     common_init_result_ptr llama_init;
-    base_callback_data cb_data;
+    common_debug_cb_user_data cb_data;
 
     llama_init = common_init_from_params(params);
     {
@@ -89,7 +91,7 @@ int main(int argc, char ** argv) {
         {
             // always enable debug callback
             mparams.cb_eval_user_data = &cb_data;
-            mparams.cb_eval = common_debug_cb_eval<false>;
+            mparams.cb_eval = common_debug_cb_eval;
         }
         ctx_mtmd.reset(mtmd_init_from_file(clip_path, model, mparams));
         if (!ctx_mtmd.get()) {

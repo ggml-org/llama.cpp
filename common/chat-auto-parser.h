@@ -60,16 +60,21 @@ struct generation_params {
     common_reasoning_format               reasoning_format    = COMMON_REASONING_FORMAT_AUTO;
     bool                                  stream              = true;
     std::string                           grammar;
-    bool                                  add_generation_prompt = false;
-    bool                                  enable_thinking       = true;
-    std::chrono::system_clock::time_point now                   = std::chrono::system_clock::now();
-    std::string                           generation_prompt;
+    bool                                  add_generation_prompt  = false;
+    common_chat_continuation              continue_final_message = COMMON_CHAT_CONTINUATION_NONE;
+    common_chat_msg                       continue_msg;
+    bool                                  enable_thinking        = true;
+    std::chrono::system_clock::time_point now                    = std::chrono::system_clock::now();
     json                                  extra_context;
     bool                                  add_bos       = false;
     bool                                  add_eos       = false;
     bool                                  is_inference  = true;
     bool                                  add_inference = false;
     bool                                  mark_input    = true;  // whether to mark input strings in the jinja context
+
+    bool has_continuation() const {
+        return continue_final_message != COMMON_CHAT_CONTINUATION_NONE && !continue_msg.empty();
+    }
 };
 
 // ============================================================================
@@ -308,18 +313,22 @@ struct analyze_tools : analyze_base {
 
   private:
     // Extract tool calling 'haystack' for further analysis and delegate further analysis based on format
-    void analyze_tool_calls(const analyze_reasoning & reasoning);
+    void analyze_tool_calls(const analyze_reasoning & reasoning, bool supports_parallel_tool_calls);
 
     // Analyze format based on position of function and argument name in needle
     void analyze_tool_call_format(const std::string &       haystack,
                                   const std::string &       fun_name_needle,
                                   const std::string &       arg_name_needle,
-                                  const analyze_reasoning & reasoning);
+                                  const analyze_reasoning & reasoning,
+                                  bool                      supports_parallel_tool_calls);
 
     // Analyze specifics of JSON native format (entire tool call is a JSON object)
     void analyze_tool_call_format_json_native(const std::string & clean_haystack,
                                               const std::string & fun_name_needle,
                                               const std::string & arg_name_needle);
+
+    // Check if parallel calls in JSON native format array wrapped or tag wrapped
+    void analyze_json_native_parallel_calls();
 
     // Analyze specifics of non-JSON native format (tags for function name or for function name and arguments)
     void analyze_tool_call_format_non_json(const std::string & clean_haystack,
@@ -368,6 +377,8 @@ struct analyze_tools : analyze_base {
 
 struct autoparser {
     jinja::caps          jinja_caps;
+    std::string          user_start;
+    std::string          assistant_start;
     analyze_reasoning    reasoning;
     analyze_content      content;
     analyze_tools        tools;
@@ -378,11 +389,15 @@ struct autoparser {
 
     autoparser() = default;
 
+    // Find the starting marker for the user message and assistant message
+    std::string detect_user_start_marker(const common_chat_template & tmpl);
+    std::string detect_assistant_start_marker(const common_chat_template & tmpl);
+
     // Run full differential analysis on a template
     void analyze_template(const common_chat_template & tmpl);
 
     // Build the PEG parser for this template
-    common_peg_arena build_parser(const generation_params & inputs) const;
+    common_peg_arena build_parser(const generation_params & inputs, const std::string & generation_prompt) const;
 
   private:
     // Collect tokens from entire analysis to preserve

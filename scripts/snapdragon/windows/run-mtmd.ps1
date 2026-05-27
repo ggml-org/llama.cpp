@@ -29,22 +29,16 @@ if ($null -ne $env:V) {
     $env:GGML_HEXAGON_VERBOSE=$env:V
 }
 
-# Default experimental to 1
-$env:GGML_HEXAGON_EXPERIMENTAL=1
-if ($null -ne $env:E) {
-    $env:GGML_HEXAGON_EXPERIMENTAL=$env:E
-}
-
 if ($null -ne $env:SCHED) {
     $env:GGML_SCHED_DEBUG=$env:SCHED; $cli_opts="$cli_opts -v"
 }
 
 if ($null -ne $env:PROF) {
-    $env:GGML_HEXAGON_PROFILE=$env:PROF; $env:GGML_HEXAGON_OPSYNC=1
+    $env:GGML_HEXAGON_PROFILE=$env:PROF
 }
 
-if ($null -ne $env:OPMASK) {
-    $env:GGML_HEXAGON_OPMASK=$env:OPMASK
+if ($null -ne $env:OPSTAGE) {
+    $env:GGML_HEXAGON_OPSTAGE=$env:OPSTAGE
 }
 
 if ($null -ne $env:NHVX) {
@@ -70,5 +64,5 @@ $env:ADSP_LIBRARY_PATH="$basedir\lib"
     --mmproj $basedir\..\..\gguf\$mmproj `
     --image $basedir\..\..\gguf\$image `
     --poll 1000 -t 6 --cpu-mask 0xfc --cpu-strict 1 `
-    --ctx-size 8192 --ubatch-size 256 -fa on `
+    --ctx-size 8192 --ubatch-size 1024 -fa on `
     -ngl 99 --device $device -v $cli_opts

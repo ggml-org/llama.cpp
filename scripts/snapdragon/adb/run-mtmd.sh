@@ -37,10 +37,10 @@ sched=
 [ "$SCHED" != "" ] && sched="GGML_SCHED_DEBUG=2" cli_opts="$cli_opts -v"
 
 profile=
-[ "$PROF" != "" ] && profile="GGML_HEXAGON_PROFILE=$PROF GGML_HEXAGON_OPSYNC=1"
+[ "$PROF" != "" ] && profile="GGML_HEXAGON_PROFILE=$PROF"
 
 opmask=
-[ "$OPMASK" != "" ] && opmask="GGML_HEXAGON_OPMASK=$OPMASK"
+[ "$OPSTAGE" != "" ] && opmask="GGML_HEXAGON_OPSTAGE=$OPSTAGE"
 
 nhvx=
 [ "$NHVX" != "" ] && nhvx="GGML_HEXAGON_NHVX=$NHVX"
@@ -66,6 +66,6 @@ adb $adbserial $adbhost shell " \
          --mmproj $basedir/../gguf/$mmproj                                   \
          --image $basedir/../gguf/$image                                     \
          --poll 1000 -t 6 --cpu-mask 0xfc --cpu-strict 1                     \
-         --ctx-size 8192 --ubatch-size 256 -fa on                            \
+         --ctx-size 8192 --ubatch-size 1024 -fa on                           \
          -ngl 99 --device $device -v $cli_opts $@                            \
 "
