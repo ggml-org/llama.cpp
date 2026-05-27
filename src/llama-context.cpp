@@ -4107,5 +4107,7 @@ void llama_set_output_layer_inp(struct llama_context * ctx, uint32_t layer_id, b
 }
 
 float * llama_get_output_layer_inp(struct llama_context * ctx, uint32_t layer_id) {
+    ctx->synchronize();
+
     return ctx->get_output_layer_inp(layer_id);
 }
