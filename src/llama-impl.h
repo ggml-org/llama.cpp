@@ -3,6 +3,7 @@
 #include "ggml.h" // for ggml_log_level
 
 #include <string>
+#include <type_traits>
 #include <vector>
 
 #ifdef __GNUC__
@@ -39,6 +40,16 @@ struct no_init {
     T value;
     no_init() = default;
 };
+
+// store an f32 mask value into a buffer that is either f32 or f16
+template <typename T>
+static inline T llama_mask_value(float v) {
+    if constexpr (std::is_same_v<T, ggml_fp16_t>) {
+        return ggml_fp32_to_fp16(v);
+    } else {
+        return v;
+    }
+}
 
 struct time_meas {
     time_meas(int64_t & t_acc, bool disable = false);
