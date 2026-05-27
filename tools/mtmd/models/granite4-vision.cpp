@@ -70,10 +70,7 @@ static ggml_tensor * g4v_build_block(
 
     auto cbx = [&](ggml_tensor * & t, const char * step) {
         const std::string name = "g4v_blk" + std::to_string(bid) + "_" + step;
-        ggml_tensor * tagged = ggml_cont(ctx, t);
-        ggml_set_name(tagged, name.c_str());
-        ggml_build_forward_expand(gf, tagged);
-        t = tagged;
+        ggml_set_name(t, name.c_str());
     };
 
     // 1. Top-level LN
