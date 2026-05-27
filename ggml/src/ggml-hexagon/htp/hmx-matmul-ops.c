@@ -423,7 +423,6 @@ static void dequantize_x4x2_weight_to_fp16_tiles_task(
             HVX_Vector v_off = v_scat_base;
 
             unsigned row_offset = ct * HMX_FP16_TILE_N_COLS * row_stride;
-            unsigned row1 = ct * HMX_FP16_TILE_N_COLS + 1;
 
             if (is_q4_1) {
                 for (int r = 0; r < HMX_FP16_TILE_N_ROWS; r += 2, row1 += 2) {
