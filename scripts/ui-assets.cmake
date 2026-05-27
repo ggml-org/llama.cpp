@@ -23,6 +23,7 @@ set(ASSETS
     loading.html
     # PWA assets
     favicon.ico
+    favicon.svg
     pwa-64x64.png
     pwa-192x192.png
     pwa-512x512.png

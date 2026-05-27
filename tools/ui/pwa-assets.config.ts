@@ -20,5 +20,5 @@ const preset = {
 
 export default defineConfig({
 	preset,
-	images: ['static/logo.svg']
+	images: ['static/favicon.svg']
 });

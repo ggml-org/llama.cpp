@@ -4,7 +4,8 @@
 	"version": "1.0.0",
 	"type": "module",
 	"scripts": {
-		"build": "npx @vite-pwa/assets-generator && vite build",
+		"build": "npm run build-pwa-assets && vite build",
+		"build-pwa-assets": "npx @vite-pwa/assets-generator && node scripts/make-icons-circular.js",
 		"dev": "bash scripts/dev.sh",
 		"preview": "vite preview",
 		"prepare": "svelte-kit sync || echo ''",
