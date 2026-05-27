@@ -335,7 +335,7 @@ $ make perplexity-run-full QUANTIZED_MODEL=~/path/to/quantized/model-Qxx.gguf LO
 
 ## HuggingFace utilities
 The following targets are useful for creating collections and model repositories
-on Hugging Face in the the ggml-org. These can be used when preparing a release
+on Hugging Face in the ggml-org. These can be used when preparing a release
 to script the process for new model releases.
 
 For the following targets a `HF_TOKEN` environment variable is required.
