@@ -16,6 +16,7 @@
 #include "ggml-common.h"
 
 #include "hex-dma.h"
+#include "hex-fastdiv.h"
 #include "worker-pool.h"
 
 #include "hvx-utils.h"
@@ -385,9 +386,11 @@ static void dequantize_x4x2_weight_to_fp16_tiles_task(
         int start_tile, int end_tile) {
 
     const int n_k_tiles = (unsigned)k_block / HMX_FP16_TILE_N_COLS;
-    const bool is_q4 = (weight_type == HTP_TYPE_Q4_0 || weight_type == HTP_TYPE_Q4_1 || weight_type == HTP_TYPE_IQ4_NL);
+    const bool is_q4   = (weight_type == HTP_TYPE_Q4_0 || weight_type == HTP_TYPE_Q4_1 || weight_type == HTP_TYPE_IQ4_NL);
     const bool is_q4_1 = (weight_type == HTP_TYPE_Q4_1);
     const int qrow_size = is_q4 ? ((unsigned)k_block / 2) : k_block;
+
+    const struct fastdiv_values n_k_tiles_div = init_fastdiv_values(n_k_tiles);
 
     const HVX_Vector vlut_cvt = (weight_type == HTP_TYPE_IQ4_NL) ? hvx_vmem(iq4_nl_to_fp16_lut) :
                                 (weight_type == HTP_TYPE_MXFP4)  ? hvx_vmem(mxfp4_to_fp16_lut) :
@@ -401,13 +404,13 @@ static void dequantize_x4x2_weight_to_fp16_tiles_task(
     const HVX_Vector v_scat_step  = Q6_V_vsplat_R(4);  // 4 bytes = 1 column step
     const HVX_VectorPred q_mask64 = Q6_Q_vsetq_R(64);  // first 16 words (64 bytes)
 
-    unsigned ct = (unsigned)start_tile / n_k_tiles;  // column tile index
-    unsigned kt = (unsigned)start_tile % n_k_tiles;  // K tile index
+    unsigned ct = fastdiv((unsigned)start_tile, &n_k_tiles_div);              // column tile index
+    unsigned kt = fastmodulo((unsigned)start_tile, n_k_tiles, &n_k_tiles_div); // K tile index
     for (unsigned t = start_tile; t < end_tile; ) {
         if (kt >= n_k_tiles) { kt = 0; ct++; }
 
         // --- Batch-4 fast path for Q4: process 4 contiguous K-tiles with one vlut16 per row ---
-        if (is_q4 && (kt % 4 == 0) && (t + 4 <= end_tile) && ((t + 3) / n_k_tiles == ct)) {
+        if (is_q4 && (kt % 4 == 0) && (t + 4 <= end_tile) && (fastdiv(t + 3, &n_k_tiles_div) == ct)) {
             unsigned blk_idx      = (kt * 32) / QK_Q4_0x4x2;
             unsigned sub_blk_base = ((kt * 32) % QK_Q4_0x4x2) / 32;  // 0 or 4
             bool upper            = (sub_blk_base >= 4);
@@ -464,7 +467,7 @@ static void dequantize_x4x2_weight_to_fp16_tiles_task(
         }
 
         // --- Batch-4 fast path for MXFP4: same nibble layout but E8M0 scales ---
-        if (weight_type == HTP_TYPE_MXFP4 && (kt % 4 == 0) && (t + 4 <= end_tile) && ((t + 3) / n_k_tiles == ct)) {
+        if (weight_type == HTP_TYPE_MXFP4 && (kt % 4 == 0) && (t + 4 <= end_tile) && (fastdiv(t + 3, &n_k_tiles_div) == ct)) {
             int  blk_idx      = (kt * 32) / QK_MXFP4x4x2;
             int  sub_blk_base = ((kt * 32) % QK_MXFP4x4x2) / 32;                 // 0 or 4
             bool upper        = (sub_blk_base >= 4);
