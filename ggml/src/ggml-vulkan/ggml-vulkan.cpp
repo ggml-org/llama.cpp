@@ -2577,6 +2577,16 @@ static vk_context ggml_vk_create_temporary_context(vk_command_pool& p) {
     return result;
 }
 
+static vk_semaphore * ggml_vk_create_binary_semaphore(ggml_backend_vk_context * ctx) {
+    VK_LOG_DEBUG("ggml_vk_create_timeline_semaphore()");
+    vk::SemaphoreTypeCreateInfo tci{ vk::SemaphoreType::eBinary, 0 };
+    vk::SemaphoreCreateInfo ci{};
+    ci.setPNext(&tci);
+    vk::Semaphore semaphore = ctx->device->device.createSemaphore(ci);
+    ctx->gc.semaphores.push_back({ semaphore, 0 });
+    return &ctx->gc.semaphores[ctx->gc.semaphores.size() - 1];
+}
+
 static vk_semaphore * ggml_vk_create_timeline_semaphore(ggml_backend_vk_context * ctx) {
     VK_LOG_DEBUG("ggml_vk_create_timeline_semaphore()");
     if (ctx->semaphore_idx >= ctx->gc.tl_semaphores.size()) {
@@ -2587,6 +2597,13 @@ static vk_semaphore * ggml_vk_create_timeline_semaphore(ggml_backend_vk_context 
         ctx->gc.tl_semaphores.push_back({ semaphore, 0 });
     }
     return &ctx->gc.tl_semaphores[ctx->semaphore_idx++];
+}
+
+static vk::Event ggml_vk_create_event(ggml_backend_vk_context * ctx) {
+    if (ctx->event_idx >= ctx->gc.events.size()) {
+        ctx->gc.events.push_back(ctx->device->device.createEvent({}));
+    }
+    return ctx->gc.events[ctx->event_idx++];
 }
 
 static void ggml_vk_command_pool_cleanup(vk_device& device, vk_command_pool& p) {
@@ -2868,6 +2885,15 @@ static void ggml_vk_sync_buffers(ggml_backend_vk_context* ctx, vk_context& subct
         } },
         {},
         {}
+    );
+}
+
+static void ggml_vk_reset_event(vk_context& ctx, vk::Event& event) {
+    VK_LOG_DEBUG("ggml_vk_set_event()");
+
+    ctx->s->buffer->buf.resetEvent(
+        event,
+        ctx->p->q->stage_flags
     );
 }
 
@@ -6855,6 +6881,103 @@ static void ggml_vk_ensure_sync_staging_buffer(ggml_backend_vk_context * ctx, si
         ctx->sync_staging = ggml_vk_create_buffer_check(ctx->device, size,
             vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent | vk::MemoryPropertyFlagBits::eHostCached,
             vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
+    }
+}
+
+static void ggml_vk_buffer_write_nc_async(ggml_backend_vk_context * ctx, vk_context& subctx, vk_buffer& dst, size_t offset, const ggml_tensor * tensor, bool sync_staging = false) {
+    VK_LOG_DEBUG("ggml_vk_buffer_write_nc_async(" << tensor << ")");
+    GGML_ASSERT(!ggml_is_contiguous(tensor));
+    // Buffer is already mapped
+    if(dst->memory_property_flags & vk::MemoryPropertyFlagBits::eHostVisible) {
+        std::cerr << "ggml_vulkan: buffer_write_nc_async dst buffer is host_visible. Use synchronous write." << std::endl;
+        GGML_ABORT("fatal error");
+    }
+    // Check if src is pinned memory
+    vk_buffer buf = nullptr;
+    size_t buf_offset = 0;
+    ggml_vk_host_get(ctx->device, tensor->data, buf, buf_offset);
+
+    const uint64_t ne0 = tensor->ne[0];
+    const uint64_t ne1 = tensor->ne[1];
+    const uint64_t ne2 = tensor->ne[2];
+    const uint64_t ne3 = tensor->ne[3];
+    const uint64_t nb0 = tensor->nb[0];
+    const uint64_t nb1 = tensor->nb[1];
+    const uint64_t nb2 = tensor->nb[2];
+    const uint64_t nb3 = tensor->nb[3];
+    const ggml_type type = tensor->type;
+    const uint64_t ts = ggml_type_size(type);
+    const uint64_t bs = ggml_blck_size(type);
+
+    const uint64_t dstnb0 = ts;
+    const uint64_t dstnb1 = dstnb0*(ne0/bs);
+    const uint64_t dstnb2 = dstnb1*ne1;
+    const uint64_t dstnb3 = dstnb2*ne2;
+
+    const uint64_t ne = ggml_nelements(tensor);
+
+    if (buf != nullptr) {
+        // Memory is pinned, use as staging buffer
+        std::vector<vk::BufferCopy> slices;
+
+        for (uint64_t i3 = 0; i3 < ne3; i3++) {
+            for (uint64_t i2 = 0; i2 < ne2; i2++) {
+                // Find longest contiguous slice
+                if (ne1*nb1 == dstnb2) {
+                    slices.push_back({ buf_offset + i3*nb3 + i2*nb2, offset + i3*dstnb3 + i2*dstnb2, dstnb2 });
+                } else {
+                    for (uint64_t i1 = 0; i1 < ne1; i1++) {
+                        if (ne0*nb0/bs == dstnb1) {
+                            slices.push_back({ buf_offset + i3*nb3 + i2*nb2 + i1*nb1, offset + i3*dstnb3 + i2*dstnb2 + i1*dstnb1, dstnb1 });
+                        } else {
+                            const uint64_t s_off = buf_offset + i3*nb3 + i2*nb2 + i1*nb1;
+                            const uint64_t d_off = offset + i3*dstnb3 + i2*dstnb2 + i1*dstnb1;
+                            for (uint64_t i0 = 0; i0 < ne0; i0++) {
+                                slices.push_back({ s_off + i1*nb0, d_off + i0*dstnb0, dstnb0 });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        ggml_vk_sync_buffers(ctx, subctx);
+        subctx->s->buffer->buf.copyBuffer(buf->buffer, dst->buffer, slices);
+        return;
+    }
+
+    if (!sync_staging) {
+        GGML_ABORT("Asynchronous write to non-pinned memory not supported");
+    }
+
+    // Staging buffer required
+    vk_buffer& staging = ctx->device->sync_staging;
+    const uint64_t copy_size = ts*ne/bs;
+    ggml_vk_ensure_sync_staging_buffer(ctx->device, copy_size);
+    VkBufferCopy buf_copy{ 0, offset, copy_size };
+
+    ggml_vk_sync_buffers(ctx, subctx);
+    vkCmdCopyBuffer(subctx->s->buffer->buf, (VkBuffer)staging->buffer, (VkBuffer)dst->buffer, 1, &buf_copy);
+
+    for (uint64_t i3 = 0; i3 < ne3; i3++) {
+        for (uint64_t i2 = 0; i2 < ne2; i2++) {
+            // Find longest contiguous slice
+            if (ne1*nb1 == dstnb2) {
+                deferred_memcpy((uint8_t *)staging->ptr + i3*dstnb3 + i2*dstnb2, (const uint8_t *) tensor->data + buf_offset + i3*nb3 + i2*nb2, dstnb2, &subctx->in_memcpys);
+            } else {
+                for (uint64_t i1 = 0; i1 < ne1; i1++) {
+                    if (ne0*nb0/bs == dstnb1) {
+                        deferred_memcpy((uint8_t *)staging->ptr + i3*dstnb3 + i2*dstnb2 + i1*dstnb1, (const uint8_t *) tensor->data + buf_offset + i3*nb3 + i2*nb2 + i1*nb1, dstnb1, &subctx->in_memcpys);
+                    } else {
+                        const uint64_t s_off = buf_offset + i3*nb3 + i2*nb2 + i1*nb1;
+                        const uint64_t d_off = i3*dstnb3 + i2*dstnb2 + i1*dstnb1;
+                        for (uint64_t i0 = 0; i0 < ne0; i0++) {
+                            deferred_memcpy((uint8_t *)staging->ptr + d_off + i0*dstnb0, (const uint8_t *) tensor->data + s_off + i0*nb0, dstnb0, &subctx->in_memcpys);
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -12351,6 +12474,40 @@ static void ggml_vk_test_matmul(ggml_backend_vk_context * ctx, size_t m, size_t 
     free(d);
 }
 
+static void ggml_vk_print_tensor_area(const ggml_tensor * tensor, int i0, int i1, int i2, int i3) {
+    if (tensor->type != GGML_TYPE_F32 && tensor->type != GGML_TYPE_F16) {
+        return;
+    }
+    i0 = std::max(i0, 5);
+    i1 = std::max(i1, 5);
+    i2 = std::max(i2, 0);
+    i3 = std::max(i3, 0);
+    fprintf(stderr, "         ");
+    for (int idx1 = i1 - 5; idx1 < i1 + 5; idx1++) {
+        fprintf(stderr, "%7d ", idx1);
+    }
+    fprintf(stderr, "\n");
+    for (int idx0 = i0 - 5; idx0 < i0 + 5; idx0++) {
+        fprintf(stderr, "%7d: ", idx0);
+        for (int idx1 = i1 - 5; idx1 < i1 + 5; idx1++) {
+            if (idx0 >= 0 && idx0 < tensor->ne[0] && idx1 >= 0 && idx1 < tensor->ne[1] && i2 >= 0 && i2 < tensor->ne[2] && i3 >= 0 && i3 < tensor->ne[3]) {
+                float val;
+                if (tensor->type == GGML_TYPE_F32) {
+                    val = *(float *) ((char *) tensor->data + i3*tensor->nb[3] + i2*tensor->nb[2] + idx1*tensor->nb[1] + idx0*tensor->nb[0]);
+                } else if (tensor->type == GGML_TYPE_F16) {
+                    val = ggml_fp16_to_fp32(*(ggml_fp16_t *) ((char *) tensor->data + i3*tensor->nb[3] + i2*tensor->nb[2] + idx1*tensor->nb[1] + idx0*tensor->nb[0]));
+                } else {
+                    GGML_ABORT("fatal error");
+                }
+                fprintf(stderr, "% 7.2f ", val);
+            } else {
+                fprintf(stderr, "        ");
+            }
+        }
+        fprintf(stderr, "\n");
+    }
+}
+
 static void ggml_vk_quantize_data(const float * from, void * to, size_t ne, ggml_type quant) {
     ggml_quantize_chunk(quant, from, to, 0, 1, ne, nullptr);
 }
@@ -12366,6 +12523,89 @@ static void ggml_vk_dequantize_data(const void * from, float * to, size_t ne, gg
     ggml_to_float_t dequant_fn = tt->to_float;
 
     dequant_fn(from, to, ne);
+}
+
+static void ggml_vk_test_dequant(ggml_backend_vk_context * ctx, size_t ne, ggml_type quant) {
+    VK_LOG_DEBUG("ggml_vk_test_dequant(" << ne << ")");
+    const size_t x_sz = sizeof(float) * ne;
+    const size_t x_sz_f16 = sizeof(ggml_fp16_t) * ne;
+    const size_t qx_sz = ne * ggml_type_size(quant)/ggml_blck_size(quant);
+    float * x = (float *) malloc(x_sz);
+    void * qx = malloc(qx_sz);
+    vk_buffer qx_buf = ggml_vk_create_buffer_check(ctx->device, qx_sz, {vk::MemoryPropertyFlagBits::eDeviceLocal});
+    vk_buffer x_buf = ggml_vk_create_buffer_check(ctx->device, x_sz_f16, {vk::MemoryPropertyFlagBits::eDeviceLocal});
+    float * x_ref = (float *) malloc(x_sz);
+    ggml_fp16_t * x_chk = (ggml_fp16_t *) malloc(x_sz_f16);
+
+    for (size_t i = 0; i < ne; i++) {
+        x[i] = rand() / (float)RAND_MAX;
+    }
+
+    vk_pipeline p = ggml_vk_get_to_fp16(ctx, quant);
+
+    ggml_vk_quantize_data(x, qx, ne, quant);
+    ggml_vk_dequantize_data(qx, x_ref, ne, quant);
+
+    ggml_pipeline_request_descriptor_sets(ctx, p, 1);
+
+    ggml_pipeline_allocate_descriptor_sets(ctx);
+
+    ggml_vk_buffer_write(qx_buf, 0, qx, qx_sz);
+
+    vk_context subctx = ggml_vk_create_context(ctx, ctx->compute_cmd_pool);
+    ggml_vk_ctx_begin(ctx->device, subctx);
+    const std::vector<uint32_t> pc = { 1, (uint32_t)ne, (uint32_t)ne, (uint32_t)ne, (uint32_t)ne };
+    ggml_vk_dispatch_pipeline(ctx, subctx, p, { vk_subbuffer{ qx_buf, 0, qx_sz }, vk_subbuffer{ x_buf, 0, x_sz_f16 } }, pc, { (uint32_t)ne, 1, 1});
+    ggml_vk_ctx_end(subctx);
+
+    auto begin = std::chrono::high_resolution_clock::now();
+
+    ggml_vk_submit(subctx, ctx->fence);
+    VK_CHECK(ctx->device->device.waitForFences({ ctx->fence }, true, UINT64_MAX), "ggml_vk_test_dequant waitForFences");
+    ctx->device->device.resetFences({ ctx->fence });
+    ggml_vk_queue_command_pools_cleanup(ctx->device);
+
+    auto end = std::chrono::high_resolution_clock::now();
+
+    double ms_dequant = std::chrono::duration_cast<std::chrono::microseconds>(end-begin).count() / 1000.0;
+    ggml_vk_buffer_read(x_buf, 0, x_chk, x_sz_f16);
+
+    int first_err = -1;
+
+    double avg_err = 0.0;
+    for (size_t i = 0; i < ne; i++) {
+        double error = std::fabs(x_ref[i] - ggml_fp16_to_fp32(x_chk[i]));
+        avg_err += error;
+
+        if (first_err < 0 && error > 0.05) {
+            first_err = i;
+        }
+    }
+
+    avg_err /= ne;
+
+    std::cerr << "TEST DEQUANT " << ggml_type_name(quant) << " time=" << ms_dequant << "ms avg_err=" << avg_err << std::endl;
+
+    if (avg_err > 0.1) {
+        std::cerr << "first_error = " << first_err << std::endl;
+        std::cerr << "Actual result: " << std::endl << std::endl;
+        for (int i = std::max(0, first_err - 5); i < std::min((int)ne, first_err + 5); i++) {
+            std::cerr << ggml_fp16_to_fp32(x_chk[i]) << ", ";
+        }
+        std::cerr << std::endl << "Expected result: " << std::endl << std::endl;
+        for (int i = std::max(0, first_err - 5); i < std::min((int)ne, first_err + 5); i++) {
+            std::cerr << x_ref[i] << ", ";
+        }
+        std::cerr << std::endl;
+    }
+
+    ggml_vk_destroy_buffer(x_buf);
+    ggml_vk_destroy_buffer(qx_buf);
+
+    free(x);
+    free(qx);
+    free(x_ref);
+    free(x_chk);
 }
 
 // This does not work without ggml q8_1 quantization support
