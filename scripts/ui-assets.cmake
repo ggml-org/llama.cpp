@@ -171,7 +171,7 @@ function(npm_build out_var)
 
     message(STATUS "UI: running npm run build, output -> ${DIST_DIR}")
     execute_process(
-        COMMAND ${CMAKE_COMMAND} -E env "LLAMA_UI_OUT_DIR=${DIST_DIR}"
+        COMMAND ${CMAKE_COMMAND} -E env "LLAMA_UI_OUT_DIR=${DIST_DIR}" "LLAMA_UI_VERSION=${HF_VERSION}"
                 ${NPM_EXECUTABLE} run build
         WORKING_DIRECTORY "${UI_SOURCE_DIR}"
         RESULT_VARIABLE rc
@@ -312,6 +312,8 @@ endif()
 set(provisioned FALSE)
 
 if(BUILD_UI)
+    # Resolve version from git build-info if not explicitly set
+    resolve_version(HF_VERSION)
     npm_build(NPM_OK)
     if(NPM_OK)
         set(provisioned TRUE)

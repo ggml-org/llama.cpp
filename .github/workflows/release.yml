@@ -116,6 +116,7 @@ jobs:
             -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
             -DLLAMA_FATAL_WARNINGS=ON \
             -DLLAMA_BUILD_BORINGSSL=ON \
+            -DHF_UI_VERSION=${{ needs.get-version.outputs.ui_version }} \
             ${{ env.CMAKE_ARGS }}
           cmake --build build --config Release -j $(sysctl -n hw.logicalcpu)
 
@@ -201,6 +202,7 @@ jobs:
             -DGGML_NATIVE=OFF \
             -DGGML_CPU_ALL_VARIANTS=ON \
             -DLLAMA_FATAL_WARNINGS=ON \
+            -DHF_UI_VERSION=${{ needs.get-version.outputs.ui_version }}
             ${{ env.CMAKE_ARGS }}
           cmake --build build --config Release -j $(nproc)
 
@@ -287,6 +289,7 @@ jobs:
             -DGGML_NATIVE=OFF \
             -DGGML_CPU_ALL_VARIANTS=ON \
             -DGGML_VULKAN=ON \
+            -DHF_UI_VERSION=${{ needs.get-version.outputs.ui_version }}
             ${{ env.CMAKE_ARGS }}
           cmake --build build --config Release -j $(nproc)
 
@@ -379,6 +382,7 @@ jobs:
             -DLLAMA_FATAL_WARNINGS=ON \
             -DGGML_OPENMP=OFF \
             -DLLAMA_BUILD_BORINGSSL=ON \
+            -DHF_UI_VERSION=${{ needs.get-version.outputs.ui_version }}
             ${{ env.CMAKE_ARGS }}
           cmake --build build --config Release -j $(nproc)
 
@@ -476,7 +480,8 @@ jobs:
           source ./openvino_toolkit/setupvars.sh
           cmake -B build/ReleaseOV -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
-            -DGGML_OPENVINO=ON
+            -DGGML_OPENVINO=ON \
+            -DHF_UI_VERSION=${{ needs.get-version.outputs.ui_version }}
           cmake --build build/ReleaseOV --config Release -j $(nproc)
 
       - name: ccache-clear
@@ -1044,6 +1049,7 @@ jobs:
             -DGGML_HIP=ON \
             -DHIP_PLATFORM=amd \
             -DGGML_HIP_ROCWMMA_FATTN=ON \
+            -DHF_UI_VERSION=${{ needs.get-version.outputs.ui_version }} \
             ${{ env.CMAKE_ARGS }}
           cmake --build build --config Release -j $(nproc)
 
@@ -1168,6 +1174,7 @@ jobs:
             -DGPU_TARGETS="${{ matrix.gpu_targets }}" `
             -DGGML_HIP_ROCWMMA_FATTN=ON `
             -DGGML_HIP=ON `
+            -DHF_UI_VERSION=${{ needs.get-version.outputs.ui_version }} `
             -DLLAMA_BUILD_BORINGSSL=ON
           cmake --build build --target ggml-hip -j ${env:NUMBER_OF_PROCESSORS}
           md "build\bin\rocblas\library\"
@@ -1225,6 +1232,7 @@ jobs:
             -DCMAKE_SYSTEM_NAME=iOS \
             -DCMAKE_OSX_DEPLOYMENT_TARGET=16.0 \
             -DCMAKE_XCODE_ATTRIBUTE_DEVELOPMENT_TEAM=ggml
+            -DHF_UI_VERSION=${{ needs.get-version.outputs.ui_version }}
           cmake --build build --config Release -j $(sysctl -n hw.logicalcpu) -- CODE_SIGNING_ALLOWED=NO
 
       - name: xcodebuild for swift package
@@ -1348,6 +1356,8 @@ jobs:
     needs: [check-release]
     if: ${{ needs.check-release.outputs.should_release == 'true' }}
     uses: ./.github/workflows/ui-build.yml
+    with:
+      hf_ui_version: ${{ needs.get-version.outputs.ui_version }}
 
   release:
     if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
@@ -1360,6 +1370,7 @@ jobs:
     runs-on: ubuntu-slim
 
     needs:
+      - get-version
       - windows
       - windows-cpu
       - windows-cuda

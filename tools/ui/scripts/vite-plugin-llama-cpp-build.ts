@@ -1,6 +1,18 @@
-import { readFileSync, writeFileSync, existsSync, readdirSync, copyFileSync, rmSync } from 'fs';
-import { resolve } from 'path';
+import {
+	readFileSync,
+	writeFileSync,
+	existsSync,
+	readdirSync,
+	copyFileSync,
+	rmSync
+} from 'node:fs';
+import { execSync } from 'node:child_process';
+import { resolve, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { Plugin } from 'vite';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
 
 const GUIDE_FOR_FRONTEND = `
 <!--
@@ -12,6 +24,7 @@ const GUIDE_FOR_FRONTEND = `
 `.trim();
 
 const OUTPUT_DIR = process.env.LLAMA_UI_OUT_DIR ?? './dist';
+let processed = false;
 
 export function llamaCppBuildPlugin(): Plugin {
 	return {
@@ -20,6 +33,24 @@ export function llamaCppBuildPlugin(): Plugin {
 		closeBundle() {
 			setTimeout(() => {
 				try {
+					if (processed) return;
+					processed = true;
+
+					// Build version: explicit env var (from CMake) > git hash > fallback
+					let buildVersion = process.env.LLAMA_UI_VERSION;
+					if (!buildVersion || buildVersion.trim() === '') {
+						try {
+							const gitHash = execSync('git rev-parse --short HEAD', {
+								cwd: resolve(__dirname, '../..'),
+								encoding: 'utf-8'
+							}).trim();
+							const epoch = Math.floor(Date.now() / 1000);
+							buildVersion = `${gitHash}-${epoch}`;
+						} catch {
+							buildVersion = `fallback-${Date.now()}`;
+						}
+					}
+
 					const outDir = resolve(OUTPUT_DIR);
 					const indexPath = resolve(outDir, 'index.html');
 					if (!existsSync(indexPath)) return;
@@ -74,14 +105,13 @@ export function llamaCppBuildPlugin(): Plugin {
 						console.log(`✓ Copied ${workboxFiles[0]} -> workbox.js`);
 					}
 
-					// Copy _app/version.json -> version.json at output root (before _app cleanup)
-					const versionJsonPath = resolve(outDir, '_app/version.json');
-					if (existsSync(versionJsonPath)) {
-						copyFileSync(versionJsonPath, resolve(outDir, 'version.json'));
-						console.log('✓ Copied _app/version.json -> version.json');
-					}
+					// Write version.json with build identifier (overwrites PWA's default)
+					writeFileSync(resolve(outDir, 'version.json'), JSON.stringify({ version: buildVersion }));
+					console.log('✓ Generated version.json:', buildVersion);
 
-					// Fix sw.js: rewrite _app paths, favicon.svg → favicon.ico, and workbox-*.js → workbox.js
+					// Fix sw.js: rewrite _app paths, favicon.svg → favicon.ico, workbox-*.js → workbox.js
+					// Inject build version into sw.js so it differs between builds, triggering
+					// the browser to detect a new service worker and fire needRefresh.
 					const swPath = resolve(outDir, 'sw.js');
 					if (existsSync(swPath)) {
 						let swContent = readFileSync(swPath, 'utf-8');
@@ -104,8 +134,10 @@ export function llamaCppBuildPlugin(): Plugin {
 							/"\/?_app\/immutable\/assets\/bundle\.[^"]+\.css"/g,
 							'"./bundle.css"'
 						);
+						// Inject build version as a comment so SW content changes between builds
+						swContent = '// Build: ' + buildVersion + '\n' + swContent;
 						writeFileSync(swPath, swContent, 'utf-8');
-						console.log('✓ Fixed sw.js precache paths');
+						console.log('✓ Fixed sw.js precache paths + injected build version');
 					}
 
 					// Cleanup: remove _app directory (static assets kept for server)

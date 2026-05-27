@@ -2,6 +2,11 @@ name: UI Build
 
 on:
   workflow_call:
+    inputs:
+      hf_ui_version:
+        description: 'Version string for version.json (e.g. v1.2.3)'
+        required: false
+        type: string
 
 jobs:
   build:
@@ -25,6 +30,8 @@ jobs:
         working-directory: tools/ui
 
       - name: Build application
+        env:
+          HF_UI_VERSION: ${{ inputs.hf_ui_version || '' }}
         run: npm run build
         working-directory: tools/ui
 

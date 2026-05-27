@@ -281,7 +281,7 @@
 </svelte:head>
 
 <!-- PWA update prompt -->
-<!-- {#if needRefresh}
+{#if $needRefresh}
 	<div
 		class="fixed right-4 bottom-4 z-[9999] max-w-sm rounded-lg border border-zinc-200 bg-white p-4 shadow-lg dark:border-zinc-700 dark:bg-zinc-800"
 	>
@@ -291,14 +291,17 @@
 		</p>
 		<div class="flex gap-2">
 			<button
-				onclick={() => updateServiceWorker(true)}
+				onclick={() => {
+					updateServiceWorker(true);
+					$needRefresh = false;
+				}}
 				class="rounded bg-blue-600 px-3 py-1 text-xs text-white hover:bg-blue-700"
 			>
 				Reload
 			</button>
 		</div>
 	</div>
-{/if} -->
+{/if}
 
 <Tooltip.Provider delayDuration={TOOLTIP_DELAY_DURATION}>
 	<ModeWatcher />

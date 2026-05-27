@@ -51,8 +51,8 @@ export default defineConfig({
 				description: 'Local AI chat interface powered by llama.cpp',
 				start_url: './',
 				display: 'standalone',
-				background_color: '#ffffff',
-				theme_color: '#ffffff',
+				background_color: 'white',
+				theme_color: 'white',
 				icons: [
 					{
 						src: 'pwa-64x64.png',
