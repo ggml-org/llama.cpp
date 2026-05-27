@@ -30,9 +30,9 @@ concurrency:
 env:
   GGML_NLOOP: 3
   GGML_N_THREADS: 1
-  LLAMA_LOG_COLORS: 1
-  LLAMA_LOG_PREFIX: 1
-  LLAMA_LOG_TIMESTAMPS: 1
+  LLAMA_ARG_LOG_COLORS: 1
+  LLAMA_ARG_LOG_PREFIX: 1
+  LLAMA_ARG_LOG_TIMESTAMPS: 1
 
 jobs:
   macos-latest-webgpu:
@@ -171,9 +171,3 @@ jobs:
             -DEMDAWNWEBGPU_DIR=emdawnwebgpu_pkg
 
           time cmake --build build-wasm --config Release --target test-backend-ops -j $(nproc)
-
-      - name: Test
-        id: cmake_test
-        run: |
-          cd build
-          ctest -L main --verbose --timeout 900
