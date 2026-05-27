@@ -11,13 +11,10 @@
 /*
  * Granite Vision 4.1 clip graph
  *
- *   Stage 1a: SigLIP vision tower (27 layers, post-norm)
- *   Stage 1b: WindowQFormer blocks (8 blocks total)
+ *   Stage 1a: SigLIP vision tower (N layers, post-norm)
+ *   Stage 1b: WindowQFormer blocks (deepstack + spatial)
  *   Stage 1c: Concatenate and pack outputs
  *   Stage 1d: Append newline tokens if append_token is set
- *
- *   A single WindowQFormer block maps a (1, 576, 1152) vision-layer
- *   hidden state h to a (1, 144, 2560) deepstack feature.
  */
 
 // ---------------------------------------------------------------------------
@@ -35,7 +32,7 @@ static ggml_tensor * g4v_gather(ggml_context * ctx, ggml_cgraph * gf,
     return ggml_get_rows(ctx, src, idx);
 }
 
-// Area-interpolate 24x24 -> 12x12 via 2x2 avg pool
+// Area downsampling with average pooling (eg 24x24 -> 12x12 via 2x2)
 static ggml_tensor * g4v_interp_down(ggml_context * ctx, ggml_tensor * src, int side, int new_side) {
     const int n_embd = src->ne[0];
     ggml_tensor * t = ggml_reshape_4d(ctx, src, n_embd, side, side, 1);

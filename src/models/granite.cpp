@@ -129,22 +129,10 @@ llama_model_granite::graph::graph(
     for (int il = 0; il < n_layer; ++il) {
 
         // Granite Vision 4.1 deepstack: inject the projector stream that
-        // targets decoder layer `il`, BEFORE the decoder layer runs.  This
-        // matches the reference forward in
-        // /ibm-granite/granite-vision-4.1/modeling.py: for each layer_idx,
-        // check the (llm_layer, packed_features) pairs and add to
-        // hidden_states[image_positions] if layer_idx == llm_layer.
-        //
-        // In the qwen3vl-deepstack layout the mmproj writes streams into
-        // res->t_inp_embd at offset (stream_index + 1) * n_embd (stream 0
-        // is the base and is already consumed via build_inp_embd).  For
-        // pure-text requests the input embedding carries zeros at those
-        // offsets (see build_inp_embd's zero-pad of the token branch), so
-        // the add is a no-op.
+        // targets decoder layer `il` before the decoder runs.
+        // NOTE: skip the first deepstack layer since that's inpL
         const auto & deepstack_emb_idx = hparams.deepstack_mapping_arr[il];
         if (il > 0 && deepstack_emb_idx >= 0) {
-            // Note: il == 0 uses the stream at offset 0, which is already
-            // inpL (= base == stream at llm_layer 0 for granite vision 4.1).
             ggml_tensor * ds = ggml_view_2d(ctx0,
                 res->t_inp_embd, n_embd, n_tokens,
                 res->t_inp_embd->nb[1],

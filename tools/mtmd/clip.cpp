@@ -4200,7 +4200,7 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
             {
                 // Granite Vision 4.1 uses precomputed permutation index
                 // tensors to express the _win / _unwin / spatial sampling
-                // reshapes as ggml_get_rows gathers.  The names are set
+                // reshapes as ggml_get_rows gathers. The names are set
                 // by g4v_gather() in models/granite4-vision.cpp.
                 const int patch_size  = model.hparams.patch_size;
                 const int image_side  = imgs.entries.front()->nx / patch_size;
@@ -4260,8 +4260,7 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
                 };
 
                 // Stage 1b only uses block 0's permutations; future stages
-                // will upload all 8 blocks.  upload() no-ops when a tensor
-                // is not present in the graph, so this is safe for either.
+                // will upload all blocks.
                 for (size_t bid = 0; bid < hparams.vision_feature_layer.size(); ++bid) {
                     const std::string prefix = "g4v_blk" + std::to_string(bid) + "_";
                     upload(prefix + "win_idx",     make_win_idx(image_side, window_side));
@@ -4427,9 +4426,6 @@ int clip_n_mmproj_embd(const struct clip_ctx * ctx) {
         case PROJECTOR_TYPE_GRANITE_SPEECH:
             return ctx->model.qf_proj_blocks[0].qf_proj_linear_w->ne[1];
         case PROJECTOR_TYPE_GRANITE4_VISION:
-            // Stage 2a: graph output is 8 concatenated streams (deepstack
-            // layout with "base" = stream targeting llm_layer 0).  Per-token
-            // feature count = projector_count * projection_dim.
             return ctx->model.qf_proj_blocks.size() * ctx->model.hparams.projection_dim;
         case PROJECTOR_TYPE_GLM4V:
             return ctx->model.mm_ffn_down_w->ne[1];
