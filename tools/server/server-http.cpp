@@ -193,6 +193,7 @@ bool server_http_context::init(const common_params & params) {
             "/apple-touch-icon-180x180.png",
             "/manifest.webmanifest",
             "/sw.js",
+            "/workbox.js",
         };
 
         // If API key is not set, skip validation
@@ -349,18 +350,19 @@ bool server_http_context::init(const common_params & params) {
                 };
             };
 
-            srv->Get(params.api_prefix + "/",                     serve_asset("index.html",             "text/html; charset=utf-8",              true));
-            srv->Get(params.api_prefix + "/bundle.js",            serve_asset("bundle.js",            "application/javascript; charset=utf-8",  false));
-            srv->Get(params.api_prefix + "/bundle.css",           serve_asset("bundle.css",           "text/css; charset=utf-8",                false));
-            srv->Get(params.api_prefix + "/favicon.ico",          serve_asset("favicon.ico",          "image/x-icon",                           false));
-            srv->Get(params.api_prefix + "/favicon.svg",          serve_asset("favicon.svg",          "image/svg+xml",                          false));
-            srv->Get(params.api_prefix + "/pwa-64x64.png",        serve_asset("pwa-64x64.png",        "image/png",                              false));
-            srv->Get(params.api_prefix + "/pwa-192x192.png",      serve_asset("pwa-192x192.png",      "image/png",                              false));
-            srv->Get(params.api_prefix + "/pwa-512x512.png",      serve_asset("pwa-512x512.png",      "image/png",                           false));
-            srv->Get(params.api_prefix + "/maskable-icon-512x512.png", serve_asset("maskable-icon-512x512.png", "image/png",               false));
-            srv->Get(params.api_prefix + "/apple-touch-icon-180x180.png", serve_asset("apple-touch-icon-180x180.png", "image/png",            false));
-            srv->Get(params.api_prefix + "/manifest.webmanifest", serve_asset("manifest.webmanifest", "application/manifest+json",           false));
-            srv->Get(params.api_prefix + "/sw.js",                serve_asset("sw.js",                "application/javascript; charset=utf-8", false));
+            srv->Get(params.api_prefix + "/",                               serve_asset("index.html",                   "text/html; charset=utf-8",                 true));
+            srv->Get(params.api_prefix + "/bundle.js",                      serve_asset("bundle.js",                    "application/javascript; charset=utf-8",    false));
+            srv->Get(params.api_prefix + "/bundle.css",                     serve_asset("bundle.css",                   "text/css; charset=utf-8",                  false));
+            srv->Get(params.api_prefix + "/favicon.ico",                    serve_asset("favicon.ico",                  "image/x-icon",                             false));
+            srv->Get(params.api_prefix + "/favicon.svg",                    serve_asset("favicon.svg",                  "image/svg+xml",                            false));
+            srv->Get(params.api_prefix + "/pwa-64x64.png",                  serve_asset("pwa-64x64.png",                "image/png",                                false));
+            srv->Get(params.api_prefix + "/pwa-192x192.png",                serve_asset("pwa-192x192.png",              "image/png",                                false));
+            srv->Get(params.api_prefix + "/pwa-512x512.png",                serve_asset("pwa-512x512.png",              "image/png",                                false));
+            srv->Get(params.api_prefix + "/maskable-icon-512x512.png",      serve_asset("maskable-icon-512x512.png",    "image/png",                                false));
+            srv->Get(params.api_prefix + "/apple-touch-icon-180x180.png",   serve_asset("apple-touch-icon-180x180.png", "image/png",                                false));
+            srv->Get(params.api_prefix + "/manifest.webmanifest",           serve_asset("manifest.webmanifest",         "application/manifest+json",                false));
+            srv->Get(params.api_prefix + "/sw.js",                          serve_asset("sw.js",                        "application/javascript; charset=utf-8",    false));
+            srv->Get(params.api_prefix + "/workbox.js",                     serve_asset("workbox.js",                   "application/javascript; charset=utf-8",    false));
 #endif
         }
     }

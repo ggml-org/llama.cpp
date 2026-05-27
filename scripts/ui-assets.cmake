@@ -31,6 +31,7 @@ set(ASSETS
     apple-touch-icon-180x180.png
     manifest.webmanifest
     sw.js
+    workbox.js
 )
 
 set(DIST_DIR     "${UI_BINARY_DIR}/dist")

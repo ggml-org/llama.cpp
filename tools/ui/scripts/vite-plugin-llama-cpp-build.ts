@@ -66,7 +66,15 @@ export function llamaCppBuildPlugin(): Plugin {
 						}
 					}
 
-					// Fix sw.js: rewrite _app paths and favicon.svg → favicon.ico
+					// Copy workbox-*.js -> workbox.js at output root
+					const workboxFiles = readdirSync(outDir).filter((f) => f.match(/^workbox-[^.]+\.js$/));
+					if (workboxFiles.length > 0) {
+						copyFileSync(resolve(outDir, workboxFiles[0]), resolve(outDir, 'workbox.js'));
+						rmSync(resolve(outDir, workboxFiles[0]), { force: true });
+						console.log(`✓ Copied ${workboxFiles[0]} -> workbox.js`);
+					}
+
+					// Fix sw.js: rewrite _app paths, favicon.svg → favicon.ico, and workbox-*.js → workbox.js
 					const swPath = resolve(outDir, 'sw.js');
 					if (existsSync(swPath)) {
 						let swContent = readFileSync(swPath, 'utf-8');
@@ -76,6 +84,11 @@ export function llamaCppBuildPlugin(): Plugin {
 							'./bundle.css'
 						);
 						swContent = swContent.replace(/"favicon\.svg"/g, '"favicon.ico"');
+						// Rewrite workbox-<hash> (import) → workbox
+						swContent = swContent.replace(/"\.\/workbox-[a-z0-9]+"/g, '"./workbox"');
+						// Rewrite precache paths with leading slash
+						swContent = swContent.replace(/"\/?_app\/immutable\/bundle\.[^"]+\.js"/g, '"./bundle.js"');
+						swContent = swContent.replace(/"\/?_app\/immutable\/assets\/bundle\.[^"]+\.css"/g, '"./bundle.css"');
 						writeFileSync(swPath, swContent, 'utf-8');
 						console.log('✓ Fixed sw.js precache paths');
 					}
