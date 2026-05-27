@@ -1336,7 +1336,8 @@ static std::optional<webgpu_encoded_op> ggml_webgpu_set_rows(webgpu_context & ct
     uint32_t threads;
     if (decisions->quantized) {
         const uint32_t blocks_per_row = src->ne[0] / ggml_blck_size(dst->type);
-        threads = (src->ne[1] * src->ne[2] * src->ne[3]) * blocks_per_row;
+        threads = (src->ne[1] * src->ne[2] * src->ne[3]) *
+                  (decisions->fast_block_pairs ? (blocks_per_row / 2) : blocks_per_row);
     } else if (decisions->vec4) {
         threads = (src->ne[1] * src->ne[2] * src->ne[3]) * (src->ne[0] / 4);
     } else {

@@ -166,9 +166,11 @@ struct ggml_webgpu_set_rows_pipeline_key {
     int dst_type;
     int vec4;
     int i64_idx;
+    int fast_block_pairs;
 
     bool operator==(const ggml_webgpu_set_rows_pipeline_key & other) const {
-        return dst_type == other.dst_type && vec4 == other.vec4 && i64_idx == other.i64_idx;
+        return dst_type == other.dst_type && vec4 == other.vec4 && i64_idx == other.i64_idx &&
+               fast_block_pairs == other.fast_block_pairs;
     }
 };
 
@@ -178,6 +180,7 @@ struct ggml_webgpu_set_rows_pipeline_key_hash {
         ggml_webgpu_hash_combine(seed, key.dst_type);
         ggml_webgpu_hash_combine(seed, key.vec4);
         ggml_webgpu_hash_combine(seed, key.i64_idx);
+        ggml_webgpu_hash_combine(seed, key.fast_block_pairs);
         return seed;
     }
 };
@@ -186,6 +189,7 @@ struct ggml_webgpu_set_rows_shader_decisions {
     bool     vec4;
     bool     i64_idx;
     bool     quantized;
+    bool     fast_block_pairs;
     uint32_t wg_size;
 };
 
@@ -1265,11 +1269,14 @@ class ggml_webgpu_shader_lib {
     }
 
     webgpu_pipeline get_set_rows_pipeline(const ggml_webgpu_shader_lib_context & context) {
+        const bool quantized = context.dst->type == GGML_TYPE_Q8_0 || context.dst->type == GGML_TYPE_Q4_0;
         ggml_webgpu_set_rows_pipeline_key key = {};
         key.dst_type                          = context.dst->type;
         key.vec4                              = (context.dst->type == GGML_TYPE_F32 || context.dst->type == GGML_TYPE_F16) &&
                   context.src0->ne[0] % 4 == 0;
         key.i64_idx                           = context.src1->type == GGML_TYPE_I64;
+        key.fast_block_pairs                  = quantized &&
+                 ((context.src0->ne[0] / ggml_blck_size(context.dst->type)) % 2 == 0);
 
         auto it = set_rows_pipelines.find(key);
         if (it != set_rows_pipelines.end()) {
@@ -1308,16 +1315,20 @@ class ggml_webgpu_shader_lib {
             defines.push_back("I64_IDX");
             variant += "_i64idx";
         }
+        if (key.fast_block_pairs) {
+            defines.push_back("FAST_BLOCK_PAIRS");
+            variant += "_fastpairs";
+        }
 
         defines.push_back(std::string("WG_SIZE=") + std::to_string(context.max_wg_size));
 
-        const bool quantized            = context.dst->type == GGML_TYPE_Q8_0 || context.dst->type == GGML_TYPE_Q4_0;
         const auto & shader_source      = quantized ? wgsl_set_rows_quant : wgsl_set_rows;
         auto processed                  = preprocessor.preprocess(shader_source, defines);
         auto decisions                  = std::make_shared<ggml_webgpu_set_rows_shader_decisions>();
         decisions->vec4                 = key.vec4;
         decisions->i64_idx              = key.i64_idx;
         decisions->quantized            = quantized;
+        decisions->fast_block_pairs     = key.fast_block_pairs;
         decisions->wg_size              = context.max_wg_size;
         set_rows_pipelines[key]         = ggml_webgpu_create_pipeline(device, processed, variant);
         set_rows_pipelines[key].context = decisions;
