@@ -51,6 +51,9 @@ opbatch=
 opqueue=
 [ "$OQ" != "" ] && opqueue="GGML_HEXAGON_OPQUEUE=$OQ"
 
+oppoll=
+[ "$OP" != "" ] && oppoll="GGML_HEXAGON_OPPOLL=$OP"
+
 opflt=
 [ "$OF" != "" ] && opflt="GGML_HEXAGON_OPFILTER=$OF"
 
@@ -66,7 +69,7 @@ adb $adbserial $adbhost shell " \
   cd $basedir; ulimit -c unlimited;        \
     LD_LIBRARY_PATH=$basedir/$branch/lib   \
     ADSP_LIBRARY_PATH=$basedir/$branch/lib \
-    $verbose $sched $opmask $profile $nhvx $hmx $ndev $hb $opbatch $opqueue $opflt $vmem $mbuf \
+    $verbose $sched $opmask $profile $nhvx $hmx $ndev $hb $opbatch $opqueue $oppoll $opflt $vmem $mbuf \
       ./$branch/bin/llama-completion --no-mmap -m $basedir/../gguf/$model \
          --poll 1000 -t 6 --cpu-mask 0xfc --cpu-strict 1                  \
          --ctx-size 8192 --ubatch-size 1024 -fa on                        \
