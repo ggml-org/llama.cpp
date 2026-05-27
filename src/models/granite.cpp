@@ -7,8 +7,20 @@ void llama_model_granite::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_EMBEDDING_SCALE,             hparams.f_embedding_scale, false);
     ml.get_key(LLM_KV_ATTENTION_SCALE,             hparams.f_attention_scale, false);
 
+    // Populate deepstack_mapping_arr - initialized to -1 (no deepstack)
+    std::fill(hparams.deepstack_mapping_arr.begin(), hparams.deepstack_mapping_arr.end(), -1);
+
     // Granite4 Vision uses array deepstack_mapping
     ml.get_arr(LLM_KV_DEEPSTACK_MAPPING, hparams.deepstack_mapping_arr, false);
+
+    // Count the unique deepstack input indices
+    std::unordered_set<uint32_t> unique_deepstack_idxs;
+    for (const auto val : hparams.deepstack_mapping_arr) {
+        if (val >= 0) {
+            unique_deepstack_idxs.insert(val);
+        }
+    }
+    hparams.n_deepstack_layers = unique_deepstack_idxs.size();
 
     // Granite uses rope_finetuned as a switch for rope, so default to true
     bool rope_finetuned = true;

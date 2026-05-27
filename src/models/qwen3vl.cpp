@@ -1,17 +1,9 @@
 #include "models.h"
 
 void llama_model_qwen3vl::load_arch_hparams(llama_model_loader & ml) {
+    ml.get_key(LLM_KV_NUM_DEEPSTACK_LAYERS, hparams.n_deepstack_layers, false);
     ml.get_key_or_arr(LLM_KV_ROPE_DIMENSION_SECTIONS, hparams.rope_sections, 4, true);
     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
-
-    // qwen3vl uses scalar n_deepstack_layers
-    uint32_t n_deepstack_layers = 0;
-    if (ml.get_key(LLM_KV_NUM_DEEPSTACK_LAYERS, n_deepstack_layers, false)) {
-        // Create 1:1 mapping: layer i gets projector i+1
-        for (int32_t i = 0; i < (int32_t)n_deepstack_layers; ++i) {
-            hparams.deepstack_mapping_arr[i] = i + 1;
-        }
-    }
     switch (hparams.n_layer) {
         case 28: type = LLM_TYPE_1_7B; break;
         case 36: type = hparams.n_embd == 2560 ? LLM_TYPE_4B : LLM_TYPE_8B; break;
@@ -59,6 +51,8 @@ std::unique_ptr<llm_graph_context> llama_model_qwen3vl::build_arch_graph(const l
 }
 
 llama_model_qwen3vl::graph::graph(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
+    const size_t n_deepstack_layers = hparams.n_deepstack_layers;
+
     const int64_t n_embd      = hparams.n_embd;
     const int64_t n_embd_head = hparams.n_embd_head_v();
 
@@ -149,9 +143,8 @@ llama_model_qwen3vl::graph::graph(const llama_model & model, const llm_graph_par
         cur = build_cvec(cur, il);
         cb(cur, "l_out", il);
 
-        const auto & deepstack_emb_idx = hparams.deepstack_mapping_arr[il];
-        if (deepstack_emb_idx >= 0) {
-            ggml_tensor * ds = ggml_view_2d(ctx0, res->t_inp_embd, n_embd, n_tokens, res->t_inp_embd->nb[1], deepstack_emb_idx * n_embd * sizeof(float));
+        if (il < (int) n_deepstack_layers) {
+            ggml_tensor * ds = ggml_view_2d(ctx0, res->t_inp_embd, n_embd, n_tokens, res->t_inp_embd->nb[1], (il + 1) * n_embd * sizeof(float));
             cur = ggml_add(ctx0, cur, ds);
             cb(cur, "deepstack_out", il);
         }

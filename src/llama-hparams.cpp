@@ -74,14 +74,6 @@ uint32_t llama_hparams::n_rot(uint32_t il) const {
 uint32_t llama_hparams::n_embd_inp() const {
     uint32_t n_embd_inp = n_embd;
 
-    // Count the unique deepstack input indices
-    std::unordered_set<uint32_t> unique_deepstack_idxs;
-    for (const auto val : deepstack_mapping_arr) {
-        if (val >= 0) {
-            unique_deepstack_idxs.insert(val);
-        }
-    }
-    const auto n_deepstack_layers = unique_deepstack_idxs.size();
     if (n_deepstack_layers > 0) {
         n_embd_inp += n_embd * n_deepstack_layers;
     }
