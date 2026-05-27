@@ -151,7 +151,11 @@ jobs:
       - name: Build
         id: cmake_build
         run: |
-          cmake -B build -DCMAKE_BUILD_TYPE=Release -DLLAMA_BUILD_BORINGSSL=ON -DGGML_SCHED_NO_REALLOC=ON
+          cmake -B build ^
+            -DCMAKE_TOOLCHAIN_FILE=cmake/x64-windows-llvm.cmake ^
+            -DCMAKE_BUILD_TYPE=Release ^
+            -DLLAMA_BUILD_BORINGSSL=ON ^
+            -DGGML_SCHED_NO_REALLOC=ON
           cmake --build build --config Release -j ${env:NUMBER_OF_PROCESSORS} --target llama-server
 
       - name: Python setup
