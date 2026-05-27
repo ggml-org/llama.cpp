@@ -5,6 +5,7 @@
 
 #undef NDEBUG
 #include <assert.h>
+#include <algorithm>
 #include <math.h>
 #include <stdio.h>
 #include <string>
@@ -83,23 +84,48 @@ static float dot_product(const float * a1, const float * a2, size_t test_size) {
 }
 
 // Total dot product error
-static float dot_product_error(const ggml_type_traits * qfns, const ggml_type_traits_cpu * qfns_cpu, size_t test_size, const float * test_data1, const float * test_data2, const int nrc) {
-    GGML_UNUSED(qfns);
-
-    std::vector<uint8_t> tmp_q1(2*test_size);
-    std::vector<uint8_t> tmp_q2(2*test_size);
-
+static float dot_product_error(const ggml_type_traits_cpu * qfns_cpu, ggml_type src0_type, size_t test_size,
+                               const float * test_data1, const float * test_data2,
+                               const float * test_data3, const float * test_data4,
+                               const int nrc) {
     const auto * vdot = ggml_get_type_traits_cpu(qfns_cpu->vec_dot_type);
+    const size_t bx   = ggml_row_size(src0_type, test_size);
+    const size_t by   = ggml_row_size(qfns_cpu->vec_dot_type, test_size);
+
+    std::vector<uint8_t> tmp_q1(bx * nrc);
+    std::vector<uint8_t> tmp_q2(by * nrc);
 
     qfns_cpu->from_float(test_data1, tmp_q1.data(), test_size);
     vdot->from_float(test_data2, tmp_q2.data(), test_size);
 
-    float result = INFINITY;
-    qfns_cpu->vec_dot(test_size, &result, 0, tmp_q1.data(), 0, tmp_q2.data(), 0, nrc);
+    if (nrc == 1) {
+        float result = INFINITY;
+        qfns_cpu->vec_dot(test_size, &result, 0, tmp_q1.data(), 0, tmp_q2.data(), 0, 1);
 
-    const float dot_ref = dot_product(test_data1, test_data2, test_size);
+        const float dot_ref = dot_product(test_data1, test_data2, test_size);
+        return fabsf(result - dot_ref) / test_size;
+    }
 
-    return fabsf(result - dot_ref) / test_size;
+    // nrc == 2: kernel computes a 2x2 dot product matrix
+    // Output layout: s[0]=dot(vx0,vy0), s[1]=dot(vx1,vy0), s[bs]=dot(vx0,vy1), s[bs+1]=dot(vx1,vy1)
+    qfns_cpu->from_float(test_data3, tmp_q1.data() + bx, test_size);
+    vdot->from_float(test_data4, tmp_q2.data() + by, test_size);
+
+    const size_t bs = 2;
+    float result[4] = {INFINITY, INFINITY, INFINITY, INFINITY};
+    qfns_cpu->vec_dot(test_size, result, bs, tmp_q1.data(), bx, tmp_q2.data(), by, 2);
+
+    const float ref00 = dot_product(test_data1, test_data2, test_size);
+    const float ref10 = dot_product(test_data3, test_data2, test_size);
+    const float ref01 = dot_product(test_data1, test_data4, test_size);
+    const float ref11 = dot_product(test_data3, test_data4, test_size);
+
+    const float err00 = fabsf(result[0]      - ref00) / test_size;
+    const float err10 = fabsf(result[1]      - ref10) / test_size;
+    const float err01 = fabsf(result[bs]     - ref01) / test_size;
+    const float err11 = fabsf(result[bs + 1] - ref11) / test_size;
+
+    return std::max({err00, err01, err10, err11});
 }
 
 int main(int argc, char * argv[]) {
@@ -120,9 +146,13 @@ int main(int argc, char * argv[]) {
 
     std::vector<float> test_data(test_size);
     std::vector<float> test_data2(test_size);
+    std::vector<float> test_data3(test_size);
+    std::vector<float> test_data4(test_size);
 
     generate_data(0.0, test_data.size(), test_data.data());
     generate_data(1.0, test_data2.size(), test_data2.data());
+    generate_data(2.0, test_data3.size(), test_data3.data());
+    generate_data(3.0, test_data4.size(), test_data4.data());
 
     ggml_cpu_init();
 
@@ -169,7 +199,7 @@ int main(int argc, char * argv[]) {
                 printf("%5s reference implementation error: %s (%f)\n", ggml_type_name(type), RESULT_STR[failed], reference_error);
             }
 
-            const float vec_dot_error = dot_product_error(qfns, qfns_cpu, test_size, test_data.data(), test_data2.data(), 1);
+            const float vec_dot_error = dot_product_error(qfns_cpu, type, test_size, test_data.data(), test_data2.data(), nullptr, nullptr, 1);
             const float max_allowed_error = type == GGML_TYPE_Q2_K || type == GGML_TYPE_IQ2_XS || type == GGML_TYPE_IQ2_XXS ||
                                             type == GGML_TYPE_IQ3_XXS || type == GGML_TYPE_IQ3_S || type == GGML_TYPE_IQ2_S
                                           ? MAX_DOT_PRODUCT_ERROR_LOWBIT
@@ -188,7 +218,7 @@ int main(int argc, char * argv[]) {
 
             // Test nrc=2 path for types that support it
             if (qfns_cpu->nrows == 2) {
-                const float vec_dot_error_nrc2 = dot_product_error(qfns, qfns_cpu, test_size, test_data.data(), test_data2.data(), 2);
+                const float vec_dot_error_nrc2 = dot_product_error(qfns_cpu, type, test_size, test_data.data(), test_data2.data(), test_data3.data(), test_data4.data(), 2);
                 failed = !(vec_dot_error_nrc2 < max_allowed_error);
                 num_failed += failed;
                 if (failed || verbose) {
