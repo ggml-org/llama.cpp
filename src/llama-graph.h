@@ -121,10 +121,10 @@ public:
     const int64_t n_embd = 0;
 };
 
-class llm_graph_input_mtp : public llm_graph_input_i {
+class llm_graph_input_token_embd : public llm_graph_input_i {
 public:
-    llm_graph_input_mtp(int64_t n_embd) : n_embd(n_embd) {}
-    virtual ~llm_graph_input_mtp() = default;
+    llm_graph_input_token_embd(int64_t n_embd) : n_embd(n_embd) {}
+    virtual ~llm_graph_input_token_embd() = default;
 
     void set_input(const llama_ubatch * ubatch) override;
 

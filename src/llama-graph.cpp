@@ -102,7 +102,7 @@ bool llm_graph_input_embd::can_reuse(const llm_graph_params & params) {
     return res;
 }
 
-void llm_graph_input_mtp::set_input(const llama_ubatch * ubatch) {
+void llm_graph_input_token_embd::set_input(const llama_ubatch * ubatch) {
     const int64_t n_tokens = ubatch->n_tokens;
 
     if (tokens) {
@@ -123,7 +123,7 @@ void llm_graph_input_mtp::set_input(const llama_ubatch * ubatch) {
     }
 }
 
-bool llm_graph_input_mtp::can_reuse(const llm_graph_params & params) {
+bool llm_graph_input_token_embd::can_reuse(const llm_graph_params & params) {
     bool res = true;
 
     res &= tokens && tokens->ne[0] == params.ubatch.n_tokens;
