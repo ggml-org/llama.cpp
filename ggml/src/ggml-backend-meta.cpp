@@ -616,6 +616,11 @@ static struct ggml_backend_meta_split_state ggml_backend_meta_get_split_state(
                     if (base_ne_out_next % base_ne_in == 0) {
                         return {ggml_backend_meta_split_axis(dim), {0}, {uint32_t(base_ne_out_next/base_ne_in)}, 1};
                     }
+                    if (base_ne_out_next > base_ne_in) {
+                        GGML_ASSERT(src_ss[0].n_segments == 1);
+                        GGML_ASSERT(src_ss[0].nr[0]      == 1);
+                        return {ggml_backend_meta_split_axis(dim), {0}, {1}, 1};
+                    }
                     base_ne_out = base_ne_out_next;
                 }
                 GGML_ABORT("shape mismatch for %s", ggml_op_name(tensor->op));
