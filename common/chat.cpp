@@ -1736,14 +1736,32 @@ static common_chat_params common_chat_params_init_nemotron_v2(const common_chat_
     data.thinking_end_tag   = THINK_END;
 
     auto parser = build_chat_peg_parser([&](common_chat_peg_builder & p) {
-        auto generation_prompt = p.prefix(data.generation_prompt, THINK_START);
+        // common_chat_peg_parse() automatically prepends data.generation_prompt
+        // to the input before parsing. The Nemotron Nano v2 generation prompt
+        // always ends with "<think>\n" (thinking enabled) or "<think></think>"
+        // (/no_think disabled). Consume the whole generation prompt up to and
+        // through the opening "<think>" literal.
+        auto generation_prompt = p.prefix(data.generation_prompt, THINK_START) + p.literal(THINK_START);
         auto eot = p.optional(p.literal(EOT));
         auto end = p.end();
 
-        auto reasoning = p.eps();
-        if (extract_reasoning && inputs.enable_thinking) {
-            reasoning = p.optional(THINK_START + p.reasoning(p.until(THINK_END)) + THINK_END);
+        // After "<think>" has been consumed, three shapes are possible:
+        //   1. model emitted reasoning + "</think>"
+        //   2. template already emitted empty "</think>" pair (/no_think)
+        //   3. nothing more (model never closed think tag)
+        // until_one_of() must include every potential terminator so it can
+        // return SUCCESS (with zero captured chars) instead of NEED_MORE when
+        // "</think>" is absent — otherwise Choice cannot backtrack to the
+        // empty-reasoning options.
+        std::vector<std::string> reasoning_terminators = { THINK_END, EOT };
+        if (has_tools) {
+            reasoning_terminators.push_back(TOOL_CALL_START);
         }
+        auto reasoning_with_close = p.until_one_of(reasoning_terminators) + p.literal(THINK_END);
+        if (extract_reasoning && inputs.enable_thinking) {
+            reasoning_with_close = p.reasoning(p.until_one_of(reasoning_terminators)) + p.literal(THINK_END);
+        }
+        auto reasoning = p.choice({ reasoning_with_close, p.literal(THINK_END), p.eps() });
 
         if (!has_tools || inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_NONE) {
             return generation_prompt + reasoning + p.content(p.until(EOT)) + eot + end;
@@ -1757,7 +1775,7 @@ static common_chat_params common_chat_params_init_nemotron_v2(const common_chat_
             /* array_wrapped */ true
         );
 
-        auto content = p.content(p.until(TOOL_CALL_START));
+        auto content = p.content(p.until_one_of({ TOOL_CALL_START, EOT }));
 
         return generation_prompt + reasoning + content + tool_calls + eot + end;
     });
