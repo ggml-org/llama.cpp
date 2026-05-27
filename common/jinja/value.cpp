@@ -594,6 +594,8 @@ static bool string_endswith(const std::string & str, const std::string & suffix)
     throw not_implemented_exception("String join builtin not implemented");
 }
 
+static value fromjson(const func_args & args);
+
 const func_builtins & value_string_t::get_builtins() const {
     static const func_builtins builtins = {
         {"default", default_value},
@@ -813,6 +815,7 @@ const func_builtins & value_string_t::get_builtins() const {
             args.ensure_vals<value_string>();
             return args.get_pos(0);
         }},
+        {"fromjson", fromjson},
         {"tojson", tojson},
         {"indent", [](const func_args &args) -> value {
             args.ensure_count(1, 4);
@@ -1282,6 +1285,20 @@ static value from_json(const nlohmann::ordered_json & j, bool mark_input) {
         return obj;
     } else {
         throw std::runtime_error("Unsupported JSON value type");
+    }
+}
+
+static value fromjson(const func_args & args) {
+    args.ensure_count(1);
+    args.ensure_vals<value_string>();
+
+    const auto & input = args.get_pos(0)->as_string();
+
+    try {
+        const auto parsed = nlohmann::ordered_json::parse(input.str());
+        return from_json(parsed, input.all_parts_are_input());
+    } catch (const nlohmann::json::exception & e) {
+        throw raised_exception("fromjson: failed to parse JSON: " + std::string(e.what()));
     }
 }
 
