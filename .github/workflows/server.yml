@@ -54,13 +54,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  ui-build:
-    name: Build Web UI
-    uses: ./.github/workflows/ui-build.yml
-
   server:
     runs-on: ubuntu-latest
-    needs: ui-build
 
     name: server (${{ matrix.wf_name }})
     strategy:
@@ -101,21 +96,14 @@ jobs:
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.21
         with:
-          key: server-ubuntu-${{ matrix.wf_name }}
+          key: server-ubuntu-default
           evict-old-files: 1d
           save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
-
-      - name: Download built UI
-        uses: actions/download-artifact@v7
-        with:
-          name: ui-build
-          path: tools/ui/dist
 
       - name: Build
         id: cmake_build
         run: |
           cmake -B build \
-            -DLLAMA_BUILD_BORINGSSL=ON \
             -DGGML_SCHED_NO_REALLOC=ON
           cmake --build build --config ${{ matrix.build_type }} -j $(nproc) --target llama-server
 
