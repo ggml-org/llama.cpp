@@ -1710,6 +1710,7 @@ static common_chat_params common_chat_params_init_nemotron_v2(const common_chat_
     common_chat_params data;
 
     data.prompt            = common_chat_template_direct_apply_impl(tmpl, inputs);
+    data.generation_prompt = common_chat_template_generation_prompt_impl(tmpl, inputs);
     data.format            = COMMON_CHAT_FORMAT_PEG_NATIVE;
     data.supports_thinking = true;
     data.additional_stops  = { "<SPECIAL_12>" };
@@ -1735,7 +1736,7 @@ static common_chat_params common_chat_params_init_nemotron_v2(const common_chat_
     data.thinking_end_tag   = THINK_END;
 
     auto parser = build_chat_peg_parser([&](common_chat_peg_builder & p) {
-        auto generation_prompt = p.prefix(inputs.generation_prompt, THINK_START);
+        auto generation_prompt = p.prefix(data.generation_prompt, THINK_START);
         auto eot = p.optional(p.literal(EOT));
         auto end = p.end();
 
