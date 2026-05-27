@@ -1889,9 +1889,17 @@ static ggml_webgpu_flash_attn_op ggml_webgpu_flash_attn_prepare(webgpu_context &
     return op;
 }
 
+static uint32_t ggml_webgpu_flash_attn_vec_nwg(uint32_t vec_nwg_cap, uint32_t kv_tile, uint32_t seq_len_kv) {
+    uint32_t       nwg     = 1u;
+    const uint64_t kv_span = (uint64_t) kv_tile;
+    while ((2u * nwg * kv_span) < (uint64_t) seq_len_kv && nwg < vec_nwg_cap) {
+        nwg <<= 1;
+    }
+    return std::min(nwg, vec_nwg_cap);
+}
+
 static webgpu_encoded_op ggml_webgpu_flash_attn_direct(webgpu_context & ctx, const ggml_webgpu_flash_attn_op & op) {
-    webgpu_pipeline pipeline = ctx->shader_lib->get_flash_attn_non_vec_pipeline(
-        op.shader_lib_ctx, ctx->global_ctx->capabilities.limits.minStorageBufferOffsetAlignment);
+    webgpu_pipeline pipeline = ctx->shader_lib->get_flash_attn_pipeline(op.shader_lib_ctx);
     auto *   decisions   = static_cast<ggml_webgpu_flash_attn_decisions *>(pipeline.context.get());
     uint32_t wg_per_head = CEIL_DIV(op.shader_lib_ctx.src0->ne[1], decisions->q_tile);
     uint32_t wg_x        = wg_per_head * op.shader_lib_ctx.src0->ne[2] * op.shader_lib_ctx.src0->ne[3];
@@ -1906,9 +1914,8 @@ static webgpu_encoded_op ggml_webgpu_flash_attn_vec(webgpu_context &          ct
                                                     ggml_tensor *             sinks,
                                                     ggml_tensor *             dst,
                                                     ggml_webgpu_flash_attn_op op) {
-    webgpu_pipeline pipeline = ctx->shader_lib->get_flash_attn_vec_pipeline(
-        op.shader_lib_ctx, ctx->global_ctx->capabilities.limits.minStorageBufferOffsetAlignment);
-    auto * decisions = static_cast<ggml_webgpu_flash_attn_decisions *>(pipeline.context.get());
+    webgpu_pipeline pipeline = ctx->shader_lib->get_flash_attn_vec_pipeline(op.shader_lib_ctx);
+    auto * decisions = static_cast<ggml_webgpu_flash_attn_vec_decisions *>(pipeline.context.get());
 
     wgpu::Buffer blk_buf         = {};
     uint64_t     blk_size_bytes  = 0;
@@ -1917,12 +1924,7 @@ static webgpu_encoded_op ggml_webgpu_flash_attn_vec(webgpu_context &          ct
     uint32_t     blk_batch_count = 0;
 
     const uint32_t vec_nwg_cap = ctx->global_ctx->capabilities.min_subgroup_size;
-    uint32_t       nwg         = 1u;
-    const uint64_t kv_span     = (uint64_t) std::max(1u, decisions->kv_tile);
-    while ((2u * nwg * kv_span) < (uint64_t) K->ne[1] && nwg < vec_nwg_cap) {
-        nwg <<= 1;
-    }
-    nwg                           = std::min(nwg, vec_nwg_cap);
+    uint32_t       nwg         = ggml_webgpu_flash_attn_vec_nwg(vec_nwg_cap, decisions->kv_tile, (uint32_t) K->ne[1]);
     const uint64_t nrows          = (uint64_t) Q->ne[1] * Q->ne[2] * Q->ne[3];
     const bool     use_vec_reduce = nwg > 1u;
     GGML_ASSERT(nrows <= UINT32_MAX);
@@ -3624,25 +3626,12 @@ static size_t ggml_backend_webgpu_buffer_type_get_alloc_size(ggml_backend_buffer
                 if (ggml_webgpu_flash_attn_use_vec_path(ctx->webgpu_global_ctx, Q, K, V)) {
                     const bool kv_direct =
                         ggml_webgpu_flash_attn_kv_direct(Q, K, GGML_WEBGPU_FLASH_ATTN_TILE_KV_VEC_WIDTH);
-                    const uint32_t max_kv_tile = ggml_webgpu_flash_attn_max_kv_tile(
-                        capabilities.limits.maxComputeWorkgroupStorageSize, 1u, 1u, (uint32_t) Q->ne[0],
-                        (uint32_t) V->ne[0], mask != nullptr, kv_direct);
-                    GGML_ASSERT(max_kv_tile > 0);
-                    uint32_t kv_tile = std::min(GGML_WEBGPU_FLASH_ATTN_VEC_MAX_KV_TILE, max_kv_tile);
-                    if (kv_direct) {
-                        kv_tile = std::min(kv_tile, GGML_WEBGPU_KV_SEQ_PAD);
-                        while (GGML_WEBGPU_KV_SEQ_PAD % kv_tile != 0) {
-                            kv_tile -= 1u;
-                        }
-                    }
+                    const uint32_t kv_tile = ggml_webgpu_flash_attn_get_vec_kv_tile(
+                        capabilities.limits.maxComputeWorkgroupStorageSize, (uint32_t) Q->ne[0], (uint32_t) V->ne[0],
+                        mask != nullptr, kv_direct);
 
                     const uint32_t vec_nwg_cap = capabilities.min_subgroup_size;
-                    uint32_t       nwg         = 1u;
-                    const uint64_t kv_span     = (uint64_t) std::max(1u, kv_tile);
-                    while ((2u * nwg * kv_span) < (uint64_t) K->ne[1] && nwg < vec_nwg_cap) {
-                        nwg <<= 1;
-                    }
-                    nwg = std::min(nwg, vec_nwg_cap);
+                    uint32_t       nwg         = ggml_webgpu_flash_attn_vec_nwg(vec_nwg_cap, kv_tile, (uint32_t) K->ne[1]);
 
                     const size_t align = capabilities.limits.minStorageBufferOffsetAlignment;
                     const uint64_t nrows = (uint64_t) Q->ne[1] * Q->ne[2] * Q->ne[3];
@@ -4205,11 +4194,18 @@ static bool ggml_backend_webgpu_device_supports_op(ggml_backend_dev_t dev, const
                 const size_t storage_offset_alignment = capabilities.limits.minStorageBufferOffsetAlignment;
                 const bool   use_subgroup_matrix  = ggml_webgpu_flash_attn_can_use_subgroup_matrix_path(
                     capabilities.supports_subgroup_matrix, capabilities.sg_mat_k, capabilities.sg_mat_n, src0, src2);
+                const bool   f16_vec4_aligned     =
+                    ggml_webgpu_flash_attn_f16_vec4_aligned(src1, src2, storage_offset_alignment);
+                const bool   tile_can_dispatch_all_q_rows =
+                    capabilities.limits.maxComputeInvocationsPerWorkgroup >=
+                    GGML_WEBGPU_FLASH_ATTN_TILE_Q_TILE * capabilities.max_subgroup_size;
                 const bool use_tile =
                     !use_subgroup_matrix &&
-                    ggml_webgpu_flash_attn_can_use_tile_path(
-                        capabilities.supports_subgroups, capabilities.limits.maxComputeInvocationsPerWorkgroup,
-                        capabilities.max_subgroup_size, src0, src1, src2, storage_offset_alignment);
+                    capabilities.supports_subgroups && src1->type == GGML_TYPE_F16 &&
+                    src2->type == GGML_TYPE_F16 && f16_vec4_aligned &&
+                    (src0->ne[0] % GGML_WEBGPU_FLASH_ATTN_TILE_KV_VEC_WIDTH == 0) &&
+                    (src2->ne[0] % GGML_WEBGPU_FLASH_ATTN_TILE_KV_VEC_WIDTH == 0) &&
+                    tile_can_dispatch_all_q_rows;
                 if (!use_subgroup_matrix && !use_tile) {
                     supports_op = false;
                     break;
