@@ -2,10 +2,16 @@ diagnostic(off, subgroup_uniformity);
 enable f16;
 enable subgroups;
 
-#ifdef KV_F32
-#define KV_TYPE f32
+#ifdef K_F32
+#define K_TYPE f32
 #else
-#define KV_TYPE f16
+#define K_TYPE f16
+#endif
+
+#ifdef V_F32
+#define V_TYPE f32
+#else
+#define V_TYPE f16
 #endif
 
 #ifdef Q_F16
@@ -35,16 +41,31 @@ enable subgroups;
 #define BLOCK_SIZE 32
 #define BLOCKS_K ((HEAD_DIM_QK + BLOCK_SIZE - 1) / BLOCK_SIZE)
 #define BLOCKS_V ((HEAD_DIM_V + BLOCK_SIZE - 1) / BLOCK_SIZE)
-#if defined(KV_Q4_0)
-#define NQ 16
-#define F16_PER_BLOCK 9
-#define WEIGHTS_PER_F16 4
-#elif defined(KV_Q8_0)
-#define NQ 8
-#define F16_PER_BLOCK 17
-#define WEIGHTS_PER_F16 2
+#if defined(K_Q4_0)
+#define K_NQ 16
+#define K_F16_PER_BLOCK 9
+#define K_WEIGHTS_PER_F16 4
+#elif defined(K_Q8_0)
+#define K_NQ 8
+#define K_F16_PER_BLOCK 17
+#define K_WEIGHTS_PER_F16 2
 #endif
-#define F16_PER_THREAD (NQ / WEIGHTS_PER_F16)
+#if defined(K_Q4_0) || defined(K_Q8_0)
+#define K_F16_PER_THREAD (K_NQ / K_WEIGHTS_PER_F16)
+#endif
+
+#if defined(V_Q4_0)
+#define V_NQ 16
+#define V_F16_PER_BLOCK 9
+#define V_WEIGHTS_PER_F16 4
+#elif defined(V_Q8_0)
+#define V_NQ 8
+#define V_F16_PER_BLOCK 17
+#define V_WEIGHTS_PER_F16 2
+#endif
+#if defined(V_Q4_0) || defined(V_Q8_0)
+#define V_F16_PER_THREAD (V_NQ / V_WEIGHTS_PER_F16)
+#endif
 
 fn get_byte(value: u32, index: u32) -> u32 {
     return (value >> (index * 8)) & 0xFF;
@@ -103,22 +124,22 @@ struct Params {
 
 @group(0) @binding(0) var<storage, read_write> Q: array<Q_TYPE>;
 #ifdef KV_OVERLAP
-#if defined(KV_Q4_0) || defined(KV_Q8_0)
-@group(0) @binding(1) var<storage, read_write> K: array<KV_TYPE>;
+#if defined(K_Q4_0) || defined(K_Q8_0)
+@group(0) @binding(1) var<storage, read_write> K: array<K_TYPE>;
 #else
-@group(0) @binding(1) var<storage, read_write> K: array<vec4<KV_TYPE>>;
+@group(0) @binding(1) var<storage, read_write> K: array<vec4<K_TYPE>>;
 #endif
 #define V K
 #else
-#if defined(KV_Q4_0) || defined(KV_Q8_0)
-@group(0) @binding(1) var<storage, read_write> K: array<KV_TYPE>;
+#if defined(K_Q4_0) || defined(K_Q8_0)
+@group(0) @binding(1) var<storage, read_write> K: array<K_TYPE>;
 #else
-@group(0) @binding(1) var<storage, read_write> K: array<vec4<KV_TYPE>>;
+@group(0) @binding(1) var<storage, read_write> K: array<vec4<K_TYPE>>;
 #endif
-#if defined(KV_Q4_0) || defined(KV_Q8_0)
-@group(0) @binding(2) var<storage, read_write> V: array<KV_TYPE>;
+#if defined(V_Q4_0) || defined(V_Q8_0)
+@group(0) @binding(2) var<storage, read_write> V: array<V_TYPE>;
 #else
-@group(0) @binding(2) var<storage, read_write> V: array<vec4<KV_TYPE>>;
+@group(0) @binding(2) var<storage, read_write> V: array<vec4<V_TYPE>>;
 #endif
 #endif
 #if defined(MASK) && defined(SINKS)
@@ -324,10 +345,10 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
         }
 
       // load k tile into shared memory
-#if defined(KV_Q4_0)
-      for (var elem_idx = local_id.x * NQ; elem_idx < KV_TILE * HEAD_DIM_QK; elem_idx += WG_SIZE * NQ) {
+#if defined(K_Q4_0)
+      for (var elem_idx = local_id.x * K_NQ; elem_idx < KV_TILE * HEAD_DIM_QK; elem_idx += WG_SIZE * K_NQ) {
           let blck_idx = elem_idx / BLOCK_SIZE;
-          let block_offset = (elem_idx % BLOCK_SIZE) / WEIGHTS_PER_F16;
+          let block_offset = (elem_idx % BLOCK_SIZE) / K_WEIGHTS_PER_F16;
           let k_row = blck_idx / BLOCKS_K;
           let global_k_row = kv_tile + k_row;
           let block_k = blck_idx % BLOCKS_K;
@@ -335,9 +356,9 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
 
           if (global_k_row < params.seq_len_kv) {
               let global_block_idx = k_head_offset + global_k_row * params.stride_k1 + block_k;
-              let base_idx = global_block_idx * F16_PER_BLOCK;
+              let base_idx = global_block_idx * K_F16_PER_BLOCK;
               let d = K[base_idx];
-              for (var j = 0u; j < F16_PER_THREAD; j += 2) {
+              for (var j = 0u; j < K_F16_PER_THREAD; j += 2) {
                   let q_0 = K[base_idx + 1u + block_offset + j];
                   let q_1 = K[base_idx + 1u + block_offset + j + 1];
                   let q_packed = bitcast<u32>(vec2(q_0, q_1));
@@ -352,10 +373,10 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
               }
           }
       }
-#elif defined(KV_Q8_0)
-      for (var elem_idx = local_id.x * NQ; elem_idx < KV_TILE * HEAD_DIM_QK; elem_idx += WG_SIZE * NQ) {
+#elif defined(K_Q8_0)
+      for (var elem_idx = local_id.x * K_NQ; elem_idx < KV_TILE * HEAD_DIM_QK; elem_idx += WG_SIZE * K_NQ) {
           let blck_idx = elem_idx / BLOCK_SIZE;
-          let block_offset = (elem_idx % BLOCK_SIZE) / WEIGHTS_PER_F16;
+          let block_offset = (elem_idx % BLOCK_SIZE) / K_WEIGHTS_PER_F16;
           let k_row = blck_idx / BLOCKS_K;
           let global_k_row = kv_tile + k_row;
           let block_k = blck_idx % BLOCKS_K;
@@ -363,9 +384,9 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
 
           if (global_k_row < params.seq_len_kv) {
               let global_block_idx = k_head_offset + global_k_row * params.stride_k1 + block_k;
-              let base_idx = global_block_idx * F16_PER_BLOCK;
+              let base_idx = global_block_idx * K_F16_PER_BLOCK;
               let d = K[base_idx];
-              for (var j = 0u; j < F16_PER_THREAD; j += 2) {
+              for (var j = 0u; j < K_F16_PER_THREAD; j += 2) {
                   let q_0 = K[base_idx + 1u + block_offset + j];
                   let q_1 = K[base_idx + 1u + block_offset + j + 1];
                   let q_packed = bitcast<u32>(vec2(q_0, q_1));
@@ -388,7 +409,7 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
           let global_k_row_offset = k_head_offset + global_k_row * params.stride_k1;
           let in_bounds = global_k_row < params.seq_len_kv && (k_col + 3u) < HEAD_DIM_QK;
           let vec_idx = (global_k_row_offset + k_col) >> 2u;
-          let k4 = select(vec4<KV_TYPE>(0.0), K[vec_idx], in_bounds);
+          let k4 = select(vec4<K_TYPE>(0.0), K[vec_idx], in_bounds);
           kv_shmem[elem_idx + 0u] = f32(k4.x);
           kv_shmem[elem_idx + 1u] = f32(k4.y);
           kv_shmem[elem_idx + 2u] = f32(k4.z);
@@ -510,10 +531,10 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
       }
 
       // load v tile into shared memory
-#if defined(KV_Q4_0)
-      for (var elem_idx = local_id.x * NQ; elem_idx < KV_TILE * HEAD_DIM_V; elem_idx += WG_SIZE * NQ) {
+#if defined(V_Q4_0)
+      for (var elem_idx = local_id.x * V_NQ; elem_idx < KV_TILE * HEAD_DIM_V; elem_idx += WG_SIZE * V_NQ) {
           let blck_idx = elem_idx / BLOCK_SIZE;
-          let block_offset = (elem_idx % BLOCK_SIZE) / WEIGHTS_PER_F16;
+          let block_offset = (elem_idx % BLOCK_SIZE) / V_WEIGHTS_PER_F16;
           let v_row = blck_idx / BLOCKS_V;
           let global_v_row = kv_tile + v_row;
           let block_k = blck_idx % BLOCKS_V;
@@ -521,9 +542,9 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
 
           if (global_v_row < params.seq_len_kv) {
               let global_block_idx = v_head_offset + global_v_row * params.stride_v1 + block_k;
-              let base_idx = global_block_idx * F16_PER_BLOCK;
+              let base_idx = global_block_idx * V_F16_PER_BLOCK;
               let d = V[base_idx];
-              for (var j = 0u; j < F16_PER_THREAD; j += 2) {
+              for (var j = 0u; j < V_F16_PER_THREAD; j += 2) {
                   let q_0 = V[base_idx + 1u + block_offset + j];
                   let q_1 = V[base_idx + 1u + block_offset + j + 1];
                   let q_packed = bitcast<u32>(vec2(q_0, q_1));
@@ -538,10 +559,10 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
               }
           }
       }
-#elif defined(KV_Q8_0)
-      for (var elem_idx = local_id.x * NQ; elem_idx < KV_TILE * HEAD_DIM_V; elem_idx += WG_SIZE * NQ) {
+#elif defined(V_Q8_0)
+      for (var elem_idx = local_id.x * V_NQ; elem_idx < KV_TILE * HEAD_DIM_V; elem_idx += WG_SIZE * V_NQ) {
           let blck_idx = elem_idx / BLOCK_SIZE;
-          let block_offset = (elem_idx % BLOCK_SIZE) / WEIGHTS_PER_F16;
+          let block_offset = (elem_idx % BLOCK_SIZE) / V_WEIGHTS_PER_F16;
           let v_row = blck_idx / BLOCKS_V;
           let global_v_row = kv_tile + v_row;
           let block_k = blck_idx % BLOCKS_V;
@@ -549,9 +570,9 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
 
           if (global_v_row < params.seq_len_kv) {
               let global_block_idx = v_head_offset + global_v_row * params.stride_v1 + block_k;
-              let base_idx = global_block_idx * F16_PER_BLOCK;
+              let base_idx = global_block_idx * V_F16_PER_BLOCK;
               let d = V[base_idx];
-              for (var j = 0u; j < F16_PER_THREAD; j += 2) {
+              for (var j = 0u; j < V_F16_PER_THREAD; j += 2) {
                   let q_0 = V[base_idx + 1u + block_offset + j];
                   let q_1 = V[base_idx + 1u + block_offset + j + 1];
                   let q_packed = bitcast<u32>(vec2(q_0, q_1));
@@ -574,7 +595,7 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
           let global_v_row_offset = v_head_offset + global_v_row * params.stride_v1;
           let in_bounds = global_v_row < params.seq_len_kv && (v_col + 3u) < HEAD_DIM_V;
           let vec_idx = (global_v_row_offset + v_col) >> 2u;
-          let v4 = select(vec4<KV_TYPE>(0.0), V[vec_idx], in_bounds);
+          let v4 = select(vec4<V_TYPE>(0.0), V[vec_idx], in_bounds);
           kv_shmem[elem_idx + 0u] = f32(v4.x);
           kv_shmem[elem_idx + 1u] = f32(v4.y);
           kv_shmem[elem_idx + 2u] = f32(v4.z);

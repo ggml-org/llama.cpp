@@ -547,7 +547,8 @@ struct ggml_webgpu_unary_pipeline_key_hash {
 
 struct ggml_webgpu_flash_attn_common_pipeline_key {
     ggml_type q_type;
-    ggml_type kv_type;
+    ggml_type k_type;
+    ggml_type v_type;
     ggml_type dst_type;
     uint32_t  head_dim_qk;
     uint32_t  head_dim_v;
@@ -558,7 +559,8 @@ struct ggml_webgpu_flash_attn_common_pipeline_key {
     bool      uses_logit_softcap;
 
     bool operator==(const ggml_webgpu_flash_attn_common_pipeline_key & other) const {
-        return q_type == other.q_type && kv_type == other.kv_type && dst_type == other.dst_type &&
+        return q_type == other.q_type && k_type == other.k_type && v_type == other.v_type &&
+               dst_type == other.dst_type &&
                head_dim_qk == other.head_dim_qk && head_dim_v == other.head_dim_v && kv_direct == other.kv_direct &&
                kv_overlap == other.kv_overlap && has_mask == other.has_mask && has_sinks == other.has_sinks &&
                uses_logit_softcap == other.uses_logit_softcap;
@@ -568,7 +570,8 @@ struct ggml_webgpu_flash_attn_common_pipeline_key {
 inline void ggml_webgpu_flash_attn_hash_common_pipeline_key(size_t & seed,
                                                             const ggml_webgpu_flash_attn_common_pipeline_key & key) {
     ggml_webgpu_hash_combine(seed, key.q_type);
-    ggml_webgpu_hash_combine(seed, key.kv_type);
+    ggml_webgpu_hash_combine(seed, key.k_type);
+    ggml_webgpu_hash_combine(seed, key.v_type);
     ggml_webgpu_hash_combine(seed, key.dst_type);
     ggml_webgpu_hash_combine(seed, key.head_dim_qk);
     ggml_webgpu_hash_combine(seed, key.head_dim_v);
@@ -635,15 +638,18 @@ inline size_t ggml_webgpu_flash_attn_tensor_offset(const ggml_tensor * tensor) {
 }
 
 inline bool ggml_webgpu_flash_attn_f16_vec4_aligned(const ggml_tensor * K,
-                                                    const ggml_tensor * V,
                                                     size_t              storage_offset_alignment) {
     const size_t alignment = std::max<size_t>(1u, storage_offset_alignment);
-    const uint32_t k_offset_elems =
+    const uint32_t offset_elems =
         (uint32_t) ((ggml_webgpu_flash_attn_tensor_offset(K) & (alignment - 1)) / ggml_type_size(K->type));
-    const uint32_t v_offset_elems =
-        (uint32_t) ((ggml_webgpu_flash_attn_tensor_offset(V) & (alignment - 1)) / ggml_type_size(V->type));
-    return (k_offset_elems % GGML_WEBGPU_FLASH_ATTN_TILE_KV_VEC_WIDTH == 0u) &&
-           (v_offset_elems % GGML_WEBGPU_FLASH_ATTN_TILE_KV_VEC_WIDTH == 0u);
+    return offset_elems % GGML_WEBGPU_FLASH_ATTN_TILE_KV_VEC_WIDTH == 0u;
+}
+
+inline bool ggml_webgpu_flash_attn_f16_vec4_aligned(const ggml_tensor * K,
+                                                    const ggml_tensor * V,
+                                                    size_t              storage_offset_alignment) {
+    return ggml_webgpu_flash_attn_f16_vec4_aligned(K, storage_offset_alignment) &&
+           ggml_webgpu_flash_attn_f16_vec4_aligned(V, storage_offset_alignment);
 }
 
 inline bool ggml_webgpu_flash_attn_kv_direct(const ggml_tensor * Q,
@@ -658,7 +664,8 @@ inline ggml_webgpu_flash_attn_common_pipeline_key ggml_webgpu_flash_attn_make_co
     uint32_t                                kv_direct_align) {
     ggml_webgpu_flash_attn_common_pipeline_key key = {};
     key.q_type                                     = context.src0->type;
-    key.kv_type                                    = context.src1->type;
+    key.k_type                                     = context.src1->type;
+    key.v_type                                     = context.src2->type;
     key.dst_type                                   = context.dst->type;
     key.head_dim_qk                                = (uint32_t) context.src0->ne[0];
     key.head_dim_v                                 = (uint32_t) context.src2->ne[0];
@@ -678,23 +685,41 @@ inline std::vector<std::string> ggml_webgpu_flash_attn_common_defines(
     uint32_t                                           wg_size) {
     std::vector<std::string> defines;
 
-    switch (key.kv_type) {
+    switch (key.k_type) {
         case GGML_TYPE_F32:
-            defines.push_back("KV_F32");
+            defines.push_back("K_F32");
             break;
         case GGML_TYPE_F16:
-            defines.push_back("KV_F16");
+            defines.push_back("K_F16");
             break;
         case GGML_TYPE_Q4_0:
-            defines.push_back("KV_Q4_0");
+            defines.push_back("K_Q4_0");
             break;
         case GGML_TYPE_Q8_0:
-            defines.push_back("KV_Q8_0");
+            defines.push_back("K_Q8_0");
             break;
         default:
-            GGML_ABORT("Unsupported KV type for flash attention shader");
+            GGML_ABORT("Unsupported K type for flash attention shader");
     }
-    variant += std::string("_") + ggml_type_name(key.kv_type);
+    variant += std::string("_k") + ggml_type_name(key.k_type);
+
+    switch (key.v_type) {
+        case GGML_TYPE_F32:
+            defines.push_back("V_F32");
+            break;
+        case GGML_TYPE_F16:
+            defines.push_back("V_F16");
+            break;
+        case GGML_TYPE_Q4_0:
+            defines.push_back("V_Q4_0");
+            break;
+        case GGML_TYPE_Q8_0:
+            defines.push_back("V_Q8_0");
+            break;
+        default:
+            GGML_ABORT("Unsupported V type for flash attention shader");
+    }
+    variant += std::string("_v") + ggml_type_name(key.v_type);
 
     switch (key.q_type) {
         case GGML_TYPE_F32:
@@ -2759,7 +2784,8 @@ class ggml_webgpu_shader_lib {
             variant += "_mask_blk";
         }
         uint32_t vec_ne = 1u;
-        if (key.common.kv_type == GGML_TYPE_F16 && key.common.head_dim_qk == key.common.head_dim_v) {
+        if (key.common.k_type == GGML_TYPE_F16 && key.common.v_type == GGML_TYPE_F16 &&
+            key.common.head_dim_qk == key.common.head_dim_v) {
             switch (key.common.head_dim_qk) {
                 case 64:
                 case 192:
