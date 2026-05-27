@@ -4,12 +4,10 @@ enable f16;
 #define BLOCK_SIZE 32u
 #define BLOCK_BYTES 34u
 #define QS_WORDS 8u
-#define PAIR_WORDS 17u
 #elif defined(DST_Q4_0)
 #define BLOCK_SIZE 32u
 #define BLOCK_BYTES 18u
 #define QS_WORDS 4u
-#define PAIR_WORDS 9u
 #endif
 
 @group(0) @binding(0)
