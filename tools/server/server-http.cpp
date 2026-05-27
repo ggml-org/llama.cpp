@@ -193,6 +193,7 @@ bool server_http_context::init(const common_params & params) {
             "/apple-touch-icon-180x180.png",
             "/manifest.webmanifest",
             "/sw.js",
+            "/version.json",
             "/workbox.js",
         };
 
@@ -360,8 +361,9 @@ bool server_http_context::init(const common_params & params) {
             srv->Get(params.api_prefix + "/pwa-512x512.png",                serve_asset("pwa-512x512.png",              "image/png",                                false));
             srv->Get(params.api_prefix + "/maskable-icon-512x512.png",      serve_asset("maskable-icon-512x512.png",    "image/png",                                false));
             srv->Get(params.api_prefix + "/apple-touch-icon-180x180.png",   serve_asset("apple-touch-icon-180x180.png", "image/png",                                false));
-            srv->Get(params.api_prefix + "/manifest.webmanifest",           serve_asset("manifest.webmanifest",         "application/manifest+json",                false));
-            srv->Get(params.api_prefix + "/sw.js",                          serve_asset("sw.js",                        "application/javascript; charset=utf-8",    false));
+            srv->Get(params.api_prefix + "/manifest.webmanifest",           serve_asset("manifest.webmanifest",        "application/manifest+json",                false));
+            srv->Get(params.api_prefix + "/sw.js",                          serve_asset("sw.js",                       "application/javascript; charset=utf-8",    false));
+            srv->Get(params.api_prefix + "/version.json",                   serve_asset("version.json",                 "application/json",                         false));
             srv->Get(params.api_prefix + "/workbox.js",                     serve_asset("workbox.js",                   "application/javascript; charset=utf-8",    false));
 #endif
         }

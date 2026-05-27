@@ -74,6 +74,13 @@ export function llamaCppBuildPlugin(): Plugin {
 						console.log(`✓ Copied ${workboxFiles[0]} -> workbox.js`);
 					}
 
+					// Copy _app/version.json -> version.json at output root (before _app cleanup)
+					const versionJsonPath = resolve(outDir, '_app/version.json');
+					if (existsSync(versionJsonPath)) {
+						copyFileSync(versionJsonPath, resolve(outDir, 'version.json'));
+						console.log('✓ Copied _app/version.json -> version.json');
+					}
+
 					// Fix sw.js: rewrite _app paths, favicon.svg → favicon.ico, and workbox-*.js → workbox.js
 					const swPath = resolve(outDir, 'sw.js');
 					if (existsSync(swPath)) {
@@ -84,6 +91,8 @@ export function llamaCppBuildPlugin(): Plugin {
 							'./bundle.css'
 						);
 						swContent = swContent.replace(/"favicon\.svg"/g, '"favicon.ico"');
+						// Rewrite _app/version.json -> version.json
+						swContent = swContent.replace(/"_app\/version\.json"/g, '"version.json"');
 						// Rewrite workbox-<hash> (import) → workbox
 						swContent = swContent.replace(/"\.\/workbox-[a-z0-9]+"/g, '"./workbox"');
 						// Rewrite precache paths with leading slash

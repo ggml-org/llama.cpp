@@ -31,6 +31,7 @@ set(ASSETS
     apple-touch-icon-180x180.png
     manifest.webmanifest
     sw.js
+    version.json
     workbox.js
 )
 
