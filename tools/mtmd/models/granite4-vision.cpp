@@ -126,10 +126,10 @@ static ggml_tensor * g4v_build_block(
             ggml_tensor * wv, ggml_tensor * bv,
             ggml_tensor * wo, ggml_tensor * bo,
             ggml_tensor * ln_w, ggml_tensor * ln_b) -> ggml_tensor * {
-        const int n_head = 18; // QFormer: 1152 / 64
-        const int d_h   = n_embd / n_head;
-        const int nq   = q_stream->ne[1];
-        const int nkv  = kv_stream->ne[1];
+        const int d_h    = 64; // hard coded in downsampling.py:77
+        const int n_head = n_embd / d_h;
+        const int nq     = q_stream->ne[1];
+        const int nkv    = kv_stream->ne[1];
 
         // We loop over the n_windows dimension by treating it as batch via
         // the ne[2] dim in mul_mat.  Collapse (C, n, n_win) → (C, n * n_win)
@@ -323,7 +323,7 @@ ggml_cgraph * clip_graph_granite4_vision::build() {
     const int projector_count = hparams.vision_feature_layer.size();
     const float qformer_eps = 1e-12f;
 
-    std::vector<ggml_tensor *> streams(projector_count, nullptr);
+    ggml_tensor * mmproj = nullptr;
     for (int bid = 0; bid < projector_count; ++bid) {
         const auto & blk = model.qf_proj_blocks[bid];
 
@@ -332,7 +332,7 @@ ggml_cgraph * clip_graph_granite4_vision::build() {
         GGML_ASSERT(vlayer >= 1 && vlayer <= n_layer);
         ggml_tensor * h = layer_outs[vlayer - 1];
 
-        streams[bid] = g4v_build_block(
+        ggml_tensor * stream = g4v_build_block(
             this, ctx0, gf, blk,
             h, bid,
             hparams.proj_spatial_offsets[bid],
@@ -340,14 +340,9 @@ ggml_cgraph * clip_graph_granite4_vision::build() {
             hparams.downsample_window_side,
             hparams.downsample_query_side,
             qformer_eps);
+        mmproj = mmproj ? ggml_concat(ctx0, mmproj, stream, 0) : stream;
     }
 
-    // Concatenate the projector activations in the correct order
-    ggml_tensor * mmproj = nullptr;
-    for (int k = 0; k < projector_count; ++k) {
-        ggml_tensor * s = ggml_cont(ctx0, streams[k]);
-        mmproj = (k == 0) ? s : ggml_concat(ctx0, mmproj, s, 0);
-    }
     // --- Stage 1d: Append newline tokens if append_token is set ---
     if (append_token_type == clip_image_f32::CLIP_APPEND_TOKEN_NEWLINE_ROWWISE) {
         mmproj = append_rowwise_newlines(ctx0, mmproj);
