@@ -1716,7 +1716,8 @@ void llama_model::print_info() const {
         LLAMA_LOG_INFO("%s: n_ctx_orig_yarn       = %u\n",     __func__, hparams.n_ctx_orig_yarn);
         LLAMA_LOG_INFO("%s: rope_yarn_log_mul     = %.4f\n",   __func__, hparams.rope_yarn_log_mul);
         LLAMA_LOG_INFO("%s: rope_finetuned        = %s\n",     __func__, hparams.rope_finetuned ? "yes" : "unknown");
-        if (std::any_of(hparams.deepstack_mapping_arr.begin(),
+        if (arch == LLM_ARCH_GRANITE &&
+            std::any_of(hparams.deepstack_mapping_arr.begin(),
                         hparams.deepstack_mapping_arr.end(),
                         [](const auto & entry) { return entry >= 0; })) {
             LLAMA_LOG_INFO("%s: deepstack_mapping_arr = %s\n", __func__,
