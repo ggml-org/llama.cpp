@@ -247,6 +247,16 @@ static std::unordered_map<std::string, BuiltinRule> PRIMITIVE_RULES = {
     {"null", {"\"null\" space", {}}},
 };
 
+// Gemma 4 uses the special token <|"|> as its string delimiter, matched via the GBNF token construct.
+static std::unordered_map<std::string, BuiltinRule> GEMMA4_PRIMITIVE_RULES = {
+    {"gemma4-char",   {"[^\\x00-\\x08\\x0B\\x0C\\x0E-\\x1F\\x7F]", {}}},
+    {"gemma4-string", {"<|\"|> gemma4-char* <|\"|> space", {"gemma4-char"}}},
+    {"gemma4-key",    {"[^:}]+", {}}},
+    {"gemma4-value",  {"gemma4-object | gemma4-array | gemma4-string | number | boolean | null", {"gemma4-object", "gemma4-array", "gemma4-string", "number", "boolean", "null"}}},
+    {"gemma4-object", {"\"{\" space ( gemma4-key \":\" space gemma4-value (\",\" space gemma4-key \":\" space gemma4-value)* )? \"}\" space", {"gemma4-key", "gemma4-value"}}},
+    {"gemma4-array",  {"\"[\" space ( gemma4-value (\",\" space gemma4-value)* )? \"]\" space", {"gemma4-value"}}},
+};
+
 static std::unordered_map<std::string, BuiltinRule> STRING_FORMAT_RULES = {
     {"date", {"[0-9]{4} \"-\" ( \"0\" [1-9] | \"1\" [0-2] ) \"-\" ( \"0\" [1-9] | [1-2] [0-9] | \"3\" [0-1] )", {}}},
     {"time", {"([01] [0-9] | \"2\" [0-3]) \":\" [0-5] [0-9] \":\" [0-5] [0-9] ( \".\" [0-9]{3} )? ( \"Z\" | ( \"+\" | \"-\" ) ( [01] [0-9] | \"2\" [0-3] ) \":\" [0-5] [0-9] )", {}}},
@@ -264,6 +274,9 @@ static bool is_reserved_name(const std::string & name) {
             s.insert(p.first);
         }
         for (const auto & p : STRING_FORMAT_RULES) {
+            s.insert(p.first);
+        }
+        for (const auto & p : GEMMA4_PRIMITIVE_RULES) {
             s.insert(p.first);
         }
         return s;
@@ -741,8 +754,11 @@ private:
             if (it == PRIMITIVE_RULES.end()) {
                 it = STRING_FORMAT_RULES.find(dep);
                 if (it == STRING_FORMAT_RULES.end()) {
-                    _errors.push_back("Rule " + dep + " not known");
-                    continue;
+                    it = GEMMA4_PRIMITIVE_RULES.find(dep);
+                    if (it == GEMMA4_PRIMITIVE_RULES.end()) {
+                        _errors.push_back("Rule " + dep + " not known");
+                        continue;
+                    }
                 }
             }
             if (_rules.find(dep) == _rules.end()) {
@@ -997,6 +1013,21 @@ public:
             out << ") space";
             return _add_rule(rule_name, out.str());
         }
+        if (_dialect == COMMON_SCHEMA_DIALECT_GEMMA4) {
+            // Route the object / array / value fallbacks through Gemma 4 primitives so nested strings use <|"|>
+            if (schema.empty() || schema_type == "object") {
+                return _add_primitive(rule_name == "root" ? "root" : "gemma4-object", GEMMA4_PRIMITIVE_RULES.at("gemma4-object"));
+            }
+            if (schema_type.is_null() && schema.is_object()) {
+                return _add_primitive(rule_name == "root" ? "root" : "gemma4-value", GEMMA4_PRIMITIVE_RULES.at("gemma4-value"));
+            }
+            if (schema_type == "string") {
+                return _add_primitive(rule_name == "root" ? "root" : "gemma4-string", GEMMA4_PRIMITIVE_RULES.at("gemma4-string"));
+            }
+            if (schema_type == "array") {
+                return _add_primitive(rule_name == "root" ? "root" : "gemma4-array", GEMMA4_PRIMITIVE_RULES.at("gemma4-array"));
+            }
+        }
         if (schema.empty() || schema_type == "object") {
             return _add_rule(rule_name, _add_primitive("object", PRIMITIVE_RULES.at("object")));
         }
@@ -1004,9 +1035,6 @@ public:
             // No type constraint and no recognized structural keywords (e.g. {"description": "..."}).
             // Per JSON Schema semantics this is equivalent to {} and accepts any value.
             return _add_rule(rule_name, _add_primitive("value", PRIMITIVE_RULES.at("value")));
-        }
-        if (_dialect == COMMON_SCHEMA_DIALECT_GEMMA4 && schema_type == "string") {
-            return _add_rule(rule_name == "root" ? "root" : rule_name, "gemma4-string");
         }
         if (!schema_type.is_string() || PRIMITIVE_RULES.find(schema_type.get<std::string>()) == PRIMITIVE_RULES.end()) {
             _errors.push_back("Unrecognized schema: " + schema.dump());

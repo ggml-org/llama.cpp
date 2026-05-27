@@ -1536,6 +1536,33 @@ static std::string gbnf_excluding_pattern(const std::vector<std::string> & strin
     return "(" + pattern + ")*";
 }
 
+// A schema parser delegates to its child (rather than emitting JSON-schema-derived GBNF)
+// when there's no schema attached, or when the schema is one of the raw-tagged primitives
+// the PEG parser handles directly (strings, enums, nullable-strings). Reachability and
+// GBNF emission both stop at non-delegating schema boundaries.
+static bool peg_schema_delegates(const common_peg_schema_parser & s) {
+    if (!s.schema) {
+        return true;
+    }
+    if (s.raw && s.schema->contains("type")) {
+        const auto & type_val = s.schema->at("type");
+        if (type_val.is_string() && type_val == "string") {
+            return true;
+        }
+        if (type_val.is_array()) {
+            for (const auto & t : type_val) {
+                if (t.is_string() && t.get<std::string>() != "null") {
+                    return t.get<std::string>() == "string";
+                }
+            }
+        }
+    }
+    if (s.raw && !s.schema->contains("type") && s.schema->contains("enum")) {
+        return true;
+    }
+    return false;
+}
+
 static std::unordered_set<std::string> collect_reachable_rules(
     const common_peg_arena & arena,
     const common_peg_parser_id & rule
@@ -1572,9 +1599,14 @@ static std::unordered_set<std::string> collect_reachable_rules(
                                  std::is_same_v<T, common_peg_not_parser> ||
                                  std::is_same_v<T, common_peg_tag_parser> ||
                                  std::is_same_v<T, common_peg_atomic_parser> ||
-                                 std::is_same_v<T, common_peg_gbnf_parser> ||
-                                 std::is_same_v<T, common_peg_schema_parser>) {
+                                 std::is_same_v<T, common_peg_gbnf_parser>) {
                 visit(p.child);
+            } else if constexpr (std::is_same_v<T, common_peg_schema_parser>) {
+                // Mirror to_gbnf: when the schema is going to be emitted as JSON-schema-derived
+                // GBNF, the child ref is replaced and its rules are not reachable
+                if (peg_schema_delegates(p)) {
+                    visit(p.child);
+                }
             } else if constexpr (std::is_same_v<T, common_peg_rule_parser>) {
                 if (visited.find(p.name) == visited.end()) {
                     visited.insert(p.name);
@@ -1597,31 +1629,7 @@ static std::unordered_set<std::string> collect_reachable_rules(
 
 // GBNF generation implementation
 void common_peg_arena::build_grammar(const common_grammar_builder & builder, bool lazy) const {
-    auto schema_delegates = [](const common_peg_schema_parser & s) -> bool {
-        if (!s.schema) {
-            return true;
-        }
-        if (s.raw && s.schema->contains("type")) {
-            const auto & type_val = s.schema->at("type");
-            if (type_val.is_string() && type_val == "string") {
-                return true;
-            }
-            // Handle nullable types like ["string", "null"] - delegate when the
-            // non-null type is string, since the tagged format uses raw text
-            if (type_val.is_array()) {
-                for (const auto & t : type_val) {
-                    if (t.is_string() && t.get<std::string>() != "null") {
-                        return t.get<std::string>() == "string";
-                    }
-                }
-            }
-        }
-        // Delegate for enum schemas in raw mode - enum values are literal strings
-        if (s.raw && !s.schema->contains("type") && s.schema->contains("enum")) {
-            return true;
-        }
-        return false;
-    };
+    auto schema_delegates = &peg_schema_delegates;
 
     // Unwrap the parser so we can properly check if it's a sequence or choice
     auto effective_parser = [&](common_peg_parser_id id) -> const common_peg_parser_variant & {
@@ -1792,16 +1800,6 @@ void common_peg_arena::build_grammar(const common_grammar_builder & builder, boo
     } else {
         // Collect rules reachable from root
         reachable_rules = collect_reachable_rules(*this, root_);
-        for (const auto & [name, id] : rules_) {
-            const auto & parser = parsers_.at(id);
-            if (auto rule = std::get_if<common_peg_rule_parser>(&parser)) {
-                if (rule->trigger) {
-                    reachable_rules.insert(name);
-                    auto add_rules = collect_reachable_rules(*this, id);
-                    reachable_rules.insert(add_rules.begin(), add_rules.end());
-                }
-            }
-        }
     }
 
     // Create GBNF rules for all reachable rules

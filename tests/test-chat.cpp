@@ -12,6 +12,7 @@
 #include "chat.h"
 #include "common.h"
 #include "ggml.h"
+#include "llama.h"
 #include "log.h"
 
 #include <algorithm>
@@ -140,9 +141,60 @@ static common_chat_templates_ptr read_templates(const std::string & path) {
     return common_chat_templates_ptr(common_chat_templates_init(/* model= */ nullptr, read_file(path)));
 }
 
-static std::unique_ptr<llama_grammar> build_grammar(const std::string & grammar_str) {
+// Lazy-loaded vocab fixtures: any template whose grammar uses GBNF token constructs
+// (e.g. Gemma 4's <|"|> string delimiter) needs a real vocab to parse the grammar and
+// to tokenize test inputs. Fixtures live in models/ggml-vocab-*.gguf.
+static std::string vocab_path_for_template(const std::string & template_path) {
+    struct mapping { const char * marker; const char * vocab; };
+    static const mapping mappings[] = {
+        { "gemma-4", "models/ggml-vocab-gemma-4.gguf" },
+    };
+    for (const auto & m : mappings) {
+        if (template_path.find(m.marker) != std::string::npos) {
+            return m.vocab;
+        }
+    }
+    return "";
+}
+
+static const llama_vocab * load_vocab(const std::string & vocab_path) {
+    if (vocab_path.empty()) {
+        return nullptr;
+    }
+    static std::map<std::string, llama_model *> cache;
+    static bool backend_initialized = false;
+    static const bool register_atexit = [] {
+        std::atexit([] {
+            for (auto & kv : cache) {
+                llama_model_free(kv.second);
+            }
+            cache.clear();
+        });
+        return true;
+    }();
+    (void) register_atexit;
+
+    auto it = cache.find(vocab_path);
+    if (it != cache.end()) {
+        return llama_model_get_vocab(it->second);
+    }
+    if (!backend_initialized) {
+        llama_backend_init();
+        backend_initialized = true;
+    }
+    auto mparams = llama_model_default_params();
+    mparams.vocab_only = true;
+    llama_model * model = llama_model_load_from_file(vocab_path.c_str(), mparams);
+    if (!model) {
+        return nullptr;
+    }
+    cache[vocab_path] = model;
+    return llama_model_get_vocab(model);
+}
+
+static std::unique_ptr<llama_grammar> build_grammar(const llama_vocab * vocab, const std::string & grammar_str) {
     return std::unique_ptr<llama_grammar>(
-        llama_grammar_init_impl(nullptr, grammar_str.c_str(), "root", false, nullptr, 0, nullptr, 0));
+        llama_grammar_init_impl(vocab, grammar_str.c_str(), "root", false, nullptr, 0, nullptr, 0));
 }
 
 // Helper to format a code point as a readable string
@@ -280,8 +332,66 @@ struct grammar_match_result {
     bool        incomplete = false;          // True if matched all input but grammar expects more
 };
 
+// Token-aware variant: tokenize input (with parse_special) and feed each token through the
+// grammar. Needed for grammars that contain GBNF token constructs like <|"|> — they match
+// by token id, not by byte sequence.
+static grammar_match_result match_tokens_detailed(const std::string & input, llama_grammar * grammar, const llama_vocab * vocab) {
+    grammar_match_result result;
+    result.total_bytes      = input.size();
+    result.total_codepoints = unicode_cpts_from_utf8(input).size();
+
+    auto &       stacks_cur = llama_grammar_get_stacks(grammar);
+    const auto & rules      = llama_grammar_get_rules(grammar);
+
+    std::vector<llama_token> tokens(input.size() + 1);
+    int32_t n = llama_tokenize(vocab, input.c_str(), (int32_t) input.size(), tokens.data(), (int32_t) tokens.size(), /* add_special = */ false, /* parse_special = */ true);
+    if (n < 0) {
+        tokens.resize(-n);
+        n = llama_tokenize(vocab, input.c_str(), (int32_t) input.size(), tokens.data(), (int32_t) tokens.size(), false, true);
+    }
+    tokens.resize(n);
+
+    size_t byte_pos = 0;
+    for (llama_token tok : tokens) {
+        char piece_buf[256];
+        int32_t piece_len = llama_token_to_piece(vocab, tok, piece_buf, (int32_t) sizeof(piece_buf), 0, /* special = */ true);
+        std::string piece = piece_len > 0 ? std::string(piece_buf, piece_len) : std::string();
+
+        std::string expected_before = get_expected_description(rules, stacks_cur);
+        bool failed = false;
+        try {
+            llama_grammar_accept_token(*grammar, tok, piece);
+        } catch (const std::runtime_error &) {
+            failed = true;
+        }
+        if (failed || stacks_cur.empty()) {
+            result.matched_bytes        = byte_pos;
+            result.matched_codepoints   = unicode_cpts_from_utf8(input.substr(0, byte_pos)).size();
+            result.matched_prefix       = input.substr(0, byte_pos);
+            result.failing_char         = "<token " + std::to_string(tok) + " `" + piece + "`>";
+            result.expected_description = expected_before;
+            return result;
+        }
+        byte_pos += piece.size();
+    }
+
+    result.matched_bytes      = input.size();
+    result.matched_codepoints = result.total_codepoints;
+    result.matched_prefix     = input;
+    if (std::any_of(stacks_cur.begin(), stacks_cur.end(), [](const auto & stack) { return stack.empty(); })) {
+        result.success = true;
+    } else {
+        result.incomplete           = true;
+        result.expected_description = get_expected_description(rules, stacks_cur);
+    }
+    return result;
+}
+
 // Detailed version of match_string that returns failure information
-static grammar_match_result match_string_detailed(const std::string & input, llama_grammar * grammar) {
+static grammar_match_result match_string_detailed(const std::string & input, llama_grammar * grammar, const llama_vocab * vocab = nullptr) {
+    if (vocab) {
+        return match_tokens_detailed(input, grammar, vocab);
+    }
     grammar_match_result result;
     result.total_bytes = input.size();
 
@@ -1003,6 +1113,7 @@ static std::string g_template_filter;
 static bool g_force_reconstruction_test = false;
 
 static void test_peg_parser(common_chat_templates *                      tmpls,
+                            const llama_vocab *                          vocab,
                             const std::function<void(peg_test_case &)> & init,
                             bool                                         detailed_debug) {
     // UTF-8-safe truncation helper (same as in test_parser_with_streaming)
@@ -1106,7 +1217,7 @@ static void test_peg_parser(common_chat_templates *                      tmpls,
 
     // Test grammar if present in params
     if (!parser.params_.grammar.empty()) {
-        auto grammar = build_grammar(parser.params_.grammar);
+        auto grammar = build_grammar(vocab, parser.params_.grammar);
         if (!grammar) {
             throw std::runtime_error("Failed to build grammar: " + parser.params_.grammar);
         }
@@ -1265,7 +1376,7 @@ static void test_peg_parser(common_chat_templates *                      tmpls,
 
         // Test the constrained portion against the grammar
         if (grammar_triggered && !tc.is_partial) {
-            auto result = match_string_detailed(constrained, grammar.get());
+            auto result = match_string_detailed(constrained, grammar.get(), vocab);
             if (!result.success) {
                 std::string error_msg;
                 if (result.incomplete) {
@@ -1352,6 +1463,7 @@ class peg_test_builder;
 class peg_tester {
     common_chat_templates_ptr tmpls_;
     std::string               template_path_;
+    const llama_vocab *       vocab_ = nullptr;
     bool                      detailed_debug_;
     friend class peg_test_builder;
 
@@ -1359,6 +1471,7 @@ class peg_tester {
     explicit peg_tester(const std::string & template_path, const bool detailed_debug = false) :
         tmpls_(read_templates(template_path)),
         template_path_(template_path),
+        vocab_(load_vocab(vocab_path_for_template(template_path))),
         detailed_debug_(detailed_debug) {}
 
     const std::string & template_path() const { return template_path_; }
@@ -1469,7 +1582,7 @@ class peg_test_builder {
             }
         }
         LOG_INF("\n\x1b[38;5;126m[%s]\x1b[0m\n%s\n\n", tester_.template_path().c_str(), tc_.input.c_str());
-        test_peg_parser(tester_.tmpls_.get(), [this](peg_test_case & t) { t = tc_; }, tester_.detailed_debug_);
+        test_peg_parser(tester_.tmpls_.get(), tester_.vocab_, [this](peg_test_case & t) { t = tc_; }, tester_.detailed_debug_);
     }
 };
 

@@ -1529,7 +1529,8 @@ static void test_gemma4_dialect() {
             "type": "string"
         })""",
         R"""(
-            root ::= gemma4-string
+            gemma4-char ::= [^\x00-\x08\x0B\x0C\x0E-\x1F\x7F]
+            root ::= <|"|> gemma4-char* <|"|> space
             space ::= | " " | "\n"{1,2} [ \t]{0,20}
         )"""
     });
@@ -1546,13 +1547,34 @@ static void test_gemma4_dialect() {
             "required": ["absolutePath"]
         })""",
         R"""(
-            absolutePath ::= gemma4-string
-            absolutePath-kv ::= "absolutePath" space ":" space absolutePath
+            absolutePath-kv ::= "absolutePath" space ":" space gemma4-string
+            gemma4-char ::= [^\x00-\x08\x0B\x0C\x0E-\x1F\x7F]
+            gemma4-string ::= <|"|> gemma4-char* <|"|> space
             integer ::= ("-"? integral-part) space
             integral-part ::= [0] | [1-9] [0-9]{0,15}
             root ::= "{" space absolutePath-kv ( "," space ( startLine-kv ) )? "}" space
             space ::= | " " | "\n"{1,2} [ \t]{0,20}
             startLine-kv ::= "startLine" space ":" space integer
+        )"""
+    });
+
+    test({
+        SUCCESS,
+        "gemma4 array of strings",
+        R"""({
+            "type": "object",
+            "properties": {
+                "todos": { "type": "array", "items": { "type": "string" } }
+            },
+            "required": ["todos"]
+        })""",
+        R"""(
+            gemma4-char ::= [^\x00-\x08\x0B\x0C\x0E-\x1F\x7F]
+            gemma4-string ::= <|"|> gemma4-char* <|"|> space
+            root ::= "{" space todos-kv "}" space
+            space ::= | " " | "\n"{1,2} [ \t]{0,20}
+            todos ::= "[" space (gemma4-string ("," space gemma4-string)*)? "]" space
+            todos-kv ::= "todos" space ":" space todos
         )"""
     });
 
