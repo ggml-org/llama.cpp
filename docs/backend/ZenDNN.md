@@ -192,13 +192,6 @@ For more details on available algorithms, see the [ZenDNN MatMul Algorithm Docum
 
 Q8_0 support is mainly beneficial for prompt processing / prefill workloads where large matrix multiplications dominate execution. Token generation performance may remain close to the standard CPU backend depending on the model, batch size, number of threads, and CPU topology.
 
-For best results with Q8_0 models:
-
-- Use a supported AMD Zen-based CPU.
-- Use `ZENDNNL_MATMUL_ALGO=1`.
-- Use sufficiently large prompt/batch workloads to expose matrix multiplication acceleration.
-- Enable profiling or logging to verify that ZenDNN MatMul kernels are being used.
-
 ### Profiling and Debugging
 
 For detailed profiling and logging options, refer to the [ZenDNN Logging Documentation](https://github.com/amd/ZenDNN/blob/a18adf8c605fb5f5e52cefd7eda08a7b18febbaf/docs/logging.md).
