@@ -128,6 +128,7 @@ class Keys:
         MOE_LATENT_SIZE                   = "{arch}.moe_latent_size"
         NEXTN_PREDICT_LAYERS              = "{arch}.nextn_predict_layers"
         NUM_DEEPSTACK_LAYERS              = "{arch}.n_deepstack_layers"
+        DEEPSTACK_LAYERS                  = "{arch}.deepstack_layers"
         POOLING_TYPE                      = "{arch}.pooling_type"
         LOGIT_SCALE                       = "{arch}.logit_scale"
         DECODER_START_TOKEN_ID            = "{arch}.decoder_start_token_id"

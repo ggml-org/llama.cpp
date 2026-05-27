@@ -57,7 +57,7 @@ class GraniteModel(LlamaModel):
                 if proj_idx == 0:
                     continue
                 deepstack_layer_arr[llm_layer] = proj_idx
-            self.gguf_writer.add_num_deepstack_layers(deepstack_layer_arr)
+            self.gguf_writer.add_deepstack_layers(deepstack_layer_arr)
 
     @classmethod
     def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:

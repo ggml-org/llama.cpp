@@ -955,18 +955,13 @@ class GGUFWriter:
     def add_pooling_type(self, value: PoolingType) -> None:
         self.add_uint32(Keys.LLM.POOLING_TYPE.format(arch=self.arch), value.value)
 
-    def add_num_deepstack_layers(self, count: int | Sequence[int]) -> None:
-        """
-        Add deepstack layer configuration.
+    def add_num_deepstack_layers(self, count: int) -> None:
+        """Add scalar deepstack layer count (qwen3vl format)"""
+        self.add_uint32(Keys.LLM.NUM_DEEPSTACK_LAYERS.format(arch=self.arch), count)
 
-        For backward compatibility, the GGUF key name remains 'n_deepstack_layers'
-        even though it now supports arrays. Existing models using scalar values
-        will continue to work.
-        """
-        if isinstance(count, int):
-            self.add_uint32(Keys.LLM.NUM_DEEPSTACK_LAYERS.format(arch=self.arch), count)
-        else:
-            self.add_array(Keys.LLM.NUM_DEEPSTACK_LAYERS.format(arch=self.arch), list(count))
+    def add_deepstack_layers(self, layers: Sequence[int]) -> None:
+        """Add per-layer deepstack projector indices (Granite4 Vision format)"""
+        self.add_array(Keys.LLM.DEEPSTACK_LAYERS.format(arch=self.arch), list(layers))
 
     def add_rope_dimension_count(self, count: int) -> None:
         self.add_uint32(Keys.Rope.DIMENSION_COUNT.format(arch=self.arch), count)
