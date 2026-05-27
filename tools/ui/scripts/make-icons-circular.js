@@ -49,7 +49,7 @@ async function makeCircle(targetFilename) {
 
 	const metadata = await sharp(targetPath).metadata();
 	const size = Math.max(metadata.width, metadata.height);
-	const radius = Math.floor(size * (1 - paddingPct / 100) / 2);
+	const radius = Math.floor((size * (1 - paddingPct / 100)) / 2);
 	const center = Math.floor(size / 2);
 
 	// Build circular mask as RGBA buffer: white opaque circle on transparent bg
@@ -71,7 +71,7 @@ async function makeCircle(targetFilename) {
 
 	const tmpMask = path.join(STATIC_DIR, '.mask-tmp.png');
 	await sharp(maskBuf, {
-		raw: { width: size, height: size, channels: 4 },
+		raw: { width: size, height: size, channels: 4 }
 	})
 		.png()
 		.toFile(tmpMask);
@@ -85,8 +85,8 @@ async function makeCircle(targetFilename) {
 				input: tmpMask,
 				top: 0,
 				left: 0,
-				blend: 'dest-in',
-			},
+				blend: 'dest-in'
+			}
 		])
 		.png()
 		.toBuffer();
@@ -94,7 +94,9 @@ async function makeCircle(targetFilename) {
 	fs.writeFileSync(targetPath, output);
 	fs.unlinkSync(tmpMask);
 
-	console.log(`✓ ${targetFilename} → circle from ${sourceIcon}, ${paddingPct}% padding (size=${size}, r=${radius})`);
+	console.log(
+		`✓ ${targetFilename} → circle from ${sourceIcon}, ${paddingPct}% padding (size=${size}, r=${radius})`
+	);
 }
 
 async function main() {

@@ -96,8 +96,14 @@ export function llamaCppBuildPlugin(): Plugin {
 						// Rewrite workbox-<hash> (import) → workbox
 						swContent = swContent.replace(/"\.\/workbox-[a-z0-9]+"/g, '"./workbox"');
 						// Rewrite precache paths with leading slash
-						swContent = swContent.replace(/"\/?_app\/immutable\/bundle\.[^"]+\.js"/g, '"./bundle.js"');
-						swContent = swContent.replace(/"\/?_app\/immutable\/assets\/bundle\.[^"]+\.css"/g, '"./bundle.css"');
+						swContent = swContent.replace(
+							/"\/?_app\/immutable\/bundle\.[^"]+\.js"/g,
+							'"./bundle.js"'
+						);
+						swContent = swContent.replace(
+							/"\/?_app\/immutable\/assets\/bundle\.[^"]+\.css"/g,
+							'"./bundle.css"'
+						);
 						writeFileSync(swPath, swContent, 'utf-8');
 						console.log('✓ Fixed sw.js precache paths');
 					}

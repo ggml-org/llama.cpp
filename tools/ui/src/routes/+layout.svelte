@@ -26,7 +26,7 @@
 	import { Toaster } from 'svelte-sonner';
 	import { modelsStore } from '$lib/stores/models.svelte';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
-	import { TOOLTIP_DELAY_DURATION } from '$lib/constants';
+	import { APP_NAME, TOOLTIP_DELAY_DURATION } from '$lib/constants';
 	import { useKeyboardShortcuts } from '$lib/hooks/use-keyboard-shortcuts.svelte';
 	import { useSettingsNavigation } from '$lib/hooks/use-settings-navigation.svelte';
 	import { conversations } from '$lib/stores/conversations.svelte';
@@ -277,7 +277,7 @@
 
 	<meta name="apple-mobile-web-app-capable" content="yes" />
 	<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-	<meta name="apple-mobile-web-app-title" content="llama.cpp" />
+	<meta name="apple-mobile-web-app-title" content={APP_NAME} />
 </svelte:head>
 
 <!-- PWA update prompt -->
