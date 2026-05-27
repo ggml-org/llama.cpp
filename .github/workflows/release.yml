@@ -27,10 +27,6 @@ on:
       '**/*.glsl'
     ]
 
-concurrency:
-  group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}
-  cancel-in-progress: true
-
 env:
   BRANCH_NAME: ${{ github.head_ref || github.ref_name }}
   CMAKE_ARGS: "-DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_TOOLS=ON -DLLAMA_BUILD_SERVER=ON -DGGML_RPC=ON"
@@ -615,6 +611,11 @@ jobs:
     needs: [check_release]
     if: ${{ needs.check_release.outputs.should_release == 'true' }}
 
+    # note: run these jobs one at a time for better cache reuse
+    concurrency:
+      group: ${{ github.workflow }}-windows-cuda
+      queue: max
+
     runs-on: windows-2022
 
     strategy:
@@ -1017,6 +1018,11 @@ jobs:
   windows-hip:
     needs: [check_release]
     if: ${{ needs.check_release.outputs.should_release == 'true' }}
+
+    # note: run these jobs one at a time for better cache reuse
+    concurrency:
+      group: ${{ github.workflow }}-windows-hip
+      queue: max
 
     runs-on: windows-2022
 
