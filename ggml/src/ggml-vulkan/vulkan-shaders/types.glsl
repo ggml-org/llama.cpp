@@ -1722,11 +1722,18 @@ struct block_nvfp4
     uint8_t qs[QUANT_K_NVFP4 / 2];
 };
 
+struct block_nvfp4_packed32
+{
+    uint32_t d[QUANT_K_NVFP4 / 16 / 4];
+    uint32_t qs[QUANT_K_NVFP4 / 2 / 4];
+};
+
 #if defined(DATA_A_NVFP4)
 #define QUANT_K QUANT_K_NVFP4
 #define QUANT_R QUANT_R_NVFP4
 #define QUANT_AUXF 1
 #define A_TYPE block_nvfp4
+#define A_TYPE_PACKED32 block_nvfp4_packed32
 #endif
 
 #if defined(DATA_A_IQ4_NL) || defined(DATA_A_IQ4_XS)

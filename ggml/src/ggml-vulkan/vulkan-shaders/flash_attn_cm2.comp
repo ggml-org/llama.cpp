@@ -11,6 +11,9 @@
 #extension GL_KHR_memory_scope_semantics : enable
 #extension GL_KHR_cooperative_matrix : enable
 #extension GL_NV_cooperative_matrix2 : enable
+#ifdef GL_NV_cooperative_matrix_decode_vector
+#extension GL_NV_cooperative_matrix_decode_vector : enable
+#endif
 #extension GL_EXT_buffer_reference : enable
 #extension GL_KHR_shader_subgroup_ballot : enable
 #extension GL_KHR_shader_subgroup_vote : enable
@@ -53,6 +56,41 @@ float16_t faDecodeV(const decodeBufFA_V bl_in, const uint blockCoords[2], const 
         default: return float16_t(0);
     }
 }
+
+// V=4 vector decode for K/V; dispatches to per-format _v decoders.
+f16vec4 faDecodeKVector(const decodeBufFA_K bl_in, const uint blockCoords[2], const uint coordInBlock[2]) {
+    switch (FaTypeK) {
+        case 0u: return f16vec4(decodeBufF32(bl_in).block);
+        case 2u: return dequantFuncQ4_0_v(decodeBufQ4_0(bl_in), blockCoords, coordInBlock);
+        case 3u: return dequantFuncQ4_1_v(decodeBufQ4_1(bl_in), blockCoords, coordInBlock);
+        case 6u: return dequantFuncQ5_0_v(decodeBufQ5_0(bl_in), blockCoords, coordInBlock);
+        case 7u: return dequantFuncQ5_1_v(decodeBufQ5_1(bl_in), blockCoords, coordInBlock);
+        case 8u: return dequantFuncQ8_0_v(decodeBufQ8_0(bl_in), blockCoords, coordInBlock);
+        case 41u: return dequantFuncQ1_0_v(decodeBufQ1_0(bl_in), blockCoords, coordInBlock);
+        default: return f16vec4(0);
+    }
+}
+
+f16vec4 faDecodeVVector(const decodeBufFA_V bl_in, const uint blockCoords[2], const uint coordInBlock[2]) {
+    switch (FaTypeV) {
+        case 0u: return f16vec4(decodeBufF32(bl_in).block);
+        case 2u: return dequantFuncQ4_0_v(decodeBufQ4_0(bl_in), blockCoords, coordInBlock);
+        case 3u: return dequantFuncQ4_1_v(decodeBufQ4_1(bl_in), blockCoords, coordInBlock);
+        case 6u: return dequantFuncQ5_0_v(decodeBufQ5_0(bl_in), blockCoords, coordInBlock);
+        case 7u: return dequantFuncQ5_1_v(decodeBufQ5_1(bl_in), blockCoords, coordInBlock);
+        case 8u: return dequantFuncQ8_0_v(decodeBufQ8_0(bl_in), blockCoords, coordInBlock);
+        case 41u: return dequantFuncQ1_0_v(decodeBufQ1_0(bl_in), blockCoords, coordInBlock);
+        default: return f16vec4(0);
+    }
+}
+
+#ifdef GL_NV_cooperative_matrix_decode_vector
+#define FADECODEK , faDecodeK, faDecodeKVector
+#define FADECODEV , faDecodeV, faDecodeVVector
+#else
+#define FADECODEK , faDecodeK
+#define FADECODEV , faDecodeV
+#endif
 
 layout (binding = 0) readonly buffer Q {uint8_t data_q[];};
 layout (binding = 1) readonly buffer K {uint8_t data_k[];};
@@ -259,7 +297,7 @@ void main() {
         // F16: bs_k==1 (direct load). F32: bs_k==4 (vec4 / dequantFuncF32). Q4/Q8 family: bs_k==32. Q1_0: bs_k==128.
         const bool k_use_decode = (bs_k > 1u);
         if (k_use_decode) {
-            coopMatLoadTensorNV(K_T, data_k, k_offset, sliceTensorLayoutNV(tensorLayoutK, j * Bc, Bc, 0, HSK_pad), tensorViewTranspose, faDecodeK);
+            coopMatLoadTensorNV(K_T, data_k, k_offset, sliceTensorLayoutNV(tensorLayoutK, j * Bc, Bc, 0, HSK_pad), tensorViewTranspose FADECODEK);
         } else {
             coopMatLoadTensorNV(K_T, data_k, k_offset, sliceTensorLayoutNV(tensorLayoutK, j * Bc, Bc, 0, HSK_pad), tensorViewTranspose);
         }
@@ -325,7 +363,7 @@ void main() {
         uint32_t v_offset = iv2*p.nb22 + iv3*p.nb23;
         const bool v_use_decode = (bs_v > 1u);
         if (v_use_decode) {
-            coopMatLoadTensorNV(V, data_v, v_offset, sliceTensorLayoutNV(tensorLayoutV, j * Bc, Bc, 0, HSV_pad), faDecodeV);
+            coopMatLoadTensorNV(V, data_v, v_offset, sliceTensorLayoutNV(tensorLayoutV, j * Bc, Bc, 0, HSV_pad) FADECODEV);
         } else {
             coopMatLoadTensorNV(V, data_v, v_offset, sliceTensorLayoutNV(tensorLayoutV, j * Bc, Bc, 0, HSV_pad));
         }
