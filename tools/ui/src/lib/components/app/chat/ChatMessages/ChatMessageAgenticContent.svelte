@@ -62,14 +62,6 @@
 		isLastAssistantMessage ? !!agenticLastError(message.convId) : false
 	);
 
-	const isReasoningInterrupted = $derived(
-		isLastAssistantMessage &&
-			!isStreaming &&
-			!!message.reasoningContent &&
-			!message.content?.trim() &&
-			!message.toolCalls
-	);
-
 	let permissionDismissed = $state(false);
 
 	const pendingPermission = $derived(
@@ -308,7 +300,7 @@
 		</CollapsibleContentBlock>
 	{:else if section.type === AgenticSectionType.REASONING}
 		{@const { preview: reasoningPreview, overflow: reasoningOverflow } = formatReasoningPreview(section.content)}
-		{@const reasoningSubtitle = isReasoningInterrupted
+		{@const reasoningSubtitle = section.wasInterrupted
 			? hasReasoningError
 				? 'Error'
 				: 'Cancelled'
