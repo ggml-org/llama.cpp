@@ -19,7 +19,7 @@ var<storage, read_write> src: array<f32>;
 var<storage, read_write> idx: array<u32>;
 
 @group(0) @binding(2)
-#ifdef FAST_BLOCK_PAIRS
+#ifdef PAIR_BLOCKS
 var<storage, read_write> dst: array<u32>;
 #else
 var<storage, read_write> dst: array<atomic<u32>>;
@@ -66,7 +66,7 @@ struct Params {
 var<uniform> params: Params;
 
 // if the quantization type is unaligned and there are an odd number of blocks per row, we need to store atomically
-#ifndef FAST_BLOCK_PAIRS
+#ifndef PAIR_BLOCKS
 fn merge_store_dst_word(word_idx: u32, mask: u32, bits: u32) {
     loop {
         let old = atomicLoad(&dst[word_idx]);
@@ -98,7 +98,7 @@ fn store_u32(dst_word_idx: u32, block_byte_offset: u32, byte_offset: u32, value:
     let shift = (total_byte_offset & 3u) * 8u;
 
     if (shift == 0u) {
-#ifdef FAST_BLOCK_PAIRS
+#ifdef PAIR_BLOCKS
         dst[word_idx] = value;
 #else
         atomicStore(&dst[word_idx], value);
@@ -176,7 +176,7 @@ fn quantize_block_to_dst(src_block: u32, dst_word_idx: u32, block_byte_offset: u
 @compute @workgroup_size(WG_SIZE)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let blocks_per_row = params.ne0 / BLOCK_SIZE;
-#ifdef FAST_BLOCK_PAIRS
+#ifdef PAIR_BLOCKS
     let blocks_per_invocation = 2u;
 #else
     let blocks_per_invocation = 1u;
@@ -219,7 +219,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let dst_block_byte = (dst_row_blocks + block_in_row) * BLOCK_BYTES;
 
     let dst_word_idx = dst_block_byte / 4u;
-#ifdef FAST_BLOCK_PAIRS
+#ifdef PAIR_BLOCKS
     quantize_block_to_dst(src_block, dst_word_idx, 0u);
     quantize_block_to_dst(src_block + BLOCK_SIZE, dst_word_idx, BLOCK_BYTES);
 #else

@@ -85,12 +85,12 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let i_idx0 = i_src1;
 
 #ifdef I64_IDX
-    let idx_high = (params.offset_idx + i_idx0 * params.stride_idx0 + i_idx1 * params.stride_idx1 + i_idx2 * params.stride_idx2) * 2u;
+    let idx_high = (params.offset_idx + i_idx0 * params.stride_idx0 + i_idx1 * params.stride_idx1 + i_idx2 * params.stride_idx2) * 2;
     let idx_val = idx[idx_high];
-    let idx_low_val = idx[idx_high + 1u];
+    let idx_low_val = idx[idx_high + 1];
 
-    if (idx_low_val != 0u) {
-        atomicStore(&error, 1u);
+    if (idx_low_val != 0) {
+        atomicStore(&error, 1);
         return;
     }
 #else
