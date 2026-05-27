@@ -5408,7 +5408,7 @@ static vk_device ggml_vk_get_device(size_t idx) {
         sync_enable_features.pNext = nullptr;
         sync_enable_features.internallySynchronizedQueues = VK_TRUE;
 
-        if (device->has_internally_synchronized_queues) {
+        if (internally_sync_support ) {
             last_struct->pNext = (VkBaseOutStructure *)&sync_enable_features;
             last_struct = (VkBaseOutStructure *)&sync_enable_features;
         }
