@@ -671,7 +671,6 @@ struct vk_device_struct {
     uint32_t shader_core_count;
     bool uma;
     bool prefer_host_memory;
-    bool host_write_dirty = false;
     bool float_controls_rte_fp16;
     bool subgroup_basic;
     bool subgroup_arithmetic;
@@ -3087,20 +3086,6 @@ static vk_subbuffer ggml_vk_subbuffer(const ggml_backend_vk_context* ctx, const 
     return { buf, offset, ggml_vk_get_max_buffer_range(ctx, buf, offset) };
 }
 
-static void ggml_vk_barrier_host_to_device(vk_context& subctx, vk_device& device) {
-    if (!device->host_write_dirty) {
-        return;
-    }
-    subctx->s->buffer->buf.pipelineBarrier(
-        vk::PipelineStageFlagBits::eHost,
-        vk::PipelineStageFlagBits::eComputeShader | vk::PipelineStageFlagBits::eTransfer,
-        {},
-        { { vk::AccessFlagBits::eHostWrite,
-            vk::AccessFlagBits::eShaderRead | vk::AccessFlagBits::eTransferRead } },
-        {}, {});
-    device->host_write_dirty = false;
-}
-
 static void ggml_vk_sync_buffers(ggml_backend_vk_context* ctx, vk_context& subctx) {
     VK_LOG_DEBUG("ggml_vk_sync_buffers()");
 
@@ -3108,7 +3093,6 @@ static void ggml_vk_sync_buffers(ggml_backend_vk_context* ctx, vk_context& subct
 
     if (ctx) {
         ctx->prealloc_x_need_sync = ctx->prealloc_y_need_sync = ctx->prealloc_split_k_need_sync = false;
-        ggml_vk_barrier_host_to_device(subctx, ctx->device);
     }
 
     subctx->s->buffer->buf.pipelineBarrier(
@@ -7640,7 +7624,6 @@ static void ggml_vk_buffer_write_2d(vk_buffer& dst, size_t offset, const void * 
                 memcpy((uint8_t *)dst->ptr + offset + i * dpitch, (const uint8_t *) src + i * spitch, width);
             }
         }
-        dst->device->host_write_dirty = true;
     } else {
         std::lock_guard<std::recursive_mutex> guard(dst->device->mutex);
 
@@ -7812,8 +7795,6 @@ static void ggml_vk_buffer_copy_async(vk_context& ctx, vk_buffer& dst, size_t ds
     // Make sure both buffers are on same device
     GGML_ASSERT(src->device == dst->device);
 
-    ggml_vk_barrier_host_to_device(ctx, src->device);
-
     VkBufferCopy bc{ src_offset, dst_offset, size };
 
     vkCmdCopyBuffer(ctx->s->buffer->buf, (VkBuffer)src->buffer, (VkBuffer)dst->buffer, 1, &bc);
@@ -7850,7 +7831,6 @@ static void ggml_vk_buffer_memset_async(vk_context& ctx, vk_buffer& dst, size_t 
     if (dst->memory_property_flags & vk::MemoryPropertyFlagBits::eHostVisible &&
         dst->device->uma) {
         deferred_memset((uint8_t*)dst->ptr + offset, c, size, &ctx->memsets);
-        dst->device->host_write_dirty = true;
         return;
     }
 
@@ -7864,7 +7844,6 @@ static void ggml_vk_buffer_memset(vk_buffer& dst, size_t offset, uint32_t c, siz
     if (dst->memory_property_flags & vk::MemoryPropertyFlagBits::eHostVisible &&
         dst->device->uma) {
         memset((uint8_t*)dst->ptr + offset, c, size);
-        dst->device->host_write_dirty = true;
         return;
     }
 
@@ -15791,12 +15770,6 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
     uint64_t mul_mat_bytes = 0;
     uint64_t total_mul_mat_bytes = 0;
     uint64_t mul_mat_bytes_per_submit = std::min(uint64_t(100*1000*1000), ctx->last_total_mul_mat_bytes / 40u);
-
-    if (ctx->device->host_write_dirty) {
-        compute_ctx = ggml_vk_get_compute_ctx(ctx);
-        ggml_vk_barrier_host_to_device(compute_ctx, ctx->device);
-    }
-
     for (int i = 0; i < cgraph->n_nodes; i++) {
         if (first_node_in_batch) {
             submit_node_idx = i;
