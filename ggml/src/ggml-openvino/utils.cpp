@@ -43,7 +43,7 @@ static bool ov_cache_enabled() {
     static const bool enabled = []() {
         const char * env = getenv("GGML_OPENVINO_ENABLE_CACHE");
         fprintf(stderr, "GGML OpenVINO: GGML_OPENVINO_ENABLE_CACHE=%s\n", env ? env : "(not set)");
-        if (env && std::string(env) == "NO") {
+        if (env && std::string(env) == "0") {
             fprintf(stderr, "GGML OpenVINO: decoder cache DISABLED\n");
             return false;
         }

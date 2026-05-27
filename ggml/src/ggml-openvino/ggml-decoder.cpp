@@ -1422,7 +1422,7 @@ void GgmlOvDecoder::compute_node_dynamic_dims() {
             m_node_dynamic_dims[node] = -1;
             if (m_node_dynamic_dims[node->src[0]] != -1) {
                 auto dynamic_dim_idx = m_node_dynamic_dims[node->src[0]];
-                auto dynamic_dim_value = node->src[0]->ne[dynamic_dim_idx];
+                // auto dynamic_dim_value = node->src[0]->ne[dynamic_dim_idx];
                 for (int i = 0; i < GGML_MAX_DIMS; i++) {
                     if (node->op_params[i] == dynamic_dim_idx) {
                         m_node_dynamic_dims[node] = i;
