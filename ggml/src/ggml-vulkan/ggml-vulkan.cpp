@@ -5411,6 +5411,7 @@ static vk_device ggml_vk_get_device(size_t idx) {
         if (internally_sync_support ) {
             last_struct->pNext = (VkBaseOutStructure *)&sync_enable_features;
             last_struct = (VkBaseOutStructure *)&sync_enable_features;
+            device_extensions.push_back(VK_KHR_INTERNALLY_SYNCHRONIZED_QUEUES_EXTENSION_NAME);
         }
 
         VkPhysicalDevicePipelineRobustnessFeaturesEXT pl_robustness_features;
