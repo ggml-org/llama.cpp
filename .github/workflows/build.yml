@@ -79,7 +79,7 @@ jobs:
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.21
         with:
-          key: ubuntu-cpu-${{ matrix.build }}
+          key: ${{ matrix.os }}-cpu
           evict-old-files: 1d
           save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
@@ -131,46 +131,7 @@ jobs:
           ./bin/llama-convert-llama2c-to-ggml --copy-vocab-from-model ./tok512.bin --llama2c-model stories260K.bin --llama2c-output-model stories260K.gguf
           ./bin/llama-completion -m stories260K.gguf -p "One day, Lily met a Shoggoth" -n 500 -c 256
 
-  ubuntu-24-vulkan:
-    strategy:
-      matrix:
-        include:
-          - build: 'x64'
-            os: ubuntu-24.04
-          - build: 'arm64'
-            os: ubuntu-24.04-arm
-
-    runs-on: ${{ matrix.os }}
-
-    steps:
-      - name: Clone
-        id: checkout
-        uses: actions/checkout@v6
-
-      - name: Dependencies
-        id: depends
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc-14 g++-14 build-essential glslc libvulkan-dev spirv-headers libssl-dev ninja-build
-          echo "CC=gcc-14" >> "$GITHUB_ENV"
-          echo "CXX=g++-14" >> "$GITHUB_ENV"
-
-      - name: Configure
-        id: cmake_configure
-        run: |
-          cmake -B build \
-            -G "Ninja" \
-            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-            -DGGML_BACKEND_DL=ON \
-            -DGGML_CPU_ALL_VARIANTS=ON \
-            -DGGML_VULKAN=ON
-
-      - name: Build
-        id: cmake_build
-        run: |
-          time cmake --build build -j $(nproc)
-
-  windows-latest:
+  windows-cpu:
     runs-on: windows-2025
 
     env:
@@ -202,7 +163,7 @@ jobs:
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.21
         with:
-          key: windows-latest-${{ matrix.build }}
+          key: windows-2025-${{ matrix.build }}
           variant: ccache
           evict-old-files: 1d
           save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
@@ -268,88 +229,3 @@ jobs:
       #     cd build
       #     $env:LLAMA_SKIP_TESTS_SLOW_ON_EMULATOR = 1
       #     & $sde -future -- ctest -L main -C Release --verbose --timeout 900
-
-  ubuntu-latest-cuda:
-    runs-on: ubuntu-latest
-    container: nvidia/cuda:12.6.2-devel-ubuntu24.04
-
-    steps:
-        - name: Clone
-          id: checkout
-          uses: actions/checkout@v6
-
-        - name: Install dependencies
-          env:
-            DEBIAN_FRONTEND: noninteractive
-          run: |
-              apt update
-              apt install -y cmake build-essential ninja-build libgomp1 git libssl-dev
-
-        - name: ccache
-          uses: ggml-org/ccache-action@v1.2.21
-          with:
-            key: ubuntu-latest-cuda
-            evict-old-files: 1d
-            save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
-
-        - name: Build with CMake
-          # TODO: Remove GGML_CUDA_CUB_3DOT2 flag once CCCL 3.2 is bundled within CTK and that CTK version is used in this project
-          run: |
-            cmake -S . -B build -G Ninja \
-              -DLLAMA_FATAL_WARNINGS=ON \
-              -DCMAKE_BUILD_TYPE=Release \
-              -DCMAKE_CUDA_ARCHITECTURES=89-real \
-              -DCMAKE_EXE_LINKER_FLAGS=-Wl,--allow-shlib-undefined \
-              -DGGML_NATIVE=OFF \
-              -DGGML_CUDA=ON \
-              -DGGML_CUDA_CUB_3DOT2=ON
-            cmake --build build
-
-  windows-2022-cuda:
-    runs-on: windows-2022
-
-    strategy:
-      matrix:
-        cuda: ['12.4']
-
-    steps:
-      - name: Clone
-        id: checkout
-        uses: actions/checkout@v6
-
-      - name: Install ccache
-        uses: ggml-org/ccache-action@v1.2.21
-        with:
-          key: windows-cuda-${{ matrix.cuda }}
-          variant: ccache
-          evict-old-files: 1d
-          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
-
-      - name: Install Cuda Toolkit
-        uses: ./.github/actions/windows-setup-cuda
-        with:
-          cuda_version: ${{ matrix.cuda }}
-
-      - name: Install Ninja
-        id: install_ninja
-        run: |
-          choco install ninja
-
-      - name: Build
-        id: cmake_build
-        shell: cmd
-        # TODO: Remove GGML_CUDA_CUB_3DOT2 flag once CCCL 3.2 is bundled within CTK and that CTK version is used in this project
-        run: |
-          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" x64
-          cmake -S . -B build -G "Ninja Multi-Config" ^
-            -DLLAMA_BUILD_SERVER=ON ^
-            -DLLAMA_BUILD_BORINGSSL=ON ^
-            -DGGML_NATIVE=OFF ^
-            -DGGML_BACKEND_DL=ON ^
-            -DGGML_CPU_ALL_VARIANTS=ON ^
-            -DGGML_CUDA=ON ^
-            -DGGML_RPC=ON ^
-            -DGGML_CUDA_CUB_3DOT2=ON
-          set /A NINJA_JOBS=%NUMBER_OF_PROCESSORS%-1
-          cmake --build build --config Release -j %NINJA_JOBS% -t ggml
-          cmake --build build --config Release

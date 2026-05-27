@@ -100,7 +100,7 @@ jobs:
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.21
         with:
-          key: macos-latest-${{ matrix.arch }}
+          key: ${{ matrix.os }}-${{ matrix.arch }}
           evict-old-files: 1d
 
       - name: Build
@@ -165,7 +165,7 @@ jobs:
         if: ${{ matrix.build != 's390x' }}
         uses: ggml-org/ccache-action@v1.2.21
         with:
-          key: ubuntu-cpu-${{ matrix.build }}
+          key: ${{ matrix.os }}-cpu
           evict-old-files: 1d
 
       - name: Dependencies
@@ -241,7 +241,7 @@ jobs:
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.21
         with:
-          key: ubuntu-vulkan-${{ matrix.build }}
+          key: ${{ matrix.os }}-vulkan
           evict-old-files: 1d
 
       - name: Dependencies
@@ -402,7 +402,7 @@ jobs:
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.21
         with:
-          key: ubuntu-24-openvino-release-no-preset-v1
+          key: ubuntu-24.04-openvino-release-no-preset-v1
           evict-old-files: 1d
 
       - name: Dependencies
@@ -485,7 +485,7 @@ jobs:
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.21
         with:
-          key: windows-latest-cpu-${{ matrix.arch }}
+          key: windows-2025-cpu-${{ matrix.arch }}
           variant: ccache
           evict-old-files: 1d
 
@@ -556,7 +556,7 @@ jobs:
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.21
         with:
-          key: windows-latest-${{ matrix.backend }}-${{ matrix.arch }}
+          key: windows-2025-${{ matrix.backend }}-${{ matrix.arch }}
           variant: ccache
           evict-old-files: 1d
 
@@ -633,10 +633,10 @@ jobs:
           cache: "npm"
           cache-dependency-path: "tools/ui/package-lock.json"
 
-      - name: Install ccache
+      - name: ccache
         uses: ggml-org/ccache-action@v1.2.21
         with:
-          key: windows-cuda-${{ matrix.cuda }}
+          key: windows-2022-cuda-${{ matrix.cuda }}
           variant: ccache
           evict-old-files: 1d
 
@@ -744,7 +744,7 @@ jobs:
 #      - name: ccache
 #        uses: ggml-org/ccache-action@v1.2.21
 #        with:
-#          key: windows-latest-sycl
+#          key: windows-2022-sycl
 #          variant: ccache
 #          evict-old-files: 1d
 #
@@ -866,7 +866,7 @@ jobs:
 #      - name: ccache
 #        uses: ggml-org/ccache-action@v1.2.21
 #        with:
-#          key: ubuntu-24-sycl-${{ matrix.build }}
+#          key: ubuntu-24.04-sycl
 #          evict-old-files: 1d
 #          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 #
@@ -936,7 +936,7 @@ jobs:
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.21
         with:
-          key: ubuntu-rocm-${{ matrix.ROCM_VERSION }}-${{ matrix.build }}
+          key: ubuntu-22.04-rocm-${{ matrix.ROCM_VERSION }}
           evict-old-files: 1d
 
       - name: Dependencies
@@ -1058,7 +1058,7 @@ jobs:
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.21
         with:
-          key: windows-latest-hip-${{ env.HIPSDK_INSTALLER_VERSION }}-${{ matrix.name }}-x64
+          key: windows-2022-hip-${{ env.HIPSDK_INSTALLER_VERSION }}-${{ matrix.name }}-x64
           evict-old-files: 1d
 
       - name: Install ROCm

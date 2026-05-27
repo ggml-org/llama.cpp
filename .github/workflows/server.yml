@@ -55,7 +55,7 @@ concurrency:
 
 jobs:
   ubuntu:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     name: ubuntu (${{ matrix.wf_name }})
     strategy:
@@ -96,7 +96,7 @@ jobs:
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.21
         with:
-          key: server-ubuntu-default
+          key: ubuntu-24.04-server
           evict-old-files: 1d
           save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
@@ -144,7 +144,7 @@ jobs:
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.21
         with:
-          key: server-windows-default
+          key: windows-2025-server-x64-llvm
           evict-old-files: 1d
           save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 

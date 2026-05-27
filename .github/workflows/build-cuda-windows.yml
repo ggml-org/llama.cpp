@@ -1,28 +1,11 @@
-name: CI (hip)
+name: CI (CUDA, windows)
 
+# TODO: this workflow is only triggered manually because it is very heavy on the CI
+#       when we provision dedicated windows runners, we can enable it for pushes too
+# note: running this workflow manually will populate the ccache for the builds
+#       this can be used to speed up the release builds
 on:
   workflow_dispatch: # allows manual triggering
-  push:
-    branches:
-      - master
-    paths: [
-      '.github/workflows/build-hip.yml',
-      '**/CMakeLists.txt',
-      '**/.cmake',
-      '**/*.h',
-      '**/*.hpp',
-      '**/*.c',
-      '**/*.cpp',
-      '**/*.cu',
-      '**/*.cuh'
-    ]
-
-  pull_request:
-    types: [opened, synchronize, reopened]
-    paths: [
-      '.github/workflows/build-hip.yml',
-      'ggml/src/ggml-cuda/**'
-    ]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}
@@ -36,45 +19,69 @@ env:
   LLAMA_ARG_LOG_TIMESTAMPS: 1
 
 jobs:
+  cuda:
+    runs-on: windows-2022
 
-  ubuntu-22-hip:
-    runs-on: ubuntu-22.04
-    container: rocm/dev-ubuntu-22.04:6.1.2
+    strategy:
+      matrix:
+        cuda: ['12.4', '13.3']
 
     steps:
       - name: Clone
         id: checkout
         uses: actions/checkout@v6
 
-      - name: Dependencies
-        id: depends
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential git cmake rocblas-dev hipblas-dev libssl-dev rocwmma-dev
-
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.21
         with:
-          key: ubuntu-22-hip
+          key: windows-2022-cuda-${{ matrix.cuda }}
+          variant: ccache
           evict-old-files: 1d
-          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+          save: true # always save the cache since we are running this manually
+          #save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
-      - name: Build with native CMake HIP support
-        id: cmake_build
+      - name: Install Cuda Toolkit
+        uses: ./.github/actions/windows-setup-cuda
+        with:
+          cuda_version: ${{ matrix.cuda }}
+
+      - name: Install Ninja
+        id: install_ninja
         run: |
-          cmake -B build -S . \
-            -DCMAKE_HIP_COMPILER="$(hipconfig -l)/clang" \
-            -DGGML_HIP_ROCWMMA_FATTN=ON \
-            -DGPU_TARGETS="gfx1030" \
-            -DGGML_HIP=ON
-          cmake --build build --config Release -j $(nproc)
+          choco install ninja
 
-  windows-latest-hip:
+      - name: Build
+        id: cmake_build
+        shell: cmd
+        # TODO: Remove GGML_CUDA_CUB_3DOT2 flag once CCCL 3.2 is bundled within CTK and that CTK version is used in this project
+        run: |
+          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" x64
+          cmake -S . -B build -G "Ninja Multi-Config" ^
+            -DLLAMA_BUILD_SERVER=ON ^
+            -DLLAMA_BUILD_BORINGSSL=ON ^
+            -DGGML_NATIVE=OFF ^
+            -DGGML_BACKEND_DL=ON ^
+            -DGGML_CPU_ALL_VARIANTS=ON ^
+            -DGGML_CUDA=ON ^
+            -DGGML_RPC=ON ^
+            -DGGML_CUDA_CUB_3DOT2=ON
+          set /A NINJA_JOBS=%NUMBER_OF_PROCESSORS%-1
+          cmake --build build --config Release -j %NINJA_JOBS% -t ggml
+          cmake --build build --config Release
+
+  hip:
     runs-on: windows-2022
 
     env:
       # Make sure this is in sync with build-cache.yml
       HIPSDK_INSTALLER_VERSION: "26.Q1"
+
+    strategy:
+      matrix:
+        include:
+          # sync with release.yml
+          - name: "radeon"
+            gpu_targets: "gfx1150;gfx1151;gfx1200;gfx1201;gfx1100;gfx1101;gfx1102;gfx1030;gfx1031;gfx1032"
 
     steps:
       - name: Clone
@@ -115,9 +122,10 @@ jobs:
       - name: Install ccache
         uses: ggml-org/ccache-action@v1.2.21
         with:
-          key: ${{ github.job }}
+          key: windows-2022-hip-${{ env.HIPSDK_INSTALLER_VERSION }}-${{ matrix.name }}-x64
           evict-old-files: 1d
-          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+          save: true # always save the cache since we are running this manually
+          #save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
       - name: Build
         id: cmake_build
@@ -136,32 +144,3 @@ jobs:
             -DGPU_TARGETS="gfx1100"  `
             -DGGML_RPC=ON
           cmake --build build -j ${env:NUMBER_OF_PROCESSORS}
-
-  ubuntu-22-musa:
-    runs-on: ubuntu-22.04
-    container: mthreads/musa:rc4.3.0-devel-ubuntu22.04-amd64
-
-    steps:
-      - name: Clone
-        id: checkout
-        uses: actions/checkout@v6
-
-      - name: Dependencies
-        id: depends
-        run: |
-          apt-get update
-          apt-get install -y build-essential git cmake libssl-dev
-
-      - name: ccache
-        uses: ggml-org/ccache-action@v1.2.21
-        with:
-          key: ubuntu-22-musa
-          evict-old-files: 1d
-          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
-
-      - name: Build with native CMake MUSA support
-        id: cmake_build
-        run: |
-          cmake -B build -S . \
-            -DGGML_MUSA=ON
-          time cmake --build build --config Release -j $(nproc)

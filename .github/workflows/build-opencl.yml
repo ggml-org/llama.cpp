@@ -36,7 +36,7 @@ env:
 
 jobs:
 
-  windows-latest-opencl-adreno:
+  windows-2025-opencl-adreno:
     runs-on: windows-2025
 
     steps:
@@ -47,7 +47,7 @@ jobs:
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.21
         with:
-          key: windows-latest-llvm-arm64-opencl-adreno
+          key: windows-2025-llvm-arm64-opencl-adreno
           variant: ccache
           evict-old-files: 1d
           save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
