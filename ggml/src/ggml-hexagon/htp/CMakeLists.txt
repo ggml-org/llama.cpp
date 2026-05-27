@@ -35,9 +35,11 @@ add_library(${HTP_LIB} SHARED
     ssm-conv.c
     cumsum-ops.c
     fill-ops.c
+    concat-ops.c
     diag-ops.c
     solve-tri-ops.c
     gated-delta-net-ops.c
+    pad-ops.c
 )
 
 target_compile_definitions(${HTP_LIB} PRIVATE

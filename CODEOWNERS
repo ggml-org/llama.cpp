@@ -49,7 +49,6 @@
 /examples/parallel/                     @ggerganov
 /examples/passkey/                      @ggerganov
 /examples/retrieval/                    @ggerganov
-/examples/save-load-state/              @ggerganov
 /examples/speculative-simple/           @ggerganov
 /examples/speculative/                  @ggerganov
 /ggml/cmake/                            @ggerganov

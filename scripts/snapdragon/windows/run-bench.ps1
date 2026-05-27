@@ -45,4 +45,4 @@ $env:ADSP_LIBRARY_PATH="$basedir\lib"
 & "$basedir\bin\llama-bench.exe" `
     --mmap 0 -m $basedir\..\..\gguf\$model `
     --poll 1000 -t 6 --cpu-mask 0xfc --cpu-strict 1 `
-    --batch-size 128 -ngl 99 --device $device $cli_opts
+    --ubatch-size 1024 -ngl 99 --device $device $cli_opts

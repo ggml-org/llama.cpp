@@ -31,9 +31,9 @@ concurrency:
 env:
   GGML_NLOOP: 3
   GGML_N_THREADS: 1
-  LLAMA_LOG_COLORS: 1
-  LLAMA_LOG_PREFIX: 1
-  LLAMA_LOG_TIMESTAMPS: 1
+  LLAMA_ARG_LOG_COLORS: 1
+  LLAMA_ARG_LOG_PREFIX: 1
+  LLAMA_ARG_LOG_TIMESTAMPS: 1
 
 jobs:
   ubuntu-24-vulkan-llvmpipe:
@@ -68,7 +68,7 @@ jobs:
         id: cache-sdk
         with:
           path: ./vulkan_sdk
-          key: vulkan-sdk-${{ env.VULKAN_SDK_VERSION }}-${{ runner.os }}
+          key: cache-gha-vulkan-sdk-${{ env.VULKAN_SDK_VERSION }}-${{ runner.os }}
 
       - name: Setup Vulkan SDK
         if: steps.cache-sdk.outputs.cache-hit != 'true'

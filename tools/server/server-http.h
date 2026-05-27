@@ -74,6 +74,7 @@ struct server_http_context {
     std::string path_prefix;
     std::string hostname;
     int port;
+    bool is_ssl = false;
 
     server_http_context();
     ~server_http_context();

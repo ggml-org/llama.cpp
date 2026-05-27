@@ -299,11 +299,13 @@ struct common_params_model {
 
 // draft-model-based speculative decoding parameters
 struct common_params_speculative_draft {
-    int32_t n_max = 16; // maximum number of tokens to draft during speculative decoding
-    int32_t n_min = 0;  // minimum number of draft tokens to use for speculative decoding
+    int32_t n_max = 3; // maximum number of tokens to draft during speculative decoding
+    int32_t n_min = 0; // minimum number of draft tokens to use for speculative decoding
 
-    float p_split = 0.1f;  // speculative decoding split probability
-    float p_min   = 0.75f; // minimum speculative decoding probability (greedy) // TODO: change default to 0.0f
+    float p_split = 0.1f; // speculative decoding split probability
+    float p_min   = 0.0f; // minimum speculative decoding probability (greedy)
+
+    bool backend_sampling = true; // offload draft sampling to the backend (default: on)
 
     common_params_model mparams;
 
@@ -592,7 +594,7 @@ struct common_params {
     bool    cache_prompt        = true;  // whether to enable prompt caching
     bool    cache_idle_slots    = true;  // save and clear idle slots upon starting a new task
     int32_t n_ctx_checkpoints   = 32;    // max number of context checkpoints per slot
-    int32_t checkpoint_every_nt = 8192;  // make a checkpoint every n tokens during prefill
+    int32_t checkpoint_min_step = 256;   // minimum spacing between context checkpoints
     int32_t cache_ram_mib       = 8192;  // -1 = no limit, 0 - disable, 1 = 1 MiB, etc.
 
     std::string hostname      = "127.0.0.1";
@@ -615,11 +617,7 @@ struct common_params {
     std::map<std::string, std::string> default_template_kwargs;
 
     // UI configs
-#ifdef LLAMA_UI_DEFAULT_ENABLED
-    bool ui = LLAMA_UI_DEFAULT_ENABLED != 0;
-#else
-    bool ui = true; // default to enabled when not set
-#endif
+    bool ui = true;
 
     // Deprecated: use ui, ui_mcp_proxy, ui_config_json instead
     bool webui = ui;
@@ -733,6 +731,7 @@ std::string string_format(const char * fmt, ...);
 
 std::string string_strip(const std::string & str);
 std::string string_get_sortable_timestamp();
+std::string string_lcs(std::string_view a, std::string_view b);
 
 std::string string_join(const std::vector<std::string> & values, const std::string & separator);
 std::vector<std::string> string_split(const std::string & str, const std::string & delimiter);
@@ -857,7 +856,7 @@ struct common_sampler;
 
 // note: defines the model, context, samplers, ets. lifetimes
 struct common_init_result {
-    common_init_result(common_params & params);
+    common_init_result(common_params & params, bool model_only = false);
     ~common_init_result();
 
     llama_model * model();
@@ -875,7 +874,7 @@ private:
 
 using common_init_result_ptr = std::unique_ptr<common_init_result>;
 
-common_init_result_ptr common_init_from_params(common_params & params);
+common_init_result_ptr common_init_from_params(common_params & params, bool model_only = false);
 
 struct llama_model_params     common_model_params_to_llama  (      common_params & params);
 struct llama_context_params   common_context_params_to_llama(const common_params & params);
