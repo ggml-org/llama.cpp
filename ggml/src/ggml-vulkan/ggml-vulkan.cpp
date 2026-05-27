@@ -5384,9 +5384,6 @@ static vk_device ggml_vk_get_device(size_t idx) {
         }
         vk::DeviceCreateInfo device_create_info{};
         std::vector<const char *> device_extensions;
-        if (device->has_internally_synchronized_queues) {
-            device_extensions.push_back(VK_KHR_INTERNALLY_SYNCHRONIZED_QUEUES_EXTENSION_NAME);
-        }
         vk::PhysicalDeviceFeatures device_features = device->physical_device.getFeatures();
 
         VkPhysicalDeviceFeatures2 device_features2;
