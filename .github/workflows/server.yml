@@ -98,7 +98,7 @@ jobs:
         with:
           key: server-ubuntu-default
           evict-old-files: 1d
-          save: true
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
       - name: Build
         id: cmake_build
@@ -151,7 +151,7 @@ jobs:
         with:
           key: server-windows-default
           evict-old-files: 1d
-          save: true
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
       - name: Build
         id: cmake_build
