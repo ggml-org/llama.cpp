@@ -25,6 +25,25 @@ using json = nlohmann::ordered_json;
 
 #define MIMETYPE_JSON "application/json; charset=utf-8"
 
+// Returns the length of the longest valid-UTF-8 prefix of `text`.
+// If a multi-byte sequence is cut off at the end, the trailing partial bytes
+// are excluded so the result is safe to hand to nlohmann::json.
+static size_t validate_utf8(const std::string & text) {
+    size_t len = text.size();
+    if (len == 0) return 0;
+    for (size_t i = 1; i <= 4 && i <= len; ++i) {
+        unsigned char c = (unsigned char) text[len - i];
+        if ((c & 0xE0) == 0xC0) {
+            if (i < 2) return len - i;
+        } else if ((c & 0xF0) == 0xE0) {
+            if (i < 3) return len - i;
+        } else if ((c & 0xF8) == 0xF0) {
+            if (i < 4) return len - i;
+        }
+    }
+    return len;
+}
+
 #if defined(__unix__) || (defined(__APPLE__) && defined(__MACH__))
 #    include <unistd.h>
 #elif defined(_WIN32)
@@ -163,17 +182,32 @@ int main(int argc, char ** argv) {
                 runner.reset();
             }
 
-            auto text_cb = [&output, &item](const std::string & text) {
+            // Buffer for incomplete trailing UTF-8 bytes between token callbacks.
+            // BPE often splits a multi-byte codepoint (e.g. Japanese, 3 bytes)
+            // across tokens; emitting partial bytes would make nlohmann::json
+            // throw type_error.316 ("incomplete UTF-8 string") on dump().
+            std::string pending_text;
+
+            auto text_cb = [&output, &item, &pending_text](const std::string & text) {
                 item.check_abort();
                 if (output->aborted.load()) {
                     return;
                 }
+                pending_text += text;
+                size_t valid_len = validate_utf8(pending_text);
+                if (valid_len == 0) {
+                    // entire buffer is still an incomplete codepoint; wait for more bytes
+                    return;
+                }
+                std::string to_send(pending_text, 0, valid_len);
+                pending_text.erase(0, valid_len);
+
                 json chunk = {
-                    { "object",  "chat.completion.chunk"                                                              },
-                    { "created", std::time(0)                                                                         },
+                    { "object",  "chat.completion.chunk"                                                                 },
+                    { "created", std::time(0)                                                                            },
                     { "choices",
                      json::array(
-                          { { { "index", 0 }, { "delta", { { "content", text } } }, { "finish_reason", nullptr } } }) }
+                          { { { "index", 0 }, { "delta", { { "content", to_send } } }, { "finish_reason", nullptr } } }) }
                 };
                 output->push("data: " + chunk.dump() + "\n\n");
             };
