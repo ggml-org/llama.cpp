@@ -39,7 +39,7 @@
 #include "ggml-hexagon.h"
 #include "ggml-impl.h"
 #include "ggml-quants.h"
-#include "op-desc.h"
+#include "htp-opnode.h"
 #include "htp-ops.h"
 #include "htp_iface.h"
 #include "htp-drv.h"
@@ -102,23 +102,23 @@ static const char * status_to_str(uint32_t status) {
 
 // ** debug helpers
 
-static void ggml_hexagon_dump_op_exec(const std::string &sess_name, const ggml_tensor * op, const uint32_t req_flags) {
+static void ggml_hexagon_dump_op_exec(const std::string &sess_name, const htp_opnode & node, const uint32_t req_flags) {
     if (!opt_verbose) return;
 
-    op_desc desc(op);
+    htp_opformat fmt(node);
     GGML_LOG_DEBUG("ggml-hex: %s execute-op %s: %s : %s : %s : %s : %s : flags 0x%x\n", sess_name.c_str(),
-                ggml_op_desc(op), desc.names, desc.dims, desc.types, desc.strides, desc.buffs, req_flags);
+                node.op_name().c_str(), fmt.names, fmt.dims, fmt.types, fmt.strides, fmt.buffs, req_flags);
 }
 
 static void ggml_hexagon_dump_op_supp(const std::string &sess_name, const struct ggml_tensor * op, bool supp) {
     if (!opt_verbose) return;
 
-    op_desc desc(op);
+    htp_opformat fmt(htp_opformat(htp_opnode{const_cast<ggml_tensor*>(op), {}, HTP_OP_INVALID}));
     GGML_LOG_DEBUG("ggml-hex: %s supports-op %s: %s : %s : %s : %s : %s : %s\n", sess_name.c_str(),
-                ggml_op_desc(op), desc.names, desc.dims, desc.types, desc.strides, desc.buffs, supp ? "yes" : "no");
+                ggml_op_desc(op), fmt.names, fmt.dims, fmt.types, fmt.strides, fmt.buffs, supp ? "yes" : "no");
 }
 
-static void ggml_hexagon_dump_op_prof(const std::string &sess_name, const ggml_tensor * op,
+static void ggml_hexagon_dump_op_prof(const std::string &sess_name, const htp_opnode & node,
                                       uint32_t op_usec, uint32_t op_cycles, const uint32_t pmu[]) {
     if (!opt_profile) return;
 
@@ -129,15 +129,16 @@ static void ggml_hexagon_dump_op_prof(const std::string &sess_name, const ggml_t
                 pmu[0], pmu[1], pmu[2], pmu[3], pmu[4], pmu[5], pmu[6], pmu[7]);
     }
 
-    op_desc desc(op);
+    htp_opformat fmt(node);
     GGML_LOG_DEBUG("ggml-hex: %s profile-op %s: %s : %s : %s : %s : usec %u cycles %u%s\n", sess_name.c_str(),
-            ggml_op_desc(op), desc.names, desc.dims, desc.types, desc.strides, op_usec, op_cycles, pmu_str);
+            node.op_name().c_str(), fmt.names, fmt.dims, fmt.types, fmt.strides, op_usec, op_cycles, pmu_str);
 }
 
 // ** backend sessions
 
 struct ggml_hexagon_opbatch;
 struct ggml_hexagon_opqueue;
+struct htp_opnode;
 
 struct ggml_hexagon_session {
     std::string      name;
@@ -167,7 +168,7 @@ struct ggml_hexagon_session {
     void allocate(int dev_id) noexcept(false);
     void release() noexcept(true);
 
-    void enqueue_op(htp_op_code opcode, const ggml_tensor *op);
+    void enqueue_op(const htp_opnode & node);
     void flush(bool all = true);
 
     void flush_pending(bool all = false);
@@ -1782,12 +1783,10 @@ static ggml_backend_buffer_type_i ggml_backend_hexagon_repack_buffer_type_interf
     /* .is_host          = */ ggml_backend_hexagon_repack_buffer_type_is_host,
 };
 
-// Backend session implementation
-
 struct ggml_hexagon_opbatch {
     ggml_hexagon_session*            sess;
 
-    std::vector<const ggml_tensor*>  ops;       // pointers to original ops
+    std::vector<htp_opnode>          ops;       // htp_opnode of ops
 
     std::vector<htp_buf_desc>        h_bufs;    // htp buffer descriptors
     std::vector<htp_tensor>          h_tens;    // htp tensor descriptors
@@ -1919,7 +1918,7 @@ struct ggml_hexagon_opbatch {
         return ti;
     }
 
-    bool fit_op(const struct ggml_tensor *t) const {
+    bool fit_op(const htp_opnode & node) const {
         if (n_ops >= n_ops_max ) return false;
 
         // check how much extras we will need
@@ -1939,10 +1938,10 @@ struct ggml_hexagon_opbatch {
             }
         };
 
-        for (unsigned int i=0; i < HTP_OP_MAX_INPUTS && t->src[i]; i++) {
-            fit_tensor(t->src[i]);
+        for (const auto * src : node.get_inputs()) {
+            fit_tensor(src);
         }
-        fit_tensor(t);
+        fit_tensor(node.dst());
 
         if ((extra_bufs + n_bufs) > n_bufs_max) return false;
         if ((extra_tens + n_tens) > n_tens_max) return false;
@@ -1952,29 +1951,30 @@ struct ggml_hexagon_opbatch {
     }
 
     // assumes that fit_op() was called first and returned true
-    void add_op(htp_op_code opcode, const struct ggml_tensor * t) {
+    void add_op(const htp_opnode & node) {
         // Add new op
 
         unsigned int n = n_ops++;
         GGML_ASSERT(n_ops <= n_ops_max);
 
-        ops[n] = t;
+        ops[n] = node;
 
         htp_op_desc &o = h_ops[n];
-        memcpy(&o.params, &t->op_params, sizeof(t->op_params));
-        o.opcode = opcode;
+        memcpy(&o.params, &node.node->op_params, sizeof(node.node->op_params));
+        o.opcode = node.opcode;
         o.flags  = 0;
 
         if (!(opt_opstage & HTP_OPSTAGE_COMPUTE)) {
             o.flags |= HTP_OPFLAGS_SKIP_COMPUTE;
         }
 
-        ggml_hexagon_dump_op_exec(sess->c_name(), t, o.flags);
+        ggml_hexagon_dump_op_exec(sess->c_name(), node, o.flags);
 
+        auto inputs = node.get_inputs();
         for (unsigned int i=0; i < HTP_OP_MAX_INPUTS; i++) {
-            o.src[i] = t->src[i] ? add_tensor(t->src[i]) : 0xffff;
+            o.src[i] = (i < inputs.size() && inputs[i]) ? add_tensor(inputs[i]) : 0xffff;
         }
-        o.dst = add_tensor(t);
+        o.dst = add_tensor(node.dst());
     }
 };
 
@@ -1983,7 +1983,7 @@ struct ggml_hexagon_opqueue {
     ggml_hexagon_shared_buffer *shm_buf;
     size_t                      shm_blk_size;
 
-    using opvec = std::vector<const ggml_tensor*>;
+    using opvec = std::vector<htp_opnode>;
 
     std::queue<unsigned int>    done;       // completed batch ids
     std::vector<opvec>          op_cache;   // per batch op cache
@@ -2182,11 +2182,11 @@ void ggml_hexagon_session::flush_batch() {
     }
 }
 
-void ggml_hexagon_session::enqueue_op(htp_op_code opcode, const ggml_tensor *op) {
-    if (!op_batch->fit_op(op)) {
+void ggml_hexagon_session::enqueue_op(const htp_opnode & node) {
+    if (!op_batch->fit_op(node)) {
         flush_batch();
     }
-    op_batch->add_op(opcode, op);
+    op_batch->add_op(node);
 }
 
 // Flush HTP response queue i.e wait for all outstanding requests to complete
@@ -3179,10 +3179,43 @@ static ggml_status ggml_backend_hexagon_graph_compute(ggml_backend_t backend, gg
 
     HEX_VERBOSE("ggml-hex: %s graph-compute n_nodes %d\n", sess->c_name(), graph->n_nodes);
 
+    std::vector<htp_opnode> nodes;
+    nodes.reserve(graph->n_nodes);
+
+    // Fusion
     for (int i = 0; i < graph->n_nodes; ++i) {
         ggml_tensor * n = graph->nodes[i];
-        if (op_is_compute(n) && (opt_opstage & HTP_OPSTAGE_QUEUE)) {
-            sess->enqueue_op(op_remap_to_htp(n), n);
+        if (!op_is_compute(n)) {
+            continue;
+        }
+
+        ggml_tensor * next_node = (i + 1 < graph->n_nodes) ? graph->nodes[i + 1] : nullptr;
+
+        htp_opnode node = {
+            /*.node =*/ n,
+            /*.fused =*/ {},
+            /*.opcode =*/ HTP_OP_INVALID
+        };
+
+        if (n->op == GGML_OP_RMS_NORM && next_node) {
+            if (next_node->op == GGML_OP_MUL && op_is_compute(next_node) && ggml_can_fuse(graph, i, { GGML_OP_RMS_NORM, GGML_OP_MUL })) {
+                node.add_fused(next_node);
+                node.opcode = HTP_OP_RMS_NORM_MUL;
+                i++; // skip the fused MUL node
+            }
+        }
+
+        if (node.opcode == HTP_OP_INVALID) {
+            node.opcode = op_remap_to_htp(n);
+        }
+
+        nodes.push_back(std::move(node));
+    }
+
+    // Queue and execute
+    if (opt_opstage & HTP_OPSTAGE_QUEUE) {
+        for (const auto & node : nodes) {
+            sess->enqueue_op(node);
         }
     }
 
@@ -3201,51 +3234,7 @@ static void ggml_backend_hexagon_synchronize(ggml_backend_t backend) {
     sess->flush();
 }
 
-struct node_info {
-    ggml_tensor * node;
-
-    std::vector<ggml_tensor *> fused;
-
-    ggml_op op() const {
-        return node->op;
-    }
-
-    const ggml_tensor * dst() const {
-        return fused.empty() ? node : fused.back();
-    }
-
-    const ggml_tensor * src0() const {
-        return node->src[0];
-    }
-
-    const ggml_tensor * src1() const {
-        return node->src[1];
-    }
-
-    bool is_empty() const {
-        return ggml_op_is_empty(node->op);
-    }
-
-    void add_fused(ggml_tensor * t) {
-        fused.push_back(t);
-    }
-
-    bool stackable() const {
-        switch (this->op()) {
-            case GGML_OP_MUL_MAT:
-            case GGML_OP_MUL_MAT_ID:
-                return ggml_is_quantized(this->src0()->type);
-            default:
-                return false;
-        }
-    }
-
-    bool same_input(const node_info& n) const {
-        return n.src1() == this->src1();
-    }
-};
-
-static std::vector<int> ggml_hexagon_graph_optimize_reorder(const std::vector<node_info> & nodes) {
+static std::vector<int> ggml_hexagon_graph_optimize_reorder(const std::vector<htp_opnode> & nodes) {
     const int n = nodes.size();
 
     std::vector<int> res;
@@ -3299,14 +3288,14 @@ static void ggml_backend_hexagon_graph_optimize(ggml_backend_t backend, ggml_cgr
 
     enum ggml_op ops[MAX_FUSE];
 
-    std::vector<node_info> nodes;
+    std::vector<htp_opnode> nodes;
     nodes.reserve(gf->n_nodes);
 
     // fuse nodes:
     // we don't want to make reorders that break fusing, so we first pack all fusable tensors
     //   and perform the reorder over the fused nodes. after the reorder is done, we unfuse
     for (int i = 0; i < n; i++) {
-        node_info node = {
+        htp_opnode node = {
             /*.node =*/gf->nodes[i],
             /*.fused =*/{},
         };
