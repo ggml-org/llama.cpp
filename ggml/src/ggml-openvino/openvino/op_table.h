@@ -14,6 +14,7 @@ GGML_OP_CONVERTER(translate_cont);
 GGML_OP_CONVERTER(translate_concat);
 GGML_OP_CONVERTER(translate_div);
 GGML_OP_CONVERTER(translate_get_rows);
+GGML_OP_CONVERTER(translate_im2col);
 GGML_OP_CONVERTER(translate_mulmat);
 GGML_OP_CONVERTER(translate_mul_mat_id);
 GGML_OP_CONVERTER(translate_permute);

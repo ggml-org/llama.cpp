@@ -1293,7 +1293,8 @@ std::string GgmlOvDecoder::compute_op_type(const ggml_tensor * node) {
         {GGML_OP_PAD,             "GGML_OP_PAD"            },
         {GGML_OP_SSM_CONV,        "GGML_OP_SSM_CONV"       },
         {GGML_OP_GATED_DELTA_NET, "GGML_OP_GATED_DELTA_NET"},
-        {GGML_OP_ARGSORT,         "GGML_OP_ARGSORT"        }
+        {GGML_OP_ARGSORT,         "GGML_OP_ARGSORT"        },
+        {GGML_OP_IM2COL,          "GGML_OP_IM2COL"         }
     };
     static const std::map<ggml_unary_op, std::string> unary_ops = {
         {GGML_UNARY_OP_ABS,         "GGML_UNARY_OP_ABS"        },
@@ -1560,6 +1561,38 @@ void GgmlOvDecoder::compute_node_dynamic_dims() {
         case GGML_OP_SET_ROWS:
             m_node_dynamic_dims[node] = -1;
             break;
+        case GGML_OP_IM2COL: {
+            m_node_dynamic_dims[node] = -1;
+            if (m_node_dynamic_dims[node->src[1]] != -1) {
+                const bool is_2D = node->op_params[6] == 1;
+                const int  src_dyn = m_node_dynamic_dims[node->src[1]];
+                if (is_2D) {
+                    // 2D mapping: src[1] dim -> output dim
+                    // ne[0]=IW->ne[1]=OW (dim 1), ne[1]=IH->ne[2]=OH (dim 2), ne[3]=N->ne[3]=N (dim 3)
+                    if (src_dyn == 0) {
+                        m_node_dynamic_dims[node] = 1;  // IW -> OW
+                    } else if (src_dyn == 1) {
+                        m_node_dynamic_dims[node] = 2;  // IH -> OH
+                    } else if (src_dyn == 3) {
+                        m_node_dynamic_dims[node] = 3;  // N  -> N
+                    }
+                } else {
+                    // 1D mapping: src[1] dim -> output dim
+                    // ne[0]=IW->ne[1]=OW (dim 1), ne[2]=N->ne[2]=N (dim 2)
+                    if (src_dyn == 0) {
+                        m_node_dynamic_dims[node] = 1;  // IW -> OW
+                    } else if (src_dyn == 2) {
+                        m_node_dynamic_dims[node] = 2;  // N  -> N  (1D: b->ne[2] is the batch/channel dim)
+                    }
+                }
+                if (m_node_dynamic_dims[node] != -1) {
+                    OPENVINO_ASSERT(node->src[1]->ne[src_dyn] == node->ne[m_node_dynamic_dims[node]],
+                                    "Dynamic dim value mismatch for IM2COL node: " + std::string(node->name) +
+                                        " and its src[1]: " + std::string(node->src[1]->name));
+                }
+            }
+            break;
+        }
         default:
             // std::cout << "Doesn't handle node name: " << node->name << " op: " << ggml_op_name(node->op) << std::endl;
             break;

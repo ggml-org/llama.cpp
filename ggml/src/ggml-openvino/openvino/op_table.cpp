@@ -24,6 +24,7 @@ std::unordered_map<std::string, CreatorFunction> get_supported_ops() {
         {"GGML_OP_CONT",            op::translate_cont                             },
         {"GGML_OP_DIV",             op::translate_div                              },
         {"GGML_OP_GET_ROWS",        op::translate_get_rows                         },
+        {"GGML_OP_IM2COL",          op::translate_im2col                           },
         {"GGML_OP_MUL",             op::translate_1to1_match_2_inputs<v1::Multiply>},
         {"GGML_OP_MUL_MAT",         op::translate_mulmat                           },
         {"GGML_OP_MUL_MAT_ID",      op::translate_mul_mat_id                       },
