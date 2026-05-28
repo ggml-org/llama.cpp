@@ -2474,6 +2474,32 @@ struct ggml_tensor_extra_cl_mxfp4 {
     }
 };
 
+struct ggml_tensor_extra_cl_ifairy64 {
+    // Packed 2-bit codes, row-major, 16 bytes per 64-value block.
+    cl_mem q = nullptr;
+    // Scale pairs, row-major, two fp16 values per 64-value block.
+    cl_mem d = nullptr;
+    size_t size_q = 0;
+    size_t size_d = 0;
+
+    ~ggml_tensor_extra_cl_ifairy64() {
+        reset();
+    }
+
+    void reset() {
+        if (q != nullptr) {
+            CL_CHECK(clReleaseMemObject(q));
+            q = nullptr;
+        }
+        if (d != nullptr) {
+            CL_CHECK(clReleaseMemObject(d));
+            d = nullptr;
+        }
+        size_q = 0;
+        size_d = 0;
+    }
+};
+
 //------------------------------------------------------------------------------
 // Backend API
 //------------------------------------------------------------------------------
@@ -3071,6 +3097,12 @@ struct ggml_backend_opencl_buffer_context {
         for (ggml_tensor_extra_cl_mxfp4 * e : temp_tensor_extras_mxfp4_in_use) {
             delete e;
         }
+        for (ggml_tensor_extra_cl_ifairy64 * e : temp_tensor_extras_ifairy64) {
+            delete e;
+        }
+        for (ggml_tensor_extra_cl_ifairy64 * e : temp_tensor_extras_ifairy64_in_use) {
+            delete e;
+        }
     }
 
     ggml_tensor_extra_cl * ggml_opencl_alloc_temp_tensor_extra() {
@@ -3118,6 +3150,21 @@ struct ggml_backend_opencl_buffer_context {
         return extra;
     }
 
+    ggml_tensor_extra_cl_ifairy64 * ggml_opencl_alloc_temp_tensor_extra_ifairy64() {
+        ggml_tensor_extra_cl_ifairy64 * extra;
+        if (temp_tensor_extras_ifairy64.empty()) {
+            extra = new ggml_tensor_extra_cl_ifairy64();
+        } else {
+            extra = temp_tensor_extras_ifairy64.back();
+            temp_tensor_extras_ifairy64.pop_back();
+        }
+
+        temp_tensor_extras_ifairy64_in_use.push_back(extra);
+
+        extra->reset();
+        return extra;
+    }
+
     void reset() {
         for (ggml_tensor_extra_cl * e : temp_tensor_extras_in_use) {
             temp_tensor_extras.push_back(e);
@@ -3133,6 +3180,11 @@ struct ggml_backend_opencl_buffer_context {
             temp_tensor_extras_mxfp4.push_back(e);
         }
         temp_tensor_extras_mxfp4_in_use.clear();
+
+        for (ggml_tensor_extra_cl_ifairy64 * e : temp_tensor_extras_ifairy64_in_use) {
+            temp_tensor_extras_ifairy64.push_back(e);
+        }
+        temp_tensor_extras_ifairy64_in_use.clear();
     }
 
     // Pools for extras. Available extras are in `temp_tensor_extras`. Extras
@@ -3146,6 +3198,8 @@ struct ggml_backend_opencl_buffer_context {
     std::vector<ggml_tensor_extra_cl_q4_0 *> temp_tensor_extras_q4_0_in_use;
     std::vector<ggml_tensor_extra_cl_mxfp4 *> temp_tensor_extras_mxfp4;
     std::vector<ggml_tensor_extra_cl_mxfp4 *> temp_tensor_extras_mxfp4_in_use;
+    std::vector<ggml_tensor_extra_cl_ifairy64 *> temp_tensor_extras_ifairy64;
+    std::vector<ggml_tensor_extra_cl_ifairy64 *> temp_tensor_extras_ifairy64_in_use;
 
     // The buffer_context is initially created by ggml_backend_buft_alloc_buffer
     // before any tensor is initialized (at the beginning of alloc_tensor_range).
@@ -3171,6 +3225,49 @@ static void ggml_backend_opencl_buffer_free_buffer(ggml_backend_buffer_t buffer)
 static void * ggml_backend_opencl_buffer_get_base(ggml_backend_buffer_t buffer) {
     ggml_backend_opencl_context * backend_ctx = ggml_cl2_init(buffer->buft->device);
     return (void *) (uintptr_t) backend_ctx->alignment;
+}
+
+static size_t ggml_opencl_ifairy64_block_count(const ggml_tensor * tensor) {
+    GGML_ASSERT(tensor->type == GGML_TYPE_IFAIRY64);
+    GGML_ASSERT(ggml_nelements(tensor) % ggml_blck_size(GGML_TYPE_IFAIRY64) == 0);
+    return (size_t) ggml_nelements(tensor) / ggml_blck_size(GGML_TYPE_IFAIRY64);
+}
+
+static size_t ggml_opencl_ifairy64_qs_size(const ggml_tensor * tensor) {
+    return ggml_opencl_ifairy64_block_count(tensor) * ggml_blck_size(GGML_TYPE_IFAIRY64) / 4;
+}
+
+static size_t ggml_opencl_ifairy64_d_size(const ggml_tensor * tensor) {
+    return ggml_opencl_ifairy64_block_count(tensor) * 2 * sizeof(ggml_fp16_t);
+}
+
+static size_t ggml_opencl_ifairy64_alloc_size(const ggml_tensor * tensor, size_t alignment) {
+    return align_to(ggml_opencl_ifairy64_qs_size(tensor), alignment) +
+           ggml_opencl_ifairy64_d_size(tensor);
+}
+
+static void ggml_opencl_ifairy64_pack(const uint8_t * src, uint8_t * q, uint8_t * d, size_t n_blocks) {
+    const size_t qs_bytes    = ggml_blck_size(GGML_TYPE_IFAIRY64) / 4;
+    const size_t scale_bytes = 2 * sizeof(ggml_fp16_t);
+    const size_t block_bytes = ggml_type_size(GGML_TYPE_IFAIRY64);
+
+    for (size_t ib = 0; ib < n_blocks; ++ib) {
+        const uint8_t * raw = src + ib * block_bytes;
+        memcpy(q + ib * qs_bytes, raw, qs_bytes);
+        memcpy(d + ib * scale_bytes, raw + qs_bytes, scale_bytes);
+    }
+}
+
+static void ggml_opencl_ifairy64_unpack(const uint8_t * q, const uint8_t * d, uint8_t * dst, size_t n_blocks) {
+    const size_t qs_bytes    = ggml_blck_size(GGML_TYPE_IFAIRY64) / 4;
+    const size_t scale_bytes = 2 * sizeof(ggml_fp16_t);
+    const size_t block_bytes = ggml_type_size(GGML_TYPE_IFAIRY64);
+
+    for (size_t ib = 0; ib < n_blocks; ++ib) {
+        uint8_t * raw = dst + ib * block_bytes;
+        memcpy(raw, q + ib * qs_bytes, qs_bytes);
+        memcpy(raw + qs_bytes, d + ib * scale_bytes, scale_bytes);
+    }
 }
 
 static enum ggml_status ggml_backend_opencl_buffer_init_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor) {
@@ -3235,6 +3332,54 @@ static void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer, 
 
     cl_context context = backend_ctx->context;
     cl_command_queue queue = backend_ctx->queue;
+
+    if (tensor->type == GGML_TYPE_IFAIRY64) {
+        GGML_ASSERT(offset == 0 && size == ggml_nbytes(tensor) &&
+                    "partial OpenCL IFAIRY64 tensor upload is not supported");
+        GGML_ASSERT(tensor->view_offs == 0 && "OpenCL IFAIRY64 tensor views are not supported");
+
+        ggml_tensor_extra_cl * extra_orig = (ggml_tensor_extra_cl *) tensor->extra;
+        GGML_ASSERT(extra_orig && "tensors in OpenCL backend should have been allocated and initialized");
+
+        ggml_backend_opencl_buffer_context * ctx = (ggml_backend_opencl_buffer_context *) buffer->context;
+        ggml_tensor_extra_cl_ifairy64 * extra = ctx->ggml_opencl_alloc_temp_tensor_extra_ifairy64();
+
+        extra->size_q = ggml_opencl_ifairy64_qs_size(tensor);
+        extra->size_d = ggml_opencl_ifairy64_d_size(tensor);
+
+        cl_int err;
+        cl_buffer_region region;
+        region.origin = extra_orig->offset + tensor->view_offs;
+        region.size   = extra->size_q;
+        extra->q = clCreateSubBuffer(
+            extra_orig->data_device,
+            CL_MEM_READ_WRITE,
+            CL_BUFFER_CREATE_TYPE_REGION,
+            &region,
+            &err);
+        CL_CHECK(err);
+
+        region.origin = align_to(region.origin + region.size, backend_ctx->alignment);
+        region.size   = extra->size_d;
+        extra->d = clCreateSubBuffer(
+            extra_orig->data_device,
+            CL_MEM_READ_WRITE,
+            CL_BUFFER_CREATE_TYPE_REGION,
+            &region,
+            &err);
+        CL_CHECK(err);
+
+        const size_t n_blocks = ggml_opencl_ifairy64_block_count(tensor);
+        std::vector<uint8_t> q(extra->size_q);
+        std::vector<uint8_t> d(extra->size_d);
+        ggml_opencl_ifairy64_pack((const uint8_t *) data, q.data(), d.data(), n_blocks);
+
+        CL_CHECK(clEnqueueWriteBuffer(queue, extra->q, CL_TRUE, 0, extra->size_q, q.data(), 0, NULL, NULL));
+        CL_CHECK(clEnqueueWriteBuffer(queue, extra->d, CL_TRUE, 0, extra->size_d, d.data(), 0, NULL, NULL));
+
+        tensor->extra = extra;
+        return;
+    }
 
 #ifdef GGML_OPENCL_SOA_Q
     // We separate the quantized bits and scale from block_q4_0 by using an
@@ -3583,6 +3728,23 @@ static void ggml_backend_opencl_buffer_get_tensor(ggml_backend_buffer_t buffer, 
     // Make sure all previously submitted commands in other devices are finished.
     sync_with_other_backends(backend_ctx);
 
+    if (tensor->type == GGML_TYPE_IFAIRY64) {
+        GGML_ASSERT(tensor->view_offs == 0 && "OpenCL IFAIRY64 tensor views are not supported");
+        ggml_tensor_extra_cl_ifairy64 * extra = (ggml_tensor_extra_cl_ifairy64 *) tensor->extra;
+
+        const size_t n_blocks = ggml_opencl_ifairy64_block_count(tensor);
+        std::vector<uint8_t> q(extra->size_q);
+        std::vector<uint8_t> d(extra->size_d);
+        std::vector<uint8_t> raw(ggml_nbytes(tensor));
+
+        CL_CHECK(clEnqueueReadBuffer(queue, extra->q, CL_TRUE, 0, extra->size_q, q.data(), 0, NULL, NULL));
+        CL_CHECK(clEnqueueReadBuffer(queue, extra->d, CL_TRUE, 0, extra->size_d, d.data(), 0, NULL, NULL));
+
+        ggml_opencl_ifairy64_unpack(q.data(), d.data(), raw.data(), n_blocks);
+        memcpy(data, raw.data() + offset, size);
+        return;
+    }
+
 #ifdef GGML_OPENCL_SOA_Q
     // In end-to-end runs, get_tensor is usually used to get back the logits,
     // where we can simply do clEnqueueReadBuffer since they are f32.
@@ -3723,6 +3885,15 @@ static size_t ggml_backend_opencl_buffer_type_get_max_size(ggml_backend_buffer_t
     return max_size;
 }
 
+static size_t ggml_backend_opencl_buffer_type_get_alloc_size(ggml_backend_buffer_type_t buffer_type, const ggml_tensor * tensor) {
+    if (tensor->type == GGML_TYPE_IFAIRY64) {
+        ggml_backend_opencl_context * backend_ctx = ggml_cl2_init(buffer_type->device);
+        return ggml_opencl_ifairy64_alloc_size(tensor, backend_ctx->alignment);
+    }
+
+    return ggml_nbytes(tensor);
+}
+
 static bool ggml_backend_opencl_buffer_type_supports_backend(ggml_backend_buffer_type_t buft, ggml_backend_t backend) {
     return ggml_backend_is_opencl(backend);
 
@@ -3734,7 +3905,7 @@ static ggml_backend_buffer_type_i ggml_backend_opencl_buffer_type_interface = {
     /* .alloc_buffer     = */ ggml_backend_opencl_buffer_type_alloc_buffer,
     /* .get_alignment    = */ ggml_backend_opencl_buffer_type_get_alignment,
     /* .get_max_size     = */ ggml_backend_opencl_buffer_type_get_max_size,
-    /* .get_alloc_size   = */ NULL,
+    /* .get_alloc_size   = */ ggml_backend_opencl_buffer_type_get_alloc_size,
     /* .is_host          = */ NULL,
 };
 

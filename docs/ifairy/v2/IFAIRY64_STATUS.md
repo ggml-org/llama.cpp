@@ -25,6 +25,16 @@ Status: Draft (2026-04-23)
   - `cmake --build build-opencl --target ggml-opencl -j 2`: PASS
   - `./build-rel/bin/test-ifairy --ifairy-lut-only`: PASS
 
+### 2026-05-28 (OpenCL IFAIRY64 buffer layout)
+- 变更：
+  - 采用 SoA raw-weight layout 作为第一版 OpenCL 可读布局，而不是直接绑定 CPU LUT packed layout。
+  - 新增 OpenCL `IFAIRY64` tensor extra：`q` 保存 row-major 2-bit packed codes，`d` 保存 row-major `(d_real, d_imag)` fp16 scale pairs。
+  - OpenCL buffer alloc size 对 `GGML_TYPE_IFAIRY64` 预留 `q` + alignment padding + `d` 空间。
+  - `set_tensor` 将 raw `block_ifairy64` pack 到 `q`/`d` sub-buffers；`get_tensor` 从 `q`/`d` 重建 raw bytes 以支持 test-backend 回读。
+  - kernel-ready gate 仍为 false；该变更只准备 buffer layout，不启用 OpenCL compute。
+- 验证：
+  - `cmake --build build-opencl --target ggml-opencl -j 2`: PASS
+
 ### 2026-04-22 (working tree; base build `abcaafef`)
 - 变更摘要：
   - `IFAIRY64` 在 `GGML_IFAIRY_LUT=1` 时于模型加载阶段提前完成 LUT transform/prepack，避免 decode 首轮再做 transform。
