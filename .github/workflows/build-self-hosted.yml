@@ -396,14 +396,6 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y cmake
 
-      # note: sparing some ccache since these jobs run on dedicated runners that are not part of the organitzation
-      #- name: ccache
-      #  uses: ggml-org/ccache-action@v1.2.21
-      #  with:
-      #    key: arm64-cpu-kleidiai-graviton4
-      #    evict-old-files: 1d
-      #    save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
-
       - name: Test
         id: ggml-ci
         run: |
