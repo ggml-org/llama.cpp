@@ -762,39 +762,35 @@ std::string common_sampler_type_to_str(enum common_sampler_type cnstr) {
 }
 
 std::vector<common_sampler_type> common_sampler_types_from_names(const std::vector<std::string> & names) {
-    std::unordered_map<std::string, common_sampler_type> sampler_canonical_name_map {
-        { "dry",         COMMON_SAMPLER_TYPE_DRY },
-        { "top_k",       COMMON_SAMPLER_TYPE_TOP_K },
-        { "top_p",       COMMON_SAMPLER_TYPE_TOP_P },
+    std::unordered_map<std::string, common_sampler_type> sampler_name_map {
+        { "infill",      COMMON_SAMPLER_TYPE_INFILL      },
+        { "dry",         COMMON_SAMPLER_TYPE_DRY         },
+        { "xtc",         COMMON_SAMPLER_TYPE_XTC         },
+        { "penalties",   COMMON_SAMPLER_TYPE_PENALTIES   },
+        { "top_k",       COMMON_SAMPLER_TYPE_TOP_K       },
+        { "top-k",       COMMON_SAMPLER_TYPE_TOP_K       },
+        { "topk",        COMMON_SAMPLER_TYPE_TOP_K       },
+        { "top-p",       COMMON_SAMPLER_TYPE_TOP_P       },
+        { "top_p",       COMMON_SAMPLER_TYPE_TOP_P       },
+        { "topp",        COMMON_SAMPLER_TYPE_TOP_P       },
+        { "nucleus",     COMMON_SAMPLER_TYPE_TOP_P       },
         { "top_n_sigma", COMMON_SAMPLER_TYPE_TOP_N_SIGMA },
-        { "typ_p",       COMMON_SAMPLER_TYPE_TYPICAL_P },
-        { "min_p",       COMMON_SAMPLER_TYPE_MIN_P },
-        { "temperature", COMMON_SAMPLER_TYPE_TEMPERATURE },
-        { "xtc",         COMMON_SAMPLER_TYPE_XTC },
-        { "infill",      COMMON_SAMPLER_TYPE_INFILL },
-        { "penalties",   COMMON_SAMPLER_TYPE_PENALTIES },
-        { "adaptive_p",  COMMON_SAMPLER_TYPE_ADAPTIVE_P },
-    };
-
-    // samplers names can be written multiple ways; we support these alternative names
-    std::unordered_map<std::string, common_sampler_type> sampler_alt_name_map {
-        { "top-k",       COMMON_SAMPLER_TYPE_TOP_K },
-        { "topk",        COMMON_SAMPLER_TYPE_TOP_K },
-        { "top-p",       COMMON_SAMPLER_TYPE_TOP_P },
-        { "topp",        COMMON_SAMPLER_TYPE_TOP_P },
-        { "nucleus",     COMMON_SAMPLER_TYPE_TOP_P },
         { "top-n-sigma", COMMON_SAMPLER_TYPE_TOP_N_SIGMA },
         { "top-nsigma",  COMMON_SAMPLER_TYPE_TOP_N_SIGMA },
-        { "typ-p",       COMMON_SAMPLER_TYPE_TYPICAL_P },
-        { "typ",         COMMON_SAMPLER_TYPE_TYPICAL_P },
-        { "typical_p",   COMMON_SAMPLER_TYPE_TYPICAL_P },
-        { "typical-p",   COMMON_SAMPLER_TYPE_TYPICAL_P },
-        { "typical",     COMMON_SAMPLER_TYPE_TYPICAL_P },
-        { "min-p",       COMMON_SAMPLER_TYPE_MIN_P },
-        { "minp",        COMMON_SAMPLER_TYPE_MIN_P },
+        { "typ_p",       COMMON_SAMPLER_TYPE_TYPICAL_P   },
+        { "typ-p",       COMMON_SAMPLER_TYPE_TYPICAL_P   },
+        { "typ",         COMMON_SAMPLER_TYPE_TYPICAL_P   },
+        { "typical_p",   COMMON_SAMPLER_TYPE_TYPICAL_P   },
+        { "typical-p",   COMMON_SAMPLER_TYPE_TYPICAL_P   },
+        { "typical",     COMMON_SAMPLER_TYPE_TYPICAL_P   },
+        { "min_p",       COMMON_SAMPLER_TYPE_MIN_P       },
+        { "min-p",       COMMON_SAMPLER_TYPE_MIN_P       },
+        { "minp",        COMMON_SAMPLER_TYPE_MIN_P       },
+        { "temperature", COMMON_SAMPLER_TYPE_TEMPERATURE },
         { "temp",        COMMON_SAMPLER_TYPE_TEMPERATURE },
-        { "adaptive-p",  COMMON_SAMPLER_TYPE_ADAPTIVE_P },
-        { "adaptivep",   COMMON_SAMPLER_TYPE_ADAPTIVE_P },
+        { "adaptive_p",  COMMON_SAMPLER_TYPE_ADAPTIVE_P  },
+        { "adaptive-p",  COMMON_SAMPLER_TYPE_ADAPTIVE_P  },
+        { "adaptivep",   COMMON_SAMPLER_TYPE_ADAPTIVE_P  }
     };
 
     std::vector<common_sampler_type> samplers;
@@ -806,15 +802,8 @@ std::vector<common_sampler_type> common_sampler_types_from_names(const std::vect
         std::transform(name.begin(), name.end(), name_lower.begin(), [](char c){
             return std::tolower(static_cast<unsigned char>(c));
         });
-        // check canonical names
-        auto sampler = sampler_canonical_name_map.find(name_lower);
-        if (sampler != sampler_canonical_name_map.end()) {
-            samplers.push_back(sampler->second);
-            continue;
-        }
-        // check alternative names
-        sampler = sampler_alt_name_map.find(name_lower);
-        if (sampler != sampler_alt_name_map.end()) {
+        auto sampler = sampler_name_map.find(name_lower);
+        if (sampler != sampler_name_map.end()) {
             samplers.push_back(sampler->second);
             continue;
         }
