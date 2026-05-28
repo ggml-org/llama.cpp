@@ -1577,7 +1577,6 @@ struct clip_model_loader {
                         hparams.image_resize_algo = RESIZE_ALGO_BICUBIC_PILLOW;
                         hparams.image_resize_pad = PAD_CEIL;
 
-                        // Load the per-projector hparams (vision_feature_layers, spatial_offsets)
                         get_arr_int(KEY_FEATURE_LAYER, hparams.vision_feature_layer);
                         get_arr_int(KEY_PROJ_SPATIAL_OFFSETS, hparams.proj_spatial_offsets);
                         GGML_ASSERT(hparams.vision_feature_layer.size() == hparams.proj_spatial_offsets.size());
