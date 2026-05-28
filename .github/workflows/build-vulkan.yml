@@ -63,7 +63,7 @@ jobs:
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.21
         with:
-          key: vulkan-${{ matrix.os }}
+          key: vulkan-${{ matrix.os }}-new
           variant: ccache
           evict-old-files: 1d
           save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
