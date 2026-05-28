@@ -853,6 +853,11 @@ static void htp_packet_callback(dspqueue_t queue, int error, void * context) {
         for (uint32_t i=0; i < n_ops; i++) {
             struct profile_data prof;
 
+            if (i == (n_ops-1)) {
+                // wake up the host before starting the last op
+                dspqueue_write_early_wakeup_noblock(queue, 0, 0);
+            }
+
             profile_start(ctx->profiler, &prof);
 
             proc_op_req(octx, tens, i, &ops[i]);
@@ -868,8 +873,6 @@ static void htp_packet_callback(dspqueue_t queue, int error, void * context) {
                 }
             }
         }
-
-        // dspqueue_write_early_wakeup_noblock(ctx->queue, 10, 0);
 
         struct htp_opbatch_rsp rsp;
         rsp.id        = req.id;

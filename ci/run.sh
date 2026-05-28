@@ -701,8 +701,8 @@ function gg_sum_test_backend_ops_cpu {
 
 ## main
 
-export LLAMA_LOG_PREFIX=1
-export LLAMA_LOG_TIMESTAMPS=1
+export LLAMA_ARG_LOG_PREFIX=1
+export LLAMA_ARG_LOG_TIMESTAMPS=1
 
 if [ -z ${GG_BUILD_LOW_PERF} ]; then
     # Create symlink: ./llama.cpp/models-mnt -> $MNT/models
