@@ -156,7 +156,6 @@ class TensorNameMap:
         MODEL_TENSOR.V_ENC_MSFA_NORM: (
             "model.vision_tower.timm_model.msfa.norm", # gemma3n
         ),
-        # TODO: Should the rest of the block mappings be moved here?
         MODEL_TENSOR.V_ENC_EMBD_IMGNL: (
             "model.image_newline",  # Granite4Vision
         ),
