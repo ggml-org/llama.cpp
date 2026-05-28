@@ -191,6 +191,53 @@ bool server_http_context::init(const common_params & params) {
             "/pwa-512x512.png",
             "/maskable-icon-512x512.png",
             "/apple-touch-icon-180x180.png",
+            "/apple-splash-portrait-640x1136.png",
+            "/apple-splash-landscape-1136x640.png",
+            "/apple-splash-portrait-750x1334.png",
+            "/apple-splash-landscape-1334x750.png",
+            "/apple-splash-portrait-1170x2532.png",
+            "/apple-splash-landscape-2532x1170.png",
+            "/apple-splash-portrait-1179x2556.png",
+            "/apple-splash-landscape-2556x1179.png",
+            "/apple-splash-portrait-1206x2622.png",
+            "/apple-splash-landscape-2622x1206.png",
+            "/apple-splash-portrait-1284x2778.png",
+            "/apple-splash-landscape-2778x1284.png",
+            "/apple-splash-portrait-1290x2796.png",
+            "/apple-splash-landscape-2796x1290.png",
+            "/apple-splash-portrait-1320x2868.png",
+            "/apple-splash-landscape-2868x1320.png",
+            "/apple-splash-portrait-1488x2266.png",
+            "/apple-splash-landscape-2266x1488.png",
+            "/apple-splash-portrait-1640x2360.png",
+            "/apple-splash-landscape-2360x1640.png",
+            "/apple-splash-portrait-1668x2388.png",
+            "/apple-splash-landscape-2388x1668.png",
+            "/apple-splash-portrait-2048x2732.png",
+            "/apple-splash-landscape-2732x2048.png",
+            // iOS dark splash screens
+            "/apple-splash-portrait-dark-640x1136.png",
+            "/apple-splash-landscape-dark-1136x640.png",
+            "/apple-splash-portrait-dark-750x1334.png",
+            "/apple-splash-landscape-dark-1334x750.png",
+            "/apple-splash-portrait-dark-1170x2532.png",
+            "/apple-splash-landscape-dark-2532x1170.png",
+            "/apple-splash-portrait-dark-1179x2556.png",
+            "/apple-splash-landscape-dark-2556x1179.png",
+            "/apple-splash-portrait-dark-1206x2622.png",
+            "/apple-splash-landscape-dark-2622x1206.png",
+            "/apple-splash-portrait-dark-1284x2778.png",
+            "/apple-splash-landscape-dark-2778x1284.png",
+            "/apple-splash-portrait-dark-1290x2796.png",
+            "/apple-splash-landscape-dark-2796x1290.png",
+            "/apple-splash-portrait-dark-1320x2868.png",
+            "/apple-splash-landscape-dark-2868x1320.png",
+            "/apple-splash-portrait-dark-1640x2360.png",
+            "/apple-splash-landscape-dark-2360x1640.png",
+            "/apple-splash-portrait-dark-1668x2388.png",
+            "/apple-splash-landscape-dark-2388x1668.png",
+            "/apple-splash-portrait-dark-2048x2732.png",
+            "/apple-splash-landscape-dark-2732x2048.png",
             "/manifest.webmanifest",
             "/sw.js",
             "/version.json",
@@ -385,6 +432,52 @@ bool server_http_context::init(const common_params & params) {
             srv->Get(params.api_prefix + "/pwa-512x512.png",                serve_asset_cached("pwa-512x512.png",              "image/png",                                false));
             srv->Get(params.api_prefix + "/maskable-icon-512x512.png",      serve_asset_cached("maskable-icon-512x512.png",    "image/png",                                false));
             srv->Get(params.api_prefix + "/apple-touch-icon-180x180.png",   serve_asset_cached("apple-touch-icon-180x180.png", "image/png",                                false));
+            srv->Get(params.api_prefix + "/apple-splash-portrait-640x1136.png",          serve_asset_cached("apple-splash-portrait-640x1136.png",          "image/png", false));
+            srv->Get(params.api_prefix + "/apple-splash-landscape-1136x640.png",         serve_asset_cached("apple-splash-landscape-1136x640.png",         "image/png", false));
+            srv->Get(params.api_prefix + "/apple-splash-portrait-750x1334.png",          serve_asset_cached("apple-splash-portrait-750x1334.png",          "image/png", false));
+            srv->Get(params.api_prefix + "/apple-splash-landscape-1334x750.png",         serve_asset_cached("apple-splash-landscape-1334x750.png",         "image/png", false));
+            srv->Get(params.api_prefix + "/apple-splash-portrait-1170x2532.png",         serve_asset_cached("apple-splash-portrait-1170x2532.png",         "image/png", false));
+            srv->Get(params.api_prefix + "/apple-splash-landscape-2532x1170.png",        serve_asset_cached("apple-splash-landscape-2532x1170.png",        "image/png", false));
+            srv->Get(params.api_prefix + "/apple-splash-portrait-1179x2556.png",         serve_asset_cached("apple-splash-portrait-1179x2556.png",         "image/png", false));
+            srv->Get(params.api_prefix + "/apple-splash-landscape-2556x1179.png",        serve_asset_cached("apple-splash-landscape-2556x1179.png",        "image/png", false));
+            srv->Get(params.api_prefix + "/apple-splash-portrait-1206x2622.png",         serve_asset_cached("apple-splash-portrait-1206x2622.png",         "image/png", false));
+            srv->Get(params.api_prefix + "/apple-splash-landscape-2622x1206.png",        serve_asset_cached("apple-splash-landscape-2622x1206.png",        "image/png", false));
+            srv->Get(params.api_prefix + "/apple-splash-portrait-1284x2778.png",         serve_asset_cached("apple-splash-portrait-1284x2778.png",         "image/png", false));
+            srv->Get(params.api_prefix + "/apple-splash-landscape-2778x1284.png",        serve_asset_cached("apple-splash-landscape-2778x1284.png",        "image/png", false));
+            srv->Get(params.api_prefix + "/apple-splash-portrait-1290x2796.png",         serve_asset_cached("apple-splash-portrait-1290x2796.png",         "image/png", false));
+            srv->Get(params.api_prefix + "/apple-splash-landscape-2796x1290.png",        serve_asset_cached("apple-splash-landscape-2796x1290.png",        "image/png", false));
+            srv->Get(params.api_prefix + "/apple-splash-portrait-1320x2868.png",         serve_asset_cached("apple-splash-portrait-1320x2868.png",         "image/png", false));
+            srv->Get(params.api_prefix + "/apple-splash-landscape-2868x1320.png",        serve_asset_cached("apple-splash-landscape-2868x1320.png",        "image/png", false));
+            srv->Get(params.api_prefix + "/apple-splash-portrait-1488x2266.png",         serve_asset_cached("apple-splash-portrait-1488x2266.png",         "image/png", false));
+            srv->Get(params.api_prefix + "/apple-splash-landscape-2266x1488.png",        serve_asset_cached("apple-splash-landscape-2266x1488.png",        "image/png", false));
+            srv->Get(params.api_prefix + "/apple-splash-portrait-1640x2360.png",         serve_asset_cached("apple-splash-portrait-1640x2360.png",         "image/png", false));
+            srv->Get(params.api_prefix + "/apple-splash-landscape-2360x1640.png",        serve_asset_cached("apple-splash-landscape-2360x1640.png",        "image/png", false));
+            srv->Get(params.api_prefix + "/apple-splash-portrait-1668x2388.png",         serve_asset_cached("apple-splash-portrait-1668x2388.png",         "image/png", false));
+            srv->Get(params.api_prefix + "/apple-splash-landscape-2388x1668.png",        serve_asset_cached("apple-splash-landscape-2388x1668.png",        "image/png", false));
+            srv->Get(params.api_prefix + "/apple-splash-portrait-2048x2732.png",         serve_asset_cached("apple-splash-portrait-2048x2732.png",         "image/png", false));
+            srv->Get(params.api_prefix + "/apple-splash-landscape-2732x2048.png",        serve_asset_cached("apple-splash-landscape-2732x2048.png",        "image/png", false));
+            srv->Get(params.api_prefix + "/apple-splash-portrait-dark-640x1136.png",     serve_asset_cached("apple-splash-portrait-dark-640x1136.png",     "image/png", false));
+            srv->Get(params.api_prefix + "/apple-splash-landscape-dark-1136x640.png",    serve_asset_cached("apple-splash-landscape-dark-1136x640.png",    "image/png", false));
+            srv->Get(params.api_prefix + "/apple-splash-portrait-dark-750x1334.png",     serve_asset_cached("apple-splash-portrait-dark-750x1334.png",     "image/png", false));
+            srv->Get(params.api_prefix + "/apple-splash-landscape-dark-1334x750.png",    serve_asset_cached("apple-splash-landscape-dark-1334x750.png",    "image/png", false));
+            srv->Get(params.api_prefix + "/apple-splash-portrait-dark-1170x2532.png",    serve_asset_cached("apple-splash-portrait-dark-1170x2532.png",    "image/png", false));
+            srv->Get(params.api_prefix + "/apple-splash-landscape-dark-2532x1170.png",   serve_asset_cached("apple-splash-landscape-dark-2532x1170.png",   "image/png", false));
+            srv->Get(params.api_prefix + "/apple-splash-portrait-dark-1179x2556.png",    serve_asset_cached("apple-splash-portrait-dark-1179x2556.png",    "image/png", false));
+            srv->Get(params.api_prefix + "/apple-splash-landscape-dark-2556x1179.png",   serve_asset_cached("apple-splash-landscape-dark-2556x1179.png",   "image/png", false));
+            srv->Get(params.api_prefix + "/apple-splash-portrait-dark-1206x2622.png",    serve_asset_cached("apple-splash-portrait-dark-1206x2622.png",    "image/png", false));
+            srv->Get(params.api_prefix + "/apple-splash-landscape-dark-2622x1206.png",   serve_asset_cached("apple-splash-landscape-dark-2622x1206.png",   "image/png", false));
+            srv->Get(params.api_prefix + "/apple-splash-portrait-dark-1284x2778.png",    serve_asset_cached("apple-splash-portrait-dark-1284x2778.png",    "image/png", false));
+            srv->Get(params.api_prefix + "/apple-splash-landscape-dark-2778x1284.png",   serve_asset_cached("apple-splash-landscape-dark-2778x1284.png",   "image/png", false));
+            srv->Get(params.api_prefix + "/apple-splash-portrait-dark-1290x2796.png",    serve_asset_cached("apple-splash-portrait-dark-1290x2796.png",    "image/png", false));
+            srv->Get(params.api_prefix + "/apple-splash-landscape-dark-2796x1290.png",   serve_asset_cached("apple-splash-landscape-dark-2796x1290.png",   "image/png", false));
+            srv->Get(params.api_prefix + "/apple-splash-portrait-dark-1320x2868.png",    serve_asset_cached("apple-splash-portrait-dark-1320x2868.png",    "image/png", false));
+            srv->Get(params.api_prefix + "/apple-splash-landscape-dark-2868x1320.png",   serve_asset_cached("apple-splash-landscape-dark-2868x1320.png",   "image/png", false));
+            srv->Get(params.api_prefix + "/apple-splash-portrait-dark-1640x2360.png",    serve_asset_cached("apple-splash-portrait-dark-1640x2360.png",    "image/png", false));
+            srv->Get(params.api_prefix + "/apple-splash-landscape-dark-2360x1640.png",   serve_asset_cached("apple-splash-landscape-dark-2360x1640.png",   "image/png", false));
+            srv->Get(params.api_prefix + "/apple-splash-portrait-dark-1668x2388.png",    serve_asset_cached("apple-splash-portrait-dark-1668x2388.png",    "image/png", false));
+            srv->Get(params.api_prefix + "/apple-splash-landscape-dark-2388x1668.png",   serve_asset_cached("apple-splash-landscape-dark-2388x1668.png",   "image/png", false));
+            srv->Get(params.api_prefix + "/apple-splash-portrait-dark-2048x2732.png",    serve_asset_cached("apple-splash-portrait-dark-2048x2732.png",    "image/png", false));
+            srv->Get(params.api_prefix + "/apple-splash-landscape-dark-2732x2048.png",   serve_asset_cached("apple-splash-landscape-dark-2732x2048.png",   "image/png", false));
             srv->Get(params.api_prefix + "/manifest.webmanifest",           serve_asset_nocache("manifest.webmanifest",        "application/manifest+json",                false));
             srv->Get(params.api_prefix + "/sw.js",                          serve_asset_nocache("sw.js",                       "application/javascript; charset=utf-8",    false));
             srv->Get(params.api_prefix + "/version.json",                   serve_asset_cached("version.json",                 "application/json",                         false));

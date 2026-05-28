@@ -26,6 +26,80 @@ const GUIDE_FOR_FRONTEND = `
 const OUTPUT_DIR = process.env.LLAMA_UI_OUT_DIR ?? './dist';
 let processed = false;
 
+/**
+ * Apple device dimensions (logical points) and DPR, from Apple HIG.
+ * Used to look up correct media query values from generated splash file dimensions.
+ */
+const APPLE_DEVICES: Record<string, { width: number; height: number; dpr: number }> = {
+	// iPhones (DPR 3)
+	'1170x2532':  { width: 390, height: 844, dpr: 3 },  // iPhone 13, 15
+	'1179x2556':  { width: 393, height: 852, dpr: 3 },  // iPhone 14, 15 Pro, 16
+	'1206x2622':  { width: 402, height: 874, dpr: 3 },  // iPhone 16 Plus, 16e
+	'1284x2778':  { width: 428, height: 926, dpr: 3 },  // iPhone 15 Plus
+	'1290x2796':  { width: 430, height: 932, dpr: 3 },  // iPhone 15 Pro Max, 16 Pro
+	'1320x2868':  { width: 440, height: 956, dpr: 3 },  // iPhone 16 Pro Max
+	'750x1334':   { width: 375, height: 667, dpr: 2 },  // iPhone 6/7/8, 14
+	'640x1136':   { width: 320, height: 568, dpr: 2 },  // iPhone 6/7/8 Plus
+	// iPads (DPR 2)
+	'1668x2388':  { width: 834, height: 1194, dpr: 2 },  // iPad Air 11", iPad 11"
+	'2048x2732':  { width: 1024, height: 1366, dpr: 2 },  // iPad Pro 12.9"
+	'1640x2360':  { width: 820, height: 1180, dpr: 2 },  // iPad Air 10.9"
+	'1032x1376':  { width: 1032, height: 1376, dpr: 2 },  // iPad Air 13"
+	'744x1133':   { width: 376, height: 573, dpr: 2 }  // iPad mini 8.3"
+};
+
+/**
+ * Generate iOS splash screen <link> tags from generated apple-splash-*.png files.
+ * Returns an array of HTML link strings to be injected into the page head.
+ */
+function generateSplashScreenLinks(outDir: string): string[] {
+	const files = readdirSync(outDir).filter((f) => f.match(/^apple-splash-(portrait|landscape)-(dark-)?\d+x\d+\.png$/));
+	if (files.length === 0) return [];
+
+	// Build lookup: "widthxheight" -> { deviceW, deviceH, dpr, orientation }
+	const dimMap = new Map<string, { deviceW: number; deviceH: number; dpr: number }>();
+	for (const [dims, spec] of Object.entries(APPLE_DEVICES)) {
+		const [w, h] = dims.split('x').map(Number);
+		// Portrait file dimensions
+		dimMap.set(`${w}x${h}`, { deviceW: spec.width, deviceH: spec.height, dpr: spec.dpr });
+		// Landscape file dimensions (swapped)
+		dimMap.set(`${h}x${w}`, { deviceW: spec.width, deviceH: spec.height, dpr: spec.dpr });
+	}
+
+	const lightLinks: string[] = [];
+	const darkLinks: string[] = [];
+
+	for (const file of files) {
+		const match = file.match(/^apple-splash-(portrait|landscape)-(dark-)?(\d+)x(\d+)\.png$/);
+		if (!match) continue;
+		const orientation = match[1] as 'portrait' | 'landscape';
+		const isDark = !!match[2];
+		const pixelW = parseInt(match[3]);
+		const pixelH = parseInt(match[4]);
+
+		// Look up device specs from the pixel dimensions
+		const key = `${pixelW}x${pixelH}`;
+		const spec = dimMap.get(key);
+		if (!spec) {
+			console.warn(`⚠ Unknown splash screen dimensions: ${key} (${file})`);
+			continue;
+		}
+
+		const { deviceW, deviceH, dpr } = spec;
+
+		const media = `screen and (device-width: ${deviceW}px) and (device-height: ${deviceH}px) and (-webkit-device-pixel-ratio: ${dpr}) and (orientation: ${orientation})`;
+		const href = `/${file}`;
+
+		if (isDark) {
+			darkLinks.push(`\t\t<link rel="apple-touch-startup-image" media="${media} and (prefers-color-scheme: dark)" href="${href}">`);
+		} else {
+			lightLinks.push(`\t\t<link rel="apple-touch-startup-image" media="${media}" href="${href}">`);
+		}
+	}
+
+	return [...lightLinks, ...darkLinks];
+}
+
 export function llamaCppBuildPlugin(): Plugin {
 	return {
 		name: 'llamacpp:build',
@@ -56,6 +130,17 @@ export function llamaCppBuildPlugin(): Plugin {
 					if (!existsSync(indexPath)) return;
 
 					let content = readFileSync(indexPath, 'utf-8');
+
+					// Generate iOS splash screen link tags from static files
+					const splashLinks = generateSplashScreenLinks(outDir);
+					if (splashLinks.length > 0) {
+						console.log(`✓ Generated ${splashLinks.length} apple-splash link tags`);
+						const splashHtml = splashLinks.map((l) => '\t\t' + l).join('\n');
+						content = content.replace(
+							/\t*<\/head>/,
+							splashHtml + '\n\t\t</head>'
+						);
+					}
 
 					content = content.replace(/\r/g, '');
 					content = GUIDE_FOR_FRONTEND + '\n' + content;
