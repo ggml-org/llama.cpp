@@ -833,15 +833,13 @@ static bool is_gemma3n_flash_attn_pattern(const ggml_tensor * op) {
         return false;
     }
 
-    // gemma3n appears in two FLASH_ATTN_EXT source forms:
-    // 1) q=ROPE, k=ROPE, v=RMS_NORM
-    // 2) q=ROPE, k=NONE, v=NONE   (KV-cache backed)
+    // gemma3n direct attention path (no KV cache): q=ROPE, k=ROPE, v=RMS_NORM
+    // Only match this specific pattern to avoid falsely catching other models
+    // (e.g. Gemma4) that also use scale=1.0 with KV-cache backed attention.
     const bool is_qkv_direct = k_base != nullptr && v_base != nullptr &&
                                k_base->op == GGML_OP_ROPE && v_base->op == GGML_OP_RMS_NORM;
-    const bool is_kv_cache = k_base != nullptr && v_base != nullptr &&
-                             k_base->op == GGML_OP_NONE && v_base->op == GGML_OP_NONE;
 
-    return is_qkv_direct || is_kv_cache;
+    return is_qkv_direct;
 }
 
 static bool checked_mul_size(size_t a, size_t b, size_t & out) {
