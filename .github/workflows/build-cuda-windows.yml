@@ -120,7 +120,11 @@ jobs:
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.21
         with:
-          key: release-windows-2022-x64-hip-${{ env.HIPSDK_INSTALLER_VERSION }}-${{ matrix.name }}
+          # TODO: this build does not match the build in release.yml, so we use a different key
+          #       ideally, the builds should match, similar to the CUDA build above so that we would be able
+          #       to populate the ccache for the release with manual runs of this workflow
+          #key: release-windows-2022-x64-hip-${{ env.HIPSDK_INSTALLER_VERSION }}-${{ matrix.name }}
+          key: cuda-windows-2022-x64-hip-${{ env.HIPSDK_INSTALLER_VERSION }}-${{ matrix.name }}
           append-timestamp: false # note: use this only with non-concurrent jobs!
 
       - name: Build
