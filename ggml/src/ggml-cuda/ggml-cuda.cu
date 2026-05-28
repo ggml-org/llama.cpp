@@ -4994,8 +4994,14 @@ static void ggml_backend_cuda_device_get_memory(ggml_backend_dev_t dev, size_t *
 }
 
 static enum ggml_backend_dev_type ggml_backend_cuda_device_get_type(ggml_backend_dev_t dev) {
-    GGML_UNUSED(dev);
-    return GGML_BACKEND_DEVICE_TYPE_GPU;
+    ggml_backend_cuda_device_context * ctx = (ggml_backend_cuda_device_context *) dev->context;
+
+    cudaDeviceProp prop;
+    CUDA_CHECK(cudaGetDeviceProperties(&prop, ctx->device));
+
+    return prop.integrated
+        ? GGML_BACKEND_DEVICE_TYPE_IGPU
+        : GGML_BACKEND_DEVICE_TYPE_GPU;
 }
 
 static void ggml_backend_cuda_device_get_props(ggml_backend_dev_t dev, ggml_backend_dev_props * props) {
