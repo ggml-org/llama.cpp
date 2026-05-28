@@ -5,9 +5,11 @@
 
 #include <cpp-httplib/httplib.h>
 
+#include <atomic>
 #include <cstdlib>
 #include <functional>
 #include <future>
+#include <memory>
 #include <string>
 #include <thread>
 
@@ -436,7 +438,7 @@ static void process_handler_response(server_http_req_ptr && request, server_http
         // convert to shared_ptr as both chunked_content_provider() and on_complete() need to use it
         std::shared_ptr<server_http_req> q_ptr = std::move(request);
         std::shared_ptr<server_http_res> r_ptr = std::move(response);
-        const auto chunked_content_provider = [response = r_ptr](size_t, httplib::DataSink & sink) -> bool {
+        const auto chunked_content_provider = [response = r_ptr](size_t /*content_index*/, httplib::DataSink & sink) -> bool {
             std::string chunk;
             bool has_next = response->next(chunk);
             if (!chunk.empty()) {
@@ -452,6 +454,10 @@ static void process_handler_response(server_http_req_ptr && request, server_http
             return has_next;
         };
         const auto on_complete = [request = q_ptr, response = r_ptr](bool) mutable {
+            // signal that the connection is closed so any pending should_stop checks return true
+            if (request && request->connection_closed) {
+                request->connection_closed->store(true);
+            }
             response.reset(); // trigger the destruction of the response object
             request.reset();  // trigger the destruction of the request object
         };
@@ -466,6 +472,7 @@ static void process_handler_response(server_http_req_ptr && request, server_http
 void server_http_context::get(const std::string & path, const server_http_context::handler_t & handler) const {
     handlers.emplace(path, handler);
     pimpl->srv->Get(path_prefix + path, [handler](const httplib::Request & req, httplib::Response & res) {
+        auto closed = std::make_shared<std::atomic<bool>>(false);
         server_http_req_ptr request = std::make_unique<server_http_req>(server_http_req{
             get_params(req),
             get_headers(req),
@@ -473,7 +480,8 @@ void server_http_context::get(const std::string & path, const server_http_contex
             build_query_string(req),
             req.body,
             {},
-            req.is_connection_closed
+            closed,
+            [closed]() { return closed->load(); }
         });
         server_http_res_ptr response = handler(*request);
         process_handler_response(std::move(request), response, res);
@@ -513,6 +521,7 @@ void server_http_context::post(const std::string & path, const server_http_conte
             }
         }
 
+        auto closed = std::make_shared<std::atomic<bool>>(false);
         server_http_req_ptr request = std::make_unique<server_http_req>(server_http_req{
             get_params(req),
             get_headers(req),
@@ -520,7 +529,8 @@ void server_http_context::post(const std::string & path, const server_http_conte
             build_query_string(req),
             body,
             std::move(files),
-            req.is_connection_closed
+            closed,
+            [closed]() { return closed->load(); }
         });
         server_http_res_ptr response = handler(*request);
         process_handler_response(std::move(request), response, res);
@@ -668,13 +678,14 @@ void server_http_context::register_gcp_compat() {
                         return build_error("no handler registered for @requestFormat: " + format, ERROR_TYPE_INVALID_REQUEST);
                     }
 
-                    const server_http_req internal_req {
+                    server_http_req internal_req {
                         req.params,
                         req.headers,
                         path_prefix + dispatch_path,
                         req.query_string,
                         payload.dump(),
                         {},
+                        req.connection_closed,
                         req.should_stop,
                     };
 

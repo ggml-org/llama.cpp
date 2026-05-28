@@ -3,6 +3,7 @@
 #include <atomic>
 #include <functional>
 #include <map>
+#include <memory>
 #include <string>
 #include <thread>
 #include <vector>
@@ -49,7 +50,13 @@ struct server_http_req {
     std::string query_string; // query parameters string (e.g. "action=save")
     std::string body;
     std::map<std::string, uploaded_file> files; // used for file uploads (form data)
-    const std::function<bool()> & should_stop;
+
+    // shared flag for detecting client disconnection
+    // set to true by process_handler_response() when the connection closes
+    std::shared_ptr<std::atomic<bool>> connection_closed;
+
+    // should_stop callback checks the shared connection_closed flag
+    std::function<bool()> should_stop = []() { return false; };
 
     std::string get_param(const std::string & key, const std::string & def = "") const {
         auto it = params.find(key);
