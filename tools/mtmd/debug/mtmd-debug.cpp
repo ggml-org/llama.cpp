@@ -176,14 +176,14 @@ int main(int argc, char ** argv) {
             }
             float cx = inp_size / 2.0f;
             float cy = inp_size / 2.0f;
-            float maxDist = std::sqrt(cx * cx + cy * cy);
+            float max_dist = std::sqrt(cx * cx + cy * cy);
             for (int y = 0; y < inp_size; ++y) {
                 for (int x = 0; x < inp_size; ++x) {
                     float dx = x - cx;
                     float dy = y - cy;
                     float hue = std::atan2(dy, dx) / (2.0f * 3.14159265f);
                     if (hue < 0) hue += 1.0f;
-                    float sat = std::sqrt(dx * dx + dy * dy) / maxDist;
+                    float sat = std::sqrt(dx * dx + dy * dy) / max_dist;
                     if (sat > 1.0f) sat = 1.0f;
                     float h6 = hue * 6.0f;
                     int i6 = (int)h6;
