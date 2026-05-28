@@ -11,6 +11,7 @@
 #include "fit.h"
 #include "llama.h"
 #include "../../src/llama-ext.h" // staging API: llama_set_mtp_source
+#include "ggml-cpp.h"
 #include "log.h"
 #include "sampling.h"
 #include "speculative.h"
@@ -846,11 +847,27 @@ private:
                 }
                 cparams_dft.n_rs_seq = 0;
 
+                bool skip_measure = false;
+                //TODO: remove this
+                if (spec_mtp && has_draft) {
+                    struct gguf_init_params meta_params = {
+                        /* .no_alloc = */ true,
+                        /* .ctx      = */ nullptr,
+                    };
+                    gguf_context_ptr meta(gguf_init_from_file(params_dft.model.path.c_str(), meta_params));
+
+                    if (std::string(gguf_get_val_str(meta.get(), gguf_find_key(meta.get(), "general.architecture"))) == "gemma4-assistant") {
+                        skip_measure = true;
+                        SRV_WRN("[spec] skipping --fit memory measurement for Gemma 4 assistant draft model '%s'\n",
+                                params_dft.model.path.c_str());
+                    }
+                }
+
                 std::vector<ggml_backend_dev_t> devs;
                 uint32_t hp_ngl = 0;
                 uint32_t hp_nct = 0;
                 uint32_t hp_nex = 0;
-                try {
+                if (!skip_measure) try {
                     auto dmd = common_get_device_memory_data(
                         params_dft.model.path.c_str(), &mparams_dft, &cparams_dft,
                         devs, hp_ngl, hp_nct, hp_nex, GGML_LOG_LEVEL_ERROR);
