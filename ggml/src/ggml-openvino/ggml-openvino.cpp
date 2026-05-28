@@ -820,6 +820,30 @@ static bool is_supported_flash_attn_pattern(const ggml_tensor * op) {
     return true;
 }
 
+static bool is_gemma3n_flash_attn_pattern(const ggml_tensor * op) {
+    if (!is_supported_flash_attn_pattern(op)) {
+        return false;
+    }
+
+    const ggml_tensor * q_base = op->src[0] != nullptr && op->src[0]->src[0] != nullptr ? op->src[0]->src[0]->src[0] : nullptr;
+    const ggml_tensor * k_base = op->src[1] != nullptr && op->src[1]->src[0] != nullptr ? op->src[1]->src[0]->src[0] : nullptr;
+    const ggml_tensor * v_base = op->src[2] != nullptr && op->src[2]->src[0] != nullptr ? op->src[2]->src[0]->src[0] : nullptr;
+
+    if (q_base == nullptr || q_base->op != GGML_OP_ROPE) {
+        return false;
+    }
+
+    // gemma3n appears in two FLASH_ATTN_EXT source forms:
+    // 1) q=ROPE, k=ROPE, v=RMS_NORM
+    // 2) q=ROPE, k=NONE, v=NONE   (KV-cache backed)
+    const bool is_qkv_direct = k_base != nullptr && v_base != nullptr &&
+                               k_base->op == GGML_OP_ROPE && v_base->op == GGML_OP_RMS_NORM;
+    const bool is_kv_cache = k_base != nullptr && v_base != nullptr &&
+                             k_base->op == GGML_OP_NONE && v_base->op == GGML_OP_NONE;
+
+    return is_qkv_direct || is_kv_cache;
+}
+
 static bool checked_mul_size(size_t a, size_t b, size_t & out) {
     if (a == 0 || b == 0) {
         out = 0;
@@ -965,9 +989,20 @@ static bool is_op_unsupported_case(const ggml_tensor * op) {
         break;
     }
     case GGML_OP_FLASH_ATTN_EXT: {
-        // qwen3next currently shows large accuracy drift in OpenVINO flash attention.
-        // Keep FLASH_ATTN_EXT on CPU until parity is restored.
-        // return true;
+        float scale = 1.0f;
+        float max_bias = 0.0f;
+        float logit_softcap = 0.0f;
+        const auto * op_params = op->op_params;
+        memcpy(&scale, (const float *) op_params + 0, sizeof(float));
+        memcpy(&max_bias, (const float *) op_params + 1, sizeof(float));
+        memcpy(&logit_softcap, (const float *) op_params + 2, sizeof(float));
+
+        // Keep gemma3n flash-attn pattern on CPU for GPU runs to avoid
+        // accuracy drift in the OpenVINO path. Restrict by scale=1.0 to avoid
+        // affecting non-gemma3n models such as Llama-3.2.
+        if (fabsf(scale - 1.0f) < 1e-6f && is_gemma3n_flash_attn_pattern(op)) {
+            return true;
+        }
 
         if (op->src[4] != nullptr) {
             // GGML_LOG_WARN("OpenVINO backend does not support FLASH_ATTN_EXT with sinks\n");
@@ -976,13 +1011,6 @@ static bool is_op_unsupported_case(const ggml_tensor * op) {
         if (!is_supported_flash_attn_pattern(op)) {
             return true;
         }
-        float scale = 1.0f;
-        float max_bias = 0.0f;
-        float logit_softcap = 0.0f;
-        const auto * op_params = op->op_params;
-        memcpy(&scale, (const float *) op_params + 0, sizeof(float));
-        memcpy(&max_bias, (const float *) op_params + 1, sizeof(float));
-        memcpy(&logit_softcap, (const float *) op_params + 2, sizeof(float));
         if (max_bias > 0) {
             // GGML_LOG_WARN("OpenVINO backend does not support FLASH_ATTN_EXT with max_bias > 0\n");
             return true;
