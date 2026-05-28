@@ -181,7 +181,7 @@ int main(int argc, char ** argv) {
                 for (int x = 0; x < inp_size; ++x) {
                     float dx = x - cx;
                     float dy = y - cy;
-                    float hue = std::atan2(dy, dx) / (2.0f * (float)M_PI);
+                    float hue = std::atan2(dy, dx) / (2.0f * 3.14159265f);
                     if (hue < 0) hue += 1.0f;
                     float sat = std::sqrt(dx * dx + dy * dy) / maxDist;
                     if (sat > 1.0f) sat = 1.0f;
