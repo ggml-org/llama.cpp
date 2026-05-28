@@ -1570,6 +1570,37 @@ static void test_array_methods(testing & t) {
         "2"
     );
 
+    test_template(t, "array|min attribute not implemented",
+        "{{ items|min(attribute='x') }}",
+        {{"items", json::array({
+            json({{"x", 2}}),
+            json({{"x", 1}}),
+        })}},
+        ""
+    );
+
+    test_template(t, "array|max attribute not implemented",
+        "{{ items|max(attribute='x') }}",
+        {{"items", json::array({
+            json({{"x", 2}}),
+            json({{"x", 1}}),
+        })}},
+        ""
+    );
+
+    // FIXME: min/max ignore case_sensitive and compare case-sensitively for now
+    test_template(t, "array|min case_sensitive",
+        "{{ items|min(case_sensitive=false) }}",
+        {{"items", json::array({"B", "a", "A"})}},
+        "A"
+    );
+
+    test_template(t, "array|max case_sensitive",
+        "{{ items|max(case_sensitive=false) }}",
+        {{"items", json::array({"B", "a", "A"})}},
+        "a"
+    );
+
     // not used by any chat templates
     // test_template(t, "array.insert()",
     //     "{% set _ = arr.insert(1, 'x') %}{{ arr|join(',') }}",
