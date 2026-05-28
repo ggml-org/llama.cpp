@@ -357,7 +357,7 @@ struct value_array_t : public value_t {
         val_arr = v->val_arr;
     }
     value_array_t(std::vector<value> && arr) {
-        val_arr = arr;
+        val_arr = std::move(arr);
     }
     value_array_t(const std::vector<value> & arr) {
         val_arr = arr;
@@ -465,7 +465,7 @@ struct value_tuple_t : public value_array_t {
         val_arr = v->val_arr;
     }
     value_tuple_t(std::vector<value> && arr) {
-        val_arr = arr;
+        val_arr = std::move(arr);
     }
     value_tuple_t(const std::vector<value> & arr) {
         val_arr = arr;
