@@ -205,6 +205,12 @@ private:
     // encoded, then used during build to determine how to handle newlines.
     const bool append_token;
 
+    ggml_tensor * gather(ggml_tensor * src, const std::string & name, int idx_len);
+    ggml_tensor * interp_down(ggml_tensor * src, int side, int new_side);
+    ggml_tensor * build_block(const qf_block & blk, ggml_tensor * h, int bid,
+                              int spatial_offset, int image_side, int window_side,
+                              int query_side, float qformer_eps);
+
     ggml_tensor * build_newline_row(ggml_context * ctx0);
     ggml_tensor * append_rowwise_newlines(ggml_context * ctx0, ggml_tensor * tile_output);
 };

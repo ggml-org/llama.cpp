@@ -18,36 +18,37 @@
  */
 
 // ---------------------------------------------------------------------------
-// Permutation helpers
+// Member method implementations
 // ---------------------------------------------------------------------------
 
-static ggml_tensor * g4v_gather(ggml_context * ctx, ggml_cgraph * gf,
-                                ggml_tensor * src,
-                                const std::string & name,
-                                int idx_len) {
-    (void) gf;
-    ggml_tensor * idx = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, idx_len);
+ggml_tensor * clip_graph_granite4_vision::gather(
+        ggml_tensor * src,
+        const std::string & name,
+        int idx_len) {
+    ggml_tensor * idx = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, idx_len);
     ggml_set_name(idx, name.c_str());
     ggml_set_input(idx);
-    return ggml_get_rows(ctx, src, idx);
+    return ggml_get_rows(ctx0, src, idx);
 }
 
-// Area downsampling with average pooling (eg 24x24 -> 12x12 via 2x2)
-static ggml_tensor * g4v_interp_down(ggml_context * ctx, ggml_tensor * src, int side, int new_side) {
+ggml_tensor * clip_graph_granite4_vision::interp_down(
+        ggml_tensor * src,
+        int side,
+        int new_side) {
     const int n_embd = src->ne[0];
-    ggml_tensor * t = ggml_reshape_4d(ctx, src, n_embd, side, side, 1);
-    t = ggml_cont(ctx, ggml_permute(ctx, t, 2, 0, 1, 3));
+    ggml_tensor * t = ggml_reshape_4d(ctx0, src, n_embd, side, side, 1);
+    t = ggml_cont(ctx0, ggml_permute(ctx0, t, 2, 0, 1, 3));
     const int kernel = side / new_side;
-    t = ggml_pool_2d(ctx, t, GGML_OP_POOL_AVG, kernel, kernel, kernel, kernel, 0, 0);
-    t = ggml_cont(ctx, ggml_permute(ctx, t, 1, 2, 0, 3));
-    return ggml_reshape_2d(ctx, t, n_embd, new_side * new_side);
+    t = ggml_pool_2d(ctx0, t, GGML_OP_POOL_AVG, kernel, kernel, kernel, kernel, 0, 0);
+    t = ggml_cont(ctx0, ggml_permute(ctx0, t, 1, 2, 0, 3));
+    return ggml_reshape_2d(ctx0, t, n_embd, new_side * new_side);
 }
 
-// Build one WindowQFormer block's forward pass
-static ggml_tensor * g4v_build_block(
-        const clip_graph * g,
-        ggml_context * ctx,
-        ggml_cgraph * gf,
+// ---------------------------------------------------------------------------
+// build_block - WindowQFormer block implementation
+// ---------------------------------------------------------------------------
+
+ggml_tensor * clip_graph_granite4_vision::build_block(
         const qf_block & blk,
         ggml_tensor * h,
         int bid,
@@ -71,16 +72,16 @@ static ggml_tensor * g4v_build_block(
     };
 
     // 1. Top-level LN
-    ggml_tensor * x = g->build_norm(h, blk.qf_proj_norm_w, blk.qf_proj_norm_b, NORM_TYPE_NORMAL, g->eps, bid);
+    ggml_tensor * x = build_norm(h, blk.qf_proj_norm_w, blk.qf_proj_norm_b, NORM_TYPE_NORMAL, eps, bid);
     cbx(x, "norm");
 
     // 2. enc = _win(x, image_side, window_side)
     ggml_tensor * enc;
     {
-        ggml_tensor * enc_flat = g4v_gather(ctx, gf, x,
+        ggml_tensor * enc_flat = gather(x,
             "g4v_blk" + std::to_string(bid) + "_win_idx",
             image_side * image_side);
-        enc = ggml_reshape_3d(ctx, enc_flat, n_embd, enc_len, n_windows);
+        enc = ggml_reshape_3d(ctx0, enc_flat, n_embd, enc_len, n_windows);
     }
     cbx(enc, "enc");
 
@@ -88,88 +89,38 @@ static ggml_tensor * g4v_build_block(
     ggml_tensor * d;
     (void) spatial_offset;
     if (spatial_offset >= 0) {
-        d = g4v_gather(ctx, gf, x,
+        d = gather(x,
             "g4v_blk" + std::to_string(bid) + "_spatial_idx",
             new_side * new_side);
     } else {
-        d = g4v_interp_down(ctx, x, image_side, new_side);
+        d = interp_down(x, image_side, new_side);
     }
     cbx(d, "downsampled");
 
     // 4. query_embeds = query + _win(d, new_side, query_side)
     ggml_tensor * q_in;
     {
-        ggml_tensor * dw_flat = g4v_gather(ctx, gf, d,
+        ggml_tensor * dw_flat = gather(d,
             "g4v_blk" + std::to_string(bid) + "_qwin_idx",
             new_side * new_side);
-        ggml_tensor * dw = ggml_reshape_3d(ctx, dw_flat, n_embd, query_len, n_windows);
-        q_in = ggml_add(ctx, dw, blk.qf_proj_query);
+        ggml_tensor * dw = ggml_reshape_3d(ctx0, dw_flat, n_embd, query_len, n_windows);
+        q_in = ggml_add(ctx0, dw, blk.qf_proj_query);
     }
     cbx(q_in, "query_embeds");
 
     // 5. encoder_embeds = enc + image_positions → (C, enc_len, n_windows)
-    ggml_tensor * e_in = ggml_add(ctx, enc, blk.qf_proj_img_pos);
+    ggml_tensor * e_in = ggml_add(ctx0, enc, blk.qf_proj_img_pos);
     cbx(e_in, "encoder_embeds");
 
     // 6. Qformer forward.
-    ggml_tensor * q = g->build_norm(q_in, blk.qf_proj_post_norm_w, blk.qf_proj_post_norm_b, NORM_TYPE_NORMAL, qformer_eps, bid);
+    ggml_tensor * q = build_norm(q_in, blk.qf_proj_post_norm_w, blk.qf_proj_post_norm_b, NORM_TYPE_NORMAL, qformer_eps, bid);
 
-    // Helper: one post-norm BERT attention block.
-    //   attn(q,k,v) via dense W^Q/W^K/W^V + scaled dot-product
-    //   residual: LN_out(dropout(dense(attn_out)) + residual_input)
-    // For self-attention q == k == v == residual. For cross-attn q != k=v.
-    auto run_postnorm_attn = [&](
-            ggml_tensor * q_stream,
-            ggml_tensor * kv_stream,
-            ggml_tensor * wq, ggml_tensor * bq,
-            ggml_tensor * wk, ggml_tensor * bk,
-            ggml_tensor * wv, ggml_tensor * bv,
-            ggml_tensor * wo, ggml_tensor * bo,
-            ggml_tensor * ln_w, ggml_tensor * ln_b) -> ggml_tensor * {
-        const int d_h    = 64; // hard coded in downsampling.py:77
-        const int n_head = n_embd / d_h;
-        const int nq     = q_stream->ne[1];
-        const int nkv    = kv_stream->ne[1];
-
-        // We loop over the n_windows dimension by treating it as batch via
-        // the ne[2] dim in mul_mat.  Collapse (C, n, n_win) → (C, n * n_win)
-        // for the linear projections (they don't care about the window dim),
-        // then reshape back.
-        auto linear = [&](ggml_tensor * x, ggml_tensor * w, ggml_tensor * b) -> ggml_tensor * {
-            ggml_tensor * t = ggml_reshape_2d(ctx, x, x->ne[0], x->ne[1] * x->ne[2]);
-            t = g->build_mm(w, t);
-            if (b) t = ggml_add(ctx, t, b);
-            return t;
-        };
-
-        ggml_tensor * Q = linear(q_stream, wq, bq);
-        ggml_tensor * K = linear(kv_stream, wk, bk);
-        ggml_tensor * V = linear(kv_stream, wv, bv);
-
-        Q = ggml_reshape_4d(ctx, Q, d_h, n_head, nq,  n_windows);
-        K = ggml_reshape_4d(ctx, K, d_h, n_head, nkv, n_windows);
-        V = ggml_reshape_4d(ctx, V, d_h, n_head, nkv, n_windows);
-
-        ggml_tensor * q_p = ggml_permute(ctx, Q, 0, 2, 1, 3);
-        ggml_tensor * k_p = ggml_permute(ctx, K, 0, 2, 1, 3);
-        ggml_tensor * v_p = ggml_permute(ctx, V, 1, 2, 0, 3);
-        v_p = ggml_cont(ctx, v_p);
-
-        ggml_tensor * kq = ggml_mul_mat(ctx, k_p, q_p);
-        const float scale = 1.0f / std::sqrt((float) d_h);
-        kq = ggml_soft_max_ext(ctx, kq, nullptr, scale, 0.0f);
-
-        ggml_tensor * kqv = ggml_mul_mat(ctx, v_p, kq);
-        ggml_tensor * out = ggml_permute(ctx, kqv, 0, 2, 1, 3);
-        out = ggml_cont_3d(ctx, out, d_h * n_head, nq, n_windows);
-
-        ggml_tensor * o = ggml_reshape_2d(ctx, out, n_embd, nq * n_windows);
-        o = g->build_mm(wo, o);
-        if (bo) o = ggml_add(ctx, o, bo);
-        o = ggml_reshape_3d(ctx, o, n_embd, nq, n_windows);
-        o = ggml_add(ctx, o, q_stream);
-        o = g->build_norm(o, ln_w, ln_b, NORM_TYPE_NORMAL, qformer_eps, bid);
-        return o;
+    // Helper for linear projections with window batching
+    auto linear = [&](ggml_tensor * x, ggml_tensor * w, ggml_tensor * b) -> ggml_tensor * {
+        ggml_tensor * t = ggml_reshape_2d(ctx0, x, x->ne[0], x->ne[1] * x->ne[2]);
+        t = build_mm(w, t);
+        if (b) t = ggml_add(ctx0, t, b);
+        return t;
     };
 
     // Get the single QFormer layer
@@ -177,53 +128,85 @@ static ggml_tensor * g4v_build_block(
     const auto & pl = blk.qf_proj_layers[0];
 
     // 6a. Self-attention
-    ggml_tensor * sa_out = run_postnorm_attn(
-        q, q,
-        pl.q_w,  pl.q_b,
-        pl.k_w,  pl.k_b,
-        pl.v_w,  pl.v_b,
-        pl.o_w, pl.o_b,
-        pl.ln_1_w, pl.ln_1_b);
+    ggml_tensor * sa_out;
+    {
+        const int d_h = 64;
+        const int n_head = n_embd / d_h;
+        const int nq = q->ne[1];
+        const float scale = 1.0f / std::sqrt((float) d_h);
+
+        ggml_tensor * Q = linear(q, pl.q_w, pl.q_b);
+        ggml_tensor * K = linear(q, pl.k_w, pl.k_b);
+        ggml_tensor * V = linear(q, pl.v_w, pl.v_b);
+
+        Q = ggml_reshape_4d(ctx0, Q, d_h, n_head, nq, n_windows);
+        K = ggml_reshape_4d(ctx0, K, d_h, n_head, nq, n_windows);
+        V = ggml_reshape_4d(ctx0, V, d_h, n_head, nq, n_windows);
+
+        sa_out = build_attn(pl.o_w, pl.o_b, Q, K, V, nullptr, scale, bid);
+        sa_out = ggml_reshape_3d(ctx0, sa_out, n_embd, nq, n_windows);
+
+        sa_out = ggml_add(ctx0, sa_out, q);
+        sa_out = build_norm(sa_out, pl.ln_1_w, pl.ln_1_b,
+                            NORM_TYPE_NORMAL, qformer_eps, bid);
+    }
     cbx(sa_out, "sa_out");
 
     // 6b. Cross-attention
-    ggml_tensor * ca_out = run_postnorm_attn(
-        sa_out, e_in,
-        pl.cross_attn_q_w,  pl.cross_attn_q_b,
-        pl.cross_attn_k_w,  pl.cross_attn_k_b,
-        pl.cross_attn_v_w,  pl.cross_attn_v_b,
-        pl.cross_attn_o_w, pl.cross_attn_o_b,
-        pl.cross_attn_norm_w, pl.cross_attn_norm_b);
+    ggml_tensor * ca_out;
+    {
+        const int d_h = 64;
+        const int n_head = n_embd / d_h;
+        const int nq = sa_out->ne[1];
+        const int nkv = e_in->ne[1];
+        const float scale = 1.0f / std::sqrt((float) d_h);
+
+        ggml_tensor * Q = linear(sa_out, pl.cross_attn_q_w, pl.cross_attn_q_b);
+        ggml_tensor * K = linear(e_in, pl.cross_attn_k_w, pl.cross_attn_k_b);
+        ggml_tensor * V = linear(e_in, pl.cross_attn_v_w, pl.cross_attn_v_b);
+
+        Q = ggml_reshape_4d(ctx0, Q, d_h, n_head, nq, n_windows);
+        K = ggml_reshape_4d(ctx0, K, d_h, n_head, nkv, n_windows);
+        V = ggml_reshape_4d(ctx0, V, d_h, n_head, nkv, n_windows);
+
+        ca_out = build_attn(pl.cross_attn_o_w, pl.cross_attn_o_b,
+                            Q, K, V, nullptr, scale, bid);
+        ca_out = ggml_reshape_3d(ctx0, ca_out, n_embd, nq, n_windows);
+
+        ca_out = ggml_add(ctx0, ca_out, sa_out);
+        ca_out = build_norm(ca_out, pl.cross_attn_norm_w, pl.cross_attn_norm_b,
+                            NORM_TYPE_NORMAL, qformer_eps, bid);
+    }
     cbx(ca_out, "ca_out");
 
     // 6c. FFN
     ggml_tensor * ffn;
     {
-        ggml_tensor * t = ggml_reshape_2d(ctx, ca_out, n_embd, query_len * n_windows);
-        t = g->build_mm(pl.ff_up_w, t);
-        if (pl.ff_up_b) t = ggml_add(ctx, t, pl.ff_up_b);
-        t = ggml_gelu_erf(ctx, t);
-        t = g->build_mm(pl.ff_down_w, t);
-        if (pl.ff_down_b) t = ggml_add(ctx, t, pl.ff_down_b);
-        t = ggml_reshape_3d(ctx, t, n_embd, query_len, n_windows);
-        ffn = ggml_add(ctx, t, ca_out);
-        ffn = g->build_norm(ffn, pl.ln_2_w, pl.ln_2_b, NORM_TYPE_NORMAL, qformer_eps, bid);
+        ggml_tensor * t = ggml_reshape_2d(ctx0, ca_out, n_embd, query_len * n_windows);
+        t = build_mm(pl.ff_up_w, t);
+        if (pl.ff_up_b) t = ggml_add(ctx0, t, pl.ff_up_b);
+        t = ggml_gelu_erf(ctx0, t);
+        t = build_mm(pl.ff_down_w, t);
+        if (pl.ff_down_b) t = ggml_add(ctx0, t, pl.ff_down_b);
+        t = ggml_reshape_3d(ctx0, t, n_embd, query_len, n_windows);
+        ffn = ggml_add(ctx0, t, ca_out);
+        ffn = build_norm(ffn, pl.ln_2_w, pl.ln_2_b, NORM_TYPE_NORMAL, qformer_eps, bid);
     }
     cbx(ffn, "qformer_out");
 
     // 7. _unwin back to raster
     ggml_tensor * unwinned;
     {
-        ggml_tensor * flat = ggml_reshape_2d(ctx, ffn, n_embd, query_len * n_windows);
-        unwinned = g4v_gather(ctx, gf, flat,
+        ggml_tensor * flat = ggml_reshape_2d(ctx0, ffn, n_embd, query_len * n_windows);
+        unwinned = gather(flat,
             "g4v_blk" + std::to_string(bid) + "_unwin_idx",
             new_side * new_side);
     }
     cbx(unwinned, "unwin");
 
     // 8. out_linear
-    ggml_tensor * out = g->build_mm(blk.qf_proj_linear_w, unwinned);
-    if (blk.qf_proj_linear_b) out = ggml_add(ctx, out, blk.qf_proj_linear_b);
+    ggml_tensor * out = build_mm(blk.qf_proj_linear_w, unwinned);
+    if (blk.qf_proj_linear_b) out = ggml_add(ctx0, out, blk.qf_proj_linear_b);
     cbx(out, "out");
 
     return out;
@@ -332,9 +315,8 @@ ggml_cgraph * clip_graph_granite4_vision::build() {
         GGML_ASSERT(vlayer >= 1 && vlayer <= n_layer);
         ggml_tensor * h = layer_outs[vlayer - 1];
 
-        ggml_tensor * stream = g4v_build_block(
-            this, ctx0, gf, blk,
-            h, bid,
+        ggml_tensor * stream = build_block(
+            blk, h, bid,
             hparams.proj_spatial_offsets[bid],
             n_patches_x,
             hparams.downsample_window_side,
