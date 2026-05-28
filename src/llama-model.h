@@ -202,12 +202,16 @@ struct llama_layer_shortconv {
 };
 
 struct llama_layer_nextn {
-    struct ggml_tensor * eh_proj          = nullptr;
-    struct ggml_tensor * embed_tokens     = nullptr;
-    struct ggml_tensor * enorm            = nullptr;
-    struct ggml_tensor * hnorm            = nullptr;
-    struct ggml_tensor * shared_head_head = nullptr;
-    struct ggml_tensor * shared_head_norm = nullptr;
+    struct ggml_tensor * eh_proj               = nullptr;
+    struct ggml_tensor * eh_proj_s             = nullptr;
+    struct ggml_tensor * eh_proj_in_s          = nullptr;
+    struct ggml_tensor * embed_tokens          = nullptr;
+    struct ggml_tensor * enorm                 = nullptr;
+    struct ggml_tensor * hnorm                 = nullptr;
+    struct ggml_tensor * shared_head_head      = nullptr;
+    struct ggml_tensor * shared_head_head_s    = nullptr;
+    struct ggml_tensor * shared_head_head_in_s = nullptr;
+    struct ggml_tensor * shared_head_norm      = nullptr;
 };
 
 struct llama_layer {
@@ -484,7 +488,7 @@ struct llama_layer {
     struct ggml_tensor * indexer_attn_k   = nullptr;
     struct ggml_tensor * indexer_attn_q_b = nullptr; // note: for lora a/b, not bias
 
-    // gemma4 layer output scale
+    // gemma4 layer output scale, reused for talkie embedding skip scale
     struct ggml_tensor * out_scale = nullptr;
 
     struct llama_layer_posnet posnet;
