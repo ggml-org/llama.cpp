@@ -600,7 +600,6 @@ static struct ggml_backend_meta_split_state ggml_backend_meta_get_split_state(
             case GGML_BACKEND_SPLIT_AXIS_1:
             case GGML_BACKEND_SPLIT_AXIS_2:
             case GGML_BACKEND_SPLIT_AXIS_3: {
-                GGML_ASSERT(!ggml_is_permuted(tensor) && !ggml_is_permuted(tensor->src[0]));
                 GGML_ASSERT(src_ss[0].n_segments == 1);
                 if (src_ss[0].axis == ggml_n_dims(tensor->src[0]) - 1 && src_ss[0].nr[0] == 1) {
                     return {ggml_backend_meta_split_axis(ggml_n_dims(tensor) - 1), {0}, {1}, 1};
