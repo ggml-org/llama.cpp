@@ -20,7 +20,7 @@ jobs:
   publish:
     name: Publish UI Static Output
     needs: build
-    runs-on: [self-hosted, fast]
+    runs-on: ubuntu-slim
 
     permissions:
       contents: read
