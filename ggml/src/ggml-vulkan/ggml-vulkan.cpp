@@ -6635,7 +6635,7 @@ static void * ggml_vk_host_malloc(vk_device& device, size_t size) {
         return nullptr;
     }
 
-    std::unique_lock<std::shared_mutex> guard(device->pinned_memory_mutex);
+    std::lock_guard<std::shared_mutex> guard(device->pinned_memory_mutex);
     device->pinned_memory.push_back(std::make_tuple(buf->ptr, size, buf));
 
     return buf->ptr;
@@ -6646,7 +6646,7 @@ static void ggml_vk_host_free(vk_device& device, void* ptr) {
         return;
     }
     VK_LOG_MEMORY("ggml_vk_host_free(" << ptr << ")");
-    std::unique_lock<std::shared_mutex> guard(device->pinned_memory_mutex);
+    std::lock_guard<std::shared_mutex> guard(device->pinned_memory_mutex);
 
     vk_buffer buf;
     size_t index;
