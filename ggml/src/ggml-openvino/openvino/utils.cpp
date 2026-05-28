@@ -279,8 +279,11 @@ ov::Output<ov::Node> process_view_input_new(const NodeContext & context, int inp
         expected_ov_shape.rank() == actual_shape.rank()) {
         bool shapes_match = true;
         for (int64_t i = 0; i < expected_ov_shape.rank().get_length(); ++i) {
-            if (expected_ov_shape[i].is_static() && actual_shape[i].is_static() &&
-                expected_ov_shape[i] != actual_shape[i]) {
+            if (!expected_ov_shape[i].is_static() || !actual_shape[i].is_static()) {
+                shapes_match = false;
+                break;
+            }
+            if (expected_ov_shape[i] != actual_shape[i]) {
                 shapes_match = false;
                 break;
             }
