@@ -3765,6 +3765,8 @@ static void ggml_opencl_print_backend_info(ggml_backend_opencl_device_context * 
         backend_ctx->svm_caps & CL_DEVICE_SVM_FINE_GRAIN_SYSTEM ? "true" : "false");
     GGML_LOG_INFO("ggml_opencl: SVM atomics support: %s\n",
         backend_ctx->svm_caps & CL_DEVICE_SVM_ATOMICS ? "true" : "false");
+    GGML_LOG_INFO("ggml_opencl: cl_qcom_subgroup_shuffle support: %s\n",
+        backend_ctx->has_qcom_subgroup_shuffle ? "true" : "false");
 
     // Print out configurations
 #ifdef GGML_OPENCL_SOA_Q
@@ -3933,14 +3935,9 @@ static ggml_backend_opencl_context * ggml_cl_init(ggml_backend_dev_t dev) {
     ext_buffer[ext_str_size] = '\0'; // ensure it is null terminated
 
     // check support for qcom_subgroup_shuffle
-    if (opencl_c_version.major == 3 && strstr(ext_buffer, "cl_khr_subgroups") != NULL) {
-        GGML_LOG_INFO("ggml_opencl: cl_khr_subgroups support: true\n");
-        if (strstr(ext_buffer, "cl_qcom_subgroup_shuffle") != NULL) {
-            backend_ctx->has_qcom_subgroup_shuffle = true;
-        }
+    if (strstr(ext_buffer, "cl_qcom_subgroup_shuffle") != NULL) {
+        backend_ctx->has_qcom_subgroup_shuffle = true;
     }
-    GGML_LOG_INFO("ggml_opencl: cl_qcom_subgroup_shuffle support: %s\n",
-        backend_ctx->has_qcom_subgroup_shuffle ? "true" : "false");
 
     // Check if ext_buffer contains cl_khr_fp16
     backend_ctx->fp16_support = strstr(ext_buffer, "cl_khr_fp16") != NULL;
