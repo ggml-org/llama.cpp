@@ -2786,9 +2786,44 @@ static bool ggml_opencl_can_ifairy64_mul_mat(const struct ggml_tensor * op) {
            ggml_is_contiguous(src0) && ggml_is_contiguous(src1);
 }
 
+static bool ggml_opencl_can_ifairy_add(const struct ggml_tensor * op) {
+    if (op->op != GGML_OP_IFAIRY_ADD) {
+        return false;
+    }
+
+    const struct ggml_tensor * src0 = op->src[0];
+    const struct ggml_tensor * src1 = op->src[1];
+    if (src0 == nullptr || src1 == nullptr) {
+        return false;
+    }
+
+    if (src0->type != GGML_TYPE_F32 || src1->type != GGML_TYPE_F32 || op->type != GGML_TYPE_F32) {
+        return false;
+    }
+
+    if (!ggml_are_same_shape(src0, op) || !ggml_can_repeat(src1, src0)) {
+        return false;
+    }
+
+    return ggml_is_contiguous(src0) && ggml_is_contiguous(src1) && ggml_is_contiguous(op);
+}
+
 static bool ggml_opencl_ifairy64_kernel_ready(const struct ggml_tensor * op) {
-    GGML_UNUSED(op);
-    return false;
+    switch (op->op) {
+        case GGML_OP_MUL_MAT:
+            return false;
+        default:
+            return false;
+    }
+}
+
+static bool ggml_opencl_ifairy_complex_kernel_ready(const struct ggml_tensor * op) {
+    switch (op->op) {
+        case GGML_OP_IFAIRY_ADD:
+            return ggml_opencl_can_ifairy_add(op);
+        default:
+            return false;
+    }
 }
 
 static bool ggml_opencl_supports_ifairy_op(const struct ggml_tensor * op) {
@@ -2796,13 +2831,17 @@ static bool ggml_opencl_supports_ifairy_op(const struct ggml_tensor * op) {
         return false;
     }
 
-    if (!ggml_opencl_can_ifairy64_mul_mat(op)) {
-        return false;
+    switch (op->op) {
+        case GGML_OP_IFAIRY_ADD:
+            return ggml_opencl_ifairy_complex_kernel_ready(op);
+        case GGML_OP_MUL_MAT:
+            if (!ggml_opencl_can_ifairy64_mul_mat(op)) {
+                return false;
+            }
+            return ggml_opencl_ifairy64_kernel_ready(op);
+        default:
+            return false;
     }
-
-    // Keep the scheduler on the CPU fallback until the matching OpenCL kernel
-    // is implemented and wired through ggml_cl_compute_forward().
-    return ggml_opencl_ifairy64_kernel_ready(op);
 }
 
 static bool ggml_opencl_supports_op(ggml_backend_dev_t dev, const struct ggml_tensor * op) {
@@ -2888,10 +2927,6 @@ static bool ggml_opencl_supports_op(ggml_backend_dev_t dev, const struct ggml_te
                    (op->src[0]->type == GGML_TYPE_F32 || op->src[0]->type == GGML_TYPE_F16);
         case GGML_OP_ADD_ID:
             return op->src[0]->type == GGML_TYPE_F32;
-        case GGML_OP_IFAIRY_ADD:
-            return op->type == GGML_TYPE_F32 &&
-                   op->src[0]->type == GGML_TYPE_F32 &&
-                   op->src[1]->type == GGML_TYPE_F32;
         case GGML_OP_UNARY:
             switch (ggml_get_unary_op(op)) {
                 case GGML_UNARY_OP_GELU:
@@ -4642,6 +4677,7 @@ static void ggml_cl_ifairy_add(ggml_backend_t backend, const ggml_tensor * src0,
     GGML_ASSERT(dst->extra);
 
     GGML_ASSERT(src0->type == GGML_TYPE_F32 && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32);
+    GGML_ASSERT(ggml_opencl_can_ifairy_add(dst));
 
     const int ne00 = src0->ne[0];
     const int ne01 = src0->ne[1];
@@ -8499,6 +8535,29 @@ static void ggml_cl_glu(ggml_backend_t backend, const ggml_tensor * src0, const 
 // Op offloading
 //------------------------------------------------------------------------------
 
+static bool ggml_cl_compute_forward_ifairy(ggml_backend_t backend, ggml_tensor * tensor) {
+    ggml_tensor * src0 = tensor->src[0];
+    ggml_tensor * src1 = tensor->src[1];
+
+    const bool any_on_device = tensor->extra
+        || (src0 != nullptr && src0->extra)
+        || (src1 != nullptr && src1->extra);
+    if (!any_on_device) {
+        return false;
+    }
+
+    switch (tensor->op) {
+        case GGML_OP_IFAIRY_ADD:
+            if (!ggml_opencl_can_ifairy_add(tensor)) {
+                return false;
+            }
+            ggml_cl_ifairy_add(backend, src0, src1, tensor);
+            return true;
+        default:
+            return false;
+    }
+}
+
 typedef void (*ggml_cl_func_t)(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst);
 
 bool ggml_cl_compute_forward(ggml_backend_t backend, struct ggml_tensor * tensor) {
@@ -8512,7 +8571,7 @@ bool ggml_cl_compute_forward(ggml_backend_t backend, struct ggml_tensor * tensor
         || (src1 != nullptr && src1->extra);
 
     if (ggml_opencl_is_ifairy_op(tensor)) {
-        return false;
+        return ggml_cl_compute_forward_ifairy(backend, tensor);
     }
 
     switch (tensor->op) {
@@ -8552,12 +8611,6 @@ bool ggml_cl_compute_forward(ggml_backend_t backend, struct ggml_tensor * tensor
                 return false;
             }
             func = ggml_cl_add_id;
-            break;
-        case GGML_OP_IFAIRY_ADD:
-            if (!any_on_device) {
-                return false;
-            }
-            func = ggml_cl_ifairy_add;
             break;
         case GGML_OP_MUL:
             if (!any_on_device) {

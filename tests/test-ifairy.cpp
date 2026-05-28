@@ -2151,6 +2151,147 @@ static int run_ifairy_lut_only_tests(void) {
     return num_failed > 0 ? 1 : 0;
 }
 
+static ggml_backend_dev_t find_opencl_test_device(void) {
+    ggml_backend_load_all();
+
+    for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
+        ggml_backend_dev_t dev = ggml_backend_dev_get(i);
+        const char *       name = ggml_backend_dev_name(dev);
+        ggml_backend_reg_t reg  = ggml_backend_dev_backend_reg(dev);
+        const char *       reg_name = ggml_backend_reg_name(reg);
+
+        if ((name && strcmp(name, "GPUOpenCL") == 0) || (reg_name && strcmp(reg_name, "OpenCL") == 0)) {
+            return dev;
+        }
+    }
+
+    return nullptr;
+}
+
+static bool check_ifairy_opencl_add_support(ggml_backend_dev_t dev,
+                                            const char *       label,
+                                            const char *       gate_value,
+                                            enum ggml_type     type,
+                                            bool               src0_view,
+                                            bool               src1_view,
+                                            int64_t            ne0,
+                                            int64_t            ne1,
+                                            int64_t            src1_ne0,
+                                            bool               expected) {
+    scoped_env_var env_gate("GGML_OPENCL_IFAIRY64");
+    if (gate_value) {
+        env_gate.set(gate_value);
+    } else {
+        env_gate.unset();
+    }
+
+    struct ggml_init_params params = {
+        /*.mem_size   =*/256 * 1024,
+        /*.mem_buffer =*/NULL,
+        /*.no_alloc   =*/true,
+    };
+    struct ggml_context * ctx = ggml_init(params);
+    if (!ctx) {
+        fprintf(stderr, "Failed to init ggml context for %s\n", label);
+        return false;
+    }
+
+    struct ggml_tensor * a_base = ggml_new_tensor_2d(ctx, type, src0_view ? ne0 * 2 : ne0, ne1);
+    struct ggml_tensor * b_base = ggml_new_tensor_2d(ctx, type, src1_view ? src1_ne0 * 2 : src1_ne0, ne1);
+    struct ggml_tensor * a = src0_view ? ggml_view_2d(ctx, a_base, ne0, ne1, a_base->nb[1], 0) : a_base;
+    struct ggml_tensor * b = src1_view ? ggml_view_2d(ctx, b_base, src1_ne0, ne1, b_base->nb[1], 0) : b_base;
+    struct ggml_tensor * out = ggml_ifairy_add(ctx, a, b);
+
+    const bool supported = ggml_backend_dev_supports_op(dev, out);
+    ggml_free(ctx);
+
+    if (supported != expected) {
+        fprintf(stderr, "IFAIRY_ADD OpenCL support case '%s' expected %s, got %s\n",
+                label, expected ? "supported" : "unsupported", supported ? "supported" : "unsupported");
+        return false;
+    }
+
+    printf("  %-28s : %s\n", label, supported ? "supported" : "unsupported");
+    return true;
+}
+
+static bool check_ifairy64_opencl_mul_mat_still_blocked(ggml_backend_dev_t dev) {
+    scoped_env_var env_gate("GGML_OPENCL_IFAIRY64");
+    env_gate.set("1");
+
+    struct ggml_init_params params = {
+        /*.mem_size   =*/256 * 1024,
+        /*.mem_buffer =*/NULL,
+        /*.no_alloc   =*/true,
+    };
+    struct ggml_context * ctx = ggml_init(params);
+    if (!ctx) {
+        fprintf(stderr, "Failed to init ggml context for ifairy64-mul-mat-blocked\n");
+        return false;
+    }
+
+    struct ggml_tensor * w   = ggml_new_tensor_2d(ctx, GGML_TYPE_IFAIRY64, QK_IFAIRY64, 1);
+    struct ggml_tensor * x   = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, QK_IFAIRY64, 1);
+    struct ggml_tensor * out = ggml_mul_mat(ctx, w, x);
+
+    const bool supported = ggml_backend_dev_supports_op(dev, out);
+    ggml_free(ctx);
+
+    if (supported) {
+        fprintf(stderr, "IFAIRY64 MUL_MAT unexpectedly reported supported before its OpenCL kernel is ready\n");
+        return false;
+    }
+
+    printf("  %-28s : unsupported\n", "ifairy64-mulmat-blocked");
+    return true;
+}
+
+static int run_ifairy_opencl_add_tests(void) {
+    printf("\n=== iFairy OpenCL ADD support gate tests ===\n");
+
+    ggml_backend_dev_t dev = find_opencl_test_device();
+    if (!dev) {
+        printf("OpenCL backend not found; skipping iFairy OpenCL ADD support tests.\n");
+        return 0;
+    }
+
+    printf("OpenCL device: %s (%s)\n", ggml_backend_dev_name(dev), ggml_backend_dev_description(dev));
+
+    int num_failed = 0;
+    auto run = [&](const char *   label,
+                   const char *   gate_value,
+                   enum ggml_type type,
+                   bool           src0_view,
+                   bool           src1_view,
+                   int64_t        ne0,
+                   int64_t        ne1,
+                   int64_t        src1_ne0,
+                   bool           expected) {
+        if (!check_ifairy_opencl_add_support(dev, label, gate_value, type, src0_view, src1_view, ne0, ne1, src1_ne0, expected)) {
+            num_failed++;
+        }
+    };
+
+    run("env-unset",       nullptr, GGML_TYPE_F32, false, false, 4, 4, 4, false);
+    run("env-zero",        "0",     GGML_TYPE_F32, false, false, 4, 4, 4, false);
+    run("same-shape-f32",  "1",     GGML_TYPE_F32, false, false, 4, 4, 4, true);
+    run("broadcast-ne0",   "1",     GGML_TYPE_F32, false, false, 8, 4, 4, true);
+    run("f16-rejected",    "1",     GGML_TYPE_F16, false, false, 4, 4, 4, false);
+    run("src0-view",       "1",     GGML_TYPE_F32, true,  false, 4, 4, 4, false);
+    run("src1-view",       "1",     GGML_TYPE_F32, false, true,  4, 4, 4, false);
+    if (!check_ifairy64_opencl_mul_mat_still_blocked(dev)) {
+        num_failed++;
+    }
+
+    if (num_failed == 0) {
+        printf("iFairy OpenCL ADD support gate tests PASSED!\n");
+    } else {
+        printf("%d iFairy OpenCL ADD support gate test(s) FAILED\n", num_failed);
+    }
+
+    return num_failed > 0 ? 1 : 0;
+}
+
 // ============================================================================
 // 测试 5: 复数矩阵乘法
 // ============================================================================
@@ -2223,6 +2364,7 @@ int main(int argc, char ** argv) {
         bool         verbose     = false;
         bool         lut_only    = false;
         bool         lut_bench   = false;
+        bool         opencl_add_only = false;
         const char * vecdot_mode = NULL;
         int64_t      bench_M     = 4096;
         int64_t      bench_N     = 1;
@@ -2241,6 +2383,10 @@ int main(int argc, char ** argv) {
             }
             if (strcmp(argv[i], "--ifairy-lut-only") == 0) {
                 lut_only = true;
+                continue;
+            }
+            if (strcmp(argv[i], "--ifairy-opencl-add-only") == 0) {
+                opencl_add_only = true;
                 continue;
             }
             if (strcmp(argv[i], "--ifairy-lut-backend-bench") == 0) {
@@ -2284,6 +2430,10 @@ int main(int argc, char ** argv) {
 
         if (lut_only) {
             return run_ifairy_lut_only_tests();
+        }
+
+        if (opencl_add_only) {
+            return run_ifairy_opencl_add_tests();
         }
 
         if (lut_bench) {
