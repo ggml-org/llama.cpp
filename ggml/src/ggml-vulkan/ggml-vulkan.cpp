@@ -5396,7 +5396,7 @@ static vk_device ggml_vk_get_device(size_t idx) {
         internally_synchronized_queues_features.pNext = nullptr;
         internally_synchronized_queues_features.internallySynchronizedQueues = VK_FALSE;
 
-        if (internally_sync_support ) {
+        if (internally_sync_support) {
             last_struct->pNext = (VkBaseOutStructure *)&internally_synchronized_queues_features;
             last_struct = (VkBaseOutStructure *)&internally_synchronized_queues_features;
             device_extensions.push_back(VK_KHR_INTERNALLY_SYNCHRONIZED_QUEUES_EXTENSION_NAME);
