@@ -1334,6 +1334,16 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_CTX_CHECKPOINTS").set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
     add_opt(common_arg(
+        {"-spc", "--system-prompt-checkpoint"}, "N",
+        string_format("user defined static checkpoint (default: %d, 0 = disabled)", params.system_prompt_checkpoint),
+        [](common_params & params, int value) {
+            if (value < 0) {
+                throw std::invalid_argument("system-prompt-checkpoint must be non-negative");
+            }
+            params.system_prompt_checkpoint = value;
+        }
+    ).set_env("LLAMA_ARG_SYSTEM_PROMPT_CHECKPOINT").set_examples({LLAMA_EXAMPLE_SERVER}));
+    add_opt(common_arg(
         {"-cms", "--checkpoint-min-step"}, "N",
         string_format("minimum spacing between context checkpoints in tokens (default: %d, 0 = no minimum)", params.checkpoint_min_step),
         [](common_params & params, int value) {

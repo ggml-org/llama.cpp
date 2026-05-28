@@ -1997,12 +1997,22 @@ private:
     void create_checkpoint(server_slot & slot, const int64_t n_tokens_cur, llama_pos pos_min, llama_pos pos_max) {
         while (slot.prompt.checkpoints.size() >= (size_t) params_base.n_ctx_checkpoints) {
             // make room for the new checkpoint, if needed
-            const auto & cur = slot.prompt.checkpoints.front();
+            auto cur = slot.prompt.checkpoints.begin();
+            // don't remove system prompt checkpoint
+            if (params_base.system_prompt_checkpoint > 0) {
+                if (cur->pos_min + 1 == params_base.system_prompt_checkpoint) {
+                    ++cur;
+                    if (cur == slot.prompt.checkpoints.end()) {
+                        SLT_WRN(slot, "cannot create checkpoint at %d: only protected system prompt checkpoint remains\n", pos_min);
+                        return;
+                    }
+                }
+            }
 
             SLT_WRN(slot, "erasing old context checkpoint (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", size = %.3f MiB)\n",
-                    cur.pos_min, cur.pos_max, cur.n_tokens, (float) cur.size() / 1024 / 1024);
+                    cur->pos_min, cur->pos_max, cur->n_tokens, (float) cur->size() / 1024 / 1024);
 
-            slot.prompt.checkpoints.erase(slot.prompt.checkpoints.begin());
+            slot.prompt.checkpoints.erase(cur);
         }
 
         auto & cur = slot.prompt.checkpoints.emplace_back();
@@ -2920,6 +2930,8 @@ private:
                         has_mtmd = true;
                     }
 
+                    const int32_t system_prompt_checkpoint = params_base.system_prompt_checkpoint;
+                    const bool system_prompt_checkpoint_set = system_prompt_checkpoint > 0;
                     const int32_t n_before_user = slot.task->params.n_before_user;
                     const bool n_before_user_known = n_before_user > 0;
 
@@ -2957,6 +2969,12 @@ private:
                             slot.prompt.n_tokens() == n_before_user) {
                             break;
                         }
+                        // stop also on system prompt checkpoint
+                        if (system_prompt_checkpoint_set &&
+                            slot.prompt.n_tokens() == system_prompt_checkpoint) {
+                            break;
+                        }
+
 
                         // process the last few tokens of the prompt separately in order to allow for a checkpoint to be created.
                         // create checkpoints that many tokens before the end of the prompt:
@@ -3012,23 +3030,26 @@ private:
                     // their token position is the batch start rather than the prompt end
                     const int32_t n_tokens_start = slot.prompt.n_tokens() - n_tokens_cur;
 
-                    {
-                        const bool is_on_user =
-                            n_before_user_known &&
-                            n_tokens_start == n_before_user;
+                    const bool is_on_user =
+                        n_before_user_known &&
+                        n_tokens_start == n_before_user;
 
-                        const bool is_after_user =
-                            n_before_user_known &&
-                            n_tokens_start > n_before_user;
+                    const bool is_on_system_prompt =
+                        system_prompt_checkpoint_set &&
+                        n_tokens_start == system_prompt_checkpoint;
 
-                        const bool is_allowed =
-                            !n_before_user_known ||
-                            is_on_user ||
-                            (is_after_user && near_prompt_end);
+                    const bool is_after_user =
+                        n_before_user_known &&
+                        n_tokens_start > n_before_user;
 
-                        if (do_checkpoint && !is_allowed) {
-                            do_checkpoint = false;
-                        }
+                    const bool is_allowed =
+                        !n_before_user_known ||
+                        is_on_system_prompt ||
+                        is_on_user ||
+                        (is_after_user && near_prompt_end);
+
+                    if (do_checkpoint && !is_allowed) {
+                        do_checkpoint = false;
                     }
 
                     // nothing to checkpoint yet
