@@ -12,6 +12,7 @@
 #include "../src/llama-model-saver.h"
 
 #include <cinttypes>
+#include <cstddef>
 #include <cstdio>
 #include <cstring>
 #include <cstdint>
@@ -497,6 +498,7 @@ static int test_backends(const llm_arch target_arch, const size_t seed, const gg
     };
 
     std::vector<device_config> dev_configs;
+    size_t max_device_label_length = 4;
     {
         std::vector<ggml_backend_dev_t> devices_meta;
         {
@@ -504,6 +506,7 @@ static int test_backends(const llm_arch target_arch, const size_t seed, const gg
             for (size_t i = 0; i < device_count; i++) {
                 ggml_backend_dev_t dev = ggml_backend_dev_get(i);
                 dev_configs.emplace_back(std::vector<ggml_backend_dev_t>{dev}, ggml_backend_dev_description(dev), LLAMA_SPLIT_MODE_LAYER);
+                max_device_label_length = std::max(max_device_label_length, dev_configs.back().label.length());
 
                 // cpu-based devices cannot be used in tensor split mode
                 if (ggml_backend_dev_buffer_type(dev) != ggml_backend_cpu_buffer_type()) {
@@ -515,10 +518,26 @@ static int test_backends(const llm_arch target_arch, const size_t seed, const gg
         dev_configs.emplace_back(devices_meta, "Meta", LLAMA_SPLIT_MODE_TENSOR);
     }
 
+    size_t max_arch_name_length = 0;
+    for (const llm_arch & arch : llm_arch_all()) {
+        max_arch_name_length = std::max(max_arch_name_length, strlen(llm_arch_name(arch)));
+    }
+
+    const std::string template_header = std::string("|%" + std::to_string(max_arch_name_length) + "s|%") + std::to_string(max_device_label_length) + "s|%6s|%15s|%9s|\n";
+    const std::string template_row    = std::string("|%" + std::to_string(max_arch_name_length) + "s|%") + std::to_string(max_device_label_length) + "s|%6s|%15s %10s|%20s|\n";
+
     bool all_ok = true;
     common_log_flush(common_log_main());
-    printf("|%16s|%30s|%6s|%15s|%9s|\n", "Model arch.", "Device", "Config", "NMSE vs. CPU", "Roundtrip");
-    printf("|----------------|------------------------------|------|---------------|---------|\n");
+    printf(template_header.c_str(), "Model arch.", "Device", "Config", "NMSE vs. CPU", "Roundtrip");
+    printf("|");
+    for (size_t i = 0; i < max_arch_name_length; i++) {
+        printf("-");
+    }
+    printf("|");
+    for (size_t i = 0; i < max_device_label_length; i++) {
+        printf("-");
+    }
+    printf("|------|---------------|---------|\n");
     for (const llm_arch & arch : llm_arch_all()) {
         if (arch == LLM_ARCH_UNKNOWN) {
             continue;
@@ -595,7 +614,7 @@ static int test_backends(const llm_arch target_arch, const size_t seed, const gg
                     }
                 }
 
-                printf("|%16s|%30s|%6s|%15s %10s|%20s|\n", llm_arch_name(arch), dc.label.c_str(),
+                printf(template_row.c_str(), llm_arch_name(arch), dc.label.c_str(),
                     config_name.c_str(), status_nmse.c_str(), nmse_str, status_roundtrip.c_str());
             }
         }
