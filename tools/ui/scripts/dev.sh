@@ -11,24 +11,28 @@
 
 cd ../../
 
+# Ensure node_modules are installed
+if [ ! -d "tools/ui/node_modules" ]; then
+    echo "📦 Installing npm dependencies..."
+    cd tools/ui && npm install && cd ../../
+fi
+
 # Check and install git hooks if missing
 check_and_install_hooks() {
     local hooks_missing=false
 
     # Check for required hooks
-    if [ ! -f ".git/hooks/pre-commit" ] || [ ! -f ".git/hooks/pre-push" ] || [ ! -f ".git/hooks/post-push" ]; then
+    if [ ! -f ".git/hooks/pre-commit" ] || [ ! -f ".git/hooks/pre-push" ]; then
         hooks_missing=true
     fi
 
     if [ "$hooks_missing" = true ]; then
         echo "🔧 Git hooks missing, installing them..."
-        cd tools/ui
-        if bash scripts/install-git-hooks.sh; then
+        if bash "$(dirname "$0")/git-hooks/install.sh"; then
             echo "✅ Git hooks installed successfully"
         else
             echo "⚠️  Failed to install git hooks, continuing anyway..."
         fi
-        cd ../../
     else
         echo "✅ Git hooks already installed"
     fi

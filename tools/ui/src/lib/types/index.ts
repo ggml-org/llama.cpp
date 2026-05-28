@@ -29,7 +29,8 @@ export type {
 	ApiRouterModelsStatusResponse,
 	ApiRouterModelsListResponse,
 	ApiRouterModelsUnloadRequest,
-	ApiRouterModelsUnloadResponse
+	ApiRouterModelsUnloadResponse,
+	AudioInputFormat
 } from './api';
 
 // Chat types
@@ -55,6 +56,7 @@ export type {
 	McpServerOverride,
 	DatabaseConversation,
 	DatabaseMessageExtraAudioFile,
+	DatabaseMessageExtraVideoFile,
 	DatabaseMessageExtraImageFile,
 	DatabaseMessageExtraLegacyContext,
 	DatabaseMessageExtraMcpPrompt,

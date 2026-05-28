@@ -6,7 +6,7 @@
 	import * as Select from '$lib/components/ui/select';
 	import { Textarea } from '$lib/components/ui/textarea';
 	import { SETTING_CONFIG_INFO, SETTINGS_KEYS } from '$lib/constants';
-	import { SettingsFieldType } from '$lib/enums/settings';
+	import { SettingsFieldType } from '$lib/enums/settings.enums';
 	import { settingsStore } from '$lib/stores/settings.svelte';
 	import { serverStore } from '$lib/stores/server.svelte';
 	import { modelsStore, selectedModelName, propsCacheVersion } from '$lib/stores/models.svelte';
@@ -79,6 +79,8 @@
 			<div class="relative w-full">
 				<Input
 					id={field.key}
+					type={field.isPositiveInteger ? 'number' : 'text'}
+					{...field.isPositiveInteger ? { min: '1', step: '1' } : {}}
 					value={currentValue}
 					oninput={(e) => {
 						// Update local config immediately for real-time badge feedback

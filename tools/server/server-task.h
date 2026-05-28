@@ -61,6 +61,9 @@ struct task_params {
 
     int32_t n_cache_reuse = 0; // min chunk size to attempt reusing from the cache via KV shifting (0 = disabled)
 
+    // number of prompt tokens before the latest user message
+    int32_t n_before_user = -1;
+
     int64_t t_max_prompt_ms  = -1; // TODO: implement
     int64_t t_max_predict_ms = -1; // if positive, limit the generation phase to this time limit
 
@@ -112,11 +115,7 @@ struct task_result_state {
     const std::string oai_resp_message_id;
     std::string oai_resp_fc_id; // function call ID for current args delta
 
-    task_result_state(const common_chat_parser_params & chat_parser_params)
-        : chat_parser_params(chat_parser_params)
-        , oai_resp_id("resp_" + random_string())
-        , oai_resp_reasoning_id("rs_" + random_string())
-        , oai_resp_message_id("msg_" + random_string()) {}
+    task_result_state(const common_chat_parser_params & chat_parser_params);
 
     // parse partial tool calls and update the internal state
     common_chat_msg update_chat_msg(

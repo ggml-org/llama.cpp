@@ -667,3 +667,17 @@ export { default as ChatScreenForm } from './ChatScreen/ChatScreenForm.svelte';
  * Only visible when `isCurrentConversationLoading` is true.
  */
 export { default as ChatScreenProcessingInfo } from './ChatScreen/ChatScreenProcessingInfo.svelte';
+
+/**
+ * Scroll-to-bottom action button. Displays a floating button when the user
+ * has scrolled up more than half a viewport height from the bottom.
+ * Takes the chat container element as a prop to manage scroll state internally.
+ */
+export { default as ChatScreenActionScrollDown } from './ChatScreen/ChatScreenActionScrollDown.svelte';
+
+/**
+ * Server error alert displayed when the server is unreachable.
+ * Shows the error message with a retry button.
+ * Rendered inside ChatScreen when `serverError` store has a value.
+ */
+export { default as ChatScreenServerError } from './ChatScreen/ChatScreenServerError.svelte';

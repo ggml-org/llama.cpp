@@ -99,6 +99,7 @@ bool server_http_context::init(const common_params & params) {
         srv.reset(
             new httplib::SSLServer(params.ssl_file_cert.c_str(), params.ssl_file_key.c_str())
         );
+        is_ssl = true;
     } else {
         SRV_INF("%s", "running without SSL\n");
         srv.reset(new httplib::Server());
@@ -231,17 +232,19 @@ bool server_http_context::init(const common_params & params) {
     };
 
     auto middleware_server_state = [this](const httplib::Request & req, httplib::Response & res) {
-        (void)req; // suppress unused parameter warning when LLAMA_BUILD_UI / LLAMA_BUILD_WEBUI is not defined
         bool ready = is_ready.load();
         if (!ready) {
-// Support both old and new preprocessor defines
-#if defined(LLAMA_BUILD_UI) || defined(LLAMA_BUILD_WEBUI)
+#if defined(LLAMA_UI_HAS_ASSETS)
             auto tmp = string_split<std::string>(req.path, '.');
             if (req.path == "/" || (tmp.size() > 0 && tmp.back() == "html")) {
-                res.status = 503;
-                res.set_content(reinterpret_cast<const char*>(loading_html), loading_html_len, "text/html; charset=utf-8");
-                return false;
+                if (const llama_ui_asset * a = llama_ui_find_asset("loading.html")) {
+                    res.status = 503;
+                    res.set_content(reinterpret_cast<const char*>(a->data), a->size, "text/html; charset=utf-8");
+                    return false;
+                }
             }
+#else
+            (void)req;
 #endif
             // no endpoints are allowed to be accessed when the server is not ready
             // this is to prevent any data races or inconsistent states
@@ -313,24 +316,27 @@ bool server_http_context::init(const common_params & params) {
                 return 1;
             }
         } else {
-// Support both old and new preprocessor defines
-#if defined(LLAMA_BUILD_UI) || defined(LLAMA_BUILD_WEBUI)
-            // using embedded static index.html
-            srv->Get(params.api_prefix + "/", [](const httplib::Request & /*req*/, httplib::Response & res) {
-                // COEP and COOP headers, required by pyodide (python interpreter)
-                res.set_header("Cross-Origin-Embedder-Policy", "require-corp");
-                res.set_header("Cross-Origin-Opener-Policy", "same-origin");
-                res.set_content(reinterpret_cast<const char*>(index_html), index_html_len, "text/html; charset=utf-8");
-                return false;
-            });
-            srv->Get(params.api_prefix + "/bundle.js", [](const httplib::Request & /*req*/, httplib::Response & res) {
-                res.set_content(reinterpret_cast<const char*>(bundle_js), bundle_js_len, "application/javascript; charset=utf-8");
-                return false;
-            });
-            srv->Get(params.api_prefix + "/bundle.css", [](const httplib::Request & /*req*/, httplib::Response & res) {
-                res.set_content(reinterpret_cast<const char*>(bundle_css), bundle_css_len, "text/css; charset=utf-8");
-                return false;
-            });
+#if defined(LLAMA_UI_HAS_ASSETS)
+            auto serve_asset = [](const std::string & name, const char * mime, bool with_isolation_headers) {
+                return [name, mime, with_isolation_headers](const httplib::Request & /*req*/, httplib::Response & res) {
+                    const llama_ui_asset * a = llama_ui_find_asset(name.c_str());
+                    if (!a) {
+                        res.status = 404;
+                        return false;
+                    }
+                    if (with_isolation_headers) {
+                        // COEP and COOP headers, required by pyodide (python interpreter)
+                        res.set_header("Cross-Origin-Embedder-Policy", "require-corp");
+                        res.set_header("Cross-Origin-Opener-Policy", "same-origin");
+                    }
+                    res.set_content(reinterpret_cast<const char*>(a->data), a->size, mime);
+                    return false;
+                };
+            };
+
+            srv->Get(params.api_prefix + "/",           serve_asset("index.html", "text/html; charset=utf-8",              true));
+            srv->Get(params.api_prefix + "/bundle.js",  serve_asset("bundle.js",  "application/javascript; charset=utf-8", false));
+            srv->Get(params.api_prefix + "/bundle.css", serve_asset("bundle.css", "text/css; charset=utf-8",               false));
 #endif
         }
     }
@@ -373,8 +379,8 @@ bool server_http_context::start() {
     thread = std::thread([this]() { pimpl->srv->listen_after_bind(); });
     srv->wait_until_ready();
 
-    listening_address = is_sock ? string_format("unix://%s",    hostname.c_str())
-                                : string_format("http://%s:%d", hostname.c_str(), port);
+    listening_address = is_sock ? string_format("unix://%s", hostname.c_str())
+                                : string_format("%s://%s:%d", is_ssl ? "https" : "http", hostname.c_str(), port);
     return true;
 }
 

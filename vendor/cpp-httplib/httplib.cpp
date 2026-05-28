@@ -1567,7 +1567,7 @@ void mmap::close() {
 #endif
   size_ = 0;
 }
-int close_socket(socket_t sock) {
+int close_socket(socket_t sock) noexcept {
 #ifdef _WIN32
   return closesocket(sock);
 #else
@@ -1794,7 +1794,7 @@ bool process_client_socket(
   return callback(strm);
 }
 
-int shutdown_socket(socket_t sock) {
+int shutdown_socket(socket_t sock) noexcept {
 #ifdef _WIN32
   return shutdown(sock, SD_BOTH);
 #else
@@ -4723,17 +4723,24 @@ write_multipart_ranges_data(Stream &strm, const Request &req, Response &res,
       });
 }
 
+bool has_framed_body(const Request &req) {
+  return is_chunked_transfer_encoding(req.headers) ||
+         req.get_header_value_u64("Content-Length") > 0;
+}
+
+bool is_connection_persistent(const Request &req) {
+  auto conn = req.get_header_value("Connection");
+  if (conn == "close") { return false; }
+  if (req.version == "HTTP/1.0" && conn != "Keep-Alive") { return false; }
+  return true;
+}
+
 bool expect_content(const Request &req) {
   if (req.method == "POST" || req.method == "PUT" || req.method == "PATCH" ||
       req.method == "DELETE") {
     return true;
   }
-  if (req.has_header("Content-Length") &&
-      req.get_header_value_u64("Content-Length") > 0) {
-    return true;
-  }
-  if (is_chunked_transfer_encoding(req.headers)) { return true; }
-  return false;
+  return has_framed_body(req);
 }
 
 #ifdef _WIN32
@@ -6643,6 +6650,176 @@ make_host_and_port_string_always_port(const std::string &host, int port) {
   return prepare_host_string(host) + ":" + std::to_string(port);
 }
 
+bool parse_no_proxy_entry(const std::string &token, NoProxyEntry &out);
+NormalizedTarget normalize_target(const std::string &host);
+bool ip_in_cidr(const IPBytes &ip, const IPBytes &net, int prefix_bits);
+bool host_matches_no_proxy(const NormalizedTarget &target,
+                           const std::vector<NoProxyEntry> &entries);
+
+bool ip_in_cidr(const IPBytes &ip, const IPBytes &net, int prefix_bits) {
+  if (prefix_bits < 0 || prefix_bits > 128) { return false; }
+  if (prefix_bits == 0) { return true; }
+  int full_bytes = prefix_bits / 8;
+  int rem_bits = prefix_bits % 8;
+  if (full_bytes > 0 && std::memcmp(ip.data(), net.data(),
+                                    static_cast<size_t>(full_bytes)) != 0) {
+    return false;
+  }
+  if (rem_bits == 0) { return true; }
+  auto i = static_cast<size_t>(full_bytes);
+  auto mask = static_cast<uint8_t>(0xFFu << (8 - rem_bits));
+  return (ip[i] & mask) == (net[i] & mask);
+}
+
+bool parse_no_proxy_entry(const std::string &token, NoProxyEntry &out) {
+  if (token.empty()) { return false; }
+
+  if (token == "*") {
+    out.kind = NoProxyKind::Wildcard;
+    return true;
+  }
+
+  auto slash = token.find('/');
+  std::string addr_part =
+      (slash == std::string::npos) ? token : token.substr(0, slash);
+  std::string prefix_part =
+      (slash == std::string::npos) ? std::string() : token.substr(slash + 1);
+
+  // A bare slash or trailing-slash CIDR like "10.0.0.0/" is malformed;
+  // don't silently treat it as a /32 (or /128).
+  if (slash != std::string::npos && prefix_part.empty()) { return false; }
+
+  // Accept the bracketed IPv6 form ("[::1]", "[fe80::]/10") as well as the
+  // bare form. Brackets have no meaning for IPv4, so skip the IPv4 attempt
+  // when brackets are present.
+  bool bracketed = addr_part.size() >= 2 && addr_part.front() == '[' &&
+                   addr_part.back() == ']';
+  if (bracketed) { addr_part = addr_part.substr(1, addr_part.size() - 2); }
+
+  if (!bracketed) {
+    struct in_addr v4;
+    if (inet_pton(AF_INET, addr_part.c_str(), &v4) == 1) {
+      int prefix = 32;
+      if (!prefix_part.empty()) {
+        auto r = from_chars(prefix_part.data(),
+                            prefix_part.data() + prefix_part.size(), prefix);
+        if (r.ec != std::errc{} ||
+            r.ptr != prefix_part.data() + prefix_part.size()) {
+          return false;
+        }
+        if (prefix < 0 || prefix > 32) { return false; }
+      }
+      out.kind = NoProxyKind::IPv4Cidr;
+      std::memcpy(out.net.data(), &v4, sizeof(v4));
+      out.prefix_bits = prefix;
+      return true;
+    }
+  }
+
+  struct in6_addr v6;
+  if (inet_pton(AF_INET6, addr_part.c_str(), &v6) == 1) {
+    int prefix = 128;
+    if (!prefix_part.empty()) {
+      auto r = from_chars(prefix_part.data(),
+                          prefix_part.data() + prefix_part.size(), prefix);
+      if (r.ec != std::errc{} ||
+          r.ptr != prefix_part.data() + prefix_part.size()) {
+        return false;
+      }
+      if (prefix < 0 || prefix > 128) { return false; }
+    }
+    out.kind = NoProxyKind::IPv6Cidr;
+    std::memcpy(out.net.data(), &v6, sizeof(v6));
+    out.prefix_bits = prefix;
+    return true;
+  }
+
+  // Bracketed entries can only be IPv6. If the IPv6 parse above failed,
+  // the entry is malformed — don't fall through to the hostname branch.
+  if (bracketed) { return false; }
+
+  // A '/' on a non-IP token means a CIDR prefix without an address. Reject.
+  if (slash != std::string::npos) { return false; }
+  // Port-specific entries (host:port) are not supported.
+  if (token.find(':') != std::string::npos) { return false; }
+
+  std::string hostname = case_ignore::to_lower(token);
+  while (!hostname.empty() && hostname.front() == '.') {
+    hostname.erase(hostname.begin());
+  }
+  while (!hostname.empty() && hostname.back() == '.') {
+    hostname.pop_back();
+  }
+  if (hostname.empty()) { return false; }
+
+  out.kind = NoProxyKind::HostnameSuffix;
+  out.hostname_pattern = std::move(hostname);
+  return true;
+}
+
+NormalizedTarget normalize_target(const std::string &host) {
+  NormalizedTarget t;
+  std::string h = host;
+
+  if (h.size() >= 2 && h.front() == '[' && h.back() == ']') {
+    h = h.substr(1, h.size() - 2);
+  }
+
+  // Strip a single trailing dot so "example.com." canonicalizes to
+  // "example.com".
+  if (!h.empty() && h.back() == '.') { h.pop_back(); }
+
+  t.hostname = case_ignore::to_lower(h);
+
+  if (!t.hostname.empty()) {
+    struct in_addr v4;
+    struct in6_addr v6;
+    if (inet_pton(AF_INET, t.hostname.c_str(), &v4) == 1) {
+      t.is_ipv4 = true;
+      std::memcpy(t.ip.data(), &v4, sizeof(v4));
+    } else if (inet_pton(AF_INET6, t.hostname.c_str(), &v6) == 1) {
+      t.is_ipv6 = true;
+      std::memcpy(t.ip.data(), &v6, sizeof(v6));
+    }
+  }
+  return t;
+}
+
+bool host_matches_no_proxy(const NormalizedTarget &target,
+                                  const std::vector<NoProxyEntry> &entries) {
+  if (target.hostname.empty()) { return false; }
+  for (const auto &e : entries) {
+    switch (e.kind) {
+    case NoProxyKind::Wildcard: return true;
+    case NoProxyKind::IPv4Cidr:
+      if (target.is_ipv4 && ip_in_cidr(target.ip, e.net, e.prefix_bits)) {
+        return true;
+      }
+      break;
+    case NoProxyKind::IPv6Cidr:
+      if (target.is_ipv6 && ip_in_cidr(target.ip, e.net, e.prefix_bits)) {
+        return true;
+      }
+      break;
+    case NoProxyKind::HostnameSuffix:
+      if (target.is_ipv4 || target.is_ipv6) { break; }
+      if (target.hostname == e.hostname_pattern) { return true; }
+      // Dot-boundary suffix match: prevents "evilexample.com" from matching
+      // an entry of "example.com".
+      if (target.hostname.size() > e.hostname_pattern.size() + 1) {
+        auto offset = target.hostname.size() - e.hostname_pattern.size();
+        if (target.hostname[offset - 1] == '.' &&
+            target.hostname.compare(offset, e.hostname_pattern.size(),
+                                    e.hostname_pattern) == 0) {
+          return true;
+        }
+      }
+      break;
+    }
+  }
+  return false;
+}
+
 template <typename T>
 bool check_and_write_headers(Stream &strm, Headers &headers,
                                     T header_writer, Error &error) {
@@ -7142,7 +7319,7 @@ void Server::wait_until_ready() const {
   }
 }
 
-void Server::stop() {
+void Server::stop() noexcept {
   if (is_running_) {
     assert(svr_sock_ != INVALID_SOCKET);
     std::atomic<socket_t> sock(svr_sock_.exchange(INVALID_SOCKET));
@@ -7449,29 +7626,18 @@ bool Server::read_content_core(
                      size_t /*len*/) { return receiver(buf, n); };
   }
 
-  // RFC 7230 Section 3.3.3: If this is a request message and none of the above
-  // are true (no Transfer-Encoding and no Content-Length), then the message
-  // body length is zero (no message body is present).
-  //
-  // For non-SSL builds, detect clients that send a body without a
-  // Content-Length header (raw HTTP over TCP). Check both the stream's
-  // internal read buffer (data already read from the socket during header
-  // parsing) and the socket itself for pending data. If data is found and
-  // exceeds the configured payload limit, reject with 413.
-  // For SSL builds we cannot reliably peek the decrypted application bytes,
-  // so keep the original behaviour.
+  // RFC 9112 §6: no Transfer-Encoding and no Content-Length means no body.
+  // For non-SSL builds we still scan non-persistent connections for stray
+  // body bytes so the payload limit is enforced (413). On keep-alive,
+  // pending bytes may be the next request (issue #2450), so skip.
 #if !defined(CPPHTTPLIB_SSL_ENABLED)
   if (!req.has_header("Content-Length") &&
       !detail::is_chunked_transfer_encoding(req.headers)) {
-    // Only check if payload_max_length is set to a finite value
-    if (payload_max_length_ > 0 &&
+    if (!detail::is_connection_persistent(req) && payload_max_length_ > 0 &&
         payload_max_length_ < (std::numeric_limits<size_t>::max)()) {
-      // Check if there is data already buffered in the stream (read during
-      // header parsing) or pending on the socket. Use a non-blocking socket
-      // check to avoid deadlock when the client sends no body.
-      bool has_data = strm.is_readable();
+      auto has_data = strm.is_readable();
       if (!has_data) {
-        socket_t s = strm.socket();
+        auto s = strm.socket();
         if (s != INVALID_SOCKET) {
           has_data = detail::select_read(s, 0, 0) > 0;
         }
@@ -8033,6 +8199,11 @@ get_client_ip(const std::string &x_forwarded_for,
                   ip_list.emplace_back(std::string(b + r.first, b + r.second));
                 });
 
+  // A malformed X-Forwarded-For (empty, comma-only, whitespace-only) yields
+  // no segments. Signal "no client IP derived" with an empty string so the
+  // caller can fall back to the connection-level remote address.
+  if (ip_list.empty()) { return std::string(); }
+
   for (size_t i = 0; i < ip_list.size(); ++i) {
     auto ip = ip_list[i];
 
@@ -8123,7 +8294,8 @@ Server::process_request(Stream &strm, const std::string &remote_addr,
 
   if (!trusted_proxies_.empty() && req.has_header("X-Forwarded-For")) {
     auto x_forwarded_for = req.get_header_value("X-Forwarded-For");
-    req.remote_addr = get_client_ip(x_forwarded_for, trusted_proxies_);
+    auto derived = get_client_ip(x_forwarded_for, trusted_proxies_);
+    req.remote_addr = derived.empty() ? remote_addr : derived;
   } else {
     req.remote_addr = remote_addr;
   }
@@ -8325,15 +8497,14 @@ Server::process_request(Stream &strm, const std::string &remote_addr,
     ret = write_response(strm, close_connection, req, res);
   }
 
-  // Drain any unconsumed request body to prevent request smuggling on
-  // keep-alive connections.
-  if (!req.body_consumed_ && detail::expect_content(req)) {
-    int drain_status = 200; // required by read_content signature
+  // Drain any unconsumed framed body to prevent request smuggling on
+  // keep-alive. Without framing there is no body to drain — reading would
+  // consume the next request (issue #2450).
+  if (!req.body_consumed_ && detail::has_framed_body(req)) {
+    int dummy_status;
     if (!detail::read_content(
-            strm, req, payload_max_length_, drain_status, nullptr,
+            strm, req, payload_max_length_, dummy_status, nullptr,
             [](const char *, size_t, size_t, size_t) { return true; }, false)) {
-      // Body exceeds payload limit or read error — close the connection
-      // to prevent leftover bytes from being misinterpreted.
       connection_closed = true;
     }
   }
@@ -8454,6 +8625,7 @@ void ClientImpl::copy_settings(const ClientImpl &rhs) {
   proxy_basic_auth_username_ = rhs.proxy_basic_auth_username_;
   proxy_basic_auth_password_ = rhs.proxy_basic_auth_password_;
   proxy_bearer_token_auth_token_ = rhs.proxy_bearer_token_auth_token_;
+  no_proxy_entries_ = rhs.no_proxy_entries_;
   logger_ = rhs.logger_;
   error_logger_ = rhs.error_logger_;
 
@@ -8469,8 +8641,25 @@ void ClientImpl::copy_settings(const ClientImpl &rhs) {
 #endif
 }
 
+bool
+ClientImpl::is_proxy_enabled_for_host(const std::string &host) const {
+  if (proxy_host_.empty() || proxy_port_ == -1) { return false; }
+  if (no_proxy_entries_.empty()) { return true; }
+  // host_ is const so its normalized form is invariant; cache it. The
+  // cross-host path (setup_redirect_client passing next_host) re-normalizes.
+  if (host == host_) {
+    if (!host_normalized_valid_) {
+      host_normalized_ = detail::normalize_target(host_);
+      host_normalized_valid_ = true;
+    }
+    return !detail::host_matches_no_proxy(host_normalized_, no_proxy_entries_);
+  }
+  auto target = detail::normalize_target(host);
+  return !detail::host_matches_no_proxy(target, no_proxy_entries_);
+}
+
 socket_t ClientImpl::create_client_socket(Error &error) const {
-  if (!proxy_host_.empty() && proxy_port_ != -1) {
+  if (is_proxy_enabled_for_host(host_)) {
     return detail::create_client_socket(
         proxy_host_, std::string(), proxy_port_, address_family_, tcp_nodelay_,
         ipv6_v6only_, socket_options_, connection_timeout_sec_,
@@ -8540,6 +8729,12 @@ void ClientImpl::close_socket(Socket &socket) {
   if (socket.sock == INVALID_SOCKET) { return; }
   detail::close_socket(socket.sock);
   socket.sock = INVALID_SOCKET;
+}
+
+void ClientImpl::disconnect(bool gracefully) {
+  shutdown_ssl(socket_, gracefully);
+  shutdown_socket(socket_);
+  close_socket(socket_);
 }
 
 bool ClientImpl::read_response_line(Stream &strm, const Request &req,
@@ -8613,14 +8808,8 @@ bool ClientImpl::send_(Request &req, Response &res, Error &error) {
 #endif
 
       if (!is_alive) {
-        // Attempt to avoid sigpipe by shutting down non-gracefully if it
-        // seems like the other side has already closed the connection Also,
-        // there cannot be any requests in flight from other threads since we
-        // locked request_mutex_, so safe to close everything immediately
-        const bool shutdown_gracefully = false;
-        shutdown_ssl(socket_, shutdown_gracefully);
-        shutdown_socket(socket_);
-        close_socket(socket_);
+        // Peer seems gone — non-graceful shutdown to avoid SIGPIPE.
+        disconnect(/*gracefully=*/false);
       }
     }
 
@@ -8670,9 +8859,7 @@ bool ClientImpl::send_(Request &req, Response &res, Error &error) {
 
     if (socket_should_be_closed_when_request_is_done_ || close_connection ||
         !ret) {
-      shutdown_ssl(socket_, true);
-      shutdown_socket(socket_);
-      close_socket(socket_);
+      disconnect(/*gracefully=*/true);
     }
   });
 
@@ -8785,11 +8972,7 @@ ClientImpl::open_stream(const std::string &method, const std::string &path,
         }
       }
 #endif
-      if (!is_alive) {
-        shutdown_ssl(socket_, false);
-        shutdown_socket(socket_);
-        close_socket(socket_);
-      }
+      if (!is_alive) { disconnect(/*gracefully=*/false); }
     }
 
     if (!is_alive) {
@@ -9081,7 +9264,7 @@ bool ClientImpl::handle_request(Stream &strm, Request &req,
 
   bool ret;
 
-  if (!is_ssl() && !proxy_host_.empty() && proxy_port_ != -1) {
+  if (!is_ssl() && is_proxy_enabled_for_host(host_)) {
     auto req2 = req;
     req2.path = "http://" +
                 detail::make_host_and_port_string(host_, port_, false) +
@@ -9105,9 +9288,7 @@ bool ClientImpl::handle_request(Stream &strm, Request &req,
     // to call it from a different thread since it's a thread-safety issue
     // to do these things to the socket if another thread is using the socket.
     std::lock_guard<std::mutex> guard(socket_mutex_);
-    shutdown_ssl(socket_, true);
-    shutdown_socket(socket_);
-    close_socket(socket_);
+    disconnect(/*gracefully=*/true);
   }
 
   if (300 < res.status && res.status < 400 && follow_location_) {
@@ -9120,6 +9301,14 @@ bool ClientImpl::handle_request(Stream &strm, Request &req,
        res.status == StatusCode::ProxyAuthenticationRequired_407) &&
       req.authorization_count_ < 5) {
     auto is_proxy = res.status == StatusCode::ProxyAuthenticationRequired_407;
+
+    // Only retry when the 407 actually came from a proxy hop: plain HTTP
+    // through an enabled proxy. HTTPS via CONNECT tunnels the 407 from the
+    // origin (#2457); direct/bypassed origins have no proxy hop at all.
+    if (is_proxy && !(!is_ssl() && is_proxy_enabled_for_host(host_))) {
+      return ret;
+    }
+
     const auto &username =
         is_proxy ? proxy_digest_auth_username_ : digest_auth_username_;
     const auto &password =
@@ -9287,13 +9476,13 @@ void ClientImpl::setup_redirect_client(ClientType &client) {
   // host. This function is only called for cross-host redirects; same-host
   // redirects are handled directly in ClientImpl::redirect().
 
-  // Setup proxy configuration (CRITICAL ORDER - proxy must be set
-  // before proxy auth)
+  // Copy the proxy configuration unconditionally; the per-target bypass is
+  // re-evaluated at send time, so a later hop to a non-bypassed host can
+  // still use the proxy.
+  client.no_proxy_entries_ = no_proxy_entries_;
   if (!proxy_host_.empty() && proxy_port_ != -1) {
-    // First set proxy host and port
     client.set_proxy(proxy_host_, proxy_port_);
 
-    // Then set proxy authentication (order matters!)
     if (!proxy_basic_auth_username_.empty()) {
       client.set_proxy_basic_auth(proxy_basic_auth_username_,
                                   proxy_basic_auth_password_);
@@ -9384,14 +9573,6 @@ bool ClientImpl::write_request(Stream &strm, Request &req,
     }
   }
 
-  if (!proxy_basic_auth_username_.empty() &&
-      !proxy_basic_auth_password_.empty()) {
-    if (!req.has_header("Proxy-Authorization")) {
-      req.headers.insert(make_basic_authentication_header(
-          proxy_basic_auth_username_, proxy_basic_auth_password_, true));
-    }
-  }
-
   if (!bearer_token_auth_token_.empty()) {
     if (!req.has_header("Authorization")) {
       req.headers.insert(make_bearer_token_authentication_header(
@@ -9399,8 +9580,18 @@ bool ClientImpl::write_request(Stream &strm, Request &req,
     }
   }
 
-  if (!proxy_bearer_token_auth_token_.empty()) {
-    if (!req.has_header("Proxy-Authorization")) {
+  // Proxy-Authorization is only sent when the proxy is actually used for
+  // this target — otherwise NO_PROXY-matched requests would leak proxy
+  // credentials directly to the destination server.
+  if (is_proxy_enabled_for_host(host_)) {
+    if (!proxy_basic_auth_username_.empty() &&
+        !proxy_basic_auth_password_.empty() &&
+        !req.has_header("Proxy-Authorization")) {
+      req.headers.insert(make_basic_authentication_header(
+          proxy_basic_auth_username_, proxy_basic_auth_password_, true));
+    }
+    if (!proxy_bearer_token_auth_token_.empty() &&
+        !req.has_header("Proxy-Authorization")) {
       req.headers.insert(make_bearer_token_authentication_header(
           proxy_bearer_token_auth_token_, true));
     }
@@ -9710,7 +9901,7 @@ bool ClientImpl::process_request(Stream &strm, Request &req,
 
 #ifdef CPPHTTPLIB_SSL_ENABLED
   if (is_ssl() && !expect_100_continue) {
-    auto is_proxy_enabled = !proxy_host_.empty() && proxy_port_ != -1;
+    auto is_proxy_enabled = is_proxy_enabled_for_host(host_);
     if (!is_proxy_enabled) {
       if (tls::is_peer_closed(socket_.ssl, socket_.sock)) {
         error = Error::SSLPeerCouldBeClosed_;
@@ -10717,10 +10908,7 @@ void ClientImpl::stop() {
     return;
   }
 
-  // Otherwise, still holding the mutex, we can shut everything down ourselves
-  shutdown_ssl(socket_, true);
-  shutdown_socket(socket_);
-  close_socket(socket_);
+  disconnect(/*gracefully=*/true);
 }
 
 std::string ClientImpl::host() const { return host_; }
@@ -10811,6 +10999,8 @@ void ClientImpl::set_interface(const std::string &intf) {
 void ClientImpl::set_proxy(const std::string &host, int port) {
   proxy_host_ = host;
   proxy_port_ = port;
+  std::lock_guard<std::mutex> guard(socket_mutex_);
+  disconnect(/*gracefully=*/true);
 }
 
 void ClientImpl::set_proxy_basic_auth(const std::string &username,
@@ -10821,6 +11011,22 @@ void ClientImpl::set_proxy_basic_auth(const std::string &username,
 
 void ClientImpl::set_proxy_bearer_token_auth(const std::string &token) {
   proxy_bearer_token_auth_token_ = token;
+}
+
+void ClientImpl::set_no_proxy(const std::vector<std::string> &patterns) {
+  std::vector<detail::NoProxyEntry> parsed;
+  parsed.reserve(patterns.size());
+  for (const auto &p : patterns) {
+    auto trimmed = detail::trim_copy(p);
+    if (trimmed.empty()) { continue; }
+    detail::NoProxyEntry entry;
+    if (detail::parse_no_proxy_entry(trimmed, entry)) {
+      parsed.push_back(std::move(entry));
+    }
+  }
+  no_proxy_entries_ = std::move(parsed);
+  std::lock_guard<std::mutex> guard(socket_mutex_);
+  disconnect(/*gracefully=*/true);
 }
 
 #ifdef CPPHTTPLIB_SSL_ENABLED
@@ -11524,6 +11730,9 @@ void Client::set_proxy_basic_auth(const std::string &username,
 void Client::set_proxy_bearer_token_auth(const std::string &token) {
   cli_->set_proxy_bearer_token_auth(token);
 }
+void Client::set_no_proxy(const std::vector<std::string> &patterns) {
+  cli_->set_no_proxy(patterns);
+}
 
 void Client::set_logger(Logger logger) {
   cli_->set_logger(std::move(logger));
@@ -11753,7 +11962,7 @@ bool SSLClient::setup_proxy_connection(
     Socket &socket,
     std::chrono::time_point<std::chrono::steady_clock> start_time,
     Response &res, bool &success, Error &error) {
-  if (proxy_host_.empty() || proxy_port_ == -1) { return true; }
+  if (!is_proxy_enabled_for_host(host_)) { return true; }
 
   if (!connect_with_proxy(socket, start_time, res, success, error)) {
     return false;
@@ -11866,7 +12075,7 @@ bool SSLClient::connect_with_proxy(
 bool SSLClient::ensure_socket_connection(Socket &socket, Error &error) {
   if (!ClientImpl::ensure_socket_connection(socket, error)) { return false; }
 
-  if (!proxy_host_.empty() && proxy_port_ != -1) { return true; }
+  if (is_proxy_enabled_for_host(host_)) { return true; }
 
   if (!initialize_ssl(socket, error)) {
     shutdown_socket(socket);
@@ -12289,9 +12498,18 @@ bool enumerate_windows_system_certs(Callback cb) {
 template <typename Callback>
 bool enumerate_macos_keychain_certs(Callback cb) {
   bool loaded = false;
-  CFArrayRef certs = nullptr;
-  OSStatus status = SecTrustCopyAnchorCertificates(&certs);
-  if (status == errSecSuccess && certs) {
+  const SecTrustSettingsDomain domains[] = {
+      kSecTrustSettingsDomainSystem,
+      kSecTrustSettingsDomainAdmin,
+      kSecTrustSettingsDomainUser,
+  };
+  for (auto domain : domains) {
+    CFArrayRef certs = nullptr;
+    OSStatus status = SecTrustSettingsCopyCertificates(domain, &certs);
+    if (status != errSecSuccess || !certs) {
+      if (certs) CFRelease(certs);
+      continue;
+    }
     CFIndex count = CFArrayGetCount(certs);
     for (CFIndex i = 0; i < count; i++) {
       SecCertificateRef cert =
@@ -12654,28 +12872,36 @@ bool load_system_certs(ctx_t ctx) {
   auto store = SSL_CTX_get_cert_store(ssl_ctx);
   if (!store) return false;
 
-  CFArrayRef certs = nullptr;
-  if (SecTrustCopyAnchorCertificates(&certs) != errSecSuccess || !certs) {
-    return SSL_CTX_set_default_verify_paths(ssl_ctx) == 1;
-  }
-
   bool loaded_any = false;
-  auto count = CFArrayGetCount(certs);
-  for (CFIndex i = 0; i < count; i++) {
-    auto cert = reinterpret_cast<SecCertificateRef>(
-        const_cast<void *>(CFArrayGetValueAtIndex(certs, i)));
-    CFDataRef der = SecCertificateCopyData(cert);
-    if (der) {
-      const unsigned char *data = CFDataGetBytePtr(der);
-      auto x509 = d2i_X509(nullptr, &data, CFDataGetLength(der));
-      if (x509) {
-        if (X509_STORE_add_cert(store, x509) == 1) { loaded_any = true; }
-        X509_free(x509);
-      }
-      CFRelease(der);
+  const SecTrustSettingsDomain domains[] = {
+      kSecTrustSettingsDomainSystem,
+      kSecTrustSettingsDomainAdmin,
+      kSecTrustSettingsDomainUser,
+  };
+  for (auto domain : domains) {
+    CFArrayRef certs = nullptr;
+    if (SecTrustSettingsCopyCertificates(domain, &certs) != errSecSuccess ||
+        !certs) {
+      if (certs) CFRelease(certs);
+      continue;
     }
+    auto count = CFArrayGetCount(certs);
+    for (CFIndex i = 0; i < count; i++) {
+      auto cert = reinterpret_cast<SecCertificateRef>(
+          const_cast<void *>(CFArrayGetValueAtIndex(certs, i)));
+      CFDataRef der = SecCertificateCopyData(cert);
+      if (der) {
+        const unsigned char *data = CFDataGetBytePtr(der);
+        auto x509 = d2i_X509(nullptr, &data, CFDataGetLength(der));
+        if (x509) {
+          if (X509_STORE_add_cert(store, x509) == 1) { loaded_any = true; }
+          X509_free(x509);
+        }
+        CFRelease(der);
+      }
+    }
+    CFRelease(certs);
   }
-  CFRelease(certs);
   return loaded_any || SSL_CTX_set_default_verify_paths(ssl_ctx) == 1;
 #else
   return SSL_CTX_set_default_verify_paths(ssl_ctx) == 1;
