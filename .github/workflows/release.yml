@@ -38,7 +38,7 @@ concurrency:
 
 jobs:
   check_release:
-    runs-on: [self-hosted, fast]
+    runs-on: ubuntu-slim
 
     outputs:
       should_release: ${{ steps.check.outputs.should_release }}
