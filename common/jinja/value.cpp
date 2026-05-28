@@ -1111,8 +1111,8 @@ const func_builtins & value_array_t::get_builtins() const {
         {"min", [](const func_args & args) -> value {
             args.ensure_count(1, 4);
             args.ensure_vals<value_array>();
-            value attribute   = args.get_kwarg_or_pos("attribute",      1);
-            value val_case    = args.get_kwarg_or_pos("case_sensitive", 2);
+            value val_case    = args.get_kwarg_or_pos("case_sensitive", 1);
+            value attribute   = args.get_kwarg_or_pos("attribute",      2);
             if (!attribute->is_undefined()) {
                 throw not_implemented_exception("min: attribute not implemented");
             }
@@ -1120,7 +1120,7 @@ const func_builtins & value_array_t::get_builtins() const {
             (void) val_case;
             const auto & arr = args.get_pos(0)->as_array();
             if (arr.empty()) {
-                throw raised_exception("min() arg is an empty sequence");
+                return mk_val<value_undefined>();
             }
             value result = arr[0];
             for (size_t i = 1; i < arr.size(); ++i) {
@@ -1133,8 +1133,8 @@ const func_builtins & value_array_t::get_builtins() const {
         {"max", [](const func_args & args) -> value {
             args.ensure_count(1, 4);
             args.ensure_vals<value_array>();
-            value attribute   = args.get_kwarg_or_pos("attribute",      1);
-            value val_case    = args.get_kwarg_or_pos("case_sensitive", 2);
+            value val_case    = args.get_kwarg_or_pos("case_sensitive", 1);
+            value attribute   = args.get_kwarg_or_pos("attribute",      2);
             if (!attribute->is_undefined()) {
                 throw not_implemented_exception("max: attribute not implemented");
             }
@@ -1142,7 +1142,7 @@ const func_builtins & value_array_t::get_builtins() const {
             (void) val_case;
             const auto & arr = args.get_pos(0)->as_array();
             if (arr.empty()) {
-                throw raised_exception("max() arg is an empty sequence");
+                return mk_val<value_undefined>();
             }
             value result = arr[0];
             for (size_t i = 1; i < arr.size(); ++i) {
