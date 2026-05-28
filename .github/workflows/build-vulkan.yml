@@ -73,7 +73,7 @@ jobs:
         run: |
           cmake -B build \
             -G "Ninja" \
-            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DCMAKE_BUILD_TYPE=Release \
             -DGGML_VULKAN=ON
 
       - name: Build
