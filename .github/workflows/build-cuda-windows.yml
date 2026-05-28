@@ -3,7 +3,7 @@ name: CI (CUDA, windows)
 # TODO: this workflow is only triggered manually because it is very heavy on the CI
 #       when we provision dedicated windows runners, we can enable it for pushes too
 # note: running this workflow manually will populate the ccache for the release builds
-#       this can be used to speed up the release builds
+#       this can be used before merging a PR to speed up the release workflow
 on:
   workflow_dispatch: # allows manual triggering
 
@@ -120,7 +120,7 @@ jobs:
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.21
         with:
-          # TODO: this build does not match the build in release.yml, so we use a different key
+          # TODO: this build does not match the build in release.yml, so we use a different cache key
           #       ideally, the builds should match, similar to the CUDA build above so that we would be able
           #       to populate the ccache for the release with manual runs of this workflow
           #key: release-windows-2022-x64-hip-${{ env.HIPSDK_INSTALLER_VERSION }}-${{ matrix.name }}
