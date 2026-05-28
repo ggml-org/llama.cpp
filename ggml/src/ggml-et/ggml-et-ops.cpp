@@ -732,6 +732,21 @@ bool ggml_et_op_mul_mat(ggml_backend_et_device_context* dev_ctx, const ggml_tens
 
     if (node->type == GGML_TYPE_F32 &&
         node->src[0]->type == GGML_TYPE_Q4_0 &&
+        node->src[1]->type == GGML_TYPE_F32 &&
+        node->src[0]->ne[1] % 16 == 0 &&   // M % TILE_M
+        node->src[0]->ne[0] % 32 == 0 &&   // K % BLOCK_K (Q4_0 block)
+        node->src[1]->ne[1] % 16 == 0) {   // N % TILE_N (full tiles only)
+
+        // Tensor (matrix) engine: dequantize Q4_0 weights to FP32 and run
+        // TensorFMA32. Used for the large-N (prefill) regime with full N tiles.
+        // Partial-N tiles (n_cur < 16, i.e. decode/GEMV) have a known bug and
+        // are routed to the faster, correct vector kernel below; that bug is
+        // fixed in a later step alongside the K-split path.
+        kernel_name = "mul_mat_Q4_0_matrix_engine";
+        src0_type_name = "Q4_0";
+
+    } else if (node->type == GGML_TYPE_F32 &&
+        node->src[0]->type == GGML_TYPE_Q4_0 &&
         node->src[1]->type == GGML_TYPE_F32) {
 
         kernel_name = "mul_mat_Q4_0";
