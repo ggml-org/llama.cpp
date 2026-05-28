@@ -92,7 +92,6 @@ static std::pair<httplib::Client, common_http_url> common_http_client(const std:
     cli.set_follow_location(true);
 
     // Honor HTTP_PROXY / HTTPS_PROXY environment variables (both lower- and upper-case).
-    // Convention: check the scheme-specific var first, fall back to the generic one.
     auto getenv_s = [](const char * upper, const char * lower) -> std::string {
         const char * val = std::getenv(upper);
         if (!val) {
