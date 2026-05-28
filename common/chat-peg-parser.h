@@ -22,13 +22,14 @@ class common_chat_peg_mapper {
   private:
       // Tool call handling state
       std::optional<common_chat_tool_call> pending_tool_call;  // Tool call waiting for name
-      common_chat_tool_call *              current_tool          = nullptr;
+      std::optional<size_t>              committed_tool_idx;   // index in result.tool_calls after streaming push
       int                                  arg_count             = 0;
       bool                                 closing_quote_pending = false;
       std::string                          args_buffer;  // Buffer to delay arguments until tool name is known
 
+      common_chat_tool_call * active_tool();
       // Returns a reference to the active argument destination string.
-      // Before tool_name is known, writes go to args_buffer; after, to current_tool->arguments.
+      // Before tool_name is known, writes go to args_buffer; after, to active_tool()->arguments.
       std::string & args_target();
 };
 
@@ -135,6 +136,11 @@ class common_chat_peg_builder : public common_peg_parser_builder {
     common_peg_parser python_style_tool_calls(const nlohmann::ordered_json & tools,
                                               bool                           parallel_tool_calls,
                                               bool                           allow_json_literals);
+
+    // MiniCPM5 XML tool calls:
+    // <function name="foo"><param name="bar">baz</param></function>
+    common_peg_parser minicpm5_xml_tool_calls(const nlohmann::ordered_json & tools,
+                                              bool                           parallel_tool_calls);
 
   private:
     // Python values plus JSON true/false/null.

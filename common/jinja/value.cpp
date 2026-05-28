@@ -1108,6 +1108,34 @@ const func_builtins & value_array_t::get_builtins() const {
             std::reverse(arr.begin(), arr.end());
             return is_val<value_tuple>(val) ? mk_val<value_tuple>(std::move(arr)) : mk_val<value_array>(std::move(arr));
         }},
+        {"min", [](const func_args & args) -> value {
+            args.ensure_vals<value_array>();
+            const auto & arr = args.get_pos(0)->as_array();
+            if (arr.empty()) {
+                throw raised_exception("min() arg is an empty sequence");
+            }
+            value result = arr[0];
+            for (size_t i = 1; i < arr.size(); ++i) {
+                if (value_compare(arr[i], result, value_compare_op::lt)) {
+                    result = arr[i];
+                }
+            }
+            return result;
+        }},
+        {"max", [](const func_args & args) -> value {
+            args.ensure_vals<value_array>();
+            const auto & arr = args.get_pos(0)->as_array();
+            if (arr.empty()) {
+                throw raised_exception("max() arg is an empty sequence");
+            }
+            value result = arr[0];
+            for (size_t i = 1; i < arr.size(); ++i) {
+                if (value_compare(arr[i], result, value_compare_op::gt)) {
+                    result = arr[i];
+                }
+            }
+            return result;
+        }},
         {"unique", array_unique_not_implemented},
     };
     return builtins;
