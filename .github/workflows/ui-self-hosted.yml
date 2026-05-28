@@ -16,7 +16,7 @@ on:
       - master
     paths: [
       '.github/workflows/ui-self-hosted.yml',
-      '.github/workflows/ui-build.yml',
+      '.github/workflows/ui-build-self-hosted.yml',
       'tools/ui/**.*',
       'tools/server/tests/**.*'
     ]
@@ -24,7 +24,7 @@ on:
     types: [opened, synchronize, reopened]
     paths: [
       '.github/workflows/ui-self-hosted.yml',
-      '.github/workflows/ui-build.yml',
+      '.github/workflows/ui-build-self-hosted.yml',
       'tools/ui/**.*',
       'tools/server/tests/**.*'
     ]
@@ -42,7 +42,7 @@ concurrency:
 jobs:
   ui-build:
     name: Build static output
-    uses: ./.github/workflows/ui-build.yml
+    uses: ./.github/workflows/ui-build-self-hosted.yml
 
   ui-checks:
     name: Checks

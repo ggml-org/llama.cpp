@@ -17,6 +17,8 @@ int llama_fit_params(int argc, char ** argv);
 int llama_quantize(int argc, char ** argv);
 int llama_perplexity(int argc, char ** argv);
 
+static const char * progname;
+
 static int help(int argc, char ** argv);
 static int version(int argc, char ** argv);
 
@@ -37,8 +39,8 @@ static const command cmds[] = {
     {"fit-params",    "Compute parameters to fit a model in device memory", {},           true,  llama_fit_params   },
     {"quantize",      "Quantize a model",                                   {},           true,  llama_quantize     },
     {"perplexity",    "Compute model perplexity and KL divergence",         {},           true,  llama_perplexity   },
-    {"version",       "Show version",                                       {},           true,  version            },
-    {"help",          "Show available commands",                            {},           true,  help               },
+    {"version",       "Show version",                                       {},           false, version            },
+    {"help",          "Show available commands",                            {},           false, help               },
 };
 
 static int version(int argc, char ** argv) {
@@ -49,14 +51,19 @@ static int version(int argc, char ** argv) {
 static int help(int argc, char ** argv) {
     const bool show_all = argc >= 2 && std::string(argv[1]) == "all";
 
-    printf("Usage: llama <command> [options]\n\nAvailable commands:\n");
+    printf("Usage: %s <command> [options]\n\nAvailable commands:\n", progname);
 
     for (const auto & cmd : cmds) {
         if (show_all || !cmd.hidden) {
             printf("  %-15s %s\n", cmd.name, cmd.desc);
         }
     }
-    printf("\nRun 'llama <command> --help' for command-specific usage.\n");
+    printf("\n");
+
+    if (!show_all) {
+        printf("Run '%s help all' to show additional commands.\n", progname);
+    }
+    printf("Run '%s <command> --help' for command-specific usage.\n", progname);
 
     return 0;
 }
@@ -74,13 +81,12 @@ static bool matches(const std::string & arg, const command & cmd) {
 }
 
 int main(int argc, char ** argv) {
+    progname = argv[0];
     const std::string arg = argc >= 2 ? argv[1] : "help";
 
     for (const auto & cmd : cmds) {
         if (matches(arg, cmd)) {
-
-            // router spawns children through this same binary, it needs the
-            // subcommand to relaunch as 'llama serve' and not bare options
+            // keep cmd.name so the router's child processes re-invoke correctly
 #ifdef _WIN32
             _putenv_s("LLAMA_APP_CMD", cmd.name);
 #else
