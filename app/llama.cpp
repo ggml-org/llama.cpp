@@ -1,4 +1,5 @@
 #include "build-info.h"
+#include "app-update.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -37,6 +38,7 @@ struct command {
 static const command cmds[] = {
     {"serve",         "HTTP API server",                                    {"server"},   false, llama_server       },
     {"cli",           "Command-line interactive interface",                 {"client"},   false, llama_cli          },
+    {"update",        "Update llama to the latest release",                 {},           false, llama_update       },
     {"completion",    "Text completion",                                    {"complete"}, true,  llama_completion   },
     {"bench",         "Benchmark prompt processing and text generation",    {},           true,  llama_bench        },
     {"batched-bench", "Benchmark batched decoding performance",             {},           true,  llama_batched_bench},
@@ -94,6 +96,8 @@ static bool matches(const std::string & arg, const command & cmd) {
 
 int main(int argc, char ** argv) {
     progname = argv[0];
+    llama_app_startup();
+
     const std::string arg = argc >= 2 ? argv[1] : "help";
 
     for (const auto & cmd : cmds) {
@@ -104,6 +108,10 @@ int main(int argc, char ** argv) {
 #else
             setenv("LLAMA_APP_CMD", cmd.name, 1);
 #endif
+            // surface a newer release before a long running command
+            if (cmd.func == llama_server || cmd.func == llama_cli) {
+                llama_app_update_notice();
+            }
             return cmd.func(argc - 1, argv + 1);
         }
     }
