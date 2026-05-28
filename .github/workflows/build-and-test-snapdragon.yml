@@ -88,24 +88,98 @@ jobs:
           name: llama-cpp-linux-arm64-snapdragon
           path: pkg-snapdragon/llama.cpp
 
-  test-snapdragon-qdc:
-    name: Test on QDC Device (${{ matrix.device }})
-    needs: [android-ndk-snapdragon, linux-iot-snapdragon]
+  windows-arm-snapdragon:
     runs-on: ubuntu-24.04-arm
-    timeout-minutes: 90
-    strategy:
-      fail-fast: false
-      matrix:
-        device: [SM8750, SM8850, QCS9075M]
+    timeout-minutes: 120
 
     steps:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Download build artifact
-        uses: actions/download-artifact@v7
+      - name: Set up Python
+        uses: actions/setup-python@v6
         with:
-          name: ${{ startsWith(matrix.device, 'QCS') && 'llama-cpp-linux-arm64-snapdragon' || 'llama-cpp-android-arm64-snapdragon' }}
+          python-version: '3.x'
+          cache: pip
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y curl unzip
+
+      - name: Install QDC SDK wheel
+        run: |
+          curl -fSL -o qdc_sdk.zip https://softwarecenter.qualcomm.com/api/download/software/tools/Qualcomm_Device_Cloud_SDK/All/0.2.3/qualcomm_device_cloud_sdk-0.2.3.zip
+          unzip qdc_sdk.zip -d qdc_sdk
+          pip install qdc_sdk/qualcomm_device_cloud_sdk-0.2.3-py3-none-any.whl
+
+      - name: Decode HTP signing pfx
+        env:
+          HEXAGON_HTP_PFX_B64: ${{ secrets.HEXAGON_HTP_PFX_B64 }}
+        run: |
+          set -euo pipefail
+          if [ -z "${HEXAGON_HTP_PFX_B64:-}" ]; then
+            echo "WARNING: HEXAGON_HTP_PFX_B64 secret is not set, skipping Windows build"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "$HEXAGON_HTP_PFX_B64" | base64 -d > "$RUNNER_TEMP/ggml-htp-v1.pfx"
+          test -s "$RUNNER_TEMP/ggml-htp-v1.pfx"
+        id: decode_pfx
+
+      - name: Submit QDC build job
+        if: steps.decode_pfx.outputs.skip != 'true'
+        env:
+          QDC_API_KEY: ${{ secrets.QDC_API_KEY }}
+        run: |
+          set -euo pipefail
+          python scripts/snapdragon/qdc/run_qdc_jobs.py \
+            --mode         build \
+            --device       SC8480XP \
+            --llama-cpp-dir . \
+            --htp-pfx      "$RUNNER_TEMP/ggml-htp-v1.pfx" \
+            --output-dir   pkg-snapdragon
+
+      - name: Upload Llama.CPP Snapdragon Windows Build Artifact
+        if: ${{ always() && steps.decode_pfx.outputs.skip != 'true' }}
+        uses: actions/upload-artifact@v6
+        with:
+          name: llama-cpp-windows-arm64-snapdragon
+          path: pkg-snapdragon/llama.cpp
+
+      - name: Cleanup
+        if: always()
+        run: |
+          rm -f "$RUNNER_TEMP/ggml-htp-v1.pfx" || true
+          rm -rf pkg-snapdragon qdc_sdk qdc_sdk.zip || true
+
+  test-snapdragon-qdc:
+    name: Test on QDC Device (${{ matrix.device }})
+    needs: [android-ndk-snapdragon, linux-iot-snapdragon, windows-arm-snapdragon]
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        device: [SM8850, QCS9075M, SC8480XP]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Resolve build artifact name
+        id: artifact
+        run: |
+          case "${{ matrix.device }}" in
+            QCS*)          echo "name=llama-cpp-linux-arm64-snapdragon"   >> "$GITHUB_OUTPUT" ;;
+            SC*|CRD*|X*)   echo "name=llama-cpp-windows-arm64-snapdragon" >> "$GITHUB_OUTPUT" ;;
+            *)             echo "name=llama-cpp-android-arm64-snapdragon" >> "$GITHUB_OUTPUT" ;;
+          esac
+
+      - name: Download build artifact
+        uses: actions/download-artifact@v6
+        with:
+          name: ${{ steps.artifact.outputs.name }}
           path: pkg-snapdragon/llama.cpp
 
       - name: Set up Python
