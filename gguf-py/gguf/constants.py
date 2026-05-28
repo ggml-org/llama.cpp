@@ -811,6 +811,8 @@ class MODEL_TENSOR(IntEnum):
     V_SAM_NET_3          = auto() # Deepseek-OCR
     V_ENC_EMBD_IMGNL     = auto() # Deepseek-OCR
     V_ENC_EMBD_VSEP      = auto() # Deepseek-OCR
+    V_RESMPL_QUERY_768   = auto() # Deepseek-OCR-2
+    V_RESMPL_QUERY_1024  = auto() # Deepseek-OCR-2
 
     # audio (mtmd)
     A_ENC_EMBD_POS        = auto()
@@ -1327,6 +1329,8 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.V_SAM_NET_3:               "v.sam.net_3",
     MODEL_TENSOR.V_ENC_EMBD_IMGNL:          "v.image_newline", # Deepseek-OCR
     MODEL_TENSOR.V_ENC_EMBD_VSEP:           "v.view_seperator", # Deepseek-OCR
+    MODEL_TENSOR.V_RESMPL_QUERY_768:        "v.resample_query_768", # Deepseek-OCR-2 qwen2
+    MODEL_TENSOR.V_RESMPL_QUERY_1024:       "v.resample_query_1024", # Deepseek-OCR-2 qwen2
     # audio (mtmd)
     # note: all audio tensor names must use prefix "a." or "mm.a."
     MODEL_TENSOR.A_ENC_EMBD_POS:            "a.position_embd",
@@ -1505,6 +1509,8 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.V_SAM_NECK,
         MODEL_TENSOR.V_SAM_NET_2,
         MODEL_TENSOR.V_SAM_NET_3,
+        MODEL_TENSOR.V_RESMPL_QUERY_768,
+        MODEL_TENSOR.V_RESMPL_QUERY_1024,
         # audio
         MODEL_TENSOR.A_ENC_EMBD_POS,
         MODEL_TENSOR.A_ENC_EMBD_NORM,
@@ -4283,6 +4289,7 @@ class VisionProjectorType:
     JANUS_PRO = "janus_pro"
     DOTSOCR = "dots_ocr"
     DEEPSEEKOCR = "deepseekocr"
+    DEEPSEEKOCR2 = "deepseekocr2"
     LFM2A = "lfm2a" # audio
     MUSIC_FLAMINGO = "musicflamingo" # audio
     GLM4V = "glm4v"
