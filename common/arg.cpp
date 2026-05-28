@@ -1334,12 +1334,15 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_CTX_CHECKPOINTS").set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
     add_opt(common_arg(
-        {"-cpent", "--checkpoint-every-n-tokens"}, "N",
-        string_format("create a checkpoint every n tokens during prefill (processing), -1 to disable (default: %d)", params.checkpoint_every_nt),
+        {"-cms", "--checkpoint-min-step"}, "N",
+        string_format("minimum spacing between context checkpoints in tokens (default: %d, 0 = no minimum)", params.checkpoint_min_step),
         [](common_params & params, int value) {
-            params.checkpoint_every_nt = value;
+            if (value < 0) {
+                throw std::invalid_argument("checkpoint-min-step must be non-negative");
+            }
+            params.checkpoint_min_step = value;
         }
-    ).set_env("LLAMA_ARG_CHECKPOINT_EVERY_NT").set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
+    ).set_env("LLAMA_ARG_CHECKPOINT_MIN_SPACING_NT").set_examples({LLAMA_EXAMPLE_SERVER}));
     add_opt(common_arg(
         {"-cram", "--cache-ram"}, "N",
         string_format("set the maximum cache size in MiB (default: %d, -1 - no limit, 0 - disable)"
@@ -2995,7 +2998,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             }
             key_file.close();
         }
-    ).set_examples({LLAMA_EXAMPLE_SERVER}));
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_API_KEY_FILE"));
     add_opt(common_arg(
         {"--ssl-key-file"}, "FNAME",
         "path to file a PEM-encoded SSL private key",
@@ -3023,7 +3026,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
                 params.default_template_kwargs[item.key()] = item.value().dump();
             }
         }
-    ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_CHAT_TEMPLATE_KWARGS"));
+    ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_CHAT_TEMPLATE_KWARGS"));
     add_opt(common_arg(
         {"-to", "--timeout"}, "N",
         string_format("server read/write timeout in seconds (default: %d)", params.timeout_read),
@@ -3324,7 +3327,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params &, const std::string & value) {
             common_log_set_file(common_log_main(), value.c_str());
         }
-    ).set_env("LLAMA_LOG_FILE"));
+    ).set_env("LLAMA_ARG_LOG_FILE"));
     add_opt(common_arg(
         {"--log-colors"}, "[on|off|auto]",
         "Set colored logging ('on', 'off', or 'auto', default: 'auto')\n"
@@ -3341,7 +3344,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
                     string_format("error: unknown value for --log-colors: '%s'\n", value.c_str()));
             }
         }
-    ).set_env("LLAMA_LOG_COLORS"));
+    ).set_env("LLAMA_ARG_LOG_COLORS"));
     add_opt(common_arg(
         {"-v", "--verbose", "--log-verbose"},
         "Set verbosity level to infinity (i.e. log all messages, useful for debugging)",
@@ -3356,7 +3359,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params) {
             params.offline = true;
         }
-    ).set_env("LLAMA_OFFLINE"));
+    ).set_env("LLAMA_ARG_OFFLINE"));
     add_opt(common_arg(
         {"-lv", "--verbosity", "--log-verbosity"}, "N",
         string_format("Set the verbosity threshold. Messages with a higher verbosity will be ignored. Values:\n"
@@ -3371,7 +3374,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.verbosity = value;
             common_log_set_verbosity_thold(value);
         }
-    ).set_env("LLAMA_LOG_VERBOSITY"));
+    ).set_env("LLAMA_ARG_LOG_VERBOSITY"));
     add_opt(common_arg(
         {"--log-prefix"},
         {"--no-log-prefix"},

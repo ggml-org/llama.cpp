@@ -420,8 +420,7 @@ AEEResult htp_iface_start(remote_handle64 handle, uint32 sess_id, uint64 dsp_que
 
     ctx->n_threads = n_hvx;
     for (int i = 0; i < ctx->n_threads; i++) {
-        // see discussion https://github.com/ggml-org/llama.cpp/pull/18151#discussion_r2632388541
-        ctx->dma[i] = dma_queue_create(128);
+        ctx->dma[i] = dma_queue_create(256); // queue depth
     }
 
     // init worker pool
@@ -600,6 +599,9 @@ static int execute_op(struct htp_ops_context * octx) {
 
         case HTP_OP_PAD:
             return op_pad(octx);
+
+        case HTP_OP_CONCAT:
+            return op_concat(octx);
 
         case HTP_OP_GATED_DELTA_NET:
             return op_gated_delta_net(octx);
@@ -851,6 +853,11 @@ static void htp_packet_callback(dspqueue_t queue, int error, void * context) {
         for (uint32_t i=0; i < n_ops; i++) {
             struct profile_data prof;
 
+            if (i == (n_ops-1)) {
+                // wake up the host before starting the last op
+                dspqueue_write_early_wakeup_noblock(queue, 0, 0);
+            }
+
             profile_start(ctx->profiler, &prof);
 
             proc_op_req(octx, tens, i, &ops[i]);
@@ -866,8 +873,6 @@ static void htp_packet_callback(dspqueue_t queue, int error, void * context) {
                 }
             }
         }
-
-        // dspqueue_write_early_wakeup_noblock(ctx->queue, 10, 0);
 
         struct htp_opbatch_rsp rsp;
         rsp.id        = req.id;

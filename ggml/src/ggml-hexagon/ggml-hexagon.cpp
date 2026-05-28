@@ -68,6 +68,7 @@ static u32vec opt_pmu_evt { 0x3, 0x111, 0x100, 0x105, 0x240, 0x256, 0x7D, 0x8C }
 static int opt_opstage  = HTP_OPSTAGE_QUEUE | HTP_OPSTAGE_COMPUTE;
 static int opt_opbatch  = 1024; // max number of ops in a batch
 static int opt_opqueue  = 16;   // max number of pending batches
+static int opt_oppoll   = 0;    // polling for batch completions
 
 static std::regex* opt_opfilter = NULL; // regex of ops to not claim
 
@@ -550,7 +551,7 @@ static void repack_q4_0_q4x4x2(ggml_tensor * t, const void * data, size_t size) 
 
     size_t row_size    = ggml_row_size(t->type, t->ne[0]);
     size_t row_size_pd = ggml_row_size(t->type, hex_round_up(t->ne[0], QK_Q4_0x4x2));  // extra elements for the pad
-    size_t row_size_rp = row_size * 2;  // extra space for tmp pad (if any)
+    size_t row_size_rp = row_size_pd;  // scratch must hold one full padded tile (qblk_size/2 quants + scales)
 
     // Ensure we don't try to read more data than is available in the source buffer 'data'
     // or write more than the tensor can hold.
@@ -611,7 +612,7 @@ static void repack_q4x4x2_q4_0(void * data, const ggml_tensor * t, size_t size) 
 
     size_t row_size    = ggml_row_size(t->type, t->ne[0]);
     size_t row_size_pd = ggml_row_size(t->type, hex_round_up(t->ne[0], QK_Q4_0x4x2));  // extra elements for the pad
-    size_t row_size_rp = row_size * 2;  // extra space for tmp pad (if any)
+    size_t row_size_rp = row_size_pd;  // scratch must hold one full padded tile (qblk_size/2 quants + scales)
 
     // Ensure we don't try to copy more data than the tensor actually contains.
     const size_t total_tensor_size = (size_t)nrows * row_size;
@@ -654,6 +655,239 @@ static void repack_q4x4x2_q4_0(void * data, const ggml_tensor * t, size_t size) 
 
         // But we only copy the remaining number of bytes to the destination.
         memcpy(dst, buf_rp, n_rem_bytes);
+    }
+
+    ggml_aligned_free(buf_pd, row_size_pd);
+    ggml_aligned_free(buf_rp, row_size_rp);
+}
+
+static void unpack_q4_1_quants(uint8_t * qs, const block_q4_1 * x, unsigned int bi) {
+    static const int qk = QK4_1;
+
+    for (unsigned int i = 0; i < qk / 2; ++i) {
+        const int x0             = (x->qs[i] & 0x0F);
+        const int x1             = (x->qs[i] >> 4);
+        qs[bi * qk + i + 0]      = x0;
+        qs[bi * qk + i + qk / 2] = x1;
+    }
+}
+
+static void pack_q4_1_quants(block_q4_1 * x, const uint8_t * qs, unsigned int bi) {
+    static const int qk = QK4_1;
+
+    for (unsigned int i = 0; i < qk / 2; ++i) {
+        const uint8_t x0 = qs[bi * qk + i + 0];
+        const uint8_t x1 = qs[bi * qk + i + qk / 2];
+        x->qs[i]         = x0 | (x1 << 4);
+    }
+}
+
+static void repack_row_q4_1x4x2(uint8_t * y, const block_q4_1 * x, int64_t k) {
+    static const int qk = QK_Q4_0x4x2;
+    const int        nb = (k + qk - 1) / qk;  // number of blocks (padded)
+    const int        nloe = k % qk;           // leftovers
+
+    const int dblk_size = 8 * 4;              // 8x (d, m) __fp16 = 32 bytes
+    const int qblk_size = qk / 2;             // int4 = 128 bytes
+    const int qrow_size = k / 2;              // int4 (not padded to blocks)
+
+    uint8_t * y_q = y + 0;                    // quants first
+    uint8_t * y_d = y + qrow_size;            // then scales/offsets
+
+    // Repack the quants
+    for (int i = 0; i < nb; i++) {
+        uint8_t qs[QK_Q4_0x4x2];  // unpacked quants
+        unpack_q4_1_quants(qs, &x[i * 8 + 0], 0);
+        unpack_q4_1_quants(qs, &x[i * 8 + 1], 1);
+        unpack_q4_1_quants(qs, &x[i * 8 + 2], 2);
+        unpack_q4_1_quants(qs, &x[i * 8 + 3], 3);
+        unpack_q4_1_quants(qs, &x[i * 8 + 4], 4);
+        unpack_q4_1_quants(qs, &x[i * 8 + 5], 5);
+        unpack_q4_1_quants(qs, &x[i * 8 + 6], 6);
+        unpack_q4_1_quants(qs, &x[i * 8 + 7], 7);
+
+        bool partial = (nloe && i == nb-1);
+
+        uint8_t * q = y_q + (i * qblk_size);
+        for (int j = 0; j < qk / 2; j++) {
+            q[j] = partial ? (qs[j*2+1] << 4) | qs[j*2+0] : (qs[j+128] << 4) | qs[j+000];
+        }
+    }
+
+    // Repack the scales and offsets
+    for (int i = 0; i < nb; i++) {
+        ggml_half * d_m = (ggml_half *) (y_d + i * dblk_size);
+        for (int j = 0; j < 8; j++) {
+            d_m[j * 2 + 0] = x[i * 8 + j].d;
+            d_m[j * 2 + 1] = x[i * 8 + j].m;
+        }
+    }
+}
+
+static void unpack_row_q4_1x4x2(block_q4_1 * x, const uint8_t * y, int64_t k) {
+    static const int qk = QK_Q4_0x4x2;
+    const int        nb = (k + qk - 1) / qk;  // number of blocks (padded)
+    const int        nloe = k % qk;           // leftovers
+
+    const int dblk_size = 8 * 4;              // 8x (d, m) __fp16 = 32 bytes
+    const int qblk_size = qk / 2;             // int4 = 128 bytes
+    const int qrow_size = k / 2;              // int4 (not padded to blocks)
+
+    const uint8_t * y_q = y + 0;              // quants first
+    const uint8_t * y_d = y + qrow_size;      // then scales/offsets
+
+    // Unpack the quants
+    for (int i = 0; i < nb; i++) {
+        uint8_t qs[QK_Q4_0x4x2];
+        bool partial = (nloe && i == nb-1);
+
+        const uint8_t * q = y_q + (i * qblk_size);
+        for (int j = 0; j < qk / 2; j++) {
+            if (partial) {
+                qs[j*2+0] = q[j] & 0x0F;
+                qs[j*2+1] = q[j] >> 4;
+            } else {
+                qs[j+000] = q[j] & 0x0F;
+                qs[j+128] = q[j] >> 4;
+            }
+        }
+
+        pack_q4_1_quants(&x[i * 8 + 0], qs, 0);
+        pack_q4_1_quants(&x[i * 8 + 1], qs, 1);
+        pack_q4_1_quants(&x[i * 8 + 2], qs, 2);
+        pack_q4_1_quants(&x[i * 8 + 3], qs, 3);
+        pack_q4_1_quants(&x[i * 8 + 4], qs, 4);
+        pack_q4_1_quants(&x[i * 8 + 5], qs, 5);
+        pack_q4_1_quants(&x[i * 8 + 6], qs, 6);
+        pack_q4_1_quants(&x[i * 8 + 7], qs, 7);
+    }
+
+    // Unpack the scales and offsets
+    for (int i = 0; i < nb; i++) {
+        const ggml_half * d_m = (const ggml_half *) (y_d + i * dblk_size);
+        for (int j = 0; j < 8; j++) {
+            x[i * 8 + j].d = d_m[j * 2 + 0];
+            x[i * 8 + j].m = d_m[j * 2 + 1];
+        }
+    }
+}
+
+static void init_row_q4_1x4x2(block_q4_1 * x, int64_t k) {
+    static const int qk = QK_Q4_0x4x2;
+    const int        nb = (k + qk - 1) / qk;  // number of blocks (padded)
+
+    uint8_t qs[QK_Q4_0x4x2];  // unpacked quants
+    memset(qs, 0, sizeof(qs));
+
+    for (int i = 0; i < nb; i++) {
+        pack_q4_1_quants(&x[i * 8 + 0], qs, 0);
+        pack_q4_1_quants(&x[i * 8 + 1], qs, 1);
+        pack_q4_1_quants(&x[i * 8 + 2], qs, 2);
+        pack_q4_1_quants(&x[i * 8 + 3], qs, 3);
+        pack_q4_1_quants(&x[i * 8 + 4], qs, 4);
+        pack_q4_1_quants(&x[i * 8 + 5], qs, 5);
+        pack_q4_1_quants(&x[i * 8 + 6], qs, 6);
+        pack_q4_1_quants(&x[i * 8 + 7], qs, 7);
+    }
+
+    for (int i = 0; i < nb; i++) {
+        for (int j = 0; j < 8; j++) {
+            x[i * 8 + j].d = 0;
+            x[i * 8 + j].m = 0;
+        }
+    }
+}
+
+static void repack_q4_1_q4x4x2(ggml_tensor * t, const void * data, size_t size) {
+    int64_t nrows = ggml_nrows(t);
+
+    size_t row_size    = ggml_row_size(t->type, t->ne[0]);
+    size_t row_size_pd = ggml_row_size(t->type, hex_round_up(t->ne[0], QK_Q4_0x4x2));
+    size_t row_size_rp = row_size_pd;  // scratch must hold one full padded tile (qblk_size/2 quants + scales)
+
+    const size_t total_tensor_size = (size_t)nrows * row_size;
+    const size_t n_bytes_to_copy = size < total_tensor_size ? size : total_tensor_size;
+
+    const int64_t n_full_rows = n_bytes_to_copy / row_size;
+    const size_t  n_rem_bytes = n_bytes_to_copy % row_size;
+
+    void * buf_pd = ggml_aligned_malloc(row_size_pd);
+    GGML_ASSERT(buf_pd != NULL);
+
+    void * buf_rp = ggml_aligned_malloc(row_size_rp);
+    GGML_ASSERT(buf_rp != NULL);
+
+    HEX_VERBOSE("ggml-hex: repack-q4_1-q4x4x2 %s : data %p size %zu dims %ldx%ld row-size %zu\n", t->name, data, size,
+                t->ne[0], nrows, row_size);
+
+    init_row_q4_1x4x2((block_q4_1 *) buf_pd, t->ne[0]);
+
+    for (int64_t i = 0; i < n_full_rows; i++) {
+        const uint8_t * src = (const uint8_t *) data + (i * row_size);
+        uint8_t *       dst = (uint8_t *) t->data + (i * row_size);
+
+        memcpy(buf_pd, src, row_size);
+        repack_row_q4_1x4x2((uint8_t *) buf_rp, (const block_q4_1 *) buf_pd, t->ne[0]);
+        memcpy(dst, buf_rp, row_size);
+    }
+
+    if (n_rem_bytes > 0) {
+        const int64_t i = n_full_rows;
+        const uint8_t * src = (const uint8_t *) data + (i * row_size);
+        uint8_t *       dst = (uint8_t *) t->data + (i * row_size);
+
+        init_row_q4_1x4x2((block_q4_1 *) buf_pd, t->ne[0]);
+        memcpy(buf_pd, src, n_rem_bytes);
+        repack_row_q4_1x4x2((uint8_t *) buf_rp, (const block_q4_1 *) buf_pd, t->ne[0]);
+        memcpy(dst, buf_rp, n_rem_bytes);
+    }
+
+    ggml_aligned_free(buf_pd, row_size_pd);
+    ggml_aligned_free(buf_rp, row_size_rp);
+}
+
+static void repack_q4x4x2_q4_1(void * data, const ggml_tensor * t, size_t size) {
+    int64_t nrows = ggml_nrows(t);
+
+    size_t row_size    = ggml_row_size(t->type, t->ne[0]);
+    size_t row_size_pd = ggml_row_size(t->type, hex_round_up(t->ne[0], QK_Q4_0x4x2));
+    size_t row_size_rp = row_size_pd;  // scratch must hold one full padded tile (qblk_size/2 quants + scales)
+
+    const size_t total_tensor_size = (size_t)nrows * row_size;
+    const size_t n_bytes_to_copy = size < total_tensor_size ? size : total_tensor_size;
+
+    const int64_t n_full_rows = n_bytes_to_copy / row_size;
+    const size_t  n_rem_bytes = n_bytes_to_copy % row_size;
+
+    void * buf_pd = ggml_aligned_malloc(row_size_pd);
+    GGML_ASSERT(buf_pd != NULL);
+
+    void * buf_rp = ggml_aligned_malloc(row_size_rp);
+    GGML_ASSERT(buf_rp != NULL);
+
+    HEX_VERBOSE("ggml-hex: repack-q4x4x2-q4_1 %s : data %p size %zu dims %ldx%ld row-size %zu\n", t->name, data, size,
+                t->ne[0], nrows, row_size);
+
+    memset(buf_rp, 0, row_size_rp);  // clear-out padded buffer to make sure the tail is all zeros
+
+    for (int64_t i = 0; i < n_full_rows; i++) {
+        const uint8_t * src = (const uint8_t *) t->data + (i * row_size);
+        uint8_t *       dst = (uint8_t *) data + (i * row_size);
+
+        memcpy(buf_rp, src, row_size);
+        unpack_row_q4_1x4x2((block_q4_1 *) buf_pd, (const uint8_t *) buf_rp, t->ne[0]);
+        memcpy(dst, buf_pd, row_size);
+    }
+
+    if (n_rem_bytes > 0) {
+        const int64_t i = n_full_rows;
+        const uint8_t * src = (const uint8_t *) t->data + (i * row_size);
+        uint8_t *       dst = (uint8_t *) data + (i * row_size);
+
+        // We still need to read and unpack the entire source row because quantization is block-based.
+        memcpy(buf_rp, src, row_size);
+        unpack_row_q4_1x4x2((block_q4_1 *) buf_pd, (const uint8_t *) buf_rp, t->ne[0]);
+        memcpy(dst, buf_pd, n_rem_bytes);
     }
 
     ggml_aligned_free(buf_pd, row_size_pd);
@@ -876,7 +1110,7 @@ static void repack_q8_0_q8x4x2(ggml_tensor * t, const void * data, size_t size) 
 
     size_t row_size    = ggml_row_size(t->type, t->ne[0]);
     size_t row_size_pd = ggml_row_size(t->type, hex_round_up(t->ne[0], QK_Q8_0x4x2));  // extra elements for the pad
-    size_t row_size_rp = row_size * 2;  // extra space for tmp pad (if any)
+    size_t row_size_rp = row_size_pd;  // scratch must hold one full padded tile (qblk_size quants + scales)
 
     // Ensure we don't try to read more data than is available in the source buffer 'data'
     // or write more than the tensor can hold.
@@ -937,7 +1171,7 @@ static void repack_q8x4x2_q8_0(void * data, const ggml_tensor * t, size_t size) 
 
     size_t row_size    = ggml_row_size(t->type, t->ne[0]);
     size_t row_size_pd = ggml_row_size(t->type, hex_round_up(t->ne[0], QK_Q8_0x4x2));  // extra elements for the pad
-    size_t row_size_rp = row_size * 2;  // extra space for tmp pad (if any)
+    size_t row_size_rp = row_size_pd;  // scratch must hold one full padded tile (qblk_size quants + scales)
 
     // Ensure we don't try to copy more data than the tensor actually contains.
     const size_t total_tensor_size = (size_t)nrows * row_size;
@@ -1238,7 +1472,7 @@ static void repack_mxfp4_mxfp4x4x2(ggml_tensor * t, const void * data, size_t si
 
     size_t row_size    = ggml_row_size(t->type, t->ne[0]);
     size_t row_size_pd = ggml_row_size(t->type, hex_round_up(t->ne[0], QK_MXFP4x4x2));  // extra elements for the pad
-    size_t row_size_rp = row_size * 2;  // extra space for tmp pad (if any)
+    size_t row_size_rp = row_size_pd;  // scratch must hold one full padded tile (qblk_size/2 quants + scales)
 
     // Ensure we don't try to read more data than is available in the source buffer 'data'
     // or write more than the tensor can hold.
@@ -1299,7 +1533,7 @@ static void repack_mxfp4x4x2_mxfp4(void * data, const ggml_tensor * t, size_t si
 
     size_t row_size    = ggml_row_size(t->type, t->ne[0]);
     size_t row_size_pd = ggml_row_size(t->type, hex_round_up(t->ne[0], QK_MXFP4x4x2));  // extra elements for the pad
-    size_t row_size_rp = row_size * 2;  // extra space for tmp pad (if any)
+    size_t row_size_rp = row_size_pd;  // scratch must hold one full padded tile (qblk_size/2 quants + scales)
 
     // Ensure we don't try to copy more data than the tensor actually contains.
     const size_t total_tensor_size = (size_t)nrows * row_size;
@@ -1365,6 +1599,12 @@ static void ggml_backend_hexagon_buffer_set_tensor(ggml_backend_buffer_t buffer,
             repack_q4_0_q4x4x2(tensor, data, size);
             break;
 
+        case GGML_TYPE_Q4_1:
+            GGML_ASSERT(offset == 0);
+            GGML_ASSERT(offset + size <= ggml_nbytes(tensor));
+            repack_q4_1_q4x4x2(tensor, data, size);
+            break;
+
         case GGML_TYPE_Q8_0:
             GGML_ASSERT(offset == 0);
             GGML_ASSERT(offset + size <= ggml_nbytes(tensor));
@@ -1405,6 +1645,12 @@ static void ggml_backend_hexagon_buffer_get_tensor(ggml_backend_buffer_t buffer,
             GGML_ASSERT(offset == 0);
             GGML_ASSERT(offset + size <= ggml_nbytes(tensor));
             repack_q4x4x2_q4_0(data, tensor, size);
+            break;
+
+        case GGML_TYPE_Q4_1:
+            GGML_ASSERT(offset == 0);
+            GGML_ASSERT(offset + size <= ggml_nbytes(tensor));
+            repack_q4x4x2_q4_1(data, tensor, size);
             break;
 
         case GGML_TYPE_Q8_0:
@@ -1886,7 +2132,8 @@ void ggml_hexagon_session::flush_pending(bool all) {
         uint32_t               n_dbufs;
 
         // Read response packet from queue
-        int err = dspqueue_read(this->queue, &flags, 1, &n_dbufs, &dbuf, sizeof(rsp), &rsp_size, (uint8_t *) &rsp, DSPQUEUE_TIMEOUT);
+        const uint32_t timeo = opt_oppoll ? 0 : DSPQUEUE_TIMEOUT;
+        int err = dspqueue_read(this->queue, &flags, 1, &n_dbufs, &dbuf, sizeof(rsp), &rsp_size, (uint8_t *) &rsp, timeo);
         if (err == AEE_EEXPIRED) {
             continue;
         }
@@ -2290,6 +2537,7 @@ static bool ggml_hexagon_supported_gated_delta_net(const struct ggml_hexagon_ses
     const int64_t H        = v->ne[1];
     const int64_t n_tokens = v->ne[2];
     const int64_t n_seqs   = v->ne[3];
+    const int64_t K        = state->ne[1];
 
     if (S_v <= 0 || S_v > 128 || H <= 0 || n_tokens <= 0 || n_seqs <= 0) {
         return false;
@@ -2302,10 +2550,10 @@ static bool ggml_hexagon_supported_gated_delta_net(const struct ggml_hexagon_ses
     if ((g->ne[0] != 1 && g->ne[0] != S_v) || beta->ne[0] != 1) {
         return false;
     }
-    if (ggml_nelements(state) != S_v * S_v * H * n_seqs) {
+    if (ggml_nelements(state) != S_v * S_v * H * n_seqs * K) {
         return false;
     }
-    if (dst->ne[0] != S_v * H || dst->ne[1] != n_tokens * n_seqs + S_v * n_seqs) {
+    if (dst->ne[0] != S_v * H || dst->ne[1] != n_tokens * n_seqs + S_v * n_seqs * K) {
         return false;
     }
 
@@ -2327,6 +2575,7 @@ static bool ggml_hexagon_supported_mul_mat(const struct ggml_hexagon_session * s
 
     switch (src0->type) {
         case GGML_TYPE_Q4_0:
+        case GGML_TYPE_Q4_1:
         case GGML_TYPE_Q8_0:
         case GGML_TYPE_IQ4_NL:
         case GGML_TYPE_MXFP4:
@@ -2377,6 +2626,7 @@ static bool ggml_hexagon_supported_mul_mat_id(const struct ggml_hexagon_session 
 
     switch (src0->type) {
         case GGML_TYPE_Q4_0:
+        case GGML_TYPE_Q4_1:
         case GGML_TYPE_Q8_0:
         case GGML_TYPE_IQ4_NL:
         case GGML_TYPE_MXFP4:
@@ -2874,6 +3124,7 @@ static htp_op_code op_remap_to_htp(const ggml_tensor * t) {
         case GGML_OP_NORM:            return HTP_OP_NORM;
         case GGML_OP_L2_NORM:         return HTP_OP_L2_NORM;
         case GGML_OP_RMS_NORM:        return HTP_OP_RMS_NORM;
+        case GGML_OP_CONCAT:          return HTP_OP_CONCAT;
         case GGML_OP_SCALE:           return HTP_OP_SCALE;
         case GGML_OP_SQR:             return HTP_OP_SQR;
         case GGML_OP_SQRT:            return HTP_OP_SQRT;
@@ -3286,6 +3537,25 @@ static bool ggml_hexagon_supported_repeat(const struct ggml_hexagon_session * se
     return true;
 }
 
+static bool ggml_hexagon_supported_concat(const struct ggml_hexagon_session * sess, const struct ggml_tensor * op) {
+    int dim = ((const int32_t *) op->op_params)[0];
+    if (dim < 0 || dim >= GGML_MAX_DIMS) {
+        return false;
+    }
+
+    for (int i = 0; i < GGML_MAX_SRC; ++i) {
+        const struct ggml_tensor * src = op->src[i];
+        if (!src) {
+            continue;
+        }
+        if (src->type != GGML_TYPE_F32 && src->type != GGML_TYPE_I32 && src->type != GGML_TYPE_F16) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
 static bool ggml_hexagon_supported_fill(const struct ggml_hexagon_session * sess, const struct ggml_tensor * op) {
     const struct ggml_tensor * dst = op;
 
@@ -3432,6 +3702,10 @@ static bool ggml_backend_hexagon_device_supports_op(ggml_backend_dev_t dev, cons
 
         case GGML_OP_CUMSUM:
             supp = ggml_hexagon_supported_cumsum(sess, op);
+            break;
+
+        case GGML_OP_CONCAT:
+            supp = ggml_hexagon_supported_concat(sess, op);
             break;
 
         case GGML_OP_FILL:
@@ -3598,6 +3872,8 @@ static void ggml_hexagon_init(ggml_backend_reg * reg) {
     // Basic sanity checks to make sure definitions match
     static_assert((unsigned int) HTP_TYPE_Q4_0 == (unsigned int) GGML_TYPE_Q4_0,
                   "please update hexagon_type to match ggml_type");
+    static_assert((unsigned int) HTP_TYPE_Q4_1 == (unsigned int) GGML_TYPE_Q4_1,
+                  "please update hexagon_type to match ggml_type");
     static_assert((unsigned int) HTP_TYPE_Q8_0 == (unsigned int) GGML_TYPE_Q8_0,
                   "please update hexagon_type to match ggml_type");
     static_assert((unsigned int) HTP_TYPE_MXFP4 == (unsigned int) GGML_TYPE_MXFP4,
@@ -3610,6 +3886,7 @@ static void ggml_hexagon_init(ggml_backend_reg * reg) {
     const char * str_opstage  = getenv("GGML_HEXAGON_OPSTAGE");
     const char * str_opbatch  = getenv("GGML_HEXAGON_OPBATCH");
     const char * str_opqueue  = getenv("GGML_HEXAGON_OPQUEUE");
+    const char * str_oppoll   = getenv("GGML_HEXAGON_OPPOLL");
     const char * str_opfilter = getenv("GGML_HEXAGON_OPFILTER");
     const char * str_profile  = getenv("GGML_HEXAGON_PROFILE");
     const char * str_etm      = getenv("GGML_HEXAGON_ETM");
@@ -3647,6 +3924,7 @@ static void ggml_hexagon_init(ggml_backend_reg * reg) {
     opt_opstage   = str_opstage  ? strtoul(str_opstage, NULL, 0)          : opt_opstage;
     opt_opbatch   = str_opbatch  ? strtoul(str_opbatch, NULL, 0)          : opt_opbatch;
     opt_opqueue   = str_opqueue  ? strtoul(str_opqueue, NULL, 0)          : opt_opqueue;
+    opt_oppoll    = str_oppoll   ? strtoul(str_oppoll,  NULL, 0)          : opt_oppoll;
     opt_profile   = str_profile  ? atoi(str_profile)                      : 0;
     opt_etm       = str_etm      ? atoi(str_etm)                          : 0;
     opt_nhvx      = str_nhvx     ? strtoul(str_nhvx, NULL, 0)             : opt_nhvx;
