@@ -1,5 +1,3 @@
-enable f16;
-
 #ifdef DST_Q8_0
 #define BLOCK_SIZE 32u
 #define BLOCK_BYTES 34u
@@ -141,10 +139,10 @@ fn quantize_block_params(src_block: u32) -> vec2<f32> {
 fn quantize_block_word(src_block: u32, j: u32, id: f32) -> u32 {
 #ifdef DST_Q8_0
     let base = src_block + j * 4u;
-    return (bitcast<u32>(i32(round(src[base + 0u] * id))) & 0xFFu) |
-           ((bitcast<u32>(i32(round(src[base + 1u] * id))) & 0xFFu) << 8u) |
-           ((bitcast<u32>(i32(round(src[base + 2u] * id))) & 0xFFu) << 16u) |
-           ((bitcast<u32>(i32(round(src[base + 3u] * id))) & 0xFFu) << 24u);
+    return (u32(i32(round(src[base + 0u] * id)) & 0xFF) << 0u) |
+           (u32(i32(round(src[base + 1u] * id)) & 0xFF) << 8u) |
+           (u32(i32(round(src[base + 2u] * id)) & 0xFF) << 16u) |
+           (u32(i32(round(src[base + 3u] * id)) & 0xFF) << 24u);
 #elif defined(DST_Q4_0)
     var packed_q = 0u;
     for (var k: u32 = 0u; k < 4u; k++) {
