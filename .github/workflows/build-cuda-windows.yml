@@ -2,14 +2,15 @@ name: CI (CUDA, windows)
 
 # TODO: this workflow is only triggered manually because it is very heavy on the CI
 #       when we provision dedicated windows runners, we can enable it for pushes too
-# note: running this workflow manually will populate the ccache for the builds
+# note: running this workflow manually will populate the ccache for the release builds
 #       this can be used to speed up the release builds
 on:
   workflow_dispatch: # allows manual triggering
 
+# note: this will run in queue with the release workflow
 concurrency:
-  group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}
-  cancel-in-progress: true
+  group: release
+  queue: max
 
 env:
   GGML_NLOOP: 3
@@ -35,11 +36,7 @@ jobs:
         uses: ggml-org/ccache-action@v1.2.21
         with:
           key: release-windows-2022-x64-cuda-${{ matrix.cuda }}
-          max-size: "1000MB"
-          variant: ccache
-          evict-old-files: job # keep only the latest cache
-          save: true # always save the cache since we are running this manually
-          #save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+          append-timestamp: false # note: use this only with non-concurrent jobs!
 
       - name: Install Cuda Toolkit
         uses: ./.github/actions/windows-setup-cuda
@@ -120,14 +117,11 @@ jobs:
           }
           & $clangPath.FullName --version
 
-      - name: Install ccache
+      - name: ccache
         uses: ggml-org/ccache-action@v1.2.21
         with:
           key: release-windows-2022-x64-hip-${{ env.HIPSDK_INSTALLER_VERSION }}-${{ matrix.name }}
-          max-size: "1000MB"
-          evict-old-files: job # keep only the latest cache
-          save: true # always save the cache since we are running this manually
-          #save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+          append-timestamp: false # note: use this only with non-concurrent jobs!
 
       - name: Build
         id: cmake_build

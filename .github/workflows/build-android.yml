@@ -103,12 +103,18 @@ jobs:
         id: checkout
         uses: actions/checkout@v6
 
-      - name: ccache
-        uses: ggml-org/ccache-action@v1.2.21
-        with:
-          key: android-ubuntu-arm64
-          evict-old-files: 1d
-          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+      # note : disabled to spare some cache space (https://github.com/ggml-org/llama.cpp/pull/23789)
+      #        for some reason, the ccache does not improve the build time in this case
+      # example:
+      #   cache off: https://github.com/ggerganov/tmp2/actions/runs/26534713799/job/78160400831
+      #   cache on:  https://github.com/ggerganov/tmp2/actions/runs/26534713799/job/78224189394
+      #
+      #- name: ccache
+      #  uses: ggml-org/ccache-action@v1.2.21
+      #  with:
+      #    key: android-ubuntu-arm64
+      #    evict-old-files: 1d
+      #    save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
       - name: Set up JDK
         uses: actions/setup-java@v5

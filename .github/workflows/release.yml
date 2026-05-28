@@ -31,8 +31,12 @@ env:
   BRANCH_NAME: ${{ github.head_ref || github.ref_name }}
   CMAKE_ARGS: "-DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_TOOLS=ON -DLLAMA_BUILD_SERVER=ON -DGGML_RPC=ON"
 
-jobs:
+# note: run these jobs one at a time for better cache reuse
+concurrency:
+  group: release
+  queue: max
 
+jobs:
   check_release:
     runs-on: [self-hosted, fast]
 
@@ -97,7 +101,7 @@ jobs:
         uses: ggml-org/ccache-action@v1.2.21
         with:
           key: release-${{ matrix.os }}-${{ matrix.arch }}
-          evict-old-files: 1d
+          append-timestamp: false # note: use this only with non-concurrent jobs!
 
       - name: Build
         id: cmake_build
@@ -162,7 +166,7 @@ jobs:
         uses: ggml-org/ccache-action@v1.2.21
         with:
           key: release-${{ matrix.os }}-cpu
-          evict-old-files: 1d
+          append-timestamp: false # note: use this only with non-concurrent jobs!
 
       - name: Dependencies
         id: depends
@@ -238,7 +242,7 @@ jobs:
         uses: ggml-org/ccache-action@v1.2.21
         with:
           key: release-${{ matrix.os }}-vulkan
-          evict-old-files: 1d
+          append-timestamp: false # note: use this only with non-concurrent jobs!
 
       - name: Dependencies
         id: depends
@@ -307,11 +311,17 @@ jobs:
           cache: "npm"
           cache-dependency-path: "tools/ui/package-lock.json"
 
-      - name: ccache
-        uses: ggml-org/ccache-action@v1.2.21
-        with:
-          key: release-android-arm64
-          evict-old-files: 1d
+      # note : disabled to spare some cache space (https://github.com/ggml-org/llama.cpp/pull/23789)
+      #        for some reason, the ccache does not improve the build time in this case
+      # example:
+      #   cache off: https://github.com/ggerganov/tmp2/actions/runs/26534713799/job/78160400831
+      #   cache on:  https://github.com/ggerganov/tmp2/actions/runs/26534713799/job/78224189394
+      #
+      #- name: ccache
+      #  uses: ggml-org/ccache-action@v1.2.21
+      #  with:
+      #    key: release-android-arm64
+      #    append-timestamp: false # note: use this only with non-concurrent jobs!
 
       - name: Set up JDK
         uses: actions/setup-java@v5
@@ -399,7 +409,7 @@ jobs:
         uses: ggml-org/ccache-action@v1.2.21
         with:
           key: release-ubuntu-24.04-openvino-release-no-preset-v1
-          evict-old-files: 1d
+          append-timestamp: false # note: use this only with non-concurrent jobs!
 
       - name: Dependencies
         run: |
@@ -482,8 +492,7 @@ jobs:
         uses: ggml-org/ccache-action@v1.2.21
         with:
           key: release-windows-2025-${{ matrix.arch }}-cpu
-          variant: ccache
-          evict-old-files: 1d
+          append-timestamp: false # note: use this only with non-concurrent jobs!
 
       - name: Install Ninja
         run: |
@@ -553,8 +562,7 @@ jobs:
         uses: ggml-org/ccache-action@v1.2.21
         with:
           key: release-windows-2025-${{ matrix.arch }}-${{ matrix.backend }}
-          variant: ccache
-          evict-old-files: 1d
+          append-timestamp: false # note: use this only with non-concurrent jobs!
 
       - name: Install Vulkan SDK
         id: get_vulkan
@@ -611,11 +619,6 @@ jobs:
     needs: [check_release]
     if: ${{ needs.check_release.outputs.should_release == 'true' }}
 
-    # note: run these jobs one at a time for better cache reuse
-    concurrency:
-      group: ${{ github.workflow }}-windows-cuda
-      queue: max
-
     runs-on: windows-2022
 
     strategy:
@@ -638,9 +641,7 @@ jobs:
         uses: ggml-org/ccache-action@v1.2.21
         with:
           key: release-windows-2022-x64-cuda-${{ matrix.cuda }}
-          max-size: "1000MB"
-          variant: ccache
-          evict-old-files: job # keep only the latest cache
+          append-timestamp: false # note: use this only with non-concurrent jobs!
 
       - name: Install Cuda Toolkit
         uses: ./.github/actions/windows-setup-cuda
@@ -747,8 +748,7 @@ jobs:
 #        uses: ggml-org/ccache-action@v1.2.21
 #        with:
 #          key: release-windows-2022-x64-sycl
-#          variant: ccache
-#          evict-old-files: 1d
+#          append-timestamp: false # note: use this only with non-concurrent jobs!
 #
 #      - name: Build
 #        id: cmake_build
@@ -869,8 +869,7 @@ jobs:
 #        uses: ggml-org/ccache-action@v1.2.21
 #        with:
 #          key: release-ubuntu-24.04-sycl
-#          evict-old-files: 1d
-#          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+#          append-timestamp: false # note: use this only with non-concurrent jobs!
 #
 #      - name: Build
 #        id: cmake_build
@@ -939,7 +938,7 @@ jobs:
         uses: ggml-org/ccache-action@v1.2.21
         with:
           key: release-ubuntu-22.04-rocm-${{ matrix.ROCM_VERSION }}
-          evict-old-files: 1d
+          append-timestamp: false # note: use this only with non-concurrent jobs!
 
       - name: Dependencies
         id: depends
@@ -1020,11 +1019,6 @@ jobs:
     needs: [check_release]
     if: ${{ needs.check_release.outputs.should_release == 'true' }}
 
-    # note: run these jobs one at a time for better cache reuse
-    concurrency:
-      group: ${{ github.workflow }}-windows-hip
-      queue: max
-
     runs-on: windows-2022
 
     env:
@@ -1066,8 +1060,7 @@ jobs:
         uses: ggml-org/ccache-action@v1.2.21
         with:
           key: release-windows-2022-x64-hip-${{ env.HIPSDK_INSTALLER_VERSION }}-${{ matrix.name }}
-          max-size: "1000MB"
-          evict-old-files: job # keep only the latest cache
+          append-timestamp: false # note: use this only with non-concurrent jobs!
 
       - name: Install ROCm
         if: steps.cache-rocm.outputs.cache-hit != 'true'
