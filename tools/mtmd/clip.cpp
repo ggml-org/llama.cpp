@@ -246,6 +246,7 @@ clip_graph::clip_graph(clip_ctx * ctx, const clip_image_f32 & img) :
         n_patches(n_patches_x * n_patches_y),
         n_embd(hparams.n_embd),
         n_head(hparams.n_head),
+        n_head_kv(hparams.n_head_kv),
         d_head(n_embd / n_head),
         n_layer(hparams.n_layer),
         n_mmproj_embd(clip_n_mmproj_embd(ctx)),
@@ -401,9 +402,9 @@ ggml_tensor * clip_graph::build_vit(
                     }
                 }
 
-                Qcur = ggml_reshape_3d(ctx0, Qcur, d_head, n_head, n_pos);
-                Kcur = ggml_reshape_3d(ctx0, Kcur, d_head, n_head, n_pos);
-                Vcur = ggml_reshape_3d(ctx0, Vcur, d_head, n_head, n_pos);
+                Qcur = ggml_reshape_3d(ctx0, Qcur, d_head, n_head,    n_pos);
+                Kcur = ggml_reshape_3d(ctx0, Kcur, d_head, n_head_kv, n_pos);
+                Vcur = ggml_reshape_3d(ctx0, Vcur, d_head, n_head_kv, n_pos);
 
                 if (norm_per_head) {
                     if (layer.q_norm) {
@@ -1119,6 +1120,9 @@ struct clip_model_loader {
             get_u32(string_format(KEY_N_BLOCK,        prefix), hparams.n_layer);
             get_u32(string_format(KEY_PROJ_DIM,       prefix), hparams.projection_dim);
             get_f32(string_format(KEY_LAYER_NORM_EPS, prefix), hparams.eps);
+
+            // n_head_kv is optional (for GQA), default to n_head
+            hparams.n_head_kv = hparams.n_head;
 
             if (is_vision) {
                 get_u32(KEY_IMAGE_SIZE, hparams.image_size);
