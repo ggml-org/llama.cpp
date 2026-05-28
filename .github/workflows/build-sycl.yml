@@ -88,7 +88,7 @@ jobs:
 #      - name: ccache
 #        uses: ggml-org/ccache-action@v1.2.21
 #        with:
-#          key: ubuntu-24-sycl-${{ matrix.build }}
+#          key: sycl-ubuntu-24-${{ matrix.build }}
 #          evict-old-files: 1d
 #          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 #
@@ -150,7 +150,7 @@ jobs:
 #      - name: ccache
 #        uses: ggml-org/ccache-action@v1.2.21
 #        with:
-#          key: windows-latest-sycl
+#          key: sycl-windows-latest
 #          variant: ccache
 #          evict-old-files: 1d
 #          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
