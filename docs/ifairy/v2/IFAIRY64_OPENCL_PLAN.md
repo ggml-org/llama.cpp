@@ -69,6 +69,22 @@ Before implementing kernels:
 - keep `GGML_OPENCL_IFAIRY64` and kernel-ready gate disabled for compute until
   the matmul kernel is implemented
 
+Current status:
+
+- layout decision: done
+- `ggml_tensor_extra_cl_ifairy64`: done
+- OpenCL alloc-size override for `GGML_TYPE_IFAIRY64`: done
+- full raw `set_tensor` pack into `q`/`d`: done
+- `get_tensor` raw reconstruction from `q`/`d`: done
+- compute enablement: intentionally blocked by kernel-ready gate
+
+Current limitations before kernels land:
+
+- partial `set_tensor` uploads for `GGML_TYPE_IFAIRY64` are not supported
+- tensor views of `GGML_TYPE_IFAIRY64` are not supported by the OpenCL IF64
+  packed extra
+- no OpenCL matmul path consumes the `q`/`d` buffers yet
+
 ## Kernel Follow-Up
 
 The first kernel should consume the SoA layout directly:
