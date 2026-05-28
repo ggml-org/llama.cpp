@@ -1091,14 +1091,15 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "CROSS_ENTROPY_LOSS_BACK",
     "OPT_STEP_ADAMW",
     "OPT_STEP_SGD",
+
+    "GLU",
+
     "IFAIRY_ROPE",
     "IFAIRY_SPLIT",
     "IFAIRY_MERGE",
     "IFAIRY_ADD",
     "IFAIRY_RMS_NORM",
     "IFAIRY_MUL",
-
-    "GLU",
 };
 
 // static_assert(GGML_OP_COUNT == 90, "GGML_OP_COUNT != 90");

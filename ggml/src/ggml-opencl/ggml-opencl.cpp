@@ -358,6 +358,7 @@ struct ggml_backend_opencl_context {
     cl_program program_get_rows;
     cl_program program_set_rows;
     cl_program program_glu;
+    cl_program program_ifairy_add;
     cl_program program_im2col_f16;
     cl_program program_im2col_f32;
     cl_program program_mul_mat_Ab_Bi_8x4;
@@ -411,6 +412,7 @@ struct ggml_backend_opencl_context {
     cl_kernel kernel_mul, kernel_mul_row, kernel_mul_f16, kernel_mul_row_f16;
     cl_kernel kernel_div, kernel_div_row, kernel_div_f16, kernel_div_row_f16;
     cl_kernel kernel_sub, kernel_sub_row, kernel_sub_f16, kernel_sub_row_f16;
+    cl_kernel kernel_ifairy_add;
     cl_kernel kernel_add_id;
     cl_kernel kernel_scale;
     cl_kernel kernel_silu, kernel_silu_4;
@@ -630,6 +632,11 @@ struct ggml_backend_opencl_context {
 // All registered devices with a default device in the front.
 static std::vector<ggml_backend_device> g_ggml_backend_opencl_devices;
 
+static bool ggml_opencl_env_enabled(const char * name) {
+    const char * value = getenv(name);
+    return value != nullptr && strcmp(value, "0") != 0 && strcmp(value, "false") != 0 && strcmp(value, "FALSE") != 0;
+}
+
 inline std::string read_file(const std::string &path) {
   std::ifstream ifs(path);
   if (!ifs) {
@@ -716,6 +723,22 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx, ggml_cl_ve
             build_program_from_source(backend_ctx->context, backend_ctx->device, kernel_src.c_str(), compile_opts);
 
         CL_CHECK((backend_ctx->kernel_add_id = clCreateKernel(backend_ctx->program_add_id, "kernel_add_id", &err), err));
+        GGML_LOG_CONT(".");
+    }
+
+    // ifairy_add
+    {
+#ifdef GGML_OPENCL_EMBED_KERNELS
+        const std::string kernel_src {
+            #include "ifairy_add.cl.h"
+        };
+#else
+        const std::string kernel_src = read_file("ifairy_add.cl");
+#endif
+        backend_ctx->program_ifairy_add =
+            build_program_from_source(backend_ctx->context, backend_ctx->device, kernel_src.c_str(), compile_opts);
+
+        CL_CHECK((backend_ctx->kernel_ifairy_add = clCreateKernel(backend_ctx->program_ifairy_add, "kernel_ifairy_add", &err), err));
         GGML_LOG_CONT(".");
     }
 
@@ -2167,6 +2190,8 @@ static ggml_backend_opencl_context * ggml_cl2_init(ggml_backend_dev_t dev) {
     // when the associated device is initialized
     backend_ctx->ref_count  = 0;
 
+    const bool allow_unsupported_device = ggml_opencl_env_enabled("GGML_OPENCL_ALLOW_UNSUPPORTED_DEVICE");
+
     if (strstr(dev_ctx->device_name.c_str(), "Adreno") ||
         strstr(dev_ctx->device_name.c_str(), "Qualcomm") ||
         strstr(dev_ctx->device_version.c_str(), "Adreno")) {
@@ -2181,6 +2206,10 @@ static ggml_backend_opencl_context * ggml_cl2_init(ggml_backend_dev_t dev) {
         backend_ctx->adreno_wave_size = 64;
     } else if (strstr(dev_ctx->device_name.c_str(), "Intel")) {
         backend_ctx->gpu_family = GPU_FAMILY::INTEL;
+    } else if (allow_unsupported_device) {
+        GGML_LOG_WARN("ggml_opencl: allowing unsupported OpenCL device for development/testing: %s\n",
+                      dev_ctx->device_name.c_str());
+        backend_ctx->gpu_family = GPU_FAMILY::UNKNOWN;
     } else {
         GGML_LOG_ERROR("Unsupported GPU: %s\n", dev_ctx->device_name.c_str());
         backend_ctx->gpu_family = GPU_FAMILY::UNKNOWN;
@@ -2745,6 +2774,10 @@ static bool ggml_opencl_supports_op(ggml_backend_dev_t dev, const struct ggml_te
                    (op->src[0]->type == GGML_TYPE_F32 || op->src[0]->type == GGML_TYPE_F16);
         case GGML_OP_ADD_ID:
             return op->src[0]->type == GGML_TYPE_F32;
+        case GGML_OP_IFAIRY_ADD:
+            return op->type == GGML_TYPE_F32 &&
+                   op->src[0]->type == GGML_TYPE_F32 &&
+                   op->src[1]->type == GGML_TYPE_F32;
         case GGML_OP_UNARY:
             switch (ggml_get_unary_op(op)) {
                 case GGML_UNARY_OP_GELU:
@@ -4338,6 +4371,95 @@ static void ggml_cl_add(ggml_backend_t backend, const ggml_tensor * src0, const 
 
         backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
     }
+}
+
+static void ggml_cl_ifairy_add(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
+    GGML_ASSERT(src0);
+    GGML_ASSERT(src0->extra);
+    GGML_ASSERT(src1);
+    GGML_ASSERT(src1->extra);
+    GGML_ASSERT(dst);
+    GGML_ASSERT(dst->extra);
+
+    GGML_ASSERT(src0->type == GGML_TYPE_F32 && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32);
+
+    const int ne00 = src0->ne[0];
+    const int ne01 = src0->ne[1];
+    const int ne02 = src0->ne[2];
+    const int ne03 = src0->ne[3];
+
+    const cl_ulong nb00 = src0->nb[0];
+    const cl_ulong nb01 = src0->nb[1];
+    const cl_ulong nb02 = src0->nb[2];
+    const cl_ulong nb03 = src0->nb[3];
+
+    const int ne10 = src1->ne[0];
+    const int ne11 = src1->ne[1];
+    const int ne12 = src1->ne[2];
+    const int ne13 = src1->ne[3];
+
+    const cl_ulong nb10 = src1->nb[0];
+    const cl_ulong nb11 = src1->nb[1];
+    const cl_ulong nb12 = src1->nb[2];
+    const cl_ulong nb13 = src1->nb[3];
+
+    const int ne0  = dst->ne[0];
+    const int ne1  = dst->ne[1];
+    const int ne2  = dst->ne[2];
+    const int ne3  = dst->ne[3];
+
+    const cl_ulong nb0  = dst->nb[0];
+    const cl_ulong nb1  = dst->nb[1];
+    const cl_ulong nb2  = dst->nb[2];
+    const cl_ulong nb3  = dst->nb[3];
+
+    ggml_backend_opencl_context * backend_ctx = (ggml_backend_opencl_context *) backend->context;
+
+    ggml_tensor_extra_cl * extra0 = (ggml_tensor_extra_cl *) src0->extra;
+    ggml_tensor_extra_cl * extra1 = (ggml_tensor_extra_cl *) src1->extra;
+    ggml_tensor_extra_cl * extrad = (ggml_tensor_extra_cl *) dst->extra;
+
+    cl_ulong offset0 = extra0->offset + src0->view_offs;
+    cl_ulong offset1 = extra1->offset + src1->view_offs;
+    cl_ulong offsetd = extrad->offset + dst->view_offs;
+
+    cl_kernel kernel = backend_ctx->kernel_ifairy_add;
+    CL_CHECK(clSetKernelArg(kernel,  0, sizeof(cl_mem),   &extra0->data_device));
+    CL_CHECK(clSetKernelArg(kernel,  1, sizeof(cl_ulong), &offset0));
+    CL_CHECK(clSetKernelArg(kernel,  2, sizeof(cl_mem),   &extra1->data_device));
+    CL_CHECK(clSetKernelArg(kernel,  3, sizeof(cl_ulong), &offset1));
+    CL_CHECK(clSetKernelArg(kernel,  4, sizeof(cl_mem),   &extrad->data_device));
+    CL_CHECK(clSetKernelArg(kernel,  5, sizeof(cl_ulong), &offsetd));
+    CL_CHECK(clSetKernelArg(kernel,  6, sizeof(int),      &ne00));
+    CL_CHECK(clSetKernelArg(kernel,  7, sizeof(int),      &ne01));
+    CL_CHECK(clSetKernelArg(kernel,  8, sizeof(int),      &ne02));
+    CL_CHECK(clSetKernelArg(kernel,  9, sizeof(int),      &ne03));
+    CL_CHECK(clSetKernelArg(kernel, 10, sizeof(cl_ulong), &nb00));
+    CL_CHECK(clSetKernelArg(kernel, 11, sizeof(cl_ulong), &nb01));
+    CL_CHECK(clSetKernelArg(kernel, 12, sizeof(cl_ulong), &nb02));
+    CL_CHECK(clSetKernelArg(kernel, 13, sizeof(cl_ulong), &nb03));
+    CL_CHECK(clSetKernelArg(kernel, 14, sizeof(int),      &ne10));
+    CL_CHECK(clSetKernelArg(kernel, 15, sizeof(int),      &ne11));
+    CL_CHECK(clSetKernelArg(kernel, 16, sizeof(int),      &ne12));
+    CL_CHECK(clSetKernelArg(kernel, 17, sizeof(int),      &ne13));
+    CL_CHECK(clSetKernelArg(kernel, 18, sizeof(cl_ulong), &nb10));
+    CL_CHECK(clSetKernelArg(kernel, 19, sizeof(cl_ulong), &nb11));
+    CL_CHECK(clSetKernelArg(kernel, 20, sizeof(cl_ulong), &nb12));
+    CL_CHECK(clSetKernelArg(kernel, 21, sizeof(cl_ulong), &nb13));
+    CL_CHECK(clSetKernelArg(kernel, 22, sizeof(int),      &ne0));
+    CL_CHECK(clSetKernelArg(kernel, 23, sizeof(int),      &ne1));
+    CL_CHECK(clSetKernelArg(kernel, 24, sizeof(int),      &ne2));
+    CL_CHECK(clSetKernelArg(kernel, 25, sizeof(int),      &ne3));
+    CL_CHECK(clSetKernelArg(kernel, 26, sizeof(cl_ulong), &nb0));
+    CL_CHECK(clSetKernelArg(kernel, 27, sizeof(cl_ulong), &nb1));
+    CL_CHECK(clSetKernelArg(kernel, 28, sizeof(cl_ulong), &nb2));
+    CL_CHECK(clSetKernelArg(kernel, 29, sizeof(cl_ulong), &nb3));
+
+    unsigned int nth = MIN(64, ne0);
+    size_t global_work_size[] = {(size_t)ne01*nth, (size_t)ne02, (size_t)ne03};
+    size_t local_work_size[] = {nth, 1, 1};
+
+    backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
 }
 
 static void ggml_cl_add_id(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
@@ -8166,6 +8288,12 @@ bool ggml_cl_compute_forward(ggml_backend_t backend, struct ggml_tensor * tensor
                 return false;
             }
             func = ggml_cl_add_id;
+            break;
+        case GGML_OP_IFAIRY_ADD:
+            if (!any_on_device) {
+                return false;
+            }
+            func = ggml_cl_ifairy_add;
             break;
         case GGML_OP_MUL:
             if (!any_on_device) {
