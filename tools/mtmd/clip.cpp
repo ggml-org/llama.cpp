@@ -1552,7 +1552,7 @@ struct clip_model_loader {
                         hparams.audio_n_fft            = 512;
                         hparams.audio_window_len       = 320;  // 20ms frame (NOT 25ms/400)
                         hparams.audio_hop_len          = 160;
-                        // due to a mistake in the original converstion code, rms_norm_eps is set to a wrong value
+                        // due to a mistake in the original conversion code, rms_norm_eps is set to a wrong value
                         // since all gemma4a models use 1e-6, we just hardcode it here to avoid re-conversion
                         hparams.eps = 1e-6f;
                     } break;
