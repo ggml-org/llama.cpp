@@ -786,14 +786,15 @@ class Gemma4VisionAudioModel(MmprojModel):
         super().set_gguf_parameters()
 
         # vision params
+        assert self.hparams_vision is not None
         self.gguf_writer.add_clip_vision_projector_type(gguf.VisionProjectorType.GEMMA4V)
-        self.gguf_writer.add_vision_attention_layernorm_eps(self.hparams.get("layer_norm_eps", 1e-6))
+        self.gguf_writer.add_vision_attention_layernorm_eps(self.hparams_vision.get("layer_norm_eps", 1e-6))
 
         # audio params
-        if self.hparams_audio:
-            self.gguf_writer.add_clip_audio_projector_type(gguf.VisionProjectorType.GEMMA4A)
-            self.gguf_writer.add_audio_num_mel_bins(self.hparams_audio["feat_in"])
-            self.gguf_writer.add_audio_attention_layernorm_eps(1e-5)
+        assert self.hparams_audio is not None
+        self.gguf_writer.add_clip_audio_projector_type(gguf.VisionProjectorType.GEMMA4A)
+        self.gguf_writer.add_audio_num_mel_bins(self.hparams_audio["feat_in"])
+        self.gguf_writer.add_audio_attention_layernorm_eps(self.hparams_audio.get("layer_norm_eps", 1e-6))
 
     def is_audio_tensor(self, name: str) -> bool:
         return "audio_tower" in name or "embed_audio" in name
