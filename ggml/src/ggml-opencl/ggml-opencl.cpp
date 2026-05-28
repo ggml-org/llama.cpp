@@ -2689,11 +2689,65 @@ static bool ggml_opencl_is_ifairy_op(const struct ggml_tensor * op) {
     }
 }
 
-static bool ggml_opencl_supports_ifairy_op(const struct ggml_tensor * op) {
-    // IFAIRY64/OpenCL kernels are not implemented yet. Returning false keeps
-    // these nodes on the CPU backend through the normal ggml scheduler fallback.
+static bool ggml_opencl_ifairy64_enabled(void) {
+    const char * env = getenv("GGML_OPENCL_IFAIRY64");
+    return env != nullptr && strcmp(env, "0") != 0;
+}
+
+static bool ggml_opencl_can_ifairy64_mul_mat(const struct ggml_tensor * op) {
+    if (op->op != GGML_OP_MUL_MAT) {
+        return false;
+    }
+
+    const struct ggml_tensor * src0 = op->src[0];
+    const struct ggml_tensor * src1 = op->src[1];
+    if (src0 == nullptr || src1 == nullptr) {
+        return false;
+    }
+
+    if (src0->type != GGML_TYPE_IFAIRY64 || src1->type != GGML_TYPE_F32 || op->type != GGML_TYPE_F32) {
+        return false;
+    }
+
+    // First OpenCL target: raw IFAIRY64 weights, F32 activations, F32 output.
+    // Kernel semantics must match the CPU path exactly:
+    //   (wr + i*wi) * conj(xr + i*xi)
+    // = (wr*xr + wi*xi) + i*(wi*xr - wr*xi)
+    if (src0->ne[0] % ggml_blck_size(GGML_TYPE_IFAIRY64) != 0) {
+        return false;
+    }
+    if (src0->ne[0] != src1->ne[0]) {
+        return false;
+    }
+    if (src1->ne[2] % src0->ne[2] != 0 || src1->ne[3] % src0->ne[3] != 0) {
+        return false;
+    }
+    if (op->ne[0] != src0->ne[1] || op->ne[1] != src1->ne[1] ||
+        op->ne[2] != src1->ne[2] || op->ne[3] != src1->ne[3]) {
+        return false;
+    }
+
+    return src0->ne[2] == 1 && src0->ne[3] == 1 &&
+           ggml_is_contiguous(src0) && ggml_is_contiguous(src1);
+}
+
+static bool ggml_opencl_ifairy64_kernel_ready(const struct ggml_tensor * op) {
     GGML_UNUSED(op);
     return false;
+}
+
+static bool ggml_opencl_supports_ifairy_op(const struct ggml_tensor * op) {
+    if (!ggml_opencl_ifairy64_enabled()) {
+        return false;
+    }
+
+    if (!ggml_opencl_can_ifairy64_mul_mat(op)) {
+        return false;
+    }
+
+    // Keep the scheduler on the CPU fallback until the matching OpenCL kernel
+    // is implemented and wired through ggml_cl_compute_forward().
+    return ggml_opencl_ifairy64_kernel_ready(op);
 }
 
 static bool ggml_opencl_supports_op(ggml_backend_dev_t dev, const struct ggml_tensor * op) {

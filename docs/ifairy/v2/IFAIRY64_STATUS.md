@@ -15,6 +15,16 @@ Status: Draft (2026-04-23)
 
 按日期追加（YYYY-MM-DD）：
 
+### 2026-05-28 (OpenCL routing skeleton)
+- 变更：
+  - OpenCL 后端新增 `GGML_OPENCL_IFAIRY64` opt-in gate 和 `IFAIRY64` matmul 严格白名单。
+  - 第一阶段范围固定为 raw `GGML_TYPE_IFAIRY64` weights、`F32` activations、`F32` output 的 `GGML_OP_MUL_MAT`。
+  - 语义不变量写入 OpenCL skeleton：必须匹配 CPU 路径的 `w * conj(x)`。
+  - 由于 OpenCL kernel 尚未实现，kernel-ready gate 仍为 false；所有 `IFAIRY64` / iFairy custom ops 默认继续 scheduler CPU fallback。
+- 验证：
+  - `cmake --build build-opencl --target ggml-opencl -j 2`: PASS
+  - `./build-rel/bin/test-ifairy --ifairy-lut-only`: PASS
+
 ### 2026-04-22 (working tree; base build `abcaafef`)
 - 变更摘要：
   - `IFAIRY64` 在 `GGML_IFAIRY_LUT=1` 时于模型加载阶段提前完成 LUT transform/prepack，避免 decode 首轮再做 transform。
