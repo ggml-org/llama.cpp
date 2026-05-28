@@ -32,20 +32,20 @@ let processed = false;
  */
 const APPLE_DEVICES: Record<string, { width: number; height: number; dpr: number }> = {
 	// iPhones (DPR 3)
-	'1170x2532':  { width: 390, height: 844, dpr: 3 },  // iPhone 13, 15
-	'1179x2556':  { width: 393, height: 852, dpr: 3 },  // iPhone 14, 15 Pro, 16
-	'1206x2622':  { width: 402, height: 874, dpr: 3 },  // iPhone 16 Plus, 16e
-	'1284x2778':  { width: 428, height: 926, dpr: 3 },  // iPhone 15 Plus
-	'1290x2796':  { width: 430, height: 932, dpr: 3 },  // iPhone 15 Pro Max, 16 Pro
-	'1320x2868':  { width: 440, height: 956, dpr: 3 },  // iPhone 16 Pro Max
-	'750x1334':   { width: 375, height: 667, dpr: 2 },  // iPhone 6/7/8, 14
-	'640x1136':   { width: 320, height: 568, dpr: 2 },  // iPhone 6/7/8 Plus
+	'1170x2532': { width: 390, height: 844, dpr: 3 }, // iPhone 13, 15
+	'1179x2556': { width: 393, height: 852, dpr: 3 }, // iPhone 14, 15 Pro, 16
+	'1206x2622': { width: 402, height: 874, dpr: 3 }, // iPhone 16 Plus, 16e
+	'1284x2778': { width: 428, height: 926, dpr: 3 }, // iPhone 15 Plus
+	'1290x2796': { width: 430, height: 932, dpr: 3 }, // iPhone 15 Pro Max, 16 Pro
+	'1320x2868': { width: 440, height: 956, dpr: 3 }, // iPhone 16 Pro Max
+	'750x1334': { width: 375, height: 667, dpr: 2 }, // iPhone 6/7/8, 14
+	'640x1136': { width: 320, height: 568, dpr: 2 }, // iPhone 6/7/8 Plus
 	// iPads (DPR 2)
-	'1668x2388':  { width: 834, height: 1194, dpr: 2 },  // iPad Air 11", iPad 11"
-	'2048x2732':  { width: 1024, height: 1366, dpr: 2 },  // iPad Pro 12.9"
-	'1640x2360':  { width: 820, height: 1180, dpr: 2 },  // iPad Air 10.9"
-	'1032x1376':  { width: 1032, height: 1376, dpr: 2 },  // iPad Air 13"
-	'744x1133':   { width: 376, height: 573, dpr: 2 }  // iPad mini 8.3"
+	'1668x2388': { width: 834, height: 1194, dpr: 2 }, // iPad Air 11", iPad 11"
+	'2048x2732': { width: 1024, height: 1366, dpr: 2 }, // iPad Pro 12.9"
+	'1640x2360': { width: 820, height: 1180, dpr: 2 }, // iPad Air 10.9"
+	'1032x1376': { width: 1032, height: 1376, dpr: 2 }, // iPad Air 13"
+	'744x1133': { width: 376, height: 573, dpr: 2 } // iPad mini 8.3"
 };
 
 /**
@@ -53,7 +53,9 @@ const APPLE_DEVICES: Record<string, { width: number; height: number; dpr: number
  * Returns an array of HTML link strings to be injected into the page head.
  */
 function generateSplashScreenLinks(outDir: string): string[] {
-	const files = readdirSync(outDir).filter((f) => f.match(/^apple-splash-(portrait|landscape)-(dark-)?\d+x\d+\.png$/));
+	const files = readdirSync(outDir).filter((f) =>
+		f.match(/^apple-splash-(portrait|landscape)-(dark-)?\d+x\d+\.png$/)
+	);
 	if (files.length === 0) return [];
 
 	// Build lookup: "widthxheight" -> { deviceW, deviceH, dpr, orientation }
@@ -91,7 +93,9 @@ function generateSplashScreenLinks(outDir: string): string[] {
 		const href = `/${file}`;
 
 		if (isDark) {
-			darkLinks.push(`\t\t<link rel="apple-touch-startup-image" media="${media} and (prefers-color-scheme: dark)" href="${href}">`);
+			darkLinks.push(
+				`\t\t<link rel="apple-touch-startup-image" media="${media} and (prefers-color-scheme: dark)" href="${href}">`
+			);
 		} else {
 			lightLinks.push(`\t\t<link rel="apple-touch-startup-image" media="${media}" href="${href}">`);
 		}
@@ -136,10 +140,7 @@ export function llamaCppBuildPlugin(): Plugin {
 					if (splashLinks.length > 0) {
 						console.log(`✓ Generated ${splashLinks.length} apple-splash link tags`);
 						const splashHtml = splashLinks.map((l) => '\t\t' + l).join('\n');
-						content = content.replace(
-							/\t*<\/head>/,
-							splashHtml + '\n\t\t</head>'
-						);
+						content = content.replace(/\t*<\/head>/, splashHtml + '\n\t\t</head>');
 					}
 
 					content = content.replace(/\r/g, '');

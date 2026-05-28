@@ -2,6 +2,7 @@
 // for information about these interfaces
 
 import 'vite-plugin-pwa/pwa-assets';
+import 'vite-plugin-pwa/svelte';
 
 // Import chat types from dedicated module
 

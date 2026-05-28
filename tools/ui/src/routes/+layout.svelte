@@ -43,8 +43,8 @@
 
 	let chatSidebar:
 		| {
-			activateSearchMode?: () => void;
-			editActiveConversation?: () => void;
+				activateSearchMode?: () => void;
+				editActiveConversation?: () => void;
 		  }
 		| undefined = $state();
 
@@ -57,12 +57,16 @@
 	function updateFavicon() {
 		const dark = theme.isSystemDark;
 
-		let icoLink = document.querySelector('link[rel="icon"][sizes="48x48"]') as HTMLLinkElement | null;
+		let icoLink = document.querySelector(
+			'link[rel="icon"][sizes="48x48"]'
+		) as HTMLLinkElement | null;
 		if (icoLink) {
 			icoLink.href = dark ? '/favicon-dark.ico' : '/favicon.ico';
 		}
 
-		let svgLink = document.querySelector('link[rel="icon"][type="image/svg+xml"]') as HTMLLinkElement | null;
+		let svgLink = document.querySelector(
+			'link[rel="icon"][type="image/svg+xml"]'
+		) as HTMLLinkElement | null;
 		if (svgLink) {
 			svgLink.href = dark ? '/favicon-dark.svg' : '/favicon.svg';
 		}
@@ -259,13 +263,15 @@
 
 	// Service worker registration and update prompt
 	const {
-     	// offlineReady, // to do - add installation banners for iOS
-     	needRefresh, updateServiceWorker } = useRegisterSW({
-		onRegisteredSW(swUrl, r) {
+		// offlineReady, // to do - add installation banners for iOS
+		needRefresh,
+		updateServiceWorker
+	} = useRegisterSW({
+		onRegisteredSW(swUrl: string, r: ServiceWorkerRegistration | undefined) {
 			if (import.meta.env.DEV) {
 				// In dev mode, periodically check for SW updates
 				setInterval(async () => {
-					if (r.installing || !navigator?.onLine) return;
+					if (!r || r.installing || !navigator?.onLine) return;
 					try {
 						const resp = await fetch(swUrl, {
 							cache: 'no-store',
@@ -280,7 +286,7 @@
 				}, 60000); // every minute in dev
 			}
 		},
-		onRegisterError(error) {
+		onRegisterError(error: unknown) {
 			console.error('[PWA] SW registration error:', error);
 		}
 	});
