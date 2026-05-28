@@ -158,6 +158,23 @@ export {
 	type ToolResultLine
 } from './agentic';
 
+export { dedupeArtifactAttachments, getArtifactAttachmentKey } from './agentic-artifact';
+
+export {
+	parseQuestionToolArguments,
+	parseQuestionToolResult,
+	formatQuestionToolResult,
+	type AgenticQuestionAnswerPair
+} from './agentic-question';
+
+export {
+	parseTodoWriteArguments,
+	parseTodoWriteResult,
+	formatTodoWriteResult
+} from './agentic-todo';
+
+export { extractToolResultAttachments } from './tool-result-attachments';
+
 // Cache utilities
 export { TTLCache, ReactiveTTLMap, type TTLCacheOptions } from './cache-ttl';
 

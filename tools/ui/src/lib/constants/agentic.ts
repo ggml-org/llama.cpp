@@ -1,4 +1,6 @@
 import type { AgenticConfig } from '$lib/types/agentic';
+import { JsonSchemaType, ToolCallType } from '$lib/enums';
+import type { OpenAIToolDefinition } from '$lib/types';
 
 export const ATTACHMENT_SAVED_REGEX = /\[Attachment saved: ([^\]]+)\]/;
 
@@ -8,6 +10,123 @@ export const DEFAULT_AGENTIC_CONFIG: AgenticConfig = {
 	enabled: true,
 	maxTurns: 100,
 	maxToolPreviewLines: 25
+} as const;
+
+export const AGENTIC_QUESTION_TOOL_NAME = 'question';
+export const AGENTIC_TODO_WRITE_TOOL_NAME = 'todowrite';
+export const AGENTIC_ARTIFACT_CREATE_TOOL_NAME = 'artifact_create';
+export const AGENTIC_ARTIFACT_EDIT_TOOL_NAME = 'artifact_edit';
+
+export const AGENTIC_QUESTION_TOOL_DEFINITION: OpenAIToolDefinition = {
+	type: ToolCallType.FUNCTION,
+	function: {
+		name: AGENTIC_QUESTION_TOOL_NAME,
+		description:
+			'Ask the user one or more clarifying questions before continuing. Use this when the assistant needs a concrete user choice or answer to proceed.',
+		parameters: {
+			type: JsonSchemaType.OBJECT,
+			properties: {
+				questions: {
+					type: 'array',
+					description: 'Questions to ask',
+					items: {
+						type: JsonSchemaType.OBJECT,
+						properties: {
+							type: {
+								type: 'string',
+								enum: ['single_choice', 'multiple_choice', 'freeform']
+							},
+							question: { type: 'string' },
+							header: { type: 'string' },
+							options: {
+								type: 'array',
+								items: {
+									type: JsonSchemaType.OBJECT,
+									properties: {
+										label: { type: 'string' },
+										description: { type: 'string' }
+									},
+									required: ['label', 'description']
+								}
+							},
+							multiple: { type: 'boolean' },
+							custom: { type: 'boolean' }
+						},
+						required: ['question', 'header']
+					}
+				}
+			},
+			required: ['questions']
+		}
+	}
+} as const;
+
+export const AGENTIC_TODO_WRITE_TOOL_DEFINITION: OpenAIToolDefinition = {
+	type: ToolCallType.FUNCTION,
+	function: {
+		name: AGENTIC_TODO_WRITE_TOOL_NAME,
+		description:
+			'Create or update the current task list. Use this to track multi-step work, mark progress, and keep task status current.',
+		parameters: {
+			type: JsonSchemaType.OBJECT,
+			properties: {
+				todos: {
+					type: 'array',
+					description: 'The updated todo list.',
+					items: {
+						type: JsonSchemaType.OBJECT,
+						properties: {
+							content: { type: 'string' },
+							status: {
+								type: 'string',
+								enum: ['pending', 'in_progress', 'completed', 'cancelled']
+							}
+						},
+						required: ['content', 'status']
+					}
+				}
+			},
+			required: ['todos']
+		}
+	}
+} as const;
+
+const AGENTIC_PRESENTABLE_CONTENT_SCHEMA = {
+	name: { type: 'string' },
+	mime_type: { type: 'string' },
+	content: { type: 'string' },
+	content_base64: { type: 'string' }
+} as const;
+
+export const AGENTIC_ARTIFACT_CREATE_TOOL_DEFINITION: OpenAIToolDefinition = {
+	type: ToolCallType.FUNCTION,
+	function: {
+		name: AGENTIC_ARTIFACT_CREATE_TOOL_NAME,
+		description:
+			'Create a file-like artifact for content the user asked to have as a file or document. Prefer this over replying only with inline text when the user wants a file to open or revise later.',
+		parameters: {
+			type: JsonSchemaType.OBJECT,
+			properties: AGENTIC_PRESENTABLE_CONTENT_SCHEMA,
+			required: ['name', 'mime_type']
+		}
+	}
+} as const;
+
+export const AGENTIC_ARTIFACT_EDIT_TOOL_DEFINITION: OpenAIToolDefinition = {
+	type: ToolCallType.FUNCTION,
+	function: {
+		name: AGENTIC_ARTIFACT_EDIT_TOOL_NAME,
+		description:
+			'Edit an existing artifact by artifact_id when revising a file previously created with artifact_create. Provide replacement content/content_base64 and optionally a new name or MIME type.',
+		parameters: {
+			type: JsonSchemaType.OBJECT,
+			properties: {
+				artifact_id: { type: 'string' },
+				...AGENTIC_PRESENTABLE_CONTENT_SCHEMA
+			},
+			required: ['artifact_id']
+		}
+	}
 } as const;
 
 export const REASONING_TAGS = {

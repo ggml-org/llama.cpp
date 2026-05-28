@@ -1,6 +1,14 @@
 import type { ChatMessageTimings, ChatRole, ChatMessageType } from '$lib/types/chat';
 import { AttachmentType } from '$lib/enums';
 
+export type AgenticAttachmentPresentation = 'artifact' | 'file';
+
+export interface DatabaseMessageExtraBase {
+	presentation?: AgenticAttachmentPresentation;
+	artifactId?: string;
+	mimeType?: string;
+}
+
 export interface McpServerOverride {
 	serverId: string;
 	enabled: boolean;
@@ -15,7 +23,7 @@ export interface DatabaseConversation {
 	forkedFromConversationId?: string;
 }
 
-export interface DatabaseMessageExtraAudioFile {
+export interface DatabaseMessageExtraAudioFile extends DatabaseMessageExtraBase {
 	type: AttachmentType.AUDIO;
 	name: string;
 	size?: number;
@@ -23,7 +31,7 @@ export interface DatabaseMessageExtraAudioFile {
 	mimeType: string;
 }
 
-export interface DatabaseMessageExtraVideoFile {
+export interface DatabaseMessageExtraVideoFile extends DatabaseMessageExtraBase {
 	type: AttachmentType.VIDEO;
 	name: string;
 	size?: number;
@@ -31,7 +39,7 @@ export interface DatabaseMessageExtraVideoFile {
 	mimeType: string;
 }
 
-export interface DatabaseMessageExtraImageFile {
+export interface DatabaseMessageExtraImageFile extends DatabaseMessageExtraBase {
 	type: AttachmentType.IMAGE;
 	name: string;
 	size?: number;
@@ -42,14 +50,14 @@ export interface DatabaseMessageExtraImageFile {
  * Legacy format from the old UI — pasted content was stored as "context" type
  * @deprecated Use DatabaseMessageExtraTextFile instead
  */
-export interface DatabaseMessageExtraLegacyContext {
+export interface DatabaseMessageExtraLegacyContext extends DatabaseMessageExtraBase {
 	type: AttachmentType.LEGACY_CONTEXT;
 	name: string;
 	size?: number;
 	content: string;
 }
 
-export interface DatabaseMessageExtraPdfFile {
+export interface DatabaseMessageExtraPdfFile extends DatabaseMessageExtraBase {
 	type: AttachmentType.PDF;
 	base64Data: string;
 	name: string;
@@ -59,14 +67,14 @@ export interface DatabaseMessageExtraPdfFile {
 	processedAsImages: boolean;
 }
 
-export interface DatabaseMessageExtraTextFile {
+export interface DatabaseMessageExtraTextFile extends DatabaseMessageExtraBase {
 	type: AttachmentType.TEXT;
 	name: string;
 	size?: number;
 	content: string;
 }
 
-export interface DatabaseMessageExtraMcpPrompt {
+export interface DatabaseMessageExtraMcpPrompt extends DatabaseMessageExtraBase {
 	type: AttachmentType.MCP_PROMPT;
 	name: string;
 	size?: number;
@@ -76,7 +84,7 @@ export interface DatabaseMessageExtraMcpPrompt {
 	arguments?: Record<string, string>;
 }
 
-export interface DatabaseMessageExtraMcpResource {
+export interface DatabaseMessageExtraMcpResource extends DatabaseMessageExtraBase {
 	type: AttachmentType.MCP_RESOURCE;
 	name: string;
 	size?: number;

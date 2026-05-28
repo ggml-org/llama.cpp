@@ -8,6 +8,7 @@
 		ChatScreenDragOverlay,
 		ChatScreenProcessingInfo,
 		ChatScreenActionScrollDown,
+		ChatScreenArtifactPane,
 		DialogEmptyFileAlert,
 		DialogFileUploadError,
 		DialogChatError,
@@ -38,6 +39,7 @@
 	import { modelsStore, modelOptions, selectedModelId } from '$lib/stores/models.svelte';
 	import { isFileTypeSupported, filterFilesByModalities } from '$lib/utils';
 	import { parseFilesToMessageExtras, processFilesToChatUploaded } from '$lib/utils/browser-only';
+	import type { DatabaseMessage, DatabaseMessageExtra } from '$lib/types';
 	import { onMount } from 'svelte';
 	import ChatScreenGreeting from './ChatScreenGreeting.svelte';
 
@@ -73,6 +75,9 @@
 	let emptyFileNames = $state<string[]>([]);
 
 	let initialMessage = $state('');
+	let dismissedArtifactKey = $state<string | null>(null);
+	let lastAutoPresentedArtifactKey = $state<string | null>(null);
+	let selectedArtifact = $state<{ key: string; attachment: DatabaseMessageExtra } | null>(null);
 
 	let isEmpty = $derived(
 		showCenteredEmpty && !activeConversation() && activeMessages().length === 0 && !isLoading()
@@ -116,6 +121,30 @@
 
 		return null;
 	});
+
+	let latestPresentedArtifact = $derived.by(() => {
+		const messages = activeMessages() as DatabaseMessage[];
+
+		for (let messageIndex = messages.length - 1; messageIndex >= 0; messageIndex--) {
+			const message = messages[messageIndex];
+			const extras = message.extra ?? [];
+
+			for (let extraIndex = extras.length - 1; extraIndex >= 0; extraIndex--) {
+				const extra = extras[extraIndex];
+
+				if (extra.presentation !== 'artifact') continue;
+
+				return {
+					key: `${message.id}:${extraIndex}:${extra.artifactId ?? extra.name}`,
+					attachment: extra
+				};
+			}
+		}
+
+		return null;
+	});
+	let activeArtifact = $derived(selectedArtifact);
+	let artifactPaneOpen = $derived(Boolean(activeArtifact));
 
 	let modelPropsVersion = $state(0);
 
@@ -354,8 +383,17 @@
 		}
 	}
 
+	function handleArtifactOpen(event: Event) {
+		const detail = (event as CustomEvent<{ key: string; attachment: DatabaseMessageExtra }>).detail;
+		if (!detail?.attachment || !detail.key) return;
+
+		selectedArtifact = detail;
+		dismissedArtifactKey = null;
+	}
+
 	onMount(() => {
 		autoScroll.startObserving();
+		window.addEventListener('agentic-artifact-open', handleArtifactOpen);
 
 		if (!disableAutoScroll) {
 			autoScroll.enable();
@@ -366,6 +404,10 @@
 			initialMessage = pendingDraft.message;
 			uploadedFiles = pendingDraft.files;
 		}
+
+		return () => {
+			window.removeEventListener('agentic-artifact-open', handleArtifactOpen);
+		};
 	});
 
 	$effect(() => {
@@ -374,6 +416,23 @@
 
 	$effect(() => {
 		autoScroll.setDisabled(disableAutoScroll);
+	});
+
+	$effect(() => {
+		if (!latestPresentedArtifact) {
+			selectedArtifact = null;
+			dismissedArtifactKey = null;
+			lastAutoPresentedArtifactKey = null;
+			return;
+		}
+
+		if (
+			latestPresentedArtifact.key !== dismissedArtifactKey &&
+			latestPresentedArtifact.key !== lastAutoPresentedArtifactKey
+		) {
+			selectedArtifact = latestPresentedArtifact;
+			lastAutoPresentedArtifactKey = latestPresentedArtifact.key;
+		}
 	});
 </script>
 
@@ -386,62 +445,81 @@
 {#if isServerLoading}
 	<ServerLoadingSplash />
 {:else}
-	<div
-		bind:this={chatScrollContainer}
-		aria-label="Chat interface with file drop zone"
-		class="flex h-full flex-col overflow-y-auto px-4 md:px-6"
-		ondragenter={handleDragEnter}
-		ondragleave={handleDragLeave}
-		ondragover={handleDragOver}
-		ondrop={handleDrop}
-		onscroll={handleScroll}
-		role="main"
-	>
-		<div class="flex grow flex-col pt-14">
-			{#if !isEmpty}
-				<ChatMessages
-					messages={activeMessages()}
-					onMessagesReady={handleMessagesReady}
-					onUserAction={() => {
-						autoScroll.enable();
-						if (!autoScroll.userScrolledUp) {
-							autoScroll.scrollToBottom();
-						}
-					}}
-				/>
-			{/if}
-
-			<div
-				class={[
-					'pointer-events-none sticky right-4 left-4 mt-auto transition-all duration-200',
-					isEmpty ? 'bottom-[calc(50dvh-7rem)]' : 'bottom-4 pt-24 md:pt-32'
-				]}
-			>
-				<ChatScreenGreeting {isEmpty} />
-
-				<ChatScreenActionScrollDown
-					container={chatScrollContainer}
-					hasProcessingInfoVisible={processingInfoVisible}
-				/>
-
-				<ChatScreenProcessingInfo onVisibilityChange={handleProcessingInfoVisibility} />
-
-				<ChatScreenServerError />
-
-				<div class="conversation-chat-form pointer-events-auto rounded-t-3xl">
-					<ChatScreenForm
-						disabled={hasPropsError || isEditing()}
-						{initialMessage}
-						isLoading={isCurrentConversationLoading}
-						onFileRemove={handleFileRemove}
-						onFileUpload={handleFileUpload}
-						onSend={handleSendMessage}
-						onStop={() => chatStore.stopGeneration()}
-						onSystemPromptAdd={handleSystemPromptAdd}
-						bind:uploadedFiles
+	<div class="flex h-full min-w-0 overflow-hidden">
+		<div
+			bind:this={chatScrollContainer}
+			aria-label="Chat interface with file drop zone"
+			class="min-w-0 flex-shrink flex-grow basis-full overflow-y-auto px-4 transition-[flex-basis] duration-300 ease-out md:px-6 {artifactPaneOpen
+				? 'md:basis-1/2'
+				: 'md:basis-full'}"
+			ondragenter={handleDragEnter}
+			ondragleave={handleDragLeave}
+			ondragover={handleDragOver}
+			ondrop={handleDrop}
+			onscroll={handleScroll}
+			role="main"
+		>
+			<div class="flex grow flex-col pt-14">
+				{#if !isEmpty}
+					<ChatMessages
+						messages={activeMessages()}
+						onMessagesReady={handleMessagesReady}
+						onUserAction={() => {
+							autoScroll.enable();
+							if (!autoScroll.userScrolledUp) {
+								autoScroll.scrollToBottom();
+							}
+						}}
 					/>
+				{/if}
+
+				<div
+					class={[
+						'pointer-events-none sticky right-4 left-4 mt-auto transition-all duration-200',
+						isEmpty ? 'bottom-[calc(50dvh-7rem)]' : 'bottom-4 pt-24 md:pt-32'
+					]}
+				>
+					<ChatScreenGreeting {isEmpty} />
+
+					<ChatScreenActionScrollDown
+						container={chatScrollContainer}
+						hasProcessingInfoVisible={processingInfoVisible}
+					/>
+
+					<ChatScreenProcessingInfo onVisibilityChange={handleProcessingInfoVisibility} />
+
+					<ChatScreenServerError />
+
+					<div class="conversation-chat-form pointer-events-auto rounded-t-3xl">
+						<ChatScreenForm
+							disabled={hasPropsError || isEditing()}
+							{initialMessage}
+							isLoading={isCurrentConversationLoading}
+							onFileRemove={handleFileRemove}
+							onFileUpload={handleFileUpload}
+							onSend={handleSendMessage}
+							onStop={() => chatStore.stopGeneration()}
+							onSystemPromptAdd={handleSystemPromptAdd}
+							bind:uploadedFiles
+						/>
+					</div>
 				</div>
 			</div>
+		</div>
+
+		<div
+			class="min-w-0 flex-shrink-0 overflow-hidden transition-[flex-basis,opacity,transform] duration-300 ease-out {artifactPaneOpen
+				? 'basis-full opacity-100 md:basis-1/2'
+				: 'basis-0 translate-x-4 opacity-0'}"
+			aria-hidden={!artifactPaneOpen}
+		>
+			<ChatScreenArtifactPane
+				attachment={activeArtifact?.attachment ?? null}
+				onClose={() => {
+					if (activeArtifact) dismissedArtifactKey = activeArtifact.key;
+					selectedArtifact = null;
+				}}
+			/>
 		</div>
 	</div>
 {/if}

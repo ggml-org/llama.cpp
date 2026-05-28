@@ -1,7 +1,10 @@
 #include "server-tools.h"
 
+#include "base64.hpp"
+
 #include <sheredom/subprocess.h>
 
+#include <unordered_set>
 #include <filesystem>
 #include <fstream>
 #include <regex>
@@ -26,6 +29,98 @@ static std::vector<char *> to_cstr_vec(const std::vector<std::string> & v) {
     }
     r.push_back(nullptr);
     return r;
+}
+
+static std::string trim_copy(const std::string & value) {
+    const auto start = value.find_first_not_of(" \t\r\n");
+    if (start == std::string::npos) {
+        return "";
+    }
+
+    const auto end = value.find_last_not_of(" \t\r\n");
+    return value.substr(start, end - start + 1);
+}
+
+static std::string json_string_value_trimmed(const json & body, const std::string & key) {
+    if (!body.contains(key) || !body.at(key).is_string()) {
+        return "";
+    }
+
+    return trim_copy(body.at(key).get<std::string>());
+}
+
+static int64_t base64_size_bytes(const std::string & base64_data) {
+    size_t padding = 0;
+    if (string_ends_with(base64_data, "==")) {
+        padding = 2;
+    } else if (string_ends_with(base64_data, "=")) {
+        padding = 1;
+    }
+
+    return std::max<int64_t>(0, (int64_t) ((base64_data.size() * 3) / 4) - (int64_t) padding);
+}
+
+static std::string encode_text_base64(const std::string & text) {
+    return base64::encode(text.data(), text.size());
+}
+
+static std::string decode_text_base64(const std::string & base64_data) {
+    try {
+        return base64::decode(base64_data);
+    } catch (...) {
+        return "";
+    }
+}
+
+static json make_artifact_attachment_json(
+        const std::string & artifact_id,
+        const server_tool_artifact_item & artifact,
+        bool presentation_artifact) {
+    const int64_t size = base64_size_bytes(artifact.base64_data);
+    json result = {
+        {"name", artifact.name},
+        {"size", size},
+        {"artifactId", artifact_id},
+        {"presentation", presentation_artifact ? "artifact" : "file"},
+        {"mimeType", artifact.mime_type},
+    };
+
+    if (string_starts_with(artifact.mime_type, "image/")) {
+        result["type"] = "IMAGE";
+        result["base64Url"] = "data:" + artifact.mime_type + ";base64," + artifact.base64_data;
+        return result;
+    }
+
+    if (artifact.mime_type == "application/pdf") {
+        result["type"] = "PDF";
+        result["base64Data"] = artifact.base64_data;
+        result["content"] = "";
+        result["processedAsImages"] = false;
+        return result;
+    }
+
+    if (string_starts_with(artifact.mime_type, "audio/")) {
+        result["type"] = "AUDIO";
+        result["base64Data"] = artifact.base64_data;
+        return result;
+    }
+
+    if (string_starts_with(artifact.mime_type, "video/")) {
+        result["type"] = "VIDEO";
+        result["base64Data"] = artifact.base64_data;
+        return result;
+    }
+
+    result["type"] = "TEXT";
+    result["content"] = artifact.text_content.empty() ? decode_text_base64(artifact.base64_data) : artifact.text_content;
+    return result;
+}
+
+static json make_tool_completed_response(const std::string & text) {
+    return {
+        {"status", "completed"},
+        {"plain_text_response", text},
+    };
 }
 
 struct run_proc_result {
@@ -148,7 +243,7 @@ struct server_tool_read_file : server_tool {
         };
     }
 
-    json invoke(json params) override {
+    json invoke(const json & params, const json &, server_tools *) override {
         std::string path  = params.at("path").get<std::string>();
         int  start_line   = json_value(params, "start_line", 1);
         int  end_line     = json_value(params, "end_line",  -1); // -1 = no limit
@@ -229,7 +324,7 @@ struct server_tool_file_glob_search : server_tool {
         };
     }
 
-    json invoke(json params) override {
+    json invoke(const json & params, const json &, server_tools *) override {
         std::string base    = params.at("path").get<std::string>();
         std::string include = json_value(params, "include", std::string("**"));
         std::string exclude = json_value(params, "exclude", std::string(""));
@@ -295,7 +390,7 @@ struct server_tool_grep_search : server_tool {
         };
     }
 
-    json invoke(json params) override {
+    json invoke(const json & params, const json &, server_tools *) override {
         std::string path    = params.at("path").get<std::string>();
         std::string pat_str = params.at("pattern").get<std::string>();
         std::string include = json_value(params, "include", std::string("**"));
@@ -391,7 +486,7 @@ struct server_tool_exec_shell_command : server_tool {
         };
     }
 
-    json invoke(json params) override {
+    json invoke(const json & params, const json &, server_tools *) override {
         std::string command   = params.at("command").get<std::string>();
         int    timeout        = json_value(params, "timeout",         10);
         size_t max_output     = (size_t) json_value(params, "max_output_size", (int) SERVER_TOOL_EXEC_SHELL_COMMAND_MAX_OUTPUT_SIZE);
@@ -446,7 +541,7 @@ struct server_tool_write_file : server_tool {
         };
     }
 
-    json invoke(json params) override {
+    json invoke(const json & params, const json &, server_tools *) override {
         std::string path    = params.at("path").get<std::string>();
         std::string content = params.at("content").get<std::string>();
 
@@ -521,7 +616,7 @@ struct server_tool_edit_file : server_tool {
         };
     }
 
-    json invoke(json params) override {
+    json invoke(const json & params, const json &, server_tools *) override {
         std::string path = params.at("path").get<std::string>();
         const json & changes = params.at("changes");
 
@@ -666,7 +761,7 @@ struct server_tool_apply_diff : server_tool {
         };
     }
 
-    json invoke(json params) override {
+    json invoke(const json & params, const json &, server_tools *) override {
         std::string diff = params.at("diff").get<std::string>();
 
         // write diff to a temporary file
@@ -715,11 +810,350 @@ struct server_tool_get_datetime : server_tool {
         };
     }
 
-    json invoke(json) override {
+    json invoke(const json &, const json &, server_tools *) override {
         auto now = std::chrono::system_clock::now();
         auto time = std::chrono::system_clock::to_time_t(now);
 
         return {{"result", std::ctime(&time)}};
+    }
+};
+
+//
+// question: pause tool execution until the user replies in the UI
+//
+
+struct server_tool_question : server_tool {
+    server_tool_question() {
+        name = "question";
+        display_name = "Question";
+        permission_write = false;
+    }
+
+    json get_definition() override {
+        return {
+            {"type", "function"},
+            {"function", {
+                {"name", name},
+                {"description", "Ask the user one or more clarifying questions before continuing. Use this when the assistant needs a concrete user choice or answer to proceed."},
+                {"parameters", {
+                    {"type", "object"},
+                    {"properties", {
+                        {"questions", {
+                            {"type", "array"},
+                            {"description", "Questions to ask"},
+                            {"items", {
+                                {"type", "object"},
+                                {"properties", {
+                                    {"question", { {"type", "string"}, {"description", "Complete question"} }},
+                                    {"header",   { {"type", "string"}, {"description", "Very short label (max 30 chars)"} }},
+                                    {"options", {
+                                        {"type", "array"},
+                                        {"description", "Available choices"},
+                                        {"items", {
+                                            {"type", "object"},
+                                            {"properties", {
+                                                {"label",       { {"type", "string"}, {"description", "Display text (1-5 words, concise)"} }},
+                                                {"description", { {"type", "string"}, {"description", "Explanation of choice"} }},
+                                            }},
+                                            {"required", json::array({"label", "description"})},
+                                        }},
+                                    }},
+                                    {"multiple", { {"type", "boolean"}, {"description", "Allow selecting multiple choices"} }},
+                                    {"custom",   { {"type", "boolean"}, {"description", "Allow typing a custom answer (default: true)"} }},
+                                }},
+                                {"required", json::array({"question", "header"})},
+                            }},
+                        }},
+                    }},
+                    {"required", json::array({"questions"})},
+                }},
+            }},
+        };
+    }
+
+    json invoke(const json & params, const json & context, server_tools * state) override {
+        std::string conversation_id = json_value(context, "conversation_id", std::string(""));
+        if (conversation_id.empty()) {
+            return {{"error", "question requires context.conversation_id"}};
+        }
+
+        if (!params.contains("questions") || !params.at("questions").is_array()) {
+            return {{"error", "question requires a questions array"}};
+        }
+
+        static std::atomic<int> counter{0};
+        std::string request_id = string_format("question-%lld-%d",
+            (long long) std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::system_clock::now().time_since_epoch()).count(),
+            ++counter);
+
+        json request = {
+            {"request_id", request_id},
+            {"conversation_id", conversation_id},
+            {"message_id", json_value(context, "message_id", std::string(""))},
+            {"tool_call_id", json_value(context, "tool_call_id", std::string(""))},
+            {"questions", params.at("questions")},
+        };
+
+        {
+            std::lock_guard<std::mutex> lock(state->mutex_state);
+            state->pending_questions[request_id] = request;
+        }
+
+        return {
+            {"status", "awaiting_user"},
+            {"kind", "question"},
+            {"request_id", request_id},
+            {"payload", request},
+        };
+    }
+};
+
+//
+// todowrite: keep a structured todo snapshot for the conversation
+//
+
+struct server_tool_todowrite : server_tool {
+    server_tool_todowrite() {
+        name = "todowrite";
+        display_name = "Todo write";
+        permission_write = false;
+    }
+
+    json get_definition() override {
+        return {
+            {"type", "function"},
+            {"function", {
+                {"name", name},
+                {"description", "Create or update the current task list. Use this to track multi-step work, mark progress, and keep task status current."},
+                {"parameters", {
+                    {"type", "object"},
+                    {"properties", {
+                        {"todos", {
+                            {"type", "array"},
+                            {"description", "The updated todo list."},
+                            {"items", {
+                                {"type", "object"},
+                                {"properties", {
+                                    {"content", {{"type", "string"}}},
+                                    {"status", {{"type", "string"}, {"enum", json::array({"pending", "in_progress", "completed", "cancelled"})}}},
+                                }},
+                                {"required", json::array({"content", "status"})},
+                            }},
+                        }},
+                    }},
+                    {"required", json::array({"todos"})},
+                }},
+            }},
+        };
+    }
+
+    json invoke(const json & params, const json &, server_tools *) override {
+        if (!params.contains("todos") || !params.at("todos").is_array()) {
+            return {{"error", "todowrite requires a todos array"}};
+        }
+
+        json todos = json::array();
+        static const std::unordered_set<std::string> valid_statuses = {
+            "pending", "in_progress", "completed", "cancelled"
+        };
+
+        for (const auto & item : params.at("todos")) {
+            if (!item.is_object()) {
+                continue;
+            }
+
+            std::string content = trim_copy(json_value(item, "content", std::string("")));
+            std::string status = trim_copy(json_value(item, "status", std::string("pending")));
+            if (content.empty()) {
+                continue;
+            }
+            if (valid_statuses.count(status) == 0) {
+                status = "pending";
+            }
+
+            todos.push_back({
+                {"content", content},
+                {"status", status},
+            });
+        }
+
+        if (todos.empty()) {
+            return {{"error", "todowrite requires at least one valid todo"}};
+        }
+
+        return make_tool_completed_response(todos.dump(2));
+    }
+};
+
+//
+// artifact_create / artifact_edit: create and revise presentable file outputs
+//
+
+struct server_tool_artifact_create : server_tool {
+    server_tool_artifact_create() {
+        name = "artifact_create";
+        display_name = "Artifact create";
+        permission_write = false;
+    }
+
+    json get_definition() override {
+        return {
+            {"type", "function"},
+            {"function", {
+                {"name", name},
+                {"description", "Create a file-like artifact for content the user asked to have as a file or document. Prefer this over replying only with inline text when the user wants a file to open or revise later."},
+                {"parameters", {
+                    {"type", "object"},
+                    {"properties", {
+                        {"name", {{"type", "string"}}},
+                        {"mime_type", {{"type", "string"}}},
+                        {"content", {{"type", "string"}}},
+                        {"content_base64", {{"type", "string"}}},
+                    }},
+                    {"required", json::array({"name", "mime_type"})},
+                }},
+            }},
+        };
+    }
+
+    json invoke(const json & params, const json & context, server_tools * state) override {
+        const std::string conversation_id = json_value(context, "conversation_id", std::string(""));
+        if (conversation_id.empty()) {
+            return {{"error", "artifact_create requires context.conversation_id"}};
+        }
+
+        const std::string name = json_string_value_trimmed(params, "name");
+        const std::string mime_type = json_string_value_trimmed(params, "mime_type");
+        std::string content = params.contains("content") && params.at("content").is_string()
+            ? params.at("content").get<std::string>()
+            : "";
+        std::string content_base64 = json_string_value_trimmed(params, "content_base64");
+
+        if (name.empty()) {
+            return {{"error", "artifact_create requires a non-empty name."}};
+        }
+        if (mime_type.empty()) {
+            return {{"error", "artifact_create requires a non-empty mime_type."}};
+        }
+        if (content.empty() && content_base64.empty()) {
+            return {{"error", "artifact_create requires content or content_base64."}};
+        }
+
+        if (content_base64.empty()) {
+            content_base64 = encode_text_base64(content);
+        }
+
+        const std::string artifact_id = string_format(
+            "artifact-%lld-%s",
+            (long long) std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::system_clock::now().time_since_epoch()).count(),
+            random_string().c_str());
+
+        server_tool_artifact_item artifact = {
+            name,
+            mime_type,
+            content_base64,
+            content.empty() ? decode_text_base64(content_base64) : content,
+        };
+
+        {
+            std::lock_guard<std::mutex> lock(state->mutex_state);
+            state->artifacts[conversation_id][artifact_id] = artifact;
+        }
+
+        json attachment = make_artifact_attachment_json(artifact_id, artifact, true);
+        return {
+            {"status", "completed"},
+            {"plain_text_response", "Created artifact " + artifact_id + ": " + name},
+            {"artifact_id", artifact_id},
+            {"attachments", json::array({attachment})},
+        };
+    }
+};
+
+struct server_tool_artifact_edit : server_tool {
+    server_tool_artifact_edit() {
+        name = "artifact_edit";
+        display_name = "Artifact edit";
+        permission_write = false;
+    }
+
+    json get_definition() override {
+        return {
+            {"type", "function"},
+            {"function", {
+                {"name", name},
+                {"description", "Edit an existing artifact by artifact_id when revising a file previously created with artifact_create. Provide replacement content/content_base64 and optionally a new name or MIME type."},
+                {"parameters", {
+                    {"type", "object"},
+                    {"properties", {
+                        {"artifact_id", {{"type", "string"}}},
+                        {"name", {{"type", "string"}}},
+                        {"mime_type", {{"type", "string"}}},
+                        {"content", {{"type", "string"}}},
+                        {"content_base64", {{"type", "string"}}},
+                    }},
+                    {"required", json::array({"artifact_id"})},
+                }},
+            }},
+        };
+    }
+
+    json invoke(const json & params, const json & context, server_tools * state) override {
+        const std::string conversation_id = json_value(context, "conversation_id", std::string(""));
+        if (conversation_id.empty()) {
+            return {{"error", "artifact_edit requires context.conversation_id"}};
+        }
+
+        const std::string artifact_id = json_string_value_trimmed(params, "artifact_id");
+        if (artifact_id.empty()) {
+            return {{"error", "artifact_edit requires a non-empty artifact_id."}};
+        }
+
+        std::lock_guard<std::mutex> lock(state->mutex_state);
+        auto conv_it = state->artifacts.find(conversation_id);
+        if (conv_it == state->artifacts.end()) {
+            return {{"error", "Artifact not found: " + artifact_id}};
+        }
+
+        auto artifact_it = conv_it->second.find(artifact_id);
+        if (artifact_it == conv_it->second.end()) {
+            return {{"error", "Artifact not found: " + artifact_id}};
+        }
+
+        server_tool_artifact_item artifact = artifact_it->second;
+
+        const std::string updated_name = json_string_value_trimmed(params, "name");
+        const std::string updated_mime_type = json_string_value_trimmed(params, "mime_type");
+        std::string updated_content = params.contains("content") && params.at("content").is_string()
+            ? params.at("content").get<std::string>()
+            : "";
+        std::string updated_content_base64 = json_string_value_trimmed(params, "content_base64");
+
+        if (!updated_name.empty()) {
+            artifact.name = updated_name;
+        }
+        if (!updated_mime_type.empty()) {
+            artifact.mime_type = updated_mime_type;
+        }
+        if (!updated_content_base64.empty()) {
+            artifact.base64_data = updated_content_base64;
+            artifact.text_content = updated_content.empty() ? decode_text_base64(updated_content_base64) : updated_content;
+        } else if (!updated_content.empty()) {
+            artifact.text_content = updated_content;
+            artifact.base64_data = encode_text_base64(updated_content);
+        }
+
+        artifact_it->second = artifact;
+
+        json attachment = make_artifact_attachment_json(artifact_id, artifact, true);
+        return {
+            {"status", "completed"},
+            {"plain_text_response", "Edited artifact " + artifact_id + ": " + artifact.name},
+            {"artifact_id", artifact_id},
+            {"attachments", json::array({attachment})},
+        };
     }
 };
 
@@ -737,6 +1171,10 @@ static std::vector<std::unique_ptr<server_tool>> build_tools() {
     tools.push_back(std::make_unique<server_tool_edit_file>());
     tools.push_back(std::make_unique<server_tool_apply_diff>());
     tools.push_back(std::make_unique<server_tool_get_datetime>());
+    tools.push_back(std::make_unique<server_tool_question>());
+    tools.push_back(std::make_unique<server_tool_todowrite>());
+    tools.push_back(std::make_unique<server_tool_artifact_create>());
+    tools.push_back(std::make_unique<server_tool_artifact_edit>());
     return tools;
 }
 
@@ -793,8 +1231,37 @@ void server_tools::setup(const std::vector<std::string> & enabled_tools) {
             json body = json::parse(req.body);
             std::string tool_name = body.at("tool").get<std::string>();
             json params = body.value("params", json::object());
-            json result = invoke(tool_name, params);
+            json context = body.value("context", json::object());
+            json result = invoke(tool_name, params, context);
             res->data   = safe_json_to_str(result);
+        } catch (const json::exception & e) {
+            res->status = 400;
+            res->data   = safe_json_to_str(format_error_response(e.what(), ERROR_TYPE_INVALID_REQUEST));
+        } catch (const std::exception & e) {
+            SRV_ERR("got exception: %s\n", e.what());
+            res->status = 500;
+            res->data   = safe_json_to_str(format_error_response(e.what(), ERROR_TYPE_SERVER));
+        }
+        return res;
+    };
+
+    handle_get_pending = [this](const server_http_req & req) -> server_http_res_ptr {
+        auto res = std::make_unique<server_http_res>();
+        try {
+            res->data = safe_json_to_str(list_pending(req.get_param("conversation_id")));
+        } catch (const std::exception & e) {
+            SRV_ERR("got exception: %s\n", e.what());
+            res->status = 500;
+            res->data   = safe_json_to_str(format_error_response(e.what(), ERROR_TYPE_SERVER));
+        }
+        return res;
+    };
+
+    handle_post_reply = [this](const server_http_req & req) -> server_http_res_ptr {
+        auto res = std::make_unique<server_http_res>();
+        try {
+            json body = json::parse(req.body);
+            res->data = safe_json_to_str(reply(body));
         } catch (const json::exception & e) {
             res->status = 400;
             res->data   = safe_json_to_str(format_error_response(e.what(), ERROR_TYPE_INVALID_REQUEST));
@@ -807,11 +1274,89 @@ void server_tools::setup(const std::vector<std::string> & enabled_tools) {
     };
 }
 
-json server_tools::invoke(const std::string & name, const json & params) {
+json server_tools::invoke(const std::string & name, const json & params, const json & context) {
     for (auto & t : tools) {
         if (t->name == name) {
-            return t->invoke(params);
+            return t->invoke(params, context, this);
         }
     }
     return {{"error", "unknown tool: " + name}};
+}
+
+json server_tools::list_pending(const std::string & conversation_id) {
+    json result = json::array();
+    std::lock_guard<std::mutex> lock(mutex_state);
+
+    for (auto it = pending_questions.begin(); it != pending_questions.end(); ++it) {
+        const json & item = it.value();
+        if (conversation_id.empty() || json_value(item, "conversation_id", std::string("")) == conversation_id) {
+            result.push_back(item);
+        }
+    }
+
+    return result;
+}
+
+json server_tools::reply(const json & body) {
+    std::string request_id = body.at("request_id").get<std::string>();
+    std::string conversation_id = body.at("conversation_id").get<std::string>();
+    json answers = body.value("answers", json::array());
+    bool rejected = json_value(body, "rejected", false);
+
+    json request;
+    {
+        std::lock_guard<std::mutex> lock(mutex_state);
+        auto it = pending_questions.find(request_id);
+        if (it == pending_questions.end()) {
+            return {{"error", "unknown question request: " + request_id}};
+        }
+        request = it.value();
+        pending_questions.erase(it);
+    }
+
+    if (json_value(request, "conversation_id", std::string("")) != conversation_id) {
+        return {{"error", "conversation_id does not match request"}};
+    }
+
+    if (rejected) {
+        return {
+            {"status", "completed"},
+            {"plain_text_response", "The user dismissed this question."},
+            {"is_error", true},
+        };
+    }
+
+    if (!answers.is_array()) {
+        return {{"error", "answers must be an array"}};
+    }
+
+    const json & questions = request.at("questions");
+    std::vector<std::string> formatted;
+    size_t count = std::min(questions.size(), answers.size());
+    formatted.reserve(count);
+
+    for (size_t i = 0; i < count; ++i) {
+        const auto & question = questions.at(i);
+        const auto & answer = answers.at(i);
+        std::string question_text = json_value(question, "question", std::string("Question"));
+
+        if (answer.is_array()) {
+            std::vector<std::string> values;
+            for (const auto & item : answer) {
+                if (item.is_string()) {
+                    values.push_back(item.get<std::string>());
+                }
+            }
+            formatted.push_back("\"" + question_text + "\"=\"" + string_join(values, ", ") + "\"");
+        } else if (answer.is_string()) {
+            formatted.push_back("\"" + question_text + "\"=\"" + answer.get<std::string>() + "\"");
+        } else {
+            formatted.push_back("\"" + question_text + "\"=\"Unanswered\"");
+        }
+    }
+
+    return {
+        {"status", "completed"},
+        {"plain_text_response", "User has answered your questions: " + string_join(formatted, ", ") + ". You can now continue with the user's answers in mind."},
+    };
 }

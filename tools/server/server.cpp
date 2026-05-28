@@ -236,6 +236,8 @@ int llama_server(int argc, char ** argv) {
         SRV_WRN("%s", "-----------------\n");
         ctx_http.get ("/tools",           ex_wrapper(tools.handle_get));
         ctx_http.post("/tools",           ex_wrapper(tools.handle_post));
+        ctx_http.get ("/tools/pending",   ex_wrapper(tools.handle_get_pending));
+        ctx_http.post("/tools/reply",     ex_wrapper(tools.handle_post_reply));
     }
 
     //

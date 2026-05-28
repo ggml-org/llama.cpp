@@ -1,5 +1,6 @@
 import type { MessageRole } from '$lib/enums';
 import { ToolCallType } from '$lib/enums';
+import type { OpenAIToolDefinition } from './mcp';
 import type {
 	ApiChatCompletionRequest,
 	ApiChatCompletionToolCall,
@@ -53,6 +54,28 @@ export type AgenticMessage =
 export type AgenticAssistantMessage = Extract<AgenticMessage, { role: MessageRole.ASSISTANT }>;
 export type AgenticToolCallList = NonNullable<AgenticAssistantMessage['tool_calls']>;
 
+export interface AgenticToolExecutionContext {
+	conversationId: string;
+	toolCall: AgenticToolCallPayload;
+	signal?: AbortSignal;
+}
+
+export interface AgenticToolExecutionResult {
+	content: string;
+	isError?: boolean;
+	extras?: DatabaseMessageExtra[];
+}
+
+export interface AgenticToolProvider {
+	id: string;
+	tools: OpenAIToolDefinition[];
+	requiresPermission?: (toolName: string) => boolean;
+	executeTool?: (
+		toolCall: AgenticToolCallPayload,
+		context: AgenticToolExecutionContext
+	) => Promise<AgenticToolExecutionResult>;
+}
+
 export type AgenticChatCompletionRequest = Omit<ApiChatCompletionRequest, 'messages'> & {
 	messages: AgenticMessage[];
 	stream: true;
@@ -70,6 +93,47 @@ export interface AgenticSession {
 	lastError: Error | null;
 	streamingToolCall: { name: string; arguments: string } | null;
 	pendingPermissionRequest: { toolName: string; serverLabel: string } | null;
+	pendingQuestionRequest?: PendingBuiltinQuestionRequest | null;
+}
+
+export interface PendingBuiltinQuestionOption {
+	label: string;
+	description: string;
+}
+
+export type AgenticQuestionType = 'single_choice' | 'multiple_choice' | 'freeform';
+
+export interface AgenticQuestionPrompt {
+	question: string;
+	header: string;
+	options: PendingBuiltinQuestionOption[];
+	type: AgenticQuestionType;
+	multiple?: boolean;
+	custom?: boolean;
+}
+
+export type AgenticQuestionAnswers = string[][];
+
+export type AgenticTodoStatus = 'pending' | 'in_progress' | 'completed' | 'cancelled';
+
+export interface AgenticTodoItem {
+	content: string;
+	status: AgenticTodoStatus;
+}
+
+export interface PendingBuiltinQuestionItem {
+	question: string;
+	header: string;
+	options?: PendingBuiltinQuestionOption[];
+	multiple?: boolean;
+	custom?: boolean;
+}
+
+export interface PendingBuiltinQuestionRequest {
+	requestID: string;
+	conversationId: string;
+	toolCallId: string;
+	questions: AgenticQuestionPrompt[];
 }
 
 /**

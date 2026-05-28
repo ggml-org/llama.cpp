@@ -1,12 +1,17 @@
 <script lang="ts">
 	import { Wrench, Loader2, Brain } from '@lucide/svelte';
 	import {
+		ChatAttachmentsList,
+		ChatMessageAgenticArtifacts,
+		ChatMessageAgenticQuestionAnswer,
+		ChatMessageAgenticTodoList,
 		ChatMessageStatistics,
 		CollapsibleContentBlock,
 		MarkdownContent,
 		SyntaxHighlightedCode,
 		ChatMessageActionCardPermissionRequest,
-		ChatMessageActionCardContinueRequest
+		ChatMessageActionCardContinueRequest,
+		ChatMessageActionCardQuestionRequest
 	} from '$lib/components/app';
 
 	import {
@@ -15,6 +20,12 @@
 		FileTypeText,
 		ToolPermissionDecision
 	} from '$lib/enums';
+	import {
+		AGENTIC_ARTIFACT_CREATE_TOOL_NAME,
+		AGENTIC_ARTIFACT_EDIT_TOOL_NAME,
+		AGENTIC_QUESTION_TOOL_NAME,
+		AGENTIC_TODO_WRITE_TOOL_NAME
+	} from '$lib/constants';
 	import type {
 		ChatMessageAgenticTimings,
 		ChatMessageAgenticTurnStats,
@@ -23,16 +34,21 @@
 	import {
 		deriveAgenticSections,
 		formatJsonPretty,
+		parseQuestionToolResult,
+		parseTodoWriteResult,
 		parseToolResultWithImages,
 		type AgenticSection,
 		type ToolResultLine
 	} from '$lib/utils';
 	import {
+		agenticTodos,
 		agenticPendingPermissionRequest,
 		agenticResolvePermission,
 		agenticPendingContinueRequest,
-		agenticResolveContinue
+		agenticResolveContinue,
+		agenticPendingBuiltinQuestion
 	} from '$lib/stores/agentic.svelte';
+	import { chatStore } from '$lib/stores/chat.svelte';
 	import { config } from '$lib/stores/settings.svelte';
 
 	interface Props {
@@ -99,17 +115,77 @@
 		agenticResolveContinue(message.convId, shouldContinue);
 	}
 
+	let questionDismissed = $state(false);
+
+	const pendingQuestion = $derived(
+		isLastAssistantMessage ? agenticPendingBuiltinQuestion(message.convId) : null
+	);
+
+	let prevQuestionRef: typeof pendingQuestion = null;
+	$effect(() => {
+		if (pendingQuestion !== prevQuestionRef) {
+			prevQuestionRef = pendingQuestion;
+			if (pendingQuestion) {
+				questionDismissed = false;
+			}
+		}
+	});
+
+	async function handleQuestion(answers: string[][]) {
+		questionDismissed = true;
+		await chatStore.answerBuiltinQuestion(message.convId, answers);
+	}
+
+	async function handleQuestionDismiss() {
+		questionDismissed = true;
+		await chatStore.answerBuiltinQuestion(message.convId, [], { rejected: true });
+	}
+
 	const sections = $derived(deriveAgenticSections(message, toolMessages, [], isStreaming));
 
 	// Parse tool results with images
 	const sectionsParsed = $derived(
 		sections.map((section) => ({
 			...section,
+			questionAnswerPairs:
+				section.toolName === AGENTIC_QUESTION_TOOL_NAME && section.toolResult
+					? parseQuestionToolResult(section.toolResult)
+					: [],
+			todoItems:
+				section.toolName === AGENTIC_TODO_WRITE_TOOL_NAME && section.toolResult
+					? parseTodoWriteResult(section.toolResult)
+					: [],
 			parsedLines: section.toolResult
 				? parseToolResultWithImages(section.toolResult, section.toolResultExtras || message?.extra)
 				: ([] as ToolResultLine[])
 		}))
 	);
+
+	const liveTodos = $derived(agenticTodos(message.convId));
+	const latestTodoResultIndex = $derived.by(() => {
+		for (let i = sectionsParsed.length - 1; i >= 0; i--) {
+			if (sectionsParsed[i].todoItems.length > 0) return i;
+		}
+
+		return -1;
+	});
+	const hasTodoSection = $derived(
+		sectionsParsed.some((section) => section.toolName === AGENTIC_TODO_WRITE_TOOL_NAME)
+	);
+	const latestTodoAnchorIndex = $derived.by(() => {
+		if (latestTodoResultIndex >= 0) return latestTodoResultIndex;
+
+		for (let i = sectionsParsed.length - 1; i >= 0; i--) {
+			if (sectionsParsed[i].toolName === AGENTIC_TODO_WRITE_TOOL_NAME) return i;
+		}
+
+		return -1;
+	});
+	const latestTodoItems = $derived.by(() => {
+		if (!hasTodoSection) return [];
+		if (latestTodoResultIndex >= 0) return sectionsParsed[latestTodoResultIndex].todoItems;
+		return liveTodos;
+	});
 
 	// Group flat sections into agentic turns
 	// A new turn starts when a non-tool section follows a tool section
@@ -182,6 +258,13 @@
 			llm: stats.llm
 		};
 	}
+
+	function isArtifactTool(toolName?: string): boolean {
+		return (
+			toolName === AGENTIC_ARTIFACT_CREATE_TOOL_NAME ||
+			toolName === AGENTIC_ARTIFACT_EDIT_TOOL_NAME
+		);
+	}
 </script>
 
 {#snippet renderSection(section: (typeof sectionsParsed)[number], index: number)}
@@ -235,6 +318,12 @@
 		{@const isPending = section.type === AgenticSectionType.TOOL_CALL_PENDING}
 		{@const toolIcon = isPending ? Loader2 : Wrench}
 		{@const toolIconClass = isPending ? 'h-4 w-4 animate-spin' : 'h-4 w-4'}
+		{@const questionAnswerPairs = section.questionAnswerPairs}
+		{@const showLatestTodosHere = latestTodoItems.length > 0 && index === latestTodoAnchorIndex}
+		{@const showArtifacts = Boolean(section.toolResultExtras?.length)}
+		{@const showQuestionBlock = !isPending && questionAnswerPairs.length > 0}
+		{@const showTodoBlock = !isPending && showLatestTodosHere}
+		{@const hideInlineResult = showQuestionBlock || showTodoBlock || (showArtifacts && isArtifactTool(section.toolName))}
 
 		<CollapsibleContentBlock
 			open={isExpanded(index, section)}
@@ -259,39 +348,73 @@
 				</div>
 			{/if}
 
-			<div class="pt-3">
-				<div class="my-3 flex items-center gap-2 text-xs text-muted-foreground">
-					<span>Result:</span>
+			{#if !hideInlineResult}
+				<div class="pt-3">
+					<div class="my-3 flex items-center gap-2 text-xs text-muted-foreground">
+						<span>Result:</span>
 
+						{#if isPending}
+							<Loader2 class="h-3 w-3 animate-spin" />
+						{/if}
+					</div>
 					{#if isPending}
-						<Loader2 class="h-3 w-3 animate-spin" />
+						<div class="rounded bg-muted/30 p-2 text-xs text-muted-foreground italic">
+							Waiting for result...
+						</div>
+					{:else if section.toolResult}
+						<div class="overflow-auto rounded-lg border border-border bg-muted p-4">
+							{#each section.parsedLines as line, i (i)}
+								{#if !line.isAttachmentMarker}
+									<div class="font-mono text-xs leading-relaxed whitespace-pre-wrap">
+										{line.text}
+									</div>
+								{/if}
+								{#if line.image}
+									<img
+										src={line.image.base64Url}
+										alt={line.image.name}
+										class="mt-2 mb-2 h-auto max-w-full rounded-lg"
+										loading="lazy"
+									/>
+								{/if}
+							{/each}
+						</div>
+
+						{#if section.toolResultExtras && section.toolResultExtras.some((extra) => extra.type !== 'IMAGE')}
+							<div class="mt-3">
+								<ChatAttachmentsList
+									attachments={section.toolResultExtras.filter((extra) => extra.type !== 'IMAGE')}
+									readonly
+									imageHeight="h-28"
+									imageWidth="w-auto"
+								/>
+							</div>
+						{/if}
+					{:else}
+						<div class="rounded bg-muted/30 p-2 text-xs text-muted-foreground italic">No output</div>
 					{/if}
 				</div>
-				{#if isPending}
-					<div class="rounded bg-muted/30 p-2 text-xs text-muted-foreground italic">
-						Waiting for result...
-					</div>
-				{:else if section.toolResult}
-					<div class="overflow-auto rounded-lg border border-border bg-muted p-4">
-						{#each section.parsedLines as line, i (i)}
-							<div class="font-mono text-xs leading-relaxed whitespace-pre-wrap">
-								{line.text}
-							</div>
-							{#if line.image}
-								<img
-									src={line.image.base64Url}
-									alt={line.image.name}
-									class="mt-2 mb-2 h-auto max-w-full rounded-lg"
-									loading="lazy"
-								/>
-							{/if}
-						{/each}
-					</div>
-				{:else}
-					<div class="rounded bg-muted/30 p-2 text-xs text-muted-foreground italic">No output</div>
+			{/if}
+		</CollapsibleContentBlock>
+
+		{#if showArtifacts || showQuestionBlock || showTodoBlock}
+			<div class="grid gap-3">
+				{#if showArtifacts}
+					<ChatMessageAgenticArtifacts
+						attachments={section.toolResultExtras}
+						messageId={section.messageId}
+					/>
+				{/if}
+
+				{#if showQuestionBlock}
+					<ChatMessageAgenticQuestionAnswer pairs={questionAnswerPairs} />
+				{/if}
+
+				{#if showTodoBlock}
+					<ChatMessageAgenticTodoList todos={latestTodoItems} />
 				{/if}
 			</div>
-		</CollapsibleContentBlock>
+		{/if}
 	{:else if section.type === AgenticSectionType.REASONING}
 		<CollapsibleContentBlock
 			open={isExpanded(index, section)}
@@ -360,11 +483,23 @@
 		{/each}
 	{/if}
 
+	{#if latestTodoItems.length > 0 && latestTodoAnchorIndex === -1}
+		<ChatMessageAgenticTodoList todos={latestTodoItems} />
+	{/if}
+
 	{#if pendingPermission && !permissionDismissed}
 		<ChatMessageActionCardPermissionRequest
 			toolName={pendingPermission.toolName}
 			serverLabel={pendingPermission.serverLabel}
 			onDecision={handlePermission}
+		/>
+	{/if}
+
+	{#if pendingQuestion && !questionDismissed}
+		<ChatMessageActionCardQuestionRequest
+			questions={pendingQuestion.questions}
+			onAnswer={handleQuestion}
+			onDismiss={handleQuestionDismiss}
 		/>
 	{/if}
 

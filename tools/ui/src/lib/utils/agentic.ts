@@ -13,6 +13,7 @@ import { AttachmentType } from '$lib/enums';
  */
 export interface AgenticSection {
 	type: AgenticSectionType;
+	messageId?: string;
 	content: string;
 	toolName?: string;
 	toolArgs?: string;
@@ -25,6 +26,7 @@ export interface AgenticSection {
  */
 export type ToolResultLine = {
 	text: string;
+	isAttachmentMarker?: boolean;
 	image?: DatabaseMessageExtraImageFile;
 };
 
@@ -51,6 +53,7 @@ function deriveSingleTurnSections(
 		const isPending = isStreaming && !hasContentAfterReasoning;
 		sections.push({
 			type: isPending ? AgenticSectionType.REASONING_PENDING : AgenticSectionType.REASONING,
+			messageId: message.id,
 			content: message.reasoningContent
 		});
 	}
@@ -59,6 +62,7 @@ function deriveSingleTurnSections(
 	if (message.content?.trim()) {
 		sections.push({
 			type: AgenticSectionType.TEXT,
+			messageId: message.id,
 			content: message.content
 		});
 	}
@@ -75,6 +79,7 @@ function deriveSingleTurnSections(
 				: AgenticSectionType.TOOL_CALL;
 		sections.push({
 			type,
+			messageId: message.id,
 			content: resultMsg?.content || '',
 			toolName: tc.function?.name,
 			toolArgs: tc.function?.arguments,
@@ -89,6 +94,7 @@ function deriveSingleTurnSections(
 		if (tc.id && toolCalls.find((t) => t.id === tc.id)) continue;
 		sections.push({
 			type: AgenticSectionType.TOOL_CALL_STREAMING,
+			messageId: message.id,
 			content: '',
 			toolName: tc.function?.name,
 			toolArgs: tc.function?.arguments
@@ -191,7 +197,7 @@ export function parseToolResultWithImages(
 				e.type === AttachmentType.IMAGE && e.name === attachmentName
 		);
 
-		return { text: line, image };
+		return { text: line, isAttachmentMarker: true, image };
 	});
 }
 

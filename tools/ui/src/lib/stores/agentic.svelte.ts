@@ -29,20 +29,23 @@ import { permissionsStore } from '$lib/stores/permissions.svelte';
 import { ToolSource, ToolPermissionDecision } from '$lib/enums';
 import { SvelteMap } from 'svelte/reactivity';
 import { ToolsService } from '$lib/services/tools.service';
-import { isAbortError } from '$lib/utils';
-import { DEFAULT_AGENTIC_CONFIG, NEWLINE_SEPARATOR } from '$lib/constants';
 import {
-	IMAGE_MIME_TO_EXTENSION,
-	DATA_URI_BASE64_REGEX,
-	MCP_ATTACHMENT_NAME_PREFIX,
-	DEFAULT_IMAGE_EXTENSION
+	apiFetch,
+	extractToolResultAttachments,
+	isAbortError,
+	parseQuestionToolArguments,
+	parseTodoWriteArguments
+} from '$lib/utils';
+import {
+	AGENTIC_TODO_WRITE_TOOL_NAME,
+	DEFAULT_AGENTIC_CONFIG
 } from '$lib/constants';
 import {
 	AttachmentType,
 	ContentPartType,
 	MessageRole,
-	MimeTypePrefix,
-	ToolCallType
+	ToolCallType,
+	ToolResponseField
 } from '$lib/enums';
 import type {
 	AgenticFlowParams,
@@ -58,7 +61,9 @@ import type {
 	AgenticToolCallList,
 	AgenticFlowCallbacks,
 	AgenticFlowOptions,
-	SteeringMessage
+	SteeringMessage,
+	AgenticTodoItem,
+	PendingBuiltinQuestionRequest
 } from '$lib/types/agentic';
 import type {
 	ApiChatCompletionToolCall,
@@ -145,9 +150,11 @@ class AgenticStore {
 	private _pendingContinueRequests = new SvelteMap<string, boolean>();
 	/** Non-reactive: stores resolve functions for pending continue Promises */
 	private _continueResolvers = new Map<string, (shouldContinue: boolean) => void>();
+	private _pendingBuiltinQuestions = new SvelteMap<string, PendingBuiltinQuestionRequest | null>();
 
 	/** Reactive: queued steering messages to inject between turns */
 	private _steeringMessages = new SvelteMap<string, SteeringMessage>();
+	private _todos = new SvelteMap<string, AgenticTodoItem[]>();
 
 	get isReady(): boolean {
 		return true;
@@ -215,6 +222,14 @@ class AgenticStore {
 		return this._pendingContinueRequests.get(conversationId) ?? false;
 	}
 
+	pendingBuiltinQuestion(conversationId: string): PendingBuiltinQuestionRequest | null {
+		return this._pendingBuiltinQuestions.get(conversationId) ?? null;
+	}
+
+	todos(conversationId: string): AgenticTodoItem[] {
+		return this._todos.get(conversationId) ?? [];
+	}
+
 	resolveContinue(conversationId: string, shouldContinue: boolean): void {
 		const resolver = this._continueResolvers.get(conversationId);
 		if (resolver) {
@@ -233,6 +248,42 @@ class AgenticStore {
 
 	clearError(conversationId: string): void {
 		this.updateSession(conversationId, { lastError: null });
+	}
+
+	async replyBuiltinQuestion(
+		conversationId: string,
+		answers: string[][],
+		rejected = false,
+		signal?: AbortSignal
+	): Promise<{ toolCallId: string; content: string; isError: boolean } | null> {
+		const pending = this._pendingBuiltinQuestions.get(conversationId);
+		if (!pending) return null;
+
+		const result = await apiFetch<Record<string, unknown>>('/tools/reply', {
+			method: 'POST',
+			body: JSON.stringify({
+				request_id: pending.requestID,
+				conversation_id: conversationId,
+				answers,
+				rejected
+			}),
+			signal
+		});
+
+		this._pendingBuiltinQuestions.set(conversationId, null);
+
+		if (ToolResponseField.ERROR in result) {
+			throw new Error(String(result[ToolResponseField.ERROR]));
+		}
+
+		return {
+			toolCallId: pending.toolCallId,
+			content:
+				ToolResponseField.PLAIN_TEXT in result
+					? String(result[ToolResponseField.PLAIN_TEXT])
+					: JSON.stringify(result),
+			isError: result.is_error === true
+		};
 	}
 
 	hasPendingSteeringMessage(conversationId: string): boolean {
@@ -390,6 +441,7 @@ class AgenticStore {
 		this._permissionResolvers.delete(conversationId);
 		this._pendingContinueRequests.set(conversationId, false);
 		this._continueResolvers.delete(conversationId);
+		this._pendingBuiltinQuestions.set(conversationId, null);
 		this._steeringMessages.delete(conversationId);
 
 		// Ensure built-in tools are fetched before checking if agentic is enabled
@@ -770,6 +822,7 @@ class AgenticStore {
 
 				let result: string;
 				let toolSuccess = true;
+				let explicitAttachments: DatabaseMessageExtra[] = [];
 
 				if (permission === ToolPermissionDecision.DENY) {
 					result = 'Tool execution was denied by the user.';
@@ -778,11 +831,39 @@ class AgenticStore {
 					try {
 						if (toolSource === ToolSource.BUILTIN) {
 							const args = this.parseToolArguments(toolCall.function.arguments);
-							const executionResult = await ToolsService.executeTool(toolName, args, signal);
+							const executionResult = await ToolsService.executeTool(
+								toolName,
+								args,
+								{
+									conversation_id: conversationId,
+									tool_call_id: toolCall.id
+								},
+								signal
+							);
 
 							result = executionResult.content;
+							explicitAttachments = executionResult.attachments ?? [];
 
 							if (executionResult.isError) toolSuccess = false;
+
+							if (executionResult.awaitingUser?.kind === 'question') {
+								const payload = executionResult.awaitingUser.payload;
+								const questions = parseQuestionToolArguments(payload);
+
+								this._pendingBuiltinQuestions.set(conversationId, {
+									requestID: executionResult.awaitingUser.requestID,
+									conversationId,
+									toolCallId: toolCall.id,
+									questions
+								});
+
+								onFlowComplete?.(this.buildFinalTimings(capturedTimings, agenticTimings));
+								return;
+							}
+
+							if (toolName === AGENTIC_TODO_WRITE_TOOL_NAME) {
+								this._todos.set(conversationId, parseTodoWriteArguments(args));
+							}
 						} else {
 							const mcpCall: MCPToolCall = {
 								id: toolCall.id,
@@ -821,6 +902,7 @@ class AgenticStore {
 				}
 
 				const { cleanedResult, attachments } = this.extractBase64Attachments(result);
+				const allAttachments = [...explicitAttachments, ...attachments];
 
 				// Create the tool result message in the DB
 				let toolResultMessage: DatabaseMessage | undefined;
@@ -828,19 +910,19 @@ class AgenticStore {
 					toolResultMessage = await createToolResultMessage(
 						toolCall.id,
 						cleanedResult,
-						attachments.length > 0 ? attachments : undefined
+						allAttachments.length > 0 ? allAttachments : undefined
 					);
 				}
 
-				if (attachments.length > 0 && toolResultMessage) {
-					onAttachments?.(toolResultMessage.id, attachments);
+				if (allAttachments.length > 0 && toolResultMessage) {
+					onAttachments?.(toolResultMessage.id, allAttachments);
 				}
 
 				// Build content parts for session history (including images for vision models)
 				const contentParts: ApiChatMessageContentPart[] = [
 					{ type: ContentPartType.TEXT, text: cleanedResult }
 				];
-				for (const attachment of attachments) {
+				for (const attachment of allAttachments) {
 					if (attachment.type === AttachmentType.IMAGE) {
 						if (modelsStore.modelSupportsVision(effectiveModel)) {
 							contentParts.push({
@@ -915,48 +997,7 @@ class AgenticStore {
 		cleanedResult: string;
 		attachments: DatabaseMessageExtra[];
 	} {
-		if (!result.trim()) {
-			return { cleanedResult: result, attachments: [] };
-		}
-
-		const lines = result.split(NEWLINE_SEPARATOR);
-		const attachments: DatabaseMessageExtra[] = [];
-		let attachmentIndex = 0;
-
-		const cleanedLines = lines.map((line) => {
-			const trimmedLine = line.trim();
-
-			const match = trimmedLine.match(DATA_URI_BASE64_REGEX);
-			if (!match) {
-				return line;
-			}
-
-			const mimeType = match[1].toLowerCase();
-			const base64Data = match[2];
-
-			if (!base64Data) {
-				return line;
-			}
-
-			attachmentIndex += 1;
-			const name = this.buildAttachmentName(mimeType, attachmentIndex);
-
-			if (mimeType.startsWith(MimeTypePrefix.IMAGE)) {
-				attachments.push({ type: AttachmentType.IMAGE, name, base64Url: trimmedLine });
-
-				return `[Attachment saved: ${name}]`;
-			}
-
-			return line;
-		});
-
-		return { cleanedResult: cleanedLines.join(NEWLINE_SEPARATOR), attachments };
-	}
-
-	private buildAttachmentName(mimeType: string, index: number): string {
-		const extension = IMAGE_MIME_TO_EXTENSION[mimeType] ?? DEFAULT_IMAGE_EXTENSION;
-
-		return `${MCP_ATTACHMENT_NAME_PREFIX}-${Date.now()}-${index}.${extension}`;
+		return extractToolResultAttachments(result);
 	}
 }
 
@@ -996,6 +1037,23 @@ export function agenticPendingContinueRequest(conversationId: string) {
 
 export function agenticResolveContinue(conversationId: string, shouldContinue: boolean) {
 	agenticStore.resolveContinue(conversationId, shouldContinue);
+}
+
+export function agenticPendingBuiltinQuestion(conversationId: string) {
+	return agenticStore.pendingBuiltinQuestion(conversationId);
+}
+
+export function agenticTodos(conversationId: string) {
+	return agenticStore.todos(conversationId);
+}
+
+export async function agenticReplyBuiltinQuestion(
+	conversationId: string,
+	answers: string[][],
+	rejected = false,
+	signal?: AbortSignal
+) {
+	return agenticStore.replyBuiltinQuestion(conversationId, answers, rejected, signal);
 }
 
 export function agenticHasPendingSteeringMessage(conversationId: string) {
