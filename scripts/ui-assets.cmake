@@ -25,6 +25,7 @@ set(ASSETS
     favicon.ico
     favicon-dark.ico
     favicon.svg
+    favicon-dark.svg
     pwa-64x64.png
     pwa-192x192.png
     pwa-512x512.png

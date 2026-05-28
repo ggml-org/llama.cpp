@@ -187,6 +187,7 @@ bool server_http_context::init(const common_params & params) {
             "/favicon.ico",
             "/favicon-dark.ico",
             "/favicon.svg",
+            "/favicon-dark.svg",
             "/pwa-64x64.png",
             "/pwa-192x192.png",
             "/pwa-512x512.png",
@@ -430,6 +431,7 @@ bool server_http_context::init(const common_params & params) {
             srv->Get(params.api_prefix + "/favicon.ico",                    serve_asset_cached("favicon.ico",                  "image/x-icon",                             false));
             srv->Get(params.api_prefix + "/favicon-dark.ico",                serve_asset_cached("favicon-dark.ico",              "image/x-icon",                             false));
             srv->Get(params.api_prefix + "/favicon.svg",                    serve_asset_cached("favicon.svg",                  "image/svg+xml",                            false));
+            srv->Get(params.api_prefix + "/favicon-dark.svg",              serve_asset_cached("favicon-dark.svg",            "image/svg+xml",                            false));
             srv->Get(params.api_prefix + "/pwa-64x64.png",                  serve_asset_cached("pwa-64x64.png",                "image/png",                                false));
             srv->Get(params.api_prefix + "/pwa-192x192.png",                serve_asset_cached("pwa-192x192.png",              "image/png",                                false));
             srv->Get(params.api_prefix + "/pwa-512x512.png",                serve_asset_cached("pwa-512x512.png",              "image/png",                                false));
