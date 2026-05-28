@@ -113,7 +113,7 @@ typedef struct VkPhysicalDeviceInternallySynchronizedQueuesFeaturesKHR {
     VkBool32           internallySynchronizedQueues;
 } VkPhysicalDeviceInternallySynchronizedQueuesFeaturesKHR;
 #else
-#define eInternallySynchronizedKHR vk::DeviceQueueCreateFlagBits::eInternallySynchronizedKHR
+static constexpr vk::DeviceQueueCreateFlagBits eInternallySynchronizedKHR = vk::DeviceQueueCreateFlagBits::eInternallySynchronizedKHR;
 #endif
 
 #define ROUNDUP_POW2(M, N) (((M) + (N) - 1) & ~((N) - 1))
