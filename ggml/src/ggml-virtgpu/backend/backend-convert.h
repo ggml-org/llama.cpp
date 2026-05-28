@@ -1,3 +1,6 @@
+#ifndef GGML_SRC_GGML_VIRTGPU_BACKEND_BACKEND_CONVERT_H_
+#define GGML_SRC_GGML_VIRTGPU_BACKEND_BACKEND_CONVERT_H_
+
 #include "shared/apir_backend.h"
 
 #define BUFFER_TO_HOST_HANDLE(name) ggml_buffer_to_apir_handle(name)
@@ -11,3 +14,5 @@ static inline apir_buffer_type_host_handle_t ggml_buffer_type_to_apir_handle(ggm
     // in the backend, the buffer handle is the buffer pointer
     return (apir_buffer_type_host_handle_t) buft;
 }
+
+#endif  // GGML_SRC_GGML_VIRTGPU_BACKEND_BACKEND_CONVERT_H_

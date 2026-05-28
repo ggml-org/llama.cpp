@@ -26,7 +26,6 @@
 #include "ggml-common.h"
 #include "htp-ctx.h"
 #include "htp-ops.h"
-#include "htp-ops.h"
 #include "htp_iface.h"
 #include "worker-pool.h"
 

@@ -10,6 +10,9 @@
 
 // TODO: prevent including the whole server-common.h as we only use server_tokens
 #include "server-common.h"
+#include <memory>
+#include <utility>
+#include <vector>
 
 using json = nlohmann::ordered_json;
 
@@ -115,7 +118,7 @@ struct task_result_state {
     const std::string oai_resp_message_id;
     std::string oai_resp_fc_id; // function call ID for current args delta
 
-    task_result_state(const common_chat_parser_params & chat_parser_params);
+    explicit task_result_state(const common_chat_parser_params & chat_parser_params);
 
     // parse partial tool calls and update the internal state
     common_chat_msg update_chat_msg(
@@ -169,7 +172,7 @@ struct server_task {
 
     server_task() = default;
 
-    server_task(server_task_type type) : type(type) {}
+    explicit server_task(server_task_type type) : type(type) {}
 
     int32_t n_tokens() const {
         return tokens.size();

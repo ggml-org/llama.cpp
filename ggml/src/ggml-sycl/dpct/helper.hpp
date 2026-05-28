@@ -10,8 +10,8 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 
-#ifndef GGML_SYCL_DPCT_HELPER_HPP
-#define GGML_SYCL_DPCT_HELPER_HPP
+#ifndef GGML_SRC_GGML_SYCL_DPCT_HELPER_HPP_
+#define GGML_SRC_GGML_SYCL_DPCT_HELPER_HPP_
 
 #include <sycl/sycl.hpp>
 #include <sycl/half_type.hpp>
@@ -240,7 +240,7 @@ namespace dpct
         {
         public:
             generic_error_type() = default;
-            generic_error_type(T value) : value{value} {}
+            explicit generic_error_type(T value) : value{value} {}
             operator T() const { return value; }
 
         private:
@@ -255,11 +255,10 @@ namespace dpct
         public:
         unsigned x, y, z;
 
-        constexpr dim3(unsigned x = 1, unsigned y = 1, unsigned z = 1)
+        explicit constexpr dim3(unsigned x = 1, unsigned y = 1, unsigned z = 1)
             : x(x), y(y), z(z) {}
 
-        dim3(const sycl::id<3> &r) : dim3(r[2], r[1], r[0]) {}
-
+        explicit dim3(const sycl::id<3> &r) : dim3(r[2], r[1], r[0]) {}
         operator sycl::range<3>() const { return sycl::range<3>(z, y, x); }
     }; // namespace dim3
 
@@ -627,8 +626,8 @@ namespace dpct
         std::lock_guard<mutex_type> lock(m_mutex);
         clear_queues();
       }
-      device_ext(const sycl::device &base) : sycl::device(base) {
-        std::lock_guard<mutex_type> lock(m_mutex);
+      explicit device_ext(const sycl::device &base) : sycl::device(base) {
+          std::lock_guard<mutex_type> lock(m_mutex);
         init_queues();
       }
 
@@ -2049,6 +2048,13 @@ namespace dpct
                     {
 #include <sycl/info/aspects.def>
 #include <sycl/info/aspects_deprecated.def>
+#include <algorithm>
+#include <limits>
+#include <memory>
+#include <string>
+#include <tuple>
+#include <utility>
+#include <vector>
                     default:
                         return "unknown aspect";
                     }
@@ -2706,7 +2712,7 @@ namespace dpct
         accessor(pointer_t data, const sycl::range<3> &in_range)
             : _data(data), _range(in_range) {}
         template <memory_region M = Memory>
-        accessor(typename std::enable_if<M != local, const accessor_t>::type &acc)
+        explicit accessor(typename std::enable_if<M != local, const accessor_t>::type &acc)
             : accessor(acc, acc.get_range()) {}
         accessor(const accessor_t &acc, const sycl::range<3> &in_range)
             : accessor(acc.get_pointer(), in_range) {}
@@ -2730,7 +2736,7 @@ namespace dpct
         accessor(pointer_t data, const sycl::range<2> &in_range)
             : _data(data), _range(in_range) {}
         template <memory_region M = Memory>
-        accessor(typename std::enable_if<M != local, const accessor_t>::type &acc)
+        explicit accessor(typename std::enable_if<M != local, const accessor_t>::type &acc)
             : accessor(acc, acc.get_range()) {}
         accessor(const accessor_t &acc, const sycl::range<2> &in_range)
             : accessor(acc.get_pointer(), in_range) {}
@@ -2787,7 +2793,7 @@ namespace dpct
             }
 
             /// Constructor with range
-            device_memory(const sycl::range<Dimension> &range_in)
+            explicit device_memory(const sycl::range<Dimension> &range_in)
                 : _size(range_in.size() * sizeof(T)), _range(range_in),
                 _reference(false), _host_ptr(nullptr), _device_ptr(nullptr) {
                 static_assert(
@@ -2801,7 +2807,7 @@ namespace dpct
 
             /// Constructor with range
             template <class... Args>
-            device_memory(Args... Arguments)
+            explicit device_memory(Args... Arguments)
                 : device_memory(sycl::range<Dimension>(Arguments...)) {}
 
             ~device_memory() {
@@ -2899,7 +2905,7 @@ namespace dpct
                 typename detail::memory_traits<Memory, T>::template accessor_t<0>;
 
             /// Constructor with initial value.
-            device_memory(const value_t &val) : base(sycl::range<1>(1), {val}) {}
+            explicit device_memory(const value_t &val) : base(sycl::range<1>(1), {val}) {}
 
             /// Default constructor
             device_memory() : base(1) {}
@@ -3151,7 +3157,7 @@ namespace dpct
             _local_mem_size = local_mem_size;
 
 
-        };
+        }
         static inline std::mutex kernel_function_ptr_map_mutex;
 
       public:
@@ -3771,4 +3777,4 @@ namespace dpct
     }
 } // COPY from DPCT head files
 
-#endif // GGML_SYCL_DPCT_HELPER_HPP
+#endif  // GGML_SRC_GGML_SYCL_DPCT_HELPER_HPP_

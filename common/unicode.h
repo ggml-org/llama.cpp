@@ -12,7 +12,7 @@ struct utf8_parse_result {
     size_t bytes_consumed;   // How many bytes this codepoint uses (1-4)
     enum status { SUCCESS, INCOMPLETE, INVALID } status;
 
-    utf8_parse_result(enum status s, uint32_t cp = 0, size_t bytes = 0)
+    explicit utf8_parse_result(enum status s, uint32_t cp = 0, size_t bytes = 0)
         : codepoint(cp), bytes_consumed(bytes), status(s) {}
 };
 

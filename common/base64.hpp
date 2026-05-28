@@ -25,8 +25,8 @@ OTHER DEALINGS IN THE SOFTWARE.
 For more information, please refer to <http://unlicense.org>
 */
 
-#ifndef PUBLIC_DOMAIN_BASE64_HPP_
-#define PUBLIC_DOMAIN_BASE64_HPP_
+#ifndef COMMON_BASE64_HPP_
+#define COMMON_BASE64_HPP_
 
 #include <cstdint>
 #include <iterator>
@@ -389,4 +389,4 @@ private:
     }
 };
 
-#endif // !PUBLIC_DOMAIN_BASE64_HPP_
+#endif  // COMMON_BASE64_HPP_

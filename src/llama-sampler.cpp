@@ -19,11 +19,13 @@
 #include <random>
 #include <unordered_map>
 #include <stdexcept>
+#include <string>
+#include <utility>
 
 // the ring buffer works similarly to std::deque, but with a fixed capacity
 template<typename T>
 struct ring_buffer {
-    ring_buffer(size_t cap) : capacity(cap), data(cap) {}
+    explicit ring_buffer(size_t cap) : capacity(cap), data(cap) {}
 
     T & front() {
         if (sz == 0) {
@@ -524,8 +526,7 @@ struct llama_sampler * llama_sampler_init_empty(const char * name) {
 // -name : means that a ggml operator is not supported by the backend
 //
 struct llama_sampler_backend {
-    llama_sampler_backend(const char * name) : name(name), name_ext(name), is_init(false), support(false) {}
-
+    explicit llama_sampler_backend(const char * name) : name(name), name_ext(name), is_init(false), support(false) {}
     const char * get_name() {
         if (!is_init) {
             return name.c_str();
@@ -1012,7 +1013,7 @@ struct llama_sampler * llama_sampler_init_greedy() {
     return llama_sampler_init(
         /* .iface = */ &llama_sampler_greedy_i,
         /* .ctx   = */ new llama_sampler_greedy {
-            ("greedy"),
+            llama_sampler_backend("greedy"),
         }
     );
 }
@@ -1232,7 +1233,7 @@ struct llama_sampler * llama_sampler_init_dist(uint32_t seed) {
     return llama_sampler_init(
         /* .iface = */ &llama_sampler_dist_i,
         /* .ctx   = */ new llama_sampler_dist {
-            ("dist"),
+            llama_sampler_backend("dist"),
             /* .seed        = */ seed,
             /* .seed_cur    = */ seed_cur,
             /* .rng         = */ std::mt19937(seed_cur),
@@ -1328,7 +1329,7 @@ struct llama_sampler * llama_sampler_init_top_k(int32_t k) {
     return llama_sampler_init(
         /* .iface = */ &llama_sampler_top_k_i,
         /* .ctx   = */ new llama_sampler_top_k {
-            ("top-k"),
+            llama_sampler_backend("top-k"),
             /* .k = */ k,
         }
     );
@@ -1520,7 +1521,7 @@ struct llama_sampler * llama_sampler_init_top_p(float p, size_t min_keep) {
     return llama_sampler_init(
         /* .iface = */ &llama_sampler_top_p_i,
         /* .ctx   = */ new llama_sampler_top_p {
-            ("top-p"),
+            llama_sampler_backend("top-p"),
             /* .p        = */ p,
             /* .min_keep = */ min_keep,
             /* .buf_sort = */ {},
@@ -1677,7 +1678,7 @@ struct llama_sampler * llama_sampler_init_min_p(float p, size_t min_keep) {
     return llama_sampler_init(
         /* .iface = */ &llama_sampler_min_p_i,
         /* .ctx   = */ new llama_sampler_min_p {
-            ("min-p"),
+            llama_sampler_backend("min-p"),
             /* .p        = */ p,
             /* .min_keep = */ min_keep,
         }
@@ -1891,7 +1892,7 @@ struct llama_sampler * llama_sampler_init_temp(float temp) {
     return llama_sampler_init(
         /* .iface = */ &llama_sampler_temp_i,
         /* .ctx   = */ new llama_sampler_temp {
-            ("temp"),
+            llama_sampler_backend("temp"),
             /*.temp = */ temp,
         }
     );
@@ -2088,7 +2089,7 @@ struct llama_sampler * llama_sampler_init_temp_ext(float temp, float delta, floa
     auto * res = llama_sampler_init(
         /* .iface = */ &llama_sampler_temp_ext_i,
         /* .ctx   = */ new llama_sampler_temp_ext {
-            ("temp-ext"),
+            llama_sampler_backend("temp-ext"),
             /* .temp     = */ temp,
             /* .delta    = */ delta,
             /* .exponent = */ exponent,
@@ -3581,7 +3582,7 @@ struct llama_sampler * llama_sampler_init_logit_bias(
     return llama_sampler_init(
         /* .iface = */ &llama_sampler_logit_bias_i,
         /* .ctx   = */ new llama_sampler_logit_bias {
-            ("logit-bias"),
+            llama_sampler_backend("logit-bias"),
             /* .n_vocab        = */ n_vocab,
             /* .logit_bias     = */ std::vector<llama_logit_bias>(logit_bias, logit_bias + n_logit_bias),
             /* .to_search      = */ {},

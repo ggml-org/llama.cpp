@@ -1,5 +1,5 @@
-#ifndef SYCL_HW_HPP
-#define SYCL_HW_HPP
+#ifndef GGML_SRC_GGML_SYCL_SYCL_HW_HPP_
+#define GGML_SRC_GGML_SYCL_SYCL_HW_HPP_
 
 #include <algorithm>
 #include <stdio.h>
@@ -7,6 +7,7 @@
 #include <map>
 
 #include <sycl/sycl.hpp>
+#include <string>
 
 namespace syclex = sycl::ext::oneapi::experimental;
 using gpu_arch = sycl::ext::oneapi::experimental::architecture;
@@ -35,4 +36,4 @@ struct sycl_hw_info {
 
 sycl_hw_info get_device_hw_info(sycl::device *device_ptr);
 
-#endif // SYCL_HW_HPP
+#endif  // GGML_SRC_GGML_SYCL_SYCL_HW_HPP_

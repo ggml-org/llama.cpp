@@ -2,6 +2,9 @@
 
 #include "llama.h"
 #include "common.h"
+#include <memory>
+#include <string>
+#include <vector>
 
 struct common_speculative;
 

@@ -1,5 +1,5 @@
-#ifndef HVX_DIV_H
-#define HVX_DIV_H
+#ifndef GGML_SRC_GGML_HEXAGON_HTP_HVX_DIV_H_
+#define GGML_SRC_GGML_HEXAGON_HTP_HVX_DIV_H_
 
 #include <HAP_farf.h>
 
@@ -288,4 +288,4 @@ HVX_DIV_DISPATCHER(hvx_div_f16)
 #undef HVX_OP_MUL_F32
 #undef HVX_OP_MUL_F16
 
-#endif // HVX_DIV_H
+#endif  // GGML_SRC_GGML_HEXAGON_HTP_HVX_DIV_H_

@@ -565,8 +565,7 @@ enum llm_tensor_layer {
 };
 
 struct LLM_KV {
-    LLM_KV(llm_arch arch, const char * suffix = nullptr);
-
+    explicit LLM_KV(llm_arch arch, const char * suffix = nullptr);
     llm_arch arch;
     const char * suffix;
 
@@ -607,8 +606,7 @@ struct LLM_TN_IMPL {
 };
 
 struct LLM_TN {
-    LLM_TN(llm_arch arch) : arch(arch) {}
-
+    explicit LLM_TN(llm_arch arch) : arch(arch) {}
     llm_arch arch;
 
     LLM_TN_IMPL operator()(llm_tensor tensor, const char * suffix, int bid = -1, int xid = -1) const {

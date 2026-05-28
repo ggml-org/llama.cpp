@@ -15,7 +15,6 @@
 #include "ggml-common.h"
 #include "htp-ctx.h"
 #include "htp-ops.h"
-#include "htp-ops.h"
 
 #define sum_rows_preamble                         \
     const struct htp_tensor *src0 = octx->src[0]; \

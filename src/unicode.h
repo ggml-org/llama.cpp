@@ -38,7 +38,7 @@ struct unicode_cpt_flags {
     uint16_t is_nfd         : 1;
 
     // decode from uint16
-    inline unicode_cpt_flags(const uint16_t flags = 0) {
+    inline explicit unicode_cpt_flags(const uint16_t flags = 0) {
 #if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
         *reinterpret_cast<uint16_t*>(this) = flags;
 #elif __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__

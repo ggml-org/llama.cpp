@@ -4,6 +4,7 @@
 #include "ggml-backend-impl.h"
 
 #include <vector>
+#include <utility>
 
 // represents a memory range (i.e. an interval from a starting address p0 to an ending address p1 in a given buffer pb)
 // the type indicates whether it is a source range (i.e. ops read data from it) or a destination range (i.e. ops write data to it)
@@ -74,7 +75,7 @@ static ggml_mem_range ggml_mem_range_from_tensor(const ggml_tensor * tensor, ggm
             /*.p1 =*/ 1024, // [0, 1024) is a dummy range, not used
             /*.pt =*/ pt,
         };
-    };
+    }
 
     return mr;
 }

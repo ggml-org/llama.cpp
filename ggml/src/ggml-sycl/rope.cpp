@@ -2,6 +2,7 @@
 #include "convert.hpp"
 #include "ggml-sycl/common.hpp"
 #include "ggml.h"
+#include <algorithm>
 
 struct rope_corr_dims {
     float v[2];

@@ -9,6 +9,8 @@
 #include <unordered_set>
 #include <cstdint>
 #include <cmath>
+#include <map>
+#include <string>
 
 enum ffn_op_type {
     FFN_GELU,

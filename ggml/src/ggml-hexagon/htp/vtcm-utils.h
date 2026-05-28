@@ -1,5 +1,5 @@
-#ifndef VTCM_UTILS_H
-#define VTCM_UTILS_H
+#ifndef GGML_SRC_GGML_HEXAGON_HTP_VTCM_UTILS_H_
+#define GGML_SRC_GGML_HEXAGON_HTP_VTCM_UTILS_H_
 
 #include "hex-utils.h"
 
@@ -13,4 +13,4 @@ static inline uint8_t *vtcm_seq_alloc(uint8_t **vtcm_ptr, size_t size) {
     return p;
 }
 
-#endif // VTCM_UTILS_H
+#endif  // GGML_SRC_GGML_HEXAGON_HTP_VTCM_UTILS_H_

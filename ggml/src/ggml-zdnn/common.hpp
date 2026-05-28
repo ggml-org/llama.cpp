@@ -1,5 +1,5 @@
-#ifndef GGML_ZDNN_COMMON_HPP
-#define GGML_ZDNN_COMMON_HPP
+#ifndef GGML_SRC_GGML_ZDNN_COMMON_HPP_
+#define GGML_SRC_GGML_ZDNN_COMMON_HPP_
 
 #include "ggml.h"
 #include "ggml-impl.h"
@@ -56,4 +56,4 @@ struct ggml_backend_zdnn_buffer_context {
     std::vector<std::unique_ptr<ggml_backend_zdnn_buffer>> buffers;
 };
 
-#endif  // GGML_ZDNN_COMMON_HPP
+#endif  // GGML_SRC_GGML_ZDNN_COMMON_HPP_

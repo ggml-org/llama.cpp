@@ -1,3 +1,6 @@
+#ifndef GGML_SRC_GGML_VIRTGPU_VIRTGPU_APIR_H_
+#define GGML_SRC_GGML_VIRTGPU_VIRTGPU_APIR_H_
+
 #include "backend/shared/apir_backend.h"
 #include "ggml-alloc.h"
 #include "ggml-impl.h"
@@ -13,3 +16,5 @@ struct apir_buffer_context_t {
 };
 
 #include "virtgpu-forward.gen.h"
+
+#endif  // GGML_SRC_GGML_VIRTGPU_VIRTGPU_APIR_H_

@@ -7,6 +7,7 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
+#include <utility>
 
 #define FILENAME "jinja-parser"
 

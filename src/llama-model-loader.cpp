@@ -12,6 +12,10 @@
 #include <cstring>
 #include <future>
 #include <regex>
+#include <memory>
+#include <string>
+#include <utility>
+#include <vector>
 
 static const size_t kiB = 1024;
 static const size_t MiB = 1024*kiB;

@@ -6,6 +6,7 @@
 
 #include <string>
 #include <vector>
+#include <memory>
 
 // common_sampler extends llama_sampler with additional functionality:
 //

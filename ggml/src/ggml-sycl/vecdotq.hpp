@@ -10,13 +10,15 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 
-#ifndef GGML_SYCL_VECDOTQ_HPP
-#define GGML_SYCL_VECDOTQ_HPP
+#ifndef GGML_SRC_GGML_SYCL_VECDOTQ_HPP_
+#define GGML_SRC_GGML_SYCL_VECDOTQ_HPP_
 
 #include "dpct/helper.hpp"
 #include "ggml.h"
 #include "type.hpp"
 #include "quants.hpp"
+#include <functional>
+#include <utility>
 
 typedef float (*vec_dot_q_sycl_t)(const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1,
                                   const int & iqs);
@@ -358,7 +360,7 @@ template <> struct reorder_vec_dot_q_sycl<GGML_TYPE_Q4_0> {
         }
 
         return vec_dot_q4_0_q8_1_impl(v, u, d, *q8_1_ds);
-    };
+    }
 };
 
 template <> struct reorder_vec_dot_q_sycl<GGML_TYPE_Q8_0> {
@@ -1498,4 +1500,4 @@ vec_dot_iq4_xs_q8_1(const void *__restrict__ vbq,
 #endif
 }
 
-#endif // GGML_SYCL_VECDOTQ_HPP
+#endif  // GGML_SRC_GGML_SYCL_VECDOTQ_HPP_

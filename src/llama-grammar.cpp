@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <set>
 #include <stdexcept>
+#include <utility>
 
 #define MAX_REPETITION_THRESHOLD 2000
 //

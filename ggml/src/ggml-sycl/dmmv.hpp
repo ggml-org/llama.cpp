@@ -10,8 +10,8 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 
-#ifndef GGML_SYCL_DMMV_HPP
-#define GGML_SYCL_DMMV_HPP
+#ifndef GGML_SRC_GGML_SYCL_DMMV_HPP_
+#define GGML_SRC_GGML_SYCL_DMMV_HPP_
 
 #include "common.hpp"
 
@@ -24,4 +24,4 @@ void ggml_sycl_op_dequantize_mul_mat_vec(
     const int64_t src1_ncols, const int64_t src1_padded_row_size,
     const dpct::queue_ptr &stream);
 
-#endif // GGML_SYCL_DMMV_HPP
+#endif  // GGML_SRC_GGML_SYCL_DMMV_HPP_

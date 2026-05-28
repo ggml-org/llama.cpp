@@ -1,5 +1,5 @@
-#ifndef HVX_SCALE_H
-#define HVX_SCALE_H
+#ifndef GGML_SRC_GGML_HEXAGON_HTP_HVX_SCALE_H_
+#define GGML_SRC_GGML_HEXAGON_HTP_HVX_SCALE_H_
 
 #include <assert.h>
 #include <stddef.h>
@@ -130,4 +130,4 @@ static inline void hvx_scale_offset_f32(uint8_t * restrict dst, const uint8_t * 
     }
 }
 
-#endif // HVX_SCALE_H
+#endif  // GGML_SRC_GGML_HEXAGON_HTP_HVX_SCALE_H_

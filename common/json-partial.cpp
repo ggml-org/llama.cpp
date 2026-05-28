@@ -6,6 +6,7 @@
 
 #include <string>
 #include <regex>
+#include <vector>
 
 using json = nlohmann::ordered_json;
 

@@ -1,5 +1,5 @@
-#ifndef GGML_WEBGPU_SHADER_LIB_HPP
-#define GGML_WEBGPU_SHADER_LIB_HPP
+#ifndef GGML_SRC_GGML_WEBGPU_GGML_WEBGPU_SHADER_LIB_HPP_
+#define GGML_SRC_GGML_WEBGPU_GGML_WEBGPU_SHADER_LIB_HPP_
 
 #include "ggml-impl.h"
 #include "ggml-wgsl-shaders.hpp"
@@ -1164,8 +1164,7 @@ class ggml_webgpu_shader_lib {
         upscale_pipelines;
 
   public:
-    ggml_webgpu_shader_lib(wgpu::Device device) { this->device = device; }
-
+    explicit ggml_webgpu_shader_lib(wgpu::Device device) { this->device = device; }
     webgpu_pipeline get_sum_rows_pipeline(const ggml_webgpu_shader_lib_context & context) {
         auto it = sum_rows_pipelines.find(1);
         if (it != sum_rows_pipelines.end()) {
@@ -3221,4 +3220,4 @@ class ggml_webgpu_shader_lib {
     }
 };
 
-#endif  // GGML_WEBGPU_SHADER_LIB_HPP
+#endif  // GGML_SRC_GGML_WEBGPU_GGML_WEBGPU_SHADER_LIB_HPP_

@@ -115,7 +115,7 @@ std::unique_ptr<llm_graph_context> llama_model_t5::build_arch_graph(const llm_gr
             return std::make_unique<graph<false>>(*this, params);
         default:
             GGML_ABORT("invalid graph type");
-    };
+    }
 }
 
 template <>

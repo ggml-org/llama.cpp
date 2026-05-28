@@ -95,6 +95,8 @@
 #define GGML_COMMON_DECL_C
 
 #include "../ggml-common.h"
+#include <algorithm>
+#include <utility>
 
 void bcast_shape(ggml_tensor *    src0,
                  ggml_tensor *    src1,

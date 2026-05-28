@@ -5190,7 +5190,7 @@ struct ggml_backend_opencl_buffer_context {
     // each tensor is allocated a separate buffer. When flattening is enabled
     // with small allocation, each tensor is backed by two cl_mem objects (for
     // quants and scales) packed into a backend_opencl_buffer.
-    ggml_backend_opencl_buffer_context(cl_mem buf)
+    explicit ggml_backend_opencl_buffer_context(cl_mem buf)
         : name("OpenCL") {
         buffer.push_back(buf);
     }
@@ -16588,7 +16588,7 @@ static void ggml_cl_rope(ggml_backend_t backend, const ggml_tensor * src0, const
                 break;
             default:
                 GGML_ASSERT(false);
-        };
+        }
     } else if (is_mrope && !is_vision) {
         switch (src0->type) {
             case GGML_TYPE_F32:
@@ -16599,7 +16599,7 @@ static void ggml_cl_rope(ggml_backend_t backend, const ggml_tensor * src0, const
                 break;
             default:
                 GGML_ASSERT(false);
-        };
+        }
     } else if (is_vision) {
         switch (src0->type) {
             case GGML_TYPE_F32:
@@ -16621,7 +16621,7 @@ static void ggml_cl_rope(ggml_backend_t backend, const ggml_tensor * src0, const
                 break;
             default:
                 GGML_ASSERT(false);
-        };
+        }
     }
 
     CL_CHECK(clSetKernelArg(kernel,  0, sizeof(cl_mem),   &extra0->data_device));

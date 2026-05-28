@@ -31,6 +31,7 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
+#include <map>
 
 // Suppress  deprecation warning for ov::Tensor::data()
 #pragma GCC diagnostic push

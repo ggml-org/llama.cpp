@@ -41,7 +41,7 @@ struct no_init {
 };
 
 struct time_meas {
-    time_meas(int64_t & t_acc, bool disable = false);
+    explicit time_meas(int64_t & t_acc, bool disable = false);
     ~time_meas();
 
     const int64_t t_start_us;

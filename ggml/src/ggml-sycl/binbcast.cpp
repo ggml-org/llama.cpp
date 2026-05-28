@@ -5,6 +5,7 @@
 #include <sycl/sycl.hpp>
 
 #include "ggml.h"
+#include <algorithm>
 
 template<float (*bin_op)(const float, const float), typename src0_t, typename src1_t, typename dst_t>
 static void k_bin_bcast(const src0_t * src0, const src1_t * src1, dst_t * dst,

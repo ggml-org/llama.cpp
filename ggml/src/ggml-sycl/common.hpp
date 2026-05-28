@@ -10,8 +10,8 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 
-#ifndef GGML_SYCL_COMMON_HPP
-#define GGML_SYCL_COMMON_HPP
+#ifndef GGML_SRC_GGML_SYCL_COMMON_HPP_
+#define GGML_SRC_GGML_SYCL_COMMON_HPP_
 
 #include <cstddef>
 #include <fstream>
@@ -50,8 +50,10 @@ namespace syclexp = sycl::ext::oneapi::experimental;
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wnested-anon-types"
 #include "ggml-common.h"
+#include <memory>
+#include <unordered_map>
+#include <vector>
 #pragma clang diagnostic pop
-#include "ggml-impl.h"
 
 void* ggml_sycl_host_malloc(size_t size);
 void ggml_sycl_host_free(void* ptr);
@@ -1004,4 +1006,4 @@ static __dpct_inline__ float ggml_sycl_ue4m3_to_fp32(uint8_t x) {
     return static_cast<float>(xf) / 2;
 }
 
-#endif // GGML_SYCL_COMMON_HPP
+#endif  // GGML_SRC_GGML_SYCL_COMMON_HPP_

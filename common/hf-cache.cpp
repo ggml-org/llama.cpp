@@ -14,6 +14,7 @@
 #include <string>
 #include <string_view>
 #include <stdexcept>
+#include <vector>
 
 namespace nl = nlohmann;
 
@@ -28,6 +29,8 @@ namespace nl = nlohmann;
 #define HOME_DIR "HOME"
 #include <unistd.h>
 #include <pwd.h>
+#include <algorithm>
+#include <utility>
 #endif
 
 namespace hf_cache {

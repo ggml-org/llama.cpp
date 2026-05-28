@@ -20,8 +20,8 @@
  * IN THE SOFTWARE.
  */
 
-#ifndef CANN_COMMON_H
-#define CANN_COMMON_H
+#ifndef GGML_SRC_GGML_CANN_COMMON_H_
+#define GGML_SRC_GGML_CANN_COMMON_H_
 
 #include "../ggml-impl.h"
 #include "../include/ggml-cann.h"
@@ -648,4 +648,4 @@ struct ggml_backend_cann_context {
     }
 };
 
-#endif  // CANN_COMMON_H
+#endif  // GGML_SRC_GGML_CANN_COMMON_H_

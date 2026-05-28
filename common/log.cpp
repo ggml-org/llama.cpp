@@ -19,6 +19,7 @@
 #    define fileno _fileno
 #else
 #    include <unistd.h>
+#include <utility>
 #endif // defined(_WIN32)
 
 int common_log_verbosity_thold = LOG_DEFAULT_LLAMA;
@@ -125,7 +126,7 @@ struct common_log {
     // default capacity - will be expanded if needed
     common_log() : common_log(256) {}
 
-    common_log(size_t capacity) {
+    explicit common_log(size_t capacity) {
         file = nullptr;
         prefix = false;
         timestamps = false;

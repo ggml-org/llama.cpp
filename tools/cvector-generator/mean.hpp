@@ -1,3 +1,6 @@
+#ifndef TOOLS_CVECTOR_GENERATOR_MEAN_HPP_
+#define TOOLS_CVECTOR_GENERATOR_MEAN_HPP_
+
 #include "common.h"
 #include "llama.h"
 #include "ggml.h"
@@ -46,3 +49,5 @@ static void run(
 }
 
 }
+
+#endif  // TOOLS_CVECTOR_GENERATOR_MEAN_HPP_

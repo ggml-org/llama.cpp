@@ -1,5 +1,5 @@
-#ifndef GGML_SYCL_ELEMENTWISE_HPP
-#define GGML_SYCL_ELEMENTWISE_HPP
+#ifndef GGML_SRC_GGML_SYCL_ELEMENT_WISE_HPP_
+#define GGML_SRC_GGML_SYCL_ELEMENT_WISE_HPP_
 
 #include "common.hpp"
 #include "ggml.h"
@@ -91,4 +91,4 @@ void ggml_sycl_trunc(ggml_backend_sycl_context & ctx, ggml_tensor * dst);
 
 void ggml_sycl_arange(ggml_backend_sycl_context & ctx, ggml_tensor * dst);
 
-#endif // GGML_SYCL_ELEMENTWISE_HPP
+#endif  // GGML_SRC_GGML_SYCL_ELEMENT_WISE_HPP_

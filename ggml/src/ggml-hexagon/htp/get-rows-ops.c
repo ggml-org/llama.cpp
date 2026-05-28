@@ -12,7 +12,6 @@
 #include "ggml-common.h"
 #include "htp-ctx.h"
 #include "htp-ops.h"
-#include "htp-ops.h"
 #include "hvx-utils.h"
 
 struct get_rows_context {

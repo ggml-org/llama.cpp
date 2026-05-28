@@ -11,6 +11,7 @@
 #include <set>
 #include <functional>
 #include <map>
+#include <utility>
 
 struct ggml_cgraph;
 struct ggml_context;
@@ -108,7 +109,7 @@ using llm_graph_input_ptr = std::unique_ptr<llm_graph_input_i>;
 
 class llm_graph_input_embd : public llm_graph_input_i {
 public:
-    llm_graph_input_embd(int64_t n_embd) : n_embd(n_embd) {}
+    explicit llm_graph_input_embd(int64_t n_embd) : n_embd(n_embd) {}
     virtual ~llm_graph_input_embd() = default;
 
     void set_input(const llama_ubatch * ubatch) override;
@@ -123,7 +124,7 @@ public:
 
 class llm_graph_input_pos : public llm_graph_input_i {
 public:
-    llm_graph_input_pos(uint32_t n_pos_per_embd) : n_pos_per_embd(n_pos_per_embd) {}
+    explicit llm_graph_input_pos(uint32_t n_pos_per_embd) : n_pos_per_embd(n_pos_per_embd) {}
     virtual ~llm_graph_input_pos() = default;
 
     void set_input(const llama_ubatch * ubatch) override;
@@ -153,7 +154,7 @@ public:
 
 class llm_graph_input_pos_bucket : public llm_graph_input_i {
 public:
-    llm_graph_input_pos_bucket(const llama_hparams & hparams) : hparams(hparams) {}
+    explicit llm_graph_input_pos_bucket(const llama_hparams & hparams) : hparams(hparams) {}
     virtual ~llm_graph_input_pos_bucket() = default;
 
     void set_input(const llama_ubatch * ubatch) override;
@@ -201,7 +202,7 @@ public:
 
 class llm_graph_input_mean : public llm_graph_input_i {
 public:
-    llm_graph_input_mean(const llama_cparams & cparams) : cparams(cparams) {}
+    explicit llm_graph_input_mean(const llama_cparams & cparams) : cparams(cparams) {}
     virtual ~llm_graph_input_mean() = default;
 
     void set_input(const llama_ubatch * ubatch) override;
@@ -226,7 +227,7 @@ public:
 
 class llm_graph_input_rs : public llm_graph_input_i {
 public:
-    llm_graph_input_rs(const llama_memory_recurrent_context * mctx) : mctx(mctx) {}
+    explicit llm_graph_input_rs(const llama_memory_recurrent_context * mctx) : mctx(mctx) {}
     virtual ~llm_graph_input_rs() = default;
 
     void set_input(const llama_ubatch * ubatch) override;
@@ -404,7 +405,7 @@ public:
 
 class llm_graph_input_attn_cross : public llm_graph_input_i {
 public:
-    llm_graph_input_attn_cross(const llama_cross * cross) : cross(cross) {}
+    explicit llm_graph_input_attn_cross(const llama_cross * cross) : cross(cross) {}
     ~llm_graph_input_attn_cross() = default;
 
     void set_input(const llama_ubatch * ubatch) override;
@@ -503,7 +504,7 @@ public:
 
 class llm_graph_input_sampling : public llm_graph_input_i {
 public:
-    llm_graph_input_sampling(std::map<llama_seq_id, llama_sampler *> samplers) :
+    explicit llm_graph_input_sampling(std::map<llama_seq_id, llama_sampler *> samplers) :
         samplers(std::move(samplers)) { }
     virtual ~llm_graph_input_sampling() = default;
 
@@ -638,7 +639,7 @@ struct llm_graph_params {
 
 class llm_graph_result {
 public:
-    llm_graph_result(int64_t max_nodes);
+    explicit llm_graph_result(int64_t max_nodes);
 
     virtual ~llm_graph_result() = default;
 
@@ -772,7 +773,7 @@ struct llm_graph_context {
     ggml_context * ctx0 = nullptr;
     ggml_cgraph  * gf   = nullptr;
 
-    llm_graph_context(const llm_graph_params & params);
+    explicit llm_graph_context(const llm_graph_params & params);
     virtual ~llm_graph_context() = default;
 
     void cb(ggml_tensor * cur, const char * name, int il) const;

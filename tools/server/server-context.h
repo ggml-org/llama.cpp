@@ -9,6 +9,9 @@
 #include <cstddef>
 #include <memory>
 #include <set>
+#include <map>
+#include <string>
+#include <vector>
 
 struct server_context_impl; // private implementation
 

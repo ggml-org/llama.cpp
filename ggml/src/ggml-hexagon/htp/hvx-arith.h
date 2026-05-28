@@ -1,5 +1,5 @@
-#ifndef HVX_ARITH_H
-#define HVX_ARITH_H
+#ifndef GGML_SRC_GGML_HEXAGON_HTP_HVX_ARITH_H_
+#define GGML_SRC_GGML_HEXAGON_HTP_HVX_ARITH_H_
 
 #include <assert.h>
 #include <stddef.h>
@@ -440,4 +440,4 @@ static inline void hvx_sqr_f32(uint8_t * restrict dst, const uint8_t * restrict 
 #undef HVX_BINARY_DISPATCHER
 #undef UNUSED
 
-#endif // HVX_ARITH_H
+#endif  // GGML_SRC_GGML_HEXAGON_HTP_HVX_ARITH_H_

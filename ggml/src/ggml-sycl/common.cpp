@@ -18,6 +18,8 @@
 
 #include "ggml-backend-impl.h"
 #include "ggml-impl.h"
+#include <limits>
+#include <vector>
 
 int get_current_device_id() {
   return dpct::dev_mgr::instance().current_device_id();

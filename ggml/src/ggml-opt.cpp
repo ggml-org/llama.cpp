@@ -1090,5 +1090,5 @@ GGML_API const char * ggml_opt_optimizer_name(enum ggml_opt_optimizer_type o) {
             return "sgd";
         default:
             return "undefined";
-    };
+    }
 }

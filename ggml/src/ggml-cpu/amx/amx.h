@@ -1,3 +1,4 @@
+#pragma once
 #include "ggml-backend.h"
 #include "ggml-cpu-impl.h"
 

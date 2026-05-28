@@ -10,8 +10,8 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 
-#ifndef GGML_SYCL_FATTN_HPP
-#define GGML_SYCL_FATTN_HPP
+#ifndef GGML_SRC_GGML_SYCL_FATTN_HPP_
+#define GGML_SRC_GGML_SYCL_FATTN_HPP_
 
 #include "common.hpp"
 
@@ -19,4 +19,4 @@ void ggml_sycl_flash_attn_ext(ggml_backend_sycl_context & ctx, ggml_tensor * dst
 
 bool ggml_sycl_flash_attn_ext_supported(int device, const ggml_tensor * dst);
 
-#endif // GGML_SYCL_FATTN_HPP
+#endif  // GGML_SRC_GGML_SYCL_FATTN_HPP_

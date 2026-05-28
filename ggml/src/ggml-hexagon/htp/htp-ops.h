@@ -1,5 +1,5 @@
-#ifndef HTP_OPS_H
-#define HTP_OPS_H
+#ifndef GGML_SRC_GGML_HEXAGON_HTP_HTP_OPS_H_
+#define GGML_SRC_GGML_HEXAGON_HTP_HTP_OPS_H_
 
 #include <assert.h>
 
@@ -184,4 +184,4 @@ struct htp_opbatch_rsp {
     // struct htp_prof_desc profs[];  -- dspqueue buf 0
 };
 
-#endif /* HTP_OPS_H */
+#endif  // GGML_SRC_GGML_HEXAGON_HTP_HTP_OPS_H_

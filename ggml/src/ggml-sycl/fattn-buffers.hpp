@@ -10,8 +10,8 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 
-#ifndef GGML_SYCL_FATTN_BUFFERS_HPP
-#define GGML_SYCL_FATTN_BUFFERS_HPP
+#ifndef GGML_SRC_GGML_SYCL_FATTN_BUFFERS_HPP_
+#define GGML_SRC_GGML_SYCL_FATTN_BUFFERS_HPP_
 
 #include <sycl/sycl.hpp>
 
@@ -60,4 +60,4 @@ struct ggml_sycl_fattn_alloc {
         return ptr;
     }
 };
-#endif
+#endif  // GGML_SRC_GGML_SYCL_FATTN_BUFFERS_HPP_

@@ -20,8 +20,8 @@
  * IN THE SOFTWARE.
  */
 
-#ifndef CANN_ACL_TENSOR_H
-#define CANN_ACL_TENSOR_H
+#ifndef GGML_SRC_GGML_CANN_ACL_TENSOR_H_
+#define GGML_SRC_GGML_CANN_ACL_TENSOR_H_
 
 #include "common.h"
 
@@ -29,6 +29,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <memory>
 
 /**
  * @brief	Maps a ggml_type to its corresponding aclDataType.
@@ -346,4 +347,4 @@ int64_t ggml_cann_get_mulmat_bcast_shape(const int64_t * input_ne,
 
 #define BCAST_MUL_MAT_PARAM(tensor) bcast_##tensor##_ne, bcast_##tensor##_nb, bcast_dims
 
-#endif  // CANN_ACL_TENSOR_H
+#endif  // GGML_SRC_GGML_CANN_ACL_TENSOR_H_

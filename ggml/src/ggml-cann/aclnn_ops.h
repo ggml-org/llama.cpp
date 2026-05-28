@@ -20,8 +20,8 @@
  * IN THE SOFTWARE.
  */
 
-#ifndef CANN_ACLNN_OPS
-#define CANN_ACLNN_OPS
+#ifndef GGML_SRC_GGML_CANN_ACLNN_OPS_H_
+#define GGML_SRC_GGML_CANN_ACLNN_OPS_H_
 
 #include "acl_tensor.h"
 #include "common.h"
@@ -59,6 +59,7 @@
 
 #include <functional>
 #include <unordered_set>
+#include <string>
 
 /**
  * @brief   Repeats a ggml tensor along each dimension to match the dimensions
@@ -1167,7 +1168,7 @@ void ggml_cann_op_unary_gated(std::function<void(ggml_backend_cann_context &, ac
             ggml_cann_op_unary_gated(lambda, ctx, dst);                                                   \
         } while (0)
 
-#endif  // CANN_ACLNN_OPS
+#endif  // GGML_SRC_GGML_CANN_ACLNN_OPS_H_
 
 /**
  * @brief Performs outer product operation on two ggml tensors using the CANN backend.

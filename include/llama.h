@@ -1,5 +1,5 @@
-#ifndef LLAMA_H
-#define LLAMA_H
+#ifndef INCLUDE_LLAMA_H_
+#define INCLUDE_LLAMA_H_
 
 #include "ggml.h"
 #include "ggml-cpu.h"
@@ -1576,4 +1576,4 @@ extern "C" {
 }
 #endif
 
-#endif // LLAMA_H
+#endif  // INCLUDE_LLAMA_H_

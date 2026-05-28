@@ -10,11 +10,11 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 
-#ifndef GGML_SYCL_TSEMBD_HPP
-#define GGML_SYCL_TSEMBD_HPP
+#ifndef GGML_SRC_GGML_SYCL_TSEMBD_HPP_
+#define GGML_SRC_GGML_SYCL_TSEMBD_HPP_
 
 #include "common.hpp"
 
 void ggml_sycl_op_timestep_embedding(ggml_backend_sycl_context & ctx, ggml_tensor * dst);
 
-#endif // GGML_SYCL_TSEMBD_HPP
+#endif  // GGML_SRC_GGML_SYCL_TSEMBD_HPP_

@@ -1,8 +1,8 @@
 // HMX tile-level inline helpers (FP16 32x32 tile operations).
 // Ported from htp-ops-lib/include/dsp/hmx_utils.h. (https://github.com/haozixu/htp-ops-lib)
 
-#ifndef HMX_UTILS_H
-#define HMX_UTILS_H
+#ifndef GGML_SRC_GGML_HEXAGON_HTP_HMX_UTILS_H_
+#define GGML_SRC_GGML_HEXAGON_HTP_HMX_UTILS_H_
 
 #include "hvx-base.h"
 
@@ -197,4 +197,4 @@ static inline void hmx_interleave_cols_to_tiles(__fp16 * restrict tiles_out,
     }
 }
 
-#endif // HMX_UTILS_H
+#endif  // GGML_SRC_GGML_HEXAGON_HTP_HMX_UTILS_H_

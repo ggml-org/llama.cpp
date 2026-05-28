@@ -12,6 +12,8 @@
 #include <algorithm>
 #include <limits>
 #include <cmath>
+#include <utility>
+#include <vector>
 
 static ggml_metal_buffer_id ggml_metal_get_buffer_id(const ggml_tensor * t) {
     if (!t) {
@@ -2127,7 +2129,7 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
                 r1ptg = 5; break;
             default:
                 GGML_ABORT("unsupported ne11");
-        };
+        }
 
         auto pipeline = ggml_metal_library_get_pipeline_mul_mv_ext(lib, op, nsg, nxpsg, r1ptg);
 

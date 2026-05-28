@@ -155,8 +155,8 @@ namespace bicubic_interpolation {
 // https://en.wikipedia.org/wiki/Bicubic_interpolation#Bicubic_convolution_algorithm
 __device__ const float a = -0.75f; // use alpha = -0.75 (same as PyTorch)
 
-static __device__ float weight1(float x) { return ((a + 2) * x - (a + 3)) * x * x + 1; };
-static __device__ float weight2(float x) { return ((a * x - 5 * a) * x + 8 * a) * x - 4 * a; };
+static __device__ float weight1(float x) { return ((a + 2) * x - (a + 3)) * x * x + 1; }
+static __device__ float weight2(float x) { return ((a * x - 5 * a) * x + 8 * a) * x - 4 * a; }
 
 static __device__ float bicubic(float p0, float p1, float p2, float p3, float x) {
     const float w0 = weight2(x + 1);
@@ -164,7 +164,7 @@ static __device__ float bicubic(float p0, float p1, float p2, float p3, float x)
     const float w2 = weight1(1 - x);
     const float w3 = weight2(2 - x);
     return p0 * w0 + p1 * w1 + p2 * w2 + p3 * w3;
-};
+}
 } // namespace bicubic_interpolation
 
 static __global__ void upscale_f32_bicubic(const float * x, float * dst,

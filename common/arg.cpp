@@ -45,6 +45,8 @@
 #include <sys/limits.h>
 #else
 #include <sys/syslimits.h>
+#include <unordered_map>
+#include <utility>
 #endif
 #endif
 

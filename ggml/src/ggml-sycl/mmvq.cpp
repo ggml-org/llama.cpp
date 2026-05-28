@@ -4,6 +4,7 @@
 #include "common.hpp"
 #include "quants.hpp"
 #include "vecdotq.hpp"
+#include <functional>
 
 template <typename reorder_vec_dot_q_sycl>
 static void mul_mat_vec_q_reorder(const void * __restrict__ vx, const void * __restrict__ vy, float * __restrict__ dst,

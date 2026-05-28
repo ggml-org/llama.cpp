@@ -465,7 +465,7 @@ static __device__ __forceinline__ void flash_attn_tile_load_tile(
                 }
             }
         }
-    };
+    }
     // 1: max 32*16=512 bytes, 128 float
     // 2: max 16*16=256 bytes,  64 float
     // 3: max  8*16=128 bytes,  32 float

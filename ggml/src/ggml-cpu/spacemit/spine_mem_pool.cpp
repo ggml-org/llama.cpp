@@ -18,6 +18,7 @@
 #include <mutex>
 #include <unordered_map>
 #include <vector>
+#include <utility>
 
 namespace ggml::cpu::riscv64_spacemit {
 namespace {

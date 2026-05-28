@@ -10,8 +10,8 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 
-#ifndef GGML_SYCL_BACKEND_HPP
-#define GGML_SYCL_BACKEND_HPP
+#ifndef GGML_SRC_GGML_SYCL_BACKEND_HPP_
+#define GGML_SRC_GGML_SYCL_BACKEND_HPP_
 
 #include "binbcast.hpp"
 #include "common.hpp"
@@ -45,4 +45,4 @@
 #include "wkv.hpp"
 
 
-#endif  // GGML_SYCL_BACKEND_HPP
+#endif  // GGML_SRC_GGML_SYCL_BACKEND_HPP_

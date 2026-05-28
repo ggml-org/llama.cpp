@@ -9,6 +9,7 @@
 #include <sstream>
 #include <string>
 #include <vector>
+#include <utility>
 
 #define JJ_DEBUG(msg, ...)  do { if (g_jinja_debug) printf("%s:%-3d : " msg "\n", FILENAME, __LINE__, __VA_ARGS__); } while (0)
 
@@ -54,7 +55,7 @@ struct context {
     bool is_get_stats = false; // whether to collect stats
 
     // src is optional, used for error reporting
-    context(std::string src = "") : src(std::make_shared<std::string>(std::move(src))) {
+    explicit context(std::string src = "") : src(std::make_shared<std::string>(std::move(src))) {
         env = mk_val<value_object>();
         env->has_builtins = false; // context object has no builtins
         env->insert("true",  mk_val<value_bool>(true));
@@ -578,7 +579,7 @@ struct ternary_expression : public expression {
 
 struct raised_exception : public std::exception {
     std::string message;
-    raised_exception(const std::string & msg) : message(msg) {}
+    explicit raised_exception(const std::string & msg) : message(msg) {}
     const char* what() const noexcept override {
         return message.c_str();
     }
@@ -587,7 +588,7 @@ struct raised_exception : public std::exception {
 // Used to rethrow exceptions with modified messages
 struct rethrown_exception : public std::exception {
     std::string message;
-    rethrown_exception(const std::string & msg) : message(msg) {}
+    explicit rethrown_exception(const std::string & msg) : message(msg) {}
     const char* what() const noexcept override {
         return message.c_str();
     }

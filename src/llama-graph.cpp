@@ -17,6 +17,8 @@
 #include <numeric>
 #include <sstream>
 #include <unordered_set>
+#include <algorithm>
+#include <utility>
 
 // dedup helpers
 
@@ -357,7 +359,7 @@ static void print_mask(const float * data, int64_t n_tokens, int64_t n_kv, int64
         case LLAMA_SWA_TYPE_STANDARD:  swa_type_str = "LLAMA_SWA_TYPE_STANDARD"; break;
         case LLAMA_SWA_TYPE_CHUNKED:   swa_type_str = "LLAMA_SWA_TYPE_CHUNKED"; break;
         case LLAMA_SWA_TYPE_SYMMETRIC: swa_type_str = "LLAMA_SWA_TYPE_SYMMETRIC"; break;
-    };
+    }
 
     LLAMA_LOG_DEBUG("%s: n_swa : %d, n_kv: %d, swq_type: %s\n", __func__, (int)n_swa, (int)n_kv, swa_type_str);
     LLAMA_LOG_DEBUG("%s: '0' = can attend, '∞' = masked\n", __func__);

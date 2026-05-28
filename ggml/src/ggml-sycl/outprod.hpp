@@ -1,10 +1,10 @@
-#ifndef GGML_SYCL_OUTPROD_HPP
-#define GGML_SYCL_OUTPROD_HPP
+#ifndef GGML_SRC_GGML_SYCL_OUTPROD_HPP_
+#define GGML_SRC_GGML_SYCL_OUTPROD_HPP_
 
 #include "common.hpp"
 
 void ggml_sycl_op_out_prod(ggml_backend_sycl_context& ctx, ggml_tensor* dst);
 
 
-#endif // GGML_SYCL_OUTPROD_HPP
+#endif  // GGML_SRC_GGML_SYCL_OUTPROD_HPP_
 

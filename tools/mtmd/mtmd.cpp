@@ -23,6 +23,8 @@
 #include <cstring>
 #include <climits>
 #include <vector>
+#include <limits>
+#include <utility>
 
 // represents raw image data, layout is RGBRGBRGB...
 // length of data must be nx * ny * 3

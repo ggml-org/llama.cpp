@@ -17,6 +17,10 @@
 #include <cstring>
 #include <limits>
 #include <stdexcept>
+#include <algorithm>
+#include <memory>
+#include <string>
+#include <utility>
 
 //
 // llama_context
@@ -1363,7 +1367,7 @@ int llama_context::encode(const llama_batch & batch_inp) {
     if (output_reserve(n_tokens) < n_tokens) {
         LLAMA_LOG_ERROR("%s: could not reserve space for batch with %u outputs\n", __func__, n_tokens);
         return -2;
-    };
+    }
 
     for (uint32_t i = 0; i < n_tokens; ++i) {
         output_ids[i] = i;
@@ -1758,7 +1762,7 @@ int llama_context::decode(const llama_batch & batch_inp) {
     if (output_reserve(n_outputs_all) < n_outputs_all) {
         LLAMA_LOG_ERROR("%s: could not reserve space for batch with %d outputs\n", __func__, n_outputs_all);
         return -2;
-    };
+    }
 
     int64_t n_outputs_prev = 0;
     int64_t n_tokens_prev  = 0;
@@ -2365,7 +2369,7 @@ llm_graph_cb llama_context::graph_get_cb() const {
 
 class llama_io_write_dummy : public llama_io_write_i {
 public:
-    llama_io_write_dummy(bool skip_tensors) : skip_tensors(skip_tensors) {}
+    explicit llama_io_write_dummy(bool skip_tensors) : skip_tensors(skip_tensors) {}
 
     void write(const void * /* src */, size_t size) override {
         size_written += size;
@@ -2496,7 +2500,7 @@ private:
 
 class llama_io_write_file : public llama_io_write_i {
 public:
-    llama_io_write_file(llama_file * f) : file(f) {}
+    explicit llama_io_write_file(llama_file * f) : file(f) {}
 
     void write(const void * src, size_t size) override {
         file->write_raw(src, size);
@@ -2521,7 +2525,7 @@ private:
 
 class llama_io_read_file : public llama_io_read_i {
 public:
-    llama_io_read_file(llama_file * f) : file(f) {}
+    explicit llama_io_read_file(llama_file * f) : file(f) {}
 
     void read(void * dst, size_t size) override {
         file->read_raw(dst, size);
@@ -3220,7 +3224,7 @@ void llama_context::opt_epoch_iter(
         if (output_reserve(n_outputs_all) < n_outputs_all) {
             LLAMA_LOG_ERROR("%s: could not reserve space for batch with %d outputs\n", __func__, n_outputs_all);
             GGML_ABORT("TODO: handle this error");
-        };
+        }
 
         uint32_t pos_batch = 0;
         do {

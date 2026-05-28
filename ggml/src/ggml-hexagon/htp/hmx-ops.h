@@ -1,8 +1,8 @@
 // HMX operation entry-point declarations.
 // Ported from htp-ops-lib/include/dsp/ops.h (renamed, benchmark kernels removed). (https://github.com/haozixu/htp-ops-lib)
 
-#ifndef HMX_OPS_H
-#define HMX_OPS_H
+#ifndef GGML_SRC_GGML_HEXAGON_HTP_HMX_OPS_H_
+#define GGML_SRC_GGML_HEXAGON_HTP_HMX_OPS_H_
 
 #include <stddef.h>
 #include <stdint.h>
@@ -67,4 +67,4 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx);
 }
 #endif
 
-#endif // HMX_OPS_H
+#endif  // GGML_SRC_GGML_HEXAGON_HTP_HMX_OPS_H_

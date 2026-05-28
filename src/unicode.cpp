@@ -114,7 +114,7 @@ uint32_t unicode_cpt_from_utf8(const std::string & utf8, size_t & offset) {
 //}
 
 static std::vector<unicode_cpt_flags> unicode_cpt_flags_array() {
-    std::vector<unicode_cpt_flags> cpt_flags(MAX_CODEPOINTS, unicode_cpt_flags::UNDEFINED);
+    std::vector<unicode_cpt_flags> cpt_flags(MAX_CODEPOINTS, unicode_cpt_flags(unicode_cpt_flags::UNDEFINED));
 
     assert (unicode_ranges_flags.begin()[0].first == 0);
     assert (unicode_ranges_flags.begin()[unicode_ranges_flags.size()-1].first == MAX_CODEPOINTS);
@@ -122,7 +122,7 @@ static std::vector<unicode_cpt_flags> unicode_cpt_flags_array() {
         const auto range_ini = unicode_ranges_flags.begin()[i-1];  // codepoint_ini, flags
         const auto range_end = unicode_ranges_flags.begin()[i];    // codepoint_end, flags
         for (uint32_t cpt = range_ini.first; cpt < range_end.first; ++cpt) {
-            cpt_flags[cpt] = range_ini.second;
+            cpt_flags[cpt] = unicode_cpt_flags(range_ini.second);
         }
     }
 

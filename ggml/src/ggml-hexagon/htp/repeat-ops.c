@@ -13,7 +13,6 @@
 #include "ggml-common.h"
 #include "htp-ctx.h"
 #include "htp-ops.h"
-#include "htp-ops.h"
 
 struct htp_repeat_context {
     struct htp_ops_context * octx;

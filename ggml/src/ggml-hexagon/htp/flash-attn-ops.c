@@ -16,7 +16,6 @@
 #include "ggml-common.h"
 #include "htp-ctx.h"
 #include "htp-ops.h"
-#include "htp-ops.h"
 #include "hmx-ops.h"
 
 // Must be multiple of 32

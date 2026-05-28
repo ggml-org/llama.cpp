@@ -2,6 +2,9 @@
 
 #include "input_model.h"
 #include "node_context.h"
+#include <memory>
+#include <string>
+#include <unordered_map>
 
 namespace ov {
 namespace frontend {

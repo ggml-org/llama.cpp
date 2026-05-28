@@ -1,5 +1,5 @@
-#ifndef HVX_REDUCE_H
-#define HVX_REDUCE_H
+#ifndef GGML_SRC_GGML_HEXAGON_HTP_HVX_REDUCE_H_
+#define GGML_SRC_GGML_HEXAGON_HTP_HVX_REDUCE_H_
 
 #include <math.h>
 #include <stdbool.h>
@@ -293,4 +293,4 @@ static inline float hvx_sum_of_squares_f32(const uint8_t * restrict src, const i
 #undef HVX_REDUCE_SUM_SCALAR
 #undef HVX_SUM_SQ_OP
 
-#endif /* HVX_REDUCE_H */
+#endif  // GGML_SRC_GGML_HEXAGON_HTP_HVX_REDUCE_H_

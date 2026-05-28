@@ -2,6 +2,7 @@
 
 // TODO: use json_fwd.hpp when possible
 #include <nlohmann/json.hpp>
+#include <string>
 
 // Healing marker (empty if the JSON was fully parsed / wasn't healed).
 struct common_healing_marker {

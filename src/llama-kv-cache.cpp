@@ -12,6 +12,9 @@
 #include <limits>
 #include <map>
 #include <stdexcept>
+#include <memory>
+#include <string>
+#include <utility>
 
 static bool ggml_is_power_of_2(int n) {
     return (n & (n - 1)) == 0;
@@ -1772,7 +1775,7 @@ ggml_tensor * llama_kv_cache::build_rope_shift(
 
 class llm_graph_input_k_shift : public llm_graph_input_i {
 public:
-    llm_graph_input_k_shift(const llama_kv_cache * kv_self) : kv_self(kv_self) {}
+    explicit llm_graph_input_k_shift(const llama_kv_cache * kv_self) : kv_self(kv_self) {}
     virtual ~llm_graph_input_k_shift() = default;
 
     void set_input(const llama_ubatch * ubatch) override;

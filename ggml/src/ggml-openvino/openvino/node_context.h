@@ -5,6 +5,9 @@
 #include <string>
 
 #include "decoder.h"
+#include <map>
+#include <memory>
+#include <vector>
 
 namespace ov {
 namespace frontend {

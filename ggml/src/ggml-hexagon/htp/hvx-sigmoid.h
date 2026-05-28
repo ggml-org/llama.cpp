@@ -1,5 +1,5 @@
-#ifndef HVX_SIGMOID_H
-#define HVX_SIGMOID_H
+#ifndef GGML_SRC_GGML_HEXAGON_HTP_HVX_SIGMOID_H_
+#define GGML_SRC_GGML_HEXAGON_HTP_HVX_SIGMOID_H_
 
 #include "hvx-base.h"
 #include "hvx-inverse.h"
@@ -139,4 +139,4 @@ static inline void hvx_tanh_f32_aa(uint8_t * restrict dst, const uint8_t * restr
     hvx_tanh_loop_body(HVX_Vector, HVX_Vector, hvx_vec_store_a);
 }
 
-#endif /* HVX_SIGMOID_H */
+#endif  // GGML_SRC_GGML_HEXAGON_HTP_HVX_SIGMOID_H_

@@ -8,6 +8,7 @@
 #include <cassert>
 #include <sstream>
 #include <stdexcept>
+#include <utility>
 
 // vec
 
@@ -258,7 +259,7 @@ static void llama_adapter_lora_init_impl(llama_model & model, const char * path_
             ctx_map[buft] = buft_ctx;
             adapter.ctxs.emplace_back(buft_ctx);
             return buft_ctx;
-        };
+        }
         return it->second;
     };
 

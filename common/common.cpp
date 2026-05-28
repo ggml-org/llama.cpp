@@ -51,7 +51,7 @@
 #endif
 
 #if defined(__linux__)
-#include <sys/types.h>
+#include <sys/types.h>  // NOLINT(build/include)
 #include <pwd.h>
 #endif
 
@@ -233,8 +233,10 @@ bool set_process_priority(enum ggml_sched_priority prio) {
 }
 
 #else // MacOS and POSIX
-#include <sys/types.h>
+#include <sys/types.h>  // NOLINT(build/include)
 #include <sys/resource.h>
+#include <limits>
+#include <utility>
 
 bool set_process_priority(enum ggml_sched_priority prio) {
     if (prio == GGML_SCHED_PRIO_NORMAL) {
@@ -874,7 +876,7 @@ bool fs_validate_filename(const std::string & filename, bool allow_subdirs) {
     return true;
 }
 
-#include <iostream>
+
 
 
 #ifdef _WIN32

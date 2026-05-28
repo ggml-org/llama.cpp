@@ -1,3 +1,6 @@
+#ifndef GGML_SRC_GGML_OPENVINO_UTILS_H_
+#define GGML_SRC_GGML_OPENVINO_UTILS_H_
+
 #include "ggml-backend-impl.h"
 #include "ggml-decoder.h"
 #include "ggml-impl.h"
@@ -13,13 +16,14 @@
 #include <unordered_map>
 #include <utility>
 #include <vector>
+#include <map>
 
 struct graph_key {
     int n_nodes;
     std::string first_node_name;
     std::string last_node_name;
 
-    graph_key(const ggml_cgraph * cgraph) : n_nodes(cgraph->n_nodes) {
+    explicit graph_key(const ggml_cgraph * cgraph) : n_nodes(cgraph->n_nodes) {
         if (n_nodes > 0) {
             first_node_name = cgraph->nodes[0]->name;
             last_node_name = cgraph->nodes[n_nodes - 1]->name;
@@ -42,9 +46,8 @@ struct graph_key_hash {
         return h;
     }
 };
-
 struct decoder_runtime_ctx {
-    decoder_runtime_ctx(std::shared_ptr<std::mutex> mutex) : mutex(std::move(mutex)) {}
+    explicit decoder_runtime_ctx(std::shared_ptr<std::mutex> mutex) : mutex(std::move(mutex)) {}
     std::shared_ptr<std::mutex> mutex;
     std::shared_ptr<GgmlOvDecoder> ptr;
 };
@@ -141,3 +144,5 @@ enum ggml_status naive_compute(struct ggml_cgraph * cgraph,
                                ov::Core & core,
                                const std::string & device,
                                const ov::AnyMap & config);
+
+#endif  // GGML_SRC_GGML_OPENVINO_UTILS_H_

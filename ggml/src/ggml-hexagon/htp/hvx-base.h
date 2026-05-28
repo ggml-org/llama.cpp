@@ -1,5 +1,5 @@
-#ifndef HVX_BASE_H
-#define HVX_BASE_H
+#ifndef GGML_SRC_GGML_HEXAGON_HTP_HVX_BASE_H_
+#define GGML_SRC_GGML_HEXAGON_HTP_HVX_BASE_H_
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -305,4 +305,4 @@ static inline HVX_Vector hvx_vec_mul_f32_f32(HVX_Vector a, HVX_Vector b) {
 
 #endif // __HVX_ARCH__ < 79
 
-#endif /* HVX_BASE_H */
+#endif  // GGML_SRC_GGML_HEXAGON_HTP_HVX_BASE_H_

@@ -249,6 +249,7 @@ typedef __hip_bfloat162 nv_bfloat162;
 
 #if HIP_VERSION >= 60200000
 #include <hip/hip_fp8.h>
+#include <limits>
 typedef __hip_fp8_e4m3 __nv_fp8_e4m3;
 #define FP8_AVAILABLE
 #endif // HIP_VERSION >= 60200000

@@ -1,6 +1,8 @@
 #pragma once
 
 #include "node_context.h"
+#include <string>
+#include <unordered_map>
 
 namespace ov {
 namespace frontend {

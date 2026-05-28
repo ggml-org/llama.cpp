@@ -92,7 +92,7 @@ struct mtmd_cli_context {
 
     common_debug_cb_user_data cb_data;
 
-    mtmd_cli_context(common_params & params) : llama_init(common_init_from_params(params)) {
+    explicit mtmd_cli_context(common_params & params) : llama_init(common_init_from_params(params)) {
         model = llama_init->model();
         lctx = llama_init->context();
         vocab = llama_model_get_vocab(model);

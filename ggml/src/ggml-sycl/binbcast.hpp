@@ -1,5 +1,5 @@
-#ifndef GGML_SYCL_BINBCAST_HPP
-#define GGML_SYCL_BINBCAST_HPP
+#ifndef GGML_SRC_GGML_SYCL_BINBCAST_HPP_
+#define GGML_SRC_GGML_SYCL_BINBCAST_HPP_
 #include "common.hpp"
 
 
@@ -35,5 +35,5 @@ void ggml_sycl_div(ggml_backend_sycl_context & ctx, ggml_tensor * dst);
 void ggml_sycl_repeat(ggml_backend_sycl_context & ctx, ggml_tensor * dst);
 
 
-#endif //GGML_SYCL_BINBCAST_HPP
+#endif  // GGML_SRC_GGML_SYCL_BINBCAST_HPP_
 

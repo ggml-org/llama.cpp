@@ -14,6 +14,8 @@
 #include <vector>
 #include <map>
 #include <algorithm>
+#include <memory>
+#include <utility>
 
 #if defined(_WIN32) && !defined(_WIN32_WINNT)
 #define _WIN32_WINNT 0x0A00
@@ -29,7 +31,7 @@
 #define die_fmt(fmt, ...) do { fprintf(stderr, "error: " fmt "\n", __VA_ARGS__); exit(1); } while (0)
 
 struct common_time_meas {
-    common_time_meas(int64_t & t_acc, bool disable = false);
+    explicit common_time_meas(int64_t & t_acc, bool disable = false);
     ~common_time_meas();
 
     const int64_t t_start_us;
@@ -856,7 +858,7 @@ struct common_sampler;
 
 // note: defines the model, context, samplers, ets. lifetimes
 struct common_init_result {
-    common_init_result(common_params & params, bool model_only = false);
+    explicit common_init_result(common_params & params, bool model_only = false);
     ~common_init_result();
 
     llama_model * model();

@@ -203,7 +203,7 @@ typedef pthread_t ggml_thread_t;
 #define GGML_THREADPOOL_N_THREADS_BITS (16)
 
 #if defined(__APPLE__)
-#include <unistd.h>
+#include <unistd.h>  // NOLINT(build/include)
 #include <mach/mach.h>
 #include <TargetConditionals.h>
 #endif
@@ -2457,7 +2457,7 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
 static thread_ret_t ggml_graph_compute_secondary_thread(void* data);
 
 #if defined(_WIN32)
-#include "windows.h"
+#include "windows.h"  // NOLINT(build/include)
 
 // TODO: support > 64 CPUs
 static bool ggml_thread_apply_affinity(bool * mask) {
@@ -2539,7 +2539,7 @@ static bool ggml_thread_apply_priority(int32_t prio) {
 }
 
 #elif defined(__APPLE__)
-#include <sys/types.h>
+#include <sys/types.h>  // NOLINT(build/include)
 #include <sys/resource.h>
 
 static bool ggml_thread_apply_affinity(const bool * mask) {

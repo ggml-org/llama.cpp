@@ -3785,7 +3785,7 @@ static const struct ggml_backend_device_i ggml_backend_hexagon_device_i = {
 #define GGML_HEXAGON_MAX_SESSIONS 16
 
 struct ggml_hexagon_registry {
-    ggml_hexagon_registry(ggml_backend_reg_t reg);
+    explicit ggml_hexagon_registry(ggml_backend_reg_t reg);
     ~ggml_hexagon_registry();
 
     ggml_backend_device devices[GGML_HEXAGON_MAX_SESSIONS];

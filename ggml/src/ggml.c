@@ -82,7 +82,6 @@ uint64_t ggml_graph_next_uid(void) {
     defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__) || \
     (defined(__APPLE__) && !TARGET_OS_TV && !TARGET_OS_WATCH)
 
-#include <unistd.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
@@ -93,7 +92,6 @@ uint64_t ggml_graph_next_uid(void) {
 #if defined(__ANDROID__)
 #include <unwind.h>
 #include <dlfcn.h>
-#include <stdio.h>
 
 struct backtrace_state {
     void ** current;

@@ -10,6 +10,9 @@
 #include <functional>
 #include <memory>
 #include <set>
+#include <map>
+#include <string>
+#include <vector>
 
 /**
  * state diagram:

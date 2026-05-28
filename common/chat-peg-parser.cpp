@@ -5,6 +5,9 @@
 #include "peg-parser.h"
 
 #include <nlohmann/json.hpp>
+#include <algorithm>
+#include <string>
+#include <utility>
 
 using ordered_json = nlohmann::ordered_json;
 

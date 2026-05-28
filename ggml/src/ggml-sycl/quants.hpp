@@ -11,8 +11,8 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 
-#ifndef GGML_SYCL_QUANTS_HPP
-#define GGML_SYCL_QUANTS_HPP
+#ifndef GGML_SRC_GGML_SYCL_QUANTS_HPP_
+#define GGML_SRC_GGML_SYCL_QUANTS_HPP_
 
 #include <utility>
 
@@ -153,4 +153,4 @@ template <> struct block_q_t<GGML_TYPE_Q8_0> {
 
 }  // namespace ggml_sycl_reordered
 
-#endif  // GGML_SYCL_QUANTS_HPP
+#endif  // GGML_SRC_GGML_SYCL_QUANTS_HPP_

@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
+#include <utility>
 
 namespace jinja {
 
@@ -63,7 +64,7 @@ struct hasher {
     size_t state = seed;
 
     hasher() = default;
-    hasher(const std::type_info & type_inf) noexcept {
+    explicit hasher(const std::type_info & type_inf) noexcept {
         const auto type_hash = type_inf.hash_code();
         update(&type_hash, sizeof(type_hash));
     }

@@ -10,8 +10,8 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 
-#ifndef GGML_SYCL_MMVQ_HPP
-#define GGML_SYCL_MMVQ_HPP
+#ifndef GGML_SRC_GGML_SYCL_MMVQ_HPP_
+#define GGML_SRC_GGML_SYCL_MMVQ_HPP_
 
 #include "common.hpp"
 
@@ -40,4 +40,4 @@ bool ggml_sycl_mul_mat_vec_q_id(
     size_t             src1_row_stride,      // 0 = shared src1, else per-expert stride in bytes
     dpct::queue_ptr    stream);
 
-#endif // GGML_SYCL_MMVQ_HPP
+#endif  // GGML_SRC_GGML_SYCL_MMVQ_HPP_

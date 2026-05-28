@@ -7,6 +7,7 @@
 #include <fstream>
 #include <sstream>
 #include <filesystem>
+#include <utility>
 
 static std::string rm_leading_dashes(const std::string & str) {
     size_t pos = 0;

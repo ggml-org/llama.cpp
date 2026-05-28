@@ -17,7 +17,6 @@
 #include "ggml-common.h"
 #include "htp-ctx.h"
 #include "htp-ops.h"
-#include "htp-ops.h"
 #include "hmx-ops.h"
 
 #define MM_SPAD_SRC0_NROWS 16

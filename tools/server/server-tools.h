@@ -2,6 +2,9 @@
 
 #include "server-common.h"
 #include "server-http.h"
+#include <memory>
+#include <string>
+#include <vector>
 
 struct server_tool {
     std::string name;

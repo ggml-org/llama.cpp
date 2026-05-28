@@ -17,7 +17,6 @@
 #include "ggml-common.h"
 #include "htp-ctx.h"
 #include "htp-ops.h"
-#include "htp-ops.h"
 
 // Redefined the rope type constants as we can't include ggml.h
 #define HTP_ROPE_TYPE_NORMAL 0

@@ -24,6 +24,9 @@
 #include "libdl.h"
 
 #include <domain.h>
+#include <memory>
+#include <utility>
+#include <vector>
 
 //
 // Driver API types

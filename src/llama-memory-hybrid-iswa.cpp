@@ -3,6 +3,9 @@
 #include "llama-impl.h"
 #include "llama-model.h"
 #include "llama-context.h"
+#include <algorithm>
+#include <map>
+#include <utility>
 
 //
 // llama_memory_hybrid_iswa

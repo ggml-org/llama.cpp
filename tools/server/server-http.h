@@ -7,6 +7,8 @@
 #include <thread>
 #include <vector>
 #include <cstdint>
+#include <memory>
+#include <unordered_map>
 
 struct common_params;
 

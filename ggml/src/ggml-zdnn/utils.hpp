@@ -1,5 +1,5 @@
-#ifndef GGML_ZDNN_UTILITIES_HPP
-#define GGML_ZDNN_UTILITIES_HPP
+#ifndef GGML_SRC_GGML_ZDNN_UTILS_HPP_
+#define GGML_SRC_GGML_ZDNN_UTILS_HPP_
 
 #include "common.hpp"
 
@@ -16,4 +16,4 @@ void ggml_zdnn_load_tensor(zdnn_ztensor & ztensor, void * buffer);
 
 void ggml_zdnn_init_tensor(ggml_backend_zdnn_buffer * buffer, const ggml_tensor * tensor);
 
-#endif  // GGML_ZDNN_UTILITIES_HPP
+#endif  // GGML_SRC_GGML_ZDNN_UTILS_HPP_

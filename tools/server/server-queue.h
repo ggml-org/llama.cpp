@@ -7,6 +7,7 @@
 #include <mutex>
 #include <vector>
 #include <unordered_set>
+#include <utility>
 
 // struct for managing server tasks
 // in most cases, use server_response_reader to post new tasks and retrieve results

@@ -21,6 +21,8 @@
 #include <openvino/op/subtract.hpp>
 #include <openvino/op/transpose.hpp>
 #include <string>
+#include <algorithm>
+#include <vector>
 
 namespace ov {
 namespace frontend {

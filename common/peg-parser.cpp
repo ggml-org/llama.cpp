@@ -13,6 +13,7 @@
 #include <regex>
 #include <stdexcept>
 #include <unordered_set>
+#include <utility>
 
 // Trick to catch missing branches
 template <typename T>
@@ -41,7 +42,7 @@ struct trie {
 
     std::vector<node> nodes;
 
-    trie(const std::vector<std::string> & words) {
+    explicit trie(const std::vector<std::string> & words) {
       create_node(); // root node
       for (const auto & w : words) {
           insert(w);

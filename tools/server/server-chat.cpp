@@ -2,6 +2,9 @@
 #include "server-common.h"
 
 #include <sstream>
+#include <map>
+#include <string>
+#include <vector>
 
 json server_chat_convert_responses_to_chatcmpl(const json & response_body) {
     if (!response_body.contains("input")) {

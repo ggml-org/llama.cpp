@@ -13,7 +13,6 @@
 
 #include "htp-ctx.h"
 #include "htp-ops.h"
-#include "htp-ops.h"
 
 #ifndef MIN
 #define MIN(a, b) ((a) < (b) ? (a) : (b))

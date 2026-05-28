@@ -1,5 +1,5 @@
-#ifndef HMX_QUEUE_H
-#define HMX_QUEUE_H
+#ifndef GGML_SRC_GGML_HEXAGON_HTP_HMX_QUEUE_H_
+#define GGML_SRC_GGML_HEXAGON_HTP_HMX_QUEUE_H_
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -131,4 +131,4 @@ static inline void hmx_queue_suspend(struct hmx_queue *q) {
 }  // extern "C"
 #endif
 
-#endif /* HMX_QUEUE_H */
+#endif  // GGML_SRC_GGML_HEXAGON_HTP_HMX_QUEUE_H_

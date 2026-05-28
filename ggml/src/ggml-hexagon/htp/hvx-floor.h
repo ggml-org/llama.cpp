@@ -1,5 +1,5 @@
-#ifndef HVX_FLOOR_H
-#define HVX_FLOOR_H
+#ifndef GGML_SRC_GGML_HEXAGON_HTP_HVX_FLOOR_H_
+#define GGML_SRC_GGML_HEXAGON_HTP_HVX_FLOOR_H_
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -97,4 +97,4 @@ static inline HVX_Vector hvx_vec_floor_f32(HVX_Vector in_vec) {
     return vout;
 }
 
-#endif /* HVX_FLOOR_H */
+#endif  // GGML_SRC_GGML_HEXAGON_HTP_HVX_FLOOR_H_

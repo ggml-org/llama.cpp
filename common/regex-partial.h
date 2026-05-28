@@ -2,6 +2,7 @@
 
 #include <regex>
 #include <string>
+#include <vector>
 
 enum common_regex_match_type {
     COMMON_REGEX_MATCH_TYPE_NONE,

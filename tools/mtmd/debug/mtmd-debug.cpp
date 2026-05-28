@@ -14,6 +14,7 @@
 #include <limits.h>
 #include <cinttypes>
 #include <clocale>
+#include <string>
 
 // INTERNAL TOOL FOR DEBUGGING PURPOSES ONLY
 // NOT INTENDED FOR PUBLIC USE

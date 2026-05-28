@@ -12,6 +12,8 @@
 
 #include <map>
 #include <vector>
+#include <memory>
+#include <utility>
 
 struct llama_model;
 class llama_batch_allocr;

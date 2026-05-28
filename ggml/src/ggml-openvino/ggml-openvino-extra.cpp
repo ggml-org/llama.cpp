@@ -8,6 +8,8 @@
 #include <openvino/runtime/intel_npu/level_zero/level_zero.hpp>
 #include <openvino/runtime/properties.hpp>
 #include <optional>
+#include <algorithm>
+#include <utility>
 
 ov::Core & ov_singleton_core() {
     static ov::Core core;

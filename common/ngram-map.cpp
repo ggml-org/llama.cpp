@@ -6,6 +6,8 @@
 #include <cstdint>
 #include <cstdio>
 #include <sstream>
+#include <algorithm>
+#include <string>
 
 // prime number used for LCG hash function (32 bit), it is near (sqrt(5) - 1)/2 * 2^32.
 #define LCG_FACTOR 2654435761UL

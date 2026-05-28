@@ -1,5 +1,5 @@
-#ifndef SPINE_TCM_PUBLIC_H_
-#define SPINE_TCM_PUBLIC_H_
+#ifndef GGML_SRC_GGML_CPU_SPACEMIT_SPINE_TCM_H_
+#define GGML_SRC_GGML_CPU_SPACEMIT_SPINE_TCM_H_
 
 /*
  * spine_tcm public API
@@ -406,4 +406,4 @@ static inline const char * spine_tcm_version(void) {
 }
 #endif
 
-#endif
+#endif  // GGML_SRC_GGML_CPU_SPACEMIT_SPINE_TCM_H_

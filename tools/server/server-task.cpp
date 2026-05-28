@@ -9,6 +9,10 @@
 #include "sampling.h"
 #include "speculative.h"
 #include "server-common.h"
+#include <algorithm>
+#include <limits>
+#include <utility>
+#include <vector>
 
 using json = nlohmann::ordered_json;
 

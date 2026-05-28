@@ -7,6 +7,9 @@
 #include "server-http.h"
 
 #include <nlohmann/json_fwd.hpp>
+#include <map>
+#include <string>
+#include <vector>
 
 using json = nlohmann::ordered_json;
 

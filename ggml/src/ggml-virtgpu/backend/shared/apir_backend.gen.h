@@ -1,3 +1,6 @@
+#ifndef GGML_SRC_GGML_VIRTGPU_BACKEND_SHARED_APIR_BACKEND_GEN_H_
+#define GGML_SRC_GGML_VIRTGPU_BACKEND_SHARED_APIR_BACKEND_GEN_H_
+
 typedef enum ApirBackendCommandType {
 
     /* device */
@@ -92,3 +95,5 @@ static inline const char * apir_dispatch_command_name(ApirBackendCommandType typ
             return "unknown";
     }
 }
+
+#endif  // GGML_SRC_GGML_VIRTGPU_BACKEND_SHARED_APIR_BACKEND_GEN_H_

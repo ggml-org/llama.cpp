@@ -27,6 +27,9 @@
 #include <string>
 #include <utility>
 #include <vector>
+#include <algorithm>
+#include <memory>
+#include <set>
 
 using json = nlohmann::ordered_json;
 
@@ -572,7 +575,7 @@ std::string common_chat_format_single(const struct common_chat_templates * tmpls
     // if the past_msg ends with a newline, we must preserve it in the formatted version
     if (add_ass && !fmt_past_msg.empty() && fmt_past_msg.back() == '\n') {
         ss << "\n";
-    };
+    }
     // format chat with new_msg
     inputs.messages.push_back(new_msg);
     inputs.add_generation_prompt = add_ass;

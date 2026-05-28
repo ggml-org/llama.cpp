@@ -1,5 +1,5 @@
-#ifndef HEX_FASTDIV_H
-#define HEX_FASTDIV_H
+#ifndef GGML_SRC_GGML_HEXAGON_HTP_HEX_FASTDIV_H_
+#define GGML_SRC_GGML_HEXAGON_HTP_HEX_FASTDIV_H_
 
 // See https://gmplib.org/~tege/divcnst-pldi94.pdf figure 4.1.
 // Precompute mp (m' in the paper) and L such that division
@@ -34,4 +34,4 @@ static inline uint32_t fastmodulo(uint32_t n, uint32_t d, const struct fastdiv_v
     return n - fastdiv(n, vals) * d;
 }
 
-#endif /* HEX_FASTDIV_H */
+#endif  // GGML_SRC_GGML_HEXAGON_HTP_HEX_FASTDIV_H_

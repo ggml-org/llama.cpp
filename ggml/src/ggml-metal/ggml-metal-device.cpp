@@ -8,6 +8,8 @@
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <algorithm>
+#include <vector>
 
 struct ggml_metal_device_deleter {
     void operator()(ggml_metal_device_t ctx) {
@@ -68,7 +70,7 @@ struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_base(ggml
         case GGML_OP_ADD_ID: op_str = "add_id"; break;
         case GGML_OP_CONCAT: op_str = "concat"; break;
         default: GGML_ABORT("fatal error");
-    };
+    }
 
     snprintf(base, 256, "kernel_%s", op_str);
     snprintf(name, 256, "%s", base);
@@ -105,7 +107,7 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_pool_1d(ggml_met
         case GGML_OP_POOL_AVG: pool_str = "avg"; break;
         case GGML_OP_POOL_MAX: pool_str = "max"; break;
         default: GGML_ASSERT(false && "not implemented");
-    };
+    }
 
     char base[256];
     char name[256];
@@ -130,7 +132,7 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_pool_2d(ggml_met
         case GGML_OP_POOL_AVG: pool_str = "avg"; break;
         case GGML_OP_POOL_MAX: pool_str = "max"; break;
         default: GGML_ASSERT(false && "not implemented");
-    };
+    }
 
     char base[256];
     char name[256];
@@ -254,7 +256,7 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_unary(ggml_metal
                 default: GGML_ABORT("fatal error");
             } break;
         default: GGML_ABORT("fatal error");
-    };
+    }
 
     const char * t0_str = ggml_type_name(op->src[0]->type);
     const char * t_str  = ggml_type_name(op->type);
@@ -302,7 +304,7 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_glu(ggml_metal_l
                 default: GGML_ABORT("fatal error");
             } break;
         default: GGML_ABORT("fatal error");
-    };
+    }
 
     snprintf(base, 256, "kernel_%s_%s", op_str, ggml_type_name(op->src[0]->type));
     snprintf(name, 256, "%s", base);
@@ -344,7 +346,7 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_sum_rows(ggml_me
         case GGML_OP_SUM_ROWS: op_num = OP_SUM_ROWS_NUM_SUM_ROWS; break;
         case GGML_OP_MEAN:     op_num = OP_SUM_ROWS_NUM_MEAN;     break;
         default: GGML_ABORT("fatal error");
-    };
+    }
 
     const char * t0_str = ggml_type_name(op->src[0]->type);
     const char * t_str  = ggml_type_name(op->type);
@@ -900,7 +902,7 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv(ggml_meta
                 GGML_LOG_ERROR("Asserting on type %d\n", (int) tsrc0);
                 GGML_ABORT("not implemented");
             }
-    };
+    }
 
     GGML_ASSERT(ne12 <= INT16_MAX && ne13 <= INT16_MAX);
     const int16_t r2 = (int16_t) (ne12 / ne02);
@@ -1124,7 +1126,7 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_id(ggml_m
                 GGML_LOG_ERROR("Asserting on type %d\n", (int)op->src[2]->type);
                 GGML_ABORT("not implemented");
             }
-    };
+    }
 
     snprintf(base, 256, "kernel_mul_mv_id_%s_%s%s", ggml_type_name(tsrc0), ggml_type_name(tsrc1), suffix);
     snprintf(name, 256, "%s_nsg=%d", base, nsg);
@@ -1185,7 +1187,7 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_argsort(ggml_met
         case GGML_SORT_ORDER_ASC:  order_str = "asc";  break;
         case GGML_SORT_ORDER_DESC: order_str = "desc"; break;
         default: GGML_ABORT("fatal error");
-    };
+    }
 
     snprintf(base, 256, "kernel_argsort_%s_%s_%s", ggml_type_name(op->src[0]->type), ggml_type_name(op->type), order_str);
     snprintf(name, 256, "%s", base);
@@ -1211,7 +1213,7 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_argsort_merge(gg
         case GGML_SORT_ORDER_ASC:  order_str = "asc";  break;
         case GGML_SORT_ORDER_DESC: order_str = "desc"; break;
         default: GGML_ABORT("fatal error");
-    };
+    }
 
     snprintf(base, 256, "kernel_argsort_merge_%s_%s_%s", ggml_type_name(op->src[0]->type), ggml_type_name(op->type), order_str);
     snprintf(name, 256, "%s", base);
@@ -1239,7 +1241,7 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_top_k(ggml_metal
         case GGML_SORT_ORDER_ASC:  order_str = "asc";  break;
         case GGML_SORT_ORDER_DESC: order_str = "desc"; break;
         default: GGML_ABORT("fatal error");
-    };
+    }
 
     snprintf(base, 256, "kernel_argsort_%s_%s_%s", ggml_type_name(op->src[0]->type), ggml_type_name(op->type), order_str);
     snprintf(name, 256, "%s", base);
@@ -1265,7 +1267,7 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_top_k_merge(ggml
         case GGML_SORT_ORDER_ASC:  order_str = "asc";  break;
         case GGML_SORT_ORDER_DESC: order_str = "desc"; break;
         default: GGML_ABORT("fatal error");
-    };
+    }
 
     snprintf(base, 256, "kernel_argsort_merge_%s_%s_%s", ggml_type_name(op->src[0]->type), ggml_type_name(op->type), order_str);
     snprintf(name, 256, "%s", base);
@@ -1532,7 +1534,7 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_bin(ggml_metal_l
         case GGML_OP_MUL: op_num = 2; break;
         case GGML_OP_DIV: op_num = 3; break;
         default: GGML_ABORT("fatal error");
-    };
+    }
 
     const char * t0_str = ggml_type_name(op->src[0]->type);
     const char * t1_str = ggml_type_name(op->src[1]->type);
@@ -1578,7 +1580,7 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_bin_one(ggml_met
         case GGML_OP_MUL: op_num = 2; break;
         case GGML_OP_DIV: op_num = 3; break;
         default: GGML_ABORT("fatal error");
-    };
+    }
 
     snprintf(base, 256, "kernel_bin_fuse_%s_%s_%s", "f32", "f32", "f32");
     snprintf(name, 256, "%s_op=%d_nf=%d", base, op_num, 1);

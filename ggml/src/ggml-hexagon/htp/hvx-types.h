@@ -1,5 +1,5 @@
-#ifndef HVX_TYPES_H
-#define HVX_TYPES_H
+#ifndef GGML_SRC_GGML_HEXAGON_HTP_HVX_TYPES_H_
+#define GGML_SRC_GGML_HEXAGON_HTP_HVX_TYPES_H_
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -33,4 +33,4 @@ typedef struct {
     HVX_Vector v[8];
 } HVX_Vector_x8;
 
-#endif /* HVX_TYPES_H */
+#endif  // GGML_SRC_GGML_HEXAGON_HTP_HVX_TYPES_H_

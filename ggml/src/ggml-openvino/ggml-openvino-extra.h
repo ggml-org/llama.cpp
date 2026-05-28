@@ -13,6 +13,7 @@
 #include <openvino/runtime/tensor.hpp>
 #include <optional>
 #include <string>
+#include <utility>
 
 // ExtraQuantType enum - defines requantization target formats
 enum class ExtraQuantType { F16, Q4_0_C, Q8_1_C, Q4_0_128, Q8_0_C, Q8_0_32 };

@@ -5,6 +5,7 @@
 #pragma once
 
 #include <openvino/frontend/frontend.hpp>
+#include <memory>
 
 namespace ov {
 namespace frontend {

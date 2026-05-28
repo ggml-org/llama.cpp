@@ -9,6 +9,7 @@
 #include <fstream>
 #include <algorithm>
 #include <functional>
+#include <utility>
 
 // some of the code here is copied from whisper.cpp
 

@@ -1,5 +1,5 @@
-#ifndef OP_DESC_H
-#define OP_DESC_H
+#ifndef GGML_SRC_GGML_HEXAGON_OP_DESC_H_
+#define GGML_SRC_GGML_HEXAGON_OP_DESC_H_
 
 #define GGML_COMMON_IMPL_CPP
 #include "ggml-backend-impl.h"
@@ -147,7 +147,7 @@ struct op_desc {
     }
 
     op_desc() {}
-    op_desc(const ggml_tensor * op) { format(op); }
+    explicit op_desc(const ggml_tensor * op) { format(op); }
 };
 
-#endif // OP_DESC_H
+#endif  // GGML_SRC_GGML_HEXAGON_OP_DESC_H_

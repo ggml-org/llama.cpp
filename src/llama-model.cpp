@@ -33,6 +33,7 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
+#include <utility>
 
 static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params & params) {
     switch (arch) {

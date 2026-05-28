@@ -1,5 +1,7 @@
 find_package(Threads REQUIRED)
 
+message("COMMON CMAKE_CXX_STANDARD=${CMAKE_CXX_STANDARD}")
+
 llama_add_compile_flags()
 
 #

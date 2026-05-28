@@ -7,6 +7,7 @@
 #include <map>
 #include <set>
 #include <vector>
+#include <utility>
 
 //
 // llama_memory_recurrent
@@ -136,7 +137,7 @@ private:
 class llama_memory_recurrent_context : public llama_memory_context_i {
 public:
     // used for errors
-    llama_memory_recurrent_context(llama_memory_status status);
+    explicit llama_memory_recurrent_context(llama_memory_status status);
 
     // used to create a full-cache or update context
     llama_memory_recurrent_context(

@@ -1,6 +1,7 @@
 #include <sycl/sycl.hpp>
 #include "common.hpp"
 #include "add-id.hpp"
+#include <algorithm>
 
 static void add_id_kernel(
     const float* src0,

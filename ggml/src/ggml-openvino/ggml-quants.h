@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <openvino/op/constant.hpp>
 #include <openvino/runtime/tensor.hpp>
+#include <memory>
 
 void unpack_32_4(const uint8_t* data, uint8_t* dst);
 

@@ -13,6 +13,7 @@
 #include <string>
 #include <thread>
 #include <unordered_map>
+#include <limits>
 
 namespace ggml::cpu::riscv64_spacemit {
 bool spine_core_info::get_spine_core_info(std::vector<spine_core_info> & result) {

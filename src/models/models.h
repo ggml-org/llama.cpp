@@ -6,13 +6,15 @@
 
 // note: almost all graphs require at least sqrtf, so include cmath globally
 #include <cmath>
+#include <memory>
+#include <utility>
 
 //
 // base classes
 //
 
 struct llm_build_mamba_base : public llm_graph_context {
-    llm_build_mamba_base(const llm_graph_params & params);
+    explicit llm_build_mamba_base(const llm_graph_params & params);
 
     virtual ~llm_build_mamba_base() = default;
 
@@ -22,7 +24,7 @@ struct llm_build_mamba_base : public llm_graph_context {
 };
 
 struct llm_build_delta_net_base : public llm_graph_context {
-    llm_build_delta_net_base(const llm_graph_params & params);
+    explicit llm_build_delta_net_base(const llm_graph_params & params);
 
     virtual ~llm_build_delta_net_base() = default;
 
@@ -135,7 +137,7 @@ struct llm_build_rwkv7_base : public llm_graph_context {
 //
 
 struct llama_model_llama : public llama_model_base {
-    llama_model_llama(const struct llama_model_params & params) : llama_model_base(params) {}
+    explicit llama_model_llama(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -149,7 +151,7 @@ struct llama_model_llama : public llama_model_base {
 
 
 struct llama_model_llama4 : public llama_model_base {
-    llama_model_llama4(const struct llama_model_params & params) : llama_model_base(params) {}
+    explicit llama_model_llama4(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -163,7 +165,7 @@ struct llama_model_llama4 : public llama_model_base {
 
 
 struct llama_model_llama_embed : public llama_model_llama {
-    llama_model_llama_embed(const struct llama_model_params & params) : llama_model_llama(params) {}
+    explicit llama_model_llama_embed(const struct llama_model_params & params) : llama_model_llama(params) {}
     // reuse load_arch_hparams and load_arch_tensors from llama_model_llama
 
     template <bool embed>
@@ -174,7 +176,7 @@ struct llama_model_llama_embed : public llama_model_llama {
 
 
 struct llama_model_maincoder : public llama_model_base {
-    llama_model_maincoder(const struct llama_model_params & params) : llama_model_base(params) {}
+    explicit llama_model_maincoder(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -187,7 +189,7 @@ struct llama_model_maincoder : public llama_model_base {
 
 
 struct llama_model_talkie : public llama_model_base {
-    llama_model_talkie(const struct llama_model_params & params) : llama_model_base(params) {}
+    explicit llama_model_talkie(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -200,7 +202,7 @@ struct llama_model_talkie : public llama_model_base {
 
 
 struct llama_model_deci : public llama_model_base {
-    llama_model_deci(const struct llama_model_params & params) : llama_model_base(params) {}
+    explicit llama_model_deci(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -213,7 +215,7 @@ struct llama_model_deci : public llama_model_base {
 
 
 struct llama_model_baichuan : public llama_model_base {
-    llama_model_baichuan(const struct llama_model_params & params) : llama_model_base(params) {}
+    explicit llama_model_baichuan(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -226,7 +228,7 @@ struct llama_model_baichuan : public llama_model_base {
 
 
 struct llama_model_falcon : public llama_model_base {
-    llama_model_falcon(const struct llama_model_params & params) : llama_model_base(params) {}
+    explicit llama_model_falcon(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -239,7 +241,7 @@ struct llama_model_falcon : public llama_model_base {
 
 
 struct llama_model_grok : public llama_model_base {
-    llama_model_grok(const struct llama_model_params & params) : llama_model_base(params) {}
+    explicit llama_model_grok(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -252,7 +254,7 @@ struct llama_model_grok : public llama_model_base {
 
 
 struct llama_model_starcoder : public llama_model_base {
-    llama_model_starcoder(const struct llama_model_params & params) : llama_model_base(params) {}
+    explicit llama_model_starcoder(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -265,7 +267,7 @@ struct llama_model_starcoder : public llama_model_base {
 
 
 struct llama_model_refact : public llama_model_base {
-    llama_model_refact(const struct llama_model_params & params) : llama_model_base(params) {}
+    explicit llama_model_refact(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -278,7 +280,7 @@ struct llama_model_refact : public llama_model_base {
 
 
 struct llama_model_bert : public llama_model_base {
-    llama_model_bert(const struct llama_model_params & params) : llama_model_base(params) {}
+    explicit llama_model_bert(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -291,7 +293,7 @@ struct llama_model_bert : public llama_model_base {
 
 
 struct llama_model_jina_bert_v2 : public llama_model_base {
-    llama_model_jina_bert_v2(const struct llama_model_params & params) : llama_model_base(params) {}
+    explicit llama_model_jina_bert_v2(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -302,7 +304,7 @@ struct llama_model_jina_bert_v2 : public llama_model_base {
 
 
 struct llama_model_jina_bert_v3 : public llama_model_base {
-    llama_model_jina_bert_v3(const struct llama_model_params & params) : llama_model_base(params) {}
+    explicit llama_model_jina_bert_v3(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -313,7 +315,7 @@ struct llama_model_jina_bert_v3 : public llama_model_base {
 
 
 struct llama_model_nomic_bert : public llama_model_base {
-    llama_model_nomic_bert(const struct llama_model_params & params) : llama_model_base(params) {}
+    explicit llama_model_nomic_bert(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -324,7 +326,7 @@ struct llama_model_nomic_bert : public llama_model_base {
 
 
 struct llama_model_nomic_bert_moe : public llama_model_base {
-    llama_model_nomic_bert_moe(const struct llama_model_params & params) : llama_model_base(params) {}
+    explicit llama_model_nomic_bert_moe(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -335,7 +337,7 @@ struct llama_model_nomic_bert_moe : public llama_model_base {
 
 
 struct llama_model_modern_bert : public llama_model_base {
-    llama_model_modern_bert(const struct llama_model_params & params) : llama_model_base(params) {}
+    explicit llama_model_modern_bert(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -348,7 +350,7 @@ struct llama_model_modern_bert : public llama_model_base {
 
 
 struct llama_model_neo_bert : public llama_model_base {
-    llama_model_neo_bert(const struct llama_model_params & params) : llama_model_base(params) {}
+    explicit llama_model_neo_bert(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -361,7 +363,7 @@ struct llama_model_neo_bert : public llama_model_base {
 
 
 struct llama_model_eurobert : public llama_model_base {
-    llama_model_eurobert(const struct llama_model_params & params) : llama_model_base(params) {}
+    explicit llama_model_eurobert(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -374,7 +376,7 @@ struct llama_model_eurobert : public llama_model_base {
 
 
 struct llama_model_bloom : public llama_model_base {
-    llama_model_bloom(const struct llama_model_params & params) : llama_model_base(params) {}
+    explicit llama_model_bloom(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -387,7 +389,7 @@ struct llama_model_bloom : public llama_model_base {
 
 
 struct llama_model_mpt : public llama_model_base {
-    llama_model_mpt(const struct llama_model_params & params) : llama_model_base(params) {}
+    explicit llama_model_mpt(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -400,7 +402,7 @@ struct llama_model_mpt : public llama_model_base {
 
 
 struct llama_model_stablelm : public llama_model_base {
-    llama_model_stablelm(const struct llama_model_params & params) : llama_model_base(params) {}
+    explicit llama_model_stablelm(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -413,7 +415,7 @@ struct llama_model_stablelm : public llama_model_base {
 
 
 struct llama_model_qwen : public llama_model_base {
-    llama_model_qwen(const struct llama_model_params & params) : llama_model_base(params) {}
+    explicit llama_model_qwen(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -426,7 +428,7 @@ struct llama_model_qwen : public llama_model_base {
 
 
 struct llama_model_qwen2 : public llama_model_base {
-    llama_model_qwen2(const struct llama_model_params & params) : llama_model_base(params) {}
+    explicit llama_model_qwen2(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -439,7 +441,7 @@ struct llama_model_qwen2 : public llama_model_base {
 
 
 struct llama_model_dream : public llama_model_base {
-    llama_model_dream(const struct llama_model_params & params) : llama_model_base(params) {}
+    explicit llama_model_dream(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -452,7 +454,7 @@ struct llama_model_dream : public llama_model_base {
 
 
 struct llama_model_llada : public llama_model_base {
-    llama_model_llada(const struct llama_model_params & params) : llama_model_base(params) {}
+    explicit llama_model_llada(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -465,7 +467,7 @@ struct llama_model_llada : public llama_model_base {
 
 
 struct llama_model_llada_moe : public llama_model_base {
-    llama_model_llada_moe(const struct llama_model_params & params) : llama_model_base(params) {}
+    explicit llama_model_llada_moe(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -478,7 +480,7 @@ struct llama_model_llada_moe : public llama_model_base {
 
 
 struct llama_model_rnd1 : public llama_model_base {
-    llama_model_rnd1(const struct llama_model_params & params) : llama_model_base(params) {}
+    explicit llama_model_rnd1(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -491,7 +493,7 @@ struct llama_model_rnd1 : public llama_model_base {
 
 
 struct llama_model_qwen2vl : public llama_model_base {
-    llama_model_qwen2vl(const struct llama_model_params & params) : llama_model_base(params) {}
+    explicit llama_model_qwen2vl(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -504,7 +506,7 @@ struct llama_model_qwen2vl : public llama_model_base {
 
 
 struct llama_model_qwen2moe : public llama_model_base {
-    llama_model_qwen2moe(const struct llama_model_params & params) : llama_model_base(params) {}
+    explicit llama_model_qwen2moe(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -517,7 +519,7 @@ struct llama_model_qwen2moe : public llama_model_base {
 
 
 struct llama_model_qwen3 : public llama_model_base {
-    llama_model_qwen3(const struct llama_model_params & params) : llama_model_base(params) {}
+    explicit llama_model_qwen3(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -530,7 +532,7 @@ struct llama_model_qwen3 : public llama_model_base {
 
 
 struct llama_model_qwen3moe : public llama_model_base {
-    llama_model_qwen3moe(const struct llama_model_params & params) : llama_model_base(params) {}
+    explicit llama_model_qwen3moe(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -543,7 +545,7 @@ struct llama_model_qwen3moe : public llama_model_base {
 
 
 struct llama_model_qwen3vl : public llama_model_base {
-    llama_model_qwen3vl(const struct llama_model_params & params) : llama_model_base(params) {}
+    explicit llama_model_qwen3vl(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -556,7 +558,7 @@ struct llama_model_qwen3vl : public llama_model_base {
 
 
 struct llama_model_qwen3vlmoe : public llama_model_base {
-    llama_model_qwen3vlmoe(const struct llama_model_params & params) : llama_model_base(params) {}
+    explicit llama_model_qwen3vlmoe(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -569,7 +571,7 @@ struct llama_model_qwen3vlmoe : public llama_model_base {
 
 
 struct llama_model_phi2 : public llama_model_base {
-    llama_model_phi2(const struct llama_model_params & params) : llama_model_base(params) {}
+    explicit llama_model_phi2(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -582,7 +584,7 @@ struct llama_model_phi2 : public llama_model_base {
 
 
 struct llama_model_phi3 : public llama_model_base {
-    llama_model_phi3(const struct llama_model_params & params) : llama_model_base(params) {}
+    explicit llama_model_phi3(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -596,7 +598,7 @@ struct llama_model_phi3 : public llama_model_base {
 
 
 struct llama_model_phimoe : public llama_model_base {
-    llama_model_phimoe(const struct llama_model_params & params) : llama_model_base(params) {}
+    explicit llama_model_phimoe(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -608,7 +610,7 @@ struct llama_model_phimoe : public llama_model_base {
 
 
 struct llama_model_plamo : public llama_model_base {
-    llama_model_plamo(const struct llama_model_params & params) : llama_model_base(params) {}
+    explicit llama_model_plamo(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -621,7 +623,7 @@ struct llama_model_plamo : public llama_model_base {
 
 
 struct llama_model_plamo2 : public llama_model_base {
-    llama_model_plamo2(const struct llama_model_params & params) : llama_model_base(params) {}
+    explicit llama_model_plamo2(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -638,7 +640,7 @@ struct llama_model_plamo2 : public llama_model_base {
 
 
 struct llama_model_plamo3 : public llama_model_base {
-    llama_model_plamo3(const struct llama_model_params & params) : llama_model_base(params) {}
+    explicit llama_model_plamo3(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -652,7 +654,7 @@ struct llama_model_plamo3 : public llama_model_base {
 
 
 struct llama_model_gpt2 : public llama_model_base {
-    llama_model_gpt2(const struct llama_model_params & params) : llama_model_base(params) {}
+    explicit llama_model_gpt2(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -665,7 +667,7 @@ struct llama_model_gpt2 : public llama_model_base {
 
 
 struct llama_model_codeshell : public llama_model_base {
-    llama_model_codeshell(const struct llama_model_params & params) : llama_model_base(params) {}
+    explicit llama_model_codeshell(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -678,7 +680,7 @@ struct llama_model_codeshell : public llama_model_base {
 
 
 struct llama_model_orion : public llama_model_base {
-    llama_model_orion(const struct llama_model_params & params) : llama_model_base(params) {}
+    explicit llama_model_orion(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -691,7 +693,7 @@ struct llama_model_orion : public llama_model_base {
 
 
 struct llama_model_internlm2 : public llama_model_base {
-    llama_model_internlm2(const struct llama_model_params & params) : llama_model_base(params) {}
+    explicit llama_model_internlm2(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -704,7 +706,7 @@ struct llama_model_internlm2 : public llama_model_base {
 
 
 struct llama_model_minicpm3 : public llama_model_base {
-    llama_model_minicpm3(const struct llama_model_params & params) : llama_model_base(params) {}
+    explicit llama_model_minicpm3(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -717,7 +719,7 @@ struct llama_model_minicpm3 : public llama_model_base {
 
 
 struct llama_model_gemma : public llama_model_base {
-    llama_model_gemma(const struct llama_model_params & params) : llama_model_base(params) {}
+    explicit llama_model_gemma(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -730,7 +732,7 @@ struct llama_model_gemma : public llama_model_base {
 
 
 struct llama_model_gemma2 : public llama_model_base {
-    llama_model_gemma2(const struct llama_model_params & params) : llama_model_base(params) {}
+    explicit llama_model_gemma2(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -743,7 +745,7 @@ struct llama_model_gemma2 : public llama_model_base {
 
 
 struct llama_model_gemma3 : public llama_model_base {
-    llama_model_gemma3(const struct llama_model_params & params) : llama_model_base(params) {}
+    explicit llama_model_gemma3(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -757,7 +759,7 @@ struct llama_model_gemma3 : public llama_model_base {
 
 
 struct llama_model_gemma3n : public llama_model_base {
-    llama_model_gemma3n(const struct llama_model_params & params) : llama_model_base(params) {}
+    explicit llama_model_gemma3n(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -790,7 +792,7 @@ struct llama_model_gemma3n : public llama_model_base {
 
 
 struct llama_model_gemma4 : public llama_model_base {
-    llama_model_gemma4(const struct llama_model_params & params) : llama_model_base(params) {}
+    explicit llama_model_gemma4(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -811,7 +813,7 @@ struct llama_model_gemma4 : public llama_model_base {
 
 
 struct llama_model_gemma_embedding : public llama_model_base {
-    llama_model_gemma_embedding(const struct llama_model_params & params) : llama_model_base(params) {}
+    explicit llama_model_gemma_embedding(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -824,7 +826,7 @@ struct llama_model_gemma_embedding : public llama_model_base {
 
 
 struct llama_model_starcoder2 : public llama_model_base {
-    llama_model_starcoder2(const struct llama_model_params & params) : llama_model_base(params) {}
+    explicit llama_model_starcoder2(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -837,7 +839,7 @@ struct llama_model_starcoder2 : public llama_model_base {
 
 
 struct llama_model_mamba : public llama_model_base {
-    llama_model_mamba(const struct llama_model_params & params) : llama_model_base(params) {}
+    explicit llama_model_mamba(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -850,7 +852,7 @@ struct llama_model_mamba : public llama_model_base {
 
 
 struct llama_model_mamba2 : public llama_model_base {
-    llama_model_mamba2(const struct llama_model_params & params) : llama_model_base(params) {}
+    explicit llama_model_mamba2(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -861,7 +863,7 @@ struct llama_model_mamba2 : public llama_model_base {
 
 
 struct llama_model_jamba : public llama_model_base {
-    llama_model_jamba(const struct llama_model_params & params) : llama_model_base(params) {}
+    explicit llama_model_jamba(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -874,7 +876,7 @@ struct llama_model_jamba : public llama_model_base {
 
 
 struct llama_model_xverse : public llama_model_base {
-    llama_model_xverse(const struct llama_model_params & params) : llama_model_base(params) {}
+    explicit llama_model_xverse(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -887,7 +889,7 @@ struct llama_model_xverse : public llama_model_base {
 
 
 struct llama_model_command_r : public llama_model_base {
-    llama_model_command_r(const struct llama_model_params & params) : llama_model_base(params) {}
+    explicit llama_model_command_r(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -900,7 +902,7 @@ struct llama_model_command_r : public llama_model_base {
 
 
 struct llama_model_cohere2 : public llama_model_base {
-    llama_model_cohere2(const struct llama_model_params & params) : llama_model_base(params) {}
+    explicit llama_model_cohere2(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -913,7 +915,7 @@ struct llama_model_cohere2 : public llama_model_base {
 
 
 struct llama_model_dbrx : public llama_model_base {
-    llama_model_dbrx(const struct llama_model_params & params) : llama_model_base(params) {}
+    explicit llama_model_dbrx(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -926,7 +928,7 @@ struct llama_model_dbrx : public llama_model_base {
 
 
 struct llama_model_olmo : public llama_model_base {
-    llama_model_olmo(const struct llama_model_params & params) : llama_model_base(params) {}
+    explicit llama_model_olmo(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -939,7 +941,7 @@ struct llama_model_olmo : public llama_model_base {
 
 
 struct llama_model_olmo2 : public llama_model_base {
-    llama_model_olmo2(const struct llama_model_params & params) : llama_model_base(params) {}
+    explicit llama_model_olmo2(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -953,7 +955,7 @@ struct llama_model_olmo2 : public llama_model_base {
 
 
 struct llama_model_olmoe : public llama_model_base {
-    llama_model_olmoe(const struct llama_model_params & params) : llama_model_base(params) {}
+    explicit llama_model_olmoe(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -966,7 +968,7 @@ struct llama_model_olmoe : public llama_model_base {
 
 
 struct llama_model_openelm : public llama_model_base {
-    llama_model_openelm(const struct llama_model_params & params) : llama_model_base(params) {}
+    explicit llama_model_openelm(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -979,7 +981,7 @@ struct llama_model_openelm : public llama_model_base {
 
 
 struct llama_model_gptneox : public llama_model_base {
-    llama_model_gptneox(const struct llama_model_params & params) : llama_model_base(params) {}
+    explicit llama_model_gptneox(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -992,7 +994,7 @@ struct llama_model_gptneox : public llama_model_base {
 
 
 struct llama_model_arctic : public llama_model_base {
-    llama_model_arctic(const struct llama_model_params & params) : llama_model_base(params) {}
+    explicit llama_model_arctic(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -1005,7 +1007,7 @@ struct llama_model_arctic : public llama_model_base {
 
 
 struct llama_model_deepseek : public llama_model_base {
-    llama_model_deepseek(const struct llama_model_params & params) : llama_model_base(params) {}
+    explicit llama_model_deepseek(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -1018,7 +1020,7 @@ struct llama_model_deepseek : public llama_model_base {
 
 
 struct llama_model_deepseek2 : public llama_model_base {
-    llama_model_deepseek2(const struct llama_model_params & params) : llama_model_base(params) {}
+    explicit llama_model_deepseek2(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -1031,7 +1033,7 @@ struct llama_model_deepseek2 : public llama_model_base {
 
 
 struct llama_model_deepseek2ocr : public llama_model_base {
-    llama_model_deepseek2ocr(const struct llama_model_params & params) : llama_model_base(params) {}
+    explicit llama_model_deepseek2ocr(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -1042,7 +1044,7 @@ struct llama_model_deepseek2ocr : public llama_model_base {
 
 
 struct llama_model_glm_dsa : public llama_model_base {
-    llama_model_glm_dsa(const struct llama_model_params & params) : llama_model_base(params) {}
+    explicit llama_model_glm_dsa(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -1053,7 +1055,7 @@ struct llama_model_glm_dsa : public llama_model_base {
 
 
 struct llama_model_mistral4 : public llama_model_deepseek2 {
-    llama_model_mistral4(const struct llama_model_params & params) : llama_model_deepseek2(params) {}
+    explicit llama_model_mistral4(const struct llama_model_params & params) : llama_model_deepseek2(params) {}
     // reuse load_arch_hparams and load_arch_tensors from llama_model_deepseek2
 
     using graph = llama_model_deepseek2::graph;
@@ -1063,7 +1065,7 @@ struct llama_model_mistral4 : public llama_model_deepseek2 {
 
 
 struct llama_model_chatglm : public llama_model_base {
-    llama_model_chatglm(const struct llama_model_params & params) : llama_model_base(params) {}
+    explicit llama_model_chatglm(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -1076,7 +1078,7 @@ struct llama_model_chatglm : public llama_model_base {
 
 
 struct llama_model_glm4 : public llama_model_base {
-    llama_model_glm4(const struct llama_model_params & params) : llama_model_base(params) {}
+    explicit llama_model_glm4(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -1089,7 +1091,7 @@ struct llama_model_glm4 : public llama_model_base {
 
 
 struct llama_model_glm4_moe : public llama_model_base {
-    llama_model_glm4_moe(const struct llama_model_params & params) : llama_model_base(params) {}
+    explicit llama_model_glm4_moe(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -1102,7 +1104,7 @@ struct llama_model_glm4_moe : public llama_model_base {
 
 
 struct llama_model_bitnet : public llama_model_base {
-    llama_model_bitnet(const struct llama_model_params & params) : llama_model_base(params) {}
+    explicit llama_model_bitnet(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -1115,7 +1117,7 @@ struct llama_model_bitnet : public llama_model_base {
 
 
 struct llama_model_t5 : public llama_model_base {
-    llama_model_t5(const struct llama_model_params & params) : llama_model_base(params) {}
+    explicit llama_model_t5(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -1129,7 +1131,7 @@ struct llama_model_t5 : public llama_model_base {
 
 
 struct llama_model_t5encoder : public llama_model_base {
-    llama_model_t5encoder(const struct llama_model_params & params) : llama_model_base(params) {}
+    explicit llama_model_t5encoder(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -1140,7 +1142,7 @@ struct llama_model_t5encoder : public llama_model_base {
 
 
 struct llama_model_jais : public llama_model_base {
-    llama_model_jais(const struct llama_model_params & params) : llama_model_base(params) {}
+    explicit llama_model_jais(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -1153,7 +1155,7 @@ struct llama_model_jais : public llama_model_base {
 
 
 struct llama_model_jais2 : public llama_model_base {
-    llama_model_jais2(const struct llama_model_params & params) : llama_model_base(params) {}
+    explicit llama_model_jais2(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -1166,7 +1168,7 @@ struct llama_model_jais2 : public llama_model_base {
 
 
 struct llama_model_nemotron : public llama_model_base {
-    llama_model_nemotron(const struct llama_model_params & params) : llama_model_base(params) {}
+    explicit llama_model_nemotron(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -1179,7 +1181,7 @@ struct llama_model_nemotron : public llama_model_base {
 
 
 struct llama_model_nemotron_h : public llama_model_base {
-    llama_model_nemotron_h(const struct llama_model_params & params) : llama_model_base(params) {}
+    explicit llama_model_nemotron_h(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -1195,7 +1197,7 @@ struct llama_model_nemotron_h : public llama_model_base {
 
 
 struct llama_model_nemotron_h_moe : public llama_model_nemotron_h {
-    llama_model_nemotron_h_moe(const struct llama_model_params & params) : llama_model_nemotron_h(params) {}
+    explicit llama_model_nemotron_h_moe(const struct llama_model_params & params) : llama_model_nemotron_h(params) {}
     // reuse load_arch_hparams and load_arch_tensors from llama_model_nemotron_h
 
     using graph = llama_model_nemotron_h::graph;
@@ -1205,7 +1207,7 @@ struct llama_model_nemotron_h_moe : public llama_model_nemotron_h {
 
 
 struct llama_model_exaone : public llama_model_base {
-    llama_model_exaone(const struct llama_model_params & params) : llama_model_base(params) {}
+    explicit llama_model_exaone(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -1218,7 +1220,7 @@ struct llama_model_exaone : public llama_model_base {
 
 
 struct llama_model_exaone4 : public llama_model_base {
-    llama_model_exaone4(const struct llama_model_params & params) : llama_model_base(params) {}
+    explicit llama_model_exaone4(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -1232,7 +1234,7 @@ struct llama_model_exaone4 : public llama_model_base {
 
 
 struct llama_model_exaone_moe : public llama_model_base {
-    llama_model_exaone_moe(const struct llama_model_params & params) : llama_model_base(params) {}
+    explicit llama_model_exaone_moe(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -1245,7 +1247,7 @@ struct llama_model_exaone_moe : public llama_model_base {
 
 
 struct llama_model_rwkv6 : public llama_model_base {
-    llama_model_rwkv6(const struct llama_model_params & params) : llama_model_base(params) {}
+    explicit llama_model_rwkv6(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -1258,7 +1260,7 @@ struct llama_model_rwkv6 : public llama_model_base {
 
 
 struct llama_model_rwkv6qwen2 : public llama_model_base {
-    llama_model_rwkv6qwen2(const struct llama_model_params & params) : llama_model_base(params) {}
+    explicit llama_model_rwkv6qwen2(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -1271,7 +1273,7 @@ struct llama_model_rwkv6qwen2 : public llama_model_base {
 
 
 struct llama_model_rwkv7 : public llama_model_base {
-    llama_model_rwkv7(const struct llama_model_params & params) : llama_model_base(params) {}
+    explicit llama_model_rwkv7(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -1284,7 +1286,7 @@ struct llama_model_rwkv7 : public llama_model_base {
 
 
 struct llama_model_arwkv7 : public llama_model_base {
-    llama_model_arwkv7(const struct llama_model_params & params) : llama_model_base(params) {}
+    explicit llama_model_arwkv7(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -1297,7 +1299,7 @@ struct llama_model_arwkv7 : public llama_model_base {
 
 
 struct llama_model_granite : public llama_model_base {
-    llama_model_granite(const struct llama_model_params & params) : llama_model_base(params) {}
+    explicit llama_model_granite(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -1325,7 +1327,7 @@ struct llama_model_granite : public llama_model_base {
 
 
 struct llama_model_granite_moe : public llama_model_base {
-    llama_model_granite_moe(const struct llama_model_params & params) : llama_model_base(params) {}
+    explicit llama_model_granite_moe(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -1336,7 +1338,7 @@ struct llama_model_granite_moe : public llama_model_base {
 
 
 struct llama_model_minicpm : public llama_model_base {
-    llama_model_minicpm(const struct llama_model_params & params) : llama_model_base(params) {}
+    explicit llama_model_minicpm(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -1347,7 +1349,7 @@ struct llama_model_minicpm : public llama_model_base {
 
 
 struct llama_model_granite_hybrid : public llama_model_base {
-    llama_model_granite_hybrid(const struct llama_model_params & params) : llama_model_base(params) {}
+    explicit llama_model_granite_hybrid(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -1363,7 +1365,7 @@ struct llama_model_granite_hybrid : public llama_model_base {
 
 
 struct llama_model_chameleon : public llama_model_base {
-    llama_model_chameleon(const struct llama_model_params & params) : llama_model_base(params) {}
+    explicit llama_model_chameleon(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -1376,7 +1378,7 @@ struct llama_model_chameleon : public llama_model_base {
 
 
 struct llama_model_wavtokenizer_dec : public llama_model_base {
-    llama_model_wavtokenizer_dec(const struct llama_model_params & params) : llama_model_base(params) {}
+    explicit llama_model_wavtokenizer_dec(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -1389,7 +1391,7 @@ struct llama_model_wavtokenizer_dec : public llama_model_base {
 
 
 struct llama_model_plm : public llama_model_base {
-    llama_model_plm(const struct llama_model_params & params) : llama_model_base(params) {}
+    explicit llama_model_plm(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -1402,7 +1404,7 @@ struct llama_model_plm : public llama_model_base {
 
 
 struct llama_model_bailingmoe : public llama_model_base {
-    llama_model_bailingmoe(const struct llama_model_params & params) : llama_model_base(params) {}
+    explicit llama_model_bailingmoe(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -1415,7 +1417,7 @@ struct llama_model_bailingmoe : public llama_model_base {
 
 
 struct llama_model_bailingmoe2 : public llama_model_base {
-    llama_model_bailingmoe2(const struct llama_model_params & params) : llama_model_base(params) {}
+    explicit llama_model_bailingmoe2(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -1428,7 +1430,7 @@ struct llama_model_bailingmoe2 : public llama_model_base {
 
 
 struct llama_model_seed_oss : public llama_model_base {
-    llama_model_seed_oss(const struct llama_model_params & params) : llama_model_base(params) {}
+    explicit llama_model_seed_oss(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -1441,7 +1443,7 @@ struct llama_model_seed_oss : public llama_model_base {
 
 
 struct llama_model_dots1 : public llama_model_base {
-    llama_model_dots1(const struct llama_model_params & params) : llama_model_base(params) {}
+    explicit llama_model_dots1(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -1454,7 +1456,7 @@ struct llama_model_dots1 : public llama_model_base {
 
 
 struct llama_model_arcee : public llama_model_base {
-    llama_model_arcee(const struct llama_model_params & params) : llama_model_base(params) {}
+    explicit llama_model_arcee(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -1467,7 +1469,7 @@ struct llama_model_arcee : public llama_model_base {
 
 
 struct llama_model_afmoe : public llama_model_base {
-    llama_model_afmoe(const struct llama_model_params & params) : llama_model_base(params) {}
+    explicit llama_model_afmoe(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -1480,7 +1482,7 @@ struct llama_model_afmoe : public llama_model_base {
 
 
 struct llama_model_ernie4_5 : public llama_model_base {
-    llama_model_ernie4_5(const struct llama_model_params & params) : llama_model_base(params) {}
+    explicit llama_model_ernie4_5(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -1493,7 +1495,7 @@ struct llama_model_ernie4_5 : public llama_model_base {
 
 
 struct llama_model_ernie4_5_moe : public llama_model_ernie4_5 {
-    llama_model_ernie4_5_moe(const struct llama_model_params & params) : llama_model_ernie4_5(params) {}
+    explicit llama_model_ernie4_5_moe(const struct llama_model_params & params) : llama_model_ernie4_5(params) {}
     // reuse load_arch_hparams and load_arch_tensors from llama_model_ernie4_5
 
     struct graph : public llm_graph_context {
@@ -1505,7 +1507,7 @@ struct llama_model_ernie4_5_moe : public llama_model_ernie4_5 {
 
 
 struct llama_model_paddleocr : public llama_model_ernie4_5 {
-    llama_model_paddleocr(const struct llama_model_params & params) : llama_model_ernie4_5(params) {}
+    explicit llama_model_paddleocr(const struct llama_model_params & params) : llama_model_ernie4_5(params) {}
     // reuse load_arch_hparams and load_arch_tensors from llama_model_ernie4_5
 
     struct graph : public llm_graph_context {
@@ -1517,7 +1519,7 @@ struct llama_model_paddleocr : public llama_model_ernie4_5 {
 
 
 struct llama_model_hunyuan_moe : public llama_model_base {
-    llama_model_hunyuan_moe(const struct llama_model_params & params) : llama_model_base(params) {}
+    explicit llama_model_hunyuan_moe(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -1530,7 +1532,7 @@ struct llama_model_hunyuan_moe : public llama_model_base {
 
 
 struct llama_model_hunyuan_vl : public llama_model_base {
-    llama_model_hunyuan_vl(const struct llama_model_params & params) : llama_model_base(params) {}
+    explicit llama_model_hunyuan_vl(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -1543,7 +1545,7 @@ struct llama_model_hunyuan_vl : public llama_model_base {
 
 
 struct llama_model_hunyuan_dense : public llama_model_hunyuan_vl {
-    llama_model_hunyuan_dense(const struct llama_model_params & params) : llama_model_hunyuan_vl(params) {}
+    explicit llama_model_hunyuan_dense(const struct llama_model_params & params) : llama_model_hunyuan_vl(params) {}
     // reuse load_arch_hparams and load_arch_tensors from llama_model_hunyuan_vl
 
     using graph = llama_model_hunyuan_vl::graph;
@@ -1553,7 +1555,7 @@ struct llama_model_hunyuan_dense : public llama_model_hunyuan_vl {
 
 
 struct llama_model_smollm3 : public llama_model_base {
-    llama_model_smollm3(const struct llama_model_params & params) : llama_model_base(params) {}
+    explicit llama_model_smollm3(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -1566,7 +1568,7 @@ struct llama_model_smollm3 : public llama_model_base {
 
 
 struct llama_model_openai_moe : public llama_model_base {
-    llama_model_openai_moe(const struct llama_model_params & params) : llama_model_base(params) {}
+    explicit llama_model_openai_moe(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -1579,7 +1581,7 @@ struct llama_model_openai_moe : public llama_model_base {
 
 
 struct llama_model_falcon_h1 : public llama_model_base {
-    llama_model_falcon_h1(const struct llama_model_params & params) : llama_model_base(params) {}
+    explicit llama_model_falcon_h1(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -1592,7 +1594,7 @@ struct llama_model_falcon_h1 : public llama_model_base {
 
 
 struct llama_model_lfm2 : public llama_model_base {
-    llama_model_lfm2(const struct llama_model_params & params) : llama_model_base(params) {}
+    explicit llama_model_lfm2(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -1606,7 +1608,7 @@ struct llama_model_lfm2 : public llama_model_base {
 
 
 struct llama_model_lfm2moe : public llama_model_base {
-    llama_model_lfm2moe(const struct llama_model_params & params) : llama_model_base(params) {}
+    explicit llama_model_lfm2moe(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -1618,7 +1620,7 @@ struct llama_model_lfm2moe : public llama_model_base {
 
 
 struct llama_model_smallthinker : public llama_model_base {
-    llama_model_smallthinker(const struct llama_model_params & params) : llama_model_base(params) {}
+    explicit llama_model_smallthinker(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -1632,7 +1634,7 @@ struct llama_model_smallthinker : public llama_model_base {
 
 
 struct llama_model_grovemoe : public llama_model_base {
-    llama_model_grovemoe(const struct llama_model_params & params) : llama_model_base(params) {}
+    explicit llama_model_grovemoe(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -1645,7 +1647,7 @@ struct llama_model_grovemoe : public llama_model_base {
 
 
 struct llama_model_apertus : public llama_model_base {
-    llama_model_apertus(const struct llama_model_params & params) : llama_model_base(params) {}
+    explicit llama_model_apertus(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -1658,7 +1660,7 @@ struct llama_model_apertus : public llama_model_base {
 
 
 struct llama_model_minimax_m2 : public llama_model_base {
-    llama_model_minimax_m2(const struct llama_model_params & params) : llama_model_base(params) {}
+    explicit llama_model_minimax_m2(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -1671,7 +1673,7 @@ struct llama_model_minimax_m2 : public llama_model_base {
 
 
 struct llama_model_cogvlm : public llama_model_base {
-    llama_model_cogvlm(const struct llama_model_params & params) : llama_model_base(params) {}
+    explicit llama_model_cogvlm(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -1684,7 +1686,7 @@ struct llama_model_cogvlm : public llama_model_base {
 
 
 struct llama_model_pangu_embed : public llama_model_base {
-    llama_model_pangu_embed(const struct llama_model_params & params) : llama_model_base(params) {}
+    explicit llama_model_pangu_embed(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -1697,7 +1699,7 @@ struct llama_model_pangu_embed : public llama_model_base {
 
 
 struct llama_model_qwen3next : public llama_model_base {
-    llama_model_qwen3next(const struct llama_model_params & params) : llama_model_base(params) {}
+    explicit llama_model_qwen3next(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -1738,7 +1740,7 @@ struct llama_model_qwen3next : public llama_model_base {
 
 
 struct llama_model_qwen35 : public llama_model_base {
-    llama_model_qwen35(const struct llama_model_params & params) : llama_model_base(params) {}
+    explicit llama_model_qwen35(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -1784,7 +1786,7 @@ struct llama_model_qwen35 : public llama_model_base {
 
 
 struct llama_model_qwen35moe : public llama_model_base {
-    llama_model_qwen35moe(const struct llama_model_params & params) : llama_model_base(params) {}
+    explicit llama_model_qwen35moe(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -1830,7 +1832,7 @@ struct llama_model_qwen35moe : public llama_model_base {
 
 
 struct llama_model_mistral3 : public llama_model_base {
-    llama_model_mistral3(const struct llama_model_params & params) : llama_model_base(params) {}
+    explicit llama_model_mistral3(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -1843,7 +1845,7 @@ struct llama_model_mistral3 : public llama_model_base {
 
 
 struct llama_model_mimo2 : public llama_model_base {
-    llama_model_mimo2(const struct llama_model_params & params) : llama_model_base(params) {}
+    explicit llama_model_mimo2(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -1856,7 +1858,7 @@ struct llama_model_mimo2 : public llama_model_base {
 
 
 struct llama_model_kimi_linear : public llama_model_base {
-    llama_model_kimi_linear(const struct llama_model_params & params) : llama_model_base(params) {}
+    explicit llama_model_kimi_linear(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -1892,7 +1894,7 @@ struct llama_model_kimi_linear : public llama_model_base {
 
 
 struct llama_model_step35 : public llama_model_base {
-    llama_model_step35(const struct llama_model_params & params) : llama_model_base(params) {}
+    explicit llama_model_step35(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 

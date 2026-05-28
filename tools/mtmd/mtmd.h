@@ -1,5 +1,5 @@
-#ifndef MTMD_H
-#define MTMD_H
+#ifndef TOOLS_MTMD_MTMD_H_
+#define TOOLS_MTMD_MTMD_H_
 
 #include "ggml.h"
 #include "llama.h"
@@ -14,6 +14,7 @@
 #include <vector>
 #include <cinttypes>
 #include <memory>
+#include <utility>
 #endif
 
 /**
@@ -301,7 +302,7 @@ using input_chunk_ptr = std::unique_ptr<mtmd_input_chunk, mtmd_input_chunk_delet
 struct bitmap {
     bitmap_ptr ptr;
     bitmap() : ptr(nullptr) {}
-    bitmap(mtmd_bitmap * bitmap) : ptr(bitmap) {}
+    explicit bitmap(mtmd_bitmap * bitmap) : ptr(bitmap) {}
     bitmap(bitmap && other) noexcept : ptr(std::move(other.ptr)) {}
     bitmap(uint32_t nx, uint32_t ny, const unsigned char * data) {
         ptr.reset(mtmd_bitmap_init(nx, ny, data));
@@ -334,7 +335,7 @@ struct bitmaps {
 struct input_chunks {
     input_chunks_ptr ptr;
     input_chunks() = default;
-    input_chunks(mtmd_input_chunks * chunks) : ptr(chunks) {}
+    explicit input_chunks(mtmd_input_chunks * chunks) : ptr(chunks) {}
     ~input_chunks() = default;
     size_t size() const { return mtmd_input_chunks_size(ptr.get()); }
     const mtmd_input_chunk * operator[](size_t idx) const {
@@ -346,4 +347,4 @@ struct input_chunks {
 
 #endif
 
-#endif
+#endif  // TOOLS_MTMD_MTMD_H_

@@ -3,6 +3,7 @@
 #include "input_model.h"
 #include "op_table.h"
 #include "translate_session.h"
+#include <memory>
 
 namespace ov {
 namespace frontend {

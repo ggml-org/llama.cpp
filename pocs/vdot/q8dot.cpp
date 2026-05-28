@@ -8,7 +8,6 @@
 #include <cassert>
 #include <cstring>
 #include <array>
-#include <type_traits>
 
 #include <ggml.h>
 #include <ggml-cpu.h>

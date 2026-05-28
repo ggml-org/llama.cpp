@@ -5,6 +5,8 @@
 #include <openvino/core/node.hpp>
 #include <openvino/frontend/decoder.hpp>
 #include <string>
+#include <memory>
+#include <vector>
 
 namespace ov {
 namespace frontend {

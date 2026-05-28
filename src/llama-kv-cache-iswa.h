@@ -3,6 +3,8 @@
 #include "llama-kv-cache.h"
 
 #include <vector>
+#include <map>
+#include <memory>
 
 //
 // llama_kv_cache_iswa
@@ -84,7 +86,7 @@ public:
     using slot_info_vec_t = llama_kv_cache::slot_info_vec_t;
 
     // used for errors
-    llama_kv_cache_iswa_context(llama_memory_status status);
+    explicit llama_kv_cache_iswa_context(llama_memory_status status);
 
     // used to create a full-cache context
     llama_kv_cache_iswa_context(

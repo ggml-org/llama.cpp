@@ -71,7 +71,7 @@ void llama_model_wavtokenizer_dec::load_arch_tensors(llama_model_loader &) {
                         layer.norm_b = create_tensor(tn(LLM_TENSOR_POS_NET_ATTN_NORM, "bias",   i), {1, n_embd}, 0);
                     } break;
                 default: GGML_ABORT("unknown posnet layer");
-            };
+            }
         }
     }
 
@@ -201,7 +201,7 @@ llama_model_wavtokenizer_dec::graph::graph(const llama_model & model, const llm_
                             LLM_NORM_GROUP, 0);
                 } break;
             default: GGML_ABORT("unknown posnet layer");
-        };
+        }
     }
     cur = ggml_cont(ctx0, ggml_transpose(ctx0, cur));
 

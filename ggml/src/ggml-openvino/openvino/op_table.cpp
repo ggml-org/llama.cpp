@@ -8,6 +8,8 @@
 #include <openvino/op/matmul.hpp>
 #include <openvino/op/multiply.hpp>
 #include <openvino/op/subtract.hpp>
+#include <string>
+#include <unordered_map>
 
 namespace ov {
 namespace frontend {

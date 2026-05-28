@@ -15,7 +15,6 @@
 #include "ggml-common.h"
 #include "htp-ctx.h"
 #include "htp-ops.h"
-#include "htp-ops.h"
 
 #define set_rows_preamble                      \
     const uint32_t ne00 = octx->src[0]->ne[0]; \

@@ -1,5 +1,5 @@
-#ifndef PRE_WGSL_HPP
-#define PRE_WGSL_HPP
+#ifndef GGML_SRC_GGML_WEBGPU_PRE_WGSL_HPP_
+#define GGML_SRC_GGML_WEBGPU_PRE_WGSL_HPP_
 
 #include <cctype>
 #include <fstream>
@@ -10,6 +10,7 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
+#include <utility>
 
 namespace pre_wgsl {
 
@@ -775,4 +776,4 @@ class Preprocessor {
 
 }  // namespace pre_wgsl
 
-#endif  // PRE_WGSL_HPP
+#endif  // GGML_SRC_GGML_WEBGPU_PRE_WGSL_HPP_

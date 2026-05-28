@@ -10,8 +10,8 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 
-#ifndef GGML_SYCL_PRESETS_HPP
-#define GGML_SYCL_PRESETS_HPP
+#ifndef GGML_SRC_GGML_SYCL_PRESETS_HPP_
+#define GGML_SRC_GGML_SYCL_PRESETS_HPP_
 
 #define GGML_SYCL_MAX_STREAMS       8
 #define GGML_SYCL_MAX_BUFFERS       256
@@ -76,4 +76,4 @@ static_assert(K_QUANTS_PER_ITERATION == 1 || K_QUANTS_PER_ITERATION == 2, "K_QUA
 #define WARP_32_SIZE 32
 #define WARP_16_SIZE 16
 
-#endif // GGML_SYCL_PRESETS_HPP
+#endif  // GGML_SRC_GGML_SYCL_PRESETS_HPP_

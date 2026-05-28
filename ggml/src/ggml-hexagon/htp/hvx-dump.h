@@ -1,5 +1,5 @@
-#ifndef HVX_DUMP_H
-#define HVX_DUMP_H
+#ifndef GGML_SRC_GGML_HEXAGON_HTP_HVX_DUMP_H_
+#define GGML_SRC_GGML_HEXAGON_HTP_HVX_DUMP_H_
 
 #include <HAP_farf.h>
 
@@ -126,4 +126,4 @@ static bool hvx_vec_eq(HVX_Vector v0, HVX_Vector v1, size_t n) {
     return true;
 }
 
-#endif /* HVX_DUMP_H */
+#endif  // GGML_SRC_GGML_HEXAGON_HTP_HVX_DUMP_H_

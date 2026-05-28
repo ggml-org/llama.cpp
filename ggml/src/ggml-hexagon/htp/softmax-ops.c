@@ -16,7 +16,6 @@
 #include "ggml-common.h"
 #include "htp-ctx.h"
 #include "htp-ops.h"
-#include "htp-ops.h"
 
 #define htp_softmax_preamble3                     \
     const uint32_t ne00 = src0->ne[0];            \

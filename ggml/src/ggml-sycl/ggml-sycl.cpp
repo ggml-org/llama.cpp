@@ -26,7 +26,6 @@
 #include <cmath>
 #include <iostream>
 #include <fstream>
-#include <stdio.h>
 #include <stdlib.h>
 #include <regex>
 
@@ -5672,7 +5671,7 @@ ggml_backend_t ggml_backend_sycl_init(int device) {
     if (ctx == nullptr) {
         GGML_LOG_ERROR("%s: error: failed to allocate context\n", __func__);
         return nullptr;
-    };
+    }
 
     ggml_backend_t sycl_backend = new ggml_backend {
         /* .guid    = */ ggml_backend_sycl_guid(),

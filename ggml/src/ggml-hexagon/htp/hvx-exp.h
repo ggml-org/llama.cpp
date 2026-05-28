@@ -1,5 +1,5 @@
-#ifndef HVX_EXP_H
-#define HVX_EXP_H
+#ifndef GGML_SRC_GGML_HEXAGON_HTP_HVX_EXP_H_
+#define GGML_SRC_GGML_HEXAGON_HTP_HVX_EXP_H_
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -213,4 +213,4 @@ static inline void hvx_exp_f32(uint8_t * restrict dst, const uint8_t * restrict 
     }
 }
 
-#endif /* HVX_EXP_H */
+#endif  // GGML_SRC_GGML_HEXAGON_HTP_HVX_EXP_H_

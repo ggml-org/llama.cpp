@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cmath>
 #include <vector>
+#include <limits>
+#include <utility>
 
 //
 // base implementation

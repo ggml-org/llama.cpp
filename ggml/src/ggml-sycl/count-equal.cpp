@@ -1,6 +1,7 @@
 #include "count-equal.hpp"
 
 #include <cstdint>
+#include <algorithm>
 
 template <typename T>
 static void count_equal(const T *__restrict__ x, const T *__restrict__ y,

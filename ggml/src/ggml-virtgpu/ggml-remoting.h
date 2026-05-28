@@ -7,6 +7,8 @@
 
 #include <memory>
 #include <string>
+#include <tuple>
+#include <vector>
 
 #define GGML_VIRTGPU_NAME "ggml-virtgpu"
 #define GGML_VIRTGPU      "ggml-virtgpu: "

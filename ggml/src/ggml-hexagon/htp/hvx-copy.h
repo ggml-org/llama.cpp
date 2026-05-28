@@ -1,5 +1,5 @@
-#ifndef HVX_COPY_H
-#define HVX_COPY_H
+#ifndef GGML_SRC_GGML_HEXAGON_HTP_HVX_COPY_H_
+#define GGML_SRC_GGML_HEXAGON_HTP_HVX_COPY_H_
 
 #include <assert.h>
 #include <stddef.h>
@@ -259,4 +259,4 @@ static inline void hvx_copy_f32_f16_uu(uint8_t * restrict dst, const uint8_t * r
     hvx_copy_f32_f16_loop_body(HVX_UVector, HVX_UVector, hvx_vec_store_u);
 }
 
-#endif // HVX_COPY_H
+#endif  // GGML_SRC_GGML_HEXAGON_HTP_HVX_COPY_H_

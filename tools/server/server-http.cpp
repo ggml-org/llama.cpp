@@ -10,6 +10,11 @@
 #include <future>
 #include <string>
 #include <thread>
+#include <algorithm>
+#include <memory>
+#include <unordered_map>
+#include <unordered_set>
+#include <utility>
 
 //
 // HTTP implementation using cpp-httplib

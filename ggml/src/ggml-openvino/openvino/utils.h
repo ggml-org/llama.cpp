@@ -7,6 +7,9 @@
 #include <utility>
 
 #include "node_context.h"
+#include <algorithm>
+#include <string>
+#include <vector>
 
 namespace ov {
 namespace frontend {

@@ -1,3 +1,6 @@
+#ifndef TOOLS_CVECTOR_GENERATOR_PCA_HPP_
+#define TOOLS_CVECTOR_GENERATOR_PCA_HPP_
+
 #include "common.h"
 #include "llama.h"
 #include "ggml.h"
@@ -60,7 +63,7 @@ struct pca_model {
     struct ggml_tensor * dev_square;
     struct ggml_tensor * dev_eigenvector;
 
-    pca_model(struct ggml_tensor * t_input) {
+    explicit pca_model(struct ggml_tensor * t_input) {
 #ifdef GGML_USE_CUDA
         fprintf(stderr, "%s: using CUDA backend\n", __func__);
         backend = ggml_backend_cuda_init(0); // init device 0
@@ -313,3 +316,5 @@ static void run_pca(
 }
 
 }
+
+#endif  // TOOLS_CVECTOR_GENERATOR_PCA_HPP_

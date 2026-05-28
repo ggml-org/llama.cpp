@@ -11,6 +11,7 @@
 #include <omp.h>
 #else
 #include <thread>
+#include <vector>
 #endif
 
 #define TILE_M 16

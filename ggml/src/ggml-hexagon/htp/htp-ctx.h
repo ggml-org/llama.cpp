@@ -1,5 +1,5 @@
-#ifndef HTP_CTX_H
-#define HTP_CTX_H
+#ifndef GGML_SRC_GGML_HEXAGON_HTP_HTP_CTX_H_
+#define GGML_SRC_GGML_HEXAGON_HTP_HTP_CTX_H_
 
 #include "hex-dma.h"
 #include "hmx-queue.h"
@@ -111,4 +111,4 @@ int op_gated_delta_net(struct htp_ops_context * octx);
 int op_tri(struct htp_ops_context * octx);
 int op_pad(struct htp_ops_context * octx);
 
-#endif /* HTP_CTX_H */
+#endif  // GGML_SRC_GGML_HEXAGON_HTP_HTP_CTX_H_

@@ -6,6 +6,7 @@
 #include <map>
 #include <string>
 #include <vector>
+#include <utility>
 
 #define FILENAME "jinja-lexer"
 

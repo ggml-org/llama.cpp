@@ -1,5 +1,5 @@
-#ifndef HEX_DUMP_H
-#define HEX_DUMP_H
+#ifndef GGML_SRC_GGML_HEXAGON_HTP_HEX_DUMP_H_
+#define GGML_SRC_GGML_HEXAGON_HTP_HEX_DUMP_H_
 
 #include <HAP_farf.h>
 
@@ -83,4 +83,4 @@ static inline void hex_dump_f16(char * pref, const __fp16 * x, uint32_t n) {
     }
 }
 
-#endif /* HEX_DUMP_H */
+#endif  // GGML_SRC_GGML_HEXAGON_HTP_HEX_DUMP_H_

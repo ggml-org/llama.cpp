@@ -12,6 +12,7 @@
 #include <string>
 #include <vector>
 #include <cinttypes>
+#include <map>
 
 using json = nlohmann::ordered_json;
 
@@ -63,8 +64,8 @@ struct server_grammar_trigger {
     common_grammar_trigger value;
 
     server_grammar_trigger() = default;
-    server_grammar_trigger(const common_grammar_trigger & value) : value(value) {}
-    server_grammar_trigger(const json & in) {
+    explicit server_grammar_trigger(const common_grammar_trigger & value) : value(value) {}
+    explicit server_grammar_trigger(const json & in) {
         value.type = (common_grammar_trigger_type) in.at("type").get<int>();
         value.value = in.at("value").get<std::string>();
         if (value.type == COMMON_GRAMMAR_TRIGGER_TYPE_TOKEN) {

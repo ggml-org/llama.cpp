@@ -10,8 +10,8 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 
-#ifndef GGML_SYCL_ROPE_HPP
-#define GGML_SYCL_ROPE_HPP
+#ifndef GGML_SRC_GGML_SYCL_ROPE_HPP_
+#define GGML_SRC_GGML_SYCL_ROPE_HPP_
 
 #include "common.hpp"
 
@@ -23,4 +23,4 @@ void ggml_sycl_rope_back(ggml_backend_sycl_context & ctx, ggml_tensor * dst);
 
 void ggml_sycl_rope_fused(ggml_backend_sycl_context & ctx, ggml_tensor * dst, ggml_tensor * set_rows);
 
-#endif // GGML_SYCL_ROPE_HPP
+#endif  // GGML_SRC_GGML_SYCL_ROPE_HPP_

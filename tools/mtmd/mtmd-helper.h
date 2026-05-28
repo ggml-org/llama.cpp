@@ -1,5 +1,5 @@
-#ifndef MTMD_HELPER_H
-#define MTMD_HELPER_H
+#ifndef TOOLS_MTMD_MTMD_HELPER_H_
+#define TOOLS_MTMD_MTMD_HELPER_H_
 
 #include "ggml.h"
 #include "llama.h"
@@ -97,4 +97,4 @@ MTMD_API int32_t mtmd_helper_decode_image_chunk(mtmd_context * ctx,
 // C++ wrappers
 //
 
-#endif
+#endif  // TOOLS_MTMD_MTMD_HELPER_H_

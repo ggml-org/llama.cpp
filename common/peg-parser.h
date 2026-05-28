@@ -10,6 +10,7 @@
 #include <functional>
 #include <vector>
 #include <variant>
+#include <utility>
 
 struct common_grammar_builder;
 
@@ -171,10 +172,10 @@ struct common_peg_parse_context {
 
     int parse_depth;
 
-    common_peg_parse_context(common_peg_parse_flags flags = COMMON_PEG_PARSE_FLAG_NONE)
+    explicit common_peg_parse_context(common_peg_parse_flags flags = COMMON_PEG_PARSE_FLAG_NONE)
         : flags(flags), parse_depth(0) {}
 
-    common_peg_parse_context(const std::string & input, common_peg_parse_flags flags = COMMON_PEG_PARSE_FLAG_NONE)
+    explicit common_peg_parse_context(const std::string & input, common_peg_parse_flags flags = COMMON_PEG_PARSE_FLAG_NONE)
         : input(input), flags(flags), parse_depth(0) {}
 
     bool is_lenient() const { return flags & COMMON_PEG_PARSE_FLAG_LENIENT; }

@@ -12,6 +12,7 @@
 #include <sstream>
 #include <vector>
 #include <memory>
+#include <utility>
 
 // Internal header for clip.cpp
 

@@ -7,6 +7,8 @@
 
 #include <unordered_map>
 #include <vector>
+#include <map>
+#include <utility>
 
 struct llama_cparams;
 struct llama_hparams;
@@ -313,7 +315,7 @@ public:
     using stream_copy_info = llama_kv_cache::stream_copy_info;
 
     // used for errors
-    llama_kv_cache_context(llama_memory_status status);
+    explicit llama_kv_cache_context(llama_memory_status status);
 
     // used to create a full-cache context
     llama_kv_cache_context(

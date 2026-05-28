@@ -1,6 +1,11 @@
+#ifndef GGML_SRC_GGML_VIRTGPU_BACKEND_SHARED_APIR_CS_GGML_H_
+#define GGML_SRC_GGML_VIRTGPU_BACKEND_SHARED_APIR_CS_GGML_H_
+
 #include "apir_cs.h"
 #include "apir_cs_rpc.h"
 #include "ggml-impl.h"
+#include <unordered_set>
+#include <vector>
 
 // ggml_buffer_to_apir_host_handle(ggml_backend_buffer_t buffer);
 
@@ -230,3 +235,5 @@ static inline const ggml_tensor * apir_decode_ggml_tensor_inplace(apir_decoder *
 
     return tensor;
 }
+
+#endif  // GGML_SRC_GGML_VIRTGPU_BACKEND_SHARED_APIR_CS_GGML_H_

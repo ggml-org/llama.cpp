@@ -26,6 +26,8 @@
 #  include <time.h>
 #  ifndef _WIN32
 #    include <poll.h>
+#include <algorithm>
+#include <utility>
 #  endif
 #endif // GGML_RPC_RDMA
 
@@ -114,7 +116,7 @@ static_assert(sizeof(rdma_caps) == RPC_CONN_CAPS_SIZE, "rdma_caps must match con
 #endif // GGML_RPC_RDMA
 
 struct socket_t::impl {
-    impl(sockfd_t fd) : use_rdma(false), fd(fd) {}
+    explicit impl(sockfd_t fd) : use_rdma(false), fd(fd) {}
     ~impl();
     bool send_data(const void * data, size_t size);
     bool recv_data(void * data, size_t size);

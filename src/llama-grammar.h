@@ -6,6 +6,7 @@
 #include <regex>
 #include <string>
 #include <vector>
+#include <utility>
 
 struct llama_vocab;
 
@@ -89,7 +90,7 @@ struct llama_grammar_parser {
 
     llama_grammar_rules rules;
 
-    llama_grammar_parser(const struct llama_vocab * vocab = nullptr) : vocab(vocab) {}
+    explicit llama_grammar_parser(const struct llama_vocab * vocab = nullptr) : vocab(vocab) {}
 
     llama_grammar_stack c_rules() const;
 

@@ -34,6 +34,9 @@
 #include <openvino/op/unsqueeze.hpp>
 #include <openvino/pass/constant_folding.hpp>
 #include <openvino/pass/make_stateful.hpp>
+#include <string>
+#include <unordered_map>
+#include <utility>
 
 namespace ov {
 namespace frontend {

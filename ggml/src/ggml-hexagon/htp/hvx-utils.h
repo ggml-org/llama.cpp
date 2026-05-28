@@ -1,5 +1,5 @@
-#ifndef HVX_UTILS_H
-#define HVX_UTILS_H
+#ifndef GGML_SRC_GGML_HEXAGON_HTP_HVX_UTILS_H_
+#define GGML_SRC_GGML_HEXAGON_HTP_HVX_UTILS_H_
 
 #include "hex-utils.h"
 
@@ -18,4 +18,4 @@
 #include "hvx-sin-cos.h"
 #include "hvx-base.h"
 
-#endif /* HVX_UTILS_H */
+#endif  // GGML_SRC_GGML_HEXAGON_HTP_HVX_UTILS_H_

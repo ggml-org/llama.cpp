@@ -9,6 +9,7 @@
 #include <map>
 
 #include "server-http.h"
+#include <memory>
 
 static server_http_res_ptr proxy_request(const server_http_req & req, std::string method) {
     std::string target_url = req.get_param("url");

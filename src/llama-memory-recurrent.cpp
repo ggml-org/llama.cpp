@@ -12,6 +12,8 @@
 #include <limits>
 #include <map>
 #include <stdexcept>
+#include <memory>
+#include <utility>
 
 //
 // llama_memory_recurrent

@@ -1,3 +1,6 @@
+#ifndef GGML_SRC_GGML_OPENVINO_OPENVINO_PASS_FUSE_TO_SDPA_H_
+#define GGML_SRC_GGML_OPENVINO_OPENVINO_PASS_FUSE_TO_SDPA_H_
+
 #include "openvino/pass/matcher_pass.hpp"
 
 namespace ov {
@@ -15,3 +18,5 @@ public:
 }  // namespace ggml
 }  // namespace frontend
 }  // namespace ov
+
+#endif  // GGML_SRC_GGML_OPENVINO_OPENVINO_PASS_FUSE_TO_SDPA_H_

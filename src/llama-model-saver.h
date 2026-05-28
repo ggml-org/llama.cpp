@@ -5,6 +5,7 @@
 #include "llama-arch.h"
 
 #include <vector>
+#include <string>
 
 // FIXME temporary function for better error messages
 bool llama_model_saver_supports_arch(llm_arch arch);
@@ -15,7 +16,7 @@ struct llama_model_saver {
     const struct llama_model * model;
     const struct LLM_KV llm_kv;
 
-    llama_model_saver(const struct llama_model * model);
+    explicit llama_model_saver(const struct llama_model * model);
     llama_model_saver(enum llm_arch arch, struct gguf_context * gguf_ctx);
     ~llama_model_saver();
 

@@ -17,7 +17,6 @@
 #include "htp-ctx.h"
 #include "hex-dma.h"
 #include "htp-ops.h"
-#include "htp-ops.h"
 #include "hvx-utils.h"
 
 #define htp_ssm_conv_tensors_preamble                           \

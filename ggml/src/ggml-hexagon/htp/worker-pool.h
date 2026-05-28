@@ -1,5 +1,5 @@
-#ifndef HTP_WORKER_POOL_H
-#define HTP_WORKER_POOL_H
+#ifndef GGML_SRC_GGML_HEXAGON_HTP_WORKER_POOL_H_
+#define GGML_SRC_GGML_HEXAGON_HTP_WORKER_POOL_H_
 
 // MACRO enables function to be visible in shared-library case.
 #define WORKERPOOL_API __attribute__((visibility("default")))
@@ -54,4 +54,4 @@ WORKERPOOL_API AEEResult worker_pool_retrieve_thread_id(worker_pool_context_t co
 }
 #endif
 
-#endif  // #ifndef HTP_WORKER_POOL_H
+#endif  // GGML_SRC_GGML_HEXAGON_HTP_WORKER_POOL_H_

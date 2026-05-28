@@ -1,5 +1,5 @@
-#ifndef GGML_METAL_IMPL
-#define GGML_METAL_IMPL
+#ifndef GGML_SRC_GGML_METAL_GGML_METAL_IMPL_H_
+#define GGML_SRC_GGML_METAL_GGML_METAL_IMPL_H_
 
 // kernel parameters for mat-mat threadgroups
 //
@@ -1172,4 +1172,4 @@ typedef struct {
     int64_t  np;
 } ggml_metal_kargs_opt_step_sgd;
 
-#endif // GGML_METAL_IMPL
+#endif  // GGML_SRC_GGML_METAL_GGML_METAL_IMPL_H_

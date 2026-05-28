@@ -12,6 +12,7 @@
 #include <openvino/pass/pattern/op/label.hpp>
 #include <openvino/pass/pattern/op/pattern.hpp>
 #include <openvino/pass/pattern/op/wrap_type.hpp>
+#include <memory>
 
 namespace ov {
 namespace frontend {

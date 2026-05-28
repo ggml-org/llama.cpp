@@ -31,6 +31,9 @@
 #   define NOMINMAX
 #endif
 #include <windows.h>
+#include <map>
+#include <string>
+#include <vector>
 #endif
 
 using json = nlohmann::ordered_json;

@@ -114,7 +114,7 @@ struct common_params_context {
     common_params & params;
     std::vector<common_arg> options;
     void(*print_usage)(int, char **) = nullptr;
-    common_params_context(common_params & params) : params(params) {}
+    explicit common_params_context(common_params & params) : params(params) {}
 };
 
 // parse input arguments from CLI

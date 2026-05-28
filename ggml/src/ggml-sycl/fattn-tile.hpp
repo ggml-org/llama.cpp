@@ -1,3 +1,6 @@
+#ifndef GGML_SRC_GGML_SYCL_FATTN_TILE_HPP_
+#define GGML_SRC_GGML_SYCL_FATTN_TILE_HPP_
+
 #include <sycl/sycl.hpp>
 #include <sycl/ext/oneapi/work_group_static.hpp>
 #include "dpct/helper.hpp"
@@ -1244,3 +1247,5 @@ extern DECL_FATTN_TILE_CASE(256, 256);
 extern DECL_FATTN_TILE_CASE(512, 512);
 extern DECL_FATTN_TILE_CASE(576, 512);
 
+
+#endif  // GGML_SRC_GGML_SYCL_FATTN_TILE_HPP_

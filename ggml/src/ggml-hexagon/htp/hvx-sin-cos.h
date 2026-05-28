@@ -1,5 +1,5 @@
-#ifndef HVX_SIN_COS_H
-#define HVX_SIN_COS_H
+#ifndef GGML_SRC_GGML_HEXAGON_HTP_HVX_SIN_COS_H_
+#define GGML_SRC_GGML_HEXAGON_HTP_HVX_SIN_COS_H_
 
 #include "hvx-base.h"
 #include "hvx-floor.h"
@@ -87,4 +87,4 @@ static inline HVX_Vector hvx_vec_sin_f32(HVX_Vector x) {
     return hvx_vec_mul_f32_f32(sin_y, sign);
 }
 
-#endif /* HVX_SIN_COS_H */
+#endif  // GGML_SRC_GGML_HEXAGON_HTP_HVX_SIN_COS_H_

@@ -12,6 +12,7 @@
 
 #include "mmq.hpp"
 #include "vecdotq.hpp"
+#include <algorithm>
 
 typedef void (*allocate_tiles_sycl_t)(
     int** x_ql,

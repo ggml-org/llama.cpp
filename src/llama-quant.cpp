@@ -1,3 +1,5 @@
+#include "llama-quant.h"
+
 #include "llama-impl.h"
 #include "llama-model.h"
 #include "llama-model-loader.h"
@@ -8,10 +10,15 @@
 #include <cstring>
 #include <cinttypes>
 #include <fstream>
+#include <map>
+#include <memory>
 #include <mutex>
 #include <regex>
+#include <string>
 #include <thread>
 #include <unordered_map>
+#include <utility>
+#include <vector>
 
 // result of parsing --tensor-type option
 // (changes to this struct must be reflected in tools/quantize/quantize.cpp)

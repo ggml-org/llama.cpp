@@ -11,6 +11,8 @@
 #include <openvino/core/partial_shape.hpp>
 #include <optional>
 #include <vector>
+#include <string>
+#include <utility>
 
 struct ModelParams {
     int ctx = -1;

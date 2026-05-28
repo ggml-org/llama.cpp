@@ -1,5 +1,5 @@
-#ifndef HTP_DMA_H
-#define HTP_DMA_H
+#ifndef GGML_SRC_GGML_HEXAGON_HTP_HEX_DMA_H_
+#define GGML_SRC_GGML_HEXAGON_HTP_HEX_DMA_H_
 
 #include <HAP_farf.h>
 #include <hexagon_types.h>
@@ -369,4 +369,4 @@ static inline bool dma_cache_push(dma_queue *q, dma_cache *c, const uint8_t * sr
 }  // extern "C"
 #endif
 
-#endif /* HTP_DMA_H */
+#endif  // GGML_SRC_GGML_HEXAGON_HTP_HEX_DMA_H_

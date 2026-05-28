@@ -3,6 +3,7 @@
 #include <openvino/frontend/input_model.hpp>
 
 #include "decoder.h"
+#include <memory>
 
 namespace ov {
 namespace frontend {

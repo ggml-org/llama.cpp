@@ -12,8 +12,8 @@
 //   TIMER_STOP(my_phase);            // accumulate elapsed ticks
 //   FARF(ALWAYS, "my_phase: %lld us", TIMER_US(my_phase));
 
-#ifndef HMX_PROFILE_H
-#define HMX_PROFILE_H
+#ifndef GGML_SRC_GGML_HEXAGON_HTP_HMX_PROFILE_H_
+#define GGML_SRC_GGML_HEXAGON_HTP_HMX_PROFILE_H_
 
 #include <HAP_perf.h>
 
@@ -31,4 +31,4 @@
 #  define TIMER_US(name)     0LL
 #endif
 
-#endif // HMX_PROFILE_H
+#endif  // GGML_SRC_GGML_HEXAGON_HTP_HMX_PROFILE_H_

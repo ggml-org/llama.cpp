@@ -6,6 +6,9 @@
 
 #include <algorithm>
 #include <cassert>
+#include <map>
+#include <memory>
+#include <utility>
 
 //
 // llama_kv_cache_iswa

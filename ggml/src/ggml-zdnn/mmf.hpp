@@ -1,5 +1,5 @@
-#ifndef GGML_ZDNN_MMF_HPP
-#define GGML_ZDNN_MMF_HPP
+#ifndef GGML_SRC_GGML_ZDNN_MMF_HPP_
+#define GGML_SRC_GGML_ZDNN_MMF_HPP_
 
 #include "common.hpp"
 
@@ -9,4 +9,4 @@ void ggml_zdnn_mul_mat_f(
     const               ggml_tensor * src1,
                         ggml_tensor * dst);
 
-#endif  // GGML_ZDNN_MMF_HPP
+#endif  // GGML_SRC_GGML_ZDNN_MMF_HPP_

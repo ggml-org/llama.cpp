@@ -1,5 +1,5 @@
-#ifndef HVX_REPL_H
-#define HVX_REPL_H
+#ifndef GGML_SRC_GGML_HEXAGON_HTP_HVX_REPL_H_
+#define GGML_SRC_GGML_HEXAGON_HTP_HVX_REPL_H_
 
 #include <assert.h>
 #include <stddef.h>
@@ -71,4 +71,4 @@ static inline HVX_Vector hvx_vec_repl_2x_f16(HVX_Vector v) {
     return hvx_vec_repl(v, repl);
 }
 
-#endif // HVX_REPL_H
+#endif  // GGML_SRC_GGML_HEXAGON_HTP_HVX_REPL_H_

@@ -10,8 +10,8 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 
-#ifndef GGML_SYCL_GEMM_HPP
-#define GGML_SYCL_GEMM_HPP
+#ifndef GGML_SRC_GGML_SYCL_GEMM_HPP_
+#define GGML_SRC_GGML_SYCL_GEMM_HPP_
 
 #include "ggml-sycl.h"
 
@@ -19,6 +19,8 @@
 
 #include "dnnl.hpp"
 #include "dnnl_sycl.hpp"
+#include <algorithm>
+#include <unordered_map>
 
 class DnnlGemmWrapper {
 public:
@@ -90,4 +92,4 @@ public:
 
 #endif
 
-#endif // GGML_SYCL_GEMM_HPP
+#endif  // GGML_SRC_GGML_SYCL_GEMM_HPP_

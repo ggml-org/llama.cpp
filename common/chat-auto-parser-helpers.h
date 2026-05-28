@@ -5,6 +5,7 @@
 #include <functional>
 #include <optional>
 #include <string>
+#include <vector>
 
 std::string trim_whitespace(const std::string & str);
 std::string trim_leading_whitespace(const std::string & str);

@@ -19,7 +19,7 @@
 // TODO: deduplicate with llama-impl.h
 template<typename T>
 struct ring_buffer {
-    ring_buffer(size_t cap) : capacity(cap), data(cap) {}
+    explicit ring_buffer(size_t cap) : capacity(cap), data(cap) {}
 
     T & front() {
         if (sz == 0) {

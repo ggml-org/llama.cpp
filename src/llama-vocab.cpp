@@ -20,6 +20,8 @@
 #include <queue>
 #include <set>
 #include <unordered_map>
+#include <functional>
+#include <utility>
 
 //
 // helpers
@@ -108,11 +110,11 @@ struct llm_bigram_spm {
 };
 
 struct llm_tokenizer_spm : llm_tokenizer {
-    llm_tokenizer_spm(const llama_vocab & /*vocab*/) {}
+    explicit llm_tokenizer_spm(const llama_vocab & /*vocab*/) {}
 };
 
 struct llm_tokenizer_spm_session {
-    llm_tokenizer_spm_session(const llama_vocab & vocab) : vocab(vocab) {}
+    explicit llm_tokenizer_spm_session(const llama_vocab & vocab) : vocab(vocab) {}
 
     void tokenize(const std::string & text, std::vector<llama_token> & output) {
         // split string into utf8 chars
@@ -277,7 +279,7 @@ struct llm_bigram_bpe {
 };
 
 struct llm_tokenizer_bpe : llm_tokenizer {
-    llm_tokenizer_bpe(const llama_vocab & vocab) {
+    explicit llm_tokenizer_bpe(const llama_vocab & vocab) {
         GGML_ASSERT(vocab.get_type() == LLAMA_VOCAB_TYPE_BPE);
         switch (vocab.get_pre_type()) {
             case LLAMA_VOCAB_PRE_TYPE_LLAMA3:
@@ -739,11 +741,11 @@ private:
 //
 
 struct llm_tokenizer_wpm : llm_tokenizer {
-    llm_tokenizer_wpm(const llama_vocab & /*vocab*/) {}
+    explicit llm_tokenizer_wpm(const llama_vocab & /*vocab*/) {}
 };
 
 struct llm_tokenizer_wpm_session {
-    llm_tokenizer_wpm_session(const llama_vocab & vocab) : vocab(vocab) {}
+    explicit llm_tokenizer_wpm_session(const llama_vocab & vocab) : vocab(vocab) {}
 
     void tokenize(const std::string & text, std::vector<llama_token> & output) {
         // normalize and split by whitespace
@@ -1259,7 +1261,7 @@ static std::vector<uint8_t> llama_unescape_rwkv_token(const std::string & escape
 }
 
 struct llm_tokenizer_rwkv : llm_tokenizer {
-    llm_tokenizer_rwkv(const llama_vocab & vocab) {
+    explicit llm_tokenizer_rwkv(const llama_vocab & vocab) {
         // RWKV supports arbitrary byte tokens, but the vocab struct only supports string tokens.
         // For now, we decode the vocab here into the lookup we'll use for tokenization.
 
@@ -1311,7 +1313,7 @@ private:
 };
 
 struct llm_tokenizer_plamo2 : llm_tokenizer {
-    llm_tokenizer_plamo2(const llama_vocab & vocab) {
+    explicit llm_tokenizer_plamo2(const llama_vocab & vocab) {
         build(vocab);
     }
 
@@ -1578,7 +1580,7 @@ private:
 };
 
 struct llm_tokenizer_plamo2_session {
-    llm_tokenizer_plamo2_session(const llm_tokenizer_plamo2 & tokenizer) : tokenizer(tokenizer) {}
+    explicit llm_tokenizer_plamo2_session(const llm_tokenizer_plamo2 & tokenizer) : tokenizer(tokenizer) {}
 
     void tokenize(const std::string & text, std::vector<llama_token> & output) {
         std::vector<llama_token> tokens = tokenizer.encode(text);
@@ -1681,7 +1683,7 @@ typedef enum FRAGMENT_BUFFER_VARIANT_TYPE {
 } FRAGMENT_BUFFER_VARIANT_TYPE;
 
 struct fragment_buffer_variant {
-    fragment_buffer_variant(llama_token _token)
+    explicit fragment_buffer_variant(llama_token _token)
     :
         type(FRAGMENT_BUFFER_VARIANT_TYPE_TOKEN),
         token(_token),
@@ -1772,7 +1774,7 @@ struct llama_vocab::impl {
 
     std::vector<char> precompiled_charsmap;
 
-    impl(const llama_vocab & vocab) : vocab(vocab) {
+    explicit impl(const llama_vocab & vocab) : vocab(vocab) {
     }
 
     ~impl() = default;

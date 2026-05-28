@@ -1,5 +1,5 @@
-#ifndef HEX_UTILS_H
-#define HEX_UTILS_H
+#ifndef GGML_SRC_GGML_HEXAGON_HTP_HEX_UTILS_H_
+#define GGML_SRC_GGML_HEXAGON_HTP_HEX_UTILS_H_
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -134,4 +134,4 @@ static inline void hex_get_pmu(uint32_t counters[]) {
 #endif
 }
 
-#endif /* HEX_UTILS_H */
+#endif  // GGML_SRC_GGML_HEXAGON_HTP_HEX_UTILS_H_

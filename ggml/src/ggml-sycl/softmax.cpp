@@ -2,6 +2,7 @@
 #include <cstdint>
 #include <utility>
 #include <cmath>
+#include <algorithm>
 
 
 template <typename T> static __dpct_inline__ float t2f32(T val) {

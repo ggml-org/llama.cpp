@@ -25,6 +25,9 @@
 #include <array>
 #include <functional>
 #include <float.h>
+#include <memory>
+#include <string>
+#include <utility>
 
 struct clip_logger_state g_logger_state = {clip_log_callback_default, NULL};
 
@@ -167,7 +170,7 @@ struct clip_ctx {
     std::map<ggml_backend_dev_t, size_t> mem_usage;
     std::map<ggml_backend_dev_t, size_t> mem_compute;
 
-    clip_ctx(clip_context_params & ctx_params) {
+    explicit clip_ctx(clip_context_params & ctx_params) {
         flash_attn_type = ctx_params.flash_attn_type;
         no_alloc = ctx_params.no_alloc;
         backend_cpu = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, nullptr);
@@ -1003,7 +1006,7 @@ struct clip_model_loader {
     bool has_audio  = false;
 
     // TODO @ngxson : we should not pass clip_ctx here, it should be clip_model
-    clip_model_loader(const char * fname, bool skip_tensors = false) : fname(fname) {
+    explicit clip_model_loader(const char * fname, bool skip_tensors = false) : fname(fname) {
         struct ggml_context * meta = nullptr;
 
         struct gguf_init_params params = {

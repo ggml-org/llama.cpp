@@ -14,6 +14,7 @@
 #include <string>
 #include <vector>
 #include <unordered_map>
+#include <utility>
 
 namespace jinja {
 
@@ -357,7 +358,7 @@ struct value_array_t : public value_t {
         val_arr = v->val_arr;
     }
     value_array_t(std::vector<value> && arr) {
-        val_arr = arr;
+        val_arr = std::move(arr);
     }
     value_array_t(const std::vector<value> & arr) {
         val_arr = arr;

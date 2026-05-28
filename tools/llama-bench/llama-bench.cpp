@@ -1621,7 +1621,9 @@ struct test {
         auto                               fields = get_fields();
         auto                               values = get_values();
         std::transform(fields.begin(), fields.end(), values.begin(), std::inserter(map, map.end()),
-                       std::make_pair<const std::string &, const std::string &>);
+                 [](const std::string & field, const std::string & value) {
+                     return std::make_pair(field, value);
+                 });
         return map;
     }
 };

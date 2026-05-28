@@ -63,7 +63,7 @@ struct cli_context {
     // thread for showing "loading" animation
     std::atomic<bool> loading_show;
 
-    cli_context(const common_params & params) {
+    explicit cli_context(const common_params & params) {
         defaults.sampling    = params.sampling;
         defaults.speculative = params.speculative;
         defaults.n_keep      = params.n_keep;

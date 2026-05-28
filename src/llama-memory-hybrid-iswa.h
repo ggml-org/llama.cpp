@@ -8,6 +8,7 @@
 
 #include <memory>
 #include <vector>
+#include <map>
 
 //
 // llama_memory_hybrid_iswa

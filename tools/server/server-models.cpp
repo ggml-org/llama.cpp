@@ -21,7 +21,6 @@
 #include <filesystem>
 #include <random>
 #include <sstream>
-#include <cstring>
 
 #ifdef _WIN32
 #include <winsock2.h>
@@ -38,6 +37,11 @@ extern char **environ;
 // macOS: use _NSGetExecutablePath to get the executable path
 #include <mach-o/dyld.h>
 #include <limits.h>
+#include <map>
+#include <string>
+#include <unordered_set>
+#include <utility>
+#include <vector>
 #endif
 
 #define DEFAULT_STOP_TIMEOUT 10 // seconds

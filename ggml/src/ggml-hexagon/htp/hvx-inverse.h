@@ -1,5 +1,5 @@
-#ifndef HVX_INVERSE_H
-#define HVX_INVERSE_H
+#ifndef GGML_SRC_GGML_HEXAGON_HTP_HVX_INVERSE_H_
+#define GGML_SRC_GGML_HEXAGON_HTP_HVX_INVERSE_H_
 
 #include <HAP_farf.h>
 
@@ -207,4 +207,4 @@ DEFINE_HVX_INV_OP_VARIANTS(hvx_inverse_f16, hvx_inverse_f16_loop_body)
 HVX_INV_DISPATCHER(hvx_inverse_f32)
 HVX_INV_DISPATCHER(hvx_inverse_f16)
 
-#endif // HVX_INVERSE_H
+#endif  // GGML_SRC_GGML_HEXAGON_HTP_HVX_INVERSE_H_

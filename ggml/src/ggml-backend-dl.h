@@ -12,6 +12,7 @@
 #    include <unistd.h>
 #endif
 #include <filesystem>
+#include <memory>
 
 namespace fs = std::filesystem;
 

@@ -38,6 +38,8 @@
 
 #if defined(__APPLE__)
 #include <TargetConditionals.h>
+#include <string>
+#include <utility>
 #endif
 
 #ifdef _WIN32
@@ -94,7 +96,7 @@ struct llama_file::impl {
         seek(0, SEEK_SET);
     }
 
-    impl(FILE * file) : owns_fp(false) {
+    explicit impl(FILE * file) : owns_fp(false) {
         fp = file;
         fp_win32 = (HANDLE) _get_osfhandle(_fileno(fp));
         seek(0, SEEK_END);
@@ -225,7 +227,7 @@ struct llama_file::impl {
         seek(0, SEEK_SET);
     }
 
-    impl(FILE * file) : fname("(file*)"), owns_fp(false) {
+    explicit impl(FILE * file) : fname("(file*)"), owns_fp(false) {
         fp = file;
         seek(0, SEEK_END);
         size = tell();

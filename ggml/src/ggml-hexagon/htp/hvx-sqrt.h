@@ -1,5 +1,5 @@
-#ifndef HVX_SQRT_H
-#define HVX_SQRT_H
+#ifndef GGML_SRC_GGML_HEXAGON_HTP_HVX_SQRT_H_
+#define GGML_SRC_GGML_HEXAGON_HTP_HVX_SQRT_H_
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -123,4 +123,4 @@ static inline void hvx_sqrt_f32(uint8_t * restrict dst, const uint8_t * restrict
     }
 }
 
-#endif /* HVX_SQRT_H */
+#endif  // GGML_SRC_GGML_HEXAGON_HTP_HVX_SQRT_H_
