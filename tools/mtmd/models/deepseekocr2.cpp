@@ -71,8 +71,8 @@ ggml_cgraph * clip_graph_deepseekocr2::build() {
 
     const auto n_dim = cur->ne[0];
 
-    // separator row, only after the global view (256 tokens)
-    if (cur->ne[1] == 256) {
+    // separator row, only after the global view
+    if (img.add_viewsep) {
         ggml_tensor * vs = ggml_reshape_2d(ctx0, model.view_seperator, n_dim, 1); // (n_dim, 1)
         cur              = ggml_concat(ctx0, cur, vs, 1); // (n_dim, 257)
     }

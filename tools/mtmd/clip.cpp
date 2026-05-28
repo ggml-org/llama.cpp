@@ -3310,7 +3310,7 @@ int clip_n_output_tokens(const struct clip_ctx * ctx, struct clip_image_f32 * im
             // 1024 global view -> 256 query tokens + 1 view separator = 257;
             // 768 local tile   -> 144 query tokens, no separator.
             n_patches /= 16;
-            if (n_patches == 256) {
+            if (img->add_viewsep) {
                 n_patches += 1; // view separator, appended only after the global view
             }
         } break;

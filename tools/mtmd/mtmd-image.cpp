@@ -1228,6 +1228,7 @@ bool mtmd_image_preprocessor_deepseekocr2::preprocess(const clip_image_u8 & img,
                      PAD_NEAREST, hparams.image_pad_color);
     clip_image_f32_ptr global(clip_image_f32_init());
     img_u8_to_f32(padded, *global, hparams.image_mean, hparams.image_std);
+    global->add_viewsep = true;
     output.entries.push_back(std::move(global));
 
     output.grid_x = 1;

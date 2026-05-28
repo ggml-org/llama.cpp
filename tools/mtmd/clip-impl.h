@@ -428,6 +428,9 @@ struct clip_image_f32 {
     int ny;
 
     std::vector<float> buf;
+
+    // marks the global view in e.g., DeepSeek-OCR Models
+    bool add_viewsep = false;
 };
 
 //
