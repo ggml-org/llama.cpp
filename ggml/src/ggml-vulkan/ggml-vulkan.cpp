@@ -7233,7 +7233,7 @@ static void ggml_vk_buffer_write_nc_async(ggml_backend_vk_context * ctx, vk_cont
                             const uint64_t s_off = buf_offset + i3*nb3 + i2*nb2 + i1*nb1;
                             const uint64_t d_off = offset + i3*dstnb3 + i2*dstnb2 + i1*dstnb1;
                             for (uint64_t i0 = 0; i0 < ne0; i0++) {
-                                slices.push_back({ s_off + i1*nb0, d_off + i0*dstnb0, dstnb0 });
+                                slices.push_back({ s_off + i0*nb0, d_off + i0*dstnb0, dstnb0 });
                             }
                         }
                     }
