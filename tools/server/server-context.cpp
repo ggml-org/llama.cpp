@@ -848,10 +848,12 @@ private:
                     }
 
                     for (size_t j = 0; j < devs.size(); ++j) {
+                        // Note: compute buffer is excluded because it is shared
+                        // with the main model via ggml_backend_sched and will be
+                        // accounted for during the main model's fit measurement.
                         const size_t bytes =
                             (measure_model_bytes ? dmd[j].mb.model : 0) +
-                            dmd[j].mb.context +
-                            dmd[j].mb.compute;
+                            dmd[j].mb.context;
                         total += bytes;
                         for (size_t i = 0; i < tgt_devices.size(); i++) {
                             if (tgt_devices[i] == devs[j]) {
