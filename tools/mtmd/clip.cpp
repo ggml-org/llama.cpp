@@ -4476,10 +4476,6 @@ const clip_hparams * clip_get_hparams(const struct clip_ctx * ctx) {
     return &ctx->model.hparams;
 }
 
-const clip_model * clip_get_model(const struct clip_ctx * ctx) {
-    return &ctx->model;
-}
-
 std::map<ggml_backend_dev_t, size_t> clip_get_mem_usage(const struct clip_ctx * ctx) {
     std::map<ggml_backend_dev_t, size_t> result = ctx->mem_usage;
     for (auto & [dev, size] : ctx->mem_compute) {

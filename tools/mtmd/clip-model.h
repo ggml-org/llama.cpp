@@ -617,4 +617,3 @@ struct clip_model {
 };
 
 const clip_hparams * clip_get_hparams(const struct clip_ctx * ctx);
-const clip_model   * clip_get_model  (const struct clip_ctx * ctx);
