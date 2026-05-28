@@ -637,19 +637,19 @@ inline size_t ggml_webgpu_flash_attn_tensor_offset(const ggml_tensor * tensor) {
     return reinterpret_cast<uintptr_t>(base->data) - ptr_base_addr + tensor->view_offs;
 }
 
-inline bool ggml_webgpu_flash_attn_f16_vec4_aligned(const ggml_tensor * K,
-                                                    size_t              storage_offset_alignment) {
+inline bool ggml_webgpu_flash_attn_float_vec4_aligned(const ggml_tensor * K,
+                                                      size_t              storage_offset_alignment) {
     const size_t alignment = std::max<size_t>(1u, storage_offset_alignment);
     const uint32_t offset_elems =
         (uint32_t) ((ggml_webgpu_flash_attn_tensor_offset(K) & (alignment - 1)) / ggml_type_size(K->type));
     return offset_elems % GGML_WEBGPU_FLASH_ATTN_TILE_KV_VEC_WIDTH == 0u;
 }
 
-inline bool ggml_webgpu_flash_attn_f16_vec4_aligned(const ggml_tensor * K,
-                                                    const ggml_tensor * V,
-                                                    size_t              storage_offset_alignment) {
-    return ggml_webgpu_flash_attn_f16_vec4_aligned(K, storage_offset_alignment) &&
-           ggml_webgpu_flash_attn_f16_vec4_aligned(V, storage_offset_alignment);
+inline bool ggml_webgpu_flash_attn_float_vec4_aligned(const ggml_tensor * K,
+                                                      const ggml_tensor * V,
+                                                      size_t              storage_offset_alignment) {
+    return ggml_webgpu_flash_attn_float_vec4_aligned(K, storage_offset_alignment) &&
+           ggml_webgpu_flash_attn_float_vec4_aligned(V, storage_offset_alignment);
 }
 
 inline bool ggml_webgpu_flash_attn_kv_direct(const ggml_tensor * Q,
@@ -2742,7 +2742,6 @@ class ggml_webgpu_shader_lib {
             shader_src = wgsl_flash_attn_tile;
             defines.push_back("MIN_SUBGROUP_SIZE=" + std::to_string(context.min_subgroup_size) + "u");
             defines.push_back("MAX_SUBGROUP_SIZE=" + std::to_string(context.max_subgroup_size) + "u");
-            defines.push_back("KV_STAGE_STRIDE=" + std::to_string(std::max(key.common.head_dim_qk, key.common.head_dim_v)));
             variant += "_tile_sg" + std::to_string(context.min_subgroup_size) + "_" +
                        std::to_string(context.max_subgroup_size);
         } else {

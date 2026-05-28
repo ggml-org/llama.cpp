@@ -41,82 +41,6 @@ enable chromium_experimental_subgroup_matrix;
 // Number of subgroup-matrix-width blocks that span the KV tile. SG_MAT_N must divide KV_TILE.
 #define KV_BLOCKS (KV_TILE / SG_MAT_N)
 
-// Quantization constants/helpers
-#define BLOCK_SIZE 32
-#define BLOCKS_K ((HEAD_DIM_QK + BLOCK_SIZE - 1) / BLOCK_SIZE)
-#define BLOCKS_V ((HEAD_DIM_V + BLOCK_SIZE - 1) / BLOCK_SIZE)
-// number of quantized elements processed per thread
-#if defined(K_Q4_0)
-#define K_NQ 16
-#define K_F16_PER_BLOCK 9
-#define K_BLOCK_SIZE_BYTES 18u
-#define K_BYTES_PER_THREAD 8u
-#define K_BYTES_PER_INNER_LOOP 4u
-#elif defined(K_Q8_0)
-#define K_NQ 16
-#define K_F16_PER_BLOCK 17
-#define K_BLOCK_SIZE_BYTES 34u
-#define K_BYTES_PER_THREAD 16u
-#define K_BYTES_PER_INNER_LOOP 4u
-#endif
-
-#if defined(V_Q4_0)
-#define V_NQ 16
-#define V_F16_PER_BLOCK 9
-#define V_BLOCK_SIZE_BYTES 18u
-#define V_BYTES_PER_THREAD 8u
-#define V_BYTES_PER_INNER_LOOP 4u
-#elif defined(V_Q8_0)
-#define V_NQ 16
-#define V_F16_PER_BLOCK 17
-#define V_BLOCK_SIZE_BYTES 34u
-#define V_BYTES_PER_THREAD 16u
-#define V_BYTES_PER_INNER_LOOP 4u
-#endif
-
-#if defined(K_Q4_0) || defined(K_Q8_0)
-fn load_k_u16_at(byte_offset: u32) -> u32 {
-    let word = K[byte_offset / 4u];
-    let shift = (byte_offset & 2u) * 8u;
-    return (word >> shift) & 0xFFFFu;
-}
-
-fn load_k_u32_at(byte_offset: u32) -> u32 {
-    let word_idx = byte_offset / 4u;
-    let shift = (byte_offset & 3u) * 8u;
-    let lo = K[word_idx];
-    if (shift == 0u) {
-        return lo;
-    }
-    let hi = K[word_idx + 1u];
-    return (lo >> shift) | (hi << (32u - shift));
-}
-#endif
-
-#if defined(V_Q4_0) || defined(V_Q8_0)
-fn load_v_u16_at(byte_offset: u32) -> u32 {
-    let word = V[byte_offset / 4u];
-    let shift = (byte_offset & 2u) * 8u;
-    return (word >> shift) & 0xFFFFu;
-}
-
-fn load_v_u32_at(byte_offset: u32) -> u32 {
-    let word_idx = byte_offset / 4u;
-    let shift = (byte_offset & 3u) * 8u;
-    let lo = V[word_idx];
-    if (shift == 0u) {
-        return lo;
-    }
-    let hi = V[word_idx + 1u];
-    return (lo >> shift) | (hi << (32u - shift));
-}
-#endif
-
-fn f16_from_u16(bits: u32) -> f16 {
-    let packed = unpack2x16float(bits);
-    return f16(packed[0]);
-}
-
 struct Params {
     offset_q: u32,
     offset_k: u32,
@@ -263,7 +187,7 @@ fn load_kx4(buf: ptr<storage, array<vec4<K_TYPE>>, read_write>, scalar_index: u3
 #define QUANT_SHMEM kv_shmem
 #define QUANT_OUT_TYPE f16
 #include "quant_inner_loops.tmpl"
-#include "flash_attn_quant_blocks.tmpl"
+#include "flash_attn_quant_staging.tmpl"
 #endif
 
 @compute @workgroup_size(WG_SIZE)
@@ -335,6 +259,7 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
     }
 
     for (var kv_tile = 0u; kv_tile < params.seq_len_kv; kv_tile += KV_TILE) {
+      let kv_count = min(KV_TILE, params.seq_len_kv - kv_tile);
       // clear inter_shmem to ensure zero-initialized accumulators
         for (var elem_idx = local_id.x; elem_idx < Q_TILE * KV_TILE; elem_idx += WG_SIZE) {
             inter_shmem[elem_idx] = 0.0;

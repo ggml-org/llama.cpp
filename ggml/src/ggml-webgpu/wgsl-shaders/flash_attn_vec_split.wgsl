@@ -45,80 +45,6 @@ enable subgroups;
 
 #define KV_BLOCKS (KV_TILE / KV_GRANULARITY)
 
-#define BLOCK_SIZE 32
-#define BLOCKS_K ((HEAD_DIM_QK + BLOCK_SIZE - 1) / BLOCK_SIZE)
-#define BLOCKS_V ((HEAD_DIM_V + BLOCK_SIZE - 1) / BLOCK_SIZE)
-#if defined(K_Q4_0)
-#define K_NQ 16
-#define K_F16_PER_BLOCK 9
-#define K_BLOCK_SIZE_BYTES 18u
-#define K_BYTES_PER_THREAD 8u
-#define K_BYTES_PER_INNER_LOOP 4u
-#elif defined(K_Q8_0)
-#define K_NQ 16
-#define K_F16_PER_BLOCK 17
-#define K_BLOCK_SIZE_BYTES 34u
-#define K_BYTES_PER_THREAD 16u
-#define K_BYTES_PER_INNER_LOOP 4u
-#endif
-
-#if defined(V_Q4_0)
-#define V_NQ 16
-#define V_F16_PER_BLOCK 9
-#define V_BLOCK_SIZE_BYTES 18u
-#define V_BYTES_PER_THREAD 8u
-#define V_BYTES_PER_INNER_LOOP 4u
-#elif defined(V_Q8_0)
-#define V_NQ 16
-#define V_F16_PER_BLOCK 17
-#define V_BLOCK_SIZE_BYTES 34u
-#define V_BYTES_PER_THREAD 16u
-#define V_BYTES_PER_INNER_LOOP 4u
-#endif
-
-#if defined(K_Q4_0) || defined(K_Q8_0)
-fn load_k_u16_at(byte_offset: u32) -> u32 {
-    let word = K[byte_offset / 4u];
-    let shift = (byte_offset & 2u) * 8u;
-    return (word >> shift) & 0xFFFFu;
-}
-
-fn load_k_u32_at(byte_offset: u32) -> u32 {
-    let word_idx = byte_offset / 4u;
-    let shift = (byte_offset & 3u) * 8u;
-    let lo = K[word_idx];
-    if (shift == 0u) {
-        return lo;
-    }
-    let hi = K[word_idx + 1u];
-    return (lo >> shift) | (hi << (32u - shift));
-}
-#endif
-
-#if defined(V_Q4_0) || defined(V_Q8_0)
-fn load_v_u16_at(byte_offset: u32) -> u32 {
-    let word = V[byte_offset / 4u];
-    let shift = (byte_offset & 2u) * 8u;
-    return (word >> shift) & 0xFFFFu;
-}
-
-fn load_v_u32_at(byte_offset: u32) -> u32 {
-    let word_idx = byte_offset / 4u;
-    let shift = (byte_offset & 3u) * 8u;
-    let lo = V[word_idx];
-    if (shift == 0u) {
-        return lo;
-    }
-    let hi = V[word_idx + 1u];
-    return (lo >> shift) | (hi << (32u - shift));
-}
-#endif
-
-fn f16_from_u16(bits: u32) -> f16 {
-    let packed = unpack2x16float(bits);
-    return f16(packed[0]);
-}
-
 struct Params {
     offset_q: u32,
     offset_k: u32,
@@ -313,7 +239,7 @@ fn calc_softmax_term(kv_idx: u32, slope: f32, has_bias: bool, apply_mask: bool) 
 #define QUANT_SHMEM kv_shmem
 #define QUANT_OUT_TYPE f32
 #include "quant_inner_loops.tmpl"
-#include "flash_attn_quant_blocks.tmpl"
+#include "flash_attn_quant_staging.tmpl"
 #endif
 
 @compute @workgroup_size(WG_SIZE)
@@ -380,6 +306,7 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
     }
 
     for (var kv_tile = iwg * KV_TILE; kv_tile < params.seq_len_kv; kv_tile += KV_TILE * params.nwg) {
+        let kv_count = min(KV_TILE, params.seq_len_kv - kv_tile);
 #ifdef BLK
         let q_blk = q_row_start;
         let kv_blk = kv_tile / KV_TILE;

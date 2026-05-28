@@ -1779,23 +1779,27 @@ static bool ggml_webgpu_flash_attn_use_vec_path(const webgpu_global_context & gl
     GGML_ASSERT(Q != nullptr);
 
     const size_t storage_offset_alignment = global_ctx->capabilities.limits.minStorageBufferOffsetAlignment;
-    const bool   k_f16_vec4_aligned =
-        K->type != GGML_TYPE_F16 || ggml_webgpu_flash_attn_f16_vec4_aligned(K, storage_offset_alignment);
-    const bool v_f16_vec4_aligned =
-        V->type != GGML_TYPE_F16 || ggml_webgpu_flash_attn_f16_vec4_aligned(V, storage_offset_alignment);
+    const bool   k_float_vec4_aligned =
+        (K->type != GGML_TYPE_F16 && K->type != GGML_TYPE_F32) ||
+        ggml_webgpu_flash_attn_float_vec4_aligned(K, storage_offset_alignment);
+    const bool v_float_vec4_aligned =
+        (V->type != GGML_TYPE_F16 && V->type != GGML_TYPE_F32) ||
+        ggml_webgpu_flash_attn_float_vec4_aligned(V, storage_offset_alignment);
     const bool k_vec_type_supported =
-        K->type == GGML_TYPE_F16 || K->type == GGML_TYPE_Q4_0 || K->type == GGML_TYPE_Q8_0;
+        K->type == GGML_TYPE_F32 || K->type == GGML_TYPE_F16 || K->type == GGML_TYPE_Q4_0 || K->type == GGML_TYPE_Q8_0;
     const bool v_vec_type_supported =
-        V->type == GGML_TYPE_F16 || V->type == GGML_TYPE_Q4_0 || V->type == GGML_TYPE_Q8_0;
+        V->type == GGML_TYPE_F32 || V->type == GGML_TYPE_F16 || V->type == GGML_TYPE_Q4_0 || V->type == GGML_TYPE_Q8_0;
     const uint32_t k_vec_head_align =
-        K->type == GGML_TYPE_F16 ? GGML_WEBGPU_FLASH_ATTN_TILE_KV_VEC_WIDTH : (uint32_t) ggml_blck_size(K->type);
+        (K->type == GGML_TYPE_F32 || K->type == GGML_TYPE_F16) ? GGML_WEBGPU_FLASH_ATTN_TILE_KV_VEC_WIDTH :
+                                                                  (uint32_t) ggml_blck_size(K->type);
     const uint32_t v_vec_head_align =
-        V->type == GGML_TYPE_F16 ? GGML_WEBGPU_FLASH_ATTN_TILE_KV_VEC_WIDTH : (uint32_t) ggml_blck_size(V->type);
+        (V->type == GGML_TYPE_F32 || V->type == GGML_TYPE_F16) ? GGML_WEBGPU_FLASH_ATTN_TILE_KV_VEC_WIDTH :
+                                                                  (uint32_t) ggml_blck_size(V->type);
     const bool kv_vec_head_dims_aligned = Q->ne[0] % k_vec_head_align == 0 && V->ne[0] % v_vec_head_align == 0;
 
     return global_ctx->capabilities.supports_subgroups && (Q->ne[1] < GGML_WEBGPU_FLASH_ATTN_VEC_MAX_SEQ_LEN) &&
-           kv_vec_head_dims_aligned && k_vec_type_supported && v_vec_type_supported && k_f16_vec4_aligned &&
-           v_f16_vec4_aligned;
+           kv_vec_head_dims_aligned && k_vec_type_supported && v_vec_type_supported && k_float_vec4_aligned &&
+           v_float_vec4_aligned;
 }
 
 static ggml_webgpu_flash_attn_op ggml_webgpu_flash_attn_prepare(webgpu_context & ctx,
@@ -4206,18 +4210,34 @@ static bool ggml_backend_webgpu_device_supports_op(ggml_backend_dev_t dev, const
                 }
                 const auto & capabilities             = ctx->webgpu_global_ctx->capabilities;
                 const size_t storage_offset_alignment = capabilities.limits.minStorageBufferOffsetAlignment;
+
+                // subgroup matrix path requirements
                 const bool   use_subgroup_matrix      = ggml_webgpu_flash_attn_can_use_subgroup_matrix_path(
                     capabilities.supports_subgroup_matrix, capabilities.sg_mat_k, capabilities.sg_mat_n, src0, src2);
-                const bool f16_vec4_aligned =
-                    ggml_webgpu_flash_attn_f16_vec4_aligned(src1, src2, storage_offset_alignment);
+
+                // tile path requirements
+                const bool float_vec4_aligned =
+                    ((src1->type != GGML_TYPE_F16 && src1->type != GGML_TYPE_F32) ||
+                     ggml_webgpu_flash_attn_float_vec4_aligned(src1, storage_offset_alignment)) &&
+                    ((src2->type != GGML_TYPE_F16 && src2->type != GGML_TYPE_F32) ||
+                     ggml_webgpu_flash_attn_float_vec4_aligned(src2, storage_offset_alignment));
+                const uint32_t k_tile_head_align =
+                    (src1->type == GGML_TYPE_F32 || src1->type == GGML_TYPE_F16) ?
+                        GGML_WEBGPU_FLASH_ATTN_TILE_KV_VEC_WIDTH :
+                        (uint32_t) ggml_blck_size(src1->type);
+                const uint32_t v_tile_head_align =
+                    (src2->type == GGML_TYPE_F32 || src2->type == GGML_TYPE_F16) ?
+                        GGML_WEBGPU_FLASH_ATTN_TILE_KV_VEC_WIDTH :
+                        (uint32_t) ggml_blck_size(src2->type);
+                const bool tile_kv_head_dims_aligned =
+                    src0->ne[0] % k_tile_head_align == 0 && src2->ne[0] % v_tile_head_align == 0;
                 const bool tile_can_dispatch_all_q_rows =
                     capabilities.limits.maxComputeInvocationsPerWorkgroup >=
                     GGML_WEBGPU_FLASH_ATTN_TILE_Q_TILE * capabilities.max_subgroup_size;
                 const bool use_tile = !use_subgroup_matrix && capabilities.supports_subgroups &&
-                                      src1->type == GGML_TYPE_F16 && src2->type == GGML_TYPE_F16 && f16_vec4_aligned &&
-                                      (src0->ne[0] % GGML_WEBGPU_FLASH_ATTN_TILE_KV_VEC_WIDTH == 0) &&
-                                      (src2->ne[0] % GGML_WEBGPU_FLASH_ATTN_TILE_KV_VEC_WIDTH == 0) &&
+                                      float_vec4_aligned && tile_kv_head_dims_aligned &&
                                       tile_can_dispatch_all_q_rows;
+
                 if (!use_subgroup_matrix && !use_tile) {
                     supports_op = false;
                     break;
