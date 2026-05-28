@@ -271,6 +271,53 @@ int get_mmvq_mmid_max_batch(ggml_type type, int cc) {
     return MMVQ_MAX_BATCH_SIZE;
 }
 
+bool ggml_cuda_should_use_mmvq(enum ggml_type type, int cc, int64_t ne11) {
+    if (GGML_CUDA_CC_IS_CDNA(cc)) {
+        if (GGML_CUDA_CC_IS_CDNA1(cc)) {
+            switch (type) {
+                case GGML_TYPE_Q4_0:
+                case GGML_TYPE_Q4_1:
+                    return ne11 <= 7;
+                case GGML_TYPE_Q5_1:
+                    return ne11 <= 7;
+                case GGML_TYPE_Q8_0:
+                    return ne11 <= 6;
+                case GGML_TYPE_Q2_K:
+                    return ne11 <= 4;
+                case GGML_TYPE_Q3_K:
+                    return ne11 <= 3;
+                case GGML_TYPE_Q4_K:
+                    return ne11 <= 2;
+                case GGML_TYPE_Q5_K:
+                    return ne11 <= 3;
+                case GGML_TYPE_Q6_K:
+                    return ne11 <= 4;
+                case GGML_TYPE_IQ1_S:
+                    return ne11 <= 5;
+                case GGML_TYPE_IQ2_XXS:
+                case GGML_TYPE_IQ3_S:
+                case GGML_TYPE_IQ4_XS:
+                    return ne11 <= 6;
+                default:
+                    return ne11 <= MMVQ_MAX_BATCH_SIZE;
+            }
+        }
+        switch (type) { // tuned for CDNA2
+            case GGML_TYPE_Q2_K:
+                return ne11 <= 5;
+            case GGML_TYPE_Q3_K:
+            case GGML_TYPE_Q4_K:
+            case GGML_TYPE_Q5_K:
+                return ne11 <= 3;
+            case GGML_TYPE_Q6_K:
+                return ne11 <= 5;
+            default:
+                return ne11 <= MMVQ_MAX_BATCH_SIZE;
+        }
+    }
+    return ne11 <= MMVQ_MAX_BATCH_SIZE;
+}
+
 // Device constexpr: returns the max batch size for the current arch+type at compile time.
 template <ggml_type type>
 static constexpr __device__ int get_mmvq_mmid_max_batch_for_device() {
