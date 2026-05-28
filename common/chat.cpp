@@ -1735,6 +1735,22 @@ static common_chat_params common_chat_params_init_nemotron_v2(const common_chat_
     data.thinking_start_tag = THINK_START;
     data.thinking_end_tag   = THINK_END;
 
+    if (inputs.has_continuation()) {
+        const auto & msg = inputs.continue_msg;
+
+        // For continuation, the assistant's prior reasoning_content/content is
+        // appended after the template's opening "<think>". Mirror that here so
+        // the prepended generation_prompt the parser sees matches what the
+        // model is actually streaming.
+        if (!msg.reasoning_content.empty()) {
+            data.generation_prompt += msg.reasoning_content;
+        }
+        if (inputs.continue_final_message == COMMON_CHAT_CONTINUATION_CONTENT) {
+            data.generation_prompt += THINK_END + msg.render_content();
+        }
+        data.prompt += data.generation_prompt;
+    }
+
     auto parser = build_chat_peg_parser([&](common_chat_peg_builder & p) {
         // common_chat_peg_parse() automatically prepends data.generation_prompt
         // to the input before parsing. The Nemotron Nano v2 generation prompt

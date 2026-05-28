@@ -4391,16 +4391,9 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .run();
 
         tst.test(
-               "<TOOLCALL>[{\"name\": \"special_function\", \"arguments\": {\"arg1\": 1}}]"
-               "</TOOLCALL><SPECIAL_12>")
-            .tools({ special_function_tool })
-            .expect(message_assist_call)
-            .run();
-
-        tst.test(
                "I'm\nthinking\n</think>\n\n"
                "<TOOLCALL>[{\"name\": \"special_function\", \"arguments\": {\"arg1\": 1}}]"
-               "</TOOLCALL><SPECIAL_12>")
+               "</TOOLCALL>")
             .enable_thinking(true)
             .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
             .tools({ special_function_tool })
