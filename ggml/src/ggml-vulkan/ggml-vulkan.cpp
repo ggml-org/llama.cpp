@@ -2095,9 +2095,9 @@ void vk_memory_logger::log_deallocation(vk_buffer_ref buf_ref) {
     const bool device = bool(buf->memory_property_flags & vk::MemoryPropertyFlagBits::eDeviceLocal);
     std::string type = device ? "device" : "host";
     auto it = allocations.find(buf->buffer);
-    total_device -= device ? it->second : 0;
-    total_host -= device ? 0 : it->second;
     if (it != allocations.end()) {
+        total_device -= device ? it->second : 0;
+        total_host -= device ? 0 : it->second;
         VK_LOG_MEMORY(buf->device->name << ": -" << format_size(it->second) << " " << type << " at " << buf->buffer << ". Total device: " << format_size(total_device) << ", total host: " << format_size(total_host));
         allocations.erase(it);
     } else {
