@@ -986,8 +986,9 @@ struct peg_test_case {
     common_chat_templates_inputs params;
     std::string                  input;
     common_chat_msg              expect;
-    bool                         is_partial            = false;
-    bool                         expect_reconstruction = false;
+    bool                         is_partial                    = false;
+    bool                         expect_reconstruction         = false;
+    bool                         expect_streaming_consistency  = true;
 };
 
 struct make_peg_parser {
@@ -1078,36 +1079,38 @@ static void test_peg_parser(common_chat_templates *                      tmpls,
         std::string     prefix      = tc.input.substr(0, safe_len);
         common_chat_msg msg_current = parser.parse(prefix, is_partial);
 
-        for (const auto & diff : common_chat_msg_diff::compute_diffs(msg_prev, msg_current)) {
-            if (!diff.reasoning_content_delta.empty()) {
-                msg_accum.reasoning_content += diff.reasoning_content_delta;
+        if (tc.expect_streaming_consistency) {
+            for (const auto & diff : common_chat_msg_diff::compute_diffs(msg_prev, msg_current)) {
+                if (!diff.reasoning_content_delta.empty()) {
+                    msg_accum.reasoning_content += diff.reasoning_content_delta;
+                }
+                if (!diff.content_delta.empty()) {
+                    msg_accum.content += diff.content_delta;
+                }
+                if (diff.tool_call_index != std::string::npos) {
+                    // During partial parsing, a new tool call may appear with empty name initially
+                    // The name gets filled in as more input is parsed
+                    while (msg_accum.tool_calls.size() <= diff.tool_call_index) {
+                        msg_accum.tool_calls.push_back({ "", "", "" });
+                    }
+                    // Always update name and id from diff (may change during incremental parsing), but only if the delta
+                    // actually contains them
+                    if (!diff.tool_call_delta.name.empty()) {
+                        msg_accum.tool_calls[diff.tool_call_index].name = diff.tool_call_delta.name;
+                    }
+                    if (!diff.tool_call_delta.id.empty()) {
+                        msg_accum.tool_calls[diff.tool_call_index].id = diff.tool_call_delta.id;
+                    }
+                    if (!diff.tool_call_delta.arguments.empty()) {
+                        msg_accum.tool_calls[diff.tool_call_index].arguments += diff.tool_call_delta.arguments;
+                    }
+                }
             }
-            if (!diff.content_delta.empty()) {
-                msg_accum.content += diff.content_delta;
+            try {
+                assert_msg_equals(msg_current, msg_accum, true);
+            } catch (std::exception & e) {
+                throw std::runtime_error((std::string("Error comparing accumulated message to current: ") + e.what()).c_str());
             }
-            if (diff.tool_call_index != std::string::npos) {
-                // During partial parsing, a new tool call may appear with empty name initially
-                // The name gets filled in as more input is parsed
-                while (msg_accum.tool_calls.size() <= diff.tool_call_index) {
-                    msg_accum.tool_calls.push_back({ "", "", "" });
-                }
-                // Always update name and id from diff (may change during incremental parsing), but only if the delta
-                // actually contains them
-                if (!diff.tool_call_delta.name.empty()) {
-                    msg_accum.tool_calls[diff.tool_call_index].name = diff.tool_call_delta.name;
-                }
-                if (!diff.tool_call_delta.id.empty()) {
-                    msg_accum.tool_calls[diff.tool_call_index].id = diff.tool_call_delta.id;
-                }
-                if (!diff.tool_call_delta.arguments.empty()) {
-                    msg_accum.tool_calls[diff.tool_call_index].arguments += diff.tool_call_delta.arguments;
-                }
-            }
-        }
-        try {
-            assert_msg_equals(msg_current, msg_accum, true);
-        } catch (std::exception & e) {
-            throw std::runtime_error((std::string("Error comparing accumulated message to current: ") + e.what()).c_str());
         }
 
         msg_prev = msg_current;
@@ -1116,7 +1119,11 @@ static void test_peg_parser(common_chat_templates *                      tmpls,
     if (!tc.is_partial) {
         assert_msg_equals(tc.expect, parser.parse(tc.input, false), true);
     }
-    assert_msg_equals(tc.expect, msg_accum, true);
+    if (tc.expect_streaming_consistency) {
+        assert_msg_equals(tc.expect, msg_accum, true);
+    } else if (tc.is_partial) {
+        assert_msg_equals(tc.expect, parser.parse(tc.input, true), true);
+    }
 
     // Test grammar if present in params
     if (!parser.params_.grammar.empty()) {
@@ -1433,6 +1440,11 @@ class peg_test_builder {
 
     peg_test_builder & expect_reconstruction(bool val = true) {
         tc_.expect_reconstruction = val;
+        return *this;
+    }
+
+    peg_test_builder & expect_streaming_consistency(bool val = true) {
+        tc_.expect_streaming_consistency = val;
         return *this;
     }
 
@@ -5593,6 +5605,88 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .expect_content("Hello, world!\nWhat's up?")
             .run();
     }
+
+    // MiniCPM5 - XML tool calls with <function name="..."><param name="...">...</param></function>
+    {
+        auto tst = peg_tester("models/templates/MiniCPM5-1B.jinja", detailed_debug);
+
+        tst.test("Hello, world!\nWhat's up?").expect(message_assist).run();
+
+        tst.test(R"(<function name="python"><param name="code">print('Hello, World!')</param></function>)")
+            .enable_thinking(false)
+            .expect_streaming_consistency(false)
+            .tools({ python_tool })
+            .expect_tool_calls({ { "python", R"#({"code": "print('Hello, World!')"})#", {} } })
+            .run();
+
+        // Model sometimes drops opening tag names but keeps attributes.
+        tst.test(R"( name="python"> name="code">print('Hello, World!'))")
+            .enable_thinking(false)
+            .expect_streaming_consistency(false)
+            .tools({ python_tool })
+            .expect_tool_calls({ { "python", R"#({"code": "print('Hello, World!')"})#", {} } })
+            .run();
+
+        tst.test(R"(<functionname="python"><paramname="code">print('Hello, World!'))")
+            .enable_thinking(false)
+            .expect_streaming_consistency(false)
+            .tools({ python_tool })
+            .expect_tool_calls({ { "python", R"#({"code": "print('Hello, World!')"})#", {} } })
+            .run();
+
+        tst.test(R"(<function name="empty_args"></function>)")
+            .enable_thinking(false)
+            .expect_streaming_consistency(false)
+            .tools({ empty_args_tool })
+            .expect(simple_assist_msg("", "", "empty_args", "{}"))
+            .run();
+
+        tst.test(R"(<function name="python"><param name="code">print('x')</param></function>)")
+            .enable_thinking(false)
+            .expect_streaming_consistency(false)
+            .parallel_tool_calls(true)
+            .tools({ python_tool })
+            .expect_tool_calls({ { "python", R"#({"code": "print('x')"})#", {} } })
+            .run();
+
+        tst.test(R"(I'm thinking</think><function name="python"><param name="code">print('hey')</param></function>)")
+            .enable_thinking(true)
+            .expect_streaming_consistency(false)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ python_tool })
+            .expect_reasoning("I'm thinking")
+            .expect_tool_calls({ { "python", R"#({"code": "print('hey')"})#", {} } })
+            .run();
+
+        tst.test(R"(<function name="python"><param name="code">print('x')</param></function><function name="python"><param name="code">print('y')</param></function>)")
+            .enable_thinking(false)
+            .expect_streaming_consistency(false)
+            .parallel_tool_calls(true)
+            .tools({ python_tool })
+            .expect_tool_calls({
+                { "python", R"#({"code": "print('x')"})#", {} },
+                { "python", R"#({"code": "print('y')"})#", {} },
+            })
+            .run();
+
+        tst.test(R"(<function name="python"><param name="code">print('hey')")
+            .enable_thinking(false)
+            .expect_streaming_consistency(false)
+            .tools({ python_tool })
+            .is_partial(true)
+            .expect(simple_assist_msg("", "", "python", R"#({"code": "print('hey')")#"))
+            .run();
+
+        tst.test(" thinking</think>Hello, world!\nWhat's up?")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .enable_thinking(true)
+            .messages({ message_user, message_assist_prefill_reasoning })
+            .add_generation_prompt(false)
+            .continue_final_message(COMMON_CHAT_CONTINUATION_REASONING)
+            .expect_reasoning("I'm thinking")
+            .expect_content("Hello, world!\nWhat's up?")
+            .run();
+    }
 }
 
 static void test_template_generation_prompt() {
@@ -5739,6 +5833,13 @@ static void test_template_generation_prompt() {
         check(tmpls, basic(),                  "<｜Assistant｜><think>");
         check(tmpls, continuation_content(),   "<｜Assistant｜><think>I'm thinking</think>Hello, ");
         check(tmpls, continuation_reasoning(), "<｜Assistant｜><think>I'm");
+    }
+
+    {
+        auto tmpls = read_templates("models/templates/MiniCPM5-1B.jinja");
+        check(tmpls, basic(),                  "<|im_start|>assistant\n<think>\n");
+        check(tmpls, continuation_content(),   "<|im_start|>assistant\n<think>I'm thinking</think>Hello, ");
+        check(tmpls, continuation_reasoning(), "<|im_start|>assistant\n<think>I'm");
     }
 }
 

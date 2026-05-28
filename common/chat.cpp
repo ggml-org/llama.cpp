@@ -22,7 +22,6 @@
 #include <functional>
 
 #include <optional>
-#include <regex>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -2385,53 +2384,6 @@ static bool is_minicpm5_template(const std::string & src) {
            src.find("<param name=\"") != std::string::npos;
 }
 
-static std::string common_chat_normalize_minicpm5_output(const std::string & input) {
-    std::string out = input;
-
-    static const std::string SP_SPACE = "\xC4\xA0"; // U+0120
-    static const std::string SP_NL    = "\xC1\x8A"; // U+010A
-
-    for (size_t pos = 0; (pos = out.find(SP_SPACE, pos)) != std::string::npos;) {
-        out.replace(pos, SP_SPACE.size(), " ");
-        pos += 1;
-    }
-    for (size_t pos = 0; (pos = out.find(SP_NL, pos)) != std::string::npos;) {
-        out.replace(pos, SP_NL.size(), "\n");
-        pos += 1;
-    }
-
-    auto replace_all = [](std::string & s, const std::string & from, const std::string & to) {
-        if (from.empty()) {
-            return;
-        }
-        for (size_t pos = 0; (pos = s.find(from, pos)) != std::string::npos;) {
-            s.replace(pos, from.size(), to);
-            pos += to.size();
-        }
-    };
-
-    replace_all(out, "<functionname=", "<function name=");
-    replace_all(out, "<paramname=", "<param name=");
-
-    // Some GGUF outputs drop opening tag names but keep attributes, e.g.
-    // ` name="python"> name="code">...` instead of `<function name="python">...`.
-    static const std::regex LEADING_FUNC_ATTR(R"((?:^|[\n\r])\s*name=\"([^\"]+)\">)");
-    out = std::regex_replace(out, LEADING_FUNC_ATTR, "\n<function name=\"$1\">");
-    static const std::regex PARAM_ATTR(R"(>\s*name=\"([^\"]+)\">)");
-    out = std::regex_replace(out, PARAM_ATTR, "><param name=\"$1\">");
-
-    static const std::string IM_END = "<|im_end|>";
-    if (out.size() >= IM_END.size() &&
-        out.compare(out.size() - IM_END.size(), IM_END.size(), IM_END) == 0) {
-        out.erase(out.size() - IM_END.size());
-        while (!out.empty() && (out.back() == '\n' || out.back() == ' ')) {
-            out.pop_back();
-        }
-    }
-
-    return out;
-}
-
 // MiniCPM5 format:
 // - Reasoning: <think>{reasoning}</think> (optional)
 // - Tool calls: <function name="foo"><param name="bar">value</param></function>
@@ -2451,7 +2403,6 @@ static common_chat_params common_chat_params_init_minicpm5(const common_chat_tem
         "<think>",
         "</think>",
         "<|im_start|>",
-        "<|im_end|>",
         "<tool_response>",
         "</tool_response>",
     };
@@ -2459,13 +2410,6 @@ static common_chat_params common_chat_params_init_minicpm5(const common_chat_tem
     const std::string GEN_PROMPT  = "<|im_start|>assistant\n";
     const std::string THINK_START = "<think>";
     const std::string THINK_END   = "</think>";
-    const std::vector<std::string> TOOL_START_MARKERS = {
-        THINK_END,
-        "<function",
-        " name=\"",
-        "<param",
-    };
-
     data.thinking_start_tag = THINK_START;
     data.thinking_end_tag   = THINK_END;
 
@@ -2487,41 +2431,138 @@ static common_chat_params common_chat_params_init_minicpm5(const common_chat_tem
     auto parser = build_chat_peg_parser([&](common_chat_peg_builder & p) {
         auto end = p.end();
 
+        static const std::string SP_SPACE = "\xC4\xA0"; // U+0120 (valid UTF-8)
+        static const std::string SP_NL    = "\xC4\x8A"; // U+010A (valid UTF-8)
+
+        auto ws = [&]() {
+            return p.choice({ p.space(), p.literal(SP_SPACE), p.literal(SP_NL) });
+        };
+
+        static const std::string IM_END = "<|im_end|>";
+        auto im_end_suffix = p.optional(p.literal(IM_END) + ws());
+
         auto assistant_prefix = p.literal(GEN_PROMPT);
-        auto thinking_prefix  = inputs.enable_thinking ?
-            p.literal("<think>\n") :
-            p.literal("<think>\n\n</think>\n\n");
 
-        auto reasoning = p.eps();
-        if (extract_reasoning && inputs.enable_thinking) {
-            reasoning = p.reasoning(p.until_one_of(TOOL_START_MARKERS)) + p.optional(p.literal("\n")) +
-                        p.optional(p.literal(THINK_END) + p.optional(p.literal("\n\n")));
+        auto thinking = p.eps();
+        if (!inputs.enable_thinking) {
+            thinking = p.literal("<think>\n\n</think>\n\n");
+        } else if (extract_reasoning) {
+            thinking = p.literal(THINK_START) + p.optional(p.literal("\n")) + p.choice({
+                p.reasoning(p.until(THINK_END)) + p.literal(THINK_END) + ws(),
+                p.reasoning(p.until_one_of({ "<function", " name=\"" })),
+            });
+        } else {
+            thinking = p.literal(THINK_START) + p.literal("\n");
         }
-
-        auto suffix = p.optional(p.literal("<|im_end|>") + p.optional(p.literal("\n")));
 
         if (!has_tools || inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_NONE) {
-            return assistant_prefix + thinking_prefix + reasoning + p.content(p.rest()) + suffix + end;
+            return assistant_prefix + thinking + p.content(p.rest()) + im_end_suffix + end;
         }
 
-        // Do not wrap minicpm5_xml_tool_calls in another rule("tool-calls", ...):
+        static const std::vector<std::string> PARAM_VALUE_STOP = {
+            "</param>",
+            "\"> name=\"",
+            "</function>",
+            "<function",
+            "<param",
+        };
+
+        auto func_name_prefix = p.choice({
+            p.literal("<function name=\""),
+            p.literal(" name=\""),
+        });
+        auto param_name_prefix = p.choice({
+            p.literal("<param name=\""),
+            p.literal(" name=\""),
+        });
+        auto func_name_prefix_compact = p.literal("<functionname=\"");
+        auto param_name_prefix_compact = p.literal("<paramname=\"");
+        auto arg_value = p.choice({
+            p.literal("<![CDATA[") + p.until("]]>") + p.literal("]]>"),
+            p.until_one_of(PARAM_VALUE_STOP),
+        });
+
+        auto tool_choice = p.choice();
+        foreach_function(inputs.tools, [&](const json & tool) {
+            const auto & function = tool.at("function");
+            const std::string  name   = function.at("name");
+            auto params = function.contains("parameters") ? function.at("parameters") : json::object();
+
+            auto args = p.eps();
+            if (params.contains("properties") && params.at("properties").is_object() &&
+                !params.at("properties").empty()) {
+                auto schema_info = common_schema_info();
+                schema_info.resolve_refs(params);
+
+                auto arg_choice = p.choice();
+                for (const auto & [prop_name, prop_schema] : params.at("properties").items()) {
+                    const bool is_string = schema_info.resolves_to_string(prop_schema);
+
+                    auto value_parser = is_string ?
+                        p.tool_arg_string_value(arg_value) :
+                        p.tool_arg_json_value(p.schema(p.json(),
+                                                       "tool-" + name + "-arg-" + prop_name + "-schema",
+                                                       prop_schema,
+                                                       false));
+
+                    auto arg_rule = p.tool_arg(
+                        p.tool_arg_open(p.choice({
+                            param_name_prefix,
+                            param_name_prefix_compact,
+                        }) + p.tool_arg_name(p.literal(prop_name)) + p.literal("\">")) +
+                        value_parser +
+                        p.tool_arg_close(p.optional(p.literal("</param>")) + ws()));
+
+                    arg_choice |= arg_rule;
+                }
+                args = p.zero_or_more(arg_choice + ws());
+            }
+
+            auto tool_parser = p.tool(
+                p.tool_open(p.choice({
+                    func_name_prefix,
+                    func_name_prefix_compact,
+                }) + p.tool_name(p.literal(name)) + p.literal("\">")) +
+                p.tool_args(args) + ws() +
+                p.tool_close(p.optional(p.literal("</function>"))));
+
+            tool_choice |= p.rule("tool-" + name, tool_parser);
+        });
+
+        // Do not wrap trigger_rule("tool-calls", ...) in another rule("tool-calls", ...):
         // parallel mode already defines trigger_rule("tool-calls", ...) and a second
         // rule with the same name resolves to itself -> peg stack overflow.
-        auto tool_calls = p.minicpm5_xml_tool_calls(inputs.tools, inputs.parallel_tool_calls);
-        auto content    = p.content(p.until_one_of({ "<function", " name=\"" }));
+        common_peg_parser tool_calls = p.eps();
+        if (inputs.parallel_tool_calls) {
+            tool_calls = p.trigger_rule("tool-calls", p.one_or_more(tool_choice + ws()));
+        } else {
+            tool_calls = p.trigger_rule("tool-call", tool_choice);
+        }
 
-        return assistant_prefix + thinking_prefix + reasoning + content + tool_calls + suffix + end;
+        auto content = p.content(p.until_one_of({ "<function", " name=\"" }));
+
+        return assistant_prefix + thinking + content + tool_calls + im_end_suffix + end;
     });
 
     data.parser = parser.save();
 
-    // MiniCPM5 tool calls are parsed post-hoc via peg-minicpm5 (XML output).
-    // Do not attach JSON-schema GBNF here — it is invalid for this format and
-    // can destabilize llama-server. SGLang/vLLM use parsers only for MiniCPM5.
-    data.grammar.clear();
-    data.grammar_lazy     = false;
-    data.grammar_triggers = {};
-    (void) include_grammar;
+    if (include_grammar) {
+        data.grammar_lazy = inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_AUTO;
+        data.grammar      = build_grammar([&](const common_grammar_builder & builder) {
+            foreach_function(inputs.tools, [&](const json & tool) {
+                const auto & function = tool.at("function");
+                auto         schema   = function.contains("parameters") ? function.at("parameters") : json::object();
+                builder.resolve_refs(schema);
+            });
+            parser.build_grammar(builder, data.grammar_lazy);
+        });
+
+        data.grammar_triggers = {
+            { COMMON_GRAMMAR_TRIGGER_TYPE_WORD, "<function" },
+            { COMMON_GRAMMAR_TRIGGER_TYPE_WORD, " name=\"" },
+            { COMMON_GRAMMAR_TRIGGER_TYPE_WORD, "<functionname=" },
+        };
+    }
 
     return data;
 }
@@ -2849,13 +2890,9 @@ common_chat_msg common_chat_peg_parse(const common_peg_arena &          src_pars
         LOG_DBG("No parser definition detected, assuming pure content parser.");
     }
 
-    const std::string normalized_input = params.format == COMMON_CHAT_FORMAT_PEG_MINICPM5 ?
-        common_chat_normalize_minicpm5_output(input) :
-        input;
-
     const std::string effective_input = params.generation_prompt.empty()
-        ? normalized_input
-        : params.generation_prompt + normalized_input;
+        ? input
+        : params.generation_prompt + input;
 
     //LOG_DBG("Parsing PEG input with format %s: %s\n", common_chat_format_name(params.format), effective_input.c_str());
 
@@ -2877,6 +2914,8 @@ common_chat_msg common_chat_peg_parse(const common_peg_arena &          src_pars
             std::unique_ptr<common_chat_peg_mapper> mapper;
             if (params.format == COMMON_CHAT_FORMAT_PEG_GEMMA4) {
                 mapper = std::make_unique<common_chat_peg_gemma4_mapper>(msg);
+            } else if (params.format == COMMON_CHAT_FORMAT_PEG_MINICPM5) {
+                mapper = std::make_unique<common_chat_peg_minicpm5_mapper>(msg, is_partial);
             } else {
                 mapper = std::make_unique<common_chat_peg_mapper>(msg);
             }
@@ -2899,6 +2938,8 @@ common_chat_msg common_chat_peg_parse(const common_peg_arena &          src_pars
     std::unique_ptr<common_chat_peg_mapper> mapper;
     if (params.format == COMMON_CHAT_FORMAT_PEG_GEMMA4) {
         mapper = std::make_unique<common_chat_peg_gemma4_mapper>(msg);
+    } else if (params.format == COMMON_CHAT_FORMAT_PEG_MINICPM5) {
+        mapper = std::make_unique<common_chat_peg_minicpm5_mapper>(msg, is_partial);
     } else {
         mapper = std::make_unique<common_chat_peg_mapper>(msg);
     }
