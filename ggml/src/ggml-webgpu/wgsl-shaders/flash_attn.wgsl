@@ -4,6 +4,9 @@ enable f16;
 enable subgroups;
 enable chromium_experimental_subgroup_matrix;
 
+#define BYTE_HELPERS
+#include "common_decls.tmpl"
+
 #ifdef K_F32
 #define K_TYPE f32
 #elif defined(K_Q4_0) || defined(K_Q8_0)
@@ -47,40 +50,29 @@ enable chromium_experimental_subgroup_matrix;
 #define K_NQ 16
 #define K_F16_PER_BLOCK 9
 #define K_BLOCK_SIZE_BYTES 18u
-#define K_WEIGHTS_PER_F16 4
+#define K_BYTES_PER_THREAD 8u
+#define K_BYTES_PER_INNER_LOOP 4u
 #elif defined(K_Q8_0)
-#define K_NQ 8
+#define K_NQ 16
 #define K_F16_PER_BLOCK 17
 #define K_BLOCK_SIZE_BYTES 34u
-#define K_WEIGHTS_PER_F16 2
-#endif
-#if defined(K_Q4_0) || defined(K_Q8_0)
-#define K_F16_PER_THREAD (K_NQ / K_WEIGHTS_PER_F16)
+#define K_BYTES_PER_THREAD 16u
+#define K_BYTES_PER_INNER_LOOP 4u
 #endif
 
 #if defined(V_Q4_0)
 #define V_NQ 16
 #define V_F16_PER_BLOCK 9
 #define V_BLOCK_SIZE_BYTES 18u
-#define V_WEIGHTS_PER_F16 4
+#define V_BYTES_PER_THREAD 8u
+#define V_BYTES_PER_INNER_LOOP 4u
 #elif defined(V_Q8_0)
-#define V_NQ 8
+#define V_NQ 16
 #define V_F16_PER_BLOCK 17
 #define V_BLOCK_SIZE_BYTES 34u
-#define V_WEIGHTS_PER_F16 2
+#define V_BYTES_PER_THREAD 16u
+#define V_BYTES_PER_INNER_LOOP 4u
 #endif
-#if defined(V_Q4_0) || defined(V_Q8_0)
-#define V_F16_PER_THREAD (V_NQ / V_WEIGHTS_PER_F16)
-#endif
-
-// Ok not to put these in a define block, compiler will remove if unused
-fn get_byte(value: u32, index: u32) -> u32 {
-    return (value >> (index * 8)) & 0xFF;
-}
-
-fn get_byte_i32(value: u32, index: u32) -> i32 {
-    return bitcast<i32>(((value >> (index * 8)) & 0xFF) << 24) >> 24;
-}
 
 #if defined(K_Q4_0) || defined(K_Q8_0)
 fn load_k_u16_at(byte_offset: u32) -> u32 {
@@ -118,12 +110,12 @@ fn load_v_u32_at(byte_offset: u32) -> u32 {
     let hi = V[word_idx + 1u];
     return (lo >> shift) | (hi << (32u - shift));
 }
+#endif
 
 fn f16_from_u16(bits: u32) -> f16 {
     let packed = unpack2x16float(bits);
     return f16(packed[0]);
 }
-#endif
 
 struct Params {
     offset_q: u32,
@@ -267,6 +259,13 @@ fn load_kx4(buf: ptr<storage, array<vec4<K_TYPE>>, read_write>, scalar_index: u3
     return (*buf)[scalar_index >> 2u];
 }
 
+#ifndef KV_DIRECT
+#define QUANT_SHMEM kv_shmem
+#define QUANT_OUT_TYPE f16
+#include "quant_inner_loops.tmpl"
+#include "flash_attn_quant_blocks.tmpl"
+#endif
+
 @compute @workgroup_size(WG_SIZE)
 fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
     @builtin(local_invocation_id) local_id: vec3<u32>,
@@ -343,57 +342,9 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
 
       // load k tile into shared memory
 #if defined(K_Q4_0)
-      for (var elem_idx = local_id.x * K_NQ; elem_idx < KV_TILE * HEAD_DIM_QK; elem_idx += WG_SIZE * K_NQ) {
-          let blck_idx = elem_idx / BLOCK_SIZE;
-          let block_offset = (elem_idx % BLOCK_SIZE) / K_WEIGHTS_PER_F16;
-          let k_row = blck_idx / BLOCKS_K;
-          let global_k_row = kv_tile + k_row;
-          let block_k = blck_idx % BLOCKS_K;
-          let row_offset = k_row * HEAD_DIM_QK;
-
-          if (global_k_row < params.seq_len_kv) {
-              let global_block_idx = k_head_offset + global_k_row * params.stride_k1 + block_k;
-              let block_byte_base = global_block_idx * K_BLOCK_SIZE_BYTES;
-              let d = f16_from_u16(load_k_u16_at(block_byte_base));
-              for (var j = 0u; j < K_F16_PER_THREAD; j += 2) {
-                  let q_byte_offset = block_byte_base + 2u + 2u * (block_offset + j);
-                  let q_packed = load_k_u32_at(q_byte_offset);
-                  for (var k = 0u; k < 4u; k++) {
-                      let q_byte = get_byte(q_packed, k);
-                      let q_hi = (f16((q_byte >> 4) & 0xF) - 8.0) * d;
-                      let q_lo = (f16(q_byte & 0xF) - 8.0) * d;
-                      let idx = block_k * BLOCK_SIZE + block_offset * 2u + j * 2u + k;
-                      kv_shmem[row_offset + idx] = q_lo;
-                      kv_shmem[row_offset + idx + 16u] = q_hi;
-                  }
-              }
-          }
-      }
+      LOAD_K_Q4_0_TILE_BLOCK
 #elif defined(K_Q8_0)
-      for (var elem_idx = local_id.x * K_NQ; elem_idx < KV_TILE * HEAD_DIM_QK; elem_idx += WG_SIZE * K_NQ) {
-          let blck_idx = elem_idx / BLOCK_SIZE;
-          let block_offset = (elem_idx % BLOCK_SIZE) / K_WEIGHTS_PER_F16;
-          let k_row = blck_idx / BLOCKS_K;
-          let global_k_row = kv_tile + k_row;
-          let block_k = blck_idx % BLOCKS_K;
-          let row_offset = k_row * HEAD_DIM_QK;
-
-          if (global_k_row < params.seq_len_kv) {
-              let global_block_idx = k_head_offset + global_k_row * params.stride_k1 + block_k;
-              let block_byte_base = global_block_idx * K_BLOCK_SIZE_BYTES;
-              let d = f16_from_u16(load_k_u16_at(block_byte_base));
-              for (var j = 0u; j < K_F16_PER_THREAD; j += 2) {
-                  let q_byte_offset = block_byte_base + 2u + 2u * (block_offset + j);
-                  let q_packed = load_k_u32_at(q_byte_offset);
-                  for (var k = 0u; k < 4u; k++) {
-                      let q_byte = get_byte_i32(q_packed, k);
-                      let q_val = f16(q_byte) * d;
-                      let idx = block_k * BLOCK_SIZE + block_offset * 2u + j * 2u + k;
-                      kv_shmem[row_offset + idx] = q_val;
-                  }
-              }
-          }
-      }
+      LOAD_K_Q8_0_TILE_BLOCK
 #elif defined(KV_DIRECT)
       // Direct global loads for KV
 #else
@@ -546,57 +497,9 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
 
       // load v tile into shared memory
 #if defined(V_Q4_0)
-      for (var elem_idx = local_id.x * V_NQ; elem_idx < KV_TILE * HEAD_DIM_V; elem_idx += WG_SIZE * V_NQ) {
-          let blck_idx = elem_idx / BLOCK_SIZE;
-          let block_offset = (elem_idx % BLOCK_SIZE) / V_WEIGHTS_PER_F16;
-          let v_row = blck_idx / BLOCKS_V;
-          let global_v_row = kv_tile + v_row;
-          let block_k = blck_idx % BLOCKS_V;
-          let row_offset = v_row * HEAD_DIM_V;
-
-          if (global_v_row < params.seq_len_kv) {
-              let global_block_idx = v_head_offset + global_v_row * params.stride_v1 + block_k;
-              let block_byte_base = global_block_idx * V_BLOCK_SIZE_BYTES;
-              let d = f16_from_u16(load_v_u16_at(block_byte_base));
-              for (var j = 0u; j < V_F16_PER_THREAD; j += 2) {
-                  let q_byte_offset = block_byte_base + 2u + 2u * (block_offset + j);
-                  let q_packed = load_v_u32_at(q_byte_offset);
-                  for (var k = 0u; k < 4u; k++) {
-                      let q_byte = get_byte(q_packed, k);
-                      let q_hi = (f16((q_byte >> 4) & 0xF) - 8.0) * d;
-                      let q_lo = (f16(q_byte & 0xF) - 8.0) * d;
-                      let idx = block_k * BLOCK_SIZE + block_offset * 2u + j * 2u + k;
-                      kv_shmem[row_offset + idx] = q_lo;
-                      kv_shmem[row_offset + idx + 16u] = q_hi;
-                  }
-              }
-          }
-      }
+      LOAD_V_Q4_0_TILE_BLOCK
 #elif defined(V_Q8_0)
-      for (var elem_idx = local_id.x * V_NQ; elem_idx < KV_TILE * HEAD_DIM_V; elem_idx += WG_SIZE * V_NQ) {
-          let blck_idx = elem_idx / BLOCK_SIZE;
-          let block_offset = (elem_idx % BLOCK_SIZE) / V_WEIGHTS_PER_F16;
-          let v_row = blck_idx / BLOCKS_V;
-          let global_v_row = kv_tile + v_row;
-          let block_k = blck_idx % BLOCKS_V;
-          let row_offset = v_row * HEAD_DIM_V;
-
-          if (global_v_row < params.seq_len_kv) {
-              let global_block_idx = v_head_offset + global_v_row * params.stride_v1 + block_k;
-              let block_byte_base = global_block_idx * V_BLOCK_SIZE_BYTES;
-              let d = f16_from_u16(load_v_u16_at(block_byte_base));
-              for (var j = 0u; j < V_F16_PER_THREAD; j += 2) {
-                  let q_byte_offset = block_byte_base + 2u + 2u * (block_offset + j);
-                  let q_packed = load_v_u32_at(q_byte_offset);
-                  for (var k = 0u; k < 4u; k++) {
-                      let q_byte = get_byte_i32(q_packed, k);
-                      let q_val = f16(q_byte) * d;
-                      let idx = block_k * BLOCK_SIZE + block_offset * 2u + j * 2u + k;
-                      kv_shmem[row_offset + idx] = q_val;
-                  }
-              }
-          }
-      }
+      LOAD_V_Q8_0_TILE_BLOCK
 #elif defined(KV_DIRECT)
       // Direct global loads for KV
 #else
