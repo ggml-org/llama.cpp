@@ -14,6 +14,13 @@ export default defineConfig({
 			padding: 0.75,
 			resizeOptions: { background: 'white', fit: 'contain' },
 			darkResizeOptions: { background: '#111111', fit: 'contain' },
+			darkImageResolver: async (imageName: string) => {
+				if (imageName.endsWith('favicon.svg')) {
+					const { resolve } = await import('node:path');
+					const { readFileSync } = await import('node:fs');
+					return readFileSync(resolve('static/favicon-dark.svg'));
+				}
+			},
 			linkMediaOptions: {
 				log: true,
 				addMediaScreen: true,
