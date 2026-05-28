@@ -449,6 +449,8 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph, std::shared_ptr<o
     int64_t conversion_end_time;
     int64_t compile_end_time;
     int64_t infer_end_time;
+    int64_t ov_raw_infer_start;
+    int64_t ov_raw_infer_total = 0;
 
     std::shared_ptr<decoder_runtime_ctx> entry;
     ModelParams old_m_params;
@@ -595,7 +597,9 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph, std::shared_ptr<o
                 infer_request->set_output_tensor(i, output_tensor);
             }
 
+            ov_raw_infer_start = ggml_time_us();
             infer_request->infer();
+            ov_raw_infer_total += ggml_time_us() - ov_raw_infer_start;
 
             if (getenv("GGML_OPENVINO_DEBUG_OUTPUT")) {
                 for (size_t i = 0; i < ov_output_names_local.size(); i++) {
@@ -623,8 +627,10 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph, std::shared_ptr<o
             infer_request->set_output_tensor(i, output_tensor);
         }
 
+        ov_raw_infer_start = ggml_time_us();
         infer_request->infer();
         infer_end_time = ggml_time_us();
+        ov_raw_infer_total = infer_end_time - ov_raw_infer_start;
 
         if (getenv("GGML_OPENVINO_DEBUG_OUTPUT")) {
             for (size_t i = 0; i < ov_output_names_local.size(); i++) {
@@ -642,6 +648,7 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph, std::shared_ptr<o
             GGML_LOG_INFO("  - Graph compile time: %ld ms \n", (compile_end_time - conversion_end_time) / 1000);
         }
         GGML_LOG_INFO("  - Graph inference time: %ld ms \n", (infer_end_time - compile_end_time) / 1000);
+        GGML_LOG_INFO("  - OV raw infer time: %.3f ms \n", ov_raw_infer_total / 1000.0);
     }
 
     return GGML_STATUS_SUCCESS;
