@@ -106,10 +106,14 @@
 	});
 
 	$effect(() => {
+		void modelPropsVersion;
+
 		hasAudioModality = activeModelId ? modelsStore.modelSupportsAudio(activeModelId) : false;
 	});
 
 	$effect(() => {
+		void modelPropsVersion;
+
 		hasVideoModality = activeModelId ? modelsStore.modelSupportsVideo(activeModelId) : false;
 	});
 
