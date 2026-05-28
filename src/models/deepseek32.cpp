@@ -423,7 +423,7 @@ llama_model_deepseek32::graph::graph(const llama_model & model, const llm_graph_
 
                 // note: MLA with the absorption optimization converts into MQA (ie: GQA with 1 group)
                 cur = build_attn(inp_attn_dsa,
-                        model.layers[il].wo, NULL,
+                        model.layers[il].wo, NULL, model.layers[il].wo_s,
                         Qcur, Kcur, Vcur, nullptr, nullptr, model.layers[il].wv_b, top_k, kq_scale, il);
             }
         }
@@ -439,9 +439,9 @@ llama_model_deepseek32::graph::graph(const llama_model & model, const llm_graph_
 
         if ((uint32_t) il < hparams.n_layer_dense_lead) {
             cur = build_ffn(cur,
-                model.layers[il].ffn_up, NULL, NULL,
-                model.layers[il].ffn_gate, NULL, NULL,
-                model.layers[il].ffn_down, NULL, NULL,
+                model.layers[il].ffn_up, NULL, model.layers[il].ffn_up_s,
+                model.layers[il].ffn_gate, NULL, model.layers[il].ffn_gate_s,
+                model.layers[il].ffn_down, NULL, model.layers[il].ffn_down_s,
                 NULL, LLM_FFN_SILU, LLM_FFN_PAR, il);
             cb(cur, "ffn_out", il);
         } else {
@@ -458,16 +458,19 @@ llama_model_deepseek32::graph::graph(const llama_model & model, const llm_graph_
                 (llama_expert_gating_func_type) hparams.expert_gating_func,
                 il,
                 nullptr,
-                model.layers[il].ffn_gate_up_exps);
+                model.layers[il].ffn_gate_up_exps,
+                model.layers[il].ffn_up_exps_s,
+                model.layers[il].ffn_gate_exps_s,
+                model.layers[il].ffn_down_exps_s);
             cb(moe_out, "ffn_moe_out", il);
 
             // FFN shared expert
             {
                 ggml_tensor * ffn_shexp =
                     build_ffn(cur,
-                        model.layers[il].ffn_up_shexp, NULL, NULL,
-                        model.layers[il].ffn_gate_shexp, NULL, NULL,
-                        model.layers[il].ffn_down_shexp, NULL, NULL,
+                        model.layers[il].ffn_up_shexp, NULL, model.layers[il].ffn_up_shexp_s,
+                        model.layers[il].ffn_gate_shexp, NULL, model.layers[il].ffn_gate_shexp_s,
+                        model.layers[il].ffn_down_shexp, NULL, model.layers[il].ffn_down_shexp_s,
                         NULL, LLM_FFN_SILU, LLM_FFN_PAR, il);
                 cb(ffn_shexp, "ffn_shexp", il);
 
