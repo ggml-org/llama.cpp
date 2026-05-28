@@ -1,4 +1,4 @@
-name: UI Build
+name: UI Build (self-hosted)
 
 on:
   workflow_call:
