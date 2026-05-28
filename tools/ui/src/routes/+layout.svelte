@@ -268,23 +268,21 @@
 		updateServiceWorker
 	} = useRegisterSW({
 		onRegisteredSW(swUrl: string, r: ServiceWorkerRegistration | undefined) {
-			if (import.meta.env.DEV) {
-				// In dev mode, periodically check for SW updates
-				setInterval(async () => {
-					if (!r || r.installing || !navigator?.onLine) return;
-					try {
-						const resp = await fetch(swUrl, {
-							cache: 'no-store',
-							headers: { cache: 'no-store', 'cache-control': 'no-cache' }
-						});
-						if (resp?.status === 200) {
-							await r.update();
-						}
-					} catch {
-						// SW check failed, skip
+			setInterval(async () => {
+				if (!r || r.installing || !navigator?.onLine) return;
+
+				try {
+					const resp = await fetch(swUrl, {
+						cache: 'no-store',
+						headers: { cache: 'no-store', 'cache-control': 'no-cache' }
+					});
+					if (resp?.status === 200) {
+						await r.update();
 					}
-				}, 60000); // every minute in dev
-			}
+				} catch (e) {
+					console.error(e);
+				}
+			}, 60000);
 		},
 		onRegisterError(error: unknown) {
 			console.error('[PWA] SW registration error:', error);

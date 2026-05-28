@@ -377,10 +377,11 @@ bool server_http_context::init(const common_params & params) {
 #if defined(LLAMA_UI_HAS_ASSETS)
             // Embedded assets are immutable for a given binary, so cache aggressively.
             // This is essential for PWA/service worker caching and offline support to work.
-            // The service worker and manifest use no-cache so the browser always checks for
-            // updates (these files tell the SW what to cache). sw.js has a build comment
-            // injected at build time so its content differs between builds, triggering a
-            // new SW registration when the server binary changes.
+            // The service worker, manifest, and version.json use no-cache so the browser
+            // always revalidates them. sw.js has a build comment injected at build time so
+            // its content differs between builds, triggering a new SW registration when the
+            // server binary changes. version.json carries the build version and is part of
+            // the SW precache manifest, so it must also be revalidated on each request.
             auto serve_asset_cached = [](const std::string & name, const char * mime, bool with_isolation_headers) {
                 return [name, mime, with_isolation_headers](const httplib::Request & req, httplib::Response & res) {
                     const llama_ui_asset * a = llama_ui_find_asset(name.c_str());
@@ -482,7 +483,7 @@ bool server_http_context::init(const common_params & params) {
             srv->Get(params.api_prefix + "/apple-splash-landscape-dark-2732x2048.png",   serve_asset_cached("apple-splash-landscape-dark-2732x2048.png",   "image/png", false));
             srv->Get(params.api_prefix + "/manifest.webmanifest",           serve_asset_nocache("manifest.webmanifest",        "application/manifest+json",                false));
             srv->Get(params.api_prefix + "/sw.js",                          serve_asset_nocache("sw.js",                       "application/javascript; charset=utf-8",    false));
-            srv->Get(params.api_prefix + "/version.json",                   serve_asset_cached("version.json",                 "application/json",                         false));
+            srv->Get(params.api_prefix + "/version.json",                   serve_asset_nocache("version.json",                 "application/json",                         false));
             srv->Get(params.api_prefix + "/workbox.js",                     serve_asset_cached("workbox.js",                   "application/javascript; charset=utf-8",    false));
 #endif
         }
