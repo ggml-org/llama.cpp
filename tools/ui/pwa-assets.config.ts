@@ -58,5 +58,5 @@ export default defineConfig({
       'iPad mini 8.3"'
     ]
   ),
-  images: ['static/favicon.svg', 'static/favicon-dark.svg']
+  images: ['static/favicon.svg']
 });

@@ -31,6 +31,7 @@
 	import { useSettingsNavigation } from '$lib/hooks/use-settings-navigation.svelte';
 	import { conversations } from '$lib/stores/conversations.svelte';
 	import { isMobile } from '$lib/stores/viewport.svelte';
+	import { theme } from '$lib/stores/theme.svelte';
 
 	let { children } = $props();
 	let alwaysShowSidebarOnDesktop = $derived(config().alwaysShowSidebarOnDesktop);
@@ -42,8 +43,8 @@
 
 	let chatSidebar:
 		| {
-				activateSearchMode?: () => void;
-				editActiveConversation?: () => void;
+			activateSearchMode?: () => void;
+			editActiveConversation?: () => void;
 		  }
 		| undefined = $state();
 
@@ -52,6 +53,20 @@
 	let titleUpdateNewTitle = $state('');
 	let titleUpdateResolve: ((value: boolean) => void) | null = null;
 	const panelNav = useSettingsNavigation();
+
+	function updateFavicon() {
+		const dark = theme.isSystemDark;
+
+		let icoLink = document.querySelector('link[rel="icon"][sizes="48x48"]') as HTMLLinkElement | null;
+		if (icoLink) {
+			icoLink.href = dark ? '/favicon-dark.ico' : '/favicon.ico';
+		}
+
+		let svgLink = document.querySelector('link[rel="icon"][type="image/svg+xml"]') as HTMLLinkElement | null;
+		if (svgLink) {
+			svgLink.href = dark ? '/favicon-dark.svg' : '/favicon.svg';
+		}
+	}
 
 	function navigateToConversation(direction: -1 | 1) {
 		const allConvs = conversations();
@@ -138,7 +153,14 @@
 	}
 
 	onMount(() => {
+		updateFavicon();
 		mounted = true;
+	});
+
+	$effect(() => {
+		void theme.isSystemDark;
+
+		updateFavicon();
 	});
 
 	$effect(() => {
@@ -236,7 +258,9 @@
 	});
 
 	// Service worker registration and update prompt
-	const { offlineReady, needRefresh, updateServiceWorker } = useRegisterSW({
+	const {
+     	// offlineReady, // to do - add installation banners for iOS
+     	needRefresh, updateServiceWorker } = useRegisterSW({
 		onRegisteredSW(swUrl, r) {
 			if (import.meta.env.DEV) {
 				// In dev mode, periodically check for SW updates
@@ -271,7 +295,7 @@
 		<style use:customCss></style>
 	{/if}
 
-	{#each pwaAssetsHead.links as link}
+	{#each pwaAssetsHead.links as link (link.href)}
 		<link {...link} />
 	{/each}
 
