@@ -756,7 +756,7 @@ extern "C" {
     GGML_API size_t  ggml_element_size(const struct ggml_tensor * tensor);
 
     GGML_API bool    ggml_is_quantized(enum ggml_type type);
-    GGML_API bool    ggml_is_derived_quantized(enum ggml_type type);
+    GGML_API bool    ggml_needs_scale_quantized(enum ggml_type type);
 
     // TODO: temporary until model loading of ggml examples is refactored
     GGML_API enum ggml_type ggml_ftype_to_ggml_type(enum ggml_ftype ftype);
@@ -2818,7 +2818,7 @@ extern "C" {
         int64_t                  blck_size_interleave; // interleave elements in blocks
         size_t                   type_size;
         bool                     is_quantized;
-        bool                     is_derived;
+        bool                     needs_scale; // whether the quantization type needs a scale factor for valid dequantization
         ggml_to_float_t          to_float;
         ggml_from_float_t        from_float_ref;
     };

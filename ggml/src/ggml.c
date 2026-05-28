@@ -746,7 +746,7 @@ static const struct ggml_type_traits type_traits[GGML_TYPE_COUNT] = {
         .blck_size                = QK_NVFP4,
         .type_size                = sizeof(block_nvfp4),
         .is_quantized             = true,
-        .is_derived               = true,
+        .needs_scale              = true,
         .to_float                 = (ggml_to_float_t) dequantize_row_nvfp4,
         .from_float_ref           = (ggml_from_float_t)quantize_row_nvfp4_ref,
     },
@@ -1336,11 +1336,11 @@ bool ggml_is_quantized(enum ggml_type type) {
     return type_traits[type].is_quantized;
 }
 
-bool ggml_is_derived_quantized(enum ggml_type type) {
+bool ggml_needs_scale_quantized(enum ggml_type type) {
     assert(type >= 0);
     assert(type < GGML_TYPE_COUNT);
-    assert(!type_traits[type].is_derived || type_traits[type].is_quantized);
-    return type_traits[type].is_derived;
+    assert(!type_traits[type].needs_scale || type_traits[type].is_quantized);
+    return type_traits[type].needs_scale;
 }
 
 const char * ggml_op_name(enum ggml_op op) {
@@ -3249,7 +3249,7 @@ struct ggml_tensor * ggml_mul_mat(
         struct ggml_context * ctx,
         struct ggml_tensor  * a,
         struct ggml_tensor  * b) {
-    GGML_ASSERT(!ggml_is_derived_quantized(a->type) && !ggml_is_derived_quantized(b->type));
+    GGML_ASSERT(!ggml_needs_scale_quantized(a->type) && !ggml_needs_scale_quantized(b->type));
 
     return ggml_mul_mat_ext(ctx, a, b, NULL, NULL);
 }
@@ -3262,8 +3262,8 @@ struct ggml_tensor * ggml_mul_mat_ext(
         struct ggml_tensor  * scale_activations) {
     GGML_ASSERT(ggml_can_mul_mat(a, b));
     GGML_ASSERT(!ggml_is_transposed(a));
-    GGML_ASSERT(!ggml_is_derived_quantized(a->type) || scale_weight != NULL);
-    GGML_ASSERT(!ggml_is_derived_quantized(b->type));
+    GGML_ASSERT(!ggml_needs_scale_quantized(a->type) || scale_weight != NULL);
+    GGML_ASSERT(!ggml_needs_scale_quantized(b->type));
     GGML_ASSERT(scale_weight == NULL || scale_weight->type == GGML_TYPE_F32);
     GGML_ASSERT(scale_activations == NULL || scale_activations->type == GGML_TYPE_F32);
 
@@ -3333,7 +3333,7 @@ struct ggml_tensor * ggml_mul_mat_id(
         struct ggml_tensor  * as,
         struct ggml_tensor  * b,
         struct ggml_tensor  * ids) {
-    GGML_ASSERT(!ggml_is_derived_quantized(as->type) && !ggml_is_derived_quantized(b->type));
+    GGML_ASSERT(!ggml_needs_scale_quantized(as->type) && !ggml_needs_scale_quantized(b->type));
 
     return ggml_mul_mat_id_ext(ctx, as, b, ids, NULL, NULL);
 }
@@ -3347,8 +3347,8 @@ struct ggml_tensor * ggml_mul_mat_id_ext(
         struct ggml_tensor  * scale_activations) {
     GGML_ASSERT(!ggml_is_transposed(as));
     GGML_ASSERT(ids->type == GGML_TYPE_I32);
-    GGML_ASSERT(!ggml_is_derived_quantized(as->type) || scale_weight != NULL);
-    GGML_ASSERT(!ggml_is_derived_quantized(b->type));
+    GGML_ASSERT(!ggml_needs_scale_quantized(as->type) || scale_weight != NULL);
+    GGML_ASSERT(!ggml_needs_scale_quantized(b->type));
     GGML_ASSERT(scale_weight == NULL || scale_weight->type == GGML_TYPE_F32);
     GGML_ASSERT(scale_activations == NULL || scale_activations->type == GGML_TYPE_F32);
 

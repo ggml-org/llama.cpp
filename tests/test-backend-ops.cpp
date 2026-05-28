@@ -4053,7 +4053,7 @@ struct test_mul_mat : public test_case {
         }
 
         ggml_tensor * scale_weight = nullptr;
-        if (ggml_is_derived_quantized(type_a)) {
+        if (ggml_needs_scale_quantized(type_a)) {
             scale_weight = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 1);
             ggml_set_name(scale_weight, "scale_weight");
         }
@@ -4206,7 +4206,7 @@ struct test_mul_mat_id : public test_case {
         ggml_set_name(b, "b");
 
         ggml_tensor * scale_weight = nullptr;
-        if (ggml_is_derived_quantized(type_a)) {
+        if (ggml_needs_scale_quantized(type_a)) {
             scale_weight = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, n_mats);
             ggml_set_name(scale_weight, "scale_weight");
         }
@@ -5819,7 +5819,7 @@ struct test_mul_mat_vec_fusion : public test_case {
             ggml_tensor * up   = ggml_new_tensor(ctx, type, 4, ne0.data());
 
             ggml_tensor * up_scale = nullptr;
-            if (ggml_is_derived_quantized(type)) {
+            if (ggml_needs_scale_quantized(type)) {
                 up_scale = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 1);
                 ggml_set_name(up_scale, "up_scale");
             }
@@ -5832,7 +5832,7 @@ struct test_mul_mat_vec_fusion : public test_case {
             }
 
             ggml_tensor * gate_scale = nullptr;
-            if (with_gate && ggml_is_derived_quantized(type)) {
+            if (with_gate && ggml_needs_scale_quantized(type)) {
                 gate_scale = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 1);
                 ggml_set_name(gate_scale, "gate_scale");
             }
@@ -5865,7 +5865,7 @@ struct test_mul_mat_vec_fusion : public test_case {
             ggml_set_name(cur, "cur");
 
             ggml_tensor * up_scale = nullptr;
-            if (ggml_is_derived_quantized(type)) {
+            if (ggml_needs_scale_quantized(type)) {
                 up_scale = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, n_mats);
                 ggml_set_name(up_scale, "up_scale");
             }
@@ -5877,7 +5877,7 @@ struct test_mul_mat_vec_fusion : public test_case {
             }
 
             ggml_tensor * gate_scale = nullptr;
-            if (with_gate && ggml_is_derived_quantized(type)) {
+            if (with_gate && ggml_needs_scale_quantized(type)) {
                 gate_scale = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, n_mats);
                 ggml_set_name(gate_scale, "gate_scale");
             }

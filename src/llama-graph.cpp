@@ -1164,9 +1164,9 @@ ggml_tensor * llm_graph_context::build_ffn(
          ggml_tensor * gate_in_s,
          ggml_tensor * down_in_s) const {
     // TODO: Split the shared use of up/gate/down_s (Architecture-specific scaling factors vs. quantization scaling factors for derived quantization types)
-    const bool up_derived   = up   && ggml_is_derived_quantized(up->type);
-    const bool gate_derived = gate && ggml_is_derived_quantized(gate->type);
-    const bool down_derived = down && ggml_is_derived_quantized(down->type);
+    const bool up_derived   = up   && ggml_needs_scale_quantized(up->type);
+    const bool gate_derived = gate && ggml_needs_scale_quantized(gate->type);
+    const bool down_derived = down && ggml_needs_scale_quantized(down->type);
 
     ggml_tensor * tmp = up ? build_lora_mm(up, cur,
             up_derived ? up_s    : nullptr,
