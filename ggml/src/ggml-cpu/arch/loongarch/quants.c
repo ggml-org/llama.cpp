@@ -2273,6 +2273,35 @@ void ggml_vec_dot_iq4_xs_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const v
 
     *s = hsum_float_8(accum);
 
+#elif defined(__loongarch_sx)
+
+    const __m128i values128 = __lsx_vld((const __m128i*)kvalues_iq4nl, 0);
+
+    __m128 accum = (__m128)__lsx_vldi(0);
+    for (int ibl = 0; ibl < nb; ++ibl) {
+        const uint8_t * qs = x[ibl].qs;
+        const int8_t  * q8 = y[ibl].qs;
+        uint16_t sh = x[ibl].scales_h;
+        __m128i sumi = __lsx_vldi(0);
+        for (int ib = 0; ib < QK_K/32; ++ib) {
+            const __m128i q4bits = __lsx_vld((const __m128i*)qs, 0); qs += 16;
+            const __m128i q8b_0 = __lsx_vld((const __m128i*)q8, 0); q8 += 16;
+            const __m128i q8b_1 = __lsx_vld((const __m128i*)q8, 0); q8 += 16;
+            const __m128i q4b_0 = __lsx_vshuf_b(values128, values128, __lsx_vandi_b(q4bits, 0xf));
+            const __m128i q4b_1 = __lsx_vshuf_b(values128, values128, __lsx_vsrli_b(q4bits, 4));
+            const __m128i p16_0 = lsx_maddubs_h(q4b_0, q8b_0);
+            const __m128i p16_1 = lsx_maddubs_h(q4b_1, q8b_1);
+            const int16_t ls = (((x[ibl].scales_l[ib/2] >> ((ib & 1) * 4)) & 0xf) | ((sh & 0x3) << 4)) - 32;
+            sh >>= 2;
+            sumi = __lsx_vadd_w(lsx_madd_h(p16_0, __lsx_vreplgr2vr_h(ls)), sumi);
+            sumi = __lsx_vadd_w(lsx_madd_h(p16_1, __lsx_vreplgr2vr_h(ls)), sumi);
+        }
+        const float ds = GGML_CPU_FP16_TO_FP32(x[ibl].d) * y[ibl].d;
+        accum = __lsx_vfadd_s(__lsx_vfmul_s(__lsx_vreplfr2vr_s(ds), __lsx_vffint_s_w(sumi)), accum);
+    }
+
+    *s = ((v4f32)lsx_hadd_s(lsx_hadd_s(accum, accum), lsx_hadd_s(accum, accum)))[0];
+
 #else
     UNUSED(x);
     UNUSED(y);
