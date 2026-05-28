@@ -195,7 +195,7 @@ struct clip_graph_kimik25 : clip_graph {
 struct clip_graph_granite4_vision : clip_graph {
     clip_graph_granite4_vision(clip_ctx * ctx, const clip_image_f32 & img)
         : clip_graph(ctx, img),
-          append_token_type((clip_image_f32::clip_append_token_type)img.append_token) {}
+          append_token(img.append_token) {}
 
     ggml_cgraph * build() override;
 
@@ -203,7 +203,7 @@ private:
     // The graph is per-tile since only batch-size 1 is supported in clip. As
     // such, this value is set at construct time based on the tile that will be
     // encoded, then used during build to determine how to handle newlines.
-    clip_image_f32::clip_append_token_type append_token_type;
+    const bool append_token;
 
     ggml_tensor * build_newline_row(ggml_context * ctx0);
     ggml_tensor * append_rowwise_newlines(ggml_context * ctx0, ggml_tensor * tile_output);

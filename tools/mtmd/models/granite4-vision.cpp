@@ -344,7 +344,7 @@ ggml_cgraph * clip_graph_granite4_vision::build() {
     }
 
     // --- Stage 1d: Append newline tokens if append_token is set ---
-    if (append_token_type == clip_image_f32::CLIP_APPEND_TOKEN_NEWLINE_ROWWISE) {
+    if (append_token) {
         mmproj = append_rowwise_newlines(ctx0, mmproj);
         ggml_set_name(mmproj, "g4v_mmproj_out_nl");
     } else {

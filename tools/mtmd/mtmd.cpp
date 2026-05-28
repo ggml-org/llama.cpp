@@ -800,15 +800,12 @@ struct mtmd_tokenizer {
             if (ctx->proj_type_v() == PROJECTOR_TYPE_GRANITE4_VISION) {
                 if (batch_f32.entries.size() == 1) {
                     // Single-tile (overview only): append one newline row.
-                    clip_image_set_append_token(batch_f32.entries[0].get(),
-                        clip_image_f32::CLIP_APPEND_TOKEN_NEWLINE_ROWWISE);
+                    batch_f32.entries[0]->append_token = true;
                 } else {
                     // Multi-tile: overview gets no newline, grid tiles get one.
-                    clip_image_set_append_token(batch_f32.entries[0].get(),
-                        clip_image_f32::CLIP_APPEND_TOKEN_NONE);
+                    batch_f32.entries[0]->append_token = false;
                     for (size_t i = 1; i < batch_f32.entries.size(); ++i) {
-                        clip_image_set_append_token(batch_f32.entries[i].get(),
-                            clip_image_f32::CLIP_APPEND_TOKEN_NEWLINE_ROWWISE);
+                        batch_f32.entries[i]->append_token = true;
                     }
                 }
             }

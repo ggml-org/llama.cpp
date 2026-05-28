@@ -3046,11 +3046,6 @@ void clip_image_size_free(struct clip_image_size * load_image_size) {
 }
 void clip_image_u8_free(struct clip_image_u8  * img) { delete img; }
 void clip_image_f32_free(struct clip_image_f32 * img) { delete img; }
-void clip_image_set_append_token(struct clip_image_f32 * img, int token_type) {
-    if (img) {
-        img->append_token = (clip_image_f32::clip_append_token_type)token_type;
-    }
-}
 void clip_image_u8_batch_free(struct clip_image_u8_batch * batch) { delete batch; }
 void clip_image_f32_batch_free(struct clip_image_f32_batch * batch) { delete batch; }
 
@@ -3392,7 +3387,7 @@ int clip_n_output_tokens(const struct clip_ctx * ctx, struct clip_image_f32 * im
                 n_patches             = (query_side * n) * (query_side * n);
 
                 // Add newline tokens based on append_token field.
-                if (img->append_token == clip_image_f32::CLIP_APPEND_TOKEN_NEWLINE_ROWWISE) {
+                if (img->append_token) {
                     // For single-tile case: append 1 newline row.
                     // For multi-tile rowwise: handled by caller, but here we
                     // report the per-tile count including one trailing newline.
