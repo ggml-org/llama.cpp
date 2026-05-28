@@ -72,19 +72,79 @@ scp_wait(volatile uint32_t *flag, uint32_t expected) {
 //   Low  nibble of byte i -> k = i
 //   High nibble of byte i -> k = i + 16
 //   value = d * (nibble - 8)
+//
+// Vectorized: for each weight row m we gather 8 packed bytes at a time, expand
+// the low/high nibbles to FP32 (nibble-8), scale by the block's fp16 d, and
+// fscw.ps-scatter the 8 values down 8 panel lines (stride 64B) at column m.
+// 4 groups of 8 cover the 32 k-values (low 0..15, high 16..31).
 static inline void __attribute__((always_inline))
 dequant_q4_0_panel(float *panel, const char *src0_batch,
                    int64_t mb, int64_t kb_block, int64_t nb1_0) {
+    static const int32_t __attribute__((aligned(32))) scatter_idx[8] = {
+        0, 64, 128, 192, 256, 320, 384, 448   // byte offsets: 8 lines apart
+    };
+    static const int32_t __attribute__((aligned(32))) gather_idx[8] = {
+        0, 1, 2, 3, 4, 5, 6, 7                 // 8 consecutive bytes
+    };
+
+    unsigned long old_mask;
+    __asm__ volatile(
+        "mova.x.m  %[ms]            \n\t"
+        "mov.m.x   m0, x0, 0xFF     \n\t"   // all 8 lanes active
+        "flw.ps    f1, (%[sidx])    \n\t"   // f1 = scatter offsets
+        "flw.ps    f2, (%[gidx])    \n\t"   // f2 = gather offsets
+        : [ms] "=&r"(old_mask)
+        : [sidx] "r"(scatter_idx), [gidx] "r"(gather_idx)
+        : "f1", "f2"
+    );
+
+    char *pbase = (char *) panel;
     for (int j = 0; j < TILE_M; ++j) {
         const block_q4_0 *blk =
             (const block_q4_0 *)(src0_batch + (mb + j) * nb1_0) + kb_block;
-        const float d = fp16_to_fp32(blk->d);
-        for (int i = 0; i < QK4_0 / 2; ++i) {       // 16 packed bytes
-            const uint8_t b = blk->qs[i];
-            panel[(i)      * TILE_M + j] = d * (float)((int)(b & 0xF) - 8);
-            panel[(i + 16) * TILE_M + j] = d * (float)((int)(b >> 4)  - 8);
-        }
+        uint32_t scale_raw = (uint32_t) blk->d;
+        const uint8_t *qs = blk->qs;
+        char *col = pbase + j * 4;           // column m=j of the panel
+
+        __asm__ volatile(
+            "fbcx.ps     f3, %[sb]      \n\t"   // broadcast fp16 scale bits
+            "fcvt.ps.f16 f3, f3         \n\t"   // -> d in all 8 lanes (fp32)
+
+            "fgb.ps      f4, f2(%[qs0]) \n\t"   // gather qs[0..7]
+            "fandi.pi    f5, f4, 15     \n\t"   // low nibble
+            "faddi.pi    f5, f5, -8     \n\t"
+            "fcvt.ps.pw  f5, f5, rne    \n\t"
+            "fmul.ps     f5, f5, f3     \n\t"
+            "fscw.ps     f5, f1(%[c0])  \n\t"   // k=0..7   -> lines 0..7
+            "fsrli.pi    f6, f4, 4      \n\t"   // high nibble
+            "fandi.pi    f6, f6, 15     \n\t"
+            "faddi.pi    f6, f6, -8     \n\t"
+            "fcvt.ps.pw  f6, f6, rne    \n\t"
+            "fmul.ps     f6, f6, f3     \n\t"
+            "fscw.ps     f6, f1(%[c16]) \n\t"   // k=16..23 -> lines 16..23
+
+            "fgb.ps      f4, f2(%[qs8]) \n\t"   // gather qs[8..15]
+            "fandi.pi    f5, f4, 15     \n\t"
+            "faddi.pi    f5, f5, -8     \n\t"
+            "fcvt.ps.pw  f5, f5, rne    \n\t"
+            "fmul.ps     f5, f5, f3     \n\t"
+            "fscw.ps     f5, f1(%[c8])  \n\t"   // k=8..15  -> lines 8..15
+            "fsrli.pi    f6, f4, 4      \n\t"
+            "fandi.pi    f6, f6, 15     \n\t"
+            "faddi.pi    f6, f6, -8     \n\t"
+            "fcvt.ps.pw  f6, f6, rne    \n\t"
+            "fmul.ps     f6, f6, f3     \n\t"
+            "fscw.ps     f6, f1(%[c24]) \n\t"   // k=24..31 -> lines 24..31
+            :
+            : [sb] "r"(scale_raw),
+              [qs0] "r"(qs), [qs8] "r"(qs + 8),
+              [c0] "r"(col), [c8] "r"(col + 8 * 64),
+              [c16] "r"(col + 16 * 64), [c24] "r"(col + 24 * 64)
+            : "f3", "f4", "f5", "f6", "memory"
+        );
     }
+
+    __asm__ volatile("mova.m.x %0" :: "r"(old_mask));
 }
 
 int entry_point(struct ggml_et_binary_params *params, void *env) {
