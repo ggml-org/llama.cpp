@@ -396,7 +396,7 @@ void llm_graph_input_attn_no_cache::set_input(const llama_ubatch * ubatch) {
     const int64_t n_kv     = ubatch->n_tokens;
     const int64_t n_tokens = ubatch->n_tokens;
 
-    const auto fill_mask = [&](auto * data, int n_swa, llama_swa_type swa_type) {
+    const auto fill_mask_inner = [&](auto * data, int n_swa, llama_swa_type swa_type) {
         using T = std::remove_reference_t<decltype(*data)>;
         for (int i1 = 0; i1 < n_tokens; ++i1) {
             const llama_seq_id s1 = ubatch->seq_id[i1][0];
@@ -423,21 +423,21 @@ void llm_graph_input_attn_no_cache::set_input(const llama_ubatch * ubatch) {
                     continue;
                 }
 
-                data[idst + i0] = llama_mask_value<T>(hparams.use_alibi ? -std::abs(p0 - p1) : 0.0f);
+                data[idst + i0] = llama_cast<T>(hparams.use_alibi ? -std::abs(p0 - p1) : 0.0f);
             }
         }
     };
 
-    const auto fill = [&](ggml_tensor * mask, int n_swa, llama_swa_type swa_type) {
+    const auto fill_mask = [&](ggml_tensor * mask, int n_swa, llama_swa_type swa_type) {
         GGML_ASSERT(mask);
         GGML_ASSERT(ggml_backend_buffer_is_host(mask->buffer));
 
         if (mask->type == GGML_TYPE_F16) {
             ggml_fp16_t * data = (ggml_fp16_t *) mask->data;
 
-            std::fill(data, data + ggml_nelements(mask), llama_mask_value<ggml_fp16_t>(-INFINITY));
+            std::fill(data, data + ggml_nelements(mask), llama_cast<ggml_fp16_t>(-INFINITY));
 
-            fill_mask(data, n_swa, swa_type);
+            fill_mask_inner(data, n_swa, swa_type);
 
             if (debug) {
                 print_mask(data, n_tokens, n_kv, n_swa, swa_type);
@@ -447,7 +447,7 @@ void llm_graph_input_attn_no_cache::set_input(const llama_ubatch * ubatch) {
 
             std::fill(data, data + ggml_nelements(mask), -INFINITY);
 
-            fill_mask(data, n_swa, swa_type);
+            fill_mask_inner(data, n_swa, swa_type);
 
             if (debug) {
                 print_mask(data, n_tokens, n_kv, n_swa, swa_type);
@@ -455,10 +455,10 @@ void llm_graph_input_attn_no_cache::set_input(const llama_ubatch * ubatch) {
         }
     };
 
-    fill(self_kq_mask, 0, LLAMA_SWA_TYPE_NONE);
+    fill_mask(self_kq_mask, 0, LLAMA_SWA_TYPE_NONE);
 
     if (hparams.swa_type != LLAMA_SWA_TYPE_NONE) {
-        fill(self_kq_mask_swa, hparams.n_swa, hparams.swa_type);
+        fill_mask(self_kq_mask_swa, hparams.n_swa, hparams.swa_type);
     }
 }
 
@@ -596,7 +596,7 @@ void llm_graph_input_attn_cross::set_input(const llama_ubatch * ubatch) {
                     }
                 }
 
-                data[i*n_enc + j] = llama_mask_value<T>(f);
+                data[i*n_enc + j] = llama_cast<T>(f);
             }
         }
     };
@@ -2109,16 +2109,16 @@ llm_graph_input_attn_no_cache * llm_graph_context::build_attn_inp_no_cache() con
     auto inp = std::make_unique<llm_graph_input_attn_no_cache>(hparams, cparams);
 
     // flash attention requires an f16 mask
-    const auto type = cparams.flash_attn ? GGML_TYPE_F16 : GGML_TYPE_F32;
+    const auto type_mask = cparams.flash_attn ? GGML_TYPE_F16 : GGML_TYPE_F32;
 
     // note: there is no KV cache, so the number of KV values is equal to the number of tokens in the batch
-    inp->self_kq_mask = ggml_new_tensor_4d(ctx0, type, n_tokens, n_tokens, 1, 1);
+    inp->self_kq_mask = ggml_new_tensor_4d(ctx0, type_mask, n_tokens, n_tokens, 1, 1);
     ggml_set_input(inp->self_kq_mask);
 
     inp->self_kq_mask_cnv = inp->self_kq_mask;
 
     if (hparams.swa_type != LLAMA_SWA_TYPE_NONE) {
-        inp->self_kq_mask_swa = ggml_new_tensor_4d(ctx0, type, n_tokens, n_tokens, 1, 1);
+        inp->self_kq_mask_swa = ggml_new_tensor_4d(ctx0, type_mask, n_tokens, n_tokens, 1, 1);
         ggml_set_input(inp->self_kq_mask_swa);
 
         inp->self_kq_mask_swa_cnv = inp->self_kq_mask_swa;

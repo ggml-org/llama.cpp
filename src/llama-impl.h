@@ -41,13 +41,14 @@ struct no_init {
     no_init() = default;
 };
 
-// store an f32 mask value into a buffer that is either f32 or f16
-template <typename T>
-static inline T llama_mask_value(float v) {
-    if constexpr (std::is_same_v<T, ggml_fp16_t>) {
-        return ggml_fp32_to_fp16(v);
-    } else {
+template <typename dst_t, typename src_t>
+static inline dst_t llama_cast(src_t v) {
+    if constexpr (std::is_same_v<src_t, dst_t>) {
         return v;
+    } else if (std::is_same_v<src_t, ggml_fp16_t> && std::is_same_v<dst_t, float>) {
+        return ggml_fp16_to_fp32(v);
+    } else if (std::is_same_v<src_t, float> && std::is_same_v<dst_t, ggml_fp16_t>) {
+        return ggml_fp32_to_fp16(v);
     }
 }
 
