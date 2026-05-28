@@ -45,6 +45,7 @@ namespace syclexp = sycl::ext::oneapi::experimental;
 #define GGML_COMMON_IMPL_SYCL
 #define SYCL_FLASH_ATTN //remove it to disable FLASH_ATTENTION in building.
 #define SYCL_FAST_FP16  //don't change. remove it will break fattn-tile.hpp building
+#define GGML_SYCL_FA_ALL_QUANTS //define it to enable all quantization types in flash attention. undefine it to only support F16, Q4_0 and Q8_0 in flash attention.
 
 /* suppress warning spam */
 #pragma clang diagnostic push
