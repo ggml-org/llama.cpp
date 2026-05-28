@@ -2666,9 +2666,43 @@ static ggml_status ggml_backend_opencl_graph_compute(ggml_backend_t backend, ggm
     return GGML_STATUS_SUCCESS;
 }
 
+static bool ggml_opencl_is_ifairy_type(enum ggml_type type) {
+    return type == GGML_TYPE_IFAIRY || type == GGML_TYPE_IFAIRY_Q16 || type == GGML_TYPE_IFAIRY64;
+}
+
+static bool ggml_opencl_is_ifairy_op(const struct ggml_tensor * op) {
+    switch (op->op) {
+        case GGML_OP_IFAIRY_ROPE:
+        case GGML_OP_IFAIRY_SPLIT:
+        case GGML_OP_IFAIRY_MERGE:
+        case GGML_OP_IFAIRY_ADD:
+        case GGML_OP_IFAIRY_RMSNORM:
+        case GGML_OP_IFAIRY_MUL:
+            return true;
+        case GGML_OP_UNARY:
+            return ggml_get_unary_op(op) == GGML_UNARY_OP_IFAIRY_RELU2;
+        case GGML_OP_MUL_MAT:
+        case GGML_OP_MUL_MAT_ID:
+            return op->src[0] != nullptr && ggml_opencl_is_ifairy_type(op->src[0]->type);
+        default:
+            return false;
+    }
+}
+
+static bool ggml_opencl_supports_ifairy_op(const struct ggml_tensor * op) {
+    // IFAIRY64/OpenCL kernels are not implemented yet. Returning false keeps
+    // these nodes on the CPU backend through the normal ggml scheduler fallback.
+    GGML_UNUSED(op);
+    return false;
+}
+
 static bool ggml_opencl_supports_op(ggml_backend_dev_t dev, const struct ggml_tensor * op) {
     ggml_backend_opencl_device_context * dev_ctx     = (ggml_backend_opencl_device_context *)dev->context;
     ggml_backend_opencl_context *        backend_ctx = dev_ctx->backend_ctx;
+
+    if (ggml_opencl_is_ifairy_op(op)) {
+        return ggml_opencl_supports_ifairy_op(op);
+    }
 
     switch (op->op) {
         case GGML_OP_NONE:
@@ -3979,7 +4013,8 @@ static bool ggml_cl_can_mul_mat(const struct ggml_tensor * src0, const struct gg
     const int64_t ne1 = dst->ne[1];
 
     // TODO: find the optimal values for these
-    return (src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16 || ggml_is_quantized(src0->type)) &&
+    return (src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16 ||
+            (ggml_is_quantized(src0->type) && !ggml_opencl_is_ifairy_type(src0->type))) &&
             src1->type == GGML_TYPE_F32 &&
              dst->type == GGML_TYPE_F32 &&
             (ne0 >= 32 && ne1 >= 32 && ne10 >= 32);
@@ -8128,6 +8163,10 @@ bool ggml_cl_compute_forward(ggml_backend_t backend, struct ggml_tensor * tensor
     const bool any_on_device = tensor->extra
         || (src0 != nullptr && src0->extra)
         || (src1 != nullptr && src1->extra);
+
+    if (ggml_opencl_is_ifairy_op(tensor)) {
+        return false;
+    }
 
     switch (tensor->op) {
         case GGML_OP_GET_ROWS:
