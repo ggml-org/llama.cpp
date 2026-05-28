@@ -977,6 +977,37 @@ void ggml_vec_dot_q8_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const voi
     sumf = hsum_float_8(acc);
 
     *s = sumf;
+
+#elif defined(__loongarch_sx)
+
+    __m128 acc = (__m128)__lsx_vldi(0);
+
+    for (; ib < nb; ++ib) {
+        const float d = GGML_CPU_FP16_TO_FP32(x[ib].d) * GGML_CPU_FP16_TO_FP32(y[ib].d);
+        const __m128i qx_0 = __lsx_vld((const __m128i *)x[ib].qs, 0);
+        const __m128i qx_1 = __lsx_vld((const __m128i *)x[ib].qs + 1, 0);
+        const __m128i qy_0 = __lsx_vld((const __m128i *)y[ib].qs, 0);
+        const __m128i qy_1 = __lsx_vld((const __m128i *)y[ib].qs + 1, 0);
+
+        const __m128i p16_0 = lsx_maddubs_h(qx_0, qy_0);
+        const __m128i p16_1 = lsx_maddubs_h(qx_1, qy_1);
+
+        // Sum int16 pairs → int32
+        const __m128i v_0 = __lsx_vpackod_h(p16_0, p16_0);
+        const __m128i v_1 = __lsx_vpackod_h(p16_1, p16_1);
+        const __m128i s_0 = __lsx_vaddwev_w_h(p16_0, v_0);
+        const __m128i s_1 = __lsx_vaddwev_w_h(p16_1, v_1);
+
+        const __m128 q = __lsx_vffint_s_w(__lsx_vadd_w(s_0, s_1));
+        acc = __lsx_vfmadd_s(__lsx_vreplfr2vr_s(d), q, acc);
+    }
+
+    __m128 res = lsx_hadd_s(acc, acc);
+    res = lsx_hadd_s(res, res);
+    sumf = ((v4f32)res)[0];
+
+    *s = sumf;
+
 #else
     UNUSED(nb);
     UNUSED(ib);
