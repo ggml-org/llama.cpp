@@ -52,14 +52,6 @@ jobs:
         id: checkout
         uses: actions/checkout@v6
 
-      - name: ccache
-        uses: ggml-org/ccache-action@v1.2.21
-        with:
-          key: vulkan-${{ matrix.os }}
-          variant: ccache
-          evict-old-files: 1d
-          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
-
       - name: Dependencies
         id: depends
         run: |
@@ -68,14 +60,20 @@ jobs:
           echo "CC=gcc-14" >> "$GITHUB_ENV"
           echo "CXX=g++-14" >> "$GITHUB_ENV"
 
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.21
+        with:
+          key: vulkan-${{ matrix.os }}-new
+          variant: ccache
+          evict-old-files: 1d
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+
       - name: Configure
         id: cmake_configure
         run: |
           cmake -B build \
             -G "Ninja" \
-            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-            -DGGML_BACKEND_DL=ON \
-            -DGGML_CPU_ALL_VARIANTS=ON \
+            -DCMAKE_BUILD_TYPE=Release \
             -DGGML_VULKAN=ON
 
       - name: Build
@@ -90,13 +88,6 @@ jobs:
       - name: Clone
         id: checkout
         uses: actions/checkout@v6
-
-      - name: ccache
-        uses: ggml-org/ccache-action@v1.2.21
-        with:
-          key: vulkan-ubuntu-24.04-llvmpipe
-          evict-old-files: 1d
-          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
       - name: Dependencies
         id: depends
@@ -123,6 +114,13 @@ jobs:
         with:
           path: ./vulkan_sdk
           version: ${{ env.VULKAN_SDK_VERSION }}
+
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.21
+        with:
+          key: vulkan-ubuntu-24.04-llvmpipe
+          evict-old-files: 1d
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
       - name: Build
         id: cmake_build
