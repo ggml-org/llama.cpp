@@ -236,7 +236,18 @@ common_peg_parser common_chat_peg_builder::tag_with_safe_content(const std::stri
 }
 
 std::string & common_chat_peg_mapper::args_target() {
-    return (current_tool && !current_tool->name.empty()) ? current_tool->arguments : args_buffer;
+    common_chat_tool_call * tool = active_tool();
+    return (tool && !tool->name.empty()) ? tool->arguments : args_buffer;
+}
+
+common_chat_tool_call * common_chat_peg_mapper::active_tool() {
+    if (committed_tool_idx.has_value()) {
+        return &result.tool_calls.at(committed_tool_idx.value());
+    }
+    if (pending_tool_call.has_value()) {
+        return &pending_tool_call.value();
+    }
+    return nullptr;
 }
 
 std::string common_chat_peg_mapper::normalize_container_value(const std::string & input) {
@@ -303,11 +314,13 @@ void common_chat_peg_mapper::map(const common_peg_ast_node & node) {
 
     if (is_tool_open) {
         pending_tool_call     = common_chat_tool_call();
-        current_tool          = &pending_tool_call.value();
+        committed_tool_idx.reset();
         arg_count             = 0;
         args_buffer.clear();
         closing_quote_pending = false;
     }
+
+    common_chat_tool_call * current_tool = active_tool();
 
     if (is_tool_id && current_tool) {
         auto text = trim_trailing_space(node.text);
@@ -329,10 +342,12 @@ void common_chat_peg_mapper::map(const common_peg_ast_node & node) {
         // Add the tool call to results so streaming can see it
         if (pending_tool_call.has_value()) {
             result.tool_calls.push_back(pending_tool_call.value());
+            committed_tool_idx = result.tool_calls.size() - 1;
             pending_tool_call.reset();
-            current_tool = &result.tool_calls.back();
         }
     }
+
+    current_tool = active_tool();
 
     if (is_tool_args && current_tool) {
         // For JSON format: arguments come as a complete JSON object
@@ -346,6 +361,8 @@ void common_chat_peg_mapper::map(const common_peg_ast_node & node) {
     if (is_arg_open) {
         closing_quote_pending = false;
     }
+
+    current_tool = active_tool();
 
     if (is_arg_name && current_tool) {
         std::string arg_entry;
@@ -414,6 +431,7 @@ void common_chat_peg_mapper::map(const common_peg_ast_node & node) {
             }
             pending_tool_call.reset();
         }
+        committed_tool_idx.reset();
     }
 }
 
@@ -1055,4 +1073,70 @@ void common_chat_peg_gemma4_mapper::visit(const common_peg_ast_arena & arena, co
     for (auto child_id : node.children) {
         visit(arena, child_id);
     }
+}
+
+common_peg_parser common_chat_peg_builder::minicpm5_xml_tool_calls(const ordered_json & tools,
+                                                                     bool                 parallel_tool_calls) {
+    if (!tools.is_array() || tools.empty()) {
+        return eps();
+    }
+
+    static const std::vector<std::string> PARAM_VALUE_STOP = {
+        "</param>",
+        " name=\"",
+        "</function>",
+        "<function",
+        "<param",
+    };
+
+    auto func_name_prefix = optional(literal("<function")) + literal(" name=\"");
+    auto param_name_prefix = optional(literal("<param")) + literal(" name=\"");
+
+    auto arg_value = choice({
+        literal("<![CDATA[") + until("]]>") + literal("]]>"),
+        until_one_of(PARAM_VALUE_STOP),
+    });
+
+    auto tool_choices = choice();
+
+    for (const auto & tool_def : tools) {
+        if (!tool_def.contains("function")) {
+            continue;
+        }
+        const auto & function = tool_def.at("function");
+        const std::string name = function.at("name");
+        ordered_json params = function.contains("parameters") ? function.at("parameters") : ordered_json::object();
+
+        auto args = eps();
+        if (params.contains("properties") && params.at("properties").is_object() &&
+            !params.at("properties").empty()) {
+            auto arg_choice = choice();
+            for (const auto & el : params.at("properties").items()) {
+                const std::string & prop_name = el.key();
+                const std::string & prop_type = el.value().value("type", "string");
+
+                auto value_parser = prop_type == "string" ? tool_arg_string_value(arg_value) : tool_arg_value(arg_value);
+
+                auto arg_rule = tool_arg(
+                    tool_arg_open(param_name_prefix + tool_arg_name(literal(prop_name)) + literal("\">")) +
+                    value_parser +
+                    tool_arg_close(optional(literal("</param>")) + space()));
+
+                arg_choice |= arg_rule;
+            }
+            args = zero_or_more(arg_choice + space());
+        }
+
+        auto tool_parser = tool(
+            tool_open(func_name_prefix + tool_name(literal(name)) + literal("\">")) + space() + tool_args(args) +
+            space() + tool_close(optional(literal("</function>"))));
+
+        tool_choices |= rule("tool-" + name, tool_parser);
+    }
+
+    if (parallel_tool_calls) {
+        return trigger_rule("tool-calls", one_or_more(tool_choices + space()));
+    }
+
+    return trigger_rule("tool-call", tool_choices);
 }

@@ -981,3 +981,4 @@ static void test_tagged_peg_parser(testing & t) {
         t.assert_equal("fun_post should be '>'", ">", result.tags["fun_post"]);
     });
 }
+
