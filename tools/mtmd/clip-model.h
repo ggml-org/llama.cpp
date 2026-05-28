@@ -4,6 +4,7 @@
 #include "clip.h"
 #include "clip-impl.h"
 
+#include <algorithm>
 #include <array>
 #include <vector>
 #include <unordered_set>
@@ -162,6 +163,10 @@ struct clip_hparams {
         }
 
         return false;
+    }
+
+    bool is_vision_feature_layer(int32_t layer) const {
+        return std::find(vision_feature_layer.begin(), vision_feature_layer.end(), layer) != vision_feature_layer.end();
     }
 };
 
