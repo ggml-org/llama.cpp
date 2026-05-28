@@ -318,10 +318,17 @@ bool server_http_context::init(const common_params & params) {
         } else {
 #if defined(LLAMA_UI_HAS_ASSETS)
             auto serve_asset = [](const std::string & name, const char * mime, bool with_isolation_headers) {
-                return [name, mime, with_isolation_headers](const httplib::Request & /*req*/, httplib::Response & res) {
+                return [name, mime, with_isolation_headers](const httplib::Request & req, httplib::Response & res) {
                     const llama_ui_asset * a = llama_ui_find_asset(name.c_str());
                     if (!a) {
                         res.status = 404;
+                        return false;
+                    }
+                    res.set_header("ETag", a->etag);
+                    // Check If-None-Match for conditional GET (304 Not Modified)
+                    if (const std::string & inm = req.get_header_value("If-None-Match");
+                        !inm.empty() && inm == a->etag) {
+                        res.status = 304;
                         return false;
                     }
                     if (with_isolation_headers) {
