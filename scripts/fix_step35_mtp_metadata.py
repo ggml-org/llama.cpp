@@ -98,8 +98,10 @@ def make_extended_value(
 
 def _bool(s: str) -> bool:
     t = s.strip().lower()
-    if t in ("1", "true", "yes", "y"):  return True
-    if t in ("0", "false", "no", "n"):  return False
+    if t in ("1", "true", "yes", "y"):
+        return True
+    if t in ("0", "false", "no", "n"):
+        return False
     raise argparse.ArgumentTypeError(f"expected boolean, got {s!r}")
 
 
