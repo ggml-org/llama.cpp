@@ -531,7 +531,7 @@ void llama_context::sched_reserve() {
             // note: n_outputs must match n_tokens for embedding models with mean/rank pooling,
             // because build_pooling creates inp_mean with shape [n_tokens, n_seqs] and multiplies
             // it with t_embd which is reduced to [n_outputs, ...] via out_ids. if n_outputs != n_tokens,
-            // the ggml_mul_mat assertion fails. this matches the pp reservation below (line ~553).
+            // the ggml_mul_mat assertion fails.
             const uint32_t n_tokens_ch = 16*n_seqs;
             auto * gf = graph_reserve(n_tokens_ch, n_seqs, n_tokens_ch, mctx.get(), true);
             if (!gf) {
@@ -577,16 +577,19 @@ void llama_context::sched_reserve() {
     int n_splits_tg = -1;
     int n_nodes_tg  = -1;
 
+    const bool     reserve_all_outputs = cparams.embeddings || cparams.pooling_type != LLAMA_POOLING_TYPE_NONE;
+    const uint32_t n_outputs_pp        = reserve_all_outputs ? n_tokens : n_seqs;
+
     // reserve pp (prompt processing) graph first so that buffers are only allocated once
     {
-        auto * gf = graph_reserve(n_tokens, n_seqs, n_tokens, mctx.get(),
+        auto * gf = graph_reserve(n_tokens, n_seqs, n_outputs_pp, mctx.get(),
                 model.hparams.no_alloc, model.hparams.no_alloc ? backend_buf_exp_size.data() : nullptr);
         if (!gf) {
             if (cparams.pipeline_parallel) {
                 LLAMA_LOG_WARN("%s: compute buffer allocation failed, retrying without pipeline parallelism\n", __func__);
                 cparams.pipeline_parallel = false;
                 sched.reset(ggml_backend_sched_new(backend_ptrs.data(), backend_buft.data(), backend_ptrs.size(), max_nodes, false, cparams.op_offload));
-                gf = graph_reserve(n_tokens, n_seqs, n_tokens, mctx.get());
+                gf = graph_reserve(n_tokens, n_seqs, n_outputs_pp, mctx.get());
             }
             if (!gf) {
                 throw std::runtime_error("failed to allocate compute pp buffers");
@@ -614,7 +617,7 @@ void llama_context::sched_reserve() {
         //
         // auto * gf = graph_reserve(n_tokens, 1, n_tokens, mctx.get());
         //
-        auto * gf = graph_reserve(n_tokens, n_seqs, n_tokens, mctx.get(), model.hparams.no_alloc);
+        auto * gf = graph_reserve(n_tokens, n_seqs, n_outputs_pp, mctx.get(), model.hparams.no_alloc);
         if (!gf) {
             throw std::runtime_error("failed to allocate compute pp buffers");
         }
@@ -774,7 +777,10 @@ bool llama_context::memory_update(bool optimize) {
         const uint32_t n_seqs = cparams.n_seq_max;
         const uint32_t n_tokens = std::min(cparams.n_ctx, cparams.n_ubatch);
 
-        auto * gf = graph_reserve(n_tokens, n_seqs, n_tokens, mctx.get());
+        const bool     reserve_all_outputs = cparams.embeddings || cparams.pooling_type != LLAMA_POOLING_TYPE_NONE;
+        const uint32_t n_outputs_pp        = reserve_all_outputs ? n_tokens : n_seqs;
+
+        auto * gf = graph_reserve(n_tokens, n_seqs, n_outputs_pp, mctx.get());
         if (!gf) {
             LLAMA_LOG_ERROR("%s: failed to reserve graph after the memory update\n", __func__);
         }
