@@ -1,12 +1,14 @@
 <script lang="ts">
 	import { Wrench, Loader2, Brain } from '@lucide/svelte';
 	import {
+		ChatMessageAgenticQuestionAnswer,
 		ChatMessageStatistics,
 		CollapsibleContentBlock,
 		MarkdownContent,
 		SyntaxHighlightedCode,
 		ChatMessageActionCardPermissionRequest,
-		ChatMessageActionCardContinueRequest
+		ChatMessageActionCardContinueRequest,
+		ChatMessageActionCardQuestionRequest
 	} from '$lib/components/app';
 
 	import {
@@ -15,6 +17,7 @@
 		FileTypeText,
 		ToolPermissionDecision
 	} from '$lib/enums';
+
 	import type {
 		ChatMessageAgenticTimings,
 		ChatMessageAgenticTurnStats,
@@ -23,6 +26,7 @@
 	import {
 		deriveAgenticSections,
 		formatJsonPretty,
+		parseQuestionToolResult,
 		parseToolResultWithImages,
 		type AgenticSection,
 		type ToolResultLine
@@ -31,8 +35,10 @@
 		agenticPendingPermissionRequest,
 		agenticResolvePermission,
 		agenticPendingContinueRequest,
-		agenticResolveContinue
+		agenticResolveContinue,
+		agenticPendingBuiltinQuestion
 	} from '$lib/stores/agentic.svelte';
+	import { chatStore } from '$lib/stores/chat.svelte';
 	import { config } from '$lib/stores/settings.svelte';
 
 	interface Props {
@@ -99,12 +105,42 @@
 		agenticResolveContinue(message.convId, shouldContinue);
 	}
 
+	let questionDismissed = $state(false);
+
+	const pendingQuestion = $derived(
+		isLastAssistantMessage ? agenticPendingBuiltinQuestion(message.convId) : null
+	);
+
+	let prevQuestionRef: typeof pendingQuestion = null;
+	$effect(() => {
+		if (pendingQuestion !== prevQuestionRef) {
+			prevQuestionRef = pendingQuestion;
+			if (pendingQuestion) {
+				questionDismissed = false;
+			}
+		}
+	});
+
+	async function handleQuestion(answers: string[][]) {
+		questionDismissed = true;
+		await chatStore.answerBuiltinQuestion(message.convId, answers);
+	}
+
+	async function handleQuestionDismiss() {
+		questionDismissed = true;
+		await chatStore.answerBuiltinQuestion(message.convId, [], { rejected: true });
+	}
+
 	const sections = $derived(deriveAgenticSections(message, toolMessages, [], isStreaming));
 
 	// Parse tool results with images
 	const sectionsParsed = $derived(
 		sections.map((section) => ({
 			...section,
+			questionAnswerPairs:
+				section.toolName === 'question' && section.toolResult
+					? parseQuestionToolResult(section.toolResult)
+					: [],
 			parsedLines: section.toolResult
 				? parseToolResultWithImages(section.toolResult, section.toolResultExtras || message?.extra)
 				: ([] as ToolResultLine[])
@@ -235,6 +271,9 @@
 		{@const isPending = section.type === AgenticSectionType.TOOL_CALL_PENDING}
 		{@const toolIcon = isPending ? Loader2 : Wrench}
 		{@const toolIconClass = isPending ? 'h-4 w-4 animate-spin' : 'h-4 w-4'}
+		{@const questionAnswerPairs = section.questionAnswerPairs}
+		{@const showQuestionBlock = !isPending && questionAnswerPairs.length > 0}
+		{@const hideInlineResult = showQuestionBlock}
 
 		<CollapsibleContentBlock
 			open={isExpanded(index, section)}
@@ -259,39 +298,47 @@
 				</div>
 			{/if}
 
-			<div class="pt-3">
-				<div class="my-3 flex items-center gap-2 text-xs text-muted-foreground">
-					<span>Result:</span>
+			{#if !hideInlineResult}
+				<div class="pt-3">
+					<div class="my-3 flex items-center gap-2 text-xs text-muted-foreground">
+						<span>Result:</span>
 
+						{#if isPending}
+							<Loader2 class="h-3 w-3 animate-spin" />
+						{/if}
+					</div>
 					{#if isPending}
-						<Loader2 class="h-3 w-3 animate-spin" />
+						<div class="rounded bg-muted/30 p-2 text-xs text-muted-foreground italic">
+							Waiting for result...
+						</div>
+					{:else if section.toolResult}
+						<div class="overflow-auto rounded-lg border border-border bg-muted p-4">
+							{#each section.parsedLines as line, i (i)}
+								<div class="font-mono text-xs leading-relaxed whitespace-pre-wrap">
+									{line.text}
+								</div>
+								{#if line.image}
+									<img
+										src={line.image.base64Url}
+										alt={line.image.name}
+										class="mt-2 mb-2 h-auto max-w-full rounded-lg"
+										loading="lazy"
+									/>
+								{/if}
+							{/each}
+						</div>
+					{:else}
+						<div class="rounded bg-muted/30 p-2 text-xs text-muted-foreground italic">No output</div>
 					{/if}
 				</div>
-				{#if isPending}
-					<div class="rounded bg-muted/30 p-2 text-xs text-muted-foreground italic">
-						Waiting for result...
-					</div>
-				{:else if section.toolResult}
-					<div class="overflow-auto rounded-lg border border-border bg-muted p-4">
-						{#each section.parsedLines as line, i (i)}
-							<div class="font-mono text-xs leading-relaxed whitespace-pre-wrap">
-								{line.text}
-							</div>
-							{#if line.image}
-								<img
-									src={line.image.base64Url}
-									alt={line.image.name}
-									class="mt-2 mb-2 h-auto max-w-full rounded-lg"
-									loading="lazy"
-								/>
-							{/if}
-						{/each}
-					</div>
-				{:else}
-					<div class="rounded bg-muted/30 p-2 text-xs text-muted-foreground italic">No output</div>
-				{/if}
-			</div>
+			{/if}
 		</CollapsibleContentBlock>
+
+		{#if showQuestionBlock}
+			<div class="grid gap-3">
+				<ChatMessageAgenticQuestionAnswer pairs={questionAnswerPairs} />
+			</div>
+		{/if}
 	{:else if section.type === AgenticSectionType.REASONING}
 		<CollapsibleContentBlock
 			open={isExpanded(index, section)}
@@ -365,6 +412,14 @@
 			toolName={pendingPermission.toolName}
 			serverLabel={pendingPermission.serverLabel}
 			onDecision={handlePermission}
+		/>
+	{/if}
+
+	{#if pendingQuestion && !questionDismissed}
+		<ChatMessageActionCardQuestionRequest
+			questions={pendingQuestion.questions}
+			onAnswer={handleQuestion}
+			onDismiss={handleQuestionDismiss}
 		/>
 	{/if}
 

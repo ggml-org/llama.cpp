@@ -257,6 +257,17 @@ export interface ToolCallParams {
 export interface ToolExecutionResult {
 	content: string;
 	isError: boolean;
+	awaitingUser?: {
+		kind: string;
+		requestID: string;
+		payload: Record<string, unknown>;
+	};
+}
+
+export interface BuiltinToolExecutionContext {
+	conversation_id: string;
+	message_id?: string;
+	tool_call_id?: string;
 }
 
 export interface ServerBuiltinToolInfo {
