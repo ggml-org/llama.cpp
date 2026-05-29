@@ -66,7 +66,7 @@ jobs:
         include:
           - build: 'arm64'
             arch: 'arm64'
-            os: macos-14
+            os: macos-26
             defines: "-DGGML_METAL_USE_BF16=ON -DGGML_METAL_EMBED_LIBRARY=ON"
           # TODO: this build is disabled to save Github Actions resources (https://github.com/ggml-org/llama.cpp/pull/23780)
           #       in order to enable it again, we have to provision dedicated runners  to run it
@@ -1134,7 +1134,7 @@ jobs:
   ios-xcode-build:
     needs: [check_release]
     if: ${{ needs.check_release.outputs.should_release == 'true' }}
-    runs-on: macos-15
+    runs-on: macos-26
 
     steps:
       - name: Checkout code

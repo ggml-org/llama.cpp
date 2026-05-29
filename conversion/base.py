@@ -915,6 +915,8 @@ class ModelBase:
                             gguf.MODEL_TENSOR.SSM_CONV1D_Q,
                             gguf.MODEL_TENSOR.SSM_CONV1D_K,
                             gguf.MODEL_TENSOR.SSM_CONV1D_V,
+                            # DSA indexer weights should be F32
+                            gguf.MODEL_TENSOR.INDEXER_PROJ,
                         )
                     )
                     or new_name[-7:] not in (".weight", ".lora_a", ".lora_b")
@@ -1138,7 +1140,7 @@ class TextModel(ModelBase):
         # Skip multimodal tensors
         if name.startswith(("mlp", "vit.", "vpm.", "siglip2.", "conformer.", "merger.", "resampler.", "sound_encoder.", "sound_projection.", "speech_embeddings.")) \
                 or "visual." in name or "vision." in name or "audio." in name or "talker." in name \
-                or "vision_" in name or "audio_" in name or "sam_model" in name \
+                or "vision_" in name or "audio_" in name \
                 or "token2wav." in name or "code2wav." in name \
                 or "projector." in name or "pre_mm_projector_norm" in name \
                 or "image_newline" in name or "view_seperator" in name \
@@ -1445,6 +1447,9 @@ class TextModel(ModelBase):
         if chkhsh == "0fe1cf6eda062318a1af7270f3331a85c539a01778ff948e24388e949c5282f4":
             # ref: https://huggingface.co/evilfreelancer/ruGPT3XL
             res = "gpt-2"
+        if chkhsh == "9e454714343b69b99b71795c1d27a68c2a1d15dab111f4d353109f966af29da7":
+            # ref: https://huggingface.co/LiquidAI/LFM2.5-8B-A1B
+            res = "lfm2"
         if chkhsh == "0ef9807a4087ebef797fc749390439009c3b9eda9ad1a097abbe738f486c01e5":
             # ref: https://huggingface.co/meta-llama/Meta-Llama-3-8B
             res = "llama-bpe"
@@ -1596,7 +1601,7 @@ class TextModel(ModelBase):
             # ref: https://huggingface.co/K-intelligence/Midm-2.0-Base-Instruct
             res = "midm-2.0"
         if chkhsh == "169bf0296a13c4d9b7672313f749eb36501d931022de052aad6e36f2bf34dd51":
-            # ref: https://huggingface.co/LiquidAI/LFM2-Tokenizer
+            # ref: https://huggingface.co/LiquidAI/LFM2.5-350M
             res = "lfm2"
         if chkhsh == "2085e1638f6c377a0aa4ead21b27bb4cb941bf800df86ed391011769c1758dfb":
             # ref: https://huggingface.co/LGAI-EXAONE/EXAONE-4.0-32B
