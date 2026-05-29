@@ -1756,7 +1756,30 @@ float common_embd_similarity_cos(const float * embd1, const float * embd2, int n
     double sum1 = 0.0;
     double sum2 = 0.0;
 
-    for (int i = 0; i < n; i++) {
+    int i = 0;
+
+#ifdef __POWER9_VECTOR__
+#include <altivec.h>
+    vector float vsumf  = vec_splats(0.0f);
+    vector float vsum1f = vec_splats(0.0f);
+    vector float vsum2f = vec_splats(0.0f);
+
+    for (; i + 4 <= n; i += 4) {
+        vector float va = vec_vsx_ld(0, embd1 + i);
+        vector float vb = vec_vsx_ld(0, embd2 + i);
+        vsumf  = vec_madd(va, vb, vsumf);
+        vsum1f = vec_madd(va, va, vsum1f);
+        vsum2f = vec_madd(vb, vb, vsum2f);
+    }
+    float sumf = vec_extract(vsumf, 0) + vec_extract(vsumf, 1) + vec_extract(vsumf, 2) + vec_extract(vsumf, 3);
+    float sum1f = vec_extract(vsum1f, 0) + vec_extract(vsum1f, 1) + vec_extract(vsum1f, 2) + vec_extract(vsum1f, 3);
+    float sum2f = vec_extract(vsum2f, 0) + vec_extract(vsum2f, 1) + vec_extract(vsum2f, 2) + vec_extract(vsum2f, 3);
+
+    sum  = (double)sumf;
+    sum1 = (double)sum1f;
+    sum2 = (double)sum2f;
+#endif
+    for (; i < n; ++i) {
         sum  += embd1[i] * embd2[i];
         sum1 += embd1[i] * embd1[i];
         sum2 += embd2[i] * embd2[i];
