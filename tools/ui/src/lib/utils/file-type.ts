@@ -40,6 +40,7 @@ export function getFileTypeCategory(mimeType: string): FileTypeCategory | null {
 		case MimeTypeAudio.WAVE:
 		case MimeTypeAudio.X_WAV:
 		case MimeTypeAudio.X_WAVE:
+		case MimeTypeAudio.VND_WAVE:
 		case MimeTypeAudio.X_PN_WAV:
 		case MimeTypeAudio.WEBM:
 		case MimeTypeAudio.WEBM_OPUS:
