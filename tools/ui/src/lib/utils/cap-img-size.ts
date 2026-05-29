@@ -14,9 +14,8 @@ export function capImageDataURLSize(
 ): Promise<string> {
 	return new Promise((resolve, reject) => {
 		try {
-			
 			const mimeMatch = base64UrlImage.match(BASE64_IMAGE_URI_REGEX);
-			
+
 			if (!mimeMatch) {
 				return reject(new Error('Invalid data URL format.'));
 			}

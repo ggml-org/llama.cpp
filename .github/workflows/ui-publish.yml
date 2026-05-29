@@ -20,7 +20,7 @@ jobs:
   publish:
     name: Publish UI Static Output
     needs: build
-    runs-on: ubuntu-24.04-arm
+    runs-on: ubuntu-slim
 
     permissions:
       contents: read
@@ -38,7 +38,7 @@ jobs:
         uses: actions/download-artifact@v7
         with:
           name: ui-build
-          path: build/tools/ui/dist/
+          path: tools/ui/dist/
 
       - name: Install Hugging Face Hub CLI
         run: pip install -U huggingface_hub
@@ -49,12 +49,12 @@ jobs:
       - name: Sync built files to Hugging Face bucket (version tag)
         run: |
           # Upload the built files to the Hugging Face bucket under the release version
-          hf buckets sync build/tools/ui/dist hf://buckets/ggml-org/${{ env.HF_BUCKET_NAME }}/${{ inputs.version_tag }} --delete --quiet
+          hf buckets sync tools/ui/dist hf://buckets/ggml-org/${{ env.HF_BUCKET_NAME }}/${{ inputs.version_tag }} --delete --quiet
 
       - name: Sync built files to Hugging Face bucket (latest)
         run: |
           # Also upload to the 'latest' directory for fallback downloads
-          hf buckets sync build/tools/ui/dist hf://buckets/ggml-org/${{ env.HF_BUCKET_NAME }}/latest --delete --quiet
+          hf buckets sync tools/ui/dist hf://buckets/ggml-org/${{ env.HF_BUCKET_NAME }}/latest --delete --quiet
 
       - name: Verify upload
         run: |

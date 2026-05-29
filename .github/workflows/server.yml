@@ -44,20 +44,20 @@ on:
     ]
 
 env:
-  LLAMA_LOG_COLORS: 1
-  LLAMA_LOG_PREFIX: 1
-  LLAMA_LOG_TIMESTAMPS: 1
-  LLAMA_LOG_VERBOSITY: 10
+  LLAMA_ARG_LOG_COLORS: 1
+  LLAMA_ARG_LOG_PREFIX: 1
+  LLAMA_ARG_LOG_TIMESTAMPS: 1
+  LLAMA_ARG_LOG_VERBOSITY: 10
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}-${{ github.head_ref || github.run_id }}
   cancel-in-progress: true
 
 jobs:
-  server:
-    runs-on: ubuntu-latest
+  ubuntu:
+    runs-on: ubuntu-24.04
 
-    name: server (${{ matrix.wf_name }})
+    name: ubuntu (${{ matrix.wf_name }})
     strategy:
       matrix:
         build_type: [Release]
@@ -93,18 +93,17 @@ jobs:
           fetch-depth: 0
           ref: ${{ github.event.inputs.sha || github.event.pull_request.head.sha || github.sha || github.head_ref || github.ref_name }}
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.21
         with:
-          node-version: "24"
-          cache: "npm"
-          cache-dependency-path: "tools/ui/package-lock.json"
+          key: server-ubuntu-24.04-x64
+          evict-old-files: 1d
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
       - name: Build
         id: cmake_build
         run: |
           cmake -B build \
-            -DLLAMA_BUILD_BORINGSSL=ON \
             -DGGML_SCHED_NO_REALLOC=ON
           cmake --build build --config ${{ matrix.build_type }} -j $(nproc) --target llama-server
 
@@ -131,8 +130,8 @@ jobs:
           export ${{ matrix.extra_args }}
           SLOW_TESTS=1 pytest -v -x
 
-  server-windows:
-    runs-on: windows-2022
+  windows:
+    runs-on: windows-2025
 
     steps:
       - name: Clone
@@ -142,16 +141,24 @@ jobs:
           fetch-depth: 0
           ref: ${{ github.event.inputs.sha || github.event.pull_request.head.sha || github.sha || github.head_ref || github.ref_name }}
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.21
         with:
-          node-version: "24"
+          key: server-windows-2025-x64
+          evict-old-files: 1d
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
       - name: Build
         id: cmake_build
+        shell: cmd
         run: |
-          cmake -B build -DLLAMA_BUILD_BORINGSSL=ON -DGGML_SCHED_NO_REALLOC=ON
-          cmake --build build --config Release -j ${env:NUMBER_OF_PROCESSORS} --target llama-server
+          cmake -B build -G "Ninja Multi-Config" ^
+            -DCMAKE_TOOLCHAIN_FILE=cmake/x64-windows-llvm.cmake ^
+            -DCMAKE_BUILD_TYPE=Release ^
+            -DLLAMA_BUILD_BORINGSSL=ON ^
+            -DGGML_SCHED_NO_REALLOC=ON
+          set /A NINJA_JOBS=%NUMBER_OF_PROCESSORS%-1
+          cmake --build build --config Release -j %NINJA_JOBS% --target llama-server
 
       - name: Python setup
         id: setup_python

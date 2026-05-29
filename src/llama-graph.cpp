@@ -7,6 +7,7 @@
 
 #include "llama-kv-cache.h"
 #include "llama-kv-cache-iswa.h"
+#include "llama-kv-cache-dsa.h"
 #include "llama-memory-hybrid.h"
 #include "llama-memory-hybrid-iswa.h"
 #include "llama-memory-recurrent.h"
@@ -29,7 +30,10 @@ static ggml_tensor * build_attn_inp_kq_mask(
     const auto n_tokens = ubatch.n_tokens;
     const auto n_stream = cparams.kv_unified ? 1 : ubatch.n_seqs_unq;
 
-    ggml_tensor * res = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, n_kv, n_tokens/n_stream, 1, n_stream);
+    // flash attention requires an f16 mask
+    const auto type = cparams.flash_attn ? GGML_TYPE_F16 : GGML_TYPE_F32;
+
+    ggml_tensor * res = ggml_new_tensor_4d(ctx, type, n_kv, n_tokens/n_stream, 1, n_stream);
     ggml_set_input(res);
     ggml_set_name(res, "attn_inp_kq_mask");
 
@@ -98,6 +102,39 @@ bool llm_graph_input_embd::can_reuse(const llm_graph_params & params) {
 
     res &= (!params.ubatch.token) || (tokens && tokens->ne[0] == params.ubatch.n_tokens);
     res &= (!params.ubatch.embd)  || (embd   &&   embd->ne[1] == params.ubatch.n_tokens);
+
+    return res;
+}
+
+void llm_graph_input_embd_h::set_input(const llama_ubatch * ubatch) {
+    const int64_t n_tokens = ubatch->n_tokens;
+
+    if (ubatch->token) {
+        ggml_backend_tensor_set(tokens, ubatch->token, 0, n_tokens*ggml_element_size(tokens));
+    } else {
+        // note: mtmd embedding input goes through here
+        GGML_ASSERT(ubatch->embd);
+        GGML_ASSERT(n_embd == embd->ne[0]);
+
+        ggml_backend_tensor_set(embd, ubatch->embd, 0, n_tokens*n_embd*ggml_element_size(h));
+    }
+
+    // TODO: extend llama_ubatch to differentiate between token embeddings and hidden states
+    //       for now, we assume that the hidden state is always provided as an embedding
+    //       ref: https://github.com/ggml-org/llama.cpp/pull/23643
+    if (ubatch->embd) {
+        GGML_ASSERT(n_embd == h->ne[0]);
+
+        ggml_backend_tensor_set(h, ubatch->embd, 0, n_tokens*n_embd*ggml_element_size(h));
+    }
+}
+
+bool llm_graph_input_embd_h::can_reuse(const llm_graph_params & params) {
+    bool res = true;
+
+    res &= (!params.ubatch.token) || (tokens && tokens->ne[0] == params.ubatch.n_tokens);
+    res &= (!params.ubatch.embd)  || (embd   && embd->ne[1]   == params.ubatch.n_tokens);
+    res &= (!params.ubatch.embd)  || (h      && h->ne[1]      == params.ubatch.n_tokens);
 
     return res;
 }
@@ -348,7 +385,8 @@ void llm_graph_input_cross_embd::set_input(const llama_ubatch * ubatch) {
     }
 }
 
-static void print_mask(const float * data, int64_t n_tokens, int64_t n_kv, int64_t n_swa, llama_swa_type swa_type) {
+template <typename T>
+static void print_mask(const T * data, int64_t n_tokens, int64_t n_kv, int64_t n_swa, llama_swa_type swa_type) {
     LLAMA_LOG_DEBUG("%s: === Attention mask ===\n", __func__);
     const char * swa_type_str = "unknown";
 
@@ -372,7 +410,7 @@ static void print_mask(const float * data, int64_t n_tokens, int64_t n_kv, int64
     for (int i = 0; i < std::min((int64_t)20, n_tokens); ++i) {
         LLAMA_LOG_DEBUG(" %2d ", i);
         for (int j = 0; j < std::min((int64_t)20, n_kv); ++j) {
-            float val = data[i * n_kv + j];
+            float val = llama_cast<float>(data[i * n_kv + j]);
             if (val == -INFINITY) {
                 LLAMA_LOG_DEBUG(" ∞");
             } else {
@@ -387,7 +425,10 @@ void llm_graph_input_attn_no_cache::set_input(const llama_ubatch * ubatch) {
     const int64_t n_kv     = ubatch->n_tokens;
     const int64_t n_tokens = ubatch->n_tokens;
 
-    const auto fill_mask = [&](float * data, int n_swa, llama_swa_type swa_type) {
+    const auto fill_mask = [&](auto * data, int64_t ne, int n_swa, llama_swa_type swa_type) {
+        using T = std::remove_reference_t<decltype(*data)>;
+        std::fill(data, data + ne, llama_cast<T>(-INFINITY));
+
         for (int i1 = 0; i1 < n_tokens; ++i1) {
             const llama_seq_id s1 = ubatch->seq_id[i1][0];
             const llama_pos    p1 = ubatch->pos[i1];
@@ -413,38 +454,30 @@ void llm_graph_input_attn_no_cache::set_input(const llama_ubatch * ubatch) {
                     continue;
                 }
 
-                data[idst + i0] = hparams.use_alibi ? -std::abs(p0 - p1) : 0.0f;
+                data[idst + i0] = llama_cast<T>(hparams.use_alibi ? -std::abs(p0 - p1) : 0.0f);
             }
+        }
+
+        if (debug) {
+            print_mask(data, n_tokens, n_kv, n_swa, swa_type);
         }
     };
 
-    {
-        GGML_ASSERT(self_kq_mask);
-        GGML_ASSERT(ggml_backend_buffer_is_host(self_kq_mask->buffer));
-
-        float * data = (float *) self_kq_mask->data;
-
-        std::fill(data, data + ggml_nelements(self_kq_mask), -INFINITY);
-
-        fill_mask(data, 0, LLAMA_SWA_TYPE_NONE);
-
-        if (debug) {
-            print_mask(data, n_tokens, n_kv, 0, LLAMA_SWA_TYPE_NONE);
-        }
+    GGML_ASSERT(self_kq_mask);
+    GGML_ASSERT(ggml_backend_buffer_is_host(self_kq_mask->buffer));
+    if (self_kq_mask->type == GGML_TYPE_F16) {
+        fill_mask((ggml_fp16_t *) self_kq_mask->data, ggml_nelements(self_kq_mask), 0, LLAMA_SWA_TYPE_NONE);
+    } else {
+        fill_mask((float       *) self_kq_mask->data, ggml_nelements(self_kq_mask), 0, LLAMA_SWA_TYPE_NONE);
     }
 
     if (hparams.swa_type != LLAMA_SWA_TYPE_NONE) {
         GGML_ASSERT(self_kq_mask_swa);
         GGML_ASSERT(ggml_backend_buffer_is_host(self_kq_mask_swa->buffer));
-
-        float * data = (float *) self_kq_mask_swa->data;
-
-        std::fill(data, data + ggml_nelements(self_kq_mask_swa), -INFINITY);
-
-        fill_mask(data, hparams.n_swa, hparams.swa_type);
-
-        if (debug) {
-            print_mask(data, n_tokens, n_kv, hparams.n_swa, hparams.swa_type);
+        if (self_kq_mask_swa->type == GGML_TYPE_F16) {
+            fill_mask((ggml_fp16_t *) self_kq_mask_swa->data, ggml_nelements(self_kq_mask_swa), hparams.n_swa, hparams.swa_type);
+        } else {
+            fill_mask((float       *) self_kq_mask_swa->data, ggml_nelements(self_kq_mask_swa), hparams.n_swa, hparams.swa_type);
         }
     }
 }
@@ -495,6 +528,34 @@ bool llm_graph_input_attn_k::can_reuse(const llm_graph_params & params) {
     res &= self_k_idxs->ne[0] == params.ubatch.n_tokens;
 
     res &= can_reuse_kq_mask(self_kq_mask, mctx, params.ubatch, params.cparams);
+
+    return res;
+}
+
+void llm_graph_input_attn_k_dsa::set_input(const llama_ubatch * ubatch) {
+    mctx->get_mla()->set_input_k_idxs(self_k_idxs_mla, ubatch);
+
+    mctx->get_mla()->set_input_kq_mask(self_kq_mask_mla, ubatch, cparams.causal_attn);
+
+    mctx->get_lid()->set_input_k_idxs(self_k_idxs_lid, ubatch);
+
+    mctx->get_lid()->set_input_kq_mask(self_kq_mask_lid, ubatch, cparams.causal_attn);
+
+    mctx->get_lid()->set_input_k_rot(self_k_rot_lid);
+}
+
+bool llm_graph_input_attn_k_dsa::can_reuse(const llm_graph_params & params) {
+    const auto * mctx = static_cast<const llama_kv_cache_dsa_context *>(params.mctx);
+
+    this->mctx = mctx;
+
+    bool res = true;
+
+    res &= self_k_idxs_mla->ne[0] == params.ubatch.n_tokens;
+    res &= self_k_idxs_lid->ne[0] == params.ubatch.n_tokens;
+
+    res &= can_reuse_kq_mask(self_kq_mask_mla, mctx->get_mla(), params.ubatch, params.cparams);
+    res &= can_reuse_kq_mask(self_kq_mask_lid, mctx->get_lid(), params.ubatch, params.cparams);
 
     return res;
 }
@@ -568,23 +629,30 @@ void llm_graph_input_attn_cross::set_input(const llama_ubatch * ubatch) {
     GGML_ASSERT(ggml_backend_buffer_is_host(cross_kq_mask->buffer));
     GGML_ASSERT(!ubatch->equal_seqs()); // TODO: use ubatch->n_seqs instead of failing
 
-    float * data = (float *) cross_kq_mask->data;
+    const auto fill_mask = [&](auto * data) {
+        using T = std::remove_reference_t<decltype(*data)>;
+        for (int i = 0; i < n_tokens; ++i) {
+            GGML_ASSERT(!cross->seq_ids_enc.empty() && "llama_encode must be called first");
+            for (int j = 0; j < n_enc; ++j) {
+                float f = -INFINITY;
 
-    for (int i = 0; i < n_tokens; ++i) {
-        GGML_ASSERT(!cross->seq_ids_enc.empty() && "llama_encode must be called first");
-        for (int j = 0; j < n_enc; ++j) {
-            float f = -INFINITY;
+                for (int s = 0; s < ubatch->n_seq_id[i]; ++s) {
+                    const llama_seq_id seq_id = ubatch->seq_id[i][s];
 
-            for (int s = 0; s < ubatch->n_seq_id[i]; ++s) {
-                const llama_seq_id seq_id = ubatch->seq_id[i][s];
-
-                if (cross->seq_ids_enc[j].find(seq_id) != cross->seq_ids_enc[j].end()) {
-                    f = 0.0f;
+                    if (cross->seq_ids_enc[j].find(seq_id) != cross->seq_ids_enc[j].end()) {
+                        f = 0.0f;
+                    }
                 }
-            }
 
-            data[i*n_enc + j] = f;
+                data[i*n_enc + j] = llama_cast<T>(f);
+            }
         }
+    };
+
+    if (cross_kq_mask->type == GGML_TYPE_F16) {
+        fill_mask((ggml_fp16_t *) cross_kq_mask->data);
+    } else {
+        fill_mask((float *) cross_kq_mask->data);
     }
 }
 
@@ -2088,17 +2156,20 @@ ggml_tensor * llm_graph_context::build_attn_mha(
 llm_graph_input_attn_no_cache * llm_graph_context::build_attn_inp_no_cache() const {
     auto inp = std::make_unique<llm_graph_input_attn_no_cache>(hparams, cparams);
 
+    // flash attention requires an f16 mask
+    const auto type_mask = cparams.flash_attn ? GGML_TYPE_F16 : GGML_TYPE_F32;
+
     // note: there is no KV cache, so the number of KV values is equal to the number of tokens in the batch
-    inp->self_kq_mask = ggml_new_tensor_4d(ctx0, GGML_TYPE_F32, n_tokens, n_tokens, 1, 1);
+    inp->self_kq_mask = ggml_new_tensor_4d(ctx0, type_mask, n_tokens, n_tokens, 1, 1);
     ggml_set_input(inp->self_kq_mask);
 
-    inp->self_kq_mask_cnv = cparams.flash_attn ? ggml_cast(ctx0, inp->self_kq_mask, GGML_TYPE_F16) : inp->self_kq_mask;
+    inp->self_kq_mask_cnv = inp->self_kq_mask;
 
     if (hparams.swa_type != LLAMA_SWA_TYPE_NONE) {
-        inp->self_kq_mask_swa = ggml_new_tensor_4d(ctx0, GGML_TYPE_F32, n_tokens, n_tokens, 1, 1);
+        inp->self_kq_mask_swa = ggml_new_tensor_4d(ctx0, type_mask, n_tokens, n_tokens, 1, 1);
         ggml_set_input(inp->self_kq_mask_swa);
 
-        inp->self_kq_mask_swa_cnv = cparams.flash_attn ? ggml_cast(ctx0, inp->self_kq_mask_swa, GGML_TYPE_F16) : inp->self_kq_mask_swa;
+        inp->self_kq_mask_swa_cnv = inp->self_kq_mask_swa;
     } else {
         inp->self_kq_mask_swa     = nullptr;
         inp->self_kq_mask_swa_cnv = nullptr;
@@ -2175,7 +2246,7 @@ static std::unique_ptr<llm_graph_input_attn_kv> build_attn_inp_kv_impl(
         inp->self_v_idxs = mctx_cur->build_input_v_idxs(ctx0, ubatch);
 
         inp->self_kq_mask = build_attn_inp_kq_mask(ctx0, mctx_cur, ubatch, cparams);
-        inp->self_kq_mask_cnv = cparams.flash_attn ? ggml_cast(ctx0, inp->self_kq_mask, GGML_TYPE_F16) : inp->self_kq_mask;
+        inp->self_kq_mask_cnv = inp->self_kq_mask;
     }
 
     inp->self_k_rot = mctx_cur->build_input_k_rot(ctx0);
@@ -2282,7 +2353,7 @@ static std::unique_ptr<llm_graph_input_attn_k> build_attn_inp_k_impl(
         inp->self_k_idxs = mctx_cur->build_input_k_idxs(ctx0, ubatch);
 
         inp->self_kq_mask = build_attn_inp_kq_mask(ctx0, mctx_cur, ubatch, cparams);
-        inp->self_kq_mask_cnv = cparams.flash_attn ? ggml_cast(ctx0, inp->self_kq_mask, GGML_TYPE_F16) : inp->self_kq_mask;
+        inp->self_kq_mask_cnv = inp->self_kq_mask;
     }
 
     return inp;
@@ -2345,6 +2416,82 @@ ggml_tensor * llm_graph_context::build_attn(
         } else {
             cur = build_lora_mm(wo, cur, wo_s);
         }
+    }
+
+    if (wo_b) {
+        cur = ggml_add(ctx0, cur, wo_b);
+    }
+
+    return cur;
+}
+
+ggml_tensor * llm_graph_context::build_attn(
+        llm_graph_input_attn_k_dsa * inp,
+        ggml_tensor * wo,
+        ggml_tensor * wo_b,
+        ggml_tensor * wo_s,
+        ggml_tensor * q_cur,
+        ggml_tensor * k_cur,
+        ggml_tensor * v_cur,
+        ggml_tensor * kq_b,
+        ggml_tensor * sinks,
+        ggml_tensor * v_mla,
+        ggml_tensor * top_k,
+            float     kq_scale,
+            int       il) const {
+    // these nodes are added to the graph together so that they are not reordered
+    // by doing so, the number of splits in the graph is reduced
+    // expand k later to enable rope fusion which directly writes into k-v cache
+    ggml_build_forward_expand(gf, q_cur);
+    ggml_build_forward_expand(gf, v_cur);
+    ggml_build_forward_expand(gf, k_cur);
+
+    const auto * mctx_cur = inp->mctx->get_mla();
+
+    // store to KV cache
+    {
+        const auto & k_idxs = inp->get_k_idxs_mla();
+
+        ggml_build_forward_expand(gf, mctx_cur->cpy_k(ctx0, k_cur, k_idxs, il));
+    }
+
+    const auto & kq_mask = inp->get_kq_mask_mla();
+
+    // prepare new kq mask - starts filled with -INFINITY
+    ggml_tensor * kq_mask_all = ggml_fill(ctx0, kq_mask, -INFINITY);
+
+    // reshape KQ mask into tensor with rows of size 1:
+    // [n_kv, n_batch, 1, n_stream] -> [1, n_kv, n_batch, n_stream]
+    kq_mask_all = ggml_view_4d(ctx0, kq_mask_all, 1, kq_mask_all->ne[0], kq_mask_all->ne[1], kq_mask_all->ne[3], kq_mask_all->nb[0], kq_mask_all->nb[1], kq_mask_all->nb[2], 0);
+
+    // reshape top_k indices: [n_top_k, n_batch, 1, n_stream] -> [n_top_k, n_batch, n_stream, 1]
+    ggml_tensor * top_k_3d = ggml_view_4d(ctx0, top_k, top_k->ne[0], top_k->ne[1], top_k->ne[3], 1, top_k->nb[1], top_k->nb[2], top_k->ne[3]*top_k->nb[3], 0);
+
+    // prepare zero-filled tensor with rows of size 1: [1, n_top_k, n_batch, n_stream]
+    // this will be our source of zero values for unmasking top k mask elements
+    ggml_tensor * zeros = ggml_new_tensor_4d(ctx0, GGML_TYPE_F32, 1, top_k_3d->ne[0], top_k_3d->ne[1], top_k_3d->ne[2]);
+    zeros = ggml_fill(ctx0, zeros, 0.0f);
+
+    // modify KQ mask by unmasking elements that are in top_k indices
+    // ggml_set_rows([1, n_kv, n_batch, n_stream], [1, n_top_k, n_batch, n_stream], [n_top_k, n_batch, n_stream, 1])
+    ggml_tensor * kq_mask_top_k = ggml_set_rows(ctx0, kq_mask_all, zeros, top_k_3d);
+
+    // reshape to restore the original shape of KQ mask:
+    // [1, n_kv, n_batch, n_stream] -> [n_kv, n_batch, 1, n_stream]
+    kq_mask_top_k = ggml_view_4d(ctx0, kq_mask_top_k, kq_mask_top_k->ne[1], kq_mask_top_k->ne[2], 1, kq_mask_top_k->ne[3], kq_mask_top_k->nb[2], kq_mask_top_k->nb[3], kq_mask_top_k->nb[3], 0);
+
+    // combine with the original kq mask
+    kq_mask_top_k = ggml_add(ctx0, kq_mask_top_k, kq_mask);
+
+    ggml_tensor * q = q_cur;
+    ggml_tensor * k = mctx_cur->get_k(ctx0, il);
+    ggml_tensor * v = ggml_view_4d(ctx0, k, v_cur->ne[0], k->ne[1], k->ne[2], k->ne[3], k->nb[1], k->nb[2], k->nb[3], 0);
+
+    ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask_top_k, sinks, v_mla, kq_scale, il);
+    cb(cur, "kqv_out", il);
+
+    if (wo) {
+        cur = build_lora_mm(wo, cur, wo_s);
     }
 
     if (wo_b) {
@@ -2446,10 +2593,13 @@ llm_graph_input_attn_cross * llm_graph_context::build_attn_inp_cross() const {
 
     const int32_t n_enc = !cross->v_embd.empty() ? cross->n_enc : hparams.n_ctx_train;
 
-    inp->cross_kq_mask = ggml_new_tensor_4d(ctx0, GGML_TYPE_F32, n_enc, n_tokens, 1, 1);
+    // flash attention requires an f16 mask
+    const auto type_mask = cparams.flash_attn ? GGML_TYPE_F16 : GGML_TYPE_F32;
+
+    inp->cross_kq_mask = ggml_new_tensor_4d(ctx0, type_mask, n_enc, n_tokens, 1, 1);
     ggml_set_input(inp->cross_kq_mask);
 
-    inp->cross_kq_mask_cnv = cparams.flash_attn ? ggml_cast(ctx0, inp->cross_kq_mask, GGML_TYPE_F16) : inp->cross_kq_mask;
+    inp->cross_kq_mask_cnv = inp->cross_kq_mask;
 
     return (llm_graph_input_attn_cross *) res->add_input(std::move(inp));
 }
@@ -2497,6 +2647,30 @@ ggml_tensor * llm_graph_context::build_attn(
     return cur;
 }
 
+llm_graph_input_attn_k_dsa * llm_graph_context::build_attn_inp_k_dsa() const {
+    const auto * mctx_cur = static_cast<const llama_kv_cache_dsa_context *>(mctx);
+
+    auto inp = std::make_unique<llm_graph_input_attn_k_dsa>(hparams, cparams, mctx_cur);
+
+    {
+        inp->self_k_idxs_mla = mctx_cur->get_mla()->build_input_k_idxs(ctx0, ubatch);
+
+        inp->self_kq_mask_mla = build_attn_inp_kq_mask(ctx0, mctx_cur->get_mla(), ubatch, cparams);
+        inp->self_kq_mask_mla_cnv = cparams.flash_attn ? ggml_cast(ctx0, inp->self_kq_mask_mla, GGML_TYPE_F16) : inp->self_kq_mask_mla;
+    }
+
+    {
+        inp->self_k_idxs_lid = mctx_cur->get_lid()->build_input_k_idxs(ctx0, ubatch);
+
+        inp->self_kq_mask_lid = build_attn_inp_kq_mask(ctx0, mctx_cur->get_lid(), ubatch, cparams);
+        inp->self_kq_mask_lid_cnv = cparams.flash_attn ? ggml_cast(ctx0, inp->self_kq_mask_lid, GGML_TYPE_F16) : inp->self_kq_mask_lid;
+
+        inp->self_k_rot_lid = mctx_cur->get_lid()->build_input_k_rot(ctx0);
+    }
+
+    return (llm_graph_input_attn_k_dsa *) res->add_input(std::move(inp));
+}
+
 // TODO: maybe separate the inner implementation into a separate function
 //       like with the non-sliding window equivalent
 //       once sliding-window hybrid caches are a thing.
@@ -2510,7 +2684,7 @@ llm_graph_input_attn_kv_iswa * llm_graph_context::build_attn_inp_kv_iswa() const
         inp->self_v_idxs = mctx_cur->get_base()->build_input_v_idxs(ctx0, ubatch);
 
         inp->self_kq_mask = build_attn_inp_kq_mask(ctx0, mctx_cur->get_base(), ubatch, cparams);
-        inp->self_kq_mask_cnv = cparams.flash_attn ? ggml_cast(ctx0, inp->self_kq_mask, GGML_TYPE_F16) : inp->self_kq_mask;
+        inp->self_kq_mask_cnv = inp->self_kq_mask;
     }
 
     {
@@ -2520,7 +2694,7 @@ llm_graph_input_attn_kv_iswa * llm_graph_context::build_attn_inp_kv_iswa() const
         inp->self_v_idxs_swa = mctx_cur->get_swa()->build_input_v_idxs(ctx0, ubatch);
 
         inp->self_kq_mask_swa = build_attn_inp_kq_mask(ctx0, mctx_cur->get_swa(), ubatch, cparams);
-        inp->self_kq_mask_swa_cnv = cparams.flash_attn ? ggml_cast(ctx0, inp->self_kq_mask_swa, GGML_TYPE_F16) : inp->self_kq_mask_swa;
+        inp->self_kq_mask_swa_cnv = inp->self_kq_mask_swa;
     }
 
     inp->self_k_rot = mctx_cur->get_base()->build_input_k_rot(ctx0);
@@ -2689,7 +2863,7 @@ llm_graph_input_mem_hybrid_iswa * llm_graph_context::build_inp_mem_hybrid_iswa()
         inp_attn->self_v_idxs = attn_ctx->get_base()->build_input_v_idxs(ctx0, ubatch);
 
         inp_attn->self_kq_mask = build_attn_inp_kq_mask(ctx0, attn_ctx->get_base(), ubatch, cparams);
-        inp_attn->self_kq_mask_cnv = cparams.flash_attn ? ggml_cast(ctx0, inp_attn->self_kq_mask, GGML_TYPE_F16) : inp_attn->self_kq_mask;
+        inp_attn->self_kq_mask_cnv = inp_attn->self_kq_mask;
     }
 
     {
@@ -2697,7 +2871,7 @@ llm_graph_input_mem_hybrid_iswa * llm_graph_context::build_inp_mem_hybrid_iswa()
         inp_attn->self_v_idxs_swa = attn_ctx->get_swa()->build_input_v_idxs(ctx0, ubatch);
 
         inp_attn->self_kq_mask_swa = build_attn_inp_kq_mask(ctx0, attn_ctx->get_swa(), ubatch, cparams);
-        inp_attn->self_kq_mask_swa_cnv = cparams.flash_attn ? ggml_cast(ctx0, inp_attn->self_kq_mask_swa, GGML_TYPE_F16) : inp_attn->self_kq_mask_swa;
+        inp_attn->self_kq_mask_swa_cnv = inp_attn->self_kq_mask_swa;
     }
 
     auto inp = std::make_unique<llm_graph_input_mem_hybrid_iswa>(cparams, std::move(inp_attn), std::move(inp_rs), mctx_cur);

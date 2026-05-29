@@ -386,3 +386,32 @@ class DeepseekV2Model(TextModel):
             experts = [k for d in self._experts for k in d.keys()]
             if len(experts) > 0:
                 raise ValueError(f"Unprocessed experts: {experts}")
+
+
+@ModelBase.register("DeepseekV32ForCausalLM")
+class DeepseekV32Model(DeepseekV2Model):
+    model_arch = gguf.MODEL_ARCH.DEEPSEEK32
+    skip_mtp = False
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.block_count = self.hparams["num_hidden_layers"] + self.hparams.get("num_nextn_predict_layers", 0)
+        self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
+
+    def set_vocab(self):
+        from transformers import AutoTokenizer
+        tokenizer = AutoTokenizer.from_pretrained(self.dir_model)
+        assert getattr(tokenizer, "add_bos_token", False), "Change value of add_bos_token to true in tokenizer_config.json file."
+        self._set_vocab_gpt2()
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+
+        # NextN/MTP prediction layers
+        if (num_nextn_predict_layers := self.hparams.get("num_nextn_predict_layers")) is not None:
+            self.gguf_writer.add_nextn_predict_layers(num_nextn_predict_layers)
+
+        # DSA indexer parameters
+        self.gguf_writer.add_indexer_head_count(self.hparams["index_n_heads"])
+        self.gguf_writer.add_indexer_key_length(self.hparams["index_head_dim"])
+        self.gguf_writer.add_indexer_top_k(self.hparams["index_topk"])

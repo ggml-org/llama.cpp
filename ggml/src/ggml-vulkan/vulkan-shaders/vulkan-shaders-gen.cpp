@@ -798,8 +798,10 @@ void process_shaders() {
 
     string_to_spv("div_f32", "div.comp", {{"A_TYPE", "float"}, {"B_TYPE", "float"}, {"D_TYPE", "float"}, {"FLOAT_TYPE", "float"}});
 
-    string_to_spv("repeat_f32", "repeat.comp", {{"A_TYPE", "float"}, {"D_TYPE", "float"}});
+    string_to_spv("repeat_i32", "repeat.comp", {{"A_TYPE", "int32_t"}, {"D_TYPE", "int32_t"}});
     string_to_spv("repeat_back_f32", "repeat_back.comp", {{"A_TYPE", "float"}, {"D_TYPE", "float"}});
+
+    string_to_spv("repeat_i16", "repeat.comp", {{"A_TYPE", "int16_t"}, {"D_TYPE", "int16_t"}});
 
     string_to_spv("scale_f32", "scale.comp", {{"A_TYPE", "float"}, {"D_TYPE", "float"}, {"FLOAT_TYPE", "float"}});
 
@@ -932,6 +934,7 @@ void process_shaders() {
 
     string_to_spv("argmax_f32", "argmax.comp", merge_maps(base_dict, {{"A_TYPE", "float"}, {"D_TYPE", "int"}}));
     string_to_spv("sum_rows_f32", "sum_rows.comp", merge_maps(base_dict, {{"A_TYPE", "float"}, {"D_TYPE", "float"}}));
+    string_to_spv("fwht_f32", "fwht.comp", {});
     string_to_spv("count_equal_i32", "count_equal.comp", merge_maps(base_dict, {{"A_TYPE", "int"}, {"B_TYPE", "int"}, {"D_TYPE", "int"}}));
     string_to_spv("cumsum_f32", "cumsum.comp", merge_maps(base_dict, {{"A_TYPE", "float"}, {"D_TYPE", "float"}}));
     string_to_spv("cumsum_multipass1_f32", "cumsum_multipass1.comp", merge_maps(base_dict, {{"A_TYPE", "float"}, {"D_TYPE", "float"}}));
@@ -984,8 +987,16 @@ void process_shaders() {
                 string_to_spv(name + (unroll ? "_unroll" : ""), "conv2d_mm.comp", defines);
 #if defined(GGML_VULKAN_COOPMAT2_GLSLC_SUPPORT)
                 if (unroll) {
-                    defines["COOPMAT2"] = "1";
-                    string_to_spv(name, "conv2d_mm.comp", defines, true, false, true);
+                    auto cm2_defines = defines;
+                    cm2_defines["COOPMAT2"] = "1";
+                    string_to_spv(name, "conv2d_mm.comp", cm2_defines, true, false, true);
+                }
+#endif
+#if defined(GGML_VULKAN_COOPMAT_GLSLC_SUPPORT)
+                if (unroll) {
+                    auto cm1_defines = defines;
+                    cm1_defines["COOPMAT"] = "1";
+                    string_to_spv(name, "conv2d_mm.comp", cm1_defines, true, true, false);
                 }
 #endif
             }
