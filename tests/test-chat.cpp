@@ -4212,6 +4212,24 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .run();
     }
 
+    // LiquidAI LFM2.5 tests - uses plain "List of tools: " + (tools | tojson)
+    {
+        auto tst = peg_tester("models/templates/LFM2.5-8B-A1B.jinja", detailed_debug);
+
+        tst.test("<think>I'm\nthinking</think>Hello, world!\nWhat's up?")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .expect(message_assist_thoughts)
+            .run();
+
+        tst.test("<think>I'm\nthinking</think>[special_function(arg1=1)]")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ special_function_tool })
+            .expect(message_assist_call_thoughts)
+            .run();
+    }
+
     // Reka-Edge tests - uses native JSON format with per-call wrapper
     {
         auto tst = peg_tester("models/templates/Reka-Edge.jinja", detailed_debug);
@@ -5435,6 +5453,13 @@ static void test_template_generation_prompt() {
 
     {
         auto tmpls = read_templates("models/templates/LFM2.5-Instruct.jinja");
+        check(tmpls, basic(),                  "<|im_start|>assistant\n");
+        check(tmpls, continuation_content(),   "<|im_start|>assistant\n<think>I'm thinking</think>Hello, ");
+        check(tmpls, continuation_reasoning(), "<|im_start|>assistant\n<think>I'm");
+    }
+
+    {
+        auto tmpls = read_templates("models/templates/LFM2.5-8B-A1B.jinja");
         check(tmpls, basic(),                  "<|im_start|>assistant\n");
         check(tmpls, continuation_content(),   "<|im_start|>assistant\n<think>I'm thinking</think>Hello, ");
         check(tmpls, continuation_reasoning(), "<|im_start|>assistant\n<think>I'm");

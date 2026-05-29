@@ -626,6 +626,22 @@ static bool is_lfm2_template(const std::string & src) {
            src.find("<|tool_list_end|>")   != std::string::npos;
 }
 
+// LFM2.5 format detection: match both static "List of tools: [...]" templates and LiquidAI templates
+// that build the same prefix dynamically via "List of tools: " + (tools | tojson).
+static bool is_lfm2_5_template(const std::string & src) {
+    // LFM2 uses wrapper tokens around the tool list; keep those templates on the LFM2 path.
+    if (src.find("<|tool_list_start|>") != std::string::npos) {
+        return false;
+    }
+
+    if (src.find("List of tools: [") != std::string::npos) {
+        return true;
+    }
+
+    return src.find("List of tools: ") != std::string::npos &&
+           src.find("tools | tojson")  != std::string::npos;
+}
+
 common_chat_prompt_preset common_chat_get_asr_prompt(const common_chat_templates * chat_templates) {
     common_chat_prompt_preset asr_preset;
     asr_preset.system = "";
@@ -2302,8 +2318,7 @@ std::optional<common_chat_params> common_chat_try_specialized_template(
     }
 
     // LFM2.5 format detection: template uses plain "List of tools: [...]" with no special tokens
-    if (src.find("List of tools: [") != std::string::npos &&
-        src.find("<|tool_list_start|>") == std::string::npos) {
+    if (is_lfm2_5_template(src)) {
         LOG_DBG("Using specialized template: LFM2.5\n");
         return common_chat_params_init_lfm2_5(tmpl, params);
     }
