@@ -321,6 +321,7 @@ extern "C" {
         bool no_host;         // bypass host buffer allowing extra buffers to be used
         bool no_alloc;        // only load metadata and simulate memory allocations
         bool pshard;          // enable pipelined sharding: weights on CPU host, pipelined to GPU per split
+        bool pshard_delegate_compute; // tensor overrides choose storage; scheduler chooses compute backends
         bool pshard_cache_skip_load; // skip loading plan cache (rebuild from scratch, then overwrite)
         size_t max_vram_alloc; // VRAM budget in MiB for the unified preload buffer (0 = auto from free VRAM)
         struct llama_pshard_plan_registry * pshard_registry; // tier plan registry, caller-owned. populated by llama_params_fit_pshard
@@ -549,7 +550,8 @@ extern "C" {
                     struct llama_model_params   * mparams,
                     struct llama_context_params * cparams,
         struct llama_model_tensor_buft_override * tensor_buft_overrides,
-                                         size_t   max_vram_mb);           // 0 = use actual free VRAM
+                                         size_t   max_vram_mb,            // 0 = use actual free VRAM minus fit_target_mb
+                                         size_t   fit_target_mb);         // ignored when max_vram_mb > 0
 
     // Create/free a tier plan registry. Caller owns the pointer and passes it via
     // mparams->pshard_registry before calling llama_params_fit_pshard.

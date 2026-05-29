@@ -14,6 +14,7 @@
 #include <map>
 #include <stdexcept>
 #include <unordered_map>
+#include <unordered_set>
 
 using llama_buf_map = std::unordered_map<uint32_t, ggml_backend_buffer_t>;
 
@@ -21,6 +22,7 @@ struct weight_preload_entry {
     void *                    cpu_addr    = nullptr;
     void *                    gpu_addr    = nullptr;
     ggml_backend_buffer_t     host_buffer = nullptr;
+    bool                      device_only_common = false;
 };
 
 // lists of buffer types used for each layer
@@ -206,7 +208,17 @@ struct llama_model_loader {
             llama_buf_map & bufs,
             llama_mlocks * lmlocks,
             llama_progress_callback progress_callback,
-            void * progress_callback_user_data);
+            void * progress_callback_user_data,
+            const std::unordered_set<struct ggml_tensor *> * skip_tensors = nullptr);
+
+    bool preload_common_weights_to_device(
+            const std::vector<struct ggml_tensor *> & preload_order,
+            size_t n_common,
+            size_t buf_size,
+            ggml_backend_buffer_t * out_buf,
+            std::unordered_map<struct ggml_tensor *, weight_preload_entry> * out_preload_map,
+            size_t * out_preloaded_size,
+            std::unordered_set<struct ggml_tensor *> * out_device_only_tensors);
 
     bool preload_weights_to_device(
             const std::unordered_map<struct ggml_tensor *, int32_t> & tensor_backend_ids,
@@ -215,7 +227,8 @@ struct llama_model_loader {
             ggml_backend_buffer_t * out_buf,
             ggml_backend_t * out_backend,
             std::unordered_map<struct ggml_tensor *, weight_preload_entry> * out_preload_map,
-            size_t * out_preloaded_size);
+            size_t * out_preloaded_size,
+            const std::vector<struct ggml_tensor *> * preload_order = nullptr);
 
     std::string ftype_name() const;
 

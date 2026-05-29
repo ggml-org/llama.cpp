@@ -13,7 +13,10 @@
 #include "ggml-alloc.h"
 
 #include <algorithm>
+#include <cstdlib>
+#include <cstring>
 #include <functional>
+#include <unordered_map>
 #include <vector>
 
 namespace {
@@ -101,6 +104,7 @@ namespace {
             }
         }
     }
+
 } // namespace
 
 void pshard_assign_tensors(
@@ -108,36 +112,17 @@ void pshard_assign_tensors(
         const llama_model                               & model,
         llama_memory_i                                  * memory,
         const std::vector<ggml_backend_ptr>             & backends,
-        const pshard_dev_layout                         & layout,
-        ggml_cgraph                                     * gf) {
+        const pshard_dev_layout                         & layout) {
     const auto & tbids = model.get_tensor_backend_ids();
+    const auto & lbids = model.get_layer_backend_ids();
 
     for (const auto & [tensor, bid] : tbids) {
-        if (bid >= 0 && bid < (int32_t)backends.size()) {
-            ggml_backend_sched_set_tensor_backend(sched, tensor, backends[bid].get());
-        }
-    }
-
-    // catches compute nodes never named via cb()
-    // (e.g. wo matmul inside build_attn)
-    if (gf) {
-        const int n_nodes = ggml_graph_n_nodes(gf);
-        for (int i = 0; i < n_nodes; i++) {
-            ggml_tensor * cur = ggml_graph_node(gf, i);
-            if (cur->view_src) continue;
-            for (int j = 0; j < GGML_MAX_SRC; j++) {
-                if (!cur->src[j]) continue;
-                auto it = tbids.find(cur->src[j]);
-                if (it != tbids.end() && it->second >= 0 && it->second < (int32_t)backends.size()) {
-                    ggml_backend_sched_set_tensor_backend(sched, cur, backends[it->second].get());
-                    break;
-                }
-            }
+        if (bid >= 0 && bid < (int32_t) backends.size()) {
+            ggml_backend_sched_set_tensor_backend_hint(sched, tensor, backends[bid].get());
         }
     }
 
     if (memory) {
-        const auto & lbids = model.get_layer_backend_ids();
         for (auto * ps : memory->get_pipe_shards()) {
             ps->assign_tensors(sched, lbids, backends, layout);
         }
@@ -346,6 +331,7 @@ void llama_context::pshard_reserve_and_save(const llama_pshard_plan & plan) {
 
     const uint32_t n_seqs   = cparams.n_seq_max;
     const uint32_t n_tokens = plan.batch_size;
+    const uint32_t n_outputs = n_tokens;
 
     // start with unconstrained scratch packing
     ggml_backend_t gpu = backends[pshard_layout.compute].get();
@@ -361,7 +347,7 @@ void llama_context::pshard_reserve_and_save(const llama_pshard_plan & plan) {
         ggml_backend_sched_set_alloc_range(sched.get(), gpu, scratch_off, SIZE_MAX/2);
     }
 
-    auto * gf = graph_reserve(n_tokens, n_seqs, n_tokens, mctx.get());
+    auto * gf = graph_reserve(n_tokens, n_seqs, n_outputs, mctx.get());
 
     if (gf && external_buf) {
         const int    n_chunks    = ggml_backend_sched_get_n_chunks(sched.get(), gpu);
@@ -378,7 +364,7 @@ void llama_context::pshard_reserve_and_save(const llama_pshard_plan & plan) {
             __func__, chunk0_used / (1024.0 * 1024.0), scratch_avail / (1024.0 * 1024.0));
 
         ggml_backend_sched_set_alloc_range(sched.get(), gpu, scratch_off, scratch_avail);
-        gf = graph_reserve(n_tokens, n_seqs, n_tokens, mctx.get());
+        gf = graph_reserve(n_tokens, n_seqs, n_outputs, mctx.get());
     }
 
     if (!gf) {
@@ -423,7 +409,7 @@ void llama_context::pshard_save_alloc_state(const llama_pshard_plan & plan) {
         sched_n_nodes, sched_n_leafs);
 }
 
-void llama_context::pshard_warmup_plans() {
+void llama_context::pshard_warmup_plan_reserves() {
     auto * registry = model.get_plan_registry();
     if (!registry) return;
 
@@ -450,12 +436,6 @@ void llama_context::pshard_warmup_plans() {
                 llama_pshard_strategy_name(plan.strategy), plan.n_pinned);
             plan.is_viable = false;
         }
-    }
-
-    llama_pshard_plan * initial = registry->get_best(0);
-    if (initial) {
-        pshard_apply_plan(*initial);
-        pshard_active_plan = initial;
     }
 
     LLAMA_LOG_INFO("%s: tier summary:\n", __func__);
@@ -487,7 +467,29 @@ void llama_context::pshard_warmup_plans() {
         __func__, registry->tier_sizes.size(), (t1 - t0) / 1000.0);
 }
 
-void llama_context::pshard_switch_plan(const llama_pshard_plan & old_plan, const llama_pshard_plan & new_plan) {
+void llama_context::pshard_apply_initial_plan() {
+    auto * registry = model.get_plan_registry();
+    if (!registry) return;
+
+    size_t initial_tier = registry->tier_index(16);
+    llama_pshard_plan * initial = registry->get_best(initial_tier);
+
+    if (!initial) {
+        initial = registry->get_best(0);
+    }
+
+    if (initial) {
+        pshard_apply_plan(*initial);
+        pshard_active_plan = initial;
+    }
+}
+
+void llama_context::pshard_switch_plan(
+        const llama_pshard_plan & old_plan,
+        const llama_pshard_plan & new_plan,
+        size_t                    old_tier,
+        size_t                    new_tier,
+        uint32_t                  n_tokens) {
     ggml_backend_t gpu = backends[pshard_layout.compute].get();
 
     auto pipe_shards = memory->get_pipe_shards();
@@ -539,8 +541,14 @@ void llama_context::pshard_switch_plan(const llama_pshard_plan & old_plan, const
         }
     }
 
-    LLAMA_LOG_DEBUG("%s: %s (n_pinned=%u) -> %s (n_pinned=%u) | down=%d skip=%d up=%d skip=%d\n",
+    auto * registry = model.get_plan_registry();
+    auto tier_bs = [&](size_t tier) -> uint32_t {
+        return registry && tier < registry->tier_sizes.size() ? registry->tier_sizes[tier] : 0;
+    };
+
+    LLAMA_LOG_DEBUG("%s: tokens=%u tier %zu(bs=%u) -> %zu(bs=%u): %s (n_pinned=%u) -> %s (n_pinned=%u) | down=%d skip=%d up=%d skip=%d\n",
         __func__,
+        n_tokens, old_tier, tier_bs(old_tier), new_tier, tier_bs(new_tier),
         llama_pshard_strategy_name(old_plan.strategy), old_plan.n_pinned,
         llama_pshard_strategy_name(new_plan.strategy), new_plan.n_pinned,
         n_down, n_skip_down, n_up, n_skip_up);
@@ -572,7 +580,41 @@ void llama_context::pshard_reapply_active_plan() {
         plan.alloc_state.leaf_backend_ids.data(), (int)plan.alloc_state.leaf_backend_ids.size());
 }
 
+bool llama_context::pshard_prepare_host_access() {
+    if (!cparams.pshard || !memory) {
+        return false;
+    }
+
+    auto pipe_shards = memory->get_pipe_shards();
+    if (pipe_shards.empty()) {
+        return false;
+    }
+
+    for (auto * ps : pipe_shards) {
+        ps->prepare_for_host_access();
+    }
+
+    pshard_memory_dirty = true;
+    return true;
+}
+
+void llama_context::pshard_restore_after_host_access() {
+    if (!pshard_memory_dirty) {
+        return;
+    }
+
+    if (pshard_active_plan) {
+        pshard_apply_plan(*pshard_active_plan);
+    }
+
+    pshard_memory_dirty = false;
+}
+
 void llama_context::pshard_maybe_switch(uint32_t n_tokens) {
+    if (pshard_memory_dirty) {
+        pshard_restore_after_host_access();
+    }
+
     auto * registry = model.get_plan_registry();
     if (!registry) return;
 
@@ -582,7 +624,14 @@ void llama_context::pshard_maybe_switch(uint32_t n_tokens) {
 
     if (best != pshard_active_plan) {
         if (pshard_active_plan) {
-            pshard_switch_plan(*pshard_active_plan, *best);
+            size_t old_tier = registry->tier_sizes.size();
+            for (size_t i = 0; i < registry->best_plans.size(); i++) {
+                if (&registry->best_plans[i] == pshard_active_plan) {
+                    old_tier = i;
+                    break;
+                }
+            }
+            pshard_switch_plan(*pshard_active_plan, *best, old_tier, tier, n_tokens);
         } else {
             pshard_apply_plan(*best);
         }

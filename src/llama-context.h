@@ -250,17 +250,25 @@ private:
     void pshard_reapply_active_plan();
     void pshard_reserve_and_save(const llama_pshard_plan & plan);
     void pshard_save_alloc_state(const llama_pshard_plan & plan);
-    void pshard_warmup_plans();
-    void pshard_switch_plan(const llama_pshard_plan & old_plan, const llama_pshard_plan & new_plan);
+    void pshard_warmup_plan_reserves();
+    void pshard_apply_initial_plan();
+    void pshard_switch_plan(
+            const llama_pshard_plan & old_plan,
+            const llama_pshard_plan & new_plan,
+            size_t                    old_tier,
+            size_t                    new_tier,
+            uint32_t                  n_tokens);
     void pshard_maybe_switch(uint32_t n_tokens);
     void pshard_update_write_cells(llama_memory_context_i * mctx);
+    bool pshard_prepare_host_access();
+    void pshard_restore_after_host_access();
 
     // TODO: read/write lora adapters and cvec
-    size_t state_write_data(llama_io_write_i & io);
-    size_t state_read_data (llama_io_read_i  & io);
+    size_t state_write_data(llama_io_write_i & io, bool pshard_host_access);
+    size_t state_read_data (llama_io_read_i  & io, bool pshard_host_access);
 
-    size_t state_seq_write_data(llama_io_write_i & io, llama_seq_id seq_id, llama_state_seq_flags flags);
-    size_t state_seq_read_data (llama_io_read_i  & io, llama_seq_id seq_id, llama_state_seq_flags flags);
+    size_t state_seq_write_data(llama_io_write_i & io, llama_seq_id seq_id, llama_state_seq_flags flags, bool pshard_host_access);
+    size_t state_seq_read_data (llama_io_read_i  & io, llama_seq_id seq_id, llama_state_seq_flags flags, bool pshard_host_access);
 
     //
     // members
@@ -326,6 +334,7 @@ private:
     bool sched_need_reserve = true;
 
     const llama_pshard_plan * pshard_active_plan = nullptr;
+    bool pshard_memory_dirty = false;
     pshard_dev_layout   pshard_layout = {};
 
     ggml_backend_t backend_cpu = nullptr;
@@ -381,7 +390,6 @@ void pshard_assign_tensors(
         const llama_model                               & model,
         llama_memory_i                                  * memory,
         const std::vector<ggml_backend_ptr>             & backends,
-        const pshard_dev_layout                         & layout,
-        ggml_cgraph                                     * gf);
+        const pshard_dev_layout                         & layout);
 
 void pshard_refresh_stream_views(llama_memory_i * memory);

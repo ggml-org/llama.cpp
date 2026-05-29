@@ -11,6 +11,7 @@
 #include <cstring>
 #include <string>
 #include <utility>
+#include <vector>
 
 const char * llama_get_overflow_pattern(size_t il, llama_layer_fraction lf) {
     constexpr size_t n_strings = 1000;
@@ -89,7 +90,7 @@ void llama_pshard_generate_overrides(
         if (il == il_boundary) {
             const char * overflow_pat = llama_get_overflow_pattern(il, overflow_type);
             if (overflow_pat) {
-                emit(overflow_pat, host_buft, (strategy == LLAMA_PSHARD_STATIC_FITPARAMS_DENSEPRIO_MOEONLY) ? layout.cpu : layout.shard(il));
+                emit(overflow_pat, host_buft, layout.shard(il));
             }
             emit(patterns_layer[il].c_str(), host_buft, layout.compute);
         } else if (il >= il_pin_start && il < il_pin_end) {
@@ -98,9 +99,6 @@ void llama_pshard_generate_overrides(
             const bool    use_alternating_shards = strategy == LLAMA_PSHARD_GPUONLY_LAYERPIN_LAYERSTREAM;
             const int32_t shard_bid = use_alternating_shards ? layout.shard(il) : layout.shard_a;
             switch (strategy) {
-                case LLAMA_PSHARD_STATIC_FITPARAMS_DENSEPRIO_MOEONLY:
-                    emit(patterns_layer[il].c_str(), host_buft, layout.cpu);
-                    break;
                 case LLAMA_PSHARD_GPUONLY_LAYERPIN_LAYERSTREAM:
                     emit(patterns_layer[il].c_str(), host_buft, shard_bid);
                     break;
@@ -212,7 +210,7 @@ bool pshard_registry_load(
     struct tier_data {
         uint32_t bs = 0;
         bool viable = false;
-        llama_pshard_strategy strategy = LLAMA_PSHARD_STATIC_FITPARAMS_DENSEPRIO_MOEONLY;
+        llama_pshard_strategy strategy = LLAMA_PSHARD_STATIC_ATTNPRIO_ALLMODELS;
         uint32_t n_pinned = 0;
         uint32_t n_attn_pinned = 0;
         int overflow = 0;
@@ -293,12 +291,16 @@ bool pshard_registry_load(
             td.pin_from_back = atoi(pfb + 14);
 
             td.overflow = pshard_overflow_from_name(overflow_name_buf);
-            td.strategy = LLAMA_PSHARD_STATIC_FITPARAMS_DENSEPRIO_MOEONLY;
+            bool found_strategy = false;
             for (int i = 0; i < LLAMA_PSHARD_COUNT; i++) {
                 if (strcmp(strat_name, llama_pshard_strategy_name((llama_pshard_strategy)i)) == 0) {
                     td.strategy = (llama_pshard_strategy)i;
+                    found_strategy = true;
                     break;
                 }
+            }
+            if (!found_strategy) {
+                td.viable = false;
             }
         } else if (s.compare(0, 3, "ot=") == 0 && !cur_variant->tiers.empty()) {
             cur_variant->tiers.back().ot_line = s.substr(3);
@@ -488,6 +490,76 @@ void llama_pshard_registry_free(llama_pshard_plan_registry * registry) {
     delete registry;
 }
 
+struct llama_pshard_cache_probe {
+    std::vector<llama_device> devs;
+    uint32_t n_layers    = 0;
+    uint32_t n_ctx_train = 0;
+    uint32_t n_expert    = 0;
+    size_t   vram_free   = 0;
+    size_t   vram_budget = 0;
+    size_t   vram_total  = 0;
+    ggml_backend_buffer_type_t host_buft = nullptr;
+};
+
+static bool llama_pshard_probe_model_only(
+        const char * path_model,
+        const struct llama_model_params * mparams,
+        size_t max_vram_mb,
+        size_t fit_target_mb,
+        llama_pshard_cache_probe & probe) {
+    struct user_data_t {
+        struct {
+            ggml_log_callback callback;
+            void * user_data;
+        } original_logger;
+    };
+    user_data_t ud;
+    llama_log_get(&ud.original_logger.callback, &ud.original_logger.user_data);
+
+    llama_log_set([](ggml_log_level level, const char * text, void * user_data) {
+        const user_data_t * ud = (const user_data_t *) user_data;
+        const ggml_log_level level_eff = level >= GGML_LOG_LEVEL_ERROR ? level : GGML_LOG_LEVEL_DEBUG;
+        ud->original_logger.callback(level_eff, text, ud->original_logger.user_data);
+    }, &ud);
+
+    llama_model_params mparams_probe = *mparams;
+    mparams_probe.no_alloc  = true;
+    mparams_probe.pshard    = false;
+    mparams_probe.use_mmap  = false;
+    mparams_probe.use_mlock = false;
+
+    llama_model * model = llama_model_load_from_file(path_model, mparams_probe);
+    llama_log_set(ud.original_logger.callback, ud.original_logger.user_data);
+
+    if (!model) {
+        return false;
+    }
+
+    probe.devs        = model->devices;
+    probe.n_layers    = model->hparams.n_layer;
+    probe.n_ctx_train = model->hparams.n_ctx_train;
+    probe.n_expert    = model->hparams.n_expert;
+
+    if (!probe.devs.empty()) {
+        ggml_backend_dev_t dev = probe.devs[0].dev;
+        ggml_backend_dev_memory(dev, &probe.vram_free, &probe.vram_total);
+
+        const size_t mib = 1024ULL * 1024ULL;
+        const size_t fit_target_bytes = fit_target_mb * mib;
+        probe.vram_budget = max_vram_mb > 0
+            ? max_vram_mb * mib
+            : (probe.vram_free > fit_target_bytes ? probe.vram_free - fit_target_bytes : 0);
+
+        probe.host_buft = ggml_backend_dev_host_buffer_type(dev);
+        if (!probe.host_buft) {
+            probe.host_buft = ggml_backend_cpu_buffer_type();
+        }
+    }
+
+    llama_model_free(model);
+    return true;
+}
+
 static bool llama_pshard_params_supported(
         const struct llama_model_params * mparams,
         const struct llama_context_params * cparams) {
@@ -530,7 +602,8 @@ void llama_params_fit_pshard(
         struct llama_model_params * mparams,
         struct llama_context_params * cparams,
         struct llama_model_tensor_buft_override * tensor_buft_overrides,
-        size_t max_vram_mb) {
+        size_t max_vram_mb,
+        size_t fit_target_mb) {
     const std::string cache_path = std::string(path_model) + ".tensor_overrides.pshard_registry";
 
     if (!llama_pshard_params_supported(mparams, cparams)) {
@@ -539,34 +612,38 @@ void llama_params_fit_pshard(
         return;
     }
 
-    std::vector<llama_device> devs;
-    uint32_t hp_ngl = 0, hp_nct = 0, hp_nex = 0;
+    llama_pshard_cache_probe probe;
+    if (!llama_pshard_probe_model_only(path_model, mparams, max_vram_mb, fit_target_mb, probe)) {
+        LLAMA_LOG_WARN("%s: failed to probe model metadata, disabling pshard\n", __func__);
+        mparams->pshard = false;
+        cparams->pshard = false;
+        return;
+    }
 
-    llama_model_params mparams_probe = *mparams;
-    mparams_probe.pshard = false;
-
-    const auto dmds = llama_get_device_memory_data(
-        path_model, &mparams_probe, cparams, devs, hp_ngl, hp_nct, hp_nex, GGML_LOG_LEVEL_ERROR);
-
-    if (devs.empty()) {
+    if (probe.devs.empty()) {
         LLAMA_LOG_WARN("%s: no GPU devices found, disabling pshard\n", __func__);
         mparams->pshard = false;
         cparams->pshard = false;
         return;
     }
 
-    const uint32_t n_layers = hp_ngl;
-    const size_t   vram_free = (max_vram_mb > 0) ? max_vram_mb * 1024ULL * 1024ULL : dmds[0].free;
+    const auto &   devs      = probe.devs;
+    const uint32_t n_layers  = probe.n_layers;
+    const size_t   vram_free = probe.vram_budget;
 
-    if (mparams->max_vram_alloc == 0 && vram_free > 0) {
-        mparams->max_vram_alloc = vram_free / (1024 * 1024);
+    if (vram_free > 0) {
+        mparams->max_vram_alloc = std::max<size_t>(1, pshard_bytes_to_mib_ceil(vram_free));
     }
 
-    ggml_backend_buffer_type_t host_buft = ggml_backend_dev_host_buffer_type(devs[0].dev);
-    if (!host_buft) host_buft = ggml_backend_cpu_buffer_type();
+    ggml_backend_buffer_type_t host_buft = probe.host_buft;
 
-    LLAMA_LOG_INFO("%s: probe: %u layers, %.1f MiB VRAM free\n",
-        __func__, n_layers, vram_free / (1024.0 * 1024.0));
+    LLAMA_LOG_INFO("%s: probe: %u layers, %.1f MiB VRAM free, %.1f MiB budget%s\n",
+        __func__, n_layers,
+        probe.vram_free / (1024.0 * 1024.0),
+        vram_free / (1024.0 * 1024.0),
+        max_vram_mb > 0 ? " (-mva)" : " (free - fit target)");
+
+    const uint32_t n_ctx_plan = cparams->n_ctx > 0 ? cparams->n_ctx : probe.n_ctx_train;
 
     auto * registry = mparams->pshard_registry;
     if (!registry) {
@@ -575,10 +652,18 @@ void llama_params_fit_pshard(
         cparams->pshard = false;
         return;
     }
+    const uint32_t requested_tier_max = registry->cache_ubatch;
+    const uint32_t tier_max_auto = std::min(std::max(cparams->n_batch, (uint32_t) 16384), n_ctx_plan);
+    const uint32_t tier_max = std::min(requested_tier_max > 0 ? requested_tier_max : tier_max_auto, n_ctx_plan);
+
+    if (registry->cache_ubatch != tier_max) {
+        registry->init(tier_max, cparams->n_seq_max);
+    }
+
     registry->budget_mib = pshard_bytes_to_mib_ceil(vram_free);
-    const uint32_t runtime_n_batch = std::min(cparams->n_ctx, cparams->n_batch);
+    const uint32_t runtime_n_batch = std::min(n_ctx_plan, cparams->n_batch);
     const uint32_t runtime_cache_ubatch = std::min(runtime_n_batch, cparams->n_ubatch == 0 ? runtime_n_batch : cparams->n_ubatch);
-    registry->cache_ubatch = registry->cache_ubatch ? std::min(cparams->n_ctx, registry->cache_ubatch) : runtime_cache_ubatch;
+    registry->cache_ubatch = registry->cache_ubatch ? std::min(n_ctx_plan, registry->cache_ubatch) : runtime_cache_ubatch;
 
     int64_t model_file_size = 0;
     {
@@ -625,7 +710,7 @@ void llama_params_fit_pshard(
     }
 
     if (registry->cache_ubatch > 0) {
-        const uint32_t pshard_ubatch = std::min(cparams->n_ctx, registry->cache_ubatch);
+        const uint32_t pshard_ubatch = std::min(n_ctx_plan, registry->cache_ubatch);
         cparams->n_batch  = pshard_ubatch;
         cparams->n_ubatch = pshard_ubatch;
     }
@@ -650,6 +735,10 @@ void llama_params_fit_pshard(
     if (default_tier < registry->tier_sizes.size() - 1) {
         LLAMA_LOG_INFO("%s: highest tier (bs=%u) not viable, falling back to bs=%u\n",
             __func__, registry->tier_sizes.back(), registry->tier_sizes[default_tier]);
+        const uint32_t tier_bs = registry->tier_sizes[default_tier];
+        cparams->n_batch  = std::min(cparams->n_batch,  tier_bs);
+        cparams->n_ubatch = std::min(cparams->n_ubatch, tier_bs);
+        LLAMA_LOG_INFO("%s: clamped n_batch/n_ubatch to %u\n", __func__, tier_bs);
     }
 
     if (best->n_pinned > n_layers) {
@@ -662,29 +751,12 @@ void llama_params_fit_pshard(
 
     const int32_t cpu_bid = pshard_dev_layout::compute_cpu_backend_id(devs.size());
     const pshard_dev_layout layout = pshard_dev_layout::for_device(0, cpu_bid);
-    // baseline plans use the cached fit params dense only placement
-    // regenerating them from n_pinned and overflow would lose that placement
-    if (best->strategy == LLAMA_PSHARD_STATIC_FITPARAMS_DENSEPRIO_MOEONLY) {
-        thread_local std::vector<std::string> shard_none_patterns;
-        shard_none_patterns.clear();
-        shard_none_patterns.reserve(best->overrides.size());
-        for (const auto & ov : best->overrides) {
-            shard_none_patterns.push_back(ov.pattern);
-        }
-        for (size_t i = 0; i < best->overrides.size(); i++) {
-            tensor_buft_overrides[i].pattern    = shard_none_patterns[i].c_str();
-            tensor_buft_overrides[i].buft       = best->overrides[i].buft;
-            tensor_buft_overrides[i].backend_id = best->overrides[i].backend_id;
-        }
-        tensor_buft_overrides[best->overrides.size()] = { nullptr, nullptr, -1 };
-    } else {
-        llama_pshard_generate_overrides(
-            best->n_pinned, n_layers, host_buft, host_buft,
-            tensor_buft_overrides,
-            (llama_layer_fraction)best->overflow,
-            best->strategy, layout,
-            best->pin_from_back, best->output_on_gpu, best->n_attn_pinned);
-    }
+    llama_pshard_generate_overrides(
+        best->n_pinned, n_layers, host_buft, host_buft,
+        tensor_buft_overrides,
+        (llama_layer_fraction)best->overflow,
+        best->strategy, layout,
+        best->pin_from_back, best->output_on_gpu, best->n_attn_pinned);
 
     for (size_t i = 0; tensor_buft_overrides[i].pattern; i++) {
         if (tensor_buft_overrides[i].backend_id == layout.compute) {
