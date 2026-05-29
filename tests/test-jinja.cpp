@@ -523,12 +523,6 @@ static void test_set_statement(testing & t) {
 }
 
 static void test_filters(testing & t) {
-    test_template(t, "fromjson parses object string",
-        "{% set arguments = '{\"arg\": \"hello\"}' | fromjson %}{{ arguments.arg }}",
-        json::object(),
-        "hello"
-    );
-
     test_template(t, "upper",
         "{{ 'hello'|upper }}",
         json::object(),
@@ -2010,7 +2004,6 @@ def raise_exception(message):
     raise jinja2.exceptions.TemplateError(message)
 
 env.filters["tojson"] = lambda x, ensure_ascii=False, indent=None, separators=None, sort_keys=False: json.dumps(x, ensure_ascii=ensure_ascii, indent=indent, separators=separators, sort_keys=sort_keys)
-env.filters["fromjson"] = lambda x: json.loads(x)
 env.globals["strftime_now"] = lambda format: datetime.now().strftime(format)
 env.globals["raise_exception"] = raise_exception
 
