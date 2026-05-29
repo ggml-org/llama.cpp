@@ -1,9 +1,14 @@
 #include "app-update.h"
 
-#include <cctype>
 #include <cstdio>
-#include <cstdlib>
 #include <string>
+
+#if defined(_WIN32)
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#else
+#include <cstdlib>
+#endif
 
 #ifndef LLAMA_APP_ID_BINARY
 #define LLAMA_APP_ID_BINARY ""
@@ -13,52 +18,31 @@
 #define LLAMA_APP_SCRIPT_URL "https://llama.app"
 #endif
 
-// extracts the backend segment from the baked variant id "arch/os/backend/config"
-static std::string backend_of(const std::string & id) {
-    size_t a = id.find('/');
-    if (a == std::string::npos) {
-        return std::string();
-    }
-    size_t b = id.find('/', a + 1);
-    if (b == std::string::npos) {
-        return std::string();
-    }
-    size_t c = id.find('/', b + 1);
-    if (c == std::string::npos) {
-        return id.substr(b + 1);
-    }
-    return id.substr(b + 1, c - b - 1);
-}
-
 int llama_update(int argc, char ** argv) {
     (void) argc;
     (void) argv;
 
-    const std::string id = LLAMA_APP_ID_BINARY;
-    if (id.empty()) {
+    if (std::string(LLAMA_APP_ID_BINARY).empty()) {
         printf("update: this build has no release channel configured\n");
         return 0;
     }
 
-    // pin the backend, the install script re-detects the hardware config which is stable
-    const std::string backend = backend_of(id);
-    if (!backend.empty()) {
-        std::string force = "FORCE_";
-        for (char ch : backend) {
-            force += (char) toupper((unsigned char) ch);
-        }
 #if defined(_WIN32)
-        _putenv_s(force.c_str(), "1");
-#else
-        setenv(force.c_str(), "1", 1);
-#endif
+    // the installer swaps llama.exe, so this process must release its lock first
+    // spawn it detached and return at once, exiting frees the binary before the swap
+    char cmd[] = "powershell -NoProfile -Command \"irm " LLAMA_APP_SCRIPT_URL "/install.ps1 | iex\"";
+    STARTUPINFOA si = { sizeof(si) };
+    PROCESS_INFORMATION pi;
+    if (!CreateProcessA(NULL, cmd, NULL, NULL, FALSE, CREATE_NEW_CONSOLE, NULL, NULL, &si, &pi)) {
+        printf("update: cannot start the installer\n");
+        return 1;
     }
-
-    // hand over to the install script, it owns download, decompress and the in place swap
-#if defined(_WIN32)
-    const char * cmd = "powershell -NoProfile -Command \"irm " LLAMA_APP_SCRIPT_URL "/install.ps1 | iex\"";
+    CloseHandle(pi.hProcess);
+    CloseHandle(pi.hThread);
+    printf("update: installer running in a new window, llama exits to free the binary\n");
+    return 0;
 #else
-    const char * cmd = "curl -fsSL " LLAMA_APP_SCRIPT_URL "/install.sh | sh";
+    // posix replaces a running binary fine, the installer runs in place
+    return system("curl -fsSL " LLAMA_APP_SCRIPT_URL "/install.sh | sh");
 #endif
-    return system(cmd);
 }
