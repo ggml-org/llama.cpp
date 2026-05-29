@@ -531,7 +531,7 @@ PLATFORM_SPECS: dict[Platform, PlatformSpec] = {
         test_framework=TestFramework.POWERSHELL,
         entry_script=_WINDOWS_ENTRY_SCRIPT,
         build_artifact=_build_windows_artifact,
-        job_name_fmt="{base} (Windows)",
+        job_name_fmt="{base} (Win)",
     ),
 }
 
@@ -880,7 +880,7 @@ def _submit_and_run_job(client, args, spec, target_id, artifact_id) -> JobResult
     except TimeoutError:
         raise DeviceUnavailableError("Capacity wait timed out — device busy")
 
-    job_name = spec.job_name_fmt.format(base="llama.cpp Hexagon tests")
+    job_name = spec.job_name_fmt.format(base="llama.cpp Hexagon tests")[:32]
 
     job_id = qdc_api.submit_job(
         public_api_client=client,
