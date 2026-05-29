@@ -754,7 +754,16 @@ static bool ggml_is_view_op(enum ggml_op op) {
 #endif
 
 #ifndef GGML_SCHED_MAX_SPLIT_INPUTS
-#define GGML_SCHED_MAX_SPLIT_INPUTS 30
+// V4 multi-GPU note: V4 (DeepSeek-V4) graphs need a higher value (~80-128)
+// when split across multiple devices, due to dense per-layer inputs
+// (hyperconnection × 4 + indexer/compressor state + multiple KV caches).
+// Single-device runs never trip the cap. The constant gates not just
+// `sched_split.inputs[N]` (small) but also `nodes_size` and
+// `context_buffer_size` allocations that scale as `graph_size × N` —
+// bumping the default adds ~200 MB per scheduler instance for V4-sized
+// graphs, paid even by single-GPU users who don't need it. We bump it
+// anyway for the DSv4-Flash use-case (Strix Halo / unified memory).
+#define GGML_SCHED_MAX_SPLIT_INPUTS 128
 #endif
 
 #ifndef GGML_SCHED_MAX_COPIES

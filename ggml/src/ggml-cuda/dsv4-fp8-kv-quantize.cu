@@ -1,6 +1,6 @@
 #include "dsv4-fp8-kv-quantize.cuh"
 
-#if __CUDA_ARCH__ >= 890
+#if !defined(__HIP_PLATFORM_AMD__) && __CUDA_ARCH__ >= 890
 #include <cuda_fp8.h>
 #endif
 
@@ -52,7 +52,7 @@ static __device__ __forceinline__ float dsv4_e4m3fn_dequant_sw(float x) {
 // __half2float chain: the class wrapper is clearer and avoids a half
 // hop on F32-only data. There is no __nv_cvt_fp8_to_float intrinsic.)
 static __device__ __forceinline__ float dsv4_e4m3fn_roundtrip(float x) {
-#if __CUDA_ARCH__ >= 890
+#if !defined(__HIP_PLATFORM_AMD__) && __CUDA_ARCH__ >= 890
     const __nv_fp8_e4m3 q(x);
     return float(q);
 #else
@@ -65,7 +65,7 @@ static __device__ __forceinline__ float dsv4_e4m3fn_roundtrip(float x) {
 static __device__ __forceinline__ float warp_reduce_max(float v) {
     #pragma unroll
     for (int offset = 16; offset > 0; offset >>= 1) {
-        v = fmaxf(v, __shfl_xor_sync(0xffffffffu, v, offset));
+        v = fmaxf(v, __shfl_xor_sync(0xffffffffu, v, offset, 32));
     }
     return v;
 }
