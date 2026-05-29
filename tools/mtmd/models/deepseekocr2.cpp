@@ -14,11 +14,11 @@ ggml_cgraph * clip_graph_deepseekocr2::build() {
     {
         ggml_tensor * inp;
 
-        inp = ggml_cpy(ctx0, sam_out, ggml_dup_tensor(ctx0, sam_out));
-        inp = ggml_reshape_2d(ctx0, inp, inp->ne[0] * inp->ne[1], inp->ne[2]); // H*W, C
+        inp = ggml_reshape_2d(ctx0, sam_out, sam_out->ne[0] * sam_out->ne[1], sam_out->ne[2]); // H*W, C
         inp = ggml_cont(ctx0, ggml_permute(ctx0, inp, 1, 0, 2, 3));
 
         auto num_image_tokens = inp->ne[1]; // H*W
+        GGML_ASSERT(num_image_tokens == 144 ^ num_image_tokens == 256);
 
         // query based on numbers of image tokens (in SAM output)
         // 16x16 -> query_1024 (1024x1024 images)
@@ -69,12 +69,9 @@ ggml_cgraph * clip_graph_deepseekocr2::build() {
     cur = ggml_mul_mat(ctx0, model.mm_fc_w, qwen2_out);
     cur = ggml_add(ctx0, cur, model.mm_fc_b);
 
-    const auto n_dim = cur->ne[0];
-
-    // separator row, only after the global view
+    // view_seperator only after the global view
     if (img.add_viewsep) {
-        ggml_tensor * vs = ggml_reshape_2d(ctx0, model.view_seperator, n_dim, 1); // (n_dim, 1)
-        cur              = ggml_concat(ctx0, cur, vs, 1); // (n_dim, 257)
+        cur = ggml_concat(ctx0, cur, model.view_seperator, 1); // (n_dim, 257)
     }
 
     cb(cur, "dsocr2_output", -1);

@@ -69,6 +69,11 @@ class DeepseekOCRVisionModel(MmprojModel):
                 return gguf.GGMLQuantizationType.F32
         return super().tensor_force_quant(name, new_name, bid, n_dims)
 
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        if name.endswith("view_seperator"):
+            data_torch = data_torch.unsqueeze(0)
+        yield from super().modify_tensors(data_torch, name, bid)
+
     @classmethod
     def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
         name, gen = item
