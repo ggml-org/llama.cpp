@@ -55,8 +55,8 @@ struct common_download_opts {
     bool skip_download = false; // if true, only validation is performed, common_skip_download_exception may be thrown if the file is missing or invalid
     bool download_mmproj = false;
     bool download_mtp = false;
-    common_download_callback * callback = nullptr;
     bool hf_prune_old_files = false;
+    common_download_callback * callback = nullptr;
 };
 
 // Result of common_download_model
