@@ -308,8 +308,35 @@ int entry_point(struct ggml_et_binary_params *params, void *env) {
         const int64_t nb = nb_idx * TILE_N;
         const int64_t n_cur = (nb + TILE_N <= N) ? TILE_N : (N - nb);
 
-        // Partial-N is handled by a_num_rows = n_cur-1 alone (as in the F32
-        // matrix engine); no tensor_mask needed for the plain FP32 layout.
+        // Partial-N tiles run the TensorFMA32 with a_num_rows = n_cur-1.
+        //
+        // Errata Type D: TensorFMA32 / TensorFMA16A32 microsequence incorrectly
+        // for certain small A-row counts. With B in L1 SCP (tenb_loc=0, our
+        // case) the bug triggers *only* at AROWS == 3, i.e. exactly n_cur == 4
+        // rows (ACOLS > 0 always holds here). All other n_cur in 1..16 are safe.
+        // Workaround (per the errata doc): pad A to AROWS == 4 (5 rows) with a
+        // zeroed 5th row and store only the valid n_cur rows. The padded row is
+        // never stored, and at AROWS == 4 there is no cross-row coupling.
+        const int64_t arows_fma = (n_cur == 4) ? 4 : (n_cur - 1);
+
+        if (n_cur == 4) {
+            // Zero the padded 5th A row (line A_L1_START+4) once; the per-pass A
+            // load only writes lines A_L1_START..+3, so this persists.
+            static const float __attribute__((aligned(64))) zero_line[16] = {0};
+            tensor_load(
+                false, false,
+                A_L1_START + 4,
+                TENSOR_LOAD_PLAIN,
+                0,
+                (uint64_t) zero_line,
+                0,
+                0,              // 1 line
+                64,
+                0
+            );
+            tensor_wait(TENSOR_LOAD_WAIT_0);
+        }
+
         int first = 1;  // first_pass=1 only for the very first FMA of the tile
 
         for (int64_t kb = kb_start; kb < kb_end; ++kb) {
@@ -355,7 +382,7 @@ int entry_point(struct ggml_et_binary_params *params, void *env) {
                 tensor_fma(
                     false,
                     3,              // b_num_col: (16/4)-1
-                    n_cur - 1,      // a_num_rows
+                    arows_fma,      // a_num_rows (n_cur-1, or 4 for the n_cur==4 errata pad)
                     FMA_K - 1,      // a_num_cols
                     0,
                     false,

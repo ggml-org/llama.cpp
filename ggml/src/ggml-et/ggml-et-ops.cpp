@@ -730,36 +730,26 @@ bool ggml_et_op_mul_mat(ggml_backend_et_device_context* dev_ctx, const ggml_tens
     const char* kernel_name;
     const char* src0_type_name;
 
-    // Q4_0 hybrid split: the matrix engine handles the floor-to-16 N columns,
-    // the vector kernel mops up the N % 16 remainder. Set when N is not itself
-    // a multiple of TILE_N but still has at least one full N tile.
-    bool    q4_hybrid_tail = false;
-    int64_t q4_n_full      = 0;   // N columns handled by the matrix engine
-
     if (node->type == GGML_TYPE_F32 &&
         node->src[0]->type == GGML_TYPE_Q4_0 &&
         node->src[1]->type == GGML_TYPE_F32 &&
         node->src[0]->ne[1] % 16 == 0 &&   // M % TILE_M
-        node->src[0]->ne[0] % 32 == 0 &&   // K % BLOCK_K (Q4_0 block)
-        node->src[1]->ne[1] >= 16) {       // at least one full N tile
+        node->src[0]->ne[0] % 32 == 0) {   // K % BLOCK_K (Q4_0 block)
 
-        // Tensor (matrix) engine: dequantize Q4_0 weights to FP32 and run
-        // TensorFMA32. Used for the large-N (prefill) regime. Partial-N tiles
-        // (n_cur < 16) have a known HW bug, so the matrix engine only ever runs
-        // the floor-to-16 columns; the < 16 remainder (N % 16) is handed to the
-        // vector kernel below via a second launch. Pure decode/GEMV (N < 16)
-        // skips this branch entirely and uses the vector kernel.
+        // Tensor (matrix) engine for all N: dequantize Q4_0 weights to FP32 and
+        // run TensorFMA32. Full N tiles (N % 16 == 0) and the partial last tile
+        // (n_cur in 1..15, including decode/GEMV) are both handled in-kernel via
+        // a_num_rows = n_cur-1, with the n_cur==4 Errata-D case zero-padded to
+        // AROWS==4. The vector kernel is used only when M or K is not
+        // tensor-tileable (M % 16 != 0 or K % 32 != 0).
         kernel_name = "mul_mat_Q4_0_matrix_engine";
         src0_type_name = "Q4_0";
-
-        q4_n_full      = node->src[1]->ne[1] & ~(int64_t)15;   // floor to 16
-        q4_hybrid_tail = (node->src[1]->ne[1] != q4_n_full);
 
     } else if (node->type == GGML_TYPE_F32 &&
         node->src[0]->type == GGML_TYPE_Q4_0 &&
         node->src[1]->type == GGML_TYPE_F32) {
 
-        kernel_name = "mul_mat_Q4_0";
+        kernel_name = "mul_mat_Q4_0";   // M % 16 != 0 or K % 32 != 0
         src0_type_name = "Q4_0";
 
     } else if (node->type == GGML_TYPE_F32 &&
@@ -838,27 +828,6 @@ bool ggml_et_op_mul_mat(ggml_backend_et_device_context* dev_ctx, const ggml_tens
             q8_params.bias = *bias_tensor;
         }
         kernel_result = ggml_et_launch_kernel(dev_ctx, kernel_name, &q8_params, sizeof(q8_params), 0xFFFFFFFF);
-    } else if (q4_hybrid_tail) {
-        // Q4_0 with N not a multiple of TILE_N: run the matrix engine on the
-        // first q4_n_full columns and the vector kernel on the N % 16 tail.
-        // The two launches write disjoint N-column ranges of dst (and read
-        // disjoint N-column ranges of src1), so order is irrelevant.
-        const int64_t N     = params.src1.ne[1];
-        const int64_t n_rem = N - q4_n_full;
-
-        ggml_et_binary_params me_params = params;
-        me_params.src1.ne[1] = q4_n_full;
-        me_params.dst.ne[1]  = q4_n_full;
-        bool me_ok = ggml_et_launch_kernel(dev_ctx, kernel_name, &me_params, sizeof(me_params), 0xFFFFFFFF);
-
-        ggml_et_binary_params vec_params = params;
-        vec_params.src1.ne[1] = n_rem;
-        vec_params.src1.data  = (char*)params.src1.data + q4_n_full * params.src1.nb[1];
-        vec_params.dst.ne[1]  = n_rem;
-        vec_params.dst.data   = (char*)params.dst.data + q4_n_full * params.dst.nb[1];
-        bool vec_ok = ggml_et_launch_kernel(dev_ctx, "mul_mat_Q4_0", &vec_params, sizeof(vec_params), 0xFFFFFFFF);
-
-        kernel_result = me_ok && vec_ok;
     } else {
         // Non-Q8 MM kernels don't yet support fused-add; the graph fuse check
         // already rejects non-Q8 pairs, so add_node is always nullptr here.
