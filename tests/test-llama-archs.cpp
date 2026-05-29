@@ -407,7 +407,7 @@ static bool arch_supported(const llm_arch arch) {
     if (arch == LLM_ARCH_PLM) {
         return false; // TODO tensor shapes
     }
-    if (arch == LLM_ARCH_DEEPSEEK2OCR) {
+    if (arch == LLM_ARCH_DEEPSEEK2OCR || arch == LLM_ARCH_DEEPSEEK32) {
         return false;
     }
 
