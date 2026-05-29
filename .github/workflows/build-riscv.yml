@@ -69,7 +69,7 @@ jobs:
       #- name: ccache
       #  uses: ggml-org/ccache-action@afde29e5b5422e5da23cb1f639e8baecadeadfc3 # https://github.com/ggml-org/ccache-action/pull/1
       #  with:
-      #    key: ubuntu-cpu-riscv64-native
+      #    key: riscv-ubuntu-native
       #    evict-old-files: 1d
       #    save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
@@ -139,7 +139,7 @@ jobs:
       #- name: ccache
       #  uses: ggml-org/ccache-action@afde29e5b5422e5da23cb1f639e8baecadeadfc3 # https://github.com/ggml-org/ccache-action/pull/1
       #  with:
-      #    key: ubuntu-riscv64-native-sanitizer-${{ matrix.sanitizer }}-${{ matrix.build_type }}
+      #    key: riscv-ubuntu-native-sanitizer-${{ matrix.sanitizer }}-${{ matrix.build_type }}
       #    evict-old-files: 1d
       #    save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 

@@ -62,6 +62,7 @@ static const std::map<std::string, llm_chat_template> LLM_CHAT_TEMPLATES = {
     { "rwkv-world",        LLM_CHAT_TEMPLATE_RWKV_WORLD        },
     { "granite",           LLM_CHAT_TEMPLATE_GRANITE_3_X       },
     { "granite-4.0",       LLM_CHAT_TEMPLATE_GRANITE_4_0       },
+    { "granite-4.1",       LLM_CHAT_TEMPLATE_GRANITE_4_1       },
     { "gigachat",          LLM_CHAT_TEMPLATE_GIGACHAT          },
     { "megrez",            LLM_CHAT_TEMPLATE_MEGREZ            },
     { "yandex",            LLM_CHAT_TEMPLATE_YANDEX            },
@@ -194,7 +195,10 @@ llm_chat_template llm_chat_detect_template(const std::string & tmpl) {
         return LLM_CHAT_TEMPLATE_RWKV_WORLD;
     } else if (tmpl_contains("<|start_of_role|>")) {
         if (tmpl_contains("<tool_call>") || tmpl_contains("<tools>")) {
-            return LLM_CHAT_TEMPLATE_GRANITE_4_0;
+            if (tmpl_contains("g4_default_system_message")) {
+                return LLM_CHAT_TEMPLATE_GRANITE_4_0;
+            }
+            return LLM_CHAT_TEMPLATE_GRANITE_4_1;
         }
         return LLM_CHAT_TEMPLATE_GRANITE_3_X;
     } else if (tmpl_contains("message['role'] + additional_special_tokens[0] + message['content'] + additional_special_tokens[1]")) {
@@ -639,6 +643,20 @@ int32_t llm_chat_apply_template(
         }
     } else if (tmpl == LLM_CHAT_TEMPLATE_GRANITE_4_0) {
         // IBM Granite 4.0 template
+        for (const auto & message : chat) {
+            std::string role(message->role);
+            if (role == "assistant_tool_call") {
+                ss << "<|start_of_role|>assistant<|end_of_role|><|tool_call|>";
+            } else {
+                ss << "<|start_of_role|>" << role << "<|end_of_role|>";
+            }
+            ss << message->content << "<|end_of_text|>\n";
+        }
+        if (add_ass) {
+            ss << "<|start_of_role|>assistant<|end_of_role|>";
+        }
+    } else if (tmpl == LLM_CHAT_TEMPLATE_GRANITE_4_1) {
+        // IBM Granite 4.1 template
         for (const auto & message : chat) {
             std::string role(message->role);
             if (role == "assistant_tool_call") {

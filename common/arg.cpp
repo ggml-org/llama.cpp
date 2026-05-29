@@ -50,8 +50,6 @@
 
 #define LLAMA_MAX_URL_LENGTH 2084 // Maximum URL Length in Chrome: 2083
 
-extern const char * LICENSES[];
-
 using json = nlohmann::ordered_json;
 using namespace common_arg_utils;
 
@@ -342,9 +340,7 @@ struct handle_model_result {
 };
 
 static handle_model_result common_params_handle_model(struct common_params_model & model,
-                                                      const std::string          & bearer_token,
-                                                      bool                         offline,
-                                                      bool                         search_mtp = false) {
+                                                      const common_download_opts & opts) {
     handle_model_result result;
 
     if (!model.docker_repo.empty()) {
@@ -356,10 +352,9 @@ static handle_model_result common_params_handle_model(struct common_params_model
             model.hf_file = model.path;
             model.path = "";
         }
-        common_download_opts opts;
-        opts.bearer_token = bearer_token;
-        opts.offline = offline;
-        auto download_result = common_download_model(model, opts, true, search_mtp);
+        common_download_opts hf_opts = opts;
+        hf_opts.download_mmproj = true; // also look for mmproj when downloading hf model
+        auto download_result = common_download_model(model, hf_opts);
 
         if (download_result.model_path.empty()) {
             throw std::runtime_error("failed to download model from Hugging Face");
@@ -384,9 +379,6 @@ static handle_model_result common_params_handle_model(struct common_params_model
             model.path = fs_get_cache_file(string_split<std::string>(f, '/').back());
         }
 
-        common_download_opts opts;
-        opts.bearer_token = bearer_token;
-        opts.offline = offline;
         auto download_result = common_download_model(model, opts);
         if (download_result.model_path.empty()) {
             throw std::runtime_error("failed to download model from " + model.url);
@@ -443,35 +435,49 @@ static bool parse_bool_value(const std::string & value) {
 // CLI argument parsing functions
 //
 
-void common_params_handle_models(common_params & params, llama_example curr_ex) {
+bool common_params_handle_models(common_params & params, llama_example curr_ex) {
     const bool spec_type_draft_mtp = std::find(params.speculative.types.begin(),
                                          params.speculative.types.end(),
                                          COMMON_SPECULATIVE_TYPE_DRAFT_MTP) != params.speculative.types.end();
 
-    auto res = common_params_handle_model(params.model, params.hf_token, params.offline, spec_type_draft_mtp);
-    if (params.no_mmproj) {
-        params.mmproj = {};
-    } else if (res.found_mmproj && params.mmproj.path.empty() && params.mmproj.url.empty()) {
-        // optionally, handle mmproj model when -hf is specified
-        params.mmproj = res.mmproj;
-    }
-    // only download mmproj if the current example is using it
-    for (const auto & ex : mmproj_examples) {
-        if (curr_ex == ex) {
-            common_params_handle_model(params.mmproj,    params.hf_token, params.offline);
-            break;
+    common_download_opts opts;
+    opts.bearer_token  = params.hf_token;
+    opts.offline       = params.offline;
+    opts.skip_download = params.skip_download;
+    opts.download_mtp  = spec_type_draft_mtp;
+
+    try {
+        auto res = common_params_handle_model(params.model, opts);
+        if (params.no_mmproj) {
+            params.mmproj = {};
+        } else if (res.found_mmproj && params.mmproj.path.empty() && params.mmproj.url.empty()) {
+            // optionally, handle mmproj model when -hf is specified
+            params.mmproj = res.mmproj;
         }
+        // only download mmproj if the current example is using it
+        for (const auto & ex : mmproj_examples) {
+            if (curr_ex == ex) {
+                common_params_handle_model(params.mmproj, opts);
+                break;
+            }
+        }
+
+        // when --spec-type mtp is set and no draft model was provided explicitly,
+        // fall back to the MTP head discovered alongside the -hf model
+        if (spec_type_draft_mtp && res.found_mtp &&
+            params.speculative.draft.mparams.path.empty() &&
+            params.speculative.draft.mparams.hf_repo.empty() &&
+            params.speculative.draft.mparams.url.empty()) {
+            params.speculative.draft.mparams.path = res.mtp.path;
+        }
+        common_params_handle_model(params.speculative.draft.mparams, opts);
+        common_params_handle_model(params.vocoder.model,             opts);
+        return true;
+    } catch (const common_skip_download_exception &) {
+        return false;
+    } catch (const std::exception &) {
+        throw;
     }
-    // when --spec-type mtp is set and no draft model was provided explicitly,
-    // fall back to the MTP head discovered alongside the -hf model
-    if (spec_type_draft_mtp && res.found_mtp &&
-        params.speculative.draft.mparams.path.empty() &&
-        params.speculative.draft.mparams.hf_repo.empty() &&
-        params.speculative.draft.mparams.url.empty()) {
-        params.speculative.draft.mparams.path = res.mtp.path;
-    }
-    common_params_handle_model(params.speculative.draft.mparams, params.hf_token, params.offline);
-    common_params_handle_model(params.vocoder.model,             params.hf_token, params.offline);
 }
 
 static bool common_params_parse_ex(int argc, char ** argv, common_params_context & ctx_arg) {
@@ -1088,16 +1094,6 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params &) {
             fprintf(stderr, "version: %d (%s)\n", llama_build_number(), llama_commit());
             fprintf(stderr, "built with %s for %s\n", llama_compiler(), llama_build_target());
-            exit(0);
-        }
-    ));
-    add_opt(common_arg(
-        {"--license"},
-        "show source code license and dependencies",
-        [](common_params &) {
-            for (int i = 0; LICENSES[i]; ++i) {
-                printf("%s\n", LICENSES[i]);
-            }
             exit(0);
         }
     ));
@@ -2998,7 +2994,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             }
             key_file.close();
         }
-    ).set_examples({LLAMA_EXAMPLE_SERVER}));
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_API_KEY_FILE"));
     add_opt(common_arg(
         {"--ssl-key-file"}, "FNAME",
         "path to file a PEM-encoded SSL private key",
