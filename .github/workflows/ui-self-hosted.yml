@@ -76,6 +76,12 @@ jobs:
         run: npm run test:client
         working-directory: tools/ui
 
+      - name: Download built UI artifacts
+        uses: actions/download-artifact@v6
+        with:
+          name: ui-build
+          path: tools/ui/dist/
+
       - name: Run Unit tests
         if: ${{ always() }}
         run: npm run test:unit
