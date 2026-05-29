@@ -1138,7 +1138,7 @@ class TextModel(ModelBase):
         name, gen = item
 
         # Skip multimodal tensors
-        if name.startswith(("mlp", "vit.", "vpm.", "siglip2.", "conformer.", "merger.", "resampler.", "sound_encoder.", "sound_projection.", "speech_embeddings.")) \
+        if name.startswith(("mlp", "vit.", "vit_large_projector.", "vpm.", "siglip2.", "conformer.", "merger.", "resampler.", "sound_encoder.", "sound_projection.", "speech_embeddings.")) \
                 or "visual." in name or "vision." in name or "audio." in name or "talker." in name \
                 or "vision_" in name or "audio_" in name \
                 or "token2wav." in name or "code2wav." in name \
