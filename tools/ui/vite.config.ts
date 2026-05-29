@@ -81,9 +81,13 @@ export default defineConfig({
 
 			// Workbox configuration for generateSW strategy
 			workbox: {
-				globPatterns: ['**/*.{js,css,html,ico,svg,png,webp,woff,woff2}'],
+				// Match all static assets in the build output.
+				// Uses '**/' because SvelteKit outputs files under _app/immutable/
+				// subdirectories; the llama-cpp-build plugin flattens them after
+				// the SW is generated.
+				globPatterns: ['**/*.{js,css,html,ico,svg,png,webp,woff,woff2,json,webmanifest}'],
 
-				maximumFileSizeToCacheInBytes: 10 * 1024 * 1024, // 10 MB
+				maximumFileSizeToCacheInBytes: 6 * 1024 * 1024, // 6 MB — bundle.js is ~5.3 MB
 
 				// Runtime caching for API calls - use NetworkFirst so APIs are always fresh
 				runtimeCaching: [
@@ -116,9 +120,9 @@ export default defineConfig({
 			devOptions: {
 				enabled: true,
 				suppressWarnings: true,
-				type: 'module',
-
-				navigateFallback: '/index.html'
+				// Use '/' to match production SW behaviour (navigateFallback defaults to
+				// the configured base path, which is '/' for this SPA).
+				navigateFallback: '/'
 			},
 
 			// SvelteKit-specific options
