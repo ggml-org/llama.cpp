@@ -20,6 +20,18 @@ int llama_fit_params(int argc, char ** argv);
 int llama_quantize(int argc, char ** argv);
 int llama_perplexity(int argc, char ** argv);
 
+// hands the update over to the install script, which downloads and swaps the binary
+static int llama_update(int argc, char ** argv) {
+    (void) argc;
+    (void) argv;
+
+#if defined(_WIN32)
+    return system("powershell -NoProfile -ExecutionPolicy Bypass -Command \"irm https://llama.app/install.ps1 | iex\"");
+#else
+    return system("curl -fsSL https://llama.app/install.sh | sh");
+#endif
+}
+
 static const char * progname;
 
 static int help(int argc, char ** argv);
@@ -37,6 +49,7 @@ struct command {
 static const command cmds[] = {
     {"serve",         "HTTP API server",                                    {"server"},   false, llama_server       },
     {"cli",           "Command-line interactive interface",                 {"client"},   false, llama_cli          },
+    {"update",        "Update llama to the latest release",                 {},           false, llama_update       },
     {"completion",    "Text completion",                                    {"complete"}, true,  llama_completion   },
     {"bench",         "Benchmark prompt processing and text generation",    {},           true,  llama_bench        },
     {"batched-bench", "Benchmark batched decoding performance",             {},           true,  llama_batched_bench},
@@ -94,6 +107,7 @@ static bool matches(const std::string & arg, const command & cmd) {
 
 int main(int argc, char ** argv) {
     progname = argv[0];
+
     const std::string arg = argc >= 2 ? argv[1] : "help";
 
     for (const auto & cmd : cmds) {
