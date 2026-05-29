@@ -445,6 +445,27 @@ std::string string_strip(const std::string & str) {
     return str.substr(start, end - start);
 }
 
+std::string string_lcs(std::string_view a, std::string_view b) {
+    if (a.empty() || b.empty()) return {};
+
+    std::vector<std::vector<size_t>> dp(a.size() + 1, std::vector<size_t>(b.size() + 1, 0));
+    size_t best_len = 0;
+    size_t best_end_a = 0;
+
+    for (size_t i = 1; i <= a.size(); ++i) {
+        for (size_t j = 1; j <= b.size(); ++j) {
+            if (a[i - 1] == b[j - 1]) {
+                dp[i][j] = dp[i - 1][j - 1] + 1;
+                if (dp[i][j] > best_len) {
+                    best_len = dp[i][j];
+                    best_end_a = i;
+                }
+            }
+        }
+    }
+    return std::string(a.substr(best_end_a - best_len, best_len));
+}
+
 std::string string_get_sortable_timestamp() {
     using clock = std::chrono::system_clock;
 
@@ -1160,7 +1181,7 @@ struct common_init_result::impl {
     std::vector<llama_sampler_seq_config> samplers_seq_config;
 };
 
-common_init_result::common_init_result(common_params & params) :
+common_init_result::common_init_result(common_params & params, bool model_only) :
     pimpl(new impl{}) {
     auto mparams = common_model_params_to_llama(params);
     auto cparams = common_context_params_to_llama(params);
@@ -1173,7 +1194,7 @@ common_init_result::common_init_result(common_params & params) :
             params.tensor_buft_overrides.data(),
             params.fit_params_target.data(),
             params.fit_params_min_ctx,
-            params.verbosity >= 4 ? GGML_LOG_LEVEL_DEBUG : GGML_LOG_LEVEL_ERROR);
+            params.verbosity >= LOG_LEVEL_DEBUG ? GGML_LOG_LEVEL_DEBUG : GGML_LOG_LEVEL_ERROR);
     }
 
     llama_model * model = llama_model_load_from_file(params.model.path.c_str(), mparams);
@@ -1182,6 +1203,10 @@ common_init_result::common_init_result(common_params & params) :
     }
 
     pimpl->model.reset(model);
+
+    if (model_only) {
+        return;
+    }
 
     const llama_vocab * vocab = llama_model_get_vocab(model);
 
@@ -1252,29 +1277,6 @@ common_init_result::common_init_result(common_params & params) :
         cparams.n_samplers = pimpl->samplers_seq_config.size();
     }
 
-    // [TAG_RS_STATE_ROLLBACK_SUPPORT]
-    // TODO: ngram speculative methods require checkpointing in addition to partial RS rollback
-    //       currently this is not supported. so we disable the partial rollback
-    if (cparams.n_rs_seq > 0 && (llama_model_is_recurrent(model) || llama_model_is_hybrid(model))) {
-        auto & types = params.speculative.types;
-
-        for (int i = 0; i < (int) types.size(); i++) {
-            if (types[i] == COMMON_SPECULATIVE_TYPE_NONE) {
-                continue;
-            }
-            if (types[i] == COMMON_SPECULATIVE_TYPE_DRAFT_MTP) {
-                continue;
-            }
-
-            cparams.n_rs_seq = 0;
-
-            LOG_WRN("%s: recurrent state rollback is not compatible with '%s' - disabling rollback support\n", __func__,
-                    common_speculative_type_to_str(types[i]).c_str());
-
-            break;
-        }
-    }
-
     llama_context * lctx = llama_init_from_model(model, cparams);
     if (lctx == NULL) {
         LOG_ERR("%s: failed to create context with model '%s'\n", __func__, params.model.path.c_str());
@@ -1309,12 +1311,16 @@ std::vector<llama_adapter_lora_ptr> & common_init_result::lora() {
     return pimpl->lora;
 }
 
-common_init_result_ptr common_init_from_params(common_params & params) {
-    common_init_result_ptr res(new common_init_result(params));
+common_init_result_ptr common_init_from_params(common_params & params, bool model_only) {
+    common_init_result_ptr res(new common_init_result(params, model_only));
 
     llama_model * model = res->model();
     if (model == NULL) {
         LOG_ERR("%s: failed to load model '%s'\n", __func__, params.model.path.c_str());
+        return res;
+    }
+
+    if (model_only) {
         return res;
     }
 
@@ -1381,7 +1387,7 @@ common_init_result_ptr common_init_from_params(common_params & params) {
     }
 
     if (params.warmup) {
-        LOG_WRN("%s: warming up the model with an empty run - please wait ... (--no-warmup to disable)\n", __func__);
+        LOG_INF("%s: warming up the model with an empty run - please wait ... (--no-warmup to disable)\n", __func__);
 
         llama_set_warmup(lctx, true);
 

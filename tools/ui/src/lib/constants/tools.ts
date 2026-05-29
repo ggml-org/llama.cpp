@@ -1,4 +1,4 @@
-import { ToolSource } from '$lib/enums/tools';
+import { ToolSource } from '$lib/enums/tools.enums';
 
 export const TOOL_GROUP_LABELS = {
 	[ToolSource.BUILTIN]: 'Built-in',
