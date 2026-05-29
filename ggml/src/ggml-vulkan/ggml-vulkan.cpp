@@ -1071,6 +1071,11 @@ struct vk_d2d_path {
 
     vk_command_pool hop2_cmd_pool;
     vk_device_struct * hop2_device = nullptr;
+
+    // Syncfd bump sub-allocator: each copy claims alloc_offset space,
+    // reset between evaluations. high_water_mark drives buffer resizing.
+    size_t alloc_offset = 0;
+    size_t high_water_mark = 0;
 };
 #endif
 
@@ -3596,8 +3601,8 @@ static void ggml_vk_d2d_destroy_sync(vk_d2d_path& path) {
         if (path.hop1_device) {
             vkDeviceWaitIdle(path.hop1_device->device);
         }
-        if (path.hop2_device) {
-            vkDeviceWaitIdle(path.hop2_device->device);
+        if (path.sem_dst_device) {
+            vkDeviceWaitIdle(path.sem_dst_device->device);
         }
     }
 
@@ -3616,13 +3621,11 @@ static void ggml_vk_d2d_destroy_sync(vk_d2d_path& path) {
         path.sem_dst_device->device.destroySemaphore(path.sem_dst);
         path.sem_dst = VK_NULL_HANDLE;
     }
-    for (size_t i = 0; i < path.num_slots; i++) {
-        path.slots[i].last_back_sem = VK_NULL_HANDLE;
-        path.slots[i].back_edge_ready = false;
-    }
 
     path.sync_method = D2D_SYNC_NONE;
     path.sem_value = 0;
+    path.alloc_offset = 0;
+    path.high_water_mark = 0;
     path.sem_src_device = nullptr;
     path.sem_dst_device = nullptr;
     path.hop1_device = nullptr;
@@ -3792,12 +3795,8 @@ static bool ggml_vk_d2d_try_syncfd_sync(vk_device& src_dev, vk_device& dst_dev, 
 
     try {
         path.hop1_cmd_pool.init(src_dev, &src_dev->compute_queue);
-        path.hop2_cmd_pool.init(dst_dev, &dst_dev->compute_queue);
     } catch (const vk::SystemError& e) {
         VK_LOG_DEBUG("ggml_vk_d2d_try_syncfd_sync: cmd pool creation failed: " << e.what());
-        if (path.hop2_cmd_pool.pool) {
-            path.hop2_cmd_pool.destroy(dst_dev->device);
-        }
         if (path.hop1_cmd_pool.pool) {
             path.hop1_cmd_pool.destroy(src_dev->device);
         }
@@ -3810,19 +3809,22 @@ static bool ggml_vk_d2d_try_syncfd_sync(vk_device& src_dev, vk_device& dst_dev, 
     path.sem_src_device = src_dev.get();
     path.sem_dst_device = dst_dev.get();
     path.hop1_device = src_dev.get();
-    path.hop2_device = dst_dev.get();
     path.sync_method = D2D_SYNC_SYNCFD;
+    path.alloc_offset = 0;
+    path.high_water_mark = 0;
 
-    // Grow to double-buffer pool size
-    for (size_t i = path.num_slots; i < vk_d2d_path::POOL_SIZE; i++) {
-        if (!ggml_vk_d2d_grow_slot(path, src_dev, dst_dev, path.size, path.slots[i])) {
-            break;
+    // Single shared buffer pair for bump sub-allocator
+    if (path.num_slots == 0) {
+        if (!ggml_vk_d2d_grow_slot(path, src_dev, dst_dev, path.size, path.slots[0])) {
+            path.hop1_cmd_pool.destroy(src_dev->device);
+            src_dev->device.destroySemaphore(src_sem);
+            return false;
         }
-        path.num_slots = i + 1;
+        path.num_slots = 1;
     }
 
-    GGML_LOG_DEBUG("ggml_vulkan: d2d %s -> %s: sync_fd sync (cross-driver), %zu pool slots\n",
-                  src_dev->name.c_str(), dst_dev->name.c_str(), path.num_slots);
+    GGML_LOG_DEBUG("ggml_vulkan: d2d %s -> %s: sync_fd sync (cross-driver)\n",
+                  src_dev->name.c_str(), dst_dev->name.c_str());
     return true;
 }
 
@@ -8898,7 +8900,6 @@ static bool ggml_vk_d2d_grow_path(vk_d2d_path& path, vk_device& src_dev, vk_devi
             cb.in_use = false;
         }
     } else if (path.sync_method == D2D_SYNC_SYNCFD) {
-        // No fences to wait — back-edge semaphores are GPU-only.
         // deviceWaitIdle below ensures all work is done.
     }
 
@@ -8909,12 +8910,14 @@ static bool ggml_vk_d2d_grow_path(vk_d2d_path& path, vk_device& src_dev, vk_devi
         if (!ggml_vk_d2d_grow_slot(path, src_dev, dst_dev, needed, path.slots[i])) {
             return false;
         }
-        path.slots[i].back_edge_ready = false;
     }
 
     if (path.sync_method == D2D_SYNC_SYNCFD) {
         ggml_vk_command_pool_cleanup(src_dev, path.hop1_cmd_pool);
-        ggml_vk_command_pool_cleanup(dst_dev, path.hop2_cmd_pool);
+        if (path.hop2_cmd_pool.pool) {
+            ggml_vk_command_pool_cleanup(dst_dev, path.hop2_cmd_pool);
+        }
+        path.alloc_offset = 0;
     }
 
     path.size = needed;
@@ -8933,6 +8936,7 @@ static vk_d2d_path& ggml_vk_get_d2d_path(vk_device& src_dev, vk_device& dst_dev,
 
     vk_d2d_path& path = it->second;
 
+    // Grow buffer if a single copy doesn't fit
     if (path.method != D2D_STAGING && path.size < size) {
         if (!ggml_vk_d2d_grow_path(path, src_dev, dst_dev, size)) {
             GGML_LOG_WARN("ggml_vulkan: d2d grow failed for %s -> %s, falling back to staging\n",
@@ -8948,6 +8952,14 @@ static vk_d2d_path& ggml_vk_get_d2d_path(vk_device& src_dev, vk_device& dst_dev,
             path.num_slots = 0;
             path.method = D2D_STAGING;
             path.size = 0;
+        }
+    }
+
+    // Syncfd: grow buffer to high-water mark at start of each evaluation
+    if (path.sync_method == D2D_SYNC_SYNCFD &&
+        path.alloc_offset == 0 && path.high_water_mark > path.size) {
+        if (ggml_vk_d2d_grow_path(path, src_dev, dst_dev, path.high_water_mark)) {
+            path.high_water_mark = 0;
         }
     }
 
@@ -9057,38 +9069,40 @@ static bool ggml_vk_d2d_syncfd_export_import(vk_device& from_dev, vk::Semaphore 
 }
 
 static bool ggml_vk_buffer_copy_async_d2d_syncfd(
-        ggml_backend_vk_context * src_ctx,
         ggml_backend_vk_context * dst_ctx,
         vk_buffer& dst, size_t dst_offset,
         vk_buffer& src, size_t src_offset,
         size_t size,
         vk_d2d_path& path) {
 
-    size_t slot_idx = path.pool_idx;
-    path.pool_idx = (path.pool_idx + 1) % path.num_slots;
-    vk_d2d_path::slot& slot = path.slots[slot_idx];
+    static constexpr size_t D2D_BUMP_ALIGN = 256;
 
+    vk_d2d_path::slot& slot = path.slots[0];
     vk_buffer& src_side_buf = path.reverse_direction ? slot.buf_b : slot.buf_a;
     vk_buffer& dst_side_buf = path.reverse_direction ? slot.buf_a : slot.buf_b;
 
-    // Create all per-copy semaphores upfront to avoid vector reallocation
-    // invalidating pointers (ggml_vk_create_binary_semaphore returns pointer
-    // into a vector that may reallocate on subsequent push_back)
-    vk::Semaphore back_wait_sem = VK_NULL_HANDLE;
-    if (slot.back_edge_ready) {
-        back_wait_sem = ggml_vk_create_binary_semaphore(src_ctx)->s;
-        slot.back_edge_ready = false;
-    }
-    vk::Semaphore fwd_sem = ggml_vk_create_binary_semaphore(dst_ctx)->s;
-    vk::Semaphore back_signal_sem = ggml_vk_create_binary_semaphore(dst_ctx,
-        vk::ExternalSemaphoreHandleTypeFlagBits::eSyncFd)->s;
+    size_t aligned_size = ggml_vk_align_size(size, D2D_BUMP_ALIGN);
 
-    // Back edge: export previous hop2's signal into the src-side wait semaphore
-    if (back_wait_sem) {
-        if (!ggml_vk_d2d_syncfd_export_import(dst->device, slot.last_back_sem, src->device, back_wait_sem)) {
-            return false;
-        }
+    // Periodic hop1 command pool cleanup
+    if (path.hop1_cmd_pool.buffers_in_use() >= 8) {
+        vkDeviceWaitIdle(src->device->device);
+        ggml_vk_command_pool_cleanup(src->device, path.hop1_cmd_pool);
     }
+
+    // Overflow: flush all deferred hop2s, reset bump allocator
+    if (path.alloc_offset + aligned_size > path.size) {
+        path.high_water_mark = std::max(path.high_water_mark, path.alloc_offset);
+        ggml_vk_synchronize(dst_ctx);
+        vkDeviceWaitIdle(src->device->device);
+        ggml_vk_command_pool_cleanup(src->device, path.hop1_cmd_pool);
+        path.alloc_offset = 0;
+    }
+
+    size_t buf_offset = path.alloc_offset;
+    path.alloc_offset += aligned_size;
+    path.high_water_mark = std::max(path.high_water_mark, path.alloc_offset);
+
+    vk::Semaphore fwd_sem = ggml_vk_create_binary_semaphore(dst_ctx)->s;
 
     // Hop 1: src device copies VRAM -> shared buffer
     {
@@ -9096,11 +9110,7 @@ static bool ggml_vk_buffer_copy_async_d2d_syncfd(
         vk_context hop1_ctx = ggml_vk_create_temporary_context(path.hop1_cmd_pool);
         ggml_vk_ctx_begin(src->device, hop1_ctx);
 
-        if (back_wait_sem) {
-            hop1_ctx->s->wait_semaphores.push_back({ back_wait_sem, 0 });
-        }
-
-        VkBufferCopy bc{ src_offset, 0, size };
+        VkBufferCopy bc{ src_offset, buf_offset, size };
         vkCmdCopyBuffer(hop1_ctx->s->buffer->buf, (VkBuffer)src->buffer, (VkBuffer)src_side_buf->buffer, 1, &bc);
 
         hop1_ctx->s->signal_semaphores.push_back({ path.sem_src, 0 });
@@ -9114,25 +9124,13 @@ static bool ggml_vk_buffer_copy_async_d2d_syncfd(
         return false;
     }
 
-    // Hop 2: dst device copies shared buffer -> VRAM
-    {
-        std::lock_guard<std::recursive_mutex> guard(dst->device->mutex);
-        vk_context hop2_ctx = ggml_vk_create_temporary_context(path.hop2_cmd_pool);
-        ggml_vk_ctx_begin(dst->device, hop2_ctx);
+    // Hop 2: deferred into dst compute context
+    vk_context compute_ctx = ggml_vk_get_compute_ctx(dst_ctx);
+    ggml_vk_ctx_begin(dst->device, compute_ctx);
+    compute_ctx->s->wait_semaphores.push_back({ fwd_sem, 0 });
 
-        hop2_ctx->s->wait_semaphores.push_back({ fwd_sem, 0 });
-
-        VkBufferCopy bc2{ 0, dst_offset, size };
-        vkCmdCopyBuffer(hop2_ctx->s->buffer->buf, (VkBuffer)dst_side_buf->buffer, (VkBuffer)dst->buffer, 1, &bc2);
-
-        hop2_ctx->s->signal_semaphores.push_back({ back_signal_sem, 0 });
-
-        ggml_vk_ctx_end(hop2_ctx);
-        ggml_vk_submit(hop2_ctx, {});
-    }
-
-    slot.last_back_sem = back_signal_sem;
-    slot.back_edge_ready = true;
+    VkBufferCopy bc2{ buf_offset, dst_offset, size };
+    vkCmdCopyBuffer(compute_ctx->s->buffer->buf, (VkBuffer)dst_side_buf->buffer, (VkBuffer)dst->buffer, 1, &bc2);
 
     return true;
 }
@@ -9156,7 +9154,7 @@ static bool ggml_vk_buffer_copy_async_d2d(
         return ggml_vk_buffer_copy_async_d2d_timeline(compute_ctx, dst, dst_offset, src, src_offset, size, path);
     }
 
-    return ggml_vk_buffer_copy_async_d2d_syncfd(src_ctx, dst_ctx, dst, dst_offset, src, src_offset, size, path);
+    return ggml_vk_buffer_copy_async_d2d_syncfd(dst_ctx, dst, dst_offset, src, src_offset, size, path);
 }
 #endif
 
@@ -16154,10 +16152,14 @@ static void ggml_vk_graph_cleanup(ggml_backend_vk_context * ctx) {
                 continue;
             }
             if (path.sem_dst_device == ctx->device.get() || path.sem_src_device == ctx->device.get()) {
-                for (size_t i = 0; i < path.num_slots; i++) {
-                    path.slots[i].last_back_sem = VK_NULL_HANDLE;
-                    path.slots[i].back_edge_ready = false;
-                }
+                path.high_water_mark = std::max(path.high_water_mark, path.alloc_offset);
+                path.alloc_offset = 0;
+            }
+            if (path.hop1_device == ctx->device.get() &&
+                path.hop1_cmd_pool.pool &&
+                path.hop1_cmd_pool.buffers_in_use() > 0) {
+                vkDeviceWaitIdle(ctx->device->device);
+                ggml_vk_command_pool_cleanup(ctx->device, path.hop1_cmd_pool);
             }
         }
     }
