@@ -201,24 +201,28 @@ export function llamaCppBuildPlugin(): Plugin {
 					const swPath = resolve(outDir, 'sw.js');
 					if (existsSync(swPath)) {
 						let swContent = readFileSync(swPath, 'utf-8');
-						swContent = swContent.replace(/\/_app\/immutable\/bundle\.[^"]+\.js/g, './bundle.js');
+						// Replace hashed bundle paths with static names + version query param
+						swContent = swContent.replace(
+							/\/_app\/immutable\/bundle\.[^"]+\.js/g,
+							`./bundle.js?v=${buildVersion}`
+						);
 						swContent = swContent.replace(
 							/\/_app\/immutable\/assets\/bundle\.[^"]+\.css/g,
-							'./bundle.css'
+							`./bundle.css?v=${buildVersion}`
 						);
 						swContent = swContent.replace(/"favicon\.svg"/g, '"favicon.ico"');
 						// Rewrite _app/version.json -> version.json
 						swContent = swContent.replace(/"_app\/version\.json"/g, '"version.json"');
 						// Rewrite workbox-<hash> (import) → workbox
 						swContent = swContent.replace(/"\.\/workbox-[a-z0-9]+"/g, '"./workbox"');
-						// Rewrite precache paths with leading slash
+						// Rewrite precache paths with leading slash to static names + version
 						swContent = swContent.replace(
 							/"\/?_app\/immutable\/bundle\.[^"]+\.js"/g,
-							'"./bundle.js"'
+							`"./bundle.js?v=${buildVersion}"`
 						);
 						swContent = swContent.replace(
 							/"\/?_app\/immutable\/assets\/bundle\.[^"]+\.css"/g,
-							'"./bundle.css"'
+							`"./bundle.css?v=${buildVersion}"`
 						);
 						// Inject build version as a comment so SW content changes between builds
 						swContent = '// Build: ' + buildVersion + '\n' + swContent;
