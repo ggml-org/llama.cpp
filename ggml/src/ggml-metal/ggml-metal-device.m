@@ -114,57 +114,6 @@ static const char * const k_lib_names[GGML_METAL_LIB_COUNT] = {
     "fa", "mul-mv", "mul-mm", "quantize", "norm", "activation", "recurrent", "misc",
 };
 
-// Dispatch a kernel name (e.g. "kernel_flash_attn_ext_f16_dk128_dv128") to the
-// op-source library that owns it.
-// All host_name-decorated kernels share the "kernel_" prefix; everything else
-// (including the dummy_kernel used by init_from_source) falls through to MISC,
-// but those code paths set single_library and never consult this dispatcher.
-static enum ggml_metal_lib_kind ggml_metal_lib_kind_for_kernel(const char * name) {
-    if (strncmp(name, "kernel_", 7) != 0) {
-        return GGML_METAL_LIB_MISC;
-    }
-    const char * s = name + 7;
-
-    if (strncmp(s, "flash_attn", 10) == 0) return GGML_METAL_LIB_FA;
-
-    // mul_mm must be checked before mul_mv so mul_mv doesn't swallow it
-    if (strncmp(s, "mul_mm",  6) == 0) return GGML_METAL_LIB_MUL_MM;
-    if (strncmp(s, "mul_mv",  6) == 0) return GGML_METAL_LIB_MUL_MV;
-
-    if (strncmp(s, "cpy_",      4) == 0) return GGML_METAL_LIB_QUANTIZE;
-    if (strncmp(s, "concat",    6) == 0) return GGML_METAL_LIB_QUANTIZE;
-    if (strncmp(s, "get_rows_", 9) == 0) return GGML_METAL_LIB_QUANTIZE;
-    if (strncmp(s, "set_rows_", 9) == 0) return GGML_METAL_LIB_QUANTIZE;
-
-    if (strncmp(s, "soft_max",    8) == 0) return GGML_METAL_LIB_NORM;
-    if (strncmp(s, "rms_norm",    8) == 0) return GGML_METAL_LIB_NORM;
-    if (strncmp(s, "l2_norm",     7) == 0) return GGML_METAL_LIB_NORM;
-    if (strncmp(s, "group_norm", 10) == 0) return GGML_METAL_LIB_NORM;
-    if (strncmp(s, "norm_",       5) == 0) return GGML_METAL_LIB_NORM;
-
-    // solve_tri must be checked before tri_ (activation) so it doesn't fall through to MISC
-    if (strncmp(s, "solve_tri",   9) == 0) return GGML_METAL_LIB_RECURRENT;
-    if (strncmp(s, "ssm_",        4) == 0) return GGML_METAL_LIB_RECURRENT;
-    if (strncmp(s, "rwkv_",       5) == 0) return GGML_METAL_LIB_RECURRENT;
-    if (strncmp(s, "gated_delta", 11) == 0) return GGML_METAL_LIB_RECURRENT;
-
-    if (strncmp(s, "unary_",      6) == 0) return GGML_METAL_LIB_ACTIVATION;
-    if (strncmp(s, "bin_",        4) == 0) return GGML_METAL_LIB_ACTIVATION;
-    if (strncmp(s, "add_id",      6) == 0) return GGML_METAL_LIB_ACTIVATION;
-    if (strncmp(s, "op_sum",      6) == 0) return GGML_METAL_LIB_ACTIVATION;
-    if (strncmp(s, "sum_rows",    8) == 0) return GGML_METAL_LIB_ACTIVATION;
-    if (strncmp(s, "cumsum",      6) == 0) return GGML_METAL_LIB_ACTIVATION;
-    if (strncmp(s, "tri_",        4) == 0) return GGML_METAL_LIB_ACTIVATION;
-    if (strncmp(s, "repeat",      6) == 0) return GGML_METAL_LIB_ACTIVATION;
-    if (strncmp(s, "reglu_",      6) == 0) return GGML_METAL_LIB_ACTIVATION;
-    if (strncmp(s, "geglu_",      6) == 0) return GGML_METAL_LIB_ACTIVATION;
-    if (strncmp(s, "swiglu_",     7) == 0) return GGML_METAL_LIB_ACTIVATION;
-
-    // fallback: rope / im2col / conv / upscale / pad / argsort / argmax / pool /
-    // opt_step / memset / count_equal / diag / arange / roll / timestep_embedding / top_k
-    return GGML_METAL_LIB_MISC;
-}
-
 struct ggml_metal_library {
     // Per-kind compiled libraries. When single_library is true, the whole library
     // (e.g. a pre-compiled default.metallib or a from-source build) lives at
@@ -172,11 +121,35 @@ struct ggml_metal_library {
     id<MTLLibrary> objs[GGML_METAL_LIB_COUNT];
     bool single_library; // true: combined library at objs[0]; false: per-kind libs in objs[*]
 
+    // Routing table: kernel function name -> objs[] index, populated from each
+    // compiled library's -[MTLLibrary functionNames]. The actual compiled
+    // libraries are the single source of truth for which library owns a kernel,
+    // so adding kernels later requires no manual routing maintenance.
+    // nil in single_library mode (everything resolves to objs[0]).
+    NSMutableDictionary<NSString *, NSNumber *> * fn_to_lib;
+
     ggml_metal_device_t dev;
     ggml_metal_pipelines_t pipelines; // cache of compiled pipelines
 
     NSLock * lock;
 };
+
+// Build the fn_to_lib routing table by querying each compiled library's public
+// function names. Call once after all per-kind libraries have been compiled.
+static void ggml_metal_library_build_index(ggml_metal_library_t lib) {
+    @autoreleasepool {
+        NSMutableDictionary<NSString *, NSNumber *> * index = [[NSMutableDictionary alloc] init];
+        for (int kind = 0; kind < GGML_METAL_LIB_COUNT; ++kind) {
+            if (!lib->objs[kind]) {
+                continue;
+            }
+            for (NSString * fname in [lib->objs[kind] functionNames]) {
+                index[fname] = @(kind);
+            }
+        }
+        lib->fn_to_lib = index;
+    }
+}
 
 ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
     id<MTLDevice> device = ggml_metal_device_get_obj(dev);
@@ -290,6 +263,8 @@ ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
     free(t_per_lib);
     GGML_LOG_INFO("%s: loaded %d libraries from embedded data in %.3f sec (max single = %.3f sec)\n",
                   __func__, GGML_METAL_LIB_COUNT, t_total / 1e6, t_max / 1e6);
+
+    ggml_metal_library_build_index(res);
 
     return res;
 #else
@@ -450,6 +425,8 @@ ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
     GGML_LOG_INFO("%s: loaded %d libraries from source in %.3f sec (max single = %.3f sec)\n",
                   __func__, GGML_METAL_LIB_COUNT, t_total / 1e6, t_max / 1e6);
 
+    ggml_metal_library_build_index(res);
+
     return res;
 #endif
 }
@@ -534,6 +511,11 @@ void ggml_metal_library_free(ggml_metal_library_t lib) {
         }
     }
 
+    if (lib->fn_to_lib) {
+        [lib->fn_to_lib release];
+        lib->fn_to_lib = nil;
+    }
+
     ggml_metal_pipelines_free(lib->pipelines);
 
     [lib->lock release];
@@ -592,8 +574,21 @@ struct ggml_metal_pipeline_with_params ggml_metal_library_compile_pipeline(ggml_
 
         GGML_LOG_DEBUG("%s: compiling pipeline: base = '%s', name = '%s'\n", __func__, base, name);
 
-        // pick the op-source library that owns this kernel (single_library mode keeps everything at objs[0])
-        const int lib_idx = lib->single_library ? 0 : (int) ggml_metal_lib_kind_for_kernel(base);
+        // route to the library that actually defines this kernel; fn_to_lib is
+        // built from -[MTLLibrary functionNames] so it's always in sync
+        int lib_idx = 0;
+        if (!lib->single_library) {
+            NSNumber * idx = lib->fn_to_lib[base_func];
+            if (!idx) {
+                [lib->lock unlock];
+
+                GGML_LOG_ERROR("%s: kernel not found in any metal library: base = '%s', name = '%s'\n", __func__, base, name);
+
+                return res;
+            }
+            lib_idx = [idx intValue];
+        }
+
         id<MTLLibrary> mtl_lib = lib->objs[lib_idx];
         if (!mtl_lib) {
             [lib->lock unlock];
