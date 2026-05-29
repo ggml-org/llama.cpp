@@ -376,12 +376,7 @@ static void print_mask(const T * data, int64_t n_tokens, int64_t n_kv, int64_t n
     for (int i = 0; i < std::min((int64_t)20, n_tokens); ++i) {
         LLAMA_LOG_DEBUG(" %2d ", i);
         for (int j = 0; j < std::min((int64_t)20, n_kv); ++j) {
-            float val;
-            if constexpr (std::is_same_v<T, ggml_fp16_t>) {
-                val = ggml_fp16_to_fp32(data[i * n_kv + j]);
-            } else {
-                val = data[i * n_kv + j];
-            }
+            float val = llama_cast<float>(data[i * n_kv + j]);
             if (val == -INFINITY) {
                 LLAMA_LOG_DEBUG(" ∞");
             } else {
@@ -396,8 +391,10 @@ void llm_graph_input_attn_no_cache::set_input(const llama_ubatch * ubatch) {
     const int64_t n_kv     = ubatch->n_tokens;
     const int64_t n_tokens = ubatch->n_tokens;
 
-    const auto fill_mask_inner = [&](auto * data, int n_swa, llama_swa_type swa_type) {
+    const auto fill_mask = [&](auto * data, int64_t ne, int n_swa, llama_swa_type swa_type) {
         using T = std::remove_reference_t<decltype(*data)>;
+        std::fill(data, data + ne, llama_cast<T>(-INFINITY));
+
         for (int i1 = 0; i1 < n_tokens; ++i1) {
             const llama_seq_id s1 = ubatch->seq_id[i1][0];
             const llama_pos    p1 = ubatch->pos[i1];
@@ -426,39 +423,28 @@ void llm_graph_input_attn_no_cache::set_input(const llama_ubatch * ubatch) {
                 data[idst + i0] = llama_cast<T>(hparams.use_alibi ? -std::abs(p0 - p1) : 0.0f);
             }
         }
-    };
 
-    const auto fill_mask = [&](ggml_tensor * mask, int n_swa, llama_swa_type swa_type) {
-        GGML_ASSERT(mask);
-        GGML_ASSERT(ggml_backend_buffer_is_host(mask->buffer));
-
-        if (mask->type == GGML_TYPE_F16) {
-            ggml_fp16_t * data = (ggml_fp16_t *) mask->data;
-
-            std::fill(data, data + ggml_nelements(mask), llama_cast<ggml_fp16_t>(-INFINITY));
-
-            fill_mask_inner(data, n_swa, swa_type);
-
-            if (debug) {
-                print_mask(data, n_tokens, n_kv, n_swa, swa_type);
-            }
-        } else {
-            float * data = (float *) mask->data;
-
-            std::fill(data, data + ggml_nelements(mask), -INFINITY);
-
-            fill_mask_inner(data, n_swa, swa_type);
-
-            if (debug) {
-                print_mask(data, n_tokens, n_kv, n_swa, swa_type);
-            }
+        if (debug) {
+            print_mask(data, n_tokens, n_kv, n_swa, swa_type);
         }
     };
 
-    fill_mask(self_kq_mask, 0, LLAMA_SWA_TYPE_NONE);
+    GGML_ASSERT(self_kq_mask);
+    GGML_ASSERT(ggml_backend_buffer_is_host(self_kq_mask->buffer));
+    if (self_kq_mask->type == GGML_TYPE_F16) {
+        fill_mask((ggml_fp16_t *) self_kq_mask->data, ggml_nelements(self_kq_mask), 0, LLAMA_SWA_TYPE_NONE);
+    } else {
+        fill_mask((float       *) self_kq_mask->data, ggml_nelements(self_kq_mask), 0, LLAMA_SWA_TYPE_NONE);
+    }
 
     if (hparams.swa_type != LLAMA_SWA_TYPE_NONE) {
-        fill_mask(self_kq_mask_swa, hparams.n_swa, hparams.swa_type);
+        GGML_ASSERT(self_kq_mask_swa);
+        GGML_ASSERT(ggml_backend_buffer_is_host(self_kq_mask_swa->buffer));
+        if (self_kq_mask_swa->type == GGML_TYPE_F16) {
+            fill_mask((ggml_fp16_t *) self_kq_mask_swa->data, ggml_nelements(self_kq_mask_swa), hparams.n_swa, hparams.swa_type);
+        } else {
+            fill_mask((float       *) self_kq_mask_swa->data, ggml_nelements(self_kq_mask_swa), hparams.n_swa, hparams.swa_type);
+        }
     }
 }
 
@@ -2470,9 +2456,9 @@ llm_graph_input_attn_cross * llm_graph_context::build_attn_inp_cross() const {
     const int32_t n_enc = !cross->v_embd.empty() ? cross->n_enc : hparams.n_ctx_train;
 
     // flash attention requires an f16 mask
-    const auto type = cparams.flash_attn ? GGML_TYPE_F16 : GGML_TYPE_F32;
+    const auto type_mask = cparams.flash_attn ? GGML_TYPE_F16 : GGML_TYPE_F32;
 
-    inp->cross_kq_mask = ggml_new_tensor_4d(ctx0, type, n_enc, n_tokens, 1, 1);
+    inp->cross_kq_mask = ggml_new_tensor_4d(ctx0, type_mask, n_enc, n_tokens, 1, 1);
     ggml_set_input(inp->cross_kq_mask);
 
     inp->cross_kq_mask_cnv = inp->cross_kq_mask;
