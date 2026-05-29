@@ -169,6 +169,8 @@ struct server_response_reader {
     bool cancelled = false;
     int polling_interval_seconds;
 
+    const int64_t time_start_ms = ggml_time_ms();
+
     // tracking generation state and partial tool calls
     // only used by streaming completions
     std::vector<task_result_state> states;
