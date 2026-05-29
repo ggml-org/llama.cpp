@@ -311,9 +311,8 @@ ggml_cgraph * clip_graph_granite4_vision::build() {
         const auto & blk = model.qf_proj_blocks[bid];
 
         int vlayer = hparams.vision_feature_layer[bid];
-        if (vlayer < 0) vlayer = (n_layer + 1) + vlayer;
-        GGML_ASSERT(vlayer >= 1 && vlayer <= n_layer);
-        ggml_tensor * h = layer_outs[vlayer - 1];
+        GGML_ASSERT(vlayer >= 0 && vlayer < n_layer);
+        ggml_tensor * h = layer_outs[vlayer];
 
         ggml_tensor * stream = build_block(
             blk, h, bid,
@@ -322,6 +321,7 @@ ggml_cgraph * clip_graph_granite4_vision::build() {
             hparams.downsample_window_side,
             hparams.downsample_query_side,
             qformer_eps);
+        cb(stream, "proj_v_out", vlayer);
         mmproj = mmproj ? ggml_concat(ctx0, mmproj, stream, 0) : stream;
     }
 
