@@ -167,7 +167,7 @@
 				>
 					<Lightbulb
 						class="h-4 w-4 shrink-0 {conversationsStore.getThinkingEnabled()
-							? 'text-white'
+							? 'fill-amber-400 text-amber-400'
 							: 'text-muted-foreground'}"
 					/>
 
