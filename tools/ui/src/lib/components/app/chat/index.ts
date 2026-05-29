@@ -251,6 +251,8 @@ export { default as ChatFormFileInputInvisible } from './ChatForm/ChatFormFileIn
  */
 export { default as ChatFormMcpResourcesList } from './ChatForm/ChatFormMcpResourcesList.svelte';
 
+export { default as ChatMessageAgenticQuestionAnswer } from './ChatMessages/ChatMessageAgenticQuestionAnswer.svelte';
+
 /**
  * Auto-resizing textarea with IME composition support. Automatically adjusts
  * height based on content. Handles IME input correctly (waits for composition
@@ -511,6 +513,7 @@ export { default as ChatMessageAgenticContent } from './ChatMessages/ChatMessage
 export { default as ChatMessageActionCardPermissionRequest } from './ChatMessages/ChatMessageActions/ChatMessageActionCard/ChatMessageActionCardPermissionRequest.svelte';
 export { default as ChatMessageActionCard } from './ChatMessages/ChatMessageActions/ChatMessageActionCard/ChatMessageActionCard.svelte';
 export { default as ChatMessageActionCardContinueRequest } from './ChatMessages/ChatMessageActions/ChatMessageActionCard/ChatMessageActionCardContinueRequest.svelte';
+export { default as ChatMessageActionCardQuestionRequest } from './ChatMessages/ChatMessageActions/ChatMessageActionCard/ChatMessageActionCardQuestionRequest.svelte';
 
 /**
  * Action buttons toolbar for messages. Displays copy, edit, delete, and regenerate

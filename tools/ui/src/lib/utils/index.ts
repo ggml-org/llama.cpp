@@ -158,6 +158,13 @@ export {
 	type ToolResultLine
 } from './agentic';
 
+export {
+	parseQuestionToolArguments,
+	parseQuestionToolResult,
+	formatQuestionToolResult,
+	type AgenticQuestionAnswerPair
+} from './agentic-question';
+
 // Cache utilities
 export { TTLCache, ReactiveTTLMap, type TTLCacheOptions } from './cache-ttl';
 
