@@ -15,7 +15,7 @@ from .base import MmprojModel, ModelBase, TextModel, _MISTRAL_COMMON_DATASET_MEA
 from .qwen import Qwen3Model
 
 
-@ModelBase.register("StepVLForConditionalGeneration")
+@ModelBase.register("StepVLForConditionalGeneration", "Step3p7ForConditionalGeneration")
 class Step3VLVisionModel(MmprojModel):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -95,14 +95,7 @@ class Step3VLTextModel(Qwen3Model):
     model_arch = gguf.MODEL_ARCH.QWEN3
 
 
-# Step3.7 reuses the Step3-VL vision tower/projector; a separate subclass is only
-# needed because ModelBase.register maps each arch to a class.
-@ModelBase.register("Step3p7ForConditionalGeneration")
-class Step37VisionModel(Step3VLVisionModel):
-    pass
-
-
-@ModelBase.register("Step3p5ForCausalLM")
+@ModelBase.register("Step3p5ForCausalLM", "Step3p7ForConditionalGeneration")
 class Step35Model(TextModel):
     model_arch = gguf.MODEL_ARCH.STEP35
 
@@ -175,6 +168,9 @@ class Step35Model(TextModel):
     @classmethod
     def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
         name, gen = item
+
+        if name.startswith("vit_large_projector."):
+            return None
 
         # Map router bias (expert selection bias) to a GGUF bias tensor
         if name.endswith(".moe.router_bias"):
@@ -252,15 +248,3 @@ class Step35Model(TextModel):
             rope_factors.extend([1.0] * (storage_dim // 2 - len(rope_factors)))
 
         yield (self.format_tensor_name(gguf.MODEL_TENSOR.ROPE_FREQS), torch.tensor(rope_factors, dtype=torch.float32))
-
-
-@ModelBase.register("Step3p7ForConditionalGeneration")
-class Step37TextModel(Step35Model):
-    model_arch = gguf.MODEL_ARCH.STEP35
-
-    @classmethod
-    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
-        name, _ = item
-        if name.startswith(("vision_model.", "model.vision_model.", "vit_large_projector.")):
-            return None
-        return super().filter_tensors(item)

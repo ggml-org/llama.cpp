@@ -594,7 +594,6 @@ static bool string_endswith(const std::string & str, const std::string & suffix)
     throw not_implemented_exception("String join builtin not implemented");
 }
 
-
 const func_builtins & value_string_t::get_builtins() const {
     static const func_builtins builtins = {
         {"default", default_value},
