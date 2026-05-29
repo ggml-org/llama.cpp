@@ -1567,8 +1567,6 @@ void GgmlOvDecoder::compute_node_dynamic_dims() {
                 const bool is_2D = node->op_params[6] == 1;
                 const int  src_dyn = m_node_dynamic_dims[node->src[1]];
                 if (is_2D) {
-                    // 2D mapping: src[1] dim -> output dim
-                    // ne[0]=IW->ne[1]=OW (dim 1), ne[1]=IH->ne[2]=OH (dim 2), ne[3]=N->ne[3]=N (dim 3)
                     if (src_dyn == 0) {
                         m_node_dynamic_dims[node] = 1;  // IW -> OW
                     } else if (src_dyn == 1) {
@@ -1577,8 +1575,6 @@ void GgmlOvDecoder::compute_node_dynamic_dims() {
                         m_node_dynamic_dims[node] = 3;  // N  -> N
                     }
                 } else {
-                    // 1D mapping: src[1] dim -> output dim
-                    // ne[0]=IW->ne[1]=OW (dim 1), ne[2]=N->ne[2]=N (dim 2)
                     if (src_dyn == 0) {
                         m_node_dynamic_dims[node] = 1;  // IW -> OW
                     } else if (src_dyn == 2) {
