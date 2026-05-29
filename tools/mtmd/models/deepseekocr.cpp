@@ -157,7 +157,6 @@ ggml_tensor * clip_graph_deepseekocr::build_sam(ggml_tensor * inp_raw) {
 
             cur = ggml_mul_mat(ctx0, layer.qkv_w, cur);
             cur = ggml_add(ctx0, cur, layer.qkv_b);
-            cur = ggml_cont(ctx0, cur); // Ensure tensor is contiguous before reshape
             cur = ggml_reshape_4d(ctx0, cur, n_embd, 3, W * H, B);
 
             ggml_tensor * Q;
@@ -251,17 +250,17 @@ ggml_cgraph * clip_graph_deepseekocr::build() {
     ggml_tensor * inp_raw = build_inp_raw();
     ggml_tensor * sam_out = build_sam(inp_raw);
 
+    const int clip_n_patches = sam_out->ne[0] * sam_out->ne[1];
+
     ggml_tensor * clip_out;
     // Building DS-OCR CLIP
     {
         ggml_tensor * inp;
 
-        inp = ggml_cpy(ctx0, sam_out, ggml_dup_tensor(ctx0, sam_out));
-        inp = ggml_reshape_2d(ctx0, inp, inp->ne[0] * inp->ne[1], inp->ne[2]);
+        inp = ggml_reshape_2d(ctx0, sam_out, clip_n_patches, sam_out->ne[2]);
         inp = ggml_cont(ctx0, ggml_permute(ctx0, inp, 1, 0, 2, 3));
 
-        ggml_tensor * new_pos_embd =
-            ggml_cpy(ctx0, model.position_embeddings, ggml_dup_tensor(ctx0, model.position_embeddings));
+        ggml_tensor * new_pos_embd = model.position_embeddings;
 
         int        n_pos    = new_pos_embd->ne[1];  // +1 for [CLS]
         const auto tgt_size = static_cast<int>(std::sqrt(inp->ne[1]));
@@ -295,16 +294,12 @@ ggml_cgraph * clip_graph_deepseekocr::build() {
         clip_out = cur;
     }
 
-    const int clip_n_patches = sam_out->ne[0] * sam_out->ne[1];
-
     sam_out  = ggml_cont(ctx0, ggml_permute(ctx0, sam_out, 1, 2, 0, 3));
     sam_out  = ggml_reshape_2d(ctx0, sam_out, sam_out->ne[0], clip_n_patches);
     clip_out = ggml_view_2d(ctx0, clip_out, n_embd, clip_n_patches, clip_out->nb[1], clip_out->nb[1]);
 
     ggml_tensor * cur;
     cur = ggml_concat(ctx0, clip_out, sam_out, 0);
-    cur = ggml_reshape_2d(ctx0, cur, 2 * n_embd, clip_n_patches);
-    cur = ggml_cont(ctx0, cur);
     cur = ggml_mul_mat(ctx0, model.mm_fc_w, cur);
     cur = ggml_add(ctx0, cur, model.mm_fc_b);
 
@@ -313,13 +308,11 @@ ggml_cgraph * clip_graph_deepseekocr::build() {
     const auto n_dim = cur->ne[0];
 
     ggml_tensor * imgnl;
-    ggml_tensor * vs;
 
     imgnl = ggml_repeat_4d(ctx0, model.image_newline, n_dim, 1, h, 1);
-    vs    = ggml_reshape_2d(ctx0, model.view_seperator, n_dim, 1);  // (n_dim, 1)
     cur   = ggml_reshape_3d(ctx0, cur, n_dim, w, h);
     cur   = ggml_reshape_2d(ctx0, ggml_concat(ctx0, cur, imgnl, 1), n_dim, (w + 1) * h);
-    cur   = ggml_concat(ctx0, cur, vs, 1);  // (n_dim, h*(w+1) + 1)
+    cur   = ggml_concat(ctx0, cur, model.view_seperator, 1);  // (n_dim, h*(w+1) + 1)
 
     cb(cur, "dsocr_output", -1);
 

@@ -953,6 +953,10 @@ static ggml_cgraph * clip_image_build_graph(clip_ctx * ctx, const clip_image_f32
             {
                 builder = std::make_unique<clip_graph_deepseekocr>(ctx, img);
             } break;
+        case PROJECTOR_TYPE_DEEPSEEKOCR2:
+             {
+                builder = std::make_unique<clip_graph_deepseekocr2>(ctx, img);
+            } break;
         case PROJECTOR_TYPE_LFM2A:
             {
                 builder = std::make_unique<clip_graph_conformer>(ctx, img);
@@ -1514,6 +1518,7 @@ struct clip_model_loader {
                         hparams.set_warmup_n_tokens(28*28); // avoid OOM on warmup
                     } break;
                 case PROJECTOR_TYPE_DEEPSEEKOCR:
+                case PROJECTOR_TYPE_DEEPSEEKOCR2:
                     {
                         hparams.patch_size = 16;
                         hparams.image_size = 1024;
@@ -1525,6 +1530,10 @@ struct clip_model_loader {
                         get_u32(KEY_SAM_N_HEAD, hparams.sam_n_head, true);
                         get_u32(KEY_SAM_N_EMBD, hparams.sam_n_embd, true);
                         get_u32(KEY_ATTN_WINDOW_SIZE, hparams.attn_window_size, true);
+                        if (model.proj_type == PROJECTOR_TYPE_DEEPSEEKOCR2) {
+                            // qwen2 encoder is GQA, requires KEY_N_HEAD_KV
+                            get_u32(string_format(KEY_N_HEAD_KV, "vision"), hparams.n_head_kv);
+                        }
                      } break;
                 case PROJECTOR_TYPE_HUNYUANVL:
                     {
@@ -2374,6 +2383,7 @@ struct clip_model_loader {
                     model.mm_2_b = get_tensor(string_format(TN_LLAVA_PROJ, 2, "bias"));
                 } break;
             case PROJECTOR_TYPE_DEEPSEEKOCR:
+            case PROJECTOR_TYPE_DEEPSEEKOCR2:
                 {
                     model.pos_embed          = get_tensor(string_format(TN_SAM_POS_EMBD,   "weight"));
                     model.patch_embed_proj_w = get_tensor(string_format(TN_SAM_PATCH_EMBD, "weight"));
@@ -2404,10 +2414,12 @@ struct clip_model_loader {
                     model.neck_3_w       = get_tensor(string_format(TN_SAM_NECK, 3, "weight"));
                     model.net_2          = get_tensor(string_format(TN_SAM_NET, 2, "weight"));
                     model.net_3          = get_tensor(string_format(TN_SAM_NET, 3, "weight"));
-                    model.image_newline  = get_tensor(TN_IMAGE_NEWLINE);
+                    model.image_newline  = get_tensor(TN_IMAGE_NEWLINE, false);
                     model.view_seperator = get_tensor(TN_IMAGE_SEPERATOR);
                     model.mm_fc_w        = get_tensor(string_format(TN_MM_PROJECTOR, "weight"));
                     model.mm_fc_b        = get_tensor(string_format(TN_MM_PROJECTOR, "bias"));
+                    model.resample_query_768  = get_tensor(string_format(TN_RESMPL_QUERY, 768, "weight"), false);
+                    model.resample_query_1024 = get_tensor(string_format(TN_RESMPL_QUERY, 1024, "weight"), false);
                  } break;
             case PROJECTOR_TYPE_GEMMA4A:
                 {
@@ -3277,7 +3289,7 @@ int clip_n_output_tokens(const struct clip_ctx * ctx, struct clip_image_f32 * im
         case PROJECTOR_TYPE_DEEPSEEKOCR:
         {
             // SAM encoder applies two stride-2 convolutions (net_2 and net_3)
-            // which reduces spatial dimensions by 4x in each direction (16x total)
+            // that reduce spatial dimensions by 4x in each direction (16x total)
             // E.g., 64x64 -> 16x16 patches
             n_patches /= 16;
 
@@ -3293,6 +3305,15 @@ int clip_n_output_tokens(const struct clip_ctx * ctx, struct clip_image_f32 * im
                 int oh = (img->ny / patch_size) / merge;
                 n_patches = (ow + 1) * oh + 2;
             } break;
+        case PROJECTOR_TYPE_DEEPSEEKOCR2:
+        {
+            // 1024 global view -> 256 query tokens + 1 view separator = 257;
+            // 768 local tile   -> 144 query tokens, no separator.
+            n_patches /= 16;
+            if (img->add_viewsep) {
+                n_patches += 1; // view separator, appended only after the global view
+            }
+        } break;
         case PROJECTOR_TYPE_LFM2A:
             {
                 n_patches = ((((img->nx + 1) / 2) + 1) / 2 + 1) / 2;
@@ -3882,6 +3903,7 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
                 set_input_i32("pos_y", pos_y);
             } break;
         case PROJECTOR_TYPE_DEEPSEEKOCR:
+        case PROJECTOR_TYPE_DEEPSEEKOCR2:
             {
                 GGML_ASSERT(pos_w == pos_h);
 
@@ -3904,6 +3926,34 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
 
                 set_input_i32("rel_pos_indices_local", rel_pos_indices_local);
                 set_input_i32("rel_pos_indices_global", rel_pos_indices_global);
+
+                if (ctx->proj_type() == PROJECTOR_TYPE_DEEPSEEKOCR2) {
+
+                    // qwen2 encoder attention mask
+
+                    // num_image_tokens = num_patches / 16
+                    //   256 for 1024 global view
+                    //   144 for 768 tile views
+                    const int   num_image_tokens = num_patches / 16;
+                    const int   seq_len          = num_image_tokens * 2;
+                    std::vector qwen2_mask(static_cast<size_t>(seq_len) * seq_len, 0.0f);
+
+                    // attention mask layout
+                    //  +--------------+---------------+
+                    //  |    all 0     |   all -inf    |
+                    //  +--------------+---------------+
+                    //  |    all 0     |  lower tri 0  |
+                    //  +--------------+---------------+
+                    for (int i = 0; i < seq_len; i++) {
+                        for (int j = 0; j < seq_len; j++) {
+                            const bool zero = i < num_image_tokens ?
+                                                     j < num_image_tokens :
+                                                     j < num_image_tokens || j <= i;
+                            qwen2_mask[static_cast<size_t>(i) * seq_len + j] = zero ? 0.0f : -1e9f;
+                        }
+                    }
+                    set_input_f32("qwen2_attn_mask", qwen2_mask);
+                }
             } break;
         case PROJECTOR_TYPE_GEMMA3:
         case PROJECTOR_TYPE_GEMMA3NV:
@@ -4256,6 +4306,7 @@ int clip_n_mmproj_embd(const struct clip_ctx * ctx) {
         case PROJECTOR_TYPE_COGVLM:
             return ctx->model.mm_4h_to_h_w->ne[1];
         case PROJECTOR_TYPE_DEEPSEEKOCR:
+        case PROJECTOR_TYPE_DEEPSEEKOCR2:
             return ctx->model.mm_fc_w->ne[1];
         case PROJECTOR_TYPE_LFM2A:
             return ctx->model.position_embeddings->ne[0];

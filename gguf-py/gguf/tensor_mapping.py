@@ -1485,6 +1485,7 @@ class TensorNameMap:
             "siglip2.vision_model.encoder.layers.{bid}.self_attn.q_proj", # youtuvl
             "model.vision_model.transformer.layers.{bid}.self_attn.q_proj", # Deepseek-OCR CLIP, generated
             "vision_model.model.layers.{bid}.self_attn.q_proj.linear", # gemma4
+            "model.qwen2_model.model.model.layers.{bid}.self_attn.q_proj" # Deepseek-OCR-2 qwen2
         ),
 
         MODEL_TENSOR.V_ENC_ATTN_Q_NORM: (
@@ -1509,6 +1510,7 @@ class TensorNameMap:
             "model.vision_model.transformer.layers.{bid}.self_attn.k_proj", # Deepseek-OCR CLIP, generated
             "siglip2.vision_model.encoder.layers.{bid}.self_attn.k_proj",
             "vision_model.model.layers.{bid}.self_attn.k_proj.linear", # gemma4
+            "model.qwen2_model.model.model.layers.{bid}.self_attn.k_proj" # Deepseek-OCR-2 qwen2
         ),
 
         MODEL_TENSOR.V_ENC_ATTN_K_NORM: (
@@ -1533,6 +1535,7 @@ class TensorNameMap:
             "siglip2.vision_model.encoder.layers.{bid}.self_attn.v_proj",
             "model.vision_model.transformer.layers.{bid}.self_attn.v_proj", # Deepseek-OCR CLIP, generated
             "vision_model.model.layers.{bid}.self_attn.v_proj.linear", # gemma4
+            "model.qwen2_model.model.model.layers.{bid}.self_attn.v_proj" # Deepseek-OCR-2 qwen2
         ),
 
         MODEL_TENSOR.V_ENC_INPUT_NORM: (
@@ -1554,6 +1557,7 @@ class TensorNameMap:
             "vision_model.radio_model.model.blocks.{bid}.norm1", # Nemotron Nano v2 VL
             "vision_tower.blocks.{bid}.norm1", # dots.ocr
             "vision_model.transformer.resblocks.{bid}.ln_1", # Step3-VL
+            "model.qwen2_model.model.model.layers.{bid}.input_layernorm", # Deepseek-OCR-2 qwen2
         ),
 
         MODEL_TENSOR.V_ENC_ATTN_O: (
@@ -1574,6 +1578,7 @@ class TensorNameMap:
             "model.vision_model.transformer.layers.{bid}.self_attn.out_proj", # Deepseek-OCR CLIP
             "siglip2.vision_model.encoder.layers.{bid}.self_attn.out_proj", # youtuvl
             "vision_model.radio_model.model.blocks.{bid}.attn.proj", # Nemotron Nano v2 VL
+            "model.qwen2_model.model.model.layers.{bid}.self_attn.o_proj", # Deepseek-OCR-2 qwen2
             "vision_model.model.layers.{bid}.self_attn.o_proj.linear", # gemma4
             "vision_tower.blocks.{bid}.attn.proj", # dots.ocr
             "vision_model.transformer.resblocks.{bid}.attn.out_proj", # Step3-VL
@@ -1603,6 +1608,7 @@ class TensorNameMap:
             "vision_model.model.layers.{bid}.pre_feedforward_layernorm", # gemma4
             "vision_tower.blocks.{bid}.norm2", # dots.ocr
             "vision_model.transformer.resblocks.{bid}.ln_2", # Step3-VL
+            "model.qwen2_model.model.model.layers.{bid}.post_attention_layernorm", # Deepseek-OCR-2 qwen2
         ),
 
         MODEL_TENSOR.V_ENC_FFN_UP: (
@@ -1625,6 +1631,7 @@ class TensorNameMap:
             "vision_model.radio_model.model.blocks.{bid}.mlp.fc1", # Nemotron Nano v2 VL
             "vision_model.model.layers.{bid}.mlp.up_proj", # gemma4
             "vision_model.transformer.resblocks.{bid}.mlp.c_fc", # Step3-VL
+            "model.qwen2_model.model.model.layers.{bid}.mlp.up_proj", # Deepseek-OCR-2 qwen2
         ),
 
         MODEL_TENSOR.V_ENC_FFN_GATE: (
@@ -1632,6 +1639,7 @@ class TensorNameMap:
             "vision_encoder.transformer.layers.{bid}.feed_forward.w1", # pixtral
             "visual.blocks.{bid}.mlp.gate_proj", # qwen2.5vl
             "vision_model.model.layers.{bid}.mlp.gate_proj", # gemma4
+            "model.qwen2_model.model.model.layers.{bid}.mlp.gate_proj", # Deepseek-OCR-2 qwen2
         ),
 
         MODEL_TENSOR.V_ENC_FFN_DOWN: (
@@ -1652,6 +1660,7 @@ class TensorNameMap:
             "model.vision_model.transformer.layers.{bid}.mlp.fc2", # Deepseek-OCR CLIP
             "siglip2.vision_model.encoder.layers.{bid}.mlp.fc2",
             "vision_model.radio_model.model.blocks.{bid}.mlp.fc2", # Nemotron Nano v2 VL
+            "model.qwen2_model.model.model.layers.{bid}.mlp.down_proj" , # Deepseek-OCR-2 qwen2
             "vision_model.model.layers.{bid}.mlp.down_proj", # gemma4
             "vision_model.transformer.resblocks.{bid}.mlp.c_proj", # Step3-VL
         ),
@@ -1699,6 +1708,7 @@ class TensorNameMap:
             "vision_tower.encoder.final_layernorm", # kimi-vl
             "visual.post_layernorm", # glm4v
             "siglip2.vision_model.post_layernorm",
+            "model.qwen2_model.model.model.norm", # Deepseek-OCR-2 qwen2
         ),
 
         MODEL_TENSOR.V_MM_POST_NORM: (
@@ -1877,6 +1887,14 @@ class TensorNameMap:
 
         MODEL_TENSOR.V_SAM_NET_3: (
             "model.sam_model.net_3",
+        ),
+
+        MODEL_TENSOR.V_RESMPL_QUERY_768: (
+            "model.qwen2_model.query_768", # Deepseek-OCR-2 qwen2
+        ),
+
+        MODEL_TENSOR.V_RESMPL_QUERY_1024: (
+            "model.qwen2_model.query_1024", # Deepseek-OCR-2 qwen2
         ),
 
         MODEL_TENSOR.V_MM_POST_FC_NORM: (
