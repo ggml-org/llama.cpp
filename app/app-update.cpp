@@ -8,7 +8,6 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <ctime>
 #include <filesystem>
 
 #if defined(_WIN32)
@@ -206,67 +205,96 @@ void llama_app_startup(void) {
 #endif
 }
 
-void llama_app_update_notice(void) {
-    std::string base, id, arch, os;
-    if (!channel(base, id, arch, os)) {
-        return;
+// asks the user to proceed, an empty line proceeds since yes is the default
+// only an explicit n declines, a closed stdin counts as no so scripts must pass --yes
+static bool confirm(const char * prompt) {
+    printf("%s", prompt);
+    fflush(stdout);
+    char buf[16];
+    if (!fgets(buf, sizeof(buf), stdin)) {
+        return false;
     }
-    const fs::path tmp = fs::temp_directory_path() / ("llama-notice-" + std::to_string((long) time(NULL)));
-    std::error_code ec;
-    fs::create_directories(tmp, ec);
-    if (ec) {
-        return;
-    }
-    const std::string latest = (tmp / "latest").string();
-    common_download_opts opts;
-    if (ok(common_download_file_single(base + "/latest", latest, opts, true))) {
-        const int remote = parse_build(read_text(latest));
-        if (remote > llama_build_number()) {
-            printf("a newer build is available (b%d), run: llama update\n", remote);
-        }
-    }
-    fs::remove_all(tmp, ec);
+    return buf[0] != 'n' && buf[0] != 'N';
 }
 
-int llama_app_update(bool force) {
+// cheap sanity check on the freshly decompressed binary before the swap
+// validates a minimum size and the executable magic for the host os
+static bool looks_runnable(const std::string & path) {
+    FILE * f = fopen(path.c_str(), "rb");
+    if (!f) {
+        return false;
+    }
+    unsigned char magic[4] = {0};
+    const size_t n = fread(magic, 1, sizeof(magic), f);
+    fseek(f, 0, SEEK_END);
+    const long size = ftell(f);
+    fclose(f);
+    if (n < 4 || size < 4096) {
+        return false;
+    }
+#if defined(_WIN32)
+    // pe starts with the mz dos stub
+    return magic[0] == 'M' && magic[1] == 'Z';
+#elif defined(__APPLE__)
+    // mach o thin or fat magic, either endianness
+    const unsigned m = ((unsigned) magic[0] << 24) | ((unsigned) magic[1] << 16) | ((unsigned) magic[2] << 8) | magic[3];
+    return m == 0xFEEDFACE || m == 0xCEFAEDFE || m == 0xFEEDFACF || m == 0xCFFAEDFE || m == 0xCAFEBABE || m == 0xBEBAFECA;
+#else
+    // elf magic
+    return magic[0] == 0x7f && magic[1] == 'E' && magic[2] == 'L' && magic[3] == 'F';
+#endif
+}
+
+int llama_app_update(bool assume_yes) {
     std::string base, id, arch, os;
     if (!channel(base, id, arch, os)) {
         printf("update: this build has no release channel configured\n");
         return 0;
     }
 
-    // scratch dir for the download artifacts
-    const fs::path tmp = fs::temp_directory_path() / ("llama-update-" + std::to_string((long) time(NULL)));
-    std::error_code ec;
-    fs::create_directories(tmp, ec);
-    if (ec) {
-        printf("update: cannot create scratch dir\n");
+    // everything stages next to the running binary, the same dir the swap already needs to write
+    const std::string exe = self_path();
+    if (exe.empty()) {
+        printf("update: cannot locate the running binary\n");
         return 1;
     }
+    const std::string helper = (os == "windows") ? "unzstd.exe" : "unzstd";
+    const std::string latest_path = exe + ".latest";
+    const std::string zst = exe + ".zst";
+    const std::string unz = exe + "." + helper;
+    const std::string staged = exe + ".new";
 
     common_download_opts opts;
-    std::string staged;
     auto work = [&]() -> int {
         // ask the channel for its latest build
-        const std::string latest_path = (tmp / "latest").string();
         if (!ok(common_download_file_single(base + "/latest", latest_path, opts, true))) {
             printf("update: cannot reach the channel at %s\n", base.c_str());
             return 1;
         }
         const int remote = parse_build(read_text(latest_path));
         const int current = llama_build_number();
-        printf("update: local b%d, channel b%d\n", current, remote);
         if (remote <= 0) {
             printf("update: channel returned no usable version\n");
             return 1;
         }
-        if (!force && remote <= current) {
+        printf("update: installed b%d\n", current);
+        printf("update: latest    b%d\n", remote);
+        if (remote <= current) {
             printf("update: already up to date\n");
             return 0;
         }
 
+        // confirm before pulling the binary, nothing heavy is fetched if the user declines
+        if (!assume_yes) {
+            char prompt[64];
+            snprintf(prompt, sizeof(prompt), "update b%d -> b%d, proceed? [Y/n] ", current, remote);
+            if (!confirm(prompt)) {
+                printf("update: cancelled\n");
+                return 0;
+            }
+        }
+
         // pull the binary for this exact variant
-        const std::string zst = (tmp / "llama-app.zst").string();
         const std::string url = base + "/b" + std::to_string(remote) + "/" + id + "/llama-app.zst";
         printf("update: downloading %s\n", url.c_str());
         if (!ok(common_download_file_single(url, zst, opts, true))) {
@@ -275,28 +303,27 @@ int llama_app_update(bool force) {
         }
 
         // pull the matching unzstd helper, the same way the installer does
-        const std::string helper = (os == "windows") ? "unzstd.exe" : "unzstd";
-        const std::string unz = (tmp / helper).string();
         const std::string unz_url = base + "/b" + std::to_string(remote) + "/" + arch + "/" + os + "/" + helper;
         if (!ok(common_download_file_single(unz_url, unz, opts, true))) {
             printf("update: cannot fetch the unzstd helper\n");
             return 1;
         }
+        std::error_code ec;
         fs::permissions(unz, fs::perms::owner_all, ec);
 
         // decompress next to the running binary
-        const std::string exe = self_path();
-        if (exe.empty()) {
-            printf("update: cannot locate the running binary\n");
-            return 1;
-        }
-        staged = exe + ".new";
         if (!run_unzstd(unz, zst, staged)) {
             printf("update: decompress failed\n");
             return 1;
         }
 
-        // swap in place
+        // refuse to swap a truncated or corrupt binary
+        if (!looks_runnable(staged)) {
+            printf("update: staged binary looks invalid\n");
+            return 1;
+        }
+
+        // swap in place, the current image stays valid until exit
         if (!swap_in_place(exe, staged)) {
             printf("update: cannot replace %s\n", exe.c_str());
             return 1;
@@ -307,20 +334,23 @@ int llama_app_update(bool force) {
 
     const int rc = work();
 
-    // leave nothing behind
-    fs::remove_all(tmp, ec);
-    if (rc != 0 && !staged.empty()) {
+    // drop the staging siblings, a successful swap already consumed the staged binary
+    std::error_code ec;
+    fs::remove(latest_path, ec);
+    fs::remove(zst, ec);
+    fs::remove(unz, ec);
+    if (rc != 0) {
         fs::remove(staged, ec);
     }
     return rc;
 }
 
 int llama_update(int argc, char ** argv) {
-    bool force = false;
+    bool assume_yes = false;
     for (int i = 1; i < argc; i++) {
-        if (strcmp(argv[i], "--force") == 0) {
-            force = true;
+        if (strcmp(argv[i], "-y") == 0 || strcmp(argv[i], "--yes") == 0) {
+            assume_yes = true;
         }
     }
-    return llama_app_update(force);
+    return llama_app_update(assume_yes);
 }

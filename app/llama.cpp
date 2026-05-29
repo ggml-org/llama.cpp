@@ -108,10 +108,6 @@ int main(int argc, char ** argv) {
 #else
             setenv("LLAMA_APP_CMD", cmd.name, 1);
 #endif
-            // surface a newer release before a long running command
-            if (cmd.func == llama_server || cmd.func == llama_cli) {
-                llama_app_update_notice();
-            }
             return cmd.func(argc - 1, argv + 1);
         }
     }
