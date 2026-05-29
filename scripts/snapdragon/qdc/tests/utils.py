@@ -137,6 +137,7 @@ def _build_win_env(device: str) -> dict[str, str]:
     env["NO_COLOR"] = "1"
     if device == "HTP0":
         env["GGML_HEXAGON_NDEV"] = "1"
+        env["GGML_HEXAGON_HOSTBUF"] = "0"
     else:
         env["GGML_HEXAGON_NDEV"] = "0"
     return env
