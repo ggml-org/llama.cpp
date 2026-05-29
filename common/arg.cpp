@@ -20,18 +20,17 @@
 #endif
 
 #define JSON_ASSERT GGML_ASSERT
-#include <nlohmann/json.hpp>
-
 #include <algorithm>
 #include <cinttypes>
 #include <climits>
 #include <cstdarg>
 #include <fstream>
 #include <list>
+#include <nlohmann/json.hpp>
 #include <regex>
 #include <set>
 #include <string>
-#include <thread> // for hardware_concurrency
+#include <thread>  // for hardware_concurrency
 #include <vector>
 
 #ifndef __EMSCRIPTEN__
@@ -441,6 +440,24 @@ static bool parse_bool_value(const std::string & value) {
 // CLI argument parsing functions
 //
 
+static const char * common_example_tool_name(llama_example ex) {
+    // Update this switch statement if adding new examples to --config-file that you want named
+    switch (ex) {
+        case LLAMA_EXAMPLE_SERVER:
+            return "llama-server";
+        case LLAMA_EXAMPLE_CLI:
+            return "llama-cli";
+        case LLAMA_EXAMPLE_EMBEDDING:
+            return "llama-embedding";
+        case LLAMA_EXAMPLE_TTS:
+            return "llama-tts";
+        case LLAMA_EXAMPLE_MTMD:
+            return "llama-mtmd";
+        default:
+            return nullptr;
+    }
+}
+
 void common_params_handle_models(common_params & params, llama_example curr_ex) {
     const bool spec_type_draft_mtp = std::find(params.speculative.types.begin(),
                                          params.speculative.types.end(),
@@ -485,6 +502,39 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
         }
         for (const auto & arg : opt.args_neg) {
             arg_to_options[arg] = {&opt, /* is_positive */ false};
+        }
+    }
+
+    // grab --config-file and --config-output file paths (must run before env/CLI
+    // processing so loaded values can be overridden by env vars and CLI args)
+    std::string config_file_path;
+    std::string config_output_path;
+    for (int i = 1; i < argc; i++) {
+        std::string arg = argv[i];
+        std::replace(arg.begin(), arg.end(), '_', '-');
+        if (arg == "--config-file" && i + 1 < argc) {
+            config_file_path = argv[++i];
+        } else if (arg == "--config-output" && i + 1 < argc) {
+            config_output_path = argv[++i];
+        }
+    }
+
+    const char *      tool_name_c = common_example_tool_name(ctx_arg.ex);
+    const std::string tool_name   = tool_name_c ? tool_name_c : "";
+
+    common_preset_context preset_ctx(ctx_arg.ex);
+    common_preset         loaded_config;
+
+    if (!config_file_path.empty()) {
+        loaded_config = preset_ctx.load_config_from_ini(config_file_path, tool_name);
+        loaded_config.apply_to_params(params);
+        if (loaded_config.options.empty()) {
+            LOG_WRN("no options loaded from %s (no [%s] or [%s] section found)\n",
+                    config_file_path.c_str(),
+                    tool_name.empty() ? COMMON_PRESET_DEFAULT_NAME : tool_name.c_str(),
+                    COMMON_PRESET_DEFAULT_NAME);
+        } else {
+            LOG_INF("loaded %zu options from %s\n", loaded_config.options.size(), config_file_path.c_str());
         }
     }
 
@@ -665,6 +715,26 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
             params.chat_template.c_str(),
             params.use_jinja ? "" : "\nnote: llama.cpp was started without --jinja, we only support commonly used templates"
         ));
+    }
+
+    // dump current config
+    if (!config_output_path.empty()) {
+        common_preset to_save = loaded_config;
+        to_save.merge(preset_ctx.load_from_args(argc, argv));
+
+        // strip meta-args so the saved config doesn't contain --config-file /
+        // --config-output (which would either self-reference or be misleading)
+        for (auto it = to_save.options.begin(); it != to_save.options.end();) {
+            const std::string & arg = it->first.args.back();
+            if (arg == "--config-file" || arg == "--config-output") {
+                it = to_save.options.erase(it);
+            } else {
+                ++it;
+            }
+        }
+
+        preset_ctx.save_config_to_ini(config_output_path, tool_name, to_save, config_file_path);
+        LOG_INF("saved %zu options to %s\n", to_save.options.size(), config_output_path.c_str());
     }
 
     return true;
@@ -2585,6 +2655,18 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             }
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_TAGS"));
+    // --config-file and --config-output are consumed by an early argv pre-scan in
+    // common_params_parse_ex (the load must happen before env/CLI processing so those
+    // can override loaded values). The handlers here are no-ops; the option is still
+    // registered so it shows up in --help and passes the unknown-argument check.
+    add_opt(common_arg({ "--config-file" }, "FNAME", "path to an INI config file to load CLI arguments from",
+                       [](common_params &, const std::string &) {})
+                .set_examples({ LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_EMBEDDING, LLAMA_EXAMPLE_TTS,
+                                LLAMA_EXAMPLE_MTMD }));
+    add_opt(common_arg({ "--config-output" }, "FNAME", "path to an INI file to save effective CLI arguments to",
+                       [](common_params &, const std::string &) {})
+                .set_examples({ LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_EMBEDDING, LLAMA_EXAMPLE_TTS,
+                                LLAMA_EXAMPLE_MTMD }));
     add_opt(common_arg(
         {"-m", "--model"}, "FNAME",
         ex == LLAMA_EXAMPLE_EXPORT_LORA

@@ -65,6 +65,19 @@ struct common_preset_context {
     // load presets from INI file
     common_presets load_from_ini(const std::string & path, common_preset & global) const;
 
+    // load only the [tool_name] section (with [default] as fallback) as a single
+    // preset. other sections — including [*] — are silently ignored. unlike
+    // load_from_ini this is per-tool: there is no global section concept.
+    common_preset load_config_from_ini(const std::string & path, const std::string & tool_name) const;
+
+    // write `preset` as section [tool_name] to `path`. if `preserve_from` is
+    // non-empty and that file exists, sections other than [tool_name] are copied
+    // through verbatim. write is atomic (temp file + rename).
+    void save_config_to_ini(const std::string &   path,
+                            const std::string &   tool_name,
+                            const common_preset & preset,
+                            const std::string &   preserve_from = "") const;
+
     // generate presets from cached models
     common_presets load_from_cache() const;
 

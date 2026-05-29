@@ -364,6 +364,94 @@ common_presets common_preset_context::load_from_ini(const std::string & path, co
     return out;
 }
 
+common_preset common_preset_context::load_config_from_ini(const std::string & path,
+                                                          const std::string & tool_name) const {
+    common_preset out;
+    out.name = !tool_name.empty() ? tool_name : COMMON_PRESET_DEFAULT_NAME;
+
+    auto ini_data = parse_ini_from_file(path);
+
+    // pick the matching section: prefer [tool_name], fall back to [default]
+    auto section = !tool_name.empty() ? ini_data.find(tool_name) : ini_data.end();
+    if (section == ini_data.end()) {
+        section = ini_data.find(COMMON_PRESET_DEFAULT_NAME);
+    }
+    if (section == ini_data.end()) {
+        return out;
+    }
+
+    LOG_DBG("loading config section: %s\n", section->first.c_str());
+    for (const auto & [key, value] : section->second) {
+        if (key == "version") {
+            continue;
+        }
+        auto found = key_to_opt.find(key);
+        if (found == key_to_opt.end()) {
+            throw std::runtime_error(
+                string_format("option '%s' not recognized in config section '%s'", key.c_str(), section->first.c_str()));
+        }
+        const auto & opt = found->second;
+        if (is_bool_arg(opt)) {
+            out.options[opt] = parse_bool_arg(opt, key, value);
+        } else {
+            out.options[opt] = value;
+        }
+    }
+
+    return out;
+}
+
+void common_preset_context::save_config_to_ini(const std::string &   path,
+                                               const std::string &   tool_name,
+                                               const common_preset & preset,
+                                               const std::string &   preserve_from) const {
+    const std::string section_name = !tool_name.empty() ? tool_name : COMMON_PRESET_DEFAULT_NAME;
+
+    common_preset to_write = preset;
+    to_write.name          = section_name;
+
+    // if a source file was provided, read it and keep all other sections
+    std::map<std::string, std::map<std::string, std::string>> foreign;
+    if (!preserve_from.empty() && std::filesystem::exists(preserve_from)) {
+        auto ini_data = parse_ini_from_file(preserve_from);
+        for (auto & [name, kv] : ini_data) {
+            if (name == section_name) {
+                continue;
+            }
+            foreign.emplace(name, std::move(kv));
+        }
+    }
+
+    const std::string tmp_path = path + ".tmp";
+    std::ofstream     out(tmp_path);
+    if (!out.good()) {
+        throw std::runtime_error("failed to open config output file: " + tmp_path);
+    }
+
+    out << to_write.to_ini();
+    for (const auto & [name, kv] : foreign) {
+        out << "[" << name << "]\n";
+        for (const auto & [key, value] : kv) {
+            out << key << " = " << value << "\n";
+        }
+        out << "\n";
+    }
+
+    out.close();
+    if (!out.good()) {
+        std::error_code ec;
+        std::filesystem::remove(tmp_path, ec);
+        throw std::runtime_error("failed to write config output file: " + tmp_path);
+    }
+
+    std::error_code ec;
+    std::filesystem::rename(tmp_path, path, ec);
+    if (ec) {
+        std::filesystem::remove(tmp_path, ec);
+        throw std::runtime_error("failed to rename config output file to: " + path);
+    }
+}
+
 common_presets common_preset_context::load_from_cache() const {
     common_presets out;
 
