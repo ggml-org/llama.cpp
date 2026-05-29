@@ -87,17 +87,16 @@ struct ggml_webgpu_shader_lib_context {
     ggml_tensor * src5;
     ggml_tensor * dst;
 
-    uint32_t max_wg_size;
-    size_t   wg_mem_limit_bytes       = 0;
-    bool     supports_subgroups       = false;
-    bool     supports_subgroup_matrix = false;
-    uint32_t sg_mat_m                 = 0;
-    uint32_t sg_mat_n                 = 0;
-    uint32_t sg_mat_k                 = 0;
-    uint32_t min_subgroup_size        = 0;
-    uint32_t max_subgroup_size        = 0;
-    bool     supports_dot_product     = false;
-
+    uint32_t    max_wg_size;
+    size_t      wg_mem_limit_bytes       = 0;
+    bool        supports_subgroups       = false;
+    bool        supports_subgroup_matrix = false;
+    uint32_t    sg_mat_m                 = 0;
+    uint32_t    sg_mat_n                 = 0;
+    uint32_t    sg_mat_k                 = 0;
+    uint32_t    min_subgroup_size        = 0;
+    uint32_t    max_subgroup_size        = 0;
+    bool        supports_dot_product     = false;
     std::string vendor;
 };
 
@@ -170,9 +169,11 @@ struct ggml_webgpu_set_rows_pipeline_key {
     int dst_type;
     int vec4;
     int i64_idx;
+    int pair_blocks;
 
     bool operator==(const ggml_webgpu_set_rows_pipeline_key & other) const {
-        return dst_type == other.dst_type && vec4 == other.vec4 && i64_idx == other.i64_idx;
+        return dst_type == other.dst_type && vec4 == other.vec4 && i64_idx == other.i64_idx &&
+               pair_blocks == other.pair_blocks;
     }
 };
 
@@ -182,6 +183,7 @@ struct ggml_webgpu_set_rows_pipeline_key_hash {
         ggml_webgpu_hash_combine(seed, key.dst_type);
         ggml_webgpu_hash_combine(seed, key.vec4);
         ggml_webgpu_hash_combine(seed, key.i64_idx);
+        ggml_webgpu_hash_combine(seed, key.pair_blocks);
         return seed;
     }
 };
@@ -189,6 +191,7 @@ struct ggml_webgpu_set_rows_pipeline_key_hash {
 struct ggml_webgpu_set_rows_shader_decisions {
     bool     vec4;
     bool     i64_idx;
+    bool     pair_blocks;
     uint32_t wg_size;
 };
 
@@ -771,6 +774,10 @@ inline std::vector<std::string> ggml_webgpu_flash_attn_common_defines(
     defines.push_back(std::string("KV_TILE=") + std::to_string(kv_tile));
     defines.push_back(std::string("WG_SIZE=") + std::to_string(wg_size));
 
+    if (ggml_is_quantized(key.k_type) || ggml_is_quantized(key.v_type)) {
+        defines.push_back("U32_DEQUANT_HELPERS");
+    }
+
     return defines;
 }
 
@@ -1303,10 +1310,13 @@ class ggml_webgpu_shader_lib {
     }
 
     webgpu_pipeline get_set_rows_pipeline(const ggml_webgpu_shader_lib_context & context) {
-        ggml_webgpu_set_rows_pipeline_key key = {};
-        key.dst_type                          = context.dst->type;
-        key.vec4                              = context.src0->ne[0] % 4 == 0;
-        key.i64_idx                           = context.src1->type == GGML_TYPE_I64;
+        const bool                        quantized = ggml_is_quantized(context.dst->type);
+        ggml_webgpu_set_rows_pipeline_key key       = {};
+        key.dst_type                                = context.dst->type;
+        key.vec4 =
+            (context.dst->type == GGML_TYPE_F32 || context.dst->type == GGML_TYPE_F16) && context.src0->ne[0] % 4 == 0;
+        key.i64_idx     = context.src1->type == GGML_TYPE_I64;
+        key.pair_blocks = quantized && ((context.src0->ne[0] / ggml_blck_size(context.dst->type)) % 2 == 0);
 
         auto it = set_rows_pipelines.find(key);
         if (it != set_rows_pipelines.end()) {
@@ -1325,6 +1335,14 @@ class ggml_webgpu_shader_lib {
                 defines.push_back("DST_F16");
                 variant += "_dstf16";
                 break;
+            case GGML_TYPE_Q8_0:
+                defines.push_back("DST_Q8_0");
+                variant += "_dstq8_0";
+                break;
+            case GGML_TYPE_Q4_0:
+                defines.push_back("DST_Q4_0");
+                variant += "_dstq4_0";
+                break;
             default:
                 GGML_ABORT("Unsupported dst type for set_rows shader");
         }
@@ -1337,13 +1355,19 @@ class ggml_webgpu_shader_lib {
             defines.push_back("I64_IDX");
             variant += "_i64idx";
         }
+        if (key.pair_blocks) {
+            defines.push_back("PAIR_BLOCKS");
+            variant += "_pair_blocks";
+        }
 
         defines.push_back(std::string("WG_SIZE=") + std::to_string(context.max_wg_size));
 
-        auto processed                  = preprocessor.preprocess(wgsl_set_rows, defines);
-        auto decisions                  = std::make_shared<ggml_webgpu_set_rows_shader_decisions>();
+        const auto & shader_source      = quantized ? wgsl_set_rows_quant : wgsl_set_rows;
+        auto         processed          = preprocessor.preprocess(shader_source, defines);
+        auto         decisions          = std::make_shared<ggml_webgpu_set_rows_shader_decisions>();
         decisions->vec4                 = key.vec4;
         decisions->i64_idx              = key.i64_idx;
+        decisions->pair_blocks          = key.pair_blocks;
         decisions->wg_size              = context.max_wg_size;
         set_rows_pipelines[key]         = ggml_webgpu_create_pipeline(device, processed, variant);
         set_rows_pipelines[key].context = decisions;
@@ -1699,7 +1723,7 @@ class ggml_webgpu_shader_lib {
         key.type                              = context.dst->type;
         key.d_state                           = (int) context.src0->ne[0];
         key.xbc_overlap                       = ggml_webgpu_tensor_overlap(context.src1, context.src4) &&
-                                                ggml_webgpu_tensor_overlap(context.src1, context.src5);
+                          ggml_webgpu_tensor_overlap(context.src1, context.src5);
 
         auto it = ssm_scan_pipelines.find(key);
         if (it != ssm_scan_pipelines.end()) {

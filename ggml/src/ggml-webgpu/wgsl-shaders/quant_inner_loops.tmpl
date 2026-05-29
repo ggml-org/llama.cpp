@@ -1,3 +1,4 @@
+#ifdef U32_DEQUANT_HELPERS
 fn dequant_q4_0_packed_to_shmem(q_packed: u32, d: f16, dst_idx: u32) {
     let scale = QUANT_OUT_TYPE(d);
     for (var k = 0u; k < 4u; k++) {
@@ -17,3 +18,4 @@ fn dequant_q8_0_packed_to_shmem(q_packed: u32, d: f16, dst_idx: u32) {
         QUANT_SHMEM[dst_idx + k] = q_val;
     }
 }
+#endif

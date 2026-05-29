@@ -119,7 +119,8 @@ class ModelBase:
                  small_first_shard: bool = False, hparams: dict[str, Any] | None = None, remote_hf_model_id: str | None = None,
                  disable_mistral_community_chat_template: bool = False,
                  sentence_transformers_dense_modules: bool = False,
-                 fuse_gate_up_exps: bool = False):
+                 fuse_gate_up_exps: bool = False,
+                 fp8_as_q8: bool = False):
         if type(self) is ModelBase or \
                 type(self) is TextModel or \
                 type(self) is MmprojModel:
@@ -148,6 +149,8 @@ class ModelBase:
         self.dir_model_card = dir_model  # overridden in convert_lora_to_gguf.py
         self._is_nvfp4 = False
         self._is_mxfp4 = False
+        self._fp8_as_q8 = fp8_as_q8
+        self._fp8_dequantized: set[str] = set()
 
         # Apply heuristics to figure out typical tensor encoding based on first tensor's dtype
         # NOTE: can't use field "torch_dtype" in config.json, because some finetunes lie.
@@ -429,6 +432,8 @@ class ModelBase:
                         s = self.model_tensors[name]
                         self.model_tensors[weight_name] = lambda w=w, s=s, bs=block_size: dequant_simple(w(), s(), bs)
                         tensors_to_remove.append(name)
+                        if self._fp8_as_q8:
+                            self._fp8_dequantized.add(weight_name)
                     if name.endswith(".activation_scale"):  # unused
                         tensors_to_remove.append(name)
                     if name.endswith("_activation_scale"):  # Mistral-Small-4-119B-2602, unused
@@ -440,6 +445,8 @@ class ModelBase:
                         s = self.model_tensors[name]
                         self.model_tensors[weight_name] = lambda w=w, s=s, bs=block_size: dequant_simple(w(), s(), bs)
                         tensors_to_remove.append(name)
+                        if self._fp8_as_q8:
+                            self._fp8_dequantized.add(weight_name)
                     if name.endswith(".qscale_act"):
                         tensors_to_remove.append(name)
             elif quant_method == "gptq":
@@ -483,6 +490,11 @@ class ModelBase:
                     strategy = weight_config.get("strategy")
                     assert strategy == "channel" or strategy == "block"
                     assert weight_config.get("group_size") is None  # didn't find a model using this yet
+                    is_fp8 = (
+                        quant_format == "float-quantized"
+                        and weight_config.get("type") == "float"
+                        and weight_config.get("num_bits") == 8
+                    )
                     for name in self.model_tensors.keys():
                         if name.endswith(".weight_scale"):
                             weight_name = name.removesuffix("_scale")
@@ -490,6 +502,8 @@ class ModelBase:
                             s = self.model_tensors[name]
                             self.model_tensors[weight_name] = lambda w=w, s=s: dequant_simple(w(), s(), block_size)
                             tensors_to_remove.append(name)
+                            if self._fp8_as_q8 and is_fp8:
+                                self._fp8_dequantized.add(weight_name)
                 elif quant_format == "pack-quantized":
                     assert weight_config.get("strategy") == "group"
                     assert weight_config.get("type", "int") == "int"
@@ -524,10 +538,18 @@ class ModelBase:
                 for name in self.model_tensors.keys():
                     if name.endswith(".weight_scale"):
                         weight_name = name.removesuffix("_scale")
+                        if weight_name not in self.model_tensors:
+                            tensors_to_remove.append(name)
+                            continue
                         w = self.model_tensors[weight_name]
                         s = self.model_tensors[name]
+                        is_fp8_weight = False
+                        if self._fp8_as_q8:
+                            is_fp8_weight = w().dtype in (torch.float8_e4m3fn, torch.float8_e5m2)
                         self.model_tensors[weight_name] = lambda w=w, s=s: dequant_simple(w(), s(), None)
                         tensors_to_remove.append(name)
+                        if is_fp8_weight:
+                            self._fp8_dequantized.add(weight_name)
                     if name.endswith((".input_scale", ".k_scale", ".v_scale")):
                         tensors_to_remove.append(name)
             elif quant_method is not None:
@@ -615,8 +637,10 @@ class ModelBase:
         return [(new_name, data_torch)]
 
     def tensor_force_quant(self, name: str, new_name: str, bid: int | None, n_dims: int) -> gguf.GGMLQuantizationType | bool:
-        del name, new_name, bid, n_dims  # unused
-
+        del new_name, bid  # unused
+        # Force FP8-original tensors to Q8_0 when requested; Q8_0 is faster than F16/BF16.
+        if self._fp8_as_q8 and name in self._fp8_dequantized and n_dims >= 2:
+            return gguf.GGMLQuantizationType.Q8_0
         return False
 
     # some models need extra generated tensors (like rope_freqs)
@@ -791,7 +815,7 @@ class ModelBase:
         if quant_algo != "NVFP4":
             if nvfp4_compressed_tensors:
                 quant_algo = "NVFP4"
-            elif any(v.get("quant_algo") == "NVFP4" for v in quant_layers.values() if isinstance(v, dict)):
+            elif any(str(v.get("quant_algo")).endswith("NVFP4") for v in quant_layers.values() if isinstance(v, dict)):
                 quant_algo = "NVFP4"
 
         self._is_nvfp4 = quant_algo == "NVFP4"
@@ -891,6 +915,8 @@ class ModelBase:
                             gguf.MODEL_TENSOR.SSM_CONV1D_Q,
                             gguf.MODEL_TENSOR.SSM_CONV1D_K,
                             gguf.MODEL_TENSOR.SSM_CONV1D_V,
+                            # DSA indexer weights should be F32
+                            gguf.MODEL_TENSOR.INDEXER_PROJ,
                         )
                     )
                     or new_name[-7:] not in (".weight", ".lora_a", ".lora_b")
@@ -1114,7 +1140,7 @@ class TextModel(ModelBase):
         # Skip multimodal tensors
         if name.startswith(("mlp", "vit.", "vpm.", "siglip2.", "conformer.", "merger.", "resampler.", "sound_encoder.", "sound_projection.", "speech_embeddings.")) \
                 or "visual." in name or "vision." in name or "audio." in name or "talker." in name \
-                or "vision_" in name or "audio_" in name or "sam_model" in name \
+                or "vision_" in name or "audio_" in name \
                 or "token2wav." in name or "code2wav." in name \
                 or "projector." in name or "pre_mm_projector_norm" in name \
                 or "image_newline" in name or "view_seperator" in name \
@@ -1421,6 +1447,9 @@ class TextModel(ModelBase):
         if chkhsh == "0fe1cf6eda062318a1af7270f3331a85c539a01778ff948e24388e949c5282f4":
             # ref: https://huggingface.co/evilfreelancer/ruGPT3XL
             res = "gpt-2"
+        if chkhsh == "9e454714343b69b99b71795c1d27a68c2a1d15dab111f4d353109f966af29da7":
+            # ref: https://huggingface.co/LiquidAI/LFM2.5-8B-A1B
+            res = "lfm2"
         if chkhsh == "0ef9807a4087ebef797fc749390439009c3b9eda9ad1a097abbe738f486c01e5":
             # ref: https://huggingface.co/meta-llama/Meta-Llama-3-8B
             res = "llama-bpe"
@@ -1572,7 +1601,7 @@ class TextModel(ModelBase):
             # ref: https://huggingface.co/K-intelligence/Midm-2.0-Base-Instruct
             res = "midm-2.0"
         if chkhsh == "169bf0296a13c4d9b7672313f749eb36501d931022de052aad6e36f2bf34dd51":
-            # ref: https://huggingface.co/LiquidAI/LFM2-Tokenizer
+            # ref: https://huggingface.co/LiquidAI/LFM2.5-350M
             res = "lfm2"
         if chkhsh == "2085e1638f6c377a0aa4ead21b27bb4cb941bf800df86ed391011769c1758dfb":
             # ref: https://huggingface.co/LGAI-EXAONE/EXAONE-4.0-32B
@@ -2417,10 +2446,9 @@ class MmprojModel(ModelBase):
         raise KeyError(f"could not find any of: {keys}")
 
     def tensor_force_quant(self, name, new_name, bid, n_dims):
-        del bid, name, n_dims  # unused
         if ".patch_embd.weight" in new_name or ".patch_merger.weight" in new_name:
             return gguf.GGMLQuantizationType.F16 if self.ftype == gguf.LlamaFileType.MOSTLY_F16 else gguf.GGMLQuantizationType.F32
-        return False
+        return super().tensor_force_quant(name, new_name, bid, n_dims)
 
 
 class LazyTorchTensor(gguf.LazyBase):

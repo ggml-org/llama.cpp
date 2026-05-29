@@ -47,6 +47,7 @@ TEXT_MODEL_MAP: dict[str, str] = {
     "DeepseekForCausalLM": "deepseek",
     "DeepseekV2ForCausalLM": "deepseek",
     "DeepseekV3ForCausalLM": "deepseek",
+    "DeepseekV32ForCausalLM": "deepseek",
     "DistilBertForMaskedLM": "bert",
     "DistilBertForSequenceClassification": "bert",
     "DistilBertModel": "bert",
@@ -236,6 +237,7 @@ TEXT_MODEL_MAP: dict[str, str] = {
 MMPROJ_MODEL_MAP: dict[str, str] = {
     "AudioFlamingo3ForConditionalGeneration": "ultravox",
     "CogVLMForCausalLM": "cogvlm",
+    "DeepseekOCR2ForCausalLM": "deepseek",
     "DeepseekOCRForCausalLM": "deepseek",
     "DotsOCRForCausalLM": "dotsocr",
     "Gemma3ForConditionalGeneration": "gemma",

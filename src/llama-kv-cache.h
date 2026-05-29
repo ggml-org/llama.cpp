@@ -93,8 +93,12 @@ public:
 
     using slot_info_vec_t = std::vector<slot_info>;
 
+    // TODO: refactor the memory instances to not depend on `llama_model`
+    //       instead pass all necessary info (e.g. hparams, dev layers, arch, etc.) directly
+    //       likely through `struct llama_memory_params`
     llama_kv_cache(
             const llama_model & model,
+            const llama_hparams & hparams,
                     ggml_type   type_k,
                     ggml_type   type_v,
                          bool   v_trans,
