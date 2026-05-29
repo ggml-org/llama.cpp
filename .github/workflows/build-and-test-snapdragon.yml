@@ -91,6 +91,8 @@ jobs:
   windows-arm-snapdragon:
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 120
+    outputs:
+      artifact_uploaded: ${{ steps.set_output.outputs.uploaded }}
 
     steps:
       - name: Checkout
@@ -113,22 +115,27 @@ jobs:
           unzip qdc_sdk.zip -d qdc_sdk
           pip install qdc_sdk/qualcomm_device_cloud_sdk-0.2.3-py3-none-any.whl
 
-      - name: Decode HTP signing pfx
+      - name: Resolve HTP signing pfx
         env:
           HEXAGON_HTP_PFX_B64: ${{ secrets.HEXAGON_HTP_PFX_B64 }}
         run: |
           set -euo pipefail
-          if [ -z "${HEXAGON_HTP_PFX_B64:-}" ]; then
-            echo "WARNING: HEXAGON_HTP_PFX_B64 secret is not set, skipping Windows build"
+          REPO_PFX="scripts/snapdragon/qdc/windows/ggml-htp-v1.pfx"
+          if [ -n "${HEXAGON_HTP_PFX_B64:-}" ]; then
+            echo "$HEXAGON_HTP_PFX_B64" | base64 -d > "$RUNNER_TEMP/ggml-htp-v1.pfx"
+            test -s "$RUNNER_TEMP/ggml-htp-v1.pfx"
+            echo "pfx_path=$RUNNER_TEMP/ggml-htp-v1.pfx" >> "$GITHUB_OUTPUT"
+          elif [ -f "$REPO_PFX" ]; then
+            echo "pfx_path=$REPO_PFX" >> "$GITHUB_OUTPUT"
+          else
+            echo "WARNING: No HTP pfx available, skipping Windows build"
             echo "skip=true" >> "$GITHUB_OUTPUT"
-            exit 0
           fi
-          echo "$HEXAGON_HTP_PFX_B64" | base64 -d > "$RUNNER_TEMP/ggml-htp-v1.pfx"
-          test -s "$RUNNER_TEMP/ggml-htp-v1.pfx"
-        id: decode_pfx
+        id: resolve_pfx
 
       - name: Submit QDC build job
-        if: steps.decode_pfx.outputs.skip != 'true'
+        id: build_qdc
+        if: steps.resolve_pfx.outputs.skip != 'true'
         env:
           QDC_API_KEY: ${{ secrets.QDC_API_KEY }}
         run: |
@@ -137,15 +144,21 @@ jobs:
             --mode         build \
             --device       SC8480XP \
             --llama-cpp-dir . \
-            --htp-pfx      "$RUNNER_TEMP/ggml-htp-v1.pfx" \
+            --htp-pfx      "${{ steps.resolve_pfx.outputs.pfx_path }}" \
             --output-dir   pkg-snapdragon
 
       - name: Upload Llama.CPP Snapdragon Windows Build Artifact
-        if: ${{ always() && steps.decode_pfx.outputs.skip != 'true' }}
+        id: upload_artifact
+        if: ${{ steps.build_qdc.outcome == 'success' }}
         uses: actions/upload-artifact@v6
         with:
           name: llama-cpp-windows-arm64-snapdragon
           path: pkg-snapdragon/llama.cpp
+
+      - name: Set artifact output
+        id: set_output
+        if: ${{ steps.upload_artifact.outcome == 'success' }}
+        run: echo "uploaded=true" >> "$GITHUB_OUTPUT"
 
       - name: Cleanup
         if: always()
@@ -156,12 +169,15 @@ jobs:
   test-snapdragon-qdc:
     name: Test on QDC Device (${{ matrix.device }})
     needs: [android-ndk-snapdragon, linux-iot-snapdragon, windows-arm-snapdragon]
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
         device: [SM8850, QCS9075M, SC8480XP]
+        exclude:
+          - device: ${{ needs.windows-arm-snapdragon.outputs.artifact_uploaded != 'true' && 'SC8480XP' || 'NONE' }}
 
     steps:
       - name: Checkout
