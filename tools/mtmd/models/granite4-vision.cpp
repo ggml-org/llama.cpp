@@ -72,6 +72,7 @@ ggml_tensor * clip_graph_granite4_vision::build_block(
     };
 
     // 1. Top-level LN
+    cbx(h, "inp");
     ggml_tensor * x = build_norm(h, blk.qf_proj_norm_w, blk.qf_proj_norm_b, NORM_TYPE_NORMAL, eps, bid);
     cbx(x, "norm");
 
@@ -321,7 +322,7 @@ ggml_cgraph * clip_graph_granite4_vision::build() {
             hparams.downsample_window_side,
             hparams.downsample_query_side,
             qformer_eps);
-        cb(stream, "proj_v_out", vlayer);
+        cb(stream, (std::string("proj_") + std::to_string(bid) + std::string("_v_out")).c_str(), vlayer);
         mmproj = mmproj ? ggml_concat(ctx0, mmproj, stream, 0) : stream;
     }
 
