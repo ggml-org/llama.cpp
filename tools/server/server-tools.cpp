@@ -148,7 +148,7 @@ struct server_tool_read_file : server_tool {
         };
     }
 
-    json invoke(json params) override {
+    json invoke(const json & params, const json &, server_tools *) override {
         std::string path  = params.at("path").get<std::string>();
         int  start_line   = json_value(params, "start_line", 1);
         int  end_line     = json_value(params, "end_line",  -1); // -1 = no limit
@@ -229,7 +229,7 @@ struct server_tool_file_glob_search : server_tool {
         };
     }
 
-    json invoke(json params) override {
+    json invoke(const json & params, const json &, server_tools *) override {
         std::string base    = params.at("path").get<std::string>();
         std::string include = json_value(params, "include", std::string("**"));
         std::string exclude = json_value(params, "exclude", std::string(""));
@@ -295,7 +295,7 @@ struct server_tool_grep_search : server_tool {
         };
     }
 
-    json invoke(json params) override {
+    json invoke(const json & params, const json &, server_tools *) override {
         std::string path    = params.at("path").get<std::string>();
         std::string pat_str = params.at("pattern").get<std::string>();
         std::string include = json_value(params, "include", std::string("**"));
@@ -391,7 +391,7 @@ struct server_tool_exec_shell_command : server_tool {
         };
     }
 
-    json invoke(json params) override {
+    json invoke(const json & params, const json &, server_tools *) override {
         std::string command   = params.at("command").get<std::string>();
         int    timeout        = json_value(params, "timeout",         10);
         size_t max_output     = (size_t) json_value(params, "max_output_size", (int) SERVER_TOOL_EXEC_SHELL_COMMAND_MAX_OUTPUT_SIZE);
@@ -446,7 +446,7 @@ struct server_tool_write_file : server_tool {
         };
     }
 
-    json invoke(json params) override {
+    json invoke(const json & params, const json &, server_tools *) override {
         std::string path    = params.at("path").get<std::string>();
         std::string content = params.at("content").get<std::string>();
 
@@ -521,7 +521,7 @@ struct server_tool_edit_file : server_tool {
         };
     }
 
-    json invoke(json params) override {
+    json invoke(const json & params, const json &, server_tools *) override {
         std::string path = params.at("path").get<std::string>();
         const json & changes = params.at("changes");
 
@@ -666,7 +666,7 @@ struct server_tool_apply_diff : server_tool {
         };
     }
 
-    json invoke(json params) override {
+    json invoke(const json & params, const json &, server_tools *) override {
         std::string diff = params.at("diff").get<std::string>();
 
         // write diff to a temporary file
@@ -715,7 +715,7 @@ struct server_tool_get_datetime : server_tool {
         };
     }
 
-    json invoke(json) override {
+    json invoke(const json &, const json &, server_tools *) override {
         auto now = std::chrono::system_clock::now();
         auto time = std::chrono::system_clock::to_time_t(now);
 
@@ -723,6 +723,98 @@ struct server_tool_get_datetime : server_tool {
     }
 };
 
+//
+// question: pause tool execution until the user replies in the UI
+//
+
+struct server_tool_question : server_tool {
+    server_tool_question() {
+        name = "question";
+        display_name = "Question";
+        permission_write = false;
+    }
+
+    json get_definition() override {
+        return {
+            {"type", "function"},
+            {"function", {
+                {"name", name},
+                {"description", "Ask the user one or more clarifying questions before continuing. Use this when the assistant needs a concrete user choice or answer to proceed."},
+                {"parameters", {
+                    {"type", "object"},
+                    {"properties", {
+                        {"questions", {
+                            {"type", "array"},
+                            {"description", "Questions to ask"},
+                            {"items", {
+                                {"type", "object"},
+                                {"properties", {
+                                    {"question", { {"type", "string"}, {"description", "Complete question"} }},
+                                    {"header",   { {"type", "string"}, {"description", "Very short label (max 30 chars)"} }},
+                                    {"options", {
+                                        {"type", "array"},
+                                        {"description", "Available choices"},
+                                        {"items", {
+                                            {"type", "object"},
+                                            {"properties", {
+                                                {"label",       { {"type", "string"}, {"description", "Display text (1-5 words, concise)"} }},
+                                                {"description", { {"type", "string"}, {"description", "Explanation of choice"} }},
+                                            }},
+                                            {"required", json::array({"label", "description"})},
+                                        }},
+                                    }},
+                                    {"multiple", { {"type", "boolean"}, {"description", "Allow selecting multiple choices"} }},
+                                    {"custom",   { {"type", "boolean"}, {"description", "Allow typing a custom answer (default: true)"} }},
+                                }},
+                                {"required", json::array({"question", "header"})},
+                            }},
+                        }},
+                    }},
+                    {"required", json::array({"questions"})},
+                }},
+            }},
+        };
+    }
+
+    json invoke(const json & params, const json & context, server_tools * state) override {
+        std::string conversation_id = json_value(context, "conversation_id", std::string(""));
+        if (conversation_id.empty()) {
+            return {{"error", "question requires context.conversation_id"}};
+        }
+
+        if (!params.contains("questions") || !params.at("questions").is_array()) {
+            return {{"error", "question requires a questions array"}};
+        }
+
+        static std::atomic<int> counter{0};
+        std::string request_id = string_format("question-%lld-%d",
+            (long long) std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::system_clock::now().time_since_epoch()).count(),
+            ++counter);
+
+        json request = {
+            {"request_id", request_id},
+            {"conversation_id", conversation_id},
+            {"message_id", json_value(context, "message_id", std::string(""))},
+            {"tool_call_id", json_value(context, "tool_call_id", std::string(""))},
+            {"questions", params.at("questions")},
+        };
+
+        {
+            std::lock_guard<std::mutex> lock(state->mutex_state);
+            state->pending_questions[request_id] = request;
+        }
+
+        return {
+            {"status", "awaiting_user"},
+            {"kind", "question"},
+            {"request_id", request_id},
+            {"payload", request},
+        };
+    }
+};
+
+//
 //
 // public API
 //
@@ -737,6 +829,7 @@ static std::vector<std::unique_ptr<server_tool>> build_tools() {
     tools.push_back(std::make_unique<server_tool_edit_file>());
     tools.push_back(std::make_unique<server_tool_apply_diff>());
     tools.push_back(std::make_unique<server_tool_get_datetime>());
+    tools.push_back(std::make_unique<server_tool_question>());
     return tools;
 }
 
@@ -793,8 +886,37 @@ void server_tools::setup(const std::vector<std::string> & enabled_tools) {
             json body = json::parse(req.body);
             std::string tool_name = body.at("tool").get<std::string>();
             json params = body.value("params", json::object());
-            json result = invoke(tool_name, params);
+            json context = body.value("context", json::object());
+            json result = invoke(tool_name, params, context);
             res->data   = safe_json_to_str(result);
+        } catch (const json::exception & e) {
+            res->status = 400;
+            res->data   = safe_json_to_str(format_error_response(e.what(), ERROR_TYPE_INVALID_REQUEST));
+        } catch (const std::exception & e) {
+            SRV_ERR("got exception: %s\n", e.what());
+            res->status = 500;
+            res->data   = safe_json_to_str(format_error_response(e.what(), ERROR_TYPE_SERVER));
+        }
+        return res;
+    };
+
+    handle_get_pending = [this](const server_http_req & req) -> server_http_res_ptr {
+        auto res = std::make_unique<server_http_res>();
+        try {
+            res->data = safe_json_to_str(list_pending(req.get_param("conversation_id")));
+        } catch (const std::exception & e) {
+            SRV_ERR("got exception: %s\n", e.what());
+            res->status = 500;
+            res->data   = safe_json_to_str(format_error_response(e.what(), ERROR_TYPE_SERVER));
+        }
+        return res;
+    };
+
+    handle_post_reply = [this](const server_http_req & req) -> server_http_res_ptr {
+        auto res = std::make_unique<server_http_res>();
+        try {
+            json body = json::parse(req.body);
+            res->data = safe_json_to_str(reply(body));
         } catch (const json::exception & e) {
             res->status = 400;
             res->data   = safe_json_to_str(format_error_response(e.what(), ERROR_TYPE_INVALID_REQUEST));
@@ -807,11 +929,89 @@ void server_tools::setup(const std::vector<std::string> & enabled_tools) {
     };
 }
 
-json server_tools::invoke(const std::string & name, const json & params) {
+json server_tools::invoke(const std::string & name, const json & params, const json & context) {
     for (auto & t : tools) {
         if (t->name == name) {
-            return t->invoke(params);
+            return t->invoke(params, context, this);
         }
     }
     return {{"error", "unknown tool: " + name}};
+}
+
+json server_tools::list_pending(const std::string & conversation_id) {
+    json result = json::array();
+    std::lock_guard<std::mutex> lock(mutex_state);
+
+    for (auto it = pending_questions.begin(); it != pending_questions.end(); ++it) {
+        const json & item = it.value();
+        if (conversation_id.empty() || json_value(item, "conversation_id", std::string("")) == conversation_id) {
+            result.push_back(item);
+        }
+    }
+
+    return result;
+}
+
+json server_tools::reply(const json & body) {
+    std::string request_id = body.at("request_id").get<std::string>();
+    std::string conversation_id = body.at("conversation_id").get<std::string>();
+    json answers = body.value("answers", json::array());
+    bool rejected = json_value(body, "rejected", false);
+
+    json request;
+    {
+        std::lock_guard<std::mutex> lock(mutex_state);
+        auto it = pending_questions.find(request_id);
+        if (it == pending_questions.end()) {
+            return {{"error", "unknown question request: " + request_id}};
+        }
+        request = it.value();
+        pending_questions.erase(it);
+    }
+
+    if (json_value(request, "conversation_id", std::string("")) != conversation_id) {
+        return {{"error", "conversation_id does not match request"}};
+    }
+
+    if (rejected) {
+        return {
+            {"status", "completed"},
+            {"plain_text_response", "The user dismissed this question."},
+            {"is_error", true},
+        };
+    }
+
+    if (!answers.is_array()) {
+        return {{"error", "answers must be an array"}};
+    }
+
+    const json & questions = request.at("questions");
+    std::vector<std::string> formatted;
+    size_t count = std::min(questions.size(), answers.size());
+    formatted.reserve(count);
+
+    for (size_t i = 0; i < count; ++i) {
+        const auto & question = questions.at(i);
+        const auto & answer = answers.at(i);
+        std::string question_text = json_value(question, "question", std::string("Question"));
+
+        if (answer.is_array()) {
+            std::vector<std::string> values;
+            for (const auto & item : answer) {
+                if (item.is_string()) {
+                    values.push_back(item.get<std::string>());
+                }
+            }
+            formatted.push_back("\"" + question_text + "\"=\"" + string_join(values, ", ") + "\"");
+        } else if (answer.is_string()) {
+            formatted.push_back("\"" + question_text + "\"=\"" + answer.get<std::string>() + "\"");
+        } else {
+            formatted.push_back("\"" + question_text + "\"=\"Unanswered\"");
+        }
+    }
+
+    return {
+        {"status", "completed"},
+        {"plain_text_response", "User has answered your questions: " + string_join(formatted, ", ") + ". You can now continue with the user's answers in mind."},
+    };
 }
