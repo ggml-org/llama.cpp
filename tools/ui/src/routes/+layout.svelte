@@ -13,6 +13,7 @@
 		DialogConversationTitleUpdate,
 		SidebarNavigation
 	} from '$lib/components/app';
+	import { PwaMetaTags, PwaRefreshAlert } from '$lib/components/pwa';
 	import { pwaAssetsHead } from 'virtual:pwa-assets/head';
 	import { useRegisterSW } from 'virtual:pwa-register/svelte';
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
@@ -26,7 +27,8 @@
 	import { Toaster } from 'svelte-sonner';
 	import { modelsStore } from '$lib/stores/models.svelte';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
-	import { APP_NAME, TOOLTIP_DELAY_DURATION } from '$lib/constants';
+	import { TOOLTIP_DELAY_DURATION } from '$lib/constants';
+	import { FAVICON_PATHS, FAVICON_SELECTORS, SW_CONFIG } from '$lib/constants/pwa';
 	import { useKeyboardShortcuts } from '$lib/hooks/use-keyboard-shortcuts.svelte';
 	import { useSettingsNavigation } from '$lib/hooks/use-settings-navigation.svelte';
 	import { conversations } from '$lib/stores/conversations.svelte';
@@ -57,18 +59,14 @@
 	function updateFavicon() {
 		const dark = theme.isSystemDark;
 
-		let icoLink = document.querySelector(
-			'link[rel="icon"][sizes="48x48"]'
-		) as HTMLLinkElement | null;
+		let icoLink = document.querySelector(FAVICON_SELECTORS.ICO_48X48) as HTMLLinkElement | null;
 		if (icoLink) {
-			icoLink.href = dark ? '/favicon-dark.ico' : '/favicon.ico';
+			icoLink.href = dark ? FAVICON_PATHS.ICO_DARK : FAVICON_PATHS.ICO_LIGHT;
 		}
 
-		let svgLink = document.querySelector(
-			'link[rel="icon"][type="image/svg+xml"]'
-		) as HTMLLinkElement | null;
+		let svgLink = document.querySelector(FAVICON_SELECTORS.SVG_ANY) as HTMLLinkElement | null;
 		if (svgLink) {
-			svgLink.href = dark ? '/favicon-dark.svg' : '/favicon.svg';
+			svgLink.href = dark ? FAVICON_PATHS.SVG_DARK : FAVICON_PATHS.SVG_LIGHT;
 		}
 	}
 
@@ -273,8 +271,11 @@
 
 				try {
 					const resp = await fetch(swUrl, {
-						cache: 'no-store',
-						headers: { cache: 'no-store', 'cache-control': 'no-cache' }
+						cache: SW_CONFIG.UPDATE_FETCH_OPTIONS.CACHE,
+						headers: {
+							cache: SW_CONFIG.UPDATE_FETCH_OPTIONS.HEADERS.CACHE,
+							'cache-control': SW_CONFIG.UPDATE_FETCH_OPTIONS.HEADERS.CACHE_CONTROL
+						}
 					});
 					if (resp?.status === 200) {
 						await r.update();
@@ -282,7 +283,7 @@
 				} catch (e) {
 					console.error(e);
 				}
-			}, 60000);
+			}, SW_CONFIG.CHECK_INTERVAL_MS);
 		},
 		onRegisterError(error: unknown) {
 			console.error('[PWA] SW registration error:', error);
@@ -303,33 +304,11 @@
 		<link {...link} />
 	{/each}
 
-	<meta name="apple-mobile-web-app-capable" content="yes" />
-	<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-	<meta name="apple-mobile-web-app-title" content={APP_NAME} />
+	<PwaMetaTags />
 </svelte:head>
 
 <!-- PWA update prompt -->
-{#if $needRefresh}
-	<div
-		class="fixed right-4 bottom-4 z-[9999] max-w-sm rounded-lg border border-zinc-200 bg-white p-4 shadow-lg dark:border-zinc-700 dark:bg-zinc-800"
-	>
-		<p class="mb-2 text-sm font-medium">Update available</p>
-		<p class="mb-3 text-xs text-zinc-500 dark:text-zinc-400">
-			A new version is available. Reload to update.
-		</p>
-		<div class="flex gap-2">
-			<button
-				onclick={() => {
-					updateServiceWorker(true);
-					$needRefresh = false;
-				}}
-				class="rounded bg-blue-600 px-3 py-1 text-xs text-white hover:bg-blue-700"
-			>
-				Reload
-			</button>
-		</div>
-	</div>
-{/if}
+<PwaRefreshAlert needRefresh={$needRefresh} {updateServiceWorker} />
 
 <Tooltip.Provider delayDuration={TOOLTIP_DELAY_DURATION}>
 	<ModeWatcher />

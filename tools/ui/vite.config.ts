@@ -9,6 +9,14 @@ import devtoolsJson from 'vite-plugin-devtools-json';
 import { storybookTest } from '@storybook/addon-vitest/vitest-plugin';
 import { llamaCppBuildPlugin } from './scripts/vite-plugin-llama-cpp-build';
 import { playwright } from '@vitest/browser-playwright';
+import {
+	PWA_MANIFEST,
+	CACHE_SETTINGS,
+	GLOB_PATTERNS,
+	RUNTIME_CACHING,
+	API_CACHING_PATTERNS,
+	PWA_KIT_OPTIONS
+} from './src/lib/constants/pwa';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -45,39 +53,7 @@ export default defineConfig({
 			// Strategy: generateSW - the plugin generates a service worker automatically
 			// using Workbox. For a custom SW, use 'injectManifest' instead.
 			// Manifest configuration
-			manifest: {
-				name: 'llama-ui',
-				short_name: 'llama-ui',
-				description: 'Local AI chat interface powered by llama.cpp',
-				start_url: './',
-				display: 'standalone',
-				background_color: 'white',
-				theme_color: 'white',
-				icons: [
-					{
-						src: 'pwa-64x64.png',
-						sizes: '64x64',
-						type: 'image/png'
-					},
-					{
-						src: 'pwa-192x192.png',
-						sizes: '192x192',
-						type: 'image/png'
-					},
-					{
-						src: 'pwa-512x512.png',
-						sizes: '512x512',
-						type: 'image/png',
-						purpose: 'any'
-					},
-					{
-						src: 'maskable-icon-512x512.png',
-						sizes: '512x512',
-						type: 'image/png',
-						purpose: 'maskable'
-					}
-				]
-			},
+			manifest: PWA_MANIFEST,
 
 			// Workbox configuration for generateSW strategy
 			workbox: {
@@ -85,44 +61,43 @@ export default defineConfig({
 				// Uses '**/' because SvelteKit outputs files under _app/immutable/
 				// subdirectories; the llama-cpp-build plugin flattens them after
 				// the SW is generated.
-				globPatterns: ['**/*.{js,css,html,ico,svg,png,webp,woff,woff2,json,webmanifest}'],
+				globPatterns: GLOB_PATTERNS,
 
-				maximumFileSizeToCacheInBytes: 6 * 1024 * 1024, // 6 MB — bundle.js is ~5.3 MB
+				maximumFileSizeToCacheInBytes: CACHE_SETTINGS.MAX_FILE_SIZE_BYTES,
 
 				// Runtime caching for API calls - use NetworkFirst so APIs are always fresh
 				runtimeCaching: [
 					{
-						urlPattern: /\/v1\/.*/,
-						handler: 'NetworkFirst',
+						urlPattern: API_CACHING_PATTERNS.V1_API,
+						handler: RUNTIME_CACHING.HANDLER,
 						options: {
-							cacheName: 'api-cache',
+							cacheName: RUNTIME_CACHING.CACHE_NAME,
 							expiration: {
-								maxEntries: 50,
-								maxAgeSeconds: 60 * 60 * 24 // 24 hours
+								maxEntries: CACHE_SETTINGS.API_CACHE_MAX_ENTRIES,
+								maxAgeSeconds: CACHE_SETTINGS.API_CACHE_MAX_AGE_SECONDS
 							}
 						}
 					},
 					{
-						urlPattern: /\/(health|props|models|tools|slots|cors-proxy).*/,
-						handler: 'NetworkFirst',
+						urlPattern: API_CACHING_PATTERNS.STATIC_API,
+						handler: RUNTIME_CACHING.HANDLER,
 						options: {
-							cacheName: 'api-cache',
+							cacheName: RUNTIME_CACHING.CACHE_NAME,
 							expiration: {
-								maxEntries: 50,
-								maxAgeSeconds: 60 * 60 * 24
+								maxEntries: CACHE_SETTINGS.API_CACHE_MAX_ENTRIES,
+								maxAgeSeconds: CACHE_SETTINGS.API_CACHE_MAX_AGE_SECONDS
 							}
 						}
 					}
 				]
 			},
 
-			// Dev options - enable SW in development mode for testing
 			devOptions: {
 				enabled: true,
 				suppressWarnings: true,
-				// Use '/' to match production SW behaviour (navigateFallback defaults to
-				// the configured base path, which is '/' for this SPA).
-				navigateFallback: '/'
+				// Use PWA_KIT_OPTIONS.NAVIGATE_FALLBACK to match production SW behaviour
+				// (navigateFallback defaults to the configured base path, which is '/' for this SPA).
+				navigateFallback: PWA_KIT_OPTIONS.NAVIGATE_FALLBACK
 			},
 
 			// SvelteKit-specific options

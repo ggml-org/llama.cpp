@@ -3,17 +3,24 @@ import {
 	defineConfig,
 	minimal2023Preset
 } from '@vite-pwa/assets-generator/config';
+import { THEME_COLORS, PWA_GENERATOR_DEVICES, PWA_ASSET_GENERATOR } from './src/lib/constants/pwa';
 
 export default defineConfig({
 	headLinkOptions: {
-		preset: '2023'
+		preset: PWA_ASSET_GENERATOR.LINK_PRESET
 	},
 	preset: combinePresetAndAppleSplashScreens(
 		minimal2023Preset,
 		{
-			padding: 0.75,
-			resizeOptions: { background: 'white', fit: 'contain' },
-			darkResizeOptions: { background: '#111111', fit: 'contain' },
+			padding: PWA_ASSET_GENERATOR.SPLASH_PADDING,
+			resizeOptions: {
+				background: THEME_COLORS.BACKGROUND_LIGHT,
+				fit: PWA_ASSET_GENERATOR.FIT_MODE
+			},
+			darkResizeOptions: {
+				background: THEME_COLORS.BACKGROUND_DARK,
+				fit: PWA_ASSET_GENERATOR.FIT_MODE
+			},
 			darkImageResolver: async (imageName: string) => {
 				if (imageName.endsWith('favicon.svg')) {
 					const { resolve } = await import('node:path');
@@ -23,47 +30,23 @@ export default defineConfig({
 			},
 			linkMediaOptions: {
 				log: true,
-				addMediaScreen: true,
-				basePath: '/',
-				xhtml: false
+				addMediaScreen: PWA_ASSET_GENERATOR.ADD_MEDIA_SCREEN,
+				basePath: PWA_ASSET_GENERATOR.BASE_PATH,
+				xhtml: PWA_ASSET_GENERATOR.XHTML
 			},
 			png: {
-				compressionLevel: 9,
-				quality: 60
+				compressionLevel: PWA_ASSET_GENERATOR.PNG_COMPRESSION_LEVEL,
+				quality: PWA_ASSET_GENERATOR.PNG_QUALITY
 			},
 			name: (landscape, size, dark) => {
-				return `apple-splash-${landscape ? 'landscape' : 'portrait'}-${dark ? 'dark-' : ''}${size.width}x${size.height}.png`;
+				const orientation = landscape
+					? PWA_ASSET_GENERATOR.ORIENTATION_LANDSCAPE
+					: PWA_ASSET_GENERATOR.ORIENTATION_PORTRAIT;
+				const darkPrefix = dark ? PWA_ASSET_GENERATOR.DARK_PREFIX : '';
+				return `apple-splash-${orientation}-${darkPrefix}${size.width}x${size.height}.png`;
 			}
 		},
-		[
-			// iPhones (current generation + one previous)
-			'iPhone 13',
-			'iPhone 13 Pro',
-			'iPhone 13 Pro Max',
-			'iPhone 14',
-			'iPhone 14 Plus',
-			'iPhone 14 Pro',
-			'iPhone 14 Pro Max',
-			'iPhone 15',
-			'iPhone 15 Plus',
-			'iPhone 15 Pro',
-			'iPhone 15 Pro Max',
-			'iPhone 16',
-			'iPhone 16 Plus',
-			'iPhone 16 Pro',
-			'iPhone 16 Pro Max',
-			'iPhone 16e',
-			'iPhone SE 4"',
-			'iPhone SE 4.7"',
-			// iPads
-			'iPad 11"',
-			'iPad Air 10.9"',
-			'iPad Air 11"',
-			'iPad Air 13"',
-			'iPad Pro 11"',
-			'iPad Pro 12.9"',
-			'iPad mini 8.3"'
-		]
+		PWA_GENERATOR_DEVICES
 	),
 	images: ['static/favicon.svg']
 });

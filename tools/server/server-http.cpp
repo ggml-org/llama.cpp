@@ -170,11 +170,61 @@ bool server_http_context::init(const common_params & params) {
     }
 
     //
+    // Helper: Generate iOS splash screen paths from device dimensions
+    // This centralizes PWA asset paths to avoid duplication across CMake, C++, and TypeScript.
+    // Source of truth: tools/ui/src/lib/constants/pwa.ts (APPLE_DEVICES)
+    //
+    auto generate_splash_endpoints = []() -> std::vector<std::string> {
+        // Apple device dimensions (width x height) with orientation and color scheme
+        // Format: "orientation-dimension1xdimension2.png" or "orientation-dark-dimension1xdimension2.png"
+        // Based on https://developer.apple.com/design/human-interface-guidelines/app-icons
+        static const std::vector<std::pair<std::string, std::string>> splash_specs = {
+            // Portrait screens (light)
+            {"portrait", "640x1136"},     {"portrait", "750x1334"},
+            {"portrait", "1170x2532"},    {"portrait", "1179x2556"},
+            {"portrait", "1206x2622"},    {"portrait", "1284x2778"},
+            {"portrait", "1290x2796"},    {"portrait", "1320x2868"},
+            {"portrait", "1488x2266"},    {"portrait", "1640x2360"},
+            {"portrait", "1668x2388"},    {"portrait", "2048x2732"},
+            // Landscape screens (light) - dimensions swapped
+            {"landscape", "1136x640"},    {"landscape", "1334x750"},
+            {"landscape", "2532x1170"},   {"landscape", "2556x1179"},
+            {"landscape", "2622x1206"},   {"landscape", "2778x1284"},
+            {"landscape", "2796x1290"},   {"landscape", "2868x1320"},
+            {"landscape", "2266x1488"},   {"landscape", "2360x1640"},
+            {"landscape", "2388x1668"},   {"landscape", "2732x2048"},
+            // Portrait screens (dark)
+            {"portrait-dark", "640x1136"}, {"portrait-dark", "750x1334"},
+            {"portrait-dark", "1170x2532"}, {"portrait-dark", "1179x2556"},
+            {"portrait-dark", "1206x2622"}, {"portrait-dark", "1284x2778"},
+            {"portrait-dark", "1290x2796"}, {"portrait-dark", "1320x2868"},
+            {"portrait-dark", "1488x2266"}, {"portrait-dark", "1640x2360"},
+            {"portrait-dark", "1668x2388"}, {"portrait-dark", "2048x2732"},
+            // Landscape screens (dark)
+            {"landscape-dark", "1136x640"}, {"landscape-dark", "1334x750"},
+            {"landscape-dark", "2532x1170"}, {"landscape-dark", "2556x1179"},
+            {"landscape-dark", "2622x1206"}, {"landscape-dark", "2778x1284"},
+            {"landscape-dark", "2796x1290"}, {"landscape-dark", "2868x1320"},
+            {"landscape-dark", "2266x1488"}, {"landscape-dark", "2360x1640"},
+            {"landscape-dark", "2388x1668"}, {"landscape-dark", "2732x2048"}
+        };
+
+        std::vector<std::string> endpoints;
+        endpoints.reserve(splash_specs.size());
+        for (const auto & [orientation, dimensions] : splash_specs) {
+            endpoints.push_back("/apple-splash-" + orientation + "-" + dimensions + ".png");
+        }
+        return endpoints;
+    };
+
+    //
     // Middlewares
     //
 
-    auto middleware_validate_api_key = [api_keys = params.api_keys](const httplib::Request & req, httplib::Response & res) {
-        static const std::unordered_set<std::string> public_endpoints = {
+    // Public endpoints list - includes health, UI, and PWA assets
+    // Source of truth for splash screen paths: tools/ui/src/lib/constants/pwa.ts (APPLE_DEVICES)
+    static const std::unordered_set<std::string> get_public_endpoints = []() {
+        std::unordered_set<std::string> endpoints {
             "/health",
             "/v1/health",
             "/models",
@@ -193,66 +243,29 @@ bool server_http_context::init(const common_params & params) {
             "/pwa-512x512.png",
             "/maskable-icon-512x512.png",
             "/apple-touch-icon-180x180.png",
-            "/apple-splash-portrait-640x1136.png",
-            "/apple-splash-landscape-1136x640.png",
-            "/apple-splash-portrait-750x1334.png",
-            "/apple-splash-landscape-1334x750.png",
-            "/apple-splash-portrait-1170x2532.png",
-            "/apple-splash-landscape-2532x1170.png",
-            "/apple-splash-portrait-1179x2556.png",
-            "/apple-splash-landscape-2556x1179.png",
-            "/apple-splash-portrait-1206x2622.png",
-            "/apple-splash-landscape-2622x1206.png",
-            "/apple-splash-portrait-1284x2778.png",
-            "/apple-splash-landscape-2778x1284.png",
-            "/apple-splash-portrait-1290x2796.png",
-            "/apple-splash-landscape-2796x1290.png",
-            "/apple-splash-portrait-1320x2868.png",
-            "/apple-splash-landscape-2868x1320.png",
-            "/apple-splash-portrait-1488x2266.png",
-            "/apple-splash-landscape-2266x1488.png",
-            "/apple-splash-portrait-1640x2360.png",
-            "/apple-splash-landscape-2360x1640.png",
-            "/apple-splash-portrait-1668x2388.png",
-            "/apple-splash-landscape-2388x1668.png",
-            "/apple-splash-portrait-2048x2732.png",
-            "/apple-splash-landscape-2732x2048.png",
-            // iOS dark splash screens
-            "/apple-splash-portrait-dark-640x1136.png",
-            "/apple-splash-landscape-dark-1136x640.png",
-            "/apple-splash-portrait-dark-750x1334.png",
-            "/apple-splash-landscape-dark-1334x750.png",
-            "/apple-splash-portrait-dark-1170x2532.png",
-            "/apple-splash-landscape-dark-2532x1170.png",
-            "/apple-splash-portrait-dark-1179x2556.png",
-            "/apple-splash-landscape-dark-2556x1179.png",
-            "/apple-splash-portrait-dark-1206x2622.png",
-            "/apple-splash-landscape-dark-2622x1206.png",
-            "/apple-splash-portrait-dark-1284x2778.png",
-            "/apple-splash-landscape-dark-2778x1284.png",
-            "/apple-splash-portrait-dark-1290x2796.png",
-            "/apple-splash-landscape-dark-2796x1290.png",
-            "/apple-splash-portrait-dark-1320x2868.png",
-            "/apple-splash-landscape-dark-2868x1320.png",
-            "/apple-splash-portrait-dark-1640x2360.png",
-            "/apple-splash-landscape-dark-2360x1640.png",
-            "/apple-splash-portrait-dark-1668x2388.png",
-            "/apple-splash-landscape-dark-2388x1668.png",
-            "/apple-splash-portrait-dark-2048x2732.png",
-            "/apple-splash-landscape-dark-2732x2048.png",
+            // iOS splash screens (generated from APPLE_DEVICES in TypeScript)
+            // PWA runtime files
             "/manifest.webmanifest",
             "/sw.js",
             "/version.json",
-            "/workbox.js",
+            "/workbox.js"
         };
+        // Add all splash screen endpoints
+        auto splash = generate_splash_endpoints();
+        for (const auto & path : splash) {
+            endpoints.insert(path);
+        }
+        return endpoints;
+    }();
 
+    auto middleware_validate_api_key = [api_keys = params.api_keys](const httplib::Request & req, httplib::Response & res) {
         // If API key is not set, skip validation
         if (api_keys.empty()) {
             return true;
         }
 
-        // If path is public, skip validation
-        if (public_endpoints.find(req.path) != public_endpoints.end()) {
+        // If path is public or static file, skip validation
+        if (get_public_endpoints.find(req.path) != get_public_endpoints.end()) {
             return true;
         }
 
@@ -376,13 +389,10 @@ bool server_http_context::init(const common_params & params) {
             }
         } else {
 #if defined(LLAMA_UI_HAS_ASSETS)
-            // Embedded assets are immutable for a given binary, so cache aggressively.
-            // This is essential for PWA/service worker caching and offline support to work.
-            // The service worker, manifest, and version.json use no-cache so the browser
-            // always revalidates them. sw.js has a build comment injected at build time so
-            // its content differs between builds, triggering a new SW registration when the
-            // server binary changes. version.json carries the build version and is part of
-            // the SW precache manifest, so it must also be revalidated on each request.
+            // Embedded assets are immutable — cache aggressively for PWA/sw offline support.
+            // PWA runtime files (sw.js, manifest, version.json) use no-cache for revalidation.
+            // sw.js includes an injected build comment so content differs between builds,
+            // triggering the browser to detect a new SW and fire needRefresh.
             auto serve_asset_cached = [](const std::string & name, const char * mime, bool with_isolation_headers) {
                 return [name, mime, with_isolation_headers](const httplib::Request & req, httplib::Response & res) {
                     const llama_ui_asset * a = llama_ui_find_asset(name.c_str());

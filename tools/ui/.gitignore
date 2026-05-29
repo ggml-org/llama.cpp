@@ -29,6 +29,7 @@ vite.config.ts.timestamp-*
 apple-splash-*.png
 apple-touch-icon-*.png
 favicon.ico
+favicon-dark.ico
 maskable-icon-*.png
 pwa-*.png
 

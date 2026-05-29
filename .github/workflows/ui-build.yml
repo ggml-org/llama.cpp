@@ -4,7 +4,7 @@ on:
   workflow_call:
     inputs:
       hf_ui_version:
-        description: 'Version string for version.json (e.g. v1.2.3)'
+        description: 'Version string for version.json (e.g. 12345)'
         required: false
         type: string
 

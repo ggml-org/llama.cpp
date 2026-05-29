@@ -16,6 +16,15 @@ set(HF_ENABLED        "" CACHE STRING "Whether to allow HF Bucket download (ON/O
 set(BUILD_UI          "" CACHE STRING "Build UI via npm (ON/OFF)")
 set(LLAMA_UI_EMBED    "" CACHE STRING "Path to llama-ui-embed helper")
 
+# IMPORTANT: When adding PWA assets, sync across all 3 places:
+#   1. tools/ui/src/lib/constants/pwa.ts   (APPLE_DEVICES, PUBLIC_ENDPOINTS)
+#   2. tools/server/server-http.cpp        (public_endpoints)
+#   3. scripts/ui-assets.cmake             (ASSETS list)
+# - C++ (server-http.cpp) - public endpoints (splash screens generated via helper)
+# - TypeScript (constants/pwa.ts) - APPLE_DEVICES, PWA_MANIFEST, PUBLIC_ENDPOINTS
+#
+# When adding/changing PWA assets, update tools/ui/src/lib/constants/pwa.ts first,
+# then sync any new file names here and in server-http.cpp.
 set(ASSETS
     bundle.css
     bundle.js
