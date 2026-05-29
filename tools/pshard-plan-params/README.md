@@ -70,13 +70,35 @@ strategy=GPUONLY_ATTNPIN_FFNSTREAM n_pinned=33 n_attn_pinned=0 overflow=NONE tps
 ot=^output=CUDA_Host:3,^token_embd=CUDA_Host:3,blk\.0\..*=CUDA_Host:0, ... ,blk\.32\..*=CUDA_Host:0,blk\.33\.ffn_(up|gate|down).*=CUDA_Host:2,blk\.33\..*=CUDA_Host:0, ... ,blk\.63\.ffn_(up|gate|down).*=CUDA_Host:2,blk\.63\..*=CUDA_Host:0
 ```
 
+## Planning for llama-bench
+
+Use `--bench-plan` when the registry is intended for `llama-bench -pshard`. The planner accepts the bench shape flags `-p` / `--n-prompt`, `-n` / `--n-gen`, `-pg`, and `-d` / `--n-depth`, then plans each unique context that llama-bench can run:
+
+```bash
+./build/bin/llama-pshard-plan-params \
+    --model /opt/models/Qwen3.5-35B-A3B-Q8_0.gguf \
+    --bench-plan \
+    -pg 512,200 \
+    -pg 2048,200 \
+    -d 0,1024
+```
+
+For each generated context, `n_ctx` is the number of tokens that can be resident during the test:
+
+- prompt-only: `n_ctx = p + d`
+- generation-only: `n_ctx = n + d`
+- prompt+generation: `n_ctx = p + n + d`
+
+The largest planned tier for a bench context is capped by prompt batch demand, not by depth. For example, `-pg 2048,200 -d 1024` plans `n_ctx=3272` with `tier_cap=2048`, so the registry includes decode tiers plus prompt tiers up to `bs=2048`.
+
+If `-fa` / `--flash-attn` is not provided and `LLAMA_ARG_FLASH_ATTN` is not set, `--bench-plan` uses Flash Attention off to match llama-bench defaults. Normal non-bench planning keeps the regular common parameter defaults.
+
 ## Strategies
 
 In the strategy names, `ATTN` refers to the attention/dense side of the layer, as opposed to FFN/MoE weights.
 
 Static schedules run GPU-resident tensors on GPU and CPU-resident tensors on CPU, with no streamed GPU execution for host-resident weights.
 
-- `STATIC_FITPARAMS_DENSEPRIO_MOEONLY`: static `llama_params_fit` placement with front-to-back fill mode enabled. This is the baseline schedule: MoE models first keep dense-only parts on GPU with expert tensors on CPU, then convert dense-only layers to full layers as budget allows. Dense models get full layers.
 - `STATIC_ATTNPRIO_ALLMODELS`: static attention-priority placement. It pins the attention/dense side across as many layers as fit, then uses the remaining budget to pin full layers. FFN/MoE that does not fit remains on CPU. Unlike `llama_params_fit`, this attention-priority placement applies to dense models too.
 
 Dynamic schedules split the layer between CPU and GPU execution. Some host-resident tensors are streamed to GPU scratch for execution, while other parts of the layer remain on CPU.
@@ -90,7 +112,7 @@ GPU-only schedules execute repeating-layer compute on GPU. Weights that do not f
 
 ## Notes
 
-- `--max-vram-alloc` / `-mva <MiB>` sets the planning budget. If it is `0` or omitted, the planner uses the free VRAM available at planning time.
+- `--max-vram-alloc` / `-mva <MiB>` sets the absolute planning budget. If it is `0` or omitted, the planner uses the free VRAM available at planning time minus `--fit-target` / `-fitt` (default 1024 MiB). When `-mva` is non-zero, `-fitt` is ignored for pshard.
 - `--pshard-tier-max <N>` caps the largest batch size the planner probes. The default is `min(max(n_batch, 16384), n_ctx)`.
 - The `[fingerprint=...]` line invalidates the registry when plan-compatible inputs change (`n_ctx`, `n_seq_max`, threads, FA mode, KV cache types, GGUF file size, or forced `PSHARD_STRATEGY`). The comment below the fingerprint lists those same inputs.
 - A fingerprint can contain multiple `[variant budget=... cache_ubatch=...]` blocks. Re-running the planner with a new budget or cache ubatch replaces only that variant and keeps the others.

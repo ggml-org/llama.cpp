@@ -619,6 +619,7 @@ struct llama_model {
     bool has_tensor_overrides() const;
 
     bool is_pshard() const;
+    bool pshard_delegates_compute() const;
 
     llama_pshard_plan_registry * get_plan_registry() const;
 

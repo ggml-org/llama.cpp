@@ -8618,6 +8618,10 @@ bool llama_model::is_pshard() const {
     return params.pshard;
 }
 
+bool llama_model::pshard_delegates_compute() const {
+    return params.pshard_delegate_compute;
+}
+
 llama_pshard_plan_registry * llama_model::get_plan_registry() const {
     return pimpl->plan_registry;
 }
@@ -9361,6 +9365,7 @@ llama_model_params llama_model_default_params() {
         /*.no_host                     =*/ false,
         /*.no_alloc                    =*/ false,
         /*.pshard                      =*/ false,
+        /*.pshard_delegate_compute     =*/ false,
         /*.pshard_cache_skip_load      =*/ false,
         /*.max_vram_alloc              =*/ 0,
         /*.pshard_registry             =*/ nullptr,

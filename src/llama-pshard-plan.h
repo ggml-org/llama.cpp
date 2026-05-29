@@ -13,24 +13,26 @@
 #include <vector>
 
 enum llama_pshard_strategy {
-    LLAMA_PSHARD_STATIC_FITPARAMS_DENSEPRIO_MOEONLY  = 0,
-    LLAMA_PSHARD_GPUONLY_LAYERPIN_LAYERSTREAM        = 1,
-    LLAMA_PSHARD_GPUONLY_ATTNPIN_FFNSTREAM           = 2,
-    LLAMA_PSHARD_DYNAMIC_FFNCPU_ATTNSTREAM           = 3,
-    LLAMA_PSHARD_STATIC_ATTNPRIO_ALLMODELS           = 4,
+    LLAMA_PSHARD_GPUONLY_LAYERPIN_LAYERSTREAM        = 0,
+    LLAMA_PSHARD_GPUONLY_ATTNPIN_FFNSTREAM           = 1,
+    LLAMA_PSHARD_DYNAMIC_FFNCPU_ATTNSTREAM           = 2,
+    LLAMA_PSHARD_STATIC_ATTNPRIO_ALLMODELS           = 3,
     LLAMA_PSHARD_COUNT
 };
 
 // strategy name for logging
 inline const char * llama_pshard_strategy_name(llama_pshard_strategy s) {
-    static const char * const names[] = {
-        "STATIC_FITPARAMS_DENSEPRIO_MOEONLY",
-        "GPUONLY_LAYERPIN_LAYERSTREAM",
-        "GPUONLY_ATTNPIN_FFNSTREAM",
-        "DYNAMIC_FFNCPU_ATTNSTREAM",
-        "STATIC_ATTNPRIO_ALLMODELS",
-    };
-    return (s >= 0 && s < LLAMA_PSHARD_COUNT) ? names[s] : "UNKNOWN";
+    switch (s) {
+        case LLAMA_PSHARD_GPUONLY_LAYERPIN_LAYERSTREAM: return "GPUONLY_LAYERPIN_LAYERSTREAM";
+        case LLAMA_PSHARD_GPUONLY_ATTNPIN_FFNSTREAM:    return "GPUONLY_ATTNPIN_FFNSTREAM";
+        case LLAMA_PSHARD_DYNAMIC_FFNCPU_ATTNSTREAM:    return "DYNAMIC_FFNCPU_ATTNSTREAM";
+        case LLAMA_PSHARD_STATIC_ATTNPRIO_ALLMODELS:    return "STATIC_ATTNPRIO_ALLMODELS";
+        default:                                        return "UNKNOWN";
+    }
+}
+
+inline bool llama_pshard_strategy_delegates_compute(llama_pshard_strategy s) {
+    return s == LLAMA_PSHARD_STATIC_ATTNPRIO_ALLMODELS;
 }
 
 // PSHARD_STRATEGY accepts a name or numeric id
@@ -58,7 +60,7 @@ struct llama_pshard_override {
 };
 
 struct llama_pshard_plan {
-    llama_pshard_strategy strategy       = LLAMA_PSHARD_STATIC_FITPARAMS_DENSEPRIO_MOEONLY;
+    llama_pshard_strategy strategy       = LLAMA_PSHARD_STATIC_ATTNPRIO_ALLMODELS;
     uint32_t             batch_size      = 0;
     uint32_t             n_pinned        = 0;   // fully pinned layers (all tensors on GPU)
     uint32_t             n_attn_pinned   = 0;   // attention priority layers on GPU (>= n_pinned)
@@ -102,14 +104,15 @@ std::vector<llama_device_memory_data> llama_get_device_memory_data(
         uint32_t & hp_n_ctx_train, uint32_t & hp_n_expert, uint32_t & hp_n_embd_r,
         enum ggml_log_level log_level,
         llama_probe_hook_t probe_hook = nullptr,
-        void * probe_hook_data = nullptr);
+        void * probe_hook_data = nullptr,
+        uint32_t probe_n_tokens = 0,
+        uint32_t probe_n_outputs = 0);
 
 // fit params entry point used by pshard planning
 void llama_params_fit_impl(
         const char * path_model, struct llama_model_params * mparams, struct llama_context_params * cparams,
         float * tensor_split, struct llama_model_tensor_buft_override * tensor_buft_overrides,
-        size_t * margins_s, uint32_t n_ctx_min, enum ggml_log_level log_level,
-        bool fill_front_to_back = false);
+        size_t * margins_s, uint32_t n_ctx_min, enum ggml_log_level log_level);
 
 // plan cache serialization. fingerprint covers only runtime plan-compatibility params
 // so the planner binary and the runtime binary can share the same cache file.
@@ -143,6 +146,12 @@ struct llama_pshard_plan_registry {
 
     void init(uint32_t n_ubatch, uint32_t n_parallel = 1, uint32_t n_draft = 0) {
         tier_sizes.clear();
+        best_plans.clear();
+
+        if (n_ubatch == 0) {
+            cache_ubatch = 0;
+            return;
+        }
 
         // decode tiers
         if (n_parallel <= 1) {

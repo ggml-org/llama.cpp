@@ -88,7 +88,7 @@ struct llama_benchmark_predictor {
 
     // Timing cache: same shape + same mode = same timing across layers.
     // Key: make_timing_key(), Value: {time_ms, pcie_contrib}.
-    mutable std::unordered_map<std::string, std::pair<double, double>> timing_cache;
+    using timing_cache_t = std::unordered_map<std::string, std::pair<double, double>>;
 
     llama_benchmark_predictor() = default;
     llama_benchmark_predictor(const llama_benchmark_predictor &) = delete;
@@ -107,9 +107,8 @@ struct llama_benchmark_predictor {
     // async_copy: true when PCIe transfers run concurrently (uses eff_* bandwidths for CPU).
     llama_split_timing predict_split(
             struct ggml_tensor ** nodes, int n_nodes,
-            bool is_gpu, int32_t batch_size, bool async_copy = true) const;
-
-    void clear_cache() const { timing_cache.clear(); }
+            bool is_gpu, int32_t batch_size, bool async_copy = true,
+            timing_cache_t * timing_cache = nullptr) const;
 
     // Nearest-neighbor search with weighted scoring (batch > dims > quant).
     // For FLASH_ATTN queries, pass op_name="FLASH_ATTN" -- matches all FLASH_ATTN_* entries.

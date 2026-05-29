@@ -25,8 +25,10 @@
 
 llama_context::llama_context(
         const llama_model & model,
-              llama_context_params params) :
+              llama_context_params params,
+              llama_context_probe_reserve probe_reserve_) :
     model(model),
+    probe_reserve(probe_reserve_),
     cvec(std::make_unique<llama_adapter_cvec>()),
     loras(std::make_unique<llama_adapter_loras>()),
     balloc(std::make_unique<llama_batch_allocr>(model.hparams.n_pos_per_embd())) {
@@ -156,14 +158,15 @@ llama_context::llama_context(
     cparams.flash_attn = params.flash_attn_type != LLAMA_FLASH_ATTN_TYPE_DISABLED;
     cparams.auto_fa    = params.flash_attn_type == LLAMA_FLASH_ATTN_TYPE_AUTO;
 
-    // pshard remaps kv by layer so auto_fa cannot use device matching
-    if (cparams.pshard) {
-        cparams.auto_fa = false;
-    }
-
     cparams.fused_gdn_ar = true;
     cparams.fused_gdn_ch = true;
     cparams.auto_fgdn    = true;
+
+    // pshard remaps kv by layer so auto_fa cannot use device matching
+    if (cparams.pshard) {
+        cparams.auto_fa = false;
+        cparams.auto_fgdn = false;
+    }
 
     // with causal attention, the batch size is limited by the context size
     cparams.n_batch = cparams.causal_attn ? std::min(cparams.n_ctx, params.n_batch) : params.n_batch;
@@ -593,7 +596,9 @@ void llama_context::sched_reserve() {
     int n_nodes_tg  = -1;
 
     if (cparams.pshard && model.hparams.no_alloc) {
-        auto * gf = graph_reserve(n_tokens, n_seqs, n_tokens, mctx.get(),
+        const uint32_t reserve_tokens  = probe_reserve.n_tokens  ? probe_reserve.n_tokens  : n_tokens;
+        const uint32_t reserve_outputs = probe_reserve.n_outputs ? probe_reserve.n_outputs : reserve_tokens;
+        auto * gf = graph_reserve(reserve_tokens, n_seqs, reserve_outputs, mctx.get(),
                 true, backend_buf_exp_size.data());
         if (!gf) {
             throw std::runtime_error("failed to measure compute buffers for pshard probe");
@@ -1257,7 +1262,7 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
         }
 
         if (cparams.pshard) {
-            pshard_assign_tensors(sched.get(), model, memory.get(), backends, pshard_layout, gf);
+            pshard_assign_tensors(sched.get(), model, memory.get(), backends, pshard_layout);
         }
 
         if (!ggml_backend_sched_alloc_graph(sched.get(), gf)) {
@@ -2179,7 +2184,7 @@ ggml_cgraph * llama_context::graph_reserve(
     this->n_outputs = save_n_outputs;
 
     if (cparams.pshard) {
-        pshard_assign_tensors(sched.get(), model, memory.get(), backends, pshard_layout, gf);
+        pshard_assign_tensors(sched.get(), model, memory.get(), backends, pshard_layout);
     }
 
     // initialize scheduler with the specified graph
@@ -2253,16 +2258,43 @@ ggml_status llama_context::graph_compute(
 
 llm_graph_cb llama_context::graph_get_cb() const {
     // keep weight islands on last_weight_bid and return mixed tails to layer_bid
+    const bool delegate_compute = model.pshard_delegates_compute();
     int32_t last_weight_bid = -1;
     int     last_il         = -2;
-    return [&, last_weight_bid, last_il](const llama_ubatch & ubatch, ggml_tensor * cur, const char * name, int il) mutable {
+    return [&, delegate_compute, last_weight_bid, last_il](const llama_ubatch & ubatch, ggml_tensor * cur, const char * name, int il) mutable {
         if (il >= 0) {
             ggml_format_name(cur, "%s-%d", name, il);
         } else {
             ggml_set_name(cur, name);
         }
 
-        if (cparams.pshard) {
+        // In delegated mode, layer nodes stay with the scheduler; non-layer heads/tails still honor exact tensor overrides.
+        if (cparams.pshard && delegate_compute && cur->view_src == nullptr) {
+            const auto & lbids = model.get_layer_backend_ids();
+            const bool has_layer_backend = il >= 0 && lbids.find(il) != lbids.end();
+
+            if (!has_layer_backend) {
+                const auto & tbids = model.get_tensor_backend_ids();
+                for (int j = 0; j < GGML_MAX_SRC; j++) {
+                    ggml_tensor * src = cur->src[j];
+                    if (!src) {
+                        continue;
+                    }
+
+                    while (src->view_src) {
+                        src = src->view_src;
+                    }
+
+                    auto it = tbids.find(src);
+                    if (it != tbids.end() && it->second >= 0 && it->second < (int32_t) backends.size()) {
+                        ggml_backend_sched_set_tensor_backend(sched.get(), cur, backends[it->second].get());
+                        break;
+                    }
+                }
+            }
+        }
+
+        if (cparams.pshard && !delegate_compute) {
             auto sched_backend_id = [&](ggml_backend_t backend) -> int32_t {
                 if (backend == nullptr) {
                     return -1;
@@ -3064,9 +3096,10 @@ llama_context_params llama_context_default_params() {
     return result;
 }
 
-llama_context * llama_init_from_model(
+llama_context * llama_init_from_model_internal(
                  llama_model * model,
-        llama_context_params   params) {
+        llama_context_params   params,
+        llama_context_probe_reserve probe_reserve) {
     if (!model) {
         LLAMA_LOG_ERROR("%s: model cannot be NULL\n", __func__);
         return nullptr;
@@ -3137,13 +3170,19 @@ llama_context * llama_init_from_model(
     }
 
     try {
-        auto * ctx = new llama_context(*model, params);
+        auto * ctx = new llama_context(*model, params, probe_reserve);
         return ctx;
     } catch (const std::exception & err) {
         LLAMA_LOG_ERROR("%s: failed to initialize the context: %s\n", __func__, err.what());
     }
 
     return nullptr;
+}
+
+llama_context * llama_init_from_model(
+                 llama_model * model,
+        llama_context_params   params) {
+    return llama_init_from_model_internal(model, params, {});
 }
 
 // deprecated

@@ -330,9 +330,12 @@ std::string llama_benchmark_predictor::make_timing_key(
 
 llama_split_timing llama_benchmark_predictor::predict_split(
         struct ggml_tensor ** nodes, int n_nodes,
-        bool is_gpu, int32_t batch_size, bool async_copy) const {
+        bool is_gpu, int32_t batch_size, bool async_copy,
+        timing_cache_t * timing_cache) const {
 
     llama_split_timing result = {};
+    timing_cache_t local_timing_cache;
+    timing_cache_t & cache = timing_cache ? *timing_cache : local_timing_cache;
 
     const auto & map     = is_gpu ? gpu_map : cpu_map;
     const auto & entries = is_gpu ? gpu_entries : cpu_entries;
@@ -350,8 +353,8 @@ llama_split_timing llama_benchmark_predictor::predict_split(
         double pcie_contrib = 0.0;
 
         std::string tkey = make_timing_key(is_gpu, async_copy, op_name, m, batch_size);
-        auto cache_it = timing_cache.find(tkey);
-        if (cache_it != timing_cache.end()) {
+        auto cache_it = cache.find(tkey);
+        if (cache_it != cache.end()) {
             op_time_ms   = cache_it->second.first;
             pcie_contrib = cache_it->second.second;
             result.time_ms += op_time_ms;
@@ -458,7 +461,7 @@ llama_split_timing llama_benchmark_predictor::predict_split(
         pcie_sum       += pcie_contrib;
         result.op_count++;
 
-        timing_cache[tkey] = {op_time_ms, pcie_contrib};
+        cache[tkey] = {op_time_ms, pcie_contrib};
     }
 
     // convert accumulated pcie_sum to time-weighted average BW
@@ -577,6 +580,8 @@ double llama_benchmark_predictor::predict_tps(
         : ((kv_size > 0) ? std::min(1.0, (double)batch_size / kv_size) : 1.0);
     const double ul_ratio = 1.0;
     double total_ms = 0.0;
+    bool copy_prefetched = false;
+    timing_cache_t timing_cache;
 
     for (int i = 0; i < n_splits; i++) {
         struct ggml_backend_sched_split_info si = {};
@@ -584,14 +589,24 @@ double llama_benchmark_predictor::predict_tps(
 
         const bool is_gpu = (si.backend_id != cpu_backend_id);
 
+        double input_copy_ms = 0.0;
+        double input_copy_bytes = 0.0;
+        if (is_gpu && !copy_prefetched && pcie_bw > 0.0) {
+            input_copy_bytes = (double)si.input_weight_copy_bytes
+                             + (double)si.writeback_bytes * ul_ratio;
+            input_copy_ms = (input_copy_bytes / 1e9 / pcie_bw) * 1000.0;
+        }
+
         // peek at next split to determine if async prefetch will overlap with this split
         double prefetch_bytes = 0.0;
+        bool next_copy_prefetched = false;
         if (i + 1 < n_splits) {
             struct ggml_backend_sched_split_info next_si = {};
             if (ggml_backend_sched_get_split_info(sched, i + 1, &next_si) &&
-                next_si.backend_id != cpu_backend_id) {
+                next_si.can_prefetch_weights) {
                 prefetch_bytes = (double)next_si.input_weight_bytes
                                + (double)next_si.writeback_bytes * ul_ratio;
+                next_copy_prefetched = prefetch_bytes > 0.0;
             }
         }
 
@@ -600,7 +615,7 @@ double llama_benchmark_predictor::predict_tps(
         // compute cost (CPU splits use eff_gflops when async_copy due to PCIe contention)
         struct ggml_tensor ** nodes = ggml_graph_nodes(si.graph);
         int n_nodes = ggml_graph_n_nodes(si.graph);
-        llama_split_timing t = predict_split(nodes, n_nodes, is_gpu, batch_size, async_copy);
+        llama_split_timing t = predict_split(nodes, n_nodes, is_gpu, batch_size, async_copy, &timing_cache);
 
         // prefetch cost: use concurrent PCIe BW for CPU splits (bus shared with DRAM),
         // peak PCIe BW for GPU splits (GPU compute doesn't contend with PCIe DMA)
@@ -610,17 +625,27 @@ double llama_benchmark_predictor::predict_tps(
             prefetch_ms = (prefetch_bytes / 1e9 / eff_bw) * 1000.0;
         }
 
-        // output scaling: the graph reserves the output matmul for all batch_size tokens,
-        // but at runtime only n_outputs tokens produce logits (1 per sequence for prefill,
-        // all tokens for decode). scale the output op cost by n_outputs/batch_size.
-        if (i == n_splits - 1 && n_outputs > 0 && n_outputs < (uint32_t)batch_size) {
+        // output scaling: use the output rows in the reserved graph, then scale to
+        // the runtime number of logits. This keeps the memory-probe graph as the
+        // source of truth and avoids double-scaling when it was already reduced.
+        if (i == n_splits - 1 && n_outputs > 0) {
             for (int j = 0; j < n_nodes; j++) {
                 if (nodes[j]->name && strstr(nodes[j]->name, "result_output")) {
-                    llama_split_timing out_t = predict_split(&nodes[j], 1, is_gpu, batch_size, async_copy);
-                    if (out_t.time_ms > 0.0) {
-                        double scale = (double)n_outputs / (double)batch_size;
-                        t.time_ms -= out_t.time_ms;
-                        t.time_ms += out_t.time_ms * scale;
+                    const llama_op_metrics out_m = llama_op_metrics_compute(nodes[j]);
+                    const int32_t graph_outputs = (int32_t) std::max<int64_t>(1, out_m.M);
+                    if (graph_outputs != batch_size || n_outputs < (uint32_t) graph_outputs) {
+                        llama_split_timing out_included = predict_split(&nodes[j], 1, is_gpu, batch_size, async_copy, &timing_cache);
+                        llama_split_timing out_graph    = predict_split(&nodes[j], 1, is_gpu, graph_outputs, async_copy, &timing_cache);
+                        if (out_included.time_ms > 0.0 || out_graph.time_ms > 0.0) {
+                            const double scale = n_outputs < (uint32_t) graph_outputs
+                                               ? (double)n_outputs / (double)graph_outputs
+                                               : 1.0;
+                            const double scaled_ms = out_graph.time_ms * scale;
+                            t.time_ms -= out_included.time_ms;
+                            t.time_ms += scaled_ms;
+                            LLAMA_LOG_DEBUG("%s: out_t: included=%f graph=%f scaled=%f rows=%d->%u\n",
+                                    __func__, out_included.time_ms, out_graph.time_ms, scaled_ms, graph_outputs, n_outputs);
+                        }
                     }
                     break;
                 }
@@ -640,14 +665,19 @@ double llama_benchmark_predictor::predict_tps(
             activ_copy_ms = ((double)si.input_activ_bytes / 1e9 / pcie_bw) * 1000.0;
         }
 
-        // split wall time = max(gpu_serial, copy_stream_prefetch) + activ_copy
-        double split_ms = std::max(t.time_ms + kv_dl_ms, prefetch_ms) + activ_copy_ms;
+        // Prefetch is enqueued after current inputs/precompute and before graph compute,
+        // so whatever remains can overlap the current split compute. CPU splits use the
+        // effective PCIe BW above because DMA contends with CPU memory traffic.
+        double split_ms = input_copy_ms + activ_copy_ms;
+        split_ms += std::max(t.time_ms + kv_dl_ms, prefetch_ms);
         total_ms += split_ms;
+        copy_prefetched = next_copy_prefetched;
 
         double dl_bytes = is_gpu ? (double)si.writeback_bytes * dl_ratio : 0.0;
-        LLAMA_LOG_DEBUG("%s:   split %d/%d [%s] compute=%.3f kv_dl=%.3f (%.2f MiB) prefetch=%.3f (%.2f MiB) activ=%.3f (%.2f MiB) -> %.3f ms"
+        LLAMA_LOG_DEBUG("%s:   split %d/%d [%s] input_copy=%.3f (%.2f MiB) compute=%.3f kv_dl=%.3f (%.2f MiB) prefetch=%.3f (%.2f MiB) activ=%.3f (%.2f MiB) -> %.3f ms"
             " (exact=%d near=%d fall=%d cache=%d)\n",
             __func__, i, n_splits, is_gpu ? "GPU" : "CPU",
+            input_copy_ms, input_copy_bytes / (1024.0 * 1024.0),
             t.time_ms,
             kv_dl_ms, dl_bytes / (1024.0 * 1024.0),
             prefetch_ms, prefetch_bytes / (1024.0 * 1024.0),
