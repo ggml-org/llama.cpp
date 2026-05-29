@@ -2076,6 +2076,7 @@ static enum ggml_status ggml_backend_meta_graph_compute(ggml_backend_t backend, 
             node_zero->src[0] = node;
             ggml_set_op_params_f32(node_zero, 0, 0.0f);
             node_zero->data = node->data;
+            node_zero->buffer = node->buffer;
             node_zero->flags |= GGML_TENSOR_FLAG_COMPUTE;
 
             step_cgraphs[j] = get_cgraph_aux();
