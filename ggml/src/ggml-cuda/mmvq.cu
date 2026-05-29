@@ -572,10 +572,10 @@ static __global__ void mul_mat_vec_q(
             }
         }
         if (use_scale) {
-            x_scales = x_scale[ids ? channel_x : channel_dst];
+            x_scales = x_scale[ids ? channel_x : 0];
         }
         if (use_gate_scale) {
-            gate_scales = gate_scale[ids ? channel_x : channel_dst];
+            gate_scales = gate_scale[ids ? channel_x : 0];
         }
     }
 
@@ -1194,19 +1194,17 @@ void ggml_cuda_mul_mat_vec_q(
             fusion_local.gate_bias = fusion->gate_bias->data;
         }
         if (fusion->x_scale) {
-            GGML_ASSERT(ids);
             GGML_ASSERT(src0->type == GGML_TYPE_NVFP4);
             GGML_ASSERT(fusion->x_scale->type == GGML_TYPE_F32);
             GGML_ASSERT(ggml_is_contiguous(fusion->x_scale));
-            GGML_ASSERT(ggml_nelements(fusion->x_scale) == src0->ne[2]);
+            GGML_ASSERT(ggml_nelements(fusion->x_scale) == (ids ? src0->ne[2] : 1));
             fusion_local.x_scale = fusion->x_scale->data;
         }
         if (fusion->gate_scale) {
-            GGML_ASSERT(ids);
             GGML_ASSERT(src0->type == GGML_TYPE_NVFP4);
             GGML_ASSERT(fusion->gate_scale->type == GGML_TYPE_F32);
             GGML_ASSERT(ggml_is_contiguous(fusion->gate_scale));
-            GGML_ASSERT(ggml_nelements(fusion->gate_scale) == src0->ne[2]);
+            GGML_ASSERT(ggml_nelements(fusion->gate_scale) == (ids ? src0->ne[2] : 1));
             fusion_local.gate_scale = fusion->gate_scale->data;
         }
         fusion_local.glu_op = fusion->glu_op;

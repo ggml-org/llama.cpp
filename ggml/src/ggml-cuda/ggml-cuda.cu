@@ -3950,6 +3950,61 @@ static bool ggml_cuda_parse_nvfp4_mmid_lane(const ggml_cgraph * cgraph, int i, g
     return true;
 }
 
+static bool ggml_cuda_parse_nvfp4_mm_lane(const ggml_cgraph * cgraph, int i, ggml_cuda_mmid_lane & lane) {
+    if (i >= cgraph->n_nodes || cgraph->nodes[i]->op != GGML_OP_MUL_MAT) {
+        return false;
+    }
+
+    ggml_tensor * mm = cgraph->nodes[i];
+    if (mm->src[0]->type != GGML_TYPE_NVFP4 || mm->src[1]->type != GGML_TYPE_F32 || mm->type != GGML_TYPE_F32) {
+        return false;
+    }
+
+    lane = {};
+    lane.mm = mm;
+    lane.out = mm;
+    lane.n_nodes = 1;
+
+    if (i + lane.n_nodes < cgraph->n_nodes && cgraph->nodes[i + lane.n_nodes]->op == GGML_OP_ADD) {
+        ggml_tensor * add = cgraph->nodes[i + lane.n_nodes];
+        if (add->src[0] == lane.out) {
+            lane.bias = add->src[1];
+        } else if (add->src[1] == lane.out) {
+            lane.bias = add->src[0];
+        } else {
+            return false;
+        }
+        lane.bias_node = add;
+        lane.out = add;
+        lane.n_nodes++;
+    }
+
+    if (i + lane.n_nodes >= cgraph->n_nodes || cgraph->nodes[i + lane.n_nodes]->op != GGML_OP_MUL) {
+        return true;
+    }
+
+    ggml_tensor * mul = cgraph->nodes[i + lane.n_nodes];
+    const bool mul_lhs_out = mul->src[0] == lane.out;
+    const bool mul_rhs_out = mul->src[1] == lane.out;
+    if (!mul_lhs_out && !mul_rhs_out) {
+        return true;
+    }
+
+    const ggml_tensor * scale = mul_lhs_out ? mul->src[1] : mul->src[0];
+    if (scale->type != GGML_TYPE_F32 || !ggml_is_contiguous(scale) || ggml_nelements(scale) != 1) {
+        return false;
+    }
+
+    if (mul->type != GGML_TYPE_F32 || !ggml_are_same_shape(mul, lane.out)) {
+        return false;
+    }
+
+    lane.scale = scale;
+    lane.out = mul;
+    lane.n_nodes++;
+    return true;
+}
+
 static bool ggml_cuda_can_fuse_mmid_scale_subgraph(const ggml_cgraph * cgraph, int start_idx, int count, const int * outputs, int num_outputs) {
     for (int j = 0; j < count; ++j) {
         const int idx = start_idx + j;
@@ -3998,6 +4053,34 @@ static bool ggml_cuda_should_fuse_mmid_lanes(const ggml_cuda_mmid_lane & up, con
     }
 
     if (up.mm->src[1] != gate.mm->src[1] || up.mm->src[2] != gate.mm->src[2]) {
+        return false;
+    }
+
+    if (glu->op != GGML_OP_GLU || glu->src[0] != gate.out || glu->src[1] != up.out) {
+        return false;
+    }
+
+    static constexpr std::array<ggml_glu_op, 3> valid_glu_ops = { GGML_GLU_OP_SWIGLU, GGML_GLU_OP_GEGLU, GGML_GLU_OP_SWIGLU_OAI };
+    if (std::find(valid_glu_ops.begin(), valid_glu_ops.end(), ggml_get_glu_op(glu)) == valid_glu_ops.end()) {
+        return false;
+    }
+
+    if (const bool swapped = ggml_get_op_params_i32(glu, 1); swapped) {
+        return false;
+    }
+
+    const bool split = ggml_backend_buft_is_cuda_split(up.mm->src[0]->buffer->buft) ||
+                       ggml_backend_buft_is_cuda_split(gate.mm->src[0]->buffer->buft);
+    return !split;
+}
+
+static bool ggml_cuda_should_fuse_mm_lanes(const ggml_cuda_mmid_lane & up, const ggml_cuda_mmid_lane & gate, const ggml_tensor * glu) {
+    if (up.mm->src[0]->type != gate.mm->src[0]->type || !ggml_are_same_shape(up.mm->src[0], gate.mm->src[0]) ||
+        !ggml_are_same_stride(up.mm->src[0], gate.mm->src[0])) {
+        return false;
+    }
+
+    if (up.mm->src[1] != gate.mm->src[1]) {
         return false;
     }
 
@@ -4083,6 +4166,66 @@ static int ggml_cuda_try_fuse_nvfp4_mmid_scale_glu(ggml_backend_cuda_context * c
     return glu_idx - i;
 }
 
+static int ggml_cuda_try_fuse_nvfp4_mm_scale_glu(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph * cgraph, int i) {
+    ggml_cuda_mmid_lane lane0;
+    if (!ggml_cuda_parse_nvfp4_mm_lane(cgraph, i, lane0)) {
+        return 0;
+    }
+
+    ggml_cuda_mmid_lane lane1;
+    if (!ggml_cuda_parse_nvfp4_mm_lane(cgraph, i + lane0.n_nodes, lane1)) {
+        return 0;
+    }
+
+    const int glu_idx = i + lane0.n_nodes + lane1.n_nodes;
+    if (glu_idx >= cgraph->n_nodes || cgraph->nodes[glu_idx]->op != GGML_OP_GLU) {
+        return 0;
+    }
+
+    if (lane0.scale == nullptr && lane1.scale == nullptr) {
+        return 0;
+    }
+
+    const ggml_tensor * glu = cgraph->nodes[glu_idx];
+    ggml_cuda_mmid_lane * gate = nullptr;
+    ggml_cuda_mmid_lane * up   = nullptr;
+    if (glu->src[0] == lane0.out && glu->src[1] == lane1.out) {
+        gate = &lane0;
+        up   = &lane1;
+    } else if (glu->src[0] == lane1.out && glu->src[1] == lane0.out) {
+        gate = &lane1;
+        up   = &lane0;
+    } else {
+        return 0;
+    }
+
+    if (!ggml_cuda_should_fuse_mm_lanes(*up, *gate, glu)) {
+        return 0;
+    }
+
+    const int out_nodes[] = { glu_idx };
+    const int n_nodes = glu_idx - i + 1;
+    if (!ggml_cuda_can_fuse_mmid_scale_subgraph(cgraph, i, n_nodes, out_nodes, 1) ||
+        !ggml_cuda_check_fusion_memory_ranges(cgraph, i, n_nodes, out_nodes, 1)) {
+        return 0;
+    }
+
+    if (!ggml_cuda_should_fuse_mul_mat_vec_q(up->mm)) {
+        return 0;
+    }
+
+    ggml_cuda_mm_fusion_args_host fusion_data{};
+    fusion_data.gate       = gate->mm->src[0];
+    fusion_data.x_bias     = up->bias;
+    fusion_data.gate_bias  = gate->bias;
+    fusion_data.x_scale    = up->scale;
+    fusion_data.gate_scale = gate->scale;
+    fusion_data.glu_op     = ggml_get_glu_op(glu);
+
+    ggml_cuda_mul_mat_vec_q(*cuda_ctx, up->mm->src[0], up->mm->src[1], nullptr, cgraph->nodes[glu_idx], &fusion_data);
+    return glu_idx - i;
+}
+
 static int ggml_cuda_try_fuse_nvfp4_mmid_scale(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph * cgraph, int i) {
     ggml_cuda_mmid_lane lane;
     if (!ggml_cuda_parse_nvfp4_mmid_lane(cgraph, i, lane) || lane.scale == nullptr) {
@@ -4110,6 +4253,31 @@ static int ggml_cuda_try_fuse_nvfp4_mmid_scale(ggml_backend_cuda_context * cuda_
     fusion_data.x_scale = lane.scale;
 
     ggml_cuda_mul_mat_vec_q(*cuda_ctx, lane.mm->src[0], lane.mm->src[1], lane.mm->src[2], lane.out, &fusion_data);
+    return lane.n_nodes - 1;
+}
+
+static int ggml_cuda_try_fuse_nvfp4_mm_scale(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph * cgraph, int i) {
+    ggml_cuda_mmid_lane lane;
+    if (!ggml_cuda_parse_nvfp4_mm_lane(cgraph, i, lane) || lane.scale == nullptr) {
+        return 0;
+    }
+
+    const int out_idx = i + lane.n_nodes - 1;
+    const int out_nodes[] = { out_idx };
+    if (!ggml_cuda_can_fuse_mmid_scale_subgraph(cgraph, i, lane.n_nodes, out_nodes, 1) ||
+        !ggml_cuda_check_fusion_memory_ranges(cgraph, i, lane.n_nodes, out_nodes, 1)) {
+        return 0;
+    }
+
+    if (!ggml_cuda_should_fuse_mul_mat_vec_q(lane.mm)) {
+        return 0;
+    }
+
+    ggml_cuda_mm_fusion_args_host fusion_data{};
+    fusion_data.x_bias  = lane.bias;
+    fusion_data.x_scale = lane.scale;
+
+    ggml_cuda_mul_mat_vec_q(*cuda_ctx, lane.mm->src[0], lane.mm->src[1], nullptr, lane.out, &fusion_data);
     return lane.n_nodes - 1;
 }
 
@@ -4291,6 +4459,10 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
         if (fused_nvfp4_mmid_nodes > 0) {
             return fused_nvfp4_mmid_nodes;
         }
+        fused_nvfp4_mmid_nodes = ggml_cuda_try_fuse_nvfp4_mm_scale_glu(cuda_ctx, cgraph, i);
+        if (fused_nvfp4_mmid_nodes > 0) {
+            return fused_nvfp4_mmid_nodes;
+        }
     }
 
     bool fused_mul_mat_vec = false;
@@ -4425,6 +4597,10 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
 
     if (!disable_nvfp4_mmid_scale_fusion) {
         fused_nvfp4_mmid_nodes = ggml_cuda_try_fuse_nvfp4_mmid_scale(cuda_ctx, cgraph, i);
+        if (fused_nvfp4_mmid_nodes > 0) {
+            return fused_nvfp4_mmid_nodes;
+        }
+        fused_nvfp4_mmid_nodes = ggml_cuda_try_fuse_nvfp4_mm_scale(cuda_ctx, cgraph, i);
         if (fused_nvfp4_mmid_nodes > 0) {
             return fused_nvfp4_mmid_nodes;
         }
