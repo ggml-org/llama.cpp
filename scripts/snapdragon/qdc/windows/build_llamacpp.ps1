@@ -105,10 +105,9 @@ try {
         Write-Host "WARN: $presetSrc not found; assuming preset already at repo root"
     }
 
-    # llama.cpp's `arm64-windows-snapdragon` preset omits -fno-finite-math-only
-    # in CMAKE_C_FLAGS / CMAKE_CXX_FLAGS, which makes ggml-cpu/vec.h fail to
-    # compile (it explicitly requires non-finite math). Patch every flag line
-    # that has `-ffp-model=fast -flto` but not `-fno-finite-math-only`.
+    # Safety net: ensure -fno-finite-math-only is present alongside -ffp-model=fast.
+    # The canonical preset already includes it, but if someone removes it the CPU
+    # backend will miscompile (inf/NaN handling breaks). Patch if missing.
     if (Test-Path -LiteralPath $presetDst) {
         $text = Get-Content -LiteralPath $presetDst -Raw
         # Match any flag string containing `-ffp-model=fast` followed eventually
