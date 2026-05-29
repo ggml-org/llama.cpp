@@ -59,10 +59,10 @@ struct ggml_kleidiai_context {
     cpu_feature features;
     ggml_kleidiai_kernels * kernels_q4;
     ggml_kleidiai_kernels * kernels_q8;
+    ggml_kleidiai_kernels * kernels_q2c;
     int sme_thread_cap; // <= 0 means “SME disabled/unknown”;
     int thread_hint;    // <= 0 means “no hint”
-    ggml_kleidiai_kernels * kernels_q2c;
-} static ctx = { CPU_FEATURE_NONE, nullptr, nullptr, 0, -1, nullptr };
+} static ctx = { CPU_FEATURE_NONE, nullptr, nullptr, nullptr, 0, -1 };
 
 static const char* cpu_feature_to_string(cpu_feature f) {
     if (f == CPU_FEATURE_NONE) {
@@ -241,8 +241,9 @@ static void init_kleidiai_context(void) {
         if (sme_cores > 0) {
             ctx.features |= CPU_FEATURE_SME;
         }
-        ctx.kernels_q4  = ggml_kleidiai_select_kernels_q4_0(ctx.features);
-        ctx.kernels_q8  = ggml_kleidiai_select_kernels_q8_0(ctx.features);
+        // Kernel selection
+        ctx.kernels_q4 = ggml_kleidiai_select_kernels_q4_0(ctx.features);
+        ctx.kernels_q8 = ggml_kleidiai_select_kernels_q8_0(ctx.features);
         ctx.kernels_q2c = ggml_kleidiai_select_kernels_q2_0c(ctx.features);
 
         if (!ctx.kernels_q4) {
@@ -255,6 +256,12 @@ static void init_kleidiai_context(void) {
             GGML_LOG_INFO("kleidiai: no compatible q8 kernels found for CPU features mask %d\n", (int)ctx.features);
         } else {
             GGML_LOG_INFO("kleidiai: primary q8 kernel feature %s\n", cpu_feature_to_string(ctx.kernels_q8->required_cpu));
+        }
+
+        if (!ctx.kernels_q2c) {
+            GGML_LOG_INFO("kleidiai: no compatible q2c kernels found for CPU features mask %d\n", (int)ctx.features);
+        } else {
+            GGML_LOG_INFO("kleidiai: primary q2c kernel feature %s\n", cpu_feature_to_string(ctx.kernels_q2c->required_cpu));
         }
 
         ctx.sme_thread_cap = (ctx.features & CPU_FEATURE_SME) ? sme_cores : 0;
@@ -352,6 +359,10 @@ static inline ggml_kleidiai_kernels * kleidiai_primary_kernel_q8() {
     return ctx.kernels_q8;
 }
 
+static inline ggml_kleidiai_kernels * kleidiai_primary_kernel_q2c() {
+    return ctx.kernels_q2c;
+}
+
 template <typename SelectFallback>
 static int kleidiai_collect_kernel_chain_common(
         ggml_kleidiai_kernels * primary,
@@ -404,6 +415,12 @@ static int kleidiai_collect_q8_chain(std::array<ggml_kleidiai_kernels *, GGML_KL
         [&](cpu_feature mask) { return ggml_kleidiai_select_kernels_q8_0(mask); });
 }
 
+static int kleidiai_collect_q2c_chain(std::array<ggml_kleidiai_kernels *, GGML_KLEIDIAI_MAX_KERNEL_SLOTS> & out) {
+    ggml_kleidiai_kernels * primary = kleidiai_primary_kernel_q2c();
+    return kleidiai_collect_kernel_chain_common(primary, ctx.features, out,
+        [&](cpu_feature mask) { return ggml_kleidiai_select_kernels_q2_0c(mask); });
+}
+
 static inline int64_t ggml_ne(const ggml_tensor * tensor, int dim) {
     GGML_ASSERT(dim >= 0 && dim < GGML_MAX_DIMS);
     return tensor->ne[dim];
@@ -444,8 +461,12 @@ class tensor_traits : public ggml::cpu::tensor_traits {
         const size_t n = op->src[0]->ne[1];
         const size_t m = op->src[1]->ne[1];
 
-        if (op->src[0]->type == GGML_TYPE_Q4_0 || op->src[0]->type == GGML_TYPE_Q8_0) {
-            const size_t qk = (op->src[0]->type == GGML_TYPE_Q4_0) ? QK4_0 : QK8_0;
+        if (op->src[0]->type == GGML_TYPE_Q4_0 ||
+            op->src[0]->type == GGML_TYPE_Q8_0 ||
+            op->src[0]->type == GGML_TYPE_Q2_0C) {
+            const size_t qk = op->src[0]->type == GGML_TYPE_Q4_0 ? QK4_0 :
+                              op->src[0]->type == GGML_TYPE_Q8_0 ? QK8_0 : QKQ2_0C;
+
             size_t cursor = 0;
             bool any_slot = false;
 
@@ -475,29 +496,9 @@ class tensor_traits : public ggml::cpu::tensor_traits {
 
             size = cursor;
             return true;
-        } else if (op->src[0]->type == GGML_TYPE_Q2_0C) {
-            size_t max_size = 0;
-            bool any_slot = false;
+        }
 
-            for (int slot = 0; slot < slot_count; ++slot) {
-                ggml_kleidiai_kernels * kernels = kernel_chain[slot];
-                lhs_packing_info * lhs_info = is_gemv ? &kernels->gemv_lhs_info : &kernels->gemm_lhs_info;
-                kernel_info * kernel        = is_gemv ? &kernels->gemv : &kernels->gemm;
-                if (!lhs_info || !lhs_info->packed_size_ex || !kernel) {
-                    return false;
-                }
-                const size_t packed = lhs_info->packed_size_ex(m, k, QKQ2_0C, kernel->get_mr(), kernel->get_kr(), kernel->get_sr());
-                max_size = std::max(max_size, packed);
-                any_slot = true;
-            }
-
-            if (!any_slot) {
-                return false;
-            }
-
-            size = max_size;
-            return true;
-        } else if (op->src[0]->type == GGML_TYPE_F16) {
+        if (op->src[0]->type == GGML_TYPE_F16) {
             const int64_t lhs_batch_size0 = op->src[1]->ne[2];
             const int64_t rhs_batch_size0 = op->src[0]->ne[2];
             GGML_ASSERT(rhs_batch_size0 > 0);
@@ -1354,14 +1355,14 @@ public:
             }
 
             static const int32_t lut_i8_i2[4] = {-3, -1, 1, 3};
+
             const size_t bytes_per_block = QKQ2_0C / 4;
             const size_t blocks_per_row = k / QKQ2_0C;
             const size_t total_blocks   = n * blocks_per_row;
 
-            const block_q2_0c * src = reinterpret_cast<const block_q2_0c *>(data);
-
+            const block_q2_0c * src = (const block_q2_0c *) data;
             std::vector<uint8_t> values_buf(total_blocks * bytes_per_block);
-            std::vector<float>   scales_buf(n);
+            std::vector<float> scales_buf(n);
 
             split_values_scales_offsets_per_channel(src, n, k, values_buf.data(), scales_buf.data());
 
@@ -1374,15 +1375,9 @@ public:
             params.rhs_zero_point = 2;
 
             ctx.kernels_q2c->rhs_info.pack_func_lut_ex(
-                1, n, k,
-                nr, kr, sr,
-                0, 0,
-                values_buf.data(),
-                nullptr,
-                scales_buf.data(),
-                tensor->data,
-                0, &params,
-                &lut_i8_i2[0]);
+                1, n, k, nr, kr, sr, 0, 0,
+                values_buf.data(), nullptr, scales_buf.data(),
+                tensor->data, 0, &params, &lut_i8_i2[0]);
 
             GGML_UNUSED(data_size);
             return 0;
@@ -1570,9 +1565,7 @@ static size_t ggml_backend_cpu_kleidiai_buffer_type_get_alignment(ggml_backend_b
 static size_t ggml_backend_cpu_kleidiai_buffer_type_get_alloc_size(ggml_backend_buffer_type_t buft, const struct ggml_tensor * tensor) {
     GGML_UNUSED(buft);
 
-    if (tensor->type != GGML_TYPE_Q4_0 &&
-        tensor->type != GGML_TYPE_Q8_0 &&
-        tensor->type != GGML_TYPE_Q2_0C) {
+    if (tensor->type != GGML_TYPE_Q4_0 && tensor->type != GGML_TYPE_Q8_0 && tensor->type != GGML_TYPE_Q2_0C) {
         return ggml_nbytes(tensor);
     }
 
@@ -1583,15 +1576,15 @@ static size_t ggml_backend_cpu_kleidiai_buffer_type_get_alloc_size(ggml_backend_
         if (!ctx.kernels_q2c || !ctx.kernels_q2c->rhs_info.packed_size_ex) {
             return ggml_nbytes(tensor);
         }
-        const size_t nr = ctx.kernels_q2c->gemm.get_nr();
-        const size_t kr = ctx.kernels_q2c->gemm.get_kr();
-        const size_t sr = ctx.kernels_q2c->gemm.get_sr();
-        const size_t packed = ctx.kernels_q2c->rhs_info.packed_size_ex(n, k, nr, kr, sr);
+
+        const size_t packed = ctx.kernels_q2c->rhs_info.packed_size_ex(
+            n, k, ctx.kernels_q2c->gemm.get_nr(), ctx.kernels_q2c->gemm.get_kr(), ctx.kernels_q2c->gemm.get_sr());
         return std::max(packed, ggml_nbytes(tensor));
     }
 
     size_t cursor = sizeof(kleidiai_weight_header);
     cursor = align_up(cursor, GGML_KLEIDIAI_PACK_ALIGN);
+
     std::array<ggml_kleidiai_kernels *, GGML_KLEIDIAI_MAX_KERNEL_SLOTS> kernel_chain;
     const bool want_q8 = tensor->type == GGML_TYPE_Q8_0;
     const int slot_total = want_q8 ? kleidiai_collect_q8_chain(kernel_chain)
@@ -1637,6 +1630,7 @@ class extra_buffer_type : ggml::cpu::extra_buffer_type {
     bool supports_op(ggml_backend_dev_t, const struct ggml_tensor * op) override {
         std::array<ggml_kleidiai_kernels *, GGML_KLEIDIAI_MAX_KERNEL_SLOTS> kernel_chain;
         const int slot_total = kleidiai_collect_kernel_chain(op, kernel_chain);
+
         if ((op->op == GGML_OP_MUL_MAT ) &&
             (op->src[0]->type == GGML_TYPE_Q2_0C) &&
             op->src[0]->buffer &&
@@ -1653,6 +1647,7 @@ class extra_buffer_type : ggml::cpu::extra_buffer_type {
                 return true;
             }
         }
+
         if ((op->op == GGML_OP_MUL_MAT || op->op == GGML_OP_GET_ROWS) &&
             (op->src[0]->type == GGML_TYPE_Q4_0 || op->src[0]->type == GGML_TYPE_Q8_0) &&
             op->src[0]->buffer &&

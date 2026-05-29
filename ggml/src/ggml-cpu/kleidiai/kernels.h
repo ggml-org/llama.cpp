@@ -62,14 +62,12 @@ struct lhs_packing_info {
 };
 
 enum rhs_repack_mode {
-    RHS_REPACK_PER_KERNEL,  // hybrid execution uses a separate packed RHS per kernel
-    RHS_REPACK_SHARED,      // hybrid execution may share one packed RHS across kernels
-    RHS_REPACK_SINGLE_ONLY, // one packed RHS, no hybrid fallback kernel
+    RHS_REPACK_PER_KERNEL,
+    RHS_REPACK_SHARED,
+    RHS_REPACK_SINGLE_ONLY,
 };
 
 struct rhs_packing_info {
-    rhs_repack_mode repack_mode;
-
     size_t (*packed_stride)(size_t k, size_t nr, size_t kr, size_t bl);
 
     void (*to_float)(const void *packed_data, int32_t row_idx, int64_t nc, float *out,
@@ -85,6 +83,8 @@ struct rhs_packing_info {
 
     void (*pack_func_lut_ex)(size_t num_groups, size_t n, size_t k, size_t nr, size_t kr, size_t sr, size_t bl,
         size_t rhs_stride, const void * rhs, const void * bias, const void * scale, void * rhs_packed, size_t extra_bytes, const void * params, const int32_t* lut);
+
+    rhs_repack_mode repack_mode = RHS_REPACK_PER_KERNEL;
 };
 
 struct ggml_kleidiai_kernels {
