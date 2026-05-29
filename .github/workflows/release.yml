@@ -59,9 +59,32 @@ jobs:
             echo "should_release=false" >> $GITHUB_OUTPUT
           fi
 
+  get-version:
+    runs-on: ubuntu-slim
+    outputs:
+      ui_version: ${{ steps.version.outputs.ui_version }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - id: version
+        run: |
+          # Resolve UI version: BUILD_NUMBER from cmake/build-info.cmake > git hash + epoch > fallback
+          version=""
+          if grep -q "BUILD_NUMBER" cmake/build-info.cmake; then
+            build_number=$(grep "set(BUILD_NUMBER" cmake/build-info.cmake | grep -oP '\d+')
+            if [ -n "$build_number" ] && [ "$build_number" -gt 0 ]; then
+              version="b${build_number}"
+            fi
+          fi
+          if [ -z "$version" ]; then
+            version=$(git rev-parse --short HEAD)-$(date +%s)
+          fi
+          echo "ui_version=${version}" >> $GITHUB_OUTPUT
+
   macos-cpu:
-    needs: [check-release]
-    if: ${{ needs.check-release.outputs.should_release == 'true' }}
+    needs: [check_release, get-version]
+    if: ${{ needs.check_release.outputs.should_release == 'true' }}
     strategy:
       matrix:
         include:
@@ -142,8 +165,8 @@ jobs:
           name: llama-bin-macos-${{ matrix.build }}.tar.gz
 
   ubuntu-cpu:
-    needs: [check-release]
-    if: ${{ needs.check-release.outputs.should_release == 'true' }}
+    needs: [check_release, get-version]
+    if: ${{ needs.check_release.outputs.should_release == 'true' }}
     strategy:
       matrix:
         include:
@@ -229,8 +252,8 @@ jobs:
           name: llama-bin-ubuntu-${{ matrix.build }}.tar.gz
 
   ubuntu-vulkan:
-    needs: [check-release]
-    if: ${{ needs.check-release.outputs.should_release == 'true' }}
+    needs: [check_release, get-version]
+    if: ${{ needs.check_release.outputs.should_release == 'true' }}
 
     strategy:
       matrix:
@@ -315,8 +338,8 @@ jobs:
           name: llama-bin-ubuntu-vulkan-${{ matrix.build }}.tar.gz
 
   android-arm64:
-    needs: [check-release]
-    if: ${{ needs.check-release.outputs.should_release == 'true' }}
+    needs: [check_release, get-version]
+    if: ${{ needs.check_release.outputs.should_release == 'true' }}
 
     runs-on: ubuntu-latest
 
@@ -408,8 +431,8 @@ jobs:
           name: llama-bin-android-arm64.tar.gz
 
   ubuntu-24-openvino:
-    needs: [check-release]
-    if: ${{ needs.check-release.outputs.should_release == 'true' }}
+    needs: [check_release, get-version]
+    if: ${{ needs.check_release.outputs.should_release == 'true' }}
 
     runs-on: ubuntu-24.04
 
@@ -957,8 +980,8 @@ jobs:
           name: llama-bin-ubuntu-sycl-${{ matrix.build }}-x64.tar.gz
 
   ubuntu-22-rocm:
-    needs: [check-release]
-    if: ${{ needs.check-release.outputs.should_release == 'true' }}
+    needs: [check_release, get-version]
+    if: ${{ needs.check_release.outputs.should_release == 'true' }}
 
     runs-on: ubuntu-22.04
 
@@ -1078,8 +1101,8 @@ jobs:
           name: llama-bin-ubuntu-rocm-${{ env.ROCM_VERSION_SHORT }}-${{ matrix.build }}.tar.gz
 
   windows-hip:
-    needs: [check-release]
-    if: ${{ needs.check-release.outputs.should_release == 'true' }}
+    needs: [check_release, get-version]
+    if: ${{ needs.check_release.outputs.should_release == 'true' }}
 
     runs-on: windows-2022
 
@@ -1201,9 +1224,9 @@ jobs:
           path: llama-bin-win-hip-${{ matrix.name }}-x64.zip
           name: llama-bin-win-hip-${{ matrix.name }}-x64.zip
 
-  ios-xcode:
-    needs: [check-release]
-    if: ${{ needs.check-release.outputs.should_release == 'true' }}
+  ios-xcode-build:
+    needs: [check_release, get-version]
+    if: ${{ needs.check_release.outputs.should_release == 'true' }}
     runs-on: macos-26
 
     steps:
@@ -1352,9 +1375,9 @@ jobs:
 #          path: llama-${{ steps.tag.outputs.name }}-bin-${{ matrix.chip_type }}-openEuler-${{ matrix.arch }}${{ matrix.use_acl_graph == 'on' && '-aclgraph' || '' }}.tar.gz
 #          name: llama-bin-${{ matrix.chip_type }}-openEuler-${{ matrix.arch }}${{ matrix.use_acl_graph == 'on' && '-aclgraph' || '' }}.tar.gz
 
-  ui:
-    needs: [check-release]
-    if: ${{ needs.check-release.outputs.should_release == 'true' }}
+  ui-build:
+    needs: [check_release, get-version]
+    if: ${{ needs.check_release.outputs.should_release == 'true' }}
     uses: ./.github/workflows/ui-build.yml
     with:
       hf_ui_version: ${{ needs.get-version.outputs.ui_version }}

@@ -223,7 +223,7 @@ bool server_http_context::init(const common_params & params) {
 
     // Public endpoints list - includes health, UI, and PWA assets
     // Source of truth for splash screen paths: tools/ui/src/lib/constants/pwa.ts (APPLE_DEVICES)
-    static const std::unordered_set<std::string> get_public_endpoints = []() {
+    static const std::unordered_set<std::string> get_public_endpoints = [generate_splash_endpoints]() {
         std::unordered_set<std::string> endpoints {
             "/health",
             "/v1/health",
