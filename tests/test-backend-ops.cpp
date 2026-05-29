@@ -8603,6 +8603,11 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
 
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_0, GGML_TYPE_F32, 576, 512, 576, {1,1}, {1,1}));
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_0, GGML_TYPE_F32, 1, 2048, 8192, {1,  1}, {1, 1}));
+    // ET Q4_0 hybrid matrix-engine + vector-kernel tail: N not a multiple of 16
+    // (m % 16 == 0, k % 32 == 0, n >= 16). Exercises the split-launch path.
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_0, GGML_TYPE_F32, 64,  24,  128, {1,1}, {1,1}));
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_0, GGML_TYPE_F32, 256, 100, 256, {1,1}, {1,1}));
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_0, GGML_TYPE_F32, 128, 33,  256, {2,2}, {1,1}));
     for (ggml_type type_a : all_types) {
         test_cases.emplace_back(new test_mul_mat(type_a, GGML_TYPE_F32, 1, 64, 256, {1,  1}, {1, 1}));
     }
@@ -9481,6 +9486,13 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
                 test_cases.emplace_back(new test_mul_mat(type_a, type_b, 4096, bs, 14336, {1,  1}, {1, 1}));
             }
         }
+    }
+
+    // ET Q4_0 matrix-engine / hybrid coverage at a realistic Llama FFN shape.
+    // Full tiles (N % 16 == 0) drive the matrix engine; partial tiles
+    // (N % 16 != 0, N >= 16) drive the hybrid matrix-engine + vector-tail split.
+    for (int bs : {256, 500, 512, 520, 1024, 2040, 2048}) {
+        test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_0, GGML_TYPE_F32, 4096, bs, 14336, {1, 1}, {1, 1}));
     }
 
     // qwen3-30b-a3b
