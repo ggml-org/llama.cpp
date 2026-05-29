@@ -1,5 +1,4 @@
 #include "build-info.h"
-#include "app-update.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -20,6 +19,18 @@ int llama_batched_bench(int argc, char ** argv);
 int llama_fit_params(int argc, char ** argv);
 int llama_quantize(int argc, char ** argv);
 int llama_perplexity(int argc, char ** argv);
+
+// hands the update over to the install script, which downloads and swaps the binary
+int llama_update(int argc, char ** argv) {
+    (void) argc;
+    (void) argv;
+
+#if defined(_WIN32)
+    return system("powershell -NoProfile -ExecutionPolicy Bypass -Command \"irm https://llama.app/install.ps1 | iex\"");
+#else
+    return system("curl -fsSL https://llama.app/install.sh | sh");
+#endif
+}
 
 static const char * progname;
 
