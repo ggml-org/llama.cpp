@@ -292,6 +292,10 @@ static int common_download_file_single_online(const std::string & url,
 
     const bool file_exists = std::filesystem::exists(path);
 
+    if (!file_exists && opts.skip_download) {
+        return -2; // file is missing and download is disabled
+    }
+
     if (file_exists && skip_etag) {
         LOG_DBG("%s: using cached file: %s\n", __func__, path.c_str());
         return 304; // 304 Not Modified - fake cached response
@@ -356,6 +360,10 @@ static int common_download_file_single_online(const std::string & url,
         if (!last_etag.empty() && last_etag == etag) {
             LOG_DBG("%s: using cached file (same etag): %s\n", __func__, path.c_str());
             return 304; // 304 Not Modified - fake cached response
+        }
+        // pass this point, the file exists but is different from the server version, so we need to redownload it
+        if (opts.skip_download) {
+            return -2; // special code to indicate that the download was skipped due to etag mismatch
         }
         if (remove(path.c_str()) != 0) {
             LOG_ERR("%s: unable to delete file: %s\n", __func__, path.c_str());
@@ -775,13 +783,13 @@ static std::vector<download_task> get_url_tasks(const common_params_model & mode
 }
 
 common_download_model_result common_download_model(const common_params_model  & model,
-                                                   const common_download_opts & opts,
-                                                   bool download_mmproj,
-                                                   bool download_mtp) {
+                                                   const common_download_opts & opts) {
     common_download_model_result result;
     std::vector<download_task> tasks;
     hf_plan hf;
 
+    bool download_mmproj = opts.download_mmproj;
+    bool download_mtp = opts.download_mtp;
     bool is_hf = !model.hf_repo.empty();
 
     if (is_hf) {
@@ -806,18 +814,22 @@ common_download_model_result common_download_model(const common_params_model  & 
         return result;
     }
 
-    std::vector<std::future<bool>> futures;
+    std::vector<std::future<int>> futures;
     for (const auto & task : tasks) {
         futures.push_back(std::async(std::launch::async,
             [&task, &opts, is_hf]() {
-                int status = common_download_file_single(task.url, task.path, opts, is_hf);
-                return is_http_status_ok(status);
+                return common_download_file_single(task.url, task.path, opts, is_hf);
             }
         ));
     }
 
     for (auto & f : futures) {
-        if (!f.get()) {
+        int status = f.get();
+        if (status == -2 && opts.skip_download) {
+            throw common_skip_download_exception();
+        }
+        bool is_ok = is_http_status_ok(status);
+        if (!is_ok) {
             return {};
         }
     }

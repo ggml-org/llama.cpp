@@ -129,8 +129,11 @@ bool common_params_to_map(int argc, char ** argv, llama_example ex, std::map<com
 // see: https://github.com/ggml-org/llama.cpp/issues/18163
 void common_params_add_preset_options(std::vector<common_arg> & args);
 
-// Populate model paths (main model, mmproj, etc) from -hf if necessary
-void common_params_handle_models(common_params & params, llama_example curr_ex);
+// populate model paths (main model, mmproj, etc) from -hf if necessary
+// return true if the model is ready to use
+// throw an exception if there is an error that prevents the model from being used (e.g. network error, model not found, etc)
+// if params.skip_download is true, no downloads will be attempted. return false if the model is invalid or missing (e.g. ETag check failed)
+bool common_params_handle_models(common_params & params, llama_example curr_ex);
 
 // initialize argument parser context - used by test-arg-parser and preset
 common_params_context common_params_parser_init(common_params & params, llama_example ex, void(*print_usage)(int, char **) = nullptr);
