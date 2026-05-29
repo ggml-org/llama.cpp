@@ -143,7 +143,7 @@ jobs:
               echo ERROR: OpenVINOConfig.cmake not found
               exit /b 1
           )
-          
+
           REM Call OpenVINO setup script to automatically append DLLs to PATH
           call "%OPENVINO_ROOT%\setupvars.bat"
 
@@ -163,10 +163,10 @@ jobs:
         run: |
           REM Find extracted OpenVINO folder dynamically
           for /d %%i in (openvino_toolkit\*) do set OPENVINO_ROOT=%%i
-          
+
           REM Call OpenVINO setup script to automatically append DLLs to PATH
           call "%OPENVINO_ROOT%\setupvars.bat"
-          
+
           REM Run the tests
           cd build
           ctest --test-dir ReleaseOV -L main -E "test-llama-archs" -C Release --verbose --timeout 3000
