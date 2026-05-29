@@ -3,11 +3,12 @@ set(TARGET llama-app)
 add_executable(${TARGET} llama.cpp app-update.cpp)
 set_target_properties(${TARGET} PROPERTIES OUTPUT_NAME llama)
 
-# bakes the self update channel when the packager provides it
-if(LLAMA_APP_REPO AND LLAMA_APP_ID_BINARY)
-    target_compile_definitions(${TARGET} PRIVATE
-        LLAMA_APP_REPO="${LLAMA_APP_REPO}"
-        LLAMA_APP_ID_BINARY="${LLAMA_APP_ID_BINARY}")
+# bakes the self update identity when the packager provides it
+if(LLAMA_APP_ID_BINARY)
+    target_compile_definitions(${TARGET} PRIVATE LLAMA_APP_ID_BINARY="${LLAMA_APP_ID_BINARY}")
+endif()
+if(LLAMA_APP_SCRIPT_URL)
+    target_compile_definitions(${TARGET} PRIVATE LLAMA_APP_SCRIPT_URL="${LLAMA_APP_SCRIPT_URL}")
 endif()
 
 target_link_libraries(${TARGET} PRIVATE

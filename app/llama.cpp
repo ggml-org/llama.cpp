@@ -96,7 +96,6 @@ static bool matches(const std::string & arg, const command & cmd) {
 
 int main(int argc, char ** argv) {
     progname = argv[0];
-    llama_app_startup();
 
     const std::string arg = argc >= 2 ? argv[1] : "help";
 
