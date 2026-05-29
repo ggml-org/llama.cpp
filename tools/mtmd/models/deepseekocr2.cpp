@@ -18,7 +18,7 @@ ggml_cgraph * clip_graph_deepseekocr2::build() {
         inp = ggml_cont(ctx0, ggml_permute(ctx0, inp, 1, 0, 2, 3));
 
         auto num_image_tokens = inp->ne[1]; // H*W
-        GGML_ASSERT(num_image_tokens == 144 ^ num_image_tokens == 256);
+        GGML_ASSERT(num_image_tokens == 144 || num_image_tokens == 256);
 
         // query based on numbers of image tokens (in SAM output)
         // 16x16 -> query_1024 (1024x1024 images)
