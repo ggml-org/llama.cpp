@@ -419,6 +419,7 @@ struct server_task_result_cmpl_partial : server_task_result {
     bool post_sampling_probs;
     bool is_progress = false;
     bool is_begin = false; // whether to send 200 status to HTTP client (begin of SSE stream)
+                           // ref: https://github.com/ggml-org/llama.cpp/pull/23884
     completion_token_output prob_output;
     result_timings timings;
     result_prompt_progress progress;
