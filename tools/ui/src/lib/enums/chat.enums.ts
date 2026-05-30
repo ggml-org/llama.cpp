@@ -63,28 +63,3 @@ export enum PdfViewMode {
 	TEXT = 'text',
 	PAGES = 'pages'
 }
-
-/**
- * Reasoning effort levels for thinking models.
- * Maps to different token budgets for reasoning depth.
- */
-export enum ReasoningEffort {
-	LOW = 'low',
-	MEDIUM = 'medium',
-	HIGH = 'high',
-	MAX = 'max'
-}
-
-export const REASONING_EFFORT_LABELS: Record<ReasoningEffort, string> = {
-	[ReasoningEffort.LOW]: 'Low',
-	[ReasoningEffort.MEDIUM]: 'Medium',
-	[ReasoningEffort.HIGH]: 'High',
-	[ReasoningEffort.MAX]: 'Max'
-};
-
-export const REASONING_EFFORT_ORDER: ReasoningEffort[] = [
-	ReasoningEffort.LOW,
-	ReasoningEffort.MEDIUM,
-	ReasoningEffort.HIGH,
-	ReasoningEffort.MAX
-];

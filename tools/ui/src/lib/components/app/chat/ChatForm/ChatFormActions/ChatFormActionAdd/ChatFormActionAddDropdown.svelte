@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Plus, Lightbulb, File, MessageSquare, Zap, FolderOpen } from '@lucide/svelte';
+	import { Plus, File, MessageSquare, Zap, FolderOpen } from '@lucide/svelte';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { buttonVariants } from '$lib/components/ui/button';
@@ -11,10 +11,9 @@
 	} from '$lib/constants';
 	import {
 		ChatFormActionAddToolsSubmenu,
-		ChatFormActionAddMcpServersSubmenu
+		ChatFormActionAddMcpServersSubmenu,
+		ChatFormReasoningEffortSubmenu
 	} from '$lib/components/app';
-	import { conversationsStore } from '$lib/stores/conversations.svelte';
-
 	import { useAttachmentMenu } from '$lib/hooks/use-attachment-menu.svelte';
 
 	interface Props {
@@ -151,25 +150,7 @@
 
 			<DropdownMenu.Separator />
 
-			<DropdownMenu.Item
-				class="flex cursor-pointer items-center gap-2"
-				onclick={() =>
-					conversationsStore.setThinkingEnabled(!conversationsStore.getThinkingEnabled())}
-			>
-				<Lightbulb
-					class="h-4 w-4 {conversationsStore.getThinkingEnabled()
-						? 'fill-amber-400 text-amber-400'
-						: 'text-muted-foreground'}"
-				/>
-
-				<span class="flex-1">Thinking</span>
-
-				{#if conversationsStore.getThinkingEnabled()}
-					<span class="text-xs text-muted-foreground">on</span>
-				{:else}
-					<span class="text-xs text-muted-foreground">off</span>
-				{/if}
-			</DropdownMenu.Item>
+			<ChatFormReasoningEffortSubmenu />
 
 			<ChatFormActionAddToolsSubmenu />
 

@@ -2,7 +2,12 @@ import type { SETTING_CONFIG_DEFAULT, SETTINGS_SECTION_TITLES } from '$lib/const
 import type { ChatMessagePromptProgress, ChatMessageTimings } from './chat';
 import type { OpenAIToolDefinition } from './mcp';
 import type { DatabaseMessageExtra } from './database';
-import type { ParameterSource, SyncableParameterType, SettingsFieldType } from '$lib/enums';
+import type {
+	ParameterSource,
+	ReasoningEffort,
+	SyncableParameterType,
+	SettingsFieldType
+} from '$lib/enums';
 import type { Icon } from '@lucide/svelte';
 import type { Component } from 'svelte';
 
@@ -68,7 +73,7 @@ export interface SettingsChatServiceOptions {
 	// Enable model thinking/reasoning via chat_template_kwargs
 	enableThinking?: boolean;
 	// Reasoning effort level (low/medium/high/max) for thinking models
-	reasoningEffort?: string;
+	reasoningEffort?: ReasoningEffort;
 	tools?: OpenAIToolDefinition[];
 	// Generation parameters
 	temperature?: number;

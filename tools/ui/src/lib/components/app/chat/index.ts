@@ -241,6 +241,15 @@ export { default as ChatFormActionAddToolsSubmenu } from './ChatForm/ChatFormAct
 export { default as ChatFormActionAddMcpServersSubmenu } from './ChatForm/ChatFormActions/ChatFormActionAdd/ChatFormActionAddMcpServersSubmenu.svelte';
 
 /**
+ * **ChatFormReasoningEffortSubmenu** - Reasoning effort levels submenu
+ *
+ * Dropdown submenu for selecting reasoning effort level (Low, Medium, High, Max).
+ * Used within the Thinking toggle submenu in both desktop and mobile chat form.
+ * Integrates with conversationsStore for per-conversation persistence.
+ */
+export { default as ChatFormReasoningEffortSubmenu } from './ChatForm/ChatFormActions/ChatFormReasoningEffortSubmenu.svelte';
+
+/**
  * Hidden file input element for programmatic file selection.
  */
 export { default as ChatFormFileInputInvisible } from './ChatForm/ChatFormFileInputInvisible.svelte';

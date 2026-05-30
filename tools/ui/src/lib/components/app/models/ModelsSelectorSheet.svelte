@@ -7,7 +7,6 @@
 		ModelId,
 		ModelsSelectorList,
 		ModelsSelectorThinkingIcon,
-		ModelsSelectorReasoningEffort,
 		SearchInput
 	} from '$lib/components/app';
 
@@ -152,12 +151,6 @@
 								onSelect={ms.handleSelect}
 								onInfoClick={ms.handleInfoClick}
 							/>
-
-							<div class="my-2 h-px bg-border" />
-
-							<div class="px-4 pb-4">
-								<ModelsSelectorReasoningEffort />
-							</div>
 						</div>
 					</div>
 				</Sheet.Content>

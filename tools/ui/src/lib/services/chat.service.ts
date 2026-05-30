@@ -6,6 +6,7 @@ import {
 	ATTACHMENT_LABEL_MCP_PROMPT,
 	ATTACHMENT_LABEL_MCP_RESOURCE,
 	LEGACY_AGENTIC_REGEX,
+	REASONING_EFFORT_TOKENS,
 	SETTINGS_KEYS
 } from '$lib/constants';
 import {
@@ -241,11 +242,17 @@ export class ChatService {
 			? ReasoningFormat.NONE
 			: ReasoningFormat.AUTO;
 
+		const reasoningBudgetTokens =
+			enableThinking && reasoningEffort ? (REASONING_EFFORT_TOKENS[reasoningEffort] ?? -1) : -1;
+
 		requestBody.chat_template_kwargs = {
 			...(requestBody.chat_template_kwargs ?? {}),
-			enable_thinking: enableThinking,
-			reasoning_effort: reasoningEffort
+			enable_thinking: enableThinking
 		};
+
+		if (reasoningBudgetTokens >= 0) {
+			requestBody.thinking_budget_tokens = reasoningBudgetTokens;
+		}
 
 		if (continueFinalMessage) {
 			requestBody.continue_final_message = true;

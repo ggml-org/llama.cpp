@@ -120,12 +120,3 @@ export { default as ModelBadge } from './ModelBadge.svelte';
  * Respects the user's `showRawModelNames` setting.
  */
 export { default as ModelId } from './ModelId.svelte';
-
-/**
- * **ModelsSelectorReasoningEffort** - Reasoning effort selector
- *
- * Dropdown panel with reasoning effort levels (Low, Medium, High, Max)
- * and thinking toggle. Used in both desktop and mobile model selectors.
- * Integrates with conversationsStore for per-conversation persistence.
- */
-export { default as ModelsSelectorReasoningEffort } from './ModelsSelectorReasoningEffort.svelte';

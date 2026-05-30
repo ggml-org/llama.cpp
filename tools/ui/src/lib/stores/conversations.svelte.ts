@@ -26,7 +26,7 @@ import { MigrationService } from '$lib/services/migration.service';
 import { config } from '$lib/stores/settings.svelte';
 import { filterByLeafNodeId, findLeafNode, generateConversationTitle } from '$lib/utils';
 import type { McpServerOverride } from '$lib/types/database';
-import { MessageRole, HtmlInputType, FileExtensionText } from '$lib/enums';
+import { MessageRole, HtmlInputType, FileExtensionText, ReasoningEffort } from '$lib/enums';
 import {
 	ISO_DATE_TIME_SEPARATOR,
 	ISO_DATE_TIME_SEPARATOR_REPLACEMENT,
@@ -80,7 +80,7 @@ class ConversationsStore {
 	pendingThinkingEnabled = $state(ConversationsStore.loadThinkingDefaults());
 
 	/** Global (non-conversation-specific) reasoning effort default */
-	pendingReasoningEffort = $state(ConversationsStore.loadReasoningEffortDefault());
+	pendingReasoningEffort = $state<ReasoningEffort>(ConversationsStore.loadReasoningEffortDefault());
 
 	/** Load MCP default overrides from localStorage */
 	private static loadMcpDefaults(): McpServerOverride[] {
@@ -135,13 +135,13 @@ class ConversationsStore {
 	}
 
 	/** Load reasoning effort default from localStorage */
-	private static loadReasoningEffortDefault(): string {
-		if (typeof globalThis.localStorage === 'undefined') return 'medium';
+	private static loadReasoningEffortDefault(): ReasoningEffort {
+		if (typeof globalThis.localStorage === 'undefined') return ReasoningEffort.MEDIUM;
 		try {
 			const raw = localStorage.getItem(REASONING_EFFORT_DEFAULT_LOCALSTORAGE_KEY);
-			return raw || 'medium';
+			return (raw as ReasoningEffort) || ReasoningEffort.MEDIUM;
 		} catch {
-			return 'medium';
+			return ReasoningEffort.MEDIUM;
 		}
 	}
 
@@ -801,7 +801,7 @@ class ConversationsStore {
 	 * Gets the effective reasoning effort for the active conversation.
 	 * Returns the conversation override if set, otherwise the global default.
 	 */
-	getReasoningEffort(): string {
+	getReasoningEffort(): ReasoningEffort {
 		if (this.activeConversation) {
 			return this.activeConversation.reasoningEffort ?? this.pendingReasoningEffort;
 		}
@@ -813,7 +813,7 @@ class ConversationsStore {
 	 * If no conversation exists, stores the global default.
 	 * @param effort - The effort level ('low' | 'medium' | 'high' | 'max')
 	 */
-	async setReasoningEffort(effort: string): Promise<void> {
+	async setReasoningEffort(effort: ReasoningEffort): Promise<void> {
 		if (!this.activeConversation) {
 			this.pendingReasoningEffort = effort;
 			this.saveReasoningEffortDefaults();

@@ -10,8 +10,7 @@
 		ModelId,
 		ModelsSelectorList,
 		ModelsSelectorOption,
-		ModelsSelectorThinkingIcon,
-		ModelsSelectorReasoningEffort
+		ModelsSelectorThinkingIcon
 	} from '$lib/components/app';
 	import type { ModelItem } from './utils';
 
@@ -238,10 +237,6 @@
 								onInfoClick={ms.handleInfoClick}
 								renderOption={modelOption}
 							/>
-
-							<DropdownMenu.Separator />
-
-							<ModelsSelectorReasoningEffort />
 						</div>
 					</DropdownMenuSearchable>
 				</DropdownMenu.Content>

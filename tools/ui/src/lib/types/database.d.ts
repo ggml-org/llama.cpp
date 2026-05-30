@@ -1,5 +1,5 @@
 import type { ChatMessageTimings, ChatRole, ChatMessageType } from '$lib/types/chat';
-import { AttachmentType } from '$lib/enums';
+import { AttachmentType, ReasoningEffort } from '$lib/enums';
 
 export interface McpServerOverride {
 	serverId: string;
@@ -13,7 +13,7 @@ export interface DatabaseConversation {
 	name: string;
 	mcpServerOverrides?: McpServerOverride[];
 	thinkingEnabled?: boolean;
-	reasoningEffort?: string;
+	reasoningEffort?: ReasoningEffort;
 	forkedFromConversationId?: string;
 }
 
