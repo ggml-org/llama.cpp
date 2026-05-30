@@ -9,7 +9,6 @@
 		ATTACHMENT_TOOLTIP_TEXT,
 		TOOLTIP_DELAY_DURATION
 	} from '$lib/constants';
-	import { AttachmentMenuItemId } from '$lib/enums';
 	import {
 		ChatFormActionAddToolsSubmenu,
 		ChatFormActionAddMcpServersSubmenu
@@ -138,33 +137,6 @@
 							</Tooltip.Root>
 						{/if}
 					{/each}
-
-					{#if !attachmentMenu.isItemEnabled('hasVisionModality')}
-						<Tooltip.Root delayDuration={TOOLTIP_DELAY_DURATION}>
-							<Tooltip.Trigger>
-								{#snippet child({ props })}
-									<DropdownMenu.Item
-										{...props}
-										class="flex cursor-pointer items-center gap-2"
-										onclick={attachmentMenu.callbacks.onFileUpload}
-									>
-										{@const pdfItem = ATTACHMENT_FILE_ITEMS.find(
-											(i) => i.id === AttachmentMenuItemId.PDF
-										)}
-										{#if pdfItem}
-											<pdfItem.icon class="h-4 w-4" />
-
-											<span>{pdfItem.label}</span>
-										{/if}
-									</DropdownMenu.Item>
-								{/snippet}
-							</Tooltip.Trigger>
-
-							<Tooltip.Content side="right">
-								<p>PDFs will be converted to text. Image-based PDFs may not work properly.</p>
-							</Tooltip.Content>
-						</Tooltip.Root>
-					{/if}
 				</DropdownMenu.SubContent>
 			</DropdownMenu.Sub>
 
