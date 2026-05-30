@@ -1,4 +1,8 @@
-name: CI (UI)
+name: UI (self-hosted)
+
+# these are the same as ui.yml, but with self-hosted runners
+# the runners come with pre-installed Playwright browsers version: 1.56.1
+# the jobs are much lighter because they don't need to install node and playwright browsers
 
 on:
   workflow_dispatch:
@@ -11,23 +15,25 @@ on:
     branches:
       - master
     paths: [
-      '.github/workflows/ui-ci.yml',
+      '.github/workflows/ui-self-hosted.yml',
+      '.github/workflows/ui-build-self-hosted.yml',
       'tools/ui/**.*',
       'tools/server/tests/**.*'
     ]
   pull_request:
     types: [opened, synchronize, reopened]
     paths: [
-      '.github/workflows/ui-ci.yml',
+      '.github/workflows/ui-self-hosted.yml',
+      '.github/workflows/ui-build-self-hosted.yml',
       'tools/ui/**.*',
       'tools/server/tests/**.*'
     ]
 
 env:
-  LLAMA_LOG_COLORS: 1
-  LLAMA_LOG_PREFIX: 1
-  LLAMA_LOG_TIMESTAMPS: 1
-  LLAMA_LOG_VERBOSITY: 10
+  LLAMA_ARG_LOG_COLORS: 1
+  LLAMA_ARG_LOG_PREFIX: 1
+  LLAMA_ARG_LOG_TIMESTAMPS: 1
+  LLAMA_ARG_LOG_VERBOSITY: 10
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}-${{ github.head_ref || github.run_id }}
@@ -36,12 +42,12 @@ concurrency:
 jobs:
   ui-build:
     name: Build static output
-    uses: ./.github/workflows/ui-build.yml
+    uses: ./.github/workflows/ui-build-self-hosted.yml
 
   ui-checks:
-    name: UI Checks
+    name: Checks
     needs: ui-build
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, PLAYWRIGHT]
     continue-on-error: true
     steps:
       - name: Checkout code
@@ -50,17 +56,8 @@ jobs:
           fetch-depth: 0
           ref: ${{ github.event.inputs.sha || github.event.pull_request.head.sha || github.sha || github.head_ref || github.ref_name }}
 
-      - name: Setup Node.js
-        id: node
-        uses: actions/setup-node@v6
-        with:
-          node-version: "24"
-          cache: "npm"
-          cache-dependency-path: "tools/ui/package-lock.json"
-
       - name: Install dependencies
         id: setup
-        if: ${{ steps.node.conclusion == 'success' }}
         run: npm ci
         working-directory: tools/ui
 
@@ -74,26 +71,20 @@ jobs:
         run: npm run lint
         working-directory: tools/ui
 
-      - name: Install Playwright browsers
-        id: playwright
-        if: ${{ always() && steps.setup.conclusion == 'success' }}
-        run: npx playwright install --with-deps
-        working-directory: tools/ui
-
       - name: Run Client tests
-        if: ${{ always() && steps.playwright.conclusion == 'success' }}
+        if: ${{ always() }}
         run: npm run test:client
         working-directory: tools/ui
 
       - name: Run Unit tests
-        if: ${{ always() && steps.playwright.conclusion == 'success' }}
+        if: ${{ always() }}
         run: npm run test:unit
         working-directory: tools/ui
 
   e2e-tests:
     name: E2E Tests
     needs: ui-build
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, PLAYWRIGHT]
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
@@ -101,17 +92,8 @@ jobs:
           fetch-depth: 0
           ref: ${{ github.event.inputs.sha || github.event.pull_request.head.sha || github.sha || github.head_ref || github.ref_name }}
 
-      - name: Setup Node.js
-        id: node
-        uses: actions/setup-node@v6
-        with:
-          node-version: "24"
-          cache: "npm"
-          cache-dependency-path: "tools/ui/package-lock.json"
-
       - name: Install dependencies
         id: setup
-        if: ${{ steps.node.conclusion == 'success' }}
         run: npm ci
         working-directory: tools/ui
 
@@ -120,23 +102,17 @@ jobs:
         run: npm run build
         working-directory: tools/ui
 
-      - name: Install Playwright browsers
-        id: playwright
-        if: ${{ always() && steps.setup.conclusion == 'success' }}
-        run: npx playwright install --with-deps
-        working-directory: tools/ui
-
       - name: Build Storybook
-        if: ${{ always() && steps.playwright.conclusion == 'success' }}
+        if: ${{ always() }}
         run: npm run build-storybook
         working-directory: tools/ui
 
       - name: Run UI tests
-        if: ${{ always() && steps.playwright.conclusion == 'success' }}
+        if: ${{ always() }}
         run: npm run test:ui -- --testTimeout=60000
         working-directory: tools/ui
 
       - name: Run E2E tests
-        if: ${{ always() && steps.playwright.conclusion == 'success' }}
+        if: ${{ always() }}
         run: npm run test:e2e
         working-directory: tools/ui

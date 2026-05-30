@@ -40,6 +40,7 @@ function getAudioInputFormat(mimeType: string): AudioInputFormat {
 		normalizedMimeType === MimeTypeAudio.WAVE ||
 		normalizedMimeType === MimeTypeAudio.X_WAV ||
 		normalizedMimeType === MimeTypeAudio.X_WAVE ||
+		normalizedMimeType === MimeTypeAudio.VND_WAVE ||
 		normalizedMimeType === MimeTypeAudio.X_PN_WAV
 	) {
 		return FileTypeAudio.WAV;
@@ -879,14 +880,6 @@ export class ChatService {
 			});
 		}
 
-		if (message.content) {
-			contentParts.push({
-				type: ContentPartType.TEXT,
-				text: message.content
-			});
-		}
-
-		// Include images from all messages
 		const imageFiles = message.extra.filter(
 			(extra: DatabaseMessageExtra): extra is DatabaseMessageExtraImageFile =>
 				extra.type === AttachmentType.IMAGE
@@ -916,6 +909,13 @@ export class ChatService {
 					data: audio.base64Data,
 					format: getAudioInputFormat(audio.mimeType)
 				}
+			});
+		}
+
+		if (message.content) {
+			contentParts.push({
+				type: ContentPartType.TEXT,
+				text: message.content
 			});
 		}
 
