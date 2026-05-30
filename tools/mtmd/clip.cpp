@@ -178,7 +178,8 @@ struct clip_ctx {
             if (ctx_params.device != nullptr) {
                 backend = ggml_backend_dev_init(ctx_params.device, nullptr);
                 if (!backend) {
-                    LOG_WRN("%s: Warning: Failed to initialize \"%s\" backend, falling back to default GPU backend\n", __func__, ctx_params.device);
+                    LOG_WRN("%s: Warning: Failed to initialize \"%s\" backend, falling back to default GPU backend\n",
+                            __func__, ggml_backend_dev_name(ctx_params.device));
                 }
             }
             if (!backend) {
