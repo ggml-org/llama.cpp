@@ -65,7 +65,7 @@ class SpecialVocab:
         self.load_merges = load_merges
         self.merges = []
         self.chat_template = None
-        self.normalizer_lowercase = False
+        self.normalizer_lowercase = None
         if special_token_types is not None:
             self.special_token_types = special_token_types
         else:
@@ -104,10 +104,10 @@ class SpecialVocab:
             if not quiet:
                 logger.info(f'Setting chat_template to {self.chat_template}')
             gw.add_chat_template(self.chat_template)
-        if self.normalizer_lowercase:
+        if self.normalizer_lowercase is not None:
             if not quiet:
-                logger.info('Setting normalizer_lowercase to True')
-            gw.add_normalizer_lowercase(True)
+                logger.info(f'Setting normalizer_lowercase to {self.normalizer_lowercase}')
+            gw.add_normalizer_lowercase(self.normalizer_lowercase)
 
     def _load(self, path: Path) -> None:
         self._try_load_from_tokenizer_json(path)
@@ -164,8 +164,8 @@ class SpecialVocab:
         if normalizer_type == 'Lowercase':
             self.normalizer_lowercase = True
         elif normalizer_type == 'BertNormalizer':
-            if normalizer.get('lowercase', True):
-                self.normalizer_lowercase = True
+            if 'lowercase' in normalizer:
+                self.normalizer_lowercase = normalizer['lowercase']
         elif normalizer_type == 'Sequence':
             for norm in normalizer.get('normalizers', []):
                 self._parse_normalizer(norm)
