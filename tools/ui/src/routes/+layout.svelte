@@ -169,11 +169,11 @@
 		}
 	});
 
-	// Inject custom CSS at runtime, reactive on the customCSS setting
+	// Inject custom CSS at runtime, reactive on the customCss setting
 	$effect(() => {
 		if (!browser) return;
 
-		const css = (config().customCSS as string | undefined) ?? '';
+		const css = (config().customCss as string | undefined) ?? '';
 
 		let style = document.getElementById('llama-custom-css') as HTMLStyleElement | null;
 
