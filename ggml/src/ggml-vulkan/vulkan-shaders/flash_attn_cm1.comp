@@ -6,6 +6,10 @@
 #extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
 #extension GL_EXT_shader_explicit_arithmetic_types_int32 : require
 
+#if defined(BFLOAT16)
+#extension GL_EXT_bfloat16 : enable
+#endif
+
 #extension GL_KHR_shader_subgroup_basic : enable
 #extension GL_KHR_shader_subgroup_arithmetic : enable
 #extension GL_KHR_shader_subgroup_vote : enable
@@ -14,7 +18,9 @@
 
 #include "types.glsl"
 #include "flash_attn_base.glsl"
+#if !defined(BFLOAT16)
 #include "flash_attn_dequant.glsl"
+#endif
 
 // These need to be supported N,M values for a MatBc x MatBr x 16 coopmatmuladd
 const uint32_t MatBr = 16;
@@ -27,32 +33,32 @@ const uint32_t cols_per_thread = Bc / cols_per_iter;
 
 layout (binding = 0) readonly buffer Q {float data_q[];};
 layout (binding = 0) readonly buffer QV4 {vec4 data_qv4[];};
-layout (binding = 1) readonly buffer K {float16_t data_k[];};
-layout (binding = 1) readonly buffer KV4 {f16vec4 data_kv4[];};
-layout (binding = 2) readonly buffer V {float16_t data_v[];};
-layout (binding = 2) readonly buffer VV4 {f16vec4 data_vv4[];};
+layout (binding = 1) readonly buffer K {FLOAT_TYPE data_k[];};
+layout (binding = 1) readonly buffer KV4 {FLOAT_TYPEV4 data_kv4[];};
+layout (binding = 2) readonly buffer V {FLOAT_TYPE data_v[];};
+layout (binding = 2) readonly buffer VV4 {FLOAT_TYPEV4 data_vv4[];};
 layout (binding = 3) readonly buffer M {float16_t data_m[];};
 
 shared float tmpsh[row_split];
 
-const uint32_t qstride = HSK_pad / 4 + 2; // in units of f16vec4
-shared f16vec4 Qf[Br * qstride];
+const uint32_t qstride = HSK_pad / 4 + 2;
+shared FLOAT_TYPEV4 Qf[Br * qstride];
 
 const uint psh_stride = Br / 4 + 2;
-shared f16vec4 Psh[Bc * psh_stride];
+shared FLOAT_TYPEV4 Psh[Bc * psh_stride];
 
 // Avoid padding for hsk==256 to make it fit in 48KB shmem.
 const uint32_t sfshstride = (HSK <= 128) ? (Br / 4 + 2) : Br / 4;
 shared ACC_TYPEV4 sfsh[Bc * sfshstride];
 
 const uint32_t D_pad = HSK_pad > HSV_pad ? HSK_pad : HSV_pad;
-const uint32_t kvsh_stride = (SHMEM_STAGING != 0 ? D_pad : MatBr) / 4 + 2; // in units of f16vec4
+const uint32_t kvsh_stride = (SHMEM_STAGING != 0 ? D_pad : MatBr) / 4 + 2;
 const uint v_cols = MatBc / 4 * row_split; // total cols, 4 vec4s per MatBc * number of subgroups
 const uint vsh_stride = v_cols;
-shared f16vec4 kvsh[(kvsh_stride >= vsh_stride) ? (Bc * kvsh_stride) : (Bc * vsh_stride)];
+shared FLOAT_TYPEV4 kvsh[(kvsh_stride >= vsh_stride) ? (Bc * kvsh_stride) : (Bc * vsh_stride)];
 
 const uint32_t osh_stride = row_split * MatBr / 4;
-shared f16vec4 pvsh[MatBc * osh_stride];
+shared O_TYPEV4 pvsh[MatBc * osh_stride];
 
 shared ACC_TYPE slope[Br];
 
@@ -76,7 +82,7 @@ void main() {
     if ((HSK % 16) != 0) {
         [[unroll]] for (uint i = 0; i < Br * qstride; i += gl_WorkGroupSize.x) {
             if (i + tid < Br * qstride) {
-                Qf[i + tid] = f16vec4(0);
+                Qf[i + tid] = FLOAT_TYPEV4(0);
             }
         }
         barrier();
@@ -89,15 +95,15 @@ void main() {
         uint32_t r = (idx + tid) / (HSK / 4);
         if (r < Br && d < HSK / 4 &&
             i * Br + r < N) {
-            Qf[r * qstride + d] = f16vec4(data_qv4[q_offset / 4 + (i * Br + r) * q_stride / 4 + d] * p.scale);
+            Qf[r * qstride + d] = FLOAT_TYPEV4(data_qv4[q_offset / 4 + (i * Br + r) * q_stride / 4 + d] * p.scale);
         }
     }
     barrier();
 
-    f16vec4 Of[rows_per_thread][d_per_thread];
+    O_TYPEV4 Of[rows_per_thread][d_per_thread];
     [[unroll]] for (uint32_t r = 0; r < rows_per_thread; ++r) {
         [[unroll]] for (uint32_t d = 0; d < d_per_thread; ++d) {
-            Of[r][d] = f16vec4(0.0);
+            Of[r][d] = O_TYPEV4(0.0);
         }
     }
 
@@ -222,15 +228,18 @@ void main() {
                 uint32_t d = (idx + tid) % (HSK_pad / 4);
                 uint32_t c = (idx + tid) / (HSK_pad / 4);
                 if (idx + gl_WorkGroupSize.x <= Bc * HSK_pad / 4 || c < Bc) {
-                    f16vec4 K_Tf = f16vec4(0);
+                    FLOAT_TYPEV4 K_Tf = FLOAT_TYPEV4(0);
                     if ((!KV_bounds_check || j * Bc + c < KV) && (HSK == HSK_pad || d < HSK / 4)) {
+#if !defined(BFLOAT16)
                         if (USE_DECODE_K) {
                             uint coord = (j * Bc + c) * k_stride * BLOCK_SIZE_K + 4 * d;
                             uint ib = coord / BLOCK_SIZE_K;
                             uint iqs = (coord % BLOCK_SIZE_K);
                             K_Tf = dequantize4(ib, iqs, k_offset, BINDING_IDX_K);
-                        } else {
-                            K_Tf = f16vec4(data_kv4[k_offset / 4 + (j * Bc + c) * k_stride / 4 + d]);
+                        } else
+#endif
+                        {
+                            K_Tf = FLOAT_TYPEV4(data_kv4[k_offset / 4 + (j * Bc + c) * k_stride / 4 + d]);
                         }
                     }
 
@@ -244,16 +253,16 @@ void main() {
         // Bc split across workgroup (four subgroups), loop over HSK in chunks of 16: 16 x 16 * 16 x 16 -> 16 x 16
         // This is written transposed in order to allow for N being 8 if implementations need it
         coopmat<ACC_TYPE, gl_ScopeSubgroup, MatBc, MatBr, gl_MatrixUseAccumulator> SfMat = coopmat<ACC_TYPE, gl_ScopeSubgroup, MatBc, MatBr, gl_MatrixUseAccumulator>(0);
-        coopmat<float16_t, gl_ScopeSubgroup, MatBc, 16, gl_MatrixUseA> KMat;
-        coopmat<float16_t, gl_ScopeSubgroup, 16, MatBr, gl_MatrixUseB> QMat;
+        coopmat<FLOAT_TYPE, gl_ScopeSubgroup, MatBc, 16, gl_MatrixUseA> KMat;
+        coopmat<FLOAT_TYPE, gl_ScopeSubgroup, 16, MatBr, gl_MatrixUseB> QMat;
 
         [[unroll]] for (uint32_t d = 0; d < HSK_pad / 16; ++d) {
             // If SHMEM_STAGING is set, a Bc * HSK_pad size tile of K is loaded to shmem
-            // If not, f16 K is loaded directly from global memory if aligned, otherwise
+            // If not, K is loaded directly from global memory if aligned, otherwise
             // staged through a Bc * MatBr size staging buffer.
-            // If K is not type f16, then it is always staged for dequantization.
+            // If K is a quant type, then it is always staged for dequantization.
             if (SHMEM_STAGING == 0) {
-            // For quants we always need to dequant into kvsh; for f16 we can load
+            // For quants we always need to dequant into kvsh; for f16/bf16 we can load
             // directly from global memory when alignment / bounds allow it.
             const bool stage_k = USE_DECODE_K || KV_bounds_check || d * 16 + 16 > HSK;
             if (stage_k) {
@@ -262,15 +271,18 @@ void main() {
                     uint32_t col_vec = (idx + tid) % (MatBr / 4);
                     uint32_t row = (idx + tid) / (MatBr / 4);
                     if (idx + tid < Bc * MatBr / 4) {
-                        f16vec4 K_Tf = f16vec4(0);
+                        FLOAT_TYPEV4 K_Tf = FLOAT_TYPEV4(0);
                         if ((!KV_bounds_check || j * Bc + row < KV) && (HSK == HSK_pad || d * 16 + col_vec * 4 < HSK)) {
+#if !defined(BFLOAT16)
                             if (USE_DECODE_K) {
                                 uint coord = (j * Bc + row) * k_stride * BLOCK_SIZE_K + d * 16 + col_vec * 4;
                                 uint ib = coord / BLOCK_SIZE_K;
                                 uint iqs = (coord % BLOCK_SIZE_K);
                                 K_Tf = dequantize4(ib, iqs, k_offset, BINDING_IDX_K);
-                            } else {
-                                K_Tf = f16vec4(data_kv4[k_offset / 4 + (j * Bc + row) * k_stride / 4 + d * 16 / 4 + col_vec]);
+                            } else
+#endif
+                            {
+                                K_Tf = FLOAT_TYPEV4(data_kv4[k_offset / 4 + (j * Bc + row) * k_stride / 4 + d * 16 / 4 + col_vec]);
                             }
                         }
 
@@ -357,7 +369,7 @@ void main() {
         [[unroll]] for (uint32_t d0 = 0; d0 < HSV / 4; d0 += threads_per_rowgroup) {
             const uint d_local = d0 / threads_per_rowgroup;
             [[unroll]] for (uint32_t r = 0; r < rows_per_thread; ++r) {
-                Of[r][d_local] = float16_t(eMf[r]) * Of[r][d_local];
+                Of[r][d_local] = O_TYPE(eMf[r]) * Of[r][d_local];
             }
         }
 
@@ -368,10 +380,10 @@ void main() {
             [[unroll]] for (uint32_t r = 0; r < rows_per_thread; r += 4) {
                 const uint row = tile_row(r);
                 if (KV_bounds_check && j * Bc + col >= KV) {
-                    Psh[col * psh_stride + row / 4] = f16vec4(0.0f);
+                    Psh[col * psh_stride + row / 4] = FLOAT_TYPEV4(0.0f);
                 } else {
                     const vec4 mfvec = vec4(Mf[r], Mf[r + 1], Mf[r + 2], Mf[r + 3]);
-                    const f16vec4 Pf = f16vec4(exp(vec4(sfsh[row / 4 + col * sfshstride]) - mfvec));
+                    const FLOAT_TYPEV4 Pf = FLOAT_TYPEV4(exp(vec4(sfsh[row / 4 + col * sfshstride]) - mfvec));
                     [[unroll]] for (uint32_t vec_idx = 0; vec_idx < 4; ++vec_idx) {
                         Lf[r + vec_idx] += Pf[vec_idx];
                     }
@@ -385,15 +397,18 @@ void main() {
                 uint32_t d = (idx + tid) % (HSV_pad / 4);
                 uint32_t c = (idx + tid) / (HSV_pad / 4);
                 if (idx + gl_WorkGroupSize.x <= Bc * HSV_pad / 4 || c < Bc) {
-                    f16vec4 V_Tf = f16vec4(0);
+                    FLOAT_TYPEV4 V_Tf = FLOAT_TYPEV4(0);
                     if ((!KV_bounds_check || j * Bc + c < KV) && (HSV == HSV_pad || d < HSV / 4)) {
+#if !defined(BFLOAT16)
                         if (USE_DECODE_V) {
                             uint coord = (j * Bc + c) * v_stride * BLOCK_SIZE_V + 4 * d;
                             uint ib = coord / BLOCK_SIZE_V;
                             uint iqs = (coord % BLOCK_SIZE_V);
                             V_Tf = dequantize4(ib, iqs, v_offset, BINDING_IDX_V);
-                        } else {
-                            V_Tf = f16vec4(data_vv4[v_offset / 4 + (j * Bc + c) * v_stride / 4 + d]);
+                        } else
+#endif
+                        {
+                            V_Tf = FLOAT_TYPEV4(data_vv4[v_offset / 4 + (j * Bc + c) * v_stride / 4 + d]);
                         }
                     }
 
@@ -409,7 +424,7 @@ void main() {
         [[unroll]] for (uint32_t hsv_tile = 0; hsv_tile < num_hsv_tiles; ++hsv_tile) {
             const uint hsv_offset = (hsv_tile * row_split + gl_SubgroupID) * 16;
 
-            coopmat<float16_t, gl_ScopeSubgroup, MatBc, MatBr, gl_MatrixUseAccumulator> PVMat = coopmat<float16_t, gl_ScopeSubgroup, MatBc, MatBr, gl_MatrixUseAccumulator>(0);
+            coopmat<O_TYPE, gl_ScopeSubgroup, MatBc, MatBr, gl_MatrixUseAccumulator> PVMat = coopmat<O_TYPE, gl_ScopeSubgroup, MatBc, MatBr, gl_MatrixUseAccumulator>(0);
 
             // Preload V tiles for [Bc, 16 * num subgroups]
             const uint v_rows = Bc;
@@ -417,11 +432,11 @@ void main() {
             const uint v_loads_per_thread = v_total / gl_WorkGroupSize.x;
 
             // If SHMEM_STAGING is set, a Bc * HSV_pad size tile of V is loaded to shmem.
-            // If not, f16 V is loaded directly from global memory if aligned, otherwise
+            // If not, V is loaded directly from global memory if aligned, otherwise
             // staged through a Bc * MatBr size staging buffer.
-            // If V is not type f16, then it is always staged for dequantization.
+            // If V is a quant type, then it is always staged for dequantization.
             if (SHMEM_STAGING == 0) {
-            // For quants we always preload via kvsh. For f16 we only preload when
+            // For quants we always preload via kvsh. For f16/bf16 we only preload when
             // alignment / bounds force it (otherwise we coopMatLoad direct from data_vv4).
             const bool stage_v = USE_DECODE_V || KV_bounds_check;
             if (stage_v) {
@@ -438,13 +453,16 @@ void main() {
                     const uint iqs = coord % BLOCK_SIZE_V;
 
                     if (!KV_bounds_check || (v_row < KV && v_col < HSV)) {
+#if !defined(BFLOAT16)
                         if (USE_DECODE_V) {
                             kvsh[row * vsh_stride + col] = dequantize4(ib, iqs, v_offset, BINDING_IDX_V);
-                        } else {
+                        } else
+#endif
+                        {
                             kvsh[row * vsh_stride + col] = data_vv4[(v_offset + v_row * v_stride + v_col) / 4];
                         }
                     } else {
-                        kvsh[row * vsh_stride + col] = f16vec4(0.0f);
+                        kvsh[row * vsh_stride + col] = FLOAT_TYPEV4(0.0f);
                     }
                 }
             }
@@ -459,7 +477,7 @@ void main() {
 
                     if (SHMEM_STAGING == 0) {
                     if (!USE_DECODE_V && !KV_bounds_check) {
-                        // F16 values can be loaded directly from global memory
+                        // F16/BF16 values can be loaded directly from global memory
                         const uint v_tile_row = j * Bc + bc_chunk * MatBc;
                         const uint v_tile_offset = v_offset / 4 + v_tile_row * v_stride / 4 + hsv_offset / 4;
                         coopMatLoad(QMat, data_vv4, v_tile_offset, v_stride / 4, gl_CooperativeMatrixLayoutRowMajor);
@@ -573,7 +591,7 @@ void main() {
 
                 [[unroll]] for (uint32_t d0 = 0; d0 < HSV / 4; d0 += threads_per_rowgroup) {
                     const uint d_local = d0 / threads_per_rowgroup;
-                    Of[r][d_local] *= float16_t(ms);
+                    Of[r][d_local] *= O_TYPE(ms);
                 }
             } else {
                 vs = exp(sink - Mf[r]);
@@ -591,7 +609,7 @@ void main() {
     [[unroll]] for (uint32_t d0 = 0; d0 < HSV / 4; d0 += threads_per_rowgroup) {
         const uint d_local = d0 / threads_per_rowgroup;
         [[unroll]] for (uint32_t r = 0; r < rows_per_thread; ++r) {
-            Of[r][d_local] *= float16_t(Lfrcp[r]);
+            Of[r][d_local] *= O_TYPE(Lfrcp[r]);
 #if defined(FLOAT_TYPE_MAX)
             Of[r][d_local] = clamp(Of[r][d_local], -FLOAT_TYPE_MAX, FLOAT_TYPE_MAX);
 #endif
