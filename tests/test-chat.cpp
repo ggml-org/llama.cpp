@@ -1548,6 +1548,40 @@ static void test_msgs_oaicompat_json_conversion() {
     }
 }
 
+static void test_split_by_role() {
+    LOG_DBG("%s\n", __func__);
+
+    // Empty inputs
+    assert_equals<size_t>(0, common_chat_split_by_role("", {}).size());
+    assert_equals<size_t>(0, common_chat_split_by_role("hello", {}).size());
+    assert_equals<size_t>(0, common_chat_split_by_role("", { { "user", "<|user|>" } }).size());
+
+    // Multi-role conversation, no leading/trailing content
+    {
+        const std::string prompt = "<|user|>Hi<|assistant|>Hello<|user|>Bye";
+        const auto splits = common_chat_split_by_role(prompt, {
+            { "user",      "<|user|>"      },
+            { "assistant", "<|assistant|>" },
+        });
+        assert_equals<size_t>(3, splits.size());
+
+        assert_equals<std::string>("user", splits[0].role);
+        assert_equals<size_t>(0, splits[0].pos);
+        assert_equals<size_t>(10, splits[0].len);
+        assert_equals<std::string>("<|user|>Hi", prompt.substr(splits[0].pos, splits[0].len));
+
+        assert_equals<std::string>("assistant", splits[1].role);
+        assert_equals<size_t>(10, splits[1].pos);
+        assert_equals<size_t>(18, splits[1].len);
+        assert_equals<std::string>("<|assistant|>Hello", prompt.substr(splits[1].pos, splits[1].len));
+
+        assert_equals<std::string>("user", splits[2].role);
+        assert_equals<size_t>(28, splits[2].pos);
+        assert_equals<size_t>(11, splits[2].len);
+        assert_equals<std::string>("<|user|>Bye", prompt.substr(splits[2].pos, splits[2].len));
+    }
+}
+
 static void test_tools_oaicompat_json_conversion() {
     LOG_DBG("%s\n", __func__);
     std::vector<common_chat_tool> tools{
@@ -2877,6 +2911,21 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .add_generation_prompt(false)
             .continue_final_message(COMMON_CHAT_CONTINUATION_CONTENT)
             .expect_content("Hello, world!\nWhat's up?")
+            .run();
+    }
+
+    {
+        // IBM Granite 4.1 (same format as 4.0)
+        auto tst = peg_tester("models/templates/ibm-granite-granite-4.1.jinja", detailed_debug);
+
+        tst.test("Hello, world!\nWhat's up?").expect(message_assist).run();
+
+        tst.test(
+               "<tool_call>\n"
+               "{\"name\": \"special_function\", \"arguments\": {\"arg1\": 1}}\n"
+               "</tool_call>")
+            .tools({ special_function_tool })
+            .expect(message_assist_call)
             .run();
     }
 
@@ -4338,16 +4387,19 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
     // Format: <TOOLCALL>[{"name": "func", "arguments": {...}}]</TOOLCALL>
     {
         auto tst = peg_tester("models/templates/NVIDIA-Nemotron-Nano-v2.jinja", detailed_debug);
-        tst.test("<TOOLCALL>[{\"name\": \"special_function\", \"arguments\": {\"arg1\": 1}}]</TOOLCALL><SPECIAL_12>")
+        tst.test("<TOOLCALL>[{\"name\": \"special_function\", \"arguments\": {\"arg1\": 1}}]</TOOLCALL>")
             .tools({ special_function_tool })
             .expect(message_assist_call)
             .run();
 
         // Continuation tests
         tst.test("world!\nWhat's up?")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .enable_thinking(true)
             .messages({ message_user, message_assist_prefill_content })
             .add_generation_prompt(false)
             .continue_final_message(COMMON_CHAT_CONTINUATION_CONTENT)
+            .expect_reasoning("I'm thinking")
             .expect_content("Hello, world!\nWhat's up?")
             .run();
     }
@@ -5593,6 +5645,7 @@ int main(int argc, char ** argv) {
     {
         test_msg_diffs_compute();
         test_msgs_oaicompat_json_conversion();
+        test_split_by_role();
         test_tools_oaicompat_json_conversion();
         test_convert_responses_to_chatcmpl();
         test_developer_role_to_system_workaround();

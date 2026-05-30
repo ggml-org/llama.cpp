@@ -5,6 +5,7 @@
 - [News](#news)
 - [OS](#os)
 - [Hardware](#hardware)
+- [Performance Reference](#performance-reference)
 - [Docker](#docker)
 - [Linux](#linux)
 - [Windows](#windows)
@@ -51,9 +52,8 @@ The packages for FP32 and FP16 would have different accuracy and performance on 
 
 ## News
 
-- 2026.04
-
-  - Optimize mul_mat by reorder feature for data type: Q4_K, Q5_K, Q_K, Q8_0.
+- 2026.04-05
+  - Optimize mul_mat by reorder feature for data type: Q4_K, Q5_K, Q6_K, Q8_0.
   - Fused MoE.
   - Upgrate CI and built package for oneAPI 2025.3.3, support Ubuntu 24.04 built package.
 
@@ -149,6 +149,13 @@ On older Intel GPUs, you may try [OpenCL](/docs/backend/OPENCL.md) although the 
 ### Other Vendor GPU
 
 NA
+
+## Performance Reference
+
+
+To get the supported LLMs, GPUs, and performance reference, please check [Performance of llama.cpp on Intel GPU with SYCL backend](https://github.com/ggml-org/llama.cpp/discussions/23313).
+
+You could update your test result in it directly.
 
 ## Docker
 
@@ -736,6 +743,7 @@ use 1 SYCL GPUs: [0] with Max compute units:512
 | GGML_SYCL_DISABLE_GRAPH | 0 or 1 (default) | Disable running computations through SYCL Graphs feature. Disabled by default because SYCL Graph is still on development, no better performance. |
 | GGML_SYCL_ENABLE_LEVEL_ZERO | 1 (default) or 0 | Use Level Zero API for device memory allocation instead of SYCL. Reduces system RAM usage on Intel dGPUs by avoiding DMA-buf/TTM host memory staging. Requires GGML_SYCL_SUPPORT_LEVEL_ZERO=ON at build time. |
 | GGML_SYCL_DISABLE_DNN | 0 (default) or 1 | Disable running computations through oneDNN and always use oneMKL. |
+| GGML_SYCL_ENABLE_VMM | 0 or 1 (default) | Enable the virtual-memory device pool. |
 | ZES_ENABLE_SYSMAN | 0 (default) or 1 | Support to get free memory of GPU by sycl::aspect::ext_intel_free_memory.<br>Recommended to use when --split-mode = layer |
 | UR_L0_ENABLE_RELAXED_ALLOCATION_LIMITS | 0 (default) or 1 | Allow SYCL/Unified Runtime Level Zero device allocations larger than 4 GiB. llama.cpp's direct Level Zero allocation path requests the relaxed maximum-size limit itself when GGML_SYCL_ENABLE_LEVEL_ZERO=1. |
 
@@ -746,6 +754,7 @@ Pass these via `CXXFLAGS` or add a one-off `#define` to enable a flag on the spo
 | Name            | Function                                                                         |
 |-----------------|----------------------------------------------------------------------------------|
 | DEBUG_SYCL_POOL | Enable device memory pool logging on teardown. Useful for profiling allocations. |
+| DEBUG_SYCL_MALLOC | Enable verbose per-call logging of device pool alloc/free operations. |
 
 ## Design Rule
 

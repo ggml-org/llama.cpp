@@ -3,7 +3,6 @@
 	import { chatStore } from '$lib/stores/chat.svelte';
 	import { conversationsStore, isConversationsInitialized } from '$lib/stores/conversations.svelte';
 	import { modelsStore, modelOptions } from '$lib/stores/models.svelte';
-	import { isRouterMode } from '$lib/stores/server.svelte';
 	import { onMount } from 'svelte';
 	import { page } from '$app/state';
 	import { replaceState } from '$app/navigation';
@@ -72,23 +71,13 @@
 		conversationsStore.clearActiveConversation();
 		chatStore.clearUIState();
 
-		if (
-			isRouterMode() &&
-			modelsStore.selectedModelName &&
-			!modelsStore.isModelLoaded(modelsStore.selectedModelName)
-		) {
-			modelsStore.clearSelection();
+		await modelsStore.fetch();
 
-			const first = modelOptions().find((m) => modelsStore.loadedModelIds.includes(m.model));
-			if (first) {
-				await modelsStore.selectModelById(first.id);
-			}
-		}
-
-		// Handle URL params only if we have ?q= or ?model= or ?new_chat=true
 		if (qParam !== null || modelParam !== null || newChatParam === 'true') {
 			await handleUrlParams();
 		}
+
+		await modelsStore.ensureFirstModelSelected();
 	});
 </script>
 

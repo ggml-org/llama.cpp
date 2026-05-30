@@ -18,6 +18,10 @@ ARG LIBZE1_VERSION=1.27.0-1~24.04~ppa2
 ARG http_proxy=
 ARG https_proxy=
 
+ARG BUILD_DATE=N/A
+ARG APP_VERSION=N/A
+ARG APP_REVISION=N/A
+
 ## Build Image
 FROM ubuntu:${UBUNTU_VERSION} AS build
 
@@ -77,6 +81,7 @@ RUN mkdir -p /app/lib && \
 RUN mkdir -p /app/full \
     && cp build/ReleaseOV/bin/* /app/full/ \
     && cp *.py /app/full \
+    && cp -r conversion /app/full \
     && cp -r gguf-py /app/full \
     && cp -r requirements /app/full \
     && cp requirements.txt /app/full \
@@ -88,6 +93,18 @@ FROM ubuntu:${UBUNTU_VERSION} AS base
 # Pass proxy args to runtime stage
 ARG http_proxy
 ARG https_proxy
+ARG BUILD_DATE=N/A
+ARG APP_VERSION=N/A
+ARG APP_REVISION=N/A
+ARG IMAGE_URL=https://github.com/ggml-org/llama.cpp
+ARG IMAGE_SOURCE=https://github.com/ggml-org/llama.cpp
+LABEL org.opencontainers.image.created=$BUILD_DATE \
+      org.opencontainers.image.version=$APP_VERSION \
+      org.opencontainers.image.revision=$APP_REVISION \
+      org.opencontainers.image.title="llama.cpp" \
+      org.opencontainers.image.description="LLM inference in C/C++" \
+      org.opencontainers.image.url=$IMAGE_URL \
+      org.opencontainers.image.source=$IMAGE_SOURCE
 
 RUN apt-get update \
     && apt-get install -y libgomp1 libtbb12 curl wget ocl-icd-libopencl1 \

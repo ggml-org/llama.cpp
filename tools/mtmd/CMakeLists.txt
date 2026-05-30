@@ -22,7 +22,7 @@ add_library(mtmd
             models/gemma4v.cpp
             models/glm4v.cpp
             models/granite-speech.cpp
-            models/hunyuanocr.cpp
+            models/hunyuanvl.cpp
             models/internvl.cpp
             models/kimivl.cpp
             models/kimik25.cpp
@@ -40,6 +40,7 @@ add_library(mtmd
             models/siglip.cpp
             models/whisper-enc.cpp
             models/deepseekocr.cpp
+            models/deepseekocr2.cpp
             models/mobilenetv5.cpp
             models/youtuvl.cpp
             models/yasa2.cpp
