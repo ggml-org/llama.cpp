@@ -1201,7 +1201,7 @@ jobs:
           path: llama-bin-win-hip-${{ matrix.name }}-x64.zip
           name: llama-bin-win-hip-${{ matrix.name }}-x64.zip
 
-  ios-xcode-build:
+  ios-xcode:
     needs: [check_release]
     if: ${{ needs.check_release.outputs.should_release == 'true' }}
     # TODO: figure out how to make this work with macos-26
@@ -1353,7 +1353,7 @@ jobs:
 #          path: llama-${{ steps.tag.outputs.name }}-bin-${{ matrix.chip_type }}-openEuler-${{ matrix.arch }}${{ matrix.use_acl_graph == 'on' && '-aclgraph' || '' }}.tar.gz
 #          name: llama-bin-${{ matrix.chip_type }}-openEuler-${{ matrix.arch }}${{ matrix.use_acl_graph == 'on' && '-aclgraph' || '' }}.tar.gz
 
-  ui-build:
+  ui:
     needs: [check_release]
     if: ${{ needs.check_release.outputs.should_release == 'true' }}
     uses: ./.github/workflows/ui-build.yml
@@ -1381,9 +1381,9 @@ jobs:
       #- ubuntu-24-sycl
       - android-arm64
       - macos-cpu
-      - ios-xcode-build
+      - ios-xcode
       #- openEuler-cann
-      - ui-build
+      - ui
 
     outputs:
       tag_name: ${{ steps.tag.outputs.name }}
