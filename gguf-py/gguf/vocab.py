@@ -52,7 +52,7 @@ class SpecialVocab:
     add_special_token: dict[str, bool]
     special_token_ids: dict[str, int]
     chat_template: str | Sequence[Mapping[str, str]] | None
-    normalizer_lowercase: bool
+    normalizer_lowercase: bool | None
 
     def __init__(
         self, path: str | os.PathLike[str], load_merges: bool = False,
