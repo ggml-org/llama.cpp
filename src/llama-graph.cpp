@@ -68,12 +68,14 @@ static ggml_tensor * ggml_mul_mat_aux(
     const auto n = rot->ne[0];
 
     ggml_tensor * res;
+    GGML_ASSERT(cur->ne[0] % n == 0);
 
     if (!ggml_is_contiguous(cur)) {
-        res = ggml_cont_2d   (ctx, cur, n, ggml_nelements(cur)/n);
-    } else {
-        res = ggml_reshape_2d(ctx, cur, n, ggml_nelements(cur)/n);
+        cur = ggml_cont(ctx, cur);
     }
+    // Keep the head axis visible through the rotation matmul so the meta backend
+    // can propagate tensor-parallel splits on the head/batch dimensions.
+    res = ggml_reshape_4d(ctx, cur, n, cur->ne[0]/n, cur->ne[1], cur->ne[2]*cur->ne[3]);
     res = ggml_mul_mat   (ctx, rot, res);
     ggml_mul_mat_set_hint(res, GGML_HINT_SRC0_IS_HADAMARD);
     res = ggml_reshape_4d(ctx, res, cur->ne[0], cur->ne[1], cur->ne[2], cur->ne[3]);

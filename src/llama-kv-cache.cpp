@@ -62,10 +62,14 @@ static ggml_tensor * ggml_mul_mat_aux(
         ggml_tensor * cur,
         ggml_tensor * rot) {
     const auto n = rot->ne[0];
+    GGML_ASSERT(cur->ne[0] % n == 0);
 
     ggml_tensor * res;
 
-    res = ggml_reshape_2d(ctx, cur, n, ggml_nelements(cur)/n);
+    // Preserve the head dim through the matmul so SPLIT_MODE_TENSOR's split-axis
+    // inference can track a head-axis split. Collapsing heads and tokens together
+    // (reshape_2d) drops that information and trips the meta backend.
+    res = ggml_reshape_4d(ctx, cur, n, cur->ne[0]/n, cur->ne[1], cur->ne[2]*cur->ne[3]);
     res = ggml_mul_mat   (ctx, rot, res);
     ggml_mul_mat_set_hint(res, GGML_HINT_SRC0_IS_HADAMARD);
     res = ggml_reshape_4d(ctx, res, cur->ne[0], cur->ne[1], cur->ne[2], cur->ne[3]);

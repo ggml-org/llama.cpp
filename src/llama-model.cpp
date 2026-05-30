@@ -407,7 +407,63 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
         return {axis, tensor_axis_0, il, rotation};
     };
 
+    auto is_qwen_recurrent_arch = [&]() {
+        return ud->model->arch == LLM_ARCH_QWEN3NEXT ||
+               ud->model->arch == LLM_ARCH_QWEN35    ||
+               ud->model->arch == LLM_ARCH_QWEN35MOE;
+    };
+
+    auto get_layer_index = [&]() -> int {
+        if (tensor_name.substr(0, 4) == "blk.") {
+            const size_t length_prefix = tensor_name.find('.', 4);
+            GGML_ASSERT(length_prefix != std::string::npos);
+            return std::stoi(tensor_name.substr(4, length_prefix));
+        }
+        if (tensor_name.substr(0, 6) == "cache_") {
+            const size_t layer_index_start = tensor_name.find("_l", 6);
+            GGML_ASSERT(layer_index_start != std::string::npos);
+            return std::stoi(tensor_name.substr(layer_index_start + 2));
+        }
+        return -1;
+    };
+
+    auto is_qwen_recurrent_tensor = [&]() {
+        if (!is_qwen_recurrent_arch()) {
+            return false;
+        }
+
+        const int il = get_layer_index();
+        return il >= 0 && hparams.is_recurrent(il);
+    };
+
     auto get_tensor_config = [&]() -> tensor_config {
+        const bool qwen_recurrent_tensor = is_qwen_recurrent_tensor();
+
+        // Qwen recurrent tensors that meet in the DeltaNet/SSM path must use one
+        // canonical Q/K/V split layout. Anchor them to attn_qkv.weight so all of
+        // them use the same rotation and quantization block granularity.
+        if (qwen_recurrent_tensor) {
+            if (std::regex_match(tensor_name, pattern_ssm_dt) || std::regex_match(tensor_name, pattern_ssm_a)) {
+                return get_tensor_config_impl(GGML_BACKEND_SPLIT_AXIS_0, "attn_qkv.weight");
+            }
+            if (std::regex_match(tensor_name, pattern_ssm_alpha) || std::regex_match(tensor_name, pattern_ssm_beta) ||
+                    std::regex_match(tensor_name, pattern_ssm_beta_alpha)) {
+                return get_tensor_config_impl(GGML_BACKEND_SPLIT_AXIS_1, "attn_qkv.weight");
+            }
+            if (std::regex_match(tensor_name, pattern_r_cache) || std::regex_match(tensor_name, pattern_s_cache)) {
+                return get_tensor_config_impl(GGML_BACKEND_SPLIT_AXIS_0, "attn_qkv.weight");
+            }
+            if (std::regex_match(tensor_name, pattern_ssm_conv1d)) {
+                return get_tensor_config_impl(GGML_BACKEND_SPLIT_AXIS_1, "attn_qkv.weight");
+            }
+            if (std::regex_match(tensor_name, pattern_ssm_out_weight)) {
+                return get_tensor_config_impl(GGML_BACKEND_SPLIT_AXIS_0, "attn_qkv.weight");
+            }
+            if (std::regex_match(tensor_name, pattern_attn_gate_weight)) {
+                return get_tensor_config_impl(GGML_BACKEND_SPLIT_AXIS_1, "attn_qkv.weight");
+            }
+        }
+
         // standard attention
         if (std::regex_match(tensor_name, pattern_q_weight) || std::regex_match(tensor_name, pattern_kv_weight)) {
             return get_tensor_config_impl(GGML_BACKEND_SPLIT_AXIS_1, "attn_output.weight");
