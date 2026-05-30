@@ -66,6 +66,6 @@ export const SETTINGS_KEYS = {
 	EXCLUDE_REASONING_FROM_CONTEXT: 'excludeReasoningFromContext',
 	SHOW_RAW_OUTPUT_SWITCH: 'showRawOutputSwitch',
 	// PY_INTERPRETER_ENABLED: 'pyInterpreterEnabled',
-	CUSTOM_JSON: 'custom',
+	CUSTOM_JSON: 'customJson',
 	CUSTOM_CSS: 'customCss'
 } as const;
