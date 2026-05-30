@@ -543,11 +543,16 @@ struct ggml_cuda_pool_vmm : public ggml_cuda_pool {
             CU_CHECK(cuMemRelease(handle));
 
             // set access
+            // WORKAROUND for ROCm gfx1151 (RDNA 3.5 APU): cuMemSetAccess only
+            // works on the first mapping in a VMM pool. Subsequent calls with
+            // different offsets return hipErrorInvalidValue. Fix: apply access
+            // to the ENTIRE pool range (from pool_addr base) instead of just
+            // the new mapping.
             CUmemAccessDesc access = {};
             access.location.type = CU_MEM_LOCATION_TYPE_DEVICE;
             access.location.id = device;
             access.flags = CU_MEM_ACCESS_FLAGS_PROT_READWRITE;
-            CU_CHECK(cuMemSetAccess((CUdeviceptr)((char *)(pool_addr) + pool_size), reserve_size, &access, 1));
+            CU_CHECK(cuMemSetAccess(pool_addr, pool_size + reserve_size, &access, 1));
 
             // add to the pool
             pool_size += reserve_size;
