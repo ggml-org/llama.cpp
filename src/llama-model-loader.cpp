@@ -1420,7 +1420,7 @@ bool llama_model_loader::load_all_data(
     std::vector<no_init<uint8_t>> read_buf;
     std::vector<std::future<std::pair<ggml_tensor *, bool>>> validation_result;
 
-    // 4 staging buffers for async uploads, each sized 1MB seems to be a good default for single NVMe drives.
+    // 4 staging buffers for async uploads, each sized 4MB seems to be a good default for single NVMe drives.
     // NVMe raid configurations might require more / larger buffers.
     constexpr size_t n_buffers = 4;
 
@@ -1431,7 +1431,7 @@ bool llama_model_loader::load_all_data(
 
     // Buffer size: balance between memory usage and I/O efficiency
     // 64MB works well for NVMe drives
-    const size_t buffer_size = alignment != 1 ? 64 * 1024 * 1024 + 2 * alignment : 1 * 1024 * 1024;
+    const size_t buffer_size = alignment != 1 ? 64 * 1024 * 1024 + 2 * alignment : 4 * 1024 * 1024;
 
     std::vector<ggml_backend_buffer_t> host_buffers;
     std::vector<ggml_backend_event_t> events;
