@@ -13,6 +13,7 @@ export interface DatabaseConversation {
 	name: string;
 	mcpServerOverrides?: McpServerOverride[];
 	thinkingEnabled?: boolean;
+	reasoningEffort?: string;
 	forkedFromConversationId?: string;
 }
 

@@ -159,6 +159,7 @@ export class ChatService {
 			disableReasoningParsing,
 			excludeReasoningFromContext,
 			enableThinking,
+			reasoningEffort,
 			continueFinalMessage
 		} = options;
 
@@ -242,7 +243,8 @@ export class ChatService {
 
 		requestBody.chat_template_kwargs = {
 			...(requestBody.chat_template_kwargs ?? {}),
-			enable_thinking: enableThinking
+			enable_thinking: enableThinking,
+			reasoning_effort: reasoningEffort
 		};
 
 		if (continueFinalMessage) {

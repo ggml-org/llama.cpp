@@ -16,7 +16,10 @@ export {
 	MessageRole,
 	MessageType,
 	PdfViewMode,
-	ReasoningFormat
+	ReasoningFormat,
+	ReasoningEffort,
+	REASONING_EFFORT_LABELS,
+	REASONING_EFFORT_ORDER
 } from './chat.enums';
 
 export {
