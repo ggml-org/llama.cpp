@@ -239,8 +239,9 @@ static bool llama_prepare_model_devices(const llama_model_params & params, llama
         // add GPUs
         model->devices.insert(model->devices.end(), gpus.begin(), gpus.end());
 
-        // add integrated GPUs only if no other devices were found
-        if (model->devices.empty()) {
+        // add integrated GPUs only if no discrete GPUs were found
+        // (RPC servers do not count, otherwise the local iGPU would be dropped on iGPU+RPC setups)
+        if (gpus.empty()) {
             model->devices.insert(model->devices.end(), igpus.begin(), igpus.end());
         }
     }
