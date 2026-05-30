@@ -4670,20 +4670,20 @@ int op_matmul(struct htp_ops_context * octx) {
         return op_matmul_hvx(octx);
     }
 
-    // HMX supports F16, Q4_0, Q8_0, IQ4_NL, MXFP4 weights.
+    // HMX supports F16, F32, Q4_0, Q8_0, IQ4_NL, MXFP4 weights.
     // Other types fall back to HVX.
     uint32_t wtype = src0->type;
-    if (wtype != HTP_TYPE_F16 && wtype != HTP_TYPE_Q4_0 && wtype != HTP_TYPE_Q4_1 && wtype != HTP_TYPE_Q8_0 && wtype != HTP_TYPE_IQ4_NL && wtype != HTP_TYPE_MXFP4) {
+    if (wtype != HTP_TYPE_F16 && wtype != HTP_TYPE_F32 && wtype != HTP_TYPE_Q4_0 && wtype != HTP_TYPE_Q4_1 && wtype != HTP_TYPE_Q8_0 && wtype != HTP_TYPE_IQ4_NL && wtype != HTP_TYPE_MXFP4) {
         return op_matmul_hvx(octx);
     }
 
     // Quantised HMX path requires K aligned to 256 (x4x2 super-block).
-    // F16 HMX path requires K aligned to 32 (tile width).
-    if (wtype != HTP_TYPE_F16 && src0->ne[0] % 256 != 0) {
+    // F16 and F32 HMX paths require K aligned to 32 (tile width).
+    if (wtype != HTP_TYPE_F16 && wtype != HTP_TYPE_F32 && src0->ne[0] % 256 != 0) {
         return op_matmul_hvx(octx);
     }
 
-    if (wtype == HTP_TYPE_F16 && src0->ne[0] % 32 != 0) {
+    if ((wtype == HTP_TYPE_F16 || wtype == HTP_TYPE_F32) && src0->ne[0] % 32 != 0) {
         return op_matmul_hvx(octx);
     }
 

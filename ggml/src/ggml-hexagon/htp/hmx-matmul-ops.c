@@ -73,6 +73,8 @@ static inline size_t get_x4x2_row_stride(int weight_type, int k) {
             return (size_t) nb * (QK_Q8_0x4x2 + HMX_X4X2_DBLK_SIZE);             // 272 * nb
         case HTP_TYPE_MXFP4:
             return (size_t) nb * (QK_MXFP4x4x2 / 2 + HMX_X4X2_MXFP4_EBLK_SIZE);  // 136 * nb
+        case HTP_TYPE_F32:
+            return (size_t) k * sizeof(float);
         default:
             return 0;
     }
@@ -720,6 +722,67 @@ static void dequantize_x4x2_worker_loop_q8_0(unsigned int n, unsigned int i, voi
     }
 }
 
+static void quantize_f32_weight_to_fp16_tiles_task(
+        const x4x2_dequantize_state_t *state,
+        int start_tile, int end_tile) {
+
+    const int n_k_tiles = state->n_k_tiles;
+    const struct fastdiv_values n_k_tiles_div = state->n_k_tiles_div;
+
+    const HVX_Vector v_scat_base  = hvx_vmem(hmx_transpose_scatter_offsets);
+    const HVX_Vector v_scat_step  = Q6_V_vsplat_R(4);
+    const HVX_VectorPred q_mask64 = Q6_Q_vsetq_R(64);
+
+    unsigned ct = fastdiv((unsigned)start_tile, &n_k_tiles_div);
+    unsigned kt = fastmodulo((unsigned)start_tile, n_k_tiles, &n_k_tiles_div);
+
+    for (unsigned t = start_tile; t < (unsigned)end_tile; ) {
+        if (kt >= (unsigned)n_k_tiles) { kt = 0; ct++; }
+
+        __fp16 *tile_base = state->dst + t * HMX_FP16_TILE_N_ELMS;
+        {
+            int byte_off = kt * 32 * sizeof(float);
+
+            HVX_Vector v_off = v_scat_base;
+            for (int r = 0; r < HMX_FP16_TILE_N_ROWS; r += 2) {
+                int row0 = ct * HMX_FP16_TILE_N_COLS + r;
+                int row1 = row0 + 1;
+
+                const uint8_t *r0 = state->src + row0 * state->row_stride;
+                const uint8_t *r1 = state->src + row1 * state->row_stride;
+
+                HVX_Vector v0_f32 = hvx_vmemu((const float *)(r0 + byte_off));
+                HVX_Vector v1_f32 = (row1 < state->n_cols) ? hvx_vmemu((const float *)(r1 + byte_off)) : Q6_V_vzero();
+
+                HVX_Vector v_out = hvx_vec_f32_to_f16(v0_f32, v1_f32);
+
+                Q6_vscatter_QRMVwV(q_mask64, (size_t)tile_base, HMX_FP16_TILE_SIZE - 1, v_off, v_out);
+                v_off = Q6_Vw_vadd_VwVw(v_off, v_scat_step);
+
+                HVX_Vector v_out_hi = Q6_V_vror_VR(v_out, 64);
+                Q6_vscatter_QRMVwV(q_mask64, (size_t)tile_base, HMX_FP16_TILE_SIZE - 1, v_off, v_out_hi);
+                v_off = Q6_Vw_vadd_VwVw(v_off, v_scat_step);
+            }
+            (void) *(volatile HVX_Vector *)(tile_base);
+        }
+        ++t; ++kt;
+    }
+
+    if (start_tile < end_tile) {
+        (void) *(volatile HVX_Vector *)(state->dst + (end_tile - 1) * HMX_FP16_TILE_N_ELMS);
+    }
+}
+
+static void quantize_f32_worker_loop(unsigned int n, unsigned int i, void *data) {
+    x4x2_dequantize_state_t *state = (x4x2_dequantize_state_t *)data;
+    for (unsigned int task_id = i; task_id < (unsigned int)state->n_tasks; task_id += n) {
+        int start = task_id * state->n_tiles_per_task;
+        int end   = hex_smin(start + state->n_tiles_per_task, state->n_tot_tiles);
+        quantize_f32_weight_to_fp16_tiles_task(state, start, end);
+    }
+}
+
+
 static void dequantize_x4x2_weight_chunk_to_fp16_tiles(
         struct htp_context *ctx, __fp16 *vtcm_dst,
         const void *vtcm_src, int n_cols, int k_block,
@@ -1052,6 +1115,7 @@ int hmx_matmul_q_f32(struct htp_context *ctx, float *restrict dst, const float *
         case HTP_TYPE_Q4_1:   dequant_worker_fn = dequantize_x4x2_worker_loop_q4_1; break;
         case HTP_TYPE_MXFP4:  dequant_worker_fn = dequantize_x4x2_worker_loop_mxfp4; break;
         case HTP_TYPE_Q8_0:   dequant_worker_fn = dequantize_x4x2_worker_loop_q8_0; break;
+        case HTP_TYPE_F32:    dequant_worker_fn = quantize_f32_worker_loop; break;
         default:
             return -1;
     }
