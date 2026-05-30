@@ -50,7 +50,6 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  GH_TOKEN: ${{ github.token }}
   GGML_NLOOP: 3
   GGML_N_THREADS: 1
   LLAMA_ARG_LOG_COLORS: 1
@@ -135,9 +134,6 @@ jobs:
   windows:
     runs-on: windows-2025
 
-    permissions:
-      actions: write
-
     env:
       OPENBLAS_VERSION: 0.3.23
       SDE_VERSION: 9.33.0-2024-01-07
@@ -205,11 +201,6 @@ jobs:
           cmake -S . -B build ${{ matrix.defines }} `
             -DLLAMA_BUILD_BORINGSSL=ON
           cmake --build build --config Release -j ${env:NUMBER_OF_PROCESSORS}
-
-      - name: ccache-clear
-        uses: ./.github/actions/ccache-clear
-        with:
-          key: cpu-windows-2025-${{ matrix.build }}
 
       - name: Add libopenblas.dll
         id: add_libopenblas_dll
