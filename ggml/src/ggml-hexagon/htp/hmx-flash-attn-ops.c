@@ -50,8 +50,8 @@ static size_t hmx_fa_compute_vtcm_usage(size_t gqa_factor, size_t DK, size_t DV,
     const size_t g_br         = hex_align_up(gqa_factor * Br, HMX_FP16_TILE_N_ROWS);
     const size_t q_tile_size  = hex_align_up(g_br * DK * sizeof(__fp16), 4096);    // Q:  [g_br, DK]
     const size_t o_tile_size  = hex_align_up(g_br * DV * sizeof(__fp16), 4096);    // O:  [g_br, DV] x2 ping-pong
-    const size_t k_dma_size   = hex_align_up(Bc * DK * sizeof(__fp16), 4096);      // K DMA: [Bc, DK] x2 double-buf
-    const size_t v_dma_size   = hex_align_up(Bc * DV * sizeof(__fp16), 4096);      // V DMA: [Bc, DV] x2 double-buf
+    const size_t k_dma_size   = hex_align_up(Bc * hex_round_up(DK * sizeof(__fp16), 128), 4096);      // K DMA: [Bc, DK] x2 double-buf
+    const size_t v_dma_size   = hex_align_up(Bc * hex_round_up(DV * sizeof(__fp16), 128), 4096);      // V DMA: [Bc, DV] x2 double-buf
     const size_t k_tile_size  = hex_align_up(Bc * DK * sizeof(__fp16), 4096);      // K tiles: [Bc, DK] interleaved
     const size_t v_tile_size  = hex_align_up(Bc * DV * sizeof(__fp16), 4096);      // V tiles: [Bc, DV] interleaved
     const size_t s_tile_size  = hex_align_up(g_br * Bc * sizeof(__fp16), 4096);    // S/P:[g_br, Bc]
@@ -852,9 +852,10 @@ static void fa_softmax_thread(unsigned int n, unsigned int i, void * data) {
             v_s_rowmax1 = hvx_vec_reduce_max_f16(v_s_rowmax1);
 
             // Splat m_prev[r], m_prev[r+1] from the per-row accumulator.
-            // vror brings the target lane to lane 0, then extract + re-splat.
-            HVX_Vector v_m_prev0 = hvx_vec_splat_f16(hvx_vec_get_f16(Q6_V_vror_VR(m_prev_v, r_vec_off * 2)));
-            HVX_Vector v_m_prev1 = hvx_vec_splat_f16(hvx_vec_get_f16(Q6_V_vror_VR(m_prev_v, (r_vec_off + 1) * 2)));
+            // vror brings the target lane to lane 0, then vdelta replicates it
+            // across all lanes — stays in the vector domain (no store/reload).
+            HVX_Vector v_m_prev0 = hvx_vec_repl_f16(Q6_V_vror_VR(m_prev_v, r_vec_off * 2));
+            HVX_Vector v_m_prev1 = hvx_vec_repl_f16(Q6_V_vror_VR(m_prev_v, (r_vec_off + 1) * 2));
 
             // HVX max — both operands are splats, so result is splat of m_new.
             HVX_Vector v_dup_m0 = Q6_Vhf_vmax_VhfVhf(v_m_prev0, v_s_rowmax0);
@@ -1247,9 +1248,6 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
     if (DK % 32 != 0 || DV % 32 != 0) {
         return HTP_STATUS_NO_SUPPORT;
     }
-    if (neq1 < 32) {
-        return HTP_STATUS_NO_SUPPORT;
-    }
 
     // GQA factor
     const uint32_t n_kv_heads = k->ne[2];
@@ -1277,7 +1275,7 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
     struct hmx_fa_context factx;
     memset(&factx, 0, sizeof(factx));
     factx.octx           = octx;
-    factx.n_threads      = octx->ctx->n_threads;
+    factx.n_threads      = n_threads;
     factx.DK             = DK;
     factx.DV             = DV;
     factx.n_kv           = nek1;
@@ -1327,10 +1325,15 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
     factx.m1          = powf(2.0f, -(max_bias / 2.0f) / factx.n_head_log2);
 
     // ======== VTCM allocation (GQA-aware) ========
+    const size_t size_k_row        = DK * sizeof(__fp16);
+    const size_t size_v_row        = DV * sizeof(__fp16);
+    const size_t size_k_row_padded = hex_round_up(size_k_row, 128);
+    const size_t size_v_row_padded = hex_round_up(size_v_row, 128);
+
     const size_t q_tile_bytes  = hex_align_up(g_br * DK * sizeof(__fp16), 4096);
     const size_t o_tile_bytes  = hex_align_up(g_br * DV * sizeof(__fp16), 4096);
-    const size_t k_dma_bytes   = hex_align_up(Bc * DK * sizeof(__fp16), 4096);
-    const size_t v_dma_bytes   = hex_align_up(Bc * DV * sizeof(__fp16), 4096);
+    const size_t k_dma_bytes   = hex_align_up(Bc * size_k_row_padded, 4096);
+    const size_t v_dma_bytes   = hex_align_up(Bc * size_v_row_padded, 4096);
     const size_t k_tile_bytes  = hex_align_up(Bc * DK * sizeof(__fp16), 4096);
     const size_t v_tile_bytes  = hex_align_up(Bc * DV * sizeof(__fp16), 4096);
     const size_t s_tile_bytes  = hex_align_up(g_br * Bc * sizeof(__fp16), 4096);
@@ -1400,11 +1403,7 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
     // ======== DMA setup ========
     dma_queue * const dma = ctx->dma[0];
 
-    // Padded row sizes for DMA
-    const size_t size_k_row        = nek0 * sizeof(__fp16);
-    const size_t size_v_row        = nev0 * sizeof(__fp16);
-    const size_t size_k_row_padded = hex_round_up(nek0 * sizeof(__fp16), 128);
-    const size_t size_v_row_padded = hex_round_up(nev0 * sizeof(__fp16), 128);
+    // Padded row sizes for DMA (defined in outer scope)
 
     const size_t n_row_tiles_g_br = g_br / HMX_FP16_TILE_N_ROWS;
     const size_t n_tiles_per_bc   = Bc / HMX_FP16_TILE_N_COLS;

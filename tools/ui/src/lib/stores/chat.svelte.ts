@@ -33,6 +33,7 @@ import {
 	isAbortError,
 	generateConversationTitle
 } from '$lib/utils';
+import { classifyContinueIntent } from '$lib/utils/agentic';
 import {
 	MAX_INACTIVE_CONVERSATION_STATES,
 	INACTIVE_CONVERSATION_STATE_MAX_AGE_MS,
@@ -51,7 +52,7 @@ import type {
 	DatabaseMessage,
 	DatabaseMessageExtra
 } from '$lib/types';
-import { ErrorDialogType, MessageRole, MessageType } from '$lib/enums';
+import { ContinueIntentKind, ErrorDialogType, MessageRole, MessageType } from '$lib/enums';
 
 interface ConversationStateEntry {
 	lastAccessed: number;
@@ -1259,6 +1260,57 @@ class ChatStore {
 		}
 	}
 
+	/**
+	 * Open a fresh assistant turn anchored at the last tool result of a resolved
+	 * agentic round and let streamChatCompletion route through runAgenticFlow.
+	 * Used by continueAssistantMessage when classifyContinueIntent returns
+	 * next_turn, meaning the target assistant already has its tool_calls paired
+	 * with trailing tool results and the next thing to generate is a brand new
+	 * turn rather than a token level continuation.
+	 */
+	private async continueAsNextAgenticTurn(anchorIndex: number): Promise<void> {
+		const activeConv = conversationsStore.activeConversation;
+		if (!activeConv) return;
+		const anchor = conversationsStore.activeMessages[anchorIndex];
+		if (!anchor) return;
+		this.cancelPreEncode();
+		this.setChatLoading(activeConv.id, true);
+		this.clearChatStreaming(activeConv.id);
+		try {
+			const allMessages = await conversationsStore.getConversationMessages(activeConv.id);
+			const anchorMessage = findMessageById(allMessages, anchor.id);
+			if (!anchorMessage) {
+				this.setChatLoading(activeConv.id, false);
+				return;
+			}
+			const newAssistantMessage = await DatabaseService.createMessageBranch(
+				{
+					convId: activeConv.id,
+					type: MessageType.TEXT,
+					timestamp: Date.now(),
+					role: MessageRole.ASSISTANT,
+					content: '',
+					toolCalls: '',
+					children: [],
+					model: null
+				},
+				anchorMessage.id
+			);
+			await conversationsStore.updateCurrentNode(newAssistantMessage.id);
+			conversationsStore.updateConversationTimestamp();
+			await conversationsStore.refreshActiveMessages();
+			const conversationPath = filterByLeafNodeId(
+				allMessages,
+				anchorMessage.id,
+				false
+			) as DatabaseMessage[];
+			await this.streamChatCompletion(conversationPath, newAssistantMessage);
+		} catch (error) {
+			if (!isAbortError(error)) console.error('Failed to continue agentic turn:', error);
+			this.setChatLoading(activeConv.id, false);
+		}
+	}
+
 	async continueAssistantMessage(messageId: string): Promise<void> {
 		const activeConv = conversationsStore.activeConversation;
 		if (!activeConv || this.isChatLoadingInternal(activeConv.id)) return;
@@ -1267,6 +1319,18 @@ class ChatStore {
 		if (!result) return;
 
 		const { message: msg, index: idx } = result;
+
+		// Decide which resume path applies. tool_calls without tool results can
+		// not be resumed mid sequence by continue_final_message, branch instead.
+		// tool_calls already paired with tool results need a fresh next turn,
+		// not a token level continuation of the target assistant.
+		const intent = classifyContinueIntent(conversationsStore.activeMessages, idx);
+		if (intent.kind === ContinueIntentKind.RERUN_TURN) {
+			return this.regenerateMessageWithBranching(messageId);
+		}
+		if (intent.kind === ContinueIntentKind.NEXT_TURN) {
+			return this.continueAsNextAgenticTurn(intent.truncateAfter);
+		}
 
 		try {
 			this.showErrorDialog(null);
@@ -1283,15 +1347,11 @@ class ChatStore {
 
 			const originalContent = dbMessage.content;
 			const originalReasoning = dbMessage.reasoningContent || '';
-			const conversationContext = conversationsStore.activeMessages.slice(0, idx);
-			const contextWithContinue = [
-				...conversationContext,
-				{
-					role: MessageRole.ASSISTANT as const,
-					content: originalContent,
-					reasoning_content: originalReasoning || undefined
-				}
-			];
+			// Hand the persisted DatabaseMessage straight to sendMessage so its
+			// internal converter preserves tool_calls and extras when present.
+			// Reconstructing a bare {role, content} here would drop those fields
+			// and break continue_final_message for messages with tool calls.
+			const contextWithContinue = conversationsStore.activeMessages.slice(0, idx + 1);
 
 			let appendedContent = '';
 			let appendedReasoning = '';

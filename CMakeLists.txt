@@ -112,16 +112,6 @@ option(LLAMA_BUILD_APP       "llama: build the unified binary"                  
 option(LLAMA_BUILD_UI        "llama: build the embedded Web UI for server"                                       ON)
 option(LLAMA_USE_PREBUILT_UI "llama: use prebuilt UI from HF Bucket when available (requires LLAMA_BUILD_UI=ON)" ON)
 
-# Backward compat: when old var is set but new one isn't, forward the value
-if(DEFINED LLAMA_BUILD_WEBUI)
-    set(LLAMA_BUILD_UI ${LLAMA_BUILD_WEBUI})
-    message(DEPRECATION "LLAMA_BUILD_WEBUI is deprecated, use LLAMA_BUILD_UI instead")
-endif()
-if(DEFINED LLAMA_USE_PREBUILT_WEBUI)
-    set(LLAMA_USE_PREBUILT_UI ${LLAMA_USE_PREBUILT_WEBUI})
-    message(DEPRECATION "LLAMA_USE_PREBUILT_WEBUI is deprecated, use LLAMA_USE_PREBUILT_UI instead")
-endif()
-
 option(LLAMA_TOOLS_INSTALL "llama: install tools" ${LLAMA_TOOLS_INSTALL_DEFAULT})
 option(LLAMA_TESTS_INSTALL "llama: install tests" ON)
 
@@ -230,19 +220,6 @@ endif()
 
 if (LLAMA_BUILD_APP)
     add_subdirectory(app)
-endif()
-
-# Automatically add all files from the 'licenses' directory
-file(GLOB EXTRA_LICENSES "${CMAKE_SOURCE_DIR}/licenses/LICENSE-*")
-
-foreach(FILE_PATH ${EXTRA_LICENSES})
-    get_filename_component(FILE_NAME "${FILE_PATH}" NAME)
-    string(REGEX REPLACE "^LICENSE-" "" NAME "${FILE_NAME}")
-    license_add_file("${NAME}" "${FILE_PATH}")
-endforeach()
-
-if (LLAMA_BUILD_COMMON)
-    license_generate(llama-common)
 endif()
 
 #
