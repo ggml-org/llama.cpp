@@ -1214,7 +1214,7 @@ jobs:
 
       - name: Setup Xcode
         run: |
-          sudo xcode-select -s /Applications/Xcode.app
+          sudo xcode-select -s /Applications/Xcode_26.4.1.app
 
       - name: Build
         id: cmake_build
