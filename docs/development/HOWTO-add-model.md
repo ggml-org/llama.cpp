@@ -106,11 +106,11 @@ NOTE: The dimensions in `ggml` are typically in the reverse order of the `pytorc
 
 ### 3. Build the GGML graph implementation
 
-This is the funniest part, you have to provide the inference graph implementation of the new model architecture in `src/llama-model.cpp`.
-Create a new struct that inherits from `llama_model_base` and implement the graph-building logic in its `build_arch_graph` method.
-The `build_arch_graph` method should return a constructed graph (inherited from `llm_graph_context`).
-Have a look at existing implementations like `llama_model_llama`, `llama_model_dbrx` or `llama_model_bert`.
-Then, in the `llama_model_mapping` function, add a case for your architecture to instantiate your new graph-building struct.
+This is the funniest part, you have to provide the inference graph implementation of the new model architecture in `src/llama-model.cpp`:
+1. Create a new struct that inherits from `llama_model_base`.
+2. Implement the graph-building logic in its `build_arch_graph` method.
+3. The `build_arch_graph` method should return a constructed graph (inherited from `llm_graph_context`). Have a look at existing implementations like `llama_model_llama`, `llama_model_dbrx` or `llama_model_bert`.
+4. Then, in the `llama_model_mapping` function, add a case for your architecture to instantiate your new graph-building struct.
 
 Some `ggml` backends do not support all operations. Backend implementations can be added in a separate PR.
 
