@@ -58,6 +58,7 @@ enum htp_op_code {
     HTP_OP_MUL_MAT,
     HTP_OP_MUL_MAT_ID,
     HTP_OP_RMS_NORM,
+    HTP_OP_RMS_NORM_MUL,
     HTP_OP_UNARY_SILU,
     HTP_OP_UNARY_GELU,
     HTP_OP_UNARY_SIGMOID,
