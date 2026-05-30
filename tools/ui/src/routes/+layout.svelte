@@ -36,6 +36,7 @@
 	let isDesktop = $derived(!isMobile.current);
 	let sidebarOpen = $state(false);
 	let mounted = $state(false);
+	let customCssEl = $state<HTMLStyleElement | null>(null);
 	let innerHeight = $state<number | undefined>();
 	let innerWidth = $state(browser ? window.innerWidth : 0);
 
@@ -170,20 +171,11 @@
 	});
 
 	// Inject custom CSS at runtime, reactive on the customCss setting
+	// textContent keeps the value as text, never parsed as HTML
 	$effect(() => {
-		if (!browser) return;
+		if (!customCssEl) return;
 
-		const css = (config().customCss as string | undefined) ?? '';
-
-		let style = document.getElementById('llama-custom-css') as HTMLStyleElement | null;
-
-		if (!style) {
-			style = document.createElement('style');
-			style.id = 'llama-custom-css';
-			document.head.appendChild(style);
-		}
-
-		style.textContent = css;
+		customCssEl.textContent = (config().customCss as string | undefined) ?? '';
 	});
 
 	// Fetch router models when in router mode (for status and modalities)
@@ -243,6 +235,10 @@
 		);
 	});
 </script>
+
+<svelte:head>
+	<style bind:this={customCssEl}></style>
+</svelte:head>
 
 <Tooltip.Provider delayDuration={TOOLTIP_DELAY_DURATION}>
 	<ModeWatcher />
