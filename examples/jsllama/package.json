@@ -1,0 +1,12 @@
+{
+  "name": "jsllama",
+  "version": "1.0.0",
+  "description": "Bun.js FFI wrapper for llama.cpp",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "example": "bun example.js"
+  },
+  "keywords": ["llama", "ffi", "bun"],
+  "license": "MIT"
+}
