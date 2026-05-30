@@ -169,6 +169,23 @@
 		}
 	});
 
+	// Inject custom CSS at runtime, reactive on the customCSS setting
+	$effect(() => {
+		if (!browser) return;
+
+		const css = (config().customCSS as string | undefined) ?? '';
+
+		let style = document.getElementById('llama-custom-css') as HTMLStyleElement | null;
+
+		if (!style) {
+			style = document.createElement('style');
+			style.id = 'llama-custom-css';
+			document.head.appendChild(style);
+		}
+
+		style.textContent = css;
+	});
+
 	// Fetch router models when in router mode (for status and modalities)
 	// Wait for models to be loaded first, run only once
 	let routerModelsFetched = false;

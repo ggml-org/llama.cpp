@@ -665,6 +665,18 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				defaultValue: '',
 				type: SettingsFieldType.TEXTAREA,
 				section: SETTINGS_SECTION_SLUGS.DEVELOPER
+			},
+			{
+				key: SETTINGS_KEYS.CUSTOM_CSS,
+				label: 'Custom CSS',
+				help: 'CSS injected into the page at runtime. Set it here, or ship it server side via the --ui-config customCSS field.',
+				defaultValue: '',
+				type: SettingsFieldType.TEXTAREA,
+				section: SETTINGS_SECTION_SLUGS.DEVELOPER,
+				sync: {
+					serverKey: SETTINGS_KEYS.CUSTOM_CSS,
+					paramType: SyncableParameterType.STRING
+				}
 			}
 		]
 	},
