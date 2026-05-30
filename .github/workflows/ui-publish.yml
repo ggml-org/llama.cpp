@@ -20,7 +20,7 @@ jobs:
   publish:
     name: Publish UI Static Output
     needs: build
-    runs-on: ubuntu-24.04-arm
+    runs-on: ubuntu-slim
 
     permissions:
       contents: read
