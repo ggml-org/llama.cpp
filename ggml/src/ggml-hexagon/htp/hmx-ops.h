@@ -52,12 +52,14 @@ int hmx_matmul_f16_f32(struct htp_context *ctx,
 // Batch semantics match ggml_mul_mat(): src0 broadcasts to src1 in dims 2/3.
 int hmx_matmul_f16_f32_batched(struct htp_context *ctx, const hmx_matmul_f16_f32_batched_params_t *params);
 
-// HMX matrix multiplication — quantised weights (Q4_0/Q8_0/IQ4_NL/MXFP4)
-int hmx_matmul_q_f32(struct htp_context *ctx,
+// HMX matrix multiplication — all supported weight types (F16/F32/Q4_0/Q4_1/Q8_0/IQ4_NL/MXFP4)
+int hmx_matmul_2d_f32(struct htp_context *ctx,
                                       float *restrict dst,
                                       const float *activation,
                                       const uint8_t *permuted_weight,
                                       int m, int k, int n,
+                                      int act_stride,
+                                      int weight_stride,
                                       int weight_type);
 
 // HMX flash attention

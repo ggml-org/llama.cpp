@@ -4728,8 +4728,8 @@ int op_matmul(struct htp_ops_context * octx) {
         return HTP_STATUS_OK;
     }
 
-    if (src0->type == HTP_TYPE_F16) {
-        if (is_batched) {
+    if (is_batched) {
+        if (src0->type == HTP_TYPE_F16) {
             hmx_matmul_f16_f32_batched_params_t batch_params = {
                 .dst             = (float *) dst->data,
                 .activation      = (float *) src1->data,
@@ -4753,13 +4753,11 @@ int op_matmul(struct htp_ops_context * octx) {
             };
             ret = hmx_matmul_f16_f32_batched(octx->ctx, &batch_params);
         } else {
-            ret = hmx_matmul_f16_f32(octx->ctx,
-                    (float*) dst->data, (float*) src1->data, (const __fp16 *) src0->data,
-                    m_total, k, n, act_stride, wgt_stride);
+            return op_matmul_hvx(octx);
         }
     } else {
-        ret = hmx_matmul_q_f32(octx->ctx, (float*) dst->data, (float*) src1->data, (const uint8_t *) src0->data,
-                    m_total, k, n, (int) src0->type);
+        ret = hmx_matmul_2d_f32(octx->ctx, (float*) dst->data, (float*) src1->data, (const uint8_t *) src0->data,
+                    m_total, k, n, act_stride, (int) src0->nb[1], (int) src0->type);
     }
 
     if (ret != 0) {
