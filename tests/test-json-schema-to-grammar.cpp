@@ -1581,6 +1581,84 @@ int main() {
         }
     }
 
+    // Test that large repetition counts are capped to avoid parser errors
+    {
+        fprintf(stderr, "#\n# Testing repetition caps\n#\n");
+        auto run = [](const TestCase & tc) {
+            fprintf(stderr, "- %s\n", tc.name.c_str());
+            try {
+                auto grammar = json_schema_to_grammar(nlohmann::ordered_json::parse(tc.schema), true);
+                // Verify the grammar is parseable (would throw if it had {0,524288} etc.)
+                llama_grammar_parser state;
+                state.parse(grammar.c_str());
+                if (state.symbol_ids.find("root") == state.symbol_ids.end()) {
+                    throw std::runtime_error("Grammar failed to parse");
+                }
+                tc.verify(grammar);
+                tc.verify_status(SUCCESS);
+            } catch (const std::exception & ex) {
+                fprintf(stderr, "# ERROR: %s\n", ex.what());
+                tc.verify_status(FAILURE);
+            }
+        };
+
+        run({
+            SUCCESS,
+            "large maxLength string",
+            R"""({
+                "type": "string",
+                "maxLength": 524288
+            })""",
+            R"""(
+                char ::= [^"\\\x7F\x00-\x1F] | [\\] (["\\bfnrt] | "u" [0-9a-fA-F]{4})
+                root ::= "\"" char* "\"" space
+                space ::= | " " | "\n"{1,2} [ \t]{0,20}
+            )"""
+        });
+
+        run({
+            SUCCESS,
+            "large minLength string",
+            R"""({
+                "type": "string",
+                "minLength": 3000
+            })""",
+            R"""(
+                char ::= [^"\\\x7F\x00-\x1F] | [\\] (["\\bfnrt] | "u" [0-9a-fA-F]{4})
+                root ::= "\"" char{2000,} "\"" space
+                space ::= | " " | "\n"{1,2} [ \t]{0,20}
+            )"""
+        });
+
+        run({
+            SUCCESS,
+            "integer wide range (digit_diff > 6)",
+            R"""({
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 9999999999999
+            })""",
+            R"""(
+                root ::= ([0] | [1-9] [0-9]{0,15}) space
+                space ::= | " " | "\n"{1,2} [ \t]{0,20}
+            )"""
+        });
+
+        run({
+            SUCCESS,
+            "integer negative wide range",
+            R"""({
+                "type": "integer",
+                "minimum": -10,
+                "maximum": 50000000000
+            })""",
+            R"""(
+                root ::= ("-"? ([0] | [1-9] [0-9]{0,15})) space
+                space ::= | " " | "\n"{1,2} [ \t]{0,20}
+            )"""
+        });
+    }
+
     test_all("Check Expectations Validity", [](const TestCase & tc) {
         if (tc.expected_status == SUCCESS) {
             tc.verify_expectation_parseable();

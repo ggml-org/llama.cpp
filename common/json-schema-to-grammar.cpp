@@ -14,7 +14,16 @@
 
 using json = nlohmann::ordered_json;
 
+static constexpr int MAX_REPETITION_LIMIT = 2000;
+
 static std::string build_repetition(const std::string & item_rule, int min_items, int max_items, const std::string & separator_rule = "") {
+    // Avoid generating repetition counts that exceed the parser's limit
+    if (min_items > MAX_REPETITION_LIMIT) {
+        min_items = MAX_REPETITION_LIMIT;
+    }
+    if (max_items > MAX_REPETITION_LIMIT) {
+        max_items = std::numeric_limits<int>::max();
+    }
     auto has_max = max_items != std::numeric_limits<int>::max();
 
     if (max_items == 0) {
@@ -44,6 +53,22 @@ static std::string build_repetition(const std::string & item_rule, int min_items
 static void build_min_max_int(int64_t min_value, int64_t max_value, std::stringstream & out, int decimals_left = 16, bool top_level = true) {
     auto has_min = min_value != std::numeric_limits<int64_t>::min();
     auto has_max = max_value != std::numeric_limits<int64_t>::max();
+
+    // For ranges that span too many digit levels, fall back to a simple pattern
+    // to prevent generating deeply nested GBNF rules that cause parser errors.
+    if (top_level && has_min && has_max) {
+        auto min_s = std::to_string(min_value);
+        auto max_s = std::to_string(max_value);
+        auto digit_diff = max_s.length() - min_s.length();
+        if (digit_diff > 6) {
+            if (min_value < 0) {
+                out << "\"-\"? ([0] | [1-9] [0-9]{0,15})";
+            } else {
+                out << "[0] | [1-9] [0-9]{0,15}";
+            }
+            return;
+        }
+    }
 
     auto digit_range = [&](char from, char to) {
         out << "[";
