@@ -1204,9 +1204,7 @@ jobs:
   ios-xcode:
     needs: [check-release]
     if: ${{ needs.check-release.outputs.should_release == 'true' }}
-    # TODO: figure out how to make this work with macos-26
-    #       https://github.com/ggml-org/llama.cpp/actions/runs/26652714555/job/78604869474
-    runs-on: macos-15
+    runs-on: macos-26
 
     steps:
       - name: Checkout code
@@ -1216,7 +1214,7 @@ jobs:
 
       - name: Setup Xcode
         run: |
-          sudo xcode-select -s /Applications/Xcode_16.4.app
+          sudo xcode-select -s /Applications/Xcode.app
 
       - name: Build
         id: cmake_build
@@ -1232,7 +1230,7 @@ jobs:
             -DLLAMA_BUILD_TESTS=OFF \
             -DLLAMA_BUILD_SERVER=OFF \
             -DCMAKE_SYSTEM_NAME=iOS \
-            -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0 \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=16.0 \
             -DCMAKE_XCODE_ATTRIBUTE_DEVELOPMENT_TEAM=ggml
           cmake --build build --config Release -j $(sysctl -n hw.logicalcpu) -- CODE_SIGNING_ALLOWED=NO
 
