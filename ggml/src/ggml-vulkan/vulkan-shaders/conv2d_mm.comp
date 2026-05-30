@@ -7,6 +7,13 @@
 #extension GL_KHR_memory_scope_semantics : enable
 #endif
 
+#ifdef COOPMAT
+#extension GL_KHR_cooperative_matrix : enable
+#extension GL_KHR_shader_subgroup_basic : enable
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_KHR_memory_scope_semantics : enable
+#endif
+
 #ifdef USE_COLLECTIVES
 #    extension GL_KHR_shader_subgroup_shuffle : enable
 #endif
@@ -77,6 +84,39 @@ layout(constant_id = 12) const uint d1             = 1;
 // Kernel spatial sizes
 layout(constant_id = 13) const uint KW             = 1;
 layout(constant_id = 14) const uint KH             = 1;
+// when set, skip bounds checks and address clamps (K/CRS/NPQ are tile-aligned)
+layout(constant_id = 15) const uint aligned        = 0;
+// stage cm2 result through shmem (Csh) for coalesced stores. cm1 always does this.
+layout(constant_id = 16) const uint csh_store      = 0;
+
+#ifdef COOPMAT
+// cm1 subgroup tile: each subgroup computes a WM x WN region as a grid of
+// TM x TN x TK fragments. Requires WM%TM == WN%TN == BS_K%WM == BS_NPQ%WN ==
+// BS_CRS%TK == 0, and WG_SIZE == (BS_K/WM) * (BS_NPQ/WN) * subgroup_size.
+layout(constant_id = 17) const uint WM             = 32;
+layout(constant_id = 18) const uint WN             = 32;
+const uint TM = 16;
+const uint TN = 16;
+const uint TK = 16;
+const uint cms_per_row = WM / TM;
+const uint cms_per_col = WN / TN;
+const uint warps_M     = BS_K / WM;
+const uint warps_N     = BS_NPQ / WN;
+#endif
+
+// without padding, H_idx/W_idx are in bounds by construction (non-TRANSPOSE only)
+#ifdef TRANSPOSE
+const bool hw_in_bounds = false;
+#else
+const bool hw_in_bounds = (p0 == 0) && (p1 == 0);
+#endif
+
+// TRANSPOSE stride alignment is trivially satisfied for stride 1
+#ifdef TRANSPOSE
+const bool stride_in_bounds = (s0 == 1) && (s1 == 1);
+#else
+const bool stride_in_bounds = true;
+#endif
 
 uint32_t       tid     = gl_LocalInvocationID.x;
 const uint32_t WG_SIZE = gl_WorkGroupSize.x;
@@ -94,7 +134,7 @@ uint32_t n_elems_out = K * NPQ;
 // Number of blocktiles per input
 uint32_t NB_CRS = splitWork(CRS, BS_CRS);
 
-#ifdef COOPMAT2
+#if defined(COOPMAT2) || defined(COOPMAT)
 #define SHMEM_TYPE float16_t
 #else
 #define SHMEM_TYPE float
@@ -111,6 +151,17 @@ const uint32_t Bsh_len = BS_CRS * Bsh_stride;
 
 shared SHMEM_TYPE Ash[Ash_len];  // K x CRS
 shared SHMEM_TYPE Bsh[Bsh_len];  // CRS x NPQ
+
+#if defined(COOPMAT2) || defined(COOPMAT)
+// stage matC through shmem so global stores are row-major (NPQ-contiguous)
+const uint32_t Csh_stride = BS_NPQ;
+#ifdef COOPMAT
+const uint32_t Csh_len    = BS_K * Csh_stride;
+#else
+const uint32_t Csh_len    = csh_store != 0 ? BS_K * Csh_stride : 1;
+#endif
+shared SHMEM_TYPE Csh[Csh_len];  // K x NPQ
+#endif
 
 // Threadtile sizes
 const uint32_t TS_NPQ = BS_K * BS_NPQ / WG_SIZE / TS_K;
@@ -161,7 +212,7 @@ ACC_TYPE perElemOpStore(const in uint32_t r, const in uint32_t c, const in ACC_T
     uint32_t OH_idx  = fastdiv(NPQ_idx - N_idx * p.OH * p.OW, p.OWmp, p.OWL); // divide by p.OW;
     uint32_t OW_idx  = NPQ_idx - N_idx * p.OH * p.OW - OH_idx * p.OW;
     uint32_t dst_idx = OW_idx + OH_idx * p.nb1 + K_idx * p.nb2 + N_idx * p.nb3;
-    if (K_idx < K && NPQ_idx < NPQ) {
+    if (aligned != 0 || (K_idx < K && NPQ_idx < NPQ)) {
         dst_data[dst_idx] = D_TYPE(elem);
     }
     return elem;
@@ -176,6 +227,13 @@ void main() {
 #ifdef COOPMAT2
     coopmat<ACC_TYPE, gl_ScopeWorkgroup, BS_K, BS_NPQ, gl_MatrixUseAccumulator> matC;
     matC = coopmat<ACC_TYPE, gl_ScopeWorkgroup, BS_K, BS_NPQ, gl_MatrixUseAccumulator>(0.0);
+#elif defined(COOPMAT)
+    coopmat<float16_t, gl_ScopeSubgroup, TM, TN, gl_MatrixUseAccumulator> sums[cms_per_row * cms_per_col];
+    [[unroll]] for (uint i = 0; i < cms_per_row * cms_per_col; i++) {
+        sums[i] = coopmat<float16_t, gl_ScopeSubgroup, TM, TN, gl_MatrixUseAccumulator>(0.0);
+    }
+    const uint warp_r = gl_SubgroupID / warps_N;
+    const uint warp_c = gl_SubgroupID % warps_N;
 #else
     float regC[TS_K][TS_NPQ];
     for (uint32_t T_ly = 0; T_ly < TS_K; T_ly++) {
@@ -228,12 +286,15 @@ void main() {
             uint32_t B_lx    = Ac;
             uint32_t K_idx   = B_idx_K * BS_K + B_ly; /* Global K_idx (row index of A)*/
 #ifdef TRANSPOSE
-            uint32_t knl_idx = min(KW_idx_a + KH_idx_a * p.nb01 + K_idx * p.nb02 + Cin_idx_a * p.nb03, K * CRS - 1);
+            uint32_t knl_idx = KW_idx_a + KH_idx_a * p.nb01 + K_idx * p.nb02 + Cin_idx_a * p.nb03;
 #else
-            uint32_t knl_idx = min(KW_idx_a + KH_idx_a * p.nb01 + Cin_idx_a * p.nb02 + K_idx * p.nb03, K * CRS - 1);
+            uint32_t knl_idx = KW_idx_a + KH_idx_a * p.nb01 + Cin_idx_a * p.nb02 + K_idx * p.nb03;
 #endif
+            if (aligned == 0) {
+                knl_idx = min(knl_idx, K * CRS - 1);
+            }
             float    val     = knl_data[knl_idx];
-            if (K_idx >= K || CRS_idx_a >= CRS) {
+            if (aligned == 0 && (K_idx >= K || CRS_idx_a >= CRS)) {
                 val = 0.0;
             }
             Ash[B_ly * Ash_stride + B_lx] = SHMEM_TYPE(val);
@@ -282,15 +343,27 @@ void main() {
             uint32_t H_idx = OH_idx * s1 + KH_idx_b * d1 - p1;
             uint32_t W_idx = OW_idx * s0 + KW_idx_b * d0 - p0;
 #endif
-            uint32_t src_idx =
-                min(max(W_idx + H_idx * p.nb11 + Cin_idx_b * p.nb12 + N_idx * p.nb13, 0), p.Cin * p.N * p.W * p.H - 1);
+            uint32_t src_idx = W_idx + H_idx * p.nb11 + Cin_idx_b * p.nb12 + N_idx * p.nb13;
+            // skip clamp when address can't go OOB
+            if (aligned == 0 || !hw_in_bounds || !stride_in_bounds) {
+                src_idx = min(max(src_idx, 0), p.Cin * p.N * p.W * p.H - 1);
+            }
             float val = src_data[src_idx];
-            if (CRS_idx_b >= CRS || NPQ_idx >= NPQ
-                || H_idx >= p.H || W_idx >= p.W // Lower bound checks aren't necessary. (idx >= 0x80000000 for such case)
+            bool oob = false;
+            if (aligned == 0 && (CRS_idx_b >= CRS || NPQ_idx >= NPQ)) {
+                oob = true;
+            }
+            // also catches lower-bound underflow (idx wraps to 0x80000000+)
+            if (!hw_in_bounds && (H_idx >= p.H || W_idx >= p.W)) {
+                oob = true;
+            }
 #ifdef TRANSPOSE
-                || (H_idx_x_s1 - H_idx * s1 != 0) || (W_idx_x_s0 - W_idx * s0 != 0)
+            if (!stride_in_bounds &&
+                ((H_idx_x_s1 - H_idx * s1 != 0) || (W_idx_x_s0 - W_idx * s0 != 0))) {
+                oob = true;
+            }
 #endif
-                ) {
+            if (oob) {
                 val = 0.0;
             }
             Bsh[B_ly * Bsh_stride + B_lx] = SHMEM_TYPE(val);
@@ -303,6 +376,23 @@ void main() {
         coopMatLoad(matA, Ash, 0, Ash_stride, gl_CooperativeMatrixLayoutRowMajor);
         coopMatLoad(matB, Bsh, 0, Bsh_stride, gl_CooperativeMatrixLayoutRowMajor);
         matC = coopMatMulAdd(matA, matB, matC);
+#elif defined(COOPMAT)
+        // each subgroup multiplies its grid of fragments per TK-sized CRS chunk
+        [[unroll]] for (uint k_step = 0; k_step < BS_CRS / TK; k_step++) {
+            coopmat<float16_t, gl_ScopeSubgroup, TM, TK, gl_MatrixUseA> cache_a[cms_per_row];
+            [[unroll]] for (uint cm_row = 0; cm_row < cms_per_row; cm_row++) {
+                const uint a_off = (warp_r * WM + cm_row * TM) * Ash_stride + k_step * TK;
+                coopMatLoad(cache_a[cm_row], Ash, a_off, Ash_stride, gl_CooperativeMatrixLayoutRowMajor);
+            }
+            [[unroll]] for (uint cm_col = 0; cm_col < cms_per_col; cm_col++) {
+                coopmat<float16_t, gl_ScopeSubgroup, TK, TN, gl_MatrixUseB> cache_b;
+                const uint b_off = k_step * TK * Bsh_stride + warp_c * WN + cm_col * TN;
+                coopMatLoad(cache_b, Bsh, b_off, Bsh_stride, gl_CooperativeMatrixLayoutRowMajor);
+                [[unroll]] for (uint cm_row = 0; cm_row < cms_per_row; cm_row++) {
+                    sums[cm_col * cms_per_row + cm_row] = coopMatMulAdd(cache_a[cm_row], cache_b, sums[cm_col * cms_per_row + cm_row]);
+                }
+            }
+        }
 #else
         if (T_y * TS_K < K) {
             UNROLL for (uint32_t CRS_lidx = 0; CRS_lidx < BS_CRS; CRS_lidx++) {
@@ -325,8 +415,51 @@ void main() {
         barrier();
     }
     /* Save C* */
+#if defined(COOPMAT2) || defined(COOPMAT)
+    // stage matC into Csh, then write to dst with coalesced NPQ-contiguous stores
+#ifdef COOPMAT
+    const bool use_staged_store = true;
+#else
+    const bool use_staged_store = (csh_store != 0);
+#endif
+    if (use_staged_store) {
+#ifdef COOPMAT
+        // cm1: each subgroup stores its fragment grid into its Csh slot
+        [[unroll]] for (uint cm_row = 0; cm_row < cms_per_row; cm_row++) {
+            [[unroll]] for (uint cm_col = 0; cm_col < cms_per_col; cm_col++) {
+                const uint csh_off = (warp_r * WM + cm_row * TM) * Csh_stride + warp_c * WN + cm_col * TN;
+                coopMatStore(sums[cm_col * cms_per_row + cm_row], Csh, csh_off, Csh_stride, gl_CooperativeMatrixLayoutRowMajor);
+            }
+        }
+#else
+        coopMatStore(matC, Csh, 0, Csh_stride, gl_CooperativeMatrixLayoutRowMajor);
+#endif
+        barrier();
+
+        // cooperative shmem->global: WG threads spread across BS_NPQ (the
+        // contiguous direction of dst), each iter covers store_rows_per_iter K-rows
+        const uint32_t store_rows_per_iter = WG_SIZE / BS_NPQ;
+        const uint32_t store_iters         = BS_K / store_rows_per_iter;
+        const uint32_t k_thread_offset     = tid / BS_NPQ;
+        const uint32_t npq_thread          = tid % BS_NPQ;
+        [[unroll]] for (uint32_t i = 0; i < store_iters; i++) {
+            uint32_t k_local = i * store_rows_per_iter + k_thread_offset;
+            uint32_t K_idx   = B_idx_K * BS_K + k_local;
+            uint32_t NPQ_idx = B_idx_NPQ * BS_NPQ + npq_thread;
+            uint32_t N_idx   = fastdiv(NPQ_idx, p.OWOHmp, p.OWOHL);
+            uint32_t OH_idx  = fastdiv(NPQ_idx - N_idx * p.OH * p.OW, p.OWmp, p.OWL);
+            uint32_t OW_idx  = NPQ_idx - N_idx * p.OH * p.OW - OH_idx * p.OW;
+            uint32_t dst_idx = OW_idx + OH_idx * p.nb1 + K_idx * p.nb2 + N_idx * p.nb3;
+            if (aligned != 0 || (K_idx < K && NPQ_idx < NPQ)) {
+                dst_data[dst_idx] = D_TYPE(Csh[k_local * Csh_stride + npq_thread]);
+            }
+        }
+    }
 #ifdef COOPMAT2
-    coopMatPerElementNV(matC, matC, perElemOpStore);
+    else {
+        coopMatPerElementNV(matC, matC, perElemOpStore);
+    }
+#endif
 #else
     if (T_y * TS_K < K) {
         for (uint32_t T_ly = 0; T_ly < TS_K; T_ly++) {
@@ -337,7 +470,7 @@ void main() {
                 uint32_t OH_idx  = fastdiv(NPQ_idx - N_idx * p.OH * p.OW, p.OWmp, p.OWL); // divide by p.OW;
                 uint32_t OW_idx  = NPQ_idx - N_idx * p.OH * p.OW - OH_idx * p.OW;
                 uint32_t dst_idx = OW_idx + OH_idx * p.nb1 + K_idx * p.nb2 + N_idx * p.nb3;
-                if (K_idx < K && NPQ_idx < NPQ) {
+                if (aligned != 0 || (K_idx < K && NPQ_idx < NPQ)) {
                     dst_data[dst_idx] = regC[T_ly][T_lx];
                 }
             }

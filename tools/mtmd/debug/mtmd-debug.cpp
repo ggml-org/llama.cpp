@@ -30,7 +30,9 @@ static void show_additional_info(int /*argc*/, char ** argv) {
         "    -p \"encode\" (debugging encode pass, default case):\n"
         "        --image can be:\n"
         "          \"white\", \"black\", \"gray\": filled 1.0f, 0.0f and 0.5f respectively\n"
+        "          \"red\", \"green\", \"blue\": filled with respective colors\n"
         "          \"cb\": checkerboard pattern, alternate 1.0f and 0.0f\n"
+        "          \"rainbow\": raspberry-pi-like rainbow pattern\n"
         "        --audio can be:\n"
         "          \"one\", \"zero\", \"half\": filled 1.0f, 0.0f and 0.5f respectively\n"
         "          \"1010\": checkerboard pattern, alternate 1.0f and 0.0f\n"
@@ -67,6 +69,8 @@ int main(int argc, char ** argv) {
         LOG_ERR("ERR: Missing --mmproj argument\n");
         return 1;
     }
+
+    ggml_backend_load_all();
 
     LOG_INF("%s: loading model: %s\n", __func__, params.model.path.c_str());
 
@@ -140,6 +144,65 @@ int main(int argc, char ** argv) {
                     image[y][x * 3 + 0] = v;
                     image[y][x * 3 + 1] = v;
                     image[y][x * 3 + 2] = v;
+                }
+            }
+        } else if (input == "red") {
+            for (int i = 0; i < inp_size; ++i) {
+                auto row = std::vector<float>(inp_size * 3, 0.0f);
+                for (int j = 0; j < inp_size; ++j) {
+                    row[j * 3 + 0] = 1.0f;  // R channel
+                }
+                image.push_back(row);
+            }
+        } else if (input == "green") {
+            for (int i = 0; i < inp_size; ++i) {
+                auto row = std::vector<float>(inp_size * 3, 0.0f);
+                for (int j = 0; j < inp_size; ++j) {
+                    row[j * 3 + 1] = 1.0f;  // G channel
+                }
+                image.push_back(row);
+            }
+        } else if (input == "blue") {
+            for (int i = 0; i < inp_size; ++i) {
+                auto row = std::vector<float>(inp_size * 3, 0.0f);
+                for (int j = 0; j < inp_size; ++j) {
+                    row[j * 3 + 2] = 1.0f;  // B channel
+                }
+                image.push_back(row);
+            }
+        } else if (input == "rainbow") {
+            for (int i = 0; i < inp_size; ++i) {
+                image.push_back(std::vector<float>(inp_size * 3, 0.0f));
+            }
+            float cx = inp_size / 2.0f;
+            float cy = inp_size / 2.0f;
+            float max_dist = std::sqrt(cx * cx + cy * cy);
+            for (int y = 0; y < inp_size; ++y) {
+                for (int x = 0; x < inp_size; ++x) {
+                    float dx = x - cx;
+                    float dy = y - cy;
+                    float hue = std::atan2(dy, dx) / (2.0f * 3.14159265f);
+                    if (hue < 0) hue += 1.0f;
+                    float sat = std::sqrt(dx * dx + dy * dy) / max_dist;
+                    if (sat > 1.0f) sat = 1.0f;
+                    float h6 = hue * 6.0f;
+                    int i6 = (int)h6;
+                    float f = h6 - i6;
+                    float p = 1.0f - sat;
+                    float q = 1.0f - sat * f;
+                    float t = 1.0f - sat * (1.0f - f);
+                    float r, g, b;
+                    switch (i6 % 6) {
+                        case 0: r=1; g=t; b=p; break;
+                        case 1: r=q; g=1; b=p; break;
+                        case 2: r=p; g=1; b=t; break;
+                        case 3: r=p; g=q; b=1; break;
+                        case 4: r=t; g=p; b=1; break;
+                        default: r=1; g=p; b=q; break;
+                    }
+                    image[y][x * 3 + 0] = r;
+                    image[y][x * 3 + 1] = g;
+                    image[y][x * 3 + 2] = b;
                 }
             }
         } else if (input == "one") {

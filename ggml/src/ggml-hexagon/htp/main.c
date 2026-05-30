@@ -87,6 +87,27 @@ AEEResult htp_iface_open(const char * uri, remote_handle64 * handle) {
         }
     }
 
+#if __HVX_ARCH__ >= 75
+    {
+        // Power on HMX and set HMX clock
+        HAP_power_request_t request;
+        memset(&request, 0, sizeof(HAP_power_request_t));
+        request.type = HAP_power_set_HMX_v2;
+        request.hmx_v2.set_power     = TRUE;
+        request.hmx_v2.power_up      = TRUE;
+        request.hmx_v2.set_clock     = TRUE;
+        request.hmx_v2.target_corner = HAP_DCVS_EXP_VCORNER_MAX;
+        request.hmx_v2.min_corner    = HAP_DCVS_EXP_VCORNER_MAX;
+        request.hmx_v2.max_corner    = HAP_DCVS_EXP_VCORNER_MAX;
+        request.hmx_v2.perf_mode     = HAP_CLK_PERF_HIGH;
+        FARF(ALWAYS, "Setting HMX clock\n");
+        err = HAP_power_set((void *) ctx, &request);
+        if (err != AEE_SUCCESS) {
+            FARF(ERROR, "Error setting HMX clock.");
+            return err;
+        }
+    }
+#else
     {
         // Power on HMX
         HAP_power_request_t request;
@@ -94,28 +115,9 @@ AEEResult htp_iface_open(const char * uri, remote_handle64 * handle) {
         request.type         = HAP_power_set_HMX;
         request.hmx.power_up = TRUE;
         FARF(ALWAYS, "Powering HMX on\n");
-        err = HAP_power_set((void *) &ctx, &request);
+        err = HAP_power_set((void *) ctx, &request);
         if (err != AEE_SUCCESS) {
             FARF(ERROR, "Error powering on HMX.");
-            return err;
-        }
-    }
-
-#if __HVX_ARCH__ >= 75
-    {
-        // Set HMX clock
-        HAP_power_request_t request;
-        memset(&request, 0, sizeof(HAP_power_request_t));
-        request.type = HAP_power_set_HMX_v2;
-        request.hmx_v2.set_clock = TRUE;
-        request.hmx_v2.target_corner = HAP_DCVS_EXP_VCORNER_MAX;
-        request.hmx_v2.min_corner = HAP_DCVS_EXP_VCORNER_MAX;
-        request.hmx_v2.max_corner = HAP_DCVS_EXP_VCORNER_MAX;
-        request.hmx_v2.perf_mode = HAP_CLK_PERF_HIGH;
-        FARF(ALWAYS, "Setting HMX clock\n");
-        err = HAP_power_set((void *) &ctx, &request);
-        if (err != AEE_SUCCESS) {
-            FARF(ERROR, "Error setting HMX clock.");
             return err;
         }
     }
@@ -210,7 +212,7 @@ AEEResult htp_iface_close(remote_handle64 handle) {
     return AEE_SUCCESS;
 }
 
-AEEResult htp_iface_mmap(remote_handle64 handle, uint32 fd, uint32 size, uint32 pinned) {
+AEEResult htp_iface_mmap(remote_handle64 handle, uint32_t fd, uint32_t size) {
     struct htp_context * ctx = (struct htp_context *) handle;
     if (!ctx) {
         return AEE_EBADPARM;
@@ -220,7 +222,6 @@ AEEResult htp_iface_mmap(remote_handle64 handle, uint32 fd, uint32 size, uint32 
     for (uint32_t i=0; i<HTP_MAX_MMAPS; i++) {
         struct htp_mmap *m = &ctx->mmap[i];
         if (m->fd == fd) {
-            m->pinned = pinned;
             return AEE_SUCCESS;
         }
     }
@@ -229,7 +230,7 @@ AEEResult htp_iface_mmap(remote_handle64 handle, uint32 fd, uint32 size, uint32 
     for (uint32_t i=0; i<HTP_MAX_MMAPS; i++) {
         struct htp_mmap *m = &ctx->mmap[i];
         if (!m->size) {
-            FARF(HIGH, "mmap : fd %u size %u pinned %u", fd, size, pinned);
+            FARF(HIGH, "mmap : fd %u size %u", fd, size);
 #if __HVX_ARCH__ > 73
             void *va = HAP_mmap2(NULL, size, HAP_PROT_READ | HAP_PROT_WRITE, 0, fd, 0);
 #else
@@ -248,7 +249,6 @@ AEEResult htp_iface_mmap(remote_handle64 handle, uint32 fd, uint32 size, uint32 
             m->base   = (uint64_t) va;
             m->fd     = fd;
             m->size   = size;
-            m->pinned = pinned;
 
             return AEE_SUCCESS;
         }
@@ -275,7 +275,6 @@ AEEResult htp_iface_munmap(remote_handle64 handle, uint32 fd) {
             m->size   = 0;
             m->base   = NULL;
             m->fd     = -1;
-            m->pinned = 0;
         }
     }
 
@@ -358,7 +357,7 @@ static void vtcm_free(struct htp_context * ctx) {
 static void htp_packet_callback(dspqueue_t queue, int error, void * context);
 static void htp_error_callback(dspqueue_t queue, int error, void * context);
 
-AEEResult htp_iface_start(remote_handle64 handle, uint32 sess_id, uint64 dsp_queue_id, uint32 n_hvx, uint32 use_hmx) {
+AEEResult htp_iface_start(remote_handle64 handle, uint32 sess_id, uint64 dsp_queue_id, uint32 n_hvx, uint32 use_hmx, uint64_t max_vmem) {
     struct htp_context * ctx = (struct htp_context *) handle;
 
     if (!ctx) {
@@ -376,12 +375,12 @@ AEEResult htp_iface_start(remote_handle64 handle, uint32 sess_id, uint64 dsp_que
                               htp_error_callback,   // Error callback; no errors expected on the DSP
                               (void *) ctx,         // Callback context
                               &ctx->queue);
-
     if (err) {
         FARF(ERROR, "Queue import failed with 0x%08x", (unsigned) err);
         return err;
     }
 
+    ctx->max_vmem    = max_vmem;
     ctx->thread_id   = qurt_thread_get_id();
     ctx->thread_prio = qurt_thread_get_priority(ctx->thread_id);
 
@@ -421,8 +420,7 @@ AEEResult htp_iface_start(remote_handle64 handle, uint32 sess_id, uint64 dsp_que
 
     ctx->n_threads = n_hvx;
     for (int i = 0; i < ctx->n_threads; i++) {
-        // see discussion https://github.com/ggml-org/llama.cpp/pull/18151#discussion_r2632388541
-        ctx->dma[i] = dma_queue_create(128);
+        ctx->dma[i] = dma_queue_create(256); // queue depth
     }
 
     // init worker pool
@@ -537,7 +535,9 @@ static int execute_op(struct htp_ops_context * octx) {
         case HTP_OP_ADD_ID:
             return op_binary(octx);
 
+        case HTP_OP_NORM:
         case HTP_OP_RMS_NORM:
+        case HTP_OP_RMS_NORM_MUL:
         case HTP_OP_SCALE:
         case HTP_OP_SQR:
         case HTP_OP_SQRT:
@@ -545,6 +545,8 @@ static int execute_op(struct htp_ops_context * octx) {
         case HTP_OP_UNARY_SIGMOID:
         case HTP_OP_UNARY_NEG:
         case HTP_OP_UNARY_EXP:
+        case HTP_OP_UNARY_TANH:
+        case HTP_OP_L2_NORM:
             return op_unary(octx);
 
         case HTP_OP_UNARY_SILU:
@@ -596,6 +598,18 @@ static int execute_op(struct htp_ops_context * octx) {
         case HTP_OP_SOLVE_TRI:
             return op_solve_tri(octx);
 
+        case HTP_OP_PAD:
+            return op_pad(octx);
+
+        case HTP_OP_CONCAT:
+            return op_concat(octx);
+
+        case HTP_OP_GATED_DELTA_NET:
+            return op_gated_delta_net(octx);
+
+        case HTP_OP_TRI:
+            return op_tri(octx);
+
         case HTP_OP_INVALID:
             break;
 
@@ -622,8 +636,8 @@ static inline bool reuse_buf(struct htp_context *ctx, uint32_t *m_reuse, struct 
 }
 
 static inline void drop_mmap(struct htp_context *ctx, struct htp_mmap *m) {
-    if (m->size && !m->pinned) {
-        FARF(HIGH, "unmap : fd %u base %p size %u pinned %u", m->fd, (void*) m->base, (uint32_t) m->size, m->pinned);
+    if (m->size) {
+        FARF(HIGH, "unmap : fd %u base %p size %u", m->fd, (void*) m->base, (uint32_t) m->size);
 #if __HVX_ARCH__ > 73
         HAP_munmap2((void *) m->base, m->size);
 #else
@@ -660,9 +674,8 @@ static inline void mmap_buf(struct htp_context *ctx, struct htp_buf_desc *b) {
             m->base   = b->base = (uint64_t) va;
             m->fd     = b->fd;
             m->size   = b->size;
-            m->pinned = 0;
 
-            FARF(HIGH, "mmap : fd %u base %p size %u pinned %u", m->fd, (void*) m->base, (uint32_t) m->size, m->pinned);
+            FARF(HIGH, "mmap : fd %u base %p size %u", m->fd, (void*) m->base, (uint32_t) m->size);
             return;
         }
     }
@@ -672,8 +685,8 @@ static void prep_op_bufs(struct htp_context *ctx, struct htp_buf_desc *bufs, uin
     uint32_t m_reuse = 0; // mmap reuse mask (index from ctx->mmap array)
     uint32_t b_reuse = 0; // buf reuse count
 
-    size_t   m_vmem  = 0; // mapped vmem
-    size_t   e_vmem  = 0; // extra  vmem
+    uint64_t m_vmem  = 0; // mapped vmem
+    uint64_t e_vmem  = 0; // extra  vmem
 
     // See what we can reuse
     for (uint32_t i=0; i < n_bufs; i++) {
@@ -687,9 +700,10 @@ static void prep_op_bufs(struct htp_context *ctx, struct htp_buf_desc *bufs, uin
     // See how much vmem we have mmaped right now
     for (uint32_t i=0; i<HTP_MAX_MMAPS; i++) { m_vmem += ctx->mmap[i].size; }
 
-    FARF(HIGH, "prep-bufs : pass1 mmap-vmem %zu extra-vmem %zu n-bufs %u b-reuse %u", m_vmem, e_vmem, n_bufs, b_reuse);
+    FARF(HIGH, "prep-bufs : pass1 mmap-vmem %zu extra-vmem %zu max-vmem %zu : n-bufs %u b-reuse %u",
+            (size_t) m_vmem, (size_t) e_vmem, (size_t) ctx->max_vmem, n_bufs, b_reuse);
 
-    if ((m_vmem + e_vmem) > HTP_OP_MAX_VMEM) {
+    if ((m_vmem + e_vmem) > ctx->max_vmem) {
         // Drop unused mappings
         for (uint32_t i=0; i < HTP_MAX_MMAPS; i++) {
             bool used = m_reuse & (1<<i);
@@ -840,6 +854,11 @@ static void htp_packet_callback(dspqueue_t queue, int error, void * context) {
         for (uint32_t i=0; i < n_ops; i++) {
             struct profile_data prof;
 
+            if (i == (n_ops-1)) {
+                // wake up the host before starting the last op
+                dspqueue_write_early_wakeup_noblock(queue, 0, 0);
+            }
+
             profile_start(ctx->profiler, &prof);
 
             proc_op_req(octx, tens, i, &ops[i]);
@@ -855,8 +874,6 @@ static void htp_packet_callback(dspqueue_t queue, int error, void * context) {
                 }
             }
         }
-
-        // dspqueue_write_early_wakeup_noblock(ctx->queue, 10, 0);
 
         struct htp_opbatch_rsp rsp;
         rsp.id        = req.id;

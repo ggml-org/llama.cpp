@@ -129,7 +129,7 @@ struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_ssm_scan 
 struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_rwkv              (ggml_metal_library_t lib, const struct ggml_tensor * op);
 struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_gated_delta_net   (ggml_metal_library_t lib, const struct ggml_tensor * op);
 struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_solve_tri         (ggml_metal_library_t lib, const struct ggml_tensor * op);
-struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_ext        (ggml_metal_library_t lib, enum ggml_type tsrc0, enum ggml_type tsrc1, int nsg, int nxpsg, int r1ptg);
+struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_ext        (ggml_metal_library_t lib, const struct ggml_tensor * op, int nsg, int nxpsg, int r1ptg);
 struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mm            (ggml_metal_library_t lib, const struct ggml_tensor * op);
 struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv            (ggml_metal_library_t lib, const struct ggml_tensor * op);
 struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mm_id_map0    (ggml_metal_library_t lib, int ne02, int ne20);
@@ -215,6 +215,30 @@ void ggml_metal_rsets_free(ggml_metal_rsets_t rsets);
 // device
 //
 
+enum ggml_metal_device_id {
+    GGML_METAL_DEVICE_GENERIC = 0,
+
+    GGML_METAL_DEVICE_M1,
+    GGML_METAL_DEVICE_M1_PRO,
+    GGML_METAL_DEVICE_M1_MAX,
+    GGML_METAL_DEVICE_M1_ULTRA,
+    GGML_METAL_DEVICE_M2,
+    GGML_METAL_DEVICE_M2_PRO,
+    GGML_METAL_DEVICE_M2_MAX,
+    GGML_METAL_DEVICE_M2_ULTRA,
+    GGML_METAL_DEVICE_M3,
+    GGML_METAL_DEVICE_M3_PRO,
+    GGML_METAL_DEVICE_M3_MAX,
+    GGML_METAL_DEVICE_M3_ULTRA,
+    GGML_METAL_DEVICE_M4,
+    GGML_METAL_DEVICE_M4_PRO,
+    GGML_METAL_DEVICE_M4_MAX,
+    GGML_METAL_DEVICE_M5,
+    GGML_METAL_DEVICE_M5_PRO,
+    GGML_METAL_DEVICE_M5_MAX,
+    GGML_METAL_DEVICE_M5_ULTRA,
+};
+
 struct ggml_metal_device_props {
     int device;
     char name[128];
@@ -233,6 +257,8 @@ struct ggml_metal_device_props {
     bool use_shared_buffers;
 
     bool supports_gpu_family_apple7;
+
+    enum ggml_metal_device_id device_id;
 
     int op_offload_min_batch_size;
 };
@@ -282,6 +308,7 @@ bool   ggml_metal_buffer_is_shared(ggml_metal_buffer_t buf);
 void   ggml_metal_buffer_memset_tensor(ggml_metal_buffer_t buf, struct ggml_tensor * tensor, uint8_t value, size_t offset, size_t size);
 void   ggml_metal_buffer_set_tensor   (ggml_metal_buffer_t buf, struct ggml_tensor * tensor, const void * data, size_t offset, size_t size);
 void   ggml_metal_buffer_get_tensor   (ggml_metal_buffer_t buf, const struct ggml_tensor * tensor, void * data, size_t offset, size_t size);
+bool   ggml_metal_buffer_cpy_tensor   (ggml_metal_buffer_t buf, const struct ggml_tensor * src, struct ggml_tensor * dst);
 void   ggml_metal_buffer_clear        (ggml_metal_buffer_t buf, uint8_t value);
 
 // finds the Metal buffer that contains the tensor data on the GPU device

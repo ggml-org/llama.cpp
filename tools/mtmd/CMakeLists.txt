@@ -21,7 +21,8 @@ add_library(mtmd
             models/gemma4a.cpp
             models/gemma4v.cpp
             models/glm4v.cpp
-            models/hunyuanocr.cpp
+            models/granite-speech.cpp
+            models/hunyuanvl.cpp
             models/internvl.cpp
             models/kimivl.cpp
             models/kimik25.cpp
@@ -33,11 +34,13 @@ add_library(mtmd
             models/pixtral.cpp
             models/qwen2vl.cpp
             models/qwen3vl.cpp
+            models/mimovl.cpp
             models/qwen3a.cpp
             models/step3vl.cpp
             models/siglip.cpp
             models/whisper-enc.cpp
             models/deepseekocr.cpp
+            models/deepseekocr2.cpp
             models/mobilenetv5.cpp
             models/youtuvl.cpp
             models/yasa2.cpp

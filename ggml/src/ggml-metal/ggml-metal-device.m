@@ -1,6 +1,7 @@
 #import "ggml-metal-device.h"
 
 #import "ggml-impl.h"
+#import "ggml-backend-impl.h"
 
 #include <Foundation/Foundation.h>
 
@@ -627,6 +628,50 @@ void ggml_metal_rsets_free(ggml_metal_rsets_t rsets) {
     free(rsets);
 }
 
+static enum ggml_metal_device_id ggml_metal_device_id_parse(const char * name) {
+    if (!name) {
+        return GGML_METAL_DEVICE_GENERIC;
+    }
+
+    static const char prefix[] = "Apple ";
+    if (strncmp(name, prefix, sizeof(prefix) - 1) != 0) {
+        return GGML_METAL_DEVICE_GENERIC;
+    }
+    const char * suffix = name + sizeof(prefix) - 1;
+
+    static const struct {
+        const char * name;
+        enum ggml_metal_device_id id;
+    } table[] = {
+        {"M1",       GGML_METAL_DEVICE_M1},
+        {"M1 Pro",   GGML_METAL_DEVICE_M1_PRO},
+        {"M1 Max",   GGML_METAL_DEVICE_M1_MAX},
+        {"M1 Ultra", GGML_METAL_DEVICE_M1_ULTRA},
+        {"M2",       GGML_METAL_DEVICE_M2},
+        {"M2 Pro",   GGML_METAL_DEVICE_M2_PRO},
+        {"M2 Max",   GGML_METAL_DEVICE_M2_MAX},
+        {"M2 Ultra", GGML_METAL_DEVICE_M2_ULTRA},
+        {"M3",       GGML_METAL_DEVICE_M3},
+        {"M3 Pro",   GGML_METAL_DEVICE_M3_PRO},
+        {"M3 Max",   GGML_METAL_DEVICE_M3_MAX},
+        {"M3 Ultra", GGML_METAL_DEVICE_M3_ULTRA},
+        {"M4",       GGML_METAL_DEVICE_M4},
+        {"M4 Pro",   GGML_METAL_DEVICE_M4_PRO},
+        {"M4 Max",   GGML_METAL_DEVICE_M4_MAX},
+        {"M5",       GGML_METAL_DEVICE_M5},
+        {"M5 Pro",   GGML_METAL_DEVICE_M5_PRO},
+        {"M5 Max",   GGML_METAL_DEVICE_M5_MAX},
+        {"M5 Ultra", GGML_METAL_DEVICE_M5_ULTRA},
+    };
+
+    for (size_t i = 0; i < sizeof(table)/sizeof(table[0]); ++i) {
+        if (strcmp(suffix, table[i].name) == 0) {
+            return table[i].id;
+        }
+    }
+    return GGML_METAL_DEVICE_GENERIC;
+}
+
 ggml_metal_device_t ggml_metal_device_init(int device) {
     ggml_metal_device_t dev = calloc(1, sizeof(struct ggml_metal_device));
 
@@ -671,7 +716,7 @@ ggml_metal_device_t ggml_metal_device_init(int device) {
                 ![[dev->mtl_device name] containsString:@"M6"] &&
                 ![[dev->mtl_device name] containsString:@"A19"] &&
                 ![[dev->mtl_device name] containsString:@"A20"]) {
-                GGML_LOG_WARN("%s: tensor API disabled for pre-M5 and pre-A19 devices\n", __func__);
+                GGML_LOG_INFO("%s: tensor API disabled for pre-M5 and pre-A19 devices\n", __func__);
                 dev->props.has_tensor = false;
             }
 
@@ -793,6 +838,8 @@ ggml_metal_device_t ggml_metal_device_init(int device) {
             }
 
             dev->props.supports_gpu_family_apple7 = [dev->mtl_device supportsFamily:MTLGPUFamilyApple7];
+
+            dev->props.device_id = ggml_metal_device_id_parse([[dev->mtl_device name] UTF8String]);
 
             dev->props.op_offload_min_batch_size  = getenv("GGML_OP_OFFLOAD_MIN_BATCH") ? atoi(getenv("GGML_OP_OFFLOAD_MIN_BATCH")) : 32;
 
@@ -1735,6 +1782,47 @@ void ggml_metal_buffer_get_tensor(ggml_metal_buffer_t buf, const struct ggml_ten
         [cmd_buf commit];
         [cmd_buf waitUntilCompleted];
     }
+}
+
+bool ggml_metal_buffer_cpy_tensor(ggml_metal_buffer_t buf_dst, const struct ggml_tensor * src, struct ggml_tensor * dst) {
+    ggml_metal_buffer_t buf_src = (ggml_metal_buffer_t)src->buffer->context;
+
+    const size_t size = ggml_nbytes(src);
+
+    // if both buffers are shared, we can use memcpy directly
+    if (buf_dst->is_shared && buf_src->is_shared) {
+        memcpy(dst->data, src->data, size);
+        return true;
+    }
+
+    // for private buffers, we need to use Metal blit commands
+    @autoreleasepool {
+        struct ggml_metal_buffer_id bid_src = ggml_metal_buffer_get_id(buf_src, src);
+        struct ggml_metal_buffer_id bid_dst = ggml_metal_buffer_get_id(buf_dst, dst);
+
+        if (bid_src.metal == nil || bid_dst.metal == nil) {
+            return false;
+        }
+
+        id<MTLCommandBuffer> cmd_buf = [buf_dst->dev->mtl_queue commandBufferWithUnretainedReferences];
+
+        {
+            id<MTLBlitCommandEncoder> encoder = [cmd_buf blitCommandEncoder];
+
+            [encoder copyFromBuffer:bid_src.metal
+                       sourceOffset:bid_src.offs
+                           toBuffer:bid_dst.metal
+                  destinationOffset:bid_dst.offs
+                               size:size];
+
+            [encoder endEncoding];
+        }
+
+        [cmd_buf commit];
+        [cmd_buf waitUntilCompleted];
+    }
+
+    return true;
 }
 
 void ggml_metal_buffer_clear(ggml_metal_buffer_t buf, uint8_t value) {

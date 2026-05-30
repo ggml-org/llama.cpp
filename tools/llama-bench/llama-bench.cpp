@@ -372,7 +372,7 @@ static const cmd_params cmd_params_defaults = {
     /* n_ubatch             */ { 512 },
     /* type_k               */ { GGML_TYPE_F16 },
     /* type_v               */ { GGML_TYPE_F16 },
-    /* n_threads            */ { cpu_get_num_math() },
+    /* n_threads            */ { common_cpu_get_num_math() },
     /* cpu_mask             */ { "0x0" },
     /* cpu_strict           */ { false },
     /* poll                 */ { 50 },
@@ -2136,7 +2136,10 @@ static std::unique_ptr<printer> create_printer(output_formats format) {
     GGML_ABORT("fatal error");
 }
 
-int main(int argc, char ** argv) {
+// satisfies -Wmissing-declarations
+int llama_bench(int argc, char ** argv);
+
+int llama_bench(int argc, char ** argv) {
     std::setlocale(LC_NUMERIC, "C");
     // try to set locale for unicode characters in markdown
     std::setlocale(LC_CTYPE, ".UTF-8");

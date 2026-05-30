@@ -1,0 +1,69 @@
+#version 450
+
+#extension GL_EXT_control_flow_attributes : require
+#extension GL_KHR_shader_subgroup_basic : enable
+#extension GL_KHR_shader_subgroup_shuffle : enable
+
+layout(local_size_x_id = 0, local_size_y = 4, local_size_z = 1) in;
+
+layout(constant_id = 0) const uint WARP_SIZE = 32;
+layout(constant_id = 1) const uint N = 128;
+
+layout(push_constant) uniform parameter
+{
+    uint n_rows;
+    uint src_offset;
+    uint dst_offset;
+    float scale;
+};
+
+layout(binding = 0, std430) readonly buffer A { float data_a[]; };
+layout(binding = 1, std430) writeonly buffer D { float data_d[]; };
+
+const uint EL_W = N / WARP_SIZE;
+
+void main() {
+    const uint lane = gl_SubgroupInvocationID;
+    for (uint row = gl_WorkGroupID.x * gl_WorkGroupSize.y + gl_SubgroupID;
+            row < n_rows;
+            row += gl_NumWorkGroups.x * gl_WorkGroupSize.y) {
+        const uint row_offset = row * N;
+
+        float reg[EL_W];
+
+        [[unroll]]
+        for (uint i = 0; i < EL_W; ++i) {
+            reg[i] = data_a[src_offset + row_offset + i * WARP_SIZE + lane] * scale;
+        }
+
+        [[unroll]]
+        for (uint h = 1; h < WARP_SIZE; h <<= 1) {
+            [[unroll]]
+            for (uint j = 0; j < EL_W; ++j) {
+                const float val = reg[j];
+                const float val2 = subgroupShuffleXor(val, h);
+                reg[j] = (lane & h) == 0 ? val + val2 : val2 - val;
+            }
+        }
+
+        [[unroll]]
+        for (uint h = WARP_SIZE; h < N; h <<= 1) {
+            const uint step = h / WARP_SIZE;
+            [[unroll]]
+            for (uint j = 0; j < EL_W; j += 2 * step) {
+                [[unroll]]
+                for (uint k = 0; k < step; ++k) {
+                    const float x = reg[j + k];
+                    const float y = reg[j + k + step];
+                    reg[j + k] = x + y;
+                    reg[j + k + step] = x - y;
+                }
+            }
+        }
+
+        [[unroll]]
+        for (uint i = 0; i < EL_W; ++i) {
+            data_d[dst_offset + row_offset + i * WARP_SIZE + lane] = reg[i];
+        }
+    }
+}
