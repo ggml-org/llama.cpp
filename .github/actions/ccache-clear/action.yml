@@ -1,0 +1,25 @@
+name: "ccache-clear"
+description: "Keep only the newest cache matching a key prefix, delete the rest"
+inputs:
+  key:
+    description: "Cache key prefix to match and delete"
+    required: true
+
+runs:
+  using: "composite"
+  steps:
+    - name: Clear caches
+      shell: bash
+      run: |
+        # List caches sorted by creation date (newest first), output id and createdAt
+        CACHE_IDS=$(gh cache list --key "${{ inputs.key }}" --sort created_at --order desc --json id --jq '.[].id' 2>/dev/null)
+        COUNT=$(echo "$CACHE_IDS" | grep -c . 2>/dev/null || true)
+        if [ "$COUNT" -le 1 ]; then
+          echo "0 or 1 cache(s) found with key prefix: ${{ inputs.key }} — nothing to delete"
+          exit 0
+        fi
+        # Skip the first (newest) cache, delete the rest
+        echo "$CACHE_IDS" | tail -n +2 | while read -r id; do
+          echo "Deleting cache: $id"
+          gh cache delete "$id"
+        done

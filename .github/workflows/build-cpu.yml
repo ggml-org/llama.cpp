@@ -114,6 +114,11 @@ jobs:
             -DGGML_RPC=ON
           time cmake --build build --config Release -j $(nproc)
 
+      - name: ccache-clear
+        uses: ./.github/actions/ccache-clear
+        with:
+          key: cpu-${{ matrix.os }}
+
       - name: Test
         id: cmake_test
         run: |
