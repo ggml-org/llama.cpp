@@ -11,12 +11,12 @@ runs:
     - name: Clear caches
       shell: bash
       run: |
-        CACHE_IDS=$(gh cache list --key "ccache-${{ inputs.key }}" --json id --jq '.[].id' 2>/dev/null)
-        if [ -z "$CACHE_IDS" ]; then
+        CACHES=$(gh cache list --key "ccache-${{ inputs.key }}" --json id,key --jq '.[] | "\(.id) \(.key)"' 2>/dev/null)
+        if [ -z "$CACHES" ]; then
           echo "No caches found with key prefix: ${{ inputs.key }}"
           exit 0
         fi
-        for id in $CACHE_IDS; do
-          echo "Deleting cache: $id"
+        while read -r id key; do
+          echo "Deleting cache: $id ($key)"
           gh cache delete "$id"
-        done
+        done <<< "$CACHES"
