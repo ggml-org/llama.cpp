@@ -982,6 +982,10 @@ static int execute_op_unary_f32(struct htp_ops_context * octx) {
         octx->dst_spad.data  = octx->src0_spad.data + octx->src0_spad.size;
     }
 
+    octx->src0_spad.src = NULL;
+    octx->src1_spad.src = NULL;
+    octx->dst_spad.src  = NULL;
+
     FARF(HIGH, "%s: (%ux%ux%ux%u) -> (%ux%ux%ux%u) : src0-spad-size %u src1-spad-size %u dst-spad-size %u\n", op_type,
          src0->ne[0], src0->ne[1], src0->ne[2], src0->ne[3], dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3],
          octx->src0_spad.size, octx->src1_spad.size, octx->dst_spad.size);
