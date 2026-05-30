@@ -71,6 +71,9 @@ jobs:
 
     runs-on: ${{ matrix.os }}
 
+    permissions:
+      actions: write
+
     steps:
       - name: Clone
         id: checkout

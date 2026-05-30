@@ -7,8 +7,6 @@ inputs:
 
 runs:
   using: "composite"
-  permissions:
-      actions: write
   steps:
     - name: Clear caches
       shell: bash
