@@ -169,7 +169,7 @@ static std::vector<float> tensor_to_float(const ggml_tensor * t) {
                         tv.push_back(ggml_bf16_to_fp32(*(ggml_bf16_t*)&buf[i]));
                     } else if (t->type == GGML_TYPE_F32) {
                         const float v = *(float *) &buf[i];
-                        if (t->op == GGML_OP_IFAIRY_ADD) {
+                        if (t->op == GGML_OP_IFAIRY_ADD || t->op == GGML_OP_IFAIRY_MUL) {
                             float real;
                             float imag;
                             unpack_ifairy_bf16_pair(v, real, imag);
@@ -2599,7 +2599,10 @@ struct test_bin_bcast : public test_case {
     }
 };
 
-struct test_ifairy_add : public test_case {
+struct test_ifairy_binary : public test_case {
+    using op_t = ggml_tensor * (*) (ggml_context *, ggml_tensor *, ggml_tensor *);
+
+    op_t op;
     const std::array<int64_t, 4> ne;
     const std::array<int, 4> nr;
 
@@ -2613,8 +2616,8 @@ struct test_ifairy_add : public test_case {
         return ggml_nbytes(t) * 3;
     }
 
-    test_ifairy_add(std::array<int64_t, 4> ne = {10, 10, 1, 1}, std::array<int, 4> nr = {1, 1, 1, 1})
-        : ne(ne), nr(nr) {}
+    test_ifairy_binary(op_t op, std::array<int64_t, 4> ne = {10, 10, 1, 1}, std::array<int, 4> nr = {1, 1, 1, 1})
+        : op(op), ne(ne), nr(nr) {}
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         ggml_tensor * a = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, ne[0]*nr[0], ne[1]*nr[1], ne[2]*nr[2], ne[3]*nr[3]);
@@ -2623,7 +2626,7 @@ struct test_ifairy_add : public test_case {
         ggml_tensor * b = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne.data());
         ggml_set_name(b, "b");
 
-        ggml_tensor * out = ggml_ifairy_add(ctx, a, b);
+        ggml_tensor * out = op(ctx, a, b);
         ggml_set_name(out, "out");
 
         return out;
@@ -2653,6 +2656,16 @@ struct test_ifairy_add : public test_case {
     double max_nmse_err() override {
         return 1e-12;
     }
+};
+
+struct test_ifairy_add : public test_ifairy_binary {
+    test_ifairy_add(std::array<int64_t, 4> ne = {10, 10, 1, 1}, std::array<int, 4> nr = {1, 1, 1, 1})
+        : test_ifairy_binary(ggml_ifairy_add, ne, nr) {}
+};
+
+struct test_ifairy_mul : public test_ifairy_binary {
+    test_ifairy_mul(std::array<int64_t, 4> ne = {10, 10, 1, 1}, std::array<int, 4> nr = {1, 1, 1, 1})
+        : test_ifairy_binary(ggml_ifairy_mul, ne, nr) {}
 };
 
 // GGML_OP_ADD_ID
@@ -6157,6 +6170,13 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_ifairy_add({10, 5, 4, 3}, {1, 2, 1, 1}));
     test_cases.emplace_back(new test_ifairy_add({10, 5, 4, 3}, {1, 1, 2, 1}));
     test_cases.emplace_back(new test_ifairy_add({10, 5, 4, 3}, {1, 1, 1, 2}));
+    test_cases.emplace_back(new test_ifairy_mul({1, 1, 8, 1}, {1, 1, 1, 1}));
+    test_cases.emplace_back(new test_ifairy_mul({10, 5, 1, 1}, {1, 1, 1, 1}));
+    test_cases.emplace_back(new test_ifairy_mul({10, 5, 4, 3}, {1, 1, 1, 1}));
+    test_cases.emplace_back(new test_ifairy_mul({10, 5, 4, 3}, {2, 1, 1, 1}));
+    test_cases.emplace_back(new test_ifairy_mul({10, 5, 4, 3}, {1, 2, 1, 1}));
+    test_cases.emplace_back(new test_ifairy_mul({10, 5, 4, 3}, {1, 1, 2, 1}));
+    test_cases.emplace_back(new test_ifairy_mul({10, 5, 4, 3}, {1, 1, 1, 2}));
 
     // single in-place tests, especially important for WebGPU backend since kernels for in-place vs. not are different
     test_cases.emplace_back(new test_bin_bcast(ggml_add_inplace, GGML_TYPE_F32, {16, 5, 4, 3}, {1, 1, 1, 1}, 16));
@@ -6672,6 +6692,11 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
 // Test cases for performance evaluation: should be representative of real-world use cases
 static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
     std::vector<std::unique_ptr<test_case>> test_cases;
+
+    test_cases.emplace_back(new test_ifairy_mul({1048576, 1, 1, 1}, {1, 1, 1, 1}));
+    test_cases.emplace_back(new test_ifairy_mul({1024, 1024, 1, 1}, {1, 1, 1, 1}));
+    test_cases.emplace_back(new test_ifairy_mul({4096, 1024, 1, 1}, {1, 1, 1, 1}));
+    test_cases.emplace_back(new test_ifairy_mul({4096, 1, 1, 1}, {1, 1024, 1, 1}));
 
     // Conv2d: K=CRS=NPQ=4096 matmul performance
     uint32_t                        iwh_idx  = 0;

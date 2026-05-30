@@ -69,6 +69,7 @@ set(GGML_OPENCL_KERNELS
     glu
     group_norm
     ifairy_add
+    ifairy_mul
     im2col_f32
     im2col_f16
     mul_mat_Ab_Bi_8x4
