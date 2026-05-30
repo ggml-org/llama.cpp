@@ -175,8 +175,8 @@ struct clip_ctx {
             throw std::runtime_error("failed to initialize CPU backend");
         }
         if (ctx_params.use_gpu) {
-            if (ctx_params.device && ctx_params.device[0] != '\0') {
-                backend = ggml_backend_init_by_name(ctx_params.device, nullptr);
+            if (ctx_params.device != nullptr) {
+                backend = ggml_backend_dev_init(ctx_params.device, nullptr);
                 if (!backend) {
                     LOG_WRN("%s: Warning: Failed to initialize \"%s\" backend, falling back to default GPU backend\n", __func__, ctx_params.device);
                 }
