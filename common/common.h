@@ -305,7 +305,7 @@ struct common_params_speculative_draft {
     float p_split = 0.1f; // speculative decoding split probability
     float p_min   = 0.0f; // minimum speculative decoding probability (greedy)
 
-    bool backend_sampling = true; // offload draft sampling to the backend (default: on)
+    bool backend_sampling = false; // offload draft sampling to the backend (default: off; enabling has substantial per-sequence compute-buffer cost in MTP draft path that can OOM with --parallel N>1)
 
     common_params_model mparams;
 
