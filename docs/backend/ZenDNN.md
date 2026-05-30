@@ -72,13 +72,13 @@ The ZenDNN backend accelerates **matrix multiplication (MUL_MAT)** and **expert-
 |:----------------------:|:-------:|:---------------------------------------------:|
 | FP32                   | Support | Full precision floating point                 |
 | BF16                   | Support | BFloat16 (best performance on Zen 4/Zen 5)    |
-| Q8_0                   | Support | Quantized 8-bit weights accelerated through ZenDNN MulMat branch |
+| Q8_0                   | Support | 8-bit quantized weights via [dynamic quantization](https://github.com/amd/ZenDNN/blob/main/docs/operator/lowoha_matmul_operator.md) |
 
 *Notes:*
 
 - **BF16** provides best performance on Zen 4 and Zen 5 EPYC™ processors (Genoa, Turin).
 - **Q8_0** support is available for quantized model weights in supported ZenDNN Mul Mat branch.
-- Other quantization formats may fall back to the standard CPU backend unless explicitly supported by the ZenDNN backend.
+- Other quantization formats fall back to the standard CPU backend unless explicitly supported by the ZenDNN backend.
 
 ## Linux
 
