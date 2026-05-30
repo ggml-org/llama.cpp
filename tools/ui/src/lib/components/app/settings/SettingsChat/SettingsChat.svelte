@@ -75,9 +75,13 @@
 	}
 
 	function handleSave() {
-		if (localConfig.custom && typeof localConfig.custom === 'string' && localConfig.custom.trim()) {
+		if (
+			localConfig.customJson &&
+			typeof localConfig.customJson === 'string' &&
+			localConfig.customJson.trim()
+		) {
 			try {
-				JSON.parse(localConfig.custom);
+				JSON.parse(localConfig.customJson);
 			} catch (error) {
 				alert('Invalid JSON in custom parameters. Please check the format and try again.');
 				console.error(error);

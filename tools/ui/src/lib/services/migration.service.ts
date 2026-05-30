@@ -470,11 +470,36 @@ const themeMigration: Migration = {
 
 // Migration Registry & Runner
 
+const CUSTOM_JSON_MIGRATION_ID = 'custom-json-key-v1';
+
+const customJsonKeyMigration: Migration = {
+	id: CUSTOM_JSON_MIGRATION_ID,
+	description: 'Copy legacy custom config key to customJson (non-destructive)',
+
+	async run(): Promise<void> {
+		const configRaw = localStorage.getItem(CONFIG_LOCALSTORAGE_KEY);
+		if (configRaw === null) return;
+
+		const config = JSON.parse(configRaw);
+
+		if (!('custom' in config)) return;
+		if (SETTINGS_KEYS.CUSTOM_JSON in config) return;
+
+		config[SETTINGS_KEYS.CUSTOM_JSON] = config.custom;
+		localStorage.setItem(CONFIG_LOCALSTORAGE_KEY, JSON.stringify(config));
+
+		// Non-destructive: keep the legacy custom key for downgrade compatibility
+		if (import.meta.env.DEV && import.meta.env.VITE_DEBUG)
+			console.log(`[Migration] Custom JSON: copied custom to customJson (preserved old key)`);
+	}
+};
+
 const migrations: Migration[] = [
 	localStorageMigration,
 	idxdbMigration,
 	legacyMessageMigration,
-	themeMigration
+	themeMigration,
+	customJsonKeyMigration
 ];
 
 export const MigrationService = {

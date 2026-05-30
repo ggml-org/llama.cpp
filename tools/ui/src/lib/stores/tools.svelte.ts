@@ -57,7 +57,7 @@ class ToolsStore {
 	}
 
 	get customTools(): OpenAIToolDefinition[] {
-		const raw = config().custom;
+		const raw = config().customJson;
 		if (!raw || typeof raw !== 'string') return [];
 
 		try {

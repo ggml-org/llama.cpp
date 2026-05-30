@@ -90,8 +90,8 @@ export interface SettingsChatServiceOptions {
 	// Sampler configuration
 	samplers?: string | string[];
 	backend_sampling?: boolean;
-	// Custom parameters
-	custom?: string;
+	// Custom JSON parameters
+	customJson?: string;
 	timings_per_token?: boolean;
 	// Continuation control (vLLM compat), opt in to the explicit continue final message flag
 	continueFinalMessage?: boolean;
