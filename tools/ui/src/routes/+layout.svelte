@@ -236,7 +236,9 @@
 </script>
 
 <svelte:head>
-	<style use:customCss></style>
+	{#if config().customCss}
+		<style use:customCss></style>
+	{/if}
 </svelte:head>
 
 <Tooltip.Provider delayDuration={TOOLTIP_DELAY_DURATION}>
