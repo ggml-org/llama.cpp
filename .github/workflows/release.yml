@@ -38,7 +38,7 @@ concurrency:
   queue: max
 
 jobs:
-  check_release:
+  check-release:
     runs-on: ubuntu-slim
 
     outputs:
@@ -60,8 +60,8 @@ jobs:
           fi
 
   macos-cpu:
-    needs: [check_release]
-    if: ${{ needs.check_release.outputs.should_release == 'true' }}
+    needs: [check-release]
+    if: ${{ needs.check-release.outputs.should_release == 'true' }}
     strategy:
       matrix:
         include:
@@ -141,8 +141,8 @@ jobs:
           name: llama-bin-macos-${{ matrix.build }}.tar.gz
 
   ubuntu-cpu:
-    needs: [check_release]
-    if: ${{ needs.check_release.outputs.should_release == 'true' }}
+    needs: [check-release]
+    if: ${{ needs.check-release.outputs.should_release == 'true' }}
     strategy:
       matrix:
         include:
@@ -227,8 +227,8 @@ jobs:
           name: llama-bin-ubuntu-${{ matrix.build }}.tar.gz
 
   ubuntu-vulkan:
-    needs: [check_release]
-    if: ${{ needs.check_release.outputs.should_release == 'true' }}
+    needs: [check-release]
+    if: ${{ needs.check-release.outputs.should_release == 'true' }}
 
     strategy:
       matrix:
@@ -312,8 +312,8 @@ jobs:
           name: llama-bin-ubuntu-vulkan-${{ matrix.build }}.tar.gz
 
   android-arm64:
-    needs: [check_release]
-    if: ${{ needs.check_release.outputs.should_release == 'true' }}
+    needs: [check-release]
+    if: ${{ needs.check-release.outputs.should_release == 'true' }}
 
     runs-on: ubuntu-latest
 
@@ -404,8 +404,8 @@ jobs:
           name: llama-bin-android-arm64.tar.gz
 
   ubuntu-24-openvino:
-    needs: [check_release]
-    if: ${{ needs.check_release.outputs.should_release == 'true' }}
+    needs: [check-release]
+    if: ${{ needs.check-release.outputs.should_release == 'true' }}
 
     runs-on: ubuntu-24.04
 
@@ -501,8 +501,8 @@ jobs:
           name: llama-bin-ubuntu-openvino-${{ env.OPENVINO_VERSION_MAJOR }}-x64.tar.gz
 
   windows-cpu:
-    needs: [check_release]
-    if: ${{ needs.check_release.outputs.should_release == 'true' }}
+    needs: [check-release]
+    if: ${{ needs.check-release.outputs.should_release == 'true' }}
 
     runs-on: windows-2025
 
@@ -569,8 +569,8 @@ jobs:
           name: llama-bin-win-cpu-${{ matrix.arch }}.zip
 
   windows:
-    needs: [check_release]
-    if: ${{ needs.check_release.outputs.should_release == 'true' }}
+    needs: [check-release]
+    if: ${{ needs.check-release.outputs.should_release == 'true' }}
 
     runs-on: windows-2025
 
@@ -667,8 +667,8 @@ jobs:
           name: llama-bin-win-${{ matrix.backend }}-${{ matrix.arch }}.zip
 
   windows-cuda:
-    needs: [check_release]
-    if: ${{ needs.check_release.outputs.should_release == 'true' }}
+    needs: [check-release]
+    if: ${{ needs.check-release.outputs.should_release == 'true' }}
 
     runs-on: windows-2022
 
@@ -959,8 +959,8 @@ jobs:
 #          name: llama-bin-ubuntu-sycl-${{ matrix.build }}-x64.tar.gz
 
   ubuntu-22-rocm:
-    needs: [check_release]
-    if: ${{ needs.check_release.outputs.should_release == 'true' }}
+    needs: [check-release]
+    if: ${{ needs.check-release.outputs.should_release == 'true' }}
 
     runs-on: ubuntu-22.04
 
@@ -1079,8 +1079,8 @@ jobs:
           name: llama-bin-ubuntu-rocm-${{ env.ROCM_VERSION_SHORT }}-${{ matrix.build }}.tar.gz
 
   windows-hip:
-    needs: [check_release]
-    if: ${{ needs.check_release.outputs.should_release == 'true' }}
+    needs: [check-release]
+    if: ${{ needs.check-release.outputs.should_release == 'true' }}
 
     runs-on: windows-2022
 
@@ -1202,11 +1202,9 @@ jobs:
           name: llama-bin-win-hip-${{ matrix.name }}-x64.zip
 
   ios-xcode:
-    needs: [check_release]
-    if: ${{ needs.check_release.outputs.should_release == 'true' }}
-    # TODO: figure out how to make this work with macos-26
-    #       https://github.com/ggml-org/llama.cpp/actions/runs/26652714555/job/78604869474
-    runs-on: macos-15
+    needs: [check-release]
+    if: ${{ needs.check-release.outputs.should_release == 'true' }}
+    runs-on: macos-26
 
     steps:
       - name: Checkout code
@@ -1216,7 +1214,7 @@ jobs:
 
       - name: Setup Xcode
         run: |
-          sudo xcode-select -s /Applications/Xcode_16.4.app
+          sudo xcode-select -s /Applications/Xcode_26.4.app
 
       - name: Build
         id: cmake_build
@@ -1232,7 +1230,7 @@ jobs:
             -DLLAMA_BUILD_TESTS=OFF \
             -DLLAMA_BUILD_SERVER=OFF \
             -DCMAKE_SYSTEM_NAME=iOS \
-            -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0 \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=16.0 \
             -DCMAKE_XCODE_ATTRIBUTE_DEVELOPMENT_TEAM=ggml
           cmake --build build --config Release -j $(sysctl -n hw.logicalcpu) -- CODE_SIGNING_ALLOWED=NO
 
@@ -1354,8 +1352,8 @@ jobs:
 #          name: llama-bin-${{ matrix.chip_type }}-openEuler-${{ matrix.arch }}${{ matrix.use_acl_graph == 'on' && '-aclgraph' || '' }}.tar.gz
 
   ui:
-    needs: [check_release]
-    if: ${{ needs.check_release.outputs.should_release == 'true' }}
+    needs: [check-release]
+    if: ${{ needs.check-release.outputs.should_release == 'true' }}
     uses: ./.github/workflows/ui-build.yml
 
   release:
