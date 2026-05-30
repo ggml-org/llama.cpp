@@ -3137,12 +3137,8 @@ static const char * ggml_backend_cuda_get_name(ggml_backend_t backend) {
     return cuda_ctx->name.c_str();
 }
 
-static void ggml_backend_cuda_free(ggml_backend_t backend) {
-    ggml_backend_cuda_context * cuda_ctx = (ggml_backend_cuda_context *)backend->context;
+static void ggml_backend_cuda_free(ggml_backend_t backend);
 
-    delete cuda_ctx;
-    delete backend;
-}
 
 static void ggml_backend_cuda_set_tensor_async(ggml_backend_t backend, ggml_tensor * tensor, const void * data, size_t offset, size_t size) {
     ggml_backend_cuda_context * cuda_ctx = (ggml_backend_cuda_context *) backend->context;
@@ -4877,11 +4873,22 @@ struct ggml_backend_cuda_device_context {
     std::string description;
     std::string pci_bus_id;
     int op_offload_min_batch_size;
+    std::atomic<int> backend_count{0};
 };
 
 static const char * ggml_backend_cuda_device_get_name(ggml_backend_dev_t dev) {
     ggml_backend_cuda_device_context * ctx = (ggml_backend_cuda_device_context *)dev->context;
     return ctx->name.c_str();
+}
+
+static void ggml_backend_cuda_free(ggml_backend_t backend) {
+    ggml_backend_cuda_context * cuda_ctx = (ggml_backend_cuda_context *)backend->context;
+
+    ggml_backend_cuda_device_context * dev_ctx = (ggml_backend_cuda_device_context *) backend->device->context;
+    dev_ctx->backend_count.fetch_sub(1, std::memory_order_relaxed);
+
+    delete cuda_ctx;
+    delete backend;
 }
 
 static const char * ggml_backend_cuda_device_get_description(ggml_backend_dev_t dev) {
@@ -4993,6 +5000,11 @@ static void ggml_backend_cuda_device_get_memory(ggml_backend_dev_t dev, size_t *
     }
 #endif // defined(__linux__)
 
+    // If no backends are active, the cudaMemGetInfo call above lazily created a CUDA context
+    // that permanently consumes VRAM. Reset the device to free it.
+    if (ctx->backend_count.load(std::memory_order_relaxed) == 0) {
+        cudaDeviceReset();
+    }
 }
 
 static enum ggml_backend_dev_type ggml_backend_cuda_device_get_type(ggml_backend_dev_t dev) {
@@ -5687,12 +5699,17 @@ ggml_backend_t ggml_backend_cuda_init(int device) {
         return nullptr;
     }
 
+    ggml_backend_dev_t dev = ggml_backend_reg_dev_get(ggml_backend_cuda_reg(), device);
+
     ggml_backend_t cuda_backend = new ggml_backend {
         /* .guid    = */ ggml_backend_cuda_guid(),
         /* .iface   = */ ggml_backend_cuda_interface,
-        /* .device  = */ ggml_backend_reg_dev_get(ggml_backend_cuda_reg(), device),
+        /* .device  = */ dev,
         /* .context = */ ctx,
     };
+
+    ggml_backend_cuda_device_context * dev_ctx = (ggml_backend_cuda_device_context *) dev->context;
+    dev_ctx->backend_count.fetch_add(1, std::memory_order_relaxed);
 
     return cuda_backend;
 }

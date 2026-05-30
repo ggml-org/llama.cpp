@@ -98,6 +98,7 @@
 #define cudaMemsetAsync hipMemsetAsync
 #define cudaMemGetInfo hipMemGetInfo
 #define cudaOccupancyMaxPotentialBlockSize hipOccupancyMaxPotentialBlockSize
+#define cudaDeviceReset hipDeviceReset
 #define cudaSetDevice hipSetDevice
 #define cuDeviceGet hipDeviceGet
 #define CUdevice hipDevice_t
