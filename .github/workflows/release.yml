@@ -1134,7 +1134,9 @@ jobs:
   ios-xcode-build:
     needs: [check_release]
     if: ${{ needs.check_release.outputs.should_release == 'true' }}
-    runs-on: macos-26
+    # TODO: figure out how to make this work with macos-26
+    #       https://github.com/ggml-org/llama.cpp/actions/runs/26652714555/job/78604869474
+    runs-on: macos-15
 
     steps:
       - name: Checkout code
