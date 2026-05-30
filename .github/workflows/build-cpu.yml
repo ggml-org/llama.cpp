@@ -50,7 +50,6 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  GH_TOKEN: ${{ github.token }}
   GGML_NLOOP: 3
   GGML_N_THREADS: 1
   LLAMA_ARG_LOG_COLORS: 1
@@ -71,9 +70,6 @@ jobs:
             os: ubuntu-24.04-arm
 
     runs-on: ${{ matrix.os }}
-
-    permissions:
-      actions: write
 
     steps:
       - name: Clone
@@ -118,11 +114,6 @@ jobs:
             -DGGML_RPC=ON
           time cmake --build build --config Release -j $(nproc)
 
-      - name: ccache-clear
-        uses: ./.github/actions/ccache-clear
-        with:
-          key: cpu-${{ matrix.os }}
-
       - name: Test
         id: cmake_test
         run: |
@@ -142,6 +133,9 @@ jobs:
 
   windows:
     runs-on: windows-2025
+
+    permissions:
+      actions: write
 
     env:
       OPENBLAS_VERSION: 0.3.23
@@ -210,6 +204,11 @@ jobs:
           cmake -S . -B build ${{ matrix.defines }} `
             -DLLAMA_BUILD_BORINGSSL=ON
           cmake --build build --config Release -j ${env:NUMBER_OF_PROCESSORS}
+
+      - name: ccache-clear
+        uses: ./.github/actions/ccache-clear
+        with:
+          key: cpu-windows-2025-${{ matrix.build }}
 
       - name: Add libopenblas.dll
         id: add_libopenblas_dll
