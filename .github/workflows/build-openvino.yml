@@ -35,7 +35,7 @@ env:
 
 jobs:
   ubuntu-24-openvino:
-    runs-on: '["self-hosted","Linux","Intel","OpenVINO"]'
+    runs-on: [self-hosted, Linux, Intel, OpenVINO]
 
     concurrency:
       group: openvino-gpu-${{ github.head_ref || github.ref }}

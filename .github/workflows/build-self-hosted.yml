@@ -298,7 +298,7 @@ jobs:
           GG_BUILD_OPENVINO=1 GGML_OPENVINO_DEVICE=GPU GG_BUILD_LOW_PERF=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
 
   cpu-x64-high-perf:
-    runs-on: [self-hosted, CPU, X64]
+    runs-on: [self-hosted, X64]
 
     steps:
       - name: Clone
