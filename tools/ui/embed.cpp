@@ -9,6 +9,7 @@
 #include <fstream>
 #include <string>
 #include <vector>
+#include <cinttypes>
 #include <cstdint>
 
 // Computes FNV-1a hash of the data
@@ -126,10 +127,10 @@ int main(int argc, char ** argv) {
             append_bytes_hex(cpp, bytes);
             const auto hash = fnv_hash(bytes.data(), bytes.size());
 
-            cpp += fmt("};\nstatic const size_t        asset_%d_size = %lu;\n",
-                       i, static_cast<unsigned long>(bytes.size()));
-            cpp += fmt("static const char        asset_%d_etag[] = \"\\\"0x%016lx\\\"\";\n\n",
-                       i, static_cast<unsigned long>(hash));
+            cpp += fmt("};\nstatic const size_t        asset_%d_size = %zu;\n",
+                       i, bytes.size());
+            cpp += fmt("static const char        asset_%d_etag[] = \"\\\"0x%016" PRIx64 "\\\"\";\n\n",
+                       i, hash);
         }
 
         cpp += "static const llama_ui_asset g_assets[] = {\n";
