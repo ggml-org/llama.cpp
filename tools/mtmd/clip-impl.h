@@ -295,6 +295,17 @@
 #define TN_YASA_STAGE_DOWN_CONV  "v.stage.%d.down.conv.%s"
 #define TN_YASA_STAGE_BLK        "v.stage.%d.blk.%d.%s.%s"
 
+// MiMo-V2.5-ASR
+#define TN_MIMO_ENC_CODEBOOK      "a.codebook.%d"
+#define TN_MIMO_ENC_EMBD_1        "a.enc_embd_1.%d.weight"
+#define TN_MIMO_ENC_ATTN_NORM_1   "a.blk.%d.attn_norm_1.%s"
+#define TN_MIMO_ENC_ATTN_Q_1      "a.blk.%d.attn_q_1.%s"
+#define TN_MIMO_ENC_ATTN_K_1      "a.blk.%d.attn_k_1.%s"
+#define TN_MIMO_ENC_ATTN_V_1      "a.blk.%d.attn_v_1.%s"
+#define TN_MIMO_ENC_ATTN_OUT_1    "a.blk.%d.attn_out_1.%s"
+#define TN_MIMO_ENC_OUT_NORM_1    "a.enc_out_norm_1.%s"
+#define TN_MIMO_ENC_FFN_GATE_1    "a.blk.%d.ffn_gate_1.%s"
+
 // align x to upper multiple of n
 #define CLIP_ALIGN(x, n) ((((x) + (n) - 1) / (n)) * (n))
 
@@ -350,6 +361,7 @@ enum projector_type {
     PROJECTOR_TYPE_MINICPMV4_6,
     PROJECTOR_TYPE_GRANITE_SPEECH,
     PROJECTOR_TYPE_MIMOVL,
+    PROJECTOR_TYPE_MIMO_V2_ASR,
     PROJECTOR_TYPE_UNKNOWN,
 };
 
@@ -400,6 +412,7 @@ static std::map<projector_type, std::string> PROJECTOR_TYPE_NAMES = {
     { PROJECTOR_TYPE_MINICPMV4_6, "minicpmv4_6"},
     { PROJECTOR_TYPE_GRANITE_SPEECH, "granite_speech"},
     { PROJECTOR_TYPE_MIMOVL,     "mimovl"},
+    { PROJECTOR_TYPE_MIMO_V2_ASR, "mimo_v2_asr" },
 };
 
 static projector_type clip_projector_type_from_string(const std::string & str) {
