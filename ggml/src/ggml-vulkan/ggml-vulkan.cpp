@@ -65,6 +65,7 @@ typedef struct VkPhysicalDeviceCooperativeMatrixDecodeVectorFeaturesNV {
 #include <mutex>
 #include <future>
 #include <thread>
+#include <regex>
 
 #if defined(_MSC_VER)
 # define NOMINMAX 1
@@ -652,6 +653,7 @@ struct vk_device_struct {
     bool subgroup_ballot;
     bool subgroup_clustered;
     bool subgroup_vote;
+    bool subgroups_gcn_enabled;
     bool multi_add;
     bool shader_int64;
     bool buffer_device_address;
@@ -2885,6 +2887,8 @@ static vk_buffer ggml_vk_create_buffer(vk_device& device, size_t size, const std
 
     vk::PhysicalDeviceMemoryProperties mem_props = device->physical_device.getMemoryProperties();
 
+    uint32_t selected_memory_type_idx = UINT32_MAX;
+
     const vk::MemoryPriorityAllocateInfoEXT mem_priority_info { 1.0f };
 
     vk::MemoryAllocateFlagsInfo mem_flags_info { mem_flags };
@@ -2927,6 +2931,7 @@ static vk_buffer ggml_vk_create_buffer(vk_device& device, size_t size, const std
             return {};
         }
 
+        selected_memory_type_idx = memory_type_idx;
         buf->memory_property_flags = mem_props.memoryTypes[memory_type_idx].propertyFlags;
         try {
             vk::ImportMemoryHostPointerInfoEXT import_info;
@@ -2945,13 +2950,14 @@ static vk_buffer ggml_vk_create_buffer(vk_device& device, size_t size, const std
             if (memory_type_indices.empty()) {
                 continue;
             }
-            buf->memory_property_flags = req_flags;
 
             bool done = false;
 
             for (auto mtype_it = memory_type_indices.begin(); mtype_it != memory_type_indices.end(); mtype_it++) {
                 try {
                     buf->device_memory = device->device.allocateMemory({ mem_req.size, *mtype_it, &mem_flags_info });
+                    buf->memory_property_flags = mem_props.memoryTypes[*mtype_it].propertyFlags;
+                    selected_memory_type_idx = *mtype_it;
                     done = true;
                     break;
                 } catch (const vk::SystemError& e) {
@@ -2963,7 +2969,6 @@ static vk_buffer ggml_vk_create_buffer(vk_device& device, size_t size, const std
                     }
                 }
             }
-
             if (done) {
                 break;
             }
@@ -2995,6 +3000,14 @@ static vk_buffer ggml_vk_create_buffer(vk_device& device, size_t size, const std
         buf->bda_addr = device->device.getBufferAddress(addressInfo);
     }
 
+    if (selected_memory_type_idx != UINT32_MAX) {
+        GGML_LOG_DEBUG("ggml_vulkan: Allocated buffer of size %zu using memory type %u flags %s (import=%d)\n",
+                size,
+                (unsigned) selected_memory_type_idx,
+                to_string(buf->memory_property_flags).c_str(),
+                import_ptr ? 1 : 0);
+    }
+
     device->memory_logger->log_allocation(buf, size);
 
     return buf;
@@ -3017,8 +3030,10 @@ static vk_buffer ggml_vk_create_buffer_device(vk_device& device, size_t size) {
             buf = ggml_vk_create_buffer(device, size, {vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,
                                                        vk::MemoryPropertyFlagBits::eDeviceLocal});
         } else if (device->uma) {
-            // Fall back to host memory type
-            buf = ggml_vk_create_buffer(device, size, {vk::MemoryPropertyFlagBits::eDeviceLocal,
+            // On UMA, prefer host-visible memory so direct tensor borrowing works.
+            // If unavailable, fall back to device-local memory.
+            buf = ggml_vk_create_buffer(device, size, {vk::MemoryPropertyFlagBits::eDeviceLocal | vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,
+                                                       vk::MemoryPropertyFlagBits::eDeviceLocal,
                                                        vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent});
         } else if (device->disable_host_visible_vidmem) {
             if (device->allow_sysmem_fallback) {
@@ -4520,7 +4535,7 @@ static void ggml_vk_load_shaders(vk_device& device) {
     }
     uint32_t rm_iq = 2 * rm_kq;
 
-    const bool use_subgroups = device->subgroup_arithmetic && device->architecture != vk_device_architecture::AMD_GCN;
+    const bool use_subgroups = device->subgroup_arithmetic && (device->architecture != vk_device_architecture::AMD_GCN || device->subgroups_gcn_enabled);
     // Ensure a subgroup size >= 16 is available
     const bool use_subgroups16 = use_subgroups && subgroup_min_size_16;
 
@@ -4602,7 +4617,9 @@ static void ggml_vk_load_shaders(vk_device& device) {
                 const uint32_t subgroup_size_int = (device->vendor_id == VK_VENDOR_ID_INTEL && device->subgroup_size_control) ? device->subgroup_min_size : device->subgroup_size;
                 const uint32_t wg_size_subgroup_int = (w == DMMV_WG_SIZE_SUBGROUP) ? subgroup_size_int : (subgroup_size_int * 4);
 
-                ggml_vk_create_pipeline(device, device->pipeline_dequant_mul_mat_vec_q8_1_f32[w][GGML_TYPE_Q4_0][i], "mul_mat_vec_q4_0_q8_1_f32", arr_dmmv_q4_0_q8_1_f32_len[reduc], arr_dmmv_q4_0_q8_1_f32_data[reduc], "main", mul_mat_vec_num_bindings, sizeof(vk_mat_vec_push_constants), {1*rm_stdq_int, 1, 1}, {wg_size_subgroup_int, 1*rm_stdq_int, i+1}, 1, true, use_subgroups, subgroup_size_int);
+                const auto * mmv_q4_0_q8_1_f32_len = device->fp16 ? arr_dmmv_q4_0_q8_1_f16_f32_len : arr_dmmv_q4_0_q8_1_f32_len;
+                const auto * mmv_q4_0_q8_1_f32_data = device->fp16 ? arr_dmmv_q4_0_q8_1_f16_f32_data : arr_dmmv_q4_0_q8_1_f32_data;
+                ggml_vk_create_pipeline(device, device->pipeline_dequant_mul_mat_vec_q8_1_f32[w][GGML_TYPE_Q4_0][i], "mul_mat_vec_q4_0_q8_1_f32", mmv_q4_0_q8_1_f32_len[reduc], mmv_q4_0_q8_1_f32_data[reduc], "main", mul_mat_vec_num_bindings, sizeof(vk_mat_vec_push_constants), {1*rm_stdq_int, 1, 1}, {wg_size_subgroup_int, 1*rm_stdq_int, i+1}, 1, true, use_subgroups, subgroup_size_int);
                 ggml_vk_create_pipeline(device, device->pipeline_dequant_mul_mat_vec_q8_1_f32[w][GGML_TYPE_Q4_1][i], "mul_mat_vec_q4_1_q8_1_f32", arr_dmmv_q4_1_q8_1_f32_len[reduc], arr_dmmv_q4_1_q8_1_f32_data[reduc], "main", mul_mat_vec_num_bindings, sizeof(vk_mat_vec_push_constants), {1*rm_stdq_int, 1, 1}, {wg_size_subgroup_int, 1*rm_stdq_int, i+1}, 1, true, use_subgroups, subgroup_size_int);
                 ggml_vk_create_pipeline(device, device->pipeline_dequant_mul_mat_vec_q8_1_f32[w][GGML_TYPE_Q5_0][i], "mul_mat_vec_q5_0_q8_1_f32", arr_dmmv_q5_0_q8_1_f32_len[reduc], arr_dmmv_q5_0_q8_1_f32_data[reduc], "main", mul_mat_vec_num_bindings, sizeof(vk_mat_vec_push_constants), {1*rm_stdq_int, 1, 1}, {wg_size_subgroup_int, 1*rm_stdq_int, i+1}, 1, true, use_subgroups, subgroup_size_int);
                 ggml_vk_create_pipeline(device, device->pipeline_dequant_mul_mat_vec_q8_1_f32[w][GGML_TYPE_Q5_1][i], "mul_mat_vec_q5_1_q8_1_f32", arr_dmmv_q5_1_q8_1_f32_len[reduc], arr_dmmv_q5_1_q8_1_f32_data[reduc], "main", mul_mat_vec_num_bindings, sizeof(vk_mat_vec_push_constants), {1*rm_stdq_int, 1, 1}, {wg_size_subgroup_int, 1*rm_stdq_int, i+1}, 1, true, use_subgroups, subgroup_size_int);
@@ -4654,7 +4671,9 @@ static void ggml_vk_load_shaders(vk_device& device) {
             const uint32_t subgroup_size_int = (device->vendor_id == VK_VENDOR_ID_INTEL && device->subgroup_size_control) ? device->subgroup_min_size : device->subgroup_size;
             const uint32_t wg_size_subgroup_int = (w == DMMV_WG_SIZE_SUBGROUP) ? subgroup_size_int : (subgroup_size_int * 4);
 
-            ggml_vk_create_pipeline(device, device->pipeline_dequant_mul_mat_vec_id_q8_1_f32[w][GGML_TYPE_Q4_0], "mul_mat_vec_id_q4_0_q8_1_f32", arr_dmmv_id_q4_0_q8_1_f32_len[reduc], arr_dmmv_id_q4_0_q8_1_f32_data[reduc], "main", mul_mat_vec_id_num_bindings, sizeof(vk_mat_vec_id_push_constants), {1*rm_stdq_int, 1, 1}, {wg_size_subgroup_int, 1*rm_stdq_int}, 1, true, use_subgroups, subgroup_size_int);
+            const auto * mmv_id_q4_0_q8_1_f32_len = device->fp16 ? arr_dmmv_id_q4_0_q8_1_f16_f32_len : arr_dmmv_id_q4_0_q8_1_f32_len;
+            const auto * mmv_id_q4_0_q8_1_f32_data = device->fp16 ? arr_dmmv_id_q4_0_q8_1_f16_f32_data : arr_dmmv_id_q4_0_q8_1_f32_data;
+            ggml_vk_create_pipeline(device, device->pipeline_dequant_mul_mat_vec_id_q8_1_f32[w][GGML_TYPE_Q4_0], "mul_mat_vec_id_q4_0_q8_1_f32", mmv_id_q4_0_q8_1_f32_len[reduc], mmv_id_q4_0_q8_1_f32_data[reduc], "main", mul_mat_vec_id_num_bindings, sizeof(vk_mat_vec_id_push_constants), {1*rm_stdq_int, 1, 1}, {wg_size_subgroup_int, 1*rm_stdq_int}, 1, true, use_subgroups, subgroup_size_int);
             ggml_vk_create_pipeline(device, device->pipeline_dequant_mul_mat_vec_id_q8_1_f32[w][GGML_TYPE_Q4_1], "mul_mat_vec_id_q4_1_q8_1_f32", arr_dmmv_id_q4_1_q8_1_f32_len[reduc], arr_dmmv_id_q4_1_q8_1_f32_data[reduc], "main", mul_mat_vec_id_num_bindings, sizeof(vk_mat_vec_id_push_constants), {1*rm_stdq_int, 1, 1}, {wg_size_subgroup_int, 1*rm_stdq_int}, 1, true, use_subgroups, subgroup_size_int);
             ggml_vk_create_pipeline(device, device->pipeline_dequant_mul_mat_vec_id_q8_1_f32[w][GGML_TYPE_Q5_0], "mul_mat_vec_id_q5_0_q8_1_f32", arr_dmmv_id_q5_0_q8_1_f32_len[reduc], arr_dmmv_id_q5_0_q8_1_f32_data[reduc], "main", mul_mat_vec_id_num_bindings, sizeof(vk_mat_vec_id_push_constants), {1*rm_stdq_int, 1, 1}, {wg_size_subgroup_int, 1*rm_stdq_int}, 1, true, use_subgroups, subgroup_size_int);
             ggml_vk_create_pipeline(device, device->pipeline_dequant_mul_mat_vec_id_q8_1_f32[w][GGML_TYPE_Q5_1], "mul_mat_vec_id_q5_1_q8_1_f32", arr_dmmv_id_q5_1_q8_1_f32_len[reduc], arr_dmmv_id_q5_1_q8_1_f32_data[reduc], "main", mul_mat_vec_id_num_bindings, sizeof(vk_mat_vec_id_push_constants), {1*rm_stdq_int, 1, 1}, {wg_size_subgroup_int, 1*rm_stdq_int}, 1, true, use_subgroups, subgroup_size_int);
@@ -5519,6 +5538,15 @@ static vk_device ggml_vk_get_device(size_t idx) {
         if (!device->support_async) {
             GGML_LOG_DEBUG("ggml_vulkan: WARNING: Async execution disabled on certain Intel devices.\n");
         }
+
+        // Enable subgroup operations on AMD GCN 5.0/5.1 GPUs
+        static const std::regex s_gcn_regex("^.*(Radeon.*(VII|Vega)|Instinct.*MI(25|50|60)).*$");
+        device->subgroups_gcn_enabled = (device->vendor_id == VK_VENDOR_ID_AMD &&
+                                         std::regex_match(std::string(device->properties.deviceName.data()), s_gcn_regex));
+        if (device->subgroups_gcn_enabled) {
+            GGML_LOG_DEBUG("ggml_vulkan: subgroup operations enabled on AMD GCN GPU: %s\n", device->properties.deviceName.data());
+        }
+
 
         const char* GGML_VK_FORCE_MAX_ALLOCATION_SIZE = getenv("GGML_VK_FORCE_MAX_ALLOCATION_SIZE");
 
@@ -7446,14 +7474,46 @@ static bool ggml_vk_buffer_write_async(vk_context subctx, vk_buffer& dst, size_t
     return ggml_vk_buffer_write_2d_async(subctx, dst, offset, src, size, size, size, 1, sync_staging);
 }
 
+static bool ggml_vk_buffer_host_write_direct(const vk_buffer & buf) {
+    if (!(buf->memory_property_flags & vk::MemoryPropertyFlagBits::eHostVisible)) {
+        return false;
+    }
+    if (buf->memory_property_flags & vk::MemoryPropertyFlagBits::eHostCoherent) {
+        return true;
+    }
+    return buf->device->uma && (buf->memory_property_flags & vk::MemoryPropertyFlagBits::eHostCached);
+}
+
+static bool ggml_vk_buffer_host_read_direct(const vk_buffer & buf) {
+    if (!(buf->device->uma && (buf->memory_property_flags & vk::MemoryPropertyFlagBits::eHostVisible))) {
+        return false;
+    }
+    if (buf->memory_property_flags & vk::MemoryPropertyFlagBits::eHostCoherent) {
+        return true;
+    }
+    return static_cast<bool>(buf->memory_property_flags & vk::MemoryPropertyFlagBits::eHostCached);
+}
+
 static void ggml_vk_buffer_write_2d(vk_buffer& dst, size_t offset, const void * src, size_t spitch, size_t dpitch, size_t width, size_t height) {
     VK_LOG_DEBUG("ggml_vk_buffer_write_2d(" << width << ", " << height << ")");
     // Buffer is already mapped
-    if(dst->memory_property_flags & vk::MemoryPropertyFlagBits::eHostVisible) {
-        GGML_ASSERT(dst->memory_property_flags & vk::MemoryPropertyFlagBits::eHostCoherent);
-
+    if (ggml_vk_buffer_host_write_direct(dst)) {
         for (size_t i = 0; i < height; i++) {
             memcpy((uint8_t *)dst->ptr + offset + i * dpitch, (const uint8_t *) src + i * spitch, width);
+        }
+        if (!(dst->memory_property_flags & vk::MemoryPropertyFlagBits::eHostCoherent)) {
+            uint64_t atom_size = dst->device->properties.limits.nonCoherentAtomSize;
+            uint64_t aligned_offset = offset & ~(atom_size - 1);
+            uint64_t end_offset = (offset + (uint64_t)dpitch * height + atom_size - 1) & ~(atom_size - 1);
+            uint64_t aligned_size = end_offset - aligned_offset;
+            if (aligned_offset + aligned_size > dst->size) {
+                aligned_size = VK_WHOLE_SIZE;
+            }
+            vk::MappedMemoryRange range;
+            range.memory = dst->device_memory;
+            range.offset = aligned_offset;
+            range.size = aligned_size;
+            dst->device->device.flushMappedMemoryRanges({range});
         }
     } else {
         std::lock_guard<std::recursive_mutex> guard(dst->device->mutex);
@@ -7569,9 +7629,21 @@ static void ggml_vk_buffer_read_2d(vk_buffer& src, size_t offset, void * dst, si
     // If the device is not an UMA device the memory is host-accessible through rebar. While writing
     // through PCIe is sufficient fast reading back data from PCIe is slower than going through
     // the HW device to host copy path.
-    if(src->memory_property_flags & vk::MemoryPropertyFlagBits::eHostVisible && src->device->uma) {
-        GGML_ASSERT(src->memory_property_flags & vk::MemoryPropertyFlagBits::eHostCoherent);
-
+    if (ggml_vk_buffer_host_read_direct(src)) {
+        if (!(src->memory_property_flags & vk::MemoryPropertyFlagBits::eHostCoherent)) {
+            uint64_t atom_size = src->device->properties.limits.nonCoherentAtomSize;
+            uint64_t aligned_offset = offset & ~(atom_size - 1);
+            uint64_t end_offset = (offset + (uint64_t)spitch * height + atom_size - 1) & ~(atom_size - 1);
+            uint64_t aligned_size = end_offset - aligned_offset;
+            if (aligned_offset + aligned_size > src->size) {
+                aligned_size = VK_WHOLE_SIZE;
+            }
+            vk::MappedMemoryRange range;
+            range.memory = src->device_memory;
+            range.offset = aligned_offset;
+            range.size = aligned_size;
+            src->device->device.invalidateMappedMemoryRanges({range});
+        }
         for (size_t i = 0; i < height; i++) {
             memcpy((uint8_t *) dst + i * dpitch, (const uint8_t *) src->ptr + offset + i * spitch, width);
         }
