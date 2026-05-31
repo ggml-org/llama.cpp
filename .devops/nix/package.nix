@@ -150,24 +150,14 @@ effectiveStdenv.mkDerivation (finalAttrs: {
       inherit nodejs;
     };
 
-    buildPhase = ''
-      runHook preBuild
-      npm run build --offline
-      runHook postBuild
-    '';
-
     installPhase = ''
-      runHook preInstall
-      mkdir -p $out
-      cp -r dist/. $out/
-      runHook postInstall
+      LLAMA_UI_OUT_DIR=$out npm run build --offline
     '';
   };
 
   postPatch = lib.optionalString useWebUi ''
-    mkdir -p build/tools/ui
-    cp -r ${finalAttrs.webui} build/tools/ui/dist
-    chmod -R u+w build/tools/ui/dist
+    cp -r ${finalAttrs.webui} tools/ui/dist
+    chmod -R u+w tools/ui/dist
   '';
 
   # With PR#6015 https://github.com/ggml-org/llama.cpp/pull/6015,
