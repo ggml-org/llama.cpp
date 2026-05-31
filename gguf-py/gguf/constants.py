@@ -367,7 +367,6 @@ class Keys:
         BETA                = "xielu.beta"
         EPS                 = "xielu.eps"
 
-
 #
 # recommended mapping of model tensor names for storage in gguf
 #
@@ -509,7 +508,6 @@ class MODEL_ARCH(IntEnum):
     MAINCODER        = auto()
     KIMI_LINEAR      = auto()
     TALKIE           = auto()
-
 
 class VISION_PROJECTOR_TYPE(IntEnum):
     MLP       = auto()
@@ -845,12 +843,12 @@ class MODEL_TENSOR(IntEnum):
     A_ENC_FFN_SCALE       = auto() # gemma3n
     A_ENC_FFN_GATE        = auto()
     A_ENC_FFN_DOWN        = auto()
-    A_ENC_FFN_UP_1        = auto() # lfm2, gemma3n
-    A_ENC_FFN_NORM_1      = auto() # lfm2, gemma3n (pre-norm)
+    A_ENC_FFN_UP_1        = auto() # lfm2, gemma3n, MiMo-V2.5-ASR
+    A_ENC_FFN_NORM_1      = auto() # lfm2, gemma3n (pre-norm), MiMo-V2.5-ASR
     A_ENC_FFN_POST_NORM_1 = auto() # gemma3n
     A_ENC_FFN_SCALE_1     = auto() # gemma3n
-    A_ENC_FFN_GATE_1      = auto() # lfm2, gemma3n
-    A_ENC_FFN_DOWN_1      = auto() # lfm2, gemma3n
+    A_ENC_FFN_GATE_1      = auto() # lfm2, gemma3n, MiMo-V2.5-ASR
+    A_ENC_FFN_DOWN_1      = auto() # lfm2, gemma3n, MiMo-V2.5-ASR
     A_MMPROJ              = auto()
     A_MMPROJ_FC           = auto()
     A_MM_NORM_PRE         = auto()
@@ -861,6 +859,14 @@ class MODEL_TENSOR(IntEnum):
     A_MM_INP_PROJ         = auto() # gemma3n
     A_PER_DIM_K_SCALE     = auto() # gemma4
     A_PER_DIM_SCALE       = auto() # gemma4
+    A_ENC_CODEBOOK        = auto() # MiMo-V2.5-ASR
+    A_ENC_EMBD_1          = auto() # MiMo-V2.5-ASR
+    A_ENC_ATTN_NORM_1     = auto() # MiMo-V2.5-ASR
+    A_ENC_ATTN_Q_1        = auto() # MiMo-V2.5-ASR
+    A_ENC_ATTN_K_1        = auto() # MiMo-V2.5-ASR
+    A_ENC_ATTN_V_1        = auto() # MiMo-V2.5-ASR
+    A_ENC_ATTN_OUT_1      = auto() # MiMo-V2.5-ASR
+    A_ENC_OUTPUT_NORM_1   = auto() # MiMo-V2.5-ASR
     # nextn/mtp
     NEXTN_EH_PROJ        = auto()
     NEXTN_EMBED_TOKENS   = auto()
@@ -1380,6 +1386,14 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.A_MM_HARD_EMB_NORM:        "mm.a.hard_emb_norm",         # gemma3n
     MODEL_TENSOR.A_PER_DIM_K_SCALE:         "a.blk.{bid}.per_dim_k_scale", # gemma4
     MODEL_TENSOR.A_PER_DIM_SCALE:           "a.blk.{bid}.per_dim_scale",   # gemma4
+    MODEL_TENSOR.A_ENC_CODEBOOK:            "a.codebook.{bid}",            # MiMo-V2.5-ASR
+    MODEL_TENSOR.A_ENC_EMBD_1:              "a.enc_embd_1.{bid}",          # MiMo-V2.5-ASR
+    MODEL_TENSOR.A_ENC_ATTN_NORM_1:         "a.blk.{bid}.attn_norm_1",     # MiMo-V2.5-ASR
+    MODEL_TENSOR.A_ENC_ATTN_Q_1:            "a.blk.{bid}.attn_q_1",        # MiMo-V2.5-ASR
+    MODEL_TENSOR.A_ENC_ATTN_K_1:            "a.blk.{bid}.attn_k_1",        # MiMo-V2.5-ASR
+    MODEL_TENSOR.A_ENC_ATTN_V_1:            "a.blk.{bid}.attn_v_1",        # MiMo-V2.5-ASR
+    MODEL_TENSOR.A_ENC_ATTN_OUT_1:          "a.blk.{bid}.attn_out_1",      # MiMo-V2.5-ASR
+    MODEL_TENSOR.A_ENC_OUTPUT_NORM_1:       "a.enc_out_norm_1",            # MiMo-V2.5-ASR
     # lfm2 audio
     MODEL_TENSOR.A_ENC_NORM_CONV:           "a.blk.{bid}.norm_conv",
     MODEL_TENSOR.A_ENC_LINEAR_POS:          "a.blk.{bid}.linear_pos",
@@ -1549,6 +1563,13 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.A_ENC_FFN_UP_1,
         MODEL_TENSOR.A_ENC_FFN_GATE_1,
         MODEL_TENSOR.A_ENC_FFN_DOWN_1,
+        MODEL_TENSOR.A_ENC_EMBD_1,
+        MODEL_TENSOR.A_ENC_ATTN_NORM_1,
+        MODEL_TENSOR.A_ENC_ATTN_Q_1,
+        MODEL_TENSOR.A_ENC_ATTN_K_1,
+        MODEL_TENSOR.A_ENC_ATTN_V_1,
+        MODEL_TENSOR.A_ENC_ATTN_OUT_1,
+        MODEL_TENSOR.A_ENC_OUTPUT_NORM_1,
         MODEL_TENSOR.A_MMPROJ,
         MODEL_TENSOR.A_MMPROJ_FC,
         MODEL_TENSOR.A_MM_NORM_PRE,
@@ -1571,6 +1592,7 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.A_CTC_OUT,
         MODEL_TENSOR.A_CTC_OUT_MID,
         MODEL_TENSOR.A_ENC_ATTN_REL_POS_EMB,
+        MODEL_TENSOR.A_ENC_CODEBOOK,
         # qformer projector
         MODEL_TENSOR.A_QF_PROJ_QUERY,
         MODEL_TENSOR.A_QF_PROJ_NORM,
@@ -4145,6 +4167,7 @@ MODEL_TENSOR_SKIP: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.ROPE_FREQS,
         MODEL_TENSOR.ATTN_ROT_EMBD,
     ],
+    
 }
 
 #
@@ -4347,6 +4370,7 @@ class VisionProjectorType:
     MINICPMV4_6    = "minicpmv4_6"
     GRANITE_SPEECH = "granite_speech"  # audio
     MIMOVL         = "mimovl"
+    MIMO_V2_ASR    = "mimo_v2_asr"
 
 
 # Items here are (block size, type size)
