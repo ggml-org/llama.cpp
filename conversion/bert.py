@@ -571,7 +571,16 @@ class JinaBertV2Model(BertModel):
         if tokenizer_class == 'BertTokenizer':
             super().set_vocab()
         elif tokenizer_class == 'RobertaTokenizer':
-            self._set_vocab_gpt2()
+            pre_tokenizer_type = None
+            tokenizer_json_path = self.dir_model / "tokenizer.json"
+            if tokenizer_json_path.is_file():
+                with open(tokenizer_json_path, "r", encoding="utf-8") as f:
+                    pre_tokenizer_type = json.load(f).get("pre_tokenizer", {}).get("type")
+
+            if pre_tokenizer_type == "Whitespace":
+                self._set_vocab_whitespace()
+            else:
+                self._set_vocab_gpt2()
             self.gguf_writer.add_token_type_count(2)
         else:
             raise NotImplementedError(f'Tokenizer {tokenizer_class} is not supported for JinaBertModel')
