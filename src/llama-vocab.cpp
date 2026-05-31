@@ -1787,7 +1787,7 @@ struct llama_vocab::impl {
     bool remove_extra_whitespaces   = false;
     bool escape_whitespaces         = true;
     bool treat_whitespace_as_suffix = false;
-    bool normalizer_lowercase       = false; // Lowercase normalizer (tokenizer.json)
+    bool normalizer_lowercase       = true; // Lowercase normalizer (tokenizer.json)
 
     std::unordered_map<std::string, llama_token> token_to_id;
     std::vector<token_data>                      id_to_token;
@@ -1937,9 +1937,6 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
             special_mask_id = 103;
 
             add_sep = true;
-
-            // BERT lowercases by default (used when the metadata flag is absent, e.g. legacy GGUFs)
-            normalizer_lowercase = true;
         } else if (tokenizer_model == "gpt2" || tokenizer_model == "hybriddna" || tokenizer_model == "whitespace") {
             type = LLAMA_VOCAB_TYPE_BPE;
 

@@ -40,6 +40,7 @@ function getAudioInputFormat(mimeType: string): AudioInputFormat {
 		normalizedMimeType === MimeTypeAudio.WAVE ||
 		normalizedMimeType === MimeTypeAudio.X_WAV ||
 		normalizedMimeType === MimeTypeAudio.X_WAVE ||
+		normalizedMimeType === MimeTypeAudio.VND_WAVE ||
 		normalizedMimeType === MimeTypeAudio.X_PN_WAV
 	) {
 		return FileTypeAudio.WAV;
