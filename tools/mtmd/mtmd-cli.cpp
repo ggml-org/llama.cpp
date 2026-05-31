@@ -231,6 +231,7 @@ static std::string chat_add_and_format(mtmd_cli_context & ctx, common_chat_msg &
 static int eval_message(mtmd_cli_context & ctx, common_chat_msg & msg) {
     bool add_bos = ctx.chat_history.empty();
     auto formatted_chat = chat_add_and_format(ctx, msg);
+
     LOG_DBG("formatted_chat.prompt: %s\n", formatted_chat.c_str());
 
     mtmd_input_text text;

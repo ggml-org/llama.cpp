@@ -569,6 +569,12 @@ struct mtmd_context {
                     aud_end = "<audio|>";
                     audio_preproc = std::make_unique<mtmd_audio_preprocessor_gemma4a>(ctx_a);
                 } break;
+            case PROJECTOR_TYPE_MIMO_V2_ASR:
+                {
+                    aud_beg = "<|sosp|>";
+                    aud_end = "<|eosp|>";
+                    audio_preproc = std::make_unique<mtmd_audio_preprocessor_mimo_asr>(ctx_a);
+                } break;
             default:
                 throw std::runtime_error(string_format("%s: unexpected audio projector type %d\n", __func__, proj));
         }

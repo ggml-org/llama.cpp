@@ -42,6 +42,7 @@ add_library(mtmd
             models/deepseekocr.cpp
             models/deepseekocr2.cpp
             models/mobilenetv5.cpp
+            models/mimo_v2_asr.cpp
             models/youtuvl.cpp
             models/yasa2.cpp
             )
@@ -60,7 +61,7 @@ target_include_directories(mtmd PRIVATE ../../vendor)
 target_compile_features   (mtmd PRIVATE cxx_std_17)
 
 if (BUILD_SHARED_LIBS)
-    set_target_properties     (mtmd PROPERTIES POSITION_INDEPENDENT_CODE ON)
+    set_target_properties     (mtmd PROPERTIES POSITION_INDEPENDENT_CODE ON WINDOWS_EXPORT_ALL_SYMBOLS ON)
     target_compile_definitions(mtmd PRIVATE LLAMA_BUILD)
     target_compile_definitions(mtmd PUBLIC  LLAMA_SHARED)
 endif()
