@@ -1562,37 +1562,90 @@ static void test_msgs_oaicompat_json_conversion() {
     }
 }
 
-static void test_split_by_role() {
+static void test_msg_token_delimiters_split() {
     LOG_DBG("%s\n", __func__);
 
+    // Delimiters that share a leading token, distinguished by the second token,
+    // to exercise the per-position token matching.
+    const common_chat_msg_token_delimiters delims = {
+        { { COMMON_CHAT_ROLE_USER,      { 10, 11 } },
+          { COMMON_CHAT_ROLE_ASSISTANT, { 10, 12 } } }
+    };
+
     // Empty inputs
-    assert_equals<size_t>(0, common_chat_split_by_role("", {}).size());
-    assert_equals<size_t>(0, common_chat_split_by_role("hello", {}).size());
-    assert_equals<size_t>(0, common_chat_split_by_role("", { { "user", "<|user|>" } }).size());
+    assert_equals<size_t>(0, common_chat_msg_token_delimiters{}.split({}).spans.size());
+    assert_equals<size_t>(0, common_chat_msg_token_delimiters{}.split({ 10, 11 }).spans.size());
+    assert_equals<size_t>(0, delims.split({}).spans.size());
 
-    // Multi-role conversation, no leading/trailing content
+    // No delimiters match -> no spans
+    assert_equals<size_t>(0, delims.split({ 100, 101, 102 }).spans.size());
+
+    // Multi-role conversation: <user>Hi<assistant>Hello<user>Bye
     {
-        const std::string prompt = "<|user|>Hi<|assistant|>Hello<|user|>Bye";
-        const auto splits = common_chat_split_by_role(prompt, {
-            { "user",      "<|user|>"      },
-            { "assistant", "<|assistant|>" },
-        });
-        assert_equals<size_t>(3, splits.size());
+        const llama_tokens tokens = {
+            10, 11,            // <user>
+            100, 101,          // Hi
+            10, 12,            // <assistant>
+            200, 201, 202,     // Hello
+            10, 11,            // <user>
+            300, 301,          // Bye
+        };
 
-        assert_equals<std::string>("user", splits[0].role);
-        assert_equals<size_t>(0, splits[0].pos);
-        assert_equals<size_t>(10, splits[0].len);
-        assert_equals<std::string>("<|user|>Hi", prompt.substr(splits[0].pos, splits[0].len));
+        const auto result = delims.split(tokens);
+        const auto & spans = result.spans;
+        assert_equals<size_t>(3, spans.size());
 
-        assert_equals<std::string>("assistant", splits[1].role);
-        assert_equals<size_t>(10, splits[1].pos);
-        assert_equals<size_t>(18, splits[1].len);
-        assert_equals<std::string>("<|assistant|>Hello", prompt.substr(splits[1].pos, splits[1].len));
+        assert_equals(COMMON_CHAT_ROLE_USER, spans[0].role);
+        assert_equals<size_t>(0, spans[0].pos);
+        assert_equals<size_t>(4, spans[0].len);
 
-        assert_equals<std::string>("user", splits[2].role);
-        assert_equals<size_t>(28, splits[2].pos);
-        assert_equals<size_t>(11, splits[2].len);
-        assert_equals<std::string>("<|user|>Bye", prompt.substr(splits[2].pos, splits[2].len));
+        assert_equals(COMMON_CHAT_ROLE_ASSISTANT, spans[1].role);
+        assert_equals<size_t>(4, spans[1].pos);
+        assert_equals<size_t>(5, spans[1].len);
+
+        assert_equals(COMMON_CHAT_ROLE_USER, spans[2].role);
+        assert_equals<size_t>(9, spans[2].pos);
+        assert_equals<size_t>(4, spans[2].len);
+
+        // last_user() returns the most recent user span
+        assert_equals(COMMON_CHAT_ROLE_USER, result.last_user().role);
+        assert_equals<size_t>(9, result.last_user().pos);
+    }
+
+    // Content before the first delimiter is not captured as a span
+    {
+        const llama_tokens tokens = {
+            500, 501,    // leading content (dropped)
+            10, 11,      // <user>
+            100,         // Hi
+        };
+
+        const auto spans = delims.split(tokens).spans;
+        assert_equals<size_t>(1, spans.size());
+        assert_equals(COMMON_CHAT_ROLE_USER, spans[0].role);
+        assert_equals<size_t>(2, spans[0].pos);
+        assert_equals<size_t>(3, spans[0].len);
+    }
+
+    // LLAMA_TOKEN_NULL tokens cannot start a delimiter match but count as content
+    {
+        const llama_tokens tokens = {
+            10, 11,             // <user>
+            LLAMA_TOKEN_NULL,   // media placeholder
+            100,                // Hi
+            10, 12,             // <assistant>
+        };
+
+        const auto spans = delims.split(tokens).spans;
+        assert_equals<size_t>(2, spans.size());
+
+        assert_equals(COMMON_CHAT_ROLE_USER, spans[0].role);
+        assert_equals<size_t>(0, spans[0].pos);
+        assert_equals<size_t>(4, spans[0].len);
+
+        assert_equals(COMMON_CHAT_ROLE_ASSISTANT, spans[1].role);
+        assert_equals<size_t>(4, spans[1].pos);
+        assert_equals<size_t>(2, spans[1].len);
     }
 }
 
@@ -5857,7 +5910,7 @@ int main(int argc, char ** argv) {
     {
         test_msg_diffs_compute();
         test_msgs_oaicompat_json_conversion();
-        test_split_by_role();
+        test_msg_token_delimiters_split();
         test_tools_oaicompat_json_conversion();
         test_convert_responses_to_chatcmpl();
         test_developer_role_to_system_workaround();

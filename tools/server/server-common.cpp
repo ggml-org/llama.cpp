@@ -1091,15 +1091,7 @@ json oaicompat_chat_params_parse(
         llama_params["chat_parser"] = chat_params.parser;
     }
 
-    llama_params["message_spans"] = json::array();
-
-    for (const auto & span : chat_params.message_spans) {
-        llama_params["message_spans"].push_back({
-            { "role", span.role },
-            { "pos",  span.pos  },
-            { "len",  span.len  },
-        });
-    }
+    llama_params["message_delimiters"] = chat_params.message_delimiters.to_json();
 
     // Reasoning budget: pass parameters through to sampling layer
     {
