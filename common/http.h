@@ -91,7 +91,19 @@ static std::pair<httplib::Client, common_http_url> common_http_client(const std:
 
     cli.set_follow_location(true);
 
+    cli.set_connection_timeout(5, 0);  // fail fast on a dead IPv6 route instead of hanging
+
     return { std::move(cli), std::move(parts) };
+}
+
+// cpp-httplib tries addresses serially and never falls back from IPv6 to IPv4, so do it ourselves
+template <typename Fn> static auto common_http_request_with_ipv4_fallback(httplib::Client & cli, Fn && fn) -> decltype(fn()) {
+    auto res = fn();
+    if (!res && (res.error() == httplib::Error::ConnectionTimeout || res.error() == httplib::Error::Connection)) {
+        cli.set_address_family(AF_INET);
+        res = fn();
+    }
+    return res;
 }
 
 static std::string common_http_show_masked_url(const common_http_url & parts) {
