@@ -6994,7 +6994,7 @@ static void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer, 
 
         cl_int err;
         cl_mem data_device = clCreateBuffer(context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR,
-            size, (void *) data, &err);
+            size, const_cast<void *>(data), &err);
         CL_CHECK(err);
 
         cl_kernel kernel = backend_ctx->kernel_convert_bf16_to_f16;
