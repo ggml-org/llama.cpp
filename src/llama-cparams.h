@@ -12,9 +12,10 @@ struct llama_cparams {
     uint32_t n_batch;
     uint32_t n_ubatch;
     uint32_t n_seq_max;
-    uint32_t n_rs_seq;        // number of recurrent-state snapshots per seq for rollback
-    int32_t  n_threads;       // number of threads to use for generation
-    int32_t  n_threads_batch; // number of threads to use for batch processing
+    uint32_t n_rs_seq;          // number of recurrent-state snapshots per seq for rollback
+    uint32_t n_outputs_per_seq; // max outputs per sequence in a ubatch (0 = no limit)
+    int32_t  n_threads;         // number of threads to use for generation
+    int32_t  n_threads_batch;   // number of threads to use for batch processing
 
     float rope_freq_base;
     float rope_freq_scale;

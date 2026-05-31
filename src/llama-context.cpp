@@ -30,6 +30,24 @@ static llm_graph_type ctx_type_to_graph_type(llama_context_type ctx_type) {
     throw std::runtime_error("Unsupported ctx type");
 }
 
+static uint32_t graph_n_outputs_pp(const llama_cparams & cparams, uint32_t n_tokens, uint32_t n_seqs) {
+    GGML_ASSERT(n_tokens >= 1);
+    GGML_ASSERT(n_seqs   >= 1);
+
+    const bool reserve_all_outputs =
+        cparams.embeddings ||
+        cparams.pooling_type != LLAMA_POOLING_TYPE_NONE ||
+        cparams.n_outputs_per_seq == 0;
+
+    if (reserve_all_outputs) {
+        return n_tokens;
+    }
+
+    const uint64_t n_outputs = (uint64_t) n_seqs * cparams.n_outputs_per_seq;
+
+    return std::max<uint32_t>(1, std::min<uint64_t>(n_tokens, n_outputs));
+}
+
 llama_context::llama_context(
         const llama_model & model,
               llama_context_params params) :
@@ -50,6 +68,8 @@ llama_context::llama_context(
     if (cparams.n_seq_max > LLAMA_MAX_SEQ) {
         throw std::runtime_error("n_seq_max must be <= " + std::to_string(LLAMA_MAX_SEQ));
     }
+
+    cparams.n_outputs_per_seq = params.n_outputs_per_seq;
 
     cparams.n_rs_seq = params.n_rs_seq;
     if (cparams.n_rs_seq > 0 && !llm_arch_supports_rs_rollback(model.arch)) {
@@ -577,8 +597,7 @@ void llama_context::sched_reserve() {
     int n_splits_tg = -1;
     int n_nodes_tg  = -1;
 
-    const bool     reserve_all_outputs = cparams.embeddings || cparams.pooling_type != LLAMA_POOLING_TYPE_NONE;
-    const uint32_t n_outputs_pp        = reserve_all_outputs ? n_tokens : n_seqs;
+    const uint32_t n_outputs_pp = graph_n_outputs_pp(cparams, n_tokens, n_seqs);
 
     // reserve pp (prompt processing) graph first so that buffers are only allocated once
     {
@@ -777,8 +796,7 @@ bool llama_context::memory_update(bool optimize) {
         const uint32_t n_seqs = cparams.n_seq_max;
         const uint32_t n_tokens = std::min(cparams.n_ctx, cparams.n_ubatch);
 
-        const bool     reserve_all_outputs = cparams.embeddings || cparams.pooling_type != LLAMA_POOLING_TYPE_NONE;
-        const uint32_t n_outputs_pp        = reserve_all_outputs ? n_tokens : n_seqs;
+        const uint32_t n_outputs_pp = graph_n_outputs_pp(cparams, n_tokens, n_seqs);
 
         auto * gf = graph_reserve(n_tokens, n_seqs, n_outputs_pp, mctx.get());
         if (!gf) {
@@ -2230,9 +2248,13 @@ ggml_cgraph * llama_context::graph_reserve(
     LLAMA_LOG_DEBUG("%s: reserving a graph for ubatch with n_tokens = %4u, n_seqs = %2u, n_outputs = %4u\n", __func__, n_tokens, n_seqs, n_outputs);
     GGML_ASSERT(n_outputs >= 1);
 
+    const bool reserve_all_outputs = n_outputs >= n_tokens;
+
     if (n_tokens % n_seqs != 0) {
         n_tokens = ((n_tokens + (n_seqs - 1)) / n_seqs) * n_seqs; // round to next multiple of n_seqs
-        n_outputs = std::max(n_outputs, n_tokens);
+        if (reserve_all_outputs) {
+            n_outputs = std::max(n_outputs, n_tokens);
+        }
 
         LLAMA_LOG_DEBUG("%s: making n_tokens a multiple of n_seqs - n_tokens = %u, n_seqs = %u, n_outputs = %u\n", __func__, n_tokens, n_seqs, n_outputs);
     }
@@ -3343,6 +3365,7 @@ llama_context_params llama_context_default_params() {
         /*.n_ubatch                    =*/ 512,
         /*.n_seq_max                   =*/ 1,
         /*.n_rs_seq                    =*/ 0,
+        /*.n_outputs_per_seq           =*/ 0,
         /*.n_threads                   =*/ GGML_DEFAULT_N_THREADS, // TODO: better default
         /*.n_threads_batch             =*/ GGML_DEFAULT_N_THREADS,
         /*.ctx_type                    =*/ LLAMA_CONTEXT_TYPE_DEFAULT,
