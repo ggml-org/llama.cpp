@@ -150,27 +150,26 @@ void common_ngram_map_begin(
         // Update the map from hash to key index (clear outdated entries).
         for (size_t i = 0; i < map.key_map.size(); ++i) {
             uint32_t key_idx = map.key_map[i];
-            if (key_idx >= map.size_last_begin) {
+            if (key_idx != 0 && key_idx + map.size_key > size_begin) {
                 map.key_map[i] = 0;
                 count_map_entries_upd++;
             }
         }
-        map.key_map_last_idx = (map.size_last_begin > 0) ? map.size_last_begin - 1 : 0;
+        map.key_map_last_idx = (size_begin > 0) ? (uint32_t) (size_begin - 1) : 0;
     }
 
     if (size_begin < map.idx_last_check && !map.keys.empty()) {
         // The next token generation will start at index size_begin.
-        // The tokens between map.size_last_begin and size_begin are no longer valid.
-        //
-        // Refresh map: Remove all entries with index >= map.size_last_begin.
+        // The valid token history is [0, size_begin), so remove any n-gram/m-gram
+        // that does not fit entirely inside it (idx + size > size_begin).
         size_t count_keys = map.keys.size();
         size_t count_keys_del = 0;
         size_t count_values_del = 0;
         for (int32_t i = map.keys.size() - 1; i >= 0; --i) {
             common_ngram_map_key & key = map.keys[i];
-            if (key.key_idx >= map.size_last_begin) {
+            if (key.key_idx + map.size_key > size_begin) {
                 // Delete the key.
-                LOG_DBG("%s: delete key %d at index %zu (>= size_last_begin=%zu)\n", __func__, i, key.key_idx, map.size_last_begin);
+                LOG_DBG("%s: delete key %d (key_idx=%zu + size_key=%d > size_begin=%zu)\n", __func__, i, key.key_idx, map.size_key, size_begin);
                 map.keys.erase(map.keys.begin() + i);
                 count_keys_del++;
                 continue;
@@ -182,7 +181,7 @@ void common_ngram_map_begin(
             // Check the indices of the values.
             for (int16_t j = COMMON_NGRAM_MAX_VALUES - 1; j >= 0; --j) {
                 common_ngram_map_value & value = key.values[j];
-                if (value.value_idx >= map.size_last_begin) {
+                if (value.value_idx != 0 && value.value_idx + map.size_value > size_begin) {
                     // Delete the value.
                     count_values_del++;
 
