@@ -22,6 +22,7 @@ The following sections describe how to build with different backends and options
 * [HIP](#hip)
 * [Vulkan](#vulkan)
 * [CANN](#cann)
+* [ZenDNN](#zendnn)
 * [Arm® KleidiAI™](#arm-kleidiai)
 * [OpenCL](#opencl)
 * [Android](#android-1)
