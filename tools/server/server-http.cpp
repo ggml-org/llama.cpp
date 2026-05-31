@@ -325,7 +325,7 @@ bool server_http_context::init(const common_params & params) {
                     res.set_header("ETag", a->etag);
                     // Check If-None-Match for conditional GET (304 Not Modified)
                     if (const std::string & inm = req.get_header_value("If-None-Match");
-                        !inm.empty() && inm == a->etag) {
+                        !inm.empty() && (inm == a->etag || inm == std::string("W/") + a->etag)) {
                         res.status = 304;
                         return false;
                     }

@@ -1692,6 +1692,16 @@ class TextModel(ModelBase):
         special_vocab = gguf.SpecialVocab(self.dir_model, load_merges=True)
         special_vocab.add_to_gguf(self.gguf_writer)
 
+    def _set_vocab_whitespace(self) -> None:
+        tokens, toktypes, _ = self.get_vocab_base()
+        self.gguf_writer.add_tokenizer_model("whitespace")
+        self.gguf_writer.add_tokenizer_pre("whitespace") # pinned, not hash-detected: chktxt hash collides with jina-v1-en
+        self.gguf_writer.add_token_list(tokens)
+        self.gguf_writer.add_token_types(toktypes)
+
+        special_vocab = gguf.SpecialVocab(self.dir_model, load_merges=True)
+        special_vocab.add_to_gguf(self.gguf_writer)
+
     def _set_vocab_hybriddna(self):
         from transformers import AutoTokenizer
         tokenizer = AutoTokenizer.from_pretrained(self.dir_model, trust_remote_code=True)
