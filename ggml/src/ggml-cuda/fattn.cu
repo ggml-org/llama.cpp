@@ -537,24 +537,14 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
     return BEST_FATTN_KERNEL_TILE;
 }
 
-static size_t ggml_cuda_flash_attn_ext_reserve_f16_buffer(size_t size, const ggml_tensor * tensor) {
-    size = GGML_PAD(size, 128);
-    return size + ggml_nelements(tensor)*ggml_type_size(GGML_TYPE_F16);
-}
-
 size_t ggml_cuda_flash_attn_ext_get_alloc_size(int device, const ggml_tensor * dst) {
-    size_t size = ggml_nbytes(dst);
-
-    if (dst->op != GGML_OP_FLASH_ATTN_EXT) {
-        return size;
-    }
+    GGML_ASSERT(dst->op == GGML_OP_FLASH_ATTN_EXT);
 
     const ggml_tensor * K = dst->src[1];
     const ggml_tensor * V = dst->src[2];
 
-    if (K == nullptr || V == nullptr) {
-        return size;
-    }
+    GGML_ASSERT(K != nullptr);
+    GGML_ASSERT(V != nullptr);
 
     const best_fattn_kernel kernel = ggml_cuda_get_best_fattn_kernel(device, dst);
 
@@ -576,17 +566,10 @@ size_t ggml_cuda_flash_attn_ext_get_alloc_size(int device, const ggml_tensor * d
             break;
     }
 
-    const bool V_is_K_view = V->view_src && (V->view_src == K || (V->view_src == K->view_src && V->view_offs == K->view_offs));
+    const ggml_cuda_flash_attn_ext_f16_extra_data f16_extra =
+        ggml_cuda_flash_attn_ext_get_f16_extra_data(dst, need_f16_K, need_f16_V);
 
-    if (need_f16_K && K->type != GGML_TYPE_F16) {
-        size = ggml_cuda_flash_attn_ext_reserve_f16_buffer(size, K);
-    }
-
-    if (need_f16_V && V->type != GGML_TYPE_F16 && !V_is_K_view) {
-        size = ggml_cuda_flash_attn_ext_reserve_f16_buffer(size, V);
-    }
-
-    return size;
+    return f16_extra.end - (uintptr_t) dst->data;
 }
 
 void ggml_cuda_flash_attn_ext(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {

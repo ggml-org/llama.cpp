@@ -44,6 +44,46 @@ typedef void (* fattn_kernel_t)(
 typedef float (*vec_dot_KQ_t)(
     const char * __restrict__ K_c, const void * __restrict__ Q_v, const int * __restrict__ Q_q8 , const void * __restrict__ Q_ds);
 
+struct ggml_cuda_flash_attn_ext_f16_extra_data {
+    uintptr_t K;
+    uintptr_t V;
+    uintptr_t end;
+};
+
+static inline ggml_cuda_flash_attn_ext_f16_extra_data ggml_cuda_flash_attn_ext_get_f16_extra_data(
+        const ggml_tensor * dst, const bool need_f16_K, const bool need_f16_V) {
+    GGML_ASSERT(dst->op == GGML_OP_FLASH_ATTN_EXT);
+
+    const ggml_tensor * K = dst->src[1];
+    const ggml_tensor * V = dst->src[2];
+
+    GGML_ASSERT(K != nullptr);
+    GGML_ASSERT(V != nullptr);
+
+    const bool V_is_K_view = V->view_src && (V->view_src == K || (V->view_src == K->view_src && V->view_offs == K->view_offs));
+
+    ggml_cuda_flash_attn_ext_f16_extra_data data = {};
+    data.end = (uintptr_t) dst->data + ggml_nbytes(dst);
+
+    if (need_f16_K && K->type != GGML_TYPE_F16) {
+        data.end = GGML_PAD(data.end, 128);
+        data.K   = data.end;
+        data.end += ggml_nelements(K)*ggml_type_size(GGML_TYPE_F16);
+    }
+
+    if (need_f16_V && V->type != GGML_TYPE_F16) {
+        if (V_is_K_view) {
+            data.V = data.K;
+        } else {
+            data.end = GGML_PAD(data.end, 128);
+            data.V   = data.end;
+            data.end += ggml_nelements(V)*ggml_type_size(GGML_TYPE_F16);
+        }
+    }
+
+    return data;
+}
+
 template <int D, int nthreads>
 static __device__ __forceinline__ float vec_dot_fattn_vec_KQ_f16(
     const char * __restrict__ K_c, const void * __restrict__ Q_v, const int * __restrict__ Q_q8 , const void * __restrict__ Q_ds_v) {
@@ -952,13 +992,9 @@ void launch_fattn(
     const int cc  = ggml_cuda_info().devices[id].cc;
     const int nsm = ggml_cuda_info().devices[id].nsm;
 
-    char * extra_data = (char *) KQV->data + ggml_nbytes(KQV);
-    auto reserve_extra_f16 = [&](const ggml_tensor * tensor) {
-        extra_data = (char *) GGML_PAD((uintptr_t) extra_data, 128);
-        half * ptr = (half *) extra_data;
-        extra_data += ggml_nelements(tensor)*sizeof(half);
-        return ptr;
-    };
+    const ggml_cuda_flash_attn_ext_f16_extra_data f16_extra =
+        ggml_cuda_flash_attn_ext_get_f16_extra_data(KQV, need_f16_K, need_f16_V);
+    GGML_ASSERT(f16_extra.end <= (uintptr_t) KQV->data + ggml_cuda_flash_attn_ext_get_alloc_size(id, KQV));
 
     ggml_cuda_pool_alloc<int>    KV_max(pool);
     ggml_cuda_pool_alloc<float>  dst_tmp(pool);
@@ -978,7 +1014,8 @@ void launch_fattn(
         const size_t bs = ggml_blck_size(K->type);
         const size_t ts = ggml_type_size(K->type);
 
-        half * K_f16 = reserve_extra_f16(K);
+        GGML_ASSERT(f16_extra.K != 0);
+        half * K_f16 = (half *) f16_extra.K;
         if (ggml_is_contiguously_allocated(K)) {
             to_fp16_cuda_t to_fp16 = ggml_get_to_fp16_cuda(K->type);
             to_fp16(K_data, K_f16, ggml_nelements(K), main_stream);
@@ -1011,7 +1048,8 @@ void launch_fattn(
             const size_t bs = ggml_blck_size(V->type);
             const size_t ts = ggml_type_size(V->type);
 
-            half * V_f16 = reserve_extra_f16(V);
+            GGML_ASSERT(f16_extra.V != 0);
+            half * V_f16 = (half *) f16_extra.V;
             if (ggml_is_contiguously_allocated(V)) {
                 to_fp16_cuda_t to_fp16 = ggml_get_to_fp16_cuda(V->type);
                 to_fp16(V_data, V_f16, ggml_nelements(V), main_stream);
