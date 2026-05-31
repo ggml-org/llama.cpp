@@ -1120,14 +1120,8 @@ json oaicompat_chat_params_parse(
         });
     }
 
-    // Reasoning budget: pass parameters through to sampling layer.
-    // The CLI flag (--reasoning-budget) is the hard ceiling chosed by
-    // the server admin. The request body may lower the budget but cannot
-    // raise it past the cap.
-    // The exhaustion message follows a different rule: it's a quality knob,
-    // not a policy lever, so the admin's choice still wins when set, but if
-    // the server was started without --reasoning-budget-message the client
-    // may supply its own via `thinking_budget_message`.
+    // Reasoning budget: request may lower the CLI cap but not raise it.
+    // The exhaustion message defaults to the CLI value, falling back to the request.
     {
         int reasoning_budget = opt.reasoning_budget;
         if (body.contains("thinking_budget_tokens")) {
