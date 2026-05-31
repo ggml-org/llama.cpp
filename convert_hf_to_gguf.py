@@ -115,15 +115,15 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--mmproj", action="store_true",
-        help="(Experimental) Export multimodal projector (mmproj) for vision models. This will only work on some vision models. A prefix 'mmproj-' will be added to the output file name.",
+        help="Export multimodal projector (mmproj) for vision models. This will only work on some vision models. An 'mmproj-' prefix will be added to the output file name.",
     )
     parser.add_argument(
         "--mtp", action="store_true",
-        help="(Experimental) Export only the multi-token prediction (MTP) head as a separate GGUF, suitable for use as a speculative draft. Output file name will get a '-MTP' suffix.",
+        help="Export only the multi-token prediction (MTP) head as a separate GGUF, suitable for use as a speculative draft. An 'mtp-' prefix will be added to the output file name.",
     )
     parser.add_argument(
         "--no-mtp", action="store_true",
-        help="(Experimental) Exclude the multi-token prediction (MTP) head from the converted GGUF. Pair with --mtp on a second run to publish trunk and MTP as two files. Note: the split form duplicates embeddings, so the bundled default is more space-efficient overall.",
+        help="Exclude the multi-token prediction (MTP) head from the converted GGUF. Pair with --mtp on a second run to publish trunk and MTP as two files. Note: the split form duplicates embeddings, but even though the bundled default is more space-efficient overall, this allows differing quantization which may be more performant.",
     )
     parser.add_argument(
         "--mistral-format", action="store_true",
@@ -147,6 +147,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--fuse-gate-up-exps", action="store_true",
         help="Fuse gate_exps and up_exps tensors into a single gate_up_exps tensor for MoE models.",
+    )
+    parser.add_argument(
+        "--fp8-as-q8", action="store_true",
+        help="Store tensors dequantized from FP8 as Q8_0 instead of BF16/F16.",
     )
 
     args = parser.parse_args()
@@ -264,7 +268,8 @@ def main() -> None:
                                      small_first_shard=args.no_tensor_first_split,
                                      remote_hf_model_id=hf_repo_id, disable_mistral_community_chat_template=disable_mistral_community_chat_template,
                                      sentence_transformers_dense_modules=args.sentence_transformers_dense_modules,
-                                     fuse_gate_up_exps=args.fuse_gate_up_exps
+                                     fuse_gate_up_exps=args.fuse_gate_up_exps,
+                                     fp8_as_q8=args.fp8_as_q8,
                                      )
 
         if args.vocab_only:

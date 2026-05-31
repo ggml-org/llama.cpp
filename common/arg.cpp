@@ -4,7 +4,6 @@
 #include "chat.h"
 #include "common.h"
 #include "download.h"
-#include "hf-cache.h"
 #include "json-schema-to-grammar.h"
 #include "log.h"
 #include "sampling.h"
@@ -50,8 +49,6 @@
 #endif
 
 #define LLAMA_MAX_URL_LENGTH 2084 // Maximum URL Length in Chrome: 2083
-
-extern const char * LICENSES[];
 
 using json = nlohmann::ordered_json;
 using namespace common_arg_utils;
@@ -343,10 +340,7 @@ struct handle_model_result {
 };
 
 static handle_model_result common_params_handle_model(struct common_params_model & model,
-                                                      const std::string          & bearer_token,
-                                                      bool                         offline,
-                                                      bool                         search_mtp = false,
-                                                      bool                         download_mmproj = true) {
+                                                      const common_download_opts & opts) {
     handle_model_result result;
 
     if (!model.docker_repo.empty()) {
@@ -358,10 +352,8 @@ static handle_model_result common_params_handle_model(struct common_params_model
             model.hf_file = model.path;
             model.path = "";
         }
-        common_download_opts opts;
-        opts.bearer_token = bearer_token;
-        opts.offline = offline;
-        auto download_result = common_download_model(model, opts, download_mmproj, search_mtp);
+        common_download_opts hf_opts = opts;
+        auto download_result = common_download_model(model, hf_opts);
 
         if (download_result.model_path.empty()) {
             throw std::runtime_error("failed to download model from Hugging Face");
@@ -386,9 +378,6 @@ static handle_model_result common_params_handle_model(struct common_params_model
             model.path = fs_get_cache_file(string_split<std::string>(f, '/').back());
         }
 
-        common_download_opts opts;
-        opts.bearer_token = bearer_token;
-        opts.offline = offline;
         auto download_result = common_download_model(model, opts);
         if (download_result.model_path.empty()) {
             throw std::runtime_error("failed to download model from " + model.url);
@@ -445,35 +434,50 @@ static bool parse_bool_value(const std::string & value) {
 // CLI argument parsing functions
 //
 
-void common_params_handle_models(common_params & params, llama_example curr_ex) {
+bool common_params_handle_models(common_params & params, llama_example curr_ex) {
     const bool spec_type_draft_mtp = std::find(params.speculative.types.begin(),
                                          params.speculative.types.end(),
                                          COMMON_SPECULATIVE_TYPE_DRAFT_MTP) != params.speculative.types.end();
 
-    auto res = common_params_handle_model(params.model, params.hf_token, params.offline, spec_type_draft_mtp, !params.no_mmproj);
-    if (params.no_mmproj) {
-        params.mmproj = {};
-    } else if (res.found_mmproj && params.mmproj.path.empty() && params.mmproj.url.empty()) {
-        // optionally, handle mmproj model when -hf is specified
-        params.mmproj = res.mmproj;
-    }
-    // only download mmproj if the current example is using it
-    for (const auto & ex : mmproj_examples) {
-        if (curr_ex == ex) {
-            common_params_handle_model(params.mmproj,    params.hf_token, params.offline);
-            break;
+    common_download_opts opts;
+    opts.bearer_token    = params.hf_token;
+    opts.offline         = params.offline;
+    opts.skip_download   = params.skip_download;
+    opts.download_mtp    = spec_type_draft_mtp;
+    opts.download_mmproj = !params.no_mmproj;
+
+    try {
+        auto res = common_params_handle_model(params.model, opts);
+        if (params.no_mmproj) {
+            params.mmproj = {};
+        } else if (res.found_mmproj && params.mmproj.path.empty() && params.mmproj.url.empty()) {
+            // optionally, handle mmproj model when -hf is specified
+            params.mmproj = res.mmproj;
         }
+        // only download mmproj if the current example is using it
+        for (const auto & ex : mmproj_examples) {
+            if (curr_ex == ex) {
+                common_params_handle_model(params.mmproj, opts);
+                break;
+            }
+        }
+
+        // when --spec-type mtp is set and no draft model was provided explicitly,
+        // fall back to the MTP head discovered alongside the -hf model
+        if (spec_type_draft_mtp && res.found_mtp &&
+            params.speculative.draft.mparams.path.empty() &&
+            params.speculative.draft.mparams.hf_repo.empty() &&
+            params.speculative.draft.mparams.url.empty()) {
+            params.speculative.draft.mparams.path = res.mtp.path;
+        }
+        common_params_handle_model(params.speculative.draft.mparams, opts);
+        common_params_handle_model(params.vocoder.model,             opts);
+        return true;
+    } catch (const common_skip_download_exception &) {
+        return false;
+    } catch (const std::exception &) {
+        throw;
     }
-    // when --spec-type mtp is set and no draft model was provided explicitly,
-    // fall back to the MTP head discovered alongside the -hf model
-    if (spec_type_draft_mtp && res.found_mtp &&
-        params.speculative.draft.mparams.path.empty() &&
-        params.speculative.draft.mparams.hf_repo.empty() &&
-        params.speculative.draft.mparams.url.empty()) {
-        params.speculative.draft.mparams.path = res.mtp.path;
-    }
-    common_params_handle_model(params.speculative.draft.mparams, params.hf_token, params.offline);
-    common_params_handle_model(params.vocoder.model,             params.hf_token, params.offline);
 }
 
 static bool common_params_parse_ex(int argc, char ** argv, common_params_context & ctx_arg) {
@@ -538,7 +542,11 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
                 throw std::invalid_argument(string_format("error: invalid argument: %s", arg.c_str()));
             }
             if (!seen_args.insert(arg).second) {
-                LOG_WRN("DEPRECATED: argument '%s' specified multiple times, use comma-separated values instead (only last value will be used)\n", arg.c_str());
+                const bool skip = (arg == "--spec-type");
+
+                if (!skip) {
+                    LOG_WRN("DEPRECATED: argument '%s' specified multiple times, use comma-separated values instead (only last value will be used)\n", arg.c_str());
+                }
             }
             auto & tmp = arg_to_options[arg];
             auto opt = *tmp.first;
@@ -587,12 +595,6 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
     // parse the first time to get -hf option (used for remote preset)
     parse_cli_args();
 
-    // TODO: Remove later
-    try {
-        hf_cache::migrate_old_cache_to_hf_cache(params.hf_token, params.offline);
-    } catch (const std::exception & e) {
-        LOG_WRN("HF cache migration failed: %s\n", e.what());
-    }
     // export_graph_ops loads only metadata
     const bool skip_model_download = ctx_arg.ex == LLAMA_EXAMPLE_EXPORT_GRAPH_OPS;
 
@@ -901,7 +903,11 @@ bool common_params_to_map(int argc, char ** argv, llama_example ex, std::map<com
             throw std::invalid_argument(string_format("error: invalid argument: %s", arg.c_str()));
         }
         if (!seen_args.insert(arg).second) {
-            LOG_WRN("DEPRECATED: argument '%s' specified multiple times, use comma-separated values instead (only last value will be used)\n", arg.c_str());
+            const bool skip = (arg == "--spec-type");
+
+            if (!skip) {
+                LOG_WRN("DEPRECATED: argument '%s' specified multiple times, use comma-separated values instead (only last value will be used)\n", arg.c_str());
+            }
         }
         auto opt = *arg_to_options[arg];
         std::string val;
@@ -1088,16 +1094,6 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params &) {
             fprintf(stderr, "version: %d (%s)\n", llama_build_number(), llama_commit());
             fprintf(stderr, "built with %s for %s\n", llama_compiler(), llama_build_target());
-            exit(0);
-        }
-    ));
-    add_opt(common_arg(
-        {"--license"},
-        "show source code license and dependencies",
-        [](common_params &) {
-            for (int i = 0; LICENSES[i]; ++i) {
-                printf("%s\n", LICENSES[i]);
-            }
             exit(0);
         }
     ));
@@ -1334,12 +1330,15 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_CTX_CHECKPOINTS").set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
     add_opt(common_arg(
-        {"-cpent", "--checkpoint-every-n-tokens"}, "N",
-        string_format("create a checkpoint every n tokens during prefill (processing), -1 to disable (default: %d)", params.checkpoint_every_nt),
+        {"-cms", "--checkpoint-min-step"}, "N",
+        string_format("minimum spacing between context checkpoints in tokens (default: %d, 0 = no minimum)", params.checkpoint_min_step),
         [](common_params & params, int value) {
-            params.checkpoint_every_nt = value;
+            if (value < 0) {
+                throw std::invalid_argument("checkpoint-min-step must be non-negative");
+            }
+            params.checkpoint_min_step = value;
         }
-    ).set_env("LLAMA_ARG_CHECKPOINT_EVERY_NT").set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
+    ).set_env("LLAMA_ARG_CHECKPOINT_MIN_SPACING_NT").set_examples({LLAMA_EXAMPLE_SERVER}));
     add_opt(common_arg(
         {"-cram", "--cache-ram"}, "N",
         string_format("set the maximum cache size in MiB (default: %d, -1 - no limit, 0 - disable)"
@@ -2995,7 +2994,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             }
             key_file.close();
         }
-    ).set_examples({LLAMA_EXAMPLE_SERVER}));
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_API_KEY_FILE"));
     add_opt(common_arg(
         {"--ssl-key-file"}, "FNAME",
         "path to file a PEM-encoded SSL private key",
@@ -3023,7 +3022,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
                 params.default_template_kwargs[item.key()] = item.value().dump();
             }
         }
-    ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_CHAT_TEMPLATE_KWARGS"));
+    ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_CHAT_TEMPLATE_KWARGS"));
     add_opt(common_arg(
         {"-to", "--timeout"}, "N",
         string_format("server read/write timeout in seconds (default: %d)", params.timeout_read),
@@ -3324,7 +3323,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params &, const std::string & value) {
             common_log_set_file(common_log_main(), value.c_str());
         }
-    ).set_env("LLAMA_LOG_FILE"));
+    ).set_env("LLAMA_ARG_LOG_FILE"));
     add_opt(common_arg(
         {"--log-colors"}, "[on|off|auto]",
         "Set colored logging ('on', 'off', or 'auto', default: 'auto')\n"
@@ -3341,7 +3340,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
                     string_format("error: unknown value for --log-colors: '%s'\n", value.c_str()));
             }
         }
-    ).set_env("LLAMA_LOG_COLORS"));
+    ).set_env("LLAMA_ARG_LOG_COLORS"));
     add_opt(common_arg(
         {"-v", "--verbose", "--log-verbose"},
         "Set verbosity level to infinity (i.e. log all messages, useful for debugging)",
@@ -3356,7 +3355,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params) {
             params.offline = true;
         }
-    ).set_env("LLAMA_OFFLINE"));
+    ).set_env("LLAMA_ARG_OFFLINE"));
     add_opt(common_arg(
         {"-lv", "--verbosity", "--log-verbosity"}, "N",
         string_format("Set the verbosity threshold. Messages with a higher verbosity will be ignored. Values:\n"
@@ -3364,13 +3363,14 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             " - 1: error\n"
             " - 2: warning\n"
             " - 3: info\n"
-            " - 4: debug\n"
+            " - 4: trace (more info)\n"
+            " - 5: debug\n"
             "(default: %d)\n", params.verbosity),
         [](common_params & params, int value) {
             params.verbosity = value;
             common_log_set_verbosity_thold(value);
         }
-    ).set_env("LLAMA_LOG_VERBOSITY"));
+    ).set_env("LLAMA_ARG_LOG_VERBOSITY"));
     add_opt(common_arg(
         {"--log-prefix"},
         {"--no-log-prefix"},
@@ -3590,6 +3590,15 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.speculative.draft.p_min = std::stof(value);
         }
     ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SPEC_DRAFT_P_MIN"));
+    add_opt(common_arg(
+        {"--spec-draft-backend-sampling"},
+        {"--no-spec-draft-backend-sampling"},
+        string_format("offload draft sampling to the backend (default: %s)",
+                      params.speculative.draft.backend_sampling ? "enabled" : "disabled"),
+        [](common_params & params, bool value) {
+            params.speculative.draft.backend_sampling = value;
+        }
+    ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SPEC_DRAFT_BACKEND_SAMPLING"));
     add_opt(common_arg(
         {"--spec-draft-device", "-devd", "--device-draft"}, "<dev1,dev2,..>",
         "comma-separated list of devices to use for offloading the draft model (none = don't offload)\n"
@@ -4125,6 +4134,12 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.speculative.ngram_mod.n_match = 24;
             params.speculative.ngram_mod.n_min = 48;
             params.speculative.ngram_mod.n_max = 64;
+
+            // TODO: not sure if this is a good config - explore more settings and potentially enable it
+            //params.speculative.types.push_back(COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V);
+            //params.speculative.ngram_map_k4v.size_n = 8;
+            //params.speculative.ngram_map_k4v.size_m = 24;
+            //params.speculative.ngram_map_k4v.min_hits = 2;
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
 

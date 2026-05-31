@@ -1,5 +1,5 @@
-import { ColorMode } from '$lib/enums/ui';
-import { SettingsFieldType } from '$lib/enums/settings';
+import { ColorMode } from '$lib/enums/ui.enums';
+import { SettingsFieldType } from '$lib/enums/settings.enums';
 import { SyncableParameterType } from '$lib/enums';
 import {
 	Funnel,
@@ -192,6 +192,14 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				help: 'Optional template for the title generation prompt. Use {{USER}} for the user message and {{ASSISTANT}} for the assistant message.',
 				defaultValue: TITLE_GENERATION.DEFAULT_PROMPT,
 				type: SettingsFieldType.TEXTAREA,
+				section: SETTINGS_SECTION_SLUGS.GENERAL
+			},
+			{
+				key: SETTINGS_KEYS.MAX_IMAGE_RESOLUTION,
+				label: 'Maximum image resolution (megapixels)',
+				help: 'Images larger than this will be resized before sending to server. Set to 0 to disable.',
+				defaultValue: 0,
+				type: SettingsFieldType.INPUT,
 				section: SETTINGS_SECTION_SLUGS.GENERAL
 			}
 		]
@@ -651,12 +659,24 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				}
 			},
 			{
-				key: SETTINGS_KEYS.CUSTOM,
+				key: SETTINGS_KEYS.CUSTOM_JSON,
 				label: 'Custom JSON',
 				help: 'Custom JSON parameters to send to the API. Must be valid JSON format.',
 				defaultValue: '',
 				type: SettingsFieldType.TEXTAREA,
 				section: SETTINGS_SECTION_SLUGS.DEVELOPER
+			},
+			{
+				key: SETTINGS_KEYS.CUSTOM_CSS,
+				label: 'Custom CSS',
+				help: 'CSS injected into the page at runtime. Set it here, or ship it server side via the --ui-config customCss field.',
+				defaultValue: '',
+				type: SettingsFieldType.TEXTAREA,
+				section: SETTINGS_SECTION_SLUGS.DEVELOPER,
+				sync: {
+					serverKey: SETTINGS_KEYS.CUSTOM_CSS,
+					paramType: SyncableParameterType.STRING
+				}
 			}
 		]
 	},

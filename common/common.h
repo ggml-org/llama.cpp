@@ -299,11 +299,13 @@ struct common_params_model {
 
 // draft-model-based speculative decoding parameters
 struct common_params_speculative_draft {
-    int32_t n_max = 16; // maximum number of tokens to draft during speculative decoding
-    int32_t n_min = 0;  // minimum number of draft tokens to use for speculative decoding
+    int32_t n_max = 3; // maximum number of tokens to draft during speculative decoding
+    int32_t n_min = 0; // minimum number of draft tokens to use for speculative decoding
 
-    float p_split = 0.1f;  // speculative decoding split probability
-    float p_min   = 0.75f; // minimum speculative decoding probability (greedy) // TODO: change default to 0.0f
+    float p_split = 0.1f; // speculative decoding split probability
+    float p_min   = 0.0f; // minimum speculative decoding probability (greedy)
+
+    bool backend_sampling = true; // offload draft sampling to the backend (default: on)
 
     common_params_model mparams;
 
@@ -477,7 +479,7 @@ struct common_params {
 
     std::set<std::string> model_alias;     // model aliases                                                 // NOLINT
     std::set<std::string> model_tags;      // model tags (informational, not used for routing)              // NOLINT
-    std::string hf_token             = ""; // HF token                                                      // NOLINT
+    std::string hf_token             = ""; // HF token (aka bearer token)                                   // NOLINT
     std::string prompt               = "";                                                                  // NOLINT
     std::string system_prompt        = "";                                                                  // NOLINT
     std::string prompt_file          = ""; // store the external prompt file name                           // NOLINT
@@ -505,6 +507,7 @@ struct common_params {
     int32_t control_vector_layer_start = -1; // layer range for control vector
     int32_t control_vector_layer_end   = -1; // layer range for control vector
     bool    offline                    = false;
+    bool    skip_download              = false; // skip model file downloading
 
     int32_t ppl_stride      = 0;     // stride for perplexity calculations. If left at 0, the pre-existing approach will be used.
     int32_t ppl_output_type = 0;     // = 0 -> ppl output is as usual, = 1 -> ppl output is num_tokens, ppl, one per line
@@ -585,14 +588,14 @@ struct common_params {
     // server params
     int32_t port                = 8080;          // server listens on this network port
     bool    reuse_port          = false;         // allow multiple sockets to bind to the same port
-    int32_t timeout_read        = 600;           // http read timeout in seconds
+    int32_t timeout_read        = 3600;          // http read timeout in seconds
     int32_t timeout_write       = timeout_read;  // http write timeout in seconds
     int32_t n_threads_http      = -1;    // number of threads to process HTTP requests (TODO: support threadpool)
     int32_t n_cache_reuse       = 0;     // min chunk size to reuse from the cache via KV shifting
     bool    cache_prompt        = true;  // whether to enable prompt caching
     bool    cache_idle_slots    = true;  // save and clear idle slots upon starting a new task
     int32_t n_ctx_checkpoints   = 32;    // max number of context checkpoints per slot
-    int32_t checkpoint_every_nt = 8192;  // make a checkpoint every n tokens during prefill
+    int32_t checkpoint_min_step = 256;   // minimum spacing between context checkpoints
     int32_t cache_ram_mib       = 8192;  // -1 = no limit, 0 - disable, 1 = 1 MiB, etc.
 
     std::string hostname      = "127.0.0.1";
@@ -615,11 +618,7 @@ struct common_params {
     std::map<std::string, std::string> default_template_kwargs;
 
     // UI configs
-#ifdef LLAMA_UI_DEFAULT_ENABLED
-    bool ui = LLAMA_UI_DEFAULT_ENABLED != 0;
-#else
-    bool ui = true; // default to enabled when not set
-#endif
+    bool ui = true;
 
     // Deprecated: use ui, ui_mcp_proxy, ui_config_json instead
     bool webui = ui;
@@ -733,6 +732,7 @@ std::string string_format(const char * fmt, ...);
 
 std::string string_strip(const std::string & str);
 std::string string_get_sortable_timestamp();
+std::string string_lcs(std::string_view a, std::string_view b);
 
 std::string string_join(const std::vector<std::string> & values, const std::string & separator);
 std::vector<std::string> string_split(const std::string & str, const std::string & delimiter);
@@ -857,7 +857,7 @@ struct common_sampler;
 
 // note: defines the model, context, samplers, ets. lifetimes
 struct common_init_result {
-    common_init_result(common_params & params);
+    common_init_result(common_params & params, bool model_only = false);
     ~common_init_result();
 
     llama_model * model();
@@ -875,7 +875,7 @@ private:
 
 using common_init_result_ptr = std::unique_ptr<common_init_result>;
 
-common_init_result_ptr common_init_from_params(common_params & params);
+common_init_result_ptr common_init_from_params(common_params & params, bool model_only = false);
 
 struct llama_model_params     common_model_params_to_llama  (      common_params & params);
 struct llama_context_params   common_context_params_to_llama(const common_params & params);

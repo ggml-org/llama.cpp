@@ -116,7 +116,7 @@ kernel void kernel_gemm_moe_q4_1_f32_ns(
     uint block_id_n = get_global_id(2); // n_tile
 
     // Boundary check
-    if (((get_global_id(0) + block_id_m * TILESIZE_M) >= ne01) || (block_id_n >= total_tiles[0])) {
+    if (block_id_n >= total_tiles[0]) {
         return;
     }
 
@@ -198,6 +198,10 @@ kernel void kernel_gemm_moe_q4_1_f32_ns(
         // 32 16x16 fp16 dot product with 3-levels reduction for better precision
         dotx16_reduce8(reg_a, shared_b, reg_c.lo, 0);
         dotx16_reduce8(reg_a, shared_b, reg_c.hi, 16);
+    }
+
+    if ((get_global_id(0) + block_id_m * TILESIZE_M) >= ne01) {
+        return;
     }
 
     // Load poster router and share in LM

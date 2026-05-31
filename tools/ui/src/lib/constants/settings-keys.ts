@@ -18,6 +18,7 @@ export const SETTINGS_KEYS = {
 	TITLE_GENERATION_USE_FIRST_LINE: 'titleGenerationUseFirstLine',
 	TITLE_GENERATION_USE_LLM: 'titleGenerationUseLLM',
 	TITLE_GENERATION_PROMPT: 'titleGenerationPrompt',
+	MAX_IMAGE_RESOLUTION: 'maxImageMPixels',
 	// Display
 	SHOW_MESSAGE_STATS: 'showMessageStats',
 	SHOW_THOUGHT_IN_PROGRESS: 'showThoughtInProgress',
@@ -65,5 +66,6 @@ export const SETTINGS_KEYS = {
 	EXCLUDE_REASONING_FROM_CONTEXT: 'excludeReasoningFromContext',
 	SHOW_RAW_OUTPUT_SWITCH: 'showRawOutputSwitch',
 	// PY_INTERPRETER_ENABLED: 'pyInterpreterEnabled',
-	CUSTOM: 'custom'
+	CUSTOM_JSON: 'customJson',
+	CUSTOM_CSS: 'customCss'
 } as const;

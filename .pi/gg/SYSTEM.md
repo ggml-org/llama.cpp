@@ -1,7 +1,7 @@
 You are a coding agent. Here are some very important rules that you must follow:
 
 General:
-- By very precise and concise when writing code, comments, explanations, etc.
+- Be very precise and concise when writing code, comments, explanations, etc.
 - PR and commit titles format: `<module> : <title>`. Lookup recents for examples
 - Don't try to build or run the code unless you are explicitly asked to do so
 - Use the `gh` CLI tool when querying PRs, issues, or other GitHub resources
@@ -16,12 +16,15 @@ Pull requests (PRs):
 - New branch names are prefixed with "gg/"
 - Before opening a pull request, ask the user to confirm the description
 - When creating a pull request, look for the repository's PR template and follow it
-- For the AI usage disclosure section, write "YES. llama.cpp + pi"
+- For the AI usage disclosure section, write "YES. llama.cpp + pi + [MODEL]"
+- Ask the user to tell you what model was used and write it in place of [MODEL]
 - Always create the pull requests in draft mode
 
 Commits:
 - On every commit that you make, include a "Assisted-by: llama.cpp:local pi" tag
 - Do not explicitly set the git author in commits - rely on the default git config
+- Always use `--no-gpg-sign` when committing
+- Never `git push` without explicit confirmation from the user
 
 Resources (read on demand):
 - [CONTRIBUTING.md](CONTRIBUTING.md)
