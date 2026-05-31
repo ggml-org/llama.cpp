@@ -20,8 +20,10 @@
 #include <cstddef>
 #include <cinttypes>
 #include <exception>
+#include <fstream>
 #include <memory>
 #include <filesystem>
+#include <set>
 #include <utility>
 
 // fix problem with std::min and std::max
@@ -51,6 +53,280 @@ enum server_state {
     SERVER_STATE_LOADING_MODEL,  // Server is starting up, model not fully loaded yet
     SERVER_STATE_READY,          // Server is ready and model is loaded
 };
+
+// --- KV restore-reuse: logits sidecar (Feature A) -------------------------------
+// When a slot's full state is saved to disk (SLOT_SAVE) for a recurrent/hybrid (FULL) model,
+// we additionally persist the last decoded token's full-vocab logits in a small sidecar file
+// (<state>.logits). On SLOT_RESTORE of an exact-prompt "regenerate" request, those logits let
+// the server emit the first token WITHOUT re-decoding into the (un-rewindable) restored
+// recurrent state — which would otherwise crash. The sidecar is independent of libllama's
+// state-file format (so that format is left untouched) and is purely best-effort: any
+// missing/corrupt/vocab-mismatched sidecar degrades gracefully to the existing behavior.
+static constexpr uint32_t SLOT_LOGITS_MAGIC   = 0x474C4B4Cu; // "LKLG" (llama kv logits), LE
+static constexpr uint32_t SLOT_LOGITS_VERSION = 1u;
+
+static std::string slot_logits_sidecar_path(const std::string & state_filepath) {
+    return state_filepath + ".logits";
+}
+
+// Best-effort write of the logits sidecar. Returns the number of bytes written (0 on failure or
+// when there is nothing valid to write). Never throws. The file is written to a temp path and
+// atomically renamed so a partial/interrupted write can never leave a corrupt sidecar in place.
+// Fields are serialized byte-by-byte little-endian (not a raw struct fwrite) for portability;
+// the float payload is documented LE-only, matching llama.cpp's native-LE state-file contract.
+static size_t slot_logits_write(const std::string & state_filepath,
+                                const std::vector<float> & logits,
+                                int32_t n_vocab,
+                                uint32_t n_tokens) {
+    if (logits.empty() || (int32_t) logits.size() != n_vocab || n_vocab <= 0) {
+        return 0;
+    }
+    const std::string sidecar = slot_logits_sidecar_path(state_filepath);
+    const std::string tmp     = sidecar + ".tmp";
+
+    std::ofstream f(tmp, std::ios::binary | std::ios::trunc);
+    if (!f) {
+        return 0;
+    }
+    auto put_u32 = [&](uint32_t v) {
+        const unsigned char b[4] = {
+            (unsigned char)( v        & 0xFF),
+            (unsigned char)((v >> 8)  & 0xFF),
+            (unsigned char)((v >> 16) & 0xFF),
+            (unsigned char)((v >> 24) & 0xFF),
+        };
+        f.write((const char *) b, 4);
+    };
+    put_u32(SLOT_LOGITS_MAGIC);
+    put_u32(SLOT_LOGITS_VERSION);
+    put_u32((uint32_t) n_vocab);
+    put_u32(n_tokens);
+    f.write((const char *) logits.data(), (std::streamsize) logits.size() * sizeof(float));
+    f.flush();
+    if (!f.good()) {
+        f.close();
+        std::error_code ec;
+        std::filesystem::remove(tmp, ec);
+        return 0;
+    }
+    f.close();
+    std::error_code ec;
+    std::filesystem::rename(tmp, sidecar, ec); // atomic replace
+    if (ec) {
+        std::filesystem::remove(tmp, ec);
+        return 0;
+    }
+    return 16 + logits.size() * sizeof(float);
+}
+
+// Read a logits sidecar. Returns true and fills `out` (size n_vocab) iff a valid sidecar exists
+// whose vocab matches `expect_n_vocab` AND whose recorded token count matches `expect_n_tokens`
+// (the count of the state just restored). The token-count check is AUTHORITATIVE: it binds the
+// sidecar to the exact state it was saved against, so a sidecar that was somehow written for a
+// different state length can never be reused. Any mismatch / short read / missing file => false
+// with `out` cleared, so the caller falls back to existing behavior. Never throws.
+static bool slot_logits_read(const std::string & state_filepath,
+                             int32_t expect_n_vocab,
+                             uint32_t expect_n_tokens,
+                             std::vector<float> & out) {
+    out.clear();
+    if (expect_n_vocab <= 0) {
+        return false;
+    }
+    const std::string sidecar = slot_logits_sidecar_path(state_filepath);
+    std::ifstream f(sidecar, std::ios::binary);
+    if (!f) {
+        return false;
+    }
+    auto get_u32 = [&](uint32_t & v) -> bool {
+        unsigned char b[4];
+        f.read((char *) b, 4);
+        if (f.gcount() != 4) {
+            return false;
+        }
+        v = (uint32_t) b[0] | ((uint32_t) b[1] << 8) | ((uint32_t) b[2] << 16) | ((uint32_t) b[3] << 24);
+        return true;
+    };
+    uint32_t magic = 0, version = 0, n_vocab = 0, n_tokens = 0;
+    if (!get_u32(magic) || !get_u32(version) || !get_u32(n_vocab) || !get_u32(n_tokens)) {
+        return false;
+    }
+    if (magic != SLOT_LOGITS_MAGIC || version != SLOT_LOGITS_VERSION ||
+        (int32_t) n_vocab != expect_n_vocab || n_tokens != expect_n_tokens) {
+        return false;
+    }
+    out.resize(n_vocab);
+    const std::streamsize want = (std::streamsize) n_vocab * (std::streamsize) sizeof(float);
+    f.read((char *) out.data(), want);
+    if (f.gcount() != want) {
+        out.clear();
+        return false;
+    }
+    return true;
+}
+
+// --- KV restore-reuse: bounded slot-save store (Feature C) ----------------------
+// One slot-save snapshot = a state file plus its optional <name>.logits sidecar; the two are
+// always evicted together as a single unit, keyed by the state file's mtime (LRU).
+struct slot_save_unit {
+    std::string state_path;
+    std::string sidecar_path; // "" if none
+    uintmax_t   bytes = 0;
+    std::filesystem::file_time_type mtime;
+};
+
+// Enforce --slot-save-max-count / --slot-save-max-bytes over `dir` using LRU-by-mtime eviction.
+// `just_written` is the state path that was just saved: it is never evicted, but if it ALONE
+// exceeds the byte cap it is deleted (with its sidecar) and `oversized` is set so the caller can
+// reject the save rather than evict everything else. Operates strictly within `dir`; uses only
+// the error_code std::filesystem overloads so it never throws across the server loop.
+//
+// IMPORTANT: when a cap is set, --slot-save-path is treated as a server-owned store — any regular
+// file in it (other than recognized "<X>.logits" sidecars and "*.tmp" temporaries) is an eviction
+// candidate. Point --slot-save-max-count/-mb at a DEDICATED directory; do not mix unrelated files
+// into the slot-save directory. (With no caps set — the default unless explicitly enabled — nothing
+// is ever deleted and the directory is left exactly as before.)
+// `just_written` is the exact filepath string the server built as `slot_save_path + filename`;
+// directory_iterator(dir) over that same `slot_save_path` yields identically-spelled path strings
+// on POSIX (the production target), so raw string equality correctly identifies the just-saved
+// unit. (Not used on Windows in practice; if ever needed there, switch to filename comparison.)
+static void slot_save_enforce_limits(const std::string & dir,
+                                     int32_t max_count, int64_t max_bytes,
+                                     const std::string & just_written,
+                                     bool & oversized) {
+    oversized = false;
+    if (max_count <= 0 && max_bytes <= 0) {
+        return; // both unlimited
+    }
+
+    std::error_code ec;
+    std::vector<slot_save_unit> units;
+    uintmax_t this_unit_bytes = 0;
+
+    // First pass: enumerate every regular file once and record the full set of paths so we can
+    // tell a real sidecar (sibling of a state file we wrote) from a state file a client happened
+    // to name "foo.logits". We must NOT blindly skip every "*.logits" — fs_validate_filename
+    // allows that suffix, so a state file literally named "foo.logits" would otherwise escape both
+    // caps entirely. Only "<X>.logits" where "<X>" also exists is treated as a sidecar.
+    std::vector<std::string> all_files;
+    {
+        std::set<std::string> present;
+        for (std::filesystem::directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec)) {
+            std::error_code fec;
+            if (!it->is_regular_file(fec) || fec) {
+                continue;
+            }
+            all_files.push_back(it->path().string());
+            present.insert(all_files.back());
+        }
+
+        for (const std::string & p : all_files) {
+            std::error_code fec;
+            // in-flight temp files are never counted or evicted (a concurrent save owns them)
+            if (p.size() >= 4 && p.compare(p.size() - 4, 4, ".tmp") == 0) {
+                continue;
+            }
+            // a "<X>.logits" file is a sidecar ONLY when its state file "<X>" is also present;
+            // accounted together with that state file below, so skip it here.
+            if (p.size() >= 7 && p.compare(p.size() - 7, 7, ".logits") == 0 &&
+                present.count(p.substr(0, p.size() - 7))) {
+                continue;
+            }
+            // reap an ORPHANED sidecar (its state file was evicted/lost): otherwise these silently
+            // accumulate (we never count them) and eat real on-disk space forever.
+            if (p.size() >= 7 && p.compare(p.size() - 7, 7, ".logits") == 0 &&
+                !present.count(p.substr(0, p.size() - 7))) {
+                std::filesystem::remove(p, fec);
+                continue;
+            }
+
+            slot_save_unit u;
+            u.state_path = p;
+            u.bytes = std::filesystem::file_size(p, fec);
+            if (fec) {
+                continue;
+            }
+            const std::string side = p + ".logits";
+            if (present.count(side)) {
+                const auto sb = std::filesystem::file_size(side, fec);
+                if (!fec) {
+                    u.sidecar_path = side;
+                    u.bytes += sb;
+                }
+            }
+            u.mtime = std::filesystem::last_write_time(p, fec);
+            if (fec) {
+                continue;
+            }
+
+            if (p == just_written) {
+                this_unit_bytes = u.bytes;
+            }
+            units.push_back(std::move(u));
+        }
+    }
+
+    // a single snapshot larger than the byte cap is rejected: delete only the just-written unit,
+    // do NOT cascade-evict every other (valid) snapshot to make room for something that can't fit.
+    // NOTE: intentionally a no-op when max_bytes == 0 (byte cap disabled); in count-only mode an
+    // individual snapshot's size is never bounded — only --slot-save-max-mb bounds per-snapshot size.
+    if (max_bytes > 0 && this_unit_bytes > (uintmax_t) max_bytes) {
+        for (const auto & u : units) {
+            if (u.state_path == just_written) {
+                std::filesystem::remove(u.state_path, ec);
+                if (!u.sidecar_path.empty()) {
+                    std::filesystem::remove(u.sidecar_path, ec);
+                }
+                break;
+            }
+        }
+        oversized = true;
+        return;
+    }
+
+    std::sort(units.begin(), units.end(),
+              [](const slot_save_unit & a, const slot_save_unit & b) { return a.mtime < b.mtime; }); // oldest first
+
+    size_t    count = units.size();
+    uintmax_t total = 0;
+    for (const auto & u : units) {
+        total += u.bytes;
+    }
+    size_t idx = 0;
+
+    auto evict_oldest = [&]() -> bool {
+        while (idx < units.size() && units[idx].state_path == just_written) {
+            idx++; // never evict the snapshot we just wrote
+        }
+        if (idx >= units.size()) {
+            return false;
+        }
+        const auto & u = units[idx];
+        std::filesystem::remove(u.state_path, ec);
+        if (!u.sidecar_path.empty()) {
+            std::filesystem::remove(u.sidecar_path, ec);
+        }
+        total -= std::min(total, (uintmax_t) u.bytes);
+        count = (count > 0) ? count - 1 : 0;
+        idx++;
+        return true;
+    };
+
+    if (max_count > 0) {
+        while (count > (size_t) max_count) {
+            if (!evict_oldest()) {
+                break;
+            }
+        }
+    }
+    if (max_bytes > 0) {
+        while (total > (uintmax_t) max_bytes) {
+            if (!evict_oldest()) {
+                break;
+            }
+        }
+    }
+}
 
 struct server_slot {
     int id;
@@ -99,6 +375,21 @@ struct server_slot {
     bool has_new_line   = false;
     bool truncated      = false;
     bool just_restored  = false; // set on disk slot-restore; one-shot, gates restored-slot KV reuse
+
+    // --- KV restore-reuse (logits sidecar) ---
+    // Full-vocab logits of this slot's most recently sampled token, captured at sample time
+    // (only populated for FULL/recurrent models when --slot-save-path is set). Serialized to the
+    // <state>.logits sidecar on SLOT_SAVE so a later exact-prompt "regenerate" can emit the first
+    // token WITHOUT re-decoding into the (un-rewindable) restored recurrent state.
+    std::vector<float> logits_last;     // size n_vocab when valid, else empty
+    // Token count of the prompt-state that `logits_last` corresponds to (i.e. the slot's KV/token
+    // length at the moment of capture). Used to BIND the captured distribution to a specific state:
+    // a sidecar is only written when this equals the saved snapshot's token_count, so a stale
+    // distribution (e.g. left over from a prior task, or skipped on a spec-decode step) can never
+    // be serialized against a mismatched state. -1 = no valid capture.
+    int32_t logits_last_n_tokens = -1;
+    // Logits loaded from a sidecar at SLOT_RESTORE, consumed once by the restore-continue path.
+    std::vector<float> restored_logits; // size n_vocab when a valid sidecar was loaded, else empty
 
     stop_type stop;
 
@@ -214,6 +505,12 @@ struct server_slot {
 
         // clear alora start
         alora_invocation_start = -1;
+
+        // one-shot; never carry restored sidecar logits into a non-restore request.
+        // NOTE: logits_last is deliberately NOT cleared here — it is the slot's running
+        // "last sampled distribution" and must survive into the idle state so a subsequent
+        // SLOT_SAVE can serialize it.
+        restored_logits.clear();
     }
 
     void init_sampler() const {
@@ -383,8 +680,12 @@ struct server_slot {
 
         timings.prompt_n            = n_prompt_tokens_processed;
         timings.prompt_ms           = t_prompt_processing;
-        timings.prompt_per_token_ms = t_prompt_processing / n_prompt_tokens_processed;
-        timings.prompt_per_second   = 1e3 / t_prompt_processing * n_prompt_tokens_processed;
+        // Guard against n_prompt_tokens_processed == 0 (e.g. the restore-continue regenerate
+        // fast-path, where the entire prompt is reused and zero tokens are re-processed). Without
+        // this, the divisions emit inf/NaN which then serialize as invalid JSON in the response's
+        // "timings" object.
+        timings.prompt_per_token_ms = n_prompt_tokens_processed > 0 ? t_prompt_processing / n_prompt_tokens_processed : 0.0;
+        timings.prompt_per_second   = n_prompt_tokens_processed > 0 ? 1e3 / t_prompt_processing * n_prompt_tokens_processed : 0.0;
 
         timings.predicted_n            = n_decoded;
         timings.predicted_ms           = t_token_generation;
@@ -1392,6 +1693,13 @@ private:
     }
 
     bool launch_slot_with_task(server_slot & slot, server_task && task) {
+        // A new task is being assigned to this slot: its prompt may differ from whatever produced
+        // the slot's current `logits_last` (even at the same token count). Invalidate the capture so
+        // a SLOT_SAVE issued on the new prompt can never serialize a stale, mismatched distribution.
+        // The stamp is re-established only by a real decode of the new prompt (the capture point).
+        slot.logits_last.clear();
+        slot.logits_last_n_tokens = -1;
+
         // process per-request lora adapters
         if (!task.params.lora.empty()) {
             auto task_loras = construct_lora_list(task.params.lora);
@@ -2176,6 +2484,49 @@ private:
                     const llama_tokens & tokens = slot->prompt.tokens.get_tokens();
                     const size_t nwrite = llama_state_seq_save_file(ctx_tgt, filepath.c_str(), slot->id, tokens.data(), token_count);
 
+                    // Feature A: persist this slot's last-token logits as a sidecar (FULL/recurrent
+                    // only). Best-effort — a missing/failed sidecar simply disables the regenerate
+                    // fast-path for this snapshot. NOT folded into res->n_bytes (that contract stays
+                    // "state-file bytes only").
+                    //
+                    // CRITICAL consistency guard: only write the sidecar when the captured logits
+                    // provably belong to the EXACT state being saved, i.e. logits_last_n_tokens ==
+                    // token_count. This blocks every stale-logits path (restore-then-save with no
+                    // intervening decode; a spec-decode step that skipped the capture; a distribution
+                    // left over from a prior task on this slot object) from persisting a sidecar that
+                    // does not match the saved state — which would otherwise emit a wrong first token
+                    // on a later regenerate with nothing to catch it.
+                    if (nwrite > 0 && ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_FULL) {
+                        if (slot->logits_last_n_tokens == (int32_t) token_count && !slot->logits_last.empty()) {
+                            const int nv = llama_vocab_n_tokens(llama_model_get_vocab(model_tgt));
+                            const size_t nwrite_logits =
+                                slot_logits_write(filepath, slot->logits_last, nv, (uint32_t) token_count);
+                            if (nwrite_logits == 0) {
+                                SLT_WRN(*slot, "%s", "failed to write logits sidecar; regenerate fast-path disabled for this snapshot\n");
+                            }
+                        } else {
+                            SLT_DBG(*slot, "no matching captured logits for this state (stamp=%d, token_count=%zu); sidecar omitted\n",
+                                    slot->logits_last_n_tokens, token_count);
+                        }
+                    }
+
+                    // Feature C: enforce the bounded slot-save store (LRU by mtime). If this single
+                    // snapshot exceeds the byte cap, reject the save instead of evicting everything.
+                    if (nwrite > 0 &&
+                        (params_base.slot_save_max_count > 0 || params_base.slot_save_max_bytes > 0)) {
+                        bool oversized = false;
+                        slot_save_enforce_limits(params_base.slot_save_path,
+                                                 params_base.slot_save_max_count,
+                                                 params_base.slot_save_max_bytes,
+                                                 filepath, oversized);
+                        if (oversized) {
+                            send_error(task,
+                                       "slot snapshot exceeds --slot-save-max-mb; save rejected",
+                                       ERROR_TYPE_INVALID_REQUEST);
+                            break;
+                        }
+                    }
+
                     const int64_t t_end = ggml_time_us();
                     const double t_save_ms = (t_end - t_start) / 1000.0;
 
@@ -2234,6 +2585,27 @@ private:
                         if (ckpt_pos_min >= 0) {
                             slot->prompt.checkpoints.clear();
                             create_checkpoint(*slot, 0, ckpt_pos_min, ckpt_pos_max);
+                        }
+                    }
+
+                    // The restored state's freshly-sampled "running" distribution is unknown: the
+                    // logits in `logits_last` (if any) belong to a PRIOR generation on this slot
+                    // object, NOT to the restored state. Invalidate them so a subsequent SLOT_SAVE
+                    // (e.g. a restore -> re-checkpoint with no intervening decode) cannot persist a
+                    // stale, mismatched sidecar. (Belt-and-suspenders: the SLOT_SAVE stamp check
+                    // already blocks this, since the stamp no longer equals the restored length.)
+                    slot->logits_last.clear();
+                    slot->logits_last_n_tokens = -1;
+
+                    // Feature A/B: load the logits sidecar (if any) so an exact-prompt regenerate
+                    // can emit the first token without re-decoding into the restored recurrent state.
+                    // The token-count check binds the sidecar to exactly this restored state.
+                    // On any failure restored_logits stays empty and Feature B falls back safely.
+                    slot->restored_logits.clear();
+                    if (ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_FULL) {
+                        const int nv = llama_vocab_n_tokens(llama_model_get_vocab(model_tgt));
+                        if (slot_logits_read(filepath, nv, (uint32_t) token_count, slot->restored_logits)) {
+                            SLT_INF(*slot, "loaded logits sidecar (%d vocab, %zu tokens) — regenerate fast-path armed\n", nv, token_count);
                         }
                     }
 
@@ -2735,6 +3107,129 @@ private:
 
                             // the largest pos_min required for a checkpoint to be useful
                             const auto pos_min_thold = std::max(0, pos_next - n_swa - 1);
+
+                            // ===== Feature B: restore-continue (regenerate fast-path) ====================
+                            // A just-restored FULL/recurrent slot receiving the EXACT restored tokens (no
+                            // suffix) cannot rewind its memory: the normal path would re-decode into the
+                            // already-occupied sequence and crash (the pure-recurrent gate at the relaxed
+                            // checkpoint predicate below is FALSE for this case, so just_restored would never
+                            // be consumed and [TAG_PROMPT_LOGITS] would decrement n_past and re-decode into
+                            // the occupied sequence). Detect that case here, BEFORE the n_past>0 guard, and:
+                            //   - if we have the saved next-token logits: emit the first token with NO decode,
+                            //     keeping the full restored state, then continue normal autoregression;
+                            //   - otherwise: fall back to a SAFE clear-then-reprefill (never crash).
+                            // Gated so it is unreachable for non-recurrent models, with-suffix requests,
+                            // non-generative slots, and multimodal (already excluded by check_no_mtmd at
+                            // save/restore). With-suffix restore reuse is left entirely to the unchanged
+                            // relaxed-predicate path below.
+                            // NOTE: cache_prompt==false sets n_past=0 above, so this gate (which
+                            // requires n_past == task->n_tokens()) is naturally not entered for a
+                            // no-cache request; that case safely takes the normal full-clear +
+                            // reprefill path (common_context_seq_rm at [p0,-1) empties the restored
+                            // sequence first), so regenerate degrades to a cold reprefill, never a crash.
+                            // No `n_past < n_ctx` clause: the fast path emits with NO decode so it
+                            // needs no free context slot; a full-n_ctx no-suffix restore is handled
+                            // here rather than falling through to a zero-token-added crash window.
+                            if (slot.just_restored &&
+                                ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_FULL &&
+                                slot.task->need_sampling() &&
+                                slot.alora_invocation_start <= 0 &&
+                                n_past == slot.task->n_tokens() &&
+                                n_past == (int) slot.prompt.n_tokens()) {
+
+                                slot.just_restored = false; // one-shot consume (this path owns it)
+
+                                if (!slot.restored_logits.empty()) {
+                                    // --- fast path: emit first token from saved logits, no decode ---
+                                    slot.n_prompt_tokens_cache     = n_past; // entire prompt "reused"
+                                    slot.n_prompt_tokens_processed = 0;      // prompt_n = 0 => observable reuse signal
+
+                                    // prime the sampler over the full restored prompt (penalties/grammar
+                                    // history), exactly as the normal DONE_PROMPT transition (init_sampler) would.
+                                    slot.n_decoded = 0;
+                                    slot.init_sampler();
+
+                                    slot.state   = SLOT_STATE_GENERATING;
+                                    slot.i_batch = -1;
+
+                                    // rebuild the (cold, unsaved) draft context for the restored prompt,
+                                    // mirroring the normal prompt-done transition.
+                                    if (slot.can_speculate()) {
+                                        common_speculative_begin(spec.get(), slot.id, slot.prompt.tokens.get_text_tokens());
+                                    }
+
+                                    const int nv = llama_vocab_n_tokens(llama_model_get_vocab(model_tgt));
+                                    const llama_token id = common_sampler_sample_from_logits(
+                                            slot.smpl.get(), slot.restored_logits.data(), nv, /*grammar_first=*/false);
+                                    slot.restored_logits.clear(); // consumed
+
+                                    common_sampler_accept(slot.smpl.get(), id, true);
+
+                                    // mirror the generation accounting from the normal sample path
+                                    const int64_t t_current = ggml_time_us();
+                                    slot.n_decoded += 1;
+                                    slot.t_start_generation  = t_current;
+                                    slot.t_prompt_processing = (slot.t_start_generation - slot.t_start_process_prompt) / 1e3;
+                                    metrics.on_prompt_eval(slot);
+                                    slot.t_token_generation  = std::max<int64_t>(1, t_current - slot.t_start_generation) / 1e3;
+
+                                    if (slot.task->params.stream) {
+                                        // mirror the normal prompt-start streaming signal exactly so a
+                                        // return_progress client still gets its initial 0% progress event
+                                        if (slot.task->params.return_progress) {
+                                            send_partial_response(slot, {}, true);
+                                        } else {
+                                            // signal HTTP to send the headers (200 status)
+                                            send_partial_response(slot, {}, false, true);
+                                        }
+                                    }
+
+                                    completion_token_output result;
+                                    result.tok  = id;
+                                    // inline of the accept_special_token lambda (defined later in this method,
+                                    // out of scope here): keep special tokens iff the server allows specials
+                                    // or the request explicitly preserves this token.
+                                    const bool keep_special =
+                                        params_base.special ||
+                                        slot.task->params.sampling.preserved_tokens.find(result.tok) !=
+                                            slot.task->params.sampling.preserved_tokens.end();
+                                    result.text_to_send = common_token_to_piece(slot.ctx_tgt, result.tok, keep_special);
+                                    result.prob         = 1.0f;
+
+                                    // First-token logprobs (n_probs>0): the post-sampling variant reads the
+                                    // candidate set (cur_p), which common_sampler_sample_from_logits leaves
+                                    // populated — so we can serve it exactly as the normal path does. The
+                                    // pre-sampling variant reads raw ctx logits at a decode index we bypass
+                                    // here; idx=-1 is passed but populate_token_probs() only uses idx in that
+                                    // branch, so we restrict the call to post_sampling to stay correct.
+                                    if (slot.task->params.sampling.n_probs > 0 && slot.task->params.post_sampling_probs) {
+                                        populate_token_probs(slot, result, /*post_sampling=*/true, params_base.special, /*idx=*/-1);
+                                    }
+
+                                    if (!process_token(result, slot)) {
+                                        slot.print_timings();
+                                        send_final_response(slot);
+                                        metrics.on_prediction(slot);
+                                        slot.release();
+                                    }
+
+                                    SLT_INF(slot, "%s", "restore-continue: emitted first token from saved logits (prompt_n=0)\n");
+                                    continue; // skip ALL prompt-batch building for this slot this iteration
+                                }
+
+                                // --- safe fallback: no valid sidecar -> clear restored seq, then reprefill ---
+                                // FULL models support full-sequence removal; clearing first guarantees the
+                                // subsequent reprefill writes into an EMPTY sequence instead of re-decoding
+                                // into the already-occupied restored state (which is the crash being fixed).
+                                SLT_WRN(slot, "%s", "restore-continue: no saved logits; clearing restored state and re-prefilling\n");
+                                llama_memory_seq_rm(llama_get_memory(ctx_tgt), slot.id, -1, -1);
+                                slot.prompt.tokens.clear();
+                                slot.prompt.checkpoints.clear();
+                                n_past   = 0;
+                                pos_next = 0; // mirror the do_reset path; keep the stale full-length value from leaking into the checkpoint-erase loop below
+                                // fall through to the normal guard below with an empty sequence (safe)
+                            }
+                            // ===== end Feature B ========================================================
 
                             if (n_past > 0 && n_past <= slot.prompt.n_tokens()) {
                                 const auto pos_min = llama_memory_seq_pos_min(llama_get_memory(ctx_tgt), slot.id);
@@ -3316,6 +3811,32 @@ private:
                 const int tok_idx = slot.i_batch - i;
 
                 llama_token id = common_sampler_sample(slot.smpl.get(), slot.ctx_tgt, tok_idx);
+
+                // Feature A: capture this slot's last-token full-vocab logits for a possible disk
+                // save. Cost: one ~n_vocab*4-byte copy per decoded token, incurred ONLY on
+                // FULL/recurrent models AND only when slot saving is enabled (--slot-save-path set);
+                // attention models and servers without slot-save pay nothing at all. The copy is
+                // unavoidable for correctness: ctx logits are overwritten by the next slot's decode,
+                // so a lazy read at SLOT_SAVE would be wrong under --parallel>1. Captured per-slot
+                // from this slot's own tok_idx so it is correct for any N/interleave (never read
+                // from the shared ctx at save time). common_sampler_sample already synchronized the
+                // context above, so llama_get_logits_ith is valid here.
+                if (ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_FULL && !params_base.slot_save_path.empty()) {
+                    const float * lg = llama_get_logits_ith(slot.ctx_tgt, tok_idx);
+                    if (lg) {
+                        const int nv = llama_vocab_n_tokens(llama_model_get_vocab(model_tgt));
+                        slot.logits_last.assign(lg, lg + nv);
+                        // Stamp the capture with the token count of the state it corresponds to.
+                        // At this point process_token() has NOT yet appended the just-sampled token,
+                        // so prompt.tokens.size() is exactly the length whose final token produced
+                        // these logits — i.e. it matches the token_count a SLOT_SAVE would record.
+                        slot.logits_last_n_tokens = (int32_t) slot.prompt.tokens.size();
+                    } else {
+                        // capture failed -> invalidate so a later save never serializes stale logits
+                        slot.logits_last.clear();
+                        slot.logits_last_n_tokens = -1;
+                    }
+                }
 
                 slot.i_batch = -1;
 

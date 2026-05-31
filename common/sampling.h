@@ -64,6 +64,21 @@ struct llama_sampler * common_sampler_get(const struct common_sampler * gsmpl);
 //
 llama_token common_sampler_sample(struct common_sampler * gsmpl, struct llama_context * ctx, int idx, bool grammar_first = false);
 
+// Sample a token directly from a caller-provided full-vocab logits buffer instead of reading them
+// from a llama_context. Mirrors common_sampler_sample()'s full-logits path exactly (reasoning
+// budget -> [grammar] -> chain, plus grammar rejection-resampling), so the selected token is
+// identical to what would have been produced had `logits` come from llama_get_logits_ith(ctx, idx).
+// `logits` must point to at least `n_vocab` floats in vocab-id order; the caller is responsible for
+// verifying n_vocab matches the live model. Does NOT call common_sampler_accept() (the caller
+// accepts separately, as with common_sampler_sample). Leaves cur_p populated for
+// common_sampler_get_candidates().
+// NOTE: the selected token also depends on the sampler's accumulated state (penalty/grammar/
+// reasoning-budget history and RNG position), exactly like common_sampler_sample(). The caller must
+// have advanced `gsmpl` to the intended decode step (e.g. by replaying the same accepted-token
+// history, as common_sampler_reset()+init does over a restored prompt) for the result to match a
+// live sample at that step; the helper is NOT stateless given only `logits`.
+llama_token common_sampler_sample_from_logits(struct common_sampler * gsmpl, const float * logits, int n_vocab, bool grammar_first = false);
+
 // generalized version of common_sampler_sample
 //
 // will cross-reference the sampled tokens with a batch of draft tokens and accept those that match

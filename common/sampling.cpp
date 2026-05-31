@@ -618,6 +618,90 @@ llama_token common_sampler_sample(struct common_sampler * gsmpl, struct llama_co
     return id;
 }
 
+// Rebuild the candidate set from a raw full-vocab logits buffer, mirroring
+// common_sampler::set_logits()'s full-logits branch (the else-branch above). Used by
+// common_sampler_sample_from_logits() to sample from persisted logits instead of a llama_context.
+// Callers must pre-validate logits != nullptr && n_vocab > 0 (the only caller does so via asserts).
+static void common_sampler_set_logits_raw(struct common_sampler * gsmpl, const float * logits, int n_vocab) {
+    auto & cur = gsmpl->cur;
+
+    cur.resize(n_vocab);
+    for (llama_token token_id = 0; token_id < n_vocab; token_id++) {
+        cur[token_id] = llama_token_data{token_id, logits[token_id], 0.0f};
+    }
+
+    gsmpl->cur_p = { cur.data(), cur.size(), -1, false };
+}
+
+llama_token common_sampler_sample_from_logits(struct common_sampler * gsmpl, const float * logits, int n_vocab, bool grammar_first) {
+    // This mirrors common_sampler_sample()'s CPU full-logits apply sequence exactly (reasoning
+    // budget -> [grammar] -> chain, plus grammar rejection-resampling), with set_logits(ctx,idx)
+    // replaced by common_sampler_set_logits_raw(). It intentionally omits two things that are
+    // inapplicable to replayed logits: llama_synchronize() (the logits are caller-provided, not
+    // pending in any llama_context) and the backend-sampler short-circuit (a replayed distribution
+    // never carries a backend-sampled token, and backend sampling is incompatible with
+    // grammar/reasoning-budget anyway — see common_sampler_sample).
+    GGML_ASSERT(logits != nullptr);
+    GGML_ASSERT(n_vocab > 0);
+
+    const auto tm = gsmpl->tm();
+
+    llama_token id = LLAMA_TOKEN_NULL;
+
+    auto & grmr    = gsmpl->grmr;
+    auto & rbudget = gsmpl->rbudget;
+    auto & chain   = gsmpl->chain;
+    auto & cur_p   = gsmpl->cur_p; // initialized by common_sampler_set_logits_raw
+
+    common_sampler_set_logits_raw(gsmpl, logits, n_vocab);
+
+    // apply reasoning budget first
+    llama_sampler_apply(rbudget, &cur_p);
+
+    if (grammar_first && grammar_should_apply(gsmpl)) {
+        llama_sampler_apply(grmr, &cur_p);
+    }
+
+    llama_sampler_apply(chain, &cur_p);
+
+    id = cur_p.data[cur_p.selected].id;
+
+    if (grammar_first || !grammar_should_apply(gsmpl)) {
+        return id;
+    }
+
+    // check if the sampled token fits the grammar (grammar-based rejection sampling)
+    {
+        llama_token_data       single_token_data       = { id, 1.0f, 0.0f };
+        llama_token_data_array single_token_data_array = { &single_token_data, 1, -1, false };
+
+        llama_sampler_apply(grmr, &single_token_data_array);
+
+        const bool is_valid = single_token_data_array.data[0].logit != -INFINITY;
+        if (is_valid) {
+            return id;
+        }
+    }
+
+    // resampling:
+    // if the token is not valid, sample again, but first apply the grammar sampler and then the sampling chain
+    common_sampler_set_logits_raw(gsmpl, logits, n_vocab);
+
+    llama_sampler_apply(rbudget,  &cur_p);
+
+    if (grammar_should_apply(gsmpl)) {
+        llama_sampler_apply(grmr,  &cur_p);
+    }
+
+    llama_sampler_apply(chain, &cur_p);
+
+    GGML_ASSERT(cur_p.selected != -1 && "no selected token during sampling - check your sampling configuration");
+
+    id = cur_p.data[cur_p.selected].id;
+
+    return id;
+}
+
 std::vector<llama_token> common_sampler_sample_and_accept_n(struct common_sampler * gsmpl, struct llama_context * ctx, const std::vector<int> & idxs, const llama_tokens & draft, bool grammar_first) {
     GGML_ASSERT(idxs.size() == draft.size() + 1 && "idxs.size() must be draft.size() + 1");
 

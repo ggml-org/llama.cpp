@@ -645,6 +645,10 @@ struct common_params {
     bool log_json = false;
 
     std::string slot_save_path;
+    // bounded slot-save store (LRU eviction by mtime; a state file + its .logits sidecar are
+    // evicted together as one unit). Defaults are finite & sane; 0 means "unlimited" (only if set).
+    int32_t slot_save_max_count = 64;                                // max snapshots in slot_save_path (0 = unlimited)
+    int64_t slot_save_max_bytes = (int64_t) 32 * 1024 * 1024 * 1024; // 32 GiB cap (0 = unlimited)
     std::string media_path; // path to directory for loading media files
 
     float slot_prompt_similarity = 0.1f;
