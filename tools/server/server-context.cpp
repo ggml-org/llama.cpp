@@ -3132,7 +3132,7 @@ private:
 
                         // stop the prompt batch exactly before the latest user input, so a checkpoint
                         // can be created after the previous messages
-                        if (span_last_user.valid() && slot.prompt.n_tokens() == span_last_user.pos) {
+                        if (span_last_user.valid() && slot.prompt.n_tokens() == (int32_t) span_last_user.pos) {
                             break;
                         }
 
@@ -3191,8 +3191,8 @@ private:
                     const int32_t n_tokens_start = slot.prompt.n_tokens() - n_tokens_cur;
 
                     if (span_last_user.valid()) {
-                        const bool is_on_user = n_tokens_start == span_last_user.pos;
-                        const bool is_after_user = n_tokens_start > span_last_user.pos;
+                        const bool is_on_user = n_tokens_start == (int32_t) span_last_user.pos;
+                        const bool is_after_user = n_tokens_start > (int32_t) span_last_user.pos;
                         const bool is_allowed = is_on_user || (is_after_user && near_prompt_end);
                         if (do_checkpoint && !is_allowed) {
                             do_checkpoint = false;
