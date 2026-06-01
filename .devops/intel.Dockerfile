@@ -4,7 +4,7 @@ ARG ONEAPI_VERSION=2025.3.3-0-devel-ubuntu24.04
 
 FROM intel/deep-learning-essentials:$ONEAPI_VERSION AS build
 
-ARG GGML_SYCL_F16=OFF
+ARG GGML_SYCL_F16=ON
 RUN apt-get update && \
     apt-get install -y git libssl-dev
 
