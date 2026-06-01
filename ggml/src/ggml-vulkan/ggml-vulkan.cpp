@@ -5583,6 +5583,11 @@ static vk_device ggml_vk_get_device(size_t idx) {
 #endif
         device->subgroup_shuffle = (vk11_props.subgroupSupportedStages & vk::ShaderStageFlagBits::eCompute) &&
                                    (vk11_props.subgroupSupportedOperations & vk::SubgroupFeatureFlagBits::eShuffle);
+#ifdef __APPLE__
+        if (device->vendor_id == VK_VENDOR_ID_AMD) {
+            device->subgroup_shuffle = false;
+        }
+#endif
         device->subgroup_clustered = (vk11_props.subgroupSupportedStages & vk::ShaderStageFlagBits::eCompute) &&
                                      (vk11_props.subgroupSupportedOperations & vk::SubgroupFeatureFlagBits::eClustered);
 
