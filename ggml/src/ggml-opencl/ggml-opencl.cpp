@@ -18545,6 +18545,30 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
 
     GGML_ASSERT(ne00 == ne10);
 
+    // The Adreno trans-weight quant GEMM/GEMV (and the generic mul_mm) compute a
+    // single 2D matmul and ignore the src1 batch dims (ne12/ne13). For a broadcast
+    // quant matmul -- one weight (ne02==ne03==1) applied to a batched activation,
+    // e.g. the GatedDeltaNet ssm_out projection in chunked prefill where ne12 is the
+    // number of chunks -- run each 2D batch slice on the GPU, reusing the weight.
+    // Without this the kernels computed batch 0 and left the rest garbage, corrupting
+    // batched prefill / perplexity on the Qwen3.5/3.6 hybrids. f16/f32 paths broadcast
+    // correctly and are left untouched; decode (ne12==1) takes the fast path below.
+    if ((ne12 > 1 || ne13 > 1) && ne02 == 1 && ne03 == 1 &&
+        src0t != GGML_TYPE_F16 && src0t != GGML_TYPE_F32) {
+        for (int i13 = 0; i13 < ne13; ++i13) {
+            for (int i12 = 0; i12 < ne12; ++i12) {
+                ggml_tensor s1 = *src1;
+                s1.ne[2] = 1; s1.ne[3] = 1;
+                s1.view_offs = src1->view_offs + (size_t)i12*nb12 + (size_t)i13*nb13;
+                ggml_tensor d = *dst;
+                d.ne[2] = 1; d.ne[3] = 1;
+                d.view_offs = dst->view_offs + (size_t)i12*nb2 + (size_t)i13*nb3;
+                ggml_cl_mul_mat(backend, src0, &s1, &d);
+            }
+        }
+        return;
+    }
+
     int nth0 = 32;
     int nth1 = 1;
     int nrows = 1;
