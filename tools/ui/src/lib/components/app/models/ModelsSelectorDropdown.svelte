@@ -9,9 +9,7 @@
 		DropdownMenuSearchable,
 		ModelId,
 		ModelsSelectorList,
-		ModelsSelectorOption,
-		ModelsSelectorThinkingIcon,
-		ModelsSelectorMessageThinkingIcon
+		ModelsSelectorOption
 	} from '$lib/components/app';
 	import type { ModelItem } from './utils';
 
@@ -20,7 +18,6 @@
 		currentModel?: string | null;
 		disabled?: boolean;
 		forceForegroundText?: boolean;
-		message?: DatabaseMessage;
 		onModelChange?: (modelId: string, modelName: string) => Promise<boolean> | boolean | void;
 		useGlobalSelection?: boolean;
 	}
@@ -30,7 +27,6 @@
 		currentModel = null,
 		disabled = false,
 		forceForegroundText = false,
-		message = null,
 		onModelChange,
 		useGlobalSelection = false
 	}: Props = $props();
@@ -110,15 +106,9 @@
 				]}
 				style="max-width: min(calc(100cqw - 10rem), 20rem)"
 			>
-				<Package class="h-3.5 w-3.5" />
+				<Package class="h-3.5 w-3.5 shrink-0" />
 
 				<ModelId modelId={currentModel} class="min-w-0" hideQuantization hideTags />
-
-				{#if message}
-					<ModelsSelectorMessageThinkingIcon {message} />
-				{:else}
-					<ModelsSelectorThinkingIcon modelId={currentModel} />
-				{/if}
 			</span>
 		{:else}
 			<p class="text-xs text-muted-foreground">No models available.</p>
@@ -167,12 +157,6 @@
 						</Tooltip.Root>
 					{:else}
 						<span class="min-w-0 font-medium">Select model</span>
-					{/if}
-
-					{#if message}
-						<ModelsSelectorMessageThinkingIcon {message} />
-					{:else}
-						<ModelsSelectorThinkingIcon modelId={selectedOption?.model} />
 					{/if}
 
 					{#if ms.updating || ms.isLoadingModel}
@@ -291,12 +275,6 @@
 							<p class="font-mono">{selectedOption.model}</p>
 						</Tooltip.Content>
 					</Tooltip.Root>
-				{/if}
-
-				{#if message}
-					<ModelsSelectorMessageThinkingIcon {message} />
-				{:else}
-					<ModelsSelectorThinkingIcon modelId={selectedOption?.model} />
 				{/if}
 
 				{#if ms.updating}

@@ -5,7 +5,8 @@
 		ChatFormActionsAdd,
 		ChatFormActionModels,
 		ChatFormActionRecord,
-		ChatFormActionSubmit
+		ChatFormActionSubmit,
+		ChatFormReasoningToggle
 	} from '$lib/components/app';
 	import { FileTypeCategory } from '$lib/enums';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
@@ -108,20 +109,24 @@
 		</div>
 	{/if}
 
-	{#if showModelSelector}
-		<ChatFormActionModels
-			{disabled}
-			bind:this={selectorModelRef}
-			bind:hasAudioModality
-			bind:hasVideoModality
-			bind:hasVisionModality
-			bind:hasModelSelected
-			bind:isSelectedModelInCache
-			bind:submitTooltip
-			forceForegroundText
-			useGlobalSelection
-		/>
-	{/if}
+	<div class="flex items-center gap-2">
+		<ChatFormReasoningToggle />
+
+		{#if showModelSelector}
+			<ChatFormActionModels
+				{disabled}
+				bind:this={selectorModelRef}
+				bind:hasAudioModality
+				bind:hasVideoModality
+				bind:hasVisionModality
+				bind:hasModelSelected
+				bind:isSelectedModelInCache
+				bind:submitTooltip
+				forceForegroundText
+				useGlobalSelection
+			/>
+		{/if}
+	</div>
 
 	{#if isLoading && !canSubmit}
 		<Button

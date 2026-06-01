@@ -6,7 +6,6 @@
 		DialogModelInformation,
 		ModelId,
 		ModelsSelectorList,
-		ModelsSelectorThinkingIcon,
 		SearchInput
 	} from '$lib/components/app';
 
@@ -95,8 +94,6 @@
 					/>
 				{/if}
 
-				<ModelsSelectorThinkingIcon modelId={selectedOption?.model} />
-
 				{#if ms.updating || ms.isLoadingModel}
 					<Loader2 class="h-3 w-3.5 shrink-0 animate-spin" />
 				{:else}
@@ -179,8 +176,6 @@
 					hideQuantization
 					hideTags
 				/>
-
-				<ModelsSelectorThinkingIcon modelId={selectedOption?.model} />
 
 				{#if ms.updating}
 					<Loader2 class="h-3 w-3.5 shrink-0 animate-spin" />

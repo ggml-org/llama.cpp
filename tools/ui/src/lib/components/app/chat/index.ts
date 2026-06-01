@@ -241,13 +241,14 @@ export { default as ChatFormActionAddToolsSubmenu } from './ChatForm/ChatFormAct
 export { default as ChatFormActionAddMcpServersSubmenu } from './ChatForm/ChatFormActions/ChatFormActionAdd/ChatFormActionAddMcpServersSubmenu.svelte';
 
 /**
- * **ChatFormReasoningEffortSubmenu** - Reasoning effort levels submenu
+ * **ChatFormReasoningToggle** - Thinking toggle button with effort dropdown
  *
- * Dropdown submenu for selecting reasoning effort level (Low, Medium, High, Max).
- * Used within the Thinking toggle submenu in both desktop and mobile chat form.
- * Integrates with conversationsStore for per-conversation persistence.
+ * A toggle button with lightbulb icon that indicates thinking status.
+ * Shows the reasoning effort dropdown when clicked.
+ * Only visible when the current model supports thinking.
+ * Replaces the lightbulb icon that was previously shown in the model selector.
  */
-export { default as ChatFormReasoningEffortSubmenu } from './ChatForm/ChatFormActions/ChatFormReasoningEffortSubmenu.svelte';
+export { default as ChatFormReasoningToggle } from './ChatForm/ChatFormActions/ChatFormReasoningToggle.svelte';
 
 /**
  * Hidden file input element for programmatic file selection.

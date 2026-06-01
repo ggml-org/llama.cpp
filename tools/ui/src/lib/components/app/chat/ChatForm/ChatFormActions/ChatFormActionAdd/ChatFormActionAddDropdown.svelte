@@ -11,8 +11,7 @@
 	} from '$lib/constants';
 	import {
 		ChatFormActionAddToolsSubmenu,
-		ChatFormActionAddMcpServersSubmenu,
-		ChatFormReasoningEffortSubmenu
+		ChatFormActionAddMcpServersSubmenu
 	} from '$lib/components/app';
 	import { useAttachmentMenu } from '$lib/hooks/use-attachment-menu.svelte';
 
@@ -147,10 +146,6 @@
 
 				<span>System Message</span>
 			</DropdownMenu.Item>
-
-			<DropdownMenu.Separator />
-
-			<ChatFormReasoningEffortSubmenu />
 
 			<ChatFormActionAddToolsSubmenu />
 
