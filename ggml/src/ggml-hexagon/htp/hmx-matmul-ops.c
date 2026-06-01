@@ -1663,6 +1663,7 @@ typedef struct {
     int                             cur_a;
     int                             mapping_stride;
     int                             ne11;
+    struct fastdiv_values           ne11_div;
     size_t                          nb11;
     size_t                          nb12;
     int                             start_row;
@@ -1695,6 +1696,7 @@ static void transfer_activation_chunk_fp32_to_fp16_gathered(
             int cur_a,
             int mapping_stride,
             int ne11,
+            const struct fastdiv_values * ne11_div,
             size_t nb11,
             size_t nb12,
             int cne1) {
@@ -1714,8 +1716,8 @@ static void transfer_activation_chunk_fp32_to_fp16_gathered(
         struct mmid_row_mapping mapping0 = matrix_rows[cur_a * mapping_stride + r_idx0];
         struct mmid_row_mapping mapping1 = matrix_rows[cur_a * mapping_stride + r_idx1];
 
-        int i11_0 = mapping0.i1 % ne11;
-        int i11_1 = mapping1.i1 % ne11;
+        int i11_0 = fastmodulo(mapping0.i1, ne11, ne11_div);
+        int i11_1 = fastmodulo(mapping1.i1, ne11, ne11_div);
 
         const float *row0_ptr = (const float *) ((const uint8_t *) src + i11_0 * nb11 + mapping0.i2 * nb12);
         const float *row1_ptr = (const float *) ((const uint8_t *) src + i11_1 * nb11 + mapping1.i2 * nb12);
@@ -1749,12 +1751,12 @@ static void transfer_activation_chunk_fp32_to_fp16_gathered(
 
         if (row0_valid) {
             struct mmid_row_mapping mapping0 = matrix_rows[cur_a * mapping_stride + (start_row + r + 0)];
-            int i11_0 = mapping0.i1 % ne11;
+            int i11_0 = fastmodulo(mapping0.i1, ne11, ne11_div);
             row0_ptr = (const float *) ((const uint8_t *) src + i11_0 * nb11 + mapping0.i2 * nb12);
         }
         if (row1_valid) {
             struct mmid_row_mapping mapping1 = matrix_rows[cur_a * mapping_stride + (start_row + r + 1)];
-            int i11_1 = mapping1.i1 % ne11;
+            int i11_1 = fastmodulo(mapping1.i1, ne11, ne11_div);
             row1_ptr = (const float *) ((const uint8_t *) src + i11_1 * nb11 + mapping1.i2 * nb12);
         }
 
@@ -1787,7 +1789,7 @@ static void transfer_activation_chunk_gathered_worker_fn(unsigned int n, unsigne
         transfer_activation_chunk_fp32_to_fp16_gathered(
             dst, st->src, start_row, n_rows, st->k_block,
             st->matrix_rows, st->cur_a, st->mapping_stride,
-            st->ne11, st->nb11, st->nb12, st->cne1);
+            st->ne11, &st->ne11_div, st->nb11, st->nb12, st->cne1);
     }
 }
 
@@ -1823,6 +1825,7 @@ static void transfer_activation_chunk_gathered_threaded(
         .cur_a             = cur_a,
         .mapping_stride    = mapping_stride,
         .ne11              = ne11,
+        .ne11_div          = init_fastdiv_values(ne11),
         .nb11              = nb11,
         .nb12              = nb12,
         .start_row         = start_row,
