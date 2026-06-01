@@ -639,7 +639,7 @@ static ggml_type llama_tensor_get_type_impl(quantize_state_impl & qs, ggml_type 
                 else if (ftype == LLAMA_FTYPE_MOSTLY_Q3_K_M ) new_type = GGML_TYPE_Q4_K;
                 else if (ftype == LLAMA_FTYPE_MOSTLY_Q3_K_L ) new_type = GGML_TYPE_Q5_K;
                 else if (ftype == LLAMA_FTYPE_MOSTLY_IQ3_M || 
-                        ftype == LLAMA_FTYPE_MOSTLY_AKQ_G2Q3) new_type = GGML_TYPE_Q4_K;
+                        ftype == LLAMA_FTYPE_MOSTLY_AKQ_G2Q3) new_type = GGML_TYPE_Q5_K;
             }
         } else {
             if (ftype == LLAMA_FTYPE_MOSTLY_Q3_K_L) new_type = GGML_TYPE_Q4_K;
