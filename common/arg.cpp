@@ -2939,6 +2939,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         "this is a white list, used only if exec_shell_command was specified with --tools.",
         [](common_params & params, const std::string & value) {
             params.server_tools_shell_command_whitelist = parse_csv_row(value);
+            for (auto const & i : params.server_tools_shell_command_whitelist) {
+                const bool all_printable = std::all_of(i.begin(), i.end(), [](const char t){return std::isprint(t);});
+                if (!all_printable) {
+                        fprintf(stderr, "shell command string contains invalid (non-printable) character");
+                        throw std::invalid_argument("each shell command string must contain only printable characters");
+                }
+            }
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_TOOLS_WHITELIST_SHELL_COMMANDS"));
     // Deprecated: use --ui/--no-ui instead (kept for backward compat)
