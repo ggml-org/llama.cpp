@@ -85,6 +85,10 @@ struct task_params {
     std::string        oaicompat_model;
     std::string        oaicompat_cmpl_id;
 
+    // realtime control (SERVER_TASK_TYPE_CONTROL)
+    std::string        control_action;
+    std::string        control_cmpl_id;
+
     // per-request parameters for chat parsing
     common_chat_parser_params chat_parser_params;
 
@@ -135,10 +139,6 @@ struct server_task {
     // used by SERVER_TASK_TYPE_CANCEL
     int id_target = -1;
     int id_slot   = -1;
-
-    // used by SERVER_TASK_TYPE_CONTROL
-    std::string control_action;
-    std::string control_cmpl_id; // targets a live completion, avoids the slot index TOCTOU
 
     // used by parallel sampling (multiple completions from same prompt)
     int id_parent  = -1;

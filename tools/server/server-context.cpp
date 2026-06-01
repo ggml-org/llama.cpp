@@ -1244,9 +1244,6 @@ private:
         return nullptr;
     }
 
-    // resolves the live slot currently serving a given chat completion id. matching the
-    // completion rather than the slot index avoids a TOCTOU: once the completion ends the
-    // slot may be reassigned, and a stale id simply matches nothing
     server_slot * get_slot_by_cmpl_id(const std::string & cmpl_id) {
         if (cmpl_id.empty()) {
             return nullptr;
@@ -2117,8 +2114,7 @@ private:
                     auto res = std::make_unique<server_task_result_control>();
                     res->id = task.id;
 
-                    // resolve the live completion, a finished one matches nothing (no TOCTOU)
-                    server_slot * slot = get_slot_by_cmpl_id(task.control_cmpl_id);
+                    server_slot * slot = get_slot_by_cmpl_id(task.params.control_cmpl_id);
                     if (slot == nullptr) {
                         res->success = false;
                         res->message = "no active completion for this id";
@@ -2126,7 +2122,7 @@ private:
                         break;
                     }
 
-                    if (task.control_action == "reasoning_end") {
+                    if (task.params.control_action == "reasoning_end") {
                         // the budget sampler only exists when reasoning control was armed
                         if (!slot->task->params.sampling.reasoning_control) {
                             res->success = false;
@@ -4315,8 +4311,8 @@ void server_routes::init_routes() {
         {
             server_task task(SERVER_TASK_TYPE_CONTROL);
             task.id              = rd.get_new_id();
-            task.control_cmpl_id = cmpl_id;
-            task.control_action  = action;
+            task.params.control_cmpl_id = cmpl_id;
+            task.params.control_action  = action;
             rd.post_task(std::move(task));
         }
 
