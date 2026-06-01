@@ -152,15 +152,7 @@ docker build -t local/llama.cpp:server-intel --target server -f .devops/intel.Do
 ```
 
 You may want to pass in some different `ARGS`, depending on the SYCL environment supported by your container host, as well as the GPU architecture.
-
-The defaults are:
-
-- `GGML_SYCL_F16` set to `OFF`
-- `IGC_VERSION` set to `v2.30.1`
-- `IGC_VERSION_FULL` set to `2_2.30.1+20950`
-- `COMPUTE_RUNTIME_VERSION` set to `26.09.37435.1`
-- `COMPUTE_RUNTIME_VERSION_FULL` set to `26.09.37435.1-0`
-- `IGDGMM_VERSION` set to `22.9.0`
+Refer to [.devops/intel.Dockerfile](../.devops/intel.Dockerfile) for the available `ARGS` and their defaults.
 
 The resulting images, are essentially the same as the non-SYCL images:
 
