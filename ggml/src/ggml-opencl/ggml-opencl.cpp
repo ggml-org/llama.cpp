@@ -6091,12 +6091,14 @@ static void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer, 
         }
 #endif // GGML_OPENCL_USE_ADRENO_KERNELS
             cl_kernel kernel = backend_ctx->kernel_convert_block_q5_0;
+            cl_ulong n_blk = ggml_nelements(tensor)/ggml_blck_size(tensor->type);
             CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem), &data_device));
             CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_mem), &extra->qs));
             CL_CHECK(clSetKernelArg(kernel, 2, sizeof(cl_mem), &extra->qh));
             CL_CHECK(clSetKernelArg(kernel, 3, sizeof(cl_mem), &extra->d));
+            CL_CHECK(clSetKernelArg(kernel, 4, sizeof(cl_ulong), &n_blk));
 
-            size_t global_work_size[] = {(size_t)ggml_nelements(tensor)/ggml_blck_size(tensor->type), 1, 1};
+            size_t global_work_size[] = {(size_t)CEIL_DIV(n_blk, 64) * 64, 1, 1};
             size_t local_work_size[] = {64, 1, 1};
 
             cl_event evt;
@@ -6207,13 +6209,15 @@ static void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer, 
         }
 #endif // GGML_OPENCL_USE_ADRENO_KERNELS
         cl_kernel kernel = backend_ctx->kernel_convert_block_q5_1;
+        cl_ulong n_blk = ggml_nelements(tensor)/ggml_blck_size(tensor->type);
         CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem), &data_device));
         CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_mem), &extra->qs));
         CL_CHECK(clSetKernelArg(kernel, 2, sizeof(cl_mem), &extra->qh));
         CL_CHECK(clSetKernelArg(kernel, 3, sizeof(cl_mem), &extra->d));
         CL_CHECK(clSetKernelArg(kernel, 4, sizeof(cl_mem), &extra->m));
+        CL_CHECK(clSetKernelArg(kernel, 5, sizeof(cl_ulong), &n_blk));
 
-        size_t global_work_size[] = {(size_t)ggml_nelements(tensor)/ggml_blck_size(tensor->type), 1, 1};
+        size_t global_work_size[] = {(size_t)CEIL_DIV(n_blk, 64) * 64, 1, 1};
         size_t local_work_size[] = {64, 1, 1};
 
         cl_event evt;

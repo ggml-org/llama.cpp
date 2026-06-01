@@ -546,8 +546,13 @@ kernel void kernel_convert_block_q5_0(
     global struct block_q5_0 * src0,
     global uchar * dst_qs,
     global uint  * dst_qh,
-    global half  * dst_d
+    global half  * dst_d,
+    ulong n_blk
 ) {
+    if (get_global_id(0) >= n_blk) {
+        return;
+    }
+
     global struct block_q5_0 * b = (global struct block_q5_0 *) src0 + get_global_id(0);
     global uchar * qs = (global uchar *) dst_qs + (QK5_0/2)*get_global_id(0);
     global uint  * qh = (global uint  *) dst_qh + get_global_id(0);
@@ -688,8 +693,13 @@ kernel void kernel_convert_block_q5_1(
     global uchar * dst_qs,
     global uint  * dst_qh,
     global half  * dst_d,
-    global half  * dst_m
+    global half  * dst_m,
+    ulong n_blk
 ) {
+    if (get_global_id(0) >= n_blk) {
+        return;
+    }
+
     global struct block_q5_1 * b = (global struct block_q5_1 *) src0 + get_global_id(0);
     global uchar * qs = (global uchar *) dst_qs + (QK5_1/2)*get_global_id(0);
     global uint  * qh = (global uint  *) dst_qh + get_global_id(0);
