@@ -113,7 +113,7 @@ export interface DatabaseMessage {
 	/** Serialized JSON array of tool calls made by assistant messages */
 	toolCalls?: string;
 	/** Chat completion id streamed by the server, used to target realtime control (e.g. end reasoning) */
-	cmplId?: string;
+	completionId?: string;
 	/** Tool call ID for tool result messages (role: 'tool') */
 	toolCallId?: string;
 	children: string[];
