@@ -121,6 +121,11 @@ struct clip_graph_deepseekocr : clip_graph {
     ggml_tensor * build_sam(ggml_tensor * inp); // build the SAM model
 };
 
+struct clip_graph_deepseekocr2 : clip_graph_deepseekocr {
+    clip_graph_deepseekocr2(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph_deepseekocr(ctx, img) {}
+    ggml_cgraph * build() override; // reuses build_sam() from base
+};
+
 struct clip_graph_conformer : clip_graph {
     clip_graph_conformer(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
     ggml_cgraph * build() override;
@@ -198,4 +203,9 @@ struct clip_graph_parakeet : clip_graph {
 
     ggml_tensor * parakeet_build_graph_conv();
     ggml_tensor * parakeet_build_graph_encoder(ggml_tensor * cur);
+};
+
+struct clip_graph_exaone4_5 : clip_graph {
+    clip_graph_exaone4_5(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
+    ggml_cgraph * build() override;
 };
