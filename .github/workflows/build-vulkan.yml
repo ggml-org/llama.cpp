@@ -36,16 +36,8 @@ env:
   LLAMA_ARG_LOG_TIMESTAMPS: 1
 
 jobs:
-  ubuntu:
-    strategy:
-      matrix:
-        include:
-          - build: 'x64'
-            os: ubuntu-24.04
-          - build: 'arm64'
-            os: ubuntu-24.04-arm
-
-    runs-on: ${{ matrix.os }}
+  ubuntu-arm64:
+    runs-on: ubuntu-24.04-arm
 
     steps:
       - name: Clone
@@ -63,7 +55,7 @@ jobs:
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.21
         with:
-          key: vulkan-${{ matrix.os }}-new
+          key: vulkan-ubuntu-24.04-arm-new
           variant: ccache
           evict-old-files: 1d
           save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
