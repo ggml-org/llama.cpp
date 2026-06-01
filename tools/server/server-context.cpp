@@ -213,6 +213,10 @@ struct server_slot {
 
         // clear alora start
         alora_invocation_start = -1;
+
+        // clear context checkpoints from the previous run
+        // they are re-created during prompt processing if needed
+        prompt.checkpoints.clear();
     }
 
     void init_sampler() const {
@@ -2797,10 +2801,14 @@ private:
                                     }
 
                                     if (do_reset) {
-                                        SLT_WRN(slot, "forcing full prompt re-processing due to lack of cache data (likely due to SWA or hybrid/recurrent memory, see %s)\n",
-                                                "https://github.com/ggml-org/llama.cpp/pull/13194#issuecomment-2868343055");
-                                        pos_next = 0;
-                                        n_past = 0;
+                                        if (pos_min >= 0) {
+                                            SLT_WRN(slot, "no checkpoints available, but KV cache has valid data - skipping checkpoint restoration for n_past = %d\n", n_past);
+                                        } else {
+                                            SLT_WRN(slot, "forcing full prompt re-processing due to lack of cache data (likely due to SWA or hybrid/recurrent memory, see %s)\n",
+                                                    "https://github.com/ggml-org/llama.cpp/pull/13194#issuecomment-2868343055");
+                                            pos_next = 0;
+                                            n_past = 0;
+                                        }
                                     }
                                 }
                             }
