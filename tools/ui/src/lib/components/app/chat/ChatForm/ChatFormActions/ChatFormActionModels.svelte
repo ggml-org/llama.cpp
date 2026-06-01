@@ -1,6 +1,11 @@
 <script lang="ts">
 	import { chatStore } from '$lib/stores/chat.svelte';
-	import { modelsStore, modelOptions, selectedModelId } from '$lib/stores/models.svelte';
+	import {
+		modelsStore,
+		modelOptions,
+		selectedModelId,
+		selectedModelName
+	} from '$lib/stores/models.svelte';
 	import { isRouterMode, serverError } from '$lib/stores/server.svelte';
 	import { ModelsSelectorDropdown, ModelsSelectorSheet } from '$lib/components/app';
 	import { isMobile } from '$lib/stores/viewport.svelte';
@@ -39,9 +44,24 @@
 
 	let lastSyncedConversationModel: string | null = null;
 
-	let selectorModel = $derived(conversationModel ?? modelsStore.selectedModelName ?? null);
+	let selectorModel = $derived.by(() => {
+		// Priority 1: if the store's selected model differs from the conversation model,
+		// show the store's model. This handles the case where the user explicitly
+		// selected a different model — selectorModel updates immediately.
+		const storeModel = selectedModelName();
+		if (storeModel && storeModel !== conversationModel) {
+			return storeModel;
+		}
+		// Priority 2: show the conversation model (from last assistant message)
+		if (conversationModel) {
+			return conversationModel;
+		}
+		return null;
+	});
 
 	$effect(() => {
+		// When the conversation model changes (new chat loaded, new assistant message),
+		// sync the store to match the conversation model.
 		if (conversationModel && conversationModel !== lastSyncedConversationModel) {
 			if (modelOptions().some((m) => m.model === conversationModel)) {
 				modelsStore.selectedModelName = conversationModel;
@@ -50,7 +70,6 @@
 				modelsStore.selectedModelName = null;
 				modelsStore.clearSelection();
 			}
-
 			lastSyncedConversationModel = conversationModel;
 		} else if (
 			isRouter &&
@@ -60,9 +79,7 @@
 			!conversationModel
 		) {
 			lastSyncedConversationModel = null;
-
 			const first = modelOptions().find((m) => modelsStore.loadedModelIds.includes(m.model));
-
 			if (first) modelsStore.selectModelById(first.id);
 		}
 	});

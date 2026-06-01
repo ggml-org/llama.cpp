@@ -269,6 +269,7 @@
 				{#if isRouter}
 					<ModelsSelectorDropdown
 						currentModel={displayedModel}
+						{message}
 						disabled={isLoading()}
 						onModelChange={async (modelId: string, modelName: string) => {
 							const status = modelsStore.getModelStatus(modelId);
