@@ -884,6 +884,10 @@ static ggml_cgraph * clip_image_build_graph(clip_ctx * ctx, const clip_image_f32
             {
                 builder = std::make_unique<clip_graph_qwen3vl>(ctx, img);
             } break;
+        case PROJECTOR_TYPE_EXAONE4_5:
+            {
+                builder = std::make_unique<clip_graph_exaone4_5>(ctx, img);
+            } break;
         case PROJECTOR_TYPE_MIMOVL:
             {
                 builder = std::make_unique<clip_graph_mimovl>(ctx, img);
@@ -1556,6 +1560,19 @@ struct clip_model_loader {
                         hparams.audio_window_len       = 400;
                         hparams.audio_hop_len          = 160;
                     } break;
+                case PROJECTOR_TYPE_EXAONE4_5:
+                    {
+                        hparams.n_merge = 2;
+                        get_u32(KEY_SPATIAL_MERGE_SIZE, hparams.n_merge, false);
+                        get_u32(KEY_WIN_ATTN_PATTERN, hparams.n_wa_pattern, false);
+                        get_u32(KEY_IMAGE_MIN_PIXELS, hparams.image_min_pixels);
+                        get_u32(KEY_IMAGE_MAX_PIXELS, hparams.image_max_pixels);
+                        hparams.set_warmup_n_tokens(46 * 46);
+                        if (hparams.rope_theta <= 0.0f) {
+                            hparams.rope_theta = 10000.0f;
+                        }
+                        get_u32(string_format(KEY_N_HEAD_KV, "vision"), hparams.n_head_kv);
+                    } break;
                 case PROJECTOR_TYPE_GEMMA4A:
                     {
                         // Gemma4 feature_extraction_gemma4.py:
@@ -1799,6 +1816,7 @@ struct clip_model_loader {
                     || model.proj_type == PROJECTOR_TYPE_LDPV2
                     || model.proj_type == PROJECTOR_TYPE_QWEN2VL
                     || model.proj_type == PROJECTOR_TYPE_QWEN25VL
+                    || model.proj_type == PROJECTOR_TYPE_EXAONE4_5
                     || model.proj_type == PROJECTOR_TYPE_GLM_EDGE
                     || model.proj_type == PROJECTOR_TYPE_GEMMA3
                     || model.proj_type == PROJECTOR_TYPE_IDEFICS3
@@ -1948,6 +1966,7 @@ struct clip_model_loader {
                 } break;
             case PROJECTOR_TYPE_QWEN2VL:
             case PROJECTOR_TYPE_QWEN25VL:
+            case PROJECTOR_TYPE_EXAONE4_5:
                 {
                     model.mm_0_w = get_tensor(string_format(TN_LLAVA_PROJ, 0, "weight"));
                     model.mm_0_b = get_tensor(string_format(TN_LLAVA_PROJ, 0, "bias"));
@@ -3079,6 +3098,7 @@ int clip_n_output_tokens_x(const struct clip_ctx * ctx, struct clip_image_f32 * 
         case PROJECTOR_TYPE_QWEN2VL:
         case PROJECTOR_TYPE_QWEN25VL:
         case PROJECTOR_TYPE_QWEN3VL:
+        case PROJECTOR_TYPE_EXAONE4_5:
         case PROJECTOR_TYPE_MIMOVL:
         case PROJECTOR_TYPE_GLM4V:
         case PROJECTOR_TYPE_PADDLEOCR:
@@ -3100,6 +3120,7 @@ int clip_n_output_tokens_y(const struct clip_ctx * ctx, struct clip_image_f32 * 
         case PROJECTOR_TYPE_QWEN2VL:
         case PROJECTOR_TYPE_QWEN25VL:
         case PROJECTOR_TYPE_QWEN3VL:
+        case PROJECTOR_TYPE_EXAONE4_5:
         case PROJECTOR_TYPE_MIMOVL:
         case PROJECTOR_TYPE_GLM4V:
         case PROJECTOR_TYPE_PADDLEOCR:
@@ -3179,6 +3200,7 @@ int clip_n_output_tokens(const struct clip_ctx * ctx, struct clip_image_f32 * im
         case PROJECTOR_TYPE_QWEN2VL:
         case PROJECTOR_TYPE_QWEN25VL:
         case PROJECTOR_TYPE_QWEN3VL:
+        case PROJECTOR_TYPE_EXAONE4_5:
         case PROJECTOR_TYPE_MIMOVL:
         case PROJECTOR_TYPE_GLM4V:
         case PROJECTOR_TYPE_YOUTUVL:
@@ -3675,11 +3697,15 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
                 set_input_i32("positions", positions);
             } break;
         case PROJECTOR_TYPE_QWEN25VL:
+        case PROJECTOR_TYPE_EXAONE4_5:
         case PROJECTOR_TYPE_YOUTUVL:
             {
                 // pw * ph = number of tokens output by ViT after apply patch merger
                 // ipw * ipw = number of vision token been processed inside ViT
-                const bool use_window_attn = ctx->model.proj_type == PROJECTOR_TYPE_QWEN25VL ? hparams.n_wa_pattern > 0 : !hparams.wa_layer_indexes.empty();
+                const bool use_window_attn =
+                    (ctx->model.proj_type == PROJECTOR_TYPE_QWEN25VL || ctx->model.proj_type == PROJECTOR_TYPE_EXAONE4_5)
+                        ? hparams.n_wa_pattern > 0
+                        : !hparams.wa_layer_indexes.empty();
                 const int merge_ratio = 2;
                 const int pw  = image_size_width  / patch_size / merge_ratio;
                 const int ph  = image_size_height / patch_size / merge_ratio;
@@ -4262,6 +4288,7 @@ int clip_n_mmproj_embd(const struct clip_ctx * ctx) {
             return ctx->model.mm_model_mlp_3_w->ne[1];
         case PROJECTOR_TYPE_QWEN2VL:
         case PROJECTOR_TYPE_QWEN25VL:
+        case PROJECTOR_TYPE_EXAONE4_5:
         case PROJECTOR_TYPE_JANUS_PRO:
         case PROJECTOR_TYPE_YOUTUVL:
             return ctx->model.mm_1_b->ne[0];

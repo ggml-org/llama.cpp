@@ -13,6 +13,7 @@ concurrency:
   queue: max
 
 env:
+  GH_TOKEN: ${{ github.token }}
   GGML_NLOOP: 3
   GGML_N_THREADS: 1
   LLAMA_ARG_LOG_COLORS: 1
@@ -22,6 +23,9 @@ env:
 jobs:
   cuda:
     runs-on: windows-2022
+
+    permissions:
+      actions: write
 
     strategy:
       matrix:
@@ -36,7 +40,6 @@ jobs:
         uses: ggml-org/ccache-action@v1.2.21
         with:
           key: release-windows-2022-x64-cuda-${{ matrix.cuda }}
-          append-timestamp: false # note: use this only with non-concurrent jobs!
 
       - name: Install Cuda Toolkit
         uses: ./.github/actions/windows-setup-cuda
@@ -67,8 +70,16 @@ jobs:
           cmake --build build --config Release -j %NINJA_JOBS% -t ggml
           cmake --build build --config Release
 
+      - name: ccache-clear
+        uses: ./.github/actions/ccache-clear
+        with:
+          key: release-windows-2022-x64-cuda-${{ matrix.cuda }}
+
   hip:
     runs-on: windows-2022
+
+    permissions:
+      actions: write
 
     env:
       # Make sure this is in sync with build-cache.yml
@@ -125,7 +136,6 @@ jobs:
           #       to populate the ccache for the release with manual runs of this workflow
           #key: release-windows-2022-x64-hip-${{ env.HIPSDK_INSTALLER_VERSION }}-${{ matrix.name }}
           key: cuda-windows-2022-x64-hip-${{ env.HIPSDK_INSTALLER_VERSION }}-${{ matrix.name }}
-          append-timestamp: false # note: use this only with non-concurrent jobs!
 
       - name: Build
         id: cmake_build
@@ -144,3 +154,9 @@ jobs:
             -DGPU_TARGETS="gfx1100"  `
             -DGGML_RPC=ON
           cmake --build build -j ${env:NUMBER_OF_PROCESSORS}
+
+      - name: ccache-clear
+        uses: ./.github/actions/ccache-clear
+        with:
+          #key: release-windows-2022-x64-hip-${{ env.HIPSDK_INSTALLER_VERSION }}-${{ matrix.name }}
+          key: cuda-windows-2022-x64-hip-${{ env.HIPSDK_INSTALLER_VERSION }}-${{ matrix.name }}
