@@ -406,25 +406,38 @@ export class ChatService {
 	 * right child, single model ignores it. Returns true on success.
 	 */
 	static async stopReasoning(completionId: string, model?: string | null): Promise<boolean> {
-		if (!completionId) return false;
-		try {
-			const body: Record<string, unknown> = {
-				id: completionId,
-				action: CONTROL_ACTION.END_REASONING
-			};
-			if (model) body.model = model;
+		if (!completionId) {
+			console.error(
+				'stopReasoning: no completion id for the active message, cannot target the running completion'
+			);
+			return false;
+		}
 
+		const body: Record<string, unknown> = {
+			id: completionId,
+			action: CONTROL_ACTION.END_REASONING
+		};
+		if (model) body.model = model;
+
+		try {
 			const res = await fetch(API_CHAT.CONTROL, {
 				method: 'POST',
 				headers: getJsonHeaders(),
 				body: JSON.stringify(body)
 			});
-			if (!res.ok) return false;
 
-			const data = await res.json();
-			return data?.success === true;
+			const data = await res.json().catch(() => null);
+			if (!res.ok || data?.success !== true) {
+				console.error('stopReasoning: control request failed', {
+					status: res.status,
+					completionId,
+					response: data
+				});
+				return false;
+			}
+			return true;
 		} catch (error) {
-			console.warn('stopReasoning failed:', error);
+			console.error('stopReasoning: control request threw', { completionId, error });
 			return false;
 		}
 	}

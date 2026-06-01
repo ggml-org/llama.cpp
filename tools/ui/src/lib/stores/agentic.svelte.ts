@@ -488,6 +488,7 @@ class AgenticStore {
 			onToolCallsStreaming,
 			onAttachments,
 			onModel,
+			onCompletionId,
 			onAssistantTurnComplete,
 			createToolResultMessage,
 			createAssistantMessage,
@@ -597,6 +598,7 @@ class AgenticStore {
 							}
 						},
 						onModel,
+						onCompletionId,
 						onTimings: (timings?: ChatMessageTimings, progress?: ChatMessagePromptProgress) => {
 							onTimings?.(timings, progress);
 							if (timings) {
