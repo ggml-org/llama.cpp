@@ -655,7 +655,7 @@ class Gemma4Model(Gemma3Model):
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
 
-        num_kv_shared_layers = self.hparams["num_kv_shared_layers"]
+        num_kv_shared_layers = self.hparams.get("num_kv_shared_layers", 0)
         self.gguf_writer.add_shared_kv_layers(num_kv_shared_layers)
 
         # per-layer embedding is optional
@@ -803,6 +803,32 @@ class Gemma4AssistantModel(Gemma4Model):
         super().set_gguf_parameters()
         self.gguf_writer.add_embedding_length_out(self.hparams["backbone_hidden_size"])
         self.gguf_writer.add_nextn_predict_layers(self.block_count)
+
+
+@ModelBase.register("DiffusionGemma4ModelForBlockDiffusion")
+class DiffusionGemma4Model(Gemma4Model):
+    # Block-diffusion variant of Gemma 4. Reuses the gemma4 decoder block; adds the
+    # self-conditioning MLP and nests the language model under `model.decoder.`.
+    model_arch = gguf.MODEL_ARCH.DIFFUSION_GEMMA4
+
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, _ = item
+        # The text encoder shares every weight with the decoder except its own
+        # per-layer `layer_scalar`. The single-stack graph uses the decoder scalars,
+        # so the encoder-only tensors are dropped here.
+        if name.startswith("model.encoder."):
+            return None
+        return super().filter_tensors(item)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        # diffusion_gemma4 nests the language model under `model.decoder.`; strip it so
+        # the shared gemma4 tensor mappings apply. `model.decoder.self_conditioning.*`
+        # then maps to the SELF_COND_* tensors.
+        if name.startswith("model.decoder."):
+            name = "model." + name[len("model.decoder."):]
+
+        yield from super().modify_tensors(data_torch, name, bid)
 
 
 @ModelBase.register("Gemma4ForConditionalGeneration")
