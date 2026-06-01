@@ -2600,6 +2600,17 @@ class LazyTorchTensor(gguf.LazyBase):
         return cls._wrap_fn(func)(*args, **kwargs)
 
 
+if hasattr(torch, "float8_e8m0fnu"):
+    _torch_float8_e8m0 = torch.float8_e8m0fnu
+    LazyTorchTensor._dtype_map[_torch_float8_e8m0] = np.uint8
+    LazyTorchTensor._dtype_byteswap_map[_torch_float8_e8m0] = np.uint8
+    LazyTorchTensor._dtype_str_map["F8_E8M0"] = _torch_float8_e8m0
+else:
+    # Older torch builds do not expose F8_E8M0. Keep the raw bytes so callers
+    # that know the format can decode them explicitly.
+    LazyTorchTensor._dtype_str_map["F8_E8M0"] = torch.uint8
+
+
 def get_model_architecture(hparams: dict[str, Any], model_type: ModelType) -> str:
     # TODO @ngxson : this won't work correctly if the model has both audio & vision encoders
     # maybe we should fallback to text model's arch in that case, since not many models have both
