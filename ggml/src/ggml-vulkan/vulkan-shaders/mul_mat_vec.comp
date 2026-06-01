@@ -68,9 +68,13 @@ void iter(inout FLOAT_TYPE temp[NUM_COLS][NUM_ROWS], const uint first_row, const
 
         const vec4 b = load_b(j, iybs, iqs, lastiter, OOB_y, OOB_z, OOB_w);
 #endif
+        const bool transa_rt = (p.fusion_flags & MAT_VEC_FUSION_FLAGS_TRANSPOSE_A) != 0;
+        const uint a_kb = col / QUANT_K;
         uint ibi = first_row*p.ncols;
         [[unroll]] for (uint n = 0; n < num_rows; ++n) {
-            const uint ib = (ibi + col)/QUANT_K; // block index
+            const uint ib = transa_rt
+                ? (a_kb * p.stride_d + (first_row + n))
+                : ((ibi + col)/QUANT_K);
             ibi += p.ncols;
 
 #if K_PER_ITER == 8
