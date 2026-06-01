@@ -99,12 +99,13 @@ class Step3VLTextModel(Qwen3Model):
 class Step35Model(TextModel):
     model_arch = gguf.MODEL_ARCH.STEP35
 
-    # --mtp / --no-mtp toggles (see convert_hf_to_gguf.py main()).
-    # Unlike Qwen3.5 which stores MTP under a `mtp.*` namespace, Step3.5 just
-    # appends MTP layers at `model.layers.{num_hidden_layers + i}`; these flags
-    # filter by layer index instead of by name prefix.
-    no_mtp: bool = False
-    mtp_only: bool = False
+    # The --mtp / --no-mtp toggles are ModelBase.mtp_only / no_mtp (set in
+    # convert_hf_to_gguf.py main()). Unlike Qwen3.5, which stores MTP under a
+    # `mtp.*` namespace, Step3.5 appends MTP layers at
+    # `model.layers.{num_hidden_layers + i}`, so we filter them by layer index.
+    # The trunk layer count is captured before indexing so the classmethod
+    # filter_tensors can tell the appended MTP block(s) apart from the trunk.
+    _n_main_layers: int | None = None
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -116,6 +117,13 @@ class Step35Model(TextModel):
         if n_nextn > 0 and not self.no_mtp:
             self.block_count = int(self.hparams["num_hidden_layers"]) + n_nextn
             self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
+
+    def index_tensors(self, remote_hf_model_id: str | None = None):
+        # filter_tensors is a classmethod and can't reach self.hparams; stash
+        # the trunk layer count here (before indexing runs) so it can detect
+        # the appended MTP layers by index.
+        type(self)._n_main_layers = int(self.hparams["num_hidden_layers"])
+        return super().index_tensors(remote_hf_model_id=remote_hf_model_id)
 
     def set_gguf_parameters(self):
         rope_theta = self.hparams.get("rope_theta")
@@ -219,31 +227,19 @@ class Step35Model(TextModel):
         if name.endswith(".moe.router_bias"):
             name += ".bias"
 
-        return super().filter_tensors((name, gen))
-
-    def _is_mtp_layer(self, bid: int | None) -> bool:
-        if bid is None:
-            return False
-        n_main = int(self.hparams.get("num_hidden_layers", self.block_count))
-        return bid >= n_main
-
-    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None):
-        is_mtp = self._is_mtp_layer(bid)
+        # Step3.5 appends the MTP block(s) past num_hidden_layers.
+        assert cls._n_main_layers is not None
+        is_mtp = (m := re.match(r"model\.layers\.(\d+)\.", name)) is not None and int(m.group(1)) >= cls._n_main_layers
 
         # --no-mtp: drop the appended MTP block(s) entirely.
-        if is_mtp and self.no_mtp:
-            return
-        # --mtp: keep ONLY MTP-block tensors plus the shared embeddings/norm/lm_head
-        # (so the resulting GGUF carries just the draft head).
-        if self.mtp_only and not is_mtp and bid is not None:
-            return
-        if self.mtp_only and bid is None:
-            # Top-level tensors: keep only shared embeddings/norm/lm_head.
-            keep = name in (
-                "model.embed_tokens.weight", "model.norm.weight", "lm_head.weight",
-            )
-            if not keep:
-                return
+        if is_mtp and cls.no_mtp:
+            return None
+        # --mtp: keep ONLY MTP-block tensors plus the shared embeddings/norm/
+        # lm_head (so the resulting GGUF carries just the draft head).
+        if cls.mtp_only and not is_mtp and name not in (
+            "model.embed_tokens.weight", "model.norm.weight", "lm_head.weight",
+        ):
+            return None
 
         # The checkpoint nests the per-MTP-layer shared head under
         # `model.layers.{N+i}.transformer.shared_head.{norm,output}.weight`;
@@ -251,11 +247,12 @@ class Step35Model(TextModel):
         # existing NEXTN_SHARED_HEAD_{NORM,HEAD} tensor mapping picks them up.
         # Mirrors vllm's `_rewrite_spec_layer_name` (step3p5_mtp.py).
         if is_mtp:
-            if ".transformer." in name:
-                name = name.replace(".transformer.", ".")
-            if "shared_head.output" in name:
-                name = name.replace("shared_head.output", "shared_head.head")
+            name = name.replace(".transformer.", ".")
+            name = name.replace("shared_head.output", "shared_head.head")
 
+        return super().filter_tensors((name, gen))
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None):
         if name.endswith("norm.weight"):
             data_torch += 1.0
 
