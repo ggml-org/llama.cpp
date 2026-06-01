@@ -130,15 +130,7 @@ jobs:
           ctest -L main -E test-backend-ops --verbose --timeout 900
 
   ubuntu-wasm:
-    strategy:
-      matrix:
-        include:
-          - build: 'x64'
-            os: ubuntu-24.04
-          - build: 'arm64'
-            os: ubuntu-24.04-arm
-
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-24.04-arm
 
     steps:
       - name: Clone
@@ -148,7 +140,7 @@ jobs:
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.21
         with:
-          key: webgpu-${{ matrix.os }}-wasm
+          key: webgpu-ubuntu-24.04-arm-wasm
           evict-old-files: 1d
           save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 

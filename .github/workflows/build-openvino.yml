@@ -35,23 +35,11 @@ env:
 
 jobs:
   ubuntu-24-openvino:
-    name: ubuntu-24-openvino-${{ matrix.openvino_device }}
+    runs-on: [self-hosted, Linux, Intel, OpenVINO]
 
     concurrency:
-      group: openvino-${{ matrix.variant }}-${{ github.head_ref || github.ref }}
+      group: openvino-gpu-${{ github.head_ref || github.ref }}
       cancel-in-progress: false
-
-    strategy:
-      matrix:
-        include:
-          - variant: cpu
-            runner: '"ubuntu-24.04"'
-            openvino_device: "CPU"
-          - variant: gpu
-            runner: '["self-hosted","Linux","Intel","OpenVINO"]'
-            openvino_device: "GPU"
-
-    runs-on: ${{ fromJSON(matrix.runner) }}
 
     env:
       # Sync versions in build-openvino.yml, build-self-hosted.yml, release.yml, build-cache.yml, .devops/openvino.Dockerfile
@@ -63,14 +51,6 @@ jobs:
         id: checkout
         uses: actions/checkout@v6
 
-      - name: ccache
-        if: runner.environment == 'github-hosted'
-        uses: ggml-org/ccache-action@v1.2.21
-        with:
-          key: openvino-ubuntu-24.04-${{ matrix.variant }}-no-preset-v1
-          evict-old-files: 1d
-          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
-
       - name: Dependencies
         id: depends
         run: |
@@ -78,16 +58,7 @@ jobs:
           sudo apt-get install -y build-essential libssl-dev libtbb12 cmake ninja-build python3-pip
           sudo apt-get install -y ocl-icd-opencl-dev opencl-headers opencl-clhpp-headers intel-opencl-icd
 
-      - name: Use OpenVINO Toolkit Cache
-        if: runner.environment == 'github-hosted'
-        uses: actions/cache@v5
-        id: cache-openvino
-        with:
-          path: ./openvino_toolkit
-          key: cache-gha-openvino-toolkit-v${{ env.OPENVINO_VERSION_FULL }}-${{ runner.os }}
-
       - name: Setup OpenVINO Toolkit
-        if: steps.cache-openvino.outputs.cache-hit != 'true'
         uses: ./.github/actions/linux-setup-openvino
         with:
           path: ./openvino_toolkit
@@ -109,12 +80,17 @@ jobs:
             -DGGML_OPENVINO=ON
           time cmake --build build/ReleaseOV --config Release -j $(nproc)
 
-      - name: Test
-        id: cmake_test
+      - name: Test (CPU)
+        id: cmake_test_cpu
         # TODO: fix and re-enable the `test-llama-archs` test below
         run: |
           cd ${{ github.workspace }}
-          if [ "${{ matrix.openvino_device }}" = "GPU" ]; then
-            export GGML_OPENVINO_DEVICE=GPU
-          fi
+          ctest --test-dir build/ReleaseOV -L main -E "test-llama-archs" --verbose --timeout 2000
+
+      - name: Test (GPU)
+        id: cmake_test_gpu
+        # TODO: fix and re-enable the `test-llama-archs` test below
+        run: |
+          cd ${{ github.workspace }}
+          export GGML_OPENVINO_DEVICE=GPU
           ctest --test-dir build/ReleaseOV -L main -E "test-llama-archs" --verbose --timeout 2000
