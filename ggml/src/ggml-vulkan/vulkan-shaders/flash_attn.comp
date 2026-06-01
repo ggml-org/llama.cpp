@@ -35,10 +35,12 @@ const uint32_t num_subgroups = SubGroupSize == 0 ? 0 : WorkGroupSize / SubGroupS
 
 layout (binding = 0) readonly buffer Q {float data_q[];};
 layout (binding = 0) readonly buffer QV4 {vec4 data_qv4[];};
+#if !defined(DATA_A_TURBO3_0)
 layout (binding = 1) readonly buffer K {float16_t data_k[];};
 layout (binding = 1) readonly buffer KV4 {f16vec4 data_kv4[];};
 layout (binding = 2) readonly buffer V {float16_t data_v[];};
 layout (binding = 2) readonly buffer VV4 {f16vec4 data_vv4[];};
+#endif
 layout (binding = 3) readonly buffer M {float16_t data_m[];};
 
 // If SubGroupSize is set to 0 then only use shmem reductions

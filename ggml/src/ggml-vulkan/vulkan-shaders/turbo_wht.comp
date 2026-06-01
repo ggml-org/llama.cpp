@@ -1,0 +1,67 @@
+#version 450
+
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_control_flow_attributes : require
+
+layout (local_size_x = 128, local_size_y = 1, local_size_z = 1) in;
+
+layout (push_constant) uniform parameter { uint ne; uint direction; uint group_size; } p;
+
+layout (binding = 0) readonly  buffer A { float data_a[]; };
+layout (binding = 1) writeonly buffer D { float data_d[]; };
+
+shared float x[128];
+
+// Pre-scramble sign vectors applied before and after the WHT.
+// direction == 0: pre = S1, post = S2; direction == 1: pre = S2, post = S1.
+const float S1[128] = float[128](
+    -1,  1,  1, -1, -1,  1, -1,  1, -1, -1,  1,  1,  1,  1,  1,  1,
+     1, -1,  1, -1,  1, -1, -1,  1,  1,  1, -1,  1,  1, -1, -1, -1,
+    -1,  1,  1, -1,  1,  1, -1,  1, -1,  1,  1, -1, -1,  1, -1,  1,
+     1,  1,  1, -1, -1, -1, -1, -1,  1, -1,  1,  1,  1,  1, -1,  1,
+    -1, -1,  1, -1, -1, -1,  1, -1, -1, -1,  1, -1, -1, -1,  1,  1,
+     1, -1, -1,  1,  1,  1, -1, -1,  1,  1, -1,  1,  1, -1,  1, -1,
+    -1,  1,  1, -1,  1, -1,  1, -1,  1,  1,  1,  1, -1,  1, -1,  1,
+     1, -1,  1,  1, -1, -1, -1, -1, -1,  1,  1, -1,  1,  1, -1,  1
+);
+
+const float S2[128] = float[128](
+     1,  1,  1,  1, -1,  1,  1, -1,  1, -1, -1, -1,  1, -1, -1, -1,
+     1,  1, -1, -1,  1, -1,  1, -1,  1, -1, -1,  1, -1,  1,  1,  1,
+     1,  1, -1, -1, -1,  1, -1, -1, -1, -1, -1, -1,  1,  1,  1, -1,
+     1, -1,  1,  1,  1, -1, -1,  1, -1, -1, -1, -1, -1, -1,  1,  1,
+     1, -1,  1, -1, -1, -1, -1,  1, -1,  1, -1,  1, -1, -1,  1,  1,
+    -1,  1, -1,  1,  1, -1,  1, -1, -1, -1, -1,  1, -1, -1,  1, -1,
+     1, -1,  1,  1,  1, -1, -1,  1, -1,  1, -1,  1,  1, -1, -1,  1,
+    -1,  1, -1,  1,  1, -1,  1, -1,  1, -1, -1, -1, -1, -1,  1, -1
+);
+
+const float INV_SQRT_128 = 0.08838834764831845;  // 1 / sqrt(128)
+
+void main() {
+    const uint tid  = gl_LocalInvocationID.x;
+    const uint base = (gl_WorkGroupID.z * 262144 + gl_WorkGroupID.y * 512 + gl_WorkGroupID.x) * 128;
+
+    if (base + tid >= p.ne) return;
+
+    const float fs = (p.direction == 0) ? S1[tid] : S2[tid];
+    const float ss = (p.direction == 0) ? S2[tid] : S1[tid];
+
+    x[tid] = data_a[base + tid];
+    barrier();
+
+    x[tid] *= fs;
+    barrier();
+
+    [[unroll]] for (uint h = 1; h < 128; h *= 2) {
+        if ((tid % (2 * h)) < h) {
+            float a    = x[tid];
+            float b    = x[tid + h];
+            x[tid]     = a + b;
+            x[tid + h] = a - b;
+        }
+        barrier();
+    }
+
+    data_d[base + tid] = x[tid] * INV_SQRT_128 * ss;
+}

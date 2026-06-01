@@ -6,6 +6,7 @@
 #extension GL_EXT_shader_explicit_arithmetic_types_int16 : require
 #extension GL_EXT_shader_explicit_arithmetic_types_int8 : require
 #extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_8bit_storage : require
 
 #if defined(DATA_A_F32)
 #define QUANT_K 1
@@ -1736,6 +1737,70 @@ struct block_nvfp4_packed32
 #define QUANT_AUXF 1
 #define A_TYPE block_nvfp4
 #define A_TYPE_PACKED32 block_nvfp4_packed32
+#endif
+
+#define QUANT_K_TURBO3_0 128
+#define QUANT_R_TURBO3_0 1
+
+struct block_turbo3_0
+{
+    float16_t norm;
+    uint8_t qs[32];     // 2-bit centroid indices (4 per byte), 128/4 = 32 bytes
+    uint8_t signs[16]; // 1-bit high bit of 3-bit index (8 per byte), 128/8 = 16 bytes
+};
+
+#if defined(DATA_A_TURBO3_0)
+#define QUANT_K QUANT_K_TURBO3_0
+#define QUANT_R QUANT_R_TURBO3_0
+#define QUANT_AUXF 1
+#define A_TYPE block_turbo3_0
+#endif
+
+#define QUANT_K_TURBO2_0 128
+#define QUANT_R_TURBO2_0 1
+struct block_turbo2_0
+{
+    float16_t norm;
+    uint8_t qs[32];     // 2-bit centroid indices (4 per byte), 128/4 = 32 bytes
+};
+#if defined(DATA_A_TURBO2_0)
+#define QUANT_K QUANT_K_TURBO2_0
+#define QUANT_R QUANT_R_TURBO2_0
+#define QUANT_AUXF 1
+#define A_TYPE block_turbo2_0
+#endif
+
+#define QUANT_K_TURBO4_0 128
+#define QUANT_R_TURBO4_0 1
+struct block_turbo4_0
+{
+    float16_t norm;
+    float16_t rnorm;    // reserved in 4-bit mode (kept for ABI parity with legacy)
+    uint8_t qs[64];     // 4-bit centroid indices, nibble-packed (2 per byte), 128/2 = 64 bytes
+};
+#if defined(DATA_A_TURBO4_0)
+#define QUANT_K QUANT_K_TURBO4_0
+#define QUANT_R QUANT_R_TURBO4_0
+#define QUANT_AUXF 1
+#define A_TYPE block_turbo4_0
+#endif
+
+
+#define QUANT_K_TQ4_1S 32
+#define QUANT_R_TQ4_1S 1
+
+struct block_tq4_1s
+{
+    float16_t d0;      // scale for elements 0-15
+    float16_t d1;      // scale for elements 16-31
+    uint8_t qs[16];    // 4-bit nibble-packed centroid indices (2 per byte)
+};
+
+#if defined(DATA_A_TQ4_1S)
+#define QUANT_K QUANT_K_TQ4_1S
+#define QUANT_R QUANT_R_TQ4_1S
+#define QUANT_AUXF 1
+#define A_TYPE block_tq4_1s
 #endif
 
 #if defined(DATA_A_IQ4_NL) || defined(DATA_A_IQ4_XS)

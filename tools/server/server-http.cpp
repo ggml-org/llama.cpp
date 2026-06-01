@@ -314,34 +314,24 @@ bool server_http_context::init(const common_params & params) {
                 return false;
             }
         } else {
-#if defined(LLAMA_UI_HAS_ASSETS)
-            auto serve_asset = [](const std::string & name, const char * mime, bool with_isolation_headers) {
-                return [name, mime, with_isolation_headers](const httplib::Request & req, httplib::Response & res) {
-                    const llama_ui_asset * a = llama_ui_find_asset(name.c_str());
-                    if (!a) {
-                        res.status = 404;
-                        return false;
-                    }
-                    res.set_header("ETag", a->etag);
-                    // Check If-None-Match for conditional GET (304 Not Modified)
-                    if (const std::string & inm = req.get_header_value("If-None-Match");
-                        !inm.empty() && (inm == a->etag || inm == std::string("W/") + a->etag)) {
-                        res.status = 304;
-                        return false;
-                    }
-                    if (with_isolation_headers) {
-                        // COEP and COOP headers, required by pyodide (python interpreter)
-                        res.set_header("Cross-Origin-Embedder-Policy", "require-corp");
-                        res.set_header("Cross-Origin-Opener-Policy", "same-origin");
-                    }
-                    res.set_content(reinterpret_cast<const char*>(a->data), a->size, mime);
-                    return false;
-                };
-            };
-
-            srv->Get(params.api_prefix + "/",           serve_asset("index.html", "text/html; charset=utf-8",              true));
-            srv->Get(params.api_prefix + "/bundle.js",  serve_asset("bundle.js",  "application/javascript; charset=utf-8", false));
-            srv->Get(params.api_prefix + "/bundle.css", serve_asset("bundle.css", "text/css; charset=utf-8",               false));
+// Support both old and new preprocessor defines
+#if defined(LLAMA_BUILD_UI) || defined(LLAMA_BUILD_WEBUI)
+            // using embedded static index.html
+            srv->Get(params.api_prefix + "/", [](const httplib::Request & /*req*/, httplib::Response & res) {
+                // COEP and COOP headers, required by pyodide (python interpreter)
+                res.set_header("Cross-Origin-Embedder-Policy", "require-corp");
+                res.set_header("Cross-Origin-Opener-Policy", "same-origin");
+                res.set_content(reinterpret_cast<const char*>(index_html), index_html_len, "text/html; charset=utf-8");
+                return false;
+            });
+            srv->Get(params.api_prefix + "/bundle.js", [](const httplib::Request & /*req*/, httplib::Response & res) {
+                res.set_content(reinterpret_cast<const char*>(bundle_js), bundle_js_len, "application/javascript; charset=utf-8");
+                return false;
+            });
+            srv->Get(params.api_prefix + "/bundle.css", [](const httplib::Request & /*req*/, httplib::Response & res) {
+                res.set_content(reinterpret_cast<const char*>(bundle_css), bundle_css_len, "text/css; charset=utf-8");
+                return false;
+            });
 #endif
         }
     }
