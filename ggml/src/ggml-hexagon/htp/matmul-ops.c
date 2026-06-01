@@ -4924,6 +4924,7 @@ int op_matmul_id(struct htp_ops_context * octx) {
             int ret = hmx_matmul_id_2d_f32(octx->ctx, (float*) dst->data, (float*) src1->data,
                                            (const uint8_t *) src0->data + cur_a * nb02,
                                            cne1, ne00, ne01,
+                                           ne11,
                                            nb11, nb12,
                                            nb1, nb2,
                                            (int) src0->nb[1], (int) src0->type,

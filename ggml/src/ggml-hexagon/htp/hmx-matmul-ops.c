@@ -549,7 +549,7 @@ static void dequantize_x4x2_weight_to_fp16_tiles_task_mxfp4(
         int start_tile, int end_tile) {
 
     const int n_k_tiles = state->n_k_tiles;
-    const int qrow_size = state->k_block;
+    const int qrow_size = (unsigned)state->k_block / 2;
     const struct fastdiv_values n_k_tiles_div = state->n_k_tiles_div;
     const HVX_Vector vlut_cvt = hvx_vmem(mxfp4_to_fp16_lut);
 
@@ -1662,6 +1662,7 @@ typedef struct {
     const struct mmid_row_mapping  *matrix_rows;
     int                             cur_a;
     int                             mapping_stride;
+    int                             ne11;
     size_t                          nb11;
     size_t                          nb12;
     int                             start_row;
@@ -1693,6 +1694,7 @@ static void transfer_activation_chunk_fp32_to_fp16_gathered(
             const struct mmid_row_mapping *matrix_rows,
             int cur_a,
             int mapping_stride,
+            int ne11,
             size_t nb11,
             size_t nb12,
             int cne1) {
@@ -1712,8 +1714,11 @@ static void transfer_activation_chunk_fp32_to_fp16_gathered(
         struct mmid_row_mapping mapping0 = matrix_rows[cur_a * mapping_stride + r_idx0];
         struct mmid_row_mapping mapping1 = matrix_rows[cur_a * mapping_stride + r_idx1];
 
-        const float *row0_ptr = (const float *) ((const uint8_t *) src + mapping0.i1 * nb11 + mapping0.i2 * nb12);
-        const float *row1_ptr = (const float *) ((const uint8_t *) src + mapping1.i1 * nb11 + mapping1.i2 * nb12);
+        int i11_0 = mapping0.i1 % ne11;
+        int i11_1 = mapping1.i1 % ne11;
+
+        const float *row0_ptr = (const float *) ((const uint8_t *) src + i11_0 * nb11 + mapping0.i2 * nb12);
+        const float *row1_ptr = (const float *) ((const uint8_t *) src + i11_1 * nb11 + mapping1.i2 * nb12);
 
         const HVX_Vector *pv_in0 = (const HVX_Vector *) row0_ptr;
         const HVX_Vector *pv_in1 = (const HVX_Vector *) row1_ptr;
@@ -1744,11 +1749,13 @@ static void transfer_activation_chunk_fp32_to_fp16_gathered(
 
         if (row0_valid) {
             struct mmid_row_mapping mapping0 = matrix_rows[cur_a * mapping_stride + (start_row + r + 0)];
-            row0_ptr = (const float *) ((const uint8_t *) src + mapping0.i1 * nb11 + mapping0.i2 * nb12);
+            int i11_0 = mapping0.i1 % ne11;
+            row0_ptr = (const float *) ((const uint8_t *) src + i11_0 * nb11 + mapping0.i2 * nb12);
         }
         if (row1_valid) {
             struct mmid_row_mapping mapping1 = matrix_rows[cur_a * mapping_stride + (start_row + r + 1)];
-            row1_ptr = (const float *) ((const uint8_t *) src + mapping1.i1 * nb11 + mapping1.i2 * nb12);
+            int i11_1 = mapping1.i1 % ne11;
+            row1_ptr = (const float *) ((const uint8_t *) src + i11_1 * nb11 + mapping1.i2 * nb12);
         }
 
         const HVX_Vector *pv_in0 = (const HVX_Vector *) row0_ptr;
@@ -1780,7 +1787,7 @@ static void transfer_activation_chunk_gathered_worker_fn(unsigned int n, unsigne
         transfer_activation_chunk_fp32_to_fp16_gathered(
             dst, st->src, start_row, n_rows, st->k_block,
             st->matrix_rows, st->cur_a, st->mapping_stride,
-            st->nb11, st->nb12, st->cne1);
+            st->ne11, st->nb11, st->nb12, st->cne1);
     }
 }
 
@@ -1794,6 +1801,7 @@ static void transfer_activation_chunk_gathered_threaded(
             const struct mmid_row_mapping *matrix_rows,
             int cur_a,
             int mapping_stride,
+            int ne11,
             size_t nb11,
             size_t nb12,
             int cne1,
@@ -1814,6 +1822,7 @@ static void transfer_activation_chunk_gathered_threaded(
         .matrix_rows       = matrix_rows,
         .cur_a             = cur_a,
         .mapping_stride    = mapping_stride,
+        .ne11              = ne11,
         .nb11              = nb11,
         .nb12              = nb12,
         .start_row         = start_row,
@@ -1944,6 +1953,7 @@ int hmx_matmul_id_2d_f32(struct htp_context *ctx,
                                          const float *activation,
                                          const uint8_t *permuted_weight,
                                          int m, int k, int n,
+                                         int ne11,
                                          size_t act_nb1, size_t act_nb2,
                                          size_t dst_nb1, size_t dst_nb2,
                                          int weight_stride,
@@ -2028,7 +2038,7 @@ int hmx_matmul_id_2d_f32(struct htp_context *ctx,
 
         transfer_activation_chunk_gathered_threaded(
             ctx, vtcm_activation, activation, (int) mr, (int) n_rows, k,
-            matrix_rows, cur_a, mapping_stride, act_nb1, act_nb2, cne1, num_threads);
+            matrix_rows, cur_a, mapping_stride, ne11, act_nb1, act_nb2, cne1, num_threads);
 
         for (size_t nc = 0; nc < (size_t) n; nc += n_chunk_n_cols) {
             const size_t n_cols = hex_smin((size_t) n - nc, n_chunk_n_cols);
