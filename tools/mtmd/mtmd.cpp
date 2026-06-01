@@ -505,6 +505,13 @@ struct mtmd_context {
                     img_end = "<｜hy_place▁holder▁no▁101｜>";
                     image_preproc = std::make_unique<mtmd_image_preprocessor_dyn_size>(ctx_v);
                 } break;
+            case PROJECTOR_TYPE_EXAONE4_5:
+                {
+                    // <vision> ... (image embeddings) ... </vision>
+                    img_beg = "<vision>";
+                    img_end = "</vision>";
+                    image_preproc = std::make_unique<mtmd_image_preprocessor_dyn_size>(ctx_v);
+                } break;
             case PROJECTOR_TYPE_GRANITE4_VISION:
                 {
                     img_beg = "<image>";

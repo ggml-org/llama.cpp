@@ -585,6 +585,7 @@ struct ggml_backend_opencl_context {
     cl_kernel kernel_convert_block_mxfp4_trans4_ns, kernel_restore_block_mxfp4_trans4_ns;
     cl_kernel kernel_convert_block_q8_0, kernel_restore_block_q8_0, kernel_restore_block_q8_0_trans;
     cl_kernel kernel_convert_block_q6_K_noshuffle, kernel_restore_block_q6_K_noshuffle;
+    cl_kernel kernel_convert_bf16_to_f16, kernel_convert_f16_to_bf16;
     cl_kernel kernel_mul_mat_q4_0_f32_8x_flat;
     cl_kernel kernel_convert_block_q4_0_noshuffle;
     cl_kernel kernel_restore_block_q4_0_noshuffle;
@@ -1175,6 +1176,8 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx) {
         CL_CHECK((backend_ctx->kernel_restore_block_iq4_nl = clCreateKernel(backend_ctx->program_cvt, "kernel_restore_block_iq4_nl", &err), err));
         CL_CHECK((backend_ctx->kernel_convert_block_iq4_nl_noshuffle = clCreateKernel(backend_ctx->program_cvt, "kernel_convert_block_iq4_nl_noshuffle", &err), err));
         CL_CHECK((backend_ctx->kernel_restore_block_iq4_nl_noshuffle = clCreateKernel(backend_ctx->program_cvt, "kernel_restore_block_iq4_nl_noshuffle", &err), err));
+        CL_CHECK((backend_ctx->kernel_convert_bf16_to_f16 = clCreateKernel(backend_ctx->program_cvt, "kernel_convert_bf16_to_f16", &err), err));
+        CL_CHECK((backend_ctx->kernel_convert_f16_to_bf16 = clCreateKernel(backend_ctx->program_cvt, "kernel_convert_f16_to_bf16", &err), err));
         GGML_LOG_CONT(".");
     }
 
@@ -5019,6 +5022,8 @@ static bool ggml_opencl_supports_op(ggml_backend_dev_t dev, const struct ggml_te
         case GGML_OP_MUL_MAT:
             if (op->src[0]->type == GGML_TYPE_F16) {
                 return true;
+            } else if (op->src[0]->type == GGML_TYPE_BF16) {
+                return true;
             } else if (op->src[0]->type == GGML_TYPE_F32) {
                 return op->src[1]->type == GGML_TYPE_F32;
             } else if (op->src[0]->type == GGML_TYPE_Q4_0  || op->src[0]->type == GGML_TYPE_Q4_1 ||
@@ -6828,6 +6833,40 @@ static void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer, 
     }
 #endif // GGML_OPENCL_SOA_Q
 
+    // convert bf16 to f16 and store as f16 in device buffer
+    if (tensor->type == GGML_TYPE_BF16) {
+        GGML_ASSERT(offset % sizeof(ggml_fp16_t) == 0 && size % sizeof(ggml_fp16_t) == 0
+            && "Offset and size must be multiples of 2 for bf16 tensors");
+
+        ggml_tensor_extra_cl * extra = (ggml_tensor_extra_cl *) tensor->extra;
+        GGML_ASSERT(extra);
+
+        cl_ulong n_elements = size / sizeof(ggml_fp16_t);
+        cl_ulong off_dst = (extra->offset + offset) / sizeof(ggml_fp16_t);
+
+        cl_int err;
+        cl_mem data_device = clCreateBuffer(context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR,
+            size, (void *) data, &err);
+        CL_CHECK(err);
+
+        cl_kernel kernel = backend_ctx->kernel_convert_bf16_to_f16;
+        CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem), &data_device));
+        CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_mem), &extra->data_device));
+        CL_CHECK(clSetKernelArg(kernel, 2, sizeof(cl_ulong), &off_dst));
+        CL_CHECK(clSetKernelArg(kernel, 3, sizeof(cl_ulong), &n_elements));
+
+        size_t global_work_size[] = { (size_t)CEIL_DIV(n_elements, 64)*64, 1, 1 };
+        size_t local_work_size[] = { 64, 1, 1 };
+
+        cl_event evt;
+        CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size, 0, NULL, &evt));
+        CL_CHECK(clWaitForEvents(1, &evt));
+        CL_CHECK(clReleaseMemObject(data_device));
+        CL_CHECK(clReleaseEvent(evt));
+
+        return;
+    }
+
     ggml_tensor_extra_cl * extra = (ggml_tensor_extra_cl *) tensor->extra;
     GGML_ASSERT(extra);
 
@@ -7676,6 +7715,41 @@ static void ggml_backend_opencl_buffer_get_tensor(ggml_backend_buffer_t buffer, 
     }
 #endif // GGML_OPENCL_SOA_Q
 
+    if (tensor->type == GGML_TYPE_BF16) {
+        GGML_ASSERT(offset % sizeof(ggml_fp16_t) == 0 && size % sizeof(ggml_fp16_t) == 0
+            && "Offset and size must be multiples of 2 for bf16 tensors");
+
+        ggml_tensor_extra_cl * extra = (ggml_tensor_extra_cl *) tensor->extra;
+        GGML_ASSERT(extra);
+
+        cl_ulong n_elements = size / sizeof(ggml_fp16_t);
+        cl_ulong off_src = (extra->offset + tensor->view_offs + offset) / sizeof(ggml_fp16_t);
+
+        cl_int err;
+        cl_mem data_device = clCreateBuffer(context, CL_MEM_READ_WRITE, size, NULL, &err);
+        CL_CHECK(err);
+
+        cl_kernel kernel = backend_ctx->kernel_convert_f16_to_bf16;
+        CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem), &extra->data_device));
+        CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_ulong), &off_src));
+        CL_CHECK(clSetKernelArg(kernel, 2, sizeof(cl_mem), &data_device));
+        CL_CHECK(clSetKernelArg(kernel, 3, sizeof(cl_ulong), &n_elements));
+
+        size_t global_work_size[] = { (size_t)CEIL_DIV(n_elements, 64)*64, 1, 1 };
+        size_t local_work_size[] = { 64, 1, 1 };
+
+        cl_event evt;
+        CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size, 0, NULL, &evt));
+        CL_CHECK(clWaitForEvents(1, &evt));
+        CL_CHECK(clReleaseEvent(evt));
+
+        CL_CHECK(clEnqueueReadBuffer(
+            queue, data_device, CL_TRUE, 0, size, data, 0, NULL, NULL));
+        CL_CHECK(clReleaseMemObject(data_device));
+
+        return;
+    }
+
     ggml_tensor_extra_cl * extra = (ggml_tensor_extra_cl *) tensor->extra;
 
     CL_CHECK(clEnqueueReadBuffer(
@@ -8165,6 +8239,7 @@ static void ggml_cl_copy_to_contiguous(ggml_backend_t backend, const ggml_tensor
             kernel = backend_ctx->kernel_cpy_f32_f32;
             break;
         case GGML_TYPE_F16:
+        case GGML_TYPE_BF16: // stored as f16 on device
             kernel = backend_ctx->kernel_cpy_f16_f16;
             break;
         default:
@@ -11125,7 +11200,8 @@ static bool ggml_cl_can_use_adreno_xmem_gemm_f16_f32(
     if (backend_ctx->gpu_family != GPU_FAMILY::ADRENO) {
         return false;
     }
-    if (src0->type != GGML_TYPE_F16 || src1->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32) {
+    if ((src0->type != GGML_TYPE_F16 && src0->type != GGML_TYPE_BF16) ||
+        src1->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32) {
         return false;
     }
     if (!ggml_is_contiguous(src0) || !ggml_is_contiguous(src1) || !ggml_is_contiguous(dst)) {
@@ -12843,7 +12919,8 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
     GGML_ASSERT(dst);
     GGML_ASSERT(dst->extra);
 
-    const enum ggml_type src0t = src0->type;
+    // bf16 is stored as f16 on device
+    const enum ggml_type src0t = (src0->type == GGML_TYPE_BF16) ? GGML_TYPE_F16 : src0->type;
     const enum ggml_type src1t = src1->type;
 
     ggml_backend_opencl_context *backend_ctx = (ggml_backend_opencl_context *)backend->context;
