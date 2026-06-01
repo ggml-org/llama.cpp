@@ -27,13 +27,6 @@ int entry_point(struct ggml_et_rms_norm_mul_params* params, void* env) {
         return -1;
     }
 
-    // et_barrier_global(32ULL);
-    // evict_region_past_l2(params->src0.data, tensor_bytes(&params->src0));
-    // evict_region_past_l2(params->src1.data, tensor_bytes(&params->src1));
-    // // evict_region_past_l2(params->dst.data, tensor_bytes(&params->dst));
-    // et_barrier_global(32ULL);
-    
-    
     int thread_id = get_relative_thread_id(kernel_env->shire_mask);
     int num_threads = get_num_threads(kernel_env->shire_mask);
 
@@ -50,7 +43,8 @@ int entry_point(struct ggml_et_rms_norm_mul_params* params, void* env) {
     struct ggml_tensor* dst = &params->dst;
 
     float eps = params->eps;
-    
+    eps = 1.0;
+
     if (src0->type != GGML_TYPE_F32 || src1->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32) {
         return -1; // Unsupported type combination
     }
@@ -88,13 +82,8 @@ int entry_point(struct ggml_et_rms_norm_mul_params* params, void* env) {
 
     const float inv_ne0 = et_fdiv(1.0f, (float)(int32_t)ne0);
     const int32_t total_rows = (int32_t)(ne1 * ne2 * ne3);
-    const int shire_threads = SOC_MINIONS_PER_SHIRE * NUM_HARTS_PER_MINION;
-    
-    // et_barrier_global(32ULL);
-    // evict_region_past_l2(params->src0.data, tensor_bytes(&params->src0));
-    // evict_region_past_l2(params->src1.data, tensor_bytes(&params->src1));
-    // evict_region_past_l2(params->dst.data, tensor_bytes(&params->dst));
-    // et_barrier_global(32ULL);
+    // const int shire_threads = SOC_MINIONS_PER_SHIRE * NUM_HARTS_PER_MINION;
+    const int shire_threads = 64;// SOC_MINIONS_PER_SHIRE * NUM_HARTS_PER_MINION;
 
     if (total_rows >= shire_threads) {
         // Row-parallel: each thread processes whole rows
@@ -162,18 +151,12 @@ int entry_point(struct ggml_et_rms_norm_mul_params* params, void* env) {
                         : "f12", "f14", "f15"
                     );
                 }
-// #ifdef ET_UBERKERNEL
-//                 FENCE;
-//                 evict_region_past_l2(dst_ptr, (size_t)ne0 * sizeof(float));
-//                 // et_barrier_global(32ULL);
-//                 // evict_region_past_l2(params->src0.data, tensor_bytes(&params->src0));
-//                 // evict_region_past_l2(params->src1.data, tensor_bytes(&params->src1));
-//                 // // evict_region_past_l2(params->dst.data, tensor_bytes(&params->dst));
-//                 // et_barrier_global(32ULL);
-
-//                 WAIT_CACHEOPS;
-//                 FENCE;
-// #endif
+#ifdef ET_UBERKERNEL
+                FENCE;
+                evict_region_past_l2(dst_ptr, (size_t)ne0 * sizeof(float));
+                WAIT_CACHEOPS;
+                FENCE;
+#endif
                 __asm__ volatile("mova.m.x %0" :: "r"(saved_mask));
                 }
             }
@@ -297,18 +280,12 @@ int entry_point(struct ggml_et_rms_norm_mul_params* params, void* env) {
                     : "f12", "f14", "f15"
                 );
             }
-// #ifdef ET_UBERKERNEL
-//             FENCE;
-//             evict_region_past_l2(dst_ptr + my_start, (size_t)(my_end - my_start) * sizeof(float));
-//             // et_barrier_global(32ULL);
-//             // evict_region_past_l2(params->src0.data, tensor_bytes(&params->src0));
-//             // evict_region_past_l2(params->src1.data, tensor_bytes(&params->src1));
-//             // // evict_region_past_l2(params->dst.data, tensor_bytes(&params->dst));
-//             // et_barrier_global(32ULL);
-
-//             WAIT_CACHEOPS;
-//             FENCE;
-// #endif
+#ifdef ET_UBERKERNEL
+            FENCE;
+            evict_region_past_l2(dst_ptr + my_start, (size_t)(my_end - my_start) * sizeof(float));
+            WAIT_CACHEOPS;
+            FENCE;
+#endif
         }
 
         __asm__ volatile("mova.m.x %0" :: "r"(saved_mask));

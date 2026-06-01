@@ -669,11 +669,11 @@ static enum ggml_status ggml_backend_et_graph_compute(ggml_backend_t backend, gg
         }
 
         // --- Fusion checks (before regular dispatch) ---
-        // if (ggml_et_can_fuse(cgraph, i, { GGML_OP_RMS_NORM, GGML_OP_MUL })) {
-        //     ggml_et_op_rms_norm_mul(dev_ctx, node, cgraph->nodes[i + 1]);
-        //     i++;  // skip the MUL node
-        //     continue;
-        // }
+        if (ggml_et_can_fuse(cgraph, i, { GGML_OP_RMS_NORM, GGML_OP_MUL })) {
+            ggml_et_op_rms_norm_mul(dev_ctx, node, cgraph->nodes[i + 1]);
+            i++;  // skip the MUL node
+            continue;
+        }
         if (ggml_et_can_fuse(cgraph, i, { GGML_OP_MUL_MAT, GGML_OP_ADD })) {
             ggml_et_op_mul_mat(dev_ctx, node, cgraph->nodes[i + 1]);
             i++;  // skip the ADD node

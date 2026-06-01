@@ -103,6 +103,10 @@ static void copy_cache_aligned_f16(uint16_t* dst, const float* src) {
     );
 }
 
+static inline size_t tensor_bytes(const struct ggml_tensor *t) {
+    return (size_t)t->ne[0] * t->ne[1] * t->ne[2] * t->ne[3] * t->nb[0];
+}
+
 int entry_point(struct ggml_et_set_rows_params* params, void* env) {
     kernel_environment_t* kernel_env = (kernel_environment_t*)env;
 
@@ -168,6 +172,12 @@ int entry_point(struct ggml_et_set_rows_params* params, void* env) {
     if (ne10 != ne01) {
         return -1; // Number of indices must match number of source rows
     }
+
+    evict_region_past_l2(params->src0.data, tensor_bytes(&params->src0));
+    evict_region_past_l2(params->src1.data, tensor_bytes(&params->src1));
+    // evict_region_past_l2(params->dst.data, tensor_bytes(&params->dst));
+    FENCE;
+    et_barrier(ET_BARRIER_GLOBAL);
 
     const int64_t total_rows = ne01 * ne02 * ne03;
 
