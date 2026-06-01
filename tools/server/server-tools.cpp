@@ -406,7 +406,7 @@ struct server_tool_exec_shell_command : server_tool {
             bool whitelisted = false;
             for (auto const & s : *s_shell_command_whitelist) {
                 if (!command.compare(0, s.length(), s)) {
-                    // Command string stards with the whitelisted string.
+                    // Command string starts with the whitelisted string.
                     whitelisted = true;
                     break;
                 }
