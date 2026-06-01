@@ -101,6 +101,7 @@ export interface SettingsChatServiceOptions {
 	onToolCallChunk?: (chunk: string) => void;
 	onAttachments?: (extras: DatabaseMessageExtra[]) => void;
 	onModel?: (model: string) => void;
+	onCompletionId?: (id: string) => void;
 	onTimings?: (timings?: ChatMessageTimings, promptProgress?: ChatMessagePromptProgress) => void;
 	onComplete?: (
 		response: string,

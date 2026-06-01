@@ -1,4 +1,4 @@
-import { getAuthHeaders, getJsonHeaders } from '$lib/utils/api-headers';
+import { getJsonHeaders } from '$lib/utils/api-headers';
 import { formatAttachmentText } from '$lib/utils/formatters';
 import { isAbortError } from '$lib/utils/abort';
 import {
@@ -129,6 +129,7 @@ export class ChatService {
 			onReasoningChunk,
 			onToolCallChunk,
 			onModel,
+			onCompletionId,
 			onTimings,
 			// Tools for function calling
 			tools,
@@ -321,6 +322,7 @@ export class ChatService {
 					onReasoningChunk,
 					onToolCallChunk,
 					onModel,
+					onCompletionId,
 					onTimings,
 					conversationId,
 					signal
@@ -397,26 +399,17 @@ export class ChatService {
 	}
 
 	/**
-	 * Forces the end of the current reasoning block on the active slot.
-	 * Discovers the processing slot via /slots, carrying the model so it
-	 * works in router mode, then posts the control action. Single model
-	 * resolves the slot locally and ignores the model field.
-	 * Returns true if a reasoning block was active and got ended.
+	 * Ends the current reasoning block of a running completion, targeted by its
+	 * chat completion id (streamed back as `id`). Matching the completion rather
+	 * than a slot index avoids a TOCTOU: a finished completion simply matches
+	 * nothing server side. The model is carried so the router forwards to the
+	 * right child, single model ignores it. Returns true on success.
 	 */
-	static async stopReasoning(model?: string | null): Promise<boolean> {
+	static async stopReasoning(cmplId: string, model?: string | null): Promise<boolean> {
+		if (!cmplId) return false;
 		try {
-			const slotsUrl = model
-				? `${API_SLOTS.LIST}?model=${encodeURIComponent(model)}`
-				: API_SLOTS.LIST;
-			const slotsRes = await fetch(slotsUrl, { headers: getAuthHeaders() });
-			if (!slotsRes.ok) return false;
-
-			const slots: { id: number; is_processing: boolean }[] = await slotsRes.json();
-			const active = slots.find((s) => s.is_processing);
-			if (!active) return false;
-
 			const body: Record<string, unknown> = {
-				id_slot: active.id,
+				id: cmplId,
 				action: CONTROL_ACTION.END_REASONING
 			};
 			if (model) body.model = model;
@@ -429,7 +422,7 @@ export class ChatService {
 			if (!res.ok) return false;
 
 			const data = await res.json();
-			return data?.reasoning_active === true;
+			return data?.success === true;
 		} catch (error) {
 			console.warn('stopReasoning failed:', error);
 			return false;
@@ -548,6 +541,7 @@ export class ChatService {
 		onReasoningChunk?: (chunk: string) => void,
 		onToolCallChunk?: (chunk: string) => void,
 		onModel?: (model: string) => void,
+		onCompletionId?: (id: string) => void,
 		onTimings?: (timings?: ChatMessageTimings, promptProgress?: ChatMessagePromptProgress) => void,
 		conversationId?: string,
 		abortSignal?: AbortSignal
@@ -565,6 +559,7 @@ export class ChatService {
 		let lastTimings: ChatMessageTimings | undefined;
 		let streamFinished = false;
 		let modelEmitted = false;
+		let idEmitted = false;
 		let toolCallIndexOffset = 0;
 		let hasOpenToolCallBatch = false;
 
@@ -647,6 +642,11 @@ export class ChatService {
 							if (chunkModel && !modelEmitted) {
 								modelEmitted = true;
 								onModel?.(chunkModel);
+							}
+
+							if (parsed.id && !idEmitted) {
+								idEmitted = true;
+								onCompletionId?.(parsed.id);
 							}
 
 							if (promptProgress) {

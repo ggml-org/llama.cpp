@@ -88,6 +88,10 @@
 	export function openModelSelector() {
 		selectorModelRef?.open();
 	}
+	// completion id of the streaming assistant message, used to target reasoning control
+	let activeCmplId = $derived(
+		conversationsStore.activeMessages[conversationsStore.activeMessages.length - 1]?.cmplId ?? ''
+	);
 </script>
 
 <div
@@ -131,7 +135,7 @@
 		<Button
 			type="button"
 			variant="secondary"
-			onclick={() => ChatService.stopReasoning(modelsStore.selectedModelName)}
+			onclick={() => ChatService.stopReasoning(activeCmplId, modelsStore.selectedModelName)}
 			class="group h-8 w-8 rounded-full p-0"
 			title="Skip reasoning"
 		>

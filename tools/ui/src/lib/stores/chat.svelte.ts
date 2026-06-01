@@ -674,6 +674,17 @@ class ChatStore {
 			}
 		};
 
+		let cmplIdRecorded = false;
+		const recordCompletionId = (id: string): void => {
+			if (!id || cmplIdRecorded) return;
+			cmplIdRecorded = true;
+			const idx = conversationsStore.findMessageIndex(currentMessageId);
+			conversationsStore.updateMessageAtIndex(idx, { cmplId: id });
+			DatabaseService.updateMessage(currentMessageId, { cmplId: id }).catch(() => {
+				cmplIdRecorded = false;
+			});
+		};
+
 		const updateStreamingUI = () => {
 			this.setChatStreaming(convId, streamedContent, currentMessageId);
 			const idx = conversationsStore.findMessageIndex(currentMessageId);
@@ -723,6 +734,7 @@ class ChatStore {
 				DatabaseService.updateMessage(messageId, { extra: updatedExtras }).catch(console.error);
 			},
 			onModel: (modelName: string) => recordModel(modelName),
+			onCompletionId: (id: string) => recordCompletionId(id),
 			onTurnComplete: (intermediateTimings: ChatMessageTimings) => {
 				// Update the first assistant message with cumulative agentic timings
 				const idx = conversationsStore.findMessageIndex(assistantMessage.id);
@@ -908,6 +920,7 @@ class ChatStore {
 				onChunk: streamCallbacks.onChunk,
 				onReasoningChunk: streamCallbacks.onReasoningChunk,
 				onModel: streamCallbacks.onModel,
+				onCompletionId: streamCallbacks.onCompletionId,
 				onTimings: streamCallbacks.onTimings,
 				onComplete: async (
 					finalContent?: string,
