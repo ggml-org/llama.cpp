@@ -1244,6 +1244,23 @@ private:
         return nullptr;
     }
 
+    // resolves the live slot currently serving a given chat completion id. matching the
+    // completion rather than the slot index avoids a TOCTOU: once the completion ends the
+    // slot may be reassigned, and a stale id simply matches nothing
+    server_slot * get_slot_by_cmpl_id(const std::string & cmpl_id) {
+        if (cmpl_id.empty()) {
+            return nullptr;
+        }
+
+        for (server_slot & slot : slots) {
+            if (slot.is_processing() && slot.task && slot.task->params.oaicompat_cmpl_id == cmpl_id) {
+                return &slot;
+            }
+        }
+
+        return nullptr;
+    }
+
     server_slot * get_available_slot(const server_task & task) {
         server_slot * ret = nullptr;
 
@@ -2097,23 +2114,34 @@ private:
                 } break;
             case SERVER_TASK_TYPE_CONTROL:
                 {
-                    server_slot * slot = get_slot_by_id(task.id_slot);
+                    auto res = std::make_unique<server_task_result_control>();
+                    res->id = task.id;
+
+                    // resolve the live completion, a finished one matches nothing (no TOCTOU)
+                    server_slot * slot = get_slot_by_cmpl_id(task.control_cmpl_id);
                     if (slot == nullptr) {
-                        send_error(task, "Invalid slot ID", ERROR_TYPE_INVALID_REQUEST);
+                        res->success = false;
+                        res->message = "no active completion for this id";
+                        queue_results.send(std::move(res));
                         break;
                     }
 
-                    // act on the live slot mid generation, never defer
-                    bool reasoning_active = false;
-                    if (task.control_action == "end_reasoning") {
-                        reasoning_active = common_sampler_reasoning_budget_force(slot->smpl.get());
+                    if (task.control_action == "reasoning_end") {
+                        // the budget sampler only exists when reasoning control was armed
+                        if (!slot->task->params.sampling.reasoning_control) {
+                            res->success = false;
+                            res->message = "reasoning control not enabled for this completion";
+                            queue_results.send(std::move(res));
+                            break;
+                        }
+                        // act on the live slot mid generation, never defer
+                        common_sampler_reasoning_budget_force(slot->smpl.get());
+                        res->success = true;
+                    } else {
+                        res->success = false;
+                        res->message = "unknown control action";
                     }
 
-                    auto res = std::make_unique<server_task_result_control>();
-                    res->id               = task.id;
-                    res->id_slot          = task.id_slot;
-                    res->found            = true;
-                    res->reasoning_active = reasoning_active;
                     queue_results.send(std::move(res));
                 } break;
             case SERVER_TASK_TYPE_NEXT_RESPONSE:
@@ -4272,13 +4300,13 @@ void server_routes::init_routes() {
         auto res = create_response();
         const json body = json::parse(req.body);
 
-        const int id_slot = json_value(body, "id_slot", -1);
-        const std::string action = json_value(body, "action", std::string());
-        if (id_slot < 0) {
-            res->error(format_error_response("missing or invalid id_slot", ERROR_TYPE_INVALID_REQUEST));
+        const std::string cmpl_id = json_value(body, "id", std::string());
+        const std::string action  = json_value(body, "action", std::string());
+        if (cmpl_id.empty()) {
+            res->error(format_error_response("missing completion id", ERROR_TYPE_INVALID_REQUEST));
             return res;
         }
-        if (action != "end_reasoning") {
+        if (action != "reasoning_end") {
             res->error(format_error_response("unknown control action", ERROR_TYPE_INVALID_REQUEST));
             return res;
         }
@@ -4286,9 +4314,9 @@ void server_routes::init_routes() {
         auto & rd = res->rd;
         {
             server_task task(SERVER_TASK_TYPE_CONTROL);
-            task.id             = rd.get_new_id();
-            task.id_slot        = id_slot;
-            task.control_action = action;
+            task.id              = rd.get_new_id();
+            task.control_cmpl_id = cmpl_id;
+            task.control_action  = action;
             rd.post_task(std::move(task));
         }
 

@@ -138,6 +138,7 @@ struct server_task {
 
     // used by SERVER_TASK_TYPE_CONTROL
     std::string control_action;
+    std::string control_cmpl_id; // targets a live completion, avoids the slot index TOCTOU
 
     // used by parallel sampling (multiple completions from same prompt)
     int id_parent  = -1;
@@ -556,15 +557,15 @@ struct server_task_result_slot_erase : server_task_result {
 };
 
 struct server_task_result_control : server_task_result {
-    bool found            = false; // slot was located
-    bool reasoning_active = false; // a reasoning block was open and got ended
+    bool        success = false;
+    std::string message; // optional detail when success is false
 
     virtual json to_json() override {
-        return json {
-            { "id_slot",          id_slot },
-            { "found",            found },
-            { "reasoning_active", reasoning_active },
-        };
+        json out = json { { "success", success } };
+        if (!message.empty()) {
+            out["message"] = message;
+        }
+        return out;
     }
 };
 
