@@ -910,6 +910,7 @@ bool llm_arch_is_diffusion(const llm_arch & arch) {
         case LLM_ARCH_LLADA:
         case LLM_ARCH_LLADA_MOE:
         case LLM_ARCH_RND1:
+        case LLM_ARCH_DIFFUSION_GEMMA4:
             return true;
         default:
             return false;

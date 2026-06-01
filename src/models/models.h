@@ -821,12 +821,26 @@ struct llama_model_gemma4 : public llama_model_base {
     std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
 };
 
-// Block-diffusion variant of Gemma 4. Reuses the gemma4 decoder block (hparams +
-// graph); adds the top-level self-conditioning MLP that feeds the previous denoising
-// step's soft-embeddings into the decoder input.
+// Block-diffusion variant of Gemma 4. Reuses the gemma4 decoder block (tensor layout
+// and per-layer math) but runs bidirectionally (non-causal, no KV cache) and applies
+// the self-conditioning transform to the input embeddings.
+//
+// NOTE: this implements a single bidirectional denoising pass over the canvas with no
+// prompt context. With soft-conditioning = 0 (the first denoising step) the
+// self-conditioning module reduces to a scale-less RMS norm of the scaled embeddings.
+// The soft-conditioning input path (later steps) and the encoder-KV cross-attention
+// (prompted generation) are layered on top in a later step.
 struct llama_model_diffusion_gemma4 : public llama_model_gemma4 {
     llama_model_diffusion_gemma4(const struct llama_model_params & params) : llama_model_gemma4(params) {}
+    void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
+
+    struct graph : public llm_graph_context {
+        const llama_model & model;
+        graph(const llama_model & model, const llm_graph_params & params);
+    };
+
+    std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
 
     // self_conditioning (top-level, not per-layer); post-norm is scale-less (no weight)
     ggml_tensor * self_cond_norm = nullptr;
