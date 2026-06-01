@@ -2095,6 +2095,27 @@ private:
                         }
                     }
                 } break;
+            case SERVER_TASK_TYPE_CONTROL:
+                {
+                    server_slot * slot = get_slot_by_id(task.id_slot);
+                    if (slot == nullptr) {
+                        send_error(task, "Invalid slot ID", ERROR_TYPE_INVALID_REQUEST);
+                        break;
+                    }
+
+                    // act on the live slot mid generation, never defer
+                    bool reasoning_active = false;
+                    if (task.control_action == "end_reasoning") {
+                        reasoning_active = common_sampler_reasoning_budget_force(slot->smpl.get());
+                    }
+
+                    auto res = std::make_unique<server_task_result_control>();
+                    res->id               = task.id;
+                    res->id_slot          = task.id_slot;
+                    res->found            = true;
+                    res->reasoning_active = reasoning_active;
+                    queue_results.send(std::move(res));
+                } break;
             case SERVER_TASK_TYPE_NEXT_RESPONSE:
                 {
                     // do nothing
@@ -4245,6 +4266,43 @@ void server_routes::init_routes() {
             body_parsed,
             files,
             TASK_RESPONSE_TYPE_OAI_CHAT);
+    };
+
+    this->post_control = [this](const server_http_req & req) {
+        auto res = create_response();
+        const json body = json::parse(req.body);
+
+        const int id_slot = json_value(body, "id_slot", -1);
+        const std::string action = json_value(body, "action", std::string());
+        if (id_slot < 0) {
+            res->error(format_error_response("missing or invalid id_slot", ERROR_TYPE_INVALID_REQUEST));
+            return res;
+        }
+        if (action != "end_reasoning") {
+            res->error(format_error_response("unknown control action", ERROR_TYPE_INVALID_REQUEST));
+            return res;
+        }
+
+        auto & rd = res->rd;
+        {
+            server_task task(SERVER_TASK_TYPE_CONTROL);
+            task.id             = rd.get_new_id();
+            task.id_slot        = id_slot;
+            task.control_action = action;
+            rd.post_task(std::move(task));
+        }
+
+        auto result = rd.next(req.should_stop);
+        if (!result) {
+            GGML_ASSERT(req.should_stop());
+            return res;
+        }
+        if (result->is_error()) {
+            res->error(result->to_json());
+            return res;
+        }
+        res->ok(result->to_json());
+        return res;
     };
 
     this->post_responses_oai = [this](const server_http_req & req) {

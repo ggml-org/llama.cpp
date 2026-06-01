@@ -1,6 +1,8 @@
 <script lang="ts">
-	import { Square } from '@lucide/svelte';
+	import { Square, SkipForward } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
+	import { ChatService } from '$lib/services';
+	import { modelsStore } from '$lib/stores/models.svelte';
 	import {
 		ChatFormActionsAdd,
 		ChatFormActionModels,
@@ -121,6 +123,20 @@
 			forceForegroundText
 			useGlobalSelection
 		/>
+	{/if}
+
+	{#if isLoading && !canSubmit}
+		<Button
+			type="button"
+			variant="secondary"
+			onclick={() => ChatService.stopReasoning(modelsStore.selectedModelName)}
+			class="group h-8 w-8 rounded-full p-0"
+			title="Skip reasoning"
+		>
+			<span class="sr-only">Skip reasoning</span>
+
+			<SkipForward class="h-4 w-4 stroke-muted-foreground group-hover:stroke-foreground" />
+		</Button>
 	{/if}
 
 	{#if isLoading && !canSubmit}

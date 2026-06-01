@@ -19,6 +19,7 @@ enum server_task_type {
     SERVER_TASK_TYPE_RERANK,
     SERVER_TASK_TYPE_INFILL,
     SERVER_TASK_TYPE_CANCEL,
+    SERVER_TASK_TYPE_CONTROL,
     SERVER_TASK_TYPE_NEXT_RESPONSE,
     SERVER_TASK_TYPE_METRICS,
     SERVER_TASK_TYPE_SLOT_SAVE,
@@ -134,6 +135,9 @@ struct server_task {
     // used by SERVER_TASK_TYPE_CANCEL
     int id_target = -1;
     int id_slot   = -1;
+
+    // used by SERVER_TASK_TYPE_CONTROL
+    std::string control_action;
 
     // used by parallel sampling (multiple completions from same prompt)
     int id_parent  = -1;
@@ -549,6 +553,19 @@ struct server_task_result_slot_erase : server_task_result {
     size_t n_erased;
 
     virtual json to_json() override;
+};
+
+struct server_task_result_control : server_task_result {
+    bool found            = false; // slot was located
+    bool reasoning_active = false; // a reasoning block was open and got ended
+
+    virtual json to_json() override {
+        return json {
+            { "id_slot",          id_slot },
+            { "found",            found },
+            { "reasoning_active", reasoning_active },
+        };
+    }
 };
 
 struct server_task_result_get_lora : server_task_result {

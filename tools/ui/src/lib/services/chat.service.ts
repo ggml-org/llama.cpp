@@ -1,4 +1,4 @@
-import { getJsonHeaders } from '$lib/utils/api-headers';
+import { getAuthHeaders, getJsonHeaders } from '$lib/utils/api-headers';
 import { formatAttachmentText } from '$lib/utils/formatters';
 import { isAbortError } from '$lib/utils/abort';
 import {
@@ -239,6 +239,9 @@ export class ChatService {
 			? ReasoningFormat.NONE
 			: ReasoningFormat.AUTO;
 
+		// arms the budget sampler so reasoning can be ended at runtime via the control endpoint
+		requestBody.reasoning_control = true;
+
 		if (continueFinalMessage) {
 			requestBody.continue_final_message = true;
 			requestBody.add_generation_prompt = false;
@@ -387,6 +390,41 @@ export class ChatService {
 			return slots.every((s) => !s.is_processing);
 		} catch {
 			return true;
+		}
+	}
+
+	/**
+	 * Forces the end of the current reasoning block on the active slot.
+	 * Discovers the processing slot via /slots, carrying the model so it
+	 * works in router mode, then posts the control action. Single model
+	 * resolves the slot locally and ignores the model field.
+	 * Returns true if a reasoning block was active and got ended.
+	 */
+	static async stopReasoning(model?: string | null): Promise<boolean> {
+		try {
+			const slotsUrl = model ? `./slots?model=${encodeURIComponent(model)}` : './slots';
+			const slotsRes = await fetch(slotsUrl, { headers: getAuthHeaders() });
+			if (!slotsRes.ok) return false;
+
+			const slots: { id: number; is_processing: boolean }[] = await slotsRes.json();
+			const active = slots.find((s) => s.is_processing);
+			if (!active) return false;
+
+			const body: Record<string, unknown> = { id_slot: active.id, action: 'end_reasoning' };
+			if (model) body.model = model;
+
+			const res = await fetch('./v1/chat/completions/control', {
+				method: 'POST',
+				headers: getJsonHeaders(),
+				body: JSON.stringify(body)
+			});
+			if (!res.ok) return false;
+
+			const data = await res.json();
+			return data?.reasoning_active === true;
+		} catch (error) {
+			console.warn('stopReasoning failed:', error);
+			return false;
 		}
 	}
 
