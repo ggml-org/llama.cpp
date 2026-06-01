@@ -62,6 +62,21 @@ int hmx_matmul_2d_f32(struct htp_context *ctx,
                                       int weight_stride,
                                       int weight_type);
 
+struct mmid_row_mapping;
+
+int hmx_matmul_id_2d_f32(struct htp_context *ctx,
+                                         float *restrict dst,
+                                         const float *activation,
+                                         const uint8_t *permuted_weight,
+                                         int m, int k, int n,
+                                         size_t act_nb1, size_t act_nb2,
+                                         size_t dst_nb1, size_t dst_nb2,
+                                         int weight_stride,
+                                         int weight_type,
+                                         const struct mmid_row_mapping *matrix_rows,
+                                         int cur_a,
+                                         int mapping_stride);
+
 // HMX flash attention
 int hmx_flash_attn_ext(struct htp_ops_context * octx);
 

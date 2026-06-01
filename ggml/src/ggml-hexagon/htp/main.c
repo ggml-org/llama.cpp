@@ -423,10 +423,18 @@ AEEResult htp_iface_start(remote_handle64 handle, uint32 sess_id, uint64 dsp_que
         ctx->dma[i] = dma_queue_create(256); // queue depth
     }
 
+    ctx->ddr_spad_size = 512 * 1024; // 512 KB
+    ctx->ddr_spad_base = memalign(128, ctx->ddr_spad_size);
+
     // init worker pool
     err = worker_pool_init(&ctx->worker_pool, n_hvx);
     if (err != AEE_SUCCESS) {
         FARF(ERROR, "Unable to create worker pool");
+        if (ctx->ddr_spad_base) {
+            free(ctx->ddr_spad_base);
+            ctx->ddr_spad_base = NULL;
+            ctx->ddr_spad_size = 0;
+        }
         return err;
     }
 
@@ -473,6 +481,12 @@ AEEResult htp_iface_stop(remote_handle64 handle) {
 #endif
 
     vtcm_free(ctx);
+
+    if (ctx->ddr_spad_base) {
+        free(ctx->ddr_spad_base);
+        ctx->ddr_spad_base = NULL;
+        ctx->ddr_spad_size = 0;
+    }
 
     return AEE_SUCCESS;
 }
