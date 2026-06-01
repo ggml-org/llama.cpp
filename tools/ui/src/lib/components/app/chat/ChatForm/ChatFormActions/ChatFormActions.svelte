@@ -23,6 +23,7 @@
 		class?: string;
 		disabled?: boolean;
 		isLoading?: boolean;
+		isReasoning?: boolean;
 		isRecording?: boolean;
 		showAddButton?: boolean;
 		showModelSelector?: boolean;
@@ -41,6 +42,7 @@
 		class: className = '',
 		disabled = false,
 		isLoading = false,
+		isReasoning = false,
 		isRecording = false,
 		showAddButton = true,
 		showModelSelector = true,
@@ -125,7 +127,7 @@
 		/>
 	{/if}
 
-	{#if isLoading && !canSubmit}
+	{#if isReasoning}
 		<Button
 			type="button"
 			variant="secondary"
