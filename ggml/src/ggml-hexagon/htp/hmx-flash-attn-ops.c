@@ -46,7 +46,7 @@
 // g_br = hex_align_up(gqa_factor * Br, 32) replaces Br for all Q/O/S/P/D dimensions.
 // Layout: Q + O_ping + O_pong + K_dma*2 + V_dma*2 + K_tile + V_tile + S + P + D + vectors + scales
 // Mask is DMA'd into a VTCM buffer (Br rows per KV block) to avoid DDR reads in softmax.
-static size_t hmx_fa_compute_vtcm_usage(size_t gqa_factor, size_t DK, size_t DV, size_t Br, size_t Bc, size_t n_threads) {
+static size_t hmx_fa_compute_vtcm_usage(size_t gqa_factor, size_t DK, size_t DV, size_t Br, size_t Bc, size_t n_threads, bool use_pipeline) {
     const size_t g_br         = hex_align_up(gqa_factor * Br, HMX_FP16_TILE_N_ROWS);
     const size_t q_tile_size  = hex_align_up(g_br * DK * sizeof(__fp16), 4096);    // Q:  [g_br, DK]
     const size_t o_tile_size  = hex_align_up(g_br * DV * sizeof(__fp16), 4096);    // O:  [g_br, DV] x2 ping-pong
@@ -67,7 +67,7 @@ static size_t hmx_fa_compute_vtcm_usage(size_t gqa_factor, size_t DK, size_t DV,
            + k_dma_size  * 2               // K DMA x2
            + v_dma_size  * 2               // V DMA x2
            + k_tile_size * 1               // K tiles
-           + v_tile_size * 1               // V tiles
+           + v_tile_size * (use_pipeline ? 2 : 1) // V tiles (double-buffered if pipelining)
            + s_tile_size * 2               // S + P
            + d_tile_size * 1               // D (diagonal matrix)
            + col_vec_size * 4              // m_vec, l_vec, s_rowmax, p_rowsum
@@ -144,12 +144,13 @@ static int hmx_fa_find_chunk_size(size_t * Br_out,
     // See .cursor/todos/hmx-flash-attn-bc-search-space.md for the perf trade-off.
     const size_t bc_unit = HMX_FP16_TILE_N_COLS * 2;  // 64
     const size_t fp16    = sizeof(__fp16);
+    const bool   can_pipeline = (kv_len >= FA_MIN_KV_BLOCKS * bc_unit && n_threads >= 2);
 
     // Approximate per-unit VTCM costs (without per-buffer alignment padding).
     const size_t per_gbr  = (DK + 2 * DV) * fp16 + 4 * fp16;  // Q + O×2 + 4 col vectors
     const size_t per_gbr2 = fp16;                             // D diagonal matrix
     const size_t per_bc =
-        3 * (DK + DV) * fp16 + 2 * n_threads * fp16;          // K_dma×2 + V_dma×2 + K_tile + V_tile + row bufs
+        3 * DK * fp16 + (can_pipeline ? 4 : 3) * DV * fp16 + 2 * n_threads * fp16;          // K/V DMA x2 + tiles + row bufs
     const size_t per_gbr_bc = 2 * fp16;                       // S + P
 
     const size_t overhead = 256 * 2 + 13 * 4096;
@@ -164,7 +165,6 @@ static int hmx_fa_find_chunk_size(size_t * Br_out,
 
     // Pipeline constraint: cap Bc so n_kv_blocks >= FA_MIN_KV_BLOCKS.
     // Only relax when kv_len is too short to form enough blocks.
-    const bool   can_pipeline = (kv_len >= FA_MIN_KV_BLOCKS * bc_unit && n_threads >= 2);
     const size_t Bc_limit     = can_pipeline ? hex_align_down(kv_len / FA_MIN_KV_BLOCKS, bc_unit) :
                                                (kv_len >= bc_unit ? hex_align_down(kv_len, bc_unit) : bc_unit);
     // Cost coefficients calibrated from profiling
@@ -200,7 +200,7 @@ static int hmx_fa_find_chunk_size(size_t * Br_out,
         }
 
         // Exact VTCM verification (alignment padding may push over budget)
-        while (Bc >= bc_unit && hmx_fa_compute_vtcm_usage(gqa_factor, DK, DV, Br, Bc, n_threads) > vtcm_budget) {
+        while (Bc >= bc_unit && hmx_fa_compute_vtcm_usage(gqa_factor, DK, DV, Br, Bc, n_threads, can_pipeline) > vtcm_budget) {
             Bc -= bc_unit;
         }
         if (Bc < bc_unit) {
@@ -321,7 +321,7 @@ struct hmx_fa_context {
     __fp16 *     vtcm_k_fp16[2];       // K DMA double-buffer [Bc, D]
     __fp16 *     vtcm_v_fp16[2];       // V DMA double-buffer [Bc, D]
     __fp16 *     vtcm_k_tiles;         // K tiles (transposed)
-    __fp16 *     vtcm_v_tiles;         // V tiles (column-major)
+    __fp16 *     vtcm_v_tiles[2];      // V tiles (column-major, double-buffered)
     __fp16 *     vtcm_s_tiles;         // S = QK^T [g_br, Bc]
     __fp16 *     vtcm_p_tiles;         // P = softmax(S) [g_br, Bc]
     __fp16 *     vtcm_d_tiles;         // Diagonal rescale [g_br, g_br]
@@ -402,7 +402,9 @@ static void fa_v_interleave_thread(unsigned int n, unsigned int i, void * data) 
         return;
     }
 
-    hmx_interleave_cols_to_tiles(factx->vtcm_v_tiles, factx->vtcm_v_fp16[args->buf_idx], total_rows, (int) factx->DV,
+    __fp16 * v_tiles_dest = factx->use_pipeline ? factx->vtcm_v_tiles[args->buf_idx] : factx->vtcm_v_tiles[0];
+
+    hmx_interleave_cols_to_tiles(v_tiles_dest, factx->vtcm_v_fp16[args->buf_idx], total_rows, (int) factx->DV,
                              (int) args->src_stride, (int) args->n_col_tiles, start, end);
 }
 
@@ -1254,19 +1256,22 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
     const uint32_t G          = neq2 / n_kv_heads;
 
     // Thread count for multi-thread HVX phases
-    const uint32_t n_threads = octx->n_threads;
+    const uint32_t n_threads_init = octx->n_threads;
 
     // Compute dynamic block sizes (GQA-aware, accounting for per-thread row bufs)
     size_t       Br, Bc;
     const size_t vtcm_budget = ctx->vtcm_size;
-    if (hmx_fa_find_chunk_size(&Br, &Bc, G, DK, DV, neq1, nek1, vtcm_budget, n_threads) != 0) {
+    if (hmx_fa_find_chunk_size(&Br, &Bc, G, DK, DV, neq1, nek1, vtcm_budget, n_threads_init) != 0) {
         return HTP_STATUS_VTCM_TOO_SMALL;
     }
 
     const size_t g_br = hex_align_up(G * Br, HMX_FP16_TILE_N_ROWS);
 
     const uint32_t n_kv_blocks  = (nek1 + Bc - 1) / Bc;
-    const bool     use_pipeline = (n_kv_blocks >= FA_MIN_KV_BLOCKS && n_threads >= 2);
+    const bool     use_pipeline = (n_kv_blocks >= FA_MIN_KV_BLOCKS && n_threads_init >= 2);
+
+    // Bypass thread pool dispatch for small prompts/non-pipelined prefill by setting n_threads = 1
+    const uint32_t n_threads = use_pipeline ? n_threads_init : 1;
 
     FARF(HIGH, "hmx-fa: neq1=%u nek1=%u DK=%u DV=%u G=%u Br=%zu Bc=%zu g_br=%zu n_kv_blocks=%u pipeline=%d vtcm=%zu",
          neq1, nek1, DK, DV, G, Br, Bc, g_br, n_kv_blocks, use_pipeline, vtcm_budget);
@@ -1354,7 +1359,12 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
     factx.vtcm_v_fp16[0]      = (__fp16 *) vtcm_seq_alloc(&vtcm_cur, v_dma_bytes);
     factx.vtcm_v_fp16[1]      = (__fp16 *) vtcm_seq_alloc(&vtcm_cur, v_dma_bytes);
     factx.vtcm_k_tiles        = (__fp16 *) vtcm_seq_alloc(&vtcm_cur, k_tile_bytes);
-    factx.vtcm_v_tiles        = (__fp16 *) vtcm_seq_alloc(&vtcm_cur, v_tile_bytes);
+    factx.vtcm_v_tiles[0]     = (__fp16 *) vtcm_seq_alloc(&vtcm_cur, v_tile_bytes);
+    if (use_pipeline) {
+        factx.vtcm_v_tiles[1] = (__fp16 *) vtcm_seq_alloc(&vtcm_cur, v_tile_bytes);
+    } else {
+        factx.vtcm_v_tiles[1] = NULL;
+    }
     factx.vtcm_s_tiles        = (__fp16 *) vtcm_seq_alloc(&vtcm_cur, s_tile_bytes);
     factx.vtcm_p_tiles        = (__fp16 *) vtcm_seq_alloc(&vtcm_cur, s_tile_bytes);
     factx.vtcm_d_tiles        = (__fp16 *) vtcm_seq_alloc(&vtcm_cur, d_tile_bytes);
@@ -1535,7 +1545,7 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
                             ou_job.o_curr           = o_tile_curr;
                             ou_job.o_prev           = o_tile_prev;
                             ou_job.p_tiles          = factx.vtcm_p_tiles;
-                            ou_job.v_tiles          = factx.vtcm_v_tiles;
+                            ou_job.v_tiles          = factx.vtcm_v_tiles[1 - buf_idx];
                             ou_job.d_tiles          = factx.vtcm_d_tiles;
                             ou_job.hmx_scales       = factx.vtcm_hmx_scales_id;
                             ou_job.n_row_tiles      = n_row_tiles;
@@ -1549,11 +1559,6 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
                         TIMER_START(k_interleave);
                         fa_phase_k_interleave(&factx, kv_rows, k_src_stride, buf_idx);
                         TIMER_STOP(k_interleave);
-
-                        if (kv_blk > 0) {
-                            hmx_queue_pop(hmx_q);
-                            hex_swap_ptr((void **) &o_tile_curr, (void **) &o_tile_prev);
-                        }
 
                         // ---- Phase 2: qk_dot(blk) on HMX ‖ V_int(blk) + DMA prefetch on HVX ----
                         qk_job.q_tiles        = factx.vtcm_q_tiles;
@@ -1574,6 +1579,13 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
                         fa_phase_v_interleave(&factx, kv_rows, v_src_stride, buf_idx, n_tiles_per_bc);
                         TIMER_STOP(v_interleave);
 
+                        // Pop and swap previous block's output update (deferred HMX pop)
+                        if (kv_blk > 0) {
+                            hmx_queue_pop(hmx_q);
+                            hex_swap_ptr((void **) &o_tile_curr, (void **) &o_tile_prev);
+                        }
+
+                        // Pop current block's dot product job
                         hmx_queue_pop(hmx_q);
                         TIMER_STOP(qk_dot);
 
@@ -1617,7 +1629,7 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
                         ou_job.o_curr           = o_tile_curr;
                         ou_job.o_prev           = o_tile_prev;
                         ou_job.p_tiles          = factx.vtcm_p_tiles;
-                        ou_job.v_tiles          = factx.vtcm_v_tiles;
+                        ou_job.v_tiles          = factx.vtcm_v_tiles[1 - buf_idx];
                         ou_job.d_tiles          = factx.vtcm_d_tiles;
                         ou_job.hmx_scales       = factx.vtcm_hmx_scales_id;
                         ou_job.n_row_tiles      = n_row_tiles;
@@ -1732,7 +1744,7 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
                             const size_t DV_tiles           = (size_t) (DV / 32);
                             const __fp16 * restrict d_base  = factx.vtcm_d_tiles;
                             const __fp16 * restrict p_base  = factx.vtcm_p_tiles;
-                            const __fp16 * restrict v_base  = factx.vtcm_v_tiles;
+                            const __fp16 * restrict v_base  = factx.vtcm_v_tiles[0];
                             const __fp16 * restrict op_base = o_tile_prev;
                             __fp16 * restrict oc_base       = o_tile_curr;
                             __builtin_assume(n_row_tiles > 0);
