@@ -90,7 +90,9 @@ struct task_params {
     std::string        control_cmpl_id;
 
     // per-request parameters for chat parsing
-    common_chat_parser_params chat_parser_params;
+    std::shared_ptr<common_chat_parser_params> chat_parser_params;
+
+    task_params() : chat_parser_params(std::make_shared<common_chat_parser_params>()) {}
 
     // Embeddings
     int32_t embd_normalize = 2; // (-1=none, 0=max absolute int16, 1=taxicab, 2=Euclidean/L2, >2=p-norm)
@@ -103,7 +105,7 @@ struct task_params {
 struct task_result_state {
     // tracking diffs for partial tool calls
     std::vector<common_chat_msg_diff> diffs;
-    common_chat_parser_params chat_parser_params;
+    std::shared_ptr<common_chat_parser_params> chat_parser_params;
     common_chat_msg chat_msg;
     std::string generated_text; // append new chunks of generated text here
     std::vector<std::string> generated_tool_call_ids;
@@ -120,7 +122,7 @@ struct task_result_state {
     const std::string oai_resp_message_id;
     std::string oai_resp_fc_id; // function call ID for current args delta
 
-    task_result_state(const common_chat_parser_params & chat_parser_params);
+    task_result_state(std::shared_ptr<common_chat_parser_params> p);
 
     // parse partial tool calls and update the internal state
     common_chat_msg update_chat_msg(
