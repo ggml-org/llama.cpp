@@ -1979,6 +1979,14 @@ json server_task_result_apply_lora::to_json() {
 }
 
 //
+// server_task_result_keepalive
+//
+
+json server_task_result_keepalive::to_json() {
+    return nullptr;
+}
+
+//
 // server_prompt_cache
 //
 size_t server_prompt_cache::size() const {

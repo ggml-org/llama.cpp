@@ -375,7 +375,8 @@ bool server_response_reader::has_next() const {
 
 // return nullptr if should_stop() is true before receiving a result
 // note: if one error is received, it will stop further processing and return error result
-server_task_result_ptr server_response_reader::next(const std::function<bool()> & should_stop) {
+server_task_result_ptr server_response_reader::next(const std::function<bool()> & should_stop, int keepalive_interval_seconds) {
+    int64_t time_last_keepalive_msg_ms = ggml_time_ms();
     while (true) {
         server_task_result_ptr result = queue_results.recv_with_timeout(id_tasks, polling_interval_seconds);
         if (result == nullptr) {
@@ -386,6 +387,11 @@ server_task_result_ptr server_response_reader::next(const std::function<bool()> 
                     SRV_WRN("%s", "request cancelled after 30s, potentially a client-side timeout; please check your client's code\n");
                 }
                 return nullptr;
+            }
+            // check if keepalive message needs to be sent
+            if (keepalive_interval_seconds > 0 && ggml_time_ms() > time_last_keepalive_msg_ms + keepalive_interval_seconds * 1000 ) {
+                time_last_keepalive_msg_ms = ggml_time_ms();
+                return std::make_unique<server_task_result_keepalive>();
             }
         } else {
             if (result->is_error()) {

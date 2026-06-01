@@ -3731,6 +3731,8 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
             }
         }
     } else {
+        int32_t keepalive_interval = params.keepalive_interval;
+
         // in streaming mode, the first error must be treated as non-stream response
         // this is to match the OAI API behavior
         // ref: https://github.com/ggml-org/llama.cpp/pull/16486#discussion_r2419657309
@@ -3764,7 +3766,7 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
         }
         res->status = 200;
         res->content_type = "text/event-stream";
-        res->next = [res_this = res.get(), res_type, &req](std::string & output) -> bool {
+        res->next = [res_this = res.get(), res_type, &req, keepalive_interval](std::string & output) -> bool {
             static auto format_error = [](task_response_type res_type, const json & res_json) {
                 if (res_type == TASK_RESPONSE_TYPE_ANTHROPIC) {
                     return format_anthropic_sse({
@@ -3809,11 +3811,18 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
                 }
 
                 // receive subsequent results
-                auto result = rd.next(req.should_stop);
+                auto result = rd.next(req.should_stop, keepalive_interval);
                 if (result == nullptr) {
                     SRV_DBG("%s", "stopping streaming due to should_stop condition\n");
                     GGML_ASSERT(req.should_stop());
                     return false; // should_stop condition met
+                }
+
+                // send keepalive as a comment (line starting with a COLON character)
+                // see 9.2.6 of https://html.spec.whatwg.org/multipage/server-sent-events.html
+                if (dynamic_cast<server_task_result_keepalive*>(result.get()) != nullptr) {
+                    output = ": keepalive\n\n";
+                    return true;
                 }
 
                 // send the results

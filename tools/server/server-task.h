@@ -566,6 +566,11 @@ struct server_task_result_apply_lora : server_task_result {
     virtual json to_json() override;
 };
 
+struct server_task_result_keepalive : server_task_result {
+    virtual json to_json() override;
+};
+
+
 struct server_prompt_data {
     std::vector<uint8_t> main;
     std::vector<uint8_t> drft;

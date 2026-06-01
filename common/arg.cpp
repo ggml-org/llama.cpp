@@ -3032,6 +3032,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_TIMEOUT"));
     add_opt(common_arg(
+        {"--sse-keepalive-interval"}, "N",
+        string_format("interval in seconds between SSE keepalive comments during streaming (default: %d; 0 = disabled)", params.keepalive_interval),
+        [](common_params & params, int value) {
+            params.keepalive_interval  = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_SSE_KEEPALIVE_INTERVAL"));
+    add_opt(common_arg(
         {"--threads-http"}, "N",
         string_format("number of threads used to process HTTP requests (default: %d)", params.n_threads_http),
         [](common_params & params, int value) {
