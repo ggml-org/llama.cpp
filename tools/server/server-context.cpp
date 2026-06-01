@@ -75,6 +75,12 @@ static uint32_t server_n_outputs_max(const common_params & params) {
         }
     }
 
+    // draft model present without an explicit speculative type: init auto enables
+    // DRAFT_SIMPLE, so reserve room for the 1 + n_max tokens of the verify batch
+    if (params.speculative.has_dft()) {
+        n_outputs_per_seq = std::max<uint32_t>(n_outputs_per_seq, 1 + std::max(0, params.speculative.draft.n_max));
+    }
+
     const uint64_t n_outputs = (uint64_t) params.n_parallel * n_outputs_per_seq;
 
     return std::max<uint32_t>(1, std::min<uint64_t>(n_batch, n_outputs));
