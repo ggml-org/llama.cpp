@@ -778,9 +778,9 @@ bool llama_context::memory_update(bool optimize) {
         const uint32_t n_seqs = cparams.n_seq_max;
         const uint32_t n_tokens = std::min(cparams.n_ctx, cparams.n_ubatch);
 
-        const uint32_t n_outputs_pp = std::min(n_tokens, cparams.n_outputs_max);
+        const uint32_t n_outputs_max = std::min(n_tokens, cparams.n_outputs_max);
 
-        auto * gf = graph_reserve(n_tokens, n_seqs, n_outputs_pp, mctx.get());
+        auto * gf = graph_reserve(n_tokens, n_seqs, n_outputs_max, mctx.get());
         if (!gf) {
             LLAMA_LOG_ERROR("%s: failed to reserve graph after the memory update\n", __func__);
         }
@@ -1786,8 +1786,6 @@ int llama_context::decode(const llama_batch & batch_inp) {
 
             // needs to happen before the graph is built
             n_outputs = n_outputs_new;
-
-            GGML_ASSERT(n_outputs <= cparams.n_outputs_max);
         }
 
         ggml_status status;
@@ -2148,6 +2146,8 @@ uint32_t llama_context::output_reserve(int32_t n_outputs) {
 
     this->n_outputs = 0;
 
+    GGML_ASSERT(n_outputs_max <= cparams.n_outputs_max);
+
     return n_outputs_max;
 }
 
@@ -2232,14 +2232,8 @@ ggml_cgraph * llama_context::graph_reserve(
     LLAMA_LOG_DEBUG("%s: reserving a graph for ubatch with n_tokens = %4u, n_seqs = %2u, n_outputs = %4u\n", __func__, n_tokens, n_seqs, n_outputs);
     GGML_ASSERT(n_outputs >= 1);
 
-    const bool reserve_all_outputs = n_outputs >= n_tokens;
-
     if (n_tokens % n_seqs != 0) {
         n_tokens = ((n_tokens + (n_seqs - 1)) / n_seqs) * n_seqs; // round to next multiple of n_seqs
-        if (reserve_all_outputs) {
-            n_outputs = std::max(n_outputs, n_tokens);
-        }
-
         LLAMA_LOG_DEBUG("%s: making n_tokens a multiple of n_seqs - n_tokens = %u, n_seqs = %u, n_outputs = %u\n", __func__, n_tokens, n_seqs, n_outputs);
     }
 
