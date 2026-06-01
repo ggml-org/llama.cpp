@@ -78,48 +78,53 @@ OutputVector translate_flash_attn_ext(const NodeContext & context) {
         manual_gqa_enabled && factor > 1 && num_heads_kv > 1 && !context.is_stateful();
 
     if (use_manual_gqa_attention) {
-        // K, V arrive as [1, num_heads_kv, S, head_size]. Reshape to
-        //   K_r: [1, num_heads_kv, 1, S, head_size]
-        //   Q_r: [1, num_heads_kv, factor, S_q, head_size]
+        // Q, K, V arrive as [B, n_heads(_kv), S, head_size], where B is the active
+        // batch (n_seq_active) and may be > 1 (llama-perplexity, llama-server -np > 1)
+        // or dynamic. Reshape to
+        //   K_r: [B, num_heads_kv, 1, S, head_size]
+        //   Q_r: [B, num_heads_kv, factor, S_q, head_size]
         // and let MatMul broadcast across the factor dim without materialising
-        // an expanded K/V.
+        // an expanded K/V. The leading 0 + special_zero=true copies B at runtime,
+        // so this is correct for B == 1, B > 1, and dynamic B alike. Only the head
+        // dims and head_size are baked in as literals; the sequence dim stays -1.
         auto k_5d_shape = ov::op::v0::Constant::create(
             ov::element::i64, {5},
-            std::vector<int64_t>{1, num_heads_kv, 1, -1, head_size});
+            std::vector<int64_t>{0, num_heads_kv, 1, -1, head_size});
         auto v_5d_shape = ov::op::v0::Constant::create(
             ov::element::i64, {5},
-            std::vector<int64_t>{1, num_heads_kv, 1, -1, head_size});
+            std::vector<int64_t>{0, num_heads_kv, 1, -1, head_size});
         auto q_5d_shape = ov::op::v0::Constant::create(
             ov::element::i64, {5},
-            std::vector<int64_t>{1, num_heads_kv, factor, -1, head_size});
+            std::vector<int64_t>{0, num_heads_kv, factor, -1, head_size});
 
-        auto k_r = std::make_shared<ov::op::v1::Reshape>(k, k_5d_shape, false);
-        auto v_r = std::make_shared<ov::op::v1::Reshape>(v, v_5d_shape, false);
-        auto q_r = std::make_shared<ov::op::v1::Reshape>(q, q_5d_shape, false);
+        auto k_r = std::make_shared<ov::op::v1::Reshape>(k, k_5d_shape, true);
+        auto v_r = std::make_shared<ov::op::v1::Reshape>(v, v_5d_shape, true);
+        auto q_r = std::make_shared<ov::op::v1::Reshape>(q, q_5d_shape, true);
 
-        // QK^T → [1, num_heads_kv, factor, S_q, S_k]
+        // QK^T → [B, num_heads_kv, factor, S_q, S_k]
         auto qk = std::make_shared<ov::op::v0::MatMul>(q_r, k_r, /*tA=*/false, /*tB=*/true);
         auto qk_scaled = std::make_shared<ov::op::v1::Multiply>(qk, scale_node);
 
-        // Mask shape is [B, 1, S_q, S_k] in stateless. We need to broadcast it to
-        // [1, num_heads_kv, factor, S_q, S_k]. NUMPY broadcast on Add will handle
-        // the trailing dims if we Unsqueeze the mask twice on the leading head
-        // dimensions to bring it to rank 5.
+        // Mask arrives as [B, 1, S_q, S_k]. Unsqueeze a factor axis at position 2 to
+        // get [B, 1, 1, S_q, S_k], which NUMPY-broadcasts cleanly against the
+        // [B, num_heads_kv, factor, S_q, S_k] scores: B==B, then 1→num_heads_kv and
+        // 1→factor on the head dims.
         auto mask_unsq1 = std::make_shared<ov::op::v0::Unsqueeze>(
-            mask, ov::op::v0::Constant::create(ov::element::i64, {1}, {0}));
-        // mask_unsq1: [1, B, 1, S_q, S_k] (rank 5)
+            mask, ov::op::v0::Constant::create(ov::element::i64, {1}, {2}));
+        // mask_unsq1: [B, 1, 1, S_q, S_k] (rank 5)
         ov::Output<ov::Node> qk_masked = std::make_shared<ov::op::v1::Add>(qk_scaled, mask_unsq1);
 
         auto softmax = std::make_shared<ov::op::v8::Softmax>(qk_masked, /*axis=*/-1);
 
-        // softmax @ V → [1, num_heads_kv, factor, S_q, head_size]
+        // softmax @ V → [B, num_heads_kv, factor, S_q, head_size]
         auto attn = std::make_shared<ov::op::v0::MatMul>(softmax, v_r);
 
-        // Reshape back to [1, num_heads, S_q, head_size] (combine num_heads_kv * factor).
+        // Reshape back to [B, num_heads, S_q, head_size] (combine num_heads_kv * factor).
+        // Leading 0 + special_zero=true copies B at runtime.
         auto out_4d_shape = ov::op::v0::Constant::create(
             ov::element::i64, {4},
-            std::vector<int64_t>{1, num_heads, -1, head_size});
-        auto out_4d = std::make_shared<ov::op::v1::Reshape>(attn, out_4d_shape, false);
+            std::vector<int64_t>{0, num_heads, -1, head_size});
+        auto out_4d = std::make_shared<ov::op::v1::Reshape>(attn, out_4d_shape, true);
 
         // The standard SDPA path's downstream is Transpose(0,2,1,3) → Convert(f32).
         // Replicate it here so callers see the same output layout/dtype.
