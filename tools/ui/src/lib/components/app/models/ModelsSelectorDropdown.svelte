@@ -10,7 +10,8 @@
 		ModelId,
 		ModelsSelectorList,
 		ModelsSelectorOption,
-		ModelsSelectorThinkingIcon
+		ModelsSelectorThinkingIcon,
+		ModelsSelectorMessageThinkingIcon
 	} from '$lib/components/app';
 	import type { ModelItem } from './utils';
 
@@ -19,6 +20,7 @@
 		currentModel?: string | null;
 		disabled?: boolean;
 		forceForegroundText?: boolean;
+		message?: DatabaseMessage;
 		onModelChange?: (modelId: string, modelName: string) => Promise<boolean> | boolean | void;
 		useGlobalSelection?: boolean;
 	}
@@ -28,6 +30,7 @@
 		currentModel = null,
 		disabled = false,
 		forceForegroundText = false,
+		message = null,
 		onModelChange,
 		useGlobalSelection = false
 	}: Props = $props();
@@ -111,7 +114,11 @@
 
 				<ModelId modelId={currentModel} class="min-w-0" hideQuantization hideTags />
 
-				<ModelsSelectorThinkingIcon />
+				{#if message}
+					<ModelsSelectorMessageThinkingIcon {message} />
+				{:else}
+					<ModelsSelectorThinkingIcon modelId={currentModel} />
+				{/if}
 			</span>
 		{:else}
 			<p class="text-xs text-muted-foreground">No models available.</p>
@@ -162,7 +169,11 @@
 						<span class="min-w-0 font-medium">Select model</span>
 					{/if}
 
-					<ModelsSelectorThinkingIcon />
+					{#if message}
+						<ModelsSelectorMessageThinkingIcon {message} />
+					{:else}
+						<ModelsSelectorThinkingIcon modelId={selectedOption?.model} />
+					{/if}
 
 					{#if ms.updating || ms.isLoadingModel}
 						<Loader2 class="h-3 w-3.5 shrink-0 animate-spin" />
@@ -282,7 +293,11 @@
 					</Tooltip.Root>
 				{/if}
 
-				<ModelsSelectorThinkingIcon />
+				{#if message}
+					<ModelsSelectorMessageThinkingIcon {message} />
+				{:else}
+					<ModelsSelectorThinkingIcon modelId={selectedOption?.model} />
+				{/if}
 
 				{#if ms.updating}
 					<Loader2 class="h-3 w-3.5 shrink-0 animate-spin" />

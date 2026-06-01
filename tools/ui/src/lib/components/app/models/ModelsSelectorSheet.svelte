@@ -95,7 +95,7 @@
 					/>
 				{/if}
 
-				<ModelsSelectorThinkingIcon />
+				<ModelsSelectorThinkingIcon modelId={selectedOption?.model} />
 
 				{#if ms.updating || ms.isLoadingModel}
 					<Loader2 class="h-3 w-3.5 shrink-0 animate-spin" />
@@ -180,7 +180,7 @@
 					hideTags
 				/>
 
-				<ModelsSelectorThinkingIcon />
+				<ModelsSelectorThinkingIcon modelId={selectedOption?.model} />
 
 				{#if ms.updating}
 					<Loader2 class="h-3 w-3.5 shrink-0 animate-spin" />
