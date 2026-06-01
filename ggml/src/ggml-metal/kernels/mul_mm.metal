@@ -723,9 +723,6 @@ kernel void kernel_mul_mm_id(
     }
 }
 
-#define QK_NL 16
-
-
 //
 // matrix-matrix multiplication
 //

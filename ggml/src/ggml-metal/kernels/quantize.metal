@@ -312,8 +312,6 @@ kernel void kernel_set_rows_f(
 
 //
 // get rows
-#define QK_NL 16
-
 //
 
 typedef decltype(kernel_get_rows_f<float, float>) get_rows_f_t;

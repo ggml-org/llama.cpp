@@ -2,6 +2,8 @@
 
 #include "common.h"
 
+#define QK_NL 16 // K-quant / iq dequantize legs; shared by the mul_mm and quantize instantiations
+
 // NOTE: this is not dequantizing - we are simply fitting the template
 template <typename type4x4>
 void dequantize_f32(device const float4x4 * src, short il, thread type4x4 & reg) {

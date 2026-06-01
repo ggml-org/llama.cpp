@@ -30,8 +30,8 @@ set(METALLIB_KERNELS_QUANTIZE   "${CMAKE_CURRENT_SOURCE_DIR}/kernels/quantize.h"
 
 set(METALLIB_KERNEL_SOURCES
     kernels/fa.metal
-    kernels/mul-mv.metal
-    kernels/mul-mm.metal
+    kernels/mul_mv.metal
+    kernels/mul_mm.metal
     kernels/quantize.metal
     kernels/norm.metal
     kernels/activation.metal
@@ -39,9 +39,13 @@ set(METALLIB_KERNEL_SOURCES
     kernels/misc.metal
 )
 
-# kinds are the basenames of METALLIB_KERNEL_SOURCES; order matches the list above
-# (each kind compiles to its own metal library at runtime, see ggml-metal-device.m)
-set(METALLIB_KINDS fa mul-mv mul-mm quantize norm activation recurrent misc)
+# kinds are the basenames of METALLIB_KERNEL_SOURCES (single source of truth);
+# each kind compiles to its own metal library at runtime (see ggml-metal-device.m)
+set(METALLIB_KINDS "")
+foreach(src ${METALLIB_KERNEL_SOURCES})
+    get_filename_component(kind ${src} NAME_WE)
+    list(APPEND METALLIB_KINDS ${kind})
+endforeach()
 
 if (GGML_METAL_EMBED_LIBRARY)
     enable_language(ASM)

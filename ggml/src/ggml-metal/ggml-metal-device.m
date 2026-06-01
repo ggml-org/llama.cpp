@@ -95,23 +95,35 @@ int ggml_metal_pipeline_max_theads_per_threadgroup(struct ggml_metal_pipeline_wi
 }
 
 //
-// MTLLibrary collection (8 op-source libraries compiled separately)
+// MTLLibrary collection (one library per op-source, compiled separately)
 //
 
+// Single source of truth for the per-kind metal libraries. The order here
+// defines the enum values and every per-kind table below, so adding a library
+// is a one-line change here (plus adding its source to CMakeLists.txt).
+//   X(suffix, name): name is both the kernels/<name>.metal basename and the
+//   ggml_metallib_<name>_{start,end} embed-symbol stem.
+#define GGML_METAL_LIBS \
+    X(FA,         fa)         \
+    X(MUL_MV,     mul_mv)     \
+    X(MUL_MM,     mul_mm)     \
+    X(QUANTIZE,   quantize)   \
+    X(NORM,       norm)       \
+    X(ACTIVATION, activation) \
+    X(RECURRENT,  recurrent)  \
+    X(MISC,       misc)
+
 enum ggml_metal_lib_kind {
-    GGML_METAL_LIB_FA = 0,
-    GGML_METAL_LIB_MUL_MV,
-    GGML_METAL_LIB_MUL_MM,
-    GGML_METAL_LIB_QUANTIZE,
-    GGML_METAL_LIB_NORM,
-    GGML_METAL_LIB_ACTIVATION,
-    GGML_METAL_LIB_RECURRENT,
-    GGML_METAL_LIB_MISC,
+#define X(e, s) GGML_METAL_LIB_##e,
+    GGML_METAL_LIBS
+#undef X
     GGML_METAL_LIB_COUNT,
 };
 
 static const char * const k_lib_names[GGML_METAL_LIB_COUNT] = {
-    "fa", "mul-mv", "mul-mm", "quantize", "norm", "activation", "recurrent", "misc",
+#define X(e, s) [GGML_METAL_LIB_##e] = #s,
+    GGML_METAL_LIBS
+#undef X
 };
 
 struct ggml_metal_library {
@@ -176,25 +188,18 @@ ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
 #if GGML_METAL_EMBED_LIBRARY
     GGML_LOG_INFO("%s: using embedded metal library\n", __func__);
 
-    // 8 pairs of start/end symbols emitted by CMake (see CMakeLists.txt)
-    extern const char ggml_metallib_fa_start[];          extern const char ggml_metallib_fa_end[];
-    extern const char ggml_metallib_mul_mv_start[];      extern const char ggml_metallib_mul_mv_end[];
-    extern const char ggml_metallib_mul_mm_start[];      extern const char ggml_metallib_mul_mm_end[];
-    extern const char ggml_metallib_quantize_start[];    extern const char ggml_metallib_quantize_end[];
-    extern const char ggml_metallib_norm_start[];        extern const char ggml_metallib_norm_end[];
-    extern const char ggml_metallib_activation_start[];  extern const char ggml_metallib_activation_end[];
-    extern const char ggml_metallib_recurrent_start[];   extern const char ggml_metallib_recurrent_end[];
-    extern const char ggml_metallib_misc_start[];        extern const char ggml_metallib_misc_end[];
+    // start/end symbols emitted by CMake (see CMakeLists.txt), one pair per kind
+#define X(e, s) extern const char ggml_metallib_##s##_start[]; extern const char ggml_metallib_##s##_end[];
+    GGML_METAL_LIBS
+#undef X
 
     NSString ** src_per_kind = calloc(GGML_METAL_LIB_COUNT, sizeof(NSString *));
-    src_per_kind[GGML_METAL_LIB_FA]         = [[NSString alloc] initWithBytes:ggml_metallib_fa_start         length:(ggml_metallib_fa_end         - ggml_metallib_fa_start)         encoding:NSUTF8StringEncoding];
-    src_per_kind[GGML_METAL_LIB_MUL_MV]     = [[NSString alloc] initWithBytes:ggml_metallib_mul_mv_start     length:(ggml_metallib_mul_mv_end     - ggml_metallib_mul_mv_start)     encoding:NSUTF8StringEncoding];
-    src_per_kind[GGML_METAL_LIB_MUL_MM]     = [[NSString alloc] initWithBytes:ggml_metallib_mul_mm_start     length:(ggml_metallib_mul_mm_end     - ggml_metallib_mul_mm_start)     encoding:NSUTF8StringEncoding];
-    src_per_kind[GGML_METAL_LIB_QUANTIZE]   = [[NSString alloc] initWithBytes:ggml_metallib_quantize_start   length:(ggml_metallib_quantize_end   - ggml_metallib_quantize_start)   encoding:NSUTF8StringEncoding];
-    src_per_kind[GGML_METAL_LIB_NORM]       = [[NSString alloc] initWithBytes:ggml_metallib_norm_start       length:(ggml_metallib_norm_end       - ggml_metallib_norm_start)       encoding:NSUTF8StringEncoding];
-    src_per_kind[GGML_METAL_LIB_ACTIVATION] = [[NSString alloc] initWithBytes:ggml_metallib_activation_start length:(ggml_metallib_activation_end - ggml_metallib_activation_start) encoding:NSUTF8StringEncoding];
-    src_per_kind[GGML_METAL_LIB_RECURRENT]  = [[NSString alloc] initWithBytes:ggml_metallib_recurrent_start  length:(ggml_metallib_recurrent_end  - ggml_metallib_recurrent_start)  encoding:NSUTF8StringEncoding];
-    src_per_kind[GGML_METAL_LIB_MISC]       = [[NSString alloc] initWithBytes:ggml_metallib_misc_start       length:(ggml_metallib_misc_end       - ggml_metallib_misc_start)       encoding:NSUTF8StringEncoding];
+#define X(e, s) \
+    src_per_kind[GGML_METAL_LIB_##e] = [[NSString alloc] initWithBytes:ggml_metallib_##s##_start \
+                                                                length:(ggml_metallib_##s##_end - ggml_metallib_##s##_start) \
+                                                              encoding:NSUTF8StringEncoding];
+    GGML_METAL_LIBS
+#undef X
 
     int64_t * t_per_lib = calloc(GGML_METAL_LIB_COUNT, sizeof(int64_t));
     NSError ** err_per_lib = calloc(GGML_METAL_LIB_COUNT, sizeof(NSError *));
@@ -215,9 +220,7 @@ ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
 
                 lib = [device newLibraryWithSource:src_per_kind[kind] options:options error:&error];
 
-#if !__has_feature(objc_arc)
                 [options release];
-#endif
             }
 
             t_per_lib[kind] = ggml_time_us() - t0;
@@ -356,17 +359,14 @@ ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
 
         GGML_LOG_INFO("%s: loading '%s'\n", __func__, [path_source UTF8String]);
 
-        NSString * path_capture = [path_source copy];
-
         dispatch_group_async(group, queue, ^{
             const int64_t t0 = ggml_time_us();
 
             NSError * file_err = nil;
-            NSString * src = [NSString stringWithContentsOfFile:path_capture encoding:NSUTF8StringEncoding error:&file_err];
+            NSString * src = [NSString stringWithContentsOfFile:path_source encoding:NSUTF8StringEncoding error:&file_err];
             if (!src || file_err) {
                 err_per_lib[kind] = [file_err retain];
                 any_failure = true;
-                [path_capture release];
                 return;
             }
 
@@ -379,9 +379,7 @@ ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
 
                 lib = [device newLibraryWithSource:src options:options error:&compile_err];
 
-#if !__has_feature(objc_arc)
                 [options release];
-#endif
             }
 
             t_per_lib[kind] = ggml_time_us() - t0;
@@ -389,12 +387,10 @@ ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
             if (!lib) {
                 err_per_lib[kind] = [compile_err retain];
                 any_failure = true;
-                [path_capture release];
                 return;
             }
 
             res->objs[kind] = lib;
-            [path_capture release];
         });
     }
     dispatch_group_wait(group, DISPATCH_TIME_FOREVER);
