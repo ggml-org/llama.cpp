@@ -6,7 +6,10 @@ import {
 	ATTACHMENT_LABEL_MCP_PROMPT,
 	ATTACHMENT_LABEL_MCP_RESOURCE,
 	LEGACY_AGENTIC_REGEX,
-	SETTINGS_KEYS
+	SETTINGS_KEYS,
+	API_CHAT,
+	API_SLOTS,
+	CONTROL_ACTION
 } from '$lib/constants';
 import {
 	AttachmentType,
@@ -292,7 +295,7 @@ export class ChatService {
 		}
 
 		try {
-			const response = await fetch(`./v1/chat/completions`, {
+			const response = await fetch(API_CHAT.COMPLETIONS, {
 				method: 'POST',
 				headers: getJsonHeaders(),
 				body: JSON.stringify(requestBody),
@@ -382,7 +385,7 @@ export class ChatService {
 	 */
 	static async areAllSlotsIdle(model?: string | null, signal?: AbortSignal): Promise<boolean> {
 		try {
-			const url = model ? `./slots?model=${encodeURIComponent(model)}` : './slots';
+			const url = model ? `${API_SLOTS.LIST}?model=${encodeURIComponent(model)}` : API_SLOTS.LIST;
 			const res = await fetch(url, { signal });
 			if (!res.ok) return true;
 
@@ -402,7 +405,9 @@ export class ChatService {
 	 */
 	static async stopReasoning(model?: string | null): Promise<boolean> {
 		try {
-			const slotsUrl = model ? `./slots?model=${encodeURIComponent(model)}` : './slots';
+			const slotsUrl = model
+				? `${API_SLOTS.LIST}?model=${encodeURIComponent(model)}`
+				: API_SLOTS.LIST;
 			const slotsRes = await fetch(slotsUrl, { headers: getAuthHeaders() });
 			if (!slotsRes.ok) return false;
 
@@ -410,10 +415,13 @@ export class ChatService {
 			const active = slots.find((s) => s.is_processing);
 			if (!active) return false;
 
-			const body: Record<string, unknown> = { id_slot: active.id, action: 'end_reasoning' };
+			const body: Record<string, unknown> = {
+				id_slot: active.id,
+				action: CONTROL_ACTION.END_REASONING
+			};
 			if (model) body.model = model;
 
-			const res = await fetch('./v1/chat/completions/control', {
+			const res = await fetch(API_CHAT.CONTROL, {
 				method: 'POST',
 				headers: getJsonHeaders(),
 				body: JSON.stringify(body)
@@ -495,7 +503,7 @@ export class ChatService {
 		}
 
 		try {
-			await fetch(`./v1/chat/completions`, {
+			await fetch(API_CHAT.COMPLETIONS, {
 				method: 'POST',
 				headers: getJsonHeaders(),
 				body: JSON.stringify(requestBody),
