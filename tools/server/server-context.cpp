@@ -45,35 +45,7 @@ static uint32_t server_n_outputs_max(const common_params & params) {
         return n_batch;
     }
 
-    uint32_t n_outputs_per_seq = 1;
-
-    for (const auto type : params.speculative.types) {
-        switch (type) {
-            case COMMON_SPECULATIVE_TYPE_DRAFT_SIMPLE:
-            case COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3:
-            case COMMON_SPECULATIVE_TYPE_DRAFT_MTP:
-                n_outputs_per_seq = std::max<uint32_t>(n_outputs_per_seq, 1 + std::max(0, params.speculative.draft.n_max));
-                break;
-            case COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE:
-                n_outputs_per_seq = std::max<uint32_t>(n_outputs_per_seq, 1 + params.speculative.ngram_simple.size_m);
-                break;
-            case COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K:
-                n_outputs_per_seq = std::max<uint32_t>(n_outputs_per_seq, 1 + params.speculative.ngram_map_k.size_m);
-                break;
-            case COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V:
-                n_outputs_per_seq = std::max<uint32_t>(n_outputs_per_seq, 1 + params.speculative.ngram_map_k4v.size_m);
-                break;
-            case COMMON_SPECULATIVE_TYPE_NGRAM_MOD:
-                n_outputs_per_seq = std::max<uint32_t>(n_outputs_per_seq, 1 + std::max(0, params.speculative.ngram_mod.n_max));
-                break;
-            case COMMON_SPECULATIVE_TYPE_NGRAM_CACHE:
-                n_outputs_per_seq = std::max<uint32_t>(n_outputs_per_seq, 1 + 8);
-                break;
-            case COMMON_SPECULATIVE_TYPE_NONE:
-            case COMMON_SPECULATIVE_TYPE_COUNT:
-                break;
-        }
-    }
+    const uint32_t n_outputs_per_seq = 1 + common_speculative_n_max(&params.speculative);
 
     const uint64_t n_outputs = (uint64_t) params.n_parallel * n_outputs_per_seq;
 
