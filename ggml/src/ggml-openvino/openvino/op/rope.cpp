@@ -55,16 +55,7 @@ OutputVector translate_rope(const NodeContext & context) {
         if (context.get_input_size() == 3) {
             rope_freqs_weight = context.get_input(2).get_node_shared_ptr();
         }
-        std::shared_ptr<ov::Node> token_len_per_seq;
-        if (context.has_input("token_len_per_seq")) {
-            token_len_per_seq = context.get_input("token_len_per_seq").get_node_shared_ptr();
-        }
-        auto sin_cos = make_sin_cos(op_params,
-                                    inp_pos,
-                                    rope_freqs_weight,
-                                    mode == TYPE_IMROPE,
-                                    false,
-                                    token_len_per_seq);
+        auto sin_cos = make_sin_cos(op_params, inp_pos, rope_freqs_weight, mode == TYPE_IMROPE, false);
         sin_theta_node = sin_cos.first;
         cos_theta_node = sin_cos.second;
     }

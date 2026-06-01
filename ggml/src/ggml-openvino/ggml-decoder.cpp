@@ -595,7 +595,7 @@ void GgmlOvDecoder::add_extra_inputs() {
     if (m_compute_params.token_len_per_seq != -1) {
         create_1d_input("token_len_per_seq", m_compute_params.token_len_per_seq);
     }
-    // create_1d_input("token_len", m_token_len_per_seq * m_n_seq_active);
+    // create_1d_input("token_len", m_compute_params.token_len_per_seq * m_compute_params.n_seq_active);
 }
 
 bool GgmlOvDecoder::node_is_used_as_src(const int node_idx) {
