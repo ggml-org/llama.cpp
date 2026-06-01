@@ -405,11 +405,11 @@ export class ChatService {
 	 * nothing server side. The model is carried so the router forwards to the
 	 * right child, single model ignores it. Returns true on success.
 	 */
-	static async stopReasoning(cmplId: string, model?: string | null): Promise<boolean> {
-		if (!cmplId) return false;
+	static async stopReasoning(completionId: string, model?: string | null): Promise<boolean> {
+		if (!completionId) return false;
 		try {
 			const body: Record<string, unknown> = {
-				id: cmplId,
+				id: completionId,
 				action: CONTROL_ACTION.END_REASONING
 			};
 			if (model) body.model = model;

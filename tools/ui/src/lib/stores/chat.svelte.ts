@@ -674,14 +674,14 @@ class ChatStore {
 			}
 		};
 
-		let cmplIdRecorded = false;
+		let completionIdRecorded = false;
 		const recordCompletionId = (id: string): void => {
-			if (!id || cmplIdRecorded) return;
-			cmplIdRecorded = true;
+			if (!id || completionIdRecorded) return;
+			completionIdRecorded = true;
 			const idx = conversationsStore.findMessageIndex(currentMessageId);
-			conversationsStore.updateMessageAtIndex(idx, { cmplId: id });
-			DatabaseService.updateMessage(currentMessageId, { cmplId: id }).catch(() => {
-				cmplIdRecorded = false;
+			conversationsStore.updateMessageAtIndex(idx, { completionId: id });
+			DatabaseService.updateMessage(currentMessageId, { completionId: id }).catch(() => {
+				completionIdRecorded = false;
 			});
 		};
 
