@@ -662,6 +662,28 @@ void process_shaders() {
         }
     }
 
+    const std::map<std::string, std::string> fa_bf16_dict = {
+        {"FLOAT_TYPE",   "bfloat16_t"},
+        {"FLOAT_TYPEV2", "bf16vec2"},
+        {"FLOAT_TYPEV4", "bf16vec4"},
+        {"ACC_TYPE",     "float"},
+        {"ACC_TYPEV2",   "vec2"},
+        {"ACC_TYPEV4",   "vec4"},
+        {"BFLOAT16",     "1"},
+    };
+
+#if defined(GGML_VULKAN_BFLOAT16_GLSLC_SUPPORT) && defined(GGML_VULKAN_COOPMAT_GLSLC_SUPPORT)
+    string_to_spv("flash_attn_f32_f16_bf16", "flash_attn_cm1.comp",
+        merge_maps(fa_bf16_dict, {{"Q_TYPE", "float"}, {"D_TYPE", "float"}, {"D_TYPEV4", "vec4"}, {"COOPMAT", "1"}}),
+        true, true, false, false);
+#endif
+
+#if defined(GGML_VULKAN_BFLOAT16_GLSLC_SUPPORT) && defined(GGML_VULKAN_COOPMAT2_GLSLC_SUPPORT)
+    string_to_spv("flash_attn_f32_f16_bf16", "flash_attn_cm2.comp",
+        merge_maps(fa_bf16_dict, {{"Q_TYPE", "float"}, {"D_TYPE", "float"}, {"D_TYPEV4", "vec4"}}),
+        true, false, true, false);
+#endif
+
     std::map<std::string, std::string> base_dict = {{"FLOAT_TYPE", "float"}, {"FLOAT_TYPEV2", "vec2"}};
 
     for (const auto& tname : type_names) {
@@ -934,6 +956,7 @@ void process_shaders() {
 
     string_to_spv("argmax_f32", "argmax.comp", merge_maps(base_dict, {{"A_TYPE", "float"}, {"D_TYPE", "int"}}));
     string_to_spv("sum_rows_f32", "sum_rows.comp", merge_maps(base_dict, {{"A_TYPE", "float"}, {"D_TYPE", "float"}}));
+    string_to_spv("fwht_f32", "fwht.comp", {});
     string_to_spv("count_equal_i32", "count_equal.comp", merge_maps(base_dict, {{"A_TYPE", "int"}, {"B_TYPE", "int"}, {"D_TYPE", "int"}}));
     string_to_spv("cumsum_f32", "cumsum.comp", merge_maps(base_dict, {{"A_TYPE", "float"}, {"D_TYPE", "float"}}));
     string_to_spv("cumsum_multipass1_f32", "cumsum_multipass1.comp", merge_maps(base_dict, {{"A_TYPE", "float"}, {"D_TYPE", "float"}}));

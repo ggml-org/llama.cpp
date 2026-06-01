@@ -37,7 +37,7 @@ jobs:
       #- name: ccache
       #  uses: ggml-org/ccache-action@v1.2.16
       #  with:
-      #    key: windows-msys2
+      #    key: msys-windows-2025-x64
       #    variant: ccache
       #    evict-old-files: 1d
       #    save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}

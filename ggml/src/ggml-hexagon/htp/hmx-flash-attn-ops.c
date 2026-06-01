@@ -1248,9 +1248,6 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
     if (DK % 32 != 0 || DV % 32 != 0) {
         return HTP_STATUS_NO_SUPPORT;
     }
-    if (neq1 < 32) {
-        return HTP_STATUS_NO_SUPPORT;
-    }
 
     // GQA factor
     const uint32_t n_kv_heads = k->ne[2];

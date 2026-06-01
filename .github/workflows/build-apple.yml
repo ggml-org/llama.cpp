@@ -48,7 +48,7 @@ jobs:
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.21
         with:
-          key: macos-latest-arm64
+          key: apple-arm64
           evict-old-files: 1d
           save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
@@ -84,7 +84,7 @@ jobs:
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.21
         with:
-          key: macos-latest-x64
+          key: apple-x64
           evict-old-files: 1d
           save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
@@ -108,39 +108,6 @@ jobs:
         run: |
           cd build
           ctest -L main --verbose --timeout 900
-
-  macos-latest-ios:
-    runs-on: macos-latest
-
-    steps:
-      - name: Clone
-        id: checkout
-        uses: actions/checkout@v6
-
-      - name: ccache
-        uses: ggml-org/ccache-action@v1.2.21
-        with:
-          key: macos-latest-ios
-          evict-old-files: 1d
-          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
-
-      - name: Build
-        id: cmake_build
-        run: |
-          sysctl -a
-          cmake -B build -G Xcode \
-            -DGGML_METAL_USE_BF16=ON \
-            -DGGML_METAL_EMBED_LIBRARY=ON \
-            -DLLAMA_BUILD_APP=OFF \
-            -DLLAMA_BUILD_COMMON=OFF \
-            -DLLAMA_BUILD_EXAMPLES=OFF \
-            -DLLAMA_BUILD_TOOLS=OFF \
-            -DLLAMA_BUILD_TESTS=OFF \
-            -DLLAMA_BUILD_SERVER=OFF \
-            -DCMAKE_SYSTEM_NAME=iOS \
-            -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0 \
-            -DCMAKE_XCODE_ATTRIBUTE_DEVELOPMENT_TEAM=ggml
-          cmake --build build --config Release -j $(sysctl -n hw.logicalcpu) -- CODE_SIGNING_ALLOWED=NO
 
   macos-latest-ios-xcode:
     runs-on: macos-latest
@@ -197,10 +164,11 @@ jobs:
         id: checkout
         uses: actions/checkout@v6
 
+      # TODO: this likely does not do anything - if yes, remove it
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.21
         with:
-          key: macos-latest-tvos
+          key: apple-tvos
           evict-old-files: 1d
           save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
@@ -229,6 +197,14 @@ jobs:
       - name: Clone
         id: checkout
         uses: actions/checkout@v6
+
+      # TODO: this likely does not do anything - if yes, remove it
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.21
+        with:
+          key: apple-visionos
+          evict-old-files: 1d
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
       - name: Build
         id: cmake_build
@@ -261,10 +237,11 @@ jobs:
         id: checkout
         uses: actions/checkout@v6
 
+      # TODO: this likely does not do anything - if yes, remove it
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.21
         with:
-          key: macos-latest-swift
+          key: apple-swift
           evict-old-files: 1d
           save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 

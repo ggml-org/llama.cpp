@@ -73,7 +73,7 @@ struct server_http_context {
 
     std::string path_prefix;
     std::string hostname;
-    int port;
+    int port    = 8080;
     bool is_ssl = false;
 
     server_http_context();
@@ -88,7 +88,7 @@ struct server_http_context {
 
     // Register the Google Cloud Platform (Vertex AI) compat (AIP_PREDICT_ROUTE env var, or /predict)
     // Must be called AFTER all other API routes are registered
-    void register_gcp_compat();
+    void register_gcp_compat() const;
 
     // for debugging
     std::string listening_address;

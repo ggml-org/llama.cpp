@@ -8,7 +8,7 @@
 - [Performance Reference](#performance-reference)
 - [Docker](#docker)
 - [Linux](#linux)
-- [Windows](#windows)
+- [Windows](#windows-1)
 - [Environment Variable](#environment-variable)
 - [Design Rule](#design-rule)
 - [Known Issue](#known-issues)

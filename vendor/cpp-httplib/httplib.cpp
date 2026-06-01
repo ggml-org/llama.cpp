@@ -1832,7 +1832,7 @@ int getaddrinfo_with_timeout(const char *node, const char *service,
 
 #ifdef _WIN32
   // Windows-specific implementation using GetAddrInfoEx with overlapped I/O
-  OVERLAPPED overlapped = {0};
+  OVERLAPPED overlapped = {};
   HANDLE event = CreateEventW(nullptr, TRUE, FALSE, nullptr);
   if (!event) { return EAI_FAIL; }
 
@@ -1841,7 +1841,7 @@ int getaddrinfo_with_timeout(const char *node, const char *service,
   PADDRINFOEXW result_addrinfo = nullptr;
   HANDLE cancel_handle = nullptr;
 
-  ADDRINFOEXW hints_ex = {0};
+  ADDRINFOEXW hints_ex = {};
   if (hints) {
     hints_ex.ai_flags = hints->ai_flags;
     hints_ex.ai_family = hints->ai_family;
@@ -9912,13 +9912,28 @@ bool ClientImpl::process_request(Stream &strm, Request &req,
   }
 #endif
 
-  // Handle Expect: 100-continue with timeout
-  if (expect_100_continue && CPPHTTPLIB_EXPECT_100_TIMEOUT_MSECOND > 0) {
-    time_t sec = CPPHTTPLIB_EXPECT_100_TIMEOUT_MSECOND / 1000;
-    time_t usec = (CPPHTTPLIB_EXPECT_100_TIMEOUT_MSECOND % 1000) * 1000;
-    auto ret = detail::select_read(strm.socket(), sec, usec);
-    if (ret <= 0) {
-      // Timeout or error: send body anyway (server didn't respond in time)
+  // Handle Expect: 100-continue.
+  //
+  // Wait for an interim/early response by attempting to read the status line
+  // under a short timeout, instead of trusting raw socket readability. Over
+  // TLS, post-handshake records (e.g. session tickets) make the socket
+  // readable without any HTTP response being available; relying on
+  // `select_read` there caused the body to be withheld forever and the
+  // request to fail with `Read` (#2458). If no status line arrives within the
+  // timeout, send the body anyway (matching curl's behavior).
+  auto status_line_read = false;
+  if (expect_100_continue && write_request_success) {
+    if (CPPHTTPLIB_EXPECT_100_TIMEOUT_MSECOND > 0) {
+      time_t sec = CPPHTTPLIB_EXPECT_100_TIMEOUT_MSECOND / 1000;
+      time_t usec = (CPPHTTPLIB_EXPECT_100_TIMEOUT_MSECOND % 1000) * 1000;
+      strm.set_read_timeout(sec, usec);
+      status_line_read = read_response_line(strm, req, res, false);
+      strm.set_read_timeout(read_timeout_sec_, read_timeout_usec_);
+    }
+
+    if (!status_line_read) {
+      // No interim response within the timeout: send the body and handle the
+      // response as usual.
       if (!write_request_body(strm, req, error)) { return false; }
       expect_100_continue = false; // Switch to normal response handling
     }
@@ -9926,7 +9941,8 @@ bool ClientImpl::process_request(Stream &strm, Request &req,
 
   // Receive response and headers
   // When using Expect: 100-continue, don't auto-skip `100 Continue` response
-  if (!read_response_line(strm, req, res, !expect_100_continue) ||
+  if ((!status_line_read &&
+       !read_response_line(strm, req, res, !expect_100_continue)) ||
       !detail::read_headers(strm, res.headers)) {
     if (write_request_success) { error = Error::Read; }
     output_error_log(error, &req);
