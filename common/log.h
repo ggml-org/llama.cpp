@@ -59,8 +59,8 @@ void                common_log_pause (struct common_log * log); // pause  the wo
 void                common_log_resume(struct common_log * log); // resume the worker thread, not thread-safe
 void                common_log_free  (struct common_log * log);
 
-LOG_ATTRIBUTE_FORMAT(3, 4)
-void common_log_add(struct common_log * log, enum ggml_log_level level, const char * fmt, ...);
+LOG_ATTRIBUTE_FORMAT(4, 5)
+void common_log_add(struct common_log * log, enum ggml_log_level level, const char* prefix, const char * fmt, ...);
 
 // defaults: file = NULL, colors = false, prefix = false, timestamps = false
 //
@@ -104,7 +104,9 @@ void common_log_flush         (struct common_log * log);                    // f
 #define LOG_TMPL(level, verbosity, ...) \
     do { \
         if ((verbosity) <= common_log_get_verbosity_thold()) { \
-            common_log_add(common_log_main(), (level), __VA_ARGS__); \
+            char prefix[256]; \
+            snprintf(prefix, sizeof prefix, "[%s:%d] ", __FILE__, __LINE__); \
+            common_log_add(common_log_main(), (level), prefix, __VA_ARGS__); \
         } \
     } while (0)
 

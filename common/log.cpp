@@ -393,7 +393,10 @@ void common_log_free(struct common_log * log) {
     delete log;
 }
 
-void common_log_add(struct common_log * log, enum ggml_log_level level, const char * fmt, ...) {
+void common_log_add(struct common_log * log, enum ggml_log_level level, const char* prefix, const char * fmt, ...) {
+    std::string str_prefix = prefix;
+    const std::string str = str_prefix + fmt;
+    fmt = str.data();
     va_list args;
     va_start(args, fmt);
     log->add(level, fmt, args);
@@ -448,6 +451,6 @@ static int common_get_verbosity(enum ggml_log_level level) {
 void common_log_default_callback(enum ggml_log_level level, const char * text, void * /*user_data*/) {
     auto verbosity = common_get_verbosity(level);
     if (verbosity <= common_log_verbosity_thold) {
-        common_log_add(common_log_main(), level, "%s", text);
+        common_log_add(common_log_main(), level, "[] ", "%s", text);
     }
 }
