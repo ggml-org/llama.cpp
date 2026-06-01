@@ -43,7 +43,7 @@
 		assistantMessages: number;
 		messageTypes: string[];
 	} | null>(null);
-	let editedContent = $derived(message.content);
+	let editedContent = $state(message.content);
 
 	let rawEditContent = $derived.by(() => {
 		if (message.role !== MessageRole.ASSISTANT) return undefined;
@@ -88,7 +88,7 @@
 
 		return parts.join('\n\n\n');
 	});
-	let editedExtras = $derived<DatabaseMessageExtra[]>(message.extra ? [...message.extra] : []);
+	let editedExtras = $state<DatabaseMessageExtra[]>(message.extra ? [...message.extra] : []);
 	let editedUploadedFiles = $state<ChatUploadedFile[]>([]);
 	let isEditing = $state(false);
 	let showDeleteDialog = $state(false);
