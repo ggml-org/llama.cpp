@@ -5047,6 +5047,12 @@ static void ggml_vk_load_shaders(vk_device& device) {
             }
             ++idx;
         }
+    } else {
+        int idx = 0;
+        for (uint32_t n : {64, 128, 256, 512}) {
+            ggml_vk_create_pipeline(device, device->pipeline_fwht_f32[idx], "fwht_shmem_f32", fwht_shmem_f32_len, fwht_shmem_f32_data, "main", 2, sizeof(vk_op_fwht_push_constants), {1, 1, 1}, { n }, 1);
+            ++idx;
+        }
     }
 
     const uint32_t cumsum_elem_per_thread = (device->vendor_id == VK_VENDOR_ID_AMD || device->vendor_id == VK_VENDOR_ID_INTEL) ? 2 : 4;

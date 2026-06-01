@@ -1,13 +1,20 @@
 #version 450
 
 #extension GL_EXT_control_flow_attributes : require
+#ifndef FWHT_SHMEM
 #extension GL_KHR_shader_subgroup_basic : enable
 #extension GL_KHR_shader_subgroup_shuffle : enable
+#endif
 
-layout(local_size_x_id = 0, local_size_y = 4, local_size_z = 1) in;
-
+#ifdef FWHT_SHMEM
+layout(constant_id = 0) const uint N = 128;
+#else
 layout(constant_id = 0) const uint WARP_SIZE = 32;
 layout(constant_id = 1) const uint N = 128;
+const uint EL_W = N / WARP_SIZE;
+#endif
+
+layout(local_size_x_id = 0, local_size_y = 4, local_size_z = 1) in;
 
 layout(push_constant) uniform parameter
 {
@@ -20,14 +27,50 @@ layout(push_constant) uniform parameter
 layout(binding = 0, std430) readonly buffer A { float data_a[]; };
 layout(binding = 1, std430) writeonly buffer D { float data_d[]; };
 
-const uint EL_W = N / WARP_SIZE;
+#ifdef FWHT_SHMEM
+shared float shmem[4 * N];
+#endif
 
 void main() {
+#ifdef FWHT_SHMEM
+    const uint tid = gl_LocalInvocationID.x;
+    const uint shmem_base = gl_LocalInvocationID.y * N;
+    const uint row_id = gl_LocalInvocationID.y;
+#else
     const uint lane = gl_SubgroupInvocationID;
-    for (uint row = gl_WorkGroupID.x * gl_WorkGroupSize.y + gl_SubgroupID;
-            row < n_rows;
-            row += gl_NumWorkGroups.x * gl_WorkGroupSize.y) {
+    const uint row_id = gl_SubgroupID;
+#endif
+
+    for (uint base_row = gl_WorkGroupID.x * gl_WorkGroupSize.y;
+            base_row < n_rows;
+            base_row += gl_NumWorkGroups.x * gl_WorkGroupSize.y) {
+        const uint row = base_row + row_id;
         const uint row_offset = row * N;
+
+#ifdef FWHT_SHMEM
+        if (row < n_rows) {
+            shmem[shmem_base + tid] = data_a[src_offset + row_offset + tid] * scale;
+        }
+        barrier();
+
+        [[unroll]]
+        for (uint h = 1; h < N; h <<= 1) {
+            const float val   = shmem[shmem_base + tid];
+            const float other = shmem[shmem_base + (tid ^ h)];
+            barrier();
+            shmem[shmem_base + tid] = (tid & h) == 0 ? val + other : other - val;
+            barrier();
+        }
+
+        if (row < n_rows) {
+            data_d[dst_offset + row_offset + tid] = shmem[shmem_base + tid];
+        }
+
+        barrier();
+#else
+        if (row >= n_rows) {
+            continue;
+        }
 
         float reg[EL_W];
 
@@ -65,5 +108,6 @@ void main() {
         for (uint i = 0; i < EL_W; ++i) {
             data_d[dst_offset + row_offset + i * WARP_SIZE + lane] = reg[i];
         }
+#endif
     }
 }
