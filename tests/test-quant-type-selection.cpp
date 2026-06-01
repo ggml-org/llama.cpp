@@ -58,7 +58,7 @@ static const ftype_name_entry ftype_name_table[] = {
     { "MXFP4_MOE", LLAMA_FTYPE_MOSTLY_MXFP4_MOE },
     { "NVFP4",     LLAMA_FTYPE_MOSTLY_NVFP4     },
     { "AIKAR_G2Q3",LLAMA_FTYPE_MOSTLY_AKQ_G2Q3  },
-    { "AIKAR_G2Q6",LLAMA_FTYPE_MOSTLY_AKQ_G2G6  },
+    { "AIKAR_G2Q6",LLAMA_FTYPE_MOSTLY_AKQ_G2Q6  },
 };
 
 static llama_ftype llama_ftype_from_name(const char * name) {
