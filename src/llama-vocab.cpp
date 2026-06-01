@@ -2159,6 +2159,7 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
             } else if (
                     tokenizer_pre == "whitespace") {
                 pre_type = LLAMA_VOCAB_PRE_TYPE_WHITESPACE;
+                normalizer_lowercase = false;
             } else if (
                     tokenizer_pre == "refact") {
                 pre_type = LLAMA_VOCAB_PRE_TYPE_REFACT;
