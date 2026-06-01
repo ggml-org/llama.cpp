@@ -1359,8 +1359,6 @@ common_speculative * common_speculative_init(common_params_speculative & params,
     {
         uint32_t enabled_configs = common_get_enabled_speculative_configs(params.types);
 
-        bool has_draft_model_path = !params.draft.mparams.path.empty();
-
         bool has_draft_simple = (enabled_configs & (1u << COMMON_SPECULATIVE_TYPE_DRAFT_SIMPLE));
         bool has_draft_eagle3 = false; // TODO PR-18039: if params.speculative.eagle3
         bool has_mtp = (enabled_configs & (1u << COMMON_SPECULATIVE_TYPE_DRAFT_MTP)) && params.draft.ctx_dft != nullptr;
@@ -1393,16 +1391,6 @@ common_speculative * common_speculative_init(common_params_speculative & params,
         if (has_ngram_cache) {
             configs.push_back(common_speculative_config(COMMON_SPECULATIVE_TYPE_NGRAM_CACHE, params));
         }
-        if (has_draft_simple) {
-            if (!has_draft_model_path) {
-                LOG_WRN("%s: draft model is not specified - cannot use 'draft' type\n", __func__);
-                has_draft_simple = false;
-            }
-        } else if (has_draft_model_path && !has_mtp && !has_draft_eagle3) {
-            LOG_WRN("%s: draft model is specified but 'draft' speculative type is not explicitly enabled - enabling it\n", __func__);
-            has_draft_simple = true;
-        }
-
         if (has_draft_simple) {
             configs.push_back(common_speculative_config(COMMON_SPECULATIVE_TYPE_DRAFT_SIMPLE, params));
         }
