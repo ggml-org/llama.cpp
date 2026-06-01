@@ -391,6 +391,8 @@ struct server_tool_exec_shell_command : server_tool {
         };
     }
 
+
+
     json invoke(json params) override {
         std::string command   = params.at("command").get<std::string>();
         int    timeout        = json_value(params, "timeout",         10);
@@ -398,6 +400,19 @@ struct server_tool_exec_shell_command : server_tool {
 
         timeout    = std::min(timeout,    SERVER_TOOL_EXEC_SHELL_COMMAND_MAX_TIMEOUT);
         max_output = std::min(max_output, SERVER_TOOL_EXEC_SHELL_COMMAND_MAX_OUTPUT_SIZE);
+
+        if (s_shell_command_whitelist->size()) {
+            // Warning: detection of pipes, semicolons, sub-shells, and such is not yet implemented!
+            bool whitelisted = false;
+            for (auto const & s : *s_shell_command_whitelist) {
+                if (!command.compare(0, s.length(), s)) {
+                    // Command string stards with the whitelisted string.
+                    whitelisted = true;
+                    break;
+                }
+            }
+            if (!whitelisted) return {{"plain_text_response", "Command rejected! Not permitted by whitelist."}};
+        }
 
 #ifdef _WIN32
         std::vector<std::string> args = {"cmd", "/c", command};
@@ -740,9 +755,10 @@ static std::vector<std::unique_ptr<server_tool>> build_tools() {
     return tools;
 }
 
-void server_tools::setup(const std::vector<std::string> & enabled_tools) {
+void server_tools::setup(const std::vector<std::string> & enabled_tools, const std::vector<std::string> & shell_command_whitelist) {
     if (!enabled_tools.empty()) {
         std::unordered_set<std::string> enabled_set(enabled_tools.begin(), enabled_tools.end());
+        s_shell_command_whitelist = &shell_command_whitelist;
         auto all_tools = build_tools();
 
         // collect all known tool names for validation

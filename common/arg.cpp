@@ -2932,6 +2932,15 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.server_tools = parse_csv_row(value);
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_TOOLS"));
+    add_opt(common_arg(
+        {"--whitelist-shell-commands"}, "CMD1,CMD2,...",
+        "VERY experimental: this does not currently sanitize commands in any of the ways it should!\n"
+        "arguments are unlimited; applies to all commands chained, but not those invoked within a permitted command's execution\n"
+        "this is a white list, used only if exec_shell_command was specified with --tools.",
+        [](common_params & params, const std::string & value) {
+            params.server_tools_shell_command_whitelist = parse_csv_row(value);
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_TOOLS_WHITELIST_SHELL_COMMANDS"));
     // Deprecated: use --ui/--no-ui instead (kept for backward compat)
     add_opt(common_arg(
         {"--webui"},
