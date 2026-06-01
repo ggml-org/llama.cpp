@@ -834,9 +834,7 @@ private:
                     measure_model_bytes = false;
                 }
 
-                if (!has_draft) {
-                    params_dft.n_outputs_max = params_base.n_parallel;
-                }
+                params_dft.n_outputs_max = params_base.n_parallel;
 
                 auto mparams_dft = common_model_params_to_llama(params_dft);
                 auto cparams_dft = common_context_params_to_llama(params_dft);
