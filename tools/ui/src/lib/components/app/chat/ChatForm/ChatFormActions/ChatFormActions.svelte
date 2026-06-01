@@ -2,7 +2,6 @@
 	import { Square, SkipForward } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { ChatService } from '$lib/services';
-	import { modelsStore } from '$lib/stores/models.svelte';
 	import {
 		ChatFormActionsAdd,
 		ChatFormActionModels,
@@ -88,10 +87,10 @@
 	export function openModelSelector() {
 		selectorModelRef?.open();
 	}
-	// completion id of the streaming assistant message, used to target reasoning control
-	let activeCompletionId = $derived(
-		conversationsStore.activeMessages[conversationsStore.activeMessages.length - 1]?.completionId ??
-			''
+	// the streaming assistant message carries both the completion id and the model that
+	// produced it, targeting reasoning control from the same source keeps them consistent
+	let activeMessage = $derived(
+		conversationsStore.activeMessages[conversationsStore.activeMessages.length - 1]
 	);
 </script>
 
@@ -136,7 +135,8 @@
 		<Button
 			type="button"
 			variant="secondary"
-			onclick={() => ChatService.stopReasoning(activeCompletionId, modelsStore.selectedModelName)}
+			onclick={() =>
+				ChatService.stopReasoning(activeMessage?.completionId ?? '', activeMessage?.model)}
 			class="group h-8 w-8 rounded-full p-0"
 			title="Skip reasoning"
 		>
