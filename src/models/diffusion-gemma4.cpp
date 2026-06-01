@@ -54,9 +54,24 @@ llama_model_diffusion_gemma4::graph::graph(const llama_model & model, const llm_
     inpL = ggml_scale(ctx0, inpL, ubatch.token ? sqrtf(n_embd) : 1.0f);
     cb(inpL, "inp_scaled", -1);
 
-    // self-conditioning: with zero soft-conditioning (first denoising step) the module
-    // reduces to the scale-less post-norm of the input embeddings
-    inpL = ggml_rms_norm(ctx0, inpL, hparams.f_norm_rms_eps);
+    // self-conditioning: sc_input = post_norm(inputs_embeds + sc_mlp(pre_norm(soft_embeds)))
+    // soft_embeds is the previous denoising step's soft-embeddings
+    // (softmax(prev_logits) @ embed * scale), zero on the first step.
+    // TODO(diffusion sampler): the block-diffusion sampler feeds the real soft-embeddings
+    // here each step; until then it is zero, which (since rms_norm(0)=0 -> sc_mlp=0) makes
+    // sc_input == scale-less post-norm of the scaled embeddings (the verified step-0 case).
+    const auto & dmodel = static_cast<const llama_model_diffusion_gemma4 &>(model);
+    {
+        ggml_tensor * soft = ggml_scale(ctx0, inpL, 0.0f); // placeholder zero soft-embeddings
+        ggml_tensor * scn  = build_norm(soft, dmodel.self_cond_norm, nullptr, LLM_NORM_RMS, -1);
+        ggml_tensor * sc   = build_ffn(scn,
+                dmodel.self_cond_up,   nullptr, nullptr,
+                dmodel.self_cond_gate, nullptr, nullptr,
+                dmodel.self_cond_down, nullptr, nullptr,
+                nullptr, LLM_FFN_GELU, LLM_FFN_PAR, -1);
+        inpL = ggml_add(ctx0, inpL, sc);
+    }
+    inpL = ggml_rms_norm(ctx0, inpL, hparams.f_norm_rms_eps); // scale-less post_norm
     cb(inpL, "self_cond_input", -1);
 
     ggml_tensor * inp_pos = build_inp_pos();
