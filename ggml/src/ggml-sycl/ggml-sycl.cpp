@@ -5301,13 +5301,31 @@ static bool ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, const g
         case GGML_OP_GET_ROWS:
             {
                 switch (op->src[0]->type) {
+                    case GGML_TYPE_I32:
                     case GGML_TYPE_F16:
                     case GGML_TYPE_BF16:
                     case GGML_TYPE_F32:
+                    case GGML_TYPE_Q1_0:
+                    case GGML_TYPE_MXFP4:
+                    case GGML_TYPE_NVFP4:
+                    case GGML_TYPE_IQ2_XXS:
+                    case GGML_TYPE_IQ2_XS:
+                    case GGML_TYPE_IQ2_S:
+                    case GGML_TYPE_IQ3_XXS:
+                    case GGML_TYPE_IQ1_S:
+                    case GGML_TYPE_IQ1_M:
+                    case GGML_TYPE_IQ3_S:
+                    case GGML_TYPE_IQ4_NL:
+                    case GGML_TYPE_IQ4_XS:
+                    case GGML_TYPE_Q2_K:
+                    case GGML_TYPE_Q3_K:
                     case GGML_TYPE_Q4_0:
                     case GGML_TYPE_Q4_1:
+                    case GGML_TYPE_Q4_K:
                     case GGML_TYPE_Q5_0:
                     case GGML_TYPE_Q5_1:
+                    case GGML_TYPE_Q5_K:
+                    case GGML_TYPE_Q6_K:
                     case GGML_TYPE_Q8_0:
                         return true;
                     default:
