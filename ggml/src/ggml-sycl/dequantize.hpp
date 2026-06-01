@@ -390,6 +390,63 @@ static void dequantize_block_q3_K(const void * __restrict__ vx, dst_t * __restri
 
 }
 
+template<typename dst_t>
+static void dequantize_block_q3_K_reorder(const void * __restrict__ vx, dst_t * __restrict__ yy,
+                                          const sycl::nd_item<3> & item_ct1, int64_t n_blocks) {
+#if QK_K == 256
+    const int64_t i = item_ct1.get_group(2);
+    if (i >= n_blocks) {
+        return;
+    }
+
+    const uint8_t * base          = static_cast<const uint8_t *>(vx);
+    const size_t    qs_offset     = i * (QK_K / 4);
+    const size_t    hmask_offset  = n_blocks * (QK_K / 4) + i * (QK_K / 8);
+    const size_t    scales_offset = n_blocks * (QK_K / 4) + n_blocks * (QK_K / 8) + i * 12;
+    const size_t    d_offset      = n_blocks * (QK_K / 4) + n_blocks * (QK_K / 8) + n_blocks * 12 +
+                                 i * sizeof(ggml_half);
+
+    const uint8_t * qs     = base + qs_offset;
+    const uint8_t * hmask  = base + hmask_offset;
+    const uint8_t * scales = base + scales_offset;
+    const float     d_all  = static_cast<float>(*reinterpret_cast<const ggml_half *>(base + d_offset));
+
+    const int64_t r    = item_ct1.get_local_id(2) / 4;
+    const int64_t tid  = r / 2;
+    const int64_t is0  = r % 2;
+    const int64_t l0   = 16 * is0 + 4 * (item_ct1.get_local_id(2) % 4);
+    const int64_t n    = tid / 4;
+    const int64_t j    = tid - 4 * n;
+    const int64_t is   = 8 * n + 2 * j + is0;
+    const int     shift = 2 * j;
+    uint8_t       m    = 1 << (4 * n + j);
+
+    uint8_t us = is < 4
+        ? (scales[is - 0] & 0xF) | (((scales[is + 8] >> 0) & 3) << 4)
+        : is < 8
+            ? (scales[is - 0] & 0xF) | (((scales[is + 4] >> 2) & 3) << 4)
+            : is < 12
+                ? (scales[is - 8] >> 4) | (((scales[is + 0] >> 4) & 3) << 4)
+                : (scales[is - 8] >> 4) | (((scales[is - 4] >> 6) & 3) << 4);
+
+    const float dl = d_all * (us - 32);
+
+    dst_t * y = yy + i * QK_K + 128 * n + 32 * j;
+    const uint8_t * q  = qs + 32 * n;
+    const uint8_t * hm = hmask;
+
+    for (int l = l0; l < l0 + 4; ++l) {
+        y[l] = dl * ((int8_t) ((q[l] >> shift) & 3) - ((hm[l] & m) ? 0 : 4));
+    }
+#else
+    GGML_UNUSED(vx);
+    GGML_UNUSED(yy);
+    GGML_UNUSED(item_ct1);
+    GGML_UNUSED(n_blocks);
+    GGML_ABORT("Q3_K reorder dequantize not supported for QK_K != 256");
+#endif
+}
+
 #if QK_K == 256
 static inline void get_scale_min_k4(int j, const uint8_t * q, uint8_t & d, uint8_t & m) {
     if (j < 4) {
