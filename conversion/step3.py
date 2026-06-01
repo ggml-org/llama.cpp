@@ -115,14 +115,16 @@ class Step35Model(TextModel):
         # base num_hidden_layers so we don't reserve unused slots.
         n_nextn = int(self.hparams.get("num_nextn_predict_layers", 0))
         if n_nextn > 0 and not self.no_mtp:
-            self.block_count = int(self.hparams["num_hidden_layers"]) + n_nextn
+            self.block_count += n_nextn
             self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
 
     def index_tensors(self, remote_hf_model_id: str | None = None):
         # filter_tensors is a classmethod and can't reach self.hparams; stash
         # the trunk layer count here (before indexing runs) so it can detect
         # the appended MTP layers by index.
-        type(self)._n_main_layers = int(self.hparams["num_hidden_layers"])
+        hparams = {**self.hparams, **self.hparams.get("text_config", {})}
+        key = next((k for k in ["n_layers", "num_hidden_layers", "n_layer", "num_layers"] if k in hparams), None)
+        type(self)._n_main_layers = hparams.get(key)
         return super().index_tensors(remote_hf_model_id=remote_hf_model_id)
 
     def set_gguf_parameters(self):
@@ -221,7 +223,9 @@ class Step35Model(TextModel):
 
     @classmethod
     def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
-        name, gen = item
+        if (titem := super().filter_tensors(item)) is None:
+            return None
+        name, gen = titem
 
         # Map router bias (expert selection bias) to a GGUF bias tensor
         if name.endswith(".moe.router_bias"):
@@ -250,7 +254,7 @@ class Step35Model(TextModel):
             name = name.replace(".transformer.", ".")
             name = name.replace("shared_head.output", "shared_head.head")
 
-        return super().filter_tensors((name, gen))
+        return name, gen
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None):
         if name.endswith("norm.weight"):
