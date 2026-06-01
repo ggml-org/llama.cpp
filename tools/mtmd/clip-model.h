@@ -259,6 +259,19 @@ struct clip_layer {
     ggml_tensor * cross_attn_o_b    = nullptr;
     ggml_tensor * cross_attn_norm_w = nullptr;
     ggml_tensor * cross_attn_norm_b = nullptr;
+    // secondary transformer block (MiMoV2.5ASR)
+    ggml_tensor * attn_norm_1_w = nullptr;
+    ggml_tensor * attn_norm_1_b = nullptr;
+    ggml_tensor * attn_q_1_w    = nullptr;
+    ggml_tensor * attn_q_1_b    = nullptr;
+    ggml_tensor * attn_k_1_w    = nullptr;
+    ggml_tensor * attn_k_1_b    = nullptr;
+    ggml_tensor * attn_v_1_w    = nullptr;
+    ggml_tensor * attn_v_1_b    = nullptr;
+    ggml_tensor * attn_out_1_w  = nullptr;
+    ggml_tensor * attn_out_1_b  = nullptr;
+    ggml_tensor * ff_gate_1_w   = nullptr;
+    ggml_tensor * ff_gate_1_b   = nullptr;
 
     bool has_deepstack() const {
         return deepstack_fc1_w != nullptr;
@@ -588,6 +601,12 @@ struct clip_model {
     ggml_tensor * qf_proj_linear_w = nullptr;
     ggml_tensor * qf_proj_linear_b = nullptr;
     std::vector<clip_layer> qf_proj_layers;
+    // MiMoV2.5ASR
+    std::vector<int> speech_zeroemb_idx;
+    std::vector<ggml_tensor *> rvq_codebooks;
+    std::vector<ggml_tensor *> enc_embd_1_w;
+    ggml_tensor * enc_out_norm_1_w = nullptr;
+    std::vector<clip_layer>    local_layers;
 
     bool audio_has_avgpool() const {
         return proj_type == PROJECTOR_TYPE_QWEN2A

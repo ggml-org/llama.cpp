@@ -942,6 +942,90 @@ bool mtmd_audio_preprocessor_gemma4a::preprocess(const float *                 s
     return true;
 }
 
+
+//
+// mtmd_audio_preprocessor_mimo_asr
+//
+
+void mtmd_audio_preprocessor_mimo_asr::initialize() {
+    cache.fill_sin_cos_table(hparams.audio_n_fft);
+    cache.fill_hann_window(hparams.audio_window_len, true);
+
+    // torchaudio default uses Slaney Mel scale, use_htk=false
+    cache.fill_mel_filterbank_matrix(
+        hparams.n_mel_bins, hparams.audio_n_fft, hparams.audio_sample_rate,
+        0.0f, hparams.audio_sample_rate / 2.0f,
+        /*slaney_area_norm=*/ false,
+        /*scale=*/ 1.0f,
+        /*use_htk=*/ true
+    );
+}
+
+bool mtmd_audio_preprocessor_mimo_asr::preprocess(const float * samples,
+                                                  size_t                        n_samples,
+                                                  std::vector<mtmd_audio_mel> & output) {
+    // empty audio
+    if (n_samples == 0) {
+        return false;
+    }
+
+    // make sure the cache is initialized
+    GGML_ASSERT(!cache.sin_vals.empty());
+    GGML_ASSERT(!cache.cos_vals.empty());
+    GGML_ASSERT(!cache.filters.data.empty());
+
+    filter_params params;
+    params.n_mel            = hparams.n_mel_bins;
+    params.n_fft_bins       = 1 + (hparams.audio_n_fft / 2);
+    params.hann_window_size = hparams.audio_window_len;
+    params.hop_length       = hparams.audio_hop_len;
+    params.sample_rate      = hparams.audio_sample_rate;
+    params.no_padding       = true;
+    params.center_padding   = false;
+    params.preemph          = 0.0f;
+    params.use_natural_log  = true; // torch.log
+    params.use_magnitude    = true; // power=1.0 (torchaudio default)
+    params.mel_floor        = 1e-7f;
+    params.norm_per_feature = false;
+
+    // split into max 30-second chunks
+    const size_t chunk_samples = 30 * hparams.audio_sample_rate;
+    const int pad_center = hparams.audio_n_fft / 2;
+
+    for (size_t off = 0; off < n_samples; off += chunk_samples) {
+        const float * chunk_ptr = samples + off;
+        size_t chunk_len = std::min(chunk_samples, n_samples - off);
+
+        // pad length if shorter than n_fft
+        size_t needed_len = chunk_len;
+        if (chunk_len < (size_t)hparams.audio_n_fft) {
+            needed_len = hparams.audio_n_fft;
+        }
+
+        // simulate torchaudio center=True reflection padding
+        std::vector<float> padded_samples(needed_len + 2 * pad_center, 0.0f);
+        std::copy(chunk_ptr, chunk_ptr + chunk_len, padded_samples.data() + pad_center);
+
+        // reflective padding at the edges (torchaudio pad_mode="reflect")
+        for (int i = 0; i < pad_center; ++i) {
+            if (1 + i < (int)chunk_len) {
+                padded_samples[pad_center - 1 - i] = chunk_ptr[1 + i]; // left reflection
+                padded_samples[pad_center + needed_len + i] = chunk_ptr[chunk_len - 2 - i]; // right reflection
+            }
+        }
+
+        mtmd_audio_mel out_chunk;
+        bool ok = log_mel_spectrogram(padded_samples.data(), padded_samples.size(), 4, params, cache, out_chunk);
+        if (!ok) {
+            return false;
+        }
+
+        output.push_back(std::move(out_chunk));
+    }
+
+    return true;
+}
+
 //
 // mtmd_audio_streaming_istft implementation
 //

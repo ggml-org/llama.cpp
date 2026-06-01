@@ -1966,15 +1966,18 @@ class TensorNameMap:
             "conformer.pre_encode.conv.{bid}", # lfm2
             "model.audio_tower.subsample_conv_projection.conv_{bid}.conv", # gemma3n
             "conformer.subsample_conv_projection.layer{bid}.conv", # gemma4
+            "mimo_audio_tokenizer.encoder.conv.{bid}", # MiMo-V2.5-ASR
         ),
 
         MODEL_TENSOR.A_ENC_CONV1D_NORM: (
             "conformer.subsample_conv_projection.layer{bid}.norm", # gemma4
+            "mimo_audio_tokenizer.encoder.conv_norm.{bid}", # MiMo-V2.5-ASR
         ),
 
         MODEL_TENSOR.A_ENC_INP_PROJ: (
             "conformer.subsample_conv_projection.input_proj_linear", # gemma4
             "encoder.input_linear",
+            "mimo_audio_tokenizer.encoder.down_sample_layer.0", # MiMo-V2.5-ASR
         ),
 
         MODEL_TENSOR.A_ENC_CONV2D: (
@@ -1985,11 +1988,14 @@ class TensorNameMap:
             "audio_tower.conv_out", # qwen3omni
         ),
 
-        MODEL_TENSOR.A_PRE_NORM: (),
+        MODEL_TENSOR.A_PRE_NORM: (
+            "mimo_audio_tokenizer.encoder.down_sample_norm", # MiMo-V2.5-ASR
+        ),
 
         MODEL_TENSOR.A_POST_NORM: (
             "audio_tower.layer_norm", # ultravox
             "audio_tower.ln_post", # qwen2omni
+            "mimo_audio_tokenizer.encoder.layer_norm", # MiMo-V2.5-ASR
         ),
 
         MODEL_TENSOR.A_ENC_ATTN_Q: (
@@ -1998,6 +2004,7 @@ class TensorNameMap:
             "conformer.layers.{bid}.attention.attn.q_proj", # gemma3n
             "conformer.layers.{bid}.self_attn.q_proj", # gemma4
             "encoder.layers.{bid}.attn.to_q", # granite_speech
+            "mimo_audio_tokenizer.encoder.layers.{bid}.self_attn.q_proj", # MiMo-V2.5-ASR
         ),
 
         MODEL_TENSOR.A_ENC_ATTN_K: (
@@ -2006,6 +2013,7 @@ class TensorNameMap:
             "conformer.layers.{bid}.attention.attn.k_proj", # gemma3n
             "conformer.layers.{bid}.self_attn.k_proj", # gemma4
             "encoder.layers.{bid}.attn.to_k", # granite_speech (split from to_kv)
+            "mimo_audio_tokenizer.encoder.layers.{bid}.self_attn.k_proj", # MiMo-V2.5-ASR
         ),
 
         MODEL_TENSOR.A_ENC_ATTN_V: (
@@ -2014,6 +2022,7 @@ class TensorNameMap:
             "conformer.layers.{bid}.attention.attn.v_proj", # gemma3n
             "conformer.layers.{bid}.self_attn.v_proj", # gemma4
             "encoder.layers.{bid}.attn.to_v", # granite_speech (split from to_kv)
+            "mimo_audio_tokenizer.encoder.layers.{bid}.self_attn.v_proj", # MiMo-V2.5-ASR
         ),
 
         MODEL_TENSOR.A_ENC_ATTN_K_REL: (
@@ -2042,6 +2051,7 @@ class TensorNameMap:
             "conformer.layers.{bid}.norm_self_att", # lfm2
             "conformer.layers.{bid}.attention.pre_attn_norm", # gemma3n
             "encoder.layers.{bid}.attn.pre_norm", # granite_speech
+            "mimo_audio_tokenizer.encoder.layers.{bid}.self_attn_layer_norm", # MiMo-V2.5-ASR
         ),
 
         MODEL_TENSOR.A_ENC_OUTPUT: (
@@ -2050,6 +2060,7 @@ class TensorNameMap:
             "conformer.layers.{bid}.attention.post", # gemma3n
             "conformer.layers.{bid}.self_attn.post", # gemma4
             "encoder.layers.{bid}.attn.to_out", # granite_speech
+            "mimo_audio_tokenizer.encoder.layers.{bid}.self_attn.out_proj", # MiMo-V2.5-ASR
         ),
 
         MODEL_TENSOR.A_ENC_OUTPUT_NORM: (
@@ -2057,6 +2068,7 @@ class TensorNameMap:
             "conformer.layers.{bid}.norm_out", # lfm2
             "conformer.layers.{bid}.attention.post_norm", # gemma3n
             "encoder.layers.{bid}.post_norm", # granite_speech
+            "mimo_audio_tokenizer.encoder.layers.{bid}.final_layer_norm", # MiMo-V2.5-ASR
         ),
 
         MODEL_TENSOR.A_ENC_FFN_NORM: (
@@ -2081,9 +2093,11 @@ class TensorNameMap:
             "conformer.layers.{bid}.ffw_layer_start.ffw_layer_1", # gemma3n
             "conformer.layers.{bid}.feed_forward1.ffw_layer_1", # gemma4
             "encoder.layers.{bid}.ff1.up_proj", # granite_speech
+            "mimo_audio_tokenizer.encoder.layers.{bid}.fc1", # MiMo-V2.5-ASR
         ),
 
-        MODEL_TENSOR.A_ENC_FFN_GATE: (),
+        MODEL_TENSOR.A_ENC_FFN_GATE: (
+        ),
 
         MODEL_TENSOR.A_ENC_FFN_DOWN: (
             "audio_tower.layers.{bid}.fc2", # ultravox
@@ -2091,6 +2105,7 @@ class TensorNameMap:
             "conformer.layers.{bid}.ffw_layer_start.ffw_layer_2", # gemma3n
             "conformer.layers.{bid}.feed_forward1.ffw_layer_2", # gemma4
             "encoder.layers.{bid}.ff1.down_proj", # granite_speech
+            "mimo_audio_tokenizer.encoder.layers.{bid}.fc2", # MiMo-V2.5-ASR
         ),
 
         MODEL_TENSOR.A_ENC_FFN_UP_1: (
@@ -2098,6 +2113,7 @@ class TensorNameMap:
             "conformer.layers.{bid}.ffw_layer_end.ffw_layer_1", # gemma3n
             "conformer.layers.{bid}.feed_forward2.ffw_layer_1", # gemma4
             "encoder.layers.{bid}.ff2.up_proj", # granite_speech
+            "input_local_transformer.layers.{bid}.mlp.up_proj", # MiMo-V2.5-ASR
         ),
 
         MODEL_TENSOR.A_ENC_FFN_DOWN_1: (
@@ -2105,6 +2121,7 @@ class TensorNameMap:
             "conformer.layers.{bid}.ffw_layer_end.ffw_layer_2", # gemma3n
             "conformer.layers.{bid}.feed_forward2.ffw_layer_2", # gemma4
             "encoder.layers.{bid}.ff2.down_proj", # granite_speech
+            "input_local_transformer.layers.{bid}.mlp.down_proj", # MiMo-V2.5-ASR
         ),
 
         MODEL_TENSOR.A_ENC_FFN_NORM_1: (
@@ -2112,6 +2129,7 @@ class TensorNameMap:
             "conformer.layers.{bid}.ffw_layer_end.pre_layer_norm", # gemma3n
             "conformer.layers.{bid}.feed_forward2.pre_layer_norm", # gemma4
             "encoder.layers.{bid}.ff2.pre_norm", # granite_speech
+            "input_local_transformer.layers.{bid}.post_attention_layernorm", # MiMo-V2.5-ASR
         ),
 
         MODEL_TENSOR.A_ENC_FFN_POST_NORM_1: (
@@ -2121,6 +2139,38 @@ class TensorNameMap:
 
         MODEL_TENSOR.A_ENC_FFN_SCALE_1: (
             "conformer.layers.{bid}.ffw_layer_end.post_layer_scale", # gemma3n
+        ),
+
+        MODEL_TENSOR.A_ENC_OUTPUT_NORM_1: (
+            "input_local_transformer.norm", # MiMo-V2.5-ASR
+        ),
+
+        MODEL_TENSOR.A_ENC_EMBD_1: (
+            "speech_embeddings.{bid}", # MiMo-V2.5-ASR
+        ),
+
+        MODEL_TENSOR.A_ENC_ATTN_NORM_1: (
+            "input_local_transformer.layers.{bid}.input_layernorm", # MiMo-V2.5-ASR
+        ),
+
+        MODEL_TENSOR.A_ENC_ATTN_Q_1: (
+            "input_local_transformer.layers.{bid}.self_attn.q_proj", # MiMo-V2.5-ASR
+        ),
+
+        MODEL_TENSOR.A_ENC_ATTN_K_1: (
+            "input_local_transformer.layers.{bid}.self_attn.k_proj", # MiMo-V2.5-ASR
+        ),
+
+        MODEL_TENSOR.A_ENC_ATTN_V_1: (
+            "input_local_transformer.layers.{bid}.self_attn.v_proj", # MiMo-V2.5-ASR
+        ),
+
+        MODEL_TENSOR.A_ENC_ATTN_OUT_1: (
+            "input_local_transformer.layers.{bid}.self_attn.o_proj", # MiMo-V2.5-ASR
+        ),
+
+        MODEL_TENSOR.A_ENC_FFN_GATE_1: (
+            "input_local_transformer.layers.{bid}.mlp.gate_proj", # MiMo-V2.5-ASR
         ),
 
         MODEL_TENSOR.A_ENC_LINEAR_POS: (
@@ -2142,6 +2192,10 @@ class TensorNameMap:
             "conformer.output_proj", # gemma4
         ),
 
+        MODEL_TENSOR.A_ENC_CODEBOOK: (
+            "mimo_audio_tokenizer.encoder.quantizer.vq.layers.{bid}._codebook.embed", # MiMo-V2.5-ASR
+        ),
+
         # note: some tensors below has "audio." pseudo-prefix, to prevent conflicts with vision tensors
         # this prefix is added in the conversion code in modify_tensors()
 
@@ -2149,6 +2203,7 @@ class TensorNameMap:
             "audio.multi_modal_projector.linear_{bid}", # ultravox, meralion
             "audio_adapter.model.{bid}", # lfm2
             "audio_tower.proj{bid}", # qwen3omni
+            "speech_group_downcast", # MiMo-V2.5-ASR
         ),
 
         MODEL_TENSOR.A_MMPROJ_FC: (

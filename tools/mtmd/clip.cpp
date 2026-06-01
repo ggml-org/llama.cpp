@@ -985,6 +985,10 @@ static ggml_cgraph * clip_image_build_graph(clip_ctx * ctx, const clip_image_f32
             {
                 builder = std::make_unique<clip_graph_yasa2>(ctx, img);
             } break;
+        case PROJECTOR_TYPE_MIMO_V2_ASR:
+            {
+                builder = std::make_unique<clip_graph_mimo_v2_asr>(ctx, img);
+            } break;
         default:
             GGML_ABORT("missing cgraph builder");
     }
@@ -1587,6 +1591,15 @@ struct clip_model_loader {
                     {
                         hparams.image_pad_color   = {127, 127, 127};
                         hparams.image_resize_algo = RESIZE_ALGO_BILINEAR;
+                    } break;
+                case PROJECTOR_TYPE_MIMO_V2_ASR:
+                    {
+                        hparams.audio_sample_rate = 24000;
+                        hparams.audio_hop_len     = 240;
+                        hparams.audio_n_fft       = 1024;
+                        hparams.audio_window_len  = 1024;
+                        hparams.n_mel_bins        = 128;
+                        hparams.audio_chunk_len   = 30;
                     } break;
                 default:
                     throw std::runtime_error(string_format("%s: unknown vision projector type %s\n", __func__, proj_type.c_str()));
@@ -2614,6 +2627,52 @@ struct clip_model_loader {
                         pl.ln_2_b    = get_tensor(string_format(TN_QF_FFN_NORM, il, "bias"));
                     }
                 } break;
+            case PROJECTOR_TYPE_MIMO_V2_ASR:
+                {
+                    model.mm_input_proj_w = get_tensor("a.input_projection.weight"); // Downsample Conv
+                    model.enc_out_norm_1_w = get_tensor(string_format(TN_MIMO_ENC_OUT_NORM_1, "weight"));
+
+                    get_arr_int("mimo.speech_zeroemb_idx", model.speech_zeroemb_idx, true);
+                    model.conv1d_1_w = get_tensor(string_format(TN_CONV1D, 0, "weight"));
+                    model.conv1d_1_b = get_tensor(string_format(TN_CONV1D, 0, "bias"));
+                    model.conv1d_2_w = get_tensor(string_format(TN_CONV1D, 1, "weight"));
+                    model.conv1d_2_b = get_tensor(string_format(TN_CONV1D, 1, "bias"));
+
+                    // RVQ Codebooks & Embeddings
+                    for (int i = 0; ; ++i) {
+                        ggml_tensor * cb = get_tensor(string_format(TN_MIMO_ENC_CODEBOOK, i), false);
+                        ggml_tensor * embd = get_tensor(string_format(TN_MIMO_ENC_EMBD_1, i), false);
+                        
+                        if (!cb || !embd) break; 
+                        
+                        model.rvq_codebooks.push_back(cb);
+                        model.enc_embd_1_w.push_back(embd);
+                    }
+                    
+                    for (int il = 0; ; ++il) {
+                        ggml_tensor * q = get_tensor(string_format(TN_MIMO_ENC_ATTN_Q_1, il, "weight"), false);
+                        if (!q) break;
+                        
+                        clip_layer layer;
+                        layer.attn_q_1_w    = q;
+                        layer.attn_q_1_b    = get_tensor(string_format(TN_MIMO_ENC_ATTN_Q_1, il, "bias"), false);
+                        layer.attn_norm_1_w = get_tensor(string_format(TN_MIMO_ENC_ATTN_NORM_1, il, "weight"));
+                        layer.attn_k_1_w    = get_tensor(string_format(TN_MIMO_ENC_ATTN_K_1, il, "weight"));
+                        layer.attn_k_1_b    = get_tensor(string_format(TN_MIMO_ENC_ATTN_K_1, il, "bias"), false);
+                        layer.attn_v_1_w    = get_tensor(string_format(TN_MIMO_ENC_ATTN_V_1, il, "weight"));
+                        layer.attn_v_1_b    = get_tensor(string_format(TN_MIMO_ENC_ATTN_V_1, il, "bias"), false);
+                        layer.attn_out_1_w  = get_tensor(string_format(TN_MIMO_ENC_ATTN_OUT_1, il, "weight"));
+                        layer.ff_gate_1_w   = get_tensor(string_format(TN_MIMO_ENC_FFN_GATE_1, il, "weight")); 
+                        
+                        layer.ff_norm_1_w   = get_tensor(string_format(TN_FFN_NORM_1, "a", il, "weight"));
+                        layer.ff_up_1_w     = get_tensor(string_format(TN_FFN_UP_1,   "a", il, "weight"));
+                        layer.ff_down_1_w   = get_tensor(string_format(TN_FFN_DOWN_1, "a", il, "weight"));
+                        
+                        model.local_layers.push_back(layer);
+                    }
+                    // hardcoded 31（32 layers）
+                    model.mm_0_w            = get_tensor(string_format(TN_MM_AUDIO_MLP, 31, "weight"));
+                } break;
             default:
                 GGML_ASSERT(false && "unknown projector type");
         }
@@ -3334,6 +3393,21 @@ int clip_n_output_tokens(const struct clip_ctx * ctx, struct clip_image_f32 * im
                 const int ds = ctx->model.hparams.audio_proj_downsample_rate;
                 n_patches = ((img->nx + ws - 1) / ws) * (ws / ds);
             } break;
+        case PROJECTOR_TYPE_MIMO_V2_ASR:
+            {
+                int n = img->nx; 
+                n = (n - 1) / 1 + 1; 
+                n = (n - 1) / 2 + 1; 
+                // average pooling
+                n = (n - 1) / 2 + 1; 
+                
+                int d_local = ctx->model.enc_embd_1_w.empty() ? 1024 : ctx->model.enc_embd_1_w[0]->ne[0];
+                int proj_in = ctx->model.mm_0_w ? ctx->model.mm_0_w->ne[0] : 4096;
+                int group_size = proj_in / d_local;
+                
+                int pad = (group_size - (n % group_size)) % group_size;
+                n_patches = (n + pad) / group_size;
+            } break;
         default:
             GGML_ABORT("unsupported projector type");
     }
@@ -3972,6 +4046,7 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
         case PROJECTOR_TYPE_PHI4:
         case PROJECTOR_TYPE_COGVLM:
         case PROJECTOR_TYPE_YASA2:
+        case PROJECTOR_TYPE_MIMO_V2_ASR:
             {
                 // do nothing
             } break;
@@ -4316,6 +4391,8 @@ int clip_n_mmproj_embd(const struct clip_ctx * ctx) {
             return ctx->model.qf_proj_linear_w->ne[1];
         case PROJECTOR_TYPE_GLM4V:
             return ctx->model.mm_ffn_down_w->ne[1];
+        case PROJECTOR_TYPE_MIMO_V2_ASR:
+            return ctx->model.mm_0_w->ne[1];
         default:
             GGML_ABORT("Unknown projector type");
     }
