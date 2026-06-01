@@ -22,7 +22,7 @@ concurrency:
 
 jobs:
   python-type-check:
-    runs-on: ubuntu-slim
+    runs-on: [self-hosted, fast]
     name: python type-check
     steps:
       - name: Check out source repository

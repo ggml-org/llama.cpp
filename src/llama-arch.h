@@ -79,6 +79,7 @@ enum llm_arch {
     LLM_ARCH_DEEPSEEK,
     LLM_ARCH_DEEPSEEK2,
     LLM_ARCH_DEEPSEEK2OCR,
+    LLM_ARCH_DEEPSEEK32,
     LLM_ARCH_CHATGLM,
     LLM_ARCH_GLM4,
     LLM_ARCH_GLM4_MOE,
@@ -137,6 +138,7 @@ enum llm_arch {
     LLM_ARCH_LLAMA_EMBED,
     LLM_ARCH_MAINCODER,
     LLM_ARCH_KIMI_LINEAR,
+    LLM_ARCH_TALKIE,
     LLM_ARCH_UNKNOWN,
 };
 
@@ -306,6 +308,7 @@ enum llm_kv {
     LLM_KV_TOKENIZER_HF_JSON,
     LLM_KV_TOKENIZER_RWKV,
     LLM_KV_TOKENIZER_CHAT_TEMPLATE,
+    LLM_KV_TOKENIZER_NORMALIZER_LOWERCASE,
     LLM_KV_TOKENIZER_FIM_PRE_ID,
     LLM_KV_TOKENIZER_FIM_SUF_ID,
     LLM_KV_TOKENIZER_FIM_MID_ID,
@@ -637,3 +640,4 @@ bool llm_arch_is_recurrent      (const llm_arch & arch);
 bool llm_arch_is_hybrid         (const llm_arch & arch);
 bool llm_arch_is_diffusion      (const llm_arch & arch);
 bool llm_arch_supports_sm_tensor(const llm_arch & arch);
+bool llm_arch_supports_rs_rollback(const llm_arch & arch);
