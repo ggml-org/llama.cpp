@@ -12,6 +12,7 @@
 #include <HAP_mem.h>
 #include <HAP_power.h>
 #include <HAP_ps.h>
+#include <HAP_dcvs.h>
 #include <qurt.h>
 #include <qurt_thread.h>
 #include <qurt_memory.h>
@@ -63,8 +64,7 @@ AEEResult htp_iface_open(const char * uri, remote_handle64 * handle) {
 
         request.type                              = HAP_power_set_DCVS_v3;
         request.dcvs_v3.set_dcvs_enable           = TRUE;
-        request.dcvs_v3.dcvs_enable               = TRUE;
-        request.dcvs_v3.dcvs_option               = HAP_DCVS_V2_PERFORMANCE_MODE;
+        request.dcvs_v3.dcvs_enable               = FALSE;
         request.dcvs_v3.set_bus_params            = TRUE;
         request.dcvs_v3.bus_params.min_corner     = HAP_DCVS_VCORNER_MAX;
         request.dcvs_v3.bus_params.max_corner     = HAP_DCVS_VCORNER_MAX;
@@ -75,6 +75,10 @@ AEEResult htp_iface_open(const char * uri, remote_handle64 * handle) {
         request.dcvs_v3.core_params.target_corner = HAP_DCVS_VCORNER_MAX;
         request.dcvs_v3.set_sleep_disable         = TRUE;
         request.dcvs_v3.sleep_disable             = TRUE;
+
+#if (__HEXAGON_ARCH__ >= 79)
+        HAP_set_dcvs_v3_protected_bus_corners(&request, 1);
+#endif
         if ((err = HAP_power_set((void *) ctx, &request)) != 0) {
             return err;
         }
@@ -103,7 +107,7 @@ AEEResult htp_iface_open(const char * uri, remote_handle64 * handle) {
         FARF(ALWAYS, "Setting HMX clock\n");
         err = HAP_power_set((void *) ctx, &request);
         if (err != AEE_SUCCESS) {
-            FARF(ERROR, "Error setting HMX clock.");
+            FARF(ERROR, "ggml-hex: error setting HMX clock.");
             return err;
         }
     }
@@ -117,7 +121,7 @@ AEEResult htp_iface_open(const char * uri, remote_handle64 * handle) {
         FARF(ALWAYS, "Powering HMX on\n");
         err = HAP_power_set((void *) ctx, &request);
         if (err != AEE_SUCCESS) {
-            FARF(ERROR, "Error powering on HMX.");
+            FARF(ERROR, "ggml-hex: error powering on HMX.");
             return err;
         }
     }
