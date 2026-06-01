@@ -821,6 +821,20 @@ struct llama_model_gemma4 : public llama_model_base {
     std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
 };
 
+// Block-diffusion variant of Gemma 4. Reuses the gemma4 decoder block (hparams +
+// graph); adds the top-level self-conditioning MLP that feeds the previous denoising
+// step's soft-embeddings into the decoder input.
+struct llama_model_diffusion_gemma4 : public llama_model_gemma4 {
+    llama_model_diffusion_gemma4(const struct llama_model_params & params) : llama_model_gemma4(params) {}
+    void load_arch_tensors(llama_model_loader & ml) override;
+
+    // self_conditioning (top-level, not per-layer); post-norm is scale-less (no weight)
+    ggml_tensor * self_cond_norm = nullptr;
+    ggml_tensor * self_cond_gate = nullptr;
+    ggml_tensor * self_cond_up   = nullptr;
+    ggml_tensor * self_cond_down = nullptr;
+};
+
 
 struct llama_model_gemma4_assistant : public llama_model_base {
     llama_model_gemma4_assistant(const struct llama_model_params & params) : llama_model_base(params) {}
