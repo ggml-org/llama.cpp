@@ -1657,6 +1657,9 @@ class TextModel(ModelBase):
         if chkhsh == "36f3066e97b7f3994b379aaacde306c1444c6ae84e81a5ae3cd2b7ed3b8c42d4":
             # ref: https://huggingface.co/openbmb/MiniCPM5-1B
             res = "minicpm5"
+        if chkhsh == "9dcf830ee9990cdbf78cc523a5f7bd9ad8f3f9890c2d3581d2785ad10f07049d":
+            # ref: https://huggingface.co/JetBrains/Mellum2-12B-A2.5B-Base
+            res = "mellum2"
 
         if res is None:
             logger.warning("\n")
