@@ -492,6 +492,54 @@ if __name__ == '__main__':
                     assert tensor.B is not None
                     yield (name, cast(torch.Tensor, LoraTorchTensor(tensor.A, tensor.B)))
 
+            @staticmethod
+            def _reorder_v_heads(
+                tensor: Tensor,
+                dim: int,
+                num_k_heads: int,
+                num_v_per_k: int,
+                head_dim: int,
+            ) -> Tensor:
+                if isinstance(tensor, LoraTorchTensor):
+                    lora_A, lora_B = tensor.get_lora_A_B()
+                    N, V, H = num_k_heads, num_v_per_k, head_dim
+                    total = N * V * H
+
+                    # Linear attention stores V heads grouped by K head:
+                    #   grouped: [G0_v0..v{r-1}, G1_v0..v{r-1}, ...]
+                    #   tiled:   [G0_v0, G1_v0, ..., G0_v1, G1_v1, ...]
+                    # Build the permutation mapping from grouped to tiled order.
+                    # grouped flat index: n*V*H + v*H + h
+                    # tiled flat index:   v*N*H + n*H + h
+                    idx = torch.arange(total)
+                    n_idx = idx // (V * H)
+                    v_idx = (idx % (V * H)) // H
+                    h_idx = idx % H
+                    tiled_idx = v_idx * N * H + n_idx * H + h_idx
+
+                    perm = torch.empty(total, dtype=torch.long)
+                    perm[tiled_idx] = idx  # perm[tiled_pos] = original_position
+
+                    if dim < 0:
+                        dim += len(tensor.shape)
+                    if dim == 0:
+                        # Permute rows of B (output dimension)
+                        lora_B = lora_B.index_select(0, perm.to(device=lora_B.device))
+                    elif dim == 1:
+                        # Permute columns of A (input dimension)
+                        lora_A = lora_A.index_select(-1, perm.to(device=lora_A.device))
+                    else:
+                        raise NotImplementedError(
+                            f"LoRA V head reordering not implemented for dim={dim}"
+                        )
+
+                    return LoraTorchTensor(lora_A, lora_B)
+
+                # For non-LoRA tensors, delegate to the base model implementation.
+                return model_class._reorder_v_heads(
+                    tensor, dim, num_k_heads, num_v_per_k, head_dim,
+                )
+
             def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
                 dest = list(super().modify_tensors(data_torch, name, bid))
                 # some archs may have the same tensor for lm_head and output (tie word embeddings)
