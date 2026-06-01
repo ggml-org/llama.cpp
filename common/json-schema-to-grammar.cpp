@@ -669,8 +669,8 @@ private:
             prop_kv_rule_names[prop_name] = _add_rule(
                 name + (name.empty() ? "" : "-") + prop_name + "-kv",
                 (_dialect == COMMON_SCHEMA_DIALECT_GEMMA4
-                     ? format_literal(prop_name)
-                     : format_literal(json(prop_name).dump())) + " space \":\" space " + prop_rule_name
+                     ? format_literal(prop_name) + " \":\" space "
+                     : format_literal(json(prop_name).dump()) + " space \":\" space ") + prop_rule_name
             );
             if (required.find(prop_name) != required.end()) {
                 required_props.push_back(prop_name);
@@ -852,7 +852,12 @@ public:
         visit_refs(schema);
     }
 
-    static std::string _generate_constant_rule(const json & value) {
+    static std::string _generate_constant_rule(const json & value, common_schema_dialect dialect = COMMON_SCHEMA_DIALECT_JSON) {
+        // Gemma 4 emits string values with the <|"|> special-token delimiter instead of JSON quotes,
+        // so enum/const values that are strings need to match the gemma4-string framing.
+        if (dialect == COMMON_SCHEMA_DIALECT_GEMMA4 && value.is_string()) {
+            return "<|\"|> " + format_literal(value.get<std::string>()) + " <|\"|>";
+        }
         return format_literal(value.dump());
     }
 
@@ -878,12 +883,12 @@ public:
             return _add_rule(rule_name, _generate_union_rule(name, schema_types));
         }
         if (schema.contains("const")) {
-            return _add_rule(rule_name, _generate_constant_rule(schema["const"]) + " space");
+            return _add_rule(rule_name, _generate_constant_rule(schema["const"], _dialect) + " space");
         }
         if (schema.contains("enum")) {
             std::vector<std::string> enum_values;
             for (const auto & v : schema["enum"]) {
-                enum_values.push_back(_generate_constant_rule(v));
+                enum_values.push_back(_generate_constant_rule(v, _dialect));
             }
             return _add_rule(rule_name, "(" + string_join(enum_values, " | ") + ") space");
         }
@@ -926,7 +931,7 @@ public:
                     }
                 } else if (comp_schema.contains("enum")) {
                     for (const auto & v : comp_schema["enum"]) {
-                        const auto rule = _generate_constant_rule(v);
+                        const auto rule = _generate_constant_rule(v, _dialect);
                         if (enum_values.find(rule) == enum_values.end()) {
                             enum_values[rule] = 0;
                         }

@@ -2702,6 +2702,29 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .expect(message_with_tool_calls("special_function", R"({"arg1": 42})"))
             .run();
 
+        // Tool call with enum on a string property — both grammar generation and parse-back
+        // must use the <|"|> delimiter, not JSON quotes.
+        {
+            common_chat_tool kanban_create_tool{
+                /* .name = */ "kanban_create",
+                /* .description = */ "Create a kanban ticket",
+                /* .parameters = */ R"({
+                    "type": "object",
+                    "properties": {
+                        "assignee": { "type": "string", "enum": ["ventes", "compta", "support", "rh"] },
+                        "body":     { "type": "string" }
+                    },
+                    "required": ["assignee", "body"]
+                })",
+            };
+            tst.test(
+                    "<|tool_call>call:kanban_create{assignee:<|\"|>compta<|\"|>,body:<|\"|>Hello<|\"|>}<tool_call|>")
+                .tools({ kanban_create_tool })
+                .expect(message_with_tool_calls("kanban_create",
+                        R"({"assignee": "compta", "body": "Hello"})"))
+                .run();
+        }
+
         // Tool call with negative number argument
         tst.test(
                 "<|tool_call>call:special_function{arg1:-7}<tool_call|>")

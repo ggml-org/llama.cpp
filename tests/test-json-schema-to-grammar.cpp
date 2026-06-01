@@ -1547,14 +1547,14 @@ static void test_gemma4_dialect() {
             "required": ["absolutePath"]
         })""",
         R"""(
-            absolutePath-kv ::= "absolutePath" space ":" space gemma4-string
+            absolutePath-kv ::= "absolutePath" ":" space gemma4-string
             gemma4-char ::= [^\x00-\x08\x0B\x0C\x0E-\x1F\x7F]
             gemma4-string ::= <|"|> gemma4-char* <|"|> space
             integer ::= ("-"? integral-part) space
             integral-part ::= [0] | [1-9] [0-9]{0,15}
             root ::= "{" space absolutePath-kv ( "," space ( startLine-kv ) )? "}" space
             space ::= | " " | "\n"{1,2} [ \t]{0,20}
-            startLine-kv ::= "startLine" space ":" space integer
+            startLine-kv ::= "startLine" ":" space integer
         )"""
     });
 
@@ -1574,7 +1574,53 @@ static void test_gemma4_dialect() {
             root ::= "{" space todos-kv "}" space
             space ::= | " " | "\n"{1,2} [ \t]{0,20}
             todos ::= "[" space (gemma4-string ("," space gemma4-string)*)? "]" space
-            todos-kv ::= "todos" space ":" space todos
+            todos-kv ::= "todos" ":" space todos
+        )"""
+    });
+
+    test({
+        SUCCESS,
+        "gemma4 string enum",
+        R"""({
+            "enum": ["ventes", "compta", "support", "rh"]
+        })""",
+        R"""(
+            root ::= (<|"|> "ventes" <|"|> | <|"|> "compta" <|"|> | <|"|> "support" <|"|> | <|"|> "rh" <|"|>) space
+            space ::= | " " | "\n"{1,2} [ \t]{0,20}
+        )"""
+    });
+
+    test({
+        SUCCESS,
+        "gemma4 enum on string property",
+        R"""({
+            "type": "object",
+            "properties": {
+                "assignee": { "type": "string", "enum": ["ventes", "compta", "support", "rh"] },
+                "body":     { "type": "string" }
+            },
+            "required": ["assignee", "body"]
+        })""",
+        R"""(
+            assignee ::= (<|"|> "ventes" <|"|> | <|"|> "compta" <|"|> | <|"|> "support" <|"|> | <|"|> "rh" <|"|>) space
+            assignee-kv ::= "assignee" ":" space assignee
+            body-kv ::= "body" ":" space gemma4-string
+            gemma4-char ::= [^\x00-\x08\x0B\x0C\x0E-\x1F\x7F]
+            gemma4-string ::= <|"|> gemma4-char* <|"|> space
+            root ::= "{" space assignee-kv "," space body-kv "}" space
+            space ::= | " " | "\n"{1,2} [ \t]{0,20}
+        )"""
+    });
+
+    test({
+        SUCCESS,
+        "gemma4 string const",
+        R"""({
+            "const": "kanban_create"
+        })""",
+        R"""(
+            root ::= <|"|> "kanban_create" <|"|> space
+            space ::= | " " | "\n"{1,2} [ \t]{0,20}
         )"""
     });
 
