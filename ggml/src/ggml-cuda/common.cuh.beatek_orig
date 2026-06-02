@@ -1463,25 +1463,6 @@ struct ggml_backend_cuda_context {
         if (streams[device][stream] == nullptr) {
             ggml_cuda_set_device(device);
             CUDA_CHECK(cudaStreamCreateWithFlags(&streams[device][stream], cudaStreamNonBlocking));
-#if defined(_WIN32) && defined(GGML_USE_HIP)
-            // BEATEK_ROCm: On Windows ROCm 7.x with gfx1100, device memory allocated
-            // on the default stream is not guaranteed visible on a newly created
-            // non-blocking stream without an explicit sync barrier.
-            // This causes an access violation (0xc0000005) when the compute stream
-            // first accesses KV cache buffers allocated before this stream was created.
-            // Insert hipDeviceSynchronize to commit all prior allocations before
-            // the new stream is returned for use.
-            // Linux ROCm uses unified VM and does not require this barrier.
-            // Tracking: https://github.com/ollama/ollama/issues/12045
-            {
-                hipError_t sync_err = hipDeviceSynchronize();
-                if (sync_err != hipSuccess) {
-                    GGML_LOG_ERROR("ggml-hip: hipDeviceSynchronize failed after "
-                                   "stream create on gfx1100 Windows: %s\n",
-                                   hipGetErrorString(sync_err));
-                }
-            }
-#endif // defined(_WIN32) && defined(GGML_USE_HIP)
         }
         return streams[device][stream];
     }

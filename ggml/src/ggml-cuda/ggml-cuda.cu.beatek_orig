@@ -5415,22 +5415,6 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
             return true;
 #endif // GGML_USE_MUSA
         case GGML_OP_FLASH_ATTN_EXT:
-#if defined(_WIN32) && defined(GGML_USE_HIP)
-            // BEATEK_ROCm: Flash Attention on gfx1100 Windows ROCm 6.x/7.x causes
-            // a deterministic access violation (0xc0000005) during context init.
-            // The split K/V buffer views use device pointer offsets that the Windows
-            // ROCm driver does not commit synchronously on this target.
-            // Disable FA on gfx1100 Windows and fall back to standard SDPA path.
-            // Linux gfx1100 is NOT affected.
-            // Tracking: https://github.com/ollama/ollama/issues/12045
-            {
-                hipDeviceProp_t prop;
-                hipGetDeviceProperties(&prop, dev_ctx->device);
-                if (strncmp(prop.gcnArchName, "gfx1100", 7) == 0) {
-                    return false;
-                }
-            }
-#endif // defined(_WIN32) && defined(GGML_USE_HIP)
             return ggml_cuda_flash_attn_ext_supported(dev_ctx->device, op);
         case GGML_OP_CROSS_ENTROPY_LOSS:
         case GGML_OP_CROSS_ENTROPY_LOSS_BACK:
