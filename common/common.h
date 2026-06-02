@@ -14,6 +14,7 @@
 #include <vector>
 #include <map>
 #include <algorithm>
+#include <chrono>
 
 #if defined(_WIN32) && !defined(_WIN32_WINNT)
 #define _WIN32_WINNT 0x0A00
@@ -825,6 +826,13 @@ std::string string_from(const struct llama_context * ctx, const std::vector<llam
 std::string string_from(const struct llama_context * ctx, const struct llama_batch & batch);
 
 bool glob_match(const std::string & pattern, const std::string & str);
+
+//
+// Time utils
+//
+
+// Formats a time string in the local timezone. Returns "" on failure.
+std::string common_time_format(const char * fmt, const std::chrono::system_clock::time_point & tp);
 
 //
 // Filesystem utils

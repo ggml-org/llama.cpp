@@ -4,6 +4,7 @@
 #include "value.h"
 
 #include <cassert>
+#include <chrono>
 #include <ctime>
 #include <memory>
 #include <sstream>
@@ -49,7 +50,7 @@ void enable_debug(bool enable);
 
 struct context {
     std::shared_ptr<std::string> src; // for debugging; use shared_ptr to avoid copying on scope creation
-    std::time_t current_time; // for functions that need current time
+    std::chrono::system_clock::time_point current_time; // for functions that need current time
 
     bool is_get_stats = false; // whether to collect stats
 
@@ -63,7 +64,7 @@ struct context {
         env->insert("False", mk_val<value_bool>(false));
         env->insert("none",  mk_val<value_none>());
         env->insert("None",  mk_val<value_none>());
-        current_time = std::time(nullptr);
+        current_time = std::chrono::system_clock::now();
     }
     ~context() = default;
 

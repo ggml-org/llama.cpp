@@ -14,7 +14,6 @@
 #include <cinttypes>
 #include <climits>
 #include <cmath>
-#include <chrono>
 #include <cstdarg>
 #include <cstring>
 #include <ctime>
@@ -470,16 +469,14 @@ std::string string_get_sortable_timestamp() {
     using clock = std::chrono::system_clock;
 
     const clock::time_point current_time = clock::now();
-    const time_t as_time_t = clock::to_time_t(current_time);
-    char timestamp_no_ns[100];
-    std::strftime(timestamp_no_ns, 100, "%Y_%m_%d-%H_%M_%S", std::localtime(&as_time_t));
+    std::string timestamp_no_ns = common_time_format("%Y_%m_%d-%H_%M_%S", current_time);
 
     const int64_t ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
         current_time.time_since_epoch() % 1000000000).count();
     char timestamp_ns[11];
     snprintf(timestamp_ns, 11, "%09" PRId64, ns);
 
-    return std::string(timestamp_no_ns) + "." + std::string(timestamp_ns);
+    return timestamp_no_ns + "." + std::string(timestamp_ns);
 }
 
 void string_replace_all(std::string & s, const std::string & search, const std::string & replace) {
@@ -792,6 +789,23 @@ static inline bool glob_match(const char * pattern, const char * str) {
 
 bool glob_match(const std::string & pattern, const std::string & str) {
     return glob_match(pattern.c_str(), str.c_str());
+}
+
+//
+// Time utils
+//
+
+std::string common_time_format(const char * fmt, const std::chrono::system_clock::time_point & tp) {
+    auto timestamp = std::chrono::system_clock::to_time_t(tp);
+    struct tm local_time;
+#ifdef _WIN32
+    localtime_s(&local_time, &timestamp);
+#else
+    localtime_r(&timestamp, &local_time);
+#endif
+    std::ostringstream ss;
+    ss << std::put_time(&local_time, fmt);
+    return ss ? ss.str() : "";
 }
 
 //

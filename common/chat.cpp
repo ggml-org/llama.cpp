@@ -30,15 +30,6 @@
 
 using json = nlohmann::ordered_json;
 
-static std::string format_time(const std::chrono::system_clock::time_point & now, const std::string & format) {
-    auto               time       = std::chrono::system_clock::to_time_t(now);
-    auto               local_time = *std::localtime(&time);
-    std::ostringstream ss;
-    ss << std::put_time(&local_time, format.c_str());
-    auto res = ss.str();
-    return res;
-}
-
 static json safe_args_parse(const std::string & to_parse) {
     std::string stripped = to_parse;
     if (to_parse.at(0) == '"' && to_parse.at(to_parse.length() - 1) == '"') {
@@ -2256,8 +2247,8 @@ static void func_args_not_string(json & messages) {
 static json common_chat_extra_context() {
     json ctx = json::object();
     std::chrono::system_clock::time_point now = std::chrono::system_clock::now();
-    std::string datetime_str = format_time(now, "%b %d %Y");
-    std::string date_str = format_time(now, "%d %b %Y");
+    std::string datetime_str = common_time_format("%b %d %Y", now);
+    std::string date_str = common_time_format("%d %b %Y", now);
     ctx["datetime"] = datetime_str;
     ctx["date_string"] = date_str;
     return ctx;
