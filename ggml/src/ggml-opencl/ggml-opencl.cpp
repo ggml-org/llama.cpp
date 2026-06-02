@@ -380,7 +380,7 @@ struct ggml_backend_opencl_device_context {
     ADRENO_GPU_GEN adreno_gen = ADRENO_GPU_GEN::ADRENO_UNKNOWN;
 
     std::regex *opfilter = nullptr; // regex of ops to not claim
-    std::string opfilter_str; // regex string for opfilter
+    std::string opfilter_str = ""; // regex string for opfilter
     size_t global_mem_size = 0;
 };
 
@@ -6822,9 +6822,6 @@ static void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer, 
 
         cl_buffer_region region;
 
-        cl_uchar mask_0F = 0x0F;
-        cl_uchar mask_F0 = 0xF0;
-
 #ifdef GGML_OPENCL_USE_ADRENO_KERNELS
         // Adreno MoE Q6_K kernel needs special transposed layout
         if (use_adreno_moe_kernels(backend_ctx, tensor)) {
@@ -6857,6 +6854,9 @@ static void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer, 
             CL_CHECK((extra->d = clCreateSubBuffer(extra_orig->data_device, CL_MEM_READ_WRITE, CL_BUFFER_CREATE_TYPE_REGION, &region, &err), err));
 
             cl_kernel kernel = backend_ctx->kernel_convert_block_q6_k_trans4_ns;
+
+            cl_uchar mask_0F = 0x0F;
+            cl_uchar mask_F0 = 0xF0;
 
             int ne00 = tensor->ne[0];
             int ne01 = tensor->ne[1];
@@ -6994,7 +6994,7 @@ static void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer, 
 
         cl_int err;
         cl_mem data_device = clCreateBuffer(context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR,
-            size, (void *) data, &err);
+            size, const_cast<void *>(data), &err);
         CL_CHECK(err);
 
         cl_kernel kernel = backend_ctx->kernel_convert_bf16_to_f16;
@@ -7782,9 +7782,6 @@ static void ggml_backend_opencl_buffer_get_tensor(ggml_backend_buffer_t buffer, 
     if (tensor->type == GGML_TYPE_Q6_K) {
         ggml_tensor_extra_cl_q6_K * extra = (ggml_tensor_extra_cl_q6_K *)tensor->extra;
 
-        cl_uchar mask_0F = 0x0F;
-        cl_uchar mask_F0 = 0xF0;
-
 #ifdef GGML_OPENCL_USE_ADRENO_KERNELS
         if (use_adreno_moe_kernels(backend_ctx, tensor)) {
             cl_int err;
@@ -7793,6 +7790,9 @@ static void ggml_backend_opencl_buffer_get_tensor(ggml_backend_buffer_t buffer, 
             CL_CHECK(err);
 
             cl_kernel kernel = backend_ctx->kernel_restore_block_q6_k_trans4_ns;
+
+            cl_uchar mask_0F = 0x0F;
+            cl_uchar mask_F0 = 0xF0;
 
             int ne00 = tensor->ne[0];
             int ne01 = tensor->ne[1];
@@ -14888,6 +14888,8 @@ static void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0,
     const int ne1 = dst->ne[1];
     const int ne2 = dst->ne[2];
 
+    GGML_UNUSED(ne2);
+
     const int r2 = ne12/ne02;
     const int r3 = ne13/ne03;
     const int dst_rows = ne20*ne21; // ne20 = n_used_experts, ne21 = n_rows
@@ -14901,6 +14903,8 @@ static void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0,
 
     const int n_tile_size = 32;
     const int max_post_router_tile = (ne20 * ne21 / n_tile_size) + ne02;
+
+    GGML_UNUSED(max_post_router_tile);
 
     cl_kernel kernel;
 
