@@ -4,7 +4,8 @@
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { ReasoningEffort, MessageRole } from '$lib/enums';
 	import { REASONING_EFFORT_TOKENS } from '$lib/constants/reasoning-effort-tokens';
-	import { EFFORT_LEVELS, type EffortLevel } from '$lib/constants/reasoning-effort';
+	import { REASONING_EFFORT_LEVELS } from '$lib/constants/reasoning-effort';
+	import type { ReasoningEffortLevel } from '$lib/types';
 	import {
 		modelsStore,
 		checkModelSupportsThinking,
@@ -56,14 +57,14 @@
 	});
 
 	// Check if current item is selected
-	function isSelected(item: EffortLevel): boolean {
+	function isSelected(item: ReasoningEffortLevel): boolean {
 		if (item.isOff) {
 			return isOff;
 		}
 		return thinkingEnabled && currentEffort === item.value;
 	}
 
-	function handleSelection(item: EffortLevel) {
+	function handleSelection(item: ReasoningEffortLevel) {
 		if (item.isOff) {
 			conversationsStore.setThinkingEnabled(false);
 		} else {
@@ -104,7 +105,7 @@
 		>
 			<div class="mb-2 px-2.5 text-sm font-medium">Reasoning effort</div>
 
-			{#each EFFORT_LEVELS as level (level.value)}
+			{#each REASONING_EFFORT_LEVELS as level (level.value)}
 				<button
 					type="button"
 					class="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm transition-colors hover:bg-accent"

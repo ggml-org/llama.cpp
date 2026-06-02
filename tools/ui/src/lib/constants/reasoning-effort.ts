@@ -1,4 +1,5 @@
 import { ReasoningEffort } from '$lib/enums';
+import type { ReasoningEffortLevel } from '$lib/types';
 
 /**
  * Reasoning effort UI labels.
@@ -11,14 +12,7 @@ export const REASONING_EFFORT_LABELS: Record<string, string> = {
 	[ReasoningEffort.MAX]: 'Max'
 };
 
-export interface EffortLevel {
-	value: string;
-	label: string;
-	isOff?: boolean;
-	hasInfo?: boolean;
-}
-
-export const EFFORT_LEVELS: EffortLevel[] = [
+export const REASONING_EFFORT_LEVELS: ReasoningEffortLevel[] = [
 	{ value: 'off', label: 'Off', isOff: true },
 	{ value: ReasoningEffort.LOW, label: 'Low' },
 	{ value: ReasoningEffort.MEDIUM, label: 'Medium' },
