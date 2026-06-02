@@ -112,9 +112,12 @@ class NemotronModel(TextModel):
     model_arch = gguf.MODEL_ARCH.NEMOTRON
 
     def set_vocab(self):
-        self._set_vocab_sentencepiece()
-        self.gguf_writer.add_pad_token_id(0)
-        self.gguf_writer.add_unk_token_id(1)
+        if (self.dir_model / "tokenizer.model").exists():
+            self._set_vocab_sentencepiece()
+            self.gguf_writer.add_pad_token_id(0)
+            self.gguf_writer.add_unk_token_id(1)
+        else:
+            self._set_vocab_gpt2()
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
@@ -128,7 +131,11 @@ class NemotronModel(TextModel):
         rot_pct = self.find_hparam(["partial_rotary_factor", "rope_pct", "rope_percent"])
         n_embd = self.find_hparam(["hidden_size", "n_embd"])
         n_head = self.find_hparam(["num_attention_heads", "n_head"])
-        self.gguf_writer.add_rope_dimension_count(int(rot_pct * n_embd) // n_head)
+        # Use explicit head_dim when available; fallback keeps standard Nemotron working.
+        # Without this, models where n_head * head_dim != n_embd (e.g. 48 heads, head_dim=128)
+        # produce the wrong rope dimension count.
+        head_dim = self.hparams.get("head_dim") or n_embd // n_head
+        self.gguf_writer.add_rope_dimension_count(int(rot_pct * head_dim))
 
         # * RopeScaling for Nemotron
         if "rope_scaling" not in self.hparams or self.hparams["rope_scaling"] is None:
