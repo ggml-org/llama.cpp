@@ -825,6 +825,28 @@ static llama_rope_scaling_type llama_rope_scaling_type_from_string(const std::st
     return LLAMA_ROPE_SCALING_TYPE_UNSPECIFIED;
 }
 
+// Maps the GGUF `<arch>.hidden_activation` string to the FFN op type used by the
+// graph builders. Only gated activations that map cleanly to llm_ffn_op_type are
+// listed; unrecognized values fall back to GeGLU, which matches the historical
+// default for ModernBert-style architectures.
+static const std::map<std::string, llm_ffn_op_type> LLM_FFN_OP_TYPES_FROM_STRING = {
+    { "gelu",   LLM_FFN_GEGLU  },
+    { "geglu",  LLM_FFN_GEGLU  },
+    { "silu",   LLM_FFN_SWIGLU },
+    { "swish",  LLM_FFN_SWIGLU },
+    { "swiglu", LLM_FFN_SWIGLU },
+    { "relu",   LLM_FFN_RELU   },
+    { "reglu",  LLM_FFN_REGLU  },
+};
+
+llm_ffn_op_type llm_ffn_op_type_from_string(const std::string & name, llm_ffn_op_type fallback) {
+    const auto it = LLM_FFN_OP_TYPES_FROM_STRING.find(name);
+    if (it != LLM_FFN_OP_TYPES_FROM_STRING.end()) {
+        return it->second;
+    }
+    return fallback;
+}
+
 // CPU: ACCEL -> GPU host -> CPU extra -> CPU
 static buft_list_t make_cpu_buft_list(const std::vector<llama_device> & devices, bool use_extra_bufts, bool no_host) {
     buft_list_t buft_list;

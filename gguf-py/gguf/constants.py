@@ -150,6 +150,7 @@ class Keys:
         EMBD_LENGTH_PER_LAYER_INP         = "{arch}.embedding_length_per_layer_input"
         SWIGLU_CLAMP_EXP                  = "{arch}.swiglu_clamp_exp"
         SWIGLU_CLAMP_SHEXP                = "{arch}.swiglu_clamp_shexp"
+        HIDDEN_ACT                        = "{arch}.hidden_activation"
         DENSE_FEAT_IN_SIZE                = "{arch}.{dense}_feat_in"
         DENSE_FEAT_OUT_SIZE               = "{arch}.{dense}_feat_out"
 
@@ -3996,6 +3997,13 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_GATE_SHEXP,
         MODEL_TENSOR.FFN_DOWN_SHEXP,
         MODEL_TENSOR.FFN_EXP_PROBS_B,
+        # NextN/MTP tensors (Step3p5 draft head)
+        MODEL_TENSOR.NEXTN_EH_PROJ,
+        MODEL_TENSOR.NEXTN_EMBED_TOKENS,
+        MODEL_TENSOR.NEXTN_ENORM,
+        MODEL_TENSOR.NEXTN_HNORM,
+        MODEL_TENSOR.NEXTN_SHARED_HEAD_HEAD,
+        MODEL_TENSOR.NEXTN_SHARED_HEAD_NORM,
     ],
     MODEL_ARCH.LLAMA_EMBED: [
         MODEL_TENSOR.TOKEN_EMBD,

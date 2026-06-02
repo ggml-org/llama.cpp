@@ -331,6 +331,30 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				}
 			},
 			{
+				key: SETTINGS_KEYS.SHOW_MODEL_QUANTIZATION,
+				label: 'Show model quantization information',
+				help: 'Display quantization badges (e.g. Q8_0, Q4_K_M) next to model names throughout the interface.',
+				defaultValue: true,
+				type: SettingsFieldType.CHECKBOX,
+				section: SETTINGS_SECTION_SLUGS.DISPLAY,
+				sync: {
+					serverKey: SETTINGS_KEYS.SHOW_MODEL_QUANTIZATION,
+					paramType: SyncableParameterType.BOOLEAN
+				}
+			},
+			{
+				key: SETTINGS_KEYS.SHOW_MODEL_TAGS,
+				label: 'Show model tags',
+				help: 'Display model tags (e.g. "vision", "reasoning") next to model names throughout the interface.',
+				defaultValue: true,
+				type: SettingsFieldType.CHECKBOX,
+				section: SETTINGS_SECTION_SLUGS.DISPLAY,
+				sync: {
+					serverKey: SETTINGS_KEYS.SHOW_MODEL_TAGS,
+					paramType: SyncableParameterType.BOOLEAN
+				}
+			},
+			{
 				key: SETTINGS_KEYS.ALWAYS_SHOW_AGENTIC_TURNS,
 				label: 'Always show agentic turns in conversation',
 				help: 'Always expand and display agentic loop turns in conversation messages.',
@@ -645,6 +669,14 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 					serverKey: SETTINGS_KEYS.EXCLUDE_REASONING_FROM_CONTEXT,
 					paramType: SyncableParameterType.BOOLEAN
 				}
+			},
+			{
+				key: SETTINGS_KEYS.ENABLE_THINKING,
+				label: 'Enable thinking',
+				help: 'Enable model thinking/reasoning for each request. When off, the model will skip the thinking phase and go straight to the response.',
+				defaultValue: false,
+				type: SettingsFieldType.CHECKBOX,
+				section: SETTINGS_SECTION_SLUGS.DEVELOPER
 			},
 			{
 				key: SETTINGS_KEYS.SHOW_RAW_OUTPUT_SWITCH,

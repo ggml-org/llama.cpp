@@ -79,6 +79,10 @@ struct htp_context {
 
     uint64_t               max_vmem;
 
+    // Persistent DDR scratchpad for MUL_MAT_ID mappings
+    void *                 ddr_spad_base;
+    size_t                 ddr_spad_size;
+
     struct htp_ops_context octx;
 
 #ifdef HTP_HAS_HMX
