@@ -51,7 +51,9 @@ Added `GGML_TYPE_Q4_0_BLUE` as a first-class KV cache type with CLI support via 
 | Build | Status |
 |-------|--------|
 | CPU (`-DGGML_CUDA=OFF`) | ✅ Builds without errors |
-| CUDA (`-DGGML_CUDA=ON`) | ❌ Pre-existing CUDA 11.5 + GCC 11.4 incompatibility (not caused by our changes) |
+| CUDA (`-DGGML_CUDA=ON` with CUDA 12.4) | ✅ Compiling (in progress — targets sm_61 for P2000 Pascal) |
+
+Note: The system's default `/usr/bin/nvcc` (CUDA 11.5) has a compatibility issue with GCC 11.4. Using `/usr/local/cuda-12.4/bin/nvcc` resolves this and targets sm_61 (Pascal) correctly for the Quadro P2000.
 
 ### End-to-End Test Results (Qwen2.5-1.5B-Instruct, q4_0 quantized, CPU)
 
