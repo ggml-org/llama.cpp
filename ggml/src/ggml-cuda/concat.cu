@@ -215,11 +215,7 @@ void ggml_cuda_op_concat(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
             concat_cuda<uint16_t>(src0, src1, dst, dim, stream);
             break;
         case 4:
-            if (src0->type == GGML_TYPE_F32) {
-                concat_cuda<float>(src0, src1, dst, dim, stream);
-            } else {
-                concat_cuda<uint32_t>(src0, src1, dst, dim, stream);
-            }
+            concat_cuda<uint32_t>(src0, src1, dst, dim, stream);
             break;
         case 8:
             concat_cuda<uint64_t>(src0, src1, dst, dim, stream);
