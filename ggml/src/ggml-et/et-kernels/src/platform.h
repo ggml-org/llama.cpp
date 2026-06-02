@@ -62,29 +62,6 @@ static inline int64_t et_gcd_i64(int64_t a, int64_t b) {
         a = t;
     }
     return a;
-    
-    // if (a == 0) return b;
-    // if (b == 0) return a;
-
-    // uint64_t u = (uint64_t)(a < 0 ? -a : a);
-    // uint64_t v = (uint64_t)(b < 0 ? -b : b);
-
-    // // Factor out common powers of 2: gcd(u,v) = 2^shift * gcd(u>>shift, v>>shift)
-    // int shift = 0;
-    // while (((u | v) & 1) == 0) { u >>= 1; v >>= 1; shift++; }
-
-    // // Remove remaining factors of 2 from u (u becomes odd)
-    // while ((u & 1) == 0) u >>= 1;
-
-    // do {
-    //     // Remove factors of 2 from v (v becomes odd)
-    //     while ((v & 1) == 0) v >>= 1;
-    //     // Ensure u <= v, then reduce
-    //     if (u > v) { uint64_t t = u; u = v; v = t; }
-    //     v -= u;
-    // } while (v != 0);
-
-    // return (int64_t)(u << shift);
 }
 
 // Return the number of consecutive rows of width row_elems needed so the
@@ -612,25 +589,12 @@ static void evict_region_past_l2(const void *addr, size_t bytes) {
     uint64_t base = (uint64_t)addr & ~(CL - 1);
     uint64_t end  = ((uint64_t)addr + bytes + CL - 1) & ~(CL - 1);
     uint64_t nlines = (end - base) / CL;
-
     // FENCE;
-
     for (uint64_t off = 0; off < nlines; off += 16) {
         uint64_t batch = nlines - off;
         if (batch > 16) batch = 16;
         evict_past_l2((const void *)(base + off * CL), batch, CL);
     }
- 
-    // cache_ops_priv_evict_sw(0, /*to_L2*/2, 0, 0, CL);
-
-
-
-    // WAIT_CACHEOPS;
-
-    // /* Use_tmask=0, dst=1 (L2/SP_RAM), set=0, way=0, num_lines=5 */
-    // status = cache_ops_priv_evict_sw(0, to_L2, 0, 0, 5);
-
-
 }
 
 #endif // PLATFORM_H
