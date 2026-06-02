@@ -742,7 +742,12 @@ private:
         SLT_INF(slot, "%s", "saving idle slot to prompt cache\n");
         SLT_DBG(slot, "%s", "__TEST_TAG_CACHE_IDLE_SLOT__\n");
         slot.prompt_save(*prompt_cache);
-        slot.prompt_clear(false);
+        // only free the slot's KV when the KV cache is a shared pool: with per-slot KV
+        // partitions (non-unified), clearing reclaims no reusable room and would just
+        // discard a usable in-VRAM prefix, so keep it and only publish a RAM-cache copy
+        if (params_base.kv_unified) {
+            slot.prompt_clear(false);
+        }
         prompt_cache->update();
     }
 
@@ -1178,14 +1183,17 @@ private:
         metrics.init();
 
         if (params_base.cache_idle_slots) {
-            if (!params_base.kv_unified) {
-                SRV_WRN("%s", "--cache-idle-slots requires --kv-unified, disabling\n");
-                params_base.cache_idle_slots = false;
-            } else if (params_base.cache_ram_mib == 0) {
+            if (params_base.cache_ram_mib == 0) {
                 SRV_WRN("%s", "--cache-idle-slots requires --cache-ram, disabling\n");
                 params_base.cache_idle_slots = false;
             } else {
-                SRV_INF("%s", "idle slots will be saved to prompt cache and cleared upon starting a new task\n");
+                if (params_base.kv_unified) {
+                    SRV_INF("%s", "idle slots will be saved to prompt cache and cleared upon starting a new task\n");
+                } else {
+                    // without a unified KV cache, clearing a slot frees no reusable room, so we only
+                    // publish a RAM-cache copy of idle slots (their KV stays in VRAM) for cross-slot reuse
+                    SRV_INF("%s", "idle slots will be saved to prompt cache upon starting a new task (KV kept in VRAM, no unified KV)\n");
+                }
                 SRV_DBG("%s", "__TEST_TAG_CACHE_IDLE_SLOTS_ENABLED__\n");
             }
         }
