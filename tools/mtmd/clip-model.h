@@ -520,7 +520,7 @@ struct clip_model {
     ggml_tensor * mm_boi = nullptr;
     ggml_tensor * mm_eoi = nullptr;
 
-    // hunyuanocr perceiver
+    // hunyuanvl perceiver
     ggml_tensor * mm_pre_norm_w  = nullptr;
     ggml_tensor * mm_img_begin   = nullptr;
     ggml_tensor * mm_img_end     = nullptr;
@@ -542,6 +542,11 @@ struct clip_model {
     int32_t n_sam_layers = 12; // used by deepseek-ocr sam encoder
 
     std::vector<clip_layer> sam_layers;
+
+    // deepseek-ocr-2
+    ggml_tensor * resample_query_768 = nullptr;
+    ggml_tensor * resample_query_1024 = nullptr;
+
     // lfm2 audio
     std::array<ggml_tensor *, 7> pre_encode_conv_X_w = {nullptr};
     std::array<ggml_tensor *, 7> pre_encode_conv_X_b = {nullptr};

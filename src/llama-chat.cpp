@@ -62,6 +62,7 @@ static const std::map<std::string, llm_chat_template> LLM_CHAT_TEMPLATES = {
     { "rwkv-world",        LLM_CHAT_TEMPLATE_RWKV_WORLD        },
     { "granite",           LLM_CHAT_TEMPLATE_GRANITE_3_X       },
     { "granite-4.0",       LLM_CHAT_TEMPLATE_GRANITE_4_0       },
+    { "granite-4.1",       LLM_CHAT_TEMPLATE_GRANITE_4_1       },
     { "gigachat",          LLM_CHAT_TEMPLATE_GIGACHAT          },
     { "megrez",            LLM_CHAT_TEMPLATE_MEGREZ            },
     { "yandex",            LLM_CHAT_TEMPLATE_YANDEX            },
@@ -73,7 +74,7 @@ static const std::map<std::string, llm_chat_template> LLM_CHAT_TEMPLATES = {
     { "hunyuan-moe",       LLM_CHAT_TEMPLATE_HUNYUAN_MOE       },
     { "gpt-oss",           LLM_CHAT_TEMPLATE_OPENAI_MOE        },
     { "hunyuan-dense",     LLM_CHAT_TEMPLATE_HUNYUAN_DENSE     },
-    { "hunyuan-ocr",       LLM_CHAT_TEMPLATE_HUNYUAN_OCR       },
+    { "hunyuan-vl",        LLM_CHAT_TEMPLATE_HUNYUAN_VL        },
     { "kimi-k2",           LLM_CHAT_TEMPLATE_KIMI_K2           },
     { "seed_oss",          LLM_CHAT_TEMPLATE_SEED_OSS          },
     { "grok-2",            LLM_CHAT_TEMPLATE_GROK_2            },
@@ -194,7 +195,10 @@ llm_chat_template llm_chat_detect_template(const std::string & tmpl) {
         return LLM_CHAT_TEMPLATE_RWKV_WORLD;
     } else if (tmpl_contains("<|start_of_role|>")) {
         if (tmpl_contains("<tool_call>") || tmpl_contains("<tools>")) {
-            return LLM_CHAT_TEMPLATE_GRANITE_4_0;
+            if (tmpl_contains("g4_default_system_message")) {
+                return LLM_CHAT_TEMPLATE_GRANITE_4_0;
+            }
+            return LLM_CHAT_TEMPLATE_GRANITE_4_1;
         }
         return LLM_CHAT_TEMPLATE_GRANITE_3_X;
     } else if (tmpl_contains("message['role'] + additional_special_tokens[0] + message['content'] + additional_special_tokens[1]")) {
@@ -218,7 +222,7 @@ llm_chat_template llm_chat_detect_template(const std::string & tmpl) {
     } else if (tmpl_contains("<|start|>") && tmpl_contains("<|channel|>")) {
         return LLM_CHAT_TEMPLATE_OPENAI_MOE;
     } else if (tmpl_contains("<｜hy_Assistant｜>") && tmpl_contains("<｜hy_begin▁of▁sentence｜>")) {
-        return LLM_CHAT_TEMPLATE_HUNYUAN_OCR;
+        return LLM_CHAT_TEMPLATE_HUNYUAN_VL;
     } else if (tmpl_contains("<｜hy_Assistant｜>") && tmpl_contains("<｜hy_place▁holder▁no▁3｜>")) {
         return LLM_CHAT_TEMPLATE_HUNYUAN_DENSE;
     } else if (tmpl_contains("<|im_assistant|>assistant<|im_middle|>")) {
@@ -651,6 +655,20 @@ int32_t llm_chat_apply_template(
         if (add_ass) {
             ss << "<|start_of_role|>assistant<|end_of_role|>";
         }
+    } else if (tmpl == LLM_CHAT_TEMPLATE_GRANITE_4_1) {
+        // IBM Granite 4.1 template
+        for (const auto & message : chat) {
+            std::string role(message->role);
+            if (role == "assistant_tool_call") {
+                ss << "<|start_of_role|>assistant<|end_of_role|><|tool_call|>";
+            } else {
+                ss << "<|start_of_role|>" << role << "<|end_of_role|>";
+            }
+            ss << message->content << "<|end_of_text|>\n";
+        }
+        if (add_ass) {
+            ss << "<|start_of_role|>assistant<|end_of_role|>";
+        }
     } else if (tmpl == LLM_CHAT_TEMPLATE_GIGACHAT) {
         // GigaChat template
         bool has_system = !chat.empty() && std::string(chat[0]->role) == "system";
@@ -825,8 +843,8 @@ int32_t llm_chat_apply_template(
                 ss << "<｜hy_User｜>" << chat[i]->content << "<｜hy_Assistant｜>";
             }
         }
-    } else if (tmpl == LLM_CHAT_TEMPLATE_HUNYUAN_OCR) {
-        // tencent/HunyuanOCR
+    } else if (tmpl == LLM_CHAT_TEMPLATE_HUNYUAN_VL) {
+        // tencent/HunyuanOCR & tencent/HunyuanVL
         ss << "<｜hy_begin▁of▁sentence｜>";
         for (size_t i = 0; i < chat.size(); i++) {
             std::string role(chat[i]->role);

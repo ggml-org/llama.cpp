@@ -50,29 +50,12 @@ concurrency:
 env:
   GGML_NLOOP: 3
   GGML_N_THREADS: 1
-  LLAMA_LOG_COLORS: 1
-  LLAMA_LOG_PREFIX: 1
-  LLAMA_LOG_TIMESTAMPS: 1
+  LLAMA_ARG_LOG_COLORS: 1
+  LLAMA_ARG_LOG_PREFIX: 1
+  LLAMA_ARG_LOG_TIMESTAMPS: 1
 
 jobs:
-  determine-tag:
-    name: Determine tag name
-    runs-on: ubuntu-slim
-    outputs:
-      tag_name: ${{ steps.tag.outputs.name }}
-    steps:
-      - name: Clone
-        uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-      - name: Determine tag name
-        id: tag
-        uses: ./.github/actions/get-tag-name
-        env:
-          BRANCH_NAME: ${{ github.head_ref || github.ref_name }}
-
-  ggml-ci-nvidia-cuda:
-    needs: determine-tag
+  gpu-cuda:
     runs-on: [self-hosted, Linux, NVIDIA]
 
     steps:
@@ -82,14 +65,11 @@ jobs:
 
       - name: Test
         id: ggml-ci
-        env:
-          HF_UI_VERSION: ${{ needs.determine-tag.outputs.tag_name }}
         run: |
           nvidia-smi
-          GG_BUILD_CUDA=1 bash ./ci/run.sh ~/results/llama.cpp /mnt/llama.cpp
+          GG_BUILD_CUDA=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
 
-  ggml-ci-nvidia-vulkan-cm:
-    needs: determine-tag
+  gpu-vulkan-nvidia-cm:
     runs-on: [self-hosted, Linux, NVIDIA]
 
     steps:
@@ -99,14 +79,11 @@ jobs:
 
       - name: Test
         id: ggml-ci
-        env:
-          HF_UI_VERSION: ${{ needs.determine-tag.outputs.tag_name }}
         run: |
           vulkaninfo --summary
-          GG_BUILD_VULKAN=1 GGML_VK_DISABLE_COOPMAT2=1 bash ./ci/run.sh ~/results/llama.cpp /mnt/llama.cpp
+          GG_BUILD_VULKAN=1 GGML_VK_DISABLE_COOPMAT2=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
 
-  ggml-ci-nvidia-vulkan-cm2:
-    needs: determine-tag
+  gpu-vulkan-nvidia-cm2:
     runs-on: [self-hosted, Linux, NVIDIA, COOPMAT2]
 
     steps:
@@ -116,14 +93,12 @@ jobs:
 
       - name: Test
         id: ggml-ci
-        env:
-          HF_UI_VERSION: ${{ needs.determine-tag.outputs.tag_name }}
         run: |
           vulkaninfo --summary
-          GG_BUILD_VULKAN=1 bash ./ci/run.sh ~/results/llama.cpp /mnt/llama.cpp
+          GG_BUILD_VULKAN=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
 
-  ggml-ci-nvidia-webgpu:
-    runs-on: [self-hosted, Linux, NVIDIA]
+  gpu-webgpu-nvidia:
+    runs-on: [self-hosted, Linux, NVIDIA, X64]
 
     steps:
       - name: Clone
@@ -149,10 +124,10 @@ jobs:
           GG_BUILD_WEBGPU=1 \
           GG_BUILD_WEBGPU_DAWN_PREFIX="$GITHUB_WORKSPACE/dawn" \
           GG_BUILD_WEBGPU_DAWN_DIR="$GITHUB_WORKSPACE/dawn/lib64/cmake/Dawn" \
-            bash ./ci/run.sh ~/results/llama.cpp /mnt/llama.cpp
+            bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
 
   # TODO: provision AMX-compatible machine
-  #ggml-ci-cpu-amx:
+  #cpu-amx:
   #  runs-on: [self-hosted, Linux, CPU, AMX]
 
   #  steps:
@@ -163,10 +138,10 @@ jobs:
   #    - name: Test
   #      id: ggml-ci
   #      run: |
-  #        bash ./ci/run.sh ~/results/llama.cpp /mnt/llama.cpp
+  #        bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
 
   # TODO: provision AMD GPU machine
-  # ggml-ci-amd-vulkan:
+  # amd-vulkan:
   #   runs-on: [self-hosted, Linux, AMD]
 
   #   steps:
@@ -178,10 +153,10 @@ jobs:
   #       id: ggml-ci
   #       run: |
   #         vulkaninfo --summary
-  #         GG_BUILD_VULKAN=1 bash ./ci/run.sh ~/results/llama.cpp /mnt/llama.cpp
+  #         GG_BUILD_VULKAN=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
 
   # TODO: provision AMD GPU machine
-  # ggml-ci-amd-rocm:
+  # amd-rocm:
   #   runs-on: [self-hosted, Linux, AMD]
 
   #   steps:
@@ -193,10 +168,9 @@ jobs:
   #       id: ggml-ci
   #       run: |
   #         amd-smi static
-  #         GG_BUILD_ROCM=1 GG_BUILD_AMDGPU_TARGETS="gfx1101" bash ./ci/run.sh ~/results/llama.cpp /mnt/llama.cpp
+  #         GG_BUILD_ROCM=1 GG_BUILD_AMDGPU_TARGETS="gfx1101" bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
 
-  ggml-ci-mac-metal:
-    needs: determine-tag
+  gpu-metal:
     runs-on: [self-hosted, macOS, ARM64]
 
     steps:
@@ -206,13 +180,10 @@ jobs:
 
       - name: Test
         id: ggml-ci
-        env:
-          HF_UI_VERSION: ${{ needs.determine-tag.outputs.tag_name }}
         run: |
           GG_BUILD_METAL=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
 
-  ggml-ci-mac-webgpu:
-    needs: determine-tag
+  gpu-webgpu-apple:
     runs-on: [self-hosted, macOS, ARM64]
 
     steps:
@@ -235,14 +206,11 @@ jobs:
 
       - name: Test
         id: ggml-ci
-        env:
-          HF_UI_VERSION: ${{ needs.determine-tag.outputs.tag_name }}
         run: |
           GG_BUILD_WEBGPU=1 GG_BUILD_WEBGPU_DAWN_PREFIX="$GITHUB_WORKSPACE/dawn" \
             bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
 
-  ggml-ci-mac-vulkan:
-    needs: determine-tag
+  gpu-vulkan-apple:
     runs-on: [self-hosted, macOS, ARM64]
 
     steps:
@@ -252,14 +220,11 @@ jobs:
 
       - name: Test
         id: ggml-ci
-        env:
-          HF_UI_VERSION: ${{ needs.determine-tag.outputs.tag_name }}
         run: |
           vulkaninfo --summary
           GG_BUILD_VULKAN=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
 
-  ggml-ci-linux-intel-vulkan:
-    needs: determine-tag
+  gpu-vulkan-intel-linux:
     runs-on: [self-hosted, Linux, Intel]
 
     steps:
@@ -271,14 +236,11 @@ jobs:
 
       - name: Test
         id: ggml-ci
-        env:
-          HF_UI_VERSION: ${{ needs.determine-tag.outputs.tag_name }}
         run: |
           vulkaninfo --summary
           GG_BUILD_VULKAN=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
 
-  ggml-ci-win-intel-vulkan:
-    needs: determine-tag
+  gpu-vulkan-intel-windows:
     runs-on: [self-hosted, Windows, X64, Intel]
 
     steps:
@@ -293,15 +255,13 @@ jobs:
           MSYSTEM: UCRT64
           CHERE_INVOKING: 1
           PATH: C:\msys64\ucrt64\bin;C:\msys64\usr\bin;C:\Windows\System32;${{ env.PATH }}
-          HF_UI_VERSION: ${{ needs.determine-tag.outputs.tag_name }}
         run: |
           vulkaninfo --summary
           # Skip python related tests with GG_BUILD_LOW_PERF=1 since Windows MSYS2 UCRT64 currently fails to create
           # a valid python environment for testing
           LLAMA_FATAL_WARNINGS=OFF GG_BUILD_NINJA=1 GG_BUILD_VULKAN=1 GG_BUILD_LOW_PERF=1 ./ci/run.sh ./results/llama.cpp ./mnt/llama.cpp
 
-  ggml-ci-intel-openvino-gpu-low-perf:
-    needs: determine-tag
+  gpu-openvino-low-perf:
     runs-on: [self-hosted, Linux, Intel, OpenVINO]
 
     concurrency:
@@ -333,8 +293,99 @@ jobs:
 
       - name: Test
         id: ggml-ci
-        env:
-          HF_UI_VERSION: ${{ needs.determine-tag.outputs.tag_name }}
         run: |
           source ./openvino_toolkit/setupvars.sh
-          GG_BUILD_OPENVINO=1 GGML_OPENVINO_DEVICE=GPU GG_BUILD_LOW_PERF=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
+          GG_BUILD_OPENVINO=1 GGML_OPENVINO_DEVICE=GPU GG_BUILD_LOW_PERF=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
+
+  cpu-x64-high-perf:
+    runs-on: [self-hosted, Linux, X64]
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
+
+      - name: Test
+        id: ggml-ci
+        run: |
+          LLAMA_ARG_THREADS=$(nproc) GG_BUILD_HIGH_PERF=1 GG_BUILD_EXTRA_TESTS_0=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
+
+  cpu-arm64-high-perf-graviton4:
+    runs-on: ah-ubuntu_22_04-c8g_8x
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
+
+      - name: Dependencies
+        id: depends
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a \
+          apt-get install -y \
+          build-essential \
+          python3-venv \
+          gpg \
+          wget \
+          time \
+          git-lfs
+
+          git lfs install
+
+          # install the latest cmake
+          sudo install -d /usr/share/keyrings
+          wget -O - https://apt.kitware.com/keys/kitware-archive-latest.asc \
+            | gpg --dearmor \
+            | sudo tee /usr/share/keyrings/kitware-archive-keyring.gpg >/dev/null
+          echo 'deb [signed-by=/usr/share/keyrings/kitware-archive-keyring.gpg] https://apt.kitware.com/ubuntu/ jammy main' \
+            | sudo tee /etc/apt/sources.list.d/kitware.list
+          sudo apt-get update
+          sudo apt-get install -y cmake
+
+      - name: Test
+        id: ggml-ci
+        run: |
+          LLAMA_ARG_THREADS=$(nproc) GG_BUILD_HIGH_PERF=1 GG_BUILD_NO_BF16=1 GG_BUILD_EXTRA_TESTS_0=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
+
+  cpu-arm64-graviton4-kleidiai:
+    runs-on: ah-ubuntu_22_04-c8g_8x
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
+
+      - name: Dependencies
+        id: depends
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a \
+          apt-get install -y \
+          build-essential \
+          python3-venv \
+          gpg \
+          wget \
+          time \
+          git-lfs
+
+          git lfs install
+
+          # install the latest cmake
+          sudo install -d /usr/share/keyrings
+          wget -O - https://apt.kitware.com/keys/kitware-archive-latest.asc \
+            | gpg --dearmor \
+            | sudo tee /usr/share/keyrings/kitware-archive-keyring.gpg >/dev/null
+          echo 'deb [signed-by=/usr/share/keyrings/kitware-archive-keyring.gpg] https://apt.kitware.com/ubuntu/ jammy main' \
+            | sudo tee /etc/apt/sources.list.d/kitware.list
+          sudo apt-get update
+          sudo apt-get install -y cmake
+
+      - name: Test
+        id: ggml-ci
+        run: |
+          GG_BUILD_KLEIDIAI=1 \
+          GG_BUILD_EXTRA_TESTS_0=1 \
+          bash ./ci/run.sh ./tmp/results ./tmp/mnt

@@ -16,10 +16,14 @@ from .qwen import QwenModel
 
 @ModelBase.register("DeepseekOCRForCausalLM")
 class DeepseekOCRVisionModel(MmprojModel):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.clip_projector_type = gguf.VisionProjectorType.DEEPSEEKOCR
+
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
         hparams = self.hparams
-        self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.DEEPSEEKOCR)
+        self.gguf_writer.add_clip_projector_type(self.clip_projector_type)
         # default values below are taken from HF tranformers code
         self.gguf_writer.add_vision_attention_layernorm_eps(hparams.get("layer_norm_eps", 1e-6))
         self.gguf_writer.add_vision_use_gelu(True)
@@ -49,21 +53,26 @@ class DeepseekOCRVisionModel(MmprojModel):
             raise ValueError("DeepseekOCR model requires 'vision_config' in the model configuration, but it was not found")
 
         vision_config['sam'] = vision_config['width']['sam_vit_b']
-        vision_config.update(vision_config['width']['clip-l-14-224'])
-        vision_config['hidden_size'] = vision_config['width']
-        vision_config['num_heads'] = vision_config['heads']
-        vision_config['intermediate_size'] = vision_config['heads'] * 4
+        if vision_config['width'].get('clip-l-14-224') is not None:
+            vision_config.update(vision_config['width']['clip-l-14-224'])
+        if isinstance(vision_config['width'], int):
+            vision_config['hidden_size'] = vision_config['width']
+        if vision_config.get('heads') is not None:
+            vision_config['num_heads'] = vision_config['heads']
+            vision_config['intermediate_size'] = vision_config['heads'] * 4
 
         return vision_config
 
     def tensor_force_quant(self, name, new_name, bid, n_dims):
-        if ".embeddings." in name or 'pos_embed' in name:
-            return gguf.GGMLQuantizationType.F32
-        if ".rel_pos_h" in name or '.rel_pos_w' in name:
-            return gguf.GGMLQuantizationType.F32
-        if ".neck." in name or ".net_" in name:
-            return gguf.GGMLQuantizationType.F32
+        for nq_name in ('.embeddings.', 'pos_embed', '.rel_pos_h', '.rel_pos_w', '.neck.', '.net_'):
+            if nq_name in name:
+                return gguf.GGMLQuantizationType.F32
         return super().tensor_force_quant(name, new_name, bid, n_dims)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        if name.endswith("view_seperator"):
+            data_torch = data_torch.unsqueeze(0)
+        yield from super().modify_tensors(data_torch, name, bid)
 
     @classmethod
     def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
@@ -79,6 +88,33 @@ class DeepseekOCRVisionModel(MmprojModel):
             name += ".weight"
 
         return super().filter_tensors((name, gen))
+
+
+@ModelBase.register("DeepseekOCR2ForCausalLM")
+class DeepseekOCR2VisionModel(DeepseekOCRVisionModel):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.clip_projector_type = gguf.VisionProjectorType.DEEPSEEKOCR2
+
+    def set_gguf_parameters(self):
+        # the vision tower's qwen2 encoder is built from fixed defaults,
+        # see build_qwen2_decoder_as_encoder() in deepencoderv2.py
+        if self.hparams.get("patch_size") is None:
+            self.hparams["patch_size"] = 16
+        if self.hparams.get("intermediate_size") is None:
+            self.hparams["intermediate_size"] = 4864
+        if self.hparams.get("num_attention_heads") is None:
+            self.hparams["num_attention_heads"] = 14
+        super().set_gguf_parameters()
+        # qwen2 encoder is GQA: 14 Q heads, 2 KV heads
+        self.gguf_writer.add_vision_head_count_kv(2)
+
+    def get_vision_config(self) -> dict[str, Any]:
+        vision_config = super().get_vision_config()
+        vision_config['hidden_size'] = vision_config['width']['qwen2-0-5b']['dim']
+        if vision_config.get('layers') is None:
+            vision_config['layers'] = 24
+        return vision_config
 
 
 @ModelBase.register("DeepseekForCausalLM")
@@ -188,12 +224,20 @@ class DeepseekV2Model(TextModel):
         self.origin_hf_arch = hparams.get('architectures', [None])[0]
 
         # special handling for Deepseek OCR
-        if self.origin_hf_arch == "DeepseekOCRForCausalLM":
+        if self.origin_hf_arch in ("DeepseekOCRForCausalLM", "DeepseekOCR2ForCausalLM"):
             self.model_arch = gguf.MODEL_ARCH.DEEPSEEK2OCR
             self.gguf_writer.arch = gguf.MODEL_ARCH_NAMES[self.model_arch]
             self.gguf_writer.add_architecture()
             # default jinja template
             self.gguf_writer.add_chat_template("{% for m in messages %}{{m['content']}}{% endfor %}")
+
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, _ = item
+        # DeepSeek-OCR vision encoder (SAM + DeepSeek-OCR-2 qwen2 tower)
+        if "sam_model" in name or "qwen2_model" in name:
+            return None
+        return super().filter_tensors(item)
 
     def set_vocab(self):
         try:
@@ -386,3 +430,32 @@ class DeepseekV2Model(TextModel):
             experts = [k for d in self._experts for k in d.keys()]
             if len(experts) > 0:
                 raise ValueError(f"Unprocessed experts: {experts}")
+
+
+@ModelBase.register("DeepseekV32ForCausalLM")
+class DeepseekV32Model(DeepseekV2Model):
+    model_arch = gguf.MODEL_ARCH.DEEPSEEK32
+    skip_mtp = False
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.block_count = self.hparams["num_hidden_layers"] + self.hparams.get("num_nextn_predict_layers", 0)
+        self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
+
+    def set_vocab(self):
+        from transformers import AutoTokenizer
+        tokenizer = AutoTokenizer.from_pretrained(self.dir_model)
+        assert getattr(tokenizer, "add_bos_token", False), "Change value of add_bos_token to true in tokenizer_config.json file."
+        self._set_vocab_gpt2()
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+
+        # NextN/MTP prediction layers
+        if (num_nextn_predict_layers := self.hparams.get("num_nextn_predict_layers")) is not None:
+            self.gguf_writer.add_nextn_predict_layers(num_nextn_predict_layers)
+
+        # DSA indexer parameters
+        self.gguf_writer.add_indexer_head_count(self.hparams["index_n_heads"])
+        self.gguf_writer.add_indexer_key_length(self.hparams["index_head_dim"])
+        self.gguf_writer.add_indexer_top_k(self.hparams["index_topk"])
