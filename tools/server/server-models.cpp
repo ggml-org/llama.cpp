@@ -814,11 +814,40 @@ void server_models::load(const std::string & name) {
                     std::string str(buffer);
                     if (string_starts_with(buffer, CMD_CHILD_TO_ROUTER_READY)) {
                         this->update_status(name, SERVER_MODEL_STATUS_LOADED, 0);
+                    } else if (string_starts_with(buffer, CMD_CHILD_TO_ROUTER_ERROR)) {
+                        // Child reported a structured error (e.g. CUDA OOM, unsupported arch).
+                        // Log it and transition to UNLOADED — avoids getting stuck in LOADING.
+                        SRV_ERR("model name=%s loading error: %s\n", name.c_str(), buffer);
+                        this->update_status(name, SERVER_MODEL_STATUS_UNLOADED, 1);
+                        // Store the error message text after the CMD prefix
+                        // (fgets includes trailing newline — strip it)
+                        std::string err_msg(buffer);
+                        size_t prefix_len = strlen(CMD_CHILD_TO_ROUTER_ERROR);
+                        if (err_msg.size() > prefix_len) {
+                            auto trimmed = err_msg.substr(prefix_len);
+                            while (!trimmed.empty() && (trimmed.back() == '\n' || trimmed.back() == '\r')) {
+                                trimmed.pop_back();
+                            }
+                            this->update_last_error(name, trimmed);
+                        }
                     } else if (string_starts_with(buffer, CMD_CHILD_TO_ROUTER_INFO)) {
                         this->update_loaded_info(name, str);
                     } else if (string_starts_with(buffer, CMD_CHILD_TO_ROUTER_SLEEP)) {
                         this->update_status(name, SERVER_MODEL_STATUS_SLEEPING, 0);
                     }
+                }
+                if (feof(stdout_file)) {
+                    // EOF on stdout — child process exited (could be a crash).
+                    // Immediately mark as UNLOADED so /v1/models stops advertising
+                    // this model as "loaded". Without this, a silent child death
+                    // (e.g. SIGABRT from CUDA OOM) leaves a zombie slot: the router
+                    // still shows "loaded" even though no process is running, and
+                    // subsequent requests either hang or fail with confusing errors.
+                    this->update_status(name, SERVER_MODEL_STATUS_UNLOADED, 1);
+                } else if (ferror(stdout_file)) {
+                    // Read error on stdout (not EOF).  Log and fall through;
+                    // the child may still be alive, so don't change status.
+                    SRV_ERR("read error on stdout for model name=%s\n", name.c_str());
                 }
             } else {
                 SRV_ERR("failed to get stdout/stderr of child process for name=%s\n", name.c_str());
@@ -1252,9 +1281,26 @@ void server_models_routes::init_routes() {
                 preset_copy.unset_option("LLAMA_ARG_TAGS");
                 status["preset"] = preset_copy.to_ini();
             }
-            if (meta.is_failed()) {
+            if (meta.recovering) {
+                // Transient crash — auto-reload pending.  Report the exit code
+                // and signal so the proxy can surface the error to the operator,
+                // but mark failed=false because recovery will retry.
+                status["exit_code"]   = meta.exit_code;
+                status["failed"]      = false;
+                status["recovering"]  = true;
+                if (meta.exit_code < 0) {
+                    status["exit_signal"] = -meta.exit_code;
+                }
+            } else if (meta.is_failed()) {
                 status["exit_code"] = meta.exit_code;
                 status["failed"]    = true;
+                if (meta.exit_code < 0) {
+                    // negative exit_code encodes the killing signal
+                    status["exit_signal"] = -meta.exit_code;
+                }
+            }
+            if (!meta.last_error.empty()) {
+                status["last_error"] = meta.last_error;
             }
 
             // pi coding agent multimodal compatibility

@@ -89,6 +89,17 @@ int llama_server(int argc, char ** argv) {
     llama_backend_init();
     llama_numa_init(params.numa);
 
+    // Set an abort callback that prints a structured error message to stdout
+    // before abort() kills the process.  The parent's log thread (in router
+    // mode) reads stdout via a pipe and parses CMD_CHILD_TO_ROUTER_ERROR to
+    // capture the error for /v1/models .  This catches ALL GGML_ABORT paths
+    // — CUDA OOM, GGML_ASSERT failures, unsupported ops, etc.
+    // fflush(stdout) is essential: abort() does not flush stdio buffers.
+    ggml_set_abort_callback([](const char * msg) {
+        fprintf(stdout, "%s%s\n", CMD_CHILD_TO_ROUTER_ERROR, msg);
+        fflush(stdout);
+    });
+
     // router server never loads a model and must not touch the GPU
     // skip device enumeration so the CUDA primary context stays uncreated
     const bool is_router_server = params.model.path.empty();
