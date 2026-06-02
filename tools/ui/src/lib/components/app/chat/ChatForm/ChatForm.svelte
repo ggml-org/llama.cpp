@@ -542,6 +542,7 @@
 				canSend={canSubmit}
 				{disabled}
 				{isLoading}
+				isReasoning={chatStore.isReasoning}
 				{isRecording}
 				{showAddButton}
 				{showModelSelector}

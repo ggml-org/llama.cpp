@@ -45,35 +45,7 @@ static uint32_t server_n_outputs_max(const common_params & params) {
         return n_batch;
     }
 
-    uint32_t n_outputs_per_seq = 1;
-
-    for (const auto type : params.speculative.types) {
-        switch (type) {
-            case COMMON_SPECULATIVE_TYPE_DRAFT_SIMPLE:
-            case COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3:
-            case COMMON_SPECULATIVE_TYPE_DRAFT_MTP:
-                n_outputs_per_seq = std::max<uint32_t>(n_outputs_per_seq, 1 + std::max(0, params.speculative.draft.n_max));
-                break;
-            case COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE:
-                n_outputs_per_seq = std::max<uint32_t>(n_outputs_per_seq, 1 + params.speculative.ngram_simple.size_m);
-                break;
-            case COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K:
-                n_outputs_per_seq = std::max<uint32_t>(n_outputs_per_seq, 1 + params.speculative.ngram_map_k.size_m);
-                break;
-            case COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V:
-                n_outputs_per_seq = std::max<uint32_t>(n_outputs_per_seq, 1 + params.speculative.ngram_map_k4v.size_m);
-                break;
-            case COMMON_SPECULATIVE_TYPE_NGRAM_MOD:
-                n_outputs_per_seq = std::max<uint32_t>(n_outputs_per_seq, 1 + std::max(0, params.speculative.ngram_mod.n_max));
-                break;
-            case COMMON_SPECULATIVE_TYPE_NGRAM_CACHE:
-                n_outputs_per_seq = std::max<uint32_t>(n_outputs_per_seq, 1 + 8);
-                break;
-            case COMMON_SPECULATIVE_TYPE_NONE:
-            case COMMON_SPECULATIVE_TYPE_COUNT:
-                break;
-        }
-    }
+    const uint32_t n_outputs_per_seq = 1 + common_speculative_n_max(&params.speculative);
 
     const uint64_t n_outputs = (uint64_t) params.n_parallel * n_outputs_per_seq;
 
@@ -862,9 +834,7 @@ private:
                     measure_model_bytes = false;
                 }
 
-                if (!has_draft) {
-                    params_dft.n_outputs_max = params_base.n_parallel;
-                }
+                params_dft.n_outputs_max = params_base.n_parallel;
 
                 auto mparams_dft = common_model_params_to_llama(params_dft);
                 auto cparams_dft = common_context_params_to_llama(params_dft);
@@ -1286,6 +1256,20 @@ private:
 
         for (server_slot & slot : slots) {
             if (slot.id == id_slot) {
+                return &slot;
+            }
+        }
+
+        return nullptr;
+    }
+
+    server_slot * get_slot_by_cmpl_id(const std::string & cmpl_id) {
+        if (cmpl_id.empty()) {
+            return nullptr;
+        }
+
+        for (server_slot & slot : slots) {
+            if (slot.is_processing() && slot.task && slot.task->params.oaicompat_cmpl_id == cmpl_id) {
                 return &slot;
             }
         }
@@ -2143,6 +2127,37 @@ private:
                             break;
                         }
                     }
+                } break;
+            case SERVER_TASK_TYPE_CONTROL:
+                {
+                    auto res = std::make_unique<server_task_result_control>();
+                    res->id = task.id;
+
+                    server_slot * slot = get_slot_by_cmpl_id(task.params.control_cmpl_id);
+                    if (slot == nullptr) {
+                        res->success = false;
+                        res->message = "no active completion for this id";
+                        queue_results.send(std::move(res));
+                        break;
+                    }
+
+                    if (task.params.control_action == "reasoning_end") {
+                        // the budget sampler only exists when reasoning control was armed
+                        if (!slot->task->params.sampling.reasoning_control) {
+                            res->success = false;
+                            res->message = "reasoning control not enabled for this completion";
+                            queue_results.send(std::move(res));
+                            break;
+                        }
+                        // act on the live slot mid generation, never defer
+                        common_sampler_reasoning_budget_force(slot->smpl.get());
+                        res->success = true;
+                    } else {
+                        res->success = false;
+                        res->message = "unknown control action";
+                    }
+
+                    queue_results.send(std::move(res));
                 } break;
             case SERVER_TASK_TYPE_NEXT_RESPONSE:
                 {
@@ -4294,6 +4309,43 @@ void server_routes::init_routes() {
             body_parsed,
             files,
             TASK_RESPONSE_TYPE_OAI_CHAT);
+    };
+
+    this->post_control = [this](const server_http_req & req) {
+        auto res = create_response();
+        const json body = json::parse(req.body);
+
+        const std::string cmpl_id = json_value(body, "id", std::string());
+        const std::string action  = json_value(body, "action", std::string());
+        if (cmpl_id.empty()) {
+            res->error(format_error_response("missing completion id", ERROR_TYPE_INVALID_REQUEST));
+            return res;
+        }
+        if (action != "reasoning_end") {
+            res->error(format_error_response("unknown control action", ERROR_TYPE_INVALID_REQUEST));
+            return res;
+        }
+
+        auto & rd = res->rd;
+        {
+            server_task task(SERVER_TASK_TYPE_CONTROL);
+            task.id              = rd.get_new_id();
+            task.params.control_cmpl_id = cmpl_id;
+            task.params.control_action  = action;
+            rd.post_task(std::move(task));
+        }
+
+        auto result = rd.next(req.should_stop);
+        if (!result) {
+            GGML_ASSERT(req.should_stop());
+            return res;
+        }
+        if (result->is_error()) {
+            res->error(result->to_json());
+            return res;
+        }
+        res->ok(result->to_json());
+        return res;
     };
 
     this->post_responses_oai = [this](const server_http_req & req) {
