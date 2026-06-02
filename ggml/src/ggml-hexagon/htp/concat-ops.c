@@ -262,6 +262,8 @@ int op_concat(struct htp_ops_context * octx) {
 
         octx->src0_spad.data = octx->ctx->vtcm_base;
         octx->src1_spad.data = octx->src0_spad.data + octx->src0_spad.size;
+        octx->src0_spad.src  = NULL;
+        octx->src1_spad.src  = NULL;
 
         if (type_size == 4) {
             worker_func = concat_2d_f32_transposed;

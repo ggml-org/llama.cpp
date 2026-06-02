@@ -1927,6 +1927,7 @@ struct ggml_hexagon_opbatch {
         size_t extra_tens = 0;
 
         auto fit_tensor = [&](const ggml_tensor *t) {
+            if (!t) return;
             if (!t_map.count(t)) {
                 extra_tens++;
 
@@ -2600,6 +2601,27 @@ static bool ggml_hexagon_supported_mul_mat(const struct ggml_hexagon_session * s
         case GGML_TYPE_F16:
             if (src0->nb[1] < src0->nb[0]) {
                 GGML_LOG_DEBUG("ggml_hexagon_supported_mul_mat: permuted F16 src0 not supported\n");
+                return false;
+            }
+            if (src1->ne[2] < src0->ne[2] || src1->ne[3] < src0->ne[3]) {
+                GGML_LOG_DEBUG("ggml_hexagon_supported_mul_mat: src1 broadcasting not supported\n");
+                return false;
+            }
+            if (ggml_nrows(src1) > 1024) {
+                return false;  // no huge batches (for now)
+            }
+            break;
+
+        case GGML_TYPE_F32:
+            if (src1->type != GGML_TYPE_F32) {
+                return false;
+            }
+            if (src0->nb[1] < src0->nb[0]) {
+                GGML_LOG_DEBUG("ggml_hexagon_supported_mul_mat: permuted F32 src0 not supported\n");
+                return false;
+            }
+            if (src1->ne[2] < src0->ne[2] || src1->ne[3] < src0->ne[3]) {
+                GGML_LOG_DEBUG("ggml_hexagon_supported_mul_mat: src1 broadcasting not supported\n");
                 return false;
             }
             if (ggml_nrows(src1) > 1024) {
