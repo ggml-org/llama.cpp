@@ -79,17 +79,40 @@ OutputVector translate_rope(const NodeContext & context) {
         data_node = std::make_shared<ov::op::v0::Convert>(data_node, ov::element::f32);
     }
 
-    //if (mode == TYPE_NORMAL) {
-    if (mode == TYPE_NORMAL && !context.is_stateful()) {
-        // Stateless rank-4 path. Emit the Flux-style interleaved-RoPE pattern so the
-        // GPU plugin's RoPEFusionFlux matcher folds this subgraph into
-        // ov::op::internal::RoPE:
+    // TODO(openvino-gpu-rope-fusion): TEMPORARY WORKAROUND - do NOT revert until the
+    // OpenVINO GPU plugin is updated.
+    //
+    // For TYPE_NORMAL rope (both stateful and stateless) we emit the Flux-style
+    // interleaved pattern below so the GPU plugin's RoPEFusionFlux matcher folds it
+    // into ov::op::internal::RoPE. The matcher requires rank-4 inputs, which is why
+    // the original even/odd Slice translation (kept in the `else if (mode ==
+    // TYPE_NORMAL)` branch below for reference) does not get fused.
+    //
+    // Once the GPU plugin's RoPE fusion is extended to also recognize the original
+    // even/odd Slice form, this Flux rewrite should be removed and both modes should
+    // be restored to the captured even/odd translation. Until then, keep both paths:
+    // the active Flux rewrite here and the previous translation preserved below.
+    if (mode == TYPE_NORMAL) {
+        // Emit the Flux-style interleaved-RoPE pattern so the GPU plugin's
+        // RoPEFusionFlux matcher folds this subgraph into ov::op::internal::RoPE:
         //   x_paired   = Reshape(x, [1, S, n_heads, head_size/2, 2])
         //   x0, x1     = Split(x_paired, axis=-1, num_splits=2)
         //   x1_neg     = x1 * -1
         //   x_rotated  = Reshape(Concat([x1_neg, x0], axis=-1), [1, S, n_heads, head_size])
         //   y          = x * t_cos + x_rotated * t_sin
-        // Mathematically equivalent to the previous even/odd Slice form.
+        // Mathematically equivalent to the even/odd Slice form below.
+        //
+        // RoPEFusionFlux requires rank_equals(4) on x, t_cos and t_sin. The cos/sin
+        // tables are already built rank-4 ([1, S, 1, head_size/2]) for both modes. In
+        // stateful mode the data arrives rank-3 ([S, n_heads, head_size]), so lift it
+        // to rank-4 ([1, S, n_heads, head_size]) here. Stateful RoPE already produced
+        // rank-4 output, so downstream attention is unaffected.
+        if (context.is_stateful()) {
+            auto r4_shape = ov::op::v0::Constant::create(
+                ov::element::i64, {4},
+                std::vector<int64_t>{1, -1, (int64_t) output_shape[2], (int64_t) output_shape[3]});
+            data_node = std::make_shared<ov::op::v1::Reshape>(data_node, r4_shape, false);
+        }
         const int64_t head_size = static_cast<int64_t>(output_shape[3]);
         const int64_t n_heads   = static_cast<int64_t>(output_shape[2]);
         const int64_t half      = head_size / 2;
@@ -134,40 +157,47 @@ OutputVector translate_rope(const NodeContext & context) {
         auto y1 = std::make_shared<ov::op::v1::Multiply>(data_node, cos_full);
         auto y2 = std::make_shared<ov::op::v1::Multiply>(x_rotated, sin_full);
         res = std::make_shared<ov::op::v1::Add>(y1, y2);
-    } else if (mode == TYPE_NORMAL) {
-        // Stateful path keeps the original even/odd Slice form unchanged. Stateful's
-        // KV layout already lets the GPU plugin's KVCacheFusion + UnsqueezeBroadcast-
-        // ReshapeSDPAFusion handle GQA, so rewriting RoPE there is unnecessary and
-        // would require extra rank-3 / rank-4 plumbing.
-        auto neg_one = ov::op::v0::Constant::create(ov::element::i64, {1}, {-1});
-        auto zero = ov::op::v0::Constant::create(ov::element::i64, {1}, {0});
-        auto one = ov::op::v0::Constant::create(ov::element::i64, {1}, {1});
-        auto two = ov::op::v0::Constant::create(ov::element::i64, {1}, {2});
-        auto end = ov::op::v0::Constant::create(ov::element::i64, {1}, {output_shape[3]});
-        Output<Node> even_slice;
-        Output<Node> odd_slice;
-        //int32_t unsqueeze_dim = context.is_stateful() ? 3 : 4;
-        int32_t unsqueeze_dim = 3; // stateful: data is rank 3, so unsqueeze at axis 3
-        even_slice = std::make_shared<ov::op::v8::Slice>(data_node, zero, end, two, neg_one);
-        odd_slice = std::make_shared<ov::op::v8::Slice>(data_node, one, end, two, neg_one);
-
-        Output<Node> first_half =
-            std::make_shared<ov::op::v1::Subtract>(std::make_shared<ov::op::v1::Multiply>(even_slice, cos_theta_node),
-                                                   std::make_shared<ov::op::v1::Multiply>(odd_slice, sin_theta_node));
-        Output<Node> second_half =
-            std::make_shared<ov::op::v1::Add>(std::make_shared<ov::op::v1::Multiply>(even_slice, sin_theta_node),
-                                              std::make_shared<ov::op::v1::Multiply>(odd_slice, cos_theta_node));
-
-        first_half = std::make_shared<ov::op::v0::Unsqueeze>(first_half,
-                                                             ov::op::v0::Constant::create(ov::element::i64, {1}, {unsqueeze_dim}));
-        second_half = std::make_shared<ov::op::v0::Unsqueeze>(second_half,
-                                                              ov::op::v0::Constant::create(ov::element::i64, {1}, {unsqueeze_dim}));
-        auto stack = std::make_shared<ov::op::v0::Concat>(OutputVector{first_half, second_half}, unsqueeze_dim);
-
-        auto data_shape = ov::op::v0::Constant::create(
-            ov::element::i64, {4}, std::vector<int64_t>{1, -1, (int64_t) output_shape[2], (int64_t) output_shape[3]});
-        res = std::make_shared<ov::op::v1::Reshape>(stack, data_shape, false);
-    } else if (mode == TYPE_NEOX) {
+    }
+    // PRESERVED PREVIOUS TRANSLATION - Re-enable this branch (and remove the Flux branch above) once
+    // the GPU plugin's RoPE fusion is updated to recognize the even/odd Slice form;
+    // see the TODO(openvino-gpu-rope-fusion) note above. Do not delete.
+    //
+    // Original even/odd Slice form. In stateless mode it ran on rank-4 data
+    // ([1, S, n_heads, head_size]); in stateful mode on rank-3 data
+    // ([S, n_heads, head_size]). Either way it does not match RoPEFusionFlux
+    // (which needs rank-4 x in the interleaved layout), so the RoPE stays as
+    // discrete elementwise ops.
+    //
+    // } else if (mode == TYPE_NORMAL) {
+    //     auto neg_one = ov::op::v0::Constant::create(ov::element::i64, {1}, {-1});
+    //     auto zero = ov::op::v0::Constant::create(ov::element::i64, {1}, {0});
+    //     auto one = ov::op::v0::Constant::create(ov::element::i64, {1}, {1});
+    //     auto two = ov::op::v0::Constant::create(ov::element::i64, {1}, {2});
+    //     auto end = ov::op::v0::Constant::create(ov::element::i64, {1}, {output_shape[3]});
+    //     Output<Node> even_slice;
+    //     Output<Node> odd_slice;
+    //     // stateful data is rank 3 (unsqueeze at axis 3), stateless is rank 4 (axis 4)
+    //     int32_t unsqueeze_dim = context.is_stateful() ? 3 : 4;
+    //     even_slice = std::make_shared<ov::op::v8::Slice>(data_node, zero, end, two, neg_one);
+    //     odd_slice = std::make_shared<ov::op::v8::Slice>(data_node, one, end, two, neg_one);
+    //
+    //     Output<Node> first_half =
+    //         std::make_shared<ov::op::v1::Subtract>(std::make_shared<ov::op::v1::Multiply>(even_slice, cos_theta_node),
+    //                                                std::make_shared<ov::op::v1::Multiply>(odd_slice, sin_theta_node));
+    //     Output<Node> second_half =
+    //         std::make_shared<ov::op::v1::Add>(std::make_shared<ov::op::v1::Multiply>(even_slice, sin_theta_node),
+    //                                           std::make_shared<ov::op::v1::Multiply>(odd_slice, cos_theta_node));
+    //
+    //     first_half = std::make_shared<ov::op::v0::Unsqueeze>(first_half,
+    //                                                          ov::op::v0::Constant::create(ov::element::i64, {1}, {unsqueeze_dim}));
+    //     second_half = std::make_shared<ov::op::v0::Unsqueeze>(second_half,
+    //                                                           ov::op::v0::Constant::create(ov::element::i64, {1}, {unsqueeze_dim}));
+    //     auto stack = std::make_shared<ov::op::v0::Concat>(OutputVector{first_half, second_half}, unsqueeze_dim);
+    //
+    //     auto data_shape = ov::op::v0::Constant::create(
+    //         ov::element::i64, {4}, std::vector<int64_t>{1, -1, (int64_t) output_shape[2], (int64_t) output_shape[3]});
+    //     res = std::make_shared<ov::op::v1::Reshape>(stack, data_shape, false);
+    else if (mode == TYPE_NEOX) {
         auto data_split = std::make_shared<ov::op::v1::Split>(
             data_node, ov::op::v0::Constant::create(ov::element::i64, ov::Shape{}, {-1}), 2);
         Output<Node> slice_data_node_0 = data_split->outputs()[0];
