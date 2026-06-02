@@ -1724,10 +1724,23 @@ static common_chat_params common_chat_params_init_lfm2(const common_chat_templat
 //   Tool calls can appear multiple times (parallel tool calls supported)
 static common_chat_params common_chat_params_init_lfm2_5(const common_chat_template &    tmpl,
                                                          const autoparser::generation_params & inputs) {
+
+    auto is_8b_variant = tmpl.source().find("message.thinking") != std::string::npos;
+
+    auto adjusted_messages = inputs.messages;
+    if (is_8b_variant) {
+        // Copy reasoning to the "thinking" field as expected by the LFM2.5 8B A1B template
+        for (auto & msg : adjusted_messages) {
+            if (msg.contains("reasoning_content") && msg.at("reasoning_content").is_string()) {
+                msg["thinking"] = msg.at("reasoning_content");
+            }
+        }
+    }
+
     common_chat_params data;
 
-    data.prompt            = common_chat_template_direct_apply_impl(tmpl, inputs);
-    data.generation_prompt = common_chat_template_generation_prompt_impl(tmpl, inputs);
+    data.prompt            = common_chat_template_direct_apply_impl(tmpl, inputs, /* messages_override= */ adjusted_messages);
+    data.generation_prompt = common_chat_template_generation_prompt_impl(tmpl, inputs, /* messages_override= */ adjusted_messages);
     data.format            = COMMON_CHAT_FORMAT_PEG_NATIVE;
     data.supports_thinking = true;
     data.preserved_tokens  = {
