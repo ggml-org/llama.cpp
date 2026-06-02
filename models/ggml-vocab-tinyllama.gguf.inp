@@ -1,0 +1,23 @@
+abc</s> def ghi
+__ggml_vocab_test__
+</s> XML
+__ggml_vocab_test__
+X</s> Y
+__ggml_vocab_test__
+a</s>b
+__ggml_vocab_test__
+a</s> b
+__ggml_vocab_test__
+a</s>  b
+__ggml_vocab_test__
+a</s>
+b
+__ggml_vocab_test__
+def ghi
+__ggml_vocab_test__
+ def ghi
+__ggml_vocab_test__
+ghi
+__ggml_vocab_test__
+ ghi
+__ggml_vocab_test__

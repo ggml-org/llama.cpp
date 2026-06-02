@@ -135,8 +135,17 @@ int main(int argc, char **argv) {
     const std::string fname_out = fname + ".out";
 
     std::string fname_text;
-    if (argc > 2) {
-        fname_text = argv[2];
+    bool parse_special = false;
+    for (int i = 2; i < argc; ++i) {
+        const std::string arg = argv[i];
+        if (arg == "--parse-special") {
+            parse_special = true;
+        } else if (fname_text.empty()) {
+            fname_text = arg;
+        } else {
+            fprintf(stderr, "Usage: %s vocab-file [text-file] [--parse-special]\n", argv[0]);
+            return 1;
+        }
     }
 
     fprintf(stderr, "%s : reading vocab from: '%s'\n", __func__, fname.c_str());
@@ -202,7 +211,7 @@ int main(int argc, char **argv) {
     for (int i = 0; i < nthread; i++) {
         threads[i] = std::thread([&, i]() {
             for (const auto & test_kv : k_tests) {
-                const std::vector<llama_token> res = common_tokenize(ctx, test_kv.first, add_special, false);
+                const std::vector<llama_token> res = common_tokenize(ctx, test_kv.first, add_special, parse_special);
 
                 // here only print the result of the first thread
                 // because the other threads are running the same tests
@@ -273,7 +282,7 @@ int main(int argc, char **argv) {
         {
             const auto t_start = ggml_time_us();
 
-            res = common_tokenize(ctx, text, add_special, false);
+            res = common_tokenize(ctx, text, add_special, parse_special);
 
             const auto t_end = ggml_time_us();
 

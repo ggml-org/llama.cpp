@@ -96,6 +96,9 @@ static_assert(std::is_trivially_copyable<llm_symbol>::value, "llm_symbol is not 
 struct llm_bigram_spm {
     struct comparator {
         bool operator()(llm_bigram_spm & l, llm_bigram_spm & r) {
+            if (l.rank >= 0 || r.rank >= 0) {
+                return (l.rank > r.rank) || (l.rank == r.rank && l.left > r.left);
+            }
             return (l.score < r.score) || (l.score == r.score && l.left > r.left);
         }
     };
@@ -104,6 +107,7 @@ struct llm_bigram_spm {
     llm_symbol::index left;
     llm_symbol::index right;
     float score;
+    int rank;
     size_t size;
 };
 
@@ -112,7 +116,7 @@ struct llm_tokenizer_spm : llm_tokenizer {
 };
 
 struct llm_tokenizer_spm_session {
-    llm_tokenizer_spm_session(const llama_vocab & vocab) : vocab(vocab) {}
+    llm_tokenizer_spm_session(const llama_vocab & vocab) : vocab(vocab), use_merges(vocab.has_bpe_ranks()) {}
 
     void tokenize(const std::string & text, std::vector<llama_token> & output) {
         // split string into utf8 chars
@@ -203,7 +207,18 @@ private:
         if (left == -1 || right == -1) {
             return;
         }
-        const std::string text = std::string(symbols[left].text, symbols[left].n + symbols[right].n);
+        const std::string left_token  = std::string(symbols[left].text,  symbols[left].n);
+        const std::string right_token = std::string(symbols[right].text, symbols[right].n);
+        const std::string text = left_token + right_token;
+
+        int rank = -1;
+        if (use_merges) {
+            rank = vocab.find_bpe_rank(left_token, right_token);
+            if (rank < 0) {
+                return;
+            }
+        }
+
         auto token = vocab.text_to_token(text);
 
         if (token == LLAMA_TOKEN_NULL) {
@@ -220,6 +235,7 @@ private:
         bigram.left  = left;
         bigram.right = right;
         bigram.score = tok_data.score;
+        bigram.rank  = rank;
         bigram.size  = text.size();
 
         work_queue.push(bigram);
@@ -229,6 +245,7 @@ private:
     }
 
     const llama_vocab & vocab;
+    const bool use_merges;
     // currently unused
     // const llm_tokenizer_spm * spm_tokenizer;
 
@@ -1917,6 +1934,28 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
 
         if (tokenizer_model == "llama") {
             type = LLAMA_VOCAB_TYPE_SPM;
+
+            // Some tokenizer.json-derived LLaMA tokenizers are stored as "llama"
+            // but use BPE merge ranks rather than SentencePiece scores.
+            const int merges_keyidx = gguf_find_key(ctx, kv(LLM_KV_TOKENIZER_MERGES).c_str());
+            if (merges_keyidx != -1) {
+                const int n_merges = gguf_get_arr_n(ctx, merges_keyidx);
+                for (int i = 0; i < n_merges; i++) {
+                    const std::string word = gguf_get_arr_str(ctx, merges_keyidx, i);
+
+                    std::string first;
+                    std::string second;
+
+                    const size_t pos = word.find(' ', 1);
+
+                    if (pos != std::string::npos) {
+                        first  = word.substr(0, pos);
+                        second = word.substr(pos + 1);
+                    }
+
+                    bpe_ranks.emplace(std::make_pair(first, second), i);
+                }
+            }
 
             // default special tokens
             special_bos_id  = 1;
@@ -3944,6 +3983,10 @@ bool llama_vocab::get_normalizer_lowercase() const {
 
 int llama_vocab::max_token_len() const {
     return pimpl->max_token_len;
+}
+
+bool llama_vocab::has_bpe_ranks() const {
+    return !pimpl->bpe_ranks.empty();
 }
 
 int llama_vocab::find_bpe_rank(const std::string & token_left, const std::string & token_right) const {

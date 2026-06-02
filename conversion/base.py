@@ -1808,7 +1808,7 @@ class TextModel(ModelBase):
         self.gguf_writer.add_token_scores(scores)
         self.gguf_writer.add_token_types(toktypes)
 
-        special_vocab = gguf.SpecialVocab(self.dir_model, n_vocab=len(tokens))
+        special_vocab = gguf.SpecialVocab(self.dir_model, load_merges=True, n_vocab=len(tokens))
         special_vocab.add_to_gguf(self.gguf_writer)
 
     def _create_vocab_sentencepiece(self):
