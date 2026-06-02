@@ -271,6 +271,7 @@ task_params server_task::params_from_json_cmpl(
     params.n_discard        = json_value(data,       "n_discard",          defaults.n_discard);
     params.n_discard        = std::max(0, params.n_discard);
     params.n_cmpl           = json_value(data,       "n_cmpl",             json_value(data, "n", 1));
+    params.n_cmpl           = std::max(1, std::min(params.n_cmpl, params_base.n_parallel));
     params.n_cache_reuse    = json_value(data,       "n_cache_reuse",      defaults.n_cache_reuse);
     //params.t_max_prompt_ms  = json_value(data,       "t_max_prompt_ms",    defaults.t_max_prompt_ms); // TODO: implement
     params.t_max_predict_ms = json_value(data,       "t_max_predict_ms",   defaults.t_max_predict_ms);
@@ -353,6 +354,10 @@ task_params server_task::params_from_json_cmpl(
 
     if (params.sampling.dry_penalty_last_n < -1) {
         throw std::runtime_error("Error: dry_penalty_last_n must be >= -1");
+    }
+
+    if (params.sampling.dry_allowed_length < 0) {
+        throw std::runtime_error("Error: dry_allowed_length must be >= 0");
     }
 
     if (params.sampling.penalty_last_n == -1) {

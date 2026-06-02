@@ -1757,6 +1757,9 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         {"--dry-allowed-length"}, "N",
         string_format("set allowed length for DRY sampling (default: %d)", params.sampling.dry_allowed_length),
         [](common_params & params, int value) {
+            if (value < 0) {
+                throw std::runtime_error(string_format("error: invalid dry-allowed-length = %d\n", value));
+            }
             params.sampling.dry_allowed_length = value;
         }
     ).set_sampling());

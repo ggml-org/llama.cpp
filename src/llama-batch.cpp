@@ -885,6 +885,22 @@ struct llama_batch llama_batch_init(int32_t n_tokens_alloc, int32_t embd, int32_
         /*logits   =*/ nullptr,
     };
 
+    if (n_tokens_alloc <= 0 || n_seq_max <= 0 || embd < 0) {
+        LLAMA_LOG_ERROR("%s: invalid parameters: n_tokens_alloc=%d, embd=%d, n_seq_max=%d\n",
+            __func__, n_tokens_alloc, embd, n_seq_max);
+        return batch;
+    }
+
+    if (embd > 0 && (size_t)n_tokens_alloc > SIZE_MAX / sizeof(float) / (size_t)embd) {
+        LLAMA_LOG_ERROR("%s: overflow in embd allocation size\n", __func__);
+        return batch;
+    }
+
+    if ((size_t)n_seq_max > SIZE_MAX / sizeof(llama_seq_id)) {
+        LLAMA_LOG_ERROR("%s: overflow in seq_id allocation size\n", __func__);
+        return batch;
+    }
+
     if (embd) {
         batch.embd = (float *) malloc(sizeof(float) * n_tokens_alloc * embd);
     } else {

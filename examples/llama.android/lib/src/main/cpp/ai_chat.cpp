@@ -2,6 +2,7 @@
 #include <jni.h>
 #include <iomanip>
 #include <cmath>
+#include <mutex>
 #include <string>
 #include <unistd.h>
 #include <sampling.h>
@@ -33,6 +34,7 @@ constexpr int   OVERFLOW_HEADROOM       = 4;
 constexpr int   BATCH_SIZE              = 512;
 constexpr float DEFAULT_SAMPLER_TEMP    = 0.3f;
 
+static std::mutex                         g_mutex;
 static llama_model                      * g_model;
 static llama_context                    * g_context;
 static llama_batch                        g_batch;
@@ -42,7 +44,7 @@ static common_sampler                   * g_sampler;
 extern "C"
 JNIEXPORT void JNICALL
 Java_com_arm_aichat_internal_InferenceEngineImpl_init(JNIEnv *env, jobject /*unused*/, jstring nativeLibDir) {
-    // Set llama log handler to Android
+    std::lock_guard<std::mutex> lock(g_mutex);
     llama_log_set(aichat_android_log_callback, nullptr);
 
     // Loading all CPU backend variants
@@ -59,6 +61,7 @@ Java_com_arm_aichat_internal_InferenceEngineImpl_init(JNIEnv *env, jobject /*unu
 extern "C"
 JNIEXPORT jint JNICALL
 Java_com_arm_aichat_internal_InferenceEngineImpl_load(JNIEnv *env, jobject, jstring jmodel_path) {
+    std::lock_guard<std::mutex> lock(g_mutex);
     llama_model_params model_params = llama_model_default_params();
 
     const auto *model_path = env->GetStringUTFChars(jmodel_path, 0);
@@ -113,6 +116,7 @@ static common_sampler *new_sampler(float temp) {
 extern "C"
 JNIEXPORT jint JNICALL
 Java_com_arm_aichat_internal_InferenceEngineImpl_prepare(JNIEnv * /*env*/, jobject /*unused*/) {
+    std::lock_guard<std::mutex> lock(g_mutex);
     auto *context = init_context(g_model);
     if (!context) { return 1; }
     g_context = context;
@@ -137,6 +141,7 @@ static std::string get_backend() {
 extern "C"
 JNIEXPORT jstring JNICALL
 Java_com_arm_aichat_internal_InferenceEngineImpl_systemInfo(JNIEnv *env, jobject /*unused*/) {
+    std::lock_guard<std::mutex> lock(g_mutex);
     return env->NewStringUTF(llama_print_system_info());
 }
 
@@ -144,6 +149,7 @@ extern "C"
 JNIEXPORT jstring JNICALL
 Java_com_arm_aichat_internal_InferenceEngineImpl_benchModel(JNIEnv *env, jobject /*unused*/, jint pp, jint tg,
                                                       jint pl, jint nr) {
+    std::lock_guard<std::mutex> lock(g_mutex);
     auto *context = init_context(g_model, pp);
     if (!context) {
         const auto *const err_msg = "Fail to init_context! Bench aborted.";
@@ -357,7 +363,7 @@ Java_com_arm_aichat_internal_InferenceEngineImpl_processSystemPrompt(
         jobject /*unused*/,
         jstring jsystem_prompt
 ) {
-    // Reset long-term & short-term states
+    std::lock_guard<std::mutex> lock(g_mutex);
     reset_long_term_states();
     reset_short_term_states();
 
@@ -407,7 +413,7 @@ Java_com_arm_aichat_internal_InferenceEngineImpl_processUserPrompt(
         jstring juser_prompt,
         jint n_predict
 ) {
-    // Reset short-term states
+    std::lock_guard<std::mutex> lock(g_mutex);
     reset_short_term_states();
 
     // Obtain and tokenize user prompt
@@ -489,7 +495,7 @@ Java_com_arm_aichat_internal_InferenceEngineImpl_generateNextToken(
         JNIEnv *env,
         jobject /*unused*/
 ) {
-    // Infinite text generation via context shifting
+    std::lock_guard<std::mutex> lock(g_mutex);
     if (current_position >= DEFAULT_CONTEXT_SIZE - OVERFLOW_HEADROOM) {
         LOGw("%s: Context full! Shifting...", __func__);
         shift_context();
@@ -546,20 +552,23 @@ Java_com_arm_aichat_internal_InferenceEngineImpl_generateNextToken(
 extern "C"
 JNIEXPORT void JNICALL
 Java_com_arm_aichat_internal_InferenceEngineImpl_unload(JNIEnv * /*unused*/, jobject /*unused*/) {
-    // Reset long-term & short-term states
+    std::lock_guard<std::mutex> lock(g_mutex);
     reset_long_term_states();
     reset_short_term_states();
 
-    // Free up resources
     common_sampler_free(g_sampler);
+    g_sampler = nullptr;
     g_chat_templates.reset();
     llama_batch_free(g_batch);
     llama_free(g_context);
+    g_context = nullptr;
     llama_model_free(g_model);
+    g_model = nullptr;
 }
 
 extern "C"
 JNIEXPORT void JNICALL
 Java_com_arm_aichat_internal_InferenceEngineImpl_shutdown(JNIEnv *, jobject /*unused*/) {
+    std::lock_guard<std::mutex> lock(g_mutex);
     llama_backend_free();
 }

@@ -2253,12 +2253,20 @@ bool llama_kv_cache::state_read_data(llama_io_read_i & io, uint32_t strm, uint32
 
         if (cell_count) {
             if (sinfo.is_contiguous()) {
-                // Fast path: contiguous cells, single memcpy
-                io.read_tensor(k, sinfo.head() * k_size_row, cell_count * k_size_row);
+                const size_t write_offset = (size_t)sinfo.head() * k_size_row;
+                const size_t write_size   = (size_t)cell_count * k_size_row;
+                if (write_size / k_size_row != cell_count || write_offset + write_size > ggml_nbytes(k)) {
+                    LLAMA_LOG_ERROR("%s: key write would overflow tensor buffer (layer %d)\n", __func__, il);
+                    return false;
+                }
+                io.read_tensor(k, write_offset, write_size);
             } else {
-                // Slow path: scatter to non-contiguous positions
                 for (uint32_t i = 0; i < cell_count; ++i) {
                     const size_t dst_offset = sinfo.idxs[0][i] * k_size_row;
+                    if (dst_offset + k_size_row > ggml_nbytes(k)) {
+                        LLAMA_LOG_ERROR("%s: key scatter write out of bounds (layer %d)\n", __func__, il);
+                        return false;
+                    }
                     io.read_tensor(k, dst_offset, k_size_row);
                 }
             }
@@ -2296,12 +2304,20 @@ bool llama_kv_cache::state_read_data(llama_io_read_i & io, uint32_t strm, uint32
 
             if (cell_count) {
                 if (sinfo.is_contiguous()) {
-                    // Fast path: contiguous cells, single memcpy
-                    io.read_tensor(v, sinfo.head() * v_size_row, cell_count * v_size_row);
+                    const size_t write_offset = (size_t)sinfo.head() * v_size_row;
+                    const size_t write_size   = (size_t)cell_count * v_size_row;
+                    if (write_size / v_size_row != cell_count || write_offset + write_size > ggml_nbytes(v)) {
+                        LLAMA_LOG_ERROR("%s: value write would overflow tensor buffer (layer %d)\n", __func__, il);
+                        return false;
+                    }
+                    io.read_tensor(v, write_offset, write_size);
                 } else {
-                    // Slow path: scatter to non-contiguous positions
                     for (uint32_t i = 0; i < cell_count; ++i) {
                         const size_t dst_offset = sinfo.idxs[0][i] * v_size_row;
+                        if (dst_offset + v_size_row > ggml_nbytes(v)) {
+                            LLAMA_LOG_ERROR("%s: value scatter write out of bounds (layer %d)\n", __func__, il);
+                            return false;
+                        }
                         io.read_tensor(v, dst_offset, v_size_row);
                     }
                 }
@@ -2346,18 +2362,30 @@ bool llama_kv_cache::state_read_data(llama_io_read_i & io, uint32_t strm, uint32
             }
 
             if (cell_count) {
+                const size_t v_nbytes = ggml_nbytes(v);
                 if (sinfo.is_contiguous()) {
-                    // Fast path: contiguous cells
                     const uint32_t h = sinfo.head();
+                    const size_t write_size = (size_t)cell_count * v_size_el;
+                    if (write_size / v_size_el != cell_count) {
+                        LLAMA_LOG_ERROR("%s: overflow in transposed value write size (layer %d)\n", __func__, il);
+                        return false;
+                    }
                     for (uint32_t j = 0; j < n_embd_v_gqa; ++j) {
                         const size_t dst_offset = (h + j * cells.size()) * v_size_el;
-                        io.read_tensor(v, dst_offset, cell_count * v_size_el);
+                        if (dst_offset + write_size > v_nbytes) {
+                            LLAMA_LOG_ERROR("%s: transposed value write would overflow tensor buffer (layer %d)\n", __func__, il);
+                            return false;
+                        }
+                        io.read_tensor(v, dst_offset, write_size);
                     }
                 } else {
-                    // Slow path: scatter to non-contiguous positions
                     for (uint32_t j = 0; j < n_embd_v_gqa; ++j) {
                         for (uint32_t i = 0; i < cell_count; ++i) {
                             const size_t dst_offset = (sinfo.idxs[0][i] + j * cells.size()) * v_size_el;
+                            if (dst_offset + v_size_el > v_nbytes) {
+                                LLAMA_LOG_ERROR("%s: transposed value scatter write out of bounds (layer %d)\n", __func__, il);
+                                return false;
+                            }
                             io.read_tensor(v, dst_offset, v_size_el);
                         }
                     }

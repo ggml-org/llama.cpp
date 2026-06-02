@@ -2,6 +2,7 @@
 
 #include "server-task.h"
 
+#include <atomic>
 #include <condition_variable>
 #include <deque>
 #include <mutex>
@@ -17,6 +18,10 @@ private:
     bool sleeping = false;
     bool req_stop_sleeping = false;
     int64_t time_last_task = 0;
+
+    std::atomic<int> n_active_requests{0};
+
+    int max_pending_tasks = 0;
 
     // queues
     std::deque<server_task> queue_tasks;
@@ -49,7 +54,10 @@ public:
 
     // if sleeping, request exiting sleep state and wait until it is done
     // returns immediately if not sleeping
+    // note: increments n_active_requests, pair with release_active_request()
     void wait_until_no_sleep();
+
+    void release_active_request();
 
     bool is_sleeping() {
         std::unique_lock<std::mutex> lock(mutex_tasks);

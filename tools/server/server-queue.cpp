@@ -22,6 +22,9 @@
 int server_queue::post(server_task && task, bool front) {
     std::unique_lock<std::mutex> lock(mutex_tasks);
     GGML_ASSERT(task.id != -1);
+    if (max_pending_tasks > 0 && (int)queue_tasks.size() >= max_pending_tasks) {
+        throw std::runtime_error("server is overloaded, too many pending tasks");
+    }
     // if this is cancel task make sure to clean up pending tasks
     if (task.type == SERVER_TASK_TYPE_CANCEL) {
         cleanup_pending_task(task.id_target);
@@ -102,6 +105,7 @@ void server_queue::pop_deferred_task(int id_slot) {
 void server_queue::wait_until_no_sleep() {
     std::unique_lock<std::mutex> lock(mutex_tasks);
     if (!sleeping) {
+        n_active_requests.fetch_add(1);
         return;
     } else {
         if (!req_stop_sleeping) {
@@ -113,7 +117,12 @@ void server_queue::wait_until_no_sleep() {
         condition_tasks.wait(lock, [&]{
             return !sleeping;
         });
+        n_active_requests.fetch_add(1);
     }
+}
+
+void server_queue::release_active_request() {
+    n_active_requests.fetch_sub(1);
 }
 
 void server_queue::terminate() {
@@ -174,8 +183,7 @@ void server_queue::start_loop(int64_t idle_sleep_ms) {
                 break; // go back to process new tasks or terminate
             }
 
-            // no tasks, check for sleeping state
-            if (should_sleep()) {
+            if (should_sleep() && n_active_requests.load() == 0) {
                 QUE_INF("%s", "entering sleeping state\n");
                 sleeping = true;
                 callback_sleeping_state(true);
