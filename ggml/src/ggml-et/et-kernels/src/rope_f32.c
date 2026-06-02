@@ -53,8 +53,7 @@ struct ggml_et_rope_params {
 // Existing scalar helpers
 //------------------------------------------------------------------------------
 
-// floor/ceil with ±inf and NaN passthrough (matches IEEE floorf/ceilf semantics).
-// Plain (int) cast is undefined for inf/NaN and would yield garbage.
+// floor/ceil with ±inf and NaN passthrough.
 static inline float rope_floorf(float x) {
     union { float f; uint32_t u; } v = { .f = x };
     const uint32_t expo = (v.u >> 23) & 0xFF;
@@ -82,9 +81,7 @@ static inline float rope_yarn_ramp(const float low, const float high, const int 
     return 1.0f - clamped;
 }
 
-// Matches CPU reference (ggml.c:ggml_rope_yarn_corr_dim):
-//   corr_dim(n_rot) = n_dims * log(n_ctx_orig / (n_rot * 2π)) / (2 * log(base))
-// (numerator uses n_rot*2π, denominator uses log(base), not log(n_rot)).
+// Matches CPU reference (ggml_rope_yarn_corr_dim).
 static inline float rope_yarn_corr_dim(int n_dims, int n_ctx_orig, float beta, float freq_base) {
     return (float)n_dims * et_fdiv(et_logf(et_fdiv((float)n_ctx_orig, beta * ROPE_TWO_PI)),
                                    2.0f * et_logf(freq_base));

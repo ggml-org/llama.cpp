@@ -7,17 +7,8 @@
 //   ids: I32 [n_expert_used, batch]
 //   C: F32   [M, n_expert_used, batch]
 //
-// Strategy:
-//   - All harts active (no even-only restriction).
-//   - Output space (m, slot, batch) is laid out in `m`-major order. Each hart
-//     owns a contiguous chunk so neighbouring `m`s of the same (slot, batch)
-//     map to the same hart. This keeps the (expert_id, B-column) lookup
-//     out of the inner loop and unlocks the 2-row x2 dot that amortizes
-//     one B load across two output rows.
-//   - For (slot, batch) runs of length >=2 inside a hart's range, the
-//     paired-row asm dot (`q4_dot_compute_x2_aligned`) is used when nb01 is
-//     32-byte aligned (always true for Q4_0 with K % 512 == 0). Otherwise
-//     and at run tails, single-row `q4_dot_compute` is used.
+// Strategy: All harts active. Flat m-major output partition allows amortized
+// expert lookups and 2-row x2 dot products.
 //******************************************************************************
 
 #include <stdint.h>
@@ -96,7 +87,6 @@ int entry_point(struct ggml_et_mul_mat_id_params* params, void* env) {
     }
 
     // Even partition: hart h owns outputs [h*chunk, (h+1)*chunk).
-    // chunk = ceil(total / num_threads) so the last hart may be short.
     const uint64_t chunk   = (total_outputs + (uint64_t)num_threads - 1) / (uint64_t)num_threads;
     const uint64_t my_start = (uint64_t)thread_id * chunk;
     if (my_start >= total_outputs) {
@@ -155,8 +145,7 @@ int entry_point(struct ggml_et_mul_mat_id_params* params, void* env) {
         int64_t m = m0;
         int64_t left = run_len;
 
-        // Paired-row dots: each call processes 2 adjacent rows sharing one B
-        // load. Halves B bandwidth for runs of length >= 2.
+        // Paired-row dots: halves B bandwidth for runs >= 2.
         if (use_x2) {
             while (left >= 2) {
                 const block_q4_0* row0 = (const block_q4_0*)(expert_base + m       * (int64_t)nb01);
