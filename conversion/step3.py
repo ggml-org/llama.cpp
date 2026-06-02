@@ -15,7 +15,7 @@ from .base import MmprojModel, ModelBase, TextModel, _MISTRAL_COMMON_DATASET_MEA
 from .qwen import Qwen3Model
 
 
-@ModelBase.register("StepVLForConditionalGeneration")
+@ModelBase.register("StepVLForConditionalGeneration", "Step3p7ForConditionalGeneration")
 class Step3VLVisionModel(MmprojModel):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -95,7 +95,7 @@ class Step3VLTextModel(Qwen3Model):
     model_arch = gguf.MODEL_ARCH.QWEN3
 
 
-@ModelBase.register("Step3p5ForCausalLM")
+@ModelBase.register("Step3p5ForCausalLM", "Step3p7ForConditionalGeneration")
 class Step35Model(TextModel):
     model_arch = gguf.MODEL_ARCH.STEP35
 
@@ -203,11 +203,23 @@ class Step35Model(TextModel):
         if isinstance(rope_theta, list):
             rope_theta = rope_theta[0]
         base = float(rope_theta)
-        if (dim := self.hparams.get("head_dim")) is None:
-            dim = self.hparams["hidden_size"] // self.hparams["num_attention_heads"]
-        dim = int(dim)
 
-        freqs = 1.0 / (base ** (torch.arange(0, dim, 2, dtype=torch.float32) / dim))
+        if (storage_dim := self.hparams.get("head_dim")) is None:
+            storage_dim = self.hparams["hidden_size"] // self.hparams["num_attention_heads"]
+        storage_dim = int(storage_dim)
+
+        # Llama 3 factors apply only to the rotary dims used by full_attention layers
+        # (partial_rotary_factor * head_dim). Remaining slots are padded with 1.0 so
+        # sliding_attention layers remain unaffected. set_gguf_parameters already
+        # guarantees at least one full_attention layer.
+        layer_types = (self.hparams.get("layer_types") or [])[: self.block_count]
+        partial_rotary_factors = (self.hparams.get("partial_rotary_factors") or [])[: self.block_count]
+        full_attention_factor = next(
+            float(f) for lt, f in zip(layer_types, partial_rotary_factors) if lt == "full_attention"
+        )
+        rotary_dim = int(storage_dim * full_attention_factor)
+
+        freqs = 1.0 / (base ** (torch.arange(0, rotary_dim, 2, dtype=torch.float32) / rotary_dim))
 
         factor = float(rope_params.get("factor", 8.0))
         low_freq_factor = float(rope_params.get("low_freq_factor", 1.0))
@@ -227,5 +239,9 @@ class Step35Model(TextModel):
             else:
                 smooth = (old_context_len / wavelen - low_freq_factor) / (high_freq_factor - low_freq_factor)
                 rope_factors.append(1.0 / ((1.0 - smooth) / factor + smooth))
+
+        # Pad to head_dim/2 with 1.0 so non-scaled layers remain neutral.
+        if len(rope_factors) < storage_dim // 2:
+            rope_factors.extend([1.0] * (storage_dim // 2 - len(rope_factors)))
 
         yield (self.format_tensor_name(gguf.MODEL_TENSOR.ROPE_FREQS), torch.tensor(rope_factors, dtype=torch.float32))
