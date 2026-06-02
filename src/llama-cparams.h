@@ -46,6 +46,7 @@ struct llama_cparams {
 
     enum llama_context_type ctx_type;
     enum llama_pooling_type pooling_type;
+    enum llama_pipeline_parallelism pp;
 
     ggml_backend_sched_eval_callback cb_eval;
     void * cb_eval_user_data;

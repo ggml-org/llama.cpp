@@ -203,6 +203,12 @@ extern "C" {
         LLAMA_CONTEXT_TYPE_MTP     = 1,
     };
 
+    enum llama_pipeline_parallelism {
+        LLAMA_PIPELINE_PARALLELISM_AUTO     = -1,
+        LLAMA_PIPELINE_PARALLELISM_DISABLED = 0,
+        LLAMA_PIPELINE_PARALLELISM_ENABLED  = 1,
+    };
+
     // TODO: simplify (https://github.com/ggml-org/llama.cpp/pull/9294#pullrequestreview-2286561979)
     typedef struct llama_token_data {
         llama_token id; // token id
@@ -348,6 +354,7 @@ extern "C" {
         enum llama_pooling_type      pooling_type;      // whether to pool (sum) embedding results by sequence id
         enum llama_attention_type    attention_type;    // attention type to use for embeddings
         enum llama_flash_attn_type   flash_attn_type;   // when to enable Flash Attention
+        enum llama_pipeline_parallelism pp;             // force enable/disable pipeline parallelism
 
         // ref: https://github.com/ggml-org/llama.cpp/pull/2054
         float    rope_freq_base;   // RoPE base frequency, 0 = from model

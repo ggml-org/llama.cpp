@@ -189,6 +189,7 @@ llama_context::llama_context(
 
     // initialized later
     cparams.pipeline_parallel = false;
+    cparams.pp = params.pp;
 
     {
         const char * LLAMA_GRAPH_REUSE_DISABLE = getenv("LLAMA_GRAPH_REUSE_DISABLE");
@@ -230,6 +231,7 @@ llama_context::llama_context(
     LLAMA_LOG_INFO("%s: freq_scale    = %g\n",   __func__, cparams.rope_freq_scale);
     LLAMA_LOG_INFO("%s: n_rs_seq      = %u\n",   __func__, cparams.n_rs_seq);
     LLAMA_LOG_INFO("%s: n_outputs_max = %u\n",   __func__, cparams.n_outputs_max);
+    LLAMA_LOG_INFO("%s: pp            = %u\n",   __func__, cparams.pp);
 
     if (cparams.n_ctx_seq < hparams.n_ctx_train) {
         LLAMA_LOG_WARN("%s: n_ctx_seq (%u) < n_ctx_train (%u) -- the full capacity of the model will not be utilized\n",
@@ -365,10 +367,16 @@ llama_context::llama_context(
             }
         }
 
+        if (cparams.pp == LLAMA_PIPELINE_PARALLELISM_DISABLED) {
+            pipeline_parallel = false;
+        }
+
         cparams.pipeline_parallel = pipeline_parallel;
 
         if (cparams.pipeline_parallel) {
             LLAMA_LOG_INFO("%s: pipeline parallelism enabled\n", __func__);
+        } else {
+            LLAMA_LOG_INFO("%s: pipeline parallelism disabled\n", __func__);
         }
 
         sched_reserve();
@@ -588,6 +596,9 @@ void llama_context::sched_reserve() {
                 model.hparams.no_alloc, model.hparams.no_alloc ? backend_buf_exp_size.data() : nullptr);
         if (!gf) {
             if (cparams.pipeline_parallel) {
+                if (cparams.pp == LLAMA_PIPELINE_PARALLELISM_ENABLED) {
+                    throw std::runtime_error("compute buffer allocation with pipeline parallelism failed");
+                }
                 LLAMA_LOG_WARN("%s: compute buffer allocation failed, retrying without pipeline parallelism\n", __func__);
                 cparams.pipeline_parallel = false;
                 sched.reset(ggml_backend_sched_new(backend_ptrs.data(), backend_buft.data(), backend_ptrs.size(), max_nodes, false, cparams.op_offload));
@@ -3352,6 +3363,7 @@ llama_context_params llama_context_default_params() {
         /*.pooling_type                =*/ LLAMA_POOLING_TYPE_UNSPECIFIED,
         /*.attention_type              =*/ LLAMA_ATTENTION_TYPE_UNSPECIFIED,
         /*.flash_attn_type             =*/ LLAMA_FLASH_ATTN_TYPE_AUTO,
+        /*.pp                          =*/ LLAMA_PIPELINE_PARALLELISM_AUTO,
         /*.rope_freq_base              =*/ 0.0f,
         /*.rope_freq_scale             =*/ 0.0f,
         /*.yarn_ext_factor             =*/ -1.0f,

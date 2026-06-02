@@ -1390,6 +1390,22 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
                            }
                        }).set_env("LLAMA_ARG_FLASH_ATTN"));
     add_opt(common_arg(
+        {"-pp", "--pipeline-parallelism"}, "[on|off|auto]",
+        "set pipeline parallelism ('on', 'off', or 'auto', default: 'auto')",
+        [](common_params & params, const std::string & value) {
+            if (is_truthy(value)) {
+                params.pp = LLAMA_PIPELINE_PARALLELISM_ENABLED;
+            } else if (is_falsey(value)) {
+                params.pp = LLAMA_PIPELINE_PARALLELISM_DISABLED;
+            } else if (is_autoy(value)) {
+                params.pp = LLAMA_PIPELINE_PARALLELISM_AUTO;
+            } else {
+                throw std::runtime_error(
+                    string_format("error: unknown value for --pipeline-parallelism: '%s'\n", value.c_str()));
+            }
+        }
+    ).set_env("LLAMA_ARG_PIPELINE_PARALLELISM"));
+    add_opt(common_arg(
         {"-p", "--prompt"}, "PROMPT",
         "prompt to start generation with; for system message, use -sys",
         [](common_params & params, const std::string & value) {
