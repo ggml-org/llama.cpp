@@ -3796,6 +3796,14 @@ bool llama_memory_can_shift(llama_memory_t mem) {
     return mem->get_can_shift();
 }
 
+llama_memory_kv_cache_stats llama_memory_get_kv_cache_stats(llama_memory_t mem) {
+    if (!mem) {
+        return {};
+    }
+
+    return mem->get_kv_cache_stats();
+}
+
 // llama state API
 
 // deprecated

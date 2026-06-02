@@ -1104,6 +1104,17 @@ bool llama_kv_cache::get_can_shift() const {
     return true;
 }
 
+llama_memory_kv_cache_stats llama_kv_cache::get_kv_cache_stats() const {
+    llama_memory_kv_cache_stats stats = {};
+
+    for (const auto & cells : v_cells) {
+        stats.used_cells  += cells.get_used();
+        stats.total_cells += cells.size();
+    }
+
+    return stats;
+}
+
 uint32_t llama_kv_cache::get_size() const {
     const auto & cells = v_cells[seq_to_stream[0]];
 

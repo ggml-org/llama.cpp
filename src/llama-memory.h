@@ -95,6 +95,7 @@ struct llama_memory_i {
 
     // getters
     virtual bool get_can_shift() const = 0;
+    virtual llama_memory_kv_cache_stats get_kv_cache_stats() const = 0;
 
     //
     // ops
