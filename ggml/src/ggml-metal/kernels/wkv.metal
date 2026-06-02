@@ -1,4 +1,4 @@
- #include "common.h"
+#include "common.h"
 
 kernel void kernel_rwkv_wkv6_f32(
     device const float * k,

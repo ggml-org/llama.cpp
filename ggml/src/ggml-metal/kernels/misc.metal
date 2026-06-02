@@ -60,7 +60,6 @@ kernel void kernel_argmax_f32(
     dst_i32[tgpig] = arg_val;
 }
 
-
 kernel void kernel_diag_f32(
         constant ggml_metal_kargs_diag & args,
         device   const char * src0,

@@ -2,7 +2,6 @@
 #include "dequantize.h"
 #include "quantize.h"
 
-
 template<typename T0, typename T1>
 kernel void kernel_cpy_t_t(
         constant ggml_metal_kargs_cpy & args,
@@ -186,7 +185,6 @@ kernel void kernel_concat(
         *y = *x;
     }
 }
-
 
 template<typename block_q, short nl, void (*dequantize_func)(device const block_q *, short, thread float4x4 &)>
 kernel void kernel_get_rows_q(

@@ -159,7 +159,6 @@ static inline void helper_mv_reduce_and_write(
     }
 }
 
-
 constant short FC_mul_mv_nsg   [[function_constant(FC_MUL_MV + 0)]];
 constant short FC_mul_mv_nxpsg [[function_constant(FC_MUL_MV + 1)]];
 constant short FC_mul_mv_ne12  [[function_constant(FC_MUL_MV + 2)]];

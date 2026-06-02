@@ -306,4 +306,3 @@ kernel void kernel_group_norm_f32(
         dst[j] *= scale;
     }
 }
-

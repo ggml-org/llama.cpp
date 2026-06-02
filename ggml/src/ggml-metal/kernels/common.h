@@ -87,7 +87,6 @@ static inline float sum(float4 x) {
     return x[0] + x[1] + x[2] + x[3];
 }
 
-
 enum ggml_sort_order {
     GGML_SORT_ORDER_ASC,
     GGML_SORT_ORDER_DESC,
@@ -132,4 +131,3 @@ template<> inline float4 elu_approx<float4>(float4 x) {
 
     return res;
 }
-

@@ -166,9 +166,6 @@ static void ggml_metal_library_build_index(ggml_metal_library_t lib) {
     @autoreleasepool {
         NSMutableDictionary<NSString *, NSNumber *> * index = [[NSMutableDictionary alloc] init];
         for (int kind = 0; kind < GGML_METAL_LIB_COUNT; ++kind) {
-            if (!lib->objs[kind]) {
-                continue;
-            }
             for (NSString * fname in [lib->objs[kind] functionNames]) {
                 index[fname] = @(kind);
             }
@@ -437,7 +434,7 @@ ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
 
         res->objs[0]        = [device newLibraryWithURL:libURL error:&error];
         res->single_library = true;
-        if (error) {
+        if (!res->objs[0]) {
             GGML_LOG_ERROR("%s: error: %s\n", __func__, [[error description] UTF8String]);
             ggml_metal_library_free(res);
             return NULL;
@@ -451,7 +448,9 @@ ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
     GGML_LOG_INFO("%s: default.metallib not found, loading kernel sources\n", __func__);
 
     NSString * path_resource = [[NSProcessInfo processInfo].environment objectForKey:@"GGML_METAL_PATH_RESOURCES"];
-    GGML_LOG_INFO("%s: GGML_METAL_PATH_RESOURCES = %s\n", __func__, path_resource ? [path_resource UTF8String] : "nil");
+    if (path_resource) {
+        GGML_LOG_INFO("%s: GGML_METAL_PATH_RESOURCES = %s\n", __func__, [path_resource UTF8String]);
+    }
 
     int64_t * t_per_lib = calloc(GGML_METAL_LIB_COUNT, sizeof(int64_t));
     NSError ** err_per_lib = calloc(GGML_METAL_LIB_COUNT, sizeof(NSError *));
@@ -525,11 +524,7 @@ ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
     if (any_failure) {
         for (int kind = 0; kind < GGML_METAL_LIB_COUNT; ++kind) {
             if (err_per_lib[kind]) {
-                // distinguish flatten-stage failures (raised by ggml_metal_library_flatten_source)
-                // from Metal compile failures so users can tell where to look.
-                const char * stage = [[err_per_lib[kind] domain] isEqualToString:@"ggml-metal-source-flatten"]
-                                         ? "flatten" : "compile";
-                GGML_LOG_ERROR("%s: failed to %s '%s' library: %s\n", __func__, stage,
+                GGML_LOG_ERROR("%s: failed to build '%s' library: %s\n", __func__,
                                k_lib_names[kind], [[err_per_lib[kind] description] UTF8String]);
                 [err_per_lib[kind] release];
             }
@@ -634,13 +629,11 @@ void ggml_metal_library_free(ggml_metal_library_t lib) {
     for (int kind = 0; kind < GGML_METAL_LIB_COUNT; ++kind) {
         if (lib->objs[kind]) {
             [lib->objs[kind] release];
-            lib->objs[kind] = nil;
         }
     }
 
     if (lib->fn_to_lib) {
         [lib->fn_to_lib release];
-        lib->fn_to_lib = nil;
     }
 
     ggml_metal_pipelines_free(lib->pipelines);
@@ -717,13 +710,6 @@ struct ggml_metal_pipeline_with_params ggml_metal_library_compile_pipeline(ggml_
         }
 
         id<MTLLibrary> mtl_lib = lib->objs[lib_idx];
-        if (!mtl_lib) {
-            [lib->lock unlock];
-
-            GGML_LOG_ERROR("%s: no library available for kernel: base = '%s', name = '%s'\n", __func__, base, name);
-
-            return res;
-        }
 
         id<MTLFunction> mtl_function;
         if (!cv) {

@@ -2,7 +2,7 @@
 
 #include "common.h"
 
-#define QK_NL 16 // K-quant / iq dequantize legs; shared by the mul_mm and quantize instantiations
+#define QK_NL 16 // shared by mul_mm and get_rows_q instantiations
 
 // NOTE: this is not dequantizing - we are simply fitting the template
 template <typename type4x4>

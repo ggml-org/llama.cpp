@@ -358,4 +358,3 @@ typedef decltype(kernel_geglu_quick<float>) kernel_geglu_quick_t;
 
 template [[host_name("kernel_geglu_quick_f32")]] kernel kernel_geglu_quick_t kernel_geglu_quick<float>;
 template [[host_name("kernel_geglu_quick_f16")]] kernel kernel_geglu_quick_t kernel_geglu_quick<half>;
-
