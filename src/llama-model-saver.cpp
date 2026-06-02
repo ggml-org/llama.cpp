@@ -29,6 +29,7 @@ bool llama_model_saver_supports_arch(llm_arch arch) {
         case LLM_ARCH_APERTUS:
         case LLM_ARCH_MIMO2:
         case LLM_ARCH_STEP35:
+        case LLM_ARCH_MELLUM:
             return false;
         default:
             return true;

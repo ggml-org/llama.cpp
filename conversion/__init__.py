@@ -135,6 +135,7 @@ TEXT_MODEL_MAP: dict[str, str] = {
     "Mamba2ForCausalLM": "mamba",
     "MambaForCausalLM": "mamba",
     "MambaLMHeadModel": "mamba",
+    "MellumForCausalLM": "mellum",
     "MiMoV2FlashForCausalLM": "mimo",
     "MiMoV2ForCausalLM": "mimo",
     "MiniCPM3ForCausalLM": "minicpm",

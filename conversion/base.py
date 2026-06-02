@@ -1663,6 +1663,9 @@ class TextModel(ModelBase):
         if chkhsh == "789696f5946cc0fc59371f39f6097cafed196b3acded6140432f26bbb1ae1669":
             # ref: https://huggingface.co/ibm-granite/granite-embedding-311m-multilingual-r2
             res = "granite-embed-multi-311m"
+        if chkhsh == "9dcf830ee9990cdbf78cc523a5f7bd9ad8f3f9890c2d3581d2785ad10f07049d":
+            # ref: https://huggingface.co/JetBrains/Mellum2-12B-A2.5B-Base
+            res = "mellum2"
 
         if res is None:
             logger.warning("\n")
