@@ -67,6 +67,7 @@ export const REDACTED_HEADERS = new Set([
 	'mcp-session-id',
 	'proxy-authorization',
 	'set-cookie',
+	'x-proxy-header-authorization',
 	'x-auth-token',
 	'x-api-key'
 ]);

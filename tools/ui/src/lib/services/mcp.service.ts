@@ -5,6 +5,7 @@ import {
 } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
 import { WebSocketClientTransport } from '@modelcontextprotocol/sdk/client/websocket.js';
+import { BrowserMcpOAuthProvider } from '$lib/services/mcp-oauth.service';
 import type {
 	Tool,
 	Prompt,
@@ -44,8 +45,6 @@ import type {
 import {
 	buildProxiedUrl,
 	buildProxiedHeaders,
-	getAuthHeaders,
-	sanitizeHeaders,
 	throwIfAborted,
 	isAbortError,
 	createBase64DataUrl,
@@ -57,6 +56,7 @@ import {
 	extractJsonRpcMethods,
 	type RequestBodySummary
 } from '$lib/utils';
+import { getAuthHeaders, sanitizeHeaders } from '$lib/utils/api-headers';
 
 interface ToolResultContentItem {
 	type: string;
@@ -238,6 +238,9 @@ export class MCPService {
 			fetch: async (input, init) => {
 				const startedAt = performance.now();
 				const requestHeaders = new Headers(baseInit.headers);
+				const proxyAuthorization = useProxy
+					? (requestHeaders.get('authorization') ?? getAuthHeaders().Authorization ?? null)
+					: null;
 
 				if (typeof Request !== 'undefined' && input instanceof Request) {
 					for (const [key, value] of input.headers.entries()) {
@@ -248,6 +251,18 @@ export class MCPService {
 				if (init?.headers) {
 					for (const [key, value] of new Headers(init.headers).entries()) {
 						requestHeaders.set(key, value);
+					}
+				}
+
+				if (useProxy && config.oauth) {
+					const targetAuthorization = new Headers(init?.headers).get('authorization');
+					if (targetAuthorization && targetAuthorization !== proxyAuthorization) {
+						requestHeaders.set('x-proxy-header-authorization', targetAuthorization);
+						if (proxyAuthorization) {
+							requestHeaders.set('authorization', proxyAuthorization);
+						} else {
+							requestHeaders.delete('authorization');
+						}
 					}
 				}
 
@@ -366,6 +381,11 @@ export class MCPService {
 		}
 
 		const useProxy = config.useProxy ?? false;
+		const authProvider =
+			config.authProvider ??
+			(config.oauth && config.transport !== MCPTransportType.WEBSOCKET
+				? new BrowserMcpOAuthProvider({ serverId: serverName, serverUrl: config.url })
+				: undefined);
 		const requestInit: RequestInit = {};
 
 		if (config.headers) {
@@ -373,10 +393,13 @@ export class MCPService {
 		}
 
 		if (useProxy) {
-			requestInit.headers = {
-				...getAuthHeaders(),
-				...(requestInit.headers as Record<string, string>)
-			};
+			const authHeaders = getAuthHeaders();
+			requestInit.headers = authProvider
+				? requestInit.headers
+				: {
+						...authHeaders,
+						...(requestInit.headers as Record<string, string>)
+					};
 		}
 
 		if (config.credentials) {
@@ -424,6 +447,7 @@ export class MCPService {
 
 			return {
 				transport: new StreamableHTTPClientTransport(url, {
+					authProvider,
 					requestInit,
 					fetch: diagnosticFetch
 				}),
@@ -436,9 +460,10 @@ export class MCPService {
 			try {
 				return {
 					transport: new SSEClientTransport(url, {
+						authProvider,
 						requestInit,
 						fetch: diagnosticFetch,
-						eventSourceInit: { fetch: diagnosticFetch }
+						...(authProvider ? {} : { eventSourceInit: { fetch: diagnosticFetch } })
 					}),
 					type: MCPTransportType.SSE,
 					stopPhaseLogging
