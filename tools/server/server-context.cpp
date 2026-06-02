@@ -1263,6 +1263,20 @@ private:
         return nullptr;
     }
 
+    server_slot * get_slot_by_cmpl_id(const std::string & cmpl_id) {
+        if (cmpl_id.empty()) {
+            return nullptr;
+        }
+
+        for (server_slot & slot : slots) {
+            if (slot.is_processing() && slot.task && slot.task->params.oaicompat_cmpl_id == cmpl_id) {
+                return &slot;
+            }
+        }
+
+        return nullptr;
+    }
+
     server_slot * get_available_slot(const server_task & task) {
         server_slot * ret = nullptr;
 
@@ -2113,6 +2127,37 @@ private:
                             break;
                         }
                     }
+                } break;
+            case SERVER_TASK_TYPE_CONTROL:
+                {
+                    auto res = std::make_unique<server_task_result_control>();
+                    res->id = task.id;
+
+                    server_slot * slot = get_slot_by_cmpl_id(task.params.control_cmpl_id);
+                    if (slot == nullptr) {
+                        res->success = false;
+                        res->message = "no active completion for this id";
+                        queue_results.send(std::move(res));
+                        break;
+                    }
+
+                    if (task.params.control_action == "reasoning_end") {
+                        // the budget sampler only exists when reasoning control was armed
+                        if (!slot->task->params.sampling.reasoning_control) {
+                            res->success = false;
+                            res->message = "reasoning control not enabled for this completion";
+                            queue_results.send(std::move(res));
+                            break;
+                        }
+                        // act on the live slot mid generation, never defer
+                        common_sampler_reasoning_budget_force(slot->smpl.get());
+                        res->success = true;
+                    } else {
+                        res->success = false;
+                        res->message = "unknown control action";
+                    }
+
+                    queue_results.send(std::move(res));
                 } break;
             case SERVER_TASK_TYPE_NEXT_RESPONSE:
                 {
@@ -4264,6 +4309,43 @@ void server_routes::init_routes() {
             body_parsed,
             files,
             TASK_RESPONSE_TYPE_OAI_CHAT);
+    };
+
+    this->post_control = [this](const server_http_req & req) {
+        auto res = create_response();
+        const json body = json::parse(req.body);
+
+        const std::string cmpl_id = json_value(body, "id", std::string());
+        const std::string action  = json_value(body, "action", std::string());
+        if (cmpl_id.empty()) {
+            res->error(format_error_response("missing completion id", ERROR_TYPE_INVALID_REQUEST));
+            return res;
+        }
+        if (action != "reasoning_end") {
+            res->error(format_error_response("unknown control action", ERROR_TYPE_INVALID_REQUEST));
+            return res;
+        }
+
+        auto & rd = res->rd;
+        {
+            server_task task(SERVER_TASK_TYPE_CONTROL);
+            task.id              = rd.get_new_id();
+            task.params.control_cmpl_id = cmpl_id;
+            task.params.control_action  = action;
+            rd.post_task(std::move(task));
+        }
+
+        auto result = rd.next(req.should_stop);
+        if (!result) {
+            GGML_ASSERT(req.should_stop());
+            return res;
+        }
+        if (result->is_error()) {
+            res->error(result->to_json());
+            return res;
+        }
+        res->ok(result->to_json());
+        return res;
     };
 
     this->post_responses_oai = [this](const server_http_req & req) {

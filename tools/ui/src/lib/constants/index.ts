@@ -15,6 +15,7 @@ export * from './cli-flags';
 export * from './code-blocks';
 export * from './code';
 export * from './context-keys';
+export * from './control-actions';
 export * from './css-classes';
 export * from './floating-ui-constraints';
 export * from './formatters';

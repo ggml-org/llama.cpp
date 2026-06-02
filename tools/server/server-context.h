@@ -110,6 +110,7 @@ struct server_routes {
     server_http_context::handler_t post_completions;
     server_http_context::handler_t post_completions_oai;
     server_http_context::handler_t post_chat_completions;
+    server_http_context::handler_t post_control;
     server_http_context::handler_t post_responses_oai;
     server_http_context::handler_t post_transcriptions_oai;
     server_http_context::handler_t post_anthropic_messages;
