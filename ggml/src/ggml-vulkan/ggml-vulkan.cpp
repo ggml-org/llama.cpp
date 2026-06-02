@@ -5047,7 +5047,8 @@ static void ggml_vk_load_shaders(vk_device& device) {
             }
             ++idx;
         }
-    } else {
+    } else if (device->driver_id != vk::DriverId::eIntelProprietaryWindows) {
+        // Disabled on Intel Windows due to a driver bug: https://github.com/ggml-org/llama.cpp/pull/23964#issuecomment-4598226147
         int idx = 0;
         for (uint32_t n : {64, 128, 256, 512}) {
             const uint32_t block_size = std::min(device->subgroup_size, n);
