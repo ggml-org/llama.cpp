@@ -98,6 +98,7 @@ struct server_slot {
     bool has_next_token = true;
     bool has_new_line   = false;
     bool truncated      = false;
+    bool lstrip_next_token = false;
 
     stop_type stop;
 
@@ -189,6 +190,7 @@ struct server_slot {
         generated_text = "";
         has_new_line   = false;
         truncated      = false;
+        lstrip_next_token = false;
         stop           = STOP_TYPE_NONE;
         stopping_word  = "";
         n_sent_text    = 0;
@@ -3068,6 +3070,16 @@ private:
                 slot.task->params.sampling.preserved_tokens.find(token) != slot.task->params.sampling.preserved_tokens.end();
         };
 
+        auto token_to_piece = [&](server_slot & slot, llama_token token) {
+            const llama_vocab * vocab = llama_model_get_vocab(llama_get_model(slot.ctx_tgt));
+            const int32_t lstrip = slot.lstrip_next_token ? 1 : 0;
+            const bool special = accept_special_token(slot, token);
+            const std::string piece = common_token_to_piece(vocab, token, special, lstrip);
+            const llama_token_attr attr = llama_vocab_get_attr(vocab, token);
+            slot.lstrip_next_token = (attr & (LLAMA_TOKEN_ATTR_CONTROL | LLAMA_TOKEN_ATTR_USER_DEFINED)) != 0;
+            return piece;
+        };
+
         if (slot_batched) {
             // apply lora, only need to do it once per batch
             common_set_adapter_lora(ctx_tgt, slot_batched->lora);
@@ -3309,7 +3321,7 @@ private:
 
                 completion_token_output result;
                 result.tok          = id;
-                result.text_to_send = common_token_to_piece(slot.ctx_tgt, result.tok, accept_special_token(slot, result.tok));
+                result.text_to_send = token_to_piece(slot, result.tok);
                 result.prob         = 1.0f; // TODO: set it here instead of doing inside populate_token_probs
 
                 if (slot.task->params.sampling.n_probs > 0) {
@@ -3424,7 +3436,7 @@ private:
                     completion_token_output result;
 
                     result.tok          = ids[i];
-                    result.text_to_send = common_token_to_piece(slot.ctx_tgt, result.tok, accept_special_token(slot, result.tok));
+                    result.text_to_send = token_to_piece(slot, result.tok);
                     result.prob         = 1.0f; // set later
 
                     // TODO: set result.probs

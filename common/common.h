@@ -959,12 +959,14 @@ std::vector<llama_token> common_tokenize(
 std::string common_token_to_piece(
         const struct llama_context * ctx,
                        llama_token   token,
-                       bool          special = true);
+                       bool          special = true,
+                    int32_t          lstrip  = 0);
 
 std::string common_token_to_piece(
           const struct llama_vocab * vocab,
                        llama_token   token,
-                       bool          special = true);
+                       bool          special = true,
+                    int32_t          lstrip  = 0);
 
 // detokenizes a vector of tokens into a string
 // should work similar to Python's `tokenizer.decode`

@@ -1673,19 +1673,19 @@ std::vector<llama_token> common_tokenize(
     return result;
 }
 
-std::string common_token_to_piece(const struct llama_context * ctx, llama_token token, bool special) {
+std::string common_token_to_piece(const struct llama_context * ctx, llama_token token, bool special, int32_t lstrip) {
     const llama_model * model = llama_get_model(ctx);
     const llama_vocab * vocab = llama_model_get_vocab(model);
-    return common_token_to_piece(vocab, token, special);
+    return common_token_to_piece(vocab, token, special, lstrip);
 }
 
-std::string common_token_to_piece(const struct llama_vocab * vocab, llama_token token, bool special) {
+std::string common_token_to_piece(const struct llama_vocab * vocab, llama_token token, bool special, int32_t lstrip) {
     std::string piece;
     piece.resize(piece.capacity());  // using string internal cache, 15 bytes + '\n'
-    const int n_chars = llama_token_to_piece(vocab, token, &piece[0], piece.size(), 0, special);
+    const int n_chars = llama_token_to_piece(vocab, token, &piece[0], piece.size(), lstrip, special);
     if (n_chars < 0) {
         piece.resize(-n_chars);
-        int check = llama_token_to_piece(vocab, token, &piece[0], piece.size(), 0, special);
+        int check = llama_token_to_piece(vocab, token, &piece[0], piece.size(), lstrip, special);
         GGML_ASSERT(check == -n_chars);
     }
     else {

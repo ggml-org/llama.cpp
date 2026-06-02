@@ -3549,8 +3549,11 @@ int32_t llama_vocab::impl::detokenize(
 
     for (int32_t i = 0; i < n_tokens; ++i) {
         GGML_ASSERT(avail >= 0);
-        int32_t n_chars = token_to_piece(tokens[i], text, avail, remove_space, unparse_special);
-        remove_space = false;
+        const llama_token token = tokens[i];
+        int32_t n_chars = token_to_piece(token, text, avail, remove_space, unparse_special);
+
+        const llama_token_attr attr = token_get_attr(token);
+        remove_space = add_space_prefix && ((attr & (LLAMA_TOKEN_ATTR_CONTROL | LLAMA_TOKEN_ATTR_USER_DEFINED)) != 0);
         if (n_chars < 0) {
             avail = 0;
             total -= n_chars;
