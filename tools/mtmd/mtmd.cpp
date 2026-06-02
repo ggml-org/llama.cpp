@@ -515,7 +515,10 @@ struct mtmd_context {
                 } break;
             case PROJECTOR_TYPE_PALIGEMMA:
                 {
-                    // SigLIP fixed-size encoder: no wrapping tokens, 256 patch embeddings per image
+                    // SigLIP fixed-size encoder: 256 patch embeddings per image, no begin token.
+                    // HF PaliGemmaProcessor layout: [256x <image>] <bos> {prompt} \n
+                    // img_end emits just <bos>; the chat template appends {prompt}\n.
+                    img_end = "<bos>";
                     image_preproc = std::make_unique<mtmd_image_preprocessor_fixed_size>(ctx_v);
                 } break;
             default:
@@ -722,14 +725,19 @@ struct mtmd_tokenizer {
                     // add BOS token to the beginning of first text chunk
                     cur.entries[0].tokens_text.insert(cur.entries[0].tokens_text.begin(), llama_vocab_bos(vocab));
                 } else {
-                    // create a new text chunk with BOS token at the beginning
-                    mtmd_input_chunk bos_chunk{
-                        MTMD_INPUT_CHUNK_TYPE_TEXT,
-                        {llama_vocab_bos(vocab)},
-                        nullptr, // image tokens
-                        nullptr, // audio tokens
-                    };
-                    cur.entries.insert(cur.entries.begin(), std::move(bos_chunk));
+                    // For PaliGemma, BOS is emitted via img_end (after image tokens), not before.
+                    if (ctx->proj_type_v() == PROJECTOR_TYPE_PALIGEMMA) {
+                        // skip — BOS is already in img_end
+                    } else {
+                        // create a new text chunk with BOS token at the beginning
+                        mtmd_input_chunk bos_chunk{
+                            MTMD_INPUT_CHUNK_TYPE_TEXT,
+                            {llama_vocab_bos(vocab)},
+                            nullptr, // image tokens
+                            nullptr, // audio tokens
+                        };
+                        cur.entries.insert(cur.entries.begin(), std::move(bos_chunk));
+                    }
                 }
             }
 

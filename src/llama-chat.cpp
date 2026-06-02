@@ -80,6 +80,7 @@ static const std::map<std::string, llm_chat_template> LLM_CHAT_TEMPLATES = {
     { "grok-2",            LLM_CHAT_TEMPLATE_GROK_2            },
     { "pangu-embedded",    LLM_CHAT_TEMPLATE_PANGU_EMBED       },
     { "solar-open",        LLM_CHAT_TEMPLATE_SOLAR_OPEN        },
+    { "paligemma",         LLM_CHAT_TEMPLATE_PALIGEMMA         },
 };
 
 llm_chat_template llm_chat_template_from_str(const std::string & name) {
@@ -397,6 +398,19 @@ int32_t llm_chat_apply_template(
         }
         if (add_ass) {
             ss << "<start_of_turn>model\n";
+        }
+    } else if (tmpl == LLM_CHAT_TEMPLATE_PALIGEMMA) {
+        // PaliGemma pretrained models use prefix-style prompting without chat turns.
+        // The expected input format (matching the HF PaliGemmaProcessor) is:
+        //   [256× <image> tokens] <bos> {prompt text} \n
+        // The image tokens and the <bos> separator are handled by mtmd (img_end = "\n<bos>").
+        // This template emits only the prompt content followed by \n — no role wrappers.
+        for (const auto & message : chat) {
+            std::string role(message->role);
+            if (role == "system") {
+                continue; // PaliGemma pretrained has no system prompt
+            }
+            ss << trim(message->content) << "\n";
         }
     } else if (tmpl == LLM_CHAT_TEMPLATE_ORION) {
         // OrionStarAI/Orion-14B-Chat
