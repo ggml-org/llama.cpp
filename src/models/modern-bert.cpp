@@ -14,6 +14,14 @@ void llama_model_modern_bert::load_arch_hparams(llama_model_loader & ml) {
 
     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_EPS, hparams.f_norm_eps);
 
+    // Some ModernBert derivatives (e.g. IBM Granite Embedding 97m R2) use
+    // SiLU/SwiGLU in the FFN instead of the default GELU/GeGLU.
+    hparams.llm_ffn_op = LLM_FFN_GEGLU;
+    std::string hidden_act;
+    if (ml.get_key(LLM_KV_HIDDEN_ACT, hidden_act, false)) {
+        hparams.llm_ffn_op = llm_ffn_op_type_from_string(hidden_act, LLM_FFN_GEGLU);
+    }
+
     switch (hparams.n_layer) {
         case 12:
             type = LLM_TYPE_47M; break; // granite-embedding-small
@@ -144,7 +152,8 @@ llama_model_modern_bert::graph::graph(const llama_model & model, const llm_graph
                 NULL,                      NULL, NULL,
                 model.layers[il].ffn_down, NULL, NULL,
                 NULL,
-                LLM_FFN_GEGLU, LLM_FFN_SEQ, il);
+                hparams.llm_ffn_op,
+                LLM_FFN_SEQ, il);
 
         // attentions bypass the intermediate layer
         cur = ggml_add(ctx0, cur, ffn_inp);

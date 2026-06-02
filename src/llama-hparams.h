@@ -23,6 +23,9 @@ enum llama_swa_type {
     LLAMA_SWA_TYPE_SYMMETRIC = 3,
 };
 
+// forward declaration; full definition in llama-graph.h
+enum llm_ffn_op_type : int;
+
 struct llama_hparams_posnet {
     uint32_t n_embd;
     uint32_t n_layer;
@@ -226,6 +229,14 @@ struct llama_hparams {
     enum llama_rope_type         rope_type               = LLAMA_ROPE_TYPE_NONE;
     enum llama_rope_scaling_type rope_scaling_type_train = LLAMA_ROPE_SCALING_TYPE_NONE;
 
+
+    // Resolved FFN gated activation flavor for archs that read
+    // `<arch>.hidden_activation` from the GGUF (e.g. ModernBert derivatives).
+    // Defaults to LLM_FFN_NONE (sentinel = 0); the mapping from the GGUF
+    // string to a real op is done at hparam-load time via
+    // llm_ffn_op_type_from_string() in llama-model.cpp, mirroring how
+    // rope_scaling_type_train is handled.
+    enum llm_ffn_op_type llm_ffn_op;
 
     // Step35: optional per-layer clamps for (Swi)GLU
     std::array<float, LLAMA_MAX_LAYERS> swiglu_clamp_exp; // clamping for expert FFN
