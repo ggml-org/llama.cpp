@@ -312,8 +312,8 @@
 			icon={Brain}
 			title="Reasoning"
 			subtitle={reasoningSubtitle}
-			preview={reasoningPreview}
-			overflow={reasoningOverflow}
+			preview={!showThoughtInProgress ? reasoningPreview : undefined}
+			overflow={!showThoughtInProgress ? reasoningOverflow : 0}
 			onToggle={() => toggleExpanded(index, section)}
 		>
 			<div class="pt-3">
@@ -333,8 +333,8 @@
 			icon={Brain}
 			title={reasoningTitle}
 			subtitle={reasoningSubtitle}
-			preview={reasoningPreview}
-			overflow={reasoningOverflow}
+			preview={!showThoughtInProgress ? reasoningPreview : undefined}
+			overflow={!showThoughtInProgress ? reasoningOverflow : 0}
 			{isStreaming}
 			onToggle={() => toggleExpanded(index, section)}
 		>
