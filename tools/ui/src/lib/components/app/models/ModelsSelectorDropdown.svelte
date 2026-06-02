@@ -107,8 +107,6 @@
 				style="max-width: min(calc(100cqw - 10rem), 20rem)"
 			>
 				<Package class="h-3.5 w-3.5 shrink-0" />
-
-				<ModelId modelId={currentModel} class="min-w-0" hideQuantization hideTags />
 			</span>
 		{:else}
 			<p class="text-xs text-muted-foreground">No models available.</p>
@@ -145,7 +143,6 @@
 										class="min-w-0 overflow-hidden"
 										hideOrgName={false}
 										hideQuantization
-										hideTags
 										{...props}
 									/>
 								{/snippet}
@@ -265,7 +262,6 @@
 									class="min-w-0 overflow-hidden"
 									hideOrgName={false}
 									hideQuantization
-									hideTags
 									{...props}
 								/>
 							{/snippet}
