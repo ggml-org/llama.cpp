@@ -47,7 +47,7 @@ enum stop_type {
 };
 
 struct task_params {
-    bool stream          = true;
+    bool stream          = false;
     bool include_usage   = false;
     bool cache_prompt    = true; // remember the prompt to avoid reprocessing all prompt
     bool return_tokens   = false;
@@ -60,6 +60,9 @@ struct task_params {
     int32_t n_cmpl    =  1; // number of completions to generate from this prompt
 
     int32_t n_cache_reuse = 0; // min chunk size to attempt reusing from the cache via KV shifting (0 = disabled)
+
+    // number of prompt tokens before the latest user message
+    int32_t n_before_user = -1;
 
     int64_t t_max_prompt_ms  = -1; // TODO: implement
     int64_t t_max_predict_ms = -1; // if positive, limit the generation phase to this time limit
@@ -415,6 +418,8 @@ struct server_task_result_cmpl_partial : server_task_result {
 
     bool post_sampling_probs;
     bool is_progress = false;
+    bool is_begin = false; // whether to send 200 status to HTTP client (begin of SSE stream)
+                           // ref: https://github.com/ggml-org/llama.cpp/pull/23884
     completion_token_output prob_output;
     result_timings timings;
     result_prompt_progress progress;

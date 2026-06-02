@@ -31,6 +31,7 @@
 #else
 #define A_TYPE float16_t
 #endif
+#define A_TYPE_PACKED32 f16vec2
 #endif
 
 #if defined(DATA_A_BF16)
@@ -44,6 +45,7 @@
 #else
 #define A_TYPE uint16_t
 #endif
+#define A_TYPE_PACKED32 uint32_t
 #endif
 
 #define QUANT_K_Q4_0 32
@@ -1722,11 +1724,18 @@ struct block_nvfp4
     uint8_t qs[QUANT_K_NVFP4 / 2];
 };
 
+struct block_nvfp4_packed32
+{
+    uint32_t d[QUANT_K_NVFP4 / 16 / 4];
+    uint32_t qs[QUANT_K_NVFP4 / 2 / 4];
+};
+
 #if defined(DATA_A_NVFP4)
 #define QUANT_K QUANT_K_NVFP4
 #define QUANT_R QUANT_R_NVFP4
 #define QUANT_AUXF 1
 #define A_TYPE block_nvfp4
+#define A_TYPE_PACKED32 block_nvfp4_packed32
 #endif
 
 #if defined(DATA_A_IQ4_NL) || defined(DATA_A_IQ4_XS)

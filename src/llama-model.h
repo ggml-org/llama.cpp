@@ -137,6 +137,7 @@ enum llm_type {
     LLM_TYPE_310B_A15B, // /MiMo-V2-Flash
     LLM_TYPE_355B_A32B, // GLM-4.5
     LLM_TYPE_397B_A17B, // Qwen3.5
+    LLM_TYPE_685B_A37B, // DeepSeek V3.2
     LLM_TYPE_744B_A40B, // GLM-5
     LLM_TYPE_E2B,
     LLM_TYPE_E4B,
@@ -488,7 +489,7 @@ struct llama_layer {
     struct ggml_tensor * indexer_attn_k   = nullptr;
     struct ggml_tensor * indexer_attn_q_b = nullptr; // note: for lora a/b, not bias
 
-    // gemma4 layer output scale
+    // gemma4 layer output scale, reused for talkie embedding skip scale
     struct ggml_tensor * out_scale = nullptr;
 
     struct llama_layer_posnet posnet;
