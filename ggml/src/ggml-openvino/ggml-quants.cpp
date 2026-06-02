@@ -570,6 +570,7 @@ std::shared_ptr<ov::Node> extract_quantized_weights(const ggml_tensor * tensor,
     int64_t weights_per_block;
     bool is_u4;
     switch (tensor->type) {
+    case GGML_TYPE_Q4_0_BLUE:
     case GGML_TYPE_Q4_0:
     case GGML_TYPE_Q4_1:
     case GGML_TYPE_Q4_K:
@@ -592,6 +593,7 @@ std::shared_ptr<ov::Node> extract_quantized_weights(const ggml_tensor * tensor,
 
     // Extract quantized data
     switch (tensor->type) {
+    case GGML_TYPE_Q4_0_BLUE:
     case GGML_TYPE_Q4_0:
         extract_q4_0_data(&temp_tensor, weights, scales, zp);
         break;

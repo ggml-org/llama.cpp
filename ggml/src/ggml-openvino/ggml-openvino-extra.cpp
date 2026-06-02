@@ -284,6 +284,7 @@ ggml_openvino_extracted_layout ggml_openvino_get_extracted_layout(const ggml_ten
     layout.is_symmetric = false;
 
     switch (tensor->type) {
+    case GGML_TYPE_Q4_0_BLUE:
     case GGML_TYPE_Q4_0:
         layout.is_u4 = true;
         layout.is_symmetric = true;

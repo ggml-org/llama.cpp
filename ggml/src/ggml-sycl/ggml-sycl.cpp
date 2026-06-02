@@ -486,6 +486,7 @@ ggml_backend_sycl_buffer_init_tensor(ggml_backend_buffer_t buffer,
         // set reorder extra buffer based on supported type
         switch (tensor->type) {
             case GGML_TYPE_Q4_0:
+            case GGML_TYPE_Q4_0_BLUE:
             case GGML_TYPE_Q8_0:
             case GGML_TYPE_Q4_K:
             case GGML_TYPE_Q6_K:{
@@ -898,6 +899,7 @@ static int64_t get_row_rounding(ggml_type type, const std::array<float, GGML_SYC
 
     switch(type) {
         case GGML_TYPE_Q4_0:
+        case GGML_TYPE_Q4_0_BLUE:
         case GGML_TYPE_Q4_1:
             return max_compute_capability >= VER_GEN9 ? 128 : 64;
         case GGML_TYPE_Q5_0:
@@ -3547,6 +3549,7 @@ inline bool ggml_sycl_supports_mmq(enum ggml_type type) {
 inline bool ggml_sycl_supports_reorder_mul_mat_sycl(enum ggml_type type) {
     switch (type) {
         case GGML_TYPE_Q4_0:
+        case GGML_TYPE_Q4_0_BLUE:
         case GGML_TYPE_Q8_0:
             return true;
         case GGML_TYPE_Q3_K:
@@ -3562,6 +3565,7 @@ inline bool ggml_sycl_supports_reorder_mul_mat_sycl(enum ggml_type type) {
 inline bool ggml_sycl_supports_reorder_dmmv(enum ggml_type type) {
     switch (type) {
         case GGML_TYPE_Q4_0:
+        case GGML_TYPE_Q4_0_BLUE:
         case GGML_TYPE_Q8_0:
             return true;
         default:
@@ -3572,6 +3576,7 @@ inline bool ggml_sycl_supports_reorder_dmmv(enum ggml_type type) {
 inline bool ggml_sycl_supports_reorder_mmvq(enum ggml_type type) {
     switch (type) {
         case GGML_TYPE_Q4_0:
+        case GGML_TYPE_Q4_0_BLUE:
         case GGML_TYPE_Q8_0:
         case GGML_TYPE_Q3_K:
         case GGML_TYPE_Q4_K:
@@ -3586,6 +3591,7 @@ inline bool ggml_sycl_supports_reorder_mmvq(enum ggml_type type) {
 static bool ggml_sycl_supports_dmmv(enum ggml_type type) {
     switch (type) {
         case GGML_TYPE_Q4_0:
+        case GGML_TYPE_Q4_0_BLUE:
         case GGML_TYPE_Q4_1:
         case GGML_TYPE_Q5_0:
         case GGML_TYPE_Q5_1:
@@ -3950,6 +3956,7 @@ static bool reorder_qw(const ggml_tensor * src0, dpct::queue_ptr stream) {
 
     switch (src0->type) {
         case GGML_TYPE_Q4_0:
+        case GGML_TYPE_Q4_0_BLUE:
             return reorder_qw_q4_0(data_device, ncols, nrows, size, 0, stream);
         case GGML_TYPE_Q8_0:
             return reorder_qw_q8_0(data_device, ncols, nrows, size, 0, stream);
@@ -5320,6 +5327,7 @@ static bool ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, const g
                     case GGML_TYPE_Q2_K:
                     case GGML_TYPE_Q3_K:
                     case GGML_TYPE_Q4_0:
+                    case GGML_TYPE_Q4_0_BLUE:
                     case GGML_TYPE_Q4_1:
                     case GGML_TYPE_Q4_K:
                     case GGML_TYPE_Q5_0:

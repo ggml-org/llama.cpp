@@ -2366,6 +2366,7 @@ void ggml_cann_mul_mat(ggml_backend_cann_context & ctx, ggml_tensor * dst) {
 #endif
             ggml_cann_mat_mul_fp(ctx, dst);
             break;
+        case GGML_TYPE_Q4_0_BLUE:
         case GGML_TYPE_Q4_0:
         case GGML_TYPE_Q8_0:
             ggml_cann_mul_mat_quant(ctx, dst, type);
@@ -3845,6 +3846,7 @@ void ggml_cann_mul_mat_id(ggml_backend_cann_context & ctx, ggml_tensor * dst) {
         case GGML_TYPE_F16:
             ggml_cann_mul_mat_id_fp(ctx, dst);
             break;
+        case GGML_TYPE_Q4_0_BLUE:
         case GGML_TYPE_Q4_0:
         case GGML_TYPE_Q8_0:
             ggml_cann_mul_mat_id_quant(ctx, dst);

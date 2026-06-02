@@ -1067,6 +1067,7 @@ inline bool ggml_webgpu_can_use_mmvq(const ggml_tensor * src0,
             switch (src1->type) {
                 case GGML_TYPE_F32:
                     switch (src0->type) {
+                        case GGML_TYPE_Q4_0_BLUE:
                         case GGML_TYPE_Q4_0:
                         case GGML_TYPE_Q4_1:
                         case GGML_TYPE_Q8_0:
@@ -1296,6 +1297,7 @@ class ggml_webgpu_shader_lib {
                 defines.push_back("DST_Q8_0");
                 variant += "_dstq8_0";
                 break;
+            case GGML_TYPE_Q4_0_BLUE:
             case GGML_TYPE_Q4_0:
                 defines.push_back("DST_Q4_0");
                 variant += "_dstq4_0";
@@ -1496,6 +1498,7 @@ class ggml_webgpu_shader_lib {
 
                     switch (key.src_type) {
                         case GGML_TYPE_Q1_0:
+                        case GGML_TYPE_Q4_0_BLUE:
                         case GGML_TYPE_Q4_0:
                         case GGML_TYPE_Q5_0:
                         case GGML_TYPE_Q8_0:
@@ -1878,6 +1881,7 @@ class ggml_webgpu_shader_lib {
                     defines.push_back("SRC0_INNER_TYPE=u32");
                     switch (context.src0->type) {
                         case GGML_TYPE_Q8_0:
+                        case GGML_TYPE_Q4_0_BLUE:
                         case GGML_TYPE_Q4_0:
                         case GGML_TYPE_Q4_1:
                             if (key.use_mmvq) {
@@ -2686,6 +2690,7 @@ class ggml_webgpu_shader_lib {
             case GGML_TYPE_F16:
                 defines.push_back("KV_F16");
                 break;
+            case GGML_TYPE_Q4_0_BLUE:
             case GGML_TYPE_Q4_0:
                 defines.push_back("KV_Q4_0");
                 break;

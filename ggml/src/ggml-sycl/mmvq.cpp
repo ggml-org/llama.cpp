@@ -1141,6 +1141,7 @@ void ggml_sycl_op_mul_mat_vec_q(ggml_backend_sycl_context & ctx, const ggml_tens
         float *      dst_dd_i_bs       = dst_dd_i + i * dst->ne[0];
         switch (src0->type) {
             case GGML_TYPE_Q4_0:
+        case GGML_TYPE_Q4_0_BLUE:
                 if ((ggml_tensor_extra_gpu *) dst->src[0]->extra &&
                     ((ggml_tensor_extra_gpu *) dst->src[0]->extra)->optimized_feature.reorder) {
                     GGML_SYCL_DEBUG("Calling reorder_mul_mat_vec_q4_0_q8_1_sycl\n");
@@ -1343,6 +1344,7 @@ bool ggml_sycl_mul_mat_vec_q_id(
     dpct::queue_ptr    stream) {
     switch (src0_type) {
         case GGML_TYPE_Q4_0:
+        case GGML_TYPE_Q4_0_BLUE:
             launch_mul_mat_vec_q_moe<QK4_0, QI4_0, block_q4_0, VDR_Q4_0_Q8_1_MMVQ, vec_dot_q4_0_q8_1>(
                 vx_base, vy, ids_dev, dst_base, ncols, nrows, n_experts_used,
                 expert_weight_stride, dst_row_stride, src1_row_stride, stream);

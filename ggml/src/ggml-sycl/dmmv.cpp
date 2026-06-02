@@ -1647,7 +1647,7 @@ void ggml_sycl_op_dequantize_mul_mat_vec(
     sycl::half *src1_dfloat = nullptr; // dfloat == half
 
     bool src1_convert_f16 =
-        src0->type == GGML_TYPE_Q4_0 || src0->type == GGML_TYPE_Q4_1 ||
+        src0->type == GGML_TYPE_Q4_0 || src0->type == GGML_TYPE_Q4_0_BLUE || src0->type == GGML_TYPE_Q4_1 ||
         src0->type == GGML_TYPE_Q5_0 || src0->type == GGML_TYPE_Q5_1 ||
         src0->type == GGML_TYPE_Q8_0 || src0->type == GGML_TYPE_F16 ||
         src0->type == GGML_TYPE_BF16;
@@ -1666,6 +1666,7 @@ void ggml_sycl_op_dequantize_mul_mat_vec(
 
     switch (src0->type) {
         case GGML_TYPE_Q4_0:
+        case GGML_TYPE_Q4_0_BLUE:
             if ((ggml_tensor_extra_gpu*)dst->src[0]->extra &&
                 ((ggml_tensor_extra_gpu*)dst->src[0]->extra)->optimized_feature.reorder) {
                 dequantize_mul_mat_vec_q4_0_sycl_reorder(src0_dd_i, src1_dfloat, dst_dd_i, ne00, row_diff, stream);

@@ -4968,6 +4968,7 @@ static bool ggml_opencl_supports_op(ggml_backend_dev_t dev, const struct ggml_te
                 case GGML_TYPE_F16:
                     return true;
                 case GGML_TYPE_Q4_0:
+                case GGML_TYPE_Q4_0_BLUE:
 #ifdef GGML_OPENCL_SOA_Q
                     // We do not support flattened Q4_0 (and possibly other Q's)
                     return false;
@@ -8507,6 +8508,7 @@ static void ggml_cl_get_rows(ggml_backend_t backend, const ggml_tensor * src0, c
             kernel = backend_ctx->kernel_get_rows_f16;
             break;
         case GGML_TYPE_Q4_0:
+        case GGML_TYPE_Q4_0_BLUE:
             kernel = backend_ctx->kernel_get_rows_q4_0;
             break;
         default:
@@ -13378,7 +13380,8 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
                 backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
                 return;
             }
-            case GGML_TYPE_Q4_0: {
+            case GGML_TYPE_Q4_0:
+            case GGML_TYPE_Q4_0_BLUE: {
                 if (ne11 < 32) {
                     break;
                 }
@@ -13793,6 +13796,7 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
         // Set up kernel.
         switch(src0t) {
             case GGML_TYPE_Q4_0:
+            case GGML_TYPE_Q4_0_BLUE:
                 // This should have been satisfied.
                 GGML_ASSERT(ne11 == ne1);
                 GGML_ASSERT(ne01 == ne0);
@@ -13947,6 +13951,7 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
             CL_CHECK(clSetKernelArg(kernel, 23, sizeof(int),      &r3));
             break;
         case GGML_TYPE_Q4_0:
+        case GGML_TYPE_Q4_0_BLUE:
             // This should have been satisfied.
             GGML_ASSERT(ne11 == ne1);
             GGML_ASSERT(ne01 == ne0);
@@ -14910,7 +14915,8 @@ static void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0,
 
     // subgroup mat vec
     switch (src0->type) {
-        case GGML_TYPE_Q4_0: {
+        case GGML_TYPE_Q4_0:
+        case GGML_TYPE_Q4_0_BLUE: {
 #ifdef GGML_OPENCL_USE_ADRENO_KERNELS
             if (use_adreno_moe_kernels(backend_ctx, src0)) {
                 cl_int status;

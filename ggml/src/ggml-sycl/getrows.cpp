@@ -252,6 +252,7 @@ void ggml_sycl_op_get_rows(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
             src1_i32, (float *)dst->data, ctx.stream());
             break;
         case GGML_TYPE_Q4_0:
+        case GGML_TYPE_Q4_0_BLUE:
             get_rows_sycl<QK4_0, QR4_0, dequantize_q4_0>(ctx, dst->src[0], dst->src[1], dst, (const float *)dst->src[0]->data,
             src1_i32, (float *)dst->data, ctx.stream());
             break;

@@ -1077,6 +1077,7 @@ static void ggml_backend_cann_transform_back_q8_0(const ggml_tensor * tensor, co
  */
 static void ggml_backend_cann_transform(ggml_tensor * tensor, const void * src, void * dst) {
     switch (tensor->type) {
+        case GGML_TYPE_Q4_0_BLUE:
         case GGML_TYPE_Q4_0:
             ggml_backend_cann_transform_q4_0(tensor, src, dst);
             break;
@@ -1102,6 +1103,7 @@ static void ggml_backend_cann_transform(ggml_tensor * tensor, const void * src, 
  */
 static void ggml_backend_cann_transform_back(const ggml_tensor * tensor, void * src, void * dst) {
     switch (tensor->type) {
+        case GGML_TYPE_Q4_0_BLUE:
         case GGML_TYPE_Q4_0:
             ggml_backend_cann_transform_back_q4_0(tensor, src, dst);
             break;
@@ -1124,6 +1126,7 @@ static void ggml_backend_cann_transform_back(const ggml_tensor * tensor, void * 
  */
 static bool need_transform(ggml_type type) {
     switch (type) {
+        case GGML_TYPE_Q4_0_BLUE:
         case GGML_TYPE_Q4_0:
         case GGML_TYPE_Q8_0:
             return true;
@@ -2443,6 +2446,7 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev, const ggml_ten
                     case GGML_TYPE_F32:
                         return true;
                     case GGML_TYPE_Q8_0:
+                    case GGML_TYPE_Q4_0_BLUE:
                     case GGML_TYPE_Q4_0:
 #ifdef ASCEND_310P
                         // Q4 && Q8 per group is not support on 310p device
@@ -2460,6 +2464,7 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev, const ggml_ten
                 case GGML_TYPE_F32:
                     return true;
                 case GGML_TYPE_Q8_0:
+                case GGML_TYPE_Q4_0_BLUE:
                 case GGML_TYPE_Q4_0:
 #ifdef ASCEND_310P
                     // Q4 && Q8 per group is not support on 310p device

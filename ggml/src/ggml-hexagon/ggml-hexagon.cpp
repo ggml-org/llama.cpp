@@ -1594,6 +1594,7 @@ static void ggml_backend_hexagon_buffer_set_tensor(ggml_backend_buffer_t buffer,
     HEX_VERBOSE("ggml-hex: %s set-tensor %s : data %p offset %zu size %zu\n", sess->c_name(), tensor->name, data, offset, size);
 
     switch (tensor->type) {
+        case GGML_TYPE_Q4_0_BLUE:
         case GGML_TYPE_Q4_0:
             GGML_ASSERT(offset == 0);
             GGML_ASSERT(offset + size <= ggml_nbytes(tensor));
@@ -1642,6 +1643,7 @@ static void ggml_backend_hexagon_buffer_get_tensor(ggml_backend_buffer_t buffer,
     HEX_VERBOSE("ggml-hex: %s get-tensor %s : data %p offset %zu size %zu\n", sess->c_name(), tensor->name, data, offset, size);
 
     switch (tensor->type) {
+        case GGML_TYPE_Q4_0_BLUE:
         case GGML_TYPE_Q4_0:
             GGML_ASSERT(offset == 0);
             GGML_ASSERT(offset + size <= ggml_nbytes(tensor));
@@ -2574,6 +2576,7 @@ static bool ggml_hexagon_supported_mul_mat(const struct ggml_hexagon_session * s
     }
 
     switch (src0->type) {
+        case GGML_TYPE_Q4_0_BLUE:
         case GGML_TYPE_Q4_0:
         case GGML_TYPE_Q4_1:
         case GGML_TYPE_Q8_0:
@@ -2625,6 +2628,7 @@ static bool ggml_hexagon_supported_mul_mat_id(const struct ggml_hexagon_session 
     }
 
     switch (src0->type) {
+        case GGML_TYPE_Q4_0_BLUE:
         case GGML_TYPE_Q4_0:
         case GGML_TYPE_Q4_1:
         case GGML_TYPE_Q8_0:
