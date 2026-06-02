@@ -982,6 +982,14 @@ void server_models::update_loaded_info(const std::string & name, std::string & r
     cv.notify_all();
 }
 
+void server_models::update_last_error(const std::string & name, const std::string & error) {
+    std::unique_lock<std::mutex> lk(mutex);
+    auto it = mapping.find(name);
+    if (it != mapping.end()) {
+        it->second.meta.last_error = error;
+    }
+}
+
 void server_models::wait_until_loading_finished(const std::string & name) {
     std::unique_lock<std::mutex> lk(mutex);
     cv.wait(lk, [this, &name]() {
