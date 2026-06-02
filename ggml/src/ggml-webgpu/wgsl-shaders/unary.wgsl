@@ -66,11 +66,11 @@ fn erf_approx(x: TYPE) -> TYPE {
 }
 
 @compute @workgroup_size(WG_SIZE)
-fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
-    if (gid.x >= params.ne) {
+fn main(@builtin(global_invocation_index) gindex: vec3<u32>) {
+    if (gindex >= params.ne) {
         return;
     }
-    var i = gid.x;
+    var i = gindex;
     let ne2 = params.ne2;
 #ifdef DIAG
     let ne1 = params.ne0;
@@ -205,6 +205,6 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 #ifdef INPLACE
     src[params.offset_src + src_idx] = res;
 #else
-    dst[params.offset_dst + gid.x] = res;
+    dst[params.offset_dst + gindex] = res;
 #endif
 }

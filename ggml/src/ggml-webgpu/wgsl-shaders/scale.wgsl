@@ -43,12 +43,12 @@ struct Params {
 var<storage, read_write> src: array<f32>;
 
 @compute @workgroup_size(WG_SIZE)
-fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
-    if (gid.x >= params.ne) {
+fn main(@builtin(global_invocation_index) gindex: u32) {
+    if (gindex >= params.ne) {
         return;
     }
 
-    var i = gid.x;
+    var i = gindex;
     let i3 = i / (params.ne2 * params.ne1 * params.ne0);
     i = i % (params.ne2 * params.ne1 * params.ne0);
     let i2 = i / (params.ne1 * params.ne0);
