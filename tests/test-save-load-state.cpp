@@ -63,7 +63,7 @@ static std::string test_baseline(struct llama_model * model, const struct common
     auto tokens = common_tokenize(ctx.get(), params.prompt, true);
 
     auto n_past = 0;
-    if (!common_prompt_batch_decode(ctx.get(), tokens, n_past, params.n_batch, params.out_file, true)) {
+    if (!common_prompt_batch_decode(ctx.get(), tokens, (int)tokens.size(), n_past, params.n_batch, params.out_file, true)) {
         LOG_ERR("%s: failed to decode prompt\n", __func__);
         return {};
     }
@@ -111,7 +111,7 @@ static bool test_state_load(struct llama_model * model, const struct common_para
     LOG_TRC("%s: loaded state with %zu tokens\n", __func__, n_token_count_out);
 
     // Replay last token
-    int n_past = (int) n_token_count_out;
+    int n_past = (int) n_token_count_out - 1;
     if (!common_replay_last_token(ctx.get(), tokens.back(), n_past)) {
         return false;
     }
@@ -165,7 +165,7 @@ static bool test_seq_cp_host(struct llama_model * model, const struct common_par
     LOG_TRC("%s: loaded state with %zu tokens\n", __func__, n_token_count_out);
 
     // Replay last token
-    int n_past = (int) n_token_count_out;
+    int n_past = (int) n_token_count_out - 1;
     if (!common_replay_last_token(ctx.get(), tokens.back(), n_past)) {
         return false;
     }
@@ -240,7 +240,7 @@ static bool test_seq_cp_device(struct llama_model * model, const struct common_p
     LOG_TRC("%s: loaded state with %zu tokens\n", __func__, n_token_count_out);
 
     // Replay last token
-    int n_past = (int) n_token_count_out;
+    int n_past = (int) n_token_count_out - 1;
     if (!common_replay_last_token(ctx.get(), tokens.back(), n_past)) {
         return false;
     }
