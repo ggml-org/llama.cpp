@@ -25,7 +25,7 @@ The convert script reads the model configuration, tokenizer, tensor names+data a
 
 The required steps to implement for an HF model are:
 
-1. Define the model `ModelBase.register` annotation in a new `TextModel` or `MmprojModel` subclass in a [conversion](/conversion) folder, example:
+1. Define the model `ModelBase.register` annotation in a new `TextModel` or `MmprojModel` subclass in the [conversion](/conversion) folder, example:
 
 ```python
 @ModelBase.register("MyModelForCausalLM")
