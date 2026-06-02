@@ -11,6 +11,7 @@
 #include "hex-dma.h"
 #include "hvx-utils.h"
 #include "hvx-dump.h"
+#include "hvx-flash-attn.h"
 
 #define GGML_COMMON_DECL_C
 #include "ggml-common.h"
@@ -694,7 +695,7 @@ int op_flash_attn_ext(struct htp_ops_context * octx) {
         return HTP_STATUS_NO_SUPPORT;
     }
     for (uint32_t h = 0; h < n_head; ++h) {
-        factx.slopes[h] = (max_bias > 0.0f) ? (h < factx.n_head_log2 ? powf(factx.m0, h + 1) : powf(factx.m1, 2*(h - factx.n_head_log2) + 1)) : 1.0f;
+        factx.slopes[h] = (max_bias > 0.0f) ? alibi_slope(h, factx.n_head_log2, factx.m0, factx.m1) : 1.0f;
     }
 
     // total rows in q

@@ -27,6 +27,7 @@
 #include "hvx-copy.h"
 #include "hvx-reduce.h"
 #include "hvx-utils.h"
+#include "hvx-flash-attn.h"
 #include "vtcm-utils.h"
 #include "worker-pool.h"
 
@@ -1211,12 +1212,22 @@ static __attribute__((noinline)) void fa_compute_slopes(
     const float    m0          = factx->m0;
     const float    m1          = factx->m1;
 
-    // Precompute G unique slope values
-    __fp16 temp_slopes[G];
-    for (uint32_t i = 0; i < G; ++i) {
-        const uint32_t h = kv_head * G + i;
-        float val = (h < n_head_log2) ? powf(m0, h + 1) : powf(m1, 2 * (h - n_head_log2) + 1);
-        temp_slopes[i] = (__fp16)val;
+    __fp16 temp_slopes[512] __attribute__((aligned(128)));
+    if (G <= 32) {
+        // Fast path: Compute G unique slope values in vector registers
+        HVX_Vector v_val = hvx_alibi_slopes(kv_head, G, n_head_log2, m0, m1);
+
+        __fp16 temp_slopes_aligned[64] __attribute__((aligned(128)));
+        hvx_vmem(temp_slopes_aligned) = hvx_vec_f32_to_f16(v_val, Q6_V_vzero());
+
+        for (uint32_t i = 0; i < G; ++i) {
+            temp_slopes[i] = temp_slopes_aligned[i];
+        }
+    } else {
+        // Fallback path: G > 32 (rare configurations)
+        for (uint32_t i = 0; i < G; ++i) {
+            temp_slopes[i] = (__fp16)alibi_slope(kv_head * G + i, n_head_log2, m0, m1);
+        }
     }
 
     // Allocate stack buffer to avoid scalar writes to VTCM (which generates L2 misses)
