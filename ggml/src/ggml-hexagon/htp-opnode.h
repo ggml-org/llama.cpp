@@ -56,6 +56,20 @@ struct htp_opnode {
     }
 
     std::vector<const ggml_tensor *> get_inputs() const {
+        if (fused.empty()) {
+            int last_non_null = -1;
+            for (int i = 0; i < GGML_MAX_SRC; i++) {
+                if (node->src[i]) {
+                    last_non_null = i;
+                }
+            }
+            std::vector<const ggml_tensor *> inputs(last_non_null + 1, nullptr);
+            for (int i = 0; i <= last_non_null; i++) {
+                inputs[i] = node->src[i];
+            }
+            return inputs;
+        }
+
         std::vector<const ggml_tensor *> inputs(GGML_MAX_SRC, nullptr);
         std::vector<const ggml_tensor *> outputs;
         outputs.push_back(node);
@@ -82,12 +96,8 @@ struct htp_opnode {
         };
 
         for (int i = 0; i < GGML_MAX_SRC; i++) {
-            if (fused.empty()) {
-                inputs[i] = node->src[i];
-            } else {
-                if (node->src[i]) {
-                    add_input(node->src[i]);
-                }
+            if (node->src[i]) {
+                add_input(node->src[i]);
             }
         }
         for (const auto * f : fused) {
@@ -98,10 +108,7 @@ struct htp_opnode {
             }
         }
 
-        if (!fused.empty()) {
-            inputs.resize(count);
-        }
-
+        inputs.resize(count);
         return inputs;
     }
 
