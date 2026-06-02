@@ -112,6 +112,12 @@ void quantize_row_tq2_0(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, 
     quantize_row_tq2_0_ref(x, y, k);
 }
 
+void quantize_row_tq3_0(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t k) {
+    assert(k % QK_TQ3_0 == 0);
+    block_tq3_0 * GGML_RESTRICT y = vy;
+    quantize_row_tq3_0_ref(x, y, k);
+}
+
 //===================================== Q8_K ==============================================
 
 void quantize_row_q8_K_generic(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k) {
@@ -506,6 +512,56 @@ void ggml_vec_dot_tq2_0_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, 
         const float d = y[i].d * GGML_CPU_FP16_TO_FP32(x[i].d);
 
         sumf += (float) sumi * d;
+    }
+
+    *s = sumf;
+}
+
+// ── TurboQuant TQ3_0 × Q8_0 scalar dot product ───────────────────────────────
+//
+// TQ3_0 block: 32 elements in 14 bytes (2-byte scale + 12-byte packed 3-bit data)
+// Q8_0  block: 32 elements in 34 bytes (2-byte scale + 32 int8 values)
+//
+// The inner loop decodes each TQ3_0 value as (stored_bit - 4) ∈ [-4, +3] and
+// multiplies by the corresponding Q8_0 int8 value.  Scales are applied once
+// per block, keeping the integer accumulation free of floating-point rounding.
+void ggml_vec_dot_tq3_0_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs,
+                                      const void * GGML_RESTRICT vx, size_t bx,
+                                      const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    assert(n % QK_TQ3_0 == 0);
+    assert(nrc == 1);
+    UNUSED(nrc); UNUSED(bx); UNUSED(by); UNUSED(bs);
+
+    const int nb = n / QK_TQ3_0;
+    const block_tq3_0 * GGML_RESTRICT x = vx;
+    const block_q8_0  * GGML_RESTRICT y = vy;
+
+    float sumf = 0.0f;
+
+    for (int i = 0; i < nb; ++i) {
+        const float dx = GGML_CPU_FP16_TO_FP32(x[i].d);
+        const float dy = GGML_CPU_FP16_TO_FP32(y[i].d);
+
+        int32_t sumi = 0;
+
+        // 4 groups × 8 elements = 32 elements total
+        // Each group is encoded in 3 bytes using 3 bits per element (LSB-first)
+        for (int g = 0; g < 4; ++g) {
+            const uint8_t * GGML_RESTRICT b = x[i].qs + g * 3;
+            const int8_t  * GGML_RESTRICT q = y[i].qs + g * 8;
+
+            // Decode 3-bit unsigned [0,7] → signed [-4,+3] by subtracting 4
+            sumi += ((int)( b[0]                      & 7) - 4) * q[0];
+            sumi += ((int)((b[0] >> 3)                & 7) - 4) * q[1];
+            sumi += ((int)(((b[0] >> 6) | (b[1] << 2)) & 7) - 4) * q[2];
+            sumi += ((int)((b[1] >> 1)                & 7) - 4) * q[3];
+            sumi += ((int)((b[1] >> 4)                & 7) - 4) * q[4];
+            sumi += ((int)(((b[1] >> 7) | (b[2] << 1)) & 7) - 4) * q[5];
+            sumi += ((int)((b[2] >> 2)                & 7) - 4) * q[6];
+            sumi += ((int)((b[2] >> 5)                & 7) - 4) * q[7];
+        }
+
+        sumf += (float)sumi * dx * dy;
     }
 
     *s = sumf;

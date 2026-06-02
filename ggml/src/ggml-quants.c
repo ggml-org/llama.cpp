@@ -13,6 +13,14 @@
 #include <stdlib.h> // for qsort
 #include <stdio.h>  // for GGML_ASSERT
 
+// SIMD headers for TQ3_0 dequantize fast path
+#if defined(__ARM_NEON)
+#  include <arm_neon.h>
+#endif
+#if defined(__AVX2__)
+#  include <immintrin.h>
+#endif
+
 #ifdef GGML_USE_OPENMP
 #include <omp.h>
 #endif
@@ -2350,6 +2358,160 @@ size_t quantize_tq2_0(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst,
     (void)quant_weights; // not used
     const size_t row_size = ggml_row_size(GGML_TYPE_TQ2_0, n_per_row);
     quantize_row_tq2_0_ref(src, dst, (int64_t)nrow*n_per_row);
+    return nrow * row_size;
+}
+
+// ============================================================================
+// TurboQuant TQ3_0 — 3-bit symmetric quantization for KV cache
+// ============================================================================
+//
+// Bit-packing pattern (3 bytes encode 8 elements; pattern repeats 4×):
+//
+//   byte 0: [q0:3][q1:3][q2:2lsb]
+//   byte 1: [q2:1msb][q3:3][q4:3][q5:1lsb]
+//   byte 2: [q5:2msb][q6:3][q7:3]
+//
+// Signed encoding:
+//   stored  = clamp(round(x / d) + 4, 0, 7)      (+4 shifts -3..+3 → 1..7)
+//   d       = max_abs / 3.0f                       (full [-3d, +3d] range)
+//   decoded = (stored - 4) * d
+
+// ── Scalar reference pack (3 bytes ← 8 elements) ──────────────────────────
+static inline void tq3_pack8(const uint8_t * GGML_RESTRICT t, uint8_t * GGML_RESTRICT out) {
+    out[0] =  (t[0] & 7)        | ((t[1] & 7) << 3) | ((t[2] & 7) << 6);
+    out[1] = ((t[2] & 7) >> 2)  | ((t[3] & 7) << 1) | ((t[4] & 7) << 4) | ((t[5] & 7) << 7);
+    out[2] = ((t[5] & 7) >> 1)  | ((t[6] & 7) << 2) | ((t[7] & 7) << 5);
+}
+
+// ── Scalar reference unpack (3 bytes → 8 elements) ─────────────────────────
+static inline void tq3_unpack8(const uint8_t * GGML_RESTRICT b,
+                                float          * GGML_RESTRICT y, float d) {
+    // Extract each 3-bit value and apply signed offset
+    y[0] = ((float)((int)( b[0]        & 7) - 4)) * d;
+    y[1] = ((float)((int)((b[0] >> 3)  & 7) - 4)) * d;
+    y[2] = ((float)((int)(((b[0] >> 6) | (b[1] << 2)) & 7) - 4)) * d;
+    y[3] = ((float)((int)((b[1] >> 1)  & 7) - 4)) * d;
+    y[4] = ((float)((int)((b[1] >> 4)  & 7) - 4)) * d;
+    y[5] = ((float)((int)(((b[1] >> 7) | (b[2] << 1)) & 7) - 4)) * d;
+    y[6] = ((float)((int)((b[2] >> 2)  & 7) - 4)) * d;
+    y[7] = ((float)((int)((b[2] >> 5)  & 7) - 4)) * d;
+}
+
+// ── Quantise: float32 → TQ3_0 block ────────────────────────────────────────
+void quantize_row_tq3_0_ref(const float * GGML_RESTRICT x,
+                             block_tq3_0 * GGML_RESTRICT y, int64_t k) {
+    assert(k % QK_TQ3_0 == 0);
+    const int64_t nb = k / QK_TQ3_0;
+
+    for (int64_t i = 0; i < nb; ++i) {
+        const float * src = x + i * QK_TQ3_0;
+
+        // 1. Find max absolute value for this block
+        float amax = 0.0f;
+        for (int j = 0; j < QK_TQ3_0; ++j) {
+            const float v = fabsf(src[j]);
+            if (v > amax) amax = v;
+        }
+
+        // 2. Compute scale: maps [-3d, +3d] to [-amax, +amax]
+        //    stored = round(x/d) + 4, so q ∈ [1,7] with q=4 → 0
+        const float d  = amax / 3.0f;
+        const float id = (d > 0.0f) ? (1.0f / d) : 0.0f;
+        y[i].d = GGML_FP32_TO_FP16(d);
+
+        // 3. Quantise and pack — 4 groups of 8 elements (3 bytes each)
+        for (int g = 0; g < 4; ++g) {
+            uint8_t t[8];
+            for (int j = 0; j < 8; ++j) {
+                int q = (int)roundf(src[g*8 + j] * id) + 4;
+                if (q < 0) q = 0;
+                if (q > 7) q = 7;
+                t[j] = (uint8_t)q;
+            }
+            tq3_pack8(t, y[i].qs + g * 3);
+        }
+    }
+}
+
+// ── Dequantise: TQ3_0 block → float32 ───────────────────────────────────────
+//
+// Strategy (all targets):
+//   1. Scalar unpack: 12 packed bytes → 32 int8 values in a local temp array.
+//      (3-bit unpack across byte boundaries is hard to vectorise cleanly.)
+//   2. SIMD convert: 32 int8 → 32 float32, multiplied by block scale d.
+//      ARM NEON: 16 elements / iteration, using vmovl + vcvtq + vmulq.
+//      AVX2:     32 elements in one shot, using _mm256_cvtepi8_epi32 chains.
+//      Scalar:   direct loop fallback.
+void dequantize_row_tq3_0(const block_tq3_0 * GGML_RESTRICT x,
+                           float             * GGML_RESTRICT y, int64_t k) {
+    assert(k % QK_TQ3_0 == 0);
+    const int64_t nb = k / QK_TQ3_0;
+
+    for (int64_t i = 0; i < nb; ++i) {
+        const float d = GGML_FP16_TO_FP32(x[i].d);
+
+        // ── Step 1: Unpack 32 × 3-bit values to int8 ────────────────────
+        // Subtract 4 so that stored=4 → int8=0 (symmetric zero).
+        int8_t tmp[QK_TQ3_0];
+        {
+            const uint8_t * q = x[i].qs;
+            for (int g = 0; g < 4; ++g, q += 3) {
+                tmp[g*8+0] = (int8_t)(( q[0]                     & 7) - 4);
+                tmp[g*8+1] = (int8_t)(((q[0] >> 3)               & 7) - 4);
+                tmp[g*8+2] = (int8_t)((((q[0] >> 6) | (q[1]<<2)) & 7) - 4);
+                tmp[g*8+3] = (int8_t)(((q[1] >> 1)               & 7) - 4);
+                tmp[g*8+4] = (int8_t)(((q[1] >> 4)               & 7) - 4);
+                tmp[g*8+5] = (int8_t)((((q[1] >> 7) | (q[2]<<1)) & 7) - 4);
+                tmp[g*8+6] = (int8_t)(((q[2] >> 2)               & 7) - 4);
+                tmp[g*8+7] = (int8_t)(((q[2] >> 5)               & 7) - 4);
+            }
+        }
+
+        // ── Step 2: SIMD int8 → float32 × scale ─────────────────────────
+        float * out = y + i * QK_TQ3_0;
+
+#if defined(__ARM_NEON)
+        {
+            const float32x4_t vd = vdupq_n_f32(d);
+            for (int j = 0; j < QK_TQ3_0; j += 16) {
+                int8x16_t v8 = vld1q_s8(tmp + j);
+                int16x8_t lo = vmovl_s8(vget_low_s8(v8));
+                int16x8_t hi = vmovl_s8(vget_high_s8(v8));
+                vst1q_f32(out+j,    vmulq_f32(vcvtq_f32_s32(vmovl_s16(vget_low_s16(lo))),  vd));
+                vst1q_f32(out+j+4,  vmulq_f32(vcvtq_f32_s32(vmovl_s16(vget_high_s16(lo))), vd));
+                vst1q_f32(out+j+8,  vmulq_f32(vcvtq_f32_s32(vmovl_s16(vget_low_s16(hi))),  vd));
+                vst1q_f32(out+j+12, vmulq_f32(vcvtq_f32_s32(vmovl_s16(vget_high_s16(hi))), vd));
+            }
+        }
+#elif defined(__AVX2__)
+        {
+            const __m256 vd256 = _mm256_set1_ps(d);
+            // Process all 32 elements in two 16-element iterations
+            for (int j = 0; j < QK_TQ3_0; j += 16) {
+                const __m128i v128 = _mm_loadu_si128((const __m128i *)(tmp + j));
+                // Expand int8 → int32 in four groups of 4
+                __m256i vi32_0 = _mm256_cvtepi8_epi32(v128);
+                __m256i vi32_1 = _mm256_cvtepi8_epi32(_mm_srli_si128(v128, 8));
+                _mm256_storeu_ps(out+j,   _mm256_mul_ps(_mm256_cvtepi32_ps(vi32_0), vd256));
+                _mm256_storeu_ps(out+j+8, _mm256_mul_ps(_mm256_cvtepi32_ps(vi32_1), vd256));
+            }
+        }
+#else
+        // Scalar fallback
+        for (int j = 0; j < QK_TQ3_0; ++j) {
+            out[j] = (float)tmp[j] * d;
+        }
+#endif
+    }
+}
+
+// ── Convenience wrapper (nrows × n_per_row) ──────────────────────────────────
+size_t quantize_tq3_0(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst,
+                       int64_t nrow, int64_t n_per_row, const float * quant_weights) {
+    (void)quant_weights; // KV-cache activations don't use importance weights
+    assert(n_per_row % QK_TQ3_0 == 0);
+    const size_t row_size = ggml_row_size(GGML_TYPE_TQ3_0, n_per_row);
+    quantize_row_tq3_0_ref(src, (block_tq3_0 *)dst, (int64_t)nrow * n_per_row);
     return nrow * row_size;
 }
 
@@ -5527,6 +5689,10 @@ bool ggml_validate_row_data(enum ggml_type type, const void * data, size_t nbyte
         case GGML_TYPE_TQ2_0:
             {
                 VALIDATE_ROW_DATA_D_F16_IMPL(block_tq2_0, data, nb);
+            } break;
+        case GGML_TYPE_TQ3_0:
+            {
+                VALIDATE_ROW_DATA_D_F16_IMPL(block_tq3_0, data, nb);
             } break;
         case GGML_TYPE_IQ1_S:
             {

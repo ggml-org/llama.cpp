@@ -489,6 +489,9 @@ void llama_context::sched_reserve() {
         }
 
         cparams.auto_fa = false;
+        if ((int)cparams.type_k == 36 || (int)cparams.type_v == 36) {
+            cparams.flash_attn = false;
+        }
     }
 
     if (cparams.auto_fgdn) {

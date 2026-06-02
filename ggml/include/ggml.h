@@ -423,9 +423,10 @@ extern "C" {
         // GGML_TYPE_Q4_0_8_8 = 33,
         GGML_TYPE_TQ1_0   = 34,
         GGML_TYPE_TQ2_0   = 35,
-        // GGML_TYPE_IQ4_NL_4_4 = 36,
-        // GGML_TYPE_IQ4_NL_4_8 = 37,
-        // GGML_TYPE_IQ4_NL_8_8 = 38,
+        GGML_TYPE_TQ3_0   = 36, // TurboQuant: 3-bit symmetric, KV-cache-only, 3.5 bpw
+        // GGML_TYPE_IQ4_NL_4_4 = 37, (was 36, shifted)
+        // GGML_TYPE_IQ4_NL_4_8 = 38, (was 37, shifted)
+        // GGML_TYPE_IQ4_NL_8_8 = 39, (was 38, shifted)
         GGML_TYPE_MXFP4   = 39, // MXFP4 (1 block)
         GGML_TYPE_NVFP4   = 40, // NVFP4 (4 blocks, E4M3 scale)
         GGML_TYPE_Q1_0    = 41,

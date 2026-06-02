@@ -4243,3 +4243,70 @@ void ggml_vec_dot_iq4_xs_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const v
 #endif
 }
 
+
+// ── TQ3_0 × Q8_0: ARM NEON dot product ───────────────────────────────────────
+// Strategy:
+//   1. Scalar unpack loop: 12 packed-3-bit bytes → 32 int8 values in tmp[].
+//      (Cross-byte bit extraction cannot be cleanly vectorised with NEON.)
+//   2. NEON: int8×int8 dot product using vdotq_s32 (DOTPROD) or vmull_s8 path.
+void ggml_vec_dot_tq3_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs,
+                              const void * GGML_RESTRICT vx, size_t bx,
+                              const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    assert(n % QK_TQ3_0 == 0);
+    assert(nrc == 1);
+    UNUSED(nrc); UNUSED(bx); UNUSED(by); UNUSED(bs);
+
+    const int nb = n / QK_TQ3_0;
+    const block_tq3_0 * GGML_RESTRICT x = vx;
+    const block_q8_0  * GGML_RESTRICT y = vy;
+
+#if defined(__ARM_NEON)
+    float32x4_t sumv = vdupq_n_f32(0.0f);
+
+    for (int i = 0; i < nb; ++i) {
+        const float dx = GGML_CPU_FP16_TO_FP32(x[i].d);
+        const float dy = GGML_CPU_FP16_TO_FP32(y[i].d);
+
+        // Step 1: Unpack 32 × 3-bit values to int8 (subtract 4 for signed centring)
+        int8_t tmp[QK_TQ3_0];
+        for (int g = 0; g < 4; ++g) {
+            const uint8_t * b = x[i].qs + g * 3;
+            tmp[g*8+0] = (int8_t)(( b[0]                     & 7) - 4);
+            tmp[g*8+1] = (int8_t)(((b[0] >> 3)               & 7) - 4);
+            tmp[g*8+2] = (int8_t)((((b[0]>>6)|(b[1]<<2))     & 7) - 4);
+            tmp[g*8+3] = (int8_t)(((b[1] >> 1)               & 7) - 4);
+            tmp[g*8+4] = (int8_t)(((b[1] >> 4)               & 7) - 4);
+            tmp[g*8+5] = (int8_t)((((b[1]>>7)|(b[2]<<1))     & 7) - 4);
+            tmp[g*8+6] = (int8_t)(((b[2] >> 2)               & 7) - 4);
+            tmp[g*8+7] = (int8_t)(((b[2] >> 5)               & 7) - 4);
+        }
+
+        // Step 2: NEON int8 × int8 → int32 accumulation over 32 elements
+        int32x4_t sumi = vdupq_n_s32(0);
+
+        const int8x16_t xtq0 = vld1q_s8(tmp + 0);
+        const int8x16_t xtq1 = vld1q_s8(tmp + 16);
+        const int8x16_t yq0  = vld1q_s8(y[i].qs + 0);
+        const int8x16_t yq1  = vld1q_s8(y[i].qs + 16);
+
+#if defined(__ARM_FEATURE_DOTPROD)
+        sumi = vdotq_s32(sumi, xtq0, yq0);
+        sumi = vdotq_s32(sumi, xtq1, yq1);
+#else
+        sumi = vaddq_s32(sumi, vpaddlq_s16(vaddq_s16(
+                vmull_s8(vget_low_s8(xtq0),  vget_low_s8(yq0)),
+                vmull_s8(vget_high_s8(xtq0), vget_high_s8(yq0)))));
+        sumi = vaddq_s32(sumi, vpaddlq_s16(vaddq_s16(
+                vmull_s8(vget_low_s8(xtq1),  vget_low_s8(yq1)),
+                vmull_s8(vget_high_s8(xtq1), vget_high_s8(yq1)))));
+#endif
+
+        sumv = vmlaq_n_f32(sumv, vcvtq_f32_s32(sumi), dx * dy);
+    }
+
+    *s = vaddvq_f32(sumv);
+#else
+    UNUSED(x); UNUSED(y); UNUSED(nb);
+    ggml_vec_dot_tq3_0_q8_0_generic(n, s, bs, vx, bx, vy, by, nrc);
+#endif
+}

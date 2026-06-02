@@ -277,6 +277,41 @@ typedef struct {
 } block_tq2_0;
 static_assert(sizeof(block_tq2_0) == sizeof(ggml_half) + QK_K / 4, "wrong tq2_0 block size/padding");
 
+// ============================================================================
+// TurboQuant TQ3_0 — 3-bit symmetric quantization, KV-cache-only
+// ============================================================================
+//
+// Design goals:
+//   • Compress attention Key/Value activations (NOT model weights).
+//   • Preserve sign: values are centred at q=4 → actual value ≈ 0.
+//   • Compact block: 32 elements → 14 bytes = 3.5 bits/element effective.
+//
+// Block layout:
+//   d      : ggml_fp16_t  – per-block scale  (2 bytes)
+//   qs[12] : uint8_t[12]  – 32 × 3-bit packed values  (12 bytes)
+//
+// Encoding (signed, symmetric):
+//   quantised_value = clamp( round(x / d) + 4 , 0, 7 )
+//   reconstructed   = (q - 4) * d
+//
+// Bit-packing (3 bytes per 8 elements, LSB-first within each byte):
+//   byte[0] : q[0](3b) | q[1](3b) | q[2](2b lsb)
+//   byte[1] : q[2](1b msb) | q[3](3b) | q[4](3b) | q[5](1b lsb)
+//   byte[2] : q[5](2b msb) | q[6](3b) | q[7](3b)
+//   … repeated for elements 8-15, 16-23, 24-31 (bytes 3-5, 6-8, 9-11)
+//
+// Coverage:  scale d = amax/3.0 → range [-3,+3]×d covers [-amax, +amax]
+
+#define QK_TQ3_0  32   // elements per TQ3_0 block
+#define QKB_TQ3_0 12   // packed data bytes per block  (32 × 3 bits / 8)
+
+typedef struct {
+    ggml_half d;            // per-block scale  (always positive; sign conveyed by q-4)
+    uint8_t   qs[QKB_TQ3_0]; // 32 quantised values at 3 bits each, packed
+} block_tq3_0;
+static_assert(sizeof(block_tq3_0) == sizeof(ggml_half) + QKB_TQ3_0,
+              "wrong tq3_0 block size/padding");
+
 //
 // Super-block quantization structures
 //
