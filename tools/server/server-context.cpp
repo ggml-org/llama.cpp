@@ -19,7 +19,10 @@
 #include <algorithm>
 #include <cstddef>
 #include <cinttypes>
+#include <cstring>
 #include <exception>
+#include <fstream>
+#include <ios>
 #include <memory>
 #include <filesystem>
 #include <utility>
@@ -36,6 +39,167 @@
 using json = nlohmann::ordered_json;
 
 constexpr int HTTP_POLLING_SECONDS = 1;
+
+// ─── slot-checkpoint sidecar persistence ────────────────────────────────────
+// llama_state_seq_save_file / llama_state_seq_load_file persist the active
+// slot KV state, but NOT the prompt-checkpoint list — which is exactly what
+// hybrid-arch models need to avoid cold prefill on prompt switching. This
+// extends both call sites with a `.ckpt` sidecar that serializes the
+// std::list<common_prompt_checkpoint> alongside the main slot blob.
+//
+// Sidecar format (LSCKPT2):
+//   magic[8]    = "LSCKPT2\0"
+//   count       : uint64                    (number of checkpoints)
+//   for each checkpoint:
+//     pos_min   : int32  (llama_pos)
+//     pos_max   : int32
+//     n_tokens  : int64
+//     size_tgt  : uint64
+//     size_dft  : uint64                    (zero if no draft / no MTP)
+//     bytes[size_tgt]
+//     bytes[size_dft]
+
+static std::string slot_ckpt_sidecar_path(const std::string & filepath) {
+    return filepath + ".ckpt";
+}
+
+template <typename T>
+static bool slot_ckpt_write(std::ofstream & out, const T & value) {
+    out.write(reinterpret_cast<const char *>(&value), sizeof(T));
+    return out.good();
+}
+
+template <typename T>
+static bool slot_ckpt_read(std::ifstream & in, T & value) {
+    in.read(reinterpret_cast<char *>(&value), sizeof(T));
+    return in.good();
+}
+
+static size_t save_slot_checkpoints(
+        const std::string & filepath,
+        const std::list<common_prompt_checkpoint> & checkpoints) {
+    const std::string sidecar = slot_ckpt_sidecar_path(filepath);
+    std::ofstream out(sidecar, std::ios::binary | std::ios::trunc);
+    if (!out.good()) {
+        LOG_WRN("%s: failed to open checkpoint sidecar for write: %s\n",
+                __func__, sidecar.c_str());
+        return 0;
+    }
+
+    const char magic[8] = { 'L', 'S', 'C', 'K', 'P', 'T', '2', '\0' };
+    out.write(magic, sizeof(magic));
+
+    const uint64_t count = checkpoints.size();
+    if (!slot_ckpt_write(out, count)) {
+        return 0;
+    }
+
+    size_t total = sizeof(magic) + sizeof(count);
+    for (const auto & ck : checkpoints) {
+        const int32_t  pos_min  = ck.pos_min;
+        const int32_t  pos_max  = ck.pos_max;
+        const int64_t  n_tokens = ck.n_tokens;
+        const uint64_t size_tgt = ck.data_tgt.size();
+        const uint64_t size_dft = ck.data_dft.size();
+
+        if (!slot_ckpt_write(out, pos_min)  ||
+            !slot_ckpt_write(out, pos_max)  ||
+            !slot_ckpt_write(out, n_tokens) ||
+            !slot_ckpt_write(out, size_tgt) ||
+            !slot_ckpt_write(out, size_dft)) {
+            return 0;
+        }
+        total += sizeof(pos_min) + sizeof(pos_max) + sizeof(n_tokens)
+               + sizeof(size_tgt) + sizeof(size_dft);
+
+        if (size_tgt > 0) {
+            out.write(reinterpret_cast<const char *>(ck.data_tgt.data()), size_tgt);
+            if (!out.good()) return 0;
+            total += size_tgt;
+        }
+        if (size_dft > 0) {
+            out.write(reinterpret_cast<const char *>(ck.data_dft.data()), size_dft);
+            if (!out.good()) return 0;
+            total += size_dft;
+        }
+    }
+
+    return total;
+}
+
+static size_t load_slot_checkpoints(
+        const std::string & filepath,
+        std::list<common_prompt_checkpoint> & checkpoints) {
+    checkpoints.clear();
+
+    const std::string sidecar = slot_ckpt_sidecar_path(filepath);
+    if (!std::filesystem::exists(sidecar)) {
+        return 0;
+    }
+
+    std::ifstream in(sidecar, std::ios::binary);
+    if (!in.good()) {
+        LOG_WRN("%s: failed to open checkpoint sidecar for read: %s\n",
+                __func__, sidecar.c_str());
+        return 0;
+    }
+
+    char magic[8] = {};
+    in.read(magic, sizeof(magic));
+    const char expected[8] = { 'L', 'S', 'C', 'K', 'P', 'T', '2', '\0' };
+    if (!in.good() || std::memcmp(magic, expected, sizeof(magic)) != 0) {
+        LOG_WRN("%s: invalid or stale checkpoint sidecar (expected LSCKPT2): %s\n",
+                __func__, sidecar.c_str());
+        return 0;
+    }
+
+    uint64_t count = 0;
+    if (!slot_ckpt_read(in, count)) {
+        return 0;
+    }
+
+    size_t total = sizeof(magic) + sizeof(count);
+    for (uint64_t i = 0; i < count; ++i) {
+        int32_t  pos_min  = 0;
+        int32_t  pos_max  = 0;
+        int64_t  n_tokens = 0;
+        uint64_t size_tgt = 0;
+        uint64_t size_dft = 0;
+
+        if (!slot_ckpt_read(in, pos_min)  ||
+            !slot_ckpt_read(in, pos_max)  ||
+            !slot_ckpt_read(in, n_tokens) ||
+            !slot_ckpt_read(in, size_tgt) ||
+            !slot_ckpt_read(in, size_dft)) {
+            checkpoints.clear();
+            return 0;
+        }
+        total += sizeof(pos_min) + sizeof(pos_max) + sizeof(n_tokens)
+               + sizeof(size_tgt) + sizeof(size_dft);
+
+        common_prompt_checkpoint ck;
+        ck.pos_min  = pos_min;
+        ck.pos_max  = pos_max;
+        ck.n_tokens = n_tokens;
+        ck.data_tgt.resize(size_tgt);
+        ck.data_dft.resize(size_dft);
+
+        if (size_tgt > 0) {
+            in.read(reinterpret_cast<char *>(ck.data_tgt.data()), size_tgt);
+            if (!in.good()) { checkpoints.clear(); return 0; }
+            total += size_tgt;
+        }
+        if (size_dft > 0) {
+            in.read(reinterpret_cast<char *>(ck.data_dft.data()), size_dft);
+            if (!in.good()) { checkpoints.clear(); return 0; }
+            total += size_dft;
+        }
+
+        checkpoints.emplace_back(std::move(ck));
+    }
+
+    return total;
+}
 
 static uint32_t server_n_outputs_max(const common_params & params) {
     const uint32_t n_batch  = params.n_batch;
@@ -2194,6 +2358,12 @@ private:
                     const llama_tokens & tokens = slot->prompt.tokens.get_tokens();
                     const size_t nwrite = llama_state_seq_save_file(ctx_tgt, filepath.c_str(), slot->id, tokens.data(), token_count);
 
+                    const size_t nwrite_ckpts = save_slot_checkpoints(filepath, slot->prompt.checkpoints);
+                    if (!slot->prompt.checkpoints.empty()) {
+                        SLT_INF(*slot, "saved %zu context checkpoint(s), sidecar size = %.3f MiB\n",
+                                slot->prompt.checkpoints.size(), (float) nwrite_ckpts / 1024 / 1024);
+                    }
+
                     const int64_t t_end = ggml_time_us();
                     const double t_save_ms = (t_end - t_start) / 1000.0;
 
@@ -2240,6 +2410,13 @@ private:
                     tokens.resize(token_count);
                     slot->prompt.tokens.clear();
                     slot->prompt.tokens.insert(tokens);
+
+                    slot->prompt.checkpoints.clear();
+                    const size_t nread_ckpts = load_slot_checkpoints(filepath, slot->prompt.checkpoints);
+                    if (!slot->prompt.checkpoints.empty()) {
+                        SLT_INF(*slot, "restored %zu context checkpoint(s), sidecar size = %.3f MiB\n",
+                                slot->prompt.checkpoints.size(), (float) nread_ckpts / 1024 / 1024);
+                    }
 
                     const int64_t t_end = ggml_time_us();
                     const double t_restore_ms = (t_end - t_start) / 1000.0;
