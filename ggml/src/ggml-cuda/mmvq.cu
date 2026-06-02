@@ -1194,14 +1194,12 @@ void ggml_cuda_mul_mat_vec_q(
             fusion_local.gate_bias = fusion->gate_bias->data;
         }
         if (fusion->x_scale) {
-            GGML_ASSERT(src0->type == GGML_TYPE_NVFP4);
             GGML_ASSERT(fusion->x_scale->type == GGML_TYPE_F32);
             GGML_ASSERT(ggml_is_contiguous(fusion->x_scale));
             GGML_ASSERT(ggml_nelements(fusion->x_scale) == (ids ? src0->ne[2] : 1));
             fusion_local.x_scale = fusion->x_scale->data;
         }
         if (fusion->gate_scale) {
-            GGML_ASSERT(src0->type == GGML_TYPE_NVFP4);
             GGML_ASSERT(fusion->gate_scale->type == GGML_TYPE_F32);
             GGML_ASSERT(ggml_is_contiguous(fusion->gate_scale));
             GGML_ASSERT(ggml_nelements(fusion->gate_scale) == (ids ? src0->ne[2] : 1));

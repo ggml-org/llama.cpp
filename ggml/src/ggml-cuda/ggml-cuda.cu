@@ -3885,13 +3885,13 @@ struct ggml_cuda_mmid_lane {
     int n_nodes = 0;
 };
 
-static bool ggml_cuda_parse_nvfp4_mmid_lane(const ggml_cgraph * cgraph, int i, ggml_cuda_mmid_lane & lane) {
+static bool ggml_cuda_parse_mmid_scale_lane(const ggml_cgraph * cgraph, int i, ggml_cuda_mmid_lane & lane) {
     if (i >= cgraph->n_nodes || cgraph->nodes[i]->op != GGML_OP_MUL_MAT_ID) {
         return false;
     }
 
     ggml_tensor * mm = cgraph->nodes[i];
-    if (mm->src[0]->type != GGML_TYPE_NVFP4 || mm->src[1]->type != GGML_TYPE_F32 || mm->type != GGML_TYPE_F32 || mm->src[2] == nullptr) {
+    if (!ggml_is_quantized(mm->src[0]->type) || mm->src[1]->type != GGML_TYPE_F32 || mm->type != GGML_TYPE_F32 || mm->src[2] == nullptr) {
         return false;
     }
 
@@ -3950,13 +3950,13 @@ static bool ggml_cuda_parse_nvfp4_mmid_lane(const ggml_cgraph * cgraph, int i, g
     return true;
 }
 
-static bool ggml_cuda_parse_nvfp4_mm_lane(const ggml_cgraph * cgraph, int i, ggml_cuda_mmid_lane & lane) {
+static bool ggml_cuda_parse_mm_scale_lane(const ggml_cgraph * cgraph, int i, ggml_cuda_mmid_lane & lane) {
     if (i >= cgraph->n_nodes || cgraph->nodes[i]->op != GGML_OP_MUL_MAT) {
         return false;
     }
 
     ggml_tensor * mm = cgraph->nodes[i];
-    if (mm->src[0]->type != GGML_TYPE_NVFP4 || mm->src[1]->type != GGML_TYPE_F32 || mm->type != GGML_TYPE_F32) {
+    if (!ggml_is_quantized(mm->src[0]->type) || mm->src[1]->type != GGML_TYPE_F32 || mm->type != GGML_TYPE_F32) {
         return false;
     }
 
@@ -4102,14 +4102,14 @@ static bool ggml_cuda_should_fuse_mm_lanes(const ggml_cuda_mmid_lane & up, const
     return !split;
 }
 
-static int ggml_cuda_try_fuse_nvfp4_mmid_scale_glu(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph * cgraph, int i) {
+static int ggml_cuda_try_fuse_mmid_scale_glu(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph * cgraph, int i) {
     ggml_cuda_mmid_lane lane0;
-    if (!ggml_cuda_parse_nvfp4_mmid_lane(cgraph, i, lane0)) {
+    if (!ggml_cuda_parse_mmid_scale_lane(cgraph, i, lane0)) {
         return 0;
     }
 
     ggml_cuda_mmid_lane lane1;
-    if (!ggml_cuda_parse_nvfp4_mmid_lane(cgraph, i + lane0.n_nodes, lane1)) {
+    if (!ggml_cuda_parse_mmid_scale_lane(cgraph, i + lane0.n_nodes, lane1)) {
         return 0;
     }
 
@@ -4166,14 +4166,14 @@ static int ggml_cuda_try_fuse_nvfp4_mmid_scale_glu(ggml_backend_cuda_context * c
     return glu_idx - i;
 }
 
-static int ggml_cuda_try_fuse_nvfp4_mm_scale_glu(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph * cgraph, int i) {
+static int ggml_cuda_try_fuse_mm_scale_glu(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph * cgraph, int i) {
     ggml_cuda_mmid_lane lane0;
-    if (!ggml_cuda_parse_nvfp4_mm_lane(cgraph, i, lane0)) {
+    if (!ggml_cuda_parse_mm_scale_lane(cgraph, i, lane0)) {
         return 0;
     }
 
     ggml_cuda_mmid_lane lane1;
-    if (!ggml_cuda_parse_nvfp4_mm_lane(cgraph, i + lane0.n_nodes, lane1)) {
+    if (!ggml_cuda_parse_mm_scale_lane(cgraph, i + lane0.n_nodes, lane1)) {
         return 0;
     }
 
@@ -4226,9 +4226,9 @@ static int ggml_cuda_try_fuse_nvfp4_mm_scale_glu(ggml_backend_cuda_context * cud
     return glu_idx - i;
 }
 
-static int ggml_cuda_try_fuse_nvfp4_mmid_scale(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph * cgraph, int i) {
+static int ggml_cuda_try_fuse_mmid_scale(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph * cgraph, int i) {
     ggml_cuda_mmid_lane lane;
-    if (!ggml_cuda_parse_nvfp4_mmid_lane(cgraph, i, lane) || lane.scale == nullptr) {
+    if (!ggml_cuda_parse_mmid_scale_lane(cgraph, i, lane) || lane.scale == nullptr) {
         return 0;
     }
 
@@ -4256,9 +4256,9 @@ static int ggml_cuda_try_fuse_nvfp4_mmid_scale(ggml_backend_cuda_context * cuda_
     return lane.n_nodes - 1;
 }
 
-static int ggml_cuda_try_fuse_nvfp4_mm_scale(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph * cgraph, int i) {
+static int ggml_cuda_try_fuse_mm_scale(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph * cgraph, int i) {
     ggml_cuda_mmid_lane lane;
-    if (!ggml_cuda_parse_nvfp4_mm_lane(cgraph, i, lane) || lane.scale == nullptr) {
+    if (!ggml_cuda_parse_mm_scale_lane(cgraph, i, lane) || lane.scale == nullptr) {
         return 0;
     }
 
@@ -4285,9 +4285,6 @@ static int ggml_cuda_try_fuse_nvfp4_mm_scale(ggml_backend_cuda_context * cuda_ct
 static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph * cgraph, int i) {
 
     static bool disable_fusion = getenv("GGML_CUDA_DISABLE_FUSION") != nullptr && std::atoi(getenv("GGML_CUDA_DISABLE_FUSION"));
-    const char * disable_nvfp4_mmid_scale_fusion_env = getenv("GGML_CUDA_DISABLE_NVFP4_MMID_SCALE_FUSION");
-    const bool disable_nvfp4_mmid_scale_fusion =
-        disable_nvfp4_mmid_scale_fusion_env != nullptr && std::atoi(disable_nvfp4_mmid_scale_fusion_env);
     if (disable_fusion) {
         return 0;
     }
@@ -4453,16 +4450,13 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
         }
     }
 
-    int fused_nvfp4_mmid_nodes = 0;
-    if (!disable_nvfp4_mmid_scale_fusion) {
-        fused_nvfp4_mmid_nodes = ggml_cuda_try_fuse_nvfp4_mmid_scale_glu(cuda_ctx, cgraph, i);
-        if (fused_nvfp4_mmid_nodes > 0) {
-            return fused_nvfp4_mmid_nodes;
-        }
-        fused_nvfp4_mmid_nodes = ggml_cuda_try_fuse_nvfp4_mm_scale_glu(cuda_ctx, cgraph, i);
-        if (fused_nvfp4_mmid_nodes > 0) {
-            return fused_nvfp4_mmid_nodes;
-        }
+    int fused_scale_nodes = ggml_cuda_try_fuse_mmid_scale_glu(cuda_ctx, cgraph, i);
+    if (fused_scale_nodes > 0) {
+        return fused_scale_nodes;
+    }
+    fused_scale_nodes = ggml_cuda_try_fuse_mm_scale_glu(cuda_ctx, cgraph, i);
+    if (fused_scale_nodes > 0) {
+        return fused_scale_nodes;
     }
 
     bool fused_mul_mat_vec = false;
@@ -4595,15 +4589,13 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
     fused_mul_mat_vec = false;
     fused_node_count  = 0;
 
-    if (!disable_nvfp4_mmid_scale_fusion) {
-        fused_nvfp4_mmid_nodes = ggml_cuda_try_fuse_nvfp4_mmid_scale(cuda_ctx, cgraph, i);
-        if (fused_nvfp4_mmid_nodes > 0) {
-            return fused_nvfp4_mmid_nodes;
-        }
-        fused_nvfp4_mmid_nodes = ggml_cuda_try_fuse_nvfp4_mm_scale(cuda_ctx, cgraph, i);
-        if (fused_nvfp4_mmid_nodes > 0) {
-            return fused_nvfp4_mmid_nodes;
-        }
+    fused_scale_nodes = ggml_cuda_try_fuse_mmid_scale(cuda_ctx, cgraph, i);
+    if (fused_scale_nodes > 0) {
+        return fused_scale_nodes;
+    }
+    fused_scale_nodes = ggml_cuda_try_fuse_mm_scale(cuda_ctx, cgraph, i);
+    if (fused_scale_nodes > 0) {
+        return fused_scale_nodes;
     }
 
     // gate + add + glu + up + add
