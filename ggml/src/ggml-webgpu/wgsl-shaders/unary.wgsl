@@ -66,7 +66,7 @@ fn erf_approx(x: TYPE) -> TYPE {
 }
 
 @compute @workgroup_size(WG_SIZE)
-fn main(@builtin(global_invocation_index) gindex: vec3<u32>) {
+fn main(@builtin(global_invocation_index) gindex: u32) {
     if (gindex >= params.ne) {
         return;
     }
