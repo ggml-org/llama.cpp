@@ -209,15 +209,15 @@ llama_model_qwen35::graph::graph(const llama_model & model, const llm_graph_para
     }
     cur = inpL;
 
+    // post-norm hidden state feeds both the LM head and the MTP seed below
+    cur = build_norm(cur, model.output_norm, nullptr, LLM_NORM_RMS, -1);
+
     cb(cur, "h_pre_norm", -1);
     res->t_h_pre_norm = cur;
 
     if (!cparams.embeddings_pre_norm_masked && inp_out_ids) {
         cur = ggml_get_rows(ctx0, cur, inp_out_ids);
     }
-
-    // Final norm
-    cur = build_norm(cur, model.output_norm, nullptr, LLM_NORM_RMS, -1);
 
     cb(cur, "result_norm", -1);
     res->t_embd = cur;
@@ -625,18 +625,17 @@ llama_model_qwen35::graph_mtp::graph_mtp(const llama_model & model, const llm_gr
     cur = ggml_add(ctx0, cur, ffn_residual);
     cb(cur, "mtp_post_ffn", il);
 
-    // Pre-norm hidden state: used by the AR draft loop to seed the next MTP step.
-    // (In the trunk graph this is `t_h_pre_norm`; the MTP head reuses the same slot.)
-    cb(cur, "h_pre_norm", -1);
-    res->t_h_pre_norm = cur;
-
-    cur   = ggml_get_rows(ctx0, cur, inp_out_ids);
-
     ggml_tensor * head_norm_w = layer.nextn.shared_head_norm
             ? layer.nextn.shared_head_norm
             : model.output_norm;
     GGML_ASSERT(head_norm_w && "QWEN35 MTP: missing both nextn.shared_head_norm and output_norm");
     cur = build_norm(cur, head_norm_w, nullptr, LLM_NORM_RMS, -1);
+
+    // this is actually post norm
+    cb(cur, "h_pre_norm", -1);
+    res->t_h_pre_norm = cur;
+
+    cur = ggml_get_rows(ctx0, cur, inp_out_ids);
     cb(cur, "mtp_shared_head_norm", -1);
 
     ggml_tensor * head_w = layer.nextn.shared_head_head ? layer.nextn.shared_head_head : model.output;
