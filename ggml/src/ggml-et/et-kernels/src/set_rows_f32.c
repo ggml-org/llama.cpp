@@ -172,12 +172,12 @@ int entry_point(struct ggml_et_set_rows_params* params, void* env) {
     if (ne10 != ne01) {
         return -1; // Number of indices must match number of source rows
     }
-// #ifdef ET_UBERKERNEL
-    // evict_region_past_l2(params->src0.data, tensor_bytes(&params->src0));
-    // evict_region_past_l2(params->src1.data, tensor_bytes(&params->src1));
-    // FENCE;
-    // et_barrier(ET_BARRIER_GLOBAL);
-// #endif
+#ifdef ET_UBERKERNEL
+    evict_region_past_l2(params->src0.data, tensor_bytes(&params->src0));
+    evict_region_past_l2(params->src1.data, tensor_bytes(&params->src1));
+    FENCE;
+    et_barrier(ET_BARRIER_GLOBAL);
+#endif
     const int64_t total_rows = ne01 * ne02 * ne03;
 
     // Determine cache-line element count based on destination type

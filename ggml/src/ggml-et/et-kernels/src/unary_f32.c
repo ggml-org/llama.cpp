@@ -484,6 +484,11 @@ int entry_point(struct ggml_et_unary_params* params, void* env) {
 
     struct ggml_tensor* src0 = &params->src0;
     struct ggml_tensor* dst = &params->dst;
+    
+    // evict_region_past_l2(&params->unary_op, sizeof(int32_t));
+    // WAIT_CACHEOPS;
+    // FENCE;
+    
     int32_t unary_op = params->unary_op;
 
     if (src0->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32) {
@@ -491,15 +496,17 @@ int entry_point(struct ggml_et_unary_params* params, void* env) {
     }
 
     float* src0_data = (float*)src0->data;
-    // evict_region_past_l2(src0->data, tensor_bytes(src0));
     float* dst_data = (float*)dst->data;
-    // evict_region_past_l2(dst->data, tensor_bytes(dst));
-    // et_barrier_global(32ULL);
     
-
     if (!src0_data || !dst_data) {
         return -1;
     }
+
+    // evict_region_past_l2(src0_data, tensor_bytes(src0));
+    // evict_region_past_l2(dst_data, tensor_bytes(dst));
+    // WAIT_CACHEOPS;
+    // FENCE;
+    // et_barrier(ET_BARRIER_GLOBAL);
 
     // Tensor layout: src and dst are F32 with at least dim-0 contiguity
     //   - nb[0] == sizeof(float) (rows are dense; SIMD loads stay legal)
@@ -515,6 +522,11 @@ int entry_point(struct ggml_et_unary_params* params, void* env) {
     const size_t  s_nb1 = src0->nb[1], s_nb2 = src0->nb[2], s_nb3 = src0->nb[3];
     const size_t  d_nb1 = dst->nb[1],  d_nb2 = dst->nb[2],  d_nb3 = dst->nb[3];
 
+    // evict_region_past_l2(src0_data, tensor_bytes(src0));
+    // evict_region_past_l2(dst_data, tensor_bytes(dst));
+    // FENCE;
+    // WAIT_CACHEOPS;
+    // et_barrier(ET_BARRIER_GLOBAL);
     const int64_t elements_per_cacheline = 16;  // 64 bytes / 4 bytes per float
     const int64_t total_cachelines = (total_elements + elements_per_cacheline - 1) / elements_per_cacheline;
 
@@ -534,12 +546,19 @@ int entry_point(struct ggml_et_unary_params* params, void* env) {
     // Fast path: tensor is fully contiguous (no view), walk it as a flat array.
     // This preserves perf for the common case and avoids the per-row dispatch loop.
     const size_t row_bytes = (size_t)nc * sizeof(float);
+    // evict_region_past_l2((src0_data + elem_start), row_bytes);
+    // // evict_region_past_l2((dst_data + elem_start), row_bytes);
+    // FENCE;
+    // WAIT_CACHEOPS;
+    // et_barrier(ET_BARRIER_GLOBAL);   
+
     const int is_flat =
         s_nb1 == row_bytes && s_nb2 == s_nb1 * (size_t)ne1 && s_nb3 == s_nb2 * (size_t)ne2 &&
         d_nb1 == row_bytes && d_nb2 == d_nb1 * (size_t)ne1 && d_nb3 == d_nb2 * (size_t)ne2;
 
     if (is_flat) {
         float* src_ptr = src0_data + elem_start;
+        // evict_region_past_l2(src_ptr, 1024);
         float* dst_ptr = dst_data  + elem_start;
         const int32_t count = (int32_t)(elem_end - elem_start);
         switch (unary_op) {
@@ -589,6 +608,10 @@ int entry_point(struct ggml_et_unary_params* params, void* env) {
         float* src_ptr = (float*)((char*)src0_data + i3 * s_nb3 + i2 * s_nb2 + i1 * s_nb1) + col;
         float* dst_ptr = (float*)((char*)dst_data  + i3 * d_nb3 + i2 * d_nb2 + i1 * d_nb1) + col;
         const int32_t count = (int32_t)take;
+
+        // evict_region_past_l2(src_ptr, 1024);
+        // FENCE;
+        // et_barrier(ET_BARRIER_GLOBAL);
 
         switch (unary_op) {
             case GGML_UNARY_OP_NEG:         vec_neg(dst_ptr, src_ptr, count);         break;

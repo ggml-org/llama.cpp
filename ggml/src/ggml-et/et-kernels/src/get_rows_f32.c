@@ -537,11 +537,11 @@ int entry_point(struct ggml_et_get_rows_params* params, void* env) {
     void* src0_data = src0->data;
     int32_t* src1_data = (int32_t*)src1->data;
     float* dst_data = (float*)dst->data;
+#ifdef ET_UBERKERNEL    
     evict_region_past_l2(src0_data, tensor_bytes(src0));
     evict_region_past_l2(src1_data, tensor_bytes(src1));
     evict_region_past_l2(dst_data, tensor_bytes(dst));
-    
-
+#endif
 
     if (!src0_data || !src1_data || !dst_data) {
         return -1; // Null data pointer
@@ -558,8 +558,9 @@ int entry_point(struct ggml_et_get_rows_params* params, void* env) {
     const int64_t ne13 = src1->ne[3];  // Outer batch dimension for indices
 
     const int64_t total_rows_to_extract = ne10 * ne11 * ne12 * ne13;
+#ifdef ET_UBERKERNEL  
     et_barrier(ET_BARRIER_GLOBAL);
-
+#endif
     // Naive single-threaded implementation - process all rows sequentially
     // XXX: Do we really need a single-threaded implementation?
     for (int64_t i = 0; i < total_rows_to_extract; i++) {

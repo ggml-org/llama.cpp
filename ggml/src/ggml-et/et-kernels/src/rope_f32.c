@@ -505,8 +505,15 @@ int entry_point(struct ggml_et_rope_params* params, void* env) {
     if (!src0_data || !src1_data || !dst_data) {
         return -1;
     }
-
-
+#ifdef ET_UBERKERNEL
+    const size_t src0_bytes = (size_t)src0->ne[0] * src0->ne[1] * src0->ne[2] * src0->ne[3] * src0->nb[0];
+    const size_t src1_bytes = (size_t)src1->ne[0] * src1->ne[1] * src1->ne[2] * src1->ne[3] * src1->nb[0];
+    evict_region_past_l2(src0_data, src0_bytes);
+    evict_region_past_l2(src1_data, src1_bytes);
+    WAIT_CACHEOPS;
+    FENCE;
+    et_barrier(ET_BARRIER_GLOBAL);
+#endif
     const int64_t head_dim = src0->ne[0];
     const int64_t heads    = src0->ne[1];
     const int64_t seq_len  = src0->ne[2];
@@ -538,6 +545,7 @@ int entry_point(struct ggml_et_rope_params* params, void* env) {
         rope_params->beta_slow,
         corr_dims
     );
+    et_barrier(ET_BARRIER_GLOBAL);
 
     // Distribute by individual heads: total = batch * seq_len * heads.
     const int64_t total_heads = batch * seq_len * heads;

@@ -82,10 +82,10 @@ set(KERNELS
 
 set(UBERKERNEL_SUPPORTED_KERNELS
     el_map_f32
-    unary_f32
-    cpy_f32_f16
-    cont_f32
-    get_rows_f32
+    # unary_f32
+    # cpy_f32_f16
+    # cont_f32
+    # get_rows_f32
     concat_f32
     cont_f16
     cumsum_f32
@@ -119,7 +119,7 @@ set(UBERKERNEL_SUPPORTED_KERNELS
     softmax_f32
     solve_tri_f32
     sqr_f32
-    ssm_conv_f32
+    # ssm_conv_f32
     ssm_scan_f32
     sum_rows_f32
     tri_f32
