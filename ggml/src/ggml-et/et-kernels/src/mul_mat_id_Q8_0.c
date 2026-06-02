@@ -7,10 +7,7 @@
 //   ids: I32 [n_expert_used, batch]
 //   C: F32   [M, n_expert_used, batch]
 //
-// Strategy mirrors mul_mat_id_Q4_0.c — all harts active, flat m-major output
-// partition so each hart's run stays inside one (slot, batch), expert/B-column
-// lookup happens once per run, and the x2 paired-row dot amortizes one B load
-// across two rows. Single-row fallback for run tails and unaligned strides.
+// Strategy mirrors mul_mat_id_Q4_0.c.
 //******************************************************************************
 
 #include <stdint.h>

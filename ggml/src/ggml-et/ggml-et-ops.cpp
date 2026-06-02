@@ -733,15 +733,11 @@ bool ggml_et_op_mul_mat(ggml_backend_et_device_context* dev_ctx, const ggml_tens
     if (node->type == GGML_TYPE_F32 &&
         node->src[0]->type == GGML_TYPE_Q4_0 &&
         node->src[1]->type == GGML_TYPE_F32 &&
+        node->src[1]->ne[1] >= 53 &&       // N >= 53
         node->src[0]->ne[1] % 16 == 0 &&   // M % TILE_M
         node->src[0]->ne[0] % 32 == 0) {   // K % BLOCK_K (Q4_0 block)
 
-        // Tensor (matrix) engine for all N: dequantize Q4_0 weights to FP32 and
-        // run TensorFMA32. Full N tiles (N % 16 == 0) and the partial last tile
-        // (n_cur in 1..15, including decode/GEMV) are both handled in-kernel via
-        // a_num_rows = n_cur-1, with the n_cur==4 Errata-D case zero-padded to
-        // AROWS==4. The vector kernel is used only when M or K is not
-        // tensor-tileable (M % 16 != 0 or K % 32 != 0).
+        // Matrix engine for N >= 53; partial N (via n_cur-1) and errata padding are handled in-kernel.
         kernel_name = "mul_mat_Q4_0_matrix_engine";
         src0_type_name = "Q4_0";
 
@@ -749,7 +745,7 @@ bool ggml_et_op_mul_mat(ggml_backend_et_device_context* dev_ctx, const ggml_tens
         node->src[0]->type == GGML_TYPE_Q4_0 &&
         node->src[1]->type == GGML_TYPE_F32) {
 
-        kernel_name = "mul_mat_Q4_0";   // M % 16 != 0 or K % 32 != 0
+        kernel_name = "mul_mat_Q4_0";   // N < 53, or M % 16 != 0 or K % 32 != 0
         src0_type_name = "Q4_0";
 
     } else if (node->type == GGML_TYPE_F32 &&

@@ -7,24 +7,8 @@
 #include "math_fp.h"
 
 // Q4_0 x F32 -> F32 MUL_MAT on the tensor (matrix) engine, TensorFMA32.
-//
-// Weights (src0, Q4_0) are dequantized to FP32 *directly into TenB layout* and
-// fed to the FP32 tensor FMA against FP32 activations (src1). No activation
-// quantization. v1: correctness-first, scalar dequant.
-//
-// Why two harts: the TensorFMA32 accumulator lives in hart 0's FP/vector
-// register file across the whole K reduction (first_pass=1 then accumulate).
-// Dequant's scale multiply is a scalar/vector FP op that uses those same
-// registers, so hart 0 cannot dequant between its accumulating FMAs without
-// corrupting the accumulator. The harts have separate register files, so:
-//   Hart 1: dequantize the next Q4_0 weight panel into double-buffered L2 SCP.
-//   Hart 0: tensor engine only (load A, load B from SCP, FMA, reduce, store).
-// Sync: monotonic counters in L2 SCP with evict-based coherency (mirrors
-// mul_mat_f16_matrix_engine.c).
-//
-// Fused dequant+transpose: while decoding each Q4_0 block, each FP32 value is
-// scattered straight into TenB's [k][m] order (line = k, within-line = m), so a
-// plain tensor_load (no TRANSPOSE32) brings it into L1 already as B.
+// Hart 1: dequantize Q4_0 weights to FP32 into double-buffered L2 SCP.
+// Hart 0: tensor engine compute (FMA, reduce, store).
 
 #define NUM_COMPUTE_SHIRES 32
 #define MINIONS_PER_SHIRE  32
@@ -192,10 +176,7 @@ int entry_point(struct ggml_et_binary_params *params, void *env) {
 
     const int64_t k_steps = K / BLOCK_K;        // number of Q4_0 blocks
 
-    // v1: force a single K-split. The multi-minion K-split + ring-reduce path
-    // has a known correctness bug on partial-N tiles; it is disabled until that
-    // is fixed separately. Each minion computes the full K reduction for its
-    // own output tiles.
+    // Force a single K-split.
     const int64_t k_splits = 1;
 
     const int64_t tiles_per_shire = MINIONS_PER_SHIRE / k_splits;
@@ -308,15 +289,8 @@ int entry_point(struct ggml_et_binary_params *params, void *env) {
         const int64_t nb = nb_idx * TILE_N;
         const int64_t n_cur = (nb + TILE_N <= N) ? TILE_N : (N - nb);
 
-        // Partial-N tiles run the TensorFMA32 with a_num_rows = n_cur-1.
-        //
-        // Errata Type D: TensorFMA32 / TensorFMA16A32 microsequence incorrectly
-        // for certain small A-row counts. With B in L1 SCP (tenb_loc=0, our
-        // case) the bug triggers *only* at AROWS == 3, i.e. exactly n_cur == 4
-        // rows (ACOLS > 0 always holds here). All other n_cur in 1..16 are safe.
-        // Workaround (per the errata doc): pad A to AROWS == 4 (5 rows) with a
-        // zeroed 5th row and store only the valid n_cur rows. The padded row is
-        // never stored, and at AROWS == 4 there is no cross-row coupling.
+        // Partial-N tiles run TensorFMA32 with a_num_rows = n_cur-1.
+        // Errata Type D workaround for n_cur == 4 (AROWS==3): pad A to AROWS==4.
         const int64_t arows_fma = (n_cur == 4) ? 4 : (n_cur - 1);
 
         if (n_cur == 4) {

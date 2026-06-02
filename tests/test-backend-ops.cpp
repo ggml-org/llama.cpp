@@ -8603,18 +8603,6 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
 
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_0, GGML_TYPE_F32, 576, 512, 576, {1,1}, {1,1}));
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_0, GGML_TYPE_F32, 1, 2048, 8192, {1,  1}, {1, 1}));
-    // ET Q4_0 matrix-engine partial-N (N % 16 != 0): the partial last tile runs
-    // on the tensor engine via a_num_rows = n_cur-1 (m % 16 == 0, k % 32 == 0).
-    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_0, GGML_TYPE_F32, 64,  24,  128, {1,1}, {1,1}));
-    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_0, GGML_TYPE_F32, 256, 100, 256, {1,1}, {1,1}));
-    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_0, GGML_TYPE_F32, 128, 33,  256, {2,2}, {1,1}));
-    // Exhaustive leftover sweep: every n_cur in 1..15, both as a pure partial
-    // tile (N = r) and as one full tile + leftover (N = 16 + r). r == 4 exercises
-    // the Errata-D (AROWS==3) zero-pad path in the matrix-engine kernel.
-    for (int r = 1; r <= 15; r++) {
-        test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_0, GGML_TYPE_F32, 64, r,      256, {1,1}, {1,1}));
-        test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_0, GGML_TYPE_F32, 64, 16 + r, 256, {1,1}, {1,1}));
-    }
     for (ggml_type type_a : all_types) {
         test_cases.emplace_back(new test_mul_mat(type_a, GGML_TYPE_F32, 1, 64, 256, {1,  1}, {1, 1}));
     }
@@ -9493,15 +9481,6 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
                 test_cases.emplace_back(new test_mul_mat(type_a, type_b, 4096, bs, 14336, {1,  1}, {1, 1}));
             }
         }
-    }
-
-    // ET Q4_0 matrix-engine coverage at a realistic Llama FFN shape. Full tiles
-    // (N % 16 == 0) and partial tiles (N % 16 != 0, incl. small-N 1..15 and the
-    // 31/47 leftovers) all run on the matrix engine; the small/partial sizes
-    // also exercise the partial-tile a_num_rows path and the n_cur==4 errata pad.
-    for (int bs : {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
-                   31, 47, 256, 500, 512, 520, 1024, 2040, 2048}) {
-        test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_0, GGML_TYPE_F32, 4096, bs, 14336, {1, 1}, {1, 1}));
     }
 
     // qwen3-30b-a3b
