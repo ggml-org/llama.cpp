@@ -649,6 +649,11 @@ struct common_params {
     // evicted together as one unit). Defaults are finite & sane; 0 means "unlimited" (only if set).
     int32_t slot_save_max_count = 64;                                // max snapshots in slot_save_path (0 = unlimited)
     int64_t slot_save_max_bytes = (int64_t) 32 * 1024 * 1024 * 1024; // 32 GiB cap (0 = unlimited)
+    // --- auto disk prompt/KV cache (opt-in, default OFF; see tools/server "auto disk cache") ---
+    // master switch for the transparent cross-process prompt/KV cache. Requires slot_save_path.
+    // When false the whole feature is inert: no startup dir scan, no index, no per-request hashing.
+    bool    slot_save_auto  = false;  // master switch; requires slot_save_path to be set
+    int32_t slot_save_block = 256;    // token-ID hash block size (vLLM-APC / SGLang-radix style)
     std::string media_path; // path to directory for loading media files
 
     float slot_prompt_similarity = 0.1f;
