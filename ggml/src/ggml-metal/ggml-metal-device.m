@@ -177,93 +177,103 @@ static void ggml_metal_library_build_index(ggml_metal_library_t lib) {
     }
 }
 
-static NSString * ggml_metal_library_read_source_file(NSString * path, NSError ** error) {
-    return [NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:error];
+// Parse a `#include "name"` line. Returns the quoted name in *include_name on
+// success. Whitespace-tolerant; ignores `#include <...>` (system headers).
+static bool ggml_metal_library_parse_quoted_include(NSString * line, NSString ** include_name) {
+    NSScanner * scanner = [NSScanner scannerWithString:line];
+    scanner.charactersToBeSkipped = [NSCharacterSet whitespaceCharacterSet];
+
+    if (![scanner scanString:@"#" intoString:NULL] ||
+        ![scanner scanString:@"include" intoString:NULL] ||
+        ![scanner scanString:@"\"" intoString:NULL]) {
+        return false;
+    }
+
+    NSString * name = nil;
+    if (![scanner scanUpToString:@"\"" intoString:&name]) {
+        return false;
+    }
+
+    if (include_name) {
+        *include_name = name;
+    }
+    return true;
 }
 
-static bool ggml_metal_library_append_source(NSMutableString * dst, NSString * path, NSError ** error) {
-    NSString * src = ggml_metal_library_read_source_file(path, error);
+// Recursively inline `#include "name"` directives. System includes (<...>),
+// `#if/#else/#endif`, and other preprocessor lines are passed through to the
+// Metal compiler unchanged. `#pragma once` is dropped since `seen` already
+// guards against double-inclusion.
+static bool ggml_metal_library_flatten_file(NSMutableString * dst, NSString * path,
+                                            NSArray<NSString *> * search_paths,
+                                            NSMutableSet<NSString *> * seen, NSError ** error) {
+    NSString * key = [path stringByStandardizingPath];
+    if ([seen containsObject:key]) {
+        return true;
+    }
+    [seen addObject:key];
+
+    NSString * src = [NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:error];
     if (!src) {
         return false;
     }
 
-    [dst appendString:src];
-    if (![src hasSuffix:@"\n"]) {
+    NSFileManager * fm = [NSFileManager defaultManager];
+    for (NSString * line in [src componentsSeparatedByString:@"\n"]) {
+        NSString * trimmed = [line stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+        if ([trimmed isEqualToString:@"#pragma once"]) {
+            continue;
+        }
+
+        NSString * include_name = nil;
+        if (ggml_metal_library_parse_quoted_include(line, &include_name)) {
+            NSString * resolved = nil;
+            for (NSString * dir in search_paths) {
+                NSString * candidate = [dir stringByAppendingPathComponent:include_name];
+                if ([fm isReadableFileAtPath:candidate]) {
+                    resolved = candidate;
+                    break;
+                }
+            }
+            if (!resolved) {
+                if (error) {
+                    NSString * msg = [NSString stringWithFormat:@"could not resolve include \"%@\" from '%@'", include_name, path];
+                    *error = [NSError errorWithDomain:@"ggml-metal-source-flatten" code:1
+                                             userInfo:@{NSLocalizedDescriptionKey: msg}];
+                }
+                return false;
+            }
+            if (!ggml_metal_library_flatten_file(dst, resolved, search_paths, seen, error)) {
+                return false;
+            }
+            continue;
+        }
+
+        [dst appendString:line];
         [dst appendString:@"\n"];
     }
-    [dst appendString:@"\n"];
 
     return true;
 }
 
-static NSString * ggml_metal_library_resolve_ggml_common_path(NSString * path_base) {
-    NSString * path_runtime = [path_base stringByAppendingPathComponent:@"ggml-common.h"];
-    if ([[NSFileManager defaultManager] isReadableFileAtPath:path_runtime]) {
-        return path_runtime;
-    }
-
-    NSString * path_source = [[path_base stringByDeletingLastPathComponent] stringByAppendingPathComponent:@"ggml-common.h"];
-    if ([[NSFileManager defaultManager] isReadableFileAtPath:path_source]) {
-        return path_source;
-    }
-
-    return path_runtime;
-}
-
 static NSString * ggml_metal_library_flatten_source(NSString * path_source, NSError ** error) {
+    // Search paths cover both runtime layout (build/bin/kernels + build/bin)
+    // and source-tree layout (ggml/src/ggml-metal/kernels + ggml/src/ggml-metal + ggml/src).
     NSString * path_kernels = [path_source stringByDeletingLastPathComponent];
     NSString * path_base    = [path_kernels stringByDeletingLastPathComponent];
-
-    NSString * path_common     = [path_kernels stringByAppendingPathComponent:@"common.h"];
-    NSString * path_dequantize = [path_kernels stringByAppendingPathComponent:@"dequantize.h"];
-    NSString * path_quantize   = [path_kernels stringByAppendingPathComponent:@"quantize.h"];
-    NSString * path_ggml_common = ggml_metal_library_resolve_ggml_common_path(path_base);
-    NSString * path_impl        = [path_base stringByAppendingPathComponent:@"ggml-metal-impl.h"];
-
-    NSString * ggml_common = ggml_metal_library_read_source_file(path_ggml_common, error);
-    if (!ggml_common) {
-        return nil;
-    }
-
-    NSString * impl = ggml_metal_library_read_source_file(path_impl, error);
-    if (!impl) {
-        return nil;
-    }
+    NSArray<NSString *> * search_paths = @[
+        path_kernels,
+        path_base,
+        [path_base stringByDeletingLastPathComponent],
+    ];
 
     NSMutableString * src = [[NSMutableString alloc] init];
-    if (!ggml_metal_library_append_source(src, path_common, error) ||
-        !ggml_metal_library_append_source(src, path_dequantize, error) ||
-        !ggml_metal_library_append_source(src, path_quantize, error) ||
-        !ggml_metal_library_append_source(src, path_source, error)) {
+    NSMutableSet<NSString *> * seen = [NSMutableSet set];
+
+    if (!ggml_metal_library_flatten_file(src, path_source, search_paths, seen, error)) {
         [src release];
         return nil;
     }
-
-    NSRange all = NSMakeRange(0, [src length]);
-    NSString * common_include =
-        @"#if defined(GGML_METAL_EMBED_LIBRARY)\n"
-         "__embed_ggml-common.h__\n"
-         "#else\n"
-         "#include \"ggml-common.h\"\n"
-         "#endif";
-    [src replaceOccurrencesOfString:common_include withString:ggml_common options:NSLiteralSearch range:all];
-
-    all = NSMakeRange(0, [src length]);
-    [src replaceOccurrencesOfString:@"#include \"ggml-metal-impl.h\"" withString:impl options:NSLiteralSearch range:all];
-
-    NSArray<NSString *> * lines_to_remove = @[
-        @"#include \"common.h\"\n",
-        @"#include \"dequantize.h\"\n",
-        @"#include \"quantize.h\"\n",
-        @"#include \"ggml-common.h\"\n",
-        @"#pragma once\n",
-    ];
-
-    for (NSString * line in lines_to_remove) {
-        all = NSMakeRange(0, [src length]);
-        [src replaceOccurrencesOfString:line withString:@"" options:NSLiteralSearch range:all];
-    }
-
     return src;
 }
 
@@ -476,7 +486,7 @@ ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
 
             NSError * file_err = nil;
             NSString * src = ggml_metal_library_flatten_source(path_source, &file_err);
-            if (!src || file_err) {
+            if (!src) {
                 err_per_lib[kind] = [file_err retain];
                 any_failure = true;
                 dispatch_semaphore_signal(compile_sem);
@@ -515,7 +525,11 @@ ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
     if (any_failure) {
         for (int kind = 0; kind < GGML_METAL_LIB_COUNT; ++kind) {
             if (err_per_lib[kind]) {
-                GGML_LOG_ERROR("%s: failed to compile '%s' library: %s\n", __func__,
+                // distinguish flatten-stage failures (raised by ggml_metal_library_flatten_source)
+                // from Metal compile failures so users can tell where to look.
+                const char * stage = [[err_per_lib[kind] domain] isEqualToString:@"ggml-metal-source-flatten"]
+                                         ? "flatten" : "compile";
+                GGML_LOG_ERROR("%s: failed to %s '%s' library: %s\n", __func__, stage,
                                k_lib_names[kind], [[err_per_lib[kind] description] UTF8String]);
                 [err_per_lib[kind] release];
             }
