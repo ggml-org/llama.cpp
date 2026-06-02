@@ -107,8 +107,6 @@ struct test_context {
             throw std::runtime_error("failed to create context");
         }
 
-        llama_set_warmup(ctx.get(), false);
-
         vocab = llama_model_get_vocab(model);
         n_vocab = llama_vocab_n_tokens(vocab);
     }
