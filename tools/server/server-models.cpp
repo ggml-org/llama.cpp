@@ -42,10 +42,7 @@ extern char **environ;
 
 #define DEFAULT_STOP_TIMEOUT 10 // seconds
 
-#define CMD_ROUTER_TO_CHILD_EXIT  "cmd_router_to_child:exit"
-#define CMD_CHILD_TO_ROUTER_READY "cmd_child_to_router:ready" // also sent when waking up from sleep
-#define CMD_CHILD_TO_ROUTER_SLEEP "cmd_child_to_router:sleep"
-#define CMD_CHILD_TO_ROUTER_INFO  "cmd_child_to_router:info:" // followed by json string
+// CMD defines moved to server-models.h
 
 // address for child process, this is needed because router may run on 0.0.0.0
 // ref: https://github.com/ggml-org/llama.cpp/issues/17862

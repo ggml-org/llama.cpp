@@ -11,6 +11,14 @@
 #include <memory>
 #include <set>
 
+// Signals between router parent and model child processes.
+// Also used by server.cpp (the child process entry point).
+#define CMD_ROUTER_TO_CHILD_EXIT  "cmd_router_to_child:exit"
+#define CMD_CHILD_TO_ROUTER_READY "cmd_child_to_router:ready"
+#define CMD_CHILD_TO_ROUTER_SLEEP "cmd_child_to_router:sleep"
+#define CMD_CHILD_TO_ROUTER_INFO  "cmd_child_to_router:info:"
+#define CMD_CHILD_TO_ROUTER_ERROR "cmd_child_to_router:error:"
+
 /**
  * state diagram:
  *
