@@ -2,8 +2,10 @@
 
 #extension GL_EXT_control_flow_attributes : enable
 #extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_8bit_storage : require
 
 #extension GL_EXT_shader_explicit_arithmetic_types_int32 : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int8 : require
 
 #ifdef FLOAT16
 #extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
@@ -264,7 +266,9 @@ void main() {
                             uint iqs = (coord % BLOCK_SIZE_K);
                             K_Tf = dequantize4(ib, iqs, k_offset, BINDING_IDX_K);
                         } else {
+#if !defined(DATA_A_TURBO3_0)
                             K_Tf = FLOAT_TYPEV4(data_kv4[k_offset / 4 + (j * Bc + c) * k_stride / 4 + d]);
+#endif
                         }
                     }
 
@@ -317,7 +321,9 @@ void main() {
                         uint iqs = (coord % BLOCK_SIZE_K);
                         K_Tf = dequantize4(ib, iqs, k_offset, BINDING_IDX_K);
                     } else {
+#if !defined(DATA_A_TURBO3_0)
                         K_Tf = FLOAT_TYPEV4(data_kv4[k_offset / 4 + (j * Bc + c * cols_per_iter + col_tid) * k_stride / 4 + d * D_split + d_tid]);
+#endif
                     }
                     [[unroll]] for (uint32_t r = 0; r < rows_per_thread; ++r) {
                         Sf[r][c] += dot(ACC_TYPEV4(Q_cache[r]), ACC_TYPEV4(K_Tf));
@@ -340,7 +346,9 @@ void main() {
                         uint iqs = (coord % BLOCK_SIZE_K);
                         K_Tf = dequantize4(ib, iqs, k_offset, BINDING_IDX_K);
                     } else {
+#if !defined(DATA_A_TURBO3_0)
                         K_Tf = FLOAT_TYPEV4(data_kv4[k_offset / 4 + (j * Bc + c * cols_per_iter + col_tid) * k_stride / 4 + d * D_split + d_tid]);
+#endif
                     }
                     [[unroll]] for (uint32_t r = 0; r < rows_per_thread; ++r) {
                         Sf[r][c] += dot(ACC_TYPEV4(Qf[tile_row(r) * qf_stride + d * D_split + d_tid]), ACC_TYPEV4(K_Tf));
@@ -494,7 +502,9 @@ void main() {
                             uint iqs = (coord % BLOCK_SIZE_V);
                             V_Tf = dequantize4(ib, iqs, v_offset, BINDING_IDX_V);
                         } else {
+#if !defined(DATA_A_TURBO3_0)
                             V_Tf = FLOAT_TYPEV4(data_vv4[v_offset / 4 + (j * Bc + c) * v_stride / 4 + d]);
+#endif
                         }
                     }
 
@@ -525,7 +535,9 @@ void main() {
                     uint iqs = (coord % BLOCK_SIZE_V);
                     Vf = dequantize4(ib, iqs, v_offset, BINDING_IDX_V);
                 } else {
+#if !defined(DATA_A_TURBO3_0)
                     Vf = FLOAT_TYPEV4(data_vv4[v_offset / 4 + (j * Bc + c * cols_per_iter + col_tid) * v_stride / 4 + d * D_split + d_tid]);
+#endif
                 }
                 [[unroll]] for (uint32_t r = 0; r < rows_per_thread; ++r) {
                     Of[r][d] += FLOAT_TYPEV4(Pf[r] * Vf);
