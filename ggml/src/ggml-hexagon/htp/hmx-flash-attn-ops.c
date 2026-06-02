@@ -24,6 +24,7 @@
 #include "htp-ctx.h"
 #include "htp-ops.h"
 #include "hvx-dump.h"
+#include "hvx-copy.h"
 #include "hvx-reduce.h"
 #include "hvx-utils.h"
 #include "vtcm-utils.h"
@@ -1195,14 +1196,13 @@ static void hmx_fa_o_norm_worker(void * data) {
 // Row r in the GQA-merged block maps to Q head h = kv_head * G + r % G.
 // slope(h) = m0^(h+1) when h < n_head_log2, else m1^(2*(h-n_head_log2)+1).
 // When max_bias == 0, all slopes are 1.0 (no ALiBi).
-static __attribute__((noinline)) void fa_compute_slopes(fa_softmax_args_t * sargs,
+static __attribute__((noinline)) void fa_compute_slopes(
                               const struct hmx_fa_context * factx,
                               uint32_t                      kv_head,
                               size_t                        n_rows_g) {
+    __fp16 * slopes = factx->vtcm_slopes;
     if (factx->max_bias == 0.0f) {
-        for (size_t r = 0; r < n_rows_g; ++r) {
-            sargs->slopes[r] = 1.0f;
-        }
+        hvx_splat_f16_a(slopes, 1.0f, n_rows_g);
         return;
     }
 
@@ -1211,10 +1211,22 @@ static __attribute__((noinline)) void fa_compute_slopes(fa_softmax_args_t * sarg
     const float    m0          = factx->m0;
     const float    m1          = factx->m1;
 
-    for (size_t r = 0; r < n_rows_g; ++r) {
-        const uint32_t h = kv_head * G + fastmodulo(r, G, &factx->div_G);
-        sargs->slopes[r] = (h < n_head_log2) ? powf(m0, h + 1) : powf(m1, 2 * (h - n_head_log2) + 1);
+    // Precompute G unique slope values
+    __fp16 temp_slopes[G];
+    for (uint32_t i = 0; i < G; ++i) {
+        const uint32_t h = kv_head * G + i;
+        float val = (h < n_head_log2) ? powf(m0, h + 1) : powf(m1, 2 * (h - n_head_log2) + 1);
+        temp_slopes[i] = (__fp16)val;
     }
+
+    // Allocate stack buffer to avoid scalar writes to VTCM (which generates L2 misses)
+    __fp16 local_slopes[n_rows_g] __attribute__((aligned(128)));
+    for (size_t r = 0; r < n_rows_g; ++r) {
+        local_slopes[r] = temp_slopes[fastmodulo(r, G, &factx->div_G)];
+    }
+
+    // Copy to VTCM slopes using HVX block copy (both are aligned to 128 bytes)
+    hvx_copy_f16_aa((uint8_t *)slopes, (const uint8_t *)local_slopes, n_rows_g);
 }
 
 // ============================================================================
@@ -1470,6 +1482,8 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
                 // ---- KV block loop with DMA double-buffering ----
                 size_t buf_idx = 0;
 
+                fa_compute_slopes(&factx, kv_head, n_rows_g);
+
                 // Prefetch first KV block
                 if (factx.n_kv_blocks > 0) {
                     const uint32_t kv_rows0 = hex_smin(Bc, nek1);
@@ -1616,7 +1630,6 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
                         sargs.mask_vtcm            = has_mask_dma ? (const __fp16 *) factx.vtcm_mask_buf : NULL;
                         sargs.mask_vtcm_row_stride = factx.mask_buf_row_stride;
                         sargs.slopes               = factx.vtcm_slopes;
-                        fa_compute_slopes(&sargs, &factx, kv_head, n_rows_g);
 
                         TIMER_START(softmax);
                         fa_phase_softmax_and_build_d(&factx, &sargs, n_row_tiles, n_row_tiles_g_br);
@@ -1727,7 +1740,6 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
                         sargs.mask_vtcm            = has_mask_dma ? (const __fp16 *) factx.vtcm_mask_buf : NULL;
                         sargs.mask_vtcm_row_stride = factx.mask_buf_row_stride;
                         sargs.slopes               = factx.vtcm_slopes;
-                        fa_compute_slopes(&sargs, &factx, kv_head, n_rows_g);
 
                         TIMER_START(softmax);
                         fa_phase_softmax_and_build_d(&factx, &sargs, n_row_tiles, n_row_tiles_g_br);

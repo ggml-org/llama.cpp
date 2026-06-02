@@ -245,6 +245,7 @@ struct htp_fa_context {
     uint32_t n_head_log2;
     float m0;
     float m1;
+    float slopes[512];
 
     uint32_t n_blocks;
 
@@ -412,7 +413,7 @@ static void flash_attn_ext_f16_thread(unsigned int nth, unsigned int ith, void *
         }
 
         const uint32_t h = iq2; // head index
-        const float slope = (factx->max_bias > 0.0f) ? (h < factx->n_head_log2 ? powf(factx->m0, h + 1) : powf(factx->m1, 2*(h - factx->n_head_log2) + 1)) : 1.0f;
+        const float slope = factx->slopes[h];
 
         HVX_Vector S_vec = hvx_vec_splat_f32(0.0f);
         HVX_Vector M_vec = hvx_vec_splat_f32(-INFINITY);
@@ -688,6 +689,13 @@ int op_flash_attn_ext(struct htp_ops_context * octx) {
     factx.n_head_log2 = 1u << (uint32_t) floor(log2(n_head));
     factx.m0 = powf(2.0f, -(max_bias       ) / factx.n_head_log2);
     factx.m1 = powf(2.0f, -(max_bias / 2.0f) / factx.n_head_log2);
+
+    if (n_head > 512) {
+        return HTP_STATUS_NO_SUPPORT;
+    }
+    for (uint32_t h = 0; h < n_head; ++h) {
+        factx.slopes[h] = (max_bias > 0.0f) ? (h < factx.n_head_log2 ? powf(factx.m0, h + 1) : powf(factx.m1, 2*(h - factx.n_head_log2) + 1)) : 1.0f;
+    }
 
     // total rows in q
     const uint32_t neq0 = q->ne[0];
