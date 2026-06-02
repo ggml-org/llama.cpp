@@ -21,6 +21,7 @@
 #extension GL_KHR_shader_subgroup_vote : enable
 
 #include "types.glsl"
+#include "dot2_f16.glsl"
 #include "flash_attn_base.glsl"
 #include "flash_attn_dequant.glsl"
 
@@ -318,7 +319,12 @@ void main() {
                         K_Tf = FLOAT_TYPEV4(data_kv4[k_offset / 4 + (j * Bc + c * cols_per_iter + col_tid) * k_stride / 4 + d * D_split + d_tid]);
                     }
                     [[unroll]] for (uint32_t r = 0; r < rows_per_thread; ++r) {
+#ifdef DOT2_F16
+                        Sf[r][c] = ACC_TYPE(v_dot2_f32_f16(Q_cache[r].zw, K_Tf.zw,
+                                   v_dot2_f32_f16(Q_cache[r].xy, K_Tf.xy, float(Sf[r][c]))));
+#else
                         Sf[r][c] += dot(ACC_TYPEV4(Q_cache[r]), ACC_TYPEV4(K_Tf));
+#endif
                     }
                 }
             }
@@ -341,7 +347,12 @@ void main() {
                         K_Tf = FLOAT_TYPEV4(data_kv4[k_offset / 4 + (j * Bc + c * cols_per_iter + col_tid) * k_stride / 4 + d * D_split + d_tid]);
                     }
                     [[unroll]] for (uint32_t r = 0; r < rows_per_thread; ++r) {
+#ifdef DOT2_F16
+                        Sf[r][c] = ACC_TYPE(v_dot2_f32_f16(f16vec2(Qf[tile_row(r) * qf_stride + d * D_split + d_tid].zw), K_Tf.zw,
+                                   v_dot2_f32_f16(f16vec2(Qf[tile_row(r) * qf_stride + d * D_split + d_tid].xy), K_Tf.xy, float(Sf[r][c]))));
+#else
                         Sf[r][c] += dot(ACC_TYPEV4(Qf[tile_row(r) * qf_stride + d * D_split + d_tid]), ACC_TYPEV4(K_Tf));
+#endif
                     }
                 }
             }
