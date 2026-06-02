@@ -10,7 +10,7 @@ void llama_model_lfm2moe::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_EXPERT_GATING_FUNC,          hparams.expert_gating_func);
 
     for (uint32_t il = 0; il < hparams.n_layer; ++il) {
-        hparams.recurrent_layer_arr[il] = hparams.n_head_kv(il) == 0;
+        hparams.is_recr_impl[il] = hparams.n_head_kv(il) == 0;
     }
 
     switch (hparams.n_layer) {

@@ -137,11 +137,11 @@ struct llama_hparams {
     llama_swa_type swa_type = LLAMA_SWA_TYPE_NONE;
     // the size of the sliding window (0 - no SWA)
     uint32_t n_swa = 0;
-    // if swa_layers[il] == 1, then layer il is SWA
-    // if swa_layers[il] == 0, then layer il is dense (i.e. non-SWA)
+    // if is_swa_impl[il] == 1, then layer il is SWA
+    // if is_swa_impl[il] == 0, then layer il is dense (i.e. non-SWA)
     // by default, all layers are dense
     // note: using uint32_t type for compatibility reason
-    std::array<uint32_t, LLAMA_MAX_LAYERS> swa_layers;
+    std::array<uint32_t, LLAMA_MAX_LAYERS> is_swa_impl;
 
     // for State Space Models
     uint32_t ssm_d_conv  = 0;
@@ -154,7 +154,7 @@ struct llama_hparams {
     uint32_t n_embd_head_kda = 0;
 
     // for hybrid state space models
-    std::array<bool, LLAMA_MAX_LAYERS> recurrent_layer_arr;
+    std::array<uint32_t, LLAMA_MAX_LAYERS> is_recr_impl;
 
     bool ssm_dt_b_c_rms = false;
 

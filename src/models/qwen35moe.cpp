@@ -21,22 +21,13 @@ void llama_model_qwen35moe::load_arch_hparams(llama_model_loader & ml) {
 
     // Mark recurrent layers (linear attention layers). MTP layers are dense
     // attention-only and must be flagged non-recurrent.
-    {
-        bool try_scalar = false;
-        try {
-            ml.get_key_or_arr(LLM_KV_FULL_ATTENTION_INTERVAL, hparams.recurrent_layer_arr, hparams.n_layer, false);
-        } catch (...) {
-            try_scalar = true;
-        }
+    if (!ml.get_key_or_arr(LLM_KV_ATTENTION_RECURRENT_LAYERS, hparams.is_recr_impl, hparams.n_layer, false)) {
+        const uint32_t n_main = hparams.n_layer - hparams.nextn_predict_layers;
 
-        if (try_scalar) {
-            const uint32_t n_main = hparams.n_layer - hparams.nextn_predict_layers;
-
-            uint32_t full_attn_interval = 4;
-            ml.get_key(LLM_KV_FULL_ATTENTION_INTERVAL, full_attn_interval, false);
-            for (uint32_t i = 0; i < hparams.n_layer; ++i) {
-                hparams.recurrent_layer_arr[i] = (i < n_main) && ((i + 1) % full_attn_interval != 0);
-            }
+        uint32_t full_attn_interval = 4;
+        ml.get_key(LLM_KV_FULL_ATTENTION_INTERVAL, full_attn_interval, false);
+        for (uint32_t i = 0; i < hparams.n_layer; ++i) {
+            hparams.is_recr_impl[i] = (i < n_main) && ((i + 1) % full_attn_interval != 0);
         }
     }
 
