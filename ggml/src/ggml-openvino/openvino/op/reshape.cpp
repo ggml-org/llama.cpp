@@ -19,7 +19,8 @@ namespace op {
 
 OutputVector translate_reshape(const NodeContext & context) {
     num_inputs_check(context, 1, 1);
-    if (context.get_input_shape(0) == context.get_output_shape()) {
+    if (context.get_input(0).get_partial_shape().is_static() &&
+        context.get_input_shape(0) == context.get_output_shape()) {
         return {context.get_input(0)};
     }
 
