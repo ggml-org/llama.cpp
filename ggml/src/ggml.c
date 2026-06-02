@@ -4,7 +4,7 @@
 #include "ggml-backend.h"
 
 // ============================================================================
-// 🔥 TURBOQUANT SIMD MASTER VECTOR PATH (ARM NEON / INTEL AVX2) - VERIFIED 100%
+// TURBOQUANT SIMD MASTER VECTOR PATH (ARM NEON / AVX2)
 // ============================================================================
 #if defined(__ARM_NEON)
 #include <arm_neon.h>
@@ -17,30 +17,30 @@ void dequantize_turboquant_simd(const uint8_t * __restrict comp_data, float * __
     int i = 0;
 
     #if defined(__ARM_NEON)
-    // 📱 مسار معالجات الهواتف والتابلت (ARM NEON) - معالجة 16 عنصر في دورة واحدة
+    // ARM NEON path: process 16 elements per iteration
     float32x4_t v_scale = vdupq_n_f32(scale);
     for (; i + 15 < target_elements; i += 16) {
         int8x16_t packed_vals = vld1q_s8((const int8_t*)(comp_data + i));
-        
-        // تفكيك أول 8 عناصر (Low Lane)
+
+        // Unpack first 8 elements (Low Lane)
         int16x8_t low_16 = vmovl_s8(vget_low_s8(packed_vals));
         int32x4_t low_32_1 = vmovl_s16(vget_low_s16(low_16));
         int32x4_t low_32_2 = vmovl_s16(vget_high_s16(low_16));
-        
+
         vst1q_f32(output + i,     vmulq_f32(vcvtq_f32_s32(low_32_1), v_scale));
         vst1q_f32(output + i + 4, vmulq_f32(vcvtq_f32_s32(low_32_2), v_scale));
-        
-        // تفكيك الـ 8 عناصر المتبقية (High Lane)
+
+        // Unpack remaining 8 elements (High Lane)
         int16x8_t high_16 = vmovl_s8(vget_high_s8(packed_vals));
         int32x4_t high_32_1 = vmovl_s16(vget_low_s16(high_16));
         int32x4_t high_32_2 = vmovl_s16(vget_high_s16(high_16));
-        
+
         vst1q_f32(output + i + 8,  vmulq_f32(vcvtq_f32_s32(high_32_1), v_scale));
         vst1q_f32(output + i + 12, vmulq_f32(vcvtq_f32_s32(high_32_2), v_scale));
     }
 
     #elif defined(__AVX2__)
-    // 💻 مسار معالجات الحاسوب واللابتوب (AVX2) - معالجة 32 عنصر صافي بدون تداخل ذاكرة
+    // x86 AVX2 path: process 32 contiguous elements without memory overlap
     __m256 v_scale_256 = _mm256_set1_ps(scale);
     for (; i + 31 < target_elements; i += 32) {
         __m256i packed = _mm256_loadu_si256((const __m256i*)(comp_data + i));
@@ -63,6 +63,7 @@ void dequantize_turboquant_simd(const uint8_t * __restrict comp_data, float * __
         output[i] = (float)((int8_t)comp_data[i]) * scale;
     }
 }
+
 // ============================================================================
 #include "ggml-impl.h"
 #include "ggml-threading.h"
