@@ -108,9 +108,21 @@ int ggml_metal_pipeline_max_theads_per_threadgroup(struct ggml_metal_pipeline_wi
     X(MUL_MV,     mul_mv)     \
     X(MUL_MM,     mul_mm)     \
     X(QUANTIZE,   quantize)   \
+    X(SOFTMAX,    softmax)    \
     X(NORM,       norm)       \
-    X(ACTIVATION, activation) \
-    X(RECURRENT,  recurrent)  \
+    X(UNARY,      unary)      \
+    X(BINBCAST,   binbcast)   \
+    X(REDUCE,     reduce)     \
+    X(TRI,        tri)        \
+    X(SSM,        ssm)        \
+    X(WKV,        wkv)        \
+    X(GLA,        gla)        \
+    X(SOLVE_TRI,  solve_tri)  \
+    X(ROPE,       rope)       \
+    X(CONV,       conv)       \
+    X(UPSCALE,    upscale)    \
+    X(ARGSORT,    argsort)    \
+    X(POOL,       pool)       \
     X(MISC,       misc)
 
 enum ggml_metal_lib_kind {
@@ -125,6 +137,8 @@ static const char * const k_lib_names[GGML_METAL_LIB_COUNT] = {
     GGML_METAL_LIBS
 #undef X
 };
+
+static const int k_max_parallel_compiles = 4;
 
 struct ggml_metal_library {
     // Per-kind compiled libraries. When single_library is true, the whole library
@@ -161,6 +175,96 @@ static void ggml_metal_library_build_index(ggml_metal_library_t lib) {
         }
         lib->fn_to_lib = index;
     }
+}
+
+static NSString * ggml_metal_library_read_source_file(NSString * path, NSError ** error) {
+    return [NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:error];
+}
+
+static bool ggml_metal_library_append_source(NSMutableString * dst, NSString * path, NSError ** error) {
+    NSString * src = ggml_metal_library_read_source_file(path, error);
+    if (!src) {
+        return false;
+    }
+
+    [dst appendString:src];
+    if (![src hasSuffix:@"\n"]) {
+        [dst appendString:@"\n"];
+    }
+    [dst appendString:@"\n"];
+
+    return true;
+}
+
+static NSString * ggml_metal_library_resolve_ggml_common_path(NSString * path_base) {
+    NSString * path_runtime = [path_base stringByAppendingPathComponent:@"ggml-common.h"];
+    if ([[NSFileManager defaultManager] isReadableFileAtPath:path_runtime]) {
+        return path_runtime;
+    }
+
+    NSString * path_source = [[path_base stringByDeletingLastPathComponent] stringByAppendingPathComponent:@"ggml-common.h"];
+    if ([[NSFileManager defaultManager] isReadableFileAtPath:path_source]) {
+        return path_source;
+    }
+
+    return path_runtime;
+}
+
+static NSString * ggml_metal_library_flatten_source(NSString * path_source, NSError ** error) {
+    NSString * path_kernels = [path_source stringByDeletingLastPathComponent];
+    NSString * path_base    = [path_kernels stringByDeletingLastPathComponent];
+
+    NSString * path_common     = [path_kernels stringByAppendingPathComponent:@"common.h"];
+    NSString * path_dequantize = [path_kernels stringByAppendingPathComponent:@"dequantize.h"];
+    NSString * path_quantize   = [path_kernels stringByAppendingPathComponent:@"quantize.h"];
+    NSString * path_ggml_common = ggml_metal_library_resolve_ggml_common_path(path_base);
+    NSString * path_impl        = [path_base stringByAppendingPathComponent:@"ggml-metal-impl.h"];
+
+    NSString * ggml_common = ggml_metal_library_read_source_file(path_ggml_common, error);
+    if (!ggml_common) {
+        return nil;
+    }
+
+    NSString * impl = ggml_metal_library_read_source_file(path_impl, error);
+    if (!impl) {
+        return nil;
+    }
+
+    NSMutableString * src = [[NSMutableString alloc] init];
+    if (!ggml_metal_library_append_source(src, path_common, error) ||
+        !ggml_metal_library_append_source(src, path_dequantize, error) ||
+        !ggml_metal_library_append_source(src, path_quantize, error) ||
+        !ggml_metal_library_append_source(src, path_source, error)) {
+        [src release];
+        return nil;
+    }
+
+    NSRange all = NSMakeRange(0, [src length]);
+    NSString * common_include =
+        @"#if defined(GGML_METAL_EMBED_LIBRARY)\n"
+         "__embed_ggml-common.h__\n"
+         "#else\n"
+         "#include \"ggml-common.h\"\n"
+         "#endif";
+    [src replaceOccurrencesOfString:common_include withString:ggml_common options:NSLiteralSearch range:all];
+
+    all = NSMakeRange(0, [src length]);
+    [src replaceOccurrencesOfString:@"#include \"ggml-metal-impl.h\"" withString:impl options:NSLiteralSearch range:all];
+
+    NSArray<NSString *> * lines_to_remove = @[
+        @"#include \"common.h\"\n",
+        @"#include \"dequantize.h\"\n",
+        @"#include \"quantize.h\"\n",
+        @"#include \"ggml-common.h\"\n",
+        @"#pragma once\n",
+    ];
+
+    for (NSString * line in lines_to_remove) {
+        all = NSMakeRange(0, [src length]);
+        [src replaceOccurrencesOfString:line withString:@"" options:NSLiteralSearch range:all];
+    }
+
+    return src;
 }
 
 ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
@@ -207,9 +311,12 @@ ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
 
     dispatch_group_t group = dispatch_group_create();
     dispatch_queue_t queue = dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0);
+    dispatch_semaphore_t compile_sem = dispatch_semaphore_create(k_max_parallel_compiles);
 
     for (int kind = 0; kind < GGML_METAL_LIB_COUNT; ++kind) {
         dispatch_group_async(group, queue, ^{
+            dispatch_semaphore_wait(compile_sem, DISPATCH_TIME_FOREVER);
+
             const int64_t t0 = ggml_time_us();
             NSError * error = nil;
             id<MTLLibrary> lib = nil;
@@ -228,10 +335,12 @@ ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
             if (!lib) {
                 err_per_lib[kind] = [error retain];
                 any_failure = true;
+                dispatch_semaphore_signal(compile_sem);
                 return;
             }
 
             res->objs[kind] = lib;
+            dispatch_semaphore_signal(compile_sem);
         });
     }
     dispatch_group_wait(group, DISPATCH_TIME_FOREVER);
@@ -340,6 +449,7 @@ ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
 
     dispatch_group_t group = dispatch_group_create();
     dispatch_queue_t queue = dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0);
+    dispatch_semaphore_t compile_sem = dispatch_semaphore_create(k_max_parallel_compiles);
 
     for (int kind = 0; kind < GGML_METAL_LIB_COUNT; ++kind) {
         NSString * rel = [NSString stringWithFormat:@"kernels/%s.metal", k_lib_names[kind]];
@@ -360,13 +470,16 @@ ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
         GGML_LOG_INFO("%s: loading '%s'\n", __func__, [path_source UTF8String]);
 
         dispatch_group_async(group, queue, ^{
+            dispatch_semaphore_wait(compile_sem, DISPATCH_TIME_FOREVER);
+
             const int64_t t0 = ggml_time_us();
 
             NSError * file_err = nil;
-            NSString * src = [NSString stringWithContentsOfFile:path_source encoding:NSUTF8StringEncoding error:&file_err];
+            NSString * src = ggml_metal_library_flatten_source(path_source, &file_err);
             if (!src || file_err) {
                 err_per_lib[kind] = [file_err retain];
                 any_failure = true;
+                dispatch_semaphore_signal(compile_sem);
                 return;
             }
 
@@ -382,15 +495,19 @@ ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
                 [options release];
             }
 
+            [src release];
+
             t_per_lib[kind] = ggml_time_us() - t0;
 
             if (!lib) {
                 err_per_lib[kind] = [compile_err retain];
                 any_failure = true;
+                dispatch_semaphore_signal(compile_sem);
                 return;
             }
 
             res->objs[kind] = lib;
+            dispatch_semaphore_signal(compile_sem);
         });
     }
     dispatch_group_wait(group, DISPATCH_TIME_FOREVER);

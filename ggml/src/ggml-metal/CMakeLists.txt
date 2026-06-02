@@ -33,9 +33,21 @@ set(METALLIB_KERNEL_SOURCES
     kernels/mul_mv.metal
     kernels/mul_mm.metal
     kernels/quantize.metal
+    kernels/softmax.metal
     kernels/norm.metal
-    kernels/activation.metal
-    kernels/recurrent.metal
+    kernels/unary.metal
+    kernels/binbcast.metal
+    kernels/reduce.metal
+    kernels/tri.metal
+    kernels/ssm.metal
+    kernels/wkv.metal
+    kernels/gla.metal
+    kernels/solve_tri.metal
+    kernels/rope.metal
+    kernels/conv.metal
+    kernels/upscale.metal
+    kernels/argsort.metal
+    kernels/pool.metal
     kernels/misc.metal
 )
 
