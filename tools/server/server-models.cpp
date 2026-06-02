@@ -910,12 +910,44 @@ void server_models::load(const std::string & name) {
 
         // get the exit code
         int exit_code = 0;
-        subprocess_join(child_proc.get(), &exit_code);
+        if (child_proc->child != 0) {
+            subprocess_join(child_proc.get(), &exit_code);
+        } else {
+            // subprocess_alive in the stopping thread already reaped the child
+            // (via waitpid WNOHANG) and cleared process->child.  Calling
+            // subprocess_join with child==0 would waitpid(0, ...) on ANY
+            // process-group child — the wrong child or (if none remain) ECHILD
+            // with exit_code stuck at 0, masking the crash as a clean exit.
+            // Use the cached return_status instead.
+            exit_code = child_proc->return_status;
+        }
         subprocess_destroy(child_proc.get());
 
         // update status and exit code
         this->update_status(name, SERVER_MODEL_STATUS_UNLOADED, exit_code);
         SRV_INF("instance name=%s exited with status %d\n", name.c_str(), exit_code);
+
+        // --- Auto-recover from transient crashes ---
+        // If the child exited abnormally (non-zero, non-SIGTERM), this is
+        // a crash — not an intentional unload.  Classify as transient and
+        // set the recovering flag so the next ensure_model_ready() call
+        // triggers a deferred reload.  The proxy just polls /v1/models,
+        // sees recovering, and holds the SSE channel open.
+        if (exit_code != 0 && exit_code != -15 /* SIGTERM = force-kill */) {
+            std::lock_guard<std::mutex> _lk(this->mutex);
+            auto _it = mapping.find(name);
+            if (_it != mapping.end() && _it->second.meta.reload_attempts < server_model_meta::MAX_RELOAD_ATTEMPTS) {
+                SRV_WRN("model name=%s crashed (exit_code=%d), auto-recovering (attempt %d/%d)...\n",
+                    name.c_str(), exit_code,
+                    _it->second.meta.reload_attempts + 1,
+                    server_model_meta::MAX_RELOAD_ATTEMPTS);
+                _it->second.meta.recovering = true;
+                _it->second.meta.reload_attempts++;
+            } else if (_it != mapping.end()) {
+                SRV_ERR("model name=%s crashed (exit_code=%d), max retries (%d) reached — permanent failure\n",
+                    name.c_str(), exit_code, server_model_meta::MAX_RELOAD_ATTEMPTS);
+            }
+        }
     });
 
     // clean up old process/thread if exists
@@ -1055,22 +1087,39 @@ bool server_models::ensure_model_ready(const std::string & name) {
     if (meta->status == SERVER_MODEL_STATUS_SLEEPING) {
         return false; // child is sleeping but still running; new request will wake it up
     }
-    if (meta->status == SERVER_MODEL_STATUS_UNLOADED) {
-        SRV_INF("model name=%s is not loaded, loading...\n", name.c_str());
-        load(name);
+
+    // Auto-reload loop: on transient crashes (recovering=true), retry loading
+    // up to MAX_RELOAD_ATTEMPTS times.  Each crash triggers another load()
+    // call via the lifecycle thread's post-exit recovering logic.
+    for (int attempt = 0; attempt <= server_model_meta::MAX_RELOAD_ATTEMPTS; attempt++) {
+        if (meta.has_value() && meta->status == SERVER_MODEL_STATUS_UNLOADED && !meta->is_failed()) {
+            if (meta->recovering && attempt > 0) {
+                SRV_INF("model name=%s auto-recovering (attempt %d/%d)...\n",
+                    name.c_str(), attempt, server_model_meta::MAX_RELOAD_ATTEMPTS);
+            }
+            SRV_INF("model name=%s is not loaded, loading...\n", name.c_str());
+            load(name);
+        }
+
+        // wait for loading to complete
+        SRV_INF("waiting until model name=%s is fully loaded...\n", name.c_str());
+        wait_until_loading_finished(name);
+
+        // check final status
+        meta = get_meta(name);
+        if (!meta.has_value()) {
+            throw std::runtime_error("model name=" + name + " is not found");
+        }
+        if (meta->is_ready()) {
+            return true;
+        }
+        if (meta->is_failed()) {
+            throw std::runtime_error("model name=" + name + " failed to load");
+        }
+        // Model is UNLOADED but recovering — loop to retry.
     }
 
-    // wait for loading to complete
-    SRV_INF("waiting until model name=%s is fully loaded...\n", name.c_str());
-    wait_until_loading_finished(name);
-
-    // check final status
-    meta = get_meta(name);
-    if (!meta.has_value() || meta->is_failed()) {
-        throw std::runtime_error("model name=" + name + " failed to load");
-    }
-
-    return true;
+    throw std::runtime_error("model name=" + name + " exceeded max reload attempts");
 }
 
 server_http_res_ptr server_models::proxy_request(const server_http_req & req, const std::string & method, const std::string & name, bool update_last_used) {
