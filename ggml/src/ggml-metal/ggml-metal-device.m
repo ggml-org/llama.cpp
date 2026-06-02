@@ -138,8 +138,6 @@ static const char * const k_lib_names[GGML_METAL_LIB_COUNT] = {
 #undef X
 };
 
-static const int k_max_parallel_compiles = 4;
-
 struct ggml_metal_library {
     // Per-kind compiled libraries. When single_library is true, the whole library
     // (e.g. a pre-compiled default.metallib or a from-source build) lives at
@@ -318,11 +316,9 @@ ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
 
     dispatch_group_t group = dispatch_group_create();
     dispatch_queue_t queue = dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0);
-    dispatch_semaphore_t compile_sem = dispatch_semaphore_create(k_max_parallel_compiles);
 
     for (int kind = 0; kind < GGML_METAL_LIB_COUNT; ++kind) {
         dispatch_group_async(group, queue, ^{
-            dispatch_semaphore_wait(compile_sem, DISPATCH_TIME_FOREVER);
 
             const int64_t t0 = ggml_time_us();
             NSError * error = nil;
@@ -342,12 +338,10 @@ ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
             if (!lib) {
                 err_per_lib[kind] = [error retain];
                 atomic_store(&any_failure, true);
-                dispatch_semaphore_signal(compile_sem);
                 return;
             }
 
             res->objs[kind] = lib;
-            dispatch_semaphore_signal(compile_sem);
         });
     }
     dispatch_group_wait(group, DISPATCH_TIME_FOREVER);
@@ -458,7 +452,6 @@ ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
 
     dispatch_group_t group = dispatch_group_create();
     dispatch_queue_t queue = dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0);
-    dispatch_semaphore_t compile_sem = dispatch_semaphore_create(k_max_parallel_compiles);
 
     for (int kind = 0; kind < GGML_METAL_LIB_COUNT; ++kind) {
         NSString * rel = [NSString stringWithFormat:@"kernels/%s.metal", k_lib_names[kind]];
@@ -479,7 +472,6 @@ ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
         GGML_LOG_INFO("%s: loading '%s'\n", __func__, [path_source UTF8String]);
 
         dispatch_group_async(group, queue, ^{
-            dispatch_semaphore_wait(compile_sem, DISPATCH_TIME_FOREVER);
 
             const int64_t t0 = ggml_time_us();
 
@@ -488,7 +480,6 @@ ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
             if (!src) {
                 err_per_lib[kind] = [file_err retain];
                 atomic_store(&any_failure, true);
-                dispatch_semaphore_signal(compile_sem);
                 return;
             }
 
@@ -511,12 +502,10 @@ ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
             if (!lib) {
                 err_per_lib[kind] = [compile_err retain];
                 atomic_store(&any_failure, true);
-                dispatch_semaphore_signal(compile_sem);
                 return;
             }
 
             res->objs[kind] = lib;
-            dispatch_semaphore_signal(compile_sem);
         });
     }
     dispatch_group_wait(group, DISPATCH_TIME_FOREVER);
