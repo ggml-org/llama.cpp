@@ -2,9 +2,11 @@
 
 #extension GL_EXT_control_flow_attributes : enable
 #extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_8bit_storage : require
 
 #extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
 #extension GL_EXT_shader_explicit_arithmetic_types_int32 : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int8 : require
 
 #extension GL_KHR_shader_subgroup_basic : enable
 #extension GL_KHR_shader_subgroup_arithmetic : enable
@@ -27,10 +29,12 @@ const uint32_t cols_per_thread = Bc / cols_per_iter;
 
 layout (binding = 0) readonly buffer Q {float data_q[];};
 layout (binding = 0) readonly buffer QV4 {vec4 data_qv4[];};
+#if !defined(DATA_A_TURBO3_0)
 layout (binding = 1) readonly buffer K {float16_t data_k[];};
 layout (binding = 1) readonly buffer KV4 {f16vec4 data_kv4[];};
 layout (binding = 2) readonly buffer V {float16_t data_v[];};
 layout (binding = 2) readonly buffer VV4 {f16vec4 data_vv4[];};
+#endif
 layout (binding = 3) readonly buffer M {float16_t data_m[];};
 
 shared float tmpsh[row_split];
@@ -230,7 +234,9 @@ void main() {
                             uint iqs = (coord % BLOCK_SIZE_K);
                             K_Tf = dequantize4(ib, iqs, k_offset, BINDING_IDX_K);
                         } else {
+#if !defined(DATA_A_TURBO3_0)
                             K_Tf = f16vec4(data_kv4[k_offset / 4 + (j * Bc + c) * k_stride / 4 + d]);
+#endif
                         }
                     }
 
@@ -270,7 +276,9 @@ void main() {
                                 uint iqs = (coord % BLOCK_SIZE_K);
                                 K_Tf = dequantize4(ib, iqs, k_offset, BINDING_IDX_K);
                             } else {
+#if !defined(DATA_A_TURBO3_0)
                                 K_Tf = f16vec4(data_kv4[k_offset / 4 + (j * Bc + row) * k_stride / 4 + d * 16 / 4 + col_vec]);
+#endif
                             }
                         }
 
@@ -281,13 +289,17 @@ void main() {
             }
 
             if (stage_k) {
+                memoryBarrierShared();
                 uint coord = (gl_SubgroupID * MatBc) * kvsh_stride;
                 coopMatLoad(KMat, kvsh, coord, kvsh_stride, gl_CooperativeMatrixLayoutRowMajor);
             } else {
+#if !defined(DATA_A_TURBO3_0)
                 const uint coord = k_offset / 4 + (j * Bc + gl_SubgroupID * MatBc) * k_stride / 4 + d * 16 / 4;
                 coopMatLoad(KMat, data_kv4, coord, k_stride / 4, gl_CooperativeMatrixLayoutRowMajor);
+#endif
             }
             } else {
+                memoryBarrierShared();
                 uint coord = (gl_SubgroupID * MatBc) * kvsh_stride + d * 16 / 4;
                 coopMatLoad(KMat, kvsh, coord, kvsh_stride, gl_CooperativeMatrixLayoutRowMajor);
             }
@@ -393,7 +405,9 @@ void main() {
                             uint iqs = (coord % BLOCK_SIZE_V);
                             V_Tf = dequantize4(ib, iqs, v_offset, BINDING_IDX_V);
                         } else {
+#if !defined(DATA_A_TURBO3_0)
                             V_Tf = f16vec4(data_vv4[v_offset / 4 + (j * Bc + c) * v_stride / 4 + d]);
+#endif
                         }
                     }
 
@@ -441,7 +455,9 @@ void main() {
                         if (USE_DECODE_V) {
                             kvsh[row * vsh_stride + col] = dequantize4(ib, iqs, v_offset, BINDING_IDX_V);
                         } else {
+#if !defined(DATA_A_TURBO3_0)
                             kvsh[row * vsh_stride + col] = data_vv4[(v_offset + v_row * v_stride + v_col) / 4];
+#endif
                         }
                     } else {
                         kvsh[row * vsh_stride + col] = f16vec4(0.0f);
@@ -459,15 +475,19 @@ void main() {
 
                     if (SHMEM_STAGING == 0) {
                     if (!USE_DECODE_V && !KV_bounds_check) {
+#if !defined(DATA_A_TURBO3_0)
                         // F16 values can be loaded directly from global memory
                         const uint v_tile_row = j * Bc + bc_chunk * MatBc;
                         const uint v_tile_offset = v_offset / 4 + v_tile_row * v_stride / 4 + hsv_offset / 4;
                         coopMatLoad(QMat, data_vv4, v_tile_offset, v_stride / 4, gl_CooperativeMatrixLayoutRowMajor);
+#endif
                     } else {
+                        memoryBarrierShared();
                         const uint v_tile_offset = bc_chunk * MatBr * v_cols + gl_SubgroupID * (MatBc / 4);
                         coopMatLoad(QMat, kvsh, v_tile_offset, vsh_stride, gl_CooperativeMatrixLayoutRowMajor);
                     }
                     } else {
+                        memoryBarrierShared();
                         const uint v_tile_offset = bc_chunk * MatBc * kvsh_stride + (hsv_tile * row_split + gl_SubgroupID) * (MatBc / 4);
                         coopMatLoad(QMat, kvsh, v_tile_offset, kvsh_stride, gl_CooperativeMatrixLayoutRowMajor);
                     }
