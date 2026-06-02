@@ -2054,10 +2054,12 @@ void common_prompt_checkpoint::clear() {
 void common_prompt_checkpoint::update_pos(
         int64_t n_tokens,
         llama_pos pos_min,
-        llama_pos pos_max) {
+        llama_pos pos_max,
+        llama_pos pos_end) {
     this->n_tokens = n_tokens;
     this->pos_min  = pos_min;
     this->pos_max  = pos_max;
+    this->pos_end  = pos_end;
 }
 
 void common_prompt_checkpoint::update_tgt(
