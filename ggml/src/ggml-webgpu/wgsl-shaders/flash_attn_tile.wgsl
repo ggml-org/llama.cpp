@@ -156,6 +156,40 @@ var<workgroup> p_shmem: array<f16, Q_TILE * KV_TILE>;
 #include "quant_inner_loops.tmpl"
 #include "flash_attn_quant_staging.tmpl"
 
+#if !defined(K_Q4_0) && !defined(K_Q8_0)
+fn load_k_tile_block(local_x: u32, kv_count: u32, kv_tile: u32, k_head_offset: u32) {
+    for (var vec_idx_local = local_x; vec_idx_local < kv_count * Q_CHUNKS; vec_idx_local += WG_SIZE) {
+        let kv_local = vec_idx_local / Q_CHUNKS;
+        let chunk = vec_idx_local % Q_CHUNKS;
+        let global_k_row = kv_tile + kv_local;
+        let k_vec_index = (k_head_offset + global_k_row * params.stride_k1 + chunk * 4u) >> 2u;
+        let k4 = K[k_vec_index];
+        let kv_off = kv_local * HEAD_DIM_QK + chunk * 4u;
+        kv_shmem[kv_off + 0u] = f16(k4.x);
+        kv_shmem[kv_off + 1u] = f16(k4.y);
+        kv_shmem[kv_off + 2u] = f16(k4.z);
+        kv_shmem[kv_off + 3u] = f16(k4.w);
+    }
+}
+#endif
+
+#if !defined(V_Q4_0) && !defined(V_Q8_0)
+fn load_v_tile_block(local_x: u32, kv_count: u32, kv_tile: u32, v_head_offset: u32) {
+    for (var vec_idx_local = local_x; vec_idx_local < kv_count * V_CHUNKS; vec_idx_local += WG_SIZE) {
+        let kv_local = vec_idx_local / V_CHUNKS;
+        let chunk = vec_idx_local % V_CHUNKS;
+        let global_v_row = kv_tile + kv_local;
+        let v_vec_index = (v_head_offset + global_v_row * params.stride_v1 + chunk * 4u) >> 2u;
+        let v4 = V[v_vec_index];
+        let kv_off = kv_local * HEAD_DIM_V + chunk * 4u;
+        kv_shmem[kv_off + 0u] = f16(v4.x);
+        kv_shmem[kv_off + 1u] = f16(v4.y);
+        kv_shmem[kv_off + 2u] = f16(v4.z);
+        kv_shmem[kv_off + 3u] = f16(v4.w);
+    }
+}
+#endif
+
 @compute @workgroup_size(WG_SIZE)
 fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
         @builtin(local_invocation_id) local_id: vec3<u32>,
@@ -236,23 +270,8 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
             local_scores[slot] = FLOAT_MIN;
         }
 
- #if defined(K_Q4_0)
-        LOAD_K_Q4_0_TILE_BLOCK
-#elif defined(K_Q8_0)
-        LOAD_K_Q8_0_TILE_BLOCK
-#else
-        for (var vec_idx_local = local_id.x; vec_idx_local < kv_count * Q_CHUNKS; vec_idx_local += WG_SIZE) {
-            let kv_local = vec_idx_local / Q_CHUNKS;
-            let chunk = vec_idx_local % Q_CHUNKS;
-            let global_k_row = kv_tile + kv_local;
-            let k_vec_index = (k_head_offset + global_k_row * params.stride_k1 + chunk * 4u) >> 2u;
-            let k4 = K[k_vec_index];
-            let kv_off = kv_local * HEAD_DIM_QK + chunk * 4u;
-            kv_shmem[kv_off + 0u] = f16(k4.x);
-            kv_shmem[kv_off + 1u] = f16(k4.y);
-            kv_shmem[kv_off + 2u] = f16(k4.z);
-            kv_shmem[kv_off + 3u] = f16(k4.w);
-        }
+#ifndef KV_DIRECT
+        load_k_tile_block(local_id.x, kv_count, kv_tile, k_head_offset);
 #endif
 
         workgroupBarrier();
@@ -314,23 +333,8 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
 
         workgroupBarrier();
 
- #if defined(V_Q4_0)
-        LOAD_V_Q4_0_TILE_BLOCK
-#elif defined(V_Q8_0)
-        LOAD_V_Q8_0_TILE_BLOCK
-#else
-        for (var vec_idx_local = local_id.x; vec_idx_local < kv_count * V_CHUNKS; vec_idx_local += WG_SIZE) {
-            let kv_local = vec_idx_local / V_CHUNKS;
-            let chunk = vec_idx_local % V_CHUNKS;
-            let global_v_row = kv_tile + kv_local;
-            let v_vec_index = (v_head_offset + global_v_row * params.stride_v1 + chunk * 4u) >> 2u;
-            let v4 = V[v_vec_index];
-            let kv_off = kv_local * HEAD_DIM_V + chunk * 4u;
-            kv_shmem[kv_off + 0u] = f16(v4.x);
-            kv_shmem[kv_off + 1u] = f16(v4.y);
-            kv_shmem[kv_off + 2u] = f16(v4.z);
-            kv_shmem[kv_off + 3u] = f16(v4.w);
-        }
+#ifndef KV_DIRECT
+        load_v_tile_block(local_id.x, kv_count, kv_tile, v_head_offset);
 #endif
 
         workgroupBarrier();

@@ -69,82 +69,56 @@ fn f16_from_u16(bits: u32) -> f16 {
     return f16(packed[0]);
 }
 
-#define LOAD_K_Q4_0_TILE_BLOCK \
-for (var elem_idx = local_id.x * K_NQ; elem_idx < kv_count * HEAD_DIM_QK; elem_idx += WG_SIZE * K_NQ) { \
-    let blck_idx = elem_idx / BLOCK_SIZE; \
-    let block_offset = (elem_idx % BLOCK_SIZE) / K_NQ; \
-    let k_row = blck_idx / BLOCKS_K; \
-    let global_k_row = kv_tile + k_row; \
-    let block_k = blck_idx % BLOCKS_K; \
-    let row_offset = k_row * HEAD_DIM_QK; \
-    let global_block_idx = k_head_offset + global_k_row * params.stride_k1 + block_k; \
-    let block_byte_base = global_block_idx * K_BLOCK_SIZE_BYTES; \
-    let d = f16_from_u16(load_k_u16_at(block_byte_base)); \
-    let thread_byte_offset = block_offset * K_BYTES_PER_THREAD; \
-    let shmem_idx = row_offset + block_k * BLOCK_SIZE + thread_byte_offset; \
-    for (var j = 0u; j < K_BYTES_PER_THREAD / K_BYTES_PER_INNER_LOOP; j += 1u) { \
-        let q_byte_offset = block_byte_base + 2u + thread_byte_offset + j * K_BYTES_PER_INNER_LOOP; \
-        let q_packed = load_k_u32_at(q_byte_offset); \
-        dequant_q4_0_packed_to_shmem(q_packed, d, shmem_idx + j * K_BYTES_PER_INNER_LOOP); \
-    } \
+#if defined(K_Q4_0) || defined(K_Q8_0)
+fn load_k_tile_block(local_x: u32, kv_count: u32, kv_tile: u32, k_head_offset: u32) {
+    for (var elem_idx = local_x * K_NQ; elem_idx < kv_count * HEAD_DIM_QK; elem_idx += WG_SIZE * K_NQ) {
+        let blck_idx = elem_idx / BLOCK_SIZE;
+        let block_offset = (elem_idx % BLOCK_SIZE) / K_NQ;
+        let k_row = blck_idx / BLOCKS_K;
+        let global_k_row = kv_tile + k_row;
+        let block_k = blck_idx % BLOCKS_K;
+        let row_offset = k_row * HEAD_DIM_QK;
+        let global_block_idx = k_head_offset + global_k_row * params.stride_k1 + block_k;
+        let block_byte_base = global_block_idx * K_BLOCK_SIZE_BYTES;
+        let d = f16_from_u16(load_k_u16_at(block_byte_base));
+        let thread_byte_offset = block_offset * K_BYTES_PER_THREAD;
+        let shmem_idx = row_offset + block_k * BLOCK_SIZE + thread_byte_offset;
+        for (var j = 0u; j < K_BYTES_PER_THREAD / K_BYTES_PER_INNER_LOOP; j += 1u) {
+            let q_byte_offset = block_byte_base + 2u + thread_byte_offset + j * K_BYTES_PER_INNER_LOOP;
+            let q_packed = load_k_u32_at(q_byte_offset);
+#if defined(K_Q4_0)
+            dequant_q4_0_packed_to_shmem(q_packed, d, shmem_idx + j * K_BYTES_PER_INNER_LOOP);
+#elif defined(K_Q8_0)
+            dequant_q8_0_packed_to_shmem(q_packed, d, shmem_idx + j * K_BYTES_PER_INNER_LOOP);
+#endif
+        }
+    }
 }
+#endif
 
-#define LOAD_K_Q8_0_TILE_BLOCK \
-for (var elem_idx = local_id.x * K_NQ; elem_idx < kv_count * HEAD_DIM_QK; elem_idx += WG_SIZE * K_NQ) { \
-    let blck_idx = elem_idx / BLOCK_SIZE; \
-    let block_offset = (elem_idx % BLOCK_SIZE) / K_NQ; \
-    let k_row = blck_idx / BLOCKS_K; \
-    let global_k_row = kv_tile + k_row; \
-    let block_k = blck_idx % BLOCKS_K; \
-    let row_offset = k_row * HEAD_DIM_QK; \
-    let global_block_idx = k_head_offset + global_k_row * params.stride_k1 + block_k; \
-    let block_byte_base = global_block_idx * K_BLOCK_SIZE_BYTES; \
-    let d = f16_from_u16(load_k_u16_at(block_byte_base)); \
-    let thread_byte_offset = block_offset * K_BYTES_PER_THREAD; \
-    let shmem_idx = row_offset + block_k * BLOCK_SIZE + thread_byte_offset; \
-    for (var j = 0u; j < K_BYTES_PER_THREAD / K_BYTES_PER_INNER_LOOP; j += 1u) { \
-        let q_byte_offset = block_byte_base + 2u + thread_byte_offset + j * K_BYTES_PER_INNER_LOOP; \
-        let q_packed = load_k_u32_at(q_byte_offset); \
-        dequant_q8_0_packed_to_shmem(q_packed, d, shmem_idx + j * K_BYTES_PER_INNER_LOOP); \
-    } \
+#if defined(V_Q4_0) || defined(V_Q8_0)
+fn load_v_tile_block(local_x: u32, kv_count: u32, kv_tile: u32, v_head_offset: u32) {
+    for (var elem_idx = local_x * V_NQ; elem_idx < kv_count * HEAD_DIM_V; elem_idx += WG_SIZE * V_NQ) {
+        let blck_idx = elem_idx / BLOCK_SIZE;
+        let block_offset = (elem_idx % BLOCK_SIZE) / V_NQ;
+        let v_row = blck_idx / BLOCKS_V;
+        let global_v_row = kv_tile + v_row;
+        let block_k = blck_idx % BLOCKS_V;
+        let row_offset = v_row * HEAD_DIM_V;
+        let global_block_idx = v_head_offset + global_v_row * params.stride_v1 + block_k;
+        let block_byte_base = global_block_idx * V_BLOCK_SIZE_BYTES;
+        let d = f16_from_u16(load_v_u16_at(block_byte_base));
+        let thread_byte_offset = block_offset * V_BYTES_PER_THREAD;
+        let shmem_idx = row_offset + block_k * BLOCK_SIZE + thread_byte_offset;
+        for (var j = 0u; j < V_BYTES_PER_THREAD / V_BYTES_PER_INNER_LOOP; j += 1u) {
+            let q_byte_offset = block_byte_base + 2u + thread_byte_offset + j * V_BYTES_PER_INNER_LOOP;
+            let q_packed = load_v_u32_at(q_byte_offset);
+#if defined(V_Q4_0)
+            dequant_q4_0_packed_to_shmem(q_packed, d, shmem_idx + j * V_BYTES_PER_INNER_LOOP);
+#elif defined(V_Q8_0)
+            dequant_q8_0_packed_to_shmem(q_packed, d, shmem_idx + j * V_BYTES_PER_INNER_LOOP);
+#endif
+        }
+    }
 }
-
-#define LOAD_V_Q4_0_TILE_BLOCK \
-for (var elem_idx = local_id.x * V_NQ; elem_idx < kv_count * HEAD_DIM_V; elem_idx += WG_SIZE * V_NQ) { \
-    let blck_idx = elem_idx / BLOCK_SIZE; \
-    let block_offset = (elem_idx % BLOCK_SIZE) / V_NQ; \
-    let v_row = blck_idx / BLOCKS_V; \
-    let global_v_row = kv_tile + v_row; \
-    let block_k = blck_idx % BLOCKS_V; \
-    let row_offset = v_row * HEAD_DIM_V; \
-    let global_block_idx = v_head_offset + global_v_row * params.stride_v1 + block_k; \
-    let block_byte_base = global_block_idx * V_BLOCK_SIZE_BYTES; \
-    let d = f16_from_u16(load_v_u16_at(block_byte_base)); \
-    let thread_byte_offset = block_offset * V_BYTES_PER_THREAD; \
-    let shmem_idx = row_offset + block_k * BLOCK_SIZE + thread_byte_offset; \
-    for (var j = 0u; j < V_BYTES_PER_THREAD / V_BYTES_PER_INNER_LOOP; j += 1u) { \
-        let q_byte_offset = block_byte_base + 2u + thread_byte_offset + j * V_BYTES_PER_INNER_LOOP; \
-        let q_packed = load_v_u32_at(q_byte_offset); \
-        dequant_q4_0_packed_to_shmem(q_packed, d, shmem_idx + j * V_BYTES_PER_INNER_LOOP); \
-    } \
-}
-
-#define LOAD_V_Q8_0_TILE_BLOCK \
-for (var elem_idx = local_id.x * V_NQ; elem_idx < kv_count * HEAD_DIM_V; elem_idx += WG_SIZE * V_NQ) { \
-    let blck_idx = elem_idx / BLOCK_SIZE; \
-    let block_offset = (elem_idx % BLOCK_SIZE) / V_NQ; \
-    let v_row = blck_idx / BLOCKS_V; \
-    let global_v_row = kv_tile + v_row; \
-    let block_k = blck_idx % BLOCKS_V; \
-    let row_offset = v_row * HEAD_DIM_V; \
-    let global_block_idx = v_head_offset + global_v_row * params.stride_v1 + block_k; \
-    let block_byte_base = global_block_idx * V_BLOCK_SIZE_BYTES; \
-    let d = f16_from_u16(load_v_u16_at(block_byte_base)); \
-    let thread_byte_offset = block_offset * V_BYTES_PER_THREAD; \
-    let shmem_idx = row_offset + block_k * BLOCK_SIZE + thread_byte_offset; \
-    for (var j = 0u; j < V_BYTES_PER_THREAD / V_BYTES_PER_INNER_LOOP; j += 1u) { \
-        let q_byte_offset = block_byte_base + 2u + thread_byte_offset + j * V_BYTES_PER_INNER_LOOP; \
-        let q_packed = load_v_u32_at(q_byte_offset); \
-        dequant_q8_0_packed_to_shmem(q_packed, d, shmem_idx + j * V_BYTES_PER_INNER_LOOP); \
-    } \
-}
+#endif

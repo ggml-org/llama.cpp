@@ -639,9 +639,8 @@ inline size_t ggml_webgpu_flash_attn_tensor_offset(const ggml_tensor * tensor) {
 }
 
 inline bool ggml_webgpu_flash_attn_float_vec4_aligned(const ggml_tensor * K, size_t storage_offset_alignment) {
-    const size_t   alignment = std::max<size_t>(1u, storage_offset_alignment);
     const uint32_t offset_elems =
-        (uint32_t) ((ggml_webgpu_flash_attn_tensor_offset(K) & (alignment - 1)) / ggml_type_size(K->type));
+        (uint32_t) ((ggml_webgpu_flash_attn_tensor_offset(K) & (storage_offset_alignment - 1)) / ggml_type_size(K->type));
     return offset_elems % GGML_WEBGPU_FLASH_ATTN_TILE_KV_VEC_WIDTH == 0u;
 }
 
@@ -652,8 +651,9 @@ inline bool ggml_webgpu_flash_attn_float_vec4_aligned(const ggml_tensor * K,
            ggml_webgpu_flash_attn_float_vec4_aligned(V, storage_offset_alignment);
 }
 
-inline bool ggml_webgpu_flash_attn_kv_direct(const ggml_tensor * Q, const ggml_tensor * K, uint32_t kv_direct_align) {
-    return K->type == GGML_TYPE_F16 && (Q->ne[0] % std::max(1u, kv_direct_align) == 0) &&
+inline bool ggml_webgpu_flash_attn_kv_direct(
+    const ggml_tensor * Q, const ggml_tensor * K, const ggml_tensor * V, uint32_t kv_direct_align) {
+    return K->type == GGML_TYPE_F16 && V->type == GGML_TYPE_F16 && (Q->ne[0] % kv_direct_align == 0) &&
            (K->ne[1] % GGML_WEBGPU_KV_SEQ_PAD == 0);
 }
 
@@ -667,7 +667,7 @@ inline ggml_webgpu_flash_attn_common_pipeline_key ggml_webgpu_flash_attn_make_co
     key.dst_type                                   = context.dst->type;
     key.head_dim_qk                                = (uint32_t) context.src0->ne[0];
     key.head_dim_v                                 = (uint32_t) context.src2->ne[0];
-    key.kv_direct          = ggml_webgpu_flash_attn_kv_direct(context.src0, context.src1, kv_direct_align);
+    key.kv_direct          = ggml_webgpu_flash_attn_kv_direct(context.src0, context.src1, context.src2, kv_direct_align);
     key.kv_overlap         = ggml_webgpu_tensor_overlap(context.src1, context.src2);
     key.has_mask           = context.src3 != nullptr;
     key.has_sinks          = context.src4 != nullptr;

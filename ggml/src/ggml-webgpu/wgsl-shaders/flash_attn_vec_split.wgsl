@@ -240,6 +240,42 @@ fn calc_softmax_term(kv_idx: u32, slope: f32, has_bias: bool, apply_mask: bool) 
 #define QUANT_OUT_TYPE f32
 #include "quant_inner_loops.tmpl"
 #include "flash_attn_quant_staging.tmpl"
+
+#if !defined(K_Q4_0) && !defined(K_Q8_0)
+fn load_k_tile_block(local_x: u32, kv_count: u32, kv_tile: u32, k_head_offset: u32) {
+    for (var elem_idx = local_x * 4u; elem_idx < KV_TILE * HEAD_DIM_QK; elem_idx += WG_SIZE * 4u) {
+        let k_row = elem_idx / HEAD_DIM_QK;
+        let k_col = elem_idx % HEAD_DIM_QK;
+        let global_k_row = kv_tile + k_row;
+        let global_k_row_offset = k_head_offset + global_k_row * params.stride_k1;
+        let in_bounds = global_k_row < params.seq_len_kv && (k_col + 3u) < HEAD_DIM_QK;
+        let vec_idx = (global_k_row_offset + k_col) >> 2u;
+        let k4 = select(vec4<K_TYPE>(0.0), K[vec_idx], in_bounds);
+        kv_shmem[elem_idx + 0u] = f32(k4.x);
+        kv_shmem[elem_idx + 1u] = f32(k4.y);
+        kv_shmem[elem_idx + 2u] = f32(k4.z);
+        kv_shmem[elem_idx + 3u] = f32(k4.w);
+    }
+}
+#endif
+
+#if !defined(V_Q4_0) && !defined(V_Q8_0)
+fn load_v_tile_block(local_x: u32, kv_count: u32, kv_tile: u32, v_head_offset: u32) {
+    for (var elem_idx = local_x * 4u; elem_idx < KV_TILE * HEAD_DIM_V; elem_idx += WG_SIZE * 4u) {
+        let v_row = elem_idx / HEAD_DIM_V;
+        let v_col = elem_idx % HEAD_DIM_V;
+        let global_v_row = kv_tile + v_row;
+        let global_v_row_offset = v_head_offset + global_v_row * params.stride_v1;
+        let in_bounds = global_v_row < params.seq_len_kv && (v_col + 3u) < HEAD_DIM_V;
+        let vec_idx = (global_v_row_offset + v_col) >> 2u;
+        let v4 = select(vec4<V_TYPE>(0.0), V[vec_idx], in_bounds);
+        kv_shmem[elem_idx + 0u] = f32(v4.x);
+        kv_shmem[elem_idx + 1u] = f32(v4.y);
+        kv_shmem[elem_idx + 2u] = f32(v4.z);
+        kv_shmem[elem_idx + 3u] = f32(v4.w);
+    }
+}
+#endif
 #endif
 
 @compute @workgroup_size(WG_SIZE)
@@ -323,26 +359,8 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
         }
 
       // load k tile into shared memory
-#if defined(K_Q4_0)
-      LOAD_K_Q4_0_TILE_BLOCK
-#elif defined(K_Q8_0)
-      LOAD_K_Q8_0_TILE_BLOCK
-#elif defined(KV_DIRECT)
-      // Direct global loads for KV
-#else
-      for (var elem_idx = local_id.x * 4u; elem_idx < KV_TILE * HEAD_DIM_QK; elem_idx += WG_SIZE * 4u) {
-          let k_row = elem_idx / HEAD_DIM_QK;
-          let k_col = elem_idx % HEAD_DIM_QK;
-          let global_k_row = kv_tile + k_row;
-          let global_k_row_offset = k_head_offset + global_k_row * params.stride_k1;
-          let in_bounds = global_k_row < params.seq_len_kv && (k_col + 3u) < HEAD_DIM_QK;
-          let vec_idx = (global_k_row_offset + k_col) >> 2u;
-          let k4 = select(vec4<K_TYPE>(0.0), K[vec_idx], in_bounds);
-          kv_shmem[elem_idx + 0u] = f32(k4.x);
-          kv_shmem[elem_idx + 1u] = f32(k4.y);
-          kv_shmem[elem_idx + 2u] = f32(k4.z);
-          kv_shmem[elem_idx + 3u] = f32(k4.w);
-      }
+#ifndef KV_DIRECT
+      load_k_tile_block(local_id.x, kv_count, kv_tile, k_head_offset);
 #endif
 
       workgroupBarrier();
@@ -459,26 +477,8 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
       }
 
       // load v tile into shared memory
-#if defined(V_Q4_0)
-      LOAD_V_Q4_0_TILE_BLOCK
-#elif defined(V_Q8_0)
-      LOAD_V_Q8_0_TILE_BLOCK
-#elif defined(KV_DIRECT)
-      // Direct global loads for KV
-#else
-      for (var elem_idx = local_id.x * 4u; elem_idx < KV_TILE * HEAD_DIM_V; elem_idx += WG_SIZE * 4u) {
-          let v_row = elem_idx / HEAD_DIM_V;
-          let v_col = elem_idx % HEAD_DIM_V;
-          let global_v_row = kv_tile + v_row;
-          let global_v_row_offset = v_head_offset + global_v_row * params.stride_v1;
-          let in_bounds = global_v_row < params.seq_len_kv && (v_col + 3u) < HEAD_DIM_V;
-          let vec_idx = (global_v_row_offset + v_col) >> 2u;
-          let v4 = select(vec4<V_TYPE>(0.0), V[vec_idx], in_bounds);
-          kv_shmem[elem_idx + 0u] = f32(v4.x);
-          kv_shmem[elem_idx + 1u] = f32(v4.y);
-          kv_shmem[elem_idx + 2u] = f32(v4.z);
-          kv_shmem[elem_idx + 3u] = f32(v4.w);
-      }
+#ifndef KV_DIRECT
+      load_v_tile_block(local_id.x, kv_count, kv_tile, v_head_offset);
 #endif
 
       workgroupBarrier();
