@@ -3875,10 +3875,251 @@ static bool ggml_cuda_can_fuse(const struct ggml_cgraph *                cgraph,
     return false;
 }
 
+
+struct ggml_cuda_mmid_lane {
+    ggml_tensor * mm = nullptr;
+    ggml_tensor * bias_node = nullptr;
+    ggml_tensor * out = nullptr;
+    const ggml_tensor * bias = nullptr;
+    const ggml_tensor * scale = nullptr;
+    int n_nodes = 0;
+};
+
+static bool ggml_cuda_parse_nvfp4_mmid_lane(const ggml_cgraph * cgraph, int i, ggml_cuda_mmid_lane & lane) {
+    if (i >= cgraph->n_nodes || cgraph->nodes[i]->op != GGML_OP_MUL_MAT_ID) {
+        return false;
+    }
+
+    ggml_tensor * mm = cgraph->nodes[i];
+    if (mm->src[0]->type != GGML_TYPE_NVFP4 || mm->src[1]->type != GGML_TYPE_F32 || mm->type != GGML_TYPE_F32 || mm->src[2] == nullptr) {
+        return false;
+    }
+
+    lane = {};
+    lane.mm = mm;
+    lane.out = mm;
+    lane.n_nodes = 1;
+
+    if (i + lane.n_nodes < cgraph->n_nodes && cgraph->nodes[i + lane.n_nodes]->op == GGML_OP_ADD_ID) {
+        ggml_tensor * add = cgraph->nodes[i + lane.n_nodes];
+        if (add->src[0] != lane.out || add->src[2] != mm->src[2]) {
+            return false;
+        }
+        lane.bias_node = add;
+        lane.bias = add->src[1];
+        lane.out = add;
+        lane.n_nodes++;
+    }
+
+    if (i + lane.n_nodes + 3 >= cgraph->n_nodes) {
+        return true;
+    }
+
+    ggml_tensor * reshape = cgraph->nodes[i + lane.n_nodes + 0];
+    ggml_tensor * repeat  = cgraph->nodes[i + lane.n_nodes + 1];
+    ggml_tensor * getrows = cgraph->nodes[i + lane.n_nodes + 2];
+    ggml_tensor * mul     = cgraph->nodes[i + lane.n_nodes + 3];
+
+    if (reshape->op != GGML_OP_RESHAPE || repeat->op != GGML_OP_REPEAT ||
+        getrows->op != GGML_OP_GET_ROWS || mul->op != GGML_OP_MUL) {
+        return true;
+    }
+
+    if (repeat->src[0] != reshape || getrows->src[0] != repeat || getrows->src[1] != mm->src[2]) {
+        return true;
+    }
+
+    const bool mul_has_out   = mul->src[0] == lane.out || mul->src[1] == lane.out;
+    const bool mul_has_scale = mul->src[0] == getrows || mul->src[1] == getrows;
+    if (!mul_has_out || !mul_has_scale) {
+        return true;
+    }
+
+    const ggml_tensor * scale = reshape->src[0];
+    if (scale->type != GGML_TYPE_F32 || !ggml_is_contiguous(scale) || ggml_nelements(scale) != mm->src[0]->ne[2]) {
+        return false;
+    }
+
+    if (mul->type != GGML_TYPE_F32 || !ggml_are_same_shape(mul, lane.out)) {
+        return false;
+    }
+
+    lane.scale = scale;
+    lane.out = mul;
+    lane.n_nodes += 4;
+    return true;
+}
+
+static bool ggml_cuda_can_fuse_mmid_scale_subgraph(const ggml_cgraph * cgraph, int start_idx, int count, const int * outputs, int num_outputs) {
+    for (int j = 0; j < count; ++j) {
+        const int idx = start_idx + j;
+        if (idx >= cgraph->n_nodes) {
+            return false;
+        }
+
+        const ggml_tensor * node = cgraph->nodes[idx];
+        bool is_output = false;
+        for (int k = 0; k < num_outputs; ++k) {
+            if (outputs[k] < cgraph->n_nodes && cgraph->nodes[outputs[k]] == node) {
+                is_output = true;
+                break;
+            }
+        }
+        if (is_output) {
+            continue;
+        }
+
+        if (node->flags & GGML_TENSOR_FLAG_OUTPUT) {
+            return false;
+        }
+
+        int subgraph_uses = 0;
+        for (int k = j + 1; k < count; ++k) {
+            const ggml_tensor * other_node = cgraph->nodes[start_idx + k];
+            for (int src_idx = 0; src_idx < GGML_MAX_SRC; ++src_idx) {
+                if (other_node->src[src_idx] == node) {
+                    subgraph_uses++;
+                }
+            }
+        }
+
+        if (subgraph_uses != ggml_node_get_use_count(cgraph, idx)) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+static bool ggml_cuda_should_fuse_mmid_lanes(const ggml_cuda_mmid_lane & up, const ggml_cuda_mmid_lane & gate, const ggml_tensor * glu) {
+    if (up.mm->src[0]->type != gate.mm->src[0]->type || !ggml_are_same_shape(up.mm->src[0], gate.mm->src[0]) ||
+        !ggml_are_same_stride(up.mm->src[0], gate.mm->src[0])) {
+        return false;
+    }
+
+    if (up.mm->src[1] != gate.mm->src[1] || up.mm->src[2] != gate.mm->src[2]) {
+        return false;
+    }
+
+    if (glu->op != GGML_OP_GLU || glu->src[0] != gate.out || glu->src[1] != up.out) {
+        return false;
+    }
+
+    static constexpr std::array<ggml_glu_op, 3> valid_glu_ops = { GGML_GLU_OP_SWIGLU, GGML_GLU_OP_GEGLU, GGML_GLU_OP_SWIGLU_OAI };
+    if (std::find(valid_glu_ops.begin(), valid_glu_ops.end(), ggml_get_glu_op(glu)) == valid_glu_ops.end()) {
+        return false;
+    }
+
+    if (const bool swapped = ggml_get_op_params_i32(glu, 1); swapped) {
+        return false;
+    }
+
+    const bool split = ggml_backend_buft_is_cuda_split(up.mm->src[0]->buffer->buft) ||
+                       ggml_backend_buft_is_cuda_split(gate.mm->src[0]->buffer->buft);
+    return !split;
+}
+
+static int ggml_cuda_try_fuse_nvfp4_mmid_scale_glu(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph * cgraph, int i) {
+    ggml_cuda_mmid_lane lane0;
+    if (!ggml_cuda_parse_nvfp4_mmid_lane(cgraph, i, lane0)) {
+        return 0;
+    }
+
+    ggml_cuda_mmid_lane lane1;
+    if (!ggml_cuda_parse_nvfp4_mmid_lane(cgraph, i + lane0.n_nodes, lane1)) {
+        return 0;
+    }
+
+    const int glu_idx = i + lane0.n_nodes + lane1.n_nodes;
+    if (glu_idx >= cgraph->n_nodes || cgraph->nodes[glu_idx]->op != GGML_OP_GLU) {
+        return 0;
+    }
+
+    if (lane0.scale == nullptr && lane1.scale == nullptr) {
+        return 0;
+    }
+
+    const ggml_tensor * glu = cgraph->nodes[glu_idx];
+    ggml_cuda_mmid_lane * gate = nullptr;
+    ggml_cuda_mmid_lane * up   = nullptr;
+    if (glu->src[0] == lane0.out && glu->src[1] == lane1.out) {
+        gate = &lane0;
+        up   = &lane1;
+    } else if (glu->src[0] == lane1.out && glu->src[1] == lane0.out) {
+        gate = &lane1;
+        up   = &lane0;
+    } else {
+        return 0;
+    }
+
+    if (!ggml_cuda_should_fuse_mmid_lanes(*up, *gate, glu)) {
+        return 0;
+    }
+
+    std::vector<ggml_op> ops;
+    for (int j = i; j <= glu_idx; ++j) {
+        ops.push_back(cgraph->nodes[j]->op);
+    }
+
+    int out_nodes[] = { glu_idx };
+    if (!ggml_cuda_can_fuse_mmid_scale_subgraph(cgraph, i, (int) ops.size(), out_nodes, 1) ||
+        !ggml_cuda_check_fusion_memory_ranges(cgraph, i, (int) ops.size(), out_nodes, 1)) {
+        return 0;
+    }
+
+    if (!ggml_cuda_should_fuse_mul_mat_vec_q(up->mm)) {
+        return 0;
+    }
+
+    ggml_cuda_mm_fusion_args_host fusion_data{};
+    fusion_data.gate       = gate->mm->src[0];
+    fusion_data.x_bias     = up->bias;
+    fusion_data.gate_bias  = gate->bias;
+    fusion_data.x_scale    = up->scale;
+    fusion_data.gate_scale = gate->scale;
+    fusion_data.glu_op     = ggml_get_glu_op(glu);
+
+    ggml_cuda_mul_mat_vec_q(*cuda_ctx, up->mm->src[0], up->mm->src[1], up->mm->src[2], cgraph->nodes[glu_idx], &fusion_data);
+    return glu_idx - i;
+}
+
+static int ggml_cuda_try_fuse_nvfp4_mmid_scale(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph * cgraph, int i) {
+    ggml_cuda_mmid_lane lane;
+    if (!ggml_cuda_parse_nvfp4_mmid_lane(cgraph, i, lane) || lane.scale == nullptr) {
+        return 0;
+    }
+
+    std::vector<ggml_op> ops;
+    for (int j = 0; j < lane.n_nodes; ++j) {
+        ops.push_back(cgraph->nodes[i + j]->op);
+    }
+
+    const int out_idx = i + lane.n_nodes - 1;
+    int out_nodes[] = { out_idx };
+    if (!ggml_cuda_can_fuse_mmid_scale_subgraph(cgraph, i, lane.n_nodes, out_nodes, 1) ||
+        !ggml_cuda_check_fusion_memory_ranges(cgraph, i, lane.n_nodes, out_nodes, 1)) {
+        return 0;
+    }
+
+    if (!ggml_cuda_should_fuse_mul_mat_vec_q(lane.mm)) {
+        return 0;
+    }
+
+    ggml_cuda_mm_fusion_args_host fusion_data{};
+    fusion_data.x_bias  = lane.bias;
+    fusion_data.x_scale = lane.scale;
+
+    ggml_cuda_mul_mat_vec_q(*cuda_ctx, lane.mm->src[0], lane.mm->src[1], lane.mm->src[2], lane.out, &fusion_data);
+    return lane.n_nodes - 1;
+}
+
 // try and fuse nodes and return the number of nodes to skip
 static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph * cgraph, int i) {
 
     static bool disable_fusion = getenv("GGML_CUDA_DISABLE_FUSION") != nullptr && std::atoi(getenv("GGML_CUDA_DISABLE_FUSION"));
+    const char * disable_nvfp4_mmid_scale_fusion_env = getenv("GGML_CUDA_DISABLE_NVFP4_MMID_SCALE_FUSION");
+    const bool disable_nvfp4_mmid_scale_fusion =
+        disable_nvfp4_mmid_scale_fusion_env != nullptr && std::atoi(disable_nvfp4_mmid_scale_fusion_env);
     if (disable_fusion) {
         return 0;
     }
@@ -4044,6 +4285,14 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
         }
     }
 
+    int fused_nvfp4_mmid_nodes = 0;
+    if (!disable_nvfp4_mmid_scale_fusion) {
+        fused_nvfp4_mmid_nodes = ggml_cuda_try_fuse_nvfp4_mmid_scale_glu(cuda_ctx, cgraph, i);
+        if (fused_nvfp4_mmid_nodes > 0) {
+            return fused_nvfp4_mmid_nodes;
+        }
+    }
+
     bool fused_mul_mat_vec = false;
     int  fused_node_count  = 0;
 
@@ -4173,6 +4422,13 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
 
     fused_mul_mat_vec = false;
     fused_node_count  = 0;
+
+    if (!disable_nvfp4_mmid_scale_fusion) {
+        fused_nvfp4_mmid_nodes = ggml_cuda_try_fuse_nvfp4_mmid_scale(cuda_ctx, cgraph, i);
+        if (fused_nvfp4_mmid_nodes > 0) {
+            return fused_nvfp4_mmid_nodes;
+        }
+    }
 
     // gate + add + glu + up + add
     for (ggml_op op : { GGML_OP_MUL_MAT, GGML_OP_MUL_MAT_ID }) {
@@ -4405,12 +4661,6 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
                     }
                 }
 
-#ifdef GGML_CUDA_DEBUG
-                const int nodes_fused = i - prev_i - 1;
-                if (nodes_fused > 0) {
-                    GGML_LOG_INFO("nodes_fused: %d\n", nodes_fused);
-                }
-#endif
                 prev_i = i;
 
                 if (ggml_is_empty(node) || node->op == GGML_OP_RESHAPE || node->op == GGML_OP_TRANSPOSE || node->op == GGML_OP_VIEW || node->op == GGML_OP_PERMUTE || node->op == GGML_OP_NONE) {
@@ -4424,6 +4674,12 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
                 int nodes_to_skip = ggml_cuda_try_fuse(cuda_ctx, cgraph, i);
 
                 if (nodes_to_skip != 0) {
+#ifdef GGML_CUDA_DEBUG
+                    const int last_fused = i + nodes_to_skip;
+                    GGML_LOG_INFO("nodes_fused: %d, first: %s (%s), last: %s (%s)\n",
+                            nodes_to_skip, ggml_op_name(node->op), node->name,
+                            ggml_op_name(cgraph->nodes[last_fused]->op), cgraph->nodes[last_fused]->name);
+#endif
                     i += nodes_to_skip;
                     continue;
                 }
