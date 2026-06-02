@@ -37,9 +37,9 @@ list(FIND HTP_HMX_VERSIONS ${DSP_VERSION} _hmx_idx)
 
 if (_hmx_idx GREATER_EQUAL 0)
     target_sources(${HTP_LIB} PRIVATE
+        hmx-matmul-ops.c
         hmx-flash-attn-ops.c
         hmx-queue.c
-        hmx-matmul-ops.c
     )
 
     # -mhmx enables HMX instruction set (needed by files that include hmx-utils.h)

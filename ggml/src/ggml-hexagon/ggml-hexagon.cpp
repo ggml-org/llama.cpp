@@ -1927,6 +1927,7 @@ struct ggml_hexagon_opbatch {
         size_t extra_tens = 0;
 
         auto fit_tensor = [&](const ggml_tensor *t) {
+            if (!t) return;
             if (!t_map.count(t)) {
                 extra_tens++;
 
