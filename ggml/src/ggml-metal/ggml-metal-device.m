@@ -314,7 +314,7 @@ ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
 
     int64_t * t_per_lib = calloc(GGML_METAL_LIB_COUNT, sizeof(int64_t));
     NSError ** err_per_lib = calloc(GGML_METAL_LIB_COUNT, sizeof(NSError *));
-    __block bool any_failure = false;
+    __block atomic_bool any_failure = false;
 
     dispatch_group_t group = dispatch_group_create();
     dispatch_queue_t queue = dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0);
@@ -341,7 +341,7 @@ ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
 
             if (!lib) {
                 err_per_lib[kind] = [error retain];
-                any_failure = true;
+                atomic_store(&any_failure, true);
                 dispatch_semaphore_signal(compile_sem);
                 return;
             }
@@ -357,7 +357,7 @@ ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
     }
     free(src_per_kind);
 
-    if (any_failure) {
+    if (atomic_load(&any_failure)) {
         for (int kind = 0; kind < GGML_METAL_LIB_COUNT; ++kind) {
             if (err_per_lib[kind]) {
                 GGML_LOG_ERROR("%s: failed to compile '%s' library: %s\n", __func__,
@@ -454,7 +454,7 @@ ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
 
     int64_t * t_per_lib = calloc(GGML_METAL_LIB_COUNT, sizeof(int64_t));
     NSError ** err_per_lib = calloc(GGML_METAL_LIB_COUNT, sizeof(NSError *));
-    __block bool any_failure = false;
+    __block atomic_bool any_failure = false;
 
     dispatch_group_t group = dispatch_group_create();
     dispatch_queue_t queue = dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0);
@@ -487,7 +487,7 @@ ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
             NSString * src = ggml_metal_library_flatten_source(path_source, &file_err);
             if (!src) {
                 err_per_lib[kind] = [file_err retain];
-                any_failure = true;
+                atomic_store(&any_failure, true);
                 dispatch_semaphore_signal(compile_sem);
                 return;
             }
@@ -510,7 +510,7 @@ ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
 
             if (!lib) {
                 err_per_lib[kind] = [compile_err retain];
-                any_failure = true;
+                atomic_store(&any_failure, true);
                 dispatch_semaphore_signal(compile_sem);
                 return;
             }
@@ -521,7 +521,7 @@ ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
     }
     dispatch_group_wait(group, DISPATCH_TIME_FOREVER);
 
-    if (any_failure) {
+    if (atomic_load(&any_failure)) {
         for (int kind = 0; kind < GGML_METAL_LIB_COUNT; ++kind) {
             if (err_per_lib[kind]) {
                 GGML_LOG_ERROR("%s: failed to build '%s' library: %s\n", __func__,
