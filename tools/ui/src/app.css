@@ -141,6 +141,7 @@
 		@apply bg-background text-foreground;
 		scrollbar-width: thin;
 		scrollbar-gutter: stable;
+		overflow: hidden;
 	}
 
 	/* Global scrollbar styling - visible only on hover */
