@@ -4,6 +4,7 @@
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { ReasoningEffort, MessageRole } from '$lib/enums';
 	import { REASONING_EFFORT_TOKENS } from '$lib/constants/reasoning-effort-tokens';
+	import { EFFORT_LEVELS, type EffortLevel } from '$lib/constants/reasoning-effort';
 	import {
 		modelsStore,
 		checkModelSupportsThinking,
@@ -15,14 +16,6 @@
 	import { conversationsStore, activeMessages } from '$lib/stores/conversations.svelte';
 	import { isRouterMode } from '$lib/stores/server.svelte';
 	import type { DatabaseMessage } from '$lib/types/database';
-
-	const EFFORT_LEVELS = [
-		{ value: 'off', label: 'Off', isOff: true },
-		{ value: ReasoningEffort.LOW, label: 'Low' },
-		{ value: ReasoningEffort.MEDIUM, label: 'Medium' },
-		{ value: ReasoningEffort.HIGH, label: 'High' },
-		{ value: ReasoningEffort.MAX, label: 'Max', hasInfo: true }
-	];
 
 	let thinkingEnabled = $derived(conversationsStore.getThinkingEnabled());
 	let currentEffort = $derived(conversationsStore.getReasoningEffort());
@@ -63,14 +56,14 @@
 	});
 
 	// Check if current item is selected
-	function isSelected(item: (typeof EFFORT_LEVELS)[number]): boolean {
+	function isSelected(item: EffortLevel): boolean {
 		if (item.isOff) {
 			return isOff;
 		}
 		return thinkingEnabled && currentEffort === item.value;
 	}
 
-	function handleSelection(item: (typeof EFFORT_LEVELS)[number]) {
+	function handleSelection(item: EffortLevel) {
 		if (item.isOff) {
 			conversationsStore.setThinkingEnabled(false);
 		} else {

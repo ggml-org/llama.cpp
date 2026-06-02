@@ -12,10 +12,9 @@
 	import { useToolsPanel } from '$lib/hooks/use-tools-panel.svelte';
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
-	import { supportsThinking } from '$lib/stores/models.svelte';
 	import { McpLogo } from '$lib/components/app';
-	import { PencilRuler, Lightbulb, ChevronDown, ChevronRight, Check, Info } from '@lucide/svelte';
-	import { HealthCheckStatus, ReasoningEffort } from '$lib/enums';
+	import { PencilRuler, ChevronDown, ChevronRight } from '@lucide/svelte';
+	import { HealthCheckStatus } from '$lib/enums';
 
 	interface Props {
 		class?: string;
@@ -76,21 +75,6 @@
 
 	function getEnabledMcpServers() {
 		return mcpStore.getServersSorted().filter((s) => s.enabled);
-	}
-
-	const EFFORT_LEVELS = [
-		{ value: ReasoningEffort.LOW, label: 'Low', default: true },
-		{ value: ReasoningEffort.MEDIUM, label: 'Medium' },
-		{ value: ReasoningEffort.HIGH, label: 'High' },
-		{ value: ReasoningEffort.MAX, label: 'Max', hasInfo: true }
-	];
-
-	let thinkingExpanded = $state(false);
-	let currentEffort = $derived(conversationsStore.getReasoningEffort());
-	let detected = $derived(supportsThinking());
-
-	function handleEffortChange(effort: ReasoningEffort) {
-		conversationsStore.setReasoningEffort(effort);
 	}
 </script>
 
@@ -292,90 +276,6 @@
 
 					<span>System Message</span>
 				</button>
-
-				<div class="my-2 border-t"></div>
-
-				{#if detected}
-					<Collapsible.Root
-						open={thinkingExpanded}
-						onOpenChange={(open) => (thinkingExpanded = open)}
-					>
-						<Collapsible.Trigger class={sheetItemClass}>
-							{#if thinkingExpanded}
-								<ChevronDown class="h-4 w-4 shrink-0" />
-							{:else}
-								<ChevronRight class="h-4 w-4 shrink-0" />
-							{/if}
-
-							<Lightbulb
-								class="h-4 w-4 shrink-0 {conversationsStore.getThinkingEnabled()
-									? 'fill-amber-400 text-amber-400'
-									: 'text-muted-foreground'}"
-							/>
-
-							<span class="flex-1">Thinking</span>
-
-							<span class="text-xs text-muted-foreground">
-								{conversationsStore.getThinkingEnabled() ? 'on' : 'off'}
-							</span>
-						</Collapsible.Trigger>
-
-						<Collapsible.Content>
-							<div class="flex flex-col gap-0.5 pl-4">
-								<div class="px-3 py-1.5 text-xs text-muted-foreground">Reasoning effort</div>
-								{#each EFFORT_LEVELS as level (level.value)}
-									<button
-										type="button"
-										class="flex w-full items-center gap-3 rounded-md px-3 py-2 text-left text-sm transition-colors hover:bg-accent active:bg-accent"
-										onclick={() => handleEffortChange(level.value)}
-									>
-										{#if currentEffort === level.value}
-											<Check class="h-4 w-4 shrink-0 text-foreground" />
-										{:else}
-											<div class="h-4 w-4 shrink-0"></div>
-										{/if}
-
-										<span class="flex-1">{level.label}</span>
-
-										{#if level.default}
-											<span
-												class="rounded bg-muted-foreground/10 px-1.5 py-0.5 text-[11px] text-muted-foreground"
-											>
-												Default
-											</span>
-										{/if}
-
-										{#if level.hasInfo}
-											<Info class="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-										{/if}
-									</button>
-								{/each}
-
-								<div class="my-1 border-t"></div>
-
-								<div class="flex items-center justify-between px-3 py-1">
-									<div class="flex flex-col gap-0.5">
-										<span class="text-sm font-medium">Thinking</span>
-
-										<span class="text-xs text-muted-foreground">
-											Can think for more complex tasks
-										</span>
-									</div>
-
-									<Switch
-										checked={conversationsStore.getThinkingEnabled()}
-										onCheckedChange={() =>
-											conversationsStore.setThinkingEnabled(
-												!conversationsStore.getThinkingEnabled()
-											)}
-									/>
-								</div>
-							</div>
-						</Collapsible.Content>
-					</Collapsible.Root>
-				{/if}
-
-				<div class="my-2 border-t"></div>
 
 				{#if hasMcpPromptsSupport}
 					<button type="button" class={sheetItemClass} onclick={onMcpPromptClick}>
