@@ -102,9 +102,8 @@ void ggml_cuda_error(const char * stmt, const char * func, const char * file, in
 // probably because the Windows CUDA libraries forget to make this check before invoking the drivers
 void ggml_cuda_set_device(int device) {
     int current_device;
-    CUDA_CHECK(cudaGetDevice(&current_device));
-
-    if (device == current_device) {
+    cudaError_t err = cudaGetDevice(&current_device);
+    if (err == cudaSuccess && device == current_device) {
         return;
     }
 
