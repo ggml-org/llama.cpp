@@ -34,20 +34,18 @@
 		chatStore.getConversationModel(activeMessages() as DatabaseMessage[])
 	);
 
-	// Fallback: if model props aren't available, check if any assistant messages
-	// for this model in the active conversation have reasoning content.
 	let modelSupportsThinkingFromMessages = $derived.by(() => {
 		const modelId = isRouterMode() ? modelsStore.selectedModelName || conversationModel : null;
 		if (!modelId) return false;
+
 		const messages = conversationsStore.activeMessages;
+
 		return messages.some(
 			(m: DatabaseMessage) =>
 				m.role === MessageRole.ASSISTANT && m.model === modelId && !!m.reasoningContent
 		);
 	});
 
-	// Check if model supports thinking. Primary: chat template from /props.
-	// Fallback: message history (reasoning content in assistant messages).
 	let modelSupportsThinking = $derived.by(() => {
 		loadedModelIds();
 		propsCacheVersion();
@@ -57,15 +55,12 @@
 			return checkModelSupportsThinking(modelId ?? '') || modelSupportsThinkingFromMessages;
 		}
 
-		// In non-router mode, use the built-in supportsThinking
 		return supportsThinking() || modelSupportsThinkingFromMessages;
 	});
 
-	// Check if current item is selected
 	function isSelected(item: (typeof EFFORT_LEVELS)[number]): boolean {
-		if (item.isOff) {
-			return isOff;
-		}
+		if (item.isOff) return isOff;
+
 		return thinkingEnabled && currentEffort === item.value;
 	}
 

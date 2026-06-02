@@ -18,8 +18,6 @@
 
 	let enabled = $derived(conversationsStore.getThinkingEnabled());
 
-	// Fallback: if model props aren't available, check if any assistant messages
-	// for this model in the active conversation have reasoning content.
 	let modelSupportsThinkingFromMessages = $derived.by(() => {
 		if (!modelId) return false;
 		const messages = conversationsStore.activeMessages;
@@ -29,8 +27,6 @@
 		);
 	});
 
-	// Primary: check via chat template from /props. Falls back to message history.
-	// Reads loadedModelIds + propsCacheVersion for reactivity when model loads and props cache updates.
 	let modelSupportsThinking = $derived.by(() => {
 		loadedModelIds();
 		propsCacheVersion();

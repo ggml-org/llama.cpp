@@ -246,7 +246,6 @@ export { default as ChatFormActionAddMcpServersSubmenu } from './ChatForm/ChatFo
  * A toggle button with lightbulb icon that indicates thinking status.
  * Shows the reasoning effort dropdown when clicked.
  * Only visible when the current model supports thinking.
- * Replaces the lightbulb icon that was previously shown in the model selector.
  */
 export { default as ChatFormReasoningToggle } from './ChatForm/ChatFormActions/ChatFormReasoningToggle.svelte';
 

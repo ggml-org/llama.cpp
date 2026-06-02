@@ -9,10 +9,6 @@
 
 	let { message }: Props = $props();
 
-	// For assistant messages, show the bulb if there's reasoning content.
-	// No chat template detection needed — the model already produced reasoning,
-	// so it obviously supports it. Template detection is only for the chat form
-	// selector where we don't have a message to inspect.
 	let hasReasoning = $derived(!!message.reasoningContent);
 </script>
 

@@ -45,23 +45,19 @@
 	let lastSyncedConversationModel: string | null = null;
 
 	let selectorModel = $derived.by(() => {
-		// Priority 1: if the store's selected model differs from the conversation model,
-		// show the store's model. This handles the case where the user explicitly
-		// selected a different model — selectorModel updates immediately.
 		const storeModel = selectedModelName();
 		if (storeModel && storeModel !== conversationModel) {
 			return storeModel;
 		}
-		// Priority 2: show the conversation model (from last assistant message)
+
 		if (conversationModel) {
 			return conversationModel;
 		}
+
 		return null;
 	});
 
 	$effect(() => {
-		// When the conversation model changes (new chat loaded, new assistant message),
-		// sync the store to match the conversation model.
 		if (conversationModel && conversationModel !== lastSyncedConversationModel) {
 			if (modelOptions().some((m) => m.model === conversationModel)) {
 				modelsStore.selectedModelName = conversationModel;
