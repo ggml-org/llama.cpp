@@ -22,7 +22,6 @@
 	} from '$lib/types';
 	import {
 		deriveAgenticSections,
-		formatReasoningPreview,
 		formatJsonPretty,
 		parseToolResultWithImages,
 		type AgenticSection,
@@ -299,7 +298,6 @@
 			</div>
 		</CollapsibleContentBlock>
 	{:else if section.type === AgenticSectionType.REASONING}
-		{@const { preview: reasoningPreview, overflow: reasoningOverflow } = formatReasoningPreview(section.content)}
 		{@const reasoningSubtitle = section.wasInterrupted
 			? hasReasoningError
 				? 'Error'
@@ -312,8 +310,7 @@
 			icon={Brain}
 			title="Reasoning"
 			subtitle={reasoningSubtitle}
-			preview={!showThoughtInProgress ? reasoningPreview : undefined}
-			overflow={!showThoughtInProgress ? reasoningOverflow : 0}
+			rawContent={!showThoughtInProgress ? section.content : undefined}
 			onToggle={() => toggleExpanded(index, section)}
 		>
 			<div class="pt-3">
@@ -323,7 +320,6 @@
 			</div>
 		</CollapsibleContentBlock>
 	{:else if section.type === AgenticSectionType.REASONING_PENDING}
-		{@const { preview: reasoningPreview, overflow: reasoningOverflow } = formatReasoningPreview(section.content)}
 		{@const reasoningTitle = isStreaming ? 'Reasoning...' : 'Reasoning'}
 		{@const reasoningSubtitle = isStreaming ? '' : (hasReasoningError ? 'Error' : 'Cancelled')}
 
@@ -333,8 +329,7 @@
 			icon={Brain}
 			title={reasoningTitle}
 			subtitle={reasoningSubtitle}
-			preview={!showThoughtInProgress ? reasoningPreview : undefined}
-			overflow={!showThoughtInProgress ? reasoningOverflow : 0}
+			rawContent={!showThoughtInProgress ? section.content : undefined}
 			{isStreaming}
 			onToggle={() => toggleExpanded(index, section)}
 		>

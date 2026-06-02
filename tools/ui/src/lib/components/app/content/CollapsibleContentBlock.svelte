@@ -5,6 +5,7 @@
 	import { Card } from '$lib/components/ui/card';
 	import { createAutoScrollController } from '$lib/hooks/use-auto-scroll.svelte';
 	import { useThrottle } from '$lib/hooks/use-throttle.svelte';
+	import { formatReasoningPreview } from '$lib/utils';
 	import type { Snippet } from 'svelte';
 	import type { Component } from 'svelte';
 
@@ -17,6 +18,7 @@
 		subtitle?: string;
 		preview?: string;
 		overflow?: number;
+		rawContent?: string;
 		isStreaming?: boolean;
 		onToggle?: () => void;
 		children: Snippet;
@@ -31,6 +33,7 @@
 		subtitle,
 		preview,
 		overflow = 0,
+		rawContent,
 		isStreaming = false,
 		onToggle,
 		children
@@ -38,13 +41,16 @@
 
 	let contentContainer: HTMLDivElement | undefined = $state();
 
-	let previewKey = useThrottle(() => preview ?? '', 500);
-	let displayedPreview = $state(preview ?? '');
+	let previewKey = useThrottle(() => rawContent ?? preview ?? '', 500);
+	let displayedPreview = $state('');
+	let displayedOverflow = $state(0);
 
 	$effect(() => {
 		previewKey.key;
-
-		displayedPreview = preview ?? '';
+		const content = rawContent ?? preview ?? '';
+		const result = formatReasoningPreview(content);
+		displayedPreview = result.preview;
+		displayedOverflow = result.overflow;
 	});
 
 	const autoScroll = createAutoScrollController();
@@ -86,16 +92,16 @@
 					{/if}
 				</div>
 
-				{#if preview}
-					<div class="flex min-w-0 items-baseline justify-between gap-2">
-						<div class="w-3/4 truncate text-xs text-muted-foreground/80">
-							{displayedPreview}
-						</div>
-						{#if overflow > 0}
-							<span class="shrink-0 text-xs text-muted-foreground/60">{overflow}+ chars</span>
-						{/if}
+			{#if displayedPreview}
+				<div class="flex min-w-0 items-baseline justify-between gap-2">
+					<div class="w-3/4 truncate text-xs text-muted-foreground/80">
+						{displayedPreview}
 					</div>
-				{/if}
+					{#if displayedOverflow > 0}
+						<span class="shrink-0 text-xs text-muted-foreground/60">{displayedOverflow}+ chars</span>
+					{/if}
+				</div>
+			{/if}
 			</div>
 
 			<div
