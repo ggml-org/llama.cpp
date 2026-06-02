@@ -3,12 +3,23 @@
 #include "unary.cuh"
 
 template <bool apply_silu, size_t split_d_inner, size_t d_conv>
-static __global__ void ssm_conv_f32(const float * __restrict__ src0, const float * __restrict__ src1,
-                                    const float * __restrict__ bias,
+static __global__ void ssm_conv_f32(const float * src0_ptr, const float * src1_ptr,
+                                    const float * bias_ptr,
                                     const int src0_nb0, const int src0_nb1, const int src0_nb2, const int src1_nb1,
-                                    float * __restrict__ dst, const int dst_nb0, const int dst_nb1, const int dst_nb2,
+                                    float * dst_ptr, const int dst_nb0, const int dst_nb1, const int dst_nb2,
                                     const int64_t n_t) {
     ggml_cuda_pdl_lc();
+    #if defined(GGML_CUDA_USE_PDL) && defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+        const float * src0 = src0_ptr;
+        const float * src1 = src1_ptr;
+        const float * bias = bias_ptr;
+        float       * dst  = dst_ptr;
+    #else
+        const float * __restrict__ src0 = src0_ptr;
+        const float * __restrict__ src1 = src1_ptr;
+        const float * __restrict__ bias = bias_ptr;
+        float       * __restrict__ dst  = dst_ptr;
+    #endif // defined(GGML_CUDA_USE_PDL) && defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
     GGML_UNUSED(src0_nb0);
     const int tid  = threadIdx.x;
     const int bidx = blockIdx.x;

@@ -678,8 +678,8 @@ static __global__ void flash_attn_mask_to_KV_max(
 template<int D, int ncols1, int ncols2> // D == head size
 __launch_bounds__(D, 1)
 static __global__ void flash_attn_stream_k_fixup_uniform(
-        float * __restrict__ dst,
-        const float2 * __restrict__ dst_fixup,
+        float * dst_ptr,
+        const float2 * dst_fixup_ptr,
         const int ne01, const int ne02,
         const int ne12, const int nblocks_stream_k,
         const int gqa_ratio,
@@ -689,6 +689,13 @@ static __global__ void flash_attn_stream_k_fixup_uniform(
         const uint3 fd_iter_j) {
     constexpr int ncols = ncols1*ncols2;
     ggml_cuda_pdl_lc();
+    #if defined(GGML_CUDA_USE_PDL) && defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+        float        * dst       = dst_ptr;
+        const float2 * dst_fixup = dst_fixup_ptr;
+    #else
+        float        * __restrict__ dst       = dst_ptr;
+        const float2 * __restrict__ dst_fixup = dst_fixup_ptr;
+    #endif // defined(GGML_CUDA_USE_PDL) && defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
 
     const int tile_idx = blockIdx.x; // One block per output tile.
     const int j        = blockIdx.y;
@@ -760,8 +767,8 @@ static __global__ void flash_attn_stream_k_fixup_uniform(
 template <int D, int ncols1, int ncols2> // D == head size
 __launch_bounds__(D, 1)
 static __global__ void flash_attn_stream_k_fixup_general(
-        float * __restrict__ dst,
-        const float2 * __restrict__ dst_fixup,
+        float * dst_ptr,
+        const float2 * dst_fixup_ptr,
         const int ne01, const int ne02,
         const int gqa_ratio,
         const int total_work,
@@ -769,6 +776,13 @@ static __global__ void flash_attn_stream_k_fixup_general(
         const uint3 fd_iter_k_j_z,
         const uint3 fd_iter_k_j,
         const uint3 fd_iter_k) {
+    #if defined(GGML_CUDA_USE_PDL) && defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+        float        * dst       = dst_ptr;
+        const float2 * dst_fixup = dst_fixup_ptr;
+    #else
+        float        * __restrict__ dst       = dst_ptr;
+        const float2 * __restrict__ dst_fixup = dst_fixup_ptr;
+    #endif // defined(GGML_CUDA_USE_PDL) && defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
     constexpr int ncols = ncols1*ncols2;
 
     const int bidx0 = blockIdx.x;
@@ -867,11 +881,20 @@ static __global__ void flash_attn_stream_k_fixup_general(
 template<int D> // D == head size
 __launch_bounds__(D, 1)
 static __global__ void flash_attn_combine_results(
-        const float  * __restrict__ VKQ_parts,
-        const float2 * __restrict__ VKQ_meta,
-        float * __restrict__ dst,
+        const float  * VKQ_parts_ptr,
+        const float2 * VKQ_meta_ptr,
+        float * dst_ptr,
         const int parallel_blocks) {
     ggml_cuda_pdl_lc();
+    #if defined(GGML_CUDA_USE_PDL) && defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+        const float  * VKQ_parts = VKQ_parts_ptr;
+        const float2 * VKQ_meta  = VKQ_meta_ptr;
+        float        * dst       = dst_ptr;
+    #else
+        const float  * __restrict__ VKQ_parts = VKQ_parts_ptr;
+        const float2 * __restrict__ VKQ_meta  = VKQ_meta_ptr;
+        float        * __restrict__ dst       = dst_ptr;
+    #endif // defined(GGML_CUDA_USE_PDL) && defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
     // Dimension 0: threadIdx.x
     // Dimension 1: blockIdx.x
     // Dimension 2: blockIdx.y
@@ -1153,8 +1176,8 @@ void launch_fattn(
 
     GGML_ASSERT(block_dim.x % warp_size == 0);
 
-        // disabled PDL enrollment for now due to a compiler bug.
-        fattn_kernel<<<blocks_num, block_dim, nbytes_shared, main_stream>>>(
+        ggml_cuda_kernel_launch_params launch_params = ggml_cuda_kernel_launch_params(blocks_num, block_dim, nbytes_shared, main_stream);
+        ggml_cuda_kernel_launch(fattn_kernel, launch_params,
         (const char *) Q->data,
         K_data,
         V_data,
