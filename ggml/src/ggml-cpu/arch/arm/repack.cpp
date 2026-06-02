@@ -15,9 +15,6 @@
 #include <cstdlib> // for qsort
 #include <cstdio>  // for GGML_ASSERT
 #include <iostream>
-#include <cstdint>
-#include <fstream>
-#include <vector>
 
 #define GGML_CPU_CLANG_WORKAROUND
 #include "../../repack.h"
@@ -27,152 +24,6 @@
 #endif
 
 #define UNUSED GGML_UNUSED
-
-#include <arm_sve.h>
-
-void dump_svuint32_to_file(const std::string& filename, svuint32_t vec)
-{
-    // Number of 32-bit lanes for the current SVE vector length
-    const std::uint64_t lanes = svcntw();
-
-    // Temporary scalar buffer
-    std::vector<std::uint32_t> buffer(lanes);
-
-    // Store all lanes from SVE vector into normal memory
-    svst1_u32(svptrue_b32(), buffer.data(), vec);
-
-    // Create / overwrite the text file
-    std::ofstream out(filename);
-    if (!out) {
-        std::cerr << "Failed to create/open file: " << filename << '\n';
-        return;
-    }
-
-    // Dump each lane
-    for (std::uint64_t i = 0; i < lanes; ++i) {
-        out << "lane[" << i << "] = " << buffer[i] << '\n';
-    }
-    out.close();
-    std::exit(EXIT_SUCCESS);
-}
-
-
-void dump_sve_s16_to_file_and_exit(const std::string& filename,
-                                   svint16_t vec)
-{
-    // Number of signed 16-bit lanes in current SVE vector length
-    const std::uint64_t lanes = svcnth();
-
-    // Temporary scalar buffer
-    std::vector<std::int16_t> buffer(lanes);
-
-    // Store all active SVE lanes into normal memory
-    svst1_s16(svptrue_b16(), buffer.data(), vec);
-
-    // Create / overwrite file
-    std::ofstream out(filename);
-    if (!out) {
-        std::cerr << "Failed to open file: " << filename << '\n';
-        std::exit(EXIT_FAILURE);
-    }
-
-    for (std::uint64_t i = 0; i < lanes; ++i) {
-        out << "lane[" << i << "] = " << buffer[i] << '\n';
-        std::cout << "lane[" << i << "] = " << buffer[i] << '\n';
-
-    }
-
-    // Important because std::exit() does not run local destructors
-    out.close();
-    // std::exit(EXIT_SUCCESS);
-}
-
-#include <arm_sve.h>
-#include <stdint.h>
-#include <stdio.h>
-
-static inline void print_svint8(const char *name, svint8_t v)
-{
-    size_t vl = svcntb();        // Number of int8 lanes in current SVE vector
-    int8_t buf[vl];
-
-    svst1_s8(svptrue_b8(), buf, v);
-
-    printf("%s = [", name);
-    for (size_t i = 0; i < vl; ++i) {
-        printf("%s%d", i ? ", " : "", (int)buf[i]);
-    }
-    printf("]\n");
-}
-
-
-void print_sve_u8(const char* label, svuint8_t v)
-{
-    // Number of 8‑bit lanes for the current SVE implementation
-    const int vl = svcntb();
-
-    // Stack buffer (GCC/Clang extension; fine for debug)
-    alignas(64) uint8_t buf[svcntb()];
-
-    // Predicate: all lanes active
-    svbool_t pg = svptrue_b8();
-
-    // Store vector to memory
-    svst1(pg, buf, v);
-
-    // Print
-    std::cout << label << " (vl=" << vl << "): ";
-    for (int i = 0; i < vl; ++i) {
-        std::cout << static_cast<unsigned>(buf[i]) << ' ';
-    }
-    std::cout << '\n';
-}
-
-
-void print_sve_s32(const char* label, svint32_t v)
-{
-    // Number of 32‑bit lanes for the current SVE implementation
-    const int vl = svcntw();
-
-    // Stack buffer sized at runtime (allowed in C++, but GCC/Clang extension)
-    alignas(64) int32_t buf[svcntw()];
-
-    // Predicate: all lanes active
-    svbool_t pg = svptrue_b32();
-
-    // Store vector to memory
-    svst1(pg, buf, v);
-
-    // Print
-    std::cout << label << " (vl=" << vl << "): ";
-    for (int i = 0; i < vl; ++i) {
-        std::cout << buf[i] << ' ';
-    }
-    std::cout << '\n';
-}
-
-void print_sve_f32(const char* label, svfloat32_t v)
-{
-    // Number of 32‑bit floating‑point lanes
-    const int vl = svcntw();
-
-    // Portable C++ buffer
-    std::vector<float> buf(vl);
-
-    // Predicate: all lanes active
-    svbool_t pg = svptrue_b32();
-
-    // Store SVE vector to memory
-    svst1(pg, buf.data(), v);
-
-    // Print
-    std::cout << label << " (vl=" << vl << "): ";
-    for (float x : buf) {
-        std::cout << x << ' ';
-    }
-    std::cout << '\n';
-}
-
 
 #if defined(__aarch64__) && defined(__ARM_NEON) && (defined(__ARM_FEATURE_MATMUL_INT8) || defined(__ARM_FEATURE_DOTPROD))
 // Helper for decoding scales and mins of Q4_K and Q5_K block formats
@@ -198,31 +49,8 @@ static inline void decode_q_Kx8_6bit_scales(const uint8_t * scales_in, int16x8_t
 }
 #endif
 
-
-bool saveBytesToFile(const uint8_t* ptr, std::size_t size, const std::string& filename)
-{
-    std::ofstream out(filename, std::ios::binary);
-    if (!out) {
-        return false;
-    }
-
-    out.write(reinterpret_cast<const char*>(ptr), size);
-    return static_cast<bool>(out);
-}
-
-bool loadBytesFromFile(uint8_t* ptr, std::size_t size, const std::string& filename)
-{
-    std::ifstream in(filename, std::ios::binary);
-    if (!in) {
-        return false;
-    }
-
-    in.read(reinterpret_cast<char*>(ptr), size);
-    return in.gcount() == static_cast<std::streamsize>(size);
-}
-
 #if defined(__aarch64__) && defined(__ARM_FEATURE_SVE) && (defined(__ARM_FEATURE_MATMUL_INT8) || defined(__ARM_FEATURE_DOTPROD))
-// Helper for decoding scales and mins of Q4_K and Q5_K block formats
+// Helper for decoding scales and mins of Q4_K and Q5_K block formats for SVE
 static inline void decode_q_Kx8_6bit_scales_sve(const uint8_t * scales_in, svint16_t * out_mins, int8_t * out_scales) {
     constexpr uint32_t kmask1 = 0x3f3f3f3f;
     constexpr uint32_t kmask2 = 0x0f0f0f0f;
@@ -231,42 +59,15 @@ static inline void decode_q_Kx8_6bit_scales_sve(const uint8_t * scales_in, svint
 
     uint32_t sm[3];
     memcpy(sm, scales_in, scales_size);
-    // std::cout<<sm[0]<<" "<<sm[1]<<" "<<sm[2]<<std::endl;
-    
-    // if (!saveBytesToFile(scales_in, 12, "data.txt")) {
-    //     std::cerr << "Failed to save file\n";
-    //     return;
-    // }
-    // std::cout << "Saved Data" << std::endl;
-    
-    // std::array<uint8_t, 12> loadedData{};
-    // uint8_t* loadPtr = loadedData.data();
-
-    // if (!loadBytesFromFile(loadPtr, loadedData.size(), "data.txt")) {
-    //     std::cerr << "Failed to load file\n";
-    //     return;
-    // }
-
-    // std::cout << "Loaded Data" << std::endl << "scales_in: ";
-    // for (uint8_t value : loadedData) {
-    //     std::cout << static_cast<unsigned>(value) << " ";
-    // }
-    // std::cout << "\nout_mins: \n";
     const uint32_t   mins_0_3 = sm[1] & kmask1;
-    const uint32_t   mins_4_7 = ((sm[2] >> 4) & kmask2) | (((sm[1] >> 6) & kmask3) << 4);
-    // const uint32x2_t mins_u32 = { mins_0_3, mins_4_7 };    
+    const uint32_t   mins_4_7 = ((sm[2] >> 4) & kmask2) | (((sm[1] >> 6) & kmask3) << 4); 
     uint32_t tmp_mins[2] = { mins_0_3, mins_4_7 };
     svbool_t pg2_u32 = svptrue_pat_b32(SV_VL4);   // 2 x uint32_t = 64 bits
     svuint32_t mins_u32 = svld1_u32(pg2_u32, tmp_mins);
-
     *out_mins = svreinterpret_s16_u16(svunpklo_u16(svreinterpret_u8_u32(mins_u32)));
-    // dump_sve_s16_to_file_and_exit("out_mins_s16.txt", *out_mins);
-
     uint32_t scales_u32[2];
     scales_u32[0] = sm[0] & kmask1;
     scales_u32[1] = (sm[2] & kmask2) | (((sm[0] >> 6) & kmask3) << 4);
-    // std::cout<<"\nout_scales: "<< scales_u32[0] <<" - "<<scales_u32[1]<<std::endl;
-    // std::exit(EXIT_SUCCESS);
     memcpy(out_scales, scales_u32, 8);
 }
 #endif
@@ -4000,8 +3801,6 @@ void ggml_gemm_q4_K_8x8_q8_K(int                        n,
     switch(svcntb() * 8){
         case 256:
         {
-            std::cout << "VL is 256" << std::endl;
-            // constexpr int    q8_k_blocklen = 4;
             const svuint8_t m4b_1          = svdup_n_u8(0x0f);
             
             //SV_VL8 would enable lower 8 lanes, since we're only loading 8 VALUES here this should work for higher VLs as well 
@@ -4310,15 +4109,8 @@ void ggml_gemm_q4_K_8x8_q8_K(int                        n,
         }
         case 128:
         {
-            //std::cout << "VL is 128" << std::endl;
-            //constexpr int    q8_k_blocklen = 4;
             const svuint8_t m4b = svdup_n_u8(0x0f);
-            svbool_t pg_b16_vl8 = svptrue_pat_b16(SV_VL8);
             svbool_t pg_b8_vl16 = svptrue_pat_b8(SV_VL16);
-            svbool_t pg_b32_vl4 = svptrue_pat_b32(SV_VL4);
-
-            // 8 accumulators: 2 row pairs × 4 col pairs
-            // svfloat32_t acc_f32[blocklen];
 
             for (int y = 0; y < nr / q8_k_blocklen; y++) {
                 const block_q8_Kx4 * GGML_RESTRICT q8_ptr = (const block_q8_Kx4 *) vy + (y * nb);
@@ -4391,7 +4183,6 @@ void ggml_gemm_q4_K_8x8_q8_K(int                        n,
                             // q8_ptr[b].qs has interleaved Q8 rows (01, 23)
                             const int8_t * q8_base = q8_ptr[b].qs + sb * 256;
 
-                            // svint8_t q8_qs_01[8];
                             svint8_t  q8_qs_01_0 = svld1_s8(pg_b8_vl16, q8_base + 0*32);
                             svint8_t  q8_qs_01_1 = svld1_s8(pg_b8_vl16, q8_base + 1*32);
                             svint8_t  q8_qs_01_2 = svld1_s8(pg_b8_vl16, q8_base + 2*32);
@@ -4400,16 +4191,7 @@ void ggml_gemm_q4_K_8x8_q8_K(int                        n,
                             svint8_t  q8_qs_01_5 = svld1_s8(pg_b8_vl16, q8_base + 5*32);
                             svint8_t  q8_qs_01_6 = svld1_s8(pg_b8_vl16, q8_base + 6*32); 
                             svint8_t  q8_qs_01_7 = svld1_s8(pg_b8_vl16, q8_base + 7*32);
-                            // print_svint8("q8_qs_01_0", q8_qs_01_0);
-                            // print_svint8("q8_qs_01_1", q8_qs_01_1);
-                            // print_svint8("q8_qs_01_2", q8_qs_01_2);
-                            // print_svint8("q8_qs_01_3", q8_qs_01_3);
-                            // print_svint8("q8_qs_01_4", q8_qs_01_4);
-                            // print_svint8("q8_qs_01_5", q8_qs_01_5);
-                            // print_svint8("q8_qs_01_6", q8_qs_01_6);
-                            // print_svint8("q8_qs_01_7", q8_qs_01_7);
 
-                            // svint8_t q8_qs_23[8];
                             svint8_t q8_qs_23_0 = svld1_s8(pg_b8_vl16, q8_base + 0*32 + 16);
                             svint8_t q8_qs_23_1 = svld1_s8(pg_b8_vl16, q8_base + 1*32 + 16);
                             svint8_t q8_qs_23_2 = svld1_s8(pg_b8_vl16, q8_base + 2*32 + 16);
@@ -4418,17 +4200,6 @@ void ggml_gemm_q4_K_8x8_q8_K(int                        n,
                             svint8_t q8_qs_23_5 = svld1_s8(pg_b8_vl16, q8_base + 5*32 + 16);
                             svint8_t q8_qs_23_6 = svld1_s8(pg_b8_vl16, q8_base + 6*32 + 16);
                             svint8_t q8_qs_23_7 = svld1_s8(pg_b8_vl16, q8_base + 7*32 + 16);
-
-                            // print_svint8("q8_qs_23_0", q8_qs_23_0);
-                            // print_svint8("q8_qs_23_1", q8_qs_23_1);
-                            // print_svint8("q8_qs_23_2", q8_qs_23_2);
-                            // print_svint8("q8_qs_23_3", q8_qs_23_3);
-                            // print_svint8("q8_qs_23_4", q8_qs_23_4);
-                            // print_svint8("q8_qs_23_5", q8_qs_23_5);
-                            // print_svint8("q8_qs_23_6", q8_qs_23_6);
-                            // print_svint8("q8_qs_23_7", q8_qs_23_7);
-
-                            // std::exit(EXIT_SUCCESS);
 
                             // Q4s columns iterated in pairs (01, 23, 45, 67)
                             for (int cp = 0; cp < ncols_interleaved / 2; cp++) {
@@ -4442,12 +4213,6 @@ void ggml_gemm_q4_K_8x8_q8_K(int                        n,
                                 svuint8_t q4_qs_cp_1 = svld1_u8(pg_b8_vl16, q4_ptr[b].qs + sb * QK_K + 16 * cp + 64);   // 8 ..15 & 40..47
                                 svuint8_t q4_qs_cp_2 = svld1_u8(pg_b8_vl16, q4_ptr[b].qs + sb * QK_K + 16 * cp + 128);  // 16..23 & 48..55
                                 svuint8_t q4_qs_cp_3 = svld1_u8(pg_b8_vl16, q4_ptr[b].qs + sb * QK_K + 16 * cp + 192);  // 24..31 & 56..63
-                                // std::cout << "\nq4_qs_cp: "<< std::endl;
-                                // print_sve_u8("q4_qs_cp_0", q4_qs_cp_0);
-                                // print_sve_u8("q4_qs_cp_1", q4_qs_cp_1);
-                                // print_sve_u8("q4_qs_cp_2", q4_qs_cp_2);
-                                // print_sve_u8("q4_qs_cp_3", q4_qs_cp_3);
-
                                 
                                 svint8_t q4_nibbles_00 = svreinterpret_s8_u8(svand_u8_x(pg_b8_vl16, q4_qs_cp_0, m4b));
                                 svint8_t q4_nibbles_01 = svreinterpret_s8_u8(svand_u8_x(pg_b8_vl16, q4_qs_cp_1, m4b));
@@ -4457,16 +4222,6 @@ void ggml_gemm_q4_K_8x8_q8_K(int                        n,
                                 svint8_t q4_nibbles_11 = svreinterpret_s8_u8(svlsr_n_u8_x(pg_b8_vl16, q4_qs_cp_1, 4));
                                 svint8_t q4_nibbles_12 = svreinterpret_s8_u8(svlsr_n_u8_x(pg_b8_vl16, q4_qs_cp_2, 4));
                                 svint8_t q4_nibbles_13 = svreinterpret_s8_u8(svlsr_n_u8_x(pg_b8_vl16, q4_qs_cp_3, 4));
-
-                                // std::cout << "\nq4_nibbles: "<< std::endl;
-                                // print_svint8("q4_nibbles_00", q4_nibbles_00);
-                                // print_svint8("q4_nibbles_01", q4_nibbles_01);
-                                // print_svint8("q4_nibbles_02", q4_nibbles_02);
-                                // print_svint8("q4_nibbles_03", q4_nibbles_03);
-                                // print_svint8("q4_nibbles_10", q4_nibbles_10);
-                                // print_svint8("q4_nibbles_11", q4_nibbles_11);
-                                // print_svint8("q4_nibbles_12", q4_nibbles_12);
-                                // print_svint8("q4_nibbles_13", q4_nibbles_13);
 
                                 // Calculates the Qs muladd of every row pair (rp) rows 01 and 23 of q8
                                 //Low nibbles of q4 and first 4 bytes of row 01
@@ -4501,12 +4256,6 @@ void ggml_gemm_q4_K_8x8_q8_K(int                        n,
                                 acc = svmmla_s32(acc, q4_nibbles_13, q8_qs_23_7);
                                 sb_acc_3 = acc;
 
-                                // std::cout << "\nsb_acc" << std::endl;
-                                // print_sve_s32("sb_acc_0", sb_acc_0);
-                                // print_sve_s32("sb_acc_1", sb_acc_1);
-                                // print_sve_s32("sb_acc_2", sb_acc_2);
-                                // print_sve_s32("sb_acc_3", sb_acc_3);
-
                                 // Scales[i] corresponds to column i
                                 const int scale_offset = cp * 2;
                                 const int32_t scale_00 = q4sb_scales[0][scale_offset];
@@ -4525,66 +4274,20 @@ void ggml_gemm_q4_K_8x8_q8_K(int                        n,
                                                             svdup_n_s32(scale_10),
                                                             svdup_n_s32(scale_11)
                                                         );
-
-                                // std::cout << "\nBlock Scale Computation" << std::endl;
-                                // print_sve_s32("block_scale_0", block_scale_0);
-                                // print_sve_s32("block_scale_1", block_scale_1);
-                                // std::exit(EXIT_SUCCESS);
                                 
                                 if(cp == 0)
-                                {
-                                    // std::cout << "\nacc_ inside cp 0 before updation" << std::endl;
-                                    // print_sve_s32("acc_00", acc_00);
-                                    // print_sve_s32("acc_11", acc_11);
-                                    // print_sve_s32("acc_22", acc_22);
-                                    // print_sve_s32("acc_33", acc_33);
-                                    // print_sve_s32("acc_44", acc_44);
-                                    // print_sve_s32("acc_55", acc_55);
-                                    // print_sve_s32("acc_66", acc_66);
-                                    // print_sve_s32("acc_77", acc_77);
-        
+                                {        
                                     acc_00     = svmla_s32_x(svptrue_pat_b32(SV_VL4), acc_00, sb_acc_0, block_scale_0);
                                     acc_44 = svmla_s32_x(svptrue_pat_b32(SV_VL4), acc_44, sb_acc_2, block_scale_0);
                                     acc_00     = svmla_s32_x(svptrue_pat_b32(SV_VL4), acc_00, sb_acc_1, block_scale_1);
                                     acc_44 = svmla_s32_x(svptrue_pat_b32(SV_VL4), acc_44, sb_acc_3, block_scale_1);
-
-                                    // std::cout << "\nacc_ inside cp 0 after updation" << std::endl;
-                                    // print_sve_s32("acc_00", acc_00);
-                                    // print_sve_s32("acc_11", acc_11);
-                                    // print_sve_s32("acc_22", acc_22);
-                                    // print_sve_s32("acc_33", acc_33);
-                                    // print_sve_s32("acc_44", acc_44);
-                                    // print_sve_s32("acc_55", acc_55);
-                                    // print_sve_s32("acc_66", acc_66);
-                                    // print_sve_s32("acc_77", acc_77);
                                 }
                                 if(cp == 1)
                                 {
-
-                                    // std::cout << "\nacc_ inside cp 1 before updation" << std::endl;
-                                    // print_sve_s32("acc_00", acc_00);
-                                    // print_sve_s32("acc_11", acc_11);
-                                    // print_sve_s32("acc_22", acc_22);
-                                    // print_sve_s32("acc_33", acc_33);
-                                    // print_sve_s32("acc_44", acc_44);
-                                    // print_sve_s32("acc_55", acc_55);
-                                    // print_sve_s32("acc_66", acc_66);
-                                    // print_sve_s32("acc_77", acc_77);
-
                                     acc_11     = svmla_s32_x(svptrue_pat_b32(SV_VL4), acc_11, sb_acc_0, block_scale_0);
                                     acc_55 = svmla_s32_x(svptrue_pat_b32(SV_VL4), acc_55, sb_acc_2, block_scale_0);
                                     acc_11     = svmla_s32_x(svptrue_pat_b32(SV_VL4), acc_11, sb_acc_1, block_scale_1);
                                     acc_55 = svmla_s32_x(svptrue_pat_b32(SV_VL4), acc_55, sb_acc_3, block_scale_1);
-
-                                    // std::cout << "\nacc_ inside cp 1 after updation" << std::endl;
-                                    // print_sve_s32("acc_00", acc_00);
-                                    // print_sve_s32("acc_11", acc_11);
-                                    // print_sve_s32("acc_22", acc_22);
-                                    // print_sve_s32("acc_33", acc_33);
-                                    // print_sve_s32("acc_44", acc_44);
-                                    // print_sve_s32("acc_55", acc_55);
-                                    // print_sve_s32("acc_66", acc_66);
-                                    // print_sve_s32("acc_77", acc_77);
                                 }
                                 if(cp == 2)
                                 {
@@ -4601,19 +4304,7 @@ void ggml_gemm_q4_K_8x8_q8_K(int                        n,
                                     acc_77 = svmla_s32_x(svptrue_pat_b32(SV_VL4), acc_77, sb_acc_3, block_scale_1);
                                 }
                             }
-
-                            // std::cout << "\nacc_" << std::endl;
-                            // print_sve_s32("acc_00", acc_00);
-                            // print_sve_s32("acc_11", acc_11);
-                            // print_sve_s32("acc_22", acc_22);
-                            // print_sve_s32("acc_33", acc_33);
-                            // print_sve_s32("acc_44", acc_44);
-                            // print_sve_s32("acc_55", acc_55);
-                            // print_sve_s32("acc_66", acc_66);
-                            // print_sve_s32("acc_77", acc_77);
-                            // // std::exit(EXIT_SUCCESS);
-
-                            
+  
                             svbool_t pg_s32 = svptrue_pat_b32(SV_VL4);
                             bias_acc_00 = svmla_s32_x(pg_s32, bias_acc_00, svdup_n_s32((int32_t)bsums_arr[sb][0]), svunpklo_s32(q4sb_mins_0));
                             bias_acc_00 = svmla_s32_x(pg_s32, bias_acc_00, svdup_n_s32((int32_t)bsums_arr[sb][1]), svunpklo_s32(q4sb_mins_1));
@@ -4631,17 +4322,7 @@ void ggml_gemm_q4_K_8x8_q8_K(int                        n,
                             bias_acc_66 = svmla_s32_x(pg_s32, bias_acc_66, svdup_n_s32((int32_t)bsums_arr[sb][7]), svunpklo_s32(q4sb_mins_1));
                             bias_acc_77 = svmla_s32_x(pg_s32, bias_acc_77, svdup_n_s32((int32_t)bsums_arr[sb][6]), svunpkhi_s32(q4sb_mins_0));
                             bias_acc_77 = svmla_s32_x(pg_s32, bias_acc_77, svdup_n_s32((int32_t)bsums_arr[sb][7]), svunpkhi_s32(q4sb_mins_1));
-
-                            // std::cout << "\nbias_acc_" << std::endl;
-                            // print_sve_s32("bias_acc_00", bias_acc_00);
-                            // print_sve_s32("bias_acc_11", bias_acc_11);
-                            // print_sve_s32("bias_acc_22", bias_acc_22);
-                            // print_sve_s32("bias_acc_33", bias_acc_33);
-                            // print_sve_s32("bias_acc_44", bias_acc_44);
-                            // print_sve_s32("bias_acc_55", bias_acc_55);
-                            // print_sve_s32("bias_acc_66", bias_acc_66);
-                            // print_sve_s32("bias_acc_77", bias_acc_77);
-                            // std::exit(EXIT_SUCCESS);
+                        
                         }  // for sb
 
                        // Reorder of i8mm output with bias and output layout
@@ -4656,17 +4337,6 @@ void ggml_gemm_q4_K_8x8_q8_K(int                        n,
                         acc_66 = svtbl_s32(acc_66, perm);
                         acc_77 = svtbl_s32(acc_77, perm);
 
-                        // std::cout << "\nacc_ before reorder_acc" << std::endl;
-                        // print_sve_s32("acc_00", acc_00);
-                        // print_sve_s32("acc_11", acc_11);
-                        // print_sve_s32("acc_22", acc_22);
-                        // print_sve_s32("acc_33", acc_33);
-                        // print_sve_s32("acc_44", acc_44);
-                        // print_sve_s32("acc_55", acc_55);
-                        // print_sve_s32("acc_66", acc_66);
-                        // print_sve_s32("acc_77", acc_77);
-                        // // std::exit(EXIT_SUCCESS);
-
                         svint32_t reorder_acc_0 = svsplice_s32(svptrue_pat_b32(SV_VL2), acc_00, acc_11);
                         svint32_t reorder_acc_1 = svsplice_s32(svptrue_pat_b32(SV_VL2), acc_22, acc_33);
                         svint32_t reorder_acc_2 = svsplice_s32(svptrue_pat_b32(SV_VL2), svext_s32(acc_00, acc_00, 2), svext_s32(acc_11, acc_11, 2));
@@ -4676,25 +4346,12 @@ void ggml_gemm_q4_K_8x8_q8_K(int                        n,
                         svint32_t reorder_acc_6 = svsplice_s32(svptrue_pat_b32(SV_VL2), svext_s32(acc_44, acc_44, 2), svext_s32(acc_55, acc_55, 2));
                         svint32_t reorder_acc_7 = svsplice_s32(svptrue_pat_b32(SV_VL2), svext_s32(acc_66, acc_66, 2), svext_s32(acc_77, acc_77, 2));
 
-                        // std::cout << "\reorder_acc_" << std::endl;
-                        // print_sve_s32("reorder_acc_0", reorder_acc_0);
-                        // print_sve_s32("reorder_acc_1", reorder_acc_1);
-                        // print_sve_s32("reorder_acc_2", reorder_acc_2);
-                        // print_sve_s32("reorder_acc_3", reorder_acc_3);
-                        // print_sve_s32("reorder_acc_4", reorder_acc_4);
-                        // print_sve_s32("reorder_acc_5", reorder_acc_5);
-                        // print_sve_s32("reorder_acc_6", reorder_acc_6);
-                        // print_sve_s32("reorder_acc_7", reorder_acc_7);
-                        // // std::exit(EXIT_SUCCESS);
-
                         // i=0, j=0
                         svfloat32_t q8_d = svdup_n_f32(q8_ptr[b].d[0]);
                         svfloat32_t q4_dmin = svcvt_f32_f16_z(svptrue_b32(), svzip1_f16(svld1_f16(svptrue_pat_b16(SV_VL4),(const __fp16 *) (q4_ptr[b].dmin + 0 * 4)), svdup_f16((__fp16)0.0)));
                         svfloat32_t dmins = svmul_f32_x(svptrue_b32(), q4_dmin, q8_d);
-                        // print_sve_f32("dmins 0", dmins);
                         svfloat32_t q4_d = svcvt_f32_f16_z(svptrue_b32(), svzip1_f16(svld1_f16(svptrue_pat_b16(SV_VL4),(const __fp16 *) (q4_ptr[b].d + 0 * 4)), svdup_f16((__fp16)0.0)));
                         svfloat32_t scale = svmul_f32_x(svptrue_b32(), q4_d, q8_d);
-                        // print_sve_f32("scale 0", scale);
                         
                         acc_f32_00 = svmls_f32_m(svptrue_b32(), acc_f32_00, svcvt_f32_s32_x(svptrue_b32(), bias_acc_00), dmins);
                         acc_f32_00 = svmla_f32_m(svptrue_b32(), acc_f32_00, svcvt_f32_s32_x(svptrue_b32(), reorder_acc_0), scale);
@@ -4769,16 +4426,6 @@ void ggml_gemm_q4_K_8x8_q8_K(int                        n,
                         acc_f32_77 = svmls_f32_m(svptrue_b32(), acc_f32_77, svcvt_f32_s32_x(svptrue_b32(), bias_acc_77), dmins);
                         acc_f32_77 = svmla_f32_m(svptrue_b32(), acc_f32_77, svcvt_f32_s32_x(svptrue_b32(), reorder_acc_7), scale);
 
-                        // std::cout << "\nacc_f32 :" << std::endl;
-                        // print_sve_f32("acc_f32_00", acc_f32_00);
-                        // print_sve_f32("acc_f32_11", acc_f32_11);
-                        // print_sve_f32("acc_f32_22", acc_f32_22);
-                        // print_sve_f32("acc_f32_33", acc_f32_33);
-                        // print_sve_f32("acc_f32_44", acc_f32_44);
-                        // print_sve_f32("acc_f32_55", acc_f32_55);
-                        // print_sve_f32("acc_f32_66", acc_f32_66);
-                        // print_sve_f32("acc_f32_77", acc_f32_77);
-                        // std::exit(EXIT_SUCCESS);
                     }  // for b
 
                     // Predicate for exactly 4 lanes
@@ -4821,12 +4468,11 @@ void ggml_gemm_q4_K_8x8_q8_K(int                        n,
             return;
         }
         default:
-            std::cout << "Invalid VL. VL is neither 128 nor 256" << std::endl;    
+            break; //If VL does not match then skip and check if NEON is supported   
     }
 #endif  // SVE compile-time end
 
 #if defined(__aarch64__) && defined(__ARM_NEON) && defined(__ARM_FEATURE_MATMUL_INT8)
-    //constexpr int    q8_k_blocklen = 4;
     const uint8x16_t m4b           = vdupq_n_u8(0x0f);
 
     // 8 accumulators: 2 row pairs × 4 col pairs
