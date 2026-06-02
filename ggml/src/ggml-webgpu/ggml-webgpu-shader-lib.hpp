@@ -445,11 +445,11 @@ struct ggml_webgpu_upscale_pipeline_key_hash {
 /** Concat **/
 
 struct ggml_webgpu_concat_pipeline_key {
-    int type;
+    int  type;
     bool src_overlap;
 
-    bool operator==(const ggml_webgpu_concat_pipeline_key & other) const { 
-        return type == other.type && src_overlap == other.src_overlap; 
+    bool operator==(const ggml_webgpu_concat_pipeline_key & other) const {
+        return type == other.type && src_overlap == other.src_overlap;
     }
 };
 
@@ -2617,7 +2617,7 @@ class ggml_webgpu_shader_lib {
             default:
                 GGML_ABORT("Unsupported type for concat shader");
         }
-        
+
         if (key.src_overlap) {
             defines.push_back("SRC_OVERLAP");
             variant += "_src_overlap";
