@@ -42,10 +42,7 @@ extern char **environ;
 
 #define DEFAULT_STOP_TIMEOUT 10 // seconds
 
-#define CMD_ROUTER_TO_CHILD_EXIT  "cmd_router_to_child:exit"
-#define CMD_CHILD_TO_ROUTER_READY "cmd_child_to_router:ready" // also sent when waking up from sleep
-#define CMD_CHILD_TO_ROUTER_SLEEP "cmd_child_to_router:sleep"
-#define CMD_CHILD_TO_ROUTER_INFO  "cmd_child_to_router:info:" // followed by json string
+// CMD defines moved to server-models.h
 
 // address for child process, this is needed because router may run on 0.0.0.0
 // ref: https://github.com/ggml-org/llama.cpp/issues/17862
@@ -817,11 +814,40 @@ void server_models::load(const std::string & name) {
                     std::string str(buffer);
                     if (string_starts_with(buffer, CMD_CHILD_TO_ROUTER_READY)) {
                         this->update_status(name, SERVER_MODEL_STATUS_LOADED, 0);
+                    } else if (string_starts_with(buffer, CMD_CHILD_TO_ROUTER_ERROR)) {
+                        // Child reported a structured error (e.g. CUDA OOM, unsupported arch).
+                        // Log it and transition to UNLOADED — avoids getting stuck in LOADING.
+                        SRV_ERR("model name=%s loading error: %s\n", name.c_str(), buffer);
+                        this->update_status(name, SERVER_MODEL_STATUS_UNLOADED, 1);
+                        // Store the error message text after the CMD prefix
+                        // (fgets includes trailing newline — strip it)
+                        std::string err_msg(buffer);
+                        size_t prefix_len = strlen(CMD_CHILD_TO_ROUTER_ERROR);
+                        if (err_msg.size() > prefix_len) {
+                            auto trimmed = err_msg.substr(prefix_len);
+                            while (!trimmed.empty() && (trimmed.back() == '\n' || trimmed.back() == '\r')) {
+                                trimmed.pop_back();
+                            }
+                            this->update_last_error(name, trimmed);
+                        }
                     } else if (string_starts_with(buffer, CMD_CHILD_TO_ROUTER_INFO)) {
                         this->update_loaded_info(name, str);
                     } else if (string_starts_with(buffer, CMD_CHILD_TO_ROUTER_SLEEP)) {
                         this->update_status(name, SERVER_MODEL_STATUS_SLEEPING, 0);
                     }
+                }
+                if (feof(stdout_file)) {
+                    // EOF on stdout — child process exited (could be a crash).
+                    // Immediately mark as UNLOADED so /v1/models stops advertising
+                    // this model as "loaded". Without this, a silent child death
+                    // (e.g. SIGABRT from CUDA OOM) leaves a zombie slot: the router
+                    // still shows "loaded" even though no process is running, and
+                    // subsequent requests either hang or fail with confusing errors.
+                    this->update_status(name, SERVER_MODEL_STATUS_UNLOADED, 1);
+                } else if (ferror(stdout_file)) {
+                    // Read error on stdout (not EOF).  Log and fall through;
+                    // the child may still be alive, so don't change status.
+                    SRV_ERR("read error on stdout for model name=%s\n", name.c_str());
                 }
             } else {
                 SRV_ERR("failed to get stdout/stderr of child process for name=%s\n", name.c_str());
@@ -837,7 +863,7 @@ void server_models::load(const std::string & name) {
                 return is_stopping() || !subprocess_alive(child_proc.get());
             };
             {
-                std::unique_lock<std::mutex> lk(this->mutex);
+                std::unique_lock<std::mutex> lk(this->stop_mutex);
                 this->cv_stop.wait(lk, should_wake);
             }
             // child may have already exited (e.g. crashed) — skip shutdown sequence
@@ -851,7 +877,7 @@ void server_models::load(const std::string & name) {
             // wait to stop gracefully or timeout
             int64_t start_time = ggml_time_ms();
             while (true) {
-                std::unique_lock<std::mutex> lk(this->mutex);
+                std::unique_lock<std::mutex> lk(this->stop_mutex);
                 if (!is_stopping()) {
                     return; // already stopped
                 }
@@ -874,7 +900,7 @@ void server_models::load(const std::string & name) {
 
         // stop the timeout monitoring thread
         {
-            std::lock_guard<std::mutex> lk(this->mutex);
+            std::lock_guard<std::mutex> lk(this->stop_mutex);
             stopping_models.erase(name);
             cv_stop.notify_all();
         }
@@ -884,12 +910,44 @@ void server_models::load(const std::string & name) {
 
         // get the exit code
         int exit_code = 0;
-        subprocess_join(child_proc.get(), &exit_code);
+        if (child_proc->child != 0) {
+            subprocess_join(child_proc.get(), &exit_code);
+        } else {
+            // subprocess_alive in the stopping thread already reaped the child
+            // (via waitpid WNOHANG) and cleared process->child.  Calling
+            // subprocess_join with child==0 would waitpid(0, ...) on ANY
+            // process-group child — the wrong child or (if none remain) ECHILD
+            // with exit_code stuck at 0, masking the crash as a clean exit.
+            // Use the cached return_status instead.
+            exit_code = child_proc->return_status;
+        }
         subprocess_destroy(child_proc.get());
 
         // update status and exit code
         this->update_status(name, SERVER_MODEL_STATUS_UNLOADED, exit_code);
         SRV_INF("instance name=%s exited with status %d\n", name.c_str(), exit_code);
+
+        // --- Auto-recover from transient crashes ---
+        // If the child exited abnormally (non-zero, non-SIGTERM), this is
+        // a crash — not an intentional unload.  Classify as transient and
+        // set the recovering flag so the next ensure_model_ready() call
+        // triggers a deferred reload.  The proxy just polls /v1/models,
+        // sees recovering, and holds the SSE channel open.
+        if (exit_code != 0 && exit_code != -15 /* SIGTERM = force-kill */) {
+            std::lock_guard<std::mutex> _lk(this->mutex);
+            auto _it = mapping.find(name);
+            if (_it != mapping.end() && _it->second.meta.reload_attempts < server_model_meta::MAX_RELOAD_ATTEMPTS) {
+                SRV_WRN("model name=%s crashed (exit_code=%d), auto-recovering (attempt %d/%d)...\n",
+                    name.c_str(), exit_code,
+                    _it->second.meta.reload_attempts + 1,
+                    server_model_meta::MAX_RELOAD_ATTEMPTS);
+                _it->second.meta.recovering = true;
+                _it->second.meta.reload_attempts++;
+            } else if (_it != mapping.end()) {
+                SRV_ERR("model name=%s crashed (exit_code=%d), max retries (%d) reached — permanent failure\n",
+                    name.c_str(), exit_code, server_model_meta::MAX_RELOAD_ATTEMPTS);
+            }
+        }
     });
 
     // clean up old process/thread if exists
@@ -915,13 +973,16 @@ void server_models::unload(const std::string & name) {
     if (it != mapping.end()) {
         if (it->second.meta.is_running()) {
             SRV_INF("stopping model instance name=%s\n", name.c_str());
-            stopping_models.insert(name);
+            {
+                std::lock_guard<std::mutex> lk2(stop_mutex);
+                stopping_models.insert(name);
+                cv_stop.notify_all();
+            }
             if (it->second.meta.status == SERVER_MODEL_STATUS_LOADING) {
                 // special case: if model is in loading state, unloading means force-killing it
                 SRV_WRN("model name=%s is still loading, force-killing\n", name.c_str());
                 subprocess_terminate(it->second.subproc.get());
             }
-            cv_stop.notify_all();
             // status change will be handled by the managing thread
         } else {
             SRV_WRN("model instance name=%s is not running\n", name.c_str());
@@ -933,6 +994,7 @@ void server_models::unload_all() {
     std::vector<std::thread> to_join;
     {
         std::lock_guard<std::mutex> lk(mutex);
+        std::lock_guard<std::mutex> lk2(stop_mutex);
         for (auto & [name, inst] : mapping) {
             if (inst.meta.is_running()) {
                 SRV_INF("stopping model instance name=%s\n", name.c_str());
@@ -985,15 +1047,37 @@ void server_models::update_loaded_info(const std::string & name, std::string & r
     cv.notify_all();
 }
 
-void server_models::wait_until_loading_finished(const std::string & name) {
+void server_models::update_last_error(const std::string & name, const std::string & error) {
     std::unique_lock<std::mutex> lk(mutex);
-    cv.wait(lk, [this, &name]() {
+    auto it = mapping.find(name);
+    if (it != mapping.end()) {
+        it->second.meta.last_error = error;
+    }
+}
+
+void server_models::wait_until_loading_finished(const std::string & name) {
+    int timeout_sec = 300; // safety floor
+    std::unique_lock<std::mutex> lk(mutex);
+    if (!cv.wait_for(lk, std::chrono::seconds(timeout_sec), [this, &name]() {
         auto it = mapping.find(name);
         if (it != mapping.end()) {
             return it->second.meta.status != SERVER_MODEL_STATUS_LOADING;
         }
         return false;
-    });
+    })) {
+        // Timeout — model loading hung. Transition to UNLOADED with exit_code=1
+        // so is_failed() correctly reports it as failed.  The lock is already
+        // held (from cv.wait_for at the top of this function), so we must NOT
+        // call update_status() which re-acquires it — deadlock.  Write both
+        // fields directly and notify waiters under the held lock.
+        SRV_WRN("model name=%s loading timed out after %ds, marking unloaded\n", name.c_str(), timeout_sec);
+        auto it = mapping.find(name);
+        if (it != mapping.end()) {
+            it->second.meta.status    = SERVER_MODEL_STATUS_UNLOADED;
+            it->second.meta.exit_code = 1;
+        }
+        cv.notify_all();
+    }
 }
 
 bool server_models::ensure_model_ready(const std::string & name) {
@@ -1007,22 +1091,39 @@ bool server_models::ensure_model_ready(const std::string & name) {
     if (meta->status == SERVER_MODEL_STATUS_SLEEPING) {
         return false; // child is sleeping but still running; new request will wake it up
     }
-    if (meta->status == SERVER_MODEL_STATUS_UNLOADED) {
-        SRV_INF("model name=%s is not loaded, loading...\n", name.c_str());
-        load(name);
+
+    // Auto-reload loop: on transient crashes (recovering=true), retry loading
+    // up to MAX_RELOAD_ATTEMPTS times.  Each crash triggers another load()
+    // call via the lifecycle thread's post-exit recovering logic.
+    for (int attempt = 0; attempt <= server_model_meta::MAX_RELOAD_ATTEMPTS; attempt++) {
+        if (meta.has_value() && meta->status == SERVER_MODEL_STATUS_UNLOADED && !meta->is_failed()) {
+            if (meta->recovering && attempt > 0) {
+                SRV_INF("model name=%s auto-recovering (attempt %d/%d)...\n",
+                    name.c_str(), attempt, server_model_meta::MAX_RELOAD_ATTEMPTS);
+            }
+            SRV_INF("model name=%s is not loaded, loading...\n", name.c_str());
+            load(name);
+        }
+
+        // wait for loading to complete
+        SRV_INF("waiting until model name=%s is fully loaded...\n", name.c_str());
+        wait_until_loading_finished(name);
+
+        // check final status
+        meta = get_meta(name);
+        if (!meta.has_value()) {
+            throw std::runtime_error("model name=" + name + " is not found");
+        }
+        if (meta->is_ready()) {
+            return true;
+        }
+        if (meta->is_failed()) {
+            throw std::runtime_error("model name=" + name + " failed to load");
+        }
+        // Model is UNLOADED but recovering — loop to retry.
     }
 
-    // wait for loading to complete
-    SRV_INF("waiting until model name=%s is fully loaded...\n", name.c_str());
-    wait_until_loading_finished(name);
-
-    // check final status
-    meta = get_meta(name);
-    if (!meta.has_value() || meta->is_failed()) {
-        throw std::runtime_error("model name=" + name + " failed to load");
-    }
-
-    return true;
+    throw std::runtime_error("model name=" + name + " exceeded max reload attempts");
 }
 
 server_http_res_ptr server_models::proxy_request(const server_http_req & req, const std::string & method, const std::string & name, bool update_last_used) {
@@ -1247,9 +1348,26 @@ void server_models_routes::init_routes() {
                 preset_copy.unset_option("LLAMA_ARG_TAGS");
                 status["preset"] = preset_copy.to_ini();
             }
-            if (meta.is_failed()) {
+            if (meta.recovering) {
+                // Transient crash — auto-reload pending.  Report the exit code
+                // and signal so the proxy can surface the error to the operator,
+                // but mark failed=false because recovery will retry.
+                status["exit_code"]   = meta.exit_code;
+                status["failed"]      = false;
+                status["recovering"]  = true;
+                if (meta.exit_code < 0) {
+                    status["exit_signal"] = -meta.exit_code;
+                }
+            } else if (meta.is_failed()) {
                 status["exit_code"] = meta.exit_code;
                 status["failed"]    = true;
+                if (meta.exit_code < 0) {
+                    // negative exit_code encodes the killing signal
+                    status["exit_signal"] = -meta.exit_code;
+                }
+            }
+            if (!meta.last_error.empty()) {
+                status["last_error"] = meta.last_error;
             }
 
             // pi coding agent multimodal compatibility
