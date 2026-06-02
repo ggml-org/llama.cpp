@@ -124,7 +124,7 @@ int entry_point(struct ggml_et_binary_params* params, void* env) {
     }
 
     int thread_id = get_relative_thread_id(kernel_env->shire_mask);
-    int num_threads = 2048; //get_num_threads(kernel_env->shire_mask);
+    int num_threads = get_num_threads(kernel_env->shire_mask);
 
     if (thread_id < 0) {
         return 0;
@@ -162,6 +162,8 @@ int entry_point(struct ggml_et_binary_params* params, void* env) {
     evict_region_past_l2(src0_data, src0_bytes);
     evict_region_past_l2(src1_data, src1_bytes);
     WAIT_CACHEOPS;
+    FENCE;
+    et_barrier(ET_BARRIER_GLOBAL);
 #endif
 
     enum ggml_op operation = dst->op;
