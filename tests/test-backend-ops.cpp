@@ -5788,21 +5788,21 @@ struct test_mul_mat_vec_fusion : public test_case {
     const bool b;        // broadcast b matrix (only for use_id)
     const bool with_bias;
     const bool with_gate;
-    const bool with_scale;
+    const bool with_lane_scale;
     std::array<int64_t, 2> batch_dims;
 
     test_mul_mat_vec_fusion(ggml_type type, ggml_glu_op op, int64_t m, int64_t n, int64_t k,
                         bool use_id = false, int n_mats = 1, int n_used = 1, bool b = false, bool with_bias = false, bool with_gate = true,
-                        std::array<int64_t, 2> batch_dims = {4, 2}, bool with_scale = false)
+                        bool with_lane_scale = false, std::array<int64_t, 2> batch_dims = {4, 2})
     : type(type), glu_op(op), m(m), n(n), k(k), use_id(use_id), n_mats(n_mats), n_used(n_used), b(b), with_bias(with_bias),
-        with_gate(with_gate), with_scale(with_scale), batch_dims(batch_dims) {
+        with_gate(with_gate), with_lane_scale(with_lane_scale), batch_dims(batch_dims) {
         if (use_id) {
             GGML_ASSERT(n_used <= n_mats);
         }
     }
 
     std::string vars() override {
-        return VARS_TO_STR13(type, glu_op, m, n, k, use_id, n_mats, n_used, b, with_bias, with_gate, with_scale, batch_dims);
+        return VARS_TO_STR13(type, glu_op, m, n, k, use_id, n_mats, n_used, b, with_bias, with_gate, with_lane_scale, batch_dims);
     }
 
     std::string op_desc(ggml_tensor * t) override {
@@ -5826,12 +5826,12 @@ struct test_mul_mat_vec_fusion : public test_case {
         return out;
     }
 
-    ggml_tensor * build_dense_scale(ggml_context * ctx, ggml_tensor * out) {
+    ggml_tensor * build_dense_lane_scale(ggml_context * ctx, ggml_tensor * out) {
         ggml_tensor * scale = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 1);
         return ggml_mul(ctx, out, scale);
     }
 
-    ggml_tensor * build_id_scale(ggml_context * ctx, ggml_tensor * out, ggml_tensor * ids) {
+    ggml_tensor * build_id_lane_scale(ggml_context * ctx, ggml_tensor * out, ggml_tensor * ids) {
         ggml_tensor * scale = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, n_mats);
         ggml_tensor * s = ggml_reshape_3d(ctx, scale, 1, n_mats, 1);
         s = ggml_repeat_4d(ctx, s, 1, n_mats, m, 1);
@@ -5856,8 +5856,8 @@ struct test_mul_mat_vec_fusion : public test_case {
                 ggml_tensor * up_bias = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, bias_ne.data());
                 ffn_up = ggml_add(ctx, ffn_up, up_bias);
             }
-            if (with_scale) {
-                ffn_up = build_dense_scale(ctx, ffn_up);
+            if (with_lane_scale) {
+                ffn_up = build_dense_lane_scale(ctx, ffn_up);
             }
 
             ggml_tensor * ffn_gate = with_gate ? ggml_mul_mat(ctx, gate, cur) : nullptr;
@@ -5866,8 +5866,8 @@ struct test_mul_mat_vec_fusion : public test_case {
                 ggml_tensor * gate_bias = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, bias_ne.data());
                 ffn_gate = ggml_add(ctx, ffn_gate, gate_bias);
             }
-            if (with_scale && with_gate) {
-                ffn_gate = build_dense_scale(ctx, ffn_gate);
+            if (with_lane_scale && with_gate) {
+                ffn_gate = build_dense_lane_scale(ctx, ffn_gate);
             }
 
             ggml_tensor * out = with_gate ? build_gate(ctx, ffn_gate, ffn_up) : ffn_up;
@@ -5895,8 +5895,8 @@ struct test_mul_mat_vec_fusion : public test_case {
                 ggml_tensor * up_bias_param = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, ffn_up->ne[0], n_mats);
                 ffn_up = ggml_add_id(ctx, ffn_up, up_bias_param, ids);
             }
-            if (with_scale) {
-                ffn_up = build_id_scale(ctx, ffn_up, ids);
+            if (with_lane_scale) {
+                ffn_up = build_id_lane_scale(ctx, ffn_up, ids);
             }
 
             ggml_tensor * ffn_gate = with_gate? ggml_mul_mat_id(ctx, gates, cur, ids) : nullptr;
@@ -5904,17 +5904,15 @@ struct test_mul_mat_vec_fusion : public test_case {
                 ggml_tensor * gate_bias_param = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, ffn_gate->ne[0], n_mats);
                 ffn_gate = ggml_add_id(ctx, ffn_gate, gate_bias_param, ids);
             }
-            if (with_scale && with_gate) {
-                ffn_gate = build_id_scale(ctx, ffn_gate, ids);
+            if (with_lane_scale && with_gate) {
+                ffn_gate = build_id_lane_scale(ctx, ffn_gate, ids);
             }
 
             ggml_tensor * out = with_gate ? build_gate(ctx, ffn_gate, ffn_up) : ffn_up;
 
-            if (!with_scale) {
-                std::array<int64_t, 4> scale_ne { 1, out->ne[1], out->ne[2], out->ne[3] };
-                ggml_tensor * scale = ggml_new_tensor(ctx, out->type, 4, scale_ne.data());
-                out = ggml_mul(ctx, out, scale);
-            }
+            std::array<int64_t, 4> scale_ne { 1, out->ne[1], out->ne[2], out->ne[3] };
+            ggml_tensor * scale = ggml_new_tensor(ctx, out->type, 4, scale_ne.data());
+            out = ggml_mul(ctx, out, scale);
 
             ggml_set_name(out, "out");
             return out;
@@ -5933,13 +5931,6 @@ struct test_mul_mat_vec_fusion : public test_case {
 
     double max_nmse_err() override {
         return 5e-3;
-    }
-
-    double max_nmse_err(ggml_backend_t backend) override {
-        if (type == GGML_TYPE_NVFP4 && backend_has_feature(backend, "BLACKWELL_NATIVE_FP4")) {
-            return 2e-2;
-        }
-        return max_nmse_err();
     }
 };
 
@@ -9119,27 +9110,17 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
                             if (!with_gate && glu_op != GGML_GLU_OP_SWIGLU) {
                                 continue;
                             }
-                            test_cases.emplace_back(new test_mul_mat_vec_fusion(type, glu_op, 1, 32, 256,
-                                use_id, 16, 8, b, with_bias, with_gate));
-                            test_cases.emplace_back(new test_mul_mat_vec_fusion(type, glu_op, 1, 32, 256,
-                                use_id, 16, 8, b, with_bias, with_gate, {1, 1}));
+                            for (bool with_lane_scale : {false, true}) {
+                                test_cases.emplace_back(new test_mul_mat_vec_fusion(type, glu_op, 1, 32, 256,
+                                    use_id, 16, 8, b, with_bias, with_gate, with_lane_scale));
+                                test_cases.emplace_back(new test_mul_mat_vec_fusion(type, glu_op, 1, 32, 256,
+                                    use_id, 16, 8, b, with_bias, with_gate, with_lane_scale, {1, 1}));
+                            }
                         }
                     }
                 }
             }
         }
-    }
-
-    // NVFP4 scale2 fusion patterns: dense/MMID, GLU/two-lane, single-lane, with and without bias.
-    for (bool with_bias : {false, true}) {
-        test_cases.emplace_back(new test_mul_mat_vec_fusion(GGML_TYPE_NVFP4, GGML_GLU_OP_SWIGLU, 1, 32, 256,
-            false, 1, 1, false, with_bias, true, {1, 1}, true));
-        test_cases.emplace_back(new test_mul_mat_vec_fusion(GGML_TYPE_NVFP4, GGML_GLU_OP_SWIGLU, 1, 32, 256,
-            true, 16, 8, false, with_bias, true, {1, 1}, true));
-        test_cases.emplace_back(new test_mul_mat_vec_fusion(GGML_TYPE_NVFP4, GGML_GLU_OP_SWIGLU, 1, 32, 256,
-            false, 1, 1, false, with_bias, false, {1, 1}, true));
-        test_cases.emplace_back(new test_mul_mat_vec_fusion(GGML_TYPE_NVFP4, GGML_GLU_OP_SWIGLU, 1, 32, 256,
-            true, 16, 8, false, with_bias, false, {1, 1}, true));
     }
 
     for (auto gate : {GATING_FUNC_SOFTMAX, GATING_FUNC_SIGMOID, GATING_FUNC_SOFTMAX_WEIGHT}) {
