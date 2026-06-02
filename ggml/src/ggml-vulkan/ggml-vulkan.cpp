@@ -113,6 +113,21 @@ typedef struct VkPhysicalDeviceShaderBfloat16FeaturesKHR {
 } VkPhysicalDeviceShaderBfloat16FeaturesKHR;
 #endif
 
+#if !defined(VK_VALVE_shader_mixed_float_dot_product)
+#define VK_VALVE_shader_mixed_float_dot_product 1
+#define VK_VALVE_SHADER_MIXED_FLOAT_DOT_PRODUCT_SPEC_VERSION 1
+#define VK_VALVE_SHADER_MIXED_FLOAT_DOT_PRODUCT_EXTENSION_NAME "VK_VALVE_shader_mixed_float_dot_product"
+#define VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_MIXED_FLOAT_DOT_PRODUCT_FEATURES_VALVE ((VkStructureType)1000673000)
+typedef struct VkPhysicalDeviceShaderMixedFloatDotProductFeaturesVALVE {
+    VkStructureType    sType;
+    void*              pNext;
+    VkBool32           shaderMixedFloatDotProductFloat16AccFloat32;
+    VkBool32           shaderMixedFloatDotProductFloat16AccFloat16;
+    VkBool32           shaderMixedFloatDotProductBFloat16Acc;
+    VkBool32           shaderMixedFloatDotProductFloat8AccFloat32;
+} VkPhysicalDeviceShaderMixedFloatDotProductFeaturesVALVE;
+#endif
+
 #define ROUNDUP_POW2(M, N) (((M) + (N) - 1) & ~((N) - 1))
 #define CEIL_DIV(M, N) (((M) + (N)-1) / (N))
 static bool is_pow2(uint32_t x) { return x > 1 && (x & (x-1)) == 0; }
@@ -5474,6 +5489,7 @@ static vk_device ggml_vk_get_device(size_t idx) {
         device->integer_dot_product = false;
         device->shader_64b_indexing = false;
         bool bfloat16_support = false;
+        bool dot2_f16_support = false;
 
         for (const auto& properties : ext_props) {
             if (strcmp("VK_KHR_maintenance4", properties.extensionName) == 0) {
@@ -5518,7 +5534,7 @@ static vk_device ggml_vk_get_device(size_t idx) {
 #endif
             } else if (strcmp("VK_VALVE_shader_mixed_float_dot_product", properties.extensionName) == 0 &&
                        !getenv("GGML_VK_DISABLE_DOT2")) {
-                device->dot2_f16 = true;
+                dot2_f16_support = true;
             } else if (strcmp("VK_KHR_pipeline_executable_properties", properties.extensionName) == 0) {
                 pipeline_executable_properties_support = true;
             } else if (strcmp("VK_EXT_memory_priority", properties.extensionName) == 0 &&
@@ -5826,7 +5842,11 @@ static vk_device ggml_vk_get_device(size_t idx) {
             device_extensions.push_back("VK_KHR_shader_integer_dot_product");
         }
 
-        if (device->dot2_f16) {
+        VkPhysicalDeviceShaderMixedFloatDotProductFeaturesVALVE dot2_features {};
+        dot2_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_MIXED_FLOAT_DOT_PRODUCT_FEATURES_VALVE;
+        if (dot2_f16_support) {
+            last_struct->pNext = (VkBaseOutStructure *)&dot2_features;
+            last_struct = (VkBaseOutStructure *)&dot2_features;
             device_extensions.push_back("VK_VALVE_shader_mixed_float_dot_product");
         }
 
@@ -5863,6 +5883,8 @@ static vk_device ggml_vk_get_device(size_t idx) {
 #else
         device->bf16 = false;
 #endif
+
+        device->dot2_f16 = dot2_f16_support && dot2_features.shaderMixedFloatDotProductFloat16AccFloat32;
 
         device->pipeline_robustness = pl_robustness_features.pipelineRobustness;
 
@@ -6278,6 +6300,7 @@ static void ggml_vk_print_gpu_info(size_t idx) {
     bool coopmat2_decode_vector_support = false;
     bool integer_dot_product = false;
     bool bfloat16_support = false;
+    bool dot2_f16_support = false;
 
     for (auto properties : ext_props) {
         if (strcmp("VK_KHR_16bit_storage", properties.extensionName) == 0) {
@@ -6307,6 +6330,9 @@ static void ggml_vk_print_gpu_info(size_t idx) {
                     !getenv("GGML_VK_DISABLE_BFLOAT16")) {
             bfloat16_support = true;
 #endif
+        } else if (strcmp("VK_VALVE_shader_mixed_float_dot_product", properties.extensionName) == 0 &&
+                    !getenv("GGML_VK_DISABLE_DOT2")) {
+            dot2_f16_support = true;
         }
     }
 
@@ -6397,6 +6423,13 @@ static void ggml_vk_print_gpu_info(size_t idx) {
         last_struct = (VkBaseOutStructure *)&coopmat2_decode_vector_features;
     }
 
+    VkPhysicalDeviceShaderMixedFloatDotProductFeaturesVALVE dot2_features {};
+    dot2_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_MIXED_FLOAT_DOT_PRODUCT_FEATURES_VALVE;
+    if (dot2_f16_support) {
+        last_struct->pNext = (VkBaseOutStructure *)&dot2_features;
+        last_struct = (VkBaseOutStructure *)&dot2_features;
+    }
+
     vkGetPhysicalDeviceFeatures2(physical_device, &device_features2);
 
     fp16 = fp16 && vk12_features.shaderFloat16;
@@ -6443,9 +6476,12 @@ static void ggml_vk_print_gpu_info(size_t idx) {
                              : coopmat_support  ? "KHR_coopmat"
                              : "none";
 
+    bool dot2_f16 = dot2_f16_support && dot2_features.shaderMixedFloatDotProductFloat16AccFloat32;
+    const char *fp16_str = fp16 ? (dot2_f16 ? "dot2" : "1") : "0";
+
     std::string device_name = props2.properties.deviceName.data();
-    GGML_LOG_DEBUG("ggml_vulkan: %zu = %s (%s) | uma: %d | fp16: %d | bf16: %d | warp size: %zu | shared memory: %d | int dot: %d | matrix cores: %s\n",
-              idx, device_name.c_str(), driver_props.driverName.data(), uma, fp16, bf16, subgroup_size,
+    GGML_LOG_DEBUG("ggml_vulkan: %zu = %s (%s) | uma: %d | fp16: %s | bf16: %d | warp size: %zu | shared memory: %d | int dot: %d | matrix cores: %s\n",
+              idx, device_name.c_str(), driver_props.driverName.data(), uma, fp16_str, bf16, subgroup_size,
               props2.properties.limits.maxComputeSharedMemorySize, integer_dot_product, matrix_cores.c_str());
 
     if (props2.properties.deviceType == vk::PhysicalDeviceType::eCpu) {
