@@ -417,6 +417,7 @@ class ChatStore {
 				undefined,
 				undefined,
 				undefined,
+				undefined,
 				convId,
 				abortController.signal,
 				(connState: StreamConnectionState) => {
