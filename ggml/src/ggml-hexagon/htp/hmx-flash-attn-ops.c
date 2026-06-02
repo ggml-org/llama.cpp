@@ -17,6 +17,7 @@
 #define GGML_COMMON_DECL_C
 #include "ggml-common.h"
 #include "hex-dma.h"
+#include "hex-fastdiv.h"
 #include "hmx-profile.h"
 #include "hmx-queue.h"
 #include "hmx-utils.h"
@@ -303,6 +304,7 @@ struct hmx_fa_context {
     uint32_t     n_kv_heads;  // number of KV heads
     uint32_t     n_heads;     // number of Q heads
     uint32_t     G;           // GQA factor = n_heads / n_kv_heads
+    struct fastdiv_values div_G;
     uint32_t     n_kv_blocks;
     uint32_t     neq1;        // Q token count
 
@@ -466,10 +468,10 @@ static void fa_q_load_thread(unsigned int n, unsigned int i, void * data) {
     for (size_t r = start; r < end; r += 2) {
         const bool next_row_valid = (r + 1) < n_rows_g;
 
-        const size_t q_idx0 = (r + 0) / G;
-        const size_t h_idx0 = (r + 0) % G;
-        const size_t q_idx1 = (r + 1) / G;
-        const size_t h_idx1 = (r + 1) % G;
+        const size_t q_idx0 = fastdiv(r + 0, &factx->div_G);
+        const size_t h_idx0 = fastmodulo(r + 0, G, &factx->div_G);
+        const size_t q_idx1 = fastdiv(r + 1, &factx->div_G);
+        const size_t h_idx1 = fastmodulo(r + 1, G, &factx->div_G);
 
         const uint8_t * q_ptr0 = (const uint8_t *) q->data + (q_start + q_idx0) * q->nb[1] +
                                                   (kv_head * G + h_idx0) * q->nb[2] + ib3 * q->nb[3];
@@ -569,8 +571,8 @@ static void fa_o_store_thread(unsigned int n, unsigned int i, void * data) {
     const uint32_t            ib3        = args->ib3;
 
     for (size_t r = start; r < end; ++r) {
-        const size_t q_idx = r / G;
-        const size_t h_idx = r % G;
+        const size_t q_idx = fastdiv(r, &factx->div_G);
+        const size_t h_idx = fastmodulo(r, G, &factx->div_G);
 
         // FIX(dst-indexing): ggml_flash_attn_ext() creates dst as permute(0,2,1,3) ->
         // [DV, n_heads, n_tokens, n_seq], so head stride is nb[1] and token stride is nb[2].
@@ -782,11 +784,11 @@ static void fa_softmax_thread(unsigned int n, unsigned int i, void * data) {
                     if (args->mask_vtcm) {
                         // Read mask from VTCM buffer (DMA'd per KV block).
                         // GQA dedup (scheme B): skip load when qi unchanged.
-                        const size_t qi0 = (r + 0) / G;
+                        const size_t qi0 = fastdiv(r + 0, &factx->div_G);
                         v_mask0 = *(const HVX_UVector *) (args->mask_vtcm + qi0 * args->mask_vtcm_row_stride + c);
                         v_mask1 = v_neg_inf;
                         if (r + 1 < (int) n_rows_g) {
-                            const size_t qi1 = (r + 1) / G;
+                            const size_t qi1 = fastdiv(r + 1, &factx->div_G);
                             if (qi1 == qi0) {
                                 v_mask1 = v_mask0;  // scheme B: reuse — same mask row
                             } else {
@@ -796,8 +798,8 @@ static void fa_softmax_thread(unsigned int n, unsigned int i, void * data) {
                     } else {
                         // Fallback: read mask directly from DDR (when mask->ne[2] > 1).
                         const struct htp_tensor * mask   = args->mask;
-                        const size_t              q_idx0 = args->q_start + ((r + 0) / G);
-                        const size_t              h_idx0 = args->kv_head * G + (r + 0) % G;
+                        const size_t              q_idx0 = args->q_start + fastdiv(r + 0, &factx->div_G);
+                        const size_t              h_idx0 = args->kv_head * G + fastmodulo(r + 0, G, &factx->div_G);
                         const uint32_t            im2_0  = h_idx0 % mask->ne[2];
                         const uint32_t            im3_0  = args->ib3 % mask->ne[3];
 
@@ -807,12 +809,12 @@ static void fa_softmax_thread(unsigned int n, unsigned int i, void * data) {
                         v_mask1 = v_neg_inf;
 
                         if (r + 1 < (int) n_rows_g) {
-                            const size_t q_idx1 = args->q_start + ((r + 1) / G);
+                            const size_t q_idx1 = args->q_start + fastdiv(r + 1, &factx->div_G);
                             if (q_idx1 == q_idx0) {
                                 // scheme B: same mask row in DDR path
                                 v_mask1 = v_mask0;
                             } else {
-                                const size_t   h_idx1 = args->kv_head * G + (r + 1) % G;
+                                const size_t   h_idx1 = args->kv_head * G + fastmodulo(r + 1, G, &factx->div_G);
                                 const uint32_t im2_1  = h_idx1 % mask->ne[2];
                                 const uint32_t im3_1  = args->ib3 % mask->ne[3];
                                 const __fp16 * m1_ptr = (const __fp16 *) ((const uint8_t *) mask->data + q_idx1 * mask->nb[1] +
@@ -1210,7 +1212,7 @@ static __attribute__((noinline)) void fa_compute_slopes(fa_softmax_args_t * sarg
     const float    m1          = factx->m1;
 
     for (size_t r = 0; r < n_rows_g; ++r) {
-        const uint32_t h = kv_head * G + r % G;
+        const uint32_t h = kv_head * G + fastmodulo(r, G, &factx->div_G);
         sargs->slopes[r] = (h < n_head_log2) ? powf(m0, h + 1) : powf(m1, 2 * (h - n_head_log2) + 1);
     }
 }
@@ -1287,6 +1289,7 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
     factx.n_kv_heads     = n_kv_heads;
     factx.n_heads        = neq2;
     factx.G              = G;
+    factx.div_G          = init_fastdiv_values(G);
     factx.neq1           = neq1;
     factx.Br             = (uint32_t) Br;
     factx.Bc             = (uint32_t) Bc;
