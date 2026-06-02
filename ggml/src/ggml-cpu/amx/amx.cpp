@@ -163,6 +163,7 @@ class extra_buffer_type : ggml::cpu::extra_buffer_type {
         }
         int alignment;
         switch (src0->type) {
+            case GGML_TYPE_Q4_0_BLUE:
             case GGML_TYPE_Q4_0:
             case GGML_TYPE_Q4_1:
             case GGML_TYPE_Q8_0:

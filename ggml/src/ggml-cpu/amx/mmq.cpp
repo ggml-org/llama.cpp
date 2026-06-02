@@ -98,6 +98,7 @@ struct is_type_qkk : std::integral_constant<bool,
 #define GGML_DISPATCH_QTYPES(QT, ...)                                                  \
     [&] {                                                                              \
         switch (QT) {                                                                  \
+            case GGML_TYPE_Q4_0_BLUE:
             case GGML_TYPE_Q4_0: {                                                     \
                 using type = block_q4_0;                                               \
                 using vec_dot_type = block_q8_0;                                       \

@@ -190,6 +190,7 @@ template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS> class tensor_
                 switch (op->src[0]->type) {
                     case GGML_TYPE_Q2_K:
                     case GGML_TYPE_Q3_K:
+                    case GGML_TYPE_Q4_0_BLUE:
                     case GGML_TYPE_Q4_0:
                     case GGML_TYPE_Q4_1:
                     case GGML_TYPE_Q4_K:
@@ -209,6 +210,7 @@ template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS> class tensor_
                 switch (op->src[0]->type) {
                     case GGML_TYPE_Q2_K:
                     case GGML_TYPE_Q3_K:
+                    case GGML_TYPE_Q4_0_BLUE:
                     case GGML_TYPE_Q4_0:
                     case GGML_TYPE_Q4_1:
                     case GGML_TYPE_Q4_K:
@@ -1274,6 +1276,7 @@ static const ggml::cpu::tensor_traits * ggml_riscv64_spacemit_get_optimal_repack
 #endif
             }
             break;
+        case GGML_TYPE_Q4_0_BLUE:
         case GGML_TYPE_Q4_0:
             {
 #if defined(RISCV64_SPACEMIT_IME2)
