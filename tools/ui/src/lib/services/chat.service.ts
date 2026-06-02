@@ -6,6 +6,7 @@ import {
 	ATTACHMENT_LABEL_MCP_PROMPT,
 	ATTACHMENT_LABEL_MCP_RESOURCE,
 	LEGACY_AGENTIC_REGEX,
+	REASONING_EFFORT_TOKENS,
 	SETTINGS_KEYS,
 	API_CHAT,
 	API_SLOTS,
@@ -162,6 +163,8 @@ export class ChatService {
 			// Config options
 			disableReasoningParsing,
 			excludeReasoningFromContext,
+			enableThinking,
+			reasoningEffort,
 			continueFinalMessage
 		} = options;
 
@@ -242,6 +245,18 @@ export class ChatService {
 		requestBody.reasoning_format = disableReasoningParsing
 			? ReasoningFormat.NONE
 			: ReasoningFormat.AUTO;
+
+		const reasoningBudgetTokens =
+			enableThinking && reasoningEffort ? (REASONING_EFFORT_TOKENS[reasoningEffort] ?? -1) : -1;
+
+		requestBody.chat_template_kwargs = {
+			...(requestBody.chat_template_kwargs ?? {}),
+			enable_thinking: enableThinking
+		};
+
+		if (reasoningBudgetTokens >= 0) {
+			requestBody.thinking_budget_tokens = reasoningBudgetTokens;
+		}
 
 		// arms the budget sampler so reasoning can be ended at runtime via the control endpoint
 		requestBody.reasoning_control = true;

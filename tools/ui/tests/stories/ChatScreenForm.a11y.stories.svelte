@@ -44,7 +44,7 @@
 		await screen.findByRole('menu');
 
 		await waitFor(() => {
-			expect(document.activeElement).toHaveTextContent('Text Files');
+			expect(document.activeElement).toHaveTextContent('Add files');
 		});
 	}}
 />

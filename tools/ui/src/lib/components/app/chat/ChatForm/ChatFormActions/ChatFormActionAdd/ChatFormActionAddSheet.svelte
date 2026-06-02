@@ -2,18 +2,19 @@
 	import type { Snippet } from 'svelte';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import * as Sheet from '$lib/components/ui/sheet';
+	import * as Collapsible from '$lib/components/ui/collapsible';
+	import { File, MessageSquare, Zap, FolderOpen } from '@lucide/svelte';
+	import { Switch } from '$lib/components/ui/switch';
+	import { Checkbox } from '$lib/components/ui/checkbox';
 	import { TOOLTIP_DELAY_DURATION } from '$lib/constants';
-	import {
-		ATTACHMENT_FILE_ITEMS,
-		ATTACHMENT_EXTRA_ITEMS,
-		ATTACHMENT_MCP_ITEMS
-	} from '$lib/constants/attachment-menu';
-	import { McpLogo } from '$lib/components/app';
+	import { ATTACHMENT_FILE_ITEMS } from '$lib/constants/attachment-menu';
 	import { useAttachmentMenu } from '$lib/hooks/use-attachment-menu.svelte';
-	import { AttachmentMenuItemId } from '$lib/enums';
-	import { PencilRuler } from '@lucide/svelte';
-	import { ROUTES, SETTINGS_SECTION_SLUGS } from '$lib/constants/routes';
-	import { RouterService } from '$lib/services/router.service';
+	import { useToolsPanel } from '$lib/hooks/use-tools-panel.svelte';
+	import { conversationsStore } from '$lib/stores/conversations.svelte';
+	import { mcpStore } from '$lib/stores/mcp.svelte';
+	import { McpLogo } from '$lib/components/app';
+	import { PencilRuler, ChevronDown, ChevronRight } from '@lucide/svelte';
+	import { HealthCheckStatus } from '$lib/enums';
 
 	interface Props {
 		class?: string;
@@ -46,6 +47,9 @@
 	}: Props = $props();
 
 	let sheetOpen = $state(false);
+	let filesExpanded = $state(true);
+	let toolsExpanded = $state(false);
+	let mcpExpanded = $state(false);
 
 	const attachmentMenu = useAttachmentMenu(
 		() => ({
@@ -61,14 +65,22 @@
 		}
 	);
 
+	const toolsPanel = useToolsPanel();
+
 	const sheetItemClass =
 		'flex w-full items-center gap-3 rounded-md px-3 py-2.5 text-left text-sm transition-colors hover:bg-accent active:bg-accent disabled:cursor-not-allowed disabled:opacity-50';
+
+	const sheetItemRowClass =
+		'flex w-full items-center justify-between gap-2 rounded-md px-3 py-2 text-left text-sm transition-colors hover:bg-accent';
+
+	function getEnabledMcpServers() {
+		return mcpStore.getServersSorted().filter((s) => s.enabled);
+	}
 </script>
 
 <div class="flex items-center gap-1 {className}">
 	<Sheet.Root bind:open={sheetOpen}>
 		{@render trigger({ disabled, onclick: () => (sheetOpen = true) })}
-		<!-- <ChatFormActionAddButton {disabled} onclick={() => (sheetOpen = true)} /> -->
 
 		<Sheet.Content side="bottom" class="max-h-[85vh] gap-0 overflow-y-auto">
 			<Sheet.Header>
@@ -80,110 +92,206 @@
 			</Sheet.Header>
 
 			<div class="flex flex-col gap-1 px-1.5 pb-2">
-				{#each ATTACHMENT_FILE_ITEMS as item (item.id)}
-					{@const enabled = attachmentMenu.isItemEnabled(item.enabledWhen)}
-					{#if enabled}
-						<button
-							type="button"
-							class={sheetItemClass}
-							onclick={() => attachmentMenu.callbacks[item.action]()}
-						>
-							<item.icon class="h-4 w-4 shrink-0" />
+				<Collapsible.Root open={filesExpanded} onOpenChange={(open) => (filesExpanded = open)}>
+					<Collapsible.Trigger class={sheetItemClass}>
+						{#if filesExpanded}
+							<ChevronDown class="h-4 w-4 shrink-0" />
+						{:else}
+							<ChevronRight class="h-4 w-4 shrink-0" />
+						{/if}
 
-							<span>{item.label}</span>
-						</button>
-					{:else if item.disabledTooltip}
-						<Tooltip.Root delayDuration={TOOLTIP_DELAY_DURATION}>
-							<Tooltip.Trigger>
-								<button type="button" class={sheetItemClass} disabled>
-									<item.icon class="h-4 w-4 shrink-0" />
+						<File class="h-4 w-4 shrink-0" />
 
-									<span>{item.label}</span>
-								</button>
-							</Tooltip.Trigger>
+						<span class="flex-1">Add files</span>
+					</Collapsible.Trigger>
 
-							<Tooltip.Content side="right">
-								<p>{item.disabledTooltip}</p>
-							</Tooltip.Content>
-						</Tooltip.Root>
-					{/if}
-				{/each}
+					<Collapsible.Content>
+						<div class="flex flex-col gap-0.5 pl-4">
+							{#each ATTACHMENT_FILE_ITEMS as item (item.id)}
+								{@const enabled = attachmentMenu.isItemEnabled(item.enabledWhen)}
+								{#if enabled}
+									<button
+										type="button"
+										class={sheetItemClass}
+										onclick={() => attachmentMenu.callbacks[item.action]()}
+									>
+										<item.icon class="h-4 w-4 shrink-0" />
 
-				{#if !attachmentMenu.isItemEnabled('hasVisionModality')}
-					{@const pdfItem = ATTACHMENT_FILE_ITEMS.find((i) => i.id === AttachmentMenuItemId.PDF)}
-					{#if pdfItem}
-						<Tooltip.Root delayDuration={TOOLTIP_DELAY_DURATION}>
-							<Tooltip.Trigger>
+										<span>{item.label}</span>
+									</button>
+								{:else if item.disabledTooltip}
+									<Tooltip.Root delayDuration={TOOLTIP_DELAY_DURATION}>
+										<Tooltip.Trigger>
+											<button type="button" class={sheetItemClass} disabled>
+												<item.icon class="h-4 w-4 shrink-0" />
+
+												<span>{item.label}</span>
+											</button>
+										</Tooltip.Trigger>
+
+										<Tooltip.Content side="right">
+											<p>{item.disabledTooltip}</p>
+										</Tooltip.Content>
+									</Tooltip.Root>
+								{/if}
+							{/each}
+						</div>
+					</Collapsible.Content>
+				</Collapsible.Root>
+
+				<Collapsible.Root open={mcpExpanded} onOpenChange={(open) => (mcpExpanded = open)}>
+					<Collapsible.Trigger class={sheetItemClass}>
+						{#if mcpExpanded}
+							<ChevronDown class="h-4 w-4 shrink-0" />
+						{:else}
+							<ChevronRight class="h-4 w-4 shrink-0" />
+						{/if}
+
+						<McpLogo class="inline h-4 w-4 shrink-0" />
+
+						<span class="flex-1">MCP Servers</span>
+
+						<span class="text-xs text-muted-foreground">
+							{getEnabledMcpServers().length} server{getEnabledMcpServers().length !== 1 ? 's' : ''}
+						</span>
+					</Collapsible.Trigger>
+
+					<Collapsible.Content>
+						<div class="flex flex-col gap-0.5 pl-4">
+							{#each getEnabledMcpServers() as server (server.id)}
+								{@const healthState = mcpStore.getHealthCheckState(server.id)}
+								{@const hasError = healthState.status === HealthCheckStatus.ERROR}
+								{@const displayName = mcpStore.getServerLabel(server)}
+								{@const faviconUrl = mcpStore.getServerFavicon(server.id)}
+								{@const isEnabled = conversationsStore.isMcpServerEnabledForChat(server.id)}
+
 								<button
 									type="button"
-									class={sheetItemClass}
-									onclick={() => attachmentMenu.callbacks[pdfItem.action]()}
+									class={sheetItemRowClass}
+									onclick={() => !hasError && conversationsStore.toggleMcpServerForChat(server.id)}
+									disabled={hasError}
 								>
-									<pdfItem.icon class="h-4 w-4 shrink-0" />
+									<div class="flex min-w-0 flex-1 items-center gap-2">
+										{#if faviconUrl}
+											<img
+												src={faviconUrl}
+												alt=""
+												class="h-4 w-4 shrink-0 rounded-sm"
+												onerror={(e) => {
+													(e.currentTarget as HTMLImageElement).style.display = 'none';
+												}}
+											/>
+										{/if}
 
-									<span>{pdfItem.label}</span>
+										<span class="min-w-0 truncate text-sm">{displayName}</span>
+									</div>
+
+									{#if hasError}
+										<span
+											class="shrink-0 rounded bg-destructive/15 px-1.5 py-0.5 text-xs text-destructive"
+										>
+											Error
+										</span>
+									{:else}
+										<Switch
+											checked={isEnabled}
+											onCheckedChange={() => conversationsStore.toggleMcpServerForChat(server.id)}
+										/>
+									{/if}
 								</button>
-							</Tooltip.Trigger>
+							{/each}
 
-							<Tooltip.Content side="right">
-								<p>PDFs will be converted to text. Image-based PDFs may not work properly.</p>
-							</Tooltip.Content>
-						</Tooltip.Root>
-					{/if}
+							{#if getEnabledMcpServers().length === 0}
+								<div class="px-3 py-2 text-center text-sm text-muted-foreground">
+									No MCP servers configured
+								</div>
+							{/if}
+						</div>
+					</Collapsible.Content>
+				</Collapsible.Root>
+
+				{#if toolsPanel.totalToolCount > 0}
+					<Collapsible.Root open={toolsExpanded} onOpenChange={(open) => (toolsExpanded = open)}>
+						<Collapsible.Trigger class={sheetItemClass}>
+							{#if toolsExpanded}
+								<ChevronDown class="h-4 w-4 shrink-0" />
+							{:else}
+								<ChevronRight class="h-4 w-4 shrink-0" />
+							{/if}
+
+							<PencilRuler class="inline h-4 w-4 shrink-0" />
+
+							<span class="flex-1">Tools</span>
+
+							<span class="text-xs text-muted-foreground">
+								{toolsPanel.totalToolCount} tool{toolsPanel.totalToolCount !== 1 ? 's' : ''}
+							</span>
+						</Collapsible.Trigger>
+
+						<Collapsible.Content>
+							<div class="flex flex-col gap-0.5 pl-4">
+								{#each toolsPanel.activeGroups as group (group.label)}
+									{@const { checked, indeterminate } = toolsPanel.getGroupCheckedState(group)}
+									{@const enabledCount = toolsPanel.getEnabledToolCount(group)}
+									{@const favicon = toolsPanel.getFavicon(group)}
+
+									<button
+										type="button"
+										class={sheetItemRowClass}
+										onclick={() => toolsPanel.toggleGroupByLabel(group.label)}
+									>
+										{#if favicon}
+											<img
+												src={favicon}
+												alt=""
+												class="h-4 w-4 shrink-0 rounded-sm"
+												onerror={(e) => {
+													(e.currentTarget as HTMLImageElement).style.display = 'none';
+												}}
+											/>
+										{/if}
+
+										<span class="min-w-0 flex-1 truncate text-sm font-medium">{group.label}</span>
+
+										<span class="shrink-0 text-xs text-muted-foreground">
+											{enabledCount}/{group.tools.length}
+										</span>
+
+										<Checkbox
+											{checked}
+											{indeterminate}
+											class="h-4 w-4 shrink-0"
+											onclick={(e) => e.stopPropagation()}
+											onCheckedChange={() => toolsPanel.toggleGroupByLabel(group.label)}
+										/>
+									</button>
+								{/each}
+							</div>
+						</Collapsible.Content>
+					</Collapsible.Root>
 				{/if}
 
-				{#each ATTACHMENT_EXTRA_ITEMS as item (item.id)}
-					{#if item.id === AttachmentMenuItemId.SYSTEM_MESSAGE}
-						<Tooltip.Root delayDuration={TOOLTIP_DELAY_DURATION}>
-							<Tooltip.Trigger>
-								<button
-									type="button"
-									class={sheetItemClass}
-									onclick={() => attachmentMenu.callbacks[item.action]()}
-								>
-									<item.icon class="h-4 w-4 shrink-0" />
+				<button type="button" class={sheetItemClass} onclick={onSystemPromptClick}>
+					<MessageSquare class="h-4 w-4 shrink-0" />
 
-									<span>{item.label}</span>
-								</button>
-							</Tooltip.Trigger>
+					<span>System Message</span>
+				</button>
 
-							<Tooltip.Content side="right">
-								<p>{attachmentMenu.getSystemMessageTooltip()}</p>
-							</Tooltip.Content>
-						</Tooltip.Root>
-					{/if}
-				{/each}
+				{#if hasMcpPromptsSupport}
+					<button type="button" class={sheetItemClass} onclick={onMcpPromptClick}>
+						<Zap class="h-4 w-4 shrink-0" />
 
-				<div class="my-2 border-t"></div>
+						<span>MCP Prompt</span>
+					</button>
+				{/if}
 
-				<a href={ROUTES.MCP_SERVERS} class="flex items-center gap-3 px-3 py-2">
-					<McpLogo class="inline h-4 w-4" />
+				{#if hasMcpResourcesSupport}
+					<button type="button" class={sheetItemClass} onclick={onMcpResourcesClick}>
+						<FolderOpen class="h-4 w-4 shrink-0" />
 
-					<span class="text-sm">MCP Servers</span>
-				</a>
-
-				<a
-					href={RouterService.settings(SETTINGS_SECTION_SLUGS.TOOLS)}
-					class="flex items-center gap-3 px-3 py-2"
-				>
-					<PencilRuler class="inline h-4 w-4" />
-
-					<span class="text-sm">Tools</span>
-				</a>
-
-				{#each ATTACHMENT_MCP_ITEMS as item (item.id)}
-					{#if attachmentMenu.isItemVisible(item.visibleWhen)}
-						<button
-							type="button"
-							class={sheetItemClass}
-							onclick={() => attachmentMenu.callbacks[item.action]()}
-						>
-							<item.icon class="h-4 w-4 shrink-0" />
-
-							<span>{item.label}</span>
-						</button>
-					{/if}
-				{/each}
+						<span>MCP Resources</span>
+					</button>
+				{/if}
 			</div>
 		</Sheet.Content>
 	</Sheet.Root>

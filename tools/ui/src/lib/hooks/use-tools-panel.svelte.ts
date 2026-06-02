@@ -17,6 +17,8 @@ export interface UseToolsPanelReturn {
 	getFavicon(group: { source: ToolSource; label: string }): string | null;
 	isGroupDisabled(group: ToolGroup): boolean;
 	toggleGroupExpanded(label: string): void;
+	/** Toggle all tools in a group by label (avoids stale group object references). */
+	toggleGroupByLabel(label: string): void;
 	handleOpen(): void;
 }
 
@@ -91,6 +93,13 @@ export function useToolsPanel(): UseToolsPanelReturn {
 		}
 	}
 
+	function toggleGroupByLabel(label: string): void {
+		// Find current group by label to get up-to-date tool references
+		const group = activeGroups.find((g) => g.label === label);
+		if (!group) return;
+		toolsStore.toggleGroup(group);
+	}
+
 	function handleOpen(): void {
 		if (toolsStore.builtinTools.length === 0 && !toolsStore.loading) {
 			toolsStore.fetchBuiltinTools();
@@ -117,6 +126,7 @@ export function useToolsPanel(): UseToolsPanelReturn {
 		getFavicon,
 		isGroupDisabled,
 		toggleGroupExpanded,
+		toggleGroupByLabel,
 		handleOpen
 	};
 }

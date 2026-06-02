@@ -26,7 +26,7 @@ import { MigrationService } from '$lib/services/migration.service';
 import { config } from '$lib/stores/settings.svelte';
 import { filterByLeafNodeId, findLeafNode, generateConversationTitle } from '$lib/utils';
 import type { McpServerOverride } from '$lib/types/database';
-import { MessageRole, HtmlInputType, FileExtensionText } from '$lib/enums';
+import { MessageRole, HtmlInputType, FileExtensionText, ReasoningEffort } from '$lib/enums';
 import {
 	ISO_DATE_TIME_SEPARATOR,
 	ISO_DATE_TIME_SEPARATOR_REPLACEMENT,
@@ -38,7 +38,9 @@ import {
 	ISO_TIME_SEPARATOR_REPLACEMENT,
 	NON_ALPHANUMERIC_REGEX,
 	MULTIPLE_UNDERSCORE_REGEX,
-	MCP_DEFAULT_ENABLED_LOCALSTORAGE_KEY
+	MCP_DEFAULT_ENABLED_LOCALSTORAGE_KEY,
+	THINKING_ENABLED_DEFAULT_LOCALSTORAGE_KEY,
+	REASONING_EFFORT_DEFAULT_LOCALSTORAGE_KEY
 } from '$lib/constants';
 
 import { ROUTES } from '$lib/constants/routes';
@@ -74,6 +76,12 @@ class ConversationsStore {
 	/** Pending MCP server overrides for new conversations (before first message) */
 	pendingMcpServerOverrides = $state<McpServerOverride[]>(ConversationsStore.loadMcpDefaults());
 
+	/** Global (non-conversation-specific) thinking toggle default */
+	pendingThinkingEnabled = $state(ConversationsStore.loadThinkingDefaults());
+
+	/** Global (non-conversation-specific) reasoning effort default */
+	pendingReasoningEffort = $state<ReasoningEffort>(ConversationsStore.loadReasoningEffortDefault());
+
 	/** Load MCP default overrides from localStorage */
 	private static loadMcpDefaults(): McpServerOverride[] {
 		if (typeof globalThis.localStorage === 'undefined') return [];
@@ -102,6 +110,45 @@ class ConversationsStore {
 		} else {
 			localStorage.removeItem(MCP_DEFAULT_ENABLED_LOCALSTORAGE_KEY);
 		}
+	}
+
+	/** Load thinking-enabled default from localStorage */
+	private static loadThinkingDefaults(): boolean {
+		if (typeof globalThis.localStorage === 'undefined') return false;
+		try {
+			const raw = localStorage.getItem(THINKING_ENABLED_DEFAULT_LOCALSTORAGE_KEY);
+			if (!raw) return false;
+			const parsed = raw === 'true';
+			return typeof parsed === 'boolean' ? parsed : false;
+		} catch {
+			return false;
+		}
+	}
+
+	/** Persist thinking-enabled default to localStorage */
+	private saveThinkingDefaults(): void {
+		if (typeof globalThis.localStorage === 'undefined') return;
+		localStorage.setItem(
+			THINKING_ENABLED_DEFAULT_LOCALSTORAGE_KEY,
+			this.pendingThinkingEnabled ? 'true' : 'false'
+		);
+	}
+
+	/** Load reasoning effort default from localStorage */
+	private static loadReasoningEffortDefault(): ReasoningEffort {
+		if (typeof globalThis.localStorage === 'undefined') return ReasoningEffort.MEDIUM;
+		try {
+			const raw = localStorage.getItem(REASONING_EFFORT_DEFAULT_LOCALSTORAGE_KEY);
+			return (raw as ReasoningEffort) || ReasoningEffort.MEDIUM;
+		} catch {
+			return ReasoningEffort.MEDIUM;
+		}
+	}
+
+	/** Persist reasoning effort default to localStorage */
+	private saveReasoningEffortDefaults(): void {
+		if (typeof globalThis.localStorage === 'undefined') return;
+		localStorage.setItem(REASONING_EFFORT_DEFAULT_LOCALSTORAGE_KEY, this.pendingReasoningEffort);
 	}
 
 	/** Callback for title update confirmation dialog */
@@ -253,6 +300,12 @@ class ConversationsStore {
 			this.pendingMcpServerOverrides = [];
 		}
 
+		// Inherit global thinking default into the new conversation
+		conversation.thinkingEnabled = this.pendingThinkingEnabled;
+		await DatabaseService.updateConversation(conversation.id, {
+			thinkingEnabled: this.pendingThinkingEnabled
+		});
+
 		this.conversations = [conversation, ...this.conversations];
 		this.activeConversation = conversation;
 		this.activeMessages = [];
@@ -276,6 +329,7 @@ class ConversationsStore {
 			}
 
 			this.pendingMcpServerOverrides = [];
+			this.pendingThinkingEnabled = false;
 			this.activeConversation = conversation;
 
 			if (conversation.currNode) {
@@ -304,8 +358,9 @@ class ConversationsStore {
 	clearActiveConversation(): void {
 		this.activeConversation = null;
 		this.activeMessages = [];
-		// reload MCP defaults so new chats inherit persisted state
+		// reload defaults so new chats inherit persisted state
 		this.pendingMcpServerOverrides = ConversationsStore.loadMcpDefaults();
+		this.pendingThinkingEnabled = ConversationsStore.loadThinkingDefaults();
 	}
 
 	/**
@@ -701,6 +756,84 @@ class ConversationsStore {
 	clearPendingMcpServerOverrides(): void {
 		this.pendingMcpServerOverrides = [];
 		this.saveMcpDefaults();
+	}
+
+	/**
+	 * Gets the effective thinking-enabled state for the active conversation.
+	 * Returns the conversation override if set, otherwise the global default.
+	 */
+	getThinkingEnabled(): boolean {
+		if (this.activeConversation) {
+			return this.activeConversation.thinkingEnabled ?? this.pendingThinkingEnabled;
+		}
+		return this.pendingThinkingEnabled;
+	}
+
+	/**
+	 * Sets the thinking-enabled state for the active conversation.
+	 * If no conversation exists, stores the global default.
+	 * @param enabled - The enabled state
+	 */
+	async setThinkingEnabled(enabled: boolean): Promise<void> {
+		if (!this.activeConversation) {
+			this.pendingThinkingEnabled = enabled;
+			this.saveThinkingDefaults();
+			return;
+		}
+
+		this.activeConversation = {
+			...this.activeConversation,
+			thinkingEnabled: enabled
+		};
+
+		await DatabaseService.updateConversation(this.activeConversation.id, {
+			thinkingEnabled: enabled
+		});
+
+		const convIndex = this.conversations.findIndex((c) => c.id === this.activeConversation!.id);
+		if (convIndex !== -1) {
+			this.conversations[convIndex].thinkingEnabled = enabled;
+			this.conversations = [...this.conversations];
+		}
+	}
+
+	/**
+	 * Gets the effective reasoning effort for the active conversation.
+	 * Returns the conversation override if set, otherwise the global default.
+	 */
+	getReasoningEffort(): ReasoningEffort {
+		if (this.activeConversation) {
+			return this.activeConversation.reasoningEffort ?? this.pendingReasoningEffort;
+		}
+		return this.pendingReasoningEffort;
+	}
+
+	/**
+	 * Sets the reasoning effort for the active conversation.
+	 * If no conversation exists, stores the global default.
+	 * @param effort - The effort level ('low' | 'medium' | 'high' | 'max')
+	 */
+	async setReasoningEffort(effort: ReasoningEffort): Promise<void> {
+		if (!this.activeConversation) {
+			this.pendingReasoningEffort = effort;
+			this.saveReasoningEffortDefaults();
+			return;
+		}
+
+		this.activeConversation = {
+			...this.activeConversation,
+			reasoningEffort: effort
+		};
+
+		await DatabaseService.updateConversation(this.activeConversation.id, {
+			reasoningEffort: effort
+		});
+
+		const convIndex = this.conversations.findIndex((c) => c.id === this.activeConversation!.id);
+		if (convIndex !== -1) {
+			this.conversations[convIndex].reasoningEffort = effort;
+			this.conversations = [...this.conversations];
+		}
 	}
 
 	/**

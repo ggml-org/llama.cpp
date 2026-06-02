@@ -5,6 +5,8 @@ export * from './agentic';
 export * from './api-endpoints';
 export * from './attachment-labels';
 export * from './database';
+export * from './reasoning-effort';
+export * from './reasoning-effort-tokens';
 export * from './storage';
 export * from './attachment-menu';
 export * from './auto-scroll';

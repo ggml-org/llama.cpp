@@ -107,7 +107,7 @@
 									<Checkbox
 										{checked}
 										{indeterminate}
-										onCheckedChange={() => toolsStore.toggleGroup(group)}
+										onCheckedChange={() => toolsPanel.toggleGroupByLabel(group.label)}
 										class="mr-2 h-4 w-4 shrink-0"
 									/>
 								</Tooltip.Trigger>

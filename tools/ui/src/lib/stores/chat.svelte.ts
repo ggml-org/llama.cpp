@@ -1852,6 +1852,9 @@ class ChatStore {
 
 		if (currentConfig.excludeReasoningFromContext) apiOptions.excludeReasoningFromContext = true;
 
+		apiOptions.enableThinking = conversationsStore.getThinkingEnabled();
+		apiOptions.reasoningEffort = conversationsStore.getReasoningEffort();
+
 		if (hasValue(currentConfig.temperature))
 			apiOptions.temperature = Number(currentConfig.temperature);
 

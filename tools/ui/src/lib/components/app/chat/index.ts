@@ -241,6 +241,15 @@ export { default as ChatFormActionAddToolsSubmenu } from './ChatForm/ChatFormAct
 export { default as ChatFormActionAddMcpServersSubmenu } from './ChatForm/ChatFormActions/ChatFormActionAdd/ChatFormActionAddMcpServersSubmenu.svelte';
 
 /**
+ * **ChatFormReasoningToggle** - Thinking toggle button with effort dropdown
+ *
+ * A toggle button with lightbulb icon that indicates thinking status.
+ * Shows the reasoning effort dropdown when clicked.
+ * Only visible when the current model supports thinking.
+ */
+export { default as ChatFormReasoningToggle } from './ChatForm/ChatFormActions/ChatFormReasoningToggle.svelte';
+
+/**
  * Hidden file input element for programmatic file selection.
  */
 export { default as ChatFormFileInputInvisible } from './ChatForm/ChatFormFileInputInvisible.svelte';
