@@ -129,6 +129,7 @@
 										class="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm transition-colors hover:bg-muted/50"
 										onclick={() => toolsStore.toggleTool(tool.function.name)}
 									>
+										<!-- TODO: Investigate why the stopPropagation hack is needed here and properly fix it. See https://github.com/ggml-org/llama.cpp/pull/23276#pullrequestreview-4411500890 and the linked issue for more details. -->
 										<Checkbox
 											checked={toolsStore.isToolEnabled(tool.function.name)}
 											onCheckedChange={() => toolsStore.toggleTool(tool.function.name)}
