@@ -121,6 +121,11 @@ struct clip_graph_deepseekocr : clip_graph {
     ggml_tensor * build_sam(ggml_tensor * inp); // build the SAM model
 };
 
+struct clip_graph_deepseekocr2 : clip_graph_deepseekocr {
+    clip_graph_deepseekocr2(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph_deepseekocr(ctx, img) {}
+    ggml_cgraph * build() override; // reuses build_sam() from base
+};
+
 struct clip_graph_conformer : clip_graph {
     clip_graph_conformer(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
     ggml_cgraph * build() override;
@@ -190,4 +195,9 @@ struct clip_graph_kimik25 : clip_graph {
     ggml_cgraph * build() override;
 
     ggml_tensor * resize_position_embeddings_3d(uint32_t interpolation_mode);
+};
+
+struct clip_graph_exaone4_5 : clip_graph {
+    clip_graph_exaone4_5(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
+    ggml_cgraph * build() override;
 };
