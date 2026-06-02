@@ -15,10 +15,19 @@ void llama_model_qwen3next::load_arch_hparams(llama_model_loader & ml) {
 
     // Mark recurrent layers (linear attention layers)
     {
-        uint32_t full_attn_interval = 4;
-        ml.get_key(LLM_KV_FULL_ATTENTION_INTERVAL, full_attn_interval, false);
-        for (uint32_t i = 0; i < hparams.n_layer; ++i) {
-            hparams.recurrent_layer_arr[i] = ((i + 1) % full_attn_interval != 0);
+        bool try_scalar = false;
+        try {
+            ml.get_key_or_arr(LLM_KV_FULL_ATTENTION_INTERVAL, hparams.recurrent_layer_arr, hparams.n_layer, false);
+        } catch (...) {
+            try_scalar = true;
+        }
+
+        if (try_scalar) {
+            uint32_t full_attn_interval = 4;
+            ml.get_key(LLM_KV_FULL_ATTENTION_INTERVAL, full_attn_interval, false);
+            for (uint32_t i = 0; i < hparams.n_layer; ++i) {
+                hparams.recurrent_layer_arr[i] = ((i + 1) % full_attn_interval != 0);
+            }
         }
     }
 
