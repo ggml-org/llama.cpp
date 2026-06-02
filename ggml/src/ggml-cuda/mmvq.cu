@@ -515,7 +515,7 @@ static __global__ void mul_mat_vec_q(
     bool use_gate = false;
     bool use_bias = false;
     bool use_gate_bias = false;
-    const void * vgate = nullptr;
+    [[maybe_unused]] const void * vgate = nullptr;
     const float * x_bias = nullptr;
     const float * gate_bias = nullptr;
     ggml_glu_op active_glu;
@@ -531,8 +531,8 @@ static __global__ void mul_mat_vec_q(
     }
 
 
-    float x_biases[ncols_dst]    = { 0.0f };
-    float gate_biases[ncols_dst] = { 0.0f };
+    [[maybe_unused]] float x_biases[ncols_dst]    = { 0.0f };
+    [[maybe_unused]] float gate_biases[ncols_dst] = { 0.0f };
     if constexpr (has_fusion) {
         const uint32_t channel_bias = ids ? channel_x : channel_dst;
         if (use_bias) {
@@ -589,12 +589,7 @@ static __global__ void mul_mat_vec_q(
     }
 
     __shared__ float tmp_shared[nwarps-1 > 0 ? nwarps-1 : 1][ncols_dst][rows_per_cuda_block][warp_size];
-    __shared__ float tmp_shared_gate[(has_fusion && (nwarps-1 > 0)) ? nwarps-1 : 1][ncols_dst][rows_per_cuda_block][warp_size];
-    if constexpr (!has_fusion) {
-        (void) tmp_shared_gate;
-    } else if (!use_gate) {
-        (void) tmp_shared_gate;
-    }
+    [[maybe_unused]] __shared__ float tmp_shared_gate[(has_fusion && (nwarps-1 > 0)) ? nwarps-1 : 1][ncols_dst][rows_per_cuda_block][warp_size];
 
     if (threadIdx.y > 0) {
 #pragma unroll
