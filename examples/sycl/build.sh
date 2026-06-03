@@ -7,11 +7,11 @@ mkdir -p build
 cd build
 source /opt/intel/oneapi/setvars.sh
 
-#for FP32
-#cmake .. -DGGML_SYCL=ON -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx -DGGML_SYCL_F16=OFF -DLLAMA_OPENSSL=OFF
-
 #for FP16
-cmake .. -DGGML_SYCL=ON -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx -DLLAMA_OPENSSL=OFF
+cmake .. -DGGML_SYCL=ON -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx -DGGML_SYCL_F16=ON -DLLAMA_OPENSSL=OFF # faster for long-prompt inference
+
+#for FP32
+#cmake .. -DGGML_SYCL=ON -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx -DLLAMA_OPENSSL=OFF
 
 #build example/main
 #cmake --build . --config Release --target main

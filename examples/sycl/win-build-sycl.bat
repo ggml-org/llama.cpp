@@ -11,11 +11,12 @@ if %errorlevel% neq 0 goto ERROR
 @call "C:\Program Files (x86)\Intel\oneAPI\setvars.bat" intel64 --force
 if %errorlevel% neq 0 goto ERROR
 
-::  for FP32
-::  cmake -G "MinGW Makefiles" .. -DLLAMA_OPENSSL=OFF -DGGML_SYCL=ON -DCMAKE_CXX_COMPILER=icx -DBUILD_SHARED_LIBS=ON -DCMAKE_BUILD_TYPE=Release -DGGML_SYCL_F16=OFF
-
 ::  for FP16
-cmake -G "Ninja" .. -DLLAMA_OPENSSL=OFF -DGGML_SYCL=ON -DCMAKE_C_COMPILER=cl -DCMAKE_CXX_COMPILER=icx -DBUILD_SHARED_LIBS=ON -DCMAKE_BUILD_TYPE=Release
+::  faster for long-prompt inference
+cmake -G "MinGW Makefiles" .. -DLLAMA_OPENSSL=OFF -DGGML_SYCL=ON -DCMAKE_CXX_COMPILER=icx -DBUILD_SHARED_LIBS=ON -DCMAKE_BUILD_TYPE=Release -DGGML_SYCL_F16=ON
+
+::  for FP32
+:: cmake -G "Ninja" .. -DLLAMA_OPENSSL=OFF -DGGML_SYCL=ON -DCMAKE_C_COMPILER=cl -DCMAKE_CXX_COMPILER=icx -DBUILD_SHARED_LIBS=ON -DCMAKE_BUILD_TYPE=Release
 if %errorlevel% neq 0 goto ERROR
 
 ::  build all binary

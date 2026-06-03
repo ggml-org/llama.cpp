@@ -291,10 +291,10 @@ or
 source /opt/intel/oneapi/setvars.sh
 
 # Option 1: Use FP16 (recommended for better performance in most cases)
-cmake -B build -DGGML_SYCL=ON -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx
+cmake -B build -DGGML_SYCL=ON -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx -DGGML_SYCL_F16=ON
 
 # Option 2: Use FP32
-cmake -B build -DGGML_SYCL=ON -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx -DGGML_SYCL_F16=OFF
+cmake -B build -DGGML_SYCL=ON -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx
 
 # build all binary
 cmake --build build --config Release -j -v
@@ -508,10 +508,10 @@ On the oneAPI command line window, step into the llama.cpp main directory and ru
 @call "C:\Program Files (x86)\Intel\oneAPI\setvars.bat" intel64 --force
 
 # Option 1: Use FP16 (recommended for better performance in most cases)
-cmake -B build -G "Ninja" -DGGML_SYCL=ON -DCMAKE_C_COMPILER=cl -DCMAKE_CXX_COMPILER=icx  -DCMAKE_BUILD_TYPE=Release
+cmake -B build -G "Ninja" -DGGML_SYCL=ON -DCMAKE_C_COMPILER=cl -DCMAKE_CXX_COMPILER=icx -DCMAKE_BUILD_TYPE=Release -DGGML_SYCL_F16=ON
 
 # Option 2: Or FP32
-cmake -B build -G "Ninja" -DGGML_SYCL=ON -DCMAKE_C_COMPILER=cl -DCMAKE_CXX_COMPILER=icx  -DCMAKE_BUILD_TYPE=Release -DGGML_SYCL_F16=OFF
+cmake -B build -G "Ninja" -DGGML_SYCL=ON -DCMAKE_C_COMPILER=cl -DCMAKE_CXX_COMPILER=icx -DCMAKE_BUILD_TYPE=Release
 
 cmake --build build --config Release -j
 ```
@@ -519,10 +519,10 @@ cmake --build build --config Release -j
 Or, use CMake presets to build:
 
 ```sh
-cmake --preset x64-windows-sycl-release
+cmake -DGGML_SYCL_F16=ON --preset x64-windows-sycl-release
 cmake --build build-x64-windows-sycl-release -j --target llama-completion
 
-cmake -DGGML_SYCL_F16=OFF --preset x64-windows-sycl-release
+cmake --preset x64-windows-sycl-release
 cmake --build build-x64-windows-sycl-release -j --target llama-completion
 
 cmake --preset x64-windows-sycl-debug
@@ -723,7 +723,7 @@ use 1 SYCL GPUs: [0] with Max compute units:512
 | GGML_SYCL          | ON (mandatory)                        | Enable build with SYCL code path.           |
 | GGML_SYCL_TARGET   | INTEL *(default)*                     | Set the SYCL target device type.            |
 | GGML_SYCL_DEVICE_ARCH | Optional                           | Set the SYCL device architecture. Setting the device architecture can improve the performance. See the table [--offload-arch](https://github.com/intel/llvm/blob/sycl/sycl/doc/design/OffloadDesign.md#--offload-arch) for a list of valid architectures. |
-| GGML_SYCL_F16      | ON *(default)* \|OFF *(optional)*     | Enable FP16 build with SYCL code path. (1.) |
+| GGML_SYCL_F16      | OFF *(default)* \|ON *(optional)*     | Enable FP16 build with SYCL code path. (1.) |
 | GGML_SYCL_GRAPH    | OFF *(default)* \|ON *(Optional)*     | Enable build with [SYCL Graph extension](https://github.com/intel/llvm/blob/sycl/sycl/doc/extensions/experimental/sycl_ext_oneapi_graph.asciidoc). |
 | GGML_SYCL_DNN      | ON *(default)* \|OFF *(Optional)*     | Enable build with oneDNN.                   |
 | GGML_SYCL_HOST_MEM_FALLBACK | ON *(default)* \|OFF *(Optional)* | Allow host memory fallback when device memory is full during quantized weight reorder. Enables inference to continue at reduced speed (reading over PCIe) instead of failing. Requires Linux kernel 6.8+. |
