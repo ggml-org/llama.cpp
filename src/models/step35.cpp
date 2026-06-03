@@ -294,7 +294,7 @@ llama_model_step35::graph::graph(const llama_model & model, const llm_graph_para
             cb(cur, "attn_proj", il);
         }
 
-        if (il == n_transformer_layers - 1 && inp_out_ids && cparams.embeddings_pre_norm_masked) {
+        if (il == n_transformer_layers - 1 && inp_out_ids && cparams.embeddings_nextn_masked) {
             cur   = ggml_get_rows(ctx0, cur, inp_out_ids);
             inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
         }
@@ -353,10 +353,10 @@ llama_model_step35::graph::graph(const llama_model & model, const llm_graph_para
 
     cur = inpL;
 
-    cb(cur, "h_pre_norm", -1);
-    res->t_h_pre_norm = cur;
+    cb(cur, "h_nextn", -1);
+    res->t_h_nextn = cur;
 
-    if (!cparams.embeddings_pre_norm_masked && inp_out_ids) {
+    if (!cparams.embeddings_nextn_masked && inp_out_ids) {
         cur = ggml_get_rows(ctx0, cur, inp_out_ids);
     }
 
@@ -541,8 +541,8 @@ llama_model_step35::graph_mtp::graph_mtp(const llama_model & model, const llm_gr
     cb(cur, "mtp_post_ffn", il);
 
     // Pre-norm hidden state: used by the AR draft loop to seed the next MTP step.
-    cb(cur, "h_pre_norm", -1);
-    res->t_h_pre_norm = cur;
+    cb(cur, "h_nextn", -1);
+    res->t_h_nextn = cur;
 
     ggml_tensor * head_norm_w = layer.nextn.shared_head_norm
             ? layer.nextn.shared_head_norm
