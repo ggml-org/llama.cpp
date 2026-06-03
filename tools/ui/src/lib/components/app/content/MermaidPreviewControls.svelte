@@ -26,7 +26,9 @@
 	}
 </script>
 
-<div class="mermaid-preview-controls absolute bottom-8 flex shrink-0 items-center justify-center p-3">
+<div
+	class="mermaid-preview-controls absolute bottom-8 flex shrink-0 items-center justify-center p-3"
+>
 	<div class="mermaid-preview-controls-inner flex items-center gap-1 rounded-lg bg-muted p-1">
 		<button
 			class="mermaid-preview-btn flex h-8 w-8 cursor-pointer items-center justify-center rounded-md border-0 bg-transparent text-foreground transition-colors hover:bg-muted-foreground/15 active:bg-muted-foreground/25"

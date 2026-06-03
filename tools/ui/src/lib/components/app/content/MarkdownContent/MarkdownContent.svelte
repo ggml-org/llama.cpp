@@ -580,13 +580,7 @@
 
 	/**
 	 * Renders mermaid diagrams that haven't been rendered yet.
-	 * Called after each markdown content update.
-	 */
-	/**
-	 * Renders mermaid diagrams that haven't been rendered yet.
-	 * Called after each markdown content update.
-	 * Uses a rendering guard to prevent concurrent renders during streaming updates.
-	 * Reads mode.current before await to ensure reactive tracking.
+	 * Uses a rendering guard to prevent concurrent renders during streaming.
 	 */
 	async function renderMermaidDiagrams() {
 		// Prevent concurrent renders during streaming updates
