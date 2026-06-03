@@ -12,6 +12,7 @@
 // the prompt is not yet used.
 
 #include "arg.h"
+#include "chat.h"
 #include "common.h"
 #include "llama.h"
 #include "log.h"
@@ -35,6 +36,18 @@ static constexpr int   STABILITY_THRESHOLD    = 1;      // StableAndConfident.st
 static int env_int(const char * name, int def) {
     const char * v = getenv(name);
     return v ? atoi(v) : def;
+}
+
+// apply the model's chat template to the user prompt (this is a chat-trained model)
+static std::string format_chat(llama_model * model, const std::string & prompt) {
+    auto tmpls = common_chat_templates_init(model, "");
+    common_chat_templates_inputs inputs;
+    common_chat_msg user;
+    user.role = "user";
+    user.content = prompt;
+    inputs.messages.push_back(user);
+    inputs.add_generation_prompt = true;
+    return common_chat_templates_apply(tmpls.get(), inputs).prompt;
 }
 
 int main(int argc, char ** argv) {
@@ -71,9 +84,12 @@ int main(int argc, char ** argv) {
     const int           n_vocab = llama_vocab_n_tokens(vocab);
 
     // tokenize the prompt (causal prefix). The canvas is appended after it.
+    // this is a chat-trained model, so apply its chat template (turn/channel tokens).
     std::vector<llama_token> prompt_tokens;
     if (!params.prompt.empty()) {
-        prompt_tokens = common_tokenize(vocab, params.prompt, /*add_special*/ true, /*parse_special*/ true);
+        const std::string formatted = format_chat(model, params.prompt);
+        LOG_INF("formatted prompt: %s\n", formatted.c_str());
+        prompt_tokens = common_tokenize(vocab, formatted, /*add_special*/ false, /*parse_special*/ true);
     }
     const int n_prompt = (int) prompt_tokens.size();
     const int n_seq    = n_prompt + canvas_length; // [prompt ; canvas]
