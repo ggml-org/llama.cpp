@@ -162,3 +162,6 @@ export type {
 
 // Tools types
 export type { ToolEntry, ToolGroup } from './tools';
+
+// Reasoning
+export type { ReasoningEffortLevel } from './reasoning';

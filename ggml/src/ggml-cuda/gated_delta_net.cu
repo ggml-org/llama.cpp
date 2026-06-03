@@ -43,7 +43,6 @@ gated_delta_net_cuda(const float * q,
     // output state layout (per-slot D * n_seqs) — same per-(seq,head) offset as before.
     const int64_t state_in_offset      = sequence * K * H * S_v * S_v + h_idx * S_v * S_v;
     const int64_t state_out_offset     = (sequence * H + h_idx) * S_v * S_v;
-    const int64_t state_size_per_token = S_v * S_v * H * n_seqs; // per-slot stride in output
     state += state_out_offset;
     curr_state += state_in_offset + col * S_v;
     attn_data += (sequence * n_tokens * H + h_idx) * S_v;
@@ -60,10 +59,6 @@ gated_delta_net_cuda(const float * q,
         const int i = r * warp_size + lane;
         s_shard[r]  = curr_state[i];
     }
-
-    // slot mapping: target_slot = t - shift. When n_tokens < K only the last n_tokens slots
-    // are written; earlier slots are left untouched (caller-owned).
-    const int shift = (int) n_tokens - K;
 
     for (int t = 0; t < n_tokens; t++) {
         const float * q_t = q + iq3 * sq3 + t * sq2 + iq1 * sq1;
@@ -148,6 +143,11 @@ gated_delta_net_cuda(const float * q,
         attn_data += S_v * H;
 
         if constexpr (keep_rs_t) {
+            // slot mapping: target_slot = t - shift. When n_tokens < K only the last n_tokens slots
+            // are written; earlier slots are left untouched (caller-owned).
+            const int shift = (int) n_tokens - K;
+
+            const int64_t state_size_per_token = S_v * S_v * H * n_seqs; // per-slot stride in output
             const int target_slot = t - shift;
             if (target_slot >= 0 && target_slot < K) {
                 float * curr_state = (dst + attn_score_elems) + target_slot * state_size_per_token + state_out_offset;
