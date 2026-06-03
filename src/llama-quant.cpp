@@ -451,8 +451,11 @@ static ggml_type llama_tensor_get_type_impl(quantize_state_impl & qs, ggml_type 
             }
             else if (ftype == LLAMA_FTYPE_MOSTLY_IQ2_XXS || ftype == LLAMA_FTYPE_MOSTLY_IQ2_XS || ftype == LLAMA_FTYPE_MOSTLY_IQ3_XXS ||
                      ftype == LLAMA_FTYPE_MOSTLY_IQ1_S   || ftype == LLAMA_FTYPE_MOSTLY_IQ2_S  || ftype == LLAMA_FTYPE_MOSTLY_IQ2_M   ||
-                     ftype == LLAMA_FTYPE_MOSTLY_IQ1_M || ftype == LLAMA_FTYPE_MOSTLY_AKQ_G2Q3) {
+                     ftype == LLAMA_FTYPE_MOSTLY_IQ1_M) {
                 new_type = GGML_TYPE_Q5_K;
+            }
+            else if (ftype == LLAMA_FTYPE_MOSTLY_AKQ_G2Q3) {
+                new_type = GGML_TYPE_Q6_K
             }
             else if (ftype == LLAMA_FTYPE_MOSTLY_AKQ_G2Q6) {
                 new_type = GGML_TYPE_Q8_K;
@@ -487,7 +490,7 @@ static ggml_type llama_tensor_get_type_impl(quantize_state_impl & qs, ggml_type 
                 new_type = GGML_TYPE_Q4_K;
             }
             else if (ftype == LLAMA_FTYPE_MOSTLY_AKQ_G2Q3) {
-                new_type = GGML_TYPE_IQ4_NL;
+                new_type = GGML_TYPE_Q6_K;
             }
             else if (ftype == LLAMA_FTYPE_MOSTLY_AKQ_G2Q6) {
                 new_type = GGML_TYPE_Q6_K;
@@ -541,7 +544,7 @@ static ggml_type llama_tensor_get_type_impl(quantize_state_impl & qs, ggml_type 
         else if ((ftype == LLAMA_FTYPE_MOSTLY_IQ4_NL || ftype == LLAMA_FTYPE_MOSTLY_IQ4_XS) && qs.model.hparams.n_gqa() >= 4) {
             new_type = GGML_TYPE_Q5_K;
         }
-        else if (ftype == LLAMA_FTYPE_MOSTLY_AKQ_G2Q3) new_type = GGML_TYPE_IQ4_XS;
+        else if (ftype == LLAMA_FTYPE_MOSTLY_AKQ_G2Q3) new_type = qs.model.hparams.n_gqa() >= 4 ? GGML_TYPE_Q4_K : !qs.has_imatrix ? GGML_TYPE_IQ3_S : GGML_TYPE_IQ2_S;
         else if (ftype == LLAMA_FTYPE_MOSTLY_AKQ_G2Q6) new_type = GGML_TYPE_Q6_K;
         else if ((ftype == LLAMA_FTYPE_MOSTLY_Q4_K_M || ftype == LLAMA_FTYPE_MOSTLY_Q5_K_M) &&
                 use_more_bits(qs.i_attention_wv, qs.n_attention_wv)) new_type = GGML_TYPE_Q6_K;
@@ -571,7 +574,7 @@ static ggml_type llama_tensor_get_type_impl(quantize_state_impl & qs, ggml_type 
             new_type = GGML_TYPE_IQ2_S;
         }
         else if (ftype == LLAMA_FTYPE_MOSTLY_AKQ_G2Q3) {
-            new_type = GGML_TYPE_IQ4_NL;
+            new_type = GGML_TYPE_IQ2_S;
         }
         else if (ftype == LLAMA_FTYPE_MOSTLY_AKQ_G2Q6) {
             new_type = GGML_TYPE_Q6_K;
@@ -581,7 +584,7 @@ static ggml_type llama_tensor_get_type_impl(quantize_state_impl & qs, ggml_type 
             new_type = GGML_TYPE_IQ3_XXS;
         }
         else if (ftype == LLAMA_FTYPE_MOSTLY_AKQ_G2Q3) {
-            new_type = GGML_TYPE_IQ4_XS;
+            new_type = GGML_TYPE_IQ2_S;
         }
         else if (ftype == LLAMA_FTYPE_MOSTLY_AKQ_G2Q6) {
             new_type = GGML_TYPE_Q8_K;
@@ -634,7 +637,7 @@ static ggml_type llama_tensor_get_type_impl(quantize_state_impl & qs, ggml_type 
             new_type = ftype == LLAMA_FTYPE_MOSTLY_Q4_0 ? GGML_TYPE_Q4_1 : GGML_TYPE_Q5_1;
         }
         else if (ftype == LLAMA_FTYPE_MOSTLY_AKQ_G2Q3) {
-            new_type = GGML_TYPE_IQ3_S;
+            new_type = GGML_TYPE_IQ4_XS;
         }
         else if (ftype == LLAMA_FTYPE_MOSTLY_AKQ_G2Q6) {
             new_type = GGML_TYPE_Q6_K;
@@ -651,10 +654,10 @@ static ggml_type llama_tensor_get_type_impl(quantize_state_impl & qs, ggml_type 
                 }
             } else {
                 if      (ftype == LLAMA_FTYPE_MOSTLY_Q2_K   ) new_type = GGML_TYPE_Q3_K;
-                else if (ftype == LLAMA_FTYPE_MOSTLY_IQ3_XXS) new_type = GGML_TYPE_IQ3_S;
+                else if (ftype == LLAMA_FTYPE_MOSTLY_IQ3_XXS || ftype == LLAMA_FTYPE_MOSTLY_AKQ_G2Q3) new_type = GGML_TYPE_IQ3_S;
                 else if (ftype == LLAMA_FTYPE_MOSTLY_Q3_K_M ) new_type = GGML_TYPE_Q4_K;
                 else if (ftype == LLAMA_FTYPE_MOSTLY_Q3_K_L ) new_type = GGML_TYPE_Q5_K;
-                else if (ftype == LLAMA_FTYPE_MOSTLY_IQ3_M || ftype == LLAMA_FTYPE_MOSTLY_AKQ_G2Q3) new_type = GGML_TYPE_IQ4_XS;
+                else if (ftype == LLAMA_FTYPE_MOSTLY_IQ3_M) new_type = GGML_TYPE_IQ4_XS;
                 else if (ftype == LLAMA_FTYPE_MOSTLY_AKQ_G2Q6) new_type = GGML_TYPE_Q8_K;
             }
         } else {
@@ -665,7 +668,6 @@ static ggml_type llama_tensor_get_type_impl(quantize_state_impl & qs, ggml_type 
         if (ftype == LLAMA_FTYPE_MOSTLY_Q3_K_M || ftype == LLAMA_FTYPE_MOSTLY_Q3_K_L || ftype == LLAMA_FTYPE_MOSTLY_IQ3_M) {
             new_type = GGML_TYPE_Q4_K;
         }
-        else if (ftype == LLAMA_FTYPE_MOSTLY_AKQ_G2Q3) new_type = GGML_TYPE_IQ4_NL;
         else if (ftype == LLAMA_FTYPE_MOSTLY_Q4_K_M) new_type = GGML_TYPE_Q5_K;
         else if (ftype == LLAMA_FTYPE_MOSTLY_Q5_K_M) new_type = GGML_TYPE_Q6_K;
     }
@@ -676,7 +678,7 @@ static ggml_type llama_tensor_get_type_impl(quantize_state_impl & qs, ggml_type 
             new_type = GGML_TYPE_IQ3_XXS;
         }
         else if (ftype == LLAMA_FTYPE_MOSTLY_AKQ_G2Q3) {
-            new_type = GGML_TYPE_IQ4_NL;
+            new_type = GGML_TYPE_IQ3_XXS;
         }
         else if (ftype == LLAMA_FTYPE_MOSTLY_AKQ_G2Q6) {
             new_type = GGML_TYPE_Q5_K;
@@ -690,7 +692,7 @@ static ggml_type llama_tensor_get_type_impl(quantize_state_impl & qs, ggml_type 
             new_type = GGML_TYPE_IQ3_XXS;
         }
         else if (ftype == LLAMA_FTYPE_MOSTLY_AKQ_G2Q3 && (i_layer >= n_layer/8 && i_layer < 7*n_layer/8)) {
-            new_type = GGML_TYPE_IQ3_XXS;
+            new_type = GGML_TYPE_IQ2_S;
         }
         else if (ftype == LLAMA_FTYPE_MOSTLY_AKQ_G2Q6 && (i_layer >= n_layer/8 && i_layer < 7*n_layer/8)) {
             new_type = GGML_TYPE_IQ4_NL;
@@ -847,7 +849,7 @@ ggml_type llama_ftype_get_default_type(llama_ftype ftype) {
 
         case LLAMA_FTYPE_MOSTLY_MXFP4_MOE: return GGML_TYPE_MXFP4;
 
-        case LLAMA_FTYPE_MOSTLY_AKQ_G2Q3: return GGML_TYPE_IQ3_S;
+        case LLAMA_FTYPE_MOSTLY_AKQ_G2Q3: return GGML_TYPE_IQ3_XXS;
         case LLAMA_FTYPE_MOSTLY_AKQ_G2Q6: return GGML_TYPE_Q6_K;
 
         // K-quants
