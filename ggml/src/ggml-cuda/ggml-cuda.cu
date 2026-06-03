@@ -3591,12 +3591,44 @@ static bool ggml_cuda_can_fuse_parsed_subgraph(const struct ggml_cgraph * cgraph
         return false;
     }
 
-    std::vector<ggml_op> ops;
-    ops.reserve(count);
-    for (int j = 0; j < count; ++j) {
-        ops.push_back(cgraph->nodes[node_idx + j]->op);
+    const auto is_output = [&](int idx) {
+        for (int j = 0; j < out_count; ++j) {
+            if (out_nodes[j] == idx) {
+                return true;
+            }
+        }
+        return false;
+    };
+
+    // Parsed MM lanes may contain RESHAPE views of external scale tensors. The
+    // parser validates those scale tensors, so only require closure by use count.
+    for (int j = node_idx; j < node_idx + count; ++j) {
+        const ggml_tensor * node = cgraph->nodes[j];
+        if ((node->flags & GGML_TENSOR_FLAG_COMPUTE) == 0) {
+            return false;
+        }
+        if (is_output(j)) {
+            continue;
+        }
+        if (node->flags & GGML_TENSOR_FLAG_OUTPUT) {
+            return false;
+        }
+
+        int subgraph_uses = 0;
+        for (int k = j + 1; k < node_idx + count; ++k) {
+            const ggml_tensor * other = cgraph->nodes[k];
+            for (int src_idx = 0; src_idx < GGML_MAX_SRC; ++src_idx) {
+                if (other->src[src_idx] == node) {
+                    subgraph_uses++;
+                }
+            }
+        }
+        if (subgraph_uses != ggml_node_get_use_count(cgraph, j)) {
+            return false;
+        }
     }
-    return ggml_cuda_can_fuse_subgraph(cgraph, node_idx, count, ops.data(), out_nodes, out_count, is_topk_moe);
+
+    return ggml_cuda_check_fusion_memory_ranges(cgraph, node_idx, count, out_nodes, out_count, is_topk_moe);
 }
 
 static bool ggml_cuda_can_fuse(const struct ggml_cgraph *                cgraph,
