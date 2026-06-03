@@ -18,6 +18,8 @@
 #  include <unistd.h>
 #endif
 #include <cstdlib>
+#include <cerrno>
+#include <climits>
 #include <mutex>
 #include <optional>
 
@@ -114,7 +116,7 @@ static_assert(sizeof(rdma_caps) == RPC_CONN_CAPS_SIZE, "rdma_caps must match con
 #endif // GGML_RPC_RDMA
 
 struct socket_t::impl {
-    impl(sockfd_t fd) : use_rdma(false), fd(fd) {}
+    impl(sockfd_t fd) : use_rdma(false), fd(fd), skip_tensor_hash(false) {}
     ~impl();
     bool send_data(const void * data, size_t size);
     bool recv_data(void * data, size_t size);
@@ -135,6 +137,7 @@ struct socket_t::impl {
 #endif // GGML_RPC_RDMA
     bool     use_rdma;
     sockfd_t fd;
+    bool     skip_tensor_hash;
 };
 
 socket_t::impl::~impl() {
@@ -564,6 +567,14 @@ void socket_t::update_caps(const uint8_t * remote_caps) {
     return pimpl->update_caps(remote_caps);
 }
 
+void socket_t::set_skip_tensor_hash(bool value) {
+    pimpl->skip_tensor_hash = value;
+}
+
+bool socket_t::skip_tensor_hash() const {
+    return pimpl->skip_tensor_hash;
+}
+
 static bool is_valid_fd(sockfd_t sockfd) {
 #ifdef _WIN32
     return sockfd != INVALID_SOCKET;
@@ -579,6 +590,46 @@ static bool set_no_delay(sockfd_t sockfd) {
     return ret == 0;
 }
 
+static bool set_tcp_buffer_size(sockfd_t sockfd, int option, int size) {
+    return setsockopt(sockfd, SOL_SOCKET, option, (char *) &size, sizeof(size)) == 0;
+}
+
+static int get_tcp_buffer_size() {
+    const char * env = std::getenv("GGML_RPC_TCP_BUFFER_SIZE");
+    if (env == nullptr || env[0] == '\0') {
+        return 0;
+    }
+
+    errno = 0;
+    char * end = nullptr;
+    long value = std::strtol(env, &end, 10);
+    if (errno != 0 || end == env || *end != '\0' || value <= 0 || value > INT_MAX) {
+        GGML_LOG_WARN("Ignoring invalid GGML_RPC_TCP_BUFFER_SIZE value: %s\n", env);
+        return 0;
+    }
+
+    return (int) value;
+}
+
+static bool configure_tcp_socket(sockfd_t sockfd) {
+    if (!set_no_delay(sockfd)) {
+        GGML_LOG_ERROR("Failed to set TCP_NODELAY\n");
+        return false;
+    }
+
+    int buffer_size = get_tcp_buffer_size();
+    if (buffer_size > 0) {
+        if (!set_tcp_buffer_size(sockfd, SO_SNDBUF, buffer_size)) {
+            GGML_LOG_WARN("Failed to set SO_SNDBUF=%d\n", buffer_size);
+        }
+        if (!set_tcp_buffer_size(sockfd, SO_RCVBUF, buffer_size)) {
+            GGML_LOG_WARN("Failed to set SO_RCVBUF=%d\n", buffer_size);
+        }
+    }
+
+    return true;
+}
+
 static bool set_reuse_addr(sockfd_t sockfd) {
     int flag = 1;
     int ret = setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, (char *)&flag, sizeof(int));
@@ -590,8 +641,7 @@ socket_ptr socket_t::accept() {
     if (!is_valid_fd(client_socket_fd)) {
         return nullptr;
     }
-    if (!set_no_delay(client_socket_fd)) {
-        GGML_LOG_ERROR("Failed to set TCP_NODELAY\n");
+    if (!configure_tcp_socket(client_socket_fd)) {
         return nullptr;
     }
     return socket_ptr(new socket_t(std::make_unique<impl>(client_socket_fd)));
@@ -629,8 +679,7 @@ socket_ptr socket_t::connect(const char * host, int port) {
     if (!is_valid_fd(sockfd)) {
         return nullptr;
     }
-    if (!set_no_delay(sockfd)) {
-        GGML_LOG_ERROR("Failed to set TCP_NODELAY\n");
+    if (!configure_tcp_socket(sockfd)) {
         return nullptr;
     }
     struct sockaddr_in addr;

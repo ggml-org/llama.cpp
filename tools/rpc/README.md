@@ -101,10 +101,45 @@ On Linux systems with RoCEv2-capable NICs (e.g. Mellanox ConnectX), the RPC back
 
 RDMA is enabled by default when `libibverbs` is found at build time.
 
+### TCP buffer tuning
+
+For high-latency or overlay-network links, you can request larger TCP send and
+receive buffers on both the RPC client and server:
+
+```bash
+export GGML_RPC_TCP_BUFFER_SIZE=4194304
+```
+
+The value is in bytes and is applied to accepted client sockets and outbound RPC
+connections. Leave it unset to use the operating-system defaults. Larger buffers
+can improve bulk model/tensor transfer on some networks, but they should be
+benchmarked with your model, split, and network because they do not remove
+per-token synchronization costs.
+
+### Benchmarking changes
+
+The `tools/rpc/bench_rpc_compare.py` helper can compare two local build trees
+with the same model and RPC settings:
+
+```bash
+python3 tools/rpc/bench_rpc_compare.py \
+  --base-bin /path/to/base/build/bin \
+  --patch-bin /path/to/patch/build/bin \
+  --model /path/to/model.gguf \
+  --host 127.0.0.1 \
+  --server-device CUDA0 \
+  --device RPC0
+```
+
+This helper starts both RPC servers locally. Use it to isolate protocol overhead
+before drawing deployment conclusions, then repeat the same `llama-bench`
+parameters against manually started remote `rpc-server` processes on the real
+network. Loopback runs do not model overlay routing, retransmits, slow remote
+disks, or accelerator imbalance.
+
 ### Troubleshooting
 
 Use the `GGML_RPC_DEBUG` environment variable to enable debug messages from `rpc-server`:
 ```bash
 $ GGML_RPC_DEBUG=1 bin/rpc-server
 ```
-

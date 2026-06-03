@@ -83,11 +83,15 @@ struct rpc_msg_hello_req {
     uint8_t conn_caps[RPC_CONN_CAPS_SIZE];
 };
 
+enum rpc_hello_flags : uint8_t {
+    RPC_HELLO_FLAG_NO_CACHE = 1 << 0,
+};
+
 struct rpc_msg_hello_rsp {
     uint8_t major;
     uint8_t minor;
     uint8_t patch;
-    uint8_t padding;
+    uint8_t flags;
     uint8_t conn_caps[RPC_CONN_CAPS_SIZE];
 };
 
@@ -241,8 +245,22 @@ static uint64_t fnv_hash(const uint8_t * data, size_t len) {
     return hash;
 }
 
+static constexpr size_t RPC_WIRE_SIZE_SIZE   = sizeof(uint64_t);
+static constexpr size_t RPC_WIRE_CMD_SIZE    = sizeof(uint8_t);
+static constexpr size_t RPC_WIRE_HEADER_SIZE = RPC_WIRE_CMD_SIZE + RPC_WIRE_SIZE_SIZE;
+static constexpr size_t RPC_COALESCE_MAX     = 4096;
+
 static bool send_msg(socket_ptr sock, const void * msg, size_t msg_size) {
-    if (!sock->send_data(&msg_size, sizeof(msg_size))) {
+    uint64_t wire_size = msg_size;
+    if (msg_size <= RPC_COALESCE_MAX) {
+        std::array<uint8_t, RPC_WIRE_SIZE_SIZE + RPC_COALESCE_MAX> frame;
+        memcpy(frame.data(), &wire_size, RPC_WIRE_SIZE_SIZE);
+        if (msg_size > 0) {
+            memcpy(frame.data() + RPC_WIRE_SIZE_SIZE, msg, msg_size);
+        }
+        return sock->send_data(frame.data(), RPC_WIRE_SIZE_SIZE + msg_size);
+    }
+    if (!sock->send_data(&wire_size, RPC_WIRE_SIZE_SIZE)) {
         return false;
     }
     return sock->send_data(msg, msg_size);
@@ -290,17 +308,20 @@ static bool parse_endpoint(const std::string & endpoint, std::string & host, int
 // RPC request : | rpc_cmd (1 byte) | request_size (8 bytes) | request_data (request_size bytes) |
 // No response
 static bool send_rpc_cmd(socket_ptr sock, enum rpc_cmd cmd, const void * input, size_t input_size) {
-    uint8_t cmd_byte = cmd;
-    if (!sock->send_data(&cmd_byte, sizeof(cmd_byte))) {
+    std::array<uint8_t, RPC_WIRE_HEADER_SIZE + RPC_COALESCE_MAX> frame;
+    frame[0] = static_cast<uint8_t>(cmd);
+    uint64_t wire_input_size = input_size;
+    memcpy(frame.data() + RPC_WIRE_CMD_SIZE, &wire_input_size, RPC_WIRE_SIZE_SIZE);
+    if (input_size <= RPC_COALESCE_MAX) {
+        if (input_size > 0) {
+            memcpy(frame.data() + RPC_WIRE_HEADER_SIZE, input, input_size);
+        }
+        return sock->send_data(frame.data(), RPC_WIRE_HEADER_SIZE + input_size);
+    }
+    if (!sock->send_data(frame.data(), RPC_WIRE_HEADER_SIZE)) {
         return false;
     }
-    if (!sock->send_data(&input_size, sizeof(input_size))) {
-        return false;
-    }
-    if (!sock->send_data(input, input_size)) {
-        return false;
-    }
-    return true;
+    return sock->send_data(input, input_size);
 }
 
 // RPC request : | rpc_cmd (1 byte) | request_size (8 bytes) | request_data (request_size bytes) |
@@ -343,6 +364,7 @@ static bool negotiate_hello(const std::shared_ptr<socket_t> & sock) {
     }
 
     sock->update_caps(response.conn_caps);
+    sock->set_skip_tensor_hash((response.flags & RPC_HELLO_FLAG_NO_CACHE) != 0);
     return true;
 }
 
@@ -465,7 +487,7 @@ static enum ggml_status ggml_backend_rpc_buffer_init_tensor(ggml_backend_buffer_
 static void ggml_backend_rpc_buffer_set_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor, const void * data, size_t offset, size_t size) {
     ggml_backend_rpc_buffer_context * ctx = (ggml_backend_rpc_buffer_context *)buffer->context;
     rpc_tensor rpc_tensor = serialize_tensor(tensor);
-    if (size > HASH_THRESHOLD) {
+    if (size > HASH_THRESHOLD && !ctx->sock->skip_tensor_hash()) {
         rpc_msg_set_tensor_hash_req request;
         request.tensor = rpc_tensor;
         request.offset = offset;
@@ -866,7 +888,11 @@ void rpc_server::hello(rpc_msg_hello_rsp & response) {
     response.major = RPC_PROTO_MAJOR_VERSION;
     response.minor = RPC_PROTO_MINOR_VERSION;
     response.patch = RPC_PROTO_PATCH_VERSION;
-    LOG_DBG("[%s] version: %d.%d.%d\n", __func__, response.major, response.minor, response.patch);
+    if (cache_dir == nullptr) {
+        response.flags |= RPC_HELLO_FLAG_NO_CACHE;
+    }
+    LOG_DBG("[%s] version: %d.%d.%d, flags: 0x%x\n",
+            __func__, response.major, response.minor, response.patch, response.flags);
 }
 
 bool rpc_server::get_alloc_size(const rpc_msg_get_alloc_size_req & request, rpc_msg_get_alloc_size_rsp & response) {
