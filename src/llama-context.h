@@ -123,6 +123,9 @@ struct llama_context {
     // ([n_vocab * n_tokens], row-major). Pass data=nullptr / n_tokens=0 to clear (-> zeros).
     void set_diffusion_self_cond(const float * probs, int64_t n_vocab, int64_t n_tokens);
 
+    // diffusion: length of the causal prompt prefix in the [prompt; canvas] sequence (0 = unconditioned)
+    void set_diffusion_prompt_len(int64_t n_prompt);
+
     void set_adapters_lora(llama_adapter_lora ** adapters, size_t n_adapters, float * scales);
 
     bool adapters_lora_are_same(llama_adapter_lora ** adapters, size_t n_adapters, float * scales);

@@ -1174,6 +1174,10 @@ void llama_context::set_diffusion_self_cond(const float * probs, int64_t n_vocab
     diffusion_cond.n_tokens = n_tokens;
 }
 
+void llama_context::set_diffusion_prompt_len(int64_t n_prompt) {
+    diffusion_cond.n_prompt = n_prompt;
+}
+
 void llama_context::set_causal_attn(bool value) {
     LLAMA_LOG_DEBUG("%s: value = %d\n", __func__, value);
 
@@ -3666,6 +3670,10 @@ void llama_set_causal_attn(llama_context * ctx, bool causal_attn) {
 
 void llama_set_diffusion_self_cond(llama_context * ctx, const float * probs, int64_t n_vocab, int64_t n_tokens) {
     ctx->set_diffusion_self_cond(probs, n_vocab, n_tokens);
+}
+
+void llama_set_diffusion_prompt_len(llama_context * ctx, int64_t n_prompt) {
+    ctx->set_diffusion_prompt_len(n_prompt);
 }
 
 void llama_set_warmup(llama_context * ctx, bool warmup) {

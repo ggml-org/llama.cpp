@@ -990,6 +990,11 @@ extern "C" {
                          int64_t   n_vocab,
                          int64_t   n_tokens);
 
+    // Diffusion prompt conditioning: set the length of the causal prompt prefix in the
+    // [prompt ; canvas] sequence. The prompt tokens attend causally among themselves; the
+    // canvas attends to everything. Pass 0 for unconditioned generation. Used by diffusion_gemma4.
+    LLAMA_API void llama_set_diffusion_prompt_len(struct llama_context * ctx, int64_t n_prompt);
+
     // Set whether the model is in warmup mode or not
     // If true, all model tensors are activated during llama_decode() to load and cache their weights.
     //

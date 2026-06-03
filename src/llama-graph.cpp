@@ -500,6 +500,46 @@ void llm_graph_input_attn_no_cache::set_input(const llama_ubatch * ubatch) {
     }
 }
 
+void llm_graph_input_attn_no_cache_prefix::set_input(const llama_ubatch * ubatch) {
+    const int64_t n_kv     = ubatch->n_tokens;
+    const int64_t n_tokens = ubatch->n_tokens;
+    const int64_t P        = n_prompt; // causal prompt prefix length
+
+    const auto fill_mask = [&](auto * data, int64_t ne) {
+        using T = std::remove_reference_t<decltype(*data)>;
+        std::fill(data, data + ne, llama_cast<T>(-INFINITY));
+
+        for (int64_t i1 = 0; i1 < n_tokens; ++i1) {          // query
+            const llama_seq_id s1 = ubatch->seq_id[i1][0];
+            const uint64_t idst = i1*n_kv;
+            for (int64_t i0 = 0; i0 < n_tokens; ++i0) {      // key
+                if (ubatch->seq_id[i0][0] != s1) {
+                    continue;
+                }
+                bool allow;
+                if (i1 < P) {
+                    // prompt query: causal, prompt keys only (no canvas)
+                    allow = (i0 < P) && (i0 <= i1);
+                } else {
+                    // canvas query: attend to everything (bidirectional + cross to prompt)
+                    allow = true;
+                }
+                if (allow) {
+                    data[idst + i0] = llama_cast<T>(0.0f);
+                }
+            }
+        }
+    };
+
+    GGML_ASSERT(self_kq_mask);
+    GGML_ASSERT(ggml_backend_buffer_is_host(self_kq_mask->buffer));
+    if (self_kq_mask->type == GGML_TYPE_F16) {
+        fill_mask((ggml_fp16_t *) self_kq_mask->data, ggml_nelements(self_kq_mask));
+    } else {
+        fill_mask((float       *) self_kq_mask->data, ggml_nelements(self_kq_mask));
+    }
+}
+
 void llm_graph_input_attn_kv::set_input(const llama_ubatch * ubatch) {
     mctx->set_input_k_idxs(self_k_idxs, ubatch);
     mctx->set_input_v_idxs(self_v_idxs, ubatch);
@@ -2253,6 +2293,22 @@ llm_graph_input_attn_no_cache * llm_graph_context::build_attn_inp_no_cache() con
     }
 
     return (llm_graph_input_attn_no_cache *) res->add_input(std::move(inp));
+}
+
+llm_graph_input_attn_no_cache_prefix * llm_graph_context::build_attn_inp_no_cache_prefix(int64_t n_prompt) const {
+    auto inp = std::make_unique<llm_graph_input_attn_no_cache_prefix>(hparams, cparams, n_prompt);
+
+    const auto type_mask = cparams.flash_attn ? GGML_TYPE_F16 : GGML_TYPE_F32;
+
+    inp->self_kq_mask = ggml_new_tensor_4d(ctx0, type_mask, n_tokens, n_tokens, 1, 1);
+    ggml_set_input(inp->self_kq_mask);
+    inp->self_kq_mask_cnv = inp->self_kq_mask;
+
+    // sliding-window layers reuse the same prefix mask (valid while n_tokens <= sliding_window)
+    inp->self_kq_mask_swa     = inp->self_kq_mask;
+    inp->self_kq_mask_swa_cnv = inp->self_kq_mask;
+
+    return (llm_graph_input_attn_no_cache_prefix *) res->add_input(std::move(inp));
 }
 
 ggml_tensor * llm_graph_context::build_attn(

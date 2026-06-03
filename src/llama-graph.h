@@ -83,6 +83,7 @@ struct llama_cross {
 struct llama_diffusion_cond {
     int64_t n_vocab  = 0;
     int64_t n_tokens = 0;
+    int64_t n_prompt = 0;     // length of the (causal) prompt prefix; 0 = unconditioned
     std::vector<float> probs; // [n_vocab * n_tokens], row-major per token
 };
 
@@ -323,6 +324,24 @@ public:
 
     const llama_hparams hparams;
     const llama_cparams cparams;
+};
+
+// prefix attention mask (no KV cache), used by block-diffusion models over a
+// [prompt(0..n_prompt-1) ; canvas(n_prompt..n_tokens-1)] sequence:
+//   - prompt queries attend causally to the prompt only (no canvas)
+//   - canvas queries attend to all positions (bidirectional + cross to prompt)
+// Valid while n_tokens <= sliding_window (sliding == full); the swa mask reuses the
+// same prefix mask. n_prompt = 0 reduces to a fully-bidirectional mask.
+class llm_graph_input_attn_no_cache_prefix : public llm_graph_input_attn_no_cache {
+public:
+    llm_graph_input_attn_no_cache_prefix(const llama_hparams & hparams, const llama_cparams & cparams, int64_t n_prompt) :
+        llm_graph_input_attn_no_cache(hparams, cparams), n_prompt(n_prompt) {
+    }
+    ~llm_graph_input_attn_no_cache_prefix() = default;
+
+    void set_input(const llama_ubatch * ubatch) override;
+
+    const int64_t n_prompt;
 };
 
 class llm_graph_input_attn_kv : public llm_graph_input_i {
@@ -1005,6 +1024,7 @@ struct llm_graph_context {
                     int   il) const;
 
     llm_graph_input_attn_no_cache * build_attn_inp_no_cache() const;
+    llm_graph_input_attn_no_cache_prefix * build_attn_inp_no_cache_prefix(int64_t n_prompt) const;
 
     ggml_tensor * build_attn(
             llm_graph_input_attn_no_cache * inp,

@@ -54,37 +54,50 @@ llama_model_diffusion_gemma4::graph::graph(const llama_model & model, const llm_
     inpL = ggml_scale(ctx0, inpL, ubatch.token ? sqrtf(n_embd) : 1.0f);
     cb(inpL, "inp_scaled", -1);
 
-    // self-conditioning: sc_input = post_norm(inputs_embeds + sc_mlp(pre_norm(soft_embeds)))
-    // soft_embeds is the previous denoising step's soft-embeddings
-    // (softmax(prev_logits) @ embed * scale), zero on the first step.
-    // TODO(diffusion sampler): the block-diffusion sampler feeds the real soft-embeddings
-    // here each step; until then it is zero, which (since rms_norm(0)=0 -> sc_mlp=0) makes
-    // sc_input == scale-less post-norm of the scaled embeddings (the verified step-0 case).
+    // length of the (causal) prompt prefix; 0 = unconditioned generation
+    const int64_t n_prompt = (diffusion && diffusion->n_prompt > 0) ? diffusion->n_prompt : 0;
+
     const auto & dmodel = static_cast<const llama_model_diffusion_gemma4 &>(model);
+
+    // self-conditioning (decoder/canvas input):
+    //   sc_input = post_norm(scaled_embed + sc_mlp(pre_norm(soft)))
+    // soft = (probs @ token_embd) * sqrt(n_embd); probs are the previous denoising step's
+    // softmax (set by the sampler via llama_set_diffusion_self_cond), zero on the first step.
+    ggml_tensor * sc_input;
     {
-        // soft-embeddings from the previous denoising step's probabilities (set by the
-        // sampler via llama_set_diffusion_self_cond; zero on the first step):
-        //   soft = (probs @ token_embd) * embed_scale
         ggml_tensor * probs   = build_inp_diffusion_self_cond(model.tok_embd->ne[1]); // {n_vocab, n_tokens}
         ggml_tensor * embed_t = ggml_cont(ctx0, ggml_transpose(ctx0, model.tok_embd)); // {n_vocab, n_embd}
         ggml_tensor * soft    = ggml_mul_mat(ctx0, embed_t, probs);                    // {n_embd, n_tokens}
         soft = ggml_scale(ctx0, soft, sqrtf((float) n_embd));
         cb(soft, "self_cond_soft_embd", -1);
-        ggml_tensor * scn  = build_norm(soft, dmodel.self_cond_norm, nullptr, LLM_NORM_RMS, -1);
-        ggml_tensor * sc   = build_ffn(scn,
+        ggml_tensor * scn = build_norm(soft, dmodel.self_cond_norm, nullptr, LLM_NORM_RMS, -1);
+        ggml_tensor * sc  = build_ffn(scn,
                 dmodel.self_cond_up,   nullptr, nullptr,
                 dmodel.self_cond_gate, nullptr, nullptr,
                 dmodel.self_cond_down, nullptr, nullptr,
                 nullptr, LLM_FFN_GELU, LLM_FFN_PAR, -1);
-        inpL = ggml_add(ctx0, inpL, sc);
+        sc_input = ggml_rms_norm(ctx0, ggml_add(ctx0, inpL, sc), hparams.f_norm_rms_eps); // scale-less post_norm
     }
-    inpL = ggml_rms_norm(ctx0, inpL, hparams.f_norm_rms_eps); // scale-less post_norm
-    cb(inpL, "self_cond_input", -1);
+    cb(sc_input, "self_cond_input", -1);
+
+    // prompt rows = raw scaled embeddings (encoder: no self-conditioning / no post-norm);
+    // canvas rows = self-conditioned input. (n_prompt == 0 -> all canvas.)
+    if (n_prompt > 0) {
+        ggml_tensor * prompt_part = ggml_view_2d(ctx0, inpL,     n_embd, n_prompt,            inpL->nb[1],     0);
+        ggml_tensor * canvas_part = ggml_view_2d(ctx0, sc_input, n_embd, n_tokens - n_prompt, sc_input->nb[1], (size_t) n_prompt*sc_input->nb[1]);
+        inpL = ggml_concat(ctx0, ggml_cont(ctx0, prompt_part), ggml_cont(ctx0, canvas_part), 1);
+    } else {
+        inpL = sc_input;
+    }
+    cb(inpL, "decoder_input", -1);
 
     ggml_tensor * inp_pos = build_inp_pos();
 
-    // bidirectional attention, no KV cache
-    auto * inp_attn = build_attn_inp_no_cache();
+    // prefix attention when prompt-conditioned (prompt causal, canvas bidirectional + cross);
+    // fully bidirectional no-cache otherwise
+    llm_graph_input_attn_no_cache * inp_attn = (n_prompt > 0)
+        ? (llm_graph_input_attn_no_cache *) build_attn_inp_no_cache_prefix(n_prompt)
+        : build_attn_inp_no_cache();
 
     ggml_tensor * inp_out_ids = build_inp_out_ids();
 

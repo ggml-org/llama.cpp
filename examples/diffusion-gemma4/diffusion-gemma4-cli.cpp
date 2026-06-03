@@ -67,10 +67,21 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
+    const llama_vocab * vocab   = llama_model_get_vocab(model);
+    const int           n_vocab = llama_vocab_n_tokens(vocab);
+
+    // tokenize the prompt (causal prefix). The canvas is appended after it.
+    std::vector<llama_token> prompt_tokens;
+    if (!params.prompt.empty()) {
+        prompt_tokens = common_tokenize(vocab, params.prompt, /*add_special*/ true, /*parse_special*/ true);
+    }
+    const int n_prompt = (int) prompt_tokens.size();
+    const int n_seq    = n_prompt + canvas_length; // [prompt ; canvas]
+
     llama_context_params ctx_params = llama_context_default_params();
-    ctx_params.n_ctx    = canvas_length;
-    ctx_params.n_batch  = canvas_length;
-    ctx_params.n_ubatch = canvas_length; // whole canvas in one ubatch -> full bidirectional attention
+    ctx_params.n_ctx    = n_seq;
+    ctx_params.n_batch  = n_seq;
+    ctx_params.n_ubatch = n_seq; // whole sequence in one ubatch -> full (prefix) attention
     ctx_params.no_perf  = params.no_perf;
 
     llama_context * ctx = llama_init_from_model(model, ctx_params);
@@ -80,15 +91,10 @@ int main(int argc, char ** argv) {
         return 1;
     }
     llama_set_n_threads(ctx, params.cpuparams.n_threads, params.cpuparams_batch.n_threads);
+    llama_set_diffusion_prompt_len(ctx, n_prompt);
 
-    const llama_vocab * vocab   = llama_model_get_vocab(model);
-    const int           n_vocab = llama_vocab_n_tokens(vocab);
-
-    if (!params.prompt.empty()) {
-        LOG_INF("note: prompt conditioning is not wired yet; running unconditioned generation\n");
-    }
-    LOG_INF("diffusion-gemma4: canvas_length=%d steps=%d entropy_bound=%.3f temp=[%.2f,%.2f]\n",
-            canvas_length, n_steps, entropy_bound, TEMP_MIN, TEMP_MAX);
+    LOG_INF("diffusion-gemma4: prompt=%d canvas=%d steps=%d entropy_bound=%.3f temp=[%.2f,%.2f]\n",
+            n_prompt, canvas_length, n_steps, entropy_bound, TEMP_MIN, TEMP_MAX);
 
     std::mt19937 rng(params.sampling.seed == LLAMA_DEFAULT_SEED ? 1234u : params.sampling.seed);
     std::uniform_int_distribution<int> rand_tok(0, n_vocab - 1);
@@ -98,33 +104,33 @@ int main(int argc, char ** argv) {
     std::vector<llama_token> canvas(canvas_length);
     for (auto & t : canvas) t = rand_tok(rng);
 
-    llama_batch batch = llama_batch_init(canvas_length, 0, 1);
+    llama_batch batch = llama_batch_init(n_seq, 0, 1);
 
     std::vector<llama_token> argmax_canvas(canvas_length, -1);
     std::vector<llama_token> prev_argmax(canvas_length, -1);
     std::vector<llama_token> accepted = canvas;
 
-    // self-conditioning buffer: softmax(processed_logits) of the previous step, fed to the
-    // next decode. Cleared for the first step (-> zero self-conditioning).
-    std::vector<float> self_cond_buf((size_t) n_vocab * canvas_length, 0.0f);
-    llama_set_diffusion_self_cond(ctx, nullptr, 0, 0);
+    // self-conditioning buffer over the full [prompt ; canvas] sequence: softmax(processed_logits)
+    // of the previous step in the canvas columns (prompt columns stay zero). Fed to the next decode.
+    std::vector<float> self_cond_buf((size_t) n_vocab * n_seq, 0.0f);
+    llama_set_diffusion_self_cond(ctx, nullptr, 0, 0); // first step: zero self-conditioning
 
     // 2. denoising loop: cur_step = n_steps .. 1
     for (int cur_step = n_steps; cur_step >= 1; --cur_step) {
-        // 2a. decode the whole canvas (logits for every position)
-        batch.n_tokens = canvas_length;
-        for (int i = 0; i < canvas_length; ++i) {
-            batch.token[i]     = canvas[i];
+        // 2a. decode [prompt ; canvas]; request logits for the canvas positions only
+        batch.n_tokens = n_seq;
+        for (int i = 0; i < n_seq; ++i) {
+            batch.token[i]     = (i < n_prompt) ? prompt_tokens[i] : canvas[i - n_prompt];
             batch.pos[i]       = i;
             batch.n_seq_id[i]  = 1;
             batch.seq_id[i][0] = 0;
-            batch.logits[i]    = 1;
+            batch.logits[i]    = (i >= n_prompt) ? 1 : 0;
         }
         if (llama_decode(ctx, batch) != 0) {
             LOG_ERR("error: llama_decode failed at step %d\n", cur_step);
             break;
         }
-        const float * logits = llama_get_logits(ctx); // [canvas_length * n_vocab], row i = position i
+        const float * logits = llama_get_logits(ctx); // [canvas_length * n_vocab], row j = canvas pos j
 
         // 2b. linear temperature schedule: t = t_min + (t_max - t_min) * (cur_step / n_steps)
         const float temp = TEMP_MIN + (TEMP_MAX - TEMP_MIN) * ((float) cur_step / (float) n_steps);
@@ -133,8 +139,8 @@ int main(int argc, char ** argv) {
         std::vector<llama_token> sampled(canvas_length);
         std::vector<float> probs(n_vocab);
 
-        for (int i = 0; i < canvas_length; ++i) {
-            const float * lg = logits + (size_t) i * n_vocab;
+        for (int j = 0; j < canvas_length; ++j) {
+            const float * lg = logits + (size_t) j * n_vocab;
             // softmax of processed (temperature-scaled) logits
             float maxl = -INFINITY;
             int   amax = 0;
@@ -154,7 +160,7 @@ int main(int argc, char ** argv) {
             float cum = 0.0f;
             int   tok = amax;
             bool  picked = false;
-            float * sc = self_cond_buf.data() + (size_t) i * n_vocab;
+            float * sc = self_cond_buf.data() + (size_t) (n_prompt + j) * n_vocab; // canvas column
             for (int v = 0; v < n_vocab; ++v) {
                 const float p = probs[v] / sum;
                 sc[v] = p;                              // store normalized softmax for self-conditioning
@@ -162,13 +168,13 @@ int main(int argc, char ** argv) {
                 cum += probs[v];
                 if (!picked && cum >= r) { tok = v; picked = true; }
             }
-            entropy[i]       = ent;
-            sampled[i]       = tok;
-            argmax_canvas[i] = amax;
+            entropy[j]       = ent;
+            sampled[j]       = tok;
+            argmax_canvas[j] = amax;
         }
 
         // self-conditioning for the NEXT denoising step: feed this step's softmax(processed_logits)
-        llama_set_diffusion_self_cond(ctx, self_cond_buf.data(), n_vocab, canvas_length);
+        llama_set_diffusion_self_cond(ctx, self_cond_buf.data(), n_vocab, n_seq);
 
         // 2c. entropy-bound accept: sort positions by entropy ascending, accept the prefix
         // where sum(entropy of all-but-last) <= entropy_bound (monotonic -> prefix selection)
