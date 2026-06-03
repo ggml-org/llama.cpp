@@ -283,8 +283,6 @@ llama_model_kimi_linear::graph::graph(const llama_model & model, const llm_graph
         cur = build_norm(inpL, layer.attn_norm, NULL, LLM_NORM_RMS, il);
         cb(cur, "attn_norm", il);
 
-        ggml_build_forward_expand(gf, cur);
-
         if (hparams.is_recurrent(il)) {
             // === KDA Layer (Kimi Delta Attention) with Recurrent State ===
             // Reference: vLLM kda.py
@@ -371,7 +369,10 @@ llama_model_kimi_linear::graph::graph(const llama_model & model, const llm_graph
             cur = ggml_mul_mat(ctx0, layer.wo, gated);
             cb(cur, "kda_out", il);
 
+            ggml_build_forward_expand(gf, cur);
         } else {
+            ggml_build_forward_expand(gf, cur);
+
             // === MLA Layer (Multi-head Latent Attention) without KV Cache ===
             // Reference: vLLM mla.py
             // Step 1: Q projection and reshape

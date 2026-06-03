@@ -126,13 +126,15 @@ llama_model_qwen3next::graph::graph(const llama_model & model, const llm_graph_p
         cur = build_norm(inpL, model.layers[il].attn_norm, nullptr, LLM_NORM_RMS, il);
         cb(cur, "attn_norm", il);
 
-        ggml_build_forward_expand(gf, cur);
-
         // Determine layer type and build appropriate attention mechanism
         if (hparams.is_recurrent(il)) {
             // Linear attention layer (gated delta net)
             cur = build_layer_attn_linear(inp->get_recr(), cur, il);
+
+            ggml_build_forward_expand(gf, cur);
         } else {
+            ggml_build_forward_expand(gf, cur);
+
             // Full attention layer
             cur = build_layer_attn(inp->get_attn(), cur, inp_pos, il);
         }
