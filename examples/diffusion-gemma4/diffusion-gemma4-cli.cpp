@@ -133,20 +133,23 @@ int main(int argc, char ** argv) {
 
     // 2. denoising loop: cur_step = n_steps .. 1
     for (int cur_step = n_steps; cur_step >= 1; --cur_step) {
-        // 2a. decode [prompt ; canvas]; request logits for the canvas positions only
+        // 2a. decode [prompt ; canvas]. Request logits for ALL tokens: in the no-KV-cache path
+        // llama.cpp prunes tokens that are not outputs, which would drop the prompt from the
+        // attention and stop the canvas from attending to it. We only read the canvas rows.
         batch.n_tokens = n_seq;
         for (int i = 0; i < n_seq; ++i) {
             batch.token[i]     = (i < n_prompt) ? prompt_tokens[i] : canvas[i - n_prompt];
             batch.pos[i]       = i;
             batch.n_seq_id[i]  = 1;
             batch.seq_id[i][0] = 0;
-            batch.logits[i]    = (i >= n_prompt) ? 1 : 0;
+            batch.logits[i]    = 1;
         }
         if (llama_decode(ctx, batch) != 0) {
             LOG_ERR("error: llama_decode failed at step %d\n", cur_step);
             break;
         }
-        const float * logits = llama_get_logits(ctx); // [canvas_length * n_vocab], row j = canvas pos j
+        // canvas logits start at row n_prompt (prompt rows precede them)
+        const float * logits = llama_get_logits(ctx) + (size_t) n_prompt * n_vocab;
 
         // 2b. linear temperature schedule: t = t_min + (t_max - t_min) * (cur_step / n_steps)
         const float temp = TEMP_MIN + (TEMP_MAX - TEMP_MIN) * ((float) cur_step / (float) n_steps);
