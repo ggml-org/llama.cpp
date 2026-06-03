@@ -87,7 +87,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             dst[params.offset_dst + gid.x] = merged_src[params.offset_src1 + src_i];
 #else
             dst[params.offset_dst + gid.x] = src1[params.offset_src1 + src_i];
-#endif        
+#endif
         }
     }
 }
