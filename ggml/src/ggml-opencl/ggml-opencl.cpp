@@ -359,6 +359,7 @@ struct ggml_backend_opencl_context {
     cl_program program_set_rows;
     cl_program program_glu;
     cl_program program_ifairy_add;
+    cl_program program_ifairy64;
     cl_program program_ifairy_mul;
     cl_program program_ifairy_rms_norm;
     cl_program program_im2col_f16;
@@ -415,6 +416,8 @@ struct ggml_backend_opencl_context {
     cl_kernel kernel_div, kernel_div_row, kernel_div_f16, kernel_div_row_f16;
     cl_kernel kernel_sub, kernel_sub_row, kernel_sub_f16, kernel_sub_row_f16;
     cl_kernel kernel_ifairy_add;
+    cl_kernel kernel_ifairy_q16_quantize_block127;
+    cl_kernel kernel_ifairy64_mul_mat_f32_q16;
     cl_kernel kernel_ifairy_mul;
     cl_kernel kernel_ifairy_rms_norm, kernel_ifairy_rms_norm_mul;
     cl_kernel kernel_add_id;
@@ -743,6 +746,27 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx, ggml_cl_ve
             build_program_from_source(backend_ctx->context, backend_ctx->device, kernel_src.c_str(), compile_opts);
 
         CL_CHECK((backend_ctx->kernel_ifairy_add = clCreateKernel(backend_ctx->program_ifairy_add, "kernel_ifairy_add", &err), err));
+        GGML_LOG_CONT(".");
+    }
+
+    // ifairy64
+    {
+#ifdef GGML_OPENCL_EMBED_KERNELS
+        const std::string kernel_src {
+            #include "ifairy64.cl.h"
+        };
+#else
+        const std::string kernel_src = read_file("ifairy64.cl");
+#endif
+        backend_ctx->program_ifairy64 =
+            build_program_from_source(backend_ctx->context, backend_ctx->device, kernel_src.c_str(), compile_opts);
+
+        CL_CHECK((backend_ctx->kernel_ifairy_q16_quantize_block127 =
+                      clCreateKernel(backend_ctx->program_ifairy64, "kernel_ifairy_q16_quantize_block127", &err),
+                  err));
+        CL_CHECK((backend_ctx->kernel_ifairy64_mul_mat_f32_q16 =
+                      clCreateKernel(backend_ctx->program_ifairy64, "kernel_ifairy64_mul_mat_f32_q16", &err),
+                  err));
         GGML_LOG_CONT(".");
     }
 
@@ -2808,26 +2832,28 @@ static bool ggml_opencl_can_ifairy64_mul_mat(const struct ggml_tensor * op) {
         return false;
     }
 
-    // First OpenCL target: raw IFAIRY64 weights, F32 activations, F32 output.
+    // First OpenCL target: IFAIRY64 weights staged as SoA q/d in set_tensor,
+    // F32 packed-BF16 activations staged to q16 SoA at dispatch time, F32 output.
     // Kernel semantics must match the CPU path exactly:
     //   (wr + i*wi) * conj(xr + i*xi)
     // = (wr*xr + wi*xi) + i*(wi*xr - wr*xi)
-    if (src0->ne[0] % ggml_blck_size(GGML_TYPE_IFAIRY64) != 0) {
+    if (src0->ne[0] % ggml_blck_size(GGML_TYPE_IFAIRY_Q16) != 0) {
         return false;
     }
     if (src0->ne[0] != src1->ne[0]) {
         return false;
     }
-    if (src1->ne[2] % src0->ne[2] != 0 || src1->ne[3] % src0->ne[3] != 0) {
-        return false;
-    }
     if (op->ne[0] != src0->ne[1] || op->ne[1] != src1->ne[1] ||
-        op->ne[2] != src1->ne[2] || op->ne[3] != src1->ne[3]) {
+        op->ne[2] != 1 || op->ne[3] != 1) {
         return false;
     }
 
     return src0->ne[2] == 1 && src0->ne[3] == 1 &&
-           ggml_is_contiguous(src0) && ggml_is_contiguous(src1);
+           src1->ne[2] == 1 && src1->ne[3] == 1 &&
+           src0->view_src == nullptr && src1->view_src == nullptr && op->view_src == nullptr &&
+           src0->view_offs == 0 && src1->view_offs == 0 && op->view_offs == 0 &&
+           src1->nb[0] == sizeof(float) && op->nb[0] == sizeof(float) &&
+           ggml_is_contiguous(src0) && ggml_is_contiguous(src1) && ggml_is_contiguous(op);
 }
 
 static bool ggml_opencl_can_ifairy_binary(const struct ggml_tensor * op, enum ggml_op expected_op) {
@@ -2918,7 +2944,7 @@ static bool ggml_opencl_can_fuse_ifairy_rmsnorm_mul(const struct ggml_cgraph * c
 static bool ggml_opencl_ifairy64_kernel_ready(const struct ggml_tensor * op) {
     switch (op->op) {
         case GGML_OP_MUL_MAT:
-            return false;
+            return ggml_opencl_can_ifairy64_mul_mat(op);
         default:
             return false;
     }
@@ -4946,6 +4972,95 @@ static void ggml_cl_ifairy_rms_norm(ggml_backend_t backend, const ggml_tensor * 
     CL_CHECK(clSetKernelArg(kernel, 15, sizeof(float) * nth, NULL));
 
     backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
+}
+
+static void ggml_cl_ifairy64_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
+    GGML_ASSERT(ggml_opencl_can_ifairy64_mul_mat(dst));
+
+    ggml_backend_opencl_context * backend_ctx = (ggml_backend_opencl_context *) backend->context;
+
+    ggml_tensor_extra_cl_ifairy64 * extra0 = (ggml_tensor_extra_cl_ifairy64 *) src0->extra;
+    ggml_tensor_extra_cl *          extra1 = (ggml_tensor_extra_cl *) src1->extra;
+    ggml_tensor_extra_cl *          extrad = (ggml_tensor_extra_cl *) dst->extra;
+    GGML_ASSERT(extra0 && extra0->q && extra0->d);
+    GGML_ASSERT(extra1 && extra1->data_device);
+    GGML_ASSERT(extrad && extrad->data_device);
+
+    const int k = src0->ne[0];
+    const int m = src0->ne[1];
+    const int n = src1->ne[1];
+
+    const int act_block_k = ggml_blck_size(GGML_TYPE_IFAIRY_Q16);
+    const int act_blocks  = k / act_block_k;
+    GGML_ASSERT(act_blocks > 0);
+
+    const size_t act_q_size = (size_t) n * (size_t) act_blocks * (size_t) act_block_k * 2;
+    const size_t act_d_size = (size_t) n * (size_t) act_blocks * 2 * sizeof(ggml_fp16_t);
+
+    cl_int err;
+    cl_mem act_q = clCreateBuffer(backend_ctx->context, CL_MEM_READ_WRITE, act_q_size, NULL, &err);
+    CL_CHECK(err);
+    cl_mem act_d = clCreateBuffer(backend_ctx->context, CL_MEM_READ_WRITE, act_d_size, NULL, &err);
+    CL_CHECK(err);
+
+    {
+        cl_kernel kernel = backend_ctx->kernel_ifairy_q16_quantize_block127;
+        const int nth = ggml_cl_ifairy_rms_norm_nth(backend_ctx, kernel);
+
+        cl_ulong offset1 = extra1->offset + src1->view_offs;
+        cl_ulong nb10    = src1->nb[0];
+        cl_ulong nb11    = src1->nb[1];
+
+        size_t global_work_size[] = {(size_t) act_blocks * (size_t) nth, (size_t) n};
+        size_t local_work_size[]  = {(size_t) nth, 1};
+
+        CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem),   &extra1->data_device));
+        CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_ulong), &offset1));
+        CL_CHECK(clSetKernelArg(kernel, 2, sizeof(cl_mem),   &act_q));
+        CL_CHECK(clSetKernelArg(kernel, 3, sizeof(cl_mem),   &act_d));
+        CL_CHECK(clSetKernelArg(kernel, 4, sizeof(int),      &k));
+        CL_CHECK(clSetKernelArg(kernel, 5, sizeof(int),      &n));
+        CL_CHECK(clSetKernelArg(kernel, 6, sizeof(cl_ulong), &nb10));
+        CL_CHECK(clSetKernelArg(kernel, 7, sizeof(cl_ulong), &nb11));
+        CL_CHECK(clSetKernelArg(kernel, 8, sizeof(float) * nth, NULL));
+        CL_CHECK(clSetKernelArg(kernel, 9, sizeof(float) * nth, NULL));
+
+        backend_ctx->enqueue_ndrange_kernel(kernel, 2, global_work_size, local_work_size, dst);
+    }
+
+    {
+        cl_kernel  kernel = backend_ctx->kernel_ifairy64_mul_mat_f32_q16;
+        const int nth = ggml_cl_ifairy_rms_norm_nth(backend_ctx, kernel);
+
+        cl_ulong offsetd = extrad->offset + dst->view_offs;
+        cl_ulong nb0     = dst->nb[0];
+        cl_ulong nb1     = dst->nb[1];
+
+        size_t global_work_size[] = {
+            (size_t) m * (size_t) nth,
+            (size_t) n,
+        };
+        size_t local_work_size[] = {(size_t) nth, 1};
+
+        CL_CHECK(clSetKernelArg(kernel,  0, sizeof(cl_mem),   &extra0->q));
+        CL_CHECK(clSetKernelArg(kernel,  1, sizeof(cl_mem),   &extra0->d));
+        CL_CHECK(clSetKernelArg(kernel,  2, sizeof(cl_mem),   &act_q));
+        CL_CHECK(clSetKernelArg(kernel,  3, sizeof(cl_mem),   &act_d));
+        CL_CHECK(clSetKernelArg(kernel,  4, sizeof(cl_mem),   &extrad->data_device));
+        CL_CHECK(clSetKernelArg(kernel,  5, sizeof(cl_ulong), &offsetd));
+        CL_CHECK(clSetKernelArg(kernel,  6, sizeof(int),      &k));
+        CL_CHECK(clSetKernelArg(kernel,  7, sizeof(int),      &m));
+        CL_CHECK(clSetKernelArg(kernel,  8, sizeof(int),      &n));
+        CL_CHECK(clSetKernelArg(kernel,  9, sizeof(cl_ulong), &nb0));
+        CL_CHECK(clSetKernelArg(kernel, 10, sizeof(cl_ulong), &nb1));
+        CL_CHECK(clSetKernelArg(kernel, 11, sizeof(float) * nth, NULL));
+        CL_CHECK(clSetKernelArg(kernel, 12, sizeof(float) * nth, NULL));
+
+        backend_ctx->enqueue_ndrange_kernel(kernel, 2, global_work_size, local_work_size, dst);
+    }
+
+    CL_CHECK(clReleaseMemObject(act_q));
+    CL_CHECK(clReleaseMemObject(act_d));
 }
 
 static void ggml_cl_add_id(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
@@ -8849,6 +8964,12 @@ static bool ggml_cl_compute_forward_ifairy(ggml_backend_t backend, ggml_tensor *
                 return false;
             }
             ggml_cl_ifairy_rms_norm(backend, src0, src1, tensor);
+            return true;
+        case GGML_OP_MUL_MAT:
+            if (!ggml_opencl_can_ifairy64_mul_mat(tensor)) {
+                return false;
+            }
+            ggml_cl_ifairy64_mul_mat(backend, src0, src1, tensor);
             return true;
         default:
             return false;
