@@ -80,9 +80,14 @@
 	let renderedBlocks = $state<MarkdownBlock[]>([]);
 	let unstableBlockHtml = $state('');
 	let incompleteCodeBlock = $state<IncompleteCodeBlock | null>(null);
-	const liveSvgHtml = $derived(
-		incompleteCodeBlock?.language === 'svg' ? sanitizeSvg(incompleteCodeBlock.code) : ''
-	);
+	const streamingSvgCode = $derived.by(() => {
+		const block = incompleteCodeBlock;
+		if (!block) return null;
+		if (block.language === 'svg') return block.code;
+		if (block.language === 'xml' && block.code.trimStart().startsWith('<svg')) return block.code;
+		return null;
+	});
+	const liveSvgHtml = $derived(streamingSvgCode !== null ? sanitizeSvg(streamingSvgCode) : '');
 	let previewDialogOpen = $state(false);
 	let previewCode = $state('');
 	let previewLanguage = $state('text');
@@ -782,7 +787,7 @@
 					<span class="mermaid-loading-text">Generating diagram...</span>
 				</div>
 			</div>
-		{:else if incompleteCodeBlock.language === 'svg'}
+		{:else if streamingSvgCode !== null}
 			<div class="svg-block-wrapper streaming-svg-block">
 				<div class="code-block-header">
 					<span class="code-language">svg</span>

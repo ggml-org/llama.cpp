@@ -18,17 +18,23 @@ function extractText(node: ElementContent): string {
  * Builds a rehype plugin that converts <pre><code class="language-{language}">
  * blocks into <pre class="{targetClass}"> elements carrying the raw text.
  *
- * Transforms:
- *   <pre><code class="language-mermaid">graph TD; A-->B</code></pre>
- * into:
- *   <pre class="mermaid">graph TD; A-->B</pre>
+ * Accepts one or more source languages, and an optional contentGuard that
+ * receives the trimmed text and decides whether the block qualifies. The guard
+ * lets a shared fence language be claimed only when its content matches, e.g.
+ * an xml block is converted to svg only when it starts with <svg.
  *
  * The result has no <code> child, so rehypeEnhanceCodeBlocks skips it. Rendering
  * happens client-side, so no markup is injected at this stage. Must run BEFORE
  * rehypeEnhanceCodeBlocks.
  */
-export function createPreTransform(language: string, targetClass: string): Plugin<[], Root> {
-	const codeClass = `language-${language}`;
+export function createPreTransform(
+	languages: string | string[],
+	targetClass: string,
+	contentGuard?: (text: string) => boolean
+): Plugin<[], Root> {
+	const codeClasses = (Array.isArray(languages) ? languages : [languages]).map(
+		(language) => `language-${language}`
+	);
 
 	return () => {
 		return (tree: Root) => {
@@ -44,7 +50,9 @@ export function createPreTransform(language: string, targetClass: string): Plugi
 				const className = codeElement.properties?.className;
 				if (!Array.isArray(className)) return;
 
-				const matches = className.some((cls) => typeof cls === 'string' && cls === codeClass);
+				const matches = className.some(
+					(cls) => typeof cls === 'string' && codeClasses.includes(cls)
+				);
 
 				if (!matches) return;
 
@@ -52,6 +60,8 @@ export function createPreTransform(language: string, targetClass: string): Plugi
 				const text = codeElement.children.map(extractText).join('').trim();
 
 				if (!text) return;
+
+				if (contentGuard && !contentGuard(text)) return;
 
 				const pre: Element = {
 					type: 'element',
