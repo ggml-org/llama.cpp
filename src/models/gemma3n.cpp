@@ -6,8 +6,8 @@ void llama_model_gemma3n::load_arch_hparams(llama_model_loader & ml) {
     hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
     hparams.set_swa_pattern(swa_period);
 
-    hparams.n_layer_kv_from_start     = 20;
-    hparams.f_attention_scale         = 1.0f;
+    hparams.n_layer_kv_from_start = 20;
+    hparams.f_attention_scale     = 1.0f;
 
     ml.get_key(LLM_KV_ROPE_FREQ_BASE_SWA,          hparams.rope_freq_base_train_swa, false);
     ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW,    hparams.n_swa);
