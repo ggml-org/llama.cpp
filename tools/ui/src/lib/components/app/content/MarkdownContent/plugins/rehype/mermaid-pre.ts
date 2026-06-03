@@ -3,6 +3,18 @@ import type { Root, Element, ElementContent, Text } from 'hast';
 import { visit } from 'unist-util-visit';
 
 /**
+ * Recursively extracts all text content from a HAST node.
+ * Handles nested elements (e.g., span wrappers from syntax highlighting).
+ */
+function extractText(node: ElementContent): string {
+	if (node.type === 'text') return node.value;
+	if (node.type === 'element') {
+		return (node.children ?? []).map(extractText).join('');
+	}
+	return '';
+}
+
+/**
  * Rehype plugin to convert mermaid code blocks to <pre class="mermaid"> elements.
  *
  * Transforms:
@@ -35,13 +47,8 @@ export const rehypeMermaidPre: Plugin<[], Root> = () => {
 
 			if (!isMermaid) return;
 
-			const diagramText = codeElement.children
-				.map((child) => {
-					if (child.type === 'text') return child.value;
-					return '';
-				})
-				.join('')
-				.trim();
+			// Recursively extract text to handle nested spans from syntax highlighting
+			const diagramText = codeElement.children.map(extractText).join('').trim();
 
 			if (!diagramText) return;
 
