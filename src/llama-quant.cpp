@@ -1347,7 +1347,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
             const float concentration = 1.0f - h_norm / 100.0f;
             const float energy = std::isfinite(ts[ENERGY]) ? std::max(0.0f, ts[ENERGY]) : 0.0f;
             const float l2_dist = std::isfinite(ts[L2_DIST]) ? std::max(0.0f, ts[L2_DIST]) : 0.0f;
-            const float rel_l2 = l2_dist / (std::sqrt(energy) + 1e-12f);
+            const float rel_l2 = l2_dist / (std::sqrt(energy) + EPSILON);
             const float density = rel_l2 / (1.0f + rel_l2);
             const float fragility = 0.5f * (corr_error(ts[COSSIM]) + corr_error(ts[PCC]));
 
@@ -1715,6 +1715,16 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
 
         return condition_number(eigenvalues);
     };
+
+    // Map [1, ∞) to [1, M]; alpha controls mapping aggressiveness towards M
+    auto squash_kappa = [](float kappa) -> float {
+        constexpr float M = 3.0f;
+        constexpr float alpha = 0.3f;
+        if (!std::isfinite(kappa)) { return M; }
+
+        return 1.0f + (M - 1.0f) * std::tanh(alpha * std::log(kappa));
+    };
+
     // Parallelize tensor processing (courtesy of https://github.com/ddh0)
     auto process_tensor = [&](
         const llama_model_loader::llama_tensor_weight * tw,
