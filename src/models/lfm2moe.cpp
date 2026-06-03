@@ -55,7 +55,7 @@ void llama_model_lfm2moe::load_arch_tensors(llama_model_loader &) {
         // for operator_norm
         layer.attn_norm = create_tensor(tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd}, 0);
 
-        if (!hparams.is_recurrent(i)) {
+        if (!hparams.is_recr(i)) {
             layer.attn_q_norm = create_tensor(tn(LLM_TENSOR_ATTN_Q_NORM, "weight", i), {n_embd_head_k}, 0);
             layer.attn_k_norm = create_tensor(tn(LLM_TENSOR_ATTN_K_NORM, "weight", i), {n_embd_head_k}, 0);
             GGML_ASSERT(n_embd_v_gqa == n_embd_k_gqa);

@@ -59,7 +59,7 @@ void llama_model_lfm2::load_arch_tensors(llama_model_loader &) {
         // for operator_norm
         layer.attn_norm = create_tensor(tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd}, 0);
 
-        if (!hparams.is_recurrent(i)) {
+        if (!hparams.is_recr(i)) {
             layer.attn_q_norm = create_tensor(tn(LLM_TENSOR_ATTN_Q_NORM, "weight", i), {n_embd_head_k}, 0);
             layer.attn_k_norm = create_tensor(tn(LLM_TENSOR_ATTN_K_NORM, "weight", i), {n_embd_head_k}, 0);
             GGML_ASSERT(n_embd_v_gqa == n_embd_k_gqa);
@@ -235,8 +235,8 @@ llama_model_lfm2::graph<iswa>::graph(const llama_model & model, const llm_graph_
         cur             = build_norm(cur, model.layers[il].attn_norm, NULL, LLM_NORM_RMS, il);
         cb(cur, "model.layers.{}.operator_norm", il);
 
-        cur = hparams.is_recurrent(il) ? build_shortconv_block(cur, inp_hybrid->get_recr(), il) :
-                                         build_attn_block(cur, inp_pos, inp_hybrid->get_attn(), il);
+        cur = hparams.is_recr(il) ? build_shortconv_block(cur, inp_hybrid->get_recr(), il) :
+                                    build_attn_block(cur, inp_pos, inp_hybrid->get_attn(), il);
 
         if (il == n_layer - 1 && inp_out_ids) {
             cur      = ggml_get_rows(ctx0, cur, inp_out_ids);

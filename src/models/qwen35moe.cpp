@@ -76,7 +76,7 @@ void llama_model_qwen35moe::load_arch_tensors(llama_model_loader & ml) {
         layer.attn_norm      = create_tensor(tn(LLM_TENSOR_ATTN_NORM,      "weight", il), { n_embd }, flags);
         layer.attn_post_norm = create_tensor(tn(LLM_TENSOR_ATTN_POST_NORM, "weight", il), { n_embd }, flags);
 
-        if (!hparams.is_recurrent(il)) {
+        if (!hparams.is_recr(il)) {
             // Attention layers
             create_tensor_qkv(layer, il, n_embd, n_embd_head_k * n_head * 2, n_embd_k_gqa, n_embd_v_gqa, flags);
             layer.wo = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "weight", il), { n_embd_head_k * n_head, n_embd }, flags);
@@ -192,7 +192,7 @@ llama_model_qwen35moe::graph::graph(const llama_model & model, const llm_graph_p
         ggml_build_forward_expand(gf, cur);
 
         // Determine layer type and build appropriate attention mechanism
-        if (hparams.is_recurrent(il)) {
+        if (hparams.is_recr(il)) {
             // Linear attention layer (gated delta net)
             cur = build_layer_attn_linear(inp->get_recr(), cur, il);
         } else {

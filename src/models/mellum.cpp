@@ -13,7 +13,7 @@ void llama_model_mellum::load_arch_hparams(llama_model_loader & ml) {
         if (res) {
             hparams.set_swa_pattern(swa_period);
         } else {
-            ml.get_key_or_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, hparams.swa_layers, hparams.n_layer);
+            ml.get_key_or_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, hparams.is_swa_impl, hparams.n_layer);
         }
 
         hparams.rope_freq_base_train_swa  = hparams.rope_freq_base_train;

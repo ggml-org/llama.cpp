@@ -244,6 +244,7 @@ void llama_model_saver::add_kv_from_model() {
     add_kv(LLM_KV_EMBEDDING_SCALE,                   hparams.f_embedding_scale);
     add_kv(LLM_KV_TOKEN_SHIFT_COUNT,                 hparams.token_shift_count);
     add_kv(LLM_KV_INTERLEAVE_MOE_LAYER_STEP,         hparams.n_moe_layer_step);
+    // add_kv(LLM_KV_FULL_ATTENTION_INTERVAL,           ???); // saved as LLM_KV_ATTENTION_RECURRENT_LAYERS instead
 
     add_kv(LLM_KV_ATTENTION_HEAD_COUNT,              hparams.n_head_arr, true);
     add_kv(LLM_KV_ATTENTION_HEAD_COUNT_KV,           hparams.n_head_kv_arr, true);

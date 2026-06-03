@@ -68,7 +68,7 @@ void llama_model_qwen3next::load_arch_tensors(llama_model_loader &) {
         layer.attn_norm      = create_tensor(tn(LLM_TENSOR_ATTN_NORM,      "weight", i), { n_embd }, 0);
         layer.attn_post_norm = create_tensor(tn(LLM_TENSOR_ATTN_POST_NORM, "weight", i), { n_embd }, 0);
 
-        if (!hparams.is_recurrent(i)) {
+        if (!hparams.is_recr(i)) {
             // Attention layers
             create_tensor_qkv(layer, i, n_embd, n_embd_head_k * n_head * 2, n_embd_k_gqa, n_embd_v_gqa, 0);
             layer.wo = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "weight", i), { n_embd_head_k * n_head, n_embd }, 0);
@@ -129,7 +129,7 @@ llama_model_qwen3next::graph::graph(const llama_model & model, const llm_graph_p
         ggml_build_forward_expand(gf, cur);
 
         // Determine layer type and build appropriate attention mechanism
-        if (hparams.is_recurrent(il)) {
+        if (hparams.is_recr(il)) {
             // Linear attention layer (gated delta net)
             cur = build_layer_attn_linear(inp->get_recr(), cur, il);
         } else {
