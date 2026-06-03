@@ -6,19 +6,44 @@ ARG APP_REVISION=N/A
 FROM ubuntu:$UBUNTU_VERSION AS build
 
 # Install build tools
-RUN apt update && apt install -y git build-essential cmake wget xz-utils
-
+RUN apt update \
+    && apt install -y \
+        git \
+        build-essential \
+        cmake \
+        wget \
+        xz-utils
+        
 # Install SSL and Vulkan SDK dependencies
-RUN apt install -y libssl-dev curl \
-    libxcb-xinput0 libxcb-xinerama0 libxcb-cursor-dev libvulkan-dev glslc spirv-headers
+RUN apt install -y \
+      libssl-dev \
+      curl \
+      libxcb-xinput0 \
+      libxcb-xinerama0 \
+      libxcb-cursor-dev \
+      libvulkan-dev \
+      glslc \
+      spirv-headers
+
+ARG CCACHE_ENABLED="false"
+RUN if $CCACHE_ENABLED; then \
+        apt-get update \
+        && apt-get install -y \
+            ccache; \
+    fi
 
 # Build it
 WORKDIR /app
 
 COPY . .
 
-RUN cmake -B build -DGGML_NATIVE=OFF -DGGML_VULKAN=ON -DLLAMA_BUILD_TESTS=OFF -DGGML_BACKEND_DL=ON -DGGML_CPU_ALL_VARIANTS=ON && \
-    cmake --build build --config Release -j$(nproc)
+RUN --mount=type=cache,target=/root/.cache/ccache \
+    cmake -B build \
+      -DGGML_NATIVE=OFF \
+      -DGGML_VULKAN=ON -DLLAMA_BUILD_TESTS=OFF \
+      -DGGML_BACKEND_DL=ON \
+      -DGGML_CPU_ALL_VARIANTS=ON \
+    && cmake --build build --config Release -j$(nproc)
 
 RUN mkdir -p /app/lib && \
     find build -name "*.so*" -exec cp -P {} /app/lib \;
@@ -72,10 +97,10 @@ ENV PATH="/root/.venv/bin:/root/.local/bin:${PATH}"
 ARG UV_INDEX_STRATEGY="unsafe-best-match"
 RUN apt-get update \
     && apt-get install -y \
-    build-essential \
-    curl \
-    git \
-    ca-certificates \
+        build-essential \
+        curl \
+        git \
+        ca-certificates \
     && curl -LsSf https://astral.sh/uv/install.sh | sh \
     && uv python install 3.13 \
     && uv venv --python 3.13 /root/.venv \

@@ -16,9 +16,26 @@ ARG APP_REVISION=N/A
 FROM ${CANN_BASE_IMAGE} AS build
 
 # -- Install build dependencies --
-RUN yum install -y gcc g++ cmake make git openssl-devel python3 python3-pip && \
-    yum clean all && \
-    rm -rf /var/cache/yum
+RUN yum install -y \
+        gcc \
+        g++ \
+        cmake \
+        make \
+        git \
+        openssl-devel \
+        python3 \
+        python3-pip \
+    && yum clean all \
+    && rm -rf /var/cache/yum
+
+ARG CCACHE_ENABLED="false"
+RUN if $CCACHE_ENABLED; then \
+        yum install -y \
+            ccache \
+        && yum clean all \
+        && rm -rf /var/cache/yum; \
+    fi
+
 
 # -- Set the working directory --
 WORKDIR /app
@@ -39,15 +56,15 @@ ENV LD_LIBRARY_PATH=${ASCEND_TOOLKIT_HOME}/runtime/lib64/stub:$LD_LIBRARY_PATH
 # -- Build llama.cpp --
 # Use the passed CHIP_TYPE argument and add general build options
 ARG CHIP_TYPE
-RUN source /usr/local/Ascend/ascend-toolkit/set_env.sh --force \
-    && \
-    cmake -B build \
+RUN --mount=type=cache,target=/root/.cache/ccache \
+    source /usr/local/Ascend/ascend-toolkit/set_env.sh --force \
+    && cmake -B build \
         -DGGML_CANN=ON \
         -DCMAKE_BUILD_TYPE=Release \
         -DSOC_TYPE=ascend${CHIP_TYPE} \
         -DUSE_ACL_GRAPH=ON \
-        . && \
-    cmake --build build --config Release -j$(nproc)
+        . \
+    && cmake --build build --config Release -j$(nproc)
 
 # -- Organize build artifacts for copying in later stages --
 # Create a lib directory to store all .so files
