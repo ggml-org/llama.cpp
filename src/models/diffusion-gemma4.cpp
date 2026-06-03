@@ -62,7 +62,14 @@ llama_model_diffusion_gemma4::graph::graph(const llama_model & model, const llm_
     // sc_input == scale-less post-norm of the scaled embeddings (the verified step-0 case).
     const auto & dmodel = static_cast<const llama_model_diffusion_gemma4 &>(model);
     {
-        ggml_tensor * soft = ggml_scale(ctx0, inpL, 0.0f); // placeholder zero soft-embeddings
+        // soft-embeddings from the previous denoising step's probabilities (set by the
+        // sampler via llama_set_diffusion_self_cond; zero on the first step):
+        //   soft = (probs @ token_embd) * embed_scale
+        ggml_tensor * probs   = build_inp_diffusion_self_cond(model.tok_embd->ne[1]); // {n_vocab, n_tokens}
+        ggml_tensor * embed_t = ggml_cont(ctx0, ggml_transpose(ctx0, model.tok_embd)); // {n_vocab, n_embd}
+        ggml_tensor * soft    = ggml_mul_mat(ctx0, embed_t, probs);                    // {n_embd, n_tokens}
+        soft = ggml_scale(ctx0, soft, sqrtf((float) n_embd));
+        cb(soft, "self_cond_soft_embd", -1);
         ggml_tensor * scn  = build_norm(soft, dmodel.self_cond_norm, nullptr, LLM_NORM_RMS, -1);
         ggml_tensor * sc   = build_ffn(scn,
                 dmodel.self_cond_up,   nullptr, nullptr,

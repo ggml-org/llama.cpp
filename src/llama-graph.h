@@ -76,6 +76,16 @@ struct llama_cross {
     std::vector<std::set<llama_seq_id>> seq_ids_enc;
 };
 
+// diffusion self-conditioning: the previous denoising step's per-token probability
+// distribution (softmax of the processed logits). The decoder turns this into
+// soft-embeddings (probs @ token_embd * embed_scale) that are added to the input
+// embeddings. Set per-decode via llama_set_diffusion_self_cond(); empty -> zeros.
+struct llama_diffusion_cond {
+    int64_t n_vocab  = 0;
+    int64_t n_tokens = 0;
+    std::vector<float> probs; // [n_vocab * n_tokens], row-major per token
+};
+
 struct llm_graph_params;
 
 //
@@ -277,6 +287,19 @@ public:
     ggml_tensor * cross_embd; // F32 [n_embd, n_outputs_enc]
 
     const llama_cross * cross;
+};
+
+// diffusion self-conditioning probabilities input (see struct llama_diffusion_cond)
+class llm_graph_input_diffusion_self_cond : public llm_graph_input_i {
+public:
+    llm_graph_input_diffusion_self_cond(const llama_diffusion_cond * diffusion) : diffusion(diffusion) {}
+    virtual ~llm_graph_input_diffusion_self_cond() = default;
+
+    void set_input(const llama_ubatch * ubatch) override;
+
+    ggml_tensor * probs; // F32 [n_vocab, n_tokens]
+
+    const llama_diffusion_cond * diffusion;
 };
 
 class llm_graph_input_attn_no_cache : public llm_graph_input_i {
@@ -602,6 +625,7 @@ struct llm_graph_params {
     const llama_adapter_loras    * loras;
     const llama_memory_context_i * mctx;
     const llama_cross            * cross;
+    const llama_diffusion_cond   * diffusion;
 
     std::map<llama_seq_id, llama_sampler *> samplers;
 
@@ -831,6 +855,7 @@ struct llm_graph_context {
     const llama_adapter_loras    * loras;
     const llama_memory_context_i * mctx;
     const llama_cross            * cross;
+    const llama_diffusion_cond   * diffusion;
 
     std::map<llama_seq_id, llama_sampler *> samplers;
 
@@ -952,6 +977,7 @@ struct llm_graph_context {
     //
 
     ggml_tensor * build_inp_embd(ggml_tensor * tok_embd) const;
+    ggml_tensor * build_inp_diffusion_self_cond(int64_t n_vocab) const; // F32 [n_vocab, n_tokens]
     ggml_tensor * build_inp_pos() const;
     ggml_tensor * build_inp_attn_scale() const;
     ggml_tensor * build_inp_out_ids() const;

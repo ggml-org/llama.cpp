@@ -104,6 +104,11 @@ int main(int argc, char ** argv) {
     std::vector<llama_token> prev_argmax(canvas_length, -1);
     std::vector<llama_token> accepted = canvas;
 
+    // self-conditioning buffer: softmax(processed_logits) of the previous step, fed to the
+    // next decode. Cleared for the first step (-> zero self-conditioning).
+    std::vector<float> self_cond_buf((size_t) n_vocab * canvas_length, 0.0f);
+    llama_set_diffusion_self_cond(ctx, nullptr, 0, 0);
+
     // 2. denoising loop: cur_step = n_steps .. 1
     for (int cur_step = n_steps; cur_step >= 1; --cur_step) {
         // 2a. decode the whole canvas (logits for every position)
@@ -149,8 +154,10 @@ int main(int argc, char ** argv) {
             float cum = 0.0f;
             int   tok = amax;
             bool  picked = false;
+            float * sc = self_cond_buf.data() + (size_t) i * n_vocab;
             for (int v = 0; v < n_vocab; ++v) {
                 const float p = probs[v] / sum;
+                sc[v] = p;                              // store normalized softmax for self-conditioning
                 if (p > 0.0f) ent -= p * logf(p);
                 cum += probs[v];
                 if (!picked && cum >= r) { tok = v; picked = true; }
@@ -159,6 +166,9 @@ int main(int argc, char ** argv) {
             sampled[i]       = tok;
             argmax_canvas[i] = amax;
         }
+
+        // self-conditioning for the NEXT denoising step: feed this step's softmax(processed_logits)
+        llama_set_diffusion_self_cond(ctx, self_cond_buf.data(), n_vocab, canvas_length);
 
         // 2c. entropy-bound accept: sort positions by entropy ascending, accept the prefix
         // where sum(entropy of all-but-last) <= entropy_bound (monotonic -> prefix selection)
@@ -201,8 +211,6 @@ int main(int argc, char ** argv) {
         for (int i = 0; i < canvas_length; ++i) {
             canvas[i] = accept_mask[i] ? accepted[i] : rand_tok(rng);
         }
-        // TODO(self-conditioning): set soft-embeddings = softmax(processed_logits) @ embed
-        // for the next step here, once the soft-embeddings input channel exists.
     }
 
     llama_batch_free(batch);

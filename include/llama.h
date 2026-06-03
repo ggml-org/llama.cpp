@@ -979,6 +979,17 @@ extern "C" {
     // If set to true, the model will only attend to the past tokens
     LLAMA_API void llama_set_causal_attn(struct llama_context * ctx, bool causal_attn);
 
+    // Set diffusion self-conditioning: the previous denoising step's per-token probability
+    // distribution (softmax of the processed logits), as a [n_vocab * n_tokens] row-major
+    // float array. The decoder forms soft-embeddings (probs @ token_embd * embed_scale) and
+    // adds them to the input embeddings. Pass probs=NULL or n_tokens=0 to clear (-> zeros,
+    // i.e. the first denoising step). Used by diffusion_gemma4.
+    LLAMA_API void llama_set_diffusion_self_cond(
+            struct llama_context * ctx,
+                     const float * probs,
+                         int64_t   n_vocab,
+                         int64_t   n_tokens);
+
     // Set whether the model is in warmup mode or not
     // If true, all model tensors are activated during llama_decode() to load and cache their weights.
     //

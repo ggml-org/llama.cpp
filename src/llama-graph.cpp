@@ -385,6 +385,24 @@ void llm_graph_input_cross_embd::set_input(const llama_ubatch * ubatch) {
     }
 }
 
+void llm_graph_input_diffusion_self_cond::set_input(const llama_ubatch * ubatch) {
+    GGML_UNUSED(ubatch);
+
+    if (!probs) {
+        return;
+    }
+    assert(probs->type == GGML_TYPE_F32);
+
+    const size_t n_bytes = ggml_nbytes(probs);
+    if (diffusion && diffusion->probs.size() * sizeof(float) == n_bytes) {
+        ggml_backend_tensor_set(probs, diffusion->probs.data(), 0, n_bytes);
+    } else {
+        // no self-conditioning this step (e.g. first denoising step) -> zeros
+        std::vector<uint8_t> zeros(n_bytes, 0);
+        ggml_backend_tensor_set(probs, zeros.data(), 0, n_bytes);
+    }
+}
+
 template <typename T>
 static void print_mask(const T * data, int64_t n_tokens, int64_t n_kv, int64_t n_swa, llama_swa_type swa_type) {
     LLAMA_LOG_DEBUG("%s: === Attention mask ===\n", __func__);
@@ -1062,6 +1080,7 @@ llm_graph_context::llm_graph_context(const llm_graph_params & params) :
     loras            (params.loras),
     mctx             (params.mctx),
     cross            (params.cross),
+    diffusion        (params.diffusion),
     samplers         (params.samplers),
     cb_func          (params.cb),
     res              (params.res),
@@ -2011,6 +2030,19 @@ ggml_tensor * llm_graph_context::build_inp_cross_embd() const {
     const auto n_enc  = !cross->v_embd.empty() ? cross->n_enc  : hparams.n_ctx_train;
 
     cur = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_embd, n_enc);
+    ggml_set_input(cur);
+
+    res->add_input(std::move(inp));
+
+    return cur;
+}
+
+ggml_tensor * llm_graph_context::build_inp_diffusion_self_cond(int64_t n_vocab) const {
+    auto inp = std::make_unique<llm_graph_input_diffusion_self_cond>(diffusion);
+
+    auto & cur = inp->probs;
+
+    cur = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_vocab, n_tokens);
     ggml_set_input(cur);
 
     res->add_input(std::move(inp));
