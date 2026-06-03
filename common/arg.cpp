@@ -353,7 +353,6 @@ static handle_model_result common_params_handle_model(struct common_params_model
             model.path = "";
         }
         common_download_opts hf_opts = opts;
-        hf_opts.download_mmproj = true; // also look for mmproj when downloading hf model
         auto download_result = common_download_model(model, hf_opts);
 
         if (download_result.model_path.empty()) {
@@ -441,10 +440,11 @@ bool common_params_handle_models(common_params & params, llama_example curr_ex) 
                                          COMMON_SPECULATIVE_TYPE_DRAFT_MTP) != params.speculative.types.end();
 
     common_download_opts opts;
-    opts.bearer_token  = params.hf_token;
-    opts.offline       = params.offline;
-    opts.skip_download = params.skip_download;
-    opts.download_mtp  = spec_type_draft_mtp;
+    opts.bearer_token    = params.hf_token;
+    opts.offline         = params.offline;
+    opts.skip_download   = params.skip_download;
+    opts.download_mtp    = spec_type_draft_mtp;
+    opts.download_mmproj = !params.no_mmproj;
 
     try {
         auto res = common_params_handle_model(params.model, opts);
