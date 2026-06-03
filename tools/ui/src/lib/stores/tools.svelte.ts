@@ -9,7 +9,7 @@ import {
 	TOOL_SERVER_LABELS
 } from '$lib/constants';
 
-import { SvelteSet } from 'svelte/reactivity';
+import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 
 /** Stable selection identity for a tool, shared by the disabled set and the permission store */
 function toolKey(source: ToolSource, name: string, serverId?: string): string {
@@ -143,7 +143,7 @@ class ToolsStore {
 	/** Canonical flat list of tool entries with source metadata and stable keys, deduped by key */
 	get allTools(): ToolEntry[] {
 		const entries: ToolEntry[] = [];
-		const seen = new Set<string>();
+		const seen = new SvelteSet<string>();
 
 		const push = (entry: ToolEntry) => {
 			if (seen.has(entry.key)) return;
@@ -178,7 +178,7 @@ class ToolsStore {
 	/** Tools grouped by category for tree display, derived from the canonical entries */
 	get toolGroups(): ToolGroup[] {
 		const groups: ToolGroup[] = [];
-		const byKey = new Map<string, ToolGroup>();
+		const byKey = new SvelteMap<string, ToolGroup>();
 
 		for (const entry of this.allTools) {
 			const groupKey =
@@ -219,7 +219,7 @@ class ToolsStore {
 	 * The API identifies tools by name, so a name is sent at most once.
 	 */
 	getEnabledToolsForLLM(): OpenAIToolDefinition[] {
-		const enabledNames = new Set<string>();
+		const enabledNames = new SvelteSet<string>();
 		for (const entry of this.allTools) {
 			if (!this._disabledTools.has(entry.key)) {
 				enabledNames.add(entry.definition.function.name);
@@ -227,7 +227,7 @@ class ToolsStore {
 		}
 
 		const result: OpenAIToolDefinition[] = [];
-		const seen = new Set<string>();
+		const seen = new SvelteSet<string>();
 
 		const take = (def: OpenAIToolDefinition) => {
 			const name = def.function.name;
