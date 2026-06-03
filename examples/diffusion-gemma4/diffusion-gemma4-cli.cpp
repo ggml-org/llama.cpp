@@ -264,8 +264,37 @@ int main(int argc, char ** argv) {
 
     llama_batch_free(batch);
 
-    std::string out = common_detokenize(vocab, accepted, false);
-    LOG_INF("\n=== generated answer ===\n%s\n", out.c_str());
+    // the full denoised canvas (thought channel + response), for reference
+    LOG_INF("\n=== generated canvas ===\n%s\n", common_detokenize(vocab, accepted, false).c_str());
+
+    // the model answers in a "<|channel>thought ... <channel|>" block followed by the response;
+    // extract the final response (after the last channel-close), truncated at the first
+    // end-of-generation token, and drop trailing duplicate sentences.
+    llama_token chan_close = LLAMA_TOKEN_NULL;
+    {
+        auto t = common_tokenize(vocab, "<channel|>", false, true);
+        if (t.size() == 1) chan_close = t[0];
+    }
+    int start = 0;
+    if (chan_close != LLAMA_TOKEN_NULL) {
+        for (int j = 0; j < canvas_length; ++j) if (accepted[j] == chan_close) start = j + 1;
+    }
+    std::vector<llama_token> answer;
+    for (int j = start; j < canvas_length; ++j) {
+        if (llama_vocab_is_eog(vocab, accepted[j])) break;
+        answer.push_back(accepted[j]);
+    }
+    std::string ans = common_detokenize(vocab, answer, false);
+    // drop a trailing exact-duplicate of the answer if the canvas repeated it
+    {
+        std::string s = ans;
+        size_t h = s.find_first_not_of(" \n\t"); if (h != std::string::npos) s = s.substr(h);
+        const size_t half = s.size() / 2;
+        if (half > 0 && s.compare(0, half, s, s.size() - half, half) == 0) {
+            ans = s.substr(0, half); // "X X" -> "X"
+        }
+    }
+    LOG_INF("=== answer ===\n%s\n", ans.c_str());
 
     llama_free(ctx);
     llama_model_free(model);
