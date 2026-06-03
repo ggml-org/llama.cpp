@@ -25,6 +25,72 @@ static void foreach_function(const json & tools, const std::function<void(const 
 
 namespace autoparser {
 
+static std::string tool_trigger_marker(const analyze_tools & tools) {
+    if (!tools.format.section_start.empty()) {
+        return tools.format.section_start;
+    }
+    if (!tools.format.per_call_start.empty()) {
+        return tools.format.per_call_start;
+    }
+    return tools.function.name_prefix;
+}
+
+static common_peg_parser build_direct_tool_calls(common_chat_peg_builder &   p,
+                                                 const analyze_tools &       tools,
+                                                 const common_peg_parser &   tool_choice,
+                                                 const generation_params &   inputs) {
+    if (tools.format.tolerate_incomplete_xml) {
+        common_peg_parser ws = p.space();
+        if (inputs.parallel_tool_calls) {
+            return p.trigger_rule("tool-calls", p.one_or_more(tool_choice + ws));
+        }
+        return p.trigger_rule("tool-call", tool_choice);
+    }
+
+    const std::string separator =
+        tools.format.call_separator.empty() ? ", " : tools.format.call_separator;
+
+    auto between_calls = separator.empty() ? p.space() : p.literal(separator);
+
+    if (inputs.parallel_tool_calls) {
+        return p.trigger_rule("tool-call", tool_choice + p.zero_or_more(between_calls + tool_choice));
+    }
+    return p.trigger_rule("tool-call", tool_choice);
+}
+
+static common_peg_parser build_attr_name_prefix_choice(common_chat_peg_builder &        p,
+                                                       const std::string &              primary,
+                                                       const std::string &              alt,
+                                                       const std::string &              compact) {
+    common_peg_parser choice = p.choice();
+    bool              any    = false;
+    if (!primary.empty()) {
+        choice |= p.literal(primary);
+        any = true;
+    }
+    if (!alt.empty()) {
+        choice |= p.literal(alt);
+        any = true;
+    }
+    if (!compact.empty()) {
+        choice |= p.literal(compact);
+        any = true;
+    }
+    return any ? choice : p.eps();
+}
+
+static common_peg_parser build_tolerant_arg_value_parser(common_chat_peg_builder &        p,
+                                                         const tool_arguments_analysis &  arguments) {
+    common_peg_parser cdata = p.literal("<![CDATA[") + p.until("]]>") + p.literal("]]>");
+    if (!arguments.value_stop_sequences.empty()) {
+        return p.choice({ cdata, p.until_one_of(arguments.value_stop_sequences) });
+    }
+    if (!arguments.value_suffix.empty()) {
+        return p.choice({ cdata, p.until(arguments.value_suffix) });
+    }
+    return cdata;
+}
+
 parser_build_context::parser_build_context(common_chat_peg_builder & p, const generation_params & inputs) :
     p(p),
     inputs(inputs),
@@ -75,8 +141,7 @@ common_chat_params peg_generator::generate_parser(const common_chat_template &  
     // Build grammar if tools are present
     bool has_tools =
         autoparser.tools.format.mode != tool_format::NONE && inputs.tools.is_array() && !inputs.tools.empty();
-    std::string trigger_marker = !autoparser.tools.format.section_start.empty() ? autoparser.tools.format.section_start :
-                                                                                  autoparser.tools.format.per_call_start;
+    std::string trigger_marker = tool_trigger_marker(autoparser.tools);
 
     bool has_response_format = !inputs.json_schema.empty() && inputs.json_schema.is_object();
     bool include_grammar = has_response_format || (has_tools &&
@@ -100,12 +165,26 @@ common_chat_params peg_generator::generate_parser(const common_chat_template &  
 
         // Set grammar triggers based on tool section markers (fall back to per-call markers)
         if (data.grammar_lazy) {
-            data.grammar_triggers = {
-                { COMMON_GRAMMAR_TRIGGER_TYPE_WORD, trigger_marker }
-            };
-            if (autoparser.tools.format.openai_wrapper_trigger) {
-                // model emits the OpenAI function wrapper, trigger on it
-                data.grammar_triggers.push_back({ COMMON_GRAMMAR_TRIGGER_TYPE_WORD, "{\"type\": \"function\"," });
+            if (!autoparser.tools.format.tool_start_triggers.empty()) {
+                for (const auto & t : autoparser.tools.format.tool_start_triggers) {
+                    data.grammar_triggers.push_back({ COMMON_GRAMMAR_TRIGGER_TYPE_WORD, t });
+                }
+                if (!autoparser.tools.function.compact_name_prefix.empty()) {
+                    const auto & cp  = autoparser.tools.function.compact_name_prefix;
+                    const auto   pos = cp.find('=');
+                    if (pos != std::string::npos) {
+                        data.grammar_triggers.push_back(
+                            { COMMON_GRAMMAR_TRIGGER_TYPE_WORD, cp.substr(0, pos + 1) });
+                    }
+                }
+            } else {
+                data.grammar_triggers = {
+                    { COMMON_GRAMMAR_TRIGGER_TYPE_WORD, trigger_marker }
+                };
+                if (autoparser.tools.format.openai_wrapper_trigger) {
+                    // model emits the OpenAI function wrapper, trigger on it
+                    data.grammar_triggers.push_back({ COMMON_GRAMMAR_TRIGGER_TYPE_WORD, "{\"type\": \"function\"," });
+                }
             }
         }
     }
@@ -147,7 +226,18 @@ common_peg_arena autoparser::build_parser(const generation_params & inputs, cons
         } else {
             parser = content.build_parser(ctx);
         }
-        return pure_content ? p.prefix(generation_prompt, reasoning.start) + parser : p.prefix(generation_prompt, reasoning.start) << parser;
+
+        // When reasoning extraction is disabled but the generation prompt already contains a
+        // closed thinking block (e.g. MiniCPM5 with enable_thinking=false), consume the full
+        // generation prompt prefix so it is not emitted as assistant content.
+        const bool consume_full_generation_prompt =
+            !extract_reasoning && !reasoning.end.empty() && generation_prompt.find(reasoning.end) != std::string::npos;
+
+        common_peg_parser generation_prefix = consume_full_generation_prompt ?
+            p.literal(generation_prompt) :
+            p.prefix(generation_prompt, reasoning.start);
+
+        return pure_content ? generation_prefix + parser : generation_prefix << parser;
     });
 }
 
@@ -257,7 +347,12 @@ common_peg_parser analyze_tools::build_func_parser(common_chat_peg_builder & p, 
                                                     const common_peg_parser & call_id_section, bool have_call_id,
                                                     const common_peg_parser & args,
                                                     std::optional<common_peg_parser> atomic_peek) const {
-    auto              open           = p.tool_open(function.name_prefix + p.tool_name(p.literal(name)) + function.name_suffix);
+    common_peg_parser name_prefix =
+        (!function.alt_name_prefix.empty() || !function.compact_name_prefix.empty()) ?
+            build_attr_name_prefix_choice(p, function.name_prefix, function.alt_name_prefix,
+                                          function.compact_name_prefix) :
+            p.literal(function.name_prefix);
+    auto              open           = p.tool_open(name_prefix + p.tool_name(p.literal(name)) + function.name_suffix);
     bool              matched_atomic = false;
     common_peg_parser func_parser    = p.eps();
 
@@ -275,7 +370,10 @@ common_peg_parser analyze_tools::build_func_parser(common_chat_peg_builder & p, 
     }
 
     if (!function.close.empty()) {
-        func_parser = func_parser + p.space() + p.tool_close(p.literal(function.close));
+        auto close_parser = format.tolerate_incomplete_xml ?
+            p.optional(p.literal(function.close)) :
+            p.literal(function.close);
+        func_parser = func_parser + p.space() + p.tool_close(close_parser);
     } else if (!format.per_call_end.empty()) {
         // When there's no func_close but there is a per_call_end marker, use peek() to ensure
         // we only emit tool_close when we can actually see the closing marker. This prevents
@@ -343,22 +441,24 @@ common_peg_parser analyze_tools::build_tool_parser_tag_json(parser_build_context
                                         p.literal(format.section_start) + p.space() + tool_calls + p.space() +
                                             (format.section_end.empty() ? p.end() : p.literal(format.section_end)));
         }
-    } else {
-        std::string separator = ", ";  // Default
+    } else if (!format.section_start.empty()) {
+        std::string separator = format.call_separator.empty() ? ", " : format.call_separator;
         if (inputs.parallel_tool_calls) {
             tool_calls = p.trigger_rule("tool-call", format.section_start + tool_choice +
                                                          p.zero_or_more(separator + tool_choice) + format.section_end);
         } else {
             tool_calls = p.trigger_rule("tool-call", format.section_start + tool_choice + format.section_end);
         }
+    } else {
+        tool_calls = build_direct_tool_calls(p, *this, tool_choice, inputs);
     }
 
     if (!require_calls) {
         tool_calls = p.optional(tool_calls);
     }
 
-    std::string trigger_marker       = !format.section_start.empty() ? format.section_start : format.per_call_start;
-    auto        content_before_tools = trigger_marker.empty() ? p.eps() : p.until(trigger_marker);
+    const std::string trigger_marker       = tool_trigger_marker(*this);
+    auto              content_before_tools = trigger_marker.empty() ? p.eps() : p.until(trigger_marker);
     return ctx.reasoning_parser + p.optional(p.content(content_before_tools)) + tool_calls + p.end();
 }
 
@@ -366,7 +466,15 @@ common_peg_parser analyze_tools::build_tool_parser_tag_tagged(parser_build_conte
     auto &       p           = ctx.p;
     const auto & inputs      = ctx.inputs;
 
-    auto until_suffix = p.rule("until-suffix", p.until(arguments.value_suffix));
+    const bool tolerant_xml = format.tolerate_incomplete_xml;
+
+    auto until_suffix = tolerant_xml ? p.eps() :
+        p.rule("until-suffix", p.until(arguments.value_suffix));
+    auto tolerant_arg_value = tolerant_xml ? build_tolerant_arg_value_parser(p, arguments) : p.eps();
+    auto arg_name_prefix    = tolerant_xml ?
+        build_attr_name_prefix_choice(p, arguments.name_prefix, arguments.alt_name_prefix,
+                                      arguments.compact_name_prefix) :
+        p.eps();
 
     common_peg_parser tool_choice = p.choice();
 
@@ -376,13 +484,55 @@ common_peg_parser analyze_tools::build_tool_parser_tag_tagged(parser_build_conte
         auto                  params     = func.contains("parameters") ? func.at("parameters") : json::object();
         const auto &          properties = params.contains("properties") ? params.at("properties") : json::object();
 
+        auto schema_info = common_schema_info();
+        schema_info.resolve_refs(params);
+
+        common_peg_parser args_seq = p.eps();
+
+        if (tolerant_xml) {
+            common_peg_parser ws = p.space();
+
+            if (!properties.empty()) {
+                auto arg_choice = p.choice();
+                for (const auto & [param_name, param_schema] : properties.items()) {
+                    const bool is_string = schema_info.resolves_to_string(param_schema);
+
+                    auto value_parser = is_string ?
+                        p.tool_arg_string_value(tolerant_arg_value) :
+                        p.tool_arg_json_value(p.schema(
+                            p.json(), "tool-" + name + "-arg-" + param_name + "-schema", param_schema, false));
+
+                    auto arg_close = p.tool_arg_close(
+                        (arguments.value_suffix.empty() ? p.eps() :
+                                                        p.optional(p.literal(arguments.value_suffix))) +
+                        ws);
+
+                    arg_choice |= p.tool_arg(
+                        p.tool_arg_open(arg_name_prefix + p.tool_arg_name(p.literal(param_name)) +
+                                        arguments.name_suffix) +
+                        arguments.value_prefix + value_parser + arg_close);
+                }
+                args_seq = p.zero_or_more(arg_choice + ws);
+            }
+
+            auto func_close = function.close.empty() ?
+                ws :
+                p.tool_close(p.optional(p.literal(function.close)) + ws);
+
+            auto tool_parser = p.tool(
+                p.tool_open(build_attr_name_prefix_choice(p, function.name_prefix, function.alt_name_prefix,
+                                                          function.compact_name_prefix) +
+                            p.tool_name(p.literal(name)) + function.name_suffix) +
+                p.tool_args(args_seq) + ws + func_close);
+
+            tool_choice |= p.rule("tool-" + name, tool_parser);
+            return;
+        }
+
         std::set<std::string> required;
         if (params.contains("required")) {
             params.at("required").get_to(required);
         }
-
-        auto schema_info = common_schema_info();
-        schema_info.resolve_refs(params);
 
         // Build parser for each argument, separating required and optional
         std::vector<common_peg_parser> required_parsers;
@@ -410,7 +560,6 @@ common_peg_parser analyze_tools::build_tool_parser_tag_tagged(parser_build_conte
         }
 
         // Build required arg sequence in definition order
-        common_peg_parser args_seq = p.eps();
         for (size_t i = 0; i < required_parsers.size(); i++) {
             if (i > 0) {
                 args_seq = args_seq + p.space();
@@ -471,8 +620,8 @@ common_peg_parser analyze_tools::build_tool_parser_tag_tagged(parser_build_conte
                                         p.literal(format.section_start) + p.space() + tool_calls + p.space() +
                                             (format.section_end.empty() ? p.end() : p.literal(format.section_end) + p.space()));
         }
-    } else {
-        std::string separator = ", ";  // Default
+    } else if (!format.section_start.empty()) {
+        std::string separator = format.call_separator.empty() ? ", " : format.call_separator;
 
         if (inputs.parallel_tool_calls) {
             tool_calls = p.trigger_rule("tool-call", format.section_start + p.space() + tool_choice +
@@ -482,14 +631,18 @@ common_peg_parser analyze_tools::build_tool_parser_tag_tagged(parser_build_conte
             tool_calls = p.trigger_rule(
                 "tool-call", format.section_start + p.space() + tool_choice + p.space() + format.section_end);
         }
+    } else {
+        tool_calls = build_direct_tool_calls(p, *this, tool_choice, inputs);
     }
 
     if (!require_tools) {
         tool_calls = p.optional(tool_calls);
     }
 
-    std::string trigger_marker       = !format.section_start.empty() ? format.section_start : format.per_call_start;
-    auto        content_before_tools = trigger_marker.empty() ? p.eps() : p.until(trigger_marker);
+    const std::string trigger_marker = tool_trigger_marker(*this);
+    auto              content_before_tools = !format.tool_start_triggers.empty() ?
+        p.until_one_of(format.tool_start_triggers) :
+        (trigger_marker.empty() ? p.eps() : p.until(trigger_marker));
     return ctx.reasoning_parser + p.optional(p.content(content_before_tools)) + tool_calls + p.end();
 }
 

@@ -235,7 +235,7 @@ common_peg_parser common_chat_peg_builder::tag_with_safe_content(const std::stri
     return zero_or_more(choice({ p, content_chunk }));
 }
 
-void common_chat_peg_minicpm5_mapper::finalize_tool_call_arguments(std::string & args) {
+static void finalize_incomplete_json_tool_args(std::string & args) {
     if (args.empty() || args.front() != '{') {
         return;
     }
@@ -259,18 +259,6 @@ void common_chat_peg_minicpm5_mapper::finalize_tool_call_arguments(std::string &
     }
     for (int d = json_brace_depth(args); d > 0; d--) {
         args += '}';
-    }
-}
-
-void common_chat_peg_minicpm5_mapper::from_ast(const common_peg_ast_arena &    arena,
-                                                 const common_peg_parse_result & parse_result) {
-    common_chat_peg_mapper::from_ast(arena, parse_result);
-    // MiniCPM5 often omits </param></function>. Lenient parsing stops before tool_close,
-    // so finalize argument JSON on the completed response (same as tool_close handler).
-    if (!is_partial_) {
-        for (auto & tool_call : result.tool_calls) {
-            finalize_tool_call_arguments(tool_call.arguments);
-        }
     }
 }
 
@@ -309,6 +297,12 @@ void common_chat_peg_mapper::from_ast(const common_peg_ast_arena &    arena,
         }
         if (all_whitespace) {
             result.reasoning_content.clear();
+        }
+    }
+
+    if (!is_partial_) {
+        for (auto & tool_call : result.tool_calls) {
+            finalize_incomplete_json_tool_args(tool_call.arguments);
         }
     }
 }

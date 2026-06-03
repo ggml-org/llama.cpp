@@ -178,6 +178,7 @@ struct tool_format_analysis {
     std::string section_end;     // e.g., "</tool_call>", ""
     std::string per_call_start;  // e.g., "<|tool_call_begin|>", "" (for multi-call templates)
     std::string per_call_end;    // e.g., "<|tool_call_end|>", ""
+    std::string call_separator;  // e.g., "\n", "<tool_sep>" — between consecutive tool calls when there is no section wrapper
 
     bool fun_name_is_key = false;       // In JSON format function name is JSON key, i.e. { "<funname>": { ... arguments ... } }
     bool tools_array_wrapped = false;   // Tool calls wrapped in JSON array [...]
@@ -189,12 +190,19 @@ struct tool_format_analysis {
     std::string              id_field;
     std::string              gen_id_field;
     std::vector<std::string> parameter_order;
+
+    // XML attribute-style tools (<function name="..."><param name="...">) may omit outer
+    // tags or closing markers; use alternate prefixes and content/tool triggers below.
+    bool tolerate_incomplete_xml = false;
+    std::vector<std::string> tool_start_triggers;
 };
 
 struct tool_function_analysis {
     std::string name_prefix;  // e.g., "<function=", "\"name\": \"", "functions."
     std::string name_suffix;  // e.g., ">", "\"", ":0"
     std::string close;        // e.g., "</function>", "" (for tag-based)
+    std::string alt_name_prefix;     // e.g. " name=\"" when the opening tag is truncated
+    std::string compact_name_prefix; // e.g. "<functionname=\""
 };
 
 struct tool_arguments_analysis {
@@ -205,6 +213,9 @@ struct tool_arguments_analysis {
     std::string value_prefix;  // e.g., "", "<arg_value>", ""
     std::string value_suffix;  // e.g., "</param>", "</arg_value>", ""
     std::string separator;     // e.g., "", "\n", ","
+    std::string alt_name_prefix;
+    std::string compact_name_prefix;
+    std::vector<std::string> value_stop_sequences;
 };
 
 struct tool_id_analysis {
@@ -337,6 +348,9 @@ struct analyze_tools : analyze_base {
 
     // Check for and extract specific per-call markers for non-native-JSON templates with parallel call support
     void check_per_call_markers();
+
+    // Extract separator between consecutive tool calls (when calls are not wrapped in section/per-call markers)
+    void extract_call_separator();
 
     // Extract function name markers
     void extract_function_markers();

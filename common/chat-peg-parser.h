@@ -11,7 +11,9 @@ class common_chat_peg_mapper {
   public:
     common_chat_msg & result;
 
-    common_chat_peg_mapper(common_chat_msg & msg) : result(msg) {}
+    common_chat_peg_mapper(common_chat_msg & msg, bool is_partial = false) :
+        result(msg),
+        is_partial_(is_partial) {}
 
     virtual ~common_chat_peg_mapper() = default;
 
@@ -26,6 +28,7 @@ class common_chat_peg_mapper {
       int                                  arg_count             = 0;
       bool                                 closing_quote_pending = false;
       std::string                          args_buffer;  // Buffer to delay arguments until tool name is known
+      bool                                 is_partial_ = false;
 
       // Returns a reference to the active argument destination string.
       // Before tool_name is known, writes go to args_buffer; after, to current_tool->arguments.
@@ -38,16 +41,6 @@ class common_chat_peg_gemma4_mapper : public common_chat_peg_mapper {
     virtual void from_ast(const common_peg_ast_arena & arena, const common_peg_parse_result & result);
   private:
     void visit(const common_peg_ast_arena & arena, common_peg_ast_id id);
-};
-
-class common_chat_peg_minicpm5_mapper : public common_chat_peg_mapper {
-  public:
-    common_chat_peg_minicpm5_mapper(common_chat_msg & msg, bool is_partial) :
-        common_chat_peg_mapper(msg), is_partial_(is_partial) {}
-    void from_ast(const common_peg_ast_arena & arena, const common_peg_parse_result & result) override;
-  private:
-    bool is_partial_;
-    static void finalize_tool_call_arguments(std::string & args);
 };
 
 struct content_structure;

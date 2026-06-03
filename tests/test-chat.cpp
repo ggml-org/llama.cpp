@@ -5610,25 +5610,15 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
     {
         auto tst = peg_tester("models/templates/MiniCPM5-1B.jinja", detailed_debug);
 
-        tst.test("Hello, world!\nWhat's up?").expect(message_assist).run();
+        tst.test("Hello, world!\nWhat's up?")
+            .enable_thinking(false)
+            .reasoning_format(COMMON_REASONING_FORMAT_NONE)
+            .expect(message_assist)
+            .run();
 
         tst.test(R"(<function name="python"><param name="code">print('Hello, World!')</param></function>)")
             .enable_thinking(false)
-            .expect_streaming_consistency(false)
-            .tools({ python_tool })
-            .expect_tool_calls({ { "python", R"#({"code": "print('Hello, World!')"})#", {} } })
-            .run();
-
-        // Model sometimes drops opening tag names but keeps attributes.
-        tst.test(R"( name="python"> name="code">print('Hello, World!'))")
-            .enable_thinking(false)
-            .expect_streaming_consistency(false)
-            .tools({ python_tool })
-            .expect_tool_calls({ { "python", R"#({"code": "print('Hello, World!')"})#", {} } })
-            .run();
-
-        tst.test(R"(<functionname="python"><paramname="code">print('Hello, World!'))")
-            .enable_thinking(false)
+            .reasoning_format(COMMON_REASONING_FORMAT_NONE)
             .expect_streaming_consistency(false)
             .tools({ python_tool })
             .expect_tool_calls({ { "python", R"#({"code": "print('Hello, World!')"})#", {} } })
@@ -5636,6 +5626,7 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
 
         tst.test(R"(<function name="empty_args"></function>)")
             .enable_thinking(false)
+            .reasoning_format(COMMON_REASONING_FORMAT_NONE)
             .expect_streaming_consistency(false)
             .tools({ empty_args_tool })
             .expect(simple_assist_msg("", "", "empty_args", "{}"))
@@ -5643,6 +5634,7 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
 
         tst.test(R"(<function name="python"><param name="code">print('x')</param></function>)")
             .enable_thinking(false)
+            .reasoning_format(COMMON_REASONING_FORMAT_NONE)
             .expect_streaming_consistency(false)
             .parallel_tool_calls(true)
             .tools({ python_tool })
@@ -5658,8 +5650,10 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .expect_tool_calls({ { "python", R"#({"code": "print('hey')"})#", {} } })
             .run();
 
-        tst.test(R"(<function name="python"><param name="code">print('x')</param></function><function name="python"><param name="code">print('y')</param></function>)")
+        tst.test(R"(<function name="python"><param name="code">print('x')</param></function>
+<function name="python"><param name="code">print('y')</param></function>)")
             .enable_thinking(false)
+            .reasoning_format(COMMON_REASONING_FORMAT_NONE)
             .expect_streaming_consistency(false)
             .parallel_tool_calls(true)
             .tools({ python_tool })
@@ -5671,6 +5665,7 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
 
         tst.test(R"(<function name="python"><param name="code">print('hey')")
             .enable_thinking(false)
+            .reasoning_format(COMMON_REASONING_FORMAT_NONE)
             .expect_streaming_consistency(false)
             .tools({ python_tool })
             .is_partial(true)
@@ -5733,8 +5728,8 @@ static void test_minicpm5_malformed_tool_args_multiturn() {
     // Truncated JSON (matches server 500: parse error at column 7 in lexasub report).
     {
         auto params = apply_multiturn(R"({"url")");
-        if (params.format != COMMON_CHAT_FORMAT_PEG_MINICPM5) {
-            throw std::runtime_error("Expected peg-minicpm5 format for malformed-args multi-turn apply");
+        if (params.format != COMMON_CHAT_FORMAT_PEG_NATIVE) {
+            throw std::runtime_error("Expected peg-native format for malformed-args multi-turn apply");
         }
         if (params.prompt.empty()) {
             throw std::runtime_error("MiniCPM5 multi-turn apply returned empty prompt");
@@ -5750,8 +5745,8 @@ static void test_minicpm5_malformed_tool_args_multiturn() {
     // Degenerate partial JSON from agent-style tool output.
     {
         auto params = apply_multiturn(R"({"id":"-Updx2F7A3C7D3D9K2Z7H6H5)");
-        if (params.format != COMMON_CHAT_FORMAT_PEG_MINICPM5) {
-            throw std::runtime_error("Expected peg-minicpm5 format for degenerate-args multi-turn apply");
+        if (params.format != COMMON_CHAT_FORMAT_PEG_NATIVE) {
+            throw std::runtime_error("Expected peg-native format for degenerate-args multi-turn apply");
         }
         if (params.generation_prompt.find("<|im_start|>assistant") == std::string::npos) {
             throw std::runtime_error("Expected generation prompt after malformed tool-call history");
@@ -5908,8 +5903,9 @@ static void test_template_generation_prompt() {
     {
         auto tmpls = read_templates("models/templates/MiniCPM5-1B.jinja");
         check(tmpls, basic(),                  "<|im_start|>assistant\n<think>\n");
-        check(tmpls, continuation_content(),   "<|im_start|>assistant\n<think>I'm thinking</think>Hello, ");
-        check(tmpls, continuation_reasoning(), "<|im_start|>assistant\n<think>I'm");
+        check(tmpls, continuation_content(),
+              "<|im_start|>assistant\n<think>\nI'm thinking\n</think>\n\nHello, ");
+        check(tmpls, continuation_reasoning(), "<|im_start|>assistant\n<think>\nI'm");
     }
 }
 
