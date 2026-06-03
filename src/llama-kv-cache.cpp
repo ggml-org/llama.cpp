@@ -1221,6 +1221,23 @@ ggml_type llama_kv_cache::type_v() const {
     return layers[0].v->type;
 }
 
+std::vector<uint32_t> llama_kv_cache::get_layer_ids() const {
+    std::vector<uint32_t> res;
+    res.reserve(layers.size());
+
+    for (const auto & layer : layers) {
+        res.push_back(layer.il);
+    }
+
+    return res;
+}
+
+ggml_tensor * llama_kv_cache::get_k_storage(int32_t il) const {
+    const int32_t ikv = map_layer_ids.at(il);
+
+    return layers[ikv].k;
+}
+
 uint32_t llama_kv_cache::get_n_kv(const slot_info & sinfo) const {
     uint32_t result = 0;
 

@@ -3,6 +3,7 @@
 #include "ggml-backend.h"
 #include "llama-impl.h"
 #include "llama-batch.h"
+#include "llama-io.h"
 #include "llama-model.h"
 
 #include <algorithm>
@@ -17,8 +18,179 @@
 static constexpr uint32_t DSV4_CSA_RATIO = 4;
 static constexpr uint32_t DSV4_HCA_RATIO = 128;
 
+static constexpr uint32_t DSV4_STATE_MAGIC         = 0x34565344; // DSV4
+static constexpr uint32_t DSV4_STATE_VERSION       = 1;
+static constexpr uint32_t DSV4_K_CACHE_STATE_VER   = 1;
+static constexpr uint32_t DSV4_COMP_STATE_VER      = 1;
+
 static uint32_t dsv4_comp_size(uint32_t kv_size, uint32_t ratio) {
     return std::max<uint32_t>(1, (kv_size + ratio - 1)/ratio);
+}
+
+static void dsv4_state_src_stream_range(
+        uint32_t       n_stream,
+        llama_seq_id   seq_id,
+        uint32_t     & s0,
+        uint32_t     & ns) {
+    if (seq_id >= 0 && n_stream > 1) {
+        if ((uint32_t) seq_id >= n_stream) {
+            throw std::runtime_error("DSV4 state sequence id out of stream range");
+        }
+
+        s0 = (uint32_t) seq_id;
+        ns = 1;
+        return;
+    }
+
+    s0 = 0;
+    ns = seq_id >= 0 ? 1 : n_stream;
+}
+
+static void dsv4_state_dst_stream_range(
+        uint32_t       n_stream,
+        llama_seq_id   seq_id,
+        uint32_t       ns,
+        uint32_t     & s0) {
+    if (seq_id >= 0) {
+        if (ns != 1) {
+            throw std::runtime_error("DSV4 sequence state stream count mismatch");
+        }
+        if (n_stream > 1 && (uint32_t) seq_id >= n_stream) {
+            throw std::runtime_error("DSV4 state sequence id out of stream range");
+        }
+
+        s0 = n_stream > 1 ? (uint32_t) seq_id : 0;
+        return;
+    }
+
+    if (ns != n_stream) {
+        throw std::runtime_error("DSV4 full state stream count mismatch");
+    }
+
+    s0 = 0;
+}
+
+static void dsv4_state_write_tensor_streams(
+        llama_io_write_i & io,
+        ggml_tensor      * tensor,
+        uint32_t           n_rows,
+        uint32_t           s0,
+        uint32_t           ns) {
+    const int32_t  type_i   = (int32_t) tensor->type;
+    const uint64_t ne0      = tensor->ne[0];
+    const uint64_t rows     = n_rows;
+    const uint64_t row_size = ggml_row_size(tensor->type, tensor->ne[0]);
+
+    io.write(&type_i,   sizeof(type_i));
+    io.write(&ne0,      sizeof(ne0));
+    io.write(&rows,     sizeof(rows));
+    io.write(&row_size, sizeof(row_size));
+
+    const size_t offset = (size_t) s0*n_rows*row_size;
+    const size_t size   = (size_t) ns*n_rows*row_size;
+
+    io.write_tensor(tensor, offset, size);
+}
+
+static void dsv4_state_read_tensor_streams(
+        llama_io_read_i & io,
+        ggml_tensor     * tensor,
+        uint32_t          n_rows,
+        uint32_t          s0,
+        uint32_t          ns) {
+    int32_t  type_i_ref;
+    uint64_t ne0_ref;
+    uint64_t rows_ref;
+    uint64_t row_size_ref;
+
+    io.read(&type_i_ref,   sizeof(type_i_ref));
+    io.read(&ne0_ref,      sizeof(ne0_ref));
+    io.read(&rows_ref,     sizeof(rows_ref));
+    io.read(&row_size_ref, sizeof(row_size_ref));
+
+    const int32_t  type_i   = (int32_t) tensor->type;
+    const uint64_t ne0      = tensor->ne[0];
+    const uint64_t rows     = n_rows;
+    const uint64_t row_size = ggml_row_size(tensor->type, tensor->ne[0]);
+
+    if (type_i != type_i_ref || ne0 != ne0_ref || rows != rows_ref || row_size != row_size_ref) {
+        throw std::runtime_error("DSV4 state tensor metadata mismatch");
+    }
+
+    const size_t offset = (size_t) s0*n_rows*row_size;
+    const size_t size   = (size_t) ns*n_rows*row_size;
+
+    io.read_tensor(tensor, offset, size);
+}
+
+static void dsv4_state_write_k_cache(
+        llama_io_write_i    & io,
+        const llama_kv_cache * kv,
+        llama_seq_id          seq_id,
+        llama_state_seq_flags flags) {
+    GGML_UNUSED(flags);
+
+    uint32_t s0;
+    uint32_t ns;
+    dsv4_state_src_stream_range(kv->get_n_stream(), seq_id, s0, ns);
+
+    const uint32_t version = DSV4_K_CACHE_STATE_VER;
+    const uint32_t kv_size = kv->get_size();
+    const auto layer_ids = kv->get_layer_ids();
+    const uint32_t n_layer = layer_ids.size();
+
+    io.write(&version, sizeof(version));
+    io.write(&kv_size, sizeof(kv_size));
+    io.write(&ns,      sizeof(ns));
+    io.write(&n_layer, sizeof(n_layer));
+
+    for (uint32_t il : layer_ids) {
+        io.write(&il, sizeof(il));
+        dsv4_state_write_tensor_streams(io, kv->get_k_storage(il), kv_size, s0, ns);
+    }
+}
+
+static void dsv4_state_read_k_cache(
+        llama_io_read_i  & io,
+        llama_kv_cache   * kv,
+        llama_seq_id       seq_id,
+        llama_state_seq_flags flags) {
+    GGML_UNUSED(flags);
+
+    uint32_t version;
+    uint32_t kv_size_ref;
+    uint32_t ns;
+    uint32_t n_layer_ref;
+
+    io.read(&version,     sizeof(version));
+    io.read(&kv_size_ref, sizeof(kv_size_ref));
+    io.read(&ns,          sizeof(ns));
+    io.read(&n_layer_ref, sizeof(n_layer_ref));
+
+    if (version != DSV4_K_CACHE_STATE_VER) {
+        throw std::runtime_error("DSV4 K-cache state version mismatch");
+    }
+    if (kv_size_ref != kv->get_size()) {
+        throw std::runtime_error("DSV4 K-cache state size mismatch");
+    }
+
+    uint32_t s0;
+    dsv4_state_dst_stream_range(kv->get_n_stream(), seq_id, ns, s0);
+
+    const auto layer_ids = kv->get_layer_ids();
+    if (n_layer_ref != layer_ids.size()) {
+        throw std::runtime_error("DSV4 K-cache layer count mismatch");
+    }
+
+    for (uint32_t il : layer_ids) {
+        uint32_t il_ref;
+        io.read(&il_ref, sizeof(il_ref));
+        if (il_ref != il) {
+            throw std::runtime_error("DSV4 K-cache layer id mismatch");
+        }
+
+        dsv4_state_read_tensor_streams(io, kv->get_k_storage(il), kv->get_size(), s0, ns);
+    }
 }
 
 static std::string dsv4_plan_positions(const std::vector<int32_t> & values) {
@@ -306,6 +478,73 @@ std::map<ggml_backend_buffer_type_t, size_t> llama_dsv4_comp_state::memory_break
     return ret;
 }
 
+void llama_dsv4_comp_state::state_write(llama_io_write_i & io, llama_seq_id seq_id, llama_state_seq_flags flags) const {
+    GGML_UNUSED(flags);
+
+    uint32_t s0;
+    uint32_t ns;
+    dsv4_state_src_stream_range(n_stream, seq_id, s0, ns);
+
+    const uint32_t version      = DSV4_COMP_STATE_VER;
+    const uint32_t n_layer      = layers.size();
+
+    io.write(&version,      sizeof(version));
+    io.write(&ratio,        sizeof(ratio));
+    io.write(&state_size,   sizeof(state_size));
+    io.write(&n_embd_state, sizeof(n_embd_state));
+    io.write(&ns,           sizeof(ns));
+    io.write(&n_layer,      sizeof(n_layer));
+
+    for (const auto & layer : layers) {
+        io.write(&layer.il, sizeof(layer.il));
+
+        dsv4_state_write_tensor_streams(io, layer.kv,    state_size, s0, ns);
+        dsv4_state_write_tensor_streams(io, layer.score, state_size, s0, ns);
+    }
+}
+
+void llama_dsv4_comp_state::state_read(llama_io_read_i & io, llama_seq_id seq_id, llama_state_seq_flags flags) {
+    GGML_UNUSED(flags);
+
+    uint32_t version;
+    uint32_t ratio_ref;
+    uint32_t state_size_ref;
+    uint32_t n_embd_state_ref;
+    uint32_t ns;
+    uint32_t n_layer_ref;
+
+    io.read(&version,          sizeof(version));
+    io.read(&ratio_ref,        sizeof(ratio_ref));
+    io.read(&state_size_ref,   sizeof(state_size_ref));
+    io.read(&n_embd_state_ref, sizeof(n_embd_state_ref));
+    io.read(&ns,               sizeof(ns));
+    io.read(&n_layer_ref,      sizeof(n_layer_ref));
+
+    if (version != DSV4_COMP_STATE_VER) {
+        throw std::runtime_error("DSV4 compressor state version mismatch");
+    }
+    if (ratio_ref != ratio || state_size_ref != state_size || n_embd_state_ref != n_embd_state) {
+        throw std::runtime_error("DSV4 compressor state metadata mismatch");
+    }
+    if (n_layer_ref != layers.size()) {
+        throw std::runtime_error("DSV4 compressor state layer count mismatch");
+    }
+
+    uint32_t s0;
+    dsv4_state_dst_stream_range(n_stream, seq_id, ns, s0);
+
+    for (const auto & layer : layers) {
+        uint32_t il_ref;
+        io.read(&il_ref, sizeof(il_ref));
+        if (il_ref != layer.il) {
+            throw std::runtime_error("DSV4 compressor state layer id mismatch");
+        }
+
+        dsv4_state_read_tensor_streams(io, layer.kv,    state_size, s0, ns);
+        dsv4_state_read_tensor_streams(io, layer.score, state_size, s0, ns);
+    }
+}
+
 ggml_tensor * llama_dsv4_comp_state::get_kv(ggml_context * ctx, int32_t il) const {
     const int32_t ids = map_layer_ids.at(il);
 
@@ -540,6 +779,8 @@ bool llama_kv_cache_dsv4::get_can_shift() const {
 }
 
 void llama_kv_cache_dsv4::clear(bool data) {
+    restored_trim_pos.clear();
+
     kv_raw->clear(data);
     clear_compressed(data);
 }
@@ -550,6 +791,20 @@ bool llama_kv_cache_dsv4::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1
     }
 
     if (p0 > 0) {
+        if (seq_id >= 0) {
+            auto it = restored_trim_pos.find(seq_id);
+            if (it != restored_trim_pos.end()) {
+                const llama_pos pos_max = it->second;
+                restored_trim_pos.erase(it);
+
+                if (p0 >= pos_max) {
+                    return kv_raw->seq_rm(seq_id, p0, p1);
+                }
+
+                return false;
+            }
+        }
+
         // DSV4 compressed cache rows are derived from running compressor state,
         // so arbitrary rollback is not reconstructible from the raw cache alone.
         // Allow the common prompt-cache cleanup no-op: remove [end, infinity).
@@ -563,6 +818,12 @@ bool llama_kv_cache_dsv4::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1
     const bool res = kv_raw->seq_rm(seq_id, p0, p1);
 
     if (res) {
+        if (seq_id >= 0) {
+            restored_trim_pos.erase(seq_id);
+        } else {
+            restored_trim_pos.clear();
+        }
+
         clear_compressed(false);
     }
 
@@ -570,27 +831,38 @@ bool llama_kv_cache_dsv4::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1
 }
 
 void llama_kv_cache_dsv4::seq_cp(llama_seq_id seq_id_src, llama_seq_id seq_id_dst, llama_pos p0, llama_pos p1) {
+    restored_trim_pos.clear();
+
     kv_raw->seq_cp(seq_id_src, seq_id_dst, p0, p1);
     clear_compressed(false);
 }
 
 void llama_kv_cache_dsv4::seq_keep(llama_seq_id seq_id) {
+    restored_trim_pos.clear();
+
     kv_raw->seq_keep(seq_id);
     clear_compressed(false);
 }
 
 void llama_kv_cache_dsv4::seq_add(llama_seq_id seq_id, llama_pos p0, llama_pos p1, llama_pos shift) {
+    restored_trim_pos.clear();
+
     kv_raw->seq_add(seq_id, p0, p1, shift);
     clear_compressed(false);
 }
 
 void llama_kv_cache_dsv4::seq_div(llama_seq_id seq_id, llama_pos p0, llama_pos p1, int d) {
+    restored_trim_pos.clear();
+
     kv_raw->seq_div(seq_id, p0, p1, d);
     clear_compressed(false);
 }
 
 llama_pos llama_kv_cache_dsv4::seq_pos_min(llama_seq_id seq_id) const {
-    return kv_raw->seq_pos_min(seq_id);
+    // The raw SWA cache may contain a wider window, but the compressed DSV4
+    // state cannot be rolled back to the beginning of that window. Report the
+    // exact restored boundary so server-context prefers checkpoints.
+    return kv_raw->seq_pos_max(seq_id);
 }
 
 llama_pos llama_kv_cache_dsv4::seq_pos_max(llama_seq_id seq_id) const {
@@ -621,12 +893,55 @@ std::map<ggml_backend_buffer_type_t, size_t> llama_kv_cache_dsv4::memory_breakdo
 }
 
 void llama_kv_cache_dsv4::state_write(llama_io_write_i & io, llama_seq_id seq_id, llama_state_seq_flags flags) const {
+    const uint32_t magic   = DSV4_STATE_MAGIC;
+    const uint32_t version = DSV4_STATE_VERSION;
+
+    io.write(&magic,   sizeof(magic));
+    io.write(&version, sizeof(version));
+
     kv_raw->state_write(io, seq_id, flags);
+
+    dsv4_state_write_k_cache(io, kv_csa.get(), seq_id, flags);
+    dsv4_state_write_k_cache(io, kv_hca.get(), seq_id, flags);
+    dsv4_state_write_k_cache(io, kv_lid.get(), seq_id, flags);
+
+    csa_state->state_write(io, seq_id, flags);
+    hca_state->state_write(io, seq_id, flags);
+    lid_state->state_write(io, seq_id, flags);
 }
 
 void llama_kv_cache_dsv4::state_read(llama_io_read_i & io, llama_seq_id seq_id, llama_state_seq_flags flags) {
+    uint32_t magic;
+    uint32_t version;
+
+    io.read(&magic,   sizeof(magic));
+    io.read(&version, sizeof(version));
+
+    if (magic != DSV4_STATE_MAGIC) {
+        throw std::runtime_error("DSV4 state magic mismatch");
+    }
+    if (version != DSV4_STATE_VERSION) {
+        throw std::runtime_error("DSV4 state version mismatch");
+    }
+
+    restored_trim_pos.clear();
+
     kv_raw->state_read(io, seq_id, flags);
-    clear_compressed(false);
+
+    dsv4_state_read_k_cache(io, kv_csa.get(), seq_id, flags);
+    dsv4_state_read_k_cache(io, kv_hca.get(), seq_id, flags);
+    dsv4_state_read_k_cache(io, kv_lid.get(), seq_id, flags);
+
+    csa_state->state_read(io, seq_id, flags);
+    hca_state->state_read(io, seq_id, flags);
+    lid_state->state_read(io, seq_id, flags);
+
+    if (seq_id >= 0) {
+        const llama_pos pos_max = kv_raw->seq_pos_max(seq_id);
+        if (pos_max >= 0) {
+            restored_trim_pos[seq_id] = pos_max;
+        }
+    }
 }
 
 llama_kv_cache_iswa * llama_kv_cache_dsv4::get_raw() const {
