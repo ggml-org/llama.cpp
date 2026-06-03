@@ -733,7 +733,10 @@ private:
                 SRV_WRN("%s\n", "cache_reuse is not supported by multimodal, it will be disabled");
             }
 
-            if (params_base.speculative.type != COMMON_SPECULATIVE_TYPE_NONE) {
+            // Gemma 4 MTP cross-attends the target's KV cache, which already encodes the
+            // image — so MTP IS multimodal-compatible. Only disable the non-MTP draft types.
+            if (params_base.speculative.type != COMMON_SPECULATIVE_TYPE_NONE &&
+                params_base.speculative.type != COMMON_SPECULATIVE_TYPE_MTP) {
                 params_base.speculative.type =  COMMON_SPECULATIVE_TYPE_NONE;
                 SRV_WRN("%s\n", "speculative decoding is not supported by multimodal, it will be disabled");
             }
@@ -794,7 +797,8 @@ private:
             if (can_spec) {
                 slot.spec = common_speculative_init(params_base.speculative, slot.ctx);
                 if (slot.spec) {
-                    if (mctx) {
+                    // MTP is multimodal-compatible (reads the target KV); other draft types are not.
+                    if (mctx && params_base.speculative.type != COMMON_SPECULATIVE_TYPE_MTP) {
                         SRV_ERR("%s\n", "speculative decoding is not supported with multimodal");
                         return false;
                     }
@@ -2113,12 +2117,14 @@ private:
             //       perform the speculative drafting for all sequences at the same time in a single batch
             const int n_draft_max = slot.get_n_draft_max();
             if (n_draft_max > 0) {
-                if (mctx) {
-                    // we should never reach this, as speculative is automatically disabled if mmproj is loaded
+                // MTP cross-attends the target KV (which encodes the image) and seeds from the
+                // target hidden, so it IS multimodal-compatible; get_text_tokens() filters out the
+                // media placeholders. Other draft types still can't run with multimodal.
+                if (mctx && slot.task->params.speculative.type != COMMON_SPECULATIVE_TYPE_MTP) {
                     GGML_ABORT("not supported by multimodal");
                 }
 
-                const llama_tokens & cached_text_tokens = slot.prompt.tokens.get_text_tokens();
+                const llama_tokens cached_text_tokens = slot.prompt.tokens.get_text_tokens();
 
                 const auto & params_spec = slot.task->params.speculative;
 
