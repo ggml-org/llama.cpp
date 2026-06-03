@@ -16,11 +16,12 @@
 	import { rehypeRestoreTableHtml } from './plugins/rehype/table-html-restorer';
 	import { rehypeEnhanceLinks } from './plugins/rehype/enhance-links';
 	import { rehypeEnhanceCodeBlocks } from './plugins/rehype/enhance-code-blocks';
+	import { rehypeEnhanceMermaidBlocks } from './plugins/rehype/enhance-mermaid-blocks';
 	import { rehypeMermaidPre } from './plugins/rehype/mermaid-pre';
 	import { rehypeResolveAttachmentImages } from './plugins/rehype/resolve-attachment-images';
 	import { rehypeRtlSupport } from './plugins/rehype/rehype-rtl-support';
 	import { remarkLiteralHtml } from './plugins/remark/literal-html';
-	import { copyCodeToClipboard, preprocessLaTeX, getImageErrorFallbackHtml } from '$lib/utils';
+	import { copyCodeToClipboard, copyToClipboard, preprocessLaTeX, getImageErrorFallbackHtml } from '$lib/utils';
 	import {
 		IMAGE_NOT_ERROR_BOUND_SELECTOR,
 		DATA_ERROR_BOUND_ATTR,
@@ -35,7 +36,7 @@
 	import githubDarkCss from 'highlight.js/styles/github-dark.css?inline';
 	import githubLightCss from 'highlight.js/styles/github.css?inline';
 	import { mode } from 'mode-watcher';
-	import { CodeBlockActions, DialogCodePreview, DialogMermaidPreview } from '$lib/components/app';
+	import { CodeBlockActions, DialogCodePreview, DialogMermaidPreview, ActionIconCopyToClipboard } from '$lib/components/app';
 	import { createAutoScrollController } from '$lib/hooks/use-auto-scroll.svelte';
 	import type { DatabaseMessageExtra } from '$lib/types/database';
 	import { config } from '$lib/stores/settings.svelte';
@@ -107,6 +108,7 @@
 			.use(rehypeEnhanceLinks) // Add target="_blank" to links
 			.use(rehypeMermaidPre) // Convert mermaid blocks to <pre class="mermaid">
 			.use(rehypeEnhanceCodeBlocks) // Wrap code blocks with header and actions
+			.use(rehypeEnhanceMermaidBlocks) // Wrap mermaid blocks with header and actions
 			.use(rehypeResolveAttachmentImages, { attachments })
 			.use(rehypeRtlSupport) // Add bidirectional text support
 			.use(rehypeStringify, { allowDangerousHtml: true }); // Convert to HTML string
@@ -502,11 +504,49 @@
 
 	/**
 	 * Opens the mermaid diagram in a full-screen preview dialog with zoom/pan support.
-	 * Uses event delegation: a single handler on the container that detects
-	 * clicks on any mermaid diagram regardless of when it was rendered.
+	 * Also handles copy and preview button clicks for mermaid blocks.
+	 * Uses event delegation: a single handler on the container.
 	 */
-	function handleMermaidClick(event: MouseEvent) {
-		const mermaidEl = (event.target as HTMLElement).closest('.mermaid');
+	async function handleMermaidClick(event: MouseEvent) {
+		const target = event.target as HTMLElement;
+
+		// Check if clicking on copy or preview button in mermaid block
+		const copyBtn = target.closest('.mermaid-block-wrapper .copy-code-btn');
+		const previewBtn = target.closest('.mermaid-block-wrapper .preview-code-btn');
+
+		if (copyBtn || previewBtn) {
+			const wrapper = target.closest('.mermaid-block-wrapper');
+			if (!wrapper) return;
+
+			const preElement = wrapper.querySelector<HTMLElement>('pre.mermaid[data-mermaid-syntax]');
+			if (!preElement) return;
+
+			const mermaidSyntax = preElement.dataset.mermaidSyntax ?? '';
+
+			if (copyBtn) {
+				event.preventDefault();
+				event.stopPropagation();
+				try {
+					await copyToClipboard(mermaidSyntax);
+				} catch (error) {
+					console.error('Failed to copy mermaid syntax:', error);
+				}
+				return;
+			}
+
+			if (previewBtn) {
+				event.preventDefault();
+				event.stopPropagation();
+				const svg = preElement.querySelector('svg');
+				if (!svg) return;
+				mermaidPreviewSvgHtml = svg.outerHTML;
+				mermaidPreviewOpen = true;
+				return;
+			}
+		}
+
+		// Otherwise, open preview when clicking on the mermaid diagram itself
+		const mermaidEl = target.closest('.mermaid');
 		if (!mermaidEl) return;
 
 		const svg = mermaidEl.querySelector('svg');
