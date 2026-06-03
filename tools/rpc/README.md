@@ -122,20 +122,24 @@ When `rpc-server` is started with `-c`, tensors larger than 10 MiB are probed by
 hash before upload and saved in the server cache. This avoids resending large
 unchanged tensors, but small-model or many-small-tensor workloads can still spend
 most wall-clock time uploading weights on every fresh client run. For repeated
-experiments on trusted machines, `GGML_RPC_CACHE_MIN_SIZE` can lower that
-threshold on both the client and server:
+experiments on trusted machines, `GGML_RPC_CACHE_MIN_SIZE` can lower the client
+probe threshold:
 
 ```bash
 export GGML_RPC_CACHE_MIN_SIZE=1048576
-./build/bin/rpc-server -H 0.0.0.0 -p 50052 -c
+./build/bin/llama-bench --rpc 192.0.2.10:50052 ...
 ```
 
-Use the same environment variable on the `llama-bench` or inference client so it
-probes the same tensor sizes. Lower values trade less transfer after the cache is
-warm for more hashing, cache files, and small hash-probe RPCs, so keep the
-default unless real network measurements show a wall-clock win. Setting the
-threshold to `0` is the most aggressive option and can hurt per-token throughput
-on workloads with many tiny tensors.
+You may also set the same variable on selected `rpc-server` processes when you
+want those servers to save smaller tensors. Lower server thresholds can create
+many more cache files and increase hashing and disk churn, so change them per
+node only after measuring that node. Leaving the server unset keeps the default
+10 MiB save threshold while still allowing an experimental client to probe
+smaller tensors; cache misses simply fall back to uploading the tensor. Lower
+values trade less transfer after the cache is warm for more hashing, cache files,
+and small hash-probe RPCs, so keep the default unless real network measurements
+show a wall-clock win. Setting the threshold to `0` is the most aggressive option
+and can hurt per-token throughput on workloads with many tiny tensors.
 
 ### Benchmarking changes
 
@@ -177,17 +181,37 @@ python3 tools/rpc/bench_rpc_remote.py \
   --gen 128 \
   --repetitions 7 \
   --ngl 99 \
-  --device RPC0
+  --device RPC0 \
+  --patch-env GGML_RPC_CACHE_MIN_SIZE=1048576
 ```
+
+Use `--env KEY=VALUE` for settings that should apply to both cases and
+`--base-env` or `--patch-env` for one-sided experiments. The summary records the
+effective environment for each case, with sensitive-looking values redacted.
 
 The remote helper only connects to endpoints passed with `--base-rpc` and
 `--patch-rpc`; it does not SSH to hosts or start/stop servers. Use `--dry-run`
-to write the planned commands without connecting, and `--env KEY=VALUE` to set
-and record benchmark-specific client environment variables such as
-`GGML_RPC_TCP_BUFFER_SIZE` or `GGML_RPC_CACHE_MIN_SIZE`. Use `--llama-bench` when
-both cases should use the same local client binary, or `--base-llama-bench` and
+to write the planned commands without connecting. Use `--env KEY=VALUE` to set
+and record client environment variables that apply to both cases, such as
+`GGML_RPC_TCP_BUFFER_SIZE`; use `--base-env` or `--patch-env` for one-sided
+knobs such as `GGML_RPC_CACHE_MIN_SIZE`. Use `--llama-bench` when both cases
+should use the same local client binary, or `--base-llama-bench` and
 `--patch-llama-bench` when you want an end-to-end base-client/base-server versus
-patch-client/patch-server comparison.
+patch-client/patch-server comparison. For warmed-cache or one-sided experiments,
+use `--only base` or `--only patch` with the matching endpoint and binary.
+
+When benchmarking CUDA RPC servers across different GPU generations, build for
+the remote GPUs as well as the local client GPU. For example, an RTX 3070 server
+and RTX 4060 client need both architectures:
+
+```bash
+cmake -B build-cuda -DGGML_CUDA=ON -DGGML_RPC=ON \
+  -DCMAKE_CUDA_ARCHITECTURES="86-real;89-real"
+```
+
+If the server log reports `no kernel image is available for execution on the
+device`, rebuild with the missing remote architecture before comparing RPC
+throughput.
 
 ### Troubleshooting
 

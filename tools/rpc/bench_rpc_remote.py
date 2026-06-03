@@ -55,6 +55,14 @@ def parse_env_assignment(value):
     return key, env_value
 
 
+def parse_env_assignments(values):
+    overrides = {}
+    for assignment in values:
+        key, value = parse_env_assignment(assignment)
+        overrides[key] = value
+    return overrides
+
+
 def format_endpoint(host, port):
     if ":" in host:
         return f"[{host}]:{port}"
@@ -154,12 +162,16 @@ def captured_environment(env, keys):
 
 def build_env(args):
     env = os.environ.copy()
-    overrides = {}
-    for assignment in args.env:
-        key, value = parse_env_assignment(assignment)
-        env[key] = value
-        overrides[key] = value
+    overrides = parse_env_assignments(args.env)
+    env.update(overrides)
     return env, overrides
+
+
+def build_case_env(env, assignments):
+    case_env = env.copy()
+    overrides = parse_env_assignments(assignments)
+    case_env.update(overrides)
+    return case_env, overrides
 
 
 def load_jsonl(path):
@@ -355,6 +367,9 @@ def percent_delta(patch_value, base_value):
 
 
 def build_comparison(summary):
+    if "base" not in summary.get("cases", {}) or "patch" not in summary.get("cases", {}):
+        return
+
     comparison = {}
     for kind in ("prompt", "decode"):
         base_avg = metric_avg(summary, "base", kind)
@@ -380,9 +395,9 @@ def build_comparison(summary):
 def validate_inputs(args):
     if args.dry_run:
         return
-    if not args.base_llama_bench.is_file():
+    if args.only in ("base", "both") and not args.base_llama_bench.is_file():
         raise FileNotFoundError(f"base llama-bench not found: {args.base_llama_bench}")
-    if not args.patch_llama_bench.is_file():
+    if args.only in ("patch", "both") and not args.patch_llama_bench.is_file():
         raise FileNotFoundError(f"patch llama-bench not found: {args.patch_llama_bench}")
     if not args.model.is_file():
         raise FileNotFoundError(f"model not found: {args.model}")
@@ -391,6 +406,10 @@ def validate_inputs(args):
 def write_summary(path, summary):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
+
+
+def path_or_none(path):
+    return str(path) if path is not None else None
 
 
 def parse_args():
@@ -404,8 +423,9 @@ def parse_args():
     parser.add_argument("--base-llama-bench", default=None, type=Path, help="baseline llama-bench executable; defaults to --llama-bench")
     parser.add_argument("--patch-llama-bench", default=None, type=Path, help="patched llama-bench executable; defaults to --llama-bench")
     parser.add_argument("--model", required=True, type=Path, help="local GGUF model path")
-    parser.add_argument("--base-rpc", required=True, help="baseline RPC host:port, or comma-separated host:port list")
-    parser.add_argument("--patch-rpc", required=True, help="patched RPC host:port, or comma-separated host:port list")
+    parser.add_argument("--base-rpc", default=None, help="baseline RPC host:port, or comma-separated host:port list")
+    parser.add_argument("--patch-rpc", default=None, help="patched RPC host:port, or comma-separated host:port list")
+    parser.add_argument("--only", choices=("base", "patch", "both"), default="both", help="run one case or both cases")
     parser.add_argument("--prompt", default=32, type=int, help="prompt tokens for llama-bench -p")
     parser.add_argument("--gen", default=32, type=int, help="generated tokens for llama-bench -n")
     parser.add_argument("--repetitions", default=7, type=int, help="llama-bench repetitions for -r")
@@ -418,6 +438,8 @@ def parse_args():
     parser.add_argument("--connect-timeout", default=10.0, type=float, help="per-endpoint TCP connect timeout in seconds")
     parser.add_argument("--skip-port-check", action="store_true", help="skip pre-run TCP checks for the RPC endpoints")
     parser.add_argument("--env", action="append", default=[], metavar="KEY=VALUE", help="environment override for llama-bench; repeatable")
+    parser.add_argument("--base-env", action="append", default=[], metavar="KEY=VALUE", help="baseline-only environment override for llama-bench; repeatable")
+    parser.add_argument("--patch-env", action="append", default=[], metavar="KEY=VALUE", help="patch-only environment override for llama-bench; repeatable")
     parser.add_argument("--record-env", action="append", default=[], metavar="KEY", help="extra environment variable to include in the summary")
     parser.add_argument("--dry-run", action="store_true", help="write the planned commands without connecting or running llama-bench")
     args = parser.parse_args()
@@ -433,9 +455,14 @@ def parse_args():
     if args.connect_timeout <= 0:
         parser.error("--connect-timeout must be > 0")
 
+    if args.only in ("base", "both") and args.base_rpc is None:
+        parser.error("--base-rpc is required when --only is base or both")
+    if args.only in ("patch", "both") and args.patch_rpc is None:
+        parser.error("--patch-rpc is required when --only is patch or both")
+
     try:
-        args.base_endpoints = parse_rpc_arg(args.base_rpc)
-        args.patch_endpoints = parse_rpc_arg(args.patch_rpc)
+        args.base_endpoints = parse_rpc_arg(args.base_rpc) if args.base_rpc is not None else None
+        args.patch_endpoints = parse_rpc_arg(args.patch_rpc) if args.patch_rpc is not None else None
     except ValueError as exc:
         parser.error(str(exc))
 
@@ -443,8 +470,10 @@ def parse_args():
         args.base_llama_bench = args.llama_bench
     if args.patch_llama_bench is None:
         args.patch_llama_bench = args.llama_bench
-    if args.base_llama_bench is None or args.patch_llama_bench is None:
-        parser.error("provide --llama-bench or both --base-llama-bench and --patch-llama-bench")
+    if args.only in ("base", "both") and args.base_llama_bench is None:
+        parser.error("provide --llama-bench or --base-llama-bench")
+    if args.only in ("patch", "both") and args.patch_llama_bench is None:
+        parser.error("provide --llama-bench or --patch-llama-bench")
 
     return args
 
@@ -455,15 +484,31 @@ def main():
     args.out_dir.mkdir(parents=True, exist_ok=True)
 
     env, env_overrides = build_env(args)
-    record_env_keys = dedupe([*DEFAULT_RECORDED_ENV, *args.record_env, *env_overrides.keys()])
+    base_env, base_env_overrides = build_case_env(env, args.base_env)
+    patch_env, patch_env_overrides = build_case_env(env, args.patch_env)
+    case_envs = {
+        "base": base_env,
+        "patch": patch_env,
+    }
+    case_env_overrides = {
+        "base": base_env_overrides,
+        "patch": patch_env_overrides,
+    }
+    record_env_keys = dedupe([
+        *DEFAULT_RECORDED_ENV,
+        *args.record_env,
+        *env_overrides.keys(),
+        *base_env_overrides.keys(),
+        *patch_env_overrides.keys(),
+    ])
     summary = {
         "schema_version": 1,
         "created_utc": utc_now(),
         "dry_run": args.dry_run,
         "cwd": os.getcwd(),
         "llama_bench": str(args.llama_bench) if args.llama_bench is not None else None,
-        "base_llama_bench": str(args.base_llama_bench),
-        "patch_llama_bench": str(args.patch_llama_bench),
+        "base_llama_bench": path_or_none(args.base_llama_bench),
+        "patch_llama_bench": path_or_none(args.patch_llama_bench),
         "model": str(args.model),
         "prompt": args.prompt,
         "gen": args.gen,
@@ -471,6 +516,7 @@ def main():
         "ngl": args.ngl,
         "device": args.device,
         "threads": args.threads,
+        "only": args.only,
         "timeout_sec": args.timeout,
         "connect_timeout_sec": args.connect_timeout,
         "skip_port_check": args.skip_port_check,
@@ -478,20 +524,30 @@ def main():
         "summary_path": str(args.summary),
         "record_env_keys": record_env_keys,
         "environment": captured_environment(env, record_env_keys),
+        "env_overrides": {key: redact_env_value(key, value) for key, value in env_overrides.items()},
         "system": {
             "platform": platform.platform(),
             "python": platform.python_version(),
         },
-        "cases": {
-            "base": make_case(args, "base", args.base_llama_bench, args.base_endpoints),
-            "patch": make_case(args, "patch", args.patch_llama_bench, args.patch_endpoints),
-        },
+        "cases": {},
     }
+
+    if args.only in ("base", "both"):
+        summary["cases"]["base"] = make_case(args, "base", args.base_llama_bench, args.base_endpoints)
+    if args.only in ("patch", "both"):
+        summary["cases"]["patch"] = make_case(args, "patch", args.patch_llama_bench, args.patch_endpoints)
 
     try:
         validate_inputs(args)
         for name in ("base", "patch"):
-            run_case(args, name, summary["cases"][name], env)
+            if name not in summary["cases"]:
+                continue
+            summary["cases"][name]["environment"] = captured_environment(case_envs[name], record_env_keys)
+            summary["cases"][name]["env_overrides"] = {
+                key: redact_env_value(key, value)
+                for key, value in case_env_overrides[name].items()
+            }
+            run_case(args, name, summary["cases"][name], case_envs[name])
         if not args.dry_run:
             build_comparison(summary)
     except Exception as exc:
