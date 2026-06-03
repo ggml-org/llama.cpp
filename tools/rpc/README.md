@@ -116,6 +116,27 @@ can improve bulk model/tensor transfer on some networks, but they should be
 benchmarked with your model, split, and network because they do not remove
 per-token synchronization costs.
 
+### Cache threshold tuning
+
+When `rpc-server` is started with `-c`, tensors larger than 10 MiB are probed by
+hash before upload and saved in the server cache. This avoids resending large
+unchanged tensors, but small-model or many-small-tensor workloads can still spend
+most wall-clock time uploading weights on every fresh client run. For repeated
+experiments on trusted machines, `GGML_RPC_CACHE_MIN_SIZE` can lower that
+threshold on both the client and server:
+
+```bash
+export GGML_RPC_CACHE_MIN_SIZE=1048576
+./build/bin/rpc-server -H 0.0.0.0 -p 50052 -c
+```
+
+Use the same environment variable on the `llama-bench` or inference client so it
+probes the same tensor sizes. Lower values trade less transfer after the cache is
+warm for more hashing, cache files, and small hash-probe RPCs, so keep the
+default unless real network measurements show a wall-clock win. Setting the
+threshold to `0` is the most aggressive option and can hurt per-token throughput
+on workloads with many tiny tensors.
+
 ### Benchmarking changes
 
 The `tools/rpc/bench_rpc_compare.py` helper can compare two local build trees
@@ -136,6 +157,37 @@ before drawing deployment conclusions, then repeat the same `llama-bench`
 parameters against manually started remote `rpc-server` processes on the real
 network. Loopback runs do not model overlay routing, retransmits, slow remote
 disks, or accelerator imbalance.
+
+For Tailscale or LAN runs where the base and patch `rpc-server` processes are
+already running on remote hosts, use `tools/rpc/bench_rpc_remote.py` from the
+main host. It runs the local `llama-bench` client against both endpoints and
+writes each JSONL stream plus a `summary.json` with the command, selected
+environment, endpoint hosts and ports, model, prompt, generation, repetition,
+`-ngl`, device, elapsed wall-clock time, and prompt/decode tokens/sec averages,
+medians, and standard deviations:
+
+```bash
+python3 tools/rpc/bench_rpc_remote.py \
+  --base-llama-bench /path/to/base/build/bin/llama-bench \
+  --patch-llama-bench /path/to/patch/build/bin/llama-bench \
+  --model /path/to/model.gguf \
+  --base-rpc 100.64.0.10:50052 \
+  --patch-rpc 100.64.0.11:50052 \
+  --prompt 512 \
+  --gen 128 \
+  --repetitions 7 \
+  --ngl 99 \
+  --device RPC0
+```
+
+The remote helper only connects to endpoints passed with `--base-rpc` and
+`--patch-rpc`; it does not SSH to hosts or start/stop servers. Use `--dry-run`
+to write the planned commands without connecting, and `--env KEY=VALUE` to set
+and record benchmark-specific client environment variables such as
+`GGML_RPC_TCP_BUFFER_SIZE` or `GGML_RPC_CACHE_MIN_SIZE`. Use `--llama-bench` when
+both cases should use the same local client binary, or `--base-llama-bench` and
+`--patch-llama-bench` when you want an end-to-end base-client/base-server versus
+patch-client/patch-server comparison.
 
 ### Troubleshooting
 

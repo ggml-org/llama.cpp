@@ -17,6 +17,9 @@
 #include <fstream>
 #include <filesystem>
 #include <algorithm>
+#include <cerrno>
+#include <cstdlib>
+#include <limits>
 
 static const char * RPC_DEBUG = std::getenv("GGML_RPC_DEBUG");
 
@@ -76,8 +79,8 @@ enum rpc_cmd {
 
 static_assert(RPC_CMD_HELLO == 14, "RPC_CMD_HELLO must be always 14");
 
-// Try RPC_CMD_SET_TENSOR_HASH first when data size is larger than this threshold
-const size_t HASH_THRESHOLD = 10 * 1024 * 1024;
+// Try RPC_CMD_SET_TENSOR_HASH first when data size is larger than this threshold.
+const size_t HASH_THRESHOLD_DEFAULT = 10 * 1024 * 1024;
 
 struct rpc_msg_hello_req {
     uint8_t conn_caps[RPC_CONN_CAPS_SIZE];
@@ -243,6 +246,27 @@ static uint64_t fnv_hash(const uint8_t * data, size_t len) {
         hash *= fnv_prime;
     }
     return hash;
+}
+
+static size_t rpc_cache_min_size() {
+    static const size_t cache_min_size = []() {
+        const char * env = std::getenv("GGML_RPC_CACHE_MIN_SIZE");
+        if (env == nullptr || env[0] == '\0') {
+            return HASH_THRESHOLD_DEFAULT;
+        }
+
+        char * end = nullptr;
+        errno = 0;
+        unsigned long long parsed = std::strtoull(env, &end, 10);
+        if (errno != 0 || end == env || *end != '\0' || parsed > std::numeric_limits<size_t>::max()) {
+            GGML_LOG_WARN("Ignoring invalid GGML_RPC_CACHE_MIN_SIZE='%s'\n", env);
+            return HASH_THRESHOLD_DEFAULT;
+        }
+
+        return static_cast<size_t>(parsed);
+    }();
+
+    return cache_min_size;
 }
 
 static constexpr size_t RPC_WIRE_SIZE_SIZE   = sizeof(uint64_t);
@@ -487,7 +511,7 @@ static enum ggml_status ggml_backend_rpc_buffer_init_tensor(ggml_backend_buffer_
 static void ggml_backend_rpc_buffer_set_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor, const void * data, size_t offset, size_t size) {
     ggml_backend_rpc_buffer_context * ctx = (ggml_backend_rpc_buffer_context *)buffer->context;
     rpc_tensor rpc_tensor = serialize_tensor(tensor);
-    if (size > HASH_THRESHOLD && !ctx->sock->skip_tensor_hash()) {
+    if (size > rpc_cache_min_size() && !ctx->sock->skip_tensor_hash()) {
         rpc_msg_set_tensor_hash_req request;
         request.tensor = rpc_tensor;
         request.offset = offset;
@@ -1103,7 +1127,7 @@ bool rpc_server::set_tensor(const std::vector<uint8_t> & input) {
     }
 
     const void * data = input.data() + sizeof(rpc_tensor) + sizeof(offset);
-    if (cache_dir && size > HASH_THRESHOLD) {
+    if (cache_dir && size > rpc_cache_min_size()) {
         uint64_t hash = fnv_hash((const uint8_t*)data, size);
         char hash_str[17];
         snprintf(hash_str, sizeof(hash_str), "%016" PRIx64, hash);
