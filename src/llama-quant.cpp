@@ -1400,6 +1400,321 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         }
     };
 
+    // HMT Randomized SVD condition number estimator: kappa = sigma 1 / sigma 20. See https://arxiv.org/abs/0909.4061
+    auto randomized_svd_condition_number = [&](const std::vector<float> & f32_sample, const int64_t n_per_row, const int64_t total_rows_sampled) -> float {
+        constexpr int64_t target_rank = 25;
+        constexpr int64_t k = 20;   // 20th singular value for condition number estimation
+        constexpr float eps_norm = 1e-8f;
+        constexpr float eps_eig = EPSILON;
+        constexpr int jacobi_sweeps = 20;
+        if (total_rows_sampled < 1 || n_per_row < 1) { return INFINITE; }
+
+        const int64_t m = total_rows_sampled;
+        const int64_t n = n_per_row;
+
+        // Jacobi eigenvalue decomposition for symmetric matrix
+        auto jacobi_diag = [&](std::vector<float> & A, const int64_t dim, const int max_sweeps) {
+            for (int sweep = 0; sweep < max_sweeps; ++sweep) {
+                bool converged = true;
+                for (int64_t p = 0; p < dim - 1; ++p) {
+                    for (int64_t q = p + 1; q < dim; ++q) {
+                        const float app = A[p * dim + p];
+                        const float aqq = A[q * dim + q];
+                        const float apq = A[p * dim + q];
+                        if (std::abs(apq) <= eps_eig) { continue; }
+                        converged = false;
+
+                        const float tau = (aqq - app) / (2.0f * apq);
+                        const float t   = tau >= 0.0f
+                            ? 1.0f / (tau + std::sqrt(1.0f + tau * tau))
+                            : -1.0f / (-tau + std::sqrt(1.0f + tau * tau));
+                        const float c   = 1.0f / std::sqrt(1.0f + t * t);
+                        const float s   = c * t;
+
+                        A[p * dim + p] = app - t * apq;
+                        A[q * dim + q] = aqq + t * apq;
+                        A[p * dim + q] = 0.0f;
+                        A[q * dim + p] = 0.0f;
+
+                        for (int64_t r = 0; r < dim; ++r) {
+                            if (r == p || r == q) { continue; }
+                            const float arp = A[r * dim + p];
+                            const float arq = A[r * dim + q];
+                            A[r * dim + p] = c * arp - s * arq;
+                            A[p * dim + r] = A[r * dim + p];
+                            A[r * dim + q] = s * arp + c * arq;
+                            A[q * dim + r] = A[r * dim + q];
+                        }
+                    }
+                }
+
+                if (converged) { break; }
+            }
+        };
+
+        auto matmul_a = [&](
+            const std::vector<float> & A, const int64_t rows_a,
+            const int64_t cols_a, const std::vector<float> & B,
+            const int64_t cols_b, std::vector<float> & C
+        )
+        {
+            C.assign((size_t)rows_a * (size_t)cols_b, 0.0f);
+            for (int64_t i = 0; i < rows_a; ++i) {
+                const size_t i_a = (size_t)i * (size_t)cols_a;
+                const size_t i_c = (size_t)i * (size_t)cols_b;
+                for (int64_t l = 0; l < cols_a; ++l) {
+                    const float aik = A[i_a + (size_t)l];
+                    if (aik == 0.0f) { continue; }
+                    const size_t k_b = (size_t)l * (size_t)cols_b;
+                    for (int64_t j = 0; j < cols_b; ++j) {
+                        C[i_c + (size_t)j] += aik * B[k_b + (size_t)j];
+                    }
+                }
+            }
+        };
+
+        // C = A^T * B  (A is rows_a x cols_a, B is rows_a x cols_b, C is cols_a x cols_b)
+        auto matmul_b = [&](
+            const std::vector<float> & A,
+            const int64_t rows_a,
+            const int64_t cols_a,
+            const std::vector<float> & B, const int64_t cols_b,
+            std::vector<float> & C
+        )
+        {
+            C.assign((size_t)cols_a * (size_t)cols_b, 0.0f);
+            for (int64_t i = 0; i < cols_a; ++i) {
+                const size_t i_c = (size_t)i * (size_t)cols_b;
+                for (int64_t l = 0; l < rows_a; ++l) {
+                    const float aki = A[(size_t)l * (size_t)cols_a + (size_t)i];
+                    if (aki == 0.0f) { continue; }
+                    const size_t k_b = (size_t)l * (size_t)cols_b;
+                    for (int64_t j = 0; j < cols_b; ++j) {
+                        C[i_c + (size_t)j] += aki * B[k_b + (size_t)j];
+                    }
+                }
+            }
+        };
+
+        // Modified Gram-Schmidt QR Decomposition. Q gets orthonormal columns from Y (Y is rows x cols)
+        auto mgs_qr = [&](
+            const std::vector<float> & Y,
+            const int64_t rows, const int64_t cols,
+            std::vector<float> & Q
+        )
+        {
+            Q.assign((size_t)rows * (size_t)cols, 0.0f);
+            std::vector<float> v(rows);
+            for (int64_t j = 0; j < cols; ++j) {
+                for (int64_t i = 0; i < rows; ++i) {
+                    v[i] = Y[(size_t)i * (size_t)cols + (size_t)j];
+                }
+
+                for (int64_t b = 0; b < j; ++b) {
+                    double dot = 0.0;
+                    for (int64_t i = 0; i < rows; ++i) {
+                        dot += (double)v[i] * (double)Q[(size_t)i * (size_t)cols + (size_t)b];
+                    }
+                    for (int64_t i = 0; i < rows; ++i) {
+                        v[i] -= (float)dot * Q[(size_t)i * (size_t)cols + (size_t)b];
+                    }
+                }
+
+                double norm_sq = 0.0;
+                for (int64_t i = 0; i < rows; ++i) {
+                    norm_sq += (double)v[i] * (double)v[i];
+                }
+
+                const float norm = std::sqrt((float)norm_sq);
+                if (norm > eps_norm) {
+                    const float inv = 1.0f / norm;
+                    for (int64_t i = 0; i < rows; ++i) {
+                        Q[(size_t)i * (size_t)cols + (size_t)j] = v[i] * inv;
+                    }
+                }
+            }
+        };
+
+        // Filter and row-normalize valid rows (exclude NaN/Inf and near zero norm rows)
+        std::vector<float> norm_matrix;
+        norm_matrix.reserve((size_t)m * (size_t)n);
+        for (int64_t r = 0; r < m; ++r) {
+            const float * row = f32_sample.data() + r * n;
+            double l2_sq = 0.0;
+            for (int64_t j = 0; j < n; ++j) {
+                const float val = row[j];
+                if (!std::isfinite(val)) { l2_sq = -1.0; break; }
+                l2_sq += (double)val * (double)val;
+            }
+
+            if (l2_sq < 0.0) { continue; }
+            const float l2 = std::sqrt((float)l2_sq);
+            if (l2 <= eps_norm) { continue; }
+            const float inv_l2 = 1.0f / l2;
+            const size_t cur = norm_matrix.size();
+            norm_matrix.resize(cur + (size_t)n);
+            float * dst = norm_matrix.data() + cur;
+            for (int64_t j = 0; j < n; ++j) { dst[j] = row[j] * inv_l2; }
+        }
+
+        const int64_t valid_m = (int64_t)norm_matrix.size() / n;
+        if (valid_m < 2) { return INFINITE; }
+        const bool hmt_direct = valid_m >= target_rank;
+        const bool hmt_transpose = !hmt_direct && n >= target_rank;
+
+        // Deterministic random Gaussian projection using Golden Ratio * Random Scrambling Hashing
+        std::mt19937 rng((uint64_t)(n_per_row * 0x9E3779B97F4A7C15ULL + valid_m * 0xBF58476D1CE4E5B9ULL));
+        std::normal_distribution<float> normal(0.0f, 1.0f);
+
+        // Estimate the condition number (kappa)
+        auto condition_number = [&](const std::vector<float> & eigenvalues) -> float {
+            if ((int64_t)eigenvalues.size() < k) { return INFINITE; }
+            const float sigma_max = std::sqrt(std::max(0.0f, eigenvalues[0]));
+            const float sigma_min = std::sqrt(std::max(0.0f, eigenvalues[k - 1]));
+            if (sigma_min <= eps_eig) { return INFINITE; }
+
+            return sigma_max / sigma_min;
+        };
+
+        if (hmt_direct) {
+            // HMT on A (valid_m x n) with q=1 power iteration
+            std::vector<float> Omega((size_t)n * (size_t)target_rank);
+            for (auto & v : Omega) { v = normal(rng); }
+
+            std::vector<float> Y0;
+            std::vector<float> Z;
+            std::vector<float> Y1;
+            std::vector<float> Q;
+            std::vector<float> B;
+            std::vector<float> C;
+            matmul_a(norm_matrix, valid_m, n, Omega, target_rank, Y0);  // Y0 = A * Omega
+            matmul_b(norm_matrix, valid_m, n, Y0, target_rank, Z);      // Z = A^T * Y0
+            matmul_a(norm_matrix, valid_m, n, Z, target_rank, Y1);      // Y1 = A * Z
+            mgs_qr(Y1, valid_m, target_rank, Q);
+            matmul_b(Q, valid_m, target_rank, norm_matrix, n, B);       // B = Q^T * A
+
+            // C = B * B^T (target_rank x target_rank)
+            C.assign((size_t)target_rank * (size_t)target_rank, 0.0f);
+            for (int64_t i = 0; i < target_rank; ++i) {
+                for (int64_t j = 0; j < target_rank; ++j) {
+                    double sum = 0.0;
+                    for (int64_t l = 0; l < n; ++l) {
+                        sum += (double)B[(size_t)i * (size_t)n + (size_t)l] * (double)B[(size_t)j * (size_t)n + (size_t)l];
+                    }
+
+                    C[(size_t)i * (size_t)target_rank + (size_t)j] = (float)sum;
+                }
+            }
+
+            jacobi_diag(C, target_rank, jacobi_sweeps);
+            std::vector<float> eigenvalues;
+            eigenvalues.reserve(target_rank);
+            for (int64_t i = 0; i < target_rank; ++i) { eigenvalues.push_back(C[i * target_rank + i]); }
+            std::sort(eigenvalues.begin(), eigenvalues.end(), std::greater<float>());
+
+            return condition_number(eigenvalues);
+        }
+
+        if (hmt_transpose) {
+            // HMT on A^T (n x valid_m) with q=1 power iteration
+            std::vector<float> Omega((size_t)valid_m * (size_t)target_rank);
+            for (auto & v : Omega) { v = normal(rng); }
+
+            std::vector<float> Y0;
+            std::vector<float> Z;
+            std::vector<float> Y1;
+            std::vector<float> Q;
+            std::vector<float> B;
+            std::vector<float> C;
+            matmul_b(norm_matrix, valid_m, n, Omega, target_rank, Y0);   // Y0 = A^T * Omega
+            matmul_a(norm_matrix, valid_m, n, Y0, target_rank, Z);       // Z = A * Y0
+            matmul_b(norm_matrix, valid_m, n, Z, target_rank, Y1);       // Y1 = A^T * Z
+            mgs_qr(Y1, n, target_rank, Q);
+
+            // B = Q^T * A^T  (target_rank x valid_m)
+            B.assign((size_t)target_rank * (size_t)valid_m, 0.0f);
+            for (int64_t j = 0; j < target_rank; ++j) {
+                for (int64_t k = 0; k < valid_m; ++k) {
+                    double sum = 0.0;
+                    for (int64_t i = 0; i < n; ++i) {
+                        sum += (double)Q[(size_t)i * (size_t)target_rank + (size_t)j] * (double)norm_matrix[(size_t)k * (size_t)n + (size_t)i];
+                    }
+
+                    B[(size_t)j * (size_t)valid_m + (size_t)k] = (float)sum;
+                }
+            }
+
+            // C = B * B^T (target_rank x target_rank)
+            C.assign((size_t)target_rank * (size_t)target_rank, 0.0f);
+            for (int64_t i = 0; i < target_rank; ++i) {
+                for (int64_t j = 0; j < target_rank; ++j) {
+                    double sum = 0.0;
+                    for (int64_t l = 0; l < valid_m; ++l) {
+                        sum += (double)B[(size_t)i * (size_t)valid_m + (size_t)l] * (double)B[(size_t)j * (size_t)valid_m + (size_t)l];
+                    }
+
+                    C[(size_t)i * (size_t)target_rank + (size_t)j] = (float)sum;
+                }
+            }
+
+            jacobi_diag(C, target_rank, jacobi_sweeps);
+            std::vector<float> eigenvalues;
+            eigenvalues.reserve(target_rank);
+            for (int64_t i = 0; i < target_rank; ++i) { eigenvalues.push_back(C[i * target_rank + i]); }
+            std::sort(eigenvalues.begin(), eigenvalues.end(), std::greater<float>());
+
+            return condition_number(eigenvalues);
+        }
+
+        // Fallback: full thin SVD via Gram matrix of smaller dimension + Jacobi
+        const bool gram_rows = valid_m <= n;
+        if (gram_rows) {
+            const int64_t gram_dim = valid_m;
+            std::vector<float> G((size_t)gram_dim * (size_t)gram_dim, 0.0f);
+            for (int64_t i = 0; i < gram_dim; ++i) {
+                for (int64_t j = i; j < gram_dim; ++j) {
+                    double sum = 0.0;
+                    for (int64_t l = 0; l < n; ++l) {
+                        sum += (double)norm_matrix[(size_t)i * (size_t)n + (size_t)l] * (double)norm_matrix[(size_t)j * (size_t)n + (size_t)l];
+                    }
+
+                    G[(size_t)i * (size_t)gram_dim + (size_t)j] = (float)sum;
+                    G[(size_t)j * (size_t)gram_dim + (size_t)i] = (float)sum;
+                }
+            }
+
+            jacobi_diag(G, gram_dim, jacobi_sweeps);
+            std::vector<float> eigenvalues;
+            eigenvalues.reserve(gram_dim);
+            for (int64_t i = 0; i < gram_dim; ++i) { eigenvalues.push_back(G[i * gram_dim + i]); }
+            std::sort(eigenvalues.begin(), eigenvalues.end(), std::greater<float>());
+
+            return condition_number(eigenvalues);
+        }
+
+        // G = A^T * A (n x n)
+        const int64_t gram_dim = n;
+        std::vector<float> G((size_t)gram_dim * (size_t)gram_dim, 0.0f);
+        for (int64_t i = 0; i < gram_dim; ++i) {
+            for (int64_t j = i; j < gram_dim; ++j) {
+                double sum = 0.0;
+                for (int64_t l = 0; l < valid_m; ++l) {
+                    sum += (double)norm_matrix[(size_t)l * (size_t)n + (size_t)i] * (double)norm_matrix[(size_t)l * (size_t)n + (size_t)j];
+                }
+
+                G[(size_t)i * (size_t)gram_dim + (size_t)j] = (float)sum;
+                G[(size_t)j * (size_t)gram_dim + (size_t)i] = (float)sum;
+            }
+        }
+
+        jacobi_diag(G, gram_dim, jacobi_sweeps);
+        std::vector<float> eigenvalues;
+        eigenvalues.reserve(gram_dim);
+        for (int64_t i = 0; i < gram_dim; ++i) { eigenvalues.push_back(G[i * gram_dim + i]); }
+        std::sort(eigenvalues.begin(), eigenvalues.end(), std::greater<float>());
+
+        return condition_number(eigenvalues);
+    };
     // Parallelize tensor processing (courtesy of https://github.com/ddh0)
     auto process_tensor = [&](
         const llama_model_loader::llama_tensor_weight * tw,
@@ -1614,6 +1929,12 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
             }
         }
 
+        float kappa_factor = 1.0f;
+        if (statistics_data && !statistics_data->empty()) {
+            const float kappa = randomized_svd_condition_number(f32_sample, n_per_row, (int64_t)total_rows_sampled);
+            kappa_factor = squash_kappa(kappa);
+        }
+
         // Build candidates
         std::vector<ggml_type> valid_types;
         valid_types.reserve(std::size(quant_types));
@@ -1643,6 +1964,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
 
         float scaling_factor = 1.0f;
         if (auto it = cnif_scores.find(remapped_name); it != cnif_scores.end()) { scaling_factor = it->second; }
+        scaling_factor *= kappa_factor;
 
         for (ggml_type vt : valid_types) {
             if (bpw_stop.load(std::memory_order_relaxed)) { return std::nullopt; }
