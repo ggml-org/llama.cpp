@@ -2342,6 +2342,35 @@ private:
                     res->n_erased = n_erased;
                     queue_results.send(std::move(res));
                 } break;
+            case SERVER_TASK_TYPE_REQUANTIZE_KVCACHE:
+                {
+                    if (!check_no_mtmd(task.id)) break;
+
+                    // If any slot is busy, defer this task for later
+                    bool deferred = false;
+                    for (auto & slot : slots) {
+                        if (slot.is_processing()) {
+                            SRV_DBG("slot %d is busy, defer task, id_task = %d\n", slot.id, task.id);
+                            queue_tasks.defer(std::move(task));
+                            deferred = true;
+                            break;
+                        }
+                    }
+                    if (deferred) break;
+
+                    ggml_type ctk = task.kvcache_action.ctk;
+                    ggml_type ctv = task.kvcache_action.ctv;
+
+                    // TODO - handle draft model
+                    if (!llama_requantize_memory(ctx_tgt, ctk, ctv)) {
+                        send_error(task, "Unable to quantize memory", ERROR_TYPE_INVALID_REQUEST);
+                        break;
+                    }
+
+                    auto res = std::make_unique<server_task_result_requantize>();
+                    res->id = task.id;
+                    queue_results.send(std::move(res));
+                } break;
             case SERVER_TASK_TYPE_GET_LORA:
                 {
                     // TODO @ngxson : make lora_adapters a dedicated member of server_context
@@ -4174,6 +4203,79 @@ void server_routes::init_routes() {
         }
 
         res->error(format_error_response("Invalid action", ERROR_TYPE_INVALID_REQUEST));
+        return res;
+    };
+
+    this->post_requantize_kvcache = [this](const server_http_req & req) {
+        auto res = create_response();
+
+        std::string ctk = req.get_param("ctk");
+        std::string ctv = req.get_param("ctv");
+
+        // Supported KV cache types (from common/arg.cpp)
+        // TODO - might be better to just make the arg.cpp method public
+        const std::vector<ggml_type> kv_cache_types = {
+            GGML_TYPE_F32,
+            GGML_TYPE_F16,
+            GGML_TYPE_BF16,
+            GGML_TYPE_Q8_0,
+            GGML_TYPE_Q4_0,
+            GGML_TYPE_Q4_1,
+            GGML_TYPE_IQ4_NL,
+            GGML_TYPE_Q5_0,
+            GGML_TYPE_Q5_1,
+        };
+
+        ggml_type k = GGML_TYPE_F16;
+        ggml_type v = GGML_TYPE_F16;
+
+        // Convert string parameters to ggml_type
+        bool found_k = ctk.empty();
+        bool found_v = ctv.empty();
+
+        for (const auto & type : kv_cache_types) {
+            const std::string type_name = ggml_type_name(type);
+            if (!found_k && type_name == ctk) {
+                k = type;
+                found_k = true;
+            }
+            if (!found_v && type_name == ctv) {
+                v = type;
+                found_v = true;
+            }
+            if (found_k && found_v) break;
+        }
+
+        if (!found_k) {
+            res->error(format_error_response("Unsupported cache type: " + ctk, ERROR_TYPE_INVALID_REQUEST));
+            return res;
+        }
+        if (!found_v) {
+            res->error(format_error_response("Unsupported cache type: " + ctv, ERROR_TYPE_INVALID_REQUEST));
+            return res;
+        }
+
+        {
+            server_task task(SERVER_TASK_TYPE_REQUANTIZE_KVCACHE);
+            task.id = res->rd.get_new_id();
+            task.kvcache_action.ctk = k;
+            task.kvcache_action.ctv = v;
+            res->rd.post_task(std::move(task), true); // high-priority task
+        }
+
+        auto result = res->rd.next(req.should_stop);
+        if (!result) {
+            // connection was closed
+            GGML_ASSERT(req.should_stop());
+            return res;
+        }
+
+        if (result->is_error()) {
+            res->error(result->to_json());
+            return res;
+        }
+
+        res->ok({{"status", "ok"}});
         return res;
     };
 

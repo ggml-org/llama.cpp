@@ -6,6 +6,7 @@
 #include "llama-impl.h"
 #include "llama-batch.h"
 #include "llama-io.h"
+#include "llama-kv-cache.h"
 #include "llama-memory.h"
 #include "llama-mmap.h"
 #include "llama-model.h"
@@ -70,6 +71,7 @@ llama_context::llama_context(
     cparams.offload_kqv             = params.offload_kqv;
     cparams.no_perf                 = params.no_perf;
     cparams.warmup                  = false;
+    cparams.swa_full                = params.swa_full;
 
     cparams.ctx_type     = params.ctx_type;
     cparams.pooling_type = params.pooling_type;
@@ -2017,6 +2019,65 @@ int llama_context::decode(const llama_batch & batch_inp) {
     return 0;
 }
 
+bool llama_context::requantize_memory(ggml_type new_type_k, ggml_type new_type_v) {
+    if (!memory) {
+        return false;
+    }
+
+    if (!cparams.flash_attn && ggml_is_quantized(new_type_v)) {
+        LLAMA_LOG_ERROR("%s: V cache quantization requires flash_attn\n", __func__);
+        return false;
+    }
+
+    // TODO - initial implementation just for llama_kv_cache
+    if (!dynamic_cast<llama_kv_cache *>(memory.get())) {
+        LLAMA_LOG_ERROR("%s: requantize only supported for basic KV cache\n", __func__);
+        return false;
+    }
+
+    // Read existing kvcache to host buffer
+    const size_t state_size = state_get_size();
+    std::vector<uint8_t> state_store(state_size);
+
+    if (state_get_data(state_store.data(), state_size) != state_size) {
+        LLAMA_LOG_ERROR("%s: error reading existing memory\n", __func__);
+        return false;
+    }
+
+    // Tear down existing kvcache
+    gf_res_reserve.reset();
+    sched.reset();
+    memory.reset();
+
+    llama_memory_params params_mem = {
+        /*.type_k   =*/ new_type_k,
+        /*.type_v   =*/ new_type_v,
+        /*.swa_full =*/ cparams.swa_full,
+        /*.ctx_type= */ cparams.ctx_type,
+    };
+
+    // Create new kvcache
+    memory.reset(model.create_memory(params_mem, cparams));
+    if (!memory) {
+        // TODO: Yikes! Maybe more checks to ensure create_memory will succeed before we do this
+        // Alternatively, we could try to rebuild using the prior types?
+        LLAMA_LOG_ERROR("%s: error requantizing memory\n", __func__);
+        return false;
+    }
+
+    // Reserve a new backend scheduler
+    sched_need_reserve = true;
+    sched_reserve();
+
+    // Restore kvcache
+    if (!state_set_data(state_store.data(), state_size)) {
+        LLAMA_LOG_ERROR("%s: error restoring kvcache\n", __func__);
+        return false;
+    }
+
+    return true;
+}
+
 //
 // output
 //
@@ -3810,6 +3871,19 @@ bool llama_memory_can_shift(llama_memory_t mem) {
     }
 
     return mem->get_can_shift();
+}
+
+bool llama_requantize_memory(struct llama_context * ctx, ggml_type ctk, ggml_type ctv) {
+    if (!ctx) {
+        return false;
+    }
+
+    try {
+        return ctx->requantize_memory(ctk, ctv);
+    } catch (const std::exception & err) {
+        LLAMA_LOG_ERROR("%s: error requantizing memory: %s\n", __func__, err.what());
+        return false;
+    }
 }
 
 // llama state API

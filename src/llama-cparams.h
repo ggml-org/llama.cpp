@@ -42,6 +42,7 @@ struct llama_cparams {
     bool warmup;             // TODO: remove [TAG_LLAMA_GRAPH_NO_WARMUP]
     bool op_offload;
     bool kv_unified;
+    bool swa_full;
     bool pipeline_parallel;
 
     enum llama_context_type ctx_type;

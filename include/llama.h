@@ -773,6 +773,11 @@ extern "C" {
     // Check if the memory supports shifting
     LLAMA_API bool llama_memory_can_shift(llama_memory_t mem);
 
+    LLAMA_API bool llama_requantize_memory(
+            struct llama_context * ctx,
+                       ggml_type   ctk,
+                       ggml_type   ctv);
+
     //
     // State / sessions
     //
