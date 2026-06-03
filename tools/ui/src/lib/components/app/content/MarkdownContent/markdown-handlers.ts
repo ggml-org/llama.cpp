@@ -196,15 +196,12 @@ export function createHandleImageError(
 		</div>`;
 
 		// Replace the img element with fallback in the block's HTML
-		const newHtml = block.html.replace(
-			/img[^>]*src=["']([^"']*)[^>]*>/g,
-			(match, src) => {
-				if (src === img.src) {
-					return fallbackHtml.replace('data-original-src=""', `data-original-src="${src}"`);
-				}
-				return match;
+		const newHtml = block.html.replace(/img[^>]*src=["']([^"']*)[^>]*>/g, (match, src) => {
+			if (src === img.src) {
+				return fallbackHtml.replace('data-original-src=""', `data-original-src="${src}"`);
 			}
-		);
+			return match;
+		});
 
 		// Update the block
 		const newBlocks = renderedBlocksState.renderedBlocks.map((b) =>
@@ -218,7 +215,10 @@ export function createHandleImageError(
  * Creates a function to set up code block action event listeners.
  * Binds click handlers to copy and preview buttons within code blocks.
  */
-export function createSetupCodeBlockActions(handleCopyClick: (event: Event) => void, handlePreviewClick: (event: Event) => void) {
+export function createSetupCodeBlockActions(
+	handleCopyClick: (event: Event) => void,
+	handlePreviewClick: (event: Event) => void
+) {
 	return function setupCodeBlockActions(containerRef: HTMLElement | null) {
 		if (!containerRef) return;
 
