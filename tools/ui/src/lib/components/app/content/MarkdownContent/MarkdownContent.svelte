@@ -18,6 +18,8 @@
 	import { rehypeEnhanceCodeBlocks } from './plugins/rehype/enhance-code-blocks';
 	import { rehypeEnhanceMermaidBlocks } from './plugins/rehype/enhance-mermaid-blocks';
 	import { rehypeMermaidPre } from './plugins/rehype/mermaid-pre';
+	import { rehypeSvgPre } from './plugins/rehype/svg-pre';
+	import { rehypeEnhanceSvgBlocks } from './plugins/rehype/enhance-svg-blocks';
 	import { rehypeResolveAttachmentImages } from './plugins/rehype/resolve-attachment-images';
 	import { rehypeRtlSupport } from './plugins/rehype/rehype-rtl-support';
 	import { remarkLiteralHtml } from './plugins/remark/literal-html';
@@ -43,6 +45,7 @@
 	import { ColorMode, UrlProtocol } from '$lib/enums';
 	import { FileTypeText } from '$lib/enums/files.enums';
 	import { highlightCode, detectIncompleteCodeBlock, type IncompleteCodeBlock } from '$lib/utils';
+	import { sanitizeSvg } from '$lib/utils/sanitize-svg';
 	import '$styles/katex-custom.scss';
 	import githubDarkCss from 'highlight.js/styles/github-dark.css?inline';
 	import githubLightCss from 'highlight.js/styles/github.css?inline';
@@ -124,8 +127,10 @@
 			.use(rehypeRestoreTableHtml) // Restore limited HTML (e.g., <br>, <ul>) inside Markdown tables
 			.use(rehypeEnhanceLinks) // Add target="_blank" to links
 			.use(rehypeMermaidPre) // Convert mermaid blocks to <pre class="mermaid">
+			.use(rehypeSvgPre) // Convert svg blocks to <pre class="svg-diagram">
 			.use(rehypeEnhanceCodeBlocks) // Wrap code blocks with header and actions
 			.use(rehypeEnhanceMermaidBlocks) // Wrap mermaid blocks with header and actions
+			.use(rehypeEnhanceSvgBlocks) // Wrap svg blocks with header and actions
 			.use(rehypeResolveAttachmentImages, { attachments })
 			.use(rehypeRtlSupport) // Add bidirectional text support
 			.use(rehypeStringify, { allowDangerousHtml: true }); // Convert to HTML string
@@ -496,6 +501,49 @@
 			}
 		}
 
+		// Check if clicking on copy or preview button in svg block
+		const svgCopyBtn = target.closest('.svg-block-wrapper .copy-code-btn');
+		const svgPreviewBtn = target.closest('.svg-block-wrapper .preview-code-btn');
+
+		if (svgCopyBtn || svgPreviewBtn) {
+			const wrapper = target.closest('.svg-block-wrapper');
+			if (!wrapper) return;
+
+			const preElement = wrapper.querySelector<HTMLElement>('pre.svg-diagram[data-svg-source]');
+			if (!preElement) return;
+
+			if (svgCopyBtn) {
+				event.preventDefault();
+				event.stopPropagation();
+				try {
+					await copyToClipboard(preElement.dataset.svgSource ?? '');
+				} catch (error) {
+					console.error('Failed to copy svg source:', error);
+				}
+				return;
+			}
+
+			if (svgPreviewBtn) {
+				event.preventDefault();
+				event.stopPropagation();
+				const svg = preElement.querySelector('svg');
+				if (!svg) return;
+				mermaidPreviewSvgHtml = svg.outerHTML;
+				mermaidPreviewOpen = true;
+				return;
+			}
+		}
+
+		// Open preview when clicking on the rendered svg diagram itself
+		const svgEl = target.closest('pre.svg-diagram');
+		if (svgEl) {
+			const svg = svgEl.querySelector('svg');
+			if (!svg) return;
+			mermaidPreviewSvgHtml = svg.outerHTML;
+			mermaidPreviewOpen = true;
+			return;
+		}
+
 		// Otherwise, open preview when clicking on the mermaid diagram itself
 		const mermaidEl = target.closest('.mermaid');
 		if (!mermaidEl) return;
@@ -563,6 +611,31 @@
 		} catch (error) {
 			console.error('Failed to render mermaid diagram:', error);
 		}
+	}
+
+	/**
+	 * Renders svg diagrams that haven't been rendered yet.
+	 * Sanitizes the source before injecting and marks each node so it renders once.
+	 * An empty sanitize result keeps the raw source as escaped text.
+	 */
+	function renderSvgDiagrams() {
+		if (!containerRef) return;
+
+		const nodes = containerRef.querySelectorAll<HTMLElement>(
+			'pre.svg-diagram:not([data-svg-rendered])'
+		);
+		if (nodes.length === 0) return;
+
+		nodes.forEach((node) => {
+			node.setAttribute('data-svg-rendered', 'true');
+
+			const source = node.getAttribute('data-svg-source') ?? node.textContent ?? '';
+			const clean = sanitizeSvg(source);
+
+			if (clean) {
+				node.innerHTML = clean;
+			}
+		});
 	}
 
 	/**
@@ -647,6 +720,7 @@
 			setupCodeBlockActions();
 			setupImageErrorHandlers();
 			renderMermaidDiagrams();
+			renderSvgDiagrams();
 		}
 	});
 
