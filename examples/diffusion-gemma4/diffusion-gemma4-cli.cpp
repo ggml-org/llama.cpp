@@ -65,7 +65,10 @@ int main(int argc, char ** argv) {
     llama_backend_init();
 
     llama_model_params model_params = llama_model_default_params();
-    model_params.n_gpu_layers = params.n_gpu_layers;
+    // Offload all layers to the GPU by default (when built with a GPU backend, e.g.
+    // -DGGML_CUDA=ON). Pass -ngl N to limit offload, or -ngl 0 to force CPU. With a
+    // CPU-only build this has no effect. (params.n_gpu_layers defaults to -1 = auto.)
+    model_params.n_gpu_layers = params.n_gpu_layers >= 0 ? params.n_gpu_layers : 999;
     model_params.devices      = params.devices.data();
     model_params.use_mmap     = params.use_mmap;
 
