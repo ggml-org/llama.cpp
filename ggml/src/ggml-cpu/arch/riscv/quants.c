@@ -36,7 +36,7 @@ void quantize_row_q8_0(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, i
 
     block_q8_0 * GGML_RESTRICT y = vy;
 
-#if defined(__riscv_v)
+#if GGML_RISCV_VECTOR_INTRINSICS
 
     size_t vl = QK8_0;
 
@@ -76,7 +76,7 @@ void quantize_row_q8_1(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, i
 
     block_q8_1 * GGML_RESTRICT y = vy;
 
-#if defined(__riscv_v)
+#if GGML_RISCV_VECTOR_INTRINSICS
 
     size_t vl = QK8_1;
 
@@ -123,7 +123,7 @@ void quantize_row_q8_K(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, in
     assert(k % QK_K == 0);
     size_t nb = k / QK_K;
 
-#if defined __riscv_v_intrinsic
+#if GGML_RISCV_VECTOR_INTRINSICS
     block_q8_K * y_blocks = (block_q8_K *)y;
     const size_t vlmax_f32m8 = __riscv_vsetvlmax_e32m8();
 
@@ -220,7 +220,7 @@ void quantize_row_q8_K(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, in
 //===================================== Dot products =================================
 
 void ggml_vec_dot_q4_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
-#if defined(__riscv_v)
+#if GGML_RISCV_VECTOR_INTRINSICS
     const int qk = QK8_0;
     const int nb = n / qk;
 
@@ -275,7 +275,7 @@ void ggml_vec_dot_q4_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const voi
 }
 
 void ggml_vec_dot_q4_1_q8_1(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
-#if defined(__riscv_v)
+#if GGML_RISCV_VECTOR_INTRINSICS
     const int qk = QK8_1;
     const int nb = n / qk;
 
@@ -326,7 +326,7 @@ void ggml_vec_dot_q4_1_q8_1(int n, float * GGML_RESTRICT s, size_t bs, const voi
 }
 
 void ggml_vec_dot_q5_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
-#if defined(__riscv_v)
+#if GGML_RISCV_RVV_1_0
     const int qk = QK8_0;
     const int nb = n / qk;
 
@@ -380,7 +380,7 @@ void ggml_vec_dot_q5_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const voi
 }
 
 void ggml_vec_dot_q5_1_q8_1(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
-#if defined(__riscv_v)
+#if GGML_RISCV_RVV_1_0
     const int qk = QK8_1;
     const int nb = n / qk;
 
@@ -449,7 +449,7 @@ void ggml_vec_dot_q8_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const voi
     int ib = 0;
     float sumf = 0;
 
-#if defined(__riscv_v)
+#if GGML_RISCV_VECTOR_INTRINSICS
     size_t vl = qk;
 
     for (; ib < nb; ++ib) {
@@ -480,7 +480,123 @@ void ggml_vec_dot_q8_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const voi
 #endif
 }
 
-#if defined(__riscv_v)
+#if defined __riscv_xtheadvector
+
+#define GGML_RISCV_XTHEAD_EXT_PUSH ".option push\n\t.option arch,+xtheadbb\n\t.option arch,+xtheadmemidx\n\t.option arch,+xtheadmempair\n\t"
+#define GGML_RISCV_XTHEAD_EXT_POP   ".option pop\n\t"
+
+static const uint32_t ggml_riscv_xthead_q1_0_mask_neg_lut[256] = {
+    0x11111111, 0x11111110, 0x11111101, 0x11111100, 0x11111011, 0x11111010, 0x11111001, 0x11111000,
+    0x11110111, 0x11110110, 0x11110101, 0x11110100, 0x11110011, 0x11110010, 0x11110001, 0x11110000,
+    0x11101111, 0x11101110, 0x11101101, 0x11101100, 0x11101011, 0x11101010, 0x11101001, 0x11101000,
+    0x11100111, 0x11100110, 0x11100101, 0x11100100, 0x11100011, 0x11100010, 0x11100001, 0x11100000,
+    0x11011111, 0x11011110, 0x11011101, 0x11011100, 0x11011011, 0x11011010, 0x11011001, 0x11011000,
+    0x11010111, 0x11010110, 0x11010101, 0x11010100, 0x11010011, 0x11010010, 0x11010001, 0x11010000,
+    0x11001111, 0x11001110, 0x11001101, 0x11001100, 0x11001011, 0x11001010, 0x11001001, 0x11001000,
+    0x11000111, 0x11000110, 0x11000101, 0x11000100, 0x11000011, 0x11000010, 0x11000001, 0x11000000,
+    0x10111111, 0x10111110, 0x10111101, 0x10111100, 0x10111011, 0x10111010, 0x10111001, 0x10111000,
+    0x10110111, 0x10110110, 0x10110101, 0x10110100, 0x10110011, 0x10110010, 0x10110001, 0x10110000,
+    0x10101111, 0x10101110, 0x10101101, 0x10101100, 0x10101011, 0x10101010, 0x10101001, 0x10101000,
+    0x10100111, 0x10100110, 0x10100101, 0x10100100, 0x10100011, 0x10100010, 0x10100001, 0x10100000,
+    0x10011111, 0x10011110, 0x10011101, 0x10011100, 0x10011011, 0x10011010, 0x10011001, 0x10011000,
+    0x10010111, 0x10010110, 0x10010101, 0x10010100, 0x10010011, 0x10010010, 0x10010001, 0x10010000,
+    0x10001111, 0x10001110, 0x10001101, 0x10001100, 0x10001011, 0x10001010, 0x10001001, 0x10001000,
+    0x10000111, 0x10000110, 0x10000101, 0x10000100, 0x10000011, 0x10000010, 0x10000001, 0x10000000,
+    0x01111111, 0x01111110, 0x01111101, 0x01111100, 0x01111011, 0x01111010, 0x01111001, 0x01111000,
+    0x01110111, 0x01110110, 0x01110101, 0x01110100, 0x01110011, 0x01110010, 0x01110001, 0x01110000,
+    0x01101111, 0x01101110, 0x01101101, 0x01101100, 0x01101011, 0x01101010, 0x01101001, 0x01101000,
+    0x01100111, 0x01100110, 0x01100101, 0x01100100, 0x01100011, 0x01100010, 0x01100001, 0x01100000,
+    0x01011111, 0x01011110, 0x01011101, 0x01011100, 0x01011011, 0x01011010, 0x01011001, 0x01011000,
+    0x01010111, 0x01010110, 0x01010101, 0x01010100, 0x01010011, 0x01010010, 0x01010001, 0x01010000,
+    0x01001111, 0x01001110, 0x01001101, 0x01001100, 0x01001011, 0x01001010, 0x01001001, 0x01001000,
+    0x01000111, 0x01000110, 0x01000101, 0x01000100, 0x01000011, 0x01000010, 0x01000001, 0x01000000,
+    0x00111111, 0x00111110, 0x00111101, 0x00111100, 0x00111011, 0x00111010, 0x00111001, 0x00111000,
+    0x00110111, 0x00110110, 0x00110101, 0x00110100, 0x00110011, 0x00110010, 0x00110001, 0x00110000,
+    0x00101111, 0x00101110, 0x00101101, 0x00101100, 0x00101011, 0x00101010, 0x00101001, 0x00101000,
+    0x00100111, 0x00100110, 0x00100101, 0x00100100, 0x00100011, 0x00100010, 0x00100001, 0x00100000,
+    0x00011111, 0x00011110, 0x00011101, 0x00011100, 0x00011011, 0x00011010, 0x00011001, 0x00011000,
+    0x00010111, 0x00010110, 0x00010101, 0x00010100, 0x00010011, 0x00010010, 0x00010001, 0x00010000,
+    0x00001111, 0x00001110, 0x00001101, 0x00001100, 0x00001011, 0x00001010, 0x00001001, 0x00001000,
+    0x00000111, 0x00000110, 0x00000101, 0x00000100, 0x00000011, 0x00000010, 0x00000001, 0x00000000,
+};
+
+static inline int ggml_vec_dot_q1_0_q8_0_xthead_sum_32(const uint8_t * packed, const int8_t * qy, size_t vl) {
+    uint32_t tmp[8] __attribute__((aligned(64)));
+    uintptr_t m0, m1, m2, m3;
+    int raw, hi;
+    const size_t one = 1;
+    const uint32_t * lut = ggml_riscv_xthead_q1_0_mask_neg_lut;
+    __asm__ __volatile__(
+        GGML_RISCV_XTHEAD_EXT_PUSH
+        "lbu %[m0],0(%[packed])\n\t"
+        "lbu %[m1],1(%[packed])\n\t"
+        "lbu %[m2],2(%[packed])\n\t"
+        "lbu %[m3],3(%[packed])\n\t"
+        "th.lrw %[m0],%[lut],%[m0],2\n\t"
+        "th.lrw %[m1],%[lut],%[m1],2\n\t"
+        "th.lrw %[m2],%[lut],%[m2],2\n\t"
+        "th.lrw %[m3],%[lut],%[m3],2\n\t"
+        "th.swd %[m0], %[m1], (%[tmp]), 0, 3\n\t"
+        "th.swd %[m2], %[m3], (%[tmp]), 1, 3\n\t"
+        "th.vsetvli zero,%[vl],e8,m2,d1\n\t"
+        "th.vle.v v0,(%[tmp])\n\t"
+        "th.vle.v v2,(%[qy])\n\t"
+        "th.vneg.v v2,v2,v0.t\n\t"
+        "th.vmv.v.i v0,0\n\t"
+        "th.vwredsum.vs v2,v2,v0\n\t"
+        "th.vext.x.v %[hi],v2,%[one]\n\t"
+        "th.vext.x.v %[raw],v2,zero\n\t"
+        "andi %[raw],%[raw],0xff\n\t"
+        "slliw %[hi],%[hi],8\n\t"
+        "or %[raw],%[raw],%[hi]\n\t"
+        "th.ext %[raw],%[raw],15,0\n\t"
+        GGML_RISCV_XTHEAD_EXT_POP
+        : [m0] "=&r"(m0), [m1] "=&r"(m1), [m2] "=&r"(m2), [m3] "=&r"(m3),
+          [raw] "=&r"(raw), [hi] "=&r"(hi)
+        : [packed] "r"(packed), [lut] "r"(lut), [tmp] "r"(tmp), [qy] "r"(qy),
+          [vl] "r"(vl), [one] "r"(one)
+        : "memory", "v0", "v1", "v2", "v3");
+    return raw;
+}
+
+static NOINLINE void ggml_vec_dot_q1_0_q8_0_xthead(const int n, float * GGML_RESTRICT s, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy) {
+    const int qk = QK1_0;
+    const int nb = n / qk;
+    assert(QK1_0 == 128);
+    assert(QK8_0 == 32);
+    assert(n % qk == 0);
+
+    const block_q1_0 * GGML_RESTRICT x = vx;
+    const block_q8_0 * GGML_RESTRICT y = vy;
+
+    const size_t vl32 = __riscv_vsetvl_e8m2(32);
+    assert(vl32 == 32);
+
+    float sumf = 0;
+
+    for (int ib = 0; ib < nb; ++ib) {
+        const float d0 = GGML_CPU_FP16_TO_FP32(x[ib].d);
+
+        float acc = 0;
+
+        for (int k = 0; k < 4; ++k) {
+            const block_q8_0 * GGML_RESTRICT yb = &y[ib * 4 + k];
+            const int sumi = ggml_vec_dot_q1_0_q8_0_xthead_sum_32(x[ib].qs + 4 * k, yb->qs, vl32);
+            acc += GGML_CPU_FP16_TO_FP32(yb->d) * (float) sumi;
+        }
+
+        sumf += d0 * acc;
+    }
+
+    *s = sumf;
+}
+
+#undef GGML_RISCV_XTHEAD_EXT_PUSH
+#undef GGML_RISCV_XTHEAD_EXT_POP
+
+#endif
+
+#if GGML_RISCV_RVV_1_0
 static NOINLINE void ggml_vec_dot_q1_0_q8_0_vl256(const int n, float * GGML_RESTRICT s, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy) {
     const int qk = QK1_0;
     const int nb = n / qk;
@@ -561,7 +677,10 @@ static NOINLINE void ggml_vec_dot_q1_0_q8_0_vl128(const int n, float * GGML_REST
 #endif
 
 void ggml_vec_dot_q1_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
-#if defined(__riscv_v)
+#if defined __riscv_xtheadvector
+    assert(nrc == 1);
+    ggml_vec_dot_q1_0_q8_0_xthead(n, s, vx, vy);
+#elif GGML_RISCV_RVV_1_0
     assert(nrc == 1);
 
     const size_t vlen_bits = __riscv_vlenb() * 8;
@@ -687,7 +806,7 @@ void ggml_vec_dot_q2_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
 
     *s = sumf;
 
-#elif defined __riscv_v
+#elif GGML_RISCV_RVV_1_0
 
     float sumf = 0;
     uint8_t atmp[16];
@@ -1069,7 +1188,7 @@ void ggml_vec_dot_q3_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
 
     *s = sumf;
 
-#elif defined __riscv_v
+#elif GGML_RISCV_RVV_1_0
 
     uint32_t utmp[4];
     float sumf = 0;
@@ -1453,7 +1572,7 @@ void ggml_vec_dot_q4_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
 
     *s = sumf;
 
-#elif defined __riscv_v
+#elif GGML_RISCV_RVV_1_0
 
     const uint8_t * scales = (const uint8_t*)&utmp[0];
     const uint8_t * mins   = (const uint8_t*)&utmp[2];
@@ -1746,7 +1865,7 @@ void ggml_vec_dot_q5_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
 
     uint32_t utmp[4];
 
-#if defined __riscv_v
+#if GGML_RISCV_RVV_1_0
 
     const uint8_t * scales = (const uint8_t*)&utmp[0];
     const uint8_t * mins   = (const uint8_t*)&utmp[2];
@@ -1940,7 +2059,7 @@ void ggml_vec_dot_q6_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
 
     *s = sumf;
 
-#elif defined __riscv_v
+#elif GGML_RISCV_RVV_1_0
 
     float sumf = 0;
     const int vector_length = __riscv_vlenb() * 8;
@@ -2156,7 +2275,7 @@ void ggml_vec_dot_q6_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
 #endif
 }
 
-#if defined __riscv_v_intrinsic
+#if GGML_RISCV_RVV_1_0
 static NOINLINE void ggml_vec_dot_iq1_s_q8_K_vl128(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
     assert(n % QK_K == 0);
     assert(nrc == 1);
@@ -2367,7 +2486,7 @@ static NOINLINE void ggml_vec_dot_iq1_s_q8_K_vl256(int n, float * GGML_RESTRICT 
 #endif
 
 void ggml_vec_dot_iq1_s_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
-#if defined __riscv_v_intrinsic
+#if GGML_RISCV_RVV_1_0
     switch (__riscv_vlenb() * 8) {
         case 128:
             ggml_vec_dot_iq1_s_q8_K_vl128(n, s, bs, vx, bx, vy, by, nrc);
@@ -2384,7 +2503,7 @@ void ggml_vec_dot_iq1_s_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
 #endif
 }
 
-#if defined __riscv_v_intrinsic
+#if GGML_RISCV_RVV_1_0
 static NOINLINE void ggml_vec_dot_iq1_m_q8_K_vl128(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
     assert(n % QK_K == 0);
     assert(nrc == 1);
@@ -2667,7 +2786,7 @@ static NOINLINE void ggml_vec_dot_iq1_m_q8_K_vl256(int n, float * GGML_RESTRICT 
 #endif
 
 void ggml_vec_dot_iq1_m_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
-#if defined __riscv_v_intrinsic
+#if GGML_RISCV_RVV_1_0
     switch (__riscv_vlenb() * 8) {
         case 128:
             ggml_vec_dot_iq1_m_q8_K_vl128(n, s, bs, vx, bx, vy, by, nrc);
@@ -2684,7 +2803,7 @@ void ggml_vec_dot_iq1_m_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
 #endif
 }
 
-#if defined __riscv_v_intrinsic
+#if GGML_RISCV_RVV_1_0
 static const uint8_t sign_gather_indices_arr[64] = {
     0,0,0,0,0,0,0,0, 1,1,1,1,1,1,1,1, 2,2,2,2,2,2,2,2, 3,3,3,3,3,3,3,3,
     4,4,4,4,4,4,4,4, 5,5,5,5,5,5,5,5, 6,6,6,6,6,6,6,6, 7,7,7,7,7,7,7,7
@@ -2890,7 +3009,7 @@ static NOINLINE void ggml_vec_dot_iq2_s_q8_K_vl256(int n, float * GGML_RESTRICT 
 #endif
 
 void ggml_vec_dot_iq2_s_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
-#if defined __riscv_v_intrinsic
+#if GGML_RISCV_RVV_1_0
     switch (__riscv_vlenb() * 8) {
         case 128:
             ggml_vec_dot_iq2_s_q8_K_vl128(n, s, bs, vx, bx, vy, by, nrc);
@@ -2907,7 +3026,7 @@ void ggml_vec_dot_iq2_s_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
 #endif
 }
 
-#if defined __riscv_v_intrinsic
+#if GGML_RISCV_VECTOR_INTRINSICS
 static const int8_t keven_signs_q2xs[1024] = {
      1,  1,  1,  1,  1,  1,  1,  1, -1,  1,  1,  1,  1,  1,  1, -1,  1, -1,  1,  1,  1,  1,  1, -1, -1, -1,  1,  1,  1,  1,  1,  1,
      1,  1, -1,  1,  1,  1,  1, -1, -1,  1, -1,  1,  1,  1,  1,  1,  1, -1, -1,  1,  1,  1,  1,  1, -1, -1, -1,  1,  1,  1,  1, -1,
@@ -3020,6 +3139,9 @@ static NOINLINE void ggml_vec_dot_iq2_xs_q8_K_vl128(int n, float * GGML_RESTRICT
     *s = 0.125f * sumf;
 }
 
+#endif
+
+#if GGML_RISCV_RVV_1_0
 static NOINLINE void ggml_vec_dot_iq2_xs_q8_K_vl256(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
     assert(n % QK_K == 0);
     assert(nrc == 1);
@@ -3097,14 +3219,16 @@ static NOINLINE void ggml_vec_dot_iq2_xs_q8_K_vl256(int n, float * GGML_RESTRICT
 #endif
 
 void ggml_vec_dot_iq2_xs_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
-#if defined __riscv_v_intrinsic
+#if GGML_RISCV_VECTOR_INTRINSICS
       switch (__riscv_vlenb() * 8) {
           case 128:
               ggml_vec_dot_iq2_xs_q8_K_vl128(n, s, bs, vx, bx, vy, by, nrc);
               break;
+#if GGML_RISCV_RVV_1_0
           case 256:
               ggml_vec_dot_iq2_xs_q8_K_vl256(n, s, bs, vx, bx, vy, by, nrc);
               break;
+#endif
           default:
               ggml_vec_dot_iq2_xs_q8_K_generic(n, s, bs, vx, bx, vy, by, nrc);
               break;
@@ -3114,7 +3238,7 @@ void ggml_vec_dot_iq2_xs_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const v
 #endif
 }
 
-#if defined __riscv_v_intrinsic
+#if GGML_RISCV_RVV_1_0
 static NOINLINE void ggml_vec_dot_iq2_xxs_q8_K_vl128(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
     assert(n % QK_K == 0);
     assert(nrc == 1);
@@ -3302,7 +3426,7 @@ static NOINLINE void ggml_vec_dot_iq2_xxs_q8_K_vl256(int n, float * GGML_RESTRIC
 #endif
 
 void ggml_vec_dot_iq2_xxs_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
-#if defined __riscv_v_intrinsic
+#if GGML_RISCV_RVV_1_0
     switch (__riscv_vlenb() * 8) {
         case 128:
             ggml_vec_dot_iq2_xxs_q8_K_vl128(n, s, bs, vx, bx, vy, by, nrc);
@@ -3316,7 +3440,7 @@ void ggml_vec_dot_iq2_xxs_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const 
 #endif
 }
 
-#if defined __riscv_v_intrinsic
+#if GGML_RISCV_RVV_1_0
 static NOINLINE void ggml_vec_dot_iq3_s_q8_K_vl128(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
     assert(n % QK_K == 0);
     UNUSED(nrc); UNUSED(bx); UNUSED(by); UNUSED(bs);
@@ -3509,7 +3633,7 @@ static NOINLINE void ggml_vec_dot_iq3_s_q8_K_vl256(int n, float * GGML_RESTRICT 
 #endif
 
 void ggml_vec_dot_iq3_s_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
-#if defined __riscv_v_intrinsic
+#if GGML_RISCV_RVV_1_0
     switch (__riscv_vlenb() * 8) {
         case 128:
              ggml_vec_dot_iq3_s_q8_K_vl128(n, s, bs, vx, bx, vy, by, nrc);
@@ -3526,7 +3650,7 @@ void ggml_vec_dot_iq3_s_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
 #endif
 }
 
-#if defined __riscv_v_intrinsic
+#if GGML_RISCV_VECTOR_INTRINSICS
 static NOINLINE void ggml_vec_dot_iq3_xxs_q8_K_vl128(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
     assert(n % QK_K == 0);
     UNUSED(nrc); UNUSED(bx); UNUSED(by); UNUSED(bs);
@@ -3620,6 +3744,9 @@ static NOINLINE void ggml_vec_dot_iq3_xxs_q8_K_vl128(int n, float * GGML_RESTRIC
     *s = 0.25f * sumf;
 }
 
+#endif
+
+#if GGML_RISCV_RVV_1_0
 static NOINLINE void ggml_vec_dot_iq3_xxs_q8_K_vl256(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
     assert(n % QK_K == 0);
     assert(nrc == 1);
@@ -3715,14 +3842,16 @@ static NOINLINE void ggml_vec_dot_iq3_xxs_q8_K_vl256(int n, float * GGML_RESTRIC
 #endif
 
 void ggml_vec_dot_iq3_xxs_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
-#if defined __riscv_v_intrinsic
+#if GGML_RISCV_VECTOR_INTRINSICS
     switch (__riscv_vlenb() * 8) {
         case 128:
             ggml_vec_dot_iq3_xxs_q8_K_vl128(n, s, bs, vx, bx, vy, by, nrc);
             break;
+#if GGML_RISCV_RVV_1_0
         case 256:
             ggml_vec_dot_iq3_xxs_q8_K_vl256(n, s, bs, vx, bx, vy, by, nrc);
             break;
+#endif
         default:
             ggml_vec_dot_iq3_xxs_q8_K_generic(n, s, bs, vx, bx, vy, by, nrc);
             break;
@@ -3732,7 +3861,7 @@ void ggml_vec_dot_iq3_xxs_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const 
 #endif
 }
 
-#if defined __riscv_v_intrinsic
+#if GGML_RISCV_VECTOR_INTRINSICS
 static NOINLINE void ggml_vec_dot_iq4_nl_q8_0_vl128(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
     assert(nrc == 1);
     UNUSED(nrc);
@@ -3788,6 +3917,9 @@ static NOINLINE void ggml_vec_dot_iq4_nl_q8_0_vl128(int n, float * GGML_RESTRICT
     *s = sumf;
 }
 
+#endif
+
+#if GGML_RISCV_RVV_1_0
 static NOINLINE void ggml_vec_dot_iq4_nl_q8_0_vl256(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
     assert(nrc == 1);
     UNUSED(nrc);
@@ -3847,13 +3979,17 @@ static NOINLINE void ggml_vec_dot_iq4_nl_q8_0_vl256(int n, float * GGML_RESTRICT
 #endif
 
 void ggml_vec_dot_iq4_nl_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
-#if defined __riscv_v_intrinsic
+#if GGML_RISCV_VECTOR_INTRINSICS
     switch (__riscv_vlenb() * 8) {
         case 128:
             ggml_vec_dot_iq4_nl_q8_0_vl128(n, s, bs, vx, bx, vy, by, nrc);
             break;
         default: // 256 and above
+#if GGML_RISCV_RVV_1_0
             ggml_vec_dot_iq4_nl_q8_0_vl256(n, s, bs, vx, bx, vy, by, nrc);
+#else
+            ggml_vec_dot_iq4_nl_q8_0_generic(n, s, bs, vx, bx, vy, by, nrc);
+#endif
             break;
     }
 #else
@@ -3861,7 +3997,7 @@ void ggml_vec_dot_iq4_nl_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const v
 #endif
 }
 
-#if defined __riscv_v_intrinsic
+#if GGML_RISCV_VECTOR_INTRINSICS
 static NOINLINE void ggml_vec_dot_iq4_xs_q8_K_vl128(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
     assert(nrc == 1);
     UNUSED(nrc);
@@ -3928,6 +4064,9 @@ static NOINLINE void ggml_vec_dot_iq4_xs_q8_K_vl128(int n, float * GGML_RESTRICT
     *s = sumf;
 }
 
+#endif
+
+#if GGML_RISCV_RVV_1_0
 static NOINLINE void ggml_vec_dot_iq4_xs_q8_K_vl256(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
     assert(nrc == 1);
     UNUSED(nrc);
@@ -4010,14 +4149,16 @@ static NOINLINE void ggml_vec_dot_iq4_xs_q8_K_vl256(int n, float * GGML_RESTRICT
 #endif
 
 void ggml_vec_dot_iq4_xs_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
-#if defined __riscv_v_intrinsic
+#if GGML_RISCV_VECTOR_INTRINSICS
     switch (__riscv_vlenb() * 8) {
         case 128:
             ggml_vec_dot_iq4_xs_q8_K_vl128(n, s, bs, vx, bx, vy, by, nrc);
             break;
+#if GGML_RISCV_RVV_1_0
         case 256:
             ggml_vec_dot_iq4_xs_q8_K_vl256(n, s, bs, vx, bx, vy, by, nrc);
             break;
+#endif
         default:
             ggml_vec_dot_iq4_xs_q8_K_generic(n, s, bs, vx, bx, vy, by, nrc);
             break;
@@ -4027,7 +4168,7 @@ void ggml_vec_dot_iq4_xs_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const v
 #endif
 }
 
-#if defined __riscv_v_intrinsic
+#if GGML_RISCV_VECTOR_INTRINSICS
 static NOINLINE void ggml_vec_dot_tq1_0_q8_K_vl128(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
     assert(nrc == 1);
     UNUSED(nrc);
@@ -4127,6 +4268,9 @@ static NOINLINE void ggml_vec_dot_tq1_0_q8_K_vl128(int n, float * GGML_RESTRICT 
     *s = sumf;
 }
 
+#endif
+
+#if GGML_RISCV_RVV_1_0
 static NOINLINE void ggml_vec_dot_tq1_0_q8_K_vl256(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
     assert(nrc == 1);
     UNUSED(nrc);
@@ -4233,14 +4377,16 @@ static NOINLINE void ggml_vec_dot_tq1_0_q8_K_vl256(int n, float * GGML_RESTRICT 
 #endif
 
 void ggml_vec_dot_tq1_0_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
-#if defined __riscv_v_intrinsic
+#if GGML_RISCV_VECTOR_INTRINSICS
     switch (__riscv_vlenb() * 8) {
         case 128:
             ggml_vec_dot_tq1_0_q8_K_vl128(n, s, bs, vx, bx, vy, by, nrc);
             break;
+#if GGML_RISCV_RVV_1_0
         case 256:
             ggml_vec_dot_tq1_0_q8_K_vl256(n, s, bs, vx, bx, vy, by, nrc);
             break;
+#endif
         default:
             ggml_vec_dot_tq1_0_q8_K_generic(n, s, bs, vx, bx, vy, by, nrc);
             break;
@@ -4250,7 +4396,7 @@ void ggml_vec_dot_tq1_0_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
 #endif
 }
 
-#if defined __riscv_v_intrinsic
+#if GGML_RISCV_VECTOR_INTRINSICS
 static NOINLINE void ggml_vec_dot_tq2_0_q8_K_vl128(const int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
     assert(n % QK_K == 0);
     assert(nrc == 1);
@@ -4406,7 +4552,7 @@ static NOINLINE void ggml_vec_dot_tq2_0_q8_K_vl256(int n, float * GGML_RESTRICT 
 #endif
 
 void ggml_vec_dot_tq2_0_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
-#if defined __riscv_v_intrinsic
+#if GGML_RISCV_VECTOR_INTRINSICS
     switch (__riscv_vlenb() * 8) {
         case 128:
             ggml_vec_dot_tq2_0_q8_K_vl128(n, s, bs, vx, bx, vy, by, nrc);
@@ -4423,7 +4569,7 @@ void ggml_vec_dot_tq2_0_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
 #endif
 }
 
-#if defined __riscv_v_intrinsic
+#if GGML_RISCV_VECTOR_INTRINSICS
 static NOINLINE void ggml_vec_dot_mxfp4_q8_0_vl128(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
     assert(nrc == 1);
     UNUSED(nrc);
@@ -4479,6 +4625,9 @@ static NOINLINE void ggml_vec_dot_mxfp4_q8_0_vl128(int n, float * GGML_RESTRICT 
     *s = sumf;
 }
 
+#endif
+
+#if GGML_RISCV_RVV_1_0
 static NOINLINE void ggml_vec_dot_mxfp4_q8_0_vl256(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
     assert(nrc == 1);
     UNUSED(nrc);
@@ -4538,13 +4687,17 @@ static NOINLINE void ggml_vec_dot_mxfp4_q8_0_vl256(int n, float * GGML_RESTRICT 
 #endif
 
 void ggml_vec_dot_mxfp4_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
-#if defined __riscv_v_intrinsic
+#if GGML_RISCV_VECTOR_INTRINSICS
     switch (__riscv_vlenb() * 8) {
         case 128:
             ggml_vec_dot_mxfp4_q8_0_vl128(n, s, bs, vx, bx, vy, by, nrc);
             break;
         default: // 256 and above
+#if GGML_RISCV_RVV_1_0
             ggml_vec_dot_mxfp4_q8_0_vl256(n, s, bs, vx, bx, vy, by, nrc);
+#else
+            ggml_vec_dot_mxfp4_q8_0_generic(n, s, bs, vx, bx, vy, by, nrc);
+#endif
             break;
     }
 #else

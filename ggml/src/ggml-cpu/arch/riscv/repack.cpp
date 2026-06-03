@@ -29,7 +29,7 @@ void ggml_quantize_mat_q8_0_4x8(const float * GGML_RESTRICT x, void * GGML_RESTR
     assert(k % QK8_0 == 0);
     const int nb = k / QK8_0;
 
-#if defined(__riscv_v_intrinsic)
+#if GGML_RISCV_VECTOR_INTRINSICS
     block_q8_0x4 * GGML_RESTRICT y = (block_q8_0x4 *) vy;
     const size_t vl_calc = __riscv_vsetvl_e32m8(QK8_0);
     const size_t vl_save = __riscv_vsetvl_e64m2(4);
@@ -130,7 +130,7 @@ void ggml_gemv_q4_0_8x8_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const vo
     UNUSED(ncols_interleaved);
     UNUSED(blocklen);
 
-#if defined __riscv_v
+#if GGML_RISCV_RVV_1_0
     if (__riscv_vlenb() >= QK4_0) {
         const size_t vl = QK4_0;
 
@@ -687,7 +687,7 @@ void ggml_gemm_q4_0_8x8_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const vo
     UNUSED(ncols_interleaved);
     UNUSED(blocklen);
 
-#if defined __riscv_v
+#if GGML_RISCV_RVV_1_0
     if (__riscv_vlenb() >= QK4_0) {
         const size_t vl = QK4_0;
 

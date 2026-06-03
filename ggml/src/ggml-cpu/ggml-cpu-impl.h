@@ -349,6 +349,22 @@ static inline int32x4_t ggml_nvfp4_dot8(const int8x8_t q4_lo, const int8x8_t q8_
 #include <riscv_vector.h>
 #endif
 
+#ifndef GGML_RISCV_VECTOR_INTRINSICS
+#if defined(__riscv_v_intrinsic)
+#define GGML_RISCV_VECTOR_INTRINSICS 1
+#else
+#define GGML_RISCV_VECTOR_INTRINSICS 0
+#endif
+#endif
+
+#ifndef GGML_RISCV_RVV_1_0
+#if defined(__riscv_v) && __riscv_v >= 1000000
+#define GGML_RISCV_RVV_1_0 1
+#else
+#define GGML_RISCV_RVV_1_0 0
+#endif
+#endif
+
 #if defined(__loongarch64)
 #if defined(__loongarch_asx)
 #include <lasxintrin.h>
