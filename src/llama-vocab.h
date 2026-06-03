@@ -143,6 +143,8 @@ struct llama_vocab {
     bool get_treat_whitespace_as_suffix() const;
     bool get_normalizer_lowercase      () const;
 
+    const std::vector<llama_token> & get_suppress_tokens() const;
+
     int max_token_len() const;
 
     int find_bpe_rank(const std::string & token_left, const std::string & token_right) const;
