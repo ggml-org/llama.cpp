@@ -2553,10 +2553,11 @@ extern "C" {
     // TODO: add ggml_gated_delta_net_set_bcast() to be able to configure Q, K broadcast type: tiled vs interleaved [TAG_GGML_GDN_BCAST]
     // ref: https://github.com/ggml-org/llama.cpp/pull/19468#discussion_r2786394306
     //
-    // state is a 3D tensor of shape (S_v*S_v*H, K, n_seqs):
+    // state holds the initial state s0 only, shape (S_v*S_v*H, 1, n_seqs). K is the number of
+    // output snapshot slots:
     //   K == 1: output carries the final state only.
-    //   K  > 1: output carries K snapshot slots; the kernel writes the last min(n_tokens, K)
-    //   per-token snapshots into the trailing slots
+    //   K  > 1: output carries K snapshots, most-recent first (slot 0 = final state, slot s =
+    //   state s tokens back); when n_tokens < K only slots 0..n_tokens-1 are written.
     GGML_API struct ggml_tensor * ggml_gated_delta_net(
             struct ggml_context * ctx,
             struct ggml_tensor  * q,
@@ -2564,7 +2565,8 @@ extern "C" {
             struct ggml_tensor  * v,
             struct ggml_tensor  * g,
             struct ggml_tensor  * beta,
-            struct ggml_tensor  * state);
+            struct ggml_tensor  * state,
+            int64_t               K);
 
     // custom operators
 

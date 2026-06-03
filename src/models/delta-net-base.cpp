@@ -400,7 +400,7 @@ std::pair<ggml_tensor *, ggml_tensor *> llm_build_delta_net_base::build_delta_ne
 
     // K=1 (final state only): reshape to 3D (S_v*S_v*H_v, 1, n_seqs) for ggml_gated_delta_net.
     ggml_tensor * s_3d = ggml_reshape_3d(ctx0, s, S_v * S_v * H_v, 1, n_seqs);
-    ggml_tensor * result = ggml_gated_delta_net(ctx0, q, k, v, g, b, s_3d);
+    ggml_tensor * result = ggml_gated_delta_net(ctx0, q, k, v, g, b, s_3d, /*K=*/1);
     if (n_tokens == 1) {
         cb(result, LLAMA_TENSOR_NAME_FGDN_AR, il);
     } else {
@@ -564,11 +564,9 @@ ggml_tensor * llm_build_delta_net_base::build_recurrent_attn(
     const int64_t D = S_v * S_v * H_v;
     const int64_t K = cparams.n_rs_seq + 1;
 
-    // TODO: remove pad + simplify
-    ggml_tensor * s_3d     = ggml_reshape_3d(ctx0, s, D, 1, n_seqs);
-    ggml_tensor * s_3d_pad = ggml_pad       (ctx0, s_3d, 0, K - 1, 0, 0);
+    ggml_tensor * s_3d = ggml_reshape_3d(ctx0, s, D, 1, n_seqs);
 
-    ggml_tensor * gdn_out = ggml_gated_delta_net(ctx0, q, k, v, g, b, s_3d_pad);
+    ggml_tensor * gdn_out = ggml_gated_delta_net(ctx0, q, k, v, g, b, s_3d, K);
     if (n_seq_tokens > 1) {
         cb(gdn_out, LLAMA_TENSOR_NAME_FGDN_CH, il);
     } else {
@@ -587,21 +585,21 @@ ggml_tensor * llm_build_delta_net_base::build_recurrent_attn(
     cb(output, "attn_output", il);
 
     const size_t row_size = hparams.n_embd_s() * ggml_element_size(ssm_states_all);
-    for (int64_t k_i = 0; k_i < K; ++k_i) {
-        const uint32_t cache_slot = (uint32_t) (K - 1 - k_i);
-        ggml_tensor * src = ggml_view_4d(ctx0, gdn_out,
-            S_v, S_v, H_v, n_seqs,
-            ggml_row_size(gdn_out->type, S_v),
-            ggml_row_size(gdn_out->type, S_v * S_v),
-            ggml_row_size(gdn_out->type, S_v * S_v * H_v),
-            ggml_row_size(gdn_out->type, attn_score_elems + k_i * state_size_per_snap));
 
-        ggml_tensor * dst = ggml_view_2d(ctx0, ssm_states_all,
-            hparams.n_embd_s(), n_seqs, ssm_states_all->nb[1],
-            ((size_t) cache_slot * mem_size + kv_head) * row_size);
+    // write the K state snapshots into the recurrent cache (snapshot slot i -> rollback group i)
+    ggml_tensor * src = ggml_view_3d(ctx0, gdn_out,
+        D, n_seqs, K,
+        ggml_row_size(gdn_out->type, D),
+        ggml_row_size(gdn_out->type, state_size_per_snap),
+        ggml_row_size(gdn_out->type, attn_score_elems));
 
-        ggml_build_forward_expand(gf, ggml_cpy(ctx0, src, dst));
-    }
+    ggml_tensor * dst = ggml_view_3d(ctx0, ssm_states_all,
+        D, n_seqs, K,
+        ssm_states_all->nb[1],
+        (size_t) mem_size * row_size,
+        (size_t) kv_head * row_size);
+
+    ggml_build_forward_expand(gf, ggml_cpy(ctx0, src, dst));
 
     return output;
 }
