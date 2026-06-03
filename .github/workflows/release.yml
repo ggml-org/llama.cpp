@@ -619,10 +619,11 @@ jobs:
         run: |
           choco install ninja
 
-      - name: ccache
-        uses: ggml-org/ccache-action@v1.2.21
-        with:
-          key: release-windows-2025-${{ matrix.arch }}-${{ matrix.backend }}
+      # TODO: these jobs need to use llvm toolchain in order to utilize the ccache
+      #- name: ccache
+      #  uses: ggml-org/ccache-action@v1.2.21
+      #  with:
+      #    key: release-windows-2025-${{ matrix.arch }}-${{ matrix.backend }}
 
       - name: Install OpenCL Headers and Libs
         id: install_opencl
@@ -650,10 +651,10 @@ jobs:
           cmake -S . -B build ${{ matrix.defines }} -DGGML_NATIVE=OFF -DGGML_CPU=OFF -DGGML_BACKEND_DL=ON -DLLAMA_BUILD_BORINGSSL=ON
           cmake --build build --config Release --target ${{ matrix.target }}
 
-      - name: ccache-clear
-        uses: ./.github/actions/ccache-clear
-        with:
-          key: release-windows-2025-${{ matrix.arch }}-${{ matrix.backend }}
+      #- name: ccache-clear
+      #  uses: ./.github/actions/ccache-clear
+      #  with:
+      #    key: release-windows-2025-${{ matrix.arch }}-${{ matrix.backend }}
 
       - name: Pack artifacts
         id: pack_artifacts
