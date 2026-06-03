@@ -560,8 +560,9 @@ div.markdown-user-content :global(.table-wrapper) {
 	border-color: var(--primary);
 }
 
-/* Mermaid diagrams */
-.markdown-content :global(pre.mermaid) {
+/* Mermaid and svg diagram blocks share the same block styling */
+.markdown-content :global(pre.mermaid),
+.markdown-content :global(pre.svg-diagram) {
 	background: transparent;
 	border: none;
 	padding: 0;
@@ -578,11 +579,19 @@ div.markdown-user-content :global(.table-wrapper) {
 	display: none;
 }
 
-.markdown-content :global(pre.mermaid:hover) {
+/* Hide svg source until rendered - prevents flash. A rendered-but-unsanitized
+   block (oversized source) keeps its raw text visible as a safe fallback. */
+.markdown-content :global(pre.svg-diagram:not([data-svg-rendered])) {
+	display: none;
+}
+
+.markdown-content :global(pre.mermaid:hover),
+.markdown-content :global(pre.svg-diagram:hover) {
 	opacity: 0.85;
 }
 
-.markdown-content :global(pre.mermaid svg) {
+.markdown-content :global(pre.mermaid svg),
+.markdown-content :global(pre.svg-diagram svg) {
 	max-width: 90%;
 	margin: 0 auto;
 	height: auto;
@@ -590,8 +599,9 @@ div.markdown-user-content :global(.table-wrapper) {
 	padding: 3rem 1rem;
 }
 
-/* Mermaid block wrapper - matches code block styling */
-.markdown-content :global(.mermaid-block-wrapper) {
+/* Diagram block wrapper - matches code block styling */
+.markdown-content :global(.mermaid-block-wrapper),
+.markdown-content :global(.svg-block-wrapper) {
 	margin: 1.5rem 0;
 	border-radius: 0.75rem;
 	overflow: hidden;
@@ -603,11 +613,13 @@ div.markdown-user-content :global(.table-wrapper) {
 	max-height: var(--max-message-height);
 }
 
-.markdown-content:global(.dark) :global(.mermaid-block-wrapper) {
+.markdown-content:global(.dark) :global(.mermaid-block-wrapper),
+.markdown-content:global(.dark) :global(.svg-block-wrapper) {
 	border-color: color-mix(in oklch, var(--border) 20%, transparent);
 }
 
-.markdown-content :global(.mermaid-scroll-container) {
+.markdown-content :global(.mermaid-scroll-container),
+.markdown-content :global(.svg-scroll-container) {
 	min-height: 350px;
 	max-height: var(--max-message-height);
 	overflow-y: auto;
@@ -618,17 +630,20 @@ div.markdown-user-content :global(.table-wrapper) {
 	padding: 3rem 1rem 1rem;
 }
 
-.full-height-code-blocks :global(.mermaid-block-wrapper) {
+.full-height-code-blocks :global(.mermaid-block-wrapper),
+.full-height-code-blocks :global(.svg-block-wrapper) {
 	max-height: none;
 }
 
-.full-height-code-blocks :global(.mermaid-scroll-container) {
+.full-height-code-blocks :global(.mermaid-scroll-container),
+.full-height-code-blocks :global(.svg-scroll-container) {
 	max-height: none;
 	overflow-y: visible;
 }
 
-/* Mermaid block uses same header styling as code blocks */
-.markdown-content :global(.mermaid-block-wrapper .code-block-header) {
+/* Diagram block uses same header styling as code blocks */
+.markdown-content :global(.mermaid-block-wrapper .code-block-header),
+.markdown-content :global(.svg-block-wrapper .code-block-header) {
 	display: flex;
 	justify-content: space-between;
 	align-items: center;
@@ -640,14 +655,16 @@ div.markdown-user-content :global(.table-wrapper) {
 	right: 0;
 }
 
-.markdown-content :global(.mermaid-block-wrapper .code-block-actions) {
+.markdown-content :global(.mermaid-block-wrapper .code-block-actions),
+.markdown-content :global(.svg-block-wrapper .code-block-actions) {
 	display: flex;
 	align-items: center;
 	gap: 0.5rem;
 }
 
-/* Mermaid pre element - remove default margins */
-.markdown-content :global(.mermaid-block-wrapper pre.mermaid) {
+/* Diagram pre element - remove default margins */
+.markdown-content :global(.mermaid-block-wrapper pre.mermaid),
+.markdown-content :global(.svg-block-wrapper pre.svg-diagram) {
 	background: transparent;
 	border: none;
 	padding: 0;
@@ -655,8 +672,8 @@ div.markdown-user-content :global(.table-wrapper) {
 	text-align: center;
 }
 
-/* Mermaid SVG should be bigger */
-.markdown-content :global(.mermaid-block-wrapper pre.mermaid svg) {
+.markdown-content :global(.mermaid-block-wrapper pre.mermaid svg),
+.markdown-content :global(.svg-block-wrapper pre.svg-diagram svg) {
 	width: unset !important;
 	height: auto;
 	display: block;
@@ -682,106 +699,4 @@ div.markdown-user-content :global(.table-wrapper) {
 .mermaid-loading-text {
 	font-size: 0.875rem;
 	font-style: italic;
-}
-
-/* Svg diagrams */
-.markdown-content :global(pre.svg-diagram) {
-	background: transparent;
-	border: none;
-	padding: 0;
-	text-align: center;
-	font-family: inherit;
-	cursor: pointer;
-	transition: opacity 0.15s ease;
-	position: relative;
-}
-
-/* Hide svg source until rendered - prevents flash. A rendered-but-unsanitized
-   block (oversized source) keeps its raw text visible as a safe fallback. */
-.markdown-content :global(pre.svg-diagram:not([data-svg-rendered])) {
-	display: none;
-}
-
-.markdown-content :global(pre.svg-diagram:hover) {
-	opacity: 0.85;
-}
-
-.markdown-content :global(pre.svg-diagram svg) {
-	max-width: 90%;
-	margin: 0 auto;
-	height: auto;
-	display: block;
-	padding: 3rem 1rem;
-}
-
-/* Svg block wrapper - matches code block styling */
-.markdown-content :global(.svg-block-wrapper) {
-	margin: 1.5rem 0;
-	border-radius: 0.75rem;
-	overflow: hidden;
-	border: 1px solid color-mix(in oklch, var(--border) 30%, transparent);
-	background: var(--code-background);
-	box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05);
-	position: relative;
-	min-height: var(--min-message-height);
-	max-height: var(--max-message-height);
-}
-
-.markdown-content:global(.dark) :global(.svg-block-wrapper) {
-	border-color: color-mix(in oklch, var(--border) 20%, transparent);
-}
-
-.markdown-content :global(.svg-scroll-container) {
-	min-height: 350px;
-	max-height: var(--max-message-height);
-	overflow-y: auto;
-	overflow-x: auto;
-	display: flex;
-	align-items: center;
-	justify-content: center;
-	padding: 3rem 1rem 1rem;
-}
-
-.full-height-code-blocks :global(.svg-block-wrapper) {
-	max-height: none;
-}
-
-.full-height-code-blocks :global(.svg-scroll-container) {
-	max-height: none;
-	overflow-y: visible;
-}
-
-/* Svg block uses same header styling as code blocks */
-.markdown-content :global(.svg-block-wrapper .code-block-header) {
-	display: flex;
-	justify-content: space-between;
-	align-items: center;
-	padding: 0.5rem 1rem 0;
-	font-size: 0.875rem;
-	position: absolute;
-	top: 0;
-	left: 0;
-	right: 0;
-}
-
-.markdown-content :global(.svg-block-wrapper .code-block-actions) {
-	display: flex;
-	align-items: center;
-	gap: 0.5rem;
-}
-
-/* Svg pre element - remove default margins */
-.markdown-content :global(.svg-block-wrapper pre.svg-diagram) {
-	background: transparent;
-	border: none;
-	padding: 0;
-	margin: 0;
-	text-align: center;
-}
-
-.markdown-content :global(.svg-block-wrapper pre.svg-diagram svg) {
-	width: unset !important;
-	height: auto;
-	display: block;
-	padding: 3rem 1rem;
 }
