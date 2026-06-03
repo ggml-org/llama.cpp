@@ -389,11 +389,11 @@ void string_to_spv_func(std::string name, std::string in_path, std::string out_p
 
     std::string stdout_str, stderr_str;
     try {
-        // std::cout << "Executing command: ";
-        // for (const auto& part : cmd) {
-        //     std::cout << part << " ";
-        // }
-        // std::cout << std::endl;
+         std::cout << "Executing command: ";
+         for (const auto& part : cmd) {
+             std::cout << part << " ";
+         }
+         std::cout << std::endl;
 
         int exit_code = execute_command(cmd, stdout_str, stderr_str);
         if (exit_code != 0 || !stderr_str.empty()) {

@@ -44,6 +44,7 @@
 
 #ifdef GGML_USE_VULKAN
 #include "ggml-vulkan.h"
+#include "vkRenderDocUtil.hpp"
 #endif
 
 #ifdef GGML_USE_WEBGPU

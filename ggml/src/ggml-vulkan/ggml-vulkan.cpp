@@ -1,4 +1,5 @@
 #include "ggml-vulkan-common.h"
+#include "vkRenderDocUtil.hpp"
 
 static vk_device_architecture get_device_architecture(const vk::PhysicalDevice& device) {
     vk::PhysicalDeviceProperties props = device.getProperties();
@@ -326,6 +327,12 @@ bool ggml_vk_concat_supported(const ggml_tensor * src0, const ggml_tensor * src1
     // Quantized tensor rows are block-aligned when created.
     return ggml_is_contiguous_rows(src0) && ggml_is_contiguous_rows(src1) && ggml_is_contiguous_rows(dst);
 }
+
+static RenderDocUtil* pRenderDocUtil;
+static bool renderdoc_initialized = false;
+static uint32_t currentGraphNum = 0;
+static uint32_t renderdoc_capture_node = 10;
+
 static bool vk_instance_initialized = false;
 
 vk_instance_t vk_instance;
@@ -337,6 +344,7 @@ static VkDeviceSize ggml_vk_get_max_buffer_range(const ggml_backend_vk_context *
 }
 
 void ggml_vk_wait_for_fence(ggml_backend_vk_context * ctx) {
+    VK_LOG_DEBUG("ggml_vk_wait_for_fence()");
     // Use waitForFences while most of the graph executes. Hopefully the CPU can sleep
     // during this wait.
     if (ctx->almost_ready_fence_pending) {
@@ -5193,7 +5201,7 @@ static void ggml_vk_print_gpu_info(size_t idx) {
     GGML_LOG_DEBUG("ggml_vulkan: %zu = %s (%s) | uma: %d | fp16: %s | bf16: %d | fp4: %d | warp size: %zu | shared memory: %d | int dot: %d | matrix cores: %s\n",
               idx, device_name.c_str(), driver_props.driverName.data(), uma, fp16_str, bf16, fp4, subgroup_size,
               props2.properties.limits.maxComputeSharedMemorySize, integer_dot_product, matrix_cores.c_str());
-
+    std::cout << "======= zztest ======= matrix_cores = " << matrix_cores.c_str() << std::endl;
     if (props2.properties.deviceType == vk::PhysicalDeviceType::eCpu) {
         GGML_LOG_DEBUG("ggml_vulkan: Warning: Device type is CPU. This is probably not the device you want.\n");
     }
@@ -5234,7 +5242,7 @@ void ggml_vk_instance_init() {
 #ifdef __APPLE__
     const bool portability_enumeration_ext = ggml_vk_instance_portability_enumeration_ext_available(instance_extensions);
 #endif
-    const bool debug_utils_ext = ggml_vk_instance_debug_utils_ext_available(instance_extensions) && getenv("GGML_VK_DEBUG_MARKERS") != nullptr;
+    const bool debug_utils_ext = ggml_vk_instance_debug_utils_ext_available(instance_extensions);
     std::vector<const char*> layers;
 
     if (layer_settings) {
@@ -14374,6 +14382,13 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
     // closed when the function returns
     ggml_vk_debug_label queue_dbg(ctx->device->compute_queue->handle.get(), "ggml_backend_vk_graph_compute");
 
+    currentGraphNum++;
+    // std::cout << "=== Graph Compute Start: " << currentGraphNum << " ===" << std::endl; 
+    if (currentGraphNum == renderdoc_capture_node) {
+        // std::cout << ">>> Starting RenderDoc capture at node " << currentGraphNum << std::endl;
+        pRenderDocUtil->startFrame();
+    }
+
     ctx->prealloc_size_add_rms_partials_offset = 0;
     ctx->do_add_rms_partials = false;
     ctx->do_add_rms_partials_offset_calculation = false;
@@ -14791,6 +14806,10 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
         }
 
         if (enqueued) {
+            if (currentGraphNum == renderdoc_capture_node && submit_count == 1) {
+                // std::cout << ">>> Ending RenderDoc capture at node " << currentGraphNum << std::endl;
+                pRenderDocUtil->endFrame();
+            }
             ++submitted_nodes;
 
 #ifndef GGML_VULKAN_CHECK_RESULTS
@@ -14852,6 +14871,11 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
         }
         ctx->perf_logger->print_timings();
     }
+
+    // if (currentGraphNum == renderdoc_capture_node) {
+    //     // std::cout << ">>> Ending RenderDoc capture at node " << currentGraphNum << std::endl;
+    //     pRenderDocUtil->endFrame();
+    // }
 
     if (!ctx->device->support_async) {
         ggml_vk_synchronize(ctx);
@@ -15333,6 +15357,12 @@ ggml_backend_t ggml_backend_vk_init(size_t dev_num) {
     VK_LOG_DEBUG("ggml_backend_vk_init(" << dev_num << ")");
 
     ggml_backend_vk_context * ctx = new ggml_backend_vk_context;
+
+    if (renderdoc_initialized == false) {
+        pRenderDocUtil        = new RenderDocUtil();
+        renderdoc_initialized = true;
+    }
+
     ggml_vk_init(ctx, dev_num);
 
     ggml_backend_t vk_backend = new ggml_backend {
