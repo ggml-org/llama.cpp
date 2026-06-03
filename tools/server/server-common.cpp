@@ -1547,6 +1547,11 @@ server_tokens format_prompt_rerank(
         std::string prompt = rerank_prompt;
         string_replace_all(prompt, "{query}"   , query);
         string_replace_all(prompt, "{document}", doc  );
+        // Rerank models expect BOS token (e.g., LLaMA models use <|begin_of_text|>)
+        // tokenize_input_subprompt with add_special=false skips it, so add manually.
+        if (llama_vocab_get_add_bos(vocab)) {
+            result.push_back(llama_vocab_bos(vocab));
+        }
         server_tokens tokens = tokenize_input_subprompt(vocab, mctx, prompt, false, true);
         result.push_back(tokens);
     } else {

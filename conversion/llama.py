@@ -10,7 +10,7 @@ import torch
 if TYPE_CHECKING:
     from torch import Tensor
 
-from .base import ModelBase, TextModel, gguf
+from .base import ModelBase, TextModel, gguf, logger
 
 
 @ModelBase.register(
@@ -267,9 +267,96 @@ class Llama4Model(LlamaModel):
         yield from super().modify_tensors(data_torch, name, bid)
 
 
-@ModelBase.register("LlamaBidirectionalModel")
+@ModelBase.register("LlamaBidirectionalModel", "LlamaBidirectionalForSequenceClassification")
 class LlamaEmbedNemotronModel(LlamaModel):
     model_arch = gguf.MODEL_ARCH.LLAMA_EMBED
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.is_rerank = self.hf_arch == "LlamaBidirectionalForSequenceClassification"
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+
+        # Both LlamaBidirectionalModel and LlamaBidirectionalForSequenceClassification
+        # use bidirectional attention (is_causal=False in the HF model).
+        # This is a behavior change from the previous class which wrote no causal_attn
+        # key (defaulting to true), but it is the correct value for both architectures.
+        self.gguf_writer.add_causal_attention(False)
+
+        if self.is_rerank:
+            assert float(self.hparams.get("temperature", 1.0)) == 1.0, \
+                "non-unit temperature not supported"
+
+            id2label = self.hparams.get("id2label") or {"0": "LABEL_0"}
+            labels = [v for k, v in sorted(id2label.items(), key=lambda x: int(x[0]))]
+            self.gguf_writer.add_classifier_output_labels(labels)
+            self.gguf_writer.add_pooling_type(gguf.PoolingType.RANK)
+
+            # Add a rerank chat template so the server formats inputs correctly.
+            # Template from the model's README: f"question:{q} \n \n passage:{p}"
+            # In this Python string, \n is a real newline — the rendered template is:
+            # "question:{query}" + newline + space + newline + "passage:{document}"
+            self.gguf_writer.add_chat_template([{
+                "name": "rerank",
+                "template": "question:{query} \n \n passage:{document}",
+            }])
+
+    def get_vocab_base(self) -> tuple[list[str], list[int], str]:
+        # The model repo contains custom code (llama_bidirectional_model.py),
+        # so AutoTokenizer needs trust_remote_code=True to load the config.
+        tokens: list[str] = []
+        toktypes: list[int] = []
+
+        from transformers import AutoTokenizer
+        tokenizer = AutoTokenizer.from_pretrained(self.dir_model, trust_remote_code=True)
+        vocab_size = self.hparams.get("vocab_size", len(tokenizer.vocab))  # ty: ignore[unresolved-attribute]
+        assert max(tokenizer.vocab.values()) < vocab_size  # ty: ignore[unresolved-attribute]
+
+        tokpre = self.get_vocab_base_pre(tokenizer)
+
+        reverse_vocab = {id_: encoded_tok for encoded_tok, id_ in tokenizer.vocab.items()}  # ty: ignore[unresolved-attribute]
+        added_vocab = tokenizer.get_added_vocab()  # ty: ignore[unresolved-attribute]
+        added_tokens_decoder = tokenizer.added_tokens_decoder  # ty: ignore[unresolved-attribute]
+
+        for i in range(vocab_size):
+            if i not in reverse_vocab:
+                tokens.append(f"[PAD{i}]")
+                toktypes.append(gguf.TokenType.UNUSED)
+            else:
+                token: str = reverse_vocab[i]
+                if token in added_vocab:
+                    if not added_tokens_decoder[i].normalized:
+                        previous_token = token
+                        token = tokenizer.decode(tokenizer.encode(token, add_special_tokens=False))  # ty: ignore[unresolved-attribute, invalid-assignment]
+                        if previous_token != token:
+                            logger.info(f"{repr(previous_token)} is encoded and decoded back to {repr(token)} using AutoTokenizer")
+
+                    if added_tokens_decoder[i].special or self.does_token_look_special(token):
+                        toktypes.append(gguf.TokenType.CONTROL)
+                    else:
+                        token = token.replace(b"\xe2\x96\x81".decode("utf-8"), " ")
+                        toktypes.append(gguf.TokenType.USER_DEFINED)
+                else:
+                    toktypes.append(gguf.TokenType.NORMAL)
+                tokens.append(token)
+
+        return tokens, toktypes, tokpre
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None):
+        if self.is_rerank:
+            # Extract score.weight → cls_out.weight
+            # In the HF model, self.score is a direct attribute of
+            # LlamaBidirectionalForSequenceClassification (not under self.model),
+            # so the state dict key is "score.weight" (not "model.score.weight").
+            if name == "score.weight":
+                yield (
+                    gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.CLS_OUT] + ".weight",
+                    data_torch,
+                )
+                return
+
+        yield from super().modify_tensors(data_torch, name, bid)
 
 
 @ModelBase.register("SmolLM3ForCausalLM")

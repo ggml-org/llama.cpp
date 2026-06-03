@@ -2952,9 +2952,12 @@ void llm_graph_context::build_pooling(
             } break;
         case LLAMA_POOLING_TYPE_RANK:
             {
-                if (arch == LLM_ARCH_MODERN_BERT) {
+                // Note: this is the fourth architecture-specific pooling check in this switch.
+                // See also: Qwen3/Qwen3VL last-token (line ~315), ModernBERT mean (below), and the CLS default.
+                if (arch == LLM_ARCH_MODERN_BERT || arch == LLM_ARCH_LLAMA_EMBED) {
                     // modern bert gte reranker builds mean first then applies prediction head and classifier
                     // https://github.com/huggingface/transformers/blob/main/src/transformers/models/modernbert/modular_modernbert.py#L1404-1411
+                    // llama-nemotron-rerank also uses mean pooling (pooling_type="avg" in HF config)
                     ggml_tensor * inp_mean = build_inp_mean();
                     cur = ggml_mul_mat(ctx0, ggml_cont(ctx0, ggml_transpose(ctx0, inp)), inp_mean);
                 } else {
