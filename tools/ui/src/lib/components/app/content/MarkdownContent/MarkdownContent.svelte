@@ -1350,56 +1350,115 @@
 		position: relative;
 	}
 
+	/* Hide mermaid code text until rendered - prevents flash */
+	div :global(pre.mermaid:not([data-mermaid-rendered])),
+	div :global(pre.mermaid[data-mermaid-rendered]:not(:has(svg))) {
+		display: none;
+	}
+
 	div :global(pre.mermaid:hover) {
 		opacity: 0.85;
 	}
 
 	div :global(pre.mermaid svg) {
-		max-width: 100%;
+		max-width: 90%;
+		margin: 0 auto;
 		height: auto;
-		display: inline-block;
-		padding-block: 3rem;
+		display: block;
+		padding: 3rem 1rem;
 	}
 
-	/* Streaming mermaid block */
-	.mermaid-streaming-block {
+	/* Mermaid block wrapper - matches code block styling */
+	div :global(.mermaid-block-wrapper) {
 		margin: 1.5rem 0;
 		border-radius: 0.75rem;
 		overflow: hidden;
-		border: 1px dashed var(--border);
-		background: var(--muted);
+		border: 1px solid color-mix(in oklch, var(--border) 30%, transparent);
+		background: var(--code-background);
+		box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+		position: relative;
+		min-height: var(--min-message-height);
+		max-height: var(--max-message-height);
 	}
 
-	.mermaid-streaming-header {
+	:global(.dark) div :global(.mermaid-block-wrapper) {
+		border-color: color-mix(in oklch, var(--border) 20%, transparent);
+	}
+
+	div :global(.mermaid-scroll-container) {
+		min-height: 350px;
+		max-height: var(--max-message-height);
+		overflow-y: auto;
+		overflow-x: auto;
 		display: flex;
 		align-items: center;
+		justify-content: center;
+		padding: 3rem 1rem 1rem;
+	}
+
+	.full-height-code-blocks :global(.mermaid-block-wrapper) {
+		max-height: none;
+	}
+
+	.full-height-code-blocks :global(.mermaid-scroll-container) {
+		max-height: none;
+		overflow-y: visible;
+	}
+
+	/* Mermaid block uses same header styling as code blocks */
+	div :global(.mermaid-block-wrapper .code-block-header) {
+		display: flex;
 		justify-content: space-between;
-		padding: 0.5rem 1rem;
+		align-items: center;
+		padding: 0.5rem 1rem 0;
 		font-size: 0.875rem;
-		background: hsl(var(--muted) / 0.5);
+		position: absolute;
+		top: 0;
+		left: 0;
+		right: 0;
 	}
 
-	.mermaid-streaming-header .code-language {
-		color: var(--muted-foreground);
-		font-weight: 500;
-		font-family: ui-monospace, SFMono-Regular, 'SF Mono', Monaco, monospace;
-		text-transform: uppercase;
-		font-size: 0.75rem;
-		letter-spacing: 0.05em;
+	div :global(.mermaid-block-wrapper .code-block-actions) {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
 	}
 
-	.mermaid-streaming-code {
-		margin: 0;
-		padding: 1rem;
-		overflow-x: auto;
+	/* Mermaid pre element - remove default margins */
+	div :global(.mermaid-block-wrapper pre.mermaid) {
 		background: transparent;
-		font-size: 0.875rem;
-		line-height: 1.5;
-		white-space: pre;
+		border: none;
+		padding: 0;
+		margin: 0;
+		text-align: center;
 	}
 
-	.mermaid-streaming-code code {
-		font-family: ui-monospace, SFMono-Regular, 'SF Mono', Monaco, monospace;
-		color: var(--foreground);
+	/* Mermaid SVG should be bigger */
+	div :global(.mermaid-block-wrapper pre.mermaid svg) {
+		width: unset !important;
+		height: auto;
+		display: block;
+		padding: 3rem 1rem;
+	}
+
+	/* Streaming mermaid block - empty preview box */
+	.mermaid-streaming-block {
+		min-height: 300px;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+	}
+
+	.mermaid-loading-placeholder {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		padding: 3rem;
+		color: var(--muted-foreground);
+	}
+
+	.mermaid-loading-text {
+		font-size: 0.875rem;
+		font-style: italic;
 	}
 </style>
