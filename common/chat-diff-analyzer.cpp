@@ -42,8 +42,9 @@ static std::vector<std::function<void(const common_chat_template & tmpl, autopar
               tmpl.src.find("<SPECIAL_12>") == std::string::npos &&
               analysis.reasoning.mode == reasoning_mode::NONE) {
               analysis.reasoning.mode  = reasoning_mode::TAG_BASED;
-              analysis.reasoning.start = "<think>";
-              analysis.reasoning.end   = "</think>";
+              // Match jinja: <think>\n{reasoning}\n</think>\n\n{content}
+              analysis.reasoning.start = "<think>\n";
+              analysis.reasoning.end   = "\n</think>\n\n";
               analysis.preserved_tokens.push_back("<think>");
               analysis.preserved_tokens.push_back("</think>");
               LOG_DBG(ANSI_ORANGE "[Patch: old Qwen/Deepseek thinking template]\n" ANSI_RESET);
@@ -173,8 +174,40 @@ static std::vector<std::function<void(const common_chat_template & tmpl, autopar
               LOG_DBG(ANSI_ORANGE "[Patch: JSON name/parameters tool instruction]\n" ANSI_RESET);
           }
       },
+      // MiniCPM5 - tool calls start at <function name="...">; calls separated by newline/<tool_sep>
+      [](const common_chat_template & tmpl, autoparser & analysis) -> void {
+          if (tmpl.src.find("Tool usage guidelines:") != std::string::npos &&
+              tmpl.src.find("<function name=\"") != std::string::npos &&
+              tmpl.src.find("<param name=\"") != std::string::npos) {
+              analysis.reasoning.mode  = reasoning_mode::TAG_BASED;
+              analysis.reasoning.start = "<think>\n";
+              analysis.reasoning.end   = "\n</think>\n\n";
+              if (analysis.tools.format.mode == tool_format::TAG_WITH_TAGGED) {
+                  analysis.tools.format.tolerate_incomplete_xml = true;
+                  analysis.tools.format.tool_start_triggers   = { "<function" };
+                  analysis.tools.format.section_start.clear();
+                  analysis.tools.format.section_end.clear();
+                  analysis.tools.format.per_call_start.clear();
+                  analysis.tools.format.per_call_end.clear();
+                  if (analysis.tools.format.call_separator.empty()) {
+                      analysis.tools.format.call_separator = "\n";
+                  }
+                  analysis.tools.function.name_prefix         = "<function name=\"";
+                  analysis.tools.function.name_suffix         = "\">";
+                  analysis.tools.function.close               = "</function>";
+                  analysis.tools.arguments.name_prefix         = "<param name=\"";
+                  analysis.tools.arguments.name_suffix         = "\">";
+                  analysis.tools.arguments.value_prefix.clear();
+                  analysis.tools.arguments.value_suffix        = "</param>";
+                  analysis.tools.arguments.value_stop_sequences = {
+                      "</param>", "</function>", "<function", "<param",
+                  };
+              }
+              LOG_DBG(ANSI_ORANGE "[Patch: MiniCPM5]\n" ANSI_RESET);
+          }
+      },
 
-    });
+      });
 
 // Common JSON structures
 static json params_schema = {
@@ -233,11 +266,13 @@ void autoparser::analyze_template(const common_chat_template & tmpl) {
     tools = analyze_tools(jinja_caps.supports_tool_calls ? analyze_tools(tmpl, jinja_caps, reasoning) : analyze_tools());
     assistant_start = detect_assistant_start_marker(tmpl);
     user_start = detect_user_start_marker(tmpl);
-    collect_preserved_tokens();
 
     for (auto & workaround : workarounds) {
         workaround(tmpl, *this);
     }
+
+    // After workarounds: markers/triggers may have been patched (e.g. MiniCPM5).
+    collect_preserved_tokens();
 
     LOG_DBG("\n--- Reasoning & Content Structure ---\n");
     LOG_DBG("user_msg_start: %s\n", user_start.c_str());
@@ -257,6 +292,7 @@ void autoparser::analyze_template(const common_chat_template & tmpl) {
     LOG_DBG("tool_section_end: '%s'\n", tools.format.section_end.c_str());
     LOG_DBG("per_call_start: '%s'\n", tools.format.per_call_start.c_str());
     LOG_DBG("per_call_end: '%s'\n", tools.format.per_call_end.c_str());
+    LOG_DBG("call_separator: '%s'\n", tools.format.call_separator.c_str());
     LOG_DBG("func_name_prefix: '%s'\n", tools.function.name_prefix.c_str());
     LOG_DBG("func_name_suffix: '%s'\n", tools.function.name_suffix.c_str());
     LOG_DBG("func_close: '%s'\n", tools.function.close.c_str());
@@ -300,18 +336,38 @@ void autoparser::collect_preserved_tokens() {
     add_token(tools.format.section_end);
     add_token(tools.format.per_call_start);
     add_token(tools.format.per_call_end);
+    add_token(tools.format.call_separator);
     add_token(tools.function.name_prefix);
+    add_token(tools.function.alt_name_prefix);
+    add_token(tools.function.compact_name_prefix);
     add_token(tools.function.name_suffix);
     add_token(tools.function.close);
     add_token(tools.arguments.start);
     add_token(tools.arguments.end);
     add_token(tools.arguments.name_prefix);
+    add_token(tools.arguments.alt_name_prefix);
+    add_token(tools.arguments.compact_name_prefix);
     add_token(tools.arguments.name_suffix);
     add_token(tools.arguments.separator);
     add_token(tools.arguments.value_prefix);
     add_token(tools.arguments.value_suffix);
     add_token(tools.call_id.prefix);
     add_token(tools.call_id.suffix);
+
+    for (const auto & trigger : tools.format.tool_start_triggers) {
+        add_token(trigger);
+    }
+    for (const auto & stop : tools.arguments.value_stop_sequences) {
+        add_token(stop);
+    }
+
+    // Match grammar trigger for compact function prefix (<functionname=).
+    if (!tools.function.compact_name_prefix.empty()) {
+        const auto pos = tools.function.compact_name_prefix.find('=');
+        if (pos != std::string::npos) {
+            add_token(tools.function.compact_name_prefix.substr(0, pos + 1));
+        }
+    }
 }
 
 std::string autoparser::detect_assistant_start_marker(const common_chat_template & tmpl) {
@@ -749,6 +805,9 @@ analyze_tools::analyze_tools(const common_chat_template & tmpl,
         }
         LOG_DBG(ANSI_ORANGE "Phase 3a: Function call analysis\n" ANSI_RESET);
         extract_function_markers();
+        if (caps.supports_parallel_tool_calls) {
+            extract_call_separator();
+        }
         LOG_DBG(ANSI_ORANGE "Phase 3b: Argument analysis\n" ANSI_RESET);
         if (format.mode == tool_format::TAG_WITH_TAGGED) {
             analyze_arguments();
@@ -1050,6 +1109,50 @@ void analyze_tools::check_per_call_markers() {
         format.per_call_end   = format.section_end;
         format.section_start.clear();
         format.section_end.clear();
+    }
+}
+
+void analyze_tools::extract_call_separator() {
+    if (!format.section_start.empty() || !format.per_call_start.empty()) {
+        return;
+    }
+
+    json assistant_one_tool = json{
+        { "role",       "assistant" },
+        { "content",    ""          },
+        { "tool_calls", json::array({ first_tool_call }) }
+    };
+
+    json assistant_two_tools = json{
+        { "role",       "assistant" },
+        { "content",    ""          },
+        { "tool_calls", json::array({ first_tool_call, second_tool_call }) }
+    };
+
+    template_params params;
+    params.messages              = json::array({ user_msg, assistant_one_tool });
+    params.tools                 = tools;
+    params.add_generation_prompt = false;
+    params.enable_thinking       = true;
+
+    auto one_vs_two = compare_variants(
+        *tmpl, params, [&](template_params & p) { p.messages = json::array({ user_msg, assistant_two_tools }); });
+
+    if (!one_vs_two) {
+        LOG_DBG(ANSI_ORANGE "%s: Generating double tool call comparison failed\n" ANSI_RESET, __func__);
+        return;
+    }
+
+    const std::string & both = one_vs_two->diff.right;
+    if (both.find(FUN_SECOND) == std::string::npos) {
+        return;
+    }
+
+    const std::string before_second = both.substr(0, both.find(FUN_SECOND));
+    std::string closer = !function.close.empty() ? function.close : "</function>";
+    const size_t      close_pos = before_second.rfind(closer);
+    if (close_pos != std::string::npos) {
+        format.call_separator = before_second.substr(close_pos + closer.size());
     }
 }
 
