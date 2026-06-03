@@ -80,6 +80,9 @@
 	let renderedBlocks = $state<MarkdownBlock[]>([]);
 	let unstableBlockHtml = $state('');
 	let incompleteCodeBlock = $state<IncompleteCodeBlock | null>(null);
+	const liveSvgHtml = $derived(
+		incompleteCodeBlock?.language === 'svg' ? sanitizeSvg(incompleteCodeBlock.code) : ''
+	);
 	let previewDialogOpen = $state(false);
 	let previewCode = $state('');
 	let previewLanguage = $state('text');
@@ -778,6 +781,29 @@
 				<div class="mermaid-loading-placeholder">
 					<span class="mermaid-loading-text">Generating diagram...</span>
 				</div>
+			</div>
+		{:else if incompleteCodeBlock.language === 'svg'}
+			<div class="svg-block-wrapper streaming-svg-block">
+				<div class="code-block-header">
+					<span class="code-language">svg</span>
+					<div class="code-block-actions">
+						<ActionIconCopyToClipboard
+							text={incompleteCodeBlock.code}
+							canCopy={false}
+							ariaLabel="Diagram incomplete"
+						/>
+					</div>
+				</div>
+				{#if liveSvgHtml}
+					<div class="svg-scroll-container">
+						<!-- eslint-disable-next-line no-at-html-tags -->
+						<pre class="svg-diagram" data-svg-rendered="true">{@html liveSvgHtml}</pre>
+					</div>
+				{:else}
+					<div class="mermaid-loading-placeholder">
+						<span class="mermaid-loading-text">Rendering svg...</span>
+					</div>
+				{/if}
 			</div>
 		{:else}
 			<div class="code-block-wrapper streaming-code-block relative">
