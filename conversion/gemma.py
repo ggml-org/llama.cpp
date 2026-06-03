@@ -860,6 +860,7 @@ class Gemma4VisionAudioModel(MmprojModel):
             mapped_name = self.map_tensor_name(name, (".weight", ".bias", ".input_max", ".input_min", ".output_max", ".output_min"))
             yield (mapped_name, data_torch)
 
+
 @ModelBase.register("Gemma4UnifiedForConditionalGeneration")
 class Gemma4UnifiedVisionAudioModel(Gemma4VisionAudioModel):
     has_audio_encoder = True
