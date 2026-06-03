@@ -458,12 +458,18 @@ struct ggml_metal_pipeline_with_params ggml_metal_library_compile_pipeline(ggml_
 
 struct ggml_metal_encoder {
     id<MTLComputeCommandEncoder> obj;
+    id<MTLCommandBuffer> cmd_buf;
+    bool concurrent;
 };
 
 ggml_metal_encoder_t ggml_metal_encoder_init(ggml_metal_cmd_buf_t cmd_buf_raw, bool concurrent) {
     ggml_metal_encoder_t res = calloc(1, sizeof(struct ggml_metal_encoder));
 
     id<MTLCommandBuffer> cmd_buf = (id<MTLCommandBuffer>) cmd_buf_raw;
+
+    res->cmd_buf = cmd_buf;
+    res->concurrent = concurrent;
+    [res->cmd_buf retain];
 
     if (concurrent) {
         res->obj = [cmd_buf computeCommandEncoderWithDispatchType: MTLDispatchTypeConcurrent];
@@ -476,8 +482,23 @@ ggml_metal_encoder_t ggml_metal_encoder_init(ggml_metal_cmd_buf_t cmd_buf_raw, b
     return res;
 }
 
+void ggml_metal_encoder_wait_for_event(ggml_metal_encoder_t enc, void *event, uint64_t value) {
+    id<MTLSharedEvent> ev = (__bridge id<MTLSharedEvent>)event;
+    [enc->obj endEncoding];
+    [enc->obj release];
+    [enc->cmd_buf encodeWaitForEvent:ev value:value];
+    if (enc->concurrent) {
+        enc->obj = [enc->cmd_buf
+            computeCommandEncoderWithDispatchType:MTLDispatchTypeConcurrent];
+    } else {
+        enc->obj = [enc->cmd_buf computeCommandEncoder];
+    }
+    [enc->obj retain];
+}
+
 void ggml_metal_encoder_free(ggml_metal_encoder_t encoder) {
     [encoder->obj release];
+    [encoder->cmd_buf release];
     free(encoder);
 }
 
@@ -1002,6 +1023,14 @@ void ggml_metal_event_encode_wait(ggml_metal_event_t ev, ggml_metal_cmd_buf_t cm
     id<MTLCommandBuffer> cmd_buf = (id<MTLCommandBuffer>) cmd_buf_raw;
 
     [cmd_buf encodeWaitForEvent:event value:atomic_load_explicit(&ev->value, memory_order_relaxed)];
+}
+
+void ggml_metal_event_cpu_signal(ggml_metal_event_t ev, uint64_t value) {
+    ((id<MTLSharedEvent>)ev->obj).signaledValue = value;
+}
+
+void *ggml_metal_event_get_obj(ggml_metal_event_t ev) {
+    return ev->obj;
 }
 
 ggml_metal_event_t ggml_metal_device_event_init(ggml_metal_device_t dev) {

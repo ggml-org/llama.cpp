@@ -1249,6 +1249,25 @@ struct ggml_tensor * llama_model_loader::create_tensor(
     }
 
     ggml_tensor * t_meta = get_tensor_meta(tn.str().c_str());
+
+    if (t_meta && skip_tensor_set.count(t_meta->name)) {
+        GGML_ASSERT(ctx_skip != nullptr);
+
+        ggml_tensor * t = ggml_get_tensor(ctx_skip, t_meta->name);
+        if (t) {
+            return t;
+        }
+
+        t = ggml_dup_tensor(ctx_skip, t_meta);
+        ggml_set_name(t, t_meta->name);
+
+        if (!(flags & TENSOR_DUPLICATED)) {
+            n_created++;
+        }
+
+        return t;
+    }
+
     ggml_backend_buffer_type_t buft = buft_for_tensor(t_meta);
     if (buft == nullptr) {
         return nullptr; // return type is ggml_tensor *

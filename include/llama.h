@@ -288,6 +288,11 @@ extern "C" {
         ggml_backend_buffer_type_t buft;
     };
 
+    typedef struct llama_moe_params {
+        int32_t n_slots;
+        int32_t n_layers;
+    } llama_moe_params;
+
     struct llama_model_params {
         // NULL-terminated list of devices to use for offloading (if NULL, all available devices are used)
         ggml_backend_dev_t * devices;
@@ -324,6 +329,8 @@ extern "C" {
         bool use_extra_bufts; // use extra buffer types (used for weight repacking)
         bool no_host;         // bypass host buffer allowing extra buffers to be used
         bool no_alloc;        // only load metadata and simulate memory allocations
+
+        llama_moe_params moe;
     };
 
     struct llama_sampler_seq_config {
@@ -342,6 +349,8 @@ extern "C" {
         uint32_t n_outputs_max;     // max outputs in a ubatch (0 = n_batch)
         int32_t  n_threads;         // number of threads to use for generation
         int32_t  n_threads_batch;   // number of threads to use for batch processing
+
+        llama_moe_params moe;
 
         enum llama_context_type      ctx_type;          // set the context type (e.g. MTP)
         enum llama_rope_scaling_type rope_scaling_type; // RoPE scaling type, from `enum llama_rope_scaling_type`

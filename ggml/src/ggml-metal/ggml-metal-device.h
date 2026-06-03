@@ -91,6 +91,8 @@ void ggml_metal_encoder_memory_barrier(ggml_metal_encoder_t encoder);
 
 void ggml_metal_encoder_end_encoding(ggml_metal_encoder_t encoder);
 
+void ggml_metal_encoder_wait_for_event(ggml_metal_encoder_t enc, void * event, uint64_t value);
+
 //
 // MTLLibrary wrapper
 //
@@ -161,6 +163,7 @@ struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_opt_step_
 struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_opt_step_sgd      (ggml_metal_library_t lib, const struct ggml_tensor * op);
 struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_memset            (ggml_metal_library_t lib, const struct ggml_tensor * op);
 struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_count_equal       (ggml_metal_library_t lib, const struct ggml_tensor * op);
+struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_moe_interceptor   (ggml_metal_library_t lib);
 
 struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_attn_ext_pad(
         ggml_metal_library_t lib,
@@ -267,6 +270,8 @@ typedef struct ggml_metal_event * ggml_metal_event_t;
 
 void ggml_metal_event_encode_signal(ggml_metal_event_t ev, ggml_metal_cmd_buf_t cmd_buf);
 void ggml_metal_event_encode_wait  (ggml_metal_event_t ev, ggml_metal_cmd_buf_t cmd_buf);
+void ggml_metal_event_cpu_signal   (ggml_metal_event_t ev, uint64_t value);
+void * ggml_metal_event_get_obj    (ggml_metal_event_t ev);
 
 ggml_metal_device_t ggml_metal_device_init(int device);
 void ggml_metal_device_free(ggml_metal_device_t dev);

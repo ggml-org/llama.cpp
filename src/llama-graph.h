@@ -4,6 +4,8 @@
 #include "llama-batch.h"
 #include "llama-hparams.h"
 #include "llama-adapter.h"
+#include "llama-moe-offloader.h"
+#include "llama-model-loader.h"
 
 #include <cstdint>
 #include <vector>
@@ -605,6 +607,12 @@ struct llm_graph_params {
 
     std::map<llama_seq_id, llama_sampler *> samplers;
 
+    int32_t moe_n_slots  = 0;
+    int32_t moe_n_layers = INT32_MAX;
+
+    const std::unordered_map<std::string, llm_tensor_file_info> *moe_file_idx;
+    llama_moe_offloader *moe_offloader;
+
     static bool samplers_equal(
           const std::map<llama_seq_id, llama_sampler *> & lhs,
           const std::map<llama_seq_id, llama_sampler *> & rhs) {
@@ -821,6 +829,12 @@ struct llm_graph_context {
     const llama_cross            * cross;
 
     std::map<llama_seq_id, llama_sampler *> samplers;
+
+    int32_t moe_n_slots  = 0;
+    int32_t moe_n_layers = INT32_MAX;
+
+    const std::unordered_map<std::string, llm_tensor_file_info> *moe_file_idx;
+    llama_moe_offloader *                                        moe_offloader;
 
     const llm_graph_cb & cb_func;
 

@@ -35,6 +35,12 @@
 #include <string>
 #include <vector>
 
+#ifdef __has_include
+#    if __has_include(<unistd.h>)
+#        include <unistd.h>
+#    endif
+#endif
+
 static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params & params) {
     switch (arch) {
         case LLM_ARCH_LLAMA:
@@ -999,6 +1005,16 @@ llama_model::~llama_model() {
     for (auto * lora : loras) {
         delete lora;
     }
+
+#if defined(__APPLE__)
+    for (int fd : moe_duped_fds) {
+        close(fd);
+    }
+
+    if (moe_ctx_skip) {
+        ggml_free(moe_ctx_skip);
+    }
+#endif
 }
 
 void llama_model_base::load_stats(llama_model_loader & ml) {
@@ -1294,6 +1310,38 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
 
         layers.resize(n_layer);
 
+        for (const auto & [name, w] : ml.weights_map) {
+            GGML_UNUSED(w);
+
+            // TODO: come up with a better way, same for layer_idx parsing
+            if (name.find("_exps.") == std::string::npos) {
+                continue;
+            }
+
+            if (params.moe.n_slots <= 0) {
+                continue;
+            }
+
+            int layer_idx = -1;
+            sscanf(name.c_str(), "blk.%d.", &layer_idx);
+            if (layer_idx < 0 || layer_idx >= params.moe.n_layers) {
+                continue;
+            }
+
+            ml.skip_tensor_set.insert(name);
+        }
+
+        if (!ml.skip_tensor_set.empty()) {
+            const size_t n_skip = ml.skip_tensor_set.size();
+
+            ggml_init_params p{};
+            p.mem_size   = ggml_tensor_overhead() * (n_skip + 32);
+            p.mem_buffer = nullptr;
+            p.no_alloc   = true;
+
+            ml.ctx_skip = ggml_init(p);
+        }
+
         // call the per-model loading function
         load_arch_tensors(ml);
 
@@ -1452,12 +1500,39 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
     }
     ml.done_getting_tensors();
 
+#if defined(__APPLE__)
+    for (const auto & file : ml.files) {
+        const int fd = dup(file->file_id());
+        if (fd < 0) {
+            throw std::runtime_error(format("failed to dup fd for model file: %s", strerror(errno)));
+        }
+        moe_duped_fds.push_back(fd);
+    }
+
+    for (const auto & [name, w] : ml.weights_map) {
+        if (name.find("_exps.") == std::string::npos) {
+            continue;
+        }
+        moe_file_idx[name] = { moe_duped_fds.at(w.idx), w.offs };
+    }
+#endif
+
+    // pass ownership to model
+    moe_ctx_skip = ml.ctx_skip;
+    ml.ctx_skip  = nullptr;
+
     GGML_ASSERT(!(output && tok_embd &&
             strcmp(output->name, tok_embd->name) == 0 &&
             output->type == GGML_TYPE_NVFP4));
     // populate tensors_by_name
     for (auto & [_, ctx_ptr] : ml.ctx_map) {
         for (auto * cur = ggml_get_first_tensor(ctx_ptr.get()); cur != NULL; cur = ggml_get_next_tensor(ctx_ptr.get(), cur)) {
+            tensors_by_name.emplace_back(ggml_get_name(cur), cur);
+        }
+    }
+
+    if (moe_ctx_skip) {
+        for (auto * cur = ggml_get_first_tensor(moe_ctx_skip); cur != NULL; cur = ggml_get_next_tensor(moe_ctx_skip, cur)) {
             tensors_by_name.emplace_back(ggml_get_name(cur), cur);
         }
     }
@@ -2199,6 +2274,7 @@ llama_model_params llama_model_default_params() {
         /*.use_extra_bufts             =*/ true,
         /*.no_host                     =*/ false,
         /*.no_alloc                    =*/ false,
+        /*.moe                         =*/ {0, 0},
     };
 
     return result;

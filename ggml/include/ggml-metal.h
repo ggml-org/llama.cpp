@@ -56,6 +56,41 @@ GGML_BACKEND_API void ggml_backend_metal_capture_next_compute(ggml_backend_t bac
 
 GGML_BACKEND_API ggml_backend_reg_t ggml_backend_metal_reg(void);
 
+typedef struct ggml_backend_metal_event * ggml_backend_metal_event_t;
+
+GGML_BACKEND_API ggml_backend_metal_event_t ggml_backend_metal_event_new(ggml_backend_t backend);
+GGML_BACKEND_API void                       ggml_backend_metal_event_free(ggml_backend_metal_event_t event);
+GGML_BACKEND_API void   ggml_backend_metal_event_signal(ggml_backend_metal_event_t event, uint64_t value);
+GGML_BACKEND_API void * ggml_backend_metal_event_raw(ggml_backend_metal_event_t event);
+
+// Shared memory layout (MTLStorageModeShared).
+const int    MOE_MAX_IDS      = 4096;
+const size_t MOE_OFF_REQ      = 0;                                   // atomic_uint: request seq
+const size_t MOE_OFF_N        = 8;                                   // int32:       id count
+const size_t MOE_OFF_SELECTED = 16;                                  // int32[n]:    expert ids (GPU writes)
+const size_t MOE_OFF_REMAPPED = MOE_OFF_SELECTED + MOE_MAX_IDS * 4;  // int32[n]:    slot ids (CPU writes)
+const size_t MOE_MSG_NBYTES   = MOE_OFF_REMAPPED + MOE_MAX_IDS * 4;
+
+struct ggml_metal_moe_intercept {
+    int                        n;
+    uint32_t                   seq;
+    const struct ggml_tensor * msg_tensor;
+    ggml_backend_metal_event_t event;
+    bool                       reuse;
+};
+
+typedef bool (*ggml_metal_moe_query_fn)(void *                            user_data,
+                                        const struct ggml_tensor *        src0,
+                                        const struct ggml_tensor *        ids,
+                                        struct ggml_metal_moe_intercept * out);
+
+struct ggml_metal_moe_handler {
+    ggml_metal_moe_query_fn fn;
+    void *                  user_data;
+};
+
+GGML_BACKEND_API void ggml_backend_metal_set_moe_handler(ggml_backend_t backend, struct ggml_metal_moe_handler handler);
+
 #ifdef __cplusplus
 }
 #endif
