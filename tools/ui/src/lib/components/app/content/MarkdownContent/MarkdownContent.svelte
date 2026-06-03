@@ -76,6 +76,7 @@
 	let previewLanguage = $state('text');
 	let mermaidPreviewOpen = $state(false);
 	let mermaidPreviewSvgHtml = $state('');
+	let isMermaidRendering = $state(false);
 	let streamingCodeScrollContainer = $state<HTMLDivElement>();
 
 	// Auto-scroll controller for streaming code block content
@@ -581,39 +582,53 @@
 	 * Renders mermaid diagrams that haven't been rendered yet.
 	 * Called after each markdown content update.
 	 */
+	/**
+	 * Renders mermaid diagrams that haven't been rendered yet.
+	 * Called after each markdown content update.
+	 * Uses a rendering guard to prevent concurrent renders during streaming updates.
+	 * Reads mode.current before await to ensure reactive tracking.
+	 */
 	async function renderMermaidDiagrams() {
+		// Prevent concurrent renders during streaming updates
+		if (isMermaidRendering) return;
 		if (!containerRef) return;
 
 		const nodes = containerRef.querySelectorAll('pre.mermaid:not([data-mermaid-rendered])');
 		if (nodes.length === 0) return;
 
-		// lazy load the mermaid dependecy only when needed to reduce bundle size.
-		const { default: mermaid } = await import('mermaid');
-
-		const isDark = mode.current === ColorMode.DARK;
-		mermaid.initialize({
-			startOnLoad: false,
-			theme: isDark ? 'dark' : 'default',
-			securityLevel: 'strict',
-			flowchart: {
-				useMaxWidth: false,
-				htmlLabels: true
-			},
-			sequence: {
-				useMaxWidth: false
-			},
-			gantt: {
-				useMaxWidth: false
-			}
-		});
+		isMermaidRendering = true;
 
 		try {
+			// Read mode before await so Svelte tracks it reactively
+			const isDark = mode.current === ColorMode.DARK;
+
+			// lazy load the mermaid dependecy only when needed to reduce bundle size.
+			const { default: mermaid } = await import('mermaid');
+
+			mermaid.initialize({
+				startOnLoad: false,
+				theme: isDark ? 'dark' : 'default',
+				securityLevel: 'strict',
+				flowchart: {
+					useMaxWidth: false,
+					htmlLabels: true
+				},
+				sequence: {
+					useMaxWidth: false
+				},
+				gantt: {
+					useMaxWidth: false
+				}
+			});
+
 			await mermaid.run({
 				nodes: Array.from(nodes) as unknown as NodeListOf<HTMLElement>
 			});
 			nodes.forEach((node) => node.setAttribute('data-mermaid-rendered', 'true'));
 		} catch (error) {
 			console.error('Failed to render mermaid diagram:', error);
+		} finally {
+			isMermaidRendering = false;
 		}
 	}
 
