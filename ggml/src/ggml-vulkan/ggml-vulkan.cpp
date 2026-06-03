@@ -308,6 +308,7 @@ enum vk_device_architecture {
     AMD_RDNA1,
     AMD_RDNA2,
     AMD_RDNA3,
+    INTEL_PRE_XE2,
     INTEL_XE2,
     NVIDIA_PRE_TURING,
     NVIDIA_TURING,
@@ -389,6 +390,7 @@ static vk_device_architecture get_device_architecture(const vk::PhysicalDevice& 
             // https://www.intel.com/content/www/us/en/docs/oneapi/optimization-guide-gpu/2025-0/intel-xe-gpu-architecture.html
             return vk_device_architecture::INTEL_XE2;
         }
+        else if (subgroup_size_control_props.minSubgroupSize == 8) return vk_device_architecture::INTEL_PRE_XE2;
     } else if (props.vendorID == VK_VENDOR_ID_NVIDIA) {
         const std::vector<vk::ExtensionProperties> ext_props = device.enumerateDeviceExtensionProperties();
 
@@ -3784,7 +3786,7 @@ static void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
             l_warptile = { 256, 128, 128, 16, subgroup_size_8, 64, 2, tm_m, tn_m, tk_m, subgroup_size_8 };
             l_warptile_mmq = l_warptile_mmq_int = { 256, 128, 128, 32, subgroup_size_8, 64, 2, tm_m, tn_m, tk_m, subgroup_size_8 };
             l_warptile_mmq_int_k = { 256, 128, 128, 32, subgroup_size_16, 64, 1, 4, 2, 1, subgroup_size_16 };
-        } else if (device->vendor_id == VK_VENDOR_ID_INTEL && device->coopmat_support && device->architecture == INTEL_XE2) {
+        } else if (device->vendor_id == VK_VENDOR_ID_INTEL && device->coopmat_support) {
             // Xe2/Xe3 with coopmat enabled - warptile performance tuning
             l_warptile = { 512, 128, 128, 16, subgroup_size_8, 32, 2, tm_m, tn_m, tk_m, subgroup_size_8 };
             l_warptile_mmq = { 512, 128, 128, 32, subgroup_size_8, 32, 2, tm_m, tn_m, tk_m, subgroup_size_8 };
@@ -5684,6 +5686,16 @@ static vk_device ggml_vk_get_device(size_t idx) {
             device->external_memory_host = false;
         }
 
+        if (device->vendor_id == VK_VENDOR_ID_INTEL) {
+            // Override driver-reported maxStorageBufferRange to 2 GiB.
+            // Some Intel drivers report a smaller value than hardware actually supports,
+            // causing large tensors to be CPU-offloaded unnecessarily.
+            // TODO: remove once driver fixes the issue.
+            if (device->properties.limits.maxStorageBufferRange < 2u * 1024u * 1024u * 1024u) {
+                device->properties.limits.maxStorageBufferRange = 2u * 1024u * 1024u * 1024u;
+            }
+        }
+
         // Implementing the async backend interfaces seems broken on older Intel HW,
         // see https://github.com/ggml-org/llama.cpp/issues/17302.
         device->support_async = (device->vendor_id != VK_VENDOR_ID_INTEL ||
@@ -6240,7 +6252,8 @@ static vk_device ggml_vk_get_device(size_t idx) {
                 // Current Windows driver does not expose BF16 support.
                 // We only want to use l_warptile if coopmat is available and is Xe2+
                 const bool xe2_with_coopmat = device->coopmat_support && device->architecture == INTEL_XE2;
-                const bool use_l_warptile = (i == GGML_TYPE_BF16) ? (device->coopmat_bf16_support && xe2_with_coopmat) : xe2_with_coopmat;
+                const bool use_l_warptile = (i == GGML_TYPE_BF16) ? (device->coopmat_bf16_support && xe2_with_coopmat) :
+                                                                    device->coopmat_support;
                 device->mul_mat_l[i] = use_l_warptile;
                 device->mul_mat_id_l[i] = use_l_warptile;
                 device->mul_mat_m[i] = true;
@@ -17601,9 +17614,9 @@ static bool ggml_vk_device_is_supported(const vk::PhysicalDevice & vkdev) {
 static bool ggml_vk_khr_cooperative_matrix_support(const vk::PhysicalDeviceProperties& props, const vk::PhysicalDeviceDriverProperties& driver_props, vk_device_architecture arch) {
     switch (props.vendorID) {
     case VK_VENDOR_ID_INTEL:
-        // Only allowing Xe2 GPU at the moment since Xe2 GPU can gain significant performance boost,
-        // while some older hardware (ex. Arc A770) has performance regressions
-        return arch == vk_device_architecture::INTEL_XE2;
+        // Only allowing Xe2/Xe3 GPU and integrated Xe GPUs at the moment since older hardware (ex. Arc A770) has performance regressions.
+        return (arch == vk_device_architecture::INTEL_XE2) || 
+            (arch == vk_device_architecture::INTEL_PRE_XE2 && props.deviceType == vk::PhysicalDeviceType::eIntegratedGpu);
     case VK_VENDOR_ID_AMD:
         if (driver_props.driverID == vk::DriverId::eAmdProprietary || driver_props.driverID == vk::DriverId::eAmdOpenSource) {
             // Workaround for AMD proprietary driver reporting support on all GPUs
@@ -17651,6 +17664,8 @@ static uint32_t ggml_vk_intel_shader_core_count(const vk::PhysicalDevice& vkdev)
     case 0xE20B:  // B580
     case 0xE211:  // Pro B60
         return 20;
+    case 0xB080:  // PTL Xe3 LPG 2x6 (12 subslices)
+        return 12;
     default:
         return 0;
     }
