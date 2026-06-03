@@ -305,6 +305,7 @@ static bool common_params_handle_remote_preset(common_params & params, llama_exa
     common_download_opts opts;
     opts.bearer_token = params.hf_token;
     opts.offline = params.offline;
+    opts.hf_prune_old_files = params.hf_prune_old_files;
 
     LOG_TRC("%s: looking for remote preset at %s\n", __func__, preset_url.c_str());
     const int status = common_download_file_single(preset_url, preset_path, opts);
@@ -441,10 +442,11 @@ bool common_params_handle_models(common_params & params, llama_example curr_ex) 
                                          COMMON_SPECULATIVE_TYPE_DRAFT_MTP) != params.speculative.types.end();
 
     common_download_opts opts;
-    opts.bearer_token  = params.hf_token;
-    opts.offline       = params.offline;
-    opts.skip_download = params.skip_download;
-    opts.download_mtp  = spec_type_draft_mtp;
+    opts.bearer_token       = params.hf_token;
+    opts.offline            = params.offline;
+    opts.skip_download      = params.skip_download;
+    opts.hf_prune_old_files = params.hf_prune_old_files;
+    opts.download_mtp       = spec_type_draft_mtp;
 
     try {
         auto res = common_params_handle_model(params.model, opts);
@@ -2652,6 +2654,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.hf_token = value;
         }
     ).set_env("HF_TOKEN"));
+    add_opt(common_arg(
+        {"-hfp", "--hf-prune-old-files"},
+        string_format("Keep only latest version of model files, delete old ones (default: %s)", params.hf_prune_old_files ? "true" : "false"),
+        [](common_params & params) {
+            params.hf_prune_old_files = true;
+        }
+    ).set_env("LLAMA_ARG_HF_PRUNE_OLD_FILES"));
     add_opt(common_arg(
         {"--context-file"}, "FNAME",
         "file to load context from (use comma-separated values to specify multiple files)",

@@ -847,6 +847,11 @@ common_download_model_result common_download_model(const common_params_model  & 
         if (!hf.mtp.path.empty()) {
             result.mtp_path = hf_cache::finalize_file(hf.mtp);
         }
+
+        if (opts.hf_prune_old_files) {
+            auto hf_repo_with_tag = common_download_split_repo_tag(model.hf_repo);
+            hf_cache::prune_old_files(hf_repo_with_tag.first, hf.model_files, hf.mmproj, hf.mtp);
+        }
     } else {
         result.model_path = model.path;
     }

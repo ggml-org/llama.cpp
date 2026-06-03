@@ -25,8 +25,16 @@ hf_files get_repo_files(
 );
 
 hf_files get_cached_files(const std::string & repo_id = {});
+hf_files get_all_snapshot_files(const std::string & repo_id = {});
 
 // Create snapshot path (link or move/copy) and return it
 std::string finalize_file(const hf_file & file);
+
+void prune_old_files(
+    const std::string & hf_repo,
+    const hf_files & current_model_files,
+    const hf_file & current_mmproj,
+    const hf_file & current_mtp
+);
 
 } // namespace hf_cache
