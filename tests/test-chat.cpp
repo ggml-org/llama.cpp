@@ -5689,6 +5689,76 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
     }
 }
 
+static void test_minicpm5_malformed_tool_args_multiturn() {
+    LOG_DBG("%s\n", __func__);
+
+    static const common_chat_tool web_fetch_tool{
+        /* .name = */ "web_fetch",
+        /* .description = */ "Fetch a URL",
+        /* .parameters = */ R"({
+            "type": "object",
+            "properties": {
+                "url": {
+                    "type": "string",
+                    "description": "URL to fetch"
+                }
+            },
+            "required": ["url"]
+        })",
+    };
+
+    auto tmpls = read_templates("models/templates/MiniCPM5-1B.jinja");
+
+    auto apply_multiturn = [&](const std::string & malformed_args) {
+        common_chat_msg assist_msg = simple_assist_msg("", "", "web_fetch", malformed_args, "call0");
+
+        common_chat_msg tool_msg;
+        tool_msg.role         = "tool";
+        tool_msg.tool_name    = "web_fetch";
+        tool_msg.tool_call_id = "call0";
+        tool_msg.content      = "fetch failed";
+
+        common_chat_msg follow_up;
+        follow_up.role    = "user";
+        follow_up.content = "ls dir";
+
+        common_chat_templates_inputs inputs;
+        inputs.messages              = { message_user, assist_msg, tool_msg, follow_up };
+        inputs.tools                 = { web_fetch_tool };
+        inputs.add_generation_prompt = true;
+
+        return common_chat_templates_apply(tmpls.get(), inputs);
+    };
+
+    // Truncated JSON (matches server 500: parse error at column 7 in lexasub report).
+    {
+        auto params = apply_multiturn(R"({"url")");
+        if (params.format != COMMON_CHAT_FORMAT_PEG_MINICPM5) {
+            throw std::runtime_error("Expected peg-minicpm5 format for malformed-args multi-turn apply");
+        }
+        if (params.prompt.empty()) {
+            throw std::runtime_error("MiniCPM5 multi-turn apply returned empty prompt");
+        }
+        if (params.prompt.find("<tool_response>") == std::string::npos) {
+            throw std::runtime_error("Expected prior tool response in prompt");
+        }
+        if (params.prompt.find("ls dir") == std::string::npos) {
+            throw std::runtime_error("Expected follow-up user message in prompt");
+        }
+    }
+
+    // Degenerate partial JSON from agent-style tool output.
+    {
+        auto params = apply_multiturn(R"({"id":"-Updx2F7A3C7D3D9K2Z7H6H5)");
+        if (params.format != COMMON_CHAT_FORMAT_PEG_MINICPM5) {
+            throw std::runtime_error("Expected peg-minicpm5 format for degenerate-args multi-turn apply");
+        }
+        if (params.generation_prompt.find("<|im_start|>assistant") == std::string::npos) {
+            throw std::runtime_error("Expected generation prompt after malformed tool-call history");
+        }
+    }
+}
+
 static void test_template_generation_prompt() {
     common_chat_msg system_msg;
     system_msg.role = "system";
@@ -6037,6 +6107,7 @@ int main(int argc, char ** argv) {
         test_tools_oaicompat_json_conversion();
         test_convert_responses_to_chatcmpl();
         test_developer_role_to_system_workaround();
+        test_minicpm5_malformed_tool_args_multiturn();
         test_template_generation_prompt();
         test_template_output_peg_parsers(detailed_debug);
         std::cout << "\n[chat] All tests passed!" << '\n';
