@@ -1762,7 +1762,13 @@ static common_chat_params common_chat_params_init_lfm2_5(const common_chat_templ
             )
         );
 
-        auto content = p.content(p.until_one_of({"<|tool_call_start|>", "["}));
+        // A bare '[' in ordinary content (a list, an index, a type hint, etc.) is not a tool call;
+        // treating it as one would fail the parse and surface as an HTTP 500.
+        std::vector<std::string> content_stops = { "<|tool_call_start|>" };
+        foreach_function(inputs.tools, [&](const json & tool) {
+            content_stops.push_back("[" + tool.at("function").at("name").get<std::string>() + "(");
+        });
+        auto content = p.content(p.until_one_of(content_stops));
         auto maybe_start = p.optional(p.literal("<|tool_call_start|>"));
         return generation_prompt + reasoning + content + maybe_start + tool_calls + end;
     });
@@ -2596,31 +2602,6 @@ common_chat_msg common_chat_peg_parse(const common_peg_arena &          src_pars
                 fprintf(stderr, "\nAST for partial parse (fail):\n%s\n", ctx.ast.dump().c_str());
                 fflush(stderr);
             }
-            // If the partial AST recovered nothing usable, degrade to plain content (see
-            // the non-partial branch below for the rationale). This is essential for
-            // streaming: a bare-bracket format optimistically enters its tool-call branch
-            // at the first '[', and once the branch fails the AST drops the leading
-            // content. Without this fallback the streamed content would retract to empty
-            // and then the final non-partial parse would re-emit the whole text, so the
-            // client sees the pre-'[' prefix duplicated. Returning the input keeps content
-            // monotonic across the stream. Genuine partial tool calls populate tool_calls
-            // (or content) and are left untouched.
-            if (msg.content.empty() && msg.reasoning_content.empty() && msg.tool_calls.empty()) {
-                msg.content = input;
-            }
-            return msg;
-        }
-        // Final (non-partial) parse failure: degrade to plain content instead of aborting
-        // the request. Native bare-bracket formats (e.g. LFM2.5) optimistically treat any
-        // '[' as the start of a tool call, so ordinary assistant content that merely
-        // contains '[' (a list, an index, a type hint) would otherwise throw here and
-        // surface to the caller as an HTTP 500. Returning the generated text as content
-        // keeps the response alive; a genuinely intended-but-malformed tool call likewise
-        // degrades to visible content rather than crashing the whole completion.
-        if (!is_partial) {
-            common_chat_msg msg;
-            msg.role    = "assistant";
-            msg.content = input;
             return msg;
         }
         throw std::runtime_error(std::string("Failed to parse input at pos ") + std::to_string(result.end) + ": " +

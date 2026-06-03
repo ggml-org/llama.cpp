@@ -4178,13 +4178,12 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .run();
 
         // Bare-bracket content must not abort the request. LFM2.5 has no tool-call wrapper
-        // token, so the parser optimistically treats the first '[' as a tool-call start.
-        // Ordinary assistant content that merely contains '[' (a list/index/type hint) used
-        // to fail the final parse and surface as an HTTP 500; it must degrade to content.
+        // token; content must only stop at an actual "[{tool_name}(" prefix (matching the
+        // grammar triggers). A '[' that doesn't start a defined tool call (a list/index/
+        // type hint) used to fail the final parse and surface as an HTTP 500.
         tst.test("Here is a Python list: [1, 2, 3] and that is all.")
             .tools({ special_function_tool })
             .expect_content("Here is a Python list: [1, 2, 3] and that is all.")
-            .expect_reconstruction(false)
             .run();
 
         // The reported production shape: a code-mode reply that ends up as content
@@ -4192,7 +4191,13 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
         tst.test("trades = [\n    {\"timestamp\": \"09:30:00\", \"price\": 150.10, \"size\": 100}\n]")
             .tools({ special_function_tool })
             .expect_content("trades = [\n    {\"timestamp\": \"09:30:00\", \"price\": 150.10, \"size\": 100}\n]")
-            .expect_reconstruction(false)
+            .run();
+
+        // Streaming: a bare '[' mid-content must not retract previously streamed content.
+        tst.test("Here is a Python list: [1, 2")
+            .tools({ special_function_tool })
+            .is_partial(true)
+            .expect_content("Here is a Python list: [1, 2")
             .run();
 
         // Partial tool call (streaming)
