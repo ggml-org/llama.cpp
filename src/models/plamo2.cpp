@@ -273,7 +273,7 @@ ggml_tensor * llama_model_plamo2::graph::build_plamo2_mamba_layer(llm_graph_inpu
     GGML_ASSERT(n_seqs != 0);
     GGML_ASSERT(ubatch.equal_seqs());
     GGML_ASSERT(ubatch.n_tokens == n_seq_tokens * n_seqs);
-    GGML_ASSERT(d_inner % n_head == 0);
+    GGML_ASSERT(d_inner % n_heads == 0);
     GGML_ASSERT(n_group == 0);
 
     ggml_tensor * conv_states_all = mctx_cur->get_r_l(il);

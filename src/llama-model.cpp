@@ -1126,14 +1126,23 @@ void llama_model_base::load_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_ROPE_SCALING_ALPHA,       hparams.rope_scaling_alpha, false);
 
     // non-transformer models do not have attention heads
-    if (hparams.n_head() > 0) {
+    // For hybrid models, find the first attention layer to get head dimensions
+    uint32_t first_attn_layer_idx = 0;
+    for (uint32_t i = 0; i < hparams.n_layer; ++i) {
+        if (hparams.n_head_arr[i] > 0) {
+            first_attn_layer_idx = i;
+            break;
+        }
+    }
+
+    if (hparams.n_head(first_attn_layer_idx) > 0) {
         // gpt-neox n_rot = rotary_pct * (n_embd / n_head)
         // gpt-j n_rot = rotary_dim
 
-        hparams.n_embd_head_k_full = hparams.n_embd / hparams.n_head();
+        hparams.n_embd_head_k_full = hparams.n_embd / hparams.n_head(first_attn_layer_idx);
         ml.get_key(LLM_KV_ATTENTION_KEY_LENGTH, hparams.n_embd_head_k_full, false);
 
-        hparams.n_embd_head_v_full = hparams.n_embd / hparams.n_head();
+        hparams.n_embd_head_v_full = hparams.n_embd / hparams.n_head(first_attn_layer_idx);
         ml.get_key(LLM_KV_ATTENTION_VALUE_LENGTH, hparams.n_embd_head_v_full, false);
 
         // sanity check for n_rot (optional)
