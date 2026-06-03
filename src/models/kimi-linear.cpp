@@ -15,7 +15,7 @@ void llama_model_kimi_linear::load_arch_hparams(llama_model_loader & ml) {
     // Mark KDA layers as recurrent using n_head_kv pattern (like Jamba)
     // Set n_head_kv = 0 for KDA layers (recurrent), n_head_kv = n_head for MLA layers (attention)
     for (uint32_t i = 0; i < hparams.n_layer; ++i) {
-        hparams.recurrent_layer_arr[i] = hparams.n_head_kv(i) == 0;  // KDA layers are recurrent
+        hparams.is_recr_impl[i] = hparams.n_head_kv(i) == 0;  // KDA layers are recurrent
     }
 
     // MoE parameters - Kimi uses moe_intermediate_size = 1024
@@ -53,7 +53,7 @@ void llama_model_kimi_linear::load_arch_tensors(llama_model_loader &) {
         const int64_t n_embd_head_v_kda = hparams.n_embd_head_kda;
         const int64_t ssm_d_conv = hparams.ssm_d_conv;
 
-        if (hparams.is_recurrent(i)) {
+        if (hparams.is_recr(i)) {
             // Conv1d weights: try 4D first, then 3D (quantization may remove trailing 1)
             // 4D: [d_conv, 1, d_inner, 1], 3D: [d_conv, 1, d_inner]
             layer.ssm_q_conv = create_tensor(tn(LLM_TENSOR_SSM_CONV1D_Q, "weight", i), {ssm_d_conv, 1, n_embd_head_k_kda * n_head, 1}, TENSOR_NOT_REQUIRED);
@@ -285,7 +285,7 @@ llama_model_kimi_linear::graph::graph(const llama_model & model, const llm_graph
 
         ggml_build_forward_expand(gf, cur);
 
-        if (hparams.is_recurrent(il)) {
+        if (hparams.is_recr(il)) {
             // === KDA Layer (Kimi Delta Attention) with Recurrent State ===
             // Reference: vLLM kda.py
             const auto * mctx_cur = inp_rs->mctx;

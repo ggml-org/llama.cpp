@@ -15,7 +15,8 @@ void llama_model_llama4::load_arch_hparams(llama_model_loader & ml) {
         hparams.n_attn_temp_floor_scale = 8192;
         hparams.f_attn_temp_scale       = 0.1f;
         hparams.f_attn_temp_offset      = 1.0f;
-        uint32_t swa_period             = 4; // pattern: 3 chunked - 1 full
+
+        uint32_t swa_period = 4; // pattern: 3 chunked - 1 full
         ml.get_key_or_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, swa_period, false);
         hparams.set_swa_pattern(swa_period);
 

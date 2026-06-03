@@ -146,7 +146,7 @@ namespace GGUFMeta {
             const enum gguf_type arr_type = gguf_get_arr_type(ctx, k);
             return ArrayInfo {
                 arr_type,
-                size_t(gguf_get_arr_n(ctx, k)),
+                gguf_get_arr_n(ctx, k),
                 arr_type == GGUF_TYPE_STRING ? nullptr : gguf_get_arr_data(ctx, k),
             };
         }
@@ -445,7 +445,7 @@ namespace GGUFMeta {
         }
 
         if (n > N_MAX) {
-            throw std::runtime_error(format("n > N_MAX: %u > %u for key %s", (uint32_t) n, (uint32_t) N_MAX, key.c_str()));
+            throw std::runtime_error(format("n > N_MAX: %u > %u for key %s", n, (uint32_t) N_MAX, key.c_str()));
         }
 
         if (gguf_get_kv_type(metadata, kid) == GGUF_TYPE_ARRAY) {
@@ -502,9 +502,9 @@ namespace GGUFMeta {
     }
 
     // TODO: this is not very clever - figure out something better
-    template bool llama_model_loader::get_key_or_arr<std::array<int, 4>>(enum llm_kv kid, std::array<int, 4> & result, uint32_t n, bool required);
+    template bool llama_model_loader::get_key_or_arr<std::array<int,      4>>  (enum llm_kv kid, std::array<int,      4>   & result, uint32_t n, bool required);
     template bool llama_model_loader::get_key_or_arr<std::array<uint32_t, 512>>(enum llm_kv kid, std::array<uint32_t, 512> & result, uint32_t n, bool required);
-    template bool llama_model_loader::get_key_or_arr<std::array<float, 512>>(enum llm_kv kid, std::array<float, 512> & result, uint32_t n, bool required);
+    template bool llama_model_loader::get_key_or_arr<std::array<float,    512>>(enum llm_kv kid, std::array<float,    512> & result, uint32_t n, bool required);
 
 
 llama_model_loader::llama_model_loader(

@@ -37,6 +37,9 @@ struct llama_hparams_convnext {
 };
 
 struct llama_hparams {
+    // note: use the `_impl` suffix to avoid name conflict between members and getters
+    //       for example: n_embd_out() vs n_embd_out_impl
+
     bool vocab_only;
     bool no_alloc;
     bool rope_finetuned;
@@ -46,7 +49,7 @@ struct llama_hparams {
     uint32_t n_ctx_train; // context size the model was trained on
     uint32_t n_embd;
     uint32_t n_layer;
-    int32_t n_layer_kv_from_start = -1; // if non-negative, the first n_layer_kv_from_start layers have KV cache
+    int32_t  n_layer_kv_from_start = -1; // if non-negative, the first n_layer_kv_from_start layers have KV cache
     uint32_t n_expert = 0;
     uint32_t n_expert_used = 0;
     uint32_t n_rel_attn_bkts = 0;
@@ -137,11 +140,15 @@ struct llama_hparams {
     llama_swa_type swa_type = LLAMA_SWA_TYPE_NONE;
     // the size of the sliding window (0 - no SWA)
     uint32_t n_swa = 0;
-    // if swa_layers[il] == 1, then layer il is SWA
-    // if swa_layers[il] == 0, then layer il is dense (i.e. non-SWA)
+
+    // if is_swa_impl[il] == 1, then layer il is SWA
+    // if is_swa_impl[il] == 0, then layer il is dense (i.e. non-SWA)
     // by default, all layers are dense
     // note: using uint32_t type for compatibility reason
-    std::array<uint32_t, LLAMA_MAX_LAYERS> swa_layers;
+    std::array<uint32_t, LLAMA_MAX_LAYERS> is_swa_impl;
+
+    // for hybrid state space models
+    std::array<uint32_t, LLAMA_MAX_LAYERS> is_recr_impl;
 
     // for State Space Models
     uint32_t ssm_d_conv  = 0;
@@ -152,9 +159,6 @@ struct llama_hparams {
 
     // for Kimi Linear KDA
     uint32_t n_embd_head_kda = 0;
-
-    // for hybrid state space models
-    std::array<bool, LLAMA_MAX_LAYERS> recurrent_layer_arr;
 
     bool ssm_dt_b_c_rms = false;
 
@@ -266,6 +270,14 @@ struct llama_hparams {
     // return true if one of the layers is SWA
     bool is_swa_any() const;
 
+    bool is_swa(uint32_t il) const;
+
+    // TODO: implement
+    //void set_recr_pattern(uint32_t n_pattern, bool dense_first = false);
+
+    // whether or not the given layer is recurrent (for hybrid models)
+    bool is_recr(uint32_t il) const;
+
     uint32_t n_head(uint32_t il = 0) const;
 
     uint32_t n_head_kv(uint32_t il = 0) const;
@@ -307,12 +319,7 @@ struct llama_hparams {
     // dimension of the recurrent state embeddings
     uint32_t n_embd_s() const;
 
-    // whether or not the given layer is recurrent (for hybrid models)
-    bool is_recurrent(uint32_t il) const;
-
     uint32_t n_pos_per_embd() const;
-
-    bool is_swa(uint32_t il) const;
 
     // note: currently only support if either all or none of the layers are MLA
     bool is_mla() const;

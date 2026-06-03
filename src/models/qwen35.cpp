@@ -18,12 +18,13 @@ void llama_model_qwen35::load_arch_hparams(llama_model_loader & ml) {
 
     // Mark recurrent layers (linear attention layers). MTP layers are dense
     // attention-only and must be flagged non-recurrent.
-    {
+    if (!ml.get_key_or_arr(LLM_KV_ATTENTION_RECURRENT_LAYERS, hparams.is_recr_impl, hparams.n_layer, false)) {
         const uint32_t n_main = hparams.n_layer - hparams.nextn_predict_layers;
+
         uint32_t full_attn_interval = 4;
         ml.get_key(LLM_KV_FULL_ATTENTION_INTERVAL, full_attn_interval, false);
         for (uint32_t i = 0; i < hparams.n_layer; ++i) {
-            hparams.recurrent_layer_arr[i] = (i < n_main) && ((i + 1) % full_attn_interval != 0);
+            hparams.is_recr_impl[i] = (i < n_main) && ((i + 1) % full_attn_interval != 0);
         }
     }
 
@@ -69,7 +70,7 @@ void llama_model_qwen35::load_arch_tensors(llama_model_loader & ml) {
         layer.attn_norm      = create_tensor(tn(LLM_TENSOR_ATTN_NORM,      "weight", il), { n_embd }, flags);
         layer.attn_post_norm = create_tensor(tn(LLM_TENSOR_ATTN_POST_NORM, "weight", il), { n_embd }, flags);
 
-        if (!hparams.is_recurrent(il)) {
+        if (!hparams.is_recr(il)) {
             // Attention layers
             create_tensor_qkv(layer, il, n_embd, n_embd_head_k * n_head * 2, n_embd_k_gqa, n_embd_v_gqa, flags);
             layer.wo = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "weight", il), { n_embd_head_k * n_head, n_embd }, flags);
@@ -168,7 +169,7 @@ llama_model_qwen35::graph::graph(const llama_model & model, const llm_graph_para
         ggml_build_forward_expand(gf, cur);
 
         // Determine layer type and build appropriate attention mechanism
-        if (hparams.is_recurrent(il)) {
+        if (hparams.is_recr(il)) {
             // Linear attention layer (gated delta net)
             cur = build_layer_attn_linear(inp->get_recr(), cur, il);
         } else {
