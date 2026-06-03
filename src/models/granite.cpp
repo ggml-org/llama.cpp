@@ -12,7 +12,7 @@ void llama_model_granite::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_ROPE_SCALING_FINETUNED, rope_finetuned, false);
     hparams.rope_finetuned = rope_finetuned;
 
-    switch (hparams.n_layer) {
+    switch (hparams.n_layer()) {
         case 32: type = LLM_TYPE_3B; break;
         case 40: type = LLM_TYPE_3B; break;
         // Add additional layer/vocab/etc checks here for other model sizes
