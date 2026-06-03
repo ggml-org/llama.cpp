@@ -25,25 +25,14 @@ __global__ void __launch_bounds__(splitD, 1)
                  const int src4_nb2, const int src4_nb3, const int src5_nb2, const int src5_nb3,
                  const int64_t s_off, const int64_t d_inner, const int64_t L_param)
 {
-    #if defined(GGML_CUDA_USE_PDL) && defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
-        const float   * src0 = src0_ptr;
-        const float   * src1 = src1_ptr;
-        const float   * src2 = src2_ptr;
-        const float   * src3 = src3_ptr;
-        const float   * src4 = src4_ptr;
-        const float   * src5 = src5_ptr;
-        const int32_t * src6 = src6_ptr;
-        float         * dst  = dst_ptr;
-    #else
-        const float   * __restrict__ src0 = src0_ptr;
-        const float   * __restrict__ src1 = src1_ptr;
-        const float   * __restrict__ src2 = src2_ptr;
-        const float   * __restrict__ src3 = src3_ptr;
-        const float   * __restrict__ src4 = src4_ptr;
-        const float   * __restrict__ src5 = src5_ptr;
-        const int32_t * __restrict__ src6 = src6_ptr;
-        float         * __restrict__ dst  = dst_ptr;
-    #endif // defined(GGML_CUDA_USE_PDL) && defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    const float   * GGML_CUDA_RESTRICT src0 = src0_ptr;
+    const float   * GGML_CUDA_RESTRICT src1 = src1_ptr;
+    const float   * GGML_CUDA_RESTRICT src2 = src2_ptr;
+    const float   * GGML_CUDA_RESTRICT src3 = src3_ptr;
+    const float   * GGML_CUDA_RESTRICT src4 = src4_ptr;
+    const float   * GGML_CUDA_RESTRICT src5 = src5_ptr;
+    const int32_t * GGML_CUDA_RESTRICT src6 = src6_ptr;
+    float         * GGML_CUDA_RESTRICT dst  = dst_ptr;
     const size_t L = L_template == 0 ? L_param : L_template;
     ggml_cuda_pdl_sync();
     const float *s0_block = (const float *)((const char *)src0 + src6[blockIdx.x] * src0_nb3 + blockIdx.y * splitD * src0_nb2);
@@ -144,25 +133,14 @@ __global__ void __launch_bounds__(d_state, 1)
         const int src2_nb1, const int src2_nb2, const int src3_nb1,
         const int src4_nb2, const int src4_nb3, const int src5_nb2, const int src5_nb3,
         const int64_t s_off, const int64_t n_head, const int64_t d_head, const int64_t n_group, const int64_t n_tok) {
-    #if defined(GGML_CUDA_USE_PDL) && defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
-        const float   * src0 = src0_ptr;
-        const float   * src1 = src1_ptr;
-        const float   * src2 = src2_ptr;
-        const float   * src3 = src3_ptr;
-        const float   * src4 = src4_ptr;
-        const float   * src5 = src5_ptr;
-        const int32_t * src6 = src6_ptr;
-        float         * dst  = dst_ptr;
-    #else
-        const float   * __restrict__ src0 = src0_ptr;
-        const float   * __restrict__ src1 = src1_ptr;
-        const float   * __restrict__ src2 = src2_ptr;
-        const float   * __restrict__ src3 = src3_ptr;
-        const float   * __restrict__ src4 = src4_ptr;
-        const float   * __restrict__ src5 = src5_ptr;
-        const int32_t * __restrict__ src6 = src6_ptr;
-        float         * __restrict__ dst  = dst_ptr;
-    #endif // defined(GGML_CUDA_USE_PDL) && defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    const float   * GGML_CUDA_RESTRICT src0 = src0_ptr;
+    const float   * GGML_CUDA_RESTRICT src1 = src1_ptr;
+    const float   * GGML_CUDA_RESTRICT src2 = src2_ptr;
+    const float   * GGML_CUDA_RESTRICT src3 = src3_ptr;
+    const float   * GGML_CUDA_RESTRICT src4 = src4_ptr;
+    const float   * GGML_CUDA_RESTRICT src5 = src5_ptr;
+    const int32_t * GGML_CUDA_RESTRICT src6 = src6_ptr;
+    float         * GGML_CUDA_RESTRICT dst  = dst_ptr;
 
     const int warp     = threadIdx.x / WARP_SIZE;
     const int lane     = threadIdx.x % WARP_SIZE;

@@ -810,25 +810,14 @@ static __global__ void flash_attn_tile(
                             const int32_t ne31, const int32_t ne32, const int32_t ne33,
                             const int32_t nb31, const int32_t nb32, const int64_t nb33) {
 #ifdef FLASH_ATTN_AVAILABLE
-    #if defined(GGML_CUDA_USE_PDL) && defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
-        const char * Q        = Q_ptr;
-        const char * K        = K_ptr;
-        const char * V        = V_ptr;
-        const char * mask     = mask_ptr;
-        const char * sinks    = sinks_ptr;
-        const int  * KV_max   = KV_max_ptr;
-        float      * dst      = dst_ptr;
-        float2     * dst_meta = dst_meta_ptr;
-    #else
-        const char * __restrict__ Q        = Q_ptr;
-        const char * __restrict__ K        = K_ptr;
-        const char * __restrict__ V        = V_ptr;
-        const char * __restrict__ mask     = mask_ptr;
-        const char * __restrict__ sinks    = sinks_ptr;
-        const int  * __restrict__ KV_max   = KV_max_ptr;
-        float      * __restrict__ dst      = dst_ptr;
-        float2     * __restrict__ dst_meta = dst_meta_ptr;
-    #endif // defined(GGML_CUDA_USE_PDL) && defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    const char * GGML_CUDA_RESTRICT Q        = Q_ptr;
+    const char * GGML_CUDA_RESTRICT K        = K_ptr;
+    const char * GGML_CUDA_RESTRICT V        = V_ptr;
+    const char * GGML_CUDA_RESTRICT mask     = mask_ptr;
+    const char * GGML_CUDA_RESTRICT sinks    = sinks_ptr;
+    const int  * GGML_CUDA_RESTRICT KV_max   = KV_max_ptr;
+    float      * GGML_CUDA_RESTRICT dst      = dst_ptr;
+    float2     * GGML_CUDA_RESTRICT dst_meta = dst_meta_ptr;
 
     // Skip unused kernel variants for faster compilation:
 

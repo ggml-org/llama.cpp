@@ -689,13 +689,8 @@ static __global__ void flash_attn_stream_k_fixup_uniform(
         const uint3 fd_iter_j) {
     constexpr int ncols = ncols1*ncols2;
     ggml_cuda_pdl_lc();
-    #if defined(GGML_CUDA_USE_PDL) && defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
-        float        * dst       = dst_ptr;
-        const float2 * dst_fixup = dst_fixup_ptr;
-    #else
-        float        * __restrict__ dst       = dst_ptr;
-        const float2 * __restrict__ dst_fixup = dst_fixup_ptr;
-    #endif // defined(GGML_CUDA_USE_PDL) && defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    float        * GGML_CUDA_RESTRICT dst       = dst_ptr;
+    const float2 * GGML_CUDA_RESTRICT dst_fixup = dst_fixup_ptr;
 
     const int tile_idx = blockIdx.x; // One block per output tile.
     const int j        = blockIdx.y;
@@ -776,13 +771,8 @@ static __global__ void flash_attn_stream_k_fixup_general(
         const uint3 fd_iter_k_j_z,
         const uint3 fd_iter_k_j,
         const uint3 fd_iter_k) {
-    #if defined(GGML_CUDA_USE_PDL) && defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
-        float        * dst       = dst_ptr;
-        const float2 * dst_fixup = dst_fixup_ptr;
-    #else
-        float        * __restrict__ dst       = dst_ptr;
-        const float2 * __restrict__ dst_fixup = dst_fixup_ptr;
-    #endif // defined(GGML_CUDA_USE_PDL) && defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    float        * GGML_CUDA_RESTRICT dst       = dst_ptr;
+    const float2 * GGML_CUDA_RESTRICT dst_fixup = dst_fixup_ptr;
     constexpr int ncols = ncols1*ncols2;
 
     const int bidx0 = blockIdx.x;
@@ -886,15 +876,9 @@ static __global__ void flash_attn_combine_results(
         float * dst_ptr,
         const int parallel_blocks) {
     ggml_cuda_pdl_lc();
-    #if defined(GGML_CUDA_USE_PDL) && defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
-        const float  * VKQ_parts = VKQ_parts_ptr;
-        const float2 * VKQ_meta  = VKQ_meta_ptr;
-        float        * dst       = dst_ptr;
-    #else
-        const float  * __restrict__ VKQ_parts = VKQ_parts_ptr;
-        const float2 * __restrict__ VKQ_meta  = VKQ_meta_ptr;
-        float        * __restrict__ dst       = dst_ptr;
-    #endif // defined(GGML_CUDA_USE_PDL) && defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    const float  * GGML_CUDA_RESTRICT VKQ_parts = VKQ_parts_ptr;
+    const float2 * GGML_CUDA_RESTRICT VKQ_meta  = VKQ_meta_ptr;
+    float        * GGML_CUDA_RESTRICT dst       = dst_ptr;
     // Dimension 0: threadIdx.x
     // Dimension 1: blockIdx.x
     // Dimension 2: blockIdx.y

@@ -11,17 +11,10 @@ static __global__ void mul_mat_vec_f(
         const uint3 channel_ratio, const int stride_channel_x, const int stride_channel_y, const int stride_channel_dst,
         const uint3 sample_ratio, const int stride_sample_x, const int stride_sample_y, const int stride_sample_dst,
         const int ids_stride) {
-    #if defined(GGML_CUDA_USE_PDL) && defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
-        const T       * x   = x_ptr;
-        const float   * y   = y_ptr;
-        const int32_t * ids = ids_ptr;
-        float         * dst = dst_ptr;
-    #else
-        const T       * __restrict__ x   = x_ptr;
-        const float   * __restrict__ y   = y_ptr;
-        const int32_t * __restrict__ ids = ids_ptr;
-        float         * __restrict__ dst = dst_ptr;
-    #endif // defined(GGML_CUDA_USE_PDL) && defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    const T       * GGML_CUDA_RESTRICT x   = x_ptr;
+    const float   * GGML_CUDA_RESTRICT y   = y_ptr;
+    const int32_t * GGML_CUDA_RESTRICT ids = ids_ptr;
+    float         * GGML_CUDA_RESTRICT dst = dst_ptr;
     const int row         = blockIdx.x;
     // for MUL_MAT_ID - blockIdx.y = n_expert_used, blockIdx.z = ncols_dst (tokens)
     const int channel_dst = blockIdx.y;

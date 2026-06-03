@@ -7,13 +7,8 @@ static __global__ void quantize_q8_1(
         const int64_t ne00, const int64_t s01, const int64_t s02, const int64_t s03,
         const int64_t ne0, const uint32_t ne1, const uint3 ne2) {
     ggml_cuda_pdl_lc();
-    #if defined(GGML_CUDA_USE_PDL) && defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
-        const float * x  = x_ptr;
-        void        * vy = vy_ptr;
-    #else
-        const float * __restrict__ x  = x_ptr;
-        void        * __restrict__ vy = vy_ptr;
-    #endif // defined(GGML_CUDA_USE_PDL) && defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    const float * GGML_CUDA_RESTRICT x  = x_ptr;
+    void        * GGML_CUDA_RESTRICT vy = vy_ptr;
     const int64_t i0 = (int64_t)blockDim.x*blockIdx.x + threadIdx.x;
 
     if (i0 >= ne0) {

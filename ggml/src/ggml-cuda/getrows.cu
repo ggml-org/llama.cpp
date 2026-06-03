@@ -50,15 +50,9 @@ static __global__ void k_get_rows_float(
         const size_t s10, const size_t s11, const size_t s12/*, const size_t s13*/) {
 
     ggml_cuda_pdl_lc();
-    #if defined(GGML_CUDA_USE_PDL) && defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
-        const src0_t  * src0 = src0_ptr;
-        const int32_t * src1 = src1_ptr;
-        dst_t         * dst  = dst_ptr;
-    #else
-        const src0_t  * __restrict__ src0 = src0_ptr;
-        const int32_t * __restrict__ src1 = src1_ptr;
-        dst_t         * __restrict__ dst  = dst_ptr;
-    #endif // defined(GGML_CUDA_USE_PDL) && defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    const src0_t  * GGML_CUDA_RESTRICT src0 = src0_ptr;
+    const int32_t * GGML_CUDA_RESTRICT src1 = src1_ptr;
+    dst_t         * GGML_CUDA_RESTRICT dst  = dst_ptr;
     ggml_cuda_pdl_sync();
     for (int64_t z = blockIdx.z; z < ne11*(int64_t)ne12_fdv.z; z += gridDim.z) {
         for (int64_t i00 = blockIdx.y*blockDim.x + threadIdx.x; i00 < ne00; i00 += gridDim.y*blockDim.x) {

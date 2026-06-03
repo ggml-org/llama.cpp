@@ -1554,6 +1554,12 @@ struct ggml_cuda_pdl_config {
 };
 #endif //defined(GGML_CUDA_USE_PDL)
 
+// PDL and __restrict__ need to be mutually exclusive, see https://github.com/ggml-org/llama.cpp/pull/24030
+# if (defined(GGML_CUDA_USE_PDL) && defined(__CUDA_ARCH__) && __CUDA_ARCH__ > 900)
+# define GGML_CUDA_RESTRICT
+# else
+# define GGML_CUDA_RESTRICT __restrict__
+# endif // defined(GGML_CUDA_USE_PDL) && defined(__CUDA_ARCH__) && __CUDA_ARCH__ > 900
 
 template<typename Kernel, typename... Args>
 static __inline__ void ggml_cuda_kernel_launch(Kernel kernel, const ggml_cuda_kernel_launch_params & launch_params, Args&&... args) {

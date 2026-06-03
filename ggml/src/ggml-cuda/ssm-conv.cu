@@ -9,17 +9,10 @@ static __global__ void ssm_conv_f32(const float * src0_ptr, const float * src1_p
                                     float * dst_ptr, const int dst_nb0, const int dst_nb1, const int dst_nb2,
                                     const int64_t n_t) {
     ggml_cuda_pdl_lc();
-    #if defined(GGML_CUDA_USE_PDL) && defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
-        const float * src0 = src0_ptr;
-        const float * src1 = src1_ptr;
-        const float * bias = bias_ptr;
-        float       * dst  = dst_ptr;
-    #else
-        const float * __restrict__ src0 = src0_ptr;
-        const float * __restrict__ src1 = src1_ptr;
-        const float * __restrict__ bias = bias_ptr;
-        float       * __restrict__ dst  = dst_ptr;
-    #endif // defined(GGML_CUDA_USE_PDL) && defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    const float * GGML_CUDA_RESTRICT src0 = src0_ptr;
+    const float * GGML_CUDA_RESTRICT src1 = src1_ptr;
+    const float * GGML_CUDA_RESTRICT bias = bias_ptr;
+    float       * GGML_CUDA_RESTRICT dst  = dst_ptr;
     GGML_UNUSED(src0_nb0);
     const int tid  = threadIdx.x;
     const int bidx = blockIdx.x;

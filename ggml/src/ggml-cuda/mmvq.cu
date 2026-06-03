@@ -482,17 +482,10 @@ static __global__ void mul_mat_vec_q(
         const uint32_t stride_channel_y, const uint32_t stride_channel_dst, const uint3 sample_ratio,
         const uint32_t stride_sample_x, const uint32_t stride_sample_y, const uint32_t stride_sample_dst,
         const uint32_t ids_stride) {
-    #if defined(GGML_CUDA_USE_PDL) && defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
-        const void    * vx  = vx_ptr;
-        const void    * vy  = vy_ptr;
-        const int32_t * ids = ids_ptr;
-        float         * dst = dst_ptr;
-    #else
-        const void    * __restrict__ vx  = vx_ptr;
-        const void    * __restrict__ vy  = vy_ptr;
-        const int32_t * __restrict__ ids = ids_ptr;
-        float         * __restrict__ dst = dst_ptr;
-    #endif // defined(GGML_CUDA_USE_PDL) && defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    const void    * GGML_CUDA_RESTRICT vx  = vx_ptr;
+    const void    * GGML_CUDA_RESTRICT vy  = vy_ptr;
+    const int32_t * GGML_CUDA_RESTRICT ids = ids_ptr;
+    float         * GGML_CUDA_RESTRICT dst = dst_ptr;
 
     constexpr int qk  = ggml_cuda_type_traits<type>::qk;
     constexpr int qi  = ggml_cuda_type_traits<type>::qi;
