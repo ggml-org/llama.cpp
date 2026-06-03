@@ -200,8 +200,8 @@ llama_model_step35::graph::graph(const llama_model & model, const llm_graph_para
             cb(cur, "attn_proj", il);
         }
 
-        if (il == n_layer - 1 && inp_out_ids) {
-            cur   = ggml_get_rows(ctx0,   cur, inp_out_ids);
+        if (il == n_transformer_layers - 1 && inp_out_ids && cparams.embeddings_nextn_masked) {
+            cur   = ggml_get_rows(ctx0, cur, inp_out_ids);
             inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
         }
 
@@ -259,6 +259,13 @@ llama_model_step35::graph::graph(const llama_model & model, const llm_graph_para
 
     cur = inpL;
 
+    cb(cur, "h_nextn", -1);
+    res->t_h_nextn = cur;
+
+    if (!cparams.embeddings_nextn_masked && inp_out_ids) {
+        cur = ggml_get_rows(ctx0, cur, inp_out_ids);
+    }
+
     cur = build_norm(cur, model.output_norm, nullptr, LLM_NORM_RMS, -1);
     cb(cur, "result_norm", -1);
     res->t_embd = cur;
@@ -267,5 +274,194 @@ llama_model_step35::graph::graph(const llama_model & model, const llm_graph_para
     cb(cur, "result_output", -1);
     res->t_logits = cur;
 
+    ggml_build_forward_expand(gf, cur);
+}
+
+// LLM_GRAPH_TYPE_DECODER_MTP draft head for Step3p5 (MoE)
+llama_model_step35::graph_mtp::graph_mtp(const llama_model & model, const llm_graph_params & params)
+    : llm_graph_context(params) {
+    GGML_ASSERT(hparams.nextn_predict_layers > 0 && "STEP35 MTP requires nextn_predict_layers > 0");
+
+    // Single-block MTP only: always run the first trained MTP block (Qwen
+    // MTP / vLLM single-MTP-layer style). Multi-block round-robin proved to
+    // be a much deeper refactor than this PR justifies; the trailing MTP
+    // blocks are loaded with TENSOR_NOT_REQUIRED so pruned GGUFs (with just
+    // block 0) also work — see load_arch_tensors below and
+    // scripts/prune_step35_extra_mtp.py.
+    const int il       = (int) hparams.n_layer - (int) hparams.nextn_predict_layers;
+    const auto & layer = model.layers[il];
+
+    GGML_ASSERT(layer.nextn.eh_proj && "MTP block missing nextn.eh_proj");
+    GGML_ASSERT(layer.nextn.enorm   && "MTP block missing nextn.enorm");
+    GGML_ASSERT(layer.nextn.hnorm   && "MTP block missing nextn.hnorm");
+
+    const uint32_t n_head_l    = hparams.n_head(il);
+    const uint32_t n_head_kv_l = hparams.n_head_kv(il);
+
+    const float freq_base_l  = model.get_rope_freq_base(cparams, il);
+    const float freq_scale_l = model.get_rope_freq_scale(cparams, il);
+
+    auto inp = std::make_unique<llm_graph_input_embd>(hparams.n_embd);
+
+    inp->tokens = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_tokens);
+    ggml_set_input(inp->tokens);
+
+    inp->embd = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, hparams.n_embd, n_tokens);
+    ggml_set_input(inp->embd);
+    ggml_set_name(inp->embd, "mtp_h_input");
+
+    ggml_tensor * tok_embd_w = layer.nextn.embed_tokens ? layer.nextn.embed_tokens : model.tok_embd;
+
+    ggml_tensor * h_input  = inp->embd;
+    ggml_tensor * tok_embd = ggml_get_rows(ctx0, tok_embd_w, inp->tokens);
+    cb(tok_embd, "mtp_tok_embd", il);
+
+    res->add_input(std::move(inp));
+
+    ggml_tensor * inp_pos  = build_inp_pos();
+    auto        * inp_attn = build_attn_inp_kv_iswa();
+
+    ggml_tensor * h_norm = build_norm(h_input, layer.nextn.hnorm, nullptr, LLM_NORM_RMS, il);
+    cb(h_norm, "mtp_hnorm", il);
+
+    ggml_tensor * e_norm = build_norm(tok_embd, layer.nextn.enorm, nullptr, LLM_NORM_RMS, il);
+    cb(e_norm, "mtp_enorm", il);
+
+    ggml_tensor * concat = ggml_concat(ctx0, e_norm, h_norm, /*dim=*/ 0);
+    cb(concat, "mtp_concat", il);
+
+    ggml_tensor * cur = build_lora_mm(layer.nextn.eh_proj, concat);
+    cb(cur, "mtp_eh_proj", il);
+
+    ggml_tensor * inpSA = cur;
+
+    // mtp_block: full Step3p5 decoder layer (attention with optional head-wise gate, then MoE/dense FFN)
+    cur = build_norm(cur, layer.attn_norm, nullptr, LLM_NORM_RMS, il);
+    cb(cur, "mtp_attn_norm", il);
+
+    ggml_tensor * Qcur = build_lora_mm(layer.wq, cur, layer.wq_s);
+    ggml_tensor * Kcur = build_lora_mm(layer.wk, cur, layer.wk_s);
+    ggml_tensor * Vcur = build_lora_mm(layer.wv, cur, layer.wv_s);
+    cb(Qcur, "mtp_Qcur", il);
+    cb(Kcur, "mtp_Kcur", il);
+    cb(Vcur, "mtp_Vcur", il);
+
+    Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head_k, n_head_l,    n_tokens);
+    Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head_k, n_head_kv_l, n_tokens);
+    Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head_v, n_head_kv_l, n_tokens);
+
+    if (layer.attn_q_norm) {
+        Qcur = build_norm(Qcur, layer.attn_q_norm, nullptr, LLM_NORM_RMS, il);
+        cb(Qcur, "mtp_Qcur_normed", il);
+    }
+    if (layer.attn_k_norm) {
+        Kcur = build_norm(Kcur, layer.attn_k_norm, nullptr, LLM_NORM_RMS, il);
+        cb(Kcur, "mtp_Kcur_normed", il);
+    }
+
+    const bool    is_swa       = hparams.is_swa(il);
+    ggml_tensor * rope_factors = is_swa ? nullptr : model.get_rope_factors(cparams, il);
+    const int64_t n_rot_l      = hparams.n_rot(il);
+
+    Qcur = ggml_rope_ext(
+        ctx0, Qcur, inp_pos, rope_factors,
+        n_rot_l, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
+        ext_factor, attn_factor, beta_fast, beta_slow);
+    Kcur = ggml_rope_ext(
+        ctx0, Kcur, inp_pos, rope_factors,
+        n_rot_l, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
+        ext_factor, attn_factor, beta_fast, beta_slow);
+    cb(Qcur, "mtp_Qcur_pos", il);
+    cb(Kcur, "mtp_Kcur_pos", il);
+
+    const float kq_scale = 1.0f / sqrtf(float(n_embd_head_k));
+    ggml_tensor * attn_out = build_attn(inp_attn,
+            nullptr, nullptr, nullptr,
+            Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il);
+    cb(attn_out, "mtp_attn_out", il);
+
+    // head-wise attention gate: sigmoid(g_proj(x))
+    if (layer.wqkv_gate) {
+        ggml_tensor * gate = build_lora_mm(layer.wqkv_gate, cur); // [n_head_l, n_tokens]
+        cb(gate, "mtp_attn_gate", il);
+
+        gate = ggml_sigmoid(ctx0, gate);
+        cb(gate, "mtp_attn_gate_sigmoid", il);
+
+        ggml_tensor * attn_3d = ggml_reshape_3d(ctx0, attn_out, n_embd_head_v, n_head_l, n_tokens);
+        ggml_tensor * gate_3d = ggml_reshape_3d(ctx0, gate,       1,           n_head_l, n_tokens);
+        cb(gate_3d, "mtp_attn_gate_3d", il);
+
+        attn_3d = ggml_mul(ctx0, attn_3d, gate_3d);
+        cb(attn_3d, "mtp_attn_gated_3d", il);
+
+        attn_out = ggml_reshape_2d(ctx0, attn_3d, n_embd_head_v * n_head_l, n_tokens);
+        cb(attn_out, "mtp_attn_gated", il);
+    }
+
+    cur = build_lora_mm(layer.wo, attn_out, layer.wo_s);
+    cb(cur, "mtp_attn_proj", il);
+
+    cur = ggml_add(ctx0, cur, inpSA);
+    cb(cur, "mtp_attn_residual", il);
+
+    ggml_tensor * ffn_inp = cur;
+    cur = build_norm(cur, layer.ffn_norm, nullptr, LLM_NORM_RMS, il);
+    cb(cur, "mtp_ffn_norm", il);
+
+    // FFN: dense MLP or MoE (mirrors trunk path)
+    if (layer.ffn_gate_inp == nullptr) {
+        cur = build_ffn(cur,
+                layer.ffn_up,   layer.ffn_up_b,   nullptr,
+                layer.ffn_gate, layer.ffn_gate_b, nullptr,
+                layer.ffn_down, layer.ffn_down_b, nullptr,
+                nullptr,
+                LLM_FFN_SILU, LLM_FFN_PAR, il);
+        cb(cur, "mtp_ffn_out", il);
+    } else {
+        ggml_tensor * moe_out = build_moe_ffn(cur,
+                layer.ffn_gate_inp,
+                layer.ffn_up_exps,
+                layer.ffn_gate_exps,
+                layer.ffn_down_exps,
+                layer.ffn_exp_probs_b,
+                n_expert, n_expert_used,
+                LLM_FFN_SILU, hparams.expert_weights_norm,
+                hparams.expert_weights_scale,
+                (llama_expert_gating_func_type) hparams.expert_gating_func,
+                il);
+        cb(moe_out, "mtp_ffn_moe_out", il);
+
+        ggml_tensor * sh_out = build_ffn(cur,
+                layer.ffn_up_shexp,   nullptr, nullptr,
+                layer.ffn_gate_shexp, nullptr, nullptr,
+                layer.ffn_down_shexp, nullptr, nullptr,
+                nullptr,
+                LLM_FFN_SILU, LLM_FFN_PAR, il);
+        cb(sh_out, "mtp_ffn_shared_out", il);
+
+        cur = ggml_add(ctx0, moe_out, sh_out);
+        cb(cur, "mtp_ffn_out", il);
+    }
+    cur = ggml_add(ctx0, cur, ffn_inp);
+    cb(cur, "mtp_post_ffn", il);
+
+    // Pre-norm hidden state: used by the AR draft loop to seed the next MTP step.
+    cb(cur, "h_nextn", -1);
+    res->t_h_nextn = cur;
+
+    ggml_tensor * head_norm_w = layer.nextn.shared_head_norm
+            ? layer.nextn.shared_head_norm
+            : model.output_norm;
+    GGML_ASSERT(head_norm_w && "STEP35 MTP: missing both nextn.shared_head_norm and output_norm");
+    cur = build_norm(cur, head_norm_w, nullptr, LLM_NORM_RMS, -1);
+    cb(cur, "mtp_shared_head_norm", -1);
+
+    ggml_tensor * head_w = layer.nextn.shared_head_head ? layer.nextn.shared_head_head : model.output;
+    GGML_ASSERT(head_w && "STEP35 MTP: missing LM head (nextn.shared_head_head or model.output)");
+    cur = build_lora_mm(head_w, cur);
+    cb(cur, "result_output", -1);
+
+    res->t_logits = cur;
     ggml_build_forward_expand(gf, cur);
 }

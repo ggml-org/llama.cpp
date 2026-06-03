@@ -59,8 +59,8 @@ bool common_speculative_process(common_speculative * spec, const llama_batch & b
 // true if any implementation requires target post-norm embeddings to be extracted
 bool common_speculative_need_embd(common_speculative * spec);
 
-// true if any implementation requires target pre-norm embeddings to be extracted
-bool common_speculative_need_embd_pre_norm(common_speculative * spec);
+// true if any implementation requires target nextn embeddings to be extracted
+bool common_speculative_need_embd_nextn(common_speculative * spec);
 
 // generate drafts for the sequences specified with `common_speculative_get_draft_params`
 void common_speculative_draft(common_speculative * spec);
