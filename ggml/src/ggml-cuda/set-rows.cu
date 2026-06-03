@@ -111,9 +111,9 @@ static void set_rows_cuda_quant(
 }
 
 template <typename src_t, typename idx_t, typename dst_t>
-static __global__ void k_set_rows(const src_t * __restrict__ src0,
-                                  const idx_t * __restrict__ src1,
-                                  dst_t * __restrict__ dst,
+static __global__ void k_set_rows(const src_t * src0_ptr,
+                                  const idx_t * src1_ptr,
+                                  dst_t * dst_ptr,
                                   const int64_t ne_total,
                                   const int64_t ne10,
                                   const int64_t ne11,
@@ -133,6 +133,9 @@ static __global__ void k_set_rows(const src_t * __restrict__ src0,
                                   const uint3   ne02,
                                   const uint3   ne11_fd,
                                   const uint3   ne12_fd) {
+    const src_t * GGML_CUDA_RESTRICT src0 = src0_ptr;
+    const idx_t * GGML_CUDA_RESTRICT src1 = src1_ptr;
+    dst_t       * GGML_CUDA_RESTRICT dst  = dst_ptr;
     const int64_t i = int64_t(blockDim.x) * blockIdx.x + threadIdx.x;
 
     if (i >= ne_total) {
