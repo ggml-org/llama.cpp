@@ -21,7 +21,12 @@
 	import { rehypeResolveAttachmentImages } from './plugins/rehype/resolve-attachment-images';
 	import { rehypeRtlSupport } from './plugins/rehype/rehype-rtl-support';
 	import { remarkLiteralHtml } from './plugins/remark/literal-html';
-	import { copyCodeToClipboard, copyToClipboard, preprocessLaTeX, getImageErrorFallbackHtml } from '$lib/utils';
+	import {
+		copyCodeToClipboard,
+		copyToClipboard,
+		preprocessLaTeX,
+		getImageErrorFallbackHtml
+	} from '$lib/utils';
 	import {
 		IMAGE_NOT_ERROR_BOUND_SELECTOR,
 		DATA_ERROR_BOUND_ATTR,
@@ -36,7 +41,12 @@
 	import githubDarkCss from 'highlight.js/styles/github-dark.css?inline';
 	import githubLightCss from 'highlight.js/styles/github.css?inline';
 	import { mode } from 'mode-watcher';
-	import { CodeBlockActions, DialogCodePreview, DialogMermaidPreview, ActionIconCopyToClipboard } from '$lib/components/app';
+	import {
+		CodeBlockActions,
+		DialogCodePreview,
+		DialogMermaidPreview,
+		ActionIconCopyToClipboard
+	} from '$lib/components/app';
 	import { createAutoScrollController } from '$lib/hooks/use-auto-scroll.svelte';
 	import type { DatabaseMessageExtra } from '$lib/types/database';
 	import { config } from '$lib/stores/settings.svelte';

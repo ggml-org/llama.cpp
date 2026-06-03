@@ -130,7 +130,7 @@
 			>
 				<ZoomInIcon class="mermaid-preview-btn-icon h-4 w-4" />
 			</button>
-			<div class="mermaid-preview-controls-separator mx-1 h-5 w-px bg-border/50" />
+			<div class="mermaid-preview-controls-separator mx-1 h-5 w-px bg-border/50"></div>
 
 			<button
 				class="mermaid-preview-btn flex h-8 w-8 cursor-pointer items-center justify-center rounded-md border-0 bg-transparent text-foreground transition-colors hover:bg-muted-foreground/15 active:bg-muted-foreground/25"
@@ -140,7 +140,7 @@
 			>
 				<RotateCcwIcon class="mermaid-preview-btn-icon h-4 w-4" />
 			</button>
-			<div class="mermaid-preview-controls-separator mx-1 h-5 w-px bg-border/50" />
+			<div class="mermaid-preview-controls-separator mx-1 h-5 w-px bg-border/50"></div>
 
 			<button
 				class="mermaid-preview-btn flex h-8 w-8 cursor-pointer items-center justify-center rounded-md border-0 bg-transparent text-foreground transition-colors hover:bg-muted-foreground/15 active:bg-muted-foreground/25"

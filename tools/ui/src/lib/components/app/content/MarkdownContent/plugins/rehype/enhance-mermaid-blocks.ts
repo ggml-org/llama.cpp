@@ -45,7 +45,12 @@ function createIconElement(svg: string): Element {
 	};
 }
 
-function createButton(className: string, title: string, iconSvg: string, mermaidId: string): Element {
+function createButton(
+	className: string,
+	title: string,
+	iconSvg: string,
+	mermaidId: string
+): Element {
 	return {
 		type: 'element',
 		tagName: 'button',
@@ -102,7 +107,10 @@ function createWrapper(header: Element, preElement: Element, mermaidId: string):
 	return {
 		type: 'element',
 		tagName: 'div',
-		properties: { className: [MERMAID_WRAPPER_CLASS, RELATIVE_CLASS], 'data-mermaid-id': mermaidId },
+		properties: {
+			className: [MERMAID_WRAPPER_CLASS, RELATIVE_CLASS],
+			'data-mermaid-id': mermaidId
+		},
 		children: [header, createScrollContainer(preElement)]
 	};
 }
