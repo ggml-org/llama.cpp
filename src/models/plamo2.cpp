@@ -12,7 +12,7 @@ void llama_model_plamo2::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_SSM_GROUP_COUNT,    hparams.ssm_n_group);
 
     for (uint32_t i = 0; i < hparams.n_layer; ++i) {
-        hparams.recurrent_layer_arr[i] = hparams.n_head_kv(i) == 0;
+        hparams.is_recr_impl[i] = hparams.n_head_kv(i) == 0;
     }
 
     switch (hparams.n_layer) {
@@ -54,7 +54,7 @@ void llama_model_plamo2::load_arch_tensors(llama_model_loader &) {
 
     for (int i = 0; i < n_layer; ++i) {
         auto & layer = layers[i];
-        bool is_mamba_layer = hparams.is_recurrent(i);
+        bool is_mamba_layer = hparams.is_recr(i);
 
         layer.attn_norm = create_tensor(tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd}, 0);
 
@@ -128,7 +128,7 @@ llama_model_plamo2::graph::graph(const llama_model & model, const llm_graph_para
         cur = build_norm(inpL, model.layers[il].attn_norm, NULL, LLM_NORM_RMS, il);
 
         // check if this layer is Mamba or Attention
-        const bool is_mamba_layer = hparams.is_recurrent(il);
+        const bool is_mamba_layer = hparams.is_recr(il);
 
         if (is_mamba_layer) {
             // PLaMo-2 Mamba layer
