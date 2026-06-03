@@ -141,6 +141,7 @@
 		@apply bg-background text-foreground;
 		scrollbar-width: thin;
 		scrollbar-gutter: stable;
+		overflow: hidden; /* Added due to Mermaid rendering somehow causing the double scrollbar */
 	}
 
 	/* Global scrollbar styling - visible only on hover */
