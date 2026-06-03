@@ -2312,10 +2312,17 @@ static void func_args_not_string(json & messages) {
                 if (tool_call.contains("function") && tool_call["function"].contains("arguments")) {
                     auto & args = tool_call["function"]["arguments"];
                     if (args.is_string()) {
+                        const std::string args_str = args.get<std::string>();
                         try {
-                            args = json::parse(args.get<std::string>());
+                            args = json::parse(args_str);
                         } catch (const std::exception & e) {
-                            throw std::runtime_error("Failed to parse tool call arguments as JSON: " + std::string(e.what()));
+                            // Agent clients may replay history with truncated or malformed
+                            // tool-call JSON (e.g. partial model output). Keep the turn
+                            // alive by falling back to an empty object for Jinja templates
+                            // that expect object arguments.
+                            LOG_WRN("%s: failed to parse tool call arguments as JSON, using empty object: %s (args=%s)\n",
+                                    __func__, e.what(), args_str.c_str());
+                            args = json::object();
                         }
                     }
                 }
