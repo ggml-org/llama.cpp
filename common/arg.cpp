@@ -2603,7 +2603,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_HF_REPO"));
     add_opt(common_arg(
-        {"-hfd", "-hfrd", "--hf-repo-draft"}, "<user>/<model>[:quant]",
+        {"-hfd", "-hfrd", "--hf-repo-draft", "--spec-draft-hf"}, "<user>/<model>[:quant]",
         "Same as --hf-repo, but for the draft model (default: unused)",
         [](common_params & params, const std::string & value) {
             params.speculative.mparams_dft.hf_repo = value;
@@ -3320,7 +3320,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
 
     // speculative parameters
     add_opt(common_arg(
-        {"-td", "--threads-draft"}, "N",
+        {"-td", "--threads-draft", "--spec-draft-threads"}, "N",
         "number of threads to use during generation (default: same as --threads)",
         [](common_params & params, int value) {
             params.speculative.cpuparams.n_threads = value;
@@ -3330,7 +3330,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER}));
     add_opt(common_arg(
-        {"-tbd", "--threads-batch-draft"}, "N",
+        {"-tbd", "--threads-batch-draft", "--spec-draft-threads-batch"}, "N",
         "number of threads to use during batch and prompt processing (default: same as --threads-draft)",
         [](common_params & params, int value) {
             params.speculative.cpuparams_batch.n_threads = value;
@@ -3428,28 +3428,28 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SPECULATIVE}));
     add_opt(common_arg(
-        {"--draft", "--draft-n", "--draft-max"}, "N",
+        {"--draft", "--draft-n", "--draft-max", "--spec-draft-n-max"}, "N",
         string_format("number of tokens to draft for speculative decoding (default: %d)", params.speculative.n_max),
         [](common_params & params, int value) {
             params.speculative.n_max = value;
         }
     ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_LOOKUP, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_DRAFT_MAX"));
     add_opt(common_arg(
-        {"--draft-min", "--draft-n-min"}, "N",
+        {"--draft-min", "--draft-n-min", "--spec-draft-n-min"}, "N",
         string_format("minimum number of draft tokens to use for speculative decoding (default: %d)", params.speculative.n_min),
         [](common_params & params, int value) {
             params.speculative.n_min = value;
         }
     ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_LOOKUP, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_DRAFT_MIN"));
     add_opt(common_arg(
-        {"--draft-p-split"}, "P",
+        {"--draft-p-split", "--spec-draft-p-split"}, "P",
         string_format("speculative decoding split probability (default: %.2f)", (double)params.speculative.p_split),
         [](common_params & params, const std::string & value) {
             params.speculative.p_split = std::stof(value);
         }
     ).set_examples({LLAMA_EXAMPLE_SPECULATIVE}).set_env("LLAMA_ARG_DRAFT_P_SPLIT"));
     add_opt(common_arg(
-        {"--draft-p-min"}, "P",
+        {"--draft-p-min", "--spec-draft-p-min"}, "P",
         string_format("minimum speculative decoding probability (greedy) (default: %.2f)", (double)params.speculative.p_min),
         [](common_params & params, const std::string & value) {
             params.speculative.p_min = std::stof(value);
@@ -3463,7 +3463,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_CTX_SIZE_DRAFT"));
     add_opt(common_arg(
-        {"-devd", "--device-draft"}, "<dev1,dev2,..>",
+        {"-devd", "--device-draft", "--spec-draft-device"}, "<dev1,dev2,..>",
         "comma-separated list of devices to use for offloading the draft model (none = don't offload)\n"
         "use --list-devices to see a list of available devices",
         [](common_params & params, const std::string & value) {
@@ -3472,7 +3472,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
     GGML_ASSERT(params.speculative.n_gpu_layers < 0); // string_format would need to be extended for a default >= 0
     add_opt(common_arg(
-        {"-ngld", "--gpu-layers-draft", "--n-gpu-layers-draft"}, "N",
+        {"-ngld", "--gpu-layers-draft", "--n-gpu-layers-draft", "--spec-draft-ngl"}, "N",
         string_format("max. number of draft model layers to store in VRAM, either an exact number, 'auto', or 'all' (default: %s)",
             params.speculative.n_gpu_layers == -1 ? "auto" : "all"),
         [](common_params & params, const std::string & value) {
@@ -3491,7 +3491,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_N_GPU_LAYERS_DRAFT"));
     add_opt(common_arg(
-        {"-md", "--model-draft"}, "FNAME",
+        {"-md", "--model-draft", "--spec-draft-model"}, "FNAME",
         "draft model for speculative decoding, or Gemma 4 MTP assistant GGUF when using --spec-type mtp (default: unused)",
         [](common_params & params, const std::string & value) {
             params.speculative.mparams_dft.path = value;
@@ -3540,7 +3540,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_SPEC_TYPE"));
     add_opt(common_arg(
-        {"--draft-block-size"}, "N",
+        {"--draft-block-size", "--spec-draft-block-size"}, "N",
         string_format("MTP draft block size B (drafts B-1 tokens per round; default: %d)", params.speculative.draft_block_size),
         [](common_params & params, int value) {
             if (value < 2 || value > 32) {
