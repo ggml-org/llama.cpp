@@ -139,6 +139,8 @@ struct llama_context {
     int encode(const llama_batch & batch_inp);
     int decode(const llama_batch & batch_inp);
 
+    bool requantize_memory(ggml_type new_type_k, ggml_type new_type_v);
+
     //
     // state save/load
     //

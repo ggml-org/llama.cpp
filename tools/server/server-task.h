@@ -27,6 +27,7 @@ enum server_task_type {
     SERVER_TASK_TYPE_SLOT_ERASE,
     SERVER_TASK_TYPE_GET_LORA,
     SERVER_TASK_TYPE_SET_LORA,
+    SERVER_TASK_TYPE_REQUANTIZE_KVCACHE,
 };
 
 // TODO: change this to more generic "response_format" to replace the "format_response_*" in server-common
@@ -165,6 +166,12 @@ struct server_task {
         std::string filepath;
     };
     slot_action slot_action;
+
+    struct kvcache_action {
+        ggml_type ctk;
+        ggml_type ctv;
+    };
+    kvcache_action kvcache_action;
 
     // used by SERVER_TASK_TYPE_METRICS
     bool metrics_reset_bucket = false;
@@ -581,6 +588,10 @@ struct server_task_result_get_lora : server_task_result {
 };
 
 struct server_task_result_apply_lora : server_task_result {
+    virtual json to_json() override;
+};
+
+struct server_task_result_requantize : server_task_result {
     virtual json to_json() override;
 };
 
