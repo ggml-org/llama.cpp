@@ -731,6 +731,8 @@ static __global__ void mul_mat_vec_q_moe(
         }
     }
 
+    ggml_cuda_pdl_lc();
+
     // Warp-level reduction only - no shared memory needed
 #pragma unroll
     for (int i = 0; i < c_rows_per_block; ++i) {
