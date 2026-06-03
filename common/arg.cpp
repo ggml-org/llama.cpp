@@ -1699,7 +1699,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_sampling());
     add_opt(common_arg(
         {"--repeat-last-n"}, "N",
-        string_format("last n tokens to consider for penalize (default: %d, 0 = disabled, -1 = ctx_size)", params.sampling.penalty_last_n),
+        string_format("last n tokens to consider for penalize (default: %d, 0 = disabled, -1 = ctx-size)", params.sampling.penalty_last_n),
         [](common_params & params, int value) {
             if (value < -1) {
                 throw std::runtime_error(string_format("error: invalid repeat-last-n = %d\n", value));

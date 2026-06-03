@@ -1254,12 +1254,12 @@ common_init_result::common_init_result(common_params & params, bool model_only) 
     }
 
     //if (params.sampling.penalty_last_n == -1) {
-    //    LOG_TRC("%s: setting penalty_last_n to ctx_size = %d\n", __func__, llama_n_ctx(lctx));
+    //    LOG_TRC("%s: setting penalty_last_n to ctx-size = %d\n", __func__, llama_n_ctx(lctx));
     //    params.sampling.penalty_last_n = llama_n_ctx(lctx);
     //}
 
     //if (params.sampling.dry_penalty_last_n == -1) {
-    //    LOG_TRC("%s: setting dry_penalty_last_n to ctx_size = %d\n", __func__, llama_n_ctx(lctx));
+    //    LOG_TRC("%s: setting dry_penalty_last_n to ctx-size = %d\n", __func__, llama_n_ctx(lctx));
     //    params.sampling.dry_penalty_last_n = llama_n_ctx(lctx);
     //}
 

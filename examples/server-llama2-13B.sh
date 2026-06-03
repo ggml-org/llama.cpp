@@ -12,7 +12,7 @@ PROMPT_TEMPLATE=${PROMPT_TEMPLATE:-./prompts/chat-system.txt}
 N_THREAD="${N_THREAD:-12}"
 
 # Note: you can also override the generation options by specifying them on the command line:
-GEN_OPTIONS="${GEN_OPTIONS:---ctx_size 4096 --batch-size 1024}"
+GEN_OPTIONS="${GEN_OPTIONS:---ctx-size 4096 --batch-size 1024}"
 
 
 # shellcheck disable=SC2086 # Intended splitting of GEN_OPTIONS
