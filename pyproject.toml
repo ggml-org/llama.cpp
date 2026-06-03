@@ -10,7 +10,7 @@ requires-python = '>=3.10,<3.15'
 dependencies = [
     'numpy (>=1.26.4,<3.0.0)',
     'sentencepiece (>=0.1.98,<0.3.0)',
-    'transformers (==5.5.1)',
+    'transformers (==4.57.6)',
     'protobuf (>=4.21.0,<5.0.0)',
     'torch (>=2.6.0,<3.0.0)',
     'gguf @ ./gguf-py',

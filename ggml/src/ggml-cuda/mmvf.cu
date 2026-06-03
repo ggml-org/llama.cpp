@@ -80,9 +80,8 @@ static __global__ void mul_mat_vec_f(
         gate_x += int64_t(sample_x)  *stride_sample_x   + channel_x  *stride_channel_x   + row*stride_row;
     }
 
-    const int channel_bias = ids ? channel_x : channel_dst;
-
     if constexpr (has_fusion) {
+        const int channel_bias = ids ? channel_x : channel_dst;
         if (use_bias) {
             x_bias += int64_t(sample_dst)*stride_sample_dst + channel_bias*stride_channel_dst;
         }
@@ -95,7 +94,7 @@ static __global__ void mul_mat_vec_f(
 
     extern __shared__ char data_mmv[];
     float * buf_iw = (float *) data_mmv;
-    float * buf_iw_gate = nullptr;
+    [[maybe_unused]] float * buf_iw_gate = nullptr;
     if constexpr (has_fusion) {
         buf_iw_gate = (float *) (data_mmv + warp_size*sizeof(float));
     }
@@ -123,7 +122,7 @@ static __global__ void mul_mat_vec_f(
 
     if constexpr (std::is_same_v<T, float>) {
         const float2 * x2 = (const float2 *) x;
-        const float2 * gate_x2 = nullptr;
+        [[maybe_unused]] const float2 * gate_x2 = nullptr;
         if constexpr (has_fusion) {
             if (use_gate) {
                 gate_x2 = (const float2 *) gate_x;
@@ -155,7 +154,7 @@ static __global__ void mul_mat_vec_f(
         }
     } else if constexpr (std::is_same_v<T, half>) {
         const half2 * x2 = (const half2 *) x;
-        const half2 * gate_x2 = nullptr;
+        [[maybe_unused]] const half2 * gate_x2 = nullptr;
         if constexpr (has_fusion) {
             if (use_gate) {
                 gate_x2 = (const half2 *) gate_x;
@@ -266,7 +265,7 @@ static __global__ void mul_mat_vec_f(
         }
 #else
         const nv_bfloat162 * x2 = (const nv_bfloat162 *) x;
-        const nv_bfloat162 * gate_x2 = nullptr;
+        [[maybe_unused]] const nv_bfloat162 * gate_x2 = nullptr;
         if constexpr (has_fusion) {
             if (use_gate) {
                 gate_x2 = (const nv_bfloat162 *) gate_x;
@@ -274,7 +273,7 @@ static __global__ void mul_mat_vec_f(
         }
         for (int col2 = tid; col2 < ncols2; col2 += block_size) {
             const nv_bfloat162 tmpx = x2[col2];
-            nv_bfloat162 tmpx_gate;
+            [[maybe_unused]] nv_bfloat162 tmpx_gate;
             if constexpr (has_fusion) {
                 if (use_gate) {
                     tmpx_gate = gate_x2[col2];
