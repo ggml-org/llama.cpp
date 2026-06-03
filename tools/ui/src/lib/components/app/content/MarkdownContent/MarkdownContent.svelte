@@ -584,7 +584,17 @@
 		mermaid.initialize({
 			startOnLoad: false,
 			theme: isDark ? 'dark' : 'default',
-			securityLevel: 'strict'
+			securityLevel: 'strict',
+			flowchart: {
+				useMaxWidth: false,
+				htmlLabels: true
+			},
+			sequence: {
+				useMaxWidth: false
+			},
+			gantt: {
+				useMaxWidth: false
+			}
 		});
 
 		try {
@@ -722,11 +732,20 @@
 
 	{#if incompleteCodeBlock}
 		{#if incompleteCodeBlock.language === 'mermaid'}
-			<div class="mermaid-streaming-block">
-				<div class="mermaid-streaming-header">
+			<div class="mermaid-block-wrapper streaming-mermaid-block">
+				<div class="code-block-header">
 					<span class="code-language">mermaid</span>
+					<div class="code-block-actions">
+						<ActionIconCopyToClipboard
+							text={incompleteCodeBlock.code}
+							canCopy={false}
+							ariaLabel="Diagram incomplete"
+						/>
+					</div>
 				</div>
-				<pre class="mermaid-streaming-code"><code>{incompleteCodeBlock.code}</code></pre>
+				<div class="mermaid-loading-placeholder">
+					<span class="mermaid-loading-text">Generating diagram...</span>
+				</div>
 			</div>
 		{:else}
 			<div class="code-block-wrapper streaming-code-block relative">
