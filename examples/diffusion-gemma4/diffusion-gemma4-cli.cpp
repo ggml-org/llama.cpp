@@ -238,10 +238,34 @@ int main(int argc, char ** argv) {
         }
     }
 
+    // 3. final read-out: decode the converged canvas once more and take the greedy argmax per
+    // canvas position. Positions that were never accepted carry stale/renoised tokens in the
+    // sampled canvas; reading the model's argmax given the settled answer cleans them up
+    // (e.g. to <pad>), rather than emitting that leftover noise.
+    {
+        batch.n_tokens = n_seq;
+        for (int i = 0; i < n_seq; ++i) {
+            batch.token[i]     = (i < n_prompt) ? prompt_tokens[i] : accepted[i - n_prompt];
+            batch.pos[i]       = i;
+            batch.n_seq_id[i]  = 1;
+            batch.seq_id[i][0] = 0;
+            batch.logits[i]    = 1;
+        }
+        if (llama_decode(ctx, batch) == 0) {
+            const float * logits = llama_get_logits(ctx) + (size_t) n_prompt * n_vocab;
+            for (int j = 0; j < canvas_length; ++j) {
+                const float * r = logits + (size_t) j * n_vocab;
+                int a = 0; float m = r[0];
+                for (int v = 1; v < n_vocab; ++v) { if (r[v] > m) { m = r[v]; a = v; } }
+                accepted[j] = a;
+            }
+        }
+    }
+
     llama_batch_free(batch);
 
     std::string out = common_detokenize(vocab, accepted, false);
-    LOG_INF("\n=== generated canvas ===\n%s\n", out.c_str());
+    LOG_INF("\n=== generated answer ===\n%s\n", out.c_str());
 
     llama_free(ctx);
     llama_model_free(model);
