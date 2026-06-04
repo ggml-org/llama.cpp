@@ -41,8 +41,8 @@
 		"@tailwindcss/typography": "0.5.16",
 		"@tailwindcss/vite": "4.1.11",
 		"@types/node": "^24",
-		"@vitest/browser": "3.2.4",
-		"@vitest/coverage-v8": "3.2.4",
+		"@vitest/browser": "4.1.8",
+		"@vitest/coverage-v8": "4.1.8",
 		"bits-ui": "2.18.1",
 		"clsx": "2.1.1",
 		"dexie": "4.0.11",
@@ -74,8 +74,8 @@
 		"uuid": "13.0.2",
 		"vite": "7.3.2",
 		"vite-plugin-devtools-json": "0.2.1",
-		"vitest": "3.2.4",
-		"vitest-browser-svelte": "0.1.0"
+		"vitest": "4.1.8",
+		"vitest-browser-svelte": "2.1.1"
 	},
 	"dependencies": {
 		"@modelcontextprotocol/sdk": "1.26.0",
@@ -92,5 +92,8 @@
 		"svelte-sonner": "1.0.5",
 		"unist-util-visit": "5.0.0",
 		"zod": "4.2.1"
+	},
+	"overrides": {
+		"cookie": ">=0.7.0"
 	}
 }
