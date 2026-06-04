@@ -2090,8 +2090,20 @@ bool server_prompt_cache::load(server_prompt & prompt, const server_tokens & tok
     if (it_best != states.end()) {
         SRV_INF(" - found better prompt with f_keep = %.3f, sim = %.3f\n", f_keep_best, sim_best);
 
+        // Restore the cached state into the live context WITHOUT consuming the
+        // cache entry. The previous behaviour moved the entry out of `states`
+        // and freed its serialized bytes on every match. That is wrong for an
+        // alternating multi-conversation workload: when the incoming prompt
+        // only partially matches the entry (a different conversation that
+        // shares a long prefix), update_slots() may still decide it cannot
+        // reuse the restored KV and reset to a full re-prefill — but by then
+        // the entry has already been erased, so when the original conversation
+        // comes back its state is gone and it pays a full re-prefill too.
+        // Keeping the entry lets both conversations hit the cache on their
+        // respective turns. Entries are still bounded by update()'s size/token
+        // eviction; this only removes the on-match deletion.
         {
-            auto & data = it_best->data.main;
+            const auto & data = it_best->data.main;
 
             const size_t size = data.size();
             const size_t n = llama_state_seq_set_data_ext(ctx_tgt, data.data(), size, id_slot, 0);
@@ -2100,13 +2112,10 @@ bool server_prompt_cache::load(server_prompt & prompt, const server_tokens & tok
 
                 return false;
             }
-
-            data.clear();
-            data.shrink_to_fit();
         }
 
         {
-            auto & data = it_best->data.drft;
+            const auto & data = it_best->data.drft;
 
             if (!data.empty()) {
                 GGML_ASSERT(ctx_dft);
@@ -2118,15 +2127,17 @@ bool server_prompt_cache::load(server_prompt & prompt, const server_tokens & tok
 
                     return false;
                 }
-
-                data.clear();
-                data.shrink_to_fit();
             }
         }
 
-        prompt = std::move(*it_best);
-
-        states.erase(it_best);
+        // Copy tokens + checkpoints into the slot's prompt, leaving the cached
+        // entry intact. Do NOT copy data.main / data.drft into prompt.data: the
+        // KV bytes are now live in ctx_tgt/ctx_dft, and prompt_save() asserts
+        // prompt.data.size() == 0 before it serializes a fresh save from the
+        // live context. server_tokens has a deleted copy ctor, hence clone().
+        prompt.tokens      = it_best->tokens.clone();
+        prompt.data        = {};
+        prompt.checkpoints = it_best->checkpoints;
     }
 
     return true;
