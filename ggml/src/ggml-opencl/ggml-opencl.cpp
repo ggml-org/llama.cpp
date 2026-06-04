@@ -639,7 +639,7 @@ struct ggml_backend_opencl_context {
     cl_kernel kernel_softplus_f16, kernel_softplus_f16_4, kernel_softplus_f16_nc;
     cl_kernel kernel_upscale;
     cl_kernel kernel_upscale_bilinear;
-    cl_kernel kernel_concat_f32;
+    cl_kernel kernel_concat_f32, kernel_concat_f32_pack;
     cl_kernel kernel_conv_2d_f16;
     cl_kernel kernel_conv_2d_f32;
     cl_kernel kernel_conv_2d_f16_f32;
@@ -2616,6 +2616,7 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx) {
         cl_program prog =
             build_program_from_source(backend_ctx->context, backend_ctx->device, kernel_src.c_str(), compile_opts);
         CL_CHECK((backend_ctx->kernel_concat_f32 = clCreateKernel(prog, "kernel_concat_f32", &err), err));
+        CL_CHECK((backend_ctx->kernel_concat_f32_pack = clCreateKernel(prog, "kernel_concat_f32_pack", &err), err));
         CL_CHECK(clReleaseProgram(prog));
         GGML_LOG_CONT(".");
     }
@@ -11136,7 +11137,9 @@ static void ggml_cl_concat(ggml_backend_t backend, const ggml_tensor * src0, con
 
     int nth = MIN(64, ne0);
 
-    cl_kernel kernel = backend_ctx->kernel_concat_f32;
+    const bool concat_pack = (dim == 0 && ne0 < 32);
+    cl_kernel kernel = concat_pack ? backend_ctx->kernel_concat_f32_pack
+                                   : backend_ctx->kernel_concat_f32;
 
     CL_CHECK(clSetKernelArg(kernel,  0, sizeof(cl_mem),   &extra0->data_device));
     CL_CHECK(clSetKernelArg(kernel,  1, sizeof(cl_ulong), &offset0));
@@ -11163,10 +11166,28 @@ static void ggml_cl_concat(ggml_backend_t backend, const ggml_tensor * src0, con
     CL_CHECK(clSetKernelArg(kernel, 22, sizeof(cl_ulong), &nb3));
     CL_CHECK(clSetKernelArg(kernel, 23, sizeof(cl_int),   &dim));
 
-    size_t global_work_size[] = {(size_t)ne1*nth, (size_t)ne2, (size_t)ne3};
-    size_t local_work_size[] = {(size_t)nth, 1, 1};
+    if (concat_pack) {
+        // packed kernel needs the dst dims to unflatten its 1-D row index.
+        CL_CHECK(clSetKernelArg(kernel, 24, sizeof(int), &ne1));
+        CL_CHECK(clSetKernelArg(kernel, 25, sizeof(int), &ne2));
+        CL_CHECK(clSetKernelArg(kernel, 26, sizeof(int), &ne3));
 
-    backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
+        const int maxwg = (int)backend_ctx->get_kernel_workgroup_size(kernel);
+        const int base  = MIN(64, maxwg);
+        const int tpr   = MIN(ne0, base);                 // threads per row
+        const int rpw   = MAX(1, base / tpr);             // rows per workgroup
+        const int lsz   = tpr * rpw;
+        const int nrows = ne1*ne2*ne3;
+        const int nwg   = (nrows + rpw - 1) / rpw;
+        size_t global_work_size[] = {(size_t)nwg*lsz, 1, 1};
+        size_t local_work_size[]  = {(size_t)lsz, 1, 1};
+        backend_ctx->enqueue_ndrange_kernel(kernel, 1, global_work_size, local_work_size, dst);
+    } else {
+        size_t global_work_size[] = {(size_t)ne1*nth, (size_t)ne2, (size_t)ne3};
+        size_t local_work_size[] = {(size_t)nth, 1, 1};
+
+        backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
+    }
 }
 
 static void ggml_cl_timestep_embedding(ggml_backend_t backend, const ggml_tensor * src0, ggml_tensor * dst) {
