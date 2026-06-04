@@ -100,8 +100,8 @@ body:
       label: Relevant log output
       description: >
           Please copy and paste any relevant log output, including the command that you entered and any generated text.
-          For very long logs (thousands of lines), preferably upload them as files instead.
-          On Linux you can redirect console output into a file by appending ` > llama.log 2>&1` to your command.
+          For very long logs (thousands of lines), please upload them as files instead; the `--log-file` CLI argument can be used for this purpose.
+          On Linux you can alternatively redirect the console output of any command into a file by appending ` > llama.log 2>&1` to your command.
       value: |
         <details>
         <summary>Logs</summary>

@@ -1,0 +1,7 @@
+#version 460
+
+#extension GL_NV_cooperative_matrix_decode_vector : require
+
+void main()
+{
+}

@@ -2235,8 +2235,42 @@ static void ggml_compute_forward_fill_f32(const ggml_compute_params * params, gg
     }
 }
 
+static void ggml_compute_forward_fill_f16(const ggml_compute_params * params, ggml_tensor * dst) {
+    const ggml_fp16_t c = GGML_CPU_FP32_TO_FP16(ggml_get_op_params_f32(dst, 0));
+
+    GGML_TENSOR_LOCALS(int64_t, ne, dst, ne);
+    GGML_TENSOR_LOCALS(size_t,  nb, dst, nb);
+
+    const auto [ir0, ir1] = get_thread_range(params, dst);
+
+    for (int64_t ir = ir0; ir < ir1; ++ir) {
+        const int64_t i03 = ir/(ne2*ne1);
+        const int64_t i02 = (ir - i03*ne2*ne1)/ne1;
+        const int64_t i01 = (ir - i03*ne2*ne1 - i02*ne1);
+
+        ggml_fp16_t * dst_ptr  = (ggml_fp16_t *) ((char *) dst->data + i03*nb3 + i02*nb2 + i01*nb1);
+
+        ggml_vec_set_f16(ne0, dst_ptr, c);
+    }
+}
+
 void ggml_compute_forward_fill(const ggml_compute_params * params, ggml_tensor * dst) {
-    ggml_compute_forward_fill_f32(params, dst);
+    const ggml_tensor * src0 = dst->src[0];
+
+    switch (src0->type) {
+        case GGML_TYPE_F32:
+            {
+                ggml_compute_forward_fill_f32(params, dst);
+            } break;
+        case GGML_TYPE_F16:
+            {
+                ggml_compute_forward_fill_f16(params, dst);
+            } break;
+        default:
+            {
+                GGML_ABORT("unsupported type for ggml_compute_forward_fill: %s", ggml_type_name(src0->type));
+            }
+    }
 }
 
 // ggml_compute_tri
@@ -8921,7 +8955,12 @@ static void ggml_compute_forward_flash_attn_ext_f16(
                                 k->type == v->type &&
                                 neq1 >= Q_TILE_SZ);
 #ifdef GGML_SIMD
-        use_tiled &= (DV % GGML_F32_EPR == 0);
+#if defined(__ARM_FEATURE_SVE)
+        const int64_t f32_epr = svcntw();
+#else
+        const int64_t f32_epr = GGML_F32_EPR;
+#endif
+        use_tiled &= (DV % f32_epr == 0);
 #endif
         int current_chunk = ith;
 
@@ -10513,18 +10552,29 @@ static void ggml_compute_forward_gated_delta_net_one_chunk(
 
     const bool kda = (neg0 == S_v);
 
-    // scratch layout per thread: [delta(S_v)]
-    const int64_t scratch_per_thread = S_v;
+    // state is 3D (S_v*S_v*H, K, n_seqs); K is the snapshot slot count.
+    const int64_t K = src_state->ne[1];
+    GGML_ASSERT(K >= 1);
+    // per-seq stride in floats (slot 0 of seq s lives at state + s * seq_stride)
+    const int64_t state_seq_stride = src_state->nb[2] / sizeof(float);
+
+    const int64_t per_thread = S_v + (K > 1 ? S_v * S_v : 0);
     const int ith = params->ith;
 
-    float * delta = (float *)params->wdata + ith * scratch_per_thread + CACHE_LINE_SIZE_F32;
+    float * delta       = (float *)params->wdata + ith * per_thread + CACHE_LINE_SIZE_F32;
+    float * state_work  = K > 1 ? (delta + S_v) : nullptr;
 
     // output layout: [attn_scores | new_states]
-    // attn_scores: S_v * H * n_tokens * n_seqs floats
-    // new_states:  S_v * S_v * H * n_seqs floats
-    const int64_t attn_score_elems = S_v * H * n_tokens * n_seqs;
+    // attn_scores: S_v * H * n_tokens * n_seqs    floats
+    // new_states:  S_v * S_v * H * n_seqs * K     floats  (K snapshot slots; last min(n_tokens, K))
+    const int64_t attn_score_elems    = S_v * H * n_tokens * n_seqs;
+    const int64_t state_size_per_snap = S_v * S_v * H * n_seqs;
     float * attn_out_base  = (float *)dst->data;
     float * state_out_base = (float *)dst->data + attn_score_elems;
+
+    // snapshot slot mapping: target_slot = t - shift. When n_tokens < K only the last
+    // n_tokens slots are written; earlier slots are left untouched (caller-owned).
+    const int64_t shift = n_tokens - K;
 
     const float * state_in_base = (const float *)src_state->data;
 
@@ -10545,10 +10595,15 @@ static void ggml_compute_forward_gated_delta_net_one_chunk(
         const int64_t iq3 = iv3 / rq3;
         const int64_t ik3 = iv3 / rk3;
 
-        float * s_out = state_out_base + (iv3 * H + iv1) * S_v * S_v;
+        // For K=1, write directly to the single output slot to avoid an extra memcpy at the end.
+        // For K>1, work in scratch and copy out per-token when the slot is in range.
+        float * s_out = (K > 1)
+            ? state_work
+            : state_out_base + (iv3 * H + iv1) * S_v * S_v;
 
-        // copy input state into output buffer and operate in-place
-        const float * s_in = state_in_base + (iv3 * H + iv1) * S_v * S_v;
+        // copy input state into the working buffer and operate in-place
+        // state layout (D, K, n_seqs): slot 0 of seq iv3 starts at iv3 * state_seq_stride.
+        const float * s_in = state_in_base + iv3 * state_seq_stride + iv1 * S_v * S_v;
         memcpy(s_out, s_in, S_v * S_v * sizeof(float));
 
         // attn output pointer for first token of this (head, seq)
@@ -10598,6 +10653,15 @@ static void ggml_compute_forward_gated_delta_net_one_chunk(
             }
 
             attn_data += S_v * H; // advance to next token
+
+            if (K > 1) {
+                const int64_t target_slot = t - shift;
+                if (target_slot >= 0 && target_slot < K) {
+                    float * curr_state_o = state_out_base + target_slot * state_size_per_snap +
+                                     (iv3 * H + iv1) * S_v * S_v;
+                    memcpy(curr_state_o, s_out, S_v * S_v * sizeof(float));
+                }
+            }
         }
     }
 }
@@ -11299,7 +11363,11 @@ static void ggml_compute_forward_fwht_f32(const ggml_compute_params * params, gg
 
         // Scalar passes
 #if defined(GGML_SIMD)
+#if defined(__ARM_FEATURE_SVE)
+        const int step = svcntw();
+#else
         const int step = GGML_F32_EPR;
+#endif
 #else
         const int step = n;
 #endif

@@ -146,7 +146,7 @@ namespace GGUFMeta {
             const enum gguf_type arr_type = gguf_get_arr_type(ctx, k);
             return ArrayInfo {
                 arr_type,
-                size_t(gguf_get_arr_n(ctx, k)),
+                gguf_get_arr_n(ctx, k),
                 arr_type == GGUF_TYPE_STRING ? nullptr : gguf_get_arr_data(ctx, k),
             };
         }
@@ -445,7 +445,7 @@ namespace GGUFMeta {
         }
 
         if (n > N_MAX) {
-            throw std::runtime_error(format("n > N_MAX: %u > %u for key %s", (uint32_t) n, (uint32_t) N_MAX, key.c_str()));
+            throw std::runtime_error(format("n > N_MAX: %u > %u for key %s", n, (uint32_t) N_MAX, key.c_str()));
         }
 
         if (gguf_get_kv_type(metadata, kid) == GGUF_TYPE_ARRAY) {
@@ -502,9 +502,9 @@ namespace GGUFMeta {
     }
 
     // TODO: this is not very clever - figure out something better
-    template bool llama_model_loader::get_key_or_arr<std::array<int, 4>>(enum llm_kv kid, std::array<int, 4> & result, uint32_t n, bool required);
+    template bool llama_model_loader::get_key_or_arr<std::array<int,      4>>  (enum llm_kv kid, std::array<int,      4>   & result, uint32_t n, bool required);
     template bool llama_model_loader::get_key_or_arr<std::array<uint32_t, 512>>(enum llm_kv kid, std::array<uint32_t, 512> & result, uint32_t n, bool required);
-    template bool llama_model_loader::get_key_or_arr<std::array<float, 512>>(enum llm_kv kid, std::array<float, 512> & result, uint32_t n, bool required);
+    template bool llama_model_loader::get_key_or_arr<std::array<float,    512>>(enum llm_kv kid, std::array<float,    512> & result, uint32_t n, bool required);
 
 
 llama_model_loader::llama_model_loader(
@@ -1312,9 +1312,16 @@ struct ggml_tensor * llama_model_loader::create_tensor_as_view(struct ggml_conte
     return tensor;
 }
 
-void llama_model_loader::done_getting_tensors() const {
-    if (n_created != n_tensors) {
-        throw std::runtime_error(format("%s: wrong number of tensors; expected %d, got %d", __func__, n_tensors, n_created));
+void llama_model_loader::done_getting_tensors(bool partial) const {
+    if (n_created > n_tensors) {
+        throw std::runtime_error(format("%s: too many tensors created; expected %d, got %d", __func__, n_tensors, n_created));
+    }
+    if (n_created < n_tensors) {
+        if (!partial) {
+            throw std::runtime_error(format("%s: wrong number of tensors; expected %d, got %d", __func__, n_tensors, n_created));
+        }
+        LLAMA_LOG_INFO("%s: partial load — used %d of %d tensors in the file (rest belong to a sibling model on the same .gguf)\n",
+                __func__, n_created, n_tensors);
     }
     if (n_tensors_moved > 0) {
         LLAMA_LOG_DEBUG("%s: tensor '%s' (%s) (and %zu others) cannot be used with preferred buffer type %s, using %s instead\n",

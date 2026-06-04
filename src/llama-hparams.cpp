@@ -8,18 +8,31 @@
 void llama_hparams::set_swa_pattern(uint32_t n_pattern, bool dense_first) {
     if (dense_first) {
         for (uint32_t il = 0; il < n_layer; ++il) {
-            swa_layers[il] = n_pattern == 0 || (il % n_pattern != 0);
+            is_swa_impl[il] = n_pattern == 0 || (il % n_pattern != 0);
         }
     } else {
         for (uint32_t il = 0; il < n_layer; ++il) {
-            swa_layers[il] = n_pattern == 0 || (il % n_pattern < (n_pattern - 1));
+            is_swa_impl[il] = n_pattern == 0 || (il % n_pattern < (n_pattern - 1));
         }
     }
 }
 
+// TODO: implement
+//void llama_hparams::set_recr_pattern(uint32_t n_pattern, bool dense_first) {
+//    if (dense_first) {
+//        for (uint32_t il = 0; il < n_layer; ++il) {
+//            is_recr_impl[il] = n_pattern == 0 || (il % n_pattern != 0);
+//        }
+//    } else {
+//        for (uint32_t il = 0; il < n_layer; ++il) {
+//            is_recr_impl[il] = n_pattern == 0 || (il % n_pattern < (n_pattern - 1));
+//        }
+//    }
+//}
+
 bool llama_hparams::is_swa_any() const {
     for (uint32_t il = 0; il < n_layer; ++il) {
-        if (swa_layers[il]) {
+        if (is_swa_impl[il]) {
             return true;
         }
     }
@@ -193,9 +206,9 @@ uint32_t llama_hparams::n_embd_s() const {
     return ssm_d_state * ssm_d_inner;
 }
 
-bool llama_hparams::is_recurrent(uint32_t il) const {
+bool llama_hparams::is_recr(uint32_t il) const {
     if (il < n_layer) {
-        return recurrent_layer_arr[il];
+        return is_recr_impl[il];
     }
 
     GGML_ABORT("%s: il (%u) out of bounds (n_layer: %u)\n", __func__, il, n_layer);
@@ -207,7 +220,7 @@ uint32_t llama_hparams::n_pos_per_embd() const {
 
 bool llama_hparams::is_swa(uint32_t il) const {
     if (il < n_layer) {
-        return swa_layers[il];
+        return is_swa_impl[il];
     }
 
     GGML_ABORT("fatal error");
@@ -229,6 +242,12 @@ uint32_t llama_hparams::n_embd_head_v_mla() const {
 }
 
 bool llama_hparams::has_kv(uint32_t il) const {
+    if (kv_only_nextn) {
+        // MTP head: only the trailing nextn_predict_layers blocks own a KV cache;
+        // the leading trunk blocks are not executed in this graph.
+        return nextn_predict_layers > 0 && il >= (n_layer - nextn_predict_layers);
+    }
+
     if (n_layer_kv_from_start >= 0) {
         if (il < (uint32_t) n_layer_kv_from_start) {
             return true;

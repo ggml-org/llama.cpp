@@ -853,6 +853,9 @@ class GGUFWriter:
     def add_swiglu_clamp_shexp(self, values: Sequence[float]) -> None:
         self.add_array(Keys.LLM.SWIGLU_CLAMP_SHEXP.format(arch=self.arch), values)
 
+    def add_hidden_act(self, value: str) -> None:
+        self.add_string(Keys.LLM.HIDDEN_ACT.format(arch=self.arch), value)
+
     def add_expert_group_scale(self, value: float) -> None:
         self.add_float32(Keys.LLM.EXPERT_GROUP_SCALE.format(arch=self.arch), value)
 
@@ -942,6 +945,9 @@ class GGUFWriter:
 
     def add_attn_output_scale(self, value: float) -> None:
         self.add_float32(Keys.Attention.OUTPUT_SCALE.format(arch=self.arch), value)
+
+    def add_attn_value_scale(self, value: float) -> None:
+        self.add_float32(Keys.Attention.VALUE_SCALE.format(arch=self.arch), value)
 
     def add_attn_temperature_length(self, value: int) -> None:
         self.add_uint32(Keys.Attention.TEMPERATURE_LENGTH.format(arch=self.arch), value)
@@ -1107,6 +1113,12 @@ class GGUFWriter:
 
         self.add_string(Keys.Tokenizer.CHAT_TEMPLATE, value)
 
+    def add_suppress_tokens(self, tokens: Sequence[int]) -> None:
+        self.add_array(Keys.Tokenizer.SUPPRESS_TOKENS, tokens)
+
+    def add_normalizer_lowercase(self, value: bool) -> None:
+        self.add_bool(Keys.Tokenizer.NORMALIZER_LOWERCASE, value)
+
     def add_eot_token_id(self, id: int) -> None:
         self.add_uint32(Keys.Tokenizer.EOT_ID, id)
 
@@ -1147,6 +1159,9 @@ class GGUFWriter:
 
     def add_vision_head_count(self, value: int) -> None:
         self.add_uint32(Keys.ClipVision.Attention.HEAD_COUNT, value)
+
+    def add_vision_head_count_kv(self, value: int) -> None:
+        self.add_uint32(Keys.ClipVision.Attention.HEAD_COUNT_KV, value)
 
     def add_vision_attention_layernorm_eps(self, value: float) -> None:
         self.add_float32(Keys.ClipVision.Attention.LAYERNORM_EPS, value)
@@ -1218,6 +1233,9 @@ class GGUFWriter:
 
     def add_vision_is_deepstack_layers(self, layers: Sequence[bool]) -> None:
         self.add_array(Keys.ClipVision.IS_DEEPSTACK_LAYERS, layers)
+
+    def add_vision_wa_pattern_mode(self, modes: Sequence[int]) -> None:
+        self.add_array(Keys.ClipVision.WA_PATTERN_MODE, modes)
 
     def add_vision_window_size(self, value: int) -> None:
         self.add_uint32(Keys.ClipVision.WINDOW_SIZE, value)

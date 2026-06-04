@@ -19,6 +19,7 @@ enum server_task_type {
     SERVER_TASK_TYPE_RERANK,
     SERVER_TASK_TYPE_INFILL,
     SERVER_TASK_TYPE_CANCEL,
+    SERVER_TASK_TYPE_CONTROL,
     SERVER_TASK_TYPE_NEXT_RESPONSE,
     SERVER_TASK_TYPE_METRICS,
     SERVER_TASK_TYPE_SLOT_SAVE,
@@ -47,7 +48,7 @@ enum stop_type {
 };
 
 struct task_params {
-    bool stream          = true;
+    bool stream          = false;
     bool include_usage   = false;
     bool cache_prompt    = true; // remember the prompt to avoid reprocessing all prompt
     bool return_tokens   = false;
@@ -60,6 +61,9 @@ struct task_params {
     int32_t n_cmpl    =  1; // number of completions to generate from this prompt
 
     int32_t n_cache_reuse = 0; // min chunk size to attempt reusing from the cache via KV shifting (0 = disabled)
+
+    // number of prompt tokens before the latest user message
+    int32_t n_before_user = -1;
 
     int64_t t_max_prompt_ms  = -1; // TODO: implement
     int64_t t_max_predict_ms = -1; // if positive, limit the generation phase to this time limit
@@ -80,6 +84,10 @@ struct task_params {
     task_response_type res_type = TASK_RESPONSE_TYPE_NONE;
     std::string        oaicompat_model;
     std::string        oaicompat_cmpl_id;
+
+    // realtime control (SERVER_TASK_TYPE_CONTROL)
+    std::string        control_action;
+    std::string        control_cmpl_id;
 
     // per-request parameters for chat parsing
     common_chat_parser_params chat_parser_params;
@@ -112,11 +120,7 @@ struct task_result_state {
     const std::string oai_resp_message_id;
     std::string oai_resp_fc_id; // function call ID for current args delta
 
-    task_result_state(const common_chat_parser_params & chat_parser_params)
-        : chat_parser_params(chat_parser_params)
-        , oai_resp_id("resp_" + random_string())
-        , oai_resp_reasoning_id("rs_" + random_string())
-        , oai_resp_message_id("msg_" + random_string()) {}
+    task_result_state(const common_chat_parser_params & chat_parser_params);
 
     // parse partial tool calls and update the internal state
     common_chat_msg update_chat_msg(
@@ -419,6 +423,8 @@ struct server_task_result_cmpl_partial : server_task_result {
 
     bool post_sampling_probs;
     bool is_progress = false;
+    bool is_begin = false; // whether to send 200 status to HTTP client (begin of SSE stream)
+                           // ref: https://github.com/ggml-org/llama.cpp/pull/23884
     completion_token_output prob_output;
     result_timings timings;
     result_prompt_progress progress;
@@ -550,6 +556,19 @@ struct server_task_result_slot_erase : server_task_result {
     virtual json to_json() override;
 };
 
+struct server_task_result_control : server_task_result {
+    bool        success = false;
+    std::string message; // optional detail when success is false
+
+    virtual json to_json() override {
+        json out = json { { "success", success } };
+        if (!message.empty()) {
+            out["message"] = message;
+        }
+        return out;
+    }
+};
+
 struct server_task_result_get_lora : server_task_result {
     struct lora {
         common_adapter_lora_info info;
@@ -565,42 +584,29 @@ struct server_task_result_apply_lora : server_task_result {
     virtual json to_json() override;
 };
 
-struct server_prompt_checkpoint {
-    llama_pos pos_min;
-    llama_pos pos_max;
-
-    int64_t n_tokens;
-
-    std::vector<uint8_t> data;
+struct server_prompt_data {
+    std::vector<uint8_t> main;
+    std::vector<uint8_t> drft;
 
     size_t size() const {
-        return data.size();
-    }
-
-    bool empty() const {
-        return data.empty();
-    }
-
-    void clear() {
-        pos_min = 0;
-        pos_max = 0;
-        n_tokens = 0;
-        data.clear();
+        return main.size() + drft.size();
     }
 };
 
 struct server_prompt {
     server_tokens tokens;
 
-    std::vector<uint8_t> data;
+    server_prompt_data data;
 
-    std::list<server_prompt_checkpoint> checkpoints;
+    std::list<common_prompt_checkpoint> checkpoints;
 
     size_t size() const {
-        size_t res = data.size();
+        size_t res = 0;
 
-        for (const auto & checkpoint : checkpoints) {
-            res += checkpoint.size();
+        res += data.size();
+
+        for (const auto & ckpt : checkpoints) {
+            res += ckpt.size();
         }
 
         return res;
@@ -614,7 +620,7 @@ struct server_prompt {
         return server_prompt {
             tokens.clone(),
             data,
-            checkpoints
+            checkpoints,
         };
     }
 };
@@ -637,9 +643,9 @@ struct server_prompt_cache {
 
     size_t n_tokens() const;
 
-    server_prompt * alloc(const server_prompt & prompt, size_t state_size);
+    server_prompt * alloc(const server_prompt & prompt, size_t state_size_main, size_t state_size_drft);
 
-    bool load(server_prompt & prompt, const server_tokens & tokens_new, llama_context * ctx, int32_t id_slot);
+    bool load(server_prompt & prompt, const server_tokens & tokens_new, llama_context * ctx_main, llama_context * ctx_drft, int32_t id_slot);
 
     void update();
 };

@@ -564,9 +564,20 @@ int ggml_metal_op_concat(ggml_metal_op_t ctx, int idx) {
     ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[1]), 2);
     ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op),         3);
 
-    const int nth = std::min(1024, ne0);
+    int nth = std::min(256, ne0);
 
-    ggml_metal_encoder_dispatch_threadgroups(enc, ne1, ne2, ne3, nth, 1, 1);
+    // when rows are small, we can batch them together in a single threadgroup
+    int nrptg = 1;
+    if (nth < 256) {
+        nrptg = std::min((256 + nth - 1) / nth, ne1);
+        if (nrptg * nth > 256) {
+            nrptg = 256 / nth;
+        }
+    }
+
+    const int nw0 = (ne1 + nrptg - 1) / nrptg;
+
+    ggml_metal_encoder_dispatch_threadgroups(enc, nw0, ne2, ne3, nth, nrptg, 1);
 
     return 1;
 }
@@ -816,9 +827,7 @@ int ggml_metal_op_unary(ggml_metal_op_t ctx, int idx) {
         ggml_metal_encoder_dispatch_threadgroups(enc, n, 1, 1, 1, 1, 1);
     } else {
         const int nth_max = MIN(256, ggml_metal_pipeline_max_theads_per_threadgroup(pipeline));
-
         const int nth = MIN(args.ne00, nth_max);
-
         const int nk0 = (args.ne00 + nth - 1)/nth;
 
         ggml_metal_encoder_dispatch_threadgroups(enc, nk0*ne01, ne02, ne03, nth, 1, 1);
@@ -1788,7 +1797,7 @@ int ggml_metal_op_set(ggml_metal_op_t ctx, int idx) {
         nk0 = ne10/ggml_blck_size(op->type);
     }
 
-    int nth = std::min<int>(nk0, ggml_metal_pipeline_max_theads_per_threadgroup(pipeline));
+    int nth = std::min<int>(nk0*ne11, 256);
 
     // when rows are small, we can batch them together in a single threadgroup
     int nrptg = 1;
@@ -1799,7 +1808,7 @@ int ggml_metal_op_set(ggml_metal_op_t ctx, int idx) {
             nrptg = (nth + nk0 - 1)/nk0;
             nth   = nk0;
 
-            if (nrptg*nth > ggml_metal_pipeline_max_theads_per_threadgroup(pipeline)) {
+            if (nrptg*nth > 256) {
                 nrptg--;
             }
         }
@@ -1863,7 +1872,7 @@ int ggml_metal_op_cpy(ggml_metal_op_t ctx, int idx) {
         nk0 = ne00/ggml_blck_size(op->type);
     }
 
-    int nth = std::min<int>(nk0, ggml_metal_pipeline_max_theads_per_threadgroup(pipeline));
+    int nth = std::min<int>(nk0*ne01, 256);
 
     // when rows are small, we can batch them together in a single threadgroup
     int nrptg = 1;
@@ -1874,7 +1883,7 @@ int ggml_metal_op_cpy(ggml_metal_op_t ctx, int idx) {
             nrptg = (nth + nk0 - 1)/nk0;
             nth   = nk0;
 
-            if (nrptg*nth > ggml_metal_pipeline_max_theads_per_threadgroup(pipeline)) {
+            if (nrptg*nth > 256) {
                 nrptg--;
             }
         }
@@ -2120,7 +2129,7 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
                 GGML_ABORT("unsupported ne11");
         };
 
-        auto pipeline = ggml_metal_library_get_pipeline_mul_mv_ext(lib, op->src[0]->type, op->src[1]->type, nsg, nxpsg, r1ptg);
+        auto pipeline = ggml_metal_library_get_pipeline_mul_mv_ext(lib, op, nsg, nxpsg, r1ptg);
 
         ggml_metal_kargs_mul_mv_ext args = {
             /*.ne00  =*/ ne00,
@@ -3626,16 +3635,26 @@ int ggml_metal_op_im2col(ggml_metal_op_t ctx, int idx) {
 
     auto pipeline = ggml_metal_library_get_pipeline_im2col(lib, op);
 
-    GGML_ASSERT(KH*KW <= ggml_metal_pipeline_max_theads_per_threadgroup(pipeline));
+    if (KH*KW <= ggml_metal_pipeline_max_theads_per_threadgroup(pipeline)) {
+        const uint64_t ntptg0 = std::min(ggml_metal_pipeline_max_theads_per_threadgroup(pipeline)/(KH*KW), N);
 
-    const uint64_t ntptg0 = std::min(ggml_metal_pipeline_max_theads_per_threadgroup(pipeline)/(KH*KW), N);
+        ggml_metal_encoder_set_pipeline(enc, pipeline);
+        ggml_metal_encoder_set_bytes   (enc, &args, sizeof(args), 0);
+        ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[1]), 1);
+        ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op),         2);
 
-    ggml_metal_encoder_set_pipeline(enc, pipeline);
-    ggml_metal_encoder_set_bytes   (enc, &args, sizeof(args), 0);
-    ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[1]), 1);
-    ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op),         2);
+        ggml_metal_encoder_dispatch_threadgroups(enc, IC, OH, OW, ntptg0, KH, KW);
+    } else {
+        const uint64_t n_threads = std::min(ggml_metal_pipeline_max_theads_per_threadgroup(pipeline), N);
+        const int64_t  quotient  = N / n_threads + (N % n_threads > 0 ? 1 : 0);
 
-    ggml_metal_encoder_dispatch_threadgroups(enc, IC, OH, OW, ntptg0, KH, KW);
+        ggml_metal_encoder_set_pipeline(enc, pipeline);
+        ggml_metal_encoder_set_bytes   (enc, &args, sizeof(args), 0);
+        ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[1]), 1);
+        ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op),         2);
+
+        ggml_metal_encoder_dispatch_threadgroups(enc, quotient * CHW, OH, OW, n_threads, 1, 1);
+    }
 
     return 1;
 }
@@ -4039,14 +4058,21 @@ int ggml_metal_op_pad(ggml_metal_op_t ctx, int idx) {
 
     auto pipeline = ggml_metal_library_get_pipeline_pad(lib, op);
 
-    const int nth = std::min(1024, ne0);
+    if (pipeline.c4) {
+        args.ne00 = ne00/4;
+        args.ne0  = ne0/4;
+    }
+
+    const int nth_max = MIN(64, ggml_metal_pipeline_max_theads_per_threadgroup(pipeline));
+    const int nth = MIN(args.ne0, nth_max);
+    const int nk0 = (args.ne0 + 1024 - 1)/1024; // note: 1024 is hardcoded in the kernel!
 
     ggml_metal_encoder_set_pipeline(enc, pipeline);
     ggml_metal_encoder_set_bytes   (enc, &args, sizeof(args), 0);
     ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[0]), 1);
     ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op),         2);
 
-    ggml_metal_encoder_dispatch_threadgroups(enc, ne1, ne2, ne3, nth, 1, 1);
+    ggml_metal_encoder_dispatch_threadgroups(enc, nk0*ne1, ne2, ne3, nth, 1, 1);
 
     return 1;
 }

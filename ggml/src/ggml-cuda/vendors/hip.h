@@ -48,6 +48,7 @@
 #define cublasSetMathMode(handle, mode) CUBLAS_STATUS_SUCCESS
 #define cublasSetStream hipblasSetStream
 #define cublasSgemm hipblasSgemm
+#define cublasSgemmStridedBatched hipblasSgemmStridedBatched
 #define cublasStatus_t hipblasStatus_t
 #define cublasOperation_t hipblasOperation_t
 #define cudaDevAttrCooperativeLaunch hipDeviceAttributeCooperativeLaunch

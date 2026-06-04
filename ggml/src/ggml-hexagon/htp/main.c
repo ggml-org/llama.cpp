@@ -12,6 +12,7 @@
 #include <HAP_mem.h>
 #include <HAP_power.h>
 #include <HAP_ps.h>
+#include <HAP_dcvs.h>
 #include <qurt.h>
 #include <qurt_thread.h>
 #include <qurt_memory.h>
@@ -63,8 +64,7 @@ AEEResult htp_iface_open(const char * uri, remote_handle64 * handle) {
 
         request.type                              = HAP_power_set_DCVS_v3;
         request.dcvs_v3.set_dcvs_enable           = TRUE;
-        request.dcvs_v3.dcvs_enable               = TRUE;
-        request.dcvs_v3.dcvs_option               = HAP_DCVS_V2_PERFORMANCE_MODE;
+        request.dcvs_v3.dcvs_enable               = FALSE;
         request.dcvs_v3.set_bus_params            = TRUE;
         request.dcvs_v3.bus_params.min_corner     = HAP_DCVS_VCORNER_MAX;
         request.dcvs_v3.bus_params.max_corner     = HAP_DCVS_VCORNER_MAX;
@@ -75,6 +75,10 @@ AEEResult htp_iface_open(const char * uri, remote_handle64 * handle) {
         request.dcvs_v3.core_params.target_corner = HAP_DCVS_VCORNER_MAX;
         request.dcvs_v3.set_sleep_disable         = TRUE;
         request.dcvs_v3.sleep_disable             = TRUE;
+
+#if (__HEXAGON_ARCH__ >= 79)
+        HAP_set_dcvs_v3_protected_bus_corners(&request, 1);
+#endif
         if ((err = HAP_power_set((void *) ctx, &request)) != 0) {
             return err;
         }
@@ -87,6 +91,27 @@ AEEResult htp_iface_open(const char * uri, remote_handle64 * handle) {
         }
     }
 
+#if __HVX_ARCH__ >= 75
+    {
+        // Power on HMX and set HMX clock
+        HAP_power_request_t request;
+        memset(&request, 0, sizeof(HAP_power_request_t));
+        request.type = HAP_power_set_HMX_v2;
+        request.hmx_v2.set_power     = TRUE;
+        request.hmx_v2.power_up      = TRUE;
+        request.hmx_v2.set_clock     = TRUE;
+        request.hmx_v2.target_corner = HAP_DCVS_EXP_VCORNER_MAX;
+        request.hmx_v2.min_corner    = HAP_DCVS_EXP_VCORNER_MAX;
+        request.hmx_v2.max_corner    = HAP_DCVS_EXP_VCORNER_MAX;
+        request.hmx_v2.perf_mode     = HAP_CLK_PERF_HIGH;
+        FARF(ALWAYS, "Setting HMX clock\n");
+        err = HAP_power_set((void *) ctx, &request);
+        if (err != AEE_SUCCESS) {
+            FARF(ERROR, "ggml-hex: error setting HMX clock.");
+            return err;
+        }
+    }
+#else
     {
         // Power on HMX
         HAP_power_request_t request;
@@ -94,28 +119,9 @@ AEEResult htp_iface_open(const char * uri, remote_handle64 * handle) {
         request.type         = HAP_power_set_HMX;
         request.hmx.power_up = TRUE;
         FARF(ALWAYS, "Powering HMX on\n");
-        err = HAP_power_set((void *) &ctx, &request);
+        err = HAP_power_set((void *) ctx, &request);
         if (err != AEE_SUCCESS) {
-            FARF(ERROR, "Error powering on HMX.");
-            return err;
-        }
-    }
-
-#if __HVX_ARCH__ >= 75
-    {
-        // Set HMX clock
-        HAP_power_request_t request;
-        memset(&request, 0, sizeof(HAP_power_request_t));
-        request.type = HAP_power_set_HMX_v2;
-        request.hmx_v2.set_clock = TRUE;
-        request.hmx_v2.target_corner = HAP_DCVS_EXP_VCORNER_MAX;
-        request.hmx_v2.min_corner = HAP_DCVS_EXP_VCORNER_MAX;
-        request.hmx_v2.max_corner = HAP_DCVS_EXP_VCORNER_MAX;
-        request.hmx_v2.perf_mode = HAP_CLK_PERF_HIGH;
-        FARF(ALWAYS, "Setting HMX clock\n");
-        err = HAP_power_set((void *) &ctx, &request);
-        if (err != AEE_SUCCESS) {
-            FARF(ERROR, "Error setting HMX clock.");
+            FARF(ERROR, "ggml-hex: error powering on HMX.");
             return err;
         }
     }
@@ -418,14 +424,21 @@ AEEResult htp_iface_start(remote_handle64 handle, uint32 sess_id, uint64 dsp_que
 
     ctx->n_threads = n_hvx;
     for (int i = 0; i < ctx->n_threads; i++) {
-        // see discussion https://github.com/ggml-org/llama.cpp/pull/18151#discussion_r2632388541
-        ctx->dma[i] = dma_queue_create(128);
+        ctx->dma[i] = dma_queue_create(256); // queue depth
     }
+
+    ctx->ddr_spad_size = 512 * 1024; // 512 KB
+    ctx->ddr_spad_base = memalign(128, ctx->ddr_spad_size);
 
     // init worker pool
     err = worker_pool_init(&ctx->worker_pool, n_hvx);
     if (err != AEE_SUCCESS) {
         FARF(ERROR, "Unable to create worker pool");
+        if (ctx->ddr_spad_base) {
+            free(ctx->ddr_spad_base);
+            ctx->ddr_spad_base = NULL;
+            ctx->ddr_spad_size = 0;
+        }
         return err;
     }
 
@@ -472,6 +485,12 @@ AEEResult htp_iface_stop(remote_handle64 handle) {
 #endif
 
     vtcm_free(ctx);
+
+    if (ctx->ddr_spad_base) {
+        free(ctx->ddr_spad_base);
+        ctx->ddr_spad_base = NULL;
+        ctx->ddr_spad_size = 0;
+    }
 
     return AEE_SUCCESS;
 }
@@ -534,7 +553,9 @@ static int execute_op(struct htp_ops_context * octx) {
         case HTP_OP_ADD_ID:
             return op_binary(octx);
 
+        case HTP_OP_NORM:
         case HTP_OP_RMS_NORM:
+        case HTP_OP_RMS_NORM_MUL:
         case HTP_OP_SCALE:
         case HTP_OP_SQR:
         case HTP_OP_SQRT:
@@ -542,6 +563,8 @@ static int execute_op(struct htp_ops_context * octx) {
         case HTP_OP_UNARY_SIGMOID:
         case HTP_OP_UNARY_NEG:
         case HTP_OP_UNARY_EXP:
+        case HTP_OP_UNARY_TANH:
+        case HTP_OP_L2_NORM:
             return op_unary(octx);
 
         case HTP_OP_UNARY_SILU:
@@ -592,6 +615,18 @@ static int execute_op(struct htp_ops_context * octx) {
 
         case HTP_OP_SOLVE_TRI:
             return op_solve_tri(octx);
+
+        case HTP_OP_PAD:
+            return op_pad(octx);
+
+        case HTP_OP_CONCAT:
+            return op_concat(octx);
+
+        case HTP_OP_GATED_DELTA_NET:
+            return op_gated_delta_net(octx);
+
+        case HTP_OP_TRI:
+            return op_tri(octx);
 
         case HTP_OP_INVALID:
             break;
@@ -837,6 +872,11 @@ static void htp_packet_callback(dspqueue_t queue, int error, void * context) {
         for (uint32_t i=0; i < n_ops; i++) {
             struct profile_data prof;
 
+            if (i == (n_ops-1)) {
+                // wake up the host before starting the last op
+                dspqueue_write_early_wakeup_noblock(queue, 0, 0);
+            }
+
             profile_start(ctx->profiler, &prof);
 
             proc_op_req(octx, tens, i, &ops[i]);
@@ -852,8 +892,6 @@ static void htp_packet_callback(dspqueue_t queue, int error, void * context) {
                 }
             }
         }
-
-        // dspqueue_write_early_wakeup_noblock(ctx->queue, 10, 0);
 
         struct htp_opbatch_rsp rsp;
         rsp.id        = req.id;

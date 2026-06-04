@@ -15,7 +15,8 @@ void llama_model_llama4::load_arch_hparams(llama_model_loader & ml) {
         hparams.n_attn_temp_floor_scale = 8192;
         hparams.f_attn_temp_scale       = 0.1f;
         hparams.f_attn_temp_offset      = 1.0f;
-        uint32_t swa_period             = 4; // pattern: 3 chunked - 1 full
+
+        uint32_t swa_period = 4; // pattern: 3 chunked - 1 full
         ml.get_key_or_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, swa_period, false);
         hparams.set_swa_pattern(swa_period);
 
@@ -260,7 +261,7 @@ llama_model_llama4::graph<iswa>::graph(const llama_model & model, const llm_grap
     res->t_embd = cur;
 
     // lm_head
-    cur = build_lora_mm(model.output, cur);
+    cur = build_lora_mm(model.output, cur, model.output_s);
 
     cb(cur, "result_output", -1);
     res->t_logits = cur;

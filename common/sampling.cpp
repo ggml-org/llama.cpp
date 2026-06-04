@@ -293,7 +293,7 @@ struct common_sampler * common_sampler_init(const struct llama_model * model, st
     }
 
     // reasoning budget sampler (skip when budget is unlimited unless a lazy grammar is active, which needs rbudget for thinking-block suppression)
-    if (!params.reasoning_budget_start.empty() && !params.reasoning_budget_end.empty() && (params.grammar_lazy || params.reasoning_budget_tokens >= 0)) {
+    if (!params.reasoning_budget_start.empty() && !params.reasoning_budget_end.empty() && (params.grammar_lazy || params.reasoning_budget_tokens >= 0 || params.reasoning_control)) {
         rbudget = common_reasoning_budget_init(
             vocab,
             params.reasoning_budget_start,
@@ -547,6 +547,8 @@ llama_token common_sampler_sample(struct common_sampler * gsmpl, struct llama_co
     auto & chain = gsmpl->chain;
     auto & cur_p = gsmpl->cur_p; // initialized by set_logits
 
+    gsmpl->set_logits(ctx, idx);
+
     // Check if a backend sampler has already sampled a token in which case we
     // return that token id directly.
     {
@@ -558,16 +560,16 @@ llama_token common_sampler_sample(struct common_sampler * gsmpl, struct llama_co
             GGML_ASSERT(!gsmpl->grmr    && "using grammar in combination with backend sampling is not supported");
             GGML_ASSERT(!gsmpl->rbudget && "using reasoning budget in combination with backend sampling is not supported");
 
-            // TODO: simplify
-            gsmpl->cur.resize(1);
-            gsmpl->cur[0] = { id, 0.0f, 1.0f };
-            cur_p = { gsmpl->cur.data(), gsmpl->cur.size(), 0, true };
+            for (size_t i = 0; i < cur_p.size; ++i) {
+                if (cur_p.data[i].id == id) {
+                    cur_p.selected = i;
+                    break;
+                }
+            }
 
             return id;
         }
     }
-
-    gsmpl->set_logits(ctx, idx);
 
     // apply reasoning budget first
     llama_sampler_apply(rbudget, &cur_p);
@@ -657,6 +659,14 @@ std::vector<llama_token> common_sampler_sample_and_accept_n(struct common_sample
 
 uint32_t common_sampler_get_seed(const struct common_sampler * gsmpl) {
     return llama_sampler_get_seed(gsmpl->chain);
+}
+
+bool common_sampler_reasoning_budget_force(struct common_sampler * gsmpl) {
+    if (!gsmpl) {
+        return false;
+    }
+
+    return common_reasoning_budget_force(gsmpl->rbudget);
 }
 
 // helpers
