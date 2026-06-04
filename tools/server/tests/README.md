@@ -63,6 +63,12 @@ Hint: You can compile and run test in single command, useful for local developme
 cmake --build build -j --target llama-server && ./tools/server/tests/tests.sh
 ```
 
+For a quick local smoke test of the built-in `question` endpoint:
+
+```shell
+cmake --build build -j --target llama-server && ./tools/server/tests/smoke_builtin_tools.sh
+```
+
 To see all available arguments, please refer to [pytest documentation](https://docs.pytest.org/en/stable/how-to/usage.html)
 
 ### Debugging external llama-server

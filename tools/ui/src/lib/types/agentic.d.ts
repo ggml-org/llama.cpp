@@ -72,6 +72,39 @@ export interface AgenticSession {
 	pendingPermissionRequest: { toolName: string; serverLabel: string } | null;
 }
 
+export interface PendingBuiltinQuestionOption {
+	label: string;
+	description: string;
+}
+
+export type AgenticQuestionType = 'single_choice' | 'multiple_choice' | 'freeform';
+
+export interface AgenticQuestionPrompt {
+	question: string;
+	header: string;
+	options: PendingBuiltinQuestionOption[];
+	type: AgenticQuestionType;
+	multiple?: boolean;
+	custom?: boolean;
+}
+
+export type AgenticQuestionAnswers = string[][];
+
+export interface PendingBuiltinQuestionItem {
+	question: string;
+	header: string;
+	options?: PendingBuiltinQuestionOption[];
+	multiple?: boolean;
+	custom?: boolean;
+}
+
+export interface PendingBuiltinQuestionRequest {
+	requestID: string;
+	conversationId: string;
+	toolCallId: string;
+	questions: AgenticQuestionPrompt[];
+}
+
 /**
  * Callbacks for agentic flow execution.
  *

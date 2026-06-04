@@ -29,7 +29,11 @@ import { permissionsStore } from '$lib/stores/permissions.svelte';
 import { ToolSource, ToolPermissionDecision } from '$lib/enums';
 import { SvelteMap } from 'svelte/reactivity';
 import { ToolsService } from '$lib/services/tools.service';
-import { isAbortError } from '$lib/utils';
+import {
+	apiFetch,
+	isAbortError,
+	parseQuestionToolArguments
+} from '$lib/utils';
 import { DEFAULT_AGENTIC_CONFIG, NEWLINE_SEPARATOR } from '$lib/constants';
 import {
 	IMAGE_MIME_TO_EXTENSION,
@@ -42,7 +46,8 @@ import {
 	ContentPartType,
 	MessageRole,
 	MimeTypePrefix,
-	ToolCallType
+	ToolCallType,
+	ToolResponseField
 } from '$lib/enums';
 import type {
 	AgenticFlowParams,
@@ -58,7 +63,8 @@ import type {
 	AgenticToolCallList,
 	AgenticFlowCallbacks,
 	AgenticFlowOptions,
-	SteeringMessage
+	SteeringMessage,
+	PendingBuiltinQuestionRequest
 } from '$lib/types/agentic';
 import type {
 	ApiChatCompletionToolCall,
@@ -145,6 +151,7 @@ class AgenticStore {
 	private _pendingContinueRequests = new SvelteMap<string, boolean>();
 	/** Non-reactive: stores resolve functions for pending continue Promises */
 	private _continueResolvers = new Map<string, (shouldContinue: boolean) => void>();
+	private _pendingBuiltinQuestions = new SvelteMap<string, PendingBuiltinQuestionRequest | null>();
 
 	/** Reactive: queued steering messages to inject between turns */
 	private _steeringMessages = new SvelteMap<string, SteeringMessage>();
@@ -215,6 +222,10 @@ class AgenticStore {
 		return this._pendingContinueRequests.get(conversationId) ?? false;
 	}
 
+	pendingBuiltinQuestion(conversationId: string): PendingBuiltinQuestionRequest | null {
+		return this._pendingBuiltinQuestions.get(conversationId) ?? null;
+	}
+
 	resolveContinue(conversationId: string, shouldContinue: boolean): void {
 		const resolver = this._continueResolvers.get(conversationId);
 		if (resolver) {
@@ -233,6 +244,42 @@ class AgenticStore {
 
 	clearError(conversationId: string): void {
 		this.updateSession(conversationId, { lastError: null });
+	}
+
+	async replyBuiltinQuestion(
+		conversationId: string,
+		answers: string[][],
+		rejected = false,
+		signal?: AbortSignal
+	): Promise<{ toolCallId: string; content: string; isError: boolean } | null> {
+		const pending = this._pendingBuiltinQuestions.get(conversationId);
+		if (!pending) return null;
+
+		const result = await apiFetch<Record<string, unknown>>('/tools/reply', {
+			method: 'POST',
+			body: JSON.stringify({
+				request_id: pending.requestID,
+				conversation_id: conversationId,
+				answers,
+				rejected
+			}),
+			signal
+		});
+
+		this._pendingBuiltinQuestions.set(conversationId, null);
+
+		if (ToolResponseField.ERROR in result) {
+			throw new Error(String(result[ToolResponseField.ERROR]));
+		}
+
+		return {
+			toolCallId: pending.toolCallId,
+			content:
+				ToolResponseField.PLAIN_TEXT in result
+					? String(result[ToolResponseField.PLAIN_TEXT])
+					: JSON.stringify(result),
+			isError: result.is_error === true
+		};
 	}
 
 	hasPendingSteeringMessage(conversationId: string): boolean {
@@ -390,6 +437,7 @@ class AgenticStore {
 		this._permissionResolvers.delete(conversationId);
 		this._pendingContinueRequests.set(conversationId, false);
 		this._continueResolvers.delete(conversationId);
+		this._pendingBuiltinQuestions.set(conversationId, null);
 		this._steeringMessages.delete(conversationId);
 
 		// Ensure built-in tools are fetched before checking if agentic is enabled
@@ -780,11 +828,34 @@ class AgenticStore {
 					try {
 						if (toolSource === ToolSource.BUILTIN) {
 							const args = this.parseToolArguments(toolCall.function.arguments);
-							const executionResult = await ToolsService.executeTool(toolName, args, signal);
+							const executionResult = await ToolsService.executeTool(
+								toolName,
+								args,
+								{
+									conversation_id: conversationId,
+									tool_call_id: toolCall.id
+								},
+								signal
+							);
 
 							result = executionResult.content;
 
 							if (executionResult.isError) toolSuccess = false;
+
+							if (executionResult.awaitingUser?.kind === 'question') {
+								const payload = executionResult.awaitingUser.payload;
+								const questions = parseQuestionToolArguments(payload);
+
+								this._pendingBuiltinQuestions.set(conversationId, {
+									requestID: executionResult.awaitingUser.requestID,
+									conversationId,
+									toolCallId: toolCall.id,
+									questions
+								});
+
+								onFlowComplete?.(this.buildFinalTimings(capturedTimings, agenticTimings));
+								return;
+							}
 						} else {
 							const mcpCall: MCPToolCall = {
 								id: toolCall.id,
@@ -998,6 +1069,19 @@ export function agenticPendingContinueRequest(conversationId: string) {
 
 export function agenticResolveContinue(conversationId: string, shouldContinue: boolean) {
 	agenticStore.resolveContinue(conversationId, shouldContinue);
+}
+
+export function agenticPendingBuiltinQuestion(conversationId: string) {
+	return agenticStore.pendingBuiltinQuestion(conversationId);
+}
+
+export async function agenticReplyBuiltinQuestion(
+	conversationId: string,
+	answers: string[][],
+	rejected = false,
+	signal?: AbortSignal
+) {
+	return agenticStore.replyBuiltinQuestion(conversationId, answers, rejected, signal);
 }
 
 export function agenticHasPendingSteeringMessage(conversationId: string) {

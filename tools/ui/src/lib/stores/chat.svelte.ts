@@ -16,7 +16,11 @@ import { DatabaseService } from '$lib/services/database.service';
 import { ChatService } from '$lib/services/chat.service';
 import { conversationsStore } from '$lib/stores/conversations.svelte';
 import { config } from '$lib/stores/settings.svelte';
-import { agenticStore } from '$lib/stores/agentic.svelte';
+import {
+	agenticStore,
+	agenticPendingBuiltinQuestion,
+	agenticReplyBuiltinQuestion
+} from '$lib/stores/agentic.svelte';
 import { mcpStore } from '$lib/stores/mcp.svelte';
 import { contextSize, isRouterMode } from '$lib/stores/server.svelte';
 import {
@@ -1342,6 +1346,80 @@ class ChatStore {
 		} catch (error) {
 			if (!isAbortError(error)) console.error('Failed to continue agentic turn:', error);
 			this.setChatLoading(activeConv.id, false);
+		}
+	}
+
+	async answerBuiltinQuestion(
+		conversationId: string,
+		answers: string[][],
+		options?: { rejected?: boolean }
+	): Promise<void> {
+		const activeConv = conversationsStore.activeConversation;
+		if (!activeConv || activeConv.id !== conversationId || this.isChatLoadingInternal(conversationId)) return;
+
+		const pending = agenticPendingBuiltinQuestion(conversationId);
+		if (!pending) return;
+
+		this.setChatLoading(conversationId, true);
+		this.clearChatStreaming(conversationId);
+
+		try {
+			const reply = await agenticReplyBuiltinQuestion(
+				conversationId,
+				answers,
+				options?.rejected === true
+			);
+			if (!reply) {
+				this.setChatLoading(conversationId, false);
+				return;
+			}
+
+			const activeMessages = conversationsStore.activeMessages;
+			const assistantIndex = activeMessages.findIndex((message) => {
+				if (message.role !== MessageRole.ASSISTANT || !message.toolCalls) return false;
+
+				try {
+					const toolCalls = JSON.parse(message.toolCalls) as Array<{ id?: string }>;
+					return toolCalls.some((call) => call.id === reply.toolCallId);
+				} catch {
+					return false;
+				}
+			});
+
+			if (assistantIndex === -1) {
+				this.setChatLoading(conversationId, false);
+				return;
+			}
+
+			const assistantMessage = activeMessages[assistantIndex];
+			const toolMessage = await DatabaseService.createMessageBranch(
+				{
+					convId: conversationId,
+					type: MessageType.TEXT,
+					role: MessageRole.TOOL,
+					content: reply.content,
+					toolCallId: reply.toolCallId,
+					timestamp: Date.now(),
+					toolCalls: '',
+					children: []
+				},
+				assistantMessage.id
+			);
+
+			conversationsStore.addMessageToActive(toolMessage);
+			await conversationsStore.updateCurrentNode(toolMessage.id);
+
+			const refreshedMessages = conversationsStore.activeMessages;
+			const toolIndex = refreshedMessages.findIndex((message) => message.id === toolMessage.id);
+			if (toolIndex === -1) {
+				this.setChatLoading(conversationId, false);
+				return;
+			}
+
+			await this.continueAsNextAgenticTurn(toolIndex);
+		} catch (error) {
+			this.setChatLoading(conversationId, false);
+			throw error;
 		}
 	}
 
