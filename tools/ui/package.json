@@ -53,6 +53,7 @@
 		"eslint-plugin-storybook": "10.2.4",
 		"eslint-plugin-svelte": "3.15.0",
 		"globals": "16.3.0",
+		"heic-to": "1.5.2",
 		"highlight.js": "11.11.1",
 		"http-server": "14.1.1",
 		"mdast": "3.0.0",

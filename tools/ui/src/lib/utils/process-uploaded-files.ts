@@ -1,5 +1,6 @@
 import { isSvgMimeType, svgBase64UrlToPngDataURL } from './svg-to-png';
 import { isWebpMimeType, webpBase64UrlToPngDataURL } from './webp-to-png';
+import { heicFileToPngDataURL, isHeicMimeType } from './heic-to-png';
 import { FileTypeCategory } from '$lib/enums';
 import { SETTINGS_KEYS } from '$lib/constants';
 import { modelsStore } from '$lib/stores/models.svelte';
@@ -68,7 +69,7 @@ export async function processFilesToChatUploaded(
 			if (getFileTypeCategory(file.type) === FileTypeCategory.IMAGE) {
 				let preview = await readFileAsDataURL(file);
 
-				// Normalize SVG and WebP to PNG in previews
+				// Normalize SVG, WebP and HEIC to PNG in previews
 				if (isSvgMimeType(file.type)) {
 					try {
 						preview = await svgBase64UrlToPngDataURL(preview);
@@ -80,6 +81,12 @@ export async function processFilesToChatUploaded(
 						preview = await webpBase64UrlToPngDataURL(preview);
 					} catch (err) {
 						console.error('Failed to convert WebP to PNG:', err);
+					}
+				} else if (isHeicMimeType(file.type)) {
+					try {
+						preview = await heicFileToPngDataURL(file);
+					} catch (err) {
+						console.error('Failed to convert HEIC to PNG:', err);
 					}
 				}
 
