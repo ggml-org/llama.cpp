@@ -35,6 +35,7 @@ std::vector<std::unique_ptr<field>> make_llama_cmpl_schema(const common_params &
         ->set_desc("Include prompt processing progress events in stream mode"));
 
     add((new field_num("n_predict", params.n_predict))
+        ->set_hard_limits(-1, INT32_MAX)
         ->add_alias("max_completion_tokens")
         ->add_alias("max_tokens")
         ->set_desc("Set the maximum number of tokens to predict. When 0, no tokens will be generated but the prompt is evaluated into the cache"));
@@ -44,7 +45,7 @@ std::vector<std::unique_ptr<field>> make_llama_cmpl_schema(const common_params &
         ->set_desc("Specify the minimum line indentation for the generated text in number of whitespace characters. Useful for code completion tasks"));
 
     add((new field_num("n_keep", params.n_keep))
-        ->set_hard_limits(0, INT32_MAX)
+        ->set_hard_limits(-1, INT32_MAX)
         ->set_desc("Specify the number of tokens from the initial prompt to retain when context size is exceeded. Use -1 to retain all tokens from the prompt"));
 
     add((new field_num("n_discard", params.n_discard))
@@ -79,6 +80,7 @@ std::vector<std::unique_ptr<field>> make_llama_cmpl_schema(const common_params &
     //
 
     add((new field_num("top_k", params.sampling.top_k))
+        ->set_limits(0, INT32_MAX)
         ->set_desc("Limit the next token selection to the K most probable tokens (0 = disabled)"));
 
     add((new field_num("top_p", params.sampling.top_p))
@@ -115,18 +117,22 @@ std::vector<std::unique_ptr<field>> make_llama_cmpl_schema(const common_params &
         ->set_desc("Dynamic temperature exponent, controls how entropy maps to temperature"));
 
     add((new field_num("repeat_last_n", params.sampling.penalty_last_n))
+        ->set_hard_limits(-1, INT32_MAX)
         ->set_desc("Last n tokens to consider for penalizing repetition (0 = disabled, -1 = ctx-size)"));
 
     add((new field_num("repeat_penalty", params.sampling.penalty_repeat))
         ->set_desc("Control the repetition of token sequences in the generated text (1.0 = disabled)"));
 
     add((new field_num("frequency_penalty", params.sampling.penalty_freq))
+        ->set_limits(0.0f, std::numeric_limits<float>::infinity())
         ->set_desc("Repeat alpha frequency penalty (0 = disabled)"));
 
     add((new field_num("presence_penalty", params.sampling.penalty_present))
+        ->set_limits(0.0f, std::numeric_limits<float>::infinity())
         ->set_desc("Repeat alpha presence penalty (0 = disabled)"));
 
     add((new field_num("dry_multiplier", params.sampling.dry_multiplier))
+        ->set_limits(0.0f, std::numeric_limits<float>::infinity())
         ->set_desc("Set the DRY (Don't Repeat Yourself) repetition penalty multiplier (0 = disabled)"));
 
     add((new field_num("dry_base", params.sampling.dry_base))
@@ -137,9 +143,11 @@ std::vector<std::unique_ptr<field>> make_llama_cmpl_schema(const common_params &
         }));
 
     add((new field_num("dry_allowed_length", params.sampling.dry_allowed_length))
+        ->set_hard_limits(0, INT32_MAX)
         ->set_desc("Tokens that extend repetition beyond this length receive exponentially increasing penalty: multiplier * base ^ (sequence_length - allowed_length)"));
 
     add((new field_num("dry_penalty_last_n", params.sampling.dry_penalty_last_n))
+        ->set_hard_limits(-1, INT32_MAX)
         ->set_desc("How many tokens to scan for repetitions (0 = disabled, -1 = context size)"));
 
     add((new field_num("mirostat", params.sampling.mirostat))
@@ -153,7 +161,7 @@ std::vector<std::unique_ptr<field>> make_llama_cmpl_schema(const common_params &
         ->set_desc("Set the Mirostat learning rate, parameter eta"));
 
     add((new field_num("adaptive_target", params.sampling.adaptive_target))
-        ->set_hard_limits(0.0f, 1.0f)
+        ->set_limits(-std::numeric_limits<float>::max(), 1.0f)
         ->set_desc("Adaptive sampling target entropy (valid range 0.0 to 1.0; negative = disabled)"));
 
     add((new field_num("adaptive_decay", params.sampling.adaptive_decay))
@@ -367,8 +375,8 @@ std::vector<std::unique_ptr<field>> make_llama_cmpl_schema(const common_params &
         ->set_desc("Create the budget sampler on demand so reasoning can be ended at runtime"));
 
     add((new field_num("reasoning_budget_tokens", params.sampling.reasoning_budget_tokens))
-        ->set_hard_limits(0, INT32_MAX)
-        ->set_desc("Number of tokens in the reasoning budget"));
+        ->set_hard_limits(-1, INT32_MAX)
+        ->set_desc("Number of tokens in the reasoning budget (-1 = disabled)"));
 
     add((new field_str("reasoning_budget_start_tag"))
         ->set_desc("Token string marking the start of the reasoning budget section")
@@ -482,6 +490,7 @@ std::vector<std::unique_ptr<field>> make_llama_cmpl_schema(const common_params &
 task_params eval_llama_cmpl_schema(
                 const llama_vocab * vocab,
                 const common_params & params_base,
+                const int n_ctx_slot,
                 const std::vector<llama_logit_bias> & logit_bias_eog,
                 const json & data) {
     task_params params;
@@ -514,18 +523,18 @@ task_params eval_llama_cmpl_schema(
 
     // post-processing
     {
+        if (params.sampling.penalty_last_n == -1) {
+            // note: should be the slot's context and not the full context, but it's ok
+            params.sampling.penalty_last_n = n_ctx_slot;
+        }
+
+        if (params.sampling.dry_penalty_last_n == -1) {
+            params.sampling.dry_penalty_last_n = n_ctx_slot;
+        }
+
         // if "reasoning_format" is not provided, its handler will not be called, we will need to handle it here
         auto reasoning_format = params.chat_parser_params.reasoning_format;
         params.chat_parser_params.reasoning_in_content = params.stream && (reasoning_format == COMMON_REASONING_FORMAT_DEEPSEEK_LEGACY);
-    }
-
-    {
-        if (params.sampling.penalty_last_n < -1) {
-            throw std::runtime_error("Error: repeat_last_n must be >= -1");
-        }
-        if (params.sampling.dry_penalty_last_n < -1) {
-            throw std::runtime_error("Error: dry_penalty_last_n must be >= -1");
-        }
     }
 
     // debugging
@@ -552,11 +561,11 @@ void field_num<T>::eval(field_eval_context & ctx, const json & data) {
             if (custom_handler) {
                 custom_handler(ctx, data);
             } else if (!is_hard_limit) {
-                val = std::max(min, std::min(max, data.at(n).get<T>()));
+                val = std::max(min, std::min(max, data.at(n).template get<T>()));
             } else {
-                T tmp = data.at(n).get<T>();
+                T tmp = data.at(n).template get<T>();
                 if (tmp < min || tmp > max) {
-                    throw std::invalid_argument("Value for \"" + n + "\" must be between " + std::to_string(min) + " and " + std::to_string(max));
+                    throw std::invalid_argument(std::string("Value for \"") + n + "\" must be between " + std::to_string(min) + " <= value <= " + std::to_string(max) + ", but got " + std::to_string(tmp));
                 }
                 val = tmp;
             }
@@ -589,11 +598,10 @@ void field_bool::eval(field_eval_context & ctx, const json & data) {
 }
 
 void field_json::eval(field_eval_context & ctx, const json & data) {
+    GGML_ASSERT(custom_handler);
     for (const auto & n : name) {
         if (data.contains(n)) {
-            if (custom_handler) {
-                custom_handler(ctx, data);
-            }
+            custom_handler(ctx, data);
             return;
         }
     }
