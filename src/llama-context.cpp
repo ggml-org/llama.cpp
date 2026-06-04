@@ -377,6 +377,9 @@ llama_context::llama_context(
             LLAMA_LOG_INFO("%s: pipeline parallelism enabled\n", __func__);
         } else {
             LLAMA_LOG_INFO("%s: pipeline parallelism disabled\n", __func__);
+            if (cparams.pp == LLAMA_PIPELINE_PARALLELISM_ENABLED) {
+                throw std::runtime_error("pipeline parallelism enabled by user but unsupported in this configuration");
+            }
         }
 
         sched_reserve();
