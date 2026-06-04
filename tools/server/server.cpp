@@ -217,7 +217,7 @@ int llama_server(int argc, char ** argv) {
     // Save & load slots
     ctx_http.get ("/slots",                    ex_wrapper(routes.get_slots));
     ctx_http.post("/slots/:id_slot",           ex_wrapper(routes.post_slots));
-    ctx_http.post("/requantize_kvcache", ex_wrapper(routes.post_requantize_kvcache));
+    ctx_http.post("/cache/requantize", ex_wrapper(routes.post_cache_requantize));
 
     // Google Cloud Platform (Vertex AI) compat
     ctx_http.register_gcp_compat();
