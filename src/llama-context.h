@@ -218,7 +218,7 @@ private:
 
     // Make sure enough space is available for outputs.
     // Returns max number of outputs for which space was reserved.
-    uint32_t output_reserve(int32_t n_outputs);
+    uint32_t output_reserve(int32_t n_outputs, int32_t n_outputs_pre_norm = -1);
 
     void output_reorder();
 
@@ -282,10 +282,11 @@ private:
     // populated only when pooling_type == LLAMA_POOLING_TYPE_NONE
     buffer_view<float> embd = {nullptr, 0};
 
-    // hidden state before the final output norm (2-dimensional array: [n_outputs][n_embd])
+    // hidden state before the final output norm (2-dimensional array: [n_outputs_pre_norm][n_embd])
     // populated only when cparams.embeddings_pre_norm is enabled and the model graph
     // sets llm_graph_result::t_h_pre_norm
     buffer_view<float> embd_pre_norm = {nullptr, 0};
+    int32_t n_outputs_pre_norm = 0;
 
     struct sampling_info {
         // !samplers.empty() to check if any samplers are active
