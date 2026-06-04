@@ -5725,6 +5725,12 @@ static vk_device ggml_vk_get_device(size_t idx) {
         device->suballocation_block_size = std::min(device->suballocation_block_size, device->max_memory_allocation_size);
 
         device->subgroup_size = subgroup_props.subgroupSize;
+#ifdef __APPLE__
+        if (device->driver_id == vk::DriverId::eMoltenvk) {
+            // MoltenVK reports subgroupSize=64, but Metal's actual SIMD-group size is 32.
+            device->subgroup_size = std::min(device->subgroup_size, 32u);
+        }
+#endif
         device->subgroup_size_log2 = uint32_t(log2f(float(device->subgroup_size)));
         device->uma = device->properties.deviceType == vk::PhysicalDeviceType::eIntegratedGpu;
         if (sm_builtins) {
@@ -5967,6 +5973,13 @@ static vk_device ggml_vk_get_device(size_t idx) {
         if (device->subgroup_size_control) {
             device->subgroup_min_size = subgroup_size_control_props.minSubgroupSize;
             device->subgroup_max_size = subgroup_size_control_props.maxSubgroupSize;
+#ifdef __APPLE__
+            if (device->driver_id == vk::DriverId::eMoltenvk) {
+                // MoltenVK reports subgroupSize=64, but Metal's actual SIMD-group size is 32.
+                device->subgroup_min_size = std::min(device->subgroup_min_size, 32u);
+                device->subgroup_max_size = std::min(device->subgroup_max_size, 32u);
+            }
+#endif
             device_extensions.push_back("VK_EXT_subgroup_size_control");
         }
 
@@ -6522,7 +6535,13 @@ static void ggml_vk_print_gpu_info(size_t idx) {
 #endif
 
     uint32_t default_subgroup_size = get_subgroup_size("", device_architecture);
-    const size_t subgroup_size = (default_subgroup_size != 0) ? default_subgroup_size : subgroup_props.subgroupSize;
+    size_t subgroup_size = (default_subgroup_size != 0) ? default_subgroup_size : subgroup_props.subgroupSize;
+#ifdef __APPLE__
+    if (driver_props.driverID == vk::DriverId::eMoltenvk) {
+        // MoltenVK reports subgroupSize=64, but Metal's actual SIMD-group size is 32.
+        subgroup_size = std::min(subgroup_size, (size_t)32);
+    }
+#endif
     const bool uma = props2.properties.deviceType == vk::PhysicalDeviceType::eIntegratedGpu;
 
     integer_dot_product = integer_dot_product
