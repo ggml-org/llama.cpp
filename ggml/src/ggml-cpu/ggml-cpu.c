@@ -19,8 +19,8 @@
 #    include "ggml-ifairy-lut.h"
 #endif
 
-// debug helper: last node being computed (for crash diagnostics)
-extern struct ggml_tensor * ggml_debug_last_node;
+// Keep a local last-node pointer for CPU-side diagnostics to avoid cross-DLL globals on Windows.
+static struct ggml_tensor * ggml_debug_last_node = NULL;
 
 #if defined(_MSC_VER) || defined(__MINGW32__)
 #include <malloc.h> // using malloc.h with MSC/MINGW

@@ -5,6 +5,9 @@
 #include "ggml-backend.h"
 #include "ggml-cpu.h"
 #include "ggml.h"
+#ifdef GGML_USE_OPENCL
+#include "ggml-opencl.h"
+#endif
 
 // Include internal quantization headers for ifairy types
 extern "C" {
@@ -384,6 +387,243 @@ static float pack_bf16_pair(float real, float imag) {
     memcpy(&out, pair, sizeof(out));
     return out;
 }
+
+#ifdef GGML_USE_OPENCL
+static bool run_ifairy_split_backend(ggml_backend_t backend,
+                                     const std::vector<float> & input_packed,
+                                     int64_t ne0,
+                                     int64_t ne1,
+                                     int64_t ne2,
+                                     int64_t ne3,
+                                     std::vector<float> & output_split) {
+    struct ggml_init_params params = {
+        /*.mem_size   =*/32 * 1024 * 1024,
+        /*.mem_buffer =*/NULL,
+        /*.no_alloc   =*/true,
+    };
+
+    ggml_context * ctx = ggml_init(params);
+    if (!ctx) {
+        return false;
+    }
+
+    ggml_tensor * src = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, ne0, ne1, ne2, ne3);
+    ggml_tensor * out = ggml_ifairy_split(ctx, src);
+
+    ggml_cgraph * gf = ggml_new_graph(ctx);
+    ggml_build_forward_expand(gf, out);
+
+    ggml_backend_buffer_t buf = ggml_backend_alloc_ctx_tensors(ctx, backend);
+    if (!buf) {
+        ggml_free(ctx);
+        return false;
+    }
+
+    ggml_backend_tensor_set(src, input_packed.data(), 0, ggml_nbytes(src));
+
+    const bool ok = ggml_backend_graph_compute(backend, gf) == GGML_STATUS_SUCCESS;
+    if (ok) {
+        output_split.resize((size_t) ggml_nelements(out));
+        ggml_backend_tensor_get(out, output_split.data(), 0, ggml_nbytes(out));
+    }
+
+    ggml_backend_buffer_free(buf);
+    ggml_free(ctx);
+    return ok;
+}
+
+static bool run_ifairy_merge_backend(ggml_backend_t backend,
+                                     const std::vector<float> & input_split,
+                                     int64_t ne0_split,
+                                     int64_t ne1,
+                                     int64_t ne2,
+                                     int64_t ne3,
+                                     std::vector<uint32_t> & output_packed) {
+    struct ggml_init_params params = {
+        /*.mem_size   =*/32 * 1024 * 1024,
+        /*.mem_buffer =*/NULL,
+        /*.no_alloc   =*/true,
+    };
+
+    ggml_context * ctx = ggml_init(params);
+    if (!ctx) {
+        return false;
+    }
+
+    ggml_tensor * src = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, ne0_split, ne1, ne2, ne3);
+    ggml_tensor * out = ggml_ifairy_merge(ctx, src);
+
+    ggml_cgraph * gf = ggml_new_graph(ctx);
+    ggml_build_forward_expand(gf, out);
+
+    ggml_backend_buffer_t buf = ggml_backend_alloc_ctx_tensors(ctx, backend);
+    if (!buf) {
+        ggml_free(ctx);
+        return false;
+    }
+
+    ggml_backend_tensor_set(src, input_split.data(), 0, ggml_nbytes(src));
+
+    const bool ok = ggml_backend_graph_compute(backend, gf) == GGML_STATUS_SUCCESS;
+    if (ok) {
+        std::vector<float> tmp((size_t) ggml_nelements(out));
+        ggml_backend_tensor_get(out, tmp.data(), 0, ggml_nbytes(out));
+        output_packed.resize(tmp.size());
+        memcpy(output_packed.data(), tmp.data(), tmp.size() * sizeof(float));
+    }
+
+    ggml_backend_buffer_free(buf);
+    ggml_free(ctx);
+    return ok;
+}
+
+static bool run_ifairy_relu2_backend(ggml_backend_t backend,
+                                     const std::vector<float> & input_packed,
+                                     int64_t ne0,
+                                     int64_t ne1,
+                                     int64_t ne2,
+                                     int64_t ne3,
+                                     std::vector<uint32_t> & output_packed) {
+    struct ggml_init_params params = {
+        /*.mem_size   =*/32 * 1024 * 1024,
+        /*.mem_buffer =*/NULL,
+        /*.no_alloc   =*/true,
+    };
+
+    ggml_context * ctx = ggml_init(params);
+    if (!ctx) {
+        return false;
+    }
+
+    ggml_tensor * src = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, ne0, ne1, ne2, ne3);
+    ggml_tensor * out = ggml_ifairy_relu2(ctx, src);
+
+    ggml_cgraph * gf = ggml_new_graph(ctx);
+    ggml_build_forward_expand(gf, out);
+
+    ggml_backend_buffer_t buf = ggml_backend_alloc_ctx_tensors(ctx, backend);
+    if (!buf) {
+        ggml_free(ctx);
+        return false;
+    }
+
+    ggml_backend_tensor_set(src, input_packed.data(), 0, ggml_nbytes(src));
+
+    const bool ok = ggml_backend_graph_compute(backend, gf) == GGML_STATUS_SUCCESS;
+    if (ok) {
+        std::vector<float> tmp((size_t) ggml_nelements(out));
+        ggml_backend_tensor_get(out, tmp.data(), 0, ggml_nbytes(out));
+        output_packed.resize(tmp.size());
+        memcpy(output_packed.data(), tmp.data(), tmp.size() * sizeof(float));
+    }
+
+    ggml_backend_buffer_free(buf);
+    ggml_free(ctx);
+    return ok;
+}
+
+static bool test_ifairy_opencl_regression_ops() {
+    printf("\n=== Test 7: iFairy OpenCL regression (split/merge/relu2) ===\n");
+
+    ggml_backend_t backend_cl = ggml_backend_opencl_init();
+    if (!backend_cl) {
+        printf("OpenCL backend unavailable, skip.\n");
+        return true;
+    }
+
+    ggml_backend_t backend_cpu = ggml_backend_cpu_init();
+    if (!backend_cpu) {
+        ggml_backend_free(backend_cl);
+        fprintf(stderr, "Failed to init CPU backend\n");
+        return false;
+    }
+
+    const int64_t ne0 = 16;
+    const int64_t ne1 = 3;
+    const int64_t ne2 = 2;
+    const int64_t ne3 = 1;
+    const int64_t rows = ne1 * ne2 * ne3;
+
+    std::vector<float> input_packed((size_t) ne0 * (size_t) rows);
+    for (int64_t r = 0; r < rows; ++r) {
+        for (int64_t i = 0; i < ne0; ++i) {
+            const int64_t t = r * ne0 + i;
+            const float xr = (float) ((t * 17) % 29 - 14) / 7.0f;
+            const float xi = (float) ((t * 13) % 23 - 11) / 6.0f;
+            input_packed[(size_t) t] = pack_bf16_pair(xr, xi);
+        }
+    }
+
+    std::vector<float> split_cpu;
+    std::vector<float> split_cl;
+    if (!run_ifairy_split_backend(backend_cpu, input_packed, ne0, ne1, ne2, ne3, split_cpu) ||
+        !run_ifairy_split_backend(backend_cl, input_packed, ne0, ne1, ne2, ne3, split_cl)) {
+        ggml_backend_free(backend_cpu);
+        ggml_backend_free(backend_cl);
+        fprintf(stderr, "split backend run failed\n");
+        return false;
+    }
+
+    printf("Comparing split output:\n");
+    if (!compare_arrays(split_cl.data(), split_cpu.data(), split_cpu.size(), 1e-6f)) {
+        ggml_backend_free(backend_cpu);
+        ggml_backend_free(backend_cl);
+        return false;
+    }
+
+    std::vector<float> merge_input((size_t) ne0 * 2 * (size_t) rows, 0.0f);
+    for (int64_t r = 0; r < rows; ++r) {
+        for (int64_t i = 0; i < ne0; ++i) {
+            const int64_t t = r * ne0 + i;
+            ggml_bf16_t pair[2];
+            memcpy(pair, &input_packed[(size_t) t], sizeof(uint32_t));
+            const size_t row_off = (size_t) r * (size_t) (ne0 * 2);
+            merge_input[row_off + (size_t) i] = GGML_BF16_TO_FP32(pair[0]);
+            merge_input[row_off + (size_t) i + (size_t) ne0] = GGML_BF16_TO_FP32(pair[1]);
+        }
+    }
+
+    std::vector<uint32_t> merge_cpu;
+    std::vector<uint32_t> merge_cl;
+    if (!run_ifairy_merge_backend(backend_cpu, merge_input, ne0 * 2, ne1, ne2, ne3, merge_cpu) ||
+        !run_ifairy_merge_backend(backend_cl, merge_input, ne0 * 2, ne1, ne2, ne3, merge_cl)) {
+        ggml_backend_free(backend_cpu);
+        ggml_backend_free(backend_cl);
+        fprintf(stderr, "merge backend run failed\n");
+        return false;
+    }
+
+    printf("Comparing merge output:\n");
+    if (!compare_u32_arrays(merge_cl.data(), merge_cpu.data(), merge_cpu.size())) {
+        ggml_backend_free(backend_cpu);
+        ggml_backend_free(backend_cl);
+        return false;
+    }
+
+    std::vector<uint32_t> relu2_cpu;
+    std::vector<uint32_t> relu2_cl;
+    if (!run_ifairy_relu2_backend(backend_cpu, input_packed, ne0, ne1, ne2, ne3, relu2_cpu) ||
+        !run_ifairy_relu2_backend(backend_cl, input_packed, ne0, ne1, ne2, ne3, relu2_cl)) {
+        ggml_backend_free(backend_cpu);
+        ggml_backend_free(backend_cl);
+        fprintf(stderr, "relu2 backend run failed\n");
+        return false;
+    }
+
+    printf("Comparing relu2 output:\n");
+    const bool relu2_ok = compare_u32_arrays(relu2_cl.data(), relu2_cpu.data(), relu2_cpu.size());
+
+    ggml_backend_free(backend_cpu);
+    ggml_backend_free(backend_cl);
+    return relu2_ok;
+}
+#else
+static bool test_ifairy_opencl_regression_ops() {
+    printf("\n=== Test 7: iFairy OpenCL regression (split/merge/relu2) ===\n");
+    printf("OpenCL backend not enabled at build time, skip.\n");
+    return true;
+}
+#endif
 
 static bool parse_cli_i64(const char * name, const char * arg, int64_t * value) {
     if (!arg || !value) {
@@ -2223,6 +2463,7 @@ int main(int argc, char ** argv) {
         bool         verbose     = false;
         bool         lut_only    = false;
         bool         lut_bench   = false;
+        bool         opencl_regression_only = false;
         const char * vecdot_mode = NULL;
         int64_t      bench_M     = 4096;
         int64_t      bench_N     = 1;
@@ -2263,6 +2504,10 @@ int main(int argc, char ** argv) {
                 }
                 continue;
             }
+            if (strcmp(argv[i], "--ifairy-opencl-regression") == 0) {
+                opencl_regression_only = true;
+                continue;
+            }
         }
         if (verbose) {
             printf("Verbose mode enabled\n");
@@ -2288,6 +2533,10 @@ int main(int argc, char ** argv) {
 
         if (lut_bench) {
             return run_ifairy_lut_backend_bench(bench_M, bench_N, bench_K, bench_t, bench_warm, bench_iters) ? 0 : 1;
+        }
+
+        if (opencl_regression_only) {
+            return test_ifairy_opencl_regression_ops() ? 0 : 1;
         }
 
         int num_failed = 0;
@@ -2390,6 +2639,11 @@ int main(int argc, char ** argv) {
 
         if (!test_ifairy64_lut_backend_f32_vs_q16()) {
             fprintf(stderr, "Test 5.4 FAILED\n");
+            num_failed++;
+        }
+
+        if (!test_ifairy_opencl_regression_ops()) {
+            fprintf(stderr, "Test 7 FAILED\n");
             num_failed++;
         }
 

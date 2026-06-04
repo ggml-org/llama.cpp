@@ -42,6 +42,86 @@ float2 rope_yarn_corr_dims(
     );
 }
 
+static inline float ifairy_bf16_to_f32(ushort x) {
+    return as_float(((uint) x) << 16);
+}
+
+kernel void kernel_ifairy_rope(
+        global void * src0,
+        ulong offset0,
+        global int * src1,
+        ulong offset1,
+        global float * src2,
+        ulong offset2,
+        global float * dst,
+        ulong offsetd,
+        int ne00,
+        int ne01,
+        int ne02,
+        int ne03,
+        ulong nb00,
+        ulong nb01,
+        ulong nb02,
+        ulong nb03,
+        int ne0,
+        int ne1,
+        int ne2,
+        int ne3,
+        ulong nb0,
+        ulong nb1,
+        ulong nb2,
+        ulong nb3,
+        int n_past,
+        int n_dims,
+        int n_ctx_orig,
+        float freq_base,
+        float freq_scale,
+        float ext_factor,
+        float attn_factor,
+        float beta_fast,
+        float beta_slow
+) {
+    src0 = (global void *)((global char *) src0 + offset0);
+    src1 = (global int  *)((global char *) src1 + offset1);
+    src2 = (global float *)((global char *) src2 + offset2);
+    dst  = (global float *)((global char *) dst  + offsetd);
+
+    const int i3 = get_group_id(2);
+    const int i2 = get_group_id(1);
+    const int i1 = get_group_id(0);
+
+    if (i1 >= ne1 || i2 >= ne2 || i3 >= ne3) {
+        return;
+    }
+
+    // Keep the same assumptions as CPU ifairy rope path.
+    if (ne00 * 2 != ne0) {
+        return;
+    }
+
+    const float2 corr_dims = rope_yarn_corr_dims(n_dims, n_ctx_orig, freq_base, beta_fast, beta_slow);
+    const float theta_base = (float) src1[i2];
+    const float inv_ndims = -2.0f / (float) n_dims;
+
+    global char * src_row = (global char *) src0 + i3 * nb03 + i2 * nb02 + i1 * nb01;
+    global char * dst_row = (global char *) dst  + i3 * nb3  + i2 * nb2  + i1 * nb1;
+
+    for (int i0 = get_local_id(0); i0 < n_dims; i0 += get_local_size(0)) {
+        const float theta = theta_base * pow(freq_base, inv_ndims * (float) i0);
+        const float freq_factor = src2 != src0 ? src2[i0] : 1.0f;
+        const float2 cos_sin_theta = rope_yarn(theta / freq_factor, freq_scale, corr_dims, 2 * i0, ext_factor, attn_factor);
+
+        const uint packed = *((global uint *) (src_row + i0 * nb00));
+        const float x0 = ifairy_bf16_to_f32((ushort) (packed & 0xFFFFu));
+        const float x1 = ifairy_bf16_to_f32((ushort) (packed >> 16));
+
+        *((global float *) (dst_row + i0 * nb0)) = x0 * cos_sin_theta.s0 - x1 * cos_sin_theta.s1;
+        *((global float *) (dst_row + (i0 + n_dims) * nb0)) = x0 * cos_sin_theta.s1 + x1 * cos_sin_theta.s0;
+    }
+
+    GGML_UNUSED(n_past);
+}
+
 kernel void kernel_rope_norm_f32(
         global void * src0,
         ulong offset0,
