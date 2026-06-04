@@ -447,6 +447,18 @@ bool socket_t::impl::rdma_recv(void * data, size_t size) {
 
         int slot = (int)wc.wr_id;
         size_t got = wc.byte_len;
+        // The completion length is controlled by the remote peer (up to the
+        // posted recv-slot size). A peer that sends more than the logical recv
+        // expects would overflow `dst` here, and `rem -= got` below would
+        // underflow (size_t), turning the loop into an unbounded copy. A
+        // zero-length completion would also make no progress (rem never
+        // decreases) -> spin on repeated 0-byte sends. Reject both and tear the
+        // connection down rather than clamp, so a malformed peer cannot silently
+        // desync the logical message stream.
+        if (got == 0 || got > rem) {
+            GGML_LOG_ERROR("rdma_recv: bad chunk (got=%zu rem=%zu)\n", got, rem);
+            return false;
+        }
         memcpy(dst, c->rx_slot(slot), got);
 
         if (!c->post_rx(slot)) return false;
