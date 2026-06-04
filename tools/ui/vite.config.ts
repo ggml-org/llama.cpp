@@ -12,6 +12,13 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 
 const SERVER_ORIGIN = import.meta.env?.VITE_PUBLIC_SERVER_ORIGIN || 'http://localhost:8080';
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const browserBaseConfig: any = {
+	enabled: true,
+	provider: 'playwright',
+	instances: [{ browser: 'chromium' }]
+};
+
 export default defineConfig({
 	resolve: {
 		alias: {
@@ -34,11 +41,7 @@ export default defineConfig({
 				test: {
 					name: 'client',
 					environment: 'browser',
-					browser: {
-						enabled: true,
-						provider: 'playwright',
-						instances: [{ browser: 'chromium' }]
-					},
+					browser: browserBaseConfig,
 					include: ['tests/client/**/*.svelte.{test,spec}.{js,ts}'],
 					setupFiles: ['./vitest-setup-client.ts']
 				}
@@ -58,11 +61,7 @@ export default defineConfig({
 				test: {
 					name: 'ui',
 					environment: 'browser',
-					browser: {
-						enabled: true,
-						provider: 'playwright',
-						instances: [{ browser: 'chromium', headless: true }]
-					},
+					browser: { ...browserBaseConfig, instances: [{ browser: 'chromium', headless: true }] },
 					include: ['tests/stories/**/*.stories.{js,ts,svelte}'],
 					setupFiles: ['./.storybook/vitest.setup.ts']
 				},
