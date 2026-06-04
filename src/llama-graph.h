@@ -463,11 +463,6 @@ public:
 class llm_graph_input_dsv4 : public llm_graph_input_i {
 public:
     struct comp_input {
-        ggml_tensor * write_idxs = nullptr; // I64 [n_write]
-        ggml_tensor * write_pos  = nullptr; // I32 [n_write]
-        ggml_tensor * write_end  = nullptr; // I32 [n_write]
-        ggml_tensor * pending_end = nullptr; // I32 [n_pending]
-
         ggml_tensor * state_idxs       = nullptr; // I32 [n_state]
         ggml_tensor * state_pos        = nullptr; // I32 [n_state]
         ggml_tensor * state_read_idxs  = nullptr; // I32 [ratio*n_state_write]

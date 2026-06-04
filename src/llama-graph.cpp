@@ -708,10 +708,6 @@ static void dsv4_set_comp_inputs(
         const char * name,
         bool debug,
         uint32_t n_tokens) {
-    dsv4_set_i64(inp.write_idxs, plan.write_idxs);
-    dsv4_set_i32(inp.write_pos,  plan.write_pos);
-    dsv4_set_i32(inp.write_end,  plan.write_end);
-    dsv4_set_i32(inp.pending_end, plan.pending_end);
     dsv4_set_i32(inp.state_idxs, plan.state_idxs);
     dsv4_set_i32(inp.state_pos, plan.state_pos);
     dsv4_set_i32(inp.state_read_idxs, plan.state_read_idxs);
@@ -722,11 +718,9 @@ static void dsv4_set_comp_inputs(
     dsv4_set_kq_mask(inp.kq_mask, plan, n_tokens);
 
     if (debug || dsv4_compress_debug()) {
-        LLAMA_LOG_INFO("%s: %s ratio=%u, n_tokens=%u, write_end=%s, state_write_end=%s, pending_end=%s\n",
+        LLAMA_LOG_INFO("%s: %s ratio=%u, n_tokens=%u, state_write_end=%s\n",
                 __func__, name, plan.ratio, n_tokens,
-                dsv4_plan_positions(plan.write_end).c_str(),
-                dsv4_plan_positions(plan.state_write_end).c_str(),
-                dsv4_plan_positions(plan.pending_end).c_str());
+                dsv4_plan_positions(plan.state_write_end).c_str());
     }
 }
 
@@ -753,13 +747,7 @@ static bool dsv4_can_reuse_comp_input(
         const llm_graph_input_dsv4::comp_input & inp,
         const llama_kv_cache_dsv4_context::comp_plan & plan,
         uint32_t n_tokens) {
-    const int64_t n_write = plan.write_idxs.size();
-
     bool res = true;
-    res &= dsv4_can_reuse_tensor_1d(inp.write_idxs, n_write);
-    res &= dsv4_can_reuse_tensor_1d(inp.write_pos,  n_write);
-    res &= dsv4_can_reuse_tensor_1d(inp.write_end,  n_write);
-    res &= dsv4_can_reuse_tensor_1d(inp.pending_end, plan.pending_end.size());
     res &= dsv4_can_reuse_tensor_1d(inp.state_idxs, plan.state_idxs.size());
     res &= dsv4_can_reuse_tensor_1d(inp.state_pos, plan.state_pos.size());
     res &= dsv4_can_reuse_tensor_1d(inp.state_read_idxs, plan.state_read_idxs.size());
@@ -793,12 +781,6 @@ static void dsv4_build_comp_inputs(
         llm_graph_input_dsv4::comp_input & inp,
         const llama_kv_cache_dsv4_context::comp_plan & plan,
         const char * name) {
-    const int64_t n_write = plan.write_idxs.size();
-
-    inp.write_idxs = dsv4_build_input_1d(ctx, GGML_TYPE_I64, n_write, std::string("dsv4_") + name + "_write_idxs");
-    inp.write_pos  = dsv4_build_input_1d(ctx, GGML_TYPE_I32, n_write, std::string("dsv4_") + name + "_write_pos");
-    inp.write_end  = dsv4_build_input_1d(ctx, GGML_TYPE_I32, n_write, std::string("dsv4_") + name + "_write_end");
-    inp.pending_end = dsv4_build_input_1d(ctx, GGML_TYPE_I32, plan.pending_end.size(), std::string("dsv4_") + name + "_pending_end");
     inp.state_idxs = dsv4_build_input_1d(ctx, GGML_TYPE_I32, plan.state_idxs.size(), std::string("dsv4_") + name + "_state_idxs");
     inp.state_pos = dsv4_build_input_1d(ctx, GGML_TYPE_I32, plan.state_pos.size(), std::string("dsv4_") + name + "_state_pos");
     inp.state_read_idxs = dsv4_build_input_1d(ctx, GGML_TYPE_I32, plan.state_read_idxs.size(), std::string("dsv4_") + name + "_state_read_idxs");

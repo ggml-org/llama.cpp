@@ -210,7 +210,6 @@ static llama_kv_cache_dsv4_context::comp_plan dsv4_build_comp_plan(
         const llama_ubatch & ubatch,
         uint32_t ratio,
         bool overlap,
-        bool stateful,
         uint32_t state_size,
         uint32_t kv_size,
         uint32_t n_stream) {
@@ -256,12 +255,10 @@ static llama_kv_cache_dsv4_context::comp_plan dsv4_build_comp_plan(
 
         const llama_seq_id seq_id = ubatch.seq_id[i][0];
 
-        if (stateful) {
-            const int64_t stream_off = n_stream > 1 ? (int64_t) seq_id*state_size : 0;
+        const int64_t stream_off = n_stream > 1 ? (int64_t) seq_id*state_size : 0;
 
-            plan.state_idxs.push_back((int32_t) (stream_off + pos%state_size));
-            plan.state_pos .push_back((int32_t) (pos%ratio));
-        }
+        plan.state_idxs.push_back((int32_t) (stream_off + pos%state_size));
+        plan.state_pos .push_back((int32_t) (pos%ratio));
 
         const int64_t n_visible = (int64_t) (pos + 1)/ratio;
         plan.n_visible[i] = (int32_t) n_visible;
@@ -273,36 +270,26 @@ static llama_kv_cache_dsv4_context::comp_plan dsv4_build_comp_plan(
 
         const llama_pos source_start = pos + 1 - ratio;
 
-        if (stateful) {
-            const int64_t cache_off = n_stream > 1 ? (int64_t) seq_id*kv_size : 0;
+        const int64_t cache_off = n_stream > 1 ? (int64_t) seq_id*kv_size : 0;
 
-            plan.state_write_idxs.push_back(cache_off + pos/ratio);
-            plan.state_write_pos .push_back((int32_t) source_start);
-            plan.state_write_end .push_back((int32_t) pos);
+        plan.state_write_idxs.push_back(cache_off + pos/ratio);
+        plan.state_write_pos .push_back((int32_t) source_start);
+        plan.state_write_end .push_back((int32_t) pos);
 
-            if (overlap) {
-                const llama_pos prev_start = source_start - ratio;
+        if (overlap) {
+            const llama_pos prev_start = source_start - ratio;
 
-                for (uint32_t j = 0; j < ratio; ++j) {
-                    plan.state_read_idxs.push_back(state_source_idx(seq_id, prev_start + j));
-                }
-                for (uint32_t j = 0; j < ratio; ++j) {
-                    plan.state_read_idxs.push_back(state_source_idx(seq_id, source_start + j));
-                }
-            } else {
-                for (uint32_t j = 0; j < ratio; ++j) {
-                    plan.state_read_idxs.push_back(state_source_idx(seq_id, source_start + j));
-                }
+            for (uint32_t j = 0; j < ratio; ++j) {
+                plan.state_read_idxs.push_back(state_source_idx(seq_id, prev_start + j));
             }
-
-            continue;
+            for (uint32_t j = 0; j < ratio; ++j) {
+                plan.state_read_idxs.push_back(state_source_idx(seq_id, source_start + j));
+            }
+        } else {
+            for (uint32_t j = 0; j < ratio; ++j) {
+                plan.state_read_idxs.push_back(state_source_idx(seq_id, source_start + j));
+            }
         }
-
-        const int64_t stream_off = n_stream > 1 ? (int64_t) seq_id*kv_size : 0;
-
-        plan.write_idxs.push_back(stream_off + pos/ratio);
-        plan.write_pos .push_back((int32_t) (pos + 1 - ratio));
-        plan.write_end .push_back((int32_t) pos);
     }
 
     static const bool debug = []() {
@@ -311,11 +298,9 @@ static llama_kv_cache_dsv4_context::comp_plan dsv4_build_comp_plan(
     }();
 
     if (debug) {
-        LLAMA_LOG_INFO("%s: ratio=%u, n_tokens=%u, write_end=%s, state_write_end=%s, pending_end=%s\n",
+        LLAMA_LOG_INFO("%s: ratio=%u, n_tokens=%u, state_write_end=%s\n",
                 __func__, ratio, ubatch.n_tokens,
-                dsv4_plan_positions(plan.write_end).c_str(),
-                dsv4_plan_positions(plan.state_write_end).c_str(),
-                dsv4_plan_positions(plan.pending_end).c_str());
+                dsv4_plan_positions(plan.state_write_end).c_str());
     }
 
     return plan;
@@ -325,7 +310,6 @@ static std::vector<llama_kv_cache_dsv4_context::comp_plan> dsv4_build_comp_plans
         const std::vector<llama_ubatch> & ubatches,
         uint32_t ratio,
         bool overlap,
-        bool stateful,
         uint32_t state_size,
         uint32_t kv_size,
         uint32_t n_stream) {
@@ -333,7 +317,7 @@ static std::vector<llama_kv_cache_dsv4_context::comp_plan> dsv4_build_comp_plans
     plans.reserve(ubatches.size());
 
     for (const llama_ubatch & ubatch : ubatches) {
-        plans.push_back(dsv4_build_comp_plan(ubatch, ratio, overlap, stateful, state_size, kv_size, n_stream));
+        plans.push_back(dsv4_build_comp_plan(ubatch, ratio, overlap, state_size, kv_size, n_stream));
     }
 
     return plans;
@@ -1023,9 +1007,9 @@ llama_kv_cache_dsv4_context::llama_kv_cache_dsv4_context(
         slot_info_vec_t sinfos_raw_swa,
         std::vector<llama_ubatch> ubatches) :
     ubatches(std::move(ubatches)),
-    plans_csa(dsv4_build_comp_plans(this->ubatches, DSV4_CSA_RATIO, true,  true,
+    plans_csa(dsv4_build_comp_plans(this->ubatches, DSV4_CSA_RATIO, true,
                 kv->get_csa_state()->get_state_size(), kv->get_csa()->get_size(), kv->get_csa_state()->get_n_stream())),
-    plans_hca(dsv4_build_comp_plans(this->ubatches, DSV4_HCA_RATIO, false, true,
+    plans_hca(dsv4_build_comp_plans(this->ubatches, DSV4_HCA_RATIO, false,
                 kv->get_hca_state()->get_state_size(), kv->get_hca()->get_size(), kv->get_hca_state()->get_n_stream())),
     plans_lid(plans_csa),
     ctx_raw(new llama_kv_cache_iswa_context(kv->get_raw(), std::move(sinfos_raw_base), std::move(sinfos_raw_swa), this->ubatches)),

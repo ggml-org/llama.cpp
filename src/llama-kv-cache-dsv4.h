@@ -155,20 +155,6 @@ public:
     struct comp_plan {
         uint32_t ratio = 0;
 
-        // Logical compressed row ids written by the current graph.
-        std::vector<int64_t> write_idxs;
-
-        // Position used for compressor RoPE. For a completed block this is the
-        // first source-token position of that block.
-        std::vector<int32_t> write_pos;
-
-        // Position at which the compressed row becomes visible to attention.
-        std::vector<int32_t> write_end;
-
-        // Completed blocks that could not be planned. This should remain empty
-        // for the scratch-backed state path.
-        std::vector<int32_t> pending_end;
-
         // Compressor-state row ids updated by the current graph.
         std::vector<int32_t> state_idxs;
 

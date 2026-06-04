@@ -1122,19 +1122,6 @@ struct llama_model_deepseek_v4_flash : public llama_model_base {
                 ggml_tensor * inp_pos,
                 int il) const;
 
-        ggml_tensor * build_compressed_kv(
-                ggml_tensor * cur,
-                ggml_tensor * comp_pos,
-                ggml_tensor * wkv,
-                ggml_tensor * wgate,
-                ggml_tensor * ape,
-                ggml_tensor * norm,
-                int64_t ratio,
-                int64_t n_embd_head,
-                bool overlap,
-                const char * name,
-                int il) const;
-
         ggml_tensor * build_hca_compressed_kv_from_state(
                 ggml_tensor * kv_state,
                 ggml_tensor * score_state,
@@ -1155,11 +1142,6 @@ struct llama_model_deepseek_v4_flash : public llama_model_base {
                 int64_t n_embd_head,
                 const char * name,
                 int il) const;
-
-        ggml_tensor * build_csa_mask(
-                ggml_tensor * inp_pos,
-                int64_t n_kv,
-                int64_t n_tokens) const;
 
         ggml_tensor * build_lid_top_k(
                 const llama_model & model,
