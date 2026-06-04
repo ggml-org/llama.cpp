@@ -7,6 +7,7 @@ import { defineConfig, searchForWorkspaceRoot } from 'vite';
 import devtoolsJson from 'vite-plugin-devtools-json';
 import { storybookTest } from '@storybook/addon-vitest/vitest-plugin';
 import { llamaCppBuildPlugin } from './scripts/vite-plugin-llama-cpp-build';
+import { playwright } from '@vitest/browser-playwright';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -15,7 +16,11 @@ const SERVER_ORIGIN = import.meta.env?.VITE_PUBLIC_SERVER_ORIGIN || 'http://loca
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const browserBaseConfig: any = {
 	enabled: true,
-	provider: 'playwright',
+	provider: playwright({
+		launchOptions: {
+			args: ['--no-sandbox']
+		}
+	}),
 	instances: [{ browser: 'chromium' }]
 };
 
@@ -40,7 +45,6 @@ export default defineConfig({
 				extends: './vite.config.ts',
 				test: {
 					name: 'client',
-					environment: 'browser',
 					browser: browserBaseConfig,
 					include: ['tests/client/**/*.svelte.{test,spec}.{js,ts}'],
 					setupFiles: ['./vitest-setup-client.ts']
@@ -60,9 +64,7 @@ export default defineConfig({
 				extends: './vite.config.ts',
 				test: {
 					name: 'ui',
-					environment: 'browser',
 					browser: { ...browserBaseConfig, instances: [{ browser: 'chromium', headless: true }] },
-					include: ['tests/stories/**/*.stories.{js,ts,svelte}'],
 					setupFiles: ['./.storybook/vitest.setup.ts']
 				},
 				plugins: [

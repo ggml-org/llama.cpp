@@ -43,6 +43,7 @@
 		"@tailwindcss/vite": "4.1.11",
 		"@types/node": "^24",
 		"@vitest/browser": "4.1.8",
+		"@vitest/browser-playwright": "4.1.8",
 		"@vitest/coverage-v8": "4.1.8",
 		"bits-ui": "2.18.1",
 		"clsx": "2.1.1",
