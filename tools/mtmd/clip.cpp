@@ -3475,9 +3475,7 @@ int clip_n_output_tokens(const struct clip_ctx * ctx, struct clip_image_f32 * im
                 const int side        = img->nx / params.patch_size;
                 const int n           = side / window_side;
                 n_patches             = (query_side * n) * (query_side * n);
-
-                // Add newline tokens based on append_token field.
-                if (img->append_token) {
+                if (img->add_newline) {
                     // For single-tile case: append 1 newline row.
                     // For multi-tile rowwise: handled by caller, but here we
                     // report the per-tile count including one trailing newline.

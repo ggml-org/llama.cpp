@@ -448,7 +448,7 @@ struct clip_image_f32 {
     // marks the global view in e.g., DeepSeek-OCR Models
     bool add_viewsep = false;
     // whether a learned newline token should be appended after the image (eg Granite4 Vision)
-    bool append_token = false;
+    bool add_newline = false;
 };
 
 //

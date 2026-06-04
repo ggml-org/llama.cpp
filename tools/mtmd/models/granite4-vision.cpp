@@ -14,7 +14,7 @@
  *   Stage 1a: SigLIP vision tower (N layers, post-norm)
  *   Stage 1b: WindowQFormer blocks (deepstack + spatial)
  *   Stage 1c: Concatenate and pack outputs
- *   Stage 1d: Append newline tokens if append_token is set
+ *   Stage 1d: Append newline tokens if add_newline is set
  */
 
 // ---------------------------------------------------------------------------
@@ -326,8 +326,8 @@ ggml_cgraph * clip_graph_granite4_vision::build() {
         mmproj = mmproj ? ggml_concat(ctx0, mmproj, stream, 0) : stream;
     }
 
-    // --- Stage 1d: Append newline tokens if append_token is set ---
-    if (append_token) {
+    // --- Stage 1d: Append newline tokens if add_newline is set ---
+    if (add_newline) {
         mmproj = append_rowwise_newlines(ctx0, mmproj);
         ggml_set_name(mmproj, "g4v_mmproj_out_nl");
     } else {

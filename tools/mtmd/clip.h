@@ -94,9 +94,6 @@ size_t clip_image_f32_batch_nx(const struct clip_image_f32_batch * batch, int id
 size_t clip_image_f32_batch_ny(const struct clip_image_f32_batch * batch, int idx); // equivalent to batch[idx]->ny
 struct clip_image_f32 * clip_image_f32_get_img(const struct clip_image_f32_batch * batch, int idx); // equivalent to batch[idx]->data
 
-// Set the append_token field of a clip_image_f32 (for newline injection models).
-void clip_image_set_append_token(struct clip_image_f32 * img, int token_type);
-
 /**
  * Build image from pixels decoded by other libraries instead of stb_image.h for better performance.
  * The memory layout is RGBRGBRGB..., input buffer length must be 3*nx*ny bytes

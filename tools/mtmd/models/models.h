@@ -215,7 +215,7 @@ struct clip_graph_exaone4_5 : clip_graph {
 struct clip_graph_granite4_vision : clip_graph {
     clip_graph_granite4_vision(clip_ctx * ctx, const clip_image_f32 & img)
         : clip_graph(ctx, img),
-          append_token(img.append_token) {}
+          add_newline(img.add_newline) {}
 
     ggml_cgraph * build() override;
 
@@ -223,7 +223,7 @@ private:
     // The graph is per-tile since only batch-size 1 is supported in clip. As
     // such, this value is set at construct time based on the tile that will be
     // encoded, then used during build to determine how to handle newlines.
-    const bool append_token;
+    const bool add_newline;
 
     ggml_tensor * gather(ggml_tensor * src, const std::string & name, int idx_len);
     ggml_tensor * interp_down(ggml_tensor * src, int side, int new_side);
