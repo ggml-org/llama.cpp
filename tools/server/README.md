@@ -227,6 +227,8 @@ For the full list of features, please refer to [server's changelog](https://gith
 | `--skip-chat-parsing, --no-skip-chat-parsing` | force a pure content parser, even if a Jinja template is specified; model will output everything in the content section, including any reasoning and/or tool calls (default: disabled)<br/>(env: LLAMA_ARG_SKIP_CHAT_PARSING) |
 | `--prefill-assistant, --no-prefill-assistant` | whether to prefill the assistant's response if the last message is an assistant message (default: prefill enabled)<br/>when this flag is set, if the last message is an assistant message then it will be treated as a full message and not prefilled<br/><br/>(env: LLAMA_ARG_PREFILL_ASSISTANT) |
 | `-sps, --slot-prompt-similarity SIMILARITY` | how much the prompt of a request must match the prompt of a slot in order to use that slot (default: 0.10, 0.0 = disabled) |
+| `--slot-cache-key-similarity SIMILARITY` | how much the prompt of a cache_key request must match the cached slot prompt before reusing it (default: 0.50, 0.0 = disable ratio check) |
+| `--slot-cache-key-min-prefix N` | minimum common-prefix tokens required before reusing a cache_key slot (default: 32, 0 = disabled) |
 | `--lora-init-without-apply` | load LoRA adapters without applying them (apply later via POST /lora-adapters) (default: disabled) |
 | `--sleep-idle-seconds SECONDS` | number of seconds of idleness after which the server will sleep (default: -1; -1 = disabled) |
 | `--spec-draft-hf, -hfd, -hfrd, --hf-repo-draft <user>/<model>[:quant]` | Same as --hf-repo, but for the draft model (default: unused)<br/>(env: LLAMA_ARG_SPEC_DRAFT_HF_REPO) |

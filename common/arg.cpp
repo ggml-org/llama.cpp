@@ -3244,6 +3244,20 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}));
     add_opt(common_arg(
+        {"--slot-cache-key-similarity"}, "SIMILARITY",
+        string_format("how much the prompt of a cache_key request must match the cached slot prompt before reusing it (default: %.2f, 0.0 = disable ratio check)\n", params.slot_cache_key_similarity),
+        [](common_params & params, const std::string & value) {
+            params.slot_cache_key_similarity = std::stof(value);
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}));
+    add_opt(common_arg(
+        {"--slot-cache-key-min-prefix"}, "N",
+        string_format("minimum common-prefix tokens required before reusing a cache_key slot (default: %d, 0 = disabled)\n", params.slot_cache_key_min_prefix),
+        [](common_params & params, const std::string & value) {
+            params.slot_cache_key_min_prefix = std::stoi(value);
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}));
+    add_opt(common_arg(
         {"--lora-init-without-apply"},
         string_format("load LoRA adapters without applying them (apply later via POST /lora-adapters) (default: %s)", params.lora_init_without_apply ? "enabled" : "disabled"),
         [](common_params & params) {

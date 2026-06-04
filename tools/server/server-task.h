@@ -135,6 +135,7 @@ struct server_task {
     // used by SERVER_TASK_TYPE_CANCEL
     int id_target = -1;
     int id_slot   = -1;
+    std::string cache_key;
 
     // used by parallel sampling (multiple completions from same prompt)
     int id_parent  = -1;
@@ -234,6 +235,7 @@ struct server_task {
         copy.type      = type;
         copy.tokens    = tokens.clone();
         copy.id_slot   = -1; // child tasks cannot specify slot
+        copy.cache_key.clear();
 
         // use different sampling seed for each child
         // note: https://github.com/ggml-org/llama.cpp/pull/18700#discussion_r2675115723
