@@ -1634,7 +1634,10 @@ struct clip_model_loader {
 
                         get_arr_int(KEY_FEATURE_LAYER, hparams.vision_feature_layer);
                         get_arr_int(KEY_PROJ_SPATIAL_OFFSETS, hparams.proj_spatial_offsets);
-                        GGML_ASSERT(hparams.vision_feature_layer.size() == hparams.proj_spatial_offsets.size());
+                        if (hparams.vision_feature_layer.size() != hparams.proj_spatial_offsets.size()) {
+                            throw std::runtime_error(string_format("%s: vision_feature_layer.size() %d != proj_spatial_offsets.size() %d",
+                                                                   hparams.vision_feature_layer.size(), hparams.proj_spatial_offsets.size()));
+                        }
 
                         get_u32(KEY_PROJ_SAMPLE_QUERY_SIDE,  hparams.downsample_query_side);
                         get_u32(KEY_PROJ_SAMPLE_WINDOW_SIDE, hparams.downsample_window_side);

@@ -1,5 +1,7 @@
 #include "models.h"
 
+#include <sstream>
+
 void llama_model_granite::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
     ml.get_key(LLM_KV_LOGIT_SCALE,                 hparams.f_logit_scale);
@@ -18,6 +20,15 @@ void llama_model_granite::load_arch_hparams(llama_model_loader & ml) {
         }
     }
     hparams.n_deepstack_layers = unique_deepstack_idxs.size();
+
+    // Ensure all values are valid (avoid overflow attacks)
+    for (const auto val : unique_deepstack_idxs) {
+        if (val > hparams.n_deepstack_layers) {
+            std::stringstream ss;
+            ss << "Invalid deepstack index: " << val << " > " << hparams.n_deepstack_layers;
+            throw std::runtime_error(ss.str());
+        }
+    }
 
     // Granite uses rope_finetuned as a switch for rope, so default to true
     bool rope_finetuned = true;
