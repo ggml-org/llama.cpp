@@ -465,6 +465,8 @@ public:
     struct comp_input {
         ggml_tensor * state_idxs       = nullptr; // I32 [n_state]
         ggml_tensor * state_pos        = nullptr; // I32 [n_state]
+        ggml_tensor * state_persist_src_idxs = nullptr; // I32 [n_state_persist]
+        ggml_tensor * state_persist_dst_idxs = nullptr; // I32 [n_state_persist]
         ggml_tensor * state_read_idxs  = nullptr; // I32 [ratio*n_state_write]
         ggml_tensor * state_write_idxs = nullptr; // I64 [n_state_write]
         ggml_tensor * state_write_pos  = nullptr; // I32 [n_state_write]

@@ -890,10 +890,13 @@ ggml_tensor * llama_model_deepseek_v4_flash::graph::build_attention(
         csa_state_kv    = dsv4_with_zero_dep(ctx0, csa_state_kv,    csa_state_dep);
         csa_state_score = dsv4_with_zero_dep(ctx0, csa_state_score, csa_state_dep);
 
+        ggml_tensor * csa_persist_kv = ggml_get_rows(ctx0, csa_state_kv, inp_dsv4->get_csa().state_persist_src_idxs);
+        ggml_tensor * csa_persist_score = ggml_get_rows(ctx0, csa_state_score, inp_dsv4->get_csa().state_persist_src_idxs);
+
         csa_state_kv = inp_dsv4->mctx->get_csa_state()->cpy_kv(ctx0,
-                csa_state_kv, inp_dsv4->get_csa().state_idxs, il);
+                csa_persist_kv, inp_dsv4->get_csa().state_persist_dst_idxs, il);
         csa_state_score = inp_dsv4->mctx->get_csa_state()->cpy_score(ctx0,
-                csa_state_score, inp_dsv4->get_csa().state_idxs, il);
+                csa_persist_score, inp_dsv4->get_csa().state_persist_dst_idxs, il);
 
         ggml_build_forward_expand(gf, csa_state_kv);
         ggml_build_forward_expand(gf, csa_state_score);
@@ -946,10 +949,13 @@ ggml_tensor * llama_model_deepseek_v4_flash::graph::build_attention(
         lid_state_kv    = dsv4_with_zero_dep(ctx0, lid_state_kv,    lid_state_dep);
         lid_state_score = dsv4_with_zero_dep(ctx0, lid_state_score, lid_state_dep);
 
+        ggml_tensor * lid_persist_kv = ggml_get_rows(ctx0, lid_state_kv, inp_dsv4->get_lid().state_persist_src_idxs);
+        ggml_tensor * lid_persist_score = ggml_get_rows(ctx0, lid_state_score, inp_dsv4->get_lid().state_persist_src_idxs);
+
         lid_state_kv = inp_dsv4->mctx->get_lid_state()->cpy_kv(ctx0,
-                lid_state_kv, inp_dsv4->get_lid().state_idxs, il);
+                lid_persist_kv, inp_dsv4->get_lid().state_persist_dst_idxs, il);
         lid_state_score = inp_dsv4->mctx->get_lid_state()->cpy_score(ctx0,
-                lid_state_score, inp_dsv4->get_lid().state_idxs, il);
+                lid_persist_score, inp_dsv4->get_lid().state_persist_dst_idxs, il);
 
         ggml_build_forward_expand(gf, lid_state_kv);
         ggml_build_forward_expand(gf, lid_state_score);
@@ -987,10 +993,13 @@ ggml_tensor * llama_model_deepseek_v4_flash::graph::build_attention(
         hca_state_kv    = dsv4_with_zero_dep(ctx0, hca_state_kv,    hca_state_dep);
         hca_state_score = dsv4_with_zero_dep(ctx0, hca_state_score, hca_state_dep);
 
+        ggml_tensor * hca_persist_kv = ggml_get_rows(ctx0, hca_state_kv, inp_dsv4->get_hca().state_persist_src_idxs);
+        ggml_tensor * hca_persist_score = ggml_get_rows(ctx0, hca_state_score, inp_dsv4->get_hca().state_persist_src_idxs);
+
         hca_state_kv = inp_dsv4->mctx->get_hca_state()->cpy_kv(ctx0,
-                hca_state_kv, inp_dsv4->get_hca().state_idxs, il);
+                hca_persist_kv, inp_dsv4->get_hca().state_persist_dst_idxs, il);
         hca_state_score = inp_dsv4->mctx->get_hca_state()->cpy_score(ctx0,
-                hca_state_score, inp_dsv4->get_hca().state_idxs, il);
+                hca_persist_score, inp_dsv4->get_hca().state_persist_dst_idxs, il);
 
         ggml_build_forward_expand(gf, hca_state_kv);
         ggml_build_forward_expand(gf, hca_state_score);

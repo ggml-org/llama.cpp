@@ -219,6 +219,24 @@ static llama_kv_cache_dsv4_context::comp_plan dsv4_build_comp_plan(
 
     const int64_t state_rows = (int64_t) state_size*n_stream;
 
+    struct persist_row {
+        int32_t dst;
+        int32_t src;
+        llama_pos pos;
+    };
+
+    std::vector<persist_row> persist_rows;
+
+    // For the overlap compressor, build_overlap_compressed_kv_from_state() consumes
+    // state_read_idxs as two contiguous halves: the first ratio*n_blocks entries are
+    // the "previous-window" gather indices for every block, followed by the
+    // "current-window" indices for every block. Collect them separately here and
+    // append cur after prev once the loop has visited all completed blocks, instead
+    // of interleaving [prev, cur] per block (which corrupted every block but the
+    // last in multi-block ubatches / long-context prefill).
+    std::vector<int32_t> overlap_prev_reads;
+    std::vector<int32_t> overlap_cur_reads;
+
     const auto current_token_idx = [&](llama_seq_id seq_id, llama_pos pos) -> int64_t {
         for (uint32_t i = 0; i < ubatch.n_tokens; ++i) {
             if (ubatch.pos[i] == pos && ubatch.seq_id[i][0] == seq_id) {
@@ -257,8 +275,21 @@ static llama_kv_cache_dsv4_context::comp_plan dsv4_build_comp_plan(
 
         const int64_t stream_off = n_stream > 1 ? (int64_t) seq_id*state_size : 0;
 
-        plan.state_idxs.push_back((int32_t) (stream_off + pos%state_size));
+        const int32_t state_idx = (int32_t) (stream_off + pos%state_size);
+
+        plan.state_idxs.push_back(state_idx);
         plan.state_pos .push_back((int32_t) (pos%ratio));
+
+        const auto it = std::find_if(persist_rows.begin(), persist_rows.end(),
+                [state_idx](const persist_row & row) {
+                    return row.dst == state_idx;
+                });
+        if (it == persist_rows.end()) {
+            persist_rows.push_back({ state_idx, (int32_t) i, pos });
+        } else if (pos > it->pos) {
+            it->src = (int32_t) i;
+            it->pos = pos;
+        }
 
         const int64_t n_visible = (int64_t) (pos + 1)/ratio;
         plan.n_visible[i] = (int32_t) n_visible;
@@ -280,10 +311,10 @@ static llama_kv_cache_dsv4_context::comp_plan dsv4_build_comp_plan(
             const llama_pos prev_start = source_start - ratio;
 
             for (uint32_t j = 0; j < ratio; ++j) {
-                plan.state_read_idxs.push_back(state_source_idx(seq_id, prev_start + j));
+                overlap_prev_reads.push_back(state_source_idx(seq_id, prev_start + j));
             }
             for (uint32_t j = 0; j < ratio; ++j) {
-                plan.state_read_idxs.push_back(state_source_idx(seq_id, source_start + j));
+                overlap_cur_reads.push_back(state_source_idx(seq_id, source_start + j));
             }
         } else {
             for (uint32_t j = 0; j < ratio; ++j) {
@@ -292,14 +323,34 @@ static llama_kv_cache_dsv4_context::comp_plan dsv4_build_comp_plan(
         }
     }
 
+    if (overlap) {
+        // [ all blocks' prev-window indices | all blocks' cur-window indices ]
+        plan.state_read_idxs.reserve(overlap_prev_reads.size() + overlap_cur_reads.size());
+        plan.state_read_idxs.insert(plan.state_read_idxs.end(),
+                overlap_prev_reads.begin(), overlap_prev_reads.end());
+        plan.state_read_idxs.insert(plan.state_read_idxs.end(),
+                overlap_cur_reads.begin(), overlap_cur_reads.end());
+    }
+
+    std::sort(persist_rows.begin(), persist_rows.end(),
+            [](const persist_row & a, const persist_row & b) {
+                return a.dst < b.dst;
+            });
+
+    for (const persist_row & row : persist_rows) {
+        plan.state_persist_src_idxs.push_back(row.src);
+        plan.state_persist_dst_idxs.push_back(row.dst);
+    }
+
     static const bool debug = []() {
         const char * env = getenv("LLAMA_DSV4_COMPRESS_DEBUG");
         return env && atoi(env) > 0;
     }();
 
     if (debug) {
-        LLAMA_LOG_INFO("%s: ratio=%u, n_tokens=%u, state_write_end=%s\n",
+        LLAMA_LOG_INFO("%s: ratio=%u, n_tokens=%u, state_persist_dst=%s, state_write_end=%s\n",
                 __func__, ratio, ubatch.n_tokens,
+                dsv4_plan_positions(plan.state_persist_dst_idxs).c_str(),
                 dsv4_plan_positions(plan.state_write_end).c_str());
     }
 
@@ -668,6 +719,12 @@ llama_kv_cache_dsv4::llama_kv_cache_dsv4(
     lid_state = std::make_unique<llama_dsv4_comp_state>(
             model, offload, unified, n_seq_max, DSV4_CSA_RATIO, 2*DSV4_CSA_RATIO,
             2*model.hparams.indexer_head_size, "lid", filter_csa);
+
+    // DSV4 attention reads compressed-K / compressor-state rows that the current
+    // graph does not necessarily overwrite; uninitialized buffer contents would
+    // otherwise leak in (instance-specific garbage) and corrupt recall. Zero all
+    // compressed buffers up front so reads of un-written rows are deterministic.
+    clear_compressed(true);
 }
 
 llama_memory_context_ptr llama_kv_cache_dsv4::init_batch(
@@ -766,7 +823,7 @@ void llama_kv_cache_dsv4::clear(bool data) {
     restored_trim_pos.clear();
 
     kv_raw->clear(data);
-    clear_compressed(data);
+    clear_compressed(true); // DSV4 compressed buffers must never expose stale/uninit rows
 }
 
 bool llama_kv_cache_dsv4::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1) {
@@ -808,7 +865,7 @@ bool llama_kv_cache_dsv4::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1
             restored_trim_pos.clear();
         }
 
-        clear_compressed(false);
+        clear_compressed(true);
     }
 
     return res;
@@ -818,28 +875,28 @@ void llama_kv_cache_dsv4::seq_cp(llama_seq_id seq_id_src, llama_seq_id seq_id_ds
     restored_trim_pos.clear();
 
     kv_raw->seq_cp(seq_id_src, seq_id_dst, p0, p1);
-    clear_compressed(false);
+    clear_compressed(true);
 }
 
 void llama_kv_cache_dsv4::seq_keep(llama_seq_id seq_id) {
     restored_trim_pos.clear();
 
     kv_raw->seq_keep(seq_id);
-    clear_compressed(false);
+    clear_compressed(true);
 }
 
 void llama_kv_cache_dsv4::seq_add(llama_seq_id seq_id, llama_pos p0, llama_pos p1, llama_pos shift) {
     restored_trim_pos.clear();
 
     kv_raw->seq_add(seq_id, p0, p1, shift);
-    clear_compressed(false);
+    clear_compressed(true);
 }
 
 void llama_kv_cache_dsv4::seq_div(llama_seq_id seq_id, llama_pos p0, llama_pos p1, int d) {
     restored_trim_pos.clear();
 
     kv_raw->seq_div(seq_id, p0, p1, d);
-    clear_compressed(false);
+    clear_compressed(true);
 }
 
 llama_pos llama_kv_cache_dsv4::seq_pos_min(llama_seq_id seq_id) const {

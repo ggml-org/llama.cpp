@@ -161,6 +161,11 @@ public:
         // APE row ids, i.e. pos % ratio, for the compressor-state updates.
         std::vector<int32_t> state_pos;
 
+        // Current-ubatch source row ids and unique persistent-state
+        // destination row ids for deterministic ring-state updates.
+        std::vector<int32_t> state_persist_src_idxs;
+        std::vector<int32_t> state_persist_dst_idxs;
+
         // Flattened source row ids used for state-backed commits. Source rows
         // index the graph-local [persistent_state | current_ubatch_scratch]
         // tensor. For overlapped compression the first half is previous rows
