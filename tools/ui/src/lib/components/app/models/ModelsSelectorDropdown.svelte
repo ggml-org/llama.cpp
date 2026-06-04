@@ -106,9 +106,7 @@
 				]}
 				style="max-width: min(calc(100cqw - 10rem), 20rem)"
 			>
-				<Package class="h-3.5 w-3.5" />
-
-				<ModelId modelId={currentModel} class="min-w-0" hideQuantization />
+				<Package class="h-3.5 w-3.5 shrink-0" />
 			</span>
 		{:else}
 			<p class="text-xs text-muted-foreground">No models available.</p>
@@ -138,22 +136,23 @@
 								]}
 								disabled={disabled || ms.updating}
 							>
-								<Package class="h-3.5 w-3.5" />
+								<Package class="h-3.5 w-3.5 shrink-0" />
 
 								{#if selectedOption}
 									<ModelId
 										modelId={selectedOption.model}
 										class="min-w-0 overflow-hidden"
 										hideOrgName={false}
+										hideQuantization
 									/>
 								{:else}
 									<span class="min-w-0 font-medium">Select model</span>
 								{/if}
 
 								{#if ms.updating || ms.isLoadingModel}
-									<Loader2 class="h-3 w-3.5 animate-spin" />
+									<Loader2 class="h-3 w-3.5 shrink-0 animate-spin" />
 								{:else}
-									<ChevronDown class="h-3 w-3.5" />
+									<ChevronDown class="h-3 w-3.5 shrink-0" />
 								{/if}
 							</DropdownMenu.Trigger>
 						{/snippet}
@@ -258,18 +257,19 @@
 							onclick={() => ms.handleOpenChange(true)}
 							disabled={disabled || ms.updating}
 						>
-							<Package class="h-3.5 w-3.5" />
+							<Package class="h-3.5 w-3.5 shrink-0" />
 
 							{#if selectedOption}
 								<ModelId
 									modelId={selectedOption.model}
 									class="min-w-0 overflow-hidden"
 									hideOrgName={false}
+									hideQuantization
 								/>
 							{/if}
 
 							{#if ms.updating}
-								<Loader2 class="h-3 w-3.5 animate-spin" />
+								<Loader2 class="h-3 w-3.5 shrink-0 animate-spin" />
 							{/if}
 						</button>
 					{/snippet}

@@ -8,8 +8,8 @@
 #ifndef CPPHTTPLIB_HTTPLIB_H
 #define CPPHTTPLIB_HTTPLIB_H
 
-#define CPPHTTPLIB_VERSION "0.45.0"
-#define CPPHTTPLIB_VERSION_NUM "0x002d00"
+#define CPPHTTPLIB_VERSION "0.46.1"
+#define CPPHTTPLIB_VERSION_NUM "0x002e01"
 
 #ifdef _WIN32
 #if defined(_WIN32_WINNT) && _WIN32_WINNT < 0x0A00
@@ -339,15 +339,25 @@ using socket_t = int;
 #include <utility>
 
 // On macOS with a TLS backend, enable Keychain root certificates by default
-// unless the user explicitly opts out.
+// unless the user explicitly opts out. Not enabled on iOS/tvOS/watchOS since
+// the SecTrustSettings APIs used to enumerate anchor certificates are macOS
+// only; on those platforms the user must provide a CA bundle explicitly.
 #if defined(__APPLE__) && defined(__clang__) &&                                \
     !defined(CPPHTTPLIB_DISABLE_MACOSX_AUTOMATIC_ROOT_CERTIFICATES) &&         \
     (defined(CPPHTTPLIB_OPENSSL_SUPPORT) ||                                    \
      defined(CPPHTTPLIB_MBEDTLS_SUPPORT) ||                                    \
      defined(CPPHTTPLIB_WOLFSSL_SUPPORT))
+#if TARGET_OS_OSX
 #ifndef CPPHTTPLIB_USE_CERTS_FROM_MACOSX_KEYCHAIN
 #define CPPHTTPLIB_USE_CERTS_FROM_MACOSX_KEYCHAIN
 #endif
+#endif
+#endif
+
+#if defined(CPPHTTPLIB_USE_CERTS_FROM_MACOSX_KEYCHAIN) &&                      \
+    defined(__APPLE__) && !TARGET_OS_OSX
+#error                                                                         \
+    "CPPHTTPLIB_USE_CERTS_FROM_MACOSX_KEYCHAIN is only supported on macOS. On iOS/tvOS/watchOS, supply a CA bundle via set_ca_cert_path()."
 #endif
 
 // On Windows, enable Schannel certificate verification by default
@@ -382,7 +392,7 @@ using socket_t = int;
 #endif // _WIN32
 
 #ifdef CPPHTTPLIB_USE_CERTS_FROM_MACOSX_KEYCHAIN
-#if TARGET_OS_MAC
+#if TARGET_OS_OSX
 #include <Security/Security.h>
 #endif
 #endif
@@ -430,7 +440,7 @@ using socket_t = int;
 #endif
 #endif // _WIN32
 #ifdef CPPHTTPLIB_USE_CERTS_FROM_MACOSX_KEYCHAIN
-#if TARGET_OS_MAC
+#if TARGET_OS_OSX
 #include <Security/Security.h>
 #endif
 #endif
@@ -473,7 +483,7 @@ using socket_t = int;
 #endif
 #endif // _WIN32
 #ifdef CPPHTTPLIB_USE_CERTS_FROM_MACOSX_KEYCHAIN
-#if TARGET_OS_MAC
+#if TARGET_OS_OSX
 #include <Security/Security.h>
 #endif
 #endif
@@ -1597,7 +1607,7 @@ private:
   std::regex regex_;
 };
 
-int close_socket(socket_t sock);
+int close_socket(socket_t sock) noexcept;
 
 ssize_t write_headers(Stream &strm, const Headers &headers);
 
@@ -1734,7 +1744,7 @@ public:
 
   bool is_running() const;
   void wait_until_ready() const;
-  void stop();
+  void stop() noexcept;
   void decommission();
 
   std::function<TaskQueue *(void)> new_task_queue;
@@ -2014,6 +2024,31 @@ inline ssize_t read_body_content(Stream *stream, BodyReader &br, char *buf,
 
 class decompressor;
 
+enum class NoProxyKind {
+  Wildcard,       // "*"
+  HostnameSuffix, // "example.com" or ".example.com"
+  IPv4Cidr,       // "10.0.0.0/8" (or single IP, treated as /32)
+  IPv6Cidr,       // "fe80::/10" (or single IP, treated as /128)
+};
+
+// Unified 16-byte buffer holding either a v4 (first 4 bytes) or v6 address.
+// Lets one CIDR matcher cover both families.
+using IPBytes = std::array<uint8_t, 16>;
+
+struct NoProxyEntry {
+  NoProxyKind kind = NoProxyKind::Wildcard;
+  std::string hostname_pattern; // lowercased, leading/trailing dot stripped
+  IPBytes net{};
+  int prefix_bits = 0;
+};
+
+struct NormalizedTarget {
+  std::string hostname; // lowercase; brackets and trailing dot removed
+  bool is_ipv4 = false;
+  bool is_ipv6 = false;
+  IPBytes ip{};
+};
+
 } // namespace detail
 
 class ClientImpl {
@@ -2230,6 +2265,7 @@ public:
   void set_proxy_basic_auth(const std::string &username,
                             const std::string &password);
   void set_proxy_bearer_token_auth(const std::string &token);
+  void set_no_proxy(const std::vector<std::string> &patterns);
 
   void set_logger(Logger logger);
   void set_error_logger(ErrorLogger error_logger);
@@ -2255,16 +2291,19 @@ protected:
       std::chrono::time_point<std::chrono::steady_clock> start_time,
       Response &res, bool &success, Error &error);
 
+  bool is_proxy_enabled_for_host(const std::string &host) const;
+
   // All of:
   //   shutdown_ssl
   //   shutdown_socket
   //   close_socket
-  // should ONLY be called when socket_mutex_ is locked.
-  // Also, shutdown_ssl and close_socket should also NOT be called concurrently
-  // with a DIFFERENT thread sending requests using that socket.
+  //   disconnect
+  // should ONLY be called when socket_mutex_ is locked, and only when
+  // no other thread is using the socket.
   virtual void shutdown_ssl(Socket &socket, bool shutdown_gracefully);
   void shutdown_socket(Socket &socket) const;
   void close_socket(Socket &socket);
+  void disconnect(bool gracefully);
 
   bool process_request(Stream &strm, Request &req, Response &res,
                        bool close_connection, Error &error);
@@ -2341,6 +2380,11 @@ protected:
   std::string proxy_basic_auth_username_;
   std::string proxy_basic_auth_password_;
   std::string proxy_bearer_token_auth_token_;
+
+  std::vector<detail::NoProxyEntry> no_proxy_entries_;
+
+  mutable detail::NormalizedTarget host_normalized_;
+  mutable bool host_normalized_valid_ = false;
 
   mutable std::mutex logger_mutex_;
   Logger logger_;
@@ -2602,6 +2646,7 @@ public:
   void set_proxy_basic_auth(const std::string &username,
                             const std::string &password);
   void set_proxy_bearer_token_auth(const std::string &token);
+  void set_no_proxy(const std::vector<std::string> &patterns);
   void set_logger(Logger logger);
   void set_error_logger(ErrorLogger error_logger);
 
@@ -3027,8 +3072,6 @@ bool parse_range_header(const std::string &s, Ranges &ranges);
 
 bool parse_accept_header(const std::string &s,
                          std::vector<std::string> &content_types);
-
-int close_socket(socket_t sock);
 
 ssize_t send_socket(socket_t sock, const void *ptr, size_t size, int flags);
 

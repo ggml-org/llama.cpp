@@ -6,7 +6,11 @@ import {
 	ATTACHMENT_LABEL_MCP_PROMPT,
 	ATTACHMENT_LABEL_MCP_RESOURCE,
 	LEGACY_AGENTIC_REGEX,
-	SETTINGS_KEYS
+	REASONING_EFFORT_TOKENS,
+	SETTINGS_KEYS,
+	API_CHAT,
+	API_SLOTS,
+	CONTROL_ACTION
 } from '$lib/constants';
 import {
 	AttachmentType,
@@ -40,6 +44,7 @@ function getAudioInputFormat(mimeType: string): AudioInputFormat {
 		normalizedMimeType === MimeTypeAudio.WAVE ||
 		normalizedMimeType === MimeTypeAudio.X_WAV ||
 		normalizedMimeType === MimeTypeAudio.X_WAVE ||
+		normalizedMimeType === MimeTypeAudio.VND_WAVE ||
 		normalizedMimeType === MimeTypeAudio.X_PN_WAV
 	) {
 		return FileTypeAudio.WAV;
@@ -125,6 +130,7 @@ export class ChatService {
 			onReasoningChunk,
 			onToolCallChunk,
 			onModel,
+			onCompletionId,
 			onTimings,
 			// Tools for function calling
 			tools,
@@ -157,6 +163,8 @@ export class ChatService {
 			// Config options
 			disableReasoningParsing,
 			excludeReasoningFromContext,
+			enableThinking,
+			reasoningEffort,
 			continueFinalMessage
 		} = options;
 
@@ -238,6 +246,21 @@ export class ChatService {
 			? ReasoningFormat.NONE
 			: ReasoningFormat.AUTO;
 
+		const reasoningBudgetTokens =
+			enableThinking && reasoningEffort ? (REASONING_EFFORT_TOKENS[reasoningEffort] ?? -1) : -1;
+
+		requestBody.chat_template_kwargs = {
+			...(requestBody.chat_template_kwargs ?? {}),
+			enable_thinking: enableThinking
+		};
+
+		if (reasoningBudgetTokens >= 0) {
+			requestBody.thinking_budget_tokens = reasoningBudgetTokens;
+		}
+
+		// arms the budget sampler so reasoning can be ended at runtime via the control endpoint
+		requestBody.reasoning_control = true;
+
 		if (continueFinalMessage) {
 			requestBody.continue_final_message = true;
 			requestBody.add_generation_prompt = false;
@@ -288,7 +311,7 @@ export class ChatService {
 		}
 
 		try {
-			const response = await fetch(`./v1/chat/completions`, {
+			const response = await fetch(API_CHAT.COMPLETIONS, {
 				method: 'POST',
 				headers: getJsonHeaders(),
 				body: JSON.stringify(requestBody),
@@ -314,6 +337,7 @@ export class ChatService {
 					onReasoningChunk,
 					onToolCallChunk,
 					onModel,
+					onCompletionId,
 					onTimings,
 					conversationId,
 					signal
@@ -378,7 +402,7 @@ export class ChatService {
 	 */
 	static async areAllSlotsIdle(model?: string | null, signal?: AbortSignal): Promise<boolean> {
 		try {
-			const url = model ? `./slots?model=${encodeURIComponent(model)}` : './slots';
+			const url = model ? `${API_SLOTS.LIST}?model=${encodeURIComponent(model)}` : API_SLOTS.LIST;
 			const res = await fetch(url, { signal });
 			if (!res.ok) return true;
 
@@ -386,6 +410,50 @@ export class ChatService {
 			return slots.every((s) => !s.is_processing);
 		} catch {
 			return true;
+		}
+	}
+
+	/**
+	 * Ends the current reasoning block of a running completion, targeted by its
+	 * chat completion id (streamed back as `id`). Matching the completion rather
+	 * than a slot index avoids a TOCTOU: a finished completion simply matches
+	 * nothing server side. The model is carried so the router forwards to the
+	 * right child, single model ignores it. Returns true on success.
+	 */
+	static async stopReasoning(completionId: string, model?: string | null): Promise<boolean> {
+		if (!completionId) {
+			console.error(
+				'stopReasoning: no completion id for the active message, cannot target the running completion'
+			);
+			return false;
+		}
+
+		const body: Record<string, unknown> = {
+			id: completionId,
+			action: CONTROL_ACTION.END_REASONING
+		};
+		if (model) body.model = model;
+
+		try {
+			const res = await fetch(API_CHAT.CONTROL, {
+				method: 'POST',
+				headers: getJsonHeaders(),
+				body: JSON.stringify(body)
+			});
+
+			const data = await res.json().catch(() => null);
+			if (!res.ok || data?.success !== true) {
+				console.error('stopReasoning: control request failed', {
+					status: res.status,
+					completionId,
+					response: data
+				});
+				return false;
+			}
+			return true;
+		} catch (error) {
+			console.error('stopReasoning: control request threw', { completionId, error });
+			return false;
 		}
 	}
 
@@ -456,7 +524,7 @@ export class ChatService {
 		}
 
 		try {
-			await fetch(`./v1/chat/completions`, {
+			await fetch(API_CHAT.COMPLETIONS, {
 				method: 'POST',
 				headers: getJsonHeaders(),
 				body: JSON.stringify(requestBody),
@@ -501,6 +569,7 @@ export class ChatService {
 		onReasoningChunk?: (chunk: string) => void,
 		onToolCallChunk?: (chunk: string) => void,
 		onModel?: (model: string) => void,
+		onCompletionId?: (id: string) => void,
 		onTimings?: (timings?: ChatMessageTimings, promptProgress?: ChatMessagePromptProgress) => void,
 		conversationId?: string,
 		abortSignal?: AbortSignal
@@ -518,6 +587,7 @@ export class ChatService {
 		let lastTimings: ChatMessageTimings | undefined;
 		let streamFinished = false;
 		let modelEmitted = false;
+		let idEmitted = false;
 		let toolCallIndexOffset = 0;
 		let hasOpenToolCallBatch = false;
 
@@ -600,6 +670,11 @@ export class ChatService {
 							if (chunkModel && !modelEmitted) {
 								modelEmitted = true;
 								onModel?.(chunkModel);
+							}
+
+							if (parsed.id && !idEmitted) {
+								idEmitted = true;
+								onCompletionId?.(parsed.id);
 							}
 
 							if (promptProgress) {
@@ -879,14 +954,6 @@ export class ChatService {
 			});
 		}
 
-		if (message.content) {
-			contentParts.push({
-				type: ContentPartType.TEXT,
-				text: message.content
-			});
-		}
-
-		// Include images from all messages
 		const imageFiles = message.extra.filter(
 			(extra: DatabaseMessageExtra): extra is DatabaseMessageExtraImageFile =>
 				extra.type === AttachmentType.IMAGE
@@ -916,6 +983,13 @@ export class ChatService {
 					data: audio.base64Data,
 					format: getAudioInputFormat(audio.mimeType)
 				}
+			});
+		}
+
+		if (message.content) {
+			contentParts.push({
+				type: ContentPartType.TEXT,
+				text: message.content
 			});
 		}
 

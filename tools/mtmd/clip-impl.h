@@ -83,6 +83,7 @@
 #define TN_PATCH_EMBD_1    "v.patch_embd.weight.1"
 #define TN_PATCH_BIAS      "v.patch_embd.bias"
 #define TN_NORM_EMBD       "v.norm_embd.%s"
+#define TN_PATCH_NORM      "v.patch_norm.%d.%s"
 #define TN_ATTN_QKV        "%s.blk.%d.attn_qkv.%s"
 #define TN_ATTN_K          "%s.blk.%d.attn_k.%s"
 #define TN_ATTN_Q          "%s.blk.%d.attn_q.%s"
@@ -188,6 +189,8 @@
 #define TN_SAM_FFN_DOWN   "v.sam.blk.%d.mlp.lin2.%s"
 #define TN_SAM_NECK       "v.sam.neck.%d.%s"
 #define TN_SAM_NET        "v.sam.net_%d.%s"
+// deepseek-ocr-2
+#define TN_RESMPL_QUERY  "v.resample_query_%d.%s"
 // (conformer) lfm2
 #define TN_PRE_ENCODE_OUT  "a.pre_encode.out.%s"
 #define TN_FFN_NORM        "%s.blk.%d.ffn_norm.%s"
@@ -315,6 +318,8 @@ enum projector_type {
     PROJECTOR_TYPE_GEMMA3NA,
     PROJECTOR_TYPE_GEMMA4V,
     PROJECTOR_TYPE_GEMMA4A,
+    PROJECTOR_TYPE_GEMMA4UV,
+    PROJECTOR_TYPE_GEMMA4UA,
     PROJECTOR_TYPE_PHI4,
     PROJECTOR_TYPE_IDEFICS3,
     PROJECTOR_TYPE_PIXTRAL,
@@ -337,6 +342,7 @@ enum projector_type {
     PROJECTOR_TYPE_JANUS_PRO,
     PROJECTOR_TYPE_DOTS_OCR,
     PROJECTOR_TYPE_DEEPSEEKOCR,
+    PROJECTOR_TYPE_DEEPSEEKOCR2,
     PROJECTOR_TYPE_LFM2A,
     PROJECTOR_TYPE_GLM4V,
     PROJECTOR_TYPE_YOUTUVL,
@@ -344,6 +350,7 @@ enum projector_type {
     PROJECTOR_TYPE_KIMIK25,
     PROJECTOR_TYPE_NEMOTRON_V2_VL,
     PROJECTOR_TYPE_HUNYUANVL,
+    PROJECTOR_TYPE_EXAONE4_5,
     PROJECTOR_TYPE_MINICPMV4_6,
     PROJECTOR_TYPE_GRANITE_SPEECH,
     PROJECTOR_TYPE_MIMOVL,
@@ -365,6 +372,8 @@ static std::map<projector_type, std::string> PROJECTOR_TYPE_NAMES = {
     { PROJECTOR_TYPE_GEMMA3NA,  "gemma3na"},
     { PROJECTOR_TYPE_GEMMA4V,   "gemma4v"},
     { PROJECTOR_TYPE_GEMMA4A,   "gemma4a"},
+    { PROJECTOR_TYPE_GEMMA4UV,  "gemma4uv"},
+    { PROJECTOR_TYPE_GEMMA4UA,  "gemma4ua"},
     { PROJECTOR_TYPE_PHI4,      "phi4"},
     { PROJECTOR_TYPE_IDEFICS3,  "idefics3"},
     { PROJECTOR_TYPE_PIXTRAL,   "pixtral"},
@@ -386,12 +395,14 @@ static std::map<projector_type, std::string> PROJECTOR_TYPE_NAMES = {
     { PROJECTOR_TYPE_JANUS_PRO, "janus_pro"},
     { PROJECTOR_TYPE_DOTS_OCR,  "dots_ocr"},
     { PROJECTOR_TYPE_DEEPSEEKOCR,"deepseekocr"},
+    { PROJECTOR_TYPE_DEEPSEEKOCR2,"deepseekocr2"},
     { PROJECTOR_TYPE_LFM2A,     "lfm2a"},
     { PROJECTOR_TYPE_GLM4V,     "glm4v"},
     { PROJECTOR_TYPE_YOUTUVL,   "youtuvl"},
     { PROJECTOR_TYPE_YASA2,     "yasa2"},
     { PROJECTOR_TYPE_KIMIK25,   "kimik25"},
     { PROJECTOR_TYPE_NEMOTRON_V2_VL, "nemotron_v2_vl"},
+    { PROJECTOR_TYPE_EXAONE4_5, "exaone4_5"},
     { PROJECTOR_TYPE_HUNYUANVL,  "hunyuanvl"},
     { PROJECTOR_TYPE_MINICPMV4_6, "minicpmv4_6"},
     { PROJECTOR_TYPE_GRANITE_SPEECH, "granite_speech"},
@@ -424,6 +435,9 @@ struct clip_image_f32 {
     int ny;
 
     std::vector<float> buf;
+
+    // marks the global view in e.g., DeepSeek-OCR Models
+    bool add_viewsep = false;
 };
 
 //

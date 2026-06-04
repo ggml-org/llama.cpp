@@ -10,6 +10,8 @@ import { llamaCppBuildPlugin } from './scripts/vite-plugin-llama-cpp-build';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
+const SERVER_ORIGIN = import.meta.env?.VITE_PUBLIC_SERVER_ORIGIN || 'http://localhost:8080';
+
 export default defineConfig({
 	resolve: {
 		alias: {
@@ -75,12 +77,12 @@ export default defineConfig({
 
 	server: {
 		proxy: {
-			'/v1': 'http://localhost:8080',
-			'/props': 'http://localhost:8080',
-			'/models': 'http://localhost:8080',
-			'/tools': 'http://localhost:8080',
-			'/slots': 'http://localhost:8080',
-			'/cors-proxy': 'http://localhost:8080'
+			'/v1': SERVER_ORIGIN,
+			'/props': SERVER_ORIGIN,
+			'/models': SERVER_ORIGIN,
+			'/tools': SERVER_ORIGIN,
+			'/slots': SERVER_ORIGIN,
+			'/cors-proxy': SERVER_ORIGIN
 		},
 		headers: {
 			'Cross-Origin-Embedder-Policy': 'require-corp',

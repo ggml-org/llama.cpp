@@ -10,7 +10,7 @@ void llama_model_nemotron_h::load_arch_hparams(llama_model_loader & ml) {
     // A layer is recurrent IFF the n_head_kv value is set to 0 and
     // the n_ff value is set to 0
     for (uint32_t i = 0; i < hparams.n_layer; ++i) {
-        hparams.recurrent_layer_arr[i] = (hparams.n_head_kv(i) == 0 && hparams.n_ff(i) == 0);
+        hparams.is_recr_impl[i] = (hparams.n_head_kv(i) == 0 && hparams.n_ff(i) == 0);
     }
 
     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
@@ -62,7 +62,7 @@ void llama_model_nemotron_h::load_arch_tensors(llama_model_loader &) {
         // all blocks use the attn norm
         layer.attn_norm  = create_tensor(tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd}, 0);
 
-        if (hparams.is_recurrent(i)) {
+        if (hparams.is_recr(i)) {
             // ssm layers
             layer.ssm_in = create_tensor(tn(LLM_TENSOR_SSM_IN, "weight", i), {n_embd, d_in_proj}, 0);
 
@@ -143,7 +143,7 @@ llama_model_nemotron_h::graph::graph(const llama_model & model, const llm_graph_
         cur = build_norm(inpL, model.layers[il].attn_norm, NULL, LLM_NORM_RMS, il);
         cb(cur, "attn_norm", il);
 
-        if (hparams.is_recurrent(il)) {
+        if (hparams.is_recr(il)) {
             // ssm layer //
             cur = build_mamba2_layer(inp->get_recr(), cur, model, ubatch, il);
         } else if (hparams.n_ff(il) == 0) {

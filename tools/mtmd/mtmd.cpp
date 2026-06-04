@@ -482,6 +482,7 @@ struct mtmd_context {
                     image_preproc = std::make_unique<mtmd_image_preprocessor_dyn_size>(ctx_v);
                 } break;
             case PROJECTOR_TYPE_GEMMA4V:
+            case PROJECTOR_TYPE_GEMMA4UV:
                 {
                     // <|image> ... (image embeddings) ... <image|>
                     img_beg = "<|image>";
@@ -493,11 +494,23 @@ struct mtmd_context {
                     img_end = "\n"; // prevent empty batch on llama-server
                     image_preproc = std::make_unique<mtmd_image_preprocessor_deepseekocr>(ctx_v);
                 } break;
+            case PROJECTOR_TYPE_DEEPSEEKOCR2:
+                {
+                    img_end = "\n"; // prevent empty batch on llama-server
+                    image_preproc = std::make_unique<mtmd_image_preprocessor_deepseekocr2>(ctx_v);
+                } break;
             case PROJECTOR_TYPE_HUNYUANVL:
                 {
                     // note: these use fullwidth ｜ (U+FF5C) and ▁ (U+2581) to match the tokenizer vocabulary
                     img_beg = "<｜hy_place▁holder▁no▁100｜>";
                     img_end = "<｜hy_place▁holder▁no▁101｜>";
+                    image_preproc = std::make_unique<mtmd_image_preprocessor_dyn_size>(ctx_v);
+                } break;
+            case PROJECTOR_TYPE_EXAONE4_5:
+                {
+                    // <vision> ... (image embeddings) ... </vision>
+                    img_beg = "<vision>";
+                    img_end = "</vision>";
                     image_preproc = std::make_unique<mtmd_image_preprocessor_dyn_size>(ctx_v);
                 } break;
             default:
@@ -563,6 +576,12 @@ struct mtmd_context {
                     aud_beg = "<|audio>";
                     aud_end = "<audio|>";
                     audio_preproc = std::make_unique<mtmd_audio_preprocessor_gemma4a>(ctx_a);
+                } break;
+            case PROJECTOR_TYPE_GEMMA4UA:
+                {
+                    aud_beg = "<|audio>";
+                    aud_end = "<audio|>";
+                    audio_preproc = std::make_unique<mtmd_audio_preprocessor_gemma4ua>(ctx_a);
                 } break;
             default:
                 throw std::runtime_error(string_format("%s: unexpected audio projector type %d\n", __func__, proj));
@@ -1091,16 +1110,21 @@ int32_t mtmd_encode(mtmd_context * ctx, const mtmd_image_tokens * image_tokens) 
     if (clip_is_llava(ctx_clip)
         || proj_type == PROJECTOR_TYPE_MINICPMV
         || proj_type == PROJECTOR_TYPE_GLM_EDGE
-        || proj_type == PROJECTOR_TYPE_INTERNVL) {
+        || proj_type == PROJECTOR_TYPE_INTERNVL
+        || proj_type == PROJECTOR_TYPE_DEEPSEEKOCR2) {
         // TODO @ngxson : llava does not support batched encoding ; this should be fixed inside clip_image_batch_encode()
         const auto & entries = image_tokens->batch_f32.entries;
+        // entries may have different token counts
+        // e.g., DeepSeek-OCR-2: 144 per tile views, 257 for the global view
+        size_t offset = 0;
         for (size_t i = 0; i < entries.size(); i++) {
             int n_tokens_per_image = clip_n_output_tokens(ctx_clip, entries[i].get());
             ok = clip_image_encode(
                 ctx_clip,
                 ctx->n_threads,
                 entries[i].get(),
-                ctx->image_embd_v.data() + i*n_mmproj_embd*n_tokens_per_image);
+                ctx->image_embd_v.data() + offset);
+            offset += static_cast<size_t>(n_mmproj_embd) * n_tokens_per_image;
         }
     } else {
         ok = clip_image_batch_encode(
@@ -1125,6 +1149,7 @@ bool mtmd_decode_use_non_causal(const mtmd_context * ctx, const mtmd_input_chunk
     switch (proj_type) {
         case PROJECTOR_TYPE_GEMMA3:
         case PROJECTOR_TYPE_GEMMA4V:
+        case PROJECTOR_TYPE_GEMMA4UV:
             return true;
         default:
             return false;
