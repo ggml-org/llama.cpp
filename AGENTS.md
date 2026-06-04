@@ -96,7 +96,15 @@ if (has_client) {
 Commit message:
 
 ```
-// GOOD: Let the user write the commit
+// BEST: Let the user write the commit
+
+
+// GOOD: Write a concise commit
+
+llama : fix KV being cleared during context shift
+
+Assisted-by: Claude Sonnet
+
 
 // BAD: Write a verbose commit
 
