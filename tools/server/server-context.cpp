@@ -923,6 +923,20 @@ private:
         const int n_ctx_train = llama_model_n_ctx_train(model_tgt);
 
         int n_ctx_slot = llama_n_ctx_seq(ctx_tgt);
+        if (params_base.n_ctx_per_slot > 0) {
+            if (n_ctx_slot > params_base.n_ctx_per_slot) {
+                SRV_INF("capping per-slot context (%d) to --ctx-per-slot (%d)\n", n_ctx_slot,
+                        params_base.n_ctx_per_slot);
+                n_ctx_slot = params_base.n_ctx_per_slot;
+            } else if (params_base.n_ctx_per_slot > n_ctx_slot) {
+                // cap is above the per-slot pool capacity, so it can never bind
+                SRV_WRN(
+                    "--ctx-per-slot (%d) exceeds the per-slot pool capacity (%d) - cap has no effect, "
+                    "slots are limited to %d (raise the KV pool with -c, or unset -c to size it to "
+                    "n_parallel*ctx_per_slot)\n",
+                    params_base.n_ctx_per_slot, n_ctx_slot, n_ctx_slot);
+            }
+        }
         if (n_ctx_slot > n_ctx_train) {
             SRV_WRN("the slot context (%d) exceeds the training context of the model (%d) - capping\n", n_ctx_slot, n_ctx_train);
             n_ctx_slot = n_ctx_train;

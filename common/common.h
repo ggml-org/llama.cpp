@@ -595,6 +595,8 @@ struct common_params {
     bool    cache_idle_slots    = true;  // save and clear idle slots upon starting a new task
     int32_t n_ctx_checkpoints   = 32;    // max number of context checkpoints per slot
     int32_t checkpoint_every_nt = 8192;  // make a checkpoint every n tokens during prefill
+    int32_t n_ctx_per_slot      = 0;     // max context per parallel slot; 0 = unset
+    float   ctx_pool_frac       = 1.0f;  // fraction of the --ctx-per-slot pool to allocate
     int32_t cache_ram_mib       = 8192;  // -1 = no limit, 0 - disable, 1 = 1 MiB, etc.
 
     std::string hostname      = "127.0.0.1";

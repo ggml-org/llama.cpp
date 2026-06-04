@@ -1285,17 +1285,34 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             }
         }
     ).set_env("LLAMA_ARG_CTX_SIZE"));
-    add_opt(common_arg(
-        {"-n", "--predict", "--n-predict"}, "N",
-        string_format(
-            ex == LLAMA_EXAMPLE_COMPLETION
-                ? "number of tokens to predict (default: %d, -1 = infinity, -2 = until context filled)"
-                : "number of tokens to predict (default: %d, -1 = infinity)",
-            params.n_predict),
-        [](common_params & params, int value) {
-            params.n_predict = value;
-        }
-    ).set_env("LLAMA_ARG_N_PREDICT"));
+    add_opt(
+        common_arg({ "--ctx-per-slot" }, "N",
+                   "max context per parallel slot in unified KV mode (default: unset, behavior unchanged).\n"
+                   "when set and -c/--ctx-size is not given, the shared KV pool is sized to n_parallel*N (fit-clamped)",
+                   [](common_params & params, const std::string & value) { params.n_ctx_per_slot = std::stoi(value); })
+            .set_env("LLAMA_ARG_CTX_PER_SLOT")
+            .set_examples({ LLAMA_EXAMPLE_SERVER }));
+    add_opt(common_arg({ "--ctx-pool-frac" }, "N",
+                       string_format("fraction (0 < N <= 1) of the --ctx-per-slot pool to allocate (default: %.2f).\n"
+                                     "with unified KV, slots share the pool, so < 1.0 overcommits (allocate for the "
+                                     "expected, not worst, case)",
+                                     (double) params.ctx_pool_frac),
+                       [](common_params & params, const std::string & value) {
+                           params.ctx_pool_frac = std::stof(value);
+                           if (params.ctx_pool_frac <= 0.0f || params.ctx_pool_frac > 1.0f) {
+                               throw std::invalid_argument("error: --ctx-pool-frac must be in the range (0, 1]\n");
+                           }
+                       })
+                .set_env("LLAMA_ARG_CTX_POOL_FRAC")
+                .set_examples({ LLAMA_EXAMPLE_SERVER }));
+    add_opt(common_arg({ "-n", "--predict", "--n-predict" }, "N",
+                       string_format(
+                           ex == LLAMA_EXAMPLE_COMPLETION ?
+                               "number of tokens to predict (default: %d, -1 = infinity, -2 = until context filled)" :
+                               "number of tokens to predict (default: %d, -1 = infinity)",
+                           params.n_predict),
+                       [](common_params & params, int value) { params.n_predict = value; })
+                .set_env("LLAMA_ARG_N_PREDICT"));
     add_opt(common_arg(
         {"-b", "--batch-size"}, "N",
         string_format("logical maximum batch size (default: %d)", params.n_batch),

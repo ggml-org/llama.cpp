@@ -110,6 +110,30 @@ int llama_server(int argc, char ** argv) {
         params.kv_unified = true;
     }
 
+    // size the KV pool from --ctx-per-slot, unless the user pinned it with -c (-c 0 sets
+    // fit_params_min_ctx to UINT32_MAX)
+    const bool ctx_pool_auto_sized =
+        params.n_ctx_per_slot > 0 && params.n_ctx == 0 && (uint32_t) params.fit_params_min_ctx != UINT32_MAX;
+
+    // ctx_pool_frac overcommits the pool; only meaningful with an auto-sized, unified pool
+    if (params.ctx_pool_frac != 1.0f) {
+        if (!ctx_pool_auto_sized) {
+            SRV_WRN("%s", "--ctx-pool-frac requires --ctx-per-slot and no explicit -c, disabling\n");
+            params.ctx_pool_frac = 1.0f;
+        } else if (!params.kv_unified) {
+            SRV_WRN("%s",
+                    "--ctx-pool-frac requires --kv-unified (non-unified KV partitions the pool "
+                    "per slot, so the fraction would just shrink each slot), disabling\n");
+            params.ctx_pool_frac = 1.0f;
+        }
+    }
+
+    if (ctx_pool_auto_sized) {
+        params.n_ctx = (int32_t) (params.ctx_pool_frac * params.n_parallel * params.n_ctx_per_slot);
+        SRV_INF("--ctx-per-slot: sizing KV pool to ctx_pool_frac*n_parallel*ctx_per_slot = %.2f*%d*%d = %d\n",
+                params.ctx_pool_frac, params.n_parallel, params.n_ctx_per_slot, params.n_ctx);
+    }
+
     // for consistency between server router mode and single-model mode, we set the same model name as alias
     if (params.model_alias.empty() && !params.model.name.empty()) {
         params.model_alias.insert(params.model.name);
