@@ -156,9 +156,6 @@ class TensorNameMap:
         MODEL_TENSOR.V_ENC_MSFA_NORM: (
             "model.vision_tower.timm_model.msfa.norm", # gemma3n
         ),
-        MODEL_TENSOR.V_ENC_EMBD_IMGNL: (
-            "model.image_newline",  # Granite4Vision
-        ),
         MODEL_TENSOR.A_CTC_OUT: (
             "encoder.out",
         ),
@@ -1463,7 +1460,7 @@ class TensorNameMap:
 
         # TODO: I think these should all be moved to mapping_cfg?
         MODEL_TENSOR.V_ENC_EMBD_IMGNL: (
-            "model.image_newline",  # Deepseek-OCR
+            "model.image_newline",  # Deepseek-OCR, Granite4Vision
             "vit.perceive.image_newline", # HunyuanVL
         ),
 
