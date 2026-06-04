@@ -11,6 +11,14 @@ static std::string dsv4_kv(const char * suffix) {
     return std::string("deepseek-v4-flash.") + suffix;
 }
 
+static float dsv4_rope_attn_factor(float freq_scale, float ext_factor) {
+    if (ext_factor == 0.0f) {
+        return 1.0f;
+    }
+
+    return 1.0f / (1.0f + 0.1f*logf(1.0f/freq_scale));
+}
+
 void llama_model_deepseek_v4_flash::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
     ml.get_key(LLM_KV_ATTENTION_Q_LORA_RANK,       hparams.n_lora_q);
@@ -54,7 +62,7 @@ void llama_model_deepseek_v4_flash::load_arch_hparams(llama_model_loader & ml) {
     }
 
     hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
-    std::fill(hparams.swa_layers.begin(), hparams.swa_layers.begin() + hparams.n_layer, 1);
+    hparams.set_swa_pattern(0);
 
     switch (hparams.n_layer) {
         case 43: type = LLM_TYPE_UNKNOWN; break;
@@ -462,7 +470,8 @@ ggml_tensor * llama_model_deepseek_v4_flash::graph::build_compressed_kv(
             ggml_row_size(comp->type, n_embd_head_nope));
 
     comp_pe = ggml_rope_ext(ctx0, comp_pe, comp_pos, nullptr, n_embd_head_rope, rope_type, n_ctx_orig,
-            hparams.dsv4_compress_rope_base, freq_scale, ext_factor, 1.0f, beta_fast, beta_slow);
+            hparams.dsv4_compress_rope_base, freq_scale, ext_factor,
+            dsv4_rope_attn_factor(freq_scale, ext_factor), beta_fast, beta_slow);
     cb(comp_pe, name, il);
 
     comp = ggml_concat(ctx0, comp_nope, comp_pe, 0);
@@ -519,7 +528,8 @@ ggml_tensor * llama_model_deepseek_v4_flash::graph::build_hca_compressed_kv_from
             ggml_row_size(comp->type, n_embd_head_nope));
 
     comp_pe = ggml_rope_ext(ctx0, comp_pe, comp_pos, nullptr, n_embd_head_rope, rope_type, n_ctx_orig,
-            hparams.dsv4_compress_rope_base, freq_scale, ext_factor, 1.0f, beta_fast, beta_slow);
+            hparams.dsv4_compress_rope_base, freq_scale, ext_factor,
+            dsv4_rope_attn_factor(freq_scale, ext_factor), beta_fast, beta_slow);
     cb(comp_pe, name, il);
 
     comp = ggml_concat(ctx0, comp_nope, comp_pe, 0);
@@ -600,7 +610,8 @@ ggml_tensor * llama_model_deepseek_v4_flash::graph::build_overlap_compressed_kv_
             ggml_row_size(comp->type, n_embd_head_nope));
 
     comp_pe = ggml_rope_ext(ctx0, comp_pe, comp_pos, nullptr, n_embd_head_rope, rope_type, n_ctx_orig,
-            hparams.dsv4_compress_rope_base, freq_scale, ext_factor, 1.0f, beta_fast, beta_slow);
+            hparams.dsv4_compress_rope_base, freq_scale, ext_factor,
+            dsv4_rope_attn_factor(freq_scale, ext_factor), beta_fast, beta_slow);
     cb(comp_pe, name, il);
 
     comp = ggml_concat(ctx0, comp_nope, comp_pe, 0);
@@ -670,7 +681,7 @@ ggml_tensor * llama_model_deepseek_v4_flash::graph::build_lid_top_k(
 
     indexer_q_pe = ggml_rope_ext(ctx0, indexer_q_pe, inp_pos, nullptr, n_embd_indexer_head_rope,
             rope_type, n_ctx_orig, hparams.dsv4_compress_rope_base, freq_scale,
-            ext_factor, 1.0f, beta_fast, beta_slow);
+            ext_factor, dsv4_rope_attn_factor(freq_scale, ext_factor), beta_fast, beta_slow);
     cb(indexer_q_pe, "lid_q_pe", il);
 
     indexer_q = ggml_concat(ctx0, indexer_q_nope, indexer_q_pe, 0);
@@ -902,6 +913,7 @@ ggml_tensor * llama_model_deepseek_v4_flash::graph::build_attention(
     const float freq_base_l      = use_compress_rope ? hparams.dsv4_compress_rope_base : freq_base;
     const float freq_scale_l     = use_compress_rope ? freq_scale : 1.0f;
     const float ext_factor_l     = use_compress_rope ? ext_factor : 0.0f;
+    const float attn_factor_l    = dsv4_rope_attn_factor(freq_scale_l, ext_factor_l);
     const float beta_fast_l      = use_compress_rope ? beta_fast : 0.0f;
     const float beta_slow_l      = use_compress_rope ? beta_slow : 0.0f;
     const int32_t n_ctx_orig_l   = use_compress_rope ? n_ctx_orig : 0;
@@ -926,7 +938,7 @@ ggml_tensor * llama_model_deepseek_v4_flash::graph::build_attention(
             ggml_row_size(q->type, n_embd_head)*n_head,
             ggml_row_size(q->type, n_embd_head_nope));
     q_pe = ggml_rope_ext(ctx0, q_pe, inp_pos, nullptr, n_embd_head_rope, rope_type, n_ctx_orig_l,
-            freq_base_l, freq_scale_l, ext_factor_l, 1.0f, beta_fast_l, beta_slow_l);
+            freq_base_l, freq_scale_l, ext_factor_l, attn_factor_l, beta_fast_l, beta_slow_l);
     cb(q_pe, "q_pe", il);
     q = ggml_concat(ctx0, q_nope, q_pe, 0);
     cb(q, "q", il);
@@ -945,7 +957,7 @@ ggml_tensor * llama_model_deepseek_v4_flash::graph::build_attention(
             ggml_row_size(kv->type, n_embd_head),
             ggml_row_size(kv->type, n_embd_head_nope));
     kv_pe = ggml_rope_ext(ctx0, kv_pe, inp_pos, nullptr, n_embd_head_rope, rope_type, n_ctx_orig_l,
-            freq_base_l, freq_scale_l, ext_factor_l, 1.0f, beta_fast_l, beta_slow_l);
+            freq_base_l, freq_scale_l, ext_factor_l, attn_factor_l, beta_fast_l, beta_slow_l);
     cb(kv_pe, "kv_pe", il);
     kv = ggml_concat(ctx0, kv_nope, kv_pe, 0);
     cb(kv, "kv", il);
@@ -1234,7 +1246,7 @@ ggml_tensor * llama_model_deepseek_v4_flash::graph::build_attention(
             ggml_row_size(out->type, n_embd_head)*n_head,
             ggml_row_size(out->type, n_embd_head_nope));
     out_pe = ggml_rope_ext_back(ctx0, out_pe, inp_pos, nullptr, n_embd_head_rope, rope_type, n_ctx_orig_l,
-            freq_base_l, freq_scale_l, ext_factor_l, 1.0f, beta_fast_l, beta_slow_l);
+            freq_base_l, freq_scale_l, ext_factor_l, attn_factor_l, beta_fast_l, beta_slow_l);
     out = ggml_concat(ctx0, out_nope, out_pe, 0);
     cb(out, "attn_derope", il);
 
