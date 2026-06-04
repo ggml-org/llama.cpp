@@ -455,7 +455,7 @@ static ggml_type llama_tensor_get_type_impl(quantize_state_impl & qs, ggml_type 
                 new_type = GGML_TYPE_Q5_K;
             }
             else if (ftype == LLAMA_FTYPE_MOSTLY_AKQ_G2Q3) {
-                new_type = GGML_TYPE_Q6_K
+                new_type = GGML_TYPE_Q6_K;
             }
             else if (ftype == LLAMA_FTYPE_MOSTLY_AKQ_G2Q6) {
                 new_type = GGML_TYPE_Q8_K;
