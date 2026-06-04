@@ -1277,34 +1277,37 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             }
         }
     ).set_env("LLAMA_ARG_CTX_SIZE"));
-    add_opt(
-        common_arg({ "--ctx-per-slot" }, "N",
-                   "context limit per parallel slot (default: unset, behavior unchanged).\n"
-                   "when set without -c/--ctx-size, the shared KV pool is sized to n_parallel*N",
-                   [](common_params & params, const std::string & value) { params.n_ctx_per_slot = std::stoi(value); })
-            .set_env("LLAMA_ARG_CTX_PER_SLOT")
-            .set_examples({ LLAMA_EXAMPLE_SERVER }));
-    add_opt(common_arg({ "--ctx-pool-slots" }, "N",
-                       "slots worth of context to provision in the shared --ctx-per-slot pool "
-                       "(default: all n_parallel slots).\n"
-                       "with unified KV, values below n_parallel overcommit the pool (allocate for the "
-                       "expected, not worst, case)",
-                       [](common_params & params, int value) {
-                           if (value < 1) {
-                               throw std::invalid_argument("error: --ctx-pool-slots must be >= 1\n");
-                           }
-                           params.ctx_pool_slots = value;
-                       })
-                .set_env("LLAMA_ARG_CTX_POOL_SLOTS")
-                .set_examples({ LLAMA_EXAMPLE_SERVER }));
-    add_opt(common_arg({ "-n", "--predict", "--n-predict" }, "N",
-                       string_format(
-                           ex == LLAMA_EXAMPLE_COMPLETION ?
-                               "number of tokens to predict (default: %d, -1 = infinity, -2 = until context filled)" :
-                               "number of tokens to predict (default: %d, -1 = infinity)",
-                           params.n_predict),
-                       [](common_params & params, int value) { params.n_predict = value; })
-                .set_env("LLAMA_ARG_N_PREDICT"));
+    add_opt(common_arg(
+        { "--ctx-per-slot" }, "N",
+        "context limit per parallel slot (default: unset, behavior unchanged).\n"
+        "when set without -c/--ctx-size, the shared KV pool is sized to n_parallel*N",
+        [](common_params & params, const std::string & value) {
+            params.n_ctx_per_slot = std::stoi(value);
+        }
+    ).set_env("LLAMA_ARG_CTX_PER_SLOT").set_examples({ LLAMA_EXAMPLE_SERVER }));
+    add_opt(common_arg(
+        { "--ctx-pool-slots" }, "N",
+        "slots worth of context to provision in the shared --ctx-per-slot pool "
+        "(default: all n_parallel slots).\n"
+        "with unified KV, values below n_parallel overcommit the pool",
+        [](common_params & params, int value) {
+            if (value < 1) {
+                throw std::invalid_argument("error: --ctx-pool-slots must be >= 1\n");
+            }
+            params.ctx_pool_slots = value;
+        }
+    ).set_env("LLAMA_ARG_CTX_POOL_SLOTS").set_examples({ LLAMA_EXAMPLE_SERVER }));
+    add_opt(common_arg(
+        {"-n", "--predict", "--n-predict"}, "N",
+        string_format(
+            ex == LLAMA_EXAMPLE_COMPLETION
+                ? "number of tokens to predict (default: %d, -1 = infinity, -2 = until context filled)"
+                : "number of tokens to predict (default: %d, -1 = infinity)",
+            params.n_predict),
+        [](common_params & params, int value) {
+            params.n_predict = value;
+        }
+    ).set_env("LLAMA_ARG_N_PREDICT"));
     add_opt(common_arg(
         {"-b", "--batch-size"}, "N",
         string_format("logical maximum batch size (default: %d)", params.n_batch),
