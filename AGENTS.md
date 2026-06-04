@@ -79,6 +79,18 @@ When uncertain, err toward minimal assistance.
 Code comments:
 
 ```cpp
+// GOOD (code is self-explantory, no comment needed)
+
+n_ctx = read_metadata("context_length", 1024);
+
+
+// BAD (too verbose, restates what the code already says)
+
+// Populate the n_ctx from metadata key name "context_length", default to 1024 if the key doesn't exist
+n_ctx = read_metadata("context_length", 1024);
+```
+
+```cpp
 // GOOD (explains a non-obvious invariant)
 
 accept();
@@ -91,6 +103,32 @@ if (has_client) {
 // BAD (too verbose, restates what the code already says)
 
 // Instead of blocking indefinitely on accept(), the server polls the listening socket with idle_interval as a timeout. If no new client connects within that interval, it fires task_queue->on_idle() and loops back
+```
+
+```cpp
+// GOOD (generic, useful to any future reader)
+
+// note : reset here, as we will release the slot below
+n_tokens = 0;
+// ... (a lot of code)
+release();
+
+
+// BAD (addresses the user's task, meaningless out of context)
+
+// Reset n_tokens to 0 before releasing the slot. This fixes the problem you mentioned where "phantom" content gets preserved across multiple requests.
+n_tokens = 0;
+```
+
+```cpp
+// GOOD (code is copied from another place; context is already clear, no comment added)
+
+ggml_tensor * inp_pos = build_inp_pos();
+
+// BAD (code copied from elsewhere - do not add comments that weren't there originally)
+
+// inp_pos - contains the positions
+ggml_tensor * inp_pos = build_inp_pos();
 ```
 
 Commit message:
