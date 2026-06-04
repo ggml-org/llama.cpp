@@ -90,19 +90,87 @@ class GptOssModel(TextModel):
         return super().filter_tensors((name, gen))
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        # correct naming for down_proj
+        # ── per-expert fp16 down_proj (e.g. mlp.experts.down_projs.E.weight) ──
+        # These need to be buffered and stacked into [n_experts, in, out] before writing.
+        import re
+        m_down = re.search(r'\.mlp\.experts\.down_projs\.(\d+)\.(weight|bias)$', name)
+        if m_down:
+            suffix = m_down.group(2)
+            expert_id = int(m_down.group(1))
+            layer_id = bid if bid is not None else 0
+            n_experts = int(self.hparams.get("num_local_experts") or self.hparams.get("num_experts") or 32)
+            
+            if suffix == 'weight':
+                if not hasattr(self, '_fp16_down_experts_w'):
+                    self._fp16_down_experts_w: dict[int, dict[int, Tensor]] = {}
+                self._fp16_down_experts_w.setdefault(layer_id, {})[expert_id] = data_torch
+                if len(self._fp16_down_experts_w[layer_id]) == n_experts:
+                    experts = self._fp16_down_experts_w.pop(layer_id)
+                    stacked = torch.stack([experts[i] for i in sorted(experts)], dim=0)
+                    yield f"blk.{layer_id}.ffn_down_exps.weight", stacked
+            else:
+                if not hasattr(self, '_fp16_down_experts_b'):
+                    self._fp16_down_experts_b: dict[int, dict[int, Tensor]] = {}
+                self._fp16_down_experts_b.setdefault(layer_id, {})[expert_id] = data_torch
+                if len(self._fp16_down_experts_b[layer_id]) == n_experts:
+                    experts = self._fp16_down_experts_b.pop(layer_id)
+                    stacked = torch.stack([experts[i] for i in sorted(experts)], dim=0)
+                    yield f"blk.{layer_id}.ffn_down_exps.bias", stacked
+            return
+
+        # ── per-expert fp16 gate_up_proj (e.g. mlp.experts.gate_up_projs.E.weight) ──
+        # gate_up_projs.E.weight has shape [gate+up, in]; split, transpose, and stack per expert.
+        m_gateup = re.search(r'\.mlp\.experts\.gate_up_projs\.(\d+)\.(weight|bias)$', name)
+        if m_gateup:
+            suffix = m_gateup.group(2)
+            expert_id = int(m_gateup.group(1))
+            layer_id = bid if bid is not None else 0
+            n_experts = int(self.hparams.get("num_local_experts") or self.hparams.get("num_experts") or 32)
+            
+            if suffix == 'weight':
+                if not hasattr(self, '_fp16_gate_up_experts_w'):
+                    self._fp16_gate_up_experts_w: dict[int, dict[int, Tensor]] = {}
+                self._fp16_gate_up_experts_w.setdefault(layer_id, {})[expert_id] = data_torch
+                if len(self._fp16_gate_up_experts_w[layer_id]) == n_experts:
+                    experts = self._fp16_gate_up_experts_w.pop(layer_id)
+                    gate_experts = [experts[i][::2, :] for i in sorted(experts)]
+                    up_experts   = [experts[i][1::2, :] for i in sorted(experts)]
+                    yield f"blk.{layer_id}.ffn_gate_exps.weight", torch.stack(gate_experts, dim=0)
+                    yield f"blk.{layer_id}.ffn_up_exps.weight",   torch.stack(up_experts, dim=0)
+            else:
+                if not hasattr(self, '_fp16_gate_up_experts_b'):
+                    self._fp16_gate_up_experts_b: dict[int, dict[int, Tensor]] = {}
+                self._fp16_gate_up_experts_b.setdefault(layer_id, {})[expert_id] = data_torch
+                if len(self._fp16_gate_up_experts_b[layer_id]) == n_experts:
+                    experts = self._fp16_gate_up_experts_b.pop(layer_id)
+                    gate_experts = [experts[i][::2] for i in sorted(experts)]
+                    up_experts   = [experts[i][1::2] for i in sorted(experts)]
+                    yield f"blk.{layer_id}.ffn_gate_exps.bias", torch.stack(gate_experts, dim=0)
+                    yield f"blk.{layer_id}.ffn_up_exps.bias",   torch.stack(up_experts, dim=0)
+            return
+
+        # ── router.linear: fp16 model has extra .linear sub-module ───────────
+        # MXFP4 model uses mlp.router.weight; fp16 model uses mlp.router.linear.weight
+        if "mlp.router.linear" in name:
+            # router.linear.weight -> router.weight -> ffn_gate_inp
+            name = name.replace("mlp.router.linear", "mlp.router")
+            yield from super().modify_tensors(data_torch, name, bid)
+            return
+
+        # ── original MXFP4 down_proj handling ─────────────────────────────────
         if "down_proj" in name:
             if name.endswith("_bias"):
                 name = name.replace("down_proj_bias", "down_proj.bias")
             elif "_blocks" not in name and "_scales" not in name:
                 logger.warning(f"{name} is not in MXFP4, performance may be degraded")
                 name = name.replace("down_proj", "down_proj.weight")
-                data_torch = data_torch.transpose(-1, -2)
+                if data_torch.dim() >= 2:
+                    data_torch = data_torch.transpose(-1, -2)
             else:
                 # otherwise, it should already be repacked to ggml MXFP4 format
                 return
 
-        # split the gate_up into gate and up
+        # ── original MXFP4 gate_up_proj handling ──────────────────────────────
         if "gate_up_proj" in name:
             if name.endswith("_bias"):
                 name_up = name.replace("gate_up_proj_bias", "up_proj.bias")
@@ -114,12 +182,14 @@ class GptOssModel(TextModel):
                 logger.warning(f"{name} is not in MXFP4, performance may be degraded")
                 name_up = name.replace("gate_up_proj", "up_proj.weight")
                 name_gate = name.replace("gate_up_proj", "gate_proj.weight")
-                data_torch = data_torch.transpose(-1, -2)
+                if data_torch.dim() >= 2:
+                    data_torch = data_torch.transpose(-1, -2)
                 gate_proj_weight, up_proj_weight = data_torch[:, ::2, :], data_torch[:, 1::2, :]
                 yield from super().modify_tensors(gate_proj_weight, name_gate, bid)
                 yield from super().modify_tensors(up_proj_weight, name_up, bid)
         else:
             yield from super().modify_tensors(data_torch, name, bid)
+
 
     def set_vocab(self):
         self._set_vocab_gpt2()
@@ -128,3 +198,9 @@ class GptOssModel(TextModel):
         super().set_gguf_parameters()
         self.gguf_writer.add_sliding_window(self.hparams["sliding_window"])
         self.gguf_writer.add_expert_feed_forward_length(self.hparams["intermediate_size"])
+        
+        n_experts = self.hparams.get("num_local_experts") or self.hparams.get("num_experts") or 32
+        n_expert_used = self.hparams.get("num_experts_per_tok") or 4
+        
+        self.gguf_writer.add_expert_count(n_experts)
+        self.gguf_writer.add_expert_used_count(n_expert_used)
