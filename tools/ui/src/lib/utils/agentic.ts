@@ -18,6 +18,7 @@ export interface AgenticSection {
 	toolArgs?: string;
 	toolResult?: string;
 	toolResultExtras?: DatabaseMessageExtra[];
+	wasInterrupted?: boolean;
 }
 
 /**
@@ -51,7 +52,8 @@ function deriveSingleTurnSections(
 		const isPending = isStreaming && !hasContentAfterReasoning;
 		sections.push({
 			type: isPending ? AgenticSectionType.REASONING_PENDING : AgenticSectionType.REASONING,
-			content: message.reasoningContent
+			content: message.reasoningContent,
+			wasInterrupted: !isStreaming && !hasContentAfterReasoning
 		});
 	}
 
