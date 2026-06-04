@@ -6,6 +6,7 @@
 	import { createAutoScrollController } from '$lib/hooks/use-auto-scroll.svelte';
 	import { useThrottle } from '$lib/hooks/use-throttle.svelte';
 	import { formatReasoningPreview } from '$lib/utils';
+	import { config } from '$lib/stores/settings.svelte';
 	import type { Snippet } from 'svelte';
 	import type { Component } from 'svelte';
 
@@ -40,6 +41,8 @@
 	}: Props = $props();
 
 	let contentContainer: HTMLDivElement | undefined = $state();
+
+	const showThoughtInProgress = $derived(config().showThoughtInProgress as boolean);
 
 	let previewKey = useThrottle(() => rawContent ?? preview ?? '', 500);
 	let displayedPreview = $state('');
@@ -92,7 +95,7 @@
 					{/if}
 				</div>
 
-			{#if displayedPreview}
+			{#if displayedPreview && !showThoughtInProgress}
 				<div class="flex min-w-0 items-baseline justify-between gap-2">
 					<div class="w-3/4 truncate text-xs text-muted-foreground/80">
 						{displayedPreview}

@@ -310,7 +310,7 @@
 			icon={Brain}
 			title="Reasoning"
 			subtitle={reasoningSubtitle}
-			rawContent={!showThoughtInProgress ? section.content : undefined}
+			rawContent={section.content}
 			onToggle={() => toggleExpanded(index, section)}
 		>
 			<div class="pt-3">
@@ -329,7 +329,7 @@
 			icon={Brain}
 			title={reasoningTitle}
 			subtitle={reasoningSubtitle}
-			rawContent={!showThoughtInProgress ? section.content : undefined}
+			rawContent={section.content}
 			{isStreaming}
 			onToggle={() => toggleExpanded(index, section)}
 		>
