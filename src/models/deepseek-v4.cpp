@@ -226,17 +226,22 @@ ggml_tensor * llama_model_deepseek_v4_flash::graph::build_hc_sinkhorn(
     // row softmax over dst, one column normalization, then repeated row/column normalization.
     comb = ggml_soft_max(ctx0, comb);
 
+    ggml_tensor * eps = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, 1);
+    eps = ggml_fill(ctx0, eps, hparams.dsv4_hc_eps);
+
+    comb = ggml_add(ctx0, comb, eps);
+
     auto norm_cols = [&]() {
         ggml_tensor * comb_src_dst = ggml_cont(ctx0, ggml_permute(ctx0, comb, 1, 0, 2, 3));
         ggml_tensor * col_sum = ggml_sum_rows(ctx0, comb_src_dst);
-        col_sum = ggml_clamp(ctx0, col_sum, hparams.dsv4_hc_eps, INFINITY);
+        col_sum = ggml_add(ctx0, col_sum, eps);
         col_sum = ggml_permute(ctx0, col_sum, 1, 0, 2, 3);
         comb = ggml_div(ctx0, comb, col_sum);
     };
 
     auto norm_rows = [&]() {
         ggml_tensor * row_sum = ggml_sum_rows(ctx0, comb);
-        row_sum = ggml_clamp(ctx0, row_sum, hparams.dsv4_hc_eps, INFINITY);
+        row_sum = ggml_add(ctx0, row_sum, eps);
         comb = ggml_div(ctx0, comb, row_sum);
     };
 
@@ -281,7 +286,9 @@ ggml_tensor * llama_model_deepseek_v4_flash::graph::build_hc_pre(
     ggml_tensor * pre = dsv4_view_2d(ctx0, mixes, hc, nt, 0);
     pre = dsv4_hc_affine(ctx0, pre, scale_pre, base_pre);
     pre = ggml_sigmoid(ctx0, pre);
-    pre = ggml_clamp(ctx0, pre, hparams.dsv4_hc_eps, INFINITY);
+    ggml_tensor * eps = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, 1);
+    eps = ggml_fill(ctx0, eps, hparams.dsv4_hc_eps);
+    pre = ggml_add(ctx0, pre, eps);
     cb(pre, "hc_pre", il);
 
     *post = dsv4_view_2d(ctx0, mixes, hc, nt, hc);
@@ -344,7 +351,9 @@ ggml_tensor * llama_model_deepseek_v4_flash::graph::build_hc_head(
 
     ggml_tensor * pre = dsv4_hc_affine(ctx0, mixes, hc_scale, hc_base);
     pre = ggml_sigmoid(ctx0, pre);
-    pre = ggml_clamp(ctx0, pre, hparams.dsv4_hc_eps, INFINITY);
+    ggml_tensor * eps = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, 1);
+    eps = ggml_fill(ctx0, eps, hparams.dsv4_hc_eps);
+    pre = ggml_add(ctx0, pre, eps);
     cb(pre, "hc_head_pre", -1);
 
     return build_hc_weighted_sum(x, pre);
