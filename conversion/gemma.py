@@ -873,7 +873,7 @@ class Gemma4UnifiedVisionAudioModel(Gemma4VisionAudioModel):
         assert self.hparams_audio is not None
         text_embd_dim = self.hparams_vision["mm_embed_dim"]
         self.hparams_vision["hidden_size"] = text_embd_dim
-        self.hparams_audio["hidden_size"] = text_embd_dim
+        self.hparams_audio["hidden_size"] = self.hparams_audio["audio_embed_dim"]
         # this is a transformer-less vision tower, the params below are redundant but set to avoid error
         self.hparams_vision["intermediate_size"] = 0
         self.hparams_vision["num_layers"] = 0
