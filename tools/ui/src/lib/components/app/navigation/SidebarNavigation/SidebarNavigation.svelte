@@ -229,7 +229,6 @@
 										pinned: conversation.pinned
 									}}
 									{depth}
-									{handleMobileSidebarItemClick}
 									isActive={currentChatId === conversation.id}
 									onSelect={selectConversation}
 									onEdit={handleEditConversation}
