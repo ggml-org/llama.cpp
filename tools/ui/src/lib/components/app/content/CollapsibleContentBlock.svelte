@@ -95,16 +95,18 @@
 					{/if}
 				</div>
 
-			{#if displayedPreview && !showThoughtInProgress}
-				<div class="flex min-w-0 items-baseline justify-between gap-2">
-					<div class="w-3/4 truncate text-xs text-muted-foreground/80">
-						{displayedPreview}
+				{#if displayedPreview && !showThoughtInProgress}
+					<div class="flex min-w-0 items-baseline justify-between gap-2">
+						<div class="w-3/4 truncate text-xs text-muted-foreground/80">
+							{displayedPreview}
+						</div>
+						{#if displayedOverflow > 0}
+							<span class="shrink-0 text-xs text-muted-foreground/60"
+								>{displayedOverflow}+ chars</span
+							>
+						{/if}
 					</div>
-					{#if displayedOverflow > 0}
-						<span class="shrink-0 text-xs text-muted-foreground/60">{displayedOverflow}+ chars</span>
-					{/if}
-				</div>
-			{/if}
+				{/if}
 			</div>
 
 			<div

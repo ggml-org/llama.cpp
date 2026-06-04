@@ -302,7 +302,9 @@
 			? hasReasoningError
 				? 'Error'
 				: 'Cancelled'
-			: (isStreaming ? '' : undefined)}
+			: isStreaming
+				? ''
+				: undefined}
 
 		<CollapsibleContentBlock
 			open={isExpanded(index, section)}
@@ -321,7 +323,7 @@
 		</CollapsibleContentBlock>
 	{:else if section.type === AgenticSectionType.REASONING_PENDING}
 		{@const reasoningTitle = isStreaming ? 'Reasoning...' : 'Reasoning'}
-		{@const reasoningSubtitle = isStreaming ? '' : (hasReasoningError ? 'Error' : 'Cancelled')}
+		{@const reasoningSubtitle = isStreaming ? '' : hasReasoningError ? 'Error' : 'Cancelled'}
 
 		<CollapsibleContentBlock
 			open={isExpanded(index, section)}

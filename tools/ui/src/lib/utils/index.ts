@@ -77,7 +77,7 @@ export {
 	formatTime,
 	formatPerformanceTime,
 	formatAttachmentText,
-	formatReasoningPreview,
+	formatReasoningPreview
 } from './formatters';
 
 // IME utilities

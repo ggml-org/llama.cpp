@@ -17,7 +17,7 @@ export const STRIP_MARKDOWN_CAPTURE_PATTERNS: [RegExp, string][] = [
 	[/\*\*(.*?)\*\*/g, '$1'],
 	[/__(.*?)__/g, '$1'],
 	[/\*(.*?)\*/g, '$1'],
-	[/_(.*?)_/g, '$1'],
+	[/_(.*?)_/g, '$1']
 ];
 
 export const STRIP_MARKDOWN_INLINE_REGEX = new RegExp(
