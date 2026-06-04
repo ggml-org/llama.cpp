@@ -106,6 +106,7 @@ class ServerProcess:
     sleep_idle_seconds: int | None = None
     cache_ram: int | None = None
     no_cache_idle_slots: bool = False
+    slot_prompt_similarity: float | None = None
     log_path: str | None = None
     webui_mcp_proxy: bool = False
     backend_sampling: bool = False
@@ -251,6 +252,8 @@ class ServerProcess:
             server_args.extend(["--cache-ram", self.cache_ram])
         if self.no_cache_idle_slots:
             server_args.append("--no-cache-idle-slots")
+        if self.slot_prompt_similarity is not None:
+            server_args.extend(["--slot-prompt-similarity", self.slot_prompt_similarity])
         if self.webui_mcp_proxy:
             server_args.append("--webui-mcp-proxy")
         if self.backend_sampling:
