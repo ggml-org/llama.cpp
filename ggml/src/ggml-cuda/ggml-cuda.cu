@@ -781,8 +781,7 @@ static void ggml_backend_cuda_buffer_clear(ggml_backend_buffer_t buffer, uint8_t
     ggml_backend_cuda_buffer_context * ctx = (ggml_backend_cuda_buffer_context *)buffer->context;
 
     ggml_cuda_set_device(ctx->device);
-    CUDA_CHECK(cudaMemsetAsync(ctx->dev_ptr, value, buffer->size, cudaStreamPerThread));
-    CUDA_CHECK(cudaStreamSynchronize(cudaStreamPerThread));
+    CUDA_CHECK(cudaMemset(ctx->dev_ptr, value, buffer->size));
 }
 
 static const ggml_backend_buffer_i ggml_backend_cuda_buffer_interface = {
@@ -5536,7 +5535,7 @@ static ggml_backend_event_t ggml_backend_cuda_device_event_new(ggml_backend_dev_
     ggml_cuda_set_device(dev_ctx->device);
 
     cudaEvent_t event;
-    CUDA_CHECK(cudaEventCreateWithFlags(&event, cudaEventDisableTiming));
+    CUDA_CHECK(cudaEventCreate(&event));
 
     return new ggml_backend_event {
         /* .device  = */ dev,
