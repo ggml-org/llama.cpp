@@ -261,7 +261,7 @@
 									lastModified: conversation.lastModified,
 									currNode: conversation.currNode,
 									forkedFromConversationId: conversation.forkedFromConversationId,
-								pinned: conversation.pinned
+									pinned: conversation.pinned
 								}}
 								{depth}
 								isActive={currentChatId === conversation.id}

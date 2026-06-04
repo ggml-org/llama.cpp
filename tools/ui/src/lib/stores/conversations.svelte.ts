@@ -1124,9 +1124,7 @@ export function buildConversationTree(convs: DatabaseConversation[]): Conversati
 		}
 	}
 
-	const roots = convs
-        .filter((c) => !forkIds.has(c.id))
-        .sort(comparePinnedThenRecent);
+	const roots = convs.filter((c) => !forkIds.has(c.id)).sort(comparePinnedThenRecent);
 	for (const root of roots) {
 		walk(root, 0);
 	}
