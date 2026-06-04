@@ -108,7 +108,7 @@ if (has_client) {
 ```cpp
 // GOOD (generic, useful to any future reader)
 
-// note : reset here, as we will release the slot below
+// reset here, as we will release the slot below
 n_tokens = 0;
 // ... (a lot of code)
 release();
