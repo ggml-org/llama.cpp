@@ -721,7 +721,6 @@ __constant__ static const float tq3_0_signs_cuda[32] = {
     -1.0f, +1.0f, +1.0f, -1.0f, +1.0f, -1.0f, -1.0f, +1.0f,
 };
 
-static __device__ __forceinline__ uint8_t tq3_idx_from_packed_cuda(const uint8_t * qp, int r);
 
 template<typename dst_t>
 static __global__ void dequantize_block_tq3_0(const void * __restrict__ vx, dst_t * __restrict__ yy, int nb) {
@@ -803,10 +802,14 @@ static void dequantize_row_tq3_1s_cuda(const void * vx, dst_t * y, const int64_t
 }
 
 __device__ static inline float tq3_4s_decode_scale_cuda(uint8_t byte) {
-    if (byte == 0) return 0.0f;
-    const int exp = (byte >> 5) - 9;
-    const float mantissa = 1.0f + (float)(byte & 31) / 32.0f;
-    return ldexpf(mantissa, exp);
+    if (byte == 0) {
+        return 0.0f;
+    }
+
+    // d encodes (1 + mant/32) * 2^(exp - 9), with exp in the high 3 bits.
+    // Build the exact FP32 representation directly and avoid ldexpf in the hot kernel.
+    const uint32_t bits = (((uint32_t) (byte >> 5) + 118u) << 23) | ((uint32_t) (byte & 31u) << 18);
+    return __uint_as_float(bits);
 }
 
 template<typename dst_t>
@@ -815,21 +818,25 @@ static __global__ void dequantize_block_tq3_4s(const void * __restrict__ vx, dst
     if (i >= nb) return;
 
     const block_tq3_4s * x = (const block_tq3_4s *)vx + i;
-    const float ds[4] = {
-        tq3_4s_decode_scale_cuda(x->d[0]),
-        tq3_4s_decode_scale_cuda(x->d[1]),
-        tq3_4s_decode_scale_cuda(x->d[2]),
-        tq3_4s_decode_scale_cuda(x->d[3]),
-    };
 
     dst_t * y = yy + i * QK_TQ3_0;
     const int j = threadIdx.x;
     const int g = j / 8;
     const int r = j % 8;
-    const uint8_t * qp = x->qs + g * 3;
-    const uint8_t idx = tq3_idx_from_packed_cuda(qp, r);
+    uint32_t packed = 0;
+    float d = 0.0f;
 
-    float val = tq3_0_centroids_cuda[idx] * ds[g];
+    if (j < 4) {
+        const uint8_t * qp = x->qs + j * 3;
+        packed = (uint32_t) qp[0] | ((uint32_t) qp[1] << 8) | ((uint32_t) qp[2] << 16);
+        d = tq3_4s_decode_scale_cuda(x->d[j]);
+    }
+
+    packed = __shfl_sync(0xFFFFFFFF, packed, g, 32);
+    d      = __shfl_sync(0xFFFFFFFF, d, g, 32);
+    const uint8_t idx = (packed >> (3 * r)) & 7u;
+
+    float val = tq3_0_centroids_cuda[idx] * d;
     for (int step = 1; step < 32; step <<= 1) {
         float other = __shfl_xor_sync(0xFFFFFFFF, val, step, 32);
         if (j & step) {
@@ -848,18 +855,6 @@ static void dequantize_row_tq3_4s_cuda(const void * vx, dst_t * y, const int64_t
     dequantize_block_tq3_4s<<<nb, 32, 0, stream>>>(vx, y, nb);
 }
 
-static __device__ __forceinline__ uint8_t tq3_idx_from_packed_cuda(const uint8_t * qp, int r) {
-    switch (r) {
-        case 0: return  qp[0]       & 7;
-        case 1: return (qp[0] >> 3) & 7;
-        case 2: return ((qp[0] >> 6) | (qp[1] << 2)) & 7;
-        case 3: return (qp[1] >> 1) & 7;
-        case 4: return (qp[1] >> 4) & 7;
-        case 5: return ((qp[1] >> 7) | (qp[2] << 1)) & 7;
-        case 6: return (qp[2] >> 2) & 7;
-        default: return (qp[2] >> 5) & 7;
-    }
-}
 
 to_fp16_cuda_t ggml_get_to_fp16_cuda(ggml_type type) {
     switch (type) {

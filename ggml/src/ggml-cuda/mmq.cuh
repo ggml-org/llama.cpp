@@ -3322,21 +3322,21 @@ template <int mmq_y, bool need_check> static __device__ __forceinline__ void loa
             const uint8_t * qp = bxi->qs + g * 3;
             packed = (uint32_t) qp[0] | ((uint32_t) qp[1] << 8) | ((uint32_t) qp[2] << 16);
         }
-        rms = __shfl_sync(0xFFFFFFFF, rms, leader);
-        packed = __shfl_sync(0xFFFFFFFF, packed, leader);
+        rms = __shfl_sync(0xFFFFFFFF, rms, leader, WARP_SIZE);
+        packed = __shfl_sync(0xFFFFFFFF, packed, leader, WARP_SIZE);
 
         // Rotated-domain TQ3 blocks always quantize against the same centroid set.
         // That makes the q8_0 requant exact with a constant per-centroid lookup:
         // q = round(centroid * 127 / max_abs_centroid), d = rms * max_abs_centroid / 127.
         const uint8_t idx = (packed >> (3 * r)) & 7;
         const int q = (int) tq3_q8_levels[idx];
-        const float d = __shfl_sync(0xFFFFFFFF, rms * tq3_d_scale, leader);
+        const float d = __shfl_sync(0xFFFFFFFF, rms * tq3_d_scale, leader, WARP_SIZE);
 
         const int slot = lane % QI8_0;
-        const int q1 = __shfl_sync(0xFFFFFFFF, q, 4*slot + 0);
-        const int q2 = __shfl_sync(0xFFFFFFFF, q, 4*slot + 1);
-        const int q3 = __shfl_sync(0xFFFFFFFF, q, 4*slot + 2);
-        const int q4 = __shfl_sync(0xFFFFFFFF, q, 4*slot + 3);
+        const int q1 = __shfl_sync(0xFFFFFFFF, q, 4*slot + 0, WARP_SIZE);
+        const int q2 = __shfl_sync(0xFFFFFFFF, q, 4*slot + 1, WARP_SIZE);
+        const int q3 = __shfl_sync(0xFFFFFFFF, q, 4*slot + 2, WARP_SIZE);
+        const int q4 = __shfl_sync(0xFFFFFFFF, q, 4*slot + 3, WARP_SIZE);
         if (lane < QI8_0) {
             const uint32_t packed_q = (uint8_t) q1 | ((uint8_t) q2 << 8) | ((uint8_t) q3 << 16) | ((uint8_t) q4 << 24);
 #if defined(AMD_MFMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
@@ -3396,18 +3396,18 @@ template <int mmq_y, bool need_check> static __device__ __forceinline__ void loa
             const uint8_t * qp = bxi->qs + g * 3;
             packed = (uint32_t) qp[0] | ((uint32_t) qp[1] << 8) | ((uint32_t) qp[2] << 16);
         }
-        rms = __shfl_sync(0xFFFFFFFF, rms, leader);
-        packed = __shfl_sync(0xFFFFFFFF, packed, leader);
+        rms = __shfl_sync(0xFFFFFFFF, rms, leader, WARP_SIZE);
+        packed = __shfl_sync(0xFFFFFFFF, packed, leader, WARP_SIZE);
 
         const uint8_t idx = (packed >> (3 * r)) & 7;
         const int q = (int) tq3_q8_levels[idx];
-        const float d = __shfl_sync(0xFFFFFFFF, rms * tq3_d_scale, leader);
+        const float d = __shfl_sync(0xFFFFFFFF, rms * tq3_d_scale, leader, WARP_SIZE);
 
         const int slot = lane % QI8_0;
-        const int q1 = __shfl_sync(0xFFFFFFFF, q, 4*slot + 0);
-        const int q2 = __shfl_sync(0xFFFFFFFF, q, 4*slot + 1);
-        const int q3 = __shfl_sync(0xFFFFFFFF, q, 4*slot + 2);
-        const int q4 = __shfl_sync(0xFFFFFFFF, q, 4*slot + 3);
+        const int q1 = __shfl_sync(0xFFFFFFFF, q, 4*slot + 0, WARP_SIZE);
+        const int q2 = __shfl_sync(0xFFFFFFFF, q, 4*slot + 1, WARP_SIZE);
+        const int q3 = __shfl_sync(0xFFFFFFFF, q, 4*slot + 2, WARP_SIZE);
+        const int q4 = __shfl_sync(0xFFFFFFFF, q, 4*slot + 3, WARP_SIZE);
         if (lane < QI8_0) {
             const uint32_t packed_q = (uint8_t) q1 | ((uint8_t) q2 << 8) | ((uint8_t) q3 << 16) | ((uint8_t) q4 << 24);
 #if defined(AMD_MFMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
@@ -4459,4 +4459,3 @@ void ggml_cuda_op_mul_mat_q(
     const int64_t src1_padded_row_size, cudaStream_t stream);
 
 bool ggml_cuda_should_use_mmq(enum ggml_type type, int cc, int64_t ne11, int64_t n_experts);
-

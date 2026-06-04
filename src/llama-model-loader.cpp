@@ -18,6 +18,7 @@ static const size_t MiB = 1024*kiB;
 static const size_t GiB = 1024*MiB;
 static const char * const LLAMA_KV_GENERAL_QUANTIZATION_ALIAS = "general.quantization_alias";
 
+
 const char * llama_file_version_name(llama_fver version) {
     switch (version) {
         case GGUF_FILE_VERSION_V1: return "GGUF V1 (support until nov 2023)";

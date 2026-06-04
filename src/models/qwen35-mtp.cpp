@@ -5,7 +5,9 @@ void llama_model_qwen35_mtp::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key_or_arr(LLM_KV_ROPE_DIMENSION_SECTIONS,    hparams.rope_sections, 4, true);
 
     ml.get_key(LLM_KV_NEXTN_PREDICT_LAYERS, hparams.nextn_predict_layers, false);
-    GGML_ASSERT(hparams.nextn_predict_layers > 0   && "QWEN35_MTP requires nextn_predict_layers > 0");
+    if (hparams.nextn_predict_layers == 0) {
+        throw std::runtime_error("QWEN35_MTP requires nextn_predict_layers > 0");
+    }
     GGML_ASSERT(hparams.nextn_predict_layers <= hparams.n_layer);
 
     // only the MTP layers get a KV cache, trunk layers are skipped.
