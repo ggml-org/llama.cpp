@@ -3,10 +3,10 @@
 void llama_model_apertus::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
 
-    ml.get_key_or_arr(LLM_KV_XIELU_ALPHA_N,hparams.xielu_alpha_n, hparams.n_layer());
-    ml.get_key_or_arr(LLM_KV_XIELU_ALPHA_P,hparams.xielu_alpha_p, hparams.n_layer());
-    ml.get_key_or_arr(LLM_KV_XIELU_BETA,   hparams.xielu_beta,    hparams.n_layer());
-    ml.get_key_or_arr(LLM_KV_XIELU_EPS,    hparams.xielu_eps,     hparams.n_layer());
+    ml.get_key_or_arr(LLM_KV_XIELU_ALPHA_N, hparams.xielu_alpha_n, hparams.n_layer());
+    ml.get_key_or_arr(LLM_KV_XIELU_ALPHA_P, hparams.xielu_alpha_p, hparams.n_layer());
+    ml.get_key_or_arr(LLM_KV_XIELU_BETA,    hparams.xielu_beta,    hparams.n_layer());
+    ml.get_key_or_arr(LLM_KV_XIELU_EPS,     hparams.xielu_eps,     hparams.n_layer());
 
     switch (hparams.n_layer()) {
         case 32: type = LLM_TYPE_8B; break;

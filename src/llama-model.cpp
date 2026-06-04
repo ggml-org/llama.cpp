@@ -2034,21 +2034,21 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                     llama_memory_hybrid::layer_filter_cb filter_attn = nullptr;
                     llama_memory_hybrid::layer_filter_cb filter_recr = nullptr;
                     if (arch == LLM_ARCH_FALCON_H1) {
-                        filter_attn = [&](int32_t) { return true; };
-                        filter_recr = [&](int32_t) { return true; };
+                        filter_attn = [&](uint32_t) { return true; };
+                        filter_recr = [&](uint32_t) { return true; };
                     } else if (arch == LLM_ARCH_NEMOTRON_H || arch == LLM_ARCH_NEMOTRON_H_MOE) {
-                        filter_attn = [&](int32_t il) {
+                        filter_attn = [&](uint32_t il) {
                             return !hparams.is_recr(il) && hparams.n_ff(il) == 0;
                         };
-                        filter_recr = [&](int32_t il) {
+                        filter_recr = [&](uint32_t il) {
                             return hparams.is_recr(il) && hparams.n_ff(il) == 0;
                         };
                     } else if (arch == LLM_ARCH_QWEN35 || arch == LLM_ARCH_QWEN35MOE) {
-                        filter_attn = [&](int32_t il) {
-                            return (uint32_t)il < hparams.n_layer() && !hparams.is_recr(il);
+                        filter_attn = [&](uint32_t il) {
+                            return il < hparams.n_layer() && !hparams.is_recr(il);
                         };
-                        filter_recr = [&](int32_t il) {
-                            return (uint32_t)il < hparams.n_layer() && hparams.is_recr(il);
+                        filter_recr = [&](uint32_t il) {
+                            return il < hparams.n_layer() && hparams.is_recr(il);
                         };
                     }
 
@@ -2097,9 +2097,11 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                     llama_kv_cache::layer_filter_cb filter = nullptr;
 
                     if (arch == LLM_ARCH_GEMMA3N || arch == LLM_ARCH_GEMMA4) {
-                        reuse = [&](int32_t il) {
-                            if (il >= (int32_t) hparams.n_layer_kv_from_start) {
-                                return (int32_t) hparams.n_layer_kv_from_start - (hparams.is_swa(il) ? 2 : 1);
+                        reuse = [&](uint32_t il) {
+                            GGML_ASSERT(hparams.n_layer_kv_from_start >= 2);
+
+                            if (il >= (uint32_t)hparams.n_layer_kv_from_start) {
+                                return hparams.n_layer_kv_from_start - (hparams.is_swa(il) ? 2 : 1);
                             }
 
                             return -1;
@@ -2107,8 +2109,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                     }
 
                     if (mtp_on_hybrid_qwen35) {
-                        const uint32_t n_main = hparams.n_layer();
-                        filter = [n_main](int32_t il) { return (uint32_t)il >= n_main; };
+                        filter = [&](uint32_t il) { return il >= hparams.n_layer(); };
                     }
 
                     if (arch == LLM_ARCH_STEP35 && hparams.nextn_predict_layers > 0) {
