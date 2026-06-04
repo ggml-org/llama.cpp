@@ -402,10 +402,29 @@ const func_builtins & global_builtins() {
                 step = arg2->as_int();
             }
 
-            auto out = mk_val<value_array>();
             if (step == 0) {
                 throw raised_exception("range() step argument must not be zero");
             }
+
+            constexpr uint64_t RANGE_RENDER_LIMIT = 1000000;
+            uint64_t range_size = 0;
+            if (step > 0) {
+                if (start < stop) {
+                    const uint64_t span = static_cast<uint64_t>(stop) - static_cast<uint64_t>(start) - 1;
+                    range_size = span / static_cast<uint64_t>(step) + 1;
+                }
+            } else if (start > stop) {
+                const uint64_t span = static_cast<uint64_t>(start) - static_cast<uint64_t>(stop) - 1;
+                range_size = span / static_cast<uint64_t>(-step) + 1;
+            }
+
+            if (range_size > RANGE_RENDER_LIMIT) {
+                throw raised_exception(
+                    "range() size " + std::to_string(range_size) +
+                    " exceeds render limit " + std::to_string(RANGE_RENDER_LIMIT));
+            }
+
+            auto out = mk_val<value_array>();
             if (step > 0) {
                 for (int64_t i = start; i < stop; i += step) {
                     out->push_back(mk_val<value_int>(i));
