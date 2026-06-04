@@ -48,7 +48,7 @@ static inline void decode_q_Kx8_6bit_scales(const uint8_t * scales_in, int16x8_t
 }
 #endif
 
-#if defined(__aarch64__) && defined(__ARM_NEON) && defined(__ARM_FEATURE_DOTPROD)
+#if defined(__aarch64__) && defined(__ARM_NEON) && (defined(__ARM_FEATURE_DOTPROD) || defined(__ARM_FEATURE_MATMUL_INT8))
 #define B1(c,s,n)  0x ## n ## c ,  0x ## n ## s
 #define B2(c,s,n) B1(c,s,n ## c), B1(c,s,n ## s)
 #define B3(c,s,n) B2(c,s,n ## c), B2(c,s,n ## s)
