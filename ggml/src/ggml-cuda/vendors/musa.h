@@ -81,7 +81,6 @@
 #define cudaMemsetAsync musaMemsetAsync
 #define cudaMemGetInfo musaMemGetInfo
 #define cudaOccupancyMaxPotentialBlockSize musaOccupancyMaxPotentialBlockSize
-#define cudaDeviceReset musaDeviceReset
 #define cudaSetDevice musaSetDevice
 #define cudaStreamCreateWithFlags musaStreamCreateWithFlags
 #define cudaStreamDestroy musaStreamDestroy

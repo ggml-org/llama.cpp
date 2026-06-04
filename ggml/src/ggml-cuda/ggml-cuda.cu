@@ -4887,9 +4887,12 @@ struct ggml_backend_cuda_device_context {
     std::string description;
     std::string pci_bus_id;
     int op_offload_min_batch_size;
+#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
     std::atomic<int> active_count{0};
+#endif // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
 };
 
+#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
 static void ggml_backend_cuda_device_inc_active(ggml_backend_dev_t dev) {
     ggml_backend_cuda_device_context * ctx = (ggml_backend_cuda_device_context *) dev->context;
     ctx->active_count.fetch_add(1, std::memory_order_relaxed);
@@ -4899,6 +4902,10 @@ static void ggml_backend_cuda_device_dec_active(ggml_backend_dev_t dev) {
     ggml_backend_cuda_device_context * ctx = (ggml_backend_cuda_device_context *) dev->context;
     ctx->active_count.fetch_sub(1, std::memory_order_relaxed);
 }
+#else
+static void ggml_backend_cuda_device_inc_active(ggml_backend_dev_t dev) { GGML_UNUSED(dev); }
+static void ggml_backend_cuda_device_dec_active(ggml_backend_dev_t dev) { GGML_UNUSED(dev); }
+#endif // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
 
 static const char * ggml_backend_cuda_device_get_name(ggml_backend_dev_t dev) {
     ggml_backend_cuda_device_context * ctx = (ggml_backend_cuda_device_context *)dev->context;
@@ -5023,11 +5030,13 @@ static void ggml_backend_cuda_device_get_memory(ggml_backend_dev_t dev, size_t *
     }
 #endif // defined(__linux__)
 
+#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
     // If no backends or buffers are active, the cudaMemGetInfo call above lazily created a CUDA
     // context that permanently consumes VRAM. Reset the device to free it.
     if (ctx->active_count.load(std::memory_order_relaxed) == 0) {
         cudaDeviceReset();
     }
+#endif // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
 }
 
 static enum ggml_backend_dev_type ggml_backend_cuda_device_get_type(ggml_backend_dev_t dev) {
