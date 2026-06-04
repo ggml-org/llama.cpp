@@ -116,6 +116,7 @@ enum llm_type {
     LLM_TYPE_A13B,
     LLM_TYPE_7B_A1B,
     LLM_TYPE_8B_A1B, // lfm2moe
+    LLM_TYPE_12B_A2_5B,
     LLM_TYPE_16B_A1B,
     LLM_TYPE_21B_A3B, // Ernie MoE small
     LLM_TYPE_24B_A2B, // lfm2moe
@@ -137,12 +138,17 @@ enum llm_type {
     LLM_TYPE_310B_A15B, // /MiMo-V2-Flash
     LLM_TYPE_355B_A32B, // GLM-4.5
     LLM_TYPE_397B_A17B, // Qwen3.5
+    LLM_TYPE_685B_A37B, // DeepSeek V3.2
     LLM_TYPE_744B_A40B, // GLM-5
     LLM_TYPE_E2B,
     LLM_TYPE_E4B,
 };
 
 std::string llama_rope_scaling_type_name(llama_rope_scaling_type rope_scaling_type);
+
+// Map a GGUF activation-name string to llm_ffn_op_type. Returns `fallback` if
+// the string is empty or not recognized.
+llm_ffn_op_type llm_ffn_op_type_from_string(const std::string & name, llm_ffn_op_type fallback);
 
 struct llama_layer_posnet {
     // resnet
@@ -202,12 +208,16 @@ struct llama_layer_shortconv {
 };
 
 struct llama_layer_nextn {
-    struct ggml_tensor * eh_proj          = nullptr;
-    struct ggml_tensor * embed_tokens     = nullptr;
-    struct ggml_tensor * enorm            = nullptr;
-    struct ggml_tensor * hnorm            = nullptr;
-    struct ggml_tensor * shared_head_head = nullptr;
-    struct ggml_tensor * shared_head_norm = nullptr;
+    struct ggml_tensor * eh_proj               = nullptr;
+    struct ggml_tensor * eh_proj_s             = nullptr;
+    struct ggml_tensor * eh_proj_in_s          = nullptr;
+    struct ggml_tensor * embed_tokens          = nullptr;
+    struct ggml_tensor * enorm                 = nullptr;
+    struct ggml_tensor * hnorm                 = nullptr;
+    struct ggml_tensor * shared_head_head      = nullptr;
+    struct ggml_tensor * shared_head_head_s    = nullptr;
+    struct ggml_tensor * shared_head_head_in_s = nullptr;
+    struct ggml_tensor * shared_head_norm      = nullptr;
 };
 
 struct llama_layer {
@@ -484,7 +494,7 @@ struct llama_layer {
     struct ggml_tensor * indexer_attn_k   = nullptr;
     struct ggml_tensor * indexer_attn_q_b = nullptr; // note: for lora a/b, not bias
 
-    // gemma4 layer output scale
+    // gemma4 layer output scale, reused for talkie embedding skip scale
     struct ggml_tensor * out_scale = nullptr;
 
     struct llama_layer_posnet posnet;

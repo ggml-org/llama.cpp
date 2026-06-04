@@ -5,7 +5,6 @@ on:
 
 jobs:
   build:
-    name: Build static output
     runs-on: ubuntu-slim
     env:
       BRANCH_NAME: ${{ github.head_ref || github.ref_name }}
@@ -31,7 +30,7 @@ jobs:
 
       - name: Generate checksums
         run: |
-          cd build/tools/ui/dist
+          cd tools/ui/dist
           for f in *; do
             sha256sum "$f" | awk '{print $1, $2}' >> checksums.txt
           done
@@ -40,5 +39,5 @@ jobs:
         uses: actions/upload-artifact@v6
         with:
           name: ui-build
-          path: build/tools/ui/dist/
+          path: tools/ui/dist/
           retention-days: 1

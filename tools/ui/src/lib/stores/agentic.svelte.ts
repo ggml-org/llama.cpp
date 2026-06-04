@@ -416,21 +416,23 @@ class AgenticStore {
 
 		console.log(`[AgenticStore] Starting agentic flow with ${tools.length} tools`);
 
-		const normalizedMessages: ApiChatMessageData[] = messages
-			.map((msg) => {
-				if ('id' in msg && 'convId' in msg && 'timestamp' in msg)
-					return ChatService.convertDbMessageToApiChatMessageData(
-						msg as DatabaseMessage & { extra?: DatabaseMessageExtra[] }
-					);
-				return msg as ApiChatMessageData;
-			})
-			.filter((msg) => {
-				if (msg.role === MessageRole.SYSTEM) {
-					const content = typeof msg.content === 'string' ? msg.content : '';
-					return content.trim().length > 0;
-				}
-				return true;
-			});
+		const normalizedMessages: ApiChatMessageData[] = (
+			await Promise.all(
+				messages.map((msg) => {
+					if ('id' in msg && 'convId' in msg && 'timestamp' in msg)
+						return ChatService.convertDbMessageToApiChatMessageData(
+							msg as DatabaseMessage & { extra?: DatabaseMessageExtra[] }
+						);
+					return msg as ApiChatMessageData;
+				})
+			)
+		).filter((msg: { role: ChatRole; content: string | ApiChatMessageContentPart[] }) => {
+			if (msg.role === MessageRole.SYSTEM) {
+				const content = typeof msg.content === 'string' ? msg.content : '';
+				return content.trim().length > 0;
+			}
+			return true;
+		});
 
 		this.updateSession(conversationId, {
 			isRunning: true,
@@ -486,6 +488,7 @@ class AgenticStore {
 			onToolCallsStreaming,
 			onAttachments,
 			onModel,
+			onCompletionId,
 			onAssistantTurnComplete,
 			createToolResultMessage,
 			createAssistantMessage,
@@ -595,6 +598,7 @@ class AgenticStore {
 							}
 						},
 						onModel,
+						onCompletionId,
 						onTimings: (timings?: ChatMessageTimings, progress?: ChatMessagePromptProgress) => {
 							onTimings?.(timings, progress);
 							if (timings) {

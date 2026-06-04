@@ -9,7 +9,7 @@ void llama_model_jamba::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
 
     for (uint32_t i = 0; i < hparams.n_layer; ++i) {
-        hparams.recurrent_layer_arr[i] = hparams.n_head_kv(i) == 0;
+        hparams.is_recr_impl[i] = hparams.n_head_kv(i) == 0;
     }
 
     switch (hparams.n_layer) {

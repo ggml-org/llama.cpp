@@ -33,6 +33,7 @@ import {
 	isAbortError,
 	generateConversationTitle
 } from '$lib/utils';
+import { classifyContinueIntent } from '$lib/utils/agentic';
 import {
 	MAX_INACTIVE_CONVERSATION_STATES,
 	INACTIVE_CONVERSATION_STATE_MAX_AGE_MS,
@@ -51,7 +52,7 @@ import type {
 	DatabaseMessage,
 	DatabaseMessageExtra
 } from '$lib/types';
-import { ErrorDialogType, MessageRole, MessageType } from '$lib/enums';
+import { ContinueIntentKind, ErrorDialogType, MessageRole, MessageType } from '$lib/enums';
 
 interface ConversationStateEntry {
 	lastAccessed: number;
@@ -62,7 +63,10 @@ class ChatStore {
 	currentResponse = $state('');
 	errorDialogState = $state<ErrorDialogState | null>(null);
 	isLoading = $state(false);
+	// true while the active conversation streams reasoning content but no visible content yet
+	isReasoning = $state(false);
 	chatLoadingStates = new SvelteMap<string, boolean>();
+	chatReasoningStates = new SvelteMap<string, boolean>();
 	chatStreamingStates = new SvelteMap<string, { response: string; messageId: string }>();
 	private abortControllers = new SvelteMap<string, AbortController>();
 	private preEncodeAbortController: AbortController | null = null;
@@ -93,6 +97,17 @@ class ChatStore {
 		} else {
 			this.chatLoadingStates.delete(convId);
 			if (convId === conversationsStore.activeConversation?.id) this.isLoading = false;
+			this.setChatReasoning(convId, false);
+		}
+	}
+
+	private setChatReasoning(convId: string, reasoning: boolean): void {
+		if (reasoning) {
+			this.chatReasoningStates.set(convId, true);
+			if (convId === conversationsStore.activeConversation?.id) this.isReasoning = true;
+		} else {
+			this.chatReasoningStates.delete(convId);
+			if (convId === conversationsStore.activeConversation?.id) this.isReasoning = false;
 		}
 	}
 	private setChatStreaming(convId: string, response: string, messageId: string): void {
@@ -109,6 +124,7 @@ class ChatStore {
 	}
 	syncLoadingStateForChat(convId: string): void {
 		this.isLoading = this.chatLoadingStates.get(convId) || false;
+		this.isReasoning = this.chatReasoningStates.get(convId) || false;
 		const s = this.chatStreamingStates.get(convId);
 		this.currentResponse = s?.response || '';
 		this.isStreamingActive = s !== undefined;
@@ -262,6 +278,10 @@ class ChatStore {
 
 	isChatLoadingPublic(convId: string): boolean {
 		return this.chatLoadingStates.get(convId) || false;
+	}
+
+	isChatReasoningPublic(convId: string): boolean {
+		return this.chatReasoningStates.get(convId) || false;
 	}
 
 	private isChatLoadingInternal(convId: string): boolean {
@@ -654,6 +674,17 @@ class ChatStore {
 			}
 		};
 
+		let completionIdRecorded = false;
+		const recordCompletionId = (id: string): void => {
+			if (!id || completionIdRecorded) return;
+			completionIdRecorded = true;
+			const idx = conversationsStore.findMessageIndex(currentMessageId);
+			conversationsStore.updateMessageAtIndex(idx, { completionId: id });
+			DatabaseService.updateMessage(currentMessageId, { completionId: id }).catch(() => {
+				completionIdRecorded = false;
+			});
+		};
+
 		const updateStreamingUI = () => {
 			this.setChatStreaming(convId, streamedContent, currentMessageId);
 			const idx = conversationsStore.findMessageIndex(currentMessageId);
@@ -675,6 +706,7 @@ class ChatStore {
 			onChunk: (chunk: string) => {
 				streamedContent += chunk;
 				updateStreamingUI();
+				this.setChatReasoning(convId, false);
 			},
 			onReasoningChunk: (chunk: string) => {
 				streamedReasoningContent += chunk;
@@ -684,6 +716,7 @@ class ChatStore {
 				conversationsStore.updateMessageAtIndex(idx, {
 					reasoningContent: streamedReasoningContent
 				});
+				this.setChatReasoning(convId, true);
 			},
 			onToolCallsStreaming: (toolCalls) => {
 				const idx = conversationsStore.findMessageIndex(currentMessageId);
@@ -701,6 +734,7 @@ class ChatStore {
 				DatabaseService.updateMessage(messageId, { extra: updatedExtras }).catch(console.error);
 			},
 			onModel: (modelName: string) => recordModel(modelName),
+			onCompletionId: (id: string) => recordCompletionId(id),
 			onTurnComplete: (intermediateTimings: ChatMessageTimings) => {
 				// Update the first assistant message with cumulative agentic timings
 				const idx = conversationsStore.findMessageIndex(assistantMessage.id);
@@ -886,6 +920,7 @@ class ChatStore {
 				onChunk: streamCallbacks.onChunk,
 				onReasoningChunk: streamCallbacks.onReasoningChunk,
 				onModel: streamCallbacks.onModel,
+				onCompletionId: streamCallbacks.onCompletionId,
 				onTimings: streamCallbacks.onTimings,
 				onComplete: async (
 					finalContent?: string,
@@ -1259,6 +1294,57 @@ class ChatStore {
 		}
 	}
 
+	/**
+	 * Open a fresh assistant turn anchored at the last tool result of a resolved
+	 * agentic round and let streamChatCompletion route through runAgenticFlow.
+	 * Used by continueAssistantMessage when classifyContinueIntent returns
+	 * next_turn, meaning the target assistant already has its tool_calls paired
+	 * with trailing tool results and the next thing to generate is a brand new
+	 * turn rather than a token level continuation.
+	 */
+	private async continueAsNextAgenticTurn(anchorIndex: number): Promise<void> {
+		const activeConv = conversationsStore.activeConversation;
+		if (!activeConv) return;
+		const anchor = conversationsStore.activeMessages[anchorIndex];
+		if (!anchor) return;
+		this.cancelPreEncode();
+		this.setChatLoading(activeConv.id, true);
+		this.clearChatStreaming(activeConv.id);
+		try {
+			const allMessages = await conversationsStore.getConversationMessages(activeConv.id);
+			const anchorMessage = findMessageById(allMessages, anchor.id);
+			if (!anchorMessage) {
+				this.setChatLoading(activeConv.id, false);
+				return;
+			}
+			const newAssistantMessage = await DatabaseService.createMessageBranch(
+				{
+					convId: activeConv.id,
+					type: MessageType.TEXT,
+					timestamp: Date.now(),
+					role: MessageRole.ASSISTANT,
+					content: '',
+					toolCalls: '',
+					children: [],
+					model: null
+				},
+				anchorMessage.id
+			);
+			await conversationsStore.updateCurrentNode(newAssistantMessage.id);
+			conversationsStore.updateConversationTimestamp();
+			await conversationsStore.refreshActiveMessages();
+			const conversationPath = filterByLeafNodeId(
+				allMessages,
+				anchorMessage.id,
+				false
+			) as DatabaseMessage[];
+			await this.streamChatCompletion(conversationPath, newAssistantMessage);
+		} catch (error) {
+			if (!isAbortError(error)) console.error('Failed to continue agentic turn:', error);
+			this.setChatLoading(activeConv.id, false);
+		}
+	}
+
 	async continueAssistantMessage(messageId: string): Promise<void> {
 		const activeConv = conversationsStore.activeConversation;
 		if (!activeConv || this.isChatLoadingInternal(activeConv.id)) return;
@@ -1267,6 +1353,18 @@ class ChatStore {
 		if (!result) return;
 
 		const { message: msg, index: idx } = result;
+
+		// Decide which resume path applies. tool_calls without tool results can
+		// not be resumed mid sequence by continue_final_message, branch instead.
+		// tool_calls already paired with tool results need a fresh next turn,
+		// not a token level continuation of the target assistant.
+		const intent = classifyContinueIntent(conversationsStore.activeMessages, idx);
+		if (intent.kind === ContinueIntentKind.RERUN_TURN) {
+			return this.regenerateMessageWithBranching(messageId);
+		}
+		if (intent.kind === ContinueIntentKind.NEXT_TURN) {
+			return this.continueAsNextAgenticTurn(intent.truncateAfter);
+		}
 
 		try {
 			this.showErrorDialog(null);
@@ -1283,15 +1381,11 @@ class ChatStore {
 
 			const originalContent = dbMessage.content;
 			const originalReasoning = dbMessage.reasoningContent || '';
-			const conversationContext = conversationsStore.activeMessages.slice(0, idx);
-			const contextWithContinue = [
-				...conversationContext,
-				{
-					role: MessageRole.ASSISTANT as const,
-					content: originalContent,
-					reasoning_content: originalReasoning || undefined
-				}
-			];
+			// Hand the persisted DatabaseMessage straight to sendMessage so its
+			// internal converter preserves tool_calls and extras when present.
+			// Reconstructing a bare {role, content} here would drop those fields
+			// and break continue_final_message for messages with tool calls.
+			const contextWithContinue = conversationsStore.activeMessages.slice(0, idx + 1);
 
 			let appendedContent = '';
 			let appendedReasoning = '';
@@ -1313,6 +1407,7 @@ class ChatStore {
 						appendedContent += chunk;
 						hasReceivedContent = true;
 						updateStreamingContent(originalContent + appendedContent);
+						this.setChatReasoning(msg.convId, false);
 					},
 					onReasoningChunk: (chunk: string) => {
 						appendedReasoning += chunk;
@@ -1322,6 +1417,7 @@ class ChatStore {
 						conversationsStore.updateMessageAtIndex(idx, {
 							reasoningContent: originalReasoning + appendedReasoning
 						});
+						this.setChatReasoning(msg.convId, true);
 					},
 					onTimings: (timings?: ChatMessageTimings, promptProgress?: ChatMessagePromptProgress) => {
 						const tokensPerSecond =
@@ -1756,6 +1852,9 @@ class ChatStore {
 
 		if (currentConfig.excludeReasoningFromContext) apiOptions.excludeReasoningFromContext = true;
 
+		apiOptions.enableThinking = conversationsStore.getThinkingEnabled();
+		apiOptions.reasoningEffort = conversationsStore.getReasoningEffort();
+
 		if (hasValue(currentConfig.temperature))
 			apiOptions.temperature = Number(currentConfig.temperature);
 
@@ -1809,7 +1908,7 @@ class ChatStore {
 
 		apiOptions.backend_sampling = currentConfig.backend_sampling;
 
-		if (currentConfig.custom) apiOptions.custom = currentConfig.custom;
+		if (currentConfig.customJson) apiOptions.custom = currentConfig.customJson;
 
 		return apiOptions;
 	}
@@ -1864,6 +1963,7 @@ export const isChatLoading = (convId: string) => chatStore.isChatLoadingPublic(c
 export const isChatStreaming = () => chatStore.isStreaming();
 export const isEditing = () => chatStore.isEditing();
 export const isLoading = () => chatStore.isLoading;
+export const isReasoning = () => chatStore.isReasoning;
 export const pendingEditMessageId = () => chatStore.pendingEditMessageId;
 export const chatHasPendingMessage = (convId: string) => chatStore.hasPendingMessage(convId);
 export const chatPendingMessageContent = (convId: string) =>

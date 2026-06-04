@@ -26,7 +26,7 @@ class common_params_fit_exception : public std::runtime_error {
     using std::runtime_error::runtime_error;
 };
 
-static std::vector<llama_device_memory_data> common_get_device_memory_data(
+std::vector<llama_device_memory_data> common_get_device_memory_data(
         const char * path_model,
         const llama_model_params * mparams,
         const llama_context_params * cparams,
