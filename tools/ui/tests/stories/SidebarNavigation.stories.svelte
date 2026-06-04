@@ -58,10 +58,12 @@
 	name="Default"
 	play={async () => {
 		const { conversationsStore } = await import('$lib/stores/conversations.svelte');
-		
-		waitFor(() => setTimeout(() => {
-			conversationsStore.conversations = mockConversations;
-		}, 0));
+
+		waitFor(() =>
+			setTimeout(() => {
+				conversationsStore.conversations = mockConversations;
+			}, 0)
+		);
 	}}
 >
 	<Sidebar.Provider bind:open={sidebarOpen}>
@@ -76,11 +78,13 @@
 	name="SearchActive"
 	play={async ({ userEvent }) => {
 		const { conversationsStore } = await import('$lib/stores/conversations.svelte');
-		
-		waitFor(() => setTimeout(() => {
-			conversationsStore.conversations = mockConversations;
-		}, 0));
-		
+
+		waitFor(() =>
+			setTimeout(() => {
+				conversationsStore.conversations = mockConversations;
+			}, 0)
+		);
+
 		const searchTrigger = screen.getByText('Search');
 		userEvent.click(searchTrigger);
 	}}
