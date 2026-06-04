@@ -1176,6 +1176,9 @@ struct clip_model_loader {
                 std::vector<int> pinpoints;
                 get_arr_int(KEY_IMAGE_GRID_PINPOINTS, pinpoints, false);
                 if (!pinpoints.empty()) {
+                    if (pinpoints.size() % 2 != 0) {
+                        throw std::runtime_error(string_format("%s: %s must be an even-length int32 array\n", __func__, KEY_IMAGE_GRID_PINPOINTS));
+                    }
                     for (size_t i = 0; i < pinpoints.size(); i += 2) {
                         hparams.image_res_candidates.push_back({
                             pinpoints[i],
@@ -1221,6 +1224,16 @@ struct clip_model_loader {
                 int idx_std  = gguf_find_key(ctx_gguf.get(), KEY_IMAGE_STD);
                 GGML_ASSERT(idx_mean >= 0 && "image_mean not found");
                 GGML_ASSERT(idx_std >= 0  && "image_std not found");
+                const gguf_type mean_type = gguf_get_arr_type(ctx_gguf.get(), idx_mean);
+                const gguf_type std_type  = gguf_get_arr_type(ctx_gguf.get(), idx_std);
+                const size_t mean_len = gguf_get_arr_n(ctx_gguf.get(), idx_mean);
+                const size_t std_len  = gguf_get_arr_n(ctx_gguf.get(), idx_std);
+                if (mean_type != GGUF_TYPE_FLOAT32 || mean_len != 3) {
+                    throw std::runtime_error(string_format("%s: %s must be a float32 array of length 3, got %s[%zu]\n", __func__, KEY_IMAGE_MEAN, gguf_type_name(mean_type), mean_len));
+                }
+                if (std_type != GGUF_TYPE_FLOAT32 || std_len != 3) {
+                    throw std::runtime_error(string_format("%s: %s must be a float32 array of length 3, got %s[%zu]\n", __func__, KEY_IMAGE_STD, gguf_type_name(std_type), std_len));
+                }
                 const float * mean_data = (const float *) gguf_get_arr_data(ctx_gguf.get(), idx_mean);
                 const float * std_data  = (const float *) gguf_get_arr_data(ctx_gguf.get(), idx_std);
                 for (int i = 0; i < 3; ++i) {
@@ -2919,7 +2932,11 @@ struct clip_model_loader {
             }
             return;
         }
-        int n = gguf_get_arr_n(ctx_gguf.get(), i);
+        const gguf_type arr_type = gguf_get_arr_type(ctx_gguf.get(), i);
+        if (arr_type != GGUF_TYPE_INT32) {
+            throw std::runtime_error(string_format("%s: %s must be an int32 array, got %s\n", __func__, key.c_str(), gguf_type_name(arr_type)));
+        }
+        const int n = gguf_get_arr_n(ctx_gguf.get(), i);
         output.resize(n);
         const int32_t * values = (const int32_t *)gguf_get_arr_data(ctx_gguf.get(), i);
         for (int i = 0; i < n; ++i) {
