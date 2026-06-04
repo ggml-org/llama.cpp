@@ -381,10 +381,6 @@ server_task_result_ptr server_response_reader::next(const std::function<bool()> 
         if (result == nullptr) {
             // timeout, check stop condition
             if (should_stop()) {
-                const int64_t time_elapsed_ms = ggml_time_ms() - time_start_ms;
-                if (time_elapsed_ms > 30000) {
-                    SRV_WRN("%s", "request cancelled after 30s, potentially a client-side timeout; please check your client's code\n");
-                }
                 return nullptr;
             }
         } else {

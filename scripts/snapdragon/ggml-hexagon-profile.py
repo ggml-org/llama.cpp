@@ -11,6 +11,7 @@ from collections import defaultdict
 
 # Mapping of cli-friendly names to (internal_data_key, Display Header, numeric_sort_key)
 COL_MAP = {
+    "tot-usec":   ("tot_usec",   "Tot usec",   "_sort_tot_usec"),
     "op":         ("op",         "Op",         "op"),
     "dims":       ("dims",       "Dims",       "dims"),
     "dtypes":     ("dtypes",     "DTypes",     "dtypes"),
@@ -24,7 +25,7 @@ COL_MAP = {
 }
 
 op_pattern = re.compile(
-    r"profile-op\s+(?P<op_name>[A-Z_0-9+]+):\s+.*?\s+:\s+(?P<dims>[\d:x\s\->!]+)\s+:\s+(?P<types>[a-z\d_\s\->x]+)\s+:\s+.*?\s+usec\s+(?P<usec>\d+)\s+cycles\s+(?P<cycles>\d+)(?:\s+pmu\s+\[(?P<pmu>[\d,\s]+)\])?"
+    r"profile-op\s+(?P<op_name>[A-Z_0-9+]+):\s+.*?\s+:\s+(?P<dims>[\d:x\s\->!]+)\s+:\s+(?P<types>[a-z\d_\s\->x]+)\s+:\s+.*?\s+(?:op-)?usec\s+(?P<usec>\d+)\s+(?:op-)?cycles\s+(?P<cycles>\d+)(?:\s+pmu\s+\[(?P<pmu>[\d,\s]+)\])?"
 )
 
 logger = logging.getLogger("ggml-hexagon-profile")
@@ -85,21 +86,27 @@ def generate_report(ops, top_n, width_overrides, sort_col, pmu_name=None):
         cycles = [o['cycles'] for o in group_ops]
         pmu_vals = [o['pmu_val'] for o in group_ops if o['pmu_val'] is not None]
 
+        avg_usec_val = statistics.mean(usecs)
+        count_val = len(group_ops)
+        tot_usec_val = avg_usec_val * count_val
+
         group_stats.append({
             'op':               name,
             'dims':             dims,
             'dtypes':           types,
-            'count':            str(len(group_ops)),
+            'count':            str(count_val),
             'max_usec':         str(max(usecs)),
-            'avg_usec':         f"{statistics.mean(usecs):.2f}",
+            'avg_usec':         f"{avg_usec_val:.2f}",
+            'tot_usec':         f"{tot_usec_val:.2f}",
             'max_cycles':       str(max(cycles)),
             'avg_cycles':       f"{statistics.mean(cycles):.2f}",
             'max_pmu':          str(max(pmu_vals)) if pmu_vals else "0",
             'avg_pmu':          f"{statistics.mean(pmu_vals):.2f}" if pmu_vals else "0.00",
             # Numeric values for accurate sorting
-            '_sort_count':      len(group_ops),
+            '_sort_count':      count_val,
             '_sort_max_usec':   max(usecs),
-            '_sort_avg_usec':   statistics.mean(usecs),
+            '_sort_avg_usec':   avg_usec_val,
+            '_sort_tot_usec':   tot_usec_val,
             '_sort_max_cycles': max(cycles),
             '_sort_avg_cycles': statistics.mean(cycles),
             '_sort_max_pmu':    max(pmu_vals) if pmu_vals else 0,
@@ -116,7 +123,7 @@ def generate_report(ops, top_n, width_overrides, sort_col, pmu_name=None):
     active_cols = ["op", "dims", "dtypes"]
     if pmu_name:
         active_cols += ["max-pmu", "avg-pmu"]
-    active_cols += ["max-usec", "avg-usec", "max-cycles", "avg-cycles", "count"]
+    active_cols += ["tot-usec", "avg-usec", "avg-cycles", "max-usec", "max-cycles", "count"]
 
     final_headers, final_keys, final_widths = [], [], []
 
@@ -156,7 +163,7 @@ def main():
     parser = argparse.ArgumentParser(description="Post-process Op profile info.")
     parser.add_argument("logfile")
     parser.add_argument("-n", "--top", type=int, default=100)
-    parser.add_argument("--sort", type=str, default="max-usec", choices=list(COL_MAP.keys()))
+    parser.add_argument("--sort", type=str, default="tot-usec", choices=list(COL_MAP.keys()))
     parser.add_argument("--pmu-index", type=int)
     parser.add_argument("--pmu-name", type=str)
     parser.add_argument("--width", action='append', default=['dims:40'], help="Override column width, e.g. --width dims:50")

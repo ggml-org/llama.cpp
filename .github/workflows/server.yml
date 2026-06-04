@@ -102,7 +102,6 @@ jobs:
 
       - name: Tests
         id: server_integration_tests
-        if: ${{ !github.event.pull_request }}
         run: |
           cd tools/server/tests
           pytest -v -x -m "not slow"
@@ -116,7 +115,6 @@ jobs:
 
       - name: Tests (Backend sampling)
         id: server_integration_tests_backend_sampling
-        if: ${{ !github.event.pull_request }}
         run: |
           cd tools/server/tests
           export LLAMA_ARG_BACKEND_SAMPLING=1
@@ -169,7 +167,6 @@ jobs:
 
       - name: Tests
         id: server_integration_tests
-        if: ${{ !github.event.pull_request }}
         run: |
           cd tools/server/tests
           $env:PYTHONIOENCODING = ":replace"
