@@ -892,7 +892,8 @@ static bool is_op_unsupported_case(const ggml_tensor * op) {
         break;
     }
     case GGML_OP_ADD:
-    case GGML_OP_MUL: {
+    case GGML_OP_MUL:
+    case GGML_OP_SUB: {
         if (op->src[1]->op == GGML_OP_PERMUTE) {
             return true;
         }
