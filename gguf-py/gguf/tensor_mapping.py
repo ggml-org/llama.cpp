@@ -1430,11 +1430,16 @@ class TensorNameMap:
             "model.vision_tower.patch_embedder.input_proj", # gemma4
             "vision_tower.patch_embed.patchifier.proj", # dots.ocr
             "vision_model.conv1", # Step3-VL
+            "model.vision_embedder.patch_dense", # gemma4 unified
         ),
 
         MODEL_TENSOR.V_ENC_EMBD_NORM: (
             "visual.post_conv_layernorm", # glm4v
             "vision_tower.patch_embed.patchifier.norm", # dots.ocr
+        ),
+
+        MODEL_TENSOR.V_ENC_EMBD_PATCH_NORM: (
+            "model.vision_embedder.patch_ln{bid}", # gemma4 unified
         ),
 
         MODEL_TENSOR.V_ENC_EMBD_POS: (
@@ -1453,6 +1458,7 @@ class TensorNameMap:
             "vision_model.radio_model.model.patch_generator.pos_embed", # Nemotron Nano v2 VL
             "model.vision_tower.patch_embedder.position_embedding_table", # gemma4
             "vision_model.positional_embedding", # Step3-VL
+            "model.vision_embedder.pos_embedding", # gemma4 unified
         ),
 
         # TODO: I think these should all be moved to mapping_cfg?

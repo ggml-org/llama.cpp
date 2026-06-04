@@ -35,23 +35,27 @@
 
 <Tooltip.Root>
 	<Tooltip.Trigger>
-		<Button
-			{variant}
-			{size}
-			{disabled}
-			onclick={(e: MouseEvent) => {
-				if (stopPropagationOnClick) e.stopPropagation();
+		<!-- prevent another nested button element -->
+		{#snippet child({ props })}
+			<Button
+				{...props}
+				{variant}
+				{size}
+				{disabled}
+				onclick={(e: MouseEvent) => {
+					if (stopPropagationOnClick) e.stopPropagation();
 
-				onclick?.(e);
-			}}
-			class="h-6 w-6 p-0 {className} flex hover:bg-transparent data-[state=open]:bg-transparent!"
-			aria-label={ariaLabel || tooltip}
-		>
-			{#if icon}
-				{@const IconComponent = icon}
-				<IconComponent class={iconSize} />
-			{/if}
-		</Button>
+					onclick?.(e);
+				}}
+				class="h-6 w-6 p-0 {className} flex hover:bg-transparent data-[state=open]:bg-transparent!"
+				aria-label={ariaLabel || tooltip}
+			>
+				{#if icon}
+					{@const IconComponent = icon}
+					<IconComponent class={iconSize} />
+				{/if}
+			</Button>
+		{/snippet}
 	</Tooltip.Trigger>
 
 	<Tooltip.Content side={tooltipSide}>

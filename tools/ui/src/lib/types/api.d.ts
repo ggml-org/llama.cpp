@@ -271,6 +271,7 @@ export interface ApiChatCompletionToolCall extends ApiChatCompletionToolCallDelt
 }
 
 export interface ApiChatCompletionStreamChunk {
+	id?: string;
 	object?: string;
 	model?: string;
 	choices: Array<{
