@@ -231,7 +231,7 @@
 						<Collapsible.Content>
 							<div class="flex flex-col gap-0.5 pl-4">
 								{#each toolsPanel.activeGroups as group (group.label)}
-									{@const { checked, indeterminate } = toolsPanel.getGroupCheckedState(group)}
+									{@const checked = toolsPanel.isGroupChecked(group)}
 									{@const enabledCount = toolsPanel.getEnabledToolCount(group)}
 									{@const favicon = toolsPanel.getFavicon(group)}
 
@@ -259,7 +259,6 @@
 
 										<Checkbox
 											{checked}
-											{indeterminate}
 											class="h-4 w-4 shrink-0"
 											onclick={(e) => e.stopPropagation()}
 											onCheckedChange={() => toolsPanel.toggleGroupByLabel(group.label)}
