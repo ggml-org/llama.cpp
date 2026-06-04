@@ -160,6 +160,8 @@ class ServerProcess:
             server_args.extend(["--hf-repo", self.model_hf_repo])
         if self.model_hf_file:
             server_args.extend(["--hf-file", self.model_hf_file])
+        if self.model_hf_repo and env.get("HF_TOKEN"):
+            server_args.extend(["--hf-token", env["HF_TOKEN"]])
         if self.models_dir:
             server_args.extend(["--models-dir", self.models_dir])
         if self.models_max is not None:
@@ -259,7 +261,11 @@ class ServerProcess:
             env["AIP_MODE"] = "PREDICTION"
 
         args = [str(arg) for arg in [server_path, *server_args]]
-        print(f"tests: starting server with: {' '.join(args)}")
+        display_args = list(args)
+        for i, arg in enumerate(display_args[:-1]):
+            if arg == "--hf-token":
+                display_args[i + 1] = "***"
+        print(f"tests: starting server with: {' '.join(display_args)}")
 
         flags = 0
         if "nt" == os.name:
@@ -272,35 +278,52 @@ class ServerProcess:
         else:
             self._log = sys.stdout
 
-        self.process = subprocess.Popen(
-            [str(arg) for arg in [server_path, *server_args]],
-            creationflags=flags,
-            stdout=self._log,
-            stderr=self._log if self._log != sys.stdout else sys.stdout,
-            env=env,
-        )
-        server_instances.add(self)
+        attempts = 3
+        last_error = None
+        self.ready = False
+        for attempt in range(1, attempts + 1):
+            self.process = subprocess.Popen(
+                [str(arg) for arg in [server_path, *server_args]],
+                creationflags=flags,
+                stdout=self._log,
+                stderr=self._log if self._log != sys.stdout else sys.stdout,
+                env=env,
+            )
+            server_instances.add(self)
 
-        print(f"server pid={self.process.pid}, pytest pid={os.getpid()}")
+            print(f"server pid={self.process.pid}, pytest pid={os.getpid()}")
 
-        # wait for server to start
-        start_time = time.time()
-        while time.time() - start_time < timeout_seconds:
-            try:
-                response = self.make_request("GET", "/health", headers={
-                    "Authorization": f"Bearer {self.api_key}" if self.api_key else None
-                })
-                if response.status_code == 200:
-                    self.ready = True
-                    return  # server is ready
-            except Exception as e:
-                pass
-            # Check if process died
-            if self.process.poll() is not None:
-                raise RuntimeError(f"Server process died with return code {self.process.returncode}")
+            start_time = time.time()
+            while time.time() - start_time < timeout_seconds:
+                try:
+                    response = self.make_request("GET", "/health", headers={
+                        "Authorization": f"Bearer {self.api_key}" if self.api_key else None
+                    })
+                    if response.status_code == 200:
+                        self.ready = True
+                        return
+                except Exception:
+                    pass
 
-            print(f"Waiting for server to start...")
-            time.sleep(0.5)
+                if self.process.poll() is not None:
+                    last_error = RuntimeError(f"Server process died with return code {self.process.returncode}")
+                    break
+
+                print("Waiting for server to start...")
+                time.sleep(0.5)
+
+            if self.ready:
+                return
+
+            self.stop()
+            if attempt < attempts:
+                print(f"Retrying server startup ({attempt}/{attempts}) after transient failure...")
+                time.sleep(attempt)
+                continue
+
+            if last_error is not None:
+                raise last_error
+
         raise TimeoutError(f"Server did not start within {timeout_seconds} seconds")
 
     def stop(self) -> None:
@@ -486,8 +509,16 @@ class ServerPreset:
         ]
         for server in servers:
             server.offline = False
-            server.start()
-            server.stop()
+            for attempt in range(3):
+                try:
+                    server.start(timeout_seconds=600)
+                    break
+                except Exception:
+                    if attempt == 2:
+                        raise
+                    time.sleep(5 * (attempt + 1))
+                finally:
+                    server.stop()
 
     @staticmethod
     def tinyllama2() -> ServerProcess:

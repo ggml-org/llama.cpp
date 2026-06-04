@@ -228,6 +228,8 @@ int main(int argc, char ** argv) {
         ctx_http.post("/tools",           ex_wrapper(tools.handle_post));
     }
 
+    ctx_http.register_gcp_compat();
+
     //
     // Start the server
     //

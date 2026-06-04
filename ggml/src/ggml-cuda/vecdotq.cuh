@@ -1414,7 +1414,7 @@ static __device__ __forceinline__ float vec_dot_tq3_1s_q8_1(
     return sum;
 }
 
-#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 1200
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800
 #define VDR_TQ3_4S_Q8_1_MMVQ 8
 #else
 #define VDR_TQ3_4S_Q8_1_MMVQ 4
@@ -1440,17 +1440,18 @@ static __device__ __forceinline__ float tq3_4s_dot_subgroup_q8_1(
     static constexpr int8_t levels[8] = {-127, -79, -45, -14, 14, 45, 79, 127};
 
     const uint8_t * qp = bq->qs + subgroup * 3;
+    const uint32_t packed = (uint32_t)qp[0] | ((uint32_t)qp[1] << 8) | ((uint32_t)qp[2] << 16);
     const float d = tq3_4s_ratio4s(bq->d[subgroup]);
 
     // Unpack 8 3-bit indices into 8 int8 weight values
-    const int8_t w0 = levels[ qp[0]       & 7];
-    const int8_t w1 = levels[(qp[0] >> 3) & 7];
-    const int8_t w2 = levels[((qp[0]>>6)|(qp[1]<<2)) & 7];
-    const int8_t w3 = levels[(qp[1] >> 1) & 7];
-    const int8_t w4 = levels[(qp[1] >> 4) & 7];
-    const int8_t w5 = levels[((qp[1]>>7)|(qp[2]<<1)) & 7];
-    const int8_t w6 = levels[(qp[2] >> 2) & 7];
-    const int8_t w7 = levels[(qp[2] >> 5) & 7];
+    const int8_t w0 = levels[(packed >>  0) & 7];
+    const int8_t w1 = levels[(packed >>  3) & 7];
+    const int8_t w2 = levels[(packed >>  6) & 7];
+    const int8_t w3 = levels[(packed >>  9) & 7];
+    const int8_t w4 = levels[(packed >> 12) & 7];
+    const int8_t w5 = levels[(packed >> 15) & 7];
+    const int8_t w6 = levels[(packed >> 18) & 7];
+    const int8_t w7 = levels[(packed >> 21) & 7];
 
     // Pack into two int32 for dp4a
     const int w_lo = (uint8_t)w0 | ((uint8_t)w1 << 8) | ((uint8_t)w2 << 16) | ((uint8_t)w3 << 24);

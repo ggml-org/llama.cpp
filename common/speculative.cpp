@@ -2,6 +2,10 @@
 
 #include "common.h"
 #include "ggml.h"
+#include "../ggml/include/ggml-backend.h"
+#if defined(GGML_USE_CUDA) || defined(GGML_USE_HIP) || defined(GGML_USE_MUSA)
+#include "../ggml/include/ggml-cuda.h"
+#endif
 #include "llama.h"
 #include "../src/llama-ext.h" // staging API: llama_set_embeddings_pre_norm / llama_get_embeddings_pre_norm_ith (used by MTP)
 #include "log.h"
@@ -372,6 +376,7 @@ struct common_speculative_state_mtp : public common_speculative_impl {
     common_params_speculative_draft params; // reuses the draft-model params slot (ctx_tgt/ctx_dft)
 
     llama_batch batch;
+    ggml_backend_buffer_t batch_embd_buffer = nullptr;
     std::vector<llama_token> token_buf;
     common_sampler_ptr smpl;
     int32_t n_embd = 0;
@@ -395,6 +400,20 @@ struct common_speculative_state_mtp : public common_speculative_impl {
         smpl.reset(common_sampler_init(llama_get_model(ctx_dft), sparams));
 
         batch = llama_batch_init(/*n_tokens=*/ 1, /*embd=*/ n_embd, /*n_seq_max=*/ 1);
+#if defined(GGML_USE_CUDA) || defined(GGML_USE_HIP) || defined(GGML_USE_MUSA)
+        if (batch.embd != nullptr) {
+            const size_t embd_bytes = sizeof(float) * (size_t) n_embd;
+            if (ggml_backend_buffer_t pinned = ggml_backend_buft_alloc_buffer(ggml_backend_cuda_host_buffer_type(), embd_bytes)) {
+                if (void * pinned_base = ggml_backend_buffer_get_base(pinned)) {
+                    free(batch.embd);
+                    batch.embd = (float *) pinned_base;
+                    batch_embd_buffer = pinned;
+                } else {
+                    ggml_backend_buffer_free(pinned);
+                }
+            }
+        }
+#endif
         token_buf.assign(1, LLAMA_TOKEN_NULL);
         batch.token = token_buf.data();
         batch.n_tokens     = 1;
@@ -406,8 +425,16 @@ struct common_speculative_state_mtp : public common_speculative_impl {
     }
 
     ~common_speculative_state_mtp() override {
+        if (batch_embd_buffer != nullptr) {
+            batch.embd = nullptr;
+        }
         batch.token = nullptr;
         llama_batch_free(batch);
+#if defined(GGML_USE_CUDA) || defined(GGML_USE_HIP) || defined(GGML_USE_MUSA)
+        if (batch_embd_buffer != nullptr) {
+            ggml_backend_buffer_free(batch_embd_buffer);
+        }
+#endif
     }
 
     void begin(llama_seq_id seq_id, const llama_tokens & prompt) override {
@@ -444,6 +471,16 @@ struct common_speculative_state_mtp : public common_speculative_impl {
         auto * ctx_dft = params.ctx_dft;
         const size_t row_bytes = (size_t) n_embd * sizeof(float);
 
+        auto prefetch_src_row = [&](llama_context * ctx_src, ggml_tensor * src, int32_t src_row) {
+            if (!ctx_src || !src || batch.embd == nullptr) {
+                return;
+            }
+            llama_synchronize(ctx_src);
+            ggml_backend_tensor_get(src, batch.embd, (size_t) src_row * row_bytes, row_bytes);
+        };
+
+        auto wait_prefetch = [&]() {};
+
         if (last_n_drafted > 0) {
             const int32_t n_to_drop = (int32_t) last_n_drafted - 1;
             if (n_to_drop > 0) {
@@ -462,7 +499,15 @@ struct common_speculative_state_mtp : public common_speculative_impl {
         llama_token cond_tok = dp.id_last;
         llama_pos   pos      = llama_memory_seq_pos_max(llama_get_memory(ctx_dft), 0) + 1;
 
+        ggml_tensor * next_src = nullptr;
+        llama_context * next_ctx = nullptr;
+        int32_t next_src_row = 0;
+
         for (int32_t k = 0; k < params.n_max; ++k) {
+            if (next_src != nullptr) {
+                wait_prefetch();
+            }
+
             ggml_tensor * src;
             int32_t src_row;
             if (k == 0) {
@@ -472,17 +517,24 @@ struct common_speculative_state_mtp : public common_speculative_impl {
                 } else {
                     src_row = last_n_accepted;
                 }
-                llama_synchronize(ctx_tgt);
             } else {
                 src = llama_context_get_t_mtp_out(ctx_dft);
+                if (src == nullptr) {
+                    src = llama_context_get_t_h_pre_norm(ctx_dft);
+                }
                 src_row = src ? (int32_t) src->ne[1] - 1 : 0;
-                llama_synchronize(ctx_dft);
             }
             if (!src) {
                 break;
             }
 
-            ggml_backend_tensor_get(src, batch.embd, (size_t) src_row * row_bytes, row_bytes);
+            llama_context * src_ctx = k == 0 ? ctx_tgt : ctx_dft;
+
+            if (next_src != src || next_ctx != src_ctx || next_src_row != src_row) {
+                wait_prefetch();
+                prefetch_src_row(src_ctx, src, src_row);
+                wait_prefetch();
+            }
             batch.token[0] = cond_tok;
             batch.pos[0]   = pos;
 
@@ -491,9 +543,20 @@ struct common_speculative_state_mtp : public common_speculative_impl {
                 break;
             }
 
+            next_src = llama_context_get_t_mtp_out(ctx_dft);
+            next_ctx = ctx_dft;
+            if (next_src == nullptr) {
+                next_src = llama_context_get_t_h_pre_norm(ctx_dft);
+                next_ctx = ctx_dft;
+            }
+            next_src_row = next_src ? (int32_t) next_src->ne[1] - 1 : 0;
+            if (next_src != nullptr && k + 1 < params.n_max) {
+                prefetch_src_row(next_ctx, next_src, next_src_row);
+            }
+
             const llama_token id = common_sampler_sample(smpl.get(), ctx_dft, 0, false);
-            const auto * cur_p = common_sampler_get_candidates(smpl.get(), true);
-            if (cur_p == nullptr || cur_p->size == 0 || cur_p->data[0].p < params.p_min) {
+            const float selected_p = common_sampler_selected_p(smpl.get());
+            if (selected_p < params.p_min) {
                 break;
             }
 
@@ -1209,6 +1272,34 @@ bool common_speculative_process(common_speculative * spec, const llama_batch & b
     }
 
     return result;
+}
+
+bool common_speculative_need_embd(common_speculative * spec) {
+    if (spec == nullptr) {
+        return false;
+    }
+
+    for (const auto & impl : spec->impls) {
+        if (impl->type == COMMON_SPECULATIVE_TYPE_EAGLE3) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+bool common_speculative_need_embd_pre_norm(common_speculative * spec) {
+    if (spec == nullptr) {
+        return false;
+    }
+
+    for (const auto & impl : spec->impls) {
+        if (impl->type == COMMON_SPECULATIVE_TYPE_MTP) {
+            return true;
+        }
+    }
+
+    return false;
 }
 
 void common_speculative_draft(common_speculative * spec) {

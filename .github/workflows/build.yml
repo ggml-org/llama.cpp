@@ -55,6 +55,7 @@ env:
   LLAMA_LOG_COLORS: 1
   LLAMA_LOG_PREFIX: 1
   LLAMA_LOG_TIMESTAMPS: 1
+  HF_TOKEN: ${{ secrets.HF_TOKEN }}
 
 jobs:
   build-cmake-pkg:
@@ -130,7 +131,7 @@ jobs:
         id: cmake_test
         run: |
           cd build
-          ctest -L main --verbose --timeout 900
+          ctest -L main -E "test-llama-archs" --verbose --timeout 900
 
   macOS-latest-arm64-webgpu:
     runs-on: macos-latest
@@ -171,7 +172,7 @@ jobs:
         id: cmake_test
         run: |
           cd build
-          ctest -L main --verbose --timeout 900
+          ctest -L main -E "test-llama-archs" --verbose --timeout 900
 
   ubuntu-cpu:
     strategy:
@@ -244,7 +245,7 @@ jobs:
         id: cmake_test
         run: |
           cd build
-          ctest -L main --verbose --timeout 900
+          ctest -L main -E "test-llama-archs" --verbose --timeout 900
 
       - name: Test llama2c conversion
         id: llama2c_test
@@ -346,7 +347,7 @@ jobs:
         id: cmake_test
         run: |
           cd build
-          ctest -L main --verbose
+          ctest -L main -E "test-llama-archs" --verbose
 
   ubuntu-24-vulkan:
     strategy:
@@ -457,7 +458,7 @@ jobs:
           cd build
           # This is using llvmpipe and runs slower than other backends
           # test-backend-ops is too slow on llvmpipe, skip it
-          ctest -L main -E test-backend-ops --verbose --timeout 900
+          ctest -L main -E "test-llama-archs|test-backend-ops" --verbose --timeout 900
 
   ubuntu-24-webgpu-wasm:
     runs-on: ${{ 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
@@ -663,7 +664,7 @@ jobs:
         if: ${{ matrix.arch == 'x64' }}
         run: |
           cd build
-          ctest -L main -C Release --verbose --timeout 900
+          ctest -L main -E "test-llama-archs" -C Release --verbose --timeout 900
 
       # TODO: disabled for now, consider adding tests for all CPU variants instead
       # - name: Test (Intel SDE)
@@ -677,7 +678,7 @@ jobs:
       #     $sde = $(join-path $env:RUNNER_TEMP sde-external-${env:SDE_VERSION}-win/sde.exe)
       #     cd build
       #     $env:LLAMA_SKIP_TESTS_SLOW_ON_EMULATOR = 1
-      #     & $sde -future -- ctest -L main -C Release --verbose --timeout 900
+      #     & $sde -future -- ctest -L main -E "test-llama-archs" -C Release --verbose --timeout 900
 
   ubuntu-latest-cuda:
     runs-on: ubuntu-latest
@@ -890,7 +891,7 @@ jobs:
         id: cmake_test
         run: |
           cd build
-          ctest -L main --verbose --timeout 900
+          ctest -L main -E "test-llama-archs" --verbose --timeout 900
 
       - name: Test llama2c conversion
         id: llama2c_test

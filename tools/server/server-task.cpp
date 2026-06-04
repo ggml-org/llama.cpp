@@ -572,9 +572,32 @@ task_params server_task::params_from_json_cmpl(
 
         params.sampling.ignore_eos = json_value(data, "ignore_eos", params_base.sampling.ignore_eos);
         if (params.sampling.ignore_eos) {
+            std::vector<llama_logit_bias> logit_bias_eog_local;
+            const auto * logit_bias_eog_src = &logit_bias_eog;
+
+            if (logit_bias_eog.empty()) {
+                for (llama_token i = 0; i < llama_vocab_n_tokens(vocab); ++i) {
+                    if (llama_vocab_is_eog(vocab, i)) {
+                        logit_bias_eog_local.push_back({i, -INFINITY});
+                    }
+                }
+
+                const auto eos = llama_vocab_eos(vocab);
+                if (eos != LLAMA_TOKEN_NULL) {
+                    const auto eos_bias = std::find_if(
+                            logit_bias_eog_local.begin(),
+                            logit_bias_eog_local.end(),
+                            [eos](const llama_logit_bias & lb) { return lb.token == eos; });
+                    if (eos_bias == logit_bias_eog_local.end()) {
+                        logit_bias_eog_local.push_back({eos, -INFINITY});
+                    }
+                }
+
+                logit_bias_eog_src = &logit_bias_eog_local;
+            }
             params.sampling.logit_bias.insert(
                     params.sampling.logit_bias.end(),
-                    logit_bias_eog.begin(), logit_bias_eog.end());
+                    logit_bias_eog_src->begin(), logit_bias_eog_src->end());
         }
     }
 

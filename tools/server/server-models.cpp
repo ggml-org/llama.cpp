@@ -294,88 +294,185 @@ void server_models::load_models() {
         preset.merge(base_preset);
     }
 
-    // convert presets to server_model_meta and add to mapping
-    for (const auto & preset : final_presets) {
-        server_model_meta meta{
-            /* preset       */ preset.second,
-            /* name         */ preset.first,
-            /* aliases      */ {},
-            /* tags         */ {},
-            /* port         */ 0,
-            /* status       */ SERVER_MODEL_STATUS_UNLOADED,
-            /* last_used    */ 0,
-            /* args         */ std::vector<std::string>(),
-            /* exit_code    */ 0,
-            /* stop_timeout */ DEFAULT_STOP_TIMEOUT,
-        };
-        add_model(std::move(meta));
+    // Helpers for logging
+    std::unordered_set<std::string> custom_names;
+    for (const auto & [name, preset] : custom_presets) {
+        custom_names.insert(name);
     }
-
-    // log available models
-    {
-        std::unordered_set<std::string> custom_names;
-        for (const auto & [name, preset] : custom_presets) {
-            custom_names.insert(name);
+    auto join_set = [](const std::set<std::string> & s) {
+        std::string result;
+        for (const auto & v : s) {
+            if (!result.empty()) result += ", ";
+            result += v;
         }
-        auto join_set = [](const std::set<std::string> & s) {
-            std::string result;
-            for (const auto & v : s) {
-                if (!result.empty()) {
-                    result += ", ";
-                }
-                result += v;
-            }
-            return result;
-        };
-
+        return result;
+    };
+    auto log_available_models = [&]() {
         SRV_INF("Available models (%zu) (*: custom preset)\n", mapping.size());
         for (const auto & [name, inst] : mapping) {
             bool has_custom = custom_names.find(name) != custom_names.end();
             std::string info;
-            if (!inst.meta.aliases.empty()) {
-                info += " (aliases: " + join_set(inst.meta.aliases) + ")";
-            }
-            if (!inst.meta.tags.empty()) {
-                info += " [tags: " + join_set(inst.meta.tags) + "]";
-            }
+            if (!inst.meta.aliases.empty()) info += " (aliases: " + join_set(inst.meta.aliases) + ")";
+            if (!inst.meta.tags.empty())    info += " [tags: "    + join_set(inst.meta.tags)    + "]";
             SRV_INF("  %c %s%s\n", has_custom ? '*' : ' ', name.c_str(), info.c_str());
         }
-    }
-
-    // handle custom stop-timeout option
-    for (auto & [name, inst] : mapping) {
-        std::string val;
-        if (inst.meta.preset.get_option(COMMON_ARG_PRESET_STOP_TIMEOUT, val)) {
-            try {
-                inst.meta.stop_timeout = std::stoi(val);
-            } catch (...) {
-                SRV_WRN("invalid stop-timeout value '%s' for model '%s', using default %d seconds\n",
-                    val.c_str(), name.c_str(), DEFAULT_STOP_TIMEOUT);
-                inst.meta.stop_timeout = DEFAULT_STOP_TIMEOUT;
+    };
+    auto apply_stop_timeout = [&]() {
+        for (auto & [name, inst] : mapping) {
+            std::string val;
+            if (inst.meta.preset.get_option(COMMON_ARG_PRESET_STOP_TIMEOUT, val)) {
+                try {
+                    inst.meta.stop_timeout = std::stoi(val);
+                } catch (...) {
+                    SRV_WRN("invalid stop-timeout value '%s' for model '%s', using default %d seconds\n",
+                        val.c_str(), name.c_str(), DEFAULT_STOP_TIMEOUT);
+                    inst.meta.stop_timeout = DEFAULT_STOP_TIMEOUT;
+                }
             }
         }
-    }
+    };
 
-    // load any autoload models
-    std::vector<std::string> models_to_load;
-    for (const auto & [name, inst] : mapping) {
-        std::string val;
-        if (inst.meta.preset.get_option(COMMON_ARG_PRESET_LOAD_ON_STARTUP, val)) {
-            if (common_arg_utils::is_truthy(val)) {
+    std::unique_lock<std::mutex> lk(mutex);
+    bool is_first_load = mapping.empty();
+
+    if (is_first_load) {
+        // FIRST LOAD: add all models
+        for (const auto & [name, preset] : final_presets) {
+            server_model_meta meta{
+                /* preset       */ preset,
+                /* name         */ name,
+                /* aliases      */ {},
+                /* tags         */ {},
+                /* port         */ 0,
+                /* status       */ SERVER_MODEL_STATUS_UNLOADED,
+                /* last_used    */ 0,
+                /* args         */ std::vector<std::string>(),
+                /* loaded_info  */ {},
+                /* exit_code    */ 0,
+                /* stop_timeout */ DEFAULT_STOP_TIMEOUT,
+                /* multimodal   */ {},
+            };
+            add_model(std::move(meta));
+        }
+        apply_stop_timeout();
+        log_available_models();
+
+        std::vector<std::string> models_to_load;
+        for (const auto & [name, inst] : mapping) {
+            std::string val;
+            if (inst.meta.preset.get_option(COMMON_ARG_PRESET_LOAD_ON_STARTUP, val) && common_arg_utils::is_truthy(val)) {
                 models_to_load.push_back(name);
             }
         }
-    }
-    if ((int)models_to_load.size() > base_params.models_max) {
-        throw std::runtime_error(string_format(
-            "number of models to load on startup (%zu) exceeds models_max (%d)",
-            models_to_load.size(),
-            base_params.models_max
-        ));
-    }
-    for (const auto & name : models_to_load) {
-        SRV_INF("(startup) loading model %s\n", name.c_str());
-        load(name);
+        if ((int)models_to_load.size() > base_params.models_max) {
+            throw std::runtime_error(string_format(
+                "number of models to load on startup (%zu) exceeds models_max (%d)",
+                models_to_load.size(), base_params.models_max));
+        }
+
+        lk.unlock();
+        for (const auto & name : models_to_load) {
+            SRV_INF("(startup) loading model %s\n", name.c_str());
+            load(name);
+        }
+    } else {
+        // RELOAD: diff new preset list against current mapping
+        is_reloading = true;
+
+        // unload running models whose source was removed or preset changed
+        std::vector<std::string> to_unload;
+        for (const auto & [name, inst] : mapping) {
+            if (!inst.meta.is_running()) continue;
+            if (final_presets.find(name) == final_presets.end()) {
+                to_unload.push_back(name);
+            }
+        }
+        for (const auto & name : to_unload) {
+            SRV_INF("(reload) unloading model name=%s (source removed)\n", name.c_str());
+            lk.unlock();
+            unload(name);
+            lk.lock();
+        }
+
+        // wait for unloaded models to finish
+        cv.wait(lk, [&]() {
+            for (const auto & name : to_unload) {
+                auto it = mapping.find(name);
+                if (it != mapping.end() && it->second.meta.is_running()) return false;
+            }
+            return true;
+        });
+
+        // join threads of models being removed
+        std::vector<std::thread> threads_to_join;
+        for (auto & [name, inst] : mapping) {
+            if (final_presets.find(name) == final_presets.end() && !inst.meta.is_running() && inst.th.joinable()) {
+                threads_to_join.push_back(std::move(inst.th));
+            }
+        }
+        lk.unlock();
+        for (auto & th : threads_to_join) th.join();
+        lk.lock();
+
+        // erase models no longer in source
+        for (auto it = mapping.begin(); it != mapping.end(); ) {
+            if (final_presets.find(it->first) == final_presets.end()) {
+                SRV_INF("(reload) removing model name=%s (no longer in source)\n", it->first.c_str());
+                it = mapping.erase(it);
+            } else {
+                ++it;
+            }
+        }
+
+        // update presets for non-running models
+        for (auto & [name, inst] : mapping) {
+            if (inst.meta.is_running()) continue;
+            auto it = final_presets.find(name);
+            if (it != final_presets.end()) {
+                inst.meta.preset = it->second;
+                inst.meta.exit_code = 0;
+            }
+        }
+
+        // add new models
+        for (const auto & [name, preset] : final_presets) {
+            if (mapping.find(name) != mapping.end()) continue;
+            server_model_meta meta{
+                /* preset       */ preset,
+                /* name         */ name,
+                /* aliases      */ {},
+                /* tags         */ {},
+                /* port         */ 0,
+                /* status       */ SERVER_MODEL_STATUS_UNLOADED,
+                /* last_used    */ 0,
+                /* args         */ std::vector<std::string>(),
+                /* loaded_info  */ {},
+                /* exit_code    */ 0,
+                /* stop_timeout */ DEFAULT_STOP_TIMEOUT,
+                /* multimodal   */ {},
+            };
+            add_model(std::move(meta));
+        }
+
+        apply_stop_timeout();
+        log_available_models();
+        is_reloading = false;
+
+        // load new models that have load-on-startup
+        std::vector<std::string> models_to_load;
+        for (const auto & [name, inst] : mapping) {
+            if (inst.meta.is_running()) continue;
+            std::string val;
+            if (inst.meta.preset.get_option(COMMON_ARG_PRESET_LOAD_ON_STARTUP, val) && common_arg_utils::is_truthy(val)) {
+                models_to_load.push_back(name);
+            }
+        }
+
+        lk.unlock();
+        for (const auto & name : models_to_load) {
+            SRV_INF("(reload) loading new model %s\n", name.c_str());
+            load(name);
+        }
     }
 }
 
@@ -994,7 +1091,11 @@ void server_models_routes::init_routes() {
         return res;
     };
 
-    this->get_router_models = [this](const server_http_req &) {
+    this->get_router_models = [this](const server_http_req & req) {
+        bool reload = !req.get_param("reload", "").empty();
+        if (reload) {
+            models.load_models();
+        }
         auto res = std::make_unique<server_http_res>();
         json models_json = json::array();
         auto all_models = models.get_all_meta();

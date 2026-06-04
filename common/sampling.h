@@ -94,6 +94,9 @@ uint32_t common_sampler_get_seed(const struct common_sampler * gsmpl);
 // the .sorted flag of the result indicates whether the returned candidates are sorted
 llama_token_data_array * common_sampler_get_candidates(struct common_sampler * gsmpl, bool do_sort);
 
+// get the probability of the currently selected token without sorting the candidates
+float common_sampler_selected_p(const struct common_sampler * gsmpl);
+
 // get the last accepted token
 llama_token common_sampler_last(const struct common_sampler * gsmpl);
 

@@ -45,13 +45,13 @@ __global__ void tq3_prefill_kernel_tiled(
                 const uint8_t * qp = bq->qs + g * 3;
                 packed = (uint32_t)qp[0] | ((uint32_t)qp[1] << 8) | ((uint32_t)qp[2] << 16);
             }
-            packed = __shfl_sync(0xFFFFFFFF, packed, leader);
+            packed = __shfl_sync(0xFFFFFFFF, packed, leader, TQ3_PREFILL_WARP);
 
             // Centroid + WHT (once per block, reused for all TT tokens)
             float val = ggml_cuda_tq3_centroid(ggml_cuda_tq3_unpack_idx(packed, r));
             #pragma unroll
             for (int step = 1; step < 32; step <<= 1) {
-                const float other = __shfl_xor_sync(0xFFFFFFFF, val, step);
+                const float other = __shfl_xor_sync(0xFFFFFFFF, val, step, 32);
                 val = (lane & step) ? (other - val) : (other + val);
             }
             const float wj = val * ggml_cuda_tq3_sign(lane) * (rms / sqrtf((float)QK_TQ3_0));
@@ -71,7 +71,7 @@ __global__ void tq3_prefill_kernel_tiled(
             float s = acc[t];
             #pragma unroll
             for (int m = 16; m > 0; m >>= 1)
-                s += __shfl_xor_sync(0xFFFFFFFF, s, m);
+                s += __shfl_xor_sync(0xFFFFFFFF, s, m, 32);
             if (lane == 0) {
                 const int tok = tok0 + t;
                 if (tok < ne11) D[row * ne11 + tok] = s;

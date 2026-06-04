@@ -1220,6 +1220,18 @@ common_init_result::common_init_result(common_params & params) :
         }
     }
 
+    const auto eos = llama_vocab_eos(vocab);
+    if (eos != LLAMA_TOKEN_NULL) {
+        const auto eos_bias = std::find_if(
+                params.sampling.logit_bias_eog.begin(),
+                params.sampling.logit_bias_eog.end(),
+                [eos](const llama_logit_bias & lb) { return lb.token == eos; });
+        if (eos_bias == params.sampling.logit_bias_eog.end()) {
+            LOG_INF("%s: added %s logit bias = %f\n", __func__, common_token_to_piece(vocab, eos).c_str(), -INFINITY);
+            params.sampling.logit_bias_eog.push_back({eos, -INFINITY});
+        }
+    }
+
     if (params.sampling.ignore_eos) {
         // add EOG biases to the active set of logit biases
         params.sampling.logit_bias.insert(

@@ -713,10 +713,9 @@ private:
 
         SRV_INF("loading model '%s'\n", params.model.path.c_str());
 
-        params_base = params;
-        auto params_tgt = params_base;
-        if (std::find(params_base.speculative.types.begin(), params_base.speculative.types.end(),
-                      COMMON_SPECULATIVE_TYPE_MTP) != params_base.speculative.types.end()) {
+        auto params_tgt = params;
+        if (std::find(params_tgt.speculative.types.begin(), params_tgt.speculative.types.end(),
+                      COMMON_SPECULATIVE_TYPE_MTP) != params_tgt.speculative.types.end()) {
             string_parse_kv_override("llama.nomtp_trunk_only=bool:true", params_tgt.kv_overrides);
             if (params_tgt.kv_overrides.empty() || params_tgt.kv_overrides.back().key[0] != 0) {
                 params_tgt.kv_overrides.emplace_back();
@@ -725,6 +724,10 @@ private:
         }
 
         llama_init = common_init_from_params(params_tgt);
+
+        // Persist the fully initialized params, including resolved adapter pointers
+        // and any common-layer normalization done during model/context setup.
+        params_base = params_tgt;
 
         model_tgt = llama_init->model();
         ctx_tgt   = llama_init->context();
@@ -1619,7 +1622,8 @@ private:
             res->progress.time_ms   = (ggml_time_us() - slot.t_start_process_prompt) / 1000;
         } else {
             res->content = tkn.text_to_send;
-            res->tokens  = { tkn.tok };
+            res->tokens.clear();
+            res->tokens.push_back(tkn.tok);
         }
 
         res->n_decoded             = slot.n_decoded;
@@ -2459,6 +2463,26 @@ private:
                             continue;
                         }
 
+                        const int32_t n_predict_budget =
+                            slot.task->params.n_predict != -1 ? slot.task->params.n_predict : params_base.n_predict;
+                        const bool exceeds_context_budget =
+                            slot.can_speculate() &&
+                            slot.task->need_sampling() &&
+                            !params_base.ctx_shift &&
+                            n_predict_budget > 0 &&
+                            (int64_t) slot.task->n_tokens() + (int64_t) n_predict_budget >= (int64_t) slot.n_ctx;
+
+                        if (exceeds_context_budget) {
+                            send_error(
+                                slot,
+                                string_format(
+                                    "request budget (%d prompt + %d predict = %d tokens) exceeds the available context size (%d tokens) under speculative decoding",
+                                    slot.task->n_tokens(), n_predict_budget, slot.task->n_tokens() + n_predict_budget, slot.n_ctx),
+                                ERROR_TYPE_EXCEED_CONTEXT_SIZE);
+                            slot.release();
+                            continue;
+                        }
+
                         if (!slot.can_split()) {
                             if (slot.task->n_tokens() > n_ubatch) {
                                 send_error(slot,
@@ -2739,6 +2763,9 @@ private:
 
                     // make checkpoints only for completion tasks
                     do_checkpoint = do_checkpoint && slot.task->type == SERVER_TASK_TYPE_COMPLETION;
+
+                    // if prompt caching is disabled, checkpoints cannot be reused and only add overhead
+                    do_checkpoint = do_checkpoint && slot.task->params.cache_prompt;
 
                     // make a checkpoint of the parts of the memory that cannot be rolled back.
                     // checkpoints are created only if:

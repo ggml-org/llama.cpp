@@ -258,7 +258,7 @@ json server_chat_convert_responses_to_chatcmpl(const json & response_body) {
             json chatcmpl_tool;
 
             if (json_value(resp_tool, "type", std::string()) != "function") {
-                throw std::invalid_argument("'type' of tool must be 'function'");
+                continue;
             }
             resp_tool.erase("type");
             chatcmpl_tool["type"] = "function";
@@ -270,7 +270,9 @@ json server_chat_convert_responses_to_chatcmpl(const json & response_body) {
             chatcmpl_tools.push_back(chatcmpl_tool);
         }
         chatcmpl_body.erase("tools");
-        chatcmpl_body["tools"] = chatcmpl_tools;
+        if (!chatcmpl_tools.empty()) {
+            chatcmpl_body["tools"] = chatcmpl_tools;
+        }
     }
 
     if (response_body.contains("max_output_tokens")) {
