@@ -622,6 +622,9 @@ ggml_backend_cuda_context::~ggml_backend_cuda_context() {
 
 // cuda buffer
 
+static void ggml_backend_cuda_device_inc_active(ggml_backend_dev_t dev);
+static void ggml_backend_cuda_device_dec_active(ggml_backend_dev_t dev);
+
 struct ggml_backend_cuda_buffer_context {
     int device;
     void * dev_ptr = nullptr;
@@ -639,6 +642,9 @@ struct ggml_backend_cuda_buffer_context {
 
 static void ggml_backend_cuda_buffer_free_buffer(ggml_backend_buffer_t buffer) {
     ggml_backend_cuda_buffer_context * ctx = (ggml_backend_cuda_buffer_context *)buffer->context;
+
+    ggml_backend_cuda_device_dec_active(buffer->buft->device);
+
     delete ctx;
 }
 
@@ -790,6 +796,8 @@ static ggml_backend_buffer_t ggml_backend_cuda_buffer_type_alloc_buffer(ggml_bac
     }
 
     ggml_backend_cuda_buffer_context * ctx = new ggml_backend_cuda_buffer_context(buft_ctx->device, dev_ptr);
+
+    ggml_backend_cuda_device_inc_active(buft->device);
 
     return ggml_backend_buffer_init(buft, ggml_backend_cuda_buffer_interface, ctx, size);
 }
@@ -1490,6 +1498,8 @@ static bool ggml_backend_buft_is_cuda_host(ggml_backend_buffer_type_t buft) {
 }
 
 static void ggml_backend_cuda_host_buffer_free_buffer(ggml_backend_buffer_t buffer) {
+    ggml_backend_cuda_device_dec_active(buffer->buft->device);
+
     CUDA_CHECK(cudaFreeHost(buffer->context));
 }
 
@@ -1497,6 +1507,8 @@ static void * ggml_cuda_host_malloc(size_t size) {
     if (getenv("GGML_CUDA_NO_PINNED") != nullptr) {
         return nullptr;
     }
+
+    ggml_cuda_set_device(0);
 
     void * ptr = nullptr;
     cudaError_t err = cudaMallocHost((void **) &ptr, size);
@@ -1522,6 +1534,8 @@ static ggml_backend_buffer_t ggml_backend_cuda_host_buffer_type_alloc_buffer(ggm
     ggml_backend_buffer_t buffer = ggml_backend_cpu_buffer_from_ptr(ptr, size);
     buffer->buft = buft;
     buffer->iface.free_buffer = ggml_backend_cuda_host_buffer_free_buffer;
+
+    ggml_backend_cuda_device_inc_active(buft->device);
 
     return buffer;
 }
@@ -4873,8 +4887,18 @@ struct ggml_backend_cuda_device_context {
     std::string description;
     std::string pci_bus_id;
     int op_offload_min_batch_size;
-    std::atomic<int> backend_count{0};
+    std::atomic<int> active_count{0};
 };
+
+static void ggml_backend_cuda_device_inc_active(ggml_backend_dev_t dev) {
+    ggml_backend_cuda_device_context * ctx = (ggml_backend_cuda_device_context *) dev->context;
+    ctx->active_count.fetch_add(1, std::memory_order_relaxed);
+}
+
+static void ggml_backend_cuda_device_dec_active(ggml_backend_dev_t dev) {
+    ggml_backend_cuda_device_context * ctx = (ggml_backend_cuda_device_context *) dev->context;
+    ctx->active_count.fetch_sub(1, std::memory_order_relaxed);
+}
 
 static const char * ggml_backend_cuda_device_get_name(ggml_backend_dev_t dev) {
     ggml_backend_cuda_device_context * ctx = (ggml_backend_cuda_device_context *)dev->context;
@@ -4884,8 +4908,7 @@ static const char * ggml_backend_cuda_device_get_name(ggml_backend_dev_t dev) {
 static void ggml_backend_cuda_free(ggml_backend_t backend) {
     ggml_backend_cuda_context * cuda_ctx = (ggml_backend_cuda_context *)backend->context;
 
-    ggml_backend_cuda_device_context * dev_ctx = (ggml_backend_cuda_device_context *) backend->device->context;
-    dev_ctx->backend_count.fetch_sub(1, std::memory_order_relaxed);
+    ggml_backend_cuda_device_dec_active(backend->device);
 
     delete cuda_ctx;
     delete backend;
@@ -5000,9 +5023,9 @@ static void ggml_backend_cuda_device_get_memory(ggml_backend_dev_t dev, size_t *
     }
 #endif // defined(__linux__)
 
-    // If no backends are active, the cudaMemGetInfo call above lazily created a CUDA context
-    // that permanently consumes VRAM. Reset the device to free it.
-    if (ctx->backend_count.load(std::memory_order_relaxed) == 0) {
+    // If no backends or buffers are active, the cudaMemGetInfo call above lazily created a CUDA
+    // context that permanently consumes VRAM. Reset the device to free it.
+    if (ctx->active_count.load(std::memory_order_relaxed) == 0) {
         cudaDeviceReset();
     }
 }
@@ -5708,8 +5731,7 @@ ggml_backend_t ggml_backend_cuda_init(int device) {
         /* .context = */ ctx,
     };
 
-    ggml_backend_cuda_device_context * dev_ctx = (ggml_backend_cuda_device_context *) dev->context;
-    dev_ctx->backend_count.fetch_add(1, std::memory_order_relaxed);
+    ggml_backend_cuda_device_inc_active(dev);
 
     return cuda_backend;
 }
