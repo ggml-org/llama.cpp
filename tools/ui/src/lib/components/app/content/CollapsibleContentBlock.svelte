@@ -18,7 +18,6 @@
 		title: string;
 		subtitle?: string;
 		preview?: string;
-		overflow?: number;
 		rawContent?: string;
 		isStreaming?: boolean;
 		onToggle?: () => void;
@@ -33,7 +32,6 @@
 		title,
 		subtitle,
 		preview,
-		overflow = 0,
 		rawContent,
 		isStreaming = false,
 		onToggle,
@@ -49,7 +47,7 @@
 	let displayedOverflow = $state(0);
 
 	$effect(() => {
-		previewKey.key;
+		void previewKey.key;
 		const content = rawContent ?? preview ?? '';
 		const result = formatReasoningPreview(content);
 		displayedPreview = result.preview;

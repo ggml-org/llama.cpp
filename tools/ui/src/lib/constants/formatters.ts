@@ -20,6 +20,7 @@ export const STRIP_MARKDOWN_CAPTURE_PATTERNS: [RegExp, string][] = [
 	[/_(.*?)_/g, '$1']
 ];
 
+/* eslint-disable no-misleading-character-class */
 export const STRIP_MARKDOWN_INLINE_REGEX = new RegExp(
 	[
 		'<[^>]*>',
@@ -31,3 +32,4 @@ export const STRIP_MARKDOWN_INLINE_REGEX = new RegExp(
 	].join('|'),
 	'gmu'
 );
+/* eslint-enable no-misleading-character-class */
