@@ -697,9 +697,8 @@ llama_model_loader::llama_model_loader(
     }
 
     n_kv      = gguf_get_n_kv(metadata);
-    n_tensors = files.empty()
-        ? gguf_get_n_tensors(metadata)
-        : weights_map.size();
+    n_tensors = gguf_get_n_tensors(metadata);
+    GGML_ASSERT(files.empty() || weights_map.size() == static_cast<size_t>(n_tensors));
 
     fver = (enum llama_fver) gguf_get_version(metadata);
 
