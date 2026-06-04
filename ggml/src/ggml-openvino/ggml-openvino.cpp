@@ -1,28 +1,10 @@
 #include "ggml-openvino.h"
 
-#include "ggml-backend-impl.h"
-#include "ggml-backend.h"
-#include "ggml-impl.h"
-#include "ggml-openvino-extra.h"
 #include "ggml-openvino/utils.h"
+#include "ggml-openvino/openvino/op_table.h"
 #include "ggml-quants.h"
-#include "ggml.h"
 
-#include <atomic>
-#include <cstdlib>
-#include <cstdint>
-#include <cstring>
-#include <memory>
-#include <mutex>
-#include <openvino/core/type/element_type.hpp>
-#include <openvino/openvino.hpp>
-#include <openvino/runtime/allocator.hpp>
 #include <openvino/runtime/intel_gpu/ocl/ocl.hpp>
-#include <openvino/runtime/intel_npu/level_zero/level_zero.hpp>
-#include <openvino/runtime/tensor.hpp>
-#include <set>
-#include <string>
-#include <vector>
 
 #if defined(_WIN32)
 #    define WIN32_LEAN_AND_MEAN
@@ -1157,48 +1139,47 @@ static bool is_op_unsupported_case(const ggml_tensor * op) {
 static bool ggml_backend_openvino_device_supports_op(ggml_backend_dev_t dev, const ggml_tensor * op) {
     GGML_ASSERT(dev->reg != nullptr);
 
-    static std::set<ggml_type> supported_types{GGML_TYPE_F32,  GGML_TYPE_F16,  GGML_TYPE_BF16, GGML_TYPE_I64,
+    static std::unordered_set<ggml_type> supported_types{GGML_TYPE_F32,  GGML_TYPE_F16,  GGML_TYPE_BF16, GGML_TYPE_I64,
                                                GGML_TYPE_I32,  GGML_TYPE_Q4_0, GGML_TYPE_Q4_1, GGML_TYPE_Q4_K,
                                                GGML_TYPE_Q5_K, GGML_TYPE_Q8_0, GGML_TYPE_Q6_K};
 
-    static const std::set<ggml_op> supported_ops{GGML_OP_NONE,
-                                                 GGML_OP_ADD,
-                                                 GGML_OP_CONCAT,
-                                                 GGML_OP_DIV,
-                                                 GGML_OP_MUL,
-                                                 GGML_OP_MUL_MAT,
-                                                 GGML_OP_MUL_MAT_ID,
-                                                 GGML_OP_VIEW,
-                                                 GGML_OP_CONT,
-                                                 GGML_OP_RESHAPE,
-                                                 GGML_OP_PERMUTE,
-                                                 GGML_OP_TRANSPOSE,
-                                                 GGML_OP_GET_ROWS,
-                                                 GGML_OP_ROPE,
-                                                 GGML_OP_RMS_NORM,
-                                                 GGML_OP_SCALE,
-                                                 GGML_OP_NORM,
-                                                 GGML_OP_SOFT_MAX,
-                                                 GGML_OP_SET_ROWS,
-                                                 GGML_OP_FLASH_ATTN_EXT,
-                                                 GGML_OP_CPY,
-                                                 GGML_OP_L2_NORM,
-                                                 GGML_OP_SUM_ROWS,
-                                                 GGML_OP_CLAMP,
-                                                 GGML_OP_PAD,
-                                                 GGML_OP_SSM_CONV,
-                                                 GGML_OP_GATED_DELTA_NET,
-                                                 GGML_OP_IM2COL};
-    static const std::set<ggml_unary_op> supported_unary_ops{
-        GGML_UNARY_OP_GELU,
-        GGML_UNARY_OP_SILU,
-        GGML_UNARY_OP_SOFTPLUS,
-        GGML_UNARY_OP_TANH,
+    // derive supported op sets from the op_table map, keys in
+    // the map use the full macro name (e.g. "GGML_OP_ADD"), while
+    // the ggml_*_op_name() helpers return only the trailing part (e.g. "ADD").
+    // each set is built once and cached.
+    static const auto build_supported_sets = [] {
+        const auto & table = ov::frontend::ggml::get_supported_ops();
+        std::unordered_set<ggml_op> ops;
+        std::unordered_set<ggml_unary_op> unary_ops;
+        std::unordered_set<ggml_glu_op> glu_ops;
+
+        // GGML_OP_NONE has no translator but is always safe to add to the supported set.
+        ops.insert(GGML_OP_NONE);
+
+        for (int i = 0; i < GGML_OP_COUNT; ++i) {
+            const std::string key = std::string("GGML_OP_") + ggml_op_name(static_cast<ggml_op>(i));
+            if (table.count(key)) {
+                ops.insert(static_cast<ggml_op>(i));
+            }
+        }
+        for (int i = 0; i < GGML_UNARY_OP_COUNT; ++i) {
+            const std::string key = std::string("GGML_UNARY_OP_") + ggml_unary_op_name(static_cast<ggml_unary_op>(i));
+            if (table.count(key)) {
+                unary_ops.insert(static_cast<ggml_unary_op>(i));
+            }
+        }
+        for (int i = 0; i < GGML_GLU_OP_COUNT; ++i) {
+            const std::string key = std::string("GGML_GLU_OP_") + ggml_glu_op_name(static_cast<ggml_glu_op>(i));
+            if (table.count(key)) {
+                glu_ops.insert(static_cast<ggml_glu_op>(i));
+            }
+        }
+        return std::make_tuple(ops, unary_ops, glu_ops);
     };
-    static const std::set<ggml_glu_op> supported_glu_ops{
-        GGML_GLU_OP_SWIGLU,
-        GGML_GLU_OP_GEGLU,
-    };
+    static const auto supported_sets = build_supported_sets();
+    static const auto & supported_ops = std::get<0>(supported_sets);
+    static const auto & supported_unary_ops = std::get<1>(supported_sets);
+    static const auto & supported_glu_ops = std::get<2>(supported_sets);
 
     switch (op->op) {
     case GGML_OP_UNARY: {
