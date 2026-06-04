@@ -5,6 +5,7 @@
 #include "server-http.h"
 #include "server-task.h"
 #include "server-queue.h"
+#include "server-schema.h"
 
 #include "build-info.h"
 #include "common.h"
@@ -3721,7 +3722,7 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
             task.id = rd.get_new_id();
 
             task.tokens = std::move(inputs[i]);
-            task.params = server_task::params_from_json_cmpl(
+            task.params = eval_llama_cmpl_schema(
                     ctx_server.vocab,
                     params,
                     meta->slot_n_ctx,
