@@ -767,8 +767,8 @@ static const std::map<llm_tensor, llm_tensor_info> LLM_TENSOR_INFOS = {
     {LLM_TENSOR_INDEXER_PROJ,               {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
     {LLM_TENSOR_INDEXER_ATTN_K,             {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
     {LLM_TENSOR_INDEXER_ATTN_Q_B,           {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
-    {LLM_TENSOR_NEXTN_PRE_PROJ,             {LLM_TENSOR_LAYER_INPUT,     GGML_OP_MUL_MAT}},
-    {LLM_TENSOR_NEXTN_POST_PROJ,            {LLM_TENSOR_LAYER_INPUT,     GGML_OP_MUL_MAT}},
+    {LLM_TENSOR_NEXTN_PRE_PROJ,             {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
+    {LLM_TENSOR_NEXTN_POST_PROJ,            {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_MUL_MAT}},
     // NextN/MTP tensors are stored per-block (blk.%d.nextn.*) even though only the
     // last nextn_predict_layers blocks carry them. Classify as LAYER_REPEATING so
     // the model loader doesn't fault on the block index.
