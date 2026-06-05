@@ -984,6 +984,11 @@ int subprocess_join(struct subprocess_s *const process,
 
     if (WIFEXITED(status)) {
       process->return_status = WEXITSTATUS(status);
+    } else if (WIFSIGNALED(status)) {
+        // Store negated signal number so callers can distinguish signal death
+        // (e.g. -6 for SIGABRT from OOM, -15 for SIGTERM from force-kill) from
+        // normal error exit (positive exit code) and clean exit (exit code 0).
+        process->return_status = -WTERMSIG(status);
     } else {
       process->return_status = EXIT_FAILURE;
     }
@@ -1168,6 +1173,11 @@ int subprocess_alive(struct subprocess_s *const process) {
     if (!is_alive) {
       if (WIFEXITED(status)) {
         process->return_status = WEXITSTATUS(status);
+      } else if (WIFSIGNALED(status)) {
+        // Store negated signal number so callers can distinguish signal death
+        // (e.g. -6 for SIGABRT from OOM, -15 for SIGTERM from force-kill) from
+        // normal error exit (positive exit code) and clean exit (exit code 0).
+        process->return_status = -WTERMSIG(status);
       } else {
         process->return_status = EXIT_FAILURE;
       }
