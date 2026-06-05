@@ -935,6 +935,8 @@ const common_chat_msg message_assist_thoughts_unopened_unparsed =
     simple_assist_msg("I'm\nthinking</think>Hello, world!\nWhat's up?");
 const common_chat_msg message_assist_thoughts_no_content = simple_assist_msg("", "I'm\nthinking");
 const common_chat_msg message_assist_call = simple_assist_msg("", "", "special_function", "{\"arg1\": 1}");
+const common_chat_msg message_assist_thoughts_call =
+    simple_assist_msg("", "I'm\nthinking", "special_function", "{\"arg1\": 1}");
 const common_chat_msg message_assist_call_noopt =
     simple_assist_msg("", "", "special_function_with_opt", "{\"arg1\": 1}");
 const common_chat_msg message_assist_call_withopt =
@@ -4383,13 +4385,34 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .run();
     }
 
-    // NVIDIA-Nemotron-Nano-v2 tests - <TOOLCALL>...</TOOLCALL> format
-    // Format: <TOOLCALL>[{"name": "func", "arguments": {...}}]</TOOLCALL>
     {
+        // NVIDIA Nemotron Nano v2 - <TOOLCALL>[{"name":..., "arguments":...}]</TOOLCALL> format
         auto tst = peg_tester("models/templates/NVIDIA-Nemotron-Nano-v2.jinja", detailed_debug);
+        tst.test("Hello, world!\nWhat's up?<SPECIAL_12>")
+            .enable_thinking(false)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .expect(message_assist)
+            .run();
+
+        tst.test("I'm\nthinking\n</think>\n\nHello, world!\nWhat's up?<SPECIAL_12>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .expect(message_assist_thoughts)
+            .run();
+
         tst.test("<TOOLCALL>[{\"name\": \"special_function\", \"arguments\": {\"arg1\": 1}}]</TOOLCALL>")
             .tools({ special_function_tool })
             .expect(message_assist_call)
+            .run();
+
+        tst.test(
+               "I'm\nthinking\n</think>\n\n"
+               "<TOOLCALL>[{\"name\": \"special_function\", \"arguments\": {\"arg1\": 1}}]"
+               "</TOOLCALL>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ special_function_tool })
+            .expect(message_assist_thoughts_call)
             .run();
 
         // Continuation tests
