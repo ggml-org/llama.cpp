@@ -119,8 +119,6 @@ std::vector<T> pad_input(const ggml_tensor * tensor, size_t padded_rows, size_t 
                         padded_rows, padded_cols, pad_value);
 }
 
-void set_zero_diagonal(std::vector<float> & matrix, size_t rows, size_t cols);
-
 const ggml_tensor * get_inp_pos_tensor(struct ggml_cgraph * cgraph);
 
 bool get_is_prefill(const ggml_tensor * inp_pos);

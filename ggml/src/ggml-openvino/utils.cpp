@@ -772,6 +772,13 @@ enum ggml_status naive_compute(ggml_cgraph * cgraph,
 }
 
 namespace {
+template <typename T> void set_zero_diagonal(std::vector<T> & matrix, size_t rows, size_t cols, T zero_value = T{}) {
+    for (size_t i = 0; i < rows; ++i) {
+        size_t diag_col = std::min(i, cols - 1);
+        matrix[i * cols + diag_col] = zero_value;
+    }
+}
+
 ov::Tensor make_contiguous_split_input_tensor(std::shared_ptr<GgmlOvDecoder> ggml_decoder,
                                               const struct ggml_tensor * ggml_tensor,
                                               const ov::Shape & input_shape) {
@@ -887,6 +894,14 @@ ov::Tensor get_ov_input_tensor_static_decode(std::shared_ptr<GgmlOvDecoder> ggml
 
     if (GgmlOvDecoder::is_inp_mask(ggml_tensor, op)) {
         size_t context_size = ggml_decoder->get_ctx_size();
+        if (ggml_tensor->type == GGML_TYPE_F16) {
+            std::vector<ggml_fp16_t> padded_data =
+                pad_input<ggml_fp16_t>(ggml_tensor, 1, context_size, GGML_FP32_TO_FP16(-INFINITY));
+            ov::Tensor input_tensor(ov::element::f16, ov::Shape{1, 1, 1, context_size});
+            std::memcpy(input_tensor.data(), padded_data.data(), padded_data.size() * sizeof(ggml_fp16_t));
+            return input_tensor;
+        }
+
         std::vector<float> padded_data = pad_input<float>(ggml_tensor, 1, context_size, -INFINITY);
         ov::Tensor input_tensor(ov::element::f32, ov::Shape{1, 1, 1, context_size});
         auto * data_ptr = input_tensor.data<float>();
@@ -955,9 +970,20 @@ ov::Tensor get_ov_input_tensor_static_prefill(std::shared_ptr<GgmlOvDecoder> ggm
     if (GgmlOvDecoder::is_inp_mask(ggml_tensor, op)) {
         size_t cols = ggml_tensor->ne[0];
         size_t rows = ggml_tensor->ne[1];
-        float * ggml_data = (float *) ggml_tensor->data + chunk_index * chunk_size * cols;
         size_t chunk_valid_rows = std::min(chunk_size, rows - chunk_index * chunk_size);
         size_t context_size = ggml_decoder->get_ctx_size();
+        if (ggml_tensor->type == GGML_TYPE_F16) {
+            const auto * ggml_data =
+                static_cast<const ggml_fp16_t *>(ggml_tensor->data) + chunk_index * chunk_size * cols;
+            std::vector<ggml_fp16_t> padded_data = pad_input<ggml_fp16_t>(ggml_data, chunk_valid_rows, cols, chunk_size,
+                                                                          context_size, GGML_FP32_TO_FP16(-INFINITY));
+            set_zero_diagonal(padded_data, chunk_size, context_size, GGML_FP32_TO_FP16(0.0f));
+            ov::Tensor input_tensor(ov::element::f16, ov::Shape{1, 1, chunk_size, context_size});
+            std::memcpy(input_tensor.data(), padded_data.data(), padded_data.size() * sizeof(ggml_fp16_t));
+            return input_tensor;
+        }
+
+        const auto * ggml_data = static_cast<const float *>(ggml_tensor->data) + chunk_index * chunk_size * cols;
         std::vector<float> padded_data =
             pad_input<float>(ggml_data, chunk_valid_rows, cols, chunk_size, context_size, -INFINITY);
         set_zero_diagonal(padded_data, chunk_size, context_size);
@@ -1135,13 +1161,6 @@ void print_output_tensor_info(const std::string & name, const ov::Tensor & tenso
     }
     default:
         break;
-    }
-}
-
-void set_zero_diagonal(std::vector<float> & matrix, size_t rows, size_t cols) {
-    for (size_t i = 0; i < rows; ++i) {
-        size_t diag_col = std::min(i, cols - 1);
-        matrix[i * cols + diag_col] = 0.0f;
     }
 }
 
