@@ -1441,6 +1441,35 @@ private:
             slot.lora = params_base.lora_adapters;
         }
 
+        // if context shift is enabled and the prompt is larger than the context, truncate the middle
+        // and keep the first n_keep tokens; otherwise the request is rejected in update_slots()
+        const bool can_split = !task.need_embd() ||
+            (llama_get_memory(ctx_tgt) && llama_pooling_type(ctx_tgt) == LLAMA_POOLING_TYPE_LAST);
+
+        if (params_base.ctx_shift && !mctx && can_split && task.n_tokens() >= slot.n_ctx) {
+            int n_keep = task.params.n_keep < 0 ? task.n_tokens() : task.params.n_keep;
+            n_keep = std::min(slot.n_ctx - 4, n_keep);
+
+            const int n_left        = slot.n_ctx - n_keep;
+            const int n_block_size  = n_left / 2;
+            const int erased_blocks = (task.n_tokens() - n_keep - n_block_size) / n_block_size;
+
+            const llama_tokens & curr_tokens = task.tokens.get_text_tokens();
+
+            llama_tokens new_tokens(curr_tokens.begin(), curr_tokens.begin() + n_keep);
+            new_tokens.insert(new_tokens.end(), curr_tokens.begin() + n_keep + erased_blocks * n_block_size, curr_tokens.end());
+
+            task.tokens.clear();
+            task.tokens.insert(new_tokens);
+
+            slot.truncated = true;
+
+            SLT_WRN(slot, "input truncated, n_ctx = %d, n_keep = %d, n_left = %d, n_tokens = %d\n",
+                    slot.n_ctx, n_keep, n_left, task.n_tokens());
+
+            GGML_ASSERT(task.n_tokens() < slot.n_ctx);
+        }
+
         // if using alora, make sure it's only a single one requested and active
         size_t alora_invocation_start = task.tokens.size();
         if (lora_all_alora(slot.lora)) {
@@ -2694,7 +2723,7 @@ private:
                             if (slot.task->n_tokens() >= slot.n_ctx) {
                                 send_error(slot,
                                            string_format("request (%d tokens) exceeds the available context size (%d "
-                                                         "tokens), try increasing it",
+                                                         "tokens), try increasing it or enable context shift",
                                                          slot.task->n_tokens(), slot.n_ctx),
                                            ERROR_TYPE_EXCEED_CONTEXT_SIZE);
                                 slot.release();
