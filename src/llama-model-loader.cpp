@@ -1213,13 +1213,12 @@ struct ggml_tensor * llama_model_loader::create_tensor(
     };
 
     if (files.empty()) {
-        if (flags & TENSOR_SKIP_IF_VIRTUAL) {
-            return nullptr;
-        }
         ggml_type type = GGML_TYPE_F32;
         const int64_t tid = gguf_find_tensor(metadata, tn.str().c_str());
         if (tid != -1) {
             type = gguf_get_tensor_type(metadata, tid);
+        } else if (flags & TENSOR_SKIP_IF_VIRTUAL) {
+            return nullptr;
         } else if (no_alloc) {
             if (flags & TENSOR_NOT_REQUIRED) {
                 return nullptr;
