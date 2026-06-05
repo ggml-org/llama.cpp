@@ -46,7 +46,9 @@ Before submitting your PR:
     - provide KL divergence data calculated vs. the FP16/BF16 (whichever is the native precision) version for both the new type as well as types of similar size
     - provide [performance data](https://github.com/ggml-org/llama.cpp/tree/master/tools/llama-bench) for the new type in comparison to types of similar size on pure CPU
 - Consider allowing write access to your branch for faster reviews, as reviewers can push commits directly
-- If you are a new contributor, limit your open PRs to 1.
+- If you are a new contributor
+    - Limit your open PRs to 1
+    - Do not submit trivial fixes (e.g. typos, formatting changes)
 
 After submitting your PR:
 - Expect requests for modifications to ensure the code meets llama.cpp's standards for quality and long-term maintainability
@@ -61,6 +63,7 @@ After submitting your PR:
 - Optionally pick a `<module>` from here: https://github.com/ggml-org/llama.cpp/wiki/Modules
 - Let other maintainers merge their own PRs
 - When merging a PR, make sure you have a good understanding of the changes
+- If a PR does not warrant a new release, add `[no release]` in the squashed commit to spare CI resources
 - Be mindful of maintenance: most of the work going into a feature happens after the PR is merged. If the PR author is not committed to contribute long-term, someone else needs to take responsibility (you)
 
 Maintainers reserve the right to decline review or close pull requests for any reason, without any questions, particularly under any of the following conditions:

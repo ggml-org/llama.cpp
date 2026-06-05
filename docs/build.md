@@ -22,6 +22,7 @@ The following sections describe how to build with different backends and options
 * [HIP](#hip)
 * [Vulkan](#vulkan)
 * [CANN](#cann)
+* [ZenDNN](#zendnn)
 * [Arm® KleidiAI™](#arm-kleidiai)
 * [OpenCL](#opencl)
 * [Android](#android-1)
@@ -281,6 +282,12 @@ Use `GGML_CUDA_FORCE_CUBLAS_COMPUTE_16F` environment variable to force use FP16 
 
 The environment variable `GGML_CUDA_ENABLE_UNIFIED_MEMORY=1` can be used to enable unified memory in Linux. This allows swapping to system RAM instead of crashing when the GPU VRAM is exhausted. In Windows this setting is available in the NVIDIA control panel as `System Memory Fallback`.
 
+### Peer Access
+
+The environment variable `GGML_CUDA_P2P` can be set to enable peer-to-peer access between multiple GPUs, allowing them to transfer data directly rather than to go through system memory.
+Requires driver support (usually restricted to workstation/datacenter GPUs).
+May cause crashes or corrupted outputs for some motherboards and BIOS settings (e.g. IOMMU).
+
 ### Performance Tuning
 
 The following compilation options are also available to tweak performance:
@@ -456,7 +463,8 @@ pacman -S git \
     mingw-w64-ucrt-x86_64-gcc \
     mingw-w64-ucrt-x86_64-cmake \
     mingw-w64-ucrt-x86_64-vulkan-devel \
-    mingw-w64-ucrt-x86_64-shaderc
+    mingw-w64-ucrt-x86_64-shaderc \
+    mingw-w64-ucrt-x86_64-spirv-headers
 ```
 
 Switch into the `llama.cpp` directory and build using CMake.
@@ -490,8 +498,10 @@ First, follow the official LunarG instructions for the installation and setup of
 
 On Debian / Ubuntu, you can install the required dependencies using:
 ```sh
-sudo apt-get install libvulkan-dev glslc
+sudo apt-get install libvulkan-dev glslc spirv-headers
 ```
+
+SPIRV-Headers (`spirv/unified1/spirv.hpp`) are required for the Vulkan backend and are **not** always pulled in by the Vulkan loader dev package alone. Other distros use names such as `spirv-headers` (Ubuntu / Debian / Arch), or `spirv-headers-devel` (Fedora / openSUSE). On Windows, the LunarG Vulkan SDK’s `Include` directory already contains these headers.
 
 #### Common steps
 
@@ -726,7 +736,7 @@ ninja
 
 To read documentation for how to build on Android, [click here](./android.md)
 
-## WebGPU [In Progress]
+## WebGPU
 
 The WebGPU backend relies on [Dawn](https://dawn.googlesource.com/dawn). Follow the instructions [here](https://dawn.googlesource.com/dawn/+/refs/heads/main/docs/quickstart-cmake.md) to install Dawn locally so that llama.cpp can find it using CMake. The current implementation is up-to-date with Dawn commit `18eb229`.
 

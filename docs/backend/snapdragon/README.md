@@ -10,7 +10,7 @@ This image includes Android NDK, OpenCL SDK, Hexagon SDK, CMake, etc.
 This method works on Linux, macOS, and Windows. macOS and Windows users should install Docker Desktop.
 
 ```
-~/src/llama.cpp$ docker run -it -u $(id -u):$(id -g) --volume $(pwd):/workspace --platform linux/amd64 ghcr.io/snapdragon-toolchain/arm64-android:v0.3
+~/src/llama.cpp$ docker run -it -u $(id -u):$(id -g) --volume $(pwd):/workspace --platform linux/amd64 ghcr.io/snapdragon-toolchain/arm64-android:v0.7
 [d]/> cd /workspace
 ```
 
@@ -24,7 +24,7 @@ Native Windows 11 arm64 builds has the following tools dependencies:
   - UCRT and Driver Kit
 - LLVM core libraries and Clang compiler (winget)
 - CMake, Git, Python (winget)
-- Hexagon SDK Community Edition 6.4 or later (see windows.md)
+- Hexagon SDK Community Edition 6.6 or later (see windows.md)
 - OpenCL SDK 2.3 or later (see windows.md)
 
 Note: The rest of the **Windows** build process assumes that you're running natively in Powershell.
@@ -45,7 +45,7 @@ Preset CMake variables:
   GGML_HEXAGON="ON"
   GGML_OPENCL="ON"
   GGML_OPENMP="OFF"
-  HEXAGON_SDK_ROOT="/opt/hexagon/6.4.0.2"
+  HEXAGON_SDK_ROOT="/opt/hexagon/6.6.0.0"
 ...
 -- Including OpenCL backend
 -- Including Hexagon backend
@@ -249,18 +249,27 @@ build: 6a8cf8914 (6733)
   ```
 
 - `GGML_HEXAGON_PROFILE=1`
-  Generates a host-side profile for the ggml-hexagon Ops.
+  Enables Op profiling:
 
-- `GGML_HEXAGON_OPMASK=0x0`
-  Allows enabling specific stages of the processing pipeline:
+  - `1` Basic profile with per-op `usecs` and `cycles` counters
+  - `2` Extended profile with per-op `usecs`, `cycles` and default PMU counter data
+  - `0x1,...,0x8` Extended profile with per-op `usecs`, `cycles` and custom PMU counter data
+
+  The logging output can be either saved into a file for post-processing or it can be piped directly into the post-processing tool to generate the report.
+  Examples:
+
+      `GGML_HEXAGON_PROFILE=1 llama-completion ... |& ./scripts/snapdragon/ggml-hexagon-profile.py -`
+
+- `GGML_HEXAGON_OPSTAGE=0x0`
+  Allows enabling specific stages of the Op processing pipeline:
 
   - `0x1` Enable Op Queue (i.e., queuing Ops into NPU)
   - `0x2` Enable Op Compute (MUL_MAT, etc.)
 
   Examples:
 
-      `GGML_HEXAGON_OPMASK=0x1 llama-completion ...` - Ops are enqueued but NPU-side processing is stubbed out
-      `GGML_HEXAGON_OPMASK=0x3 llama-completion ...` - Full queuing and processing of Ops (default)
+      `GGML_HEXAGON_OPSTAGE=0x1 llama-completion ...` - Ops are enqueued to the NPU but dma & compute are disabled
+      `GGML_HEXAGON_OPSTAGE=0x3 llama-completion ...` - Full queuing and processing of Ops (default)
 
 - `GGML_HEXAGON_OPFILTER=regex`
   Allows filtering (disabling) Ops that match the regex pattern:

@@ -20,6 +20,10 @@ typedef void (*dequantize_kernel_t)(const void * vx, const int64_t ib, const int
 typedef void (*dequantize_kernel_t_reorder)(const void *d, const int64_t ib, const void *qs,
                                             const int iqs, dfloat2 &v);
 
+#if QK_K == 256
+static inline void get_scale_min_k4(int j, const uint8_t * q, uint8_t & d, uint8_t & m);
+#endif
+
 static __dpct_inline__ void dequantize_q4_0(const void *vx, const int64_t ib,
                                             const int iqs, dfloat2 &v) {
     const block_q4_0 * x = (const block_q4_0 *) vx;
@@ -88,6 +92,474 @@ static __dpct_inline__ void dequantize_q4_1(const void *vx, const int64_t ib,
     v.x() = sycl::fma(v.x(), d, m);
     v.y() = sycl::fma(v.y(), d, m);
 #endif // GGML_SYCL_F16
+}
+
+static __dpct_inline__ void dequantize_q4_K(const void *vx, const int64_t ib,
+                                            const int iqs, dfloat2 &v) {
+#if QK_K == 256
+    const block_q4_K * x = (const block_q4_K *) vx;
+    const sycl::half2 dm = x[ib].dm;
+    const float dall = dm[0];
+    const float dmin = dm[1];
+
+    auto dequantize_one = [&](const int idx) -> dfloat {
+        const int il = idx / 64;
+        const int in = idx % 64;
+        const int is = 2 * il + (in >= 32 ? 1 : 0);
+        const int off = in & 31;
+        const int qsi = 32 * il + off;
+
+        uint8_t sc;
+        uint8_t m;
+        get_scale_min_k4(is, x[ib].scales, sc, m);
+
+        const uint8_t q = x[ib].qs[qsi];
+        const uint8_t qv = (in >= 32) ? (q >> 4) : (q & 0xF);
+        return sycl::fma((dfloat) qv, (dfloat) (dall * sc), (dfloat) (-dmin * m));
+    };
+
+    v.x() = dequantize_one(iqs + 0);
+    v.y() = dequantize_one(iqs + 1);
+#else
+    GGML_ABORT("Q4_K dequantize not supported for QK_K != 256");
+#endif
+}
+
+static __dpct_inline__ void dequantize_q2_K(const void *vx, const int64_t ib,
+                                            const int iqs, dfloat2 &v) {
+#if QK_K == 256
+    const block_q2_K * x = (const block_q2_K *) vx;
+    const float dall = x[ib].dm[0];
+    const float dmin = x[ib].dm[1];
+
+    auto dequantize_one = [&](const int idx) -> dfloat {
+        const int n = idx / 128;
+        const int r = idx % 128;
+        const int g = r / 32;
+        const int l = r % 32;
+        const int is = 8 * n + l / 16;
+
+        const uint8_t q = x[ib].qs[32 * n + l];
+        const uint8_t sc = x[ib].scales[is + 2 * g];
+        const float d = dall * (sc & 0xF);
+        const float m = dmin * (sc >> 4);
+
+        return sycl::fma((dfloat) ((q >> (2 * g)) & 3), (dfloat) d, (dfloat) (-m));
+    };
+
+    v.x() = dequantize_one(iqs + 0);
+    v.y() = dequantize_one(iqs + 1);
+#else
+    GGML_ABORT("Q2_K dequantize not supported for QK_K != 256");
+#endif
+}
+
+static __dpct_inline__ void dequantize_q3_K(const void *vx, const int64_t ib,
+                                            const int iqs, dfloat2 &v) {
+#if QK_K == 256
+    const block_q3_K * x = (const block_q3_K *) vx;
+    const float d_all = x[ib].d;
+
+    auto dequantize_one = [&](const int idx) -> dfloat {
+        const int n = idx / 128;
+        const int r = idx % 128;
+        const int j = r / 32;
+        const int l = r % 32;
+
+        const int is0 = l / 16;
+        const int is = 8 * n + 2 * j + is0;
+        const int shift = 2 * j;
+        const uint8_t m = 1 << (4 * n + j);
+
+        const int8_t us = is <  4 ? (x[ib].scales[is - 0] & 0xF) | (((x[ib].scales[is + 8] >> 0) & 3) << 4) :
+                         is <  8 ? (x[ib].scales[is - 0] & 0xF) | (((x[ib].scales[is + 4] >> 2) & 3) << 4) :
+                         is < 12 ? (x[ib].scales[is - 8] >> 4)  | (((x[ib].scales[is + 0] >> 4) & 3) << 4) :
+                                   (x[ib].scales[is - 8] >> 4)  | (((x[ib].scales[is - 4] >> 6) & 3) << 4);
+
+        const float dl = d_all * (us - 32);
+        const uint8_t q = x[ib].qs[32 * n + l];
+        const uint8_t h = x[ib].hmask[l];
+        const int8_t qv = ((q >> shift) & 3) - ((h & m) ? 0 : 4);
+
+        return (dfloat) (dl * qv);
+    };
+
+    v.x() = dequantize_one(iqs + 0);
+    v.y() = dequantize_one(iqs + 1);
+#else
+    GGML_ABORT("Q3_K dequantize not supported for QK_K != 256");
+#endif
+}
+
+static __dpct_inline__ void dequantize_q5_K(const void *vx, const int64_t ib,
+                                            const int iqs, dfloat2 &v) {
+#if QK_K == 256
+    const block_q5_K * x = (const block_q5_K *) vx;
+    const float dall = x[ib].dm[0];
+    const float dmin = x[ib].dm[1];
+
+    auto dequantize_one = [&](const int idx) -> dfloat {
+        const int il = idx / 64;
+        const int in = idx % 64;
+        const int is = 2 * il + (in >= 32 ? 1 : 0);
+        const int ir = (in & 31) / 2;
+        const int iq = in & 1;
+
+        const uint8_t q = x[ib].qs[32 * il + 2 * ir + iq];
+        const uint8_t h = x[ib].qh[2 * ir + iq];
+        const uint8_t qv = (in >= 32) ? (q >> 4) : (q & 0xF);
+
+        uint8_t sc;
+        uint8_t m;
+        get_scale_min_k4(is, x[ib].scales, sc, m);
+
+        const float d = dall * sc;
+        const float mn = dmin * m;
+        const uint8_t hm = 1 << (2 * il + (in >= 32 ? 1 : 0));
+
+        return sycl::fma((dfloat) (qv + ((h & hm) ? 16 : 0)), (dfloat) d, (dfloat) (-mn));
+    };
+
+    v.x() = dequantize_one(iqs + 0);
+    v.y() = dequantize_one(iqs + 1);
+#else
+    GGML_ABORT("Q5_K dequantize not supported for QK_K != 256");
+#endif
+}
+
+static __dpct_inline__ void dequantize_q6_K(const void *vx, const int64_t ib,
+                                            const int iqs, dfloat2 &v) {
+#if QK_K == 256
+    const block_q6_K * x = (const block_q6_K *) vx;
+    const float d = x[ib].d;
+
+    auto dequantize_one = [&](const int idx) -> dfloat {
+        const int ip = idx / 128;
+        const int in = idx % 128;
+        const int il = in & 31;
+        const int ig = in / 32;
+        const int is = 8 * ip + il / 16;
+
+        const uint8_t ql0 = x[ib].ql[64 * ip + il];
+        const uint8_t ql1 = x[ib].ql[64 * ip + il + 32];
+        const uint8_t qh = x[ib].qh[32 * ip + il];
+        const int8_t * sc = x[ib].scales + is;
+
+        uint8_t qv;
+        int8_t scale;
+        if (ig == 0) {
+            qv = (ql0 & 0xF) | (((qh >> 0) & 3) << 4);
+            scale = sc[0];
+        } else if (ig == 1) {
+            qv = (ql1 & 0xF) | (((qh >> 2) & 3) << 4);
+            scale = sc[2];
+        } else if (ig == 2) {
+            qv = (ql0 >> 4) | (((qh >> 4) & 3) << 4);
+            scale = sc[4];
+        } else {
+            qv = (ql1 >> 4) | (((qh >> 6) & 3) << 4);
+            scale = sc[6];
+        }
+
+        return (dfloat) (d * scale * ((int8_t) qv - 32));
+    };
+
+    v.x() = dequantize_one(iqs + 0);
+    v.y() = dequantize_one(iqs + 1);
+#else
+    GGML_ABORT("Q6_K dequantize not supported for QK_K != 256");
+#endif
+}
+
+static __dpct_inline__ void dequantize_mxfp4(const void *vx, const int64_t ib,
+                                             const int iqs, dfloat2 &v) {
+    const block_mxfp4 * x = (const block_mxfp4 *) vx;
+    const float d = ggml_sycl_e8m0_to_fp32(x[ib].e);
+    const uint8_t q = x[ib].qs[iqs];
+
+    v.x() = d * kvalues_mxfp4[q & 0xF] * 0.5f;
+    v.y() = d * kvalues_mxfp4[q >> 4] * 0.5f;
+}
+
+static __dpct_inline__ void dequantize_q1_0(const void *vx, const int64_t ib,
+                                            const int iqs, dfloat2 &v) {
+    const block_q1_0 * x = (const block_q1_0 *) vx;
+    const dfloat d = x[ib].d;
+
+    const int bit_index_0 = iqs + 0;
+    const int bit_index_1 = iqs + 1;
+
+    const int bit_0 = (x[ib].qs[bit_index_0 / 8] >> (bit_index_0 % 8)) & 1;
+    const int bit_1 = (x[ib].qs[bit_index_1 / 8] >> (bit_index_1 % 8)) & 1;
+
+    v.x() = (2 * bit_0 - 1) * d;
+    v.y() = (2 * bit_1 - 1) * d;
+}
+
+static __dpct_inline__ void dequantize_nvfp4(const void *vx, const int64_t ib,
+                                             const int iqs, dfloat2 &v) {
+    const block_nvfp4 & xb = ((const block_nvfp4 *) vx)[ib];
+
+    auto dequantize_one = [&](const int idx) -> dfloat {
+        const int sub = idx / QK_NVFP4_SUB;
+        const int j = idx % QK_NVFP4_SUB;
+        const int jh = j % (QK_NVFP4_SUB / 2);
+
+        const float d = ggml_sycl_ue4m3_to_fp32(xb.d[sub]);
+        const uint8_t q = xb.qs[sub * (QK_NVFP4_SUB / 2) + jh];
+        const uint8_t qv = (j < (QK_NVFP4_SUB / 2)) ? (q & 0x0F) : (q >> 4);
+
+        return d * kvalues_mxfp4[qv];
+    };
+
+    v.x() = dequantize_one(iqs + 0);
+    v.y() = dequantize_one(iqs + 1);
+}
+
+static __dpct_inline__ void dequantize_iq2_xxs(const void *vx, const int64_t ib,
+                                               const int iqs, dfloat2 &v) {
+#if QK_K == 256
+    const block_iq2_xxs * x = (const block_iq2_xxs *) vx;
+
+    auto dequantize_one = [&](const int idx) -> dfloat {
+        const int ib8 = idx / 32;
+        const int r = idx % 32;
+        const int il = r / 8;
+        const int j = r % 8;
+
+        const uint16_t * q2 = x[ib].qs + 4 * ib8;
+        const uint8_t * aux8 = (const uint8_t *) q2;
+        const uint8_t * grid = (const uint8_t *) (iq2xxs_grid + aux8[il]);
+        const uint32_t aux32 = q2[2] | (q2[3] << 16);
+        const float d = (float) x[ib].d * (0.5f + (aux32 >> 28)) * 0.25f;
+        const uint8_t signs = ksigns_iq2xs[(aux32 >> (7 * il)) & 127];
+
+        return d * grid[j] * ((signs & kmask_iq2xs[j]) ? -1.f : 1.f);
+    };
+
+    v.x() = dequantize_one(iqs + 0);
+    v.y() = dequantize_one(iqs + 1);
+#else
+    GGML_ABORT("IQ2_XXS dequantize not supported for QK_K != 256");
+#endif
+}
+
+static __dpct_inline__ void dequantize_iq2_xs(const void *vx, const int64_t ib,
+                                              const int iqs, dfloat2 &v) {
+#if QK_K == 256
+    const block_iq2_xs * x = (const block_iq2_xs *) vx;
+
+    auto dequantize_one = [&](const int idx) -> dfloat {
+        const int ib8 = idx / 32;
+        const int r = idx % 32;
+        const int il = r / 8;
+        const int j = r % 8;
+
+        const uint16_t * q2 = x[ib].qs + 4 * ib8;
+        const uint8_t * grid = (const uint8_t *) (iq2xs_grid + (q2[il] & 511));
+        const float d = (float) x[ib].d * (0.5f + ((x[ib].scales[ib8] >> (4 * (il / 2))) & 0xf)) * 0.25f;
+        const uint8_t signs = ksigns_iq2xs[q2[il] >> 9];
+
+        return d * grid[j] * ((signs & kmask_iq2xs[j]) ? -1.f : 1.f);
+    };
+
+    v.x() = dequantize_one(iqs + 0);
+    v.y() = dequantize_one(iqs + 1);
+#else
+    GGML_ABORT("IQ2_XS dequantize not supported for QK_K != 256");
+#endif
+}
+
+static __dpct_inline__ void dequantize_iq2_s(const void *vx, const int64_t ib,
+                                             const int iqs, dfloat2 &v) {
+#if QK_K == 256
+    const block_iq2_s * x = (const block_iq2_s *) vx;
+
+    auto dequantize_one = [&](const int idx) -> dfloat {
+        const int ib8 = idx / 32;
+        const int r = idx % 32;
+        const int il = r / 8;
+        const int j = r % 8;
+
+        const uint16_t grid_id = x[ib].qs[4 * ib8 + il] | ((x[ib].qh[ib8] << (8 - 2 * il)) & 0x300);
+        const uint8_t * grid = (const uint8_t *) (iq2s_grid + grid_id);
+        const float d = (float) x[ib].d * (0.5f + ((x[ib].scales[ib8] >> (4 * (il / 2))) & 0xf)) * 0.25f;
+        const uint8_t signs = x[ib].qs[QK_K / 8 + 4 * ib8 + il];
+
+        return d * grid[j] * ((signs & kmask_iq2xs[j]) ? -1.f : 1.f);
+    };
+
+    v.x() = dequantize_one(iqs + 0);
+    v.y() = dequantize_one(iqs + 1);
+#else
+    GGML_ABORT("IQ2_S dequantize not supported for QK_K != 256");
+#endif
+}
+
+static __dpct_inline__ void dequantize_iq3_xxs(const void *vx, const int64_t ib,
+                                               const int iqs, dfloat2 &v) {
+#if QK_K == 256
+    const block_iq3_xxs * x = (const block_iq3_xxs *) vx;
+
+    auto dequantize_one = [&](const int idx) -> dfloat {
+        const int ib8 = idx / 32;
+        const int r = idx % 32;
+        const int il = r / 8;
+        const int j = r % 8;
+
+        const uint8_t * q3 = x[ib].qs + 8 * ib8;
+        const uint16_t * gas = (const uint16_t *) (x[ib].qs + QK_K / 4) + 2 * ib8;
+        const uint8_t * grid1 = (const uint8_t *) (iq3xxs_grid + q3[2 * il + 0]);
+        const uint8_t * grid2 = (const uint8_t *) (iq3xxs_grid + q3[2 * il + 1]);
+        const uint32_t aux32 = gas[0] | (gas[1] << 16);
+        const float d = (float) x[ib].d * (0.5f + (aux32 >> 28)) * 0.5f;
+        const uint8_t signs = ksigns_iq2xs[(aux32 >> (7 * il)) & 127];
+
+        if (j < 4) {
+            return d * grid1[j] * ((signs & kmask_iq2xs[j + 0]) ? -1.f : 1.f);
+        }
+        return d * grid2[j - 4] * ((signs & kmask_iq2xs[j + 0]) ? -1.f : 1.f);
+    };
+
+    v.x() = dequantize_one(iqs + 0);
+    v.y() = dequantize_one(iqs + 1);
+#else
+    GGML_ABORT("IQ3_XXS dequantize not supported for QK_K != 256");
+#endif
+}
+
+static __dpct_inline__ void dequantize_iq3_s(const void *vx, const int64_t ib,
+                                             const int iqs, dfloat2 &v) {
+#if QK_K == 256
+    const block_iq3_s * x = (const block_iq3_s *) vx;
+
+    auto dequantize_one = [&](const int idx) -> dfloat {
+        const int ib8 = idx / 32;
+        const int r = idx % 32;
+        const int il = r / 8;
+        const int j = r % 8;
+
+        const uint8_t * qs = x[ib].qs + 8 * ib8;
+        const uint16_t grid1_id = qs[2 * il + 0] | ((x[ib].qh[ib8] << (8 - 2 * il)) & 256);
+        const uint16_t grid2_id = qs[2 * il + 1] | ((x[ib].qh[ib8] << (7 - 2 * il)) & 256);
+        const uint8_t * grid1 = (const uint8_t *) (iq3s_grid + grid1_id);
+        const uint8_t * grid2 = (const uint8_t *) (iq3s_grid + grid2_id);
+        const float d = (float) x[ib].d * (1 + 2 * ((x[ib].scales[ib8 / 2] >> (4 * (ib8 % 2))) & 0xf));
+        const uint8_t signs = x[ib].signs[4 * ib8 + il];
+
+        if (j < 4) {
+            return d * grid1[j] * ((signs & kmask_iq2xs[j + 0]) ? -1.f : 1.f);
+        }
+        return d * grid2[j - 4] * ((signs & kmask_iq2xs[j + 0]) ? -1.f : 1.f);
+    };
+
+    v.x() = dequantize_one(iqs + 0);
+    v.y() = dequantize_one(iqs + 1);
+#else
+    GGML_ABORT("IQ3_S dequantize not supported for QK_K != 256");
+#endif
+}
+
+static __dpct_inline__ void dequantize_iq1_s(const void *vx, const int64_t ib,
+                                             const int iqs, dfloat2 &v) {
+#if QK_K == 256
+    const block_iq1_s * x = (const block_iq1_s *) vx;
+
+    auto dequantize_one = [&](const int idx) -> dfloat {
+        const int ib8 = idx / 32;
+        const int r = idx % 32;
+        const int il = r / 8;
+        const int j = r % 8;
+
+        const float delta = (x[ib].qh[ib8] & 0x8000) ? (-1.f - IQ1S_DELTA) : (-1.f + IQ1S_DELTA);
+        const float d = (float) x[ib].d * (2 * ((x[ib].qh[ib8] >> 12) & 7) + 1);
+        const uint16_t grid_id = x[ib].qs[4 * ib8 + il] | (((x[ib].qh[ib8] >> (3 * il)) & 7) << 8);
+        const uint32_t g = iq1s_grid_gpu[grid_id];
+        const int8_t qv = (j < 4) ? ((g >> (8 * j)) & 0x0F) : ((g >> (8 * (j - 4) + 4)) & 0x0F);
+
+        return d * (qv + delta);
+    };
+
+    v.x() = dequantize_one(iqs + 0);
+    v.y() = dequantize_one(iqs + 1);
+#else
+    GGML_ABORT("IQ1_S dequantize not supported for QK_K != 256");
+#endif
+}
+
+static __dpct_inline__ void dequantize_iq1_m(const void *vx, const int64_t ib,
+                                             const int iqs, dfloat2 &v) {
+#if QK_K == 256
+    const block_iq1_m * x = (const block_iq1_m *) vx;
+
+    auto dequantize_one = [&](const int idx) -> dfloat {
+        const int ib8 = idx / 32;
+        const int r = idx % 32;
+        const int il = r / 8;
+        const int j = r % 8;
+
+        const uint16_t * sc = (const uint16_t *) x[ib].scales;
+        iq1m_scale_t scale;
+        scale.u16 = (sc[0] >> 12) | ((sc[1] >> 8) & 0x00f0) | ((sc[2] >> 4) & 0x0f00) | (sc[3] & 0xf000);
+
+        const int ib16 = 2 * ib8 + il / 2;
+        const float d = (float) scale.f16 * (2 * ((sc[ib16 / 4] >> (3 * (ib16 % 4))) & 0x7) + 1);
+
+        const uint8_t qh = x[ib].qh[2 * ib8 + il / 2];
+        const float delta = (qh & (0x08 << (4 * (il % 2)))) ? (-1.f - IQ1M_DELTA) : (-1.f + IQ1M_DELTA);
+
+        const uint16_t grid_id = x[ib].qs[4 * ib8 + il] | (((qh >> (4 * (il % 2))) & 7) << 8);
+        const uint32_t g = iq1s_grid_gpu[grid_id];
+        const int8_t qv = (j < 4) ? ((g >> (8 * j)) & 0x0F) : ((g >> (8 * (j - 4) + 4)) & 0x0F);
+
+        return d * (qv + delta);
+    };
+
+    v.x() = dequantize_one(iqs + 0);
+    v.y() = dequantize_one(iqs + 1);
+#else
+    GGML_ABORT("IQ1_M dequantize not supported for QK_K != 256");
+#endif
+}
+
+static __dpct_inline__ void dequantize_iq4_nl(const void *vx, const int64_t ib,
+                                              const int iqs, dfloat2 &v) {
+    const block_iq4_nl * x = (const block_iq4_nl *) vx;
+    const float d = (float) x[ib].d;
+
+    auto dequantize_one = [&](const int idx) -> dfloat {
+        if (idx < 16) {
+            return d * kvalues_iq4nl[x[ib].qs[idx] & 0xF];
+        }
+        return d * kvalues_iq4nl[x[ib].qs[idx - 16] >> 4];
+    };
+
+    v.x() = dequantize_one(iqs + 0);
+    v.y() = dequantize_one(iqs + 1);
+}
+
+static __dpct_inline__ void dequantize_iq4_xs(const void *vx, const int64_t ib,
+                                              const int iqs, dfloat2 &v) {
+#if QK_K == 256
+    const block_iq4_xs * x = (const block_iq4_xs *) vx;
+
+    auto dequantize_one = [&](const int idx) -> dfloat {
+        const int ib8 = idx / 32;
+        const int r = idx % 32;
+        const int byte_idx = (r < 16) ? r : (r - 16);
+        const uint8_t q = x[ib].qs[16 * ib8 + byte_idx];
+        const uint8_t qv = (r < 16) ? (q & 0x0F) : (q >> 4);
+
+        const float d = (float) x[ib].d * ((((x[ib].scales_l[ib8 / 2] >> (4 * (ib8 % 2))) & 0xf) |
+                        (((x[ib].scales_h >> (2 * ib8)) & 3) << 4)) - 32);
+        return d * kvalues_iq4nl[qv];
+    };
+
+    v.x() = dequantize_one(iqs + 0);
+    v.y() = dequantize_one(iqs + 1);
+#else
+    GGML_ABORT("IQ4_XS dequantize not supported for QK_K != 256");
+#endif
 }
 
 static __dpct_inline__ void dequantize_q5_0(const void *vx, const int64_t ib,
@@ -239,6 +711,34 @@ static void dequantize_block_q4_0_reorder(const void * __restrict__ vx, dst_t * 
 
 }
 
+// Dequantize Q8_0 from reorder layout: [all qs (k bytes)][all d values]
+// Each thread handles one block of QK8_0 elements.
+template<typename dst_t>
+static void dequantize_block_q8_0_reorder(const void * __restrict__ vx, dst_t * __restrict__ yy, int64_t k,
+                                  const sycl::nd_item<3> &item_ct1) {
+
+    const int64_t i = item_ct1.get_group(2);
+    const int64_t tid = item_ct1.get_local_id(2);
+    const int lane_ib = i * WARP_SIZE + tid;
+
+    if (lane_ib >= k / QK8_0) {
+        return;
+    }
+
+    dst_t * y_ptr = yy + lane_ib * QK8_0;
+
+    auto qs = (const int8_t*)vx + lane_ib * QK8_0;
+    auto s_ptr = (const sycl::half*)((const uint8_t*)vx + k) + lane_ib;
+
+    const float d = float(*s_ptr);
+
+#pragma unroll
+    for (int l = 0; l < QK8_0; ++l) {
+        y_ptr[l] = d * qs[l];
+    }
+
+}
+
 template<typename dst_t>
 static void dequantize_block_q4_1(const void * __restrict__ vx, dst_t * __restrict__ yy, int64_t nb32,
                                   const sycl::nd_item<3> &item_ct1) {
@@ -360,6 +860,63 @@ static void dequantize_block_q3_K(const void * __restrict__ vx, dst_t * __restri
     }
 #endif
 
+}
+
+template<typename dst_t>
+static void dequantize_block_q3_K_reorder(const void * __restrict__ vx, dst_t * __restrict__ yy,
+                                          const sycl::nd_item<3> & item_ct1, int64_t n_blocks) {
+#if QK_K == 256
+    const int64_t i = item_ct1.get_group(2);
+    if (i >= n_blocks) {
+        return;
+    }
+
+    const uint8_t * base          = static_cast<const uint8_t *>(vx);
+    const size_t    qs_offset     = i * (QK_K / 4);
+    const size_t    hmask_offset  = n_blocks * (QK_K / 4) + i * (QK_K / 8);
+    const size_t    scales_offset = n_blocks * (QK_K / 4) + n_blocks * (QK_K / 8) + i * 12;
+    const size_t    d_offset      = n_blocks * (QK_K / 4) + n_blocks * (QK_K / 8) + n_blocks * 12 +
+                                 i * sizeof(ggml_half);
+
+    const uint8_t * qs     = base + qs_offset;
+    const uint8_t * hmask  = base + hmask_offset;
+    const uint8_t * scales = base + scales_offset;
+    const float     d_all  = static_cast<float>(*reinterpret_cast<const ggml_half *>(base + d_offset));
+
+    const int64_t r    = item_ct1.get_local_id(2) / 4;
+    const int64_t tid  = r / 2;
+    const int64_t is0  = r % 2;
+    const int64_t l0   = 16 * is0 + 4 * (item_ct1.get_local_id(2) % 4);
+    const int64_t n    = tid / 4;
+    const int64_t j    = tid - 4 * n;
+    const int64_t is   = 8 * n + 2 * j + is0;
+    const int     shift = 2 * j;
+    uint8_t       m    = 1 << (4 * n + j);
+
+    uint8_t us = is < 4
+        ? (scales[is - 0] & 0xF) | (((scales[is + 8] >> 0) & 3) << 4)
+        : is < 8
+            ? (scales[is - 0] & 0xF) | (((scales[is + 4] >> 2) & 3) << 4)
+            : is < 12
+                ? (scales[is - 8] >> 4) | (((scales[is + 0] >> 4) & 3) << 4)
+                : (scales[is - 8] >> 4) | (((scales[is - 4] >> 6) & 3) << 4);
+
+    const float dl = d_all * (us - 32);
+
+    dst_t * y = yy + i * QK_K + 128 * n + 32 * j;
+    const uint8_t * q  = qs + 32 * n;
+    const uint8_t * hm = hmask;
+
+    for (int l = l0; l < l0 + 4; ++l) {
+        y[l] = dl * ((int8_t) ((q[l] >> shift) & 3) - ((hm[l] & m) ? 0 : 4));
+    }
+#else
+    GGML_UNUSED(vx);
+    GGML_UNUSED(yy);
+    GGML_UNUSED(item_ct1);
+    GGML_UNUSED(n_blocks);
+    GGML_ABORT("Q3_K reorder dequantize not supported for QK_K != 256");
+#endif
 }
 
 #if QK_K == 256
@@ -506,6 +1063,63 @@ static void dequantize_block_q5_K(const void * __restrict__ vx, dst_t * __restri
     dst_t * y = yy + i*QK_K + tid;
     y[ 0] = d * x[i].scales[is+0] * ((q & 0xF) - ((h >> 0) & 1 ? 0 : 16));
     y[32] = d * x[i].scales[is+2] * ((q >>  4) - ((h >> 4) & 1 ? 0 : 16));
+#endif
+}
+
+template <typename dst_t>
+static void dequantize_block_q5_K_reorder(const void * __restrict__ vx, dst_t * __restrict__ yy,
+                                          uint8_t * scales_local, const sycl::nd_item<3> & item_ct1, int64_t n_blocks) {
+    const int64_t ib = item_ct1.get_group(2);
+
+#if QK_K == 256
+    // assume 64 threads
+    const int64_t tid = item_ct1.get_local_id(2);
+    const int64_t il  = tid / 16;   // 0...3
+    const int64_t ir  = tid % 16;   // 0...15
+    const int64_t is  = 2 * il;
+
+    dst_t * y = yy + ib * QK_K + 64 * il + 2 * ir;
+
+    const uint8_t * base = static_cast<const uint8_t *>(vx);
+
+    // Reordered layout: [qs (QK_K/2 per block)] [qh (QK_K/8 per block)] [scales (K_SCALE_SIZE per block)] [dm (half2 per block)]
+    const size_t qs_offset     = ib * (QK_K / 2);
+    const size_t qh_offset     = n_blocks * (QK_K / 2) + ib * (QK_K / 8);
+    const size_t scales_offset = n_blocks * (QK_K / 2) + n_blocks * (QK_K / 8) + ib * K_SCALE_SIZE;
+    const size_t dm_offset     = n_blocks * (QK_K / 2) + n_blocks * (QK_K / 8) + n_blocks * K_SCALE_SIZE + ib * sizeof(ggml_half2);
+
+    const uint8_t *  qs_ptr     = base + qs_offset;
+    const uint8_t *  qh_ptr     = base + qh_offset;
+    const uint8_t *  scales_ptr = base + scales_offset;
+    const ggml_half2 dm_values  = *reinterpret_cast<const ggml_half2 *>(base + dm_offset);
+
+    const float dall = dm_values.x();
+    const float dmin = dm_values.y();
+
+    const uint8_t * ql = qs_ptr + 32 * il + 2 * ir;
+    const uint8_t * qh = qh_ptr + 2 * ir;
+
+    if (tid < K_SCALE_SIZE) {
+        scales_local[tid] = scales_ptr[tid];
+    }
+
+    item_ct1.barrier(sycl::access::fence_space::local_space);
+
+    uint8_t sc, m;
+    get_scale_min_k4(is + 0, scales_local, sc, m);
+    const float d1 = dall * sc; const float m1 = dmin * m;
+    get_scale_min_k4(is + 1, scales_local, sc, m);
+    const float d2 = dall * sc; const float m2 = dmin * m;
+
+    uint8_t hm  = 1 << (2 * il);
+    y[ 0] = d1 * ((ql[ 0] & 0xF) + (qh[ 0] & hm ? 16 : 0)) - m1;
+    y[ 1] = d1 * ((ql[ 1] & 0xF) + (qh[ 1] & hm ? 16 : 0)) - m1;
+    hm <<= 1;
+    y[32] = d2 * ((ql[ 0] >>  4) + (qh[ 0] & hm ? 16 : 0)) - m2;
+    y[33] = d2 * ((ql[ 1] >>  4) + (qh[ 1] & hm ? 16 : 0)) - m2;
+#else
+    GGML_UNUSED(ib); GGML_UNUSED(tid); GGML_UNUSED(yy); GGML_UNUSED(scales_local); GGML_UNUSED(n_blocks);
+    GGML_ABORT("Q5_K reorder dequantize not supported for QK_K != 256");
 #endif
 }
 
