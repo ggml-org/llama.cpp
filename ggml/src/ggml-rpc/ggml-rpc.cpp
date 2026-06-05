@@ -290,13 +290,22 @@ struct rpc_trace_copy_stat {
     uint64_t bytes = 0;
 };
 
+struct rpc_trace_tensor_stat {
+    uint64_t calls = 0;
+    uint64_t bytes = 0;
+    uint64_t elapsed_ns = 0;
+};
+
 struct rpc_trace_state {
     std::mutex mutex;
     bool has_activity = false;
     uint64_t active_rpc_backends = 0;
     rpc_trace_cmd_stat client[RPC_CMD_COUNT] = {};
     rpc_trace_cmd_stat server[RPC_CMD_COUNT] = {};
+    std::unordered_map<std::string, std::array<rpc_trace_cmd_stat, RPC_CMD_COUNT>> client_by_endpoint;
+    std::unordered_map<std::string, rpc_trace_tensor_stat> tensor_ops;
     std::unordered_map<std::string, rpc_trace_copy_stat> cross_endpoint_copies;
+    std::unordered_map<std::string, rpc_trace_copy_stat> cross_endpoint_tensor_copies;
 };
 
 struct rpc_trace_server_span;
@@ -357,8 +366,33 @@ static void rpc_trace_add_cmd_stat(
     stat.server_ns += server_ns;
 }
 
+static std::string rpc_trace_key3(const char * first, const std::string & second, const char * third) {
+    std::string key = first ? first : "";
+    key.push_back('\t');
+    key += second;
+    key.push_back('\t');
+    key += third ? third : "";
+    return key;
+}
+
+static void rpc_trace_split_key3(
+        const std::string & key, std::string & first, std::string & second, std::string & third) {
+    const size_t p0 = key.find('\t');
+    const size_t p1 = p0 == std::string::npos ? std::string::npos : key.find('\t', p0 + 1);
+    if (p0 == std::string::npos || p1 == std::string::npos) {
+        first = key;
+        second.clear();
+        third.clear();
+        return;
+    }
+    first  = key.substr(0, p0);
+    second = key.substr(p0 + 1, p1 - p0 - 1);
+    third  = key.substr(p1 + 1);
+}
+
 static void rpc_trace_record_client(
-        enum rpc_cmd cmd, uint64_t input_bytes, uint64_t output_bytes, uint64_t elapsed_ns, bool has_response) {
+        enum rpc_cmd cmd, const std::string & endpoint, uint64_t input_bytes, uint64_t output_bytes,
+        uint64_t elapsed_ns, bool has_response) {
     if (!rpc_trace_enabled()) {
         return;
     }
@@ -369,6 +403,11 @@ static void rpc_trace_record_client(
     rpc_trace_add_cmd_stat(
         state.client[cmd], input_bytes, output_bytes,
         has_response ? 0 : elapsed_ns, has_response ? elapsed_ns : 0, 0);
+    if (!endpoint.empty()) {
+        rpc_trace_add_cmd_stat(
+            state.client_by_endpoint[endpoint][cmd], input_bytes, output_bytes,
+            has_response ? 0 : elapsed_ns, has_response ? elapsed_ns : 0, 0);
+    }
 }
 
 static void rpc_trace_record_server(enum rpc_cmd cmd, uint64_t input_bytes, uint64_t output_bytes, uint64_t elapsed_ns) {
@@ -393,6 +432,36 @@ static void rpc_trace_record_cross_endpoint_copy(const std::string & src_endpoin
     auto & stat = state.cross_endpoint_copies[src_endpoint + " -> " + dst_endpoint];
     stat.calls++;
     stat.bytes += bytes;
+}
+
+static void rpc_trace_record_cross_endpoint_tensor_copy(
+        const std::string & src_endpoint, const std::string & dst_endpoint, const char * tensor_name, uint64_t bytes) {
+    if (!rpc_trace_enabled()) {
+        return;
+    }
+
+    auto & state = rpc_trace_get_state();
+    std::lock_guard<std::mutex> lock(state.mutex);
+    state.has_activity = true;
+    auto & stat = state.cross_endpoint_tensor_copies[
+        rpc_trace_key3((src_endpoint + " -> " + dst_endpoint).c_str(), "", tensor_name)];
+    stat.calls++;
+    stat.bytes += bytes;
+}
+
+static void rpc_trace_record_tensor_op(
+        const char * op, const std::string & endpoint, const char * tensor_name, uint64_t bytes, uint64_t elapsed_ns) {
+    if (!rpc_trace_enabled()) {
+        return;
+    }
+
+    auto & state = rpc_trace_get_state();
+    std::lock_guard<std::mutex> lock(state.mutex);
+    state.has_activity = true;
+    auto & stat = state.tensor_ops[rpc_trace_key3(op, endpoint, tensor_name)];
+    stat.calls++;
+    stat.bytes += bytes;
+    stat.elapsed_ns += elapsed_ns;
 }
 
 static void rpc_trace_client_backend_init() {
@@ -435,9 +504,79 @@ static void rpc_trace_print_cmd_table(FILE * stream, const char * label, const r
     }
 }
 
+static void rpc_trace_print_endpoint_cmd_table(
+        FILE * stream, const std::unordered_map<std::string, std::array<rpc_trace_cmd_stat, RPC_CMD_COUNT>> & stats) {
+    std::vector<std::string> endpoints;
+    endpoints.reserve(stats.size());
+    for (const auto & endpoint_stats : stats) {
+        endpoints.push_back(endpoint_stats.first);
+    }
+    std::sort(endpoints.begin(), endpoints.end());
+
+    fprintf(stream, "ggml-rpc trace client commands by endpoint:\n");
+    fprintf(stream, "  %-24s %-18s %12s %14s %14s %12s %12s\n",
+            "endpoint", "command", "calls", "in_bytes", "out_bytes", "send_ms", "wait_ms");
+    for (const auto & endpoint : endpoints) {
+        const auto & endpoint_stats = stats.at(endpoint);
+        for (int i = 0; i < RPC_CMD_COUNT; ++i) {
+            const auto & stat = endpoint_stats[i];
+            if (stat.calls == 0) {
+                continue;
+            }
+            const double send_ms = (double) stat.one_way_ns / 1000000.0;
+            const double wait_ms = (double) stat.response_ns / 1000000.0;
+            fprintf(stream, "  %-24s %-18s %12" PRIu64 " %14" PRIu64 " %14" PRIu64 " %12.3f %12.3f\n",
+                    endpoint.c_str(), rpc_cmd_name((rpc_cmd) i), stat.calls,
+                    stat.input_bytes, stat.output_bytes, send_ms, wait_ms);
+        }
+    }
+}
+
+static void rpc_trace_print_tensor_ops(
+        FILE * stream, const std::unordered_map<std::string, rpc_trace_tensor_stat> & stats) {
+    std::vector<std::pair<std::string, rpc_trace_tensor_stat>> rows;
+    rows.reserve(stats.size());
+    for (const auto & entry : stats) {
+        if (entry.second.calls != 0) {
+            rows.push_back(entry);
+        }
+    }
+    std::sort(rows.begin(), rows.end(), [](const auto & lhs, const auto & rhs) {
+        if (lhs.second.elapsed_ns != rhs.second.elapsed_ns) {
+            return lhs.second.elapsed_ns > rhs.second.elapsed_ns;
+        }
+        return lhs.second.bytes > rhs.second.bytes;
+    });
+
+    fprintf(stream, "ggml-rpc trace tensor operations (top by elapsed):\n");
+    fprintf(stream, "  %-16s %-24s %-42s %12s %14s %12s\n",
+            "operation", "endpoint", "tensor", "calls", "bytes", "elapsed_ms");
+    const size_t limit = std::min<size_t>(rows.size(), 24);
+    for (size_t i = 0; i < limit; ++i) {
+        std::string op;
+        std::string endpoint;
+        std::string tensor;
+        rpc_trace_split_key3(rows[i].first, op, endpoint, tensor);
+        const auto & stat = rows[i].second;
+        const double wait_ms = (double) stat.elapsed_ns / 1000000.0;
+        fprintf(stream, "  %-16s %-24s %-42s %12" PRIu64 " %14" PRIu64 " %12.3f\n",
+                op.c_str(), endpoint.c_str(), tensor.c_str(), stat.calls, stat.bytes, wait_ms);
+    }
+}
+
 static bool rpc_trace_has_cmd_stats(const rpc_trace_cmd_stat * stats) {
     for (int i = 0; i < RPC_CMD_COUNT; ++i) {
         if (stats[i].calls != 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool rpc_trace_has_endpoint_cmd_stats(
+        const std::unordered_map<std::string, std::array<rpc_trace_cmd_stat, RPC_CMD_COUNT>> & stats) {
+    for (const auto & endpoint_stats : stats) {
+        if (rpc_trace_has_cmd_stats(endpoint_stats.second.data())) {
             return true;
         }
     }
@@ -453,6 +592,41 @@ static bool rpc_trace_has_copy_stats(const std::unordered_map<std::string, rpc_t
     return false;
 }
 
+static bool rpc_trace_has_tensor_stats(const std::unordered_map<std::string, rpc_trace_tensor_stat> & stats) {
+    for (const auto & entry : stats) {
+        if (entry.second.calls != 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static void rpc_trace_print_cross_endpoint_tensor_copies(
+        FILE * stream, const std::unordered_map<std::string, rpc_trace_copy_stat> & stats) {
+    std::vector<std::pair<std::string, rpc_trace_copy_stat>> rows;
+    rows.reserve(stats.size());
+    for (const auto & entry : stats) {
+        if (entry.second.calls != 0) {
+            rows.push_back(entry);
+        }
+    }
+    std::sort(rows.begin(), rows.end(), [](const auto & lhs, const auto & rhs) {
+        return lhs.second.bytes > rhs.second.bytes;
+    });
+
+    fprintf(stream, "ggml-rpc trace cross-endpoint copy tensors (top by bytes):\n");
+    fprintf(stream, "  %-48s %-42s %12s %14s\n", "endpoints", "tensor", "calls", "bytes");
+    const size_t limit = std::min<size_t>(rows.size(), 24);
+    for (size_t i = 0; i < limit; ++i) {
+        std::string endpoints;
+        std::string unused;
+        std::string tensor;
+        rpc_trace_split_key3(rows[i].first, endpoints, unused, tensor);
+        fprintf(stream, "  %-48s %-42s %12" PRIu64 " %14" PRIu64 "\n",
+                endpoints.c_str(), tensor.c_str(), rows[i].second.calls, rows[i].second.bytes);
+    }
+}
+
 static void rpc_trace_report() {
     if (!rpc_trace_enabled()) {
         return;
@@ -465,13 +639,22 @@ static void rpc_trace_report() {
     }
     const bool has_client = rpc_trace_has_cmd_stats(state.client);
     const bool has_server = rpc_trace_has_cmd_stats(state.server);
+    const bool has_client_by_endpoint = rpc_trace_has_endpoint_cmd_stats(state.client_by_endpoint);
+    const bool has_tensor_ops = rpc_trace_has_tensor_stats(state.tensor_ops);
     const bool has_copies = rpc_trace_has_copy_stats(state.cross_endpoint_copies);
-    if (!has_client && !has_server && !has_copies) {
+    const bool has_tensor_copies = rpc_trace_has_copy_stats(state.cross_endpoint_tensor_copies);
+    if (!has_client && !has_server && !has_client_by_endpoint && !has_tensor_ops && !has_copies && !has_tensor_copies) {
         return;
     }
     fprintf(stderr, "\n");
     if (has_client) {
         rpc_trace_print_cmd_table(stderr, "client", state.client);
+    }
+    if (has_client_by_endpoint) {
+        rpc_trace_print_endpoint_cmd_table(stderr, state.client_by_endpoint);
+    }
+    if (has_tensor_ops) {
+        rpc_trace_print_tensor_ops(stderr, state.tensor_ops);
     }
     if (has_server) {
         rpc_trace_print_cmd_table(stderr, "server", state.server);
@@ -484,11 +667,17 @@ static void rpc_trace_report() {
                     entry.first.c_str(), entry.second.calls, entry.second.bytes);
         }
     }
+    if (has_tensor_copies) {
+        rpc_trace_print_cross_endpoint_tensor_copies(stderr, state.cross_endpoint_tensor_copies);
+    }
     for (int i = 0; i < RPC_CMD_COUNT; ++i) {
         state.client[i] = {};
         state.server[i] = {};
     }
+    state.client_by_endpoint.clear();
+    state.tensor_ops.clear();
     state.cross_endpoint_copies.clear();
+    state.cross_endpoint_tensor_copies.clear();
     state.has_activity = false;
     fflush(stderr);
 }
@@ -636,7 +825,7 @@ static bool send_rpc_cmd(socket_ptr sock, enum rpc_cmd cmd, const void * input, 
     const uint64_t start_ns = rpc_trace_enabled() ? rpc_trace_now_ns() : 0;
     bool status = send_rpc_cmd_request(sock, cmd, input, input_size);
     if (rpc_trace_enabled()) {
-        rpc_trace_record_client(cmd, input_size, 0, rpc_trace_now_ns() - start_ns, false);
+        rpc_trace_record_client(cmd, sock->label(), input_size, 0, rpc_trace_now_ns() - start_ns, false);
     }
     return status;
 }
@@ -657,7 +846,7 @@ static bool send_rpc_cmd(socket_ptr sock, enum rpc_cmd cmd, const void * input, 
         }
     }
     if (rpc_trace_enabled()) {
-        rpc_trace_record_client(cmd, input_size, status ? output_size : 0, rpc_trace_now_ns() - start_ns, true);
+        rpc_trace_record_client(cmd, sock->label(), input_size, status ? output_size : 0, rpc_trace_now_ns() - start_ns, true);
     }
     return status;
 }
@@ -711,6 +900,9 @@ static std::shared_ptr<socket_t> get_socket(const std::string & endpoint) {
     auto sock = socket_t::connect(host.c_str(), port);
     if (sock == nullptr) {
         return nullptr;
+    }
+    if (rpc_trace_enabled()) {
+        sock->set_label(endpoint.c_str());
     }
     if (!negotiate_hello(sock)) {
         return nullptr;
@@ -812,8 +1004,15 @@ static void ggml_backend_rpc_buffer_set_tensor(ggml_backend_buffer_t buffer, ggm
         request.offset = offset;
         request.hash = fnv_hash((const uint8_t*)data, size);
         rpc_msg_set_tensor_hash_rsp response;
+        const uint64_t trace_start_ns = rpc_trace_enabled() ? rpc_trace_now_ns() : 0;
         bool status = send_rpc_cmd(ctx->sock, RPC_CMD_SET_TENSOR_HASH, &request, sizeof(request), &response, sizeof(response));
         RPC_STATUS_ASSERT(status);
+        if (rpc_trace_enabled()) {
+            ggml_backend_rpc_buffer_type_context * buft_ctx =
+                (ggml_backend_rpc_buffer_type_context *)ggml_backend_buffer_get_type(buffer)->context;
+            rpc_trace_record_tensor_op(
+                "SET_TENSOR_HASH", buft_ctx->endpoint, tensor->name, size, rpc_trace_now_ns() - trace_start_ns);
+        }
         if (response.result) {
             // the server has the same data, no need to send it
             return;
@@ -825,8 +1024,14 @@ static void ggml_backend_rpc_buffer_set_tensor(ggml_backend_buffer_t buffer, ggm
     memcpy(input.data(), &rpc_tensor, sizeof(rpc_tensor));
     memcpy(input.data() + sizeof(rpc_tensor), &offset, sizeof(offset));
     memcpy(input.data() + sizeof(rpc_tensor) + sizeof(offset), data, size);
+    const uint64_t trace_start_ns = rpc_trace_enabled() ? rpc_trace_now_ns() : 0;
     bool status = send_rpc_cmd(ctx->sock, RPC_CMD_SET_TENSOR, input.data(), input.size());
     RPC_STATUS_ASSERT(status);
+    if (rpc_trace_enabled()) {
+        ggml_backend_rpc_buffer_type_context * buft_ctx =
+            (ggml_backend_rpc_buffer_type_context *)ggml_backend_buffer_get_type(buffer)->context;
+        rpc_trace_record_tensor_op("SET_TENSOR", buft_ctx->endpoint, tensor->name, size, rpc_trace_now_ns() - trace_start_ns);
+    }
 }
 
 static void ggml_backend_rpc_buffer_get_tensor(ggml_backend_buffer_t buffer, const ggml_tensor * tensor, void * data, size_t offset, size_t size) {
@@ -835,8 +1040,14 @@ static void ggml_backend_rpc_buffer_get_tensor(ggml_backend_buffer_t buffer, con
     request.tensor = serialize_tensor(tensor);
     request.offset = offset;
     request.size = size;
+    const uint64_t trace_start_ns = rpc_trace_enabled() ? rpc_trace_now_ns() : 0;
     bool status = send_rpc_cmd(ctx->sock, RPC_CMD_GET_TENSOR, &request, sizeof(request), data, size);
     RPC_STATUS_ASSERT(status);
+    if (rpc_trace_enabled()) {
+        ggml_backend_rpc_buffer_type_context * buft_ctx =
+            (ggml_backend_rpc_buffer_type_context *)ggml_backend_buffer_get_type(buffer)->context;
+        rpc_trace_record_tensor_op("GET_TENSOR", buft_ctx->endpoint, tensor->name, size, rpc_trace_now_ns() - trace_start_ns);
+    }
 }
 
 static bool ggml_backend_rpc_buffer_cpy_tensor(ggml_backend_buffer_t buffer, const ggml_tensor * src, ggml_tensor * dst) {
@@ -847,11 +1058,15 @@ static bool ggml_backend_rpc_buffer_cpy_tensor(ggml_backend_buffer_t buffer, con
         ggml_backend_buffer_t dst_buffer = dst->buffer;
         ggml_backend_rpc_buffer_context * dst_ctx = (ggml_backend_rpc_buffer_context *)dst_buffer->context;
         if (src_ctx->sock != dst_ctx->sock) {
-            ggml_backend_rpc_buffer_type_context * src_buft_ctx =
-                (ggml_backend_rpc_buffer_type_context *)ggml_backend_buffer_get_type(src_buffer)->context;
-            ggml_backend_rpc_buffer_type_context * dst_buft_ctx =
-                (ggml_backend_rpc_buffer_type_context *)ggml_backend_buffer_get_type(dst_buffer)->context;
-            rpc_trace_record_cross_endpoint_copy(src_buft_ctx->endpoint, dst_buft_ctx->endpoint, ggml_nbytes(src));
+            if (rpc_trace_enabled()) {
+                ggml_backend_rpc_buffer_type_context * src_buft_ctx =
+                    (ggml_backend_rpc_buffer_type_context *)ggml_backend_buffer_get_type(src_buffer)->context;
+                ggml_backend_rpc_buffer_type_context * dst_buft_ctx =
+                    (ggml_backend_rpc_buffer_type_context *)ggml_backend_buffer_get_type(dst_buffer)->context;
+                rpc_trace_record_cross_endpoint_copy(src_buft_ctx->endpoint, dst_buft_ctx->endpoint, ggml_nbytes(src));
+                rpc_trace_record_cross_endpoint_tensor_copy(
+                    src_buft_ctx->endpoint, dst_buft_ctx->endpoint, src->name, ggml_nbytes(src));
+            }
             return false;
         }
         ggml_backend_rpc_buffer_context * ctx = (ggml_backend_rpc_buffer_context *)buffer->context;
@@ -859,8 +1074,15 @@ static bool ggml_backend_rpc_buffer_cpy_tensor(ggml_backend_buffer_t buffer, con
         request.src = serialize_tensor(src);
         request.dst = serialize_tensor(dst);
         rpc_msg_copy_tensor_rsp response;
+        const uint64_t trace_start_ns = rpc_trace_enabled() ? rpc_trace_now_ns() : 0;
         bool status = send_rpc_cmd(ctx->sock, RPC_CMD_COPY_TENSOR, &request, sizeof(request), &response, sizeof(response));
         RPC_STATUS_ASSERT(status);
+        if (rpc_trace_enabled()) {
+            ggml_backend_rpc_buffer_type_context * dst_buft_ctx =
+                (ggml_backend_rpc_buffer_type_context *)ggml_backend_buffer_get_type(dst_buffer)->context;
+            rpc_trace_record_tensor_op(
+                "COPY_TENSOR", dst_buft_ctx->endpoint, src->name, ggml_nbytes(src), rpc_trace_now_ns() - trace_start_ns);
+        }
         return response.result;
     }
     return false;

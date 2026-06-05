@@ -223,14 +223,21 @@ time when the RPC backend is freed:
 GGML_RPC_TRACE=1 ./build/bin/llama-bench --rpc 192.0.2.10:50052 ...
 ```
 
-The client summary also reports cross-endpoint tensor-copy fallbacks, which are
+The client summary also reports command timing by endpoint, the slowest traced
+tensor operations by endpoint and tensor name, and cross-endpoint tensor-copy
+fallbacks. The tensor table reports client-side elapsed time, so one-way tensor
+uploads include local send time but not remote handler completion. Fallbacks are
 copies that cannot use the same-server `COPY_TENSOR` RPC path and must fall back
-through the main host. Setting `GGML_RPC_TRACE=1` on `rpc-server` prints
-per-connection server command counts and handler times to that server's stderr.
-One-way commands such as `SET_TENSOR` and `GRAPH_RECOMPUTE` only show local send
-time in the client table; use server tracing to measure remote handler time.
-Tracing is disabled by default and should be used for diagnostics because it
-adds timing and logging overhead.
+through the main host. These tables are useful for separating raw transport cost
+from placement effects such as a final output tensor being read back from a slow
+endpoint or many layer-boundary copies being routed through the coordinator.
+
+Setting `GGML_RPC_TRACE=1` on `rpc-server` prints per-connection server command
+counts and handler times to that server's stderr. One-way commands such as
+`SET_TENSOR` and `GRAPH_RECOMPUTE` only show local send time in the client
+table; use server tracing to measure remote handler time. Tracing is disabled by
+default and should be used for diagnostics because it adds timing and logging
+overhead.
 
 ### Model placement reporting
 

@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <string>
 
 struct socket_t;
 typedef std::shared_ptr<socket_t> socket_ptr;
@@ -23,6 +24,9 @@ struct socket_t {
 
     void set_skip_tensor_hash(bool value);
     bool skip_tensor_hash() const;
+
+    void set_label(const char * label);
+    const std::string & label() const;
 
     static socket_ptr create_server(const char * host, int port);
     static socket_ptr connect(const char * host, int port);

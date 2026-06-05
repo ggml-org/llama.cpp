@@ -138,6 +138,7 @@ struct socket_t::impl {
     bool     use_rdma;
     sockfd_t fd;
     bool     skip_tensor_hash;
+    std::string label;
 };
 
 socket_t::impl::~impl() {
@@ -573,6 +574,14 @@ void socket_t::set_skip_tensor_hash(bool value) {
 
 bool socket_t::skip_tensor_hash() const {
     return pimpl->skip_tensor_hash;
+}
+
+void socket_t::set_label(const char * label) {
+    pimpl->label = label ? label : "";
+}
+
+const std::string & socket_t::label() const {
+    return pimpl->label;
 }
 
 static bool is_valid_fd(sockfd_t sockfd) {
