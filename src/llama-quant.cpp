@@ -384,6 +384,8 @@ static ggml_type tensor_type_fallback(quantize_state_impl & qs, const ggml_tenso
             case GGML_TYPE_Q3_K:
             case GGML_TYPE_TQ1_0:
             case GGML_TYPE_TQ2_0:   return_type = GGML_TYPE_Q4_0;   break;
+            case GGML_TYPE_Q4_0_ROCMFP4:
+            case GGML_TYPE_Q4_0_ROCMFP4_FAST: return_type = GGML_TYPE_Q4_0; break;
             case GGML_TYPE_Q4_K:    return_type = GGML_TYPE_Q5_0;   break;
             case GGML_TYPE_Q5_K:    return_type = GGML_TYPE_Q5_1;   break;
             case GGML_TYPE_Q6_K:    return_type = GGML_TYPE_Q8_0;   break;
@@ -443,7 +445,10 @@ static ggml_type llama_tensor_get_type_impl(quantize_state_impl & qs, ggml_type 
             const int64_t nx = tensor->ne[0];
             const int64_t qk_k = ggml_blck_size(new_type);
 
-            if (ftype == LLAMA_FTYPE_MOSTLY_MXFP4_MOE) {
+            if (ftype == LLAMA_FTYPE_MOSTLY_Q4_0_ROCMFP4_FAST) {
+                new_type = GGML_TYPE_Q4_0_ROCMFP4_FAST;
+            }
+            else if (ftype == LLAMA_FTYPE_MOSTLY_MXFP4_MOE) {
                 new_type = GGML_TYPE_Q8_0;
             }
             else if (arch == LLM_ARCH_FALCON || nx % qk_k != 0) {
@@ -509,6 +514,12 @@ static ggml_type llama_tensor_get_type_impl(quantize_state_impl & qs, ggml_type 
             }
         }
     } else if (category_is_attn_v(category)) {
+        if (ftype == LLAMA_FTYPE_MOSTLY_Q4_0_ROCMFP4) {
+            // Keep attention V above 4-bit FP4 in the default mixed preset,
+            // matching the existing policy of spending extra bits on selected
+            // attention tensors for low-bit quantization modes.
+            new_type = GGML_TYPE_Q5_K;
+        }
         if      (ftype == LLAMA_FTYPE_MOSTLY_Q2_K) {
             new_type = qs.model.hparams.n_gqa() >= 4 ? GGML_TYPE_Q4_K : GGML_TYPE_Q3_K;
         }
@@ -568,7 +579,12 @@ static ggml_type llama_tensor_get_type_impl(quantize_state_impl & qs, ggml_type 
     } else if (category == tensor_category::FFN_DOWN) {
         auto info = layer_info(qs.i_ffn_down, qs.n_ffn_down, name.c_str());
         int i_layer = info.first, n_layer = info.second;
-        if      (ftype == LLAMA_FTYPE_MOSTLY_Q2_K) new_type = GGML_TYPE_Q3_K;
+        if      (ftype == LLAMA_FTYPE_MOSTLY_Q4_0_ROCMFP4) {
+            // Down projections carry residual-stream detail. Spend extra bits
+            // here so the experimental FP4 tensors do not dominate perplexity.
+            new_type = (n_layer > 0 && i_layer >= (2 * n_layer) / 3) ? GGML_TYPE_Q5_K : GGML_TYPE_Q6_K;
+        }
+        else if (ftype == LLAMA_FTYPE_MOSTLY_Q2_K) new_type = GGML_TYPE_Q3_K;
         else if (ftype == LLAMA_FTYPE_MOSTLY_Q2_K_S) {
             if (i_layer < n_layer/8) new_type = GGML_TYPE_Q4_K;
         }
@@ -611,6 +627,11 @@ static ggml_type llama_tensor_get_type_impl(quantize_state_impl & qs, ggml_type 
         }
         ++qs.i_ffn_down;
     } else if (category == tensor_category::ATTENTION_OUTPUT) {
+        if (ftype == LLAMA_FTYPE_MOSTLY_Q4_0_ROCMFP4) {
+            // Output projections are another high-leverage location; Q5_K is
+            // a modest size increase that helps preserve chat coherence.
+            new_type = GGML_TYPE_Q5_K;
+        }
         if (arch != LLM_ARCH_FALCON) {
             if (qs.model.hparams.n_expert == 8) {
                 if (ftype == LLAMA_FTYPE_MOSTLY_Q2_K   || ftype == LLAMA_FTYPE_MOSTLY_IQ3_XS || ftype == LLAMA_FTYPE_MOSTLY_IQ3_XXS ||
@@ -640,7 +661,13 @@ static ggml_type llama_tensor_get_type_impl(quantize_state_impl & qs, ggml_type 
     else if (category == tensor_category::FFN_GATE) {
         auto info = layer_info(qs.i_ffn_gate, qs.n_ffn_gate, name.c_str());
         int i_layer = info.first, n_layer = info.second;
-        if (ftype == LLAMA_FTYPE_MOSTLY_IQ3_XS && (i_layer >= n_layer/8 && i_layer < 7*n_layer/8)) {
+        if (ftype == LLAMA_FTYPE_MOSTLY_Q4_0_ROCMFP4 && use_more_bits(i_layer, n_layer)) {
+            // Gate projections are the cheapest place to buy back coherence in
+            // this preset. Keep selected layers at Q5_K, but leave FFN-up in
+            // ROCmFP4 to avoid sliding back to a bulky/slower mostly-Q5 mix.
+            new_type = GGML_TYPE_Q5_K;
+        }
+        else if (ftype == LLAMA_FTYPE_MOSTLY_IQ3_XS && (i_layer >= n_layer/8 && i_layer < 7*n_layer/8)) {
             new_type = GGML_TYPE_IQ3_XXS;
         }
         ++qs.i_ffn_gate;
@@ -648,7 +675,11 @@ static ggml_type llama_tensor_get_type_impl(quantize_state_impl & qs, ggml_type 
     else if (category == tensor_category::FFN_UP) {
         auto info = layer_info(qs.i_ffn_up, qs.n_ffn_up, name.c_str());
         int i_layer = info.first, n_layer = info.second;
-        if (ftype == LLAMA_FTYPE_MOSTLY_IQ3_XS && (i_layer >= n_layer/8 && i_layer < 7*n_layer/8)) {
+        if (ftype == LLAMA_FTYPE_MOSTLY_Q4_0_ROCMFP4) {
+            GGML_UNUSED(i_layer);
+            GGML_UNUSED(n_layer);
+        }
+        else if (ftype == LLAMA_FTYPE_MOSTLY_IQ3_XS && (i_layer >= n_layer/8 && i_layer < 7*n_layer/8)) {
             new_type = GGML_TYPE_IQ3_XXS;
         }
         ++qs.i_ffn_up;
@@ -792,6 +823,8 @@ static bool tensor_requires_imatrix(const char * tensor_name, const ggml_type ds
 ggml_type llama_ftype_get_default_type(llama_ftype ftype) {
     switch (ftype) {
         case LLAMA_FTYPE_MOSTLY_Q4_0: return GGML_TYPE_Q4_0;
+        case LLAMA_FTYPE_MOSTLY_Q4_0_ROCMFP4: return GGML_TYPE_Q4_0_ROCMFP4;
+        case LLAMA_FTYPE_MOSTLY_Q4_0_ROCMFP4_FAST: return GGML_TYPE_Q4_0_ROCMFP4_FAST;
         case LLAMA_FTYPE_MOSTLY_Q4_1: return GGML_TYPE_Q4_1;
         case LLAMA_FTYPE_MOSTLY_Q5_0: return GGML_TYPE_Q5_0;
         case LLAMA_FTYPE_MOSTLY_Q5_1: return GGML_TYPE_Q5_1;

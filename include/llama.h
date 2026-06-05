@@ -155,6 +155,8 @@ extern "C" {
         LLAMA_FTYPE_MOSTLY_MXFP4_MOE     = 38, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_NVFP4         = 39, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_Q1_0          = 40, // except 1d tensors
+        LLAMA_FTYPE_MOSTLY_Q4_0_ROCMFP4          = 41, // except 1d tensors
+        LLAMA_FTYPE_MOSTLY_Q4_0_ROCMFP4_FAST     = 42, // ROCmFP4 single-scale speed layout
 
         LLAMA_FTYPE_GUESSED = 1024, // not specified in the model file
     };
