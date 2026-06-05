@@ -321,6 +321,12 @@ common_chat_templates_ptr common_chat_templates_init(const struct llama_model * 
 bool        common_chat_templates_was_explicit(const struct common_chat_templates * tmpls);
 std::string common_chat_templates_source(const struct common_chat_templates * tmpls, const std::string & variant = "");
 
+// Returns the built-in ("inline") chat template registered for the given model
+// architecture name (see common/chat-inline-templates.h.in), or an empty string
+// if none is registered. Used as a fallback for models that ship without an
+// embedded chat_template and when no template override is supplied.
+std::string common_chat_template_inline(const std::string & arch);
+
 struct common_chat_params common_chat_templates_apply(const struct common_chat_templates *        tmpls,
                                                       const struct common_chat_templates_inputs & inputs);
 

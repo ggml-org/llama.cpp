@@ -1,0 +1,22 @@
+// Manifest of built-in ("inline") Jinja chat templates.
+//
+// Some models ship GGUF files without an embedded chat_template. For those, we
+// fall back to a built-in template selected by the model architecture name.
+//
+// This file is the MANIFEST: it is empty by default and only lists, as
+// placeholder comments, the architectures that need an inline template. At
+// build time scripts/gen-chat-inline-templates.py reads the placeholders below,
+// embeds each referenced template file as a C string, and writes the filled-in
+// chat-inline-templates.h into the build directory (which common/chat.cpp then
+// includes). This file itself is never compiled.
+//
+// To register a new inline template, add a line of the form:
+//
+//   /* <arch-name>: <path/to/template.jinja> */
+//
+// where <arch-name> exactly matches llm_arch_name() in src/llama-arch.cpp and
+// the path is relative to the repository root.
+//
+// Registered inline templates:
+
+/* deepseek-v4-flash: models/templates/deepseek-ai-DeepSeek-V4.jinja */

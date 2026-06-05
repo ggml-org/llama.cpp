@@ -1,5 +1,6 @@
 #include "chat.h"
 
+#include "chat-inline-templates.h"
 #include "chat-auto-parser-helpers.h"
 #include "chat-auto-parser.h"
 #include "chat-peg-parser.h"
@@ -704,6 +705,15 @@ std::string common_chat_templates_source(const struct common_chat_templates * tm
     return tmpls->template_default->source();
 }
 
+std::string common_chat_template_inline(const std::string & arch) {
+    for (size_t i = 0; i < COMMON_CHAT_INLINE_TEMPLATES_COUNT; ++i) {
+        if (arch == COMMON_CHAT_INLINE_TEMPLATES[i].arch) {
+            return COMMON_CHAT_INLINE_TEMPLATES[i].tmpl;
+        }
+    }
+    return "";
+}
+
 common_chat_templates_ptr common_chat_templates_init(const struct llama_model * model,
                                                      const std::string &        chat_template_override,
                                                      const std::string &        bos_token_override,
@@ -727,6 +737,22 @@ common_chat_templates_ptr common_chat_templates_init(const struct llama_model * 
     } else {
         default_template_src = chat_template_override;
     }
+
+    // No template override and the model has no embedded chat template: fall back
+    // to a built-in inline template selected by the model architecture, if any.
+    if (chat_template_override.empty() && default_template_src.empty() && template_tool_use_src.empty() && model != nullptr) {
+        char arch_buf[128] = { 0 };
+        if (llama_model_meta_val_str(model, "general.architecture", arch_buf, sizeof(arch_buf)) > 0) {
+            std::string inline_template = common_chat_template_inline(arch_buf);
+            if (!inline_template.empty()) {
+                LOG_INF("%s: no chat template found in model, using built-in inline template for arch '%s'\n",
+                        __func__, arch_buf);
+                default_template_src  = inline_template;
+                has_explicit_template = true;
+            }
+        }
+    }
+
     if (default_template_src.empty() || default_template_src == "chatml") {
         if (!template_tool_use_src.empty()) {
             default_template_src = template_tool_use_src;
