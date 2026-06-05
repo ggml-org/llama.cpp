@@ -100,8 +100,6 @@ struct clip_image_f32 * clip_image_f32_get_img(const struct clip_image_f32_batch
  */
 void clip_build_img_from_pixels(const unsigned char * rgb_pixels, int nx, int ny, struct clip_image_u8 * img);
 
-struct ggml_tensor * clip_get_newline_tensor(const struct clip_ctx * ctx);
-
 bool clip_image_encode      (struct clip_ctx * ctx, int n_threads, struct clip_image_f32 * img, float * vec);
 bool clip_image_batch_encode(struct clip_ctx * ctx, int n_threads, const struct clip_image_f32_batch * imgs, float * vec);
 
