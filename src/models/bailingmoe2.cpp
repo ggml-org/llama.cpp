@@ -15,9 +15,7 @@ void llama_model_bailingmoe2::load_arch_hparams(llama_model_loader & ml) {
 
     switch (hparams.n_layer()) {
         case 20: type = LLM_TYPE_16B_A1B; break;
-        case 21: type = LLM_TYPE_16B_A1B; break;
         case 32: type = LLM_TYPE_100B_A6B; break;
-        case 33: type = LLM_TYPE_100B_A6B; break;
         default: type = LLM_TYPE_UNKNOWN;
     }
 }
