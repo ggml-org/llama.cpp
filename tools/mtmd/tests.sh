@@ -56,6 +56,19 @@ add_test_vision() {
     arr_file+=("test-1.jpeg")
 }
 
+add_test_vision_webp() {
+    local hf=$1
+    shift
+    local extra_args=""
+    if [ $# -gt 0 ]; then
+        extra_args=$(printf " %q" "$@")
+    fi
+    arr_prefix+=("[vision]")
+    arr_hf+=("$hf")
+    arr_extra_args+=("$extra_args")
+    arr_file+=("test-3.webp")
+}
+
 add_test_audio() {
     local hf=$1
     shift
@@ -94,6 +107,10 @@ add_test_vision "ggml-org/HunyuanOCR-GGUF:Q8_0" -p "OCR"
 add_test_vision "ggml-org/HunyuanVL-4B-GGUF:Q8_0"
 add_test_vision "ggml-org/gemma-4-E2B-it-GGUF:Q8_0" --jinja
 
+add_test_vision_webp "ggml-org/SmolVLM-500M-Instruct-GGUF:Q8_0"
+add_test_vision_webp "bartowski/Qwen2-VL-2B-Instruct-GGUF:Q4_K_M"
+add_test_vision_webp "ggml-org/gemma-4-E2B-it-GGUF:Q8_0" --jinja
+
 add_test_audio  "ggml-org/ultravox-v0_5-llama-3_2-1b-GGUF:Q8_0"
 add_test_audio  "ggml-org/Qwen2.5-Omni-3B-GGUF:Q4_K_M"
 add_test_audio  "ggml-org/Voxtral-Mini-3B-2507-GGUF:Q4_K_M"
@@ -117,6 +134,8 @@ if [ "$RUN_BIG_TESTS" = true ]; then
     # add_test_vision "ggml-org/Kimi-VL-A3B-Thinking-2506-GGUF:Q4_K_M" # not always working
     add_test_vision "ggml-org/GLM-4.6V-Flash-GGUF:Q4_K_M" -p "extract all texts from this image"
 
+    add_test_vision_webp "ggml-org/Qwen3-VL-2B-Instruct-GGUF:Q8_0"
+
     add_test_audio  "ggml-org/ultravox-v0_5-llama-3_1-8b-GGUF:Q4_K_M"
     add_test_audio  "ggml-org/Qwen2.5-Omni-7B-GGUF:Q4_K_M"
 fi
@@ -127,6 +146,8 @@ fi
 if [ "$RUN_HUGE_TESTS" = true ]; then
     add_test_vision "ggml-org/Qwen2.5-VL-72B-Instruct-GGUF:Q4_K_M"
     add_test_vision "ggml-org/Llama-4-Scout-17B-16E-Instruct-GGUF:IQ1_S"
+    
+    add_test_vision_webp "ggml-org/Qwen2.5-VL-72B-Instruct-GGUF:Q4_K_M"
 fi
 
 # these models always give the wrong answer, not sure why
