@@ -1214,12 +1214,9 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
     for (int i = 0; i < graph->n_nodes; i++) {
         struct ggml_tensor * node = graph->nodes[i];
         int * cur_backend_id = &tensor_backend_id(node);
-        if (node->view_src != NULL) {
-            int vsrc_backend_id = tensor_backend_id(node->view_src);
-            if (vsrc_backend_id != -1) {
-                *cur_backend_id = vsrc_backend_id;
-                SET_CAUSE(node, "4.vsrc");
-            }
+        if (node->view_src != NULL && *cur_backend_id == -1) {
+            *cur_backend_id = tensor_backend_id(node->view_src);
+            SET_CAUSE(node, "4.vsrc");
         }
         for (int j = 0; j < GGML_MAX_SRC; j++) {
             struct ggml_tensor * src = node->src[j];
