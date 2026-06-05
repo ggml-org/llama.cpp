@@ -1870,4 +1870,4 @@ You can specify default preferences for the web UI using `--ui-config <JSON conf
 
 > **Note:** The old flags `--webui-config` and `--webui-config-file` are deprecated but still work as aliases.
 
-You may find available preferences in [settings-config.ts](../ui/src/lib/constants/settings-config.ts).
+You may find available preferences in [settings-keys.ts](../ui/src/lib/constants/settings-keys.ts).
