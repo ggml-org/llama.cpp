@@ -4192,7 +4192,7 @@ void server_routes::init_routes() {
         return res;
     };
 
-    this->post_requantize_kvcache = [this](const server_http_req & req) {
+    this->post_cache_requantize = [this](const server_http_req & req) {
         auto res = create_response();
 
         std::string ctk = req.get_param("ctk");

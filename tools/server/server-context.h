@@ -124,7 +124,7 @@ struct server_routes {
     server_http_context::handler_t get_models;
     server_http_context::handler_t post_tokenize;
     server_http_context::handler_t post_detokenize;
-    server_http_context::handler_t post_requantize_kvcache;
+    server_http_context::handler_t post_cache_requantize;
     server_http_context::handler_t post_embeddings;
     server_http_context::handler_t post_embeddings_oai;
     server_http_context::handler_t post_rerank;

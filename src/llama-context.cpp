@@ -7,6 +7,7 @@
 #include "llama-batch.h"
 #include "llama-io.h"
 #include "llama-kv-cache.h"
+#include "llama-memory-recurrent.h"
 #include "llama-memory.h"
 #include "llama-mmap.h"
 #include "llama-model.h"
@@ -2029,9 +2030,10 @@ bool llama_context::requantize_memory(ggml_type new_type_k, ggml_type new_type_v
         return false;
     }
 
-    // TODO - initial implementation just for llama_kv_cache
-    if (!dynamic_cast<llama_kv_cache *>(memory.get())) {
-        LLAMA_LOG_ERROR("%s: requantize only supported for basic KV cache\n", __func__);
+    // Base-level recurrent cache does not support quantization; it's hardcoded
+    // to f32/f32. The other cache implementations can be quantized.
+    if (llm_arch_is_recurrent(model.arch)) {
+        LLAMA_LOG_ERROR("%s: requantize not supported for recurrent cache\n", __func__);
         return false;
     }
 
