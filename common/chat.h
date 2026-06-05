@@ -184,7 +184,7 @@ struct common_chat_msg_spans {
 struct common_chat_msg_delimiter {
     common_chat_role role = COMMON_CHAT_ROLE_UNKNOWN;
     std::string      delimiter;
-    llama_tokens     tokens;
+    llama_tokens     tokens = {};
 };
 
 struct common_chat_msg_delimiters {
@@ -194,7 +194,7 @@ struct common_chat_msg_delimiters {
     common_chat_msg_delimiters(std::initializer_list<common_chat_msg_delimiter> delims) : delimiters(delims) {}
 
     void add(common_chat_role role, const std::string & delimiter) {
-        delimiters.push_back({ role, delimiter, {} });
+        delimiters.push_back({ role, delimiter });
     }
 
     void tokenize(const llama_vocab * vocab);

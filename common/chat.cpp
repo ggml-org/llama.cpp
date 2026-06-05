@@ -135,7 +135,6 @@ common_chat_msg_delimiters common_chat_msg_delimiters_parse(const json & delimit
         result.delimiters.push_back({
             common_chat_role_from_string(d.value("role", std::string())),
             d.value("delimiter", std::string()),
-            {},
         });
     }
 
