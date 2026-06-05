@@ -637,7 +637,6 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
     tensor_config tc = get_tensor_config();
     split_state.axis = tc.axis;
     if (split_state.axis >= 0 && split_state.axis < GGML_MAX_DIMS) {
-        const int64_t ne_full = tensor->ne[split_state.axis];
         const int64_t blck_size = ggml_blck_size(tc.tensor_axis_0->type);
         const float * tensor_split = ud->model->tensor_split();
         std::vector<float> tensor_split_scan;
@@ -654,7 +653,6 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
             const int64_t  ne_s = segments[is].first;
             const uint32_t nr_s = segments[is].second;
             const int64_t  g_s  = granularity[is];
-            GGML_ASSERT(ne_full % g_s == 0);
             int64_t low = 0;
             size_t j = 0;
             for (; j < ud->n_devices - 1; j++) {
