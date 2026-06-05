@@ -15,6 +15,10 @@ void llama_hparams::set_swa_pattern(uint32_t n_pattern, bool dense_first) {
             is_swa_impl[il] = n_pattern == 0 || (il % n_pattern < (n_pattern - 1));
         }
     }
+
+    for (uint32_t il = n_layer(); il < n_layer_all; ++il) {
+        is_swa_impl[il] = false;
+    }
 }
 
 void llama_hparams::set_recr_pattern(uint32_t n_pattern, bool dense_first) {
@@ -27,10 +31,14 @@ void llama_hparams::set_recr_pattern(uint32_t n_pattern, bool dense_first) {
             is_recr_impl[il] = n_pattern == 0 || (il % n_pattern < (n_pattern - 1));
         }
     }
+
+    for (uint32_t il = n_layer(); il < n_layer_all; ++il) {
+        is_recr_impl[il] = false;
+    }
 }
 
 bool llama_hparams::is_swa_any() const {
-    for (uint32_t il = 0; il < n_layer(); ++il) {
+    for (uint32_t il = 0; il < n_layer_all; ++il) {
         if (is_swa_impl[il]) {
             return true;
         }
