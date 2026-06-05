@@ -39,12 +39,7 @@ static std::string llama_model_ftype_name(llama_ftype ftype) {
         case LLAMA_FTYPE_MOSTLY_Q1_0:     return "Q1_0";
         case LLAMA_FTYPE_MOSTLY_Q4_0:     return "Q4_0";
         case LLAMA_FTYPE_MOSTLY_Q4_0_ROCMFP4:          return "Q4_0_ROCMFP4";
-        case LLAMA_FTYPE_MOSTLY_Q4_0_ROCMFP4_LEAN:     return "Q4_0_ROCMFP4_LEAN";
-        case LLAMA_FTYPE_MOSTLY_Q4_0_ROCMFP4_COHERENT: return "Q4_0_ROCMFP4_COHERENT";
         case LLAMA_FTYPE_MOSTLY_Q4_0_ROCMFP4_FAST:     return "Q4_0_ROCMFP4_FAST";
-        case LLAMA_FTYPE_MOSTLY_Q4_0_ROCMFP4_FAST_COHERENT: return "Q4_0_ROCMFP4_FAST_COHERENT";
-        case LLAMA_FTYPE_MOSTLY_Q4_0_ROCMFP4_STRIX:    return "Q4_0_ROCMFP4_STRIX";
-        case LLAMA_FTYPE_MOSTLY_Q4_0_ROCMFP4_STRIX_LEAN: return "Q4_0_ROCMFP4_STRIX_LEAN";
         case LLAMA_FTYPE_MOSTLY_Q4_1:     return "Q4_1";
         case LLAMA_FTYPE_MOSTLY_Q5_0:     return "Q5_0";
         case LLAMA_FTYPE_MOSTLY_Q5_1:     return "Q5_1";

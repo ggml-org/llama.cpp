@@ -1423,15 +1423,8 @@ enum ggml_type ggml_ftype_to_ggml_type(enum ggml_ftype ftype) {
         case GGML_FTYPE_MOSTLY_F16:           wtype = GGML_TYPE_F16;   break;
         case GGML_FTYPE_MOSTLY_BF16:          wtype = GGML_TYPE_BF16;  break;
         case GGML_FTYPE_MOSTLY_Q4_0:          wtype = GGML_TYPE_Q4_0;  break;
-        case GGML_FTYPE_MOSTLY_Q4_0_ROCMFP4:
-        case GGML_FTYPE_MOSTLY_Q4_0_ROCMFP4_LEAN:
-        case GGML_FTYPE_MOSTLY_Q4_0_ROCMFP4_COHERENT:
-            wtype = GGML_TYPE_Q4_0_ROCMFP4; break;
-        case GGML_FTYPE_MOSTLY_Q4_0_ROCMFP4_FAST:
-        case GGML_FTYPE_MOSTLY_Q4_0_ROCMFP4_FAST_COHERENT:
-        case GGML_FTYPE_MOSTLY_Q4_0_ROCMFP4_STRIX:
-        case GGML_FTYPE_MOSTLY_Q4_0_ROCMFP4_STRIX_LEAN:
-            wtype = GGML_TYPE_Q4_0_ROCMFP4_FAST; break;
+        case GGML_FTYPE_MOSTLY_Q4_0_ROCMFP4:  wtype = GGML_TYPE_Q4_0_ROCMFP4; break;
+        case GGML_FTYPE_MOSTLY_Q4_0_ROCMFP4_FAST: wtype = GGML_TYPE_Q4_0_ROCMFP4_FAST; break;
         case GGML_FTYPE_MOSTLY_Q4_1:          wtype = GGML_TYPE_Q4_1;  break;
         case GGML_FTYPE_MOSTLY_Q1_0:          wtype = GGML_TYPE_Q1_0;  break;
         case GGML_FTYPE_MOSTLY_Q5_0:          wtype = GGML_TYPE_Q5_0;  break;

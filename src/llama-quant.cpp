@@ -448,18 +448,6 @@ static ggml_type llama_tensor_get_type_impl(quantize_state_impl & qs, ggml_type 
             if (ftype == LLAMA_FTYPE_MOSTLY_Q4_0_ROCMFP4_FAST) {
                 new_type = GGML_TYPE_Q4_0_ROCMFP4_FAST;
             }
-            else if (ftype == LLAMA_FTYPE_MOSTLY_Q4_0_ROCMFP4_LEAN ||
-                ftype == LLAMA_FTYPE_MOSTLY_Q4_0_ROCMFP4_COHERENT ||
-                ftype == LLAMA_FTYPE_MOSTLY_Q4_0_ROCMFP4_FAST_COHERENT ||
-                ftype == LLAMA_FTYPE_MOSTLY_Q4_0_ROCMFP4_STRIX ||
-                ftype == LLAMA_FTYPE_MOSTLY_Q4_0_ROCMFP4_STRIX_LEAN) {
-                new_type = category == tensor_category::TOKEN_EMBD ?
-                    ((ftype == LLAMA_FTYPE_MOSTLY_Q4_0_ROCMFP4_LEAN ||
-                      ftype == LLAMA_FTYPE_MOSTLY_Q4_0_ROCMFP4_STRIX_LEAN) ? GGML_TYPE_Q5_K : GGML_TYPE_Q6_K) :
-                    ((ftype == LLAMA_FTYPE_MOSTLY_Q4_0_ROCMFP4_FAST_COHERENT ||
-                      ftype == LLAMA_FTYPE_MOSTLY_Q4_0_ROCMFP4_STRIX ||
-                      ftype == LLAMA_FTYPE_MOSTLY_Q4_0_ROCMFP4_STRIX_LEAN) ? GGML_TYPE_Q4_0_ROCMFP4_FAST : GGML_TYPE_Q4_0_ROCMFP4);
-            }
             else if (ftype == LLAMA_FTYPE_MOSTLY_MXFP4_MOE) {
                 new_type = GGML_TYPE_Q8_0;
             }
@@ -487,18 +475,7 @@ static ggml_type llama_tensor_get_type_impl(quantize_state_impl & qs, ggml_type 
         if (qs.params->token_embedding_type < GGML_TYPE_COUNT) {
             new_type = qs.params->token_embedding_type;
         } else {
-            if (ftype == LLAMA_FTYPE_MOSTLY_Q4_0_ROCMFP4_LEAN ||
-                ftype == LLAMA_FTYPE_MOSTLY_Q4_0_ROCMFP4_COHERENT ||
-                ftype == LLAMA_FTYPE_MOSTLY_Q4_0_ROCMFP4_FAST_COHERENT ||
-                ftype == LLAMA_FTYPE_MOSTLY_Q4_0_ROCMFP4_STRIX ||
-                ftype == LLAMA_FTYPE_MOSTLY_Q4_0_ROCMFP4_STRIX_LEAN) {
-                // Token embeddings are not hot during decode. Spending a
-                // little more here preserves coherence while keeping the
-                // transformer layers on the fast ROCmFP4 path.
-                new_type = (ftype == LLAMA_FTYPE_MOSTLY_Q4_0_ROCMFP4_LEAN ||
-                            ftype == LLAMA_FTYPE_MOSTLY_Q4_0_ROCMFP4_STRIX_LEAN) ? GGML_TYPE_Q5_K : GGML_TYPE_Q6_K;
-            }
-            else if (ftype == LLAMA_FTYPE_MOSTLY_IQ2_XXS || ftype == LLAMA_FTYPE_MOSTLY_IQ2_XS ||
+            if (ftype == LLAMA_FTYPE_MOSTLY_IQ2_XXS || ftype == LLAMA_FTYPE_MOSTLY_IQ2_XS ||
                 ftype == LLAMA_FTYPE_MOSTLY_IQ1_S   || ftype == LLAMA_FTYPE_MOSTLY_IQ1_M) {
                 new_type = GGML_TYPE_Q2_K;
             }
@@ -537,17 +514,10 @@ static ggml_type llama_tensor_get_type_impl(quantize_state_impl & qs, ggml_type 
             }
         }
     } else if (category_is_attn_v(category)) {
-        if (ftype == LLAMA_FTYPE_MOSTLY_Q4_0_ROCMFP4_STRIX ||
-            ftype == LLAMA_FTYPE_MOSTLY_Q4_0_ROCMFP4_STRIX_LEAN) {
-            // Strix Halo quality/speed recipe: keep attention V in the
-            // dual-scale ROCmFP4 layout. Together with ATTENTION_K below this
-            // costs about 0.02 BPW on Qwen3-4B and improves the short
-            // WikiText-2 pass while preserving the speed win over stock Q4_0.
-            new_type = GGML_TYPE_Q4_0_ROCMFP4;
-        }
-        else if (ftype == LLAMA_FTYPE_MOSTLY_Q4_0_ROCMFP4) {
-            // Attention V is coherence-sensitive, but on Qwen3-4B Q5_K tested
-            // better than Q6_K while also shaving a little size from the preset.
+        if (ftype == LLAMA_FTYPE_MOSTLY_Q4_0_ROCMFP4) {
+            // Keep attention V above 4-bit FP4 in the default mixed preset,
+            // matching the existing policy of spending extra bits on selected
+            // attention tensors for low-bit quantization modes.
             new_type = GGML_TYPE_Q5_K;
         }
         if      (ftype == LLAMA_FTYPE_MOSTLY_Q2_K) {
@@ -588,14 +558,7 @@ static ggml_type llama_tensor_get_type_impl(quantize_state_impl & qs, ggml_type 
         }
         ++qs.i_attention_wv;
     } else if (category == tensor_category::ATTENTION_K) {
-        if (ftype == LLAMA_FTYPE_MOSTLY_Q4_0_ROCMFP4_STRIX ||
-            ftype == LLAMA_FTYPE_MOSTLY_Q4_0_ROCMFP4_STRIX_LEAN) {
-            // Matching K/V in the dual-scale custom layout improved PPL more
-            // than attention-V alone while keeping the large tensors on the
-            // faster single-scale ROCmFP4 path.
-            new_type = GGML_TYPE_Q4_0_ROCMFP4;
-        }
-        else if (qs.model.hparams.n_expert == 8) {
+        if (qs.model.hparams.n_expert == 8) {
             // for the 8-expert model, bumping this to Q8_0 trades just ~128MB
             // TODO: explore better strategies
             new_type = GGML_TYPE_Q8_0;
@@ -619,8 +582,6 @@ static ggml_type llama_tensor_get_type_impl(quantize_state_impl & qs, ggml_type 
         if      (ftype == LLAMA_FTYPE_MOSTLY_Q4_0_ROCMFP4) {
             // Down projections carry residual-stream detail. Spend extra bits
             // here so the experimental FP4 tensors do not dominate perplexity.
-            // The final third is less sensitive on Qwen3-4B in the Strix FP4
-            // quality pass, so Q5_K buys back size and a little decode speed.
             new_type = (n_layer > 0 && i_layer >= (2 * n_layer) / 3) ? GGML_TYPE_Q5_K : GGML_TYPE_Q6_K;
         }
         else if (ftype == LLAMA_FTYPE_MOSTLY_Q2_K) new_type = GGML_TYPE_Q3_K;
@@ -863,12 +824,7 @@ ggml_type llama_ftype_get_default_type(llama_ftype ftype) {
     switch (ftype) {
         case LLAMA_FTYPE_MOSTLY_Q4_0: return GGML_TYPE_Q4_0;
         case LLAMA_FTYPE_MOSTLY_Q4_0_ROCMFP4: return GGML_TYPE_Q4_0_ROCMFP4;
-        case LLAMA_FTYPE_MOSTLY_Q4_0_ROCMFP4_LEAN: return GGML_TYPE_Q4_0_ROCMFP4;
-        case LLAMA_FTYPE_MOSTLY_Q4_0_ROCMFP4_COHERENT: return GGML_TYPE_Q4_0_ROCMFP4;
         case LLAMA_FTYPE_MOSTLY_Q4_0_ROCMFP4_FAST: return GGML_TYPE_Q4_0_ROCMFP4_FAST;
-        case LLAMA_FTYPE_MOSTLY_Q4_0_ROCMFP4_FAST_COHERENT: return GGML_TYPE_Q4_0_ROCMFP4_FAST;
-        case LLAMA_FTYPE_MOSTLY_Q4_0_ROCMFP4_STRIX: return GGML_TYPE_Q4_0_ROCMFP4_FAST;
-        case LLAMA_FTYPE_MOSTLY_Q4_0_ROCMFP4_STRIX_LEAN: return GGML_TYPE_Q4_0_ROCMFP4_FAST;
         case LLAMA_FTYPE_MOSTLY_Q4_1: return GGML_TYPE_Q4_1;
         case LLAMA_FTYPE_MOSTLY_Q5_0: return GGML_TYPE_Q5_0;
         case LLAMA_FTYPE_MOSTLY_Q5_1: return GGML_TYPE_Q5_1;
