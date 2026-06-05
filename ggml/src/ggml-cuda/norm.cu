@@ -14,7 +14,7 @@ static __global__ void norm_f32(
     const int tid       = threadIdx.x;
 
     x   += sample*stride_sample + channel*stride_channel + row*stride_row;
-    dst += ((sample*nchannels + channel)*nrows + row)*ncols;
+    dst += ((int64_t(sample)*nchannels + channel)*nrows + row)*ncols;
 
     float2 mean_var = make_float2(0.0f, 0.0f);
 
@@ -109,7 +109,7 @@ static __global__ void rms_norm_f32(const float * x,
     static_assert(!do_add || do_multiply, "fusing add is not supported without multiplying");
 
     x   += sample*stride_sample + channel*stride_channel + row*stride_row;
-    dst += ((sample*nchannels + channel)*nrows + row)*ncols;
+    dst += ((int64_t(sample)*nchannels + channel)*nrows + row)*ncols;
 
     if constexpr (do_multiply) {
         const uint32_t mul_row     = fastmodulo(row, mul_nrows_packed);
@@ -254,7 +254,7 @@ static __global__ void l2_norm_f32(
     const int tid       = threadIdx.x;
 
     x   += sample*stride_sample + channel*stride_channel + row*stride_row;
-    dst += ((sample*nchannels + channel)*nrows + row)*ncols;
+    dst += ((int64_t(sample)*nchannels + channel)*nrows + row)*ncols;
 
     float tmp = 0.0f; // partial sum for thread in warp
 
