@@ -213,6 +213,25 @@ If the server log reports `no kernel image is available for execution on the
 device`, rebuild with the missing remote architecture before comparing RPC
 throughput.
 
+### RPC tracing
+
+Set `GGML_RPC_TRACE=1` on the RPC client to print a summary of RPC command
+counts, input bytes, output bytes, one-way send time, and request/response wait
+time when the RPC backend is freed:
+
+```bash
+GGML_RPC_TRACE=1 ./build/bin/llama-bench --rpc 192.0.2.10:50052 ...
+```
+
+The client summary also reports cross-endpoint tensor-copy fallbacks, which are
+copies that cannot use the same-server `COPY_TENSOR` RPC path and must fall back
+through the main host. Setting `GGML_RPC_TRACE=1` on `rpc-server` prints
+per-connection server command counts and handler times to that server's stderr.
+One-way commands such as `SET_TENSOR` and `GRAPH_RECOMPUTE` only show local send
+time in the client table; use server tracing to measure remote handler time.
+Tracing is disabled by default and should be used for diagnostics because it
+adds timing and logging overhead.
+
 ### Troubleshooting
 
 Use the `GGML_RPC_DEBUG` environment variable to enable debug messages from `rpc-server`:

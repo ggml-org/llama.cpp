@@ -14,9 +14,11 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <cstring>
+#include <cstdio>
 #include <fstream>
 #include <filesystem>
 #include <algorithm>
+#include <chrono>
 #include <cerrno>
 #include <cstdlib>
 #include <limits>
@@ -274,7 +276,287 @@ static constexpr size_t RPC_WIRE_CMD_SIZE    = sizeof(uint8_t);
 static constexpr size_t RPC_WIRE_HEADER_SIZE = RPC_WIRE_CMD_SIZE + RPC_WIRE_SIZE_SIZE;
 static constexpr size_t RPC_COALESCE_MAX     = 4096;
 
+struct rpc_trace_cmd_stat {
+    uint64_t calls        = 0;
+    uint64_t input_bytes  = 0;
+    uint64_t output_bytes = 0;
+    uint64_t one_way_ns   = 0;
+    uint64_t response_ns  = 0;
+    uint64_t server_ns    = 0;
+};
+
+struct rpc_trace_copy_stat {
+    uint64_t calls = 0;
+    uint64_t bytes = 0;
+};
+
+struct rpc_trace_state {
+    std::mutex mutex;
+    bool has_activity = false;
+    uint64_t active_rpc_backends = 0;
+    rpc_trace_cmd_stat client[RPC_CMD_COUNT] = {};
+    rpc_trace_cmd_stat server[RPC_CMD_COUNT] = {};
+    std::unordered_map<std::string, rpc_trace_copy_stat> cross_endpoint_copies;
+};
+
+struct rpc_trace_server_span;
+static thread_local rpc_trace_server_span * rpc_trace_current_server_span = nullptr;
+
+static bool rpc_trace_enabled() {
+    static const bool enabled = []() {
+        const char * env = std::getenv("GGML_RPC_TRACE");
+        return env != nullptr && env[0] != '\0' && strcmp(env, "0") != 0;
+    }();
+
+    return enabled;
+}
+
+static const char * rpc_cmd_name(enum rpc_cmd cmd) {
+    switch (cmd) {
+        case RPC_CMD_ALLOC_BUFFER:      return "ALLOC_BUFFER";
+        case RPC_CMD_GET_ALIGNMENT:     return "GET_ALIGNMENT";
+        case RPC_CMD_GET_MAX_SIZE:      return "GET_MAX_SIZE";
+        case RPC_CMD_BUFFER_GET_BASE:   return "BUFFER_GET_BASE";
+        case RPC_CMD_FREE_BUFFER:       return "FREE_BUFFER";
+        case RPC_CMD_BUFFER_CLEAR:      return "BUFFER_CLEAR";
+        case RPC_CMD_SET_TENSOR:        return "SET_TENSOR";
+        case RPC_CMD_SET_TENSOR_HASH:   return "SET_TENSOR_HASH";
+        case RPC_CMD_GET_TENSOR:        return "GET_TENSOR";
+        case RPC_CMD_COPY_TENSOR:       return "COPY_TENSOR";
+        case RPC_CMD_GRAPH_COMPUTE:     return "GRAPH_COMPUTE";
+        case RPC_CMD_GET_DEVICE_MEMORY: return "GET_DEVICE_MEMORY";
+        case RPC_CMD_INIT_TENSOR:       return "INIT_TENSOR";
+        case RPC_CMD_GET_ALLOC_SIZE:    return "GET_ALLOC_SIZE";
+        case RPC_CMD_HELLO:             return "HELLO";
+        case RPC_CMD_DEVICE_COUNT:      return "DEVICE_COUNT";
+        case RPC_CMD_GRAPH_RECOMPUTE:   return "GRAPH_RECOMPUTE";
+        case RPC_CMD_COUNT:             break;
+    }
+
+    return "UNKNOWN";
+}
+
+static uint64_t rpc_trace_now_ns() {
+    using clock = std::chrono::steady_clock;
+    return (uint64_t) std::chrono::duration_cast<std::chrono::nanoseconds>(clock::now().time_since_epoch()).count();
+}
+
+static rpc_trace_state & rpc_trace_get_state() {
+    static rpc_trace_state * state = new rpc_trace_state();
+    return *state;
+}
+
+static void rpc_trace_add_cmd_stat(
+        rpc_trace_cmd_stat & stat, uint64_t input_bytes, uint64_t output_bytes,
+        uint64_t one_way_ns, uint64_t response_ns, uint64_t server_ns) {
+    stat.calls++;
+    stat.input_bytes += input_bytes;
+    stat.output_bytes += output_bytes;
+    stat.one_way_ns += one_way_ns;
+    stat.response_ns += response_ns;
+    stat.server_ns += server_ns;
+}
+
+static void rpc_trace_record_client(
+        enum rpc_cmd cmd, uint64_t input_bytes, uint64_t output_bytes, uint64_t elapsed_ns, bool has_response) {
+    if (!rpc_trace_enabled()) {
+        return;
+    }
+
+    auto & state = rpc_trace_get_state();
+    std::lock_guard<std::mutex> lock(state.mutex);
+    state.has_activity = true;
+    rpc_trace_add_cmd_stat(
+        state.client[cmd], input_bytes, output_bytes,
+        has_response ? 0 : elapsed_ns, has_response ? elapsed_ns : 0, 0);
+}
+
+static void rpc_trace_record_server(enum rpc_cmd cmd, uint64_t input_bytes, uint64_t output_bytes, uint64_t elapsed_ns) {
+    if (!rpc_trace_enabled()) {
+        return;
+    }
+
+    auto & state = rpc_trace_get_state();
+    std::lock_guard<std::mutex> lock(state.mutex);
+    state.has_activity = true;
+    rpc_trace_add_cmd_stat(state.server[cmd], input_bytes, output_bytes, 0, 0, elapsed_ns);
+}
+
+static void rpc_trace_record_cross_endpoint_copy(const std::string & src_endpoint, const std::string & dst_endpoint, uint64_t bytes) {
+    if (!rpc_trace_enabled()) {
+        return;
+    }
+
+    auto & state = rpc_trace_get_state();
+    std::lock_guard<std::mutex> lock(state.mutex);
+    state.has_activity = true;
+    auto & stat = state.cross_endpoint_copies[src_endpoint + " -> " + dst_endpoint];
+    stat.calls++;
+    stat.bytes += bytes;
+}
+
+static void rpc_trace_client_backend_init() {
+    if (!rpc_trace_enabled()) {
+        return;
+    }
+
+    auto & state = rpc_trace_get_state();
+    std::lock_guard<std::mutex> lock(state.mutex);
+    state.active_rpc_backends++;
+}
+
+static bool rpc_trace_client_backend_free() {
+    if (!rpc_trace_enabled()) {
+        return false;
+    }
+
+    auto & state = rpc_trace_get_state();
+    std::lock_guard<std::mutex> lock(state.mutex);
+    if (state.active_rpc_backends > 0) {
+        state.active_rpc_backends--;
+    }
+    return state.active_rpc_backends == 0;
+}
+
+static void rpc_trace_print_cmd_table(FILE * stream, const char * label, const rpc_trace_cmd_stat * stats) {
+    fprintf(stream, "ggml-rpc trace %s commands:\n", label);
+    fprintf(stream, "  %-18s %12s %14s %14s %12s %12s %12s\n",
+            "command", "calls", "in_bytes", "out_bytes", "send_ms", "wait_ms", "server_ms");
+    for (int i = 0; i < RPC_CMD_COUNT; ++i) {
+        const auto & stat = stats[i];
+        if (stat.calls == 0) {
+            continue;
+        }
+        const double send_ms = (double) stat.one_way_ns / 1000000.0;
+        const double wait_ms = (double) stat.response_ns / 1000000.0;
+        const double server_ms = (double) stat.server_ns / 1000000.0;
+        fprintf(stream, "  %-18s %12" PRIu64 " %14" PRIu64 " %14" PRIu64 " %12.3f %12.3f %12.3f\n",
+                rpc_cmd_name((rpc_cmd) i), stat.calls, stat.input_bytes, stat.output_bytes, send_ms, wait_ms, server_ms);
+    }
+}
+
+static bool rpc_trace_has_cmd_stats(const rpc_trace_cmd_stat * stats) {
+    for (int i = 0; i < RPC_CMD_COUNT; ++i) {
+        if (stats[i].calls != 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool rpc_trace_has_copy_stats(const std::unordered_map<std::string, rpc_trace_copy_stat> & stats) {
+    for (const auto & entry : stats) {
+        if (entry.second.calls != 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static void rpc_trace_report() {
+    if (!rpc_trace_enabled()) {
+        return;
+    }
+
+    auto & state = rpc_trace_get_state();
+    std::lock_guard<std::mutex> lock(state.mutex);
+    if (!state.has_activity) {
+        return;
+    }
+    const bool has_client = rpc_trace_has_cmd_stats(state.client);
+    const bool has_server = rpc_trace_has_cmd_stats(state.server);
+    const bool has_copies = rpc_trace_has_copy_stats(state.cross_endpoint_copies);
+    if (!has_client && !has_server && !has_copies) {
+        return;
+    }
+    fprintf(stderr, "\n");
+    if (has_client) {
+        rpc_trace_print_cmd_table(stderr, "client", state.client);
+    }
+    if (has_server) {
+        rpc_trace_print_cmd_table(stderr, "server", state.server);
+    }
+    if (has_copies) {
+        fprintf(stderr, "ggml-rpc trace cross-endpoint copy fallbacks:\n");
+        fprintf(stderr, "  %-48s %12s %14s\n", "endpoints", "calls", "bytes");
+        for (const auto & entry : state.cross_endpoint_copies) {
+            fprintf(stderr, "  %-48s %12" PRIu64 " %14" PRIu64 "\n",
+                    entry.first.c_str(), entry.second.calls, entry.second.bytes);
+        }
+    }
+    for (int i = 0; i < RPC_CMD_COUNT; ++i) {
+        state.client[i] = {};
+        state.server[i] = {};
+    }
+    state.cross_endpoint_copies.clear();
+    state.has_activity = false;
+    fflush(stderr);
+}
+
+static void rpc_trace_report_server_connection() {
+    if (!rpc_trace_enabled()) {
+        return;
+    }
+
+    auto & state = rpc_trace_get_state();
+    std::lock_guard<std::mutex> lock(state.mutex);
+    if (!rpc_trace_has_cmd_stats(state.server)) {
+        return;
+    }
+    fprintf(stderr, "\n");
+    rpc_trace_print_cmd_table(stderr, "server", state.server);
+    for (int i = 0; i < RPC_CMD_COUNT; ++i) {
+        state.server[i] = {};
+    }
+    fflush(stderr);
+}
+
+struct rpc_trace_server_connection_report {
+    ~rpc_trace_server_connection_report() {
+        rpc_trace_report_server_connection();
+    }
+};
+
+struct rpc_trace_server_span {
+    explicit rpc_trace_server_span(enum rpc_cmd cmd)
+        : cmd(cmd), previous(rpc_trace_current_server_span), start_ns(0), input_bytes(0), output_bytes(0), active(rpc_trace_enabled()) {
+        if (active) {
+            start_ns = rpc_trace_now_ns();
+            rpc_trace_current_server_span = this;
+        }
+    }
+
+    ~rpc_trace_server_span() {
+        if (!active) {
+            return;
+        }
+
+        rpc_trace_current_server_span = previous;
+        rpc_trace_record_server(cmd, input_bytes, output_bytes, rpc_trace_now_ns() - start_ns);
+    }
+
+    enum rpc_cmd cmd;
+    rpc_trace_server_span * previous;
+    uint64_t start_ns;
+    uint64_t input_bytes;
+    uint64_t output_bytes;
+    bool active;
+};
+
+static void rpc_trace_server_add_input(uint64_t bytes) {
+    if (rpc_trace_current_server_span != nullptr) {
+        rpc_trace_current_server_span->input_bytes += bytes;
+    }
+}
+
+static void rpc_trace_server_add_output(uint64_t bytes) {
+    if (rpc_trace_current_server_span != nullptr) {
+        rpc_trace_current_server_span->output_bytes += bytes;
+    }
+}
+
 static bool send_msg(socket_ptr sock, const void * msg, size_t msg_size) {
+    rpc_trace_server_add_output(msg_size);
     uint64_t wire_size = msg_size;
     if (msg_size <= RPC_COALESCE_MAX) {
         std::array<uint8_t, RPC_WIRE_SIZE_SIZE + RPC_COALESCE_MAX> frame;
@@ -298,6 +580,7 @@ static bool recv_msg(socket_ptr sock, void * msg, size_t msg_size) {
     if (size != msg_size) {
         return false;
     }
+    rpc_trace_server_add_input(size);
     return sock->recv_data(msg, msg_size);
 }
 
@@ -312,6 +595,7 @@ static bool recv_msg(socket_ptr sock, std::vector<uint8_t> & input) {
         GGML_LOG_ERROR("Failed to allocate input buffer of size %" PRIu64 "\n", size);
         return false;
     }
+    rpc_trace_server_add_input(size);
     return sock->recv_data(input.data(), size);
 }
 
@@ -329,9 +613,7 @@ static bool parse_endpoint(const std::string & endpoint, std::string & host, int
     return true;
 }
 
-// RPC request : | rpc_cmd (1 byte) | request_size (8 bytes) | request_data (request_size bytes) |
-// No response
-static bool send_rpc_cmd(socket_ptr sock, enum rpc_cmd cmd, const void * input, size_t input_size) {
+static bool send_rpc_cmd_request(socket_ptr sock, enum rpc_cmd cmd, const void * input, size_t input_size) {
     std::array<uint8_t, RPC_WIRE_HEADER_SIZE + RPC_COALESCE_MAX> frame;
     frame[0] = static_cast<uint8_t>(cmd);
     uint64_t wire_input_size = input_size;
@@ -349,22 +631,35 @@ static bool send_rpc_cmd(socket_ptr sock, enum rpc_cmd cmd, const void * input, 
 }
 
 // RPC request : | rpc_cmd (1 byte) | request_size (8 bytes) | request_data (request_size bytes) |
+// No response
+static bool send_rpc_cmd(socket_ptr sock, enum rpc_cmd cmd, const void * input, size_t input_size) {
+    const uint64_t start_ns = rpc_trace_enabled() ? rpc_trace_now_ns() : 0;
+    bool status = send_rpc_cmd_request(sock, cmd, input, input_size);
+    if (rpc_trace_enabled()) {
+        rpc_trace_record_client(cmd, input_size, 0, rpc_trace_now_ns() - start_ns, false);
+    }
+    return status;
+}
+
+// RPC request : | rpc_cmd (1 byte) | request_size (8 bytes) | request_data (request_size bytes) |
 // RPC response: | response_size (8 bytes) | response_data (response_size bytes) |
 static bool send_rpc_cmd(socket_ptr sock, enum rpc_cmd cmd, const void * input, size_t input_size, void * output, size_t output_size) {
-    if (!send_rpc_cmd(sock, cmd, input, input_size)) {
-        return false;
+    const uint64_t start_ns = rpc_trace_enabled() ? rpc_trace_now_ns() : 0;
+    bool status = send_rpc_cmd_request(sock, cmd, input, input_size);
+    if (status) {
+        uint64_t out_size;
+        status = sock->recv_data(&out_size, sizeof(out_size));
+        if (status && out_size != output_size) {
+            status = false;
+        }
+        if (status) {
+            status = sock->recv_data(output, output_size);
+        }
     }
-    uint64_t out_size;
-    if (!sock->recv_data(&out_size, sizeof(out_size))) {
-        return false;
+    if (rpc_trace_enabled()) {
+        rpc_trace_record_client(cmd, input_size, status ? output_size : 0, rpc_trace_now_ns() - start_ns, true);
     }
-    if (out_size != output_size) {
-        return false;
-    }
-    if (!sock->recv_data(output, output_size)) {
-        return false;
-    }
-    return true;
+    return status;
 }
 
 // RPC client-side implementation
@@ -552,6 +847,11 @@ static bool ggml_backend_rpc_buffer_cpy_tensor(ggml_backend_buffer_t buffer, con
         ggml_backend_buffer_t dst_buffer = dst->buffer;
         ggml_backend_rpc_buffer_context * dst_ctx = (ggml_backend_rpc_buffer_context *)dst_buffer->context;
         if (src_ctx->sock != dst_ctx->sock) {
+            ggml_backend_rpc_buffer_type_context * src_buft_ctx =
+                (ggml_backend_rpc_buffer_type_context *)ggml_backend_buffer_get_type(src_buffer)->context;
+            ggml_backend_rpc_buffer_type_context * dst_buft_ctx =
+                (ggml_backend_rpc_buffer_type_context *)ggml_backend_buffer_get_type(dst_buffer)->context;
+            rpc_trace_record_cross_endpoint_copy(src_buft_ctx->endpoint, dst_buft_ctx->endpoint, ggml_nbytes(src));
             return false;
         }
         ggml_backend_rpc_buffer_context * ctx = (ggml_backend_rpc_buffer_context *)buffer->context;
@@ -690,9 +990,13 @@ static const char * ggml_backend_rpc_name(ggml_backend_t backend) {
 }
 
 static void ggml_backend_rpc_free(ggml_backend_t backend) {
+    const bool report_trace = rpc_trace_client_backend_free();
     ggml_backend_rpc_context * rpc_ctx = (ggml_backend_rpc_context *)backend->context;
     delete rpc_ctx;
     delete backend;
+    if (report_trace) {
+        rpc_trace_report();
+    }
 }
 
 static void ggml_backend_rpc_synchronize(ggml_backend_t backend) {
@@ -820,6 +1124,7 @@ ggml_backend_buffer_type_t ggml_backend_rpc_buffer_type(const char * endpoint, u
 }
 
 ggml_backend_t ggml_backend_rpc_init(const char * endpoint, uint32_t device) {
+    rpc_trace_client_backend_init();
     std::string dev_name = "RPC" + std::to_string(device) + "[" + std::string(endpoint) + "]";
     ggml_backend_rpc_context * ctx = new ggml_backend_rpc_context {
         /* .endpoint       = */ endpoint,
@@ -1477,6 +1782,7 @@ rpc_server::~rpc_server() {
 
 static void rpc_serve_client(const std::vector<ggml_backend_t> & backends, const char * cache_dir,
                              socket_ptr sock) {
+    rpc_trace_server_connection_report trace_connection_report;
     rpc_server server(backends, cache_dir);
     uint8_t cmd;
     if (!sock->recv_data(&cmd, 1)) {
@@ -1523,6 +1829,7 @@ static void rpc_serve_client(const std::vector<ggml_backend_t> & backends, const
             GGML_LOG_ERROR("Unknown command: %d\n", cmd);
             break;
         }
+        rpc_trace_server_span trace_span((rpc_cmd) cmd);
         switch (cmd) {
             case RPC_CMD_HELLO: {
                 // HELLO command is handled above
