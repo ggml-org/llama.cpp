@@ -2,22 +2,20 @@
 
 void llama_model_gemma4_assistant::load_arch_hparams(llama_model_loader & ml) {
     hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
-    ml.get_key_or_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, hparams.is_swa_impl, hparams.n_layer);
+    ml.get_key_or_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, hparams.is_swa_impl, hparams.n_layer());
 
     uint32_t n_kv_shared_layers = 0;
     ml.get_key(LLM_KV_ATTENTION_SHARED_KV_LAYERS, n_kv_shared_layers, false);
 
-    hparams.n_layer_kv_from_start = hparams.n_layer - (int32_t) n_kv_shared_layers;
-    hparams.f_attention_scale     = 1.0f;
+    hparams.f_attention_scale = 1.0f;
 
-    ml.get_key(LLM_KV_NEXTN_PREDICT_LAYERS,         hparams.nextn_predict_layers, false);
     ml.get_key(LLM_KV_ROPE_FREQ_BASE_SWA,           hparams.rope_freq_base_train_swa, false);
     ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW,     hparams.n_swa);
     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS,  hparams.f_norm_rms_eps);
     ml.get_key(LLM_KV_ATTENTION_KEY_LENGTH_SWA,     hparams.n_embd_head_k_swa);
     ml.get_key(LLM_KV_ATTENTION_VALUE_LENGTH_SWA,   hparams.n_embd_head_v_swa);
 
-    if (hparams.n_layer == 4) {
+    if (hparams.n_layer() == 4) {
         type = LLM_TYPE_31B;
     }
 }
@@ -88,8 +86,8 @@ llama_model_gemma4_assistant::graph::graph(const llama_model & model, const llm_
     const auto & src_hparams = src_model->hparams;
 
     // By convention the MTP draft reads from the trunk's final SWA and full layers.
-    const int32_t src_layer_full = (int32_t) src_hparams.n_layer - 1;
-    const int32_t src_layer_swa  = (int32_t) src_hparams.n_layer - 2;
+    const int32_t src_layer_full = (int32_t) src_hparams.n_layer() - 1;
+    const int32_t src_layer_swa  = (int32_t) src_hparams.n_layer() - 2;
     GGML_ASSERT(!src_hparams.is_swa(src_layer_full) && "trunk's last layer must be full attention");
     GGML_ASSERT( src_hparams.is_swa(src_layer_swa)  && "trunk's penultimate layer must be SWA");
 

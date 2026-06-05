@@ -491,11 +491,11 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
             }
         }
 
+        kv_shared_with_target = llama_get_memory(ctx_dft) == nullptr;
+
         llama_set_embeddings_nextn(ctx_tgt, true, /*masked*/ false);
         llama_set_embeddings_nextn(ctx_dft, true, /*masked*/ true);
         llama_set_mtp_source(ctx_dft, ctx_tgt);
-
-        kv_shared_with_target = llama_model_n_layer_kv(llama_get_model(ctx_dft)) == 0;
 
         pending_h.assign(n_seq, std::vector<float>(n_embd, 0.0f));
 

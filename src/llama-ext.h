@@ -85,11 +85,6 @@ using llama_memory_breakdown = std::map<ggml_backend_buffer_type_t, llama_memory
 LLAMA_API int32_t llama_model_n_expert (const struct llama_model * model);
 LLAMA_API int32_t llama_model_n_devices(const struct llama_model * model);
 
-// number of layers that own KV (i.e. layers whose graph writes K/V).
-// 0 means the model owns no KV — e.g. a Gemma4-style MTP draft that reads
-// trunk KV via llama_set_mtp_source.
-LLAMA_API int32_t llama_model_n_layer_kv(const struct llama_model * model);
-
 LLAMA_API ggml_backend_dev_t llama_model_get_device(const struct llama_model * model, int i);
 
 LLAMA_API llama_memory_breakdown llama_get_memory_breakdown(const struct llama_context * ctx);

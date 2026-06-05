@@ -65,8 +65,8 @@ static void llama_assert_gemma4_mtp_source_placement(
     const auto & hparams_dft = model_dft.hparams;
     const auto & hparams_tgt = model_tgt.hparams;
 
-    const int32_t il_tgt_full = (int32_t) hparams_tgt.n_layer - 1;
-    const int32_t il_tgt_swa  = (int32_t) hparams_tgt.n_layer - 2;
+    const int32_t il_tgt_full = (int32_t) hparams_tgt.n_layer() - 1;
+    const int32_t il_tgt_swa  = (int32_t) hparams_tgt.n_layer() - 2;
 
     ggml_backend_dev_t dev_cpu = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
     if (!dev_cpu) {
@@ -75,7 +75,7 @@ static void llama_assert_gemma4_mtp_source_placement(
 
     const bool kv_offload = src->get_cparams().offload_kqv;
 
-    for (uint32_t il_dft = 0; il_dft < hparams_dft.n_layer; ++il_dft) {
+    for (uint32_t il_dft = 0; il_dft < hparams_dft.n_layer(); ++il_dft) {
         const int32_t il_tgt = hparams_dft.is_swa(il_dft) ? il_tgt_swa : il_tgt_full;
 
         ggml_backend_dev_t dev_dft = model_dft.dev_layer(il_dft);
@@ -3560,12 +3560,11 @@ llama_context * llama_init_from_model(
                        model->hparams.pooling_type, params.pooling_type);
     }
 
-    if (params.ctx_type == LLAMA_CONTEXT_TYPE_MTP &&
-        model->hparams.n_layer_nextn == 0) {
-        LLAMA_LOG_WARN("%s: context type MTP requested but model doesn't contain MTP layers\n", __func__);
-        return nullptr;
-    }
-
+    //if (params.ctx_type == LLAMA_CONTEXT_TYPE_MTP &&
+    //    model->hparams.n_layer_nextn == 0) {
+    //    LLAMA_LOG_WARN("%s: context type MTP requested but model doesn't contain MTP layers\n", __func__);
+    //    return nullptr;
+    //}
 
     try {
         auto * ctx = new llama_context(*model, params);
