@@ -1274,8 +1274,8 @@ static common_chat_params common_chat_params_init_gemma4(const common_chat_templ
     }
 
     data.message_delimiters = {
-        { COMMON_CHAT_ROLE_USER,      "<|turn>user\n"  },
-        { COMMON_CHAT_ROLE_ASSISTANT, "<|turn>model\n" },
+        { COMMON_CHAT_ROLE_USER,      "<|turn>user"  },
+        { COMMON_CHAT_ROLE_ASSISTANT, "<|turn>model" },
     };
 
     data.format            = COMMON_CHAT_FORMAT_PEG_GEMMA4;
