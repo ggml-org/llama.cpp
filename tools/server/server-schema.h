@@ -10,7 +10,6 @@
 #include <functional>
 #include <limits>
 #include <memory>
-#include <set>
 #include <string>
 #include <vector>
 
@@ -26,7 +25,7 @@ struct field_eval_context {
 using field_handler = std::function<void(field_eval_context &, const json &)>;
 
 struct field {
-    std::set<const char *> name;
+    std::vector<const char *> name;
     const char * desc = "";
     field_handler custom_handler;
     field() = default;
@@ -38,7 +37,7 @@ struct field {
     }
     // if 'name' is present, use it, otherwise look for aliases following the order they were added
     field * add_alias(const char * n) {
-        name.insert(n);
+        name.push_back(n);
         return this;
     }
     field * set_handler(field_handler h) { this->custom_handler = h; return this; }

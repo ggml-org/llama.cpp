@@ -103,7 +103,7 @@ std::vector<std::unique_ptr<field>> make_llama_cmpl_schema(const common_params &
         ->set_desc("Set a minimum probability threshold for tokens to be removed via XTC sampler (> 0.5 disables XTC)"));
 
     add((new field_num("typical_p", params.sampling.typ_p))
-        ->set_limits(0.0f, 1.0f)
+        // ->set_limits(0.0f, 1.0f) // what's the valid range?
         ->set_desc("Enable locally typical sampling with parameter p (1.0 = disabled)"));
 
     add((new field_num("temperature", params.sampling.temp))
@@ -124,19 +124,16 @@ std::vector<std::unique_ptr<field>> make_llama_cmpl_schema(const common_params &
         ->set_desc("Control the repetition of token sequences in the generated text (1.0 = disabled)"));
 
     add((new field_num("frequency_penalty", params.sampling.penalty_freq))
-        ->set_limits(0.0f, std::numeric_limits<float>::infinity())
         ->set_desc("Repeat alpha frequency penalty (0 = disabled)"));
 
     add((new field_num("presence_penalty", params.sampling.penalty_present))
-        ->set_limits(0.0f, std::numeric_limits<float>::infinity())
         ->set_desc("Repeat alpha presence penalty (0 = disabled)"));
 
     add((new field_num("dry_multiplier", params.sampling.dry_multiplier))
-        ->set_limits(0.0f, std::numeric_limits<float>::infinity())
         ->set_desc("Set the DRY (Don't Repeat Yourself) repetition penalty multiplier (0 = disabled)"));
 
     add((new field_num("dry_base", params.sampling.dry_base))
-        ->set_desc("Set the DRY repetition penalty base value (must be >= 1.0)")
+        ->set_desc("Set the DRY repetition penalty base value (must be >= 1.0, any values < 1.0 will be replaced with the default value)")
         ->set_handler([&](field_eval_context & ctx, const json & data) {
             float v = data.at("dry_base").get<float>();
             ctx.params.sampling.dry_base = (v < 1.0f) ? params_base.sampling.dry_base : v;
@@ -177,6 +174,7 @@ std::vector<std::unique_ptr<field>> make_llama_cmpl_schema(const common_params &
         ->set_desc("If greater than 0, output the probabilities of top N tokens for each generated token"));
 
     add((new field_num("min_keep", params.sampling.min_keep))
+        ->set_hard_limits(0, INT32_MAX)
         ->set_desc("If greater than 0, force samplers to return at least N possible tokens"));
 
     add((new field_bool("backend_sampling", params.sampling.backend_sampling))
