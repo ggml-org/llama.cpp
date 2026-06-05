@@ -136,9 +136,9 @@ llama_model_eagle3::graph<true>::graph(const llama_model & model, const llm_grap
     cb(cur, "fc_out", -1);
 
     // Output: g_embeddings e.g. [4096, n_tokens]
-    // store in t_h_pre_norm (same as MTP) so can be read via llama_get_embeddings_pre_norm(ctx_dft)
+    // store in t_h_nextn (same as MTP) so can be read via llama_get_embeddings_nextn(ctx_dft)
     ggml_set_output(cur);
-    res->t_h_pre_norm = cur;
+    res->t_h_nextn = cur;
 
     ggml_build_forward_expand(gf, cur);
 }
@@ -283,7 +283,7 @@ llama_model_eagle3::graph<false>::graph(const llama_model & model, const llm_gra
 
     // Output prenorm state (for next token's g_embeddings in autoregressive generation)
     ggml_set_output(cur);
-    res->t_h_pre_norm = cur;
+    res->t_h_nextn = cur;
 
     cur = build_norm(cur,
             model.output_norm, NULL,

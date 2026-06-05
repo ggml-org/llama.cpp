@@ -86,6 +86,7 @@ llama_context::llama_context(
     cparams.cb_eval_user_data = params.cb_eval_user_data;
 
     cparams.ctx_other = nullptr;
+
     cparams.output_layer_inp.resize(hparams.n_layer, false);
     embd_layer_inp.resize(hparams.n_layer);
 
@@ -196,7 +197,7 @@ llama_context::llama_context(
 
     cparams.n_ubatch = std::min(cparams.n_batch, params.n_ubatch == 0 ? params.n_batch : params.n_ubatch);
 
-    cparams.n_outputs_max = params.n_outputs_max == 0 ? cparams.n_batch : params.n_outputs_max;
+    cparams.n_outputs_max = params.n_outputs_max == 0 || llama_model_has_encoder(&model) ? cparams.n_batch : params.n_outputs_max;
 
     cparams.op_offload = params.op_offload;
     cparams.kv_unified = params.kv_unified;
@@ -1271,7 +1272,7 @@ bool llama_context::set_adapter_cvec(
 void llama_context::set_output_layer_inp(uint32_t layer_id, bool enable) {
     LLAMA_LOG_DEBUG("%s: layer_id = %d, enable = %d\n", __func__, layer_id, enable);
 
-    GGML_ASSERT(layer_id < model.hparams.n_layer);
+    GGML_ASSERT(layer_id < model.hparams.n_layer_all);
 
     cparams.output_layer_inp[layer_id] = enable;
 
