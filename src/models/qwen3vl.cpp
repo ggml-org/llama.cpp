@@ -4,7 +4,8 @@ void llama_model_qwen3vl::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_NUM_DEEPSTACK_LAYERS, hparams.n_deepstack_layers, false);
     ml.get_key_or_arr(LLM_KV_ROPE_DIMENSION_SECTIONS, hparams.rope_sections, 4, true);
     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
-    switch (hparams.n_layer) {
+
+    switch (hparams.n_layer()) {
         case 28: type = LLM_TYPE_1_7B; break;
         case 36: type = hparams.n_embd == 2560 ? LLM_TYPE_4B : LLM_TYPE_8B; break;
         case 64: type = LLM_TYPE_32B; break;

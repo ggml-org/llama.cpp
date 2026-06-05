@@ -5,7 +5,8 @@ void llama_model_qwen2moe::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_EXPERT_SHARED_FEED_FORWARD_LENGTH, hparams.n_ff_shexp, false);
 
     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
-    switch (hparams.n_layer) {
+
+    switch (hparams.n_layer()) {
         case 24: type = LLM_TYPE_A2_7B; break;
         case 28: type = LLM_TYPE_57B_A14B; break;
         default: type = LLM_TYPE_UNKNOWN;

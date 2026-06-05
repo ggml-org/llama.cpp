@@ -26,7 +26,7 @@ llama_memory_recurrent::llama_memory_recurrent(
                  uint32_t   n_seq_max,
                  uint32_t   n_rs_seq,
     const layer_filter_cb & filter) : hparams(model.hparams), n_seq_max(n_seq_max) {
-    const int32_t n_layer = hparams.n_layer;
+    const int32_t n_layer = hparams.n_layer();
 
     head = 0;
     size = mem_size;
@@ -863,7 +863,7 @@ void llama_memory_recurrent::state_write_meta(llama_io_write_i & io, const std::
 
 void llama_memory_recurrent::state_write_data(llama_io_write_i & io, const std::vector<std::pair<uint32_t, uint32_t>> & cell_ranges) const {
     const uint32_t s_trans = 0;
-    const uint32_t n_layer = hparams.n_layer;
+    const uint32_t n_layer = hparams.n_layer();
 
     io.write(&s_trans, sizeof(s_trans));
     io.write(&n_layer, sizeof(n_layer));
@@ -1047,8 +1047,8 @@ bool llama_memory_recurrent::state_read_data(llama_io_read_i & io, uint32_t cell
     io.read(&s_trans, sizeof(s_trans));
     io.read(&n_layer, sizeof(n_layer));
 
-    if (n_layer != hparams.n_layer) {
-        LLAMA_LOG_ERROR("%s: mismatched layer count (%u instead of %u)\n", __func__, n_layer, hparams.n_layer);
+    if (n_layer != hparams.n_layer()) {
+        LLAMA_LOG_ERROR("%s: mismatched layer count (%u instead of %u)\n", __func__, n_layer, hparams.n_layer());
         return false;
     }
     if (cell_count > size) {

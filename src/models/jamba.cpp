@@ -8,11 +8,11 @@ void llama_model_jamba::load_arch_hparams(llama_model_loader & ml) {
 
     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
 
-    for (uint32_t i = 0; i < hparams.n_layer; ++i) {
+    for (uint32_t i = 0; i < hparams.n_layer(); ++i) {
         hparams.is_recr_impl[i] = hparams.n_head_kv(i) == 0;
     }
 
-    switch (hparams.n_layer) {
+    switch (hparams.n_layer()) {
         // TODO: Jamba layers are a bit heterogeneous, so naming this is hard.
         case 12: // 900M  8x???M
         case 32: // 51B  16x?B

@@ -26,7 +26,7 @@ void llama_model_grok::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_ROPE_SCALING_YARN_BETA_FAST,   hparams.yarn_beta_fast, false);
     ml.get_key(LLM_KV_ROPE_SCALING_YARN_BETA_SLOW,   hparams.yarn_beta_slow, false);
 
-    switch (hparams.n_layer) {
+    switch (hparams.n_layer()) {
         case 64: type = LLM_TYPE_314B; break;
         default: type = LLM_TYPE_UNKNOWN;
     }

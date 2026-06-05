@@ -3,7 +3,7 @@
 void llama_model_minicpm::load_arch_hparams(llama_model_loader & ml) {
     // Backward-compatible defaults for older MiniCPM GGUFs
     hparams.f_embedding_scale = 12.0f;
-    hparams.f_residual_scale  = 1.4f / sqrtf(float(hparams.n_layer));
+    hparams.f_residual_scale  = 1.4f / sqrtf(float(hparams.n_layer()));
     hparams.f_logit_scale     = hparams.n_embd ? (256.0f / float(hparams.n_embd)) : 1.0f;
 
     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
@@ -16,7 +16,7 @@ void llama_model_minicpm::load_arch_hparams(llama_model_loader & ml) {
     // MiniCPM uses rope by default, unlike Granite which uses it as a switch
     hparams.rope_finetuned = true;
 
-    switch (hparams.n_layer) {
+    switch (hparams.n_layer()) {
         case 52: type = LLM_TYPE_1B; break;
         case 40: type = LLM_TYPE_2B; break;
         default: type = LLM_TYPE_UNKNOWN;

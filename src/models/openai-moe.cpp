@@ -14,7 +14,7 @@ void llama_model_openai_moe::load_arch_hparams(llama_model_loader & ml) {
     hparams.rope_freq_scale_train_swa = hparams.rope_freq_scale_train;
     ml.get_key(LLM_KV_ROPE_FREQ_BASE_SWA, hparams.rope_freq_base_train_swa, false);
 
-    switch (hparams.n_layer) {
+    switch (hparams.n_layer()) {
         case 24: type = LLM_TYPE_20B; break;
         case 36: type = LLM_TYPE_120B; break;
         default: type = LLM_TYPE_UNKNOWN;

@@ -19,7 +19,7 @@ void llama_model_granite_hybrid::load_arch_hparams(llama_model_loader & ml) {
     hparams.rope_finetuned = rope_finetuned;
 
     // A layer is recurrent IFF the n_head_kv value is set to 0
-    for (uint32_t i = 0; i < hparams.n_layer; ++i) {
+    for (uint32_t i = 0; i < hparams.n_layer(); ++i) {
         hparams.is_recr_impl[i] = hparams.n_head_kv(i) == 0;
     }
 

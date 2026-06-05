@@ -5,10 +5,13 @@
 void llama_model_lfm2::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_SHORTCONV_L_CACHE,           hparams.n_shortconv_l_cache);
     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
-    for (uint32_t il = 0; il < hparams.n_layer; ++il) {
+
+    for (uint32_t il = 0; il < hparams.n_layer(); ++il) {
         hparams.is_recr_impl[il] = hparams.n_head_kv(il) == 0;
     }
-    hparams.n_layer_dense_lead = hparams.n_layer;
+
+    hparams.n_layer_dense_lead = hparams.n_layer();
+
     switch (hparams.n_ff()) {
         case  4608: type = LLM_TYPE_350M; break;
         case  6912: type = LLM_TYPE_700M; break;
@@ -16,9 +19,10 @@ void llama_model_lfm2::load_arch_hparams(llama_model_loader & ml) {
         case 10752: type = LLM_TYPE_2_6B; break;
         default:    type = LLM_TYPE_UNKNOWN;
     }
+
     if (const auto is_swa = ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW, hparams.n_swa, false); is_swa && hparams.n_swa > 0) {
         hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
-        for (uint32_t il = 0; il < hparams.n_layer; ++il) {
+        for (uint32_t il = 0; il < hparams.n_layer(); ++il) {
             hparams.is_swa_impl[il] = !hparams.is_recr_impl[il];
         }
     }

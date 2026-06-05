@@ -1,7 +1,7 @@
 #include "models.h"
 
 void llama_model_exaone4::load_arch_hparams(llama_model_loader & ml) {
-    if (hparams.n_layer == 64) {    // 32B
+    if (hparams.n_layer() == 64) {    // 32B
         hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
         hparams.n_swa = 4096;
         uint32_t swa_period = 4;
@@ -15,11 +15,11 @@ void llama_model_exaone4::load_arch_hparams(llama_model_loader & ml) {
 
     ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW,    hparams.n_swa, false);
     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
-    ml.get_key(LLM_KV_NEXTN_PREDICT_LAYERS,        hparams.nextn_predict_layers, false);
-    GGML_ASSERT(hparams.nextn_predict_layers < hparams.n_layer && "nextn_predict_layers must be < n_layer");
-    hparams.n_layer_kv_from_start = hparams.n_layer - hparams.nextn_predict_layers;
+    ml.get_key(LLM_KV_NEXTN_PREDICT_LAYERS,        hparams.n_layer_nextn, false);
 
-    switch (hparams.n_layer) {
+    GGML_ASSERT(hparams.n_layer_nextn < hparams.n_layer_all && "n_layer_nextn must be < n_layer");
+
+    switch (hparams.n_layer()) {
         case 30: type = LLM_TYPE_1_2B; break;
         case 64: type = LLM_TYPE_32B; break;
         default: type = LLM_TYPE_UNKNOWN;
@@ -40,8 +40,8 @@ void llama_model_exaone4::load_arch_tensors(llama_model_loader &) {
         output = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, TENSOR_DUPLICATED);
     }
 
-    for (int i = 0; i < n_layer; ++i) {
-        const bool is_nextn = hparams.nextn_predict_layers > 0 && static_cast<uint32_t>(i) >= n_layer - hparams.nextn_predict_layers;
+    for (int i = 0; i < n_layer_all; ++i) {
+        const bool is_nextn = i >= n_layer;
         int flags = 0;
         if (is_nextn) {
             // NextN/MTP layers are preserved in GGUF but are not executed yet.
@@ -109,11 +109,7 @@ llama_model_exaone4::graph<iswa>::graph(const llama_model & model, const llm_gra
     }
     ggml_tensor * inp_out_ids = build_inp_out_ids();
 
-    // MTP / NextN tail blocks are loaded for compatibility but not executed (same as exaone-moe).
-    const int n_layer_main = int(n_layer) - int(hparams.nextn_predict_layers);
-    GGML_ASSERT(n_layer_main > 0);
-
-    for (int il = 0; il < n_layer_main; ++il) {
+    for (int il = 0; il < n_layer; ++il) {
         ggml_tensor * inpSA = inpL;
 
         // use RoPE for SWA layers or non-SWA models
@@ -149,7 +145,7 @@ llama_model_exaone4::graph<iswa>::graph(const llama_model & model, const llm_gra
                     Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f / sqrtf(float(n_embd_head)), il);
             cb(cur, "attn_out", il);
         }
-        if (il == n_layer_main - 1 && inp_out_ids) {
+        if (il == n_layer - 1 && inp_out_ids) {
             cur   = ggml_get_rows(ctx0, cur, inp_out_ids);
             inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
         }

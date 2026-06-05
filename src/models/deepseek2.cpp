@@ -5,7 +5,7 @@ void llama_model_deepseek2::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_VOCAB_SIZE, n_vocab, false) || ml.get_arr_n(LLM_KV_TOKENIZER_LIST, n_vocab, false);
 
     // lite variants include DeepSeek-V2-Lite, GigaChat3-10B-A1.8B, Kanana-2-30B-A3B
-    const bool is_lite = (hparams.n_layer == 27 || hparams.n_layer == 26 || (hparams.n_layer == 48 && n_vocab == 128256));
+    const bool is_lite = (hparams.n_layer() == 27 || hparams.n_layer() == 26 || (hparams.n_layer() == 48 && n_vocab == 128256));
 
     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
     ml.get_key(LLM_KV_LEADING_DENSE_BLOCK_COUNT,   hparams.n_layer_dense_lead, false);
@@ -23,7 +23,7 @@ void llama_model_deepseek2::load_arch_hparams(llama_model_loader & ml) {
     if (hparams.expert_gating_func == LLAMA_EXPERT_GATING_FUNC_TYPE_NONE) {
         // for compatibility with existing DeepSeek V2 and V2.5 GGUFs
         // that have no expert_gating_func model parameter set
-        if ((hparams.n_layer == 47 || hparams.n_layer == 48) && n_vocab == 154880) {
+        if ((hparams.n_layer() == 47 || hparams.n_layer() == 48) && n_vocab == 154880) {
             // GLM 4.7 Lite
             hparams.expert_gating_func = LLAMA_EXPERT_GATING_FUNC_TYPE_SIGMOID;
         } else {
@@ -43,7 +43,7 @@ void llama_model_deepseek2::load_arch_hparams(llama_model_loader & ml) {
 
     hparams.f_attn_temp_offset = 0.0f;
 
-    switch (hparams.n_layer) {
+    switch (hparams.n_layer()) {
         case 27: type = LLM_TYPE_16B; break;
         case 47: type = LLM_TYPE_30B_A3B; break;
         case 60: type = LLM_TYPE_236B; break;
@@ -191,8 +191,7 @@ llama_model_deepseek2::graph::graph(const llama_model & model, const llm_graph_p
 
     ggml_tensor * inp_out_ids = build_inp_out_ids();
 
-    int effective_n_layers = hparams.n_layer - hparams.nextn_predict_layers;
-    for (int il = 0; il < effective_n_layers; ++il) {
+    for (int il = 0; il < n_layer; ++il) {
         ggml_tensor * inpSA = inpL;
 
         // norm
@@ -366,7 +365,7 @@ llama_model_deepseek2::graph::graph(const llama_model & model, const llm_graph_p
                             Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il);
             }
         }
-        if (il == effective_n_layers - 1 && inp_out_ids) {
+        if (il == n_layer - 1 && inp_out_ids) {
             cur   = ggml_get_rows(ctx0, cur, inp_out_ids);
             inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
         }
