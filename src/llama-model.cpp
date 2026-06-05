@@ -1527,19 +1527,17 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
     }
 
     if (llama_supports_gpu_offload()) {
-        const int n_gpu = std::min(n_gpu_layers, int(hparams.n_layer));
+        const int max_backend_supported_layers = hparams.n_layer + 1;
+        const int max_offloadable_layers       = hparams.n_layer + 1;
+        const int n_gpu                        = std::min(n_gpu_layers, max_offloadable_layers);
+        const int n_repeating                  = n_gpu > 0 ? n_gpu - 1 : 0;
 
-        int n_repeating = n_gpu;
-        if (n_repeating > 0) {
+        if (n_gpu > 0) {
             LLAMA_LOG_INFO("%s: offloading output layer to GPU\n", __func__);
-            n_repeating--;
         }
         LLAMA_LOG_INFO("%s: offloading %d repeating layers to GPU\n", __func__, n_repeating);
 
-        const int max_backend_supported_layers = hparams.n_layer + 1;
-        const int max_offloadable_layers       = hparams.n_layer + 1;
-
-        LLAMA_LOG_INFO("%s: offloaded %d/%d layers to GPU\n", __func__, std::min(n_gpu_layers, max_offloadable_layers), max_backend_supported_layers);
+        LLAMA_LOG_INFO("%s: offloaded %d/%d layers to GPU\n", __func__, n_gpu, max_backend_supported_layers);
     }
 
     // print memory requirements per buffer type
@@ -1606,18 +1604,7 @@ const float * llama_model::tensor_split() const {
 }
 
 uint32_t llama_model::n_gpu_layers() const {
-    uint32_t n_gpu_layers = params.n_gpu_layers >= 0 ? params.n_gpu_layers : hparams.n_layer + 1;
-
-    const bool is_qwen35_native_mtp =
-        (arch == LLM_ARCH_QWEN35 || arch == LLM_ARCH_QWEN35MOE ||
-         arch == LLM_ARCH_QWEN35_MTP || arch == LLM_ARCH_QWEN35MOE_MTP) &&
-        hparams.nextn_predict_layers > 0;
-
-    if (is_qwen35_native_mtp && n_gpu_layers > hparams.n_layer) {
-        n_gpu_layers = hparams.n_layer;
-    }
-
-    return n_gpu_layers;
+    return params.n_gpu_layers >= 0 ? params.n_gpu_layers : hparams.n_layer + 1;
 }
 
 llama_split_mode llama_model::split_mode() const {

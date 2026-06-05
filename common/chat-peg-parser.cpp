@@ -218,6 +218,47 @@ std::string common_chat_peg_mapper::normalize_container_value(const std::string 
     return normalize_quotes_to_json(input);
 }
 
+static bool is_ascii_whitespace_only(const std::string & text) {
+    for (char c : text) {
+        if (c != ' ' && c != '\n' && c != '\r' && c != '\t') {
+            return false;
+        }
+    }
+    return true;
+}
+
+static void strip_leading_empty_reasoning_prefill(common_chat_msg & result) {
+    static const std::string kThinkOpen = "<think>";
+    static const std::string kThinkClose = "</think>";
+
+    if (!result.reasoning_content.empty() || result.content.compare(0, kThinkOpen.size(), kThinkOpen) != 0) {
+        return;
+    }
+
+    const size_t close_pos = result.content.find(kThinkClose, kThinkOpen.size());
+    if (close_pos == std::string::npos) {
+        return;
+    }
+
+    const size_t body_start = kThinkOpen.size();
+    const std::string body = result.content.substr(body_start, close_pos - body_start);
+    if (!is_ascii_whitespace_only(body)) {
+        return;
+    }
+
+    const size_t suffix_start = close_pos + kThinkClose.size();
+    size_t trim_start = suffix_start;
+    while (trim_start < result.content.size()) {
+        const char c = result.content[trim_start];
+        if (c != ' ' && c != '\n' && c != '\r' && c != '\t') {
+            break;
+        }
+        ++trim_start;
+    }
+
+    result.content.erase(0, trim_start);
+}
+
 void common_chat_peg_mapper::from_ast(const common_peg_ast_arena &    arena,
                                       const common_peg_parse_result & parse_result_arg) {
     arena.visit(parse_result_arg, [this](const common_peg_ast_node & node) { map(node); });
@@ -236,17 +277,12 @@ void common_chat_peg_mapper::from_ast(const common_peg_ast_arena &    arena,
 
     // Discard whitespace-only reasoning content (e.g. from <think></think> prefill)
     if (!result.reasoning_content.empty()) {
-        bool all_whitespace = true;
-        for (char c : result.reasoning_content) {
-            if (c != ' ' && c != '\n' && c != '\r' && c != '\t') {
-                all_whitespace = false;
-                break;
-            }
-        }
-        if (all_whitespace) {
+        if (is_ascii_whitespace_only(result.reasoning_content)) {
             result.reasoning_content.clear();
         }
     }
+
+    strip_leading_empty_reasoning_prefill(result);
 }
 
 void common_chat_peg_mapper::map(const common_peg_ast_node & node) {

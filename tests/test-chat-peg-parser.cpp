@@ -21,6 +21,7 @@ static void test_example_qwen3_non_coder(testing & t);
 static void test_command7_parser_compare(testing & t);
 static void test_prefix_tool_names(testing & t);
 static void test_tagged_peg_parser(testing & t);
+static void test_empty_reasoning_prefill_strip(testing & t);
 
 int main(int argc, char * argv[]) {
     testing t(std::cout);
@@ -39,6 +40,7 @@ int main(int argc, char * argv[]) {
     t.test("comparison", test_command7_parser_compare);
     t.test("prefix tool names", test_prefix_tool_names);
     t.test("tagged peg parser", test_tagged_peg_parser);
+    t.test("empty reasoning prefill strip", test_empty_reasoning_prefill_strip);
 
     return t.summary();
 }
@@ -979,5 +981,31 @@ static void test_tagged_peg_parser(testing & t) {
         t.assert_true("success", result.result.success());
         t.assert_equal("fun_pre should be '<function='", "<function=", result.tags["fun_pre"]);
         t.assert_equal("fun_post should be '>'", ">", result.tags["fun_post"]);
+    });
+}
+
+static void test_empty_reasoning_prefill_strip(testing & t) {
+    auto parser = build_chat_peg_parser([](common_chat_peg_builder & p) {
+        return p.sequence({ p.content(p.rest()), p.end() });
+    });
+
+    common_chat_parser_params params;
+    params.format = COMMON_CHAT_FORMAT_PEG_NATIVE;
+    params.reasoning_format = COMMON_REASONING_FORMAT_NONE;
+
+    t.test("strips empty qwen off-thinking prefill", [&](testing & t) {
+        const std::string input = "<think>\n\n</think>\n\n{\"name\":\"alice\"}";
+        const auto msg = common_chat_peg_parse(parser, input, /* is_partial = */ false, params);
+
+        t.assert_equal("reasoning empty", std::string(), msg.reasoning_content);
+        t.assert_equal("content stripped", std::string("{\"name\":\"alice\"}"), msg.content);
+    });
+
+    t.test("keeps non-empty reasoning in content when reasoning_format=none", [&](testing & t) {
+        const std::string input = "<think>\nplan\n</think>\n\n{\"name\":\"alice\"}";
+        const auto msg = common_chat_peg_parse(parser, input, /* is_partial = */ false, params);
+
+        t.assert_equal("reasoning empty", std::string(), msg.reasoning_content);
+        t.assert_equal("content preserved", input, msg.content);
     });
 }
