@@ -83,6 +83,7 @@
 #define TN_PATCH_EMBD_1    "v.patch_embd.weight.1"
 #define TN_PATCH_BIAS      "v.patch_embd.bias"
 #define TN_NORM_EMBD       "v.norm_embd.%s"
+#define TN_PATCH_NORM      "v.patch_norm.%d.%s"
 #define TN_ATTN_QKV        "%s.blk.%d.attn_qkv.%s"
 #define TN_ATTN_K          "%s.blk.%d.attn_k.%s"
 #define TN_ATTN_Q          "%s.blk.%d.attn_q.%s"
@@ -315,6 +316,8 @@ enum projector_type {
     PROJECTOR_TYPE_GEMMA3NA,
     PROJECTOR_TYPE_GEMMA4V,
     PROJECTOR_TYPE_GEMMA4A,
+    PROJECTOR_TYPE_GEMMA4UV,
+    PROJECTOR_TYPE_GEMMA4UA,
     PROJECTOR_TYPE_PHI4,
     PROJECTOR_TYPE_IDEFICS3,
     PROJECTOR_TYPE_PIXTRAL,
@@ -366,6 +369,8 @@ static std::map<projector_type, std::string> PROJECTOR_TYPE_NAMES = {
     { PROJECTOR_TYPE_GEMMA3NA,  "gemma3na"},
     { PROJECTOR_TYPE_GEMMA4V,   "gemma4v"},
     { PROJECTOR_TYPE_GEMMA4A,   "gemma4a"},
+    { PROJECTOR_TYPE_GEMMA4UV,  "gemma4uv"},
+    { PROJECTOR_TYPE_GEMMA4UA,  "gemma4ua"},
     { PROJECTOR_TYPE_PHI4,      "phi4"},
     { PROJECTOR_TYPE_IDEFICS3,  "idefics3"},
     { PROJECTOR_TYPE_PIXTRAL,   "pixtral"},

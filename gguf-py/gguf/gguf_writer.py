@@ -1110,6 +1110,9 @@ class GGUFWriter:
 
         self.add_string(Keys.Tokenizer.CHAT_TEMPLATE, value)
 
+    def add_suppress_tokens(self, tokens: Sequence[int]) -> None:
+        self.add_array(Keys.Tokenizer.SUPPRESS_TOKENS, tokens)
+
     def add_eot_token_id(self, id: int) -> None:
         self.add_uint32(Keys.Tokenizer.EOT_ID, id)
 

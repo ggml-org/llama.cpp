@@ -1153,7 +1153,24 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
         case GGML_OP_ROPE:
             return true;
         case GGML_OP_IM2COL:
-            return ggml_is_contiguous(op->src[1]) && op->src[1]->type == GGML_TYPE_F32 && (op->type == GGML_TYPE_F16 || op->type == GGML_TYPE_F32);
+            {
+                if (!(ggml_is_contiguous(op->src[1]) && op->src[1]->type == GGML_TYPE_F32 && (op->type == GGML_TYPE_F16 || op->type == GGML_TYPE_F32))) {
+                    return false;
+                }
+                // The Metal im2col kernel launches KH*KW threads per threadgroup
+                // (one per kernel element). If the conv kernel is large enough that
+                // KH*KW exceeds the Apple GPU threadgroup cap (1024), the kernel
+                // would hit a runtime GGML_ASSERT. Decline here so the op falls back
+                // to CPU instead of crashing. Affects large-kernel patch convs such
+                // as Gemma 4 unified vision (gemma4uv).
+                const bool is_2D = ggml_get_op_params_i32(op, 6) == 1;
+                const int64_t KW = op->src[0]->ne[0];
+                const int64_t KH = is_2D ? op->src[0]->ne[1] : 1;
+                if (KH*KW > 1024) {
+                    return false;
+                }
+                return true;
+            }
         case GGML_OP_CONV_2D:
             return ggml_is_contiguous(op->src[0]) &&
                    op->src[1]->type == GGML_TYPE_F32 &&

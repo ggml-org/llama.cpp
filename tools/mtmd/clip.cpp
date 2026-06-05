@@ -240,11 +240,11 @@ clip_graph::clip_graph(clip_ctx * ctx, const clip_image_f32 & img) :
         n_patches(n_patches_x * n_patches_y),
         n_embd(hparams.n_embd),
         n_head(hparams.n_head),
-        d_head(n_embd / n_head),
+        d_head(n_head > 0 ? n_embd / n_head : 0),
         n_layer(hparams.n_layer),
         n_mmproj_embd(clip_n_mmproj_embd(ctx)),
         eps(hparams.eps),
-        kq_scale(1.0f / sqrtf((float)d_head)),
+        kq_scale(d_head > 0 ? 1.0f / sqrtf((float)d_head) : 0.0f),
         flash_attn_type(ctx->flash_attn_type) {
     struct ggml_init_params params = {
         /*.mem_size   =*/ ctx->buf_compute_meta.size(),
@@ -859,6 +859,10 @@ static ggml_cgraph * clip_image_build_graph(clip_ctx * ctx, const clip_image_f32
             {
                 builder = std::make_unique<clip_graph_gemma4v>(ctx, img);
             } break;
+        case PROJECTOR_TYPE_GEMMA4UV:
+            {
+                builder = std::make_unique<clip_graph_gemma4uv>(ctx, img);
+            } break;
         case PROJECTOR_TYPE_PIXTRAL:
         case PROJECTOR_TYPE_LIGHTONOCR:
             {
@@ -954,6 +958,10 @@ static ggml_cgraph * clip_image_build_graph(clip_ctx * ctx, const clip_image_f32
         case PROJECTOR_TYPE_GEMMA4A:
             {
                 builder = std::make_unique<clip_graph_gemma4a>(ctx, img);
+            } break;
+        case PROJECTOR_TYPE_GEMMA4UA:
+            {
+                builder = std::make_unique<clip_graph_gemma4ua>(ctx, img);
             } break;
         case PROJECTOR_TYPE_GRANITE_SPEECH:
             {
@@ -1369,13 +1377,19 @@ struct clip_model_loader {
                     } break;
 
                 case PROJECTOR_TYPE_GEMMA4V:
+                case PROJECTOR_TYPE_GEMMA4UV:
                     {
                         hparams.rope_theta = 100.0f;
                         hparams.n_merge = 3; // pooling_kernel_size
                         hparams.image_resize_algo = RESIZE_ALGO_BILINEAR;
                         get_u32(KEY_PROJ_SCALE_FACTOR, hparams.n_merge, false);
+                        if (model.proj_type == PROJECTOR_TYPE_GEMMA4UV) {
+                            // for "unified" variant, we directly use a bigger patch size, because the "token merging" is done directly on conv layer
+                            hparams.patch_size = hparams.patch_size * hparams.n_merge;
+                            hparams.n_merge = 1;
+                        }
                         // @ngxson : the model performs quite poor with small images, we need to bump minimum image tokens to 40 to avoid that
-                        hparams.set_limit_image_tokens(252, 280);
+                        hparams.set_limit_image_tokens(40, 280);
                         hparams.set_warmup_n_tokens(256); // avoid OOM on warmup
                     } break;
 
@@ -1555,6 +1569,14 @@ struct clip_model_loader {
                         hparams.audio_n_fft            = 512;
                         hparams.audio_window_len       = 320;  // 20ms frame (NOT 25ms/400)
                         hparams.audio_hop_len          = 160;
+                    } break;
+                case PROJECTOR_TYPE_GEMMA4UA:
+                    {
+                        // Encoder-free: raw 16 kHz waveform chunked into 640-sample frames.
+                        hparams.audio_chunk_len   = 0;
+                        hparams.audio_sample_rate = 16000;
+                        hparams.eps               = 1e-6f;
+                        hparams.n_mel_bins        = 640;
                     } break;
                 case PROJECTOR_TYPE_GRANITE_SPEECH:
                     {
@@ -2063,6 +2085,16 @@ struct clip_model_loader {
                         }
                     }
                 } break;
+            case PROJECTOR_TYPE_GEMMA4UV:
+                {
+                    model.mm_input_proj_w = get_tensor(TN_MM_INP_PROJ);
+                    model.patch_norm_1_w = get_tensor(string_format(TN_PATCH_NORM, 1, "weight"));
+                    model.patch_norm_1_b = get_tensor(string_format(TN_PATCH_NORM, 1, "bias"));
+                    model.patch_norm_2_w = get_tensor(string_format(TN_PATCH_NORM, 2, "weight"));
+                    model.patch_norm_2_b = get_tensor(string_format(TN_PATCH_NORM, 2, "bias"));
+                    model.patch_norm_3_w = get_tensor(string_format(TN_PATCH_NORM, 3, "weight")); // pos_norm
+                    model.patch_norm_3_b = get_tensor(string_format(TN_PATCH_NORM, 3, "bias"));   // pos_norm
+                } break;
             case PROJECTOR_TYPE_GEMMA3NV:
                 {
                     model.mobilenet_stem_conv_w = get_tensor(TN_MNV5_STEM_CONV, false);
@@ -2473,6 +2505,10 @@ struct clip_model_loader {
                             };
                         }
                     }
+                } break;
+            case PROJECTOR_TYPE_GEMMA4UA:
+                {
+                    model.mm_input_proj_w = get_tensor(string_format(TN_A_MM_INP_PROJ, "weight"));
                 } break;
             case PROJECTOR_TYPE_LFM2A:
                 {
@@ -3177,6 +3213,7 @@ int clip_n_output_tokens(const struct clip_ctx * ctx, struct clip_image_f32 * im
             } break;
         case PROJECTOR_TYPE_GEMMA3:
         case PROJECTOR_TYPE_GEMMA4V:
+        case PROJECTOR_TYPE_GEMMA4UV:
         case PROJECTOR_TYPE_IDEFICS3:
         case PROJECTOR_TYPE_INTERNVL:
         case PROJECTOR_TYPE_NEMOTRON_V2_VL:
@@ -3300,6 +3337,10 @@ int clip_n_output_tokens(const struct clip_ctx * ctx, struct clip_image_f32 * im
                     n = (n - 1) / 2 + 1;
                 }
                 n_patches = n;
+            } break;
+        case PROJECTOR_TYPE_GEMMA4UA:
+            {
+                n_patches = img->nx;  // no downsampling: one token per raw waveform frame
             } break;
         case PROJECTOR_TYPE_GRANITE_SPEECH:
             {
@@ -3864,6 +3905,7 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
                 set_input_i32("patches", patches);
             } break;
         case PROJECTOR_TYPE_GEMMA4V:
+        case PROJECTOR_TYPE_GEMMA4UV:
             {
                 // set (col, row) patch positions for learned positional embedding
                 const int n_cols = image_size_width  / patch_size;
@@ -3917,6 +3959,7 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
         case PROJECTOR_TYPE_COGVLM:
         case PROJECTOR_TYPE_HUNYUANOCR:
         case PROJECTOR_TYPE_YASA2:
+        case PROJECTOR_TYPE_GEMMA4UA:
             {
                 // do nothing
             } break;
@@ -4221,6 +4264,9 @@ int clip_n_mmproj_embd(const struct clip_ctx * ctx) {
         case PROJECTOR_TYPE_GEMMA3NV:
             return ctx->model.mm_input_proj_w->ne[0];
         case PROJECTOR_TYPE_GEMMA4V:
+        case PROJECTOR_TYPE_GEMMA4UV:
+        case PROJECTOR_TYPE_GEMMA4A:
+        case PROJECTOR_TYPE_GEMMA4UA:
             return ctx->model.mm_input_proj_w->ne[1];
         case PROJECTOR_TYPE_IDEFICS3:
             return ctx->model.mm_fc_w->ne[1];
@@ -4255,8 +4301,6 @@ int clip_n_mmproj_embd(const struct clip_ctx * ctx) {
             return ctx->model.mm_fc_w->ne[1];
         case PROJECTOR_TYPE_LFM2A:
             return ctx->model.position_embeddings->ne[0];
-        case PROJECTOR_TYPE_GEMMA4A:
-            return ctx->model.hparams.projection_dim;
         case PROJECTOR_TYPE_GRANITE_SPEECH:
             return ctx->model.qf_proj_linear_w->ne[1];
         case PROJECTOR_TYPE_GLM4V:
