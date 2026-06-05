@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Any, Callable, Iterable, TYPE_CHECKING
 
 import torch
@@ -13,7 +14,7 @@ from .llama import LlamaModel
 from .mamba import Mamba2Model
 
 
-@ModelBase.register("GraniteForCausalLM", "GraniteSpeechForConditionalGeneration")
+@ModelBase.register("GraniteForCausalLM")
 class GraniteModel(LlamaModel):
     """Conversion for IBM's GraniteForCausalLM"""
     model_arch = gguf.MODEL_ARCH.GRANITE
@@ -46,11 +47,29 @@ class GraniteModel(LlamaModel):
             self.gguf_writer.add_logit_scale(logits_scale)
             logger.info("gguf: (granite) logits_scale = %s", logits_scale)
 
+        # If being used as the base for Granite4 Vision, add deepstack_layer_arr
+        if self.hparams.get("spatial_target_layers") or self.hparams.get("deepstack_layer_map"):
+            normalized_projector_map = Granite4VisionMmprojModel.get_normalized_projector_map(self.hparams)
+            deepstack_mapping_arr = [-1 for _ in range(self.block_count)] # Populate with -1 sentinels
+            for proj_idx, (_, llm_layer, _, _) in enumerate(normalized_projector_map):
+                # Skip the first projector which is handled as the base embedding
+                # stream like normal
+                if proj_idx == 0:
+                    continue
+                deepstack_mapping_arr[llm_layer] = proj_idx
+            self.gguf_writer.add_deepstack_mapping(deepstack_mapping_arr)
+
     @classmethod
     def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
         name, gen = item
-        if name.startswith("encoder."):
-            return None
+        # Skip multimodal tensors
+        if (
+            name.startswith(("encoder."))
+            or "image_" in name
+            or "layerwise_projectors" in name
+            or "spatial_projectors" in name
+        ):
+            return
         return super().filter_tensors(item)
 
 
@@ -241,7 +260,8 @@ class GraniteHybridModel(Mamba2Model, GraniteMoeModel):
         assert self.d_inner % d_head == 0, f"SSM inner size {self.d_inner} not a multiple of head dim {d_head}"
 
     def set_vocab(self):
-        self.hparams["pad_vocab_size_multiple"] = 8
+        # For models with no ssm layers, don't pad for mamba2
+        self.hparams["pad_vocab_size_multiple"] = 8 if self._ssm_layers else 1
         Mamba2Model.set_vocab(self)
 
 
@@ -325,4 +345,134 @@ class GraniteSpeechMmprojModel(MmprojModel):
             if data_torch.ndim == 3 and data_torch.shape[1] == 1:
                 data_torch = data_torch.squeeze(1)
 
+        yield from super().modify_tensors(data_torch, name, bid)
+
+
+@ModelBase.register("Granite4VisionForConditionalGeneration")
+class Granite4VisionMmprojModel(MmprojModel):
+    has_vision_encoder = True
+    has_audio_encoder = False
+
+    @staticmethod
+    def get_normalized_projector_map(global_config: dict) -> list[tuple[int, int, str, int]]:
+        """Normalize both deepstack and spatial projector maps to the form:
+        (vision_layer, llm_layer, <type>, type_index)
+
+        This is then used to populate the following mappings:
+        - vision_feature_layers (mmproj hparam): ordered list of all
+          vision_layer values where order corresponds with the order of the
+          stacked projector tensors
+          NOTE: Values may appear multiple times for spatial projectors
+        - tensor_prefix_map (mmproj tensors): mapping from tensor prefixes to
+          the index of the corresponding projector in the stacked tensors
+        - deepstack_layer_arr (llm hparam): per-text-layer array indicating
+          which input vision feature should be injected at that layer
+          (-1 if none)
+
+        Output: (vision_layer, llm_layer, <type>, type_index)
+        """
+        deepstack_map = global_config.get("deepstack_layer_map", [])  # [[vis_layer, llm_layer], ...]
+        spatial_layers = global_config.get("spatial_target_layers", [])  # [llm_layer, ...]
+        n_text_layers = global_config["text_config"]["num_hidden_layers"]
+        n_vision_layers = global_config["vision_config"]["num_hidden_layers"]
+        normalized_projector_map = []
+        if deepstack_map:
+            for deepstack_idx, (vision_layer, llm_layer) in enumerate(sorted(deepstack_map)):
+                if vision_layer < 0:
+                    vision_layer = n_vision_layers + vision_layer
+                if llm_layer < 0:
+                    llm_layer = n_text_layers + llm_layer
+                normalized_projector_map.append((vision_layer, llm_layer, "layerwise", deepstack_idx))
+        if spatial_layers:
+            spatial_vision_layer = global_config.get("spatial_vision_layer", -1)
+            if spatial_vision_layer < 0:
+                spatial_vision_layer = n_vision_layers + spatial_vision_layer
+            for spatial_idx, llm_layer in enumerate(spatial_layers):
+                normalized_projector_map.append((spatial_vision_layer, llm_layer, "spatial", spatial_idx))
+        return list(sorted(normalized_projector_map, key=(lambda entry: entry[1])))
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        normalized_projector_map = self.get_normalized_projector_map(self.global_config)
+        self._n_proj = len(normalized_projector_map)
+
+        self._tensor_prefix_map = {
+            f"model.{proj_type}_projectors.{type_idx}": proj_idx
+            for proj_idx, (_, _, proj_type, type_idx) in enumerate(normalized_projector_map)
+        }
+        self._vision_feature_layers = [vision_layer for vision_layer, _, _, _ in normalized_projector_map]
+        self._spatial_offsets = [
+            type_idx if proj_type == "spatial" else -1
+            for _, _, proj_type, type_idx in normalized_projector_map
+        ]
+
+    def set_gguf_parameters(self):
+        assert self.hparams_vision is not None
+        super().set_gguf_parameters()
+
+        self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.GRANITE4_VISION)
+
+        # SigLIP encoder hparams
+        self.gguf_writer.add_vision_attention_layernorm_eps(self.hparams.get("layer_norm_eps", 1e-6))
+        self.gguf_writer.add_vision_use_gelu(True)
+
+        # Preprocessor
+        self.gguf_writer.add_vision_preproc_image_size(self.hparams.get("image_size", 384))
+
+        # QFormer projector config
+        ds_rate = self.global_config["downsample_rate"]
+        ds_parts = ds_rate.split("/")
+        assert len(ds_parts) == 2, f"Invalid 'downsample_rate' value: {ds_rate}"
+        query_side, window_side = [int(p) for p in ds_parts]
+        self.gguf_writer.add_vision_projector_query_side(query_side)
+        self.gguf_writer.add_vision_projector_window_side(window_side)
+
+        # Set vision feature layers
+        self.gguf_writer.add_vision_feature_layers(self._vision_feature_layers)
+
+        # Set the spatial offests per projector
+        self.gguf_writer.add_vision_spatial_offsets(self._spatial_offsets)
+
+        # Add flattened image grind pinpoints (resolution candidates internally)
+        if pinpoints := self.global_config.get("image_grid_pinpoints"):
+            # Flatten with h, w -> w, h inversion
+            pinpoints = [val for h, w in pinpoints for val in (w, h)]
+            self.gguf_writer.add_vision_image_grid_pinpoints(pinpoints)
+
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, _ = item
+        if ("vision_model.head" in name or name.startswith("lm_head")):
+            return None
+        return super().filter_tensors(item)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+
+        # Detect projector tensors and bin them
+        projector_idx = None
+        for prefix, proj_idx in self._tensor_prefix_map.items():
+            if name.startswith(prefix):
+                projector_idx = proj_idx
+                break
+        if projector_idx is not None:
+            # If this projector tensor has a block id within the projector,
+            # alias the bid to projector_idx
+            #
+            # TODO: currently, none of the Granite 4 Vision models have
+            # projectors with multiple QFormer layers, so the `layer.{}` index
+            # is always 0. This allows us to simply map to a single `bid` that
+            # matches the projector index. If this changes, we'll need a
+            # convention that merges the two IDs.
+            id_matches = list(re.finditer(r"\.([0-9]+)\.", name))
+            all_ids = [int(m.group(1)) for m in id_matches]
+            assert len(all_ids) >= 1 and len(all_ids) <= 2, "Must have at least 1 and at most 2 ids in tensor names"
+            # If not layer id, just use the projector index
+            new_bid = projector_idx
+            if len(all_ids) == 1:
+                new_name = name[:id_matches[0].span(1)[0]] + str(new_bid) + name[id_matches[0].span(1)[1]:]
+            else: # len(all_ids) == 2
+                new_bid = projector_idx # + all_ids[1]
+                new_name = name[:id_matches[0].span(0)[0]] + name[id_matches[0].span(1)[1]:id_matches[1].span(1)[0]] + str(new_bid) + name[id_matches[1].span(1)[1]:]
+            yield from super().modify_tensors(data_torch, new_name, new_bid)
+            return
         yield from super().modify_tensors(data_torch, name, bid)

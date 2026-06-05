@@ -547,6 +547,8 @@ struct ggml_metal_rsets {
     // number of seconds since the last graph computation
     // keep the residency sets wired for that amount of time to avoid being collected by the OS
     int keep_alive_s;
+    int loops_per_s;
+    int time_per_loop_ms;
 
     // background heartbeat thread to keep the residency sets alive
     atomic_bool d_stop;
@@ -573,10 +575,13 @@ ggml_metal_rsets_t ggml_metal_rsets_init(void) {
         res->keep_alive_s = 3*60;
     }
 
+    res->time_per_loop_ms = 5;
+    res->loops_per_s = 1000/res->time_per_loop_ms;
+
     GGML_LOG_INFO("%s: creating a residency set collection (keep_alive = %d s)\n", __func__, res->keep_alive_s);
 
     atomic_store_explicit(&res->d_stop, false, memory_order_relaxed);
-    atomic_store_explicit(&res->d_loop, 2*res->keep_alive_s, memory_order_relaxed);
+    atomic_store_explicit(&res->d_loop, res->loops_per_s*res->keep_alive_s, memory_order_relaxed);
 
     res->d_group = dispatch_group_create();
 
@@ -599,8 +604,7 @@ ggml_metal_rsets_t ggml_metal_rsets_init(void) {
                       [res->lock unlock];
                   }
 
-                  // half a second
-                  usleep(500 * 1000);
+                  usleep(res->time_per_loop_ms * 1000);
               }
         }
 #endif
@@ -979,7 +983,7 @@ void ggml_metal_device_rsets_keep_alive(ggml_metal_device_t dev) {
         return;
     }
 
-    atomic_store_explicit(&dev->rsets->d_loop, 2*dev->rsets->keep_alive_s, memory_order_relaxed);
+    atomic_store_explicit(&dev->rsets->d_loop, dev->rsets->loops_per_s*dev->rsets->keep_alive_s, memory_order_relaxed);
 }
 
 struct ggml_metal_event {
@@ -1107,7 +1111,7 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
                 case GGML_GLU_OP_SWIGLU_OAI:
                 case GGML_GLU_OP_GEGLU_ERF:
                 case GGML_GLU_OP_GEGLU_QUICK:
-                    return ggml_is_contiguous_1(op->src[0]) && op->src[0]->type == GGML_TYPE_F32;
+                    return ggml_is_contiguous_1(op->src[0]) && (op->src[0]->type == GGML_TYPE_F32 || op->src[0]->type == GGML_TYPE_F16);
                default:
                     return false;
             }

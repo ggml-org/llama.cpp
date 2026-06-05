@@ -1244,6 +1244,8 @@ The `response_format` parameter supports both plain JSON output (e.g. `{"type": 
 
 `reasoning_format`: The reasoning format to be parsed. If set to `none`, it will output the raw generated text.
 
+`reasoning_control`: Arms realtime reasoning control for this completion so it can be ended early via `/v1/chat/completions/control`. Defaults to `false`.
+
 `generation_prompt`: The generation prompt that was prefilled in by the template. Prepended to model output before parsing.
 
 `parse_tool_calls`: Whether to parse the generated tool call.
@@ -1349,6 +1351,22 @@ The response also includes a standard `usage` object:
 The server supports parsing and returning reasoning via the `reasoning_content` field, similar to Deepseek API.
 
 Reasoning input (preserve reasoning in history) is also supported by some specific templates. For more details, please refer to [PR#18994](https://github.com/ggml-org/llama.cpp/pull/18994).
+
+### POST `/v1/chat/completions/control`: Control a running chat completion in real time
+
+Acts on an in-flight completion identified by its `id` (the `id` field streamed back by `/v1/chat/completions`). The request is processed in parallel with the SSE stream, so the client sends it while still reading tokens.
+
+*Options:*
+
+`id`: (Required) The chat completion id to act on. A completion that has already finished matches nothing and the call is a no-op.
+
+`action`: (Required) The control action to perform. Currently the only supported value is `reasoning_end`, which forces the end of the current reasoning block so the model moves on to the final answer. Requires `reasoning_control: true` on the original completion request.
+
+`model`: (Required in router mode) The model name, used to route the request to the right instance. Ignored in single model mode.
+
+**Response format**
+
+Returns a JSON object with a boolean `success` field, and an optional `message` field describing the reason when `success` is `false`.
 
 ### POST `/v1/responses`: OpenAI-compatible Responses API
 
@@ -1852,4 +1870,4 @@ You can specify default preferences for the web UI using `--ui-config <JSON conf
 
 > **Note:** The old flags `--webui-config` and `--webui-config-file` are deprecated but still work as aliases.
 
-You may find available preferences in [settings-config.ts](../ui/src/lib/constants/settings-config.ts).
+You may find available preferences in [settings-keys.ts](../ui/src/lib/constants/settings-keys.ts).

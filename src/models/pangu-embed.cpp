@@ -2,7 +2,8 @@
 
 void llama_model_pangu_embed::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
-    switch (hparams.n_layer) {
+
+    switch (hparams.n_layer()) {
         case 26: type = LLM_TYPE_1B; break; // openPangu-Embedded-1B-V1.1
         case 34: type = LLM_TYPE_7B; break; // openPangu-Embedded-7B-V1.1
         default: type = LLM_TYPE_UNKNOWN;

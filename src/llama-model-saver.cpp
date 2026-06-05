@@ -14,9 +14,6 @@
 
 bool llama_model_saver_supports_arch(llm_arch arch) {
     switch (arch) {
-        case LLM_ARCH_QWEN3NEXT:
-        case LLM_ARCH_QWEN35:
-        case LLM_ARCH_QWEN35MOE:
         case LLM_ARCH_PLAMO3:
         case LLM_ARCH_GEMMA3:
         case LLM_ARCH_GEMMA3N:
@@ -29,6 +26,7 @@ bool llama_model_saver_supports_arch(llm_arch arch) {
         case LLM_ARCH_APERTUS:
         case LLM_ARCH_MIMO2:
         case LLM_ARCH_STEP35:
+        case LLM_ARCH_MELLUM:
             return false;
         default:
             return true;
@@ -79,7 +77,7 @@ void llama_model_saver::add_kv(const enum llm_kv key, const char value) {
 template <typename Container>
 void llama_model_saver::add_kv(const enum llm_kv key, const Container & value, const bool per_layer) {
     GGML_ASSERT(model != nullptr || !per_layer);
-    const size_t n_values = per_layer ? size_t(model->hparams.n_layer) : value.size();
+    const size_t n_values = per_layer ? size_t(model->hparams.n_layer()) : value.size();
     GGML_ASSERT(n_values <= value.size());
 
     if (n_values == 0) {
@@ -106,6 +104,8 @@ void llama_model_saver::add_kv(const enum llm_kv key, const Container & value, c
         gguf_set_arr_data(gguf_ctx, llm_kv(key).c_str(), GGUF_TYPE_INT8, value.data(), n_values);
     } else if (std::is_same<typename Container::value_type, uint32_t>::value) {
         gguf_set_arr_data(gguf_ctx, llm_kv(key).c_str(), GGUF_TYPE_UINT32, value.data(), n_values);
+    } else if (std::is_same<typename Container::value_type, bool>::value) {
+        gguf_set_arr_data(gguf_ctx, llm_kv(key).c_str(), GGUF_TYPE_BOOL, value.data(), n_values);
     } else if (std::is_same<typename Container::value_type, int32_t>::value) {
         gguf_set_arr_data(gguf_ctx, llm_kv(key).c_str(), GGUF_TYPE_INT32, value.data(), n_values);
     } else if (std::is_same<typename Container::value_type, float>::value) {
@@ -206,7 +206,7 @@ void llama_model_saver::add_kv_from_model() {
     if (hparams.n_embd_out_impl > 0) {
         add_kv(LLM_KV_EMBEDDING_LENGTH_OUT,          hparams.n_embd_out_impl);
     }
-    add_kv(LLM_KV_BLOCK_COUNT,                       hparams.n_layer);
+    add_kv(LLM_KV_BLOCK_COUNT,                       hparams.n_layer_all);
     add_kv(LLM_KV_LEADING_DENSE_BLOCK_COUNT,         hparams.n_layer_dense_lead);
     add_kv(LLM_KV_FEED_FORWARD_LENGTH,               hparams.n_ff_arr, true);
     add_kv(LLM_KV_EXPERT_FEED_FORWARD_LENGTH,        hparams.n_ff_exp);
@@ -227,8 +227,9 @@ void llama_model_saver::add_kv_from_model() {
     add_kv(LLM_KV_EXPERT_GROUP_SCALE,                hparams.expert_group_scale);
     add_kv(LLM_KV_EXPERTS_PER_GROUP,                 hparams.n_group_experts);
     add_kv(LLM_KV_MOE_EVERY_N_LAYERS,                hparams.moe_every_n_layers);
-    add_kv(LLM_KV_NEXTN_PREDICT_LAYERS,              hparams.nextn_predict_layers);
+    add_kv(LLM_KV_NEXTN_PREDICT_LAYERS,              hparams.n_layer_nextn);
     add_kv(LLM_KV_NUM_DEEPSTACK_LAYERS,              hparams.n_deepstack_layers);
+    add_kv(LLM_KV_DEEPSTACK_MAPPING,                 hparams.deepstack_mapping_arr);
     add_kv(LLM_KV_POOLING_TYPE,                      uint32_t(hparams.pooling_type));
     add_kv(LLM_KV_LOGIT_SCALE,                       hparams.f_logit_scale);
     add_kv(LLM_KV_DECODER_START_TOKEN_ID,            hparams.dec_start_token_id);
@@ -244,7 +245,7 @@ void llama_model_saver::add_kv_from_model() {
     add_kv(LLM_KV_EMBEDDING_SCALE,                   hparams.f_embedding_scale);
     add_kv(LLM_KV_TOKEN_SHIFT_COUNT,                 hparams.token_shift_count);
     add_kv(LLM_KV_INTERLEAVE_MOE_LAYER_STEP,         hparams.n_moe_layer_step);
-    // add_kv(LLM_KV_FULL_ATTENTION_INTERVAL,           ???);
+    // add_kv(LLM_KV_FULL_ATTENTION_INTERVAL,           ???); // saved as LLM_KV_ATTENTION_RECURRENT_LAYERS instead
 
     add_kv(LLM_KV_ATTENTION_HEAD_COUNT,              hparams.n_head_arr, true);
     add_kv(LLM_KV_ATTENTION_HEAD_COUNT_KV,           hparams.n_head_kv_arr, true);
@@ -278,6 +279,7 @@ void llama_model_saver::add_kv_from_model() {
     add_kv(LLM_KV_ATTENTION_INDEXER_HEAD_COUNT,      hparams.indexer_n_head);
     add_kv(LLM_KV_ATTENTION_INDEXER_KEY_LENGTH,      hparams.indexer_head_size);
     add_kv(LLM_KV_ATTENTION_INDEXER_TOP_K,           hparams.indexer_top_k);
+    add_kv(LLM_KV_ATTENTION_RECURRENT_LAYERS,        hparams.is_recr_impl, true);
 
     const float rope_scaling_factor = hparams.rope_freq_scale_train == 1.0f ? 0.0f : 1.0f/hparams.rope_freq_scale_train;
 
