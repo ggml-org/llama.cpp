@@ -5662,11 +5662,234 @@ static ggml_backend_dev_t ggml_backend_sycl_reg_get_device(ggml_backend_reg_t re
     return ctx->devices[index];
 }
 
+// ==========================================================================
+// Tensor parallelism (--split-mode tensor) for the SYCL backend.
+//
+// The meta-backend invokes these three entry points via get_proc_address:
+//   * ggml_backend_sycl_comm_init             - one-time per-graph setup
+//   * ggml_backend_sycl_comm_allreduce_tensor - per-allreduce step
+//   * ggml_backend_sycl_comm_free             - tear-down
+//
+// For N=2 (dual-GPU), this is a degenerate ring allreduce with dual paths
+// chosen by tensor size:
+//
+//   * Small (nelem < 32K): FP32 direct memcpy + per-device ADD
+//     kernel. The kernel depends_on() its corresponding memcpy event
+//     so it doesn't read partial data. Both devices run in parallel.
+//
+//   * Large (nelem >= 32K): BF16-compressed. Each device compresses
+//     its FP32 partial to BF16 locally, cross-device memcpys
+//     to the peer (half the PCI bandwidth), where it is deompressed 
+//     and added into the local FP32 partial. 6 SYCL submissions per
+//     allreduce (2 compress + 2 memcpy + 2 decompress-add) vs the
+//     4 for the small path, but the bandwidth saving > 6 GB/s PCIe x 2
+//     dominates for larger tensors.
+//
+// Storage: A persistent uint8_t buffer per device, sized to
+// 4 * nelem bytes. Both paths reinterpret the same bytes (small path
+// as nelem floats; large path as outbox + inbox = 2*nelem uint16_t
+// each, using the full 4*nelem byte budget either way). Single
+// alloc+free per device keeps the SYCL pool's strict-LIFO invariant
+// trivial.
+//
+// For non-(N=2 FP32 contiguous) cases, comm_init or comm_allreduce_tensor
+// returns null/false, causing the meta-backend to use its generic
+// butterfly all-reduce fallback.
+// ==========================================================================
+
+struct ggml_backend_sycl_comm_context {
+    std::vector<ggml_backend_t> backends;
+    // ONE persistent per-device byte buffer, 4*nelem bytes.  Both the
+    // FP32 small-tensor path and the BF16 large-tensor path share it
+    // by reinterpreting.
+    std::unique_ptr<ggml_sycl_pool_alloc<uint8_t>> buf0;
+    std::unique_ptr<ggml_sycl_pool_alloc<uint8_t>> buf1;
+    int64_t buf_nelem = 0;
+};
+
+void * ggml_backend_sycl_comm_init(ggml_backend_t * backends, size_t n_backends) try {
+    for (size_t i = 0; i < n_backends; ++i) {
+        if (!ggml_backend_is_sycl(backends[i])) {
+            return nullptr;
+        }
+    }
+
+    // Initial version: N=2 only. For N!=2, returning null makes the
+    // meta-backend skip this backend-specific allreduce entirely.
+    if (n_backends != 2) {
+        return nullptr;
+    }
+
+    auto * ctx = new ggml_backend_sycl_comm_context;
+    ctx->backends.assign(backends, backends + n_backends);
+    auto * sctx0 = (ggml_backend_sycl_context *) backends[0]->context;
+    auto * sctx1 = (ggml_backend_sycl_context *) backends[1]->context;
+    ctx->buf0 = std::make_unique<ggml_sycl_pool_alloc<uint8_t>>(sctx0->pool());
+    ctx->buf1 = std::make_unique<ggml_sycl_pool_alloc<uint8_t>>(sctx1->pool());
+    return ctx;
+}
+catch (const sycl::exception &) { return nullptr; }
+catch (...)                     { return nullptr; }
+
+void ggml_backend_sycl_comm_free(void * comm_ctx_v) {
+    auto * comm_ctx = static_cast<ggml_backend_sycl_comm_context *>(comm_ctx_v);
+    if (comm_ctx == nullptr) {
+        return;
+    }
+
+    // Sync both per-device queues so the pool_alloc destructors don't
+    // return memory still in use by the last kernel.
+    if (comm_ctx->backends.size() == 2) {
+        auto * sctx0 = (ggml_backend_sycl_context *) comm_ctx->backends[0]->context;
+        auto * sctx1 = (ggml_backend_sycl_context *) comm_ctx->backends[1]->context;
+        try {
+            sctx0->stream()->wait();
+            sctx1->stream()->wait();
+        } catch (...) { /* best effort during shutdown */ }
+    }
+
+    delete comm_ctx;
+}
+
+bool ggml_backend_sycl_comm_allreduce_tensor(void * comm_ctx_v, struct ggml_tensor ** tensors) try {
+    if (comm_ctx_v == nullptr) {
+        return false;
+    }
+
+    auto * comm_ctx = static_cast<ggml_backend_sycl_comm_context *>(comm_ctx_v);
+    const size_t n_backends = comm_ctx->backends.size();
+
+    // Fast path: N=2, FP32, contiguous, matching shapes.
+    if (n_backends != 2) {
+        return false;
+    }
+    if (tensors[0]->type != GGML_TYPE_F32 || tensors[1]->type != GGML_TYPE_F32) {
+        return false;
+    }
+    if (!ggml_is_contiguous(tensors[0]) || !ggml_is_contiguous(tensors[1])) {
+        return false;
+    }
+    if (ggml_nelements(tensors[0]) != ggml_nelements(tensors[1])) {
+        return false;
+    }
+
+    const int64_t nelem  = ggml_nelements(tensors[0]);
+    const size_t  nbytes = ggml_nbytes(tensors[0]);
+    if (nelem == 0) {
+        return true;
+    }
+
+    auto * ctx0 = (ggml_backend_sycl_context *) comm_ctx->backends[0]->context;
+    auto * ctx1 = (ggml_backend_sycl_context *) comm_ctx->backends[1]->context;
+    queue_ptr q0 = ctx0->stream();
+    queue_ptr q1 = ctx1->stream();
+
+    // Grow per-device byte buffers if needed (4 * nelem bytes each).
+    if (comm_ctx->buf_nelem < nelem) {
+        comm_ctx->buf0->realloc(nelem * 4);
+        comm_ctx->buf1->realloc(nelem * 4);
+        comm_ctx->buf_nelem = nelem;
+    }
+    uint8_t * buf0 = comm_ctx->buf0->get();
+    uint8_t * buf1 = comm_ctx->buf1->get();
+
+    float * out0 = (float *) tensors[0]->data;
+    float * out1 = (float *) tensors[1]->data;
+
+    // BF16 threshold: above this, the PCIe savings from halving the
+    // cross-device bytes outweigh the 2 extra compress kernels.
+    // Below: stay on the FP32 fast path.  Threshold mirrors the CUDA
+    // NCCL allreduce pattern for n_backends=2.
+    static constexpr int64_t BF16_THRESHOLD = 32768;
+
+    if (nelem < BF16_THRESHOLD) {
+        // FP32 small path: 4 SYCL submissions per allreduce.
+        float * tmp0 = (float *) buf0;
+        float * tmp1 = (float *) buf1;
+
+        sycl::event e0 = q0->memcpy(tmp0, tensors[1]->data, nbytes);
+        sycl::event e1 = q1->memcpy(tmp1, tensors[0]->data, nbytes);
+
+        q0->submit([&](sycl::handler & h) {
+            h.depends_on(e0);
+            h.parallel_for(sycl::range<1>(nelem), [=](sycl::id<1> i) {
+                out0[i] += tmp0[i];
+            });
+        });
+        q1->submit([&](sycl::handler & h) {
+            h.depends_on(e1);
+            h.parallel_for(sycl::range<1>(nelem), [=](sycl::id<1> i) {
+                out1[i] += tmp1[i];
+            });
+        });
+        return true;
+    }
+
+    // BF16 large path: 6 SYCL submissions per allreduce, but the
+    // cross-device memcpy is HALF the bytes. Pure bit-shift
+    // conversion (no rounding) — matches ggml's truncating fp32->bf16.
+    uint16_t * outbox0 = (uint16_t *) buf0;
+    uint16_t * inbox0  = outbox0 + nelem;
+    uint16_t * outbox1 = (uint16_t *) buf1;
+    uint16_t * inbox1  = outbox1 + nelem;
+
+    // Phase A: compress each device's local partial in parallel.
+    sycl::event c0 = q0->parallel_for(sycl::range<1>(nelem), [=](sycl::id<1> i) {
+        outbox0[i] = (uint16_t) (sycl::bit_cast<uint32_t>(out0[i]) >> 16);
+    });
+
+    sycl::event c1 = q1->parallel_for(sycl::range<1>(nelem), [=](sycl::id<1> i) {
+        outbox1[i] = (uint16_t) (sycl::bit_cast<uint32_t>(out1[i]) >> 16);
+    });
+
+    // Phase B: cross-device memcpy of compressed bytes (half FP32 size).
+    const size_t bf16_bytes = nelem * sizeof(uint16_t);
+    sycl::event m0 = q0->submit([&](sycl::handler & h) {
+        h.depends_on(c1);
+        h.memcpy(inbox0, outbox1, bf16_bytes);
+    });
+
+    sycl::event m1 = q1->submit([&](sycl::handler & h) {
+        h.depends_on(c0);
+        h.memcpy(inbox1, outbox0, bf16_bytes);
+    });
+
+    // Phase C: decompress + add into local FP32 partial.
+    q0->submit([&](sycl::handler & h) {
+        h.depends_on(m0);
+        h.parallel_for(sycl::range<1>(nelem), [=](sycl::id<1> i) {
+            out0[i] += sycl::bit_cast<float>(((uint32_t) inbox0[i]) << 16);
+        });
+    });
+
+    q1->submit([&](sycl::handler & h) {
+        h.depends_on(m1);
+        h.parallel_for(sycl::range<1>(nelem), [=](sycl::id<1> i) {
+            out1[i] += sycl::bit_cast<float>(((uint32_t) inbox1[i]) << 16);
+        });
+    });
+
+    return true;
+}
+catch (const sycl::exception &) { return false; }
+catch (...)                     { return false; }
+
 static void *ggml_backend_sycl_reg_get_proc_address(ggml_backend_reg_t reg, const char *name) {
     GGML_UNUSED(reg);
 
     if (strcmp(name, "ggml_backend_split_buffer_type") == 0) {
         return (void *)ggml_backend_sycl_split_buffer_type;
+    }
+
+    // Tensor parallelism (--split-mode tensor) entry points.
+    if (strcmp(name, "ggml_backend_comm_init") == 0) {
+        return (void *)ggml_backend_sycl_comm_init;
+    }
+    if (strcmp(name, "ggml_backend_comm_free") == 0) {
+        return (void *)ggml_backend_sycl_comm_free;
+    }
+    if (strcmp(name, "ggml_backend_comm_allreduce_tensor") == 0) {
+        return (void *)ggml_backend_sycl_comm_allreduce_tensor;
     }
 
     // SYCL doesn't support registering host memory, left here for reference
