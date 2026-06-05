@@ -25,8 +25,7 @@ void llama_model_exaone_moe::load_arch_hparams(llama_model_loader & ml) {
 
     switch (hparams.n_layer()) {
         case 32: type = LLM_TYPE_30B_A3B; break;
-        case 48:
-        case 49: type = LLM_TYPE_235B_A22B; break;
+        case 48: type = LLM_TYPE_235B_A22B; break;
         default: type = LLM_TYPE_UNKNOWN;
     }
 }

@@ -24,9 +24,9 @@ void llama_model_glm4_moe::load_arch_hparams(llama_model_loader & ml) {
     GGML_ASSERT(hparams.n_layer_nextn < hparams.n_layer_all && "n_layer_nextn must be < n_layer_impl");
 
     switch (hparams.n_layer()) {
-        case 47: type = LLM_TYPE_106B_A12B; break; // GLM-4.5-Air (46 layers + 1 NextN layer)
+        case 46: type = LLM_TYPE_106B_A12B; break; // GLM-4.5-Air
         case 48: type = LLM_TYPE_102B_A12B; break; // Solar Open
-        case 93: type = LLM_TYPE_355B_A32B; break; // GLM-4.5 (92 layers + 1 NextN layer)
+        case 92: type = LLM_TYPE_355B_A32B; break; // GLM-4.5
         default: type = LLM_TYPE_UNKNOWN;
     }
 }
