@@ -184,17 +184,7 @@ struct common_chat_msg_spans {
 struct common_chat_msg_delimiter {
     common_chat_role role = COMMON_CHAT_ROLE_UNKNOWN;
     std::string      delimiter;
-};
-
-struct common_chat_msg_token_delimiter {
-    common_chat_role role = COMMON_CHAT_ROLE_UNKNOWN;
     llama_tokens     tokens;
-};
-
-struct common_chat_msg_token_delimiters {
-    std::vector<common_chat_msg_token_delimiter> delimiters;
-
-    common_chat_msg_spans split(const llama_tokens & tokens) const;
 };
 
 struct common_chat_msg_delimiters {
@@ -204,8 +194,12 @@ struct common_chat_msg_delimiters {
     common_chat_msg_delimiters(std::initializer_list<common_chat_msg_delimiter> delims) : delimiters(delims) {}
 
     void add(common_chat_role role, const std::string & delimiter) {
-        delimiters.push_back({ role, delimiter });
+        delimiters.push_back({ role, delimiter, {} });
     }
+
+    void tokenize(const llama_vocab * vocab);
+
+    common_chat_msg_spans split(const llama_tokens & tokens) const;
 
     nlohmann::ordered_json to_json() const;
 };
@@ -381,4 +375,4 @@ struct common_chat_prompt_preset {
 
 common_chat_prompt_preset common_chat_get_asr_prompt(const common_chat_templates * chat_templates);
 
-common_chat_msg_token_delimiters common_chat_msg_token_delimiters_parse(const llama_vocab * vocab, const nlohmann::ordered_json & delimiters);
+common_chat_msg_delimiters common_chat_msg_delimiters_parse(const nlohmann::ordered_json & delimiters);

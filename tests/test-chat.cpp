@@ -1567,14 +1567,14 @@ static void test_msg_token_delimiters_split() {
 
     // Delimiters that share a leading token, distinguished by the second token,
     // to exercise the per-position token matching.
-    const common_chat_msg_token_delimiters delims = {
-        { { COMMON_CHAT_ROLE_USER,      { 10, 11 } },
-          { COMMON_CHAT_ROLE_ASSISTANT, { 10, 12 } } }
+    const common_chat_msg_delimiters delims = {
+        { { COMMON_CHAT_ROLE_USER,      "", { 10, 11 } },
+          { COMMON_CHAT_ROLE_ASSISTANT, "", { 10, 12 } } }
     };
 
     // Empty inputs
-    assert_equals<size_t>(0, common_chat_msg_token_delimiters{}.split({}).spans.size());
-    assert_equals<size_t>(0, common_chat_msg_token_delimiters{}.split({ 10, 11 }).spans.size());
+    assert_equals<size_t>(0, common_chat_msg_delimiters{}.split({}).spans.size());
+    assert_equals<size_t>(0, common_chat_msg_delimiters{}.split({ 10, 11 }).spans.size());
     assert_equals<size_t>(0, delims.split({}).spans.size());
 
     // No delimiters match -> no spans
@@ -1607,9 +1607,10 @@ static void test_msg_token_delimiters_split() {
         assert_equals<size_t>(9, spans[2].pos);
         assert_equals<size_t>(4, spans[2].len);
 
-        // last_user() returns the most recent user span
-        assert_equals(COMMON_CHAT_ROLE_USER, result.last_user().role);
-        assert_equals<size_t>(9, result.last_user().pos);
+        // is_user_start() is true at the token position where a user span begins
+        assert_equals(true,  result.is_user_start(0));
+        assert_equals(false, result.is_user_start(4));  // assistant span
+        assert_equals(true,  result.is_user_start(9));
     }
 
     // Content before the first delimiter is not captured as a span

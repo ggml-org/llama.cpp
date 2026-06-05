@@ -616,7 +616,8 @@ task_params server_task::params_from_json_cmpl(
     }
 
     // message spans for checkpointing
-    auto delimiters = common_chat_msg_token_delimiters_parse(vocab, json_value(data, "message_delimiters", json::array()));
+    auto delimiters = common_chat_msg_delimiters_parse(json_value(data, "message_delimiters", json::array()));
+    delimiters.tokenize(vocab);
     params.message_spans = delimiters.split(tokens);
 
     if (params.n_cmpl > params_base.n_parallel) {

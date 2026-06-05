@@ -120,8 +120,8 @@ json common_chat_msg_delimiters::to_json() const {
     return result;
 }
 
-common_chat_msg_token_delimiters common_chat_msg_token_delimiters_parse(const llama_vocab * vocab, const json & delimiters) {
-    common_chat_msg_token_delimiters result;
+common_chat_msg_delimiters common_chat_msg_delimiters_parse(const json & delimiters) {
+    common_chat_msg_delimiters result;
 
     if (!delimiters.is_array()) {
         return result;
@@ -132,20 +132,23 @@ common_chat_msg_token_delimiters common_chat_msg_token_delimiters_parse(const ll
         if (!d.is_object()) {
             continue;
         }
-        auto tokens = common_tokenize(vocab, d.value("delimiter", std::string()), false, true);
-        if (tokens.empty()) {
-            continue;
-        }
         result.delimiters.push_back({
             common_chat_role_from_string(d.value("role", std::string())),
-            std::move(tokens),
+            d.value("delimiter", std::string()),
+            {},
         });
     }
 
     return result;
 }
 
-common_chat_msg_spans common_chat_msg_token_delimiters::split(const llama_tokens & tokens) const {
+void common_chat_msg_delimiters::tokenize(const llama_vocab * vocab) {
+    for (auto & d : delimiters) {
+        d.tokens = common_tokenize(vocab, d.delimiter, false, true);
+    }
+}
+
+common_chat_msg_spans common_chat_msg_delimiters::split(const llama_tokens & tokens) const {
     std::vector<std::pair<common_chat_role, size_t>> matches;
     for (size_t i = 0; i < tokens.size(); i++) {
         if (tokens[i] == LLAMA_TOKEN_NULL) {
