@@ -264,6 +264,7 @@ class Keys:
         ADD_PREFIX           = "tokenizer.ggml.add_space_prefix"
         REMOVE_EXTRA_WS      = "tokenizer.ggml.remove_extra_whitespaces"
         PRECOMPILED_CHARSMAP = "tokenizer.ggml.precompiled_charsmap"
+        SUPPRESS_TOKENS      = "tokenizer.ggml.suppress_tokens"
         HF_JSON              = "tokenizer.huggingface.json"
         RWKV                 = "tokenizer.rwkv.world"
         CHAT_TEMPLATE        = "tokenizer.chat_template"
@@ -731,6 +732,7 @@ class MODEL_TENSOR(IntEnum):
     V_ENC_EMBD_CLS       = auto()
     V_ENC_EMBD_PATCH     = auto()
     V_ENC_EMBD_NORM      = auto()
+    V_ENC_EMBD_PATCH_NORM = auto() # allow multiple norms in the same embd, e.g. for gemma4u
     V_ENC_EMBD_POS       = auto()
     V_ENC_INPUT_NORM     = auto()
     V_ENC_ATTN_QKV       = auto()
@@ -1250,6 +1252,7 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.V_ENC_EMBD_CLS:            "v.class_embd",
     MODEL_TENSOR.V_ENC_EMBD_PATCH:          "v.patch_embd",
     MODEL_TENSOR.V_ENC_EMBD_NORM:           "v.norm_embd",
+    MODEL_TENSOR.V_ENC_EMBD_PATCH_NORM:     "v.patch_norm.{bid}",
     MODEL_TENSOR.V_ENC_EMBD_POS:            "v.position_embd",
     MODEL_TENSOR.V_ENC_ATTN_QKV:            "v.blk.{bid}.attn_qkv",
     MODEL_TENSOR.V_ENC_ATTN_Q:              "v.blk.{bid}.attn_q",
@@ -1431,6 +1434,7 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.V_ENC_EMBD_CLS,
         MODEL_TENSOR.V_ENC_EMBD_PATCH,
         MODEL_TENSOR.V_ENC_EMBD_NORM,
+        MODEL_TENSOR.V_ENC_EMBD_PATCH_NORM,
         MODEL_TENSOR.V_ENC_EMBD_POS,
         MODEL_TENSOR.V_ENC_EMBD_IMGNL,
         MODEL_TENSOR.V_ENC_EMBD_VSEP,
@@ -4346,6 +4350,8 @@ class VisionProjectorType:
     GEMMA3NA = "gemma3na"
     GEMMA4V = "gemma4v"
     GEMMA4A = "gemma4a"
+    GEMMA4UV = "gemma4uv" # "unified" variant
+    GEMMA4UA = "gemma4ua" # "unified" variant
     PHI4 = "phi4"
     IDEFICS3 = "idefics3"
     PIXTRAL = "pixtral"

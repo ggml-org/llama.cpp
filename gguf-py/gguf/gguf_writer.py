@@ -1113,6 +1113,9 @@ class GGUFWriter:
 
         self.add_string(Keys.Tokenizer.CHAT_TEMPLATE, value)
 
+    def add_suppress_tokens(self, tokens: Sequence[int]) -> None:
+        self.add_array(Keys.Tokenizer.SUPPRESS_TOKENS, tokens)
+
     def add_normalizer_lowercase(self, value: bool) -> None:
         self.add_bool(Keys.Tokenizer.NORMALIZER_LOWERCASE, value)
 

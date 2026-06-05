@@ -2,10 +2,23 @@ diagnostic(off, subgroup_uniformity);
 enable f16;
 enable subgroups;
 
-#ifdef KV_F32
-#define KV_TYPE f32
+#define BYTE_HELPERS
+#include "common_decls.tmpl"
+
+#ifdef K_F32
+#define K_TYPE f32
+#elif defined(K_Q4_0) || defined(K_Q8_0)
+#define K_TYPE u32
 #else
-#define KV_TYPE f16
+#define K_TYPE f16
+#endif
+
+#ifdef V_F32
+#define V_TYPE f32
+#elif defined(V_Q4_0) || defined(V_Q8_0)
+#define V_TYPE u32
+#else
+#define V_TYPE f16
 #endif
 
 #ifdef Q_F16
@@ -31,28 +44,6 @@ enable subgroups;
 #endif
 
 #define KV_BLOCKS (KV_TILE / KV_GRANULARITY)
-
-#define BLOCK_SIZE 32
-#define BLOCKS_K ((HEAD_DIM_QK + BLOCK_SIZE - 1) / BLOCK_SIZE)
-#define BLOCKS_V ((HEAD_DIM_V + BLOCK_SIZE - 1) / BLOCK_SIZE)
-#if defined(KV_Q4_0)
-#define NQ 16
-#define F16_PER_BLOCK 9
-#define WEIGHTS_PER_F16 4
-#elif defined(KV_Q8_0)
-#define NQ 8
-#define F16_PER_BLOCK 17
-#define WEIGHTS_PER_F16 2
-#endif
-#define F16_PER_THREAD (NQ / WEIGHTS_PER_F16)
-
-fn get_byte(value: u32, index: u32) -> u32 {
-    return (value >> (index * 8)) & 0xFF;
-}
-
-fn get_byte_i32(value: u32, index: u32) -> i32 {
-    return bitcast<i32>(((value >> (index * 8)) & 0xFF) << 24) >> 24;
-}
 
 struct Params {
     offset_q: u32,
@@ -103,22 +94,22 @@ struct Params {
 
 @group(0) @binding(0) var<storage, read_write> Q: array<Q_TYPE>;
 #ifdef KV_OVERLAP
-#if defined(KV_Q4_0) || defined(KV_Q8_0)
-@group(0) @binding(1) var<storage, read_write> K: array<KV_TYPE>;
+#if defined(K_Q4_0) || defined(K_Q8_0)
+@group(0) @binding(1) var<storage, read_write> K: array<K_TYPE>;
 #else
-@group(0) @binding(1) var<storage, read_write> K: array<vec4<KV_TYPE>>;
+@group(0) @binding(1) var<storage, read_write> K: array<vec4<K_TYPE>>;
 #endif
 #define V K
 #else
-#if defined(KV_Q4_0) || defined(KV_Q8_0)
-@group(0) @binding(1) var<storage, read_write> K: array<KV_TYPE>;
+#if defined(K_Q4_0) || defined(K_Q8_0)
+@group(0) @binding(1) var<storage, read_write> K: array<K_TYPE>;
 #else
-@group(0) @binding(1) var<storage, read_write> K: array<vec4<KV_TYPE>>;
+@group(0) @binding(1) var<storage, read_write> K: array<vec4<K_TYPE>>;
 #endif
-#if defined(KV_Q4_0) || defined(KV_Q8_0)
-@group(0) @binding(2) var<storage, read_write> V: array<KV_TYPE>;
+#if defined(V_Q4_0) || defined(V_Q8_0)
+@group(0) @binding(2) var<storage, read_write> V: array<V_TYPE>;
 #else
-@group(0) @binding(2) var<storage, read_write> V: array<vec4<KV_TYPE>>;
+@group(0) @binding(2) var<storage, read_write> V: array<vec4<V_TYPE>>;
 #endif
 #endif
 #if defined(MASK) && defined(SINKS)
@@ -244,6 +235,49 @@ fn calc_softmax_term(kv_idx: u32, slope: f32, has_bias: bool, apply_mask: bool) 
     return v;
 }
 
+#ifndef KV_DIRECT
+#define QUANT_SHMEM kv_shmem
+#define QUANT_OUT_TYPE f32
+#include "quant_inner_loops.tmpl"
+#include "flash_attn_quant_staging.tmpl"
+
+#if !defined(K_Q4_0) && !defined(K_Q8_0)
+fn load_k_tile_block(local_x: u32, kv_count: u32, kv_tile: u32, k_head_offset: u32) {
+    for (var elem_idx = local_x * 4u; elem_idx < KV_TILE * HEAD_DIM_QK; elem_idx += WG_SIZE * 4u) {
+        let k_row = elem_idx / HEAD_DIM_QK;
+        let k_col = elem_idx % HEAD_DIM_QK;
+        let global_k_row = kv_tile + k_row;
+        let global_k_row_offset = k_head_offset + global_k_row * params.stride_k1;
+        let in_bounds = global_k_row < params.seq_len_kv && (k_col + 3u) < HEAD_DIM_QK;
+        let vec_idx = (global_k_row_offset + k_col) >> 2u;
+        let k4 = select(vec4<K_TYPE>(0.0), K[vec_idx], in_bounds);
+        kv_shmem[elem_idx + 0u] = f32(k4.x);
+        kv_shmem[elem_idx + 1u] = f32(k4.y);
+        kv_shmem[elem_idx + 2u] = f32(k4.z);
+        kv_shmem[elem_idx + 3u] = f32(k4.w);
+    }
+}
+#endif
+
+#if !defined(V_Q4_0) && !defined(V_Q8_0)
+fn load_v_tile_block(local_x: u32, kv_count: u32, kv_tile: u32, v_head_offset: u32) {
+    for (var elem_idx = local_x * 4u; elem_idx < KV_TILE * HEAD_DIM_V; elem_idx += WG_SIZE * 4u) {
+        let v_row = elem_idx / HEAD_DIM_V;
+        let v_col = elem_idx % HEAD_DIM_V;
+        let global_v_row = kv_tile + v_row;
+        let global_v_row_offset = v_head_offset + global_v_row * params.stride_v1;
+        let in_bounds = global_v_row < params.seq_len_kv && (v_col + 3u) < HEAD_DIM_V;
+        let vec_idx = (global_v_row_offset + v_col) >> 2u;
+        let v4 = select(vec4<V_TYPE>(0.0), V[vec_idx], in_bounds);
+        kv_shmem[elem_idx + 0u] = f32(v4.x);
+        kv_shmem[elem_idx + 1u] = f32(v4.y);
+        kv_shmem[elem_idx + 2u] = f32(v4.z);
+        kv_shmem[elem_idx + 3u] = f32(v4.w);
+    }
+}
+#endif
+#endif
+
 @compute @workgroup_size(WG_SIZE)
 fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
     @builtin(local_invocation_id) local_id: vec3<u32>,
@@ -308,6 +342,7 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
     }
 
     for (var kv_tile = iwg * KV_TILE; kv_tile < params.seq_len_kv; kv_tile += KV_TILE * params.nwg) {
+        let kv_count = min(KV_TILE, params.seq_len_kv - kv_tile);
 #ifdef BLK
         let q_blk = q_row_start;
         let kv_blk = kv_tile / KV_TILE;
@@ -324,76 +359,8 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
         }
 
       // load k tile into shared memory
-#if defined(KV_Q4_0)
-      for (var elem_idx = local_id.x * NQ; elem_idx < KV_TILE * HEAD_DIM_QK; elem_idx += WG_SIZE * NQ) {
-          let blck_idx = elem_idx / BLOCK_SIZE;
-          let block_offset = (elem_idx % BLOCK_SIZE) / WEIGHTS_PER_F16;
-          let k_row = blck_idx / BLOCKS_K;
-          let global_k_row = kv_tile + k_row;
-          let block_k = blck_idx % BLOCKS_K;
-          let row_offset = k_row * HEAD_DIM_QK;
-
-          if (global_k_row < params.seq_len_kv) {
-              let global_block_idx = k_head_offset + global_k_row * params.stride_k1 + block_k;
-              let base_idx = global_block_idx * F16_PER_BLOCK;
-              let d = K[base_idx];
-              for (var j = 0u; j < F16_PER_THREAD; j += 2) {
-                  let q_0 = K[base_idx + 1u + block_offset + j];
-                  let q_1 = K[base_idx + 1u + block_offset + j + 1];
-                  let q_packed = bitcast<u32>(vec2(q_0, q_1));
-                  for (var k = 0u; k < 4u; k++) {
-                      let q_byte = get_byte(q_packed, k);
-                      let q_hi = (f32((q_byte >> 4) & 0xF) - 8.0) * f32(d);
-                      let q_lo = (f32(q_byte & 0xF) - 8.0) * f32(d);
-                      let idx = block_k * BLOCK_SIZE + block_offset * 2u + j * 2u + k;
-                      kv_shmem[row_offset + idx] = q_lo;
-                      kv_shmem[row_offset + idx + 16u] = q_hi;
-                  }
-              }
-          }
-      }
-#elif defined(KV_Q8_0)
-      for (var elem_idx = local_id.x * NQ; elem_idx < KV_TILE * HEAD_DIM_QK; elem_idx += WG_SIZE * NQ) {
-          let blck_idx = elem_idx / BLOCK_SIZE;
-          let block_offset = (elem_idx % BLOCK_SIZE) / WEIGHTS_PER_F16;
-          let k_row = blck_idx / BLOCKS_K;
-          let global_k_row = kv_tile + k_row;
-          let block_k = blck_idx % BLOCKS_K;
-          let row_offset = k_row * HEAD_DIM_QK;
-
-          if (global_k_row < params.seq_len_kv) {
-              let global_block_idx = k_head_offset + global_k_row * params.stride_k1 + block_k;
-              let base_idx = global_block_idx * F16_PER_BLOCK;
-              let d = K[base_idx];
-              for (var j = 0u; j < F16_PER_THREAD; j += 2) {
-                  let q_0 = K[base_idx + 1u + block_offset + j];
-                  let q_1 = K[base_idx + 1u + block_offset + j + 1];
-                  let q_packed = bitcast<u32>(vec2(q_0, q_1));
-                  for (var k = 0u; k < 4u; k++) {
-                      let q_byte = get_byte_i32(q_packed, k);
-                      let q_val = f32(q_byte) * f32(d);
-                      let idx = block_k * BLOCK_SIZE + block_offset * 2u + j * 2u + k;
-                      kv_shmem[row_offset + idx] = q_val;
-                  }
-              }
-          }
-      }
-#elif defined(KV_DIRECT)
-      // Direct global loads for KV
-#else
-      for (var elem_idx = local_id.x * 4u; elem_idx < KV_TILE * HEAD_DIM_QK; elem_idx += WG_SIZE * 4u) {
-          let k_row = elem_idx / HEAD_DIM_QK;
-          let k_col = elem_idx % HEAD_DIM_QK;
-          let global_k_row = kv_tile + k_row;
-          let global_k_row_offset = k_head_offset + global_k_row * params.stride_k1;
-          let in_bounds = global_k_row < params.seq_len_kv && (k_col + 3u) < HEAD_DIM_QK;
-          let vec_idx = (global_k_row_offset + k_col) >> 2u;
-          let k4 = select(vec4<KV_TYPE>(0.0), K[vec_idx], in_bounds);
-          kv_shmem[elem_idx + 0u] = f32(k4.x);
-          kv_shmem[elem_idx + 1u] = f32(k4.y);
-          kv_shmem[elem_idx + 2u] = f32(k4.z);
-          kv_shmem[elem_idx + 3u] = f32(k4.w);
-      }
+#ifndef KV_DIRECT
+      load_k_tile_block(local_id.x, kv_count, kv_tile, k_head_offset);
 #endif
 
       workgroupBarrier();
@@ -510,76 +477,8 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
       }
 
       // load v tile into shared memory
-#if defined(KV_Q4_0)
-      for (var elem_idx = local_id.x * NQ; elem_idx < KV_TILE * HEAD_DIM_V; elem_idx += WG_SIZE * NQ) {
-          let blck_idx = elem_idx / BLOCK_SIZE;
-          let block_offset = (elem_idx % BLOCK_SIZE) / WEIGHTS_PER_F16;
-          let v_row = blck_idx / BLOCKS_V;
-          let global_v_row = kv_tile + v_row;
-          let block_k = blck_idx % BLOCKS_V;
-          let row_offset = v_row * HEAD_DIM_V;
-
-          if (global_v_row < params.seq_len_kv) {
-              let global_block_idx = v_head_offset + global_v_row * params.stride_v1 + block_k;
-              let base_idx = global_block_idx * F16_PER_BLOCK;
-              let d = V[base_idx];
-              for (var j = 0u; j < F16_PER_THREAD; j += 2) {
-                  let q_0 = V[base_idx + 1u + block_offset + j];
-                  let q_1 = V[base_idx + 1u + block_offset + j + 1];
-                  let q_packed = bitcast<u32>(vec2(q_0, q_1));
-                  for (var k = 0u; k < 4u; k++) {
-                      let q_byte = get_byte(q_packed, k);
-                      let q_hi = (f32((q_byte >> 4) & 0xF) - 8.0) * f32(d);
-                      let q_lo = (f32(q_byte & 0xF) - 8.0) * f32(d);
-                      let idx = block_k * BLOCK_SIZE + block_offset * 2u + j * 2u + k;
-                      kv_shmem[row_offset + idx] = q_lo;
-                      kv_shmem[row_offset + idx + 16u] = q_hi;
-                  }
-              }
-          }
-      }
-#elif defined(KV_Q8_0)
-      for (var elem_idx = local_id.x * NQ; elem_idx < KV_TILE * HEAD_DIM_V; elem_idx += WG_SIZE * NQ) {
-          let blck_idx = elem_idx / BLOCK_SIZE;
-          let block_offset = (elem_idx % BLOCK_SIZE) / WEIGHTS_PER_F16;
-          let v_row = blck_idx / BLOCKS_V;
-          let global_v_row = kv_tile + v_row;
-          let block_k = blck_idx % BLOCKS_V;
-          let row_offset = v_row * HEAD_DIM_V;
-
-          if (global_v_row < params.seq_len_kv) {
-              let global_block_idx = v_head_offset + global_v_row * params.stride_v1 + block_k;
-              let base_idx = global_block_idx * F16_PER_BLOCK;
-              let d = V[base_idx];
-              for (var j = 0u; j < F16_PER_THREAD; j += 2) {
-                  let q_0 = V[base_idx + 1u + block_offset + j];
-                  let q_1 = V[base_idx + 1u + block_offset + j + 1];
-                  let q_packed = bitcast<u32>(vec2(q_0, q_1));
-                  for (var k = 0u; k < 4u; k++) {
-                      let q_byte = get_byte_i32(q_packed, k);
-                      let q_val = f32(q_byte) * f32(d);
-                      let idx = block_k * BLOCK_SIZE + block_offset * 2u + j * 2u + k;
-                      kv_shmem[row_offset + idx] = q_val;
-                  }
-              }
-          }
-      }
-#elif defined(KV_DIRECT)
-      // Direct global loads for KV
-#else
-      for (var elem_idx = local_id.x * 4u; elem_idx < KV_TILE * HEAD_DIM_V; elem_idx += WG_SIZE * 4u) {
-          let v_row = elem_idx / HEAD_DIM_V;
-          let v_col = elem_idx % HEAD_DIM_V;
-          let global_v_row = kv_tile + v_row;
-          let global_v_row_offset = v_head_offset + global_v_row * params.stride_v1;
-          let in_bounds = global_v_row < params.seq_len_kv && (v_col + 3u) < HEAD_DIM_V;
-          let vec_idx = (global_v_row_offset + v_col) >> 2u;
-          let v4 = select(vec4<KV_TYPE>(0.0), V[vec_idx], in_bounds);
-          kv_shmem[elem_idx + 0u] = f32(v4.x);
-          kv_shmem[elem_idx + 1u] = f32(v4.y);
-          kv_shmem[elem_idx + 2u] = f32(v4.z);
-          kv_shmem[elem_idx + 3u] = f32(v4.w);
-      }
+#ifndef KV_DIRECT
+      load_v_tile_block(local_id.x, kv_count, kv_tile, v_head_offset);
 #endif
 
       workgroupBarrier();
