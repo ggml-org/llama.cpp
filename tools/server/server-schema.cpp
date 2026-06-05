@@ -552,21 +552,31 @@ task_params eval_llama_cmpl_schema(
 // eval() implementations
 //
 
+static void handle_with_catch(const char * name, std::function<void()> func) {
+    try {
+        func();
+    } catch (const std::exception & e) {
+        throw std::invalid_argument(string_format("Field '%s': %s", name, e.what()));
+    }
+}
+
 template <typename T>
 void field_num<T>::eval(field_eval_context & ctx, const json & data) {
     for (const auto & n : name) {
         if (data.contains(n)) {
-            if (custom_handler) {
+            handle_with_catch(n, [&]() {
+                if (custom_handler) {
                 custom_handler(ctx, data);
-            } else if (!is_hard_limit) {
-                val = std::max(min, std::min(max, data.at(n).template get<T>()));
-            } else {
-                T tmp = data.at(n).template get<T>();
-                if (tmp < min || tmp > max) {
-                    throw std::invalid_argument(std::string("Value for \"") + n + "\" must be between " + std::to_string(min) + " <= value <= " + std::to_string(max) + ", but got " + std::to_string(tmp));
+                } else if (!is_hard_limit) {
+                    val = std::max(min, std::min(max, data.at(n).template get<T>()));
+                } else {
+                    T tmp = data.at(n).template get<T>();
+                    if (tmp < min || tmp > max) {
+                        throw std::invalid_argument(std::string("Value must be between ") + std::to_string(min) + " <= value <= " + std::to_string(max) + ", but got " + std::to_string(tmp));
+                    }
+                    val = tmp;
                 }
-                val = tmp;
-            }
+            });
             return;
         }
     }
@@ -576,7 +586,9 @@ void field_str::eval(field_eval_context & ctx, const json & data) {
     GGML_ASSERT(custom_handler);
     for (const auto & n : name) {
         if (data.contains(n)) {
-            custom_handler(ctx, data);
+            handle_with_catch(n, [&]() {
+                custom_handler(ctx, data);
+            });
             return;
         }
     }
@@ -585,11 +597,13 @@ void field_str::eval(field_eval_context & ctx, const json & data) {
 void field_bool::eval(field_eval_context & ctx, const json & data) {
     for (const auto & n : name) {
         if (data.contains(n)) {
-            if (custom_handler) {
-                custom_handler(ctx, data);
-            } else {
-                val = data.at(n).get<bool>();
-            }
+            handle_with_catch(n, [&]() {
+                if (custom_handler) {
+                    custom_handler(ctx, data);
+                } else {
+                    val = data.at(n).get<bool>();
+                }
+            });
             return;
         }
     }
@@ -599,7 +613,9 @@ void field_json::eval(field_eval_context & ctx, const json & data) {
     GGML_ASSERT(custom_handler);
     for (const auto & n : name) {
         if (data.contains(n)) {
-            custom_handler(ctx, data);
+            handle_with_catch(n, [&]() {
+                custom_handler(ctx, data);
+            });
             return;
         }
     }
