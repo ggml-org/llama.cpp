@@ -5,6 +5,11 @@
 #include "gguf.h"
 #include "llama-hparams.h"
 
+#ifdef __linux__
+#include <sys/mman.h> // madvise, MADV_DONTNEED
+#include <unistd.h>   // sysconf, _SC_PAGESIZE
+#endif
+
 #include <algorithm>
 #include <array>
 #include <cinttypes>
@@ -518,6 +523,7 @@ llama_model_loader::llama_model_loader(
         bool use_direct_io,
         bool check_tensors,
         bool no_alloc,
+        bool reclaim_mmap_source,
         const llama_model_kv_override * param_overrides_p,
         const llama_model_tensor_buft_override * param_tensor_buft_overrides_p)
         : metadata(meta), set_tensor_data(set_tensor_data), set_tensor_data_ud(set_tensor_data_ud) {
@@ -816,6 +822,7 @@ llama_model_loader::llama_model_loader(
     this->use_direct_io = use_direct_io;
     this->check_tensors = check_tensors;
     this->no_alloc = no_alloc;
+    this->reclaim_mmap_source = reclaim_mmap_source;
 }
 
 std::string llama_model_loader::get_arch_name() const {
@@ -1518,6 +1525,11 @@ bool llama_model_loader::load_all_data(
             ggml_backend_name(upload_backend));
     }
 
+#if defined(MADV_DONTNEED)
+    // Page size for reclaim_mmap_source; queried once and reused for every repacked tensor.
+    const uintptr_t reclaim_page_size = (uintptr_t) sysconf(_SC_PAGESIZE);
+#endif
+
     for (struct ggml_tensor * cur = ggml_get_first_tensor(ctx); cur != NULL; cur = ggml_get_next_tensor(ctx, cur)) {
         const auto * weight = get_weight(ggml_get_name(cur));
         if (weight == nullptr) {
@@ -1560,6 +1572,26 @@ bool llama_model_loader::load_all_data(
                 mmap_used.second = std::max(mmap_used.second, weight->offs + n_size);
             } else {
                 ggml_backend_tensor_set(cur, data, 0, n_size);
+
+#if defined(MADV_DONTNEED)
+                // This tensor's data was copied from the mmap into its own buffer (e.g.
+                // CPU_REPACK), so the source pages [data, data + n_size) are now dormant -
+                // compute reads only from the copy. madvise drops them from RSS; the
+                // read-only file mapping stays valid and any later access (e.g. a
+                // concurrent --check-tensors validation thread) simply re-faults the
+                // original bytes from disk - safe, never wrong data. Skipped under mlock
+                // (lmlocks != nullptr), where the user wants the file pages resident. The
+                // range is rounded inward to whole pages so we never evict a page shared
+                // with a neighbouring zero-copy tensor. Reclaims the duplication reported
+                // upstream in #16761.
+                if (reclaim_mmap_source && lmlocks == nullptr) {
+                    const uintptr_t beg = ((uintptr_t) data + reclaim_page_size - 1) & ~(reclaim_page_size - 1);
+                    const uintptr_t end = ((uintptr_t) data + n_size)                & ~(reclaim_page_size - 1);
+                    if (end > beg) {
+                        madvise((void *) beg, end - beg, MADV_DONTNEED);
+                    }
+                }
+#endif
             }
         } else {
             const auto & file = files.at(weight->idx);
