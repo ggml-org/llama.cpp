@@ -1,16 +1,15 @@
+import {
+	EXIF_SCAN_BYTE_LIMIT,
+	JPEG_SOI_MARKER,
+	APP1_MARKER,
+	SOS_MARKER,
+	EXIF_SIGNATURE,
+	TIFF_LITTLE_ENDIAN,
+	TIFF_MAGIC,
+	EXIF_ORIENTATION_TAG,
+	IFD_ENTRY_SIZE
+} from '$lib/constants/jpeg-exif';
 import { MimeTypeImage } from '$lib/enums';
-
-// EXIF metadata lives in the APP1 segment near the start of the file,
-// so decoding this many bytes of base64 is enough to find the tag
-const EXIF_SCAN_BYTE_LIMIT = 128 * 1024;
-
-const JPEG_SOI_MARKER = 0xffd8;
-const APP1_MARKER = 0xe1;
-const SOS_MARKER = 0xda;
-const TIFF_LITTLE_ENDIAN = 0x4949;
-const TIFF_MAGIC = 42;
-const EXIF_ORIENTATION_TAG = 0x0112;
-const IFD_ENTRY_SIZE = 12;
 
 /**
  * Read the EXIF orientation tag from a JPEG base64 data URL
@@ -91,7 +90,11 @@ function parseExifOrientation(view: DataView, start: number, segmentLength: numb
 	const end = Math.min(start + segmentLength, view.byteLength);
 
 	// The payload opens with the "Exif\0\0" signature
-	if (start + 6 > end || view.getUint32(start) !== 0x45786966 || view.getUint16(start + 4) !== 0) {
+	if (
+		start + 6 > end ||
+		view.getUint32(start) !== EXIF_SIGNATURE ||
+		view.getUint16(start + 4) !== 0
+	) {
 		return 1;
 	}
 
