@@ -10,8 +10,8 @@ ARG COMPUTE_RUNTIME_VERSION_FULL=26.18.38308.1-0
 ARG IGDGMM_VERSION=22.10.0
 
 # Intel NPU driver versions. https://github.com/intel/linux-npu-driver/releases
-ARG NPU_DRIVER_VERSION=v1.32.1
-ARG NPU_DRIVER_FULL=v1.32.1.20260422-24767473183
+ARG NPU_DRIVER_VERSION=v1.33.0
+ARG NPU_DRIVER_FULL=v1.33.0.20260529-26625960453
 ARG LIBZE1_VERSION=1.27.0-1~24.04~ppa2
 
 # Optional proxy build arguments
@@ -69,7 +69,7 @@ RUN bash -c "source ${OpenVINO_DIR}/setupvars.sh && \
     cmake -B build/ReleaseOV -G Ninja \
         -DCMAKE_BUILD_TYPE=Release \
         -DGGML_OPENVINO=ON && \
-    cmake --build build/ReleaseOV -j$(nproc)"
+    cmake --build build/ReleaseOV --parallel "
 
 # Copy all necessary libraries
 RUN mkdir -p /app/lib && \

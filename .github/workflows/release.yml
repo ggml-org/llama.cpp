@@ -477,7 +477,7 @@ jobs:
           cmake -B build/ReleaseOV -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DGGML_OPENVINO=ON
-          cmake --build build/ReleaseOV --config Release -j $(nproc)
+          cmake --build build/ReleaseOV --config Release --parallel
 
       - name: ccache-clear
         uses: ./.github/actions/ccache-clear
@@ -568,7 +568,6 @@ jobs:
               exit /b 1
           )
 
-          REM Call OpenVINO setup script to automatically append DLLs to PATH
           call "%OPENVINO_ROOT%\setupvars.bat"
 
           cmake -B build\ReleaseOV -G "Visual Studio 17 2022" ^

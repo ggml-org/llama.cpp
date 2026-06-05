@@ -78,7 +78,7 @@ jobs:
           cmake -B build/ReleaseOV -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DGGML_OPENVINO=ON
-          time cmake --build build/ReleaseOV --config Release -j $(nproc)
+          time cmake --build build/ReleaseOV --config Release --parallel
 
       - name: Test (CPU)
         id: cmake_test_cpu
@@ -150,29 +150,24 @@ jobs:
               exit /b 1
           )
 
-          REM Call OpenVINO setup script to automatically append DLLs to PATH
           call "%OPENVINO_ROOT%\setupvars.bat"
 
           cmake -B build\ReleaseOV -G "Visual Studio 17 2022" ^
             -A x64 ^
             -DCMAKE_BUILD_TYPE=Release ^
             -DGGML_OPENVINO=ON ^
-            -DLLAMA_CURL=OFF ^
             -DCMAKE_TOOLCHAIN_FILE=C:\vcpkg\scripts\buildsystems\vcpkg.cmake
 
           cmake --build build\ReleaseOV --config Release -- /m
 
-      - name: Test
-        id: cmake_test
+      - name: Test (CPU)
+        id: cmake_test_cpu
         shell: cmd
         # TODO: fix and re-enable the `test-llama-archs` test below
         run: |
           REM Find extracted OpenVINO folder dynamically
           for /d %%i in (openvino_toolkit\*) do set OPENVINO_ROOT=%%i
-
-          REM Call OpenVINO setup script to automatically append DLLs to PATH
           call "%OPENVINO_ROOT%\setupvars.bat"
 
-          REM Run the tests
           cd build
           ctest --test-dir ReleaseOV -L main -E "test-llama-archs" -C Release --verbose --timeout 3000
