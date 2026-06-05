@@ -782,7 +782,8 @@ class DeepseekV4FlashModel(TextModel):
         if tensor_key == gguf.MODEL_TENSOR.FFN_GATE_TID2EID:
             return []
         elif tensor_key == gguf.MODEL_TENSOR.ATTN_OUT_A:
-            data_torch = data_torch.reshape(self.hparams["o_groups"], self.hparams["o_lora_rank"], self.hparams["hidden_size"])
+            attn_out_a_dim = int(self.hparams["num_attention_heads"] * self.hparams["head_dim"] / self.hparams["o_groups"])
+            data_torch = data_torch.reshape(self.hparams["o_groups"], self.hparams["o_lora_rank"], attn_out_a_dim)
 
         return [(self._format_dsv4_tensor_name(tensor_key, bid, suffix), data_torch)]
 
