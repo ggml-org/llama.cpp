@@ -136,20 +136,26 @@ struct mtmd_cli_context {
     void init_vision_context(common_params & params) {
         const char * clip_path = params.mmproj.path.c_str();
         mtmd_context_params mparams = mtmd_context_params_default();
-        mparams.use_gpu          = params.mmproj_use_gpu;
-        mparams.print_timings    = true;
-        mparams.n_threads        = params.cpuparams.n_threads;
-        mparams.flash_attn_type  = params.flash_attn_type;
-        mparams.warmup           = params.warmup;
-        mparams.image_min_tokens = params.image_min_tokens;
-        mparams.image_max_tokens = params.image_max_tokens;
+        mparams.use_gpu           = params.mmproj_use_gpu;
+        mparams.print_timings     = true;
+        mparams.n_threads         = params.cpuparams.n_threads;
+        mparams.flash_attn_type   = params.flash_attn_type;
+        mparams.warmup            = params.warmup;
+        mparams.image_min_tokens  = params.image_min_tokens;
+        mparams.image_max_tokens  = params.image_max_tokens;
+        mparams.coreml_model_path = params.coreml_path.empty() ? nullptr : params.coreml_path.c_str();
         if (std::getenv("MTMD_DEBUG_GRAPH") != nullptr) {
             mparams.cb_eval_user_data = &cb_data;
             mparams.cb_eval = common_debug_cb_eval;
         }
         ctx_vision.reset(mtmd_init_from_file(clip_path, model, mparams));
         if (!ctx_vision.get()) {
-            LOG_ERR("Failed to load vision model from %s\n", clip_path);
+            if (!params.coreml_path.empty()) {
+                LOG_ERR("Failed to load vision model (mmproj=%s, coreml=%s)\n",
+                        clip_path, params.coreml_path.c_str());
+            } else {
+                LOG_ERR("Failed to load vision model from %s\n", clip_path);
+            }
             exit(1);
         }
     }
@@ -289,9 +295,9 @@ int main(int argc, char ** argv) {
 
     mtmd_helper_log_set(common_log_default_callback, nullptr);
 
-    if (params.mmproj.path.empty()) {
+    if (params.mmproj.path.empty() && params.coreml_path.empty()) {
         show_additional_info(argc, argv);
-        LOG_ERR("ERR: Missing --mmproj argument\n");
+        LOG_ERR("ERR: Missing --mmproj argument (or --coreml on Apple builds with -DGGML_COREML=ON)\n");
         return 1;
     }
 

@@ -94,6 +94,12 @@ struct mtmd_context_params {
     int image_min_tokens; // minimum number of tokens for image input (default: read from metadata)
     int image_max_tokens; // maximum number of tokens for image input (default: read from metadata)
 
+    // optional path to a CoreML .mlmodelc bundle implementing the vision
+    // encoder. When non-null and CoreML support was compiled in
+    // (-DGGML_COREML=ON, Apple platforms only), image encoding is forwarded
+    // to the CoreML backend; in that case mmproj_fname may be empty.
+    const char * coreml_model_path;
+
     // callback function passed over to mtmd proper
     ggml_backend_sched_eval_callback cb_eval;
     void * cb_eval_user_data;

@@ -2243,6 +2243,17 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.image_max_tokens = value;
         }
     ).set_examples(mmproj_examples).set_env("LLAMA_ARG_IMAGE_MAX_TOKENS"));
+    add_opt(common_arg(
+        {"--coreml"}, "FILE",
+        "path to a CoreML .mlmodelc bundle that implements the vision encoder. "
+        "Requires the build to enable CoreML (-DGGML_COREML=ON, Apple only). "
+        "When set, image encoding is dispatched to CoreML; --mmproj becomes "
+        "optional and the bundle's input/output schema is matched against "
+        "the registered adapters automatically.",
+        [](common_params & params, const std::string & value) {
+            params.coreml_path = value;
+        }
+    ).set_examples(mmproj_examples).set_env("LLAMA_ARG_COREML"));
     if (llama_supports_rpc()) {
         add_opt(common_arg(
             {"--rpc"}, "SERVERS",
