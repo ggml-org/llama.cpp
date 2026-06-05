@@ -1,9 +1,9 @@
 #include "mtmd-coreml.h"
 
-#include "clip-impl.h"
-#include "clip.h"
-#include "coreml/backend.h"
-#include "coreml/models/models.h"
+#include "../clip-impl.h"
+#include "../clip.h"
+#include "backend.h"
+#include "models/models.h"
 
 #include <nlohmann/json.hpp>
 
