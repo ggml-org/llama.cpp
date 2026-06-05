@@ -396,6 +396,7 @@ int llama_cli(int argc, char ** argv) {
         console::error("\nFailed to load the model\n");
         return 1;
     }
+    ctx_cli.defaults.sampling = params.sampling;
 
     console::spinner::stop();
     console::log("\n");
