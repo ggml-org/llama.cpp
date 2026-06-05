@@ -1719,14 +1719,14 @@ std::string common_detokenize(const struct llama_vocab * vocab, const std::vecto
 // Embedding utils
 //
 
-void common_embd_normalize(const float * inp, float * out, int n, int embd_norm) {
+void common_embd_normalize(const float * inp, float * out, int n, common_embd_norm embd_norm) {
     double sum = 0.0;
 
     switch (embd_norm) {
-        case -1: // no normalisation
+        case COMMON_EMBD_NORM_NONE: // no normalisation
             sum = 1.0;
             break;
-        case 0: // max absolute
+        case COMMON_EMBD_NORM_MAX_ABS: // max absolute
             for (int i = 0; i < n; i++) {
                 if (sum < std::abs(inp[i])) {
                     sum = std::abs(inp[i]);
@@ -1734,7 +1734,12 @@ void common_embd_normalize(const float * inp, float * out, int n, int embd_norm)
             }
             sum /= 32760.0; // make an int16 range
             break;
-        case 2: // euclidean
+        case COMMON_EMBD_NORM_TAXICAB: // taxicab
+            for (int i = 0; i < n; i++) {
+                sum += std::abs(inp[i]);
+            }
+            break;
+        case COMMON_EMBD_NORM_EUCLIDEAN: // euclidean
             for (int i = 0; i < n; i++) {
                 sum += inp[i] * inp[i];
             }
@@ -1742,9 +1747,9 @@ void common_embd_normalize(const float * inp, float * out, int n, int embd_norm)
             break;
         default: // p-norm (euclidean is p-norm p=2)
             for (int i = 0; i < n; i++) {
-                sum += std::pow(std::abs(inp[i]), embd_norm);
+                sum += std::pow(std::abs(inp[i]), (int) embd_norm);
             }
-            sum = std::pow(sum, 1.0 / embd_norm);
+            sum = std::pow(sum, 1.0 / (int) embd_norm);
             break;
     }
 

@@ -404,6 +404,13 @@ enum common_reasoning_format {
     // see: https://github.com/ggml-org/llama.cpp/pull/15408
 };
 
+enum common_embd_norm {
+    COMMON_EMBD_NORM_NONE      = -1,
+    COMMON_EMBD_NORM_MAX_ABS   = 0,
+    COMMON_EMBD_NORM_TAXICAB   = 1,
+    COMMON_EMBD_NORM_EUCLIDEAN = 2,
+};
+
 
 struct lr_opt {
     float    lr0          = 1e-5; // learning rate at first epoch
@@ -581,9 +588,9 @@ struct common_params {
     float val_split = 0.05f; // fraction of the data used for the validation set
 
     // embedding
-    bool embedding         = false; // get only sentence embedding
-    int32_t embd_normalize = 2;     // normalisation for embeddings (-1=none, 0=max absolute int16, 1=taxicab, 2=euclidean, >2=p-norm)
-    std::string embd_out   = "";    // empty = default, "array" = [[],[]...], "json" = openai style, "json+" = same "json" + cosine similarity matrix
+    bool embedding                  = false; // get only sentence embedding
+    common_embd_norm embd_normalize = COMMON_EMBD_NORM_EUCLIDEAN; // normalisation for embeddings (-1=none, 0=max absolute int16, 1=taxicab, 2=euclidean, >2=p-norm)
+    std::string embd_out            = "";    // empty = default, "array" = [[],[]...], "json" = openai style, "json+" = same "json" + cosine similarity matrix
     std::string embd_sep   = "\n";  // separator of embeddings
     std::string cls_sep    = "\t";  // separator of classification sequences
 
@@ -988,8 +995,7 @@ std::string common_detokenize(
 // Embedding utils
 //
 
-// TODO: replace embd_norm with an enum
-void common_embd_normalize(const float * inp, float * out, int n, int embd_norm);
+void common_embd_normalize(const float * inp, float * out, int n, common_embd_norm embd_norm);
 
 float common_embd_similarity_cos(const float * embd1, const float * embd2, int n);
 
