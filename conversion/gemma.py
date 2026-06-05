@@ -785,7 +785,7 @@ class Gemma4UnifiedModel(Gemma4Model):
             self.gguf_writer.add_suppress_tokens(suppress_tokens)
 
 
-@ModelBase.register("Gemma4AssistantForCausalLM")
+@ModelBase.register("Gemma4AssistantForCausalLM", "Gemma4UnifiedAssistantForCausalLM")
 class Gemma4AssistantModel(Gemma4Model):
     model_arch = gguf.MODEL_ARCH.GEMMA4_ASSISTANT
 
