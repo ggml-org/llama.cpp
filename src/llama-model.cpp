@@ -1638,7 +1638,8 @@ const float * llama_model::tensor_split() const {
 }
 
 uint32_t llama_model::n_gpu_layers() const {
-    return params.n_gpu_layers >= 0 ? params.n_gpu_layers : hparams.n_layer() + 1;
+    // note: plus 1 for the "output" layer
+    return params.n_gpu_layers >= 0 ? params.n_gpu_layers : hparams.n_layer_all + 1;
 }
 
 llama_split_mode llama_model::split_mode() const {
