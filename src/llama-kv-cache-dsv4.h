@@ -131,6 +131,7 @@ public:
     llama_dsv4_comp_state * get_lid_state() const;
 
 private:
+    llama_hparams hparams_raw;
     llama_hparams hparams_csa;
     llama_hparams hparams_hca;
     llama_hparams hparams_lid;

@@ -1179,6 +1179,14 @@ struct llama_model_deepseek_v4_flash : public llama_model_base {
                 float kq_scale,
                 int il) const;
 
+        ggml_tensor * build_raw_attention(
+                llm_graph_input_attn_kv_iswa * inp_attn,
+                ggml_tensor * q,
+                ggml_tensor * kv,
+                ggml_tensor * sinks,
+                float kq_scale,
+                int il) const;
+
         ggml_tensor * build_hc_weighted_sum(
                 ggml_tensor * x,
                 ggml_tensor * weights) const;

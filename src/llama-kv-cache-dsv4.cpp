@@ -632,6 +632,7 @@ llama_kv_cache_dsv4::llama_kv_cache_dsv4(
                  uint32_t   n_pad,
     const layer_filter_cb & filter,
     const  layer_reuse_cb & reuse) :
+    hparams_raw(model.hparams),
     hparams_csa(model.hparams),
     hparams_hca(model.hparams),
     hparams_lid(model.hparams) {
@@ -646,10 +647,12 @@ llama_kv_cache_dsv4::llama_kv_cache_dsv4(
 
     LLAMA_LOG_INFO("%s: creating DSV4 raw KV cache\n", __func__);
 
+    dsv4_make_k_only(hparams_raw);
+
     kv_raw = std::make_unique<llama_kv_cache_iswa>(
-            model, type_k, type_v,
+            model, hparams_raw, type_k, type_v,
             v_trans, offload, swa_full, unified, kv_size, n_seq_max, n_ubatch, n_pad,
-            filter_raw, reuse);
+            nullptr, filter_raw, reuse, nullptr);
 
     dsv4_make_k_only(hparams_csa);
     dsv4_make_k_only(hparams_hca);

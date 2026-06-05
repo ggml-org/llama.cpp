@@ -524,7 +524,7 @@ class DeepseekV4FlashModel(TextModel):
             return scale.float()
 
         bits = scale.view(torch.uint8).float()
-        return torch.pow(torch.tensor(2.0, device=bits.device), bits - 127.0)
+        return torch.exp2(bits - 127.0)
 
     def _collect_source_dtypes(self) -> None:
         for name, gen in self.model_tensors.items():
