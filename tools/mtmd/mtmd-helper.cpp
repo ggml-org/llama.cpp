@@ -32,6 +32,9 @@
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb/stb_image.h"
 
+#define SIMPLEWEBP_IMPLEMENTATION
+#include "vendor/simplewebp/simplewebp.h"
+
 #ifdef MTMD_INTERNAL_HEADER
 #error "mtmd-helper is a public library outside of mtmd. it must not include internal headers"
 #endif
@@ -425,7 +428,9 @@ static bool is_audio_file(const char * buf, size_t len) {
 
     // RIFF ref: https://en.wikipedia.org/wiki/Resource_Interchange_File_Format
     // WAV ref: https://www.mmsp.ece.mcgill.ca/Documents/AudioFormats/WAVE/WAVE.html
+    // WEBP ref: https://developers.google.com/speed/webp/docs/riff_container
     bool is_wav = memcmp(buf, "RIFF", 4) == 0 && memcmp(buf + 8, "WAVE", 4) == 0;
+    bool is_webp = memcmp(buf, "RIFF", 4) == 0 && memcmp(buf + 8, "WEBP", 4) == 0;
     bool is_mp3 = len >= 3 && (
         memcmp(buf, "ID3", 3) == 0 ||
         // Check for MPEG sync word (simplified check)
@@ -433,7 +438,7 @@ static bool is_audio_file(const char * buf, size_t len) {
     );
     bool is_flac = memcmp(buf, "fLaC", 4) == 0;
 
-    return is_wav || is_mp3 || is_flac;
+    return (is_wav || is_mp3 || is_flac) && !is_webp;
 }
 
 // returns true if the buffer is a valid audio file
@@ -478,34 +483,94 @@ static bool decode_audio_from_buf(const unsigned char * buf_in, size_t len, int 
 
 } // namespace audio_helpers
 
-mtmd_bitmap * mtmd_helper_bitmap_init_from_buf(mtmd_context * ctx, const unsigned char * buf, size_t len) {
-    if (audio_helpers::is_audio_file((const char *)buf, len)) {
-        std::vector<float> pcmf32;
-        const int sample_rate = mtmd_get_audio_sample_rate(ctx);
-        if (sample_rate < 0) {
-            LOG_ERR("This model does not support audio input\n");
-            return nullptr;
-        }
-        if (!audio_helpers::decode_audio_from_buf(buf, len, sample_rate, pcmf32)) {
-            LOG_ERR("Unable to read WAV audio file from buffer\n");
-            return nullptr;
-        }
-        return mtmd_bitmap_init_from_audio(pcmf32.size(), pcmf32.data());
+// Returns true when the input has an audio signature and was handled.
+// If handled but decoding fails, out_result is set to nullptr.
+static bool try_init_audio_bitmap(mtmd_context * ctx, const unsigned char * buf, size_t len, mtmd_bitmap ** out_result) {
+    if (!audio_helpers::is_audio_file((const char *) buf, len)) {
+        return false;
     }
 
-    // otherwise, we assume it's an image
-    mtmd_bitmap * result = nullptr;
-    {
-        int nx, ny, nc;
-        auto * data = stbi_load_from_memory(buf, len, &nx, &ny, &nc, 3);
-        if (!data) {
-            LOG_ERR("%s: failed to decode image bytes\n", __func__);
-            return nullptr;
-        }
-        result = mtmd_bitmap_init(nx, ny, data);
-        stbi_image_free(data);
+    std::vector<float> pcmf32;
+    const int sample_rate = mtmd_get_audio_sample_rate(ctx);
+    if (sample_rate < 0) {
+        LOG_ERR("This model does not support audio input\n");
+        *out_result = nullptr;
+        return true;
     }
+    if (!audio_helpers::decode_audio_from_buf(buf, len, sample_rate, pcmf32)) {
+        LOG_ERR("Unable to read WAV audio file from buffer\n");
+        *out_result = nullptr;
+        return true;
+    }
+
+    *out_result = mtmd_bitmap_init_from_audio(pcmf32.size(), pcmf32.data());
+    return true;
+}
+
+// Returns true when the input has a WebP signature and was handled.
+// If handled but decoding fails, out_result is set to nullptr.
+static bool try_init_webp_bitmap(const unsigned char * buf, size_t len, mtmd_bitmap ** out_result) {
+    if (!(len >= 12 && memcmp(buf, "RIFF", 4) == 0 && memcmp(buf + 8, "WEBP", 4) == 0)) {
+        return false;
+    }
+
+    simplewebp * webp = nullptr;
+    simplewebp_error err = simplewebp_load_from_memory((void *) buf, len, nullptr, &webp);
+    if (err != SIMPLEWEBP_NO_ERROR) {
+        LOG_ERR("Unable to read the WebP file from buffer: %s\n", simplewebp_get_error_text(err));
+        *out_result = nullptr;
+        return true;
+    }
+
+    size_t nx, ny;
+    simplewebp_get_dimensions(webp, &nx, &ny);
+
+    std::vector<uint8_t> rgba(nx * ny * 4);
+    err = simplewebp_decode(webp, rgba.data(), nullptr);
+    simplewebp_unload(webp);
+
+    if (err != SIMPLEWEBP_NO_ERROR) {
+        LOG_ERR("Unable to decode the WebP file from buffer: %s\n", simplewebp_get_error_text(err));
+        *out_result = nullptr;
+        return true;
+    }
+
+    // Convert RGBA to RGB
+    std::vector<uint8_t> rgb(nx * ny * 3);
+    for (size_t i = 0; i < nx * ny; i++) {
+        rgb[i * 3]     = rgba[i * 4];
+        rgb[i * 3 + 1] = rgba[i * 4 + 1];
+        rgb[i * 3 + 2] = rgba[i * 4 + 2];
+    }
+
+    *out_result = mtmd_bitmap_init((int) nx, (int) ny, rgb.data());
+    return true;
+}
+
+static mtmd_bitmap * init_bitmap_with_stbi(const unsigned char * buf, size_t len) {
+    int nx, ny, nc;
+    auto * data = stbi_load_from_memory(buf, len, &nx, &ny, &nc, 3);
+    if (!data) {
+        LOG_ERR("%s: failed to decode image bytes\n", __func__);
+        return nullptr;
+    }
+
+    mtmd_bitmap * result = mtmd_bitmap_init(nx, ny, data);
+    stbi_image_free(data);
     return result;
+}
+
+mtmd_bitmap * mtmd_helper_bitmap_init_from_buf(mtmd_context * ctx, const unsigned char * buf, size_t len) {
+    mtmd_bitmap * result = nullptr;
+    if (try_init_audio_bitmap(ctx, buf, len, &result)) {
+        return result;
+    }
+
+    if (try_init_webp_bitmap(buf, len, &result)) {
+        return result;
+    }
+
+    return init_bitmap_with_stbi(buf, len);
 }
 
 mtmd_bitmap * mtmd_helper_bitmap_init_from_file(mtmd_context * ctx, const char * fname) {
