@@ -1764,7 +1764,7 @@ void llama_model::print_info() const {
                         [](const auto & entry) { return entry >= 0; })) {
             LLAMA_LOG_INFO("%s: deepstack_mapping_arr = %s\n", __func__,
                            print_f([&](uint32_t il) { return hparams.deepstack_mapping_arr[il]; },
-                           hparams.n_layer).c_str());
+                           hparams.n_layer()).c_str());
         }
         // MRoPE (Multi-axis Rotary Position Embedding) sections
         if (const auto & s = hparams.rope_sections; s[0] || s[1] || s[2] || s[3]) {
