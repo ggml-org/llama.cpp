@@ -89,7 +89,7 @@ struct task_params {
     // per-request parameters for chat parsing
     common_chat_parser_params chat_parser_params;
 
-    // spans for message-aware checkpointing
+    // message spans for checkpointing
     common_chat_msg_spans message_spans;
 
     // Embeddings
