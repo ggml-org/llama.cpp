@@ -14,9 +14,6 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <list>
-#include <unordered_map>
-#include <unordered_set>
 #include <vector>
 
 #if __has_include(<filesystem>)
@@ -28,14 +25,6 @@ namespace fs = std::experimental::filesystem;
 #else
 #error "cannot include the filesystem library"
 #endif
-
-/*
-  ET Driver.
-
-  `ggml_et_driver()` handles both the device layer and the runtime,
-  for doing actual operations on devices.
-*/
-
 
 /*
  * ggml_et_dump_tensor_metadata

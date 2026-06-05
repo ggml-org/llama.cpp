@@ -1,12 +1,6 @@
-//******************************************************************************
-// SSM_CONV F32 Kernel
-// First-pass scalar implementation matching ggml_compute_forward_ssm_conv_f32.
-//******************************************************************************
-
 #include <stdint.h>
 #include "ggml_tensor.h"
 #include "platform.h"
-#include "math_fp.h"
 
 struct ggml_et_ssm_conv_params {
     struct ggml_tensor src0;  // conv_x: [d_conv - 1 + n_t, d_inner, n_seqs]

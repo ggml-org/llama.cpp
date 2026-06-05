@@ -15,14 +15,14 @@ RISC-V accelerator platform [ET-SOC](https://github.com/aifoundry-org/et-man).
 
 ## Limitations
 
-The ET backend is at the proof-of-concept stage and comes with a bouquet of
-limitations:
+The ET backend runs several of the major OSS models with some limitations:
 
 - Only limited set of operations is supported (check [../ops.md](../ops.md)
   and [../ops/ET.csv](../ops/ET.csv)).
 - Only `q8_0`, `q4_0` (and partially `fp16`, `q4_K`) quantization is supported.
 - Only one llama.cpp instance can use device at the same time (current firmware
   limitation).
+- Limited (but working) MoE model support
 
 As a result of the above, only select models can run fully on ET-SOC
 (you can actually run any model llama.cpp supports, but some/most operations
@@ -36,7 +36,9 @@ Fully supported models:
   [lmstudio-community/Llama-3.2-1B-Instruct-GGUF:q8_0](https://huggingface.co/lmstudio-community/Llama-3.2-1B-Instruct-GGUF/blob/main/Llama-3.2-1B-Instruct-Q8_0.gguf).
 - SmolLM2, e.g.
   [unsloth/SmolLM2-135M-Instruct-GGUF:q8_0](https://huggingface.co/unsloth/SmolLM2-135M-Instruct-GGUF/blob/main/SmolLM2-135M-Instruct-Q8_0.gguf)
-- Llama3.1 model family.
+- Llama 3.1 model family.
+- RWKV v7 model family.
+- TinyLLaMA
 
 
 ## Build
@@ -158,18 +160,18 @@ to `GGML_ET_PROFILE/et_runtime_trace.json` and `GGML_ET_PROFILE/kernel_map` on e
 
 ### Uberkernel
 
-Basically poorman's device dispatch/kernel fusion. The ET SDK has a non-trivial op-to-op gap. `Uberkernel` (name taken from the original Esperanto AI's compiler)
+The in-knernel implementaiton of device dispatch/kernel fusion. The ET SDK has a non-trivial op-to-op gap. `Uberkernel` (name taken from the original Esperanto AI's compiler)
 dispatches multiple already existing kernel implementations with device side synchronization. Due to the processor's design, there is no natural memory visibility
 horizon between sub-kernel invocations. This makes uberkernel much more difficult to develop and debug. Currently Uberkerel is hidden begind the
 `GGML_ET_UBERKERNEL` environment variable and is disabled by default. Setting it to 1 enables it and provides significant performance improvements but is only
-validated for the LLaMA 3.2 model family.
+validated for the LLaMA 3.2 model family and Qwen 3.5.
 
 ## Roadmap
 
 As of writing the documentation the ET backend is capable of running most models and smaller ones at usable speed given the low power profile of the processor. We'd
 address the following capabilities in the future:
 
-* Enable uberkernel for all models
+* Enable Uberkernel for all models
 * More oprtator support
-* Convolution to support TTS models
+* Better TTS model support
 * Enable more quantization format support

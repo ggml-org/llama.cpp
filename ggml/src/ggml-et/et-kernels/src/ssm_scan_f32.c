@@ -1,8 +1,3 @@
-//******************************************************************************
-// SSM_SCAN F32 Kernel
-// Scalar reference-style implementation matching ggml_compute_forward_ssm_scan_f32.
-//******************************************************************************
-
 #include <stdint.h>
 #include "ggml_tensor.h"
 #include "platform.h"

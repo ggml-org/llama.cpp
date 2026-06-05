@@ -11,14 +11,12 @@
 // Operation: dst[indices[i]] = src[i] for i = 0..num_source_rows
 // This is the inverse of GET_ROWS operation
 //
-// Parallelization strategy (non-cache-coherent processor, 64B cache lines):
-// - Cache-aligned rows (ne00 aligned to dst cache line): distribute cache
-//   lines across threads. Each thread owns complete cache lines, no conflicts.
-// - Stride-aligned rows (nb1 % 64 == 0, e.g. padded tensors): compute
-//   lcm(ne00, cache_line_elems) to group rows into cache-line-aligned
-//   units and distribute cache lines across threads with normal stores.
-// - Unaligned fallback: distribute rows across threads, use atomic global
-//   stores (amoswapg.w / shg) which bypass local caches.
+// As ET is not a cache coherent processor yet SET_ROWS often are setting
+// small mount of large rows (KV cache). There's several strategies to
+// optimize this operation, including cacheline-based parallelization.
+//
+// - distribute work at cacheline granularity
+// - if previous does not work, find the LCM of cacheline size
 //
 // Features supported:
 // - F32 source data (always F32 input)

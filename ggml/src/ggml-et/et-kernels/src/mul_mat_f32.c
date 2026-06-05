@@ -2,9 +2,7 @@
 #include <stdint.h>
 #include "ggml_tensor.h"
 #include "platform.h"
-// #include "tensor.h"
 
-#include "math_fp.h"
 #include "quants.h"
 #include "block_ops.h"
 
