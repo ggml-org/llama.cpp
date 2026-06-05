@@ -5,7 +5,7 @@ on:
 
 jobs:
   build:
-    runs-on: [self-hosted, fast]
+    runs-on: ubuntu-slim
     env:
       BRANCH_NAME: ${{ github.head_ref || github.ref_name }}
 

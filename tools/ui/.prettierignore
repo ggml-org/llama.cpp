@@ -7,3 +7,12 @@ bun.lockb
 
 # Miscellaneous
 /static/
+dist/
+.svelte-kit/
+build/
+
+# Build output
+/dist/
+/build/
+/.svelte-kit/
+test-results

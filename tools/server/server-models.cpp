@@ -180,7 +180,8 @@ void server_model_meta::update_caps() {
             "LLAMA_ARG_HF_REPO",
             "LLAMA_ARG_HF_REPO_FILE",
         });
-        params.offline = true; // avoid any unwanted network call during capability detection
+        params.offline = true;
+        // params.skip_download = true; // TODO: ideally, we should validate the model here, but it takes too much time
         common_params_handle_models(params, LLAMA_EXAMPLE_SERVER);
         if (params.mmproj.path.empty()) {
             multimodal = { false, false };
@@ -371,18 +372,19 @@ void server_models::load_models() {
         // FIRST LOAD: add all models, then unlock for autoloading
         for (const auto & [name, preset] : final_presets) {
             server_model_meta meta{
-                /* preset       */ preset,
-                /* name         */ name,
-                /* aliases      */ {},
-                /* tags         */ {},
-                /* port         */ 0,
-                /* status       */ SERVER_MODEL_STATUS_UNLOADED,
-                /* last_used    */ 0,
-                /* args         */ std::vector<std::string>(),
-                /* loaded_info  */ {},
-                /* exit_code    */ 0,
-                /* stop_timeout */ DEFAULT_STOP_TIMEOUT,
-                /* multimodal   */ mtmd_caps{false, false},
+                /* preset        */ preset,
+                /* name          */ name,
+                /* aliases       */ {},
+                /* tags          */ {},
+                /* port          */ 0,
+                /* status        */ SERVER_MODEL_STATUS_UNLOADED,
+                /* last_used     */ 0,
+                /* args          */ std::vector<std::string>(),
+                /* loaded_info   */ {},
+                /* exit_code     */ 0,
+                /* stop_timeout  */ DEFAULT_STOP_TIMEOUT,
+                /* multimodal    */ mtmd_caps{false, false},
+                /* need_download */ false,
             };
             add_model(std::move(meta));
         }
@@ -524,18 +526,19 @@ void server_models::load_models() {
         for (const auto & [name, preset] : final_presets) {
             if (mapping.find(name) == mapping.end()) {
                 server_model_meta meta{
-                    /* preset       */ preset,
-                    /* name         */ name,
-                    /* aliases      */ {},
-                    /* tags         */ {},
-                    /* port         */ 0,
-                    /* status       */ SERVER_MODEL_STATUS_UNLOADED,
-                    /* last_used    */ 0,
-                    /* args         */ std::vector<std::string>(),
-                    /* loaded_info  */ {},
-                    /* exit_code    */ 0,
-                    /* stop_timeout */ DEFAULT_STOP_TIMEOUT,
-                    /* multimodal   */ mtmd_caps{false, false},
+                    /* preset        */ preset,
+                    /* name          */ name,
+                    /* aliases       */ {},
+                    /* tags          */ {},
+                    /* port          */ 0,
+                    /* status        */ SERVER_MODEL_STATUS_UNLOADED,
+                    /* last_used     */ 0,
+                    /* args          */ std::vector<std::string>(),
+                    /* loaded_info   */ {},
+                    /* exit_code     */ 0,
+                    /* stop_timeout  */ DEFAULT_STOP_TIMEOUT,
+                    /* multimodal    */ mtmd_caps{false, false},
+                    /* need_download */ false,
                 };
                 add_model(std::move(meta));
                 newly_added.push_back(name);
@@ -1263,14 +1266,15 @@ void server_models_routes::init_routes() {
             };
 
             json model_info = json {
-                {"id",           meta.name},
-                {"aliases",      meta.aliases},
-                {"tags",         meta.tags},
-                {"object",       "model"},    // for OAI-compat
-                {"owned_by",     "llamacpp"}, // for OAI-compat
-                {"created",      t},          // for OAI-compat
-                {"status",       status},
-                {"architecture", architecture},
+                {"id",            meta.name},
+                {"aliases",       meta.aliases},
+                {"tags",          meta.tags},
+                {"object",        "model"},    // for OAI-compat
+                {"owned_by",      "llamacpp"}, // for OAI-compat
+                {"created",       t},          // for OAI-compat
+                {"status",        status},
+                {"architecture",  architecture},
+                {"need_download", meta.need_download},
                 // TODO: add other fields, may require reading GGUF metadata
             };
 

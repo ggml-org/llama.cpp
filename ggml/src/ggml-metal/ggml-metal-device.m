@@ -547,6 +547,8 @@ struct ggml_metal_rsets {
     // number of seconds since the last graph computation
     // keep the residency sets wired for that amount of time to avoid being collected by the OS
     int keep_alive_s;
+    int loops_per_s;
+    int time_per_loop_ms;
 
     // background heartbeat thread to keep the residency sets alive
     atomic_bool d_stop;
@@ -573,10 +575,13 @@ ggml_metal_rsets_t ggml_metal_rsets_init(void) {
         res->keep_alive_s = 3*60;
     }
 
+    res->time_per_loop_ms = 5;
+    res->loops_per_s = 1000/res->time_per_loop_ms;
+
     GGML_LOG_INFO("%s: creating a residency set collection (keep_alive = %d s)\n", __func__, res->keep_alive_s);
 
     atomic_store_explicit(&res->d_stop, false, memory_order_relaxed);
-    atomic_store_explicit(&res->d_loop, 2*res->keep_alive_s, memory_order_relaxed);
+    atomic_store_explicit(&res->d_loop, res->loops_per_s*res->keep_alive_s, memory_order_relaxed);
 
     res->d_group = dispatch_group_create();
 
@@ -599,8 +604,7 @@ ggml_metal_rsets_t ggml_metal_rsets_init(void) {
                       [res->lock unlock];
                   }
 
-                  // half a second
-                  usleep(500 * 1000);
+                  usleep(res->time_per_loop_ms * 1000);
               }
         }
 #endif
@@ -626,6 +630,50 @@ void ggml_metal_rsets_free(ggml_metal_rsets_t rsets) {
     [rsets->lock release];
 
     free(rsets);
+}
+
+static enum ggml_metal_device_id ggml_metal_device_id_parse(const char * name) {
+    if (!name) {
+        return GGML_METAL_DEVICE_GENERIC;
+    }
+
+    static const char prefix[] = "Apple ";
+    if (strncmp(name, prefix, sizeof(prefix) - 1) != 0) {
+        return GGML_METAL_DEVICE_GENERIC;
+    }
+    const char * suffix = name + sizeof(prefix) - 1;
+
+    static const struct {
+        const char * name;
+        enum ggml_metal_device_id id;
+    } table[] = {
+        {"M1",       GGML_METAL_DEVICE_M1},
+        {"M1 Pro",   GGML_METAL_DEVICE_M1_PRO},
+        {"M1 Max",   GGML_METAL_DEVICE_M1_MAX},
+        {"M1 Ultra", GGML_METAL_DEVICE_M1_ULTRA},
+        {"M2",       GGML_METAL_DEVICE_M2},
+        {"M2 Pro",   GGML_METAL_DEVICE_M2_PRO},
+        {"M2 Max",   GGML_METAL_DEVICE_M2_MAX},
+        {"M2 Ultra", GGML_METAL_DEVICE_M2_ULTRA},
+        {"M3",       GGML_METAL_DEVICE_M3},
+        {"M3 Pro",   GGML_METAL_DEVICE_M3_PRO},
+        {"M3 Max",   GGML_METAL_DEVICE_M3_MAX},
+        {"M3 Ultra", GGML_METAL_DEVICE_M3_ULTRA},
+        {"M4",       GGML_METAL_DEVICE_M4},
+        {"M4 Pro",   GGML_METAL_DEVICE_M4_PRO},
+        {"M4 Max",   GGML_METAL_DEVICE_M4_MAX},
+        {"M5",       GGML_METAL_DEVICE_M5},
+        {"M5 Pro",   GGML_METAL_DEVICE_M5_PRO},
+        {"M5 Max",   GGML_METAL_DEVICE_M5_MAX},
+        {"M5 Ultra", GGML_METAL_DEVICE_M5_ULTRA},
+    };
+
+    for (size_t i = 0; i < sizeof(table)/sizeof(table[0]); ++i) {
+        if (strcmp(suffix, table[i].name) == 0) {
+            return table[i].id;
+        }
+    }
+    return GGML_METAL_DEVICE_GENERIC;
 }
 
 ggml_metal_device_t ggml_metal_device_init(int device) {
@@ -795,6 +843,8 @@ ggml_metal_device_t ggml_metal_device_init(int device) {
 
             dev->props.supports_gpu_family_apple7 = [dev->mtl_device supportsFamily:MTLGPUFamilyApple7];
 
+            dev->props.device_id = ggml_metal_device_id_parse([[dev->mtl_device name] UTF8String]);
+
             dev->props.op_offload_min_batch_size  = getenv("GGML_OP_OFFLOAD_MIN_BATCH") ? atoi(getenv("GGML_OP_OFFLOAD_MIN_BATCH")) : 32;
 
             dev->props.max_buffer_size            = dev->mtl_device.maxBufferLength;
@@ -933,7 +983,7 @@ void ggml_metal_device_rsets_keep_alive(ggml_metal_device_t dev) {
         return;
     }
 
-    atomic_store_explicit(&dev->rsets->d_loop, 2*dev->rsets->keep_alive_s, memory_order_relaxed);
+    atomic_store_explicit(&dev->rsets->d_loop, dev->rsets->loops_per_s*dev->rsets->keep_alive_s, memory_order_relaxed);
 }
 
 struct ggml_metal_event {
@@ -1061,7 +1111,7 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
                 case GGML_GLU_OP_SWIGLU_OAI:
                 case GGML_GLU_OP_GEGLU_ERF:
                 case GGML_GLU_OP_GEGLU_QUICK:
-                    return ggml_is_contiguous_1(op->src[0]) && op->src[0]->type == GGML_TYPE_F32;
+                    return ggml_is_contiguous_1(op->src[0]) && (op->src[0]->type == GGML_TYPE_F32 || op->src[0]->type == GGML_TYPE_F16);
                default:
                     return false;
             }
