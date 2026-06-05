@@ -2,7 +2,7 @@
 
 find_package(Threads REQUIRED)
 
-option(GGML_COREML "mtmd: enable Apple CoreML vision backend (Apple platforms only)" OFF)
+option(MTMD_COREML "mtmd: enable Apple CoreML vision backend (Apple platforms only)" OFF)
 
 add_library(mtmd
             mtmd.cpp
@@ -51,14 +51,14 @@ add_library(mtmd
             models/yasa2.cpp
             )
 
-if (GGML_COREML)
+if (MTMD_COREML)
     if (NOT APPLE)
-        message(FATAL_ERROR "GGML_COREML is only supported on Apple platforms")
+        message(FATAL_ERROR "MTMD_COREML is only supported on Apple platforms")
     endif()
 
     target_sources(mtmd PRIVATE
-        mtmd-coreml.cpp
-        mtmd-coreml.h
+        coreml/mtmd-coreml.cpp
+        coreml/mtmd-coreml.h
         coreml/backend.h
         coreml/backend.mm
         coreml/models/models.h

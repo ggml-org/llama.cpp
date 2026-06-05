@@ -6,7 +6,7 @@
 
 #define MTMD_INTERNAL_HEADER
 
-#include "../../mtmd-coreml.h"
+#include "../mtmd-coreml.h"
 
 namespace mtmd_coreml::models::minicpmv {
 extern const model_adapter g_adapter;

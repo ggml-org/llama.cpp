@@ -575,10 +575,6 @@ struct common_params {
     int image_min_tokens = -1;
     int image_max_tokens = -1;
 
-    // path to a CoreML .mlmodelc bundle providing the vision encoder
-    // (Apple platforms only, requires -DGGML_COREML=ON at build time)
-    std::string coreml_path;
-
     // finetune
     struct lr_opt lr;
     enum ggml_opt_optimizer_type optimizer = GGML_OPT_OPTIMIZER_TYPE_ADAMW;

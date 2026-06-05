@@ -4,7 +4,7 @@
 #include "mtmd-audio.h"
 #include "mtmd-image.h"
 #ifdef MTMD_USE_COREML
-#include "mtmd-coreml.h"
+#include "coreml/mtmd-coreml.h"
 #endif
 #include "debug/mtmd-debug.h"
 
@@ -247,7 +247,7 @@ struct mtmd_context {
 #else
         if (want_coreml) {
             throw std::runtime_error(
-                "CoreML backend was not compiled in (rebuild with -DGGML_COREML=ON)");
+                "CoreML backend was not compiled in (rebuild with -DMTMD_COREML=ON)");
         }
 #endif
 

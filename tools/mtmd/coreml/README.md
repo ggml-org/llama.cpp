@@ -82,7 +82,7 @@ xcrun coremlcompiler compile coreml_minicpmv46_vit_all_f16.mlpackage output_dir/
 ### 3. Build llama.cpp with CoreML support
 
 ```bash
-cmake -B build -DGGML_COREML=ON
+cmake -B build -DMTMD_COREML=ON
 cmake --build build
 ```
 
@@ -91,7 +91,7 @@ cmake --build build
 ```bash
 ./build/bin/llama-mtmd-cli \
     -m MiniCPM-V-4_6-Q4_K_M.gguf \
-    --coreml output_dir/coreml_minicpmv46_vit_all_f16.mlmodelc \
+    --mmproj output_dir/coreml_minicpmv46_vit_all_f16.mlmodelc \
     --image cat.jpg \
     -p "Describe this image."
 ```
@@ -119,7 +119,7 @@ variants with different hidden sizes.
    - `setup()` — fill `hparams` + build preprocessor from metadata
    - `encode_slice()` — pack pixels → `backend::predict_single_output()`
 4. **Register**: add `extern const model_adapter g_adapter;` to `models/models.h` and
-   `&your_model::g_adapter` to the registry in `mtmd-coreml.cpp`
+   `&your_model::g_adapter` to the registry in `coreml/mtmd-coreml.cpp`
 
 ## Notes
 
