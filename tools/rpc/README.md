@@ -232,6 +232,29 @@ time in the client table; use server tracing to measure remote handler time.
 Tracing is disabled by default and should be used for diagnostics because it
 adds timing and logging overhead.
 
+### Model placement reporting
+
+Set `LLAMA_LOG_MODEL_PLACEMENT=1` on the RPC client to print the model tensor
+placement decision made during load:
+
+```bash
+LLAMA_LOG_MODEL_PLACEMENT=1 ./build/bin/llama-bench --rpc 192.0.2.10:50052 ...
+```
+
+The report includes the split mode, split source, raw split weights, normalized
+split points, whether a split weight came from user tensor-split input, backend
+reported memory, or the client CPU fallback, the input and output devices, and
+compressed repeating-layer ranges. For RPC, `client_backend` and
+`client_device_type` are local client/RPC-wrapper metadata and are not proof of
+the remote backend type. RPC memory is whatever the remote backend reports and
+may be remote CPU RAM; confirm each remote backend from the corresponding
+`rpc-server` startup device banner. The `RPC<index>[host:port]` value in
+`default_buft` and `buft_candidate` identifies the remote RPC device index to
+match against that server banner. The report is useful when RPC throughput looks
+network-bound but the real issue may be layer placement, output placement, or a
+device that reports no memory and therefore receives a host-memory-based split
+weight.
+
 ### Troubleshooting
 
 Use the `GGML_RPC_DEBUG` environment variable to enable debug messages from `rpc-server`:
