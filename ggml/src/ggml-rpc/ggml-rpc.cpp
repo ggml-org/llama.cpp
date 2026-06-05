@@ -71,6 +71,7 @@ enum rpc_cmd {
     RPC_CMD_HELLO,
     RPC_CMD_DEVICE_COUNT,
     RPC_CMD_GRAPH_RECOMPUTE,
+    RPC_CMD_SYNCHRONIZE,
     RPC_CMD_COUNT,
 };
 
@@ -650,8 +651,17 @@ static void ggml_backend_rpc_free(ggml_backend_t backend) {
 }
 
 static void ggml_backend_rpc_synchronize(ggml_backend_t backend) {
-    GGML_UNUSED(backend);
-    // this is no-op because we don't have any async operations
+    ggml_backend_rpc_context * rpc_ctx = (ggml_backend_rpc_context *)backend->context;
+
+    LOG_DBG("[%s] flushing pipeline for endpoint=%s\n", __func__, rpc_ctx->endpoint.c_str());
+
+    auto sock = get_socket(rpc_ctx->endpoint);
+    if (sock == nullptr) {
+        return;
+    }
+    // Send SYNCHRONIZE and wait for response - this drains the command pipeline
+    bool status = send_rpc_cmd(sock, RPC_CMD_SYNCHRONIZE, nullptr, 0, nullptr, 0);
+    RPC_STATUS_ASSERT(status);
 }
 
 static void add_tensor(ggml_tensor * tensor, std::vector<rpc_tensor> & tensors, std::unordered_set<ggml_tensor*> & visited) {
@@ -701,23 +711,52 @@ static enum ggml_status ggml_backend_rpc_graph_compute(ggml_backend_t backend, g
     ggml_backend_dev_t rpc_dev = ggml_backend_get_device(backend);
     ggml_backend_rpc_device_context * rpc_dev_ctx = (ggml_backend_rpc_device_context *)rpc_dev->context;
 
+    LOG_DBG("[%s] backend=%p, cgraph=%p, n_nodes=%d, endpoint=%s\n",
+            __func__, (void*)backend, (void*)cgraph, cgraph->n_nodes, rpc_ctx->endpoint.c_str());
+
     GGML_ASSERT(cgraph->n_nodes > 0);
     bool reuse = cgraph->uid != 0 && rpc_dev_ctx->last_graph_uid == cgraph->uid;
     if (reuse) {
+        LOG_DBG("[%s] using cached graph (recompute)\n", __func__);
         rpc_msg_graph_recompute_req request;
         request.device = rpc_ctx->device;
         auto sock = get_socket(rpc_ctx->endpoint);
+        if (sock == nullptr) {
+            LOG_DBG("[%s] WARNING: get_socket returned nullptr for endpoint %s\n", __func__, rpc_ctx->endpoint.c_str());
+            return GGML_STATUS_FAILED;
+        }
         bool status = send_rpc_cmd(sock, RPC_CMD_GRAPH_RECOMPUTE, &request, sizeof(request));
         RPC_STATUS_ASSERT(status);
     } else {
+        LOG_DBG("[%s] serializing and sending new graph\n", __func__);
         rpc_dev_ctx->last_graph_uid = cgraph->uid;
         std::vector<uint8_t> input;
         serialize_graph(rpc_ctx->device, cgraph, input);
         auto sock = get_socket(rpc_ctx->endpoint);
+        if (sock == nullptr) {
+            LOG_DBG("[%s] WARNING: get_socket returned nullptr for endpoint %s\n", __func__, rpc_ctx->endpoint.c_str());
+            return GGML_STATUS_FAILED;
+        }
         bool status = send_rpc_cmd(sock, RPC_CMD_GRAPH_COMPUTE, input.data(), input.size());
         RPC_STATUS_ASSERT(status);
     }
     return GGML_STATUS_SUCCESS;
+}
+
+// Backend-level event functions
+// Events are no-ops for RPC: TCP command ordering provides implicit synchronization.
+// graph_compute is fire-and-forget; any subsequent command that expects a response
+// (get_tensor, synchronize) will naturally block until prior commands complete.
+static void ggml_backend_rpc_event_record(ggml_backend_t backend, ggml_backend_event_t event) {
+    LOG_DBG("[%s] no-op (TCP ordering provides synchronization)\n", __func__);
+    GGML_UNUSED(backend);
+    GGML_UNUSED(event);
+}
+
+static void ggml_backend_rpc_event_wait(ggml_backend_t backend, ggml_backend_event_t event) {
+    LOG_DBG("[%s] no-op (TCP ordering provides synchronization)\n", __func__);
+    GGML_UNUSED(backend);
+    GGML_UNUSED(event);
 }
 
 static ggml_backend_i ggml_backend_rpc_interface = {
@@ -734,8 +773,8 @@ static ggml_backend_i ggml_backend_rpc_interface = {
     /* .graph_plan_update       = */ NULL,
     /* .graph_plan_compute      = */ NULL,
     /* .graph_compute           = */ ggml_backend_rpc_graph_compute,
-    /* .event_record            = */ NULL,
-    /* .event_wait              = */ NULL,
+    /* .event_record            = */ ggml_backend_rpc_event_record,
+    /* .event_wait              = */ ggml_backend_rpc_event_wait,
     /* .graph_optimize          = */ NULL,
 };
 
@@ -1670,6 +1709,18 @@ static void rpc_serve_client(const std::vector<ggml_backend_t> & backends, const
                 }
                 break;
             }
+            case RPC_CMD_SYNCHRONIZE: {
+                // Drain the pipeline: by the time we reach here, all prior
+                // fire-and-forget commands (GRAPH_COMPUTE, GRAPH_RECOMPUTE)
+                // have already completed. Send an empty response as the fence.
+                if (!recv_msg(sock, nullptr, 0)) {
+                    return;
+                }
+                if (!send_msg(sock, nullptr, 0)) {
+                    return;
+                }
+                break;
+            }
             case RPC_CMD_GET_DEVICE_MEMORY: {
                 rpc_msg_get_device_memory_req request;
                 if (!recv_msg(sock, &request, sizeof(request))) {
@@ -1796,10 +1847,10 @@ static void ggml_backend_rpc_device_get_props(ggml_backend_dev_t dev, struct ggm
     props->type        = ggml_backend_rpc_device_get_type(dev);
     ggml_backend_rpc_device_get_memory(dev, &props->memory_free, &props->memory_total);
     props->caps = {
-        /* .async                 = */ false,
+        /* .async                 = */ true,
         /* .host_buffer           = */ false,
         /* .buffer_from_host_ptr  = */ false,
-        /* .events                = */ false,
+        /* .events                = */ true,
     };
 }
 
@@ -1835,6 +1886,39 @@ static bool ggml_backend_rpc_device_supports_buft(ggml_backend_dev_t dev, ggml_b
     return buft_ctx->endpoint == dev_ctx->endpoint && buft_ctx->device == dev_ctx->device;
 }
 
+// Device-level event functions
+// Events are local-only objects that satisfy the ggml_backend_device_i interface.
+// TCP command ordering provides the actual synchronization guarantees.
+static ggml_backend_event_t ggml_backend_rpc_device_event_new(ggml_backend_dev_t dev) {
+    LOG_DBG("[%s] dev=%p\n", __func__, (void*)dev);
+
+    return new ggml_backend_event{
+        /* .device  = */ dev,
+        /* .context = */ nullptr,
+    };
+}
+
+static void ggml_backend_rpc_device_event_free(ggml_backend_dev_t dev, ggml_backend_event_t event) {
+    GGML_UNUSED(dev);
+    delete event;
+}
+
+static void ggml_backend_rpc_device_event_synchronize(ggml_backend_dev_t dev, ggml_backend_event_t event) {
+    GGML_UNUSED(event);
+    ggml_backend_rpc_device_context * dev_ctx = (ggml_backend_rpc_device_context *)dev->context;
+
+    LOG_DBG("[%s] dev=%p, endpoint=%s (sending SYNCHRONIZE to flush pipeline)\n",
+            __func__, (void*)dev, dev_ctx->endpoint.c_str());
+
+    auto sock = get_socket(dev_ctx->endpoint.c_str());
+    if (sock == nullptr) {
+        return;
+    }
+    // Round-trip to drain all pending commands on this endpoint
+    bool status = send_rpc_cmd(sock, RPC_CMD_SYNCHRONIZE, nullptr, 0, nullptr, 0);
+    RPC_STATUS_ASSERT(status);
+}
+
 static const struct ggml_backend_device_i ggml_backend_rpc_device_i = {
     /* .get_name             = */ ggml_backend_rpc_device_get_name,
     /* .get_description      = */ ggml_backend_rpc_device_get_description,
@@ -1848,9 +1932,9 @@ static const struct ggml_backend_device_i ggml_backend_rpc_device_i = {
     /* .supports_op          = */ ggml_backend_rpc_device_supports_op,
     /* .supports_buft        = */ ggml_backend_rpc_device_supports_buft,
     /* .offload_op           = */ NULL,
-    /* .event_new            = */ NULL,
-    /* .event_free           = */ NULL,
-    /* .event_synchronize    = */ NULL,
+    /* .event_new            = */ ggml_backend_rpc_device_event_new,
+    /* .event_free           = */ ggml_backend_rpc_device_event_free,
+    /* .event_synchronize    = */ ggml_backend_rpc_device_event_synchronize,
 };
 
 // backend reg interface
