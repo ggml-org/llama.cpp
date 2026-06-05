@@ -36,8 +36,8 @@ python convert_hf_to_gguf.py --outfile gemma-4-E2B-it-bf16.gguf --outtype bf16 -
 ```
 
 Notes:
-- In the usual case where the model is distributed in 16-bit format, `--outtype auto` also works well.
-- If you have previously download the model locally, specify the directory and remove the `--remote` flag.
+- In the usual case where the model is distributed in 16-bit format, `--outtype auto` (or omitting `--outtype` entirely) also works well.
+- If you have previously downloaded the model locally, specify the directory and remove the `--remote` flag.
 - For compatibility reasons, the Python requirements install transformers 4, but more and more models (like Gemma 4) require transformers 5. You can safely `pip install -U transformers` to get the latest version.
 
 ## Quantize the GGUF
@@ -55,8 +55,8 @@ Options:
 * `--leave-output-tensor` leave output.weight un(re)quantized. Increases model size but may also increase quality, especially when requantizing
 * `--pure` disable k-quant mixtures and quantizes all tensors to the same type
 * `--imatrix file_name` use data in file_name as importance matrix for quant optimizations
-* `--include-weights tensor_name` use importance matrix for these tensors
-* `--exclude-weights tensor_names` use importance matrix for tensors not in this list
+* `--include-weights tensor_name` use importance matrix for this tensor (can be specified multiple times)
+* `--exclude-weights tensor_name` use importance matrix for the tensors **not** specified (include/exclude cannot be mixed)
 * `--output-tensor-type` use a specific quant type for the output.weight tensor
 * `--token-embedding-type` use a specific quant type for the token embeddings tensor
 * `--keep-split` generate the quantized model in the same shards as the input file instead of a single quantized file
