@@ -23,6 +23,7 @@ class llama_io_write_i;
 struct llama_memory_i;
 struct llama_memory_context_i;
 
+
 // stores copy of the memory in device buffer. used for fast state save/load
 struct llama_memory_buffer {
     int n_tensors = 0;
@@ -134,9 +135,7 @@ struct llama_context {
     int encode(const llama_batch & batch_inp);
     int decode(const llama_batch & batch_inp);
 
-    //
-    // state save/load
-    //
+  
 
     size_t state_get_size();
     size_t state_get_data(      uint8_t * dst, size_t size);
@@ -319,6 +318,53 @@ private:
 
     bool sched_need_reserve = true;
 
+    struct llama_turboprefill_state {
+        bool enabled = false;
+        // 0 = regular scheduler path.
+        // Positive values defer full ubatches; a negative value marks the final full ubatch and triggers replay.
+        int stage = 0;
+        uint32_t ubatch_index = 0;
+        uint32_t n_full_ubatches = 0;
+
+        void begin_batch(bool is_enabled, uint32_t n_tokens, uint32_t n_ubatch) {
+            enabled = is_enabled;
+            stage = 0;
+            ubatch_index = 0;
+            n_full_ubatches = enabled ? n_tokens / n_ubatch : 0;
+        }
+
+        int stage_for_ubatch(uint32_t n_tokens, uint32_t n_ubatch) {
+            stage = 0;
+
+            if (enabled && ubatch_index < n_full_ubatches && n_tokens == n_ubatch) {
+                if (ubatch_index + 1 == n_full_ubatches) {
+                    stage = -((int) ubatch_index + 1);
+                    if (stage == -1) {
+                        // A single full ubatch goes through the standard path.
+                        stage = 0;
+                    }
+                } else {
+                    stage = ubatch_index + 1;
+                }
+            }
+
+            return stage;
+        }
+
+        void finish_ubatch() {
+            ubatch_index++;
+        }
+
+        void finish_batch() {
+            enabled = false;
+            stage = 0;
+            ubatch_index = 0;
+            n_full_ubatches = 0;
+        }
+    };
+
+    llama_turboprefill_state turboprefill;
+
     ggml_backend_t backend_cpu = nullptr;
     std::vector<ggml_backend_ptr> backends;
 
@@ -338,8 +384,12 @@ private:
     std::vector<ggml_backend_buffer_type_t> backend_buft;
     std::vector<size_t>                     backend_buf_exp_size; // expected buffer sizes
 
+
     llm_graph_result_ptr gf_res_prev;
     llm_graph_result_ptr gf_res_reserve;
+
+    std::vector<llm_graph_result_ptr> gf_ring;
+    size_t gf_ring_idx = 0;
 
     // host buffer for the model output (logits and embeddings)
     ggml_backend_buffer_ptr buf_output;

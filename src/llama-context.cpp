@@ -13,6 +13,7 @@
 
 #include <cinttypes>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <limits>
 #include <stdexcept>
@@ -1178,19 +1179,18 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
     auto * res = gf_res_prev.get();
     auto * gf  = res->get_gf();
 
+    // Pipeline-parallel work may still be reading the previous ubatch inputs.
+    // Synchronize before rewriting them for the next graph.
+    if (cparams.pipeline_parallel) {
+        ggml_backend_sched_synchronize(sched.get());
+    }
+
     // the new graph parameters
     // in order to correctly reuse a graph, it's full topology has to be uniquely determined by these parameters
     const auto gparams = graph_params(res, ubatch, mctx, gtype);
 
     if (!graph_reuse_disable && res->can_reuse(gparams)) {
         //LLAMA_LOG_DEBUG("%s: reusing previous graph\n", __func__);
-
-        // with pipeline parallelism, the previous graph_compute_async may still be running
-        // on the GPU. we must synchronize before set_inputs to avoid overwriting input tensors
-        // that the previous compute is still reading.
-        if (cparams.pipeline_parallel) {
-            ggml_backend_sched_synchronize(sched.get());
-        }
 
         n_reused++;
     } else {
@@ -1600,6 +1600,73 @@ int llama_context::decode(const llama_batch & batch_inp) {
 
     GGML_ASSERT((cparams.causal_attn || cparams.n_ubatch >= n_tokens_all) && "non-causal attention requires n_ubatch >= n_tokens");
 
+    // TurboPrefill eligibility for this logical batch.
+    const uint32_t turboprefill_threshold = cparams.n_ubatch;
+
+    const llama_batch & batch = balloc->get_batch();
+
+    bool turboprefill_has_tokens = batch.token != nullptr;
+    bool turboprefill_single_seq = true;
+    bool turboprefill_positions_contiguous = true;
+
+    bool turboprefill_requested = false;
+    const char * turboprefill_env = std::getenv("TURBOPREFILL");
+    turboprefill_requested =
+            turboprefill_env != nullptr &&
+            std::strcmp(turboprefill_env, "0") != 0 &&
+            std::strcmp(turboprefill_env, "false") != 0 &&
+            std::strcmp(turboprefill_env, "off") != 0;
+
+    bool turboprefill_enabled =
+            turboprefill_requested &&
+            n_tokens_all >= turboprefill_threshold &&
+            n_outputs_all == 0 &&
+            !cparams.embeddings &&
+            cparams.causal_attn &&
+            cparams.pipeline_parallel &&
+            model.split_mode() == LLAMA_SPLIT_MODE_LAYER &&
+            model.n_devices() > 1 &&
+            turboprefill_has_tokens;
+
+    if (turboprefill_enabled) {
+        const llama_seq_id seq0 = batch.seq_id[0][0];
+        const llama_pos    pos0 = batch.pos[0];
+
+        for (uint32_t i = 0; i < n_tokens_all; ++i) {
+            if (batch.n_seq_id[i] != 1 || batch.seq_id[i][0] != seq0) {
+                turboprefill_single_seq = false;
+                break;
+            }
+        }
+
+        for (uint32_t i = 0; i < n_tokens_all; ++i) {
+            if (batch.pos[i] != pos0 + (llama_pos) i) {
+                turboprefill_positions_contiguous = false;
+                break;
+            }
+        }
+
+        turboprefill_enabled =
+                turboprefill_single_seq &&
+                turboprefill_positions_contiguous;
+    }
+
+    turboprefill.begin_batch(turboprefill_enabled, n_tokens_all, cparams.n_ubatch);
+
+    if (n_tokens_all >= turboprefill_threshold) {
+        LLAMA_LOG_INFO(
+                "%s: TurboPrefill requested=%d active=%d n_tokens=%u n_ubatch=%u full_ubatches=%u devices=%d pipeline=%d split_mode=%d\n",
+                __func__,
+                (int) turboprefill_requested,
+                (int) turboprefill.enabled,
+                n_tokens_all,
+                cparams.n_ubatch,
+                turboprefill.n_full_ubatches,
+                (int) model.n_devices(),
+                (int) cparams.pipeline_parallel,
+                (int) model.split_mode());
+    }
+
     if (t_compute_start_us == 0) {
         t_compute_start_us = ggml_time_us();
     }
@@ -1689,6 +1756,9 @@ int llama_context::decode(const llama_batch & batch_inp) {
         }
 
         ggml_status status;
+
+        turboprefill.stage_for_ubatch(ubatch.n_tokens, cparams.n_ubatch);
+
         const auto * res = process_ubatch(ubatch, LLM_GRAPH_TYPE_DECODER, mctx.get(), status);
 
         if (!res) {
@@ -1823,7 +1893,12 @@ int llama_context::decode(const llama_batch & batch_inp) {
         }
 
         n_outputs_prev += n_outputs;
+        turboprefill.finish_ubatch();
     } while (mctx->next());
+
+    // The scheduler only reads turboprefill.stage while processing one ubatch graph.
+    turboprefill.finish_batch();
+
 
     // set to total number of outputs in the batch, for use in llama_get_logits_ith
     n_outputs = n_outputs_all;
@@ -2187,8 +2262,9 @@ ggml_status llama_context::graph_compute(
     for (const auto & set_n_threads_fn : set_n_threads_fns) {
         set_n_threads_fn.second(set_n_threads_fn.first, n_threads);
     }
-
-    auto status = ggml_backend_sched_graph_compute_async(sched.get(), gf);
+    auto status = turboprefill.stage != 0
+            ? ggml_backend_sched_graph_compute_async_turboprefill(sched.get(), gf, turboprefill.stage)
+            : ggml_backend_sched_graph_compute_async(sched.get(), gf);
     if (status != GGML_STATUS_SUCCESS) {
         LLAMA_LOG_ERROR("%s: ggml_backend_sched_graph_compute_async failed with error %d\n", __func__, status);
     }
@@ -3824,3 +3900,4 @@ void llama_opt_epoch(
 llama_memory_breakdown llama_get_memory_breakdown(const struct llama_context * ctx) {
     return ctx->memory_breakdown();
 }
+
