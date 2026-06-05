@@ -106,6 +106,16 @@ void ggml_cuda_error(const char * stmt, const char * func, const char * file, in
 
 // this is faster on Windows
 // probably because the Windows CUDA libraries forget to make this check before invoking the drivers
+// Forward declarations for host-staged cross-GPU copy helpers
+// (used by buffer ops before their definition site).
+static cudaError_t ggml_cuda_copy_across_devices(
+    void * dst, int dst_device, const void * src, int src_device,
+    size_t size, cudaStream_t dst_stream, cudaStream_t src_stream);
+static cudaError_t ggml_cuda_copy2d_across_devices(
+    void * dst, int dst_device, size_t dpitch,
+    const void * src, int src_device, size_t spitch,
+    size_t width, size_t height, cudaStream_t dst_stream, cudaStream_t src_stream);
+
 void ggml_cuda_set_device(int device) {
     int current_device;
     CUDA_CHECK(cudaGetDevice(&current_device));
@@ -342,6 +352,7 @@ static ggml_cuda_device_info ggml_cuda_init() {
                 CUDA_CHECK(cudaDeviceCanAccessPeer(&can_access_peer, id, id_other));
                 if (can_access_peer) {
                     CUDA_CHECK(cudaDeviceEnablePeerAccess(id_other, 0));
+                    info.peer_access[id][id_other] = true;
                 }
             }
         }
@@ -762,11 +773,16 @@ static bool ggml_backend_cuda_buffer_cpy_tensor(ggml_backend_buffer_t buffer, co
         ggml_backend_cuda_buffer_context * dst_ctx = (ggml_backend_cuda_buffer_context *)dst->buffer->context;
         if (src_ctx->device == dst_ctx->device) {
             CUDA_CHECK(cudaMemcpyAsync(dst->data, src->data, ggml_nbytes(src), cudaMemcpyDeviceToDevice, cudaStreamPerThread));
+        } else if (ggml_cuda_info().peer_access[src_ctx->device][dst_ctx->device]) {
+            CUDA_CHECK(cudaMemcpyPeerAsync(dst->data, dst_ctx->device, src->data, src_ctx->device, ggml_nbytes(src), cudaStreamPerThread));
         } else {
 #ifdef GGML_CUDA_NO_PEER_COPY
             return false;
 #else
-            CUDA_CHECK(cudaMemcpyPeerAsync(dst->data, dst_ctx->device, src->data, src_ctx->device, ggml_nbytes(src), cudaStreamPerThread));
+            // host-staged fallback
+            CUDA_CHECK(ggml_cuda_copy_across_devices(
+                dst->data, dst_ctx->device, src->data, src_ctx->device,
+                ggml_nbytes(src), cudaStreamPerThread, cudaStreamPerThread));
 #endif
         }
         CUDA_CHECK(cudaStreamSynchronize(cudaStreamPerThread));
@@ -1845,6 +1861,122 @@ static cudaError_t ggml_cuda_Memcpy2DPeerAsync(
 #endif // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
 }
 
+// Pinned host staging buffer for cross-GPU copies without peer access.
+// Reuses a single buffer across calls, growing as needed, to avoid the
+// overhead of per-call cudaMallocHost/cudaFreeHost.
+struct ggml_cuda_host_staging_pool {
+    void * buf = nullptr;
+    size_t size = 0;
+
+    cudaError_t ensure(size_t needed) {
+        if (needed <= size) {
+            return cudaSuccess;
+        }
+        if (buf) {
+            cudaFreeHost(buf);
+        }
+        cudaError_t err = cudaMallocHost(&buf, needed);
+        if (err != cudaSuccess) {
+            buf = nullptr;
+            size = 0;
+            return err;
+        }
+        size = needed;
+        return cudaSuccess;
+    }
+};
+
+static ggml_cuda_host_staging_pool & ggml_cuda_get_staging() {
+    static thread_local ggml_cuda_host_staging_pool pool;
+    return pool;
+}
+
+// Host-staged cross-device copy for GPUs without peer access.
+// Copies data from src_device to dst_device via a pinned host buffer.
+// Returns cudaSuccess on success, error code on failure.
+static cudaError_t ggml_cuda_copy_across_devices(
+    void * dst, int dst_device, const void * src, int src_device,
+    size_t size, cudaStream_t dst_stream, cudaStream_t src_stream) {
+
+    const auto & info = ggml_cuda_info();
+    if (info.peer_access[src_device][dst_device]) {
+        return cudaMemcpyPeerAsync(dst, dst_device, src, src_device, size, dst_stream);
+    }
+
+    // Fallback: stage through pinned host memory via reusable pool
+    int prev_device = ggml_cuda_get_device();
+    auto & pool = ggml_cuda_get_staging();
+    cudaError_t err = pool.ensure(size);
+    if (err != cudaSuccess) { return err; }
+
+    ggml_cuda_set_device(src_device);
+    err = cudaMemcpyAsync(pool.buf, src, size, cudaMemcpyDeviceToHost, src_stream);
+    if (err != cudaSuccess) { goto cleanup; }
+
+    err = cudaStreamSynchronize(src_stream);
+    if (err != cudaSuccess) { goto cleanup; }
+
+    ggml_cuda_set_device(dst_device);
+    err = cudaMemcpyAsync(dst, pool.buf, size, cudaMemcpyHostToDevice, dst_stream);
+
+cleanup:
+    ggml_cuda_set_device(prev_device);
+    return err;
+}
+
+// 2D host-staged cross-device copy for strided data (used in split mul_mat output).
+// Batches all rows into a single contiguous staging buffer to replace the
+// original row-by-row approach (one sync per row → two syncs total).
+static cudaError_t ggml_cuda_copy2d_across_devices(
+    void * dst, int dst_device, size_t dpitch,
+    const void * src, int src_device, size_t spitch,
+    size_t width, size_t height, cudaStream_t dst_stream, cudaStream_t src_stream) {
+
+    const auto & info = ggml_cuda_info();
+    if (info.peer_access[src_device][dst_device]) {
+        cudaMemcpy3DPeerParms p = {};
+        p.dstDevice = dst_device;
+        p.dstPtr = make_cudaPitchedPtr(dst, dpitch, dpitch, height);
+        p.srcDevice = src_device;
+        p.srcPtr = make_cudaPitchedPtr(const_cast<void *>(src), spitch, spitch, height);
+        p.extent = make_cudaExtent(width, height, 1);
+        return cudaMemcpy3DPeerAsync(&p, dst_stream);
+    }
+
+    // Fallback: stage all rows through a single contiguous pinned buffer
+    int prev_device = ggml_cuda_get_device();
+    auto & pool = ggml_cuda_get_staging();
+    cudaError_t err = pool.ensure(width * height);
+    if (err != cudaSuccess) { return err; }
+
+    // Batch D2H for all rows
+    ggml_cuda_set_device(src_device);
+    for (size_t r = 0; r < height; r++) {
+        err = cudaMemcpyAsync(
+            (char *)pool.buf + r * width,
+            (const char *)src + r * spitch,
+            width, cudaMemcpyDeviceToHost, src_stream);
+        if (err != cudaSuccess) { goto cleanup; }
+    }
+    err = cudaStreamSynchronize(src_stream);
+    if (err != cudaSuccess) { goto cleanup; }
+
+    // Batch H2D for all rows
+    ggml_cuda_set_device(dst_device);
+    for (size_t r = 0; r < height; r++) {
+        err = cudaMemcpyAsync(
+            (char *)dst + r * dpitch,
+            (char *)pool.buf + r * width,
+            width, cudaMemcpyHostToDevice, dst_stream);
+        if (err != cudaSuccess) { goto cleanup; }
+    }
+    err = cudaStreamSynchronize(dst_stream);
+
+cleanup:
+    ggml_cuda_set_device(prev_device);
+    return err;
+}
+
 static void ggml_cuda_op_mul_mat(
     ggml_backend_cuda_context & ctx,
     const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst, ggml_cuda_op_mul_mat_t op,
@@ -2075,7 +2207,41 @@ static void ggml_cuda_op_mul_mat(
 
                 // copy src0, src1 to device if necessary
                 if (src1_is_contiguous) {
-                    if (id != ctx.device) {
+                    if (id != ctx.device && !ggml_cuda_info().peer_access[ctx.device][id]) {
+                        // No peer access — use host-staged fallback.
+                        // We need to wait for ctx.device to finish writing src1 first.
+                        if (split) {
+                            CUDA_CHECK(cudaStreamWaitEvent(stream,
+                                src0_extra->events[ctx.device][0], 0));
+                        }
+                        if (quantize_src1) {
+                            if (quantize_src1 == quantize_mmq_q8_1_cuda) {
+                                // MMQ stores rows at ne11 pitch, not src1_ncols pitch:
+                                // a flat contiguous copy would read from wrong rows.
+                                const size_t pitch = ne11*sizeof(block_q8_1_mmq);
+                                const size_t width = src1_ncols*sizeof(block_q8_1_mmq);
+                                const size_t height = src1_padded_col_size/(4*QK8_1);
+                                CUDA_CHECK(ggml_cuda_copy2d_across_devices(
+                                    dev[id].src1_ddq + src1_ddq_i_offset, id, pitch,
+                                    dev[ctx.device].src1_ddq + src1_ddq_i_offset, ctx.device, pitch,
+                                    width, height, stream, ctx.stream()));
+                            } else {
+                                CUDA_CHECK(ggml_cuda_copy_across_devices(
+                                    dev[id].src1_ddq + src1_ddq_i_offset, id,
+                                    dev[ctx.device].src1_ddq + src1_ddq_i_offset, ctx.device,
+                                    src1_ncols*src1_padded_col_size*q8_1_ts/q8_1_bs,
+                                    stream, ctx.stream()));
+                            }
+                        } else {
+                            float * dst_p = dev[id].src1_ddf + (i0*ne11 + src1_col_0) * ne10;
+                            float * src_p = (float *) src1->data;
+                            src_p += (i0*ne11 + src1_col_0) * ne10;
+                            CUDA_CHECK(ggml_cuda_copy_across_devices(
+                                dst_p, id, src_p, ctx.device,
+                                src1_ncols*ne10*sizeof(float),
+                                stream, ctx.stream()));
+                        }
+                    } else if (id != ctx.device) {
                         if (quantize_src1) {
                             char * src1_ddq_i_source = dev[ctx.device].src1_ddq + src1_ddq_i_offset;
                             if (quantize_src1 == quantize_mmq_q8_1_cuda) {
@@ -2130,8 +2296,16 @@ static void ggml_cuda_op_mul_mat(
                         float * dhf_dst_i = (float *) ((char *) dst_off_device + i02*nb2 + i03*nb3);
                         GGML_ASSERT(dst->nb[1] == ne0*sizeof(float));
                         dhf_dst_i += src1_col_0*ne0 + dev[id].row_low;
-                        CUDA_CHECK(ggml_cuda_Memcpy2DPeerAsync(
-                            dhf_dst_i, ctx.device, ne0*sizeof(float), dst_dd_i, id, row_diff*sizeof(float), row_diff*sizeof(float), src1_ncols, stream));
+                        if (!ggml_cuda_info().peer_access[id][ctx.device]) {
+                            CUDA_CHECK(ggml_cuda_copy2d_across_devices(
+                                dhf_dst_i, ctx.device, ne0*sizeof(float),
+                                dst_dd_i, id, row_diff*sizeof(float),
+                                row_diff*sizeof(float), src1_ncols,
+                                ctx.stream(), stream));
+                        } else {
+                            CUDA_CHECK(ggml_cuda_Memcpy2DPeerAsync(
+                                dhf_dst_i, ctx.device, ne0*sizeof(float), dst_dd_i, id, row_diff*sizeof(float), row_diff*sizeof(float), src1_ncols, stream));
+                        }
                     } else {
                         float * dhf_dst_i = (float *) ((char *) dst_off_device + i02*nb2 + i03*nb3);
                         GGML_ASSERT(dst->nb[1] == ne0*sizeof(float));
@@ -3268,11 +3442,16 @@ static bool ggml_backend_cuda_cpy_tensor_async(ggml_backend_t backend_src, ggml_
         // copy on src stream
         if (cuda_ctx_src->device == cuda_ctx_dst->device) {
             CUDA_CHECK(cudaMemcpyAsync(dst->data, src->data, ggml_nbytes(dst), cudaMemcpyDeviceToDevice, cuda_ctx_src->stream()));
+        } else if (ggml_cuda_info().peer_access[cuda_ctx_src->device][cuda_ctx_dst->device]) {
+            CUDA_CHECK(cudaMemcpyPeerAsync(dst->data, cuda_ctx_dst->device, src->data, cuda_ctx_src->device, ggml_nbytes(dst), cuda_ctx_src->stream()));
         } else {
 #ifdef GGML_CUDA_NO_PEER_COPY
             return false;
 #else
-            CUDA_CHECK(cudaMemcpyPeerAsync(dst->data, cuda_ctx_dst->device, src->data, cuda_ctx_src->device, ggml_nbytes(dst), cuda_ctx_src->stream()));
+            CUDA_CHECK(ggml_cuda_copy_across_devices(
+                dst->data, cuda_ctx_dst->device,
+                src->data, cuda_ctx_src->device,
+                ggml_nbytes(dst), cuda_ctx_dst->stream(), cuda_ctx_src->stream()));
 #endif // GGML_CUDA_NO_PEER_COPY
         }
 

@@ -1106,6 +1106,11 @@ struct ggml_cuda_device_info {
 
     cuda_device_info devices[GGML_CUDA_MAX_DEVICES] = {};
 
+    // peer access availability: peer_access[from][to] = true when
+    // cudaDeviceEnablePeerAccess(from, to) succeeded at init time.
+    // When false, cross-device copies must use host staging instead.
+    bool peer_access[GGML_CUDA_MAX_DEVICES][GGML_CUDA_MAX_DEVICES] = {{}};
+
     std::array<float, GGML_CUDA_MAX_DEVICES> default_tensor_split = {};
 };
 
