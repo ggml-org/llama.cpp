@@ -862,11 +862,9 @@ ggml_tensor * llama_model_deepseek_v4_flash::graph::build_attention(
     ggml_tensor * hca_state_score = nullptr;
     if (ratio == DSV4_HCA_RATIO && inp_dsv4->get_hca().state_idxs) {
         hca_state_kv = build_lora_mm(layer.attn_comp_wkv, cur);
-        hca_state_kv = ggml_cont(ctx0, ggml_cast(ctx0, hca_state_kv, GGML_TYPE_F32));
         cb(hca_state_kv, "hca_state_kv", il);
 
         hca_state_score = build_lora_mm(layer.attn_comp_wgate, cur);
-        hca_state_score = ggml_cont(ctx0, ggml_cast(ctx0, hca_state_score, GGML_TYPE_F32));
         cb(hca_state_score, "hca_state_score", il);
 
         ggml_tensor * ape = layer.attn_comp_ape;
@@ -882,11 +880,9 @@ ggml_tensor * llama_model_deepseek_v4_flash::graph::build_attention(
 
     if (ratio == DSV4_CSA_RATIO && inp_dsv4->get_csa().state_idxs) {
         ggml_tensor * csa_state_kv = build_lora_mm(layer.attn_comp_wkv, cur);
-        csa_state_kv = ggml_cont(ctx0, ggml_cast(ctx0, csa_state_kv, GGML_TYPE_F32));
         cb(csa_state_kv, "csa_state_kv", il);
 
         ggml_tensor * csa_state_score = build_lora_mm(layer.attn_comp_wgate, cur);
-        csa_state_score = ggml_cont(ctx0, ggml_cast(ctx0, csa_state_score, GGML_TYPE_F32));
         cb(csa_state_score, "csa_state_score", il);
 
         ggml_tensor * csa_ape = layer.attn_comp_ape;
@@ -936,11 +932,9 @@ ggml_tensor * llama_model_deepseek_v4_flash::graph::build_attention(
         ggml_build_forward_expand(gf, csa_state_score);
 
         ggml_tensor * lid_state_kv = build_lora_mm(layer.indexer_comp_wkv, cur);
-        lid_state_kv = ggml_cont(ctx0, ggml_cast(ctx0, lid_state_kv, GGML_TYPE_F32));
         cb(lid_state_kv, "lid_state_kv", il);
 
         ggml_tensor * lid_state_score = build_lora_mm(layer.indexer_comp_wgate, cur);
-        lid_state_score = ggml_cont(ctx0, ggml_cast(ctx0, lid_state_score, GGML_TYPE_F32));
         cb(lid_state_score, "lid_state_score", il);
 
         ggml_tensor * lid_ape = layer.indexer_comp_ape;
