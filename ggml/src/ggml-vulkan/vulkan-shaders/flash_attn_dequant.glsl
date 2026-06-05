@@ -198,7 +198,6 @@ FLOAT_TYPEV4 dequantize4(uint ib, uint iqs, uint a_offset, uint binding_idx) {
             case FA_TYPE_Q5_1: FA_DEQUANT4_Q5_1(k_packed_q5_1)
             case FA_TYPE_Q8_0: FA_DEQUANT4_Q8_0(k_packed_q8_0)
             case FA_TYPE_BF16: FA_DEQUANT4_BF16(k_packed_bf16)
-            case FA_TYPE_BF16: FA_DEQUANT4_BF16(k_packed_bf16)
             case FA_TYPE_Q4_0_ROCMFP4:      FA_DEQUANT4_ROCMFP4(k_packed_rocmfp4)
             case FA_TYPE_Q4_0_ROCMFP4_FAST: FA_DEQUANT4_ROCMFP4_FAST(k_packed_rocmfp4_fast)
         }
@@ -210,7 +209,6 @@ FLOAT_TYPEV4 dequantize4(uint ib, uint iqs, uint a_offset, uint binding_idx) {
             case FA_TYPE_Q5_0: FA_DEQUANT4_Q5_0(v_packed_q5_0)
             case FA_TYPE_Q5_1: FA_DEQUANT4_Q5_1(v_packed_q5_1)
             case FA_TYPE_Q8_0: FA_DEQUANT4_Q8_0(v_packed_q8_0)
-            case FA_TYPE_BF16: FA_DEQUANT4_BF16(v_packed_bf16)
             case FA_TYPE_BF16: FA_DEQUANT4_BF16(v_packed_bf16)
             case FA_TYPE_Q4_0_ROCMFP4:      FA_DEQUANT4_ROCMFP4(v_packed_rocmfp4)
             case FA_TYPE_Q4_0_ROCMFP4_FAST: FA_DEQUANT4_ROCMFP4_FAST(v_packed_rocmfp4_fast)
