@@ -313,7 +313,7 @@ struct mtmd_context {
 #endif
             ) {
             throw std::runtime_error(
-                "no vision/audio backend was initialized; pass --mmproj or --coreml");
+                "no vision/audio backend was initialized; pass --mmproj");
         }
     }
 

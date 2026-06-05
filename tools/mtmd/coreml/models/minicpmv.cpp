@@ -1,4 +1,4 @@
-// CoreML adapter for the MiniCPM-V family with the unified "vit_all" ANE
+// CoreML adapter for the MiniCPM-V family with the unified "vit_all"
 // pipeline (used by v4.0 / v4.5 / v4.6 and any future variant that follows
 // the same export contract).
 //
@@ -11,7 +11,7 @@
 //                                                    (embed_dim is LLM hidden)
 //
 // position_ids / sincos pos_embed / window indices are all computed inside
-// the ANE graph from `patch_w`; the host only packs pixels and passes one
+// the CoreML graph from `patch_w`; the host only packs pixels and passes one
 // integer. n_embd_out and n_tokens_out are read directly from the
 // .mlmodelc metadata.json so the same adapter works across all variants
 // that differ only in LLM hidden dim (2560 for v4.0, 4096 for v4.5,
@@ -55,11 +55,17 @@ static void setup(context &                  ctx,
     auto & hp = ctx.hparams;
     hp.image_size         = IMAGE_SIZE;
     hp.patch_size         = PATCH_SIZE;
-    // minicpmv_version >= 3 makes mtmd select the MINICPMV_2_6 slice
-    // template (overview <image> ... </image> <slice> ... </slice> ...).
-    // The actual numeric variant (4 / 5 / 6) doesn't change slice layout
-    // in mtmd, so we use a single value for all bundles.
-    hp.minicpmv_version   = 4;
+    // Determine minicpmv_version from the bundle's userDefinedMetadata.
+    // For slice layout purposes (mtmd.cpp) versions 3+ all use the same
+    // MINICPMV_2_6 template; the version marker still drives projector
+    // selection in clip.cpp and must be accurate for each variant.
+    int ver = 4;
+    if (!meta.base_model.empty()) {
+        if (meta.base_model.find("4.0") != std::string::npos) {
+            ver = 3;
+        }
+    }
+    hp.minicpmv_version   = ver;
     hp.minicpmv_query_num = ctx.n_tokens_out;
     hp.image_mean[0] = hp.image_mean[1] = hp.image_mean[2] = 0.5f;
     hp.image_std [0] = hp.image_std [1] = hp.image_std [2] = 0.5f;

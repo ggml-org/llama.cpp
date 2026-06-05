@@ -31,7 +31,7 @@ struct mlmodelc_meta {
     std::string                                      base_model;    // "MiniCPM-V 4.6", may be empty
 };
 
-// One CoreML adapter == one ANE-supported model family.
+// One CoreML adapter == one model family supported on Apple hardware.
 // Each adapter is fully self-contained: it knows how to detect its own
 // .mlmodelc, fill the context (hparams + preprocessor + output shape) from
 // the bundle's metadata, and run a single preprocessed slice through CoreML.
