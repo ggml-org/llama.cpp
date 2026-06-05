@@ -1,15 +1,9 @@
-//******************************************************************************
-// Element-wise Map F32 Kernel
 // Element-wise operations: dst[i] = src0[i] op src1[i]
-// Supports: MUL, ADD (more operations to be added later)
-//******************************************************************************
-
 #include <stdint.h>
 #include "ggml_tensor.h"
 #include "platform.h"
 
-// Generic m0-gated element-wise block operation.  Processes full 8-wide
-// chunks with m0=0xFF, then a single tail chunk with m0 = (1<<tail)-1.
+// Generic m0-gated element-wise block operation.
 // The OP parameter selects the instruction: "fmul.ps", "fadd.ps", "fsub.ps".
 #define DEFINE_BLOCK_OP(name, op_insn)                                         \
 static inline void name(float* dst_block, const float* src0_block,             \
@@ -17,12 +11,12 @@ static inline void name(float* dst_block, const float* src0_block,             \
     const int32_t vec_end = (elements / 8) * 8;                                \
     const int32_t tail = elements - vec_end;                                   \
                                                                                \
-    unsigned long temp_mask;                                                    \
+    unsigned long temp_mask;                                                   \
     __asm__ volatile("mova.x.m %0" : "=r"(temp_mask));                         \
     __asm__ volatile("mov.m.x m0, x0, 0xFF");                                  \
                                                                                \
-    for (int32_t i = 0; i < vec_end; i += 8) {                                \
-        __asm__ volatile(                                                       \
+    for (int32_t i = 0; i < vec_end; i += 8) {                                 \
+        __asm__ volatile(                                                      \
             "flw.ps f10, %[s0]\n"                                              \
             "flw.ps f11, %[s1]\n"                                              \
             op_insn " f12, f10, f11\n"                                         \
@@ -33,16 +27,16 @@ static inline void name(float* dst_block, const float* src0_block,             \
             : "f10", "f11", "f12"                                              \
         );                                                                     \
     }                                                                          \
-                                                                               \
+    /* Deal with tail chunks */                                                \
     if (tail > 0) {                                                            \
         const unsigned long tail_m0 = (1ul << tail) - 1;                       \
-        __asm__ volatile(                                                       \
+        __asm__ volatile(                                                      \
             "mov.m.x m0, %[tm], 0\n"                                           \
             "flw.ps f10, 0(%[s0])\n"                                           \
             "flw.ps f11, 0(%[s1])\n"                                           \
             op_insn " f12, f10, f11\n"                                         \
             "fsw.ps f12, 0(%[d])\n"                                            \
-            :                                                                   \
+            :                                                                  \
             : [s0] "r"(&src0_block[vec_end]),                                  \
               [s1] "r"(&src1_block[vec_end]),                                  \
               [d]  "r"(&dst_block[vec_end]),                                   \
