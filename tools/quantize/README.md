@@ -15,6 +15,18 @@ Quantization is done in two phases:
 
 If the model supports multimodal inputs (images or audio), you also need to convert and quantize the multimodal encoders and projectors.
 
+To perform these tasks, you need to install the Python requirements:
+
+```bash
+python3 -m pip install -r requirements.txt
+```
+
+Or if you use `uv`:
+
+```bash
+uv pip install -r requirements.txt --index-strategy unsafe-best-match
+```
+
 ## Prepare the input GGUF file
 
 To convert a model from a Hugging Face repo, you can use a command like the following:
@@ -26,6 +38,7 @@ python convert_hf_to_gguf.py --outfile gemma-4-E2B-it-bf16.gguf --outtype bf16 -
 Notes:
 - In the usual case where the model is distributed in 16-bit format, `--outtype auto` also works well.
 - If you have previously download the model locally, specify the directory and remove the `--remote` flag.
+- For compatibility reasons, the Python requirements install transformers 4, but more and more models (like Gemma 4) require transformers 5. You can safely `pip install -U transformers` to get the latest version.
 
 ## Quantize the GGUF
 
