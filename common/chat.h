@@ -171,13 +171,13 @@ struct common_chat_msg_spans {
         spans.push_back({ role, pos, len });
     }
 
-    common_chat_msg_span last_user() const {
-        for (auto it = spans.rbegin(); it != spans.rend(); ++it) {
-            if (it->role == COMMON_CHAT_ROLE_USER) {
-                return *it;
+    bool is_user_start(int32_t pos) const {
+        for (auto it = spans.begin(); it != spans.end(); ++it) {
+            if (it->role == COMMON_CHAT_ROLE_USER && pos == (int32_t) it->pos) {
+                return true;
             }
         }
-        return {};
+        return false;
     }
 };
 

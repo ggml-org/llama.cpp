@@ -3098,9 +3098,7 @@ private:
                         has_mtmd = true;
                     }
 
-                    // find span for last user message
                     const auto & spans = slot.task->params.message_spans;
-                    const auto span_last_user = spans.last_user();
 
                     // add prompt tokens for processing in the current batch
                     while (slot.prompt.n_tokens() < slot.task->n_tokens() && batch.n_tokens < n_batch) {
@@ -3130,9 +3128,8 @@ private:
 
                         slot.n_prompt_tokens_processed++;
 
-                        // stop the prompt batch exactly before the latest user input, so a checkpoint
-                        // can be created after the previous messages
-                        if (span_last_user.valid() && slot.prompt.n_tokens() == (int32_t) span_last_user.pos) {
+                        // stop the prompt batch exactly before a user message
+                        if (spans.is_user_start(slot.prompt.n_tokens())) {
                             break;
                         }
 
@@ -3161,7 +3158,11 @@ private:
                     // the number of tokens added to the batch for the current slot
                     const auto n_tokens_cur = batch.n_tokens - n_tokens_prev;
 
+                    const auto n_tokens_start = slot.prompt.n_tokens() - n_tokens_cur;
+
                     const bool near_prompt_end = slot.task->n_tokens() < slot.prompt.n_tokens() + n_ubatch;
+
+                    const bool is_user_start = spans.is_user_start(n_tokens_start);
 
                     // entire prompt has been processed
                     if (slot.prompt.n_tokens() == slot.task->n_tokens()) {
@@ -3177,27 +3178,15 @@ private:
 
                         slot.init_sampler();
                     } else {
-                        // skip ordinary mid-prompt checkpoints
-                        if (!span_last_user.valid() && !near_prompt_end) {
+                        // skip ordinary mid-prompt checkpoints, unless the batch starts a user
+                        // message or we are near the end of the prompt
+                        if (!is_user_start && !near_prompt_end) {
                             do_checkpoint = false;
                         }
                     }
 
                     const auto pos_min = llama_memory_seq_pos_min(llama_get_memory(ctx_tgt), slot.id);
                     const auto pos_max = llama_memory_seq_pos_max(llama_get_memory(ctx_tgt), slot.id);
-
-                    // checkpoints are created before the current batch is decoded, so
-                    // their token position is the batch start rather than the prompt end
-                    const int32_t n_tokens_start = slot.prompt.n_tokens() - n_tokens_cur;
-
-                    if (span_last_user.valid()) {
-                        const bool is_on_user = n_tokens_start == (int32_t) span_last_user.pos;
-                        const bool is_after_user = n_tokens_start > (int32_t) span_last_user.pos;
-                        const bool is_allowed = is_on_user || (is_after_user && near_prompt_end);
-                        if (do_checkpoint && !is_allowed) {
-                            do_checkpoint = false;
-                        }
-                    }
 
                     // nothing to checkpoint yet
                     // TODO: is this check needed?
