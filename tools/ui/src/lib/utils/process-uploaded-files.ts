@@ -87,6 +87,7 @@ export async function processFilesToChatUploaded(
 						preview = await heicFileToPngDataURL(file);
 					} catch (err) {
 						console.error('Failed to convert HEIC to PNG:', err);
+						continue;
 					}
 				}
 

@@ -1,5 +1,26 @@
-import { heicTo } from 'heic-to';
 import { MimeTypeImage } from '$lib/enums';
+
+// heic requires a relatively large decoder, in order to reduce primary bundle size
+// we lazily load this decoder from a CDN when needed, and cache it for future conversions
+const HEIC_TO_CDN_URL = 'https://cdn.jsdelivr.net/npm/heic-to@1.5.2/dist/heic-to.js';
+
+interface HeicToModule {
+	heicTo(args: { blob: Blob; type: string }): Promise<Blob>;
+}
+
+let modulePromise: Promise<HeicToModule> | null = null;
+
+/**
+ * Lazily load the heic-to decoder from the CDN and cache it
+ * @returns Promise resolving to the heic-to module
+ */
+function getHeicTo(): Promise<HeicToModule> {
+	if (!modulePromise) {
+		modulePromise = import(/* @vite-ignore */ HEIC_TO_CDN_URL) as Promise<HeicToModule>;
+	}
+
+	return modulePromise;
+}
 
 /**
  * Convert a HEIC/HEIF file to a PNG data URL
@@ -7,10 +28,8 @@ import { MimeTypeImage } from '$lib/enums';
  * @returns Promise resolving to PNG data URL
  */
 export async function heicFileToPngDataURL(file: File | Blob): Promise<string> {
-	const pngBlob = await heicTo({
-		blob: file,
-		type: MimeTypeImage.PNG
-	});
+	const { heicTo } = await getHeicTo();
+	const pngBlob = await heicTo({ blob: file, type: MimeTypeImage.PNG });
 
 	return new Promise((resolve, reject) => {
 		const reader = new FileReader();
