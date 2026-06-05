@@ -357,6 +357,12 @@ static constexpr __host__ __device__ int calc_nwarps(ggml_type type, int ncols_d
     if (table_id == MMVQ_PARAMETERS_GENERIC) {
         switch (ncols_dst) {
             case 1:
+                if (type == GGML_TYPE_TQ3_4S) {
+                    // TQ3_4S has a heavier vec_dot than the simple q4/q8 paths.
+                    // On NVIDIA, 4 warps overpay in shared reduction for bs=1 decode.
+                    return 2;
+                }
+                [[fallthrough]];
             case 2:
             case 3:
             case 4:
@@ -960,6 +966,14 @@ static void mul_mat_vec_q_switch_ncols_dst(
                 (is_nvidia_pascal_older && std::find(slow_pascal.begin(), slow_pascal.end(), type) != slow_pascal.end()) ||
                 GGML_CUDA_CC_IS_RDNA(cc)) {
             use = false;
+        }
+
+        if (GGML_CUDA_CC_IS_NVIDIA(cc) && type == GGML_TYPE_TQ3_4S && c_ncols_dst == 1) {
+            // 27B-class widths benefit from 2 rows/block; smaller models do not.
+            constexpr int large_k_threshold_blocks = 144;
+            if (blocks_per_row_x >= large_k_threshold_blocks) {
+                use = true;
+            }
         }
 
         return use;

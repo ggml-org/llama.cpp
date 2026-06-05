@@ -3464,24 +3464,29 @@ template <int mmq_y, bool need_check> static __device__ __forceinline__ void loa
 
         const block_tq3_4s * bxi = (const block_tq3_4s *)x + kbx0 + i*stride + blk_in_row;
 
-        // Decode all 4 subgroup scales, find max for the block-level scale
-        float rms[4];
-        for (int g = 0; g < 4; g++) {
-            const uint8_t sb = bxi->d[g];
+        // Each adjacent thread pair works on one 32-weight block.
+        // Decode only the two subgroup scales used by this thread, then share
+        // the block max with the sibling thread instead of redundantly decoding all four.
+        float rms_local[2];
+#pragma unroll
+        for (int sg = 0; sg < 2; ++sg) {
+            const uint8_t sb = bxi->d[g_base + sg];
             if (sb == 0) {
-                rms[g] = 0.0f;
+                rms_local[sg] = 0.0f;
             } else {
-                rms[g] = ldexpf(1.0f + (float)(sb & 31) / 32.0f, (sb >> 5) - 9);
+                rms_local[sg] = ldexpf(1.0f + (float)(sb & 31) / 32.0f, (sb >> 5) - 9);
             }
         }
-        const float amax = fmaxf(fmaxf(rms[0], rms[1]), fmaxf(rms[2], rms[3])) * 1.996684f;
+        const float amax_pair = fmaxf(rms_local[0], rms_local[1]);
+        const float amax_shfl = __shfl_xor_sync(0xFFFFFFFF, amax_pair, 1, WARP_SIZE);
+        const float amax = fmaxf(amax_pair, amax_shfl) * 1.996684f;
         const float d_block = amax / 127.0f;
         const float d_inv = (d_block > 0.0f) ? 127.0f / amax : 0.0f;
 
 #pragma unroll
         for (int sg = 0; sg < 2; sg++) {
             const int g = g_base + sg;
-            const float rms_g = rms[g];
+            const float rms_g = rms_local[sg];
 
             const uint8_t * qp = bxi->qs + g * 3;
             const uint32_t packed = (uint32_t)qp[0] | ((uint32_t)qp[1] << 8) | ((uint32_t)qp[2] << 16);

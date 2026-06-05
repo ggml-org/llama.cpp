@@ -1466,12 +1466,7 @@ static __device__ __forceinline__ float tq3_4s_dot_subgroup_q8_1(
     int sumi = ggml_cuda_dp4a(w_lo, a_lo, 0);
     sumi     = ggml_cuda_dp4a(w_hi, a_hi, sumi);
 
-    // Scale: d_weight * (centroid_scale / 127) * d_activation
-    // centroids range [-2.1519, 2.1519], levels range [-127, 127]
-    // so levels[i] = centroids[i] * (127 / 2.1519)
-    // dot = sumi * d_weight * (2.1519 / 127) * d_activation
-    const float2 ds8 = __half22float2(bq8_1->ds);
-    return (float)sumi * d * (2.1519f / 127.0f) * ds8.x;
+    return (float)sumi * d;
 }
 
 static __device__ __forceinline__ float vec_dot_tq3_4s_q8_1(
@@ -1479,6 +1474,9 @@ static __device__ __forceinline__ float vec_dot_tq3_4s_q8_1(
 
     const block_tq3_4s * bq = (const block_tq3_4s *) vbq + kbx;
     const int subgroup0 = iqs / 4;
+    const float2 ds8 = __half22float2(bq8_1->ds);
+    // Hoist the activation-side scale once per block instead of reloading it per subgroup.
+    const float scale = (2.1519f / 127.0f) * ds8.x;
     float sum = 0.0f;
 
 #pragma unroll
@@ -1486,5 +1484,5 @@ static __device__ __forceinline__ float vec_dot_tq3_4s_q8_1(
         sum += tq3_4s_dot_subgroup_q8_1(bq, bq8_1, subgroup0 + s);
     }
 
-    return sum;
+    return sum * scale;
 }
