@@ -247,6 +247,55 @@ and may reduce prompt throughput or fail to fit on another model or cluster.
 Always compare prompt and decode tokens/sec on the real network after the RPC
 server caches are warm enough for your workload.
 
+For larger RPC setups, `tools/rpc/suggest_rpc_placement.py` can read a
+`GGML_RPC_TRACE=1` stderr file and emit candidate `--tensor-split` values for
+`tools/rpc/bench_rpc_remote.py`. The helper is intentionally conservative: it
+does not claim a split is faster, it only ranks benchmark candidates from
+observed `result_output`, `l_out-*`, and cross-endpoint copy timing.
+
+```bash
+python3 tools/rpc/suggest_rpc_placement.py \
+  --trace-stderr baseline.stderr.txt \
+  --rpc "$RPC" \
+  --device RPC0/RPC1/RPC2 \
+  --tensor-split "$BASE_TS" \
+  --llama-bench /path/to/build/bin/llama-bench \
+  --model /path/to/model.gguf \
+  --flash-attn on \
+  --env LLAMA_LOG_MODEL_PLACEMENT=1
+```
+
+When a single `rpc-server` exposes multiple devices, pass
+`--device-endpoints RPC0=host-a:50052,RPC1=host-a:50052,...` so the report can
+group candidate risk and trace cost by endpoint. The generated commands should
+still be run and compared with `bench_rpc_remote.py`; the trace-derived ranking
+is only a way to reduce the number of manual placement experiments.
+
+To run several suggested splits in one pass, use
+`tools/rpc/bench_rpc_sweep.py`. It writes one JSONL/stderr pair per candidate,
+a `summary.json`, and grep-friendly `ranked.csv` and `ranked.jsonl` files:
+
+```bash
+python3 tools/rpc/bench_rpc_sweep.py \
+  --llama-bench /path/to/build/bin/llama-bench \
+  --model /path/to/model.gguf \
+  --rpc "$RPC" \
+  --device RPC0/RPC1/RPC2 \
+  --split-mode layer \
+  --flash-attn on \
+  --candidate baseline="$BASE_TS" \
+  --candidate tail_on_rpc1=24576/24576/0 \
+  --candidate tail_on_rpc0=24576/0/0 \
+  --prompt 128 \
+  --gen 128 \
+  --repetitions 5 \
+  --env LLAMA_LOG_MODEL_PLACEMENT=1
+```
+
+Each `--candidate` is a single benchmark case. Use `NAME=auto` to omit `-ts`
+for that case. Comma-separated `-ts` grids are rejected so each result row maps
+to one placement candidate.
+
 When benchmarking CUDA RPC servers across different GPU generations, build for
 the remote GPUs as well as the local client GPU. For example, an RTX 3070 server
 and RTX 4060 client need both architectures:

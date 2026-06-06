@@ -1,0 +1,427 @@
+#!/usr/bin/env python3
+"""Suggest RPC layer-placement benchmark candidates from trace output."""
+
+import argparse
+import json
+import re
+import shlex
+from collections import defaultdict
+from pathlib import Path
+
+
+TRACE_OP_RE = re.compile(
+    r"^\s+(?P<operation>\S+)\s+"
+    r"(?P<endpoint>\S+:\d+)\s+"
+    r"(?P<tensor>.+?)\s+"
+    r"(?P<calls>\d+)\s+"
+    r"(?P<bytes>\d+)\s+"
+    r"(?P<wait_ms>[0-9.]+)\s*$"
+)
+CROSS_RE = re.compile(
+    r"^\s+(?P<src>\S+:\d+)\s+->\s+"
+    r"(?P<dst>\S+:\d+)\s+"
+    r"(?P<calls>\d+)\s+"
+    r"(?P<bytes>\d+)\s*$"
+)
+CROSS_TENSOR_RE = re.compile(
+    r"^\s+(?P<src>\S+:\d+)\s+->\s+"
+    r"(?P<dst>\S+:\d+)\s+"
+    r"(?P<tensor>.+?)\s+"
+    r"(?P<calls>\d+)\s+"
+    r"(?P<bytes>\d+)\s*$"
+)
+
+
+def parse_float_list(value):
+    values = []
+    for part in re.split(r"[,;/]+", value.strip()):
+        if not part:
+            continue
+        try:
+            values.append(float(part))
+        except ValueError as exc:
+            raise argparse.ArgumentTypeError(f"invalid numeric split value {part!r}") from exc
+    if not values:
+        raise argparse.ArgumentTypeError("split list is empty")
+    return values
+
+
+def format_split(values):
+    parts = []
+    for value in values:
+        if value == int(value):
+            parts.append(str(int(value)))
+        else:
+            parts.append(f"{value:.6g}")
+    return "/".join(parts)
+
+
+def parse_list(value):
+    return [part.strip() for part in re.split(r"[,;/]+", value) if part.strip()]
+
+
+def parse_device_endpoints(value):
+    mapping = {}
+    if value is None:
+        return mapping
+    if isinstance(value, dict):
+        return value
+    for item in value.split(","):
+        item = item.strip()
+        if not item:
+            continue
+        device, sep, endpoint = item.partition("=")
+        if not sep or not device or not endpoint:
+            raise argparse.ArgumentTypeError(
+                f"invalid device endpoint mapping {item!r}; expected RPC0=host:port"
+            )
+        mapping[device.strip()] = endpoint.strip()
+    return mapping
+
+
+def parse_trace(paths):
+    tensor_ops = []
+    cross_endpoint = []
+    cross_tensors = []
+
+    section = None
+    for path in paths:
+        with path.open("r", encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                stripped = line.strip()
+                if stripped == "ggml-rpc trace tensor operations (top by wait):":
+                    section = "tensor_ops"
+                    continue
+                if stripped == "ggml-rpc trace cross-endpoint copy fallbacks:":
+                    section = "cross"
+                    continue
+                if stripped == "ggml-rpc trace cross-endpoint copy tensors (top by bytes):":
+                    section = "cross_tensors"
+                    continue
+                if stripped.startswith("ggml-rpc trace "):
+                    section = None
+                    continue
+                if not stripped or stripped.startswith("operation ") or stripped.startswith("endpoints "):
+                    continue
+
+                if section == "tensor_ops":
+                    match = TRACE_OP_RE.match(line)
+                    if match:
+                        tensor_ops.append({
+                            "operation": match.group("operation"),
+                            "endpoint": match.group("endpoint"),
+                            "tensor": match.group("tensor").strip(),
+                            "calls": int(match.group("calls")),
+                            "bytes": int(match.group("bytes")),
+                            "wait_ms": float(match.group("wait_ms")),
+                        })
+                    continue
+
+                if section == "cross":
+                    match = CROSS_RE.match(line)
+                    if match:
+                        cross_endpoint.append({
+                            "src": match.group("src"),
+                            "dst": match.group("dst"),
+                            "calls": int(match.group("calls")),
+                            "bytes": int(match.group("bytes")),
+                        })
+                    continue
+
+                if section == "cross_tensors":
+                    match = CROSS_TENSOR_RE.match(line)
+                    if match:
+                        cross_tensors.append({
+                            "src": match.group("src"),
+                            "dst": match.group("dst"),
+                            "tensor": match.group("tensor").strip(),
+                            "calls": int(match.group("calls")),
+                            "bytes": int(match.group("bytes")),
+                        })
+
+    return tensor_ops, cross_endpoint, cross_tensors
+
+
+def aggregate_endpoint_waits(tensor_ops):
+    endpoint = defaultdict(lambda: {
+        "result_output_wait_ms": 0.0,
+        "result_output_bytes": 0,
+        "layer_boundary_wait_ms": 0.0,
+        "layer_boundary_bytes": 0,
+        "copy_tensor_wait_ms": 0.0,
+        "copy_tensor_bytes": 0,
+    })
+
+    for op in tensor_ops:
+        item = endpoint[op["endpoint"]]
+        tensor = op["tensor"]
+        if tensor == "result_output" and op["operation"] == "GET_TENSOR":
+            item["result_output_wait_ms"] += op["wait_ms"]
+            item["result_output_bytes"] += op["bytes"]
+        if tensor.startswith("l_out-"):
+            item["layer_boundary_wait_ms"] += op["wait_ms"]
+            item["layer_boundary_bytes"] += op["bytes"]
+            if op["operation"] == "COPY_TENSOR":
+                item["copy_tensor_wait_ms"] += op["wait_ms"]
+                item["copy_tensor_bytes"] += op["bytes"]
+
+    result = {}
+    for name, item in endpoint.items():
+        result[name] = dict(item)
+        for metric in ("result_output", "layer_boundary", "copy_tensor"):
+            bytes_key = f"{metric}_bytes"
+            wait_key = f"{metric}_wait_ms"
+            rate_key = f"{metric}_ms_per_mib"
+            bytes_value = item[bytes_key]
+            result[name][rate_key] = (
+                item[wait_key] / (bytes_value / (1024 * 1024))
+                if bytes_value else None
+            )
+    return result
+
+
+def aggregate_cross_tensors(cross_tensors, tensor_ops):
+    wait_by_tensor = defaultdict(float)
+    for op in tensor_ops:
+        if op["tensor"].startswith("l_out-"):
+            wait_by_tensor[(op["endpoint"], op["tensor"])] += op["wait_ms"]
+
+    pairs = []
+    for item in cross_tensors:
+        pairs.append({
+            **item,
+            "src_wait_ms": wait_by_tensor.get((item["src"], item["tensor"]), 0.0),
+        })
+    return pairs
+
+
+def infer_device_endpoints(devices, rpc_endpoints, explicit):
+    if explicit:
+        return {device: explicit.get(device) for device in devices}
+    if len(devices) == len(rpc_endpoints):
+        return dict(zip(devices, rpc_endpoints))
+    return {device: None for device in devices}
+
+
+def endpoint_suffix_cost(removed_endpoints, endpoint_metrics, cross_pairs):
+    cost = 0.0
+    for endpoint in removed_endpoints:
+        metrics = endpoint_metrics.get(endpoint)
+        if not metrics:
+            continue
+        cost += metrics["result_output_wait_ms"]
+        cost += metrics["layer_boundary_wait_ms"]
+    for pair in cross_pairs:
+        if pair["src"] in removed_endpoints or pair["dst"] in removed_endpoints:
+            cost += pair.get("src_wait_ms", 0.0)
+    return cost
+
+
+def make_candidates(args, devices, splits, device_endpoints, endpoint_metrics, cross_pairs):
+    total = sum(splits)
+    candidates = []
+    baseline = {
+        "name": "baseline",
+        "description": "Original tensor split.",
+        "device": "/".join(devices),
+        "tensor_split": format_split(splits),
+        "zero_suffix_after_device": None,
+        "output_device_estimate": devices[-1] if devices else None,
+        "output_endpoint_estimate": device_endpoints.get(devices[-1]) if devices else None,
+        "omitted_split_weight": 0.0,
+        "omitted_split_ratio": 0.0,
+        "trace_removed_suffix_cost_ms": 0.0,
+    }
+    candidates.append(baseline)
+
+    for cutoff in range(len(splits) - 2, -1, -1):
+        candidate_splits = list(splits)
+        for index in range(cutoff + 1, len(candidate_splits)):
+            candidate_splits[index] = 0.0
+
+        active_total = sum(candidate_splits)
+        if active_total <= 0:
+            continue
+
+        omitted = total - active_total
+        omitted_ratio = omitted / total if total else 0.0
+        if omitted_ratio > args.max_omitted_ratio:
+            continue
+
+        output_device = devices[cutoff] if cutoff < len(devices) else None
+        output_endpoint = device_endpoints.get(output_device)
+        removed_devices = devices[cutoff + 1 :]
+        removed_endpoints = {
+            endpoint for device in removed_devices
+            for endpoint in [device_endpoints.get(device)]
+            if endpoint is not None
+        }
+        trace_cost = endpoint_suffix_cost(removed_endpoints, endpoint_metrics, cross_pairs)
+
+        candidates.append({
+            "name": f"zero_suffix_after_{output_device or cutoff}",
+            "description": (
+                "Set all split weights after this device to zero so the output "
+                "slot lands on this device in layer split mode."
+            ),
+            "device": "/".join(devices),
+            "tensor_split": format_split(candidate_splits),
+            "zero_suffix_after_device": output_device,
+            "output_device_estimate": output_device,
+            "output_endpoint_estimate": output_endpoint,
+            "removed_devices": removed_devices,
+            "removed_endpoints": sorted(removed_endpoints),
+            "omitted_split_weight": omitted,
+            "omitted_split_ratio": omitted_ratio,
+            "trace_removed_suffix_cost_ms": trace_cost,
+        })
+
+    candidates[1:] = sorted(
+        candidates[1:],
+        key=lambda item: (
+            -item["trace_removed_suffix_cost_ms"],
+            item["omitted_split_ratio"],
+            item["name"],
+        ),
+    )
+    return candidates[: args.max_candidates + 1]
+
+
+def build_bench_command(args, candidate):
+    if args.llama_bench is None or args.model is None or args.rpc is None:
+        return None
+    cmd = [
+        "python3",
+        "tools/rpc/bench_rpc_remote.py",
+        "--llama-bench",
+        str(args.llama_bench),
+        "--model",
+        str(args.model),
+        "--base-rpc",
+        args.rpc,
+        "--patch-rpc",
+        args.rpc,
+        "--prompt",
+        str(args.prompt),
+        "--gen",
+        str(args.gen),
+        "--repetitions",
+        str(args.repetitions),
+        "--ngl",
+        str(args.ngl),
+        "--device",
+        candidate["device"],
+        "--split-mode",
+        args.split_mode,
+        "--base-tensor-split",
+        format_split(args.tensor_split),
+        "--patch-tensor-split",
+        candidate["tensor_split"],
+    ]
+    if args.flash_attn is not None:
+        cmd.extend(["--flash-attn", args.flash_attn])
+    for env in args.env:
+        cmd.extend(["--env", env])
+    if args.out_dir is not None:
+        separator = "\\" if "\\" in args.out_dir and "/" not in args.out_dir else "/"
+        cmd.extend(["--out-dir", args.out_dir.rstrip("/\\") + separator + candidate["name"]])
+    return shlex.join(cmd)
+
+
+def build_summary(args):
+    tensor_ops, cross_endpoint, cross_tensors = parse_trace(args.trace_stderr)
+    devices = parse_list(args.device)
+    rpc_endpoints = parse_list(args.rpc) if args.rpc else []
+    explicit_mapping = parse_device_endpoints(args.device_endpoints)
+    device_endpoints = infer_device_endpoints(devices, rpc_endpoints, explicit_mapping)
+    endpoint_metrics = aggregate_endpoint_waits(tensor_ops)
+    cross_pairs = aggregate_cross_tensors(cross_tensors, tensor_ops)
+    candidates = make_candidates(
+        args,
+        devices,
+        args.tensor_split,
+        device_endpoints,
+        endpoint_metrics,
+        cross_pairs,
+    )
+    for candidate in candidates:
+        candidate["bench_command"] = build_bench_command(args, candidate)
+
+    return {
+        "schema_version": 1,
+        "trace_stderr": [str(path) for path in args.trace_stderr],
+        "rpc": args.rpc,
+        "device": "/".join(devices),
+        "device_endpoints": device_endpoints,
+        "tensor_split": format_split(args.tensor_split),
+        "split_mode": args.split_mode,
+        "flash_attn": args.flash_attn,
+        "parsed": {
+            "tensor_op_count": len(tensor_ops),
+            "cross_endpoint_count": len(cross_endpoint),
+            "cross_tensor_count": len(cross_tensors),
+        },
+        "endpoint_metrics": endpoint_metrics,
+        "cross_endpoint": cross_endpoint,
+        "cross_tensors": cross_pairs,
+        "candidates": candidates,
+        "notes": [
+            "Candidates are benchmark suggestions, not proven optimizations.",
+            "Layer split output placement is estimated as the last non-zero split device.",
+            "Zeroing a suffix changes model placement and may reduce fit or prompt throughput.",
+        ],
+    }
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="Suggest RPC tensor-split placement candidates from GGML_RPC_TRACE stderr."
+    )
+    parser.add_argument("--trace-stderr", action="append", required=True, type=Path, help="stderr file containing GGML_RPC_TRACE output; repeatable")
+    parser.add_argument("--tensor-split", required=True, type=parse_float_list, help="current tensor split, for example 1/2/3/4")
+    parser.add_argument("--device", required=True, help="current llama-bench device string, for example RPC0/RPC1")
+    parser.add_argument("--rpc", default=None, help="RPC endpoint list used by llama-bench")
+    parser.add_argument("--device-endpoints", default=None, help="explicit device to endpoint mapping, for example RPC0=a:50052,RPC1=a:50052")
+    parser.add_argument("--max-omitted-ratio", default=0.35, type=float, help="skip candidates that zero more than this split-weight fraction")
+    parser.add_argument("--max-candidates", default=6, type=int, help="maximum non-baseline candidates to emit")
+    parser.add_argument("--llama-bench", default=None, help="optional llama-bench path for generated bench_rpc_remote commands")
+    parser.add_argument("--model", default=None, help="optional model path for generated bench_rpc_remote commands")
+    parser.add_argument("--prompt", default=16, type=int, help="generated command prompt tokens")
+    parser.add_argument("--gen", default=16, type=int, help="generated command generation tokens")
+    parser.add_argument("--repetitions", default=3, type=int, help="generated command repetitions")
+    parser.add_argument("--ngl", default=99, type=int, help="generated command -ngl")
+    parser.add_argument("--split-mode", default="layer", choices=("none", "layer", "row", "tensor"), help="generated command split mode")
+    parser.add_argument("--flash-attn", default=None, choices=("on", "off", "auto"), help="generated command flash attention setting")
+    parser.add_argument("--env", action="append", default=[], metavar="KEY=VALUE", help="environment override for generated commands; repeatable")
+    parser.add_argument("--out-dir", default=None, help="optional output directory root for generated bench commands")
+    parser.add_argument("--output", default=None, type=Path, help="write JSON summary to this path")
+    args = parser.parse_args()
+
+    if args.max_omitted_ratio < 0 or args.max_omitted_ratio > 1:
+        parser.error("--max-omitted-ratio must be in the range 0..1")
+    if args.max_candidates < 1:
+        parser.error("--max-candidates must be >= 1")
+
+    devices = parse_list(args.device)
+    if len(devices) != len(args.tensor_split):
+        parser.error(
+            f"--device has {len(devices)} entries but --tensor-split has "
+            f"{len(args.tensor_split)} entries"
+        )
+
+    return args
+
+
+def main():
+    args = parse_args()
+    summary = build_summary(args)
+    text = json.dumps(summary, indent=2) + "\n"
+    if args.output is not None:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(text, encoding="utf-8")
+    print(text, end="")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
