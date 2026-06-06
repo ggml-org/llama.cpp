@@ -5,6 +5,7 @@
 #include "llama.h"
 #include "log.h"
 
+#include <chrono>
 #include <climits>
 #include <cmath>
 #include <fstream>
