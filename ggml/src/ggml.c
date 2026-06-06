@@ -4552,14 +4552,18 @@ struct ggml_tensor * ggml_col2im_1d(
         int                   oc,
         int                   p0) {
     GGML_ASSERT(ggml_is_matrix(a));
+    GGML_ASSERT(ggml_is_contiguous(a));
     GGML_ASSERT(a->type == GGML_TYPE_F32 || a->type == GGML_TYPE_F16 || a->type == GGML_TYPE_BF16);
+    GGML_ASSERT(s0 > 0);
+    GGML_ASSERT(oc > 0);
+    GGML_ASSERT(p0 >= 0);
 
     const int64_t K_OC = a->ne[0];
     const int64_t T_in = a->ne[1];
     const int64_t K = K_OC / oc;
     const int64_t T_out = (T_in - 1) * s0 + K - 2 * p0;
 
-    GGML_ASSERT(K_OC == K * oc);  // K*OC must be divisible
+    GGML_ASSERT(K_OC == K * oc);  // a->ne[0] must be a whole number of oc blocks
     GGML_ASSERT(K > 0 && T_out > 0);
 
     const int64_t ne[4] = { T_out, oc, 1, 1 };
