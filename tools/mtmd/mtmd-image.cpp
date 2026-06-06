@@ -1116,7 +1116,7 @@ bool mtmd_image_preprocessor_deepseekocr::preprocess(const clip_image_u8 & img, 
     static constexpr int native_resolutions[] = { 1024 /* base */, 1280 /* large */ };
     // TODO: support 512 (tiny) and 640 (small) once we have eval data for them
 
-    const int64_t orig_area = static_cast<int64_t>(img.n_pixels());
+    const int64_t orig_area = static_cast<int64_t>(img.get_size().area());
 
     size_t  mode_i   = 0;
     int64_t min_diff = std::numeric_limits<int64_t>::max();

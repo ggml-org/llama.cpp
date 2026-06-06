@@ -24,10 +24,11 @@
 #include <climits>
 #include <vector>
 
-// represents raw image data, layout is RGBRGBRGB...
-// length of data must be nx * ny * 3
+// for still image data, layout is RGBRGBRGB...
+// length of data must be nx * ny * 3 bytes
+//
 // for audio bitmap: nx = sample count, ny = 1, layout is F32 F32 F32 ...
-// length of data must be nx * sizeof(float)
+// length of data must be nx * sizeof(float) bytes
 struct mtmd_bitmap {
     uint32_t nx = 0;
     uint32_t ny = 0;
@@ -35,7 +36,7 @@ struct mtmd_bitmap {
     bool is_audio = false; // true if the bitmap is audio
 
     mtmd_bitmap(const unsigned char * data, uint32_t nx, uint32_t ny)
-        : nx(nx), ny(ny) {
+        : nx(nx), ny(ny), is_audio(false) {
         if (data) {
             size_t data_size = (size_t)nx * ny * 3;
             this->data.resize(data_size);
@@ -62,6 +63,11 @@ struct mtmd_bitmap {
 
     size_t n_bytes() const {
         return data.size();
+    }
+
+    bool can_batch_with(const mtmd_bitmap & other) const {
+        // [QWEN_VIDEO] can batch if both are images with same size
+        return !is_audio && !other.is_audio && nx == other.nx && ny == other.ny;
     }
 
   private:
@@ -750,16 +756,55 @@ struct mtmd_tokenizer {
         cur.entries.clear();
         std::vector<std::string> parts = split_text(input_text, ctx->media_marker);
         size_t i_bm = 0; // index of the current bitmap
+
+        // [QWEN_VIDEO] handle frame merging for models that support it (i.e. qwen-vl)
+        int n_merge_frames = 1;
+        if (ctx->ctx_v) {
+            n_merge_frames = clip_model_n_batch_max(ctx->ctx_v);
+            GGML_ASSERT(n_merge_frames <= 2 && "we only support merging maximum 2 images for now; open an issue if this model supports merging more");
+        }
+
+        std::vector<std::vector<const mtmd_bitmap *>> merged_bitmaps;
+        if (n_merge_frames > 1) {
+            size_t i_bm_scan = 0;
+            for (size_t i = 0; i < parts.size(); ++i) {
+                if (parts[i] != ctx->media_marker) {
+                    continue;
+                }
+                if (i + 1 < parts.size()
+                        && parts[i + 1] == ctx->media_marker
+                        && i_bm_scan + 1 < bitmaps.size()) {
+                    const mtmd_bitmap * bm_a = bitmaps[i_bm_scan];
+                    const mtmd_bitmap * bm_b = bitmaps[i_bm_scan + 1];
+                    if (bm_a->can_batch_with(*bm_b)) {
+                        LOG_DBG("%s: merging 2 frames at bitmap index %zu and %zu\n", __func__, i_bm_scan, i_bm_scan + 1);
+                        merged_bitmaps.push_back({bm_a, bm_b});
+                        parts.erase(parts.begin() + i + 1); // remove the second marker
+                        i_bm_scan += 2;
+                        continue;
+                    }
+                }
+                LOG_DBG("%s: no merging for bitmap index %zu\n", __func__, i_bm_scan);
+                merged_bitmaps.push_back({bitmaps[i_bm_scan]});
+                ++i_bm_scan;
+            }
+        } else {
+            for (size_t i = 0; i < bitmaps.size(); ++i) {
+                merged_bitmaps.push_back({bitmaps[i]});
+            }
+        }
+
+        i_bm = 0;
         for (auto & part : parts) {
             if (part == ctx->media_marker) {
                 // this is a marker, we should add the next bitmap
-                if (i_bm >= bitmaps.size()) {
+                if (i_bm >= merged_bitmaps.size()) {
                     LOG_ERR("%s: error: number of bitmaps (%zu) does not match number of markers (%zu)\n",
-                            __func__, bitmaps.size(), parts.size() - 1);
+                            __func__, merged_bitmaps.size(), parts.size() - 1);
                     return 1;
                 }
-                const mtmd_bitmap * bitmap = bitmaps[i_bm++];
-                int32_t res = add_media(bitmap);
+                auto & bmps = merged_bitmaps[i_bm++];
+                int32_t res = add_media(bmps);
                 if (res != 0) {
                     return res;
                 }
@@ -794,9 +839,9 @@ struct mtmd_tokenizer {
             }
         }
 
-        if (i_bm != bitmaps.size()) {
+        if (i_bm != merged_bitmaps.size()) {
             LOG_ERR("%s: error: number of bitmaps (%zu) does not match number of markers (%zu)\n",
-                    __func__, bitmaps.size(), parts.size() - 1);
+                    __func__, merged_bitmaps.size(), parts.size() - 1);
             return 1;
         }
 
@@ -835,8 +880,10 @@ struct mtmd_tokenizer {
         }
     }
 
-    int32_t add_media(const mtmd_bitmap * bitmap) {
-        if (!bitmap->is_audio) {
+    int32_t add_media(std::vector<const mtmd_bitmap *> & bitmaps) {
+        GGML_ASSERT(!bitmaps.empty());
+
+        if (!bitmaps[0]->is_audio) {
             // handle image
 
             if (!ctx->ctx_v) {
@@ -848,27 +895,44 @@ struct mtmd_tokenizer {
                 add_text(ctx->img_beg, true); // add image begin token
             }
 
-            // sanity check
-            if (bitmap->nx <= 0 || bitmap->ny <= 0) {
-                LOG_ERR("%s: error: invalid bitmap dimensions: nx = %d, ny = %d\n",
-                        __func__, bitmap->nx, bitmap->ny);
-                return 2;
-            }
-            GGML_ASSERT(ctx->image_preproc != nullptr);
+            // TODO @ngxson : this is quite hacky because preprocessor only support batch with one single element, that need to be fixed in the future (e.g. by changing the preprocessor interface always take single input)
 
-            // convert mtmd_bitmap to clip_image_u8
-            clip_image_u8_ptr img_u8(clip_image_u8_init());
-            img_u8->set_size(
-                {(int)bitmap->nx, (int)bitmap->ny},
-                bitmap->is_placeholder());
-            img_u8->cpy_buf(bitmap->get_ro_buf());
-
-            // preprocess image
             clip_image_f32_batch batch_f32;
-            bool ok = ctx->image_preproc->preprocess(*img_u8, batch_f32);
-            if (!ok) {
-                LOG_ERR("Unable to preprocess image\n");
-                return 2;
+
+            for (const auto * bmp : bitmaps) {
+                // sanity check
+                GGML_ASSERT(!bmp->is_audio);
+                GGML_ASSERT(ctx->image_preproc != nullptr);
+                if (bmp->nx <= 0 || bmp->ny <= 0) {
+                    LOG_ERR("%s: error: invalid bitmap dimensions: nx = %d, ny = %d\n",
+                            __func__, bmp->nx, bmp->ny);
+                    return 2;
+                }
+
+                // convert mtmd_bitmap to clip_image_u8
+                clip_image_u8_ptr img_u8(clip_image_u8_init());
+                img_u8->set_size(
+                    {(int)bmp->nx, (int)bmp->ny},
+                    bmp->is_placeholder());
+                img_u8->cpy_buf(bmp->get_ro_buf());
+
+                // preprocess image
+                clip_image_f32_batch tmp_batch;
+                bool ok = ctx->image_preproc->preprocess(*img_u8, tmp_batch);
+                if (!ok) {
+                    LOG_ERR("Unable to preprocess image\n");
+                    return 2;
+                }
+
+                // move entries and grid dimensions to the "global" batch_f32
+                for (auto & entry : tmp_batch.entries) {
+                    batch_f32.entries.emplace_back(std::move(entry));
+                }
+
+                // for llava-uhd style, we need to handle grid too
+                // we don't care about overwriting these values for now because llama-uhd doesn't support batching anyway
+                batch_f32.grid_x = tmp_batch.grid_x;
+                batch_f32.grid_y = tmp_batch.grid_y;
             }
 
             // Annotate llava-next style tiles so clip_n_output_tokens accounts
@@ -896,11 +960,14 @@ struct mtmd_tokenizer {
                 || ctx->slice_tmpl == MTMD_SLICE_TMPL_STEP3VL
                 || (ctx->slice_tmpl == MTMD_SLICE_TMPL_LFM2 && has_tiling_grid)
             ) {
+                // [QWEN_VIDEO] we do not support "frame merging" for llama-uhd style, so no batching for now
+                GGML_ASSERT(bitmaps.size() == 1);
+
                 const int n_col = batch_f32.grid_x;
                 const int n_row = batch_f32.grid_y;
                 // split batch into chunks of single images
                 // NOTE: batch_f32 will be invalidated after this call
-                auto chunks = split_batch_to_chunk(std::move(batch_f32), bitmap->id);
+                auto chunks = split_batch_to_chunk(std::move(batch_f32), bitmaps[0]->id);
                 GGML_ASSERT(chunks.size() > 0);
 
                 auto ov_chunk = std::move(chunks.front());
@@ -954,6 +1021,10 @@ struct mtmd_tokenizer {
                 size_t n_tokens = 0;
                 for (const auto & e : batch_f32.entries) {
                     n_tokens += clip_n_output_tokens(ctx->ctx_v, e.get());
+                    if (clip_model_n_batch_max(ctx->ctx_v) == 2) {
+                        // [QWEN_VIDEO] pair input is merged to the same embd, so only count as one image
+                        break;
+                    }
                 }
 
                 mtmd_image_tokens_ptr image_tokens(new mtmd_image_tokens);
@@ -976,7 +1047,7 @@ struct mtmd_tokenizer {
                     GGML_ASSERT(n_tokens == (size_t)image_tokens->n_tokens());
                 }
                 image_tokens->batch_f32 = std::move(batch_f32);
-                image_tokens->id = bitmap->id; // optional
+                image_tokens->id = bitmaps[0]->id; // optional
 
                 LOG_DBG("image_tokens->nx = %d\n", image_tokens->nx);
                 LOG_DBG("image_tokens->ny = %d\n", image_tokens->ny);
@@ -1000,6 +1071,9 @@ struct mtmd_tokenizer {
 
         } else {
             // handle audio
+
+            GGML_ASSERT(bitmaps.size() == 1); // no batching support for now
+            auto & bitmap = bitmaps[0];
 
             if (!ctx->ctx_a) {
                 LOG_ERR("%s: error: model does not support audio input\n", __func__);

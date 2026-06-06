@@ -480,10 +480,6 @@ struct clip_image_u8 {
         buf[idx + 2] = rgb[2];
     }
 
-    size_t n_pixels() const {
-        return (size_t) nx * (size_t) ny;
-    }
-
     size_t n_elements() const {
         return n_pixels() * 3;
     }
@@ -492,10 +488,16 @@ struct clip_image_u8 {
     std::vector<uint8_t> buf;
     int nx = 0;
     int ny = 0;
+
+    size_t n_pixels() const {
+        return (size_t) nx * (size_t) ny;
+    }
 };
 
 // For images, buf.size() == nx*ny*3
 //     Memory layout: RGBRGBRGB...
+// For seq, buf.size() == nx*ny*3*nt
+//     Memory layout: RGBRGB...RGBRGB... (nt times)
 // For audio, only one channel is used, buf.size() == nx*ny
 //     nx will be n_frames and ny will be n_mel
 struct clip_image_f32 {
@@ -544,10 +546,6 @@ struct clip_image_f32 {
         }
     }
 
-    size_t n_pixels() const {
-        return (size_t) nx_ * (size_t) ny_;
-    }
-
     size_t n_elements() const {
         return n_pixels() * 3;
     }
@@ -580,6 +578,10 @@ struct clip_image_f32 {
     std::vector<float> buf;
     int nx_ = 0;
     int ny_ = 0;
+
+    size_t n_pixels() const {
+        return (size_t) nx_ * (size_t) ny_;
+    }
 };
 
 //
@@ -627,6 +629,7 @@ static void clip_log_internal(enum ggml_log_level level, const char * format, ..
     va_end(args);
 }
 
+#define LOG_TRC(...) clip_log_internal(GGML_LOG_LEVEL_DEBUG, __VA_ARGS__)
 #define LOG_DBG(...) clip_log_internal(GGML_LOG_LEVEL_DEBUG, __VA_ARGS__)
 #define LOG_INF(...) clip_log_internal(GGML_LOG_LEVEL_INFO,  __VA_ARGS__)
 #define LOG_WRN(...) clip_log_internal(GGML_LOG_LEVEL_WARN,  __VA_ARGS__)
