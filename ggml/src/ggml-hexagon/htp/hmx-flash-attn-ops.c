@@ -59,25 +59,29 @@ static size_t hmx_fa_compute_vtcm_usage(size_t gqa_factor, size_t DK, size_t DV,
     const size_t v_tile_size  = hex_align_up(Bc * DV * sizeof(__fp16), 4096);      // V tiles: [Bc, DV] interleaved
     const size_t s_tile_size  = hex_align_up(g_br * Bc * sizeof(__fp16), 4096);    // S/P:[g_br, Bc]
     const size_t d_tile_size  = hex_align_up(g_br * g_br * sizeof(__fp16), 4096);  // D:  [g_br, g_br]
-    const size_t col_vec_size = hex_align_up(g_br * sizeof(__fp16), 256);          // m, l, etc.
+    const size_t col_vec_fp32 =
+        hex_align_up(g_br * sizeof(float), 256);   // m, l, p_rowsum (FP32 for cross-block precision)
+    const size_t col_vec_fp16 =
+        hex_align_up(g_br * sizeof(__fp16), 256);  // s_rowmax (per-block intermediate, lossless in fp16)
     const size_t row_vec_size = hex_align_up(Bc * sizeof(__fp16), 256);
     const size_t m_line_size  = hex_align_up(Bc * sizeof(__fp16), 128);
     const size_t m_buf_size   = hex_align_up(Br * m_line_size, 4096);
     const size_t slopes_size  = hex_align_up(g_br * sizeof(__fp16), 128);
 
-    return   q_tile_size * 1               // Q tiles
-           + o_tile_size * 2               // O ping-pong
-           + k_dma_size  * 2               // K DMA x2
-           + v_dma_size  * 2               // V DMA x2
-           + k_tile_size * 1               // K tiles
-           + v_tile_size * (use_pipeline ? 2 : 1) // V tiles (double-buffered if pipelining)
-           + s_tile_size * 2               // S + P
-           + d_tile_size * 1               // D (diagonal matrix)
-           + col_vec_size * 4              // m_vec, l_vec, s_rowmax, p_rowsum
-           + row_vec_size * 2 * n_threads  // per-thread softmax row scratch
-           + m_buf_size * 1                // mask VTCM buffer [Br rows]
-           + slopes_size                   // Slopes
-           + 256 * 2;                      // HMX scales (id + qk)
+    return q_tile_size * 1                         // Q tiles
+           + o_tile_size * 2                       // O ping-pong
+           + k_dma_size * 2                        // K DMA x2
+           + v_dma_size * 2                        // V DMA x2
+           + k_tile_size * 1                       // K tiles
+           + v_tile_size * (use_pipeline ? 2 : 1)  // V tiles (double-buffered if pipelining)
+           + s_tile_size * 2                       // S + P
+           + d_tile_size * 1                       // D (diagonal matrix)
+           + col_vec_fp32 * 3                      // m_vec, l_vec, p_rowsum (FP32)
+           + col_vec_fp16 * 1                      // s_rowmax (FP16)
+           + row_vec_size * 2 * n_threads          // per-thread softmax row scratch
+           + m_buf_size * 1                        // mask VTCM buffer [Br rows]
+           + slopes_size                           // Slopes
+           + 256 * 2;                              // HMX scales (id + qk)
 }
 
 // ============================================================================
@@ -150,7 +154,9 @@ static int hmx_fa_find_chunk_size(size_t * Br_out,
     const bool   can_pipeline = (kv_len >= FA_MIN_KV_BLOCKS * bc_unit && n_threads >= 2);
 
     // Approximate per-unit VTCM costs (without per-buffer alignment padding).
-    const size_t per_gbr  = (DK + 2 * DV) * fp16 + 4 * fp16;  // Q + O×2 + 4 col vectors
+    // m/l/p_rowsum stored as FP32; s_rowmax stays FP16 (lossless — max of fp16 is fp16).
+    const size_t per_gbr =
+        (DK + 2 * DV) * fp16 + 3 * sizeof(float) + 1 * fp16;  // Q + O×2 + m+l+p_rowsum (fp32) + s_rowmax (fp16)
     const size_t per_gbr2 = fp16;                             // D diagonal matrix
     const size_t per_bc =
         3 * DK * fp16 + (can_pipeline ? 4 : 3) * DV * fp16 + 2 * n_threads * fp16;          // K/V DMA x2 + tiles + row bufs
@@ -329,10 +335,10 @@ struct hmx_fa_context {
     __fp16 *     vtcm_s_tiles;         // S = QK^T [g_br, Bc]
     __fp16 *     vtcm_p_tiles;         // P = softmax(S) [g_br, Bc]
     __fp16 *     vtcm_d_tiles;         // Diagonal rescale [g_br, g_br]
-    HVX_Vector * vtcm_m_vec;           // Row max [g_br]
-    HVX_Vector * vtcm_l_vec;           // Row sum [g_br]
-    HVX_Vector * vtcm_s_rowmax;        // Softmax intermediate [g_br]
-    HVX_Vector * vtcm_p_rowsum;        // Softmax intermediate [g_br]
+    HVX_Vector * vtcm_m_vec;           // Row max [g_br], FP32 sf (cross-block stat)
+    HVX_Vector * vtcm_l_vec;           // Row sum [g_br], FP32 sf (cross-block stat)
+    HVX_Vector * vtcm_s_rowmax;        // Softmax intermediate [g_br], FP16 hf (lossless: max of fp16)
+    HVX_Vector * vtcm_p_rowsum;        // Softmax intermediate [g_br], FP32 sf (qf32 sum kept at full precision)
     HVX_Vector * vtcm_row_bufs;        // Per-thread softmax row scratch [n_threads][2][Bc/64]
     uint8_t *    vtcm_hmx_scales_id;   // HMX output scales (identity)
     uint8_t *    vtcm_hmx_scales_qk;   // HMX output scales (qk_scale)
@@ -688,15 +694,18 @@ static void fa_softmax_thread(unsigned int n, unsigned int i, void * data) {
     const HVX_Vector v_neg_inf = Q6_Vh_vsplat_R(0xfbff);
 
     // Per-row accumulators: each fp16 lane in a 64-lane vector holds one row's scalar.
-    // CONTRACT: lane bits must be IEEE fp16 (hf), never qf16 — qf16 uses a different
-    // bit layout, so a later hf-domain read would silently produce wrong values.
-    // Convert first via Q6_Vhf_equals_Vqf16(). For reference: vtcm_m_vec/vtcm_s_rowmax
-    // are hf; vtcm_l_vec is qf16 — don't mix them up.
+    // CONTRACT: lane bits in s_rowmax must be IEEE fp16 (hf).
+    // m_vec/l_vec/p_rowsum are FP32 sf storage (32 lanes per HVX_Vector, 2 vectors per 64-row chunk);
+    // we cast back to hf via f32_to_f16_shuff for local intra-block use of m_prev.
 
     for (size_t r_vec_idx = vec_start; r_vec_idx < vec_end; ++r_vec_idx) {
         HVX_Vector rowmax_acc_v = v_neg_inf;
-        HVX_Vector rowsum_acc_v = Q6_V_vzero();
-        HVX_Vector m_prev_v     = factx->vtcm_m_vec[r_vec_idx];
+        HVX_Vector rowsum_lo_v  = Q6_V_vzero();
+        HVX_Vector rowsum_hi_v  = Q6_V_vzero();
+        // m_prev: 2 fp32 vecs (32 rows each) → recombine to 64-lane fp16 for splat.
+        HVX_Vector m_prev_lo_sf = factx->vtcm_m_vec[r_vec_idx * 2 + 0];
+        HVX_Vector m_prev_hi_sf = factx->vtcm_m_vec[r_vec_idx * 2 + 1];
+        HVX_Vector m_prev_v     = hvx_vec_f32_to_f16_shuff(m_prev_lo_sf, m_prev_hi_sf);
 
         for (int r_vec_off = 0; r_vec_off < 64; r_vec_off += 2) {
             int r = r_vec_idx * 64 + r_vec_off;
@@ -933,22 +942,22 @@ static void fa_softmax_thread(unsigned int n, unsigned int i, void * data) {
             HVX_Vector rowsum0_sf = hvx_vec_reduce_sum_f32(Q6_Vsf_equals_Vqf32(v_p_rowsum0));
             HVX_Vector rowsum1_sf = hvx_vec_reduce_sum_f32(Q6_Vsf_equals_Vqf32(v_p_rowsum1));
             {
-                // Both inputs are f32 splats, so the f32->f16 output is an fp16 splat.
-                HVX_Vector rv0_v = hvx_vec_f32_to_f16(rowsum0_sf, rowsum0_sf);
-                HVX_Vector rv1_v = hvx_vec_f32_to_f16(rowsum1_sf, rowsum1_sf);
-
+                // FP32 storage: keep the qf32 row-sum at full precision (no fp16
+                // round-trip).  Even row r → lo vec, odd row r+1 → hi vec, both at
+                // 4-byte lane t = r_vec_off/2 — matches the even/odd split that
+                // f16<->f32_shuff imposes on m_vec/l_vec, so the reader pairs them
+                // directly with l_prev_lo/hi.  rowsum{0,1}_sf are sf splats.
                 HVX_VectorPred p_start = Q6_Q_vsetq_R(r_vec_off * 2);
-                HVX_VectorPred p_mid   = Q6_Q_vsetq_R((r_vec_off + 1) * 2);
-                HVX_VectorPred p_end   = Q6_Q_vsetq2_R((r_vec_off + 2) * 2);
-                HVX_VectorPred p_lane0 = Q6_Q_and_QQn(p_mid, p_start);
-                HVX_VectorPred p_lane1 = Q6_Q_and_QQn(p_end, p_mid);
-                rowsum_acc_v           = Q6_V_vmux_QVV(p_lane0, rv0_v, rowsum_acc_v);
-                rowsum_acc_v           = Q6_V_vmux_QVV(p_lane1, rv1_v, rowsum_acc_v);
+                HVX_VectorPred p_end   = Q6_Q_vsetq2_R(r_vec_off * 2 + 4);
+                HVX_VectorPred p_lane  = Q6_Q_and_QQn(p_end, p_start);
+                rowsum_lo_v            = Q6_V_vmux_QVV(p_lane, rowsum0_sf, rowsum_lo_v);
+                rowsum_hi_v            = Q6_V_vmux_QVV(p_lane, rowsum1_sf, rowsum_hi_v);
             }
         }
 
-        factx->vtcm_s_rowmax[r_vec_idx] = rowmax_acc_v;
-        factx->vtcm_p_rowsum[r_vec_idx] = rowsum_acc_v;
+        factx->vtcm_s_rowmax[r_vec_idx]         = rowmax_acc_v;
+        factx->vtcm_p_rowsum[r_vec_idx * 2 + 0] = rowsum_lo_v;
+        factx->vtcm_p_rowsum[r_vec_idx * 2 + 1] = rowsum_hi_v;
     }
 }
 
@@ -963,31 +972,58 @@ static __attribute__((noinline)) void fa_ml_update_and_build_d(struct hmx_fa_con
                                                                size_t                  n_rows_g,
                                                                size_t                  n_row_tiles,
                                                                size_t                  n_row_tiles_g_br) {
-    // Reuse s_rowmax buffer for exp(m_diff) — safe because softmax is fully complete
+    // Reuse s_rowmax buffer for exp(m_diff) — safe because softmax is fully complete.
+    // mvec_exp_m_diff is FP16 (matches s_rowmax buffer size) and feeds the D scatter below.
     HVX_Vector * const mvec_exp_m_diff = factx->vtcm_s_rowmax;
 
+    // Iterate over FP16 vec count (each covers 64 rows).  For each FP16 vec we
+    // touch 2 FP32 vecs of m/l (32 rows each) — natural pairing via f16↔f32 shuff.
     const size_t n_row_vec_cnt = hmx_ceil_div(n_rows_g, 64);
     for (size_t i = 0; i < n_row_vec_cnt; ++i) {
-        HVX_Vector v_m_prev = factx->vtcm_m_vec[i];
-        HVX_Vector v_m_curr = Q6_Vhf_vmax_VhfVhf(v_m_prev, factx->vtcm_s_rowmax[i]);
-        HVX_Vector v_m_diff = Q6_Vqf16_vsub_VhfVhf(v_m_prev, v_m_curr);
+        HVX_Vector m_prev_lo = factx->vtcm_m_vec[i * 2 + 0];  // sf, 32 rows
+        HVX_Vector m_prev_hi = factx->vtcm_m_vec[i * 2 + 1];  // sf, 32 rows
+        HVX_Vector l_prev_lo = factx->vtcm_l_vec[i * 2 + 0];  // sf, 32 rows
+        HVX_Vector l_prev_hi = factx->vtcm_l_vec[i * 2 + 1];  // sf, 32 rows
 
+        // Lift s_rowmax (hf, 64 lanes) to fp32 pairs (sf, lo/hi 32 lanes each).
+        // p_rowsum is already FP32 sf (lo/hi vecs) — read directly, no lift.
+        HVX_VectorPair vp_s    = hvx_vec_f16_to_f32_shuff(factx->vtcm_s_rowmax[i]);
+        HVX_Vector     p_lo_sf = factx->vtcm_p_rowsum[i * 2 + 0];
+        HVX_Vector     p_hi_sf = factx->vtcm_p_rowsum[i * 2 + 1];
+
+        HVX_Vector m_curr_lo = Q6_Vsf_vmax_VsfVsf(m_prev_lo, Q6_V_lo_W(vp_s));
+        HVX_Vector m_curr_hi = Q6_Vsf_vmax_VsfVsf(m_prev_hi, Q6_V_hi_W(vp_s));
+
+        HVX_Vector m_diff_lo = Q6_Vqf32_vsub_VsfVsf(m_prev_lo, m_curr_lo);
+        HVX_Vector m_diff_hi = Q6_Vqf32_vsub_VsfVsf(m_prev_hi, m_curr_hi);
+
+        HVX_Vector exp_lo, exp_hi;
 #ifdef HMX_FA_USE_EXP2_HF
-        // Base-2 path: must match P = exp2(S - m_new) in fa_softmax_thread.
-        HVX_Vector v_exp_m_diff      = hvx_exp2_hf(Q6_Vhf_equals_Vqf16(v_m_diff));
+        // EXP2_HF path is out of scope for this experiment — keep functional via
+        // an fp32→fp16→exp2_hf→fp32 round-trip; precision benefits don't apply here.
+        HVX_Vector diff_hf = hvx_vec_f32_to_f16_shuff(Q6_Vsf_equals_Vqf32(m_diff_lo), Q6_Vsf_equals_Vqf32(m_diff_hi));
+        HVX_Vector exp_hf  = hvx_exp2_hf(diff_hf);
+        HVX_VectorPair vp_exp = hvx_vec_f16_to_f32_shuff(exp_hf);
+        exp_lo                = Q6_V_lo_W(vp_exp);
+        exp_hi                = Q6_V_hi_W(vp_exp);
 #else
-        HVX_VectorPair vp_diff       = hvx_vec_f16_to_f32_shuff(Q6_Vhf_equals_Vqf16(v_m_diff));
-        HVX_Vector     exp_lo        = hvx_vec_exp_f32(Q6_V_lo_W(vp_diff));
-        HVX_Vector     exp_hi        = hvx_vec_exp_f32(Q6_V_hi_W(vp_diff));
-        HVX_Vector     v_exp_m_diff  = hvx_vec_f32_to_f16_shuff(exp_lo, exp_hi);
+        exp_lo = hvx_vec_exp_f32(Q6_Vsf_equals_Vqf32(m_diff_lo));
+        exp_hi = hvx_vec_exp_f32(Q6_Vsf_equals_Vqf32(m_diff_hi));
 #endif
 
-        HVX_Vector v_l_curr = Q6_Vqf16_vmpy_Vqf16Vhf(factx->vtcm_l_vec[i], v_exp_m_diff);
-        v_l_curr            = Q6_Vqf16_vadd_Vqf16Vhf(v_l_curr, factx->vtcm_p_rowsum[i]);
+        // l_curr = l_prev * exp(m_diff) + p_rowsum, all in qf32 then collapsed to sf.
+        HVX_Vector l_q_lo = Q6_Vqf32_vmpy_VsfVsf(l_prev_lo, exp_lo);
+        HVX_Vector l_q_hi = Q6_Vqf32_vmpy_VsfVsf(l_prev_hi, exp_hi);
+        l_q_lo            = Q6_Vqf32_vadd_Vqf32Vsf(l_q_lo, p_lo_sf);
+        l_q_hi            = Q6_Vqf32_vadd_Vqf32Vsf(l_q_hi, p_hi_sf);
 
-        factx->vtcm_m_vec[i] = v_m_curr;
-        factx->vtcm_l_vec[i] = v_l_curr;
-        mvec_exp_m_diff[i]   = v_exp_m_diff;
+        factx->vtcm_m_vec[i * 2 + 0] = m_curr_lo;
+        factx->vtcm_m_vec[i * 2 + 1] = m_curr_hi;
+        factx->vtcm_l_vec[i * 2 + 0] = Q6_Vsf_equals_Vqf32(l_q_lo);
+        factx->vtcm_l_vec[i * 2 + 1] = Q6_Vsf_equals_Vqf32(l_q_hi);
+
+        // Pack exp_m_diff back to fp16 for the D-tile scatter below (consumer layout unchanged).
+        mvec_exp_m_diff[i] = hvx_vec_f32_to_f16_shuff(exp_lo, exp_hi);
     }
 
     // Build diagonal tile D = diag(exp(m_diff))
@@ -1021,10 +1057,10 @@ static __attribute__((noinline)) void fa_build_d_diag_inv_l(struct hmx_fa_contex
     HVX_Vector v_content = Q6_V_vzero();
     for (size_t i = 0; i < n_row_tiles; ++i) {
         if ((i % 2) == 0) {
-            HVX_Vector     v_l_hf = Q6_Vhf_equals_Vqf16(factx->vtcm_l_vec[i / 2]);
-            HVX_VectorPair vp_l   = hvx_vec_f16_to_f32_shuff(v_l_hf);
-            HVX_Vector     inv_lo = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(one, hvx_vec_inverse_f32(Q6_V_lo_W(vp_l))));
-            HVX_Vector     inv_hi = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(one, hvx_vec_inverse_f32(Q6_V_hi_W(vp_l))));
+            HVX_Vector l_lo_sf = factx->vtcm_l_vec[i + 0];
+            HVX_Vector l_hi_sf = factx->vtcm_l_vec[i + 1];
+            HVX_Vector inv_lo  = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(one, hvx_vec_inverse_f32(l_lo_sf)));
+            HVX_Vector inv_hi  = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(one, hvx_vec_inverse_f32(l_hi_sf)));
             v_content = hvx_vec_f32_to_f16_shuff(inv_lo, inv_hi);
         } else {
             v_content = Q6_V_vror_VR(v_content, 64);
@@ -1369,8 +1405,9 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
     const size_t v_tile_bytes  = hex_align_up(Bc * DV * sizeof(__fp16), 4096);
     const size_t s_tile_bytes  = hex_align_up(g_br * Bc * sizeof(__fp16), 4096);
     const size_t d_tile_bytes  = hex_align_up(g_br * g_br * sizeof(__fp16), 4096);
-    const size_t col_vec_bytes = hex_align_up(g_br * sizeof(__fp16), 256);
-    const size_t row_vec_bytes = hex_align_up(Bc * sizeof(__fp16), 256);
+    const size_t col_vec_fp32_bytes = hex_align_up(g_br * sizeof(float), 256);   // m, l, p_rowsum (FP32)
+    const size_t col_vec_fp16_bytes = hex_align_up(g_br * sizeof(__fp16), 256);  // s_rowmax
+    const size_t row_vec_bytes      = hex_align_up(Bc * sizeof(__fp16), 256);
     const size_t m_line_bytes  = hex_align_up(Bc * sizeof(__fp16), 128);
     const size_t m_buf_bytes   = hex_align_up(Br * m_line_bytes, 4096);
     const size_t slopes_bytes  = hex_align_up(g_br * sizeof(__fp16), 128);
@@ -1394,10 +1431,10 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
     factx.vtcm_s_tiles        = (__fp16 *) vtcm_seq_alloc(&vtcm_cur, s_tile_bytes);
     factx.vtcm_p_tiles        = (__fp16 *) vtcm_seq_alloc(&vtcm_cur, s_tile_bytes);
     factx.vtcm_d_tiles        = (__fp16 *) vtcm_seq_alloc(&vtcm_cur, d_tile_bytes);
-    factx.vtcm_m_vec          = (HVX_Vector *) vtcm_seq_alloc(&vtcm_cur, col_vec_bytes);
-    factx.vtcm_l_vec          = (HVX_Vector *) vtcm_seq_alloc(&vtcm_cur, col_vec_bytes);
-    factx.vtcm_s_rowmax       = (HVX_Vector *) vtcm_seq_alloc(&vtcm_cur, col_vec_bytes);
-    factx.vtcm_p_rowsum       = (HVX_Vector *) vtcm_seq_alloc(&vtcm_cur, col_vec_bytes);
+    factx.vtcm_m_vec          = (HVX_Vector *) vtcm_seq_alloc(&vtcm_cur, col_vec_fp32_bytes);
+    factx.vtcm_l_vec          = (HVX_Vector *) vtcm_seq_alloc(&vtcm_cur, col_vec_fp32_bytes);
+    factx.vtcm_s_rowmax       = (HVX_Vector *) vtcm_seq_alloc(&vtcm_cur, col_vec_fp16_bytes);
+    factx.vtcm_p_rowsum       = (HVX_Vector *) vtcm_seq_alloc(&vtcm_cur, col_vec_fp32_bytes);
     factx.vtcm_row_bufs       = (HVX_Vector *) vtcm_seq_alloc(&vtcm_cur, row_vec_bytes * 2 * n_threads);
     factx.row_buf_stride      = row_vec_bytes / sizeof(HVX_Vector);
     factx.vtcm_hmx_scales_id  = vtcm_seq_alloc(&vtcm_cur, 256);
@@ -1482,9 +1519,11 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
                 TIMER_STOP(q_load);
 
                 // ---- Initialize per-block state ----
-                hvx_splat_u8_a(factx.vtcm_l_vec,   0,      col_vec_bytes);
-                hvx_splat_u8_a(factx.vtcm_d_tiles, 0,      d_tile_bytes);
-                hvx_splat_u16_a(factx.vtcm_m_vec,  0xfbff, col_vec_bytes/2);
+                // m: -65504.0f (finite negative, avoids -INF in qf32 paths); l: 0.0f.
+                // Both stored as FP32 sf for cross-block precision.
+                hvx_splat_u8_a(factx.vtcm_l_vec, 0, col_vec_fp32_bytes);
+                hvx_splat_u8_a(factx.vtcm_d_tiles, 0, d_tile_bytes);
+                hvx_splat_f32_a(factx.vtcm_m_vec, -65504.0f, col_vec_fp32_bytes / sizeof(float));
 
                 __fp16 * o_tile_prev = factx.vtcm_o_tiles[0];
                 __fp16 * o_tile_curr = factx.vtcm_o_tiles[1];
