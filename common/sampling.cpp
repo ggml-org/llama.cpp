@@ -398,6 +398,12 @@ struct common_sampler * common_sampler_init(const struct llama_model * model, st
         params.backend_sampling = false;
     }
 
+    if (!params.token_healing_prefix.empty() && params.backend_sampling) {
+        LOG_WRN("%s: backend sampling is not compatible with token healing, disabling\n", __func__);
+
+        params.backend_sampling = false;
+    }
+
     auto * result = new common_sampler {
         /* .params  = */ params,
         /* .grmr    = */ grmr,
@@ -441,6 +447,11 @@ static bool grammar_should_apply(struct common_sampler * gsmpl) {
 void common_sampler_accept(struct common_sampler * gsmpl, llama_token token, bool is_generated) {
     if (!gsmpl) {
         return;
+    }
+
+    // Clear token healing prefix on the first accepted generated token
+    if (is_generated) {
+        gsmpl->params.token_healing_prefix.clear();
     }
 
     const auto tm = gsmpl->tm();
@@ -548,6 +559,44 @@ llama_token common_sampler_sample(struct common_sampler * gsmpl, struct llama_co
     auto & cur_p = gsmpl->cur_p; // initialized by set_logits
 
     gsmpl->set_logits(ctx, idx);
+
+    if (!gsmpl->params.token_healing_prefix.empty()) {
+        const llama_model * model = llama_get_model(ctx);
+        const llama_vocab * vocab = llama_model_get_vocab(model);
+        bool at_least_one_valid = false;
+
+        for (size_t i = 0; i < gsmpl->cur_p.size; ++i) {
+            llama_token token_id = gsmpl->cur_p.data[i].id;
+            if (llama_vocab_is_control(vocab, token_id) || llama_vocab_is_eog(vocab, token_id)) {
+                continue;
+            }
+            std::string piece = common_token_to_piece(vocab, token_id, false);
+            if (piece.size() >= gsmpl->params.token_healing_prefix.size() &&
+                piece.compare(0, gsmpl->params.token_healing_prefix.size(), gsmpl->params.token_healing_prefix) == 0) {
+                at_least_one_valid = true;
+                break;
+            }
+        }
+
+        if (at_least_one_valid) {
+            for (size_t i = 0; i < gsmpl->cur_p.size; ++i) {
+                llama_token token_id = gsmpl->cur_p.data[i].id;
+                if (llama_vocab_is_control(vocab, token_id) || llama_vocab_is_eog(vocab, token_id)) {
+                    gsmpl->cur_p.data[i].logit = -INFINITY;
+                    continue;
+                }
+                std::string piece = common_token_to_piece(vocab, token_id, false);
+                if (piece.size() >= gsmpl->params.token_healing_prefix.size() &&
+                    piece.compare(0, gsmpl->params.token_healing_prefix.size(), gsmpl->params.token_healing_prefix) == 0) {
+                    // keep logit
+                } else {
+                    gsmpl->cur_p.data[i].logit = -INFINITY;
+                }
+            }
+        } else {
+            LOG_WRN("%s: token healing failed: no vocabulary token starts with prefix '%s'\n", __func__, gsmpl->params.token_healing_prefix.c_str());
+        }
+    }
 
     // Check if a backend sampler has already sampled a token in which case we
     // return that token id directly.

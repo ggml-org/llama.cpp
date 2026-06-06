@@ -79,6 +79,7 @@ json task_params::to_json(bool only_metrics) const {
             {"speculative.types",         common_speculative_type_name_str(speculative.types)},
             {"timings_per_token",         timings_per_token},
             {"post_sampling_probs",       post_sampling_probs},
+            {"token_healing",             token_healing},
             {"backend_sampling",          sampling.backend_sampling},
             {"lora",                      lora},
         };
@@ -136,6 +137,7 @@ json task_params::to_json(bool only_metrics) const {
         {"speculative.types",         common_speculative_type_name_str(speculative.types)},
         {"timings_per_token",         timings_per_token},
         {"post_sampling_probs",       post_sampling_probs},
+        {"token_healing",             token_healing},
         {"backend_sampling",          sampling.backend_sampling},
         {"lora",                      lora},
     };
@@ -257,6 +259,7 @@ task_params server_task::params_from_json_cmpl(
     // enabling this will output extra debug information in the HTTP responses from the server
     params.verbose           = params_base.verbosity > 9;
     params.timings_per_token = json_value(data, "timings_per_token", false);
+    params.token_healing     = json_value(data, "token_healing",     false);
 
     params.stream           = json_value(data,       "stream",             false);
     auto stream_opt         = json_value(data,       "stream_options",     json::object());
