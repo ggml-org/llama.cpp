@@ -39,12 +39,14 @@ static void clip_image_write_image_to_ppm(const clip_image_u8& img, const std::s
     }
 
     // PPM header: P6 format, width, height, and max color value
-    file << "P6\n" << img.nx << " " << img.ny << "\n255\n";
+    const auto ppm_size = img.get_size();
+    file << "P6\n" << ppm_size.width << " " << ppm_size.height << "\n255\n";
 
     // Write pixel data
-    for (size_t i = 0; i < img.buf.size(); i += 3) {
+    const auto & ppm_buf = img.get_ro_buf();
+    for (size_t i = 0; i < ppm_buf.size(); i += 3) {
         // PPM expects binary data in RGB format, which matches our image buffer
-        file.write(reinterpret_cast<const char*>(&img.buf[i]), 3);
+        file.write(reinterpret_cast<const char*>(&ppm_buf[i]), 3);
     }
 
     file.close();
@@ -57,9 +59,10 @@ static void clip_image_save_to_bmp(const clip_image_u8& img, const std::string& 
         return;
     }
 
-    int fileSize = 54 + 3 * img.nx * img.ny; // File header + info header + pixel data
+    const auto bmp_size = img.get_size();
+    int fileSize = 54 + 3 * bmp_size.width * bmp_size.height; // File header + info header + pixel data
     int bytesPerPixel = 3;
-    int widthInBytes = img.nx * bytesPerPixel;
+    int widthInBytes = bmp_size.width * bytesPerPixel;
     int paddingAmount = (4 - (widthInBytes % 4)) % 4;
     int stride = widthInBytes + paddingAmount;
 
@@ -72,7 +75,7 @@ static void clip_image_save_to_bmp(const clip_image_u8& img, const std::string& 
     };
 
     // Total file size
-    fileSize = 54 + (stride * img.ny);
+    fileSize = 54 + (stride * bmp_size.height);
     fileHeader[2] = (unsigned char)(fileSize);
     fileHeader[3] = (unsigned char)(fileSize >> 8);
     fileHeader[4] = (unsigned char)(fileSize >> 16);
@@ -94,14 +97,14 @@ static void clip_image_save_to_bmp(const clip_image_u8& img, const std::string& 
     };
 
     // Width and height in the information header
-    infoHeader[4] = (unsigned char)(img.nx);
-    infoHeader[5] = (unsigned char)(img.nx >> 8);
-    infoHeader[6] = (unsigned char)(img.nx >> 16);
-    infoHeader[7] = (unsigned char)(img.nx >> 24);
-    infoHeader[8] = (unsigned char)(img.ny);
-    infoHeader[9] = (unsigned char)(img.ny >> 8);
-    infoHeader[10] = (unsigned char)(img.ny >> 16);
-    infoHeader[11] = (unsigned char)(img.ny >> 24);
+    infoHeader[4] = (unsigned char)(bmp_size.width);
+    infoHeader[5] = (unsigned char)(bmp_size.width >> 8);
+    infoHeader[6] = (unsigned char)(bmp_size.width >> 16);
+    infoHeader[7] = (unsigned char)(bmp_size.width >> 24);
+    infoHeader[8] = (unsigned char)(bmp_size.height);
+    infoHeader[9] = (unsigned char)(bmp_size.height >> 8);
+    infoHeader[10] = (unsigned char)(bmp_size.height >> 16);
+    infoHeader[11] = (unsigned char)(bmp_size.height >> 24);
 
     // Write file headers
     file.write(reinterpret_cast<char*>(fileHeader), sizeof(fileHeader));
@@ -109,14 +112,14 @@ static void clip_image_save_to_bmp(const clip_image_u8& img, const std::string& 
 
     // Pixel data
     std::vector<unsigned char> padding(3, 0); // Max padding size to be added to each row
-    for (int y = img.ny - 1; y >= 0; --y) { // BMP files are stored bottom-to-top
-        for (int x = 0; x < img.nx; ++x) {
+    for (int y = bmp_size.height - 1; y >= 0; --y) { // BMP files are stored bottom-to-top
+        for (int x = 0; x < bmp_size.width; ++x) {
             // Each pixel
-            size_t pixelIndex = (y * img.nx + x) * 3;
+            const auto px = img.get_pixel(x, y);
             unsigned char pixel[3] = {
-                img.buf[pixelIndex + 2], // BMP stores pixels in BGR format
-                img.buf[pixelIndex + 1],
-                img.buf[pixelIndex]
+                px[2], // BMP stores pixels in BGR format
+                px[1],
+                px[0]
             };
             file.write(reinterpret_cast<char*>(pixel), 3);
         }
@@ -129,12 +132,13 @@ static void clip_image_save_to_bmp(const clip_image_u8& img, const std::string& 
 
 // debug function to convert f32 to u8
 static void clip_image_convert_f32_to_u8(const clip_image_f32& src, clip_image_u8& dst) {
-    dst.nx = src.nx;
-    dst.ny = src.ny;
-    dst.buf.resize(3 * src.nx * src.ny);
-    for (size_t i = 0; i < src.buf.size(); ++i) {
-        dst.buf[i] = static_cast<uint8_t>(std::min(std::max(int(src.buf[i] * 255.0f), 0), 255));
+    dst.set_size(src.get_size(), false);
+    const auto & src_buf = src.get_ro_buf();
+    std::vector<uint8_t> dst_buf(src.n_elements());
+    for (size_t i = 0; i < src.n_elements(); ++i) {
+        dst_buf[i] = static_cast<uint8_t>(std::min(std::max(int(src_buf[i] * 255.0f), 0), 255));
     }
+    dst.cpy_buf(dst_buf);
 }
 #endif
 
@@ -241,8 +245,8 @@ clip_graph::clip_graph(clip_ctx * ctx, const clip_image_f32 & img) :
         proj_type(ctx->proj_type()),
         img(img),
         patch_size(hparams.patch_size),
-        n_patches_x(img.nx / patch_size),
-        n_patches_y(img.ny / patch_size),
+        n_patches_x(img.nx() / patch_size),
+        n_patches_y(img.ny() / patch_size),
         n_patches(n_patches_x * n_patches_y),
         n_embd(hparams.n_embd),
         n_head(hparams.n_head),
@@ -278,8 +282,8 @@ void clip_graph::cb(ggml_tensor * cur, const char * name, int il) const {
 // siglip2 naflex
 ggml_tensor * clip_graph::resize_position_embeddings(uint32_t interpolation_mode) {
     ggml_tensor * pos_embd = model.position_embeddings;
-    const int height       = img.ny / patch_size;
-    const int width        = img.nx / patch_size;
+    const int height       = img.ny() / patch_size;
+    const int width        = img.nx() / patch_size;
     const uint32_t mode    = interpolation_mode;
     const int n_per_side   = (int)std::sqrt(pos_embd->ne[1]);
 
@@ -523,7 +527,7 @@ ggml_tensor * clip_graph::build_inp() {
 }
 
 ggml_tensor * clip_graph::build_inp_raw(int channels) {
-    ggml_tensor * inp_raw = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, img.nx, img.ny, channels);
+    ggml_tensor * inp_raw = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, img.nx(), img.ny(), channels);
     ggml_set_name(inp_raw, "inp_raw");
     ggml_set_input(inp_raw);
     return inp_raw;
@@ -816,8 +820,8 @@ ggml_tensor * clip_graph::build_patch_merge_permute(ggml_tensor * cur, int scale
     GGML_ASSERT(scale_factor > 1);
 
     const int n_embd = cur->ne[0];
-    int width  = img.nx / patch_size;
-    int height = img.ny / patch_size;
+    int width  = img.nx() / patch_size;
+    int height = img.ny() / patch_size;
 
     // pad width and height to factor
     const int64_t pad_width  = CLIP_ALIGN(width,  scale_factor) - width;
@@ -2805,13 +2809,12 @@ struct clip_model_loader {
         clip_image_f32_batch batch;
         clip_image_f32_ptr img(clip_image_f32_init());
         if (ctx_clip.model.modality == CLIP_MODALITY_VISION) {
-            img->nx = hparams.warmup_image_size;
-            img->ny = hparams.warmup_image_size;
-            LOG_INF("%s: warmup with image size = %d x %d\n", __func__, img->nx, img->ny);
+            const int sz = hparams.warmup_image_size;
+            img->set_size({sz, sz}, false, false);
+            LOG_INF("%s: warmup with image size = %d x %d\n", __func__, sz, sz);
         } else {
-            img->nx = hparams.warmup_audio_size;
-            img->ny = hparams.n_mel_bins;
-            LOG_INF("%s: warmup with audio size = %d\n", __func__, img->nx);
+            img->set_size({hparams.warmup_audio_size, hparams.n_mel_bins}, false, false);
+            LOG_INF("%s: warmup with audio size = %d\n", __func__, hparams.warmup_audio_size);
         }
         batch.entries.push_back(std::move(img));
         warmup(ctx_clip, batch);
@@ -3108,12 +3111,6 @@ struct clip_image_f32_batch * clip_image_f32_batch_init() {
     return new clip_image_f32_batch();
 }
 
-unsigned char * clip_image_u8_get_data(struct clip_image_u8 * img, uint32_t * nx, uint32_t * ny) {
-    if (nx) *nx = img->nx;
-    if (ny) *ny = img->ny;
-    return img->buf.data();
-}
-
 void clip_image_size_free(struct clip_image_size * load_image_size) {
     if (load_image_size == nullptr) {
         return;
@@ -3134,7 +3131,7 @@ size_t clip_image_f32_batch_nx(const struct clip_image_f32_batch * batch, int id
         LOG_ERR("%s: invalid index %d\n", __func__, idx);
         return 0;
     }
-    return batch->entries[idx]->nx;
+    return batch->entries[idx]->nx();
 }
 
 size_t clip_image_f32_batch_ny(const struct clip_image_f32_batch * batch, int idx) {
@@ -3142,7 +3139,7 @@ size_t clip_image_f32_batch_ny(const struct clip_image_f32_batch * batch, int id
         LOG_ERR("%s: invalid index %d\n", __func__, idx);
         return 0;
     }
-    return batch->entries[idx]->ny;
+    return batch->entries[idx]->ny();
 }
 
 clip_image_f32 * clip_image_f32_get_img(const struct clip_image_f32_batch * batch, int idx) {
@@ -3153,32 +3150,11 @@ clip_image_f32 * clip_image_f32_get_img(const struct clip_image_f32_batch * batc
     return batch->entries[idx].get();
 }
 
-void clip_build_img_from_pixels(const unsigned char * rgb_pixels, int nx, int ny, clip_image_u8 * img) {
-    img->nx = nx;
-    img->ny = ny;
-    img->buf.resize(3 * nx * ny);
-    memcpy(img->buf.data(), rgb_pixels, img->buf.size());
-}
-
 void clip_free(clip_ctx * ctx) {
     if (ctx == nullptr) {
         return;
     }
     delete ctx;
-}
-
-// deprecated
-size_t clip_embd_nbytes(const struct clip_ctx * ctx) {
-    const int32_t nx = ctx->model.hparams.image_size;
-    const int32_t ny = ctx->model.hparams.image_size;
-    return clip_embd_nbytes_by_img(ctx, nx, ny);
-}
-
-size_t clip_embd_nbytes_by_img(const struct clip_ctx * ctx, int img_w, int img_h) {
-    clip_image_f32 img;
-    img.nx = img_w;
-    img.ny = img_h;
-    return clip_n_output_tokens(ctx, &img) * clip_n_mmproj_embd(ctx) * sizeof(float);
 }
 
 int32_t clip_get_image_size(const struct clip_ctx * ctx) {
@@ -3211,9 +3187,9 @@ int clip_n_output_tokens_x(const struct clip_ctx * ctx, struct clip_image_f32 * 
         case PROJECTOR_TYPE_PADDLEOCR:
         case PROJECTOR_TYPE_HUNYUANVL:
         case PROJECTOR_TYPE_YOUTUVL:
-            return (img->nx / params.patch_size) / 2;
+            return (img->nx() / params.patch_size) / 2;
         case PROJECTOR_TYPE_STEP3VL:
-            return img->nx / (params.patch_size * params.n_merge);
+            return img->nx() / (params.patch_size * params.n_merge);
         default:
             break;
     }
@@ -3233,9 +3209,9 @@ int clip_n_output_tokens_y(const struct clip_ctx * ctx, struct clip_image_f32 * 
         case PROJECTOR_TYPE_PADDLEOCR:
         case PROJECTOR_TYPE_HUNYUANVL:
         case PROJECTOR_TYPE_YOUTUVL:
-            return (img->ny / params.patch_size) / 2;
+            return (img->ny() / params.patch_size) / 2;
         case PROJECTOR_TYPE_STEP3VL:
-            return img->ny / (params.patch_size * params.n_merge);
+            return img->ny() / (params.patch_size * params.n_merge);
         default:
             break;
     }
@@ -3247,7 +3223,7 @@ int clip_n_output_tokens(const struct clip_ctx * ctx, struct clip_image_f32 * im
 
     // for models with fixed size image, the input image is already pre-processed and resized to square
     int patch_size = params.patch_size;
-    int n_patches = (img->nx / patch_size) * (img->ny / patch_size);
+    int n_patches = (img->nx() / patch_size) * (img->ny() / patch_size);
 
     projector_type proj = ctx->proj_type();
 
@@ -3313,14 +3289,14 @@ int clip_n_output_tokens(const struct clip_ctx * ctx, struct clip_image_f32 * im
         case PROJECTOR_TYPE_YOUTUVL:
             {
                 // dynamic size (2 conv, so double patch size)
-                int x_patch = img->nx / (params.patch_size * 2);
-                int y_patch = img->ny / (params.patch_size * 2);
+                int x_patch = img->nx() / (params.patch_size * 2);
+                int y_patch = img->ny() / (params.patch_size * 2);
                 n_patches = x_patch * y_patch;
             } break;
         case PROJECTOR_TYPE_STEP3VL:
             {
-                int x_patch = img->nx / (params.patch_size * params.n_merge);
-                int y_patch = img->ny / (params.patch_size * params.n_merge);
+                int x_patch = img->nx() / (params.patch_size * params.n_merge);
+                int y_patch = img->ny() / (params.patch_size * params.n_merge);
                 n_patches = x_patch * y_patch;
             } break;
         case PROJECTOR_TYPE_GEMMA3:
@@ -3347,8 +3323,8 @@ int clip_n_output_tokens(const struct clip_ctx * ctx, struct clip_image_f32 * im
             {
                 // dynamic size
                 int out_patch_size = params.patch_size * ctx->model.hparams.n_merge;
-                int x_patch = CLIP_ALIGN(img->nx, out_patch_size) / out_patch_size;
-                int y_patch = CLIP_ALIGN(img->ny, out_patch_size) / out_patch_size;
+                int x_patch = CLIP_ALIGN(img->nx(), out_patch_size) / out_patch_size;
+                int y_patch = CLIP_ALIGN(img->ny(), out_patch_size) / out_patch_size;
                 n_patches = x_patch * y_patch;
             } break;
         case PROJECTOR_TYPE_PADDLEOCR:
@@ -3364,8 +3340,8 @@ int clip_n_output_tokens(const struct clip_ctx * ctx, struct clip_image_f32 * im
             {
                 // dynamic size
                 int n_merge = ctx->model.hparams.n_merge;
-                int n_patches_x = img->nx / patch_size / (n_merge > 0 ? n_merge : 1);
-                int n_patches_y = img->ny / patch_size / (n_merge > 0 ? n_merge : 1);
+                int n_patches_x = img->nx() / patch_size / (n_merge > 0 ? n_merge : 1);
+                int n_patches_y = img->ny() / patch_size / (n_merge > 0 ? n_merge : 1);
                 if (ctx->model.token_embd_img_break) {
                     n_patches = n_patches_y * n_patches_x + n_patches_y - 1; // + one [IMG_BREAK] per row, except the last row
                 } else {
@@ -3378,7 +3354,7 @@ int clip_n_output_tokens(const struct clip_ctx * ctx, struct clip_image_f32 * im
         case PROJECTOR_TYPE_MERALION:
         case PROJECTOR_TYPE_MUSIC_FLAMINGO:
             {
-                n_patches = img->nx;
+                n_patches = img->nx();
 
                 const int proj_stack_factor = ctx->model.hparams.proj_stack_factor;
                 if (ctx->model.audio_has_stack_frames()) {
@@ -3400,11 +3376,11 @@ int clip_n_output_tokens(const struct clip_ctx * ctx, struct clip_image_f32 * im
                 // chunk_size=100 frames --> 3x stride-2 conv2d --> 13 tokens per chunk
                 const int chunk_size       = 100;
                 const int tokens_per_chunk = 13;
-                n_patches = (img->nx / chunk_size) * tokens_per_chunk;
+                n_patches = (img->nx() / chunk_size) * tokens_per_chunk;
             } break;
         case PROJECTOR_TYPE_GLMA:
             {
-                n_patches = img->nx;
+                n_patches = img->nx();
                 // whisper downscales input token by half after conv1d
                 n_patches /= 2;
                 // reshape by merge_factor
@@ -3431,8 +3407,8 @@ int clip_n_output_tokens(const struct clip_ctx * ctx, struct clip_image_f32 * im
         case PROJECTOR_TYPE_HUNYUANVL:
             {
                 int merge = ctx->model.hparams.n_merge;
-                int ow = (img->nx / patch_size) / merge;
-                int oh = (img->ny / patch_size) / merge;
+                int ow = (img->nx() / patch_size) / merge;
+                int oh = (img->ny() / patch_size) / merge;
                 n_patches = (ow + 1) * oh + 2;
             } break;
         case PROJECTOR_TYPE_DEEPSEEKOCR2:
@@ -3446,13 +3422,13 @@ int clip_n_output_tokens(const struct clip_ctx * ctx, struct clip_image_f32 * im
         } break;
         case PROJECTOR_TYPE_LFM2A:
             {
-                n_patches = ((((img->nx + 1) / 2) + 1) / 2 + 1) / 2;
+                n_patches = ((((img->nx() + 1) / 2) + 1) / 2 + 1) / 2;
             } break;
         case PROJECTOR_TYPE_GEMMA4A:
             {
                 // Two Conv2D stride-2: O = floor((I + 2p - k) / s) + 1, p=1, k=3, s=2
                 // O = floor((I - 1) / 2) + 1
-                int n = img->nx;
+                int n = img->nx();
                 for (int i = 0; i < 2; i++) {
                     n = (n - 1) / 2 + 1;
                 }
@@ -3460,13 +3436,13 @@ int clip_n_output_tokens(const struct clip_ctx * ctx, struct clip_image_f32 * im
             } break;
         case PROJECTOR_TYPE_GEMMA4UA:
             {
-                n_patches = img->nx;  // no downsampling: one token per raw waveform frame
+                n_patches = img->nx();  // no downsampling: one token per raw waveform frame
             } break;
         case PROJECTOR_TYPE_GRANITE_SPEECH:
             {
                 const int ws = ctx->model.hparams.audio_proj_window_size;
                 const int ds = ctx->model.hparams.audio_proj_downsample_rate;
-                n_patches = ((img->nx + ws - 1) / ws) * (ws / ds);
+                n_patches = ((img->nx() + ws - 1) / ws) * (ws / ds);
             } break;
         case PROJECTOR_TYPE_GRANITE4_VISION:
             {
@@ -3475,7 +3451,7 @@ int clip_n_output_tokens(const struct clip_ctx * ctx, struct clip_image_f32 * im
                 // For 384×384 input: n = 24/8 = 3, query_side = 4 → 144.
                 const int window_side = ctx->model.hparams.downsample_window_side;
                 const int query_side  = ctx->model.hparams.downsample_query_side;
-                const int side        = img->nx / params.patch_size;
+                const int side        = img->nx() / params.patch_size;
                 const int n           = side / window_side;
                 n_patches             = (query_side * n) * (query_side * n);
                 if (img->add_newline) {
@@ -3525,8 +3501,8 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
     const auto & model   = ctx->model;
     const auto & hparams = model.hparams;
 
-    const int image_size_width  = imgs.entries[0]->nx;
-    const int image_size_height = imgs.entries[0]->ny;
+    const int image_size_width  = imgs.entries[0]->nx();
+    const int image_size_height = imgs.entries[0]->ny();
 
     const int patch_size    = hparams.patch_size;
     const int num_patches   = ((image_size_width / patch_size) * (image_size_height / patch_size));
@@ -3546,7 +3522,7 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
         return inp;
     };
 
-    auto set_input_f32 = [&get_inp_tensor](const char * name, std::vector<float> & values) {
+    auto set_input_f32 = [&get_inp_tensor](const char * name, const std::vector<float> & values) {
         ggml_tensor * cur = get_inp_tensor(name);
         GGML_ASSERT(cur->type == GGML_TYPE_F32);
         GGML_ASSERT(ggml_nelements(cur) == (int64_t)values.size());
@@ -3564,7 +3540,7 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
     if (!imgs.is_audio) {
         size_t nelem = 0;
         for (const auto & img : imgs.entries) {
-            nelem += img->nx * img->ny * 3;
+            nelem += img->nx() * img->ny() * 3;
         }
         std::vector<float> inp_raw(nelem);
 
@@ -3580,19 +3556,20 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
         //   ──────┘ x B
 
         for (size_t i = 0; i < imgs.entries.size(); i++) {
-            const int nx = imgs.entries[i]->nx;
-            const int ny = imgs.entries[i]->ny;
+            const int nx = imgs.entries[i]->nx();
+            const int ny = imgs.entries[i]->ny();
             const int n = nx * ny;
 
             for (int b = 0; b < batch_size; b++) {
+                const auto & buf = imgs.entries[b]->get_ro_buf();
                 float * batch_entry = inp_raw.data() + b * (3*n);
                 for (int y = 0; y < ny; y++) {
                     for (int x = 0; x < nx; x++) {
                         size_t base_src = 3*(y * nx + x); // idx of the first channel
                         size_t base_dst =    y * nx + x;  // idx of the first channel
-                        batch_entry[      base_dst] = imgs.entries[b]->buf[base_src    ];
-                        batch_entry[1*n + base_dst] = imgs.entries[b]->buf[base_src + 1];
-                        batch_entry[2*n + base_dst] = imgs.entries[b]->buf[base_src + 2];
+                        batch_entry[      base_dst] = buf[base_src    ];
+                        batch_entry[1*n + base_dst] = buf[base_src + 1];
+                        batch_entry[2*n + base_dst] = buf[base_src + 2];
                     }
                 }
             }
@@ -3602,12 +3579,14 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
     } else {
         // audio input
         GGML_ASSERT(imgs.entries.size() == 1);
+
         const auto & mel_inp = imgs.entries[0];
-        const int n_step = mel_inp->nx;
-        const int n_mel  = mel_inp->ny;
-        std::vector<float> inp_raw(n_step * n_mel);
-        std::memcpy(inp_raw.data(), mel_inp->buf.data(), n_step * n_mel * sizeof(float));
-        set_input_f32("inp_raw", inp_raw);
+        const auto & buf = mel_inp->get_ro_buf();
+        const int n_step = mel_inp->nx();
+        const int n_mel  = mel_inp->ny();
+        GGML_ASSERT((size_t)n_step * n_mel == buf.size());
+
+        set_input_f32("inp_raw", buf);
     }
 
     // set input per projector
@@ -4218,7 +4197,7 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
                 GGML_ASSERT(imgs.entries.size() == 1);
                 const auto & img0 = imgs.entries.front();
                 // Compute n_pos matching SSCP output: two stride-2 convs
-                int n_pos = img0->nx;
+                int n_pos = img0->nx();
                 for (int i = 0; i < 2; i++) { n_pos = (n_pos - 1) / 2 + 1; }
 
                 // Chunked local attention: blocked causal mask and RPE
@@ -4324,7 +4303,7 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
                 // reshapes as ggml_get_rows gathers. The names are set
                 // by g4v_gather() in models/granite4-vision.cpp.
                 const int patch_size  = model.hparams.patch_size;
-                const int image_side  = imgs.entries.front()->nx / patch_size;
+                const int image_side  = imgs.entries.front()->nx() / patch_size;
                 const int window_side = hparams.downsample_window_side;
                 const int query_side  = hparams.downsample_query_side;
                 const int n           = image_side / window_side;
@@ -4570,36 +4549,12 @@ bool clip_has_audio_encoder(const struct clip_ctx * ctx) {
     return ctx->model.modality == CLIP_MODALITY_AUDIO;
 }
 
-bool clip_encode_float_image (struct clip_ctx * ctx, int n_threads, float * img, int h, int w, float * vec) {
-    clip_image_f32 clip_img;
-    clip_img.buf.resize(h * w * 3);
-    for (int i = 0; i < h*w*3; i++)
-    {
-        clip_img.buf[i] = img[i];
-    }
-    clip_img.nx = w;
-    clip_img.ny = h;
-    clip_image_encode(ctx, n_threads, &clip_img, vec);
-    return true;
-}
-
 //
 // API used internally with mtmd
 //
 
 projector_type clip_get_projector_type(const struct clip_ctx * ctx) {
     return ctx->proj_type();
-}
-
-void clip_image_f32_batch_add_mel(struct clip_image_f32_batch * batch, int n_mel, int n_frames, float * mel) {
-    clip_image_f32 * audio = new clip_image_f32;
-    audio->nx = n_frames;
-    audio->ny = n_mel;
-    audio->buf.resize(n_frames * n_mel);
-    std::memcpy(audio->buf.data(), mel, n_frames * n_mel * sizeof(float));
-
-    batch->entries.push_back(clip_image_f32_ptr(audio));
-    batch->is_audio = true;
 }
 
 const clip_hparams * clip_get_hparams(const struct clip_ctx * ctx) {
