@@ -31,6 +31,7 @@ typedef struct ggml_profile_record {
     const char *                 extra;       // fusion name for fused ops, or NULL
 
     // Output tensor info
+    char                         tensor_name[GGML_MAX_NAME];           // output tensor name (e.g. "ffn_out-0"), "" if unnamed
     int64_t                      ne[4];                                // output tensor dimensions
     int                          out_type;                             // output tensor type (ggml_type), -1 if N/A
 

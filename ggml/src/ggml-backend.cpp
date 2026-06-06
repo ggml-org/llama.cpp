@@ -1577,6 +1577,7 @@ static ggml_profile_record make_copy_record(const char * copy_dir, int backend_i
     rec.end_ns     = end_ns;
     rec.bytes      = bytes;
     rec.extra      = input ? input->name : NULL;
+    snprintf(rec.tensor_name, sizeof(rec.tensor_name), "%s", input ? input->name : "");
     rec.out_type   = -1;
     rec.sub_op     = -1;
     rec.n_src      = 0;
@@ -2792,6 +2793,11 @@ int ggml_backend_sched_write_profiling_json(ggml_backend_sched_t sched, FILE * f
         }
 
         // Output tensor info
+        if (rec.tensor_name[0] != '\0') {
+            fprintf(fp, ", \"tensor_name\": \"%s\"", rec.tensor_name);
+        } else {
+            fprintf(fp, ", \"tensor_name\": null");
+        }
         fprintf(fp, ", \"ne\": [%lld, %lld, %lld, %lld]", (long long) rec.ne[0], (long long) rec.ne[1],
                 (long long) rec.ne[2], (long long) rec.ne[3]);
         fprintf(fp, ", \"out_type\": %d", rec.out_type);
