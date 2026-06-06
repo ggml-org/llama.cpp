@@ -1455,7 +1455,6 @@ static void ggml_cuda_mul_mat_cublas_impl(ggml_backend_cuda_context & ctx, const
                 ne12*ne13,
                 cu_compute_type,
                 CUBLAS_GEMM_DEFAULT_TENSOR_OP));
-        return;
     } else {
         // use cublasGemmBatchedEx
         const int64_t ne23 = ne12*ne13;
