@@ -357,7 +357,7 @@ llama_context::llama_context(
             /*.type_v   =*/ params.type_v,
             /*.swa_full =*/ params.swa_full,
             /*.ctx_type =*/ cparams.ctx_type,
-            /*.mem_src  =*/ params.ctx_src ? params.ctx_src->memory.get() : nullptr,
+            /*.mem_src  =*/ llama_get_memory(cparams.ctx_src),
         };
 
         memory.reset(model.create_memory(params_mem, cparams));

@@ -2543,10 +2543,6 @@ uint32_t llama_kv_cache_context::get_n_kv() const {
     return n_kv;
 }
 
-llama_pos llama_kv_cache_context::seq_pos_max(llama_seq_id seq_id) const {
-    return kv->seq_pos_max(seq_id);
-}
-
 ggml_type llama_kv_cache_context::type_k() const {
     return kv->type_k();
 }
