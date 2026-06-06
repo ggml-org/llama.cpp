@@ -93,7 +93,7 @@ LLAMA_API llama_memory_breakdown llama_get_memory_breakdown(const struct llama_c
 // If masked == true,  output the embeddings only for the tokens with batch.logits != 0
 // If masked == false, output the embeddings for all tokens in the batch regardless of batch.logits
 LLAMA_API void llama_set_embeddings_nextn(struct llama_context * ctx, bool value, bool masked);
-LLAMA_API void llama_set_mtp_source(struct llama_context * ctx, struct llama_context * src);
+LLAMA_API void llama_set_memory(struct llama_context * ctx, struct llama_context * src);
 
 // mirrors:
 // LLAMA_API float * llama_get_embeddings(struct llama_context * ctx);
@@ -101,3 +101,6 @@ LLAMA_API float * llama_get_embeddings_nextn(struct llama_context * ctx);
 
 // LLAMA_API float * llama_get_embeddings_ith(struct llama_context * ctx, int32_t i);
 LLAMA_API float * llama_get_embeddings_nextn_ith(struct llama_context * ctx, int32_t i);
+
+LLAMA_API ggml_tensor * llama_model_get_tok_embd(const struct llama_model * model);
+LLAMA_API void          llama_model_set_tok_embd(      struct llama_model * model, ggml_tensor * tensor);

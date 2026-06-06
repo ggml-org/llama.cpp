@@ -82,18 +82,6 @@ std::unique_ptr<llm_graph_context> llama_model_gemma4_assistant::build_arch_grap
 
 llama_model_gemma4_assistant::graph::graph(const llama_model & model, const llm_graph_params & params) :
         llm_graph_context(params) {
-    GGML_ASSERT(src_mctx  && "Gemma 4 assistant graph requires an MTP source (llama_set_mtp_source)");
-    GGML_ASSERT(src_model && "Gemma 4 assistant graph requires a source model");
-    GGML_ASSERT(src_model->tok_embd && "source model missing tok_embd");
-
-    const auto & src_hparams = src_model->hparams;
-
-    // By convention the MTP draft reads from the trunk's final SWA and full layers.
-    const int32_t src_layer_full = (int32_t) src_hparams.n_layer() - 1;
-    const int32_t src_layer_swa  = (int32_t) src_hparams.n_layer() - 2;
-    GGML_ASSERT(!src_hparams.is_swa(src_layer_full) && "trunk's last layer must be full attention");
-    GGML_ASSERT( src_hparams.is_swa(src_layer_swa)  && "trunk's penultimate layer must be SWA");
-
     const int64_t n_embd_backbone = hparams.n_embd_out();
 
     ggml_tensor * inp_tokens;
@@ -116,7 +104,7 @@ llama_model_gemma4_assistant::graph::graph(const llama_model & model, const llm_
         res->add_input(std::move(inp));
     }
 
-    ggml_tensor * x = ggml_get_rows(ctx0, src_model->tok_embd, inp_tokens);
+    ggml_tensor * x = ggml_get_rows(ctx0, model.tok_embd, inp_tokens);
     x = ggml_scale(ctx0, x, sqrtf((float) n_embd_backbone));
     cb(x, "inp_embd_target", -1);
 
@@ -126,15 +114,14 @@ llama_model_gemma4_assistant::graph::graph(const llama_model & model, const llm_
     ggml_tensor * cur = ggml_mul_mat(ctx0, model.nextn_pre_proj, xh);
     cb(cur, "pre_proj", -1);
 
-    auto *        inp_attn    = build_attn_inp_src_kv_iswa();
+    auto *        inp_attn    = build_attn_inp_kv_iswa();
     ggml_tensor * inp_pos     = build_inp_pos();
     ggml_tensor * inp_out_ids = build_inp_out_ids();
 
     ggml_tensor * inpL = cur;
 
     for (int il = 0; il < n_layer; ++il) {
-        const bool    is_swa = hparams.is_swa(il);
-        const int32_t il_src = is_swa ? src_layer_swa : src_layer_full;
+        const bool is_swa = hparams.is_swa(il);
 
         const int64_t n_embd_head = hparams.n_embd_head_k(il);
         const int64_t n_head      = hparams.n_head(il);
@@ -157,7 +144,7 @@ llama_model_gemma4_assistant::graph::graph(const llama_model & model, const llm_
         cb(Qcur, "Qcur_pos", il);
 
         cur = build_attn(inp_attn, model.layers[il].wo, nullptr, nullptr,
-                Qcur, nullptr, nullptr, nullptr, hparams.f_attention_scale, il, il_src);
+                Qcur, nullptr, nullptr, nullptr, nullptr, nullptr, hparams.f_attention_scale, il);
 
         if (il == n_layer - 1 && inp_out_ids) {
             cur  = ggml_get_rows(ctx0, cur,  inp_out_ids);

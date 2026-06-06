@@ -1552,6 +1552,10 @@ static void set_input_kq_mask_impl(const args_set_input_kq_mask & args, T * data
                         goto skip;
                     }
 
+                    if (ubatch->n_tokens == 1 && p0 == p1) {
+                        goto skip;
+                    }
+
                     // M-RoPE causal mask
                     if (is_2d) {
                         if (p0 == p1) {

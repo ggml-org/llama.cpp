@@ -491,11 +491,16 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
             }
         }
 
-        kv_shared_with_target = llama_get_memory(ctx_dft) == nullptr;
-
         llama_set_embeddings_nextn(ctx_tgt, true, /*masked*/ false);
         llama_set_embeddings_nextn(ctx_dft, true, /*masked*/ true);
-        llama_set_mtp_source(ctx_dft, ctx_tgt);
+
+        kv_shared_with_target = llama_get_memory(ctx_dft) == nullptr;
+        if (kv_shared_with_target) {
+            llama_set_memory(ctx_dft, ctx_tgt);
+
+            // TODO: avoid the const cast
+            llama_model_set_tok_embd(const_cast<llama_model *>(llama_get_model(ctx_dft)), llama_model_get_tok_embd(llama_get_model(ctx_tgt)));
+        }
 
         pending_h.assign(n_seq, std::vector<float>(n_embd, 0.0f));
 
@@ -640,6 +645,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
 
     void draft(common_speculative_draft_params_vec & dparams) override {
         auto & ctx_dft = params.ctx_dft;
+        auto & ctx_tgt = params.ctx_tgt;
 
         common_batch_clear(batch);
 
@@ -665,6 +671,8 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
 
             h_row = pending_h[seq_id].data();
             std::memcpy(batch.embd + n_embd*(batch.n_tokens - 1), h_row, row_bytes);
+
+            llama_memory_seq_rm(llama_get_memory(ctx_dft), seq_id, dp.n_past, -1);
         }
 
         int ret = llama_decode(ctx_dft, batch);
@@ -725,6 +733,8 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
 
                 common_batch_add(batch, id, dp.n_past + i + 1, { seq_id }, true);
                 std::memcpy(batch.embd + n_embd*(batch.n_tokens - 1), h_row, row_bytes);
+
+                llama_memory_seq_rm(llama_get_memory(ctx_dft), seq_id, dp.n_past, -1);
             }
 
             if (batch.n_tokens == 0) {
@@ -740,6 +750,8 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
 
             ++i;
         }
+
+        llama_synchronize(ctx_dft);
 
         for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
             auto & dp = dparams[seq_id];

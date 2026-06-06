@@ -38,12 +38,6 @@ static uint32_t ctx_type_to_embd_inp(const llama_hparams & hparams, llama_contex
     throw std::runtime_error("Unsupported ctx type");
 }
 
-namespace {
-struct src_mctx_reset_on_exit {
-    llama_memory_context_ptr * slot;
-    ~src_mctx_reset_on_exit() { if (slot) slot->reset(); }
-};
-
 static void llama_assert_gemma4_mtp_source_placement(
         const llama_context * ctx,
         const llama_context * src) {
@@ -91,7 +85,6 @@ static void llama_assert_gemma4_mtp_source_placement(
                     ggml_backend_dev_name(dev_kv)));
         }
     }
-}
 }
 
 llama_context::llama_context(
@@ -514,23 +507,6 @@ void llama_context::sched_reserve() {
         }
     }
 
-    // When called from decode(), src_mctx_for_decode is already populated and
-    // we must not drop it on exit (process_ubatch still needs it). Snapshot
-    // only when sched_reserve runs standalone (e.g. lazy first-decode reserve
-    // when set_mtp_source flipped sched_need_reserve).
-    const bool owns_src_snapshot = src_ctx && !src_mctx_for_decode;
-    if (owns_src_snapshot) {
-        auto * src_memory = src_ctx->get_memory();
-        if (!src_memory) {
-            throw std::runtime_error("MTP source context has no memory module");
-        }
-        src_mctx_for_decode = src_memory->init_full();
-        if (!src_mctx_for_decode) {
-            throw std::runtime_error("failed to initialize MTP source memory snapshot");
-        }
-    }
-    src_mctx_reset_on_exit reserve_src_drop{owns_src_snapshot ? &src_mctx_for_decode : nullptr};
-
     // avoid reserving graphs with zero outputs - assume one output per sequence
     const int n_outputs = n_seqs;
 
@@ -816,8 +792,14 @@ uint32_t llama_context::n_threads_batch() const {
     return cparams.n_threads_batch;
 }
 
-llama_memory_t llama_context::get_memory() const {
-    return memory.get();
+llama_memory_ptr llama_context::get_memory() const {
+    return memory;
+}
+
+void llama_context::set_memory(llama_memory_ptr memory) {
+    this->memory = std::move(memory);
+
+    sched_need_reserve = true;
 }
 
 bool llama_context::memory_update(bool optimize) {
@@ -1196,18 +1178,6 @@ void llama_context::set_embeddings_nextn(bool value, bool masked) {
 
     cparams.embeddings_nextn        = value;
     cparams.embeddings_nextn_masked = masked;
-}
-
-void llama_context::set_mtp_source(llama_context * src) {
-    if (src_ctx == src) {
-        return;
-    }
-    llama_assert_gemma4_mtp_source_placement(this, src);
-    src_ctx = src;
-    src_mctx_for_decode.reset();
-    // worst-case compute buffers were reserved without knowing about the source
-    // memory; force a re-reserve so the next decode sees src views
-    sched_need_reserve = true;
 }
 
 void llama_context::set_causal_attn(bool value) {
@@ -1807,20 +1777,6 @@ int llama_context::decode(const llama_batch & batch_inp) {
     embd_seq.clear();
     output_swaps.clear();
 
-    src_mctx_reset_on_exit decode_src_drop{&src_mctx_for_decode};
-    if (src_ctx) {
-        auto * src_memory = src_ctx->get_memory();
-        if (!src_memory) {
-            LLAMA_LOG_ERROR("%s: MTP source context has no memory module\n", __func__);
-            return -2;
-        }
-        src_mctx_for_decode = src_memory->init_full();
-        if (!src_mctx_for_decode) {
-            LLAMA_LOG_ERROR("%s: failed to snapshot MTP source memory\n", __func__);
-            return -2;
-        }
-    }
-
     sched_reserve();
 
     bool did_optimize = false;
@@ -2414,8 +2370,6 @@ llm_graph_params llama_context::graph_params(
         /*.cvec        =*/ cvec.get(),
         /*.loras       =*/ loras.get(),
         /*.mctx        =*/ mctx,
-        /*.src_mctx    =*/ src_mctx_for_decode.get(),
-        /*.src_model   =*/ src_ctx ? &src_ctx->get_model() : nullptr,
         /*.cross       =*/ &cross,
         /*.samplers    =*/ sampling.samplers,
         /*.n_outputs   =*/ n_outputs,
@@ -3704,8 +3658,12 @@ void llama_set_embeddings_nextn(llama_context * ctx, bool value, bool masked) {
     ctx->set_embeddings_nextn(value, masked);
 }
 
-void llama_set_mtp_source(llama_context * ctx, llama_context * src) {
-    ctx->set_mtp_source(src);
+void llama_set_memory(llama_context * ctx, llama_context * src) {
+    ctx->set_memory(src->get_memory());
+}
+
+llama_memory_t llama_get_memory(const struct llama_context * ctx) {
+    return ctx->get_memory().get();
 }
 
 float * llama_get_embeddings_nextn(llama_context * ctx) {
@@ -3771,7 +3729,7 @@ struct ggml_cgraph * llama_graph_reserve(
         uint32_t n_tokens,
         uint32_t n_seqs,
         uint32_t n_outputs) {
-    auto * memory = ctx->get_memory();
+    auto memory = ctx->get_memory();
     llama_memory_context_ptr mctx;
     if (memory) {
         mctx = memory->init_full();
@@ -3810,10 +3768,6 @@ int32_t llama_set_adapter_cvec(
 //
 // memory
 //
-
-llama_memory_t llama_get_memory(const struct llama_context * ctx) {
-    return ctx->get_memory();
-}
 
 void llama_memory_clear(llama_memory_t mem, bool data) {
     if (!mem) {

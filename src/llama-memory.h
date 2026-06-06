@@ -122,4 +122,4 @@ struct llama_memory_i {
     virtual void state_read (llama_io_read_i  & io, llama_seq_id seq_id = -1, llama_state_seq_flags flags = 0) = 0;
 };
 
-using llama_memory_ptr = std::unique_ptr<llama_memory_i>;
+using llama_memory_ptr = std::shared_ptr<llama_memory_i>;
