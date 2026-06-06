@@ -76,6 +76,7 @@ enum rpc_cmd {
     RPC_CMD_HELLO,
     RPC_CMD_DEVICE_COUNT,
     RPC_CMD_GRAPH_RECOMPUTE,
+    RPC_CMD_GET_DEVICE_TYPE,
     RPC_CMD_COUNT,
 };
 
@@ -90,6 +91,7 @@ struct rpc_msg_hello_req {
 
 enum rpc_hello_flags : uint8_t {
     RPC_HELLO_FLAG_NO_CACHE = 1 << 0,
+    RPC_HELLO_FLAG_DEVICE_TYPE = 1 << 1,
 };
 
 struct rpc_msg_hello_rsp {
@@ -193,6 +195,14 @@ struct rpc_msg_get_device_memory_req {
 struct rpc_msg_get_device_memory_rsp {
     uint64_t free_mem;
     uint64_t total_mem;
+};
+
+struct rpc_msg_get_device_type_req {
+    uint32_t device;
+};
+
+struct rpc_msg_get_device_type_rsp {
+    uint32_t type;
 };
 
 struct rpc_msg_graph_recompute_req {
@@ -339,6 +349,7 @@ static const char * rpc_cmd_name(enum rpc_cmd cmd) {
         case RPC_CMD_HELLO:             return "HELLO";
         case RPC_CMD_DEVICE_COUNT:      return "DEVICE_COUNT";
         case RPC_CMD_GRAPH_RECOMPUTE:   return "GRAPH_RECOMPUTE";
+        case RPC_CMD_GET_DEVICE_TYPE:   return "GET_DEVICE_TYPE";
         case RPC_CMD_COUNT:             break;
     }
 
@@ -873,6 +884,7 @@ static bool negotiate_hello(const std::shared_ptr<socket_t> & sock) {
 
     sock->update_caps(response.conn_caps);
     sock->set_skip_tensor_hash((response.flags & RPC_HELLO_FLAG_NO_CACHE) != 0);
+    sock->set_supports_device_type((response.flags & RPC_HELLO_FLAG_DEVICE_TYPE) != 0);
     return true;
 }
 
@@ -1387,6 +1399,49 @@ void ggml_backend_rpc_get_device_memory(const char * endpoint, uint32_t device, 
     get_device_memory(sock, device, free, total);
 }
 
+static bool is_valid_backend_device_type(uint32_t type) {
+    switch ((enum ggml_backend_dev_type) type) {
+        case GGML_BACKEND_DEVICE_TYPE_CPU:
+        case GGML_BACKEND_DEVICE_TYPE_GPU:
+        case GGML_BACKEND_DEVICE_TYPE_IGPU:
+        case GGML_BACKEND_DEVICE_TYPE_ACCEL:
+        case GGML_BACKEND_DEVICE_TYPE_META:
+            return true;
+    }
+    return false;
+}
+
+static const char * backend_device_type_name(enum ggml_backend_dev_type type) {
+    switch (type) {
+        case GGML_BACKEND_DEVICE_TYPE_CPU:   return "CPU";
+        case GGML_BACKEND_DEVICE_TYPE_GPU:   return "GPU";
+        case GGML_BACKEND_DEVICE_TYPE_IGPU:  return "IGPU";
+        case GGML_BACKEND_DEVICE_TYPE_ACCEL: return "ACCEL";
+        case GGML_BACKEND_DEVICE_TYPE_META:  return "META";
+    }
+    return "unknown";
+}
+
+static bool get_remote_device_type(const std::shared_ptr<socket_t> & sock, uint32_t device, enum ggml_backend_dev_type * type) {
+    if (!sock->supports_device_type()) {
+        return false;
+    }
+
+    rpc_msg_get_device_type_req request;
+    request.device = device;
+    rpc_msg_get_device_type_rsp response;
+    bool status = send_rpc_cmd(sock, RPC_CMD_GET_DEVICE_TYPE, &request, sizeof(request), &response, sizeof(response));
+    RPC_STATUS_ASSERT(status);
+
+    if (!is_valid_backend_device_type(response.type)) {
+        GGML_LOG_WARN("RPC server returned invalid device type %u\n", response.type);
+        return false;
+    }
+
+    *type = (enum ggml_backend_dev_type) response.type;
+    return true;
+}
+
 // RPC server-side implementation
 
 class rpc_server {
@@ -1413,6 +1468,7 @@ public:
     bool init_tensor(const rpc_msg_init_tensor_req & request);
     bool get_alloc_size(const rpc_msg_get_alloc_size_req & request, rpc_msg_get_alloc_size_rsp & response);
     bool get_device_memory(const rpc_msg_get_device_memory_req & request, rpc_msg_get_device_memory_rsp & response);
+    bool get_device_type(const rpc_msg_get_device_type_req & request, rpc_msg_get_device_type_rsp & response);
 
     struct stored_graph {
         std::vector<uint8_t>   buffer;
@@ -1439,6 +1495,7 @@ void rpc_server::hello(rpc_msg_hello_rsp & response) {
     response.major = RPC_PROTO_MAJOR_VERSION;
     response.minor = RPC_PROTO_MINOR_VERSION;
     response.patch = RPC_PROTO_PATCH_VERSION;
+    response.flags |= RPC_HELLO_FLAG_DEVICE_TYPE;
     if (cache_dir == nullptr) {
         response.flags |= RPC_HELLO_FLAG_NO_CACHE;
     }
@@ -1996,6 +2053,17 @@ bool rpc_server::get_device_memory(const rpc_msg_get_device_memory_req & request
     return true;
 }
 
+bool rpc_server::get_device_type(const rpc_msg_get_device_type_req & request, rpc_msg_get_device_type_rsp & response) {
+    uint32_t dev_id = request.device;
+    if (dev_id >= backends.size()) {
+        return false;
+    }
+    ggml_backend_dev_t dev = ggml_backend_get_device(backends[dev_id]);
+    response.type = (uint32_t) ggml_backend_dev_type(dev);
+    LOG_DBG("[%s] device: %u, type: %u\n", __func__, dev_id, response.type);
+    return true;
+}
+
 rpc_server::~rpc_server() {
     for (auto buffer : buffers) {
         ggml_backend_buffer_free(buffer);
@@ -2263,6 +2331,20 @@ static void rpc_serve_client(const std::vector<ggml_backend_t> & backends, const
                 }
                 break;
             }
+            case RPC_CMD_GET_DEVICE_TYPE: {
+                rpc_msg_get_device_type_req request;
+                if (!recv_msg(sock, &request, sizeof(request))) {
+                    return;
+                }
+                rpc_msg_get_device_type_rsp response;
+                if (!server.get_device_type(request, response)) {
+                    return;
+                }
+                if (!send_msg(sock, &response, sizeof(response))) {
+                    return;
+                }
+                break;
+            }
             default: {
                 GGML_LOG_ERROR("Unknown command: %d\n", cmd);
                 return;
@@ -2363,10 +2445,11 @@ static void ggml_backend_rpc_device_get_memory(ggml_backend_dev_t dev, size_t * 
 }
 
 static enum ggml_backend_dev_type ggml_backend_rpc_device_get_type(ggml_backend_dev_t dev) {
-    // TODO: obtain value from the server
-    return GGML_BACKEND_DEVICE_TYPE_GPU;
-
+    // RPC devices are classified as GPU for compatibility with existing
+    // offload-device selection. The remote underlying type is reported in the
+    // device description when the server supports RPC device-type reporting.
     GGML_UNUSED(dev);
+    return GGML_BACKEND_DEVICE_TYPE_GPU;
 }
 
 static void ggml_backend_rpc_device_get_props(ggml_backend_dev_t dev, struct ggml_backend_dev_props * props) {
@@ -2519,11 +2602,21 @@ ggml_backend_reg_t ggml_backend_rpc_add_server(const char * endpoint) {
     if (dev_count == 0) {
         return nullptr;
     }
+    auto sock = get_socket(endpoint);
+    if (sock == nullptr) {
+        return nullptr;
+    }
     ggml_backend_rpc_reg_context * ctx = new ggml_backend_rpc_reg_context;
     ctx->name = "RPC[" + std::string(endpoint) + "]";
     for (uint32_t ind = 0; ind < dev_count; ind++) {
         std::string dev_name = "RPC" + std::to_string(dev_id);
         std::string dev_desc = std::string(endpoint);
+        enum ggml_backend_dev_type remote_type;
+        if (get_remote_device_type(sock, ind, &remote_type)) {
+            dev_desc += " (remote type: ";
+            dev_desc += backend_device_type_name(remote_type);
+            dev_desc += ")";
+        }
         ggml_backend_rpc_device_context * dev_ctx = new ggml_backend_rpc_device_context {
             /* .endpoint    = */    endpoint,
             /* .device      = */    ind,

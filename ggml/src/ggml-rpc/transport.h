@@ -25,6 +25,9 @@ struct socket_t {
     void set_skip_tensor_hash(bool value);
     bool skip_tensor_hash() const;
 
+    void set_supports_device_type(bool value);
+    bool supports_device_type() const;
+
     void set_label(const char * label);
     const std::string & label() const;
 

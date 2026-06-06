@@ -116,7 +116,7 @@ static_assert(sizeof(rdma_caps) == RPC_CONN_CAPS_SIZE, "rdma_caps must match con
 #endif // GGML_RPC_RDMA
 
 struct socket_t::impl {
-    impl(sockfd_t fd) : use_rdma(false), fd(fd), skip_tensor_hash(false) {}
+    impl(sockfd_t fd) : use_rdma(false), fd(fd), skip_tensor_hash(false), supports_device_type(false) {}
     ~impl();
     bool send_data(const void * data, size_t size);
     bool recv_data(void * data, size_t size);
@@ -138,6 +138,7 @@ struct socket_t::impl {
     bool     use_rdma;
     sockfd_t fd;
     bool     skip_tensor_hash;
+    bool     supports_device_type;
     std::string label;
 };
 
@@ -574,6 +575,14 @@ void socket_t::set_skip_tensor_hash(bool value) {
 
 bool socket_t::skip_tensor_hash() const {
     return pimpl->skip_tensor_hash;
+}
+
+void socket_t::set_supports_device_type(bool value) {
+    pimpl->supports_device_type = value;
+}
+
+bool socket_t::supports_device_type() const {
+    return pimpl->supports_device_type;
 }
 
 void socket_t::set_label(const char * label) {

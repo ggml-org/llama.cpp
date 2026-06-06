@@ -348,10 +348,14 @@ The report includes the split mode, split source, raw split weights, normalized
 split points, whether a split weight came from user tensor-split input, backend
 reported memory, or the client CPU fallback, the input and output devices, and
 compressed repeating-layer ranges. For RPC, `client_backend` and
-`client_device_type` are local client/RPC-wrapper metadata and are not proof of
-the remote backend type. RPC memory is whatever the remote backend reports and
-may be remote CPU RAM; confirm each remote backend from the corresponding
-`rpc-server` startup device banner. The `RPC<index>[host:port]` value in
+`client_device_type` are local client/RPC-wrapper metadata; RPC devices keep the
+historical GPU classification so they remain selectable as offload devices.
+When both the client and server support RPC device-type reporting, the RPC
+device description includes the underlying remote backend type, for example
+`remote type: CPU`. Older `rpc-server` processes omit that description suffix.
+RPC memory is whatever the remote backend reports and may be remote CPU RAM; use
+the remote type suffix or the corresponding `rpc-server` startup device banner
+to confirm each remote backend. The `RPC<index>[host:port]` value in
 `default_buft` and `buft_candidate` identifies the remote RPC device index to
 match against that server banner. The report is useful when RPC throughput looks
 network-bound but the real issue may be layer placement, output placement, or a
