@@ -112,7 +112,7 @@ This fork supports three KV cache compression types:
 ./build/bin/llama-server \
   -m ./models/tq3_4s/model.gguf \
   -ngl 99 -fa on -c 32768 \
-  -ctk q8_0 -ctv q8_0 \
+  -ctk q8_0 -ctv tq3_0 \
   --port 8090
 ```
 
