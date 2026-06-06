@@ -555,10 +555,12 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
     };
 
     auto get_split_granularity = [&](int64_t blck_size, uint32_t il, const std::vector<std::pair<int64_t, uint32_t>> & segments) -> std::vector<int64_t> {
+        // for better performance it may make sense to round up blck_size to a higher power of 2 so that more efficient kernels can be used
         if (hparams.is_recr(il)) {
             // linear attention
-            const int64_t head_dim  = hparams.ssm_d_state;
-            const int64_t granularity_qkv = std::lcm(blck_size, head_dim);
+            const int64_t head_dim        = hparams.ssm_d_state;
+            const int64_t blck_size_perf  = std::lcm(blck_size, 128);
+            const int64_t granularity_qkv = std::lcm(blck_size_perf, head_dim);
             if (std::regex_match(tensor_name, pattern_qkv_weight) || std::regex_match(tensor_name, pattern_attn_gate_weight) ||
                     std::regex_match(tensor_name, pattern_ssm_conv1d) || std::regex_match(tensor_name, pattern_ssm_out_weight)) {
                 return std::vector<int64_t>(segments.size(), granularity_qkv);
@@ -580,17 +582,24 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
             // regular attention
             const uint32_t n_gqa    = hparams.n_gqa(il);
             const uint32_t n_embd_q = n_gqa * hparams.n_embd_head_k(il);
-            if (std::regex_match(tensor_name, pattern_attn_sinks)) {
-                GGML_ASSERT(segments.size() == 1);
-                return {std::lcm(n_embd_q, blck_size)/n_embd_q * n_gqa};
+
+            // to handle head sizes like 80, only increase granularity while it doesn't cause underutilization
+            int64_t blck_size_perf = blck_size;
+            while (blck_size_perf < 128 && blck_size_perf*ud->n_devices < n_embd_q) {
+                blck_size_perf *= 2;
             }
 
-            const int64_t granularity_q = std::lcm(n_embd_q, blck_size);
+            if (std::regex_match(tensor_name, pattern_attn_sinks)) {
+                GGML_ASSERT(segments.size() == 1);
+                return {std::lcm(n_embd_q, blck_size_perf)/n_embd_q * n_gqa};
+            }
+
+            const int64_t granularity_q = std::lcm(n_embd_q, blck_size_perf);
             if (std::regex_match(tensor_name, pattern_q_weight) || std::regex_match(tensor_name, pattern_q_bias)) {
                 GGML_ASSERT(segments.size() == 1);
                 // some models have Q gate tensors, for those cases the granularity needs to be doubled:
                 if (ud->model->arch == LLM_ARCH_QWEN3NEXT || ud->model->arch == LLM_ARCH_QWEN35 || ud->model->arch == LLM_ARCH_QWEN35MOE) {
-                    return {std::lcm(2*n_embd_q, blck_size)};
+                    return {std::lcm(2*n_embd_q, blck_size_perf)};
                 }
                 return {granularity_q};
             }
@@ -615,8 +624,9 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
         // FFN
         if (std::regex_match(tensor_name, pattern_ffn_up_gate_weight) || std::regex_match(tensor_name, pattern_ffn_up_gate_bias) ||
                 std::regex_match(tensor_name, pattern_ffn_gate_up_weight) || std::regex_match(tensor_name, pattern_ffn_down_weight)) {
+            const int64_t blck_size_perf = std::lcm(blck_size, 128);
             GGML_ASSERT(segments.size() == 1);
-            return {blck_size};
+            return {blck_size_perf};
         }
 
         // everything else
@@ -629,7 +639,6 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
     tensor_config tc = get_tensor_config();
     split_state.axis = tc.axis;
     if (split_state.axis >= 0 && split_state.axis < GGML_MAX_DIMS) {
-        const int64_t ne_full = tensor->ne[split_state.axis];
         const int64_t blck_size = ggml_blck_size(tc.tensor_axis_0->type);
         const float * tensor_split = ud->model->tensor_split();
         std::vector<float> tensor_split_scan;
@@ -646,7 +655,6 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
             const int64_t  ne_s = segments[is].first;
             const uint32_t nr_s = segments[is].second;
             const int64_t  g_s  = granularity[is];
-            GGML_ASSERT(ne_full % g_s == 0);
             int64_t low = 0;
             size_t j = 0;
             for (; j < ud->n_devices - 1; j++) {
@@ -1094,6 +1102,9 @@ void llama_model_base::load_hparams(llama_model_loader & ml) {
     ml.get_key_or_arr(LLM_KV_FEED_FORWARD_LENGTH,  hparams.n_ff_arr,   hparams.n_layer(), false);
     ml.get_key_or_arr(LLM_KV_ATTENTION_HEAD_COUNT, hparams.n_head_arr, hparams.n_layer(), false);
 
+    // Populate deepstack_mapping_arr - initialized to -1 (no deepstack)
+    std::fill(hparams.deepstack_mapping_arr.begin(), hparams.deepstack_mapping_arr.end(), -1);
+
     // n_head_kv is optional, default to n_head
     hparams.n_head_kv_arr = hparams.n_head_arr;
 
@@ -1196,7 +1207,7 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
     const auto & use_mlock    = params.use_mlock;
     const auto & tensor_split = params.tensor_split;
 
-    const int n_layer = hparams.n_layer_all;
+    const int n_layer_all = hparams.n_layer_all;
     const int n_gpu_layers = this->n_gpu_layers();
 
     const bool use_mmap_buffer = true;
@@ -1253,10 +1264,10 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
         splits[i] /= split_sum;
     }
 
-    const int i_gpu_start = std::max(n_layer + 1 - n_gpu_layers, 0);
-    const int act_gpu_layers = devices.empty() ? 0 : std::min(n_gpu_layers, n_layer + 1);
+    const int i_gpu_start = std::max(n_layer_all + 1 - n_gpu_layers, 0);
+    const int act_gpu_layers = devices.empty() ? 0 : std::min(n_gpu_layers, n_layer_all + 1);
     auto get_layer_buft_list = [&](int il) -> llama_model::impl::layer_dev {
-        const bool is_swa = il < n_layer && hparams.is_swa(il);
+        const bool is_swa = il < n_layer_all && hparams.is_swa(il);
         if (il < i_gpu_start || (il - i_gpu_start) >= act_gpu_layers) {
             LLAMA_LOG_DEBUG("load_tensors: layer %3d assigned to device %s, is_swa = %d\n", il, ggml_backend_dev_name(cpu_dev), is_swa);
             return {cpu_dev, &pimpl->cpu_buft_list};
@@ -1272,13 +1283,13 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
     pimpl->dev_input = { cpu_dev, &pimpl->cpu_buft_list };
 
     // assign the repeating layers to the devices according to the splits
-    pimpl->dev_layer.resize(n_layer);
-    for (int il = 0; il < n_layer; ++il) {
+    pimpl->dev_layer.resize(n_layer_all);
+    for (int il = 0; il < n_layer_all; ++il) {
         pimpl->dev_layer[il] = get_layer_buft_list(il);
     }
 
     // assign the output layer
-    pimpl->dev_output = get_layer_buft_list(n_layer);
+    pimpl->dev_output = get_layer_buft_list(n_layer_all);
 
     const auto TENSOR_NOT_REQUIRED = llama_model_loader::TENSOR_NOT_REQUIRED;
 
@@ -1294,14 +1305,14 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
             throw std::runtime_error("model has expert layers but no expert layers are used");
         }
 
-        layers.resize(n_layer);
+        layers.resize(n_layer_all);
 
         // call the per-model loading function
         load_arch_tensors(ml);
 
         // generic pass: load optional per-tensor/per-expert ".scale" tensors (e.g. NVFP4 scale2)
         // this avoids having to add scale loading to every architecture
-        for (int i = 0; i < n_layer; ++i) {
+        for (int i = 0; i < n_layer_all; ++i) {
             auto & layer = layers[i];
 
             // attention weight scales (per-tensor, shape {1})
@@ -1559,7 +1570,7 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
     }
 
     if (llama_supports_gpu_offload()) {
-        const int n_gpu = std::min(n_gpu_layers, n_layer);
+        const int n_gpu = std::min(n_gpu_layers, n_layer_all);
 
         int n_repeating = n_gpu;
         if (n_repeating > 0) {
@@ -1568,8 +1579,8 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
         }
         LLAMA_LOG_INFO("%s: offloading %d repeating layers to GPU\n", __func__, n_repeating);
 
-        const int max_backend_supported_layers = n_layer + 1;
-        const int max_offloadable_layers       = n_layer + 1;
+        const int max_backend_supported_layers = n_layer_all + 1;
+        const int max_offloadable_layers       = n_layer_all + 1;
 
         LLAMA_LOG_INFO("%s: offloaded %d/%d layers to GPU\n", __func__, std::min(n_gpu_layers, max_offloadable_layers), max_backend_supported_layers);
     }
@@ -1672,10 +1683,10 @@ uint64_t llama_model::n_elements() const {
 void llama_model::print_info() const {
     const std::string rope_scaling_type = llama_rope_scaling_type_name(hparams.rope_scaling_type_train);
 
-    auto print_f = [](const std::function<uint32_t(uint32_t)> & f, uint32_t n) {
+    auto print_f = [](const std::function<int32_t(uint32_t)> & f, uint32_t n) {
         bool is_var = false;
 
-        std::vector<uint32_t> v;
+        std::vector<int32_t> v;
         for (uint32_t i = 0; i < n; ++i) {
             v.push_back(f(i));
             if (v[i] != v[0]) {
@@ -1749,6 +1760,14 @@ void llama_model::print_info() const {
         LLAMA_LOG_INFO("%s: n_ctx_orig_yarn       = %u\n",     __func__, hparams.n_ctx_orig_yarn);
         LLAMA_LOG_INFO("%s: rope_yarn_log_mul     = %.4f\n",   __func__, hparams.rope_yarn_log_mul);
         LLAMA_LOG_INFO("%s: rope_finetuned        = %s\n",     __func__, hparams.rope_finetuned ? "yes" : "unknown");
+        if (arch == LLM_ARCH_GRANITE &&
+            std::any_of(hparams.deepstack_mapping_arr.begin(),
+                        hparams.deepstack_mapping_arr.end(),
+                        [](const auto & entry) { return entry >= 0; })) {
+            LLAMA_LOG_INFO("%s: deepstack_mapping_arr = %s\n", __func__,
+                           print_f([&](uint32_t il) { return hparams.deepstack_mapping_arr[il]; },
+                           hparams.n_layer()).c_str());
+        }
         // MRoPE (Multi-axis Rotary Position Embedding) sections
         if (const auto & s = hparams.rope_sections; s[0] || s[1] || s[2] || s[3]) {
             LLAMA_LOG_INFO("%s: mrope sections        = [%d, %d, %d, %d]\n", __func__, s[0], s[1], s[2], s[3]);

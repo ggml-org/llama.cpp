@@ -255,6 +255,7 @@ MMPROJ_MODEL_MAP: dict[str, str] = {
     "Glm4vMoeForConditionalGeneration": "qwen3vl",
     "GlmOcrForConditionalGeneration": "qwen3vl",
     "GlmasrModel": "ultravox",
+    "Granite4VisionForConditionalGeneration": "granite",
     "GraniteSpeechForConditionalGeneration": "granite",
     "HunYuanVLForConditionalGeneration": "hunyuan",
     "Idefics3ForConditionalGeneration": "smolvlm",
