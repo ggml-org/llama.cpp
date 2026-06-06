@@ -3,6 +3,7 @@
 #define GGML_COMMON_DECL_C
 #include "ggml-common.h"
 
+#include "ggml-backend.h"
 #include "ggml.h"
 
 // GGML CPU internal header
@@ -34,7 +35,7 @@ void quantize_row_ifairy(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, 
 void quantize_row_ifairy64(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k);
 void quantize_row_ifairy_q16(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k);
 void quantize_row_ifairy_q16_lut_c(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k);
-void quantize_row_ifairy_q16_tensor(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k);
+GGML_BACKEND_API void quantize_row_ifairy_q16_tensor(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k);
 
 void quantize_row_iq4_nl (const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k);
 void quantize_row_iq4_xs (const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k);
@@ -56,7 +57,7 @@ void ggml_vec_dot_q6_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
 
 void ggml_vec_dot_tq1_0_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc);
 void ggml_vec_dot_tq2_0_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc);
-void ggml_vec_dot_ifairy_q16_K(int                        n,
+GGML_BACKEND_API void ggml_vec_dot_ifairy_q16_K(int                        n,
                                float * GGML_RESTRICT      s,
                                size_t                     bs,
                                const void * GGML_RESTRICT vx,
@@ -64,7 +65,7 @@ void ggml_vec_dot_ifairy_q16_K(int                        n,
                                const void * GGML_RESTRICT vy,
                                size_t                     by,
                                int                        nrc);
-void ggml_vec_dot_ifairy64_q16_K(int                        n,
+GGML_BACKEND_API void ggml_vec_dot_ifairy64_q16_K(int                        n,
                                  float * GGML_RESTRICT      s,
                                  size_t                     bs,
                                  const void * GGML_RESTRICT vx,
@@ -97,7 +98,7 @@ void ggml_vec_dot_mxfp4_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, 
 
 void ggml_vec_dot_tq1_0_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc);
 void ggml_vec_dot_tq2_0_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc);
-void ggml_vec_dot_ifairy_q16_K_generic(int                        n,
+GGML_BACKEND_API void ggml_vec_dot_ifairy_q16_K_generic(int                        n,
                                        float * GGML_RESTRICT      s,
                                        size_t                     bs,
                                        const void * GGML_RESTRICT vx,
@@ -105,7 +106,7 @@ void ggml_vec_dot_ifairy_q16_K_generic(int                        n,
                                        const void * GGML_RESTRICT vy,
                                        size_t                     by,
                                        int                        nrc);
-void ggml_vec_dot_ifairy64_q16_K_generic(int                        n,
+GGML_BACKEND_API void ggml_vec_dot_ifairy64_q16_K_generic(int                        n,
                                          float * GGML_RESTRICT      s,
                                          size_t                     bs,
                                          const void * GGML_RESTRICT vx,

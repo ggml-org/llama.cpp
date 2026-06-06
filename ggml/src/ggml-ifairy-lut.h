@@ -107,16 +107,16 @@ static_assert(sizeof(struct ifairy64_lut_wtile_16) == 320, "wrong ifairy64_lut_w
 //     when src1 is F32; otherwise falls back to lut16). In `auto`, Fairy2i F32 activations default to `lut_c`;
 //     set `GGML_IFAIRY_LUT_IMPL=lut16` to force lut16.
 
-void   ggml_ifairy_lut_init(void);
-void   ggml_ifairy_lut_free(void);
-bool   ggml_ifairy_lut_can_mul_mat(const struct ggml_tensor * src0,
+GGML_API void   ggml_ifairy_lut_init(void);
+GGML_API void   ggml_ifairy_lut_free(void);
+GGML_API bool   ggml_ifairy_lut_can_mul_mat(const struct ggml_tensor * src0,
                                    const struct ggml_tensor * src1,
                                    const struct ggml_tensor * dst);
-size_t ggml_ifairy_lut_get_wsize(const struct ggml_tensor * src0,
+GGML_API size_t ggml_ifairy_lut_get_wsize(const struct ggml_tensor * src0,
                                  const struct ggml_tensor * src1,
                                  const struct ggml_tensor * dst,
                                  int                        n_threads);
-bool   ggml_ifairy_lut_transform_tensor(struct ggml_tensor * tensor, struct ggml_tensor ** index_tensor_out);
+GGML_API bool   ggml_ifairy_lut_transform_tensor(struct ggml_tensor * tensor, struct ggml_tensor ** index_tensor_out);
 void   ggml_ifairy_lut_preprocess_ex_lut16(int          m,
                                            int          k,
                                            int          n,
@@ -249,7 +249,7 @@ void   ggml_ifairy64_lut_qgemm_fused_lut_c(int          m,
                                            size_t       dst_row_stride,
                                            bool         pack_bf16,
                                            bool         add);
-void   ggml_ifairy_lut_mul_mat_scalar(int          m,
+GGML_API void   ggml_ifairy_lut_mul_mat_scalar(int          m,
                                       int          k,
                                       int          n,
                                       const void * qweights,

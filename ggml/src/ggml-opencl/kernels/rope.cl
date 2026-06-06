@@ -101,7 +101,7 @@ kernel void kernel_ifairy_rope(
 
     const float2 corr_dims = rope_yarn_corr_dims(n_dims, n_ctx_orig, freq_base, beta_fast, beta_slow);
     const float theta_base = (float) src1[i2];
-    const float inv_ndims = -2.0f / (float) n_dims;
+    const float inv_ndims = -1.0f / (float) n_dims;
 
     global char * src_row = (global char *) src0 + i3 * nb03 + i2 * nb02 + i1 * nb01;
     global char * dst_row = (global char *) dst  + i3 * nb3  + i2 * nb2  + i1 * nb1;
@@ -119,7 +119,7 @@ kernel void kernel_ifairy_rope(
         *((global float *) (dst_row + (i0 + n_dims) * nb0)) = x0 * cos_sin_theta.s1 + x1 * cos_sin_theta.s0;
     }
 
-    GGML_UNUSED(n_past);
+    (void) n_past;
 }
 
 kernel void kernel_rope_norm_f32(

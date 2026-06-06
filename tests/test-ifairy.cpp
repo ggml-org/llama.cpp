@@ -522,8 +522,54 @@ static bool run_ifairy_relu2_backend(ggml_backend_t backend,
     return ok;
 }
 
+static bool run_ifairy_rope_backend(ggml_backend_t backend,
+                                    const std::vector<float> & input_packed,
+                                    const std::vector<int32_t> & positions,
+                                    int64_t ne0,
+                                    int64_t ne1,
+                                    int64_t ne2,
+                                    int64_t ne3,
+                                    std::vector<float> & output) {
+    struct ggml_init_params params = {
+        /*.mem_size   =*/32 * 1024 * 1024,
+        /*.mem_buffer =*/NULL,
+        /*.no_alloc   =*/true,
+    };
+
+    ggml_context * ctx = ggml_init(params);
+    if (!ctx) {
+        return false;
+    }
+
+    ggml_tensor * src = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, ne0, ne1, ne2, ne3);
+    ggml_tensor * pos = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, ne2);
+    ggml_tensor * out = ggml_ifairy_rope(ctx, src, pos, (int) (ne0 * 2), 0);
+
+    ggml_cgraph * gf = ggml_new_graph(ctx);
+    ggml_build_forward_expand(gf, out);
+
+    ggml_backend_buffer_t buf = ggml_backend_alloc_ctx_tensors(ctx, backend);
+    if (!buf) {
+        ggml_free(ctx);
+        return false;
+    }
+
+    ggml_backend_tensor_set(src, input_packed.data(), 0, ggml_nbytes(src));
+    ggml_backend_tensor_set(pos, positions.data(), 0, ggml_nbytes(pos));
+
+    const bool ok = ggml_backend_graph_compute(backend, gf) == GGML_STATUS_SUCCESS;
+    if (ok) {
+        output.resize((size_t) ggml_nelements(out));
+        ggml_backend_tensor_get(out, output.data(), 0, ggml_nbytes(out));
+    }
+
+    ggml_backend_buffer_free(buf);
+    ggml_free(ctx);
+    return ok;
+}
+
 static bool test_ifairy_opencl_regression_ops() {
-    printf("\n=== Test 7: iFairy OpenCL regression (split/merge/relu2) ===\n");
+    printf("\n=== Test 7: iFairy OpenCL regression (split/merge/relu2/rope) ===\n");
 
     ggml_backend_t backend_cl = ggml_backend_opencl_init();
     if (!backend_cl) {
@@ -611,15 +657,37 @@ static bool test_ifairy_opencl_regression_ops() {
     }
 
     printf("Comparing relu2 output:\n");
-    const bool relu2_ok = compare_u32_arrays(relu2_cl.data(), relu2_cpu.data(), relu2_cpu.size());
+    if (!compare_u32_arrays(relu2_cl.data(), relu2_cpu.data(), relu2_cpu.size())) {
+        ggml_backend_free(backend_cpu);
+        ggml_backend_free(backend_cl);
+        return false;
+    }
+
+    std::vector<int32_t> positions((size_t) ne2);
+    for (int64_t i = 0; i < ne2; ++i) {
+        positions[(size_t) i] = (int32_t) i;
+    }
+
+    std::vector<float> rope_cpu;
+    std::vector<float> rope_cl;
+    if (!run_ifairy_rope_backend(backend_cpu, input_packed, positions, ne0, ne1, ne2, ne3, rope_cpu) ||
+        !run_ifairy_rope_backend(backend_cl, input_packed, positions, ne0, ne1, ne2, ne3, rope_cl)) {
+        ggml_backend_free(backend_cpu);
+        ggml_backend_free(backend_cl);
+        fprintf(stderr, "rope backend run failed\n");
+        return false;
+    }
+
+    printf("Comparing rope output:\n");
+    const bool rope_ok = compare_arrays(rope_cl.data(), rope_cpu.data(), rope_cpu.size(), 1e-4f);
 
     ggml_backend_free(backend_cpu);
     ggml_backend_free(backend_cl);
-    return relu2_ok;
+    return rope_ok;
 }
 #else
 static bool test_ifairy_opencl_regression_ops() {
-    printf("\n=== Test 7: iFairy OpenCL regression (split/merge/relu2) ===\n");
+    printf("\n=== Test 7: iFairy OpenCL regression (split/merge/relu2/rope) ===\n");
     printf("OpenCL backend not enabled at build time, skip.\n");
     return true;
 }
