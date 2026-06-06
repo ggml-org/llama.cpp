@@ -706,6 +706,7 @@ const char * llm_type_name(llm_type type);
 #define LLAMA_LOAD_LOCALS \
     const int     n_layer        = hparams.n_layer();        GGML_UNUSED(n_layer); \
     const int     n_layer_all    = hparams.n_layer_all;      GGML_UNUSED(n_layer_all); \
+    const int     n_layer_nextn  = hparams.n_layer_nextn;    GGML_UNUSED(n_layer_nextn); \
     const int64_t n_head         = hparams.n_head();         GGML_UNUSED(n_head); \
     const int64_t n_head_kv      = hparams.n_head_kv();      GGML_UNUSED(n_head_kv); \
     const int64_t n_embd         = hparams.n_embd;           GGML_UNUSED(n_embd); \

@@ -1,4 +1,3 @@
-
 #include "server-context.h"
 #include "server-chat.h"
 #include "server-common.h"
@@ -10,13 +9,13 @@
 #include "common.h"
 #include "fit.h"
 #include "llama.h"
-#include "../../src/llama-ext.h" // staging API: llama_set_mtp_source
-#include "ggml-cpp.h"
 #include "log.h"
 #include "sampling.h"
 #include "speculative.h"
 #include "mtmd.h"
 #include "mtmd-helper.h"
+
+#include "ggml-cpp.h"
 
 #include <algorithm>
 #include <cstddef>
@@ -972,14 +971,9 @@ private:
             // note: for small models maybe we can set this to the maximum possible draft from all speculative types
             //       the extra memory for small models is likely negligible?
             cparams.n_rs_seq = 0;
+            cparams.ctx_src = ctx_tgt;
+
             ctx_dft.reset(llama_init_from_model(model_dft.get(), cparams));
-
-            if (spec_mtp) {
-                // MTP draft must know its target before the first decode
-                llama_set_mtp_source(ctx_dft.get(), ctx_tgt);
-            }
-
-            ctx_dft_seq_rm_type = common_context_can_seq_rm(ctx_dft.get());
 
             params_base.speculative.draft.ctx_tgt = ctx_tgt;
             params_base.speculative.draft.ctx_dft = ctx_dft.get();
@@ -994,18 +988,13 @@ private:
             cparams_mtp.type_v        = params_base.speculative.draft.cache_type_v;
             cparams_mtp.n_rs_seq      = 0;
             cparams_mtp.n_outputs_max = params_base.n_parallel;
+            cparams_mtp.ctx_src       = ctx_tgt;
 
             ctx_dft.reset(llama_init_from_model(model_tgt, cparams_mtp));
             if (ctx_dft == nullptr) {
                 SRV_ERR("%s", "failed to create MTP context\n");
                 return false;
             }
-
-            // wire the source before any decode (the seq-rm probe below
-            // triggers sched_reserve which needs src for Gemma4-style MTP)
-            llama_set_mtp_source(ctx_dft.get(), ctx_tgt);
-
-            ctx_dft_seq_rm_type = common_context_can_seq_rm(ctx_dft.get());
 
             params_base.speculative.draft.ctx_tgt = ctx_tgt;
             params_base.speculative.draft.ctx_dft = ctx_dft.get();
@@ -1092,6 +1081,10 @@ private:
             } catch (const std::exception & e) {
                 SRV_ERR("failed to initialize speculative decoding context: %s\n", e.what());
             }
+        }
+
+        if (ctx_dft) {
+            ctx_dft_seq_rm_type = common_context_can_seq_rm(ctx_dft.get());
         }
 
         if (spec) {
