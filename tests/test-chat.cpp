@@ -1890,25 +1890,6 @@ static void test_lfm2_parser(const std::string & template_path, bool detailed_de
         })
         .run();
 
-    // Tool call with reasoning (enable_thinking=true)
-    tst.test("<think>I'm\nthinking</think><|tool_call_start|>[special_function(arg1=1)]<|tool_call_end|>")
-        .enable_thinking(true)
-        .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
-        .tools({ special_function_tool })
-        .expect(message_assist_call_thoughts)
-        .run();
-
-    // Tool call with reasoning and content
-    tst.test("<think>I need to call a function</think>"
-             "Let me check the time.<|tool_call_start|>[get_time(city=\"Paris\")]<|tool_call_end|>")
-        .enable_thinking(true)
-        .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
-        .tools({ get_time_tool })
-        .expect(message_with_reasoning_content_and_multiple_tool_calls(
-            "I need to call a function", "Let me check the time.", { { "get_time", "{\"city\":\"Paris\"}" } }
-        ))
-        .run();
-
     // Content before tool call (no reasoning)
     tst.test("Let me check the time.<|tool_call_start|>[get_time(city=\"Paris\")]<|tool_call_end|>")
         .tools({ get_time_tool })
@@ -1927,33 +1908,6 @@ static void test_lfm2_parser(const std::string & template_path, bool detailed_de
         })
         .run();
 
-    // Fake tool call marker inside reasoning is not parsed as a call
-    tst.test("<think>Let me think about <|tool_call_start|>[special_function(arg1=1)]<|tool_call_end|> hmm</think>"
-             "<|tool_call_start|>[special_function(arg1=1)]<|tool_call_end|>")
-        .enable_thinking(true)
-        .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
-        .tools({ special_function_tool })
-        .expect_reasoning("Let me think about <|tool_call_start|>[special_function(arg1=1)]<|tool_call_end|> hmm")
-        .expect_tool_calls({
-            { "special_function", R"({"arg1": 1})", {} },
-        })
-        .run();
-
-    // Thinking off, but model still emits <think>: drop it, keep only content
-    tst.test("<think>I'm\nthinking</think>Hello, world!\nWhat's up?")
-        .enable_thinking(false)
-        .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
-        .expect(message_assist)
-        .run();
-
-    // Thinking off with tools: <think> dropped, tool call still parsed
-    tst.test("<think>I'm\nthinking</think><|tool_call_start|>[special_function(arg1=1)]<|tool_call_end|>")
-        .enable_thinking(false)
-        .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
-        .tools({ special_function_tool })
-        .expect(message_assist_call)
-        .run();
-
     // Partial tool call (streaming)
     tst.test("<|tool_call_start|>[special_function(arg1=")
         .tools({ special_function_tool })
@@ -1967,27 +1921,6 @@ static void test_lfm2_parser(const std::string & template_path, bool detailed_de
         .expect(simple_assist_msg("", "", "empty_args", "{}"))
         .run();
 
-    // Continuation: prefill content
-    tst.test("world!\nWhat's up?")
-        .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
-        .enable_thinking(true)
-        .messages({ message_user, message_assist_prefill_content })
-        .add_generation_prompt(false)
-        .continue_final_message(COMMON_CHAT_CONTINUATION_CONTENT)
-        .expect_reasoning("I'm thinking")
-        .expect_content("Hello, world!\nWhat's up?")
-        .run();
-
-    // Continuation: prefill reasoning
-    tst.test(" thinking</think>Hello, world!\nWhat's up?")
-        .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
-        .enable_thinking(true)
-        .messages({ message_user, message_assist_prefill_reasoning })
-        .add_generation_prompt(false)
-        .continue_final_message(COMMON_CHAT_CONTINUATION_REASONING)
-        .expect_reasoning("I'm thinking")
-        .expect_content("Hello, world!\nWhat's up?")
-        .run();
 }
 
 static void test_template_output_peg_parsers(bool detailed_debug) {
@@ -4209,6 +4142,77 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
              "models/templates/LFM2.5-8B-A1B.jinja",
          }) {
         test_lfm2_parser(tmpl, detailed_debug);
+    }
+
+    // Thinking cases only apply to LFM2.5-8B-A1B, the one LFM2 template that emits <think>
+    {
+        auto tst = peg_tester("models/templates/LFM2.5-8B-A1B.jinja", detailed_debug);
+
+        // Reasoning is parsed independent of enable_thinking
+
+        // Tool call with reasoning
+        tst.test("<think>I'm\nthinking</think><|tool_call_start|>[special_function(arg1=1)]<|tool_call_end|>")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ special_function_tool })
+            .expect(message_assist_call_thoughts)
+            .run();
+
+        // Tool call with reasoning and content
+        tst.test("<think>I need to call a function</think>"
+                 "Let me check the time.<|tool_call_start|>[get_time(city=\"Paris\")]<|tool_call_end|>")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ get_time_tool })
+            .expect(message_with_reasoning_content_and_multiple_tool_calls(
+                "I need to call a function", "Let me check the time.", { { "get_time", "{\"city\":\"Paris\"}" } }
+            ))
+            .run();
+
+        // Fake tool call marker inside reasoning is not parsed as a call
+        tst.test("<think>Let me think about <|tool_call_start|>[special_function(arg1=1)]<|tool_call_end|> hmm</think>"
+                 "<|tool_call_start|>[special_function(arg1=1)]<|tool_call_end|>")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ special_function_tool })
+            .expect_reasoning("Let me think about <|tool_call_start|>[special_function(arg1=1)]<|tool_call_end|> hmm")
+            .expect_tool_calls({
+                { "special_function", R"({"arg1": 1})", {} },
+            })
+            .run();
+
+        // enable_thinking=false still captures emitted reasoning
+        tst.test("<think>I'm\nthinking</think>Hello, world!\nWhat's up?")
+            .enable_thinking(false)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .expect(message_assist_thoughts)
+            .run();
+
+        tst.test("<think>I'm\nthinking</think><|tool_call_start|>[special_function(arg1=1)]<|tool_call_end|>")
+            .enable_thinking(false)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ special_function_tool })
+            .expect(message_assist_call_thoughts)
+            .run();
+
+        // Continuation: prefill content
+        tst.test("world!\nWhat's up?")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .enable_thinking(true)
+            .messages({ message_user, message_assist_prefill_content })
+            .add_generation_prompt(false)
+            .continue_final_message(COMMON_CHAT_CONTINUATION_CONTENT)
+            .expect_reasoning("I'm thinking")
+            .expect_content("Hello, world!\nWhat's up?")
+            .run();
+
+        // Continuation: prefill reasoning
+        tst.test(" thinking</think>Hello, world!\nWhat's up?")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .enable_thinking(true)
+            .messages({ message_user, message_assist_prefill_reasoning })
+            .add_generation_prompt(false)
+            .continue_final_message(COMMON_CHAT_CONTINUATION_REASONING)
+            .expect_reasoning("I'm thinking")
+            .expect_content("Hello, world!\nWhat's up?")
+            .run();
     }
 
     // Reka-Edge tests - uses native JSON format with per-call wrapper

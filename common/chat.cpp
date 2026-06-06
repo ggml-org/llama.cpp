@@ -1648,7 +1648,9 @@ static common_chat_params common_chat_params_init_lfm2(const common_chat_templat
     data.thinking_end_tag   = THINK_END;
 
     auto has_tools         = inputs.tools.is_array() && !inputs.tools.empty();
-    auto extract_reasoning = inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE;
+    // Gate by reasoning format and whether the template supports <think>
+    auto extract_reasoning = inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE &&
+                             tmpl.source().find(THINK_START) != std::string::npos;
     auto include_grammar   = has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE;
 
     if (inputs.has_continuation()) {
@@ -1667,11 +1669,8 @@ static common_chat_params common_chat_params_init_lfm2(const common_chat_templat
         auto end = p.end();
 
         auto reasoning = p.eps();
-        if (extract_reasoning && inputs.enable_thinking) {
+        if (extract_reasoning) {
             reasoning = p.optional(THINK_START + p.reasoning(p.until(THINK_END)) + THINK_END);
-        } else if (extract_reasoning) {
-            // Thinking off, but model may still emit <think>, drop it
-            reasoning = p.optional(p.literal(THINK_START) + p.until(THINK_END) + p.literal(THINK_END));
         }
 
         if (!has_tools || inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_NONE) {
