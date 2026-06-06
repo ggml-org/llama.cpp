@@ -128,6 +128,7 @@ class Keys:
         MOE_LATENT_SIZE                   = "{arch}.moe_latent_size"
         NEXTN_PREDICT_LAYERS              = "{arch}.nextn_predict_layers"
         NUM_DEEPSTACK_LAYERS              = "{arch}.n_deepstack_layers"
+        DEEPSTACK_MAPPING                 = "{arch}.deepstack_mapping"
         POOLING_TYPE                      = "{arch}.pooling_type"
         LOGIT_SCALE                       = "{arch}.logit_scale"
         DECODER_START_TOKEN_ID            = "{arch}.decoder_start_token_id"
@@ -325,6 +326,8 @@ class Keys:
         WA_PATTERN_MODE       = "clip.vision.wa_pattern_mode"  # used by mimovl, per-layer -1/0/1
         IS_DEEPSTACK_LAYERS   = "clip.vision.is_deepstack_layers"
         WINDOW_SIZE           = "clip.vision.window_size"
+        FEATURE_LAYERS        = "clip.vision.feature_layer" # Granite4 Vision
+        IMAGE_GRID_PINPOINTS  = "clip.vision.image_grid_pinpoints" # Granite4 Vision
 
         class Attention:
             HEAD_COUNT      = "clip.vision.attention.head_count"
@@ -333,6 +336,9 @@ class Keys:
 
         class Projector:
             SCALE_FACTOR    = "clip.vision.projector.scale_factor"
+            QUERY_SIDE      = "clip.vision.projector.query_side"
+            WINDOW_SIDE     = "clip.vision.projector.window_side"
+            SPATIAL_OFFSETS = "clip.vision.projector.spatial_offsets"
 
         class SAM:
             BLOCK_COUNT         = "clip.vision.sam.block_count"
@@ -821,6 +827,31 @@ class MODEL_TENSOR(IntEnum):
     V_RESMPL_QUERY_768   = auto() # Deepseek-OCR-2
     V_RESMPL_QUERY_1024  = auto() # Deepseek-OCR-2
 
+    # qformer projector (vision) - Granite4 Vision
+    V_QF_PROJ_QUERY      = auto()
+    V_QF_PROJ_NORM       = auto()
+    V_QF_PROJ_LINEAR     = auto()
+    V_QF_SELF_ATTN_Q     = auto()
+    V_QF_SELF_ATTN_K     = auto()
+    V_QF_SELF_ATTN_V     = auto()
+    V_QF_SELF_ATTN_O     = auto()
+    V_QF_SELF_ATTN_NORM  = auto()
+    V_QF_CROSS_ATTN_Q    = auto()
+    V_QF_CROSS_ATTN_K    = auto()
+    V_QF_CROSS_ATTN_V    = auto()
+    V_QF_CROSS_ATTN_O    = auto()
+    V_QF_CROSS_ATTN_NORM = auto()
+    V_QF_FFN_UP          = auto()
+    V_QF_FFN_DOWN        = auto()
+    V_QF_FFN_NORM        = auto()
+    V_PROJ_NORM          = auto()
+    # multi-projector (bid => projector id) - Granite4 vision
+    V_MULTI_PROJ_IMG_POS   = auto()
+    V_MULTI_PROJ_QUERY     = auto()
+    V_MULTI_PROJ_NORM      = auto()
+    V_MULTI_PROJ_LINEAR    = auto()
+    V_MULTI_PROJ_POST_NORM = auto()
+
     # audio (mtmd)
     A_ENC_EMBD_POS        = auto()
     A_ENC_EMBD_NORM       = auto()
@@ -885,7 +916,7 @@ class MODEL_TENSOR(IntEnum):
     A_CTC_OUT              = auto()
     A_CTC_OUT_MID          = auto()
     A_ENC_ATTN_REL_POS_EMB = auto()
-    # qformer projector
+    # audio qformer projector
     A_QF_PROJ_QUERY        = auto()
     A_QF_PROJ_NORM         = auto()
     A_QF_PROJ_LINEAR       = auto()
@@ -1337,10 +1368,33 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.V_SAM_NECK:                "v.sam.neck.{bid}",
     MODEL_TENSOR.V_SAM_NET_2:               "v.sam.net_2",
     MODEL_TENSOR.V_SAM_NET_3:               "v.sam.net_3",
-    MODEL_TENSOR.V_ENC_EMBD_IMGNL:          "v.image_newline", # Deepseek-OCR
+    MODEL_TENSOR.V_ENC_EMBD_IMGNL:          "v.image_newline", # Deepseek-OCR, Granite4Vision
     MODEL_TENSOR.V_ENC_EMBD_VSEP:           "v.view_seperator", # Deepseek-OCR
     MODEL_TENSOR.V_RESMPL_QUERY_768:        "v.resample_query_768", # Deepseek-OCR-2 qwen2
     MODEL_TENSOR.V_RESMPL_QUERY_1024:       "v.resample_query_1024", # Deepseek-OCR-2 qwen2
+    # Granite4 Vision
+    # qformer layers (bid => proj_id)
+    # NOTE: Names align with A_QF_*
+    MODEL_TENSOR.V_QF_SELF_ATTN_Q:          "v.proj_blk.{bid}.self_attn_q",
+    MODEL_TENSOR.V_QF_SELF_ATTN_K:          "v.proj_blk.{bid}.self_attn_k",
+    MODEL_TENSOR.V_QF_SELF_ATTN_V:          "v.proj_blk.{bid}.self_attn_v",
+    MODEL_TENSOR.V_QF_SELF_ATTN_O:          "v.proj_blk.{bid}.self_attn_out",
+    MODEL_TENSOR.V_QF_SELF_ATTN_NORM:       "v.proj_blk.{bid}.self_attn_norm",
+    MODEL_TENSOR.V_QF_CROSS_ATTN_Q:         "v.proj_blk.{bid}.cross_attn_q",
+    MODEL_TENSOR.V_QF_CROSS_ATTN_K:         "v.proj_blk.{bid}.cross_attn_k",
+    MODEL_TENSOR.V_QF_CROSS_ATTN_V:         "v.proj_blk.{bid}.cross_attn_v",
+    MODEL_TENSOR.V_QF_CROSS_ATTN_O:         "v.proj_blk.{bid}.cross_attn_out",
+    MODEL_TENSOR.V_QF_CROSS_ATTN_NORM:      "v.proj_blk.{bid}.cross_attn_norm",
+    MODEL_TENSOR.V_QF_FFN_UP:               "v.proj_blk.{bid}.ffn_up",
+    MODEL_TENSOR.V_QF_FFN_DOWN:             "v.proj_blk.{bid}.ffn_down",
+    MODEL_TENSOR.V_QF_FFN_NORM:             "v.proj_blk.{bid}.ffn_norm",
+    # multi-projector (bid => projector ID)
+    MODEL_TENSOR.V_MULTI_PROJ_IMG_POS:   "v.proj_blk.{bid}.img_pos",
+    MODEL_TENSOR.V_MULTI_PROJ_QUERY:     "v.proj_blk.{bid}.query",
+    MODEL_TENSOR.V_MULTI_PROJ_NORM:      "v.proj_blk.{bid}.norm",
+    MODEL_TENSOR.V_MULTI_PROJ_LINEAR:    "v.proj_blk.{bid}.linear",
+    MODEL_TENSOR.V_MULTI_PROJ_POST_NORM: "v.proj_blk.{bid}.post_norm",
+
     # audio (mtmd)
     # note: all audio tensor names must use prefix "a." or "mm.a."
     MODEL_TENSOR.A_ENC_EMBD_POS:            "a.position_embd",
@@ -1522,6 +1576,29 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.V_SAM_NET_3,
         MODEL_TENSOR.V_RESMPL_QUERY_768,
         MODEL_TENSOR.V_RESMPL_QUERY_1024,
+        MODEL_TENSOR.V_PROJ_NORM,
+        MODEL_TENSOR.V_QF_PROJ_QUERY,
+        MODEL_TENSOR.V_QF_PROJ_NORM,
+        MODEL_TENSOR.V_QF_PROJ_LINEAR,
+        MODEL_TENSOR.V_QF_SELF_ATTN_Q,
+        MODEL_TENSOR.V_QF_SELF_ATTN_K,
+        MODEL_TENSOR.V_QF_SELF_ATTN_V,
+        MODEL_TENSOR.V_QF_SELF_ATTN_O,
+        MODEL_TENSOR.V_QF_SELF_ATTN_NORM,
+        MODEL_TENSOR.V_QF_CROSS_ATTN_Q,
+        MODEL_TENSOR.V_QF_CROSS_ATTN_K,
+        MODEL_TENSOR.V_QF_CROSS_ATTN_V,
+        MODEL_TENSOR.V_QF_CROSS_ATTN_O,
+        MODEL_TENSOR.V_QF_CROSS_ATTN_NORM,
+        MODEL_TENSOR.V_QF_FFN_UP,
+        MODEL_TENSOR.V_QF_FFN_DOWN,
+        MODEL_TENSOR.V_QF_FFN_NORM,
+        MODEL_TENSOR.V_QF_PROJ_NORM,
+        MODEL_TENSOR.V_MULTI_PROJ_IMG_POS,
+        MODEL_TENSOR.V_MULTI_PROJ_QUERY,
+        MODEL_TENSOR.V_MULTI_PROJ_LINEAR,
+        MODEL_TENSOR.V_MULTI_PROJ_NORM,
+        MODEL_TENSOR.V_MULTI_PROJ_POST_NORM,
         # audio
         MODEL_TENSOR.A_ENC_EMBD_POS,
         MODEL_TENSOR.A_ENC_EMBD_NORM,
@@ -4388,6 +4465,7 @@ class VisionProjectorType:
     MINICPMV4_6    = "minicpmv4_6"
     GRANITE_SPEECH = "granite_speech"  # audio
     MIMOVL         = "mimovl"
+    GRANITE4_VISION = "granite4_vision"
 
 
 # Items here are (block size, type size)

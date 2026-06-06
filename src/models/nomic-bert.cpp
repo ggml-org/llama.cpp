@@ -4,7 +4,7 @@ void llama_model_nomic_bert::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_EPS,    hparams.f_norm_eps);
     ml.get_key(LLM_KV_MOE_EVERY_N_LAYERS,         hparams.moe_every_n_layers, 0);
 
-    if (hparams.n_layer == 12 && hparams.n_embd == 768) {
+    if (hparams.n_layer() == 12 && hparams.n_embd == 768) {
         if (arch == LLM_ARCH_NOMIC_BERT) {
             type = LLM_TYPE_137M;
         } else if (arch == LLM_ARCH_NOMIC_BERT_MOE && hparams.moe_every_n_layers == 2) {

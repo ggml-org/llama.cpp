@@ -199,8 +199,8 @@ ggml_cgraph * clip_graph_granite_speech::build() {
 
         ggml_tensor * enc_windows = ggml_reshape_3d(ctx0, cur, n_embd, window_size, nblocks_proj);
 
-        ggml_tensor * queries = build_norm(model.qf_proj_query,
-            model.qf_proj_norm_w, model.qf_proj_norm_b,
+        ggml_tensor * queries = build_norm(model.qf_proj_blocks[0].qf_proj_query,
+            model.qf_proj_blocks[0].qf_proj_norm_w, model.qf_proj_blocks[0].qf_proj_norm_b,
             NORM_TYPE_NORMAL, proj_eps, -1);
         {
             ggml_tensor * q_3d    = ggml_reshape_3d(ctx0, queries, n_embd, num_queries, 1);
@@ -209,8 +209,8 @@ ggml_cgraph * clip_graph_granite_speech::build() {
             queries = ggml_repeat(ctx0, q_3d, q_shape);
         }
 
-        for (int il = 0; il < (int)model.qf_proj_layers.size(); il++) {
-            const auto & pl = model.qf_proj_layers[il];
+        for (int il = 0; il < (int)model.qf_proj_blocks[0].qf_proj_layers.size(); il++) {
+            const auto & pl = model.qf_proj_blocks[0].qf_proj_layers[il];
 
             // self-attention
             {
@@ -265,7 +265,7 @@ ggml_cgraph * clip_graph_granite_speech::build() {
         }
 
         cur = ggml_reshape_2d(ctx0, queries, n_embd, num_queries * nblocks_proj);
-        cur = ggml_add(ctx0, build_mm(model.qf_proj_linear_w, cur), model.qf_proj_linear_b);
+        cur = ggml_add(ctx0, build_mm(model.qf_proj_blocks[0].qf_proj_linear_w, cur), model.qf_proj_blocks[0].qf_proj_linear_b);
         cb(cur, "projector_out", -1);
     }
 
