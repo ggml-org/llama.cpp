@@ -53,10 +53,14 @@ void ggml_profile_record_from_tensor(ggml_profile_record * rec, const struct ggm
         memcpy(rec->ne, node->ne, sizeof(rec->ne));
         rec->out_type = (int) node->type;
         memcpy(rec->op_params, node->op_params, sizeof(rec->op_params));
+        // Copy the tensor name (rather than aliasing node->name) so the record stays
+        // valid after the graph's meta context is reused on the next build.
+        snprintf(rec->tensor_name, sizeof(rec->tensor_name), "%s", node->name);
     } else {
         memset(rec->ne, 0, sizeof(rec->ne));
         rec->out_type = -1;
         memset(rec->op_params, 0, sizeof(rec->op_params));
+        rec->tensor_name[0] = '\0';
     }
 
     // Sub-op (UNARY/GLU)
