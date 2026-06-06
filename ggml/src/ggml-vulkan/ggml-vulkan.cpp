@@ -5686,12 +5686,6 @@ static vk_device ggml_vk_get_device(size_t idx) {
         device->vendor_id = device->properties.vendorID;
         device->driver_id = driver_props.driverID;
 
-        if (device->driver_id == vk::DriverId::eMoltenvk) {
-            // Disable external_memory_host until https://github.com/KhronosGroup/MoltenVK/pull/2622
-            // is available in the Vulkan SDK.
-            device->external_memory_host = false;
-        }
-
         // Implementing the async backend interfaces seems broken on older Intel HW,
         // see https://github.com/ggml-org/llama.cpp/issues/17302.
         device->support_async = (device->vendor_id != VK_VENDOR_ID_INTEL ||
@@ -5756,12 +5750,6 @@ static vk_device ggml_vk_get_device(size_t idx) {
                                  (vk11_props.subgroupSupportedOperations & vk::SubgroupFeatureFlagBits::eBasic);
         device->subgroup_arithmetic = (vk11_props.subgroupSupportedStages & vk::ShaderStageFlagBits::eCompute) &&
                                       (vk11_props.subgroupSupportedOperations & vk::SubgroupFeatureFlagBits::eArithmetic);
-#ifdef __APPLE__
-        // Workaround for subgroup arithmetic failing on MoltenVK with AMD GPUs (issue 15846)
-        if (device->vendor_id == VK_VENDOR_ID_AMD) {
-            device->subgroup_arithmetic = false;
-        }
-#endif
         device->subgroup_shuffle = (vk11_props.subgroupSupportedStages & vk::ShaderStageFlagBits::eCompute) &&
                                    (vk11_props.subgroupSupportedOperations & vk::SubgroupFeatureFlagBits::eShuffle);
 #ifdef __APPLE__
@@ -15563,10 +15551,6 @@ static bool ggml_vk_can_fuse_topk_moe(ggml_backend_vk_context * ctx, const struc
         // bias is expected to be 1D
         if (ggml_nrows(cgraph->nodes[node_idx + 2]->src[1]) != 1 ||
             !ggml_is_contiguous(cgraph->nodes[node_idx + 2]->src[1])) {
-            return false;
-        }
-        // sigmoid fusion seems to generate infinities on moltenvk
-        if (ctx->device->driver_id == vk::DriverId::eMoltenvk) {
             return false;
         }
         break;
