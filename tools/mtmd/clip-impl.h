@@ -488,7 +488,6 @@ struct clip_image_u8 {
     std::vector<uint8_t> buf;
     int nx = 0;
     int ny = 0;
-    // note: we don't need nt here because preprocessor always expect one single image
 
     size_t n_pixels() const {
         return (size_t) nx * (size_t) ny;

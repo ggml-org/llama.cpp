@@ -27,9 +27,6 @@
 // for still image data, layout is RGBRGBRGB...
 // length of data must be nx * ny * 3 bytes
 //
-// for sequence of images (i.e. video): data is nt sequential RGB frames, each nx * ny * 3 bytes
-// length of data must be nt * nx * ny * 3 bytes
-//
 // for audio bitmap: nx = sample count, ny = 1, layout is F32 F32 F32 ...
 // length of data must be nx * sizeof(float) bytes
 struct mtmd_bitmap {
@@ -1306,7 +1303,6 @@ int32_t mtmd_encode(mtmd_context * ctx, const mtmd_image_tokens * image_tokens) 
         || proj_type == PROJECTOR_TYPE_DEEPSEEKOCR2
         || proj_type == PROJECTOR_TYPE_GRANITE4_VISION) {
         // TODO @ngxson : llava does not support batched encoding ; this should be fixed inside clip_image_batch_encode()
-        // video: each entry is one frame pair, encoded with per-frame attention
         const auto & entries = image_tokens->batch_f32.entries;
         // entries may have different token counts
         // e.g., DeepSeek-OCR-2: 144 per tile views, 257 for the global view
@@ -1618,8 +1614,6 @@ const char * mtmd_image_tokens_get_id(const mtmd_image_tokens * image_tokens) {
 llama_pos mtmd_image_tokens_get_n_pos(const mtmd_image_tokens * image_tokens) {
     switch (image_tokens->pos) {
         case MTMD_POS_TYPE_MROPE:
-            // for M-RoPE, n_pos = max(t, h, w)
-            // t is omitted as we don't support batching
             return std::max(image_tokens->nx, image_tokens->ny);
         case MTMD_POS_TYPE_NORMAL:
             return image_tokens->n_tokens();
