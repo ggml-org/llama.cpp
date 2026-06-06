@@ -1,27 +1,16 @@
 #include "arg.h"
 #include "common.h"
-#include "imatrix-loader.h"
-#include "log.h"
-#include "llama.h"
 #include "gguf.h"
+#include "imatrix-loader.h"
+#include "llama.h"
+#include "log.h"
 
-#include <algorithm>
-#include <chrono>
 #include <climits>
-#include <clocale>
 #include <cmath>
-#include <cstdio>
-#include <cstring>
-#include <ctime>
-#include <thread>
-#include <mutex>
-#include <vector>
 #include <fstream>
+#include <mutex>
+#include <thread>
 #include <unordered_map>
-#include <map>
-#include <regex>
-#include <numeric>
-#include <valarray>
 
 #if defined(_MSC_VER)
 #pragma warning(disable: 4244 4267) // possible loss of data
