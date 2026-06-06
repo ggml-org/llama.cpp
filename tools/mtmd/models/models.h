@@ -18,6 +18,11 @@ struct clip_graph_gemma4v : clip_graph {
     ggml_tensor * build_mm(ggml_tensor * w, ggml_tensor * x) const override;
 };
 
+struct clip_graph_gemma4uv : clip_graph {
+    clip_graph_gemma4uv(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
+    ggml_cgraph * build() override;
+};
+
 struct clip_graph_pixtral : clip_graph {
     clip_graph_pixtral(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
     ggml_cgraph * build() override;
@@ -142,6 +147,11 @@ struct clip_graph_gemma4a : clip_graph {
     ggml_tensor * build_mm(ggml_tensor * w, ggml_tensor * x) const override;
 };
 
+struct clip_graph_gemma4ua : clip_graph {
+    clip_graph_gemma4ua(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
+    ggml_cgraph * build() override;
+};
+
 struct clip_graph_glm4v : clip_graph {
     clip_graph_glm4v(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
     ggml_cgraph * build() override;
@@ -195,4 +205,32 @@ struct clip_graph_kimik25 : clip_graph {
     ggml_cgraph * build() override;
 
     ggml_tensor * resize_position_embeddings_3d(uint32_t interpolation_mode);
+};
+
+struct clip_graph_exaone4_5 : clip_graph {
+    clip_graph_exaone4_5(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
+    ggml_cgraph * build() override;
+};
+
+struct clip_graph_granite4_vision : clip_graph {
+    clip_graph_granite4_vision(clip_ctx * ctx, const clip_image_f32 & img)
+        : clip_graph(ctx, img),
+          add_newline(img.add_newline) {}
+
+    ggml_cgraph * build() override;
+
+private:
+    // The graph is per-tile since only batch-size 1 is supported in clip. As
+    // such, this value is set at construct time based on the tile that will be
+    // encoded, then used during build to determine how to handle newlines.
+    const bool add_newline;
+
+    ggml_tensor * gather(ggml_tensor * src, const std::string & name, int idx_len);
+    ggml_tensor * interp_down(ggml_tensor * src, int side, int new_side);
+    ggml_tensor * build_block(const qf_block & blk, ggml_tensor * h, int bid,
+                              int spatial_offset, int image_side, int window_side,
+                              int query_side, float qformer_eps);
+
+    ggml_tensor * build_newline_row(ggml_context * ctx0);
+    ggml_tensor * append_rowwise_newlines(ggml_context * ctx0, ggml_tensor * tile_output);
 };

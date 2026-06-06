@@ -247,3 +247,24 @@ common_reasoning_budget_state common_reasoning_budget_get_state(const struct lla
     }
     return ((const common_reasoning_budget_ctx *)smpl->ctx)->state;
 }
+
+bool common_reasoning_budget_force(struct llama_sampler * smpl) {
+    if (!smpl) {
+        return false;
+    }
+
+    auto * ctx = (common_reasoning_budget_ctx *) smpl->ctx;
+
+    // only a sampler that is actively counting down the budget may be forced;
+    // any other state (idle, already forcing/waiting, or done) is left untouched
+    if (ctx->state != REASONING_BUDGET_COUNTING) {
+        return false;
+    }
+
+    ctx->state = REASONING_BUDGET_FORCING;
+    ctx->force_pos = 0;
+    ctx->end_matcher.reset();
+    LOG_INF("reasoning-budget: forced into forcing state (manual transition)\n");
+
+    return true;
+}

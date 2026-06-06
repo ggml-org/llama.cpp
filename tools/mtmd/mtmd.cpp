@@ -482,6 +482,7 @@ struct mtmd_context {
                     image_preproc = std::make_unique<mtmd_image_preprocessor_dyn_size>(ctx_v);
                 } break;
             case PROJECTOR_TYPE_GEMMA4V:
+            case PROJECTOR_TYPE_GEMMA4UV:
                 {
                     // <|image> ... (image embeddings) ... <image|>
                     img_beg = "<|image>";
@@ -504,6 +505,19 @@ struct mtmd_context {
                     img_beg = "<｜hy_place▁holder▁no▁100｜>";
                     img_end = "<｜hy_place▁holder▁no▁101｜>";
                     image_preproc = std::make_unique<mtmd_image_preprocessor_dyn_size>(ctx_v);
+                } break;
+            case PROJECTOR_TYPE_EXAONE4_5:
+                {
+                    // <vision> ... (image embeddings) ... </vision>
+                    img_beg = "<vision>";
+                    img_end = "</vision>";
+                    image_preproc = std::make_unique<mtmd_image_preprocessor_dyn_size>(ctx_v);
+                } break;
+            case PROJECTOR_TYPE_GRANITE4_VISION:
+                {
+                    img_beg = "<image>";
+                    img_end = "";
+                    image_preproc = std::make_unique<mtmd_image_preprocessor_llava_uhd>(ctx_v);
                 } break;
             default:
                 throw std::runtime_error(string_format("%s: unexpected vision projector type %d\n", __func__, proj));
@@ -568,6 +582,12 @@ struct mtmd_context {
                     aud_beg = "<|audio>";
                     aud_end = "<audio|>";
                     audio_preproc = std::make_unique<mtmd_audio_preprocessor_gemma4a>(ctx_a);
+                } break;
+            case PROJECTOR_TYPE_GEMMA4UA:
+                {
+                    aud_beg = "<|audio>";
+                    aud_end = "<audio|>";
+                    audio_preproc = std::make_unique<mtmd_audio_preprocessor_gemma4ua>(ctx_a);
                 } break;
             default:
                 throw std::runtime_error(string_format("%s: unexpected audio projector type %d\n", __func__, proj));
@@ -794,6 +814,21 @@ struct mtmd_tokenizer {
                 return 2;
             }
 
+            // Annotate llava-next style tiles so clip_n_output_tokens accounts
+            // for per-tile newline injection.
+            if (ctx->proj_type_v() == PROJECTOR_TYPE_GRANITE4_VISION) {
+                if (batch_f32.entries.size() == 1) {
+                    // Single-tile (overview only): append one newline row.
+                    batch_f32.entries[0]->add_newline = true;
+                } else {
+                    // Multi-tile: overview gets no newline, grid tiles get one.
+                    batch_f32.entries[0]->add_newline = false;
+                    for (size_t i = 1; i < batch_f32.entries.size(); ++i) {
+                        batch_f32.entries[i]->add_newline = true;
+                    }
+                }
+            }
+
             // handle llava-uhd style preprocessing
             const bool has_tiling_grid = batch_f32.grid_x > 0 && batch_f32.grid_y > 0;
             if (
@@ -858,9 +893,10 @@ struct mtmd_tokenizer {
                 }
 
             } else {
+
                 size_t n_tokens = 0;
-                for (const auto & entry : batch_f32.entries) {
-                    n_tokens += clip_n_output_tokens(ctx->ctx_v, entry.get());
+                for (const auto & e : batch_f32.entries) {
+                    n_tokens += clip_n_output_tokens(ctx->ctx_v, e.get());
                 }
 
                 mtmd_image_tokens_ptr image_tokens(new mtmd_image_tokens);
@@ -1097,7 +1133,8 @@ int32_t mtmd_encode(mtmd_context * ctx, const mtmd_image_tokens * image_tokens) 
         || proj_type == PROJECTOR_TYPE_MINICPMV
         || proj_type == PROJECTOR_TYPE_GLM_EDGE
         || proj_type == PROJECTOR_TYPE_INTERNVL
-        || proj_type == PROJECTOR_TYPE_DEEPSEEKOCR2) {
+        || proj_type == PROJECTOR_TYPE_DEEPSEEKOCR2
+        || proj_type == PROJECTOR_TYPE_GRANITE4_VISION) {
         // TODO @ngxson : llava does not support batched encoding ; this should be fixed inside clip_image_batch_encode()
         const auto & entries = image_tokens->batch_f32.entries;
         // entries may have different token counts
@@ -1135,6 +1172,7 @@ bool mtmd_decode_use_non_causal(const mtmd_context * ctx, const mtmd_input_chunk
     switch (proj_type) {
         case PROJECTOR_TYPE_GEMMA3:
         case PROJECTOR_TYPE_GEMMA4V:
+        case PROJECTOR_TYPE_GEMMA4UV:
             return true;
         default:
             return false;
