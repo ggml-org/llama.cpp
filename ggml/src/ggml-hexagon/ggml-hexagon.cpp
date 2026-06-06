@@ -1927,6 +1927,7 @@ struct ggml_hexagon_opbatch {
         size_t extra_tens = 0;
 
         auto fit_tensor = [&](const ggml_tensor *t) {
+            if (!t) return;
             if (!t_map.count(t)) {
                 extra_tens++;
 
@@ -2602,6 +2603,27 @@ static bool ggml_hexagon_supported_mul_mat(const struct ggml_hexagon_session * s
                 GGML_LOG_DEBUG("ggml_hexagon_supported_mul_mat: permuted F16 src0 not supported\n");
                 return false;
             }
+            if (src1->ne[2] < src0->ne[2] || src1->ne[3] < src0->ne[3]) {
+                GGML_LOG_DEBUG("ggml_hexagon_supported_mul_mat: src1 broadcasting not supported\n");
+                return false;
+            }
+            if (ggml_nrows(src1) > 1024) {
+                return false;  // no huge batches (for now)
+            }
+            break;
+
+        case GGML_TYPE_F32:
+            if (src1->type != GGML_TYPE_F32) {
+                return false;
+            }
+            if (src0->nb[1] < src0->nb[0]) {
+                GGML_LOG_DEBUG("ggml_hexagon_supported_mul_mat: permuted F32 src0 not supported\n");
+                return false;
+            }
+            if (src1->ne[2] < src0->ne[2] || src1->ne[3] < src0->ne[3]) {
+                GGML_LOG_DEBUG("ggml_hexagon_supported_mul_mat: src1 broadcasting not supported\n");
+                return false;
+            }
             if (ggml_nrows(src1) > 1024) {
                 return false;  // no huge batches (for now)
             }
@@ -3142,13 +3164,14 @@ static htp_op_code op_remap_to_htp(const ggml_tensor * t) {
 
         case GGML_OP_UNARY:
             switch (ggml_get_unary_op(t)) {
-                case GGML_UNARY_OP_SILU:     return HTP_OP_UNARY_SILU;
-                case GGML_UNARY_OP_GELU:     return HTP_OP_UNARY_GELU;
-                case GGML_UNARY_OP_SIGMOID:  return HTP_OP_UNARY_SIGMOID;
-                case GGML_UNARY_OP_NEG:      return HTP_OP_UNARY_NEG;
-                case GGML_UNARY_OP_EXP:      return HTP_OP_UNARY_EXP;
-                case GGML_UNARY_OP_SOFTPLUS: return HTP_OP_UNARY_SOFTPLUS;
-                case GGML_UNARY_OP_TANH:     return HTP_OP_UNARY_TANH;
+                case GGML_UNARY_OP_SILU:       return HTP_OP_UNARY_SILU;
+                case GGML_UNARY_OP_GELU:       return HTP_OP_UNARY_GELU;
+                case GGML_UNARY_OP_GELU_QUICK: return HTP_OP_UNARY_GELU;
+                case GGML_UNARY_OP_SIGMOID:    return HTP_OP_UNARY_SIGMOID;
+                case GGML_UNARY_OP_NEG:        return HTP_OP_UNARY_NEG;
+                case GGML_UNARY_OP_EXP:        return HTP_OP_UNARY_EXP;
+                case GGML_UNARY_OP_SOFTPLUS:   return HTP_OP_UNARY_SOFTPLUS;
+                case GGML_UNARY_OP_TANH:       return HTP_OP_UNARY_TANH;
             default:
                 break;
             }
@@ -3630,6 +3653,7 @@ static bool ggml_backend_hexagon_device_supports_op(ggml_backend_dev_t dev, cons
                     break;
                 case GGML_UNARY_OP_SILU:
                 case GGML_UNARY_OP_GELU:
+                case GGML_UNARY_OP_GELU_QUICK:
                     supp = ggml_hexagon_supported_activations(sess, op);
                     break;
                 default:

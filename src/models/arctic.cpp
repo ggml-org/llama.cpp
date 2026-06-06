@@ -4,7 +4,7 @@ void llama_model_arctic::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
 
     if (hparams.n_expert == 128) {
-        switch (hparams.n_layer) {
+        switch (hparams.n_layer()) {
             case 35: type = LLM_TYPE_10B_128x3_66B; break;
             default: type = LLM_TYPE_UNKNOWN;
         }

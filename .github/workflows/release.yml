@@ -28,6 +28,7 @@ on:
     ]
 
 env:
+  GH_TOKEN: ${{ github.token }}
   BRANCH_NAME: ${{ github.head_ref || github.ref_name }}
   CMAKE_ARGS: "-DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_TOOLS=ON -DLLAMA_BUILD_SERVER=ON -DGGML_RPC=ON"
 
@@ -37,7 +38,7 @@ concurrency:
   queue: max
 
 jobs:
-  check_release:
+  check-release:
     runs-on: ubuntu-slim
 
     outputs:
@@ -59,14 +60,14 @@ jobs:
           fi
 
   macos-cpu:
-    needs: [check_release]
-    if: ${{ needs.check_release.outputs.should_release == 'true' }}
+    needs: [check-release]
+    if: ${{ needs.check-release.outputs.should_release == 'true' }}
     strategy:
       matrix:
         include:
           - build: 'arm64'
             arch: 'arm64'
-            os: macos-14
+            os: macos-26
             defines: "-DGGML_METAL_USE_BF16=ON -DGGML_METAL_EMBED_LIBRARY=ON"
           # TODO: this build is disabled to save Github Actions resources (https://github.com/ggml-org/llama.cpp/pull/23780)
           #       in order to enable it again, we have to provision dedicated runners  to run it
@@ -82,6 +83,9 @@ jobs:
             defines: "-DGGML_METAL=OFF -DCMAKE_OSX_DEPLOYMENT_TARGET=13.3"
 
     runs-on: ${{ matrix.os }}
+
+    permissions:
+      actions: write
 
     steps:
       - name: Clone
@@ -101,7 +105,6 @@ jobs:
         uses: ggml-org/ccache-action@v1.2.21
         with:
           key: release-${{ matrix.os }}-${{ matrix.arch }}
-          append-timestamp: false # note: use this only with non-concurrent jobs!
 
       - name: Build
         id: cmake_build
@@ -115,6 +118,11 @@ jobs:
             -DLLAMA_BUILD_BORINGSSL=ON \
             ${{ env.CMAKE_ARGS }}
           cmake --build build --config Release -j $(sysctl -n hw.logicalcpu)
+
+      - name: ccache-clear
+        uses: ./.github/actions/ccache-clear
+        with:
+          key: release-${{ matrix.os }}-${{ matrix.arch }}
 
       - name: Determine tag name
         id: tag
@@ -133,8 +141,8 @@ jobs:
           name: llama-bin-macos-${{ matrix.build }}.tar.gz
 
   ubuntu-cpu:
-    needs: [check_release]
-    if: ${{ needs.check_release.outputs.should_release == 'true' }}
+    needs: [check-release]
+    if: ${{ needs.check-release.outputs.should_release == 'true' }}
     strategy:
       matrix:
         include:
@@ -146,6 +154,9 @@ jobs:
             os: ubuntu-24.04-s390x
 
     runs-on: ${{ matrix.os }}
+
+    permissions:
+      actions: write
 
     steps:
       - name: Clone
@@ -161,13 +172,6 @@ jobs:
           cache: "npm"
           cache-dependency-path: "tools/ui/package-lock.json"
 
-      - name: ccache
-        if: ${{ matrix.build != 's390x' }}
-        uses: ggml-org/ccache-action@v1.2.21
-        with:
-          key: release-${{ matrix.os }}-cpu
-          append-timestamp: false # note: use this only with non-concurrent jobs!
-
       - name: Dependencies
         id: depends
         run: |
@@ -181,6 +185,12 @@ jobs:
           echo "CC=gcc-14" >> "$GITHUB_ENV"
           echo "CXX=g++-14" >> "$GITHUB_ENV"
 
+      - name: ccache
+        if: ${{ matrix.build != 's390x' }}
+        uses: ggml-org/ccache-action@v1.2.21
+        with:
+          key: release-${{ matrix.os }}-cpu
+
       - name: Build
         id: cmake_build
         run: |
@@ -193,6 +203,12 @@ jobs:
             -DLLAMA_FATAL_WARNINGS=ON \
             ${{ env.CMAKE_ARGS }}
           cmake --build build --config Release -j $(nproc)
+
+      - name: ccache-clear
+        if: ${{ matrix.build != 's390x' }}
+        uses: ./.github/actions/ccache-clear
+        with:
+          key: release-${{ matrix.os }}-cpu
 
       - name: Determine tag name
         id: tag
@@ -211,8 +227,8 @@ jobs:
           name: llama-bin-ubuntu-${{ matrix.build }}.tar.gz
 
   ubuntu-vulkan:
-    needs: [check_release]
-    if: ${{ needs.check_release.outputs.should_release == 'true' }}
+    needs: [check-release]
+    if: ${{ needs.check-release.outputs.should_release == 'true' }}
 
     strategy:
       matrix:
@@ -223,6 +239,9 @@ jobs:
             os: ubuntu-24.04-arm
 
     runs-on: ${{ matrix.os }}
+
+    permissions:
+      actions: write
 
     steps:
       - name: Clone
@@ -237,12 +256,6 @@ jobs:
           node-version: "24"
           cache: "npm"
           cache-dependency-path: "tools/ui/package-lock.json"
-
-      - name: ccache
-        uses: ggml-org/ccache-action@v1.2.21
-        with:
-          key: release-${{ matrix.os }}-vulkan
-          append-timestamp: false # note: use this only with non-concurrent jobs!
 
       - name: Dependencies
         id: depends
@@ -259,6 +272,11 @@ jobs:
             echo "CXX=g++-14" >> "$GITHUB_ENV"
           fi
 
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.21
+        with:
+          key: release-${{ matrix.os }}-vulkan
+
       - name: Build
         id: cmake_build
         run: |
@@ -271,6 +289,11 @@ jobs:
             -DGGML_VULKAN=ON \
             ${{ env.CMAKE_ARGS }}
           cmake --build build --config Release -j $(nproc)
+
+      - name: ccache-clear
+        uses: ./.github/actions/ccache-clear
+        with:
+          key: release-${{ matrix.os }}-vulkan
 
       - name: Determine tag name
         id: tag
@@ -289,10 +312,13 @@ jobs:
           name: llama-bin-ubuntu-vulkan-${{ matrix.build }}.tar.gz
 
   android-arm64:
-    needs: [check_release]
-    if: ${{ needs.check_release.outputs.should_release == 'true' }}
+    needs: [check-release]
+    if: ${{ needs.check-release.outputs.should_release == 'true' }}
 
     runs-on: ubuntu-latest
+
+    #permissions:
+    #  actions: write
 
     env:
       NDK_VERSION: "29.0.14206865"
@@ -311,18 +337,6 @@ jobs:
           cache: "npm"
           cache-dependency-path: "tools/ui/package-lock.json"
 
-      # note : disabled to spare some cache space (https://github.com/ggml-org/llama.cpp/pull/23789)
-      #        for some reason, the ccache does not improve the build time in this case
-      # example:
-      #   cache off: https://github.com/ggerganov/tmp2/actions/runs/26534713799/job/78160400831
-      #   cache on:  https://github.com/ggerganov/tmp2/actions/runs/26534713799/job/78224189394
-      #
-      #- name: ccache
-      #  uses: ggml-org/ccache-action@v1.2.21
-      #  with:
-      #    key: release-android-arm64
-      #    append-timestamp: false # note: use this only with non-concurrent jobs!
-
       - name: Set up JDK
         uses: actions/setup-java@v5
         with:
@@ -338,6 +352,17 @@ jobs:
         run: |
           sdkmanager "ndk;${{ env.NDK_VERSION }}"
           echo "ANDROID_NDK=${ANDROID_SDK_ROOT}/ndk/${{ env.NDK_VERSION }}" >> $GITHUB_ENV
+
+      # note : disabled to spare some cache space (https://github.com/ggml-org/llama.cpp/pull/23789)
+      #        for some reason, the ccache does not improve the build time in this case
+      # example:
+      #   cache off: https://github.com/ggerganov/tmp2/actions/runs/26534713799/job/78160400831
+      #   cache on:  https://github.com/ggerganov/tmp2/actions/runs/26534713799/job/78224189394
+      #
+      #- name: ccache
+      #  uses: ggml-org/ccache-action@v1.2.21
+      #  with:
+      #    key: release-android-arm64
 
       - name: Build
         id: cmake_build
@@ -357,6 +382,11 @@ jobs:
             ${{ env.CMAKE_ARGS }}
           cmake --build build --config Release -j $(nproc)
 
+      #- name: ccache-clear
+      #  uses: ./.github/actions/ccache-clear
+      #  with:
+      #    key: release-android-arm64
+
       - name: Determine tag name
         id: tag
         uses: ./.github/actions/get-tag-name
@@ -374,10 +404,13 @@ jobs:
           name: llama-bin-android-arm64.tar.gz
 
   ubuntu-24-openvino:
-    needs: [check_release]
-    if: ${{ needs.check_release.outputs.should_release == 'true' }}
+    needs: [check-release]
+    if: ${{ needs.check-release.outputs.should_release == 'true' }}
 
     runs-on: ubuntu-24.04
+
+    permissions:
+      actions: write
 
     outputs:
       openvino_version: ${{ steps.openvino_version.outputs.value }}
@@ -409,7 +442,6 @@ jobs:
         uses: ggml-org/ccache-action@v1.2.21
         with:
           key: release-ubuntu-24.04-openvino-release-no-preset-v1
-          append-timestamp: false # note: use this only with non-concurrent jobs!
 
       - name: Dependencies
         run: |
@@ -447,6 +479,11 @@ jobs:
             -DGGML_OPENVINO=ON
           cmake --build build/ReleaseOV --config Release -j $(nproc)
 
+      - name: ccache-clear
+        uses: ./.github/actions/ccache-clear
+        with:
+          key: release-ubuntu-24.04-openvino-release-no-preset-v1
+
       - name: Determine tag name
         id: tag
         uses: ./.github/actions/get-tag-name
@@ -464,10 +501,13 @@ jobs:
           name: llama-bin-ubuntu-openvino-${{ env.OPENVINO_VERSION_MAJOR }}-x64.tar.gz
 
   windows-cpu:
-    needs: [check_release]
-    if: ${{ needs.check_release.outputs.should_release == 'true' }}
+    needs: [check-release]
+    if: ${{ needs.check-release.outputs.should_release == 'true' }}
 
     runs-on: windows-2025
+
+    permissions:
+      actions: write
 
     strategy:
       matrix:
@@ -488,15 +528,14 @@ jobs:
           cache: "npm"
           cache-dependency-path: "tools/ui/package-lock.json"
 
+      - name: Install Ninja
+        run: |
+          choco install ninja
+
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.21
         with:
           key: release-windows-2025-${{ matrix.arch }}-cpu
-          append-timestamp: false # note: use this only with non-concurrent jobs!
-
-      - name: Install Ninja
-        run: |
-          choco install ninja
 
       - name: Build
         shell: cmd
@@ -512,6 +551,11 @@ jobs:
             ${{ env.CMAKE_ARGS }}
           cmake --build build --config Release
 
+      - name: ccache-clear
+        uses: ./.github/actions/ccache-clear
+        with:
+          key: release-windows-2025-${{ matrix.arch }}-cpu
+
       - name: Pack artifacts
         id: pack_artifacts
         run: |
@@ -525,10 +569,13 @@ jobs:
           name: llama-bin-win-cpu-${{ matrix.arch }}.zip
 
   windows:
-    needs: [check_release]
-    if: ${{ needs.check_release.outputs.should_release == 'true' }}
+    needs: [check-release]
+    if: ${{ needs.check-release.outputs.should_release == 'true' }}
 
     runs-on: windows-2025
+
+    permissions:
+      actions: write
 
     env:
       OPENBLAS_VERSION: 0.3.23
@@ -558,12 +605,6 @@ jobs:
           cache: "npm"
           cache-dependency-path: "tools/ui/package-lock.json"
 
-      - name: ccache
-        uses: ggml-org/ccache-action@v1.2.21
-        with:
-          key: release-windows-2025-${{ matrix.arch }}-${{ matrix.backend }}
-          append-timestamp: false # note: use this only with non-concurrent jobs!
-
       - name: Install Vulkan SDK
         id: get_vulkan
         if: ${{ matrix.backend == 'vulkan' }}
@@ -577,6 +618,12 @@ jobs:
         id: install_ninja
         run: |
           choco install ninja
+
+      # TODO: these jobs need to use llvm toolchain in order to utilize the ccache
+      #- name: ccache
+      #  uses: ggml-org/ccache-action@v1.2.21
+      #  with:
+      #    key: release-windows-2025-${{ matrix.arch }}-${{ matrix.backend }}
 
       - name: Install OpenCL Headers and Libs
         id: install_opencl
@@ -604,6 +651,11 @@ jobs:
           cmake -S . -B build ${{ matrix.defines }} -DGGML_NATIVE=OFF -DGGML_CPU=OFF -DGGML_BACKEND_DL=ON -DLLAMA_BUILD_BORINGSSL=ON
           cmake --build build --config Release --target ${{ matrix.target }}
 
+      #- name: ccache-clear
+      #  uses: ./.github/actions/ccache-clear
+      #  with:
+      #    key: release-windows-2025-${{ matrix.arch }}-${{ matrix.backend }}
+
       - name: Pack artifacts
         id: pack_artifacts
         run: |
@@ -616,10 +668,13 @@ jobs:
           name: llama-bin-win-${{ matrix.backend }}-${{ matrix.arch }}.zip
 
   windows-cuda:
-    needs: [check_release]
-    if: ${{ needs.check_release.outputs.should_release == 'true' }}
+    needs: [check-release]
+    if: ${{ needs.check-release.outputs.should_release == 'true' }}
 
     runs-on: windows-2022
+
+    permissions:
+      actions: write
 
     strategy:
       matrix:
@@ -637,12 +692,6 @@ jobs:
           cache: "npm"
           cache-dependency-path: "tools/ui/package-lock.json"
 
-      - name: ccache
-        uses: ggml-org/ccache-action@v1.2.21
-        with:
-          key: release-windows-2022-x64-cuda-${{ matrix.cuda }}
-          append-timestamp: false # note: use this only with non-concurrent jobs!
-
       - name: Install Cuda Toolkit
         uses: ./.github/actions/windows-setup-cuda
         with:
@@ -652,6 +701,11 @@ jobs:
         id: install_ninja
         run: |
           choco install ninja
+
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.21
+        with:
+          key: release-windows-2022-x64-cuda-${{ matrix.cuda }}
 
       - name: Build
         id: cmake_build
@@ -668,6 +722,11 @@ jobs:
             -DGGML_CUDA_CUB_3DOT2=ON
           set /A NINJA_JOBS=%NUMBER_OF_PROCESSORS%-1
           cmake --build build --config Release -j %NINJA_JOBS% --target ggml-cuda
+
+      - name: ccache-clear
+        uses: ./.github/actions/ccache-clear
+        with:
+          key: release-windows-2022-x64-cuda-${{ matrix.cuda }}
 
       - name: Pack artifacts
         id: pack_artifacts
@@ -748,7 +807,6 @@ jobs:
 #        uses: ggml-org/ccache-action@v1.2.21
 #        with:
 #          key: release-windows-2022-x64-sycl
-#          append-timestamp: false # note: use this only with non-concurrent jobs!
 #
 #      - name: Build
 #        id: cmake_build
@@ -869,7 +927,6 @@ jobs:
 #        uses: ggml-org/ccache-action@v1.2.21
 #        with:
 #          key: release-ubuntu-24.04-sycl
-#          append-timestamp: false # note: use this only with non-concurrent jobs!
 #
 #      - name: Build
 #        id: cmake_build
@@ -903,10 +960,13 @@ jobs:
 #          name: llama-bin-ubuntu-sycl-${{ matrix.build }}-x64.tar.gz
 
   ubuntu-22-rocm:
-    needs: [check_release]
-    if: ${{ needs.check_release.outputs.should_release == 'true' }}
+    needs: [check-release]
+    if: ${{ needs.check-release.outputs.should_release == 'true' }}
 
     runs-on: ubuntu-22.04
+
+    permissions:
+      actions: write
 
     strategy:
       matrix:
@@ -938,7 +998,6 @@ jobs:
         uses: ggml-org/ccache-action@v1.2.21
         with:
           key: release-ubuntu-22.04-rocm-${{ matrix.ROCM_VERSION }}
-          append-timestamp: false # note: use this only with non-concurrent jobs!
 
       - name: Dependencies
         id: depends
@@ -996,6 +1055,11 @@ jobs:
             ${{ env.CMAKE_ARGS }}
           cmake --build build --config Release -j $(nproc)
 
+      - name: ccache-clear
+        uses: ./.github/actions/ccache-clear
+        with:
+          key: release-ubuntu-22.04-rocm-${{ matrix.ROCM_VERSION }}
+
       - name: Determine tag name
         id: tag
         uses: ./.github/actions/get-tag-name
@@ -1016,10 +1080,13 @@ jobs:
           name: llama-bin-ubuntu-rocm-${{ env.ROCM_VERSION_SHORT }}-${{ matrix.build }}.tar.gz
 
   windows-hip:
-    needs: [check_release]
-    if: ${{ needs.check_release.outputs.should_release == 'true' }}
+    needs: [check-release]
+    if: ${{ needs.check-release.outputs.should_release == 'true' }}
 
     runs-on: windows-2022
+
+    permissions:
+      actions: write
 
     env:
       HIPSDK_INSTALLER_VERSION: "26.Q1"
@@ -1060,7 +1127,6 @@ jobs:
         uses: ggml-org/ccache-action@v1.2.21
         with:
           key: release-windows-2022-x64-hip-${{ env.HIPSDK_INSTALLER_VERSION }}-${{ matrix.name }}
-          append-timestamp: false # note: use this only with non-concurrent jobs!
 
       - name: Install ROCm
         if: steps.cache-rocm.outputs.cache-hit != 'true'
@@ -1120,6 +1186,11 @@ jobs:
           cp "${env:HIP_PATH}\bin\rocblas\library\*" "build\bin\rocblas\library\"
           cp "${env:HIP_PATH}\bin\hipblaslt\library\*" "build\bin\hipblaslt\library\"
 
+      - name: ccache-clear
+        uses: ./.github/actions/ccache-clear
+        with:
+          key: release-windows-2022-x64-hip-${{ env.HIPSDK_INSTALLER_VERSION }}-${{ matrix.name }}
+
       - name: Pack artifacts
         id: pack_artifacts
         run: |
@@ -1131,10 +1202,10 @@ jobs:
           path: llama-bin-win-hip-${{ matrix.name }}-x64.zip
           name: llama-bin-win-hip-${{ matrix.name }}-x64.zip
 
-  ios-xcode-build:
-    needs: [check_release]
-    if: ${{ needs.check_release.outputs.should_release == 'true' }}
-    runs-on: macos-15
+  ios-xcode:
+    needs: [check-release]
+    if: ${{ needs.check-release.outputs.should_release == 'true' }}
+    runs-on: macos-26
 
     steps:
       - name: Checkout code
@@ -1144,7 +1215,7 @@ jobs:
 
       - name: Setup Xcode
         run: |
-          sudo xcode-select -s /Applications/Xcode_16.4.app
+          sudo xcode-select -s /Applications/Xcode_26.4.app
 
       - name: Build
         id: cmake_build
@@ -1160,7 +1231,7 @@ jobs:
             -DLLAMA_BUILD_TESTS=OFF \
             -DLLAMA_BUILD_SERVER=OFF \
             -DCMAKE_SYSTEM_NAME=iOS \
-            -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0 \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=16.0 \
             -DCMAKE_XCODE_ATTRIBUTE_DEVELOPMENT_TEAM=ggml
           cmake --build build --config Release -j $(sysctl -n hw.logicalcpu) -- CODE_SIGNING_ALLOWED=NO
 
@@ -1281,9 +1352,9 @@ jobs:
 #          path: llama-${{ steps.tag.outputs.name }}-bin-${{ matrix.chip_type }}-openEuler-${{ matrix.arch }}${{ matrix.use_acl_graph == 'on' && '-aclgraph' || '' }}.tar.gz
 #          name: llama-bin-${{ matrix.chip_type }}-openEuler-${{ matrix.arch }}${{ matrix.use_acl_graph == 'on' && '-aclgraph' || '' }}.tar.gz
 
-  ui-build:
-    needs: [check_release]
-    if: ${{ needs.check_release.outputs.should_release == 'true' }}
+  ui:
+    needs: [check-release]
+    if: ${{ needs.check-release.outputs.should_release == 'true' }}
     uses: ./.github/workflows/ui-build.yml
 
   release:
@@ -1309,9 +1380,9 @@ jobs:
       #- ubuntu-24-sycl
       - android-arm64
       - macos-cpu
-      - ios-xcode-build
+      - ios-xcode
       #- openEuler-cann
-      - ui-build
+      - ui
 
     outputs:
       tag_name: ${{ steps.tag.outputs.name }}

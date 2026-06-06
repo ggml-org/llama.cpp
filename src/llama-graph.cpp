@@ -929,8 +929,8 @@ void llm_graph_result::set_outputs() {
     if (t_embd_pooled != nullptr) {
         ggml_set_output(t_embd_pooled);
     }
-    if (t_h_pre_norm != nullptr) {
-        ggml_set_output(t_h_pre_norm);
+    if (t_h_nextn != nullptr) {
+        ggml_set_output(t_h_nextn);
     }
     for (auto & [seq_id, t] : t_sampled) {
         if (t != nullptr) {
@@ -1005,7 +1005,7 @@ llm_graph_context::llm_graph_context(const llm_graph_params & params) :
     cparams          (params.cparams),
     ubatch           (params.ubatch),
     n_embd           (hparams.n_embd),
-    n_layer          (hparams.n_layer),
+    n_layer          (hparams.n_layer()),
     n_rot            (hparams.n_rot()),
     n_ctx            (cparams.n_ctx),
     n_head           (hparams.n_head()),
@@ -1859,7 +1859,12 @@ ggml_tensor * llm_graph_context::build_inp_embd(ggml_tensor * tok_embd) const {
     res->t_inp_embd = cur;
 
     // For Granite architecture
-    if (hparams.f_embedding_scale != 0.0f) {
+    // NOTE: Only apply scale to token inputs. Raw embeddings are assumed to be
+    //  multimodal inputs that should not be scaled.
+    if (ubatch.token && hparams.f_embedding_scale != 0.0f) {
+        if (!ggml_is_contiguous(cur)) {
+            cur = ggml_cont(ctx0, cur);
+        }
         cur = ggml_scale(ctx0, cur, hparams.f_embedding_scale);
     }
 
@@ -2656,14 +2661,18 @@ llm_graph_input_attn_k_dsa * llm_graph_context::build_attn_inp_k_dsa() const {
         inp->self_k_idxs_mla = mctx_cur->get_mla()->build_input_k_idxs(ctx0, ubatch);
 
         inp->self_kq_mask_mla = build_attn_inp_kq_mask(ctx0, mctx_cur->get_mla(), ubatch, cparams);
-        inp->self_kq_mask_mla_cnv = cparams.flash_attn ? ggml_cast(ctx0, inp->self_kq_mask_mla, GGML_TYPE_F16) : inp->self_kq_mask_mla;
+        inp->self_kq_mask_mla_cnv = inp->self_kq_mask_mla;
     }
 
     {
         inp->self_k_idxs_lid = mctx_cur->get_lid()->build_input_k_idxs(ctx0, ubatch);
 
-        inp->self_kq_mask_lid = build_attn_inp_kq_mask(ctx0, mctx_cur->get_lid(), ubatch, cparams);
-        inp->self_kq_mask_lid_cnv = cparams.flash_attn ? ggml_cast(ctx0, inp->self_kq_mask_lid, GGML_TYPE_F16) : inp->self_kq_mask_lid;
+        // ensure F32 mask
+        auto cparams_copy = cparams;
+        cparams_copy.flash_attn = false;
+
+        inp->self_kq_mask_lid = build_attn_inp_kq_mask(ctx0, mctx_cur->get_lid(), ubatch, cparams_copy);
+        inp->self_kq_mask_lid_cnv = inp->self_kq_mask_lid;
 
         inp->self_k_rot_lid = mctx_cur->get_lid()->build_input_k_rot(ctx0);
     }
