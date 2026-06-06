@@ -272,7 +272,7 @@ server caches are warm enough for your workload.
 For generation workloads that only need the next token, backend sampling can
 avoid reading the full final logits tensor back to the coordinator each token.
 `llama-bench` can measure this path with `-bs` / `--backend-sampling`, which
-attaches a greedy backend sampler for tg and pg tests:
+attaches a bounded top-k/top-p/temp/dist backend sampler for tg and pg tests:
 
 ```bash
 GGML_RPC_TRACE=1 ./build/bin/llama-bench \

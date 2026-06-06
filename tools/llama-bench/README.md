@@ -74,7 +74,7 @@ test parameters:
   -ot --override-tensor <tensor name pattern>=<buffer type>;...
                                             (default: disabled)
   -nopo, --no-op-offload <0|1>              (default: 0)
-  -bs, --backend-sampling                   use a greedy backend sampler for generation tests (default: disabled)
+  -bs, --backend-sampling                   use a top-k/top-p/temp/dist backend sampler for generation tests (default: disabled)
   --no-host <0|1>                           (default: 0)
 
 Multiple values can be given for each parameter by separating them with ','
@@ -97,7 +97,7 @@ Using the `-d <n>` option, each test can be run at a specified context depth, pr
 For a description of the other options, see the [completion example](../completion/README.md).
 
 > [!NOTE]
-> The default measurements with `llama-bench` do not include the times for tokenization or CPU-side sampling. With `-bs` / `--backend-sampling`, tg and pg tests attach a greedy backend sampler and include the backend sampling graph and sampled-token transfer in the measured decode path.
+> The default measurements with `llama-bench` do not include the times for tokenization or CPU-side sampling. With `-bs` / `--backend-sampling`, tg and pg tests attach a bounded top-k/top-p/temp/dist sampler (`top_k=40`, `top_p=0.95`, `temp=0.8`, `seed=1`) and include the backend sampling graph and sampled-token transfer in the measured decode path.
 
 ## Examples
 

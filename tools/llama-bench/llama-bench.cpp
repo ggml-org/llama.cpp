@@ -215,6 +215,23 @@ static std::string devices_to_string(const std::vector<ggml_backend_dev_t> & dev
     return join(names, "/");
 }
 
+static llama_sampler * llama_bench_init_backend_sampler() {
+    static constexpr int32_t  top_k    = 40;
+    static constexpr float    top_p    = 0.95f;
+    static constexpr size_t   min_keep = 0;
+    static constexpr float    temp     = 0.80f;
+    static constexpr uint32_t seed     = 1;
+
+    auto sparams = llama_sampler_chain_default_params();
+    llama_sampler * smpl = llama_sampler_chain_init(sparams);
+    llama_sampler_chain_add(smpl, llama_sampler_init_top_k(top_k));
+    llama_sampler_chain_add(smpl, llama_sampler_init_top_p(top_p, min_keep));
+    llama_sampler_chain_add(smpl, llama_sampler_init_temp(temp));
+    llama_sampler_chain_add(smpl, llama_sampler_init_dist(seed));
+
+    return smpl;
+}
+
 // command line params
 enum output_formats { NONE, CSV, JSON, JSONL, MARKDOWN, SQL };
 
@@ -466,7 +483,7 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("  -ot --override-tensor <tensor name pattern>=<buffer type>;...\n");
     printf("                                              (default: disabled)\n");
     printf("  -nopo, --no-op-offload <0|1>                (default: 0)\n");
-    printf("  -bs, --backend-sampling                     use a greedy backend sampler for generation tests (default: disabled)\n");
+    printf("  -bs, --backend-sampling                     use a top-k/top-p/temp/dist backend sampler for generation tests (default: disabled)\n");
     printf("  --no-host <0|1>                             (default: %s)\n", join(cmd_params_defaults.no_host, ",").c_str());
     printf("\n");
     printf(
@@ -2304,9 +2321,7 @@ int llama_bench(int argc, char ** argv) {
        }
 
         if (inst.backend_sampling && inst.n_gen > 0) {
-            auto sparams = llama_sampler_chain_default_params();
-            sampler.reset(llama_sampler_chain_init(sparams));
-            llama_sampler_chain_add(sampler.get(), llama_sampler_init_greedy());
+            sampler.reset(llama_bench_init_backend_sampler());
 
             sampler_configs.push_back({ 0, sampler.get() });
             cparams.samplers   = sampler_configs.data();
