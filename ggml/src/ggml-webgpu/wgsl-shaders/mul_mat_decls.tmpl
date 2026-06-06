@@ -123,7 +123,7 @@ fn init_shmem_src0(thread_id: u32, batch_offset: u32, offset_m: u32, k_outer: u3
 
         if (global_m < params.m && global_block_k < params.k / BLOCK_SIZE) {
             let src0_idx = batch_offset + global_m * params.stride_01 + global_block_k;
-            
+
 #ifdef INIT_SRC0_SHMEM_Q4_0
             let block_byte_base = src0_idx * 18u; // BLOCK_SIZE_BYTES = 18u;
             let d = load_f16_at_src0(block_byte_base);
@@ -326,7 +326,7 @@ fn init_shmem_src0(thread_id: u32, batch_offset: u32, offset_m: u32, k_outer: u3
         let pos_in_chunk = k_in_block % 32u;
         let sub_block    = k_in_block / 16u;
         let shift_phase  = (k_in_block % 128u) / 32u;
-        
+
         let hmask_block       = pos_in_chunk;
         let hmask_shift_phase = k_in_block / 32u;
 
@@ -414,7 +414,7 @@ fn init_shmem_src0(thread_id: u32, batch_offset: u32, offset_m: u32, k_outer: u3
         let pos_in_chunk = (k_in_block % 64u) % 32u;
         let sub_block    = k_in_block / 32u;
         let shift_phase  = sub_block & 1u;
-        
+
         let qh_block       = k_in_block % 32u;
         let qh_shift_phase = sub_block;
 
