@@ -269,6 +269,25 @@ and may reduce prompt throughput or fail to fit on another model or cluster.
 Always compare prompt and decode tokens/sec on the real network after the RPC
 server caches are warm enough for your workload.
 
+For generation workloads that only need the next token, backend sampling can
+avoid reading the full final logits tensor back to the coordinator each token.
+`llama-bench` can measure this path with `-bs` / `--backend-sampling`, which
+attaches a greedy backend sampler for tg and pg tests:
+
+```bash
+GGML_RPC_TRACE=1 ./build/bin/llama-bench \
+  --rpc "$RPC" \
+  --device RPC0/RPC1/RPC2 \
+  --tensor-split "$TS" \
+  --n-prompt 0 \
+  --n-gen 128 \
+  --backend-sampling
+```
+
+Use this only when the application does not need host-side full-vocabulary
+logits for every token. If logits or logprobs are part of the workload, compare
+against the default raw-logits path as a separate benchmark.
+
 For larger RPC setups, `tools/rpc/suggest_rpc_placement.py` can read a
 `GGML_RPC_TRACE=1` stderr file and emit candidate `--tensor-split` values for
 `tools/rpc/bench_rpc_remote.py`. The helper is intentionally conservative: it

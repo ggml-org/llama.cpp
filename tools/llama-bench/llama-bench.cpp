@@ -11,6 +11,7 @@
 #include <ctime>
 #include <iterator>
 #include <map>
+#include <memory>
 #include <numeric>
 #include <regex>
 #include <sstream>
@@ -348,6 +349,7 @@ struct cmd_params {
     std::vector<bool>                use_direct_io;
     std::vector<bool>                embeddings;
     std::vector<bool>                no_op_offload;
+    std::vector<bool>                backend_sampling;
     std::vector<bool>                no_host;
     std::vector<size_t>              fit_params_target;
     std::vector<uint32_t>            fit_params_min_ctx;
@@ -392,6 +394,7 @@ static const cmd_params cmd_params_defaults = {
     /* use_direct_io        */ { false },
     /* embeddings           */ { false },
     /* no_op_offload        */ { false },
+    /* backend_sampling     */ { false },
     /* no_host              */ { false },
     /* fit_params_target    */ { 0 },
     /* fit_params_min_ctx   */ { 0 },
@@ -463,6 +466,7 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("  -ot --override-tensor <tensor name pattern>=<buffer type>;...\n");
     printf("                                              (default: disabled)\n");
     printf("  -nopo, --no-op-offload <0|1>                (default: 0)\n");
+    printf("  -bs, --backend-sampling                     use a greedy backend sampler for generation tests (default: disabled)\n");
     printf("  --no-host <0|1>                             (default: %s)\n", join(cmd_params_defaults.no_host, ",").c_str());
     printf("\n");
     printf(
@@ -845,6 +849,8 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                 }
                 auto p = string_split<bool>(argv[i], split_delim);
                 params.no_op_offload.insert(params.no_op_offload.end(), p.begin(), p.end());
+            } else if (arg == "-bs" || arg == "--backend-sampling") {
+                params.backend_sampling.push_back(true);
             } else if (arg == "--no-host") {
                 if (++i >= argc) {
                     invalid_param = true;
@@ -1117,6 +1123,9 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
     if (params.no_op_offload.empty()) {
         params.no_op_offload = cmd_params_defaults.no_op_offload;
     }
+    if (params.backend_sampling.empty()) {
+        params.backend_sampling = cmd_params_defaults.backend_sampling;
+    }
     if (params.no_host.empty()) {
         params.no_host = cmd_params_defaults.no_host;
     }
@@ -1168,6 +1177,7 @@ struct cmd_params_instance {
     bool               use_direct_io;
     bool               embeddings;
     bool               no_op_offload;
+    bool               backend_sampling;
     bool               no_host;
     size_t             fit_target;
     uint32_t           fit_min_ctx;
@@ -1273,6 +1283,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
     for (const auto & noh : params.no_host)
     for (const auto & embd : params.embeddings)
     for (const auto & nopo : params.no_op_offload)
+    for (const auto & bs : params.backend_sampling)
     for (const auto & nb : params.n_batch)
     for (const auto & nub : params.n_ubatch)
     for (const auto & tk : params.type_k)
@@ -1314,6 +1325,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .use_direct_io= */ dio,
                 /* .embeddings   = */ embd,
                 /* .no_op_offload= */ nopo,
+                /* .backend_sampling = */ false,
                 /* .no_host      = */ noh,
                 /* .fit_target   = */ fpt,
                 /* .fit_min_ctx  = */ fpc,
@@ -1351,6 +1363,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .use_direct_io= */ dio,
                 /* .embeddings   = */ embd,
                 /* .no_op_offload= */ nopo,
+                /* .backend_sampling = */ bs,
                 /* .no_host      = */ noh,
                 /* .fit_target   = */ fpt,
                 /* .fit_min_ctx  = */ fpc,
@@ -1388,6 +1401,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .use_direct_io= */ dio,
                 /* .embeddings   = */ embd,
                 /* .no_op_offload= */ nopo,
+                /* .backend_sampling = */ bs,
                 /* .no_host      = */ noh,
                 /* .fit_target   = */ fpt,
                 /* .fit_min_ctx  = */ fpc,
@@ -1430,6 +1444,7 @@ struct test {
     bool                     use_direct_io;
     bool                     embeddings;
     bool                     no_op_offload;
+    bool                     backend_sampling;
     bool                     no_host;
     size_t                   fit_target;
     uint32_t                 fit_min_ctx;
@@ -1470,6 +1485,7 @@ struct test {
         use_direct_io  = inst.use_direct_io;
         embeddings     = inst.embeddings;
         no_op_offload  = inst.no_op_offload;
+        backend_sampling = inst.backend_sampling;
         no_host        = inst.no_host;
         fit_target     = inst.fit_target;
         fit_min_ctx    = inst.fit_min_ctx;
@@ -1530,7 +1546,7 @@ struct test {
             "type_k",         "type_v",         "n_gpu_layers",  "n_cpu_moe",      "split_mode",
             "main_gpu",       "no_kv_offload",  "flash_attn",    "devices",        "tensor_split",
             "tensor_buft_overrides",            "use_mmap",      "use_direct_io",  "embeddings",
-            "no_op_offload",  "no_host",        "fit_target",     "fit_min_ctx",
+            "no_op_offload",  "backend_sampling", "no_host",      "fit_target",     "fit_min_ctx",
             "n_prompt",       "n_gen",          "n_depth",
             "test_time",      "avg_ns",         "stddev_ns",     "avg_ts",         "stddev_ts"
         };
@@ -1548,7 +1564,8 @@ struct test {
             return INT;
         }
         if (field == "f16_kv" || field == "no_kv_offload" || field == "cpu_strict" ||
-            field == "use_mmap" || field == "use_direct_io" || field == "embeddings" || field == "no_host") {
+            field == "use_mmap" || field == "use_direct_io" || field == "embeddings" ||
+            field == "backend_sampling" || field == "no_host") {
             return BOOL;
         }
         if (field == "avg_ts" || field == "stddev_ts") {
@@ -1624,6 +1641,7 @@ struct test {
                                             std::to_string(use_direct_io),
                                             std::to_string(embeddings),
                                             std::to_string(no_op_offload),
+                                            std::to_string(backend_sampling),
                                             std::to_string(no_host),
                                             std::to_string(fit_target),
                                             std::to_string(fit_min_ctx),
@@ -1818,6 +1836,9 @@ struct markdown_printer : public printer {
         if (field == "no_op_offload") {
             return 4;
         }
+        if (field == "backend_sampling") {
+            return 3;
+        }
         if (field == "no_host") {
             return 4;
         }
@@ -1857,6 +1878,9 @@ struct markdown_printer : public printer {
         }
         if (field == "no_op_offload") {
             return "nopo";
+        }
+        if (field == "backend_sampling") {
+            return "bs";
         }
         if (field == "no_host") {
             return "noh";
@@ -1950,6 +1974,9 @@ struct markdown_printer : public printer {
         }
         if (params.no_op_offload.size() > 1 || params.no_op_offload != cmd_params_defaults.no_op_offload) {
             fields.emplace_back("no_op_offload");
+        }
+        if (params.backend_sampling.size() > 1 || params.backend_sampling != cmd_params_defaults.backend_sampling) {
+            fields.emplace_back("backend_sampling");
         }
         if (params.no_host.size() > 1 || params.no_host != cmd_params_defaults.no_host) {
             fields.emplace_back("no_host");
@@ -2113,7 +2140,7 @@ static bool test_prompt(llama_context * ctx, int n_prompt, int n_batch, int n_th
     return true;
 }
 
-static bool test_gen(llama_context * ctx, int n_gen, int n_threads) {
+static bool test_gen(llama_context * ctx, int n_gen, int n_threads, llama_sampler * sampler) {
     llama_set_n_threads(ctx, n_threads, n_threads);
 
     const llama_model * model   = llama_get_model(ctx);
@@ -2129,7 +2156,11 @@ static bool test_gen(llama_context * ctx, int n_gen, int n_threads) {
             return false;
         }
         llama_synchronize(ctx);
-        token = std::rand() % n_vocab;
+        token = sampler ? llama_sampler_sample(sampler, ctx, -1) : std::rand() % n_vocab;
+        if (token == LLAMA_TOKEN_NULL) {
+            fprintf(stderr, "%s: failed to sample generation token\n", __func__);
+            return false;
+        }
     }
     return true;
 }
@@ -2242,6 +2273,8 @@ int llama_bench(int argc, char ** argv) {
 
         std::vector<float> fit_tensor_split(llama_max_devices(), 0.0f);
         std::vector<llama_model_tensor_buft_override> fit_overrides(llama_max_tensor_buft_overrides(), {nullptr, nullptr});
+        std::unique_ptr<llama_sampler, decltype(&llama_sampler_free)> sampler(nullptr, llama_sampler_free);
+        std::vector<llama_sampler_seq_config> sampler_configs;
 
         if (do_fit) {
             // free the previous model so fit sees full free VRAM
@@ -2269,6 +2302,16 @@ int llama_bench(int argc, char ** argv) {
                 inst.fit_min_ctx,
                 params.verbose ? GGML_LOG_LEVEL_DEBUG : GGML_LOG_LEVEL_ERROR);
        }
+
+        if (inst.backend_sampling && inst.n_gen > 0) {
+            auto sparams = llama_sampler_chain_default_params();
+            sampler.reset(llama_sampler_chain_init(sparams));
+            llama_sampler_chain_add(sampler.get(), llama_sampler_init_greedy());
+
+            sampler_configs.push_back({ 0, sampler.get() });
+            cparams.samplers   = sampler_configs.data();
+            cparams.n_samplers = sampler_configs.size();
+        }
 
         // keep the same model between tests when possible
         if (!lmodel || !prev_inst || !inst.equal_mparams(*prev_inst)) {
@@ -2340,7 +2383,7 @@ int llama_bench(int argc, char ** argv) {
                 if (params.progress) {
                     fprintf(stderr, "llama-bench: benchmark %d/%zu: warmup generation run\n", params_idx, params_count);
                 }
-                bool res = test_gen(ctx, 1, t.n_threads);
+                bool res = test_gen(ctx, 1, t.n_threads, sampler.get());
                 if (!res) {
                     fprintf(stderr, "%s: error: failed to run gen warmup\n", __func__);
                     llama_free(ctx);
@@ -2410,7 +2453,7 @@ int llama_bench(int argc, char ** argv) {
                     fprintf(stderr, "llama-bench: benchmark %d/%zu: generation run %d/%d\n", params_idx, params_count,
                             i + 1, params.reps);
                 }
-                bool res = test_gen(ctx, t.n_gen, t.n_threads);
+                bool res = test_gen(ctx, t.n_gen, t.n_threads, sampler.get());
                 if (!res) {
                     fprintf(stderr, "%s: error: failed to run gen\n", __func__);
                     llama_free(ctx);
