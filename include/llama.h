@@ -411,6 +411,7 @@ extern "C" {
         bool quantize_output_tensor;                                // quantize output.weight
         bool only_copy;                                             // only copy tensors - ftype, allow_requantize and quantize_output_tensor are ignored
         bool pure;                                                  // quantize all tensors to the default type
+        bool imatrix_allow_missing_tensors;                         // when imatrix data is missing for certain tensors, quantize them to a static level
         bool keep_split;                                            // quantize to the same number of shards
         bool dry_run;                                               // calculate and show the final quantization size without performing quantization
         const struct llama_model_imatrix_data * imatrix;            // pointer to importance matrix data

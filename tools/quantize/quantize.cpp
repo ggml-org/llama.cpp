@@ -134,6 +134,9 @@ static void usage(const char * executable) {
     printf("                                      disable k-quant mixtures and quantize all tensors to the same type\n");
     printf("  --imatrix file_name\n");
     printf("                                      use data in file_name as importance matrix for quant optimizations\n");
+    printf("  --imatrix-allow-missing-tensors\n");
+    printf("                                      when encountering tensors which aren't present in the imatrix data,\n");
+    printf("                                      quantize them to a static quantization type instead of exiting with an error.\n");
     printf("  --include-weights tensor_name\n");
     printf("                                      use importance matrix for this/these tensor(s)\n");
     printf("  --exclude-weights tensor_name\n");
@@ -452,6 +455,8 @@ int llama_quantize(int argc, char ** argv) {
             } else {
                 usage(argv[0]);
             }
+        } else if (strcmp(argv[arg_idx], "--imatrix-allow-missing-tensors") == 0) {
+            params.imatrix_allow_missing_tensors = true;
         } else if (strcmp(argv[arg_idx], "--include-weights") == 0) {
             if (arg_idx < argc-1) {
                 included_weights.emplace_back(argv[++arg_idx]);

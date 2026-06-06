@@ -1041,7 +1041,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
         if (params->imatrix) {
             metadata[i].remapped_imatrix_name = remap_imatrix(tensor->name, mapped);
 
-            if (metadata[i].allows_quantization && imatrix_data) {
+            if (params->imatrix_allow_missing_tensors && metadata[i].allows_quantization && imatrix_data) {
                 auto it = imatrix_data->find(metadata[i].remapped_imatrix_name);
                 if (it == imatrix_data->end()) {
                     ggml_type fallback_type;
@@ -1224,6 +1224,8 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
                     LLAMA_LOG_ERROR("\n\n============================================================\n");
                     LLAMA_LOG_ERROR("Missing importance matrix for tensor %s in a very low-bit quantization\n", tensor->name);
                     LLAMA_LOG_ERROR("The result will be garbage, so bailing out\n");
+                    LLAMA_LOG_ERROR("To ignore this error and use a larger bitsize for tensors missing from\n");
+                    LLAMA_LOG_ERROR("the provider imatrix gguf, use --imatrix-allow-missing-tensors.\n");
                     LLAMA_LOG_ERROR("============================================================\n\n");
                     throw std::runtime_error(format("Missing importance matrix for tensor %s in a very low-bit quantization", tensor->name));
                 }
@@ -1307,20 +1309,21 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
 
 llama_model_quantize_params llama_model_quantize_default_params() {
     llama_model_quantize_params result = {
-        /*.nthread                     =*/ 0,
-        /*.ftype                       =*/ LLAMA_FTYPE_MOSTLY_Q8_0,
-        /*.output_tensor_type          =*/ GGML_TYPE_COUNT,
-        /*.token_embedding_type        =*/ GGML_TYPE_COUNT,
-        /*.allow_requantize            =*/ false,
-        /*.quantize_output_tensor      =*/ true,
-        /*.only_copy                   =*/ false,
-        /*.pure                        =*/ false,
-        /*.keep_split                  =*/ false,
-        /*.dry_run                     =*/ false,
-        /*.imatrix                     =*/ nullptr,
-        /*.kv_overrides                =*/ nullptr,
-        /*.tensor_type                 =*/ nullptr,
-        /*.prune_layers                =*/ nullptr
+        /*.nthread                        =*/ 0,
+        /*.ftype                          =*/ LLAMA_FTYPE_MOSTLY_Q8_0,
+        /*.output_tensor_type             =*/ GGML_TYPE_COUNT,
+        /*.token_embedding_type           =*/ GGML_TYPE_COUNT,
+        /*.allow_requantize               =*/ false,
+        /*.quantize_output_tensor         =*/ true,
+        /*.only_copy                      =*/ false,
+        /*.pure                           =*/ false,
+        /*.imatrix_allow_missing_tensors  =*/ false,
+        /*.keep_split                     =*/ false,
+        /*.dry_run                        =*/ false,
+        /*.imatrix                        =*/ nullptr,
+        /*.kv_overrides                   =*/ nullptr,
+        /*.tensor_type                    =*/ nullptr,
+        /*.prune_layers                   =*/ nullptr
     };
 
     return result;
