@@ -14,14 +14,31 @@ file(DOWNLOAD
     "https://huggingface.co/ggml-org/models/resolve/main/${NAME}?download=true"
     "${DEST}"
     TLS_VERIFY ON
-    EXPECTED_HASH ${HASH}
     ${DOWNLOAD_HEADERS}
     STATUS status
 )
 
 list(GET status 0 code)
 
-if(NOT code EQUAL 0)
+if(code EQUAL 0)
+    string(REPLACE "=" ";" hash_parts "${HASH}")
+    list(LENGTH hash_parts hash_parts_len)
+    if(NOT hash_parts_len EQUAL 2)
+        file(REMOVE "${DEST}")
+        message(FATAL_ERROR "Invalid hash spec '${HASH}'")
+    endif()
+
+    list(GET hash_parts 0 hash_algorithm)
+    list(GET hash_parts 1 expected_hash)
+    file("${hash_algorithm}" "${DEST}" actual_hash)
+
+    if(NOT actual_hash STREQUAL expected_hash)
+        file(REMOVE "${DEST}")
+        message(FATAL_ERROR
+            "Downloaded ${NAME} but hash check failed for ${DEST}: expected ${expected_hash}, got ${actual_hash}")
+    endif()
+else()
     list(GET status 1 msg)
+    file(REMOVE "${DEST}")
     message(WARNING "Failed to download ${NAME}: ${msg} (test will be skipped)")
 endif()
