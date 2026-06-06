@@ -74,6 +74,18 @@ struct gcp_params {
     }
 };
 
+static bool ct_str_equal(const std::string & a, const std::string & b) {
+    if (a.size() != b.size()) {
+        return false;
+    }
+    volatile unsigned char diff = 0;
+    for (size_t i = 0; i < a.size(); ++i) {
+        diff |= static_cast<unsigned char>(a[i]) ^ static_cast<unsigned char>(b[i]);
+    }
+    return diff == 0;
+}
+
+
 bool server_http_context::init(const common_params & params) {
     const gcp_params gcp;
 
@@ -209,9 +221,18 @@ bool server_http_context::init(const common_params & params) {
         }
 
         // validate the API key
-        if (std::find(api_keys.begin(), api_keys.end(), req_api_key) != api_keys.end()) {
-            return true; // API key is valid
+             bool key_valid = false;
+        for (const auto & key : api_keys) {
+            if (ct_str_equal(key, req_api_key)) {
+                key_valid = true;
+                break;
+            }
         }
+        if (key_valid) {
+            return true;
+        }
+
+
 
         // API key is invalid or not provided
         res.status = 401;
