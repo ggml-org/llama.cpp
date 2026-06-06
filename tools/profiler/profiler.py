@@ -169,6 +169,7 @@ class ProfileRecord:
     bytes: int
     extra: Optional[str]
     # Output tensor info
+    tensor_name: Optional[str] = None
     ne: list[int] = field(default_factory=lambda: [0, 0, 0, 0])
     out_type: int = -1
     # Source tensors (variable length, up to GGML_MAX_SRC)
@@ -266,6 +267,7 @@ class ProfileRecord:
             "duration_ns": self.duration_ns,
             "bytes": self.bytes,
             "extra": self.extra,
+            "tensor_name": self.tensor_name,
             "ne": self.ne,
             "out_type": self.out_type,
             "n_src": len(self.ne_src),
@@ -416,6 +418,7 @@ class ProfileData:
                 duration_ns=r.get("duration_ns", 0),
                 bytes=r.get("bytes", 0),
                 extra=r.get("extra"),
+                tensor_name=r.get("tensor_name"),
                 ne=ne_out,
                 out_type=int(r.get("out_type", -1)),
                 ne_src=ne_src,
@@ -565,7 +568,8 @@ class ProfileData:
         print(f"\n  --- Top 5 Longest Kernels ---")
         for rec in top_k:
             shape = f" {rec.shape_str}" if rec.shape_str else ""
-            print(f"  {rec.type_name:<5} {rec.name:<28} {rec.duration_us:>10.2f} us{shape}  "
+            tname = f" '{rec.tensor_name}'" if rec.tensor_name else ""
+            print(f"  {rec.type_name:<5} {rec.name:<28}{tname} {rec.duration_us:>10.2f} us{shape}  "
                   f"(split={rec.split_id}, backend={rec.backend_id})")
 
         print()
