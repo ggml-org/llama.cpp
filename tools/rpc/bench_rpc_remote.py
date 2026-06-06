@@ -64,6 +64,16 @@ def parse_env_assignments(values):
     return overrides
 
 
+def parse_bench_extra_args(values, option):
+    args = []
+    for value in values:
+        try:
+            args.extend(shlex.split(value))
+        except ValueError as exc:
+            raise argparse.ArgumentTypeError(f"{option}: invalid argument string {value!r}: {exc}") from exc
+    return args
+
+
 def format_endpoint(host, port):
     if ":" in host:
         return f"[{host}]:{port}"
@@ -255,7 +265,24 @@ def summarize_rows(rows):
     return metrics
 
 
-def build_bench_cmd(args, llama_bench, rpc_arg):
+def case_tensor_split(args, name):
+    if name == "base" and args.base_tensor_split is not None:
+        return args.base_tensor_split
+    if name == "patch" and args.patch_tensor_split is not None:
+        return args.patch_tensor_split
+    return args.tensor_split
+
+
+def case_bench_extra_args(args, name):
+    extra = list(args.bench_extra)
+    if name == "base":
+        extra.extend(args.base_bench_extra)
+    elif name == "patch":
+        extra.extend(args.patch_bench_extra)
+    return extra
+
+
+def build_bench_cmd(args, name, llama_bench, rpc_arg):
     cmd = [
         str(llama_bench),
         "-m",
@@ -270,13 +297,20 @@ def build_bench_cmd(args, llama_bench, rpc_arg):
         str(args.gen),
         "-r",
         str(args.repetitions),
-        "-o",
-        "jsonl",
     ]
+    if args.split_mode is not None:
+        cmd.extend(["-sm", args.split_mode])
+    if args.flash_attn is not None:
+        cmd.extend(["-fa", args.flash_attn])
+    tensor_split = case_tensor_split(args, name)
+    if tensor_split is not None:
+        cmd.extend(["-ts", tensor_split])
     if args.threads is not None:
         cmd.extend(["-t", str(args.threads)])
     if args.device is not None:
         cmd.extend(["--device", args.device])
+    cmd.extend(case_bench_extra_args(args, name))
+    cmd.extend(["-o", "jsonl"])
     return cmd
 
 
@@ -284,12 +318,18 @@ def make_case(args, name, llama_bench, endpoints):
     rpc_arg = rpc_arg_from_endpoints(endpoints)
     jsonl_path = args.out_dir / f"{name}-llama-bench.jsonl"
     stderr_path = args.out_dir / f"{name}-llama-bench.stderr.txt"
-    command = build_bench_cmd(args, llama_bench, rpc_arg)
+    tensor_split = case_tensor_split(args, name)
+    bench_extra = case_bench_extra_args(args, name)
+    command = build_bench_cmd(args, name, llama_bench, rpc_arg)
     return {
         "status": "planned",
         "llama_bench": str(llama_bench),
         "rpc": rpc_arg,
         "endpoints": endpoints,
+        "split_mode": args.split_mode,
+        "flash_attn": args.flash_attn,
+        "tensor_split": tensor_split,
+        "bench_extra": bench_extra,
         "command": command,
         "command_display": shlex.join(command),
         "jsonl_path": str(jsonl_path),
@@ -432,6 +472,11 @@ def parse_args():
     parser.add_argument("--repetitions", default=7, type=int, help="llama-bench repetitions for -r")
     parser.add_argument("--ngl", default=99, type=int, help="GPU layers for llama-bench -ngl")
     parser.add_argument("--device", default=None, help="llama-bench device selector, for example RPC0")
+    parser.add_argument("--split-mode", choices=("none", "layer", "row", "tensor"), default=None, help="optional llama-bench split mode for -sm")
+    parser.add_argument("--flash-attn", choices=("on", "off", "auto"), default=None, help="optional llama-bench flash attention setting for -fa")
+    parser.add_argument("--tensor-split", default=None, help="common llama-bench tensor split for -ts")
+    parser.add_argument("--base-tensor-split", default=None, help="baseline-only llama-bench tensor split for -ts; overrides --tensor-split")
+    parser.add_argument("--patch-tensor-split", default=None, help="patch-only llama-bench tensor split for -ts; overrides --tensor-split")
     parser.add_argument("--threads", default=None, type=int, help="optional llama-bench CPU thread count for -t")
     parser.add_argument("--out-dir", default=Path("rpc-remote-bench-results"), type=Path, help="directory for jsonl and summary outputs")
     parser.add_argument("--summary", default=None, type=Path, help="summary JSON path; defaults to OUT_DIR/summary.json")
@@ -442,8 +487,21 @@ def parse_args():
     parser.add_argument("--base-env", action="append", default=[], metavar="KEY=VALUE", help="baseline-only environment override for llama-bench; repeatable")
     parser.add_argument("--patch-env", action="append", default=[], metavar="KEY=VALUE", help="patch-only environment override for llama-bench; repeatable")
     parser.add_argument("--record-env", action="append", default=[], metavar="KEY", help="extra environment variable to include in the summary")
+    parser.add_argument("--bench-extra", action="append", default=[], metavar="ARGS", help="extra shell-style llama-bench args for both cases; repeatable")
+    parser.add_argument("--base-bench-extra", action="append", default=[], metavar="ARGS", help="baseline-only extra shell-style llama-bench args; repeatable")
+    parser.add_argument("--patch-bench-extra", action="append", default=[], metavar="ARGS", help="patch-only extra shell-style llama-bench args; repeatable")
     parser.add_argument("--dry-run", action="store_true", help="write the planned commands without connecting or running llama-bench")
     args = parser.parse_args()
+
+    for attr, option in (
+        ("bench_extra", "--bench-extra"),
+        ("base_bench_extra", "--base-bench-extra"),
+        ("patch_bench_extra", "--patch-bench-extra"),
+    ):
+        try:
+            setattr(args, attr, parse_bench_extra_args(getattr(args, attr), option))
+        except argparse.ArgumentTypeError as exc:
+            parser.error(str(exc))
 
     if args.prompt < 1:
         parser.error("--prompt must be >= 1")
@@ -516,6 +574,14 @@ def main():
         "repetitions": args.repetitions,
         "ngl": args.ngl,
         "device": args.device,
+        "split_mode": args.split_mode,
+        "flash_attn": args.flash_attn,
+        "tensor_split": args.tensor_split,
+        "base_tensor_split": args.base_tensor_split,
+        "patch_tensor_split": args.patch_tensor_split,
+        "bench_extra": args.bench_extra,
+        "base_bench_extra": args.base_bench_extra,
+        "patch_bench_extra": args.patch_bench_extra,
         "threads": args.threads,
         "only": args.only,
         "timeout_sec": args.timeout,

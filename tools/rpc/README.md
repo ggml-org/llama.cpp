@@ -188,6 +188,14 @@ python3 tools/rpc/bench_rpc_remote.py \
 Use `--env KEY=VALUE` for settings that should apply to both cases and
 `--base-env` or `--patch-env` for one-sided experiments. The summary records the
 effective environment for each case, with sensitive-looking values redacted.
+Use `--split-mode`, `--flash-attn`, `--tensor-split`,
+`--base-tensor-split`, and `--patch-tensor-split` to compare placement
+variants without hand-editing the generated `llama-bench` commands. For
+options not modeled directly by the helper, use `--bench-extra`,
+`--base-bench-extra`, or `--patch-bench-extra` with a shell-style argument
+string. If the extra argument string starts with `-`, pass it with the equals
+form, for example `--bench-extra=--no-mmap`, so `argparse` does not treat it as
+an option for the helper.
 
 The remote helper only connects to endpoints passed with `--base-rpc` and
 `--patch-rpc`; it does not SSH to hosts or start/stop servers. Use `--dry-run`
@@ -199,6 +207,45 @@ should use the same local client binary, or `--base-llama-bench` and
 `--patch-llama-bench` when you want an end-to-end base-client/base-server versus
 patch-client/patch-server comparison. For warmed-cache or one-sided experiments,
 use `--only base` or `--only patch` with the matching endpoint and binary.
+
+Layer split placement can have a large effect on RPC decode throughput. With
+`--split-mode layer`, the output tensor is placed like one additional layer
+after the repeating transformer layers. If the final split point lands on a
+slow endpoint, every decoded token may read the final logits from that endpoint
+and may also add an extra cross-endpoint layer-boundary copy. Use
+`LLAMA_LOG_MODEL_PLACEMENT=1` to confirm the output device and
+`GGML_RPC_TRACE=1` to check whether `result_output` or layer-boundary tensors
+dominate wait time.
+
+For example, this compares a proportional split with a variant that gives the
+last endpoint zero split weight so the output slot lands on the previous
+endpoint:
+
+```bash
+RPC=192.0.2.10:50052,192.0.2.11:50052,192.0.2.12:50052
+BASE_TS=24576/24576/24576
+PATCH_TS=24576/24576/0
+
+python3 tools/rpc/bench_rpc_remote.py \
+  --llama-bench /path/to/build/bin/llama-bench \
+  --model /path/to/model.gguf \
+  --base-rpc "$RPC" \
+  --patch-rpc "$RPC" \
+  --prompt 128 \
+  --gen 128 \
+  --repetitions 5 \
+  --ngl 99 \
+  --split-mode layer \
+  --base-tensor-split "$BASE_TS" \
+  --patch-tensor-split "$PATCH_TS" \
+  --env LLAMA_LOG_MODEL_PLACEMENT=1
+```
+
+Treat this as a measured tuning step, not a universal rule. Removing a slow
+tail endpoint can improve decode latency, but it also changes model placement
+and may reduce prompt throughput or fail to fit on another model or cluster.
+Always compare prompt and decode tokens/sec on the real network after the RPC
+server caches are warm enough for your workload.
 
 When benchmarking CUDA RPC servers across different GPU generations, build for
 the remote GPUs as well as the local client GPU. For example, an RTX 3070 server
