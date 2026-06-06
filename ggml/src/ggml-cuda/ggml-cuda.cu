@@ -1295,8 +1295,6 @@ static void ggml_cuda_mul_mat_cublas_impl(ggml_backend_cuda_context & ctx, const
     using traits = batched_mul_mat_traits<compute_type>;
     using cuda_t = typename traits::cuda_type;
 
-    GGML_ASSERT(!ggml_is_transposed(src0));
-    GGML_ASSERT(!ggml_is_transposed(src1));
     GGML_ASSERT(ggml_is_contiguous(dst));
 
     // Byte offsets and tensor dimensions are currently used in an inconsistent way for dst.
@@ -1334,8 +1332,7 @@ static void ggml_cuda_mul_mat_cublas_impl(ggml_backend_cuda_context & ctx, const
     if (src0->type == compute_type) {
         src0_ptr = (const cuda_t *) src0->data;
     } else {
-        const int64_t ne_src0 = ggml_nelements(src0);
-        src0_alloc.alloc(ne_src0);
+        src0_alloc.alloc(ggml_nelements(src0));
 
         if (ggml_is_contiguous(src0)) {
             const auto convert_func = traits::convert(src0->type);
@@ -1357,8 +1354,7 @@ static void ggml_cuda_mul_mat_cublas_impl(ggml_backend_cuda_context & ctx, const
     if (src1->type == compute_type) {
         src1_ptr = (const cuda_t *) src1->data;
     } else {
-        const int64_t ne_src1 = ggml_nelements(src1);
-        src1_alloc.alloc(ne_src1);
+        src1_alloc.alloc(ggml_nelements(src1));
 
         if (ggml_is_contiguous(src1)) {
             const auto convert_func = traits::convert(src1->type);
@@ -1441,8 +1437,8 @@ static void ggml_cuda_mul_mat_cublas_impl(ggml_backend_cuda_context & ctx, const
                     CUBLAS_GEMM_DEFAULT_TENSOR_OP));
     } else if (r2 == 1 && r3 == 1 && is_src0_cont_2 && is_src1_cont_2) {
         // with a [0, 2, 1, 3] perm. and ne02==1 the matrix strides need to be determined from dim 3:
-        const int64_t sma = ne02 == 1 ? nb03/nb00 : nb02/nb00;
-        const int64_t smb = ne12 == 1 ? s13       : s12;
+        const int64_t sma = ne02 == 1 ? s03 : s02;
+        const int64_t smb = ne12 == 1 ? s13 : s12;
 
         // there is no broadcast and src0, src1 are contiguous across dims 2, 3
         // use cublasGemmStridedBatchedEx
@@ -4194,6 +4190,9 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
             {
                 struct ggml_tensor * a = op->src[0];
                 struct ggml_tensor * b = op->src[1];
+                if (a->nb[0] != ggml_element_size(a) || b->nb[0] != ggml_element_size(b)) {
+                    return false; // TODO this could in principle be implemented though currently there is no use case.
+                }
                 if (b->type == GGML_TYPE_F16 && a->type != GGML_TYPE_F16) {
                     return false;
                 }
