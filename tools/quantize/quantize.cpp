@@ -1,22 +1,11 @@
-#include "llama.h"
-
 #include "build-info.h"
 #include "common.h"
 #include "imatrix-loader.h"
 
-#include "gguf.h"
-
-#include <algorithm>
-#include <cctype>
-#include <clocale>
-#include <cmath>
-#include <cstdio>
 #include <cstring>
-#include <vector>
-#include <string>
-#include <unordered_map>
-#include <fstream>
 #include <filesystem>
+#include <fstream>
+#include <unordered_map>
 
 // changes to this struct must also be reflected in src/llama-quant.cpp
 struct tensor_type_option {
@@ -76,7 +65,6 @@ static const char * const LLM_KV_QUANTIZE_IMATRIX_FILE       = "quantize.imatrix
 static const char * const LLM_KV_QUANTIZE_IMATRIX_DATASET    = "quantize.imatrix.dataset";
 static const char * const LLM_KV_QUANTIZE_IMATRIX_N_ENTRIES  = "quantize.imatrix.entries_count";
 static const char * const LLM_KV_QUANTIZE_IMATRIX_N_CHUNKS   = "quantize.imatrix.chunks_count";
-
 
 static bool striequals(const char * a, const char * b) {
     while (*a && *b) {
