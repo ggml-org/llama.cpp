@@ -142,6 +142,10 @@ For the full list of features, please refer to [server's changelog](https://gith
 | `--dry-sequence-breaker STRING` | add sequence breaker for DRY sampling, clearing out default breakers ('\n', ':', '"', '*') in the process; use "none" to not use any sequence breakers |
 | `--adaptive-target N` | adaptive-p: select tokens near this probability (valid range 0.0 to 1.0; negative = disabled) (default: -1.00)<br/>[(more info)](https://github.com/ggml-org/llama.cpp/pull/17927) |
 | `--adaptive-decay N` | adaptive-p: decay rate for target adaptation over time. lower values are more reactive, higher values are more stable.<br/>(valid range 0.0 to 0.99) (default: 0.90) |
+| `--viscosity-alpha N` | viscosity sampler: viscosity-weighted fallback prior blend strength (valid range 0.0 to 1.0) (default: 0.35) |
+| `--viscosity-beta N` | viscosity sampler: accepted-token prior update rate (valid range 0.0 to 1.0) (default: 0.05) |
+| `--viscosity-lambda N` | viscosity sampler: viscosity smoothness weight for damping abrupt prior-blend changes (default: 0.00) |
+| `--viscosity-prior-floor N` | viscosity sampler: minimum prior mass assigned to each candidate token (default: 0.00000100) |
 | `--dynatemp-range N` | dynamic temperature range (default: 0.00, 0.0 = disabled) |
 | `--dynatemp-exp N` | dynamic temperature exponent (default: 1.00) |
 | `--mirostat N` | use Mirostat sampling.<br/>Top K, Nucleus and Locally Typical samplers are ignored if used.<br/>(default: 0, 0 = disabled, 1 = Mirostat, 2 = Mirostat 2.0) |
@@ -495,6 +499,14 @@ These words will not be included in the completion, so make sure to add them to 
 
 `mirostat_eta`: Set the Mirostat learning rate, parameter eta.  Default: `0.1`
 
+`viscosity_alpha`: Set the viscosity sampler viscosity-weighted fallback prior blend strength. Default: `0.35`
+
+`viscosity_beta`: Set the viscosity sampler accepted-token prior update rate. Default: `0.05`
+
+`viscosity_lambda`: Set the viscosity sampler viscosity smoothness weight for damping abrupt prior-blend changes. Default: `0.0`
+
+`viscosity_prior_floor`: Set the viscosity sampler minimum prior mass assigned to each candidate token. Default: `0.000001`
+
 `grammar`: Set grammar for grammar-based sampling.  Default: no grammar
 
 `json_schema`: Set a JSON schema for grammar-based sampling (e.g. `{"items": {"type": "string"}, "minItems": 10, "maxItems": 100}` of a list of strings, or `{}` for any JSON). See [tests](../../tests/test-json-schema-to-grammar.cpp) for supported features.  Default: no JSON schema.
@@ -797,6 +809,10 @@ By default, it is read-only. To make POST request to change global properties, y
       "mirostat": 0,
       "mirostat_tau": 5.0,
       "mirostat_eta": 0.10000000149011612,
+      "viscosity_alpha": 0.3499999940395355,
+      "viscosity_beta": 0.05000000074505806,
+      "viscosity_lambda": 0.0,
+      "viscosity_prior_floor": 9.999999974752427e-7,
       "stop": [],
       "max_tokens": -1,
       "n_keep": 0,
@@ -941,6 +957,10 @@ If query param `?fail_on_no_slot=1` is set, this endpoint will respond with stat
       "mirostat": 0,
       "mirostat_tau": 5.0,
       "mirostat_eta": 0.10000000149011612,
+      "viscosity_alpha": 0.3499999940395355,
+      "viscosity_beta": 0.05000000074505806,
+      "viscosity_lambda": 0.0,
+      "viscosity_prior_floor": 9.999999974752427e-7,
       "max_tokens": -1,
       "n_keep": 0,
       "n_discard": 0,
@@ -1006,6 +1026,10 @@ If query param `?fail_on_no_slot=1` is set, this endpoint will respond with stat
       "mirostat": 0,
       "mirostat_tau": 5.0,
       "mirostat_eta": 0.10000000149011612,
+      "viscosity_alpha": 0.3499999940395355,
+      "viscosity_beta": 0.05000000074505806,
+      "viscosity_lambda": 0.0,
+      "viscosity_prior_floor": 9.999999974752427e-7,
       "max_tokens": -1,
       "n_keep": 0,
       "n_discard": 0,

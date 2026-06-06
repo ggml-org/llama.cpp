@@ -1442,6 +1442,16 @@ extern "C" {
                                float   decay,
                             uint32_t   seed);
 
+    /// @details Experimental deterministic entropy-collapse sampler. Uses the dominant-token-vs-rest
+    /// distribution entropy to derive an viscosity viscosity term, blends the model probabilities with
+    /// a lightweight accepted-token prior, and selects the maximum blended probability.
+    /// This sampler selects a token ID, so it should be last in the sampler chain.
+    LLAMA_API struct llama_sampler * llama_sampler_init_viscosity(
+                               float   alpha,
+                               float   beta,
+                               float   lambda,
+                               float   prior_floor);
+
     LLAMA_API struct llama_sampler * llama_sampler_init_logit_bias(
                              int32_t   n_vocab,
                              int32_t   n_logit_bias,

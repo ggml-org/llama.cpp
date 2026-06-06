@@ -96,6 +96,10 @@ export interface SettingsChatServiceOptions {
 	dry_base?: number;
 	dry_allowed_length?: number;
 	dry_penalty_last_n?: number;
+	viscosity_alpha?: number;
+	viscosity_beta?: number;
+	viscosity_lambda?: number;
+	viscosity_prior_floor?: number;
 	// Sampler configuration
 	samplers?: string | string[];
 	backend_sampling?: boolean;

@@ -1819,6 +1819,42 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_sampling());
     add_opt(common_arg(
+        {"--viscosity-alpha"}, "N",
+        string_format("viscosity sampler: viscosity-weighted fallback prior blend strength "
+                      "(valid range 0.0 to 1.0) (default: %.2f)",
+                      (double)params.sampling.viscosity_alpha),
+        [](common_params & params, const std::string & value) {
+            params.sampling.viscosity_alpha = std::stof(value);
+        }
+    ).set_sampling());
+    add_opt(common_arg(
+        {"--viscosity-beta"}, "N",
+        string_format("viscosity sampler: accepted-token prior update rate "
+                      "(valid range 0.0 to 1.0) (default: %.2f)",
+                      (double)params.sampling.viscosity_beta),
+        [](common_params & params, const std::string & value) {
+            params.sampling.viscosity_beta = std::stof(value);
+        }
+    ).set_sampling());
+    add_opt(common_arg(
+        {"--viscosity-lambda"}, "N",
+        string_format("viscosity sampler: viscosity smoothness weight for damping abrupt prior-blend changes "
+                      "(default: %.2f)",
+                      (double)params.sampling.viscosity_lambda),
+        [](common_params & params, const std::string & value) {
+            params.sampling.viscosity_lambda = std::stof(value);
+        }
+    ).set_sampling());
+    add_opt(common_arg(
+        {"--viscosity-prior-floor"}, "N",
+        string_format("viscosity sampler: minimum prior mass assigned to each candidate token "
+                      "(default: %.8f)",
+                      (double)params.sampling.viscosity_prior_floor),
+        [](common_params & params, const std::string & value) {
+            params.sampling.viscosity_prior_floor = std::stof(value);
+        }
+    ).set_sampling());
+    add_opt(common_arg(
         {"--dynatemp-range"}, "N",
         string_format("dynamic temperature range (default: %.2f, 0.0 = disabled)", (double)params.sampling.dynatemp_range),
         [](common_params & params, const std::string & value) {

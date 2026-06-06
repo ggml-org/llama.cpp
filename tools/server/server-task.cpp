@@ -63,6 +63,10 @@ json task_params::to_json(bool only_metrics) const {
             {"mirostat",                  sampling.mirostat},
             {"mirostat_tau",              sampling.mirostat_tau},
             {"mirostat_eta",              sampling.mirostat_eta},
+            {"viscosity_alpha",              sampling.viscosity_alpha},
+            {"viscosity_beta",               sampling.viscosity_beta},
+            {"viscosity_lambda",             sampling.viscosity_lambda},
+            {"viscosity_prior_floor",        sampling.viscosity_prior_floor},
             {"max_tokens",                n_predict},
             {"n_predict",                 n_predict}, // TODO: deduplicate?
             {"n_keep",                    n_keep},
@@ -114,6 +118,10 @@ json task_params::to_json(bool only_metrics) const {
         {"mirostat",                  sampling.mirostat},
         {"mirostat_tau",              sampling.mirostat_tau},
         {"mirostat_eta",              sampling.mirostat_eta},
+        {"viscosity_alpha",              sampling.viscosity_alpha},
+        {"viscosity_beta",               sampling.viscosity_beta},
+        {"viscosity_lambda",             sampling.viscosity_lambda},
+        {"viscosity_prior_floor",        sampling.viscosity_prior_floor},
         {"stop",                      antiprompt},
         {"max_tokens",                n_predict},
         {"n_predict",                 n_predict}, // TODO: deduplicate?
@@ -299,6 +307,10 @@ task_params server_task::params_from_json_cmpl(
     params.sampling.mirostat_eta       = json_value(data, "mirostat_eta",        defaults.sampling.mirostat_eta);
     params.sampling.adaptive_target    = json_value(data, "adaptive_target",     defaults.sampling.adaptive_target);
     params.sampling.adaptive_decay     = json_value(data, "adaptive_decay",      defaults.sampling.adaptive_decay);
+    params.sampling.viscosity_alpha       = json_value(data, "viscosity_alpha",        defaults.sampling.viscosity_alpha);
+    params.sampling.viscosity_beta        = json_value(data, "viscosity_beta",         defaults.sampling.viscosity_beta);
+    params.sampling.viscosity_lambda      = json_value(data, "viscosity_lambda",       defaults.sampling.viscosity_lambda);
+    params.sampling.viscosity_prior_floor = json_value(data, "viscosity_prior_floor",  defaults.sampling.viscosity_prior_floor);
     params.sampling.seed               = json_value(data, "seed",                defaults.sampling.seed);
     params.sampling.n_probs            = json_value(data, "n_probs",             defaults.sampling.n_probs);
     params.sampling.min_keep           = json_value(data, "min_keep",            defaults.sampling.min_keep);

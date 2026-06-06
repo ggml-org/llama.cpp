@@ -192,6 +192,57 @@ static void test_top_n_sigma(const std::vector<float> & probs, const std::vector
     tester.check();
 }
 
+static llama_token_data_array make_token_data_array(const std::vector<float> & probs, std::vector<llama_token_data> & cur) {
+    cur.clear();
+    cur.reserve(probs.size());
+
+    for (llama_token token_id = 0; token_id < (llama_token) probs.size(); token_id++) {
+        cur.emplace_back(llama_token_data{ token_id, logf(probs[token_id]), 0.0f });
+    }
+
+    return llama_token_data_array { cur.data(), cur.size(), -1, false };
+}
+
+static void test_viscosity() {
+    std::vector<llama_token_data> cur;
+
+    {
+        auto * sampler = llama_sampler_init_viscosity(0.35f, 0.05f, 0.0f, 1e-6f);
+        auto cur_p = make_token_data_array({ 0.10f, 0.20f, 0.70f }, cur);
+
+        llama_sampler_apply(sampler, &cur_p);
+        GGML_ASSERT(cur_p.selected >= 0);
+        GGML_ASSERT(cur_p.data[cur_p.selected].id == 2);
+
+        llama_sampler_free(sampler);
+    }
+
+    {
+        auto * sampler = llama_sampler_init_viscosity(1.0f, 1.0f, 0.0f, 0.0f);
+
+        auto cur_p = make_token_data_array({ 0.34f, 0.33f, 0.33f }, cur);
+        llama_sampler_apply(sampler, &cur_p);
+        GGML_ASSERT(cur_p.selected >= 0);
+        GGML_ASSERT(cur_p.data[cur_p.selected].id == 0);
+
+        llama_sampler_accept(sampler, 2);
+
+        cur_p = make_token_data_array({ 0.34f, 0.33f, 0.33f }, cur);
+        llama_sampler_apply(sampler, &cur_p);
+        GGML_ASSERT(cur_p.selected >= 0);
+        GGML_ASSERT(cur_p.data[cur_p.selected].id == 2);
+
+        llama_sampler_reset(sampler);
+
+        cur_p = make_token_data_array({ 0.34f, 0.33f, 0.33f }, cur);
+        llama_sampler_apply(sampler, &cur_p);
+        GGML_ASSERT(cur_p.selected >= 0);
+        GGML_ASSERT(cur_p.data[cur_p.selected].id == 0);
+
+        llama_sampler_free(sampler);
+    }
+}
+
 static void test_sampler_queue(const size_t n_vocab, const std::string & samplers_sequence, const int top_k, const float top_p, const float min_p
 ) {
     sampler_tester tester(n_vocab);
@@ -363,6 +414,7 @@ int main(void) {
     test_top_n_sigma({0.1f, 0.2f, 0.3f, 0.4f}, {0.571429f, 0.428571f, 0.0f, 0.0f}, 1.00f);
     test_top_n_sigma({0.1f, 0.2f, 0.3f, 0.4f}, {0.1f, 0.2f, 0.3f, 0.4f}, 0.00f); // top_n_sigma == 0 now represents a no-op rather than greedy decoding as of PR#13345
     test_top_n_sigma({0.1f, 0.2f, 0.3f, 0.4f}, {0.4f, 0.3f, 0.2f, 0.1f}, 3.00f);
+    test_viscosity();
 
     test_sampler_queue(10000, "k", 10000, 1.0f, 1.0f);
     test_sampler_queue(10000, "k",     1, 1.0f, 1.0f);

@@ -155,6 +155,10 @@ export interface ApiLlamaCppServerProps {
 			mirostat: number;
 			mirostat_tau: number;
 			mirostat_eta: number;
+			viscosity_alpha: number;
+			viscosity_beta: number;
+			viscosity_lambda: number;
+			viscosity_prior_floor: number;
 			stop: string[];
 			max_tokens: number;
 			n_keep: number;
@@ -243,6 +247,10 @@ export interface ApiChatCompletionRequest {
 	dry_base?: number;
 	dry_allowed_length?: number;
 	dry_penalty_last_n?: number;
+	viscosity_alpha?: number;
+	viscosity_beta?: number;
+	viscosity_lambda?: number;
+	viscosity_prior_floor?: number;
 	// Sampler configuration
 	samplers?: string[];
 	backend_sampling?: boolean;
@@ -340,6 +348,10 @@ export interface ApiSlotData {
 		mirostat: number;
 		mirostat_tau: number;
 		mirostat_eta: number;
+		viscosity_alpha: number;
+		viscosity_beta: number;
+		viscosity_lambda: number;
+		viscosity_prior_floor: number;
 		max_tokens: number;
 		n_keep: number;
 		n_discard: number;

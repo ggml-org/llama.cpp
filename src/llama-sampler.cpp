@@ -3423,6 +3423,179 @@ struct llama_sampler * llama_sampler_init_adaptive_p(
     );
 }
 
+// viscosity
+
+struct llama_sampler_viscosity {
+    const float alpha;
+    const float beta;
+    const float lambda;
+    const float prior_floor;
+
+    float omega_prev;
+    float pending_omega;
+    llama_token pending_token_id;
+
+    std::vector<float> prior;
+};
+
+static float llama_sampler_viscosity_clip(float x, float lo, float hi) {
+    return std::max(lo, std::min(hi, x));
+}
+
+static float llama_sampler_viscosity_binary_entropy(float p) {
+    constexpr float eps = 1e-6f;
+
+    p = llama_sampler_viscosity_clip(p, eps, 1.0f - eps);
+
+    return -(p*logf(p) + (1.0f - p)*logf(1.0f - p))/logf(2.0f);
+}
+
+static const char * llama_sampler_viscosity_name(const struct llama_sampler * /*smpl*/) {
+    return "viscosity";
+}
+
+static void llama_sampler_viscosity_apply(struct llama_sampler * smpl, llama_token_data_array * cur_p) {
+    auto * ctx = (llama_sampler_viscosity *) smpl->ctx;
+
+    if (cur_p->size == 0) {
+        cur_p->selected = -1;
+        ctx->pending_token_id = LLAMA_TOKEN_NULL;
+        return;
+    }
+
+    llama_sampler_softmax_impl(cur_p, false);
+
+    size_t i_best_model = 0;
+    float p_star = cur_p->data[0].p;
+    for (size_t i = 1; i < cur_p->size; ++i) {
+        if (cur_p->data[i].p > p_star) {
+            p_star = cur_p->data[i].p;
+            i_best_model = i;
+        }
+    }
+
+    const float h = llama_sampler_viscosity_binary_entropy(p_star);
+    const float s = 1.0f - fabsf(2.0f*p_star - 1.0f);
+    const float omega = llama_sampler_viscosity_clip(0.85f - 0.35f*(h + s), 0.50f, 0.85f);
+
+    double prior_sum = 0.0;
+    for (size_t i = 0; i < cur_p->size; ++i) {
+        const llama_token id = cur_p->data[i].id;
+        const float prior = id >= 0 && (size_t) id < ctx->prior.size() ? ctx->prior[id] : 0.0f;
+        prior_sum += std::max(0.0f, prior) + ctx->prior_floor;
+    }
+
+    const float smooth = 1.0f + ctx->lambda*fabsf(omega - ctx->omega_prev);
+    const float blend = llama_sampler_viscosity_clip(ctx->alpha*omega/smooth, 0.0f, 1.0f);
+
+    size_t i_best = i_best_model;
+    float best_q = -INFINITY;
+    for (size_t i = 0; i < cur_p->size; ++i) {
+        const llama_token id = cur_p->data[i].id;
+        const float prior = id >= 0 && (size_t) id < ctx->prior.size() ? ctx->prior[id] : 0.0f;
+        const float pi = prior_sum > 0.0 ? (std::max(0.0f, prior) + ctx->prior_floor)/prior_sum : 1.0f/cur_p->size;
+        const float q = (1.0f - blend)*cur_p->data[i].p + blend*pi;
+
+        cur_p->data[i].p = q;
+        cur_p->data[i].logit = q > 0.0f ? logf(q) : -INFINITY;
+
+        if (q > best_q) {
+            best_q = q;
+            i_best = i;
+        }
+    }
+
+    cur_p->selected = i_best;
+    ctx->pending_token_id = cur_p->data[i_best].id;
+    ctx->pending_omega = omega;
+}
+
+static void llama_sampler_viscosity_accept(struct llama_sampler * smpl, llama_token token) {
+    auto * ctx = (llama_sampler_viscosity *) smpl->ctx;
+
+    if (token < 0) {
+        ctx->pending_token_id = LLAMA_TOKEN_NULL;
+        return;
+    }
+
+    if ((size_t) token >= ctx->prior.size()) {
+        ctx->prior.resize((size_t) token + 1, 0.0f);
+    }
+
+    const float beta = llama_sampler_viscosity_clip(ctx->beta, 0.0f, 1.0f);
+    for (float & p : ctx->prior) {
+        p *= 1.0f - beta;
+    }
+
+    ctx->prior[token] += beta;
+
+    if (ctx->pending_token_id == token) {
+        ctx->omega_prev = ctx->pending_omega;
+    }
+
+    ctx->pending_token_id = LLAMA_TOKEN_NULL;
+}
+
+static void llama_sampler_viscosity_reset(struct llama_sampler * smpl) {
+    auto * ctx = (llama_sampler_viscosity *) smpl->ctx;
+
+    ctx->omega_prev = 0.50f;
+    ctx->pending_omega = 0.50f;
+    ctx->pending_token_id = LLAMA_TOKEN_NULL;
+    ctx->prior.clear();
+}
+
+static struct llama_sampler * llama_sampler_viscosity_clone(const struct llama_sampler * smpl) {
+    const auto * ctx = (const llama_sampler_viscosity *) smpl->ctx;
+    auto * result = llama_sampler_init_viscosity(ctx->alpha, ctx->beta, ctx->lambda, ctx->prior_floor);
+    auto * result_ctx = (llama_sampler_viscosity *) result->ctx;
+
+    result_ctx->omega_prev       = ctx->omega_prev;
+    result_ctx->pending_omega    = ctx->pending_omega;
+    result_ctx->pending_token_id = ctx->pending_token_id;
+    result_ctx->prior            = ctx->prior;
+
+    return result;
+}
+
+static void llama_sampler_viscosity_free(struct llama_sampler * smpl) {
+    delete (llama_sampler_viscosity *) smpl->ctx;
+}
+
+static struct llama_sampler_i llama_sampler_viscosity_i = {
+    /* .name              = */ llama_sampler_viscosity_name,
+    /* .accept            = */ llama_sampler_viscosity_accept,
+    /* .apply             = */ llama_sampler_viscosity_apply,
+    /* .reset             = */ llama_sampler_viscosity_reset,
+    /* .clone             = */ llama_sampler_viscosity_clone,
+    /* .free              = */ llama_sampler_viscosity_free,
+    /* .backend_init      = */ nullptr,
+    /* .backend_accept    = */ nullptr,
+    /* .backend_apply     = */ nullptr,
+    /* .backend_set_input = */ nullptr,
+};
+
+struct llama_sampler * llama_sampler_init_viscosity(
+    float alpha,
+    float beta,
+    float lambda,
+    float prior_floor
+) {
+    return llama_sampler_init(
+        /* .iface = */ &llama_sampler_viscosity_i,
+        /* .ctx   = */ new llama_sampler_viscosity {
+            /* .alpha            = */ llama_sampler_viscosity_clip(alpha, 0.0f, 1.0f),
+            /* .beta             = */ llama_sampler_viscosity_clip(beta, 0.0f, 1.0f),
+            /* .lambda           = */ std::max(0.0f, lambda),
+            /* .prior_floor      = */ std::max(0.0f, prior_floor),
+            /* .omega_prev       = */ 0.50f,
+            /* .pending_omega    = */ 0.50f,
+            /* .pending_token_id = */ LLAMA_TOKEN_NULL,
+            /* .prior            = */ {},
+        }
+    );
+}
+
 // logit-bias
 
 struct llama_sampler_logit_bias : public llama_sampler_backend {

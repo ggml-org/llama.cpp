@@ -169,17 +169,19 @@ struct common_sampler {
 };
 
 std::string common_params_sampling::print() const {
-    char result[1024];
+    char result[1536];
 
     snprintf(result, sizeof(result),
             "\trepeat_last_n = %d, repeat_penalty = %.3f, frequency_penalty = %.3f, presence_penalty = %.3f\n"
             "\tdry_multiplier = %.3f, dry_base = %.3f, dry_allowed_length = %d, dry_penalty_last_n = %d\n"
             "\ttop_k = %d, top_p = %.3f, min_p = %.3f, xtc_probability = %.3f, xtc_threshold = %.3f, typical_p = %.3f, top_n_sigma = %.3f, temp = %.3f\n"
-            "\tmirostat = %d, mirostat_lr = %.3f, mirostat_ent = %.3f, adaptive_target = %.3f, adaptive_decay = %.3f",
+            "\tmirostat = %d, mirostat_lr = %.3f, mirostat_ent = %.3f, adaptive_target = %.3f, adaptive_decay = %.3f\n"
+            "\tviscosity_alpha = %.3f, viscosity_beta = %.3f, viscosity_lambda = %.3f, viscosity_prior_floor = %.8f",
             penalty_last_n, penalty_repeat, penalty_freq, penalty_present,
             dry_multiplier, dry_base, dry_allowed_length, dry_penalty_last_n,
             top_k, top_p, min_p, xtc_probability, xtc_threshold, typ_p, top_n_sigma, temp,
-            mirostat, mirostat_eta, mirostat_tau, adaptive_target, adaptive_decay);
+            mirostat, mirostat_eta, mirostat_tau, adaptive_target, adaptive_decay,
+            viscosity_alpha, viscosity_beta, viscosity_lambda, viscosity_prior_floor);
 
     return std::string(result);
 }
@@ -314,6 +316,7 @@ struct common_sampler * common_sampler_init(const struct llama_model * model, st
     if (params.mirostat == 0) {
 
         bool use_adaptive_p = false; // see below
+        bool use_viscosity    = false; // see below
 
         for (const auto & cnstr : params.samplers) {
             switch (cnstr) {
@@ -361,11 +364,23 @@ struct common_sampler * common_sampler_init(const struct llama_model * model, st
                     // so we know to add the sampler at the very end.
                     use_adaptive_p = true;
                     break;
+                case COMMON_SAMPLER_TYPE_viscosity:
+                    // the `viscosity` sampler selects a single token deterministically, so it must
+                    // terminate the chain in the same way as `adaptive-p`, `dist`, and `mirostat`.
+                    use_viscosity = true;
+                    break;
                 default:
                     GGML_ASSERT(false && "unknown sampler type");
             }
         }
-        if (use_adaptive_p) {
+        if (use_viscosity && use_adaptive_p) {
+            LOG_WRN("%s: both adaptive-p and viscosity were requested; using viscosity as the sampler-chain terminator\n", __func__);
+        }
+
+        if (use_viscosity) {
+            // only if user explicitly included viscosity sampler
+            samplers.push_back(llama_sampler_init_viscosity(params.viscosity_alpha, params.viscosity_beta, params.viscosity_lambda, params.viscosity_prior_floor));
+        } else if (use_adaptive_p) {
             // only if user explicitly included adaptive-p sampler
             samplers.push_back(llama_sampler_init_adaptive_p(params.adaptive_target, params.adaptive_decay, params.seed));
         } else {
@@ -748,6 +763,7 @@ char common_sampler_type_to_chr(enum common_sampler_type cnstr) {
         case COMMON_SAMPLER_TYPE_INFILL:      return 'i';
         case COMMON_SAMPLER_TYPE_PENALTIES:   return 'e';
         case COMMON_SAMPLER_TYPE_ADAPTIVE_P:  return 'a';
+        case COMMON_SAMPLER_TYPE_viscosity:      return 'o';
         default : return '?';
     }
 }
@@ -765,6 +781,7 @@ std::string common_sampler_type_to_str(enum common_sampler_type cnstr) {
         case COMMON_SAMPLER_TYPE_INFILL:      return "infill";
         case COMMON_SAMPLER_TYPE_PENALTIES:   return "penalties";
         case COMMON_SAMPLER_TYPE_ADAPTIVE_P:  return "adaptive_p";
+        case COMMON_SAMPLER_TYPE_viscosity:      return "viscosity";
         default : return "";
     }
 }
@@ -782,6 +799,7 @@ std::vector<common_sampler_type> common_sampler_types_from_names(const std::vect
         { "infill",      COMMON_SAMPLER_TYPE_INFILL },
         { "penalties",   COMMON_SAMPLER_TYPE_PENALTIES },
         { "adaptive_p",  COMMON_SAMPLER_TYPE_ADAPTIVE_P },
+        { "viscosity",      COMMON_SAMPLER_TYPE_viscosity },
     };
 
     // since samplers names are written multiple ways
@@ -798,6 +816,7 @@ std::vector<common_sampler_type> common_sampler_types_from_names(const std::vect
         { "min-p",       COMMON_SAMPLER_TYPE_MIN_P },
         { "temp",        COMMON_SAMPLER_TYPE_TEMPERATURE },
         { "adaptive-p",  COMMON_SAMPLER_TYPE_ADAPTIVE_P },
+        { "entropy-collapse", COMMON_SAMPLER_TYPE_viscosity },
     };
 
     std::vector<common_sampler_type> samplers;
@@ -835,6 +854,7 @@ std::vector<common_sampler_type> common_sampler_types_from_chars(const std::stri
         { common_sampler_type_to_chr(COMMON_SAMPLER_TYPE_INFILL),      COMMON_SAMPLER_TYPE_INFILL },
         { common_sampler_type_to_chr(COMMON_SAMPLER_TYPE_PENALTIES),   COMMON_SAMPLER_TYPE_PENALTIES },
         { common_sampler_type_to_chr(COMMON_SAMPLER_TYPE_ADAPTIVE_P),  COMMON_SAMPLER_TYPE_ADAPTIVE_P },
+        { common_sampler_type_to_chr(COMMON_SAMPLER_TYPE_viscosity),      COMMON_SAMPLER_TYPE_viscosity },
     };
 
     std::vector<common_sampler_type> samplers;

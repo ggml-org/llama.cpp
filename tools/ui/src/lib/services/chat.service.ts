@@ -155,6 +155,10 @@ export class ChatService {
 			dry_base,
 			dry_allowed_length,
 			dry_penalty_last_n,
+			viscosity_alpha,
+			viscosity_beta,
+			viscosity_lambda,
+			viscosity_prior_floor,
 			// Other parameters
 			samplers,
 			backend_sampling,
@@ -289,6 +293,10 @@ export class ChatService {
 		if (dry_base !== undefined) requestBody.dry_base = dry_base;
 		if (dry_allowed_length !== undefined) requestBody.dry_allowed_length = dry_allowed_length;
 		if (dry_penalty_last_n !== undefined) requestBody.dry_penalty_last_n = dry_penalty_last_n;
+		if (viscosity_alpha !== undefined) requestBody.viscosity_alpha = viscosity_alpha;
+		if (viscosity_beta !== undefined) requestBody.viscosity_beta = viscosity_beta;
+		if (viscosity_lambda !== undefined) requestBody.viscosity_lambda = viscosity_lambda;
+		if (viscosity_prior_floor !== undefined) requestBody.viscosity_prior_floor = viscosity_prior_floor;
 
 		if (samplers !== undefined) {
 			requestBody.samplers =
