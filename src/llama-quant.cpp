@@ -8,6 +8,7 @@
 #include <csignal>
 #include <fstream>
 #include <mutex>
+#include <numeric>
 #include <optional>
 #include <queue>
 #include <random>
