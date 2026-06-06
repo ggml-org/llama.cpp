@@ -34,6 +34,7 @@ struct quant_option {
 static const std::vector<quant_option> QUANT_OPTIONS = {
     { "Q1_0",     LLAMA_FTYPE_MOSTLY_Q1_0,     " 1.125 bpw quantization",           },
     { "Q4_0",     LLAMA_FTYPE_MOSTLY_Q4_0,     " 4.34G, +0.4685 ppl @ Llama-3-8B",  },
+    { "Q4_0_QAT", LLAMA_FTYPE_MOSTLY_Q4_0,     " Google QAT-safe Q4_0; token/output tensors forced to Q8_0", },
     { "Q4_0_ROCMFP4",          LLAMA_FTYPE_MOSTLY_Q4_0_ROCMFP4,          " 4.50 bpw ROCmFP4 dual-scale layout", },
     { "Q4_0_ROCMFP4_FAST",     LLAMA_FTYPE_MOSTLY_Q4_0_ROCMFP4_FAST,     " 4.25 bpw ROCmFP4 single-scale layout", },
     { "Q4_1",     LLAMA_FTYPE_MOSTLY_Q4_1,     " 4.78G, +0.4511 ppl @ Llama-3-8B",  },
@@ -95,6 +96,76 @@ static bool striequals(const char * a, const char * b) {
     return *a == *b;
 }
 
+static bool str_contains_casefold(std::string haystack, std::string needle) {
+    std::transform(haystack.begin(), haystack.end(), haystack.begin(),
+            [](unsigned char c) { return std::tolower(c); });
+    std::transform(needle.begin(), needle.end(), needle.begin(),
+            [](unsigned char c) { return std::tolower(c); });
+    return haystack.find(needle) != std::string::npos;
+}
+
+static bool looks_like_google_qat_path(const std::string & path) {
+    const size_t pos = path.find_last_of("/\\");
+    const std::string name = pos == std::string::npos ? path : path.substr(pos + 1);
+    return str_contains_casefold(name, "qat") &&
+        (str_contains_casefold(name, "gemma") || str_contains_casefold(name, "google"));
+}
+
+static bool gguf_string_kv_contains_casefold(const struct gguf_context * ctx, const char * key, const char * needle) {
+    const int64_t key_id = gguf_find_key(ctx, key);
+    if (key_id < 0 || gguf_get_kv_type(ctx, key_id) != GGUF_TYPE_STRING) {
+        return false;
+    }
+
+    const char * value = gguf_get_val_str(ctx, key_id);
+    return value != nullptr && str_contains_casefold(value, needle);
+}
+
+static bool looks_like_google_qat_metadata(const std::string & path) {
+    struct gguf_init_params meta_params = {
+        /* .no_alloc = */ true,
+        /* .ctx      = */ nullptr,
+    };
+    struct gguf_context * ctx = gguf_init_from_file(path.c_str(), meta_params);
+    if (ctx == nullptr) {
+        return false;
+    }
+
+    static const char * const source_keys[] = {
+        "general.name",
+        "general.basename",
+        "general.finetune",
+        "general.quantized_by",
+        "general.repo_url",
+        "general.architecture",
+        "general.base_model.0.name",
+        "general.base_model.0.organization",
+        "general.base_model.0.repo_url",
+        "tokenizer.ggml.model",
+    };
+
+    bool has_qat = false;
+    bool has_google_or_gemma = false;
+    for (const char * key : source_keys) {
+        has_qat = has_qat || gguf_string_kv_contains_casefold(ctx, key, "qat");
+        has_google_or_gemma = has_google_or_gemma ||
+            gguf_string_kv_contains_casefold(ctx, key, "google") ||
+            gguf_string_kv_contains_casefold(ctx, key, "gemma");
+    }
+
+    gguf_free(ctx);
+    return has_qat && has_google_or_gemma;
+}
+
+static bool looks_like_google_qat_source(const std::string & path) {
+    return looks_like_google_qat_metadata(path) || looks_like_google_qat_path(path);
+}
+
+static bool is_rocmfp4_ftype_str(const std::string & ftype_str) {
+    return striequals(ftype_str.c_str(), "Q4_0_ROCMFP4") ||
+        striequals(ftype_str.c_str(), "Q4_0_ROCMFP4_FAST");
+}
+
 static bool try_parse_ftype(const std::string & ftype_str_in, llama_ftype & ftype, std::string & ftype_str_out) {
     std::string ftype_str;
 
@@ -126,7 +197,8 @@ static bool try_parse_ftype(const std::string & ftype_str_in, llama_ftype & ftyp
 
 [[noreturn]]
 static void usage(const char * executable) {
-    printf("usage: %s [--help] [--allow-requantize] [--leave-output-tensor] [--pure] [--imatrix] [--include-weights]\n", executable);
+    printf("usage: %s [--help] [--allow-requantize] [--allow-qat-requantize] [--leave-output-tensor] [--pure]\n", executable);
+    printf("       [--imatrix] [--include-weights]\n");
     printf("       [--exclude-weights] [--output-tensor-type] [--token-embedding-type] [--tensor-type] [--tensor-type-file]\n");
     printf("       [--prune-layers] [--keep-split] [--override-kv] [--dry-run]\n");
     printf("       model-f32.gguf [model-quant.gguf] type [nthreads]\n\n");
@@ -134,6 +206,9 @@ static void usage(const char * executable) {
     printf("                                      allow requantizing tensors that have already been quantized\n");
     printf("                                      WARNING: this can severely reduce quality compared to quantizing\n");
     printf("                                               from 16bit or 32bit!\n");
+    printf("  --allow-qat-requantize\n");
+    printf("                                      allow obvious Google/Gemma QAT sources to be requantized to ROCmFP4\n");
+    printf("                                      WARNING: QAT-to-ROCmFP4 can damage coherence; prefer Q4_0_QAT or COPY\n");
     printf("  --leave-output-tensor\n");
     printf("                                      leave output.weight un(re)quantized\n");
     printf("                                      increases model size but may also increase quality, especially when requantizing\n");
@@ -509,6 +584,7 @@ int llama_quantize(int argc, char ** argv) {
     std::vector<llama_model_kv_override> kv_overrides;
     std::vector<tensor_type_option> tensor_type_opts;
     std::vector<int> prune_layers;
+    bool allow_qat_requantize = false;
 
     for (; arg_idx < argc && strncmp(argv[arg_idx], "--", 2) == 0; arg_idx++) {
         if (strcmp(argv[arg_idx], "--leave-output-tensor") == 0) {
@@ -551,6 +627,8 @@ int llama_quantize(int argc, char ** argv) {
             params.dry_run = true;
         } else if (strcmp(argv[arg_idx], "--allow-requantize") == 0) {
             params.allow_requantize = true;
+        } else if (strcmp(argv[arg_idx], "--allow-qat-requantize") == 0) {
+            allow_qat_requantize = true;
         } else if (strcmp(argv[arg_idx], "--pure") == 0) {
             params.pure = true;
         } else if (strcmp(argv[arg_idx], "--imatrix") == 0) {
@@ -677,6 +755,10 @@ int llama_quantize(int argc, char ** argv) {
         if (ftype_str == "COPY") {
             params.only_copy = true;
         }
+        if (ftype_str == "Q4_0_QAT") {
+            params.output_tensor_type = GGML_TYPE_Q8_0;
+            params.token_embedding_type = GGML_TYPE_Q8_0;
+        }
     } else {
         // argv[arg_idx] is not a valid ftype, so treat it as output path: <input> <output> <ftype>
         fname_out = argv[arg_idx];
@@ -696,7 +778,21 @@ int llama_quantize(int argc, char ** argv) {
         if (ftype_str == "COPY") {
            params.only_copy = true;
         }
+        if (ftype_str == "Q4_0_QAT") {
+            params.output_tensor_type = GGML_TYPE_Q8_0;
+            params.token_embedding_type = GGML_TYPE_Q8_0;
+        }
         arg_idx++;
+    }
+
+    // Fence only the known-bad source conversion; existing ROCmFP4 tensor formats and kernels are unchanged.
+    if (!allow_qat_requantize && looks_like_google_qat_source(fname_inp) && is_rocmfp4_ftype_str(ftype_str)) {
+        fprintf(stderr,
+                "%s: refusing to requantize apparent Google/Gemma QAT source '%s' to %s\n"
+                "%s: QAT models are trained for their native quantization layout; use Q4_0_QAT for a QAT-safe Q4_0 recipe,\n"
+                "%s: use COPY for an existing Google QAT GGUF, or pass --allow-qat-requantize to override intentionally.\n",
+                __func__, fname_inp.c_str(), ftype_str.c_str(), __func__, __func__);
+        return 1;
     }
 
     // parse nthreads
