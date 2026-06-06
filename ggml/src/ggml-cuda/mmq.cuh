@@ -3450,6 +3450,15 @@ template <int mmq_y, bool need_check> static __device__ __forceinline__ void loa
          0.230106f,  0.725222f,  1.277503f,  1.988943f
     };
 
+    const auto decode_tq3_4s_scale = [] __device__ (const uint8_t sb) {
+        if (sb == 0) {
+            return 0.0f;
+        }
+        // Exact FP32 decode for (1 + mant/32) * 2^(exp - 9), matching getrows.
+        const uint32_t bits = (((uint32_t) (sb >> 5) + 118u) << 23) | ((uint32_t) (sb & 31u) << 18);
+        return __uint_as_float(bits);
+    };
+
 #pragma unroll
     for (int i0 = 0; i0 < mmq_y; i0 += nrows*nwarps) {
         int i = i0 + threadIdx.y*nrows + threadIdx.x/threads_per_row;
@@ -3470,12 +3479,7 @@ template <int mmq_y, bool need_check> static __device__ __forceinline__ void loa
         float rms_local[2];
 #pragma unroll
         for (int sg = 0; sg < 2; ++sg) {
-            const uint8_t sb = bxi->d[g_base + sg];
-            if (sb == 0) {
-                rms_local[sg] = 0.0f;
-            } else {
-                rms_local[sg] = ldexpf(1.0f + (float)(sb & 31) / 32.0f, (sb >> 5) - 9);
-            }
+            rms_local[sg] = decode_tq3_4s_scale(bxi->d[g_base + sg]);
         }
         const float amax_pair = fmaxf(rms_local[0], rms_local[1]);
         const float amax_shfl = __shfl_xor_sync(0xFFFFFFFF, amax_pair, 1, WARP_SIZE);
@@ -3491,16 +3495,18 @@ template <int mmq_y, bool need_check> static __device__ __forceinline__ void loa
             const uint8_t * qp = bxi->qs + g * 3;
             const uint32_t packed = (uint32_t)qp[0] | ((uint32_t)qp[1] << 8) | ((uint32_t)qp[2] << 16);
 
-            // Bake per-subgroup scale into int8: qs = round(centroid * rms_g / d_block * 127)
-            int8_t q[8];
-#pragma unroll
-            for (int r = 0; r < 8; r++) {
-                const float val = tq3_centroids[(packed >> (3*r)) & 7] * rms_g;
-                q[r] = (int8_t)__float2int_rn(val * d_inv);
-            }
+            const float q_scale = rms_g * d_inv;
+            const uint32_t q0 = (uint8_t) __float2int_rn(tq3_centroids[(packed >>  0) & 7] * q_scale);
+            const uint32_t q1 = (uint8_t) __float2int_rn(tq3_centroids[(packed >>  3) & 7] * q_scale);
+            const uint32_t q2 = (uint8_t) __float2int_rn(tq3_centroids[(packed >>  6) & 7] * q_scale);
+            const uint32_t q3 = (uint8_t) __float2int_rn(tq3_centroids[(packed >>  9) & 7] * q_scale);
+            const uint32_t q4 = (uint8_t) __float2int_rn(tq3_centroids[(packed >> 12) & 7] * q_scale);
+            const uint32_t q5 = (uint8_t) __float2int_rn(tq3_centroids[(packed >> 15) & 7] * q_scale);
+            const uint32_t q6 = (uint8_t) __float2int_rn(tq3_centroids[(packed >> 18) & 7] * q_scale);
+            const uint32_t q7 = (uint8_t) __float2int_rn(tq3_centroids[(packed >> 21) & 7] * q_scale);
 
-            const uint32_t pq0 = (uint8_t)q[0] | ((uint8_t)q[1] << 8) | ((uint8_t)q[2] << 16) | ((uint8_t)q[3] << 24);
-            const uint32_t pq1 = (uint8_t)q[4] | ((uint8_t)q[5] << 8) | ((uint8_t)q[6] << 16) | ((uint8_t)q[7] << 24);
+            const uint32_t pq0 = q0 | (q1 << 8) | (q2 << 16) | (q3 << 24);
+            const uint32_t pq1 = q4 | (q5 << 8) | (q6 << 16) | (q7 << 24);
 
             const int out_base = blk_in_row * QI8_0 + g * 2;
 
