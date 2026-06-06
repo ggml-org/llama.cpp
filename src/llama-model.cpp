@@ -1394,7 +1394,7 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
         LLAMA_LOG_INFO("%s: placement: reporting enabled by LLAMA_LOG_MODEL_PLACEMENT\n", __func__);
         LLAMA_LOG_INFO("%s: placement: n_layer = %d, n_gpu_layers = %d, split_mode = %s, split_source = %s, i_gpu_start = %d, act_gpu_layers = %d, tensor_overrides = %s\n",
                 __func__,
-                n_layer,
+                n_layer_all,
                 n_gpu_layers,
                 llama_model_split_mode_name(split_mode),
                 all_zero ? "free-memory" : "tensor-split",
@@ -1451,8 +1451,8 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
             LLAMA_LOG_INFO("%s: placement: repeating layers -> none\n", __func__);
         } else {
             int range_start = 0;
-            for (int il = 1; il <= n_layer; ++il) {
-                if (il == n_layer ||
+            for (int il = 1; il <= n_layer_all; ++il) {
+                if (il == n_layer_all ||
                         pimpl->dev_layer[il].dev != pimpl->dev_layer[range_start].dev ||
                         pimpl->dev_layer[il].buft_list != pimpl->dev_layer[range_start].buft_list) {
                     llama_model_log_layer_range(

@@ -30,6 +30,10 @@ CROSS_TENSOR_RE = re.compile(
     r"(?P<calls>\d+)\s+"
     r"(?P<bytes>\d+)\s*$"
 )
+TRACE_TENSOR_OP_HEADERS = {
+    "ggml-rpc trace tensor operations (top by elapsed):",
+    "ggml-rpc trace tensor operations (top by wait):",
+}
 
 
 def parse_float_list(value):
@@ -89,7 +93,7 @@ def parse_trace(paths):
         with path.open("r", encoding="utf-8", errors="replace") as fh:
             for line in fh:
                 stripped = line.strip()
-                if stripped == "ggml-rpc trace tensor operations (top by wait):":
+                if stripped in TRACE_TENSOR_OP_HEADERS:
                     section = "tensor_ops"
                     continue
                 if stripped == "ggml-rpc trace cross-endpoint copy fallbacks:":
