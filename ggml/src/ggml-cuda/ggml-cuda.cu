@@ -3176,8 +3176,18 @@ static const char * ggml_backend_cuda_get_name(ggml_backend_t backend) {
     return cuda_ctx->name.c_str();
 }
 
-static void ggml_backend_cuda_free(ggml_backend_t backend);
+static void ggml_backend_cuda_free(ggml_backend_t backend) {
+    ggml_backend_cuda_context * cuda_ctx = (ggml_backend_cuda_context *)backend->context;
 
+#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
+    ggml_backend_cuda_device_context * dev_ctx = (ggml_backend_cuda_device_context *) backend->device->context;
+    std::lock_guard<std::mutex> lock(dev_ctx->device_mutex);
+    dev_ctx->active_count--;
+#endif // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
+
+    delete cuda_ctx;
+    delete backend;
+}
 
 static void ggml_backend_cuda_set_tensor_async(ggml_backend_t backend, ggml_tensor * tensor, const void * data, size_t offset, size_t size) {
     ggml_backend_cuda_context * cuda_ctx = (ggml_backend_cuda_context *) backend->context;
@@ -4909,19 +4919,6 @@ void ggml_backend_cuda_unregister_host_buffer(void * buffer) {
 static const char * ggml_backend_cuda_device_get_name(ggml_backend_dev_t dev) {
     ggml_backend_cuda_device_context * ctx = (ggml_backend_cuda_device_context *)dev->context;
     return ctx->name.c_str();
-}
-
-static void ggml_backend_cuda_free(ggml_backend_t backend) {
-    ggml_backend_cuda_context * cuda_ctx = (ggml_backend_cuda_context *)backend->context;
-
-#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
-    ggml_backend_cuda_device_context * dev_ctx = (ggml_backend_cuda_device_context *) backend->device->context;
-    std::lock_guard<std::mutex> lock(dev_ctx->device_mutex);
-    dev_ctx->active_count--;
-#endif // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
-
-    delete cuda_ctx;
-    delete backend;
 }
 
 static const char * ggml_backend_cuda_device_get_description(ggml_backend_dev_t dev) {
