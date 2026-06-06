@@ -3433,10 +3433,16 @@ struct llama_sampler_viscosity {
 
     float omega_prev;
     float pending_omega;
+    float prior_scale;
     llama_token pending_token_id;
 
     std::vector<float> prior;
 };
+
+static constexpr size_t LLAMA_SAMPLER_VISCOSITY_ACTIVE_MAX  = 64;
+static constexpr size_t LLAMA_SAMPLER_VISCOSITY_ACTIVE_MIN  = 16;
+static constexpr float  LLAMA_SAMPLER_VISCOSITY_PROB_FLOOR  = 1e-4f;
+static constexpr float  LLAMA_SAMPLER_VISCOSITY_SCALE_FLOOR = 1e-12f;
 
 static float llama_sampler_viscosity_clip(float x, float lo, float hi) {
     return std::max(lo, std::min(hi, x));
@@ -3463,6 +3469,10 @@ static void llama_sampler_viscosity_apply(struct llama_sampler * smpl, llama_tok
         return;
     }
 
+    if (cur_p->size > LLAMA_SAMPLER_VISCOSITY_ACTIVE_MAX) {
+        llama_token_data_array_partial_sort_inplace(cur_p, LLAMA_SAMPLER_VISCOSITY_ACTIVE_MAX);
+    }
+
     llama_sampler_softmax_impl(cur_p, false);
 
     size_t i_best_model = 0;
@@ -3474,6 +3484,12 @@ static void llama_sampler_viscosity_apply(struct llama_sampler * smpl, llama_tok
         }
     }
 
+    size_t active_size = cur_p->size;
+    while (active_size > LLAMA_SAMPLER_VISCOSITY_ACTIVE_MIN && cur_p->data[active_size - 1].p < LLAMA_SAMPLER_VISCOSITY_PROB_FLOOR) {
+        active_size--;
+    }
+    cur_p->size = active_size;
+
     const float h = llama_sampler_viscosity_binary_entropy(p_star);
     const float s = 1.0f - fabsf(2.0f*p_star - 1.0f);
     const float omega = llama_sampler_viscosity_clip(0.85f - 0.35f*(h + s), 0.50f, 0.85f);
@@ -3481,7 +3497,7 @@ static void llama_sampler_viscosity_apply(struct llama_sampler * smpl, llama_tok
     double prior_sum = 0.0;
     for (size_t i = 0; i < cur_p->size; ++i) {
         const llama_token id = cur_p->data[i].id;
-        const float prior = id >= 0 && (size_t) id < ctx->prior.size() ? ctx->prior[id] : 0.0f;
+        const float prior = id >= 0 && (size_t) id < ctx->prior.size() ? ctx->prior[id]*ctx->prior_scale : 0.0f;
         prior_sum += std::max(0.0f, prior) + ctx->prior_floor;
     }
 
@@ -3492,7 +3508,7 @@ static void llama_sampler_viscosity_apply(struct llama_sampler * smpl, llama_tok
     float best_q = -INFINITY;
     for (size_t i = 0; i < cur_p->size; ++i) {
         const llama_token id = cur_p->data[i].id;
-        const float prior = id >= 0 && (size_t) id < ctx->prior.size() ? ctx->prior[id] : 0.0f;
+        const float prior = id >= 0 && (size_t) id < ctx->prior.size() ? ctx->prior[id]*ctx->prior_scale : 0.0f;
         const float pi = prior_sum > 0.0 ? (std::max(0.0f, prior) + ctx->prior_floor)/prior_sum : 1.0f/cur_p->size;
         const float q = (1.0f - blend)*cur_p->data[i].p + blend*pi;
 
@@ -3523,11 +3539,18 @@ static void llama_sampler_viscosity_accept(struct llama_sampler * smpl, llama_to
     }
 
     const float beta = llama_sampler_viscosity_clip(ctx->beta, 0.0f, 1.0f);
-    for (float & p : ctx->prior) {
-        p *= 1.0f - beta;
+
+    ctx->prior_scale *= 1.0f - beta;
+    if (ctx->prior_scale < LLAMA_SAMPLER_VISCOSITY_SCALE_FLOOR) {
+        for (float & p : ctx->prior) {
+            p *= ctx->prior_scale;
+        }
+        ctx->prior_scale = 1.0f;
     }
 
-    ctx->prior[token] += beta;
+    if (ctx->prior_scale > 0.0f) {
+        ctx->prior[token] += beta/ctx->prior_scale;
+    }
 
     if (ctx->pending_token_id == token) {
         ctx->omega_prev = ctx->pending_omega;
@@ -3541,6 +3564,7 @@ static void llama_sampler_viscosity_reset(struct llama_sampler * smpl) {
 
     ctx->omega_prev = 0.50f;
     ctx->pending_omega = 0.50f;
+    ctx->prior_scale = 1.0f;
     ctx->pending_token_id = LLAMA_TOKEN_NULL;
     ctx->prior.clear();
 }
@@ -3552,6 +3576,7 @@ static struct llama_sampler * llama_sampler_viscosity_clone(const struct llama_s
 
     result_ctx->omega_prev       = ctx->omega_prev;
     result_ctx->pending_omega    = ctx->pending_omega;
+    result_ctx->prior_scale      = ctx->prior_scale;
     result_ctx->pending_token_id = ctx->pending_token_id;
     result_ctx->prior            = ctx->prior;
 
@@ -3590,6 +3615,7 @@ struct llama_sampler * llama_sampler_init_viscosity(
             /* .prior_floor      = */ std::max(0.0f, prior_floor),
             /* .omega_prev       = */ 0.50f,
             /* .pending_omega    = */ 0.50f,
+            /* .prior_scale      = */ 1.0f,
             /* .pending_token_id = */ LLAMA_TOKEN_NULL,
             /* .prior            = */ {},
         }
