@@ -634,8 +634,12 @@ static int get_tcp_buffer_size() {
     return get_positive_env_int("GGML_RPC_TCP_BUFFER_SIZE");
 }
 
-static int get_tcp_timeout_seconds() {
+static int get_tcp_client_timeout_seconds() {
     return get_positive_env_int("GGML_RPC_TIMEOUT");
+}
+
+static int get_tcp_server_timeout_seconds() {
+    return get_positive_env_int("GGML_RPC_SERVER_TIMEOUT");
 }
 
 static bool set_tcp_io_timeout(sockfd_t sockfd, int option, int seconds) {
@@ -654,7 +658,7 @@ static bool set_tcp_io_timeout(sockfd_t sockfd, int option, int seconds) {
 #endif
 }
 
-static bool configure_tcp_socket(sockfd_t sockfd) {
+static bool configure_tcp_socket(sockfd_t sockfd, int timeout_seconds) {
     if (!set_no_delay(sockfd)) {
         GGML_LOG_ERROR("Failed to set TCP_NODELAY\n");
         return false;
@@ -670,7 +674,6 @@ static bool configure_tcp_socket(sockfd_t sockfd) {
         }
     }
 
-    int timeout_seconds = get_tcp_timeout_seconds();
     if (timeout_seconds > 0) {
         if (!set_tcp_io_timeout(sockfd, SO_SNDTIMEO, timeout_seconds)) {
             GGML_LOG_WARN("Failed to set SO_SNDTIMEO=%d\n", timeout_seconds);
@@ -694,7 +697,7 @@ socket_ptr socket_t::accept() {
     if (!is_valid_fd(client_socket_fd)) {
         return nullptr;
     }
-    if (!configure_tcp_socket(client_socket_fd)) {
+    if (!configure_tcp_socket(client_socket_fd, get_tcp_server_timeout_seconds())) {
         return nullptr;
     }
     return socket_ptr(new socket_t(std::make_unique<impl>(client_socket_fd)));
@@ -732,7 +735,7 @@ socket_ptr socket_t::connect(const char * host, int port) {
     if (!is_valid_fd(sockfd)) {
         return nullptr;
     }
-    if (!configure_tcp_socket(sockfd)) {
+    if (!configure_tcp_socket(sockfd, get_tcp_client_timeout_seconds())) {
         return nullptr;
     }
     struct sockaddr_in addr;

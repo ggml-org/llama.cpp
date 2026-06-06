@@ -120,17 +120,23 @@ per-token synchronization costs.
 
 By default, RPC TCP sockets use the operating-system blocking I/O behavior. In
 long-running distributed experiments this can hide sick or stale endpoints until
-the whole run appears to hang. To make send and receive operations fail after a
-fixed interval, set `GGML_RPC_TIMEOUT` on the RPC client and server:
+the whole run appears to hang. To make outbound client send and receive
+operations fail after a fixed interval, set `GGML_RPC_TIMEOUT` on the RPC
+client:
 
 ```bash
 export GGML_RPC_TIMEOUT=30
 ```
 
-The value is in seconds and is applied to accepted client sockets and outbound
-RPC connections. Leave it unset to preserve the default blocking behavior. The
-timeout applies after a socket is created or accepted; it does not make the TCP
-connection attempt itself non-blocking.
+The value is in seconds and is applied after the outbound socket is created; it
+does not make the TCP connection attempt itself non-blocking. Leave it unset to
+preserve the default blocking behavior.
+
+Servers can also apply send and receive timeouts to accepted client sockets with
+`GGML_RPC_SERVER_TIMEOUT`, but keep this unset or much larger than the expected
+cold model-load interval for multi-server runs. During a large load, one server
+can be idle while the client uploads or hashes tensors for another server, and a
+short server-side timeout can close an otherwise healthy connection.
 
 ### Cache threshold tuning
 
