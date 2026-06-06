@@ -847,7 +847,7 @@ static void init_quantize_state_counters(quantize_state_impl & qs, std::vector<t
             qs.has_tied_embeddings = false;
         }
     }
-    qs.n_ffn_down = qs.n_ffn_gate = qs.n_ffn_up = (int)qs.model.hparams.n_layer;
+    qs.n_ffn_down = qs.n_ffn_gate = qs.n_ffn_up = (int)qs.model.hparams.n_layer();
 }
 
 //
@@ -1348,7 +1348,7 @@ llama_model * llama_quant_model_from_metadata(const llama_quant_model_desc * des
     model->hparams.n_embd             = desc->n_embd;
     model->hparams.n_embd_head_k_full = desc->n_embd_head_k;
     model->hparams.n_embd_head_v_full = desc->n_embd_head_v;
-    model->hparams.n_layer            = desc->n_layer;
+    model->hparams.n_layer_all        = desc->n_layer;
     model->hparams.n_expert           = desc->n_expert;
 
     for (uint32_t i = 0; i < desc->n_layer; i++) {

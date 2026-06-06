@@ -128,6 +128,7 @@ class Keys:
         MOE_LATENT_SIZE                   = "{arch}.moe_latent_size"
         NEXTN_PREDICT_LAYERS              = "{arch}.nextn_predict_layers"
         NUM_DEEPSTACK_LAYERS              = "{arch}.n_deepstack_layers"
+        DEEPSTACK_MAPPING                 = "{arch}.deepstack_mapping"
         POOLING_TYPE                      = "{arch}.pooling_type"
         LOGIT_SCALE                       = "{arch}.logit_scale"
         DECODER_START_TOKEN_ID            = "{arch}.decoder_start_token_id"
@@ -150,6 +151,7 @@ class Keys:
         EMBD_LENGTH_PER_LAYER_INP         = "{arch}.embedding_length_per_layer_input"
         SWIGLU_CLAMP_EXP                  = "{arch}.swiglu_clamp_exp"
         SWIGLU_CLAMP_SHEXP                = "{arch}.swiglu_clamp_shexp"
+        HIDDEN_ACT                        = "{arch}.hidden_activation"
         DENSE_FEAT_IN_SIZE                = "{arch}.{dense}_feat_in"
         DENSE_FEAT_OUT_SIZE               = "{arch}.{dense}_feat_out"
 
@@ -263,11 +265,14 @@ class Keys:
         ADD_PREFIX           = "tokenizer.ggml.add_space_prefix"
         REMOVE_EXTRA_WS      = "tokenizer.ggml.remove_extra_whitespaces"
         PRECOMPILED_CHARSMAP = "tokenizer.ggml.precompiled_charsmap"
+        SUPPRESS_TOKENS      = "tokenizer.ggml.suppress_tokens"
         HF_JSON              = "tokenizer.huggingface.json"
         RWKV                 = "tokenizer.rwkv.world"
         CHAT_TEMPLATE        = "tokenizer.chat_template"
         CHAT_TEMPLATE_N      = "tokenizer.chat_template.{name}"
         CHAT_TEMPLATES       = "tokenizer.chat_templates"
+        # Normalizer constants
+        NORMALIZER_LOWERCASE = "tokenizer.ggml.normalizer.lowercase"
         # FIM/Infill special tokens constants
         FIM_PRE_ID           = "tokenizer.ggml.fim_pre_token_id"
         FIM_SUF_ID           = "tokenizer.ggml.fim_suf_token_id"
@@ -321,6 +326,8 @@ class Keys:
         WA_PATTERN_MODE       = "clip.vision.wa_pattern_mode"  # used by mimovl, per-layer -1/0/1
         IS_DEEPSTACK_LAYERS   = "clip.vision.is_deepstack_layers"
         WINDOW_SIZE           = "clip.vision.window_size"
+        FEATURE_LAYERS        = "clip.vision.feature_layer" # Granite4 Vision
+        IMAGE_GRID_PINPOINTS  = "clip.vision.image_grid_pinpoints" # Granite4 Vision
 
         class Attention:
             HEAD_COUNT      = "clip.vision.attention.head_count"
@@ -329,6 +336,9 @@ class Keys:
 
         class Projector:
             SCALE_FACTOR    = "clip.vision.projector.scale_factor"
+            QUERY_SIDE      = "clip.vision.projector.query_side"
+            WINDOW_SIDE     = "clip.vision.projector.window_side"
+            SPATIAL_OFFSETS = "clip.vision.projector.spatial_offsets"
 
         class SAM:
             BLOCK_COUNT         = "clip.vision.sam.block_count"
@@ -507,6 +517,7 @@ class MODEL_ARCH(IntEnum):
     MAINCODER        = auto()
     KIMI_LINEAR      = auto()
     TALKIE           = auto()
+    MELLUM           = auto()
 
 
 class VISION_PROJECTOR_TYPE(IntEnum):
@@ -727,6 +738,7 @@ class MODEL_TENSOR(IntEnum):
     V_ENC_EMBD_CLS       = auto()
     V_ENC_EMBD_PATCH     = auto()
     V_ENC_EMBD_NORM      = auto()
+    V_ENC_EMBD_PATCH_NORM = auto() # allow multiple norms in the same embd, e.g. for gemma4u
     V_ENC_EMBD_POS       = auto()
     V_ENC_INPUT_NORM     = auto()
     V_ENC_ATTN_QKV       = auto()
@@ -815,6 +827,31 @@ class MODEL_TENSOR(IntEnum):
     V_RESMPL_QUERY_768   = auto() # Deepseek-OCR-2
     V_RESMPL_QUERY_1024  = auto() # Deepseek-OCR-2
 
+    # qformer projector (vision) - Granite4 Vision
+    V_QF_PROJ_QUERY      = auto()
+    V_QF_PROJ_NORM       = auto()
+    V_QF_PROJ_LINEAR     = auto()
+    V_QF_SELF_ATTN_Q     = auto()
+    V_QF_SELF_ATTN_K     = auto()
+    V_QF_SELF_ATTN_V     = auto()
+    V_QF_SELF_ATTN_O     = auto()
+    V_QF_SELF_ATTN_NORM  = auto()
+    V_QF_CROSS_ATTN_Q    = auto()
+    V_QF_CROSS_ATTN_K    = auto()
+    V_QF_CROSS_ATTN_V    = auto()
+    V_QF_CROSS_ATTN_O    = auto()
+    V_QF_CROSS_ATTN_NORM = auto()
+    V_QF_FFN_UP          = auto()
+    V_QF_FFN_DOWN        = auto()
+    V_QF_FFN_NORM        = auto()
+    V_PROJ_NORM          = auto()
+    # multi-projector (bid => projector id) - Granite4 vision
+    V_MULTI_PROJ_IMG_POS   = auto()
+    V_MULTI_PROJ_QUERY     = auto()
+    V_MULTI_PROJ_NORM      = auto()
+    V_MULTI_PROJ_LINEAR    = auto()
+    V_MULTI_PROJ_POST_NORM = auto()
+
     # audio (mtmd)
     A_ENC_EMBD_POS        = auto()
     A_ENC_EMBD_NORM       = auto()
@@ -879,7 +916,7 @@ class MODEL_TENSOR(IntEnum):
     A_CTC_OUT              = auto()
     A_CTC_OUT_MID          = auto()
     A_ENC_ATTN_REL_POS_EMB = auto()
-    # qformer projector
+    # audio qformer projector
     A_QF_PROJ_QUERY        = auto()
     A_QF_PROJ_NORM         = auto()
     A_QF_PROJ_LINEAR       = auto()
@@ -1027,6 +1064,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.MAINCODER:        "maincoder",
     MODEL_ARCH.KIMI_LINEAR:      "kimi-linear",
     MODEL_ARCH.TALKIE:           "talkie",
+    MODEL_ARCH.MELLUM:           "mellum",
 }
 
 VISION_PROJECTOR_TYPE_NAMES: dict[VISION_PROJECTOR_TYPE, str] = {
@@ -1245,6 +1283,7 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.V_ENC_EMBD_CLS:            "v.class_embd",
     MODEL_TENSOR.V_ENC_EMBD_PATCH:          "v.patch_embd",
     MODEL_TENSOR.V_ENC_EMBD_NORM:           "v.norm_embd",
+    MODEL_TENSOR.V_ENC_EMBD_PATCH_NORM:     "v.patch_norm.{bid}",
     MODEL_TENSOR.V_ENC_EMBD_POS:            "v.position_embd",
     MODEL_TENSOR.V_ENC_ATTN_QKV:            "v.blk.{bid}.attn_qkv",
     MODEL_TENSOR.V_ENC_ATTN_Q:              "v.blk.{bid}.attn_q",
@@ -1329,10 +1368,33 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.V_SAM_NECK:                "v.sam.neck.{bid}",
     MODEL_TENSOR.V_SAM_NET_2:               "v.sam.net_2",
     MODEL_TENSOR.V_SAM_NET_3:               "v.sam.net_3",
-    MODEL_TENSOR.V_ENC_EMBD_IMGNL:          "v.image_newline", # Deepseek-OCR
+    MODEL_TENSOR.V_ENC_EMBD_IMGNL:          "v.image_newline", # Deepseek-OCR, Granite4Vision
     MODEL_TENSOR.V_ENC_EMBD_VSEP:           "v.view_seperator", # Deepseek-OCR
     MODEL_TENSOR.V_RESMPL_QUERY_768:        "v.resample_query_768", # Deepseek-OCR-2 qwen2
     MODEL_TENSOR.V_RESMPL_QUERY_1024:       "v.resample_query_1024", # Deepseek-OCR-2 qwen2
+    # Granite4 Vision
+    # qformer layers (bid => proj_id)
+    # NOTE: Names align with A_QF_*
+    MODEL_TENSOR.V_QF_SELF_ATTN_Q:          "v.proj_blk.{bid}.self_attn_q",
+    MODEL_TENSOR.V_QF_SELF_ATTN_K:          "v.proj_blk.{bid}.self_attn_k",
+    MODEL_TENSOR.V_QF_SELF_ATTN_V:          "v.proj_blk.{bid}.self_attn_v",
+    MODEL_TENSOR.V_QF_SELF_ATTN_O:          "v.proj_blk.{bid}.self_attn_out",
+    MODEL_TENSOR.V_QF_SELF_ATTN_NORM:       "v.proj_blk.{bid}.self_attn_norm",
+    MODEL_TENSOR.V_QF_CROSS_ATTN_Q:         "v.proj_blk.{bid}.cross_attn_q",
+    MODEL_TENSOR.V_QF_CROSS_ATTN_K:         "v.proj_blk.{bid}.cross_attn_k",
+    MODEL_TENSOR.V_QF_CROSS_ATTN_V:         "v.proj_blk.{bid}.cross_attn_v",
+    MODEL_TENSOR.V_QF_CROSS_ATTN_O:         "v.proj_blk.{bid}.cross_attn_out",
+    MODEL_TENSOR.V_QF_CROSS_ATTN_NORM:      "v.proj_blk.{bid}.cross_attn_norm",
+    MODEL_TENSOR.V_QF_FFN_UP:               "v.proj_blk.{bid}.ffn_up",
+    MODEL_TENSOR.V_QF_FFN_DOWN:             "v.proj_blk.{bid}.ffn_down",
+    MODEL_TENSOR.V_QF_FFN_NORM:             "v.proj_blk.{bid}.ffn_norm",
+    # multi-projector (bid => projector ID)
+    MODEL_TENSOR.V_MULTI_PROJ_IMG_POS:   "v.proj_blk.{bid}.img_pos",
+    MODEL_TENSOR.V_MULTI_PROJ_QUERY:     "v.proj_blk.{bid}.query",
+    MODEL_TENSOR.V_MULTI_PROJ_NORM:      "v.proj_blk.{bid}.norm",
+    MODEL_TENSOR.V_MULTI_PROJ_LINEAR:    "v.proj_blk.{bid}.linear",
+    MODEL_TENSOR.V_MULTI_PROJ_POST_NORM: "v.proj_blk.{bid}.post_norm",
+
     # audio (mtmd)
     # note: all audio tensor names must use prefix "a." or "mm.a."
     MODEL_TENSOR.A_ENC_EMBD_POS:            "a.position_embd",
@@ -1426,6 +1488,7 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.V_ENC_EMBD_CLS,
         MODEL_TENSOR.V_ENC_EMBD_PATCH,
         MODEL_TENSOR.V_ENC_EMBD_NORM,
+        MODEL_TENSOR.V_ENC_EMBD_PATCH_NORM,
         MODEL_TENSOR.V_ENC_EMBD_POS,
         MODEL_TENSOR.V_ENC_EMBD_IMGNL,
         MODEL_TENSOR.V_ENC_EMBD_VSEP,
@@ -1513,6 +1576,29 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.V_SAM_NET_3,
         MODEL_TENSOR.V_RESMPL_QUERY_768,
         MODEL_TENSOR.V_RESMPL_QUERY_1024,
+        MODEL_TENSOR.V_PROJ_NORM,
+        MODEL_TENSOR.V_QF_PROJ_QUERY,
+        MODEL_TENSOR.V_QF_PROJ_NORM,
+        MODEL_TENSOR.V_QF_PROJ_LINEAR,
+        MODEL_TENSOR.V_QF_SELF_ATTN_Q,
+        MODEL_TENSOR.V_QF_SELF_ATTN_K,
+        MODEL_TENSOR.V_QF_SELF_ATTN_V,
+        MODEL_TENSOR.V_QF_SELF_ATTN_O,
+        MODEL_TENSOR.V_QF_SELF_ATTN_NORM,
+        MODEL_TENSOR.V_QF_CROSS_ATTN_Q,
+        MODEL_TENSOR.V_QF_CROSS_ATTN_K,
+        MODEL_TENSOR.V_QF_CROSS_ATTN_V,
+        MODEL_TENSOR.V_QF_CROSS_ATTN_O,
+        MODEL_TENSOR.V_QF_CROSS_ATTN_NORM,
+        MODEL_TENSOR.V_QF_FFN_UP,
+        MODEL_TENSOR.V_QF_FFN_DOWN,
+        MODEL_TENSOR.V_QF_FFN_NORM,
+        MODEL_TENSOR.V_QF_PROJ_NORM,
+        MODEL_TENSOR.V_MULTI_PROJ_IMG_POS,
+        MODEL_TENSOR.V_MULTI_PROJ_QUERY,
+        MODEL_TENSOR.V_MULTI_PROJ_LINEAR,
+        MODEL_TENSOR.V_MULTI_PROJ_NORM,
+        MODEL_TENSOR.V_MULTI_PROJ_POST_NORM,
         # audio
         MODEL_TENSOR.A_ENC_EMBD_POS,
         MODEL_TENSOR.A_ENC_EMBD_NORM,
@@ -3308,6 +3394,13 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_DOWN,
         MODEL_TENSOR.FFN_UP,
         MODEL_TENSOR.FFN_POST_NORM,
+        # NextN/MTP tensors - preserved but unused
+        MODEL_TENSOR.NEXTN_EH_PROJ,
+        MODEL_TENSOR.NEXTN_EMBED_TOKENS,
+        MODEL_TENSOR.NEXTN_ENORM,
+        MODEL_TENSOR.NEXTN_HNORM,
+        MODEL_TENSOR.NEXTN_SHARED_HEAD_HEAD,
+        MODEL_TENSOR.NEXTN_SHARED_HEAD_NORM,
     ],
     MODEL_ARCH.EXAONE_MOE: [
         MODEL_TENSOR.TOKEN_EMBD,
@@ -3985,6 +4078,13 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_GATE_SHEXP,
         MODEL_TENSOR.FFN_DOWN_SHEXP,
         MODEL_TENSOR.FFN_EXP_PROBS_B,
+        # NextN/MTP tensors (Step3p5 draft head)
+        MODEL_TENSOR.NEXTN_EH_PROJ,
+        MODEL_TENSOR.NEXTN_EMBED_TOKENS,
+        MODEL_TENSOR.NEXTN_ENORM,
+        MODEL_TENSOR.NEXTN_HNORM,
+        MODEL_TENSOR.NEXTN_SHARED_HEAD_HEAD,
+        MODEL_TENSOR.NEXTN_SHARED_HEAD_NORM,
     ],
     MODEL_ARCH.LLAMA_EMBED: [
         MODEL_TENSOR.TOKEN_EMBD,
@@ -4075,6 +4175,23 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_DOWN,
         MODEL_TENSOR.FFN_UP,
         MODEL_TENSOR.LAYER_OUT_SCALE,
+    ],
+    MODEL_ARCH.MELLUM: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_Q,
+        MODEL_TENSOR.ATTN_Q_NORM,
+        MODEL_TENSOR.ATTN_K,
+        MODEL_TENSOR.ATTN_K_NORM,
+        MODEL_TENSOR.ATTN_V,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.FFN_NORM,
+        MODEL_TENSOR.FFN_GATE_INP,
+        MODEL_TENSOR.FFN_GATE_EXP,
+        MODEL_TENSOR.FFN_DOWN_EXP,
+        MODEL_TENSOR.FFN_UP_EXP,
     ],
     # TODO
 }
@@ -4310,12 +4427,15 @@ class VisionProjectorType:
     GEMMA3NA = "gemma3na"
     GEMMA4V = "gemma4v"
     GEMMA4A = "gemma4a"
+    GEMMA4UV = "gemma4uv" # "unified" variant
+    GEMMA4UA = "gemma4ua" # "unified" variant
     PHI4 = "phi4"
     IDEFICS3 = "idefics3"
     PIXTRAL = "pixtral"
     LLAMA4 = "llama4"
     QWEN2VL = "qwen2vl_merger"
     QWEN25VL = "qwen2.5vl_merger"
+    EXAONE4_5 = "exaone4_5"
     QWEN3VL = "qwen3vl_merger"
     STEP3VL = "step3vl"
     ULTRAVOX = "ultravox"
@@ -4345,6 +4465,7 @@ class VisionProjectorType:
     MINICPMV4_6    = "minicpmv4_6"
     GRANITE_SPEECH = "granite_speech"  # audio
     MIMOVL         = "mimovl"
+    GRANITE4_VISION = "granite4_vision"
 
 
 # Items here are (block size, type size)

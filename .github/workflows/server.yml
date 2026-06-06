@@ -55,21 +55,7 @@ concurrency:
 
 jobs:
   ubuntu:
-    runs-on: ubuntu-24.04
-
-    name: ubuntu (${{ matrix.wf_name }})
-    strategy:
-      matrix:
-        build_type: [Release]
-        wf_name: ["default"]
-        include:
-          - build_type: Release
-            extra_args: ""
-            wf_name:    "default"
-          - build_type: Release
-            extra_args: "LLAMA_ARG_BACKEND_SAMPLING=1"
-            wf_name:    "backend-sampling"
-      fail-fast: false
+    runs-on: ubuntu-24.04-arm
 
     steps:
       - name: Dependencies
@@ -96,7 +82,7 @@ jobs:
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.21
         with:
-          key: server-ubuntu-24.04-x64
+          key: server-ubuntu-24.04-arm
           evict-old-files: 1d
           save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
@@ -105,7 +91,7 @@ jobs:
         run: |
           cmake -B build \
             -DGGML_SCHED_NO_REALLOC=ON
-          cmake --build build --config ${{ matrix.build_type }} -j $(nproc) --target llama-server
+          cmake --build build --config Release -j $(nproc) --target llama-server
 
       - name: Python setup
         id: setup_python
@@ -116,18 +102,30 @@ jobs:
 
       - name: Tests
         id: server_integration_tests
-        if: ${{ (!matrix.disabled_on_pr || !github.event.pull_request) }}
         run: |
           cd tools/server/tests
-          export ${{ matrix.extra_args }}
           pytest -v -x -m "not slow"
 
       - name: Slow tests
         id: server_integration_tests_slow
-        if: ${{ (github.event.schedule || github.event.inputs.slow_tests == 'true') && matrix.build_type == 'Release' }}
+        if: ${{ github.event.schedule || github.event.inputs.slow_tests == 'true' }}
         run: |
           cd tools/server/tests
-          export ${{ matrix.extra_args }}
+          SLOW_TESTS=1 pytest -v -x
+
+      - name: Tests (Backend sampling)
+        id: server_integration_tests_backend_sampling
+        run: |
+          cd tools/server/tests
+          export LLAMA_ARG_BACKEND_SAMPLING=1
+          pytest -v -x -m "not slow"
+
+      - name: Slow tests (Backend sampling)
+        id: server_integration_tests_slow_backend_sampling
+        if: ${{ github.event.schedule || github.event.inputs.slow_tests == 'true' }}
+        run: |
+          cd tools/server/tests
+          export LLAMA_ARG_BACKEND_SAMPLING=1
           SLOW_TESTS=1 pytest -v -x
 
   windows:
@@ -169,7 +167,6 @@ jobs:
 
       - name: Tests
         id: server_integration_tests
-        if: ${{ !matrix.disabled_on_pr || !github.event.pull_request }}
         run: |
           cd tools/server/tests
           $env:PYTHONIOENCODING = ":replace"
@@ -177,7 +174,7 @@ jobs:
 
       - name: Slow tests
         id: server_integration_tests_slow
-        if: ${{ (github.event.schedule || github.event.inputs.slow_tests == 'true') && matrix.build_type == 'Release' }}
+        if: ${{ github.event.schedule || github.event.inputs.slow_tests == 'true' }}
         run: |
           cd tools/server/tests
           $env:SLOW_TESTS = "1"

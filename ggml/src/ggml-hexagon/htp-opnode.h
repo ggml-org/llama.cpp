@@ -56,7 +56,21 @@ struct htp_opnode {
     }
 
     std::vector<const ggml_tensor *> get_inputs() const {
-        std::vector<const ggml_tensor *> inputs;
+        if (fused.empty()) {
+            int last_non_null = -1;
+            for (int i = 0; i < GGML_MAX_SRC; i++) {
+                if (node->src[i]) {
+                    last_non_null = i;
+                }
+            }
+            std::vector<const ggml_tensor *> inputs(last_non_null + 1, nullptr);
+            for (int i = 0; i <= last_non_null; i++) {
+                inputs[i] = node->src[i];
+            }
+            return inputs;
+        }
+
+        std::vector<const ggml_tensor *> inputs(GGML_MAX_SRC, nullptr);
         std::vector<const ggml_tensor *> outputs;
         outputs.push_back(node);
         for (const auto * f : fused) {
@@ -70,20 +84,31 @@ struct htp_opnode {
             return false;
         };
 
+        int count = 0;
         auto add_input = [&](const ggml_tensor * t) {
             if (t && !contains(outputs, t) && !contains(inputs, t)) {
-                inputs.push_back(t);
+                if (count < (int)inputs.size()) {
+                    inputs[count++] = t;
+                } else {
+                    inputs.push_back(t);
+                }
             }
         };
 
-        for (int i = 0; i < GGML_MAX_SRC && node->src[i]; i++) {
-            add_input(node->src[i]);
-        }
-        for (const auto * f : fused) {
-            for (int i = 0; i < GGML_MAX_SRC && f->src[i]; i++) {
-                add_input(f->src[i]);
+        for (int i = 0; i < GGML_MAX_SRC; i++) {
+            if (node->src[i]) {
+                add_input(node->src[i]);
             }
         }
+        for (const auto * f : fused) {
+            for (int i = 0; i < GGML_MAX_SRC; i++) {
+                if (f->src[i]) {
+                    add_input(f->src[i]);
+                }
+            }
+        }
+
+        inputs.resize(count);
         return inputs;
     }
 
@@ -108,6 +133,9 @@ struct htp_opformat {
     char names[64 * GGML_MAX_SRC];
 
     int format_tensor_dims(char * str, const struct ggml_tensor * t) {
+        if (!t) {
+            return sprintf(str, "NONE");
+        }
         if (t->ne[2] == 1 && t->ne[3] == 1) {
             return sprintf(str, "%d:%d", (int) t->ne[0], (int) t->ne[1]);
         } else {
@@ -136,6 +164,9 @@ struct htp_opformat {
     }
 
     int format_tensor_strides(char * str, const struct ggml_tensor * t) {
+        if (!t) {
+            return sprintf(str, "NONE");
+        }
         const char * c = ggml_is_contiguous(t) ? "" : "!";
 
         if (t->ne[2] == 1 && t->ne[3] == 1) {
@@ -170,11 +201,11 @@ struct htp_opformat {
         auto inputs = node.get_inputs();
 
         if (!inputs.empty()) {
-            p += sprintf(p, "%s", ggml_type_name(inputs[0]->type));
+            p += sprintf(p, "%s", inputs[0] ? ggml_type_name(inputs[0]->type) : "NONE");
 
             for (size_t i = 1; i < inputs.size(); i++) {
                 p += sprintf(p, " x ");
-                p += sprintf(p, "%s", ggml_type_name(inputs[i]->type));
+                p += sprintf(p, "%s", inputs[i] ? ggml_type_name(inputs[i]->type) : "NONE");
             }
 
             p += sprintf(p, " -> ");
@@ -184,7 +215,7 @@ struct htp_opformat {
     }
 
     const char * tensor_buff_name(const struct ggml_tensor * t) {
-        if (t->buffer) {
+        if (t && t->buffer) {
             return ggml_backend_buffer_name(t->buffer);
         }
         return "NONE";
@@ -213,11 +244,11 @@ struct htp_opformat {
         auto inputs = node.get_inputs();
 
         if (!inputs.empty()) {
-            p += sprintf(p, "%s", inputs[0]->name);
+            p += sprintf(p, "%s", inputs[0] ? inputs[0]->name : "NONE");
 
             for (size_t i = 1; i < inputs.size(); i++) {
                 p += sprintf(p, " x ");
-                p += sprintf(p, "%s", inputs[i]->name);
+                p += sprintf(p, "%s", inputs[i] ? inputs[i]->name : "NONE");
             }
 
             p += sprintf(p, " -> ");
