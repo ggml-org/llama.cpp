@@ -116,6 +116,22 @@ can improve bulk model/tensor transfer on some networks, but they should be
 benchmarked with your model, split, and network because they do not remove
 per-token synchronization costs.
 
+### TCP I/O timeout
+
+By default, RPC TCP sockets use the operating-system blocking I/O behavior. In
+long-running distributed experiments this can hide sick or stale endpoints until
+the whole run appears to hang. To make send and receive operations fail after a
+fixed interval, set `GGML_RPC_TIMEOUT` on the RPC client and server:
+
+```bash
+export GGML_RPC_TIMEOUT=30
+```
+
+The value is in seconds and is applied to accepted client sockets and outbound
+RPC connections. Leave it unset to preserve the default blocking behavior. The
+timeout applies after a socket is created or accepted; it does not make the TCP
+connection attempt itself non-blocking.
+
 ### Cache threshold tuning
 
 When `rpc-server` is started with `-c`, tensors larger than 10 MiB are probed by

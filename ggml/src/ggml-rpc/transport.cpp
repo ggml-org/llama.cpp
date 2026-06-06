@@ -10,6 +10,7 @@
 #  include <winsock2.h>
 #else
 #  include <arpa/inet.h>
+#  include <sys/time.h>
 #  include <sys/socket.h>
 #  include <sys/types.h>
 #  include <netinet/in.h>
@@ -612,8 +613,8 @@ static bool set_tcp_buffer_size(sockfd_t sockfd, int option, int size) {
     return setsockopt(sockfd, SOL_SOCKET, option, (char *) &size, sizeof(size)) == 0;
 }
 
-static int get_tcp_buffer_size() {
-    const char * env = std::getenv("GGML_RPC_TCP_BUFFER_SIZE");
+static int get_positive_env_int(const char * name) {
+    const char * env = std::getenv(name);
     if (env == nullptr || env[0] == '\0') {
         return 0;
     }
@@ -622,11 +623,35 @@ static int get_tcp_buffer_size() {
     char * end = nullptr;
     long value = std::strtol(env, &end, 10);
     if (errno != 0 || end == env || *end != '\0' || value <= 0 || value > INT_MAX) {
-        GGML_LOG_WARN("Ignoring invalid GGML_RPC_TCP_BUFFER_SIZE value: %s\n", env);
+        GGML_LOG_WARN("Ignoring invalid %s value: %s\n", name, env);
         return 0;
     }
 
     return (int) value;
+}
+
+static int get_tcp_buffer_size() {
+    return get_positive_env_int("GGML_RPC_TCP_BUFFER_SIZE");
+}
+
+static int get_tcp_timeout_seconds() {
+    return get_positive_env_int("GGML_RPC_TIMEOUT");
+}
+
+static bool set_tcp_io_timeout(sockfd_t sockfd, int option, int seconds) {
+#ifdef _WIN32
+    if (seconds > INT_MAX / 1000) {
+        seconds = INT_MAX / 1000;
+    }
+    DWORD timeout_ms = (DWORD) seconds * 1000;
+    return setsockopt(sockfd, SOL_SOCKET, option, (char *) &timeout_ms, sizeof(timeout_ms)) == 0;
+#else
+    struct timeval timeout = {
+        /* .tv_sec  = */ seconds,
+        /* .tv_usec = */ 0,
+    };
+    return setsockopt(sockfd, SOL_SOCKET, option, (char *) &timeout, sizeof(timeout)) == 0;
+#endif
 }
 
 static bool configure_tcp_socket(sockfd_t sockfd) {
@@ -642,6 +667,16 @@ static bool configure_tcp_socket(sockfd_t sockfd) {
         }
         if (!set_tcp_buffer_size(sockfd, SO_RCVBUF, buffer_size)) {
             GGML_LOG_WARN("Failed to set SO_RCVBUF=%d\n", buffer_size);
+        }
+    }
+
+    int timeout_seconds = get_tcp_timeout_seconds();
+    if (timeout_seconds > 0) {
+        if (!set_tcp_io_timeout(sockfd, SO_SNDTIMEO, timeout_seconds)) {
+            GGML_LOG_WARN("Failed to set SO_SNDTIMEO=%d\n", timeout_seconds);
+        }
+        if (!set_tcp_io_timeout(sockfd, SO_RCVTIMEO, timeout_seconds)) {
+            GGML_LOG_WARN("Failed to set SO_RCVTIMEO=%d\n", timeout_seconds);
         }
     }
 
