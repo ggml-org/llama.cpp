@@ -989,7 +989,7 @@ int llama_completion(int argc, char ** argv) {
         LOG("\n%s: saving final output to session file '%s'\n", __func__, path_session.c_str());
         session_tokens.insert(session_tokens.end(), embd.begin(), embd.end());
         llama_state_save_file(ctx, path_session.c_str(), session_tokens.data(), session_tokens.size());
-        LOG_INF("saved final session to %s, n_tokens = %ld\n", path_session.data(), session_tokens.size());
+        LOG_INF("saved final session to %s, n_tokens = %zu\n", path_session.data(), session_tokens.size());
 
     }
 
