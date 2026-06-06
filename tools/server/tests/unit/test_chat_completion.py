@@ -573,3 +573,19 @@ def test_chat_completions_multiple_choices():
         for choice in res.body["choices"]:
             assert "assistant" == choice["message"]["role"]
             assert choice["finish_reason"] == "length"
+
+
+def test_chat_completions_token_count():
+    global server
+    server.start()
+    # make sure cache can be reused across multiple choices and multiple requests
+    # ref: https://github.com/ggml-org/llama.cpp/pull/18663
+    for _ in range(2):
+        res = server.make_request("POST", "/chat/completions/input_tokens", data={
+            "messages": [
+                {"role": "system", "content": "Book"},
+                {"role": "user", "content": "What is the best book"},
+            ],
+        })
+        assert res.status_code == 200
+        assert res.body["input_tokens"] > 5

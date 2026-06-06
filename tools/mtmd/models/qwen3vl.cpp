@@ -16,8 +16,8 @@ ggml_cgraph * clip_graph_qwen3vl::build() {
     ggml_tensor * inp_raw = build_inp_raw();
     ggml_tensor * inp = ggml_conv_2d(ctx0, model.patch_embeddings_0, inp_raw, patch_size, patch_size, 0, 0, 1, 1);
 
-    GGML_ASSERT(img.nx % (patch_size * 2) == 0);
-    GGML_ASSERT(img.ny % (patch_size * 2) == 0);
+    GGML_ASSERT(img.nx() % (patch_size * 2) == 0);
+    GGML_ASSERT(img.ny() % (patch_size * 2) == 0);
 
     // second conv dimension
     {

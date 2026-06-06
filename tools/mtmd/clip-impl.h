@@ -4,6 +4,7 @@
 #include "gguf.h"
 #include "clip.h"
 
+#include <array>
 #include <climits>
 #include <cstdarg>
 #include <cinttypes>
@@ -429,10 +430,68 @@ static projector_type clip_projector_type_from_string(const std::string & str) {
 
 // RGB uint8 image
 struct clip_image_u8 {
-    int nx;
-    int ny;
+    clip_image_size get_size() const {
+        return { nx, ny };
+    }
 
+    void set_size(clip_image_size size, bool is_placeholder) {
+        nx = size.width;
+        ny = size.height;
+        if (is_placeholder) {
+            buf.clear();
+        } else {
+            buf.resize((size_t) nx * (size_t) ny * 3);
+        }
+    }
+
+    void cpy_buf(const std::vector<uint8_t> & new_buf) {
+        buf = new_buf;
+    }
+
+    const std::vector<uint8_t> & get_ro_buf() const {
+        if (is_placeholder()) {
+            throw std::runtime_error("this clip_image_u8 is a placeholder");
+        }
+        return buf;
+    }
+
+    // note to contributors: NEVER add a get_rw_buf(), it is a DANGEROUS pattern. always use get_pixel / set_pixel for buffer manipulation
+
+    bool is_placeholder() const {
+        return buf.empty();
+    }
+
+    std::array<uint8_t, 3> get_pixel(int x, int y) const {
+        if (is_placeholder()) {
+            // return a dummy value, so that legacy code can still process image without errors
+            return { 0, 0, 0 };
+        }
+        int idx = (y * nx + x) * 3;
+        return { buf[idx], buf[idx + 1], buf[idx + 2] };
+    }
+
+    void set_pixel(int x, int y, const std::array<uint8_t, 3> & rgb) {
+        if (is_placeholder()) {
+            return; // no-op
+        }
+        int idx = (y * nx + x) * 3;
+        buf[idx] = rgb[0];
+        buf[idx + 1] = rgb[1];
+        buf[idx + 2] = rgb[2];
+    }
+
+    size_t n_pixels() const {
+        return (size_t) nx * (size_t) ny;
+    }
+
+    size_t n_elements() const {
+        return n_pixels() * 3;
+    }
+
+  private:
     std::vector<uint8_t> buf;
+    int nx = 0;
+    int ny = 0;
 };
 
 // For images, buf.size() == nx*ny*3
@@ -440,15 +499,87 @@ struct clip_image_u8 {
 // For audio, only one channel is used, buf.size() == nx*ny
 //     nx will be n_frames and ny will be n_mel
 struct clip_image_f32 {
-    int nx;
-    int ny;
-
-    std::vector<float> buf;
-
     // marks the global view in e.g., DeepSeek-OCR Models
     bool add_viewsep = false;
-    // whether a learned newline token should be appended after the image (eg Granite4 Vision)
+    // whether a learned newline (or EOI) token should be appended after the image (eg Granite4 Vision)
     bool add_newline = false;
+
+    clip_image_size get_size() const {
+        return { nx_, ny_ };
+    }
+
+    int nx() const { return nx_; }
+    int ny() const { return ny_; }
+
+    void set_size(clip_image_size size, bool is_placeholder, bool is_audio) {
+        nx_ = size.width;
+        ny_ = size.height;
+        if (is_placeholder) {
+            buf.clear();
+        } else {
+            if (is_audio) {
+                buf.resize((size_t) nx_ * (size_t) ny_);
+            } else {
+                buf.resize((size_t) nx_ * (size_t) ny_ * 3);
+            }
+        }
+    }
+
+    void cpy_buf(const std::vector<float> & new_buf) {
+        buf = new_buf;
+    }
+
+    void from_u8(const clip_image_u8 & img) {
+        auto size = img.get_size();
+        nx_ = size.width;
+        ny_ = size.height;
+        if (img.is_placeholder()) {
+            buf.clear();
+            return; // no-op
+        }
+        buf.resize(img.n_elements());
+        const auto & u8_buf = img.get_ro_buf();
+        for (size_t i = 0; i < img.n_elements(); ++i) {
+            buf[i] = (float) u8_buf[i] / 255.0f;
+        }
+    }
+
+    size_t n_pixels() const {
+        return (size_t) nx_ * (size_t) ny_;
+    }
+
+    size_t n_elements() const {
+        return n_pixels() * 3;
+    }
+
+    void normalize(const float mean[3], const float std[3]) {
+        if (is_placeholder()) {
+            return; // no-op
+        }
+        for (size_t i = 0; i < n_pixels(); ++i) {
+            buf[i * 3 + 0] = (buf[i * 3 + 0] - mean[0]) / std[0];
+            buf[i * 3 + 1] = (buf[i * 3 + 1] - mean[1]) / std[1];
+            buf[i * 3 + 2] = (buf[i * 3 + 2] - mean[2]) / std[2];
+        }
+    }
+
+    const std::vector<float> & get_ro_buf() const {
+        if (is_placeholder()) {
+            throw std::runtime_error("this clip_image_f32 is a placeholder");
+        }
+        return buf;
+    }
+
+    // note to contributors: NEVER add a get_rw_buf(), it is a DANGEROUS pattern
+
+    bool is_placeholder() const {
+        return buf.empty();
+    }
+
+  private:
+    std::vector<float> buf;
+    int nx_ = 0;
+    int ny_ = 0;
 };
 
 //

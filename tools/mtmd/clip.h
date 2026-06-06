@@ -17,6 +17,9 @@ struct clip_ctx;
 struct clip_image_size {
     int width;
     int height;
+    bool operator==(const clip_image_size & other) const {
+        return width == other.width && height == other.height;
+    }
 };
 
 struct clip_image_f32;
@@ -54,9 +57,6 @@ struct clip_init_result clip_init(const char * fname, struct clip_context_params
 
 void clip_free(struct clip_ctx * ctx);
 
-size_t clip_embd_nbytes(const struct clip_ctx * ctx);
-size_t clip_embd_nbytes_by_img(const struct clip_ctx * ctx, int img_w, int img_h);
-
 int32_t clip_get_image_size (const struct clip_ctx * ctx);
 int32_t clip_get_patch_size (const struct clip_ctx * ctx);
 int32_t clip_get_hidden_size(const struct clip_ctx * ctx);
@@ -79,9 +79,6 @@ struct clip_image_u8        * clip_image_u8_init (void);
 struct clip_image_f32       * clip_image_f32_init(void);
 struct clip_image_f32_batch * clip_image_f32_batch_init(void); // only used by libllava
 
-// nx, ny are the output image dimensions
-unsigned char * clip_image_u8_get_data(struct clip_image_u8 * img, uint32_t * nx, uint32_t * ny);
-
 void clip_image_size_free (struct clip_image_size * img_size);
 void clip_image_u8_free (struct clip_image_u8  * img);
 void clip_image_f32_free(struct clip_image_f32 * img);
@@ -94,23 +91,12 @@ size_t clip_image_f32_batch_nx(const struct clip_image_f32_batch * batch, int id
 size_t clip_image_f32_batch_ny(const struct clip_image_f32_batch * batch, int idx); // equivalent to batch[idx]->ny
 struct clip_image_f32 * clip_image_f32_get_img(const struct clip_image_f32_batch * batch, int idx); // equivalent to batch[idx]->data
 
-/**
- * Build image from pixels decoded by other libraries instead of stb_image.h for better performance.
- * The memory layout is RGBRGBRGB..., input buffer length must be 3*nx*ny bytes
- */
-void clip_build_img_from_pixels(const unsigned char * rgb_pixels, int nx, int ny, struct clip_image_u8 * img);
-
 bool clip_image_encode      (struct clip_ctx * ctx, int n_threads, struct clip_image_f32 * img, float * vec);
 bool clip_image_batch_encode(struct clip_ctx * ctx, int n_threads, const struct clip_image_f32_batch * imgs, float * vec);
 
 bool clip_is_llava(const struct clip_ctx * ctx);
 // note for contributor: this clip_is_(model) pattern is deprecated
 //                       do NOT add new functions like this
-
-bool clip_encode_float_image (struct clip_ctx * ctx, int n_threads, float * img, int h, int w, float * vec);
-
-// use by audio input
-void clip_image_f32_batch_add_mel(struct clip_image_f32_batch * batch, int n_mel, int n_frames, float * mel);
 
 bool clip_has_vision_encoder(const struct clip_ctx * ctx);
 bool clip_has_audio_encoder(const struct clip_ctx * ctx);

@@ -29,7 +29,7 @@ MTMD_API void mtmd_helper_log_set(ggml_log_callback log_callback, void * user_da
 // it calls mtmd_helper_bitmap_init_from_buf() internally
 // returns nullptr on failure
 // this function is thread-safe
-MTMD_API mtmd_bitmap * mtmd_helper_bitmap_init_from_file(mtmd_context * ctx, const char * fname);
+MTMD_API mtmd_bitmap * mtmd_helper_bitmap_init_from_file(mtmd_context * ctx, const char * fname, bool placeholder);
 
 // helper function to construct a mtmd_bitmap from a buffer containing a file
 // supported formats:
@@ -38,7 +38,7 @@ MTMD_API mtmd_bitmap * mtmd_helper_bitmap_init_from_file(mtmd_context * ctx, con
 // note: audio files will be auto-detected based on magic bytes
 // returns nullptr on failure
 // this function is thread-safe
-MTMD_API mtmd_bitmap * mtmd_helper_bitmap_init_from_buf(mtmd_context * ctx, const unsigned char * buf, size_t len);
+MTMD_API mtmd_bitmap * mtmd_helper_bitmap_init_from_buf(mtmd_context * ctx, const unsigned char * buf, size_t len, bool placeholder);
 
 // helper to count the total number of tokens from a list of chunks, useful to keep track of KV cache
 MTMD_API size_t mtmd_helper_get_n_tokens(const mtmd_input_chunks * chunks);
