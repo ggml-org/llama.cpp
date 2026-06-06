@@ -478,7 +478,7 @@ static bool decode_audio_from_buf(const unsigned char * buf_in, size_t len, int 
 
 } // namespace audio_helpers
 
-mtmd_bitmap * mtmd_helper_bitmap_init_from_buf(mtmd_context * ctx, const unsigned char * buf, size_t len) {
+mtmd_bitmap * mtmd_helper_bitmap_init_from_buf(mtmd_context * ctx, const unsigned char * buf, size_t len, bool placeholder) {
     if (audio_helpers::is_audio_file((const char *)buf, len)) {
         std::vector<float> pcmf32;
         const int sample_rate = mtmd_get_audio_sample_rate(ctx);
@@ -490,7 +490,7 @@ mtmd_bitmap * mtmd_helper_bitmap_init_from_buf(mtmd_context * ctx, const unsigne
             LOG_ERR("Unable to read WAV audio file from buffer\n");
             return nullptr;
         }
-        return mtmd_bitmap_init_from_audio(pcmf32.size(), pcmf32.data());
+        return mtmd_bitmap_init_from_audio(pcmf32.size(), placeholder ? nullptr : pcmf32.data());
     }
 
     // otherwise, we assume it's an image
@@ -502,13 +502,13 @@ mtmd_bitmap * mtmd_helper_bitmap_init_from_buf(mtmd_context * ctx, const unsigne
             LOG_ERR("%s: failed to decode image bytes\n", __func__);
             return nullptr;
         }
-        result = mtmd_bitmap_init(nx, ny, data);
+        result = mtmd_bitmap_init(nx, ny, placeholder ? nullptr : data);
         stbi_image_free(data);
     }
     return result;
 }
 
-mtmd_bitmap * mtmd_helper_bitmap_init_from_file(mtmd_context * ctx, const char * fname) {
+mtmd_bitmap * mtmd_helper_bitmap_init_from_file(mtmd_context * ctx, const char * fname, bool placeholder) {
     std::vector<unsigned char> buf;
     FILE * f = fopen(fname, "rb");
     if (!f) {
@@ -533,5 +533,6 @@ mtmd_bitmap * mtmd_helper_bitmap_init_from_file(mtmd_context * ctx, const char *
         return nullptr;
     }
 
-    return mtmd_helper_bitmap_init_from_buf(ctx, buf.data(), buf.size());
+    return mtmd_helper_bitmap_init_from_buf(ctx, buf.data(), buf.size(), placeholder);
 }
+
