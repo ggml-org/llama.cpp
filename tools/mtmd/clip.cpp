@@ -3560,19 +3560,19 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
         //   ──────┘ x B
 
         // IMPORTANT: [QWEN_VIDEO] the batch dim is currently used for temporal dim in Qwen-VL models
-
-        for (size_t i = 0; i < imgs.entries.size(); i++) {
-            const int nx = imgs.entries[i]->nx();
-            const int ny = imgs.entries[i]->ny();
-            const int n = nx * ny;
+        // All entries must have the same spatial size (enforced by can_batch_with() during merging)
+        {
+            const int nx = imgs.entries[0]->nx();
+            const int ny = imgs.entries[0]->ny();
+            const int n  = nx * ny;
 
             for (int b = 0; b < n_batch_cur; b++) {
                 const auto & buf = imgs.entries[b]->get_ro_buf();
                 float * batch_entry = inp_raw.data() + b * (3*n);
                 for (int y = 0; y < ny; y++) {
                     for (int x = 0; x < nx; x++) {
-                        size_t base_src = 3*(y * nx + x); // idx of the first channel
-                        size_t base_dst =    y * nx + x;  // idx of the first channel
+                        size_t base_src = 3*(y * nx + x);
+                        size_t base_dst =    y * nx + x;
                         batch_entry[      base_dst] = buf[base_src    ];
                         batch_entry[1*n + base_dst] = buf[base_src + 1];
                         batch_entry[2*n + base_dst] = buf[base_src + 2];
