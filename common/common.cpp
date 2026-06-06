@@ -17,6 +17,7 @@
 #include <chrono>
 #include <cstdarg>
 #include <cstring>
+#include <cstdlib>
 #include <ctime>
 #include <filesystem>
 #include <fstream>
@@ -371,6 +372,16 @@ void common_init() {
     common_log_set_timestamps(common_log_main(), true);
 
     llama_log_set(common_log_default_callback, NULL);
+
+#if defined(GGML_USE_HIP)
+    // Work around a ROCm/amdgpu MES multi-queue issue where an idle server
+    // can sit at ~100% GFX utilization and max clocks (#3929, #21430, #23965).
+    // Default GPU_MAX_HW_QUEUES to 1 on HIP builds when the user has not set it;
+    // an explicit value is always respected.
+    if (!std::getenv("GPU_MAX_HW_QUEUES")) {
+        setenv("GPU_MAX_HW_QUEUES", "1", 0);
+    }
+#endif
 }
 
 void common_params_print_info(const common_params & params, bool print_devices) {
