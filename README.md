@@ -52,9 +52,24 @@ Notes:
 git clone https://github.com/turbo-tan/llama.cpp-tq3.git
 cd llama.cpp-tq3
 
-cmake -B build -DGGML_CUDA=ON -DCMAKE_BUILD_TYPE=Release
+cmake -B build \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_CUDA_ARCHITECTURES=86 \
+  -DGGML_CUDA=ON \
+  -DGGML_CUDA_FA_ALL_QUANTS=ON \
+  -DGGML_CUDA_PEER_MAX_BATCH_SIZE=512 \
+  -DGGML_NATIVE=ON \
+  -DGGML_CUDA_GRAPHS=ON
+
 cmake --build build -j
 ```
+
+**Important:** Set `CMAKE_CUDA_ARCHITECTURES` to your GPU's compute capability:
+- RTX 3090/3080/3070: `86`
+- RTX 4090/4080/4070: `89`
+- RTX 5090/5080: `120`
+
+The `GGML_CUDA_FA_ALL_QUANTS=ON` flag is required for flash attention with TQ3/Turbo KV cache types. Without it, speed drops ~18%.
 
 ## Download A Model
 
@@ -79,36 +94,45 @@ huggingface-cli download YTan2000/Qwen3.5-27B-TQ3_4S \
   --port 8090
 ```
 
-## KV Cache Settings
+## KV Cache Types
 
-For the cleanest baseline, run with normal KV cache:
+This fork supports three KV cache compression types:
+
+| Type | Flag | Bits/element | Use case |
+|------|------|-------------|----------|
+| `q8_0` | `-ctk q8_0` | 8.5 | **Recommended** — best quality/speed balance |
+| `q4_0` | `-ctk q4_0` | 4.5 | Maximum VRAM savings, slight quality trade |
+| `tq3_0` | `-ctk tq3_0` / `-ctv tq3_0` | 3.5 | Experimental TQ3 KV compression |
+| `turbo3_0` | `-ctk turbo3_0` / `-ctv turbo3_0` | 3.5 | Turbo3 KV cache (equivalent to tq3_0) |
+| `turbo4_0` | `-ctk turbo4_0` / `-ctv turbo4_0` | 4.0 | Turbo4 KV cache (4-bit variant) |
+
+**Recommended for production:**
 
 ```bash
 ./build/bin/llama-server \
-  -m ./models/tq3_4s/Qwen_Qwen3.5-27B-TQ3_4S.gguf \
-  -ngl 99 \
-  -fa on \
-  -c 4096 \
+  -m ./models/tq3_4s/model.gguf \
+  -ngl 99 -fa on -c 32768 \
+  -ctk q8_0 -ctv q8_0 \
   --port 8090
 ```
 
-For the TurboQuant KV-cache path used in local experiments, use:
+**Maximum compression (with speculative MTP):**
 
 ```bash
 ./build/bin/llama-server \
-  -m ./models/tq3_4s/Qwen_Qwen3.5-27B-TQ3_4S.gguf \
-  -ngl 99 \
-  -fa on \
-  -c 8192 \
-  -ctk tq3_0 \
-  -ctv tq3_0 \
-  --port 8090
+  -m ./models/tq3_4s/model.gguf \
+  -ngl 99 -np 1 -c 32768 \
+  -ctk q4_0 -ctv tq3_0 \
+  --spec-type draft-mtp --spec-draft-n-min 1 --spec-draft-n-max 2 \
+  --spec-draft-p-min 1.0 --spec-draft-ngl 99 \
+  --spec-draft-type-k q4_0 --spec-draft-type-v tq3_0 \
+  --jinja --port 8090
 ```
 
 Notes:
-- `-ctk tq3_0 -ctv tq3_0` is the currently supported TurboQuant KV-cache setting in this fork.
-- Keep weight-format and KV-cache experiments separate when benchmarking.
-- If you want the exact weight-format baseline, leave KV cache at the default types.
+- Turbo3 (`turbo3_0`) and Turbo4 (`turbo4_0`) are KV-cache-only types for maximum context compression.
+- For weight quantization, use `TQ3_4S` (weights) + `q4_0`/`tq3_0` (KV cache) — the combination gives best throughput.
+- `--spec-draft-p-min 1.0` is required (values < 1.0 can cause output divergence).
 
 ## Native MTP Runtime
 
@@ -161,8 +185,10 @@ Notes:
 
 ## Scope
 
-- runtime support for `TQ3_1S` and `TQ3_4S`
-- CUDA path for local inference
+- runtime support for `TQ3_1S`, `TQ3_4S` weight quantization
+- `turbo3_0`, `turbo4_0`, `tq3_0` KV cache types
+- CUDA path for local inference (Ampere, Ada, Blackwell)
+- native MTP speculative decoding
 - pre-quantized GGUF workflow
 
 Not in scope for this public fork:
