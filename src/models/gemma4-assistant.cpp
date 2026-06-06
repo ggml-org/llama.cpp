@@ -104,7 +104,10 @@ llama_model_gemma4_assistant::graph::graph(const llama_model & model, const llm_
         res->add_input(std::move(inp));
     }
 
-    ggml_tensor * x = ggml_get_rows(ctx0, model.tok_embd, inp_tokens);
+    GGML_ASSERT(cparams.ctx_src != nullptr);
+    const auto * model_src = llama_get_model(cparams.ctx_src);
+
+    ggml_tensor * x = ggml_get_rows(ctx0, model_src->tok_embd, inp_tokens);
     x = ggml_scale(ctx0, x, sqrtf((float) n_embd_backbone));
     cb(x, "inp_embd_target", -1);
 

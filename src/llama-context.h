@@ -71,8 +71,7 @@ struct llama_context {
     uint32_t n_threads()       const;
     uint32_t n_threads_batch() const;
 
-    llama_memory_ptr get_memory() const;
-    void set_memory(llama_memory_ptr memory);
+    llama_memory_t get_memory() const;
 
     // return true if the memory was updated
     bool memory_update(bool optimize);

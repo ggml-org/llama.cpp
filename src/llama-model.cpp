@@ -1987,7 +1987,6 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
         case LLM_ARCH_WAVTOKENIZER_DEC:
         case LLM_ARCH_MODERN_BERT:
         case LLM_ARCH_GEMMA_EMBEDDING:
-        case LLM_ARCH_GEMMA4_ASSISTANT:
         case LLM_ARCH_DREAM:
         case LLM_ARCH_LLADA:
         case LLM_ARCH_LLADA_MOE:
@@ -2097,8 +2096,9 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                             /* filter_recr       */ std::move(filter_recr));
                     }
                 } else {
-                    llama_memory_i::layer_reuse_cb reuse = nullptr;
                     llama_kv_cache::layer_filter_cb filter = nullptr;
+                    llama_memory_i::layer_reuse_cb reuse = nullptr;
+                    llama_kv_cache::layer_share_cb share = nullptr;
 
                     if (arch == LLM_ARCH_GEMMA3N || arch == LLM_ARCH_GEMMA4) {
                         reuse = [&](uint32_t il) {
@@ -2124,23 +2124,56 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                         }
                     }
 
+                    llama_memory_t mem_src = cparams.ctx_src ? llama_get_memory(cparams.ctx_src) : nullptr;
+
                     if (hparams.swa_type != LLAMA_SWA_TYPE_NONE) {
                         GGML_ASSERT(hparams.is_swa_any());
 
-                        res = new llama_kv_cache_iswa(
-                                *this,
-                                params.type_k,
-                                params.type_v,
-                                !cparams.flash_attn,
-                                cparams.offload_kqv,
-                                params.swa_full,
-                                cparams.kv_unified,
-                                cparams.n_ctx_seq,
-                                cparams.n_seq_max,
-                                cparams.n_ubatch,
-                                1,
-                                filter,
-                                reuse);
+                        if (arch == LLM_ARCH_GEMMA4_ASSISTANT) {
+                            share = [&](int32_t il) {
+                                const llama_model * model_src = llama_get_model(cparams.ctx_src);
+
+                                if (hparams.is_swa(il)) {
+                                    return llama_model_n_layer(model_src) - 2;
+                                }
+
+                                return llama_model_n_layer(model_src) - 1;
+                            };
+
+                            res = new llama_kv_cache_iswa(
+                                    *this,
+                                    params.type_k,
+                                    params.type_v,
+                                    !cparams.flash_attn,
+                                    cparams.offload_kqv,
+                                    params.swa_full,
+                                    cparams.kv_unified,
+                                    cparams.n_ctx_seq,
+                                    cparams.n_seq_max,
+                                    cparams.n_ubatch,
+                                    1,
+                                    mem_src,
+                                    filter,
+                                    reuse,
+                                    share);
+                        } else {
+                            res = new llama_kv_cache_iswa(
+                                    *this,
+                                    params.type_k,
+                                    params.type_v,
+                                    !cparams.flash_attn,
+                                    cparams.offload_kqv,
+                                    params.swa_full,
+                                    cparams.kv_unified,
+                                    cparams.n_ctx_seq,
+                                    cparams.n_seq_max,
+                                    cparams.n_ubatch,
+                                    1,
+                                    mem_src,
+                                    filter,
+                                    reuse,
+                                    share);
+                        }
                     } else {
                         GGML_ASSERT(!hparams.is_swa_any());
 
@@ -2157,7 +2190,9 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                                 1,
                                 hparams.n_swa,
                                 hparams.swa_type,
+                                mem_src,
                                 filter,
+                                nullptr,
                                 nullptr);
                     }
                 }
@@ -2630,12 +2665,4 @@ void llama_model_base::create_tensor_qkv(llama_layer & layer, int bid,
         layer.wk_b = create_tensor(tn(LLM_TENSOR_ATTN_K, "bias", bid), {n_embd_k_}, TENSOR_NOT_REQUIRED);
         layer.wv_b = create_tensor(tn(LLM_TENSOR_ATTN_V, "bias", bid), {n_embd_v_}, TENSOR_NOT_REQUIRED);
     }
-}
-
-ggml_tensor * llama_model_get_tok_embd(const struct llama_model * model) {
-    return model->tok_embd;
-}
-
-void llama_model_set_tok_embd(struct llama_model * model, ggml_tensor * tensor) {
-    model->tok_embd = tensor;
 }

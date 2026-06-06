@@ -2543,16 +2543,6 @@ ggml_tensor * llm_graph_context::build_attn(
         ggml_build_forward_expand(gf, v_cur);
     }
 
-    int il_save = il;
-
-    if (arch == LLM_ARCH_GEMMA4_ASSISTANT) {
-        if (il == n_layer - 1) {
-            il = 59;
-        } else {
-            il = 58;
-        }
-    }
-
     const auto * mctx_iswa = inp->mctx;
 
     const auto * mctx_cur = is_swa ? mctx_iswa->get_swa() : mctx_iswa->get_base();
@@ -2575,8 +2565,6 @@ ggml_tensor * llm_graph_context::build_attn(
     ggml_tensor * q = q_cur;
     ggml_tensor * k = mctx_cur->get_k(ctx0, il);
     ggml_tensor * v = mctx_cur->get_v(ctx0, il);
-
-    il = il_save;
 
     ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, sinks, v_mla, kq_scale, il);
     cb(cur, "kqv_out", il);

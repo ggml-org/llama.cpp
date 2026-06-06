@@ -126,9 +126,10 @@ llama_context::llama_context(
     cparams.embeddings_nextn_masked = false;
     cparams.offload_kqv             = params.offload_kqv;
     cparams.no_perf                 = params.no_perf;
-    cparams.pooling_type            = params.pooling_type;
     cparams.warmup                  = false;
 
+    cparams.ctx_type     = params.ctx_type;
+    cparams.pooling_type = params.pooling_type;
 
     cparams.n_ctx            = params.n_ctx           == 0    ? hparams.n_ctx_train           : params.n_ctx;
     cparams.rope_freq_base   = params.rope_freq_base  == 0.0f ? hparams.rope_freq_base_train  : params.rope_freq_base;
@@ -141,7 +142,7 @@ llama_context::llama_context(
     cparams.cb_eval           = params.cb_eval;
     cparams.cb_eval_user_data = params.cb_eval_user_data;
 
-    cparams.ctx_type          = params.ctx_type;
+    cparams.ctx_src = params.ctx_src;
 
     // Initialize backend samplers here so they are part of the sampling graph
     // before the reserve passes run later in this function. This avoids a later
@@ -360,7 +361,8 @@ llama_context::llama_context(
             /*.type_k   =*/ params.type_k,
             /*.type_v   =*/ params.type_v,
             /*.swa_full =*/ params.swa_full,
-            /*.ctx_type= */ cparams.ctx_type,
+            /*.ctx_type =*/ cparams.ctx_type,
+            /*.mem_src  =*/ params.ctx_src ? params.ctx_src->memory.get() : nullptr,
         };
 
         memory.reset(model.create_memory(params_mem, cparams));
@@ -792,14 +794,8 @@ uint32_t llama_context::n_threads_batch() const {
     return cparams.n_threads_batch;
 }
 
-llama_memory_ptr llama_context::get_memory() const {
-    return memory;
-}
-
-void llama_context::set_memory(llama_memory_ptr memory) {
-    this->memory = std::move(memory);
-
-    sched_need_reserve = true;
+llama_memory_t llama_context::get_memory() const {
+    return memory.get();
 }
 
 bool llama_context::memory_update(bool optimize) {
@@ -3441,6 +3437,7 @@ llama_context_params llama_context_default_params() {
         /*.kv_unified                  =*/ false,
         /*.sampler                     =*/ nullptr,
         /*.n_sampler                   =*/ 0,
+        /*.ctx_src                     =*/ nullptr,
     };
 
     return result;
@@ -3658,12 +3655,8 @@ void llama_set_embeddings_nextn(llama_context * ctx, bool value, bool masked) {
     ctx->set_embeddings_nextn(value, masked);
 }
 
-void llama_set_memory(llama_context * ctx, llama_context * src) {
-    ctx->set_memory(src->get_memory());
-}
-
 llama_memory_t llama_get_memory(const struct llama_context * ctx) {
-    return ctx->get_memory().get();
+    return ctx->get_memory();
 }
 
 float * llama_get_embeddings_nextn(llama_context * ctx) {

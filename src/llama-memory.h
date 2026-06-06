@@ -23,6 +23,8 @@ struct llama_memory_params {
     bool swa_full;
 
     llama_context_type ctx_type;
+
+    llama_memory_t mem_src;
 };
 
 enum llama_memory_status {
@@ -76,6 +78,8 @@ struct llama_memory_i {
     // return negative value to indicate that the layer il should not reuse memory
     using layer_reuse_cb = std::function<int32_t(int32_t il)>;
 
+    using layer_share_cb = std::function<int32_t(int32_t il)>;
+
     virtual ~llama_memory_i() = default;
 
     // split the input batch into a set of ubatches and verify that they can fit into the cache
@@ -122,4 +126,4 @@ struct llama_memory_i {
     virtual void state_read (llama_io_read_i  & io, llama_seq_id seq_id = -1, llama_state_seq_flags flags = 0) = 0;
 };
 
-using llama_memory_ptr = std::shared_ptr<llama_memory_i>;
+using llama_memory_ptr = std::unique_ptr<llama_memory_i>;

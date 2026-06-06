@@ -418,7 +418,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
 
     int32_t n_embd = 0;
 
-    bool kv_shared_with_target = false;
+    bool is_mem_shared = false;
 
     // Per-sequence cross-batch carryover: pair (h_p, x_{p+1}) at MTP pos p+1.
     // The last h-row of one process() call needs the first token of the NEXT
@@ -494,13 +494,8 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
         llama_set_embeddings_nextn(ctx_tgt, true, /*masked*/ false);
         llama_set_embeddings_nextn(ctx_dft, true, /*masked*/ true);
 
-        kv_shared_with_target = llama_get_memory(ctx_dft) == nullptr;
-        if (kv_shared_with_target) {
-            llama_set_memory(ctx_dft, ctx_tgt);
-
-            // TODO: avoid the const cast
-            llama_model_set_tok_embd(const_cast<llama_model *>(llama_get_model(ctx_dft)), llama_model_get_tok_embd(llama_get_model(ctx_tgt)));
-        }
+        // TODO: fix this
+        is_mem_shared = true;
 
         pending_h.assign(n_seq, std::vector<float>(n_embd, 0.0f));
 
@@ -541,7 +536,8 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
 
         auto * ctx_dft = this->params.ctx_dft;
         const llama_pos pos_max = llama_memory_seq_pos_max(llama_get_memory(ctx_dft), seq_id);
-        if (pos_max < N - 1 && !kv_shared_with_target) {
+
+        if (pos_max < N - 1 && !is_mem_shared) {
             LOG_WRN("%s: ctx_dft pos_max=%d < N-1=%d - "
                     "process() hook may not have run on every prefill ubatch "
                     "(need_embd / logits=1 on every prompt position?). "
@@ -585,7 +581,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
         const size_t row_bytes = (size_t) n_embd * sizeof(float);
 
         // if kv is shared with target (e.g Gemma4), then we can skip this catch-up decode
-        if (!kv_shared_with_target) {
+        if (!is_mem_shared) {
             common_batch_clear(batch);
 
             for (int k = 0; k < n_tokens; ++k) {
@@ -645,7 +641,6 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
 
     void draft(common_speculative_draft_params_vec & dparams) override {
         auto & ctx_dft = params.ctx_dft;
-        auto & ctx_tgt = params.ctx_tgt;
 
         common_batch_clear(batch);
 
@@ -671,8 +666,6 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
 
             h_row = pending_h[seq_id].data();
             std::memcpy(batch.embd + n_embd*(batch.n_tokens - 1), h_row, row_bytes);
-
-            llama_memory_seq_rm(llama_get_memory(ctx_dft), seq_id, dp.n_past, -1);
         }
 
         int ret = llama_decode(ctx_dft, batch);
@@ -733,8 +726,6 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
 
                 common_batch_add(batch, id, dp.n_past + i + 1, { seq_id }, true);
                 std::memcpy(batch.embd + n_embd*(batch.n_tokens - 1), h_row, row_bytes);
-
-                llama_memory_seq_rm(llama_get_memory(ctx_dft), seq_id, dp.n_past, -1);
             }
 
             if (batch.n_tokens == 0) {
@@ -750,8 +741,6 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
 
             ++i;
         }
-
-        llama_synchronize(ctx_dft);
 
         for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
             auto & dp = dparams[seq_id];

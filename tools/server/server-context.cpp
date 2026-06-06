@@ -10,8 +10,6 @@
 #include "common.h"
 #include "fit.h"
 #include "llama.h"
-#include "../../src/llama-ext.h" // staging API: llama_set_mtp_source
-#include "ggml-cpp.h"
 #include "log.h"
 #include "sampling.h"
 #include "speculative.h"
@@ -847,30 +845,14 @@ private:
                 }
                 cparams_dft.n_rs_seq = 0;
 
-                bool skip_measure = false;
-                //TODO: remove this
-                if (spec_mtp && has_draft) {
-                    struct gguf_init_params meta_params = {
-                        /* .no_alloc = */ true,
-                        /* .ctx      = */ nullptr,
-                    };
-                    gguf_context_ptr meta(gguf_init_from_file(params_dft.model.path.c_str(), meta_params));
-
-                    if (std::string(gguf_get_val_str(meta.get(), gguf_find_key(meta.get(), "general.architecture"))) == "gemma4-assistant") {
-                        skip_measure = true;
-                        SRV_WRN("[spec] skipping --fit memory measurement for Gemma 4 assistant draft model '%s'\n",
-                                params_dft.model.path.c_str());
-                    }
-                }
-
                 std::vector<ggml_backend_dev_t> devs;
                 uint32_t hp_ngl = 0;
                 uint32_t hp_nct = 0;
                 uint32_t hp_nex = 0;
-                if (!skip_measure) try {
+                try {
                     auto dmd = common_get_device_memory_data(
                         params_dft.model.path.c_str(), &mparams_dft, &cparams_dft,
-                        devs, hp_ngl, hp_nct, hp_nex, GGML_LOG_LEVEL_ERROR);
+                        devs, hp_ngl, hp_nct, hp_nex, GGML_LOG_LEVEL_DEBUG);
 
                     GGML_ASSERT(!params_base.fit_params_target.empty());
                     size_t total = 0;
@@ -972,6 +954,8 @@ private:
             // note: for small models maybe we can set this to the maximum possible draft from all speculative types
             //       the extra memory for small models is likely negligible?
             cparams.n_rs_seq = 0;
+            cparams.ctx_src = ctx_tgt;
+
             ctx_dft.reset(llama_init_from_model(model_dft.get(), cparams));
 
             params_base.speculative.draft.ctx_tgt = ctx_tgt;
@@ -987,6 +971,7 @@ private:
             cparams_mtp.type_v        = params_base.speculative.draft.cache_type_v;
             cparams_mtp.n_rs_seq      = 0;
             cparams_mtp.n_outputs_max = params_base.n_parallel;
+            cparams_mtp.ctx_src       = ctx_tgt;
 
             ctx_dft.reset(llama_init_from_model(model_tgt, cparams_mtp));
             if (ctx_dft == nullptr) {
