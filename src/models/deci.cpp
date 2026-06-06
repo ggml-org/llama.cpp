@@ -2,7 +2,8 @@
 
 void llama_model_deci::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
-    switch (hparams.n_layer) {
+
+    switch (hparams.n_layer()) {
         case 32: type = LLM_TYPE_7B; break;
         case 80: type = LLM_TYPE_70B; break;
         case 162: type = LLM_TYPE_405B; break;
@@ -181,7 +182,7 @@ llama_model_deci::graph::graph(const llama_model & model, const llm_graph_params
     res->t_embd = cur;
 
     // lm_head
-    cur = build_lora_mm(model.output, cur);
+    cur = build_lora_mm(model.output, cur, model.output_s);
 
     cb(cur, "result_output", -1);
     res->t_logits = cur;

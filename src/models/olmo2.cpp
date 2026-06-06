@@ -17,7 +17,7 @@ void llama_model_olmo2::load_arch_hparams(llama_model_loader & ml) {
         hparams.swa_type = LLAMA_SWA_TYPE_NONE;
     }
 
-    switch (hparams.n_layer) {
+    switch (hparams.n_layer()) {
         case 16: type = LLM_TYPE_1B; break;
         case 32: type = LLM_TYPE_7B; break;
         case 40: type = LLM_TYPE_13B; break;
@@ -198,7 +198,7 @@ llama_model_olmo2::graph<iswa>::graph(const llama_model & model, const llm_graph
     res->t_embd = cur;
 
     // lm_head
-    cur = build_lora_mm(model.output, cur);
+    cur = build_lora_mm(model.output, cur, model.output_s);
 
     cb(cur, "result_output", -1);
     res->t_logits = cur;

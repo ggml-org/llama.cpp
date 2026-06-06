@@ -17,7 +17,7 @@ void llama_model_gemma3::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_FINAL_LOGIT_SOFTCAPPING, hparams.f_final_logit_softcapping, false);
     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
 
-    switch (hparams.n_layer) {
+    switch (hparams.n_layer()) {
         case 18: type = LLM_TYPE_270M; break;
         case 26: type = LLM_TYPE_1B; break;
         case 32: type = LLM_TYPE_8B; break; // Rnj-1
@@ -207,7 +207,7 @@ llama_model_gemma3::graph<iswa>::graph(const llama_model & model, const llm_grap
     res->t_embd = cur;
 
     // lm_head
-    cur = build_lora_mm(model.output, cur);
+    cur = build_lora_mm(model.output, cur, model.output_s);
 
     if (hparams.f_final_logit_softcapping) {
         cur = ggml_scale(ctx0, cur, 1.0f / hparams.f_final_logit_softcapping);

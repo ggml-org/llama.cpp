@@ -146,6 +146,17 @@ json task_params::to_json(bool only_metrics) const {
 //
 // task_result_state
 //
+task_result_state::task_result_state(const common_chat_parser_params & chat_parser_params)
+    : chat_parser_params(chat_parser_params)
+    , oai_resp_id("resp_" + random_string())
+    , oai_resp_reasoning_id("rs_" + random_string())
+    , oai_resp_message_id("msg_" + random_string()) {
+    if (chat_parser_params.is_continuation && !chat_parser_params.echo) {
+        // initialize chat_msg to avoid emitting a delta containing the assistant prefill
+        chat_msg = common_chat_parse("", true, chat_parser_params);
+    }
+}
+
 common_chat_msg task_result_state::update_chat_msg(
         const std::string & text_added,
         bool is_partial,
@@ -430,6 +441,11 @@ task_params server_task::params_from_json_cmpl(
         if (data.contains("chat_parser")) {
             params.chat_parser_params.parser.load(data.at("chat_parser").get<std::string>());
         }
+        if (data.contains("continue_final_message")) {
+            auto continuation = common_chat_continuation_parse(data.at("continue_final_message"));
+            params.chat_parser_params.is_continuation = continuation != COMMON_CHAT_CONTINUATION_NONE;
+        }
+        params.chat_parser_params.echo = json_value(data, "echo", false);
     }
 
     {
@@ -492,6 +508,7 @@ task_params server_task::params_from_json_cmpl(
         const auto end_tag   = json_value(data, "reasoning_budget_end_tag", std::string());
         const auto message   = json_value(data, "reasoning_budget_message", std::string());
         params.sampling.reasoning_budget_tokens = budget;
+        params.sampling.reasoning_control = json_value(data, "reasoning_control", false);
 
         if (!start_tag.empty()) {
             params.sampling.reasoning_budget_start = common_tokenize(vocab, start_tag, false, true);
@@ -2013,6 +2030,9 @@ void server_task_result_cmpl_partial::update(task_result_state & state) {
 
 json server_task_result_cmpl_partial::to_json() {
     GGML_ASSERT(is_updated && "update() must be called before to_json()");
+    if (is_begin) {
+        return nullptr; // simply signal to HTTP handler to send the headers and status code
+    }
     switch (res_type) {
         case TASK_RESPONSE_TYPE_NONE:
             return to_json_non_oaicompat();

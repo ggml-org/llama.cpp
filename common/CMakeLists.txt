@@ -78,6 +78,8 @@ add_library(${TARGET}
     hf-cache.cpp
     hf-cache.h
     http.h
+    imatrix-loader.cpp
+    imatrix-loader.h
     json-partial.cpp
     json-partial.h
     json-schema-to-grammar.cpp
