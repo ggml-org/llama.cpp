@@ -20,6 +20,12 @@ struct clip_image_size {
     bool operator==(const clip_image_size & other) const {
         return width == other.width && height == other.height;
     }
+    bool operator!=(const clip_image_size & other) const {
+        return !(*this == other);
+    }
+    int area() const {
+        return width * height;
+    }
 };
 
 struct clip_image_f32;
@@ -101,8 +107,8 @@ bool clip_is_llava(const struct clip_ctx * ctx);
 bool clip_has_vision_encoder(const struct clip_ctx * ctx);
 bool clip_has_audio_encoder(const struct clip_ctx * ctx);
 
-// true if model graph support image->nt (temporal dimension) as input
-bool clip_model_supports_seq_input(const struct clip_ctx * ctx);
+// return the max number of model's cgraph image->nt (temporal dimension) as input
+int clip_model_n_batch_max(const struct clip_ctx * ctx);
 
 std::map<ggml_backend_dev_t, size_t> clip_get_mem_usage(const struct clip_ctx * ctx);
 
