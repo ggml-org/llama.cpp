@@ -627,9 +627,10 @@ class LazyUnpickler(pickle.Unpickler):
     }
 
     def find_class(self, module: str, name: str) -> Any:
-        if not module.startswith('torch'):
-            return super().find_class(module, name)
-        return self.CLASSES[(module, name)]
+    if not module.startswith('torch'):
+        raise pickle.UnpicklingError(f"global '{module}.{name}' is forbidden")
+    return self.CLASSES[(module, name)]
+
 
 
 def lazy_load_torch_file(outer_fp: IO[bytes], path: Path) -> ModelPlus:
