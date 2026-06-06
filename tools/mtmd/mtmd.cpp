@@ -927,10 +927,15 @@ struct mtmd_tokenizer {
                     return 2;
                 }
 
-                // move them back to the "global" batch_f32
+                // move entries and grid dimensions to the "global" batch_f32
                 for (auto & entry : tmp_batch.entries) {
                     batch_f32.entries.emplace_back(std::move(entry));
                 }
+
+                // for llava-uhd style, we need to handle grid too
+                // we don't care about overwriting these values for now because llama-uhd doesn't support batching anyway
+                batch_f32.grid_x = tmp_batch.grid_x;
+                batch_f32.grid_y = tmp_batch.grid_y;
             }
 
             // Annotate llava-next style tiles so clip_n_output_tokens accounts
