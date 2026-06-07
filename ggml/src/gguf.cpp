@@ -557,6 +557,11 @@ static struct gguf_context * gguf_init_from_reader(const struct gguf_reader & gr
                 GGML_LOG_ERROR("%s: encountered bad_alloc error while reading key %" PRIi64 "\n", __func__, i);
                 ok = false;
             }
+            // check that key is not empty (empty key would trigger GGML_ASSERT)
+            if (ok && key.empty()) {
+                GGML_LOG_ERROR("%s: key %" PRIi64 " has empty name\n", __func__, i);
+                ok = false;
+            }
             for (size_t j = 0; ok && j < ctx->kv.size(); ++j) {
                 if (key == ctx->kv[j].key) {
                     GGML_LOG_ERROR("%s: duplicate key '%s' for tensors %zu and %" PRIi64 " \n", __func__, key.c_str(), j, i);
@@ -678,7 +683,9 @@ static struct gguf_context * gguf_init_from_reader(const struct gguf_reader & gr
             }
 
             // check that the total number of elements is representable
-            if (ok && ((INT64_MAX/info.t.ne[1] <= info.t.ne[0]) ||
+            // (skip when any dim is 0: zero-sized tensors have 0 elements, no overflow)
+            if (ok && info.t.ne[1] != 0 && info.t.ne[2] != 0 && info.t.ne[3] != 0 &&
+                       ((INT64_MAX/info.t.ne[1] <= info.t.ne[0]) ||
                        (INT64_MAX/info.t.ne[2] <= info.t.ne[0]*info.t.ne[1]) ||
                        (INT64_MAX/info.t.ne[3] <= info.t.ne[0]*info.t.ne[1]*info.t.ne[2]))) {
 
