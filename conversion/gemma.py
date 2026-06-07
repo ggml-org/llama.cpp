@@ -785,6 +785,16 @@ class Gemma4UnifiedModel(Gemma4Model):
             self.gguf_writer.add_suppress_tokens(suppress_tokens)
 
 
+@ModelBase.register("Gemma4AssistantForCausalLM", "Gemma4UnifiedAssistantForCausalLM")
+class Gemma4AssistantModel(Gemma4Model):
+    model_arch = gguf.MODEL_ARCH.GEMMA4_ASSISTANT
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        self.gguf_writer.add_embedding_length_out(self.hparams["backbone_hidden_size"])
+        self.gguf_writer.add_nextn_predict_layers(self.block_count)
+
+
 @ModelBase.register("Gemma4ForConditionalGeneration")
 class Gemma4VisionAudioModel(MmprojModel):
     has_audio_encoder = True

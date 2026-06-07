@@ -784,6 +784,7 @@ struct llm_graph_context {
 
     const int64_t n_embd;
     const int64_t n_layer;
+    const int64_t n_layer_nextn;
     const int64_t n_rot;
     const int64_t n_ctx;       // user-specified context size (can be different from n_ctx_train)
     const int64_t n_head;
