@@ -796,13 +796,13 @@ std::vector<common_sampler_type> common_sampler_types_from_names(const std::vect
             {
                 std::string kebab_case = canonical;
                 std::replace(kebab_case.begin(), kebab_case.end(), '_', '-');
-                alias_name_map[kebab_case] = entry.second;
+                alias_name_map.insert({kebab_case, entry.second});
             }
             // no dash: "topk", "minp", etc.
             {
                 std::string no_dash = canonical;
                 no_dash.erase(std::remove(no_dash.begin(), no_dash.end(), '_'), no_dash.end());
-                alias_name_map[no_dash] = entry.second;
+                alias_name_map.insert({no_dash, entry.second});
             }
         }
         // misc. aliases
