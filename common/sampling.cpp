@@ -770,7 +770,7 @@ std::string common_sampler_type_to_str(enum common_sampler_type cnstr) {
 }
 
 std::vector<common_sampler_type> common_sampler_types_from_names(const std::vector<std::string> & names) {
-    // sampler names can be written multiple ways; generate aliases from canonical sampler names
+    // sampler names can be written multiple ways; generate aliases from canonical names
     static const auto sampler_name_map = []{
         // canonical sampler name mapping
         std::unordered_map<std::string, common_sampler_type> canonical_name_map {
