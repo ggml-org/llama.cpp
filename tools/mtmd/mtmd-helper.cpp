@@ -36,8 +36,10 @@
 #error "mtmd-helper is a public library outside of mtmd. it must not include internal headers"
 #endif
 
+#ifdef MTMD_VIDEO
 #include "sheredom/subprocess.h"
 #include <thread>
+#endif
 
 //
 // internal logging functions
@@ -533,6 +535,7 @@ mtmd_helper_bitmap_wrapper mtmd_helper_bitmap_init_from_buf(mtmd_context * ctx, 
     }
 
     // last try: load as video
+#ifdef MTMD_VIDEO
     if (!result) {
         auto params = mtmd_helper_video_init_params_default();
         auto video_ctx = mtmd_helper_video_init_from_buf(ctx, buf, len, params);
@@ -552,6 +555,12 @@ mtmd_helper_bitmap_wrapper mtmd_helper_bitmap_init_from_buf(mtmd_context * ctx, 
             });
          return {result, video_ctx};
     }
+#else
+    if (!result) {
+        LOG_ERR("%s: failed to decode buffer as either image or audio (video support not compiled in)\n", __func__);
+        return {nullptr, nullptr};
+    }
+#endif
 
     // should not reach here
     return {nullptr, nullptr};
@@ -585,9 +594,19 @@ mtmd_helper_bitmap_wrapper mtmd_helper_bitmap_init_from_file(mtmd_context * ctx,
     return mtmd_helper_bitmap_init_from_buf(ctx, buf.data(), buf.size(), placeholder);
 }
 
+bool mtmd_helper_support_video(mtmd_context * ctx) {
+#ifdef MTMD_VIDEO
+    return mtmd_support_vision(ctx);
+#else
+    return false;
+#endif
+}
+
 //
 // Video input helpers
 //
+
+#ifdef MTMD_VIDEO
 
 struct mtmd_helper_video_context {
     mtmd_context * mctx;
@@ -862,6 +881,7 @@ struct mtmd_helper_video_context {
         return 0.0f;
     }
 };
+#endif
 
 mtmd_helper_video_init_params mtmd_helper_video_init_params_default() {
     return {
@@ -894,6 +914,7 @@ mtmd_helper_video_context * mtmd_helper_video_init(
         mtmd_context * mctx,
         const char * path,
         mtmd_helper_video_init_params params) {
+#ifdef MTMD_VIDEO
     auto * ctx = new mtmd_helper_video_context();
 
     ctx->mctx        = mctx;
@@ -914,12 +935,17 @@ mtmd_helper_video_context * mtmd_helper_video_init(
     }
 
     return ctx;
+#else
+    LOG_ERR("%s: video is not supported in this build (MTMD_VIDEO is set to OFF)\n", __func__);
+    return nullptr;
+#endif
 }
 
 mtmd_helper_video_context * mtmd_helper_video_init_from_buf(
         mtmd_context * mctx,
         const unsigned char * buf, size_t len,
         mtmd_helper_video_init_params params) {
+#ifdef MTMD_VIDEO
     auto * ctx = new mtmd_helper_video_context();
 
     ctx->mctx        = mctx;
@@ -940,20 +966,36 @@ mtmd_helper_video_context * mtmd_helper_video_init_from_buf(
     }
 
     return ctx;
+#else
+    LOG_ERR("%s: video is not supported in this build (MTMD_VIDEO is set to OFF)\n", __func__);
+    return nullptr;
+#endif
 }
 
 void mtmd_helper_video_free(mtmd_helper_video_context * ctx) {
+#ifdef MTMD_VIDEO
     if (!ctx) return;
     ctx->stop_ffmpeg();
     delete ctx;
+#else
+    LOG_ERR("%s: video is not supported in this build (MTMD_VIDEO is set to OFF)\n", __func__);
+#endif
 }
 
 mtmd_helper_video_info mtmd_helper_video_get_info(const mtmd_helper_video_context * ctx) {
+#ifdef MTMD_VIDEO
     return ctx->info;
+#else
+    GGML_ASSERT(false && "video is not supported in this build (MTMD_VIDEO is set to OFF)");
+#endif
 }
 
 int32_t mtmd_helper_video_read_next(mtmd_helper_video_context * ctx,
         mtmd_bitmap ** out_bitmap, char ** out_text) {
+#ifdef MTMD_VIDEO
     if (!ctx) return -2;
     return ctx->read_next(out_bitmap, out_text);
+#else
+    GGML_ASSERT(false && "video is not supported in this build (MTMD_VIDEO is set to OFF)");
+#endif
 }

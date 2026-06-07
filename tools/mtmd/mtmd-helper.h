@@ -28,6 +28,9 @@ typedef struct mtmd_helper_video_context mtmd_helper_video_context;
 // Note: this also call mtmd_log_set() internally
 MTMD_API void mtmd_helper_log_set(ggml_log_callback log_callback, void * user_data);
 
+// Returns true if this build includes video support (MTMD_VIDEO was ON at compile time).
+MTMD_API bool mtmd_helper_support_video(mtmd_context * ctx);
+
 struct mtmd_helper_bitmap_wrapper {
     mtmd_bitmap * bitmap;
     mtmd_helper_video_context * video_ctx;
@@ -117,8 +120,9 @@ struct mtmd_helper_video_info {
 };
 
 struct mtmd_helper_video_init_params {
-    float fps_target;            // desired output fps; <= 0 means use the video's native fps
+    float fps_target;            // desired output fps; <= 0 means use the video's native fps, defaulted to 4.0f
     const char * ffmpeg_bin_dir; // directory containing ffmpeg/ffprobe binaries; NULL means search PATH
+    // TODO @ngxson : allow "placeholder" bitmap output for counting tokens
 };
 
 MTMD_API struct mtmd_helper_video_init_params mtmd_helper_video_init_params_default(void);
