@@ -389,6 +389,8 @@ extern "C" {
         struct llama_sampler_seq_config * samplers;
         size_t                            n_samplers;
 
+        // a source/target/parent context
+        // can be utilized in various ways, for example by sharing results or llama_memory between 2 contexts
         struct llama_context * ctx_src;
     };
 
