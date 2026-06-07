@@ -511,6 +511,34 @@ beginning, middle, and end rather than only from the prefix. Use
 16 MiB are clamped. This is a diagnostic tool only; it does not compress,
 decompress, or alter network traffic.
 
+To test real codecs against the sampled payload bytes, set
+`GGML_RPC_COMPRESSION_PROBE_DUMP_DIR`:
+
+```bash
+GGML_RPC_COMPRESSION_PROBE_DUMP_DIR=/tmp/rpc-payloads \
+GGML_RPC_COMPRESSION_PROBE_MAX_SAMPLE=65536 \
+./build/bin/llama-bench --rpc 192.0.2.10:50052 ...
+
+python3 tools/rpc/bench_rpc_payload_codecs.py /tmp/rpc-payloads
+```
+
+The dump directory contains bounded `.bin` samples plus `samples.jsonl`
+metadata. `GGML_RPC_COMPRESSION_PROBE_DUMP_MAX_FILES` limits the number of
+files written and defaults to 64. The codec bench reports JSONL rows for each
+sample and summary rows per codec, including compressed ratio, encode time,
+decode time, round-trip verification, and the effective ratio if expansion is
+skipped. It uses Python `zlib` by default and also tests `zstd` or `lz4`
+command-line tools when they are installed.
+
+Transparent compression below RPC is usually not enough for this path. Btrfs,
+ZFS, NTFS, and other filesystem compression can reduce stored model size or disk
+I/O, but RPC sends tensor bytes that are already in memory. SMB compression and
+SSH `Compression=yes` can compress their own file-transfer or tunnel protocols,
+but raw RPC over TCP/Tailscale does not pass through those layers unless you
+explicitly wrap the RPC connection in such a tunnel. Tailscale/WireGuard encrypts
+IP packets and does not provide a transparent per-TCP-stream compression stage
+for RPC payloads.
+
 ### Model placement reporting
 
 Set `LLAMA_LOG_MODEL_PLACEMENT=1` on the RPC client to print the model tensor

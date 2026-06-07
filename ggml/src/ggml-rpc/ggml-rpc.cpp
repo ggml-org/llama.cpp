@@ -5,6 +5,7 @@
 #include "transport.h"
 
 #include <array>
+#include <atomic>
 #include <cinttypes>
 #include <optional>
 #include <string>
@@ -22,6 +23,7 @@
 #include <cerrno>
 #include <cstdlib>
 #include <cmath>
+#include <exception>
 #include <limits>
 
 static const char * RPC_DEBUG = std::getenv("GGML_RPC_DEBUG");
@@ -285,7 +287,12 @@ static size_t rpc_cache_min_size() {
 static bool rpc_compression_probe_enabled() {
     static const bool enabled = []() {
         const char * env = std::getenv("GGML_RPC_COMPRESSION_PROBE");
-        return env != nullptr && env[0] != '\0' && strcmp(env, "0") != 0;
+        if (env != nullptr && env[0] != '\0' && strcmp(env, "0") != 0) {
+            return true;
+        }
+
+        const char * dump_dir = std::getenv("GGML_RPC_COMPRESSION_PROBE_DUMP_DIR");
+        return dump_dir != nullptr && dump_dir[0] != '\0';
     }();
 
     return enabled;
@@ -319,6 +326,41 @@ static size_t rpc_compression_probe_max_sample() {
     }();
 
     return max_sample;
+}
+
+static const std::string & rpc_compression_probe_dump_dir() {
+    static const std::string dump_dir = []() {
+        const char * env = std::getenv("GGML_RPC_COMPRESSION_PROBE_DUMP_DIR");
+        return env == nullptr ? std::string() : std::string(env);
+    }();
+
+    return dump_dir;
+}
+
+static bool rpc_compression_probe_dump_enabled() {
+    return !rpc_compression_probe_dump_dir().empty();
+}
+
+static size_t rpc_compression_probe_dump_max_files() {
+    static const size_t max_files = []() {
+        const char * env = std::getenv("GGML_RPC_COMPRESSION_PROBE_DUMP_MAX_FILES");
+        if (env == nullptr || env[0] == '\0') {
+            return (size_t) 64;
+        }
+
+        char * end = nullptr;
+        errno = 0;
+        unsigned long long parsed = std::strtoull(env, &end, 10);
+        if (env[0] == '-' || env[0] == '+' || errno != 0 || end == env || *end != '\0' ||
+                parsed > std::numeric_limits<size_t>::max()) {
+            GGML_LOG_WARN("Ignoring invalid GGML_RPC_COMPRESSION_PROBE_DUMP_MAX_FILES='%s'\n", env);
+            return (size_t) 64;
+        }
+
+        return static_cast<size_t>(parsed);
+    }();
+
+    return max_files;
 }
 
 static constexpr size_t RPC_WIRE_SIZE_SIZE   = sizeof(uint64_t);
@@ -549,6 +591,183 @@ static void rpc_compression_probe_scan_bytes(
     }
 }
 
+struct rpc_compression_probe_sample_window {
+    size_t offset = 0;
+    size_t size = 0;
+};
+
+static std::vector<rpc_compression_probe_sample_window> rpc_compression_probe_sample_windows(
+        size_t size, size_t sample_budget) {
+    std::vector<rpc_compression_probe_sample_window> windows;
+    sample_budget = std::min(size, sample_budget);
+    if (sample_budget == 0) {
+        return windows;
+    }
+
+    if (sample_budget == size) {
+        windows.push_back({0, size});
+        return windows;
+    }
+
+    const size_t window_count = std::min<size_t>(3, sample_budget);
+    size_t consumed = 0;
+    windows.reserve(window_count);
+    for (size_t i = 0; i < window_count; ++i) {
+        const size_t remaining_windows = window_count - i;
+        const size_t window_size = (sample_budget - consumed + remaining_windows - 1)/remaining_windows;
+        size_t offset = 0;
+        if (window_count == 1 || i == 0) {
+            offset = 0;
+        } else if (i + 1 == window_count) {
+            offset = size - window_size;
+        } else {
+            offset = (size - window_size)/2;
+        }
+
+        windows.push_back({offset, window_size});
+        consumed += window_size;
+    }
+
+    return windows;
+}
+
+static std::string rpc_compression_probe_safe_token(const char * text) {
+    std::string out;
+    if (text == nullptr || text[0] == '\0') {
+        return "_";
+    }
+
+    for (const unsigned char c : std::string(text)) {
+        if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
+                c == '.' || c == '-' || c == '_') {
+            out.push_back((char) c);
+        } else {
+            out.push_back('_');
+        }
+        if (out.size() >= 80) {
+            break;
+        }
+    }
+
+    return out.empty() ? "_" : out;
+}
+
+static std::string rpc_compression_probe_safe_token(const std::string & text) {
+    return rpc_compression_probe_safe_token(text.c_str());
+}
+
+static std::string rpc_compression_probe_json_escape(const std::string & text) {
+    std::string out;
+    out.reserve(text.size() + 8);
+    for (const unsigned char c : text) {
+        switch (c) {
+            case '\\': out += "\\\\"; break;
+            case '"':  out += "\\\""; break;
+            case '\b': out += "\\b";  break;
+            case '\f': out += "\\f";  break;
+            case '\n': out += "\\n";  break;
+            case '\r': out += "\\r";  break;
+            case '\t': out += "\\t";  break;
+            default:
+                if (c < 0x20) {
+                    char buf[7];
+                    snprintf(buf, sizeof(buf), "\\u%04x", c);
+                    out += buf;
+                } else {
+                    out.push_back((char) c);
+                }
+                break;
+        }
+    }
+    return out;
+}
+
+static std::mutex & rpc_compression_probe_dump_mutex() {
+    static std::mutex mutex;
+    return mutex;
+}
+
+static uint64_t rpc_compression_probe_next_dump_index() {
+    static std::atomic<uint64_t> dump_index{0};
+    return dump_index.fetch_add(1, std::memory_order_relaxed);
+}
+
+static void rpc_compression_probe_dump_sample(
+        const char * op, const std::string & endpoint, const char * tensor_name,
+        const uint8_t * bytes, size_t size,
+        const std::vector<rpc_compression_probe_sample_window> & windows) {
+    if (!rpc_compression_probe_dump_enabled() || windows.empty()) {
+        return;
+    }
+
+    const uint64_t dump_index = rpc_compression_probe_next_dump_index();
+    if (dump_index >= rpc_compression_probe_dump_max_files()) {
+        if (dump_index == rpc_compression_probe_dump_max_files()) {
+            GGML_LOG_WARN("GGML_RPC_COMPRESSION_PROBE_DUMP_MAX_FILES reached; skipping further sample dumps\n");
+        }
+        return;
+    }
+
+    const fs::path dump_dir = rpc_compression_probe_dump_dir();
+    try {
+        fs::create_directories(dump_dir);
+    } catch (const std::exception & e) {
+        GGML_LOG_WARN("Failed to create GGML_RPC_COMPRESSION_PROBE_DUMP_DIR='%s': %s\n",
+                dump_dir.string().c_str(), e.what());
+        return;
+    }
+
+    uint64_t sampled_bytes = 0;
+    for (const auto & window : windows) {
+        sampled_bytes += window.size;
+    }
+
+    char index_buf[32];
+    snprintf(index_buf, sizeof(index_buf), "%06" PRIu64, dump_index);
+    const std::string file_name = std::string(index_buf) + "_" +
+        rpc_compression_probe_safe_token(op) + "_" +
+        rpc_compression_probe_safe_token(endpoint) + "_" +
+        rpc_compression_probe_safe_token(tensor_name) + ".bin";
+    const fs::path sample_path = dump_dir / file_name;
+
+    {
+        std::ofstream sample(sample_path, std::ios::binary);
+        if (!sample) {
+            GGML_LOG_WARN("Failed to open RPC compression sample '%s' for writing\n", sample_path.string().c_str());
+            return;
+        }
+        for (const auto & window : windows) {
+            sample.write((const char *) bytes + window.offset, window.size);
+        }
+    }
+
+    std::string window_text;
+    for (size_t i = 0; i < windows.size(); ++i) {
+        if (i != 0) {
+            window_text += ",";
+        }
+        window_text += std::to_string(windows[i].offset);
+        window_text += ":";
+        window_text += std::to_string(windows[i].size);
+    }
+
+    std::lock_guard<std::mutex> lock(rpc_compression_probe_dump_mutex());
+    std::ofstream meta(dump_dir / "samples.jsonl", std::ios::app);
+    if (!meta) {
+        GGML_LOG_WARN("Failed to append RPC compression sample metadata in '%s'\n", dump_dir.string().c_str());
+        return;
+    }
+
+    meta << "{\"file\":\"" << rpc_compression_probe_json_escape(file_name)
+         << "\",\"operation\":\"" << rpc_compression_probe_json_escape(op == nullptr ? "" : op)
+         << "\",\"endpoint\":\"" << rpc_compression_probe_json_escape(endpoint)
+         << "\",\"tensor\":\"" << rpc_compression_probe_json_escape(tensor_name == nullptr ? "" : tensor_name)
+         << "\",\"bytes\":" << size
+         << ",\"sampled_bytes\":" << sampled_bytes
+         << ",\"windows\":\"" << rpc_compression_probe_json_escape(window_text)
+         << "\"}\n";
+}
+
 static void rpc_compression_probe_record(
         const char * op, const std::string & endpoint, const char * tensor_name, const void * data, size_t size) {
     if (!rpc_compression_probe_enabled() || data == nullptr || size == 0) {
@@ -562,35 +781,19 @@ static void rpc_compression_probe_record(
         return;
     }
 
+    const auto windows = rpc_compression_probe_sample_windows(size, sample_budget);
     std::array<uint64_t, 256> hist = {};
     uint64_t zero_bytes = 0;
     uint64_t rle_estimated_bytes = 0;
     uint64_t longest_run = 0;
     uint64_t sampled_bytes = 0;
 
-    if (sample_budget == size) {
-        rpc_compression_probe_scan_bytes(bytes, size, hist, zero_bytes, rle_estimated_bytes, longest_run);
-        sampled_bytes = size;
-    } else {
-        const size_t window_count = std::min<size_t>(3, sample_budget);
-        size_t consumed = 0;
-        for (size_t i = 0; i < window_count; ++i) {
-            const size_t remaining_windows = window_count - i;
-            const size_t window_size = (sample_budget - consumed + remaining_windows - 1)/remaining_windows;
-            size_t offset = 0;
-            if (window_count == 1 || i == 0) {
-                offset = 0;
-            } else if (i + 1 == window_count) {
-                offset = size - window_size;
-            } else {
-                offset = (size - window_size)/2;
-            }
-            rpc_compression_probe_scan_bytes(bytes + offset, window_size,
-                    hist, zero_bytes, rle_estimated_bytes, longest_run);
-            sampled_bytes += window_size;
-            consumed += window_size;
-        }
+    for (const auto & window : windows) {
+        rpc_compression_probe_scan_bytes(bytes + window.offset, window.size,
+                hist, zero_bytes, rle_estimated_bytes, longest_run);
+        sampled_bytes += window.size;
     }
+    rpc_compression_probe_dump_sample(op, endpoint, tensor_name, bytes, size, windows);
 
     auto & state = rpc_trace_get_state();
     std::lock_guard<std::mutex> lock(state.mutex);
