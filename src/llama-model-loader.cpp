@@ -1242,7 +1242,13 @@ struct ggml_tensor * llama_model_loader::create_tensor(
         for (size_t dim = 0; dim < GGML_MAX_DIMS; dim++) {
             t_meta.ne[dim] = dim < ne.size() ? ne.begin()[dim] : 1;
             GGML_ASSERT(t_meta.ne[dim] >= 1);
-            t_meta.nb[dim] = dim == 0 ? ggml_type_size(type) : t_meta.ne[dim-1]*t_meta.nb[dim-1];
+        }
+        t_meta.nb[0] = ggml_type_size(type);
+        t_meta.nb[1] = t_meta.nb[0] * (t_meta.ne[0] / ggml_blck_size(type));
+        GGML_ASSERT(t_meta.nb[0] >= 1);
+        GGML_ASSERT(t_meta.nb[1] >= 1);
+        for (size_t dim = 2; dim < GGML_MAX_DIMS; ++dim) {
+            t_meta.nb[dim] = t_meta.nb[dim - 1] * t_meta.ne[dim - 1];
             GGML_ASSERT(t_meta.nb[dim] >= 1);
         }
         ggml_set_name(&t_meta, tn.str().c_str());
