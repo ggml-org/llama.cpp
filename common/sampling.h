@@ -109,7 +109,7 @@ std::string common_sampler_prev_str(common_sampler * gsmpl, llama_context * ctx,
 char        common_sampler_type_to_chr(enum common_sampler_type cnstr);
 std::string common_sampler_type_to_str(enum common_sampler_type cnstr);
 
-std::vector<enum common_sampler_type> common_sampler_types_from_names(const std::vector<std::string> & names, bool allow_alt_names);
+std::vector<enum common_sampler_type> common_sampler_types_from_names(const std::vector<std::string> & names);
 std::vector<enum common_sampler_type> common_sampler_types_from_chars(const std::string & chars);
 
 llama_sampler * llama_sampler_init_llg(const llama_vocab * vocab,

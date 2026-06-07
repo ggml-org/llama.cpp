@@ -605,7 +605,7 @@ task_params server_task::params_from_json_cmpl(
         const auto samplers = data.find("samplers");
         if (samplers != data.end()) {
             if (samplers->is_array()) {
-                params.sampling.samplers = common_sampler_types_from_names(*samplers, false);
+                params.sampling.samplers = common_sampler_types_from_names(*samplers);
             } else if (samplers->is_string()){
                 params.sampling.samplers = common_sampler_types_from_chars(samplers->get<std::string>());
             }
