@@ -444,7 +444,7 @@ bool common_params_handle_models(common_params & params, llama_example curr_ex) 
     opts.offline         = params.offline;
     opts.skip_download   = params.skip_download;
     opts.download_mtp    = spec_type_draft_mtp;
-    opts.download_mmproj = !params.no_mmproj;
+    opts.download_mmproj = !params.no_mmproj && params.mmproj.path.empty() && params.mmproj.url.empty();
 
     // sub-models (draft, mmproj, vocoder) are explicitly specified by the user,
     // so we should not auto-discover mtp/mmproj siblings for them
