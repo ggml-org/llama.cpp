@@ -2367,11 +2367,11 @@ class TensorNameMap:
         ),
 
         # NextN/MTP tensors
-        MODEL_TENSOR.NEXTN_PRE_PROJ: (
+        MODEL_TENSOR.NEXTN_PROJ_PRE: (
             "pre_projection",
         ),
 
-        MODEL_TENSOR.NEXTN_POST_PROJ: (
+        MODEL_TENSOR.NEXTN_PROJ_POST: (
             "post_projection",
         ),
 

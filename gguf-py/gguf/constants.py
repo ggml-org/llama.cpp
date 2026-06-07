@@ -898,8 +898,8 @@ class MODEL_TENSOR(IntEnum):
     A_PER_DIM_K_SCALE     = auto() # gemma4
     A_PER_DIM_SCALE       = auto() # gemma4
     # nextn/mtp
-    NEXTN_PRE_PROJ       = auto()
-    NEXTN_POST_PROJ      = auto()
+    NEXTN_PROJ_PRE       = auto()
+    NEXTN_PROJ_POST      = auto()
     NEXTN_EH_PROJ        = auto()
     NEXTN_EMBED_TOKENS   = auto()
     NEXTN_ENORM          = auto()
@@ -1475,8 +1475,8 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.A_QF_FFN_DOWN:             "a.proj_blk.{bid}.ffn_down",
     MODEL_TENSOR.A_QF_FFN_NORM:             "a.proj_blk.{bid}.ffn_norm",
     # NextN/MTP
-    MODEL_TENSOR.NEXTN_PRE_PROJ:            "nextn.pre_projection",
-    MODEL_TENSOR.NEXTN_POST_PROJ:           "nextn.post_projection",
+    MODEL_TENSOR.NEXTN_PROJ_PRE:            "nextn.pre_projection",
+    MODEL_TENSOR.NEXTN_PROJ_POST:           "nextn.post_projection",
     MODEL_TENSOR.NEXTN_EH_PROJ:             "blk.{bid}.nextn.eh_proj",
     MODEL_TENSOR.NEXTN_EMBED_TOKENS:        "blk.{bid}.nextn.embed_tokens",
     MODEL_TENSOR.NEXTN_ENORM:               "blk.{bid}.nextn.enorm",
@@ -2587,8 +2587,8 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.ROPE_FREQS,
         MODEL_TENSOR.TOKEN_EMBD,
         MODEL_TENSOR.OUTPUT_NORM,
-        MODEL_TENSOR.NEXTN_PRE_PROJ,
-        MODEL_TENSOR.NEXTN_POST_PROJ,
+        MODEL_TENSOR.NEXTN_PROJ_PRE,
+        MODEL_TENSOR.NEXTN_PROJ_POST,
         MODEL_TENSOR.ATTN_Q,
         MODEL_TENSOR.ATTN_Q_NORM,
         MODEL_TENSOR.ATTN_OUT,
