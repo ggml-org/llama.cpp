@@ -12,20 +12,16 @@ export async function validateApiKey(fetch: typeof globalThis.fetch): Promise<vo
 		return;
 	}
 
-	const apiKey = config().apiKey;
-
-	// No API key configured — server doesn't require auth, skip the request entirely.
-	// The /props endpoint is only protected when the server has API keys configured,
-	// and in that case the client always has one set (from settings).
-	if (!apiKey) {
-		return;
-	}
-
 	try {
+		const apiKey = config().apiKey;
+
 		const headers: Record<string, string> = {
-			'Content-Type': 'application/json',
-			Authorization: `Bearer ${apiKey}`
+			'Content-Type': 'application/json'
 		};
+
+		if (apiKey) {
+			headers.Authorization = `Bearer ${apiKey}`;
+		}
 
 		const response = await fetch(`${base}/props`, { headers });
 

@@ -101,14 +101,6 @@ export class AutoScrollController {
 	}
 
 	/**
-	 * Resets scroll state when switching conversations.
-	 */
-	resetScrollState(): void {
-		this._userScrolledUp = false;
-		this._autoScrollEnabled = true;
-	}
-
-	/**
 	 * Starts the auto-scroll interval for continuous scrolling during streaming.
 	 */
 	startInterval(): void {

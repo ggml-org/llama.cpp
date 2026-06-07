@@ -18,7 +18,6 @@ export const SETTINGS_KEYS = {
 	TITLE_GENERATION_USE_FIRST_LINE: 'titleGenerationUseFirstLine',
 	TITLE_GENERATION_USE_LLM: 'titleGenerationUseLLM',
 	TITLE_GENERATION_PROMPT: 'titleGenerationPrompt',
-	MAX_IMAGE_RESOLUTION: 'maxImageMPixels',
 	// Display
 	SHOW_MESSAGE_STATS: 'showMessageStats',
 	SHOW_THOUGHT_IN_PROGRESS: 'showThoughtInProgress',
@@ -29,8 +28,6 @@ export const SETTINGS_KEYS = {
 	ALWAYS_SHOW_SIDEBAR_ON_DESKTOP: 'alwaysShowSidebarOnDesktop',
 	FULL_HEIGHT_CODE_BLOCKS: 'fullHeightCodeBlocks',
 	SHOW_RAW_MODEL_NAMES: 'showRawModelNames',
-	SHOW_MODEL_QUANTIZATION: 'showModelQuantization',
-	SHOW_MODEL_TAGS: 'showModelTags',
 	SHOW_SYSTEM_MESSAGE: 'showSystemMessage',
 	// Sampling
 	TEMPERATURE: 'temperature',
@@ -66,9 +63,7 @@ export const SETTINGS_KEYS = {
 	// Developer
 	DISABLE_REASONING_PARSING: 'disableReasoningParsing',
 	EXCLUDE_REASONING_FROM_CONTEXT: 'excludeReasoningFromContext',
-	ENABLE_THINKING: 'enableThinking',
 	SHOW_RAW_OUTPUT_SWITCH: 'showRawOutputSwitch',
 	// PY_INTERPRETER_ENABLED: 'pyInterpreterEnabled',
-	CUSTOM_JSON: 'customJson',
-	CUSTOM_CSS: 'customCss'
+	CUSTOM: 'custom'
 } as const;

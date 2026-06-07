@@ -4,9 +4,9 @@ export {
 	AttachmentItemEnabledWhen,
 	AttachmentAction,
 	AttachmentItemVisibleWhen
-} from './attachment.enums';
+} from './attachment';
 
-export { AgenticSectionType, ContinueIntentKind, ToolCallType } from './agentic.enums';
+export { AgenticSectionType, ToolCallType } from './agentic';
 
 export {
 	ChatMessageStatsView,
@@ -17,9 +17,7 @@ export {
 	MessageType,
 	PdfViewMode,
 	ReasoningFormat
-} from './chat.enums';
-
-export { ReasoningEffort } from './reasoning-effort.enums';
+} from './chat';
 
 export {
 	FileTypeCategory,
@@ -40,7 +38,7 @@ export {
 	MimeTypeImage,
 	MimeTypeText,
 	SpecialFileType
-} from './files.enums';
+} from './files';
 
 export {
 	MCPConnectionPhase,
@@ -50,16 +48,16 @@ export {
 	MCPContentType,
 	MCPRefType,
 	JsonSchemaType
-} from './mcp.enums';
+} from './mcp';
 
-export { ModelModality } from './model.enums';
+export { ModelModality } from './model';
 
-export { ServerRole, ServerModelStatus } from './server.enums';
+export { ServerRole, ServerModelStatus } from './server';
 
-export { ParameterSource, SyncableParameterType, SettingsFieldType } from './settings.enums';
+export { ParameterSource, SyncableParameterType, SettingsFieldType } from './settings';
 
-export { ColorMode, HtmlInputType, McpPromptVariant, TooltipSide, UrlProtocol } from './ui.enums';
+export { ColorMode, HtmlInputType, McpPromptVariant, TooltipSide, UrlProtocol } from './ui';
 
-export { KeyboardKey } from './keyboard.enums';
+export { KeyboardKey } from './keyboard';
 
-export { ToolSource, ToolPermissionDecision, ToolResponseField } from './tools.enums';
+export { ToolSource, ToolPermissionDecision, ToolResponseField } from './tools';

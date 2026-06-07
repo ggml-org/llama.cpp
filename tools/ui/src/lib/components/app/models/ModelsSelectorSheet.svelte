@@ -6,7 +6,8 @@
 		DialogModelInformation,
 		ModelId,
 		ModelsSelectorList,
-		SearchInput
+		SearchInput,
+		TruncatedText
 	} from '$lib/components/app';
 
 	interface Props {
@@ -66,7 +67,7 @@
 			<button
 				type="button"
 				class={[
-					`inline-flex cursor-pointer items-center gap-1.5 rounded-sm bg-background px-1.5 py-1 text-xs shadow-sm transition hover:bg-muted-foreground/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-muted-foreground/15 dark:text-secondary-foreground`,
+					`inline-grid cursor-pointer grid-cols-[1fr_auto_1fr] items-center gap-1.5 rounded-sm bg-background px-1.5 py-1 text-xs shadow-sm transition hover:bg-muted-foreground/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-muted-foreground/15 dark:text-secondary-foreground`,
 					!ms.isCurrentModelInCache
 						? 'bg-red-400/10 !text-red-400 hover:bg-red-400/20 hover:text-red-400'
 						: forceForegroundText
@@ -80,7 +81,7 @@
 				disabled={disabled || ms.updating}
 				onclick={() => ms.handleOpenChange(true)}
 			>
-				<Package class="h-3.5 w-3.5 shrink-0" />
+				<Package class="h-3.5 w-3.5" />
 
 				{#if !selectedOption}
 					<span class="min-w-0 font-medium">Select model</span>
@@ -89,15 +90,14 @@
 						class="text-xs"
 						modelId={selectedOption?.model || ''}
 						hideQuantization
-						hideTags
 						hideOrgName
 					/>
 				{/if}
 
 				{#if ms.updating || ms.isLoadingModel}
-					<Loader2 class="h-3 w-3.5 shrink-0 animate-spin" />
+					<Loader2 class="h-3 w-3.5 animate-spin" />
 				{:else}
-					<ChevronDown class="h-3 w-3.5 shrink-0" />
+					<ChevronDown class="h-3 w-3.5" />
 				{/if}
 			</button>
 
@@ -168,12 +168,12 @@
 				onclick={() => ms.handleOpenChange(true)}
 				disabled={disabled || ms.updating}
 			>
-				<Package class="h-3.5 w-3.5 shrink-0" />
+				<Package class="h-3.5 w-3.5" />
 
-				<ModelId modelId={selectedOption?.model || ''} class="font-medium" hideQuantization />
+				<TruncatedText text={selectedOption?.model || ''} class="font-medium" />
 
 				{#if ms.updating}
-					<Loader2 class="h-3 w-3.5 shrink-0 animate-spin" />
+					<Loader2 class="h-3 w-3.5 animate-spin" />
 				{/if}
 			</button>
 		{/if}

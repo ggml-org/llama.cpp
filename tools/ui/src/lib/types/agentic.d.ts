@@ -93,7 +93,6 @@ export interface AgenticFlowCallbacks {
 	onAttachments?: (messageId: string, extras: DatabaseMessageExtra[]) => void;
 	/** Model name detected from response */
 	onModel?: (model: string) => void;
-	onCompletionId?: (id: string) => void;
 	/** Current assistant turn's streaming is complete - save to DB */
 	onAssistantTurnComplete?: (
 		content: string,

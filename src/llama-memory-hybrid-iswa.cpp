@@ -44,7 +44,7 @@ llama_memory_hybrid_iswa::llama_memory_hybrid_iswa(
         n_ubatch,
         n_pad,
         filter_attn == nullptr ?
-            [&](int32_t il) { return !hparams.is_recr(il); }
+            [&](int32_t il) { return !hparams.is_recurrent(il); }
             : filter_attn,
         nullptr
     )),
@@ -57,7 +57,7 @@ llama_memory_hybrid_iswa::llama_memory_hybrid_iswa(
         n_seq_max,
         n_rs_seq,
         filter_recr == nullptr ?
-            [&](int32_t il) { return hparams.is_recr(il); }
+            [&](int32_t il) { return hparams.is_recurrent(il); }
             : filter_recr
     )) {}
 
@@ -75,15 +75,9 @@ llama_memory_context_ptr llama_memory_hybrid_iswa::init_batch(llama_batch_allocr
                 // if all tokens are output, split by sequence
                 ubatch = balloc.split_seq(n_ubatch);
             } else {
-                if (mem_recr->n_rs_seq > 0) {
-                    // [TAG_RECURRENT_ROLLBACK_SPLITS]
-                    // TODO: recurrent state rollback does not support equal splits
-                    ubatch = balloc.split_seq(n_ubatch);
-                } else {
-                    // Use non-sequential split when KV cache is unified (needed for hellaswag/winogrande/multiple-choice)
-                    const bool unified = (mem_attn->get_base()->get_n_stream() == 1);
-                    ubatch = balloc.split_equal(n_ubatch, !unified);
-                }
+                // Use non-sequential split when KV cache is unified (needed for hellaswag/winogrande/multiple-choice)
+                const bool unified = (mem_attn->get_base()->get_n_stream() == 1);
+                ubatch = balloc.split_equal(n_ubatch, !unified);
             }
 
             if (ubatch.n_tokens == 0) {

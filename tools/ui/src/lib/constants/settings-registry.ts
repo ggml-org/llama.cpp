@@ -1,5 +1,5 @@
-import { ColorMode } from '$lib/enums/ui.enums';
-import { SettingsFieldType } from '$lib/enums/settings.enums';
+import { ColorMode } from '$lib/enums/ui';
+import { SettingsFieldType } from '$lib/enums/settings';
 import { SyncableParameterType } from '$lib/enums';
 import {
 	Funnel,
@@ -193,14 +193,6 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				defaultValue: TITLE_GENERATION.DEFAULT_PROMPT,
 				type: SettingsFieldType.TEXTAREA,
 				section: SETTINGS_SECTION_SLUGS.GENERAL
-			},
-			{
-				key: SETTINGS_KEYS.MAX_IMAGE_RESOLUTION,
-				label: 'Maximum image resolution (megapixels)',
-				help: 'Images larger than this will be resized before sending to server. Set to 0 to disable.',
-				defaultValue: 0,
-				type: SettingsFieldType.INPUT,
-				section: SETTINGS_SECTION_SLUGS.GENERAL
 			}
 		]
 	},
@@ -327,30 +319,6 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				section: SETTINGS_SECTION_SLUGS.DISPLAY,
 				sync: {
 					serverKey: SETTINGS_KEYS.SHOW_RAW_MODEL_NAMES,
-					paramType: SyncableParameterType.BOOLEAN
-				}
-			},
-			{
-				key: SETTINGS_KEYS.SHOW_MODEL_QUANTIZATION,
-				label: 'Show model quantization information',
-				help: 'Display quantization badges (e.g. Q8_0, Q4_K_M) next to model names throughout the interface.',
-				defaultValue: true,
-				type: SettingsFieldType.CHECKBOX,
-				section: SETTINGS_SECTION_SLUGS.DISPLAY,
-				sync: {
-					serverKey: SETTINGS_KEYS.SHOW_MODEL_QUANTIZATION,
-					paramType: SyncableParameterType.BOOLEAN
-				}
-			},
-			{
-				key: SETTINGS_KEYS.SHOW_MODEL_TAGS,
-				label: 'Show model tags',
-				help: 'Display model tags (e.g. "vision", "reasoning") next to model names throughout the interface.',
-				defaultValue: true,
-				type: SettingsFieldType.CHECKBOX,
-				section: SETTINGS_SECTION_SLUGS.DISPLAY,
-				sync: {
-					serverKey: SETTINGS_KEYS.SHOW_MODEL_TAGS,
 					paramType: SyncableParameterType.BOOLEAN
 				}
 			},
@@ -671,14 +639,6 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				}
 			},
 			{
-				key: SETTINGS_KEYS.ENABLE_THINKING,
-				label: 'Enable thinking',
-				help: 'Enable model thinking/reasoning for each request. When off, the model will skip the thinking phase and go straight to the response.',
-				defaultValue: false,
-				type: SettingsFieldType.CHECKBOX,
-				section: SETTINGS_SECTION_SLUGS.DEVELOPER
-			},
-			{
 				key: SETTINGS_KEYS.SHOW_RAW_OUTPUT_SWITCH,
 				label: 'Enable raw output toggle',
 				help: 'Show toggle button to display messages as plain text instead of Markdown-formatted content',
@@ -691,24 +651,12 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				}
 			},
 			{
-				key: SETTINGS_KEYS.CUSTOM_JSON,
+				key: SETTINGS_KEYS.CUSTOM,
 				label: 'Custom JSON',
 				help: 'Custom JSON parameters to send to the API. Must be valid JSON format.',
 				defaultValue: '',
 				type: SettingsFieldType.TEXTAREA,
 				section: SETTINGS_SECTION_SLUGS.DEVELOPER
-			},
-			{
-				key: SETTINGS_KEYS.CUSTOM_CSS,
-				label: 'Custom CSS',
-				help: 'CSS injected into the page at runtime. Set it here, or ship it server side via the --ui-config customCss field.',
-				defaultValue: '',
-				type: SettingsFieldType.TEXTAREA,
-				section: SETTINGS_SECTION_SLUGS.DEVELOPER,
-				sync: {
-					serverKey: SETTINGS_KEYS.CUSTOM_CSS,
-					paramType: SyncableParameterType.STRING
-				}
 			}
 		]
 	},

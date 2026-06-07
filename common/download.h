@@ -52,9 +52,6 @@ struct common_download_opts {
     std::string bearer_token;
     common_header_list headers;
     bool offline = false;
-    bool skip_download = false; // if true, only validation is performed, common_skip_download_exception may be thrown if the file is missing or invalid
-    bool download_mmproj = false;
-    bool download_mtp = false;
     common_download_callback * callback = nullptr;
 };
 
@@ -63,11 +60,6 @@ struct common_download_model_result {
     std::string model_path;
     std::string mmproj_path;
     std::string mtp_path;
-};
-
-// throw if the file is missing or invalid (e.g. ETag check failed)
-struct common_skip_download_exception : public std::runtime_error {
-    common_skip_download_exception() : std::runtime_error("skip download") {}
 };
 
 // Download model from HuggingFace repo or URL
@@ -97,7 +89,9 @@ struct common_skip_download_exception : public std::runtime_error {
 // returns result with model_path, mmproj_path and mtp_path (empty when not found / on failure)
 common_download_model_result common_download_model(
     const common_params_model & model,
-    const common_download_opts & opts = {}
+    const common_download_opts & opts = {},
+    bool download_mmproj = false,
+    bool download_mtp    = false
 );
 
 // returns list of cached models
@@ -105,7 +99,6 @@ std::vector<common_cached_model_info> common_list_cached_models();
 
 // download single file from url to local path
 // returns status code or -1 on error
-// returns -2 if the download was skipped due to ETag mismatch (file outdated, skip_download=true)
 // skip_etag: if true, don't read/write .etag files (for HF cache where filename is the hash)
 int common_download_file_single(const std::string & url,
                                 const std::string & path,

@@ -2,12 +2,7 @@ import type { SETTING_CONFIG_DEFAULT, SETTINGS_SECTION_TITLES } from '$lib/const
 import type { ChatMessagePromptProgress, ChatMessageTimings } from './chat';
 import type { OpenAIToolDefinition } from './mcp';
 import type { DatabaseMessageExtra } from './database';
-import type {
-	ParameterSource,
-	ReasoningEffort,
-	SyncableParameterType,
-	SettingsFieldType
-} from '$lib/enums';
+import type { ParameterSource, SyncableParameterType, SettingsFieldType } from '$lib/enums';
 import type { Icon } from '@lucide/svelte';
 import type { Component } from 'svelte';
 
@@ -70,10 +65,6 @@ export interface SettingsChatServiceOptions {
 	disableReasoningParsing?: boolean;
 	// Strip reasoning content from context before sending
 	excludeReasoningFromContext?: boolean;
-	// Enable model thinking/reasoning via chat_template_kwargs
-	enableThinking?: boolean;
-	// Reasoning effort level (low/medium/high/max) for thinking models
-	reasoningEffort?: ReasoningEffort;
 	tools?: OpenAIToolDefinition[];
 	// Generation parameters
 	temperature?: number;
@@ -99,8 +90,8 @@ export interface SettingsChatServiceOptions {
 	// Sampler configuration
 	samplers?: string | string[];
 	backend_sampling?: boolean;
-	// Custom JSON parameters
-	customJson?: string;
+	// Custom parameters
+	custom?: string;
 	timings_per_token?: boolean;
 	// Continuation control (vLLM compat), opt in to the explicit continue final message flag
 	continueFinalMessage?: boolean;
@@ -110,7 +101,6 @@ export interface SettingsChatServiceOptions {
 	onToolCallChunk?: (chunk: string) => void;
 	onAttachments?: (extras: DatabaseMessageExtra[]) => void;
 	onModel?: (model: string) => void;
-	onCompletionId?: (id: string) => void;
 	onTimings?: (timings?: ChatMessageTimings, promptProgress?: ChatMessagePromptProgress) => void;
 	onComplete?: (
 		response: string,

@@ -439,6 +439,12 @@ extern "C" {
         GGML_PREC_F32     = 10,
     };
 
+    // op hint
+    enum ggml_op_hint {
+        GGML_HINT_NONE             = 0,
+        GGML_HINT_SRC0_IS_HADAMARD = 1,
+    };
+
     // model file types
     enum ggml_ftype {
         GGML_FTYPE_UNKNOWN        = -1,
@@ -467,6 +473,7 @@ extern "C" {
         GGML_FTYPE_MOSTLY_BF16    = 24, // except 1d tensors
         GGML_FTYPE_MOSTLY_MXFP4   = 25, // except 1d tensors
         GGML_FTYPE_MOSTLY_NVFP4   = 26, // except 1d tensors
+        GGML_FTYPE_MOSTLY_Q1_0    = 27, // except 1d tensors
     };
 
     // available tensor operations:
@@ -903,15 +910,17 @@ extern "C" {
             struct ggml_tensor  * b,
             struct ggml_tensor  * ids);
 
-    GGML_API struct ggml_tensor * ggml_add1(
+    GGML_DEPRECATED(GGML_API struct ggml_tensor * ggml_add1(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
-            struct ggml_tensor  * b);
+            struct ggml_tensor  * b),
+        "use ggml_add instead");
 
-    GGML_API struct ggml_tensor * ggml_add1_inplace(
+    GGML_DEPRECATED(GGML_API struct ggml_tensor * ggml_add1_inplace(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
-            struct ggml_tensor  * b);
+            struct ggml_tensor  * b),
+        "use ggml_add_inplace instead");
 
     // dst = a
     // view(dst, nb1, nb2, nb3, offset) += b
@@ -1417,6 +1426,11 @@ extern "C" {
     GGML_API void ggml_mul_mat_set_prec(
             struct ggml_tensor * a,
             enum ggml_prec       prec);
+
+    // change the hint of a matrix multiplication
+    GGML_API void ggml_mul_mat_set_hint(
+            struct ggml_tensor * a,
+            enum ggml_op_hint    hint);
 
     // indirect matrix multiplication
     GGML_API struct ggml_tensor * ggml_mul_mat_id(
@@ -2529,6 +2543,11 @@ extern "C" {
 
     // TODO: add ggml_gated_delta_net_set_bcast() to be able to configure Q, K broadcast type: tiled vs interleaved [TAG_GGML_GDN_BCAST]
     // ref: https://github.com/ggml-org/llama.cpp/pull/19468#discussion_r2786394306
+    //
+    // state is a 3D tensor of shape (S_v*S_v*H, K, n_seqs):
+    //   K == 1: output carries the final state only.
+    //   K  > 1: output carries K snapshot slots; the kernel writes the last min(n_tokens, K)
+    //   per-token snapshots into the trailing slots
     GGML_API struct ggml_tensor * ggml_gated_delta_net(
             struct ggml_context * ctx,
             struct ggml_tensor  * q,

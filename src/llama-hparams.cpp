@@ -7,39 +7,19 @@
 
 void llama_hparams::set_swa_pattern(uint32_t n_pattern, bool dense_first) {
     if (dense_first) {
-        for (uint32_t il = 0; il < n_layer(); ++il) {
-            is_swa_impl[il] = n_pattern == 0 || (il % n_pattern != 0);
+        for (uint32_t il = 0; il < n_layer; ++il) {
+            swa_layers[il] = n_pattern == 0 || (il % n_pattern != 0);
         }
     } else {
-        for (uint32_t il = 0; il < n_layer(); ++il) {
-            is_swa_impl[il] = n_pattern == 0 || (il % n_pattern < (n_pattern - 1));
+        for (uint32_t il = 0; il < n_layer; ++il) {
+            swa_layers[il] = n_pattern == 0 || (il % n_pattern < (n_pattern - 1));
         }
-    }
-
-    for (uint32_t il = n_layer(); il < n_layer_all; ++il) {
-        is_swa_impl[il] = false;
-    }
-}
-
-void llama_hparams::set_recr_pattern(uint32_t n_pattern, bool dense_first) {
-    if (dense_first) {
-        for (uint32_t il = 0; il < n_layer(); ++il) {
-            is_recr_impl[il] = n_pattern == 0 || (il % n_pattern != 0);
-        }
-    } else {
-        for (uint32_t il = 0; il < n_layer(); ++il) {
-            is_recr_impl[il] = n_pattern == 0 || (il % n_pattern < (n_pattern - 1));
-        }
-    }
-
-    for (uint32_t il = n_layer(); il < n_layer_all; ++il) {
-        is_recr_impl[il] = false;
     }
 }
 
 bool llama_hparams::is_swa_any() const {
-    for (uint32_t il = 0; il < n_layer_all; ++il) {
-        if (is_swa_impl[il]) {
+    for (uint32_t il = 0; il < n_layer; ++il) {
+        if (swa_layers[il]) {
             return true;
         }
     }
@@ -48,7 +28,7 @@ bool llama_hparams::is_swa_any() const {
 }
 
 uint32_t llama_hparams::n_head(uint32_t il) const {
-    if (il < n_layer_all) {
+    if (il < n_layer) {
         return n_head_arr[il];
     }
 
@@ -56,7 +36,7 @@ uint32_t llama_hparams::n_head(uint32_t il) const {
 }
 
 uint32_t llama_hparams::n_head_kv(uint32_t il) const {
-    if (il < n_layer_all) {
+    if (il < n_layer) {
         return n_head_kv_arr[il];
     }
 
@@ -64,7 +44,7 @@ uint32_t llama_hparams::n_head_kv(uint32_t il) const {
 }
 
 uint32_t llama_hparams::n_ff(uint32_t il) const {
-    if (il < n_layer_all) {
+    if (il < n_layer) {
         return n_ff_arr[il];
     }
 
@@ -83,7 +63,7 @@ uint32_t llama_hparams::n_gqa(uint32_t il) const {
 }
 
 uint32_t llama_hparams::n_rot(uint32_t il) const {
-    if (il < n_layer_all) {
+    if (il < n_layer) {
         return is_swa(il) ? n_rot_swa : n_rot_full;
     }
 
@@ -105,7 +85,7 @@ uint32_t llama_hparams::n_embd_out() const {
 }
 
 uint32_t llama_hparams::n_embd_head_k(uint32_t il) const {
-    if (il < n_layer_all) {
+    if (il < n_layer) {
         return is_swa(il) ? n_embd_head_k_swa : n_embd_head_k_full;
     }
 
@@ -113,7 +93,7 @@ uint32_t llama_hparams::n_embd_head_k(uint32_t il) const {
 }
 
 uint32_t llama_hparams::n_embd_head_v(uint32_t il) const {
-    if (il < n_layer_all) {
+    if (il < n_layer) {
         return is_swa(il) ? n_embd_head_v_swa : n_embd_head_v_full;
     }
 
@@ -134,7 +114,7 @@ uint32_t llama_hparams::n_embd_v_gqa(uint32_t il) const {
 
 bool llama_hparams::is_n_embd_k_gqa_variable() const {
     const uint32_t val = n_embd_k_gqa();
-    for (uint32_t il = 0; il < n_layer_all; ++il) {
+    for (uint32_t il = 0; il < n_layer; ++il) {
         if (val != n_embd_k_gqa(il)) {
             return true;
         }
@@ -145,7 +125,7 @@ bool llama_hparams::is_n_embd_k_gqa_variable() const {
 
 bool llama_hparams::is_n_embd_v_gqa_variable() const {
     const uint32_t val = n_embd_v_gqa();
-    for (uint32_t il = 0; il < n_layer_all; ++il) {
+    for (uint32_t il = 0; il < n_layer; ++il) {
         if (val != n_embd_v_gqa(il)) {
             return true;
         }
@@ -156,7 +136,7 @@ bool llama_hparams::is_n_embd_v_gqa_variable() const {
 
 uint32_t llama_hparams::n_embd_k_gqa_max() const {
     uint32_t val = n_embd_k_gqa();
-    for (uint32_t il = 0; il < n_layer_all; ++il) {
+    for (uint32_t il = 0; il < n_layer; ++il) {
         val = std::max(val, n_embd_k_gqa(il));
     }
 
@@ -165,7 +145,7 @@ uint32_t llama_hparams::n_embd_k_gqa_max() const {
 
 uint32_t llama_hparams::n_embd_v_gqa_max() const {
     uint32_t val = n_embd_v_gqa();
-    for (uint32_t il = 0; il < n_layer_all; ++il) {
+    for (uint32_t il = 0; il < n_layer; ++il) {
         val = std::max(val, n_embd_v_gqa(il));
     }
 
@@ -213,12 +193,12 @@ uint32_t llama_hparams::n_embd_s() const {
     return ssm_d_state * ssm_d_inner;
 }
 
-bool llama_hparams::is_recr(uint32_t il) const {
-    if (il < n_layer_all) {
-        return is_recr_impl[il];
+bool llama_hparams::is_recurrent(uint32_t il) const {
+    if (il < n_layer) {
+        return recurrent_layer_arr[il];
     }
 
-    GGML_ABORT("%s: il (%u) out of bounds (n_layer_all: %u)\n", __func__, il, n_layer_all);
+    GGML_ABORT("%s: il (%u) out of bounds (n_layer: %u)\n", __func__, il, n_layer);
 }
 
 uint32_t llama_hparams::n_pos_per_embd() const {
@@ -226,11 +206,11 @@ uint32_t llama_hparams::n_pos_per_embd() const {
 }
 
 bool llama_hparams::is_swa(uint32_t il) const {
-    if (il < n_layer_all) {
-        return is_swa_impl[il];
+    if (il < n_layer) {
+        return swa_layers[il];
     }
 
-    GGML_ABORT("%s: il (%u) out of bounds (n_layer_all: %u)\n", __func__, il, n_layer_all);
+    GGML_ABORT("fatal error");
 }
 
 bool llama_hparams::is_mla() const {
@@ -267,8 +247,16 @@ bool llama_hparams::has_kv(uint32_t il) const {
     return true;
 }
 
-uint32_t llama_hparams::n_layer() const {
-    return n_layer_all - n_layer_nextn;
+uint32_t llama_hparams::n_layer_kv() const {
+    uint32_t res = 0;
+
+    for (uint32_t il = 0; il < n_layer; ++il) {
+        if (has_kv(il)) {
+            res++;
+        }
+    }
+
+    return res;
 }
 
 bool llama_hparams::use_mrope() const {
