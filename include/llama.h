@@ -391,7 +391,7 @@ extern "C" {
 
         // a source/target/parent context
         // can be utilized in various ways, for example by sharing results or llama_memory between 2 contexts
-        struct llama_context * ctx_src;
+        struct llama_context * ctx_other;
     };
 
     struct llama_model_tensor_override {

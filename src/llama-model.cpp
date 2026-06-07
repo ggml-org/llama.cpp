@@ -2149,16 +2149,16 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                         GGML_ASSERT(hparams.is_swa_any());
 
                         if (arch == LLM_ARCH_GEMMA4_ASSISTANT) {
-                            llama_memory_t mem_src = llama_get_memory(cparams.ctx_src);
+                            llama_memory_t mem_other = llama_get_memory(cparams.ctx_other);
 
                             share = [&](int32_t il) {
-                                const llama_model * model_src = llama_get_model(cparams.ctx_src);
+                                const llama_model * model_other = llama_get_model(cparams.ctx_other);
 
                                 if (hparams.is_swa(il)) {
-                                    return llama_model_n_layer(model_src) - 2;
+                                    return llama_model_n_layer(model_other) - 2;
                                 }
 
-                                return llama_model_n_layer(model_src) - 1;
+                                return llama_model_n_layer(model_other) - 1;
                             };
 
                             res = new llama_kv_cache_iswa(
@@ -2173,7 +2173,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                                     cparams.n_seq_max,
                                     cparams.n_ubatch,
                                     1,
-                                    mem_src,
+                                    mem_other,
                                     filter,
                                     reuse,
                                     share);

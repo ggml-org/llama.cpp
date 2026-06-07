@@ -85,16 +85,16 @@ llama_context::llama_context(
     cparams.cb_eval           = params.cb_eval;
     cparams.cb_eval_user_data = params.cb_eval_user_data;
 
-    cparams.ctx_src = nullptr;
+    cparams.ctx_other = nullptr;
 
     // TODO: more generic
     if (model.arch == LLM_ARCH_GEMMA4_ASSISTANT) {
-        if (params.ctx_src == nullptr) {
+        if (params.ctx_other == nullptr) {
             // TODO: change from runtime_error to llama_exception to avoid printing error message
-            throw std::runtime_error("Gemma4Assistant requires ctx_src to be set (this is normal during memory fitting)");
+            throw std::runtime_error("Gemma4Assistant requires ctx_other to be set (this is normal during memory fitting)");
         }
 
-        cparams.ctx_src = params.ctx_src;
+        cparams.ctx_other = params.ctx_other;
     }
 
     // Initialize backend samplers here so they are part of the sampling graph
@@ -311,11 +311,11 @@ llama_context::llama_context(
     // init the memory module
     if (!hparams.vocab_only) {
         llama_memory_params params_mem = {
-            /*.type_k   =*/ params.type_k,
-            /*.type_v   =*/ params.type_v,
-            /*.swa_full =*/ params.swa_full,
-            /*.ctx_type =*/ cparams.ctx_type,
-            /*.mem_src  =*/ llama_get_memory(cparams.ctx_src),
+            /*.type_k    =*/ params.type_k,
+            /*.type_v    =*/ params.type_v,
+            /*.swa_full  =*/ params.swa_full,
+            /*.ctx_type  =*/ cparams.ctx_type,
+            /*.mem_other =*/ llama_get_memory(cparams.ctx_other),
         };
 
         memory.reset(model.create_memory(params_mem, cparams));
@@ -3386,7 +3386,7 @@ llama_context_params llama_context_default_params() {
         /*.kv_unified                  =*/ false,
         /*.sampler                     =*/ nullptr,
         /*.n_sampler                   =*/ 0,
-        /*.ctx_src                     =*/ nullptr,
+        /*.ctx_other                   =*/ nullptr,
     };
 
     return result;
@@ -4026,6 +4026,6 @@ llama_memory_breakdown llama_get_memory_breakdown(const struct llama_context * c
     return ctx->memory_breakdown();
 }
 
-llama_context * llama_get_ctx_src(struct llama_context * ctx) {
-    return ctx->get_cparams().ctx_src;
+llama_context * llama_get_ctx_other(struct llama_context * ctx) {
+    return ctx->get_cparams().ctx_other;
 }

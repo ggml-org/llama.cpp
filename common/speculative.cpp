@@ -495,7 +495,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
         llama_set_embeddings_nextn(ctx_tgt, true, /*masked*/ false);
         llama_set_embeddings_nextn(ctx_dft, true, /*masked*/ true);
 
-        is_mem_shared = llama_get_ctx_src(ctx_dft) == ctx_tgt;
+        is_mem_shared = llama_get_ctx_other(ctx_dft) == ctx_tgt;
 
         pending_h.assign(n_seq, std::vector<float>(n_embd, 0.0f));
 

@@ -951,8 +951,8 @@ private:
 
             // note: for small models maybe we can set this to the maximum possible draft from all speculative types
             //       the extra memory for small models is likely negligible?
-            cparams.n_rs_seq = 0;
-            cparams.ctx_src = ctx_tgt;
+            cparams.n_rs_seq  = 0;
+            cparams.ctx_other = ctx_tgt;
 
             ctx_dft.reset(llama_init_from_model(model_dft.get(), cparams));
 
@@ -969,7 +969,7 @@ private:
             cparams_mtp.type_v        = params_base.speculative.draft.cache_type_v;
             cparams_mtp.n_rs_seq      = 0;
             cparams_mtp.n_outputs_max = params_base.n_parallel;
-            cparams_mtp.ctx_src       = ctx_tgt;
+            cparams_mtp.ctx_other     = ctx_tgt;
 
             ctx_dft.reset(llama_init_from_model(model_tgt, cparams_mtp));
             if (ctx_dft == nullptr) {
@@ -2982,7 +2982,7 @@ private:
                             continue;
                         }
 
-                        if (ctx_dft && llama_get_ctx_src(ctx_dft.get()) != ctx_tgt) {
+                        if (ctx_dft && llama_get_ctx_other(ctx_dft.get()) != ctx_tgt) {
                             // TODO: in the future, figure out how to infuse target embeddings to the images
                             //       for now, we skip this for simplicity
                             //       maybe we simply need to call `common_speculative_process()` on the mtmd batches in the `process_chunk` above?
