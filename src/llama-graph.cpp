@@ -929,8 +929,8 @@ void llm_graph_result::set_outputs() {
     if (t_embd_pooled != nullptr) {
         ggml_set_output(t_embd_pooled);
     }
-    if (t_h_pre_norm != nullptr) {
-        ggml_set_output(t_h_pre_norm);
+    if (t_h_nextn != nullptr) {
+        ggml_set_output(t_h_nextn);
     }
     for (auto & [seq_id, t] : t_sampled) {
         if (t != nullptr) {
@@ -1005,7 +1005,7 @@ llm_graph_context::llm_graph_context(const llm_graph_params & params) :
     cparams          (params.cparams),
     ubatch           (params.ubatch),
     n_embd           (hparams.n_embd),
-    n_layer          (hparams.n_layer),
+    n_layer          (hparams.n_layer()),
     n_rot            (hparams.n_rot()),
     n_ctx            (cparams.n_ctx),
     n_head           (hparams.n_head()),
@@ -1859,7 +1859,12 @@ ggml_tensor * llm_graph_context::build_inp_embd(ggml_tensor * tok_embd) const {
     res->t_inp_embd = cur;
 
     // For Granite architecture
-    if (hparams.f_embedding_scale != 0.0f) {
+    // NOTE: Only apply scale to token inputs. Raw embeddings are assumed to be
+    //  multimodal inputs that should not be scaled.
+    if (ubatch.token && hparams.f_embedding_scale != 0.0f) {
+        if (!ggml_is_contiguous(cur)) {
+            cur = ggml_cont(ctx0, cur);
+        }
         cur = ggml_scale(ctx0, cur, hparams.f_embedding_scale);
     }
 

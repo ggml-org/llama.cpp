@@ -111,6 +111,7 @@
 	let preSelectedResourceUri = $state<string | undefined>(undefined);
 
 	let currentConfig = $derived(config());
+
 	let pasteLongTextToFileLength = $derived.by(() => {
 		const n = Number(currentConfig.pasteLongTextToFileLen);
 		return Number.isNaN(n) ? Number(SETTING_CONFIG_DEFAULT.pasteLongTextToFileLen) : n;
@@ -541,6 +542,7 @@
 				canSend={canSubmit}
 				{disabled}
 				{isLoading}
+				isReasoning={chatStore.isReasoning}
 				{isRecording}
 				{showAddButton}
 				{showModelSelector}
