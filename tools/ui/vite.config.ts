@@ -32,86 +32,86 @@ export default defineConfig(async () => {
 	}
 
 	return {
-	resolve: {
-		alias: {
-			'katex-fonts': resolve('node_modules/katex/dist/fonts')
-		}
-	},
+		resolve: {
+			alias: {
+				'katex-fonts': resolve('node_modules/katex/dist/fonts')
+			}
+		},
 
-	build: {
-		assetsInlineLimit: 32000,
-		chunkSizeWarningLimit: 3072,
-		minify: true
-	},
+		build: {
+			assetsInlineLimit: 32000,
+			chunkSizeWarningLimit: 3072,
+			minify: true
+		},
 
-	css: {
-		preprocessorOptions: {
-			scss: {
-				additionalData: `
+		css: {
+			preprocessorOptions: {
+				scss: {
+					additionalData: `
 					$use-woff2: true;
 					$use-woff: false;
 					$use-ttf: false;
 				`
+				}
 			}
-		}
-	},
+		},
 
-	plugins: [tailwindcss(), sveltekit(), devtoolsJson(), llamaCppBuildPlugin()],
+		plugins: [tailwindcss(), sveltekit(), devtoolsJson(), llamaCppBuildPlugin()],
 
-	test: {
-		projects: [
-			{
-				extends: './vite.config.ts',
-				test: {
-					name: 'client',
-					browser: browserBaseConfig,
-					include: ['tests/client/**/*.svelte.{test,spec}.{js,ts}'],
-					setupFiles: ['./vitest-setup-client.ts']
-				}
-			},
-
-			{
-				extends: './vite.config.ts',
-				test: {
-					name: 'unit',
-					environment: 'node',
-					include: ['tests/unit/**/*.{test,spec}.{js,ts}']
-				}
-			},
-
-			{
-				extends: './vite.config.ts',
-				test: {
-					name: 'ui',
-					browser: { ...browserBaseConfig, instances: [{ browser: 'chromium', headless: true }] },
-					include: ['tests/stories/**/*.stories.{js,ts,svelte}'],
-					setupFiles: ['./.storybook/vitest.setup.ts']
+		test: {
+			projects: [
+				{
+					extends: './vite.config.ts',
+					test: {
+						name: 'client',
+						browser: browserBaseConfig,
+						include: ['tests/client/**/*.svelte.{test,spec}.{js,ts}'],
+						setupFiles: ['./vitest-setup-client.ts']
+					}
 				},
-				plugins: [
-					storybookTest({
-						storybookScript: 'pnpm run storybook --no-open'
-					})
-				]
-			}
-		]
-	},
 
-	server: {
-		proxy: {
-			'/v1': SERVER_ORIGIN,
-			'/props': SERVER_ORIGIN,
-			'/models': SERVER_ORIGIN,
-			'/tools': SERVER_ORIGIN,
-			'/slots': SERVER_ORIGIN,
-			'/cors-proxy': SERVER_ORIGIN
+				{
+					extends: './vite.config.ts',
+					test: {
+						name: 'unit',
+						environment: 'node',
+						include: ['tests/unit/**/*.{test,spec}.{js,ts}']
+					}
+				},
+
+				{
+					extends: './vite.config.ts',
+					test: {
+						name: 'ui',
+						browser: { ...browserBaseConfig, instances: [{ browser: 'chromium', headless: true }] },
+						include: ['tests/stories/**/*.stories.{js,ts,svelte}'],
+						setupFiles: ['./.storybook/vitest.setup.ts']
+					},
+					plugins: [
+						storybookTest({
+							storybookScript: 'pnpm run storybook --no-open'
+						})
+					]
+				}
+			]
 		},
-		headers: {
-			'Cross-Origin-Embedder-Policy': 'require-corp',
-			'Cross-Origin-Opener-Policy': 'same-origin'
-		},
-		fs: {
-			allow: [searchForWorkspaceRoot(process.cwd()), resolve(__dirname, 'tests')]
+
+		server: {
+			proxy: {
+				'/v1': SERVER_ORIGIN,
+				'/props': SERVER_ORIGIN,
+				'/models': SERVER_ORIGIN,
+				'/tools': SERVER_ORIGIN,
+				'/slots': SERVER_ORIGIN,
+				'/cors-proxy': SERVER_ORIGIN
+			},
+			headers: {
+				'Cross-Origin-Embedder-Policy': 'require-corp',
+				'Cross-Origin-Opener-Policy': 'same-origin'
+			},
+			fs: {
+				allow: [searchForWorkspaceRoot(process.cwd()), resolve(__dirname, 'tests')]
+			}
 		}
-	}
 	};
 });
