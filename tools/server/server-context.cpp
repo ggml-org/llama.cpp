@@ -4967,7 +4967,7 @@ std::unique_ptr<server_res_generator> server_routes::handle_count_tokens(const l
         n_tokens = tokenize_mixed(vocab, prompt, true, true).size();
     }
 
-    json response = {{"input_tokens", static_cast<int>(n_tokens)}};
+    json response = {{"input_tokens", static_cast<int64_t>(n_tokens)}};
     if (is_oai) {
         response["object"] = "response.input_tokens";
     }
