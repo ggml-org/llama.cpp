@@ -526,7 +526,7 @@ static __device__ __forceinline__ float vec_dot_q4_K_q8_1_impl_vmmq(
     return dm4f.x*sumf_d - dm4f.y*sumf_m;
 }
 
-static __device__ __forceinline__ float vec_dot_q4_K_q8_1_impl_vmmq_x4(
+static __device__ __forceinline__ float vec_dot_q4_K_q8_1_impl_vmmq_layout(
         const uint4 & packed_q4_lo,
         const uint4 & packed_q4_hi,
         const int4 * __restrict__ q8_lo,
@@ -675,9 +675,9 @@ static __device__ __forceinline__ float vec_dot_q5_K_q8_1_impl_mmq(
     return dm4f.x*sumf_d - dm4f.y*sumf_m;
 }
 
-// Q5_K x4 consumes two consecutive q8_1 sub-blocks per call.
+// Q5_K layout dot consumes two consecutive q8_1 sub-blocks per call.
 // qh is shared across the super-block; bit_shift selects the high bit for each sub-block.
-static __device__ __forceinline__ float vec_dot_q5_K_q8_1_impl_vmmq_x4(
+static __device__ __forceinline__ float vec_dot_q5_K_q8_1_impl_vmmq_layout(
         const uint4 & packed_q4_lo,
         const uint4 & packed_q4_hi,
         const uint4 & qh_lo,
@@ -806,9 +806,9 @@ static __device__ __forceinline__ float vec_dot_q6_K_q8_1_impl_mmq(
     return d6 * sumf_d;
 }
 
-// Q6_K x4 consumes a pair {sub_block_0, sub_block_0 + 2} per call.
+// Q6_K layout dot consumes a pair {sub_block_0, sub_block_0 + 2} per call.
 // qh_base_shift selects either pair {0,2}/{4,6} or {1,3}/{5,7} within each half.
-static __device__ __forceinline__ float vec_dot_q6_K_q8_1_impl_vmmq_x4(
+static __device__ __forceinline__ float vec_dot_q6_K_q8_1_impl_vmmq_layout(
         const uint4 & ql_lo,
         const uint4 & ql_hi,
         const uint4 & qh_lo,
@@ -942,7 +942,6 @@ static __device__ __forceinline__ float vec_dot_q4_0_q8_1(
 
     return vec_dot_q4_0_q8_1_impl<VDR_Q4_0_Q8_1_MMVQ>(v, u, bq4_0->d, bq8_1->ds);
 }
-
 
 static __device__ __forceinline__ float vec_dot_q4_1_q8_1(
     const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs) {
@@ -1115,99 +1114,70 @@ static __device__ __forceinline__ float vec_dot_q4_K_q8_1(
     return vec_dot_q4_K_q8_1_impl_vmmq(v, u, sc, m, bq4_K->dm, d8);
 }
 
-static __device__ __forceinline__ float vec_dot_q4_K_q8_1_x4(
+template<int q8_1_layout_block_size>
+static __device__ __forceinline__ float vec_dot_q4_K_q8_1_layout(
         const void * __restrict__ vbq,
-        const block_q8_1_layout<4 * QK8_1> * __restrict__ yx4,
+        const block_q8_1_layout<q8_1_layout_block_size> * __restrict__ y_layout,
         const int & kby,
         const int & kbx,
         const int subblock_pair) {
+    static_assert(q8_1_layout_block_size % QK8_1 == 0);
+    constexpr int q8_1_blocks = block_q8_1_layout<q8_1_layout_block_size>::q8_1_blocks;
+    constexpr int q8_1_qs_per_block = QK8_1 / sizeof(int32_t);
+    static_assert(q8_1_blocks == 2 || q8_1_blocks == 4 || q8_1_blocks == 8);
 
-    // Select the kbx-th Q4_K weight block.
     const block_q4_K * bq4_K = (const block_q4_K *) vbq + kbx;
 
-    // Packed Q4 values for this 64-element chunk.
-    // v_lo contains the first 32 Q4 values.
-    // v_hi contains the second 32 Q4 values.
     uint4 v_lo;
     uint4 v_hi;
-    // For each Q4 subblock, load low and high halves of Q8 data.
     int4 q8_lo[QR4_K];
     int4 q8_hi[QR4_K];
 
-    // ds8[i].x = Q8 scale
-    // ds8[i].y = Q8 scale * sum(q8), used for min correction
     float2 ds8[QR4_K];
-    uint8_t sc[QR4_K]; //subblock Q4 scales.
-    uint8_t m[QR4_K];  //subblock Q4 mins (offsets).
+    uint8_t sc[QR4_K];
+    uint8_t m[QR4_K];
 
-    // Each subblock_pair corresponds to two Q4_K subblocks (64 values total).
     const int subblock0 = 2 * subblock_pair;
-    // Compute index into packed Q4 array (each pair uses 8 uint32_t entries).
     const int qs_idx = subblock_pair * 8;
     const uint32_t * q4 = (const uint32_t *) bq4_K->qs + qs_idx;
 
-    // Load first and second half (32 values) of packed Q4 data.
     v_lo = ((const uint4 *)(q4 + 0))[0];
     v_hi = ((const uint4 *)(q4 + 4))[0];
 
     const half2 dm4 = bq4_K->dm;
 
-    // Q4_K stores 8 (scale, min) pairs, each pair is 12 bits.
-    // These are packed into 3 32-bit integers.
-    // scale0/scale4 contain values for subblocks 0-3 and the upper bits for 4-7.
     const uint32_t scale0 = (uint32_t) get_int_b4(bq4_K->scales, 0);
     const uint32_t scale4 = (uint32_t) get_int_b4(bq4_K->scales, 1);
     const uint32_t scale8 = (uint32_t) get_int_b4(bq4_K->scales, 2);
 
-    // scale bytes for subblocks 0-3.
     const uint32_t sc_lo = scale0;
-    //min/offset bytes for subblocks 0-3.
     const uint32_t mb_lo = scale4;
-
-    // Reconstruct scale bytes for subblocks 4-7.
-    // Low 4 bits come from scale8.
-    // High 2 bits come from the top 2 bits of scale0.
     const uint32_t sc_hi = (scale8 & 0x0F0F0F0Fu) | ((scale0 & 0xC0C0C0C0u) >> 2);
-
-    //Similar reconstruction applies for min/offset bytes
     const uint32_t mb_hi = ((scale8 & 0xF0F0F0F0u) >> 4) | ((scale4 & 0xC0C0C0C0u) >> 2);
 
 #pragma unroll
-    // Loop through Q4 blocks (typically 2).
     for (int i = 0; i < QR4_K; ++i) {
-
-        //subblock index inside the Q4_K block.
         const int subblock = subblock0 + i;
 
-        // Select which byte inside the 32-bit scale/min word to read. subblock & 3 gives position 0,1,2,3 within a group of 4.
         const int shift = 8 * (subblock & 3);
-        // subblocks 0-3 use sc_lo; subblocks 4-7 use sc_hi.
         const uint32_t sc_word = subblock < 4 ? sc_lo : sc_hi;
         const uint32_t mb_word = subblock < 4 ? mb_lo : mb_hi;
 
-        // Extract the 6-bit Q4 scale and min/offset for this subblock.
         sc[i] = (uint8_t) ((sc_word >> shift) & 0x3Fu);
         m[i]  = (uint8_t) ((mb_word >> shift) & 0x3Fu);
 
-        // Compute global Q8 subblock index
         const int block_offset = kby + subblock;
-        // Divide by 4 to choose which q8_1 layout group.
-        const int block_outer  = block_offset >> 2;
-        // Modulo 4 to choose which q8_1 block inside that layout group.
-        const int block_inner  = block_offset & 3;
-        const block_q8_1_layout<4 * QK8_1> * by = yx4 + block_outer;
-        //Q8 values for the selected inner subblock (uses 8 int32 entries = 2 int4 loads).
-        const int4 * q8 = (const int4 *) (by->qs + block_inner * 8);
+        const int block_outer  = block_offset / q8_1_blocks;
+        const int block_inner  = block_offset % q8_1_blocks;
+        const block_q8_1_layout<q8_1_layout_block_size> * by = y_layout + block_outer;
+        const int4 * q8 = (const int4 *) (by->qs + block_inner * q8_1_qs_per_block);
 
-        // Load first and second half of packed Q8 values
         q8_lo[i] = q8[0];
         q8_hi[i] = q8[1];
-
-        // Load Q8 scale/correction values and convert half2 to float2.
         ds8[i] = __half22float2(by->ds[block_inner]);
     }
 
-    return vec_dot_q4_K_q8_1_impl_vmmq_x4(v_lo, v_hi, q8_lo, q8_hi, ds8, sc, m, dm4);
+    return vec_dot_q4_K_q8_1_impl_vmmq_layout(v_lo, v_hi, q8_lo, q8_hi, ds8, sc, m, dm4);
 }
 
 static __device__ __forceinline__ float vec_dot_q5_K_q8_1(
@@ -1257,12 +1227,17 @@ static __device__ __forceinline__ float vec_dot_q5_K_q8_1(
 }
 
 // Q5_K uses consecutive q8_1 sub-block pairs, matching Q4_K.
-static __device__ __forceinline__ float vec_dot_q5_K_q8_1_x4(
+template<int q8_1_layout_block_size>
+static __device__ __forceinline__ float vec_dot_q5_K_q8_1_layout(
         const void * __restrict__ vbq,
-        const block_q8_1_layout<4 * QK8_1> * __restrict__ yx4,
+        const block_q8_1_layout<q8_1_layout_block_size> * __restrict__ y_layout,
         const int & kby,
         const int & kbx,
         const int subblock_pair) {
+    static_assert(q8_1_layout_block_size % QK8_1 == 0);
+    constexpr int q8_1_blocks = block_q8_1_layout<q8_1_layout_block_size>::q8_1_blocks;
+    constexpr int q8_1_qs_per_block = QK8_1 / sizeof(int32_t);
+    static_assert(q8_1_blocks == 2 || q8_1_blocks == 4 || q8_1_blocks == 8);
 
     const block_q5_K * bq5_K = (const block_q5_K *) vbq + kbx;
 
@@ -1305,16 +1280,16 @@ static __device__ __forceinline__ float vec_dot_q5_K_q8_1_x4(
         m[i]  = (uint8_t) ((mb_word >> shift) & 0x3Fu);
 
         const int block_offset = kby + subblock;
-        const int block_outer  = block_offset >> 2;
-        const int block_inner  = block_offset & 3;
-        const block_q8_1_layout<4 * QK8_1> * by = yx4 + block_outer;
-        const int4 * q8 = (const int4 *) (by->qs + block_inner * 8);
+        const int block_outer  = block_offset / q8_1_blocks;
+        const int block_inner  = block_offset % q8_1_blocks;
+        const block_q8_1_layout<q8_1_layout_block_size> * by = y_layout + block_outer;
+        const int4 * q8 = (const int4 *) (by->qs + block_inner * q8_1_qs_per_block);
         q8_lo[i] = q8[0];
         q8_hi[i] = q8[1];
         ds8[i]   = __half22float2(by->ds[block_inner]);
     }
 
-    return vec_dot_q5_K_q8_1_impl_vmmq_x4(
+    return vec_dot_q5_K_q8_1_impl_vmmq_layout(
         packed_q4_lo, packed_q4_hi, qh_lo, qh_hi, q8_lo, q8_hi, ds8, sc, m, subblock0, bq5_K->dm);
 }
 
@@ -1345,12 +1320,17 @@ static __device__ __forceinline__ float vec_dot_q6_K_q8_1(
 }
 
 // Q6_K uses interleaved q8_1 sub-block pairs: {0,2}, {1,3}, {4,6}, {5,7}.
-static __device__ __forceinline__ float vec_dot_q6_K_q8_1_x4(
+template<int q8_1_layout_block_size>
+static __device__ __forceinline__ float vec_dot_q6_K_q8_1_layout(
         const void * __restrict__ vbq,
-        const block_q8_1_layout<4 * QK8_1> * __restrict__ yx4,
+        const block_q8_1_layout<q8_1_layout_block_size> * __restrict__ y_layout,
         const int & kby,
         const int & kbx,
         const int subblock_pair) {
+    static_assert(q8_1_layout_block_size % QK8_1 == 0);
+    constexpr int q8_1_blocks = block_q8_1_layout<q8_1_layout_block_size>::q8_1_blocks;
+    constexpr int q8_1_qs_per_block = QK8_1 / sizeof(int32_t);
+    static_assert(q8_1_blocks == 2 || q8_1_blocks == 4 || q8_1_blocks == 8);
 
     const block_q6_K * bq6_K = (const block_q6_K *) vbq + kbx;
 
@@ -1387,16 +1367,16 @@ static __device__ __forceinline__ float vec_dot_q6_K_q8_1_x4(
 #pragma unroll
     for (int i = 0; i < QR6_K; ++i) {
         const int block_offset = kby + sub_blocks_in_pair[i];
-        const int block_outer  = block_offset >> 2;
-        const int block_inner  = block_offset & 3;
-        const block_q8_1_layout<4 * QK8_1> * by = yx4 + block_outer;
-        const int4 * q8 = (const int4 *) (by->qs + block_inner * 8);
+        const int block_outer  = block_offset / q8_1_blocks;
+        const int block_inner  = block_offset % q8_1_blocks;
+        const block_q8_1_layout<q8_1_layout_block_size> * by = y_layout + block_outer;
+        const int4 * q8 = (const int4 *) (by->qs + block_inner * q8_1_qs_per_block);
         q8_lo[i] = q8[0];
         q8_hi[i] = q8[1];
         ds8[i]   = __half22float2(by->ds[block_inner]);
     }
 
-    return vec_dot_q6_K_q8_1_impl_vmmq_x4(
+    return vec_dot_q6_K_q8_1_impl_vmmq_layout(
         ql_lo, ql_hi, qh_lo, qh_hi, q8_lo, q8_hi, ds8, sc, qh_base_shift, bq6_K->d);
 }
 
