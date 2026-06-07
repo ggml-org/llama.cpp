@@ -103,6 +103,17 @@ def parse_device_endpoints(value):
     return mapping
 
 
+def parse_spill_device(value):
+    target, sep, spill = value.partition("=")
+    target = target.strip()
+    spill = spill.strip()
+    if not sep or not target or not spill:
+        raise argparse.ArgumentTypeError(
+            f"invalid spill device mapping {value!r}; expected TARGET=SPILL_DEVICE"
+        )
+    return target, spill
+
+
 def parse_trace(paths):
     tensor_ops = []
     cross_endpoint = []
@@ -221,7 +232,10 @@ def aggregate_cross_tensors(cross_tensors, tensor_ops):
 
 def infer_device_endpoints(devices, rpc_endpoints, explicit):
     if explicit:
-        return {device: explicit.get(device) for device in devices}
+        result = dict(explicit)
+        for device in devices:
+            result.setdefault(device, explicit.get(device))
+        return result
     if len(devices) == len(rpc_endpoints):
         return dict(zip(devices, rpc_endpoints))
     return {device: None for device in devices}
@@ -237,6 +251,16 @@ def endpoint_suffix_cost(removed_endpoints, endpoint_metrics, cross_pairs):
         cost += metrics["layer_boundary_wait_ms"]
     for pair in cross_pairs:
         if pair["src"] in removed_endpoints or pair["dst"] in removed_endpoints:
+            cost += pair.get("src_wait_ms", 0.0)
+    return cost
+
+
+def endpoint_pair_cost(src_endpoint, dst_endpoint, cross_pairs):
+    if src_endpoint is None or dst_endpoint is None:
+        return 0.0
+    cost = 0.0
+    for pair in cross_pairs:
+        if pair["src"] == src_endpoint and pair["dst"] == dst_endpoint:
             cost += pair.get("src_wait_ms", 0.0)
     return cost
 
@@ -323,6 +347,68 @@ def load_fit_failures(paths):
     return by_placement, records
 
 
+def make_spill_candidates(args, devices, splits, device_endpoints, cross_pairs):
+    candidates = []
+    for target_device, spill_device in args.spill_device:
+        if target_device not in devices:
+            continue
+        if spill_device in devices:
+            continue
+
+        target_index = devices.index(target_device)
+        source_index = None
+        for index in range(target_index + 1, len(splits)):
+            if splits[index] > 0:
+                source_index = index
+                break
+        if source_index is None:
+            continue
+
+        target_endpoint = device_endpoints.get(target_device)
+        spill_endpoint = device_endpoints.get(spill_device)
+        if target_endpoint is not None and spill_endpoint is not None and target_endpoint != spill_endpoint:
+            continue
+
+        source_device = devices[source_index]
+        source_endpoint = device_endpoints.get(source_device)
+        trace_cost = endpoint_pair_cost(target_endpoint, source_endpoint, cross_pairs)
+
+        for spill_weight in args.spill_weight:
+            if spill_weight <= 0 or splits[source_index] - spill_weight <= 0:
+                continue
+
+            candidate_devices = devices[:target_index + 1] + [spill_device] + devices[target_index + 1:]
+            candidate_splits = splits[:target_index + 1] + [spill_weight] + splits[target_index + 1:]
+            candidate_splits[source_index + 1] -= spill_weight
+
+            candidates.append({
+                "name": (
+                    f"spill_after_{target_device}_to_{spill_device}_"
+                    f"w{format_split([spill_weight]).replace('.', 'p')}_from_{source_device}"
+                ),
+                "description": (
+                    "Move a small split weight from the next downstream device "
+                    "onto a spill device that should live on the same RPC endpoint "
+                    "as the target device."
+                ),
+                "device": "/".join(candidate_devices),
+                "tensor_split": format_split(candidate_splits),
+                "generation": "endpoint-spill",
+                "spill_after_device": target_device,
+                "spill_device": spill_device,
+                "spill_source_device": source_device,
+                "spill_weight": spill_weight,
+                "spill_endpoint_estimate": spill_endpoint,
+                "source_endpoint_estimate": source_endpoint,
+                "trace_candidate_cost_ms": trace_cost,
+                "trace_spill_boundary_cost_ms": trace_cost,
+                "output_device_estimate": candidate_devices[-1],
+                "output_endpoint_estimate": device_endpoints.get(candidate_devices[-1]),
+            })
+
+    return candidates
+
+
 def make_candidates(args, devices, splits, device_endpoints, endpoint_metrics, cross_pairs):
     total = sum(splits)
     candidates = []
@@ -380,17 +466,19 @@ def make_candidates(args, devices, splits, device_endpoints, endpoint_metrics, c
             "omitted_split_weight": omitted,
             "omitted_split_ratio": omitted_ratio,
             "trace_removed_suffix_cost_ms": trace_cost,
+            "trace_candidate_cost_ms": trace_cost,
         })
 
-    candidates[1:] = sorted(
+    candidates.extend(make_spill_candidates(args, devices, splits, device_endpoints, cross_pairs))
+    non_baseline = sorted(
         candidates[1:],
         key=lambda item: (
-            -item["trace_removed_suffix_cost_ms"],
-            item["omitted_split_ratio"],
+            -item.get("trace_candidate_cost_ms", 0.0),
+            item.get("omitted_split_ratio", 0.0),
             item["name"],
         ),
     )
-    return candidates[: args.max_candidates + 1]
+    return candidates[:1] + non_baseline[:args.max_candidates]
 
 
 def apply_fit_constraints(candidates, fit_failures, include_known_failures):
@@ -414,6 +502,8 @@ def apply_fit_constraints(candidates, fit_failures, include_known_failures):
 
 def build_bench_command(args, candidate):
     if args.llama_bench is None or args.model is None or args.rpc is None:
+        return None
+    if candidate["device"] != "/".join(parse_list(args.device)):
         return None
     cmd = [
         "python3",
@@ -453,6 +543,12 @@ def build_bench_command(args, candidate):
     return shlex.join(cmd)
 
 
+def build_sweep_candidate_arg(candidate):
+    return "--candidate-device " + shlex.quote(
+        f"{candidate['name']}={candidate['device']}:{candidate['tensor_split']}"
+    )
+
+
 def build_summary(args):
     tensor_ops, cross_endpoint, cross_tensors = parse_trace(args.trace_stderr)
     devices = parse_list(args.device)
@@ -476,8 +572,10 @@ def build_summary(args):
         args.include_known_fit_failures,
     )
     for candidate in candidates:
+        candidate["bench_rpc_sweep_arg"] = build_sweep_candidate_arg(candidate)
         candidate["bench_command"] = build_bench_command(args, candidate)
     for candidate in rejected_candidates:
+        candidate["bench_rpc_sweep_arg"] = build_sweep_candidate_arg(candidate)
         candidate["bench_command"] = build_bench_command(args, candidate)
 
     return {
@@ -521,6 +619,8 @@ def parse_args():
     parser.add_argument("--device-endpoints", default=None, help="explicit device to endpoint mapping, for example RPC0=a:50052,RPC1=a:50052")
     parser.add_argument("--fit-summary", action="append", default=[], type=Path, help="bench_rpc_sweep summary JSON containing failed candidates to avoid; repeatable")
     parser.add_argument("--include-known-fit-failures", action="store_true", help="emit known non-fitting candidates instead of moving them to rejected_candidates")
+    parser.add_argument("--spill-device", action="append", default=[], type=parse_spill_device, metavar="TARGET=SPILL_DEVICE", help="generate same-endpoint spill candidates after TARGET using SPILL_DEVICE; repeatable")
+    parser.add_argument("--spill-weight", default=[1.0], type=parse_float_list, help="spill weights to try for each --spill-device, for example 1 or 1/2")
     parser.add_argument("--max-omitted-ratio", default=0.35, type=float, help="skip candidates that zero more than this split-weight fraction")
     parser.add_argument("--max-candidates", default=6, type=int, help="maximum non-baseline candidates to emit")
     parser.add_argument("--llama-bench", default=None, help="optional llama-bench path for generated bench_rpc_remote commands")

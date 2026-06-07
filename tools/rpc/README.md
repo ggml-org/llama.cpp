@@ -328,6 +328,31 @@ python3 tools/rpc/suggest_rpc_placement.py \
   --fit-summary outputs/tail-taper/summary.json
 ```
 
+Use `--spill-device TARGET=SPILL_DEVICE` to ask the planner for same-endpoint
+spill candidates. This inserts `SPILL_DEVICE` immediately after `TARGET` and
+moves a small split weight from the next downstream device onto it. The intended
+case is a single `rpc-server` exposing both a GPU and a CPU, where a small CPU
+spill may change a costly downstream boundary without adding another network
+endpoint:
+
+```bash
+python3 tools/rpc/suggest_rpc_placement.py \
+  --trace-stderr baseline.stderr.txt \
+  --rpc "$RPC" \
+  --device RPC6/RPC1/RPC3/RPC5 \
+  --device-endpoints "$DEVICE_ENDPOINTS" \
+  --tensor-split 1/8/8/8 \
+  --fit-summary outputs/trace-suggested-zero-suffix/summary.json \
+  --spill-device RPC3=RPC4 \
+  --spill-weight 1/2
+```
+
+Spill candidates are emitted with `bench_rpc_sweep_arg` values because they can
+change both `--device` and `--tensor-split`. Run them with
+`tools/rpc/bench_rpc_sweep.py` on the real network before adopting them; a spill
+that wins in one noisy discovery run can regress once cache state, prompt size,
+or node load changes.
+
 To run several suggested splits in one pass, use
 `tools/rpc/bench_rpc_sweep.py`. It writes one JSONL/stderr pair per candidate,
 a `summary.json`, and grep-friendly `ranked.csv` and `ranked.jsonl` files:
