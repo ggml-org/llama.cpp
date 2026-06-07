@@ -101,7 +101,7 @@ def test_vision_chat_completion(prompt, image_url, success, re_content):
 def test_vision_chat_completion_token_count():
     global server
     server.start()
-    res = server.make_request("POST", "/chat/completions/input_tokens", data={
+    res = server.make_request("POST", "/v1/chat/completions/input_tokens", data={
         "temperature": 0.0,
         "top_k": 1,
         "messages": [

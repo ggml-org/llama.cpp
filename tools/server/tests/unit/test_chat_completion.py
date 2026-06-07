@@ -581,7 +581,7 @@ def test_chat_completions_token_count():
     # make sure cache can be reused across multiple choices and multiple requests
     # ref: https://github.com/ggml-org/llama.cpp/pull/18663
     for _ in range(2):
-        res = server.make_request("POST", "/chat/completions/input_tokens", data={
+        res = server.make_request("POST", "/v1/chat/completions/input_tokens", data={
             "messages": [
                 {"role": "system", "content": "Book"},
                 {"role": "user", "content": "What is the best book"},
