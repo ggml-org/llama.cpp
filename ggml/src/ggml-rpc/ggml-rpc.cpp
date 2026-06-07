@@ -1898,6 +1898,15 @@ bool rpc_server::copy_tensor(const rpc_msg_copy_tensor_req & request, rpc_msg_co
             __func__, (void*) src->buffer, (void*) dst->buffer);
 
     response.result = ggml_backend_buffer_copy_tensor(src, dst);
+    if (!response.result) {
+        // Keep same-server fallback copies on the RPC server instead of routing
+        // tensor bytes back through the RPC client.
+        const size_t nbytes = ggml_nbytes(src);
+        std::vector<uint8_t> data(nbytes);
+        ggml_backend_tensor_get(src, data.data(), 0, nbytes);
+        ggml_backend_tensor_set(dst, data.data(), 0, nbytes);
+        response.result = true;
+    }
     return true;
 }
 

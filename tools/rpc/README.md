@@ -165,6 +165,36 @@ and can hurt per-token throughput on workloads with many tiny tensors.
 
 ### Benchmarking changes
 
+The `llama-rpc-copy-bench` tool measures one RPC tensor-copy path directly,
+without running a full model. This is useful when a model trace shows many
+layer-boundary or output tensor copies and you need to separate raw copy-path
+cost from placement, cache, or compute effects:
+
+```bash
+GGML_RPC_TRACE=1 ./build/bin/llama-rpc-copy-bench \
+  --src 192.0.2.10:50052/0 \
+  --dst 192.0.2.11:50052/0 \
+  --bytes 4096,16384,73728,262144,1048576 \
+  --repetitions 9 \
+  --warmup 2
+```
+
+Each output line is a JSON object for one tensor size with latency samples,
+summary timing, and average MiB/s. The `--src` and `--dst` values use
+`ENDPOINT/DEVICE` syntax, where `DEVICE` is the device index exposed by that
+`rpc-server`. When both devices are on the same endpoint, the copy can use the
+server-side `COPY_TENSOR` path. If the server backend cannot copy directly
+between those two local devices, `rpc-server` keeps the fallback local by
+reading from the source tensor and writing to the destination tensor on the
+server. When endpoints differ, the current RPC backend falls back through the
+coordinator. Use `GGML_RPC_TRACE=1` on the client to confirm the actual commands
+observed for the benchmarked path.
+
+The optional `--verify` flag reads the destination tensor back after each byte
+size and checks that it matches the source pattern. This adds extra
+`GET_TENSOR` traffic, so leave it off for timing runs and use it only as a
+sanity check.
+
 The `tools/rpc/bench_rpc_compare.py` helper can compare two local build trees
 with the same model and RPC settings:
 
