@@ -98,12 +98,21 @@ def safe_name_part(value):
     return result.strip("_") or "device"
 
 
-def output_device_from_selector(device):
+def estimate_output_device(device, tensor_split):
     if device is None:
         return None
     devices = split_device_selector(device)
     if not devices:
         return None
+    if tensor_split is not None:
+        splits = split_tensor_split(tensor_split)
+        if len(splits) == len(devices):
+            for index in range(len(splits) - 1, -1, -1):
+                try:
+                    if float(splits[index]) > 0:
+                        return devices[index]
+                except ValueError:
+                    break
     return devices[-1]
 
 
@@ -185,7 +194,7 @@ def make_case(args, rpc_arg, endpoints, candidate):
         "rpc": rpc_arg,
         "endpoints": endpoints,
         "device": device,
-        "output_device": candidate.get("output_device") or output_device_from_selector(device),
+        "output_device": candidate.get("output_device") or estimate_output_device(device, candidate["tensor_split"]),
         "generation": candidate.get("generation"),
         "generated_from": candidate.get("generated_from"),
         "rotation": candidate.get("rotation"),
