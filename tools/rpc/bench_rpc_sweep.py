@@ -59,12 +59,34 @@ def parse_candidate(value):
                 ) from exc
     return {
         "name": name,
+        "device": None,
         "tensor_split": None if tensor_split == "auto" else tensor_split,
         "tensor_split_display": tensor_split,
     }
 
 
+def parse_device_candidate(value):
+    name, sep, placement = value.partition("=")
+    if not sep or not name:
+        raise argparse.ArgumentTypeError(
+            f"invalid device candidate {value!r}; expected NAME=DEVICE:TENSOR_SPLIT or NAME=DEVICE:auto"
+        )
+
+    device, sep, tensor_split = placement.rpartition(":")
+    if not sep or not device or not tensor_split:
+        raise argparse.ArgumentTypeError(
+            f"invalid device candidate {value!r}; expected NAME=DEVICE:TENSOR_SPLIT or NAME=DEVICE:auto"
+        )
+
+    candidate = parse_candidate(f"{name}={tensor_split}")
+    candidate["device"] = device.strip()
+    if not candidate["device"]:
+        raise argparse.ArgumentTypeError(f"candidate {name!r} has an empty device")
+    return candidate
+
+
 def build_bench_cmd(args, rpc_arg, candidate):
+    device = candidate.get("device") if candidate.get("device") is not None else args.device
     cmd = [
         str(args.llama_bench),
         "-m",
@@ -88,8 +110,8 @@ def build_bench_cmd(args, rpc_arg, candidate):
         cmd.extend(["-ts", candidate["tensor_split"]])
     if args.threads is not None:
         cmd.extend(["-t", str(args.threads)])
-    if args.device is not None:
-        cmd.extend(["--device", args.device])
+    if device is not None:
+        cmd.extend(["--device", device])
     cmd.extend(args.bench_extra)
     cmd.extend(["-o", "jsonl"])
     return cmd
@@ -104,7 +126,7 @@ def make_case(args, rpc_arg, endpoints, candidate):
         "name": candidate["name"],
         "rpc": rpc_arg,
         "endpoints": endpoints,
-        "device": args.device,
+        "device": candidate.get("device") if candidate.get("device") is not None else args.device,
         "split_mode": args.split_mode,
         "flash_attn": args.flash_attn,
         "tensor_split": candidate["tensor_split"],
@@ -153,10 +175,10 @@ def run_case(args, case, env):
         raise RuntimeError(f"{case['name']} {case['error']}; see {stderr_path}")
 
     metrics = summarize_rows(load_jsonl(jsonl_path))
-    if "prompt" not in metrics or "decode" not in metrics:
+    if args.rank_by not in metrics:
         case["status"] = "failed"
         case["metrics"] = metrics
-        case["error"] = f"missing prompt or decode metrics in {jsonl_path}"
+        case["error"] = f"missing {args.rank_by} metrics in {jsonl_path}"
         raise RuntimeError(f"{case['name']} {case['error']}")
 
     case["status"] = "ok"
@@ -184,6 +206,7 @@ def rank_cases(summary, rank_by):
         {
             "rank": case["rank"],
             "name": case["name"],
+            "device": case["device"],
             "tensor_split": case["tensor_split_display"],
             "prompt_avg_tokens_per_second": metric(case, "prompt"),
             "decode_avg_tokens_per_second": metric(case, "decode"),
@@ -226,11 +249,12 @@ def parse_args():
     parser.add_argument("--llama-bench", required=True, type=Path, help="local llama-bench executable")
     parser.add_argument("--model", required=True, type=Path, help="local GGUF model path")
     parser.add_argument("--rpc", required=True, help="RPC host:port list")
-    parser.add_argument("--candidate", action="append", required=True, type=parse_candidate, metavar="NAME=TENSOR_SPLIT", help="candidate tensor split; use NAME=auto to omit -ts")
+    parser.add_argument("--candidate", action="append", default=[], type=parse_candidate, metavar="NAME=TENSOR_SPLIT", help="candidate tensor split; use NAME=auto to omit -ts")
+    parser.add_argument("--candidate-device", action="append", default=[], type=parse_device_candidate, metavar="NAME=DEVICE:TENSOR_SPLIT", help="candidate device selector and tensor split; use TENSOR_SPLIT=auto to omit -ts")
     parser.add_argument("--device", default=None, help="llama-bench device selector, for example RPC0/RPC1")
     parser.add_argument("--split-mode", choices=("none", "layer", "row", "tensor"), default=None, help="optional llama-bench split mode for -sm")
     parser.add_argument("--flash-attn", choices=("on", "off", "auto"), default=None, help="optional llama-bench flash attention setting for -fa")
-    parser.add_argument("--prompt", default=32, type=int, help="prompt tokens for llama-bench -p")
+    parser.add_argument("--prompt", default=32, type=int, help="prompt tokens for llama-bench -p; use 0 for generation-only runs")
     parser.add_argument("--gen", default=32, type=int, help="generated tokens for llama-bench -n")
     parser.add_argument("--repetitions", default=7, type=int, help="llama-bench repetitions for -r")
     parser.add_argument("--ngl", default=99, type=int, help="GPU layers for llama-bench -ngl")
@@ -257,8 +281,8 @@ def parse_args():
     except argparse.ArgumentTypeError as exc:
         parser.error(str(exc))
 
-    if args.prompt < 1:
-        parser.error("--prompt must be >= 1")
+    if args.prompt < 0:
+        parser.error("--prompt must be >= 0")
     if args.gen < 1:
         parser.error("--gen must be >= 1")
     if args.repetitions < 1:
@@ -268,7 +292,10 @@ def parse_args():
     if args.connect_timeout <= 0:
         parser.error("--connect-timeout must be > 0")
 
-    names = [candidate["name"] for candidate in args.candidate]
+    args.candidates = args.candidate + args.candidate_device
+    if not args.candidates:
+        parser.error("at least one --candidate or --candidate-device is required")
+    names = [candidate["name"] for candidate in args.candidates]
     if len(names) != len(set(names)):
         parser.error("candidate names must be unique")
 
@@ -319,7 +346,7 @@ def main():
         },
         "cases": [
             make_case(args, rpc_arg, args.endpoints, candidate)
-            for candidate in args.candidate
+            for candidate in args.candidates
         ],
     }
 
