@@ -684,6 +684,20 @@ static common_chat_tool config_tool{
     })",
 };
 
+static common_chat_tool calendar_create_event_tool{
+    /* .name = */ "Calendar.create_event",
+    /* .description = */ "Create a calendar event",
+    /* .parameters = */ R"({
+        "type": "object",
+        "properties": {
+            "title": { "type": "string" },
+            "participants": { "type": "array", "items": { "type": "string" } },
+            "metadata": { "type": "object" }
+        },
+        "required": ["title", "participants", "metadata"]
+    })",
+};
+
 static common_chat_tool imaginary_number_tool{
     /* .name = */ "imaginary_number",
     /* .description = */ "Imaginary number converter",
@@ -4130,7 +4144,7 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .run();
     }
 
-    // LFM2.5 tests - uses plain "List of tools: [...]" and bare [name(args)] without wrapper tokens
+    // LFM2.5 tests - format <|tool_call_start|>[name(args)]<|tool_call_end|>
     {
         auto tst = peg_tester("models/templates/LFM2.5-Instruct.jinja", detailed_debug);
 
@@ -4138,19 +4152,57 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
         tst.test("Hello, world!\nWhat's up?").expect(message_assist).run();
 
         // Single tool call without reasoning
-        tst.test("[special_function(arg1=1)]")
+        tst.test("<|tool_call_start|>[special_function(arg1=1)]<|tool_call_end|>")
             .tools({ special_function_tool })
             .expect(message_assist_call)
             .run();
 
         // Tool call with string argument
-        tst.test("[get_time(city=\"XYZCITY\")]")
+        tst.test("<|tool_call_start|>[get_time(city=\"XYZCITY\")]<|tool_call_end|>")
             .tools({ get_time_tool })
             .expect(message_with_tool_calls("get_time", "{\"city\":\"XYZCITY\"}"))
             .run();
 
+        // Python literals become JSON.
+        tst.test("<|tool_call_start|>[toggle(enabled=True)]<|tool_call_end|>")
+            .tools({ toggle_tool })
+            .expect(message_with_tool_calls("toggle", R"({"enabled": true})"))
+            .run();
+
+        tst.test("<|tool_call_start|>[set_nullable(value=None)]<|tool_call_end|>")
+            .tools({ nullable_tool })
+            .expect(message_with_tool_calls("set_nullable", R"({"value": null})"))
+            .run();
+
+        // Nested Python literal.
+        tst.test("<|tool_call_start|>[set_config(config={\"enabled\": True, \"count\": 3})]<|tool_call_end|>")
+            .tools({ config_tool })
+            .expect(message_with_tool_calls("set_config", R"({"config": {"enabled": true, "count": 3}})"))
+            .run();
+
+        // JSON literals are accepted too.
+        tst.test("<|tool_call_start|>[set_config(config={\"enabled\": true, \"note\": null})]<|tool_call_end|>")
+            .tools({ config_tool })
+            .expect(message_with_tool_calls("set_config", R"({"config": {"enabled": true, "note": null}})"))
+            .run();
+
+        // Dotted function name with structured args.
+        tst.test("<|tool_call_start|>[Calendar.create_event(title=\"demo\", participants=[\"Alice\", \"Bob\"], "
+                 "metadata={\"priority\": \"high\", \"reminder\": true})]<|tool_call_end|>")
+            .tools({ calendar_create_event_tool })
+            .expect(message_with_tool_calls(
+                "Calendar.create_event",
+                R"({"title": "demo", "participants": ["Alice", "Bob"], "metadata": {"priority": "high", "reminder": true}})"))
+            .run();
+
+        // Markdown links stay content.
+        tst.test("Use this format: [link text](url). Example: [Wikipedia](https://www.wikipedia.org).")
+            .tools({ get_time_tool })
+            .expect(simple_assist_msg("Use this format: [link text](url). Example: [Wikipedia](https://www.wikipedia.org)."))
+            .run();
+
         // Tool call with reasoning (enable_thinking=true)
-        tst.test("<think>I'm\nthinking</think>[special_function(arg1=1)]")
+        tst.test("<think>I'm\nthinking</think><|tool_call_start|>[special_function(arg1=1)]<|tool_call_end|>")
             .enable_thinking(true)
             .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
             .tools({ special_function_tool })
@@ -4158,7 +4210,7 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .run();
 
         // Multiple tool calls (parallel)
-        tst.test("[special_function(arg1=1), special_function_with_opt(arg1=1, arg2=2)]")
+        tst.test("<|tool_call_start|>[special_function(arg1=1), special_function_with_opt(arg1=1, arg2=2)]<|tool_call_end|>")
             .parallel_tool_calls(true)
             .tools({
                 special_function_tool, special_function_tool_with_optional_param
@@ -4170,7 +4222,7 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .run();
 
         // Tool call with content before tool call
-        tst.test("Let me check the time.[get_time(city=\"Paris\")]")
+        tst.test("Let me check the time.<|tool_call_start|>[get_time(city=\"Paris\")]<|tool_call_end|>")
             .tools({ get_time_tool })
             .expect(message_with_reasoning_content_and_multiple_tool_calls(
                 "", "Let me check the time.", { { "get_time", "{\"city\":\"Paris\"}" } }
@@ -4178,14 +4230,14 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .run();
 
         // Partial tool call (streaming)
-        tst.test("[special_function(arg1=")
+        tst.test("<|tool_call_start|>[special_function(arg1=")
             .tools({ special_function_tool })
             .is_partial(true)
             .expect(simple_assist_msg("", "", "special_function", "{\"arg1\": "))
             .run();
 
         // Tool call with empty arguments
-        tst.test("[empty_args()]")
+        tst.test("<|tool_call_start|>[empty_args()]<|tool_call_end|>")
             .tools({ empty_args_tool })
             .expect(simple_assist_msg("", "", "empty_args", "{}"))
             .run();

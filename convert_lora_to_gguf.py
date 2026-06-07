@@ -312,6 +312,10 @@ def parse_args() -> argparse.Namespace:
         help="the model ID of the base model, if it is not available locally or in the adapter config. If specified, it will ignore --base and load the base model config from the Hugging Face hub (Example: 'meta-llama/Llama-3.2-1B-Instruct')",
     )
     parser.add_argument(
+        "--trust-remote-code", default=False, action="store_true",
+        help="trust remote code in the model",
+    )
+    parser.add_argument(
         "lora_path", type=Path,
         help="directory containing Hugging Face PEFT LoRA config (adapter_model.json) and weights (adapter_model.safetensors or adapter_model.bin)",
     )
@@ -319,11 +323,11 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def load_hparams_from_hf(hf_model_id: str) -> tuple[dict[str, Any], Path | None]:
+def load_hparams_from_hf(hf_model_id: str, trust_remote_code: bool) -> tuple[dict[str, Any], Path | None]:
     from huggingface_hub import try_to_load_from_cache
 
     # normally, adapter does not come with base model config, we need to load it from AutoConfig
-    config = AutoConfig.from_pretrained(hf_model_id)
+    config = AutoConfig.from_pretrained(hf_model_id, trust_remote_code=trust_remote_code)
     cache_dir = try_to_load_from_cache(hf_model_id, "config.json")
     cache_dir = Path(cache_dir).parent if isinstance(cache_dir, str) else None
 
@@ -372,13 +376,13 @@ if __name__ == '__main__':
     # load base model
     if base_model_id is not None:
         logger.info(f"Loading base model from Hugging Face: {base_model_id}")
-        hparams, dir_base_model = load_hparams_from_hf(base_model_id)
+        hparams, dir_base_model = load_hparams_from_hf(base_model_id, args.trust_remote_code)
     elif dir_base_model is None:
         if "base_model_name_or_path" in lparams:
             model_id = lparams["base_model_name_or_path"]
             logger.info(f"Loading base model from Hugging Face: {model_id}")
             try:
-                hparams, dir_base_model = load_hparams_from_hf(model_id)
+                hparams, dir_base_model = load_hparams_from_hf(model_id, args.trust_remote_code)
             except OSError as e:
                 logger.error(f"Failed to load base model config: {e}")
                 logger.error("Please try downloading the base model and add its path to --base")
@@ -393,7 +397,9 @@ if __name__ == '__main__':
 
     with torch.inference_mode():
         try:
-            model_class = get_model_class(hparams["architectures"][0])
+            model_arch = hparams.get("text_config", {}).get("architectures", hparams["architectures"])[0]
+            logger.info("Using model architecture: %s", model_arch)
+            model_class = get_model_class(model_arch)
         except NotImplementedError:
             logger.error(f"Model {hparams['architectures'][0]} is not supported")
             sys.exit(1)

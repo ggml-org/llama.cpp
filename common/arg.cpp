@@ -446,6 +446,12 @@ bool common_params_handle_models(common_params & params, llama_example curr_ex) 
     opts.download_mtp    = spec_type_draft_mtp;
     opts.download_mmproj = !params.no_mmproj;
 
+    // sub-models (draft, mmproj, vocoder) are explicitly specified by the user,
+    // so we should not auto-discover mtp/mmproj siblings for them
+    common_download_opts sub_opts = opts;
+    sub_opts.download_mtp    = false;
+    sub_opts.download_mmproj = false;
+
     try {
         auto res = common_params_handle_model(params.model, opts);
         if (params.no_mmproj) {
@@ -457,7 +463,7 @@ bool common_params_handle_models(common_params & params, llama_example curr_ex) 
         // only download mmproj if the current example is using it
         for (const auto & ex : mmproj_examples) {
             if (curr_ex == ex) {
-                common_params_handle_model(params.mmproj, opts);
+                common_params_handle_model(params.mmproj, sub_opts);
                 break;
             }
         }
@@ -470,8 +476,8 @@ bool common_params_handle_models(common_params & params, llama_example curr_ex) 
             params.speculative.draft.mparams.url.empty()) {
             params.speculative.draft.mparams.path = res.mtp.path;
         }
-        common_params_handle_model(params.speculative.draft.mparams, opts);
-        common_params_handle_model(params.vocoder.model,             opts);
+        common_params_handle_model(params.speculative.draft.mparams, sub_opts);
+        common_params_handle_model(params.vocoder.model,             sub_opts);
         return true;
     } catch (const common_skip_download_exception &) {
         return false;

@@ -57,6 +57,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
     { LLM_ARCH_GEMMA3,           "gemma3"           },
     { LLM_ARCH_GEMMA3N,          "gemma3n"          },
     { LLM_ARCH_GEMMA4,           "gemma4"           },
+    { LLM_ARCH_GEMMA4_ASSISTANT, "gemma4-assistant" },
     { LLM_ARCH_GEMMA_EMBEDDING,  "gemma-embedding"  },
     { LLM_ARCH_STARCODER2,       "starcoder2"       },
     { LLM_ARCH_MAMBA,            "mamba"            },
@@ -196,6 +197,7 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
     { LLM_KV_MOE_LATENT_SIZE,                   "%s.moe_latent_size"                   },
     { LLM_KV_NEXTN_PREDICT_LAYERS,              "%s.nextn_predict_layers"              },
     { LLM_KV_NUM_DEEPSTACK_LAYERS,              "%s.n_deepstack_layers"                },
+    { LLM_KV_DEEPSTACK_MAPPING,                 "%s.deepstack_mapping"                 },
     { LLM_KV_HIDDEN_ACT,                        "%s.hidden_activation"                 },
     { LLM_KV_POOLING_TYPE,                      "%s.pooling_type"                      },
     { LLM_KV_LOGIT_SCALE,                       "%s.logit_scale"                       },
@@ -329,6 +331,7 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
     { LLM_KV_TOKENIZER_FIM_PAD_ID,           "tokenizer.ggml.fim_pad_token_id"         },
     { LLM_KV_TOKENIZER_FIM_REP_ID,           "tokenizer.ggml.fim_rep_token_id"         },
     { LLM_KV_TOKENIZER_FIM_SEP_ID,           "tokenizer.ggml.fim_sep_token_id"         },
+    { LLM_KV_TOKENIZER_SUPPRESS_TOKENS,      "tokenizer.ggml.suppress_tokens"          },
 
     { LLM_KV_ADAPTER_TYPE,                    "adapter.type"               },
     { LLM_KV_ADAPTER_LORA_ALPHA,              "adapter.lora.alpha"         },
@@ -451,6 +454,8 @@ static const std::map<llm_tensor, const char *> LLM_TENSOR_NAMES = {
     { LLM_TENSOR_FFN_NORM_EXPS,                          "blk.%d.ffn_norm_exps" },
     { LLM_TENSOR_ATTN_K_B,                               "blk.%d.attn_k_b" },
     { LLM_TENSOR_ATTN_V_B,                               "blk.%d.attn_v_b" },
+    { LLM_TENSOR_NEXTN_PRE_PROJ,                         "nextn.pre_projection" },
+    { LLM_TENSOR_NEXTN_POST_PROJ,                        "nextn.post_projection" },
     { LLM_TENSOR_NEXTN_EH_PROJ,                          "blk.%d.nextn.eh_proj" },
     { LLM_TENSOR_NEXTN_EMBED_TOKENS,                     "blk.%d.nextn.embed_tokens" },
     { LLM_TENSOR_NEXTN_ENORM,                            "blk.%d.nextn.enorm" },
@@ -763,6 +768,8 @@ static const std::map<llm_tensor, llm_tensor_info> LLM_TENSOR_INFOS = {
     {LLM_TENSOR_INDEXER_PROJ,               {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
     {LLM_TENSOR_INDEXER_ATTN_K,             {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
     {LLM_TENSOR_INDEXER_ATTN_Q_B,           {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
+    {LLM_TENSOR_NEXTN_PRE_PROJ,             {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
+    {LLM_TENSOR_NEXTN_POST_PROJ,            {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_MUL_MAT}},
     // NextN/MTP tensors are stored per-block (blk.%d.nextn.*) even though only the
     // last nextn_predict_layers blocks carry them. Classify as LAYER_REPEATING so
     // the model loader doesn't fault on the block index.
