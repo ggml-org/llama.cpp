@@ -538,6 +538,8 @@ class VISION_PROJECTOR_TYPE(IntEnum):
 class MODEL_TENSOR(IntEnum):
     TOKEN_EMBD           = auto()
     TOKEN_EMBD_NORM      = auto()
+    MASKED_EMBD_CENTROIDS= auto()
+    MASKED_EMBD_ORDERING = auto()
     TOKEN_TYPES          = auto()
     POS_EMBD             = auto()
     OUTPUT               = auto()
@@ -1087,6 +1089,8 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.TOKEN_EMBD:                "token_embd",
     MODEL_TENSOR.TOKEN_EMBD_NORM:           "token_embd_norm",
     MODEL_TENSOR.TOKEN_TYPES:               "token_types",
+    MODEL_TENSOR.MASKED_EMBD_CENTROIDS:     "masked_embd_centroids",
+    MODEL_TENSOR.MASKED_EMBD_ORDERING:      "masked_embd_ordering",
     MODEL_TENSOR.POS_EMBD:                  "position_embd",
     MODEL_TENSOR.OUTPUT_NORM:               "output_norm",
     MODEL_TENSOR.OUTPUT:                    "output",
@@ -2586,6 +2590,8 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
     MODEL_ARCH.GEMMA4_ASSISTANT: [
         MODEL_TENSOR.ROPE_FREQS,
         MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.MASKED_EMBD_CENTROIDS,
+        MODEL_TENSOR.MASKED_EMBD_ORDERING,
         MODEL_TENSOR.OUTPUT_NORM,
         MODEL_TENSOR.NEXTN_PROJ_PRE,
         MODEL_TENSOR.NEXTN_PROJ_POST,
