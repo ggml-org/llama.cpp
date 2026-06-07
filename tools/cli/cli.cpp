@@ -128,7 +128,18 @@ struct cli_context {
         console::spinner::start();
         server_task_result_ptr result = rd.next(should_stop);
 
-        console::spinner::stop();
+        while (true) {
+            auto res_partial = dynamic_cast<server_task_result_cmpl_partial *>(result.get());
+            if (res_partial && res_partial->is_begin) {
+                // this is the "send 200 status to client" signal in streaming mode
+                // skip, do not stop the spinner
+                result = rd.next(should_stop);
+            } else {
+                console::spinner::stop();
+                break;
+            }
+        }
+
         std::string curr_content;
         bool is_thinking = false;
 
