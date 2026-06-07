@@ -133,9 +133,16 @@ MTMD_API int mtmd_get_audio_sample_rate(const mtmd_context * ctx);
 // if bitmap is image:
 //     length of data must be nx * ny * 3
 //     the data is in RGBRGBRGB... format
+//     note: some video-capable models (i.e. qwen-vl) can merge consecutive bitmaps
+//           into one chunk, mtmd_tokenize() will automatically handle this
 // if bitmap is audio:
 //     length of data must be n_samples * sizeof(float)
 //     the data is in float format (PCM F32)
+//
+// if data == nullptr:
+//     the bitmap is considered "empty", and will be treated as a placeholder for counting tokens
+//     you can pass the bitmap via mtmd_tokenize(), then call mtmd_*_get_n_tokens() to count the tokens
+//     note: passing a placeholder bitmap to mtmd_encode() will return an error
 MTMD_API mtmd_bitmap *         mtmd_bitmap_init           (uint32_t nx, uint32_t ny, const unsigned char * data);
 MTMD_API mtmd_bitmap *         mtmd_bitmap_init_from_audio(size_t n_samples,         const float         * data);
 MTMD_API uint32_t              mtmd_bitmap_get_nx     (const mtmd_bitmap * bitmap);
