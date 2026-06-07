@@ -34,6 +34,10 @@ TRACE_TENSOR_OP_HEADERS = {
     "ggml-rpc trace tensor operations (top by elapsed):",
     "ggml-rpc trace tensor operations (top by wait):",
 }
+FIT_FAILURE_KINDS = {
+    "allocation_failed",
+    "model_load_failed",
+}
 
 
 def parse_float_list(value):
@@ -58,6 +62,22 @@ def format_split(values):
         else:
             parts.append(f"{value:.6g}")
     return "/".join(parts)
+
+
+def normalize_split_text(value):
+    if value is None:
+        return "auto"
+    text = str(value).strip()
+    if not text or text == "auto":
+        return text or "auto"
+    try:
+        return format_split(parse_float_list(text))
+    except argparse.ArgumentTypeError:
+        return text
+
+
+def placement_key(device, tensor_split):
+    return str(device or ""), normalize_split_text(tensor_split)
 
 
 def parse_list(value):
@@ -221,6 +241,88 @@ def endpoint_suffix_cost(removed_endpoints, endpoint_metrics, cross_pairs):
     return cost
 
 
+def read_text_if_exists(path):
+    try:
+        return path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+
+
+def resolve_case_path(summary_path, summary, value):
+    if not value:
+        return None
+    path = Path(value)
+    if path.is_absolute():
+        return path if path.is_file() else None
+
+    candidates = []
+    cwd = summary.get("cwd")
+    if cwd:
+        candidates.append(Path(cwd) / path)
+    candidates.append(summary_path.parent / path.name)
+    candidates.append(summary_path.parent / path)
+    candidates.append(path)
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def infer_fit_failure_kind(case, stderr_text):
+    kind = case.get("failure_kind")
+    if kind in FIT_FAILURE_KINDS:
+        return kind
+
+    text = "\n".join([
+        str(case.get("error") or ""),
+        str(case.get("stderr_tail") or ""),
+        stderr_text,
+    ]).lower()
+    if "failed to load model" in text:
+        return "model_load_failed"
+    if "out of memory" in text or "failed to allocate" in text or "memory allocation failed" in text:
+        return "allocation_failed"
+    return None
+
+
+def load_fit_failures(paths):
+    records = []
+    by_placement = defaultdict(list)
+
+    for path in paths:
+        summary = json.loads(path.read_text(encoding="utf-8"))
+        for case in summary.get("cases", []):
+            if case.get("status") not in ("failed", "timeout"):
+                continue
+
+            stderr_path = resolve_case_path(path, summary, case.get("stderr_path"))
+            stderr_text = read_text_if_exists(stderr_path) if stderr_path is not None else ""
+            failure_kind = infer_fit_failure_kind(case, stderr_text)
+            if failure_kind is None:
+                continue
+
+            device = case.get("device") or summary.get("device")
+            tensor_split = case.get("tensor_split_display", case.get("tensor_split"))
+            if device is None or tensor_split is None:
+                continue
+
+            record = {
+                "summary": str(path),
+                "name": case.get("name"),
+                "status": case.get("status"),
+                "failure_kind": failure_kind,
+                "device": device,
+                "tensor_split": normalize_split_text(tensor_split),
+                "output_device": case.get("output_device"),
+                "error": case.get("error"),
+                "stderr_path": str(stderr_path) if stderr_path is not None else case.get("stderr_path"),
+            }
+            records.append(record)
+            by_placement[placement_key(device, tensor_split)].append(record)
+
+    return by_placement, records
+
+
 def make_candidates(args, devices, splits, device_endpoints, endpoint_metrics, cross_pairs):
     total = sum(splits)
     candidates = []
@@ -291,6 +393,25 @@ def make_candidates(args, devices, splits, device_endpoints, endpoint_metrics, c
     return candidates[: args.max_candidates + 1]
 
 
+def apply_fit_constraints(candidates, fit_failures, include_known_failures):
+    kept = []
+    rejected = []
+
+    for candidate in candidates:
+        failures = fit_failures.get(placement_key(candidate["device"], candidate["tensor_split"]), [])
+        if failures:
+            candidate["fit_status"] = "known_failed"
+            candidate["fit_failures"] = failures
+            if candidate["name"] != "baseline" and not include_known_failures:
+                rejected.append(candidate)
+                continue
+        else:
+            candidate["fit_status"] = "unknown"
+        kept.append(candidate)
+
+    return kept, rejected
+
+
 def build_bench_command(args, candidate):
     if args.llama_bench is None or args.model is None or args.rpc is None:
         return None
@@ -340,7 +461,8 @@ def build_summary(args):
     device_endpoints = infer_device_endpoints(devices, rpc_endpoints, explicit_mapping)
     endpoint_metrics = aggregate_endpoint_waits(tensor_ops)
     cross_pairs = aggregate_cross_tensors(cross_tensors, tensor_ops)
-    candidates = make_candidates(
+    fit_failures, fit_failure_records = load_fit_failures(args.fit_summary)
+    raw_candidates = make_candidates(
         args,
         devices,
         args.tensor_split,
@@ -348,7 +470,14 @@ def build_summary(args):
         endpoint_metrics,
         cross_pairs,
     )
+    candidates, rejected_candidates = apply_fit_constraints(
+        raw_candidates,
+        fit_failures,
+        args.include_known_fit_failures,
+    )
     for candidate in candidates:
+        candidate["bench_command"] = build_bench_command(args, candidate)
+    for candidate in rejected_candidates:
         candidate["bench_command"] = build_bench_command(args, candidate)
 
     return {
@@ -368,11 +497,15 @@ def build_summary(args):
         "endpoint_metrics": endpoint_metrics,
         "cross_endpoint": cross_endpoint,
         "cross_tensors": cross_pairs,
+        "fit_summaries": [str(path) for path in args.fit_summary],
+        "fit_failures": fit_failure_records,
         "candidates": candidates,
+        "rejected_candidates": rejected_candidates,
         "notes": [
             "Candidates are benchmark suggestions, not proven optimizations.",
             "Layer split output placement is estimated as the last non-zero split device.",
             "Zeroing a suffix changes model placement and may reduce fit or prompt throughput.",
+            "Known fit failures are skipped unless --include-known-fit-failures is set.",
         ],
     }
 
@@ -386,6 +519,8 @@ def parse_args():
     parser.add_argument("--device", required=True, help="current llama-bench device string, for example RPC0/RPC1")
     parser.add_argument("--rpc", default=None, help="RPC endpoint list used by llama-bench")
     parser.add_argument("--device-endpoints", default=None, help="explicit device to endpoint mapping, for example RPC0=a:50052,RPC1=a:50052")
+    parser.add_argument("--fit-summary", action="append", default=[], type=Path, help="bench_rpc_sweep summary JSON containing failed candidates to avoid; repeatable")
+    parser.add_argument("--include-known-fit-failures", action="store_true", help="emit known non-fitting candidates instead of moving them to rejected_candidates")
     parser.add_argument("--max-omitted-ratio", default=0.35, type=float, help="skip candidates that zero more than this split-weight fraction")
     parser.add_argument("--max-candidates", default=6, type=int, help="maximum non-baseline candidates to emit")
     parser.add_argument("--llama-bench", default=None, help="optional llama-bench path for generated bench_rpc_remote commands")

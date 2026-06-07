@@ -8,6 +8,7 @@ import os
 import platform
 import shlex
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -236,6 +237,7 @@ def run_case(args, case, env, progress=None):
         case["finished_utc"] = utc_now()
         case["elapsed_sec"] = time.monotonic() - started
         case["status"] = "timeout"
+        case["failure_kind"] = "timeout"
         case["error"] = f"llama-bench timed out after {args.timeout} seconds"
         raise RuntimeError(f"{case['name']} {case['error']}") from exc
 
@@ -245,12 +247,17 @@ def run_case(args, case, env, progress=None):
 
     if completed.returncode != 0:
         case["status"] = "failed"
+        stderr_tail = read_failure_tail(stderr_path)
+        case["failure_kind"] = classify_failure(stderr_tail, "process_failed")
+        if stderr_tail:
+            case["stderr_tail"] = stderr_tail
         case["error"] = f"llama-bench exited with status {completed.returncode}"
         raise RuntimeError(f"{case['name']} {case['error']}; see {stderr_path}")
 
     metrics = summarize_rows(load_jsonl(jsonl_path))
     if args.rank_by not in metrics:
         case["status"] = "failed"
+        case["failure_kind"] = "metrics_missing"
         case["metrics"] = metrics
         case["error"] = f"missing {args.rank_by} metrics in {jsonl_path}"
         raise RuntimeError(f"{case['name']} {case['error']}")
@@ -318,6 +325,28 @@ def validate_inputs(args):
         raise FileNotFoundError(f"llama-bench not found: {args.llama_bench}")
     if not args.model.is_file():
         raise FileNotFoundError(f"model not found: {args.model}")
+
+
+def read_failure_tail(path, max_bytes=8192, max_lines=24):
+    try:
+        with path.open("rb") as fh:
+            if path.stat().st_size > max_bytes:
+                fh.seek(-max_bytes, os.SEEK_END)
+            text = fh.read().decode("utf-8", errors="replace")
+    except OSError:
+        return ""
+    return "\n".join(text.splitlines()[-max_lines:])
+
+
+def classify_failure(stderr_text, default_kind):
+    lower = stderr_text.lower()
+    if "failed to load model" in lower:
+        return "model_load_failed"
+    if "out of memory" in lower or "failed to allocate" in lower or "memory allocation failed" in lower:
+        return "allocation_failed"
+    if "remote rpc server crashed" in lower or "malformed response" in lower:
+        return "rpc_server_failure"
+    return default_kind
 
 
 def parse_args():
@@ -455,6 +484,10 @@ def main():
                 case_errors.append({
                     "name": case["name"],
                     "status": case["status"],
+                    "failure_kind": case.get("failure_kind"),
+                    "device": case.get("device"),
+                    "output_device": case.get("output_device"),
+                    "tensor_split": case.get("tensor_split_display"),
                     "error": case["error"],
                 })
             finally:

@@ -312,6 +312,22 @@ group candidate risk and trace cost by endpoint. The generated commands should
 still be run and compared with `bench_rpc_remote.py`; the trace-derived ranking
 is only a way to reduce the number of manual placement experiments.
 
+Pass one or more previous sweep summaries with `--fit-summary` to avoid
+placements that already failed to load the model or allocate memory. The
+rejected candidates are still reported in `rejected_candidates` so the planner's
+decision can be audited:
+
+```bash
+python3 tools/rpc/suggest_rpc_placement.py \
+  --trace-stderr baseline.stderr.txt \
+  --rpc "$RPC" \
+  --device RPC6/RPC1/RPC3/RPC5 \
+  --device-endpoints "$DEVICE_ENDPOINTS" \
+  --tensor-split 1/8/8/8 \
+  --fit-summary outputs/trace-suggested-zero-suffix/summary.json \
+  --fit-summary outputs/tail-taper/summary.json
+```
+
 To run several suggested splits in one pass, use
 `tools/rpc/bench_rpc_sweep.py`. It writes one JSONL/stderr pair per candidate,
 a `summary.json`, and grep-friendly `ranked.csv` and `ranked.jsonl` files:
