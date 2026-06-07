@@ -770,8 +770,7 @@ std::string common_sampler_type_to_str(enum common_sampler_type cnstr) {
 }
 
 std::vector<common_sampler_type> common_sampler_types_from_names(const std::vector<std::string> & names) {
-    // canonical sampler name mapping
-    static const std::unordered_map<std::string, common_sampler_type> sname_map {
+    static const std::unordered_map<std::string, common_sampler_type> canonical_name_map {
         { "dry",         COMMON_SAMPLER_TYPE_DRY         },
         { "top_k",       COMMON_SAMPLER_TYPE_TOP_K       },
         { "top_p",       COMMON_SAMPLER_TYPE_TOP_P       },
@@ -785,10 +784,10 @@ std::vector<common_sampler_type> common_sampler_types_from_names(const std::vect
         { "adaptive_p",  COMMON_SAMPLER_TYPE_ADAPTIVE_P  }
     };
 
-    // auto-generate aliases from canonical names
-    static const std::unordered_map<std::string, common_sampler_type> sname_alt_map = [] {
+    // sampler names can be written multiple ways; auto-generate aliases from canonical names
+    static const std::unordered_map<std::string, common_sampler_type> complete_name_map = []{
         std::unordered_map<std::string, common_sampler_type> m;
-        for (const auto & entry : sname_map) {
+        for (const auto & entry : canonical_name_map) {
             const std::string & canonical = entry.first;
             if (canonical.find('_') == std::string::npos) {
                 continue;
@@ -806,10 +805,14 @@ std::vector<common_sampler_type> common_sampler_types_from_names(const std::vect
                 m[no_dash] = entry.second;
             }
         }
-        // misc. well-known aliases
-        m["typ"] = COMMON_SAMPLER_TYPE_TYPICAL_P;
-        m["nucleus"] = COMMON_SAMPLER_TYPE_TOP_P;
-        m["temp"] = COMMON_SAMPLER_TYPE_TEMPERATURE;
+
+        // misc. aliases
+        m.insert({"nucleus", COMMON_SAMPLER_TYPE_TOP_P});
+        m.insert({"temp",    COMMON_SAMPLER_TYPE_TEMPERATURE});
+        m.insert({"typ",     COMMON_SAMPLER_TYPE_TYPICAL_P});
+
+        // merge with the canonical map
+        m.insert(canonical_name_map.begin(), canonical_name_map.end());
         return m;
     }();
 
@@ -819,14 +822,9 @@ std::vector<common_sampler_type> common_sampler_types_from_names(const std::vect
     for (const auto & name : names) {
         std::string name_lower = name;
         std::transform(name_lower.begin(), name_lower.end(), name_lower.begin(), ::tolower);
-        auto sampler = sname_map.find(name_lower);
-        if (sampler != sname_map.end()) {
+        auto sampler = complete_name_map.find(name_lower);
+        if (sampler != complete_name_map.end()) {
             samplers.push_back(sampler->second);
-            continue;
-        }
-        auto alt_sampler = sname_alt_map.find(name_lower);
-        if (alt_sampler != sname_alt_map.end()) {
-            samplers.push_back(alt_sampler->second);
             continue;
         }
         LOG_WRN("%s: unable to match sampler by name '%s'\n", __func__, name_lower.c_str());
