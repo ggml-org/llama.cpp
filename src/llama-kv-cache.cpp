@@ -97,6 +97,17 @@ llama_kv_cache::llama_kv_cache(
     model(model), hparams(hparams), v_trans(v_trans),
     n_seq_max(n_seq_max), n_stream(unified ? 1 : n_seq_max), n_pad(n_pad), n_swa(n_swa), swa_type(swa_type) {
 
+    // shared cells view the source cache's K/V tensors, so the cell count
+    // follows the source allocation: a fitted target can be smaller than the
+    // draft default and oversized views would overflow the source tensors
+    if (mem_other) {
+        const uint32_t size_other = static_cast<llama_kv_cache *>(mem_other)->get_size();
+        if (kv_size != size_other) {
+            LLAMA_LOG_WARN("%s: kv_size = %u overridden to %u to match the shared source cache\n", __func__, kv_size, size_other);
+            kv_size = size_other;
+        }
+    }
+
     GGML_ASSERT(kv_size % n_pad == 0);
 
     const uint32_t n_layer = hparams.n_layer_all;
