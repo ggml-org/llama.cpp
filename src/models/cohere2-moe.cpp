@@ -148,10 +148,6 @@ llama_model_cohere2_moe::graph::graph(const llama_model & model, const llm_graph
     GGML_ASSERT(n_embd_head == n_rot);
 
     const float f_logit_scale = hparams.f_logit_scale;
-    const auto gating_func = hparams.expert_gating_func == LLAMA_EXPERT_GATING_FUNC_TYPE_NONE
-        ? LLAMA_EXPERT_GATING_FUNC_TYPE_SIGMOID
-        : (llama_expert_gating_func_type) hparams.expert_gating_func;
-
     ggml_tensor * cur;
     ggml_tensor * inpL = build_inp_embd(model.tok_embd);
     ggml_tensor * inp_pos = build_inp_pos();
@@ -227,7 +223,7 @@ llama_model_cohere2_moe::graph::graph(const llama_model & model, const llm_graph
                     n_expert, n_expert_used,
                     LLM_FFN_SILU, hparams.expert_weights_norm,
                     hparams.expert_weights_scale,
-                    gating_func,
+                    (llama_expert_gating_func_type) hparams.expert_gating_func,
                     il,
                     nullptr, layer.ffn_gate_up_exps,
                     layer.ffn_up_exps_s,
@@ -297,10 +293,6 @@ llama_model_cohere2_moe::graph_mtp::graph_mtp(const llama_model & model, const l
 
     const int il = hparams.n_layer();
     const auto & layer = model.layers[il];
-    const auto gating_func = hparams.expert_gating_func == LLAMA_EXPERT_GATING_FUNC_TYPE_NONE
-        ? LLAMA_EXPERT_GATING_FUNC_TYPE_SIGMOID
-        : (llama_expert_gating_func_type) hparams.expert_gating_func;
-
     GGML_ASSERT(layer.nextn.eh_proj && "MTP block missing nextn.eh_proj");
     GGML_ASSERT(layer.nextn.enorm   && "MTP block missing nextn.enorm");
     GGML_ASSERT(layer.nextn.hnorm   && "MTP block missing nextn.hnorm");
@@ -388,7 +380,7 @@ llama_model_cohere2_moe::graph_mtp::graph_mtp(const llama_model & model, const l
             n_expert, n_expert_used,
             LLM_FFN_SILU, hparams.expert_weights_norm,
             hparams.expert_weights_scale,
-            gating_func,
+            (llama_expert_gating_func_type) hparams.expert_gating_func,
             il,
             nullptr, layer.ffn_gate_up_exps,
             layer.ffn_up_exps_s,
