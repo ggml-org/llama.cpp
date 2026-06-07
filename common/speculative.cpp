@@ -725,6 +725,8 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
                 }
 
                 if (is_mem_shared) {
+                    // note: with shared memory (e.g. Gemma4 assistants) we use the same position for all draft tokens
+                    // ref: https://github.com/huggingface/transformers/blob/effde20942e3f82a1b97449f60b3a48c5ff96145/docs/source/en/model_doc/gemma4_assistant.md?plain=1#L36-L37
                     common_batch_add(batch, id, dp.n_past, { seq_id }, true);
                 } else {
                     common_batch_add(batch, id, dp.n_past + i + 1, { seq_id }, true);
