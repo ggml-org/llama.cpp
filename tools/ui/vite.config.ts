@@ -12,18 +12,24 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 
 const SERVER_ORIGIN = import.meta.env?.VITE_PUBLIC_SERVER_ORIGIN || 'http://localhost:8080';
 export default defineConfig(async () => {
-	const { playwright } = await import('@vitest/browser-playwright');
-
 	// eslint-disable-next-line @typescript-eslint/no-explicit-any
-	const browserBaseConfig: any = {
-		enabled: true,
-		provider: playwright({
-			launchOptions: {
-				args: ['--no-sandbox']
-			}
-		}),
-		instances: [{ browser: 'chromium' }]
-	};
+	const isVitest = !!process.env.VITEST || process.argv.some((arg) => arg.includes('vitest'));
+	let browserBaseConfig: any = undefined;
+
+	if (isVitest) {
+		const providerModule = '@vitest/browser-playwright';
+		const { playwright } = await import(providerModule);
+
+		browserBaseConfig = {
+			enabled: true,
+			provider: playwright({
+				launchOptions: {
+					args: ['--no-sandbox']
+				}
+			}),
+			instances: [{ browser: 'chromium' }]
+		};
+	}
 
 	return {
 	resolve: {
