@@ -1091,6 +1091,11 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
     void draft(common_speculative_draft_params_vec & dparams) override {
         auto & ctx_dft = params.ctx_dft;
 
+        if (chain_heads) {
+            draft_multi_head(dparams);
+            return;
+        }
+
         common_batch_clear(batch);
 
         // keep track of which sequences are still drafting
@@ -1208,6 +1213,114 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
             }
 
             last_n_drafted[seq_id] = (uint16_t) dp.result->size();
+        }
+    }
+
+    // Multi-head MTP draft: chain heads 0..n_mtp_layers-1. Step s runs head s on
+    // the accumulated prefix [id_last, draft_1, .., draft_s] and samples draft_{s+1}.
+    // Each slot's embd is the hidden produced by the PREVIOUS head for that token
+    // (slot 0 is always pending_h = trunk h). Per-step seq_rm keeps each head's KV
+    // on a clean, position-aligned slot set.
+    void draft_multi_head(common_speculative_draft_params_vec & dparams) {
+        auto * ctx_dft = params.ctx_dft;
+        auto * mem_dft = llama_get_memory(ctx_dft);
+        const size_t row_bytes = (size_t) n_embd * sizeof(float);
+
+        // Per-seq accumulated draft state. Positions are implicit: slot k always
+        // sits at round_start + k (the prefix is contiguous from id_last), so we
+        // don't store a parallel positions vector.
+        struct seq_state {
+            bool active = false;
+            llama_pos round_start = 0;                 // pos of id_last (slot 0)
+            std::vector<llama_token> toks;             // [id_last, draft_1, ...]
+            std::vector<std::vector<float>> slot_h;    // embd per slot (toks[k] <-> slot_h[k])
+        };
+        std::vector<seq_state> st(n_seq);
+
+        int n_drafting = 0;
+        for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
+            auto & dp = dparams[seq_id];
+            if (!dp.drafting) continue;
+            common_sampler_reset(smpls[seq_id].get());
+            st[seq_id].active      = true;
+            st[seq_id].round_start = dp.n_past;
+            st[seq_id].toks.push_back(dp.id_last);
+            st[seq_id].slot_h.push_back(pending_h[seq_id]); // slot 0 = trunk pending_h
+            n_drafting++;
+        }
+        if (n_drafting == 0) return;
+
+        const int n_steps = n_mtp_layers; // one head per step, capped at head count
+
+        for (int step = 0; step < n_steps && n_drafting > 0; ++step) {
+            // 1) per-seq KV reset for this head + select the head's layer.
+            for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
+                if (!st[seq_id].active) continue;
+                llama_memory_seq_rm(mem_dft, seq_id, st[seq_id].round_start, -1);
+            }
+            llama_set_mtp_layer_offset(ctx_dft, step);
+
+            // 2) build accumulated batch; logits only on each seq's last slot.
+            common_batch_clear(batch);
+            std::vector<int> last_i_batch(n_seq, -1);
+            for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
+                if (!st[seq_id].active) continue;
+                auto & s = st[seq_id];
+                const int len = (int) s.toks.size();
+                for (int k = 0; k < len; ++k) {
+                    const bool is_last = (k == len - 1);
+                    common_batch_add(batch, s.toks[k], s.round_start + k, { seq_id }, is_last);
+                    std::memcpy(batch.embd + (size_t) (batch.n_tokens - 1) * n_embd,
+                                s.slot_h[k].data(), row_bytes);
+                    if (is_last) last_i_batch[seq_id] = batch.n_tokens - 1;
+                }
+            }
+
+            const int rc = llama_decode(ctx_dft, batch);
+            if (rc != 0) {
+                LOG_WRN("%s: multi-head draft decode step=%d rc=%d\n", __func__, step, rc);
+                break;
+            }
+
+            // 3) sample next draft token per active seq; extend prefix + slot_h.
+            for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
+                if (!st[seq_id].active) continue;
+                auto & s  = st[seq_id];
+                auto & dp = dparams[seq_id];
+                const int ib = last_i_batch[seq_id];
+
+                auto * smpl = smpls[seq_id].get();
+                common_sampler_sample(smpl, ctx_dft, ib, true);
+                const float * h_row = llama_get_embeddings_nextn_ith(ctx_dft, ib);
+                const auto  * cur_p = common_sampler_get_candidates(smpl, true);
+                const llama_token id = cur_p->data[0].id;
+
+                if (cur_p->data[0].p < params.p_min) {
+                    s.active = false; n_drafting--; continue;
+                }
+
+                common_sampler_accept(smpl, id, true);
+                dp.result->push_back(id);
+
+                if ((int) dp.result->size() >= params.n_max) {
+                    s.active = false; n_drafting--; continue;
+                }
+
+                // next slot's token + its embd (= this head's output at last slot).
+                // Its position is implicit: round_start + toks.size().
+                s.toks.push_back(id);
+                s.slot_h.emplace_back(h_row, h_row + n_embd);
+            }
+        }
+
+        llama_set_mtp_layer_offset(ctx_dft, 0); // restore default
+
+        for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
+            auto & dp = dparams[seq_id];
+            if (!dp.drafting) continue;
+            if (dp.result->size() < (size_t) params.n_min) {
+                dp.result->clear();
+            }
         }
     }
 
