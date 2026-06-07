@@ -825,7 +825,16 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
 
     int32_t n_embd = 0;
 
-    bool is_mem_shared = false;
+    // One MTP draft driver, three modes (flags set once in the ctor):
+    //   is_mem_shared : gemma4-assistant — the draft shares the target's KV and
+    //                   runs every nextn layer in a single graph; the catch-up
+    //                   decode is skipped and all draft tokens reuse one position.
+    //   chain_heads   : step35 — n_mtp_layers independently-trained heads run one
+    //                   per step (mtp_layer_offset = k), each on its own KV.
+    //   neither       : single-block AR (qwen3.5/3.6) — one trained MTP head.
+    int32_t n_mtp_layers  = 1;
+    bool    is_mem_shared = false;   // gemma4
+    bool    chain_heads   = false;   // derived in the ctor: n_mtp_layers > 1 && !is_mem_shared
 
     // Per-sequence cross-batch carryover: pair (h_p, x_{p+1}) at MTP pos p+1.
     // The last h-row of one process() call needs the first token of the NEXT
@@ -856,6 +865,8 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
         n_embd = llama_model_n_embd_out(llama_get_model(ctx_dft));
         GGML_ASSERT(n_embd == llama_model_n_embd(llama_get_model(ctx_tgt)) &&
                 "MTP input row width must match the target h_nextn width");
+        n_mtp_layers = std::max(1, (int) llama_model_n_nextn_layer(llama_get_model(ctx_dft)));
+        // note: chain_heads / n_max clamp are derived below, once is_mem_shared is known.
 
         LOG_INF("%s: adding speculative implementation 'draft-mtp'\n", __func__);
         LOG_INF("%s: - n_max=%d, n_min=%d, p_min=%.2f, n_embd=%d, backend_sampling=%d\n", __func__, this->params.n_max, this->params.n_min, this->params.p_min, n_embd, (int) this->params.backend_sampling);
@@ -902,6 +913,14 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
         llama_set_embeddings_nextn(ctx_dft, true, /*masked*/ true);
 
         is_mem_shared = llama_get_ctx_other(ctx_dft) == ctx_tgt;
+        chain_heads   = n_mtp_layers > 1 && !is_mem_shared;
+
+        // step35-style chaining uses each trained head exactly once per draft
+        // round, so the draft length is capped at the number of heads. Mem-shared
+        // archs (gemma4) run every head in one graph, so this clamp does not apply.
+        if (chain_heads) {
+            this->params.n_max = std::min(this->params.n_max, n_mtp_layers);
+        }
 
         pending_h.assign(n_seq, std::vector<float>(n_embd, 0.0f));
 
@@ -988,8 +1007,12 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
 
         // if kv is shared with target (e.g Gemma4), then we can skip this catch-up decode
         if (!is_mem_shared) {
+            // Build the teacher-forcing batch ONCE — it is identical for every head:
+            // tokens at their real positions, tgt nextn-embd right-shifted by one,
+            // pending_h planted at each seq's first slot. llama_decode only reads the
+            // batch, so the same buffer is replayed per head; only the layer offset
+            // and the per-head KV reset differ.
             common_batch_clear(batch);
-
             for (int k = 0; k < n_tokens; ++k) {
                 common_batch_add(batch, batch_in.token[k], batch_in.pos[k], { batch_in.seq_id[k][0] }, 0);
             }
@@ -1003,23 +1026,43 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
                 const float * h_tgt = llama_get_embeddings_nextn(ctx_tgt);
                 std::memcpy(batch.embd + (size_t) 1 * n_embd, h_tgt, row_bytes * (n_tokens-1));
             }
-
-            // fill the pending embeddings from a previous run
-            auto set_h = [&](int idx, const float * h_row) {
-                std::memcpy(batch.embd + (size_t) idx * n_embd, h_row, row_bytes);
-            };
-
             for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
-                if (i_batch_beg[seq_id] < 0) {
-                    continue;
-                }
-
-                set_h(i_batch_beg[seq_id], pending_h[seq_id].data());
+                if (i_batch_beg[seq_id] < 0) continue;
+                std::memcpy(batch.embd + (size_t) i_batch_beg[seq_id] * n_embd,
+                            pending_h[seq_id].data(), row_bytes);
             }
 
-            const int32_t rc = llama_decode(ctx_dft, batch);
-            if (rc != 0) {
-                LOG_ERR("%s: llama_decode(ctx_dft) failed rc=%d (pos=%d)\n", __func__, (int) rc, (int) batch_in.pos[0]);
+            auto * mem_dft = llama_get_memory(ctx_dft);
+
+            bool ok = true;
+            for (int head = 0; head < n_mtp_layers; ++head) {
+                // chain_heads == false keeps the legacy single-decode path byte-for-byte
+                // (no seq_rm, no offset switch). When chaining, reset each sequence's
+                // own batch region first so this head re-decodes the whole batch into
+                // a clean, position-aligned slot set (find_slot is deterministic given
+                // identical v_cells). Lower bound = this batch's first pos for the seq
+                // (prompt-multi-ubatch safe).
+                if (chain_heads) {
+                    for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
+                        if (i_batch_beg[seq_id] < 0) continue;
+                        llama_memory_seq_rm(mem_dft, seq_id, batch_in.pos[i_batch_beg[seq_id]], -1);
+                    }
+                    llama_set_mtp_layer_offset(ctx_dft, head);
+                }
+
+                const int32_t rc = llama_decode(ctx_dft, batch);
+                if (rc != 0) {
+                    LOG_ERR("%s: llama_decode(ctx_dft) head=%d failed rc=%d (pos=%d)\n",
+                            __func__, head, (int) rc, (int) batch_in.pos[0]);
+                    ok = false;
+                    break;
+                }
+            }
+
+            if (chain_heads) {
+                llama_set_mtp_layer_offset(ctx_dft, 0); // restore default for non-draft decodes
+            }
+            if (!ok) {
                 return false;
             }
         }
