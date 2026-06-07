@@ -356,6 +356,26 @@ python3 tools/rpc/bench_rpc_sweep.py \
   --bench-extra=--backend-sampling
 ```
 
+Use `--candidate-device-rotate NAME=DEVICE:TENSOR_SPLIT` to generate one case
+per rotation of the device list. The tensor split rotates with the devices, so
+each listed device gets tested as the output-side owner while keeping the same
+per-device split weight. Add `--keep-going` for fragile sweeps where some
+placements may fail to fit:
+
+```bash
+python3 tools/rpc/bench_rpc_sweep.py \
+  --llama-bench /path/to/build/bin/llama-bench \
+  --model /path/to/model.gguf \
+  --rpc "$RPC" \
+  --split-mode layer \
+  --prompt 0 \
+  --gen 128 \
+  --repetitions 3 \
+  --candidate-device-rotate gpu_output=RPC6/RPC1/RPC3/RPC5:1/8/8/8 \
+  --bench-extra=--backend-sampling \
+  --keep-going
+```
+
 When benchmarking CUDA RPC servers across different GPU generations, build for
 the remote GPUs as well as the local client GPU. For example, an RTX 3070 server
 and RTX 4060 client need both architectures:

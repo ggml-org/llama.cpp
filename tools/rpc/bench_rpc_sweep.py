@@ -85,6 +85,63 @@ def parse_device_candidate(value):
     return candidate
 
 
+def split_device_selector(device):
+    return [part.strip() for part in device.split("/") if part.strip()]
+
+
+def split_tensor_split(tensor_split):
+    return [part.strip() for part in tensor_split.replace(";", "/").split("/") if part.strip()]
+
+
+def safe_name_part(value):
+    result = "".join(ch if ch.isalnum() or ch in "._-" else "_" for ch in value)
+    return result.strip("_") or "device"
+
+
+def output_device_from_selector(device):
+    if device is None:
+        return None
+    devices = split_device_selector(device)
+    if not devices:
+        return None
+    return devices[-1]
+
+
+def parse_device_rotation_candidates(value):
+    base = parse_device_candidate(value)
+    devices = split_device_selector(base["device"])
+    if len(devices) < 2:
+        raise argparse.ArgumentTypeError(
+            f"candidate {base['name']!r}: device rotation needs at least two devices"
+        )
+
+    splits = None
+    if base["tensor_split"] is not None:
+        splits = split_tensor_split(base["tensor_split"])
+        if len(splits) != len(devices):
+            raise argparse.ArgumentTypeError(
+                f"candidate {base['name']!r}: tensor split count ({len(splits)}) "
+                f"must match device count ({len(devices)}) for rotation"
+            )
+
+    candidates = []
+    for rotation in range(len(devices)):
+        rotated_devices = devices[rotation:] + devices[:rotation]
+        rotated_splits = None if splits is None else splits[rotation:] + splits[:rotation]
+        output_device = rotated_devices[-1]
+        candidate = dict(base)
+        candidate["name"] = f"{base['name']}_r{rotation}_out_{safe_name_part(output_device)}"
+        candidate["device"] = "/".join(rotated_devices)
+        candidate["tensor_split"] = None if rotated_splits is None else "/".join(rotated_splits)
+        candidate["tensor_split_display"] = "auto" if rotated_splits is None else candidate["tensor_split"]
+        candidate["generation"] = "device-rotate"
+        candidate["generated_from"] = base["name"]
+        candidate["rotation"] = rotation
+        candidate["output_device"] = output_device
+        candidates.append(candidate)
+    return candidates
+
+
 def build_bench_cmd(args, rpc_arg, candidate):
     device = candidate.get("device") if candidate.get("device") is not None else args.device
     cmd = [
@@ -121,12 +178,17 @@ def make_case(args, rpc_arg, endpoints, candidate):
     jsonl_path = args.out_dir / f"{candidate['name']}.jsonl"
     stderr_path = args.out_dir / f"{candidate['name']}.stderr.txt"
     command = build_bench_cmd(args, rpc_arg, candidate)
+    device = candidate.get("device") if candidate.get("device") is not None else args.device
     return {
         "status": "planned",
         "name": candidate["name"],
         "rpc": rpc_arg,
         "endpoints": endpoints,
-        "device": candidate.get("device") if candidate.get("device") is not None else args.device,
+        "device": device,
+        "output_device": candidate.get("output_device") or output_device_from_selector(device),
+        "generation": candidate.get("generation"),
+        "generated_from": candidate.get("generated_from"),
+        "rotation": candidate.get("rotation"),
         "split_mode": args.split_mode,
         "flash_attn": args.flash_attn,
         "tensor_split": candidate["tensor_split"],
@@ -138,7 +200,7 @@ def make_case(args, rpc_arg, endpoints, candidate):
     }
 
 
-def run_case(args, case, env):
+def run_case(args, case, env, progress=None):
     if args.dry_run:
         case["status"] = "dry-run"
         return
@@ -146,7 +208,10 @@ def run_case(args, case, env):
     jsonl_path = Path(case["jsonl_path"])
     stderr_path = Path(case["stderr_path"])
     started = time.monotonic()
+    case["status"] = "running"
     case["started_utc"] = utc_now()
+    if progress is not None:
+        progress()
     try:
         with jsonl_path.open("w", encoding="utf-8") as stdout_fh, stderr_path.open("w", encoding="utf-8") as stderr_fh:
             completed = subprocess.run(
@@ -207,6 +272,10 @@ def rank_cases(summary, rank_by):
             "rank": case["rank"],
             "name": case["name"],
             "device": case["device"],
+            "output_device": case["output_device"],
+            "generation": case["generation"],
+            "generated_from": case["generated_from"],
+            "rotation": case["rotation"],
             "tensor_split": case["tensor_split_display"],
             "prompt_avg_tokens_per_second": metric(case, "prompt"),
             "decode_avg_tokens_per_second": metric(case, "decode"),
@@ -251,6 +320,7 @@ def parse_args():
     parser.add_argument("--rpc", required=True, help="RPC host:port list")
     parser.add_argument("--candidate", action="append", default=[], type=parse_candidate, metavar="NAME=TENSOR_SPLIT", help="candidate tensor split; use NAME=auto to omit -ts")
     parser.add_argument("--candidate-device", action="append", default=[], type=parse_device_candidate, metavar="NAME=DEVICE:TENSOR_SPLIT", help="candidate device selector and tensor split; use TENSOR_SPLIT=auto to omit -ts")
+    parser.add_argument("--candidate-device-rotate", action="append", default=[], type=parse_device_rotation_candidates, metavar="NAME=DEVICE:TENSOR_SPLIT", help="generate one candidate per device rotation so each listed device is output-side once")
     parser.add_argument("--device", default=None, help="llama-bench device selector, for example RPC0/RPC1")
     parser.add_argument("--split-mode", choices=("none", "layer", "row", "tensor"), default=None, help="optional llama-bench split mode for -sm")
     parser.add_argument("--flash-attn", choices=("on", "off", "auto"), default=None, help="optional llama-bench flash attention setting for -fa")
@@ -268,6 +338,7 @@ def parse_args():
     parser.add_argument("--env", action="append", default=[], metavar="KEY=VALUE", help="environment override; repeatable")
     parser.add_argument("--record-env", action="append", default=[], metavar="KEY", help="extra environment variable to include in summary")
     parser.add_argument("--bench-extra", action="append", default=[], metavar="ARGS", help="extra shell-style llama-bench args for all candidates; repeatable")
+    parser.add_argument("--keep-going", action="store_true", help="continue the sweep after a candidate fails or does not fit")
     parser.add_argument("--dry-run", action="store_true", help="write planned commands without running llama-bench")
     args = parser.parse_args()
 
@@ -292,9 +363,14 @@ def parse_args():
     if args.connect_timeout <= 0:
         parser.error("--connect-timeout must be > 0")
 
-    args.candidates = args.candidate + args.candidate_device
+    generated_candidates = [
+        candidate
+        for candidate_group in args.candidate_device_rotate
+        for candidate in candidate_group
+    ]
+    args.candidates = args.candidate + args.candidate_device + generated_candidates
     if not args.candidates:
-        parser.error("at least one --candidate or --candidate-device is required")
+        parser.error("at least one candidate option is required")
     names = [candidate["name"] for candidate in args.candidates]
     if len(names) != len(set(names)):
         parser.error("candidate names must be unique")
@@ -334,6 +410,7 @@ def main():
         "timeout_sec": args.timeout,
         "connect_timeout_sec": args.connect_timeout,
         "skip_port_check": args.skip_port_check,
+        "keep_going": args.keep_going,
         "out_dir": str(args.out_dir),
         "summary_path": str(args.summary),
         "record_env_keys": record_env_keys,
@@ -352,12 +429,31 @@ def main():
 
     try:
         validate_inputs(args)
+        write_summary(args.summary, summary)
         if not args.skip_port_check and not args.dry_run:
             wait_for_endpoints(args.endpoints, args.connect_timeout)
+        case_errors = []
         for case in summary["cases"]:
             case["environment"] = captured_environment(env, record_env_keys)
-            run_case(args, case, env)
+            try:
+                run_case(args, case, env, progress=lambda: write_summary(args.summary, summary))
+            except Exception as exc:
+                if not args.keep_going:
+                    raise
+                if case.get("status") in (None, "planned", "running"):
+                    case["status"] = "failed"
+                case["error"] = case.get("error") or str(exc)
+                case_errors.append({
+                    "name": case["name"],
+                    "status": case["status"],
+                    "error": case["error"],
+                })
+            finally:
+                if not args.dry_run:
+                    write_summary(args.summary, summary)
         if not args.dry_run:
+            if case_errors:
+                summary["case_errors"] = case_errors
             rank_cases(summary, args.rank_by)
             write_ranked_csv(args.out_dir / "ranked.csv", summary["ranked_cases"])
             write_ranked_jsonl(args.out_dir / "ranked.jsonl", summary["ranked_cases"])
