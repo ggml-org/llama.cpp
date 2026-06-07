@@ -57,11 +57,6 @@ class GemmaModel(TextModel):
             logger.debug(f"Skipping get tensor {name!r} in safetensors so that convert can end normally.")
             return None
 
-        print("HERE")
-        if name == "masked_embedding.centroids.weight":
-            logger.debug(f"Skipping get tensor {name!r} in safetensors so that convert can end normally.")
-            return None
-
         return super().filter_tensors(item)
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
