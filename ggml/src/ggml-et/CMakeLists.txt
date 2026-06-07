@@ -24,7 +24,6 @@ include(aifoundry-utils/ProjectFunctions)
 message("Using ET Platform at ${ET_PLATFORM_PATH}")
 
 find_package(runtime REQUIRED)
-find_package(Python3 REQUIRED)
 
 # Kernel list
 set(KERNELS
@@ -126,27 +125,32 @@ set(UBERKERNEL_SUPPORTED_KERNELS
     tri_f32
 )
 
-set(UBERKERNEL_MAP_SCRIPT ${CMAKE_CURRENT_SOURCE_DIR}/et-kernels/scripts/generate_uberkernel_mapping.py)
 set(UBERKERNEL_MAP_HPP ${CMAKE_CURRENT_BINARY_DIR}/et-kernels/ggml-et-uberkernel-kernel-map.h)
 set(UBERKERNEL_MAP_CPP ${CMAKE_CURRENT_BINARY_DIR}/et-kernels/ggml-et-uberkernel-kernel-map.cpp)
 
-set(UBERKERNEL_SUPPORTED_KERNELS_FILE ${CMAKE_CURRENT_BINARY_DIR}/et-kernels/uberkernel-supported-kernels.txt)
-set(UBERKERNEL_SUPPORTED_KERNELS_LINES "")
-foreach(KERNEL ${UBERKERNEL_SUPPORTED_KERNELS})
-    string(APPEND UBERKERNEL_SUPPORTED_KERNELS_LINES "${KERNEL}\n")
-endforeach()
-file(CONFIGURE OUTPUT ${UBERKERNEL_SUPPORTED_KERNELS_FILE} CONTENT "${UBERKERNEL_SUPPORTED_KERNELS_LINES}" @ONLY)
+set(UBERKERNEL_KERNELS_SORTED ${UBERKERNEL_SUPPORTED_KERNELS})
+list(SORT UBERKERNEL_KERNELS_SORTED)
 
-add_custom_command(
-    OUTPUT ${UBERKERNEL_MAP_HPP} ${UBERKERNEL_MAP_CPP}
-    COMMAND ${Python3_EXECUTABLE} ${UBERKERNEL_MAP_SCRIPT}
-        --output-h ${UBERKERNEL_MAP_HPP}
-        --output-cpp ${UBERKERNEL_MAP_CPP}
-        --kernels ${UBERKERNEL_SUPPORTED_KERNELS}
-    DEPENDS ${UBERKERNEL_MAP_SCRIPT} ${UBERKERNEL_SUPPORTED_KERNELS_FILE}
-    COMMENT "Generating ET uberkernel mapping"
-    VERBATIM
-)
+set(UBERKERNEL_ENUM_ENTRIES "")
+set(UBERKERNEL_MAP_ENTRIES "")
+set(_uk_idx 1)
+foreach(KERNEL ${UBERKERNEL_KERNELS_SORTED})
+    string(TOUPPER ${KERNEL} _uk_upper)
+    string(APPEND UBERKERNEL_ENUM_ENTRIES
+        "    GGML_ET_UBERKERNEL_KERNEL_${_uk_upper} = ${_uk_idx},\n")
+    string(APPEND UBERKERNEL_MAP_ENTRIES
+        "        {\"${KERNEL}\", GGML_ET_UBERKERNEL_KERNEL_${_uk_upper}},\n")
+    math(EXPR _uk_idx "${_uk_idx} + 1")
+endforeach()
+
+configure_file(
+    ${CMAKE_CURRENT_SOURCE_DIR}/cmake/ggml-et-uberkernel-kernel-map.h.in
+    ${UBERKERNEL_MAP_HPP}
+    @ONLY)
+configure_file(
+    ${CMAKE_CURRENT_SOURCE_DIR}/cmake/ggml-et-uberkernel-kernel-map.cpp.in
+    ${UBERKERNEL_MAP_CPP}
+    @ONLY)
 
 add_custom_target(et-uberkernel-map
     DEPENDS ${UBERKERNEL_MAP_HPP} ${UBERKERNEL_MAP_CPP}
