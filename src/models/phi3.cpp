@@ -3,7 +3,7 @@
 void llama_model_phi3::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
 
-    switch (hparams.n_layer) {
+    switch (hparams.n_layer()) {
         case 24: type = LLM_TYPE_1B; break;
         case 32: type = LLM_TYPE_3B; break;
         case 40: type = LLM_TYPE_14B; break;
@@ -179,7 +179,7 @@ llama_model_phi3::graph<iswa>::graph(const llama_model & model, const llm_graph_
     cb(cur, "result_norm", -1);
     res->t_embd = cur;
 
-    cur = build_lora_mm(model.output, cur);
+    cur = build_lora_mm(model.output, cur, model.output_s);
 
     if (model.output_b != nullptr) {
         cb(cur, "result_output_no_bias", -1);

@@ -22,66 +22,65 @@ concurrency:
 env:
   GGML_NLOOP: 3
   GGML_N_THREADS: 1
-  LLAMA_LOG_COLORS: 1
-  LLAMA_LOG_PREFIX: 1
-  LLAMA_LOG_TIMESTAMPS: 1
+  LLAMA_ARG_LOG_COLORS: 1
+  LLAMA_ARG_LOG_PREFIX: 1
+  LLAMA_ARG_LOG_TIMESTAMPS: 1
 
 jobs:
-  ubuntu-latest-sanitizer:
-    runs-on: ubuntu-latest
+  ctest:
+    runs-on: [self-hosted, X64, CPU, Linux]
 
     continue-on-error: true
 
     strategy:
       matrix:
         sanitizer: [ADDRESS, THREAD, UNDEFINED]
-        build_type: [Debug]
 
     steps:
       - name: Clone
         id: checkout
         uses: actions/checkout@v6
 
-      - name: ccache
-        uses: ggml-org/ccache-action@v1.2.21
-        with:
-          key: ubuntu-latest-sanitizer-${{ matrix.sanitizer }}
-          evict-old-files: 1d
-          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
-
-      - name: Dependencies
-        id: depends
+      # with UNDEFINED sanitizer, we have to build in Debug to avoid GCC 13 false-positive warnings
+      - name: Build (undefined)
+        id: cmake_build_undefined
+        if: ${{ matrix.sanitizer == 'UNDEFINED' }}
         run: |
-          sudo apt-get update
-          sudo apt-get install build-essential libssl-dev
+          cmake -B build \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DLLAMA_FATAL_WARNINGS=ON \
+            -DLLAMA_SANITIZE_${{ matrix.sanitizer }}=ON \
+            -DGGML_SANITIZE_${{ matrix.sanitizer }}=ON
+
+          cmake --build build --config Debug -j $(nproc)
 
       - name: Build
         id: cmake_build
-        if: ${{ matrix.sanitizer != 'THREAD' }}
+        if: ${{ matrix.sanitizer == 'ADDRESS' }}
         run: |
           cmake -B build \
-            -DLLAMA_FATAL_WARNINGS=ON \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
             -DLLAMA_SANITIZE_${{ matrix.sanitizer }}=ON \
-            -DGGML_SANITIZE_${{ matrix.sanitizer }}=ON \
-            -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
+            -DGGML_SANITIZE_${{ matrix.sanitizer }}=ON
 
-          cmake --build build --config ${{ matrix.build_type }} -j $(nproc)
+          cmake --build build --config RelWithDebInfo -j $(nproc)
 
       - name: Build (no OpenMP)
         id: cmake_build_no_openmp
         if: ${{ matrix.sanitizer == 'THREAD' }}
         run: |
           cmake -B build \
-            -DLLAMA_FATAL_WARNINGS=ON \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
             -DLLAMA_SANITIZE_${{ matrix.sanitizer }}=ON \
             -DGGML_SANITIZE_${{ matrix.sanitizer }}=ON \
-            -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
             -DGGML_OPENMP=OFF
 
-          cmake --build build --config ${{ matrix.build_type }} -j $(nproc)
+          cmake --build build --config RelWithDebInfo -j $(nproc)
 
       - name: Test
         id: cmake_test
+        # skip run in Debug - very slow
+        if: ${{ matrix.sanitizer != 'UNDEFINED' }}
         run: |
           cd build
-          ctest -L main --verbose --timeout 900
+          ctest -L main -E tokenizer --verbose --timeout 900

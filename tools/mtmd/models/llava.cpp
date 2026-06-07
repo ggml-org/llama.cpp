@@ -51,7 +51,6 @@ ggml_cgraph * clip_graph_llava::build() {
     }
 
     std::vector<ggml_tensor *> embedding_stack;
-    const auto & vision_feature_layer = hparams.vision_feature_layer;
 
     // loop over layers
     for (int il = 0; il < max_feature_layer; il++) {
@@ -60,7 +59,7 @@ ggml_cgraph * clip_graph_llava::build() {
 
         // If this is an embedding feature layer, save the output.
         // NOTE: 0 index here refers to the input to the encoder.
-        if (vision_feature_layer.find(il) != vision_feature_layer.end()) {
+        if (hparams.is_vision_feature_layer(il)) {
             embedding_stack.push_back(cur);
         }
 
@@ -135,7 +134,7 @@ ggml_cgraph * clip_graph_llava::build() {
     // process vision feature layers (used by granite)
     {
         // final layer is a vision feature layer
-        if (vision_feature_layer.find(max_feature_layer) != vision_feature_layer.end()) {
+        if (hparams.is_vision_feature_layer(max_feature_layer)) {
             embedding_stack.push_back(inpL);
         }
 

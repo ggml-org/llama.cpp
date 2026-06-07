@@ -72,17 +72,9 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
         endif()
     endif()
 
-    if (GGML_OPENMP)
-        find_package(OpenMP)
-        if (OpenMP_FOUND)
-            set(GGML_OPENMP_ENABLED "ON" CACHE INTERNAL "")
-            target_compile_definitions(${GGML_CPU_NAME} PRIVATE GGML_USE_OPENMP)
-
-            target_link_libraries(${GGML_CPU_NAME} PRIVATE OpenMP::OpenMP_C OpenMP::OpenMP_CXX)
-        else()
-            set(GGML_OPENMP_ENABLED "OFF" CACHE INTERNAL "")
-            message(WARNING "OpenMP not found")
-        endif()
+    if (GGML_OPENMP_ENABLED)
+        target_compile_definitions(${GGML_CPU_NAME} PRIVATE GGML_USE_OPENMP)
+        target_link_libraries(${GGML_CPU_NAME} PRIVATE OpenMP::OpenMP_C OpenMP::OpenMP_CXX)
     endif()
 
     if (GGML_LLAMAFILE)
@@ -450,12 +442,22 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
             ggml-cpu/arch/riscv/repack.cpp
             )
         if (GGML_CPU_RISCV64_SPACEMIT)
+            include(ggml-cpu/cmake/FindSMTIME.cmake)
             target_compile_definitions(${GGML_CPU_NAME} PRIVATE GGML_USE_CPU_RISCV64_SPACEMIT ${RISCV64_SPACEMIT_IME_SPEC})
             list(APPEND GGML_CPU_SOURCES
                 ggml-cpu/spacemit/ime.cpp
                 ggml-cpu/spacemit/ime.h
+                ggml-cpu/spacemit/spine_mem_pool.cpp
+                ggml-cpu/spacemit/spine_mem_pool.h
+                ggml-cpu/spacemit/repack.cpp
+                ggml-cpu/spacemit/repack.h
+                ggml-cpu/spacemit/ime_env.cpp
+                ggml-cpu/spacemit/ime_env.h
                 ggml-cpu/spacemit/ime1_kernels.cpp
+                ggml-cpu/spacemit/ime2_kernels.cpp
                 ggml-cpu/spacemit/ime_kernels.h
+                ggml-cpu/spacemit/rvv_kernels.cpp
+                ggml-cpu/spacemit/rvv_kernels.h
             )
         endif()
         if(NOT GGML_CPU_ALL_VARIANTS)
@@ -484,6 +486,9 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
             endif()
             if (GGML_RV_ZIHINTPAUSE)
                 string(APPEND MARCH_STR "_zihintpause")
+            endif()
+            if (GGML_RV_ZBA)
+                string(APPEND MARCH_STR "_zba")
             endif()
             if (GGML_CPU_RISCV64_SPACEMIT)
                 # `xsmtvdotii' is only required for GCC >= 15.

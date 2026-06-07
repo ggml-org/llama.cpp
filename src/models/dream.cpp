@@ -2,8 +2,9 @@
 
 void llama_model_dream::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
+
     // Dream models are primarily 7B with 28 layers
-    switch (hparams.n_layer) {
+    switch (hparams.n_layer()) {
         case 28:
             type = LLM_TYPE_7B;
             break;
@@ -128,7 +129,7 @@ llama_model_dream::graph::graph(const llama_model & model, const llm_graph_param
     res->t_embd = cur;
 
     // lm_head
-    cur = build_lora_mm(model.output, cur);
+    cur = build_lora_mm(model.output, cur, model.output_s);
 
     cb(cur, "result_output", -1);
     res->t_logits = cur;

@@ -10,7 +10,7 @@ This image includes Android NDK, OpenCL SDK, Hexagon SDK, CMake, etc.
 This method works on Linux, macOS, and Windows. macOS and Windows users should install Docker Desktop.
 
 ```
-~/src/llama.cpp$ docker run -it -u $(id -u):$(id -g) --volume $(pwd):/workspace --platform linux/amd64 ghcr.io/snapdragon-toolchain/arm64-android:v0.3
+~/src/llama.cpp$ docker run -it -u $(id -u):$(id -g) --volume $(pwd):/workspace --platform linux/amd64 ghcr.io/snapdragon-toolchain/arm64-android:v0.7
 [d]/> cd /workspace
 ```
 
@@ -24,7 +24,7 @@ Native Windows 11 arm64 builds has the following tools dependencies:
   - UCRT and Driver Kit
 - LLVM core libraries and Clang compiler (winget)
 - CMake, Git, Python (winget)
-- Hexagon SDK Community Edition 6.4 or later (see windows.md)
+- Hexagon SDK Community Edition 6.6 or later (see windows.md)
 - OpenCL SDK 2.3 or later (see windows.md)
 
 Note: The rest of the **Windows** build process assumes that you're running natively in Powershell.
@@ -45,7 +45,7 @@ Preset CMake variables:
   GGML_HEXAGON="ON"
   GGML_OPENCL="ON"
   GGML_OPENMP="OFF"
-  HEXAGON_SDK_ROOT="/opt/hexagon/6.4.0.2"
+  HEXAGON_SDK_ROOT="/opt/hexagon/6.6.0.0"
 ...
 -- Including OpenCL backend
 -- Including Hexagon backend

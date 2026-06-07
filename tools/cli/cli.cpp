@@ -342,7 +342,10 @@ static std::vector<std::pair<std::string, size_t>> auto_completion_callback(std:
 
 static constexpr size_t FILE_GLOB_MAX_RESULTS = 100;
 
-int main(int argc, char ** argv) {
+// satisfies -Wmissing-declarations
+int llama_cli(int argc, char ** argv);
+
+int llama_cli(int argc, char ** argv) {
     common_params params;
 
     params.verbosity = LOG_LEVEL_ERROR; // by default, less verbose logs
@@ -393,6 +396,8 @@ int main(int argc, char ** argv) {
         console::error("\nFailed to load the model\n");
         return 1;
     }
+
+    ctx_cli.defaults.sampling = params.sampling;
 
     console::spinner::stop();
     console::log("\n");
