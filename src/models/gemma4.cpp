@@ -155,12 +155,14 @@ public:
     }
     virtual ~llm_graph_input_logits_bias() = default;
 
-    void set_input(const llama_ubatch *) override {
+    void set_input(const llama_ubatch * /*ubatch*/) override {
         const int64_t n_vocab = arr.size();
         ggml_backend_tensor_set(logits_bias, arr.data(), 0, n_vocab*ggml_element_size(logits_bias));
     }
 
-    // bool can_reuse(const llm_graph_params & params) override;
+    bool can_reuse(const llm_graph_params & /*params*/) override {
+        return true;
+    }
 
     ggml_tensor * logits_bias = nullptr; // F32 [n_vocab]
 
