@@ -977,6 +977,95 @@ void quantize_row_q2_K_ref(const float * GGML_RESTRICT x, block_q2_K * GGML_REST
     }
 }
 
+void quantize_row_q2_K_blue_ref(const float * GGML_RESTRICT x, block_q2_K * GGML_RESTRICT y, int64_t k) {
+    assert(k % QK_K == 0);
+    const int nb = k / QK_K;
+    const float strength = 0.25f;
+
+    uint8_t L[QK_K];
+    uint8_t Laux[16];
+    float   weights[16];
+    float mins[QK_K/16];
+    float scales[QK_K/16];
+
+    const float q4scale = 15.f;
+
+    for (int i = 0; i < nb; i++) {
+        float max_scale = 0;
+        float max_min = 0;
+        for (int j = 0; j < QK_K/16; ++j) {
+            for (int l = 0; l < 16; ++l) weights[l] = fabsf(x[16*j + l]);
+            scales[j] = make_qkx2_quants(16, 3, x + 16*j, weights, L + 16*j, &mins[j], Laux, -0.5f, 0.1f, 15, true);
+            float scale = scales[j];
+            if (scale > max_scale) {
+                max_scale = scale;
+            }
+            float min = mins[j];
+            if (min > max_min) {
+                max_min = min;
+            }
+        }
+
+        if (max_scale > 0) {
+            float iscale = q4scale/max_scale;
+            for (int j = 0; j < QK_K/16; ++j) {
+                int l = nearest_int(iscale*scales[j]);
+                y[i].scales[j] = l;
+            }
+            y[i].d = GGML_FP32_TO_FP16(max_scale/q4scale);
+        } else {
+            for (int j = 0; j < QK_K/16; ++j) y[i].scales[j] = 0;
+            y[i].d = GGML_FP32_TO_FP16(0.f);
+        }
+        if (max_min > 0) {
+            float iscale = q4scale/max_min;
+            for (int j = 0; j < QK_K/16; ++j) {
+                int l = nearest_int(iscale*mins[j]);
+                y[i].scales[j] |= (l << 4);
+            }
+            y[i].dmin = GGML_FP32_TO_FP16(max_min/q4scale);
+        } else {
+            y[i].dmin = GGML_FP32_TO_FP16(0.f);
+        }
+        for (int j = 0; j < QK_K/16; ++j) {
+            const float d = GGML_FP16_TO_FP32(y[i].d) * (y[i].scales[j] & 0xF);
+            if (!d) continue;
+            const float dm = GGML_FP16_TO_FP32(y[i].dmin) * (y[i].scales[j] >> 4);
+            for (int ii = 0; ii < 16; ++ii) {
+                const int seed = i * QK_K + j * 16 + ii;
+                const float noise = blue_noise_64[(seed) & 63] * strength;
+                int l = nearest_int((x[16*j + ii] + dm)/d + noise);
+                l = MAX(0, MIN(3, l));
+                L[16*j + ii] = l;
+            }
+        }
+
+        for (int j = 0; j < QK_K; j += 128) {
+            for (int l = 0; l < 32; ++l) {
+                y[i].qs[j/4 + l] = L[j + l] | (L[j + l + 32] << 2) | (L[j + l + 64] << 4) | (L[j + l + 96] << 6);
+            }
+        }
+
+        x += QK_K;
+    }
+}
+
+
+size_t quantize_q2_K_blue(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrow, int64_t n_per_row, const float * quant_weights) {
+    if (!quant_weights) {
+        quantize_row_q2_K_blue_ref(src, dst, (int64_t)nrow*n_per_row);
+        return nrow * ggml_row_size(GGML_TYPE_Q2_K, n_per_row);
+    }
+    size_t row_size = ggml_row_size(GGML_TYPE_Q2_K, n_per_row);
+    char * qrow = (char *)dst;
+    for (int64_t row = 0; row < nrow; ++row) {
+        quantize_row_q2_K_blue_ref(src, (block_q2_K*)qrow, n_per_row);
+        src += n_per_row;
+        qrow += row_size;
+    }
+    return nrow * row_size;
+}
+
 void dequantize_row_q2_K(const block_q2_K * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
     assert(k % QK_K == 0);
     const int nb = k / QK_K;
@@ -1464,6 +1553,101 @@ size_t quantize_q3_K(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, 
         char * qrow = (char *)dst;
         for (int64_t row = 0; row < nrow; ++row) {
             quantize_row_q3_K_impl(src, (block_q3_K*)qrow, n_per_row, quant_weights);
+            src += n_per_row;
+            qrow += row_size;
+        }
+    }
+    return nrow * row_size;
+}
+
+void quantize_row_q3_K_blue_ref(const float * GGML_RESTRICT x, block_q3_K * GGML_RESTRICT y, int64_t k) {
+    assert(k % QK_K == 0);
+    const int nb = k / QK_K;
+    const float strength = 0.25f;
+
+    int8_t L[QK_K];
+    float scales[QK_K / 16];
+
+    for (int i = 0; i < nb; i++) {
+
+        float max_scale = 0;
+        float amax = 0;
+        for (int j = 0; j < QK_K/16; ++j) {
+            scales[j] = make_q3_quants(16, 4, x + 16*j, L + 16*j, true);
+            float scale = fabsf(scales[j]);
+            if (scale > amax) {
+                amax = scale; max_scale = scales[j];
+            }
+        }
+
+        memset(y[i].scales, 0, 12);
+        if (max_scale) {
+            float iscale = -32.f/max_scale;
+            for (int j = 0; j < QK_K/16; ++j) {
+                int8_t l = nearest_int(iscale*scales[j]);
+                l = MAX(-32, MIN(31, l)) + 32;
+                if (j < 8) {
+                    y[i].scales[j] = l & 0xF;
+                } else {
+                    y[i].scales[j-8] |= ((l & 0xF) << 4);
+                }
+                l >>= 4;
+                y[i].scales[j%4 + 8] |= (l << (2*(j/4)));
+            }
+            y[i].d = GGML_FP32_TO_FP16(1/iscale);
+        } else {
+            y[i].d = GGML_FP32_TO_FP16(0.f);
+        }
+
+        int8_t sc;
+        for (int j = 0; j < QK_K/16; ++j) {
+            sc = j < 8 ? y[i].scales[j] & 0xF : y[i].scales[j-8] >> 4;
+            sc = (sc | (((y[i].scales[8 + j%4] >> (2*(j/4))) & 3) << 4)) - 32;
+            float d = GGML_FP16_TO_FP32(y[i].d) * sc;
+            if (!d) {
+                continue;
+            }
+            for (int ii = 0; ii < 16; ++ii) {
+                const int seed = i * QK_K + j * 16 + ii;
+                const float noise = blue_noise_64[(seed) & 63] * strength;
+                int l = nearest_int(x[16*j + ii]/d + noise);
+                l = MAX(-4, MIN(3, l));
+                L[16*j + ii] = l + 4;
+            }
+        }
+
+        memset(y[i].hmask, 0, QK_K/8);
+        int m = 0;
+        uint8_t hm = 1;
+        for (int j = 0; j < QK_K; ++j) {
+            if (L[j] > 3) {
+                y[i].hmask[m] |= hm;
+                L[j] -= 4;
+            }
+            if (++m == QK_K/8) {
+                m = 0; hm <<= 1;
+            }
+        }
+        for (int j = 0; j < QK_K; j += 128) {
+            for (int l = 0; l < 32; ++l) {
+                y[i].qs[j/4 + l] = L[j + l] | (L[j + l + 32] << 2) | (L[j + l + 64] << 4) | (L[j + l + 96] << 6);
+            }
+        }
+
+        x += QK_K;
+    }
+}
+
+
+size_t quantize_q3_K_blue(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrow, int64_t n_per_row, const float * quant_weights) {
+    size_t row_size = ggml_row_size(GGML_TYPE_Q3_K, n_per_row);
+    if (!quant_weights) {
+        quantize_row_q3_K_blue_ref(src, dst, (int64_t)nrow*n_per_row);
+    }
+    else {
+        char * qrow = (char *)dst;
+        for (int64_t row = 0; row < nrow; ++row) {
+            quantize_row_q3_K_blue_ref(src, (block_q3_K*)qrow, n_per_row);
             src += n_per_row;
             qrow += row_size;
         }
@@ -2207,6 +2391,50 @@ size_t quantize_q4_1(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, 
     return nrow * row_size;
 }
 
+void quantize_row_q4_1_blue_ref(const float * GGML_RESTRICT x, block_q4_1 * GGML_RESTRICT y, int64_t k) {
+    const int qk = QK4_1;
+    assert(k % qk == 0);
+    const int nb = k / qk;
+    const float strength = 0.25f;
+    for (int i = 0; i < nb; i++) {
+        float min = FLT_MAX, max = -FLT_MAX;
+        for (int j = 0; j < qk; j++) {
+            const float v = x[i*qk + j];
+            if (v < min) min = v;
+            if (v > max) max = v;
+        }
+        const float d  = (max - min) / ((1 << 4) - 1);
+        const float id = d ? 1.0f/d : 0.0f;
+        y[i].d = GGML_FP32_TO_FP16(d);
+        y[i].m = GGML_FP32_TO_FP16(min);
+        for (int j = 0; j < qk/2; ++j) {
+            const int seed = i * qk + j;
+            const float noise0 = blue_noise_64[(seed + 0) & 63] * strength;
+            const float noise1 = blue_noise_64[(seed + 1) & 63] * strength;
+            const float x0 = (x[i*qk + 0    + j] - min)*id + noise0;
+            const float x1 = (x[i*qk + qk/2 + j] - min)*id + noise1;
+            const uint8_t xi0 = MIN(15, (int8_t)(x0 + 0.5f));
+            const uint8_t xi1 = MIN(15, (int8_t)(x1 + 0.5f));
+            y[i].qs[j]  = xi0;
+            y[i].qs[j] |= xi1 << 4;
+        }
+    }
+}
+
+size_t quantize_q4_1_blue(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrow, int64_t n_per_row, const float * quant_weights) {
+    if (!quant_weights) {
+        quantize_row_q4_1_blue_ref(src, dst, (int64_t)nrow*n_per_row);
+        return nrow * ggml_row_size(GGML_TYPE_Q4_1, n_per_row);
+    }
+    size_t row_size = ggml_row_size(GGML_TYPE_Q4_1, n_per_row);
+    char * qrow = (char *)dst;
+    for (int64_t row = 0; row < nrow; ++row) {
+        quantize_row_q4_1_blue_ref(src, (block_q4_1*)qrow, n_per_row);
+        src += n_per_row;
+        qrow += row_size;
+    }
+    return nrow * row_size;
+}
 static void quantize_row_q5_0_impl(const float * GGML_RESTRICT x, block_q5_0 * GGML_RESTRICT y, int64_t n_per_row, const float * quant_weights) {
     static_assert(QK5_0 == 32, "QK5_0 must be 32");
 

@@ -29,6 +29,15 @@ void quantize_row_q1_0(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, in
 void quantize_row_q4_0(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k) {
     quantize_row_q4_0_ref(x, y, k);
 }
+void quantize_row_q4_0_blue(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k) {
+    quantize_row_q4_0_blue_ref(x, y, k);
+}
+
+void quantize_row_q4_1_blue(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k) {
+    quantize_row_q4_1_blue_ref(x, y, k);
+}
+
+
 
 void quantize_row_q4_1(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k) {
     quantize_row_q4_1_ref(x, y, k);
@@ -63,6 +72,15 @@ void quantize_row_nvfp4(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, i
 //
 
 //========================- 2-bit (de)-quantization
+void quantize_row_q2_K_blue(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t k) {
+    quantize_row_q2_K_blue_ref(x, (block_q2_K *)vy, k);
+}
+
+void quantize_row_q3_K_blue(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t k) {
+    quantize_row_q3_K_blue_ref(x, (block_q3_K *)vy, k);
+}
+
+
 
 void quantize_row_q2_K(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t k) {
     quantize_row_q2_K_ref(x, vy, k);

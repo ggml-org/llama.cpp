@@ -3416,9 +3416,15 @@ llama_context * llama_init_from_model(
     if (params.flash_attn_type != LLAMA_FLASH_ATTN_TYPE_DISABLED && ggml_is_quantized(params.type_k)) {
         const uint32_t blck_size = ggml_blck_size(params.type_k);
         for (uint32_t il = 0; il < model->hparams.n_layer; ++il) {
-            if (model->hparams.n_embd_head_k(il) % blck_size != 0) {
-                LLAMA_LOG_ERROR("%s: K cache type %s with block size %u does not divide n_embd_head_k=%u\n",
-                    __func__, ggml_type_name(params.type_k), blck_size, model->hparams.n_embd_head_k(il));
+            if (!model->hparams.has_kv(il)) {
+                continue;
+            }
+            const uint32_t n_embd_k_gqa = model->hparams.n_embd_k_gqa(il);
+            if (n_embd_k_gqa % blck_size != 0) {
+                LLAMA_LOG_ERROR("%s: K cache type %s with block size %u does not divide n_embd_k_gqa=%u "
+                    "(n_embd_head_k=%u, n_head_kv=%u). Consider using Q4_0 cache types (block_size=32).\n",
+                    __func__, ggml_type_name(params.type_k), blck_size,
+                    n_embd_k_gqa, model->hparams.n_embd_head_k(il), model->hparams.n_head_kv(il));
                 return nullptr;
             }
         }
@@ -3427,9 +3433,15 @@ llama_context * llama_init_from_model(
     if (params.flash_attn_type != LLAMA_FLASH_ATTN_TYPE_DISABLED && ggml_is_quantized(params.type_v)) {
         const uint32_t blck_size = ggml_blck_size(params.type_v);
         for (uint32_t il = 0; il < model->hparams.n_layer; ++il) {
-            if (model->hparams.n_embd_head_v(il) % blck_size != 0) {
-                LLAMA_LOG_ERROR("%s: V cache type %s with block size %u does not divide n_embd_head_v=%u\n",
-                    __func__, ggml_type_name(params.type_v), blck_size, model->hparams.n_embd_head_v(il));
+            if (!model->hparams.has_kv(il)) {
+                continue;
+            }
+            const uint32_t n_embd_v_gqa = model->hparams.n_embd_v_gqa(il);
+            if (n_embd_v_gqa % blck_size != 0) {
+                LLAMA_LOG_ERROR("%s: V cache type %s with block size %u does not divide n_embd_v_gqa=%u "
+                    "(n_embd_head_v=%u, n_head_kv=%u). Consider using Q4_0 cache types (block_size=32).\n",
+                    __func__, ggml_type_name(params.type_v), blck_size,
+                    n_embd_v_gqa, model->hparams.n_embd_head_v(il), model->hparams.n_head_kv(il));
                 return nullptr;
             }
         }

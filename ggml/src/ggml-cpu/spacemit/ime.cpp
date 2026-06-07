@@ -189,7 +189,9 @@ template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS> class tensor_
             case GGML_OP_MUL_MAT:
                 switch (op->src[0]->type) {
                     case GGML_TYPE_Q2_K:
+                    case GGML_TYPE_Q2_K_BLUE:
                     case GGML_TYPE_Q3_K:
+                    case GGML_TYPE_Q3_K_BLUE:
                     case GGML_TYPE_Q4_0_BLUE:
                     case GGML_TYPE_Q4_0:
                     case GGML_TYPE_Q4_1:
@@ -209,7 +211,9 @@ template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS> class tensor_
             case GGML_OP_MUL_MAT_ID:
                 switch (op->src[0]->type) {
                     case GGML_TYPE_Q2_K:
+                    case GGML_TYPE_Q2_K_BLUE:
                     case GGML_TYPE_Q3_K:
+                    case GGML_TYPE_Q3_K_BLUE:
                     case GGML_TYPE_Q4_0_BLUE:
                     case GGML_TYPE_Q4_0:
                     case GGML_TYPE_Q4_1:

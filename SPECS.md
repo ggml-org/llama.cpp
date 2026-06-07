@@ -38,12 +38,18 @@ We are testing whether quality falls apart more slowly.
 
 ## Required modes
 
-Implement three KV cache modes:
+Implement KV cache modes:
 
 ```text
 f16              baseline
 q4_0             existing INT4 KV cache
 q4_0_blue        INT4 KV cache with deterministic blue-noise dither
+q4_1             INT4 KV cache with asymmetric range
+q4_1_blue        INT4 KV cache with asymmetric range + blue-noise dither
+q2_K             2-bit K-quant KV cache
+q2_K_blue        2-bit K-quant KV cache with blue-noise dither
+q3_K             3-bit K-quant KV cache
+q3_K_blue        3-bit K-quant KV cache with blue-noise dither
 ```
 
 Expose through CLI:
@@ -51,17 +57,23 @@ Expose through CLI:
 ```bash
 --cache-type-k q4_0_blue
 --cache-type-v q4_0_blue
+--cache-type-k q2_K_blue
+--cache-type-k q3_K_blue
 ```
 
 Also allow mixed mode:
 
 ```bash
---cache-type-k q4_0_blue --cache-type-v q4_0
+--cache-type-k q4_0_blue --cache-type-v q4_0          # blue K, normal V (most important)
+--cache-type-k q4_0    --cache-type-v q4_0_blue        # normal K, blue V
+--cache-type-k q2_K_blue --cache-type-v q2_K           # blue K (2-bit), normal V (2-bit)
+--cache-type-k q3_K    --cache-type-v q3_K_blue        # normal K (3-bit), blue V (3-bit)
+--cache-type-k q2_K_blue --cache-type-v q3_K_blue      # blue K (2-bit), blue V (3-bit)
 ```
 
-This is the most important test.
-
 Keys steer attention. Values carry payload.
+
+Testing lower-bit types (Q2_K, Q3_K) helps determine whether blue-noise dithering has a proportionally larger effect at lower bit depths where the quantization grid is coarser.
 
 ## Implementation plan for Cline
 
@@ -168,7 +180,7 @@ cmake --build build-cuda -j
 
 ## Test matrix
 
-Use one fixed prompt file:
+Use fixed prompt files:
 
 ```text
 tests/prompts/needle_4k.txt
@@ -184,35 +196,51 @@ Use fixed seed:
 --seed 42
 ```
 
-Run these:
+### KV cache type combinations to test
+
+Each mode is tested with all prompt files.
+
+```text
+# Baseline
+K=f16,  V=f16
+
+# Existing INT4
+K=q4_0, V=q4_0
+K=q4_1, V=q4_1
+
+# Blue-noise INT4
+K=q4_0_blue, V=q4_0        # Blue K only
+K=q4_0,      V=q4_0_blue   # Blue V only
+K=q4_0_blue, V=q4_0_blue   # Both blue
+K=q4_1_blue, V=q4_1        # Blue K (asymmetric)
+K=q4_1,      V=q4_1_blue   # Blue V (asymmetric)
+K=q4_1_blue, V=q4_1_blue   # Both blue (asymmetric)
+
+# 3-bit (Q3_K)
+K=q3_K,      V=q3_K        # Normal 3-bit
+K=q3_K_blue, V=q3_K        # Blue K (3-bit)
+K=q3_K,      V=q3_K_blue   # Blue V (3-bit)
+K=q3_K_blue, V=q3_K_blue   # Both blue (3-bit)
+
+# 2-bit (Q2_K)
+K=q2_K,      V=q2_K        # Normal 2-bit
+K=q2_K_blue, V=q2_K        # Blue K (2-bit)
+K=q2_K,      V=q2_K_blue   # Blue V (2-bit)
+K=q2_K_blue, V=q2_K_blue   # Both blue (2-bit)
+
+# Cross-bit mixed (blue K at lower bit, blue V at different bit)
+K=q2_K_blue, V=q3_K_blue   # Blue K (2-bit), Blue V (3-bit)
+K=q3_K_blue, V=q2_K_blue   # Blue K (3-bit), Blue V (2-bit)
+```
+
+Example invocation:
 
 ```bash
-# F16 baseline
 ./build-cuda/bin/llama-cli \
   -m models/qwen2.5-1.5b-instruct-q4_k_m.gguf \
   -ngl 999 -c 4096 \
-  --cache-type-k f16 \
-  --cache-type-v f16 \
-  --seed 42 \
-  -f tests/prompts/needle_4k.txt \
-  -n 256
-
-# Normal INT4
-./build-cuda/bin/llama-cli \
-  -m models/qwen2.5-1.5b-instruct-q4_k_m.gguf \
-  -ngl 999 -c 4096 \
-  --cache-type-k q4_0 \
-  --cache-type-v q4_0 \
-  --seed 42 \
-  -f tests/prompts/needle_4k.txt \
-  -n 256
-
-# Blue INT4
-./build-cuda/bin/llama-cli \
-  -m models/qwen2.5-1.5b-instruct-q4_k_m.gguf \
-  -ngl 999 -c 4096 \
-  --cache-type-k q4_0_blue \
-  --cache-type-v q4_0 \
+  --cache-type-k q3_K_blue \
+  --cache-type-v q3_K \
   --seed 42 \
   -f tests/prompts/needle_4k.txt \
   -n 256

@@ -430,7 +430,10 @@ extern "C" {
         GGML_TYPE_NVFP4   = 40, // NVFP4 (4 blocks, E4M3 scale)
         GGML_TYPE_Q1_0    = 41,
         GGML_TYPE_Q4_0_BLUE = 42,
-        GGML_TYPE_COUNT   = 43,
+        GGML_TYPE_Q4_1_BLUE = 43,
+        GGML_TYPE_Q2_K_BLUE = 44,
+        GGML_TYPE_Q3_K_BLUE = 45,
+        GGML_TYPE_COUNT   = 46,
     };
 
     // precision

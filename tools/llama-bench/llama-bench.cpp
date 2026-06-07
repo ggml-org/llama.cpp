@@ -497,6 +497,19 @@ static ggml_type ggml_type_from_name(const std::string & s) {
         return GGML_TYPE_IQ4_NL;
     }
 
+    if (s == "q4_0_blue") {
+        return GGML_TYPE_Q4_0_BLUE;
+    }
+    if (s == "q4_1_blue") {
+        return GGML_TYPE_Q4_1_BLUE;
+    }
+    if (s == "q2_K_blue") {
+        return GGML_TYPE_Q2_K_BLUE;
+    }
+    if (s == "q3_K_blue") {
+        return GGML_TYPE_Q3_K_BLUE;
+    }
+
     return GGML_TYPE_COUNT;
 }
 
