@@ -152,8 +152,6 @@ class Cohere2MoeModel(TextModel):
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         if name == "lm_head.weight":
-            if not self.hparams.get("tie_word_embeddings", False):
-                raise ValueError("Cohere2 MoE converter assumes tied lm_head.weight")
             logger.info("Skipping tied output layer 'lm_head.weight'")
             return
 
