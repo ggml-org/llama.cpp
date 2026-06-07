@@ -245,12 +245,8 @@ llama_model_cohere2_moe::graph::graph(const llama_model & model, const llm_graph
                         nullptr, LLM_FFN_SILU, LLM_FFN_PAR, il);
                 cb(ffn_shexp, "ffn_shexp", il);
 
-                if (hparams.n_expert_shared > 1) {
-                    ffn_shexp = ggml_scale(ctx0, ffn_shexp, 1.0f / hparams.n_expert_shared);
-                    cb(ffn_shexp, "ffn_shexp_avg", il);
-                }
-
                 cur = ggml_add(ctx0, cur, ffn_shexp);
+                cur = ggml_scale(ctx0, cur, 0.5f);
                 cb(cur, "ffn_out", il);
             }
         }
@@ -402,12 +398,8 @@ llama_model_cohere2_moe::graph_mtp::graph_mtp(const llama_model & model, const l
                 nullptr, LLM_FFN_SILU, LLM_FFN_PAR, il);
         cb(ffn_shexp, "mtp_ffn_shexp", il);
 
-        if (hparams.n_expert_shared > 1) {
-            ffn_shexp = ggml_scale(ctx0, ffn_shexp, 1.0f / hparams.n_expert_shared);
-            cb(ffn_shexp, "mtp_ffn_shexp_avg", il);
-        }
-
         cur = ggml_add(ctx0, cur, ffn_shexp);
+        cur = ggml_scale(ctx0, cur, 0.5f);
         cb(cur, "mtp_ffn_out", il);
     }
 
