@@ -7,24 +7,25 @@ import { defineConfig, searchForWorkspaceRoot } from 'vite';
 import devtoolsJson from 'vite-plugin-devtools-json';
 import { storybookTest } from '@storybook/addon-vitest/vitest-plugin';
 import { llamaCppBuildPlugin } from './scripts/vite-plugin-llama-cpp-build';
-import { playwright } from '@vitest/browser-playwright';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 const SERVER_ORIGIN = import.meta.env?.VITE_PUBLIC_SERVER_ORIGIN || 'http://localhost:8080';
+export default defineConfig(async () => {
+	const { playwright } = await import('@vitest/browser-playwright');
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const browserBaseConfig: any = {
-	enabled: true,
-	provider: playwright({
-		launchOptions: {
-			args: ['--no-sandbox']
-		}
-	}),
-	instances: [{ browser: 'chromium' }]
-};
+	// eslint-disable-next-line @typescript-eslint/no-explicit-any
+	const browserBaseConfig: any = {
+		enabled: true,
+		provider: playwright({
+			launchOptions: {
+				args: ['--no-sandbox']
+			}
+		}),
+		instances: [{ browser: 'chromium' }]
+	};
 
-export default defineConfig({
+	return {
 	resolve: {
 		alias: {
 			'katex-fonts': resolve('node_modules/katex/dist/fonts')
@@ -106,4 +107,5 @@ export default defineConfig({
 			allow: [searchForWorkspaceRoot(process.cwd()), resolve(__dirname, 'tests')]
 		}
 	}
+	};
 });
