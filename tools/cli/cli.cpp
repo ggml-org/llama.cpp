@@ -446,6 +446,9 @@ int llama_cli(int argc, char ** argv) {
     if (inf.has_inp_audio) {
         console::log("  /audio <file>       add an audio file\n");
     }
+    if (inf.has_inp_video) {
+        console::log("  /video <file>       add a video file\n");
+    }
     console::log("\n");
 
     // interactive loop
@@ -542,7 +545,8 @@ int llama_cli(int argc, char ** argv) {
             continue;
         } else if (
                 (string_starts_with(buffer, "/image ") && inf.has_inp_image) ||
-                (string_starts_with(buffer, "/audio ") && inf.has_inp_audio)) {
+                (string_starts_with(buffer, "/audio ") && inf.has_inp_audio) ||
+                (string_starts_with(buffer, "/video ") && inf.has_inp_video)) {
             // just in case (bad copy-paste for example), we strip all trailing/leading spaces
             std::string fname = string_strip(buffer.substr(7));
             std::string marker = ctx_cli.load_input_file(fname, true);
