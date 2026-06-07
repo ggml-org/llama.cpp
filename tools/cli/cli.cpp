@@ -232,6 +232,7 @@ static const std::array<std::string_view, 7> cmds = {
     "/image ",
     "/read ",
     "/regen",
+    "/video ",
 };
 
 static std::vector<std::pair<std::string, size_t>> auto_completion_callback(std::string_view line, size_t cursor_byte_pos) {
