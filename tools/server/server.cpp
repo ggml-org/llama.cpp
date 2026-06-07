@@ -82,6 +82,11 @@ int llama_server(int argc, char ** argv) {
 
     common_init();
 
+    // child download happens during arg parsing, so register the forwarding callback beforehand
+    if (server_models::is_child_server()) {
+        server_models::register_child_download_progress();
+    }
+
     if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_SERVER)) {
         return 1;
     }
@@ -298,6 +303,11 @@ int llama_server(int argc, char ** argv) {
             ctx_server.on_sleeping_changed([&](bool sleeping) {
                 server_models::notify_router_sleeping_state(sleeping);
             });
+            // forward load stages to the router: "load" via the progress callback, warmup/finalize via the stage callback
+            params.load_progress_callback           = server_models::child_load_progress_callback;
+            params.load_progress_callback_user_data = nullptr;
+            params.load_stage_callback              = server_models::child_load_stage_callback;
+            params.load_stage_callback_user_data    = nullptr;
         }
 
         if (!ctx_server.load_model(params)) {

@@ -110,6 +110,8 @@ export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSele
 			if (open) {
 				modelsStore.fetchRouterModels().then(() => {
 					modelsStore.fetchModalitiesForLoadedModels();
+					// pick up loads started elsewhere so their progress keeps updating here
+					modelsStore.observeOngoingLoads();
 				});
 			}
 

@@ -18,6 +18,8 @@
 #include <atomic>
 #include <chrono>
 #include <queue>
+#include <unordered_map>
+#include <unordered_set>
 #include <filesystem>
 #include <random>
 #include <sstream>
@@ -46,6 +48,9 @@ extern char **environ;
 #define CMD_CHILD_TO_ROUTER_READY "cmd_child_to_router:ready" // also sent when waking up from sleep
 #define CMD_CHILD_TO_ROUTER_SLEEP "cmd_child_to_router:sleep"
 #define CMD_CHILD_TO_ROUTER_INFO  "cmd_child_to_router:info:" // followed by json string
+// load stage report: "<stage>" or "<stage>:<fraction 0..1>" (no fraction => indeterminate stage)
+// stages are the COMMON_LOAD_STAGE_* names (download / load / warmup / finalize)
+#define CMD_CHILD_TO_ROUTER_STAGE "cmd_child_to_router:stage:"
 
 // address for child process, this is needed because router may run on 0.0.0.0
 // ref: https://github.com/ggml-org/llama.cpp/issues/17862
@@ -762,9 +767,11 @@ void server_models::load(const std::string & name) {
     instance_t inst;
     inst.meta             = meta;
     inst.meta.port        = get_free_port();
-    inst.meta.status      = SERVER_MODEL_STATUS_LOADING;
-    inst.meta.loaded_info = json{};
-    inst.meta.last_used   = ggml_time_ms();
+    inst.meta.status        = SERVER_MODEL_STATUS_LOADING;
+    inst.meta.loaded_info   = json{};
+    inst.meta.load_stage    = "";    // reset stale stage/progress from a previous load
+    inst.meta.load_progress = -1.0f;
+    inst.meta.last_used     = ggml_time_ms();
 
     if (inst.meta.port <= 0) {
         throw std::runtime_error("failed to get a port number");
@@ -821,6 +828,16 @@ void server_models::load(const std::string & name) {
                         this->update_loaded_info(name, str);
                     } else if (string_starts_with(buffer, CMD_CHILD_TO_ROUTER_SLEEP)) {
                         this->update_status(name, SERVER_MODEL_STATUS_SLEEPING, 0);
+                    } else if (string_starts_with(buffer, CMD_CHILD_TO_ROUTER_STAGE)) {
+                        std::string payload = string_strip(str.substr(strlen(CMD_CHILD_TO_ROUTER_STAGE)));
+                        std::string stage   = payload;
+                        float       progress = -1.0f;
+                        auto colon = payload.find(':');
+                        if (colon != std::string::npos) {
+                            stage    = payload.substr(0, colon);
+                            progress = strtof(payload.c_str() + colon + 1, nullptr);
+                        }
+                        this->update_stage(name, stage, progress);
                     }
                 }
             } else {
@@ -985,6 +1002,16 @@ void server_models::update_loaded_info(const std::string & name, std::string & r
     cv.notify_all();
 }
 
+void server_models::update_stage(const std::string & name, const std::string & stage, float progress) {
+    std::unique_lock<std::mutex> lk(mutex);
+    auto it = mapping.find(name);
+    if (it != mapping.end()) {
+        it->second.meta.load_stage    = stage;
+        it->second.meta.load_progress = progress;
+    }
+    cv.notify_all();
+}
+
 void server_models::wait_until_loading_finished(const std::string & name) {
     std::unique_lock<std::mutex> lk(mutex);
     cv.wait(lk, [this, &name]() {
@@ -1104,6 +1131,112 @@ void server_models::notify_router_sleeping_state(bool is_sleeping) {
     fprintf(stdout, "%s\n", is_sleeping ? CMD_CHILD_TO_ROUTER_SLEEP : CMD_CHILD_TO_ROUTER_READY);
     fflush(stdout);
     common_log_resume(common_log_main());
+}
+
+void server_models::notify_router_stage(const char * stage, float progress) {
+    // write in a single fputs to avoid interleaving with loader logging on the shared stdout
+    char line[96];
+    if (progress >= 0.0f) {
+        snprintf(line, sizeof(line), "%s%s:%.4f\n", CMD_CHILD_TO_ROUTER_STAGE, stage, progress);
+    } else {
+        snprintf(line, sizeof(line), "%s%s\n", CMD_CHILD_TO_ROUTER_STAGE, stage);
+    }
+    common_log_pause(common_log_main());
+    fflush(stdout);
+    fputs(line, stdout);
+    fflush(stdout);
+    common_log_resume(common_log_main());
+}
+
+// funnels all stage emissions to the router. progress callbacks fire per tensor/chunk (hundreds of
+// times), so only forward on phase change, integer-percent advance, or completion.
+struct stage_emitter {
+    std::string last_stage;
+    int         last_pct = -1;
+
+    void emit(const char * stage, float progress) {
+        const int pct = (int) (progress * 100.0f);
+        if (last_stage != stage || pct != last_pct || progress >= 1.0f) {
+            last_stage = stage;
+            last_pct   = pct;
+            server_models::notify_router_stage(stage, progress);
+        }
+    }
+};
+
+// single model per child; emission sources don't overlap in time (download at arg-parse, then
+// single-threaded load/warmup/finalize), and the download callback serializes its part threads.
+static stage_emitter g_stage_emitter;
+
+bool server_models::child_load_progress_callback(float progress, void * /*user_data*/) {
+    g_stage_emitter.emit(COMMON_LOAD_STAGE_LOAD, progress);
+    return true; // never abort loading
+}
+
+void server_models::child_load_stage_callback(const char * stage, float progress, void * /*user_data*/) {
+    g_stage_emitter.emit(stage, progress); // coarse phase markers (e.g. warmup / finalize)
+}
+
+// forwards download progress to the router. multi-part GGUFs download parts in parallel, each with
+// its own byte counts, so aggregate across parts for a whole-model 0->1 instead of one racing part.
+//
+// the per-file total arrives lazily (from each file's HEAD), so a naive sum over only-seen files has
+// a growing denominator and the percent regresses (e.g. one part hits 100% before the rest register).
+// to avoid that, stay indeterminate until every expected file is resolved (size known, or finished
+// for a cached/unknown-size file); only then is the denominator stable and the percent monotonic.
+struct child_download_progress_callback : common_download_callback {
+    void on_plan(size_t total_files) override {
+        std::lock_guard<std::mutex> lock(mutex);
+        // fresh accounting per download pass (defensive: child loads one model, but a validation
+        // pass could call this twice) so a stale denominator can't leak across passes
+        files.clear();
+        resolved.clear();
+        expected = total_files;
+    }
+    void on_start(const common_download_progress & p) override { record(p, /*done=*/false); }
+    void on_update(const common_download_progress & p) override { record(p, /*done=*/false); }
+    void on_done(const common_download_progress & p, bool /*ok*/) override { record(p, /*done=*/true); }
+
+private:
+    std::mutex mutex;
+    std::unordered_map<std::string, std::pair<size_t, size_t>> files;    // url -> {downloaded, total}
+    std::unordered_set<std::string>                            resolved; // urls with a known size or finished
+    size_t expected = 0;                                                 // total files, from on_plan
+
+    void record(const common_download_progress & p, bool done) {
+        // serializing here also protects g_stage_emitter's state from the parallel part threads
+        std::lock_guard<std::mutex> lock(mutex);
+
+        if (p.total > 0) {
+            files[p.url] = { p.downloaded, p.total };
+            resolved.insert(p.url);
+        } else if (done) {
+            // cached / unknown-size file finished: count it resolved so we don't wait forever
+            files.emplace(p.url, std::make_pair<size_t, size_t>(0, 0));
+            resolved.insert(p.url);
+        }
+
+        // until every file's size is known the denominator keeps growing; report indeterminate so
+        // the UI shows an animated download phase instead of a percentage that jumps backwards
+        if (expected == 0 || resolved.size() < expected) {
+            g_stage_emitter.emit(COMMON_LOAD_STAGE_DOWNLOAD, -1.0f);
+            return;
+        }
+
+        size_t downloaded = 0;
+        size_t total      = 0;
+        for (const auto & f : files) {
+            downloaded += f.second.first;
+            total      += f.second.second;
+        }
+        // total == 0 means every file was cached/unknown-size: nothing to transfer, report complete
+        g_stage_emitter.emit(COMMON_LOAD_STAGE_DOWNLOAD, total > 0 ? (float) downloaded / (float) total : 1.0f);
+    }
+};
+
+void server_models::register_child_download_progress() {
+    static child_download_progress_callback cb;
+    common_download_set_default_callback(&cb);
 }
 
 
@@ -1238,6 +1371,14 @@ void server_models_routes::init_routes() {
                 {"value",  server_model_status_to_string(meta.status)},
                 {"args",   meta.args},
             };
+            if (meta.status == SERVER_MODEL_STATUS_LOADING) {
+                if (!meta.load_stage.empty()) {
+                    status["stage"] = meta.load_stage;
+                }
+                if (meta.load_progress >= 0.0f) {
+                    status["progress"] = meta.load_progress;
+                }
+            }
             if (!meta.preset.name.empty()) {
                 common_preset preset_copy = meta.preset;
                 unset_reserved_args(preset_copy, false);

@@ -475,17 +475,38 @@ std::pair<long, std::vector<char>> common_remote_get_content(const std::string  
     return { res->status, std::move(buf) };
 }
 
+static common_download_callback * g_default_download_callback = nullptr;
+
+void common_download_set_default_callback(common_download_callback * callback) {
+    g_default_download_callback = callback;
+}
+
 int common_download_file_single(const std::string & url,
                                 const std::string & path,
                                 const common_download_opts & opts,
                                 bool skip_etag) {
-    if (!opts.offline) {
+    // resolve the effective callback: per-call > process-wide default
+    common_download_opts eff = opts;
+    if (!eff.callback) {
+        eff.callback = g_default_download_callback;
+    }
+
+    if (!eff.offline) {
         ProgressBar tty_cb;
-        common_download_opts online_opts = opts;
-        if (!online_opts.callback) {
-            online_opts.callback = &tty_cb;
+        if (!eff.callback) {
+            eff.callback = &tty_cb;
         }
-        return common_download_file_single_online(url, path, online_opts, skip_etag);
+        const int status = common_download_file_single_online(url, path, eff, skip_etag);
+        // the online path returns 304 (cached, not modified) before emitting any callback;
+        // surface a cached start/done pair so aggregators still see every file exactly once
+        if (status == 304 && eff.callback) {
+            common_download_progress p;
+            p.url    = url;
+            p.cached = true;
+            eff.callback->on_start(p);
+            eff.callback->on_done(p, true);
+        }
+        return status;
     }
 
     if (!std::filesystem::exists(path)) {
@@ -496,12 +517,12 @@ int common_download_file_single(const std::string & url,
     LOG_DBG("%s: using cached file (offline mode): %s\n", __func__, path.c_str());
 
     // notify the callback that the file was cached
-    if (opts.callback) {
+    if (eff.callback) {
         common_download_progress p;
         p.url = url;
         p.cached = true;
-        opts.callback->on_start(p);
-        opts.callback->on_done(p, true);
+        eff.callback->on_start(p);
+        eff.callback->on_done(p, true);
     }
 
     return 304; // Not Modified - fake cached response
@@ -812,6 +833,13 @@ common_download_model_result common_download_model(const common_params_model  & 
 
     if (tasks.empty()) {
         return result;
+    }
+
+    // announce the full file set up front so a progress aggregator can form a stable
+    // denominator (multi-part GGUFs download in parallel below). use the effective callback,
+    // mirroring common_download_file_single's per-call > process-wide resolution.
+    if (common_download_callback * cb = opts.callback ? opts.callback : g_default_download_callback) {
+        cb->on_plan(tasks.size());
     }
 
     std::vector<std::future<int>> futures;

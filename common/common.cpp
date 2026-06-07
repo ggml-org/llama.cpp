@@ -1312,6 +1312,12 @@ std::vector<llama_adapter_lora_ptr> & common_init_result::lora() {
 }
 
 common_init_result_ptr common_init_from_params(common_params & params, bool model_only) {
+    // report the load phase up front (router progress UI); fit + metadata read emit nothing,
+    // so without this the UI sticks on "download 100%" until the per-tensor callback starts
+    if (params.load_stage_callback) {
+        params.load_stage_callback(COMMON_LOAD_STAGE_LOAD, -1.0f, params.load_stage_callback_user_data);
+    }
+
     common_init_result_ptr res(new common_init_result(params, model_only));
 
     llama_model * model = res->model();
@@ -1387,6 +1393,10 @@ common_init_result_ptr common_init_from_params(common_params & params, bool mode
     }
 
     if (params.warmup) {
+        // report the warmup phase (router progress UI)
+        if (params.load_stage_callback) {
+            params.load_stage_callback(COMMON_LOAD_STAGE_WARMUP, -1.0f, params.load_stage_callback_user_data);
+        }
         LOG_INF("%s: warming up the model with an empty run - please wait ... (--no-warmup to disable)\n", __func__);
 
         std::vector<llama_token> tmp;

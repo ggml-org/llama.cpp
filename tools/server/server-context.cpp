@@ -1004,6 +1004,12 @@ private:
             }
         }
 
+        // init done (weights + warmup); mark finalize so the UI doesn't stick on the warmup phase
+        // while the post-warmup setup below (chat templates / seq-rm tests) runs
+        if (params_base.load_stage_callback) {
+            params_base.load_stage_callback(COMMON_LOAD_STAGE_FINALIZE, -1.0f, params_base.load_stage_callback_user_data);
+        }
+
         if (!llama_memory_can_shift(llama_get_memory(ctx_tgt))) {
             if (params_base.ctx_shift) {
                 params_base.ctx_shift = false;

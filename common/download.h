@@ -18,11 +18,19 @@ struct common_download_progress {
 class common_download_callback {
 public:
     virtual ~common_download_callback() = default;
+    // called once before any file starts, with the number of files about to be downloaded;
+    // lets aggregators know the full set up front (e.g. multi-part GGUFs) instead of discovering
+    // files lazily as their callbacks fire. optional: default no-op.
+    virtual void on_plan(size_t total_files) { (void) total_files; }
     virtual void on_start(const common_download_progress & p) = 0;
     virtual void on_update(const common_download_progress & p) = 0;
     virtual void on_done(const common_download_progress & p, bool ok) = 0;
     virtual bool is_cancelled() const { return false; }
 };
+
+// process-wide default download callback, used when common_download_opts::callback is unset (nullptr to clear).
+// borrowed, not owned: must outlive any download that uses it.
+void common_download_set_default_callback(common_download_callback * callback);
 
 struct common_remote_params {
     common_header_list headers;

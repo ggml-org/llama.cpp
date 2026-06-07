@@ -66,6 +66,14 @@ export { default as ModelsSelectorList } from './ModelsSelectorList.svelte';
 export { default as ModelsSelectorOption } from './ModelsSelectorOption.svelte';
 
 /**
+ * **ModelsSelectorTriggerIndicator** - Trailing trigger indicator
+ *
+ * Shared by the desktop dropdown and mobile sheet triggers: renders the load
+ * phase (icon + percent), a spinner, or the chevron for a given model.
+ */
+export { default as ModelsSelectorTriggerIndicator } from './ModelsSelectorTriggerIndicator.svelte';
+
+/**
  * **ModelsSelectorSheet** - Mobile model selection sheet
  *
  * Bottom sheet variant of ModelsSelectorDropdown optimized for touch interaction

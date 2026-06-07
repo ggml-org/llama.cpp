@@ -207,7 +207,10 @@ class ModelsStore {
 	getModelStatus(modelId: string): ServerModelStatus | null {
 		const model = this.routerModels.find((m) => m.id === modelId);
 
-		return model?.status.value ?? null;
+		if (!model) return null;
+		// the router reports a crash as value="unloaded" + failed=true; surface it as FAILED
+		if (model.status.failed === true) return ServerModelStatus.FAILED;
+		return model.status.value ?? null;
 	}
 
 	getModelUsage(modelId: string): SvelteSet<string> {
@@ -384,8 +387,8 @@ class ModelsStore {
 	 * No-op in router mode — fetch() already calls listRouter() internally.
 	 * Kept for API compatibility (e.g. handleOpenChange dropdown open handler).
 	 */
-	async fetchRouterModels(): Promise<void> {
-		if (!isRouterMode()) return;
+	async fetchRouterModels(): Promise<boolean> {
+		if (!isRouterMode()) return true;
 
 		try {
 			const response = await ModelsService.listRouter();
@@ -396,9 +399,11 @@ class ModelsStore {
 			if (visible.length === 1 && this.isModelLoaded(visible[0].model)) {
 				this.selectModelById(visible[0].id);
 			}
+			return true;
 		} catch (error) {
 			console.warn('Failed to fetch router models:', error);
 			this.routerModels = [];
+			return false;
 		}
 	}
 
@@ -637,6 +642,8 @@ class ModelsStore {
 	 */
 
 	private static readonly STATUS_POLL_INTERVAL = 500;
+	// give up after this many consecutive failed fetches (e.g. router died mid-load) instead of spinning forever
+	private static readonly MAX_POLL_FAILURES = 6;
 
 	/**
 	 * Poll for expected model status after load/unload operation.
@@ -647,8 +654,18 @@ class ModelsStore {
 		expectedStatus: ServerModelStatus
 	): Promise<void> {
 		let attempt = 0;
+		let failures = 0;
 		while (true) {
-			await this.fetchRouterModels();
+			const ok = await this.fetchRouterModels();
+			if (!ok) {
+				// tolerate transient blips, but bail if the server stays unreachable
+				if (++failures >= ModelsStore.MAX_POLL_FAILURES) {
+					throw new Error('Lost connection to the server while loading the model');
+				}
+				await new Promise((resolve) => setTimeout(resolve, ModelsStore.STATUS_POLL_INTERVAL));
+				continue;
+			}
+			failures = 0;
 
 			const currentStatus = this.getModelStatus(modelId);
 			if (currentStatus === expectedStatus) return;
@@ -690,6 +707,37 @@ class ModelsStore {
 			throw error;
 		} finally {
 			this.modelLoadingStates.set(modelId, false);
+		}
+	}
+
+	/**
+	 * Follow a load started elsewhere (another client/tab) so this UI keeps updating its
+	 * progress. Same path as loadModel() without the load() call — the modelLoadingStates
+	 * guard keeps it from stacking on a load we already started or observe.
+	 */
+	observeModelLoad(modelId: string): void {
+		if (this.isModelLoaded(modelId)) return;
+		if (this.modelLoadingStates.get(modelId)) return;
+
+		this.modelLoadingStates.set(modelId, true);
+		this.pollForModelStatus(modelId, ServerModelStatus.LOADED)
+			.then(() => this.updateModelModalities(modelId))
+			// the load aborting/failing on the server is the normal end of observing, not our error
+			.catch((error) => console.warn(`Stopped observing load for ${modelId}:`, error))
+			.finally(() => this.modelLoadingStates.set(modelId, false));
+	}
+
+	/**
+	 * Follow every load the router currently reports, so out-of-band loads keep ticking
+	 * here. Safe to call repeatedly — observeModelLoad() no-ops on loads already followed.
+	 */
+	observeOngoingLoads(): void {
+		if (!isRouterMode()) return;
+
+		for (const model of this.routerModels) {
+			if (model.status.value === ServerModelStatus.LOADING && !model.status.failed) {
+				this.observeModelLoad(model.id);
+			}
 		}
 	}
 

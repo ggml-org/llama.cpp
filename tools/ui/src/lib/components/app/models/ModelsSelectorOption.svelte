@@ -13,6 +13,7 @@
 	import type { ModelOption } from '$lib/types/models';
 	import { ServerModelStatus } from '$lib/enums';
 	import { modelsStore, routerModels } from '$lib/stores/models.svelte';
+	import { getModelLoadPhase } from './utils';
 
 	interface Props {
 		option: ModelOption;
@@ -39,17 +40,22 @@
 	}: Props = $props();
 
 	let currentRouterModels = $derived(routerModels());
-	let serverStatus = $derived.by(() => {
-		const model = currentRouterModels.find((m) => m.id === option.model);
-		return (model?.status?.value as ServerModelStatus) ?? null;
-	});
+	let model = $derived(currentRouterModels.find((m) => m.id === option.model) ?? null);
+	// store maps crash (failed=true) -> FAILED in one place
+	let serverStatus = $derived(modelsStore.getModelStatus(option.model));
+	let loadStage = $derived(model?.status?.stage ?? null);
+	let loadProgress = $derived(model?.status?.progress ?? null);
+	let loadPhase = $derived(getModelLoadPhase(loadStage));
 	let isOperationInProgress = $derived(modelsStore.isModelOperationInProgress(option.model));
 	let isFailed = $derived(serverStatus === ServerModelStatus.FAILED);
 	let isSleeping = $derived(serverStatus === ServerModelStatus.SLEEPING);
 	let isLoaded = $derived(
 		(serverStatus === ServerModelStatus.LOADED || isSleeping) && !isOperationInProgress
 	);
-	let isLoading = $derived(serverStatus === ServerModelStatus.LOADING || isOperationInProgress);
+	// don't keep spinning on a crashed instance while the operation winds down
+	let isLoading = $derived(
+		!isFailed && (serverStatus === ServerModelStatus.LOADING || isOperationInProgress)
+	);
 </script>
 
 <div
@@ -113,7 +119,32 @@
 		</div>
 
 		{#if isLoading}
-			<Loader2 class="h-4 w-4 animate-spin text-muted-foreground" />
+			{#if loadPhase}
+				{@const Icon = loadPhase.icon}
+				<span
+					class="flex items-center gap-1 text-muted-foreground"
+					title={loadPhase.numeric && loadProgress != null
+						? `${loadPhase.label} ${Math.round(loadProgress * 100)}%`
+						: loadPhase.label}
+				>
+					<!-- a numeric phase with no % yet (e.g. download before sizes are known) is indeterminate: pulse so it doesn't look frozen -->
+					<Icon
+						class={[
+							'h-3.5 w-3.5',
+							loadPhase.anim,
+							!loadPhase.anim && loadProgress == null && 'animate-pulse'
+						]}
+					/>
+					{#if loadPhase.numeric && loadProgress != null}
+						<!-- reserve room for "100%" so the w-max menu doesn't resize as the % grows -->
+						<span class="w-9 shrink-0 text-center font-mono text-xs tabular-nums">
+							{Math.round(loadProgress * 100)}%
+						</span>
+					{/if}
+				</span>
+			{:else}
+				<Loader2 class="h-4 w-4 animate-spin text-muted-foreground" />
+			{/if}
 		{:else if isFailed}
 			<div class="flex w-4 items-center justify-center">
 				<CircleAlert class="h-3.5 w-3.5 text-red-500 group-hover:hidden" />

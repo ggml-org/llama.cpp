@@ -1,9 +1,34 @@
+import { ArrowDownToLine, Flame, Layers, Settings } from '@lucide/svelte';
 import { SvelteMap } from 'svelte/reactivity';
 import type { ModelOption } from '$lib/types/models';
 
 export interface ModelItem {
 	option: ModelOption;
 	flatIndex: number;
+}
+
+export interface ModelLoadPhase {
+	icon: typeof ArrowDownToLine;
+	label: string;
+	numeric: boolean; // true => phase reports 0..1 progress shown as a %
+	anim: string; // animation class for indeterminate phases
+}
+
+// Map a router load stage (COMMON_LOAD_STAGE_* in common/common.h) to its presentation;
+// shared by the dropdown trigger and the option rows so both render the same icon/label/%.
+export function getModelLoadPhase(stage: string | null | undefined): ModelLoadPhase | null {
+	switch (stage) {
+		case 'download':
+			return { icon: ArrowDownToLine, label: 'Downloading', numeric: true, anim: '' };
+		case 'load':
+			return { icon: Layers, label: 'Loading weights', numeric: true, anim: '' };
+		case 'warmup':
+			return { icon: Flame, label: 'Warming up', numeric: false, anim: 'animate-pulse' };
+		case 'finalize':
+			return { icon: Settings, label: 'Finalizing', numeric: false, anim: 'animate-spin' };
+		default:
+			return null;
+	}
 }
 
 export interface OrgGroup {

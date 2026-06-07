@@ -68,6 +68,8 @@ struct server_model_meta {
     int stop_timeout = 0; // seconds to wait before force-killing the model instance during shutdown
     mtmd_caps multimodal; // multimodal capabilities
     bool need_download = false; // whether the model needs to be downloaded before loading
+    std::string load_stage = "";  // current load stage ("download"/"load"/"warmup"/"finalize"), valid while status == LOADING
+    float load_progress = -1.0f;  // progress 0..1 within the current stage, or <0 if indeterminate
 
     bool is_ready() const {
         return status == SERVER_MODEL_STATUS_LOADED;
@@ -150,6 +152,7 @@ public:
     // update the status of a model instance (thread-safe)
     void update_status(const std::string & name, server_model_status status, int exit_code);
     void update_loaded_info(const std::string & name, std::string & raw_info);
+    void update_stage(const std::string & name, const std::string & stage, float progress);
 
     // wait until the model instance is fully loaded (thread-safe)
     // return when the model no longer in "loading" state
@@ -172,6 +175,19 @@ public:
 
     // notify the router server that the sleeping state has changed
     static void notify_router_sleeping_state(bool sleeping);
+
+    // notify the router server of the current load stage (progress < 0 => indeterminate phase)
+    static void notify_router_stage(const char * stage, float progress);
+
+    // llama_progress_callback for tensor loading: forwards throttled "load" progress to the router
+    static bool child_load_progress_callback(float progress, void * user_data);
+
+    // common_params load_stage_callback: forwards a coarse phase marker (e.g. "finalize") to the router
+    static void child_load_stage_callback(const char * stage, float progress, void * user_data);
+
+    // register a process-wide download progress callback that forwards "download" progress to the router
+    // (must be called before model download happens, i.e. before common_params_parse)
+    static void register_child_download_progress();
 };
 
 struct server_models_routes {

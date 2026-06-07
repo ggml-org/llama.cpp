@@ -423,6 +423,15 @@ struct lr_opt {
 
 struct ggml_opt_optimizer_params common_opt_lr_pars(void * userdata);
 
+// load-stage names for common_load_stage_callback; keep the webui switch in sync (getModelLoadPhase in models/utils.ts)
+#define COMMON_LOAD_STAGE_DOWNLOAD "download" // file download (router child only)
+#define COMMON_LOAD_STAGE_LOAD     "load"     // tensor loading
+#define COMMON_LOAD_STAGE_WARMUP   "warmup"   // empty-run warmup
+#define COMMON_LOAD_STAGE_FINALIZE "finalize" // post-warmup setup: chat templates / seq-rm tests (context alloc already happened during load)
+
+// coarse load-stage reporting for router mode; progress in [0,1], or <0 if indeterminate
+typedef void (*common_load_stage_callback)(const char * stage, float progress, void * user_data);
+
 struct common_params {
     int32_t n_predict             =    -1; // max. number of new tokens to predict, -1 == no limit
     int32_t n_ctx                 =     0; // context size, 0 == context the model was trained with
@@ -701,6 +710,9 @@ struct common_params {
     // return false from callback to abort model loading or true to continue
     llama_progress_callback load_progress_callback = NULL;
     void *                  load_progress_callback_user_data = NULL;
+    // optional callback for coarse load-stage reporting (used by router mode to drive a progress UI)
+    common_load_stage_callback load_stage_callback = NULL;
+    void *                     load_stage_callback_user_data = NULL;
     bool no_alloc = false; // Don't allocate model buffers
 };
 

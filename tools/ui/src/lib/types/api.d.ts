@@ -65,6 +65,14 @@ export interface ApiModelStatus {
 	value: ServerModelStatus;
 	/** Command line arguments used when loading (only for loaded models) */
 	args?: string[];
+	/** Current load phase while loading: "download" | "load" | "warmup" | "finalize" */
+	stage?: string;
+	/** Progress 0..1 within the current phase; absent for indeterminate phases */
+	progress?: number;
+	/** True when the model instance crashed/exited with a non-zero code (value stays "unloaded") */
+	failed?: boolean;
+	/** Exit code of the crashed instance (present when failed is true) */
+	exit_code?: number;
 }
 
 /**

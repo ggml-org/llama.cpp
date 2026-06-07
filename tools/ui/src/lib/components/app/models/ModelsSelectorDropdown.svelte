@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { ChevronDown, Loader2, Package } from '@lucide/svelte';
+	import { Loader2, Package } from '@lucide/svelte';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { KeyboardKey } from '$lib/enums';
@@ -9,7 +9,8 @@
 		DropdownMenuSearchable,
 		ModelId,
 		ModelsSelectorList,
-		ModelsSelectorOption
+		ModelsSelectorOption,
+		ModelsSelectorTriggerIndicator
 	} from '$lib/components/app';
 	import type { ModelItem } from './utils';
 
@@ -123,7 +124,7 @@
 							<DropdownMenu.Trigger
 								{...props}
 								class={[
-									`inline-grid cursor-pointer grid-cols-[1fr_auto_1fr] items-center gap-1.5 rounded-sm bg-background px-1.5 py-1 text-xs shadow-sm transition hover:bg-muted-foreground/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-muted-foreground/15 dark:text-secondary-foreground`,
+									`inline-flex cursor-pointer items-center gap-1.5 rounded-sm bg-background px-1.5 py-1 text-xs shadow-sm transition hover:bg-muted-foreground/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-muted-foreground/15 dark:text-secondary-foreground`,
 									!ms.isCurrentModelInCache
 										? 'bg-red-400/10 !text-red-400 hover:bg-red-400/20 hover:text-red-400'
 										: forceForegroundText
@@ -141,19 +142,18 @@
 								{#if selectedOption}
 									<ModelId
 										modelId={selectedOption.model}
-										class="min-w-0 overflow-hidden"
+										class="min-w-0 flex-1 overflow-hidden"
 										hideOrgName={false}
 										hideQuantization
 									/>
 								{:else}
-									<span class="min-w-0 font-medium">Select model</span>
+									<span class="min-w-0 flex-1 text-left font-medium">Select model</span>
 								{/if}
 
-								{#if ms.updating || ms.isLoadingModel}
-									<Loader2 class="h-3 w-3.5 shrink-0 animate-spin" />
-								{:else}
-									<ChevronDown class="h-3 w-3.5 shrink-0" />
-								{/if}
+								<ModelsSelectorTriggerIndicator
+									loading={ms.updating || ms.isLoadingModel}
+									modelId={selectedOption?.model}
+								/>
 							</DropdownMenu.Trigger>
 						{/snippet}
 					</Tooltip.Trigger>

@@ -1,11 +1,12 @@
 <script lang="ts">
-	import { ChevronDown, Loader2, Package } from '@lucide/svelte';
+	import { Loader2, Package } from '@lucide/svelte';
 	import * as Sheet from '$lib/components/ui/sheet';
 	import { useModelsSelector } from '$lib/hooks/use-models-selector.svelte';
 	import {
 		DialogModelInformation,
 		ModelId,
 		ModelsSelectorList,
+		ModelsSelectorTriggerIndicator,
 		SearchInput
 	} from '$lib/components/app';
 
@@ -83,10 +84,10 @@
 				<Package class="h-3.5 w-3.5 shrink-0" />
 
 				{#if !selectedOption}
-					<span class="min-w-0 font-medium">Select model</span>
+					<span class="min-w-0 flex-1 text-left font-medium">Select model</span>
 				{:else}
 					<ModelId
-						class="text-xs"
+						class="min-w-0 flex-1 text-xs"
 						modelId={selectedOption?.model || ''}
 						hideQuantization
 						hideTags
@@ -94,11 +95,10 @@
 					/>
 				{/if}
 
-				{#if ms.updating || ms.isLoadingModel}
-					<Loader2 class="h-3 w-3.5 shrink-0 animate-spin" />
-				{:else}
-					<ChevronDown class="h-3 w-3.5 shrink-0" />
-				{/if}
+				<ModelsSelectorTriggerIndicator
+					loading={ms.updating || ms.isLoadingModel}
+					modelId={selectedOption?.model}
+				/>
 			</button>
 
 			<Sheet.Root bind:open={sheetOpen} onOpenChange={handleSheetOpenChange}>
