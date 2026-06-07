@@ -77,7 +77,7 @@ class Cohere2MoeModel(TextModel):
         return "cohere2-moe"
 
     def _set_vocab_gpt2(self) -> None:
-        tokens, toktypes, tokpre = self.get_vocab_base(tokenizer_type="cohere2")
+        tokens, toktypes, tokpre = self.get_vocab_base()
         self.gguf_writer.add_tokenizer_model("gpt2")
         self.gguf_writer.add_tokenizer_pre(tokpre)
         self.gguf_writer.add_token_list(tokens)
@@ -87,20 +87,7 @@ class Cohere2MoeModel(TextModel):
         chat_template_jinja = self.dir_model / "chat_template.jinja"
         if chat_template_jinja.is_file():
             with open(chat_template_jinja, "r", encoding="utf-8") as f:
-                chat_template = f.read()
-            chat_template = chat_template.replace(
-                '{%- set reasoning = reasoning if reasoning is not undefined else (false if reasoning_effort is defined and reasoning_effort | lower == "none" else true) -%}',
-                '{%- set reasoning = reasoning if reasoning is not undefined else (false if reasoning_effort is defined and reasoning_effort | lower == "none" else (enable_thinking if enable_thinking is defined else true)) -%}',
-            )
-            chat_template = chat_template.replace(
-                "    {%- if msg.thinking -%}\n{{ msg.thinking }}",
-                "    {%- if msg.reasoning_content -%}\n{{ msg.reasoning_content }}\n    {%- elif msg.thinking -%}\n{{ msg.thinking }}",
-            )
-            chat_template = chat_template.replace(
-                "message.thinking or (message.content and message.content[0].type == \"thinking\")",
-                "message.reasoning_content or message.thinking or (message.content and message.content[0].type == \"thinking\")",
-            )
-            special_vocab.chat_template = chat_template
+                special_vocab.chat_template = f.read()
         special_vocab.add_to_gguf(self.gguf_writer)
 
     def set_gguf_parameters(self):
@@ -151,10 +138,6 @@ class Cohere2MoeModel(TextModel):
         return name, gen
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        if name == "lm_head.weight":
-            logger.info("Skipping tied output layer 'lm_head.weight'")
-            return
-
         if (m := self._expert_tensor_re.fullmatch(name)) is not None:
             n_experts = self.hparams["num_experts"]
             layer_idx = int(m.group(1))
