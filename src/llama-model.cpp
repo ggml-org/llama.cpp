@@ -155,7 +155,7 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
             return new llama_model_command_r(params);
         case LLM_ARCH_COHERE2:
             return new llama_model_cohere2(params);
-        case LLM_ARCH_COHERE2_MOE:
+        case LLM_ARCH_COHERE2MOE:
             return new llama_model_cohere2_moe(params);
         case LLM_ARCH_DBRX:
             return new llama_model_dbrx(params);
@@ -1843,7 +1843,7 @@ void llama_model::print_info() const {
         }
 
         if (arch == LLM_ARCH_MELLUM ||
-                arch == LLM_ARCH_COHERE2_MOE ||
+                arch == LLM_ARCH_COHERE2MOE ||
                 arch == LLM_ARCH_QWEN3MOE ||
                 arch == LLM_ARCH_OPENAI_MOE ||
                 arch == LLM_ARCH_QWEN3VLMOE ||
@@ -2353,7 +2353,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_XVERSE:
         case LLM_ARCH_COMMAND_R:
         case LLM_ARCH_COHERE2:
-        case LLM_ARCH_COHERE2_MOE:
+        case LLM_ARCH_COHERE2MOE:
         case LLM_ARCH_OLMO:
         case LLM_ARCH_ARCTIC:
         case LLM_ARCH_DEEPSEEK:

@@ -60,7 +60,7 @@ class Cohere2Model(TextModel):
 
 @ModelBase.register("Cohere2MoeForCausalLM")
 class Cohere2MoeModel(TextModel):
-    model_arch = gguf.MODEL_ARCH.COHERE2_MOE
+    model_arch = gguf.MODEL_ARCH.COHERE2MOE
     _n_main_layers: int | None = None
     _expert_tensor_re = re.compile(
         r"model\.layers\.(\d+)\.mlp\.experts\.(\d+)\.(down_proj|gate_proj|up_proj)\.weight"

@@ -284,8 +284,8 @@ llama_model_cohere2_moe::graph::graph(const llama_model & model, const llm_graph
 }
 
 llama_model_cohere2_moe::graph_mtp::graph_mtp(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
-    GGML_ASSERT(hparams.n_layer_nextn > 0 && "COHERE2_MOE MTP requires n_layer_nextn > 0");
-    GGML_ASSERT(hparams.n_layer_nextn == 1 && "COHERE2_MOE MTP currently only supports a single MTP block");
+    GGML_ASSERT(hparams.n_layer_nextn > 0 && "COHERE2MOE MTP requires n_layer_nextn > 0");
+    GGML_ASSERT(hparams.n_layer_nextn == 1 && "COHERE2MOE MTP currently only supports a single MTP block");
 
     const int64_t n_embd_head = hparams.n_embd_head_v();
     GGML_ASSERT(n_embd_head == hparams.n_embd_head_k());
@@ -412,7 +412,7 @@ llama_model_cohere2_moe::graph_mtp::graph_mtp(const llama_model & model, const l
     ggml_tensor * head_norm_w = layer.nextn.shared_head_norm
             ? layer.nextn.shared_head_norm
             : model.output_norm;
-    GGML_ASSERT(head_norm_w && "COHERE2_MOE MTP: missing both nextn.shared_head_norm and output_norm");
+    GGML_ASSERT(head_norm_w && "COHERE2MOE MTP: missing both nextn.shared_head_norm and output_norm");
     cur = build_norm(cur, head_norm_w, nullptr, LLM_NORM_RMS, -1);
 
     cb(cur, "h_nextn", -1);
@@ -422,7 +422,7 @@ llama_model_cohere2_moe::graph_mtp::graph_mtp(const llama_model & model, const l
     cb(cur, "mtp_shared_head_norm", -1);
 
     ggml_tensor * head_w = layer.nextn.shared_head_head ? layer.nextn.shared_head_head : model.output;
-    GGML_ASSERT(head_w && "COHERE2_MOE MTP: missing LM head (nextn.shared_head_head or model.output)");
+    GGML_ASSERT(head_w && "COHERE2MOE MTP: missing LM head (nextn.shared_head_head or model.output)");
     cur = build_lora_mm(head_w, cur, layer.nextn.shared_head_head ? layer.nextn.shared_head_head_s : nullptr);
 
     if (hparams.f_logit_scale) {
