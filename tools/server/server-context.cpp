@@ -929,23 +929,13 @@ private:
 
             SRV_INF("loading draft model '%s'\n", params_spec.mparams.path.c_str());
 
-            const bool spec_mtp = std::find(params_base.speculative.types.begin(),
-                                            params_base.speculative.types.end(),
-                                            COMMON_SPECULATIVE_TYPE_DRAFT_MTP) != params_base.speculative.types.end();
-
             auto params_dft = params_base;
 
             params_dft.devices      = params_spec.devices;
             params_dft.model        = params_spec.mparams;
             params_dft.n_gpu_layers = params_spec.n_gpu_layers;
-            // TODO: find a better way to expose that the cache is shared
-            if (spec_mtp) {
-                params_dft.cache_type_k = params_base.cache_type_k;
-                params_dft.cache_type_v = params_base.cache_type_v;
-            } else {
-                params_dft.cache_type_k = params_spec.cache_type_k;
-                params_dft.cache_type_v = params_spec.cache_type_v;
-            }
+            params_dft.cache_type_k = params_spec.cache_type_k;
+            params_dft.cache_type_v = params_spec.cache_type_v;
 
             if (params_spec.cpuparams.n_threads > 0) {
                 params_dft.cpuparams.n_threads       = params_spec.cpuparams.n_threads;
@@ -963,6 +953,10 @@ private:
             }
 
             auto cparams = common_context_params_to_llama(params_dft);
+
+            const bool spec_mtp = std::find(params_base.speculative.types.begin(),
+                                            params_base.speculative.types.end(),
+                                            COMMON_SPECULATIVE_TYPE_DRAFT_MTP) != params_base.speculative.types.end();
 
             if (spec_mtp) {
                 cparams.ctx_type = LLAMA_CONTEXT_TYPE_MTP;
