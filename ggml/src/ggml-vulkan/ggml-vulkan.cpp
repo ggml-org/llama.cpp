@@ -2948,8 +2948,6 @@ static vk_buffer ggml_vk_create_buffer(vk_device& device, size_t size, const std
 
     vk::PhysicalDeviceMemoryProperties mem_props = device->physical_device.getMemoryProperties();
 
-    uint32_t selected_memory_type_idx = UINT32_MAX;
-
     const vk::MemoryPriorityAllocateInfoEXT mem_priority_info { 1.0f };
 
     vk::MemoryAllocateFlagsInfo mem_flags_info { mem_flags };
@@ -2992,7 +2990,6 @@ static vk_buffer ggml_vk_create_buffer(vk_device& device, size_t size, const std
             return {};
         }
 
-        selected_memory_type_idx = memory_type_idx;
         buf->memory_property_flags = mem_props.memoryTypes[memory_type_idx].propertyFlags;
         try {
             vk::ImportMemoryHostPointerInfoEXT import_info;
@@ -3018,7 +3015,6 @@ static vk_buffer ggml_vk_create_buffer(vk_device& device, size_t size, const std
                 try {
                     buf->device_memory = device->device.allocateMemory({ mem_req.size, *mtype_it, &mem_flags_info });
                     buf->memory_property_flags = mem_props.memoryTypes[*mtype_it].propertyFlags;
-                    selected_memory_type_idx = *mtype_it;
                     done = true;
                     break;
                 } catch (const vk::SystemError& e) {
@@ -3059,14 +3055,6 @@ static vk_buffer ggml_vk_create_buffer(vk_device& device, size_t size, const std
     if (device->buffer_device_address) {
         const vk::BufferDeviceAddressInfo addressInfo(buf->buffer);
         buf->bda_addr = device->device.getBufferAddress(addressInfo);
-    }
-
-    if (selected_memory_type_idx != UINT32_MAX) {
-        GGML_LOG_DEBUG("ggml_vulkan: Allocated buffer of size %zu using memory type %u flags %s (import=%d)\n",
-                size,
-                (unsigned) selected_memory_type_idx,
-                to_string(buf->memory_property_flags).c_str(),
-                import_ptr ? 1 : 0);
     }
 
     device->memory_logger->log_allocation(buf, size);
