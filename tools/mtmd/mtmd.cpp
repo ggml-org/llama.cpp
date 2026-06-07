@@ -747,11 +747,19 @@ struct mtmd_tokenizer {
         const mtmd_bitmap * bitmap;
     };
     std::vector<part> parts;
-    std::vector<mtmd::bitmap> bm_from_lazy; // they will be freed when mtmd_tokenizer finishes
-    // TODO @ngxson : refactor, free bm_from_lazy progressively
+    // these will be freed when mtmd_tokenizer finishes
+    std::vector<mtmd::bitmap> bm_from_lazy; // TODO @ngxson : refactor, free bm_from_lazy progressively
+    std::vector<const char *> text_from_lazy;
 
     mtmd_input_chunks cur;
     uint32_t n_images_added = 0; // 0-based index assigned to the next image chunk
+
+    ~mtmd_tokenizer() {
+        // note: mtmd::bitmap is already RAII
+        for (auto & str : text_from_lazy) {
+            free((void *)str);
+        }
+    }
 
     mtmd_tokenizer(mtmd_context * ctx,
             const mtmd_input_text * text,
@@ -795,7 +803,7 @@ struct mtmd_tokenizer {
         for (auto & p : parts) {
             if (p.bitmap != nullptr && p.bitmap->lazy_callback) {
                 for (size_t i = 0;; i++) {
-                    const char * out_str = nullptr;
+                    char * out_str = nullptr;
                     mtmd_bitmap * out_bm = nullptr;
                     int res = p.bitmap->lazy_callback(i,
                                     p.bitmap->lazy_user_data,
@@ -810,7 +818,8 @@ struct mtmd_tokenizer {
                             auto & ptr = bm_from_lazy.emplace_back(out_bm); // remember to free it later
                             expanded.push_back({"", ptr.ptr.get()});
                         } else if (out_str) {
-                            expanded.push_back({out_str, nullptr});
+                            auto & ptr = text_from_lazy.emplace_back(out_str); // remember to free it later
+                            expanded.push_back({ptr, nullptr});
                         }
                     } else if (res == 1) {
                         // EOF: lazy part removes itself (not added to expanded)

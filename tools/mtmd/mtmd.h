@@ -170,7 +170,7 @@ MTMD_API void         mtmd_bitmap_set_id(mtmd_bitmap * bitmap, const char * id);
 // - allow tracking the whole video with a single ID (for example, the file hash)
 
 // set (*out_bitmap) to non-nullptr to emit a bitmap chunk; it will be freed automatically
-// set (*out_text) to non-nullptr to emit a text chunk
+// set (*out_text) to non-nullptr to emit a text chunk; it must be heap-allocated, null-terminated and will be freed automatically
 // either out_bitmap or out_text can be set, but not both
 // out_bitmap cannot be another lazy bitmap (no nested lazy allowed)
 // return value:
@@ -181,7 +181,7 @@ typedef int(* mtmd_bitmap_lazy_callback)(
     size_t chunk_idx,
     void * user_data,
     mtmd_bitmap ** out_bitmap,
-    const char ** out_text);
+    char ** out_text);
 
 MTMD_API mtmd_bitmap * mtmd_bitmap_init_lazy(mtmd_context * ctx,
                                              const char * id, // usually set to file hash
