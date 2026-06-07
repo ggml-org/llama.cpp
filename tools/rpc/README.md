@@ -486,6 +486,31 @@ table; use server tracing to measure remote handler time. Tracing is disabled by
 default and should be used for diagnostics because it adds timing and logging
 overhead.
 
+### Compression probing
+
+Set `GGML_RPC_COMPRESSION_PROBE=1` on the RPC client to inspect whether tensor
+payload bytes look compressible without changing the RPC wire format:
+
+```bash
+GGML_RPC_COMPRESSION_PROBE=1 ./build/bin/llama-bench --rpc 192.0.2.10:50052 ...
+```
+
+The report is printed when RPC backends are freed and covers `SET_TENSOR` and
+`GET_TENSOR` payloads. It includes sampled bytes, sample coverage, Shannon
+entropy in bits per byte, an ideal entropy lower-bound ratio, a simple byte-run
+estimate, zero-byte percentage, maximum repeated-byte run, and local probe time.
+High entropy near 8 bits per byte and byte-run ratios above 1.0 mean the simple
+probe did not find an easy compression win for that payload. Lower entropy or
+many repeated bytes identify candidates for a real codec experiment with encode
+time, decode time, compressed size, and end-to-end tokens-per-second checks.
+
+By default, the probe samples up to 256 KiB per payload so cold model uploads do
+not spend excessive time in diagnostics. Large payloads are sampled from the
+beginning, middle, and end rather than only from the prefix. Use
+`GGML_RPC_COMPRESSION_PROBE_MAX_SAMPLE` to change that limit; values above
+16 MiB are clamped. This is a diagnostic tool only; it does not compress,
+decompress, or alter network traffic.
+
 ### Model placement reporting
 
 Set `LLAMA_LOG_MODEL_PLACEMENT=1` on the RPC client to print the model tensor

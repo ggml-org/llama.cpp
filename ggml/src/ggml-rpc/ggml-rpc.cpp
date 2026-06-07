@@ -21,6 +21,7 @@
 #include <chrono>
 #include <cerrno>
 #include <cstdlib>
+#include <cmath>
 #include <limits>
 
 static const char * RPC_DEBUG = std::getenv("GGML_RPC_DEBUG");
@@ -281,6 +282,45 @@ static size_t rpc_cache_min_size() {
     return cache_min_size;
 }
 
+static bool rpc_compression_probe_enabled() {
+    static const bool enabled = []() {
+        const char * env = std::getenv("GGML_RPC_COMPRESSION_PROBE");
+        return env != nullptr && env[0] != '\0' && strcmp(env, "0") != 0;
+    }();
+
+    return enabled;
+}
+
+static constexpr size_t RPC_COMPRESSION_PROBE_DEFAULT_SAMPLE = 256*1024;
+static constexpr size_t RPC_COMPRESSION_PROBE_MAX_SAMPLE     = 16*1024*1024;
+
+static size_t rpc_compression_probe_max_sample() {
+    static const size_t max_sample = []() {
+        const char * env = std::getenv("GGML_RPC_COMPRESSION_PROBE_MAX_SAMPLE");
+        if (env == nullptr || env[0] == '\0') {
+            return RPC_COMPRESSION_PROBE_DEFAULT_SAMPLE;
+        }
+
+        char * end = nullptr;
+        errno = 0;
+        unsigned long long parsed = std::strtoull(env, &end, 10);
+        if (env[0] == '-' || env[0] == '+' || errno != 0 || end == env || *end != '\0' ||
+                parsed > std::numeric_limits<size_t>::max()) {
+            GGML_LOG_WARN("Ignoring invalid GGML_RPC_COMPRESSION_PROBE_MAX_SAMPLE='%s'\n", env);
+            return RPC_COMPRESSION_PROBE_DEFAULT_SAMPLE;
+        }
+        if (parsed > RPC_COMPRESSION_PROBE_MAX_SAMPLE) {
+            GGML_LOG_WARN("Clamping GGML_RPC_COMPRESSION_PROBE_MAX_SAMPLE='%s' to %zu bytes\n",
+                    env, RPC_COMPRESSION_PROBE_MAX_SAMPLE);
+            return RPC_COMPRESSION_PROBE_MAX_SAMPLE;
+        }
+
+        return static_cast<size_t>(parsed);
+    }();
+
+    return max_sample;
+}
+
 static constexpr size_t RPC_WIRE_SIZE_SIZE   = sizeof(uint64_t);
 static constexpr size_t RPC_WIRE_CMD_SIZE    = sizeof(uint8_t);
 static constexpr size_t RPC_WIRE_HEADER_SIZE = RPC_WIRE_CMD_SIZE + RPC_WIRE_SIZE_SIZE;
@@ -306,6 +346,17 @@ struct rpc_trace_tensor_stat {
     uint64_t elapsed_ns = 0;
 };
 
+struct rpc_compression_probe_stat {
+    uint64_t calls = 0;
+    uint64_t bytes = 0;
+    uint64_t sampled_bytes = 0;
+    uint64_t zero_bytes = 0;
+    uint64_t rle_estimated_bytes = 0;
+    uint64_t longest_run = 0;
+    uint64_t probe_ns = 0;
+    std::array<uint64_t, 256> hist = {};
+};
+
 struct rpc_trace_state {
     std::mutex mutex;
     bool has_activity = false;
@@ -316,6 +367,7 @@ struct rpc_trace_state {
     std::unordered_map<std::string, rpc_trace_tensor_stat> tensor_ops;
     std::unordered_map<std::string, rpc_trace_copy_stat> cross_endpoint_copies;
     std::unordered_map<std::string, rpc_trace_copy_stat> cross_endpoint_tensor_copies;
+    std::unordered_map<std::string, rpc_compression_probe_stat> compression_probe;
 };
 
 struct rpc_trace_server_span;
@@ -475,8 +527,89 @@ static void rpc_trace_record_tensor_op(
     stat.elapsed_ns += elapsed_ns;
 }
 
+static void rpc_compression_probe_scan_bytes(
+        const uint8_t * bytes, size_t size,
+        std::array<uint64_t, 256> & hist, uint64_t & zero_bytes,
+        uint64_t & rle_estimated_bytes, uint64_t & longest_run) {
+    size_t i = 0;
+    while (i < size) {
+        const uint8_t value = bytes[i];
+        size_t run = 1;
+        while (i + run < size && bytes[i + run] == value) {
+            run++;
+        }
+
+        hist[value] += run;
+        if (value == 0) {
+            zero_bytes += run;
+        }
+        longest_run = std::max<uint64_t>(longest_run, run);
+        rle_estimated_bytes += 2*((run + 254)/255);
+        i += run;
+    }
+}
+
+static void rpc_compression_probe_record(
+        const char * op, const std::string & endpoint, const char * tensor_name, const void * data, size_t size) {
+    if (!rpc_compression_probe_enabled() || data == nullptr || size == 0) {
+        return;
+    }
+
+    const uint64_t start_ns = rpc_trace_now_ns();
+    const uint8_t * bytes = (const uint8_t *) data;
+    const size_t sample_budget = std::min(size, rpc_compression_probe_max_sample());
+    if (sample_budget == 0) {
+        return;
+    }
+
+    std::array<uint64_t, 256> hist = {};
+    uint64_t zero_bytes = 0;
+    uint64_t rle_estimated_bytes = 0;
+    uint64_t longest_run = 0;
+    uint64_t sampled_bytes = 0;
+
+    if (sample_budget == size) {
+        rpc_compression_probe_scan_bytes(bytes, size, hist, zero_bytes, rle_estimated_bytes, longest_run);
+        sampled_bytes = size;
+    } else {
+        const size_t window_count = std::min<size_t>(3, sample_budget);
+        size_t consumed = 0;
+        for (size_t i = 0; i < window_count; ++i) {
+            const size_t remaining_windows = window_count - i;
+            const size_t window_size = (sample_budget - consumed + remaining_windows - 1)/remaining_windows;
+            size_t offset = 0;
+            if (window_count == 1 || i == 0) {
+                offset = 0;
+            } else if (i + 1 == window_count) {
+                offset = size - window_size;
+            } else {
+                offset = (size - window_size)/2;
+            }
+            rpc_compression_probe_scan_bytes(bytes + offset, window_size,
+                    hist, zero_bytes, rle_estimated_bytes, longest_run);
+            sampled_bytes += window_size;
+            consumed += window_size;
+        }
+    }
+
+    auto & state = rpc_trace_get_state();
+    std::lock_guard<std::mutex> lock(state.mutex);
+    state.has_activity = true;
+    auto & stat = state.compression_probe[rpc_trace_key3(op, endpoint, tensor_name)];
+    stat.calls++;
+    stat.bytes += size;
+    stat.sampled_bytes += sampled_bytes;
+    stat.zero_bytes += zero_bytes;
+    stat.rle_estimated_bytes += rle_estimated_bytes;
+    stat.longest_run = std::max(stat.longest_run, longest_run);
+    stat.probe_ns += rpc_trace_now_ns() - start_ns;
+    for (size_t b = 0; b < hist.size(); ++b) {
+        stat.hist[b] += hist[b];
+    }
+}
+
 static void rpc_trace_client_backend_init() {
-    if (!rpc_trace_enabled()) {
+    if (!rpc_trace_enabled() && !rpc_compression_probe_enabled()) {
         return;
     }
 
@@ -486,7 +619,7 @@ static void rpc_trace_client_backend_init() {
 }
 
 static bool rpc_trace_client_backend_free() {
-    if (!rpc_trace_enabled()) {
+    if (!rpc_trace_enabled() && !rpc_compression_probe_enabled()) {
         return false;
     }
 
@@ -575,6 +708,66 @@ static void rpc_trace_print_tensor_ops(
     }
 }
 
+static double rpc_compression_probe_entropy_bits_per_byte(const rpc_compression_probe_stat & stat) {
+    if (stat.sampled_bytes == 0) {
+        return 0.0;
+    }
+
+    double entropy = 0.0;
+    const double total = (double) stat.sampled_bytes;
+    for (uint64_t count : stat.hist) {
+        if (count == 0) {
+            continue;
+        }
+        const double p = (double) count/total;
+        entropy -= p*std::log2(p);
+    }
+    return entropy;
+}
+
+static void rpc_compression_probe_print(
+        FILE * stream, const std::unordered_map<std::string, rpc_compression_probe_stat> & stats) {
+    std::vector<std::pair<std::string, rpc_compression_probe_stat>> rows;
+    rows.reserve(stats.size());
+    for (const auto & entry : stats) {
+        if (entry.second.calls != 0) {
+            rows.push_back(entry);
+        }
+    }
+    std::sort(rows.begin(), rows.end(), [](const auto & lhs, const auto & rhs) {
+        if (lhs.second.bytes != rhs.second.bytes) {
+            return lhs.second.bytes > rhs.second.bytes;
+        }
+        return lhs.second.sampled_bytes > rhs.second.sampled_bytes;
+    });
+
+    fprintf(stream, "ggml-rpc compression probe tensor payloads (top by bytes):\n");
+    fprintf(stream, "  %-16s %-24s %-42s %8s %14s %14s %10s %11s %12s %10s %10s %10s %12s\n",
+            "operation", "endpoint", "tensor", "calls", "bytes", "sampled",
+            "coverage", "entropy_bpb", "ideal_ratio", "rle_ratio", "zero_pct", "max_run", "probe_ms");
+    const size_t limit = std::min<size_t>(rows.size(), 24);
+    for (size_t i = 0; i < limit; ++i) {
+        std::string op;
+        std::string endpoint;
+        std::string tensor;
+        rpc_trace_split_key3(rows[i].first, op, endpoint, tensor);
+        const auto & stat = rows[i].second;
+        const double entropy = rpc_compression_probe_entropy_bits_per_byte(stat);
+        const double coverage = stat.bytes == 0 ? 0.0 : 100.0*(double) stat.sampled_bytes/(double) stat.bytes;
+        const double ideal_ratio = stat.sampled_bytes == 0 ? 0.0 : entropy/8.0;
+        const double rle_ratio =
+            stat.sampled_bytes == 0 ? 0.0 : (double) stat.rle_estimated_bytes/(double) stat.sampled_bytes;
+        const double zero_pct =
+            stat.sampled_bytes == 0 ? 0.0 : 100.0*(double) stat.zero_bytes/(double) stat.sampled_bytes;
+        const double probe_ms = (double) stat.probe_ns/1000000.0;
+        fprintf(stream, "  %-16s %-24s %-42s %8" PRIu64 " %14" PRIu64 " %14" PRIu64
+                        " %9.2f%% %11.3f %12.3f %10.3f %10.2f %10" PRIu64 " %12.3f\n",
+                op.c_str(), endpoint.c_str(), tensor.c_str(),
+                stat.calls, stat.bytes, stat.sampled_bytes,
+                coverage, entropy, ideal_ratio, rle_ratio, zero_pct, stat.longest_run, probe_ms);
+    }
+}
+
 static bool rpc_trace_has_cmd_stats(const rpc_trace_cmd_stat * stats) {
     for (int i = 0; i < RPC_CMD_COUNT; ++i) {
         if (stats[i].calls != 0) {
@@ -612,6 +805,15 @@ static bool rpc_trace_has_tensor_stats(const std::unordered_map<std::string, rpc
     return false;
 }
 
+static bool rpc_compression_probe_has_stats(const std::unordered_map<std::string, rpc_compression_probe_stat> & stats) {
+    for (const auto & entry : stats) {
+        if (entry.second.calls != 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static void rpc_trace_print_cross_endpoint_tensor_copies(
         FILE * stream, const std::unordered_map<std::string, rpc_trace_copy_stat> & stats) {
     std::vector<std::pair<std::string, rpc_trace_copy_stat>> rows;
@@ -639,7 +841,7 @@ static void rpc_trace_print_cross_endpoint_tensor_copies(
 }
 
 static void rpc_trace_report() {
-    if (!rpc_trace_enabled()) {
+    if (!rpc_trace_enabled() && !rpc_compression_probe_enabled()) {
         return;
     }
 
@@ -654,7 +856,9 @@ static void rpc_trace_report() {
     const bool has_tensor_ops = rpc_trace_has_tensor_stats(state.tensor_ops);
     const bool has_copies = rpc_trace_has_copy_stats(state.cross_endpoint_copies);
     const bool has_tensor_copies = rpc_trace_has_copy_stats(state.cross_endpoint_tensor_copies);
-    if (!has_client && !has_server && !has_client_by_endpoint && !has_tensor_ops && !has_copies && !has_tensor_copies) {
+    const bool has_compression_probe = rpc_compression_probe_has_stats(state.compression_probe);
+    if (!has_client && !has_server && !has_client_by_endpoint && !has_tensor_ops && !has_copies && !has_tensor_copies &&
+            !has_compression_probe) {
         return;
     }
     fprintf(stderr, "\n");
@@ -681,6 +885,9 @@ static void rpc_trace_report() {
     if (has_tensor_copies) {
         rpc_trace_print_cross_endpoint_tensor_copies(stderr, state.cross_endpoint_tensor_copies);
     }
+    if (has_compression_probe) {
+        rpc_compression_probe_print(stderr, state.compression_probe);
+    }
     for (int i = 0; i < RPC_CMD_COUNT; ++i) {
         state.client[i] = {};
         state.server[i] = {};
@@ -689,6 +896,7 @@ static void rpc_trace_report() {
     state.tensor_ops.clear();
     state.cross_endpoint_copies.clear();
     state.cross_endpoint_tensor_copies.clear();
+    state.compression_probe.clear();
     state.has_activity = false;
     fflush(stderr);
 }
@@ -1042,10 +1250,15 @@ static void ggml_backend_rpc_buffer_set_tensor(ggml_backend_buffer_t buffer, ggm
     const uint64_t trace_start_ns = rpc_trace_enabled() ? rpc_trace_now_ns() : 0;
     bool status = send_rpc_cmd(ctx->sock, RPC_CMD_SET_TENSOR, input.data(), input.size());
     RPC_STATUS_ASSERT(status);
-    if (rpc_trace_enabled()) {
+    if (rpc_trace_enabled() || rpc_compression_probe_enabled()) {
         ggml_backend_rpc_buffer_type_context * buft_ctx =
             (ggml_backend_rpc_buffer_type_context *)ggml_backend_buffer_get_type(buffer)->context;
-        rpc_trace_record_tensor_op("SET_TENSOR", buft_ctx->endpoint, tensor->name, size, rpc_trace_now_ns() - trace_start_ns);
+        if (rpc_trace_enabled()) {
+            rpc_trace_record_tensor_op("SET_TENSOR", buft_ctx->endpoint, tensor->name, size, rpc_trace_now_ns() - trace_start_ns);
+        }
+        if (rpc_compression_probe_enabled()) {
+            rpc_compression_probe_record("SET_TENSOR", buft_ctx->endpoint, tensor->name, data, size);
+        }
     }
 }
 
@@ -1058,10 +1271,15 @@ static void ggml_backend_rpc_buffer_get_tensor(ggml_backend_buffer_t buffer, con
     const uint64_t trace_start_ns = rpc_trace_enabled() ? rpc_trace_now_ns() : 0;
     bool status = send_rpc_cmd(ctx->sock, RPC_CMD_GET_TENSOR, &request, sizeof(request), data, size);
     RPC_STATUS_ASSERT(status);
-    if (rpc_trace_enabled()) {
+    if (rpc_trace_enabled() || rpc_compression_probe_enabled()) {
         ggml_backend_rpc_buffer_type_context * buft_ctx =
             (ggml_backend_rpc_buffer_type_context *)ggml_backend_buffer_get_type(buffer)->context;
-        rpc_trace_record_tensor_op("GET_TENSOR", buft_ctx->endpoint, tensor->name, size, rpc_trace_now_ns() - trace_start_ns);
+        if (rpc_trace_enabled()) {
+            rpc_trace_record_tensor_op("GET_TENSOR", buft_ctx->endpoint, tensor->name, size, rpc_trace_now_ns() - trace_start_ns);
+        }
+        if (rpc_compression_probe_enabled()) {
+            rpc_compression_probe_record("GET_TENSOR", buft_ctx->endpoint, tensor->name, data, size);
+        }
     }
 }
 
