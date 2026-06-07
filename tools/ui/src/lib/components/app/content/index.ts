@@ -77,3 +77,10 @@ export { default as SyntaxHighlightedCode } from './SyntaxHighlightedCode.svelte
  * ```
  */
 export { default as CollapsibleContentBlock } from './CollapsibleContentBlock.svelte';
+
+/**
+ * **MermaidPreview** - Interactive Mermaid diagram viewer
+ *
+ * Renders Mermaid-generated SVG diagrams with zoom, pan, and fit-to-view controls.
+ */
+export { default as MermaidPreview } from './MermaidPreview.svelte';

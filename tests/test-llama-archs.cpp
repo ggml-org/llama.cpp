@@ -523,7 +523,9 @@ static int test_backends(const llm_arch target_arch, const size_t seed, const gg
             }
         }
 
-        dev_configs.emplace_back(devices_meta, "Meta", LLAMA_SPLIT_MODE_TENSOR);
+        if (devices_meta.size() > 1) {
+            dev_configs.emplace_back(devices_meta, "Meta", LLAMA_SPLIT_MODE_TENSOR);
+        }
     }
 
     bool all_ok = true;

@@ -88,6 +88,9 @@ export type {
 	SettingsSection
 } from './settings';
 
+// Reasoning types
+export type { ReasoningEffortLevel } from './reasoning';
+
 // Common types
 export type {
 	KeyValuePair,

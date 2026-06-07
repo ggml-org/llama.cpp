@@ -104,7 +104,7 @@ static bool test_state_load(struct llama_model * model, const struct common_para
     LOG_TRC("%s: loaded state with %zu tokens\n", __func__, n_token_count_out);
 
     // Replay last token
-    int n_past = (int) n_token_count_out - 1;
+    int n_past = (int) n_token_count_out;
     if (!common_replay_last_token(ctx.get(), tokens.back(), n_past)) {
         return false;
     }
@@ -155,7 +155,7 @@ static bool test_seq_cp_host(struct llama_model * model, const struct common_par
     LOG_TRC("%s: loaded state with %zu tokens\n", __func__, n_token_count_out);
 
     // Replay last token
-    int n_past = (int) n_token_count_out - 1;
+    int n_past = (int) n_token_count_out;
     if (!common_replay_last_token(ctx.get(), tokens.back(), n_past)) {
         return false;
     }
@@ -227,7 +227,7 @@ static bool test_seq_cp_device(struct llama_model * model, const struct common_p
     LOG_TRC("%s: loaded state with %zu tokens\n", __func__, n_token_count_out);
 
     // Replay last token
-    int n_past = (int) n_token_count_out - 1;
+    int n_past = (int) n_token_count_out;
     if (!common_replay_last_token(ctx.get(), tokens.back(), n_past)) {
         return false;
     }
@@ -296,15 +296,13 @@ int main(int argc, char ** argv) {
 
     ggml_backend_load_all();
 
-    auto llama_init = common_init_from_params(params, true);
+    auto llama_init = common_init_from_params(params);
     auto * model = llama_init->model();
 
     if (model == nullptr) {
         LOG_ERR("%s: failed to init\n", __func__);
         return 1;
     }
-
-    GGML_ASSERT(llama_init->context() == nullptr);
 
     // Tokenize prompt or generate random tokens
     llama_tokens tokens;
