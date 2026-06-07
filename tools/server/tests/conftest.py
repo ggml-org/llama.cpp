@@ -1,5 +1,5 @@
 import pytest
-from utils import *
+from utils import ServerPreset, server_instances
 
 
 # ref: https://stackoverflow.com/questions/22627659/run-code-before-and-after-each-test-in-py-test

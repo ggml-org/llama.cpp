@@ -3,30 +3,31 @@
 
 # type: ignore[reportUnusedImport]
 
-import subprocess
-import os
-
-TMP_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tmp")
-import re
 import json
-from json import JSONDecodeError
+import os
+import re
+import subprocess
 import sys
-import requests
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from json import JSONDecodeError
 from typing import (
     Any,
     Callable,
-    ContextManager,
-    Iterable,
     Iterator,
     List,
     Literal,
+    Optional,
     Tuple,
     Set,
 )
 from re import RegexFlag
+
+import requests
 import wget
+
+
+TMP_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tmp")
 
 
 DEFAULT_HTTP_TIMEOUT = 60
@@ -328,21 +329,21 @@ class ServerProcess:
 
     def stop(self) -> None:
         if self.external_server:
-            print("[external_server]: Not stopping external server")
+            print("[external_server]: Not stopping external server")  # noqa: NP100
             return
         if self in server_instances:
             server_instances.remove(self)
         if self.process:
-            print(f"Stopping server with pid={self.process.pid}")
+            print(f"Stopping server with pid={self.process.pid}")  # noqa: NP100
             self.process.terminate()
             try:
                 self.process.wait(timeout=5)
             except subprocess.TimeoutExpired:
-                print(f"Server pid={self.process.pid} did not terminate in time, killing")
+                print(f"Server pid={self.process.pid} did not terminate in time, killing")  # noqa: NP100
                 self.process.kill()
                 self.process.wait(timeout=5)
             except Exception as e:
-                print(f"Error waiting for server: {e}")
+                print(f"Error waiting for server: {e}")  # noqa: NP100
             self.process = None
         if hasattr(self, '_log') and self._log != sys.stdout:
             self._log.close()
@@ -377,7 +378,7 @@ class ServerProcess:
                 result.body = response.text
         else:
             result.body = None
-        print("Response from server", json.dumps(result.body, indent=2))
+        print("Response from server", json.dumps(result.body, indent=2))  # noqa: NP100
         return result
 
     def make_stream_request(
@@ -400,7 +401,7 @@ class ServerProcess:
                 break
             elif line.startswith('data: '):
                 data = json.loads(line[6:])
-                print("Partial response from server", json.dumps(data, indent=2))
+                print("Partial response from server", json.dumps(data, indent=2))  # noqa: NP100
                 yield data
 
     def make_any_request(
@@ -428,11 +429,11 @@ class ServerProcess:
                     assert len(chunk['choices']) == 1, f'Expected 1 choice, got {len(chunk["choices"])}'
                     choice = chunk['choices'][0]
                     if choice['delta'].get('content') is not None:
-                        assert len(choice['delta']['content']) > 0, f'Expected non empty content delta!'
+                        assert len(choice['delta']['content']) > 0, 'Expected non empty content delta!'
                         content.append(choice['delta']['content'])
                         content_parts += 1
                     if choice['delta'].get('reasoning_content') is not None:
-                        assert len(choice['delta']['reasoning_content']) > 0, f'Expected non empty reasoning_content delta!'
+                        assert len(choice['delta']['reasoning_content']) > 0, 'Expected non empty reasoning_content delta!'
                         reasoning_content.append(choice['delta']['reasoning_content'])
                         reasoning_content_parts += 1
                     if choice['delta'].get('finish_reason') is not None:
@@ -471,7 +472,7 @@ class ServerProcess:
                     # the last chunk)
                     assert 'usage' in chunk, f"Expected finish_reason in chunk: {chunk}"
                     assert 'timings' in chunk, f"Expected finish_reason in chunk: {chunk}"
-            print(f'Streamed response had {content_parts} content parts, {reasoning_content_parts} reasoning_content parts, {tool_call_parts} tool call parts incl. {arguments_parts} arguments parts')
+            print(f'Streamed response had {content_parts} content parts, {reasoning_content_parts} reasoning_content parts, {tool_call_parts} tool call parts incl. {arguments_parts} arguments parts')  # noqa: NP100
             result = dict(
                 choices=[
                     dict(
@@ -486,14 +487,12 @@ class ServerProcess:
                     )
                 ],
             )
-            print("Final response from server", json.dumps(result, indent=2))
+            print("Final response from server", json.dumps(result, indent=2))  # noqa: NP100
             return result
         else:
             response = self.make_request(method, path, data, headers, timeout=timeout)
             assert response.status_code == 200, f"Server returned error: {response.status_code}"
             return response.body
-
-
 
 server_instances: Set[ServerProcess] = set()
 
@@ -641,6 +640,7 @@ class ServerPreset:
         return server
 
 
+
 def parallel_function_calls(function_list: List[Tuple[Callable[..., Any], Tuple[Any, ...]]]) -> List[Any]:
     """
     Run multiple functions in parallel and return results in the same order as calls. Equivalent to Promise.all in JS.
@@ -674,9 +674,9 @@ def parallel_function_calls(function_list: List[Tuple[Callable[..., Any], Tuple[
 
     # Check if there were any exceptions
     if exceptions:
-        print("Exceptions occurred:")
+        print("Exceptions occurred:")  # noqa: NP100
         for index, error in exceptions:
-            print(f"Function at index {index}: {error}")
+            print(f"Function at index {index}: {error}")  # noqa: NP100
 
     return results
 
@@ -701,11 +701,11 @@ def download_file(url: str, output_file_path: str | None = None) -> str:
     file_name = url.split('/').pop()
     output_file = f'./tmp/{file_name}' if output_file_path is None else output_file_path
     if not os.path.exists(output_file):
-        print(f"Downloading {url} to {output_file}")
+        print(f"Downloading {url} to {output_file}")  # noqa: NP100
         wget.download(url, out=output_file)
-        print(f"Done downloading to {output_file}")
+        print(f"Done downloading to {output_file}")  # noqa: NP100
     else:
-        print(f"File already exists at {output_file}")
+        print(f"File already exists at {output_file}")  # noqa: NP100
     return output_file
 
 

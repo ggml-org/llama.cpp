@@ -1,11 +1,13 @@
 import pytest
-from utils import *
+from utils import ServerPreset, download_file, match_regex, parallel_function_calls
 
 # We use a F16 MOE gguf as main model, and q4_0 as draft model
 
 server = ServerPreset.stories15m_moe()
 
+
 MODEL_DRAFT_FILE_URL = "https://huggingface.co/ggml-org/tiny-llamas/resolve/main/stories15M-q4_0.gguf"
+
 
 def create_server():
     global server
@@ -107,6 +109,21 @@ def test_speculative_rejects_oversized_budget_under_small_ctx():
     assert "context size" in res.body["error"]["message"]
 
 
+def test_speculative_rejects_oversized_budget_under_small_ctx():
+    global server
+    server.n_ctx = 256
+    server.start()
+    res = server.make_request("POST", "/completion", data={
+        "prompt": [1] * 240,
+        "n_predict": 32,
+        "cache_prompt": False,
+        "speculative.p_min": 0.0,
+    })
+    assert res.status_code == 400
+    assert "request budget" in res.body["error"]["message"]
+    assert "context size" in res.body["error"]["message"]
+
+
 def test_with_ctx_shift():
     global server
     server.n_ctx = 256
@@ -122,7 +139,7 @@ def test_with_ctx_shift():
     assert res.status_code == 200
     assert len(res.body["content"]) > 0
     assert res.body["tokens_predicted"] == 256
-    assert res.body["truncated"] == True
+    assert res.body["truncated"] is True
 
 
 @pytest.mark.parametrize("n_slots,n_requests", [
