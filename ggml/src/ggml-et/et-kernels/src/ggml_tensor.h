@@ -6,12 +6,12 @@
 #ifndef GGML_TENSOR_H
 #define GGML_TENSOR_H
 
+#include <stddef.h>  // for size_t
 #include <stdint.h>
-#include <stddef.h> // for size_t
 
-#define GGML_MAX_DIMS 4
-#define GGML_MAX_SRC 10
-#define GGML_MAX_NAME 64
+#define GGML_MAX_DIMS      4
+#define GGML_MAX_SRC       10
+#define GGML_MAX_NAME      64
 #define GGML_MAX_OP_PARAMS 64
 
 // Data types supported by GGML
@@ -53,7 +53,7 @@ enum ggml_type {
     // GGML_TYPE_IQ4_NL_4_4 = 36,
     // GGML_TYPE_IQ4_NL_4_8 = 37,
     // GGML_TYPE_IQ4_NL_8_8 = 38,
-    GGML_TYPE_MXFP4   = 39, // MXFP4 (1 block)
+    GGML_TYPE_MXFP4   = 39,  // MXFP4 (1 block)
     GGML_TYPE_COUNT   = 40,
 };
 
@@ -206,33 +206,33 @@ struct ggml_tensor;
 
 // Main tensor structure - matches the GGML definition exactly
 struct ggml_tensor {
-    enum ggml_type type;                          // Data type
-    struct ggml_backend_buffer * buffer;          // Memory buffer
+    enum ggml_type               type;    // Data type
+    struct ggml_backend_buffer * buffer;  // Memory buffer
 
-    int64_t ne[GGML_MAX_DIMS];                   // Number of elements in each dimension
-    size_t  nb[GGML_MAX_DIMS];                   // Stride in bytes for each dimension
-                                                  // nb[0] = ggml_type_size(type)
-                                                  // nb[1] = nb[0] * (ne[0] / ggml_blck_size(type)) + padding
-                                                  // nb[i] = nb[i-1] * ne[i-1]
+    int64_t ne[GGML_MAX_DIMS];            // Number of elements in each dimension
+    size_t  nb[GGML_MAX_DIMS];            // Stride in bytes for each dimension
+                                          // nb[0] = ggml_type_size(type)
+                                          // nb[1] = nb[0] * (ne[0] / ggml_blck_size(type)) + padding
+                                          // nb[i] = nb[i-1] * ne[i-1]
 
     // Compute data
-    enum ggml_op op;                              // Operation type
-    int32_t op_params[GGML_MAX_OP_PARAMS / sizeof(int32_t)]; // Operation parameters
-    int32_t flags;                                // Tensor flags
+    enum ggml_op op;                                               // Operation type
+    int32_t      op_params[GGML_MAX_OP_PARAMS / sizeof(int32_t)];  // Operation parameters
+    int32_t      flags;                                            // Tensor flags
 
-    struct ggml_tensor * src[GGML_MAX_SRC];       // Source tensors
+    struct ggml_tensor * src[GGML_MAX_SRC];                        // Source tensors
 
     // View data
-    struct ggml_tensor * view_src;                // Source tensor for views
-    size_t               view_offs;               // Offset for views
+    struct ggml_tensor * view_src;   // Source tensor for views
+    size_t               view_offs;  // Offset for views
 
-    void * data;                                  // Pointer to tensor data
+    void * data;                     // Pointer to tensor data
 
-    char name[GGML_MAX_NAME];                     // Tensor name
+    char name[GGML_MAX_NAME];        // Tensor name
 
-    void * extra;                                 // Extra data (backend-specific)
+    void * extra;                    // Extra data (backend-specific)
 
-    char padding[8];                              // Padding for alignment
+    char padding[8];                 // Padding for alignment
 };
 
 // Binary operation parameters (for MUL, ADD, etc.)
@@ -267,7 +267,7 @@ struct ggml_et_mul_mat_id_params {
 static inline int ggml_tensor_is_contiguous(const struct ggml_tensor * t, int type_size) {
     int64_t expected = type_size;
     for (int i = 0; i < GGML_MAX_DIMS; i++) {
-        if (t->ne[i] > 1 && (int64_t)t->nb[i] != expected) {
+        if (t->ne[i] > 1 && (int64_t) t->nb[i] != expected) {
             return 0;
         }
         expected *= t->ne[i];
@@ -275,4 +275,4 @@ static inline int ggml_tensor_is_contiguous(const struct ggml_tensor * t, int ty
     return 1;
 }
 
-#endif // GGML_TENSOR_H
+#endif  // GGML_TENSOR_H

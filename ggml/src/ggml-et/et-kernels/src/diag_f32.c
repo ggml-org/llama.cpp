@@ -7,43 +7,43 @@
 // dst:  [N, N, ne2, ne3]   (diagonal matrix per batch)
 //******************************************************************************
 
-#include <stdint.h>
 #include "ggml_tensor.h"
 #include "platform.h"
+
+#include <stdint.h>
 
 struct ggml_et_diag_params {
     struct ggml_tensor src0;  // F32 input vector
     struct ggml_tensor dst;   // F32 output diagonal matrix
 };
 
-
-int entry_point(struct ggml_et_diag_params* params, void* env) {
-    kernel_environment_t* kernel_env = (kernel_environment_t*)env;
+int entry_point(struct ggml_et_diag_params * params, void * env) {
+    kernel_environment_t * kernel_env = (kernel_environment_t *) env;
 
     if (!kernel_env) {
         return -1;
     }
 
-    int thread_id = get_relative_thread_id(kernel_env->shire_mask);
+    int thread_id   = get_relative_thread_id(kernel_env->shire_mask);
     int num_threads = get_num_threads(kernel_env->shire_mask);
 
     if (thread_id < 0) {
         return 0;
     }
 
-    if (params == 0 || ((uint64_t)params & 0x7) != 0) {
+    if (params == 0 || ((uint64_t) params & 0x7) != 0) {
         return -1;
     }
 
-    struct ggml_tensor* src0 = &params->src0;
-    struct ggml_tensor* dst = &params->dst;
+    struct ggml_tensor * src0 = &params->src0;
+    struct ggml_tensor * dst  = &params->dst;
 
     if (src0->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32) {
         return -1;
     }
 
-    float* src0_data = (float*)src0->data;
-    float* dst_data = (float*)dst->data;
+    float * src0_data = (float *) src0->data;
+    float * dst_data  = (float *) dst->data;
 
     if (!src0_data || !dst_data) {
         return -1;
@@ -54,7 +54,7 @@ int entry_point(struct ggml_et_diag_params* params, void* env) {
     const int64_t ne2 = dst->ne[2];
     const int64_t ne3 = dst->ne[3];
 
-    const size_t nb1  = dst->nb[1], nb2  = dst->nb[2], nb3  = dst->nb[3];
+    const size_t nb1 = dst->nb[1], nb2 = dst->nb[2], nb3 = dst->nb[3];
     const size_t nb02 = src0->nb[2], nb03 = src0->nb[3];
 
     // Total rows across all batches — parallelize over these
@@ -69,25 +69,21 @@ int entry_point(struct ggml_et_diag_params* params, void* env) {
         int64_t i2 = (row / ne1) % ne2;
         int64_t i3 = row / (ne1 * ne2);
 
-        float* dst_row = (float*)((char*)dst_data + i1*nb1 + i2*nb2 + i3*nb3);
+        float * dst_row = (float *) ((char *) dst_data + i1 * nb1 + i2 * nb2 + i3 * nb3);
 
         // Zero the entire row with SIMD
-        int64_t i0 = 0;
+        int64_t       i0      = 0;
         const int64_t vec_end = (ne0 / 8) * 8;
         for (; i0 < vec_end; i0 += 8) {
-            __asm__ volatile(
-                "fsw.ps f10, %[d]\n"
-                : [d] "=m"(*(float(*)[8])&dst_row[i0])
-                :: "f10"
-            );
+            __asm__ volatile("fsw.ps f10, %[d]\n" : [d] "=m"(*(float (*)[8]) & dst_row[i0])::"f10");
         }
         for (; i0 < ne0; i0++) {
             dst_row[i0] = 0.0f;
         }
 
         // Place the diagonal element: dst[i1][i1] = src0[i1]
-        const float* src_ptr = (const float*)((const char*)src0_data + i2*nb02 + i3*nb03);
-        dst_row[i1] = src_ptr[i1];
+        const float * src_ptr = (const float *) ((const char *) src0_data + i2 * nb02 + i3 * nb03);
+        dst_row[i1]           = src_ptr[i1];
     }
 
     return 0;

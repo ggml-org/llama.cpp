@@ -1,12 +1,14 @@
 #include "ggml-et-cpu-compare.h"
+
 #include "ggml-cpu/ggml-cpu-impl.h"
 #include "ggml-cpu/ops.h"
-#include <cstdlib>
-#include <cmath>
-#include <cstring>
-#include <algorithm>
 
-bool ggml_et_cpu_compare_init_pre(ggml_et_cpu_compare_ctx* ctx, const ggml_tensor* node, ggml_op op) {
+#include <algorithm>
+#include <cmath>
+#include <cstdlib>
+#include <cstring>
+
+bool ggml_et_cpu_compare_init_pre(ggml_et_cpu_compare_ctx * ctx, const ggml_tensor * node, ggml_op op) {
     if (!ctx || !node) {
         GGML_LOG_ERROR("ET: Invalid parameters for CPU compare init\n");
         return false;
@@ -16,7 +18,7 @@ bool ggml_et_cpu_compare_init_pre(ggml_et_cpu_compare_ctx* ctx, const ggml_tenso
     memset(ctx, 0, sizeof(*ctx));
 
     // Calculate actual buffer sizes - use backend buffer size for accurate copy
-    auto get_tensor_buffer_size = [](const ggml_tensor* tensor) -> size_t {
+    auto get_tensor_buffer_size = [](const ggml_tensor * tensor) -> size_t {
         if (!tensor) {
             return 0;
         }
@@ -36,7 +38,7 @@ bool ggml_et_cpu_compare_init_pre(ggml_et_cpu_compare_ctx* ctx, const ggml_tenso
     ctx->src0_size = get_tensor_buffer_size(node->src[0]);
     ctx->src1_size = get_tensor_buffer_size(node->src[1]);
     ctx->src2_size = get_tensor_buffer_size(node->src[2]);
-    ctx->dst_size = get_tensor_buffer_size(node);
+    ctx->dst_size  = get_tensor_buffer_size(node);
 
     // Allocate CPU buffers for all tensors
     if (ctx->src0_size > 0) {
@@ -108,10 +110,10 @@ bool ggml_et_cpu_compare_init_pre(ggml_et_cpu_compare_ctx* ctx, const ggml_tenso
     // Create GGML context for CPU tensors
     GGML_LOG_DEBUG("ET: Creating GGML context for CPU computation\n");
     ggml_init_params ctx_params;
-    ctx_params.mem_size = ggml_tensor_overhead() * 4 + ggml_graph_overhead(); // up to 4 tensors + graph
+    ctx_params.mem_size   = ggml_tensor_overhead() * 4 + ggml_graph_overhead();  // up to 4 tensors + graph
     ctx_params.mem_buffer = nullptr;
-    ctx_params.no_alloc = true; // We'll manage data ourselves
-    ctx->ggml_ctx = ggml_init(ctx_params);
+    ctx_params.no_alloc   = true;                                                // We'll manage data ourselves
+    ctx->ggml_ctx         = ggml_init(ctx_params);
     if (!ctx->ggml_ctx) {
         GGML_LOG_ERROR("ET: Failed to create GGML context\n");
         goto cleanup;
@@ -164,8 +166,9 @@ cleanup:
     return false;
 }
 
-bool ggml_et_cpu_compare_compute_and_check(ggml_et_cpu_compare_ctx* ctx, const ggml_tensor* node,
-                                           const ggml_et_cpu_compare_config* config) {
+bool ggml_et_cpu_compare_compute_and_check(ggml_et_cpu_compare_ctx *          ctx,
+                                           const ggml_tensor *                node,
+                                           const ggml_et_cpu_compare_config * config) {
     if (!ctx || !ctx->cpu_backend || !ctx->ggml_ctx || !node || !config) {
         GGML_LOG_ERROR("ET: Invalid parameters for CPU compute and check\n");
         return false;
@@ -192,20 +195,17 @@ bool ggml_et_cpu_compare_compute_and_check(ggml_et_cpu_compare_ctx* ctx, const g
             break;
         case GGML_OP_ROPE:
             // Copy op_params to destination tensor for ROPE operation
-            ctx->cpu_dst = ggml_rope_ext(
-                ctx->ggml_ctx,
-                ctx->cpu_src0,
-                ctx->cpu_src1,
-                ctx->cpu_src2,  // freq_factors (may be null)
-                ((const int32_t*)node->op_params)[1], // n_dims
-                ((const int32_t*)node->op_params)[2], // mode
-                ((const int32_t*)node->op_params)[4], // n_ctx_orig
-                *((const float*)((const int32_t*)node->op_params + 5)), // freq_base
-                *((const float*)((const int32_t*)node->op_params + 6)), // freq_scale
-                *((const float*)((const int32_t*)node->op_params + 7)), // ext_factor
-                *((const float*)((const int32_t*)node->op_params + 8)), // attn_factor
-                *((const float*)((const int32_t*)node->op_params + 9)), // beta_fast
-                *((const float*)((const int32_t*)node->op_params + 10)) // beta_slow
+            ctx->cpu_dst = ggml_rope_ext(ctx->ggml_ctx, ctx->cpu_src0, ctx->cpu_src1,
+                                         ctx->cpu_src2,                           // freq_factors (may be null)
+                                         ((const int32_t *) node->op_params)[1],  // n_dims
+                                         ((const int32_t *) node->op_params)[2],  // mode
+                                         ((const int32_t *) node->op_params)[4],  // n_ctx_orig
+                                         *((const float *) ((const int32_t *) node->op_params + 5)),  // freq_base
+                                         *((const float *) ((const int32_t *) node->op_params + 6)),  // freq_scale
+                                         *((const float *) ((const int32_t *) node->op_params + 7)),  // ext_factor
+                                         *((const float *) ((const int32_t *) node->op_params + 8)),  // attn_factor
+                                         *((const float *) ((const int32_t *) node->op_params + 9)),  // beta_fast
+                                         *((const float *) ((const int32_t *) node->op_params + 10))  // beta_slow
             );
             break;
         case GGML_OP_RMS_NORM:
@@ -222,7 +222,7 @@ bool ggml_et_cpu_compare_compute_and_check(ggml_et_cpu_compare_ctx* ctx, const g
         case GGML_OP_UNARY:
             {
                 enum ggml_unary_op uop = (enum ggml_unary_op) ggml_get_op_params_i32(node, 0);
-                ctx->cpu_dst = ggml_unary(ctx->ggml_ctx, ctx->cpu_src0, uop);
+                ctx->cpu_dst           = ggml_unary(ctx->ggml_ctx, ctx->cpu_src0, uop);
             }
             break;
         case GGML_OP_SUM_ROWS:
@@ -231,17 +231,19 @@ bool ggml_et_cpu_compare_compute_and_check(ggml_et_cpu_compare_ctx* ctx, const g
         case GGML_OP_MEAN:
             ctx->cpu_dst = ggml_mean(ctx->ggml_ctx, ctx->cpu_src0);
             break;
-        case GGML_OP_CLAMP: {
-            float clamp_min, clamp_max;
-            memcpy(&clamp_min, (const float*)node->op_params + 0, sizeof(float));
-            memcpy(&clamp_max, (const float*)node->op_params + 1, sizeof(float));
-            ctx->cpu_dst = ggml_clamp(ctx->ggml_ctx, ctx->cpu_src0, clamp_min, clamp_max);
-        } break;
+        case GGML_OP_CLAMP:
+            {
+                float clamp_min, clamp_max;
+                memcpy(&clamp_min, (const float *) node->op_params + 0, sizeof(float));
+                memcpy(&clamp_max, (const float *) node->op_params + 1, sizeof(float));
+                ctx->cpu_dst = ggml_clamp(ctx->ggml_ctx, ctx->cpu_src0, clamp_min, clamp_max);
+            }
+            break;
         case GGML_OP_GLU:
             // Extract GLU parameters from op_params (split mode only)
             {
-                int32_t glu_op_type = ggml_get_op_params_i32(node, 0);  // GLU variant
-                ggml_glu_op glu_op = (ggml_glu_op)glu_op_type;
+                int32_t     glu_op_type = ggml_get_op_params_i32(node, 0);  // GLU variant
+                ggml_glu_op glu_op      = (ggml_glu_op) glu_op_type;
 
                 // Only support split tensor mode
                 if (!ctx->cpu_src1) {
@@ -254,10 +256,10 @@ bool ggml_et_cpu_compare_compute_and_check(ggml_et_cpu_compare_ctx* ctx, const g
         case GGML_OP_SOFT_MAX:
             {
                 // Extract scale and max_bias from op_params
-                float scale = 1.0f;
+                float scale    = 1.0f;
                 float max_bias = 0.0f;
-                memcpy(&scale, (const float*)node->op_params + 0, sizeof(float));
-                memcpy(&max_bias, (const float*)node->op_params + 1, sizeof(float));
+                memcpy(&scale, (const float *) node->op_params + 0, sizeof(float));
+                memcpy(&max_bias, (const float *) node->op_params + 1, sizeof(float));
 
                 if (ctx->cpu_src1 || scale != 1.0f || max_bias != 0.0f) {
                     // Use extended softmax when mask or non-default parameters are present
@@ -283,7 +285,7 @@ bool ggml_et_cpu_compare_compute_and_check(ggml_et_cpu_compare_ctx* ctx, const g
             {
                 // SET_ROWS operation scatters src0 rows to dst[src1] positions
                 // Create destination tensor (this is the "view" that SET_ROWS returns)
-                ggml_tensor* cpu_dst_base = ggml_new_tensor(ctx->ggml_ctx, node->type, GGML_MAX_DIMS, node->ne);
+                ggml_tensor * cpu_dst_base = ggml_new_tensor(ctx->ggml_ctx, node->type, GGML_MAX_DIMS, node->ne);
                 if (!cpu_dst_base) {
                     GGML_LOG_ERROR("ET: Failed to create CPU destination base tensor for SET_ROWS\n");
                     return false;
@@ -322,19 +324,19 @@ bool ggml_et_cpu_compare_compute_and_check(ggml_et_cpu_compare_ctx* ctx, const g
         return false;
     }
     ctx->cpu_graph->nodes[0] = ctx->cpu_dst;
-    ctx->cpu_graph->n_nodes = 1;
+    ctx->cpu_graph->n_nodes  = 1;
 
     // Log input data for debugging if enabled
     if (config && config->log_differences) {
         if (ctx->cpu_src0_data && ctx->src0_size >= 4) {
-            GGML_LOG_DEBUG("ET: CPU src0 first few bytes: %02x %02x %02x %02x\n",
-                          ((uint8_t*)ctx->cpu_src0_data)[0], ((uint8_t*)ctx->cpu_src0_data)[1],
-                          ((uint8_t*)ctx->cpu_src0_data)[2], ((uint8_t*)ctx->cpu_src0_data)[3]);
+            GGML_LOG_DEBUG("ET: CPU src0 first few bytes: %02x %02x %02x %02x\n", ((uint8_t *) ctx->cpu_src0_data)[0],
+                           ((uint8_t *) ctx->cpu_src0_data)[1], ((uint8_t *) ctx->cpu_src0_data)[2],
+                           ((uint8_t *) ctx->cpu_src0_data)[3]);
         }
         if (ctx->cpu_src1_data && ctx->src1_size >= 16) {
-            GGML_LOG_DEBUG("ET: CPU src1 first few floats: %.6f %.6f %.6f %.6f\n",
-                          ((float*)ctx->cpu_src1_data)[0], ((float*)ctx->cpu_src1_data)[1],
-                          ((float*)ctx->cpu_src1_data)[2], ((float*)ctx->cpu_src1_data)[3]);
+            GGML_LOG_DEBUG("ET: CPU src1 first few floats: %.6f %.6f %.6f %.6f\n", ((float *) ctx->cpu_src1_data)[0],
+                           ((float *) ctx->cpu_src1_data)[1], ((float *) ctx->cpu_src1_data)[2],
+                           ((float *) ctx->cpu_src1_data)[3]);
         }
     }
 
@@ -349,8 +351,8 @@ bool ggml_et_cpu_compare_compute_and_check(ggml_et_cpu_compare_ctx* ctx, const g
     // Log output data for debugging if enabled
     if (config && config->log_differences && ctx->dst_size >= 16) {
         GGML_LOG_DEBUG("ET: CPU dst first few floats after computation: %.6f %.6f %.6f %.6f\n",
-                      ((float*)ctx->cpu_dst_data)[0], ((float*)ctx->cpu_dst_data)[1],
-                      ((float*)ctx->cpu_dst_data)[2], ((float*)ctx->cpu_dst_data)[3]);
+                       ((float *) ctx->cpu_dst_data)[0], ((float *) ctx->cpu_dst_data)[1],
+                       ((float *) ctx->cpu_dst_data)[2], ((float *) ctx->cpu_dst_data)[3]);
     }
 
     // Now copy ET device destination to host for comparison
@@ -359,33 +361,33 @@ bool ggml_et_cpu_compare_compute_and_check(ggml_et_cpu_compare_ctx* ctx, const g
 
     if (config->log_differences) {
         size_t num_elements = ggml_nelements(node);
-        size_t max_log = std::min(num_elements, config->max_log_elements);
+        size_t max_log      = std::min(num_elements, config->max_log_elements);
 
         // Check if this is an elementwise operation that can show src inputs
-        bool is_elementwise = (op == GGML_OP_MUL || op == GGML_OP_ADD || op == GGML_OP_GLU);
-        float* cpu_src0_float = is_elementwise ? (float*)ctx->cpu_src0_data : nullptr;
-        float* cpu_src1_float = is_elementwise ? (float*)ctx->cpu_src1_data : nullptr;
+        bool    is_elementwise = (op == GGML_OP_MUL || op == GGML_OP_ADD || op == GGML_OP_GLU);
+        float * cpu_src0_float = is_elementwise ? (float *) ctx->cpu_src0_data : nullptr;
+        float * cpu_src1_float = is_elementwise ? (float *) ctx->cpu_src1_data : nullptr;
 
         // Helper to get float value from tensor data (handles f16 and f32)
-        auto get_float = [](const void* data, size_t idx, ggml_type type) -> float {
+        auto get_float = [](const void * data, size_t idx, ggml_type type) -> float {
             if (type == GGML_TYPE_F16) {
-                const ggml_fp16_t* fp16_data = (const ggml_fp16_t*)data;
+                const ggml_fp16_t * fp16_data = (const ggml_fp16_t *) data;
                 return ggml_fp16_to_fp32(fp16_data[idx]);
             }
 
-            const float* float_data = (const float*)data;
+            const float * float_data = (const float *) data;
             return float_data[idx];
         };
 
         // Compare all elements but log only the first max_log_elements
-        bool matches = true;
+        bool   matches          = true;
         size_t total_mismatches = 0;
 
         // First pass: check all elements for mismatches
         for (size_t i = 0; i < num_elements; i++) {
-            float cpu_val = get_float(ctx->cpu_dst_data, i, node->type);
-            float et_val = get_float(ctx->et_dst_data, i, node->type);
-            float diff = fabsf(cpu_val - et_val);
+            float cpu_val  = get_float(ctx->cpu_dst_data, i, node->type);
+            float et_val   = get_float(ctx->et_dst_data, i, node->type);
+            float diff     = fabsf(cpu_val - et_val);
             float rel_diff = diff / (fabsf(cpu_val) + 1e-8f);
 
             if (rel_diff > config->tolerance) {
@@ -397,62 +399,73 @@ bool ggml_et_cpu_compare_compute_and_check(ggml_et_cpu_compare_ctx* ctx, const g
         // Second pass: log detailed info for first max_log elements only
         for (size_t i = 0; i < max_log; i++) {
             float cpu_val = get_float(ctx->cpu_dst_data, i, node->type);
-            float et_val = get_float(ctx->et_dst_data, i, node->type);
-            float diff = fabsf(cpu_val - et_val);
+            float et_val  = get_float(ctx->et_dst_data, i, node->type);
+            float diff    = fabsf(cpu_val - et_val);
 
             if (is_elementwise && cpu_src0_float && cpu_src1_float) {
-                GGML_LOG_DEBUG("ET: [%zu] src0=%.6f, src1=%.6f -> CPU=%.6f, ET=%.6f, diff=%.6f\n",
-                              i, cpu_src0_float[i], cpu_src1_float[i], cpu_val, et_val, diff);
+                GGML_LOG_DEBUG("ET: [%zu] src0=%.6f, src1=%.6f -> CPU=%.6f, ET=%.6f, diff=%.6f\n", i, cpu_src0_float[i],
+                               cpu_src1_float[i], cpu_val, et_val, diff);
             } else if (is_elementwise && cpu_src0_float) {
-                GGML_LOG_DEBUG("ET: [%zu] src0=%.6f -> CPU=%.6f, ET=%.6f, diff=%.6f\n",
-                              i, cpu_src0_float[i], cpu_val, et_val, diff);
+                GGML_LOG_DEBUG("ET: [%zu] src0=%.6f -> CPU=%.6f, ET=%.6f, diff=%.6f\n", i, cpu_src0_float[i], cpu_val,
+                               et_val, diff);
             } else {
-                GGML_LOG_DEBUG("ET: [%zu] CPU=%.6f, ET=%.6f, diff=%.6f\n",
-                              i, cpu_val, et_val, diff);
+                GGML_LOG_DEBUG("ET: [%zu] CPU=%.6f, ET=%.6f, diff=%.6f\n", i, cpu_val, et_val, diff);
             }
         }
 
         // Check some elements from the middle and end for full coverage
         if (num_elements > max_log) {
-            size_t mid = num_elements / 2;
-            size_t end = num_elements - 1;
-            float cpu_mid = get_float(ctx->cpu_dst_data, mid, node->type);
-            float et_mid = get_float(ctx->et_dst_data, mid, node->type);
-            float cpu_end = get_float(ctx->cpu_dst_data, end, node->type);
-            float et_end = get_float(ctx->et_dst_data, end, node->type);
+            size_t mid     = num_elements / 2;
+            size_t end     = num_elements - 1;
+            float  cpu_mid = get_float(ctx->cpu_dst_data, mid, node->type);
+            float  et_mid  = get_float(ctx->et_dst_data, mid, node->type);
+            float  cpu_end = get_float(ctx->cpu_dst_data, end, node->type);
+            float  et_end  = get_float(ctx->et_dst_data, end, node->type);
 
-            GGML_LOG_DEBUG("ET: Middle element [%zu]: CPU=%.6f, ET=%.6f\n",
-                          mid, cpu_mid, et_mid);
-            GGML_LOG_DEBUG("ET: Last element [%zu]: CPU=%.6f, ET=%.6f\n",
-                          end, cpu_end, et_end);
+            GGML_LOG_DEBUG("ET: Middle element [%zu]: CPU=%.6f, ET=%.6f\n", mid, cpu_mid, et_mid);
+            GGML_LOG_DEBUG("ET: Last element [%zu]: CPU=%.6f, ET=%.6f\n", end, cpu_end, et_end);
         }
 
-        GGML_LOG_DEBUG("ET: Results %s (%zu/%zu elements match within tolerance %.6f)\n",
-                      matches ? "MATCH" : "DIFFER", num_elements - total_mismatches, num_elements, config->tolerance);
+        GGML_LOG_DEBUG("ET: Results %s (%zu/%zu elements match within tolerance %.6f)\n", matches ? "MATCH" : "DIFFER",
+                       num_elements - total_mismatches, num_elements, config->tolerance);
     }
 
     // Copy CPU result to device if flag is set
     if (config->use_cpu_result) {
         GGML_LOG_DEBUG("ET: Overwriting ET device result with CPU result for correct inference\n");
         size_t dst_logical_size = ggml_nbytes(node);
-        ggml_backend_tensor_set(const_cast<ggml_tensor*>(node), ctx->cpu_dst_data, 0, dst_logical_size);
+        ggml_backend_tensor_set(const_cast<ggml_tensor *>(node), ctx->cpu_dst_data, 0, dst_logical_size);
         GGML_LOG_DEBUG("ET: CPU result copied to ET device buffer\n");
     }
 
     return true;
 }
 
-
-void ggml_et_cpu_compare_free(ggml_et_cpu_compare_ctx* ctx) {
+void ggml_et_cpu_compare_free(ggml_et_cpu_compare_ctx * ctx) {
     if (!ctx) {
         return;
     }
 
-    if (ctx->cpu_src0_data) { free(ctx->cpu_src0_data); ctx->cpu_src0_data = nullptr; }
-    if (ctx->cpu_src1_data) { free(ctx->cpu_src1_data); ctx->cpu_src1_data = nullptr; }
-    if (ctx->cpu_src2_data) { free(ctx->cpu_src2_data); ctx->cpu_src2_data = nullptr; }
-    if (ctx->cpu_dst_data) { free(ctx->cpu_dst_data); ctx->cpu_dst_data = nullptr; }
-    if (ctx->et_dst_data) { free(ctx->et_dst_data); ctx->et_dst_data = nullptr; }
+    if (ctx->cpu_src0_data) {
+        free(ctx->cpu_src0_data);
+        ctx->cpu_src0_data = nullptr;
+    }
+    if (ctx->cpu_src1_data) {
+        free(ctx->cpu_src1_data);
+        ctx->cpu_src1_data = nullptr;
+    }
+    if (ctx->cpu_src2_data) {
+        free(ctx->cpu_src2_data);
+        ctx->cpu_src2_data = nullptr;
+    }
+    if (ctx->cpu_dst_data) {
+        free(ctx->cpu_dst_data);
+        ctx->cpu_dst_data = nullptr;
+    }
+    if (ctx->et_dst_data) {
+        free(ctx->et_dst_data);
+        ctx->et_dst_data = nullptr;
+    }
 
     if (ctx->ggml_ctx) {
         ggml_free(ctx->ggml_ctx);
@@ -465,9 +478,9 @@ void ggml_et_cpu_compare_free(ggml_et_cpu_compare_ctx* ctx) {
     }
 
     // Clear pointers
-    ctx->cpu_src0 = nullptr;
-    ctx->cpu_src1 = nullptr;
-    ctx->cpu_src2 = nullptr;
-    ctx->cpu_dst = nullptr;
+    ctx->cpu_src0  = nullptr;
+    ctx->cpu_src1  = nullptr;
+    ctx->cpu_src2  = nullptr;
+    ctx->cpu_dst   = nullptr;
     ctx->cpu_graph = nullptr;
 }
