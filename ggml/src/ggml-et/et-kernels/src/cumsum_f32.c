@@ -4,15 +4,15 @@
 // First-pass implementation: scalar and row-contiguous input/output only.
 //******************************************************************************
 
-#include <stdint.h>
 #include "ggml_tensor.h"
 #include "platform.h"
+
+#include <stdint.h>
 
 struct ggml_et_cumsum_params {
     struct ggml_tensor src0;
     struct ggml_tensor dst;
 };
-
 
 int entry_point(struct ggml_et_cumsum_params * params, void * env) {
     kernel_environment_t * kernel_env = (kernel_environment_t *) env;
@@ -21,7 +21,7 @@ int entry_point(struct ggml_et_cumsum_params * params, void * env) {
         return -1;
     }
 
-    int thread_id = get_relative_thread_id(kernel_env->shire_mask);
+    int thread_id   = get_relative_thread_id(kernel_env->shire_mask);
     int num_threads = get_num_threads(kernel_env->shire_mask);
 
     if (thread_id < 0) {
@@ -65,13 +65,13 @@ int entry_point(struct ggml_et_cumsum_params * params, void * env) {
         return -1;
     }
 
-    const int64_t total_rows = ne1 * ne2 * ne3;
+    const int64_t total_rows     = ne1 * ne2 * ne3;
     const int64_t rows_per_group = et_rows_per_cacheline_group(ne0, sizeof(float));
-    const int64_t total_groups = (total_rows + rows_per_group - 1) / rows_per_group;
+    const int64_t total_groups   = (total_rows + rows_per_group - 1) / rows_per_group;
 
     for (int64_t grp = thread_id; grp < total_groups; grp += num_threads) {
         const int64_t row_start = grp * rows_per_group;
-        int64_t row_end = row_start + rows_per_group;
+        int64_t       row_end   = row_start + rows_per_group;
         if (row_end > total_rows) {
             row_end = total_rows;
         }
@@ -82,7 +82,7 @@ int entry_point(struct ggml_et_cumsum_params * params, void * env) {
             int64_t i3 = row / (ne1 * ne2);
 
             const float * src_row = (const float *) ((const char *) src0_data + i1 * snb1 + i2 * snb2 + i3 * snb3);
-            float * dst_row = (float *) ((char *) dst_data + i1 * dnb1 + i2 * dnb2 + i3 * dnb3);
+            float *       dst_row = (float *) ((char *) dst_data + i1 * dnb1 + i2 * dnb2 + i3 * dnb3);
 
             float acc = 0.0f;
             for (int64_t i0 = 0; i0 < ne0; ++i0) {

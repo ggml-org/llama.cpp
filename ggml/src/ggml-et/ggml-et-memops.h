@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ggml-et-common.h"
+
 #include <cstddef>
 #include <cstdint>
 
@@ -14,7 +15,4 @@ enum ggml_et_memop_type : uint32_t {
 
 // Memset operation: fill device memory with a value
 // Returns true on success, false on failure
-bool ggml_et_memset(ggml_backend_et_device_context* dev_ctx,
-                    void* dst_ptr,
-                    uint8_t value,
-                    size_t size);
+bool ggml_et_memset(ggml_backend_et_device_context * dev_ctx, void * dst_ptr, uint8_t value, size_t size);

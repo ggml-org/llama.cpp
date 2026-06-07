@@ -10,17 +10,18 @@
 // - destination view strides/offset are cacheline-aligned
 //******************************************************************************
 
-#include <stdint.h>
 #include "ggml_tensor.h"
 #include "platform.h"
+
+#include <stdint.h>
 
 struct ggml_et_set_params {
     struct ggml_tensor src1;
     struct ggml_tensor dst;
-    int32_t nb1;
-    int32_t nb2;
-    int32_t nb3;
-    int32_t offset;
+    int32_t            nb1;
+    int32_t            nb2;
+    int32_t            nb3;
+    int32_t            offset;
 };
 
 static inline void copy_row_aligned(float * dst, const float * src, int32_t n) {
@@ -28,13 +29,11 @@ static inline void copy_row_aligned(float * dst, const float * src, int32_t n) {
         __asm__ volatile(
             "flw.ps f11, %[src_vec]\n"
             "fsw.ps f11, %[dst_vec]\n"
-            : [dst_vec] "=m"(*(float(*)[8])&dst[i])
-            : [src_vec] "m"(*(const float(*)[8])&src[i])
-            : "f11"
-        );
+            : [dst_vec] "=m"(*(float (*)[8]) & dst[i])
+            : [src_vec] "m"(*(const float (*)[8]) & src[i])
+            : "f11");
     }
 }
-
 
 int entry_point(struct ggml_et_set_params * params, void * env) {
     kernel_environment_t * kernel_env = (kernel_environment_t *) env;
@@ -43,7 +42,7 @@ int entry_point(struct ggml_et_set_params * params, void * env) {
         return -1;
     }
 
-    int thread_id = get_relative_thread_id(kernel_env->shire_mask);
+    int thread_id   = get_relative_thread_id(kernel_env->shire_mask);
     int num_threads = get_num_threads(kernel_env->shire_mask);
 
     if (thread_id < 0) {
@@ -62,7 +61,7 @@ int entry_point(struct ggml_et_set_params * params, void * env) {
     }
 
     const float * src1_data = (const float *) src1->data;
-    float * dst_data = (float *) dst->data;
+    float *       dst_data  = (float *) dst->data;
     if (!src1_data || !dst_data) {
         return -1;
     }
@@ -80,9 +79,9 @@ int entry_point(struct ggml_et_set_params * params, void * env) {
     const int64_t nb12 = src1->nb[2];
     const int64_t nb13 = src1->nb[3];
 
-    const int64_t dnb1 = params->nb1;
-    const int64_t dnb2 = params->nb2;
-    const int64_t dnb3 = params->nb3;
+    const int64_t dnb1   = params->nb1;
+    const int64_t dnb2   = params->nb2;
+    const int64_t dnb3   = params->nb3;
     const int64_t offset = params->offset;
 
     const int64_t total_rows = ne11 * ne12 * ne13;
@@ -93,7 +92,7 @@ int entry_point(struct ggml_et_set_params * params, void * env) {
         const int64_t i3 = row / (ne11 * ne12);
 
         const float * src_row = (const float *) ((const char *) src1_data + i1 * nb11 + i2 * nb12 + i3 * nb13);
-        float * dst_row = (float *) ((char *) dst_data + offset + i1 * dnb1 + i2 * dnb2 + i3 * dnb3);
+        float *       dst_row = (float *) ((char *) dst_data + offset + i1 * dnb1 + i2 * dnb2 + i3 * dnb3);
 
         copy_row_aligned(dst_row, src_row, (int32_t) ne10);
     }
