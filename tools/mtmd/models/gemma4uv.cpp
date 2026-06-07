@@ -20,6 +20,9 @@ ggml_cgraph * clip_graph_gemma4uv::build() {
         // inp shape: [patch_size * patch_size * c, n_patches]
 
         inp = ggml_mul_mat(ctx0, model.patch_embeddings_0, inp);
+        // 6912-wide reduction over high-contrast patches overflows F16 accumulation
+        // (GGML_CUDA_F16) -> Inf/NaN; force F32 accumulation like other clip projectors.
+        ggml_mul_mat_set_prec(inp, GGML_PREC_F32);
         inp = ggml_add(ctx0, inp, model.patch_bias);
         // inp shape: [n_embd, n_patches]
 
@@ -63,6 +66,7 @@ ggml_cgraph * clip_graph_gemma4uv::build() {
         // embedding_pre_projection_norm
         cur = ggml_rms_norm(ctx0, cur, hparams.eps);
         cur = build_mm(model.mm_input_proj_w, cur);
+        ggml_mul_mat_set_prec(cur, GGML_PREC_F32);
         cb(cur, "projected", -1);
     }
 

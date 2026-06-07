@@ -190,6 +190,21 @@ struct img_tool {
         return {w_bar, h_bar};
     }
 
+    static clip_image_size calc_size_fill_budget(const clip_image_size & inp_size, const int align_size, const int target_pixels) {
+        GGML_ASSERT(align_size > 0);
+        if (inp_size.width <= 0 || inp_size.height <= 0 || target_pixels <= 0) {
+            return {0, 0};
+        }
+        const double total_px = (double) inp_size.width * (double) inp_size.height;
+        const double factor   = std::sqrt((double) target_pixels / total_px);
+        auto floor_by_factor = [f = align_size](double x) {
+            return std::max(f, static_cast<int>(std::floor(x / static_cast<double>(f))) * f);
+        };
+        const int target_width  = floor_by_factor(factor * inp_size.width);
+        const int target_height = floor_by_factor(factor * inp_size.height);
+        return {target_width, target_height};
+    }
+
     // draw src image into dst image at offset (offset_x, offset_y)
     static void composite(clip_image_u8 & dst, const clip_image_u8 & src, int offset_x, int offset_y) {
         if (src.is_placeholder()) {
@@ -948,6 +963,26 @@ mtmd_image_preproc_out mtmd_image_preprocessor_dyn_size::preprocess(const clip_i
     output.append(hparams, resized_image, true);
     return output;
 }
+
+bool mtmd_image_preprocessor_gemma4::preprocess(const clip_image_u8 & img, clip_image_f32_batch & output) {
+    GGML_ASSERT(hparams.image_max_pixels > 0);
+    clip_image_u8 resized_image;
+    const clip_image_size original_size{img.nx, img.ny};
+    const int cur_merge = hparams.n_merge == 0 ? 1 : hparams.n_merge;
+    const int align     = hparams.patch_size * cur_merge;
+    const clip_image_size target_size = img_tool::calc_size_fill_budget(
+        original_size,
+        align,
+        hparams.image_max_pixels);
+    img_tool::resize(img, resized_image, target_size,
+                        RESIZE_ALGO_BICUBIC,
+                        PAD_NONE);
+    clip_image_f32_ptr img_f32(clip_image_f32_init());
+    img_u8_to_f32(resized_image, *img_f32, hparams.image_mean, hparams.image_std);
+    output.entries.push_back(std::move(img_f32));
+    return true;
+}
+
 
 //
 // mtmd_image_preprocessor_longest_edge

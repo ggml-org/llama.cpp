@@ -625,12 +625,18 @@ struct mtmd_context {
                     image_preproc = std::make_unique<mtmd_image_preprocessor_dyn_size>(ctx_v);
                 } break;
             case PROJECTOR_TYPE_GEMMA4V:
-            case PROJECTOR_TYPE_GEMMA4UV:
                 {
-                    // <|image> ... (image embeddings) ... <image|>
                     img_beg = "<|image>";
                     img_end = "<image|>";
                     image_preproc = std::make_unique<mtmd_image_preprocessor_dyn_size>(ctx_v);
+                } break;
+            case PROJECTOR_TYPE_GEMMA4UV:
+                {
+                    img_beg = "<|image>";
+                    img_end = "<image|>";
+                    // encoder-free unified vision: aspect-preserving resize that fills the
+                    // soft-token budget, then 48px patches re-packed HWC in the graph
+                    image_preproc = std::make_unique<mtmd_image_preprocessor_gemma4>(ctx_v);
                 } break;
             case PROJECTOR_TYPE_DEEPSEEKOCR:
             case PROJECTOR_TYPE_DEEPSEEKOCR2:
