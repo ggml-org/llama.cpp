@@ -685,8 +685,33 @@ int llama_completion(int argc, char ** argv) {
                 const bool is_last_batch = (n_consumed >= (int) embd_inp.size());
                 const bool save_now = session_do_save && is_last_batch;
                 session_tokens.insert(session_tokens.end(), embd.begin(), embd.end());
-                if (!common_prompt_batch_decode(ctx, session_tokens, n_past, params.n_batch, path_session, save_now)) {
-                    return 1;
+
+                if (save_now && embd.size() > 1) {
+                    const int n_tokens_before_last = embd.size() - 1;
+
+                    if (llama_decode(ctx, llama_batch_get_one(embd.data(), n_tokens_before_last))) {
+                        LOG_ERR("%s : failed to eval\n", __func__);
+                        return 1;
+                    }
+                    n_past += n_tokens_before_last;
+
+                    llama_state_save_file(ctx, path_session.c_str(), session_tokens.data(), session_tokens.size() - 1);
+                    LOG_INF("saved session before last token to %s, n_tokens = %zu\n", path_session.c_str(), session_tokens.size() - 1);
+
+                    llama_token last_token = embd.back();
+                    llama_batch batch = llama_batch_get_one(&last_token, 1);
+                    int32_t pos = n_past;
+                    batch.pos = &pos;
+
+                    if (llama_decode(ctx, batch)) {
+                        LOG_ERR("%s : failed to eval last token\n", __func__);
+                        return 1;
+                    }
+                    n_past++;
+                } else {
+                    if (!common_prompt_batch_decode(ctx, embd, n_past, params.n_batch, path_session, false)) {
+                        return 1;
+                    }
                 }
                 n_session_consumed += embd.size();
                 if (save_now) {
