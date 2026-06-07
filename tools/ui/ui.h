@@ -1,17 +1,16 @@
 #pragma once
 
-// TODO @ngxson : refactor, wrap these in a function
+#include <stddef.h>
 
-#ifdef LLAMA_BUILD_UI
-extern unsigned char index_html[];
-extern unsigned int  index_html_len;
+struct llama_ui_asset {
+    const char *          name;
+    const unsigned char * data;
+    size_t                size;
+    const char *          etag;
+};
 
-extern unsigned char bundle_js[];
-extern unsigned int  bundle_js_len;
-
-extern unsigned char bundle_css[];
-extern unsigned int  bundle_css_len;
-
-extern unsigned char loading_html[];
-extern unsigned int  loading_html_len;
+#if defined(LLAMA_BUILD_UI)
+#define LLAMA_UI_HAS_ASSETS 1
 #endif
+
+const llama_ui_asset * llama_ui_find_asset(const char * name);
