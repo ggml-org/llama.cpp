@@ -30,55 +30,6 @@ static llm_graph_type ctx_type_to_graph_type(llama_context_type ctx_type) {
     throw std::runtime_error("Unsupported ctx type");
 }
 
-static void llama_assert_gemma4_mtp_source_placement(
-        const llama_context * ctx,
-        const llama_context * src) {
-    if (!ctx || !src) {
-        return;
-    }
-
-    const auto & model_dft = ctx->get_model();
-    const auto & model_tgt = src->get_model();
-
-    if (model_dft.arch != LLM_ARCH_GEMMA4_ASSISTANT || model_tgt.arch != LLM_ARCH_GEMMA4) {
-        return;
-    }
-
-    if (model_tgt.split_mode() == LLAMA_SPLIT_MODE_TENSOR) {
-        return;
-    }
-
-    const auto & hparams_dft = model_dft.hparams;
-    const auto & hparams_tgt = model_tgt.hparams;
-
-    const int32_t il_tgt_full = (int32_t) hparams_tgt.n_layer() - 1;
-    const int32_t il_tgt_swa  = (int32_t) hparams_tgt.n_layer() - 2;
-
-    ggml_backend_dev_t dev_cpu = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
-    if (!dev_cpu) {
-        throw std::runtime_error("Gemma 4 assistant MTP placement check failed: no CPU backend found");
-    }
-
-    const bool kv_offload = src->get_cparams().offload_kqv;
-
-    for (uint32_t il_dft = 0; il_dft < hparams_dft.n_layer(); ++il_dft) {
-        const int32_t il_tgt = hparams_dft.is_swa(il_dft) ? il_tgt_swa : il_tgt_full;
-
-        ggml_backend_dev_t dev_dft = model_dft.dev_layer(il_dft);
-        ggml_backend_dev_t dev_kv  = kv_offload ? model_tgt.dev_layer(il_tgt) : dev_cpu;
-
-        if (dev_dft != dev_kv) {
-            throw std::runtime_error(format(
-                    "Gemma 4 assistant MTP placement mismatch: draft layer %d is on %s, "
-                    "but shared target KV layer %d is on %s",
-                    (int) il_dft,
-                    ggml_backend_dev_name(dev_dft),
-                    (int) il_tgt,
-                    ggml_backend_dev_name(dev_kv)));
-        }
-    }
-}
-
 llama_context::llama_context(
         const llama_model & model,
               llama_context_params params) :
