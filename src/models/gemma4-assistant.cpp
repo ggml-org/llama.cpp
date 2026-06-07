@@ -40,7 +40,7 @@ void llama_model_gemma4_assistant::load_arch_tensors(llama_model_loader &) {
     output_norm = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM, "weight"), { n_embd }, 0);
 
     const int64_t n_embd_backbone = hparams.n_embd_inp();
-    nextn_post_proj = create_tensor(tn(LLM_TENSOR_NEXTN_POST_PROJ, "weight"), { n_embd, n_embd_backbone }, 0);
+    nextn_post_proj = create_tensor(tn(LLM_TENSOR_NEXTN_PROJ_POST, "weight"), { n_embd, n_embd_backbone }, 0);
 
     int rope_freqs_flag = 0;
 
@@ -52,7 +52,7 @@ void llama_model_gemma4_assistant::load_arch_tensors(llama_model_loader &) {
         const int64_t n_ff        = hparams.n_ff(i);
 
         if (i == 0) {
-            nextn_pre_proj = create_tensor(tn(LLM_TENSOR_NEXTN_PRE_PROJ, "weight", i), { 2*n_embd_backbone, n_embd }, 0);
+            nextn_pre_proj = create_tensor(tn(LLM_TENSOR_NEXTN_PROJ_PRE, "weight", i), { 2*n_embd_backbone, n_embd }, 0);
         }
 
         layer.attn_norm = create_tensor(tn(LLM_TENSOR_ATTN_NORM, "weight", i), { n_embd }, 0);
