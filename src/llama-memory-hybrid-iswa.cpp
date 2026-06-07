@@ -43,9 +43,11 @@ llama_memory_hybrid_iswa::llama_memory_hybrid_iswa(
         n_seq_max,
         n_ubatch,
         n_pad,
+        nullptr,
         filter_attn == nullptr ?
             [&](int32_t il) { return !hparams.is_recr(il); }
             : filter_attn,
+        nullptr,
         nullptr
     )),
     mem_recr(new llama_memory_recurrent(

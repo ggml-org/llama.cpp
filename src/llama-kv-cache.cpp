@@ -103,6 +103,7 @@ TURBO_IQ_IMPORT void turbo_innerq_mark_tensor_updated(void);
 
 llama_kv_cache::llama_kv_cache(
         const llama_model & model,
+      const llama_hparams & hparams,
                 ggml_type   type_k,
                 ggml_type   type_v,
                      bool   v_trans,
@@ -113,9 +114,11 @@ llama_kv_cache::llama_kv_cache(
                  uint32_t   n_pad,
                  uint32_t   n_swa,
            llama_swa_type   swa_type,
+           llama_memory_t   mem_other,
     const layer_filter_cb & filter,
-    const  layer_reuse_cb & reuse) :
-    model(model), hparams(model.hparams), v_trans(v_trans),
+    const  layer_reuse_cb & reuse,
+    const  layer_share_cb & share) :
+    model(model), hparams(hparams), v_trans(v_trans),
     n_seq_max(n_seq_max), n_stream(unified ? 1 : n_seq_max), n_pad(n_pad), n_swa(n_swa), swa_type(swa_type) {
 
     GGML_ASSERT(kv_size % n_pad == 0);
@@ -211,6 +214,8 @@ llama_kv_cache::llama_kv_cache(
 
     const bool is_mla = hparams.is_mla();
 
+    other = static_cast<llama_kv_cache *>(mem_other);
+
     for (uint32_t il = 0; il < n_layer; il++) {
         if (!hparams.has_kv(il)) {
             LLAMA_LOG_DEBUG("%s: layer %3d: does not have KV cache\n", __func__, il);
@@ -220,6 +225,24 @@ llama_kv_cache::llama_kv_cache(
         if (filter && !filter(il)) {
             LLAMA_LOG_DEBUG("%s: layer %3d: filtered\n", __func__, il);
             continue;
+        }
+
+        if (share && other) {
+            const int32_t il_share = share(il);
+
+            if (il_share >= 0) {
+                const auto & layer_share = other->layers[other->map_layer_ids[il_share]];
+
+                LLAMA_LOG_WARN("%s: layer %3d: sharing with layer %d. k = %p, v = %p\n", __func__, il, il_share,
+                        layer_share.k->data, layer_share.v->data);
+
+                map_layer_ids[il] = layers.size();
+
+                layers.push_back(layer_share);
+                layers.back().il = il;
+
+                continue;
+            }
         }
 
         if (n_embd_head_k_all == 0) {
@@ -464,61 +487,68 @@ llama_kv_cache::llama_kv_cache(
                 ggml_type_name(type_v), (float)memory_size_v / (1024.0f * 1024.0f));
     }
 
-    // TurboQuant: master's #21038 attention rotation is OFF by default on this
-    // fork. Enable per-side via LLAMA_ATTN_ROT_K_OVERRIDE=1 and/or
-    // LLAMA_ATTN_ROT_V_OVERRIDE=1 if your specific model+KV combo benefits.
-    //
-    // Why default OFF: empirical PPL+KLD testing on 7 model families
-    // (gemma-4 26B-A4B/31B/E2B, Qwen2.5-7B, Qwen3.5-2B, Mistral-Small-24B,
-    // phi-4, on q8/turbo4 KV) showed the optimal rotation policy is highly
-    // model-and-quant specific:
-    //
-    //   • gemma-4 31B Q8 q8/turbo4: V-only rotation gives -43% PPL (huge win).
-    //   • gemma-4 26B-A4B Q8 q8/turbo4: V-only gives -3.9%.
-    //   • gemma-4 E2B Q4_K_L q8/turbo4: V-only HURTS by +6.7%.
-    //   • phi-4 Q8 q8/turbo4: V-side rotation crashes (graph hash overflow).
-    //   • Qwen2.5/3.5/Mistral: rotation effect is within standard error.
-    //
-    // No single default is correct everywhere, including within the same
-    // architecture family (gemma-4 above shows three distinct optima across
-    // three sizes). Per-arch heuristics in code would silently regress users
-    // on variants we haven't tested. Default OFF + per-side env knobs lets
-    // each user tune for their specific config; documented findings in the
-    // README guide the choice.
-    //
-    // Reported by @erazortt (TheTom/turboquant_plus#88).
-    //
-    // LLAMA_ATTN_ROT_DISABLE retained as a no-op alias (default OFF makes it
-    // redundant but historical scripts may set it).
-    // Default attn_rot_disable=false now that rotation is OFF by default. The
-    // env var is preserved as a hard lock-out (=1 forces rotation off and
-    // blocks overrides), useful for users who want to guarantee no rotation
-    // regardless of any LLAMA_ATTN_ROT_*_OVERRIDE settings.
-    const char * LLAMA_ATTN_ROT_DISABLE = getenv("LLAMA_ATTN_ROT_DISABLE");
-    const bool attn_rot_disable = LLAMA_ATTN_ROT_DISABLE ? (atoi(LLAMA_ATTN_ROT_DISABLE) != 0) : false;
+    // TODO: refactor [TAG_KV_CACHE_SHARE_CELLS]
+    // KV-cache sharing (MTP draft): a shared cache inherits head dims and the
+    // resolved rotation policy from its parent so draft and target agree.
+    if (other) {
+        n_embd_head_k_all = other->n_embd_head_k_all;
+        n_embd_head_v_all = other->n_embd_head_v_all;
 
-    // Default: rotation OFF on both sides (safe across all tested model families).
-    // Override per side via env vars below.
-    attn_rot_k = false;
-    attn_rot_v = false;
+        attn_rot_k = other->attn_rot_k;
+        attn_rot_v = other->attn_rot_v;
+    } else {
+        // TurboQuant: master's #21038 attention rotation is OFF by default on this
+        // fork. Enable per-side via LLAMA_ATTN_ROT_K_OVERRIDE=1 and/or
+        // LLAMA_ATTN_ROT_V_OVERRIDE=1 if your specific model+KV combo benefits.
+        //
+        // Why default OFF: empirical PPL+KLD testing on 7 model families
+        // (gemma-4 26B-A4B/31B/E2B, Qwen2.5-7B, Qwen3.5-2B, Mistral-Small-24B,
+        // phi-4, on q8/turbo4 KV) showed the optimal rotation policy is highly
+        // model-and-quant specific:
+        //
+        //   • gemma-4 31B Q8 q8/turbo4: V-only rotation gives -43% PPL (huge win).
+        //   • gemma-4 26B-A4B Q8 q8/turbo4: V-only gives -3.9%.
+        //   • gemma-4 E2B Q4_K_L q8/turbo4: V-only HURTS by +6.7%.
+        //   • phi-4 Q8 q8/turbo4: V-side rotation crashes (graph hash overflow).
+        //   • Qwen2.5/3.5/Mistral: rotation effect is within standard error.
+        //
+        // No single default is correct everywhere, including within the same
+        // architecture family (gemma-4 above shows three distinct optima across
+        // three sizes). Per-arch heuristics in code would silently regress users
+        // on variants we haven't tested. Default OFF + per-side env knobs lets
+        // each user tune for their specific config; documented findings in the
+        // README guide the choice.
+        //
+        // Reported by @erazortt (TheTom/turboquant_plus#88).
+        //
+        // LLAMA_ATTN_ROT_DISABLE retained as a hard lock-out: =1 forces rotation
+        // off on both sides and blocks the per-side overrides below.
+        const char * LLAMA_ATTN_ROT_DISABLE = getenv("LLAMA_ATTN_ROT_DISABLE");
+        const bool attn_rot_disable = LLAMA_ATTN_ROT_DISABLE ? (atoi(LLAMA_ATTN_ROT_DISABLE) != 0) : false;
 
-    // Per-side overrides. Set LLAMA_ATTN_ROT_K_OVERRIDE=1 / LLAMA_ATTN_ROT_V_OVERRIDE=1
-    // to enable rotation. The cache type and head-dim alignment guards below
-    // still apply: rotation only takes effect on quantized types with
-    // head_dim % 64 == 0 (master's #21038 requirements).
-    const char * ROT_K_OV = getenv("LLAMA_ATTN_ROT_K_OVERRIDE");
-    if (ROT_K_OV && atoi(ROT_K_OV) != 0 && !attn_rot_disable) {
-        attn_rot_k =
-            n_embd_head_k_all > 0 &&
-            ggml_is_quantized(type_k) &&
-            hparams.n_embd_head_k() % 64 == 0;
-    }
-    const char * ROT_V_OV = getenv("LLAMA_ATTN_ROT_V_OVERRIDE");
-    if (ROT_V_OV && atoi(ROT_V_OV) != 0 && !attn_rot_disable) {
-        attn_rot_v =
-            n_embd_head_v_all > 0 &&
-            ggml_is_quantized(type_v) &&
-            hparams.n_embd_head_v() % 64 == 0;
+        // Default: rotation OFF on both sides (safe across all tested model families).
+        // Override per side via env vars below.
+        attn_rot_k = false;
+        attn_rot_v = false;
+
+        // Per-side overrides. Set LLAMA_ATTN_ROT_K_OVERRIDE=1 / LLAMA_ATTN_ROT_V_OVERRIDE=1
+        // to enable rotation. The cache type and head-dim alignment guards below
+        // still apply: rotation only takes effect on quantized types with
+        // head_dim % 64 == 0 (master's #21038 requirements).
+        const char * ROT_K_OV = getenv("LLAMA_ATTN_ROT_K_OVERRIDE");
+        if (ROT_K_OV && atoi(ROT_K_OV) != 0 && !attn_rot_disable) {
+            attn_rot_k =
+                n_embd_head_k_all > 0 &&
+                ggml_is_quantized(type_k) &&
+                hparams.n_embd_head_k() % 64 == 0;
+        }
+        const char * ROT_V_OV = getenv("LLAMA_ATTN_ROT_V_OVERRIDE");
+        if (ROT_V_OV && atoi(ROT_V_OV) != 0 && !attn_rot_disable) {
+            attn_rot_v =
+                n_embd_head_v_all > 0 &&
+                ggml_is_quantized(type_v) &&
+                hparams.n_embd_head_v() % 64 == 0;
+        }
     }
 
     LLAMA_LOG_INFO("%s: attn_rot_k = %d, n_embd_head_k_all = %d\n", __func__, attn_rot_k, n_embd_head_k_all);
@@ -577,6 +607,11 @@ void llama_kv_cache::clear(bool data) {
 }
 
 bool llama_kv_cache::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1) {
+    // TODO: refactor [TAG_KV_CACHE_SHARE_CELLS]
+    if (other) {
+        return true;
+    }
+
     GGML_ASSERT(seq_id == -1 || (seq_id >= 0 && (size_t) seq_id < seq_to_stream.size()));
 
     if (p0 < 0) {
@@ -640,6 +675,11 @@ bool llama_kv_cache::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1) {
 }
 
 void llama_kv_cache::seq_cp(llama_seq_id seq_id_src, llama_seq_id seq_id_dst, llama_pos p0, llama_pos p1) {
+    // TODO: refactor [TAG_KV_CACHE_SHARE_CELLS]
+    if (other) {
+        return;
+    }
+
     GGML_ASSERT(seq_id_src >= 0 && (size_t) seq_id_src < seq_to_stream.size());
     GGML_ASSERT(seq_id_dst >= 0 && (size_t) seq_id_dst < seq_to_stream.size());
 
@@ -727,6 +767,11 @@ void llama_kv_cache::seq_cp(llama_seq_id seq_id_src, llama_seq_id seq_id_dst, ll
 }
 
 void llama_kv_cache::seq_keep(llama_seq_id seq_id) {
+    // TODO: refactor [TAG_KV_CACHE_SHARE_CELLS]
+    if (other) {
+        return;
+    }
+
     GGML_ASSERT(seq_id >= 0 && (size_t) seq_id < seq_to_stream.size());
 
     auto & cells = v_cells[seq_to_stream[seq_id]];
@@ -749,6 +794,11 @@ void llama_kv_cache::seq_keep(llama_seq_id seq_id) {
 }
 
 void llama_kv_cache::seq_add(llama_seq_id seq_id, llama_pos p0, llama_pos p1, llama_pos shift) {
+    // TODO: refactor [TAG_KV_CACHE_SHARE_CELLS]
+    if (other) {
+        return;
+    }
+
     GGML_ASSERT(seq_id >= 0 && (size_t) seq_id < seq_to_stream.size());
     GGML_ASSERT(hparams.n_pos_per_embd() == 1 && "seq_add() is only supported for n_pos_per_embd() == 1");
 
@@ -794,6 +844,11 @@ void llama_kv_cache::seq_add(llama_seq_id seq_id, llama_pos p0, llama_pos p1, ll
 }
 
 void llama_kv_cache::seq_div(llama_seq_id seq_id, llama_pos p0, llama_pos p1, int d) {
+    // TODO: refactor [TAG_KV_CACHE_SHARE_CELLS]
+    if (other) {
+        return;
+    }
+
     GGML_ASSERT(seq_id >= 0 && (size_t) seq_id < seq_to_stream.size());
     GGML_ASSERT(hparams.n_pos_per_embd() == 1 && "seq_div() is only supported for n_pos_per_embd() == 1");
 
@@ -828,6 +883,11 @@ void llama_kv_cache::seq_div(llama_seq_id seq_id, llama_pos p0, llama_pos p1, in
 }
 
 llama_pos llama_kv_cache::seq_pos_min(llama_seq_id seq_id) const {
+    // TODO: refactor [TAG_KV_CACHE_SHARE_CELLS]
+    if (other) {
+        return other->seq_pos_min(seq_id);
+    }
+
     GGML_ASSERT(seq_id >= 0 && (size_t) seq_id < seq_to_stream.size());
 
     const auto & cells = v_cells[seq_to_stream[seq_id]];
@@ -836,6 +896,11 @@ llama_pos llama_kv_cache::seq_pos_min(llama_seq_id seq_id) const {
 }
 
 llama_pos llama_kv_cache::seq_pos_max(llama_seq_id seq_id) const {
+    // TODO: refactor [TAG_KV_CACHE_SHARE_CELLS]
+    if (other) {
+        return other->seq_pos_max(seq_id);
+    }
+
     GGML_ASSERT(seq_id >= 0 && (size_t) seq_id < seq_to_stream.size());
 
     const auto & cells = v_cells[seq_to_stream[seq_id]];
@@ -976,6 +1041,11 @@ llama_kv_cache::slot_info_vec_t llama_kv_cache::prepare(const std::vector<llama_
 }
 
 bool llama_kv_cache::update(llama_context * lctx, bool do_shift, const stream_copy_info & sc_info) {
+    // TODO: refactor [TAG_KV_CACHE_SHARE_CELLS]
+    if (other) {
+        return true;
+    }
+
     bool updated = false;
 
     auto * sched = lctx->get_sched();
@@ -1251,6 +1321,12 @@ llama_kv_cache::slot_info llama_kv_cache::find_slot(const llama_ubatch & ubatch,
 }
 
 void llama_kv_cache::apply_ubatch(const slot_info & sinfo, const llama_ubatch & ubatch) {
+    // TODO: refactor [TAG_KV_CACHE_SHARE_CELLS]
+    if (other) {
+        v_cells = other->v_cells;
+        return;
+    }
+
     // keep track of the max sequence position that we would overwrite with this ubatch
     // for non-SWA cache, this would be always empty
     llama_seq_id seq_pos_max_rm[LLAMA_MAX_SEQ];
@@ -2095,6 +2171,9 @@ void llm_graph_input_k_shift::set_input(const llama_ubatch * ubatch) {
 }
 
 ggml_cgraph * llama_kv_cache::build_graph_shift(llm_graph_result * res, llama_context * lctx) const {
+    // TODO: refactor [TAG_KV_CACHE_SHARE_CELLS]
+    GGML_ASSERT(!other);
+
     auto * ctx = res->get_ctx();
     auto * gf  = res->get_gf();
 
@@ -2140,6 +2219,11 @@ ggml_cgraph * llama_kv_cache::build_graph_shift(llm_graph_result * res, llama_co
 }
 
 void llama_kv_cache::state_write(llama_io_write_i & io, llama_seq_id seq_id, llama_state_seq_flags flags) const {
+    // TODO: refactor [TAG_KV_CACHE_SHARE_CELLS]
+    if (other) {
+        return;
+    }
+
     GGML_UNUSED(flags);
 
     io.write(&n_stream, sizeof(n_stream));
@@ -2193,6 +2277,11 @@ void llama_kv_cache::state_write(llama_io_write_i & io, llama_seq_id seq_id, lla
 }
 
 void llama_kv_cache::state_read(llama_io_read_i & io, llama_seq_id seq_id, llama_state_seq_flags flags) {
+    // TODO: refactor [TAG_KV_CACHE_SHARE_CELLS]
+    if (other) {
+        return;
+    }
+
     GGML_UNUSED(flags);
 
     GGML_ASSERT(seq_id == -1 || (seq_id >= 0 && (size_t) seq_id < seq_to_stream.size()));
