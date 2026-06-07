@@ -770,8 +770,8 @@ std::string common_sampler_type_to_str(enum common_sampler_type cnstr) {
 }
 
 std::vector<common_sampler_type> common_sampler_types_from_names(const std::vector<std::string> & names) {
-    std::unordered_map<std::string, common_sampler_type> sampler_name_map {
-        // canonical sampler names
+    // canonical sampler name mapping
+    static const std::unordered_map<std::string, common_sampler_type> sname_map {
         { "dry",         COMMON_SAMPLER_TYPE_DRY         },
         { "top_k",       COMMON_SAMPLER_TYPE_TOP_K       },
         { "top_p",       COMMON_SAMPLER_TYPE_TOP_P       },
@@ -782,37 +782,51 @@ std::vector<common_sampler_type> common_sampler_types_from_names(const std::vect
         { "xtc",         COMMON_SAMPLER_TYPE_XTC         },
         { "infill",      COMMON_SAMPLER_TYPE_INFILL      },
         { "penalties",   COMMON_SAMPLER_TYPE_PENALTIES   },
-        { "adaptive_p",  COMMON_SAMPLER_TYPE_ADAPTIVE_P  },
-        // we support these alternative sampler names for compatibility
-        { "top-k",       COMMON_SAMPLER_TYPE_TOP_K       },
-        { "topk",        COMMON_SAMPLER_TYPE_TOP_K       },
-        { "top-p",       COMMON_SAMPLER_TYPE_TOP_P       },
-        { "topp",        COMMON_SAMPLER_TYPE_TOP_P       },
-        { "nucleus",     COMMON_SAMPLER_TYPE_TOP_P       },
-        { "top-n-sigma", COMMON_SAMPLER_TYPE_TOP_N_SIGMA },
-        { "top-nsigma",  COMMON_SAMPLER_TYPE_TOP_N_SIGMA },
-        { "typ-p",       COMMON_SAMPLER_TYPE_TYPICAL_P   },
-        { "typ",         COMMON_SAMPLER_TYPE_TYPICAL_P   },
-        { "typical_p",   COMMON_SAMPLER_TYPE_TYPICAL_P   },
-        { "typical-p",   COMMON_SAMPLER_TYPE_TYPICAL_P   },
-        { "typical",     COMMON_SAMPLER_TYPE_TYPICAL_P   },
-        { "min-p",       COMMON_SAMPLER_TYPE_MIN_P       },
-        { "minp",        COMMON_SAMPLER_TYPE_MIN_P       },
-        { "temp",        COMMON_SAMPLER_TYPE_TEMPERATURE },
-        { "adaptive-p",  COMMON_SAMPLER_TYPE_ADAPTIVE_P  },
-        { "adaptivep",   COMMON_SAMPLER_TYPE_ADAPTIVE_P  }
+        { "adaptive_p",  COMMON_SAMPLER_TYPE_ADAPTIVE_P  }
     };
+
+    // auto-generate aliases from canonical names
+    static const std::unordered_map<std::string, common_sampler_type> sname_alt_map = [] {
+        std::unordered_map<std::string, common_sampler_type> m;
+        for (const auto & entry : sname_map) {
+            const std::string & canonical = entry.first;
+            if (canonical.find('_') == std::string::npos) {
+                continue;
+            }
+            // kebab-case: "top-k", "min-p", etc.
+            {
+                std::string kebab_case = canonical;
+                std::replace(kebab_case.begin(), kebab_case.end(), '_', '-');
+                m[kebab_case] = entry.second;
+            }
+            // no dash: "topk", "minp", etc.
+            {
+                std::string no_dash = canonical;
+                no_dash.erase(std::remove(no_dash.begin(), no_dash.end(), '_'), no_dash.end());
+                m[no_dash] = entry.second;
+            }
+        }
+        // misc. well-known aliases
+        m["typ"] = COMMON_SAMPLER_TYPE_TYPICAL_P;
+        m["nucleus"] = COMMON_SAMPLER_TYPE_TOP_P;
+        m["temp"] = COMMON_SAMPLER_TYPE_TEMPERATURE;
+        return m;
+    }();
 
     std::vector<common_sampler_type> samplers;
     samplers.reserve(names.size());
 
     for (const auto & name : names) {
-        // transform the given sampler name to lowercase before checking
         std::string name_lower = name;
         std::transform(name_lower.begin(), name_lower.end(), name_lower.begin(), ::tolower);
-        auto sampler = sampler_name_map.find(name_lower);
-        if (sampler != sampler_name_map.end()) {
+        auto sampler = sname_map.find(name_lower);
+        if (sampler != sname_map.end()) {
             samplers.push_back(sampler->second);
+            continue;
+        }
+        auto alt_sampler = sname_alt_map.find(name_lower);
+        if (alt_sampler != sname_alt_map.end()) {
+            samplers.push_back(alt_sampler->second);
             continue;
         }
         LOG_WRN("%s: unable to match sampler by name '%s'\n", __func__, name_lower.c_str());
