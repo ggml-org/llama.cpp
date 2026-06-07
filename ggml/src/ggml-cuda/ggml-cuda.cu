@@ -1306,17 +1306,17 @@ static void ggml_cuda_mul_mat_cublas_impl(ggml_backend_cuda_context & ctx, const
     cudaStream_t main_stream = ctx.stream();
     CUBLAS_CHECK(cublasSetStream(ctx.cublas_handle(), main_stream));
 
-    const size_t ts_src0 = ggml_type_size(src0->type);
-    GGML_ASSERT(nb00 == ts_src0);
-    int64_t s01 = nb01 / ts_src0;
-    int64_t s02 = nb02 / ts_src0;
-    int64_t s03 = nb03 / ts_src0;
+    const size_t src0_ts = ggml_type_size(src0->type);
+    GGML_ASSERT(nb00 == src0_ts);
+    int64_t s01 = nb01 / src0_ts;
+    int64_t s02 = nb02 / src0_ts;
+    int64_t s03 = nb03 / src0_ts;
 
-    const size_t ts_src1 = ggml_type_size(src1->type);
-    GGML_ASSERT(nb10 == ts_src1);
-    int64_t s11 = nb11 / ts_src1;
-    int64_t s12 = nb12 / ts_src1;
-    int64_t s13 = nb13 / ts_src1;
+    const size_t src1_ts = ggml_type_size(src1->type);
+    GGML_ASSERT(nb10 == src1_ts);
+    int64_t s11 = nb11 / src1_ts;
+    int64_t s12 = nb12 / src1_ts;
+    int64_t s13 = nb13 / src1_ts;
 
     float * dst_ddf = (float *) dst->data;
 
@@ -1334,21 +1334,24 @@ static void ggml_cuda_mul_mat_cublas_impl(ggml_backend_cuda_context & ctx, const
     } else {
         src0_alloc.alloc(ggml_nelements(src0));
 
-        if (ggml_is_contiguous(src0)) {
+        if (ggml_is_contiguously_allocated(src0)) {
             const auto convert_func = traits::convert(src0->type);
             GGML_ASSERT(convert_func != nullptr);
             convert_func(src0->data, src0_alloc.get(), ggml_nelements(src0), main_stream);
+            const size_t src0_bs = ggml_blck_size(src0->type);
+            s01 *= src0_bs;
+            s02 *= src0_bs;
+            s03 *= src0_bs;
         } else {
             const auto convert_func = traits::convert_nc(src0->type);
             GGML_ASSERT(convert_func != nullptr);
             convert_func(src0->data, src0_alloc.get(), ne00, ne01, ne02, ne03, s01, s02, s03, main_stream);
+            s01 = ne00;
+            s02 = ne01*s01;
+            s03 = ne02*s02;
+            is_src0_cont_2 = true;
         }
         src0_ptr = src0_alloc.get();
-        s01 = ne00;
-        s02 = ne01*s01;
-        s03 = ne02*s02;
-
-        is_src0_cont_2 = true;
     }
 
     if (src1->type == compute_type) {
@@ -1356,21 +1359,24 @@ static void ggml_cuda_mul_mat_cublas_impl(ggml_backend_cuda_context & ctx, const
     } else {
         src1_alloc.alloc(ggml_nelements(src1));
 
-        if (ggml_is_contiguous(src1)) {
+        if (ggml_is_contiguously_allocated(src1)) {
             const auto convert_func = traits::convert(src1->type);
             GGML_ASSERT(convert_func != nullptr);
             convert_func(src1->data, src1_alloc.get(), ggml_nelements(src1), main_stream);
+            const size_t src1_bs = ggml_blck_size(src1->type);
+            s11 *= src1_bs;
+            s12 *= src1_bs;
+            s13 *= src1_bs;
         } else {
             const auto convert_func = traits::convert_nc(src1->type);
             GGML_ASSERT(convert_func != nullptr);
             convert_func(src1->data, src1_alloc.get(), ne10, ne11, ne12, ne13, s11, s12, s13, main_stream);
+            s11 = ne10;
+            s12 = ne11*s11;
+            s13 = ne12*s12;
+            is_src1_cont_2 = true;
         }
         src1_ptr = src1_alloc.get();
-        s11 = ne10;
-        s12 = ne11*s11;
-        s13 = ne12*s12;
-
-        is_src1_cont_2 = true;
     }
 
     ggml_cuda_pool_alloc<cuda_t> dst_temp(ctx.pool());
@@ -1458,13 +1464,13 @@ static void ggml_cuda_mul_mat_cublas_impl(ggml_backend_cuda_context & ctx, const
         ggml_cuda_pool_alloc<const void *> ptrs_src(ctx.pool(), 2*ne23);
         ggml_cuda_pool_alloc<      void *> ptrs_dst(ctx.pool(), 1*ne23);
 
-        size_t src1_stride_size = sizeof(cuda_t);
+        const size_t src_type_size = sizeof(cuda_t);
 
         const int threads_x = 16;
         const int threads_y = 16;
-        dim3 block_dims(threads_x, threads_y);
+        const dim3 block_dims(threads_x, threads_y);
 
-        dim3 grid_dims(
+        const dim3 grid_dims(
             (ne13 + threads_x - 1) / threads_x,
             (ne12 + threads_y - 1) / threads_y
         );
@@ -1473,9 +1479,8 @@ static void ggml_cuda_mul_mat_cublas_impl(ggml_backend_cuda_context & ctx, const
                 ptrs_src.get(), ptrs_dst.get(),
                 ne12, ne13,
                 ne23,
-                nb02, nb03,
-                (src1->type == compute_type) ? nb12 : s12*src1_stride_size,
-                (src1->type == compute_type) ? nb13 : s13*src1_stride_size,
+                s02*src_type_size, s03*src_type_size,
+                s12*src_type_size, s13*src_type_size,
                 nbd2, nbd3,
                 r2, r3);
 
@@ -1484,7 +1489,7 @@ static void ggml_cuda_mul_mat_cublas_impl(ggml_backend_cuda_context & ctx, const
         CUBLAS_CHECK(
         cublasGemmBatchedEx(ctx.cublas_handle(), CUBLAS_OP_T, CUBLAS_OP_N,
                 ne01, ne11, ne10,
-                alpha, (const void **) (ptrs_src.get() + 0*ne23), cu_data_type_a, nb01/nb00,
+                alpha, (const void **) (ptrs_src.get() + 0*ne23), cu_data_type_a, s01,
                        (const void **) (ptrs_src.get() + 1*ne23), cu_data_type_b, s11,
                 beta,  (      void **) (ptrs_dst.get() + 0*ne23), cu_data_type,   ne0,
                 ne23,
