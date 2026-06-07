@@ -60,7 +60,7 @@ static llama_tokens test_baseline(struct llama_model * model, const struct commo
     llama_sampler_chain_add(smpl.get(), llama_sampler_init_dist(params.sampling.seed));
 
     auto n_past = 0;
-    if (!common_prompt_batch_decode(ctx.get(), tokens, (int)tokens.size(), n_past, params.n_batch, params.out_file, true)) {
+    if (!common_prompt_batch_decode(ctx.get(), tokens, n_past, params.n_batch, params.out_file, true)) {
         LOG_ERR("%s: failed to decode prompt\n", __func__);
         return {};
     }

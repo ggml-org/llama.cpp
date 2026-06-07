@@ -685,7 +685,7 @@ int llama_completion(int argc, char ** argv) {
                 const bool is_last_batch = (n_consumed >= (int) embd_inp.size());
                 const bool save_now = session_do_save && is_last_batch;
                 session_tokens.insert(session_tokens.end(), embd.begin(), embd.end());
-                if (!common_prompt_batch_decode(ctx, session_tokens, embd.size(), n_past, params.n_batch, path_session, save_now)) {
+                if (!common_prompt_batch_decode(ctx, session_tokens, n_past, params.n_batch, path_session, save_now)) {
                     return 1;
                 }
                 n_session_consumed += embd.size();
