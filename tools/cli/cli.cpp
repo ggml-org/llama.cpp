@@ -224,7 +224,7 @@ struct cli_context {
 };
 
 // TODO?: Make this reusable, enums, docs
-static const std::array<std::string_view, 7> cmds = {
+static const std::array<std::string_view, 8> cmds = {
     "/audio ",
     "/clear",
     "/exit",
