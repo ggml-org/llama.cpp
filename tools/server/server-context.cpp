@@ -1443,10 +1443,7 @@ private:
 
         // if context shift is enabled and the prompt is larger than the context, truncate the middle
         // and keep the first n_keep tokens; otherwise the request is rejected in update_slots()
-        const bool can_split = !task.need_embd() ||
-            (llama_get_memory(ctx_tgt) && llama_pooling_type(ctx_tgt) == LLAMA_POOLING_TYPE_LAST);
-
-        if (params_base.ctx_shift && !mctx && can_split && task.n_tokens() >= slot.n_ctx) {
+        if (params_base.ctx_shift && !mctx && task.n_tokens() >= slot.n_ctx) {
             int n_keep = task.params.n_keep < 0 ? task.n_tokens() : task.params.n_keep;
             n_keep = std::min(slot.n_ctx - 4, n_keep);
 
