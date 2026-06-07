@@ -5,6 +5,7 @@
 #include "llama-kv-cells.h"
 #include "llama-memory.h"
 
+#include <memory>
 #include <unordered_map>
 #include <vector>
 
@@ -269,7 +270,7 @@ private:
     // TODO: temporary until we refactor to be able to share the same cells between 2 kv caches [TAG_KV_CACHE_SHARE_CELLS]
     llama_kv_cache * other;
 
-    std::vector<llama_kv_cells> v_cells;
+    std::shared_ptr<std::vector<llama_kv_cells>> v_cells;
 
     // maps from a sequence id to a stream id
     std::vector<uint32_t> seq_to_stream;
@@ -279,12 +280,13 @@ private:
 
     std::vector<kv_layer> layers;
 
-    // model layer id -> KV cache layer id
+    // maps from a model layer id to a KV cache layer id
     std::unordered_map<int32_t, int32_t> map_layer_ids;
 
     size_t total_size() const;
 
     size_t size_k_bytes() const;
+
     size_t size_v_bytes() const;
 
     ggml_tensor * build_rope_shift(
@@ -296,7 +298,7 @@ private:
                     ggml_tensor * factors,
                           float   freq_base,
                           float   freq_scale,
-                       uint32_t   il) const;
+                   uint32_t   il) const;
 
     ggml_cgraph * build_graph_shift(
                llm_graph_result * res,
