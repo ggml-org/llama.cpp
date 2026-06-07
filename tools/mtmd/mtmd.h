@@ -174,9 +174,9 @@ MTMD_API void         mtmd_bitmap_set_id(mtmd_bitmap * bitmap, const char * id);
 // either out_bitmap or out_text can be set, but not both
 // out_bitmap cannot be another lazy bitmap (no nested lazy allowed)
 // return value:
-//   0 on success
-//   1 on EOF (signal to mtmd_tokenize to move on)
-//   2 on error (signal to mtmd_tokenize to abort)
+//    0 on success
+//   -1 on EOF (signal to mtmd_tokenize to move on)
+//   -2 on error (signal to mtmd_tokenize to abort)
 typedef int(* mtmd_bitmap_lazy_callback)(
     size_t chunk_idx,
     void * user_data,

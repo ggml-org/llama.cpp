@@ -802,6 +802,7 @@ struct mtmd_tokenizer {
         expanded.reserve(parts.size());
         for (auto & p : parts) {
             if (p.bitmap != nullptr && p.bitmap->lazy_callback) {
+                LOG_DBG("%s: expanding lazy bitmap\n", __func__);
                 for (size_t i = 0;; i++) {
                     char * out_str = nullptr;
                     mtmd_bitmap * out_bm = nullptr;
@@ -817,14 +818,16 @@ struct mtmd_tokenizer {
                         if (out_bm) {
                             auto & ptr = bm_from_lazy.emplace_back(out_bm); // remember to free it later
                             expanded.push_back({"", ptr.ptr.get()});
+                            LOG_DBG("%s: lazy callback returned bitmap with dimensions %d x %d\n", __func__, out_bm->nx, out_bm->ny);
                         } else if (out_str) {
                             auto & ptr = text_from_lazy.emplace_back(out_str); // remember to free it later
                             expanded.push_back({ptr, nullptr});
+                            LOG_DBG("%s: lazy callback returned text: %s\n", __func__, out_str);
                         }
-                    } else if (res == 1) {
+                    } else if (res == -1) {
                         // EOF: lazy part removes itself (not added to expanded)
                         break;
-                    } else if (res == 2) {
+                    } else if (res == -2) {
                         // error
                         throw std::runtime_error(string_format("lazy callback returned error"));
                     }
