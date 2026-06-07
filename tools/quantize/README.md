@@ -39,6 +39,7 @@ Notes:
 - In the usual case where the model is distributed in 16-bit format, `--outtype auto` (or omitting `--outtype` entirely) also works well.
 - If you have previously downloaded the model locally, specify the directory and remove the `--remote` flag.
 - For compatibility reasons, the Python requirements install transformers 4, but more and more models (like Gemma 4) require transformers 5. You can safely `pip install -U transformers` to get the latest version.
+- For NVIDIA NVFP4 (FP4) checkpoints distributed in ModelOpt or compressed-tensors format, see [NVFP4 quantization](../../docs/nvfp4.md) for conversion and benchmarking notes.
 
 ## Quantize the GGUF
 
