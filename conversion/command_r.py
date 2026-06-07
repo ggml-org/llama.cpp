@@ -93,6 +93,10 @@ class Cohere2MoeModel(TextModel):
     def set_gguf_parameters(self):
         hparams = self.hparams
         expert_intermediate_size = hparams["intermediate_size"]
+        mlp_layer_types = hparams.get("mlp_layer_types")
+        n_dense_lead = hparams.get("first_k_dense_replace", 0)
+        if mlp_layer_types is not None:
+            n_dense_lead = next((i for i, t in enumerate(mlp_layer_types) if t != "dense"), len(mlp_layer_types))
 
         super().set_gguf_parameters()
 
@@ -101,7 +105,7 @@ class Cohere2MoeModel(TextModel):
         self.gguf_writer.add_sliding_window_pattern([t == "sliding_attention" for t in hparams["layer_types"]])
         self.gguf_writer.add_vocab_size(hparams["vocab_size"])
         self.gguf_writer.add_expert_feed_forward_length(expert_intermediate_size)
-        self.gguf_writer.add_leading_dense_block_count(hparams["first_k_dense_replace"])
+        self.gguf_writer.add_leading_dense_block_count(n_dense_lead)
         self.gguf_writer.add_expert_weights_norm(hparams.get("norm_topk_prob", False))
         self.gguf_writer.add_expert_gating_func(gguf.ExpertGatingFuncType.SIGMOID)
         if (num_shared_experts := hparams.get("num_shared_experts", 0)) > 0:
