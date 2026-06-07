@@ -262,6 +262,7 @@ class Keys:
         ADD_SEP              = "tokenizer.ggml.add_sep_token"
         ADD_PREFIX           = "tokenizer.ggml.add_space_prefix"
         REMOVE_EXTRA_WS      = "tokenizer.ggml.remove_extra_whitespaces"
+        NORMALIZER_LOWERCASE = "tokenizer.ggml.normalizer.lowercase"
         PRECOMPILED_CHARSMAP = "tokenizer.ggml.precompiled_charsmap"
         HF_JSON              = "tokenizer.huggingface.json"
         RWKV                 = "tokenizer.rwkv.world"
