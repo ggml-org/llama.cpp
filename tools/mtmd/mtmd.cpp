@@ -34,6 +34,10 @@ struct mtmd_bitmap {
     std::string id; // optional user-defined id, for ex: can be set to image hash, useful for KV cache tracking
     bool is_audio = false; // true if the bitmap is audio
 
+    // lazy-loaded bitmap
+    mtmd_bitmap_lazy_callback lazy_callback = nullptr;
+    void * lazy_user_data = nullptr;
+
     mtmd_bitmap(const unsigned char * data, uint32_t nx, uint32_t ny)
         : nx(nx), ny(ny) {
         if (data) {
@@ -1299,6 +1303,10 @@ int mtmd_get_audio_sample_rate(const mtmd_context * ctx) {
     return clip_get_hparams(ctx->ctx_a)->audio_sample_rate;
 }
 
+const char * mtmd_get_marker(const mtmd_context * ctx) {
+    return ctx->media_marker.c_str();
+}
+
 //
 // public API functions
 //
@@ -1331,10 +1339,16 @@ uint32_t mtmd_bitmap_get_ny(const mtmd_bitmap * bitmap) {
 }
 
 const unsigned char * mtmd_bitmap_get_data(const mtmd_bitmap * bitmap) {
+    if (bitmap->is_placeholder()) {
+        return nullptr;
+    }
     return bitmap->get_ro_buf().data();
 }
 
 size_t mtmd_bitmap_get_n_bytes(const mtmd_bitmap * bitmap) {
+    if (bitmap->is_placeholder()) {
+        return 0;
+    }
     return bitmap->get_ro_buf().size();
 }
 
