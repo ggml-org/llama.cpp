@@ -136,6 +136,8 @@ MTMD_API const char * mtmd_get_marker(const mtmd_context * ctx);
 // if bitmap is image:
 //     length of data must be nx * ny * 3
 //     the data is in RGBRGBRGB... format
+//     note: some video-capable models (i.e. qwen-vl) can merge consecutive bitmaps
+//           into one chunk, mtmd_tokenize() will automatically handle this
 // if bitmap is audio:
 //     length of data must be n_samples * sizeof(float)
 //     the data is in float format (PCM F32)
