@@ -107,13 +107,7 @@ class Cohere2MoeModel(TextModel):
         hparams = self.hparams
         expert_intermediate_size = hparams["intermediate_size"]
 
-        # The dense prefix FFN size is the GGUF feed_forward_length; routed
-        # expert FFN size is written separately below.
-        hparams["intermediate_size"] = hparams["prefix_dense_intermediate_size"]
-        try:
-            super().set_gguf_parameters()
-        finally:
-            hparams["intermediate_size"] = expert_intermediate_size
+        super().set_gguf_parameters()
 
         self.gguf_writer.add_logit_scale(hparams["logit_scale"])
         self.gguf_writer.add_sliding_window(hparams["sliding_window"])
