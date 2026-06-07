@@ -622,9 +622,9 @@ struct mtmd_helper_video_context {
     int32_t current_frame = 0;
     std::thread feeder_thread;
 
-    // TODO allow these params to be user-configurable
-    std::string prompt_start          = "Video:";
-    int32_t     prompt_timestamp_freq = 4; // emit a timestamp text every N frames (0 = disabled)
+    std::string prompt_start         = "Video:";
+    int32_t     timestamp_interval_ms = 5000; // emit a timestamp text every N ms (0 = disabled)
+    float       next_timestamp_ms     = 0.0f; // next elapsed-ms threshold at which to emit
 
     std::vector<uint8_t> frame_buf;
     std::string pending_text; // text queued to be returned before the next frame
@@ -860,10 +860,18 @@ struct mtmd_helper_video_context {
         if (!frame) return -1;
         *out_bitmap = frame;
 
-        if (prompt_timestamp_freq > 0 && current_frame % prompt_timestamp_freq == 0) {
-            char ts_buf[32];
-            snprintf(ts_buf, sizeof(ts_buf), "[%.2fs]", (float)current_frame / info.fps);
-            pending_text = ts_buf;
+        if (timestamp_interval_ms > 0) {
+            // current_frame was already incremented by read_next_frame(); undo for elapsed calc
+            float elapsed_ms = (float)(current_frame - 1) / info.fps * 1000.0f;
+            if (elapsed_ms >= next_timestamp_ms) {
+                char ts_buf[32];
+                float elapsed_s = elapsed_ms / 1000.0f;
+                int   minutes   = (int)(elapsed_s / 60);
+                float seconds   = elapsed_s - minutes * 60.0f;
+                snprintf(ts_buf, sizeof(ts_buf), "[%dm%.2fs]", minutes, seconds);
+                pending_text = ts_buf;
+                next_timestamp_ms += (float)timestamp_interval_ms;
+            }
         }
 
         return 0;
@@ -885,8 +893,9 @@ struct mtmd_helper_video_context {
 
 mtmd_helper_video_init_params mtmd_helper_video_init_params_default() {
     return {
-        /* fps_target      */ 4.0f,
-        /* ffmpeg_bin_dir  */ nullptr
+        /* fps_target             */ 4.0f,
+        /* ffmpeg_bin_dir         */ nullptr,
+        /* timestamp_interval_ms  */ 5000,
     };
 }
 
@@ -917,10 +926,11 @@ mtmd_helper_video_context * mtmd_helper_video_init(
 #ifdef MTMD_VIDEO
     auto * ctx = new mtmd_helper_video_context();
 
-    ctx->mctx        = mctx;
-    ctx->path        = path;
-    ctx->ffmpeg_bin  = video_resolve_bin(params.ffmpeg_bin_dir, "ffmpeg");
-    ctx->ffprobe_bin = video_resolve_bin(params.ffmpeg_bin_dir, "ffprobe");
+    ctx->mctx                 = mctx;
+    ctx->path                 = path;
+    ctx->ffmpeg_bin           = video_resolve_bin(params.ffmpeg_bin_dir, "ffmpeg");
+    ctx->ffprobe_bin          = video_resolve_bin(params.ffmpeg_bin_dir, "ffprobe");
+    ctx->timestamp_interval_ms = params.timestamp_interval_ms;
 
     if (!ctx->probe(params.fps_target)) {
         LOG_ERR("%s: ffprobe failed for '%s' (is ffprobe in PATH?)\n", __func__, path);
@@ -948,10 +958,11 @@ mtmd_helper_video_context * mtmd_helper_video_init_from_buf(
 #ifdef MTMD_VIDEO
     auto * ctx = new mtmd_helper_video_context();
 
-    ctx->mctx        = mctx;
+    ctx->mctx                  = mctx;
     ctx->input_buf.assign(buf, buf + len);
-    ctx->ffmpeg_bin  = video_resolve_bin(params.ffmpeg_bin_dir, "ffmpeg");
-    ctx->ffprobe_bin = video_resolve_bin(params.ffmpeg_bin_dir, "ffprobe");
+    ctx->ffmpeg_bin            = video_resolve_bin(params.ffmpeg_bin_dir, "ffmpeg");
+    ctx->ffprobe_bin           = video_resolve_bin(params.ffmpeg_bin_dir, "ffprobe");
+    ctx->timestamp_interval_ms = params.timestamp_interval_ms;
 
     if (!ctx->probe(params.fps_target)) {
         LOG_ERR("%s: ffprobe failed on buffer (is ffprobe in PATH?)\n", __func__);
