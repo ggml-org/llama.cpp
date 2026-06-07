@@ -770,23 +770,23 @@ std::string common_sampler_type_to_str(enum common_sampler_type cnstr) {
 }
 
 std::vector<common_sampler_type> common_sampler_types_from_names(const std::vector<std::string> & names) {
-    static const std::unordered_map<std::string, common_sampler_type> canonical_name_map {
-        { "dry",         COMMON_SAMPLER_TYPE_DRY         },
-        { "top_k",       COMMON_SAMPLER_TYPE_TOP_K       },
-        { "top_p",       COMMON_SAMPLER_TYPE_TOP_P       },
-        { "top_n_sigma", COMMON_SAMPLER_TYPE_TOP_N_SIGMA },
-        { "typ_p",       COMMON_SAMPLER_TYPE_TYPICAL_P   },
-        { "min_p",       COMMON_SAMPLER_TYPE_MIN_P       },
-        { "temperature", COMMON_SAMPLER_TYPE_TEMPERATURE },
-        { "xtc",         COMMON_SAMPLER_TYPE_XTC         },
-        { "infill",      COMMON_SAMPLER_TYPE_INFILL      },
-        { "penalties",   COMMON_SAMPLER_TYPE_PENALTIES   },
-        { "adaptive_p",  COMMON_SAMPLER_TYPE_ADAPTIVE_P  }
-    };
-
-    // sampler names can be written multiple ways; auto-generate aliases from canonical names
-    static const std::unordered_map<std::string, common_sampler_type> complete_name_map = []{
-        std::unordered_map<std::string, common_sampler_type> m;
+    // sampler names can be written multiple ways; generate aliases from canonical sampler names
+    static const auto sampler_name_map = []{
+        // canonical sampler name mapping
+        std::unordered_map<std::string, common_sampler_type> canonical_name_map {
+            { "dry",         COMMON_SAMPLER_TYPE_DRY         },
+            { "top_k",       COMMON_SAMPLER_TYPE_TOP_K       },
+            { "top_p",       COMMON_SAMPLER_TYPE_TOP_P       },
+            { "top_n_sigma", COMMON_SAMPLER_TYPE_TOP_N_SIGMA },
+            { "typ_p",       COMMON_SAMPLER_TYPE_TYPICAL_P   },
+            { "min_p",       COMMON_SAMPLER_TYPE_MIN_P       },
+            { "temperature", COMMON_SAMPLER_TYPE_TEMPERATURE },
+            { "xtc",         COMMON_SAMPLER_TYPE_XTC         },
+            { "infill",      COMMON_SAMPLER_TYPE_INFILL      },
+            { "penalties",   COMMON_SAMPLER_TYPE_PENALTIES   },
+            { "adaptive_p",  COMMON_SAMPLER_TYPE_ADAPTIVE_P  }
+        };
+        std::unordered_map<std::string, common_sampler_type> alias_name_map;
         for (const auto & entry : canonical_name_map) {
             const std::string & canonical = entry.first;
             if (canonical.find('_') == std::string::npos) {
@@ -796,24 +796,22 @@ std::vector<common_sampler_type> common_sampler_types_from_names(const std::vect
             {
                 std::string kebab_case = canonical;
                 std::replace(kebab_case.begin(), kebab_case.end(), '_', '-');
-                m[kebab_case] = entry.second;
+                alias_name_map[kebab_case] = entry.second;
             }
             // no dash: "topk", "minp", etc.
             {
                 std::string no_dash = canonical;
                 no_dash.erase(std::remove(no_dash.begin(), no_dash.end(), '_'), no_dash.end());
-                m[no_dash] = entry.second;
+                alias_name_map[no_dash] = entry.second;
             }
         }
-
         // misc. aliases
-        m.insert({"nucleus", COMMON_SAMPLER_TYPE_TOP_P});
-        m.insert({"temp",    COMMON_SAMPLER_TYPE_TEMPERATURE});
-        m.insert({"typ",     COMMON_SAMPLER_TYPE_TYPICAL_P});
-
-        // merge with the canonical map
-        m.insert(canonical_name_map.begin(), canonical_name_map.end());
-        return m;
+        alias_name_map.insert({"nucleus", COMMON_SAMPLER_TYPE_TOP_P});
+        alias_name_map.insert({"temp",    COMMON_SAMPLER_TYPE_TEMPERATURE});
+        alias_name_map.insert({"typ",     COMMON_SAMPLER_TYPE_TYPICAL_P});
+        // include aliases + canonical names in the complete mapping
+        alias_name_map.merge(canonical_name_map);
+        return alias_name_map;
     }();
 
     std::vector<common_sampler_type> samplers;
@@ -822,8 +820,8 @@ std::vector<common_sampler_type> common_sampler_types_from_names(const std::vect
     for (const auto & name : names) {
         std::string name_lower = name;
         std::transform(name_lower.begin(), name_lower.end(), name_lower.begin(), ::tolower);
-        auto sampler = complete_name_map.find(name_lower);
-        if (sampler != complete_name_map.end()) {
+        auto sampler = sampler_name_map.find(name_lower);
+        if (sampler != sampler_name_map.end()) {
             samplers.push_back(sampler->second);
             continue;
         }
