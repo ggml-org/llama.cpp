@@ -1,0 +1,7 @@
+# Phase 0 Python dependencies (installed inside Docker)
+# llama-cpp-python is installed separately with GGML_CUDA=on (see Dockerfile)
+
+numpy
+scipy
+silero-vad      # neural VAD; pulls in CPU torch (sufficient for VAD inference)
+sounddevice     # mic input (for --mic on local desktops; not usable on headless servers)

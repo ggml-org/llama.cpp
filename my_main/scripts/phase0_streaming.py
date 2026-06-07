@@ -6,24 +6,35 @@ Proves that audio embeddings can be injected into the LLM KV cache
 one 40ms chunk at a time, then text is generated at speech boundaries.
 
 Architecture (no fine-tuning needed):
-  WAV -> 40ms frames -> rms_norm -> mm.a.input_projection.weight
-      -> llama_decode(embd) x N -> suffix tokens -> token sampling -> stdout
+  WAV / mic -> 40ms frames -> rms_norm -> mm.a.input_projection.weight
+            -> llama_decode(embd) x N -> suffix tokens -> token sampling -> stdout
 
 Requirements:
-  pip install llama-cpp-python
+  pip install llama-cpp-python silero-vad sounddevice
   (CUDA build: CMAKE_ARGS='-DGGML_CUDA=on' pip install llama-cpp-python)
 
-Usage:
+Usage (WAV file):
   python phase0_streaming.py \\
       --model  ~/.cache/llama.cpp/ggml-org_gemma-4-12B-it-GGUF/gemma-4-12B-it-Q4_K_M.gguf \\
       --mmproj ~/.cache/llama.cpp/ggml-org_gemma-4-12B-it-GGUF/mmproj-model-f16.gguf \\
       --audio  ./input.wav
 
+Usage (Microphone):
+  python phase0_streaming.py \\
+      --model  ~/.cache/llama.cpp/ggml-org_gemma-4-12B-it-GGUF/gemma-4-12B-it-Q4_K_M.gguf \\
+      --mmproj ~/.cache/llama.cpp/ggml-org_gemma-4-12B-it-GGUF/mmproj-model-f16.gguf \\
+      --mic
+
 Notes:
-  - mmproj GGUF must contain f16 or f32 tensors (not quantized weights).
-  - Audio must be 16kHz mono WAV.
+  - mmproj GGUF: f16, f32, or Q8_0 tensors are all supported.
+  - Audio must be 16kHz mono WAV (for --audio mode).
     Convert: ffmpeg -i in.mp3 -ar 16000 -ac 1 out.wav
-  - Without fine-tuning the response quality is limited; this tests plumbing.
+  - Default VAD: silero (robust to noise; requires pip install silero-vad)
+    Fallback:    --vad-backend energy (no extra deps; WAV-only)
+  - --mic requires: pip install sounddevice
+  - --save-turns DIR: saves each detected utterance as turn_NNNN.wav in DIR
+    Useful for Phase 1 fine-tune verification: replay the same audio against
+    the base model and the fine-tuned model to compare responses.
   - Find cached model files: ls ~/.cache/llama.cpp/ggml-org_gemma-4-12B-it-GGUF/
 """
 
@@ -33,7 +44,8 @@ import struct
 import sys
 import time
 from pathlib import Path
-from typing import List
+from queue import Queue
+from typing import Iterator, List, Optional
 
 import numpy as np
 import scipy.io.wavfile as wavfile
@@ -46,9 +58,9 @@ CHUNK_SAMPLES = 640     # 40ms frame: n_mel_bins = 640 samples
 RMS_EPS       = 1e-6    # hparams.eps for gemma4ua rms_norm
 
 # --------------------------------------------------------------------------- #
-#  Energy-based VAD                                                            #
+#  Energy-based VAD (fallback; no extra deps; WAV-only)                        #
 # --------------------------------------------------------------------------- #
-_VAD_THRESHOLD     = 0.003   # fraction of file-wide mean energy
+_VAD_THRESHOLD     = 0.003
 _VAD_SILENCE_GRACE = 12      # consecutive silent frames before utterance_end (~480ms)
 _VAD_MIN_SPEECH    = 15      # ignore speech bursts shorter than this many frames (~600ms)
 
@@ -58,19 +70,24 @@ class EnergyVAD:
       'speech'        - frame has voice energy
       'silence'       - quiet frame
       'utterance_end' - emitted once after speech + sufficient silence
-    """
-    def __init__(self, threshold=_VAD_THRESHOLD,
-                 silence_grace=_VAD_SILENCE_GRACE,
-                 min_speech=_VAD_MIN_SPEECH):
-        self.threshold = threshold
-        self.grace     = silence_grace
-        self.min_speech = min_speech
-        self._active   = False
-        self._silence  = 0
-        self._n_speech = 0
 
-    def process(self, chunk: np.ndarray, ref_energy: float) -> str:
-        is_speech = float(np.mean(chunk ** 2)) > ref_energy * self.threshold
+    ref_energy: file-wide mean energy (float(np.mean(samples**2))).
+    Only usable with WAV files; not suitable for mic (no ref energy available).
+    """
+    def __init__(self, ref_energy: float,
+                 threshold: float = _VAD_THRESHOLD,
+                 silence_grace: int = _VAD_SILENCE_GRACE,
+                 min_speech: int = _VAD_MIN_SPEECH):
+        self._ref       = ref_energy
+        self.threshold  = threshold
+        self.grace      = silence_grace
+        self.min_speech = min_speech
+        self._active    = False
+        self._silence   = 0
+        self._n_speech  = 0
+
+    def process(self, chunk: np.ndarray) -> str:
+        is_speech = float(np.mean(chunk ** 2)) > self._ref * self.threshold
         if is_speech:
             self._active    = True
             self._n_speech += 1
@@ -84,6 +101,118 @@ class EnergyVAD:
                 self._n_speech = 0
                 return 'utterance_end'
         return 'silence'
+
+
+# --------------------------------------------------------------------------- #
+#  Silero-VAD wrapper (default; requires: pip install silero-vad)             #
+# --------------------------------------------------------------------------- #
+class SileroVAD:
+    """
+    Neural VAD using Silero-VAD. Works for both --audio and --mic.
+
+    Silero-VAD expects 512 samples at 16kHz. Each 640-sample Gemma4 frame is
+    truncated to 512 for the VAD decision only; the projector still receives
+    the full 640 samples.
+    """
+    _WINDOW = 512   # Silero-VAD fixed window at 16kHz
+
+    def __init__(self, threshold: float = 0.5,
+                 silence_ms: int = 480,
+                 min_speech: int = 15,
+                 speech_pad_ms: int = 30):
+        try:
+            from silero_vad import load_silero_vad, VADIterator
+        except ImportError:
+            sys.exit(
+                "ERROR: silero-vad not found.\n"
+                "Install: pip install silero-vad\n"
+                "  or use --vad-backend energy (WAV-only, no extra deps)"
+            )
+        model = load_silero_vad()
+        self._vad = VADIterator(
+            model,
+            threshold               = threshold,
+            sampling_rate           = SAMPLE_RATE,
+            min_silence_duration_ms = silence_ms,
+            speech_pad_ms           = speech_pad_ms,
+        )
+        self.min_speech = min_speech
+        self._active    = False
+        self._n_speech  = 0
+
+    def process(self, chunk: np.ndarray) -> str:
+        """Process one 640-sample chunk → 'speech' | 'silence' | 'utterance_end'."""
+        import torch
+        # Silero expects exactly 512 samples; truncate our 640-sample frame
+        vad_in = torch.from_numpy(chunk[:self._WINDOW].astype(np.float32))
+        event  = self._vad(vad_in)
+
+        if event is not None:
+            if 'start' in event:
+                self._active   = True
+                self._n_speech = 0
+            elif 'end' in event and self._active:
+                self._active = False
+                n = self._n_speech
+                self._n_speech = 0
+                return 'utterance_end' if n >= self.min_speech else 'silence'
+
+        if self._active:
+            self._n_speech += 1
+            return 'speech'
+        return 'silence'
+
+    def reset(self):
+        self._vad.reset_states()
+        self._active   = False
+        self._n_speech = 0
+
+
+# --------------------------------------------------------------------------- #
+#  Microphone input (requires: pip install sounddevice)                        #
+# --------------------------------------------------------------------------- #
+class MicStream:
+    """Real-time 16kHz mono microphone input via sounddevice."""
+
+    def __init__(self, blocksize: int = CHUNK_SAMPLES,
+                 samplerate: int = SAMPLE_RATE):
+        try:
+            import sounddevice as sd
+            self._sd = sd
+        except ImportError:
+            sys.exit(
+                "ERROR: sounddevice not found.\n"
+                "Install: pip install sounddevice"
+            )
+        self._blocksize  = blocksize
+        self._samplerate = samplerate
+        self._queue: Queue = Queue()
+        self._stream     = None
+
+    def _callback(self, indata: np.ndarray, frames: int, time_info, status):
+        if status:
+            print(f"\n[mic] {status}", file=sys.stderr)
+        self._queue.put(indata[:, 0].copy())
+
+    def __enter__(self):
+        self._stream = self._sd.InputStream(
+            samplerate = self._samplerate,
+            channels   = 1,
+            dtype      = 'float32',
+            blocksize  = self._blocksize,
+            callback   = self._callback,
+        )
+        self._stream.start()
+        return self
+
+    def __exit__(self, *args):
+        if self._stream:
+            self._stream.stop()
+            self._stream.close()
+
+    def __iter__(self) -> Iterator[np.ndarray]:
+        while True:
+            yield self._queue.get()
 
 
 # --------------------------------------------------------------------------- #
@@ -306,12 +435,30 @@ def load_wav_f32(path: str) -> np.ndarray:
     return raw.astype(np.float32)
 
 
+def _wav_to_chunks(samples: np.ndarray) -> Iterator[np.ndarray]:
+    """Yield padded 640-sample chunks from a pre-loaded WAV array."""
+    n = (len(samples) + CHUNK_SAMPLES - 1) // CHUNK_SAMPLES
+    for i in range(n):
+        chunk = samples[i * CHUNK_SAMPLES:(i + 1) * CHUNK_SAMPLES]
+        if len(chunk) < CHUNK_SAMPLES:
+            chunk = np.pad(chunk, (0, CHUNK_SAMPLES - len(chunk)))
+        yield chunk
+
+
 # --------------------------------------------------------------------------- #
 #  Main streaming loop                                                         #
 # --------------------------------------------------------------------------- #
-def run(model_path: str, mmproj_path: str, audio_path: str,
-        user_prompt: str, n_ctx: int, n_gpu_layers: int,
-        vad_threshold: float):
+def run(model_path: str, mmproj_path: str,
+        audio_path: Optional[str],
+        use_mic: bool,
+        vad_backend: str,
+        user_prompt: str,
+        n_ctx: int, n_gpu_layers: int,
+        silero_threshold: float,
+        vad_threshold: float,
+        save_turns: Optional[str],
+        flash_attn: bool = True,
+        show_thinking: bool = False):
 
     lc = _import_llama_cpp()
 
@@ -320,13 +467,15 @@ def run(model_path: str, mmproj_path: str, audio_path: str,
     n_embd = proj.n_embd
 
     # 2. Load LLM ------------------------------------------------------------
-    print(f"[llama] loading {Path(model_path).name}  n_ctx={n_ctx}  gpu_layers={n_gpu_layers}")
+    fa_str = 'on' if flash_attn else 'off'
+    print(f"[llama] loading {Path(model_path).name}  n_ctx={n_ctx}  gpu_layers={n_gpu_layers}  flash_attn={fa_str}")
     model = lc.Llama(
         model_path    = model_path,
         n_ctx         = n_ctx,
         n_gpu_layers  = n_gpu_layers,
         embedding     = False,
         verbose       = False,
+        flash_attn    = flash_attn,
     )
     ctx   = model._ctx.ctx       # llama_context*
     lm    = model._model.model   # llama_model*
@@ -343,17 +492,46 @@ def run(model_path: str, mmproj_path: str, audio_path: str,
     PREFIX = [BOS] + tok("<start_of_turn>user\n")
     SUFFIX = tok(f"{user_prompt}<end_of_turn>\n<start_of_turn>model\n")
 
-    # 4. Load audio ----------------------------------------------------------
-    print(f"[audio] loading {audio_path}")
-    samples    = load_wav_f32(audio_path)
-    n_chunks   = (len(samples) + CHUNK_SAMPLES - 1) // CHUNK_SAMPLES
-    ref_energy = float(np.mean(samples ** 2))
-    dur_s      = len(samples) / SAMPLE_RATE
-    print(f"[audio] {dur_s:.2f}s  {n_chunks} frames @ 40ms  ref_energy={ref_energy:.5f}")
+    # 4. Set up VAD ----------------------------------------------------------
+    if vad_backend == 'energy':
+        if use_mic:
+            sys.exit("ERROR: --vad-backend energy is not supported with --mic")
+        samples    = load_wav_f32(audio_path)
+        ref_energy = float(np.mean(samples ** 2))
+        n_chunks   = (len(samples) + CHUNK_SAMPLES - 1) // CHUNK_SAMPLES
+        dur_s      = len(samples) / SAMPLE_RATE
+        print(f"[audio] {dur_s:.2f}s  {n_chunks} frames @ 40ms  ref_energy={ref_energy:.5f}")
+        vad = EnergyVAD(ref_energy=ref_energy, threshold=vad_threshold)
+    else:  # silero (default)
+        vad = SileroVAD(threshold=silero_threshold)
+        if not use_mic:
+            samples  = load_wav_f32(audio_path)
+            n_chunks = (len(samples) + CHUNK_SAMPLES - 1) // CHUNK_SAMPLES
+            dur_s    = len(samples) / SAMPLE_RATE
+            print(f"[audio] {dur_s:.2f}s  {n_chunks} frames @ 40ms")
 
-    # 5. Decode + generate after each detected utterance ---------------------
-    def respond(audio_embeds: List[np.ndarray]):
-        # Clear KV cache - llama_kv_cache_clear was renamed in newer llama.cpp
+    # 5. Prepare turn save directory -----------------------------------------
+    turns_dir: Optional[Path] = None
+    if save_turns:
+        turns_dir = Path(save_turns)
+        turns_dir.mkdir(parents=True, exist_ok=True)
+        print(f"[turns] saving detected utterances to {turns_dir}/")
+
+    # 6. respond() closure ---------------------------------------------------
+    turn_idx = [0]
+
+    def respond(speech_frames: List[np.ndarray],
+                speech_raw: Optional[List[np.ndarray]]):
+        # Optionally save raw audio for Phase 1 verification
+        if turns_dir is not None and speech_raw:
+            raw_audio = np.concatenate(speech_raw)
+            wav_path  = turns_dir / f"turn_{turn_idx[0]:04d}.wav"
+            wavfile.write(str(wav_path), SAMPLE_RATE,
+                          (raw_audio * 32768).astype(np.int16))
+            print(f"  [turn] saved {wav_path}  ({len(raw_audio)/SAMPLE_RATE:.2f}s)")
+        turn_idx[0] += 1
+
+        # Clear KV cache
         mem = lc.llama_get_memory(ctx)
         if mem is not None:
             lc.llama_memory_clear(mem, True)
@@ -361,19 +539,17 @@ def run(model_path: str, mmproj_path: str, audio_path: str,
 
         pos = _decode_tokens(lc, ctx, PREFIX, pos)
 
-        n_frames = len(audio_embeds)
+        n_frames = len(speech_frames)
         print(f"  [inject] {n_frames} frames ({n_frames * 40}ms) into KV cache...",
               end=' ', flush=True)
         t_inject = time.monotonic()
-        pos = _decode_embeds(lc, ctx, audio_embeds, pos, n_embd)
+        pos = _decode_embeds(lc, ctx, speech_frames, pos, n_embd)
         print(f"{time.monotonic() - t_inject:.2f}s")
 
         # Last suffix token gets logits=1 so we can immediately sample
         pos = _decode_tokens(lc, ctx, SUFFIX, pos, need_logits_on_last=True)
 
-        # Build sampler chain.
-        # Use top_k(40) + greedy to stay robust when logits contain NaN
-        # (expected without fine-tuning since the model sees unexpected embeddings).
+        # top_k(40) + greedy: robust when logits contain NaN (expected without fine-tuning)
         sparams = lc.llama_sampler_chain_default_params()
         sampler = lc.llama_sampler_chain_init(sparams)
         lc.llama_sampler_chain_add(sampler, lc.llama_sampler_init_top_k(40))
@@ -381,7 +557,6 @@ def run(model_path: str, mmproj_path: str, audio_path: str,
 
         gen_batch = lc.llama_batch_init(1, 0, 1)
 
-        # Inspect logits to verify model state
         raw_logits = lc.llama_get_logits(ctx)
         if raw_logits:
             import ctypes as _ct
@@ -391,9 +566,16 @@ def run(model_path: str, mmproj_path: str, audio_path: str,
             has_nan = any(x != x for x in sample)
             print(f"  [logits] first 10: {[f'{v:.2f}' for v in sample]}  nan={has_nan}")
 
+        # Gemma 4 thinking token IDs (fixed in vocab)
+        TOK_THINK_START = 100  # <|channel>
+        TOK_THINK_END   = 101  # <channel|>
+
         print("[model] ", end='', flush=True)
         t_gen = time.monotonic()
         n_tok = 0
+        n_think_tok = 0
+        in_thinking = False
+
         for _ in range(512):
             new_tok = lc.llama_sampler_sample(sampler, ctx, -1)
             lc.llama_sampler_accept(sampler, new_tok)
@@ -402,11 +584,28 @@ def run(model_path: str, mmproj_path: str, audio_path: str,
             if lc.llama_vocab_is_eog(vocab, new_tok):
                 break
 
-            piece = model.detokenize([new_tok]).decode('utf-8', errors='replace')
-            print(piece, end='', flush=True)
-            n_tok += 1
+            if new_tok == TOK_THINK_START:
+                in_thinking = True
+                if show_thinking:
+                    print('\033[2m<|channel>\033[0m', end='', flush=True)
+            elif new_tok == TOK_THINK_END:
+                in_thinking = False
+                if show_thinking:
+                    print('\033[2m<channel|>\033[0m', end='', flush=True)
+                elif n_think_tok > 0:
+                    print(f'\033[2m[{n_think_tok} thinking tokens]\033[0m\n',
+                          end='', flush=True)
+                n_think_tok = 0
+            elif in_thinking:
+                n_think_tok += 1
+                if show_thinking:
+                    piece = model.detokenize([new_tok]).decode('utf-8', errors='replace')
+                    print('\033[2m' + piece + '\033[0m', end='', flush=True)
+            else:
+                piece = model.detokenize([new_tok]).decode('utf-8', errors='replace')
+                print(piece, end='', flush=True)
+                n_tok += 1
 
-            # Decode the new token to update KV for next iteration
             gen_batch.n_tokens    = 1
             gen_batch.token[0]    = new_tok
             gen_batch.pos[0]      = pos
@@ -420,41 +619,64 @@ def run(model_path: str, mmproj_path: str, audio_path: str,
         lc.llama_batch_free(gen_batch)
         elapsed = time.monotonic() - t_gen
         tps = n_tok / elapsed if elapsed > 0 else 0
-        print(f"\n  [perf] {n_tok} tokens  {elapsed:.2f}s  {tps:.1f} tok/s")
+        think_info = f'  think={n_think_tok}tok' if n_think_tok else ''
+        print(f"\n  [perf] {n_tok} tokens  {elapsed:.2f}s  {tps:.1f} tok/s{think_info}")
 
-    # 6. Streaming simulation: process 40ms chunks + VAD --------------------
-    vad           = EnergyVAD(threshold=vad_threshold)
-    speech_frames : List[np.ndarray] = []
+    # 7. Unified streaming loop ----------------------------------------------
+    speech_frames: List[np.ndarray] = []
+    speech_raw:    List[np.ndarray] = []
     t_start = time.monotonic()
+    frame_idx = 0
 
-    for i in range(n_chunks):
-        start = i * CHUNK_SAMPLES
-        chunk = samples[start : start + CHUNK_SAMPLES]
-        if len(chunk) < CHUNK_SAMPLES:
-            chunk = np.pad(chunk, (0, CHUNK_SAMPLES - len(chunk)))
-
+    def _process_chunk(chunk: np.ndarray):
+        nonlocal frame_idx, speech_frames, speech_raw
         embed  = proj.project(chunk)
-        status = vad.process(chunk, ref_energy)
+        status = vad.process(chunk)
+        frame_idx += 1
+        ms = frame_idx * 40
 
-        ms = (i + 1) * 40
-        print(f"\r[{ms:6d}/{int(dur_s * 1000):d}ms] {status:14s}", end='', flush=True)
+        if use_mic:
+            print(f"\r[{ms:8d}ms] {status:14s}", end='', flush=True)
+        else:
+            total_ms = int(dur_s * 1000)
+            print(f"\r[{ms:6d}/{total_ms:d}ms] {status:14s}", end='', flush=True)
 
         if status in ('speech', 'utterance_end'):
             speech_frames.append(embed)
+            if turns_dir is not None:
+                speech_raw.append(chunk.copy())
 
         if status == 'utterance_end':
             n = len(speech_frames)
             print(f"\n[VAD] utterance: {n} frames ({n * 40}ms)")
-            respond(speech_frames)
+            respond(speech_frames, speech_raw if turns_dir else None)
             speech_frames = []
+            speech_raw    = []
 
-    # Trailing speech if audio ends without silence — apply same min_speech guard
-    if speech_frames and len(speech_frames) >= vad.min_speech:
-        n = len(speech_frames)
-        print(f"\n[VAD] trailing utterance: {n} frames ({n * 40}ms)")
-        respond(speech_frames)
+    if use_mic:
+        print("[mic] Listening... Press Ctrl+C to stop.\n")
+        try:
+            with MicStream() as mic:
+                for chunk in mic:
+                    _process_chunk(chunk)
+        except KeyboardInterrupt:
+            print("\n[mic] stopped")
+    else:
+        for chunk in _wav_to_chunks(samples):
+            _process_chunk(chunk)
+
+        # Trailing speech if file ends without silence
+        if speech_frames and len(speech_frames) >= (
+            vad.min_speech if hasattr(vad, 'min_speech') else _VAD_MIN_SPEECH
+        ):
+            n = len(speech_frames)
+            print(f"\n[VAD] trailing utterance: {n} frames ({n * 40}ms)")
+            respond(speech_frames, speech_raw if turns_dir else None)
 
     print(f"\n[done] total wall time: {time.monotonic() - t_start:.2f}s")
+    if turns_dir:
+        saved = list(turns_dir.glob("turn_*.wav"))
+        print(f"[turns] {len(saved)} utterance(s) saved to {turns_dir}/")
 
 
 # --------------------------------------------------------------------------- #
@@ -469,25 +691,53 @@ def main():
                    help='Path to Gemma 4 12B main GGUF')
     p.add_argument('--mmproj', required=True,
                    help='Path to Gemma 4 UA mmproj GGUF (f16 or f32)')
-    p.add_argument('--audio',  required=True,
-                   help='Path to input WAV (16kHz mono)')
+
+    src = p.add_mutually_exclusive_group(required=True)
+    src.add_argument('--audio', metavar='WAV',
+                     help='Path to input WAV (16kHz mono)')
+    src.add_argument('--mic', action='store_true',
+                     help='Read audio from microphone in real time')
+
+    p.add_argument('--vad-backend', choices=['silero', 'energy'], default='silero',
+                   help='VAD backend: silero (default, robust) or energy (no deps, WAV-only)')
+    p.add_argument('--silero-threshold', type=float, default=0.5,
+                   help='Silero-VAD speech probability threshold 0–1 (default: 0.5)')
+    p.add_argument('--vad-threshold', type=float, default=_VAD_THRESHOLD,
+                   help=f'Energy VAD threshold as fraction of mean (default: {_VAD_THRESHOLD})')
     p.add_argument('--prompt', default='解答して',
                    help='User text prompt appended after audio (default: "解答して")')
-    p.add_argument('--n-ctx',         type=int,   default=4096)
-    p.add_argument('--n-gpu-layers',  type=int,   default=-1,
+    p.add_argument('--n-ctx',        type=int, default=4096)
+    p.add_argument('--n-gpu-layers', type=int, default=-1,
                    help='-1 = all layers to GPU (default)')
-    p.add_argument('--vad-threshold', type=float, default=_VAD_THRESHOLD,
-                   help=f'VAD energy threshold as fraction of mean (default: {_VAD_THRESHOLD})')
+    p.add_argument('--save-turns', metavar='DIR',
+                   help='Save each detected utterance as turn_NNNN.wav in DIR '
+                        '(useful for Phase 1 fine-tune verification)')
+    p.add_argument('--flash-attn', action='store_true', default=True,
+                   help='Enable Flash Attention (default: on)')
+    p.add_argument('--no-flash-attn', action='store_false', dest='flash_attn',
+                   help='Disable Flash Attention')
+    p.add_argument('--show-thinking', action='store_true', default=False,
+                   help='Print Gemma 4 thinking tokens in dim color (default: hidden)')
     args = p.parse_args()
 
+    if args.mic and args.vad_backend == 'energy':
+        p.error("--vad-backend energy is not supported with --mic; "
+                "use the default --vad-backend silero")
+
     run(
-        model_path    = args.model,
-        mmproj_path   = args.mmproj,
-        audio_path    = args.audio,
-        user_prompt   = args.prompt,
-        n_ctx         = args.n_ctx,
-        n_gpu_layers  = args.n_gpu_layers,
-        vad_threshold = args.vad_threshold,
+        model_path       = args.model,
+        mmproj_path      = args.mmproj,
+        audio_path       = args.audio,
+        use_mic          = args.mic,
+        vad_backend      = args.vad_backend,
+        user_prompt      = args.prompt,
+        n_ctx            = args.n_ctx,
+        n_gpu_layers     = args.n_gpu_layers,
+        silero_threshold = args.silero_threshold,
+        vad_threshold    = args.vad_threshold,
+        save_turns       = args.save_turns,
+        flash_attn       = args.flash_attn,
+        show_thinking    = args.show_thinking,
     )
 
 if __name__ == '__main__':
