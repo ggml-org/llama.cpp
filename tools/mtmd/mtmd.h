@@ -161,11 +161,13 @@ MTMD_API void         mtmd_bitmap_set_id(mtmd_bitmap * bitmap, const char * id);
 
 // mtmd_bitmap lazy
 //
-// this is a special bitmap that
+// this is a special bitmap that:
 // - does not hold the actual data
 // - can be expanded into one or more chunks (either media to text chunks)
 // user must provide a callback to fill in the data when mtmd_tokenize() is called
-// this is useful for large video inputs that cannot be fully loaded into memory
+// this is useful for large video inputs:
+// - allow reading video frame by frame, without loading the entire video into memory
+// - allow tracking the whole video with a single ID (for example, the file hash)
 
 // set (*out_bitmap) to non-nullptr to emit a bitmap chunk; it will be freed automatically
 // set (*out_text) to non-nullptr to emit a text chunk
