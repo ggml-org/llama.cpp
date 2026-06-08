@@ -62,6 +62,9 @@ struct clip_graph {
     // build vision transformer (ViT) cgraph
     // this function should cover most of the models
     // if your model has specific features, you should probably duplicate this function
+    //
+    // inp is 2D [n_embd, n_pos] or 3D [n_embd, n_pos, B] (batched multi-tile encode);
+    // returns the same rank with the batch dim preserved (B==1 -> trailing 1)
     ggml_tensor * build_vit(
                 ggml_tensor * inp,
                 int64_t n_pos,
@@ -75,7 +78,7 @@ struct clip_graph {
     // returns tensor with shape [n_embd, n_patches]
     ggml_tensor * build_inp();
 
-    ggml_tensor * build_inp_raw(int channels = 3);
+    ggml_tensor * build_inp_raw(int channels = 3, int batch = 1);
 
     ggml_tensor * build_norm(
             ggml_tensor * cur,

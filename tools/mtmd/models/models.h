@@ -120,14 +120,24 @@ struct clip_graph_whisper_enc : clip_graph {
     ggml_cgraph * build() override;
 };
 
+// one graph for both the global view (grid 1x1)
+// and multi-tile batch; batch dim is grid_x * grid_y
 struct clip_graph_deepseekocr : clip_graph {
-    clip_graph_deepseekocr(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
+    int grid_x;
+    int grid_y;
+
+    clip_graph_deepseekocr(clip_ctx * ctx, const clip_image_f32 & img,
+                           const int grid_x = 1, const int grid_y = 1)
+        : clip_graph(ctx, img), grid_x(grid_x), grid_y(grid_y) {}
+
     ggml_cgraph * build() override;
     ggml_tensor * build_sam(ggml_tensor * inp); // build the SAM model
 };
 
 struct clip_graph_deepseekocr2 : clip_graph_deepseekocr {
-    clip_graph_deepseekocr2(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph_deepseekocr(ctx, img) {}
+    clip_graph_deepseekocr2(clip_ctx * ctx, const clip_image_f32 & img,
+                            const int grid_x = 1, const int grid_y = 1)
+        : clip_graph_deepseekocr(ctx, img, grid_x, grid_y) {}
     ggml_cgraph * build() override; // reuses build_sam() from base
 };
 

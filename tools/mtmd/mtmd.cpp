@@ -120,6 +120,46 @@ static clip_flash_attn_type mtmd_get_clip_flash_attn_type(enum llama_flash_attn_
     return CLIP_FLASH_ATTN_TYPE_AUTO;
 }
 
+// DeepSeek-OCR multi-tile batched encode:
+// tile-grid is encoded as one batch,
+// then the global view is encoded and appended.
+//
+// v1 weaves newlines onto the grid in-graph;
+// v2 just concatenates the per-tile query tokens.
+static bool encode_deepseekocr(clip_ctx * ctx_clip,
+                               int n_threads,
+                               const clip_image_f32_batch & batch,
+                               float * out) {
+    const auto & entries       = batch.entries;
+    const int    n_tiles       = static_cast<int>(entries.size()) - 1; // global view is last
+    const int    n_mmproj_embd = clip_n_mmproj_embd(ctx_clip);
+
+    if (n_tiles > 0) {
+        GGML_ASSERT(n_tiles == batch.grid_x * batch.grid_y);
+        const size_t tiles_sz = static_cast<size_t>(
+            clip_n_output_tokens(ctx_clip, entries[0].get(), batch.grid_x, batch.grid_y)) * n_mmproj_embd;
+        clip_image_f32_batch tile_batch;
+        tile_batch.grid_x = batch.grid_x;
+        tile_batch.grid_y = batch.grid_y;
+        tile_batch.entries.reserve(n_tiles);
+        for (int i = 0; i < n_tiles; i++) {
+            tile_batch.entries.emplace_back(entries[i].get());
+        }
+
+        const bool ok = clip_image_batch_encode(ctx_clip, n_threads, &tile_batch, out);
+
+        for (auto & tile : tile_batch.entries) {
+            (void) tile.release();
+        }
+        if (!ok) {
+            return false;
+        }
+        out += tiles_sz;
+    }
+
+    return clip_image_encode(ctx_clip, n_threads, entries.back().get(), out);
+}
+
 mtmd_context_params mtmd_context_params_default() {
     mtmd_context_params params {
         /* use_gpu           */ true,
@@ -490,14 +530,10 @@ struct mtmd_context {
                     image_preproc = std::make_unique<mtmd_image_preprocessor_dyn_size>(ctx_v);
                 } break;
             case PROJECTOR_TYPE_DEEPSEEKOCR:
-                {
-                    img_end = "\n"; // prevent empty batch on llama-server
-                    image_preproc = std::make_unique<mtmd_image_preprocessor_deepseekocr>(ctx_v);
-                } break;
             case PROJECTOR_TYPE_DEEPSEEKOCR2:
                 {
                     img_end = "\n"; // prevent empty batch on llama-server
-                    image_preproc = std::make_unique<mtmd_image_preprocessor_deepseekocr2>(ctx_v);
+                    image_preproc = std::make_unique<mtmd_image_preprocessor_deepseekocr>(ctx_v);
                 } break;
             case PROJECTOR_TYPE_HUNYUANVL:
                 {
@@ -873,8 +909,18 @@ struct mtmd_tokenizer {
 
             } else {
                 size_t n_tokens = 0;
-                for (const auto & entry : batch_f32.entries) {
-                    n_tokens += clip_n_output_tokens(ctx->ctx_v, entry.get());
+                if (ctx->proj_type_v() == PROJECTOR_TYPE_DEEPSEEKOCR
+                    || ctx->proj_type_v() == PROJECTOR_TYPE_DEEPSEEKOCR2) {
+                    // tiles run as one batched image grid; the global view is separate single image
+                    if (batch_f32.entries.size() > 1) {
+                        n_tokens += clip_n_output_tokens(ctx->ctx_v, batch_f32.entries[0].get(),
+                                                         batch_f32.grid_x, batch_f32.grid_y);
+                    }
+                    n_tokens += clip_n_output_tokens(ctx->ctx_v, batch_f32.entries.back().get());
+                } else {
+                    for (const auto & entry : batch_f32.entries) {
+                        n_tokens += clip_n_output_tokens(ctx->ctx_v, entry.get());
+                    }
                 }
 
                 mtmd_image_tokens_ptr image_tokens(new mtmd_image_tokens);
@@ -1107,15 +1153,15 @@ int32_t mtmd_encode(mtmd_context * ctx, const mtmd_image_tokens * image_tokens) 
     ctx->image_embd_v.resize(image_tokens->n_tokens() * n_mmproj_embd);
     bool ok = false;
 
-    if (clip_is_llava(ctx_clip)
+    if (proj_type == PROJECTOR_TYPE_DEEPSEEKOCR || proj_type == PROJECTOR_TYPE_DEEPSEEKOCR2) {
+        ok = encode_deepseekocr(ctx_clip, ctx->n_threads, image_tokens->batch_f32, ctx->image_embd_v.data());
+    } else if (clip_is_llava(ctx_clip)
         || proj_type == PROJECTOR_TYPE_MINICPMV
         || proj_type == PROJECTOR_TYPE_GLM_EDGE
-        || proj_type == PROJECTOR_TYPE_INTERNVL
-        || proj_type == PROJECTOR_TYPE_DEEPSEEKOCR2) {
+        || proj_type == PROJECTOR_TYPE_INTERNVL) {
         // TODO @ngxson : llava does not support batched encoding ; this should be fixed inside clip_image_batch_encode()
         const auto & entries = image_tokens->batch_f32.entries;
         // entries may have different token counts
-        // e.g., DeepSeek-OCR-2: 144 per tile views, 257 for the global view
         size_t offset = 0;
         for (size_t i = 0; i < entries.size(); i++) {
             int n_tokens_per_image = clip_n_output_tokens(ctx_clip, entries[i].get());

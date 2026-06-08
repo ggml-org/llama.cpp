@@ -523,8 +523,9 @@ struct clip_image_f32_batch {
 
     // for llava-uhd style models, we need to know the grid size
     // note: entries.size() == grid_x * grid_y + 1 (one overview image)
-    int grid_x = 0;
-    int grid_y = 0;
+    // 1x1 = no tiling; llava-uhd preprocessors always overwrite grid before has_tiling_grid reads it
+    int grid_x = 1;
+    int grid_y = 1;
 
     clip_image_f32_batch clone() const {
         clip_image_f32_batch new_batch{

@@ -4,17 +4,17 @@ ggml_cgraph * clip_graph_deepseekocr2::build() {
     GGML_ASSERT(hparams.n_head_kv > 0);
     GGML_ASSERT(n_head % hparams.n_head_kv == 0);
 
-    // patch embedding
-    ggml_tensor * inp_raw = build_inp_raw();
+    const int64_t B = grid_x * grid_y;
+
+    ggml_tensor * inp_raw = build_inp_raw(3, grid_x * grid_y);
 
     ggml_tensor * sam_out = build_sam(inp_raw);
 
     ggml_tensor * qwen2_out;
     // Building Qwen2 encoder
     {
-        ggml_tensor * inp;
-
-        inp = ggml_reshape_2d(ctx0, sam_out, sam_out->ne[0] * sam_out->ne[1], sam_out->ne[2]); // H*W, C
+        // [W, H, C, B] -> [H*W, C, B] -> [C, H*W, B]
+        ggml_tensor * inp = ggml_reshape_3d(ctx0, sam_out, sam_out->ne[0] * sam_out->ne[1], sam_out->ne[2], B);
         inp = ggml_cont(ctx0, ggml_permute(ctx0, inp, 1, 0, 2, 3));
 
         auto num_image_tokens = inp->ne[1]; // H*W
@@ -32,8 +32,10 @@ ggml_cgraph * clip_graph_deepseekocr2::build() {
             num_queries = 144;
         }
 
-        // (B, num_image_tokens + num_queries, C)
-        inp = ggml_concat(ctx0, inp, ggml_cast(ctx0, query_embed, inp->type), 1);
+        // query_embed [C, num_queries]; broadcast across the batch and append:
+        ggml_tensor * query_b = ggml_repeat_4d(ctx0, ggml_cast(ctx0, query_embed, inp->type),
+                                               inp->ne[0], num_queries, B, 1);
+        inp = ggml_concat(ctx0, inp, query_b, 1);
 
         auto seq_len = inp->ne[1];
 
@@ -54,11 +56,12 @@ ggml_cgraph * clip_graph_deepseekocr2::build() {
 
         // build_vit applies model.post_ln_w internally; do not re-apply
         ggml_tensor * cur = build_vit(inp, seq_len, NORM_TYPE_RMS, FFN_SILU,
-                                      /* learned_pos_embd */ nullptr, add_rope, vit_opts);
+                                      /* learned_pos_embd */ nullptr, add_rope, vit_opts); // [C, seq_len, B]
 
+        // only keep the query tokens; [C, num_queries, B]
         cur = ggml_cont(ctx0,
-                        ggml_view_2d(ctx0, cur, cur->ne[0], num_queries, cur->nb[1],
-                                     cur->nb[1] * (cur->ne[1] - num_queries))); // only take query tokens for output
+                        ggml_view_3d(ctx0, cur, cur->ne[0], num_queries, B,
+                                     cur->nb[1], cur->nb[2], cur->nb[1] * (cur->ne[1] - num_queries)));
 
         ggml_build_forward_expand(gf, cur);
         qwen2_out = cur;
@@ -66,14 +69,17 @@ ggml_cgraph * clip_graph_deepseekocr2::build() {
 
     ggml_tensor * cur;
 
-    cur = ggml_mul_mat(ctx0, model.mm_fc_w, qwen2_out);
+    cur = ggml_mul_mat(ctx0, model.mm_fc_w, qwen2_out); // [n_dim, num_queries, B]
     cur = ggml_add(ctx0, cur, model.mm_fc_b);
 
     // view_seperator only after the global view
     if (img.add_viewsep) {
+        GGML_ASSERT(B == 1);
         cur = ggml_concat(ctx0, cur, model.view_seperator, 1); // (n_dim, 257)
     }
 
+    // flatten the batch
+    cur = ggml_reshape_2d(ctx0, cur, cur->ne[0], cur->ne[1] * cur->ne[2]);
     cb(cur, "dsocr2_output", -1);
 
     ggml_build_forward_expand(gf, cur);

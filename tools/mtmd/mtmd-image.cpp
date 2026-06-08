@@ -1104,46 +1104,7 @@ bool mtmd_image_preprocessor_internvl::preprocess(const clip_image_u8 & img, cli
 // mtmd_image_preprocessor_deepseekocr
 //
 
-bool mtmd_image_preprocessor_deepseekocr::preprocess(const clip_image_u8 & img, clip_image_f32_batch & output) {
-    static constexpr int native_resolutions[] = { 1024 /* base */, 1280 /* large */ };
-    // TODO: support 512 (tiny) and 640 (small) once we have eval data for them
-
-    const int64_t orig_area = static_cast<int64_t>(img.nx) * img.ny;
-
-    size_t  mode_i   = 0;
-    int64_t min_diff = std::numeric_limits<int64_t>::max();
-    for (size_t i = 0; i < std::size(native_resolutions); i++) {
-        const int64_t r    = native_resolutions[i];
-        const int64_t diff = std::abs(orig_area - r * r);
-        if (diff < min_diff) {
-            mode_i   = i;
-            min_diff = diff;
-        }
-    }
-    const int image_size = native_resolutions[mode_i];
-
-    // Aspect-preserving fit-and-pad. Pillow bicubic + PAD_NEAREST for
-    // byte-parity with the upstream deepseek-ai/DeepSeek-OCR HF preprocessor.
-    clip_image_u8 padded;
-    img_tool::resize(img, padded, {image_size, image_size}, RESIZE_ALGO_BICUBIC_PILLOW,
-                     PAD_NEAREST, hparams.image_pad_color);
-
-    clip_image_f32_ptr res(clip_image_f32_init());
-    img_u8_to_f32(padded, *res, hparams.image_mean, hparams.image_std);
-    output.entries.push_back(std::move(res));
-
-    output.grid_x = 1;
-    output.grid_y = 1;
-    return true;
-}
-
-//
-// mtmd_image_preprocessor_deepseekocr2
-//
-
-// candidate tile grids (cols, rows) with min_tiles <= cols*rows <= max_tiles
-// sorted by tile count
-std::vector<clip_image_size> mtmd_image_preprocessor_deepseekocr2::get_target_ratios() {
+std::vector<clip_image_size> mtmd_image_preprocessor_deepseekocr::get_target_ratios() const {
     std::vector<clip_image_size> ratios;
     for (int n = min_tiles; n <= max_tiles; n++) {
         for (int w = 1; w <= n; w++) {
@@ -1159,7 +1120,7 @@ std::vector<clip_image_size> mtmd_image_preprocessor_deepseekocr2::get_target_ra
                     }
                 }
                 if (!found) {
-                    ratios.push_back({ w, h });
+                    ratios.push_back({w, h});
                 }
             }
         }
@@ -1170,23 +1131,20 @@ std::vector<clip_image_size> mtmd_image_preprocessor_deepseekocr2::get_target_ra
     return ratios;
 }
 
-// pick the grid whose aspect ratio is closest to the image
-// on a tie, prefer the larger grid when the image fits
-clip_image_size mtmd_image_preprocessor_deepseekocr2::find_closest_aspect_ratio(
-    float                                aspect_ratio,
-    const std::vector<clip_image_size> & target_ratios,
-    int                                  width,
-    int                                  height) {
-    float           best_ratio_diff = std::numeric_limits<float>::max();
-    clip_image_size best_ratio      = { 1, 1 };
-    const float     area            = static_cast<float>(width * height);
+clip_image_size mtmd_image_preprocessor_deepseekocr::find_closest_aspect_ratio(
+        float aspect_ratio,
+        const std::vector<clip_image_size> & target_ratios,
+        int width, int height) const {
+    float best_ratio_diff = std::numeric_limits<float>::max();
+    clip_image_size best_ratio = {1, 1};
+    const float area = static_cast<float>(width * height);
 
     for (const auto & ratio : target_ratios) {
         const float target_aspect_ratio = static_cast<float>(ratio.width) / ratio.height;
-        const float ratio_diff          = std::abs(aspect_ratio - target_aspect_ratio);
+        const float ratio_diff = std::abs(aspect_ratio - target_aspect_ratio);
         if (ratio_diff < best_ratio_diff) {
             best_ratio_diff = ratio_diff;
-            best_ratio      = ratio;
+            best_ratio = ratio;
         } else if (ratio_diff == best_ratio_diff) {
             const float target_area = static_cast<float>(tile_size * tile_size * ratio.width * ratio.height);
             if (area > 0.5f * target_area) {
@@ -1197,22 +1155,24 @@ clip_image_size mtmd_image_preprocessor_deepseekocr2::find_closest_aspect_ratio(
     return best_ratio;
 }
 
-bool mtmd_image_preprocessor_deepseekocr2::preprocess(const clip_image_u8 & img, clip_image_f32_batch & output) {
-    // emit 768x768 local tiles when the image is larger than a tile in either
-    // dimension, then always a 1024x1024 global view. order: [tiles..., global].
+bool mtmd_image_preprocessor_deepseekocr::preprocess(const clip_image_u8 & img, clip_image_f32_batch & output) {
+    // output order: [local tiles..., global]
 
+    int grid_w = 1;
+    int grid_h = 1;
     if (img.nx > tile_size || img.ny > tile_size) {
-        const float           aspect_ratio  = static_cast<float>(img.nx) / img.ny;
-        const auto            target_ratios = get_target_ratios();
-        const clip_image_size grid          = find_closest_aspect_ratio(aspect_ratio, target_ratios, img.nx, img.ny);
+        const float aspect_ratio   = static_cast<float>(img.nx) / img.ny;
+        const auto  target_ratios  = get_target_ratios();
+        const clip_image_size grid = find_closest_aspect_ratio(aspect_ratio, target_ratios, img.nx, img.ny);
+        grid_w = grid.width;
+        grid_h = grid.height;
 
-        // stretch onto the grid (no aspect preserve), then crop tiles row-major.
         clip_image_u8 refined;
-        img_tool::resize(img, refined, { tile_size * grid.width, tile_size * grid.height },
+        img_tool::resize(img, refined, {tile_size * grid_w, tile_size * grid_h},
                          RESIZE_ALGO_BICUBIC_PILLOW, PAD_NONE);
 
-        for (int row = 0; row < grid.height; row++) {
-            for (int col = 0; col < grid.width; col++) {
+        for (int row = 0; row < grid_h; row++) {
+            for (int col = 0; col < grid_w; col++) {
                 clip_image_u8 tile;
                 img_tool::crop(refined, tile, col * tile_size, row * tile_size, tile_size, tile_size);
                 clip_image_f32_ptr res(clip_image_f32_init());
@@ -1222,20 +1182,19 @@ bool mtmd_image_preprocessor_deepseekocr2::preprocess(const clip_image_u8 & img,
         }
     }
 
-    // global view: aspect-preserving fit-and-pad to base_size.
+    // global view: aspect-preserving fit-and-pad to base_size
     clip_image_u8 padded;
-    img_tool::resize(img, padded, { base_size, base_size }, RESIZE_ALGO_BICUBIC_PILLOW,
+    img_tool::resize(img, padded, {base_size, base_size}, RESIZE_ALGO_BICUBIC_PILLOW,
                      PAD_NEAREST, hparams.image_pad_color);
     clip_image_f32_ptr global(clip_image_f32_init());
     img_u8_to_f32(padded, *global, hparams.image_mean, hparams.image_std);
     global->add_viewsep = true;
     output.entries.push_back(std::move(global));
-
-    output.grid_x = 1;
-    output.grid_y = 1;
+    output.grid_x = grid_w;
+    output.grid_y = grid_h;
+    LOG_DBG("%s: grid size: %d x %d (%d tiles) + global view\n", __func__, grid_w, grid_h, grid_w * grid_h);
     return true;
 }
-
 //
 // mtmd_image_preprocessor_step3vl
 //
