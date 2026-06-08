@@ -643,6 +643,11 @@ struct mtmd_helper_video {
         size_t written = fwrite(input_buf.data(), 1, input_buf.size(), f);
         LOG_DBG("%s: wrote %zu bytes, closing stdin\n", __func__, written);
         fclose(f);
+        // subprocess_stdin() returns sp->stdin_file directly; fclosing our local
+        // copy leaves the struct pointer dangling, so subprocess_destroy() would
+        // fclose() the same FILE again -> heap corruption. Null it so the later
+        // destroy skips stdin.
+        sp->stdin_file = nullptr;
     }
 
     bool probe(float fps_target_arg) {
