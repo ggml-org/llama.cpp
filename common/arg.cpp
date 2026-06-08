@@ -1276,6 +1276,9 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         {"-c", "--ctx-size"}, "N",
         string_format("size of the prompt context (default: %d, 0 = loaded from model)", params.n_ctx),
         [](common_params & params, int value) {
+            if (value == 1) {
+                throw std::invalid_argument("ctx-size must be 0 or at least 2");
+            }
             params.n_ctx = value;
             if (value == 0) {
                 // disable context reduction in llama_params_fit if the user explicitly requests the full context size:

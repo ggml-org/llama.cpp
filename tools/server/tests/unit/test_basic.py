@@ -18,6 +18,17 @@ def test_server_start_simple():
     assert res.status_code == 200
 
 
+def test_server_rejects_ctx_size_one(tmp_path):
+    global server
+    server.model_hf_repo = None
+    server.model_hf_file = None
+    server.models_dir = str(tmp_path)
+    server.no_models_autoload = True
+    server.n_ctx = 1
+    with pytest.raises(RuntimeError, match="Server process died"):
+        server.start(timeout_seconds=3)
+
+
 def test_server_props():
     global server
     server.start()
