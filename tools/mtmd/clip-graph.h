@@ -9,8 +9,6 @@
 #include <vector>
 #include <functional>
 
-#define DEFAULT_INTERPOLATION_MODE (GGML_SCALE_MODE_BILINEAR | GGML_SCALE_FLAG_ANTIALIAS)
-
 struct build_vit_opts {
     ggml_tensor * attn_mask = nullptr;
     // TODO @ngxson : merge attn_mask and attn_mask_layers into one call
@@ -76,6 +74,8 @@ struct clip_graph {
         GGML_ASSERT(idx < img_batch->entries.size());
         return img_batch->entries[idx];
     }
+
+    static constexpr ggml_scale_mode DEFAULT_INTERPOLATION_MODE = GGML_SCALE_MODE_BILINEAR | GGML_SCALE_FLAG_ANTIALIAS;
 
     // siglip2 naflex
     ggml_tensor * resize_position_embeddings(uint32_t interpolation_mode = DEFAULT_INTERPOLATION_MODE);
