@@ -197,6 +197,7 @@ int main(int argc, char ** argv) {
     int n_past = 0;
     llama_set_diffusion_decoder_phase(ctx, false);
     llama_set_diffusion_self_cond(ctx, nullptr, 0, 0);
+    const auto t_prefill_start = std::chrono::steady_clock::now();
     if (use_mm) {
         // mtmd_helper_eval_chunks decodes text chunks (tokens, causal) and the image chunk
         // (vision embeddings, bidirectional for gemma) into the cache, managing causal_attn.
@@ -228,6 +229,13 @@ int main(int argc, char ** argv) {
             return 1;
         }
         n_past = prefix_len; // prompt K/V is now the committed read-only prefix
+    }
+    const double prefill_s = std::chrono::duration<double>(std::chrono::steady_clock::now() - t_prefill_start).count();
+    if (prefix_len > 0) {
+        // encoder-phase prefill: causal, NO self-conditioning -> same forward as the base
+        // gemma4 model (the self-cond matmul only runs in the decoder/denoise phase).
+        LOG_INF("prefill (encoder, no self-cond): %d tokens in %.3f s (%.1f tok/s)\n",
+                prefix_len, prefill_s, prefill_s > 0.0 ? prefix_len / prefill_s : 0.0);
     }
 
     std::vector<llama_token> canvas(canvas_length);
