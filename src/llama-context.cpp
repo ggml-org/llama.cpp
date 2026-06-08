@@ -47,6 +47,7 @@ llama_context::llama_context(
     const auto & hparams = model.hparams;
 
     cparams.n_seq_max = std::max(1u, params.n_seq_max);
+    cparams.n_outputs_max = params.n_outputs_max;
     if (cparams.n_seq_max > LLAMA_MAX_SEQ) {
         throw std::runtime_error("n_seq_max must be <= " + std::to_string(LLAMA_MAX_SEQ));
     }
@@ -3349,6 +3350,7 @@ llama_context_params llama_context_default_params() {
         /*.n_batch                     =*/ 2048,
         /*.n_ubatch                    =*/ 512,
         /*.n_seq_max                   =*/ 1,
+        /*.n_outputs_max               =*/ 0,
         /*.n_rs_seq                    =*/ 0,
         /*.n_threads                   =*/ GGML_DEFAULT_N_THREADS, // TODO: better default
         /*.n_threads_batch             =*/ GGML_DEFAULT_N_THREADS,

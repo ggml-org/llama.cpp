@@ -547,7 +547,7 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
         return {tensor->ne[axis]};
     };
 
-    auto get_split_granularity = [&](int64_t blck_size, uint32_t il, const std::vector<std::pair<int64_t, uint32_t>> & segments) -> std::vector<int64_t> {
+    auto get_split_granularity = [&](int64_t blck_size, uint32_t il, const std::vector<int64_t> & segments) -> std::vector<int64_t> {
         if (hparams.is_recr(il)) {
             // linear attention
             const int64_t head_dim  = hparams.ssm_d_state;
@@ -2133,6 +2133,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
 
                         res = new llama_kv_cache(
                                 *this,
+                                hparams,
                                 params.type_k,
                                 params.type_v,
                                 !cparams.flash_attn,

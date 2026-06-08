@@ -227,6 +227,9 @@ struct llama_hparams {
     // TODO: can be expressed via the `new n_embd_inp_impl` and remove this param
     uint32_t n_deepstack_layers = 0;
 
+    // deepstack layer array (Granite4 Vision): -1 => none, >=0 => input embedding index
+    std::array<int32_t, LLAMA_MAX_LAYERS> deepstack_mapping_arr;
+
     // gemma4 per-layer embedding
     uint32_t n_embd_per_layer = 0;
 
@@ -328,6 +331,9 @@ struct llama_hparams {
 
     // number of effective layers (excludes nextn layers)
     uint32_t n_layer() const;
+
+    // number of layers that carry a KV cache (respects n_layer_kv_from_start)
+    uint32_t n_layer_kv() const;
 
     // note that this function uses different SWA parameters from those in the hparams
     // note: inlined on purpose for performance reasons
