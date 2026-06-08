@@ -967,7 +967,7 @@ mtmd_image_preproc_out mtmd_image_preprocessor_dyn_size::preprocess(const clip_i
 bool mtmd_image_preprocessor_gemma4::preprocess(const clip_image_u8 & img, clip_image_f32_batch & output) {
     GGML_ASSERT(hparams.image_max_pixels > 0);
     clip_image_u8 resized_image;
-    const clip_image_size original_size{img.nx, img.ny};
+    const clip_image_size original_size = img.get_size();
     const int cur_merge = hparams.n_merge == 0 ? 1 : hparams.n_merge;
     const int align     = hparams.patch_size * cur_merge;
     const clip_image_size target_size = img_tool::calc_size_fill_budget(
