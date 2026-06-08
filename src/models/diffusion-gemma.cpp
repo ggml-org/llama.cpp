@@ -39,6 +39,12 @@ void llama_model_diffusion_gemma::load_arch_tensors(llama_model_loader & ml) {
 }
 
 llama_model_diffusion_gemma::~llama_model_diffusion_gemma() {
+    if (tok_embd_gpu_buf) {
+        ggml_backend_buffer_free(tok_embd_gpu_buf);
+    }
+    if (tok_embd_gpu_ctx) {
+        ggml_free(tok_embd_gpu_ctx);
+    }
     if (tok_embd_t_buf) {
         ggml_backend_buffer_free(tok_embd_t_buf);
     }
@@ -47,10 +53,17 @@ llama_model_diffusion_gemma::~llama_model_diffusion_gemma() {
     }
 }
 
-// Precompute the transposed F32 token embedding {n_vocab, n_embd} once, into a model-owned
-// backend buffer on the same backend as tok_embd. The self-conditioning soft-embedding matmul
-// (probs @ token_embd) needs vocab as the contracted (ne[0]) dimension; precomputing this here
-// avoids dequantizing + transposing the whole embedding on every decode.
+// Place the token embedding the self-conditioning step needs on an offloaded (GPU) backend.
+//
+// Primary path (sparse gather): store tok_embd {n_embd, n_vocab} as F16 in tok_embd_gpu on-device.
+// The decoder graph gathers only the top-k rows per position (ggml_get_rows), so this is the whole
+// soft-embedding cost: ~1.47 GiB resident, no per-decode PCIe copy, no full-vocab matmul. F16 (not
+// the native Q4_K) because CUDA get_rows has no Q4_K/Q6_K kernel -- a quantized gather would fall
+// back to CPU every step (a large regression). F16 halves the VRAM vs the F32 dense path.
+//
+// Fallback path (dense matmul): if the F16 copy can't be allocated, precompute the transposed F32
+// embedding {n_vocab, n_embd} so the dense `probs @ token_embd` matmul (build_input) still runs
+// on-device. This costs ~2.75 GiB and is only used when the gather copy is unavailable.
 void llama_model_diffusion_gemma::load_arch_post(llama_model_loader & ml) {
     GGML_UNUSED(ml);
 
@@ -60,42 +73,69 @@ void llama_model_diffusion_gemma::load_arch_post(llama_model_loader & ml) {
 
     const int64_t n_embd_t  = tok_embd->ne[0];
     const int64_t n_vocab_t = tok_embd->ne[1];
-    const int64_t n_elem    = n_embd_t * n_vocab_t;
 
-    const auto * tt = ggml_get_type_traits(tok_embd->type);
-    if (!tt || !tt->to_float) {
-        LLAMA_LOG_WARN("%s: cannot precompute transposed embedding for type %s; "
-                       "falling back to per-decode transpose\n", __func__, ggml_type_name(tok_embd->type));
-        return;
-    }
-
-    // copy tok_embd to host (works whether it lives on CPU or a GPU buffer), dequantize to F32,
-    // then transpose: src {n_embd, n_vocab} (ne0=n_embd) -> dst {n_vocab, n_embd} (ne0=n_vocab).
-    std::vector<uint8_t> raw(ggml_nbytes(tok_embd));
-    ggml_backend_tensor_get(tok_embd, raw.data(), 0, raw.size());
-
-    std::vector<float> src((size_t) n_elem);
-    tt->to_float(raw.data(), src.data(), n_elem);
-
-    std::vector<float> dst((size_t) n_elem);
-    for (int64_t e = 0; e < n_embd_t; ++e) {
-        for (int64_t v = 0; v < n_vocab_t; ++v) {
-            dst[(size_t) e * n_vocab_t + v] = src[(size_t) v * n_embd_t + e];
-        }
-    }
-
-    // Choose the buffer type for tok_embd_t. token_embd itself is usually host-resident
-    // (it's only used for a cheap get_rows lookup), but the self-conditioning soft-embedding
-    // does a full-vocab matmul with tok_embd_t every decode. If we left it on the host, the
-    // scheduler would copy the whole ~3 GiB tensor across PCIe on every forward (~hundreds of
-    // ms). So prefer an offloaded (non-host) backend taken from a layer weight, so the matmul
-    // runs on-device with no per-decode copy; fall back to token_embd's buffer (CPU-only runs).
+    // Choose an offloaded (non-host) backend taken from a layer weight; fall back to token_embd's
+    // own buffer (CPU-only runs). Leaving the self-cond embedding host-resident would force the
+    // scheduler to stream it across PCIe every forward, which dominated the per-step time.
     ggml_backend_buffer_type_t buft = ggml_backend_buffer_get_type(tok_embd->buffer);
     for (const auto & layer : layers) {
         ggml_tensor * t = layer.wq ? layer.wq : (layer.wk ? layer.wk : layer.ffn_down);
         if (t && t->buffer) {
             ggml_backend_buffer_type_t b = ggml_backend_buffer_get_type(t->buffer);
             if (!ggml_backend_buft_is_host(b)) { buft = b; break; }
+        }
+    }
+
+    // Dequantize the embedding to F32 once (host). It's needed by both paths below, and crucially
+    // CUDA ggml_get_rows supports F16/F32/BF16 but NOT Q4_K/Q6_K (see ggml-cuda supports_op) -- a
+    // gather from the native quantized type silently falls back to CPU every step. So the gather
+    // copy must be F16/F32; we use F16 to halve its VRAM (~1.47 GiB vs 2.75 GiB F32).
+    const int64_t n_elem = n_embd_t * n_vocab_t;
+    const auto * tt = ggml_get_type_traits(tok_embd->type);
+    if (!tt || !tt->to_float) {
+        LLAMA_LOG_WARN("%s: cannot dequantize token embedding type %s; self-conditioning will use "
+                       "the per-decode transpose fallback\n", __func__, ggml_type_name(tok_embd->type));
+        return;
+    }
+
+    std::vector<uint8_t> raw(ggml_nbytes(tok_embd));
+    ggml_backend_tensor_get(tok_embd, raw.data(), 0, raw.size());
+
+    std::vector<float> src((size_t) n_elem);
+    tt->to_float(raw.data(), src.data(), n_elem);
+
+    // --- primary: F16 on-device copy for the sparse gather (get_rows runs on the GPU) ---
+    {
+        std::vector<ggml_fp16_t> half((size_t) n_elem);
+        ggml_fp32_to_fp16_row(src.data(), half.data(), n_elem);
+
+        ggml_init_params ip = { /*.mem_size =*/ ggml_tensor_overhead(), /*.mem_buffer =*/ nullptr, /*.no_alloc =*/ true };
+        tok_embd_gpu_ctx = ggml_init(ip);
+        tok_embd_gpu = ggml_new_tensor_2d(tok_embd_gpu_ctx, GGML_TYPE_F16, n_embd_t, n_vocab_t);
+        ggml_set_name(tok_embd_gpu, "token_embd.gpu.f16");
+
+        tok_embd_gpu_buf = ggml_backend_alloc_ctx_tensors_from_buft(tok_embd_gpu_ctx, buft);
+        if (tok_embd_gpu_buf) {
+            ggml_backend_tensor_set(tok_embd_gpu, half.data(), 0, ggml_nbytes(tok_embd_gpu));
+
+            LLAMA_LOG_INFO("%s: placed self-cond token embedding {%lld, %lld} F16 (%.2f GiB) on %s (gather, k=%lld)\n",
+                           __func__, (long long) n_embd_t, (long long) n_vocab_t,
+                           ggml_nbytes(tok_embd_gpu) / (1024.0 * 1024.0 * 1024.0),
+                           ggml_backend_buffer_name(tok_embd_gpu->buffer),
+                           (long long) N_SC_TOPK);
+            return;
+        }
+        LLAMA_LOG_WARN("%s: failed to allocate on-device gather embedding; falling back to dense matmul\n", __func__);
+        ggml_free(tok_embd_gpu_ctx);
+        tok_embd_gpu_ctx = nullptr;
+        tok_embd_gpu = nullptr;
+    }
+
+    // --- fallback: transposed F32 embedding for the dense matmul path ---
+    std::vector<float> dst((size_t) n_elem);
+    for (int64_t e = 0; e < n_embd_t; ++e) {
+        for (int64_t v = 0; v < n_vocab_t; ++v) {
+            dst[(size_t) e * n_vocab_t + v] = src[(size_t) v * n_embd_t + e];
         }
     }
 
@@ -114,7 +154,7 @@ void llama_model_diffusion_gemma::load_arch_post(llama_model_loader & ml) {
     }
     ggml_backend_tensor_set(tok_embd_t, dst.data(), 0, ggml_nbytes(tok_embd_t));
 
-    LLAMA_LOG_INFO("%s: precomputed transposed F32 token embedding {%lld, %lld} (%.2f GiB) on %s\n",
+    LLAMA_LOG_INFO("%s: precomputed transposed F32 token embedding {%lld, %lld} (%.2f GiB) on %s (dense fallback)\n",
                    __func__, (long long) n_vocab_t, (long long) n_embd_t,
                    ggml_nbytes(tok_embd_t) / (1024.0 * 1024.0 * 1024.0),
                    ggml_backend_buffer_name(tok_embd_t->buffer));
@@ -151,17 +191,39 @@ ggml_tensor * llama_model_diffusion_gemma::graph_base::build_input(bool is_decod
     cb(inpL, "inp_scaled", -1);
 
     if (is_decoder) {
-        ggml_tensor * probs   = build_inp_diffusion_self_cond(model.tok_embd->ne[1]); // {n_vocab, n_tokens}
-        // soft = (probs @ token_embd): mul_mat contracts ne[0], so token_embd needs vocab as
-        // ne[0]. Prefer the transposed F32 embedding precomputed once at load (load_arch_post).
-        // Fallback (if precompute was skipped): dequantize + transpose every decode (a quantized
-        // tensor can't be transposed directly, hence the cast to F32 first).
-        ggml_tensor * embed_t = dmodel.tok_embd_t;                                     // {n_vocab, n_embd}
-        if (!embed_t) {
-            ggml_tensor * embed_f = ggml_cast(ctx0, model.tok_embd, GGML_TYPE_F32);     // {n_embd, n_vocab}
-            embed_t = ggml_cont(ctx0, ggml_transpose(ctx0, embed_f));                  // {n_vocab, n_embd}
+        ggml_tensor * soft; // soft-embedding {n_embd, n_tokens}: blend of the previous step's
+                            // predicted token embeddings, scaled by sqrt(n_embd)
+        if (dmodel.tok_embd_gpu) {
+            // Sparse gather path (Option-2): the previous step's top-k token ids+probs are fed per
+            // position; gather just those k embedding rows and blend them, instead of the dense
+            // full-vocab `probs @ token_embd` matmul. Gather width is fixed (N_SC_TOPK) so the
+            // graph shape is constant; unused slots carry prob 0 (the CLI zero-pads).
+            const int64_t k = llama_model_diffusion_gemma::N_SC_TOPK;
+            auto * inp = build_inp_diffusion_self_cond_topk(k);
+            ggml_tensor * ids   = inp->ids;                                                // I32 {k*n_tokens}
+            ggml_tensor * probs = inp->probs;                                              // F32 {k, n_tokens}
+
+            // gather: {n_embd, n_vocab} x {k*n_tokens} ids -> {n_embd, k*n_tokens} -> {n_embd, k, n_tokens}
+            ggml_tensor * emb = ggml_get_rows(ctx0, dmodel.tok_embd_gpu, ids);             // {n_embd, k*n_tokens}
+            emb = ggml_reshape_3d(ctx0, emb, n_embd, k, n_tokens);                          // {n_embd, k, n_tokens}
+            // weight each gathered row by its prob (broadcast over n_embd): {n_embd, k, n_tokens}
+            ggml_tensor * w = ggml_mul(ctx0, emb, ggml_reshape_3d(ctx0, probs, 1, k, n_tokens));
+            // sum over k: bring k to ne[0] then sum_rows -> {1, n_embd, n_tokens} -> {n_embd, n_tokens}
+            w = ggml_cont(ctx0, ggml_permute(ctx0, w, 1, 0, 2, 3));                         // {k, n_embd, n_tokens}
+            w = ggml_sum_rows(ctx0, w);                                                     // {1, n_embd, n_tokens}
+            soft = ggml_reshape_2d(ctx0, w, n_embd, n_tokens);                              // {n_embd, n_tokens}
+        } else {
+            // Dense fallback: soft = (probs @ token_embd). mul_mat contracts ne[0], so token_embd
+            // needs vocab as ne[0]; prefer the transposed F32 embedding from load_arch_post, else
+            // dequantize+transpose every decode (a quantized tensor can't be transposed directly).
+            ggml_tensor * probs   = build_inp_diffusion_self_cond(model.tok_embd->ne[1]); // {n_vocab, n_tokens}
+            ggml_tensor * embed_t = dmodel.tok_embd_t;                                     // {n_vocab, n_embd}
+            if (!embed_t) {
+                ggml_tensor * embed_f = ggml_cast(ctx0, model.tok_embd, GGML_TYPE_F32);     // {n_embd, n_vocab}
+                embed_t = ggml_cont(ctx0, ggml_transpose(ctx0, embed_f));                  // {n_vocab, n_embd}
+            }
+            soft = ggml_mul_mat(ctx0, embed_t, probs);                                     // {n_embd, n_tokens}
         }
-        ggml_tensor * soft    = ggml_mul_mat(ctx0, embed_t, probs);                    // {n_embd, n_tokens}
         soft = ggml_scale(ctx0, soft, sqrtf((float) n_embd));
         cb(soft, "self_cond_soft_embd", -1);
         ggml_tensor * scn = build_norm(soft, dmodel.self_cond_norm, nullptr, LLM_NORM_RMS, -1);

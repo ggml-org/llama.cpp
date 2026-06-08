@@ -1182,6 +1182,19 @@ void llama_context::set_diffusion_decoder_phase(bool decoder_phase) {
     diffusion_cond.decoder_phase = decoder_phase;
 }
 
+void llama_context::set_diffusion_self_cond_topk(const int32_t * ids, const float * probs, int64_t k, int64_t n_tokens) {
+    if (ids == nullptr || probs == nullptr || k <= 0 || n_tokens <= 0) {
+        diffusion_cond.sc_topk = 0;
+        diffusion_cond.sc_topk_ids.clear();
+        diffusion_cond.sc_topk_probs.clear();
+        return;
+    }
+    const size_t n = (size_t) k * (size_t) n_tokens;
+    diffusion_cond.sc_topk = k;
+    diffusion_cond.sc_topk_ids.assign(ids, ids + n);
+    diffusion_cond.sc_topk_probs.assign(probs, probs + n);
+}
+
 void llama_context::set_causal_attn(bool value) {
     LLAMA_LOG_DEBUG("%s: value = %d\n", __func__, value);
 
@@ -3682,6 +3695,10 @@ void llama_set_diffusion_prompt_len(llama_context * ctx, int64_t n_prompt) {
 
 void llama_set_diffusion_decoder_phase(llama_context * ctx, bool decoder_phase) {
     ctx->set_diffusion_decoder_phase(decoder_phase);
+}
+
+void llama_set_diffusion_self_cond_topk(llama_context * ctx, const int32_t * ids, const float * probs, int64_t k, int64_t n_tokens) {
+    ctx->set_diffusion_self_cond_topk(ids, probs, k, n_tokens);
 }
 
 void llama_set_warmup(llama_context * ctx, bool warmup) {

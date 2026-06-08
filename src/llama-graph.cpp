@@ -403,6 +403,36 @@ void llm_graph_input_diffusion_self_cond::set_input(const llama_ubatch * ubatch)
     }
 }
 
+void llm_graph_input_diffusion_self_cond_topk::set_input(const llama_ubatch * ubatch) {
+    GGML_UNUSED(ubatch);
+
+    if (!ids || !probs) {
+        return;
+    }
+    assert(ids->type   == GGML_TYPE_I32);
+    assert(probs->type == GGML_TYPE_F32);
+
+    const size_t n_id_bytes = ggml_nbytes(ids);
+    const size_t n_pr_bytes = ggml_nbytes(probs);
+
+    const bool have = diffusion
+        && diffusion->sc_topk > 0
+        && diffusion->sc_topk_ids.size()   * sizeof(int32_t) == n_id_bytes
+        && diffusion->sc_topk_probs.size() * sizeof(float)   == n_pr_bytes;
+
+    if (have) {
+        ggml_backend_tensor_set(ids,   diffusion->sc_topk_ids.data(),   0, n_id_bytes);
+        ggml_backend_tensor_set(probs, diffusion->sc_topk_probs.data(), 0, n_pr_bytes);
+    } else {
+        // no self-conditioning this step (e.g. first denoising step):
+        // ids -> 0 (any valid row), probs -> 0 so the gathered embeddings contribute nothing
+        std::vector<uint8_t> zeros_id(n_id_bytes, 0);
+        std::vector<uint8_t> zeros_pr(n_pr_bytes, 0);
+        ggml_backend_tensor_set(ids,   zeros_id.data(), 0, n_id_bytes);
+        ggml_backend_tensor_set(probs, zeros_pr.data(), 0, n_pr_bytes);
+    }
+}
+
 template <typename T>
 static void print_mask(const T * data, int64_t n_tokens, int64_t n_kv, int64_t n_swa, llama_swa_type swa_type) {
     LLAMA_LOG_DEBUG("%s: === Attention mask ===\n", __func__);
@@ -2088,6 +2118,23 @@ ggml_tensor * llm_graph_context::build_inp_diffusion_self_cond(int64_t n_vocab) 
     res->add_input(std::move(inp));
 
     return cur;
+}
+
+llm_graph_input_diffusion_self_cond_topk * llm_graph_context::build_inp_diffusion_self_cond_topk(int64_t k) const {
+    auto inp = std::make_unique<llm_graph_input_diffusion_self_cond_topk>(diffusion);
+
+    // ids are flat [k*n_tokens] (ggml_get_rows treats higher dims of the index tensor as batch
+    // dims that must match the data tensor; a flat index list gathers into [n_embd, k*n_tokens]).
+    inp->ids = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, k * n_tokens);
+    ggml_set_input(inp->ids);
+
+    inp->probs = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, k, n_tokens);
+    ggml_set_input(inp->probs);
+
+    auto * ptr = inp.get();
+    res->add_input(std::move(inp));
+
+    return ptr;
 }
 
 ggml_tensor * llm_graph_context::build_inp_pos_bucket_enc() const {

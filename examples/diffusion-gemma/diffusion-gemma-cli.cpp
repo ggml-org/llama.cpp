@@ -215,7 +215,7 @@ int main(int argc, char ** argv) {
     // ---- ENCODER phase: prefill the prompt prefix into the KV cache (no self-conditioning) ----
     int n_past = 0;
     llama_set_diffusion_decoder_phase(ctx, false);
-    llama_set_diffusion_self_cond(ctx, nullptr, 0, 0);
+    llama_set_diffusion_self_cond_topk(ctx, nullptr, nullptr, 0, 0);
     const auto t_prefill_start = std::chrono::steady_clock::now();
     if (use_mm) {
         // mtmd_helper_eval_chunks decodes text chunks (tokens, causal) and the image chunk
@@ -261,9 +261,14 @@ int main(int argc, char ** argv) {
     std::vector<llama_token> argmax_canvas(canvas_length, -1);
     std::vector<llama_token> prev_argmax(canvas_length, -1);
     std::vector<llama_token> accepted(canvas_length);
-    // self-conditioning buffer over the canvas: softmax(processed_logits) of the previous step.
-    // Fed to the next decode as the decoder-phase self-conditioning input (zeros on step 1).
-    std::vector<float> self_cond_buf((size_t) n_vocab * canvas_length, 0.0f);
+    // sparse self-conditioning over the canvas: the previous step's top-SC_K token ids + their
+    // (renormalized) softmax probabilities per position. Fed to the next decode (Option-2 graph
+    // gather: the decoder gathers just these SC_K embedding rows and blends them, instead of a
+    // dense full-vocab probs @ token_embd matmul). Zero probs => no self-conditioning (step 1).
+    // SC_K must match llama_model_diffusion_gemma::N_SC_TOPK (the graph's fixed gather width).
+    const int SC_K = 256;
+    std::vector<int32_t> sc_ids ((size_t) SC_K * canvas_length, 0);
+    std::vector<float>   sc_probs((size_t) SC_K * canvas_length, 0.0f);
 
     // all generated tokens across the autoregressive canvas blocks
     std::vector<llama_token> generated;
@@ -280,7 +285,7 @@ int main(int argc, char ** argv) {
     // 1. initialize canvas with random tokens
     for (auto & t : canvas) t = rand_tok(rng);
     std::fill(prev_argmax.begin(), prev_argmax.end(), -1);
-    llama_set_diffusion_self_cond(ctx, nullptr, 0, 0); // first step: zero self-conditioning
+    llama_set_diffusion_self_cond_topk(ctx, nullptr, nullptr, 0, 0); // first step: zero self-conditioning
 
     // 2. denoising loop (DECODER phase): cur_step = n_steps .. 1
     int step_k = 0; // top-k used for the current step (0 = full softmax), for logging
@@ -324,16 +329,34 @@ int main(int argc, char ** argv) {
         if (k_step <= 0 || k_step >= n_vocab) k_step = 0;
         step_k = k_step;
 
+        // sparse self-cond for the NEXT step: top-SC_K (id, prob) per position. Cleared each step;
+        // unused slots stay (id 0, prob 0) so the graph gather contributes nothing for them.
+        std::fill(sc_probs.begin(), sc_probs.end(), 0.0f);
+        std::fill(sc_ids.begin(),   sc_ids.end(),   0);
+
         if (k_step == 0) {
             // ---- full softmax over the whole vocabulary (reference behaviour) ----
+            // self-cond still feeds only the top-SC_K tokens (full-normalized probs); the dropped
+            // tail carries negligible embedding weight and the post RMS norm absorbs the scale.
             std::vector<float> probs(n_vocab);
+            std::vector<std::pair<float,int>> scheap; scheap.reserve(SC_K); // min-heap of (x, idx), size SC_K
+            const auto cmp = [](const std::pair<float,int>&a, const std::pair<float,int>&b){ return a.first > b.first; };
             for (int j = 0; j < canvas_length; ++j) {
                 const float * lg = logits + (size_t) j * n_vocab;
                 float maxl = -INFINITY;
                 int   amax = 0;
+                scheap.clear();
                 for (int v = 0; v < n_vocab; ++v) {
                     const float x = lg[v] / temp;
                     if (x > maxl) { maxl = x; amax = v; }
+                    if ((int) scheap.size() < SC_K) {
+                        scheap.push_back({x, v});
+                        std::push_heap(scheap.begin(), scheap.end(), cmp);
+                    } else if (x > scheap.front().first) {
+                        std::pop_heap(scheap.begin(), scheap.end(), cmp);
+                        scheap.back() = {x, v};
+                        std::push_heap(scheap.begin(), scheap.end(), cmp);
+                    }
                 }
                 float sum = 0.0f;
                 for (int v = 0; v < n_vocab; ++v) {
@@ -346,26 +369,28 @@ int main(int argc, char ** argv) {
                 float cum = 0.0f;
                 int   tok = amax;
                 bool  picked = false;
-                float * sc = self_cond_buf.data() + (size_t) j * n_vocab;
                 for (int v = 0; v < n_vocab; ++v) {
                     const float p = probs[v] / sum;
-                    sc[v] = p;
                     if (p > 0.0f) ent -= p * logf(p);
                     cum += probs[v];
                     if (!picked && cum >= r) { tok = v; picked = true; }
                 }
+                // store top-SC_K self-cond (full-normalized probability per selected token)
+                int32_t * sid = sc_ids.data()   + (size_t) j * SC_K;
+                float   * spr = sc_probs.data() + (size_t) j * SC_K;
+                int slot = 0;
+                for (auto & h : scheap) { sid[slot] = h.second; spr[slot] = expf(h.first - maxl) / sum; ++slot; }
                 entropy[j]       = ent;
                 sampled[j]       = tok;
                 argmax_canvas[j] = amax;
             }
         } else {
             // ---- top-k host sampling: softmax / entropy / sample / self-cond over the top-k
-            // logits only. The self-cond buffer is sparse (top-k filled), so the in-graph
-            // soft-embedding matmul blends only the top-k token embeddings (the dropped tail
-            // carries negligible embedding weight; the subsequent RMS norm absorbs the scale). ----
-            std::fill(self_cond_buf.begin(), self_cond_buf.end(), 0.0f);
-            std::vector<std::pair<float,int>> heap; // min-heap of (logit/temp, idx), size k_step
-            heap.reserve(k_step);
+            // logits only. Self-cond feeds the top min(k,SC_K) tokens (renormalized over the
+            // sampled top-k), gathered in-graph; the dropped tail carries negligible weight. ----
+            const int heap_k = std::max(k_step, SC_K); // collect enough for both sampling and self-cond
+            std::vector<std::pair<float,int>> heap; // min-heap of (logit/temp, idx), size heap_k
+            heap.reserve(heap_k);
             const auto cmp = [](const std::pair<float,int>&a, const std::pair<float,int>&b){ return a.first > b.first; };
             for (int j = 0; j < canvas_length; ++j) {
                 const float * lg = logits + (size_t) j * n_vocab;
@@ -375,7 +400,7 @@ int main(int argc, char ** argv) {
                 for (int v = 0; v < n_vocab; ++v) {
                     const float x = lg[v] / temp;
                     if (x > maxl) { maxl = x; amax = v; }
-                    if ((int) heap.size() < k_step) {
+                    if ((int) heap.size() < heap_k) {
                         heap.push_back({x, v});
                         std::push_heap(heap.begin(), heap.end(), cmp);
                     } else if (x > heap.front().first) {
@@ -384,9 +409,13 @@ int main(int argc, char ** argv) {
                         std::push_heap(heap.begin(), heap.end(), cmp);
                     }
                 }
-                // softmax over the top-k (renormalized); reuse .first to hold exp value
+                // sort the collected entries by logit descending (exp is monotonic with x): the
+                // first k_step drive sampling/entropy, the first SC_K drive self-cond.
+                std::sort(heap.begin(), heap.end(), [](const std::pair<float,int>&a, const std::pair<float,int>&b){ return a.first > b.first; });
+
+                // softmax over the sampled top-k (renormalized); reuse .first to hold exp value
                 float Zk = 0.0f;
-                for (auto & h : heap) { const float e = expf(h.first - maxl); h.first = e; Zk += e; }
+                for (int i = 0; i < k_step; ++i) { const float e = expf(heap[i].first - maxl); heap[i].first = e; Zk += e; }
 
                 float ent;
                 if (topk_tail) {
@@ -401,20 +430,24 @@ int main(int argc, char ** argv) {
                     ent = (float) (log(Zf) - T / Zf);
                 } else {
                     ent = 0.0f;
-                    for (auto & h : heap) { const float q = h.first / Zk; if (q > 0.0f) ent -= q * logf(q); }
+                    for (int i = 0; i < k_step; ++i) { const float q = heap[i].first / Zk; if (q > 0.0f) ent -= q * logf(q); }
                 }
 
-                // multinomial sample over the top-k + store sparse self-cond
+                // multinomial sample over the sampled top-k
                 const float r = rand_unif(rng) * Zk;
                 float cum = 0.0f;
                 int   tok = amax;
                 bool  picked = false;
-                float * sc = self_cond_buf.data() + (size_t) j * n_vocab;
-                for (auto & h : heap) {
-                    sc[h.second] = h.first / Zk;        // renormalized top-k probability
-                    cum += h.first;
-                    if (!picked && cum >= r) { tok = h.second; picked = true; }
+                for (int i = 0; i < k_step; ++i) {
+                    cum += heap[i].first;
+                    if (!picked && cum >= r) { tok = heap[i].second; picked = true; }
                 }
+
+                // store top-SC_K self-cond (renormalized over the sampled top-k)
+                int32_t * sid = sc_ids.data()   + (size_t) j * SC_K;
+                float   * spr = sc_probs.data() + (size_t) j * SC_K;
+                const int n_sc = std::min(k_step, SC_K);
+                for (int i = 0; i < n_sc; ++i) { sid[i] = heap[i].second; spr[i] = heap[i].first / Zk; }
                 entropy[j]       = ent;
                 sampled[j]       = tok;
                 argmax_canvas[j] = amax;
@@ -425,8 +458,8 @@ int main(int argc, char ** argv) {
         // prefix [0, n_past); the next step re-decodes the canvas fresh against that prefix.
         llama_memory_seq_rm(mem, 0, n_past, -1);
 
-        // self-conditioning for the NEXT denoising step: feed this step's softmax(processed_logits)
-        llama_set_diffusion_self_cond(ctx, self_cond_buf.data(), n_vocab, canvas_length);
+        // self-conditioning for the NEXT denoising step: feed this step's top-SC_K (id, prob)
+        llama_set_diffusion_self_cond_topk(ctx, sc_ids.data(), sc_probs.data(), SC_K, canvas_length);
 
         // 2c. entropy-bound accept: sort positions by entropy ascending, accept the prefix
         // where sum(entropy of all-but-last) <= entropy_bound (monotonic -> prefix selection)
@@ -490,7 +523,7 @@ int main(int argc, char ** argv) {
     if (!done && block + 1 < max_canvases) {
         llama_set_causal_attn(ctx, true);
         llama_set_diffusion_decoder_phase(ctx, false);
-        llama_set_diffusion_self_cond(ctx, nullptr, 0, 0);
+        llama_set_diffusion_self_cond_topk(ctx, nullptr, nullptr, 0, 0);
         batch.n_tokens = canvas_length;
         for (int j = 0; j < canvas_length; ++j) {
             batch.token[j]     = block_out[j];

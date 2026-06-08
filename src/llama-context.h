@@ -129,6 +129,9 @@ struct llama_context {
     // diffusion: select the KV-cache reuse phase (false = encoder/commit, true = decoder/denoise)
     void set_diffusion_decoder_phase(bool decoder_phase);
 
+    // diffusion: sparse (top-k) self-conditioning (top-k token ids + probs per position)
+    void set_diffusion_self_cond_topk(const int32_t * ids, const float * probs, int64_t k, int64_t n_tokens);
+
     void set_adapters_lora(llama_adapter_lora ** adapters, size_t n_adapters, float * scales);
 
     bool adapters_lora_are_same(llama_adapter_lora ** adapters, size_t n_adapters, float * scales);

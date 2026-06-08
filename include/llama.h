@@ -1004,6 +1004,18 @@ extern "C" {
     //           logits. Use with llama_set_causal_attn(ctx, false).
     LLAMA_API void llama_set_diffusion_decoder_phase(struct llama_context * ctx, bool decoder_phase);
 
+    // Sparse (top-k) self-conditioning for block diffusion: instead of the dense per-token probs
+    // (llama_set_diffusion_self_cond), feed only the top-k token ids + their probabilities per
+    // position. The graph then gathers just those k token embeddings and blends them, avoiding the
+    // full-vocab soft-embedding matmul and the [n_vocab x n_tokens] input. ids and probs are each
+    // [k * n_tokens] (token-major: position outer, k inner). Pass k=0 to clear.
+    LLAMA_API void llama_set_diffusion_self_cond_topk(
+            struct llama_context * ctx,
+                   const int32_t * ids,
+                     const float * probs,
+                         int64_t   k,
+                         int64_t   n_tokens);
+
     // Set whether the model is in warmup mode or not
     // If true, all model tensors are activated during llama_decode() to load and cache their weights.
     //

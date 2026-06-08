@@ -84,7 +84,15 @@ struct llama_diffusion_cond {
     int64_t n_vocab  = 0;
     int64_t n_tokens = 0;
     int64_t n_prompt = 0;     // length of the (causal) prompt prefix; 0 = unconditioned
-    std::vector<float> probs; // [n_vocab * n_tokens], row-major per token
+    std::vector<float> probs; // [n_vocab * n_tokens], row-major per token (dense self-cond path)
+
+    // Sparse (top-k) self-conditioning: the previous step's top-k token ids + probabilities per
+    // position. When sc_topk > 0 the graph gathers only these k embedding rows and blends them,
+    // instead of the full-vocab `probs @ token_embd` matmul. ids/probs are [sc_topk * n_tokens]
+    // (token-major: positions outer, k inner). Set via llama_set_diffusion_self_cond_topk().
+    int64_t sc_topk = 0;
+    std::vector<int32_t> sc_topk_ids;
+    std::vector<float>   sc_topk_probs;
 
     // KV-cache reuse phase selector (block-diffusion):
     //   false (encoder phase) = plain token embeddings, no self-conditioning; KV is
@@ -312,6 +320,22 @@ public:
     void set_input(const llama_ubatch * ubatch) override;
 
     ggml_tensor * probs; // F32 [n_vocab, n_tokens]
+
+    const llama_diffusion_cond * diffusion;
+};
+
+// sparse (top-k) diffusion self-conditioning input: top-k token ids + probabilities per position.
+// Feeds [k, n_tokens] ids (I32) and probs (F32) so the graph gathers only k embedding rows per
+// position instead of the dense full-vocab probs (see struct llama_diffusion_cond, sc_topk).
+class llm_graph_input_diffusion_self_cond_topk : public llm_graph_input_i {
+public:
+    llm_graph_input_diffusion_self_cond_topk(const llama_diffusion_cond * diffusion) : diffusion(diffusion) {}
+    virtual ~llm_graph_input_diffusion_self_cond_topk() = default;
+
+    void set_input(const llama_ubatch * ubatch) override;
+
+    ggml_tensor * ids;   // I32 [k*n_tokens] (flat; gathered into [n_embd, k*n_tokens])
+    ggml_tensor * probs; // F32 [k, n_tokens]
 
     const llama_diffusion_cond * diffusion;
 };
@@ -1010,6 +1034,8 @@ struct llm_graph_context {
 
     ggml_tensor * build_inp_embd(ggml_tensor * tok_embd) const;
     ggml_tensor * build_inp_diffusion_self_cond(int64_t n_vocab) const; // F32 [n_vocab, n_tokens]
+    // sparse self-cond: returns the input object exposing ->ids (I32 [k,n_tokens]) and ->probs (F32 [k,n_tokens])
+    llm_graph_input_diffusion_self_cond_topk * build_inp_diffusion_self_cond_topk(int64_t k) const;
     ggml_tensor * build_inp_pos() const;
     ggml_tensor * build_inp_attn_scale() const;
     ggml_tensor * build_inp_out_ids() const;

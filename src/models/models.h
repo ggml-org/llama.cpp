@@ -835,7 +835,13 @@ struct llama_model_diffusion_gemma : public llama_model_gemma4 {
     ~llama_model_diffusion_gemma() override;
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
-    void load_arch_post(llama_model_loader & ml) override; // precompute the transposed F32 embedding
+    void load_arch_post(llama_model_loader & ml) override; // place the self-cond embedding on-device
+
+    // width of the sparse (top-k) self-conditioning gather. The graph gathers exactly this many
+    // token embeddings per position each decoder step (the CLI feeds the top-N ids+probs, zero-
+    // padding unused slots), independent of the sampling k. 256 captures effectively all the
+    // softmax mass of a converged diffusion step, so the soft-embedding blend is near-exact.
+    static constexpr int64_t N_SC_TOPK = 256;
 
     // Shared transformer body for both KV-cache-reuse variants. The reused gemma4 decoder
     // block (layers + final norm + tied lm_head + softcapping) is identical across phases;
@@ -872,9 +878,16 @@ struct llama_model_diffusion_gemma : public llama_model_gemma4 {
     ggml_tensor * self_cond_up   = nullptr;
     ggml_tensor * self_cond_down = nullptr;
 
-    // Precomputed transposed F32 token embedding {n_vocab, n_embd}, used by the self-conditioning
-    // soft-embedding matmul (probs @ token_embd). Computed once in load_arch_post and kept in a
-    // model-owned backend buffer, so the per-decode dequantize+transpose is avoided.
+    // On-device F16 copy of the token embedding {n_embd, n_vocab}, used by the sparse self-cond
+    // gather (ggml_get_rows of the top-k ids). F16 (not the native Q4_K) because CUDA get_rows has
+    // no Q4_K/Q6_K kernel and would fall back to CPU. Allocated once in load_arch_post on an
+    // offloaded backend so the gather runs on-device. ~1.47 GiB vs the 2.75 GiB F32 dense transpose.
+    ggml_context        * tok_embd_gpu_ctx = nullptr;
+    ggml_backend_buffer_t tok_embd_gpu_buf = nullptr;
+    ggml_tensor         * tok_embd_gpu     = nullptr;
+
+    // Fallback only (used if the on-device gather copy can't be allocated): transposed F32 token
+    // embedding {n_vocab, n_embd} for the dense soft-embedding matmul (probs @ token_embd).
     ggml_context        * tok_embd_t_ctx = nullptr;
     ggml_backend_buffer_t tok_embd_t_buf = nullptr;
     ggml_tensor         * tok_embd_t     = nullptr;
