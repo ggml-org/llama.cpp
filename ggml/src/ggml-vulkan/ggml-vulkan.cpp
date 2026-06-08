@@ -8269,17 +8269,22 @@ static void ggml_vk_mul_mat_q_f16(ggml_backend_vk_context * ctx, vk_context& sub
             ggml_vk_preallocate_buffers(ctx, subctx);
         }
         if ((qy_needs_dequant || quantize_y) && ctx->prealloc_size_y < y_sz) {
-            // If the prescan failed to prevent this growth, log the cause.
-            // Enable with GGML_VK_FA_DEBUG=1.
+            // The prescan in ggml_backend_vk_graph_compute should have pre-allocated
+            // enough prealloc_y before any command buffer was opened.  If we get here
+            // with a live subctx it means the prescan missed this op, which is the
+            // race condition that caused crashes on Intel Arc UMA.
+            // Set GGML_VK_FA_DEBUG=1 to surface this as a hard assertion failure
+            // (useful for running unit tests with the prescan disabled to verify coverage).
             if (getenv("GGML_VK_FA_DEBUG")) {
                 fprintf(stderr,
                     "ggml_vulkan MulMat Y grow (UNEXPECTED): y_sz=%llu ne=[%lld,%lld,%lld,%lld]"
-                    " padded_n=%u qy_needs=%d quantize_y=%d\n",
+                    " padded_n=%u qy_needs=%d quantize_y=%d has_subctx=%d\n",
                     (unsigned long long)y_sz,
                     (long long)src1->ne[0], (long long)src1->ne[1],
                     (long long)src1->ne[2], (long long)src1->ne[3],
-                    padded_n, (int)qy_needs_dequant, (int)quantize_y);
+                    padded_n, (int)qy_needs_dequant, (int)quantize_y, subctx ? 1 : 0);
                 fflush(stderr);
+                GGML_ASSERT(!subctx && "MulMat prealloc_y grew mid-graph: prescan missing for this op");
             }
             ctx->prealloc_size_y = y_sz;
             ggml_vk_preallocate_buffers(ctx, subctx);
@@ -9189,17 +9194,19 @@ static void ggml_vk_mul_mat_id_q_f16(ggml_backend_vk_context * ctx, vk_context& 
             ggml_vk_preallocate_buffers(ctx, subctx);
         }
         if ((qy_needs_dequant || quantize_y) && ctx->prealloc_size_y < y_sz) {
-            // If the prescan failed to prevent this growth, log the cause.
-            // Enable with GGML_VK_FA_DEBUG=1.
+            // Same invariant as MulMat above: the prescan should have pre-allocated this.
+            // Mid-graph growth with a live subctx is the race that caused crashes on
+            // Intel Arc UMA.  Set GGML_VK_FA_DEBUG=1 to surface as a hard assertion.
             if (getenv("GGML_VK_FA_DEBUG")) {
                 fprintf(stderr,
                     "ggml_vulkan MulMatId Y grow (UNEXPECTED): y_sz=%llu ne=[%lld,%lld,%lld,%lld]"
-                    " padded_n=%u qy_needs=%d quantize_y=%d\n",
+                    " padded_n=%u qy_needs=%d quantize_y=%d has_subctx=%d\n",
                     (unsigned long long)y_sz,
                     (long long)src1->ne[0], (long long)src1->ne[1],
                     (long long)src1->ne[2], (long long)src1->ne[3],
-                    padded_n, (int)qy_needs_dequant, (int)quantize_y);
+                    padded_n, (int)qy_needs_dequant, (int)quantize_y, subctx ? 1 : 0);
                 fflush(stderr);
+                GGML_ASSERT(!subctx && "MulMatId prealloc_y grew mid-graph: prescan missing for this op");
             }
             ctx->prealloc_size_y = y_sz;
             ggml_vk_preallocate_buffers(ctx, subctx);
@@ -13742,11 +13749,10 @@ static void ggml_vk_preallocate_buffers(ggml_backend_vk_context * ctx, vk_contex
     }
     if (ctx->prealloc_y == nullptr || (ctx->prealloc_size_y > 0 && ctx->prealloc_y->size < ctx->prealloc_size_y)) {
         VK_LOG_MEMORY("ggml_vk_preallocate_buffers(y_size: " << ctx->prealloc_size_y << ")");
-        // Log large prealloc_y growth with subctx state. Enable with GGML_VK_FA_DEBUG=1.
-        // has_subctx=1 here means a command buffer is open — this is the unsafe path that
-        // can corrupt memory on Intel Arc UMA. The prescan fix should prevent this for
-        // MUL_MAT/MUL_MAT_ID nodes; if seen, it indicates a gap in prescan coverage.
-        if (getenv("GGML_VK_FA_DEBUG") && ctx->prealloc_size_y > 64*1024*1024) {
+        // Note: the actual GGML_ASSERT(!subctx) lives at the op level (MulMat/MulMatId)
+        // where (qy_needs_dequant || quantize_y) && prealloc_size_y < y_sz, gated by
+        // GGML_VK_FA_DEBUG.  That is the precise invariant the prescan maintains.
+        if (getenv("GGML_VK_FA_DEBUG")) {
             fprintf(stderr, "ggml_vulkan: prealloc_y growing to %zu bytes (has_subctx=%d)\n",
                     ctx->prealloc_size_y, subctx ? 1 : 0);
             fflush(stderr);
@@ -15612,6 +15618,7 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
     // For X (src0 weight buffer, dequant path):
     //   Only F32/F16/BF16 src0 requires dequantisation; quantised types are consumed
     //   directly by the shader, so qx_needs_dequant=false for those.
+#if 1  // set to 0 to disable prescan (for unit test regression verification)
     {
         // Maximum wg_denoms[1] across all configured pipelines (conservative).
         // Empirically observed: MUL_MAT l_wg_denoms[1]=256, MUL_MAT_ID l_mmqid[1]=128.
@@ -15661,6 +15668,7 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
             ggml_vk_preallocate_buffers(ctx, nullptr);
         }
     }
+#endif  // prescan
 
     // Submit after enough work has accumulated, to overlap CPU cmdbuffer generation with GPU execution.
     // Estimate the amount of matmul work by looking at the weight matrix size, and submit every 100MB

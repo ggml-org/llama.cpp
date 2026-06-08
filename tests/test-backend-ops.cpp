@@ -4324,6 +4324,76 @@ struct test_mul_mat_id_fusion : public test_case {
     }
 };
 
+// Regression test for the Vulkan prealloc prescan fix (PR #24312).
+// Builds a two-op graph: a small MUL_MAT runs first (establishing a tiny
+// prealloc_y), then a large MUL_MAT_ID with ne11=1 (single-token decode)
+// and a large expert count.  Without the prescan pass in
+// ggml_backend_vk_graph_compute, the Vulkan backend will attempt to grow
+// prealloc_y mid-graph while a command buffer is open (has_subctx=1),
+// which can corrupt memory on UMA hardware.
+struct test_mul_mat_id_prescan : public test_case {
+    const ggml_type type_a;  // weight type for the MUL_MAT_ID
+    const int       n_mats;  // total number of experts
+    const int       n_used;  // active experts per token
+    const int64_t   m;       // output dim per expert
+    const int64_t   k;       // inner (contraction) dim
+    const int64_t   n_tokens; // number of tokens (must be > 8 to use the matrix path)
+
+    std::string vars() override { return VARS_TO_STR6(type_a, n_mats, n_used, m, k, n_tokens); }
+    double      max_nmse_err() override { return 5e-4; }
+    // run_whole_graph ensures the graph goes through ggml_backend_graph_compute
+    // (where the prescan runs) rather than being dispatched op-by-op.
+    bool        run_whole_graph() override { return true; }
+    std::string op_desc(ggml_tensor *) override { return "MUL_MAT_ID_PRESCAN"; }
+
+    test_mul_mat_id_prescan(
+            ggml_type type_a = GGML_TYPE_F16, int n_mats = 512, int n_used = 2,
+            int64_t m = 128, int64_t k = 256, int64_t n_tokens = 16)
+        : type_a(type_a), n_mats(n_mats), n_used(n_used), m(m), k(k), n_tokens(n_tokens) {
+            // n_tokens > 8 routes ggml_mul_mat_id to the matrix path (ggml_vk_mul_mat_id_q_f16)
+            // which uses prealloc_y. n_tokens <= 8 takes the vector path that does not,
+            // so the test would not exercise the mid-graph reallocation bug.
+            GGML_ASSERT(n_tokens > 8);
+        }
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        // Part 1: small MUL_MAT — dispatches to the mul_mat_vec path (dst->ne[1]==n_used<=8),
+        // which does NOT use prealloc_y.  After this op, prealloc_size_y is still 0.
+        const int64_t k_small = 4;
+        ggml_tensor * sa = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, k_small, m);
+        ggml_tensor * sb = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, k_small, n_used);
+        ggml_set_name(sa, "sa");
+        ggml_set_name(sb, "sb");
+        ggml_tensor * small_out = ggml_mul_mat(ctx, sa, sb); // (m, n_used)
+        ggml_set_name(small_out, "small_out");
+
+        // Part 2: large MUL_MAT_ID with n_tokens > 8 — routes to ggml_vk_mul_mat_id_q_f16
+        // (the matrix path), which uses prealloc_y and pads ne11 to a pipeline wg_denom
+        // multiple.  Without the prescan, prealloc_size_y grows from 0 to y_sz mid-graph
+        // with a live command buffer (subctx), triggering the crash on Intel Arc UMA.
+        ggml_tensor * as = ggml_new_tensor_3d(ctx, type_a, k, m, n_mats);
+        ggml_set_name(as, "as");
+        // ids: [n_mats, n_tokens] storage; view first n_used rows as the routing tensor.
+        ggml_tensor * ids_storage = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, n_mats, n_tokens);
+        ggml_set_name(ids_storage, "ids_storage");
+        ggml_tensor * ids = ggml_view_2d(ctx, ids_storage, n_used, n_tokens, ids_storage->nb[1], 0);
+        ggml_set_name(ids, "ids");
+        // bl: [k, n_used, n_tokens] — activations for n_tokens tokens, each routed to n_used experts
+        ggml_tensor * bl = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, k, n_used, n_tokens);
+        ggml_set_name(bl, "bl");
+        ggml_tensor * large_out = ggml_mul_mat_id(ctx, as, bl, ids); // (m, n_used, n_tokens)
+        ggml_set_name(large_out, "large_out");
+
+        // Combine both ops so the graph executor must run both.
+        // small_out (m, n_used) broadcasts over large_out (m, n_used, n_tokens).
+        return ggml_add(ctx, large_out, small_out);
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        init_mul_mat_id_tensors(ctx, n_mats);
+    }
+};
+
 // GGML_OP_OUT_PROD
 struct test_out_prod : public test_case {
     const ggml_type type_a;
@@ -8521,6 +8591,31 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
 
     test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_F16, GGML_TYPE_F32, 1, 1, false, 8, 16, 1));
     test_cases.emplace_back(new test_mul_mat_id_fusion(GGML_TYPE_F16, GGML_TYPE_F32, 16, 16, false, 32, 32, 32, 3));
+
+    // Gemma 4 26B-A4B MoE: 512 experts, ne11=1 single-token decode.
+    // Uses reduced k/m (256/128) to keep device memory < 128 MB on any backend.
+    // n_mats=512 + n=1 exercises ROUNDUP_POW2(1, wg_denom) amplification regardless
+    // of k -- the same code path that caused crashes on Vulkan UMA hardware at
+    // >= 23K token contexts (see PR #24312).
+    for (ggml_type type_a : {GGML_TYPE_F16, GGML_TYPE_Q4_K}) {
+        // n=1: single-token decode — the crash-inducing case
+        test_cases.emplace_back(new test_mul_mat_id(type_a, GGML_TYPE_F32, 512, 2, false, 128, 1, 256));
+        // n=4: small prefill batch — sanity-checks adjacent decode batch sizes
+        test_cases.emplace_back(new test_mul_mat_id(type_a, GGML_TYPE_F32, 512, 2, false, 128, 4, 256));
+    }
+
+    // Prescan regression: two-op graph (small MUL_MAT then large MUL_MAT_ID).
+    // run_whole_graph=true ensures the graph goes through ggml_backend_graph_compute
+    // so the Vulkan prescan in ggml_backend_vk_graph_compute is exercised.
+    // n_tokens=16 forces the matrix path (ggml_vk_mul_mat_id_q_f16) which uses
+    // prealloc_y; n_tokens<=8 would take the vector path that does not.
+    // Without the prescan fix the Vulkan backend grows prealloc_y mid-graph
+    // (has_subctx=1), which corrupts memory on UMA hardware (Intel Arc).
+    // To verify the test catches the regression, disable the prescan (#if 0 in
+    // ggml_backend_vk_graph_compute) and run with GGML_VK_FA_DEBUG=1; the
+    // GGML_ASSERT(!subctx) in ggml_vk_mul_mat_id_q_f16 will abort the process.
+    test_cases.emplace_back(new test_mul_mat_id_prescan(GGML_TYPE_F16,  512, 2, 128, 256, 16));
+    test_cases.emplace_back(new test_mul_mat_id_prescan(GGML_TYPE_Q4_K, 512, 2, 128, 256, 16));
 
     // gpt-oss issue with Vulkan mmq_id
     test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_MXFP4, GGML_TYPE_F32, 32, 2, false, 2880, 32, 2880));
