@@ -3,17 +3,17 @@
 #include "ggml-backend.h"
 #include "ggml-alloc.h"
 
-// diffusion_gemma4 reuses the gemma4 decoder block (tensor layout + per-layer math) but runs
+// diffusion_gemma reuses the gemma4 decoder block (tensor layout + per-layer math) but runs
 // as a bidirectional (non-causal) block-diffusion denoiser over a canvas, with KV-cache reuse:
 // the prompt / previously-finalized canvases form a causal, read-only prefix in the unified
 // sliding-window KV cache, and each denoising step decodes only the current canvas against it
 // (self-conditioned, bidirectional), rolling back its own K/V afterwards.
 //
 // Two graph variants are provided (see build_arch_graph): a single phase-branching graph, and
-// a separate encoder/decoder pair (DG4_SEPARATE_ENC_DEC). Both reuse the gemma4 transformer
+// a separate encoder/decoder pair (DG_SEPARATE_ENC_DEC). Both reuse the gemma4 transformer
 // body and differ only in input-embedding handling (encoder: plain; decoder: self-conditioned).
 
-void llama_model_diffusion_gemma4::load_arch_hparams(llama_model_loader & ml) {
+void llama_model_diffusion_gemma::load_arch_hparams(llama_model_loader & ml) {
     // reuse the gemma4 hparam loading (sliding window pattern, dual head dims, MoE, rope,
     // softcapping, layer types, ...)
     llama_model_gemma4::load_arch_hparams(ml);
@@ -22,7 +22,7 @@ void llama_model_diffusion_gemma4::load_arch_hparams(llama_model_loader & ml) {
     hparams.causal_attn = false;
 }
 
-void llama_model_diffusion_gemma4::load_arch_tensors(llama_model_loader & ml) {
+void llama_model_diffusion_gemma::load_arch_tensors(llama_model_loader & ml) {
     // load the shared gemma4 tensors (token embd, attention, dual dense+MoE FFN, norms,
     // per-layer layer_scalar, output)
     llama_model_gemma4::load_arch_tensors(ml);
@@ -38,7 +38,7 @@ void llama_model_diffusion_gemma4::load_arch_tensors(llama_model_loader & ml) {
     self_cond_down = create_tensor(tn(LLM_TENSOR_SELF_COND_DOWN, "weight"), {n_ff_sc, n_embd},  0);
 }
 
-llama_model_diffusion_gemma4::~llama_model_diffusion_gemma4() {
+llama_model_diffusion_gemma::~llama_model_diffusion_gemma() {
     if (tok_embd_t_buf) {
         ggml_backend_buffer_free(tok_embd_t_buf);
     }
@@ -51,7 +51,7 @@ llama_model_diffusion_gemma4::~llama_model_diffusion_gemma4() {
 // backend buffer on the same backend as tok_embd. The self-conditioning soft-embedding matmul
 // (probs @ token_embd) needs vocab as the contracted (ne[0]) dimension; precomputing this here
 // avoids dequantizing + transposing the whole embedding on every decode.
-void llama_model_diffusion_gemma4::load_arch_post(llama_model_loader & ml) {
+void llama_model_diffusion_gemma::load_arch_post(llama_model_loader & ml) {
     GGML_UNUSED(ml);
 
     if (!tok_embd || !tok_embd->buffer) {
@@ -106,14 +106,14 @@ void llama_model_diffusion_gemma4::load_arch_post(llama_model_loader & ml) {
                    ggml_nbytes(tok_embd_t) / (1024.0 * 1024.0 * 1024.0));
 }
 
-std::unique_ptr<llm_graph_context> llama_model_diffusion_gemma4::build_arch_graph(const llm_graph_params & params) const {
+std::unique_ptr<llm_graph_context> llama_model_diffusion_gemma::build_arch_graph(const llm_graph_params & params) const {
     const bool is_decoder = params.diffusion && params.diffusion->decoder_phase;
 
     // Variant B ("separate encoder and decoder block", shared weights): opt-in via
-    // DG4_SEPARATE_ENC_DEC. Two distinct graphs are built per phase. Functionally identical
+    // DG_SEPARATE_ENC_DEC. Two distinct graphs are built per phase. Functionally identical
     // to Variant A here (the checkpoint shares encoder/decoder weights); the split mirrors
     // the HF two-stack structure and generalizes to a checkpoint with distinct weights.
-    if (getenv("DG4_SEPARATE_ENC_DEC")) {
+    if (getenv("DG_SEPARATE_ENC_DEC")) {
         if (is_decoder) {
             return std::make_unique<graph_decoder>(*this, params);
         }
@@ -127,8 +127,8 @@ std::unique_ptr<llm_graph_context> llama_model_diffusion_gemma4::build_arch_grap
 // Scaled input embeddings. In the decoder phase, apply the self-conditioning transform:
 //   inpL = post_norm(scaled_embed + sc_mlp(pre_norm(soft))),
 //   soft = (probs @ token_embd) * sqrt(n_embd)   [probs = previous step's softmax, 0 on step 1]
-ggml_tensor * llama_model_diffusion_gemma4::graph_base::build_input(bool is_decoder) {
-    const auto & dmodel = static_cast<const llama_model_diffusion_gemma4 &>(model);
+ggml_tensor * llama_model_diffusion_gemma::graph_base::build_input(bool is_decoder) {
+    const auto & dmodel = static_cast<const llama_model_diffusion_gemma &>(model);
 
     ggml_tensor * inpL = build_inp_embd(model.tok_embd);
 
@@ -164,24 +164,24 @@ ggml_tensor * llama_model_diffusion_gemma4::graph_base::build_input(bool is_deco
 }
 
 // Variant A: single graph, phase chosen at runtime from the diffusion cond.
-llama_model_diffusion_gemma4::graph::graph(const llama_model & model, const llm_graph_params & params) :
+llama_model_diffusion_gemma::graph::graph(const llama_model & model, const llm_graph_params & params) :
         graph_base(model, params) {
     build_transformer(build_input(diffusion && diffusion->decoder_phase));
 }
 
 // Variant B: separate encoder / decoder graphs (shared weight tensors).
-llama_model_diffusion_gemma4::graph_encoder::graph_encoder(const llama_model & model, const llm_graph_params & params) :
+llama_model_diffusion_gemma::graph_encoder::graph_encoder(const llama_model & model, const llm_graph_params & params) :
         graph_base(model, params) {
     build_transformer(build_input(/*is_decoder=*/false));
 }
 
-llama_model_diffusion_gemma4::graph_decoder::graph_decoder(const llama_model & model, const llm_graph_params & params) :
+llama_model_diffusion_gemma::graph_decoder::graph_decoder(const llama_model & model, const llm_graph_params & params) :
         graph_base(model, params) {
     build_transformer(build_input(/*is_decoder=*/true));
 }
 
 // Run the reused gemma4 decoder block over the input embeddings and emit logits.
-void llama_model_diffusion_gemma4::graph_base::build_transformer(ggml_tensor * inpL) {
+void llama_model_diffusion_gemma::graph_base::build_transformer(ggml_tensor * inpL) {
     ggml_tensor * cur;
 
     ggml_tensor * inp_pos = build_inp_pos();

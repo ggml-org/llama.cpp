@@ -1,4 +1,4 @@
-// Block-diffusion generation for diffusion_gemma4.
+// Block-diffusion generation for diffusion_gemma.
 //
 // Implements the reference block-diffusion loop (EntropyBoundSampler + StableAndConfident
 // stopping + linear temperature schedule) with KV-cache reuse:
@@ -19,6 +19,8 @@
 #include "common.h"
 #include "llama.h"
 #include "log.h"
+#include "mtmd.h"
+#include "mtmd-helper.h"
 
 #include <algorithm>
 #include <cmath>
@@ -27,7 +29,7 @@
 #include <random>
 #include <vector>
 
-// reference defaults from generation_config.json / DiffusionGemma4GenerationConfig
+// reference defaults from generation_config.json / DiffusionGemmaGenerationConfig
 static constexpr int   DEF_CANVAS_LENGTH      = 256;
 static constexpr int   DEF_MAX_DENOISE_STEPS  = 48;
 static constexpr float ENTROPY_BOUND          = 0.1f;   // EntropyBoundSamplerConfig.entropy_bound
@@ -55,15 +57,15 @@ static std::string format_chat(llama_model * model, const std::string & prompt) 
 
 int main(int argc, char ** argv) {
     common_params params;
-    if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_COMMON)) {
+    if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_DIFFUSION)) {
         return 1;
     }
     common_init();
 
     // diffusion config (env-overridable for quick CPU testing)
-    const int   canvas_length = env_int("DG4_CANVAS", params.n_predict > 0 ? params.n_predict : DEF_CANVAS_LENGTH);
-    const int   n_steps       = env_int("DG4_STEPS", DEF_MAX_DENOISE_STEPS);
-    const int   max_canvases  = std::max(env_int("DG4_MAX_CANVASES", 1), 1); // autoregressive blocks
+    const int   canvas_length = env_int("DG_CANVAS", params.n_predict > 0 ? params.n_predict : DEF_CANVAS_LENGTH);
+    const int   n_steps       = env_int("DG_STEPS", DEF_MAX_DENOISE_STEPS);
+    const int   max_canvases  = std::max(env_int("DG_MAX_CANVASES", 1), 1); // autoregressive blocks
     const float entropy_bound = ENTROPY_BOUND;
 
     llama_backend_init();
@@ -90,24 +92,75 @@ int main(int argc, char ** argv) {
     const llama_vocab * vocab   = llama_model_get_vocab(model);
     const int           n_vocab = llama_vocab_n_tokens(vocab);
 
-    // tokenize the prompt (causal prefix). The canvas is appended after it.
-    // this is a chat-trained model, so apply its chat template (turn/channel tokens).
-    std::vector<llama_token> prompt_tokens;
-    if (!params.prompt.empty()) {
-        const std::string formatted = format_chat(model, params.prompt);
+    // Build the prompt prefix. Text-only path tokenizes the chat-formatted prompt. Multimodal
+    // path (--mmproj + --image) tokenizes via libmtmd: the image marker expands to the gemma
+    // image tokens and the vision embeddings are produced by the GEMMA4V mmproj.
+    const bool use_mm = !params.mmproj.path.empty() && !params.image.empty();
+
+    std::vector<llama_token> prompt_tokens;               // text-only prefill
+    mtmd::context_ptr        mctx_vision;                 // multimodal context
+    mtmd::input_chunks       mm_chunks(mtmd_input_chunks_init());
+    int prefix_len = 0;                                   // total positions in the prompt prefix
+
+    if (use_mm) {
+        mtmd_context_params mparams = mtmd_context_params_default();
+        mparams.use_gpu       = params.mmproj_use_gpu;
+        mparams.print_timings = false;
+        mparams.n_threads     = params.cpuparams.n_threads;
+        mctx_vision.reset(mtmd_init_from_file(params.mmproj.path.c_str(), model, mparams));
+        if (!mctx_vision) {
+            LOG_ERR("error: failed to load mmproj '%s'\n", params.mmproj.path.c_str());
+            llama_model_free(model);
+            return 1;
+        }
+
+        // load image(s) and build one media marker per image
+        mtmd::bitmaps bitmaps;
+        std::string markers;
+        for (const auto & img : params.image) {
+            mtmd::bitmap bmp(mtmd_helper_bitmap_init_from_file(mctx_vision.get(), img.c_str()));
+            if (!bmp.ptr) {
+                LOG_ERR("error: failed to load image '%s'\n", img.c_str());
+                llama_model_free(model);
+                return 1;
+            }
+            bitmaps.entries.push_back(std::move(bmp));
+            markers += mtmd_default_marker();
+            markers += "\n";
+        }
+
+        // chat-format with the image marker(s) prepended to the user content
+        const std::string formatted = format_chat(model, markers + params.prompt);
         LOG_INF("formatted prompt: %s\n", formatted.c_str());
-        prompt_tokens = common_tokenize(vocab, formatted, /*add_special*/ false, /*parse_special*/ true);
+
+        mtmd_input_text text;
+        text.text          = formatted.c_str();
+        text.add_special   = false;
+        text.parse_special = true;
+        auto bmp_c = bitmaps.c_ptr();
+        if (mtmd_tokenize(mctx_vision.get(), mm_chunks.ptr.get(), &text, bmp_c.data(), bmp_c.size()) != 0) {
+            LOG_ERR("error: mtmd_tokenize failed\n");
+            llama_model_free(model);
+            return 1;
+        }
+        prefix_len = (int) mtmd_helper_get_n_pos(mm_chunks.ptr.get());
+    } else {
+        // text-only: chat-format and tokenize (turn/channel special tokens)
+        if (!params.prompt.empty()) {
+            const std::string formatted = format_chat(model, params.prompt);
+            LOG_INF("formatted prompt: %s\n", formatted.c_str());
+            prompt_tokens = common_tokenize(vocab, formatted, /*add_special*/ false, /*parse_special*/ true);
+        }
+        prefix_len = (int) prompt_tokens.size();
     }
-    const int n_prompt = (int) prompt_tokens.size();
 
     // Context holds the committed prefix (prompt + finalized canvases) plus the canvas being
-    // denoised. We size it for the prompt + all committed blocks + one extra canvas of headroom
-    // (the in-flight canvas's K/V is written then rolled back each denoising step, so the ring
-    // buffer needs room to place a fresh canvas before the previous step's cells are reused).
-    const int n_ctx_min = n_prompt + (max_canvases + 1) * canvas_length;
+    // denoised, plus one extra canvas of headroom (the in-flight canvas's K/V is written then
+    // rolled back each denoising step, so the ring buffer needs room before cells are reused).
+    const int n_ctx_min = prefix_len + (max_canvases + 1) * canvas_length;
     const int n_ctx     = std::max<int>(n_ctx_min, (int) params.n_ctx);
-    // Largest single decode is the prompt prefill (n_prompt) or a canvas pass (canvas_length).
-    const int n_ub      = std::max(std::max(n_prompt, canvas_length), 1);
+    // Largest single decode is the prompt prefill (prefix_len) or a canvas pass (canvas_length).
+    const int n_ub      = std::max(std::max(prefix_len, canvas_length), 1);
 
     llama_context_params ctx_params = llama_context_default_params();
     ctx_params.n_ctx    = n_ctx;
@@ -122,11 +175,11 @@ int main(int argc, char ** argv) {
         return 1;
     }
     llama_set_n_threads(ctx, params.cpuparams.n_threads, params.cpuparams_batch.n_threads);
-    llama_set_diffusion_prompt_len(ctx, n_prompt);
+    llama_set_diffusion_prompt_len(ctx, prefix_len);
     llama_memory_t mem = llama_get_memory(ctx);
 
-    LOG_INF("diffusion-gemma4: prompt=%d canvas=%d steps=%d entropy_bound=%.3f temp=[%.2f,%.2f] n_ctx=%d\n",
-            n_prompt, canvas_length, n_steps, entropy_bound, TEMP_MIN, TEMP_MAX, n_ctx);
+    LOG_INF("diffusion-gemma: prefix=%d canvas=%d steps=%d entropy_bound=%.3f temp=[%.2f,%.2f] n_ctx=%d mm=%d\n",
+            prefix_len, canvas_length, n_steps, entropy_bound, TEMP_MIN, TEMP_MAX, n_ctx, (int) use_mm);
 
     std::mt19937 rng(params.sampling.seed == LLAMA_DEFAULT_SEED ? 1234u : params.sampling.seed);
     std::uniform_int_distribution<int> rand_tok(0, n_vocab - 1);
@@ -134,19 +187,32 @@ int main(int argc, char ** argv) {
 
     llama_batch batch = llama_batch_init(n_ub, 0, 1);
 
-    // ---- ENCODER phase: prefill the prompt into the KV cache (causal, no self-conditioning) ----
+    // ---- ENCODER phase: prefill the prompt prefix into the KV cache (no self-conditioning) ----
     int n_past = 0;
-    if (n_prompt > 0) {
+    llama_set_diffusion_decoder_phase(ctx, false);
+    llama_set_diffusion_self_cond(ctx, nullptr, 0, 0);
+    if (use_mm) {
+        // mtmd_helper_eval_chunks decodes text chunks (tokens, causal) and the image chunk
+        // (vision embeddings, bidirectional for gemma) into the cache, managing causal_attn.
+        llama_pos new_n_past = 0;
+        if (mtmd_helper_eval_chunks(mctx_vision.get(), ctx, mm_chunks.ptr.get(),
+                /*n_past*/ 0, /*seq_id*/ 0, /*n_batch*/ n_ub, /*logits_last*/ true, &new_n_past)) {
+            LOG_ERR("error: multimodal prefill failed\n");
+            llama_batch_free(batch);
+            llama_free(ctx);
+            llama_model_free(model);
+            return 1;
+        }
+        n_past = (int) new_n_past; // prompt + image K/V is now the committed read-only prefix
+    } else if (prefix_len > 0) {
         llama_set_causal_attn(ctx, true);
-        llama_set_diffusion_decoder_phase(ctx, false);
-        llama_set_diffusion_self_cond(ctx, nullptr, 0, 0);
-        batch.n_tokens = n_prompt;
-        for (int i = 0; i < n_prompt; ++i) {
+        batch.n_tokens = prefix_len;
+        for (int i = 0; i < prefix_len; ++i) {
             batch.token[i]     = prompt_tokens[i];
             batch.pos[i]       = i;
             batch.n_seq_id[i]  = 1;
             batch.seq_id[i][0] = 0;
-            batch.logits[i]    = (i == n_prompt - 1) ? 1 : 0; // logits unused; keep n_outputs >= 1
+            batch.logits[i]    = (i == prefix_len - 1) ? 1 : 0; // logits unused; keep n_outputs >= 1
         }
         if (llama_decode(ctx, batch) != 0) {
             LOG_ERR("error: prompt prefill (encoder) decode failed\n");
@@ -155,7 +221,7 @@ int main(int argc, char ** argv) {
             llama_model_free(model);
             return 1;
         }
-        n_past = n_prompt; // prompt K/V is now the committed read-only prefix
+        n_past = prefix_len; // prompt K/V is now the committed read-only prefix
     }
 
     std::vector<llama_token> canvas(canvas_length);

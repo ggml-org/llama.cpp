@@ -830,9 +830,9 @@ struct llama_model_gemma4 : public llama_model_base {
 // self-conditioning module reduces to a scale-less RMS norm of the scaled embeddings.
 // The soft-conditioning input path (later steps) and the encoder-KV cross-attention
 // (prompted generation) are layered on top in a later step.
-struct llama_model_diffusion_gemma4 : public llama_model_gemma4 {
-    llama_model_diffusion_gemma4(const struct llama_model_params & params) : llama_model_gemma4(params) {}
-    ~llama_model_diffusion_gemma4() override;
+struct llama_model_diffusion_gemma : public llama_model_gemma4 {
+    llama_model_diffusion_gemma(const struct llama_model_params & params) : llama_model_gemma4(params) {}
+    ~llama_model_diffusion_gemma() override;
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
     void load_arch_post(llama_model_loader & ml) override; // precompute the transposed F32 embedding

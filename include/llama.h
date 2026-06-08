@@ -983,7 +983,7 @@ extern "C" {
     // distribution (softmax of the processed logits), as a [n_vocab * n_tokens] row-major
     // float array. The decoder forms soft-embeddings (probs @ token_embd * embed_scale) and
     // adds them to the input embeddings. Pass probs=NULL or n_tokens=0 to clear (-> zeros,
-    // i.e. the first denoising step). Used by diffusion_gemma4.
+    // i.e. the first denoising step). Used by diffusion_gemma.
     LLAMA_API void llama_set_diffusion_self_cond(
             struct llama_context * ctx,
                      const float * probs,
@@ -992,10 +992,10 @@ extern "C" {
 
     // Diffusion prompt conditioning: set the length of the causal prompt prefix in the
     // [prompt ; canvas] sequence. The prompt tokens attend causally among themselves; the
-    // canvas attends to everything. Pass 0 for unconditioned generation. Used by diffusion_gemma4.
+    // canvas attends to everything. Pass 0 for unconditioned generation. Used by diffusion_gemma.
     LLAMA_API void llama_set_diffusion_prompt_len(struct llama_context * ctx, int64_t n_prompt);
 
-    // Diffusion KV-cache reuse phase selector (block-diffusion, e.g. diffusion_gemma4):
+    // Diffusion KV-cache reuse phase selector (block-diffusion, e.g. diffusion_gemma):
     //   false = encoder phase: plain token embeddings, no self-conditioning; the decoded
     //           tokens' KV is committed to the cache (prompt prefill / finalized-canvas
     //           commit). Use with llama_set_causal_attn(ctx, true).

@@ -57,7 +57,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
     { LLM_ARCH_GEMMA3N,          "gemma3n"          },
     { LLM_ARCH_GEMMA4,           "gemma4"           },
     { LLM_ARCH_GEMMA4_ASSISTANT, "gemma4-assistant" },
-    { LLM_ARCH_DIFFUSION_GEMMA4, "diffusion-gemma4" },
+    { LLM_ARCH_DIFFUSION_GEMMA,  "diffusion-gemma"  },
     { LLM_ARCH_GEMMA_EMBEDDING,  "gemma-embedding"  },
     { LLM_ARCH_STARCODER2,       "starcoder2"       },
     { LLM_ARCH_MAMBA,            "mamba"            },
@@ -597,7 +597,7 @@ static const std::map<llm_tensor, llm_tensor_info> LLM_TENSOR_INFOS = {
     {LLM_TENSOR_CLS_NORM,                   {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_MUL}},
     {LLM_TENSOR_DENSE_2_OUT,                {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_MUL_MAT}}, // Dense layer output
     {LLM_TENSOR_DENSE_3_OUT,                {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_MUL_MAT}}, // Dense layer output
-    {LLM_TENSOR_SELF_COND_NORM,             {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_MUL}},     // diffusion-gemma4 self-conditioning
+    {LLM_TENSOR_SELF_COND_NORM,             {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_MUL}},     // diffusion-gemma self-conditioning
     {LLM_TENSOR_SELF_COND_GATE,             {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_MUL_MAT}},
     {LLM_TENSOR_SELF_COND_UP,               {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_MUL_MAT}},
     {LLM_TENSOR_SELF_COND_DOWN,             {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_MUL_MAT}},
@@ -910,7 +910,7 @@ bool llm_arch_is_diffusion(const llm_arch & arch) {
         case LLM_ARCH_LLADA:
         case LLM_ARCH_LLADA_MOE:
         case LLM_ARCH_RND1:
-        case LLM_ARCH_DIFFUSION_GEMMA4:
+        case LLM_ARCH_DIFFUSION_GEMMA:
             return true;
         default:
             return false;
