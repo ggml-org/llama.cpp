@@ -402,8 +402,10 @@ std::pair<ggml_tensor *, ggml_tensor *> llm_build_delta_net_base::build_delta_ne
     ggml_tensor * s_3d = ggml_reshape_3d(ctx0, s, S_v * S_v * H_v, 1, n_seqs);
     ggml_tensor * result = ggml_gated_delta_net(ctx0, q, k, v, g, b, s_3d);
     if (n_tokens == 1) {
+        ggml_format_name(result, "%s-%d", LLAMA_TENSOR_NAME_FGDN_AR, il);
         cb(result, LLAMA_TENSOR_NAME_FGDN_AR, il);
     } else {
+        ggml_format_name(result, "%s-%d", LLAMA_TENSOR_NAME_FGDN_CH, il);
         cb(result, LLAMA_TENSOR_NAME_FGDN_CH, il);
     }
 
@@ -570,8 +572,10 @@ ggml_tensor * llm_build_delta_net_base::build_recurrent_attn(
 
     ggml_tensor * gdn_out = ggml_gated_delta_net(ctx0, q, k, v, g, b, s_3d_pad);
     if (n_seq_tokens > 1) {
+        ggml_format_name(gdn_out, "%s-%d", LLAMA_TENSOR_NAME_FGDN_CH, il);
         cb(gdn_out, LLAMA_TENSOR_NAME_FGDN_CH, il);
     } else {
+        ggml_format_name(gdn_out, "%s-%d", LLAMA_TENSOR_NAME_FGDN_AR, il);
         cb(gdn_out, LLAMA_TENSOR_NAME_FGDN_AR, il);
     }
 
