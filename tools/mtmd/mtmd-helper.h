@@ -20,8 +20,8 @@ extern "C" {
 // BREAKING CHANGES are expected.
 //
 
-struct mtmd_helper_video_context;
-typedef struct mtmd_helper_video_context mtmd_helper_video_context;
+struct mtmd_helper_video;
+typedef struct mtmd_helper_video mtmd_helper_video;
 
 // Set callback for all future logging events.
 // If this is not called, or NULL is supplied, everything is output on stderr.
@@ -33,7 +33,7 @@ MTMD_API bool mtmd_helper_support_video(mtmd_context * ctx);
 
 struct mtmd_helper_bitmap_wrapper {
     mtmd_bitmap * bitmap;
-    mtmd_helper_video_context * video_ctx;
+    mtmd_helper_video * video_ctx;
 };
 
 // helper function to construct a mtmd_bitmap from a file
@@ -129,7 +129,7 @@ struct mtmd_helper_video_init_params {
 MTMD_API struct mtmd_helper_video_init_params mtmd_helper_video_init_params_default(void);
 
 // returns NULL on failure (ffprobe not found, file unreadable, etc.)
-MTMD_API mtmd_helper_video_context * mtmd_helper_video_init(
+MTMD_API mtmd_helper_video * mtmd_helper_video_init(
                     struct mtmd_context * mctx,
                     const char * path,
                     struct mtmd_helper_video_init_params params);
@@ -138,18 +138,18 @@ MTMD_API mtmd_helper_video_context * mtmd_helper_video_init(
 // The buffer is copied internally; the caller does not need to keep it alive.
 // Note: pipe input is not seekable, so seeking will use output-side seeking
 // (ffmpeg decodes and discards frames up to the target position).
-MTMD_API mtmd_helper_video_context * mtmd_helper_video_init_from_buf(
+MTMD_API mtmd_helper_video * mtmd_helper_video_init_from_buf(
                     struct mtmd_context * mctx,
                     const unsigned char * buf, size_t len,
                     struct mtmd_helper_video_init_params params);
-MTMD_API void mtmd_helper_video_free(mtmd_helper_video_context * ctx);
-MTMD_API struct mtmd_helper_video_info mtmd_helper_video_get_info(const mtmd_helper_video_context * ctx);
+MTMD_API void mtmd_helper_video_free(mtmd_helper_video * ctx);
+MTMD_API struct mtmd_helper_video_info mtmd_helper_video_get_info(const mtmd_helper_video * ctx);
 
 // Read the next item from the video stream; exactly one of out_bitmap or out_text is set per call.
 // *out_bitmap - heap-allocated; caller must free with mtmd_bitmap_free()
 // *out_text   - heap-allocated (always via strdup/malloc); caller must free with free()
 // returns 0 on success, -1 on EOF, -2 on error
-MTMD_API int32_t mtmd_helper_video_read_next(mtmd_helper_video_context * ctx,
+MTMD_API int32_t mtmd_helper_video_read_next(mtmd_helper_video * ctx,
             mtmd_bitmap ** out_bitmap,
             char ** out_text);
 
@@ -165,10 +165,10 @@ MTMD_API int32_t mtmd_helper_video_read_next(mtmd_helper_video_context * ctx,
 namespace mtmd_helper {
 
 // video-related C++ wrappers
-struct mtmd_helper_video_context_deleter {
-    void operator()(mtmd_helper_video_context * val) { mtmd_helper_video_free(val); }
+struct mtmd_helper_video_deleter {
+    void operator()(mtmd_helper_video * val) { mtmd_helper_video_free(val); }
 };
-using video_context_ptr = std::unique_ptr<mtmd_helper_video_context, mtmd_helper_video_context_deleter>;
+using video_ptr = std::unique_ptr<mtmd_helper_video, mtmd_helper_video_deleter>;
 
 } // namespace mtmd_helper
 #endif

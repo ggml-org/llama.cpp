@@ -77,7 +77,7 @@ struct mtmd_cli_context {
     int                 n_batch;
 
     mtmd::bitmaps bitmaps;
-    std::vector<mtmd_helper::video_context_ptr> video_contexts;
+    std::vector<mtmd_helper::video_ptr> videos;
 
     // chat template
     common_chat_templates_ptr tmpls;
@@ -173,7 +173,7 @@ struct mtmd_cli_context {
         }
         bitmaps.entries.emplace_back(res.bitmap);
         if (res.video_ctx) {
-            video_contexts.emplace_back(res.video_ctx);
+            videos.emplace_back(res.video_ctx);
         }
         return true;
     }
@@ -257,7 +257,7 @@ static int eval_message(mtmd_cli_context & ctx, common_chat_msg & msg) {
     }
 
     ctx.bitmaps.entries.clear();
-    ctx.video_contexts.clear();
+    ctx.videos.clear();
 
     llama_pos new_n_past;
     if (mtmd_helper_eval_chunks(ctx.ctx_vision.get(),

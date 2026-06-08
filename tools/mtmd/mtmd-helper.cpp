@@ -547,7 +547,7 @@ mtmd_helper_bitmap_wrapper mtmd_helper_bitmap_init_from_buf(mtmd_context * ctx, 
             id.empty() ? nullptr : id.c_str(),
             video_ctx,
             [](size_t, void * user_data, mtmd_bitmap ** out_bitmap, char ** out_text) -> int {
-                auto * vctx = static_cast<mtmd_helper_video_context *>(user_data);
+                auto * vctx = static_cast<mtmd_helper_video *>(user_data);
                 char * text = nullptr;
                 int ret = mtmd_helper_video_read_next(vctx, out_bitmap, &text);
                 *out_text = text; // heap-allocated by read_next; freed automatically by mtmd
@@ -608,7 +608,7 @@ bool mtmd_helper_support_video(mtmd_context * ctx) {
 
 #ifdef MTMD_VIDEO
 
-struct mtmd_helper_video_context {
+struct mtmd_helper_video {
     mtmd_context * mctx;
     std::string path;
     std::vector<uint8_t> input_buf; // non-empty when initialized from buffer
@@ -919,12 +919,12 @@ static std::string video_resolve_bin(const char * bin_dir, const char * name) {
     return result;
 }
 
-mtmd_helper_video_context * mtmd_helper_video_init(
+mtmd_helper_video * mtmd_helper_video_init(
         mtmd_context * mctx,
         const char * path,
         mtmd_helper_video_init_params params) {
 #ifdef MTMD_VIDEO
-    auto * ctx = new mtmd_helper_video_context();
+    auto * ctx = new mtmd_helper_video();
 
     ctx->mctx                 = mctx;
     ctx->path                 = path;
@@ -951,12 +951,12 @@ mtmd_helper_video_context * mtmd_helper_video_init(
 #endif
 }
 
-mtmd_helper_video_context * mtmd_helper_video_init_from_buf(
+mtmd_helper_video * mtmd_helper_video_init_from_buf(
         mtmd_context * mctx,
         const unsigned char * buf, size_t len,
         mtmd_helper_video_init_params params) {
 #ifdef MTMD_VIDEO
-    auto * ctx = new mtmd_helper_video_context();
+    auto * ctx = new mtmd_helper_video();
 
     ctx->mctx                  = mctx;
     ctx->input_buf.assign(buf, buf + len);
@@ -983,7 +983,7 @@ mtmd_helper_video_context * mtmd_helper_video_init_from_buf(
 #endif
 }
 
-void mtmd_helper_video_free(mtmd_helper_video_context * ctx) {
+void mtmd_helper_video_free(mtmd_helper_video * ctx) {
 #ifdef MTMD_VIDEO
     if (!ctx) return;
     ctx->stop_ffmpeg();
@@ -993,7 +993,7 @@ void mtmd_helper_video_free(mtmd_helper_video_context * ctx) {
 #endif
 }
 
-mtmd_helper_video_info mtmd_helper_video_get_info(const mtmd_helper_video_context * ctx) {
+mtmd_helper_video_info mtmd_helper_video_get_info(const mtmd_helper_video * ctx) {
 #ifdef MTMD_VIDEO
     return ctx->info;
 #else
@@ -1001,7 +1001,7 @@ mtmd_helper_video_info mtmd_helper_video_get_info(const mtmd_helper_video_contex
 #endif
 }
 
-int32_t mtmd_helper_video_read_next(mtmd_helper_video_context * ctx,
+int32_t mtmd_helper_video_read_next(mtmd_helper_video * ctx,
         mtmd_bitmap ** out_bitmap, char ** out_text) {
 #ifdef MTMD_VIDEO
     if (!ctx) return -2;

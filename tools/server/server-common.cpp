@@ -704,7 +704,7 @@ size_t validate_utf8(const std::string& text) {
 server_tokens process_mtmd_prompt(mtmd_context * mctx, const std::string & prompt, const std::vector<raw_buffer> & files, bool is_placeholder) {
     // these will be freed upon going out of scope
     mtmd::bitmaps bitmaps;
-    std::vector<mtmd_helper::video_context_ptr> video_contexts;
+    std::vector<mtmd_helper::video_ptr> videos;
     for (auto & file : files) {
         auto out = mtmd_helper_bitmap_init_from_buf(mctx, file.data(), file.size(), is_placeholder);
         if (!out.bitmap) {
@@ -712,7 +712,7 @@ server_tokens process_mtmd_prompt(mtmd_context * mctx, const std::string & promp
         }
         bitmaps.entries.emplace_back(out.bitmap);
         if (out.video_ctx) {
-            video_contexts.emplace_back(out.video_ctx);
+            videos.emplace_back(out.video_ctx);
         }
     }
     // process prompt
