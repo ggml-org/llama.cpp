@@ -296,6 +296,7 @@ enum vk_device_architecture {
     INTEL_XE2,
     NVIDIA_PRE_TURING,
     NVIDIA_TURING,
+    APPLE_AGX,
 };
 
 static vk_device_architecture get_device_architecture(const vk::PhysicalDevice& device) {
@@ -407,6 +408,11 @@ static vk_device_architecture get_device_architecture(const vk::PhysicalDevice& 
             }
         }
     }
+
+    if (strncmp(props.deviceName.data(), "Apple", 5) == 0) {
+        return vk_device_architecture::APPLE_AGX;
+    }
+
     return vk_device_architecture::OTHER;
 }
 
@@ -6148,6 +6154,17 @@ static vk_device ggml_vk_get_device(size_t idx) {
                 device->mul_mat_id_m[i] = true;
                 device->mul_mat_id_s[i] = true;
                 break;
+            }
+
+            // Honeykrisp driver for Asahi Linux doesn't report VK_VENDOR_ID_APPLE.
+            // Check for Apple AGX arch and force same configuration as the VK_VENDOR_ID_APPLE case.
+            if (device->architecture == vk_device_architecture::APPLE_AGX) {
+                device->mul_mat_l[i]    = false;
+                device->mul_mat_m[i]    = true;
+                device->mul_mat_s[i]    = false;
+                device->mul_mat_id_l[i] = false;
+                device->mul_mat_id_m[i] = true;
+                device->mul_mat_id_s[i] = false;
             }
 
             device->mul_mat_l_int[i]    = device->mul_mat_l[i];
