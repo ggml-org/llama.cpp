@@ -64,6 +64,7 @@ struct ggml_openvino_device_config {
     bool initialized = false;
     std::optional<ov::RemoteContext> remote_context;
     ov::AnyMap compile_config;
+    std::unordered_map<std::string, std::string> environment_variables;
     cl_command_queue cl_queue = nullptr;
 
     void init();
@@ -78,6 +79,9 @@ void ggml_openvino_init_device_config();
 
 // Get the device name
 const std::string & ggml_openvino_get_device_name();
+
+// Get the value of a specific environment variable
+const char* ggml_openvino_getenv(const char* var);
 
 // Check if running on NPU
 bool ggml_openvino_is_npu();

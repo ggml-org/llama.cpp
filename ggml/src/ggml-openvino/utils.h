@@ -1,4 +1,3 @@
-#include "ggml-backend-impl.h"
 #include "ggml-decoder.h"
 #include "ggml-impl.h"
 
@@ -92,6 +91,8 @@ bool save_ggml_tensor_data_to_txt(const ggml_tensor * tensor, const std::string 
 void print_input_tensor_info(const std::string & name, const ov::Tensor & tensor);
 
 void print_output_tensor_info(const std::string & name, const ov::Tensor & tensor, const void * output_dst);
+
+int ggml_openvino_env_flag(const char * name);
 
 template <typename T>
 std::vector<T> pad_input(const T * data,
