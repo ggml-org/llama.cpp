@@ -84,13 +84,26 @@ void llama_model_diffusion_gemma::load_arch_post(llama_model_loader & ml) {
         }
     }
 
-    // allocate the transposed tensor in a buffer of the same type as tok_embd's buffer
+    // Choose the buffer type for tok_embd_t. token_embd itself is usually host-resident
+    // (it's only used for a cheap get_rows lookup), but the self-conditioning soft-embedding
+    // does a full-vocab matmul with tok_embd_t every decode. If we left it on the host, the
+    // scheduler would copy the whole ~3 GiB tensor across PCIe on every forward (~hundreds of
+    // ms). So prefer an offloaded (non-host) backend taken from a layer weight, so the matmul
+    // runs on-device with no per-decode copy; fall back to token_embd's buffer (CPU-only runs).
+    ggml_backend_buffer_type_t buft = ggml_backend_buffer_get_type(tok_embd->buffer);
+    for (const auto & layer : layers) {
+        ggml_tensor * t = layer.wq ? layer.wq : (layer.wk ? layer.wk : layer.ffn_down);
+        if (t && t->buffer) {
+            ggml_backend_buffer_type_t b = ggml_backend_buffer_get_type(t->buffer);
+            if (!ggml_backend_buft_is_host(b)) { buft = b; break; }
+        }
+    }
+
     ggml_init_params ip = { /*.mem_size =*/ ggml_tensor_overhead(), /*.mem_buffer =*/ nullptr, /*.no_alloc =*/ true };
     tok_embd_t_ctx = ggml_init(ip);
     tok_embd_t = ggml_new_tensor_2d(tok_embd_t_ctx, GGML_TYPE_F32, n_vocab_t, n_embd_t);
     ggml_set_name(tok_embd_t, "token_embd_t.f32");
 
-    ggml_backend_buffer_type_t buft = ggml_backend_buffer_get_type(tok_embd->buffer);
     tok_embd_t_buf = ggml_backend_alloc_ctx_tensors_from_buft(tok_embd_t_ctx, buft);
     if (!tok_embd_t_buf) {
         LLAMA_LOG_WARN("%s: failed to allocate transposed embedding buffer; falling back\n", __func__);
@@ -101,9 +114,10 @@ void llama_model_diffusion_gemma::load_arch_post(llama_model_loader & ml) {
     }
     ggml_backend_tensor_set(tok_embd_t, dst.data(), 0, ggml_nbytes(tok_embd_t));
 
-    LLAMA_LOG_INFO("%s: precomputed transposed F32 token embedding {%lld, %lld} (%.2f GiB)\n",
+    LLAMA_LOG_INFO("%s: precomputed transposed F32 token embedding {%lld, %lld} (%.2f GiB) on %s\n",
                    __func__, (long long) n_vocab_t, (long long) n_embd_t,
-                   ggml_nbytes(tok_embd_t) / (1024.0 * 1024.0 * 1024.0));
+                   ggml_nbytes(tok_embd_t) / (1024.0 * 1024.0 * 1024.0),
+                   ggml_backend_buffer_name(tok_embd_t->buffer));
 }
 
 std::unique_ptr<llm_graph_context> llama_model_diffusion_gemma::build_arch_graph(const llm_graph_params & params) const {
