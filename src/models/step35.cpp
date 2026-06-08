@@ -532,6 +532,13 @@ llama_model_step35::graph_mtp::graph_mtp(const llama_model & model, const llm_gr
     cur = ggml_add(ctx0, cur, ffn_inp);
     cb(cur, "mtp_post_ffn", il);
 
+    // Gather t_h_nextn/t_logits to the n_outputs rows, like the trunk graph: the
+    // context and backend sampling assume an inp_out_ids gather. Without it a draft
+    // batch whose output slot isn't row 0 (multi-head chain, step>=1) reads the wrong
+    // row. Identity gather when n_outputs==n_tokens, so the single-head path is unchanged.
+    ggml_tensor * inp_out_ids = build_inp_out_ids();
+    cur = ggml_get_rows(ctx0, cur, inp_out_ids);
+
     // Pre-norm hidden state: used by the AR draft loop to seed the next MTP step.
     cb(cur, "h_nextn", -1);
     res->t_h_nextn = cur;
