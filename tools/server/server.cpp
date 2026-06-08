@@ -264,7 +264,7 @@ int llama_server(int argc, char ** argv) {
     // you already own (the WebUI passes the convs visible in its sidebar). the server never
     // lists ids it has not been asked about, so a random caller cannot enumerate live sessions
     ctx_http.post("/v1/streams/lookup",        ex_wrapper(streams_lookup_h));
-    ctx_http.del_("/v1/stream/:conv_id",       ex_wrapper(stream_delete_h));
+    ctx_http.del ("/v1/stream/:conv_id",       ex_wrapper(stream_delete_h));
 
     // Google Cloud Platform (Vertex AI) compat
     ctx_http.register_gcp_compat();
