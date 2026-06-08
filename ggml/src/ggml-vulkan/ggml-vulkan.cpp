@@ -15526,6 +15526,94 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
         ggml_vk_sync_buffers(ctx, compute_ctx);
     }
 
+    // Pre-scan all MUL_MAT / MUL_MAT_ID nodes and raise prealloc_size_x / prealloc_size_y
+    // to their worst-case upper bounds BEFORE any subctx (GPU command buffer) is live.
+    //
+    // Without this, ggml_vk_preallocate_buffers is called mid-graph with a live subctx
+    // whenever a new node requires a larger buffer than what was allocated for a previous
+    // node.  That path submits the current command buffer, waits for the GPU, destroys
+    // the old Vulkan buffer, then allocates a new one.  On Intel Arc UMA the physical
+    // pages of the freed buffer are immediately available to the OS, so any stale GPU
+    // reference or driver-internal structure that still touches those pages after the
+    // fence wait can corrupt arbitrary memory — including the CPU stack — producing
+    // STATUS_STACK_BUFFER_OVERRUN (0xC0000409) at large (≥ 23 K token) contexts.
+    //
+    // By pre-allocating the maximum size here (no subctx, hence safe to destroy / resize)
+    // the mid-graph growth condition (prealloc_size < required_size) is never true, so
+    // ggml_vk_preallocate_buffers is never called again with a live subctx for these
+    // two buffers.
+    //
+    // Upper bound derivation for Y (src1 activation buffer):
+    //   y_ne  = padded_n * ne10 * ne12 * ne13
+    //   padded_n  = qy_needs_dequant ? ROUNDUP_POW2(ne11, wg_denom[1]) : ne11
+    //
+    //   When qy_needs_dequant=true and ne11 is small (e.g. ne11=1 for a MulMatId vec
+    //   kernel), ROUNDUP_POW2 inflates padded_n up to wg_denom[1].  The maximum
+    //   wg_denom[1] across all non-coopmat pipelines is:
+    //     MUL_MAT    : 256  (l_wg_denoms[1])
+    //     MUL_MAT_ID : 128  (l_mmqid_wg_denoms[1])
+    //
+    //   We conservatively compute:
+    //     padded_n_bound = ROUNDUP_POW2(ne11, MAX_WG_DENOM)
+    //   where MAX_WG_DENOM is per-op-type.  For large ne11 this equals ne11 exactly;
+    //   for ne11=1 it equals MAX_WG_DENOM (the worst case that caused the crash).
+    //
+    //   Note: coopmat devices use different tile sizes; for safety we cap at 256
+    //   for both op types so the bound holds regardless of device capabilities.
+    //
+    // For X (src0 weight buffer, dequant path):
+    //   Only F32/F16/BF16 src0 requires dequantisation; quantised types are consumed
+    //   directly by the shader, so qx_needs_dequant=false for those.
+    {
+        // Maximum wg_denoms[1] across all configured pipelines (conservative).
+        // Empirically observed: MUL_MAT l_wg_denoms[1]=256, MUL_MAT_ID l_mmqid[1]=128.
+        // Use 256 for both to be safe across coopmat and non-coopmat devices.
+        constexpr uint32_t MAX_WG_DENOM_Y = 256;
+
+        uint64_t prescan_max_x = ctx->prealloc_size_x;
+        uint64_t prescan_max_y = ctx->prealloc_size_y;
+        for (int i = 0; i < cgraph->n_nodes; i++) {
+            const ggml_tensor * node = cgraph->nodes[i];
+            if (node->op != GGML_OP_MUL_MAT && node->op != GGML_OP_MUL_MAT_ID) {
+                continue;
+            }
+            const ggml_tensor * src0 = node->src[0];
+            const ggml_tensor * src1 = node->src[1];
+            if (!src0 || !src1) {
+                continue;
+            }
+            // Y buffer: upper-bound using worst-case padded_n.
+            // ROUNDUP_POW2(ne11, MAX_WG_DENOM_Y) equals ne11 when ne11 is already
+            // ≥ MAX_WG_DENOM_Y (the common prefill case), and inflates to MAX_WG_DENOM_Y
+            // when ne11=1 (the problematic MulMatId decode case).
+            const uint64_t ne10     = (uint64_t)src1->ne[0];
+            const uint64_t ne11     = (uint64_t)src1->ne[1];
+            const uint64_t ne12     = (uint64_t)src1->ne[2];
+            const uint64_t ne13     = (uint64_t)src1->ne[3];
+            const uint64_t padded_n = (ne11 == 0) ? 0 : ROUNDUP_POW2(ne11, MAX_WG_DENOM_Y);
+            const uint64_t y_bound  = sizeof(ggml_fp16_t) * padded_n * ne10 * ne12 * ne13;
+            if (prescan_max_y < y_bound) {
+                prescan_max_y = y_bound;
+            }
+            // X buffer: weight dequant — only for unquantised source types.
+            if (src0->type == GGML_TYPE_F32 ||
+                src0->type == GGML_TYPE_F16 ||
+                src0->type == GGML_TYPE_BF16) {
+                const uint64_t x_bound = sizeof(ggml_fp16_t) * (uint64_t)ggml_nelements(src0);
+                if (prescan_max_x < x_bound) {
+                    prescan_max_x = x_bound;
+                }
+            }
+        }
+        if (prescan_max_x > ctx->prealloc_size_x || prescan_max_y > ctx->prealloc_size_y) {
+            ctx->prealloc_size_x = prescan_max_x;
+            ctx->prealloc_size_y = prescan_max_y;
+            // nullptr subctx: safe to destroy and recreate GPU buffers here since
+            // no command buffer is open yet.
+            ggml_vk_preallocate_buffers(ctx, nullptr);
+        }
+    }
+
     // Submit after enough work has accumulated, to overlap CPU cmdbuffer generation with GPU execution.
     // Estimate the amount of matmul work by looking at the weight matrix size, and submit every 100MB
     // (and scaled down based on model size, so smaller models submit earlier).
