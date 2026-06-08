@@ -2288,6 +2288,9 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         "- mmap+mlock: mmap + force system to keep model in RAM rather than swapping or compressing\n"
         "- dio: use DirectIO if available\n",
         [](common_params & params, const std::string & value) {
+            // split the modifiers from the load mode.
+            // for example, "mmap+mlock", mmap would be the load mode and mlock would be the modifier.
+            // in the future, more modifiers may be added and users can chain the modifiers using the `+` symbol.
             const std::vector<std::string> parts = string_split<std::string>(value, '+');
 
             params.load_mode = llama_load_mode_from_str(parts[0].c_str());
