@@ -57,3 +57,12 @@ install(TARGETS ${TARGET} RUNTIME)
 
 target_link_libraries(${TARGET} PRIVATE llama-server-impl)
 target_compile_features(${TARGET} PRIVATE cxx_std_17)
+
+if (LLAMA_BUILD_TESTS)
+    add_test(
+        NAME test-server-embedding-batch-mismatch
+        COMMAND ${CMAKE_COMMAND}
+            -DLLAMA_SERVER_BIN=$<TARGET_FILE:llama-server>
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/test-embedding-batch-mismatch.cmake
+    )
+endif()

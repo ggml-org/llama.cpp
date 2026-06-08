@@ -96,11 +96,12 @@ int llama_server(int argc, char ** argv) {
 
     // validate batch size for embeddings
     // embeddings require all tokens to be processed in a single ubatch
+    // see https://github.com/ggml-org/llama.cpp/issues/6263
     // see https://github.com/ggml-org/llama.cpp/issues/12836
-    if (params.embedding && params.n_batch > params.n_ubatch) {
-        SRV_WRN("embeddings enabled with n_batch (%d) > n_ubatch (%d)\n", params.n_batch, params.n_ubatch);
-        SRV_WRN("setting n_batch = n_ubatch = %d to avoid assertion failure\n", params.n_ubatch);
-        params.n_batch = params.n_ubatch;
+    if (params.embedding && params.n_batch != params.n_ubatch) {
+        SRV_ERR("embeddings require n_batch (%d) to equal n_ubatch (%d)\n", params.n_batch, params.n_ubatch);
+        SRV_ERR("%s", "set --batch-size and --ubatch-size to the same value\n");
+        return 1;
     }
 
     if (params.n_parallel < 0) {
