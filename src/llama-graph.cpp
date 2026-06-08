@@ -1,5 +1,6 @@
 #include "llama-graph.h"
 
+#include "ggml.h"
 #include "llama-impl.h"
 #include "llama-model.h"
 #include "llama-batch.h"
@@ -463,16 +464,22 @@ void llm_graph_input_attn_no_cache::set_input(const llama_ubatch * ubatch) {
         }
     };
 
-    GGML_ASSERT(self_kq_mask);
-    GGML_ASSERT(ggml_backend_buffer_is_host(self_kq_mask->buffer));
-    if (self_kq_mask->type == GGML_TYPE_F16) {
-        fill_mask((ggml_fp16_t *) self_kq_mask->data, ggml_nelements(self_kq_mask), 0, LLAMA_SWA_TYPE_NONE);
-    } else {
-        fill_mask((float       *) self_kq_mask->data, ggml_nelements(self_kq_mask), 0, LLAMA_SWA_TYPE_NONE);
+    GGML_ASSERT(swa_mix != LLM_SWA_MIX_UNSET);
+
+    if (swa_mix != LLM_SWA_MIX_ALL) {
+        GGML_ASSERT(self_kq_mask);
+        GGML_ASSERT(self_kq_mask->buffer);
+        GGML_ASSERT(ggml_backend_buffer_is_host(self_kq_mask->buffer));
+        if (self_kq_mask->type == GGML_TYPE_F16) {
+            fill_mask((ggml_fp16_t *) self_kq_mask->data, ggml_nelements(self_kq_mask), 0, LLAMA_SWA_TYPE_NONE);
+        } else {
+            fill_mask((float       *) self_kq_mask->data, ggml_nelements(self_kq_mask), 0, LLAMA_SWA_TYPE_NONE);
+        }
     }
 
-    if (hparams.swa_type != LLAMA_SWA_TYPE_NONE) {
+    if (swa_mix != LLM_SWA_MIX_NONE) {
         GGML_ASSERT(self_kq_mask_swa);
+        GGML_ASSERT(self_kq_mask_swa->buffer);
         GGML_ASSERT(ggml_backend_buffer_is_host(self_kq_mask_swa->buffer));
         if (self_kq_mask_swa->type == GGML_TYPE_F16) {
             fill_mask((ggml_fp16_t *) self_kq_mask_swa->data, ggml_nelements(self_kq_mask_swa), hparams.n_swa, hparams.swa_type);
@@ -2210,6 +2217,16 @@ ggml_tensor * llm_graph_context::build_attn(
     ggml_build_forward_expand(gf, v_cur);
 
     const bool is_swa = hparams.is_swa(il);
+    switch (inp->swa_mix) {
+    case LLM_SWA_MIX_UNSET:
+        inp->swa_mix = is_swa ? LLM_SWA_MIX_ALL : LLM_SWA_MIX_NONE; break;
+    case LLM_SWA_MIX_NONE:
+        inp->swa_mix = is_swa ? LLM_SWA_MIX_SOME : LLM_SWA_MIX_NONE; break;
+    case LLM_SWA_MIX_ALL:
+        inp->swa_mix = is_swa ? LLM_SWA_MIX_ALL : LLM_SWA_MIX_SOME; break;
+    case LLM_SWA_MIX_SOME:
+        break;
+    }
 
     const auto & kq_mask = is_swa ? inp->get_kq_mask_swa() : inp->get_kq_mask();
 

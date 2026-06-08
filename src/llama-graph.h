@@ -59,6 +59,13 @@ enum llm_norm_type {
     LLM_NORM_GROUP,
 };
 
+enum llm_swa_mix {
+    LLM_SWA_MIX_UNSET = 0,
+    LLM_SWA_MIX_NONE  = 1,
+    LLM_SWA_MIX_SOME  = 2,
+    LLM_SWA_MIX_ALL   = 3,
+};
+
 // TODO: tmp - need something better to pass the data from the encoder to the decoder
 struct llama_cross {
     // the output embeddings from the encoder as a ggml tensor
@@ -297,6 +304,9 @@ public:
     ggml_tensor * self_kq_mask_cnv     = nullptr; //         [n_tokens, n_batch/n_stream, 1, n_stream]
     ggml_tensor * self_kq_mask_swa     = nullptr; // F32/F16 [n_tokens, n_batch/n_stream, 1, n_stream]
     ggml_tensor * self_kq_mask_swa_cnv = nullptr; //         [n_tokens, n_batch/n_stream, 1, n_stream]
+
+    // Record the usage of SWA across layers in this particular graph
+    llm_swa_mix swa_mix = LLM_SWA_MIX_UNSET;
 
     const llama_hparams hparams;
     const llama_cparams cparams;
