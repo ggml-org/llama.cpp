@@ -3840,6 +3840,21 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params) { params.diffusion.visual_mode = true; }
     ).set_examples({ LLAMA_EXAMPLE_DIFFUSION }));
     add_opt(common_arg(
+        {"--top-k-start"}, "N",
+        "block-diffusion: anneal top-k from N at the first (high-entropy) denoising step (with --top-k-end)",
+        [](common_params & params, int value) { params.diffusion.top_k_start = value; }
+    ).set_examples({ LLAMA_EXAMPLE_DIFFUSION }));
+    add_opt(common_arg(
+        {"--top-k-end"}, "N",
+        "block-diffusion: anneal top-k to N at the last denoising step (with --top-k-start)",
+        [](common_params & params, int value) { params.diffusion.top_k_end = value; }
+    ).set_examples({ LLAMA_EXAMPLE_DIFFUSION }));
+    add_opt(common_arg(
+        {"--top-k-tail-correction"},
+        "block-diffusion: use the exact full-vocab entropy (logsumexp) for the accept/stop signal under top-k",
+        [](common_params & params) { params.diffusion.top_k_tail_correction = true; }
+    ).set_examples({ LLAMA_EXAMPLE_DIFFUSION }));
+    add_opt(common_arg(
         {"--diffusion-eps"}, "F",
         string_format("epsilon for timesteps (default: %.6f)", (double) params.diffusion.eps),
         [](common_params & params, const std::string & value) { params.diffusion.eps = std::stof(value); }

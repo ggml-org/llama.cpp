@@ -399,6 +399,11 @@ struct common_params_diffusion {
 
     float   cfg_scale     = 0;        // classifier-free guidance scale
     bool    add_gumbel_noise = false; // add gumbel noise to the logits if temp > 0.0
+
+    // block-diffusion (diffusion-gemma) top-k host sampling knobs
+    int32_t top_k_start        = 0;     // anneal top-k from this (first/high-entropy step) ...
+    int32_t top_k_end          = 0;     // ... to this (last step); both > 0 enables annealing
+    bool    top_k_tail_correction = false; // use exact full-vocab entropy for accept/stop
 };
 
 // reasoning API response format (not to be confused as chat template's reasoning format)

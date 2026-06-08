@@ -26,8 +26,10 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <functional>
 #include <numeric>
 #include <random>
+#include <utility>
 #include <vector>
 
 // reference defaults from generation_config.json / DiffusionGemmaGenerationConfig
@@ -73,6 +75,19 @@ int main(int argc, char ** argv) {
     const int   blocks_from_n = params.n_predict > 0 ? (params.n_predict + canvas_length - 1) / canvas_length : 1;
     const int   max_canvases  = std::max(env_int("DG_MAX_CANVASES", blocks_from_n), 1); // autoregressive blocks
     const float entropy_bound = ENTROPY_BOUND;
+
+    // top-k host sampling (CLI flags; default = full softmax over the whole vocab):
+    //   --top-k k                 : top-k logits per position for softmax/sample/self-cond (0 = full).
+    //   --top-k-start/--top-k-end : anneal k from START (first/high-entropy step) to END (last step).
+    //   --top-k-tail-correction   : exact full-vocab entropy (logsumexp) for the accept/stop signal,
+    //                               instead of the under-estimating top-k entropy.
+    // --top-k uses its own "0 = disabled" convention and is applied only when explicitly passed.
+    const int topk_fixed = (params.sampling.user_sampling_config & common_params_sampling_config::COMMON_PARAMS_SAMPLING_CONFIG_TOP_K)
+                         ? params.sampling.top_k
+                         : 0;
+    const int topk_start = params.diffusion.top_k_start;
+    const int topk_end   = params.diffusion.top_k_end;
+    const int topk_tail  = params.diffusion.top_k_tail_correction ? 1 : 0;
 
     llama_backend_init();
 
@@ -186,6 +201,10 @@ int main(int argc, char ** argv) {
 
     LOG_INF("diffusion-gemma: prefix=%d canvas=%d max_canvases=%d steps=%d entropy_bound=%.3f temp=[%.2f,%.2f] n_ctx=%d mm=%d\n",
             prefix_len, canvas_length, max_canvases, n_steps, entropy_bound, TEMP_MIN, TEMP_MAX, n_ctx, (int) use_mm);
+    if (topk_fixed > 0 || (topk_start > 0 && topk_end > 0)) {
+        LOG_INF("diffusion-gemma: top-k sampling: fixed=%d anneal=[%d->%d] tail_correction=%d (vocab=%d)\n",
+                topk_fixed, topk_start, topk_end, topk_tail, n_vocab);
+    }
 
     std::mt19937 rng(params.sampling.seed == LLAMA_DEFAULT_SEED ? 1234u : params.sampling.seed);
     std::uniform_int_distribution<int> rand_tok(0, n_vocab - 1);
@@ -264,6 +283,7 @@ int main(int argc, char ** argv) {
     llama_set_diffusion_self_cond(ctx, nullptr, 0, 0); // first step: zero self-conditioning
 
     // 2. denoising loop (DECODER phase): cur_step = n_steps .. 1
+    int step_k = 0; // top-k used for the current step (0 = full softmax), for logging
     for (int cur_step = n_steps; cur_step >= 1; --cur_step) {
         ++n_steps_total;
         // 2a. decode the canvas only, at positions [n_past, n_past+canvas). Bidirectional, with
@@ -290,40 +310,115 @@ int main(int argc, char ** argv) {
 
         std::vector<float> entropy(canvas_length);
         std::vector<llama_token> sampled(canvas_length);
-        std::vector<float> probs(n_vocab);
 
-        for (int j = 0; j < canvas_length; ++j) {
-            const float * lg = logits + (size_t) j * n_vocab;
-            // softmax of processed (temperature-scaled) logits
-            float maxl = -INFINITY;
-            int   amax = 0;
-            for (int v = 0; v < n_vocab; ++v) {
-                const float x = lg[v] / temp;
-                if (x > maxl) { maxl = x; amax = v; }
+        // k for this step: 0 = full softmax. With annealing, k is high at the first (high-entropy)
+        // step and low at the last, since early canvases are flat (need many tokens) and late ones
+        // are peaked (a few suffice).
+        int k_step = 0;
+        if (topk_start > 0 && topk_end > 0) {
+            const float frac = (n_steps > 1) ? (float) (cur_step - 1) / (float) (n_steps - 1) : 0.0f; // 1 at first step (cur_step=n_steps), 0 at last (cur_step=1)
+            k_step = (int) lroundf(topk_end + (topk_start - topk_end) * frac);
+        } else if (topk_fixed > 0) {
+            k_step = topk_fixed;
+        }
+        if (k_step <= 0 || k_step >= n_vocab) k_step = 0;
+        step_k = k_step;
+
+        if (k_step == 0) {
+            // ---- full softmax over the whole vocabulary (reference behaviour) ----
+            std::vector<float> probs(n_vocab);
+            for (int j = 0; j < canvas_length; ++j) {
+                const float * lg = logits + (size_t) j * n_vocab;
+                float maxl = -INFINITY;
+                int   amax = 0;
+                for (int v = 0; v < n_vocab; ++v) {
+                    const float x = lg[v] / temp;
+                    if (x > maxl) { maxl = x; amax = v; }
+                }
+                float sum = 0.0f;
+                for (int v = 0; v < n_vocab; ++v) {
+                    const float p = expf(lg[v] / temp - maxl);
+                    probs[v] = p;
+                    sum += p;
+                }
+                float ent = 0.0f;
+                const float r = rand_unif(rng) * sum;
+                float cum = 0.0f;
+                int   tok = amax;
+                bool  picked = false;
+                float * sc = self_cond_buf.data() + (size_t) j * n_vocab;
+                for (int v = 0; v < n_vocab; ++v) {
+                    const float p = probs[v] / sum;
+                    sc[v] = p;
+                    if (p > 0.0f) ent -= p * logf(p);
+                    cum += probs[v];
+                    if (!picked && cum >= r) { tok = v; picked = true; }
+                }
+                entropy[j]       = ent;
+                sampled[j]       = tok;
+                argmax_canvas[j] = amax;
             }
-            float sum = 0.0f;
-            for (int v = 0; v < n_vocab; ++v) {
-                const float p = expf(lg[v] / temp - maxl);
-                probs[v] = p;
-                sum += p;
+        } else {
+            // ---- top-k host sampling: softmax / entropy / sample / self-cond over the top-k
+            // logits only. The self-cond buffer is sparse (top-k filled), so the in-graph
+            // soft-embedding matmul blends only the top-k token embeddings (the dropped tail
+            // carries negligible embedding weight; the subsequent RMS norm absorbs the scale). ----
+            std::fill(self_cond_buf.begin(), self_cond_buf.end(), 0.0f);
+            std::vector<std::pair<float,int>> heap; // min-heap of (logit/temp, idx), size k_step
+            heap.reserve(k_step);
+            const auto cmp = [](const std::pair<float,int>&a, const std::pair<float,int>&b){ return a.first > b.first; };
+            for (int j = 0; j < canvas_length; ++j) {
+                const float * lg = logits + (size_t) j * n_vocab;
+                float maxl = -INFINITY;
+                int   amax = 0;
+                heap.clear();
+                for (int v = 0; v < n_vocab; ++v) {
+                    const float x = lg[v] / temp;
+                    if (x > maxl) { maxl = x; amax = v; }
+                    if ((int) heap.size() < k_step) {
+                        heap.push_back({x, v});
+                        std::push_heap(heap.begin(), heap.end(), cmp);
+                    } else if (x > heap.front().first) {
+                        std::pop_heap(heap.begin(), heap.end(), cmp);
+                        heap.back() = {x, v};
+                        std::push_heap(heap.begin(), heap.end(), cmp);
+                    }
+                }
+                // softmax over the top-k (renormalized); reuse .first to hold exp value
+                float Zk = 0.0f;
+                for (auto & h : heap) { const float e = expf(h.first - maxl); h.first = e; Zk += e; }
+
+                float ent;
+                if (topk_tail) {
+                    // exact full entropy via logsumexp over all logits (one expf pass, no per-token logf):
+                    //   H = ln(Z) - (sum_i (z_i-max) e_i)/Z
+                    double Zf = 0.0, T = 0.0;
+                    for (int v = 0; v < n_vocab; ++v) {
+                        const double d = (double) (lg[v] / temp) - (double) maxl;
+                        const double e = exp(d);
+                        Zf += e; T += d * e;
+                    }
+                    ent = (float) (log(Zf) - T / Zf);
+                } else {
+                    ent = 0.0f;
+                    for (auto & h : heap) { const float q = h.first / Zk; if (q > 0.0f) ent -= q * logf(q); }
+                }
+
+                // multinomial sample over the top-k + store sparse self-cond
+                const float r = rand_unif(rng) * Zk;
+                float cum = 0.0f;
+                int   tok = amax;
+                bool  picked = false;
+                float * sc = self_cond_buf.data() + (size_t) j * n_vocab;
+                for (auto & h : heap) {
+                    sc[h.second] = h.first / Zk;        // renormalized top-k probability
+                    cum += h.first;
+                    if (!picked && cum >= r) { tok = h.second; picked = true; }
+                }
+                entropy[j]       = ent;
+                sampled[j]       = tok;
+                argmax_canvas[j] = amax;
             }
-            // entropy + multinomial sample
-            float ent = 0.0f;
-            const float r = rand_unif(rng) * sum;
-            float cum = 0.0f;
-            int   tok = amax;
-            bool  picked = false;
-            float * sc = self_cond_buf.data() + (size_t) j * n_vocab; // canvas column
-            for (int v = 0; v < n_vocab; ++v) {
-                const float p = probs[v] / sum;
-                sc[v] = p;                              // store normalized softmax for self-conditioning
-                if (p > 0.0f) ent -= p * logf(p);
-                cum += probs[v];
-                if (!picked && cum >= r) { tok = v; picked = true; }
-            }
-            entropy[j]       = ent;
-            sampled[j]       = tok;
-            argmax_canvas[j] = amax;
         }
 
         // roll back the canvas K/V written by this decode so the cache keeps only the committed
@@ -362,8 +457,8 @@ int main(int argc, char ** argv) {
         // 2d. stopping: stable (argmax canvas unchanged for STABILITY_THRESHOLD steps) AND confident
         bool stable = (STABILITY_THRESHOLD == 0) || (argmax_canvas == prev_argmax);
         bool confident = mean_ent < CONFIDENCE_THRESHOLD;
-        LOG_INF("step %3d  temp=%.3f  accepted=%4d/%d  mean_entropy=%.4f%s\n",
-                cur_step, temp, n_accept, canvas_length, mean_ent,
+        LOG_INF("step %3d  temp=%.3f  k=%d  accepted=%4d/%d  mean_entropy=%.4f%s\n",
+                cur_step, temp, step_k, n_accept, canvas_length, mean_ent,
                 (stable && confident) ? "  [STOP]" : "");
         if (stable && confident) {
             break;
