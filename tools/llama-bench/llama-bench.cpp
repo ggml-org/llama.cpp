@@ -862,7 +862,7 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                 }
                 LOG_WRN("DEPRECATED: -mmp and --mmap are deprecated in favour of --load-mode. Please use --load-mode mmap instead.");
                 auto p = string_split<bool>(argv[i], split_delim);
-                
+
                 std::vector<llama_load_mode> modes;
                 for (const auto & m : p) {
                     llama_load_mode mode;
