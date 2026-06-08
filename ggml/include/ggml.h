@@ -796,11 +796,20 @@ extern "C" {
     GGML_API bool ggml_validate_row_data(enum ggml_type type, const void * data, size_t nbytes);
 
     // main
-
+    // Creates and initializes a new ggml_context — the central handle that owns the
+    // memory pool (object/tensor metadata, and optionally tensor data) used by all
+    // subsequent ggml operations. Configured via ggml_init_params (mem_size,
+    // mem_buffer, no_alloc). Returns NULL on allocation failure.
     GGML_API struct ggml_context * ggml_init (struct ggml_init_params params);
+    // Resets an existing context for reuse: clears all objects/tensors and rewinds
+    // the memory pool to empty, WITHOUT freeing the underlying buffer. Lets you
+    // recycle one allocation across iterations instead of free + re-init.
     GGML_API void                  ggml_reset(struct ggml_context * ctx);
+   // Destroys the context and releases all resources it owns (including the
+   // internally allocated memory buffer when mem_buffer was NULL). The ctx pointer
+   // is invalid afterwards. Must be paired with ggml_init to avoid leaks.
     GGML_API void                  ggml_free (struct ggml_context * ctx);
-
+    
     GGML_API size_t  ggml_used_mem(const struct ggml_context * ctx);
 
     GGML_API bool    ggml_get_no_alloc(struct ggml_context * ctx);
