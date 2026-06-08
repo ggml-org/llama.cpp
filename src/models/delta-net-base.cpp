@@ -401,8 +401,10 @@ std::pair<ggml_tensor *, ggml_tensor *> llm_build_delta_net_base::build_delta_ne
     // K=1: output carries the final state only. state s is 4D [S_v, S_v, H_v, n_seqs].
     ggml_tensor * result = ggml_gated_delta_net(ctx0, q, k, v, g, b, s, /*K=*/1);
     if (n_tokens == 1) {
+        ggml_format_name(result, "%s-%d", LLAMA_TENSOR_NAME_FGDN_AR, il);
         cb(result, LLAMA_TENSOR_NAME_FGDN_AR, il);
     } else {
+        ggml_format_name(result, "%s-%d", LLAMA_TENSOR_NAME_FGDN_CH, il);
         cb(result, LLAMA_TENSOR_NAME_FGDN_CH, il);
     }
 
@@ -566,8 +568,10 @@ ggml_tensor * llm_build_delta_net_base::build_recurrent_attn(
     // state s is 4D [S_v, S_v, H_v, n_seqs]; K snapshot slots are written into the output.
     ggml_tensor * gdn_out = ggml_gated_delta_net(ctx0, q, k, v, g, b, s, K);
     if (n_seq_tokens > 1) {
+        ggml_format_name(gdn_out, "%s-%d", LLAMA_TENSOR_NAME_FGDN_CH, il);
         cb(gdn_out, LLAMA_TENSOR_NAME_FGDN_CH, il);
     } else {
+        ggml_format_name(gdn_out, "%s-%d", LLAMA_TENSOR_NAME_FGDN_AR, il);
         cb(gdn_out, LLAMA_TENSOR_NAME_FGDN_AR, il);
     }
 
