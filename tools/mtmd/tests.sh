@@ -76,7 +76,7 @@ add_test_vision "ggml-org/gemma-3-4b-it-GGUF:Q4_K_M"
 add_test_vision "THUDM/glm-edge-v-5b-gguf:Q4_K_M" -p "name of the newspaper?<__media__>"
 add_test_vision "second-state/Llava-v1.5-7B-GGUF:Q2_K" --chat-template vicuna
 add_test_vision "cjpais/llava-1.6-mistral-7b-gguf:Q3_K_M" --chat-template vicuna
-add_test_vision "ibm-research/granite-vision-3.2-2b-GGUF:Q4_K_M"
+add_test_vision "ibm-research/granite-vision-3.2-2b-GGUF:Q4_K_M" --jinja
 add_test_vision "second-state/MiniCPM-Llama3-V-2_5-GGUF:Q2_K"  # model from openbmb is corrupted
 add_test_vision "openbmb/MiniCPM-V-2_6-gguf:Q2_K"
 add_test_vision "openbmb/MiniCPM-o-2_6-gguf:Q4_0"
