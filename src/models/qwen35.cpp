@@ -155,7 +155,7 @@ llama_model_qwen35::graph::graph(const llama_model & model, const llm_graph_para
     auto * inp = build_inp_mem_hybrid();
 
     ggml_tensor * inp_pos     = build_inp_pos();
-    ggml_tensor * inp_out_ids = (n_outputs > 0 && (!cparams.embeddings_pre_norm || n_outputs < n_tokens)) ? build_inp_out_ids() : nullptr;
+    ggml_tensor * inp_out_ids = build_inp_out_ids();
 
     // MTP/NextN layers are loaded as extra decoder blocks but not executed in the main pass.
     const int n_transformer_layers = n_layer - (int) hparams.nextn_predict_layers;
@@ -176,7 +176,7 @@ llama_model_qwen35::graph::graph(const llama_model & model, const llm_graph_para
             cur = build_layer_attn(inp->get_attn(), cur, inp_pos, sections, il);
         }
 
-        if (il == n_transformer_layers - 1 && inp_out_ids && !cparams.embeddings_pre_norm) {
+        if (il == n_transformer_layers - 1 && inp_out_ids) {
             cur   = ggml_get_rows(ctx0, cur, inp_out_ids);
             inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
         }
@@ -210,16 +210,6 @@ llama_model_qwen35::graph::graph(const llama_model & model, const llm_graph_para
 
     cb(cur, "h_pre_norm", -1);
     res->t_h_pre_norm = cur;
-
-    if (n_outputs == 0) {
-        ggml_build_forward_expand(gf, cur);
-        return;
-    }
-
-    if (inp_out_ids && cparams.embeddings_pre_norm && n_outputs < n_tokens) {
-        cur = ggml_get_rows(ctx0, cur, inp_out_ids);
-        cb(cur, "h_pre_norm_out", -1);
-    }
 
     // Final norm
     cur = build_norm(cur, model.output_norm, nullptr, LLM_NORM_RMS, -1);
@@ -530,9 +520,8 @@ llama_model_qwen35::graph_mtp::graph_mtp(const llama_model & model, const llm_gr
 
     res->add_input(std::move(inp));
 
-    ggml_tensor * inp_pos     = build_inp_pos();
-    ggml_tensor * inp_out_ids = (n_outputs > 0 && n_outputs < n_tokens) ? build_inp_out_ids() : nullptr;
-    auto * inp_attn           = build_attn_inp_kv();
+    ggml_tensor * inp_pos = build_inp_pos();
+    auto * inp_attn       = build_attn_inp_kv();
 
     ggml_tensor * h_norm = build_norm(h_input, layer.nextn.hnorm, nullptr, LLM_NORM_RMS, il);
     cb(h_norm, "mtp_hnorm", il);
@@ -620,16 +609,6 @@ llama_model_qwen35::graph_mtp::graph_mtp(const llama_model & model, const llm_gr
     // (In the trunk graph this is `t_h_pre_norm`; the MTP head reuses the same slot.)
     cb(cur, "h_pre_norm", -1);
     res->t_h_pre_norm = cur;
-
-    if (n_outputs == 0) {
-        ggml_build_forward_expand(gf, cur);
-        return;
-    }
-
-    if (inp_out_ids && n_outputs < n_tokens) {
-        cur = ggml_get_rows(ctx0, cur, inp_out_ids);
-        cb(cur, "mtp_h_pre_norm_out", -1);
-    }
 
     ggml_tensor * head_norm_w = layer.nextn.shared_head_norm
             ? layer.nextn.shared_head_norm

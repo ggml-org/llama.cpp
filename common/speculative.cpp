@@ -539,12 +539,7 @@ struct common_speculative_state_draft_mtp : public common_speculative_impl {
             set_h(i_batch_beg[seq_id], pending_h[seq_id].data());
         }
 
-        // During prompt sync the draft MTP context only needs its cache/state
-        // updated. Host-visible pre-norm rows are consumed during draft()
-        // generation, not while mirroring prompt batches.
-        llama_set_embeddings_pre_norm(ctx_dft, false);
         const int32_t rc = llama_decode(ctx_dft, batch);
-        llama_set_embeddings_pre_norm(ctx_dft, true);
         if (rc != 0) {
             LOG_ERR("%s: llama_decode(ctx_dft) failed rc=%d (pos=%d)\n", __func__, (int) rc, (int) batch_in.pos[0]);
             return false;

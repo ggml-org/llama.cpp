@@ -241,11 +241,7 @@ struct server_slot {
 
     bool need_embd() const {
         GGML_ASSERT(task);
-        return task->need_embd();
-    }
-
-    bool need_embd_pre_norm() const {
-        return spec && common_speculative_need_embd(spec);
+        return task->need_embd() || (spec && common_speculative_need_embd(spec));
     }
 
     // if the context does not have a memory module then all embeddings have to be computed within a single ubatch
@@ -2893,6 +2889,9 @@ private:
                             break;
                         }
 
+                        // embedding requires all tokens in the batch to be output;
+                        // MTP also wants logits at every prompt position so the
+                        // streaming hook can mirror t_h_pre_norm into ctx_dft.
                         common_batch_add(batch,
                             cur_tok,
                             slot.prompt.tokens.pos_next(),
