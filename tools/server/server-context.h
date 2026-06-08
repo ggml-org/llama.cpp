@@ -21,6 +21,7 @@ struct server_context_meta {
     bool has_mtmd;
     bool has_inp_image;
     bool has_inp_audio;
+    bool has_inp_video;
     json json_ui_settings;            // Primary: new name
     json json_webui_settings;            // Deprecated: use json_ui_settings instead (kept for backward compat)
     int slot_n_ctx;

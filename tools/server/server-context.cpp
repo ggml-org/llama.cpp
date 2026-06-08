@@ -1247,6 +1247,7 @@ private:
                 /* tmpls                 */ std::move(chat_templates),
                 /* allow_image           */ mctx ? mtmd_support_vision(mctx) : false,
                 /* allow_audio           */ mctx ? mtmd_support_audio (mctx) : false,
+                /* allow_video           */ mctx ? mtmd_helper_support_video(mctx) : false,
                 /* enable_thinking       */ enable_thinking,
                 /* reasoning_budget      */ params_base.sampling.reasoning_budget_tokens,
                 /* reasoning_budget_msg  */ params_base.sampling.reasoning_budget_message,
@@ -3586,6 +3587,7 @@ server_context_meta server_context::get_meta() const {
         /* has_mtmd               */ impl->mctx != nullptr,
         /* has_inp_image          */ impl->chat_params.allow_image,
         /* has_inp_audio          */ impl->chat_params.allow_audio,
+        /* has_inp_video          */ impl->chat_params.allow_video,
         /* json_ui_settings       */ impl->json_ui_settings,
         /* json_webui_settings    */ impl->json_webui_settings,  // Deprecated
         /* slot_n_ctx             */ impl->get_slot_n_ctx(),
@@ -4183,6 +4185,7 @@ void server_routes::init_routes() {
             { "model_path",                  meta->model_path },
             { "modalities",                  json {
                 {"vision", meta->has_inp_image},
+                {"video",  meta->has_inp_video},
                 {"audio",  meta->has_inp_audio},
             } },
             { "media_marker",                get_media_marker() },
@@ -4976,7 +4979,7 @@ std::unique_ptr<server_res_generator> server_routes::handle_count_tokens(const l
         n_tokens = tokenize_mixed(vocab, prompt, true, true).size();
     }
 
-    json response = {{"input_tokens", static_cast<int>(n_tokens)}};
+    json response = {{"input_tokens", static_cast<int64_t>(n_tokens)}};
     if (is_oai) {
         response["object"] = "response.input_tokens";
     }
