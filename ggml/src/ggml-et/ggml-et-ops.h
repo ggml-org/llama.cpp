@@ -43,7 +43,7 @@
             (void) (node);                          \
         } while (0)
 
-#endif
+#endif  // ET_PERF_RECORD
 
 struct ggml_et_binary_params {
     ggml_tensor src0;
@@ -52,7 +52,7 @@ struct ggml_et_binary_params {
 };
 
 // Q8_0 mul_mat with optional residual bias.
-// bias.data == NULL means "no bias" — kernel skips the add.
+// bias.data == NULL means "no bias" - kernel skips the add.
 // When non-NULL, bias must have the same shape and strides as dst.
 struct ggml_et_mm_q8_params {
     ggml_tensor src0;
@@ -75,7 +75,7 @@ struct ggml_et_elmap_params {
     ggml_tensor dst;
 };
 
-typedef struct {
+struct ggml_et_rope_settings {
     int32_t n_past;
     int32_t n_dims;  // Number of dimensions to apply ROPE to (must be even)
     int32_t mode;    // ROPE mode (0=normal, 1=neox, 2=glm)
@@ -88,14 +88,14 @@ typedef struct {
     float   beta_fast;    // Fast beta for YaRN
     float   beta_slow;    // Slow beta for YaRN
     int32_t sections[4];  // Sections for multi-modal ROPE
-} rope_params_t;
+};
 
 struct ggml_et_rope_params {
-    ggml_tensor   src0;
-    ggml_tensor   src1;
-    ggml_tensor   src2;
-    ggml_tensor   dst;
-    rope_params_t rope_params;
+    ggml_tensor           src0;
+    ggml_tensor           src1;
+    ggml_tensor           src2;
+    ggml_tensor           dst;
+    ggml_et_rope_settings rope_params;
 };
 
 struct ggml_et_rms_norm_params {

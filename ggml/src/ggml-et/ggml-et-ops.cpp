@@ -500,8 +500,8 @@ bool ggml_et_op_unary(ggml_backend_et_device_context * dev_ctx, const ggml_tenso
         return false;
     }
 
-    const enum ggml_unary_op uop     = ggml_get_unary_op(node);
-    const char *             op_name = ggml_unary_op_name(uop);
+    const ggml_unary_op uop     = ggml_get_unary_op(node);
+    const char *        op_name = ggml_unary_op_name(uop);
 
     ggml_et_unary_params params;
     params.src0     = *node->src[0];  // F32 input tensor
@@ -1519,7 +1519,7 @@ bool ggml_et_op_flash_attn_ext(ggml_backend_et_device_context * dev_ctx, const g
         return false;
     }
 
-    const enum ggml_prec prec = ggml_flash_attn_ext_get_prec(node);
+    const ggml_prec prec = ggml_flash_attn_ext_get_prec(node);
     if (prec != GGML_PREC_F32 && prec != GGML_PREC_DEFAULT) {
         GGML_LOG_ERROR("ET: FLASH_ATTN_EXT baseline kernel only supports F32 precision\n");
         return false;
