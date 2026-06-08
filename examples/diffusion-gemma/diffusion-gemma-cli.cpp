@@ -23,6 +23,7 @@
 #include "mtmd-helper.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <numeric>
@@ -63,9 +64,14 @@ int main(int argc, char ** argv) {
     common_init();
 
     // diffusion config (env-overridable for quick CPU testing)
-    const int   canvas_length = env_int("DG_CANVAS", params.n_predict > 0 ? params.n_predict : DEF_CANVAS_LENGTH);
+    // canvas_length is fixed at the trained block size (256); overriding it is for experiments only.
+    const int   canvas_length = env_int("DG_CANVAS", DEF_CANVAS_LENGTH);
     const int   n_steps       = env_int("DG_STEPS", DEF_MAX_DENOISE_STEPS);
-    const int   max_canvases  = std::max(env_int("DG_MAX_CANVASES", 1), 1); // autoregressive blocks
+    // number of autoregressive canvas blocks = ceil(-n / canvas_length), i.e. -n is the total
+    // number of tokens to generate (e.g. -n 256 -> 1 canvas, -n 512 -> 2, -n 1024 -> 4). The
+    // model may stop earlier on an EOG token. DG_MAX_CANVASES overrides; default (no -n) is 1.
+    const int   blocks_from_n = params.n_predict > 0 ? (params.n_predict + canvas_length - 1) / canvas_length : 1;
+    const int   max_canvases  = std::max(env_int("DG_MAX_CANVASES", blocks_from_n), 1); // autoregressive blocks
     const float entropy_bound = ENTROPY_BOUND;
 
     llama_backend_init();
@@ -178,8 +184,8 @@ int main(int argc, char ** argv) {
     llama_set_diffusion_prompt_len(ctx, prefix_len);
     llama_memory_t mem = llama_get_memory(ctx);
 
-    LOG_INF("diffusion-gemma: prefix=%d canvas=%d steps=%d entropy_bound=%.3f temp=[%.2f,%.2f] n_ctx=%d mm=%d\n",
-            prefix_len, canvas_length, n_steps, entropy_bound, TEMP_MIN, TEMP_MAX, n_ctx, (int) use_mm);
+    LOG_INF("diffusion-gemma: prefix=%d canvas=%d max_canvases=%d steps=%d entropy_bound=%.3f temp=[%.2f,%.2f] n_ctx=%d mm=%d\n",
+            prefix_len, canvas_length, max_canvases, n_steps, entropy_bound, TEMP_MIN, TEMP_MAX, n_ctx, (int) use_mm);
 
     std::mt19937 rng(params.sampling.seed == LLAMA_DEFAULT_SEED ? 1234u : params.sampling.seed);
     std::uniform_int_distribution<int> rand_tok(0, n_vocab - 1);
@@ -237,8 +243,13 @@ int main(int argc, char ** argv) {
 
     // ---- autoregressive block loop: each block denoises a canvas against the cached prefix,
     //      then (if continuing) commits its finalized tokens to the cache as the next prefix ----
+    int n_blocks_run  = 0;
+    int n_steps_total = 0;
+    const auto t_gen_start = std::chrono::steady_clock::now();
+
     bool done = false;
     for (int block = 0; block < max_canvases && !done; ++block) {
+    ++n_blocks_run;
     // 1. initialize canvas with random tokens
     for (auto & t : canvas) t = rand_tok(rng);
     std::fill(prev_argmax.begin(), prev_argmax.end(), -1);
@@ -246,6 +257,7 @@ int main(int argc, char ** argv) {
 
     // 2. denoising loop (DECODER phase): cur_step = n_steps .. 1
     for (int cur_step = n_steps; cur_step >= 1; --cur_step) {
+        ++n_steps_total;
         // 2a. decode the canvas only, at positions [n_past, n_past+canvas). Bidirectional, with
         // self-conditioning; it reads the cached prefix read-only. All canvas tokens are outputs.
         llama_set_causal_attn(ctx, false);
@@ -356,37 +368,17 @@ int main(int argc, char ** argv) {
         }
     }
 
-    // 3. final read-out: decode the converged canvas once more (decoder phase) and take the
-    // greedy argmax per canvas position. Positions that were never accepted carry stale/renoised
-    // tokens; reading the model's argmax given the settled answer cleans them up (e.g. to <pad>),
-    // rather than emitting that leftover noise.
-    {
-        llama_set_causal_attn(ctx, false);
-        llama_set_diffusion_decoder_phase(ctx, true);
-        batch.n_tokens = canvas_length;
-        for (int j = 0; j < canvas_length; ++j) {
-            batch.token[j]     = accepted[j];
-            batch.pos[j]       = n_past + j;
-            batch.n_seq_id[j]  = 1;
-            batch.seq_id[j][0] = 0;
-            batch.logits[j]    = 1;
-        }
-        if (llama_decode(ctx, batch) == 0) {
-            const float * logits = llama_get_logits(ctx);
-            for (int j = 0; j < canvas_length; ++j) {
-                const float * r = logits + (size_t) j * n_vocab;
-                int a = 0; float m = r[0];
-                for (int v = 1; v < n_vocab; ++v) { if (r[v] > m) { m = r[v]; a = v; } }
-                accepted[j] = a;
-            }
-        }
-        llama_memory_seq_rm(mem, 0, n_past, -1); // roll back the read-out canvas K/V
-    }
+    // 3. block output = the inline argmax of the last (stable) denoising step's logits.
+    // This matches the reference (DiffusionGemma _denoising_step uses argmax(processed_logits)
+    // taken during the denoising forward, read once the canvas is stable + confident). There is
+    // no separate read-out: the never-accepted tail is the model's own prediction given the
+    // settled context, rather than a stale-random scratch buffer.
+    const std::vector<llama_token> & block_out = argmax_canvas;
 
     // accumulate this block's finalized tokens; stop after a block that contains an EOG token
-    generated.insert(generated.end(), accepted.begin(), accepted.end());
+    generated.insert(generated.end(), block_out.begin(), block_out.end());
     for (int j = 0; j < canvas_length; ++j) {
-        if (llama_vocab_is_eog(vocab, accepted[j])) { done = true; break; }
+        if (llama_vocab_is_eog(vocab, block_out[j])) { done = true; break; }
     }
 
     // 4. COMMIT (ENCODER phase): if another block follows, write the finalized canvas's plain
@@ -398,7 +390,7 @@ int main(int argc, char ** argv) {
         llama_set_diffusion_self_cond(ctx, nullptr, 0, 0);
         batch.n_tokens = canvas_length;
         for (int j = 0; j < canvas_length; ++j) {
-            batch.token[j]     = accepted[j];
+            batch.token[j]     = block_out[j];
             batch.pos[j]       = n_past + j;
             batch.n_seq_id[j]  = 1;
             batch.seq_id[j][0] = 0;
@@ -412,6 +404,8 @@ int main(int argc, char ** argv) {
         LOG_INF("committed block %d -> n_past=%d\n", block, n_past);
     }
     } // end autoregressive block loop
+
+    const double gen_s = std::chrono::duration<double>(std::chrono::steady_clock::now() - t_gen_start).count();
 
     llama_batch_free(batch);
 
@@ -447,6 +441,17 @@ int main(int argc, char ** argv) {
         }
     }
     LOG_INF("=== answer ===\n%s\n", ans.c_str());
+
+    // generation timing (excludes model load + prompt prefill): wall-clock of the denoising
+    // block loop, the canvas tokens produced, and effective throughput.
+    const int n_canvas_tok = n_blocks_run * canvas_length;
+    LOG_INF("=== perf ===\n");
+    LOG_INF("generation: %d block(s), %d denoising steps, %d canvas tokens in %.2f s "
+            "(%.1f canvas tok/s, %.3f s/step); answer tokens=%d\n",
+            n_blocks_run, n_steps_total, n_canvas_tok, gen_s,
+            gen_s > 0.0 ? n_canvas_tok / gen_s : 0.0,
+            n_steps_total > 0 ? gen_s / n_steps_total : 0.0,
+            (int) answer.size());
 
     llama_free(ctx);
     llama_model_free(model);
