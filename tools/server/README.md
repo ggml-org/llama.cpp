@@ -1252,6 +1252,10 @@ The `response_format` parameter supports both plain JSON output (e.g. `{"type": 
 
 `parallel_tool_calls` : Whether to enable parallel/multiple tool calls (only supported on some models, verification is based on jinja template).
 
+For multimodal input:
+- Content type `image_url` and `input_audio` are the same as OAI schema
+- Content type `input_video` is an extension from OAI schema. For now, it only accepts base64 input
+
 *Examples:*
 
 You can use either Python `openai` library with appropriate checkpoints:

@@ -1018,12 +1018,8 @@ json oaicompat_chat_params_parse(
                     throw std::runtime_error("video input is not supported - hint: if this is unexpected, you may need to provide the mmproj");
                 }
 
-                json input_video   = json_value(p, "input_video", json::object());
-                std::string data   = json_value(input_video, "data", std::string());
-                std::string format = json_value(input_video, "format", std::string());
-                if (format != "mp4" && format != "ogg" && format != "auto") {
-                    throw std::invalid_argument("input_video.format must be 'mp4', 'ogg', or 'auto'");
-                }
+                json input_video  = json_value(p, "input_video", json::object());
+                std::string data  = json_value(input_video, "data", std::string());
                 auto decoded_data = base64_decode(data); // expected to be base64 encoded
                 out_files.push_back(decoded_data);
 
