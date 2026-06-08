@@ -226,9 +226,9 @@ static bool ggml_et_launch_kernel_internal(ggml_backend_et_device_context * dev_
                                   static_cast<uint32_t>(ET_TRACE_BUFFER_SIZE),
                                   0,                      // threshold
                                   shire_mask,             // shire mask
-                                  0xFFFFFFFFFFFFFFFFULL,  // threadMask — all threads
-                                  0xFFFFFFFFU,            // eventMask — all events
-                                  0xFFFFFFFFU             // filterMask — all levels
+                                  0xFFFFFFFFFFFFFFFFULL,  // threadMask - all threads
+                                  0xFFFFFFFFU,            // eventMask - all events
+                                  0xFFFFFFFFU             // filterMask - all levels
             );
         }
 
@@ -251,18 +251,18 @@ static bool ggml_et_launch_kernel_internal(ggml_backend_et_device_context * dev_
         }
 
         if (enable_print) {
-            std::vector<std::byte> hostTraceBuf(ET_TRACE_BUFFER_SIZE);
-            runtime->memcpyDeviceToHost(dev_ctx->default_stream, dev_ctx->trace_buffer, hostTraceBuf.data(),
+            std::vector<std::byte> host_trace_buf(ET_TRACE_BUFFER_SIZE);
+            runtime->memcpyDeviceToHost(dev_ctx->default_stream, dev_ctx->trace_buffer, host_trace_buf.data(),
                                         ET_TRACE_BUFFER_SIZE);
             runtime->waitForStream(dev_ctx->default_stream);
-            const auto * traceHeader = reinterpret_cast<const trace_buffer_std_header_t *>(hostTraceBuf.data());
+            const auto * trace_header = reinterpret_cast<const trace_buffer_std_header_t *>(host_trace_buf.data());
             const trace_entry_header_t * entry = nullptr;
-            while ((entry = Trace_Decode(traceHeader, entry))) {
+            while ((entry = Trace_Decode(trace_header, entry))) {
                 if (entry->type != TRACE_TYPE_STRING) {
                     continue;
                 }
-                const auto * strEntry = reinterpret_cast<const trace_string_t *>(entry);
-                printf("[hart %d] %s", entry->hart_id, strEntry->string);
+                const auto * str_entry = reinterpret_cast<const trace_string_t *>(entry);
+                printf("[hart %d] %s", entry->hart_id, str_entry->string);
             }
         }
 

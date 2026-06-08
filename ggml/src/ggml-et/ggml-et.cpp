@@ -155,7 +155,7 @@ static bool ggml_et_driver_init() {
 #else
             // For physical PCIe device
             _drv.device_layer = dev::IDeviceLayer::createPcieDeviceLayer();
-#endif
+#endif  // GGML_ET_SYSEMU
 
             _drv.runtime = rt::IRuntime::create(_drv.device_layer);
 
@@ -255,7 +255,7 @@ static void * ggml_backend_et_buffer_get_base(ggml_backend_buffer_t buffer) {
     return ctx->data;
 }
 
-static enum ggml_status ggml_backend_et_buffer_init_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor) {
+static ggml_status ggml_backend_et_buffer_init_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor) {
     // View tensors share buffer with their view_src, no additional initialization needed
     if (tensor->view_src != NULL) {
         return GGML_STATUS_SUCCESS;
@@ -570,7 +570,7 @@ static void ggml_backend_et_synchronize(ggml_backend_t backend) {
     abort();
 }
 
-static bool ggml_et_can_fuse(const struct ggml_cgraph * cgraph, int node_idx, std::initializer_list<enum ggml_op> ops) {
+static bool ggml_et_can_fuse(const ggml_cgraph * cgraph, int node_idx, std::initializer_list<ggml_op> ops) {
     if (!ggml_can_fuse(cgraph, node_idx, ops)) {
         return false;
     }
@@ -579,7 +579,7 @@ static bool ggml_et_can_fuse(const struct ggml_cgraph * cgraph, int node_idx, st
         const ggml_tensor * mm  = cgraph->nodes[node_idx];
         const ggml_tensor * add = cgraph->nodes[node_idx + 1];
 
-        // Only Q8_0 weights × F32 activations → F32 (the kernel that has
+        // Only Q8_0 weights x F32 activations -> F32 (the kernel that has
         // the bias path).  Other MM variants must wait for their own kernel
         // bias support.
         if (mm->type != GGML_TYPE_F32 || mm->src[0]->type != GGML_TYPE_Q8_0 || mm->src[1]->type != GGML_TYPE_F32) {
@@ -607,7 +607,7 @@ static bool ggml_et_can_fuse(const struct ggml_cgraph * cgraph, int node_idx, st
             }
         }
 
-        // Bias and dst must be contiguous and have identical strides — the
+        // Bias and dst must be contiguous and have identical strides - the
         // kernel uses dst-style offset arithmetic against bias's nb[].
         if (!ggml_is_contiguous(bias) || !ggml_is_contiguous(mm)) {
             return false;
@@ -654,7 +654,7 @@ static bool ggml_et_can_fuse(const struct ggml_cgraph * cgraph, int node_idx, st
     return true;
 }
 
-static enum ggml_status ggml_backend_et_graph_compute(ggml_backend_t backend, ggml_cgraph * cgraph) {
+static ggml_status ggml_backend_et_graph_compute(ggml_backend_t backend, ggml_cgraph * cgraph) {
     ggml_backend_et_device_context * dev_ctx = (ggml_backend_et_device_context *) backend->device->context;
     ggml_et_uberkernel_begin_graph(&dev_ctx->uberkernel);
 
@@ -862,7 +862,7 @@ static enum ggml_status ggml_backend_et_graph_compute(ggml_backend_t backend, gg
 }
 
 // Check that elements within each row are contiguous (nb[0] == type_size).
-// Higher-dim strides can be arbitrary — kernels navigate them via byte offsets.
+// Higher-dim strides can be arbitrary - kernels navigate them via byte offsets.
 static bool et_ggml_is_row_contiguous(const ggml_tensor * t) {
     return t->nb[0] == ggml_type_size(t->type);
 }
@@ -893,8 +893,8 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
             break;
         case GGML_OP_CLAMP:
             // Element-wise; kernel distributes by cache lines and handles a
-            // scalar tail, so any contiguous F32 size is fine — including the
-            // 1×1×1×1 scalar case.
+            // scalar tail, so any contiguous F32 size is fine - including the
+            // 1x1x1x1 scalar case.
             supported = op->type == GGML_TYPE_F32 && op->src[0] && op->src[0]->type == GGML_TYPE_F32 &&
                         ggml_is_contiguous(op) && ggml_is_contiguous(op->src[0]);
             break;
@@ -1152,7 +1152,7 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
                 const int64_t stage_bytes   = need_stage ? (Cout * OH * OW_pad * 4) : 0;
                 const int64_t L2SCP_BUDGET  = 1500 * 1024;
                 // Per-hart partial-TenC scratch (mirrors kernel MAX_TILES_PER_HART=2):
-                // 32 minions × 2 tiles × 1024 bytes = 64 KB per shire.
+                // 32 minions x 2 tiles x 1024 bytes = 64 KB per shire.
                 const int64_t scratch_bytes = 32 * 2 * 16 * 16 * 4;
                 const int64_t budget        = L2SCP_BUDGET - stage_bytes - scratch_bytes;
                 const int64_t per_KT_bytes  = Kh * Kw * Cout * 16 * 4 + Kw * 16 * Hp * Wp_a * 4;
@@ -1273,7 +1273,7 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
                 memcpy(&max_bias, (const float *) op->op_params + 1, sizeof(max_bias));
                 memcpy(&logit_softcap, (const float *) op->op_params + 2, sizeof(logit_softcap));
 
-                const enum ggml_prec prec = ggml_flash_attn_ext_get_prec(op);
+                const ggml_prec prec = ggml_flash_attn_ext_get_prec(op);
 
                 // Mask must be F16 or F32 if present
                 bool mask_ok = (op->src[3] == nullptr) || (op->src[3]->type == GGML_TYPE_F32) ||
