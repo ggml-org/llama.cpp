@@ -241,6 +241,8 @@ struct ggml_backend_rpc_buffer_type_context {
     std::string name;
     size_t      alignment;
     size_t      max_size;
+    std::mutex  alloc_size_cache_mutex;
+    std::unordered_map<std::string, size_t> alloc_size_cache;
 };
 
 struct ggml_backend_rpc_context {
@@ -480,6 +482,7 @@ static constexpr size_t RPC_WIRE_SIZE_SIZE   = sizeof(uint64_t);
 static constexpr size_t RPC_WIRE_CMD_SIZE    = sizeof(uint8_t);
 static constexpr size_t RPC_WIRE_HEADER_SIZE = RPC_WIRE_CMD_SIZE + RPC_WIRE_SIZE_SIZE;
 static constexpr size_t RPC_COALESCE_MAX     = 4096;
+static constexpr size_t RPC_ALLOC_SIZE_CACHE_MAX = 4096;
 
 struct rpc_trace_cmd_stat {
     uint64_t calls        = 0;
@@ -499,6 +502,20 @@ struct rpc_trace_tensor_stat {
     uint64_t calls = 0;
     uint64_t bytes = 0;
     uint64_t elapsed_ns = 0;
+};
+
+struct rpc_trace_pending_one_way_stat {
+    uint64_t calls = 0;
+    uint64_t bytes = 0;
+};
+
+struct rpc_trace_pending_drain_stat {
+    uint64_t sync_calls = 0;
+    uint64_t failed_sync_calls = 0;
+    uint64_t pending_calls = 0;
+    uint64_t pending_bytes = 0;
+    uint64_t wait_ns = 0;
+    uint64_t failed_wait_ns = 0;
 };
 
 struct rpc_compression_probe_stat {
@@ -523,6 +540,8 @@ struct rpc_trace_state {
     std::unordered_map<std::string, rpc_trace_copy_stat> cross_endpoint_copies;
     std::unordered_map<std::string, rpc_trace_copy_stat> cross_endpoint_tensor_copies;
     std::unordered_map<std::string, rpc_compression_probe_stat> compression_probe;
+    std::unordered_map<std::string, std::array<rpc_trace_pending_one_way_stat, RPC_CMD_COUNT>> pending_one_way_by_connection;
+    std::unordered_map<std::string, rpc_trace_pending_drain_stat> pending_one_way_drains;
 };
 
 struct rpc_trace_server_span;
@@ -609,6 +628,15 @@ static void rpc_trace_split_key3(
     third  = key.substr(p1 + 1);
 }
 
+static std::string rpc_trace_connection_key(const socket_ptr & sock) {
+    char ptr[32];
+    snprintf(ptr, sizeof(ptr), "%p", (const void *) sock.get());
+    std::string key = sock->label();
+    key.push_back('#');
+    key += ptr;
+    return key;
+}
+
 static void rpc_trace_record_client(
         enum rpc_cmd cmd, const std::string & endpoint, uint64_t input_bytes, uint64_t output_bytes,
         uint64_t elapsed_ns, bool has_response) {
@@ -626,6 +654,73 @@ static void rpc_trace_record_client(
         rpc_trace_add_cmd_stat(
             state.client_by_endpoint[endpoint][cmd], input_bytes, output_bytes,
             has_response ? 0 : elapsed_ns, has_response ? elapsed_ns : 0, 0);
+    }
+}
+
+static bool rpc_trace_is_pending_one_way(enum rpc_cmd cmd) {
+    switch (cmd) {
+        case RPC_CMD_SET_TENSOR:
+        case RPC_CMD_SET_TENSOR_ZLIB:
+        case RPC_CMD_GRAPH_COMPUTE:
+        case RPC_CMD_GRAPH_RECOMPUTE:
+            return true;
+        default:
+            return false;
+    }
+}
+
+static void rpc_trace_record_pending_one_way(
+        enum rpc_cmd cmd, const std::string & connection_key, uint64_t input_bytes) {
+    if (!rpc_trace_enabled() || connection_key.empty() || !rpc_trace_is_pending_one_way(cmd)) {
+        return;
+    }
+
+    auto & state = rpc_trace_get_state();
+    std::lock_guard<std::mutex> lock(state.mutex);
+    state.has_activity = true;
+    auto & stat = state.pending_one_way_by_connection[connection_key][cmd];
+    stat.calls++;
+    stat.bytes += input_bytes;
+}
+
+static void rpc_trace_record_pending_one_way_drain(
+        enum rpc_cmd response_cmd, const std::string & endpoint, const std::string & connection_key,
+        uint64_t wait_ns, bool response_ok) {
+    if (!rpc_trace_enabled() || endpoint.empty() || connection_key.empty()) {
+        return;
+    }
+
+    auto & state = rpc_trace_get_state();
+    std::lock_guard<std::mutex> lock(state.mutex);
+    auto it = state.pending_one_way_by_connection.find(connection_key);
+    if (it == state.pending_one_way_by_connection.end()) {
+        return;
+    }
+
+    bool has_pending = false;
+    for (int i = 0; i < RPC_CMD_COUNT; ++i) {
+        const auto & pending = it->second[i];
+        if (pending.calls == 0) {
+            continue;
+        }
+
+        has_pending = true;
+        auto & drain = state.pending_one_way_drains[
+            rpc_trace_key3(endpoint.c_str(), rpc_cmd_name(response_cmd), rpc_cmd_name((rpc_cmd) i))];
+        if (response_ok) {
+            drain.sync_calls++;
+            drain.wait_ns += wait_ns;
+        } else {
+            drain.failed_sync_calls++;
+            drain.failed_wait_ns += wait_ns;
+        }
+        drain.pending_calls += pending.calls;
+        drain.pending_bytes += pending.bytes;
+    }
+
+    if (has_pending) {
+        it->second = {};
+        state.has_activity = true;
     }
 }
 
@@ -1216,6 +1311,52 @@ static void rpc_trace_print_cross_endpoint_tensor_copies(
     }
 }
 
+static bool rpc_trace_has_pending_drain_stats(const std::unordered_map<std::string, rpc_trace_pending_drain_stat> & stats) {
+    for (const auto & entry : stats) {
+        if (entry.second.sync_calls != 0 || entry.second.failed_sync_calls != 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static void rpc_trace_print_pending_one_way_drains(
+        FILE * stream, const std::unordered_map<std::string, rpc_trace_pending_drain_stat> & stats) {
+    std::vector<std::pair<std::string, rpc_trace_pending_drain_stat>> rows;
+    rows.reserve(stats.size());
+    for (const auto & entry : stats) {
+        if (entry.second.sync_calls != 0 || entry.second.failed_sync_calls != 0) {
+            rows.push_back(entry);
+        }
+    }
+    std::sort(rows.begin(), rows.end(), [](const auto & lhs, const auto & rhs) {
+        const uint64_t lhs_wait = lhs.second.wait_ns + lhs.second.failed_wait_ns;
+        const uint64_t rhs_wait = rhs.second.wait_ns + rhs.second.failed_wait_ns;
+        if (lhs_wait != rhs_wait) {
+            return lhs_wait > rhs_wait;
+        }
+        return lhs.second.pending_bytes > rhs.second.pending_bytes;
+    });
+
+    fprintf(stream, "ggml-rpc trace sync waits after one-way commands:\n");
+    fprintf(stream, "  %-24s %-18s %-18s %12s %12s %14s %14s %12s %12s\n",
+            "endpoint", "response_cmd", "pending_cmd", "ok_syncs", "fail_syncs",
+            "pending_calls", "pending_bytes", "wait_ms", "fail_wait_ms");
+    for (const auto & row : rows) {
+        std::string endpoint;
+        std::string response_cmd;
+        std::string pending_cmd;
+        rpc_trace_split_key3(row.first, endpoint, response_cmd, pending_cmd);
+        const auto & stat = row.second;
+        const double wait_ms = (double) stat.wait_ns / 1000000.0;
+        const double failed_wait_ms = (double) stat.failed_wait_ns / 1000000.0;
+        fprintf(stream, "  %-24s %-18s %-18s %12" PRIu64 " %12" PRIu64
+                        " %14" PRIu64 " %14" PRIu64 " %12.3f %12.3f\n",
+                endpoint.c_str(), response_cmd.c_str(), pending_cmd.c_str(), stat.sync_calls,
+                stat.failed_sync_calls, stat.pending_calls, stat.pending_bytes, wait_ms, failed_wait_ms);
+    }
+}
+
 static void rpc_trace_report() {
     if (!rpc_trace_enabled() && !rpc_compression_probe_enabled()) {
         return;
@@ -1233,8 +1374,9 @@ static void rpc_trace_report() {
     const bool has_copies = rpc_trace_has_copy_stats(state.cross_endpoint_copies);
     const bool has_tensor_copies = rpc_trace_has_copy_stats(state.cross_endpoint_tensor_copies);
     const bool has_compression_probe = rpc_compression_probe_has_stats(state.compression_probe);
+    const bool has_pending_drains = rpc_trace_has_pending_drain_stats(state.pending_one_way_drains);
     if (!has_client && !has_server && !has_client_by_endpoint && !has_tensor_ops && !has_copies && !has_tensor_copies &&
-            !has_compression_probe) {
+            !has_compression_probe && !has_pending_drains) {
         return;
     }
     fprintf(stderr, "\n");
@@ -1246,6 +1388,9 @@ static void rpc_trace_report() {
     }
     if (has_tensor_ops) {
         rpc_trace_print_tensor_ops(stderr, state.tensor_ops);
+    }
+    if (has_pending_drains) {
+        rpc_trace_print_pending_one_way_drains(stderr, state.pending_one_way_drains);
     }
     if (has_server) {
         rpc_trace_print_cmd_table(stderr, "server", state.server);
@@ -1273,6 +1418,8 @@ static void rpc_trace_report() {
     state.cross_endpoint_copies.clear();
     state.cross_endpoint_tensor_copies.clear();
     state.compression_probe.clear();
+    state.pending_one_way_by_connection.clear();
+    state.pending_one_way_drains.clear();
     state.has_activity = false;
     fflush(stderr);
 }
@@ -1419,6 +1566,9 @@ static bool send_rpc_cmd_request(socket_ptr sock, enum rpc_cmd cmd, const void *
 static bool send_rpc_cmd(socket_ptr sock, enum rpc_cmd cmd, const void * input, size_t input_size) {
     const uint64_t start_ns = rpc_trace_enabled() ? rpc_trace_now_ns() : 0;
     bool status = send_rpc_cmd_request(sock, cmd, input, input_size);
+    if (status && rpc_trace_enabled()) {
+        rpc_trace_record_pending_one_way(cmd, rpc_trace_connection_key(sock), input_size);
+    }
     if (rpc_trace_enabled()) {
         rpc_trace_record_client(cmd, sock->label(), input_size, 0, rpc_trace_now_ns() - start_ns, false);
     }
@@ -1430,6 +1580,7 @@ static bool send_rpc_cmd(socket_ptr sock, enum rpc_cmd cmd, const void * input, 
 static bool send_rpc_cmd(socket_ptr sock, enum rpc_cmd cmd, const void * input, size_t input_size, void * output, size_t output_size) {
     const uint64_t start_ns = rpc_trace_enabled() ? rpc_trace_now_ns() : 0;
     bool status = send_rpc_cmd_request(sock, cmd, input, input_size);
+    const uint64_t wait_start_ns = rpc_trace_enabled() ? rpc_trace_now_ns() : 0;
     if (status) {
         uint64_t out_size;
         status = sock->recv_data(&out_size, sizeof(out_size));
@@ -1439,6 +1590,10 @@ static bool send_rpc_cmd(socket_ptr sock, enum rpc_cmd cmd, const void * input, 
         if (status) {
             status = sock->recv_data(output, output_size);
         }
+    }
+    if (rpc_trace_enabled()) {
+        rpc_trace_record_pending_one_way_drain(
+            cmd, sock->label(), rpc_trace_connection_key(sock), rpc_trace_now_ns() - wait_start_ns, status);
     }
     if (rpc_trace_enabled()) {
         rpc_trace_record_client(cmd, sock->label(), input_size, status ? output_size : 0, rpc_trace_now_ns() - start_ns, true);
@@ -1838,12 +1993,29 @@ static size_t ggml_backend_rpc_buffer_type_get_alloc_size(ggml_backend_buffer_ty
             request.srcs[i] = serialize_tensor(tensor->src[i]);
         }
 
-        // TODO: cache the alloc responses to avoid extra RPC calls?
+        const std::string cache_key(reinterpret_cast<const char *>(&request), sizeof(request));
+        {
+            std::lock_guard<std::mutex> lock(buft_ctx->alloc_size_cache_mutex);
+            auto it = buft_ctx->alloc_size_cache.find(cache_key);
+            if (it != buft_ctx->alloc_size_cache.end()) {
+                return it->second;
+            }
+        }
+
         rpc_msg_get_alloc_size_rsp response;
         bool status = send_rpc_cmd(sock, RPC_CMD_GET_ALLOC_SIZE, &request, sizeof(request), &response, sizeof(response));
         RPC_STATUS_ASSERT(status);
 
-        return response.alloc_size;
+        const size_t alloc_size = response.alloc_size;
+        {
+            std::lock_guard<std::mutex> lock(buft_ctx->alloc_size_cache_mutex);
+            if (buft_ctx->alloc_size_cache.size() >= RPC_ALLOC_SIZE_CACHE_MAX) {
+                buft_ctx->alloc_size_cache.clear();
+            }
+            buft_ctx->alloc_size_cache.emplace(cache_key, alloc_size);
+        }
+
+        return alloc_size;
     }
 
     return ggml_nbytes(tensor);
@@ -1986,7 +2158,9 @@ ggml_backend_buffer_type_t ggml_backend_rpc_buffer_type(const char * endpoint, u
         /* .device    = */ device,
         /* .name      = */ buft_name,
         /* .alignment = */ alignment,
-        /* .max_size  = */ max_size
+        /* .max_size  = */ max_size,
+        /* .alloc_size_cache_mutex = */ {},
+        /* .alloc_size_cache       = */ {}
     };
     auto reg = ggml_backend_rpc_add_server(endpoint);
     ggml_backend_buffer_type_t buft = new ggml_backend_buffer_type {

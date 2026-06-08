@@ -163,6 +163,15 @@ and small hash-probe RPCs, so keep the default unless real network measurements
 show a wall-clock win. Setting the threshold to `0` is the most aggressive option
 and can hurt per-token throughput on workloads with many tiny tensors.
 
+RPC buffer types cache successful `GET_ALLOC_SIZE` responses for identical
+serialized requests on the client. This avoids repeating thousands of small
+synchronous alloc-size round trips during graph and buffer planning while still
+querying the server for the first instance of each distinct tensor/source
+layout. The cache is capped at 4096 distinct requests per RPC buffer type and
+clears itself at the cap. Use `GGML_RPC_TRACE=1` to confirm `GET_ALLOC_SIZE`
+call counts before and after a change; this optimization affects setup/load
+time, not the remote backend's allocation rules.
+
 ### Benchmarking changes
 
 The `llama-rpc-copy-bench` tool measures one RPC tensor-copy path directly,
@@ -485,6 +494,18 @@ copies that cannot use the same-server `COPY_TENSOR` RPC path and must fall back
 through the main host. These tables are useful for separating raw transport cost
 from placement effects such as a final output tensor being read back from a slow
 endpoint or many layer-boundary copies being routed through the coordinator.
+
+The client trace also prints `sync waits after one-way commands` when a
+synchronous command such as `GET_TENSOR` or `GET_ALLOC_SIZE` waits after earlier
+one-way commands on the same connection. This table attributes the response wait
+to pending `SET_TENSOR`, `SET_TENSOR_ZLIB`, `GRAPH_COMPUTE`, and
+`GRAPH_RECOMPUTE` calls so a long `GET_TENSOR` wait is easier to distinguish
+from pure readback time. The `wait_ms` values are diagnostic hints rather than
+additive totals: if one synchronous response drains multiple pending command
+types, the same wait can appear on more than one row. Failed response waits are
+reported separately as `fail_syncs` and `fail_wait_ms`, so a closed socket or
+server crash does not look like successful queue-drain evidence. Rows remain
+grouped by endpoint for readability.
 
 Setting `GGML_RPC_TRACE=1` on `rpc-server` prints per-connection server command
 counts and handler times to that server's stderr. One-way commands such as
