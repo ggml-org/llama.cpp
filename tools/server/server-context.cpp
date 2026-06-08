@@ -993,6 +993,15 @@ private:
             }
             SRV_INF("loaded multimodal model, '%s'\n", mmproj_path.c_str());
 
+            {
+                auto video_params = mtmd_helper_video_get_default_params();
+                video_params.fps_target = params_base.video_fps;
+                video_params.timestamp_interval_ms = params_base.video_timestamp_interval_ms;
+                video_params.ffmpeg_bin_dir = params_base.video_ffmpeg_bin_dir.empty()
+                                    ? nullptr : params_base.video_ffmpeg_bin_dir.c_str();
+                mtmd_helper_video_set_default_params(video_params);
+            }
+
             if (params_base.ctx_shift) {
                 params_base.ctx_shift = false;
                 SRV_WRN("%s\n", "ctx_shift is not supported by multimodal, it will be disabled");

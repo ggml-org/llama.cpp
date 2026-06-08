@@ -537,7 +537,7 @@ mtmd_helper_bitmap_wrapper mtmd_helper_bitmap_init_from_buf(mtmd_context * ctx, 
     // last try: load as video
 #ifdef MTMD_VIDEO
     if (!result) {
-        auto params = mtmd_helper_video_init_params_default();
+        auto params = mtmd_helper_video_get_default_params();
         auto video_ctx = mtmd_helper_video_init_from_buf(ctx, buf, len, params);
         if (!video_ctx) {
             LOG_ERR("%s: failed to decode buffer as either image/audio/video\n", __func__);
@@ -891,12 +891,18 @@ struct mtmd_helper_video {
 };
 #endif
 
-mtmd_helper_video_init_params mtmd_helper_video_init_params_default() {
-    return {
-        /* fps_target             */ 4.0f,
-        /* ffmpeg_bin_dir         */ nullptr,
-        /* timestamp_interval_ms  */ 5000,
-    };
+static mtmd_helper_video_init_params default_video_params = {
+    /* fps_target             */ 4.0f,
+    /* ffmpeg_bin_dir         */ nullptr,
+    /* timestamp_interval_ms  */ 5000,
+};
+
+mtmd_helper_video_init_params mtmd_helper_video_get_default_params() {
+    return default_video_params;
+}
+
+void mtmd_helper_video_set_default_params(struct mtmd_helper_video_init_params params) {
+    default_video_params = params;
 }
 
 static std::string video_resolve_bin(const char * bin_dir, const char * name) {
