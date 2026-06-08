@@ -2340,8 +2340,6 @@ private:
                 } break;
             case SERVER_TASK_TYPE_REQUANTIZE_KVCACHE:
                 {
-                    if (!check_no_mtmd(task.id)) break;
-
                     // If any slot is busy, defer this task for later
                     bool deferred = false;
                     for (auto & slot : slots) {
