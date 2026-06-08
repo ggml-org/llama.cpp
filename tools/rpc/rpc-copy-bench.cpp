@@ -21,6 +21,12 @@ struct rpc_device_spec {
     uint32_t device = 0;
 };
 
+enum class payload_pattern {
+    random,
+    zero,
+    ramp,
+};
+
 struct bench_options {
     rpc_device_spec src;
     rpc_device_spec dst;
@@ -28,6 +34,7 @@ struct bench_options {
     int repetitions = 9;
     int warmup = 2;
     bool verify = false;
+    payload_pattern pattern = payload_pattern::random;
 };
 
 static void print_usage(const char * prog) {
@@ -42,6 +49,7 @@ static void print_usage(const char * prog) {
         "\n"
         "options:\n"
         "  --bytes LIST              comma-separated byte sizes (default: 4096,16384,73728,262144,1048576)\n"
+        "  --pattern NAME            payload pattern: random, zero, or ramp (default: random)\n"
         "  --repetitions N           measured copies per byte size (default: 9)\n"
         "  --warmup N                warmup copies per byte size (default: 2)\n"
         "  --verify                  read back and verify destination contents after each byte size\n"
@@ -67,6 +75,28 @@ static std::string json_escape(const std::string & s) {
         }
     }
     return out;
+}
+
+static const char * payload_pattern_name(payload_pattern pattern) {
+    switch (pattern) {
+        case payload_pattern::random: return "random";
+        case payload_pattern::zero:   return "zero";
+        case payload_pattern::ramp:   return "ramp";
+    }
+    return "unknown";
+}
+
+static payload_pattern parse_payload_pattern(const std::string & value) {
+    if (value == "random") {
+        return payload_pattern::random;
+    }
+    if (value == "zero") {
+        return payload_pattern::zero;
+    }
+    if (value == "ramp") {
+        return payload_pattern::ramp;
+    }
+    throw std::runtime_error("invalid --pattern: " + value);
 }
 
 static int parse_non_negative_int(const char * value, const char * name) {
@@ -156,6 +186,8 @@ static bench_options parse_args(int argc, char ** argv) {
             have_dst = true;
         } else if (arg == "--bytes") {
             opts.bytes = parse_byte_list(require_value("--bytes"));
+        } else if (arg == "--pattern") {
+            opts.pattern = parse_payload_pattern(require_value("--pattern"));
         } else if (arg == "--repetitions") {
             opts.repetitions = parse_non_negative_int(require_value("--repetitions"), "--repetitions");
         } else if (arg == "--warmup") {
@@ -190,10 +222,20 @@ static std::string path_hint(const rpc_device_spec & src, const rpc_device_spec 
     return src.endpoint == dst.endpoint ? "same-endpoint" : "cross-endpoint-fallback";
 }
 
-static std::vector<float> make_pattern(size_t n) {
+static std::vector<float> make_pattern(size_t n, payload_pattern pattern) {
     std::vector<float> data(n);
     for (size_t i = 0; i < n; ++i) {
-        data[i] = (float) ((i * 1315423911ULL + 17ULL) % 1000003ULL) / 1000003.0f;
+        switch (pattern) {
+            case payload_pattern::random:
+                data[i] = (float) ((i * 1315423911ULL + 17ULL) % 1000003ULL) / 1000003.0f;
+                break;
+            case payload_pattern::zero:
+                data[i] = 0.0f;
+                break;
+            case payload_pattern::ramp:
+                data[i] = (float) (i % 1024) / 1024.0f;
+                break;
+        }
     }
     return data;
 }
@@ -280,7 +322,7 @@ static bench_result run_size(const bench_options & opts, size_t bytes) {
         throw std::runtime_error("failed to allocate RPC tensor buffers");
     }
 
-    const std::vector<float> data = make_pattern(n_floats);
+    const std::vector<float> data = make_pattern(n_floats, opts.pattern);
     ggml_backend_tensor_set(src, data.data(), 0, bytes);
 
     for (int i = 0; i < opts.warmup; ++i) {
@@ -323,6 +365,7 @@ static void print_result_json(
     std::printf("\"dst\":\"%s\",", json_escape(spec_to_string(opts.dst)).c_str());
     std::printf("\"path_hint\":\"%s\",", path_hint(opts.src, opts.dst).c_str());
     std::printf("\"type\":\"f32\",");
+    std::printf("\"pattern\":\"%s\",", payload_pattern_name(opts.pattern));
     std::printf("\"bytes\":%zu,", result.bytes);
     std::printf("\"elements\":%zu,", result.bytes / sizeof(float));
     std::printf("\"repetitions\":%d,", opts.repetitions);

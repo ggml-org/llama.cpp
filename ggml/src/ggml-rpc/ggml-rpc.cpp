@@ -26,6 +26,10 @@
 #include <exception>
 #include <limits>
 
+#ifdef GGML_RPC_ZLIB
+#include <zlib.h>
+#endif
+
 static const char * RPC_DEBUG = std::getenv("GGML_RPC_DEBUG");
 
 #define LOG_DBG(...) \
@@ -80,6 +84,7 @@ enum rpc_cmd {
     RPC_CMD_DEVICE_COUNT,
     RPC_CMD_GRAPH_RECOMPUTE,
     RPC_CMD_GET_DEVICE_TYPE,
+    RPC_CMD_SET_TENSOR_ZLIB,
     RPC_CMD_COUNT,
 };
 
@@ -95,6 +100,7 @@ struct rpc_msg_hello_req {
 enum rpc_hello_flags : uint8_t {
     RPC_HELLO_FLAG_NO_CACHE = 1 << 0,
     RPC_HELLO_FLAG_DEVICE_TYPE = 1 << 1,
+    RPC_HELLO_FLAG_SET_TENSOR_ZLIB = 1 << 2,
 };
 
 struct rpc_msg_hello_rsp {
@@ -284,6 +290,113 @@ static size_t rpc_cache_min_size() {
     return cache_min_size;
 }
 
+static bool rpc_env_truthy(const char * name) {
+    const char * env = std::getenv(name);
+    return env != nullptr && env[0] != '\0' && strcmp(env, "0") != 0;
+}
+
+static size_t rpc_parse_size_env(const char * name, size_t default_value, size_t max_value) {
+    const char * env = std::getenv(name);
+    if (env == nullptr || env[0] == '\0') {
+        return default_value;
+    }
+
+    char * end = nullptr;
+    errno = 0;
+    unsigned long long parsed = std::strtoull(env, &end, 10);
+    if (env[0] == '-' || env[0] == '+' || errno != 0 || end == env || *end != '\0' ||
+            parsed > std::numeric_limits<size_t>::max()) {
+        GGML_LOG_WARN("Ignoring invalid %s='%s'\n", name, env);
+        return default_value;
+    }
+    if (parsed > max_value) {
+        GGML_LOG_WARN("Clamping %s='%s' to %zu bytes\n", name, env, max_value);
+        return max_value;
+    }
+
+    return static_cast<size_t>(parsed);
+}
+
+static constexpr size_t RPC_SET_TENSOR_ZLIB_DEFAULT_MIN_SIZE    = 1024*1024;
+static constexpr size_t RPC_SET_TENSOR_ZLIB_DEFAULT_SAMPLE_SIZE = 64*1024;
+static constexpr size_t RPC_SET_TENSOR_ZLIB_MAX_SAMPLE_SIZE     = 16*1024*1024;
+static constexpr double RPC_SET_TENSOR_ZLIB_DEFAULT_RATIO       = 0.80;
+static constexpr int    RPC_SET_TENSOR_ZLIB_DEFAULT_LEVEL       = 1;
+
+static bool rpc_set_tensor_zlib_client_enabled() {
+    static const bool enabled = []() {
+        const bool requested = rpc_env_truthy("GGML_RPC_SET_TENSOR_COMPRESS");
+#ifndef GGML_RPC_ZLIB
+        if (requested) {
+            GGML_LOG_WARN("Ignoring GGML_RPC_SET_TENSOR_COMPRESS because RPC was built without zlib support\n");
+        }
+        return false;
+#else
+        return requested;
+#endif
+    }();
+
+    return enabled;
+}
+
+static size_t rpc_set_tensor_zlib_min_size() {
+    static const size_t min_size = rpc_parse_size_env(
+            "GGML_RPC_SET_TENSOR_COMPRESS_MIN_SIZE",
+            RPC_SET_TENSOR_ZLIB_DEFAULT_MIN_SIZE,
+            std::numeric_limits<size_t>::max());
+    return min_size;
+}
+
+static size_t rpc_set_tensor_zlib_sample_size() {
+    static const size_t sample_size = rpc_parse_size_env(
+            "GGML_RPC_SET_TENSOR_COMPRESS_SAMPLE_SIZE",
+            RPC_SET_TENSOR_ZLIB_DEFAULT_SAMPLE_SIZE,
+            RPC_SET_TENSOR_ZLIB_MAX_SAMPLE_SIZE);
+    return sample_size;
+}
+
+static double rpc_set_tensor_zlib_sample_ratio() {
+    static const double ratio = []() {
+        const char * env = std::getenv("GGML_RPC_SET_TENSOR_COMPRESS_SAMPLE_RATIO");
+        if (env == nullptr || env[0] == '\0') {
+            return RPC_SET_TENSOR_ZLIB_DEFAULT_RATIO;
+        }
+
+        char * end = nullptr;
+        errno = 0;
+        const double parsed = std::strtod(env, &end);
+        if (errno != 0 || end == env || *end != '\0' || parsed <= 0.0 || parsed >= 1.0) {
+            GGML_LOG_WARN("Ignoring invalid GGML_RPC_SET_TENSOR_COMPRESS_SAMPLE_RATIO='%s'\n", env);
+            return RPC_SET_TENSOR_ZLIB_DEFAULT_RATIO;
+        }
+
+        return parsed;
+    }();
+
+    return ratio;
+}
+
+static int rpc_set_tensor_zlib_level() {
+    static const int level = []() {
+        const char * env = std::getenv("GGML_RPC_SET_TENSOR_COMPRESS_LEVEL");
+        if (env == nullptr || env[0] == '\0') {
+            return RPC_SET_TENSOR_ZLIB_DEFAULT_LEVEL;
+        }
+
+        char * end = nullptr;
+        errno = 0;
+        const long parsed = std::strtol(env, &end, 10);
+        if (errno != 0 || end == env || *end != '\0' || parsed < 1 || parsed > 9) {
+            GGML_LOG_WARN("Ignoring invalid GGML_RPC_SET_TENSOR_COMPRESS_LEVEL='%s'\n", env);
+            return RPC_SET_TENSOR_ZLIB_DEFAULT_LEVEL;
+        }
+
+        return (int) parsed;
+    }();
+
+    return level;
+}
+
 static bool rpc_compression_probe_enabled() {
     static const bool enabled = []() {
         const char * env = std::getenv("GGML_RPC_COMPRESSION_PROBE");
@@ -444,6 +557,7 @@ static const char * rpc_cmd_name(enum rpc_cmd cmd) {
         case RPC_CMD_DEVICE_COUNT:      return "DEVICE_COUNT";
         case RPC_CMD_GRAPH_RECOMPUTE:   return "GRAPH_RECOMPUTE";
         case RPC_CMD_GET_DEVICE_TYPE:   return "GET_DEVICE_TYPE";
+        case RPC_CMD_SET_TENSOR_ZLIB:   return "SET_TENSOR_ZLIB";
         case RPC_CMD_COUNT:             break;
     }
 
@@ -630,6 +744,65 @@ static std::vector<rpc_compression_probe_sample_window> rpc_compression_probe_sa
 
     return windows;
 }
+
+#ifdef GGML_RPC_ZLIB
+static bool rpc_zlib_size_fits(size_t size, const char * what) {
+    if (size > (size_t) std::numeric_limits<uLong>::max()) {
+        GGML_LOG_WARN("Skipping RPC zlib compression: %s size %zu exceeds zlib limit\n", what, size);
+        return false;
+    }
+    return true;
+}
+
+static bool rpc_zlib_compress_buffer(const uint8_t * data, size_t size, int level, std::vector<uint8_t> & compressed) {
+    if (!rpc_zlib_size_fits(size, "source")) {
+        return false;
+    }
+
+    uLongf compressed_bound = compressBound((uLong) size);
+    if (compressed_bound > (uLongf) std::numeric_limits<size_t>::max()) {
+        GGML_LOG_WARN("Skipping RPC zlib compression: compressed bound exceeds size_t\n");
+        return false;
+    }
+
+    compressed.resize((size_t) compressed_bound);
+    int rc = compress2(compressed.data(), &compressed_bound, data, (uLong) size, level);
+    if (rc != Z_OK) {
+        GGML_LOG_WARN("Skipping RPC zlib compression: zlib returned %d\n", rc);
+        compressed.clear();
+        return false;
+    }
+
+    compressed.resize((size_t) compressed_bound);
+    return true;
+}
+
+static bool rpc_set_tensor_zlib_sample_passes(const void * data, size_t size, int level) {
+    const size_t sample_budget = std::min(size, rpc_set_tensor_zlib_sample_size());
+    if (sample_budget == 0) {
+        return false;
+    }
+
+    const uint8_t * bytes = (const uint8_t *) data;
+    const auto windows = rpc_compression_probe_sample_windows(size, sample_budget);
+    std::vector<uint8_t> sample;
+    sample.reserve(sample_budget);
+    for (const auto & window : windows) {
+        sample.insert(sample.end(), bytes + window.offset, bytes + window.offset + window.size);
+    }
+    if (sample.empty()) {
+        return false;
+    }
+
+    std::vector<uint8_t> compressed_sample;
+    if (!rpc_zlib_compress_buffer(sample.data(), sample.size(), level, compressed_sample)) {
+        return false;
+    }
+
+    const double sample_ratio = (double) compressed_sample.size()/(double) sample.size();
+    return sample_ratio <= rpc_set_tensor_zlib_sample_ratio();
+}
+#endif
 
 static std::string rpc_compression_probe_safe_token(const char * text) {
     std::string out;
@@ -1299,6 +1472,7 @@ static bool negotiate_hello(const std::shared_ptr<socket_t> & sock) {
     sock->update_caps(response.conn_caps);
     sock->set_skip_tensor_hash((response.flags & RPC_HELLO_FLAG_NO_CACHE) != 0);
     sock->set_supports_device_type((response.flags & RPC_HELLO_FLAG_DEVICE_TYPE) != 0);
+    sock->set_supports_set_tensor_zlib((response.flags & RPC_HELLO_FLAG_SET_TENSOR_ZLIB) != 0);
     return true;
 }
 
@@ -1444,6 +1618,49 @@ static void ggml_backend_rpc_buffer_set_tensor(ggml_backend_buffer_t buffer, ggm
             return;
         }
     }
+
+#ifdef GGML_RPC_ZLIB
+    if (rpc_set_tensor_zlib_client_enabled() && ctx->sock->supports_set_tensor_zlib() &&
+            size >= rpc_set_tensor_zlib_min_size()) {
+        const int level = rpc_set_tensor_zlib_level();
+        const uint64_t trace_start_ns = rpc_trace_enabled() ? rpc_trace_now_ns() : 0;
+        if (rpc_set_tensor_zlib_sample_passes(data, size, level)) {
+            std::vector<uint8_t> compressed;
+            if (rpc_zlib_compress_buffer((const uint8_t *) data, size, level, compressed) &&
+                    (double) compressed.size()/(double) size <= rpc_set_tensor_zlib_sample_ratio()) {
+                const size_t header_size = sizeof(rpc_tensor) + sizeof(uint64_t) + sizeof(uint64_t);
+                if (compressed.size() <= std::numeric_limits<size_t>::max() - header_size) {
+                    const uint64_t uncompressed_size = size;
+                    const size_t input_size = header_size + compressed.size();
+                    std::vector<uint8_t> input(input_size, 0);
+                    memcpy(input.data(), &rpc_tensor, sizeof(rpc_tensor));
+                    memcpy(input.data() + sizeof(rpc_tensor), &offset, sizeof(offset));
+                    memcpy(input.data() + sizeof(rpc_tensor) + sizeof(offset),
+                            &uncompressed_size, sizeof(uncompressed_size));
+                    memcpy(input.data() + header_size, compressed.data(), compressed.size());
+
+                    bool status = send_rpc_cmd(ctx->sock, RPC_CMD_SET_TENSOR_ZLIB, input.data(), input.size());
+                    RPC_STATUS_ASSERT(status);
+                    if (rpc_trace_enabled() || rpc_compression_probe_enabled()) {
+                        ggml_backend_rpc_buffer_type_context * buft_ctx =
+                            (ggml_backend_rpc_buffer_type_context *)ggml_backend_buffer_get_type(buffer)->context;
+                        if (rpc_trace_enabled()) {
+                            rpc_trace_record_tensor_op(
+                                    "SET_TENSOR_ZLIB", buft_ctx->endpoint, tensor->name, size,
+                                    rpc_trace_now_ns() - trace_start_ns);
+                        }
+                        if (rpc_compression_probe_enabled()) {
+                            rpc_compression_probe_record("SET_TENSOR_ZLIB", buft_ctx->endpoint, tensor->name, data, size);
+                        }
+                    }
+                    return;
+                }
+                GGML_LOG_WARN("Skipping RPC zlib compression: compressed input size overflow\n");
+            }
+        }
+    }
+#endif
+
     // input serialization format: | rpc_tensor | offset (8 bytes) | data (size bytes)
     size_t input_size = sizeof(rpc_tensor) + sizeof(uint64_t) + size;
     std::vector<uint8_t> input(input_size, 0);
@@ -1884,6 +2101,7 @@ public:
     bool free_buffer(const rpc_msg_free_buffer_req & request);
     bool buffer_clear(const rpc_msg_buffer_clear_req & request);
     bool set_tensor(const std::vector<uint8_t> & input);
+    bool set_tensor_zlib(const std::vector<uint8_t> & input);
     bool set_tensor_hash(const rpc_msg_set_tensor_hash_req & request, rpc_msg_set_tensor_hash_rsp & response);
     bool get_tensor(const rpc_msg_get_tensor_req & request, std::vector<uint8_t> & response);
     bool copy_tensor(const rpc_msg_copy_tensor_req & request, rpc_msg_copy_tensor_rsp & response);
@@ -1901,6 +2119,7 @@ public:
 
 private:
     bool get_cached_file(uint64_t hash, std::vector<uint8_t> & data);
+    void cache_tensor_data(const void * data, size_t size);
     ggml_tensor * deserialize_tensor(struct ggml_context * ctx, const rpc_tensor * tensor);
     ggml_tensor * create_node(uint64_t id,
                               struct ggml_context * ctx,
@@ -1923,6 +2142,9 @@ void rpc_server::hello(rpc_msg_hello_rsp & response) {
     if (cache_dir == nullptr) {
         response.flags |= RPC_HELLO_FLAG_NO_CACHE;
     }
+#ifdef GGML_RPC_ZLIB
+    response.flags |= RPC_HELLO_FLAG_SET_TENSOR_ZLIB;
+#endif
     LOG_DBG("[%s] version: %d.%d.%d, flags: 0x%x\n",
             __func__, response.major, response.minor, response.patch, response.flags);
 }
@@ -2096,6 +2318,52 @@ ggml_tensor * rpc_server::deserialize_tensor(struct ggml_context * ctx, const rp
     return result;
 }
 
+static bool rpc_validate_tensor_data_region(
+        const rpc_tensor * in_tensor, const ggml_tensor * tensor, uint64_t offset, size_t size, const char * func) {
+    if (tensor == nullptr || tensor->buffer == nullptr) {
+        GGML_LOG_ERROR("[%s] error deserializing tensor\n", func);
+        return false;
+    }
+
+    const uint64_t p0 = (uint64_t) (uintptr_t) ggml_backend_buffer_get_base(tensor->buffer);
+    const uint64_t buffer_size = (uint64_t) ggml_backend_buffer_get_size(tensor->buffer);
+    if (buffer_size > std::numeric_limits<uint64_t>::max() - p0) {
+        GGML_LOG_ERROR("[%s] tensor buffer bounds overflow (base=0x%" PRIx64 ", size=%" PRIu64 ")\n",
+                func, p0, buffer_size);
+        return false;
+    }
+    const uint64_t p1 = p0 + buffer_size;
+    if (in_tensor->data > std::numeric_limits<uint64_t>::max() - offset) {
+        GGML_LOG_ERROR("[%s] tensor data offset overflow (data=0x%" PRIx64 ", offset=%" PRIu64 ")\n",
+                func, in_tensor->data, offset);
+        return false;
+    }
+
+    const uint64_t start = in_tensor->data + offset;
+    const uint64_t requested_size = (uint64_t) size;
+    if (start < p0 || start >= p1 || requested_size > p1 - start) {
+        GGML_LOG_ERROR("[%s] tensor data region (data=0x%" PRIx64 ", offset=%" PRIu64 ", size=%zu) out of buffer bounds [0x%" PRIx64 ", 0x%" PRIx64 ")\n",
+                       func, in_tensor->data, offset, size, p0, p1);
+        return false;
+    }
+
+    return true;
+}
+
+void rpc_server::cache_tensor_data(const void * data, size_t size) {
+    if (cache_dir == nullptr || size <= rpc_cache_min_size()) {
+        return;
+    }
+
+    uint64_t hash = fnv_hash((const uint8_t*)data, size);
+    char hash_str[17];
+    snprintf(hash_str, sizeof(hash_str), "%016" PRIx64, hash);
+    // save to cache_dir/hash_str
+    fs::path cache_file = fs::path(cache_dir) / hash_str;
+    std::ofstream ofs(cache_file, std::ios::binary);
+    ofs.write((const char *)data, size);
+    GGML_LOG_INFO("[%s] saved to '%s'\n", __func__, cache_file.string().c_str());
+}
 
 bool rpc_server::set_tensor(const std::vector<uint8_t> & input) {
     // serialization format: | rpc_tensor | offset (8 bytes) | data (size bytes) |
@@ -2116,37 +2384,79 @@ bool rpc_server::set_tensor(const std::vector<uint8_t> & input) {
     GGML_ASSERT(ctx_ptr != nullptr);
     ggml_context * ctx = ctx_ptr.get();
     ggml_tensor * tensor = deserialize_tensor(ctx, in_tensor);
-    if (tensor == nullptr || tensor->buffer == nullptr) {
-        GGML_LOG_ERROR("[%s] error deserializing tensor\n", __func__);
+    if (!rpc_validate_tensor_data_region(in_tensor, tensor, offset, size, __func__)) {
         return false;
     }
     LOG_DBG("[%s] buffer: %p, data: %p, offset: %" PRIu64 ", size: %zu\n", __func__, (void*)tensor->buffer, tensor->data, offset, size);
 
-    // sanitize tensor->data
-    {
-        const size_t p0 = (size_t) ggml_backend_buffer_get_base(tensor->buffer);
-        const size_t p1 = p0 + ggml_backend_buffer_get_size(tensor->buffer);
-
-        if (in_tensor->data + offset < p0 || in_tensor->data + offset >= p1 || size > (p1 - in_tensor->data - offset)) {
-            GGML_LOG_ERROR("[%s] tensor data region (data=0x%" PRIx64 ", offset=%" PRIu64 ", size=%zu) out of buffer bounds [0x%zx, 0x%zx)\n",
-                           __func__, in_tensor->data, offset, size, p0, p1);
-            return false;
-        }
-    }
-
     const void * data = input.data() + sizeof(rpc_tensor) + sizeof(offset);
-    if (cache_dir && size > rpc_cache_min_size()) {
-        uint64_t hash = fnv_hash((const uint8_t*)data, size);
-        char hash_str[17];
-        snprintf(hash_str, sizeof(hash_str), "%016" PRIx64, hash);
-        // save to cache_dir/hash_str
-        fs::path cache_file = fs::path(cache_dir) / hash_str;
-        std::ofstream ofs(cache_file, std::ios::binary);
-        ofs.write((const char *)data, size);
-        GGML_LOG_INFO("[%s] saved to '%s'\n", __func__, cache_file.string().c_str());
-    }
+    cache_tensor_data(data, size);
     ggml_backend_tensor_set(tensor, data, offset, size);
     return true;
+}
+
+bool rpc_server::set_tensor_zlib(const std::vector<uint8_t> & input) {
+#ifndef GGML_RPC_ZLIB
+    (void) input;
+    GGML_LOG_ERROR("[%s] RPC server was built without zlib support\n", __func__);
+    return false;
+#else
+    // serialization format: | rpc_tensor | offset (8 bytes) | raw_size (8 bytes) | zlib_data |
+    const size_t header_size = sizeof(rpc_tensor) + sizeof(uint64_t) + sizeof(uint64_t);
+    if (input.size() < header_size) {
+        return false;
+    }
+
+    const rpc_tensor * in_tensor = (const rpc_tensor *) input.data();
+    uint64_t offset;
+    memcpy(&offset, input.data() + sizeof(rpc_tensor), sizeof(offset));
+    uint64_t raw_size_u64;
+    memcpy(&raw_size_u64, input.data() + sizeof(rpc_tensor) + sizeof(offset), sizeof(raw_size_u64));
+    if (raw_size_u64 == 0 || raw_size_u64 > (uint64_t) std::numeric_limits<size_t>::max()) {
+        GGML_LOG_ERROR("[%s] invalid uncompressed size: %" PRIu64 "\n", __func__, raw_size_u64);
+        return false;
+    }
+
+    const size_t raw_size = (size_t) raw_size_u64;
+    const size_t compressed_size = input.size() - header_size;
+    if (compressed_size == 0 || compressed_size >= raw_size) {
+        GGML_LOG_ERROR("[%s] invalid compressed size: %zu for raw size %zu\n",
+                __func__, compressed_size, raw_size);
+        return false;
+    }
+
+    struct ggml_init_params params {
+        /*.mem_size   =*/ ggml_tensor_overhead(),
+        /*.mem_buffer =*/ NULL,
+        /*.no_alloc   =*/ true,
+    };
+    ggml_context_ptr ctx_ptr { ggml_init(params) };
+    GGML_ASSERT(ctx_ptr != nullptr);
+    ggml_context * ctx = ctx_ptr.get();
+    ggml_tensor * tensor = deserialize_tensor(ctx, in_tensor);
+    if (!rpc_validate_tensor_data_region(in_tensor, tensor, offset, raw_size, __func__)) {
+        return false;
+    }
+
+    if (!rpc_zlib_size_fits(raw_size, "decompressed") || !rpc_zlib_size_fits(compressed_size, "compressed")) {
+        return false;
+    }
+
+    std::vector<uint8_t> data(raw_size);
+    uLongf dest_len = (uLongf) raw_size;
+    int rc = uncompress(data.data(), &dest_len, input.data() + header_size, (uLong) compressed_size);
+    if (rc != Z_OK || dest_len != (uLongf) raw_size) {
+        GGML_LOG_ERROR("[%s] zlib inflate failed: rc=%d, bytes=%lu/%zu\n",
+                __func__, rc, (unsigned long) dest_len, raw_size);
+        return false;
+    }
+
+    LOG_DBG("[%s] buffer: %p, data: %p, offset: %" PRIu64 ", raw_size: %zu, compressed_size: %zu\n",
+            __func__, (void*)tensor->buffer, tensor->data, offset, raw_size, compressed_size);
+    cache_tensor_data(data.data(), raw_size);
+    ggml_backend_tensor_set(tensor, data.data(), offset, raw_size);
+    return true;
+#endif
 }
 
 bool rpc_server::get_cached_file(uint64_t hash, std::vector<uint8_t> & data) {
@@ -2193,18 +2503,8 @@ bool rpc_server::set_tensor_hash(const rpc_msg_set_tensor_hash_req & request, rp
     LOG_DBG("[%s] buffer: %p, data: %p, offset: %" PRIu64 ", size: %zu, hash: %" PRIx64 "\n",
             __func__, (void*)tensor->buffer, tensor->data, request.offset, size, request.hash);
 
-    // sanitize tensor->data
-    {
-        const size_t p0 = (size_t) ggml_backend_buffer_get_base(tensor->buffer);
-        const size_t p1 = p0 + ggml_backend_buffer_get_size(tensor->buffer);
-
-        if (request.tensor.data + request.offset < p0
-         || request.tensor.data + request.offset >= p1
-         || size > (p1 - request.tensor.data - request.offset)) {
-            GGML_LOG_ERROR("[%s] tensor data region (data=0x%" PRIx64 ", offset=%" PRIu64 ", size=%zu, hash=0x%" PRIx64 ") out of buffer bounds [0x%zx, 0x%zx)\n",
-                           __func__, request.tensor.data, request.offset, size, request.hash, p0, p1);
-            return false;
-        }
+    if (!rpc_validate_tensor_data_region(&request.tensor, tensor, request.offset, size, __func__)) {
+        return false;
     }
     ggml_backend_tensor_set(tensor, cached_file.data(), request.offset, size);
     response.result = 1;
@@ -2671,6 +2971,16 @@ static void rpc_serve_client(const std::vector<ggml_backend_t> & backends, const
                     return;
                 }
                 if (!server.set_tensor(input)) {
+                    return;
+                }
+                break;
+            }
+            case RPC_CMD_SET_TENSOR_ZLIB: {
+                std::vector<uint8_t> input;
+                if (!recv_msg(sock, input)) {
+                    return;
+                }
+                if (!server.set_tensor_zlib(input)) {
                     return;
                 }
                 break;

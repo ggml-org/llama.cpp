@@ -28,6 +28,9 @@ struct socket_t {
     void set_supports_device_type(bool value);
     bool supports_device_type() const;
 
+    void set_supports_set_tensor_zlib(bool value);
+    bool supports_set_tensor_zlib() const;
+
     void set_label(const char * label);
     const std::string & label() const;
 

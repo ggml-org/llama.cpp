@@ -175,6 +175,7 @@ GGML_RPC_TRACE=1 ./build/bin/llama-rpc-copy-bench \
   --src 192.0.2.10:50052/0 \
   --dst 192.0.2.11:50052/0 \
   --bytes 4096,16384,73728,262144,1048576 \
+  --pattern random \
   --repetitions 9 \
   --warmup 2
 ```
@@ -189,6 +190,12 @@ reading from the source tensor and writing to the destination tensor on the
 server. When endpoints differ, the current RPC backend falls back through the
 coordinator. Use `GGML_RPC_TRACE=1` on the client to confirm the actual commands
 observed for the benchmarked path.
+
+The optional `--pattern` argument selects the payload used to initialize the
+source tensor before copy timing. `random` is the default and uses a
+pseudo-random `f32` pattern. `zero` and `ramp` are useful when testing
+compression, cache, or transport behavior against predictable payloads. The
+selected pattern is included in each JSON output row.
 
 The optional `--verify` flag reads the destination tensor back after each byte
 size and checks that it matches the source pattern. This adds extra
@@ -529,6 +536,45 @@ sample and summary rows per codec, including compressed ratio, encode time,
 decode time, round-trip verification, and the effective ratio if expansion is
 skipped. It uses Python `zlib` by default and also tests `zstd` or `lz4`
 command-line tools when they are installed.
+
+### Tensor upload compression
+
+When both the RPC client and server are built with zlib support, the client can
+selectively compress cold/cache-miss `SET_TENSOR` uploads:
+
+```bash
+GGML_RPC_SET_TENSOR_COMPRESS=1 ./build/bin/llama-bench --rpc 192.0.2.10:50052 ...
+```
+
+The feature is off by default. It is negotiated during `HELLO`, so clients only
+send the compressed `SET_TENSOR_ZLIB` command to servers that advertise support.
+If zlib development headers are available at configure time, `GGML_RPC_ZLIB` is
+enabled automatically; pass `-DGGML_RPC_ZLIB=ON` or `-DGGML_RPC_ZLIB=OFF` to
+force the build setting.
+
+Compression is attempted only after the normal cache hash probe misses. Warm
+server caches still avoid the upload through `SET_TENSOR_HASH`, which is better
+than compressing. Before compressing a full tensor, the client samples the
+beginning, middle, and end of the payload. By default, tensors smaller than
+1 MiB are skipped, up to 64 KiB is sampled, zlib level 1 is used, and both the
+sample and full payload must compress to 80% or less of the original size.
+
+Useful knobs:
+
+```bash
+export GGML_RPC_SET_TENSOR_COMPRESS=1
+export GGML_RPC_SET_TENSOR_COMPRESS_MIN_SIZE=1048576
+export GGML_RPC_SET_TENSOR_COMPRESS_SAMPLE_SIZE=65536
+export GGML_RPC_SET_TENSOR_COMPRESS_SAMPLE_RATIO=0.80
+export GGML_RPC_SET_TENSOR_COMPRESS_LEVEL=1
+```
+
+Use `GGML_RPC_TRACE=1` to compare `SET_TENSOR` and `SET_TENSOR_ZLIB` wire bytes
+and client-side elapsed time. This path can reduce cold model-load or cache-miss
+upload time on slower links with highly compressible tensors, but it can hurt if
+the ratio threshold is relaxed enough to compress payloads that shrink only a
+little. It is not expected to improve steady tokens per second once large model
+weights are already resident on the RPC servers.
 
 Transparent compression below RPC is usually not enough for this path. Btrfs,
 ZFS, NTFS, and other filesystem compression can reduce stored model size or disk
