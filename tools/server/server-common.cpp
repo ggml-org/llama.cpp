@@ -839,11 +839,20 @@ json oaicompat_completion_params_parse(const json & body) {
     return llama_params;
 }
 
-// media_path always end with '/', see arg.cpp
+// url can be
+// - http(s):// for remote files
+// - file:// for local files (only allowed if media_path is set)
+// - data: for base64 encoded data with uri scheme (e.g. data:image/png;base64,...)
+// - raw base64 encoded data
 static void handle_media(
         std::vector<raw_buffer> & out_files,
         const std::string & url,
         const std::string & media_path) {
+    if (!media_path.empty()) {
+        // should already be enforced by arg.cpp, but checking just in case
+        GGML_ASSERT(string_ends_with(media_path, "/"));
+    }
+    
     if (string_starts_with(url, "http")) {
         // download remote image
         // TODO @ngxson : maybe make these params configurable
@@ -879,20 +888,28 @@ static void handle_media(
         data.assign((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
         out_files.push_back(data);
 
-    } else {
+    } else if (string_starts_with(url, "data:")) {
         // try to decode base64 image
         std::vector<std::string> parts = string_split<std::string>(url, /*separator*/ ',');
         if (parts.size() != 2) {
-            throw std::runtime_error("Invalid url value");
+            throw std::runtime_error("Invalid uri-encoded base64 value");
         } else if (!string_starts_with(parts[0], "data:image/")) {
-            throw std::runtime_error("Invalid url format: " + parts[0]);
+            throw std::runtime_error("Invalid uri format: " + parts[0]);
         } else if (!string_ends_with(parts[0], "base64")) {
-            throw std::runtime_error("url must be base64 encoded");
+            throw std::runtime_error("uri must be base64 encoded");
         } else {
             auto base64_data = parts[1];
             auto decoded_data = base64_decode(base64_data);
             out_files.push_back(decoded_data);
         }
+
+    } else {
+        // try as raw base64 string
+        auto decoded_data = base64_decode(url);
+        if (decoded_data.empty()) {
+            throw std::runtime_error("Invalid base64 value");
+        }
+        out_files.push_back(decoded_data);
     }
 }
 
@@ -978,7 +995,7 @@ json oaicompat_chat_params_parse(
         }
 
         for (auto & p : content) {
-            std::string type      = json_value(p, "type", std::string());
+            std::string type = json_value(p, "type", std::string());
             if (type == "image_url") {
                 if (!opt.allow_image) {
                     throw std::runtime_error("image input is not supported - hint: if this is unexpected, you may need to provide the mmproj");
@@ -1012,10 +1029,10 @@ json oaicompat_chat_params_parse(
                     throw std::runtime_error("video input is not supported - hint: if this is unexpected, you may need to provide the mmproj");
                 }
 
-                json input_video  = json_value(p, "input_video", json::object());
-                std::string data  = json_value(input_video, "data", std::string());
-                auto decoded_data = base64_decode(data); // expected to be base64 encoded
-                out_files.push_back(decoded_data);
+                json input_video = json_value(p, "input_video", json::object());
+                std::string url  = json_value(input_video, "data",
+                                        json_value(input_video, "url", std::string()));
+                handle_media(out_files, url, opt.media_path);
 
                 p["type"] = "media_marker";
                 p["text"] = get_media_marker();
