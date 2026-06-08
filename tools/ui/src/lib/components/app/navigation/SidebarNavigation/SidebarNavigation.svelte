@@ -251,7 +251,7 @@
 
 			<Sidebar.GroupContent>
 				<Sidebar.Menu>
-					{#each unpinnedConversations as { conversation, depth } (conversation.id)}
+					{#each isSearchModeActive ? conversationTree : unpinnedConversations as { conversation, depth } (conversation.id)}
 						<Sidebar.MenuItem class="mb-1 p-0">
 							<SidebarNavigationConversationItem
 								conversation={{
