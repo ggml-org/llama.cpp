@@ -141,8 +141,8 @@ enum llm_arch {
     LLM_ARCH_KIMI_LINEAR,
     LLM_ARCH_TALKIE,
     LLM_ARCH_MELLUM,
-    LLM_ARCH_UNKNOWN,
     LLM_ARCH_EAGLE3,
+    LLM_ARCH_UNKNOWN,
 };
 
 enum llm_kv {
