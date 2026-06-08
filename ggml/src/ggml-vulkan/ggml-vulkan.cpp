@@ -67,7 +67,6 @@ typedef struct VkPhysicalDeviceCooperativeMatrixDecodeVectorFeaturesNV {
 #include <future>
 #include <condition_variable>
 #include <thread>
-#include <regex>
 
 #if defined(_MSC_VER)
 # define NOMINMAX 1
@@ -123,6 +122,8 @@ static bool is_pow2(uint32_t x) { return x > 1 && (x & (x-1)) == 0; }
 #define VK_VENDOR_ID_INTEL 0x8086
 #define VK_VENDOR_ID_NVIDIA 0x10de
 #define VK_VENDOR_ID_QUALCOMM 0x5143
+
+#define VK_DEVICE_ID_MI50 0x66a1
 
 #define VK_DEVICE_DESCRIPTOR_POOL_SIZE 256
 
@@ -5589,9 +5590,7 @@ static vk_device ggml_vk_get_device(size_t idx) {
         }
 
         // Enable subgroup operations on AMD GCN 5.0/5.1 GPUs
-        static const std::regex s_gcn_regex("^.*(Radeon.*(VII|Vega)|Instinct.*MI(25|50|60)).*$");
-        device->subgroups_gcn_enabled = (device->vendor_id == VK_VENDOR_ID_AMD &&
-                                         std::regex_match(std::string(device->properties.deviceName.data()), s_gcn_regex));
+        device->subgroups_gcn_enabled = (device->vendor_id == VK_VENDOR_ID_AMD && device->properties.vendorID == VK_DEVICE_ID_MI50);
         if (device->subgroups_gcn_enabled) {
             GGML_LOG_DEBUG("ggml_vulkan: subgroup operations enabled on AMD GCN GPU: %s\n", device->properties.deviceName.data());
         }
