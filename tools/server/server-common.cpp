@@ -852,9 +852,8 @@ json oaicompat_completion_params_parse(const json & body) {
 // media_path always end with '/', see arg.cpp
 static void handle_media(
         std::vector<raw_buffer> & out_files,
-        json & media_obj,
+        const std::string & url,
         const std::string & media_path) {
-    std::string url = json_value(media_obj, "url", std::string());
     if (string_starts_with(url, "http")) {
         // download remote image
         // TODO @ngxson : maybe make these params configurable
@@ -996,7 +995,8 @@ json oaicompat_chat_params_parse(
                 }
 
                 json image_url = json_value(p, "image_url", json::object());
-                handle_media(out_files, image_url, opt.media_path);
+                std::string url = json_value(image_url, "url", std::string());
+                handle_media(out_files, url, opt.media_path);
 
                 p["type"] = "media_marker";
                 p["text"] = get_media_marker();
@@ -1007,17 +1007,11 @@ json oaicompat_chat_params_parse(
                     throw std::runtime_error("audio input is not supported - hint: if this is unexpected, you may need to provide the mmproj");
                 }
 
-                json input_audio   = json_value(p, "input_audio", json::object());
-                std::string data   = json_value(input_audio, "data", std::string());
-                std::string format = json_value(input_audio, "format", std::string());
-                // while we also support flac, we don't allow it here so we matches the OAI spec
-                if (format != "wav" && format != "mp3") {
-                    throw std::invalid_argument("input_audio.format must be either 'wav' or 'mp3'");
-                }
-                auto decoded_data = base64_decode(data); // expected to be base64 encoded
-                out_files.push_back(decoded_data);
-
-                // TODO: add audio_url support by reusing handle_media()
+                // note: don't need to validate "format", it's redundant
+                json input_audio = json_value(p, "input_audio", json::object());
+                std::string url  = json_value(input_audio, "data",
+                                        json_value(input_audio, "url", std::string()));
+                handle_media(out_files, url, opt.media_path);
 
                 p["type"] = "media_marker";
                 p["text"] = get_media_marker();

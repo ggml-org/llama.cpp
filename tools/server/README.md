@@ -1234,6 +1234,8 @@ Given a ChatML-formatted json description in `messages`, it returns the predicte
 
 If model supports multimodal, you can input the media file via `image_url` content part. We support both base64 and remote URL as input. See OAI documentation for more.
 
+TODO: add details about input file schema
+
 *Options:*
 
 See [OpenAI Chat Completions API documentation](https://platform.openai.com/docs/api-reference/chat). llama.cpp `/completion`-specific features such as `mirostat` are also supported.
