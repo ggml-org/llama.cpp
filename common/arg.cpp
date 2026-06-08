@@ -2288,13 +2288,12 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         "- mmap+mlock: mmap + force system to keep model in RAM rather than swapping or compressing\n"
         "- dio: use DirectIO if available\n",
         [](common_params & params, const std::string & value) {
-            /**/ if (value == "none") { params.load_mode = LLAMA_LOAD_MODE_NONE;      }
-            else if (value == "mmap") { params.load_mode = LLAMA_LOAD_MODE_MMAP;      }
-            else if (value == "dio")  { params.load_mode = LLAMA_LOAD_MODE_DIRECT_IO; }
-            else if (value == "mmap+mlock") {
-                params.load_mode     = LLAMA_LOAD_MODE_MMAP;
-                params.load_modifier = LLAMA_LOAD_MODIFIER_MLOCK;
-            } else { throw std::invalid_argument("invalid value"); }
+            const std::vector<std::string> parts = string_split<std::string>(value, '+');
+
+            params.load_mode = llama_load_mode_from_str(parts[0].c_str());
+            for (size_t i = 1; i < parts.size(); ++i) {
+                params.load_modifier = (llama_load_modifier)(params.load_modifier | llama_load_modifier_from_str(parts[i].c_str()));
+            }
         }
     ).set_env("LLAMA_ARG_LOAD_MODE"));
     add_opt(common_arg(

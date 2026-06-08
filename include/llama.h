@@ -205,6 +205,7 @@ extern "C" {
     };
 
     LLAMA_API const char * llama_load_mode_name(enum llama_load_mode load_mode);
+    LLAMA_API enum llama_load_mode llama_load_mode_from_str(const char * str);
 
     enum llama_load_modifier {
         LLAMA_LOAD_MODIFIER_NONE  = 0,      // no modifier
@@ -213,6 +214,7 @@ extern "C" {
 
     // uint32_t because llama_load_modifier is a bitflag and we want to return all active modifiers as a string
     LLAMA_API const char * llama_load_modifier_name(uint32_t load_modifier);
+    LLAMA_API enum llama_load_modifier llama_load_modifier_from_str(const char * str);
 
     enum llama_context_type {
         LLAMA_CONTEXT_TYPE_DEFAULT = 0,
