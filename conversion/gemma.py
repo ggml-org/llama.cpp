@@ -789,6 +789,16 @@ class Gemma4UnifiedModel(Gemma4Model):
 class Gemma4AssistantModel(Gemma4Model):
     model_arch = gguf.MODEL_ARCH.GEMMA4_ASSISTANT
 
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, gen = item
+
+        if "masked_embedding" in name:
+            logger.debug(f"Skipping get tensor {name!r} in safetensors so that convert can end normally.")
+            return None
+
+        return super().filter_tensors(item)
+
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
         self.gguf_writer.add_embedding_length_out(self.hparams["backbone_hidden_size"])
