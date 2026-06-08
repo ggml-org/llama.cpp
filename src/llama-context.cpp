@@ -1178,6 +1178,10 @@ void llama_context::set_diffusion_prompt_len(int64_t n_prompt) {
     diffusion_cond.n_prompt = n_prompt;
 }
 
+void llama_context::set_diffusion_decoder_phase(bool decoder_phase) {
+    diffusion_cond.decoder_phase = decoder_phase;
+}
+
 void llama_context::set_causal_attn(bool value) {
     LLAMA_LOG_DEBUG("%s: value = %d\n", __func__, value);
 
@@ -3674,6 +3678,10 @@ void llama_set_diffusion_self_cond(llama_context * ctx, const float * probs, int
 
 void llama_set_diffusion_prompt_len(llama_context * ctx, int64_t n_prompt) {
     ctx->set_diffusion_prompt_len(n_prompt);
+}
+
+void llama_set_diffusion_decoder_phase(llama_context * ctx, bool decoder_phase) {
+    ctx->set_diffusion_decoder_phase(decoder_phase);
 }
 
 void llama_set_warmup(llama_context * ctx, bool warmup) {

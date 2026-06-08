@@ -1613,6 +1613,9 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
         }
     }
 
+    // per-arch precompute of derived tensors (data is now available)
+    load_arch_post(ml);
+
     if (use_mmap_buffer) {
         for (auto & mapping : ml.mappings) {
             pimpl->mappings.emplace_back(std::move(mapping));
@@ -2022,7 +2025,6 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
         case LLM_ARCH_LLADA:
         case LLM_ARCH_LLADA_MOE:
         case LLM_ARCH_RND1:
-        case LLM_ARCH_DIFFUSION_GEMMA4:
             {
                 res = nullptr;
             } break;

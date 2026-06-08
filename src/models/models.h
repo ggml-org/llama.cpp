@@ -832,12 +832,36 @@ struct llama_model_gemma4 : public llama_model_base {
 // (prompted generation) are layered on top in a later step.
 struct llama_model_diffusion_gemma4 : public llama_model_gemma4 {
     llama_model_diffusion_gemma4(const struct llama_model_params & params) : llama_model_gemma4(params) {}
+    ~llama_model_diffusion_gemma4() override;
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
+    void load_arch_post(llama_model_loader & ml) override; // precompute the transposed F32 embedding
 
-    struct graph : public llm_graph_context {
+    // Shared transformer body for both KV-cache-reuse variants. The reused gemma4 decoder
+    // block (layers + final norm + tied lm_head + softcapping) is identical across phases;
+    // only the input embedding handling differs (encoder: plain; decoder: self-conditioned).
+    struct graph_base : public llm_graph_context {
         const llama_model & model;
+        graph_base(const llama_model & model, const llm_graph_params & params) :
+            llm_graph_context(params), model(model) {}
+        // scaled input embeddings; if is_decoder, apply the self-conditioning transform
+        ggml_tensor * build_input(bool is_decoder);
+        // run the per-layer block over inpL (cached iswa attention) and emit logits
+        void build_transformer(ggml_tensor * inpL);
+    };
+
+    // Variant A ("single encoder/decoder block"): one graph that branches on the phase.
+    struct graph : public graph_base {
         graph(const llama_model & model, const llm_graph_params & params);
+    };
+
+    // Variant B ("separate encoder and decoder block", shared weights): two graphs selected
+    // by phase. Enabled with the DG4_SEPARATE_ENC_DEC environment variable.
+    struct graph_encoder : public graph_base {
+        graph_encoder(const llama_model & model, const llm_graph_params & params);
+    };
+    struct graph_decoder : public graph_base {
+        graph_decoder(const llama_model & model, const llm_graph_params & params);
     };
 
     std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
@@ -847,6 +871,13 @@ struct llama_model_diffusion_gemma4 : public llama_model_gemma4 {
     ggml_tensor * self_cond_gate = nullptr;
     ggml_tensor * self_cond_up   = nullptr;
     ggml_tensor * self_cond_down = nullptr;
+
+    // Precomputed transposed F32 token embedding {n_vocab, n_embd}, used by the self-conditioning
+    // soft-embedding matmul (probs @ token_embd). Computed once in load_arch_post and kept in a
+    // model-owned backend buffer, so the per-decode dequantize+transpose is avoided.
+    ggml_context        * tok_embd_t_ctx = nullptr;
+    ggml_backend_buffer_t tok_embd_t_buf = nullptr;
+    ggml_tensor         * tok_embd_t     = nullptr;
 };
 
 

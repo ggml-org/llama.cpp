@@ -1,15 +1,18 @@
 // Block-diffusion generation for diffusion_gemma4.
 //
 // Implements the reference block-diffusion loop (EntropyBoundSampler + StableAndConfident
-// stopping + linear temperature schedule) over a single canvas, driving the bidirectional
-// no-KV-cache graph.
+// stopping + linear temperature schedule) with KV-cache reuse:
 //
-// SCOPE (first runnable version): unconditioned generation (no prompt context) with
-// self-conditioning = 0. The graph currently feeds zero soft-embeddings, so this matches
-// the verified first-denoising-step behaviour every step. The self-conditioning feedback
-// (softmax(prev_logits) @ embed, via a soft-embeddings input channel) and prompt/encoder-KV
-// conditioning are added on top of this loop next; until then output quality is limited and
-// the prompt is not yet used.
+//   * ENCODER phase (causal, no self-conditioning): the prompt is prefilled once into the
+//     unified sliding-window KV cache. Its per-layer K/V become the read-only prefix.
+//   * DECODER phase (bidirectional, self-conditioned): each denoising step decodes only the
+//     canvas tokens at positions [n_past, n_past+canvas). They read the cached prefix and
+//     attend the canvas bidirectionally. After reading the logits the canvas K/V is rolled
+//     back (llama_memory_seq_rm) so the cache keeps only the committed prefix.
+//
+// This avoids re-encoding the prompt on every denoising step. Multi-block autoregressive
+// generation (commit the finalized canvas via an encoder pass, then advance n_past) is
+// layered on top of this single-block loop.
 
 #include "arg.h"
 #include "chat.h"
@@ -60,6 +63,7 @@ int main(int argc, char ** argv) {
     // diffusion config (env-overridable for quick CPU testing)
     const int   canvas_length = env_int("DG4_CANVAS", params.n_predict > 0 ? params.n_predict : DEF_CANVAS_LENGTH);
     const int   n_steps       = env_int("DG4_STEPS", DEF_MAX_DENOISE_STEPS);
+    const int   max_canvases  = std::max(env_int("DG4_MAX_CANVASES", 1), 1); // autoregressive blocks
     const float entropy_bound = ENTROPY_BOUND;
 
     llama_backend_init();
@@ -95,12 +99,20 @@ int main(int argc, char ** argv) {
         prompt_tokens = common_tokenize(vocab, formatted, /*add_special*/ false, /*parse_special*/ true);
     }
     const int n_prompt = (int) prompt_tokens.size();
-    const int n_seq    = n_prompt + canvas_length; // [prompt ; canvas]
+
+    // Context holds the committed prefix (prompt + finalized canvases) plus the canvas being
+    // denoised. We size it for the prompt + all committed blocks + one extra canvas of headroom
+    // (the in-flight canvas's K/V is written then rolled back each denoising step, so the ring
+    // buffer needs room to place a fresh canvas before the previous step's cells are reused).
+    const int n_ctx_min = n_prompt + (max_canvases + 1) * canvas_length;
+    const int n_ctx     = std::max<int>(n_ctx_min, (int) params.n_ctx);
+    // Largest single decode is the prompt prefill (n_prompt) or a canvas pass (canvas_length).
+    const int n_ub      = std::max(std::max(n_prompt, canvas_length), 1);
 
     llama_context_params ctx_params = llama_context_default_params();
-    ctx_params.n_ctx    = n_seq;
-    ctx_params.n_batch  = n_seq;
-    ctx_params.n_ubatch = n_seq; // whole sequence in one ubatch -> full (prefix) attention
+    ctx_params.n_ctx    = n_ctx;
+    ctx_params.n_batch  = n_ub;
+    ctx_params.n_ubatch = n_ub;
     ctx_params.no_perf  = params.no_perf;
 
     llama_context * ctx = llama_init_from_model(model, ctx_params);
@@ -111,48 +123,81 @@ int main(int argc, char ** argv) {
     }
     llama_set_n_threads(ctx, params.cpuparams.n_threads, params.cpuparams_batch.n_threads);
     llama_set_diffusion_prompt_len(ctx, n_prompt);
+    llama_memory_t mem = llama_get_memory(ctx);
 
-    LOG_INF("diffusion-gemma4: prompt=%d canvas=%d steps=%d entropy_bound=%.3f temp=[%.2f,%.2f]\n",
-            n_prompt, canvas_length, n_steps, entropy_bound, TEMP_MIN, TEMP_MAX);
+    LOG_INF("diffusion-gemma4: prompt=%d canvas=%d steps=%d entropy_bound=%.3f temp=[%.2f,%.2f] n_ctx=%d\n",
+            n_prompt, canvas_length, n_steps, entropy_bound, TEMP_MIN, TEMP_MAX, n_ctx);
 
     std::mt19937 rng(params.sampling.seed == LLAMA_DEFAULT_SEED ? 1234u : params.sampling.seed);
     std::uniform_int_distribution<int> rand_tok(0, n_vocab - 1);
     std::uniform_real_distribution<float> rand_unif(0.0f, 1.0f);
 
-    // 1. initialize canvas with random tokens
-    std::vector<llama_token> canvas(canvas_length);
-    for (auto & t : canvas) t = rand_tok(rng);
+    llama_batch batch = llama_batch_init(n_ub, 0, 1);
 
-    llama_batch batch = llama_batch_init(n_seq, 0, 1);
-
-    std::vector<llama_token> argmax_canvas(canvas_length, -1);
-    std::vector<llama_token> prev_argmax(canvas_length, -1);
-    std::vector<llama_token> accepted = canvas;
-
-    // self-conditioning buffer over the full [prompt ; canvas] sequence: softmax(processed_logits)
-    // of the previous step in the canvas columns (prompt columns stay zero). Fed to the next decode.
-    std::vector<float> self_cond_buf((size_t) n_vocab * n_seq, 0.0f);
-    llama_set_diffusion_self_cond(ctx, nullptr, 0, 0); // first step: zero self-conditioning
-
-    // 2. denoising loop: cur_step = n_steps .. 1
-    for (int cur_step = n_steps; cur_step >= 1; --cur_step) {
-        // 2a. decode [prompt ; canvas]. Request logits for ALL tokens: in the no-KV-cache path
-        // llama.cpp prunes tokens that are not outputs, which would drop the prompt from the
-        // attention and stop the canvas from attending to it. We only read the canvas rows.
-        batch.n_tokens = n_seq;
-        for (int i = 0; i < n_seq; ++i) {
-            batch.token[i]     = (i < n_prompt) ? prompt_tokens[i] : canvas[i - n_prompt];
+    // ---- ENCODER phase: prefill the prompt into the KV cache (causal, no self-conditioning) ----
+    int n_past = 0;
+    if (n_prompt > 0) {
+        llama_set_causal_attn(ctx, true);
+        llama_set_diffusion_decoder_phase(ctx, false);
+        llama_set_diffusion_self_cond(ctx, nullptr, 0, 0);
+        batch.n_tokens = n_prompt;
+        for (int i = 0; i < n_prompt; ++i) {
+            batch.token[i]     = prompt_tokens[i];
             batch.pos[i]       = i;
             batch.n_seq_id[i]  = 1;
             batch.seq_id[i][0] = 0;
-            batch.logits[i]    = 1;
+            batch.logits[i]    = (i == n_prompt - 1) ? 1 : 0; // logits unused; keep n_outputs >= 1
+        }
+        if (llama_decode(ctx, batch) != 0) {
+            LOG_ERR("error: prompt prefill (encoder) decode failed\n");
+            llama_batch_free(batch);
+            llama_free(ctx);
+            llama_model_free(model);
+            return 1;
+        }
+        n_past = n_prompt; // prompt K/V is now the committed read-only prefix
+    }
+
+    std::vector<llama_token> canvas(canvas_length);
+    std::vector<llama_token> argmax_canvas(canvas_length, -1);
+    std::vector<llama_token> prev_argmax(canvas_length, -1);
+    std::vector<llama_token> accepted(canvas_length);
+    // self-conditioning buffer over the canvas: softmax(processed_logits) of the previous step.
+    // Fed to the next decode as the decoder-phase self-conditioning input (zeros on step 1).
+    std::vector<float> self_cond_buf((size_t) n_vocab * canvas_length, 0.0f);
+
+    // all generated tokens across the autoregressive canvas blocks
+    std::vector<llama_token> generated;
+
+    // ---- autoregressive block loop: each block denoises a canvas against the cached prefix,
+    //      then (if continuing) commits its finalized tokens to the cache as the next prefix ----
+    bool done = false;
+    for (int block = 0; block < max_canvases && !done; ++block) {
+    // 1. initialize canvas with random tokens
+    for (auto & t : canvas) t = rand_tok(rng);
+    std::fill(prev_argmax.begin(), prev_argmax.end(), -1);
+    llama_set_diffusion_self_cond(ctx, nullptr, 0, 0); // first step: zero self-conditioning
+
+    // 2. denoising loop (DECODER phase): cur_step = n_steps .. 1
+    for (int cur_step = n_steps; cur_step >= 1; --cur_step) {
+        // 2a. decode the canvas only, at positions [n_past, n_past+canvas). Bidirectional, with
+        // self-conditioning; it reads the cached prefix read-only. All canvas tokens are outputs.
+        llama_set_causal_attn(ctx, false);
+        llama_set_diffusion_decoder_phase(ctx, true);
+        batch.n_tokens = canvas_length;
+        for (int j = 0; j < canvas_length; ++j) {
+            batch.token[j]     = canvas[j];
+            batch.pos[j]       = n_past + j;
+            batch.n_seq_id[j]  = 1;
+            batch.seq_id[j][0] = 0;
+            batch.logits[j]    = 1;
         }
         if (llama_decode(ctx, batch) != 0) {
             LOG_ERR("error: llama_decode failed at step %d\n", cur_step);
             break;
         }
-        // canvas logits start at row n_prompt (prompt rows precede them)
-        const float * logits = llama_get_logits(ctx) + (size_t) n_prompt * n_vocab;
+        // canvas logits occupy rows [0, canvas_length) (canvas-only ubatch)
+        const float * logits = llama_get_logits(ctx);
 
         // 2b. linear temperature schedule: t = t_min + (t_max - t_min) * (cur_step / n_steps)
         const float temp = TEMP_MIN + (TEMP_MAX - TEMP_MIN) * ((float) cur_step / (float) n_steps);
@@ -182,7 +227,7 @@ int main(int argc, char ** argv) {
             float cum = 0.0f;
             int   tok = amax;
             bool  picked = false;
-            float * sc = self_cond_buf.data() + (size_t) (n_prompt + j) * n_vocab; // canvas column
+            float * sc = self_cond_buf.data() + (size_t) j * n_vocab; // canvas column
             for (int v = 0; v < n_vocab; ++v) {
                 const float p = probs[v] / sum;
                 sc[v] = p;                              // store normalized softmax for self-conditioning
@@ -195,8 +240,12 @@ int main(int argc, char ** argv) {
             argmax_canvas[j] = amax;
         }
 
+        // roll back the canvas K/V written by this decode so the cache keeps only the committed
+        // prefix [0, n_past); the next step re-decodes the canvas fresh against that prefix.
+        llama_memory_seq_rm(mem, 0, n_past, -1);
+
         // self-conditioning for the NEXT denoising step: feed this step's softmax(processed_logits)
-        llama_set_diffusion_self_cond(ctx, self_cond_buf.data(), n_vocab, n_seq);
+        llama_set_diffusion_self_cond(ctx, self_cond_buf.data(), n_vocab, canvas_length);
 
         // 2c. entropy-bound accept: sort positions by entropy ascending, accept the prefix
         // where sum(entropy of all-but-last) <= entropy_bound (monotonic -> prefix selection)
@@ -241,21 +290,23 @@ int main(int argc, char ** argv) {
         }
     }
 
-    // 3. final read-out: decode the converged canvas once more and take the greedy argmax per
-    // canvas position. Positions that were never accepted carry stale/renoised tokens in the
-    // sampled canvas; reading the model's argmax given the settled answer cleans them up
-    // (e.g. to <pad>), rather than emitting that leftover noise.
+    // 3. final read-out: decode the converged canvas once more (decoder phase) and take the
+    // greedy argmax per canvas position. Positions that were never accepted carry stale/renoised
+    // tokens; reading the model's argmax given the settled answer cleans them up (e.g. to <pad>),
+    // rather than emitting that leftover noise.
     {
-        batch.n_tokens = n_seq;
-        for (int i = 0; i < n_seq; ++i) {
-            batch.token[i]     = (i < n_prompt) ? prompt_tokens[i] : accepted[i - n_prompt];
-            batch.pos[i]       = i;
-            batch.n_seq_id[i]  = 1;
-            batch.seq_id[i][0] = 0;
-            batch.logits[i]    = 1;
+        llama_set_causal_attn(ctx, false);
+        llama_set_diffusion_decoder_phase(ctx, true);
+        batch.n_tokens = canvas_length;
+        for (int j = 0; j < canvas_length; ++j) {
+            batch.token[j]     = accepted[j];
+            batch.pos[j]       = n_past + j;
+            batch.n_seq_id[j]  = 1;
+            batch.seq_id[j][0] = 0;
+            batch.logits[j]    = 1;
         }
         if (llama_decode(ctx, batch) == 0) {
-            const float * logits = llama_get_logits(ctx) + (size_t) n_prompt * n_vocab;
+            const float * logits = llama_get_logits(ctx);
             for (int j = 0; j < canvas_length; ++j) {
                 const float * r = logits + (size_t) j * n_vocab;
                 int a = 0; float m = r[0];
@@ -263,12 +314,43 @@ int main(int argc, char ** argv) {
                 accepted[j] = a;
             }
         }
+        llama_memory_seq_rm(mem, 0, n_past, -1); // roll back the read-out canvas K/V
     }
+
+    // accumulate this block's finalized tokens; stop after a block that contains an EOG token
+    generated.insert(generated.end(), accepted.begin(), accepted.end());
+    for (int j = 0; j < canvas_length; ++j) {
+        if (llama_vocab_is_eog(vocab, accepted[j])) { done = true; break; }
+    }
+
+    // 4. COMMIT (ENCODER phase): if another block follows, write the finalized canvas's plain
+    // (non-self-conditioned, causal) K/V into the cache and advance the prefix pointer, so the
+    // next block's canvas cross-attends to it. Skipped on the last block / on EOG.
+    if (!done && block + 1 < max_canvases) {
+        llama_set_causal_attn(ctx, true);
+        llama_set_diffusion_decoder_phase(ctx, false);
+        llama_set_diffusion_self_cond(ctx, nullptr, 0, 0);
+        batch.n_tokens = canvas_length;
+        for (int j = 0; j < canvas_length; ++j) {
+            batch.token[j]     = accepted[j];
+            batch.pos[j]       = n_past + j;
+            batch.n_seq_id[j]  = 1;
+            batch.seq_id[j][0] = 0;
+            batch.logits[j]    = (j == canvas_length - 1) ? 1 : 0;
+        }
+        if (llama_decode(ctx, batch) != 0) {
+            LOG_ERR("error: canvas commit (encoder) decode failed at block %d\n", block);
+            break;
+        }
+        n_past += canvas_length; // finalized canvas is now part of the read-only prefix
+        LOG_INF("committed block %d -> n_past=%d\n", block, n_past);
+    }
+    } // end autoregressive block loop
 
     llama_batch_free(batch);
 
     // the full denoised canvas (thought channel + response), for reference
-    LOG_INF("\n=== generated canvas ===\n%s\n", common_detokenize(vocab, accepted, false).c_str());
+    LOG_INF("\n=== generated canvas ===\n%s\n", common_detokenize(vocab, generated, false).c_str());
 
     // the model answers in a "<|channel>thought ... <channel|>" block followed by the response;
     // extract the final response (after the last channel-close), truncated at the first
@@ -278,14 +360,15 @@ int main(int argc, char ** argv) {
         auto t = common_tokenize(vocab, "<channel|>", false, true);
         if (t.size() == 1) chan_close = t[0];
     }
+    const int n_gen = (int) generated.size();
     int start = 0;
     if (chan_close != LLAMA_TOKEN_NULL) {
-        for (int j = 0; j < canvas_length; ++j) if (accepted[j] == chan_close) start = j + 1;
+        for (int j = 0; j < n_gen; ++j) if (generated[j] == chan_close) start = j + 1;
     }
     std::vector<llama_token> answer;
-    for (int j = start; j < canvas_length; ++j) {
-        if (llama_vocab_is_eog(vocab, accepted[j])) break;
-        answer.push_back(accepted[j]);
+    for (int j = start; j < n_gen; ++j) {
+        if (llama_vocab_is_eog(vocab, generated[j])) break;
+        answer.push_back(generated[j]);
     }
     std::string ans = common_detokenize(vocab, answer, false);
     // drop a trailing exact-duplicate of the answer if the canvas repeated it

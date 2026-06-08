@@ -995,6 +995,15 @@ extern "C" {
     // canvas attends to everything. Pass 0 for unconditioned generation. Used by diffusion_gemma4.
     LLAMA_API void llama_set_diffusion_prompt_len(struct llama_context * ctx, int64_t n_prompt);
 
+    // Diffusion KV-cache reuse phase selector (block-diffusion, e.g. diffusion_gemma4):
+    //   false = encoder phase: plain token embeddings, no self-conditioning; the decoded
+    //           tokens' KV is committed to the cache (prompt prefill / finalized-canvas
+    //           commit). Use with llama_set_causal_attn(ctx, true).
+    //   true  = decoder phase: self-conditioned canvas input that reads the cached prefix;
+    //           the caller rolls back the canvas KV (llama_memory_seq_rm) after reading the
+    //           logits. Use with llama_set_causal_attn(ctx, false).
+    LLAMA_API void llama_set_diffusion_decoder_phase(struct llama_context * ctx, bool decoder_phase);
+
     // Set whether the model is in warmup mode or not
     // If true, all model tensors are activated during llama_decode() to load and cache their weights.
     //

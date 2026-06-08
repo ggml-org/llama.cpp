@@ -1,17 +1,17 @@
 #include "models.h"
 
-// diffusion_gemma4 reuses the gemma4 decoder block (tensor layout + per-layer math) but
-// runs as a bidirectional (non-causal, no KV cache) denoiser over the canvas, and applies
-// the self-conditioning transform to the input embeddings.
+#include "ggml-backend.h"
+#include "ggml-alloc.h"
+
+// diffusion_gemma4 reuses the gemma4 decoder block (tensor layout + per-layer math) but runs
+// as a bidirectional (non-causal) block-diffusion denoiser over a canvas, with KV-cache reuse:
+// the prompt / previously-finalized canvases form a causal, read-only prefix in the unified
+// sliding-window KV cache, and each denoising step decodes only the current canvas against it
+// (self-conditioned, bidirectional), rolling back its own K/V afterwards.
 //
-// This implements a single bidirectional denoising pass with no prompt context. The
-// self-conditioning module, with soft-conditioning = 0 (first denoising step), reduces to
-// a scale-less RMS norm of the scaled input embeddings. The soft-conditioning input path
-// (later denoising steps) and the encoder-KV cross-attention (prompted generation) are
-// layered on top in a later step.
-//
-// NOTE: this graph assumes the canvas length does not exceed the sliding window, so the
-// sliding/full attention layers are all equivalent to full (bidirectional) attention.
+// Two graph variants are provided (see build_arch_graph): a single phase-branching graph, and
+// a separate encoder/decoder pair (DG4_SEPARATE_ENC_DEC). Both reuse the gemma4 transformer
+// body and differ only in input-embedding handling (encoder: plain; decoder: self-conditioned).
 
 void llama_model_diffusion_gemma4::load_arch_hparams(llama_model_loader & ml) {
     // reuse the gemma4 hparam loading (sliding window pattern, dual head dims, MoE, rope,
@@ -38,35 +38,115 @@ void llama_model_diffusion_gemma4::load_arch_tensors(llama_model_loader & ml) {
     self_cond_down = create_tensor(tn(LLM_TENSOR_SELF_COND_DOWN, "weight"), {n_ff_sc, n_embd},  0);
 }
 
+llama_model_diffusion_gemma4::~llama_model_diffusion_gemma4() {
+    if (tok_embd_t_buf) {
+        ggml_backend_buffer_free(tok_embd_t_buf);
+    }
+    if (tok_embd_t_ctx) {
+        ggml_free(tok_embd_t_ctx);
+    }
+}
+
+// Precompute the transposed F32 token embedding {n_vocab, n_embd} once, into a model-owned
+// backend buffer on the same backend as tok_embd. The self-conditioning soft-embedding matmul
+// (probs @ token_embd) needs vocab as the contracted (ne[0]) dimension; precomputing this here
+// avoids dequantizing + transposing the whole embedding on every decode.
+void llama_model_diffusion_gemma4::load_arch_post(llama_model_loader & ml) {
+    GGML_UNUSED(ml);
+
+    if (!tok_embd || !tok_embd->buffer) {
+        return;
+    }
+
+    const int64_t n_embd_t  = tok_embd->ne[0];
+    const int64_t n_vocab_t = tok_embd->ne[1];
+    const int64_t n_elem    = n_embd_t * n_vocab_t;
+
+    const auto * tt = ggml_get_type_traits(tok_embd->type);
+    if (!tt || !tt->to_float) {
+        LLAMA_LOG_WARN("%s: cannot precompute transposed embedding for type %s; "
+                       "falling back to per-decode transpose\n", __func__, ggml_type_name(tok_embd->type));
+        return;
+    }
+
+    // copy tok_embd to host (works whether it lives on CPU or a GPU buffer), dequantize to F32,
+    // then transpose: src {n_embd, n_vocab} (ne0=n_embd) -> dst {n_vocab, n_embd} (ne0=n_vocab).
+    std::vector<uint8_t> raw(ggml_nbytes(tok_embd));
+    ggml_backend_tensor_get(tok_embd, raw.data(), 0, raw.size());
+
+    std::vector<float> src((size_t) n_elem);
+    tt->to_float(raw.data(), src.data(), n_elem);
+
+    std::vector<float> dst((size_t) n_elem);
+    for (int64_t e = 0; e < n_embd_t; ++e) {
+        for (int64_t v = 0; v < n_vocab_t; ++v) {
+            dst[(size_t) e * n_vocab_t + v] = src[(size_t) v * n_embd_t + e];
+        }
+    }
+
+    // allocate the transposed tensor in a buffer of the same type as tok_embd's buffer
+    ggml_init_params ip = { /*.mem_size =*/ ggml_tensor_overhead(), /*.mem_buffer =*/ nullptr, /*.no_alloc =*/ true };
+    tok_embd_t_ctx = ggml_init(ip);
+    tok_embd_t = ggml_new_tensor_2d(tok_embd_t_ctx, GGML_TYPE_F32, n_vocab_t, n_embd_t);
+    ggml_set_name(tok_embd_t, "token_embd_t.f32");
+
+    ggml_backend_buffer_type_t buft = ggml_backend_buffer_get_type(tok_embd->buffer);
+    tok_embd_t_buf = ggml_backend_alloc_ctx_tensors_from_buft(tok_embd_t_ctx, buft);
+    if (!tok_embd_t_buf) {
+        LLAMA_LOG_WARN("%s: failed to allocate transposed embedding buffer; falling back\n", __func__);
+        ggml_free(tok_embd_t_ctx);
+        tok_embd_t_ctx = nullptr;
+        tok_embd_t = nullptr;
+        return;
+    }
+    ggml_backend_tensor_set(tok_embd_t, dst.data(), 0, ggml_nbytes(tok_embd_t));
+
+    LLAMA_LOG_INFO("%s: precomputed transposed F32 token embedding {%lld, %lld} (%.2f GiB)\n",
+                   __func__, (long long) n_vocab_t, (long long) n_embd_t,
+                   ggml_nbytes(tok_embd_t) / (1024.0 * 1024.0 * 1024.0));
+}
+
 std::unique_ptr<llm_graph_context> llama_model_diffusion_gemma4::build_arch_graph(const llm_graph_params & params) const {
+    const bool is_decoder = params.diffusion && params.diffusion->decoder_phase;
+
+    // Variant B ("separate encoder and decoder block", shared weights): opt-in via
+    // DG4_SEPARATE_ENC_DEC. Two distinct graphs are built per phase. Functionally identical
+    // to Variant A here (the checkpoint shares encoder/decoder weights); the split mirrors
+    // the HF two-stack structure and generalizes to a checkpoint with distinct weights.
+    if (getenv("DG4_SEPARATE_ENC_DEC")) {
+        if (is_decoder) {
+            return std::make_unique<graph_decoder>(*this, params);
+        }
+        return std::make_unique<graph_encoder>(*this, params);
+    }
+
+    // Variant A ("single encoder/decoder block"): one graph that branches on the phase.
     return std::make_unique<graph>(*this, params);
 }
 
-llama_model_diffusion_gemma4::graph::graph(const llama_model & model, const llm_graph_params & params) :
-        llm_graph_context(params),
-        model(model) {
-    ggml_tensor * cur;
-    ggml_tensor * inpL;
+// Scaled input embeddings. In the decoder phase, apply the self-conditioning transform:
+//   inpL = post_norm(scaled_embed + sc_mlp(pre_norm(soft))),
+//   soft = (probs @ token_embd) * sqrt(n_embd)   [probs = previous step's softmax, 0 on step 1]
+ggml_tensor * llama_model_diffusion_gemma4::graph_base::build_input(bool is_decoder) {
+    const auto & dmodel = static_cast<const llama_model_diffusion_gemma4 &>(model);
 
-    inpL = build_inp_embd(model.tok_embd);
+    ggml_tensor * inpL = build_inp_embd(model.tok_embd);
 
     // scaled word embeddings (sqrt(hidden_size)); raw embeddings input is not scaled
     inpL = ggml_scale(ctx0, inpL, ubatch.token ? sqrtf(n_embd) : 1.0f);
     cb(inpL, "inp_scaled", -1);
 
-    // length of the (causal) prompt prefix; 0 = unconditioned generation
-    const int64_t n_prompt = (diffusion && diffusion->n_prompt > 0) ? diffusion->n_prompt : 0;
-
-    const auto & dmodel = static_cast<const llama_model_diffusion_gemma4 &>(model);
-
-    // self-conditioning (decoder/canvas input):
-    //   sc_input = post_norm(scaled_embed + sc_mlp(pre_norm(soft)))
-    // soft = (probs @ token_embd) * sqrt(n_embd); probs are the previous denoising step's
-    // softmax (set by the sampler via llama_set_diffusion_self_cond), zero on the first step.
-    ggml_tensor * sc_input;
-    {
+    if (is_decoder) {
         ggml_tensor * probs   = build_inp_diffusion_self_cond(model.tok_embd->ne[1]); // {n_vocab, n_tokens}
-        ggml_tensor * embed_t = ggml_cont(ctx0, ggml_transpose(ctx0, model.tok_embd)); // {n_vocab, n_embd}
+        // soft = (probs @ token_embd): mul_mat contracts ne[0], so token_embd needs vocab as
+        // ne[0]. Prefer the transposed F32 embedding precomputed once at load (load_arch_post).
+        // Fallback (if precompute was skipped): dequantize + transpose every decode (a quantized
+        // tensor can't be transposed directly, hence the cast to F32 first).
+        ggml_tensor * embed_t = dmodel.tok_embd_t;                                     // {n_vocab, n_embd}
+        if (!embed_t) {
+            ggml_tensor * embed_f = ggml_cast(ctx0, model.tok_embd, GGML_TYPE_F32);     // {n_embd, n_vocab}
+            embed_t = ggml_cont(ctx0, ggml_transpose(ctx0, embed_f));                  // {n_vocab, n_embd}
+        }
         ggml_tensor * soft    = ggml_mul_mat(ctx0, embed_t, probs);                    // {n_embd, n_tokens}
         soft = ggml_scale(ctx0, soft, sqrtf((float) n_embd));
         cb(soft, "self_cond_soft_embd", -1);
@@ -76,28 +156,41 @@ llama_model_diffusion_gemma4::graph::graph(const llama_model & model, const llm_
                 dmodel.self_cond_gate, nullptr, nullptr,
                 dmodel.self_cond_down, nullptr, nullptr,
                 nullptr, LLM_FFN_GELU, LLM_FFN_PAR, -1);
-        sc_input = ggml_rms_norm(ctx0, ggml_add(ctx0, inpL, sc), hparams.f_norm_rms_eps); // scale-less post_norm
+        inpL = ggml_rms_norm(ctx0, ggml_add(ctx0, inpL, sc), hparams.f_norm_rms_eps); // scale-less post_norm
+        cb(inpL, "self_cond_input", -1);
     }
-    cb(sc_input, "self_cond_input", -1);
 
-    // prompt rows = raw scaled embeddings (encoder: no self-conditioning / no post-norm);
-    // canvas rows = self-conditioned input. (n_prompt == 0 -> all canvas.)
-    if (n_prompt > 0) {
-        ggml_tensor * prompt_part = ggml_view_2d(ctx0, inpL,     n_embd, n_prompt,            inpL->nb[1],     0);
-        ggml_tensor * canvas_part = ggml_view_2d(ctx0, sc_input, n_embd, n_tokens - n_prompt, sc_input->nb[1], (size_t) n_prompt*sc_input->nb[1]);
-        inpL = ggml_concat(ctx0, ggml_cont(ctx0, prompt_part), ggml_cont(ctx0, canvas_part), 1);
-    } else {
-        inpL = sc_input;
-    }
-    cb(inpL, "decoder_input", -1);
+    return inpL;
+}
+
+// Variant A: single graph, phase chosen at runtime from the diffusion cond.
+llama_model_diffusion_gemma4::graph::graph(const llama_model & model, const llm_graph_params & params) :
+        graph_base(model, params) {
+    build_transformer(build_input(diffusion && diffusion->decoder_phase));
+}
+
+// Variant B: separate encoder / decoder graphs (shared weight tensors).
+llama_model_diffusion_gemma4::graph_encoder::graph_encoder(const llama_model & model, const llm_graph_params & params) :
+        graph_base(model, params) {
+    build_transformer(build_input(/*is_decoder=*/false));
+}
+
+llama_model_diffusion_gemma4::graph_decoder::graph_decoder(const llama_model & model, const llm_graph_params & params) :
+        graph_base(model, params) {
+    build_transformer(build_input(/*is_decoder=*/true));
+}
+
+// Run the reused gemma4 decoder block over the input embeddings and emit logits.
+void llama_model_diffusion_gemma4::graph_base::build_transformer(ggml_tensor * inpL) {
+    ggml_tensor * cur;
 
     ggml_tensor * inp_pos = build_inp_pos();
 
-    // prefix attention when prompt-conditioned (prompt causal, canvas bidirectional + cross);
-    // fully bidirectional no-cache otherwise
-    llm_graph_input_attn_no_cache * inp_attn = (n_prompt > 0)
-        ? (llm_graph_input_attn_no_cache *) build_attn_inp_no_cache_prefix(n_prompt)
-        : build_attn_inp_no_cache();
+    // Reuse the unified sliding-window KV cache: the canvas (decoder phase) reads the
+    // cached prompt/previous-canvas prefix; encoder-phase tokens write (commit) their KV.
+    // The prompt/canvas attention pattern is selected by cparams.causal_attn, toggled by
+    // the caller (encoder: causal; decoder: bidirectional + full cross to the prefix).
+    auto * inp_attn = build_attn_inp_kv_iswa();
 
     ggml_tensor * inp_out_ids = build_inp_out_ids();
 
@@ -129,28 +222,37 @@ llama_model_diffusion_gemma4::graph::graph(const llama_model & model, const llm_
                              freq_base_l, freq_scale_l, ext_factor, attn_factor, beta_fast, beta_slow);
         cb(Qcur, "Qcur_pos", il);
 
-        ggml_tensor * Kcur = build_lora_mm(model.layers[il].wk, cur, model.layers[il].wk_s);
-        cb(Kcur, "Kcur", il);
-        // global (full-attention) layers have no v_proj: V = K (before norms)
-        ggml_tensor * Vcur = model.layers[il].wv
-                                ? build_lora_mm(model.layers[il].wv, cur, model.layers[il].wv_s)
-                                : Kcur;
-        cb(Vcur, "Vcur", il);
+        // KV-sharing layers (n_kv_shared_layers) do not own a cache slot: they reuse an
+        // earlier layer's cached K/V (wk/wv/k_norm are absent). Mirror gemma4: compute and
+        // store K/V only for has_kv layers, otherwise pass nullptr (no store).
+        if (hparams.has_kv(il)) {
+            ggml_tensor * Kcur = build_lora_mm(model.layers[il].wk, cur, model.layers[il].wk_s);
+            cb(Kcur, "Kcur", il);
+            // global (full-attention) layers have no v_proj: V = K (before norms)
+            ggml_tensor * Vcur = model.layers[il].wv
+                                    ? build_lora_mm(model.layers[il].wv, cur, model.layers[il].wv_s)
+                                    : Kcur;
+            cb(Vcur, "Vcur", il);
 
-        Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
-        Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
+            Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
+            Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
 
-        Kcur = build_norm(Kcur, model.layers[il].attn_k_norm, nullptr, LLM_NORM_RMS, il);
-        Vcur = ggml_rms_norm(ctx0, Vcur, hparams.f_norm_rms_eps); // scale-less v_norm
-        cb(Kcur, "Kcur_normed", il);
-        cb(Vcur, "Vcur_normed", il);
+            Kcur = build_norm(Kcur, model.layers[il].attn_k_norm, nullptr, LLM_NORM_RMS, il);
+            Vcur = ggml_rms_norm(ctx0, Vcur, hparams.f_norm_rms_eps); // scale-less v_norm
+            cb(Kcur, "Kcur_normed", il);
+            cb(Vcur, "Vcur_normed", il);
 
-        Kcur = ggml_rope_ext(ctx0, Kcur, inp_pos, freq_factors, n_rot_l, rope_type, n_ctx_orig,
-                             freq_base_l, freq_scale_l, ext_factor, attn_factor, beta_fast, beta_slow);
-        cb(Kcur, "Kcur_pos", il);
+            Kcur = ggml_rope_ext(ctx0, Kcur, inp_pos, freq_factors, n_rot_l, rope_type, n_ctx_orig,
+                                 freq_base_l, freq_scale_l, ext_factor, attn_factor, beta_fast, beta_slow);
+            cb(Kcur, "Kcur_pos", il);
 
-        cur = build_attn(inp_attn, model.layers[il].wo, nullptr, model.layers[il].wo_s,
-                         Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, hparams.f_attention_scale, il);
+            cur = build_attn(inp_attn, model.layers[il].wo, nullptr, model.layers[il].wo_s,
+                             Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, hparams.f_attention_scale, il);
+        } else {
+            // reuse the cached K/V of an earlier layer
+            cur = build_attn(inp_attn, model.layers[il].wo, nullptr, model.layers[il].wo_s,
+                             Qcur, nullptr, nullptr, nullptr, nullptr, nullptr, hparams.f_attention_scale, il);
+        }
 
         if (il == n_layer - 1 && inp_out_ids) {
             cur  = ggml_get_rows(ctx0, cur,  inp_out_ids);

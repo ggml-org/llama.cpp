@@ -85,6 +85,19 @@ struct llama_diffusion_cond {
     int64_t n_tokens = 0;
     int64_t n_prompt = 0;     // length of the (causal) prompt prefix; 0 = unconditioned
     std::vector<float> probs; // [n_vocab * n_tokens], row-major per token
+
+    // KV-cache reuse phase selector (block-diffusion):
+    //   false (encoder phase) = plain token embeddings, no self-conditioning; KV is
+    //          committed to the cache (prompt prefill / finalized-canvas commit).
+    //   true  (decoder phase) = self-conditioned canvas input that reads the cached
+    //          prefix read-only; its own KV is written then rolled back by the caller.
+    // Causality is controlled separately via llama_set_causal_attn (encoder: causal,
+    // decoder: bidirectional).
+    //
+    // Defaults to true (decoder) so the init-time graph reserve builds the worst-case
+    // superset graph (the decoder adds the self-conditioning input + block on top of the
+    // encoder graph). The caller sets the actual phase before every decode.
+    bool decoder_phase = true;
 };
 
 struct llm_graph_params;

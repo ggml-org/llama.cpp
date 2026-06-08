@@ -126,6 +126,9 @@ struct llama_context {
     // diffusion: length of the causal prompt prefix in the [prompt; canvas] sequence (0 = unconditioned)
     void set_diffusion_prompt_len(int64_t n_prompt);
 
+    // diffusion: select the KV-cache reuse phase (false = encoder/commit, true = decoder/denoise)
+    void set_diffusion_decoder_phase(bool decoder_phase);
+
     void set_adapters_lora(llama_adapter_lora ** adapters, size_t n_adapters, float * scales);
 
     bool adapters_lora_are_same(llama_adapter_lora ** adapters, size_t n_adapters, float * scales);
