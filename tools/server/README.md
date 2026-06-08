@@ -1251,15 +1251,15 @@ The `response_format` parameter supports both plain JSON output (e.g. `{"type": 
 `parallel_tool_calls` : Whether to enable parallel/multiple tool calls (only supported on some models, verification is based on jinja template).
 
 For multimodal input (typed content, `messages[i].content[j]`):
-- If `type == "image_url"`: 
+- If `type == "image_url"`:
     - `image_url.url` can be a remote URL, base64 (raw or URI-encoded) or path to local file
-- If `type == "input_audio"`: 
-    - Either `input_audio.data` or `input_audio.url` can be specified, can be a remote URL, base64 (raw or URI-encoded) or path to local file
+- If `type == "input_audio"`:
+    - Either `input_audio.data` or `input_audio.url` can be specified, can be a remote URL, base64 raw or path to local file
     - Accepts formats supported by `miniaudio` (mp3, wav, flac)
     - `input_audio.format` will be ignored, the file format will be determined automatically
-- If `type == "input_video"`: 
-    - Either `input_video.data` or `input_video.url` can be specified, can be a remote URL, base64 (raw or URI-encoded) or path to local file
-    - Accept formats supported by `ffmpeg`
+- If `type == "input_video"`:
+    - Either `input_video.data` or `input_video.url` can be specified, can be a remote URL, base64 raw or path to local file
+    - Accepts formats supported by `ffmpeg`
 - Note: for local file, make sure to set `--media-path`. File path must be prefixed by `file://`
 
 *Examples:*

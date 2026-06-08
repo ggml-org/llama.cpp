@@ -847,12 +847,13 @@ json oaicompat_completion_params_parse(const json & body) {
 static void handle_media(
         std::vector<raw_buffer> & out_files,
         const std::string & url,
-        const std::string & media_path) {
+        const std::string & media_path,
+        bool accept_base64_uri) {
     if (!media_path.empty()) {
         // should already be enforced by arg.cpp, but checking just in case
         GGML_ASSERT(string_ends_with(media_path, "/"));
     }
-    
+
     if (string_starts_with(url, "http")) {
         // download remote image
         // TODO @ngxson : maybe make these params configurable
@@ -888,7 +889,7 @@ static void handle_media(
         data.assign((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
         out_files.push_back(data);
 
-    } else if (string_starts_with(url, "data:")) {
+    } else if (accept_base64_uri && string_starts_with(url, "data:")) {
         // try to decode base64 image
         std::vector<std::string> parts = string_split<std::string>(url, /*separator*/ ',');
         if (parts.size() != 2) {
@@ -1003,7 +1004,7 @@ json oaicompat_chat_params_parse(
 
                 json image_url = json_value(p, "image_url", json::object());
                 std::string url = json_value(image_url, "url", std::string());
-                handle_media(out_files, url, opt.media_path);
+                handle_media(out_files, url, opt.media_path, true);
 
                 p["type"] = "media_marker";
                 p["text"] = get_media_marker();
@@ -1018,7 +1019,7 @@ json oaicompat_chat_params_parse(
                 json input_audio = json_value(p, "input_audio", json::object());
                 std::string url  = json_value(input_audio, "data",
                                         json_value(input_audio, "url", std::string()));
-                handle_media(out_files, url, opt.media_path);
+                handle_media(out_files, url, opt.media_path, false);
 
                 p["type"] = "media_marker";
                 p["text"] = get_media_marker();
@@ -1032,7 +1033,7 @@ json oaicompat_chat_params_parse(
                 json input_video = json_value(p, "input_video", json::object());
                 std::string url  = json_value(input_video, "data",
                                         json_value(input_video, "url", std::string()));
-                handle_media(out_files, url, opt.media_path);
+                handle_media(out_files, url, opt.media_path, false);
 
                 p["type"] = "media_marker";
                 p["text"] = get_media_marker();
