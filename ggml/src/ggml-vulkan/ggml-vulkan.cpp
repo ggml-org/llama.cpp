@@ -8269,6 +8269,18 @@ static void ggml_vk_mul_mat_q_f16(ggml_backend_vk_context * ctx, vk_context& sub
             ggml_vk_preallocate_buffers(ctx, subctx);
         }
         if ((qy_needs_dequant || quantize_y) && ctx->prealloc_size_y < y_sz) {
+            // If the prescan failed to prevent this growth, log the cause.
+            // Enable with GGML_VK_FA_DEBUG=1.
+            if (getenv("GGML_VK_FA_DEBUG")) {
+                fprintf(stderr,
+                    "ggml_vulkan MulMat Y grow (UNEXPECTED): y_sz=%llu ne=[%lld,%lld,%lld,%lld]"
+                    " padded_n=%u qy_needs=%d quantize_y=%d\n",
+                    (unsigned long long)y_sz,
+                    (long long)src1->ne[0], (long long)src1->ne[1],
+                    (long long)src1->ne[2], (long long)src1->ne[3],
+                    padded_n, (int)qy_needs_dequant, (int)quantize_y);
+                fflush(stderr);
+            }
             ctx->prealloc_size_y = y_sz;
             ggml_vk_preallocate_buffers(ctx, subctx);
         }
@@ -9177,6 +9189,18 @@ static void ggml_vk_mul_mat_id_q_f16(ggml_backend_vk_context * ctx, vk_context& 
             ggml_vk_preallocate_buffers(ctx, subctx);
         }
         if ((qy_needs_dequant || quantize_y) && ctx->prealloc_size_y < y_sz) {
+            // If the prescan failed to prevent this growth, log the cause.
+            // Enable with GGML_VK_FA_DEBUG=1.
+            if (getenv("GGML_VK_FA_DEBUG")) {
+                fprintf(stderr,
+                    "ggml_vulkan MulMatId Y grow (UNEXPECTED): y_sz=%llu ne=[%lld,%lld,%lld,%lld]"
+                    " padded_n=%u qy_needs=%d quantize_y=%d\n",
+                    (unsigned long long)y_sz,
+                    (long long)src1->ne[0], (long long)src1->ne[1],
+                    (long long)src1->ne[2], (long long)src1->ne[3],
+                    padded_n, (int)qy_needs_dequant, (int)quantize_y);
+                fflush(stderr);
+            }
             ctx->prealloc_size_y = y_sz;
             ggml_vk_preallocate_buffers(ctx, subctx);
         }
@@ -9848,6 +9872,21 @@ static void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx
 
     const uint32_t mask_opt_num_dwords = CEIL_DIV(nem0, 16 * Bc);
     const uint64_t mask_opt_size = sizeof(uint32_t) * mask_opt_num_dwords * CEIL_DIV(nem1, Br) * nem2 * nem3;
+
+    // Log FA tuning parameters per-call. Enable with GGML_VK_FA_DEBUG=1.
+    // Useful for verifying HSK/HSV switching between SWA (256) and global (512)
+    // attention layers in dual-head-dim models such as Gemma 4.
+    if (getenv("GGML_VK_FA_DEBUG")) {
+        fprintf(stderr,
+            "ggml_vulkan FA: HSK=%u HSV=%u N=%u KV=%u Br=%u Bc=%u"
+            " use_mask_opt=%d mask_opt_size=%llu"
+            " prealloc_y_cur=%zu prealloc_y_new=%s\n",
+            HSK, HSV, N, KV, Br, Bc,
+            (int)use_mask_opt, (unsigned long long)mask_opt_size,
+            ctx->prealloc_y ? ctx->prealloc_y->size : (size_t)0,
+            (use_mask_opt && ctx->prealloc_size_y < mask_opt_size) ? "GROW" : "ok");
+        fflush(stderr);
+    }
 
     vk_pipeline pipeline_fa_mask_opt = nullptr;
     if (use_mask_opt) {
@@ -13703,6 +13742,15 @@ static void ggml_vk_preallocate_buffers(ggml_backend_vk_context * ctx, vk_contex
     }
     if (ctx->prealloc_y == nullptr || (ctx->prealloc_size_y > 0 && ctx->prealloc_y->size < ctx->prealloc_size_y)) {
         VK_LOG_MEMORY("ggml_vk_preallocate_buffers(y_size: " << ctx->prealloc_size_y << ")");
+        // Log large prealloc_y growth with subctx state. Enable with GGML_VK_FA_DEBUG=1.
+        // has_subctx=1 here means a command buffer is open — this is the unsafe path that
+        // can corrupt memory on Intel Arc UMA. The prescan fix should prevent this for
+        // MUL_MAT/MUL_MAT_ID nodes; if seen, it indicates a gap in prescan coverage.
+        if (getenv("GGML_VK_FA_DEBUG") && ctx->prealloc_size_y > 64*1024*1024) {
+            fprintf(stderr, "ggml_vulkan: prealloc_y growing to %zu bytes (has_subctx=%d)\n",
+                    ctx->prealloc_size_y, subctx ? 1 : 0);
+            fflush(stderr);
+        }
         // Resize buffer
         if (ctx->prealloc_y != nullptr) {
             ggml_vk_destroy_buffer(ctx->prealloc_y);
