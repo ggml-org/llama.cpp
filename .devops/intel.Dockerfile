@@ -85,7 +85,7 @@ RUN mkdir /tmp/neo/ && cd /tmp/neo/ \
   && dpkg --install *.deb
 
 RUN apt-get update \
-    && apt-get install -y libgomp1 curl \
+    && apt-get install -y libgomp1 curl ffmpeg \
     && apt autoremove -y \
     && apt clean -y \
     && rm -rf /tmp/* /var/tmp/* \
