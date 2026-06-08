@@ -197,6 +197,10 @@ struct server_slot {
     int64_t t_start_process_prompt;
     int64_t t_start_generation;
 
+    int64_t t_tg_window_start = 0;
+    int32_t n_tg_window_start = 0;
+    double  tg_second_last    = 0.0; // token generation speed over the last completed window
+
     double t_prompt_processing = 0.0; // ms
     double t_token_generation = 0.0;  // ms
 
@@ -226,6 +230,9 @@ struct server_slot {
         }
         generated_tokens.clear();
         generated_token_probs.clear();
+        t_tg_window_start = 0;
+        n_tg_window_start = 0;
+        tg_second_last    = 0.0;
         json_schema = json();
 
         // clear speculative decoding stats
@@ -463,6 +470,19 @@ struct server_slot {
 
         const int64_t t_now = ggml_time_us();
 
+        // window over which the recent (last) token generation speed is computed
+        const int64_t tg_window_us = 5*1000*1000;
+
+        if (t_tg_window_start == 0) {
+            t_tg_window_start = t_now;
+            n_tg_window_start = n_decoded;
+        } else if (t_now - t_tg_window_start >= tg_window_us) {
+            // once the window elapses, compute speed and reset
+            tg_second_last    = 1e6 / (t_now - t_tg_window_start) * (n_decoded - n_tg_window_start);
+            t_tg_window_start = t_now;
+            n_tg_window_start = n_decoded;
+        }
+
         if (t_now - t_print_last < 3*1000*1000) {
             return;
         }
@@ -471,7 +491,8 @@ struct server_slot {
 
         const double n_gen_second = 1e3 / t_token_generation * n_decoded;
 
-        SLT_INF(*this, "n_decoded = %6d, tg = %6.2f t/s\n", n_decoded, n_gen_second);
+        SLT_INF(*this, "n_decoded = %6d, tg = %6.2f t/s, tg(last %ds) = %6.2f t/s\n",
+                n_decoded, n_gen_second, (int) (tg_window_us / (1000*1000)), tg_second_last);
     }
 
     void print_timings_pp() const {
