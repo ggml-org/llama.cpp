@@ -478,6 +478,21 @@ static common_chat_tool python_tool{
     })",
 };
 
+static common_chat_tool category_menu_tool{
+    /* .name = */ "category_menu",
+    /* .description = */ "Show menu items for a category",
+    /* .parameters = */ R"({
+        "type": "object",
+        "properties": {
+            "category": {
+                "type": "string",
+                "description": "Menu category name"
+            }
+        },
+        "required": ["category"]
+    })",
+};
+
 static common_chat_tool html_tool{
     /* .name = */ "html",
     /* .description = */ "an html validator",
@@ -5547,6 +5562,22 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .expect_streaming_consistency(false)
             .tools({ python_tool })
             .expect_tool_calls({ { "python", R"#({"code": "print('Hello, World!')"})#", {} } })
+            .run();
+
+        tst.test(R"(<function name="category_menu"><param name="category">Dessert</param></function>)")
+            .enable_thinking(false)
+            .reasoning_format(COMMON_REASONING_FORMAT_NONE)
+            .expect_streaming_consistency(false)
+            .tools({ category_menu_tool })
+            .expect_tool_calls({ { "category_menu", R"#({"category": "Dessert"})#", {} } })
+            .run();
+
+        tst.test(R"(<function name="category_menu">)")
+            .enable_thinking(false)
+            .reasoning_format(COMMON_REASONING_FORMAT_NONE)
+            .tools({ category_menu_tool })
+            .is_partial(true)
+            .expect(simple_assist_msg("", "", "category_menu", "{"))
             .run();
 
         tst.test(R"(<function name="empty_args"></function>)")

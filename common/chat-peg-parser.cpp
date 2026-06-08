@@ -389,7 +389,8 @@ void common_chat_peg_mapper::map(const common_peg_ast_node & node) {
         ++arg_count;
 
         auto & target = args_target();
-        if (target.empty()) {
+        if (target.empty() || target == "{}") {
+            // "{}" can appear when partial parsing closes an empty arg placeholder too early.
             target = "{";
         }
         target += arg_entry;
@@ -436,9 +437,12 @@ void common_chat_peg_mapper::map(const common_peg_ast_node & node) {
             current_tool->arguments += "\"";
             closing_quote_pending = false;
         }
-        // Close any unclosed braces (accounts for nested objects)
-        for (int d = json_brace_depth(current_tool->arguments); d > 0; d--) {
-            current_tool->arguments += "}";
+        // Close any unclosed braces (accounts for nested objects).
+        // During partial parsing, keep a lone "{" open until the first arg arrives.
+        if (!(is_partial_ && arg_count == 0 && current_tool->arguments == "{")) {
+            for (int d = json_brace_depth(current_tool->arguments); d > 0; d--) {
+                current_tool->arguments += "}";
+            }
         }
         // Add tool call to results if named; otherwise discard
         if (pending_tool_call.has_value()) {
