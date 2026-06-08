@@ -31,6 +31,16 @@ struct Params {
 #define DataType i32
 #endif
 
+#ifdef SRC_OVERLAP
+@group(0) @binding(0)
+var<storage, read_write> merged_src: array<DataType>;
+
+@group(0) @binding(1)
+var<storage, read_write> dst: array<DataType>;
+
+@group(0) @binding(2)
+var<uniform> params: Params;
+#else
 @group(0) @binding(0)
 var<storage, read_write> src0: array<DataType>;
 
@@ -42,7 +52,7 @@ var<storage, read_write> dst: array<DataType>;
 
 @group(0) @binding(3)
 var<uniform> params: Params;
-
+#endif
 @compute @workgroup_size(WG_SIZE)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
@@ -62,14 +72,22 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
                              ni[1] * params.stride_src0_1 +
                              ni[2] * params.stride_src0_2 +
                              ni[3] * params.stride_src0_3;
+#ifdef SRC_OVERLAP
+            dst[params.offset_dst + gid.x] = merged_src[params.offset_src0 + src_i];
+#else
             dst[params.offset_dst + gid.x] = src0[params.offset_src0 + src_i];
+#endif
         } else {
             ni[params.dim] -= params.src0_nedim;
             let src_i = ni[0] * params.stride_src1_0 +
                              ni[1] * params.stride_src1_1 +
                              ni[2] * params.stride_src1_2 +
                              ni[3] * params.stride_src1_3;
+#ifdef SRC_OVERLAP
+            dst[params.offset_dst + gid.x] = merged_src[params.offset_src1 + src_i];
+#else
             dst[params.offset_dst + gid.x] = src1[params.offset_src1 + src_i];
+#endif
         }
     }
 }

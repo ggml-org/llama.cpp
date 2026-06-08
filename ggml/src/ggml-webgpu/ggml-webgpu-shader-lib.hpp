@@ -448,15 +448,19 @@ struct ggml_webgpu_upscale_pipeline_key_hash {
 /** Concat **/
 
 struct ggml_webgpu_concat_pipeline_key {
-    int type;
+    int  type;
+    bool src_overlap;
 
-    bool operator==(const ggml_webgpu_concat_pipeline_key & other) const { return type == other.type; }
+    bool operator==(const ggml_webgpu_concat_pipeline_key & other) const {
+        return type == other.type && src_overlap == other.src_overlap;
+    }
 };
 
 struct ggml_webgpu_concat_pipeline_key_hash {
     size_t operator()(const ggml_webgpu_concat_pipeline_key & key) const {
         size_t seed = 0;
         ggml_webgpu_hash_combine(seed, key.type);
+        ggml_webgpu_hash_combine(seed, key.src_overlap);
         return seed;
     }
 };
@@ -2634,6 +2638,7 @@ class ggml_webgpu_shader_lib {
     webgpu_pipeline get_concat_pipeline(const ggml_webgpu_shader_lib_context & context) {
         ggml_webgpu_concat_pipeline_key key = {};
         key.type                            = context.dst->type;
+        key.src_overlap                     = ggml_webgpu_tensor_overlap(context.src0, context.src1);
 
         auto it = concat_pipelines.find(key);
         if (it != concat_pipelines.end()) {
@@ -2656,11 +2661,17 @@ class ggml_webgpu_shader_lib {
                 GGML_ABORT("Unsupported type for concat shader");
         }
 
+        if (key.src_overlap) {
+            defines.push_back("SRC_OVERLAP");
+            variant += "_src_overlap";
+        }
+
         defines.push_back(std::string("WG_SIZE=") + std::to_string(context.max_wg_size));
 
         auto processed           = preprocessor.preprocess(wgsl_concat, defines);
-        auto decisions           = std::make_shared<ggml_webgpu_generic_shader_decisions>();
+        auto decisions           = std::make_shared<ggml_webgpu_binary_shader_decisions>();
         decisions->wg_size       = context.max_wg_size;
+        decisions->src_overlap   = key.src_overlap;
         webgpu_pipeline pipeline = ggml_webgpu_create_pipeline(device, processed, variant);
         pipeline.context         = decisions;
         concat_pipelines[key]    = pipeline;
