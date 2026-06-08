@@ -7866,11 +7866,13 @@ static void ggml_vk_mul_mat_q_f16(ggml_backend_vk_context * ctx, vk_context& sub
             vk_matmul_pipeline candidate = (ctx->device->fp16 && ctx->device->coopmat_acc_f16_support && (ggml_prec)dst->op_params[0] == GGML_PREC_DEFAULT) ? transa.f16acc : transa.f32acc;
             if (candidate && !candidate->is_empty()) {
                 mmp = candidate;
+                quantize_y = false;
             }
         } else {
             vk_matmul_pipeline candidate = (ctx->device->fp16 && (ggml_prec)dst->op_params[0] == GGML_PREC_DEFAULT) ? transa.f16acc : transa.f32acc;
             if (candidate && !candidate->is_empty()) {
                 mmp = candidate;
+                quantize_y = false;
             }
         }
     }
@@ -8734,11 +8736,13 @@ static void ggml_vk_mul_mat_id_q_f16(ggml_backend_vk_context * ctx, vk_context& 
             vk_matmul_pipeline candidate = (ctx->device->fp16 && ctx->device->coopmat_acc_f16_support && (ggml_prec)dst->op_params[0] == GGML_PREC_DEFAULT) ? transa.f16acc : transa.f32acc;
             if (candidate && !candidate->is_empty()) {
                 mmp = candidate;
+                quantize_y = false;
             }
         } else {
             vk_matmul_pipeline candidate = (ctx->device->fp16 && (ggml_prec)dst->op_params[0] == GGML_PREC_DEFAULT) ? transa.f16acc : transa.f32acc;
             if (candidate && !candidate->is_empty()) {
                 mmp = candidate;
+                quantize_y = false;
             }
         }
     }
@@ -9303,7 +9307,12 @@ static bool ggml_vk_flash_attn_coopmat_shmem_support(const vk_device& device, co
     return supported;
 }
 
+static void ggml_vk_ensure_non_transposed(const ggml_tensor * tensor);
+
 static void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * q, const ggml_tensor * k, const ggml_tensor * v, const ggml_tensor * mask, const ggml_tensor * sinks, ggml_tensor * dst) {
+    ggml_vk_ensure_non_transposed(k);
+    ggml_vk_ensure_non_transposed(v);
+
     VK_LOG_DEBUG("ggml_vk_flash_attn((" << q << ", name=" << q->name << ", type=" << q->type << ", ne0=" << q->ne[0] << ", ne1=" << q->ne[1] << ", ne2=" << q->ne[2] << ", ne3=" << q->ne[3] << ", nb0=" << q->nb[0] << ", nb1=" << q->nb[1] << ", nb2=" << q->nb[2] << ", nb3=" << q->nb[3];
     std::cerr << "), (" << k << ", name=" << k->name << ", type=" << k->type << ", ne0=" << k->ne[0] << ", ne1=" << k->ne[1] << ", ne2=" << k->ne[2] << ", ne3=" << k->ne[3] << ", nb0=" << k->nb[0] << ", nb1=" << k->nb[1] << ", nb2=" << k->nb[2] << ", nb3=" << k->nb[3];
     std::cerr << "), (" << v << ", name=" << v->name << ", type=" << v->type << ", ne0=" << v->ne[0] << ", ne1=" << v->ne[1] << ", ne2=" << v->ne[2] << ", ne3=" << v->ne[3] << ", nb0=" << v->nb[0] << ", nb1=" << v->nb[1] << ", nb2=" << v->nb[2] << ", nb3=" << v->nb[3];
@@ -10645,7 +10654,51 @@ static void ggml_vk_op_f32(ggml_backend_vk_context * ctx, vk_context& subctx, co
     }
 }
 
+// Revert a transposed-A tensor back to its original layout on the GPU.
+// Called by ops that lack transa-aware shaders (e.g. GET_ROWS, FLASH_ATTN_EXT, CPY).
+// For non-transposed tensors this is a no-op (zero overhead).
+static void ggml_vk_ensure_non_transposed(const ggml_tensor * tensor) {
+    if (!tensor->buffer || !ggml_backend_buffer_is_vk(tensor->buffer)) {
+        return;
+    }
+    ggml_backend_vk_buffer_context * buf_ctx =
+        (ggml_backend_vk_buffer_context *)tensor->buffer->context;
+    if (!buf_ctx->transposed_a_tensors.count(tensor)) {
+        return;
+    }
+
+    const size_t block_size = ggml_type_size(tensor->type);
+    const int64_t n_rows = tensor->ne[1];
+    const int64_t blocks_per_row = tensor->ne[0] / ggml_blck_size(tensor->type);
+    const int64_t n_experts = tensor->ne[2];
+    const size_t expert_blocks = n_rows * blocks_per_row;
+    const size_t expert_size = expert_blocks * block_size;
+    const size_t total_size = n_experts * expert_size;
+
+    std::vector<uint8_t> transposed(total_size);
+    vk_buffer buf = buf_ctx->dev_buffer;
+    const uint64_t buf_off = vk_tensor_offset(tensor) + tensor->view_offs;
+    ggml_vk_buffer_read(buf, buf_off, transposed.data(), total_size);
+
+    std::vector<uint8_t> original(total_size);
+    for (int64_t e = 0; e < n_experts; e++) {
+        const size_t eo = e * expert_size;
+        for (int64_t row = 0; row < n_rows; row++) {
+            for (int64_t kb = 0; kb < blocks_per_row; kb++) {
+                memcpy(original.data() + eo + (row * blocks_per_row + kb) * block_size,
+                       transposed.data() + eo + (kb * n_rows + row) * block_size,
+                       block_size);
+            }
+        }
+    }
+
+    ggml_vk_buffer_write(buf, buf_off, original.data(), total_size);
+    buf_ctx->transposed_a_tensors.erase(tensor);
+}
+
 static void ggml_vk_get_rows(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
+    ggml_vk_ensure_non_transposed(src0);
+
     const uint32_t src0_type_size = ggml_type_size(src0->type);
     const uint32_t src1_type_size = ggml_type_size(src1->type);
     const uint32_t dst_type_size = ggml_type_size(dst->type);
@@ -11325,6 +11378,8 @@ static void ggml_vk_repeat_back(ggml_backend_vk_context * ctx, vk_context& subct
 }
 
 static void ggml_vk_cpy(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, ggml_tensor * dst) {
+    ggml_vk_ensure_non_transposed(src0);
+
     uint32_t ne = (uint32_t)ggml_nelements(src0);
     if (ggml_is_quantized(src0->type) && ggml_is_quantized(dst->type)) {
         // Convert from number of logical elements to 2- or 4-byte units.
@@ -13991,6 +14046,19 @@ static void ggml_backend_vk_buffer_memset_tensor(ggml_backend_buffer_t buffer, g
     ggml_vk_buffer_memset(buf, vk_tensor_offset(tensor) + tensor->view_offs + offset, val32, size);
 }
 
+static bool ggml_vk_has_transa_pipeline(const vk_device & device, ggml_type type) {
+    if (type >= GGML_TYPE_COUNT) {
+        return false;
+    }
+    auto non_empty = [](const vk_matmul_pipeline & p) {
+        return p && !p->is_empty();
+    };
+    const vk_matmul_pipeline2 & mm  = device->pipeline_dequant_mul_mat_mat_transa[type];
+    const vk_matmul_pipeline2 & mid = device->pipeline_dequant_mul_mat_mat_id_transa[type];
+    return non_empty(mm.f16acc)  || non_empty(mm.f32acc)
+        || non_empty(mid.f16acc) || non_empty(mid.f32acc);
+}
+
 static void ggml_backend_vk_buffer_set_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor, const void * data, size_t offset, size_t size) {
     VK_LOG_DEBUG("ggml_backend_vk_buffer_set_tensor(" << buffer << ", " << tensor << ", " << data << ", " << offset << ", " << size << ")");
     ggml_backend_vk_buffer_context * buf_ctx = (ggml_backend_vk_buffer_context *)buffer->context;
@@ -14002,9 +14070,16 @@ static void ggml_backend_vk_buffer_set_tensor(ggml_backend_buffer_t buffer, ggml
 
     // Repack weight blocks from [row, k_block] to [k_block, row] order.
     // Token embedding is excluded: it is used as a lookup table, not a matmul operand.
-    if (buf_ctx->device.lock()->transpose_a && offset == 0 && tensor->ne[3] == 1
-        && (tensor->type == GGML_TYPE_Q4_K || tensor->type == GGML_TYPE_Q5_K || tensor->type == GGML_TYPE_Q6_K || tensor->type == GGML_TYPE_Q5_1)
-        && strstr(tensor->name, "token_embd") == nullptr) {
+    // Guard: only repack when a transa pipeline actually exists for this dtype, otherwise
+    // dispatch will use a non-transa pipeline and read the data with the wrong layout.
+    // Views are excluded: graph_copy reads via get_tensor on the parent tensor, not the
+    // view, so the un-transpose in get_tensor would never trigger (the parent pointer
+    // is not in transposed_a_tensors).  Real model weights are never views.
+    auto dev = buf_ctx->device.lock();
+    if (dev && dev->transpose_a && offset == 0 && tensor->ne[3] == 1
+        && tensor->view_src == nullptr
+        && strstr(tensor->name, "token_embd") == nullptr
+        && ggml_vk_has_transa_pipeline(dev, tensor->type)) {
         const size_t block_size = ggml_type_size(tensor->type);
         const int64_t n_rows = tensor->ne[1];
         const int64_t blocks_per_row = tensor->ne[0] / ggml_blck_size(tensor->type);
@@ -14034,6 +14109,14 @@ static void ggml_backend_vk_buffer_set_tensor(ggml_backend_buffer_t buffer, ggml
         }
     }
 
+    // When writing to a view, invalidate any transpose record on its parent.
+    // The test framework creates a base tensor (transposed in set_tensor above),
+    // then writes the view with non-transposed data.  Without this erasure,
+    // get_tensor would un-transpose the already-non-transposed view region.
+    if (tensor->view_src != nullptr) {
+        buf_ctx->transposed_a_tensors.erase(tensor->view_src);
+    }
+
     ggml_vk_buffer_write(buf, vk_tensor_offset(tensor) + tensor->view_offs + offset, data, size);
 }
 
@@ -14048,6 +14131,7 @@ static void ggml_backend_vk_buffer_set_tensor_2d(ggml_backend_buffer_t buffer, g
         return;
     }
 
+    buf_ctx->transposed_a_tensors.erase(tensor);
     ggml_vk_buffer_write_2d(buf, vk_tensor_offset(tensor) + tensor->view_offs + offset, data, stride_data, stride_tensor, size, n_copies);
 }
 
@@ -14068,18 +14152,23 @@ static void ggml_backend_vk_buffer_get_tensor(ggml_backend_buffer_t buffer, cons
         const size_t block_size = ggml_type_size(tensor->type);
         const int64_t n_rows = tensor->ne[1];
         const int64_t blocks_per_row = tensor->ne[0] / ggml_blck_size(tensor->type);
-        const size_t total_blocks = n_rows * blocks_per_row;
+        const int64_t n_experts = tensor->ne[2];
+        const size_t expert_blocks = n_rows * blocks_per_row;
+        const size_t expert_size = expert_blocks * block_size;
 
-        if (size == total_blocks * block_size) {
+        if (size == n_experts * expert_size) {
             std::vector<uint8_t> original(size);
             const uint8_t * src = (const uint8_t *)data;
             uint8_t * dst = original.data();
 
-            for (int64_t row = 0; row < n_rows; row++) {
-                for (int64_t kb = 0; kb < blocks_per_row; kb++) {
-                    memcpy(dst + (row * blocks_per_row + kb) * block_size,
-                           src + (kb * n_rows + row) * block_size,
-                           block_size);
+            for (int64_t e = 0; e < n_experts; e++) {
+                const size_t expert_offset = e * expert_size;
+                for (int64_t row = 0; row < n_rows; row++) {
+                    for (int64_t kb = 0; kb < blocks_per_row; kb++) {
+                        memcpy(dst + expert_offset + (row * blocks_per_row + kb) * block_size,
+                               src + expert_offset + (kb * n_rows + row) * block_size,
+                               block_size);
+                    }
                 }
             }
 
@@ -14127,6 +14216,7 @@ static bool ggml_backend_vk_buffer_cpy_tensor(ggml_backend_buffer_t buffer, cons
 static void ggml_backend_vk_buffer_clear(ggml_backend_buffer_t buffer, uint8_t value) {
     ggml_backend_vk_buffer_context * ctx = (ggml_backend_vk_buffer_context *)buffer->context;
 
+    ctx->transposed_a_tensors.clear();
     ggml_vk_buffer_memset(ctx->dev_buffer, 0, value, buffer->size);
 }
 
