@@ -1252,13 +1252,14 @@ The `response_format` parameter supports both plain JSON output (e.g. `{"type": 
 
 For multimodal input (typed content, `messages[i].content[j]`):
 - If `type == "image_url"`:
-    - `image_url.url` can be a remote URL, base64 (raw or URI-encoded) or path to local file
+    - `image_url.url` can be a remote URL, base64 (raw or URI-encoded via `data:image/...;base64`) or path to local file
+    - Accepts formats supported by `stb_image` (jpeg, png, tga, bmp, gif, ...)
 - If `type == "input_audio"`:
-    - Either `input_audio.data` or `input_audio.url` can be specified, can be a remote URL, base64 raw or path to local file
+    - Either `input_audio.data` or `input_audio.url` can be specified, can be a remote URL, raw base64 or path to local file
     - Accepts formats supported by `miniaudio` (mp3, wav, flac)
     - `input_audio.format` will be ignored, the file format will be determined automatically
 - If `type == "input_video"`:
-    - Either `input_video.data` or `input_video.url` can be specified, can be a remote URL, base64 raw or path to local file
+    - Either `input_video.data` or `input_video.url` can be specified, can be a remote URL, raw base64 or path to local file
     - Accepts formats supported by `ffmpeg`
 - Note: for local file, make sure to set `--media-path`. File path must be prefixed by `file://`
 
