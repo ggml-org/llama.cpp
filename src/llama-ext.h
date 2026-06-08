@@ -130,4 +130,3 @@ LLAMA_API const int32_t * llama_model_target_extract_layers  (const struct llama
 LLAMA_API uint32_t        llama_model_n_target_extract_layers(const struct llama_model * model);
 // returns the target model hidden size
 LLAMA_API uint32_t        llama_model_target_hidden_size     (const struct llama_model * model);
-

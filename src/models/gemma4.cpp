@@ -211,7 +211,7 @@ llama_model_gemma4::graph::graph(const llama_model & model, const llm_graph_para
         const int   n_rot_l      = hparams.n_rot(il);
 
         res->t_layer_inp[il] = inpL;
-        
+
         // norm
         cur = build_norm(inpL, model.layers[il].attn_norm, nullptr, LLM_NORM_RMS, il);
         cb(cur, "attn_norm", il);
