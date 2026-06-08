@@ -849,11 +849,35 @@ private:
                 }
                 cparams_dft.n_rs_seq = 0;
 
+                bool skip_measure = false;
+
+                // Integrated MTP shares the target model; the no-alloc probe context cannot be
+                // constructed without llama_set_mtp_source(), so memory_breakdown() aborts.
+                // See https://github.com/ggml-org/llama.cpp/issues/24117
+                if (spec_mtp && !has_draft) {
+                    skip_measure = true;
+                    SRV_WRN("[spec] skipping --fit memory measurement for integrated MTP model '%s'\n",
+                            params_dft.model.path.c_str());
+                } else if (spec_mtp && has_draft) {
+                    struct gguf_init_params meta_params = {
+                        /* .no_alloc = */ true,
+                        /* .ctx      = */ nullptr,
+                    };
+                    gguf_context_ptr meta(gguf_init_from_file(params_dft.model.path.c_str(), meta_params));
+                    const int arch_key = gguf_find_key(meta.get(), "general.architecture");
+                    if (arch_key >= 0 &&
+                            std::string(gguf_get_val_str(meta.get(), arch_key)) == "gemma4-assistant") {
+                        skip_measure = true;
+                        SRV_WRN("[spec] skipping --fit memory measurement for Gemma 4 assistant draft model '%s'\n",
+                                params_dft.model.path.c_str());
+                    }
+                }
+
                 std::vector<ggml_backend_dev_t> devs;
                 uint32_t hp_ngl = 0;
                 uint32_t hp_nct = 0;
                 uint32_t hp_nex = 0;
-                try {
+                if (!skip_measure) try {
                     auto dmd = common_get_device_memory_data(
                         params_dft.model.path.c_str(), &mparams_dft, &cparams_dft,
                         devs, hp_ngl, hp_nct, hp_nex, GGML_LOG_LEVEL_ERROR);
