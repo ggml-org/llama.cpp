@@ -78,6 +78,18 @@ const char * llama_load_modifier_name(uint32_t load_modifier) {
     return result.c_str();
 }
 
+enum llama_load_mode llama_load_mode_from_str(const char * str) {
+    if (std::strcmp(str, "none") == 0) { return LLAMA_LOAD_MODE_NONE;      }
+    if (std::strcmp(str, "mmap") == 0) { return LLAMA_LOAD_MODE_MMAP;      }
+    if (std::strcmp(str, "dio")  == 0) { return LLAMA_LOAD_MODE_DIRECT_IO; }
+    throw std::invalid_argument(std::string("unknown load mode: ") + str);
+}
+
+enum llama_load_modifier llama_load_modifier_from_str(const char * str) {
+    if (std::strcmp(str, "mlock") == 0) { return LLAMA_LOAD_MODIFIER_MLOCK; }
+    throw std::invalid_argument(std::string("unknown load modifier: ") + str);
+}
+
 struct llama_sampler_chain_params llama_sampler_chain_default_params() {
     struct llama_sampler_chain_params result = {
         /*.no_perf =*/ true,
