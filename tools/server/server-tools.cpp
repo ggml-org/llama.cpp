@@ -114,6 +114,251 @@ json server_tool::to_json() {
     };
 }
 
+// Structure pour représenter une action (skill/agent)
+struct SkillAction {
+    std::string name;        // Nom de l'action (ex: "web_search")
+    std::string description; // Description de l'action
+    std::string command;     // Commande associée (ex: "websearch {query}")
+};
+
+// List of forbidden commands and chars (security)
+static const std::vector<std::string> FORBIDDEN_COMMANDS = {
+    "bash", "chmod", "chown", "dd", "fdisk", "fish", "format", "halt", "ifconfig", "iptables", "kill",
+    "killall", "ln", "mkfs", "rmdir", "mv", "nc", "netcat", "nmap", "ping", "parted", "perl",
+    "poweroff", "pkill", "reboot", "rm", "scp", "sh", "shutdown", "sudo", "ufw", "zsh"
+};
+
+static const std::vector<char> FORBIDDEN_CHARS = {
+    '|', '&', '>', '<', '$', '`', '(', ')', '{', '}', '[', ']', '!', '\\', '\''
+};
+
+// Store global skills (load_skills)
+static std::vector<SkillAction> global_skills;
+
+// Check if command contains forbidden elements
+static bool is_command_safe(const std::string& command) {
+    // check commands
+    for (const auto& forbidden_cmd : FORBIDDEN_COMMANDS) {
+        if (command.find(forbidden_cmd) != std::string::npos) {
+            return false;
+        }
+    }
+
+    // check chars
+    for (char forbidden_char : FORBIDDEN_CHARS) {
+        if (command.find(forbidden_char) != std::string::npos) {
+            return false;
+        }
+    }
+
+    // check path
+    if (command.find("/") != std::string::npos) {
+        return false;
+    }
+
+    return true;
+}
+
+//
+// execute_skils: execute user-side skills
+//
+
+
+//
+// load_skills: load SKILLS.md user-side skills
+//
+
+// The SKILLS.md file should have the following syntax:
+//
+// # Skills/Agents Definition
+//
+// - **web_search**: Search the web for a query (command: `websearch "{query}"`)
+// - **read_file**: Read a file and return its content (command: `cat "{path}"`)
+// - **summarize**: Summarize a text (command: `python summarize.py "{text}"`)
+
+struct server_tool_load_skills : server_tool {
+    std::vector<SkillAction> actions; // Liste des actions chargées
+
+    server_tool_load_skills() {
+        name = "load_skills";
+        display_name = "Load Skills/Agents";
+        permission_write = false;
+    }
+
+    // Parse une ligne au format Markdown (ex: "- **web_search**: description (command: `websearch {query}`)")
+    SkillAction parse_skill_line(const std::string& line) {
+        SkillAction action;
+        // Regex mise à jour pour correspondre à votre format
+        std::regex skill_regex(R"(\*\*(.*?)\*\*: (.*?) \(command: `(.*?)`\))");
+        std::smatch matches;
+
+        if (std::regex_search(line, matches, skill_regex)) {
+            if (matches.size() == 4) {
+                action.name = matches[1].str();
+                action.description = matches[2].str();
+                action.command = matches[3].str();
+            }
+        }
+        return action;
+    }
+
+    // Charge les actions depuis un fichier Markdown
+    bool load_skills_from_file(const std::string& path) {
+        std::ifstream file(path);
+        if (!file.is_open()) {
+            return false;
+        }
+
+        actions.clear(); // Réinitialiser la liste
+        std::string line;
+        while (std::getline(file, line)) {
+            // Ignorer les lignes vides ou les titres
+            if (line.empty() || line[0] == '#') continue;
+
+            SkillAction action = parse_skill_line(line);
+            if (!action.name.empty()) {
+                actions.push_back(action);
+            }
+        }
+        return true;
+    }
+
+    json get_definition() override {
+        return {
+            {"type", "function"},
+            {"function", {
+                {"name", name},
+                {"description", "Load a SKILLS.md or AGENTS.md file and extract available actions. "
+                    "Commands are validated for security. Unsafe commands are skipped."},
+                    {"parameters", {
+                        {"type", "object"},
+                        {"properties", {
+                            {"path", {{"type", "string"}, {"description", "Path to the SKILLS.md or AGENTS.md file"}}},
+                        }},
+                        {"required", json::array({"path"})},
+                    }},
+            }},
+        };
+    }
+
+    json invoke(json params) override {
+        std::string path = params.at("path").get<std::string>();
+
+        if (!load_skills_from_file(path)) {
+            return {{"error", "Failed to open or parse file: " + path}};
+        }
+
+        // Store the loaded skills globally
+        global_skills = actions;
+
+        json actions_json = json::array();
+        for (const auto& action : actions) {
+            actions_json.push_back({
+                {"name", action.name},
+                {"description", action.description},
+                {"command", action.command}
+            });
+        }
+
+        return {
+            {"actions", actions_json},
+            {"count", actions.size()},
+            {"warning", "Unsafe commands were skipped during loading."}
+        };
+    }
+};
+
+struct server_tool_execute_skill : server_tool {
+
+    server_tool_execute_skill() {
+        name = "execute_skill";
+        display_name = "Execute Skill";
+        permission_write = false;
+    }
+
+    json get_definition() override {
+        return {
+            {"type", "function"},
+            {"function", {
+                {"name", name},
+                {"description", "Execute a skill/action loaded from SKILLS.md or AGENTS.md. "
+                    "The skill must be loaded first using the 'load_skills' tool. "
+                    "Commands are validated for security before execution."},
+                    {"parameters", {
+                        {"type", "object"},
+                        {"properties", {
+                            {"skill_name", {{"type", "string"}, {"description", "Name of the skill to execute"}}},
+                            {"args", {{"type", "object"}, {"description", "Arguments for the skill (e.g., {\"query\": \"test\"})"}}},
+                        }},
+                        {"required", json::array({"skill_name"})},
+                    }},
+            }},
+        };
+    }
+
+    json invoke(json params) override {
+        std::string skill_name = params.at("skill_name").get<std::string>();
+        json args = json_value(params, "args", json::object());
+
+        // Use the global skills list
+        auto it = std::find_if(
+            global_skills.begin(), global_skills.end(),
+                               [&skill_name](const SkillAction& action) { return action.name == skill_name; }
+        );
+
+        if (it == global_skills.end()) {
+            return {{"error", "Skill not found: " + skill_name}};
+        }
+
+        // Replace placeholders in the command
+        std::string command = it->command;
+        for (auto& arg : args.items()) {
+            std::string placeholder = "{" + arg.key() + "}";
+            size_t pos = command.find(placeholder);
+            if (pos != std::string::npos) {
+                std::string arg_value = arg.value().dump();
+                if (arg_value.front() == '"' && arg_value.back() == '"') {
+                    arg_value = arg_value.substr(1, arg_value.length() - 2);
+                }
+                command.replace(pos, placeholder.length(), arg_value);
+            }
+        }
+
+        // Security validation
+        if (!is_command_safe(command)) {
+            return {
+                {"error", "Command blocked for security reasons: '" + command + "' contains forbidden keywords or characters."},
+                {"forbidden_keywords", FORBIDDEN_COMMANDS},
+                {"forbidden_chars", std::string(FORBIDDEN_CHARS.begin(), FORBIDDEN_CHARS.end())}
+            };
+        }
+
+        // Execute the command
+        std::array<char, 128> buffer;
+        std::string result;
+        std::unique_ptr<FILE, decltype(&pclose)> pipe(popen(command.c_str(), "r"), pclose);
+
+        if (!pipe) {
+            return {{"error", "Failed to execute command for skill: " + skill_name}};
+        }
+
+        while (fgets(buffer.data(), buffer.size(), pipe.get()) != nullptr) {
+            result += buffer.data();
+        }
+
+        if (!result.empty() && result.back() == '\n') {
+            result.pop_back();
+        }
+
+        return {
+            {"output", result},
+            {"skill", skill_name},
+            {"command_executed", command}
+        };
+    }
+
+};
+
 //
 // read_file: read a file with optional line range and line-number prefix
 //
@@ -737,6 +982,8 @@ static std::vector<std::unique_ptr<server_tool>> build_tools() {
     tools.push_back(std::make_unique<server_tool_edit_file>());
     tools.push_back(std::make_unique<server_tool_apply_diff>());
     tools.push_back(std::make_unique<server_tool_get_datetime>());
+    tools.push_back(std::make_unique<server_tool_load_skills>());
+    tools.push_back(std::make_unique<server_tool_execute_skill>());
     return tools;
 }
 
