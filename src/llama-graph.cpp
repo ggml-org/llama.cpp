@@ -1257,6 +1257,29 @@ ggml_tensor * llm_graph_context::build_ffn(
      llm_ffn_op_type   type_op,
    llm_ffn_gate_type   type_gate,
                  int   il) const {
+    // NVFP4 support is currently restricted to
+    // 1) LORA absence (*_s would be applied after LORA residual, which is incorrect)
+    // 2) bias absense (*_s would be applied after bias addition, which is incorrect)
+    // TODO: disambiguate LLM-architectural scales (which use *_s) from NVFP4 scale_2 (which also uses *_s currently)
+    auto has_lora = [this](ggml_tensor * w) {
+        if (!w) {
+            return false;
+        }
+        for (const auto & lora : *loras) {
+            if (lora.first->get_weight(w) != nullptr) {
+                return true;
+            }
+        }
+        return false;
+    };
+
+    GGML_ASSERT(!up_s   || !up_b   || !up   || up->type   != GGML_TYPE_NVFP4);
+    GGML_ASSERT(!gate_s || !gate_b || !gate || gate->type != GGML_TYPE_NVFP4);
+    GGML_ASSERT(!down_s || !down_b || !down || down->type != GGML_TYPE_NVFP4);
+    GGML_ASSERT(!up_s   || !up   || up->type   != GGML_TYPE_NVFP4 || !has_lora(up));
+    GGML_ASSERT(!gate_s || !gate || gate->type != GGML_TYPE_NVFP4 || !has_lora(gate));
+    GGML_ASSERT(!down_s || !down || down->type != GGML_TYPE_NVFP4 || !has_lora(down));
+
     ggml_tensor * tmp = up ? build_lora_mm(up, cur) : cur;
     cb(tmp, "ffn_up", il);
 
