@@ -1,8 +1,9 @@
 import pytest
 from openai import OpenAI
-from utils import *
+from utils import ServerPreset, ServerProcess, match_regex, ServerError
 
 server: ServerProcess
+
 
 @pytest.fixture(autouse=True)
 def create_server():
@@ -71,6 +72,7 @@ def test_chat_completion_cached_tokens():
         })
         assert res.body["usage"]["prompt_tokens"] == n_prompt
         assert res.body["usage"]["prompt_tokens_details"]["cached_tokens"] == n_cache
+
 
 @pytest.mark.parametrize(
     "system_prompt,user_prompt,max_tokens,re_content,n_prompt,n_predicted,finish_reason",
@@ -454,6 +456,7 @@ def test_logit_bias():
     assert output_text
     assert all(output_text.find(" " + tok + " ") == -1 for tok in exclude)
 
+
 def test_context_size_exceeded():
     global server
     server.start()
@@ -480,9 +483,10 @@ def test_context_size_exceeded_stream():
             "messages": [
                 {"role": "system", "content": "Book"},
                 {"role": "user", "content": "What is the best book"},
-            ] * 100, # make the prompt too long
-            "stream": True}):
-                pass
+            ] * 100,  # make the prompt too long
+            "stream": True,
+        }):
+            pass
         assert False, "Should have failed"
     except ServerError as e:
         assert e.code == 400
@@ -507,6 +511,7 @@ def test_return_progress(n_batch, batch_count, reuse_cache):
     server.n_ctx = 256
     server.n_slots = 1
     server.start()
+
     def make_cmpl_request():
         return server.make_stream_request("POST", "/chat/completions", data={
             "max_tokens": 10,
@@ -573,3 +578,19 @@ def test_chat_completions_multiple_choices():
         for choice in res.body["choices"]:
             assert "assistant" == choice["message"]["role"]
             assert choice["finish_reason"] == "length"
+
+
+def test_chat_completions_token_count():
+    global server
+    server.start()
+    # make sure cache can be reused across multiple choices and multiple requests
+    # ref: https://github.com/ggml-org/llama.cpp/pull/18663
+    for _ in range(2):
+        res = server.make_request("POST", "/v1/chat/completions/input_tokens", data={
+            "messages": [
+                {"role": "system", "content": "Book"},
+                {"role": "user", "content": "What is the best book"},
+            ],
+        })
+        assert res.status_code == 200
+        assert res.body["input_tokens"] > 5

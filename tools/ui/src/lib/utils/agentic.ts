@@ -1,4 +1,4 @@
-import { AgenticSectionType, MessageRole } from '$lib/enums';
+import { AgenticSectionType, ContinueIntentKind, MessageRole } from '$lib/enums';
 import { ATTACHMENT_SAVED_REGEX, NEWLINE_SEPARATOR } from '$lib/constants';
 import type { ApiChatCompletionToolCall } from '$lib/types/api';
 import type {
@@ -224,4 +224,37 @@ export function hasAgenticContent(
 	}
 
 	return toolMessages.length > 0;
+}
+
+export type ContinueIntent =
+	| { kind: ContinueIntentKind.APPEND_TEXT }
+	| { kind: ContinueIntentKind.RERUN_TURN; truncateAfter: number }
+	| { kind: ContinueIntentKind.NEXT_TURN; truncateAfter: number };
+
+export function classifyContinueIntent(messages: DatabaseMessage[], idx: number): ContinueIntent {
+	const target = messages[idx];
+
+	if (!target || target.role !== MessageRole.ASSISTANT) {
+		return { kind: ContinueIntentKind.APPEND_TEXT };
+	}
+
+	const hasToolCalls = parseToolCalls(target.toolCalls).length > 0;
+	if (!hasToolCalls) {
+		return { kind: ContinueIntentKind.APPEND_TEXT };
+	}
+
+	let lastTrailingTool = idx;
+	for (let i = idx + 1; i < messages.length; i++) {
+		if (messages[i].role === MessageRole.TOOL) {
+			lastTrailingTool = i;
+		} else {
+			break;
+		}
+	}
+
+	if (lastTrailingTool > idx) {
+		return { kind: ContinueIntentKind.NEXT_TURN, truncateAfter: lastTrailingTool };
+	}
+
+	return { kind: ContinueIntentKind.RERUN_TURN, truncateAfter: idx - 1 };
 }

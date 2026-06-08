@@ -25,6 +25,10 @@ fn store_shmem(val: f16, idx: u32) {
 }
 #endif // SCALAR
 
+#define QUANT_SHMEM shmem
+#define QUANT_OUT_TYPE f16
+#include "quant_inner_loops.tmpl"
+
 #ifdef INIT_SRC0_SHMEM_FLOAT
 fn init_shmem_src0(thread_id: u32, batch_offset: u32, offset_m: u32, k_outer: u32) {
     for (var elem_idx = thread_id * VEC_SIZE; elem_idx < TILE_SRC0_SHMEM; elem_idx += TOTAL_WORKGROUP_SIZE * VEC_SIZE) {
@@ -124,14 +128,7 @@ fn init_shmem_src0(thread_id: u32, batch_offset: u32, offset_m: u32, k_outer: u3
 
                 let q_byte_offset = block_byte_base + 2u + block_offset * BYTES_PER_THREAD + j * BYTES_PER_INNER_LOOP;
                 let q_packed = load_u32_at_src0(q_byte_offset);
-
-                for (var k = 0u; k < BYTES_PER_INNER_LOOP; k++) {
-                    let q_byte = get_byte(q_packed, k);
-                    let q_hi = (f16((q_byte >> 4) & 0xF) - 8.0) * d;
-                    let q_lo = (f16(q_byte & 0xF) - 8.0) * d;
-                    shmem[shmem_idx + j * BYTES_PER_INNER_LOOP + k] = q_lo;
-                    shmem[shmem_idx + j * BYTES_PER_INNER_LOOP + k + 16u] = q_hi;
-                }
+                dequant_q4_0_packed_to_shmem(q_packed, d, shmem_idx + j * BYTES_PER_INNER_LOOP);
             }
         }
     }
@@ -314,12 +311,7 @@ fn init_shmem_src0(thread_id: u32, batch_offset: u32, offset_m: u32, k_outer: u3
             for (var j = 0u; j < BYTES_PER_THREAD / BYTES_PER_INNER_LOOP; j += 1) {
                 let q_byte_offset = block_byte_base + 2u + block_offset * BYTES_PER_THREAD + j * BYTES_PER_INNER_LOOP;
                 let q_packed = load_u32_at_src0(q_byte_offset);
-                for (var k = 0u; k < BYTES_PER_INNER_LOOP; k++) {
-                    let q_byte = get_byte_i32(q_packed, k);
-
-                    let q_val = f16(q_byte) * d;
-                    shmem[shmem_idx + j * BYTES_PER_INNER_LOOP + k] = q_val;
-                }
+                dequant_q8_0_packed_to_shmem(q_packed, d, shmem_idx + j * BYTES_PER_INNER_LOOP);
             }
         }
     }

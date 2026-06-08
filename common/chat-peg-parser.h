@@ -195,4 +195,3 @@ struct tagged_peg_parser {
 
 tagged_peg_parser build_tagged_peg_parser(
     const std::function<common_peg_parser(common_peg_parser_builder & builder)> & fn);
-

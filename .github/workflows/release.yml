@@ -27,29 +27,54 @@ on:
       '**/*.glsl'
     ]
 
-concurrency:
-  group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}
-  cancel-in-progress: true
-
 env:
+  GH_TOKEN: ${{ github.token }}
   BRANCH_NAME: ${{ github.head_ref || github.ref_name }}
   CMAKE_ARGS: "-DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_TOOLS=ON -DLLAMA_BUILD_SERVER=ON -DGGML_RPC=ON"
 
+# note: run this workflow one at a time for better cache reuse
+concurrency:
+  group: release
+  queue: max
+
 jobs:
+  check-release:
+    runs-on: ubuntu-slim
 
-  macOS-cpu:
+    outputs:
+      should_release: ${{ steps.check.outputs.should_release }}
 
+    steps:
+      - id: check
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "should_release=true" >> $GITHUB_OUTPUT
+          elif [[ "${{ github.event_name }}" == "push" && "${{ github.ref }}" == "refs/heads/master" ]]; then
+            if echo "${{ github.event.head_commit.message }}" | grep -q '\[no release\]'; then
+              echo "should_release=false" >> $GITHUB_OUTPUT
+            else
+              echo "should_release=true" >> $GITHUB_OUTPUT
+            fi
+          else
+            echo "should_release=false" >> $GITHUB_OUTPUT
+          fi
+
+  macos-cpu:
+    needs: [check-release]
+    if: ${{ needs.check-release.outputs.should_release == 'true' }}
     strategy:
       matrix:
         include:
           - build: 'arm64'
             arch: 'arm64'
-            os: macos-14
+            os: macos-26
             defines: "-DGGML_METAL_USE_BF16=ON -DGGML_METAL_EMBED_LIBRARY=ON"
-          - build: 'arm64-kleidiai'
-            arch: 'arm64'
-            os: macos-14
-            defines: "-DGGML_METAL_USE_BF16=ON -DGGML_METAL_EMBED_LIBRARY=ON -DGGML_CPU_KLEIDIAI=ON"
+          # TODO: this build is disabled to save Github Actions resources (https://github.com/ggml-org/llama.cpp/pull/23780)
+          #       in order to enable it again, we have to provision dedicated runners  to run it
+          #- build: 'arm64-kleidiai'
+          #  arch: 'arm64'
+          #  os: macos-14
+          #  defines: "-DGGML_METAL_USE_BF16=ON -DGGML_METAL_EMBED_LIBRARY=ON -DGGML_CPU_KLEIDIAI=ON"
           - build: 'x64'
             arch: 'x64'
             os: macos-15-intel
@@ -58,6 +83,9 @@ jobs:
             defines: "-DGGML_METAL=OFF -DCMAKE_OSX_DEPLOYMENT_TARGET=13.3"
 
     runs-on: ${{ matrix.os }}
+
+    permissions:
+      actions: write
 
     steps:
       - name: Clone
@@ -76,8 +104,7 @@ jobs:
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.21
         with:
-          key: macOS-latest-${{ matrix.arch }}
-          evict-old-files: 1d
+          key: release-${{ matrix.os }}-${{ matrix.arch }}
 
       - name: Build
         id: cmake_build
@@ -91,6 +118,11 @@ jobs:
             -DLLAMA_BUILD_BORINGSSL=ON \
             ${{ env.CMAKE_ARGS }}
           cmake --build build --config Release -j $(sysctl -n hw.logicalcpu)
+
+      - name: ccache-clear
+        uses: ./.github/actions/ccache-clear
+        with:
+          key: release-${{ matrix.os }}-${{ matrix.arch }}
 
       - name: Determine tag name
         id: tag
@@ -109,7 +141,8 @@ jobs:
           name: llama-bin-macos-${{ matrix.build }}.tar.gz
 
   ubuntu-cpu:
-
+    needs: [check-release]
+    if: ${{ needs.check-release.outputs.should_release == 'true' }}
     strategy:
       matrix:
         include:
@@ -121,6 +154,9 @@ jobs:
             os: ubuntu-24.04-s390x
 
     runs-on: ${{ matrix.os }}
+
+    permissions:
+      actions: write
 
     steps:
       - name: Clone
@@ -136,13 +172,6 @@ jobs:
           cache: "npm"
           cache-dependency-path: "tools/ui/package-lock.json"
 
-      - name: ccache
-        if: ${{ matrix.build != 's390x' }}
-        uses: ggml-org/ccache-action@v1.2.21
-        with:
-          key: ubuntu-cpu-${{ matrix.build }}
-          evict-old-files: 1d
-
       - name: Dependencies
         id: depends
         run: |
@@ -156,6 +185,12 @@ jobs:
           echo "CC=gcc-14" >> "$GITHUB_ENV"
           echo "CXX=g++-14" >> "$GITHUB_ENV"
 
+      - name: ccache
+        if: ${{ matrix.build != 's390x' }}
+        uses: ggml-org/ccache-action@v1.2.21
+        with:
+          key: release-${{ matrix.os }}-cpu
+
       - name: Build
         id: cmake_build
         run: |
@@ -168,6 +203,12 @@ jobs:
             -DLLAMA_FATAL_WARNINGS=ON \
             ${{ env.CMAKE_ARGS }}
           cmake --build build --config Release -j $(nproc)
+
+      - name: ccache-clear
+        if: ${{ matrix.build != 's390x' }}
+        uses: ./.github/actions/ccache-clear
+        with:
+          key: release-${{ matrix.os }}-cpu
 
       - name: Determine tag name
         id: tag
@@ -186,6 +227,8 @@ jobs:
           name: llama-bin-ubuntu-${{ matrix.build }}.tar.gz
 
   ubuntu-vulkan:
+    needs: [check-release]
+    if: ${{ needs.check-release.outputs.should_release == 'true' }}
 
     strategy:
       matrix:
@@ -196,6 +239,9 @@ jobs:
             os: ubuntu-24.04-arm
 
     runs-on: ${{ matrix.os }}
+
+    permissions:
+      actions: write
 
     steps:
       - name: Clone
@@ -210,12 +256,6 @@ jobs:
           node-version: "24"
           cache: "npm"
           cache-dependency-path: "tools/ui/package-lock.json"
-
-      - name: ccache
-        uses: ggml-org/ccache-action@v1.2.21
-        with:
-          key: ubuntu-vulkan-${{ matrix.build }}
-          evict-old-files: 1d
 
       - name: Dependencies
         id: depends
@@ -232,6 +272,11 @@ jobs:
             echo "CXX=g++-14" >> "$GITHUB_ENV"
           fi
 
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.21
+        with:
+          key: release-${{ matrix.os }}-vulkan
+
       - name: Build
         id: cmake_build
         run: |
@@ -244,6 +289,11 @@ jobs:
             -DGGML_VULKAN=ON \
             ${{ env.CMAKE_ARGS }}
           cmake --build build --config Release -j $(nproc)
+
+      - name: ccache-clear
+        uses: ./.github/actions/ccache-clear
+        with:
+          key: release-${{ matrix.os }}-vulkan
 
       - name: Determine tag name
         id: tag
@@ -262,8 +312,13 @@ jobs:
           name: llama-bin-ubuntu-vulkan-${{ matrix.build }}.tar.gz
 
   android-arm64:
+    needs: [check-release]
+    if: ${{ needs.check-release.outputs.should_release == 'true' }}
 
     runs-on: ubuntu-latest
+
+    #permissions:
+    #  actions: write
 
     env:
       NDK_VERSION: "29.0.14206865"
@@ -282,12 +337,6 @@ jobs:
           cache: "npm"
           cache-dependency-path: "tools/ui/package-lock.json"
 
-      - name: ccache
-        uses: ggml-org/ccache-action@v1.2.21
-        with:
-          key: android-arm64
-          evict-old-files: 1d
-
       - name: Set up JDK
         uses: actions/setup-java@v5
         with:
@@ -303,6 +352,17 @@ jobs:
         run: |
           sdkmanager "ndk;${{ env.NDK_VERSION }}"
           echo "ANDROID_NDK=${ANDROID_SDK_ROOT}/ndk/${{ env.NDK_VERSION }}" >> $GITHUB_ENV
+
+      # note : disabled to spare some cache space (https://github.com/ggml-org/llama.cpp/pull/23789)
+      #        for some reason, the ccache does not improve the build time in this case
+      # example:
+      #   cache off: https://github.com/ggerganov/tmp2/actions/runs/26534713799/job/78160400831
+      #   cache on:  https://github.com/ggerganov/tmp2/actions/runs/26534713799/job/78224189394
+      #
+      #- name: ccache
+      #  uses: ggml-org/ccache-action@v1.2.21
+      #  with:
+      #    key: release-android-arm64
 
       - name: Build
         id: cmake_build
@@ -322,6 +382,11 @@ jobs:
             ${{ env.CMAKE_ARGS }}
           cmake --build build --config Release -j $(nproc)
 
+      #- name: ccache-clear
+      #  uses: ./.github/actions/ccache-clear
+      #  with:
+      #    key: release-android-arm64
+
       - name: Determine tag name
         id: tag
         uses: ./.github/actions/get-tag-name
@@ -339,8 +404,13 @@ jobs:
           name: llama-bin-android-arm64.tar.gz
 
   ubuntu-24-openvino:
+    needs: [check-release]
+    if: ${{ needs.check-release.outputs.should_release == 'true' }}
 
     runs-on: ubuntu-24.04
+
+    permissions:
+      actions: write
 
     outputs:
       openvino_version: ${{ steps.openvino_version.outputs.value }}
@@ -371,8 +441,7 @@ jobs:
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.21
         with:
-          key: ubuntu-24-openvino-release-no-preset-v1
-          evict-old-files: 1d
+          key: release-ubuntu-24.04-openvino-release-no-preset-v1
 
       - name: Dependencies
         run: |
@@ -385,7 +454,7 @@ jobs:
         id: cache-openvino
         with:
           path: ./openvino_toolkit
-          key: openvino-toolkit-v${{ env.OPENVINO_VERSION_FULL }}-${{ runner.os }}
+          key: cache-gha-openvino-toolkit-v${{ env.OPENVINO_VERSION_FULL }}-${{ runner.os }}
 
       - name: Setup OpenVINO Toolkit
         if: steps.cache-openvino.outputs.cache-hit != 'true'
@@ -410,6 +479,11 @@ jobs:
             -DGGML_OPENVINO=ON
           cmake --build build/ReleaseOV --config Release -j $(nproc)
 
+      - name: ccache-clear
+        uses: ./.github/actions/ccache-clear
+        with:
+          key: release-ubuntu-24.04-openvino-release-no-preset-v1
+
       - name: Determine tag name
         id: tag
         uses: ./.github/actions/get-tag-name
@@ -427,8 +501,13 @@ jobs:
           name: llama-bin-ubuntu-openvino-${{ env.OPENVINO_VERSION_MAJOR }}-x64.tar.gz
 
   windows-cpu:
+    needs: [check-release]
+    if: ${{ needs.check-release.outputs.should_release == 'true' }}
 
     runs-on: windows-2025
+
+    permissions:
+      actions: write
 
     strategy:
       matrix:
@@ -449,16 +528,14 @@ jobs:
           cache: "npm"
           cache-dependency-path: "tools/ui/package-lock.json"
 
-      - name: ccache
-        uses: ggml-org/ccache-action@v1.2.21
-        with:
-          key: windows-latest-cpu-${{ matrix.arch }}
-          variant: ccache
-          evict-old-files: 1d
-
       - name: Install Ninja
         run: |
           choco install ninja
+
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.21
+        with:
+          key: release-windows-2025-${{ matrix.arch }}-cpu
 
       - name: Build
         shell: cmd
@@ -474,6 +551,11 @@ jobs:
             ${{ env.CMAKE_ARGS }}
           cmake --build build --config Release
 
+      - name: ccache-clear
+        uses: ./.github/actions/ccache-clear
+        with:
+          key: release-windows-2025-${{ matrix.arch }}-cpu
+
       - name: Pack artifacts
         id: pack_artifacts
         run: |
@@ -487,8 +569,13 @@ jobs:
           name: llama-bin-win-cpu-${{ matrix.arch }}.zip
 
   windows:
+    needs: [check-release]
+    if: ${{ needs.check-release.outputs.should_release == 'true' }}
 
     runs-on: windows-2025
+
+    permissions:
+      actions: write
 
     env:
       OPENBLAS_VERSION: 0.3.23
@@ -518,13 +605,6 @@ jobs:
           cache: "npm"
           cache-dependency-path: "tools/ui/package-lock.json"
 
-      - name: ccache
-        uses: ggml-org/ccache-action@v1.2.21
-        with:
-          key: windows-latest-${{ matrix.backend }}-${{ matrix.arch }}
-          variant: ccache
-          evict-old-files: 1d
-
       - name: Install Vulkan SDK
         id: get_vulkan
         if: ${{ matrix.backend == 'vulkan' }}
@@ -538,6 +618,12 @@ jobs:
         id: install_ninja
         run: |
           choco install ninja
+
+      # TODO: these jobs need to use llvm toolchain in order to utilize the ccache
+      #- name: ccache
+      #  uses: ggml-org/ccache-action@v1.2.21
+      #  with:
+      #    key: release-windows-2025-${{ matrix.arch }}-${{ matrix.backend }}
 
       - name: Install OpenCL Headers and Libs
         id: install_opencl
@@ -565,6 +651,11 @@ jobs:
           cmake -S . -B build ${{ matrix.defines }} -DGGML_NATIVE=OFF -DGGML_CPU=OFF -DGGML_BACKEND_DL=ON -DLLAMA_BUILD_BORINGSSL=ON
           cmake --build build --config Release --target ${{ matrix.target }}
 
+      #- name: ccache-clear
+      #  uses: ./.github/actions/ccache-clear
+      #  with:
+      #    key: release-windows-2025-${{ matrix.arch }}-${{ matrix.backend }}
+
       - name: Pack artifacts
         id: pack_artifacts
         run: |
@@ -577,12 +668,17 @@ jobs:
           name: llama-bin-win-${{ matrix.backend }}-${{ matrix.arch }}.zip
 
   windows-cuda:
+    needs: [check-release]
+    if: ${{ needs.check-release.outputs.should_release == 'true' }}
 
     runs-on: windows-2022
 
+    permissions:
+      actions: write
+
     strategy:
       matrix:
-        cuda: ['12.4', '13.1']
+        cuda: ['12.4', '13.3']
 
     steps:
       - name: Clone
@@ -596,13 +692,6 @@ jobs:
           cache: "npm"
           cache-dependency-path: "tools/ui/package-lock.json"
 
-      - name: Install ccache
-        uses: ggml-org/ccache-action@v1.2.21
-        with:
-          key: windows-cuda-${{ matrix.cuda }}
-          variant: ccache
-          evict-old-files: 1d
-
       - name: Install Cuda Toolkit
         uses: ./.github/actions/windows-setup-cuda
         with:
@@ -612,6 +701,11 @@ jobs:
         id: install_ninja
         run: |
           choco install ninja
+
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.21
+        with:
+          key: release-windows-2022-x64-cuda-${{ matrix.cuda }}
 
       - name: Build
         id: cmake_build
@@ -628,6 +722,11 @@ jobs:
             -DGGML_CUDA_CUB_3DOT2=ON
           set /A NINJA_JOBS=%NUMBER_OF_PROCESSORS%-1
           cmake --build build --config Release -j %NINJA_JOBS% --target ggml-cuda
+
+      - name: ccache-clear
+        uses: ./.github/actions/ccache-clear
+        with:
+          key: release-windows-2022-x64-cuda-${{ matrix.cuda }}
 
       - name: Pack artifacts
         id: pack_artifacts
@@ -655,216 +754,219 @@ jobs:
           path: cudart-llama-bin-win-cuda-${{ matrix.cuda }}-x64.zip
           name: cudart-llama-bin-win-cuda-${{ matrix.cuda }}-x64.zip
 
-  windows-sycl:
+# TODO: this build is disabled to save Github Actions resources (https://github.com/ggml-org/llama.cpp/pull/23705)
+#       in order to enable it again, we have to provision dedicated runners  to run it
+#  windows-sycl:
+#
+#    runs-on: windows-2022
+#
+#    defaults:
+#      run:
+#        shell: bash
+#
+#    env:
+#      WINDOWS_BASEKIT_URL: https://registrationcenter-download.intel.com/akdlm/IRC_NAS/b60765d1-2b85-4e85-86b6-cb0e9563a699/intel-deep-learning-essentials-2025.3.3.18_offline.exe
+#      WINDOWS_DPCPP_MKL: intel.oneapi.win.cpp-dpcpp-common:intel.oneapi.win.mkl.devel:intel.oneapi.win.dnnl:intel.oneapi.win.tbb.devel
+#      LEVEL_ZERO_SDK_URL: https://github.com/oneapi-src/level-zero/releases/download/v1.28.2/level-zero-win-sdk-1.28.2.zip
+#      ONEAPI_ROOT: "C:/Program Files (x86)/Intel/oneAPI"
+#      ONEAPI_INSTALLER_VERSION: "2025.3.3"
+#
+#    steps:
+#      - name: Clone
+#        id: checkout
+#        uses: actions/checkout@v6
+#
+#      - name: Use oneAPI Installation Cache
+#        uses: actions/cache@v5
+#        id: cache-sycl
+#        with:
+#          path: ${{ env.ONEAPI_ROOT }}
+#          key: cache-gha-oneAPI-${{ env.ONEAPI_INSTALLER_VERSION }}-${{ runner.os }}
+#
+#      - name: Download & Install oneAPI
+#        shell: bash
+#        if: steps.cache-sycl.outputs.cache-hit != 'true'
+#        run: |
+#          scripts/install-oneapi.bat $WINDOWS_BASEKIT_URL $WINDOWS_DPCPP_MKL
+#
+#      - name: Install Level Zero SDK
+#        shell: pwsh
+#        run: |
+#          Invoke-WebRequest -Uri "${{ env.LEVEL_ZERO_SDK_URL }}" -OutFile "level-zero-win-sdk.zip"
+#          Expand-Archive -Path "level-zero-win-sdk.zip" -DestinationPath "C:/level-zero-sdk" -Force
+#          "LEVEL_ZERO_V1_SDK_PATH=C:/level-zero-sdk" | Out-File -FilePath $env:GITHUB_ENV -Append
+#
+#      - name: Setup Node.js
+#        uses: actions/setup-node@v6
+#        with:
+#          node-version: "24"
+#          cache: "npm"
+#          cache-dependency-path: "tools/ui/package-lock.json"
+#
+#      - name: ccache
+#        uses: ggml-org/ccache-action@v1.2.21
+#        with:
+#          key: release-windows-2022-x64-sycl
+#
+#      - name: Build
+#        id: cmake_build
+#        shell: cmd
+#        run: |
+#          call "C:\Program Files (x86)\Intel\oneAPI\setvars.bat" intel64 --force
+#          cmake -G "Ninja" -B build ^
+#            -DCMAKE_C_COMPILER=cl -DCMAKE_CXX_COMPILER=icx ^
+#            -DCMAKE_BUILD_TYPE=Release ^
+#            -DGGML_BACKEND_DL=ON -DBUILD_SHARED_LIBS=ON ^
+#            -DGGML_CPU=OFF -DGGML_SYCL=ON ^
+#            -DLLAMA_BUILD_BORINGSSL=ON
+#          cmake --build build --target ggml-sycl -j
+#
+#      - name: Build the release package
+#        id: pack_artifacts
+#        run: |
+#          echo "cp oneAPI running time dll files in ${{ env.ONEAPI_ROOT }} to ./build/bin"
+#
+#          cp "${{ env.ONEAPI_ROOT }}/mkl/latest/bin/mkl_sycl_blas.5.dll" ./build/bin
+#          cp "${{ env.ONEAPI_ROOT }}/mkl/latest/bin/mkl_core.2.dll" ./build/bin
+#          cp "${{ env.ONEAPI_ROOT }}/mkl/latest/bin/mkl_tbb_thread.2.dll" ./build/bin
+#
+#          cp "${{ env.ONEAPI_ROOT }}/compiler/latest/bin/ur_adapter_level_zero.dll" ./build/bin
+#          cp "${{ env.ONEAPI_ROOT }}/compiler/latest/bin/ur_adapter_level_zero_v2.dll" ./build/bin
+#          cp "${{ env.ONEAPI_ROOT }}/compiler/latest/bin/ur_adapter_opencl.dll" ./build/bin
+#          cp "${{ env.ONEAPI_ROOT }}/compiler/latest/bin/ur_loader.dll" ./build/bin
+#          cp "${{ env.ONEAPI_ROOT }}/compiler/latest/bin/ur_win_proxy_loader.dll" ./build/bin
+#          ZE_LOADER_DLL=$(find "${{ env.ONEAPI_ROOT }}" "$LEVEL_ZERO_V1_SDK_PATH" -iname ze_loader.dll -print -quit 2>/dev/null || true)
+#          if [ -n "$ZE_LOADER_DLL" ]; then
+#            echo "Using Level Zero loader: $ZE_LOADER_DLL"
+#            cp "$ZE_LOADER_DLL" ./build/bin
+#          else
+#            echo "Level Zero loader DLL not found in oneAPI or SDK; relying on system driver/runtime"
+#          fi
+#
+#          cp "${{ env.ONEAPI_ROOT }}/compiler/latest/bin/sycl8.dll" ./build/bin
+#          cp "${{ env.ONEAPI_ROOT }}/compiler/latest/bin/svml_dispmd.dll" ./build/bin
+#          cp "${{ env.ONEAPI_ROOT }}/compiler/latest/bin/libmmd.dll" ./build/bin
+#          cp "${{ env.ONEAPI_ROOT }}/compiler/latest/bin/libiomp5md.dll" ./build/bin
+#          cp "${{ env.ONEAPI_ROOT }}/compiler/latest/bin/sycl-ls.exe" ./build/bin
+#          cp "${{ env.ONEAPI_ROOT }}/compiler/latest/bin/libsycl-fallback-bfloat16.spv" ./build/bin
+#          cp "${{ env.ONEAPI_ROOT }}/compiler/latest/bin/libsycl-native-bfloat16.spv" ./build/bin
+#
+#          cp "${{ env.ONEAPI_ROOT }}/dnnl/latest/bin/dnnl.dll" ./build/bin
+#          cp "${{ env.ONEAPI_ROOT }}/tbb/latest/bin/tbb12.dll" ./build/bin
+#
+#          cp "${{ env.ONEAPI_ROOT }}/tcm/latest/bin/tcm.dll" ./build/bin
+#          cp "${{ env.ONEAPI_ROOT }}/tcm/latest/bin/libhwloc-15.dll" ./build/bin
+#          cp "${{ env.ONEAPI_ROOT }}/umf/latest/bin/umf.dll" ./build/bin
+#
+#          echo "cp oneAPI running time dll files to ./build/bin done"
+#          7z a -snl llama-bin-win-sycl-x64.zip ./build/bin/*
+#
+#      - name: Upload the release package
+#        uses: actions/upload-artifact@v6
+#        with:
+#          path: llama-bin-win-sycl-x64.zip
+#          name: llama-bin-win-sycl-x64.zip
 
-    runs-on: windows-2022
-
-    defaults:
-      run:
-        shell: bash
-
-    env:
-      WINDOWS_BASEKIT_URL: https://registrationcenter-download.intel.com/akdlm/IRC_NAS/b60765d1-2b85-4e85-86b6-cb0e9563a699/intel-deep-learning-essentials-2025.3.3.18_offline.exe
-      WINDOWS_DPCPP_MKL: intel.oneapi.win.cpp-dpcpp-common:intel.oneapi.win.mkl.devel:intel.oneapi.win.dnnl:intel.oneapi.win.tbb.devel
-      LEVEL_ZERO_SDK_URL: https://github.com/oneapi-src/level-zero/releases/download/v1.28.2/level-zero-win-sdk-1.28.2.zip
-      ONEAPI_ROOT: "C:/Program Files (x86)/Intel/oneAPI"
-      ONEAPI_INSTALLER_VERSION: "2025.3.3"
-
-    steps:
-      - name: Clone
-        id: checkout
-        uses: actions/checkout@v6
-
-      - name: Use oneAPI Installation Cache
-        uses: actions/cache@v5
-        id: cache-sycl
-        with:
-          path: ${{ env.ONEAPI_ROOT }}
-          key: oneAPI-${{ env.ONEAPI_INSTALLER_VERSION }}-${{ runner.os }}
-
-      - name: Download & Install oneAPI
-        shell: bash
-        if: steps.cache-sycl.outputs.cache-hit != 'true'
-        run: |
-          scripts/install-oneapi.bat $WINDOWS_BASEKIT_URL $WINDOWS_DPCPP_MKL
-
-      - name: Install Level Zero SDK
-        shell: pwsh
-        run: |
-          Invoke-WebRequest -Uri "${{ env.LEVEL_ZERO_SDK_URL }}" -OutFile "level-zero-win-sdk.zip"
-          Expand-Archive -Path "level-zero-win-sdk.zip" -DestinationPath "C:/level-zero-sdk" -Force
-          "LEVEL_ZERO_V1_SDK_PATH=C:/level-zero-sdk" | Out-File -FilePath $env:GITHUB_ENV -Append
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: "24"
-          cache: "npm"
-          cache-dependency-path: "tools/ui/package-lock.json"
-
-      - name: ccache
-        uses: ggml-org/ccache-action@v1.2.21
-        with:
-          key: windows-latest-sycl
-          variant: ccache
-          evict-old-files: 1d
-
-      - name: Build
-        id: cmake_build
-        shell: cmd
-        run: |
-          call "C:\Program Files (x86)\Intel\oneAPI\setvars.bat" intel64 --force
-          cmake -G "Ninja" -B build ^
-            -DCMAKE_C_COMPILER=cl -DCMAKE_CXX_COMPILER=icx ^
-            -DCMAKE_BUILD_TYPE=Release ^
-            -DGGML_BACKEND_DL=ON -DBUILD_SHARED_LIBS=ON ^
-            -DGGML_CPU=OFF -DGGML_SYCL=ON ^
-            -DLLAMA_BUILD_BORINGSSL=ON
-          cmake --build build --target ggml-sycl -j
-
-      - name: Build the release package
-        id: pack_artifacts
-        run: |
-          echo "cp oneAPI running time dll files in ${{ env.ONEAPI_ROOT }} to ./build/bin"
-
-          cp "${{ env.ONEAPI_ROOT }}/mkl/latest/bin/mkl_sycl_blas.5.dll" ./build/bin
-          cp "${{ env.ONEAPI_ROOT }}/mkl/latest/bin/mkl_core.2.dll" ./build/bin
-          cp "${{ env.ONEAPI_ROOT }}/mkl/latest/bin/mkl_tbb_thread.2.dll" ./build/bin
-
-          cp "${{ env.ONEAPI_ROOT }}/compiler/latest/bin/ur_adapter_level_zero.dll" ./build/bin
-          cp "${{ env.ONEAPI_ROOT }}/compiler/latest/bin/ur_adapter_level_zero_v2.dll" ./build/bin
-          cp "${{ env.ONEAPI_ROOT }}/compiler/latest/bin/ur_adapter_opencl.dll" ./build/bin
-          cp "${{ env.ONEAPI_ROOT }}/compiler/latest/bin/ur_loader.dll" ./build/bin
-          cp "${{ env.ONEAPI_ROOT }}/compiler/latest/bin/ur_win_proxy_loader.dll" ./build/bin
-          ZE_LOADER_DLL=$(find "${{ env.ONEAPI_ROOT }}" "$LEVEL_ZERO_V1_SDK_PATH" -iname ze_loader.dll -print -quit 2>/dev/null || true)
-          if [ -n "$ZE_LOADER_DLL" ]; then
-            echo "Using Level Zero loader: $ZE_LOADER_DLL"
-            cp "$ZE_LOADER_DLL" ./build/bin
-          else
-            echo "Level Zero loader DLL not found in oneAPI or SDK; relying on system driver/runtime"
-          fi
-
-          cp "${{ env.ONEAPI_ROOT }}/compiler/latest/bin/sycl8.dll" ./build/bin
-          cp "${{ env.ONEAPI_ROOT }}/compiler/latest/bin/svml_dispmd.dll" ./build/bin
-          cp "${{ env.ONEAPI_ROOT }}/compiler/latest/bin/libmmd.dll" ./build/bin
-          cp "${{ env.ONEAPI_ROOT }}/compiler/latest/bin/libiomp5md.dll" ./build/bin
-          cp "${{ env.ONEAPI_ROOT }}/compiler/latest/bin/sycl-ls.exe" ./build/bin
-          cp "${{ env.ONEAPI_ROOT }}/compiler/latest/bin/libsycl-fallback-bfloat16.spv" ./build/bin
-          cp "${{ env.ONEAPI_ROOT }}/compiler/latest/bin/libsycl-native-bfloat16.spv" ./build/bin
-
-          cp "${{ env.ONEAPI_ROOT }}/dnnl/latest/bin/dnnl.dll" ./build/bin
-          cp "${{ env.ONEAPI_ROOT }}/tbb/latest/bin/tbb12.dll" ./build/bin
-
-          cp "${{ env.ONEAPI_ROOT }}/tcm/latest/bin/tcm.dll" ./build/bin
-          cp "${{ env.ONEAPI_ROOT }}/tcm/latest/bin/libhwloc-15.dll" ./build/bin
-          cp "${{ env.ONEAPI_ROOT }}/umf/latest/bin/umf.dll" ./build/bin
-
-          echo "cp oneAPI running time dll files to ./build/bin done"
-          7z a -snl llama-bin-win-sycl-x64.zip ./build/bin/*
-
-      - name: Upload the release package
-        uses: actions/upload-artifact@v6
-        with:
-          path: llama-bin-win-sycl-x64.zip
-          name: llama-bin-win-sycl-x64.zip
-
-  ubuntu-24-sycl:
-
-    strategy:
-      matrix:
-        build: [fp32, fp16]
-        include:
-          - build: fp32
-            fp16: OFF
-          - build: fp16
-            fp16: ON
-
-    runs-on: ubuntu-24.04
-
-    env:
-      ONEAPI_ROOT: /opt/intel/oneapi/
-      ONEAPI_INSTALLER_VERSION: "2025.3.3"
-      LEVEL_ZERO_VERSION: "1.28.2"
-      LEVEL_ZERO_UBUNTU_VERSION: "u24.04"
-
-    steps:
-      - name: Clone
-        id: checkout
-        uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-
-      - name: Use oneAPI Installation Cache
-        uses: actions/cache@v5
-        id: cache-sycl
-        with:
-          path: ${{ env.ONEAPI_ROOT }}
-          key: oneAPI-${{ env.ONEAPI_INSTALLER_VERSION }}-${{ runner.os }}
-
-      - name: Download & Install oneAPI
-        shell: bash
-        if: steps.cache-sycl.outputs.cache-hit != 'true'
-        run: |
-          cd /tmp
-          wget https://registrationcenter-download.intel.com/akdlm/IRC_NAS/56f7923a-adb8-43f3-8b02-2b60fcac8cab/intel-deep-learning-essentials-2025.3.3.16_offline.sh -O intel-deep-learning-essentials_offline.sh
-          sudo bash intel-deep-learning-essentials_offline.sh -s -a --silent --eula accept
-
-      - name: Install Level Zero SDK
-        shell: bash
-        run: |
-          cd /tmp
-          wget -q "https://github.com/oneapi-src/level-zero/releases/download/v${LEVEL_ZERO_VERSION}/level-zero_${LEVEL_ZERO_VERSION}%2B${LEVEL_ZERO_UBUNTU_VERSION}_amd64.deb" -O level-zero.deb
-          wget -q "https://github.com/oneapi-src/level-zero/releases/download/v${LEVEL_ZERO_VERSION}/level-zero-devel_${LEVEL_ZERO_VERSION}%2B${LEVEL_ZERO_UBUNTU_VERSION}_amd64.deb" -O level-zero-devel.deb
-          sudo apt-get install -y ./level-zero.deb ./level-zero-devel.deb
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: "24"
-          cache: "npm"
-          cache-dependency-path: "tools/ui/package-lock.json"
-
-      - name: ccache
-        uses: ggml-org/ccache-action@v1.2.21
-        with:
-          key: ubuntu-24-sycl-${{ matrix.build }}
-          evict-old-files: 1d
-          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
-
-      - name: Build
-        id: cmake_build
-        run: |
-          source /opt/intel/oneapi/setvars.sh
-          cmake -B build \
-            -G "Ninja" \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DGGML_SYCL=ON \
-            -DCMAKE_C_COMPILER=icx \
-            -DCMAKE_CXX_COMPILER=icpx \
-            -DLLAMA_OPENSSL=OFF \
-            -DGGML_NATIVE=OFF \
-            -DGGML_SYCL_F16=${{ matrix.fp16 }}
-          time cmake --build build --config Release -j $(nproc)
-
-      - name: Determine tag name
-        id: tag
-        uses: ./.github/actions/get-tag-name
-
-      - name: Pack artifacts
-        id: pack_artifacts
-        run: |
-          cp LICENSE ./build/bin/
-          tar -czvf llama-${{ steps.tag.outputs.name }}-bin-ubuntu-sycl-${{ matrix.build }}-x64.tar.gz --transform "s,^\.,llama-${{ steps.tag.outputs.name }}," -C ./build/bin .
-
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v6
-        with:
-          path: llama-${{ steps.tag.outputs.name }}-bin-ubuntu-sycl-${{ matrix.build }}-x64.tar.gz
-          name: llama-bin-ubuntu-sycl-${{ matrix.build }}-x64.tar.gz
+# TODO: this build is disabled to save Github Actions resources (https://github.com/ggml-org/llama.cpp/pull/23705)
+#       in order to enable it again, we have to provision dedicated runners  to run it
+#  ubuntu-24-sycl:
+#
+#    strategy:
+#      matrix:
+#        build: [fp32]
+#        include:
+#          - build: fp32
+#            fp16: OFF
+#
+#    runs-on: ubuntu-24.04
+#
+#    env:
+#      ONEAPI_ROOT: /opt/intel/oneapi/
+#      ONEAPI_INSTALLER_VERSION: "2025.3.3"
+#      LEVEL_ZERO_VERSION: "1.28.2"
+#      LEVEL_ZERO_UBUNTU_VERSION: "u24.04"
+#
+#    steps:
+#      - name: Clone
+#        id: checkout
+#        uses: actions/checkout@v6
+#        with:
+#          fetch-depth: 0
+#
+#      - name: Use oneAPI Installation Cache
+#        uses: actions/cache@v5
+#        id: cache-sycl
+#        with:
+#          path: ${{ env.ONEAPI_ROOT }}
+#          key: cache-gha-oneAPI-${{ env.ONEAPI_INSTALLER_VERSION }}-${{ runner.os }}
+#
+#      - name: Download & Install oneAPI
+#        shell: bash
+#        if: steps.cache-sycl.outputs.cache-hit != 'true'
+#        run: |
+#          cd /tmp
+#          wget https://registrationcenter-download.intel.com/akdlm/IRC_NAS/56f7923a-adb8-43f3-8b02-2b60fcac8cab/intel-deep-learning-essentials-2025.3.3.16_offline.sh -O intel-deep-learning-essentials_offline.sh
+#          sudo bash intel-deep-learning-essentials_offline.sh -s -a --silent --eula accept
+#
+#      - name: Install Level Zero SDK
+#        shell: bash
+#        run: |
+#          cd /tmp
+#          wget -q "https://github.com/oneapi-src/level-zero/releases/download/v${LEVEL_ZERO_VERSION}/level-zero_${LEVEL_ZERO_VERSION}%2B${LEVEL_ZERO_UBUNTU_VERSION}_amd64.deb" -O level-zero.deb
+#          wget -q "https://github.com/oneapi-src/level-zero/releases/download/v${LEVEL_ZERO_VERSION}/level-zero-devel_${LEVEL_ZERO_VERSION}%2B${LEVEL_ZERO_UBUNTU_VERSION}_amd64.deb" -O level-zero-devel.deb
+#          sudo apt-get install -y ./level-zero.deb ./level-zero-devel.deb
+#
+#      - name: Setup Node.js
+#        uses: actions/setup-node@v6
+#        with:
+#          node-version: "24"
+#          cache: "npm"
+#          cache-dependency-path: "tools/ui/package-lock.json"
+#
+#      - name: ccache
+#        uses: ggml-org/ccache-action@v1.2.21
+#        with:
+#          key: release-ubuntu-24.04-sycl
+#
+#      - name: Build
+#        id: cmake_build
+#        run: |
+#          source /opt/intel/oneapi/setvars.sh
+#          cmake -B build \
+#            -G "Ninja" \
+#            -DCMAKE_BUILD_TYPE=Release \
+#            -DGGML_SYCL=ON \
+#            -DCMAKE_C_COMPILER=icx \
+#            -DCMAKE_CXX_COMPILER=icpx \
+#            -DLLAMA_OPENSSL=OFF \
+#            -DGGML_NATIVE=OFF \
+#            -DGGML_SYCL_F16=${{ matrix.fp16 }}
+#          time cmake --build build --config Release -j $(nproc)
+#
+#      - name: Determine tag name
+#        id: tag
+#        uses: ./.github/actions/get-tag-name
+#
+#      - name: Pack artifacts
+#        id: pack_artifacts
+#        run: |
+#          cp LICENSE ./build/bin/
+#          tar -czvf llama-${{ steps.tag.outputs.name }}-bin-ubuntu-sycl-${{ matrix.build }}-x64.tar.gz --transform "s,^\.,llama-${{ steps.tag.outputs.name }}," -C ./build/bin .
+#
+#      - name: Upload artifacts
+#        uses: actions/upload-artifact@v6
+#        with:
+#          path: llama-${{ steps.tag.outputs.name }}-bin-ubuntu-sycl-${{ matrix.build }}-x64.tar.gz
+#          name: llama-bin-ubuntu-sycl-${{ matrix.build }}-x64.tar.gz
 
   ubuntu-22-rocm:
+    needs: [check-release]
+    if: ${{ needs.check-release.outputs.should_release == 'true' }}
 
     runs-on: ubuntu-22.04
+
+    permissions:
+      actions: write
 
     strategy:
       matrix:
@@ -895,8 +997,7 @@ jobs:
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.21
         with:
-          key: ubuntu-rocm-${{ matrix.ROCM_VERSION }}-${{ matrix.build }}
-          evict-old-files: 1d
+          key: release-ubuntu-22.04-rocm-${{ matrix.ROCM_VERSION }}
 
       - name: Dependencies
         id: depends
@@ -954,6 +1055,11 @@ jobs:
             ${{ env.CMAKE_ARGS }}
           cmake --build build --config Release -j $(nproc)
 
+      - name: ccache-clear
+        uses: ./.github/actions/ccache-clear
+        with:
+          key: release-ubuntu-22.04-rocm-${{ matrix.ROCM_VERSION }}
+
       - name: Determine tag name
         id: tag
         uses: ./.github/actions/get-tag-name
@@ -974,8 +1080,13 @@ jobs:
           name: llama-bin-ubuntu-rocm-${{ env.ROCM_VERSION_SHORT }}-${{ matrix.build }}.tar.gz
 
   windows-hip:
+    needs: [check-release]
+    if: ${{ needs.check-release.outputs.should_release == 'true' }}
 
     runs-on: windows-2022
+
+    permissions:
+      actions: write
 
     env:
       HIPSDK_INSTALLER_VERSION: "26.Q1"
@@ -1010,13 +1121,12 @@ jobs:
         uses: actions/cache@v5
         with:
           path: C:\Program Files\AMD\ROCm
-          key: rocm-${{ env.HIPSDK_INSTALLER_VERSION }}-${{ runner.os }}
+          key: cache-gha-rocm-${{ env.HIPSDK_INSTALLER_VERSION }}-${{ runner.os }}
 
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.21
         with:
-          key: windows-latest-hip-${{ env.HIPSDK_INSTALLER_VERSION }}-${{ matrix.name }}-x64
-          evict-old-files: 1d
+          key: release-windows-2022-x64-hip-${{ env.HIPSDK_INSTALLER_VERSION }}-${{ matrix.name }}
 
       - name: Install ROCm
         if: steps.cache-rocm.outputs.cache-hit != 'true'
@@ -1076,6 +1186,11 @@ jobs:
           cp "${env:HIP_PATH}\bin\rocblas\library\*" "build\bin\rocblas\library\"
           cp "${env:HIP_PATH}\bin\hipblaslt\library\*" "build\bin\hipblaslt\library\"
 
+      - name: ccache-clear
+        uses: ./.github/actions/ccache-clear
+        with:
+          key: release-windows-2022-x64-hip-${{ env.HIPSDK_INSTALLER_VERSION }}-${{ matrix.name }}
+
       - name: Pack artifacts
         id: pack_artifacts
         run: |
@@ -1087,8 +1202,10 @@ jobs:
           path: llama-bin-win-hip-${{ matrix.name }}-x64.zip
           name: llama-bin-win-hip-${{ matrix.name }}-x64.zip
 
-  ios-xcode-build:
-    runs-on: macos-15
+  ios-xcode:
+    needs: [check-release]
+    if: ${{ needs.check-release.outputs.should_release == 'true' }}
+    runs-on: macos-26
 
     steps:
       - name: Checkout code
@@ -1098,7 +1215,7 @@ jobs:
 
       - name: Setup Xcode
         run: |
-          sudo xcode-select -s /Applications/Xcode_16.4.app
+          sudo xcode-select -s /Applications/Xcode_26.4.app
 
       - name: Build
         id: cmake_build
@@ -1108,12 +1225,13 @@ jobs:
             -DGGML_METAL_USE_BF16=ON \
             -DGGML_METAL_EMBED_LIBRARY=ON \
             -DLLAMA_OPENSSL=OFF \
+            -DLLAMA_BUILD_APP=OFF \
             -DLLAMA_BUILD_EXAMPLES=OFF \
             -DLLAMA_BUILD_TOOLS=OFF \
             -DLLAMA_BUILD_TESTS=OFF \
             -DLLAMA_BUILD_SERVER=OFF \
             -DCMAKE_SYSTEM_NAME=iOS \
-            -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0 \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=16.0 \
             -DCMAKE_XCODE_ATTRIBUTE_DEVELOPMENT_TEAM=ggml
           cmake --build build --config Release -j $(sysctl -n hw.logicalcpu) -- CODE_SIGNING_ALLOWED=NO
 
@@ -1142,96 +1260,102 @@ jobs:
           path: llama-${{ steps.tag.outputs.name }}-xcframework.zip
           name: llama-${{ steps.tag.outputs.name }}-xcframework.zip
 
+# TODO: this build is disabled to save Github Actions resources (https://github.com/ggml-org/llama.cpp/pull/23705)
+#       in order to enable it again, we have to provision dedicated runners  to run it
+#  openEuler-cann:
+#    strategy:
+#      matrix:
+#        include:
+#          # 910b with aclgraph (both architectures)
+#          - arch: x86
+#            chip_type: '910b'
+#            build: 'Release'
+#            use_acl_graph: 'on'
+#          - arch: aarch64
+#            chip_type: '910b'
+#            build: 'Release'
+#            use_acl_graph: 'on'
+#          # 310p without aclgraph (both architectures)
+#          - arch: x86
+#            chip_type: '310p'
+#            build: 'Release'
+#            use_acl_graph: 'off'
+#          - arch: aarch64
+#            chip_type: '310p'
+#            build: 'Release'
+#            use_acl_graph: 'off'
+#    runs-on: ${{ matrix.arch == 'aarch64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
+#    steps:
+#      - name: Checkout
+#        uses: actions/checkout@v6
+#        with:
+#          fetch-depth: 0
+#
+#      - name: Free up disk space
+#        uses: ggml-org/free-disk-space@v1.3.1
+#        with:
+#          tool-cache: true
+#
+#      - name: Set container image
+#        id: cann-image
+#        run: |
+#          image="ascendai/cann:${{ matrix.chip_type == '910b' &&  '8.5.0-910b-openeuler24.03-py3.11' || '8.5.0-310p-openeuler24.03-py3.11' }}"
+#          echo "image=${image}" >> "${GITHUB_OUTPUT}"
+#
+#      - name: Pull container image
+#        run: docker pull "${{ steps.cann-image.outputs.image }}"
+#
+#      - name: Build
+#        env:
+#          BUILD_TYPE: ${{ matrix.build }}
+#          SOC_TYPE: ascend${{ matrix.chip_type }}
+#          USE_ACL_GRAPH: ${{ matrix.use_acl_graph }}
+#        run: |
+#          HOST_UID=$(id -u)
+#          HOST_GID=$(id -g)
+#
+#          docker run --rm \
+#            -v "${PWD}:/workspace" \
+#            -w /workspace \
+#            -e SOC_TYPE=${SOC_TYPE} \
+#            -e BUILD_TYPE=${BUILD_TYPE} \
+#            -e USE_ACL_GRAPH=${USE_ACL_GRAPH} \
+#            "${{ steps.cann-image.outputs.image }}" \
+#            bash -lc '
+#              set -e
+#              yum install -y --setopt=install_weak_deps=False --setopt=tsflags=nodocs git gcc gcc-c++ make cmake openssl-devel
+#              yum clean all && rm -rf /var/cache/yum
+#              git config --global --add safe.directory "/workspace"
+#              export LD_LIBRARY_PATH=${ASCEND_TOOLKIT_HOME}/lib64:${ASCEND_TOOLKIT_HOME}/$(uname -m)-linux/devlib/:${LD_LIBRARY_PATH}
+#              cmake -S . -B build \
+#                  -DCMAKE_BUILD_TYPE=${BUILD_TYPE} \
+#                  -DGGML_CANN=on \
+#                  -DSOC_TYPE=${SOC_TYPE} \
+#                  -DUSE_ACL_GRAPH=${USE_ACL_GRAPH}
+#              cmake --build build -j $(nproc)
+#
+#              chown -R '"${HOST_UID}"':'"${HOST_GID}"' /workspace/build
+#            '
+#
+#      - name: Determine tag name
+#        id: tag
+#        uses: ./.github/actions/get-tag-name
+#
+#      - name: Pack artifacts
+#        run: |
+#          cp LICENSE ./build/bin/
+#          tar -czvf llama-${{ steps.tag.outputs.name }}-bin-${{ matrix.chip_type }}-openEuler-${{ matrix.arch }}${{ matrix.use_acl_graph == 'on' && '-aclgraph' || '' }}.tar.gz --transform "s,^\.,llama-${{ steps.tag.outputs.name }}," -C ./build/bin .
+#
+#      - name: Upload artifacts
+#        uses: actions/upload-artifact@v6
+#        with:
+#          path: llama-${{ steps.tag.outputs.name }}-bin-${{ matrix.chip_type }}-openEuler-${{ matrix.arch }}${{ matrix.use_acl_graph == 'on' && '-aclgraph' || '' }}.tar.gz
+#          name: llama-bin-${{ matrix.chip_type }}-openEuler-${{ matrix.arch }}${{ matrix.use_acl_graph == 'on' && '-aclgraph' || '' }}.tar.gz
 
-  openEuler-cann:
-    strategy:
-      matrix:
-        include:
-          # 910b with aclgraph (both architectures)
-          - arch: x86
-            chip_type: '910b'
-            build: 'Release'
-            use_acl_graph: 'on'
-          - arch: aarch64
-            chip_type: '910b'
-            build: 'Release'
-            use_acl_graph: 'on'
-          # 310p without aclgraph (both architectures)
-          - arch: x86
-            chip_type: '310p'
-            build: 'Release'
-            use_acl_graph: 'off'
-          - arch: aarch64
-            chip_type: '310p'
-            build: 'Release'
-            use_acl_graph: 'off'
-    runs-on: ${{ matrix.arch == 'aarch64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-
-      - name: Free up disk space
-        uses: ggml-org/free-disk-space@v1.3.1
-        with:
-          tool-cache: true
-
-      - name: Set container image
-        id: cann-image
-        run: |
-          image="ascendai/cann:${{ matrix.chip_type == '910b' &&  '8.5.0-910b-openeuler24.03-py3.11' || '8.5.0-310p-openeuler24.03-py3.11' }}"
-          echo "image=${image}" >> "${GITHUB_OUTPUT}"
-
-      - name: Pull container image
-        run: docker pull "${{ steps.cann-image.outputs.image }}"
-
-      - name: Build
-        env:
-          BUILD_TYPE: ${{ matrix.build }}
-          SOC_TYPE: ascend${{ matrix.chip_type }}
-          USE_ACL_GRAPH: ${{ matrix.use_acl_graph }}
-        run: |
-          HOST_UID=$(id -u)
-          HOST_GID=$(id -g)
-
-          docker run --rm \
-            -v "${PWD}:/workspace" \
-            -w /workspace \
-            -e SOC_TYPE=${SOC_TYPE} \
-            -e BUILD_TYPE=${BUILD_TYPE} \
-            -e USE_ACL_GRAPH=${USE_ACL_GRAPH} \
-            "${{ steps.cann-image.outputs.image }}" \
-            bash -lc '
-              set -e
-              yum install -y --setopt=install_weak_deps=False --setopt=tsflags=nodocs git gcc gcc-c++ make cmake openssl-devel
-              yum clean all && rm -rf /var/cache/yum
-              git config --global --add safe.directory "/workspace"
-              export LD_LIBRARY_PATH=${ASCEND_TOOLKIT_HOME}/lib64:${ASCEND_TOOLKIT_HOME}/$(uname -m)-linux/devlib/:${LD_LIBRARY_PATH}
-              cmake -S . -B build \
-                  -DCMAKE_BUILD_TYPE=${BUILD_TYPE} \
-                  -DGGML_CANN=on \
-                  -DSOC_TYPE=${SOC_TYPE} \
-                  -DUSE_ACL_GRAPH=${USE_ACL_GRAPH}
-              cmake --build build -j $(nproc)
-
-              chown -R '"${HOST_UID}"':'"${HOST_GID}"' /workspace/build
-            '
-
-      - name: Determine tag name
-        id: tag
-        uses: ./.github/actions/get-tag-name
-
-      - name: Pack artifacts
-        run: |
-          cp LICENSE ./build/bin/
-          tar -czvf llama-${{ steps.tag.outputs.name }}-bin-${{ matrix.chip_type }}-openEuler-${{ matrix.arch }}${{ matrix.use_acl_graph == 'on' && '-aclgraph' || '' }}.tar.gz --transform "s,^\.,llama-${{ steps.tag.outputs.name }}," -C ./build/bin .
-
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v6
-        with:
-          path: llama-${{ steps.tag.outputs.name }}-bin-${{ matrix.chip_type }}-openEuler-${{ matrix.arch }}${{ matrix.use_acl_graph == 'on' && '-aclgraph' || '' }}.tar.gz
-          name: llama-bin-${{ matrix.chip_type }}-openEuler-${{ matrix.arch }}${{ matrix.use_acl_graph == 'on' && '-aclgraph' || '' }}.tar.gz
+  ui:
+    needs: [check-release]
+    if: ${{ needs.check-release.outputs.should_release == 'true' }}
+    uses: ./.github/workflows/ui-build.yml
 
   release:
     if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
@@ -1247,17 +1371,18 @@ jobs:
       - windows
       - windows-cpu
       - windows-cuda
-      - windows-sycl
+      #- windows-sycl
       - windows-hip
       - ubuntu-22-rocm
       - ubuntu-cpu
       - ubuntu-vulkan
       - ubuntu-24-openvino
-      - ubuntu-24-sycl
+      #- ubuntu-24-sycl
       - android-arm64
-      - macOS-cpu
-      - ios-xcode-build
-      - openEuler-cann
+      - macos-cpu
+      - ios-xcode
+      #- openEuler-cann
+      - ui
 
     outputs:
       tag_name: ${{ steps.tag.outputs.name }}
@@ -1317,6 +1442,18 @@ jobs:
           mv -v artifact/*.zip release
           mv -v artifact/*.tar.gz release
 
+      - name: Download UI build
+        id: download_ui
+        uses: actions/download-artifact@v7
+        with:
+          name: ui-build
+          path: ./ui-dist
+
+      - name: Package UI
+        id: package_ui
+        run: |
+          tar -czvf release/llama-${{ steps.tag.outputs.name }}-ui.tar.gz --transform "s,^\.,llama-${{ steps.tag.outputs.name }}," -C ./ui-dist .
+
       - name: Create release
         id: create_release
         uses: ggml-org/action-create-release@v1
@@ -1333,7 +1470,7 @@ jobs:
 
             **macOS/iOS:**
             - [macOS Apple Silicon (arm64)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-macos-arm64.tar.gz)
-            - [macOS Apple Silicon (arm64, KleidiAI enabled)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-macos-arm64-kleidiai.tar.gz)
+            - macOS Apple Silicon (arm64, KleidiAI enabled) [DISABLED](https://github.com/ggml-org/llama.cpp/pull/23780)
             - [macOS Intel (x64)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-macos-x64.tar.gz)
             - [iOS XCFramework](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-xcframework.zip)
 
@@ -1345,8 +1482,7 @@ jobs:
             - [Ubuntu arm64 (Vulkan)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-ubuntu-vulkan-arm64.tar.gz)
             - [Ubuntu x64 (ROCm 7.2)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-ubuntu-rocm-7.2-x64.tar.gz)
             - [Ubuntu x64 (OpenVINO)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-ubuntu-openvino-${{ needs.ubuntu-24-openvino.outputs.openvino_version }}-x64.tar.gz)
-            - [Ubuntu x64 (SYCL FP32)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-ubuntu-sycl-fp32-x64.tar.gz)
-            - [Ubuntu x64 (SYCL FP16)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-ubuntu-sycl-fp16-x64.tar.gz)
+            - Ubuntu x64 (SYCL FP32) [DISABLED](https://github.com/ggml-org/llama.cpp/pull/23705)
 
             **Android:**
             - [Android arm64 (CPU)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-android-arm64.tar.gz)
@@ -1355,16 +1491,20 @@ jobs:
             - [Windows x64 (CPU)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-win-cpu-x64.zip)
             - [Windows arm64 (CPU)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-win-cpu-arm64.zip)
             - [Windows x64 (CUDA 12)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-win-cuda-12.4-x64.zip) - [CUDA 12.4 DLLs](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/cudart-llama-bin-win-cuda-12.4-x64.zip)
-            - [Windows x64 (CUDA 13)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-win-cuda-13.1-x64.zip) - [CUDA 13.1 DLLs](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/cudart-llama-bin-win-cuda-13.1-x64.zip)
+            - [Windows x64 (CUDA 13)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-win-cuda-13.3-x64.zip) - [CUDA 13.3 DLLs](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/cudart-llama-bin-win-cuda-13.3-x64.zip)
             - [Windows x64 (Vulkan)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-win-vulkan-x64.zip)
-            - [Windows x64 (SYCL)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-win-sycl-x64.zip)
+            - Windows x64 (SYCL) [DISABLED](https://github.com/ggml-org/llama.cpp/pull/23705)
             - [Windows x64 (HIP)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-win-hip-radeon-x64.zip)
 
             **openEuler:**
-            - [openEuler x86 (310p)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-310p-openEuler-x86.tar.gz)
-            - [openEuler x86 (910b, ACL Graph)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-910b-openEuler-x86-aclgraph.tar.gz)
-            - [openEuler aarch64 (310p)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-310p-openEuler-aarch64.tar.gz)
-            - [openEuler aarch64 (910b, ACL Graph)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-910b-openEuler-aarch64-aclgraph.tar.gz)
+            - [DISABLED](https://github.com/ggml-org/llama.cpp/pull/23705)
+            - openEuler x86 (310p)
+            - openEuler x86 (910b, ACL Graph)
+            - openEuler aarch64 (310p)
+            - openEuler aarch64 (910b, ACL Graph)
+
+            **UI:**
+            - [UI](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-ui.tar.gz)
 
       - name: Upload release
         id: upload_release

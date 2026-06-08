@@ -262,6 +262,7 @@ class Keys:
         ADD_SEP              = "tokenizer.ggml.add_sep_token"
         ADD_PREFIX           = "tokenizer.ggml.add_space_prefix"
         REMOVE_EXTRA_WS      = "tokenizer.ggml.remove_extra_whitespaces"
+        NORMALIZER_LOWERCASE = "tokenizer.ggml.normalizer.lowercase"
         PRECOMPILED_CHARSMAP = "tokenizer.ggml.precompiled_charsmap"
         HF_JSON              = "tokenizer.huggingface.json"
         RWKV                 = "tokenizer.rwkv.world"
@@ -725,6 +726,7 @@ class MODEL_TENSOR(IntEnum):
     V_ENC_EMBD_CLS       = auto()
     V_ENC_EMBD_PATCH     = auto()
     V_ENC_EMBD_NORM      = auto()
+    V_ENC_EMBD_PATCH_NORM = auto() # gemma4 unified
     V_ENC_EMBD_POS       = auto()
     V_ENC_INPUT_NORM     = auto()
     V_ENC_ATTN_QKV       = auto()
@@ -772,6 +774,8 @@ class MODEL_TENSOR(IntEnum):
     V_RESMPL_Q_NORM      = auto() # minicpmv
     V_RESMPL_PROJ        = auto() # minicpmv
     V_RESMPL_QUERY       = auto() # minicpmv
+    V_RESMPL_QUERY_768   = auto() # Deepseek-OCR-2
+    V_RESMPL_QUERY_1024  = auto() # Deepseek-OCR-2
     V_TOK_EMBD_IMG_BREAK = auto() # pixtral
     V_MM_PATCH_MERGER    = auto() # mistral small 3.1
     V_DS_NORM            = auto() # qwen3vl
@@ -892,6 +896,25 @@ class MODEL_TENSOR(IntEnum):
     A_QF_FFN_UP            = auto()
     A_QF_FFN_DOWN          = auto()
     A_QF_FFN_NORM          = auto()
+    # vision qformer projector (Granite4 Vision)
+    V_MULTI_PROJ_IMG_POS   = auto()
+    V_MULTI_PROJ_QUERY     = auto()
+    V_MULTI_PROJ_LINEAR    = auto()
+    V_MULTI_PROJ_NORM      = auto()
+    V_MULTI_PROJ_POST_NORM = auto()
+    V_QF_SELF_ATTN_Q       = auto()
+    V_QF_SELF_ATTN_K       = auto()
+    V_QF_SELF_ATTN_V       = auto()
+    V_QF_SELF_ATTN_O       = auto()
+    V_QF_SELF_ATTN_NORM    = auto()
+    V_QF_CROSS_ATTN_Q      = auto()
+    V_QF_CROSS_ATTN_K      = auto()
+    V_QF_CROSS_ATTN_V      = auto()
+    V_QF_CROSS_ATTN_O      = auto()
+    V_QF_CROSS_ATTN_NORM   = auto()
+    V_QF_FFN_UP            = auto()
+    V_QF_FFN_DOWN          = auto()
+    V_QF_FFN_NORM          = auto()
 
 
 MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
@@ -1239,6 +1262,7 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.V_ENC_EMBD_CLS:            "v.class_embd",
     MODEL_TENSOR.V_ENC_EMBD_PATCH:          "v.patch_embd",
     MODEL_TENSOR.V_ENC_EMBD_NORM:           "v.norm_embd",
+    MODEL_TENSOR.V_ENC_EMBD_PATCH_NORM:     "v.patch_ln.{bid}", # gemma4 unified
     MODEL_TENSOR.V_ENC_EMBD_POS:            "v.position_embd",
     MODEL_TENSOR.V_ENC_ATTN_QKV:            "v.blk.{bid}.attn_qkv",
     MODEL_TENSOR.V_ENC_ATTN_Q:              "v.blk.{bid}.attn_q",
@@ -1285,6 +1309,8 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.V_RESMPL_Q_NORM:           "resampler.ln_q",
     MODEL_TENSOR.V_RESMPL_PROJ:             "resampler.proj",
     MODEL_TENSOR.V_RESMPL_QUERY:            "resampler.query",
+    MODEL_TENSOR.V_RESMPL_QUERY_768:        "resampler.query_768", # Deepseek-OCR-2
+    MODEL_TENSOR.V_RESMPL_QUERY_1024:       "resampler.query_1024", # Deepseek-OCR-2
     MODEL_TENSOR.V_TOK_EMBD_IMG_BREAK:      "v.token_embd.img_break", # pixtral
     MODEL_TENSOR.V_MM_PATCH_MERGER:         "mm.patch_merger", # mistral small 3.1
     MODEL_TENSOR.V_DS_NORM:                 "v.deepstack.{bid}.norm",
@@ -1400,6 +1426,25 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.A_QF_FFN_UP:               "a.proj_blk.{bid}.ffn_up",
     MODEL_TENSOR.A_QF_FFN_DOWN:             "a.proj_blk.{bid}.ffn_down",
     MODEL_TENSOR.A_QF_FFN_NORM:             "a.proj_blk.{bid}.ffn_norm",
+    # vision qformer projector (Granite4 Vision)
+    MODEL_TENSOR.V_MULTI_PROJ_IMG_POS:       "mm.proj.{bid}.img_pos",
+    MODEL_TENSOR.V_MULTI_PROJ_QUERY:         "mm.proj.{bid}.query",
+    MODEL_TENSOR.V_MULTI_PROJ_LINEAR:        "mm.proj.{bid}.linear",
+    MODEL_TENSOR.V_MULTI_PROJ_NORM:          "mm.proj.{bid}.norm",
+    MODEL_TENSOR.V_MULTI_PROJ_POST_NORM:     "mm.proj.{bid}.post_norm",
+    MODEL_TENSOR.V_QF_SELF_ATTN_Q:           "mm.proj.blk.{bid}.self_attn_q",
+    MODEL_TENSOR.V_QF_SELF_ATTN_K:           "mm.proj.blk.{bid}.self_attn_k",
+    MODEL_TENSOR.V_QF_SELF_ATTN_V:           "mm.proj.blk.{bid}.self_attn_v",
+    MODEL_TENSOR.V_QF_SELF_ATTN_O:           "mm.proj.blk.{bid}.self_attn_out",
+    MODEL_TENSOR.V_QF_SELF_ATTN_NORM:        "mm.proj.blk.{bid}.self_attn_norm",
+    MODEL_TENSOR.V_QF_CROSS_ATTN_Q:          "mm.proj.blk.{bid}.cross_attn_q",
+    MODEL_TENSOR.V_QF_CROSS_ATTN_K:          "mm.proj.blk.{bid}.cross_attn_k",
+    MODEL_TENSOR.V_QF_CROSS_ATTN_V:          "mm.proj.blk.{bid}.cross_attn_v",
+    MODEL_TENSOR.V_QF_CROSS_ATTN_O:          "mm.proj.blk.{bid}.cross_attn_out",
+    MODEL_TENSOR.V_QF_CROSS_ATTN_NORM:       "mm.proj.blk.{bid}.cross_attn_norm",
+    MODEL_TENSOR.V_QF_FFN_UP:                "mm.proj.blk.{bid}.ffn_up",
+    MODEL_TENSOR.V_QF_FFN_DOWN:              "mm.proj.blk.{bid}.ffn_down",
+    MODEL_TENSOR.V_QF_FFN_NORM:              "mm.proj.blk.{bid}.ffn_norm",
     # NextN/MTP
     MODEL_TENSOR.NEXTN_EH_PROJ:             "blk.{bid}.nextn.eh_proj",
     MODEL_TENSOR.NEXTN_EMBED_TOKENS:        "blk.{bid}.nextn.embed_tokens",
@@ -1466,6 +1511,8 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.V_RESMPL_Q_NORM,
         MODEL_TENSOR.V_RESMPL_PROJ,
         MODEL_TENSOR.V_RESMPL_QUERY,
+        MODEL_TENSOR.V_RESMPL_QUERY_768,
+        MODEL_TENSOR.V_RESMPL_QUERY_1024,
         MODEL_TENSOR.V_TOK_EMBD_IMG_BREAK,
         MODEL_TENSOR.V_MM_PATCH_MERGER,
         MODEL_TENSOR.V_DS_NORM,
@@ -1576,6 +1623,25 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.A_QF_FFN_UP,
         MODEL_TENSOR.A_QF_FFN_DOWN,
         MODEL_TENSOR.A_QF_FFN_NORM,
+        # vision qformer projector (Granite4 Vision)
+        MODEL_TENSOR.V_MULTI_PROJ_IMG_POS,
+        MODEL_TENSOR.V_MULTI_PROJ_QUERY,
+        MODEL_TENSOR.V_MULTI_PROJ_LINEAR,
+        MODEL_TENSOR.V_MULTI_PROJ_NORM,
+        MODEL_TENSOR.V_MULTI_PROJ_POST_NORM,
+        MODEL_TENSOR.V_QF_SELF_ATTN_Q,
+        MODEL_TENSOR.V_QF_SELF_ATTN_K,
+        MODEL_TENSOR.V_QF_SELF_ATTN_V,
+        MODEL_TENSOR.V_QF_SELF_ATTN_O,
+        MODEL_TENSOR.V_QF_SELF_ATTN_NORM,
+        MODEL_TENSOR.V_QF_CROSS_ATTN_Q,
+        MODEL_TENSOR.V_QF_CROSS_ATTN_K,
+        MODEL_TENSOR.V_QF_CROSS_ATTN_V,
+        MODEL_TENSOR.V_QF_CROSS_ATTN_O,
+        MODEL_TENSOR.V_QF_CROSS_ATTN_NORM,
+        MODEL_TENSOR.V_QF_FFN_UP,
+        MODEL_TENSOR.V_QF_FFN_DOWN,
+        MODEL_TENSOR.V_QF_FFN_NORM,
     ],
     MODEL_ARCH.LLAMA: [
         MODEL_TENSOR.TOKEN_EMBD,

@@ -1,9 +1,11 @@
 import pytest
-from utils import *
+from utils import ServerPreset, ServerProcess, match_regex
 import base64
+import os
 import requests
 
 server: ServerProcess
+
 
 def get_img_url(id: str) -> str:
     IMG_URL_0 = "https://huggingface.co/ggml-org/tinygemma3-GGUF/resolve/main/test/11_truck.png"
@@ -31,8 +33,10 @@ def get_img_url(id: str) -> str:
     else:
         return id
 
+
 JSON_MULTIMODAL_KEY = "multimodal_data"
 JSON_PROMPT_STRING_KEY = "prompt_string"
+
 
 @pytest.fixture(autouse=True)
 def create_server():
@@ -40,15 +44,16 @@ def create_server():
     os.environ['LLAMA_MEDIA_MARKER'] = '<__media__>'
     server = ServerPreset.tinygemma3()
 
+
 def test_models_supports_multimodal_capability():
     global server
     server.start()
     res = server.make_request("GET", "/models", data={})
     assert res.status_code == 200
     model_info = res.body["models"][0]
-    print(model_info)
     assert "completion" in model_info["capabilities"]
     assert "multimodal" in model_info["capabilities"]
+
 
 def test_v1_models_supports_multimodal_capability():
     global server
@@ -56,9 +61,9 @@ def test_v1_models_supports_multimodal_capability():
     res = server.make_request("GET", "/v1/models", data={})
     assert res.status_code == 200
     model_info = res.body["models"][0]
-    print(model_info)
     assert "completion" in model_info["capabilities"]
     assert "multimodal" in model_info["capabilities"]
+
 
 @pytest.mark.parametrize(
     "prompt, image_url, success, re_content",
@@ -98,6 +103,25 @@ def test_vision_chat_completion(prompt, image_url, success, re_content):
         assert res.status_code != 200
 
 
+def test_vision_chat_completion_token_count():
+    global server
+    server.start()
+    res = server.make_request("POST", "/v1/chat/completions/input_tokens", data={
+        "temperature": 0.0,
+        "top_k": 1,
+        "messages": [
+            {"role": "user", "content": [
+                {"type": "text", "text": "What is this:"},
+                {"type": "image_url", "image_url": {
+                    "url": get_img_url("IMG_URL_0"),
+                }},
+            ]},
+        ],
+    })
+    assert res.status_code == 200
+    assert res.body["input_tokens"] > 10
+
+
 @pytest.mark.parametrize(
     "prompt, image_data, success, re_content",
     [
@@ -116,7 +140,7 @@ def test_vision_completion(prompt, image_data, success, re_content):
         "top_k": 1,
         "prompt": {
             JSON_PROMPT_STRING_KEY: prompt,
-            JSON_MULTIMODAL_KEY: [ get_img_url(image_data) ],
+            JSON_MULTIMODAL_KEY: [get_img_url(image_data)],
         },
     })
     if success:
@@ -145,9 +169,9 @@ def test_vision_embeddings(prompt, image_data, success):
     image_data = get_img_url(image_data)
     res = server.make_request("POST", "/embeddings", data={
         "content": [
-            { JSON_PROMPT_STRING_KEY: prompt, JSON_MULTIMODAL_KEY: [ image_data ] },
-            { JSON_PROMPT_STRING_KEY: prompt, JSON_MULTIMODAL_KEY: [ image_data ] },
-            { JSON_PROMPT_STRING_KEY: prompt, },
+            {JSON_PROMPT_STRING_KEY: prompt, JSON_MULTIMODAL_KEY: [image_data]},
+            {JSON_PROMPT_STRING_KEY: prompt, JSON_MULTIMODAL_KEY: [image_data]},
+            {JSON_PROMPT_STRING_KEY: prompt},
         ],
     })
     if success:

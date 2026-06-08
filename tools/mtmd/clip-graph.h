@@ -29,12 +29,16 @@ struct clip_graph {
     const int n_patches;
     const int n_embd;
     const int n_head;
+    const int n_head_kv;
     const int d_head;
     const int n_layer;
     const int n_mmproj_embd;
     const float eps;
     float kq_scale; // TODO: maybe move this to hparams
     const clip_flash_attn_type flash_attn_type;
+
+    // TODO [QWEN_VIDEO]: improve this in the future
+    int n_batch = 1;
 
     ggml_context_ptr ctx0_ptr;
     ggml_context * ctx0;
