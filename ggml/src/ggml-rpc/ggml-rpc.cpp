@@ -320,7 +320,7 @@ static size_t rpc_parse_size_env(const char * name, size_t default_value, size_t
 static constexpr size_t RPC_SET_TENSOR_ZLIB_DEFAULT_MIN_SIZE    = 1024*1024;
 static constexpr size_t RPC_SET_TENSOR_ZLIB_DEFAULT_SAMPLE_SIZE = 64*1024;
 static constexpr size_t RPC_SET_TENSOR_ZLIB_MAX_SAMPLE_SIZE     = 16*1024*1024;
-static constexpr double RPC_SET_TENSOR_ZLIB_DEFAULT_RATIO       = 0.80;
+static constexpr double RPC_SET_TENSOR_ZLIB_DEFAULT_RATIO       = 0.70;
 static constexpr int    RPC_SET_TENSOR_ZLIB_DEFAULT_LEVEL       = 1;
 
 static bool rpc_set_tensor_zlib_client_enabled() {

@@ -557,7 +557,7 @@ server caches still avoid the upload through `SET_TENSOR_HASH`, which is better
 than compressing. Before compressing a full tensor, the client samples the
 beginning, middle, and end of the payload. By default, tensors smaller than
 1 MiB are skipped, up to 64 KiB is sampled, zlib level 1 is used, and both the
-sample and full payload must compress to 80% or less of the original size.
+sample and full payload must compress to 70% or less of the original size.
 
 Useful knobs:
 
@@ -565,7 +565,7 @@ Useful knobs:
 export GGML_RPC_SET_TENSOR_COMPRESS=1
 export GGML_RPC_SET_TENSOR_COMPRESS_MIN_SIZE=1048576
 export GGML_RPC_SET_TENSOR_COMPRESS_SAMPLE_SIZE=65536
-export GGML_RPC_SET_TENSOR_COMPRESS_SAMPLE_RATIO=0.80
+export GGML_RPC_SET_TENSOR_COMPRESS_SAMPLE_RATIO=0.70
 export GGML_RPC_SET_TENSOR_COMPRESS_LEVEL=1
 ```
 
@@ -575,6 +575,11 @@ upload time on slower links with highly compressible tensors, but it can hurt if
 the ratio threshold is relaxed enough to compress payloads that shrink only a
 little. It is not expected to improve steady tokens per second once large model
 weights are already resident on the RPC servers.
+
+Real model weights can be close to the cutoff. If traces show the client using
+CPU time to compress payloads that shrink only slightly, lower
+`GGML_RPC_SET_TENSOR_COMPRESS_SAMPLE_RATIO` or leave upload compression off for
+that model.
 
 Transparent compression below RPC is usually not enough for this path. Btrfs,
 ZFS, NTFS, and other filesystem compression can reduce stored model size or disk
