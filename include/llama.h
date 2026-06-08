@@ -198,6 +198,22 @@ extern "C" {
         LLAMA_SPLIT_MODE_TENSOR = 3,
     };
 
+    enum llama_load_mode {
+        LLAMA_LOAD_MODE_NONE      = 0, // no special loading mode
+        LLAMA_LOAD_MODE_MMAP      = 1, // memory map the model
+        LLAMA_LOAD_MODE_DIRECT_IO = 2, // use direct I/O if available
+    };
+
+    LLAMA_API const char * llama_load_mode_name(enum llama_load_mode load_mode);
+
+    enum llama_load_modifier {
+        LLAMA_LOAD_MODIFIER_NONE  = 0,      // no modifier
+        LLAMA_LOAD_MODIFIER_MLOCK = 1u << 0, // force system to keep model in RAM rather than swapping or compressing
+    };
+
+    // uint32_t because llama_load_modifier is a bitflag and we want to return all active modifiers as a string
+    LLAMA_API const char * llama_load_modifier_name(uint32_t load_modifier);
+
     enum llama_context_type {
         LLAMA_CONTEXT_TYPE_DEFAULT = 0,
         LLAMA_CONTEXT_TYPE_MTP     = 1,
@@ -298,6 +314,9 @@ extern "C" {
         int32_t n_gpu_layers; // number of layers to store in VRAM, a negative value means all layers
         enum llama_split_mode split_mode; // how to split the model across multiple GPUs
 
+        enum llama_load_mode     load_mode;     // how to load the model
+        enum llama_load_modifier load_modifier; // model loading modifier
+
         // the GPU that is used for the entire model when split_mode is LLAMA_SPLIT_MODE_NONE
         int32_t main_gpu;
 
@@ -317,9 +336,9 @@ extern "C" {
 
         // Keep the booleans together to avoid misalignment during copy-by-value.
         bool vocab_only;      // only load the vocabulary, no weights
-        bool use_mmap;        // use mmap if possible
-        bool use_direct_io;   // use direct io, takes precedence over use_mmap when supported
-        bool use_mlock;       // force system to keep model in RAM
+        // bool use_mmap;        // use mmap if possible
+        // bool use_direct_io;   // use direct io, takes precedence over use_mmap when supported
+        // bool use_mlock;       // force system to keep model in RAM
         bool check_tensors;   // validate model tensor data
         bool use_extra_bufts; // use extra buffer types (used for weight repacking)
         bool no_host;         // bypass host buffer allowing extra buffers to be used

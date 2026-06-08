@@ -6,6 +6,7 @@
 
 #include "ggml-opt.h"
 #include "ggml.h"
+#include "llama.h"
 
 #include <set>
 #include <sstream>
@@ -459,6 +460,9 @@ struct common_params {
 
     enum llama_split_mode split_mode = LLAMA_SPLIT_MODE_LAYER; // how to split the model across GPUs
 
+    enum llama_load_mode load_mode = LLAMA_LOAD_MODE_MMAP; // how to load the model
+    llama_load_modifier  load_modifier = LLAMA_LOAD_MODIFIER_NONE; // model loading modifier
+
     common_cpu_params cpuparams;
     common_cpu_params cpuparams_batch;
 
@@ -548,9 +552,6 @@ struct common_params {
     bool kv_unified        = false; // enable unified KV cache
 
     bool input_prefix_bos  = false; // prefix BOS to user inputs, preceding input_prefix
-    bool use_mmap          = true;  // enable mmap to use filesystem cache
-    bool use_direct_io     = false; // read from disk without buffering
-    bool use_mlock         = false; // use mlock to keep model in memory
     bool verbose_prompt    = false; // print prompt tokens before generation
     bool display_prompt    = true;  // print prompt before generation
     bool no_kv_offload     = false; // disable KV offloading
