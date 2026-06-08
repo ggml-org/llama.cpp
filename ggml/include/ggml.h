@@ -2249,11 +2249,11 @@ extern "C" {
 #ifdef __cplusplus
     // Overloads to apply a flag to a mode. Explicitly defined because arithmethic between different enum types are deprecated by C++20 (https://wg21.link/P1120) and disallowed by C++26 (https://wg21.link/P2864).
 
-    inline ggml_scale_mode operator|(const ggml_scale_mode mode, const ggml_scale_flag flag) {
+    inline constexpr ggml_scale_mode operator|(const ggml_scale_mode mode, const ggml_scale_flag flag) {
         return ggml_scale_mode(int(mode) | int(flag));
     }
 
-    inline ggml_scale_mode operator&(const ggml_scale_mode mode, const ggml_scale_flag flag) {
+    inline constexpr ggml_scale_mode operator&(const ggml_scale_mode mode, const ggml_scale_flag flag) {
         return ggml_scale_mode(int(mode) & int(flag));
     }
 #endif
