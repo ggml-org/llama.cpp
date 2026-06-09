@@ -104,7 +104,7 @@ common_chat_params peg_generator::generate_parser(const common_chat_template &  
                 { COMMON_GRAMMAR_TRIGGER_TYPE_WORD, trigger_marker }
             };
             if (autoparser.tools.format.mode == tool_format::JSON_NATIVE) {
-                // some models emit the openai wrapper, trigger on it as well
+                // Some models emit the OpenAI wrapper, trigger on it as well
                 data.grammar_triggers.push_back({ COMMON_GRAMMAR_TRIGGER_TYPE_WORD, "{\"type\": \"function\"," });
             }
         }

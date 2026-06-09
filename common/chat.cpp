@@ -2520,10 +2520,9 @@ common_chat_msg common_chat_peg_parse(const common_peg_arena &          src_pars
             }
             return msg;
         }
-        // log the unparsed fragment and raise a clean error
         LOG_WRN("%s: unparsed %s output: %s\n", __func__, common_chat_format_name(params.format),
                 effective_input.substr(result.end).c_str());
-        throw std::runtime_error(std::string("the model produced output that does not match the expected ") +
+        throw std::runtime_error(std::string("The model produced output that does not match the expected ") +
                                  common_chat_format_name(params.format) + " format");
     }
 
