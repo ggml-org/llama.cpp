@@ -85,6 +85,7 @@ enum rpc_cmd {
     RPC_CMD_GRAPH_RECOMPUTE,
     RPC_CMD_GET_DEVICE_TYPE,
     RPC_CMD_SET_TENSOR_ZLIB,
+    RPC_CMD_COPY_TENSOR_ASYNC,
     RPC_CMD_COUNT,
 };
 
@@ -101,6 +102,7 @@ enum rpc_hello_flags : uint8_t {
     RPC_HELLO_FLAG_NO_CACHE = 1 << 0,
     RPC_HELLO_FLAG_DEVICE_TYPE = 1 << 1,
     RPC_HELLO_FLAG_SET_TENSOR_ZLIB = 1 << 2,
+    RPC_HELLO_FLAG_COPY_TENSOR_ASYNC = 1 << 3,
 };
 
 struct rpc_msg_hello_rsp {
@@ -295,6 +297,15 @@ static size_t rpc_cache_min_size() {
 static bool rpc_env_truthy(const char * name) {
     const char * env = std::getenv(name);
     return env != nullptr && env[0] != '\0' && strcmp(env, "0") != 0;
+}
+
+static bool rpc_copy_tensor_async_client_enabled() {
+    static const bool enabled = []() {
+        const char * env = std::getenv("GGML_RPC_COPY_TENSOR_ASYNC");
+        return env != nullptr && env[0] != '\0' && strcmp(env, "0") != 0;
+    }();
+
+    return enabled;
 }
 
 static size_t rpc_parse_size_env(const char * name, size_t default_value, size_t max_value) {
@@ -585,6 +596,7 @@ static const char * rpc_cmd_name(enum rpc_cmd cmd) {
         case RPC_CMD_GRAPH_RECOMPUTE:   return "GRAPH_RECOMPUTE";
         case RPC_CMD_GET_DEVICE_TYPE:   return "GET_DEVICE_TYPE";
         case RPC_CMD_SET_TENSOR_ZLIB:   return "SET_TENSOR_ZLIB";
+        case RPC_CMD_COPY_TENSOR_ASYNC: return "COPY_TENSOR_ASYNC";
         case RPC_CMD_COUNT:             break;
     }
 
@@ -740,6 +752,7 @@ static bool rpc_trace_is_pending_one_way(enum rpc_cmd cmd) {
         case RPC_CMD_SET_TENSOR_ZLIB:
         case RPC_CMD_GRAPH_COMPUTE:
         case RPC_CMD_GRAPH_RECOMPUTE:
+        case RPC_CMD_COPY_TENSOR_ASYNC:
             return true;
         default:
             return false;
@@ -1727,6 +1740,7 @@ static bool negotiate_hello(const std::shared_ptr<socket_t> & sock) {
     sock->set_skip_tensor_hash((response.flags & RPC_HELLO_FLAG_NO_CACHE) != 0);
     sock->set_supports_device_type((response.flags & RPC_HELLO_FLAG_DEVICE_TYPE) != 0);
     sock->set_supports_set_tensor_zlib((response.flags & RPC_HELLO_FLAG_SET_TENSOR_ZLIB) != 0);
+    sock->set_supports_copy_tensor_async((response.flags & RPC_HELLO_FLAG_COPY_TENSOR_ASYNC) != 0);
     return true;
 }
 
@@ -1755,9 +1769,7 @@ static std::shared_ptr<socket_t> get_socket(const std::string & endpoint) {
     if (sock == nullptr) {
         return nullptr;
     }
-    if (rpc_trace_enabled()) {
-        sock->set_label(endpoint.c_str());
-    }
+    sock->set_label(endpoint.c_str());
     if (!negotiate_hello(sock)) {
         return nullptr;
     }
@@ -1995,6 +2007,38 @@ static bool ggml_backend_rpc_buffer_cpy_tensor(ggml_backend_buffer_t buffer, con
     return false;
 }
 
+static bool ggml_backend_rpc_cpy_tensor_async(
+        ggml_backend_t backend_src, ggml_backend_t backend_dst, const ggml_tensor * src, ggml_tensor * dst) {
+    GGML_UNUSED(backend_src);
+    GGML_UNUSED(backend_dst);
+    if (!rpc_copy_tensor_async_client_enabled() ||
+            src->buffer == nullptr || dst->buffer == nullptr ||
+            !ggml_backend_buffer_is_rpc(src->buffer) ||
+            !ggml_backend_buffer_is_rpc(dst->buffer)) {
+        return false;
+    }
+
+    ggml_backend_rpc_buffer_context * src_ctx = (ggml_backend_rpc_buffer_context *) src->buffer->context;
+    ggml_backend_rpc_buffer_context * dst_ctx = (ggml_backend_rpc_buffer_context *) dst->buffer->context;
+    if (src_ctx->sock != dst_ctx->sock || !dst_ctx->sock->supports_copy_tensor_async()) {
+        return false;
+    }
+
+    rpc_msg_copy_tensor_req request;
+    request.src = serialize_tensor(src);
+    request.dst = serialize_tensor(dst);
+    const uint64_t trace_start_ns = rpc_trace_enabled() ? rpc_trace_now_ns() : 0;
+    bool status = send_rpc_cmd(dst_ctx->sock, RPC_CMD_COPY_TENSOR_ASYNC, &request, sizeof(request));
+    RPC_STATUS_ASSERT(status);
+    if (rpc_trace_enabled()) {
+        ggml_backend_rpc_buffer_type_context * dst_buft_ctx =
+            (ggml_backend_rpc_buffer_type_context *)ggml_backend_buffer_get_type(dst->buffer)->context;
+        rpc_trace_record_tensor_op(
+            "COPY_TENSOR_ASYNC", dst_buft_ctx->endpoint, src->name, ggml_nbytes(src), rpc_trace_now_ns() - trace_start_ns);
+    }
+    return true;
+}
+
 static void ggml_backend_rpc_buffer_clear(ggml_backend_buffer_t buffer, uint8_t value) {
     ggml_backend_rpc_buffer_context * ctx = (ggml_backend_rpc_buffer_context *)buffer->context;
     rpc_msg_buffer_clear_req request = {ctx->remote_ptr, value};
@@ -2147,7 +2191,8 @@ static void ggml_backend_rpc_free(ggml_backend_t backend) {
 
 static void ggml_backend_rpc_synchronize(ggml_backend_t backend) {
     GGML_UNUSED(backend);
-    // this is no-op because we don't have any async operations
+    // RPC commands are processed in-order on the connection. Response-bearing
+    // commands drain earlier one-way work.
 }
 
 static void add_tensor(ggml_tensor * tensor, std::vector<rpc_tensor> & tensors, std::unordered_set<ggml_tensor*> & visited) {
@@ -2223,7 +2268,7 @@ static ggml_backend_i ggml_backend_rpc_interface = {
     /* .get_tensor_async        = */ NULL,
     /* .set_tensor_2d_async     = */ NULL,
     /* .get_tensor_2d_async     = */ NULL,
-    /* .cpy_tensor_async        = */ NULL,
+    /* .cpy_tensor_async        = */ ggml_backend_rpc_cpy_tensor_async,
     /* .synchronize             = */ ggml_backend_rpc_synchronize,
     /* .graph_plan_create       = */ NULL,
     /* .graph_plan_free         = */ NULL,
@@ -2418,6 +2463,7 @@ void rpc_server::hello(rpc_msg_hello_rsp & response) {
 #ifdef GGML_RPC_ZLIB
     response.flags |= RPC_HELLO_FLAG_SET_TENSOR_ZLIB;
 #endif
+    response.flags |= RPC_HELLO_FLAG_COPY_TENSOR_ASYNC;
     LOG_DBG("[%s] version: %d.%d.%d, flags: 0x%x\n",
             __func__, response.major, response.minor, response.patch, response.flags);
 }
@@ -3309,6 +3355,17 @@ static void rpc_serve_client(const std::vector<ggml_backend_t> & backends, const
                     return;
                 }
                 if (!send_msg(sock, &response, sizeof(response))) {
+                    return;
+                }
+                break;
+            }
+            case RPC_CMD_COPY_TENSOR_ASYNC: {
+                rpc_msg_copy_tensor_req request;
+                if (!recv_msg(sock, &request, sizeof(request))) {
+                    return;
+                }
+                rpc_msg_copy_tensor_rsp response;
+                if (!server.copy_tensor(request, response)) {
                     return;
                 }
                 break;

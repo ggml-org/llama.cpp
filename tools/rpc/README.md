@@ -499,6 +499,20 @@ If the server log reports `no kernel image is available for execution on the
 device`, rebuild with the missing remote architecture before comparing RPC
 throughput.
 
+### Async same-server copies
+
+Set `GGML_RPC_COPY_TENSOR_ASYNC=1` on the RPC client to send same-server
+RPC-to-RPC tensor copies as one-way `COPY_TENSOR_ASYNC` commands. This avoids a
+client-side response wait at layer or backend split boundaries while preserving
+server-side command order on the same RPC connection.
+
+The optimization is used only when source and destination tensors are RPC
+buffers on the same server and the server advertises support during `HELLO`.
+Other copy paths keep the synchronous `COPY_TENSOR` behavior.
+
+Use `GGML_RPC_TRACE=1` to confirm `COPY_TENSOR_ASYNC` commands and see which
+response-bearing command drains the queued work.
+
 ### RPC tracing
 
 Set `GGML_RPC_TRACE=1` on the RPC client to print a summary of RPC command
@@ -523,13 +537,14 @@ The client trace also prints `sync waits after one-way commands` when a
 synchronous command such as `GET_TENSOR` or `GET_ALLOC_SIZE` waits after earlier
 one-way commands on the same connection. This table attributes the response wait
 to pending `SET_TENSOR`, `SET_TENSOR_ZLIB`, `GRAPH_COMPUTE`, and
-`GRAPH_RECOMPUTE` calls so a long `GET_TENSOR` wait is easier to distinguish
-from pure readback time. The `wait_ms` values are diagnostic hints rather than
-additive totals: if one synchronous response drains multiple pending command
-types, the same wait can appear on more than one row. Failed response waits are
-reported separately as `fail_syncs` and `fail_wait_ms`, so a closed socket or
-server crash does not look like successful queue-drain evidence. Rows remain
-grouped by endpoint for readability.
+`GRAPH_RECOMPUTE` calls, and to `COPY_TENSOR_ASYNC` when that experimental path
+is enabled, so a long `GET_TENSOR` wait is easier to distinguish from pure
+readback time. The `wait_ms` values are diagnostic hints rather than additive
+totals: if one synchronous response drains multiple pending command types, the
+same wait can appear on more than one row. Failed response waits are reported
+separately as `fail_syncs` and `fail_wait_ms`, so a closed socket or server
+crash does not look like successful queue-drain evidence. Rows remain grouped by
+endpoint for readability.
 
 Latency percentiles use bounded per-row sampling to avoid unbounded trace memory
 growth during long benchmarks. Set `GGML_RPC_TRACE_LATENCY_SAMPLE_LIMIT=N` to

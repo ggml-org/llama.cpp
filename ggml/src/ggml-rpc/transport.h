@@ -31,6 +31,9 @@ struct socket_t {
     void set_supports_set_tensor_zlib(bool value);
     bool supports_set_tensor_zlib() const;
 
+    void set_supports_copy_tensor_async(bool value);
+    bool supports_copy_tensor_async() const;
+
     void set_label(const char * label);
     const std::string & label() const;
 

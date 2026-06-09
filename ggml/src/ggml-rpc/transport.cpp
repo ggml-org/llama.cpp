@@ -119,7 +119,7 @@ static_assert(sizeof(rdma_caps) == RPC_CONN_CAPS_SIZE, "rdma_caps must match con
 struct socket_t::impl {
     impl(sockfd_t fd)
         : use_rdma(false), fd(fd), skip_tensor_hash(false), supports_device_type(false),
-          supports_set_tensor_zlib(false) {}
+          supports_set_tensor_zlib(false), supports_copy_tensor_async(false) {}
     ~impl();
     bool send_data(const void * data, size_t size);
     bool recv_data(void * data, size_t size);
@@ -143,6 +143,7 @@ struct socket_t::impl {
     bool     skip_tensor_hash;
     bool     supports_device_type;
     bool     supports_set_tensor_zlib;
+    bool     supports_copy_tensor_async;
     std::string label;
 };
 
@@ -595,6 +596,14 @@ void socket_t::set_supports_set_tensor_zlib(bool value) {
 
 bool socket_t::supports_set_tensor_zlib() const {
     return pimpl->supports_set_tensor_zlib;
+}
+
+void socket_t::set_supports_copy_tensor_async(bool value) {
+    pimpl->supports_copy_tensor_async = value;
+}
+
+bool socket_t::supports_copy_tensor_async() const {
+    return pimpl->supports_copy_tensor_async;
 }
 
 void socket_t::set_label(const char * label) {
