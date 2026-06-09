@@ -373,6 +373,7 @@ llama_model_gemma4::graph::graph(const llama_model & model, const llm_graph_para
 
     cb(cur, "h_pre_norm", -1);
     res->t_h_pre_norm = cur;
+    res->t_h_nextn    = cur;
 
     cur = build_norm(cur,
             model.output_norm, nullptr,

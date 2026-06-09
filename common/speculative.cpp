@@ -144,6 +144,9 @@ struct common_speculative_impl {
 
     virtual ~common_speculative_impl() = default;
 
+    // true if this implementation requires the target context to extract nextn embeddings
+    virtual bool need_embd_nextn() const { return false; }
+
     virtual void begin(llama_seq_id seq_id, const llama_tokens & prompt) = 0;
 
     virtual bool process(const llama_batch & batch) = 0;
@@ -422,6 +425,10 @@ struct common_speculative_state_mtp : public common_speculative_impl {
         batch.logits[0]    = 1;
 
         llama_set_mtp(ctx_tgt, ctx_dft);
+
+        // Enable extraction of nextn hidden states for MTP drafters (gemma4, etc.)
+        llama_set_embeddings_nextn(ctx_tgt, true, /*masked*/ false);
+        llama_set_embeddings_nextn(ctx_dft, true, /*masked*/ true);
     }
 
     ~common_speculative_state_mtp() override {
@@ -508,32 +515,69 @@ struct common_speculative_state_mtp : public common_speculative_impl {
                 wait_prefetch();
             }
 
-            ggml_tensor * src;
-            int32_t src_row;
+            ggml_tensor * src = nullptr;
+            int32_t src_row = 0;
+            bool use_nextn_fallback = false;
+
             if (k == 0) {
                 src = llama_context_get_t_h_pre_norm(ctx_tgt);
-                if (last_n_accepted < 0) {
-                    src_row = (src && src->ne[1] > 0) ? (int32_t) src->ne[1] - 1 : 0;
+                if (src) {
+                    if (last_n_accepted < 0) {
+                        src_row = src->ne[1] > 0 ? (int32_t) src->ne[1] - 1 : 0;
+                    } else {
+                        src_row = last_n_accepted;
+                    }
                 } else {
-                    src_row = last_n_accepted;
+                    // nextn fallback for target (gemma4 backbone, etc.)
+                    use_nextn_fallback = true;
+                    if (last_n_accepted < 0) {
+                        src_row = 0;
+                    } else {
+                        src_row = last_n_accepted;
+                    }
                 }
             } else {
                 src = llama_context_get_t_mtp_out(ctx_dft);
                 if (src == nullptr) {
                     src = llama_context_get_t_h_pre_norm(ctx_dft);
                 }
-                src_row = src ? (int32_t) src->ne[1] - 1 : 0;
+                if (src) {
+                    src_row = (int32_t) src->ne[1] - 1;
+                } else {
+                    // nextn fallback for draft (gemma4 assistant, etc.)
+                    use_nextn_fallback = true;
+                    src_row = 0;
+                }
             }
-            if (!src) {
+
+            if (!src && !use_nextn_fallback) {
                 break;
             }
 
             llama_context * src_ctx = k == 0 ? ctx_tgt : ctx_dft;
 
-            if (next_src != src || next_ctx != src_ctx || next_src_row != src_row) {
-                wait_prefetch();
-                prefetch_src_row(src_ctx, src, src_row);
-                wait_prefetch();
+            if (use_nextn_fallback) {
+                // Copy hidden state from pre-extracted nextn buffer to batch.embd
+                // NOTE: row_bytes is based on ctx_dft's n_embd, which matches the nextn
+                // row dimension for the draft model (n_embd == n_embd_out). If the k==0
+                // (target) fallback is ever taken with a model where target n_embd_out
+                // differs from draft n_embd, the copy would truncate.
+                if (batch.embd) {
+                    const float * h_row = llama_get_embeddings_nextn_ith(src_ctx, src_row);
+                    if (h_row) {
+                        memcpy(batch.embd, h_row, row_bytes);
+                    } else {
+                        break;
+                    }
+                } else {
+                    break;
+                }
+            } else {
+                if (next_src != src || next_ctx != src_ctx || next_src_row != src_row) {
+                    wait_prefetch();
+                    prefetch_src_row(src_ctx, src, src_row);
+                    wait_prefetch();
+                }
             }
             batch.token[0] = cond_tok;
             batch.pos[0]   = pos;
@@ -588,6 +632,10 @@ struct common_speculative_state_mtp : public common_speculative_impl {
 
         last_n_drafted  = 0;
         last_n_accepted = (int32_t) n_accepted;
+    }
+
+    bool need_embd_nextn() const override {
+        return true;
     }
 };
 
@@ -1295,6 +1343,20 @@ bool common_speculative_need_embd_pre_norm(common_speculative * spec) {
 
     for (const auto & impl : spec->impls) {
         if (impl->type == COMMON_SPECULATIVE_TYPE_MTP) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+bool common_speculative_need_embd_nextn(common_speculative * spec) {
+    if (spec == nullptr) {
+        return false;
+    }
+
+    for (const auto & impl : spec->impls) {
+        if (impl->need_embd_nextn()) {
             return true;
         }
     }

@@ -112,3 +112,10 @@ LLAMA_API float * llama_get_embeddings_pre_norm_raw_ith(struct llama_context * c
 LLAMA_API struct ggml_tensor * llama_context_get_t_h_pre_norm(struct llama_context * ctx);
 LLAMA_API struct ggml_tensor * llama_context_get_t_mtp_out(struct llama_context * ctx);
 LLAMA_API void llama_set_mtp(struct llama_context * ctx_target, struct llama_context * ctx_mtp);
+
+//
+// nextn embeddings (hidden state before the final output norm, gemma4 etc.)
+//
+LLAMA_API void    llama_set_embeddings_nextn   (struct llama_context * ctx, bool value, bool masked);
+LLAMA_API float * llama_get_embeddings_nextn    (struct llama_context * ctx);
+LLAMA_API float * llama_get_embeddings_nextn_ith(struct llama_context * ctx, int32_t i);
