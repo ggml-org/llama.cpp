@@ -89,3 +89,17 @@ target_link_libraries(ggml-zendnn PRIVATE m pthread)
 if (GGML_OPENMP)
     target_link_libraries(ggml-zendnn PRIVATE OpenMP::OpenMP_CXX)
 endif()
+
+if (ZENDNN_SHARED_LIB AND CMAKE_SYSTEM_NAME MATCHES "Linux")
+    set_target_properties(ggml-zendnn PROPERTIES
+        BUILD_WITH_INSTALL_RPATH ON
+        INSTALL_RPATH "$ORIGIN")
+
+    add_custom_command(TARGET ggml-zendnn POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            ${ZENDNN_ROOT}/zendnnl/lib/libzendnnl.so
+            $<TARGET_FILE_DIR:ggml-zendnn>/libzendnnl.so)
+
+    install(FILES ${ZENDNN_ROOT}/zendnnl/lib/libzendnnl.so
+        TYPE LIB)
+endif()
