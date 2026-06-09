@@ -168,8 +168,10 @@ struct server_task {
     slot_action slot_action;
 
     struct kvcache_action {
-        ggml_type ctk;
-        ggml_type ctv;
+        std::optional<ggml_type> ctk;
+        std::optional<ggml_type> ctv;
+        std::optional<ggml_type> ctkd;
+        std::optional<ggml_type> ctvd;
     };
     kvcache_action kvcache_action;
 

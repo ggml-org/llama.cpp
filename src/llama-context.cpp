@@ -2056,6 +2056,7 @@ bool llama_context::requantize_memory(ggml_type new_type_k, ggml_type new_type_v
         /*.type_v   =*/ new_type_v,
         /*.swa_full =*/ cparams.swa_full,
         /*.ctx_type= */ cparams.ctx_type,
+        /*.mem_other =*/ llama_get_memory(cparams.ctx_other),
     };
 
     // Create new kvcache
