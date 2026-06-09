@@ -13780,9 +13780,6 @@ static void ggml_vk_preallocate_buffers(ggml_backend_vk_context * ctx, vk_contex
     }
     if (ctx->prealloc_y == nullptr || (ctx->prealloc_size_y > 0 && ctx->prealloc_y->size < ctx->prealloc_size_y)) {
         VK_LOG_MEMORY("ggml_vk_preallocate_buffers(y_size: " << ctx->prealloc_size_y << ")");
-        // Note: the actual GGML_ASSERT(!subctx) lives at the op level (MulMat/MulMatId)
-        // where (qy_needs_dequant || quantize_y) && prealloc_size_y < y_sz, gated by
-        // GGML_VK_FA_DEBUG.  That is the precise invariant the prescan maintains.
         if (getenv("GGML_VK_FA_DEBUG")) {
             fprintf(stderr, "ggml_vulkan: prealloc_y growing to %zu bytes (has_subctx=%d)\n",
                     ctx->prealloc_size_y, subctx ? 1 : 0);
@@ -15649,7 +15646,7 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
     // For X (src0 weight buffer, dequant path):
     //   Only F32/F16/BF16 src0 requires dequantisation; quantised types are consumed
     //   directly by the shader, so qx_needs_dequant=false for those.
-#if 1  // set to 0 to disable prescan (for unit test regression verification)
+#if 1  // pre-scan: set to 0 only for regression testing (see test_mul_mat_id_prescan)
     {
         // Maximum wg_denoms[1] across all configured pipelines (conservative).
         // Empirically observed: MUL_MAT l_wg_denoms[1]=256, MUL_MAT_ID l_mmqid[1]=128.
@@ -18172,6 +18169,7 @@ static void ggml_vk_check_results_1(ggml_backend_vk_context * ctx, ggml_cgraph *
 #endif
 
 GGML_BACKEND_DL_IMPL(ggml_backend_vk_reg)
+
 
 
 

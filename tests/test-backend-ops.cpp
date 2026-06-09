@@ -8638,8 +8638,12 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     // To verify the test catches the regression, disable the prescan (#if 0 in
     // ggml_backend_vk_graph_compute) and run with GGML_VK_FA_DEBUG=1; the
     // GGML_ASSERT(!subctx) in ggml_vk_mul_mat_id_q_f16 will abort the process.
-    test_cases.emplace_back(new test_mul_mat_id_prescan(GGML_TYPE_F16,  512, 2, 128, 256, 16));
-    test_cases.emplace_back(new test_mul_mat_id_prescan(GGML_TYPE_Q4_K, 512, 2, 128, 256, 16));
+    // k=1024 → k_small=256: both ops land in the quantize_y=1 pipeline branch on Arc UMA,
+    // giving a non-null old_VkBuffer when Op 2 (k=1024) forces prealloc_y to grow past
+    // Op 1's (k_small=256) allocation.  On Intel Arc UMA the freed buffer's physical pages
+    // can be immediately reused for host memory, allowing the GPU to corrupt host stack.
+    test_cases.emplace_back(new test_mul_mat_id_prescan(GGML_TYPE_F16,  512, 2, 128, 1024, 16));
+    test_cases.emplace_back(new test_mul_mat_id_prescan(GGML_TYPE_Q4_K, 512, 2, 128, 1024, 16));
 
     // gpt-oss issue with Vulkan mmq_id
     test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_MXFP4, GGML_TYPE_F32, 32, 2, false, 2880, 32, 2880));
