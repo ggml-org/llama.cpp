@@ -142,6 +142,13 @@ void extract_q5_1_data(const ggml_tensor * tensor,
     auto * weights = static_cast<uint8_t *>(weights_arr.data());  // u8 weights, one byte per weight
     auto * scales = scales_arr.data<ov::element_type_traits<ov::element::f16>::value_type>();
 
+    // Read a 16-bit little-endian value without aliasing/const-qual violations.
+    auto read_u16 = [](const uint8_t * p) {
+        uint16_t v;
+        memcpy(&v, p, sizeof(v));
+        return v;
+    };
+
     auto unpack_block = [&](const uint8_t * block, uint8_t * dst) {
         uint32_t qh;
         memcpy(&qh, block + 4, sizeof(uint32_t));
@@ -161,8 +168,8 @@ void extract_q5_1_data(const ggml_tensor * tensor,
         auto * bias = zp_arr.data<ov::element_type_traits<ov::element::f16>::value_type>();
         ov::parallel_for(scales_arr.get_size(), [&](size_t i) {
             const uint8_t * block = data + i * bytes_per_block;
-            float scale = static_cast<float>(ov::float16::from_bits(*((uint16_t *) (block))));
-            float min = static_cast<float>(ov::float16::from_bits(*((uint16_t *) (block + 2))));
+            float scale = static_cast<float>(ov::float16::from_bits(read_u16(block)));
+            float min = static_cast<float>(ov::float16::from_bits(read_u16(block + 2)));
             scales[i] = ov::float16(scale);
             bias[i] = ov::float16(min);
             unpack_block(block, weights + i * qk);
@@ -171,8 +178,8 @@ void extract_q5_1_data(const ggml_tensor * tensor,
         auto * zp = static_cast<uint8_t *>(zp_arr.data());  // u8 zero points
         ov::parallel_for(scales_arr.get_size(), [&](size_t i) {
             const uint8_t * block = data + i * bytes_per_block;
-            float scale = static_cast<float>(ov::float16::from_bits(*((uint16_t *) (block))));
-            float min = static_cast<float>(ov::float16::from_bits(*((uint16_t *) (block + 2))));
+            float scale = static_cast<float>(ov::float16::from_bits(read_u16(block)));
+            float min = static_cast<float>(ov::float16::from_bits(read_u16(block + 2)));
             scales[i] = ov::float16(scale);
             // zp = -min / scale (dequant: (w - zp) * s == w*s + min)
             zp[i] = (scale != 0.0f) ? (uint8_t) std::lround(-min / scale) : 0;
