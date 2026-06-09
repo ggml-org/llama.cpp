@@ -308,7 +308,9 @@
 </svelte:head>
 
 <!-- PWA update prompt -->
-<PwaRefreshAlert needRefresh={$needRefresh} {updateServiceWorker} />
+<div class="fixed right-4 bottom-4 z-[9999]">
+	<PwaRefreshAlert needRefresh={$needRefresh} {updateServiceWorker} />
+</div>
 
 <Tooltip.Provider delayDuration={TOOLTIP_DELAY_DURATION}>
 	<ModeWatcher />

@@ -1,26 +1,30 @@
 <script lang="ts">
-	export let needRefresh: boolean | undefined;
-	export let updateServiceWorker: (() => void) | undefined;
+	import * as Card from '$lib/components/ui/card';
+	import { Button } from '$lib/components/ui/button';
+
+	let { needRefresh: needRefreshProp, updateServiceWorker } = $props();
+	let needRefresh = $derived(needRefreshProp ?? false);
 </script>
 
-{#if needRefresh && updateServiceWorker}
-	<div
-		class="fixed right-4 bottom-4 z-[9999] max-w-sm rounded-lg border border-zinc-200 bg-white p-4 shadow-lg dark:border-zinc-700 dark:bg-zinc-800"
-	>
-		<p class="mb-2 text-sm font-medium">Update available</p>
-		<p class="mb-3 text-xs text-zinc-500 dark:text-zinc-400">
-			A new version is available. Reload to update.
-		</p>
-		<div class="flex gap-2">
-			<button
+{#if needRefresh}
+	<Card.Root class="overflow-hidden gap-1 py-5">
+		<Card.Header class="px-5">
+			<Card.Title class="text-sm font-medium">Update available</Card.Title>
+		</Card.Header>
+
+		<Card.Content class="gap-6 grid px-5">
+			<p class="text-xs text-muted-foreground">A new version is available. Reload to update.</p>
+
+			<Button
+				class="justify-self-end-safe"
+				size="sm"
 				onclick={() => {
 					updateServiceWorker();
 					needRefresh = false;
 				}}
-				class="rounded bg-blue-600 px-3 py-1 text-xs text-white hover:bg-blue-700"
 			>
 				Reload
-			</button>
-		</div>
-	</div>
+			</Button>
+		</Card.Content>
+	</Card.Root>
 {/if}
