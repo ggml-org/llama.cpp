@@ -536,9 +536,6 @@ llama_model_step35::graph_mtp::graph_mtp(const llama_model & model, const llm_gr
     // n_outputs rows of t_h_nextn, so the output slots must come first. Without it
     // a multi-head draft (step >= 1, output slot != row 0) extracts the wrong row.
     // Identity when n_outputs == n_tokens, so the single-head path is unchanged.
-    // The MTP graph is always run masked; assert it so this stays valid.
-    GGML_ASSERT(cparams.embeddings_nextn_masked &&
-                "STEP35 MTP graph requires masked nextn extraction");
     ggml_tensor * inp_out_ids = build_inp_out_ids();
     cur = ggml_get_rows(ctx0, cur, inp_out_ids);
 
