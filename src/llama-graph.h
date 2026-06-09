@@ -93,6 +93,11 @@ struct llama_diffusion_cond {
     int64_t sc_topk = 0;
     std::vector<int32_t> sc_topk_ids;
     std::vector<float>   sc_topk_probs;
+    bool     sc_topk_device_ready      = false;
+    void   * sc_topk_device_ids_data   = nullptr;
+    void   * sc_topk_device_probs_data = nullptr;
+    size_t   sc_topk_device_ids_bytes  = 0;
+    size_t   sc_topk_device_probs_bytes = 0;
 
     // KV-cache reuse phase selector (block-diffusion):
     //   false (encoder phase) = plain token embeddings, no self-conditioning; KV is
@@ -791,6 +796,8 @@ public:
     ggml_tensor * get_embd()        const { return t_embd; }
     ggml_tensor * get_embd_pooled() const { return t_embd_pooled; }
     ggml_tensor * get_h_nextn()     const { return t_h_nextn; }
+    ggml_tensor * get_h_pre_norm()  const { return t_h_pre_norm; }
+    llm_graph_input_diffusion_self_cond_topk * get_inp_diffusion_self_cond_topk() const;
 
     ggml_tensor * get_layer_inp(int il) const { return t_layer_inp[il]; }
 
@@ -822,6 +829,7 @@ public:
     ggml_tensor * t_embd        = nullptr;
     ggml_tensor * t_embd_pooled = nullptr;
     ggml_tensor * t_h_nextn     = nullptr; // [n_embd, n_outputs] hidden state before final output norm
+    ggml_tensor * t_h_pre_norm  = nullptr; // [n_embd, n_outputs] hidden state before final output norm
 
     std::vector<ggml_tensor *> t_layer_inp;
 

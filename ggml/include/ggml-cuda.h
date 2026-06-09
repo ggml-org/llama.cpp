@@ -60,6 +60,8 @@ struct ggml_cuda_diffusion_sample_result {
     float   * entropy;
     int32_t * self_cond_ids;
     float   * self_cond_probs;
+    struct ggml_tensor * self_cond_ids_tensor;
+    struct ggml_tensor * self_cond_probs_tensor;
 };
 
 typedef bool (*ggml_backend_cuda_diffusion_sample_topk_t)(

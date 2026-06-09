@@ -388,7 +388,7 @@ bool ggml_cuda_diffusion_sample_topk(
     if (!ggml_backend_is_cuda(backend) || logits->type != GGML_TYPE_F32 || !ggml_is_contiguous(logits)) {
         return false;
     }
-    if (!result->sampled || !result->argmax || !result->entropy || !result->self_cond_ids || !result->self_cond_probs) {
+    if (!result->sampled || !result->argmax || !result->entropy) {
         return false;
     }
 
@@ -406,6 +406,36 @@ bool ggml_cuda_diffusion_sample_topk(
     const int sc_k = params->self_cond_top_k;
     if (sc_k <= 0 || sc_k > 1024) {
         return false;
+    }
+
+    const bool have_self_cond_host = result->self_cond_ids != nullptr && result->self_cond_probs != nullptr;
+    const bool have_self_cond_tensor = result->self_cond_ids_tensor != nullptr && result->self_cond_probs_tensor != nullptr;
+    if (!have_self_cond_host && !have_self_cond_tensor) {
+        return false;
+    }
+    if ((result->self_cond_ids == nullptr) != (result->self_cond_probs == nullptr)) {
+        return false;
+    }
+    if ((result->self_cond_ids_tensor == nullptr) != (result->self_cond_probs_tensor == nullptr)) {
+        return false;
+    }
+    if (have_self_cond_tensor) {
+        if (result->self_cond_ids_tensor->type != GGML_TYPE_I32 ||
+            result->self_cond_probs_tensor->type != GGML_TYPE_F32 ||
+            !ggml_is_contiguous(result->self_cond_ids_tensor) ||
+            !ggml_is_contiguous(result->self_cond_probs_tensor) ||
+            result->self_cond_ids_tensor->data == nullptr ||
+            result->self_cond_probs_tensor->data == nullptr ||
+            result->self_cond_ids_tensor->buffer == nullptr ||
+            result->self_cond_probs_tensor->buffer == nullptr ||
+            ggml_backend_buffer_is_host(result->self_cond_ids_tensor->buffer) ||
+            ggml_backend_buffer_is_host(result->self_cond_probs_tensor->buffer)) {
+            return false;
+        }
+        if (ggml_nbytes(result->self_cond_ids_tensor) != (size_t) n_tokens * sc_k * sizeof(int) ||
+            ggml_nbytes(result->self_cond_probs_tensor) != (size_t) n_tokens * sc_k * sizeof(float)) {
+            return false;
+        }
     }
 
     const int heap_k = top_k == 0 ? sc_k : std::max(top_k, sc_k);
@@ -483,10 +513,18 @@ bool ggml_cuda_diffusion_sample_topk(
                                cudaMemcpyDeviceToHost, stream));
     CUDA_CHECK(cudaMemcpyAsync(result->entropy, entropy_alloc.get(), (size_t) n_tokens * sizeof(float),
                                cudaMemcpyDeviceToHost, stream));
-    CUDA_CHECK(cudaMemcpyAsync(result->self_cond_ids, sc_ids_alloc.get(), (size_t) n_tokens * sc_k * sizeof(int),
-                               cudaMemcpyDeviceToHost, stream));
-    CUDA_CHECK(cudaMemcpyAsync(result->self_cond_probs, sc_probs_alloc.get(), (size_t) n_tokens * sc_k * sizeof(float),
-                               cudaMemcpyDeviceToHost, stream));
+    if (have_self_cond_host) {
+        CUDA_CHECK(cudaMemcpyAsync(result->self_cond_ids, sc_ids_alloc.get(), (size_t) n_tokens * sc_k * sizeof(int),
+                                   cudaMemcpyDeviceToHost, stream));
+        CUDA_CHECK(cudaMemcpyAsync(result->self_cond_probs, sc_probs_alloc.get(), (size_t) n_tokens * sc_k * sizeof(float),
+                                   cudaMemcpyDeviceToHost, stream));
+    }
+    if (have_self_cond_tensor) {
+        CUDA_CHECK(cudaMemcpyAsync(result->self_cond_ids_tensor->data, sc_ids_alloc.get(), (size_t) n_tokens * sc_k * sizeof(int),
+                                   cudaMemcpyDeviceToDevice, stream));
+        CUDA_CHECK(cudaMemcpyAsync(result->self_cond_probs_tensor->data, sc_probs_alloc.get(), (size_t) n_tokens * sc_k * sizeof(float),
+                                   cudaMemcpyDeviceToDevice, stream));
+    }
 
     CUDA_CHECK(cudaStreamSynchronize(stream));
     return true;

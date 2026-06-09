@@ -207,14 +207,16 @@ int main(int argc, char ** argv) {
     const bool use_gpu_sampling = gpu_sampling_requested &&
                                   gpu_sampling_topk_ok &&
                                   llama_diffusion_sample_topk_supported(ctx);
+    const bool use_device_self_cond = use_gpu_sampling && env_int("DG_DEVICE_SELFCOND", 1) != 0;
     llama_set_diffusion_gpu_sampling(ctx, use_gpu_sampling);
 
     LOG_INF("diffusion-gemma: prefix=%d canvas=%d max_canvases=%d steps=%d entropy_bound=%.3f temp=[%.2f,%.2f] n_ctx=%d mm=%d\n",
             prefix_len, canvas_length, max_canvases, n_steps, entropy_bound, TEMP_MIN, TEMP_MAX, n_ctx, (int) use_mm);
-    LOG_INF("diffusion-gemma: gpu sampling: %s%s\n",
+    LOG_INF("diffusion-gemma: gpu sampling: %s%s%s\n",
             use_gpu_sampling ? "on" : "off",
             (!gpu_sampling_topk_ok ? " (top-k exceeds CUDA fast-path limit)" :
-             (!gpu_sampling_requested ? " (disabled by DG_GPU_SAMPLING=0)" : "")));
+             (!gpu_sampling_requested ? " (disabled by DG_GPU_SAMPLING=0)" : "")),
+            use_device_self_cond ? " | device self-cond: on" : "");
     if (topk_fixed > 0 || (topk_start > 0 && topk_end > 0)) {
         LOG_INF("diffusion-gemma: top-k sampling: fixed=%d anneal=[%d->%d] tail_correction=%d (vocab=%d)\n",
                 topk_fixed, topk_start, topk_end, topk_tail, n_vocab);
@@ -350,8 +352,10 @@ int main(int argc, char ** argv) {
 
         // sparse self-cond for the NEXT step: top-SC_K (id, prob) per position. Cleared each step;
         // unused slots stay (id 0, prob 0) so the graph gather contributes nothing for them.
-        std::fill(sc_probs.begin(), sc_probs.end(), 0.0f);
-        std::fill(sc_ids.begin(),   sc_ids.end(),   0);
+        if (!use_device_self_cond) {
+            std::fill(sc_probs.begin(), sc_probs.end(), 0.0f);
+            std::fill(sc_ids.begin(),   sc_ids.end(),   0);
+        }
 
         bool sampled_ok = true;
         const auto t_sample_start = std::chrono::steady_clock::now();
@@ -369,8 +373,8 @@ int main(int argc, char ** argv) {
                 /* .sampled         = */ sampled.data(),
                 /* .argmax          = */ argmax_canvas.data(),
                 /* .entropy         = */ entropy.data(),
-                /* .self_cond_ids   = */ sc_ids.data(),
-                /* .self_cond_probs = */ sc_probs.data(),
+                /* .self_cond_ids   = */ use_device_self_cond ? nullptr : sc_ids.data(),
+                /* .self_cond_probs = */ use_device_self_cond ? nullptr : sc_probs.data(),
             };
             sampled_ok = llama_diffusion_sample_topk(ctx, &sample_params, &sample_result);
             if (!sampled_ok) {
@@ -513,9 +517,6 @@ int main(int argc, char ** argv) {
         // prefix [0, n_past); the next step re-decodes the canvas fresh against that prefix.
         llama_memory_seq_rm(mem, 0, n_past, -1);
 
-        // self-conditioning for the NEXT denoising step: feed this step's top-SC_K (id, prob)
-        llama_set_diffusion_self_cond_topk(ctx, sc_ids.data(), sc_probs.data(), SC_K, canvas_length);
-
         // 2c. entropy-bound accept: sort positions by entropy ascending, accept the prefix
         // where sum(entropy of all-but-last) <= entropy_bound (monotonic -> prefix selection)
         std::vector<int> order(canvas_length);
@@ -552,6 +553,12 @@ int main(int argc, char ** argv) {
             break;
         }
         prev_argmax = argmax_canvas;
+
+        // self-conditioning for the NEXT denoising step. With device self-cond this was already
+        // copied D2D into the reused graph input tensors by llama_diffusion_sample_topk().
+        if (!use_device_self_cond) {
+            llama_set_diffusion_self_cond_topk(ctx, sc_ids.data(), sc_probs.data(), SC_K, canvas_length);
+        }
 
         // 2e. renoise non-accepted positions with fresh random tokens -> next canvas
         for (int i = 0; i < canvas_length; ++i) {

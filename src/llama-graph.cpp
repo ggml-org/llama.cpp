@@ -415,6 +415,18 @@ void llm_graph_input_diffusion_self_cond_topk::set_input(const llama_ubatch * ub
     const size_t n_id_bytes = ggml_nbytes(ids);
     const size_t n_pr_bytes = ggml_nbytes(probs);
 
+    const bool have_device = diffusion
+        && diffusion->sc_topk > 0
+        && diffusion->sc_topk_device_ready
+        && diffusion->sc_topk_device_ids_data    == ids->data
+        && diffusion->sc_topk_device_probs_data  == probs->data
+        && diffusion->sc_topk_device_ids_bytes   == n_id_bytes
+        && diffusion->sc_topk_device_probs_bytes == n_pr_bytes;
+
+    if (have_device) {
+        return;
+    }
+
     const bool have = diffusion
         && diffusion->sc_topk > 0
         && diffusion->sc_topk_ids.size()   * sizeof(int32_t) == n_id_bytes
@@ -1024,6 +1036,16 @@ void llm_graph_result::set_inputs(const llama_ubatch * ubatch) {
     }
 }
 
+llm_graph_input_diffusion_self_cond_topk * llm_graph_result::get_inp_diffusion_self_cond_topk() const {
+    for (auto & input : inputs) {
+        if (auto * topk = dynamic_cast<llm_graph_input_diffusion_self_cond_topk *>(input.get())) {
+            return topk;
+        }
+    }
+
+    return nullptr;
+}
+
 void llm_graph_result::set_outputs(const llm_graph_params & params) {
     if (t_logits != nullptr) {
         ggml_set_output(t_logits);
@@ -1045,6 +1067,9 @@ void llm_graph_result::set_outputs(const llm_graph_params & params) {
                 ggml_set_output(t_layer_inp[il]);
             }
         }
+    }
+    if (t_h_pre_norm != nullptr) {
+        ggml_set_output(t_h_pre_norm);
     }
     for (auto & [seq_id, t] : t_sampled) {
         if (t != nullptr) {
@@ -2130,6 +2155,18 @@ llm_graph_input_diffusion_self_cond_topk * llm_graph_context::build_inp_diffusio
 
     inp->probs = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, k, n_tokens);
     ggml_set_input(inp->probs);
+
+    if (sched) {
+        for (int i = 0; i < ggml_backend_sched_get_n_backends(sched); ++i) {
+            ggml_backend_t backend = ggml_backend_sched_get_backend(sched, i);
+            if (backend && backend != backend_cpu &&
+                ggml_backend_dev_type(ggml_backend_get_device(backend)) == GGML_BACKEND_DEVICE_TYPE_GPU) {
+                ggml_backend_sched_set_tensor_backend(sched, inp->ids, backend);
+                ggml_backend_sched_set_tensor_backend(sched, inp->probs, backend);
+                break;
+            }
+        }
+    }
 
     auto * ptr = inp.get();
     res->add_input(std::move(inp));

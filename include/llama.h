@@ -1030,6 +1030,8 @@ extern "C" {
         llama_token * sampled;
         llama_token * argmax;
         float       * entropy;
+        // Optional host outputs for self-conditioning. If both are null, the CUDA fast path writes
+        // sparse self-conditioning directly into the reused decoder graph input tensors.
         int32_t     * self_cond_ids;
         float       * self_cond_probs;
     };

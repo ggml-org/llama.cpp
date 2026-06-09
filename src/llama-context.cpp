@@ -1184,6 +1184,12 @@ void llama_context::set_diffusion_decoder_phase(bool decoder_phase) {
 }
 
 void llama_context::set_diffusion_self_cond_topk(const int32_t * ids, const float * probs, int64_t k, int64_t n_tokens) {
+    diffusion_cond.sc_topk_device_ready       = false;
+    diffusion_cond.sc_topk_device_ids_data    = nullptr;
+    diffusion_cond.sc_topk_device_probs_data  = nullptr;
+    diffusion_cond.sc_topk_device_ids_bytes   = 0;
+    diffusion_cond.sc_topk_device_probs_bytes = 0;
+
     if (ids == nullptr || probs == nullptr || k <= 0 || n_tokens <= 0) {
         diffusion_cond.sc_topk = 0;
         diffusion_cond.sc_topk_ids.clear();
@@ -1248,6 +1254,20 @@ bool llama_context::diffusion_sample_topk(
         return false;
     }
 
+    ggml_tensor * t_self_cond_ids   = nullptr;
+    ggml_tensor * t_self_cond_probs = nullptr;
+    const bool device_self_cond = result->self_cond_ids == nullptr && result->self_cond_probs == nullptr;
+    if (device_self_cond) {
+        auto * inp = gf_res_prev->get_inp_diffusion_self_cond_topk();
+        if (!inp || !inp->ids || !inp->probs) {
+            return false;
+        }
+        t_self_cond_ids   = inp->ids;
+        t_self_cond_probs = inp->probs;
+    } else if (result->self_cond_ids == nullptr || result->self_cond_probs == nullptr) {
+        return false;
+    }
+
     ggml_cuda_diffusion_sample_params cuda_params = {
         /* .n_vocab               = */ (int32_t) model.vocab.n_tokens(),
         /* .n_tokens              = */ params->n_tokens,
@@ -1265,9 +1285,23 @@ bool llama_context::diffusion_sample_topk(
         /* .entropy         = */ result->entropy,
         /* .self_cond_ids   = */ result->self_cond_ids,
         /* .self_cond_probs = */ result->self_cond_probs,
+        /* .self_cond_ids_tensor   = */ t_self_cond_ids,
+        /* .self_cond_probs_tensor = */ t_self_cond_probs,
     };
 
-    return sample_proc(backend, t_logits, &cuda_params, &cuda_result);
+    const bool ok = sample_proc(backend, t_logits, &cuda_params, &cuda_result);
+    if (ok && device_self_cond) {
+        diffusion_cond.sc_topk = params->self_cond_top_k;
+        diffusion_cond.sc_topk_ids.clear();
+        diffusion_cond.sc_topk_probs.clear();
+        diffusion_cond.sc_topk_device_ready       = true;
+        diffusion_cond.sc_topk_device_ids_data    = t_self_cond_ids->data;
+        diffusion_cond.sc_topk_device_probs_data  = t_self_cond_probs->data;
+        diffusion_cond.sc_topk_device_ids_bytes   = ggml_nbytes(t_self_cond_ids);
+        diffusion_cond.sc_topk_device_probs_bytes = ggml_nbytes(t_self_cond_probs);
+    }
+
+    return ok;
 }
 
 void llama_context::set_causal_attn(bool value) {
