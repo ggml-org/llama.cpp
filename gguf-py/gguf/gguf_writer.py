@@ -511,6 +511,12 @@ class GGUFWriter:
     def add_file_type(self, ftype: int) -> None:
         self.add_uint32(Keys.General.FILE_TYPE, ftype)
 
+    def add_nvfp4_w4a16_blocks(self, blocks: Sequence[int]) -> None:
+        self.add_array(Keys.General.NVFP4_W4A16_BLOCKS, list(blocks))
+
+    def add_nvfp4_w4a16_output(self) -> None:
+        self.add_bool(Keys.General.NVFP4_W4A16_OUTPUT, True)
+
     def add_sampling_sequence(self, sequence: str) -> None:
         self.add_string(Keys.General.SAMPLING_SEQUENCE, sequence)
 

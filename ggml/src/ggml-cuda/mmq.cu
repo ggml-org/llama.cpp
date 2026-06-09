@@ -5,7 +5,8 @@
 
 #include <cstdint>
 
-static void ggml_cuda_mul_mat_q_switch_type(ggml_backend_cuda_context & ctx, const mmq_args & args, cudaStream_t stream) {
+static void ggml_cuda_mul_mat_q_switch_type(ggml_backend_cuda_context & ctx, const mmq_args & args, cudaStream_t stream,
+                                            [[maybe_unused]] bool force_w4a8 = false) {
     switch (args.type_x) {
         case GGML_TYPE_Q1_0:
             mul_mat_q_case<GGML_TYPE_Q1_0>(ctx, args, stream);
@@ -29,6 +30,13 @@ static void ggml_cuda_mul_mat_q_switch_type(ggml_backend_cuda_context & ctx, con
             mul_mat_q_case<GGML_TYPE_MXFP4>(ctx, args, stream);
             break;
         case GGML_TYPE_NVFP4:
+#ifdef GGML_CUDA_HAS_BLACKWELL_TARGET
+            // W4A16 NVFP4: dispatch the W4A8 instantiation so activations stay at higher precision even on Blackwell.
+            if (force_w4a8) {
+                mul_mat_q_case<GGML_TYPE_NVFP4, true>(ctx, args, stream);
+                break;
+            }
+#endif // GGML_CUDA_HAS_BLACKWELL_TARGET
             mul_mat_q_case<GGML_TYPE_NVFP4>(ctx, args, stream);
             break;
         case GGML_TYPE_Q2_K:
@@ -74,6 +82,12 @@ static void ggml_cuda_mul_mat_q_switch_type(ggml_backend_cuda_context & ctx, con
             GGML_ABORT("fatal error");
             break;
     }
+}
+
+// True iff src0 is NVFP4 and dst carries the no-quant-src1 hint: gates the W4A8 mmq path.
+static inline bool ggml_cuda_mmq_force_w4a8(const ggml_tensor * src0, const ggml_tensor * dst) {
+    return src0->type == GGML_TYPE_NVFP4 &&
+           ggml_get_op_params_i32(dst, 1) == GGML_HINT_NO_QUANT_SRC1;
 }
 
 void ggml_cuda_mul_mat_q(
@@ -122,7 +136,12 @@ void ggml_cuda_mul_mat_q(
 
     const bool fallback = ne01 % 128 != 0;
 
-    const bool use_native_fp4 = blackwell_mma_available(cc) && (src0->type == GGML_TYPE_MXFP4 || src0->type == GGML_TYPE_NVFP4);
+    // NVFP4 defaults to native W4A4 on Blackwell; a requested activation precision of
+    // >= 8 bits selects the Q8_1 (W4A8) mmq path instead.
+    const bool force_w4a8 = ggml_cuda_mmq_force_w4a8(src0, dst);
+
+    const bool use_native_fp4 = !force_w4a8 && blackwell_mma_available(cc) &&
+                                (src0->type == GGML_TYPE_MXFP4 || src0->type == GGML_TYPE_NVFP4);
     const size_t y_block_size       = use_native_fp4 ? sizeof(block_fp4_mmq) : sizeof(block_q8_1_mmq);
     const size_t y_values_per_block = use_native_fp4 ? QK_FP4_MMQ            : QK8_1_MMQ;
 
@@ -159,7 +178,7 @@ void ggml_cuda_mul_mat_q(
             ne02, ne12, s02, s12, s2,
             ne03, ne13, s03, s13, s3,
             ne1};
-        ggml_cuda_mul_mat_q_switch_type(ctx, args, stream);
+        ggml_cuda_mul_mat_q_switch_type(ctx, args, stream, force_w4a8);
         return;
     }
 
@@ -234,7 +253,7 @@ void ggml_cuda_mul_mat_q(
         ne03, ne13, s03, s13, s3,
         ne12};
 
-    ggml_cuda_mul_mat_q_switch_type(ctx, args, stream);
+    ggml_cuda_mul_mat_q_switch_type(ctx, args, stream, force_w4a8);
 }
 
 bool ggml_cuda_should_use_mmq(enum ggml_type type, int cc, int64_t ne11, int64_t n_experts) {
