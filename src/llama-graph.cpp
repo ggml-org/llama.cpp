@@ -1216,8 +1216,9 @@ void llm_graph_context::set_diffusion_input_backend(ggml_tensor * tensor, uint32
         const char * env = getenv("DG_GPU_INPUT_GROUPS");
         // Keep the default to inputs used by the fixed diffusion decoder graph:
         // canvas/self-cond, positions, attention scale, KV indices, masks and
-        // rotary helpers. They are marked persistent below so the allocator will
-        // not overwrite them between denoising replays.
+        // rotary helpers. Mark them as outputs too, matching ggml-backend's
+        // existing copy-tensor convention, so the allocator will not overwrite
+        // them between denoising replays.
         return env ? (uint32_t) strtoul(env, nullptr, 0) : 63u; // 1|2|4|8|16|32
     }();
     if ((enabled_groups & group) == 0) {
@@ -1228,7 +1229,7 @@ void llm_graph_context::set_diffusion_input_backend(ggml_tensor * tensor, uint32
         ggml_backend_t backend = ggml_backend_sched_get_backend(sched, i);
         if (backend && backend != backend_cpu &&
             ggml_backend_dev_type(ggml_backend_get_device(backend)) == GGML_BACKEND_DEVICE_TYPE_GPU) {
-            tensor->flags |= GGML_TENSOR_FLAG_PERSIST;
+            ggml_set_output(tensor);
             ggml_backend_sched_set_tensor_backend(sched, tensor, backend);
             break;
         }
