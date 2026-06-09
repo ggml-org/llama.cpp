@@ -1891,7 +1891,6 @@ int llama_context::decode(const llama_batch & batch_inp) {
                     static thread_local std::vector<float>   eagle3_draft_logits;
 
                     const int64_t draft_vocab_size = t_logits->ne[0];
-                    const uint32_t last_idx = n_outputs - 1;
 
                     if (eagle3_d2t_map.empty()) {
                         eagle3_d2t_map.resize(model.d2t->ne[0]);
@@ -1899,20 +1898,24 @@ int llama_context::decode(const llama_batch & batch_inp) {
                                                 eagle3_d2t_map.size() * sizeof(int64_t));
                     }
 
-                    eagle3_draft_logits.resize(draft_vocab_size);
-                    const size_t last_offset = last_idx * draft_vocab_size * sizeof(float);
+                    // remap every output row (one per sequence) from draft vocab to target vocab.
+                    eagle3_draft_logits.resize((size_t) n_outputs * draft_vocab_size);
                     ggml_backend_tensor_get_async(backend_res, t_logits, eagle3_draft_logits.data(),
-                                                  last_offset, draft_vocab_size * sizeof(float));
+                                                  0, (size_t) n_outputs * draft_vocab_size * sizeof(float));
                     synchronize();
 
-                    float * last_logits_out = logits_out + last_idx * n_vocab;
-                    std::fill(last_logits_out, last_logits_out + n_vocab,
-                              -std::numeric_limits<float>::infinity());
+                    for (uint32_t r = 0; r < n_outputs; r++) {
+                        float       * row_out = logits_out + (size_t) r * n_vocab;
+                        const float * row_in  = eagle3_draft_logits.data() + (size_t) r * draft_vocab_size;
 
-                    for (int64_t j = 0; j < draft_vocab_size; j++) {
-                        const int64_t target_id = j + eagle3_d2t_map[j];
-                        GGML_ASSERT(target_id >= 0 && target_id < n_vocab);
-                        last_logits_out[target_id] = eagle3_draft_logits[j];
+                        std::fill(row_out, row_out + n_vocab,
+                                  -std::numeric_limits<float>::infinity());
+
+                        for (int64_t j = 0; j < draft_vocab_size; j++) {
+                            const int64_t target_id = j + eagle3_d2t_map[j];
+                            GGML_ASSERT(target_id >= 0 && target_id < n_vocab);
+                            row_out[target_id] = row_in[j];
+                        }
                     }
                 } else {
                     ggml_backend_tensor_get_async(backend_res, t_logits, logits_out, 0, n_outputs*n_vocab*sizeof(float));
