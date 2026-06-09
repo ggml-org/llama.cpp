@@ -3336,7 +3336,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     add_opt(common_arg(
         {"--log-prompts-dir"}, "PATH",
         "Log prompts to directory (only used for debugging, default: disabled)",
-        [](common_params &params, const std::string & value) {
+        [](common_params & params, const std::string & value) {
             params.path_prompts_log_dir = value;
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
