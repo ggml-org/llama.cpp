@@ -281,6 +281,7 @@ When targeting an intel GPU, the user should expect one or more devices among th
 #### Intel GPU
 
 ```sh
+# Uses FP32, consider using FP16 for better performance in most cases
 ./examples/sycl/build.sh
 ```
 
@@ -497,6 +498,7 @@ Choose one of following methods to build from source code.
 ##### Option 1: Script
 
 ```sh
+# Uses FP32, consider using FP16 for better performance in most cases
 .\examples\sycl\win-build-sycl.bat
 ```
 
