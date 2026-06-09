@@ -1,4 +1,3 @@
-#include "ggml-backend-impl.h"
 #include "ggml-decoder.h"
 #include "ggml-impl.h"
 
@@ -79,6 +78,8 @@ struct ov_runtime_context {
         ov_output_names_cache.clear();
     }
 };
+
+int ggml_openvino_env_flag(const char * name);
 
 enum ggml_status ov_graph_compute(struct ggml_cgraph * cgraph, ggml_backend_t backend);
 

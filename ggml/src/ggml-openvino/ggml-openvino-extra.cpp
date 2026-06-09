@@ -22,7 +22,31 @@ void ggml_openvino_device_config::init() {
     if (initialized) {
         return;
     }
-    device_name = getenv("GGML_OPENVINO_DEVICE") ? getenv("GGML_OPENVINO_DEVICE") : "CPU";
+
+    static constexpr const char* env_var_names[] = {
+        "GGML_OPENVINO_DEVICE",
+        "GGML_OPENVINO_CACHE_DIR",
+        "GGML_OPENVINO_PREFILL_CHUNK_SIZE",
+        "GGML_OPENVINO_STATEFUL_EXECUTION",
+        "GGML_OPENVINO_PROFILING",
+        "GGML_OPENVINO_DUMP_CGRAPH",
+        "GGML_OPENVINO_DUMP_IR",
+        "GGML_OPENVINO_DEBUG_INPUT",
+        "GGML_OPENVINO_DEBUG_OUTPUT",
+        "GGML_OPENVINO_PRINT_CGRAPH_TENSOR_ADDRESS",
+        "GGML_OPENVINO_ENABLE_CACHE",
+        "GGML_OPENVINO_DISABLE_KV_SLICE",
+        "GGML_OPENVINO_MANUAL_GQA_ATTN"
+    };
+
+    for (const char* const & env_var : env_var_names) {
+        auto * env = getenv(env_var);
+        if (env) {
+            environment_variables[env_var] = env;
+        }
+    }
+
+    device_name = ggml_openvino_getenv("GGML_OPENVINO_DEVICE") ? ggml_openvino_getenv("GGML_OPENVINO_DEVICE") : "CPU";
     auto available_devices = ov_singleton_core().get_available_devices();
     if (std::find(available_devices.begin(), available_devices.end(), device_name) == available_devices.end()) {
         GGML_LOG_WARN("GGML OpenVINO Backend: device %s is not available, fallback to CPU\n", device_name.c_str());
@@ -30,7 +54,7 @@ void ggml_openvino_device_config::init() {
     }
     is_npu = (device_name == "NPU");
 
-    auto * cache_dir = getenv("GGML_OPENVINO_CACHE_DIR");
+    const char * cache_dir = ggml_openvino_getenv("GGML_OPENVINO_CACHE_DIR");
     if (device_name == "NPU") {
         compile_config = {
             {"NPU_COMPILER_DYNAMIC_QUANTIZATION", "YES"   },
@@ -117,6 +141,15 @@ void ggml_openvino_init_device_config() {
 // Get the device name
 const std::string & ggml_openvino_get_device_name() {
     return ggml_openvino_get_device_config().device_name;
+}
+
+// Get the value of a specific environment variable
+const char* ggml_openvino_getenv(const char* var){
+    auto it =  ggml_openvino_get_device_config().environment_variables.find(var);
+    if (it == ggml_openvino_get_device_config().environment_variables.end()) {
+        return nullptr;
+    }
+    return it->second.c_str();
 }
 
 // Check if running on NPU

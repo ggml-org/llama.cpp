@@ -44,8 +44,8 @@
 // =100); otherwise returns 0 (unset, empty, =0, negative, or non-numeric).
 // Boolean toggles use this as a flag: `if (ggml_openvino_env_flag(name))` is
 // true iff the value is positive, so =0 is a no-op for all toggles.
-static int ggml_openvino_env_flag(const char * name) {
-    const char * v = getenv(name);
+int ggml_openvino_env_flag(const char * name) {
+    const char * v = ggml_openvino_getenv(name);
     return v ? std::max(0, std::atoi(v)) : 0;
 }
 

@@ -5,6 +5,7 @@
 #include "ggml-openvino.h"
 #include "ggml-quants.h"
 #include "ggml.h"
+#include "utils.h"
 
 #include <algorithm>
 #include <cassert>
@@ -51,13 +52,12 @@ GgmlOvDecoder::GgmlOvDecoder(ggml_cgraph * cgraph,
     m_model_weights(model_weights),
     m_model_params(model_params),
     m_compute_params(compute_params) {
-    if (auto * env = getenv("GGML_OPENVINO_PRINT_CGRAPH_TENSOR_ADDRESS"); env && atoi(env) > 0) {
-#ifdef _WIN32
-        _putenv_s("GGML_OPENVINO_PRINT_CGRAPH_TENSOR_ADDRESS", "");
-#else
-        unsetenv("GGML_OPENVINO_PRINT_CGRAPH_TENSOR_ADDRESS");
-#endif
-        print_tensor_address_map(cgraph);
+    static bool printed_address_map = false;
+    if (!printed_address_map) {
+        if (ggml_openvino_env_flag("GGML_OPENVINO_PRINT_CGRAPH_TENSOR_ADDRESS")) {
+            printed_address_map = true;
+            print_tensor_address_map(cgraph);
+        }
     }
 
     validate_cgraph();

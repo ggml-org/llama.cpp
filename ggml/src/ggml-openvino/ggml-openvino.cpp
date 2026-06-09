@@ -1,10 +1,29 @@
 #include "ggml-openvino.h"
 
+#include "ggml-backend-impl.h"
+#include "ggml-backend.h"
+#include "ggml-impl.h"
+#include "ggml-openvino-extra.h"
 #include "ggml-openvino/utils.h"
 #include "ggml-openvino/openvino/op_table.h"
 #include "ggml-quants.h"
+#include "ggml.h"
 
+#include <atomic>
+#include <cstdlib>
+#include <cstdint>
+#include <cstring>
+#include <memory>
+#include <mutex>
+#include <openvino/core/type/element_type.hpp>
+#include <openvino/openvino.hpp>
+#include <openvino/runtime/allocator.hpp>
 #include <openvino/runtime/intel_gpu/ocl/ocl.hpp>
+#include <openvino/runtime/intel_npu/level_zero/level_zero.hpp>
+#include <openvino/runtime/tensor.hpp>
+#include <set>
+#include <string>
+#include <vector>
 
 #if defined(_WIN32)
 #    define WIN32_LEAN_AND_MEAN
@@ -129,7 +148,7 @@ static void * ggml_backend_openvino_buffer_get_base(ggml_backend_buffer_t buffer
 
 static bool is_stateful_enabled() {
     static const auto * stateful = getenv("GGML_OPENVINO_STATEFUL_EXECUTION");
-    return stateful != nullptr && atoi(stateful) > 0;
+    return stateful && *stateful != '\0' && strcmp(stateful, "0") != 0;
 }
 
 static enum ggml_status ggml_backend_openvino_buffer_init_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor) {
