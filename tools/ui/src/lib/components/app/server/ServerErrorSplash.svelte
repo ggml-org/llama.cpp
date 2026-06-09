@@ -7,7 +7,7 @@
 	import Label from '$lib/components/ui/label/label.svelte';
 	import { serverStore, serverLoading } from '$lib/stores/server.svelte';
 	import { config, settingsStore } from '$lib/stores/settings.svelte';
-	import { SETTINGS_KEYS } from '$lib/constants';
+	import { SETTINGS_KEYS, API_PROPS } from '$lib/constants';
 	import { ROUTES } from '$lib/constants/routes';
 	import { fade, fly, scale } from 'svelte/transition';
 	import { KeyboardKey } from '$lib/enums';
@@ -68,7 +68,7 @@
 			settingsStore.updateConfig(SETTINGS_KEYS.API_KEY, apiKeyInput.trim());
 
 			// Test the API key by making a real request to the server
-			const response = await fetch(`${base}/props`, {
+			const response = await fetch(base + API_PROPS.LIST, {
 				headers: {
 					'Content-Type': 'application/json',
 					Authorization: `Bearer ${apiKeyInput.trim()}`
