@@ -295,8 +295,7 @@ struct diffusion_server {
                     const int block_step = n_steps - cur_step + 1;
                     const bool use_device_early_stop = device_early_stop_interval > 0;
                     const bool reset_stop_state = use_device_early_stop && block_step == 1;
-                    const bool check_stop = use_device_early_stop &&
-                        (cur_step == 1 || (block_step % device_early_stop_interval) == 0);
+                    const bool check_stop = use_device_early_stop;
                     int32_t stop_flag = 0;
                     llama_diffusion_sample_params sample_params = {
                         /* .n_tokens              = */ canvas_length,
@@ -736,8 +735,7 @@ int main(int argc, char ** argv) {
                            llama_diffusion_sample_topk_supported(srv.ctx);
     srv.use_device_self_cond = srv.use_gpu_sampling && env_int("DG_DEVICE_SELFCOND", 1) != 0;
     srv.use_device_loop = srv.use_device_self_cond && env_int("DG_DEVICE_LOOP", 1) != 0;
-    srv.device_early_stop_interval = srv.use_device_loop ?
-        std::max(env_int("DG_DEVICE_EARLY_STOP_INTERVAL", 0), 0) : 0;
+    srv.device_early_stop_interval = srv.use_device_loop ? 1 : 0;
     llama_set_diffusion_gpu_sampling(srv.ctx, srv.use_gpu_sampling);
     const bool default_topk_gpu_ok = topk_max_requested <= 0 || topk_max_requested <= GPU_SAMPLING_MAX_TOP_K;
 
