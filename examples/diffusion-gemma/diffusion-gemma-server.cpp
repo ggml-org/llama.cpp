@@ -161,6 +161,7 @@ struct diffusion_server {
     bool   use_gpu_sampling = false;
     bool   use_device_self_cond = false;
     bool   use_device_loop = false;
+    int    device_early_stop_interval = 0;
     std::string model_id;
     std::string model_path;
     std::string build_info = "llama.cpp diffusion-gemma-server";
@@ -291,6 +292,12 @@ struct diffusion_server {
                 std::vector<llama_token> sampled(canvas_length);
 
                 if (use_device_loop_step) {
+                    const int block_step = n_steps - cur_step + 1;
+                    const bool use_device_early_stop = device_early_stop_interval > 0;
+                    const bool reset_stop_state = use_device_early_stop && block_step == 1;
+                    const bool check_stop = use_device_early_stop &&
+                        (cur_step == 1 || (block_step % device_early_stop_interval) == 0);
+                    int32_t stop_flag = 0;
                     llama_diffusion_sample_params sample_params = {
                         /* .n_tokens              = */ canvas_length,
                         /* .top_k                 = */ k_step,
@@ -306,9 +313,15 @@ struct diffusion_server {
                         /* .entropy         = */ nullptr,
                         /* .self_cond_ids   = */ nullptr,
                         /* .self_cond_probs = */ nullptr,
-                        /* .final_tokens    = */ cur_step == 1 ? argmax_canvas.data() : nullptr,
-                        /* .update_canvas_on_device = */ cur_step > 1,
+                        /* .final_tokens    = */ (cur_step == 1 || check_stop) ? argmax_canvas.data() : nullptr,
+                        /* .stop            = */ check_stop ? &stop_flag : nullptr,
                         /* .entropy_bound   = */ ENTROPY_BOUND,
+                        /* .confidence_threshold = */ CONFIDENCE_THRESHOLD,
+                        /* .stability_threshold  = */ STABILITY_THRESHOLD,
+                        /* .update_canvas_on_device = */ cur_step > 1,
+                        /* .update_stop_state_on_device = */ use_device_early_stop,
+                        /* .check_stop_on_device = */ check_stop,
+                        /* .reset_stop_state = */ reset_stop_state,
                     };
                     if (!llama_diffusion_sample_topk(ctx, &sample_params, &sample_result)) {
                         llama_memory_seq_rm(mem, 0, n_past, -1);
@@ -317,6 +330,9 @@ struct diffusion_server {
                         return out;
                     }
                     llama_memory_seq_rm(mem, 0, n_past, -1);
+                    if (check_stop && stop_flag != 0) {
+                        break;
+                    }
                     continue;
                 }
 
@@ -341,6 +357,15 @@ struct diffusion_server {
                         /* .entropy         = */ entropy.data(),
                         /* .self_cond_ids   = */ use_device_self_cond_step ? nullptr : sc_ids.data(),
                         /* .self_cond_probs = */ use_device_self_cond_step ? nullptr : sc_probs.data(),
+                        /* .final_tokens    = */ nullptr,
+                        /* .stop            = */ nullptr,
+                        /* .entropy_bound   = */ 0.0f,
+                        /* .confidence_threshold = */ 0.0f,
+                        /* .stability_threshold  = */ 0,
+                        /* .update_canvas_on_device = */ false,
+                        /* .update_stop_state_on_device = */ false,
+                        /* .check_stop_on_device = */ false,
+                        /* .reset_stop_state = */ false,
                     };
                     if (!llama_diffusion_sample_topk(ctx, &sample_params, &sample_result)) {
                         llama_memory_seq_rm(mem, 0, n_past, -1);
@@ -711,6 +736,8 @@ int main(int argc, char ** argv) {
                            llama_diffusion_sample_topk_supported(srv.ctx);
     srv.use_device_self_cond = srv.use_gpu_sampling && env_int("DG_DEVICE_SELFCOND", 1) != 0;
     srv.use_device_loop = srv.use_device_self_cond && env_int("DG_DEVICE_LOOP", 1) != 0;
+    srv.device_early_stop_interval = srv.use_device_loop ?
+        std::max(env_int("DG_DEVICE_EARLY_STOP_INTERVAL", 0), 0) : 0;
     llama_set_diffusion_gpu_sampling(srv.ctx, srv.use_gpu_sampling);
     const bool default_topk_gpu_ok = topk_max_requested <= 0 || topk_max_requested <= GPU_SAMPLING_MAX_TOP_K;
 
@@ -726,6 +753,9 @@ int main(int argc, char ** argv) {
             srv.use_device_self_cond ? " | device self-cond: on" : "",
             srv.use_device_loop ? " | device loop: on" : "",
             srv.topk_fixed, srv.topk_start, srv.topk_end, srv.topk_tail ? 1 : 0);
+    if (srv.device_early_stop_interval > 0) {
+        SRV_INF("device early-stop interval: %d\n", srv.device_early_stop_interval);
+    }
 
     // ------------------------------------------------------------------------------------------
     // HTTP server
@@ -797,6 +827,7 @@ int main(int argc, char ** argv) {
                 {"gpu_sampling", srv.use_gpu_sampling},
                 {"device_self_cond", srv.use_device_self_cond},
                 {"device_loop", srv.use_device_loop},
+                {"device_early_stop_interval", srv.device_early_stop_interval},
                 {"top_k", srv.topk_fixed},
                 {"top_k_start", srv.topk_start},
                 {"top_k_end", srv.topk_end},
@@ -905,6 +936,7 @@ int main(int argc, char ** argv) {
                     {"gpu_sampling", srv.use_gpu_sampling},
                     {"device_self_cond", srv.use_device_self_cond},
                     {"device_loop", srv.use_device_loop},
+                    {"device_early_stop_interval", srv.device_early_stop_interval},
                     {"top_k", srv.topk_fixed},
                     {"top_k_start", srv.topk_start},
                     {"top_k_end", srv.topk_end},

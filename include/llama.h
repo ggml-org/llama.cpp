@@ -1039,8 +1039,16 @@ extern "C" {
         // decoder token input tensor. final_tokens is copied only when requested, typically on
         // the final denoising step.
         llama_token * final_tokens;
-        bool          update_canvas_on_device;
+        // Optional host stop flag for device-loop early stopping. When requested, CUDA computes
+        // the stable+confident condition on device and copies only this flag plus final_tokens.
+        int32_t     * stop;
         float         entropy_bound;
+        float         confidence_threshold;
+        int32_t       stability_threshold;
+        bool          update_canvas_on_device;
+        bool          update_stop_state_on_device;
+        bool          check_stop_on_device;
+        bool          reset_stop_state;
     };
 
     // CUDA-only fast path for block-diffusion sampling. When enabled, llama_decode()

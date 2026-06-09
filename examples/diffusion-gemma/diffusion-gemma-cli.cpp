@@ -209,6 +209,8 @@ int main(int argc, char ** argv) {
                                   llama_diffusion_sample_topk_supported(ctx);
     const bool use_device_self_cond = use_gpu_sampling && env_int("DG_DEVICE_SELFCOND", 1) != 0;
     const bool use_device_loop      = use_device_self_cond && env_int("DG_DEVICE_LOOP", 1) != 0;
+    const int device_early_stop_interval = use_device_loop ?
+        std::max(env_int("DG_DEVICE_EARLY_STOP_INTERVAL", 0), 0) : 0;
     llama_set_diffusion_gpu_sampling(ctx, use_gpu_sampling);
 
     LOG_INF("diffusion-gemma: prefix=%d canvas=%d max_canvases=%d steps=%d entropy_bound=%.3f temp=[%.2f,%.2f] n_ctx=%d mm=%d\n",
@@ -219,6 +221,9 @@ int main(int argc, char ** argv) {
              (!gpu_sampling_requested ? " (disabled by DG_GPU_SAMPLING=0)" : "")),
             use_device_self_cond ? " | device self-cond: on" : "",
             use_device_loop ? " | device loop: on" : "");
+    if (device_early_stop_interval > 0) {
+        LOG_INF("diffusion-gemma: device early-stop interval=%d\n", device_early_stop_interval);
+    }
     if (topk_fixed > 0 || (topk_start > 0 && topk_end > 0)) {
         LOG_INF("diffusion-gemma: top-k sampling: fixed=%d anneal=[%d->%d] tail_correction=%d (vocab=%d)\n",
                 topk_fixed, topk_start, topk_end, topk_tail, n_vocab);
@@ -354,6 +359,12 @@ int main(int argc, char ** argv) {
 
         if (use_device_loop) {
             bool sampled_ok = true;
+            const int block_step = n_steps - cur_step + 1;
+            const bool use_device_early_stop = device_early_stop_interval > 0;
+            const bool reset_stop_state = use_device_early_stop && block_step == 1;
+            const bool check_stop = use_device_early_stop &&
+                (cur_step == 1 || (block_step % device_early_stop_interval) == 0);
+            int32_t stop_flag = 0;
             const auto t_sample_start = std::chrono::steady_clock::now();
             llama_diffusion_sample_params sample_params = {
                 /* .n_tokens              = */ canvas_length,
@@ -370,9 +381,15 @@ int main(int argc, char ** argv) {
                 /* .entropy         = */ nullptr,
                 /* .self_cond_ids   = */ nullptr,
                 /* .self_cond_probs = */ nullptr,
-                /* .final_tokens    = */ cur_step == 1 ? argmax_canvas.data() : nullptr,
-                /* .update_canvas_on_device = */ cur_step > 1,
+                /* .final_tokens    = */ (cur_step == 1 || check_stop) ? argmax_canvas.data() : nullptr,
+                /* .stop            = */ check_stop ? &stop_flag : nullptr,
                 /* .entropy_bound   = */ entropy_bound,
+                /* .confidence_threshold = */ CONFIDENCE_THRESHOLD,
+                /* .stability_threshold  = */ STABILITY_THRESHOLD,
+                /* .update_canvas_on_device = */ cur_step > 1,
+                /* .update_stop_state_on_device = */ use_device_early_stop,
+                /* .check_stop_on_device = */ check_stop,
+                /* .reset_stop_state = */ reset_stop_state,
             };
             sampled_ok = llama_diffusion_sample_topk(ctx, &sample_params, &sample_result);
             sample_sync_s += std::chrono::duration<double>(std::chrono::steady_clock::now() - t_sample_start).count();
@@ -381,6 +398,9 @@ int main(int argc, char ** argv) {
                 LOG_ERR("error: CUDA diffusion device loop failed at step %d (k=%d)\n", cur_step, k_step);
                 failed = true;
                 done = true;
+                break;
+            }
+            if (check_stop && stop_flag != 0) {
                 break;
             }
             continue;
@@ -411,6 +431,15 @@ int main(int argc, char ** argv) {
                 /* .entropy         = */ entropy.data(),
                 /* .self_cond_ids   = */ use_device_self_cond ? nullptr : sc_ids.data(),
                 /* .self_cond_probs = */ use_device_self_cond ? nullptr : sc_probs.data(),
+                /* .final_tokens    = */ nullptr,
+                /* .stop            = */ nullptr,
+                /* .entropy_bound   = */ 0.0f,
+                /* .confidence_threshold = */ 0.0f,
+                /* .stability_threshold  = */ 0,
+                /* .update_canvas_on_device = */ false,
+                /* .update_stop_state_on_device = */ false,
+                /* .check_stop_on_device = */ false,
+                /* .reset_stop_state = */ false,
             };
             sampled_ok = llama_diffusion_sample_topk(ctx, &sample_params, &sample_result);
             if (!sampled_ok) {

@@ -35,6 +35,8 @@ struct diffusion_sample_scratch {
     int   * top_ids  = nullptr;
     int   * sampled  = nullptr;
     int   * argmax   = nullptr;
+    int   * prev_argmax = nullptr;
+    int   * stop     = nullptr;
     float * entropy  = nullptr;
     int   * sc_ids   = nullptr;
     float * sc_probs = nullptr;
@@ -42,6 +44,8 @@ struct diffusion_sample_scratch {
     size_t top_ids_cap  = 0;
     size_t sampled_cap  = 0;
     size_t argmax_cap   = 0;
+    size_t prev_argmax_cap = 0;
+    size_t stop_cap     = 0;
     size_t entropy_cap  = 0;
     size_t sc_ids_cap   = 0;
     size_t sc_probs_cap = 0;
@@ -80,6 +84,8 @@ static diffusion_sample_scratch * diffusion_get_scratch(
     diffusion_scratch_reserve(stream, &scratch.top_ids,  &scratch.top_ids_cap,  (size_t) n_tokens * heap_k, &synced);
     diffusion_scratch_reserve(stream, &scratch.sampled,  &scratch.sampled_cap,  (size_t) n_tokens,          &synced);
     diffusion_scratch_reserve(stream, &scratch.argmax,   &scratch.argmax_cap,   (size_t) n_tokens,          &synced);
+    diffusion_scratch_reserve(stream, &scratch.prev_argmax, &scratch.prev_argmax_cap, (size_t) n_tokens,     &synced);
+    diffusion_scratch_reserve(stream, &scratch.stop,     &scratch.stop_cap,     (size_t) 1,                 &synced);
     diffusion_scratch_reserve(stream, &scratch.entropy,  &scratch.entropy_cap,  (size_t) n_tokens,          &synced);
     diffusion_scratch_reserve(stream, &scratch.sc_ids,   &scratch.sc_ids_cap,   (size_t) n_tokens * sc_k,   &synced);
     diffusion_scratch_reserve(stream, &scratch.sc_probs, &scratch.sc_probs_cap, (size_t) n_tokens * sc_k,   &synced);
@@ -357,6 +363,51 @@ static __global__ void diffusion_update_canvas_kernel(
     }
 }
 
+static __global__ void diffusion_stop_state_kernel(
+        const float * __restrict__ entropy,
+        const int * __restrict__ argmax,
+        int * __restrict__ prev_argmax,
+        int * __restrict__ stop,
+        const int n_tokens,
+        const float confidence_threshold,
+        const int stability_threshold,
+        const int check_stop,
+        const int reset_state) {
+    const int tid = threadIdx.x;
+
+    __shared__ float s_entropy[1024];
+    __shared__ int   s_diff[1024];
+
+    if (tid < n_tokens) {
+        s_entropy[tid] = entropy[tid];
+        s_diff[tid] = reset_state ? 1 : (prev_argmax[tid] != argmax[tid]);
+    } else {
+        s_entropy[tid] = 0.0f;
+        s_diff[tid] = 0;
+    }
+    __syncthreads();
+
+    for (int stride = blockDim.x >> 1; stride > 0; stride >>= 1) {
+        if (tid < stride) {
+            s_entropy[tid] += s_entropy[tid + stride];
+            s_diff[tid] += s_diff[tid + stride];
+        }
+        __syncthreads();
+    }
+
+    if (tid == 0 && check_stop) {
+        const bool stable = !reset_state && (stability_threshold == 0 || s_diff[0] == 0);
+        const bool confident = confidence_threshold > 0.0f &&
+                (s_entropy[0] / (float) n_tokens) < confidence_threshold;
+        stop[0] = (stable && confident) ? 1 : 0;
+    }
+    __syncthreads();
+
+    if (tid < n_tokens) {
+        prev_argmax[tid] = argmax[tid];
+    }
+}
+
 static __global__ void diffusion_sample_kernel(
         const float * __restrict__ logits,
         const int * __restrict__ top_ids,
@@ -550,6 +601,11 @@ bool ggml_cuda_diffusion_sample_topk(
             return false;
         }
     }
+    if (result->update_stop_state_on_device || result->check_stop_on_device || result->reset_stop_state) {
+        if (n_tokens > 1024 || (result->check_stop_on_device && result->stop == nullptr)) {
+            return false;
+        }
+    }
 
     const bool have_self_cond_host = result->self_cond_ids != nullptr && result->self_cond_probs != nullptr;
     const bool have_self_cond_tensor = result->self_cond_ids_tensor != nullptr && result->self_cond_probs_tensor != nullptr;
@@ -651,6 +707,13 @@ bool ggml_cuda_diffusion_sample_topk(
                 scratch->entropy, scratch->sampled, (int *) result->canvas_tokens_tensor->data,
                 n_tokens, n_vocab, result->entropy_bound, params->seed, params->step);
     }
+    if (result->update_stop_state_on_device || result->check_stop_on_device || result->reset_stop_state) {
+        const int stop_threads = next_power_of_2_host(n_tokens);
+        diffusion_stop_state_kernel<<<1, stop_threads, 0, stream>>>(
+                scratch->entropy, scratch->argmax, scratch->prev_argmax, scratch->stop,
+                n_tokens, result->confidence_threshold, result->stability_threshold,
+                result->check_stop_on_device ? 1 : 0, result->reset_stop_state ? 1 : 0);
+    }
 
     if (result->sampled) {
         CUDA_CHECK(cudaMemcpyAsync(result->sampled, scratch->sampled, (size_t) n_tokens * sizeof(int),
@@ -668,6 +731,10 @@ bool ggml_cuda_diffusion_sample_topk(
         CUDA_CHECK(cudaMemcpyAsync(result->final_tokens, scratch->argmax, (size_t) n_tokens * sizeof(int),
                                    cudaMemcpyDeviceToHost, stream));
     }
+    if (result->stop) {
+        CUDA_CHECK(cudaMemcpyAsync(result->stop, scratch->stop, sizeof(int),
+                                   cudaMemcpyDeviceToHost, stream));
+    }
     if (have_self_cond_host) {
         CUDA_CHECK(cudaMemcpyAsync(result->self_cond_ids, scratch->sc_ids, (size_t) n_tokens * sc_k * sizeof(int),
                                    cudaMemcpyDeviceToHost, stream));
@@ -682,7 +749,7 @@ bool ggml_cuda_diffusion_sample_topk(
     }
 
     const bool host_outputs_requested = result->sampled || result->argmax || result->entropy ||
-        result->final_tokens || have_self_cond_host;
+        result->final_tokens || result->stop || have_self_cond_host;
     CUDA_CHECK(cudaGetLastError());
     if (sync_required || host_outputs_requested) {
         CUDA_CHECK(cudaStreamSynchronize(stream));

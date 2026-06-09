@@ -64,8 +64,14 @@ struct ggml_cuda_diffusion_sample_result {
     struct ggml_tensor * self_cond_probs_tensor;
     struct ggml_tensor * canvas_tokens_tensor;
     int32_t * final_tokens;
+    int32_t * stop;
     float entropy_bound;
+    float confidence_threshold;
+    int32_t stability_threshold;
     bool update_canvas_on_device;
+    bool update_stop_state_on_device;
+    bool check_stop_on_device;
+    bool reset_stop_state;
 };
 
 typedef bool (*ggml_backend_cuda_diffusion_sample_topk_t)(

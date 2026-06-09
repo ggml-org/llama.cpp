@@ -1329,8 +1329,14 @@ bool llama_context::diffusion_sample_topk(
         /* .self_cond_probs_tensor = */ t_self_cond_probs,
         /* .canvas_tokens_tensor   = */ t_canvas_tokens,
         /* .final_tokens           = */ (int32_t *) result->final_tokens,
+        /* .stop                   = */ result->stop,
         /* .entropy_bound          = */ result->entropy_bound,
+        /* .confidence_threshold   = */ result->confidence_threshold,
+        /* .stability_threshold    = */ result->stability_threshold,
         /* .update_canvas_on_device = */ result->update_canvas_on_device,
+        /* .update_stop_state_on_device = */ result->update_stop_state_on_device,
+        /* .check_stop_on_device   = */ result->check_stop_on_device,
+        /* .reset_stop_state       = */ result->reset_stop_state,
     };
 
     const bool ok = sample_proc(backend, t_logits, &cuda_params, &cuda_result);
