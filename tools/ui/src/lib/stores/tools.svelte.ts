@@ -5,6 +5,7 @@ import { HealthCheckStatus, JsonSchemaType, ToolCallType, ToolSource } from '$li
 import { config } from '$lib/stores/settings.svelte';
 import {
 	DISABLED_TOOL_KEYS_LOCALSTORAGE_KEY,
+	SANDBOX_TOOL_DEFINITION,
 	TOOL_GROUP_LABELS,
 	TOOL_SERVER_LABELS
 } from '$lib/constants';
@@ -18,6 +19,8 @@ function toolKey(source: ToolSource, name: string, serverId?: string): string {
 			return serverId ? `mcp-${serverId}:${name}` : `mcp:${name}`;
 		case ToolSource.CUSTOM:
 			return `custom:${name}`;
+		case ToolSource.FRONTEND:
+			return `frontend:${name}`;
 		default:
 			return `builtin:${name}`;
 	}
@@ -80,6 +83,10 @@ class ToolsStore {
 
 	get mcpTools(): OpenAIToolDefinition[] {
 		return mcpStore.getToolDefinitionsForLLM();
+	}
+
+	get frontendTools(): OpenAIToolDefinition[] {
+		return config().jsSandboxEnabled ? [SANDBOX_TOOL_DEFINITION] : [];
 	}
 
 	get customTools(): OpenAIToolDefinition[] {
@@ -156,6 +163,15 @@ class ToolsStore {
 			push({ source: ToolSource.BUILTIN, key: toolKey(ToolSource.BUILTIN, name), definition: def });
 		}
 
+		for (const def of this.frontendTools) {
+			const name = def.function.name;
+			push({
+				source: ToolSource.FRONTEND,
+				key: toolKey(ToolSource.FRONTEND, name),
+				definition: def
+			});
+		}
+
 		for (const { serverId, serverName, definition } of this.mcpEntries()) {
 			const name = definition.function.name;
 			push({
@@ -208,6 +224,8 @@ class ToolsStore {
 				return entry.serverName ?? '';
 			case ToolSource.CUSTOM:
 				return TOOL_GROUP_LABELS[ToolSource.CUSTOM];
+			case ToolSource.FRONTEND:
+				return TOOL_GROUP_LABELS[ToolSource.FRONTEND];
 			default:
 				return TOOL_GROUP_LABELS[ToolSource.BUILTIN];
 		}
@@ -237,6 +255,7 @@ class ToolsStore {
 		};
 
 		for (const def of this._builtinTools) take(def);
+		for (const def of this.frontendTools) take(def);
 		for (const def of mcpStore.getToolDefinitionsForLLM()) take(def);
 		for (const def of this.customTools) take(def);
 
@@ -346,6 +365,7 @@ class ToolsStore {
 		if (entry.serverName) return mcpStore.getServerDisplayName(entry.serverName);
 		if (entry.source === ToolSource.BUILTIN) return TOOL_SERVER_LABELS[ToolSource.BUILTIN];
 		if (entry.source === ToolSource.CUSTOM) return TOOL_SERVER_LABELS[ToolSource.CUSTOM];
+		if (entry.source === ToolSource.FRONTEND) return TOOL_SERVER_LABELS[ToolSource.FRONTEND];
 		return '';
 	}
 
