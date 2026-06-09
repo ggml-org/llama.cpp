@@ -16,6 +16,7 @@ import {
 	DEFAULT_MCP_CONFIG,
 	DEFAULT_CLIENT_VERSION,
 	DEFAULT_IMAGE_MIME_TYPE,
+	CORS_PROXY_HEADER_PREFIX,
 	MCP_PARTIAL_REDACT_HEADERS
 } from '$lib/constants';
 import {
@@ -132,6 +133,20 @@ export class MCPService {
 		return details;
 	}
 
+	private static addRequestHeaders(
+		requestHeaders: Headers,
+		headers: HeadersInit,
+		useProxy: boolean
+	) {
+		for (const [key, value] of new Headers(headers).entries()) {
+			const proxiedKey =
+				useProxy && !key.toLowerCase().startsWith(CORS_PROXY_HEADER_PREFIX)
+					? `${CORS_PROXY_HEADER_PREFIX}${key}`
+					: key;
+			requestHeaders.set(proxiedKey, value);
+		}
+	}
+
 	private static summarizeError(error: unknown): Record<string, unknown> {
 		if (error instanceof Error) {
 			return {
@@ -240,15 +255,11 @@ export class MCPService {
 				const requestHeaders = new Headers(baseInit.headers);
 
 				if (typeof Request !== 'undefined' && input instanceof Request) {
-					for (const [key, value] of input.headers.entries()) {
-						requestHeaders.set(key, value);
-					}
+					this.addRequestHeaders(requestHeaders, input.headers, useProxy);
 				}
 
 				if (init?.headers) {
-					for (const [key, value] of new Headers(init.headers).entries()) {
-						requestHeaders.set(key, value);
-					}
+					this.addRequestHeaders(requestHeaders, init.headers, useProxy);
 				}
 
 				const request = this.createDiagnosticRequestDetails(
