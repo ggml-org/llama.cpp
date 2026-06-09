@@ -846,7 +846,6 @@ static void gated_delta_net_f32_tg_thread(unsigned int nth, unsigned int ith, vo
     const uint32_t S_v      = v->ne[0];
     const uint32_t H        = v->ne[1];
     const uint32_t n_seqs   = v->ne[3];
-    const uint32_t K        = octx->op_params[0];
 
     const uint32_t total_rows = H * n_seqs;
     if (ith >= total_rows) {
@@ -881,7 +880,6 @@ static void gated_delta_net_f32_tg_thread(unsigned int nth, unsigned int ith, vo
     struct fastdiv_values fd_rk3 = init_fastdiv_values(rk3);
 
     const uint64_t state_seq_stride = state->nb[3] / sizeof(float);
-    const uint64_t state_size_per_snap = (uint64_t) S_v * S_v * H * n_seqs;
 
     uint32_t ir_prefetch = ith;
     int spad_idx = 0;
