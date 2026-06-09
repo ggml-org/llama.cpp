@@ -25,6 +25,155 @@
 
 #define UNUSED GGML_UNUSED
 
+#include <cstdint>
+#include <fstream>
+#include <vector>
+#include <arm_sve.h>
+#include <stdint.h>
+#include <stdio.h>
+
+static inline void print_sve_s8(const char *name, svint8_t v)
+{
+    size_t vl = svcntb();        // Number of int8 lanes in current SVE vector
+    int8_t buf[vl];
+    svst1_s8(svptrue_b8(), buf, v);
+    printf("%s = [", name);
+    for (size_t i = 0; i < vl; ++i) {
+        printf("%s%d", i ? ", " : "", (int)buf[i]);
+    }
+    printf("]\n");
+}
+
+void print_sve_u8(const char* label, svuint8_t v)
+{
+    // Number of 8‑bit lanes for the current SVE implementation
+    const int vl = svcntb();
+    // Stack buffer (GCC/Clang extension; fine for debug)
+    alignas(64) uint8_t buf[svcntb()];
+    // Predicate: all lanes active
+    svbool_t pg = svptrue_b8();
+    // Store vector to memory
+    svst1(pg, buf, v);
+    // Print
+    std::cout << label << " (vl=" << vl << "): ";
+    for (int i = 0; i < vl; ++i) {
+        std::cout << static_cast<unsigned>(buf[i]) << ' ';
+    }
+    std::cout << '\n';
+}
+
+
+void print_sve_s16(const char* label, svint16_t v)
+{
+    // Number of 16-bit lanes for the current SVE implementation
+    const int vl = svcnth();
+
+    // Stack buffer sized at runtime
+    // Note: variable-length arrays are a GCC/Clang extension in C++
+    alignas(64) int16_t buf[svcnth()];
+
+    // Predicate: all 16-bit lanes active
+    svbool_t pg = svptrue_b16();
+
+    // Store vector to memory
+    svst1_s16(pg, buf, v);
+    // or simply: svst1(pg, buf, v);
+
+    // Print
+    std::cout << label << " (vl=" << vl << "): ";
+    for (int i = 0; i < vl; ++i) {
+        std::cout << buf[i] << ' ';
+    }
+    std::cout << '\n';
+}
+
+
+void print_sve_s32(const char* label, svint32_t v)
+{
+    // Number of 32‑bit lanes for the current SVE implementation
+    const int vl = svcntw();
+    // Stack buffer sized at runtime (allowed in C++, but GCC/Clang extension)
+    alignas(64) int32_t buf[svcntw()];
+    // Predicate: all lanes active
+    svbool_t pg = svptrue_b32();
+    // Store vector to memory
+    svst1(pg, buf, v);
+    // Print
+    std::cout << label << " (vl=" << vl << "): ";
+    for (int i = 0; i < vl; ++i) {
+        std::cout << buf[i] << ' ';
+    }
+    std::cout << '\n';
+}
+void print_sve_f32(const char* label, svfloat32_t v)
+{
+    // Number of 32‑bit floating‑point lanes
+    const int vl = svcntw();
+    // Portable C++ buffer
+    std::vector<float> buf(vl);
+    // Predicate: all lanes active
+    svbool_t pg = svptrue_b32();
+    // Store SVE vector to memory
+    svst1(pg, buf.data(), v);
+    // Print
+    std::cout << label << " (vl=" << vl << "): ";
+    for (float x : buf) {
+        std::cout << x << ' ';
+    }
+    std::cout << '\n';
+}
+
+
+void print_sve_f16(const char* label, svfloat16_t v)
+{
+    // Number of 16-bit floating-point lanes
+    const int vl = svcnth();
+
+    // Portable C++ buffer for FP16 values
+    std::vector<__fp16> buf(vl);
+
+    // Predicate: all 16-bit lanes active
+    svbool_t pg = svptrue_b16();
+
+    // Store SVE FP16 vector to memory
+    svst1_f16(pg, buf.data(), v);
+
+    // Print
+    std::cout << label << " (vl=" << vl << "): ";
+    for (__fp16 x : buf) {
+        // Cast to float for readable printing
+        std::cout << static_cast<float>(x) << ' ';
+    }
+    std::cout << '\n';
+}
+
+void print_neon_f16(const char* label, float16x4_t v)
+{
+    __fp16 buf[4];
+
+    // Store NEON vector to memory
+    vst1_f16(buf, v);
+
+    // Print
+    std::cout << label << " (lanes=4): ";
+    for (int i = 0; i < 4; ++i) {
+        std::cout << static_cast<float>(buf[i]) << ' ';
+    }
+    std::cout << '\n';
+}
+
+void print_int16_array(const char* label, const int16_t* arr, int size)
+{
+    std::cout << label << " (size=" << size << "): ";
+
+    for (int i = 0; i < size; ++i) {
+        std::cout << arr[i] << ' ';
+    }
+
+    std::cout << '\n';
+}
+
+
 #if defined(__aarch64__) && defined(__ARM_NEON) && (defined(__ARM_FEATURE_MATMUL_INT8) || defined(__ARM_FEATURE_DOTPROD))
 // Helper for decoding scales and mins of Q4_K and Q5_K block formats
 static inline void decode_q_Kx8_6bit_scales(const uint8_t * scales_in, int16x8_t * out_mins, int8_t * out_scales) {
@@ -1537,7 +1686,8 @@ void ggml_gemv_q6_K_8x8_q8_K(int                        n,
 #if defined(__aarch64__) && defined(__ARM_FEATURE_SVE) && defined(__ARM_FEATURE_DOTPROD)
     switch(svcntb() * 8){
         case 128:{
-            std::cout << "SVE 128 called" << std::endl;
+            // break; //To Skip SVE
+            // std::cout << "SVE 128 called" << std::endl;
             constexpr int    col_pairs = ncols_interleaved / 2;
             const svuint8_t  m4b       = svdup_n_u8(0x0f);
             const svuint8_t  mask_lo   = svdup_n_u8(0x03);
@@ -1556,12 +1706,22 @@ void ggml_gemv_q6_K_8x8_q8_K(int                        n,
                 acc_f32_1 = svdup_n_f32(0);
 
                 for (int b = 0; b < nb; b++) {
-                    svfloat32_t q6_d_0 = svcvt_f32_f16_x(svptrue_b16(), svld1(svwhilelt_b16(0, 4), (const __fp16 *)q6_ptr[b].d)); // d0 d1 d2 d3
-                    svfloat32_t q6_d_1 = svcvt_f32_f16_x(svptrue_b16(), svld1(svwhilelt_b16(0, 4), (const __fp16 *)q6_ptr[b].d + 4)); // d4 d5 d6 d7
+                    // svfloat16_t h = svld1_f16(svwhilelt_b16(0, 4), (const __fp16 *)q6_ptr[b].d);
+                    // print_neon_f16("h: ", vld1_f16((const __fp16 *) q6_ptr[b].d));
+                    // print_sve_f16("h: ", svld1_f16(svwhilelt_b16(0, 4), (const __fp16 *)q6_ptr[b].d));
+                    // svfloat32_t q6_d_0 = svcvt_f32_f16_x(svptrue_b16(), svld1(svwhilelt_b16(0, 4), (const __fp16 *)q6_ptr[b].d)); // d0 d1 d2 d3
+                    svfloat32_t q6_d_0 = svcvt_f32_f16_z(svwhilelt_b32((uint64_t)0, (uint64_t)4), svzip1_f16(svld1_f16(svwhilelt_b16(0, 4), (const __fp16 *)q6_ptr[b].d), svdup_n_f16((__fp16)0.0)));
+                    svfloat32_t q6_d_1 = svcvt_f32_f16_z(svwhilelt_b32((uint64_t)0, (uint64_t)4), svzip1_f16(svld1_f16(svwhilelt_b16(0, 4), (const __fp16 *)q6_ptr[b].d+4), svdup_n_f16((__fp16)0.0))); // d4 d5 d6 d7
                     svfloat32_t q8_d = svdup_f32(q8_ptr[b].d);
                     svfloat32_t sb_scale_0 = svmul_f32_x(svptrue_b32(), q6_d_0, q8_d);
                     svfloat32_t sb_scale_1 = svmul_f32_x(svptrue_b32(), q6_d_1, q8_d);
 
+                    // print_sve_f32("q6_d_0: ", q6_d_0);
+                    // print_sve_f32("q6_d_1: ", q6_d_1);
+                    // print_sve_f32("q8_d: ", q8_d);
+                    // print_sve_f32("sb_scale_0: ", sb_scale_0);
+                    // print_sve_f32("sb_scale_1: ", sb_scale_1);
+                    // std::exit(EXIT_SUCCESS);
                     //4 col pairs
                     svint32_t  acc_0 = svdup_s32(0);
                     svint32_t  acc_1 = svdup_s32(0);
@@ -1572,10 +1732,16 @@ void ggml_gemv_q6_K_8x8_q8_K(int                        n,
                     // Reused for bias and dequantization later
                     int16_t q6_scales[16 * 8];
                     for (int i = 0; i < 16; i++) {
-                        // svint16_t scales = svunpklo_s8(svld1(svwhilelt_b8 (0, 8), q6_ptr[b].scales + i * 8));
-                        svint16_t scales = svld1sb_s16(svwhilelt_b8 (0, 8), q6_ptr[b].scales + i * 8);
-                        svst1(svwhilelt_b16(0, 8), q6_scales + i * 8, scales);
+                        svbool_t pg8 = svwhilelt_b16(0, 8);
+                        // Load 8 int8 values and sign-extend to int16 lanes
+                        svint16_t scales = svld1sb_s16(pg8, q6_ptr[b].scales + i * 8);
+                        // print_sve_s16("scales: ", scales);
+                        // Store 8 int16 values
+                        svst1_s16(pg8, q6_scales + i * 8, scales);
                     }
+
+                    // print_int16_array("q6_scales: ", q6_scales, 16);
+                    // std::exit(EXIT_SUCCESS);
 
                     // Compute bias per column using q8 bsums and preloaded scales to skip the -32 shift
                     svint32_t bias_lo = svdup_s32(0);
@@ -1606,10 +1772,18 @@ void ggml_gemv_q6_K_8x8_q8_K(int                        n,
                         svint16_t b3 = svdup_lane_s16(bsums_vec, 3);
                         bias_lo = svmla_s32_m(svwhilelt_b32(0, 4), bias_lo, svunpklo_s32(scales_lo_3), svunpklo_s32(b3));
                         bias_hi = svmla_s32_m(svwhilelt_b32(0, 4), bias_hi, svunpklo_s32(scales_hi_3), svunpklo_s32(b3));
+
+                        // print_sve_s32("bias_lo", bias_lo);
+                        // print_sve_s32("bias_hi", bias_hi);
+                        // std::exit(EXIT_SUCCESS);
                     }
                     
                     bias_lo = svlsl_n_s32_x(svptrue_b32(), bias_lo, 5);
                     bias_hi = svlsl_n_s32_x(svptrue_b32(), bias_hi, 5);
+
+                    // print_sve_s32("bias_lo", bias_lo);
+                    // print_sve_s32("bias_hi", bias_hi);
+                    // std::exit(EXIT_SUCCESS);
 
                     // Process two 128-value halves per superblock
                     for (int half = 0; half < 2; half++) {
@@ -1702,6 +1876,13 @@ void ggml_gemv_q6_K_8x8_q8_K(int                        n,
                                     q6_qs_cp_1_h = q6_qh_1_3;
                                 }
 
+                                // print_sve_u8("q6_qs_cp_0_l: ", q6_qs_cp_0_l);
+                                // print_sve_u8("q6_qs_cp_1_l: ", q6_qs_cp_1_l);
+                                // print_sve_u8("q6_qs_cp_0_h: ", q6_qs_cp_0_h);
+                                // print_sve_u8("q6_qs_cp_1_h: ", q6_qs_cp_1_h);
+                                // std::exit(EXIT_SUCCESS);
+
+
                                 // Extract high 2 bits for upper nibble reconstruction
                                 const svuint8_t q6_qs_cp_0_hh = svand_u8_x(svwhilelt_b8(0, 16), q6_qs_cp_0_h, mask_hi);
                                 const svuint8_t q6_qs_cp_1_hh = svand_u8_x(svwhilelt_b8(0, 16), q6_qs_cp_1_h, mask_hi);
@@ -1725,10 +1906,20 @@ void ggml_gemv_q6_K_8x8_q8_K(int                        n,
                                 sb_acc_h = svdot_s32(sb_acc_h, q6_h0, q8_h_0);
                                 sb_acc_h = svdot_s32(sb_acc_h, q6_h1, q8_h_1);
 
+                                // print_sve_s32("sb_acc_l: ", sb_acc_l);
+                                // print_sve_s32("sb_acc_h: ", sb_acc_h);
+                                // std::exit(EXIT_SUCCESS);
+
                                 // Pairwise add to get per-column sums: [col0, col1]
                                 // svint32_t sum_l = svaddp_s32_x(svwhilelt_b32(0, 2), sb_acc_l, svext_s32(sb_acc_l, sb_acc_l, 2));
-                                svint32_t sum_l = svaddp_s32_x(svwhilelt_b32(0, 2), sb_acc_l, sb_acc_l);
-                                svint32_t sum_h = svaddp_s32_x(svwhilelt_b32(0, 2), sb_acc_h, sb_acc_h);
+                                svint32_t sum_l = svaddp_s32_x(svwhilelt_b32(0, 4), sb_acc_l, sb_acc_l);
+                                sum_l = svuzp1_s32(sum_l, sum_l);
+                                svint32_t sum_h = svaddp_s32_x(svwhilelt_b32(0, 4), sb_acc_h, sb_acc_h);
+                                sum_h = svuzp1_s32(sum_h, sum_h);
+
+                                // print_sve_s32("sum_l: ", sum_l);
+                                // print_sve_s32("sum_h: ", sum_h);
+                                // std::exit(EXIT_SUCCESS);
 
                                 const int scale_idx_l = half * 8 + sb;
                                 const int scale_idx_h = half * 8 + sb + 4;
@@ -1756,14 +1947,26 @@ void ggml_gemv_q6_K_8x8_q8_K(int                        n,
                                     acc_3 = svmla_s32_m(pg2, acc_3, sum_h, scale_vec_h);
                                 }
                             }   
+                            // print_sve_s32("acc_0", acc_0);
+                            // print_sve_s32("acc_1", acc_1);
+                            // print_sve_s32("acc_2", acc_2);
+                            // print_sve_s32("acc_3", acc_3);
+                            // std::exit(EXIT_SUCCESS);
                         }
                     }   // for half
 
                     // Bias correction
                     acc_0 = svsub_s32_m(pg2, acc_0, bias_lo);
-                    acc_1 = svsub_s32_m(pg2, acc_1, bias_lo);
+                    acc_1 = svsub_s32_m(pg2, acc_1, svext_s32(bias_lo, bias_lo, 2));
                     acc_2 = svsub_s32_m(pg2, acc_2, bias_hi);
-                    acc_3 = svsub_s32_m(pg2, acc_3, bias_hi);
+                    acc_3 = svsub_s32_m(pg2, acc_3, svext_s32(bias_hi, bias_hi, 2));
+
+                    // std::cout<<"After Bias Correction:"<<std::endl;
+                    // print_sve_s32("acc_0", acc_0);
+                    // print_sve_s32("acc_1", acc_1);
+                    // print_sve_s32("acc_2", acc_2);
+                    // print_sve_s32("acc_3", acc_3);
+                    // std::exit(EXIT_SUCCESS);
 
                     // Apply superblock scale (no mins for q6_K)
                     // acc[cp] has [c0, c1]
@@ -1787,6 +1990,7 @@ void ggml_gemv_q6_K_8x8_q8_K(int                        n,
 #endif  // SVE compile-time end
 
 #if defined(__aarch64__) && defined(__ARM_NEON) && defined(__ARM_FEATURE_DOTPROD)
+    std::cout << "NEON called" << std::endl;
     constexpr int    col_pairs = ncols_interleaved / 2;
     const uint8x16_t m4b       = vdupq_n_u8(0x0f);
     const uint8x16_t mask_lo   = vdupq_n_u8(0x03);
@@ -1804,6 +2008,8 @@ void ggml_gemv_q6_K_8x8_q8_K(int                        n,
         acc_f32[1] = vdupq_n_f32(0);
 
         for (int b = 0; b < nb; b++) {
+            print_neon_f16("h: ", vld1_f16((const __fp16 *) q6_ptr[b].d));
+            std::exit(EXIT_SUCCESS);
             float32x4_t q6_d_0     = vcvt_f32_f16(vld1_f16((const __fp16 *) q6_ptr[b].d));      // d0 d1 d2 d3
             float32x4_t q6_d_1     = vcvt_f32_f16(vld1_f16((const __fp16 *) q6_ptr[b].d + 4));  // d4 d5 d6 d7
             float32x4_t q8_d       = vdupq_n_f32(q8_ptr[b].d);
