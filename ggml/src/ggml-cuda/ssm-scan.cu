@@ -67,6 +67,7 @@ __global__ void __launch_bounds__(splitD, 1)
     __shared__ CubTempStorage cub_temp_storage;
 
     BlockLoad(cub_temp_storage.load_temp).Load(A_block, regA);
+    __syncthreads();
     BlockLoad(cub_temp_storage.load_temp).Load(s0_block, regs0);
 #else
     const int stride_s0 = src0_nb2 / sizeof(float);
