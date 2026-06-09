@@ -755,7 +755,6 @@ jobs:
           name: cudart-llama-bin-win-cuda-${{ matrix.cuda }}-x64.zip
 
   windows-sycl:
-
     runs-on: windows-2022
 
     defaults:
