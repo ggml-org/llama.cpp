@@ -43,6 +43,31 @@ GGML_BACKEND_API void ggml_backend_cuda_get_device_memory(int device, size_t * f
 GGML_BACKEND_API bool ggml_backend_cuda_register_host_buffer(void * buffer, size_t size);
 GGML_BACKEND_API void ggml_backend_cuda_unregister_host_buffer(void * buffer);
 
+struct ggml_cuda_diffusion_sample_params {
+    int32_t  n_vocab;
+    int32_t  n_tokens;
+    int32_t  top_k;
+    int32_t  self_cond_top_k;
+    float    temperature;
+    uint32_t seed;
+    uint32_t step;
+    bool     top_k_tail_correction;
+};
+
+struct ggml_cuda_diffusion_sample_result {
+    int32_t * sampled;
+    int32_t * argmax;
+    float   * entropy;
+    int32_t * self_cond_ids;
+    float   * self_cond_probs;
+};
+
+typedef bool (*ggml_backend_cuda_diffusion_sample_topk_t)(
+        ggml_backend_t backend,
+        const struct ggml_tensor * logits,
+        const struct ggml_cuda_diffusion_sample_params * params,
+        struct ggml_cuda_diffusion_sample_result * result);
+
 GGML_BACKEND_API ggml_backend_reg_t ggml_backend_cuda_reg(void);
 
 #ifdef  __cplusplus

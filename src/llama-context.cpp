@@ -1,6 +1,7 @@
 #include "llama-context.h"
 
 #include "ggml.h"
+#include "ggml-cuda.h"
 #include "llama-arch.h"
 #include "llama-graph.h"
 #include "llama-impl.h"
@@ -1195,6 +1196,80 @@ void llama_context::set_diffusion_self_cond_topk(const int32_t * ids, const floa
     diffusion_cond.sc_topk_probs.assign(probs, probs + n);
 }
 
+static ggml_backend_cuda_diffusion_sample_topk_t get_cuda_diffusion_sample_topk_proc(ggml_backend_t backend) {
+    if (!backend) {
+        return nullptr;
+    }
+
+    ggml_backend_dev_t dev = ggml_backend_get_device(backend);
+    if (!dev) {
+        return nullptr;
+    }
+
+    ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(dev);
+    if (!reg) {
+        return nullptr;
+    }
+
+    return (ggml_backend_cuda_diffusion_sample_topk_t)
+        ggml_backend_reg_get_proc_address(reg, "ggml_backend_cuda_diffusion_sample_topk");
+}
+
+bool llama_context::diffusion_sample_topk_supported() const {
+    for (ggml_backend_t backend : backend_ptrs) {
+        if (get_cuda_diffusion_sample_topk_proc(backend)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void llama_context::set_diffusion_gpu_sampling(bool enabled) {
+    diffusion_gpu_sampling = enabled;
+}
+
+bool llama_context::diffusion_sample_topk(
+        const llama_diffusion_sample_params * params,
+              llama_diffusion_sample_result * result) {
+    if (!params || !result || !gf_res_prev) {
+        return false;
+    }
+
+    static_assert(sizeof(llama_token) == sizeof(int32_t), "llama_token must be int32_t for CUDA diffusion sampling");
+
+    ggml_tensor * t_logits = gf_res_prev->get_logits();
+    if (!t_logits) {
+        return false;
+    }
+
+    ggml_backend_t backend = ggml_backend_sched_get_tensor_backend(sched.get(), t_logits);
+    auto sample_proc = get_cuda_diffusion_sample_topk_proc(backend);
+    if (!sample_proc) {
+        return false;
+    }
+
+    ggml_cuda_diffusion_sample_params cuda_params = {
+        /* .n_vocab               = */ (int32_t) model.vocab.n_tokens(),
+        /* .n_tokens              = */ params->n_tokens,
+        /* .top_k                 = */ params->top_k,
+        /* .self_cond_top_k       = */ params->self_cond_top_k,
+        /* .temperature           = */ params->temperature,
+        /* .seed                  = */ params->seed,
+        /* .step                  = */ params->step,
+        /* .top_k_tail_correction = */ params->top_k_tail_correction,
+    };
+
+    ggml_cuda_diffusion_sample_result cuda_result = {
+        /* .sampled         = */ (int32_t *) result->sampled,
+        /* .argmax          = */ (int32_t *) result->argmax,
+        /* .entropy         = */ result->entropy,
+        /* .self_cond_ids   = */ result->self_cond_ids,
+        /* .self_cond_probs = */ result->self_cond_probs,
+    };
+
+    return sample_proc(backend, t_logits, &cuda_params, &cuda_result);
+}
+
 void llama_context::set_causal_attn(bool value) {
     LLAMA_LOG_DEBUG("%s: value = %d\n", __func__, value);
 
@@ -1695,7 +1770,11 @@ static void copy_tensor_async_candidates(
     }
 }
 
-static bool needs_raw_logits(const llama_ubatch & ubatch, const std::map<llama_seq_id, llama_sampler *> & samplers) {
+static bool needs_raw_logits(const llama_ubatch & ubatch, const std::map<llama_seq_id, llama_sampler *> & samplers, bool skip_raw_logits) {
+    if (skip_raw_logits) {
+        return false;
+    }
+
     for (uint32_t i = 0; i < ubatch.n_tokens; i++) {
         if (!ubatch.output[i]) {
             continue;
@@ -1922,7 +2001,7 @@ int llama_context::decode(const llama_batch & batch_inp) {
         }
 
         // extract logits
-        if (logits.data && t_logits && n_outputs > 0 && needs_raw_logits(ubatch, sampling.samplers)) {
+        if (logits.data && t_logits && n_outputs > 0 && needs_raw_logits(ubatch, sampling.samplers, diffusion_gpu_sampling)) {
             ggml_backend_t backend_res = ggml_backend_sched_get_tensor_backend(sched.get(), t_logits);
             GGML_ASSERT(backend_res != nullptr);
             GGML_ASSERT(logits.data != nullptr);
@@ -3699,6 +3778,21 @@ void llama_set_diffusion_decoder_phase(llama_context * ctx, bool decoder_phase) 
 
 void llama_set_diffusion_self_cond_topk(llama_context * ctx, const int32_t * ids, const float * probs, int64_t k, int64_t n_tokens) {
     ctx->set_diffusion_self_cond_topk(ids, probs, k, n_tokens);
+}
+
+bool llama_diffusion_sample_topk_supported(llama_context * ctx) {
+    return ctx->diffusion_sample_topk_supported();
+}
+
+void llama_set_diffusion_gpu_sampling(llama_context * ctx, bool enabled) {
+    ctx->set_diffusion_gpu_sampling(enabled);
+}
+
+bool llama_diffusion_sample_topk(
+        llama_context * ctx,
+        const llama_diffusion_sample_params * params,
+        llama_diffusion_sample_result * result) {
+    return ctx->diffusion_sample_topk(params, result);
 }
 
 void llama_set_warmup(llama_context * ctx, bool warmup) {

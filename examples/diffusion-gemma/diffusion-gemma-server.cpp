@@ -28,6 +28,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <ctime>
 #include <mutex>
 #include <numeric>
@@ -54,6 +55,12 @@ static constexpr float TEMP_MAX             = 0.8f;
 static constexpr float CONFIDENCE_THRESHOLD = 0.005f;
 static constexpr int   STABILITY_THRESHOLD  = 1;
 static constexpr int   SC_K                 = 256; // must match llama_model_diffusion_gemma::N_SC_TOPK
+static constexpr int   GPU_SAMPLING_MAX_TOP_K = 1024; // CUDA diffusion sampler limit
+
+static int env_int(const char * name, int def) {
+    const char * v = getenv(name);
+    return v ? atoi(v) : def;
+}
 
 // ------------------------------------------------------------------------------------------------
 // per-request generation parameters and result
@@ -147,6 +154,11 @@ struct diffusion_server {
     int    n_ctx         = 0;
     int    n_ub          = 0;       // ubatch == canvas_length (keeps the decoder gather graph small)
     int    n_vocab       = 0;
+    int    topk_fixed    = 0;
+    int    topk_start    = 0;
+    int    topk_end      = 0;
+    bool   topk_tail     = false;
+    bool   use_gpu_sampling = false;
     std::string model_id;
     std::string model_path;
     std::string build_info = "llama.cpp diffusion-gemma-server";
@@ -237,8 +249,22 @@ struct diffusion_server {
 
             for (int cur_step = n_steps; cur_step >= 1; --cur_step) {
                 ++n_steps_total;
+                const float temp = TEMP_MIN + (TEMP_MAX - TEMP_MIN) * ((float) cur_step / (float) n_steps);
+
+                int k_step = 0;
+                if (rq.topk_start > 0 && rq.topk_end > 0) {
+                    const float frac = (n_steps > 1) ? (float) (cur_step - 1) / (float) (n_steps - 1) : 0.0f;
+                    k_step = (int) lroundf(rq.topk_end + (rq.topk_start - rq.topk_end) * frac);
+                } else if (rq.topk_fixed > 0) {
+                    k_step = rq.topk_fixed;
+                }
+                if (k_step <= 0 || k_step >= n_vocab) k_step = 0;
+                const bool use_gpu_sampling_step = use_gpu_sampling &&
+                    (k_step <= 0 || k_step <= GPU_SAMPLING_MAX_TOP_K);
+
                 llama_set_causal_attn(ctx, false);
                 llama_set_diffusion_decoder_phase(ctx, true);
+                llama_set_diffusion_gpu_sampling(ctx, use_gpu_sampling_step);
                 batch.n_tokens = canvas_length;
                 for (int j = 0; j < canvas_length; ++j) {
                     batch.token[j]     = canvas[j];
@@ -252,28 +278,39 @@ struct diffusion_server {
                     return out;
                 }
                 ++n_decode;
-                const float * logits = llama_get_logits(ctx);
-
-                const float temp = TEMP_MIN + (TEMP_MAX - TEMP_MIN) * ((float) cur_step / (float) n_steps);
 
                 std::vector<float> entropy(canvas_length);
                 std::vector<llama_token> sampled(canvas_length);
 
-                int k_step = 0;
-                if (rq.topk_start > 0 && rq.topk_end > 0) {
-                    const float frac = (n_steps > 1) ? (float) (cur_step - 1) / (float) (n_steps - 1) : 0.0f;
-                    k_step = (int) lroundf(rq.topk_end + (rq.topk_start - rq.topk_end) * frac);
-                } else if (rq.topk_fixed > 0) {
-                    k_step = rq.topk_fixed;
-                }
-                if (k_step <= 0 || k_step >= n_vocab) k_step = 0;
-
                 std::fill(sc_probs.begin(), sc_probs.end(), 0.0f);
                 std::fill(sc_ids.begin(),   sc_ids.end(),   0);
 
-                const auto cmp = [](const std::pair<float,int>&a, const std::pair<float,int>&b){ return a.first > b.first; };
-
-                if (k_step == 0) {
+                if (use_gpu_sampling_step) {
+                    llama_diffusion_sample_params sample_params = {
+                        /* .n_tokens              = */ canvas_length,
+                        /* .top_k                 = */ k_step,
+                        /* .self_cond_top_k       = */ SC_K,
+                        /* .temperature           = */ temp,
+                        /* .seed                  = */ rq.seed,
+                        /* .step                  = */ (uint32_t) n_steps_total,
+                        /* .top_k_tail_correction = */ rq.topk_tail,
+                    };
+                    llama_diffusion_sample_result sample_result = {
+                        /* .sampled         = */ sampled.data(),
+                        /* .argmax          = */ argmax_canvas.data(),
+                        /* .entropy         = */ entropy.data(),
+                        /* .self_cond_ids   = */ sc_ids.data(),
+                        /* .self_cond_probs = */ sc_probs.data(),
+                    };
+                    if (!llama_diffusion_sample_topk(ctx, &sample_params, &sample_result)) {
+                        llama_memory_seq_rm(mem, 0, n_past, -1);
+                        out.error = "CUDA diffusion sampling failed at denoising step " +
+                            std::to_string(cur_step) + " (k=" + std::to_string(k_step) + ")";
+                        return out;
+                    }
+                } else if (k_step == 0) {
+                    const float * logits = llama_get_logits(ctx);
+                    const auto cmp = [](const std::pair<float,int>&a, const std::pair<float,int>&b){ return a.first > b.first; };
                     std::vector<float> probs(n_vocab);
                     std::vector<std::pair<float,int>> scheap; scheap.reserve(SC_K);
                     for (int j = 0; j < canvas_length; ++j) {
@@ -310,6 +347,8 @@ struct diffusion_server {
                         entropy[j] = ent; sampled[j] = tok; argmax_canvas[j] = amax;
                     }
                 } else {
+                    const float * logits = llama_get_logits(ctx);
+                    const auto cmp = [](const std::pair<float,int>&a, const std::pair<float,int>&b){ return a.first > b.first; };
                     const int heap_k = std::max(k_step, SC_K);
                     std::vector<std::pair<float,int>> heap; heap.reserve(heap_k);
                     for (int j = 0; j < canvas_length; ++j) {
@@ -503,12 +542,25 @@ static diffusion_request request_from_body(const json & body, const diffusion_se
     rq.canvas_length = srv.canvas_length;
     rq.n_steps       = srv.n_steps;
     rq.seed          = default_seed;
+    rq.topk_fixed    = srv.topk_fixed;
+    rq.topk_start    = srv.topk_start;
+    rq.topk_end      = srv.topk_end;
+    rq.topk_tail     = srv.topk_tail;
     int max_tokens = 0;
     if (body.contains("max_tokens") && body["max_tokens"].is_number_integer())                       max_tokens = body["max_tokens"].get<int>();
     else if (body.contains("max_completion_tokens") && body["max_completion_tokens"].is_number_integer()) max_tokens = body["max_completion_tokens"].get<int>();
     rq.max_canvases = max_tokens > 0 ? (max_tokens + rq.canvas_length - 1) / rq.canvas_length : 1;
-    if (body.contains("top_k") && body["top_k"].is_number_integer()) rq.topk_fixed = body["top_k"].get<int>();
-    if (body.contains("seed")  && body["seed"].is_number_integer())  rq.seed = (uint32_t) body["seed"].get<int64_t>();
+    if (body.contains("top_k") && body["top_k"].is_number_integer()) {
+        rq.topk_fixed = body["top_k"].get<int>();
+        rq.topk_start = 0;
+        rq.topk_end   = 0;
+    }
+    if (body.contains("top_k_start") && body["top_k_start"].is_number_integer()) rq.topk_start = body["top_k_start"].get<int>();
+    if (body.contains("top_k_end")   && body["top_k_end"].is_number_integer())   rq.topk_end   = body["top_k_end"].get<int>();
+    if (body.contains("top_k_tail_correction") && body["top_k_tail_correction"].is_boolean()) {
+        rq.topk_tail = body["top_k_tail_correction"].get<bool>();
+    }
+    if (body.contains("seed")  && body["seed"].is_number_integer()) rq.seed = (uint32_t) body["seed"].get<int64_t>();
     if (body.contains("ignore_eos") && body["ignore_eos"].is_boolean()) rq.ignore_eos = body["ignore_eos"].get<bool>();
     return rq;
 }
@@ -574,6 +626,12 @@ int main(int argc, char ** argv) {
     srv.n_ub          = srv.canvas_length;
     srv.n_ctx         = params.n_ctx > 0 ? (int) params.n_ctx : 4096;
     if (srv.n_ctx < 2 * srv.canvas_length) srv.n_ctx = 2 * srv.canvas_length;
+    srv.topk_fixed    = (params.sampling.user_sampling_config & common_params_sampling_config::COMMON_PARAMS_SAMPLING_CONFIG_TOP_K)
+                            ? params.sampling.top_k
+                            : 0;
+    srv.topk_start    = params.diffusion.top_k_start;
+    srv.topk_end      = params.diffusion.top_k_end;
+    srv.topk_tail     = params.diffusion.top_k_tail_correction;
     srv.model_path    = params.model.path;
     srv.metrics.t_start = (int64_t) std::time(nullptr);
 
@@ -603,11 +661,24 @@ int main(int argc, char ** argv) {
     srv.batch = llama_batch_init(srv.n_ub, 0, 1);
     srv.templates = common_chat_templates_init(srv.model, "");
 
+    const int topk_max_requested =
+        (srv.topk_start > 0 && srv.topk_end > 0) ? std::max(srv.topk_start, srv.topk_end) : srv.topk_fixed;
+    const bool gpu_sampling_requested = env_int("DG_GPU_SAMPLING", 1) != 0;
+    srv.use_gpu_sampling = gpu_sampling_requested &&
+                           llama_diffusion_sample_topk_supported(srv.ctx);
+    llama_set_diffusion_gpu_sampling(srv.ctx, srv.use_gpu_sampling);
+    const bool default_topk_gpu_ok = topk_max_requested <= 0 || topk_max_requested <= GPU_SAMPLING_MAX_TOP_K;
+
     const uint32_t default_seed = params.sampling.seed == LLAMA_DEFAULT_SEED ? 1234u : params.sampling.seed;
 
     SRV_INF("%s\n", llama_print_system_info());
     SRV_INF("model loaded: '%s' | n_ctx = %d | canvas = %d | denoise steps = %d | 1 slot\n",
             srv.model_id.c_str(), srv.n_ctx, srv.canvas_length, srv.n_steps);
+    SRV_INF("gpu sampling: %s%s | top-k fixed=%d anneal=[%d->%d] tail_correction=%d\n",
+            srv.use_gpu_sampling ? "on" : "off",
+            (!default_topk_gpu_ok ? " (default top-k will use CPU fallback until k <= CUDA limit)" :
+             (!gpu_sampling_requested ? " (disabled by DG_GPU_SAMPLING=0)" : "")),
+            srv.topk_fixed, srv.topk_start, srv.topk_end, srv.topk_tail ? 1 : 0);
 
     // ------------------------------------------------------------------------------------------
     // HTTP server
@@ -676,6 +747,11 @@ int main(int argc, char ** argv) {
                 {"confidence_threshold", CONFIDENCE_THRESHOLD},
                 {"stability_threshold", STABILITY_THRESHOLD},
                 {"self_cond_topk", SC_K},
+                {"gpu_sampling", srv.use_gpu_sampling},
+                {"top_k", srv.topk_fixed},
+                {"top_k_start", srv.topk_start},
+                {"top_k_end", srv.topk_end},
+                {"top_k_tail_correction", srv.topk_tail},
             }},
             {"total_slots", 1},
             {"model_path", srv.model_path},
@@ -777,6 +853,11 @@ int main(int argc, char ** argv) {
                     {"canvas_length", srv.canvas_length},
                     {"n_denoise_steps", srv.n_steps},
                     {"self_cond_topk", SC_K},
+                    {"gpu_sampling", srv.use_gpu_sampling},
+                    {"top_k", srv.topk_fixed},
+                    {"top_k_start", srv.topk_start},
+                    {"top_k_end", srv.topk_end},
+                    {"top_k_tail_correction", srv.topk_tail},
                 }},
             };
             res.set_content(json::array({slot}).dump(), "application/json");

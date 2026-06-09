@@ -40,6 +40,7 @@ static constexpr float TEMP_MIN               = 0.4f;   // LinearTemperatureSche
 static constexpr float TEMP_MAX               = 0.8f;   // LinearTemperatureScheduleConfig.t_max
 static constexpr float CONFIDENCE_THRESHOLD   = 0.005f; // StableAndConfident.confidence_threshold
 static constexpr int   STABILITY_THRESHOLD    = 1;      // StableAndConfident.stability_threshold
+static constexpr int   GPU_SAMPLING_MAX_TOP_K = 1024;   // small top-k sort kernel limit
 
 static int env_int(const char * name, int def) {
     const char * v = getenv(name);
@@ -199,8 +200,21 @@ int main(int argc, char ** argv) {
     llama_set_diffusion_prompt_len(ctx, prefix_len);
     llama_memory_t mem = llama_get_memory(ctx);
 
+    const int topk_max_requested =
+        (topk_start > 0 && topk_end > 0) ? std::max(topk_start, topk_end) : topk_fixed;
+    const bool gpu_sampling_requested = env_int("DG_GPU_SAMPLING", 1) != 0;
+    const bool gpu_sampling_topk_ok = topk_max_requested <= 0 || topk_max_requested <= GPU_SAMPLING_MAX_TOP_K;
+    const bool use_gpu_sampling = gpu_sampling_requested &&
+                                  gpu_sampling_topk_ok &&
+                                  llama_diffusion_sample_topk_supported(ctx);
+    llama_set_diffusion_gpu_sampling(ctx, use_gpu_sampling);
+
     LOG_INF("diffusion-gemma: prefix=%d canvas=%d max_canvases=%d steps=%d entropy_bound=%.3f temp=[%.2f,%.2f] n_ctx=%d mm=%d\n",
             prefix_len, canvas_length, max_canvases, n_steps, entropy_bound, TEMP_MIN, TEMP_MAX, n_ctx, (int) use_mm);
+    LOG_INF("diffusion-gemma: gpu sampling: %s%s\n",
+            use_gpu_sampling ? "on" : "off",
+            (!gpu_sampling_topk_ok ? " (top-k exceeds CUDA fast-path limit)" :
+             (!gpu_sampling_requested ? " (disabled by DG_GPU_SAMPLING=0)" : "")));
     if (topk_fixed > 0 || (topk_start > 0 && topk_end > 0)) {
         LOG_INF("diffusion-gemma: top-k sampling: fixed=%d anneal=[%d->%d] tail_correction=%d (vocab=%d)\n",
                 topk_fixed, topk_start, topk_end, topk_tail, n_vocab);
@@ -278,8 +292,13 @@ int main(int argc, char ** argv) {
     int n_blocks_run  = 0;
     int n_steps_total = 0;
     const auto t_gen_start = std::chrono::steady_clock::now();
+    const bool log_step_timing = env_int("DG_TIMING", 0) != 0;
+    double decode_enqueue_s = 0.0;
+    double sample_sync_s    = 0.0;
+    double host_loop_s      = 0.0;
 
     bool done = false;
+    bool failed = false;
     for (int block = 0; block < max_canvases && !done; ++block) {
     ++n_blocks_run;
     // 1. initialize canvas with random tokens
@@ -303,12 +322,12 @@ int main(int argc, char ** argv) {
             batch.seq_id[j][0] = 0;
             batch.logits[j]    = 1;
         }
+        const auto t_decode_start = std::chrono::steady_clock::now();
         if (llama_decode(ctx, batch) != 0) {
             LOG_ERR("error: llama_decode failed at step %d\n", cur_step);
             break;
         }
-        // canvas logits occupy rows [0, canvas_length) (canvas-only ubatch)
-        const float * logits = llama_get_logits(ctx);
+        decode_enqueue_s += std::chrono::duration<double>(std::chrono::steady_clock::now() - t_decode_start).count();
 
         // 2b. linear temperature schedule: t = t_min + (t_max - t_min) * (cur_step / n_steps)
         const float temp = TEMP_MIN + (TEMP_MAX - TEMP_MIN) * ((float) cur_step / (float) n_steps);
@@ -334,7 +353,32 @@ int main(int argc, char ** argv) {
         std::fill(sc_probs.begin(), sc_probs.end(), 0.0f);
         std::fill(sc_ids.begin(),   sc_ids.end(),   0);
 
-        if (k_step == 0) {
+        bool sampled_ok = true;
+        const auto t_sample_start = std::chrono::steady_clock::now();
+        if (use_gpu_sampling) {
+            llama_diffusion_sample_params sample_params = {
+                /* .n_tokens              = */ canvas_length,
+                /* .top_k                 = */ k_step,
+                /* .self_cond_top_k       = */ SC_K,
+                /* .temperature           = */ temp,
+                /* .seed                  = */ params.sampling.seed == LLAMA_DEFAULT_SEED ? 1234u : params.sampling.seed,
+                /* .step                  = */ (uint32_t) n_steps_total,
+                /* .top_k_tail_correction = */ topk_tail != 0,
+            };
+            llama_diffusion_sample_result sample_result = {
+                /* .sampled         = */ sampled.data(),
+                /* .argmax          = */ argmax_canvas.data(),
+                /* .entropy         = */ entropy.data(),
+                /* .self_cond_ids   = */ sc_ids.data(),
+                /* .self_cond_probs = */ sc_probs.data(),
+            };
+            sampled_ok = llama_diffusion_sample_topk(ctx, &sample_params, &sample_result);
+            if (!sampled_ok) {
+                LOG_ERR("error: CUDA diffusion sampling failed at step %d (k=%d)\n", cur_step, k_step);
+            }
+        } else if (k_step == 0) {
+            // canvas logits occupy rows [0, canvas_length) (canvas-only ubatch)
+            const float * logits = llama_get_logits(ctx);
             // ---- full softmax over the whole vocabulary (reference behaviour) ----
             // self-cond still feeds only the top-SC_K tokens (full-normalized probs); the dropped
             // tail carries negligible embedding weight and the post RMS norm absorbs the scale.
@@ -385,6 +429,8 @@ int main(int argc, char ** argv) {
                 argmax_canvas[j] = amax;
             }
         } else {
+            // canvas logits occupy rows [0, canvas_length) (canvas-only ubatch)
+            const float * logits = llama_get_logits(ctx);
             // ---- top-k host sampling: softmax / entropy / sample / self-cond over the top-k
             // logits only. Self-cond feeds the top min(k,SC_K) tokens (renormalized over the
             // sampled top-k), gathered in-graph; the dropped tail carries negligible weight. ----
@@ -453,6 +499,15 @@ int main(int argc, char ** argv) {
                 argmax_canvas[j] = amax;
             }
         }
+        sample_sync_s += std::chrono::duration<double>(std::chrono::steady_clock::now() - t_sample_start).count();
+        if (!sampled_ok) {
+            llama_memory_seq_rm(mem, 0, n_past, -1);
+            failed = true;
+            done = true;
+            break;
+        }
+
+        const auto t_host_start = std::chrono::steady_clock::now();
 
         // roll back the canvas K/V written by this decode so the cache keeps only the committed
         // prefix [0, n_past); the next step re-decodes the canvas fresh against that prefix.
@@ -502,6 +557,10 @@ int main(int argc, char ** argv) {
         for (int i = 0; i < canvas_length; ++i) {
             canvas[i] = accept_mask[i] ? accepted[i] : rand_tok(rng);
         }
+        host_loop_s += std::chrono::duration<double>(std::chrono::steady_clock::now() - t_host_start).count();
+    }
+    if (failed) {
+        break;
     }
 
     // 3. block output = the inline argmax of the last (stable) denoising step's logits.
@@ -544,6 +603,13 @@ int main(int argc, char ** argv) {
     const double gen_s = std::chrono::duration<double>(std::chrono::steady_clock::now() - t_gen_start).count();
 
     llama_batch_free(batch);
+
+    if (failed) {
+        llama_free(ctx);
+        llama_model_free(model);
+        llama_backend_free();
+        return 1;
+    }
 
     // the full denoised canvas (thought channel + response), for reference
     LOG_INF("\n=== generated canvas ===\n%s\n", common_detokenize(vocab, generated, false).c_str());
@@ -588,6 +654,10 @@ int main(int argc, char ** argv) {
             gen_s > 0.0 ? n_canvas_tok / gen_s : 0.0,
             n_steps_total > 0 ? gen_s / n_steps_total : 0.0,
             (int) answer.size());
+    if (log_step_timing) {
+        LOG_INF("timing: decode enqueue %.3f s, sample/sync %.3f s, host loop %.3f s\n",
+                decode_enqueue_s, sample_sync_s, host_loop_s);
+    }
 
     llama_free(ctx);
     llama_model_free(model);

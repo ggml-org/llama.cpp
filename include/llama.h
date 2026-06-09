@@ -1016,6 +1016,35 @@ extern "C" {
                          int64_t   k,
                          int64_t   n_tokens);
 
+    struct llama_diffusion_sample_params {
+        int32_t  n_tokens;
+        int32_t  top_k;
+        int32_t  self_cond_top_k;
+        float    temperature;
+        uint32_t seed;
+        uint32_t step;
+        bool     top_k_tail_correction;
+    };
+
+    struct llama_diffusion_sample_result {
+        llama_token * sampled;
+        llama_token * argmax;
+        float       * entropy;
+        int32_t     * self_cond_ids;
+        float       * self_cond_probs;
+    };
+
+    // CUDA-only fast path for block-diffusion sampling. When enabled, llama_decode()
+    // keeps the dense diffusion logits on the backend and does not copy them to the
+    // host output buffer. Call llama_diffusion_sample_topk() after llama_decode() to
+    // sample the most recent logits tensor and retrieve compact row results.
+    LLAMA_API bool llama_diffusion_sample_topk_supported(struct llama_context * ctx);
+    LLAMA_API void llama_set_diffusion_gpu_sampling(struct llama_context * ctx, bool enabled);
+    LLAMA_API bool llama_diffusion_sample_topk(
+            struct llama_context * ctx,
+            const struct llama_diffusion_sample_params * params,
+            struct llama_diffusion_sample_result * result);
+
     // Set whether the model is in warmup mode or not
     // If true, all model tensors are activated during llama_decode() to load and cache their weights.
     //
