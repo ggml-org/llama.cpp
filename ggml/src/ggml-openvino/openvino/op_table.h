@@ -40,6 +40,7 @@ GGML_OP_CONVERTER(translate_clamp);
 GGML_OP_CONVERTER(translate_pad);
 GGML_OP_CONVERTER(translate_ssm_conv);
 GGML_OP_CONVERTER(translate_gated_delta_net);
+GGML_OP_CONVERTER(translate_repeat);
 
 } // namespace op
 
