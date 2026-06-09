@@ -46,14 +46,7 @@ export function llamaCppBuildPlugin(): Plugin {
 
 					content = content.replace(/\r/g, '');
 					content = BUILD_CONFIG.GUIDE_COMMENT + '\n' + content;
-
-					// Keep the Vite hash as a query string so each build busts the browser cache
-					content = content.replace(/\/_app\/immutable\/bundle\.([^".]+)\.js/g, './bundle.js?$1');
-					content = content.replace(
-						/\/_app\/immutable\/assets\/bundle\.([^".]+)\.css/g,
-						'./bundle.css?$1'
-					);
-					content = content.replace(/__sveltekit_[a-z0-9]+/g, '__sveltekit__');
+					content = rewriteBundlePaths(content, buildVersion);
 
 					writeFileSync(indexPath, content, 'utf-8');
 					console.log('✓ Updated index.html');

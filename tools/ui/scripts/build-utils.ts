@@ -86,11 +86,12 @@ export function generateSplashScreenLinks(outDir: string): string[] {
 	return [...lightLinks, ...darkLinks];
 }
 
-/** Rewrite bundle paths in content: hashed paths → static names with version query. */
-export function rewriteBundlePaths(content: string, buildVersion: string): string {
-	let result = content;
-	result = result.replace(REGEX_PATTERNS.BUNDLE_JS, `./bundle.js?v=${buildVersion}`);
-	result = result.replace(REGEX_PATTERNS.BUNDLE_CSS, `./bundle.css?v=${buildVersion}`);
+/** Rewrite bundle paths in content: hashed paths → static names with content hash as query string. */
+export function rewriteBundlePaths(_content: string): string {
+	let result = _content;
+	// Keep the Vite hash as a query string so each build busts the browser cache
+	result = result.replace(REGEX_PATTERNS.BUNDLE_JS_HASH, './bundle.js?$1');
+	result = result.replace(REGEX_PATTERNS.BUNDLE_CSS_HASH, './bundle.css?$1');
 	result = result.replace(REGEX_PATTERNS.SVELTEKIT_HASH, '__sveltekit__');
 	return result;
 }

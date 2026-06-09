@@ -186,6 +186,8 @@ export const PUBLIC_ENDPOINTS = [
 export const REGEX_PATTERNS = {
 	BUNDLE_JS: /\/_app\/immutable\/bundle\.[^"]+\.js/g,
 	BUNDLE_CSS: /\/_app\/immutable\/assets\/bundle\.[^"]+\.css/g,
+	BUNDLE_JS_HASH: /\/_app\/immutable\/bundle\.([^".]+)\.js/g,
+	BUNDLE_CSS_HASH: /\/_app\/immutable\/assets\/bundle\.([^".]+)\.css/g,
 	SVELTEKIT_HASH: /__sveltekit_[a-z0-9]+/g,
 	SPLASH_FILE: /^apple-splash-(portrait|landscape)-(dark-)?(\d+)x(\d+)\.png$/,
 	BUNDLE_JS_FILE: /^bundle\..+\.js$/,
