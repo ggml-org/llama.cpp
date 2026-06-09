@@ -2164,7 +2164,8 @@ static void func_args_not_string(json & messages) {
                         try {
                             args = json::parse(args.get<std::string>());
                         } catch (const std::exception & e) {
-                            throw std::runtime_error("Failed to parse tool call arguments as JSON: " + std::string(e.what()));
+                            // keep the raw arguments string when it is not valid json
+                            LOG_WRN("%s: tool call arguments are not valid json, keeping raw string: %s\n", __func__, e.what());
                         }
                     }
                 }
@@ -2520,8 +2521,16 @@ common_chat_msg common_chat_peg_parse(const common_peg_arena &          src_pars
             }
             return msg;
         }
-        throw std::runtime_error(std::string("Failed to parse input at pos ") + std::to_string(result.end) + ": " +
-                                 effective_input.substr(result.end));
+        if (!is_partial) {
+            // on a final parse failure log the fragment and raise a clean error
+            LOG_WRN("%s: unparsed %s output: %s\n", __func__, common_chat_format_name(params.format),
+                    effective_input.substr(result.end).c_str());
+            throw std::runtime_error(std::string("the model produced output that does not match the expected ") +
+                                     common_chat_format_name(params.format) + " format");
+        }
+        common_chat_msg msg;
+        msg.role = "assistant";
+        return msg;
     }
 
     common_chat_msg msg;
