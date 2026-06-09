@@ -18,6 +18,11 @@ struct llama_cparams {
     int32_t  n_threads;       // number of threads to use for generation
     int32_t  n_threads_batch; // number of threads to use for batch processing
 
+    // MTP (multi-token prediction): which appended NextN/MTP block the
+    // DECODER_MTP graph runs, as an offset past the trunk (il = n_layer() + offset).
+    // 0 selects the first MTP head; the speculative driver bumps it per draft step.
+    int32_t  mtp_layer_offset = 0;
+
     float rope_freq_base;
     float rope_freq_scale;
 
@@ -33,11 +38,6 @@ struct llama_cparams {
     bool embeddings_nextn;        // also extract the hidden state before the final output norm
     bool embeddings_nextn_masked; // extract for only rows where batch.logits != 0
     bool causal_attn;
-
-    // MTP (multi-token prediction): which appended NextN/MTP block the
-    // DECODER_MTP graph runs, as an offset past the trunk (il = n_layer() + offset).
-    // 0 selects the first MTP head; the speculative driver bumps it per draft step.
-    int32_t mtp_layer_offset = 0;
     bool offload_kqv;
     bool flash_attn;
     bool auto_fa;

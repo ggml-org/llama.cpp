@@ -831,7 +831,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
     //                   decode is skipped and all draft tokens reuse one position.
     //   chain_heads   : step35 — n_mtp_layers independently-trained heads run one
     //                   per step (mtp_layer_offset = k), each on its own KV.
-    //   neither       : single-block AR (qwen3.5/3.6) — one trained MTP head.
+    //   neither       : single-block AR (qwen35 / qwen35moe) — one trained MTP head.
     int32_t n_mtp_layers  = 1;
     bool    is_mem_shared = false;   // gemma4
     bool    chain_heads   = false;   // derived in the ctor: n_mtp_layers > 1 && !is_mem_shared
@@ -849,9 +849,8 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
     std::vector<std::vector<float>> verify_h;
     std::vector<int32_t> verify_h_rows;
 
-    // Per-seq draft length from the last draft() call, used in accept() to
-    // roll back ctx_dft's recurrent state past the AR draft's redundant
-    // pre-advancement before process() mirrored the verify batch.
+    // Per-seq draft length from the single-head draft() path. Currently write-only
+    // (accept() rolls back via verify_h_rows); kept pending a follow-up cleanup.
     std::vector<uint16_t> last_n_drafted;
 
     common_speculative_impl_draft_mtp(const common_params_speculative & params, uint32_t n_seq)
@@ -865,7 +864,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
         n_embd = llama_model_n_embd_out(llama_get_model(ctx_dft));
         GGML_ASSERT(n_embd == llama_model_n_embd(llama_get_model(ctx_tgt)) &&
                 "MTP input row width must match the target h_nextn width");
-        n_mtp_layers = std::max(1, (int) llama_model_n_nextn_layer(llama_get_model(ctx_dft)));
+        n_mtp_layers = std::max(1, (int) llama_model_n_layer_nextn(llama_get_model(ctx_dft)));
         // note: chain_heads / n_max clamp are derived below, once is_mem_shared is known.
 
         LOG_INF("%s: adding speculative implementation 'draft-mtp'\n", __func__);
@@ -1027,7 +1026,9 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
                 std::memcpy(batch.embd + (size_t) 1 * n_embd, h_tgt, row_bytes * (n_tokens-1));
             }
             for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
-                if (i_batch_beg[seq_id] < 0) continue;
+                if (i_batch_beg[seq_id] < 0) {
+                    continue;
+                }
                 std::memcpy(batch.embd + (size_t) i_batch_beg[seq_id] * n_embd,
                             pending_h[seq_id].data(), row_bytes);
             }
@@ -1036,15 +1037,17 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
 
             bool ok = true;
             for (int head = 0; head < n_mtp_layers; ++head) {
-                // chain_heads == false keeps the legacy single-decode path byte-for-byte
-                // (no seq_rm, no offset switch). When chaining, reset each sequence's
-                // own batch region first so this head re-decodes the whole batch into
-                // a clean, position-aligned slot set (find_slot is deterministic given
-                // identical v_cells). Lower bound = this batch's first pos for the seq
-                // (prompt-multi-ubatch safe).
+                // chain_heads == false (n_mtp_layers == 1) runs the loop once and
+                // skips seq_rm / offset — same observable decode as single-block.
+                // When chaining, reset each seq's batch region first so this head
+                // re-decodes into a clean, position-aligned slot set (find_slot
+                // stays deterministic). Lower bound = this batch's first pos for the
+                // seq (prompt-multi-ubatch safe).
                 if (chain_heads) {
                     for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
-                        if (i_batch_beg[seq_id] < 0) continue;
+                        if (i_batch_beg[seq_id] < 0) {
+                            continue;
+                        }
                         llama_memory_seq_rm(mem_dft, seq_id, batch_in.pos[i_batch_beg[seq_id]], -1);
                     }
                     llama_set_mtp_layer_offset(ctx_dft, head);
@@ -1240,7 +1243,9 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
         int n_drafting = 0;
         for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
             auto & dp = dparams[seq_id];
-            if (!dp.drafting) continue;
+            if (!dp.drafting) {
+                continue;
+            }
             common_sampler_reset(smpls[seq_id].get());
             st[seq_id].active      = true;
             st[seq_id].round_start = dp.n_past;
@@ -1248,14 +1253,18 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
             st[seq_id].slot_h.push_back(pending_h[seq_id]); // slot 0 = trunk pending_h
             n_drafting++;
         }
-        if (n_drafting == 0) return;
+        if (n_drafting == 0) {
+            return;
+        }
 
         const int n_steps = n_mtp_layers; // one head per step, capped at head count
 
         for (int step = 0; step < n_steps && n_drafting > 0; ++step) {
             // 1) per-seq KV reset for this head + select the head's layer.
             for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
-                if (!st[seq_id].active) continue;
+                if (!st[seq_id].active) {
+                    continue;
+                }
                 llama_memory_seq_rm(mem_dft, seq_id, st[seq_id].round_start, -1);
             }
             llama_set_mtp_layer_offset(ctx_dft, step);
@@ -1264,7 +1273,9 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
             common_batch_clear(batch);
             std::vector<int> last_i_batch(n_seq, -1);
             for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
-                if (!st[seq_id].active) continue;
+                if (!st[seq_id].active) {
+                    continue;
+                }
                 auto & s = st[seq_id];
                 const int len = (int) s.toks.size();
                 for (int k = 0; k < len; ++k) {
@@ -1284,7 +1295,9 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
 
             // 3) sample next draft token per active seq; extend prefix + slot_h.
             for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
-                if (!st[seq_id].active) continue;
+                if (!st[seq_id].active) {
+                    continue;
+                }
                 auto & s  = st[seq_id];
                 auto & dp = dparams[seq_id];
                 const int ib = last_i_batch[seq_id];
@@ -1296,14 +1309,18 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
                 const llama_token id = cur_p->data[0].id;
 
                 if (cur_p->data[0].p < params.p_min) {
-                    s.active = false; n_drafting--; continue;
+                    s.active = false;
+                    n_drafting--;
+                    continue;
                 }
 
                 common_sampler_accept(smpl, id, true);
                 dp.result->push_back(id);
 
                 if ((int) dp.result->size() >= params.n_max) {
-                    s.active = false; n_drafting--; continue;
+                    s.active = false;
+                    n_drafting--;
+                    continue;
                 }
 
                 // next slot's token + its embd (= this head's output at last slot).
@@ -1317,7 +1334,9 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
 
         for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
             auto & dp = dparams[seq_id];
-            if (!dp.drafting) continue;
+            if (!dp.drafting) {
+                continue;
+            }
             if (dp.result->size() < (size_t) params.n_min) {
                 dp.result->clear();
             }

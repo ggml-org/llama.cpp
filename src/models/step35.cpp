@@ -532,10 +532,13 @@ llama_model_step35::graph_mtp::graph_mtp(const llama_model & model, const llm_gr
     cur = ggml_add(ctx0, cur, ffn_inp);
     cb(cur, "mtp_post_ffn", il);
 
-    // Gather t_h_nextn/t_logits to the n_outputs rows, like the trunk graph: the
-    // context and backend sampling assume an inp_out_ids gather. Without it a draft
-    // batch whose output slot isn't row 0 (multi-head chain, step>=1) reads the wrong
-    // row. Identity gather when n_outputs==n_tokens, so the single-head path is unchanged.
+    // Gather to the n_outputs rows: masked nextn extraction copies the first
+    // n_outputs rows of t_h_nextn, so the output slots must come first. Without it
+    // a multi-head draft (step >= 1, output slot != row 0) extracts the wrong row.
+    // Identity when n_outputs == n_tokens, so the single-head path is unchanged.
+    // The MTP graph is always run masked; assert it so this stays valid.
+    GGML_ASSERT(cparams.embeddings_nextn_masked &&
+                "STEP35 MTP graph requires masked nextn extraction");
     ggml_tensor * inp_out_ids = build_inp_out_ids();
     cur = ggml_get_rows(ctx0, cur, inp_out_ids);
 

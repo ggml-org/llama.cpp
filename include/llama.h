@@ -564,7 +564,7 @@ extern "C" {
     LLAMA_API int32_t llama_model_n_embd_out (const struct llama_model * model);
     LLAMA_API int32_t llama_model_n_layer    (const struct llama_model * model);
     // Number of appended NextN/MTP prediction blocks (0 if the model has none)
-    LLAMA_API int32_t llama_model_n_nextn_layer(const struct llama_model * model);
+    LLAMA_API int32_t llama_model_n_layer_nextn(const struct llama_model * model);
     LLAMA_API int32_t llama_model_n_head     (const struct llama_model * model);
     LLAMA_API int32_t llama_model_n_head_kv  (const struct llama_model * model);
     LLAMA_API int32_t llama_model_n_swa      (const struct llama_model * model);
