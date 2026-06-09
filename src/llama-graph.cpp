@@ -1873,9 +1873,9 @@ ggml_tensor * llm_graph_context::build_inp_embd(ggml_tensor * tok_embd) const {
     res->t_inp_embd = cur;
 
     // For Granite architecture
-    // NOTE: Only apply scale to token inputs. Raw embeddings are assumed to be
-    //  multimodal inputs that should not be scaled.
-    if (ubatch.token && hparams.f_embedding_scale != 0.0f) {
+    // NOTE: For deepstack models, only apply scale to token inputs (ie text-only input).
+    //  Raw embeddings are assumed to be multimodal inputs that should not be scaled.
+    if (hparams.f_embedding_scale != 0.0f && (ubatch.token || hparams.n_deepstack_layers == 0)) {
         if (!ggml_is_contiguous(cur)) {
             cur = ggml_cont(ctx0, cur);
         }
