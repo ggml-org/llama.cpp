@@ -825,13 +825,10 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
 
     int32_t n_embd = 0;
 
-    // One MTP draft driver, three modes (flags set once in the ctor):
-    //   is_mem_shared : gemma4-assistant — the draft shares the target's KV and
-    //                   runs every nextn layer in a single graph; the catch-up
-    //                   decode is skipped and all draft tokens reuse one position.
-    //   chain_heads   : step35 — n_mtp_layers independently-trained heads run one
-    //                   per step (mtp_layer_offset = k), each on its own KV.
-    //   neither       : single-block AR (qwen35 / qwen35moe) — one trained MTP head.
+    // One MTP draft driver, three modes (set once in the ctor):
+    //   is_mem_shared (gemma4): shares the target KV, runs all heads in one graph.
+    //   chain_heads (step35): n_mtp_layers trained heads, one per draft step.
+    //   neither (qwen35 / qwen35moe): a single trained MTP head.
     int32_t n_mtp_layers  = 1;
     bool    is_mem_shared = false;   // gemma4
     bool    chain_heads   = false;   // derived in the ctor: n_mtp_layers > 1 && !is_mem_shared
@@ -849,8 +846,9 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
     std::vector<std::vector<float>> verify_h;
     std::vector<int32_t> verify_h_rows;
 
-    // Per-seq draft length from the single-head draft() path. Currently write-only
-    // (accept() rolls back via verify_h_rows); kept pending a follow-up cleanup.
+    // Per-seq draft length from the last draft() call, used in accept() to
+    // roll back ctx_dft's recurrent state past the AR draft's redundant
+    // pre-advancement before process() mirrored the verify batch.
     std::vector<uint16_t> last_n_drafted;
 
     common_speculative_impl_draft_mtp(const common_params_speculative & params, uint32_t n_seq)
@@ -865,7 +863,6 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
         GGML_ASSERT(n_embd == llama_model_n_embd(llama_get_model(ctx_tgt)) &&
                 "MTP input row width must match the target h_nextn width");
         n_mtp_layers = std::max(1, (int) llama_model_n_layer_nextn(llama_get_model(ctx_dft)));
-        // note: chain_heads / n_max clamp are derived below, once is_mem_shared is known.
 
         LOG_INF("%s: adding speculative implementation 'draft-mtp'\n", __func__);
         LOG_INF("%s: - n_max=%d, n_min=%d, p_min=%.2f, n_embd=%d, backend_sampling=%d\n", __func__, this->params.n_max, this->params.n_min, this->params.p_min, n_embd, (int) this->params.backend_sampling);
@@ -1006,12 +1003,8 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
 
         // if kv is shared with target (e.g Gemma4), then we can skip this catch-up decode
         if (!is_mem_shared) {
-            // Build the teacher-forcing batch ONCE — it is identical for every head:
-            // tokens at their real positions, tgt nextn-embd right-shifted by one,
-            // pending_h planted at each seq's first slot. llama_decode only reads the
-            // batch, so the same buffer is replayed per head; only the layer offset
-            // and the per-head KV reset differ.
             common_batch_clear(batch);
+
             for (int k = 0; k < n_tokens; ++k) {
                 common_batch_add(batch, batch_in.token[k], batch_in.pos[k], { batch_in.seq_id[k][0] }, 0);
             }
@@ -1025,12 +1018,18 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
                 const float * h_tgt = llama_get_embeddings_nextn(ctx_tgt);
                 std::memcpy(batch.embd + (size_t) 1 * n_embd, h_tgt, row_bytes * (n_tokens-1));
             }
+
+            // fill the pending embeddings from a previous run
+            auto set_h = [&](int idx, const float * h_row) {
+                std::memcpy(batch.embd + (size_t) idx * n_embd, h_row, row_bytes);
+            };
+
             for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
                 if (i_batch_beg[seq_id] < 0) {
                     continue;
                 }
-                std::memcpy(batch.embd + (size_t) i_batch_beg[seq_id] * n_embd,
-                            pending_h[seq_id].data(), row_bytes);
+
+                set_h(i_batch_beg[seq_id], pending_h[seq_id].data());
             }
 
             auto * mem_dft = llama_get_memory(ctx_dft);
