@@ -513,6 +513,23 @@ Other copy paths keep the synchronous `COPY_TENSOR` behavior.
 Use `GGML_RPC_TRACE=1` to confirm `COPY_TENSOR_ASYNC` commands and see which
 response-bearing command drains the queued work.
 
+### Async host readbacks
+
+Set `GGML_RPC_GET_TENSOR_ASYNC=1` on the RPC client to defer receiving
+`GET_TENSOR` responses until backend synchronization. This lets llama.cpp issue
+several small host readbacks, such as backend-sampling outputs, before paying the
+socket response waits. The wire command is still `GET_TENSOR`, so this client
+optimization does not require a new server command.
+
+Before sending any later non-deferred RPC command on the same socket, the client
+drains pending readbacks first. This preserves response ordering for mixed RPC
+traffic while still allowing grouped async reads when callers use
+`ggml_backend_tensor_get_async`.
+
+Use `GGML_RPC_TRACE=1` to confirm `GET_TENSOR_ASYNC` rows in the slow tensor
+table and compare the `GET_TENSOR` response wait before and after enabling the
+knob.
+
 ### RPC tracing
 
 Set `GGML_RPC_TRACE=1` on the RPC client to print a summary of RPC command
