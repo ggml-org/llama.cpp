@@ -154,6 +154,7 @@ class ModelBase:
         self.dir_model_card = dir_model  # overridden in convert_lora_to_gguf.py
         self._is_nvfp4 = False
         self._is_mxfp4 = False
+        self._allow_prec_a8: dict[str, bool] = {} # gguf tensor name -> wants >= 8-bit (A8) activations (True = keep higher precision)
         self._fp8_as_q8 = fp8_as_q8
         self._fp8_dequantized: set[str] = set()
 
@@ -611,6 +612,40 @@ class ModelBase:
             raise ValueError(f"Can not map tensor {name!r}")
         return new_name
 
+    def _gguf_weight_name(self, name: str) -> str:
+        if name.endswith((".weight", ".bias")):
+            return name
+        return name + ".weight"
+
+    def _hf_quant_tensors_to_gguf(self, hf_name: str) -> list[str]:
+        # Map an HF quantized-layer name to its GGUF tensor name(s).
+        if hf_name == "lm_head" or hf_name.endswith(".lm_head"):
+            return ["output.weight"]
+
+        name = hf_name
+        if name.startswith("model.language_model."):
+            name = "model." + name[len("model.language_model."):]
+
+        m = re.fullmatch(r"model\.layers\.(\d+)\.mlp\.experts", name)
+        if m:
+            bid = int(m.group(1))
+            return [
+                self._gguf_weight_name(self.format_tensor_name(gguf.MODEL_TENSOR.FFN_GATE_EXP, bid)),
+                self._gguf_weight_name(self.format_tensor_name(gguf.MODEL_TENSOR.FFN_UP_EXP, bid)),
+                self._gguf_weight_name(self.format_tensor_name(gguf.MODEL_TENSOR.FFN_DOWN_EXP, bid)),
+            ]
+
+        candidates = [name]
+        if not name.endswith((".weight", ".bias")):
+            candidates.append(name + ".weight")
+
+        for cand in candidates:
+            try:
+                return [self._gguf_weight_name(self.map_tensor_name(cand))]
+            except ValueError:
+                continue
+        return []
+
     def set_gguf_parameters(self):
         raise NotImplementedError("set_gguf_parameters() must be implemented in subclasses")
 
@@ -826,6 +861,14 @@ class ModelBase:
         self._is_nvfp4 = quant_algo == "NVFP4"
         self._is_mxfp4 = quant_method == "mxfp4"
 
+        # Collect per-tensor W4A16_NVFP4 metadata (activations were not quantized to 4-bit).
+        if self._is_nvfp4:
+            for tensor_name, entry in quant_layers.items():
+                if not isinstance(entry, dict) or entry.get("quant_algo") != "W4A16_NVFP4":
+                    continue
+                for gguf_name in self._hf_quant_tensors_to_gguf(tensor_name):
+                    self._allow_prec_a8[gguf_name] = True
+
         # NVFP4 weights are repacked and written directly to gguf_writer.
         # This must run before dequant_model so NVFP4 tensors are removed
         # from model_tensors, leaving only non-NVFP4 (e.g. FP8) for dequant.
@@ -1017,6 +1060,12 @@ class ModelBase:
 
         logger.info("Set model quantization version")
         self.gguf_writer.add_quantization_version(gguf.GGML_QUANT_VERSION)
+
+        if self._allow_prec_a8:
+            names = sorted(self._allow_prec_a8.keys())
+            values = [self._allow_prec_a8[n] for n in names]
+            logger.info(f"Set allow_prec_a8 metadata for {len(names)} tensor(s)")
+            self.gguf_writer.add_tensor_extra_allow_prec_a8(names, values)
 
     def write_vocab(self):
         raise NotImplementedError("write_vocab() must be implemented in subclasses")
