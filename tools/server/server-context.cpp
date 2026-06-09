@@ -2352,13 +2352,39 @@ private:
                     }
                     if (deferred) break;
 
-                    ggml_type ctk = task.kvcache_action.ctk;
-                    ggml_type ctv = task.kvcache_action.ctv;
+                    auto ctk_opt = task.kvcache_action.ctk;
+                    auto ctv_opt = task.kvcache_action.ctv;
+                    auto ctkd_opt = task.kvcache_action.ctkd;
+                    auto ctvd_opt = task.kvcache_action.ctvd;
 
-                    // TODO - handle draft model
-                    if (!llama_requantize_memory(ctx_tgt, ctk, ctv)) {
-                        send_error(task, "Unable to quantize memory", ERROR_TYPE_INVALID_REQUEST);
-                        break;
+                    // Requantize draft model
+                    if (ctx_dft && (ctkd_opt.has_value() || ctvd_opt.has_value())) {                        
+                        ggml_type ctkd = ctkd_opt.value_or(params_base.speculative.draft.cache_type_k);
+                        ggml_type ctvd = ctvd_opt.value_or(params_base.speculative.draft.cache_type_v);
+
+                        if (!llama_requantize_memory(ctx_dft.get(), ctkd, ctvd)) {
+                            send_error(task, "Unable to quantize draft model memory", ERROR_TYPE_INVALID_REQUEST);
+                            break;
+                        }
+
+                        // Update draft model params on success
+                        params_base.speculative.draft.cache_type_k = ctkd;
+                        params_base.speculative.draft.cache_type_v = ctvd;
+                    }
+
+                    // Requantize main model
+                    if (ctx_tgt && (ctk_opt.has_value() || ctv_opt.has_value())) {
+                        ggml_type ctk = ctk_opt.value_or(params_base.cache_type_k);
+                        ggml_type ctv = ctv_opt.value_or(params_base.cache_type_v);
+
+                        if (!llama_requantize_memory(ctx_tgt, ctk, ctv)) {
+                            send_error(task, "Unable to quantize memory", ERROR_TYPE_INVALID_REQUEST);
+                            break;
+                        }
+
+                        // Update params on success
+                        params_base.cache_type_k = ctk;
+                        params_base.cache_type_v = ctv;
                     }
 
                     auto res = std::make_unique<server_task_result_requantize>();
@@ -4195,6 +4221,8 @@ void server_routes::init_routes() {
 
         std::string ctk = req.get_param("ctk");
         std::string ctv = req.get_param("ctv");
+        std::string ctkd = req.get_param("ctkd");
+        std::string ctvd = req.get_param("ctvd");
 
         // Supported KV cache types (from common/arg.cpp)
         // TODO - might be better to just make the arg.cpp method public
@@ -4210,40 +4238,49 @@ void server_routes::init_routes() {
             GGML_TYPE_Q5_1,
         };
 
-        ggml_type k = GGML_TYPE_F16;
-        ggml_type v = GGML_TYPE_F16;
-
-        // Convert string parameters to ggml_type
-        bool found_k = ctk.empty();
-        bool found_v = ctv.empty();
-
-        for (const auto & type : kv_cache_types) {
-            const std::string type_name = ggml_type_name(type);
-            if (!found_k && type_name == ctk) {
-                k = type;
-                found_k = true;
+        // Resolve a string to an option representing a valid cache ggml type
+        auto resolve_cache_type = [&](const std::string & type_str) -> std::optional<ggml_type> {
+            if (type_str.empty()) {
+                return std::nullopt;
             }
-            if (!found_v && type_name == ctv) {
-                v = type;
-                found_v = true;
+            for (const auto & type : kv_cache_types) {
+                if (ggml_type_name(type) == type_str) {
+                    return type;
+                }
             }
-            if (found_k && found_v) break;
-        }
+            return std::nullopt;
+        };
 
-        if (!found_k) {
-            res->error(format_error_response("Unsupported cache type: " + ctk, ERROR_TYPE_INVALID_REQUEST));
+        auto ctk_opt = resolve_cache_type(ctk);
+        auto ctv_opt = resolve_cache_type(ctv);
+        auto ctkd_opt = resolve_cache_type(ctkd);
+        auto ctvd_opt = resolve_cache_type(ctvd);
+
+        // If parameters are specified and did not resolve, return an error
+        if (!ctk.empty() && !ctk_opt.has_value()) {
+            res->error(format_error_response("Unsupported cache type (ctk): " + ctk, ERROR_TYPE_INVALID_REQUEST));
             return res;
         }
-        if (!found_v) {
-            res->error(format_error_response("Unsupported cache type: " + ctv, ERROR_TYPE_INVALID_REQUEST));
+        if (!ctv.empty() && !ctv_opt.has_value()) {
+            res->error(format_error_response("Unsupported cache type (ctv): " + ctv, ERROR_TYPE_INVALID_REQUEST));
+            return res;
+        }
+        if (!ctkd.empty() && !ctkd_opt.has_value()) {
+            res->error(format_error_response("Unsupported cache type (ctkd): " + ctkd, ERROR_TYPE_INVALID_REQUEST));
+            return res;
+        }
+        if (!ctvd.empty() && !ctvd_opt.has_value()) {
+            res->error(format_error_response("Unsupported cache type (ctvd): " + ctvd, ERROR_TYPE_INVALID_REQUEST));
             return res;
         }
 
         {
             server_task task(SERVER_TASK_TYPE_REQUANTIZE_KVCACHE);
             task.id = res->rd.get_new_id();
-            task.kvcache_action.ctk = k;
-            task.kvcache_action.ctv = v;
+            task.kvcache_action.ctk = ctk_opt;
+            task.kvcache_action.ctv = ctv_opt;
+            task.kvcache_action.ctkd = ctkd_opt;
+            task.kvcache_action.ctvd = ctvd_opt;
             res->rd.post_task(std::move(task), true); // high-priority task
         }
 
