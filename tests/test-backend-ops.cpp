@@ -4325,18 +4325,32 @@ struct test_mul_mat_id_fusion : public test_case {
 };
 
 // Regression test for the Vulkan prealloc prescan fix (PR #24312).
-// Builds a two-op graph: a small MUL_MAT runs first (establishing a tiny
-// prealloc_y), then a large MUL_MAT_ID with ne11=1 (single-token decode)
-// and a large expert count.  Without the prescan pass in
-// ggml_backend_vk_graph_compute, the Vulkan backend will attempt to grow
-// prealloc_y mid-graph while a command buffer is open (has_subctx=1),
-// which can corrupt memory on UMA hardware.
+//
+// Builds a two-op graph where both ops use prealloc_y but require different sizes:
+//   Op 1 (small_out): MUL_MAT_ID with k_small contraction dim — allocates prealloc_y
+//                     at small_y_sz and records GPU commands referencing that buffer.
+//   Op 2 (large_out): MUL_MAT_ID with k (larger) contraction dim — needs large_y_sz
+//                     > small_y_sz, so without the prescan it calls
+//                     ggml_vk_preallocate_buffers mid-graph, which DESTROYS the buffer
+//                     that Op 1's already-recorded descriptors still point to.
+//
+// Op 1 is placed as src[0] of the final ADD so the graph executor always runs it
+// first, ensuring prealloc_y is non-null (old VkBuffer visible) when Op 2 grows it.
+//
+// With GGML_VK_FA_DEBUG=1 the backend logs the old and new VkBuffer handles,
+// showing the use-after-free directly:
+//   old_VkBuffer=0x<A>  <- bound in Op 1's recorded commands, about to be destroyed
+//   DESTROYED while live in cmd buffer -- descriptor referencing it is now invalid
+//   new_VkBuffer=0x<B>  <- different handle; Op 1's commands now reference freed memory
+//
+// On Intel Arc UMA the destroyed buffer's physical memory can be reused for host
+// allocations; GPU writes via the stale descriptor then corrupt host stack memory.
 struct test_mul_mat_id_prescan : public test_case {
-    const ggml_type type_a;  // weight type for the MUL_MAT_ID
+    const ggml_type type_a;  // weight type for both MUL_MAT_ID ops
     const int       n_mats;  // total number of experts
     const int       n_used;  // active experts per token
     const int64_t   m;       // output dim per expert
-    const int64_t   k;       // inner (contraction) dim
+    const int64_t   k;       // inner dim for Op 2 (the large op); Op 1 uses k/4
     const int64_t   n_tokens; // number of tokens (must be > 8 to use the matrix path)
 
     std::string vars() override { return VARS_TO_STR6(type_a, n_mats, n_used, m, k, n_tokens); }
@@ -4354,31 +4368,38 @@ struct test_mul_mat_id_prescan : public test_case {
             // which uses prealloc_y. n_tokens <= 8 takes the vector path that does not,
             // so the test would not exercise the mid-graph reallocation bug.
             GGML_ASSERT(n_tokens > 8);
+            // k must be divisible by 4 so k_small = k/4 is a valid contraction dim.
+            GGML_ASSERT(k % 4 == 0);
         }
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
-        // Part 1: small MUL_MAT — dispatches to the mul_mat_vec path (dst->ne[1]==n_used<=8),
-        // which does NOT use prealloc_y.  After this op, prealloc_size_y is still 0.
-        const int64_t k_small = 4;
-        ggml_tensor * sa = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, k_small, m);
-        ggml_tensor * sb = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, k_small, n_used);
-        ggml_set_name(sa, "sa");
-        ggml_set_name(sb, "sb");
-        ggml_tensor * small_out = ggml_mul_mat(ctx, sa, sb); // (m, n_used)
+        // Op 1 (small): MUL_MAT_ID with F16 weights and k_small — matrix path, uses
+        // prealloc_y at ROUNDUP_POW2(padded_n * k_small * n_tokens * sizeof(fp16)) bytes.
+        // Always F16 so k_small can be any multiple of 1 (quantized types require
+        // k to be a multiple of their block size, e.g. 256 for Q4_K, which k/4 may not satisfy).
+        // Placed as src[0] of ADD so the executor always runs this op first.
+        const int64_t k_small = k / 4;
+        ggml_tensor * as_small = ggml_new_tensor_3d(ctx, GGML_TYPE_F16, k_small, m, n_mats);
+        ggml_set_name(as_small, "as_small");
+        ggml_tensor * ids_s_storage = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, n_mats, n_tokens);
+        ggml_set_name(ids_s_storage, "ids_s_storage");
+        ggml_tensor * ids_small = ggml_view_2d(ctx, ids_s_storage, n_used, n_tokens, ids_s_storage->nb[1], 0);
+        ggml_set_name(ids_small, "ids_small");
+        ggml_tensor * bl_small = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, k_small, n_used, n_tokens);
+        ggml_set_name(bl_small, "bl_small");
+        ggml_tensor * small_out = ggml_mul_mat_id(ctx, as_small, bl_small, ids_small); // (m, n_used, n_tokens)
         ggml_set_name(small_out, "small_out");
 
-        // Part 2: large MUL_MAT_ID with n_tokens > 8 — routes to ggml_vk_mul_mat_id_q_f16
-        // (the matrix path), which uses prealloc_y and pads ne11 to a pipeline wg_denom
-        // multiple.  Without the prescan, prealloc_size_y grows from 0 to y_sz mid-graph
-        // with a live command buffer (subctx), triggering the crash on Intel Arc UMA.
+        // Op 2 (large): MUL_MAT_ID with k > k_small — matrix path, needs prealloc_y
+        // at ROUNDUP_POW2(padded_n * k * n_tokens * sizeof(fp16)) bytes > Op 1's size.
+        // Without the prescan, this causes ggml_vk_preallocate_buffers to destroy
+        // Op 1's prealloc_y buffer while Op 1's commands are already in the cmd buffer.
         ggml_tensor * as = ggml_new_tensor_3d(ctx, type_a, k, m, n_mats);
         ggml_set_name(as, "as");
-        // ids: [n_mats, n_tokens] storage; view first n_used rows as the routing tensor.
         ggml_tensor * ids_storage = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, n_mats, n_tokens);
         ggml_set_name(ids_storage, "ids_storage");
         ggml_tensor * ids = ggml_view_2d(ctx, ids_storage, n_used, n_tokens, ids_storage->nb[1], 0);
         ggml_set_name(ids, "ids");
-        // bl: [k, n_used, n_tokens] — activations for n_tokens tokens, each routed to n_used experts
         ggml_tensor * bl = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, k, n_used, n_tokens);
         ggml_set_name(bl, "bl");
         ggml_tensor * large_out = ggml_mul_mat_id(ctx, as, bl, ids); // (m, n_used, n_tokens)
@@ -4386,7 +4407,10 @@ struct test_mul_mat_id_prescan : public test_case {
 
         // Combine both ops so the graph executor must run both.
         // small_out (m, n_used) broadcasts over large_out (m, n_used, n_tokens).
-        return ggml_add(ctx, large_out, small_out);
+        // small_out is src[0] so GGML executes it first (DFS visits src[0] before src[1]).
+        // This guarantees prealloc_y is already allocated (non-null) when large_out runs,
+        // making the old VkBuffer handle visible in the GGML_VK_FA_DEBUG log.
+        return ggml_add(ctx, small_out, large_out);
     }
 
     void initialize_tensors(ggml_context * ctx) override {

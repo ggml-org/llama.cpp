@@ -8273,21 +8273,37 @@ static void ggml_vk_mul_mat_q_f16(ggml_backend_vk_context * ctx, vk_context& sub
             // enough prealloc_y before any command buffer was opened.  If we get here
             // with a live subctx it means the prescan missed this op, which is the
             // race condition that caused crashes on Intel Arc UMA.
-            // Set GGML_VK_FA_DEBUG=1 to surface this as a hard assertion failure
-            // (useful for running unit tests with the prescan disabled to verify coverage).
+            // Set GGML_VK_FA_DEBUG=1 to surface as a hard assertion failure and to log
+            // the VkBuffer handle swap that proves the use-after-free (the old handle
+            // is already bound in live command buffer descriptors; destroying it here
+            // makes those descriptors invalid before the GPU executes them).
             if (getenv("GGML_VK_FA_DEBUG")) {
+                VkBuffer old_handle = ctx->prealloc_y ? (VkBuffer)ctx->prealloc_y->buffer : VK_NULL_HANDLE;
                 fprintf(stderr,
                     "ggml_vulkan MulMat Y grow (UNEXPECTED): y_sz=%llu ne=[%lld,%lld,%lld,%lld]"
-                    " padded_n=%u qy_needs=%d quantize_y=%d has_subctx=%d\n",
+                    " padded_n=%u qy_needs=%d quantize_y=%d has_subctx=%d old_VkBuffer=%p\n",
                     (unsigned long long)y_sz,
                     (long long)src1->ne[0], (long long)src1->ne[1],
                     (long long)src1->ne[2], (long long)src1->ne[3],
-                    padded_n, (int)qy_needs_dequant, (int)quantize_y, subctx ? 1 : 0);
+                    padded_n, (int)qy_needs_dequant, (int)quantize_y, subctx ? 1 : 0,
+                    (void*)old_handle);
+                if (old_handle != VK_NULL_HANDLE) {
+                    fprintf(stderr,
+                        "ggml_vulkan MulMat Y grow: old VkBuffer=%p DESTROYED while live in cmd buffer"
+                        " -- any already-recorded descriptor referencing it is now invalid (use-after-free)\n",
+                        (void*)old_handle);
+                }
                 fflush(stderr);
-                GGML_ASSERT(!subctx && "MulMat prealloc_y grew mid-graph: prescan missing for this op");
             }
             ctx->prealloc_size_y = y_sz;
             ggml_vk_preallocate_buffers(ctx, subctx);
+            if (getenv("GGML_VK_FA_DEBUG")) {
+                VkBuffer new_handle = ctx->prealloc_y ? (VkBuffer)ctx->prealloc_y->buffer : VK_NULL_HANDLE;
+                fprintf(stderr,
+                    "ggml_vulkan MulMat Y grow: new_VkBuffer=%p\n",
+                    (void*)new_handle);
+                fflush(stderr);
+            }
         }
         if (split_k > 1 && ctx->prealloc_size_split_k < split_k_size) {
             ctx->prealloc_size_split_k = split_k_size;
@@ -9196,20 +9212,35 @@ static void ggml_vk_mul_mat_id_q_f16(ggml_backend_vk_context * ctx, vk_context& 
         if ((qy_needs_dequant || quantize_y) && ctx->prealloc_size_y < y_sz) {
             // Same invariant as MulMat above: the prescan should have pre-allocated this.
             // Mid-graph growth with a live subctx is the race that caused crashes on
-            // Intel Arc UMA.  Set GGML_VK_FA_DEBUG=1 to surface as a hard assertion.
+            // Intel Arc UMA.  Set GGML_VK_FA_DEBUG=1 to surface as a hard assertion and
+            // to log the VkBuffer handle swap that proves the use-after-free.
             if (getenv("GGML_VK_FA_DEBUG")) {
+                VkBuffer old_handle = ctx->prealloc_y ? (VkBuffer)ctx->prealloc_y->buffer : VK_NULL_HANDLE;
                 fprintf(stderr,
                     "ggml_vulkan MulMatId Y grow (UNEXPECTED): y_sz=%llu ne=[%lld,%lld,%lld,%lld]"
-                    " padded_n=%u qy_needs=%d quantize_y=%d has_subctx=%d\n",
+                    " padded_n=%u qy_needs=%d quantize_y=%d has_subctx=%d old_VkBuffer=%p\n",
                     (unsigned long long)y_sz,
                     (long long)src1->ne[0], (long long)src1->ne[1],
                     (long long)src1->ne[2], (long long)src1->ne[3],
-                    padded_n, (int)qy_needs_dequant, (int)quantize_y, subctx ? 1 : 0);
+                    padded_n, (int)qy_needs_dequant, (int)quantize_y, subctx ? 1 : 0,
+                    (void*)old_handle);
+                if (old_handle != VK_NULL_HANDLE) {
+                    fprintf(stderr,
+                        "ggml_vulkan MulMatId Y grow: old VkBuffer=%p DESTROYED while live in cmd buffer"
+                        " -- any already-recorded descriptor referencing it is now invalid (use-after-free)\n",
+                        (void*)old_handle);
+                }
                 fflush(stderr);
-                GGML_ASSERT(!subctx && "MulMatId prealloc_y grew mid-graph: prescan missing for this op");
             }
             ctx->prealloc_size_y = y_sz;
             ggml_vk_preallocate_buffers(ctx, subctx);
+            if (getenv("GGML_VK_FA_DEBUG")) {
+                VkBuffer new_handle = ctx->prealloc_y ? (VkBuffer)ctx->prealloc_y->buffer : VK_NULL_HANDLE;
+                fprintf(stderr,
+                    "ggml_vulkan MulMatId Y grow: new_VkBuffer=%p\n",
+                    (void*)new_handle);
+                fflush(stderr);
+            }
         }
         if (ctx->prealloc_size_split_k < expert_count_size) {
             ctx->prealloc_size_split_k = expert_count_size;
@@ -18141,3 +18172,7 @@ static void ggml_vk_check_results_1(ggml_backend_vk_context * ctx, ggml_cgraph *
 #endif
 
 GGML_BACKEND_DL_IMPL(ggml_backend_vk_reg)
+
+
+
+
