@@ -214,9 +214,17 @@ class ConversationsStore {
 	 */
 
 	/**
-	 * Adds a message to the active messages array
+	 * Adds a message to the active messages array. When `expectedConvId` is provided,
+	 * the push is skipped if the user has navigated away to a different conversation.
+	 * this prevents an in-flight stream (e.g. an agentic loop) from leaking new turns
+	 * into a conversation the user has since switched to. The DB row is still written
+	 * by the caller against the correct conversation, so reopening the original
+	 * conversation will display the message normally.
 	 */
-	addMessageToActive(message: DatabaseMessage): void {
+	addMessageToActive(message: DatabaseMessage, expectedConvId?: string): void {
+		if (expectedConvId !== undefined && expectedConvId !== this.activeConversation?.id) {
+			return;
+		}
 		this.activeMessages.push(message);
 	}
 
@@ -557,11 +565,14 @@ class ConversationsStore {
 	 * Updates the current node of the active conversation
 	 * @param nodeId - The new current node ID
 	 */
-	async updateCurrentNode(nodeId: string): Promise<void> {
-		if (!this.activeConversation) return;
+	async updateCurrentNode(nodeId: string, expectedConvId?: string): Promise<void> {
+		const targetConvId = expectedConvId ?? this.activeConversation?.id;
+		if (!targetConvId) return;
 
-		await DatabaseService.updateCurrentNode(this.activeConversation.id, nodeId);
-		this.activeConversation = { ...this.activeConversation, currNode: nodeId };
+		await DatabaseService.updateCurrentNode(targetConvId, nodeId);
+		if (this.activeConversation?.id === targetConvId) {
+			this.activeConversation = { ...this.activeConversation, currNode: nodeId };
+		}
 	}
 
 	/**

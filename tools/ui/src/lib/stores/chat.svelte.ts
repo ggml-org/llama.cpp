@@ -780,7 +780,7 @@ class ChatStore {
 				if (timings) uiUpdate.timings = timings;
 				if (resolvedModel) uiUpdate.model = resolvedModel;
 				conversationsStore.updateMessageAtIndex(idx, uiUpdate);
-				await conversationsStore.updateCurrentNode(currentMessageId);
+				await conversationsStore.updateCurrentNode(currentMessageId, convId);
 			},
 			createToolResultMessage: async (
 				toolCallId: string,
@@ -801,8 +801,8 @@ class ChatStore {
 					},
 					currentMessageId
 				);
-				conversationsStore.addMessageToActive(msg);
-				await conversationsStore.updateCurrentNode(msg.id);
+				conversationsStore.addMessageToActive(msg, convId);
+				await conversationsStore.updateCurrentNode(msg.id, convId);
 				return msg;
 			},
 			createAssistantMessage: async () => {
@@ -825,7 +825,7 @@ class ChatStore {
 					},
 					lastMsg.id
 				);
-				conversationsStore.addMessageToActive(msg);
+				conversationsStore.addMessageToActive(msg, convId);
 				currentMessageId = msg.id;
 				return msg;
 			},
@@ -947,7 +947,7 @@ class ChatStore {
 					if (timings) uiUpdate.timings = timings;
 					if (resolvedModel) uiUpdate.model = resolvedModel;
 					conversationsStore.updateMessageAtIndex(idx, uiUpdate);
-					await conversationsStore.updateCurrentNode(currentMessageId);
+					await conversationsStore.updateCurrentNode(currentMessageId, convId);
 					cleanupStreamingState();
 					if (onComplete) await onComplete(content);
 					if (isRouterMode()) modelsStore.fetchRouterModels().catch(console.error);
