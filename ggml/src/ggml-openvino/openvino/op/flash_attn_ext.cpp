@@ -65,11 +65,12 @@ OutputVector translate_flash_attn_ext(const NodeContext & context) {
     const int64_t factor        = num_heads / num_heads_kv;
 
     // Manual GQA attention: enabled by default on GPU in stateless mode.
-    // Set GGML_OPENVINO_MANUAL_GQA_ATTN=0 to explicitly disable.
+    // Set GGML_OPENVINO_MANUAL_GQA_ATTN to a positive value (e.g. 1) to force-enable,
+    // or to 0 to force-disable. Unset falls back to the device-based default.
     static const bool manual_gqa_enabled = []() {
         const char * env = getenv("GGML_OPENVINO_MANUAL_GQA_ATTN");
         if (env != nullptr) {
-            return std::string(env) != "0";
+            return atoi(env) > 0;
         }
         const char * dev = getenv("GGML_OPENVINO_DEVICE");
         return dev != nullptr && std::string(dev) == "GPU";

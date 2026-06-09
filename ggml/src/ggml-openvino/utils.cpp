@@ -39,24 +39,20 @@
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
 
-static bool ov_cache_enabled() {
-    static const bool enabled = []() {
-        const char * env = getenv("GGML_OPENVINO_ENABLE_CACHE");
-        fprintf(stderr, "GGML OpenVINO: GGML_OPENVINO_ENABLE_CACHE=%s\n", env ? env : "(not set)");
-        if (env && std::string(env) == "0") {
-            fprintf(stderr, "GGML OpenVINO: decoder cache DISABLED\n");
-            return false;
-        }
-        fprintf(stderr, "GGML OpenVINO: decoder cache ENABLED\n");
-        return true;
-    }();
-    return enabled;
+// Parse a GGML_OPENVINO_* env var as a non-negative integer. Returns the
+// parsed value when it is set and parses to a positive integer (e.g. =1, =2,
+// =100); otherwise returns 0 (unset, empty, =0, negative, or non-numeric).
+// Boolean toggles use this as a flag: `if (ggml_openvino_env_flag(name))` is
+// true iff the value is positive, so =0 is a no-op for all toggles.
+static int ggml_openvino_env_flag(const char * name) {
+    const char * v = getenv(name);
+    return v ? std::max(0, std::atoi(v)) : 0;
 }
 
 enum ggml_status ov_graph_compute(ggml_cgraph * cgraph, ggml_backend_t backend) {
     ggml_backend_openvino_context * ctx = (ggml_backend_openvino_context *) backend->context;
     try {
-        if (getenv("GGML_OPENVINO_DUMP_CGRAPH")) {
+        if (ggml_openvino_env_flag("GGML_OPENVINO_DUMP_CGRAPH")) {
             std::string filename = "cgraph_ov.txt";
             GgmlOvDecoder::dump_cgraph(cgraph, filename);
         }
@@ -92,7 +88,7 @@ enum ggml_status ov_graph_compute(ggml_cgraph * cgraph, ggml_backend_t backend) 
 static std::optional<ov::Tensor> try_make_kv_sliced_tensor(std::shared_ptr<GgmlOvDecoder> ggml_decoder,
                                                            const std::string & name,
                                                            const ggml_tensor * ggml_tensor) {
-    static const bool disabled = getenv("GGML_OPENVINO_DISABLE_KV_SLICE") != nullptr;
+    static const bool disabled = ggml_openvino_env_flag("GGML_OPENVINO_DISABLE_KV_SLICE");
     if (disabled) {
         return std::nullopt;
     }
@@ -199,7 +195,7 @@ enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, std::shared_ptr<
     std::tie(m_params, c_params) = GgmlOvDecoder::compute_llm_params(cgraph, is_static);
 
     graph_key key(cgraph);
-    const bool cache_enabled = ov_cache_enabled();
+    static const bool cache_enabled = !ggml_openvino_env_flag("GGML_OPENVINO_DISABLE_CACHE");
     bool cache_hit = false;
 
     int64_t decoder_end_time;
@@ -316,7 +312,7 @@ enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, std::shared_ptr<
             ggml_decoder->clear_model_weights();
             conversion_end_time = ggml_time_us();
 
-            if (getenv("GGML_OPENVINO_DUMP_IR")) {
+            if (ggml_openvino_env_flag("GGML_OPENVINO_DUMP_IR")) {
                 char timestamped_filename[64];
                 auto timestamp = (long long) ggml_time_us();
                 snprintf(timestamped_filename, sizeof(timestamped_filename), "model_%lld.xml", timestamp);
@@ -364,7 +360,7 @@ enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, std::shared_ptr<
             auto input_tensor = get_ov_input_tensor(ggml_decoder, param_name);
             infer_request->set_input_tensor(i, input_tensor);
 
-            if (getenv("GGML_OPENVINO_DEBUG_INPUT")) {
+            if (ggml_openvino_env_flag("GGML_OPENVINO_DEBUG_INPUT")) {
                 print_input_tensor_info(param_name, input_tensor);
             }
         }
@@ -382,14 +378,14 @@ enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, std::shared_ptr<
         infer_request->infer();
         infer_end_time = ggml_time_us();
 
-        if (getenv("GGML_OPENVINO_DEBUG_OUTPUT")) {
+        if (ggml_openvino_env_flag("GGML_OPENVINO_DEBUG_OUTPUT")) {
             for (size_t i = 0; i < ov_output_names.size(); i++) {
                 const auto output_tensor = infer_request->get_output_tensor(i);
                 print_output_tensor_info(ov_output_names[i], output_tensor, output_tensor.data());
             }
         }
 
-        if (getenv("GGML_OPENVINO_PROFILING")) {
+        if (ggml_openvino_env_flag("GGML_OPENVINO_PROFILING")) {
             GGML_LOG_INFO("\nGGML OpenVINO Backend: \n");
             GGML_LOG_INFO("  - Graph decoder time: %.3f ms \n", (decoder_end_time - start_time) / 1000.0);
             if (!cache_hit) {
@@ -410,12 +406,8 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph, std::shared_ptr<o
     auto get_prefill_chunk_size = [] {
         static int chunk_size = -1;
         if (chunk_size == -1) {
-            const char * chunk_size_str = getenv("GGML_OPENVINO_PREFILL_CHUNK_SIZE");
-            if (chunk_size_str && atoi(chunk_size_str) > 0) {
-                chunk_size = atoi(chunk_size_str);
-            } else {
-                chunk_size = 256;
-            }
+            int env_value = ggml_openvino_env_flag("GGML_OPENVINO_PREFILL_CHUNK_SIZE");
+            chunk_size = env_value > 0 ? env_value : 256;
         }
         return chunk_size;
     };
@@ -442,7 +434,7 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph, std::shared_ptr<o
     const auto * inp_pos = get_inp_pos_tensor(cgraph);
     const auto is_prefill = get_is_prefill(inp_pos);
     graph_key key(cgraph);
-    const bool cache_enabled = ov_cache_enabled();
+    static const bool cache_enabled = !ggml_openvino_env_flag("GGML_OPENVINO_DISABLE_CACHE");
     bool cache_hit = false;
 
     int64_t decoder_end_time;
@@ -532,7 +524,7 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph, std::shared_ptr<o
         ggml_decoder_decode->clear_model_weights();
         conversion_end_time = ggml_time_us();
 
-        if (getenv("GGML_OPENVINO_DUMP_IR")) {
+        if (ggml_openvino_env_flag("GGML_OPENVINO_DUMP_IR")) {
             char timestamped_filename[64];
             auto timestamp = (long long) ggml_time_us();
             snprintf(timestamped_filename, sizeof(timestamped_filename), "model_prefill_%lld.xml", timestamp);
@@ -585,7 +577,7 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph, std::shared_ptr<o
                 auto input_tensor = get_ov_input_tensor_static_prefill(ggml_decoder, param_name, chunk_index);
                 infer_request->set_input_tensor(i, input_tensor);
 
-                if (getenv("GGML_OPENVINO_DEBUG_INPUT")) {
+                if (ggml_openvino_env_flag("GGML_OPENVINO_DEBUG_INPUT")) {
                     const auto input_tensor = infer_request->get_input_tensor(i);
                     print_input_tensor_info(param_name, input_tensor);
                 }
@@ -601,7 +593,7 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph, std::shared_ptr<o
             infer_request->infer();
             ov_raw_infer_total += ggml_time_us() - ov_raw_infer_start;
 
-            if (getenv("GGML_OPENVINO_DEBUG_OUTPUT")) {
+            if (ggml_openvino_env_flag("GGML_OPENVINO_DEBUG_OUTPUT")) {
                 for (size_t i = 0; i < ov_output_names_local.size(); i++) {
                     const auto output_tensor = infer_request->get_output_tensor(i);
                     print_output_tensor_info(ov_output_names_local[i], output_tensor, output_tensor.data());
@@ -615,7 +607,7 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph, std::shared_ptr<o
             auto input_tensor = get_ov_input_tensor_static_decode(ggml_decoder, param_name);
             infer_request->set_input_tensor(i, input_tensor);
 
-            if (getenv("GGML_OPENVINO_DEBUG_INPUT")) {
+            if (ggml_openvino_env_flag("GGML_OPENVINO_DEBUG_INPUT")) {
                 const auto input_tensor = infer_request->get_input_tensor(i);
                 print_input_tensor_info(param_name, input_tensor);
             }
@@ -632,7 +624,7 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph, std::shared_ptr<o
         infer_end_time = ggml_time_us();
         ov_raw_infer_total = infer_end_time - ov_raw_infer_start;
 
-        if (getenv("GGML_OPENVINO_DEBUG_OUTPUT")) {
+        if (ggml_openvino_env_flag("GGML_OPENVINO_DEBUG_OUTPUT")) {
             for (size_t i = 0; i < ov_output_names_local.size(); i++) {
                 const auto output_tensor = infer_request->get_output_tensor(i);
                 print_output_tensor_info(ov_output_names_local[i], output_tensor, output_tensor.data());
@@ -640,7 +632,7 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph, std::shared_ptr<o
         }
     }
 
-    if (getenv("GGML_OPENVINO_PROFILING")) {
+    if (ggml_openvino_env_flag("GGML_OPENVINO_PROFILING")) {
         GGML_LOG_INFO("\nGGML OpenVINO Backend: \n");
         GGML_LOG_INFO("  - Graph decoder time: %.3f ms \n", (decoder_end_time - start_time) / 1000.0);
         if (!cache_hit) {
@@ -730,7 +722,7 @@ enum ggml_status naive_compute(ggml_cgraph * cgraph,
     auto decoder = std::make_shared<GgmlOvDecoder>(cgraph, model_weights);
     auto input_model = std::make_shared<ov::frontend::ggml::InputModel>(decoder);
     auto model = ov::frontend::ggml::FrontEnd::convert(input_model, naive);
-    if (getenv("GGML_OPENVINO_DUMP_IR")) {
+    if (ggml_openvino_env_flag("GGML_OPENVINO_DUMP_IR")) {
         ov::serialize(model, "IR_naive.xml");
     }
 

@@ -323,15 +323,17 @@ curl -X POST "http://localhost:8080/v1/chat/completions" -H "Content-Type: appli
 ## Runtime Configuration
 
 The OpenVINO backend can be configured using the following environment variables at runtime to control device selection, caching, debugging, and profiling behavior.
-
-### Configuration Options
+Boolean flags follow a uniform convention: set to a **positive integer** (e.g. `1`) to enable; unset, empty, `0`, negative, or non-numeric values are treated as disabled.
 
 | Variable                          | Default    | Description                                                                                                 |
 |-----------------------------------|------------|-------------------------------------------------------------------------------------------------------------|
 | `GGML_OPENVINO_DEVICE`            | `CPU`      | Specify the target device (CPU, GPU, NPU). On systems with multiple GPUs, use `GPU.0` or `GPU.1` to explicitly target specific GPU. See [OpenVINO GPU Device](https://docs.openvino.ai/2026/openvino-workflow/running-inference/inference-devices-and-modes/gpu-device.html). When set to **NPU**, static compilation mode is enabled for optimal performance. |
 | `GGML_OPENVINO_CACHE_DIR`         | `not set`  | Directory for OpenVINO model caching (recommended: `/tmp/ov_cache`). Enables model caching when set. **Not supported on NPU devices.** |
-| `GGML_OPENVINO_PREFILL_CHUNK_SIZE`| `256`      | Token chunk size for **NPU** prefill.                                                                       |
-| `GGML_OPENVINO_STATEFUL_EXECUTION`| `0`        | Enable stateful KV cache on for better performance. Recommended on CPU, GPU.                                |
+| `GGML_OPENVINO_PREFILL_CHUNK_SIZE`| `256`      | Token chunk size for **NPU** prefill. Must be a positive integer; otherwise the default is used.            |
+| `GGML_OPENVINO_STATEFUL_EXECUTION`| `0`        | Enable stateful KV cache for better performance. Recommended on CPU, GPU.                                   |
+| `GGML_OPENVINO_DISABLE_CACHE`     | `0`        | Disable the in-process compiled-model / decoder cache (cache is on by default). Set to `1` to disable.      |
+| `GGML_OPENVINO_DISABLE_KV_SLICE`  | `0`        | Disable the KV-cache input-tensor slicing optimization (slicing is on by default on CPU/GPU). Set to `1` to disable. |
+| `GGML_OPENVINO_MANUAL_GQA_ATTN`   | device-based | Tri-state. When **unset**, manual GQA attention is enabled by default on `GPU` and disabled on other devices. Set to a positive integer to force-enable, or `0` to force-disable. |
 | `GGML_OPENVINO_PROFILING`         | `0`        | Enable execution-time profiling.                                                                            |
 | `GGML_OPENVINO_DUMP_CGRAPH`       | `0`        | Dump the GGML compute graph to `cgraph_ov.txt`.                                                             |
 | `GGML_OPENVINO_DUMP_IR`           | `0`        | Serialize OpenVINO IR files with timestamps.                                                                |
