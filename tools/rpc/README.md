@@ -511,12 +511,13 @@ GGML_RPC_TRACE=1 ./build/bin/llama-bench --rpc 192.0.2.10:50052 ...
 
 The client summary also reports command timing by endpoint, the slowest traced
 tensor operations by endpoint and tensor name, and cross-endpoint tensor-copy
-fallbacks. The tensor table reports client-side elapsed time, so one-way tensor
-uploads include local send time but not remote handler completion. Fallbacks are
-copies that cannot use the same-server `COPY_TENSOR` RPC path and must fall back
-through the main host. These tables are useful for separating raw transport cost
-from placement effects such as a final output tensor being read back from a slow
-endpoint or many layer-boundary copies being routed through the coordinator.
+fallbacks. The tensor table reports total, average, p50, p95, and max client-side
+elapsed time, so one-way tensor uploads include local send time but not remote
+handler completion. Fallbacks are copies that cannot use the same-server
+`COPY_TENSOR` RPC path and must fall back through the main host. These tables are
+useful for separating raw transport cost from placement effects such as a final
+output tensor being read back from a slow endpoint or many layer-boundary copies
+being routed through the coordinator.
 
 The client trace also prints `sync waits after one-way commands` when a
 synchronous command such as `GET_TENSOR` or `GET_ALLOC_SIZE` waits after earlier
@@ -529,6 +530,11 @@ types, the same wait can appear on more than one row. Failed response waits are
 reported separately as `fail_syncs` and `fail_wait_ms`, so a closed socket or
 server crash does not look like successful queue-drain evidence. Rows remain
 grouped by endpoint for readability.
+
+Latency percentiles use bounded per-row sampling to avoid unbounded trace memory
+growth during long benchmarks. Set `GGML_RPC_TRACE_LATENCY_SAMPLE_LIMIT=N` to
+change the default cap of 8192 samples per row, or set it to `0` to keep only
+totals and maxima.
 
 Setting `GGML_RPC_TRACE=1` on `rpc-server` prints per-connection server command
 counts and handler times to that server's stderr. One-way commands such as

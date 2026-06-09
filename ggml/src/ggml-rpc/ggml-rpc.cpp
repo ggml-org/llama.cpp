@@ -484,6 +484,12 @@ static constexpr size_t RPC_WIRE_HEADER_SIZE = RPC_WIRE_CMD_SIZE + RPC_WIRE_SIZE
 static constexpr size_t RPC_COALESCE_MAX     = 4096;
 static constexpr size_t RPC_ALLOC_SIZE_CACHE_MAX = 4096;
 
+struct rpc_trace_latency_samples {
+    uint64_t seen = 0;
+    uint64_t max_ns = 0;
+    std::vector<uint64_t> samples_ns;
+};
+
 struct rpc_trace_cmd_stat {
     uint64_t calls        = 0;
     uint64_t input_bytes  = 0;
@@ -502,6 +508,7 @@ struct rpc_trace_tensor_stat {
     uint64_t calls = 0;
     uint64_t bytes = 0;
     uint64_t elapsed_ns = 0;
+    rpc_trace_latency_samples elapsed_samples;
 };
 
 struct rpc_trace_pending_one_way_stat {
@@ -516,6 +523,7 @@ struct rpc_trace_pending_drain_stat {
     uint64_t pending_bytes = 0;
     uint64_t wait_ns = 0;
     uint64_t failed_wait_ns = 0;
+    rpc_trace_latency_samples wait_samples;
 };
 
 struct rpc_compression_probe_stat {
@@ -591,6 +599,75 @@ static uint64_t rpc_trace_now_ns() {
 static rpc_trace_state & rpc_trace_get_state() {
     static rpc_trace_state * state = new rpc_trace_state();
     return *state;
+}
+
+static size_t rpc_trace_latency_sample_limit() {
+    static const size_t limit = []() {
+        const char * env = std::getenv("GGML_RPC_TRACE_LATENCY_SAMPLE_LIMIT");
+        if (env == nullptr || env[0] == '\0') {
+            return (size_t) 8192;
+        }
+
+        char * end = nullptr;
+        errno = 0;
+        const unsigned long long parsed = std::strtoull(env, &end, 10);
+        if (errno != 0 || end == env || *end != '\0') {
+            GGML_LOG_WARN("Ignoring invalid GGML_RPC_TRACE_LATENCY_SAMPLE_LIMIT='%s'\n", env);
+            return (size_t) 8192;
+        }
+
+        return (size_t) parsed;
+    }();
+
+    return limit;
+}
+
+static uint64_t rpc_trace_sample_hash(uint64_t value) {
+    value += 0x9e3779b97f4a7c15ULL;
+    value = (value ^ (value >> 30))*0xbf58476d1ce4e5b9ULL;
+    value = (value ^ (value >> 27))*0x94d049bb133111ebULL;
+    return value ^ (value >> 31);
+}
+
+static void rpc_trace_record_latency_sample(rpc_trace_latency_samples & samples, uint64_t elapsed_ns) {
+    samples.seen++;
+    samples.max_ns = std::max(samples.max_ns, elapsed_ns);
+
+    const size_t limit = rpc_trace_latency_sample_limit();
+    if (limit == 0) {
+        return;
+    }
+
+    if (samples.samples_ns.size() < limit) {
+        samples.samples_ns.push_back(elapsed_ns);
+        return;
+    }
+
+    const uint64_t slot = rpc_trace_sample_hash(samples.seen)%samples.seen;
+    if (slot < limit) {
+        samples.samples_ns[(size_t) slot] = elapsed_ns;
+    }
+}
+
+static double rpc_trace_ns_to_ms(uint64_t ns) {
+    return (double) ns/1000000.0;
+}
+
+static double rpc_trace_percentile_sorted_ms(const std::vector<uint64_t> & sorted_ns, double percentile) {
+    if (sorted_ns.empty()) {
+        return 0.0;
+    }
+    if (sorted_ns.size() == 1) {
+        return rpc_trace_ns_to_ms(sorted_ns[0]);
+    }
+
+    const double position = percentile*(double) (sorted_ns.size() - 1);
+    const size_t lower = (size_t) std::floor(position);
+    const size_t upper = (size_t) std::ceil(position);
+    const double fraction = position - (double) lower;
+    const double lower_ms = rpc_trace_ns_to_ms(sorted_ns[lower]);
+    const double upper_ms = rpc_trace_ns_to_ms(sorted_ns[upper]);
+    return lower_ms + (upper_ms - lower_ms)*fraction;
 }
 
 static void rpc_trace_add_cmd_stat(
@@ -710,6 +787,7 @@ static void rpc_trace_record_pending_one_way_drain(
         if (response_ok) {
             drain.sync_calls++;
             drain.wait_ns += wait_ns;
+            rpc_trace_record_latency_sample(drain.wait_samples, wait_ns);
         } else {
             drain.failed_sync_calls++;
             drain.failed_wait_ns += wait_ns;
@@ -776,6 +854,7 @@ static void rpc_trace_record_tensor_op(
     stat.calls++;
     stat.bytes += bytes;
     stat.elapsed_ns += elapsed_ns;
+    rpc_trace_record_latency_sample(stat.elapsed_samples, elapsed_ns);
 }
 
 static void rpc_compression_probe_scan_bytes(
@@ -1149,33 +1228,43 @@ static void rpc_trace_print_endpoint_cmd_table(
 
 static void rpc_trace_print_tensor_ops(
         FILE * stream, const std::unordered_map<std::string, rpc_trace_tensor_stat> & stats) {
-    std::vector<std::pair<std::string, rpc_trace_tensor_stat>> rows;
+    std::vector<const std::unordered_map<std::string, rpc_trace_tensor_stat>::value_type *> rows;
     rows.reserve(stats.size());
     for (const auto & entry : stats) {
         if (entry.second.calls != 0) {
-            rows.push_back(entry);
+            rows.push_back(&entry);
         }
     }
     std::sort(rows.begin(), rows.end(), [](const auto & lhs, const auto & rhs) {
-        if (lhs.second.elapsed_ns != rhs.second.elapsed_ns) {
-            return lhs.second.elapsed_ns > rhs.second.elapsed_ns;
+        if (lhs->second.elapsed_ns != rhs->second.elapsed_ns) {
+            return lhs->second.elapsed_ns > rhs->second.elapsed_ns;
         }
-        return lhs.second.bytes > rhs.second.bytes;
+        return lhs->second.bytes > rhs->second.bytes;
     });
 
     fprintf(stream, "ggml-rpc trace tensor operations (top by elapsed):\n");
-    fprintf(stream, "  %-16s %-24s %-42s %12s %14s %12s\n",
-            "operation", "endpoint", "tensor", "calls", "bytes", "elapsed_ms");
+    fprintf(stream, "  %-16s %-24s %-42s %12s %12s %14s %12s %12s %12s %12s %12s\n",
+            "operation", "endpoint", "tensor", "calls", "samples", "bytes", "elapsed_ms",
+            "avg_ms", "p50_ms", "p95_ms", "max_ms");
     const size_t limit = std::min<size_t>(rows.size(), 24);
     for (size_t i = 0; i < limit; ++i) {
         std::string op;
         std::string endpoint;
         std::string tensor;
-        rpc_trace_split_key3(rows[i].first, op, endpoint, tensor);
-        const auto & stat = rows[i].second;
-        const double wait_ms = (double) stat.elapsed_ns / 1000000.0;
-        fprintf(stream, "  %-16s %-24s %-42s %12" PRIu64 " %14" PRIu64 " %12.3f\n",
-                op.c_str(), endpoint.c_str(), tensor.c_str(), stat.calls, stat.bytes, wait_ms);
+        rpc_trace_split_key3(rows[i]->first, op, endpoint, tensor);
+        const auto & stat = rows[i]->second;
+        const double elapsed_ms = rpc_trace_ns_to_ms(stat.elapsed_ns);
+        const double avg_ms = stat.calls == 0 ? 0.0 : elapsed_ms/(double) stat.calls;
+        std::vector<uint64_t> sorted_samples = stat.elapsed_samples.samples_ns;
+        std::sort(sorted_samples.begin(), sorted_samples.end());
+        const double p50_ms = rpc_trace_percentile_sorted_ms(sorted_samples, 0.50);
+        const double p95_ms = rpc_trace_percentile_sorted_ms(sorted_samples, 0.95);
+        const double max_ms = rpc_trace_ns_to_ms(stat.elapsed_samples.max_ns);
+        fprintf(stream, "  %-16s %-24s %-42s %12" PRIu64 " %12zu %14" PRIu64
+                        " %12.3f %12.3f %12.3f %12.3f %12.3f\n",
+                op.c_str(), endpoint.c_str(), tensor.c_str(), stat.calls,
+                stat.elapsed_samples.samples_ns.size(), stat.bytes,
+                elapsed_ms, avg_ms, p50_ms, p95_ms, max_ms);
     }
 }
 
@@ -1322,38 +1411,48 @@ static bool rpc_trace_has_pending_drain_stats(const std::unordered_map<std::stri
 
 static void rpc_trace_print_pending_one_way_drains(
         FILE * stream, const std::unordered_map<std::string, rpc_trace_pending_drain_stat> & stats) {
-    std::vector<std::pair<std::string, rpc_trace_pending_drain_stat>> rows;
+    std::vector<const std::unordered_map<std::string, rpc_trace_pending_drain_stat>::value_type *> rows;
     rows.reserve(stats.size());
     for (const auto & entry : stats) {
         if (entry.second.sync_calls != 0 || entry.second.failed_sync_calls != 0) {
-            rows.push_back(entry);
+            rows.push_back(&entry);
         }
     }
     std::sort(rows.begin(), rows.end(), [](const auto & lhs, const auto & rhs) {
-        const uint64_t lhs_wait = lhs.second.wait_ns + lhs.second.failed_wait_ns;
-        const uint64_t rhs_wait = rhs.second.wait_ns + rhs.second.failed_wait_ns;
+        const uint64_t lhs_wait = lhs->second.wait_ns + lhs->second.failed_wait_ns;
+        const uint64_t rhs_wait = rhs->second.wait_ns + rhs->second.failed_wait_ns;
         if (lhs_wait != rhs_wait) {
             return lhs_wait > rhs_wait;
         }
-        return lhs.second.pending_bytes > rhs.second.pending_bytes;
+        return lhs->second.pending_bytes > rhs->second.pending_bytes;
     });
 
     fprintf(stream, "ggml-rpc trace sync waits after one-way commands:\n");
-    fprintf(stream, "  %-24s %-18s %-18s %12s %12s %14s %14s %12s %12s\n",
-            "endpoint", "response_cmd", "pending_cmd", "ok_syncs", "fail_syncs",
-            "pending_calls", "pending_bytes", "wait_ms", "fail_wait_ms");
+    fprintf(stream, "  %-24s %-18s %-18s %12s %12s %12s %14s %14s %12s %12s %12s %12s %12s %12s\n",
+            "endpoint", "response_cmd", "pending_cmd", "ok_syncs", "samples", "fail_syncs",
+            "pending_calls", "pending_bytes", "wait_ms", "avg_wait_ms", "p50_wait_ms",
+            "p95_wait_ms", "max_wait_ms", "fail_wait_ms");
     for (const auto & row : rows) {
         std::string endpoint;
         std::string response_cmd;
         std::string pending_cmd;
-        rpc_trace_split_key3(row.first, endpoint, response_cmd, pending_cmd);
-        const auto & stat = row.second;
-        const double wait_ms = (double) stat.wait_ns / 1000000.0;
-        const double failed_wait_ms = (double) stat.failed_wait_ns / 1000000.0;
-        fprintf(stream, "  %-24s %-18s %-18s %12" PRIu64 " %12" PRIu64
-                        " %14" PRIu64 " %14" PRIu64 " %12.3f %12.3f\n",
-                endpoint.c_str(), response_cmd.c_str(), pending_cmd.c_str(), stat.sync_calls,
-                stat.failed_sync_calls, stat.pending_calls, stat.pending_bytes, wait_ms, failed_wait_ms);
+        rpc_trace_split_key3(row->first, endpoint, response_cmd, pending_cmd);
+        const auto & stat = row->second;
+        const double wait_ms = rpc_trace_ns_to_ms(stat.wait_ns);
+        const double avg_wait_ms = stat.sync_calls == 0 ? 0.0 : wait_ms/(double) stat.sync_calls;
+        std::vector<uint64_t> sorted_samples = stat.wait_samples.samples_ns;
+        std::sort(sorted_samples.begin(), sorted_samples.end());
+        const double p50_wait_ms = rpc_trace_percentile_sorted_ms(sorted_samples, 0.50);
+        const double p95_wait_ms = rpc_trace_percentile_sorted_ms(sorted_samples, 0.95);
+        const double max_wait_ms = rpc_trace_ns_to_ms(stat.wait_samples.max_ns);
+        const double failed_wait_ms = rpc_trace_ns_to_ms(stat.failed_wait_ns);
+        fprintf(stream, "  %-24s %-18s %-18s %12" PRIu64 " %12zu"
+                        " %12" PRIu64 " %14" PRIu64 " %14" PRIu64
+                        " %12.3f %12.3f %12.3f %12.3f %12.3f %12.3f\n",
+                endpoint.c_str(), response_cmd.c_str(), pending_cmd.c_str(),
+                stat.sync_calls, stat.wait_samples.samples_ns.size(), stat.failed_sync_calls,
+                stat.pending_calls, stat.pending_bytes,
+                wait_ms, avg_wait_ms, p50_wait_ms, p95_wait_ms, max_wait_ms, failed_wait_ms);
     }
 }
 
