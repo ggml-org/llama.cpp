@@ -807,7 +807,10 @@ common_peg_parser common_chat_peg_builder::build_json_tools_flat_keys(
                 return idx_a < idx_b;
             });
 
-        auto ordered_body = tool_open(literal("{")) + space();
+        // accept an optional leading "type": "function" field
+        auto type_field = optional(literal("\"type\"") + space() + literal(":") + space() +
+                                   literal("\"function\"") + space() + literal(",") + space());
+        auto ordered_body = tool_open(literal("{")) + space() + type_field;
         for (size_t i = 0; i < parser_pairs.size(); i++) {
             ordered_body = ordered_body + parser_pairs[i].first;
             if (i < parser_pairs.size() - 1) {
