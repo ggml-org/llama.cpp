@@ -106,6 +106,7 @@ __global__ void __launch_bounds__(splitD, 1)
             regs0[n] = state;
         }
         y_block[i * stride_y + threadIdx.x] = sumf;
+        __syncthreads();
     }
 
 #ifdef USE_CUB
