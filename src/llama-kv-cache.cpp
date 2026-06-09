@@ -149,7 +149,10 @@ llama_kv_cache::llama_kv_cache(
         }
     }
 
-    const uint32_t n_layer    = hparams.n_layer();
+    // #24060/MTP fix: iterate ALL layers (incl. nextn) so an all-nextn draft
+    // (gemma4-assistant: n_layer()==0) registers its KV layers; has_kv() still
+    // gates per-layer. Upstream loops the full hparams.n_layer member here.
+    const uint32_t n_layer    = hparams.n_layer_all;
     const uint32_t n_layer_kv = hparams.n_layer_kv();
 
     // define a comparator for the buft -> ctx map to ensure that the order is well-defined:
