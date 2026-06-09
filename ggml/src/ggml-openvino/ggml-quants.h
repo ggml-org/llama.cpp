@@ -19,6 +19,12 @@ void extract_q4_1_data(const ggml_tensor * tensor,
                        ov::Tensor & zp_arr,
                        bool use_bias = false);
 
+void extract_q5_1_data(const ggml_tensor * tensor,
+                       ov::Tensor & weights_arr,
+                       ov::Tensor & scales_arr,
+                       ov::Tensor & zp_arr,
+                       bool use_bias = false);
+
 void extract_q8_0_data(const ggml_tensor * tensor,
                        ov::Tensor & weights_arr,
                        ov::Tensor & scales_arr,
