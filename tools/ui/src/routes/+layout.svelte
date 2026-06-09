@@ -34,6 +34,8 @@
 	import { conversations } from '$lib/stores/conversations.svelte';
 	import { isMobile } from '$lib/stores/viewport.svelte';
 	import { theme } from '$lib/stores/theme.svelte';
+	import { versionStore } from '$lib/stores/version.svelte';
+	import { SETTINGS_KEYS } from '$lib/constants';
 
 	let { children } = $props();
 	let alwaysShowSidebarOnDesktop = $derived(config().alwaysShowSidebarOnDesktop);
@@ -55,6 +57,7 @@
 	let titleUpdateNewTitle = $state('');
 	let titleUpdateResolve: ((value: boolean) => void) | null = null;
 	const panelNav = useSettingsNavigation();
+	let showBuildVersion = $derived(config()[SETTINGS_KEYS.SHOW_BUILD_VERSION] as boolean);
 
 	function updateFavicon() {
 		const dark = theme.isSystemDark;
@@ -307,8 +310,11 @@
 	<PwaMetaTags />
 </svelte:head>
 
-<!-- PWA update prompt -->
-<div class="fixed right-4 bottom-4 z-[9999]">
+<!-- PWA update prompt + version -->
+<div class="fixed right-4 bottom-4 z-[9999] flex flex-col items-end gap-1">
+	{#if showBuildVersion && versionStore.value}
+		<span class="text-[10px] tabular-nums text-muted-foreground">{versionStore.value}</span>
+	{/if}
 	<PwaRefreshAlert needRefresh={$needRefresh} {updateServiceWorker} />
 </div>
 
