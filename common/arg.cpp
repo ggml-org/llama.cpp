@@ -444,7 +444,7 @@ bool common_params_handle_models(common_params & params, llama_example curr_ex) 
     opts.offline         = params.offline;
     opts.skip_download   = params.skip_download;
     opts.download_mtp    = spec_type_draft_mtp;
-    opts.download_mmproj = !params.no_mmproj;
+    opts.download_mmproj = !params.no_mmproj && params.mmproj.path.empty() && params.mmproj.url.empty();
 
     // sub-models (draft, mmproj, vocoder) are explicitly specified by the user,
     // so we should not auto-discover mtp/mmproj siblings for them
@@ -1615,7 +1615,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         string_format("samplers that will be used for generation in the order, separated by \';\'\n(default: %s)", sampler_type_names.c_str()),
         [](common_params & params, const std::string & value) {
             const auto sampler_names = string_split<std::string>(value, ';');
-            params.sampling.samplers = common_sampler_types_from_names(sampler_names, true);
+            params.sampling.samplers = common_sampler_types_from_names(sampler_names);
             params.sampling.user_sampling_config |= common_params_sampling_config::COMMON_PARAMS_SAMPLING_CONFIG_SAMPLERS;
         }
     ).set_sampling());
@@ -2221,8 +2221,8 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples(mmproj_examples).set_env("LLAMA_ARG_MMPROJ_OFFLOAD"));
     add_opt(common_arg(
-        {"--image", "--audio"}, "FILE",
-        "path to an image or audio file. use with multimodal models, use comma-separated values for multiple files\n",
+        {"--image", "--audio", "--video"}, "FILE",
+        "path to an image, audio, or video file. use with multimodal models, use comma-separated values for multiple files\n",
         [](common_params & params, const std::string & value) {
             for (const auto & item : parse_csv_row(value)) {
                 params.image.emplace_back(item);

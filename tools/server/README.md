@@ -1252,6 +1252,10 @@ The `response_format` parameter supports both plain JSON output (e.g. `{"type": 
 
 `parallel_tool_calls` : Whether to enable parallel/multiple tool calls (only supported on some models, verification is based on jinja template).
 
+For multimodal input:
+- Content type `image_url` and `input_audio` are the same as OAI schema
+- Content type `input_video` is an extension from OAI schema. For now, it only accepts base64 input
+
 *Examples:*
 
 You can use either Python `openai` library with appropriate checkpoints:
@@ -1446,6 +1450,36 @@ See [OpenAI Embeddings API documentation](https://platform.openai.com/docs/api-r
           "encoding_format": "float"
   }'
   ```
+
+### POST `/v1/responses/input_tokens`: Token Counting
+
+Similar to [Response input token counts API](https://developers.openai.com/api/reference/python/resources/responses/subresources/input_tokens/methods/count).
+
+Example response:
+
+```json
+{
+  "object": "response.input_tokens",
+  "input_tokens": 11
+}
+```
+
+### POST `/v1/chat/completions/input_tokens`: Token Counting
+
+Similar to [Response input token counts API](https://developers.openai.com/api/reference/python/resources/responses/subresources/input_tokens/methods/count), but accepts a chat completion body as input.
+
+Note: This is not an official OAI endpoint, but is added for completeness and convenience.
+
+Example response:
+
+```json
+{
+  "object": "response.input_tokens",
+  "input_tokens": 11
+}
+```
+
+## Anthropic-compatible API Endpoints
 
 ### POST `/v1/messages`: Anthropic-compatible Messages API
 

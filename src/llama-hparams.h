@@ -185,6 +185,9 @@ struct llama_hparams {
     // for Classifiers
     uint32_t n_cls_out = 1;
 
+    // input embedding dimension (0 = use n_embd)
+    uint32_t n_embd_inp_impl = 0;
+
     // output embedding dimension (0 = use n_embd)
     uint32_t n_embd_out_impl = 0;
 
@@ -219,7 +222,18 @@ struct llama_hparams {
     uint32_t indexer_top_k     = 0;
 
     // qwen3vl deepstack
+    // When parsed from GGUF, this implies the first N layers consume the first
+    // N deepstack embeddings. Use deepstack_mapping_arr if you need a more
+    // complex mapping. If using deepstack_mapping_arr, also make sure to set
+    // n_deepstack_layers to the number of unique deepstack layers so that
+    // n_embd_imp is accurate (see granite.cpp).
+    // TODO: can be expressed via the `new n_embd_inp_impl` and remove this param
     uint32_t n_deepstack_layers = 0;
+
+    // deepstack layer array (Granite4 Vision)
+    // -1  => no deepstack
+    // >=0 => input embedding index for deepstack injection
+    std::array<int32_t, LLAMA_MAX_LAYERS> deepstack_mapping_arr;
 
     // gemma4 per-layer embedding
     uint32_t n_embd_per_layer = 0;
