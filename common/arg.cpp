@@ -353,7 +353,6 @@ static handle_model_result common_params_handle_model(struct common_params_model
             model.path = "";
         }
         common_download_opts hf_opts = opts;
-        hf_opts.download_mmproj = true; // also look for mmproj when downloading hf model
         auto download_result = common_download_model(model, hf_opts);
 
         if (download_result.model_path.empty()) {
@@ -441,10 +440,17 @@ bool common_params_handle_models(common_params & params, llama_example curr_ex) 
                                          COMMON_SPECULATIVE_TYPE_DRAFT_MTP) != params.speculative.types.end();
 
     common_download_opts opts;
-    opts.bearer_token  = params.hf_token;
-    opts.offline       = params.offline;
-    opts.skip_download = params.skip_download;
-    opts.download_mtp  = spec_type_draft_mtp;
+    opts.bearer_token    = params.hf_token;
+    opts.offline         = params.offline;
+    opts.skip_download   = params.skip_download;
+    opts.download_mtp    = spec_type_draft_mtp;
+    opts.download_mmproj = !params.no_mmproj && params.mmproj.path.empty() && params.mmproj.url.empty();
+
+    // sub-models (draft, mmproj, vocoder) are explicitly specified by the user,
+    // so we should not auto-discover mtp/mmproj siblings for them
+    common_download_opts sub_opts = opts;
+    sub_opts.download_mtp    = false;
+    sub_opts.download_mmproj = false;
 
     try {
         auto res = common_params_handle_model(params.model, opts);
@@ -457,7 +463,7 @@ bool common_params_handle_models(common_params & params, llama_example curr_ex) 
         // only download mmproj if the current example is using it
         for (const auto & ex : mmproj_examples) {
             if (curr_ex == ex) {
-                common_params_handle_model(params.mmproj, opts);
+                common_params_handle_model(params.mmproj, sub_opts);
                 break;
             }
         }
@@ -470,8 +476,8 @@ bool common_params_handle_models(common_params & params, llama_example curr_ex) 
             params.speculative.draft.mparams.url.empty()) {
             params.speculative.draft.mparams.path = res.mtp.path;
         }
-        common_params_handle_model(params.speculative.draft.mparams, opts);
-        common_params_handle_model(params.vocoder.model,             opts);
+        common_params_handle_model(params.speculative.draft.mparams, sub_opts);
+        common_params_handle_model(params.vocoder.model,             sub_opts);
         return true;
     } catch (const common_skip_download_exception &) {
         return false;
@@ -1609,7 +1615,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         string_format("samplers that will be used for generation in the order, separated by \';\'\n(default: %s)", sampler_type_names.c_str()),
         [](common_params & params, const std::string & value) {
             const auto sampler_names = string_split<std::string>(value, ';');
-            params.sampling.samplers = common_sampler_types_from_names(sampler_names, true);
+            params.sampling.samplers = common_sampler_types_from_names(sampler_names);
             params.sampling.user_sampling_config |= common_params_sampling_config::COMMON_PARAMS_SAMPLING_CONFIG_SAMPLERS;
         }
     ).set_sampling());
@@ -2215,8 +2221,8 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples(mmproj_examples).set_env("LLAMA_ARG_MMPROJ_OFFLOAD"));
     add_opt(common_arg(
-        {"--image", "--audio"}, "FILE",
-        "path to an image or audio file. use with multimodal models, use comma-separated values for multiple files\n",
+        {"--image", "--audio", "--video"}, "FILE",
+        "path to an image, audio, or video file. use with multimodal models, use comma-separated values for multiple files\n",
         [](common_params & params, const std::string & value) {
             for (const auto & item : parse_csv_row(value)) {
                 params.image.emplace_back(item);
@@ -3027,6 +3033,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.timeout_write = value;
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_TIMEOUT"));
+    add_opt(common_arg(
+        {"--sse-ping-interval"}, "N",
+        string_format("server SSE ping interval in seconds (-1 = disabled, default: %d)", params.sse_ping_interval),
+        [](common_params & params, int value) {
+            params.sse_ping_interval = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_SSE_PING_INTERVAL"));
     add_opt(common_arg(
         {"--threads-http"}, "N",
         string_format("number of threads used to process HTTP requests (default: %d)", params.n_threads_http),
@@ -4077,7 +4090,6 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.sampling.top_k = 0;
             params.sampling.min_p = 0.01f;
             params.use_jinja = true;
-            //params.default_template_kwargs["reasoning_effort"] = "\"high\"";
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
 
@@ -4096,7 +4108,6 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.sampling.top_k = 0;
             params.sampling.min_p = 0.01f;
             params.use_jinja = true;
-            //params.default_template_kwargs["reasoning_effort"] = "\"high\"";
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
 

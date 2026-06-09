@@ -2,12 +2,12 @@
 
 void llama_model_gemma4::load_arch_hparams(llama_model_loader & ml) {
     hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
-    ml.get_key_or_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, hparams.swa_layers, hparams.n_layer);
+    ml.get_key_or_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, hparams.is_swa_impl, hparams.n_layer());
 
     uint32_t n_kv_shared_layers = 0;
     ml.get_key(LLM_KV_ATTENTION_SHARED_KV_LAYERS, n_kv_shared_layers, false);
 
-    hparams.n_layer_kv_from_start = hparams.n_layer - (int32_t)n_kv_shared_layers;
+    hparams.n_layer_kv_from_start = hparams.n_layer_all - (int32_t)n_kv_shared_layers;
     hparams.f_attention_scale     = 1.0f; // Gemma4 uses self.scaling = 1.0 (no pre-attn scaling)
 
     ml.get_key(LLM_KV_ROPE_FREQ_BASE_SWA,          hparams.rope_freq_base_train_swa, false);
@@ -19,7 +19,7 @@ void llama_model_gemma4::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_ATTENTION_VALUE_LENGTH_SWA,  hparams.n_embd_head_v_swa);
     ml.get_key(LLM_KV_FINAL_LOGIT_SOFTCAPPING,     hparams.f_final_logit_softcapping, false);
 
-    switch (hparams.n_layer) {
+    switch (hparams.n_layer()) {
         case 30: type = LLM_TYPE_26B_A4B; break;
         case 35: type = LLM_TYPE_E2B; break;
         case 42: type = LLM_TYPE_E4B; break;
@@ -142,6 +142,33 @@ static ggml_tensor * ggml_view_2d_slice(ggml_context * ctx0, ggml_tensor * x, in
                         idx * x->ne[0] * x->ne[1] * ggml_element_size(x));
 }
 
+// TODO @ngxson : maybe improve this in the future
+class llm_graph_input_logits_bias : public llm_graph_input_i {
+public:
+    llm_graph_input_logits_bias(const llama_vocab & vocab) {
+        arr.resize(vocab.n_tokens(), 0.0f);
+        for (llama_token id : vocab.get_suppress_tokens()) {
+            if (0 <= id && id < (int32_t)vocab.n_tokens()) {
+                arr[id] = -INFINITY;
+            }
+        }
+    }
+    virtual ~llm_graph_input_logits_bias() = default;
+
+    void set_input(const llama_ubatch * /*ubatch*/) override {
+        const int64_t n_vocab = arr.size();
+        ggml_backend_tensor_set(logits_bias, arr.data(), 0, n_vocab*ggml_element_size(logits_bias));
+    }
+
+    bool can_reuse(const llm_graph_params & /*params*/) override {
+        return true;
+    }
+
+    ggml_tensor * logits_bias = nullptr; // F32 [n_vocab]
+
+    std::vector<float> arr;
+};
+
 llama_model_gemma4::graph::graph(const llama_model & model, const llm_graph_params & params) :
         llm_graph_context(params),
         model(model),
@@ -245,7 +272,8 @@ llama_model_gemma4::graph::graph(const llama_model & model, const llm_graph_para
         }
 
         // TODO @ngxson : strip unused token right after the last KV layer to speed up prompt processing
-        if (il == n_layer - 1 && inp_out_ids) {
+        // keep all rows when extracting unmasked nextn embeddings (MTP target needs the hidden state for every token)
+        if (il == n_layer - 1 && inp_out_ids && cparams.embeddings_nextn_masked) {
             cur  = ggml_get_rows(ctx0,  cur, inp_out_ids);
             inpL = ggml_get_rows(ctx0, inpL, inp_out_ids);
         }
@@ -345,7 +373,7 @@ llama_model_gemma4::graph::graph(const llama_model & model, const llm_graph_para
             ggml_tensor * inp_this_layer = ggml_view_2d_slice(ctx0, inp_per_layer, il); // [n_embd_per_layer, n_tokens]
 
             // TODO @ngxson : improve this
-            if (il == n_layer - 1 && inp_out_ids) {
+            if (il == n_layer - 1 && inp_out_ids && cparams.embeddings_nextn_masked) {
                 inp_this_layer = ggml_get_rows(ctx0, inp_this_layer, inp_out_ids);
             }
 
@@ -376,6 +404,17 @@ llama_model_gemma4::graph::graph(const llama_model & model, const llm_graph_para
             model.output_norm, nullptr,
             LLM_NORM_RMS, -1);
 
+    // Expose the post-output-norm hidden state (the LM-head input feature) so that
+    // MTP draft contexts can read it via llama_get_embeddings_nextn_ith() as the
+    // recurrent h input. This matches the reference (transformers/vLLM/SGLang),
+    // which feeds the drafter the target's post-final-norm hidden state.
+    cb(cur, "h_nextn", -1);
+    res->t_h_nextn = cur;
+
+    if (!cparams.embeddings_nextn_masked && inp_out_ids) {
+        cur = ggml_get_rows(ctx0, cur, inp_out_ids);
+    }
+
     cb(cur, "result_norm", -1);
     res->t_embd = cur;
 
@@ -386,6 +425,16 @@ llama_model_gemma4::graph::graph(const llama_model & model, const llm_graph_para
         cur = ggml_scale(ctx0, cur, 1.0f / hparams.f_final_logit_softcapping);
         cur = ggml_tanh(ctx0, cur);
         cur = ggml_scale(ctx0, cur, hparams.f_final_logit_softcapping);
+    }
+
+    // apply logits bias if needed (e.g. for gemma4_unified patch)
+    // this is to mirror the suppress_tokens patch on transformers, to avoid model from outputing <image|> and <audio|> tokens (which is a known issue related to the checkpoint)
+    // TODO: maybe handle this inside the sampling system in the future
+    if (!model.vocab.get_suppress_tokens().empty()) {
+        auto inp_bias = std::make_unique<llm_graph_input_logits_bias>(model.vocab);
+        inp_bias->logits_bias = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, inp_bias->arr.size());
+        cur = ggml_add(ctx0, cur, inp_bias->logits_bias);
+        res->add_input(std::move(inp_bias));
     }
 
     cb(cur, "result_output", -1);

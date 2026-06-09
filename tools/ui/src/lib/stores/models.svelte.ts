@@ -4,6 +4,10 @@ import { ServerModelStatus, ModelModality } from '$lib/enums';
 import { ModelsService } from '$lib/services/models.service';
 import { PropsService } from '$lib/services/props.service';
 import { serverStore, isRouterMode } from '$lib/stores/server.svelte';
+import {
+	detectThinkingSupport,
+	detectThinkingSupportWithReason
+} from '$lib/utils/chat-template-thinking-detector';
 import { TTLCache } from '$lib/utils';
 import {
 	MODEL_PROPS_CACHE_TTL_MS,
@@ -215,6 +219,67 @@ class ModelsStore {
 
 		return usage !== undefined && usage.size > 0;
 	}
+	//
+	// Thinking Support Detection
+	//
+
+	/**
+	 * Whether the selected model's chat template supports thinking/reasoning.
+	 * Uses heuristic detection on the model's chat_template from /props.
+	 *
+	 * - MODEL mode: uses serverStore.props.chat_template (single loaded model)
+	 * - ROUTER mode: fetches /props?model=<id> for the selected model (cached)
+	 *
+	 * Triggers an async fetch of model props if not yet cached in ROUTER mode.
+	 */
+	get supportsThinking(): boolean {
+		const modelId = this.selectedModelName;
+		if (!modelId) {
+			if (!isRouterMode()) {
+				return detectThinkingSupport(serverStore.props?.chat_template ?? '');
+			}
+			return false;
+		}
+
+		if (isRouterMode() && !this.modelPropsCache.get(modelId)) {
+			this.fetchModelProps(modelId);
+		}
+		const props = this.getModelProps(modelId);
+		return detectThinkingSupport(props?.chat_template ?? '');
+	}
+
+	/**
+	 * Check if a specific model supports thinking.
+	 * Fetches model props if not cached (in router mode).
+	 */
+	checkModelSupportsThinking(modelId: string): boolean {
+		if (!modelId) return false;
+
+		if (isRouterMode() && !this.modelPropsCache.get(modelId)) {
+			this.fetchModelProps(modelId);
+		}
+
+		const props = this.getModelProps(modelId);
+		return detectThinkingSupport(props?.chat_template ?? '');
+	}
+
+	/**
+	 * Detailed thinking support detection result with reason for debugging/UI.
+	 */
+	get thinkingSupportDetails(): { supported: boolean; reason: string } {
+		const modelId = this.selectedModelName;
+		if (!modelId) {
+			if (!isRouterMode()) {
+				return detectThinkingSupportWithReason(serverStore.props?.chat_template ?? '');
+			}
+			return { supported: false, reason: 'No model selected' };
+		}
+		if (isRouterMode() && !this.modelPropsCache.get(modelId)) {
+			this.fetchModelProps(modelId);
+		}
+		const props = this.getModelProps(modelId);
+		return detectThinkingSupportWithReason(props?.chat_template ?? '');
+	}
 
 	/**
 	 *
@@ -362,6 +427,7 @@ class ModelsStore {
 		try {
 			const props = await PropsService.fetchForModel(modelId);
 			this.modelPropsCache.set(modelId, props);
+			this.propsCacheVersion++;
 			return props;
 		} catch (error) {
 			console.warn(`Failed to fetch props for model ${modelId}:`, error);
@@ -755,3 +821,7 @@ export const propsCacheVersion = () => modelsStore.propsCacheVersion;
 export const singleModelName = () => modelsStore.singleModelName;
 export const selectedModelContextSize = () => modelsStore.selectedModelContextSize;
 export const favoriteModelIds = () => modelsStore.favoriteModelIds;
+export const supportsThinking = () => modelsStore.supportsThinking;
+export const checkModelSupportsThinking = (modelId: string) =>
+	modelsStore.checkModelSupportsThinking(modelId);
+export const thinkingSupportDetails = () => modelsStore.thinkingSupportDetails;

@@ -82,8 +82,8 @@ class ServerStore {
 				this.props = props;
 				this.error = null;
 				this.detectRole(props);
-			} catch (error) {
-				this.error = this.getErrorMessage(error);
+			} catch (error: unknown) {
+				this.error = error instanceof Error ? error.message : String(error);
 				console.error('Error fetching server properties:', error);
 			} finally {
 				this.loading = false;
@@ -93,32 +93,6 @@ class ServerStore {
 
 		this.fetchPromise = fetchPromise;
 		await fetchPromise;
-	}
-
-	private getErrorMessage(error: unknown): string {
-		if (error instanceof Error) {
-			const message = error.message || '';
-
-			if (error.name === 'TypeError' && message.includes('fetch')) {
-				return 'Server is not running or unreachable';
-			} else if (message.includes('ECONNREFUSED')) {
-				return 'Connection refused - server may be offline';
-			} else if (message.includes('ENOTFOUND')) {
-				return 'Server not found - check server address';
-			} else if (message.includes('ETIMEDOUT')) {
-				return 'Request timed out';
-			} else if (message.includes('503')) {
-				return 'Server temporarily unavailable';
-			} else if (message.includes('500')) {
-				return 'Server error - check server logs';
-			} else if (message.includes('404')) {
-				return 'Server endpoint not found';
-			} else if (message.includes('403') || message.includes('401')) {
-				return 'Access denied';
-			}
-		}
-
-		return 'Failed to connect to server';
 	}
 
 	clear(): void {

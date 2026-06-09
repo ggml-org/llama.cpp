@@ -116,6 +116,7 @@ enum llm_type {
     LLM_TYPE_A13B,
     LLM_TYPE_7B_A1B,
     LLM_TYPE_8B_A1B, // lfm2moe
+    LLM_TYPE_12B_A2_5B,
     LLM_TYPE_16B_A1B,
     LLM_TYPE_21B_A3B, // Ernie MoE small
     LLM_TYPE_24B_A2B, // lfm2moe
@@ -144,6 +145,10 @@ enum llm_type {
 };
 
 std::string llama_rope_scaling_type_name(llama_rope_scaling_type rope_scaling_type);
+
+// Map a GGUF activation-name string to llm_ffn_op_type. Returns `fallback` if
+// the string is empty or not recognized.
+llm_ffn_op_type llm_ffn_op_type_from_string(const std::string & name, llm_ffn_op_type fallback);
 
 struct llama_layer_posnet {
     // resnet
@@ -543,6 +548,10 @@ struct llama_model {
     struct ggml_tensor * output_s    = nullptr;
     struct ggml_tensor * output_in_s = nullptr;
 
+    // NextN/MTP model-level projections
+    struct ggml_tensor * nextn_proj_pre  = nullptr;
+    struct ggml_tensor * nextn_proj_post = nullptr;
+
     // classifier
     struct ggml_tensor * cls       = nullptr;
     struct ggml_tensor * cls_b     = nullptr;
@@ -695,7 +704,9 @@ const char * llm_type_name(llm_type type);
 // convenience macro for loading local variables for load_tensors() in llama_model_base
 // note: cast to int64_t since we will use these for the tensor dimensions
 #define LLAMA_LOAD_LOCALS \
-    const int     n_layer        = hparams.n_layer;          GGML_UNUSED(n_layer); \
+    const int     n_layer        = hparams.n_layer();        GGML_UNUSED(n_layer); \
+    const int     n_layer_all    = hparams.n_layer_all;      GGML_UNUSED(n_layer_all); \
+    const int     n_layer_nextn  = hparams.n_layer_nextn;    GGML_UNUSED(n_layer_nextn); \
     const int64_t n_head         = hparams.n_head();         GGML_UNUSED(n_head); \
     const int64_t n_head_kv      = hparams.n_head_kv();      GGML_UNUSED(n_head_kv); \
     const int64_t n_embd         = hparams.n_embd;           GGML_UNUSED(n_embd); \
