@@ -8,13 +8,11 @@ using namespace cub;
 #endif // USE_CUB
 
 #include "ssm-scan.cuh"
-#include "mma.cuh"
-#include "cp-async.cuh"
 
 
 // Minimum number of tokens to use SSD (State Space Duality) matmul path instead of scan path.
 // For n_tok <= this threshold, the scan kernel is used (lower overhead for short sequences).
-#define SSM_SSD_MIN_TOKENS 64
+#define SSM_SSD_MIN_TOKENS 128
 
 // Maximum number of tokens the SSD prepare_dt kernel can handle in one launch.
 // Bounded by DT_BLOCK (256) * DT_MAX_ITEMS (32) = 8192 items per block. Sequences
@@ -413,7 +411,8 @@ __global__ void ssm_ssd_prepare_dt_kernel(
 // T_matmul controls precision for X_dt, B_weighted (float or half).
 // C_scaled is always float (pairs with float s_cur in step 3c).
 // Computation is always FP32; only the final store converts to T_matmul.
-// Grid: (ceil(max(C*head_dim, d_state*C) / BLOCK), n_head, n_seqs)
+// Also materializes the causal M matrix = exp(A*(cs_out - cs_in)) * CB (fused with prep to save a launch).
+// Grid: (ceil(max(C*head_dim, d_state*C, chunk_len^2) / BLOCK), n_head, n_seqs)
 template <int BLOCK_SIZE, typename T_matmul>
 __global__ void ssm_ssd_pre_matmul_kernel(
         const float * __restrict__ cs,         // {n_tok, n_head} cumulative dt sums
@@ -425,6 +424,8 @@ __global__ void ssm_ssd_pre_matmul_kernel(
         T_matmul * __restrict__ X_dt,          // {head_dim, C, n_head} x * dt, d-fastest
         T_matmul * __restrict__ B_weighted,    // {d_state, C, n_head} B * decay_from_end
         float * __restrict__ C_scaled,         // {d_state, C, n_head} C * decay_to_pos (always float)
+        const float * __restrict__ CB,         // {chunk_len, chunk_len, n_group, n_seqs}
+        half * __restrict__ M_out,             // {chunk_len, chunk_len, n_head, n_seqs}
         const int chunk_len, const int head_dim, const int n_head, const int n_group,
         const int d_state, const int A_stride,
         const int x_stride_tok, const int x_stride_seq,
@@ -457,9 +458,6 @@ __global__ void ssm_ssd_pre_matmul_kernel(
     }
 
     // Prepare B_weighted = B * decay_from_end for state update matmul.
-    // dt factor is already in X_dt (x * dt), so B_weighted must NOT include dt
-    // to avoid double-counting: s_cur = B_weighted @ X_dt^T = B*decay * x*dt = B*x*decay*dt
-    // Column-major {d_state, chunk_len} per head, group broadcast to head.
     const int n_bw = d_state * chunk_len;
     if (idx < n_bw) {
         const int n = idx % d_state;
@@ -474,7 +472,6 @@ __global__ void ssm_ssd_pre_matmul_kernel(
     }
 
     // Prepare C_scaled = C * decay_to_pos for state contribution matmul.
-    // Column-major {d_state, chunk_len} per head, group broadcast to head.
     const int n_cs = d_state * chunk_len;
     if (idx < n_cs) {
         const int n = idx % d_state;
@@ -486,6 +483,28 @@ __global__ void ssm_ssd_pre_matmul_kernel(
         const float C_val = C_src[s * C_stride_seq + (chunk_offset + t) * C_stride_tok + g * d_state + n];
 
         C_scaled[n + t * d_state + h * n_cs + s * n_cs * n_head] = C_val * decay_to_pos;
+    }
+
+    // Materialize M = exp(A*(cs_out - cs_in)) * CB with causal mask.
+    const int n_M = chunk_len * chunk_len;
+    if (idx < n_M) {
+        const int t_out = idx % chunk_len;
+        const int t_in  = idx / chunk_len;
+
+        half val;
+        if (t_in <= t_out) {
+            const float cs_out = cs[cs_seq_off + (chunk_offset + t_out) * n_head + h] - cs_base;
+            const float cs_in  = cs[cs_seq_off + (chunk_offset + t_in)  * n_head + h] - cs_base;
+            const float decay  = __expf(A_h * (cs_out - cs_in));
+            const float * CB_g = CB + (int64_t)s * chunk_len * chunk_len * n_group
+                                   + (int64_t)g * chunk_len * chunk_len;
+            const float cb_val = CB_g[t_out + t_in * chunk_len];
+            val = __float2half(decay * cb_val);
+        } else {
+            val = __float2half(0.0f);
+        }
+
+        M_out[(int64_t)s * n_M * n_head + (int64_t)h * n_M + t_in * chunk_len + t_out] = val;
     }
 }
 
@@ -519,236 +538,6 @@ __global__ void ssm_ssd_scale_state_kernel(
     s_cur[off] *= decay_total;
 }
 
-// ============================================================================
-// Fused Y kernel (MMA tensor-core): Y += X_dt @ M_online^T
-//
-// Computes M on-the-fly from CB + cs + A in shared memory, never writing M to
-// global memory. This eliminates ~32 MB DRAM traffic per chunk vs materializing M.
-// Uses m16n8k16 FP16->FP32 MMA instructions via mma.cuh.
-//
-// The operation computes:
-//   Y[d, t_out, h] += Sigma_{t_in<=t_out} X_dt[d, t_in, h]
-//                      * exp(A[h]*(cs[t_out]-cs[t_in])) * CB[t_out, t_in, g(h)]
-//
-// Key design:
-//   - M is computed on-the-fly per warp in shared memory (never touches DRAM)
-//   - X_dt tile loaded cooperatively into smem with d->t_in transpose
-//   - Both A and B tiles loaded via hardware ldmatrix from shared memory
-//   - C (output) accumulated in registers across all k-blocks
-//
-// Block: dim3(WARP_SIZE, N_WARPS, 1) — threadIdx.x is lane, threadIdx.y is warp
-// Grid:  dim3(ceil(head_dim/D_TILE), n_head, n_seqs)
-// ============================================================================
-
-template <int D_TILE, int K_TILE, int N_WARPS, int N_TOUT_PER_WARP>
-__global__ void ssm_ssd_fused_y_mma_kernel(
-        const half  * __restrict__ X_dt,       // {head_dim, chunk_len, n_head, n_seqs} d-fastest, FP16
-        const float * __restrict__ CB,         // {chunk_len, chunk_len, n_group, n_seqs} FP32
-        const float * __restrict__ cs,         // {n_tok, n_head, n_seqs} cumulative dt sums
-        const float * __restrict__ A,          // {1, n_head}
-        float       * __restrict__ dst,        // {d_inner, n_tok, n_seqs} accumulate onto step 3c result
-        const int head_dim, const int chunk_len, const int n_head, const int n_group,
-        const int d_inner, const int n_tok,
-        const int chunk_offset, const int A_stride,
-        const int64_t stride_X_head) {         // = chunk_len * head_dim
-
-    static_assert(D_TILE == 16, "MMA m16n8k16 requires D_TILE=16");
-    static_assert(K_TILE == 16, "K_TILE must be 16 for cp.async pipeline");
-    constexpr int T_OUT_TILE = 8;   // MMA N dimension (t_out per tile)
-
-    // Number of 16-byte cp.async copies per X tile: D_TILE=16 halfs = 32 bytes = 2 copies per t_in row
-    [[maybe_unused]] constexpr int COPIES_PER_ROW = D_TILE / 8;  // 16 halfs / 8 halfs per copy = 2
-    [[maybe_unused]] constexpr int COPIES_TOTAL   = K_TILE * COPIES_PER_ROW;  // 16 * 2 = 32
-
-    const int d_block = blockIdx.x;
-    const int h       = blockIdx.y;
-    const int s       = blockIdx.z;
-    const int g       = h / (n_head / n_group);
-    const int warp_id = threadIdx.y;
-
-    const float A_h = A[h * A_stride];
-    const int d_start = d_block * D_TILE;
-
-    // --- Shared memory layout (double-buffered X for cp.async pipeline) ---
-    // smem_X stored D-FASTEST (matching global layout) for direct cp.async copies.
-    // A tile loaded via load_ldmatrix_trans (hardware transpose during load).
-    // smem_cs padded to 16-byte alignment for cp.async destination requirements.
-    // [smem_cs: chunk_len_padded floats]
-    // [smem_X: 2 * K_TILE * D_TILE halfs]  <- ping-pong buffers, d-fastest
-    // [smem_M: N_WARPS * T_OUT_TILE * K_TILE halfs]  <- t_in-fastest (for B tile)
-    extern __shared__ char smem_raw[];
-    const int chunk_len_padded = (chunk_len + 3) & ~3;  // round up to 16-byte boundary
-    float * smem_cs   = (float *)smem_raw;
-    half  * smem_X_pp = (half *)(smem_cs + chunk_len_padded);  // double buffer base
-    half  * smem_M    = smem_X_pp + 2 * K_TILE * D_TILE;
-
-    // Load cs values for this chunk (cooperative, block-wide)
-    {
-        const int n_threads = WARP_SIZE * N_WARPS;
-        const int cs_seq_off = s * n_tok * n_head;
-        for (int i = threadIdx.y * WARP_SIZE + threadIdx.x; i < chunk_len; i += n_threads) {
-            smem_cs[i] = cs[cs_seq_off + (chunk_offset + i) * n_head + h];
-        }
-    }
-    __syncthreads();
-
-    // Global memory pointers
-    const half  * X_base = X_dt + (int64_t)s * stride_X_head * n_head
-                                + (int64_t)h * stride_X_head + d_start;
-    const float * CB_g   = CB + (int64_t)s * chunk_len * chunk_len * n_group
-                              + (int64_t)g * chunk_len * chunk_len;
-    float * dst_base      = dst + (int64_t)s * d_inner * n_tok + (int64_t)h * head_dim + d_start;
-
-    // C accumulators in registers
-    using tile_C = ggml_cuda_mma::tile<16, 8, float>;
-    tile_C C_acc[N_TOUT_PER_WARP];
-
-    const int tout_base = warp_id * N_TOUT_PER_WARP;
-    const int n_k_blocks = (chunk_len + K_TILE - 1) / K_TILE;
-
-    // Helper: issue cp.async copies for X_dt tile into smem buffer (d-fastest layout).
-    // Each copy is 16 bytes = 8 halfs. D_TILE=16 -> 2 copies per t_in row, 32 total.
-    // k_len_tile: valid rows in this tile (may be < K_TILE for the last k-block).
-    // Out-of-bounds rows are zeroed to prevent NaN propagation through MMA (0*NaN=NaN).
-    auto issue_cp_async_X = [&](half * smem_X_buf, const int t_in_start, const int k_len_tile) {
-#ifdef CP_ASYNC_AVAILABLE
-        const int tid = threadIdx.y * WARP_SIZE + threadIdx.x;
-        constexpr int n_threads = WARP_SIZE * N_WARPS;
-        // Zero-fill partial tiles to prevent 0*NaN in MMA (pool memory may contain NaN)
-        if (k_len_tile < K_TILE) {
-            for (int i = tid; i < D_TILE * K_TILE; i += n_threads) {
-                smem_X_buf[i] = __float2half(0.0f);
-            }
-            __syncthreads();
-        }
-        if (tid < COPIES_TOTAL) {
-            const int t      = tid / COPIES_PER_ROW;  // which t_in (0..K_TILE-1)
-            const int d_half = tid % COPIES_PER_ROW;  // which 8-half group (0 or 1)
-            if (t < k_len_tile) {
-                const half * src = X_base + (t_in_start + t) * head_dim + d_half * 8;
-                half * dst_ptr = smem_X_buf + t * D_TILE + d_half * 8;
-                const unsigned int dst_addr = ggml_cuda_cvta_generic_to_shared(dst_ptr);
-                cp_async_cg_16<0>(dst_addr, src);
-            }
-        }
-        asm volatile("cp.async.commit_group;");
-#else
-        // Fallback: synchronous load (for GPUs below Ampere without cp.async)
-        const int n_threads = WARP_SIZE * N_WARPS;
-        const int tid = threadIdx.y * WARP_SIZE + threadIdx.x;
-        for (int i = tid; i < D_TILE * K_TILE; i += n_threads) {
-            const int t_local = i / D_TILE;
-            const int d_local = i % D_TILE;
-            half val = (t_local < k_len_tile && d_start + d_local < head_dim)
-                     ? X_base[(t_in_start + t_local) * head_dim + d_local]
-                     : __float2half(0.0f);
-            smem_X_buf[t_local * D_TILE + d_local] = val;
-        }
-#endif
-    };
-
-    // === cp.async pipelined loop: overlap next X load with current compute ===
-    int pp_cur = 0;
-
-    // Prologue: issue async load of first k-block into buffer 0
-    issue_cp_async_X(smem_X_pp, 0, min(K_TILE, chunk_len));
-#ifdef CP_ASYNC_AVAILABLE
-    cp_async_wait_all();
-#endif
-    __syncthreads();
-
-    for (int kb = 0; kb < n_k_blocks; kb++) {
-        const int t_in_start = kb * K_TILE;
-        const int k_len = min(K_TILE, chunk_len - t_in_start);
-
-        half * smem_X_cur = smem_X_pp + pp_cur * K_TILE * D_TILE;
-
-        // --- Issue async load of NEXT k-block (overlaps with compute below!) ---
-        if (kb + 1 < n_k_blocks) {
-            half * smem_X_next = smem_X_pp + (1 - pp_cur) * K_TILE * D_TILE;
-            const int next_k_len = min(K_TILE, chunk_len - (kb + 1) * K_TILE);
-            issue_cp_async_X(smem_X_next, (kb + 1) * K_TILE, next_k_len);
-        }
-
-        // --- Per-warp: iterate over assigned t_out blocks ---
-        for (int tb = 0; tb < N_TOUT_PER_WARP; tb++) {
-            const int tout_block = tout_base + tb;
-            const int t_out_start = tout_block * T_OUT_TILE;
-
-            if (t_out_start >= chunk_len) break;
-            if (t_in_start > t_out_start + T_OUT_TILE - 1) continue;
-
-            // --- Compute M tile on-the-fly in warp's smem region ---
-            {
-                half * my_M = smem_M + warp_id * T_OUT_TILE * K_TILE;
-                for (int i = threadIdx.x; i < T_OUT_TILE * K_TILE; i += WARP_SIZE) {
-                    const int tout_local = i / K_TILE;
-                    const int tin_local  = i % K_TILE;
-                    const int t_out_abs  = t_out_start + tout_local;
-                    const int t_in_abs   = t_in_start + tin_local;
-
-                    half val;
-                    if (t_out_abs < chunk_len && tin_local < k_len && t_in_abs <= t_out_abs) {
-                        const float cs_out = smem_cs[t_out_abs];
-                        const float cs_in  = smem_cs[t_in_abs];
-                        const float decay  = __expf(A_h * (cs_out - cs_in));
-                        const float cb_val = CB_g[t_out_abs + t_in_abs * chunk_len];
-                        val = __float2half(decay * cb_val);
-                    } else {
-                        val = __float2half(0.0f);
-                    }
-                    my_M[tout_local * K_TILE + tin_local] = val;
-                }
-            }
-
-            // --- MMA tiles ---
-            // A tile: loaded via ldmatrix_trans from d-fastest smem_X (hardware transpose)
-            // B tile: loaded via ldmatrix from t_in-fastest smem_M (no transpose needed)
-            using tile_A = ggml_cuda_mma::tile<16, 8, half2>;
-            using tile_B = ggml_cuda_mma::tile<8, 8, half2>;
-
-            tile_A A_tile;
-            tile_B B_tile;
-
-            // A from smem_X (d-fastest): stride = D_TILE/2 half2 between t_in rows
-            // ldmatrix_trans transposes: smem rows=t_in -> tile rows=d
-            const half2 * X_h2 = (const half2 *)smem_X_cur;
-            ggml_cuda_mma::load_ldmatrix_trans(A_tile, X_h2, D_TILE / 2);
-
-            // B from smem_M (t_in-fastest): stride = K_TILE/2 half2 between t_out rows
-            const half2 * my_M_h2 = (const half2 *)(smem_M + warp_id * T_OUT_TILE * K_TILE);
-            ggml_cuda_mma::load_ldmatrix(B_tile, my_M_h2, K_TILE / 2);
-
-            ggml_cuda_mma::mma(C_acc[tb], A_tile, B_tile);
-        }
-
-        // Wait for next buffer load + ensure all warps done with current buffer
-#ifdef CP_ASYNC_AVAILABLE
-        cp_async_wait_all();
-#endif
-        pp_cur = 1 - pp_cur;
-        __syncthreads();
-    }
-
-    // === Store C accumulators to dst ===
-    for (int tb = 0; tb < N_TOUT_PER_WARP; tb++) {
-        const int tout_block = tout_base + tb;
-        const int t_out_start = tout_block * T_OUT_TILE;
-        if (t_out_start >= chunk_len) break;
-
-#pragma unroll
-        for (int l = 0; l < tile_C::ne; l++) {
-            const int d_local    = tile_C::get_i(l);
-            const int tout_local = tile_C::get_j(l);
-            const int t_out_abs  = t_out_start + tout_local;
-
-            if (d_start + d_local < head_dim && t_out_abs < chunk_len) {
-                dst_base[d_local + (chunk_offset + t_out_abs) * d_inner] += C_acc[tb].x[l];
-            }
-        }
-    }
-}
-
 // Copy initial state from src0[ids[s]] into s_cur for each sequence.
 // Grid: (ceil(d_state * head_dim * n_head / BLOCK), n_seqs)
 template <int BLOCK_SIZE>
@@ -767,7 +556,7 @@ __global__ void ssm_ssd_init_state_kernel(
 }
 
 // SSD (State Space Duality) dispatch for Mamba-2 prefill.
-// Chunked matmuls: CB, fused_Y (MMA), S@C, B@X_dt.
+// Chunked matmuls: CB, materialize M + cuBLAS Y, S@C, B@X_dt.
 // All strides are in elements (floats), not bytes.
 static void ssm_scan_ssd_f32_cuda(
         ggml_backend_cuda_context & ctx,
@@ -828,7 +617,7 @@ static void ssm_scan_ssd_f32_cuda(
     }
 
     // Step 3: chunked SSD loop
-    // Per chunk: pre_matmul + 3 cuBLAS (CB, S@C, state update) + fused MMA Y + scale_state
+    // Per chunk: pre_matmul (incl. M) + 4 cuBLAS (CB, Y, S@C, state update) + scale_state
     cublasHandle_t handle = ctx.cublas_handle();
     CUBLAS_CHECK(cublasSetStream(handle, stream));
     const float alpha_one  = 1.0f;
@@ -836,6 +625,11 @@ static void ssm_scan_ssd_f32_cuda(
     const float beta_one   = 1.0f;
     const int lda_C_src = C_stride_tok;  // leading dim for C in CB = C^T @ B
     const int ldb_B_src = B_stride_tok;  // leading dim for B in CB = C^T @ B
+
+    // Scratch buffer for causal M matrix, reused across chunks (max size at chunk_size)
+    const int64_t n_M_max = chunk_size * chunk_size;
+    ggml_cuda_pool_alloc<half> M_buf(ctx.pool(), n_M_max * n_head * n_seq);
+    half * M_mat = M_buf.get();
 
     for (int64_t k = 0; k < n_chunks; k++) {
         const int64_t chunk_offset = k * chunk_size;
@@ -865,17 +659,20 @@ static void ssm_scan_ssd_f32_cuda(
             }
         }
 
-        // 3b: prepare X_dt, B_weighted, C_scaled
+        // 3b: prepare X_dt, B_weighted, C_scaled + materialize causal M matrix
+        const int64_t n_M = chunk_len * chunk_len;
         {
             constexpr int BLOCK = 256;
             const int64_t n_xdt   = chunk_len * head_dim;
             const int64_t n_bw    = d_state * chunk_len;
             int64_t max_work = n_xdt;
-            if (n_bw > max_work)  max_work = n_bw;
+            if (n_bw  > max_work) max_work = n_bw;
+            if (n_M   > max_work) max_work = n_M;
             dim3 grid((max_work + BLOCK - 1) / BLOCK, n_head, n_seq);
             ssm_ssd_pre_matmul_kernel<BLOCK, matmul_t><<<grid, BLOCK, 0, stream>>>(
                 cs, dt_sp, src3_d, src1_d, src4_d, src5_d,
                 X_dt, B_weighted, C_scaled,
+                CB, M_mat,
                 chunk_len, head_dim, n_head, n_group, d_state, A_stride,
                 x_stride_tok, x_stride_seq, B_stride_tok, B_stride_seq, C_stride_tok, C_stride_seq,
                 chunk_offset, n_tok);
@@ -902,27 +699,24 @@ static void ssm_scan_ssd_f32_cuda(
             }
         }
 
-        // 3d: dst += fused MMA Y (intra-chunk contribution, adds to 3c)
+        // 3d: dst += X_dt @ M^T (intra-chunk contribution, adds to 3c result)
+        // M is stored as M[t_out, t_in] (lower-triangular), transpose needed for Y = X @ M^T.
         {
-            constexpr int D_TILE = 16;
-            constexpr int K_TILE = 16;
-            constexpr int N_WARPS = 8;
-            constexpr int N_TOUT_PER_WARP = SSM_SSD_CHUNK_SIZE / 8 / N_WARPS; // 256/8/8 = 4
-            const int n_d_blocks = (head_dim + D_TILE - 1) / D_TILE;
-            dim3 grid(n_d_blocks, n_head, n_seq);
-            dim3 block(WARP_SIZE, N_WARPS, 1);
-            const size_t smem_cs_padded = ((chunk_len + 3) & ~3) * sizeof(float);  // 16-byte aligned
-            const size_t smem_bytes = smem_cs_padded                           // smem_cs
-                                    + 2 * K_TILE * D_TILE * sizeof(half)       // smem_X (double-buffered, d-fastest)
-                                    + N_WARPS * 8 * K_TILE * sizeof(half);     // smem_M
-            ssm_ssd_fused_y_mma_kernel<D_TILE, K_TILE, N_WARPS, N_TOUT_PER_WARP>
-                <<<grid, block, smem_bytes, stream>>>(
-                    X_dt, CB, cs, src3_d, dst_d,
-                    head_dim, chunk_len, n_head, n_group,
-                    d_inner, n_tok,
-                    chunk_offset, A_stride,
-                    (int64_t)chunk_len * head_dim);
-            CUDA_CHECK(cudaGetLastError());
+            const int64_t stride_M = n_M;
+            const int64_t stride_X_h = (int64_t)chunk_len * head_dim;
+
+            for (int64_t s = 0; s < n_seq; s++) {
+                float * dst_chunk = dst_d + s * d_inner * n_tok + chunk_offset * d_inner;
+                CUBLAS_CHECK(cublasGemmStridedBatchedEx(handle, CUBLAS_OP_N, CUBLAS_OP_T,
+                    head_dim, chunk_len, chunk_len,
+                    &alpha_one,
+                    X_dt       + s * stride_X_h * n_head, matmul_dtype, head_dim, stride_X_h,
+                    M_mat      + s * stride_M   * n_head, matmul_dtype, chunk_len, stride_M,
+                    &beta_one,
+                    dst_chunk, CUDA_R_32F, d_inner, head_dim,
+                    n_head,
+                    CUBLAS_COMPUTE_32F, CUBLAS_GEMM_DEFAULT));
+            }
         }
 
         // 3e: s_cur = B_weighted @ X_dt^T + decay_total * s_cur_old (state update)
@@ -999,7 +793,7 @@ void ggml_cuda_op_ssm_scan(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     GGML_ASSERT(dst->type == GGML_TYPE_F32);
 
     // Mamba-2 with scalar A per head: use SSD matmul path for long sequences.
-    // Requires NVIDIA Turing+ for MMA (m16n8k16 + ldmatrix), otherwise fallback to scan.
+    // Requires NVIDIA Turing+ otherwise fallback to scan.
     const bool is_mamba2 = (src3->nb[1] == sizeof(float));
     const int cc = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
     const bool use_ssd = is_mamba2 && n_t > SSM_SSD_MIN_TOKENS
