@@ -557,15 +557,13 @@ struct common_speculative_state_mtp : public common_speculative_impl {
             llama_context * src_ctx = k == 0 ? ctx_tgt : ctx_dft;
 
             if (use_nextn_fallback) {
-                // Copy hidden state from pre-extracted nextn buffer to batch.embd
-                // NOTE: row_bytes is based on ctx_dft's n_embd, which matches the nextn
-                // row dimension for the draft model (n_embd == n_embd_out). If the k==0
-                // (target) fallback is ever taken with a model where target n_embd_out
-                // differs from draft n_embd, the copy would truncate.
                 if (batch.embd) {
                     const float * h_row = llama_get_embeddings_nextn_ith(src_ctx, src_row);
                     if (h_row) {
-                        memcpy(batch.embd, h_row, row_bytes);
+                        const size_t src_row_bytes = (k == 0)
+                            ? (size_t) llama_model_n_embd_out(llama_get_model(ctx_tgt)) * sizeof(float)
+                            : row_bytes;
+                        memcpy(batch.embd, h_row, src_row_bytes);
                     } else {
                         break;
                     }
