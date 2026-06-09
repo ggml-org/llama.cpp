@@ -2041,6 +2041,21 @@ extern "C" {
             int                   s0,  // stride
             int                   d0); // dilation
 
+    // grouped 1D convolution
+    // a: [K, IC/G, OC]   convolution kernel
+    // b: [L, IC,   N]    data
+    // groups must divide both IC and OC evenly
+    // when groups == 1, equivalent to ggml_conv_1d
+    // when groups == IC, equivalent to ggml_conv_1d_dw
+    GGML_API struct ggml_tensor * ggml_conv_1d_grouped(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,      // convolution kernel
+            struct ggml_tensor  * b,      // data
+            int                   s0,     // stride
+            int                   p0,     // padding
+            int                   d0,     // dilation
+            int                   groups); // number of groups
+
     GGML_API struct ggml_tensor * ggml_conv_transpose_1d(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,   // convolution kernel

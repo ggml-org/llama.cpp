@@ -4541,6 +4541,63 @@ struct ggml_tensor * ggml_conv_1d_dw_ph(
     return ggml_conv_1d_dw(ctx, a, b, s0, a->ne[0] / 2, d0);
 }
 
+// ggml_conv_1d_grouped
+
+struct ggml_tensor * ggml_conv_1d_grouped(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        struct ggml_tensor  * b,
+        int                   s0,
+        int                   p0,
+        int                   d0,
+        int                   groups) {
+    GGML_ASSERT(groups > 0);
+
+    const int64_t OC   = a->ne[2];   // total output channels
+    const int64_t IC_G = a->ne[1];   // input channels per group (kernel dim)
+    const int64_t IC   = b->ne[1];   // total input channels
+
+    GGML_ASSERT(IC % groups == 0);
+    GGML_ASSERT(OC % groups == 0);
+    GGML_ASSERT(IC_G == IC / groups);
+
+    // degenerate cases: fall back to existing implementations
+    if (groups == 1) {
+        return ggml_conv_1d(ctx, a, b, s0, p0, d0);
+    }
+    if (groups == IC && groups == OC) {
+        return ggml_conv_1d_dw(ctx, a, b, s0, p0, d0);
+    }
+
+    const int64_t OC_G = OC / groups;
+
+    struct ggml_tensor * result = NULL;
+
+    for (int g = 0; g < groups; g++) {
+        // slice kernel for group g: [K, IC_G, OC_G]
+        struct ggml_tensor * a_g = ggml_view_3d(ctx, a,
+            a->ne[0], IC_G, OC_G,
+            a->nb[1], a->nb[2],
+            g * OC_G * a->nb[2]);
+
+        // slice input for group g: [L, IC_G, N]
+        struct ggml_tensor * b_g = ggml_view_3d(ctx, b,
+            b->ne[0], IC_G, b->ne[2],
+            b->nb[1], b->nb[2],
+            g * IC_G * b->nb[1]);
+
+        struct ggml_tensor * out_g = ggml_conv_1d(ctx, a_g, b_g, s0, p0, d0);
+
+        if (result == NULL) {
+            result = out_g;
+        } else {
+            result = ggml_concat(ctx, result, out_g, 1);
+        }
+    }
+
+    return result;
+}
+
 // ggml_conv_transpose_1d
 
 static int64_t ggml_calc_conv_transpose_1d_output_size(int64_t ins, int64_t ks, int s, int p, int d) {
