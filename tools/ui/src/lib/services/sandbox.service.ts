@@ -1,70 +1,14 @@
 import {
+	NEWLINE_SEPARATOR,
+	SANDBOX_EMPTY_OUTPUT,
+	SANDBOX_HARNESS_HTML,
 	SANDBOX_OUTPUT_MAX_CHARS,
 	SANDBOX_TIMEOUT_MS_DEFAULT,
 	SANDBOX_TIMEOUT_MS_MAX,
-	SANDBOX_TOOL_NAME
+	SANDBOX_TOOL_NAME,
+	SANDBOX_TRUNCATION_NOTICE
 } from '$lib/constants';
 import type { ToolExecutionResult } from '$lib/types';
-
-/**
- * Source of the worker that runs model generated code.
- * Captures console output and the value returned by the code,
- * then reports back to the iframe harness in a single message.
- */
-const WORKER_SHIM = `
-const logs = [];
-const fmt = (value) => {
-	if (typeof value === 'string') return value;
-	try {
-		return JSON.stringify(value);
-	} catch {
-		return String(value);
-	}
-};
-const capture = (level, prefix) => (...args) => {
-	logs.push(prefix + args.map(fmt).join(' '));
-};
-console.log = capture('log', '');
-console.info = capture('info', '');
-console.debug = capture('debug', '');
-console.warn = capture('warn', 'warn: ');
-console.error = capture('error', 'error: ');
-self.onmessage = async (event) => {
-	const reply = { logs, result: null, error: null };
-	try {
-		const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
-		const value = await new AsyncFunction(event.data.code)();
-		if (value !== undefined) reply.result = fmt(value);
-	} catch (err) {
-		reply.error = err instanceof Error ? err.stack || err.message : String(err);
-	}
-	self.postMessage(reply);
-};
-`;
-
-/**
- * Harness loaded as srcdoc into a sandboxed iframe (allow-scripts only).
- * The opaque origin is the security boundary: no access to the app origin,
- * its storage or its API. The harness spawns a worker so model code never
- * runs on a main thread, which makes the parent timeout enforceable by
- * removing the iframe.
- */
-const HARNESS_HTML = `<!doctype html><script>
-const SHIM = ${JSON.stringify(WORKER_SHIM)};
-addEventListener('message', (event) => {
-	const respond = (payload) => parent.postMessage(payload, '*');
-	let worker;
-	try {
-		worker = new Worker(URL.createObjectURL(new Blob([SHIM], { type: 'text/javascript' })));
-	} catch (err) {
-		respond({ logs: [], result: null, error: 'Worker creation failed: ' + err });
-		return;
-	}
-	worker.onmessage = (msg) => respond(msg.data);
-	worker.onerror = (err) => respond({ logs: [], result: null, error: String(err.message || err) });
-	worker.postMessage({ code: event.data.code });
-});
-</script>`;
 
 interface SandboxReply {
 	logs?: unknown;
@@ -85,10 +29,10 @@ function formatReply(reply: SandboxReply): ToolExecutionResult {
 		lines.push(`=> ${String(reply.result)}`);
 	}
 
-	let content = lines.join('\n');
-	if (!content) content = '(no output)';
+	let content = lines.join(NEWLINE_SEPARATOR);
+	if (!content) content = SANDBOX_EMPTY_OUTPUT;
 	if (content.length > SANDBOX_OUTPUT_MAX_CHARS) {
-		content = `${content.slice(0, SANDBOX_OUTPUT_MAX_CHARS)}\n[output truncated]`;
+		content = `${content.slice(0, SANDBOX_OUTPUT_MAX_CHARS)}${NEWLINE_SEPARATOR}${SANDBOX_TRUNCATION_NOTICE}`;
 	}
 
 	return { content, isError: reply.error != null };
@@ -125,7 +69,7 @@ export class SandboxService {
 			const iframe = document.createElement('iframe');
 			iframe.setAttribute('sandbox', 'allow-scripts');
 			iframe.style.display = 'none';
-			iframe.srcdoc = HARNESS_HTML;
+			iframe.srcdoc = SANDBOX_HARNESS_HTML;
 
 			let settled = false;
 
