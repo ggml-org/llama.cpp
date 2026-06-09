@@ -8,6 +8,11 @@ endif()
 
 find_package(Vulkan COMPONENTS glslc REQUIRED)
 
+if (DEFINED ENV{VULKAN_SDK})
+    list(APPEND CMAKE_PREFIX_PATH "$ENV{VULKAN_SDK}")
+endif()
+find_package(SPIRV-Headers CONFIG REQUIRED)
+
 if (CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
     # Parallel build object files
     add_definitions(/MP)
@@ -72,6 +77,12 @@ if (Vulkan_FOUND)
         "GL_NV_cooperative_matrix2"
         "${CMAKE_CURRENT_SOURCE_DIR}/vulkan-shaders/feature-tests/coopmat2.comp"
         "GGML_VULKAN_COOPMAT2_GLSLC_SUPPORT"
+    )
+
+    test_shader_extension_support(
+        "GL_NV_cooperative_matrix_decode_vector"
+        "${CMAKE_CURRENT_SOURCE_DIR}/vulkan-shaders/feature-tests/coopmat2_decode_vector.comp"
+        "GGML_VULKAN_COOPMAT2_DECODE_VECTOR_GLSLC_SUPPORT"
     )
 
     test_shader_extension_support(

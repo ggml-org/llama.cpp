@@ -7,6 +7,7 @@
 #include "log.h"
 #include "llama.h"
 #include "sampling.h"
+#include "speculative.h"
 #include "unicode.h"
 
 #include <algorithm>
@@ -366,15 +367,33 @@ void common_init() {
     SetConsoleCP(CP_UTF8);
 #endif
 
-    llama_log_set(common_log_default_callback, NULL);
+    common_log_set_prefix(common_log_main(), true);
+    common_log_set_timestamps(common_log_main(), true);
 
+    llama_log_set(common_log_default_callback, NULL);
+}
+
+void common_params_print_info(const common_params & params, bool print_devices) {
 #ifdef NDEBUG
     const char * build_type = "";
 #else
     const char * build_type = " (debug)";
 #endif
+    LOG_TRC("%s: build %d (%s) with %s for %s%s\n", __func__, llama_build_number(), llama_commit(), llama_compiler(), llama_build_target(), build_type);
 
-    LOG_DBG("build: %d (%s) with %s for %s%s\n", llama_build_number(), llama_commit(), llama_compiler(), llama_build_target(), build_type);
+    LOG_INF("log_info: verbosity = %d (adjust with the `-lv N` CLI arg)\n", common_log_get_verbosity_thold());
+
+    // device enumeration creates a primary context on CUDA backends, skip it when the caller does not own any device
+    if (print_devices) {
+        LOG_INF("device_info:\n");
+        for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
+            auto * dev = ggml_backend_dev_get(i);
+            size_t free, total;
+            ggml_backend_dev_memory(dev, &free, &total);
+            LOG_INF("  - %-8s: %s (%zu MiB, %zu MiB free)\n", ggml_backend_dev_name(dev), ggml_backend_dev_description(dev), total / 1024 / 1024, free / 1024 / 1024);
+        }
+    }
+    LOG_INF("%s\n", common_params_get_system_info(params).c_str());
 }
 
 std::string common_params_get_system_info(const common_params & params) {
@@ -424,6 +443,27 @@ std::string string_strip(const std::string & str) {
         end--;
     }
     return str.substr(start, end - start);
+}
+
+std::string string_lcs(std::string_view a, std::string_view b) {
+    if (a.empty() || b.empty()) return {};
+
+    std::vector<std::vector<size_t>> dp(a.size() + 1, std::vector<size_t>(b.size() + 1, 0));
+    size_t best_len = 0;
+    size_t best_end_a = 0;
+
+    for (size_t i = 1; i <= a.size(); ++i) {
+        for (size_t j = 1; j <= b.size(); ++j) {
+            if (a[i - 1] == b[j - 1]) {
+                dp[i][j] = dp[i - 1][j - 1] + 1;
+                if (dp[i][j] > best_len) {
+                    best_len = dp[i][j];
+                    best_end_a = i;
+                }
+            }
+        }
+    }
+    return std::string(a.substr(best_end_a - best_len, best_len));
 }
 
 std::string string_get_sortable_timestamp() {
@@ -1108,7 +1148,7 @@ static void common_init_sampler_from_model(
         if (llama_model_meta_val_str(model, llama_model_meta_key_str(LLAMA_MODEL_META_KEY_SAMPLING_SEQUENCE), buf, sizeof(buf)) > 0) {
             const std::vector<std::string> sampler_names = string_split<std::string>(std::string(buf), ';');
             if (!sampler_names.empty()) {
-                sparams.samplers = common_sampler_types_from_names(sampler_names, true);
+                sparams.samplers = common_sampler_types_from_names(sampler_names);
             }
         }
     }
@@ -1141,19 +1181,20 @@ struct common_init_result::impl {
     std::vector<llama_sampler_seq_config> samplers_seq_config;
 };
 
-common_init_result::common_init_result(common_params & params) :
+common_init_result::common_init_result(common_params & params, bool model_only) :
     pimpl(new impl{}) {
     auto mparams = common_model_params_to_llama(params);
     auto cparams = common_context_params_to_llama(params);
 
     if (params.fit_params) {
-        LOG_INF("%s: fitting params to device memory, for bugs during this step try to reproduce them with -fit off, or provide --verbose logs if the bug only occurs with -fit on\n", __func__);
+        LOG_INF("%s: fitting params to device memory ...\n", __func__);
+        LOG_INF("%s: (for bugs during this step try to reproduce them with -fit off, or provide --verbose logs if the bug only occurs with -fit on)\n", __func__);
         common_fit_params(params.model.path.c_str(), &mparams, &cparams,
             params.tensor_split,
             params.tensor_buft_overrides.data(),
             params.fit_params_target.data(),
             params.fit_params_min_ctx,
-            params.verbosity >= 4 ? GGML_LOG_LEVEL_DEBUG : GGML_LOG_LEVEL_ERROR);
+            params.verbosity >= LOG_LEVEL_DEBUG ? GGML_LOG_LEVEL_DEBUG : GGML_LOG_LEVEL_ERROR);
     }
 
     llama_model * model = llama_model_load_from_file(params.model.path.c_str(), mparams);
@@ -1162,6 +1203,10 @@ common_init_result::common_init_result(common_params & params) :
     }
 
     pimpl->model.reset(model);
+
+    if (model_only) {
+        return;
+    }
 
     const llama_vocab * vocab = llama_model_get_vocab(model);
 
@@ -1196,7 +1241,7 @@ common_init_result::common_init_result(common_params & params) :
     // initialize once
     for (llama_token i = 0; i < llama_vocab_n_tokens(vocab); i++) {
         if (llama_vocab_is_eog(vocab, i)) {
-            LOG_INF("%s: added %s logit bias = %f\n", __func__, common_token_to_piece(vocab, i).c_str(), -INFINITY);
+            LOG_TRC("%s: added %s logit bias = %f\n", __func__, common_token_to_piece(vocab, i).c_str(), -INFINITY);
             params.sampling.logit_bias_eog.push_back({i, -INFINITY});
         }
     }
@@ -1209,12 +1254,12 @@ common_init_result::common_init_result(common_params & params) :
     }
 
     //if (params.sampling.penalty_last_n == -1) {
-    //    LOG_INF("%s: setting penalty_last_n to ctx_size = %d\n", __func__, llama_n_ctx(lctx));
+    //    LOG_TRC("%s: setting penalty_last_n to ctx_size = %d\n", __func__, llama_n_ctx(lctx));
     //    params.sampling.penalty_last_n = llama_n_ctx(lctx);
     //}
 
     //if (params.sampling.dry_penalty_last_n == -1) {
-    //    LOG_INF("%s: setting dry_penalty_last_n to ctx_size = %d\n", __func__, llama_n_ctx(lctx));
+    //    LOG_TRC("%s: setting dry_penalty_last_n to ctx_size = %d\n", __func__, llama_n_ctx(lctx));
     //    params.sampling.dry_penalty_last_n = llama_n_ctx(lctx);
     //}
 
@@ -1266,12 +1311,16 @@ std::vector<llama_adapter_lora_ptr> & common_init_result::lora() {
     return pimpl->lora;
 }
 
-common_init_result_ptr common_init_from_params(common_params & params) {
-    common_init_result_ptr res(new common_init_result(params));
+common_init_result_ptr common_init_from_params(common_params & params, bool model_only) {
+    common_init_result_ptr res(new common_init_result(params, model_only));
 
     llama_model * model = res->model();
     if (model == NULL) {
         LOG_ERR("%s: failed to load model '%s'\n", __func__, params.model.path.c_str());
+        return res;
+    }
+
+    if (model_only) {
         return res;
     }
 
@@ -1338,9 +1387,7 @@ common_init_result_ptr common_init_from_params(common_params & params) {
     }
 
     if (params.warmup) {
-        LOG_WRN("%s: warming up the model with an empty run - please wait ... (--no-warmup to disable)\n", __func__);
-
-        llama_set_warmup(lctx, true);
+        LOG_INF("%s: warming up the model with an empty run - please wait ... (--no-warmup to disable)\n", __func__);
 
         std::vector<llama_token> tmp;
         llama_token bos = llama_vocab_bos(vocab);
@@ -1372,7 +1419,6 @@ common_init_result_ptr common_init_from_params(common_params & params) {
         llama_memory_clear(llama_get_memory(lctx), true);
         llama_synchronize(lctx);
         llama_perf_context_reset(lctx);
-        llama_set_warmup(lctx, false);
 
         // reset samplers to reset RNG state after warmup to the seeded state
         res->reset_samplers();
@@ -1420,9 +1466,15 @@ common_context_seq_rm_type common_context_can_seq_rm(llama_context * ctx) {
         goto done;
     }
 
+    if (llama_n_rs_seq(ctx) > 0) {
+        LOG_INF("%s: the context supports bounded partial sequence removal\n", __func__);
+        res = COMMON_CONTEXT_SEQ_RM_TYPE_RS;
+        goto done;
+    }
+
     // try to remove the last tokens
     if (!llama_memory_seq_rm(mem, 0, 1, -1)) {
-        LOG_WRN("%s: the target context does not support partial sequence removal\n", __func__);
+        LOG_TRC("%s: the context does not support partial sequence removal\n", __func__);
         res = COMMON_CONTEXT_SEQ_RM_TYPE_FULL;
         goto done;
     }
@@ -1432,6 +1484,23 @@ done:
     llama_synchronize(ctx);
 
     return res;
+}
+
+void common_context_seq_rm(llama_context * ctx, llama_seq_id seq_id, llama_pos p0, llama_pos p1) {
+    auto * mem = llama_get_memory(ctx);
+    if (!llama_memory_seq_rm(mem, seq_id, p0, p1)) {
+        GGML_ABORT("%s", string_format("failed to remove sequence %d with p0=%d, p1=%d\n", seq_id, p0, p1).c_str());
+    }
+}
+
+void common_context_seq_cp(llama_context * ctx, llama_seq_id seq_id_src, llama_seq_id seq_id_dst, llama_pos p0, llama_pos p1) {
+    auto * mem = llama_get_memory(ctx);
+    llama_memory_seq_cp(mem, seq_id_src, seq_id_dst, p0, p1);
+}
+
+void common_context_seq_add(llama_context * ctx, llama_seq_id seq_id, llama_pos p0, llama_pos p1, llama_pos delta) {
+    auto * mem = llama_get_memory(ctx);
+    llama_memory_seq_add(mem, seq_id, p0, p1, delta);
 }
 
 void common_set_adapter_lora(struct llama_context * ctx, std::vector<common_adapter_lora_info> & lora) {
@@ -1490,6 +1559,8 @@ struct llama_context_params common_context_params_to_llama(const common_params &
 
     cparams.n_ctx             = params.n_ctx;
     cparams.n_seq_max         = params.n_parallel;
+    cparams.n_rs_seq          = params.speculative.need_n_rs_seq();
+    cparams.n_outputs_max     = std::max(params.n_outputs_max, 0);
     cparams.n_batch           = params.n_batch;
     cparams.n_ubatch          = params.n_ubatch;
     cparams.n_threads         = params.cpuparams.n_threads;
@@ -1911,36 +1982,37 @@ bool common_replay_last_token(struct llama_context * ctx, llama_token last_token
 
 bool common_prompt_batch_decode(
               struct llama_context * ctx,
-    const std::vector<llama_token> & tokens,
+    const std::vector<llama_token> & all_tokens,
+                               int   n_new,
                                int & n_past,
                                int   n_batch,
                   std::string_view   state_path,
                               bool   save_state) {
-    const int n_eval = tokens.size();
-    if (n_eval == 0) {
+    if (n_new == 0) {
         return true;
     }
+    const int offset = all_tokens.size() - n_new;
 
-    if (save_state && n_eval > 1) {
-        const int n_tokens_before_last = n_eval - 1;
+    if (save_state && n_new > 1) {
+        const int n_tokens_before_last = n_new - 1;
 
-        GGML_ASSERT(n_eval <= n_batch);
+        GGML_ASSERT(n_new <= n_batch);
 
         // Decode all but the last token so we can save the memory state before decoding the last token.
         // This is done so we can restore the session state later and replay the last token.
         // Memory implementations in recurrent/hybrid models don't support removing tokens from their
         // memory, so we can't just remove the last token from the memory and replay the last token which
         // is the reason for this logic.
-        if (llama_decode(ctx, llama_batch_get_one(const_cast<llama_token*>(tokens.data()), n_tokens_before_last))) {
+        if (llama_decode(ctx, llama_batch_get_one(const_cast<llama_token*>(all_tokens.data() + offset), n_tokens_before_last))) {
             LOG_ERR("%s : failed to eval\n", __func__);
             return false;
         }
         n_past += n_tokens_before_last;
 
-        llama_state_save_file(ctx, state_path.data(), tokens.data(), n_tokens_before_last);
-        LOG_INF("saved session before last token to %s, n_tokens = %d\n", state_path.data(), n_tokens_before_last);
+        llama_state_save_file(ctx, state_path.data(), all_tokens.data(), all_tokens.size());
+        LOG_INF("saved session before last token to %s, n_new = %zu\n", state_path.data(), all_tokens.size());
 
-        llama_token last_token = tokens.back();
+        llama_token last_token = all_tokens.back();
         llama_batch batch = llama_batch_get_one(&last_token, 1);
         int32_t pos = n_past;
         batch.pos = &pos;
@@ -1951,12 +2023,119 @@ bool common_prompt_batch_decode(
         }
         n_past++;
     } else {
-        if (llama_decode(ctx, llama_batch_get_one(const_cast<llama_token*>(tokens.data()), n_eval))) {
+        if (llama_decode(ctx, llama_batch_get_one(const_cast<llama_token*>(all_tokens.data() + offset), n_new))) {
             LOG_ERR("%s : failed to eval\n", __func__);
             return false;
         }
-        n_past += n_eval;
+        n_past += n_new;
     }
 
     return true;
+}
+
+size_t common_prompt_checkpoint::size() const {
+    return data_tgt.size() + data_dft.size();
+}
+
+bool common_prompt_checkpoint::empty() const {
+    return data_tgt.empty();
+}
+
+void common_prompt_checkpoint::clear() {
+    n_tokens = 0;
+
+    pos_min = 0;
+    pos_max = 0;
+
+    data_tgt.clear();
+    data_dft.clear();
+}
+
+void common_prompt_checkpoint::update_pos(
+        int64_t n_tokens,
+        llama_pos pos_min,
+        llama_pos pos_max) {
+    this->n_tokens = n_tokens;
+    this->pos_min  = pos_min;
+    this->pos_max  = pos_max;
+}
+
+void common_prompt_checkpoint::update_tgt(
+        llama_context * ctx,
+        llama_seq_id seq_id,
+        llama_state_seq_flags flags) {
+    if (ctx == nullptr) {
+        return;
+    }
+
+    const size_t ckpt_size = llama_state_seq_get_size_ext(ctx, seq_id, flags);
+
+    data_tgt.resize(ckpt_size);
+
+    const size_t n = llama_state_seq_get_data_ext(ctx, data_tgt.data(), ckpt_size, seq_id, flags);
+    if (n != ckpt_size) {
+        GGML_ABORT("checkpoint size mismatch: expected %zu, got %zu\n", ckpt_size, n);
+    }
+}
+
+void common_prompt_checkpoint::update_dft(
+        llama_context * ctx,
+        llama_seq_id seq_id,
+        llama_state_seq_flags flags) {
+    if (ctx == nullptr) {
+        return;
+    }
+
+    const size_t ckpt_size = llama_state_seq_get_size_ext(ctx, seq_id, flags);
+
+    data_dft.resize(ckpt_size);
+
+    const size_t n = llama_state_seq_get_data_ext(ctx, data_dft.data(), ckpt_size, seq_id, flags);
+    if (n != ckpt_size) {
+        GGML_ABORT("checkpoint size mismatch: expected %zu, got %zu\n", ckpt_size, n);
+    }
+}
+
+void common_prompt_checkpoint::load_tgt(
+        llama_context * ctx,
+        llama_seq_id seq_id,
+        llama_state_seq_flags flags) const {
+    if (ctx == nullptr) {
+        return;
+    }
+
+    if (data_tgt.empty()) {
+        return;
+    }
+
+    const size_t n = llama_state_seq_set_data_ext(ctx, data_tgt.data(), data_tgt.size(), seq_id, flags);
+    if (n != data_tgt.size()) {
+        GGML_ABORT("checkpoint size mismatch: expected %zu, got %zu\n", data_tgt.size(), n);
+    }
+}
+
+void common_prompt_checkpoint::load_dft(
+        llama_context * ctx,
+        llama_seq_id seq_id,
+        llama_state_seq_flags flags) const {
+    if (ctx == nullptr) {
+        return;
+    }
+
+    if (data_dft.empty()) {
+        return;
+    }
+
+    const size_t n = llama_state_seq_set_data_ext(ctx, data_dft.data(), data_dft.size(), seq_id, flags);
+    if (n != data_dft.size()) {
+        GGML_ABORT("checkpoint size mismatch: expected %zu, got %zu\n", data_dft.size(), n);
+    }
+}
+
+void common_prompt_checkpoint::clear_tgt() {
+    data_tgt.clear();
+}
+
+void common_prompt_checkpoint::clear_dft() {
+    data_dft.clear();
 }

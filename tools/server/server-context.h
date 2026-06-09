@@ -21,7 +21,9 @@ struct server_context_meta {
     bool has_mtmd;
     bool has_inp_image;
     bool has_inp_audio;
-    json json_webui_settings;
+    bool has_inp_video;
+    json json_ui_settings;            // Primary: new name
+    json json_webui_settings;            // Deprecated: use json_ui_settings instead (kept for backward compat)
     int slot_n_ctx;
     enum llama_pooling_type pooling_type;
 
@@ -109,7 +111,10 @@ struct server_routes {
     server_http_context::handler_t post_completions;
     server_http_context::handler_t post_completions_oai;
     server_http_context::handler_t post_chat_completions;
+    server_http_context::handler_t post_chat_completions_tok;
+    server_http_context::handler_t post_control;
     server_http_context::handler_t post_responses_oai;
+    server_http_context::handler_t post_responses_tok_oai;
     server_http_context::handler_t post_transcriptions_oai;
     server_http_context::handler_t post_anthropic_messages;
     server_http_context::handler_t post_anthropic_count_tokens;
@@ -122,6 +127,10 @@ struct server_routes {
     server_http_context::handler_t post_rerank;
     server_http_context::handler_t get_lora_adapters;
     server_http_context::handler_t post_lora_adapters;
+
+    // to be used in router mode
+    json get_model_info() const;
+
 private:
     std::unique_ptr<server_res_generator> handle_completions_impl(
             const server_http_req & req,
@@ -133,6 +142,7 @@ private:
     std::unique_ptr<server_res_generator> handle_slots_restore(const server_http_req & req, int id_slot);
     std::unique_ptr<server_res_generator> handle_slots_erase(const server_http_req &, int id_slot);
     std::unique_ptr<server_res_generator> handle_embeddings_impl(const server_http_req & req, task_response_type res_type);
+    std::unique_ptr<server_res_generator> handle_count_tokens(const llama_vocab * vocab, mtmd_context * mctx, const server_http_req & req, task_response_type res_type);
 
     // using unique_ptr to allow late initialization of const
     std::unique_ptr<const server_context_meta> meta;

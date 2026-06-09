@@ -90,11 +90,14 @@ class common_chat_peg_builder : public common_peg_parser_builder {
 
     // Use for schema-declared string types - won't be treated as potential JSON container
     common_peg_parser tool_arg_string_value(const common_peg_parser & p) { return tag(TOOL_ARG_STRING_VALUE, p); }
-    common_peg_parser tool_arg_json_value(const common_peg_parser & p) { return atomic(tag(TOOL_ARG_VALUE, p)); }
+    common_peg_parser tool_arg_json_value(const common_peg_parser & p) { return tag(TOOL_ARG_VALUE, p); }
 
 
     // Return a parser that parses the prefix of a string, up to a given delimiter.
     common_peg_parser prefix(const std::string & s, const std::string & delimiter = {});
+
+    // Return a parser that parses all elements of tag, but leading and trailing spaces are optional
+    common_peg_parser optspace(const std::string & tag);
 
     // Legacy-compatible helper for building standard JSON tool calls
     // Used by tests and manual parsers
@@ -129,9 +132,13 @@ class common_chat_peg_builder : public common_peg_parser_builder {
     // Helper for Python-style function call format: name(arg1="value1", arg2=123)
     // Used by LFM2 and similar templates
     common_peg_parser python_style_tool_calls(const nlohmann::ordered_json & tools,
-                                              bool                           parallel_tool_calls);
+                                              bool                           parallel_tool_calls,
+                                              bool                           allow_json_literals);
 
   private:
+    // Python values plus JSON true/false/null.
+    common_peg_parser python_or_json_value();
+
     // Implementation helpers for standard_json_tools — one per JSON tool call layout mode
     common_peg_parser build_json_tools_function_is_key(const nlohmann::ordered_json & tools,
                                                        const std::string &            args_key,
@@ -192,4 +199,3 @@ struct tagged_peg_parser {
 
 tagged_peg_parser build_tagged_peg_parser(
     const std::function<common_peg_parser(common_peg_parser_builder & builder)> & fn);
-

@@ -5,6 +5,7 @@
 
 #include "hvx-types.h"
 #include "hvx-copy.h"
+#include "hvx-repl.h"
 #include "hvx-scale.h"
 #include "hvx-exp.h"
 #include "hvx-inverse.h"
@@ -13,6 +14,10 @@
 #include "hvx-sqrt.h"
 #include "hvx-arith.h"
 #include "hvx-div.h"
+#include "hvx-floor.h"
+#include "hvx-sin-cos.h"
 #include "hvx-base.h"
+#include "hvx-pow.h"
+#include "hvx-log.h"
 
 #endif /* HVX_UTILS_H */

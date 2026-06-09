@@ -8,9 +8,16 @@
 #extension GL_EXT_shader_explicit_arithmetic_types_int32 : require
 #extension GL_EXT_shader_explicit_arithmetic_types_int16 : require
 
+#if defined(BFLOAT16)
+#extension GL_EXT_bfloat16 : enable
+#endif
+
 #extension GL_KHR_memory_scope_semantics : enable
 #extension GL_KHR_cooperative_matrix : enable
 #extension GL_NV_cooperative_matrix2 : enable
+#ifdef GL_NV_cooperative_matrix_decode_vector
+#extension GL_NV_cooperative_matrix_decode_vector : enable
+#endif
 #extension GL_EXT_buffer_reference : enable
 #extension GL_KHR_shader_subgroup_ballot : enable
 #extension GL_KHR_shader_subgroup_vote : enable
@@ -18,7 +25,9 @@
 
 #include "types.glsl"
 #include "flash_attn_base.glsl"
+#if !defined(BFLOAT16)
 #include "dequant_funcs_cm2.glsl"
+#endif
 
 // buffer_reference stride = sizeof(struct) = FaBlockBytesK/V.
 layout(buffer_reference, std430, buffer_reference_align = 1) buffer decodeBufFA_K {
@@ -28,46 +37,68 @@ layout(buffer_reference, std430, buffer_reference_align = 1) buffer decodeBufFA_
     uint8_t raw[FaBlockBytesV];
 };
 
-uint fa_block_elems(uint ty) {
-    switch (ty) {
-        case 0u:  return 4u;  // GGML_TYPE_F32: vec4 block (matches decodeBufF32 / dequantFuncF32)
-        case 1u:  return 1u;  // GGML_TYPE_F16
-        case 2u:  return uint(QUANT_K_Q4_0);
-        case 3u:  return uint(QUANT_K_Q4_1);
-        case 6u:  return uint(QUANT_K_Q5_0);
-        case 7u:  return uint(QUANT_K_Q5_1);
-        case 8u:  return uint(QUANT_K_Q8_0);
-        case 41u: return uint(QUANT_K_Q1_0);
-        default:
-            return 1u;
-    }
-}
-
+#if !defined(BFLOAT16)
 float16_t faDecodeK(const decodeBufFA_K bl_in, const uint blockCoords[2], const uint coordInBlock[2]) {
     switch (FaTypeK) {
-        case 0u: return dequantFuncF32(decodeBufF32(bl_in), blockCoords, coordInBlock);
-        case 2u: return dequantFuncQ4_0(decodeBufQ4_0(bl_in), blockCoords, coordInBlock);
-        case 3u: return dequantFuncQ4_1(decodeBufQ4_1(bl_in), blockCoords, coordInBlock);
-        case 6u: return dequantFuncQ5_0(decodeBufQ5_0(bl_in), blockCoords, coordInBlock);
-        case 7u: return dequantFuncQ5_1(decodeBufQ5_1(bl_in), blockCoords, coordInBlock);
-        case 8u: return dequantFuncQ8_0(decodeBufQ8_0(bl_in), blockCoords, coordInBlock);
-        case 41u: return dequantFuncQ1_0(decodeBufQ1_0(bl_in), blockCoords, coordInBlock);
+        case FA_TYPE_F32:  return dequantFuncF32 (decodeBufF32 (bl_in), blockCoords, coordInBlock);
+        case FA_TYPE_Q4_0: return dequantFuncQ4_0(decodeBufQ4_0(bl_in), blockCoords, coordInBlock);
+        case FA_TYPE_Q4_1: return dequantFuncQ4_1(decodeBufQ4_1(bl_in), blockCoords, coordInBlock);
+        case FA_TYPE_Q5_0: return dequantFuncQ5_0(decodeBufQ5_0(bl_in), blockCoords, coordInBlock);
+        case FA_TYPE_Q5_1: return dequantFuncQ5_1(decodeBufQ5_1(bl_in), blockCoords, coordInBlock);
+        case FA_TYPE_Q8_0: return dequantFuncQ8_0(decodeBufQ8_0(bl_in), blockCoords, coordInBlock);
+        case FA_TYPE_Q1_0: return dequantFuncQ1_0(decodeBufQ1_0(bl_in), blockCoords, coordInBlock);
         default: return float16_t(0);
     }
 }
 
 float16_t faDecodeV(const decodeBufFA_V bl_in, const uint blockCoords[2], const uint coordInBlock[2]) {
     switch (FaTypeV) {
-        case 0u: return dequantFuncF32(decodeBufF32(bl_in), blockCoords, coordInBlock);
-        case 2u: return dequantFuncQ4_0(decodeBufQ4_0(bl_in), blockCoords, coordInBlock);
-        case 3u: return dequantFuncQ4_1(decodeBufQ4_1(bl_in), blockCoords, coordInBlock);
-        case 6u: return dequantFuncQ5_0(decodeBufQ5_0(bl_in), blockCoords, coordInBlock);
-        case 7u: return dequantFuncQ5_1(decodeBufQ5_1(bl_in), blockCoords, coordInBlock);
-        case 8u: return dequantFuncQ8_0(decodeBufQ8_0(bl_in), blockCoords, coordInBlock);
-        case 41u: return dequantFuncQ1_0(decodeBufQ1_0(bl_in), blockCoords, coordInBlock);
+        case FA_TYPE_F32:  return dequantFuncF32 (decodeBufF32 (bl_in), blockCoords, coordInBlock);
+        case FA_TYPE_Q4_0: return dequantFuncQ4_0(decodeBufQ4_0(bl_in), blockCoords, coordInBlock);
+        case FA_TYPE_Q4_1: return dequantFuncQ4_1(decodeBufQ4_1(bl_in), blockCoords, coordInBlock);
+        case FA_TYPE_Q5_0: return dequantFuncQ5_0(decodeBufQ5_0(bl_in), blockCoords, coordInBlock);
+        case FA_TYPE_Q5_1: return dequantFuncQ5_1(decodeBufQ5_1(bl_in), blockCoords, coordInBlock);
+        case FA_TYPE_Q8_0: return dequantFuncQ8_0(decodeBufQ8_0(bl_in), blockCoords, coordInBlock);
+        case FA_TYPE_Q1_0: return dequantFuncQ1_0(decodeBufQ1_0(bl_in), blockCoords, coordInBlock);
         default: return float16_t(0);
     }
 }
+
+// V=4 vector decode for K/V; dispatches to per-format _v decoders.
+f16vec4 faDecodeKVector(const decodeBufFA_K bl_in, const uint blockCoords[2], const uint coordInBlock[2]) {
+    switch (FaTypeK) {
+        case 0u: return f16vec4(decodeBufF32(bl_in).block);
+        case 2u: return dequantFuncQ4_0_v(decodeBufQ4_0(bl_in), blockCoords, coordInBlock);
+        case 3u: return dequantFuncQ4_1_v(decodeBufQ4_1(bl_in), blockCoords, coordInBlock);
+        case 6u: return dequantFuncQ5_0_v(decodeBufQ5_0(bl_in), blockCoords, coordInBlock);
+        case 7u: return dequantFuncQ5_1_v(decodeBufQ5_1(bl_in), blockCoords, coordInBlock);
+        case 8u: return dequantFuncQ8_0_v(decodeBufQ8_0(bl_in), blockCoords, coordInBlock);
+        case 41u: return dequantFuncQ1_0_v(decodeBufQ1_0(bl_in), blockCoords, coordInBlock);
+        default: return f16vec4(0);
+    }
+}
+
+f16vec4 faDecodeVVector(const decodeBufFA_V bl_in, const uint blockCoords[2], const uint coordInBlock[2]) {
+    switch (FaTypeV) {
+        case 0u: return f16vec4(decodeBufF32(bl_in).block);
+        case 2u: return dequantFuncQ4_0_v(decodeBufQ4_0(bl_in), blockCoords, coordInBlock);
+        case 3u: return dequantFuncQ4_1_v(decodeBufQ4_1(bl_in), blockCoords, coordInBlock);
+        case 6u: return dequantFuncQ5_0_v(decodeBufQ5_0(bl_in), blockCoords, coordInBlock);
+        case 7u: return dequantFuncQ5_1_v(decodeBufQ5_1(bl_in), blockCoords, coordInBlock);
+        case 8u: return dequantFuncQ8_0_v(decodeBufQ8_0(bl_in), blockCoords, coordInBlock);
+        case 41u: return dequantFuncQ1_0_v(decodeBufQ1_0(bl_in), blockCoords, coordInBlock);
+        default: return f16vec4(0);
+    }
+}
+
+#ifdef GL_NV_cooperative_matrix_decode_vector
+#define FADECODEK , faDecodeK, faDecodeKVector
+#define FADECODEV , faDecodeV, faDecodeVVector
+#else
+#define FADECODEK , faDecodeK
+#define FADECODEV , faDecodeV
+#endif
+#endif
 
 layout (binding = 0) readonly buffer Q {uint8_t data_q[];};
 layout (binding = 1) readonly buffer K {uint8_t data_k[];};
@@ -172,15 +203,15 @@ void main() {
     tensorLayoutV = setTensorLayoutStrideNV(tensorLayoutV, v_stride, 1);
 
     coopmat<Q_TYPE, gl_ScopeWorkgroup, Br, HSK_pad, gl_MatrixUseAccumulator> Q;
-    coopmat<float16_t, gl_ScopeWorkgroup, Br, HSK_pad, gl_MatrixUseA> Qf16;
+    coopmat<FLOAT_TYPE, gl_ScopeWorkgroup, Br, HSK_pad, gl_MatrixUseA> Qf16;
 
     uint32_t q_offset = gqa_iq1*p.nb01*4/*sizeof(float)*/ + iq2*p.nb02+iq3*p.nb03;
     coopMatLoadTensorNV(Q, data_q, q_offset, sliceTensorLayoutNV(tensorLayoutQ, i * Br, Br, 0, HSK_pad));
 
-    Qf16 = coopmat<float16_t, gl_ScopeWorkgroup, Br, HSK_pad, gl_MatrixUseA>(Q);
-    Qf16 *= float16_t(p.scale);
+    Q *= Q_TYPE(p.scale);
+    Qf16 = coopmat<FLOAT_TYPE, gl_ScopeWorkgroup, Br, HSK_pad, gl_MatrixUseA>(Q);
 
-    coopmat<float16_t, gl_ScopeWorkgroup, Br, HSV_pad, gl_MatrixUseAccumulator> O = coopmat<float16_t, gl_ScopeWorkgroup, Br, HSV_pad, gl_MatrixUseAccumulator>(0);
+    coopmat<O_TYPE, gl_ScopeWorkgroup, Br, HSV_pad, gl_MatrixUseAccumulator> O = coopmat<O_TYPE, gl_ScopeWorkgroup, Br, HSV_pad, gl_MatrixUseAccumulator>(0);
 
     coopmat<ACC_TYPE, gl_ScopeWorkgroup, Br, Bc, gl_MatrixUseAccumulator> L, M;
 
@@ -268,16 +299,20 @@ void main() {
 
         coopmat<ACC_TYPE, gl_ScopeWorkgroup, Br, Bc, gl_MatrixUseAccumulator> S = coopmat<ACC_TYPE, gl_ScopeWorkgroup, Br, Bc, gl_MatrixUseAccumulator>(0);
 
-        coopmat<float16_t, gl_ScopeWorkgroup, HSK_pad, Bc, gl_MatrixUseB> K_T;
+        coopmat<FLOAT_TYPE, gl_ScopeWorkgroup, HSK_pad, Bc, gl_MatrixUseB> K_T;
 
         uint32_t k_offset = ik2*p.nb12 + ik3*p.nb13;
         // F16: bs_k==1 (direct load). F32: bs_k==4 (vec4 / dequantFuncF32). Q4/Q8 family: bs_k==32. Q1_0: bs_k==128.
+#if defined(BFLOAT16)
+        coopMatLoadTensorNV(K_T, data_k, k_offset, sliceTensorLayoutNV(tensorLayoutK, j * Bc, Bc, 0, HSK_pad), tensorViewTranspose);
+#else
         const bool k_use_decode = (bs_k > 1u);
         if (k_use_decode) {
-            coopMatLoadTensorNV(K_T, data_k, k_offset, sliceTensorLayoutNV(tensorLayoutK, j * Bc, Bc, 0, HSK_pad), tensorViewTranspose, faDecodeK);
+            coopMatLoadTensorNV(K_T, data_k, k_offset, sliceTensorLayoutNV(tensorLayoutK, j * Bc, Bc, 0, HSK_pad), tensorViewTranspose FADECODEK);
         } else {
             coopMatLoadTensorNV(K_T, data_k, k_offset, sliceTensorLayoutNV(tensorLayoutK, j * Bc, Bc, 0, HSK_pad), tensorViewTranspose);
         }
+#endif
         S = coopMatMulAdd(Qf16, K_T, S);
 
         if (LOGIT_SOFTCAP) {
@@ -328,22 +363,26 @@ void main() {
             coopMatPerElementNV(P, P, replacePadding, ACC_TYPE(0.0), R, C);
         }
 
-        coopmat<float16_t, gl_ScopeWorkgroup, Br, Bc, gl_MatrixUseA> P_A = coopmat<float16_t, gl_ScopeWorkgroup, Br, Bc, gl_MatrixUseA>(P);
+        coopmat<FLOAT_TYPE, gl_ScopeWorkgroup, Br, Bc, gl_MatrixUseA> P_A = coopmat<FLOAT_TYPE, gl_ScopeWorkgroup, Br, Bc, gl_MatrixUseA>(P);
 
         // compute rowsum by multiplying by matrix of all ones.
-        coopmat<float16_t, gl_ScopeWorkgroup, Bc, Bc, gl_MatrixUseB> One = coopmat<float16_t, gl_ScopeWorkgroup, Bc, Bc, gl_MatrixUseB>(1.0);
+        coopmat<FLOAT_TYPE, gl_ScopeWorkgroup, Bc, Bc, gl_MatrixUseB> One = coopmat<FLOAT_TYPE, gl_ScopeWorkgroup, Bc, Bc, gl_MatrixUseB>(1.0);
 
         rowsum = coopmat<ACC_TYPE, gl_ScopeWorkgroup, Br, Bc, gl_MatrixUseAccumulator>(0.0);
         rowsum = coopMatMulAdd(P_A, One, rowsum);
 
-        coopmat<float16_t, gl_ScopeWorkgroup, Bc, HSV_pad, gl_MatrixUseB> V;
+        coopmat<FLOAT_TYPE, gl_ScopeWorkgroup, Bc, HSV_pad, gl_MatrixUseB> V;
         uint32_t v_offset = iv2*p.nb22 + iv3*p.nb23;
+#if defined(BFLOAT16)
+        coopMatLoadTensorNV(V, data_v, v_offset, sliceTensorLayoutNV(tensorLayoutV, j * Bc, Bc, 0, HSV_pad));
+#else
         const bool v_use_decode = (bs_v > 1u);
         if (v_use_decode) {
-            coopMatLoadTensorNV(V, data_v, v_offset, sliceTensorLayoutNV(tensorLayoutV, j * Bc, Bc, 0, HSV_pad), faDecodeV);
+            coopMatLoadTensorNV(V, data_v, v_offset, sliceTensorLayoutNV(tensorLayoutV, j * Bc, Bc, 0, HSV_pad) FADECODEV);
         } else {
             coopMatLoadTensorNV(V, data_v, v_offset, sliceTensorLayoutNV(tensorLayoutV, j * Bc, Bc, 0, HSV_pad));
         }
+#endif
 
         L = eM*L + rowsum;
 
@@ -355,7 +394,7 @@ void main() {
         // resize eM by using smear/reduce
         coopMatReduceNV(eMdiag, eM, gl_CooperativeMatrixReduceRowNV, smearReduce);
 
-        O *= coopmat<float16_t, gl_ScopeWorkgroup, Br, HSV_pad, gl_MatrixUseAccumulator>(eMdiag);
+        O *= coopmat<O_TYPE, gl_ScopeWorkgroup, Br, HSV_pad, gl_MatrixUseAccumulator>(eMdiag);
         O = coopMatMulAdd(P_A, V, O);
     }
 
@@ -404,7 +443,7 @@ void main() {
             if (sink > Mr[i]) {
                 ms = exp(Mr[i] - sink);
 
-                O[i] *= float16_t(ms);
+                O[i] *= O_TYPE(ms);
             } else {
                 vs = exp(sink - Mr[i]);
             }
