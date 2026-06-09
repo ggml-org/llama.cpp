@@ -398,9 +398,8 @@ std::pair<ggml_tensor *, ggml_tensor *> llm_build_delta_net_base::build_delta_ne
     GGML_ASSERT(b->ne[0] == 1   && b->ne[1] == H_v && b->ne[2] == n_tokens && b->ne[3] == n_seqs);
     GGML_ASSERT(s->ne[0] == S_v && s->ne[1] == S_v && s->ne[2] == H_v      && s->ne[3] == n_seqs);
 
-    // K=1 (final state only): reshape to 3D (S_v*S_v*H_v, 1, n_seqs) for ggml_gated_delta_net.
-    ggml_tensor * s_3d = ggml_reshape_3d(ctx0, s, S_v * S_v * H_v, 1, n_seqs);
-    ggml_tensor * result = ggml_gated_delta_net(ctx0, q, k, v, g, b, s_3d, /*K=*/1);
+    // K=1: output carries the final state only. state s is 4D [S_v, S_v, H_v, n_seqs].
+    ggml_tensor * result = ggml_gated_delta_net(ctx0, q, k, v, g, b, s, /*K=*/1);
     if (n_tokens == 1) {
         cb(result, LLAMA_TENSOR_NAME_FGDN_AR, il);
     } else {
@@ -564,9 +563,8 @@ ggml_tensor * llm_build_delta_net_base::build_recurrent_attn(
     const int64_t D = S_v * S_v * H_v;
     const int64_t K = cparams.n_rs_seq + 1;
 
-    ggml_tensor * s_3d = ggml_reshape_3d(ctx0, s, D, 1, n_seqs);
-
-    ggml_tensor * gdn_out = ggml_gated_delta_net(ctx0, q, k, v, g, b, s_3d, K);
+    // state s is 4D [S_v, S_v, H_v, n_seqs]; K snapshot slots are written into the output.
+    ggml_tensor * gdn_out = ggml_gated_delta_net(ctx0, q, k, v, g, b, s, K);
     if (n_seq_tokens > 1) {
         cb(gdn_out, LLAMA_TENSOR_NAME_FGDN_CH, il);
     } else {
@@ -586,15 +584,18 @@ ggml_tensor * llm_build_delta_net_base::build_recurrent_attn(
 
     const size_t row_size = hparams.n_embd_s() * ggml_element_size(ssm_states_all);
 
-    // write the K state snapshots into the recurrent cache (snapshot slot i -> rollback group i)
+    // op writes the last min(n_seq_tokens, K) snapshots; trailing slots are left unwritten
+    const int64_t n_written = std::min<int64_t>(n_seq_tokens, K);
+
+    // write the produced snapshots into the recurrent cache (snapshot slot i -> rollback group i)
     ggml_tensor * src = ggml_view_3d(ctx0, gdn_out,
-        D, n_seqs, K,
+        D, n_seqs, n_written,
         ggml_row_size(gdn_out->type, D),
         ggml_row_size(gdn_out->type, state_size_per_snap),
         ggml_row_size(gdn_out->type, attn_score_elems));
 
     ggml_tensor * dst = ggml_view_3d(ctx0, ssm_states_all,
-        D, n_seqs, K,
+        D, n_seqs, n_written,
         ssm_states_all->nb[1],
         (size_t) mem_size * row_size,
         (size_t) kv_head * row_size);

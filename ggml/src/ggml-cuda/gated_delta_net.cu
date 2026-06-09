@@ -39,7 +39,7 @@ gated_delta_net_cuda(const float * q,
     float *       attn_data        = dst;
     float *       state            = dst + attn_score_elems;
 
-    // input state holds s0 only: (D, 1, n_seqs) — seq stride is D = H * S_v * S_v.
+    // input state holds s0 only: [S_v, S_v, H, n_seqs] — seq stride is D = H * S_v * S_v.
     // output state layout (per-slot D * n_seqs) — same per-(seq,head) offset as before.
     const int64_t state_in_offset      = sequence * H * S_v * S_v + h_idx * S_v * S_v;
     const int64_t state_out_offset     = (sequence * H + h_idx) * S_v * S_v;
@@ -284,7 +284,7 @@ void ggml_cuda_op_gated_delta_net(ggml_backend_cuda_context & ctx, ggml_tensor *
 
     cudaStream_t stream = ctx.stream();
 
-    // K (snapshot slot count) is an op param; state holds s0 only (D, 1, n_seqs).
+    // K (snapshot slot count) is an op param; state holds s0 only [S_v, S_v, H, n_seqs].
     const int K = ggml_get_op_params_i32(dst, 0);
     const bool keep_rs = K > 1;
 

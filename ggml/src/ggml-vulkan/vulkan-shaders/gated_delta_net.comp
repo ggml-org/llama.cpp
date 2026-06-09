@@ -102,7 +102,7 @@ void main() {
     const uint iq3 = seq_id / rq3;
 
     const uint state_size = S_V * S_V;
-    // input state holds s0 only (D, 1, n_seqs): per-seq stride is H*D.
+    // input state holds s0 only [S_v, S_v, H, n_seqs]: per-seq stride is H*D.
     const uint state_in_base       = (seq_id * H + head_id) * state_size;
     // output state layout per slot: same per-(seq,head) offset as the single-slot case.
     const uint state_out_base      = (seq_id * H + head_id) * state_size;

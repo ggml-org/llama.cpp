@@ -6248,11 +6248,11 @@ struct ggml_tensor * ggml_gated_delta_net(
     GGML_ASSERT(g->ne[0] == 1 || g->ne[0] == S_v);
     GGML_ASSERT(beta->ne[0] == 1);
 
-    // state holds s0 only: (S_v*S_v*H, 1, n_seqs). K (snapshot slot count) is an op param.
-    GGML_ASSERT(state->ne[0] == S_v * S_v * H);
-    GGML_ASSERT(state->ne[1] == 1);
-    GGML_ASSERT(state->ne[2] == n_seqs);
-    GGML_ASSERT(state->ne[3] == 1);
+    // state holds the initial state s0 only: [S_v, S_v, H, n_seqs]. K (snapshot slot count) is an op param.
+    GGML_ASSERT(state->ne[0] == S_v);
+    GGML_ASSERT(state->ne[1] == S_v);
+    GGML_ASSERT(state->ne[2] == H);
+    GGML_ASSERT(state->ne[3] == n_seqs);
     GGML_ASSERT(K >= 1);
     const int64_t state_rows = K * S_v * n_seqs;
     const int64_t ne[4] = { S_v * H, n_tokens * n_seqs + state_rows, 1, 1 };
