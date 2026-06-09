@@ -982,6 +982,7 @@ private:
                 mtmd_helper_log_set(common_log_default_callback, nullptr);
             }
 
+            mparams.sched = llama_get_sched(ctx_tgt);
             mctx = mtmd_init_from_file(mmproj_path.c_str(), model_tgt, mparams);
             if (mctx == nullptr) {
                 SRV_ERR("failed to load multimodal model, '%s'\n", mmproj_path.c_str());

@@ -52,6 +52,9 @@ struct clip_context_params {
     ggml_backend_sched_eval_callback cb_eval;
     void * cb_eval_user_data;
     bool no_alloc;
+    // optional: share an existing scheduler instead of creating a new one
+    // caller must ensure the scheduler outlives the clip context
+    ggml_backend_sched_t sched;
 };
 
 struct clip_init_result {
