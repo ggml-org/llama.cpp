@@ -251,9 +251,8 @@ static void ssm_scan_f32_cuda(const float * src0, const float * src1, const floa
         GGML_ASSERT(head_dim == 1);
         GGML_ASSERT(n_group == 1);
         const dim3 blocks(n_seq, (n_head + threads - 1) / threads, 1);
-        const int  smem_size = (threads * (d_state + 1) * 2) * sizeof(float);
         if (d_state == 16) {
-            const ggml_cuda_kernel_launch_params launch_params = ggml_cuda_kernel_launch_params(blocks, threads, smem_size, stream);
+            const ggml_cuda_kernel_launch_params launch_params = ggml_cuda_kernel_launch_params(blocks, threads, 0, stream);
             switch (n_tok)
             {
             case 1:
