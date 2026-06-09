@@ -618,13 +618,35 @@ void ggml_metal_rsets_free(ggml_metal_rsets_t rsets) {
         return;
     }
 
-    // note: if you hit this assert, most likely you haven't deallocated all Metal resources before exiting
-    GGML_ASSERT([rsets->data count] == 0);
-
+    // Stop the keep-alive heartbeat before touching the collection, so the drain below
+    // cannot race the background thread's residency requests.
     atomic_store_explicit(&rsets->d_stop, true, memory_order_relaxed);
 
     dispatch_group_wait(rsets->d_group, DISPATCH_TIME_FOREVER);
     dispatch_release(rsets->d_group);
+
+    // The device is torn down from a C++ static destructor at process exit. If the host did
+    // not free every Metal buffer first, that buffer's residency set is still registered
+    // here, so the array is non-empty. The original code did GGML_ASSERT([rsets->data count]
+    // == 0), which calls abort() and crashes the app on every quit on macOS 15+. The device
+    // does not own the buffers and cannot free them from its destructor, so instead of
+    // aborting, defensively wind down residency on any leftover sets (mirroring
+    // ggml_metal_buffer_rset_free, minus -release, since each set is still owned by its
+    // not-yet-freed buffer) before releasing the collection. The backing buffers are
+    // reclaimed by the OS as the process exits. No behavior change when all buffers were
+    // freed (the array is empty).
+#if defined(GGML_METAL_HAS_RESIDENCY_SETS)
+    if (@available(macOS 15.0, iOS 18.0, tvOS 18.0, visionOS 2.0, *)) {
+        if ([rsets->data count] != 0) {
+            GGML_LOG_DEBUG("%s: %ld residency set(s) still registered at teardown; winding down\n",
+                           __func__, (long) [rsets->data count]);
+            for (id rset in rsets->data) {
+                [rset endResidency];
+                [rset removeAllAllocations];
+            }
+        }
+    }
+#endif
 
     [rsets->data release];
     [rsets->lock release];
