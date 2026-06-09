@@ -35,6 +35,29 @@ env:
   LLAMA_ARG_LOG_TIMESTAMPS: 1
 
 jobs:
+  format:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Clone
+        uses: actions/checkout@v6
+
+      - name: Install clang-format 22
+        run: |
+          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key |
+            sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc > /dev/null
+          sudo add-apt-repository -y \
+            "deb http://apt.llvm.org/noble/ llvm-toolchain-noble-22 main"
+          sudo apt-get update
+          sudo apt-get install -y clang-format-22
+
+      - name: Check formatting
+        run: |
+          find ggml/src/ggml-webgpu \
+            -type f \( -name '*.cpp' -o -name '*.hpp' -o -name '*.h' \) \
+            -print0 |
+            xargs -0 clang-format-22 --dry-run --Werror
+
   macos:
     runs-on: macos-latest
 
