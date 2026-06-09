@@ -4324,27 +4324,22 @@ struct test_mul_mat_id_fusion : public test_case {
     }
 };
 
-// Regression test for the Vulkan prealloc prescan fix (PR #24312).
+// Regression test for the Vulkan mid-graph prealloc double-submit fix.
 //
-// Builds a two-op graph where both ops use prealloc_y but require different sizes:
-//   Op 1 (small_out): MUL_MAT_ID with k_small contraction dim — allocates prealloc_y
-//                     at small_y_sz and records GPU commands referencing that buffer.
-//   Op 2 (large_out): MUL_MAT_ID with k (larger) contraction dim — needs large_y_sz
-//                     > small_y_sz, so without the prescan it calls
-//                     ggml_vk_preallocate_buffers mid-graph, which DESTROYS the buffer
-//                     that Op 1's already-recorded descriptors still point to.
+// Builds a two-op graph where Op 1 (small k) causes prealloc_y to be allocated at a
+// smaller size, then Op 2 (larger k) triggers ggml_vk_preallocate_buffers mid-graph
+// with a live command buffer (subctx != nullptr).
 //
-// Op 1 is placed as src[0] of the final ADD so the graph executor always runs it
-// first, ensuring prealloc_y is non-null (old VkBuffer visible) when Op 2 grows it.
+// Before the fix, ggml_vk_preallocate_buffers called ggml_vk_ctx_end + ggml_vk_submit
+// on the command buffer, then immediately called ggml_vk_synchronize — which also
+// called ggml_vk_ctx_end + ggml_vk_submit on the SAME command buffer.  This double-
+// end / double-submit is a Vulkan spec violation (undefined behaviour) that corrupted
+// host memory on Intel Arc UMA, manifesting as STATUS_STACK_BUFFER_OVERRUN at large
+// (≥ 23K token) contexts.
 //
-// With GGML_VK_FA_DEBUG=1 the backend logs the old and new VkBuffer handles,
-// showing the use-after-free directly:
-//   old_VkBuffer=0x<A>  <- bound in Op 1's recorded commands, about to be destroyed
-//   DESTROYED while live in cmd buffer -- descriptor referencing it is now invalid
-//   new_VkBuffer=0x<B>  <- different handle; Op 1's commands now reference freed memory
-//
-// On Intel Arc UMA the destroyed buffer's physical memory can be reused for host
-// allocations; GPU writes via the stale descriptor then corrupt host stack memory.
+// The fix removes the redundant ctx_end + submit from ggml_vk_preallocate_buffers,
+// delegating entirely to ggml_vk_synchronize which already handles it correctly.
+// This test verifies that the resulting mid-graph reallocation produces correct output.
 struct test_mul_mat_id_prescan : public test_case {
     const ggml_type type_a;  // weight type for both MUL_MAT_ID ops
     const int       n_mats;  // total number of experts
@@ -4355,10 +4350,11 @@ struct test_mul_mat_id_prescan : public test_case {
 
     std::string vars() override { return VARS_TO_STR6(type_a, n_mats, n_used, m, k, n_tokens); }
     double      max_nmse_err() override { return 5e-4; }
-    // run_whole_graph ensures the graph goes through ggml_backend_graph_compute
-    // (where the prescan runs) rather than being dispatched op-by-op.
+    // run_whole_graph routes through ggml_backend_graph_compute so the Vulkan
+    // backend processes a single batched command buffer (the path that triggers
+    // mid-graph ggml_vk_preallocate_buffers calls when buffer sizes differ).
     bool        run_whole_graph() override { return true; }
-    std::string op_desc(ggml_tensor *) override { return "MUL_MAT_ID_PRESCAN"; }
+    std::string op_desc(ggml_tensor *) override { return "MUL_MAT_ID_PREALLOC"; }
 
     test_mul_mat_id_prescan(
             ggml_type type_a = GGML_TYPE_F16, int n_mats = 512, int n_used = 2,
@@ -4373,11 +4369,10 @@ struct test_mul_mat_id_prescan : public test_case {
         }
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
-        // Op 1 (small): MUL_MAT_ID with F16 weights and k_small — matrix path, uses
-        // prealloc_y at ROUNDUP_POW2(padded_n * k_small * n_tokens * sizeof(fp16)) bytes.
-        // Always F16 so k_small can be any multiple of 1 (quantized types require
-        // k to be a multiple of their block size, e.g. 256 for Q4_K, which k/4 may not satisfy).
-        // Placed as src[0] of ADD so the executor always runs this op first.
+        // Op 1 (small): MUL_MAT_ID with F16 weights and k_small — matrix path.
+        // F16 weights so k_small can be any multiple of 1 (quantized types require
+        // k to be a multiple of their block size, e.g. 256 for Q4_K).
+        // Placed as src[0] of ADD so the graph executor runs this op first (DFS).
         const int64_t k_small = k / 4;
         ggml_tensor * as_small = ggml_new_tensor_3d(ctx, GGML_TYPE_F16, k_small, m, n_mats);
         ggml_set_name(as_small, "as_small");
@@ -4390,10 +4385,9 @@ struct test_mul_mat_id_prescan : public test_case {
         ggml_tensor * small_out = ggml_mul_mat_id(ctx, as_small, bl_small, ids_small); // (m, n_used, n_tokens)
         ggml_set_name(small_out, "small_out");
 
-        // Op 2 (large): MUL_MAT_ID with k > k_small — matrix path, needs prealloc_y
-        // at ROUNDUP_POW2(padded_n * k * n_tokens * sizeof(fp16)) bytes > Op 1's size.
-        // Without the prescan, this causes ggml_vk_preallocate_buffers to destroy
-        // Op 1's prealloc_y buffer while Op 1's commands are already in the cmd buffer.
+        // Op 2 (large): MUL_MAT_ID with k > k_small — matrix path, needs a larger
+        // prealloc_y than Op 1 allocated, triggering ggml_vk_preallocate_buffers
+        // mid-graph with the subctx (command buffer) still live.
         ggml_tensor * as = ggml_new_tensor_3d(ctx, type_a, k, m, n_mats);
         ggml_set_name(as, "as");
         ggml_tensor * ids_storage = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, n_mats, n_tokens);
@@ -4405,11 +4399,9 @@ struct test_mul_mat_id_prescan : public test_case {
         ggml_tensor * large_out = ggml_mul_mat_id(ctx, as, bl, ids); // (m, n_used, n_tokens)
         ggml_set_name(large_out, "large_out");
 
-        // Combine both ops so the graph executor must run both.
-        // small_out (m, n_used) broadcasts over large_out (m, n_used, n_tokens).
-        // small_out is src[0] so GGML executes it first (DFS visits src[0] before src[1]).
-        // This guarantees prealloc_y is already allocated (non-null) when large_out runs,
-        // making the old VkBuffer handle visible in the GGML_VK_FA_DEBUG log.
+        // Combine both ops so the graph executor runs both in the same command buffer.
+        // small_out is src[0] so DFS visits it first, ensuring prealloc_y is allocated
+        // to the smaller size before large_out triggers mid-graph reallocation.
         return ggml_add(ctx, small_out, large_out);
     }
 
@@ -8628,20 +8620,13 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         test_cases.emplace_back(new test_mul_mat_id(type_a, GGML_TYPE_F32, 512, 2, false, 128, 4, 256));
     }
 
-    // Prescan regression: two-op graph (small MUL_MAT then large MUL_MAT_ID).
-    // run_whole_graph=true ensures the graph goes through ggml_backend_graph_compute
-    // so the Vulkan prescan in ggml_backend_vk_graph_compute is exercised.
-    // n_tokens=16 forces the matrix path (ggml_vk_mul_mat_id_q_f16) which uses
-    // prealloc_y; n_tokens<=8 would take the vector path that does not.
-    // Without the prescan fix the Vulkan backend grows prealloc_y mid-graph
-    // (has_subctx=1), which corrupts memory on UMA hardware (Intel Arc).
-    // To verify the test catches the regression, disable the prescan (#if 0 in
-    // ggml_backend_vk_graph_compute) and run with GGML_VK_FA_DEBUG=1; the
-    // GGML_ASSERT(!subctx) in ggml_vk_mul_mat_id_q_f16 will abort the process.
-    // k=1024 → k_small=256: both ops land in the quantize_y=1 pipeline branch on Arc UMA,
-    // giving a non-null old_VkBuffer when Op 2 (k=1024) forces prealloc_y to grow past
-    // Op 1's (k_small=256) allocation.  On Intel Arc UMA the freed buffer's physical pages
-    // can be immediately reused for host memory, allowing the GPU to corrupt host stack.
+    // Regression test for the mid-graph prealloc_y double-submit bug.
+    // Two MUL_MAT_ID ops in one graph with different inner dims force
+    // ggml_vk_preallocate_buffers to be called mid-graph with a live command buffer.
+    // Before the fix this triggered a double vkEndCommandBuffer + vkQueueSubmit on
+    // the same VkCommandBuffer (Vulkan UB that crashed on Intel Arc UMA).
+    // n_tokens=16 ensures the matrix path (uses prealloc_y); k=1024/k_small=256
+    // ensures Op 2 needs a strictly larger prealloc_y than Op 1.
     test_cases.emplace_back(new test_mul_mat_id_prescan(GGML_TYPE_F16,  512, 2, 128, 1024, 16));
     test_cases.emplace_back(new test_mul_mat_id_prescan(GGML_TYPE_Q4_K, 512, 2, 128, 1024, 16));
 
