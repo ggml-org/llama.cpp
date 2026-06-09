@@ -114,6 +114,17 @@ def parse_spill_device(value):
     return target, spill
 
 
+def parse_sweep_device_weight(value):
+    device, sep, weights = value.partition("=")
+    device = device.strip()
+    weights = weights.strip()
+    if not sep or not device or not weights:
+        raise argparse.ArgumentTypeError(
+            f"invalid device weight sweep {value!r}; expected DEVICE=WEIGHT_LIST"
+        )
+    return device, parse_float_list(weights)
+
+
 def parse_trace(paths):
     tensor_ops = []
     cross_endpoint = []
@@ -409,6 +420,60 @@ def make_spill_candidates(args, devices, splits, device_endpoints, cross_pairs):
     return candidates
 
 
+def make_weight_sweep_candidates(args, devices, splits, device_endpoints):
+    candidates = []
+    seen = set()
+    sweep_order = 0
+    for device, weights in args.sweep_device_weight:
+        if device not in devices:
+            continue
+
+        index = devices.index(device)
+        for weight in weights:
+            if weight <= 0:
+                continue
+
+            candidate_splits = list(splits)
+            if candidate_splits[index] == weight:
+                continue
+            candidate_splits[index] = weight
+            if sum(candidate_splits) <= 0:
+                continue
+            key = (tuple(devices), tuple(candidate_splits))
+            if key in seen:
+                continue
+            seen.add(key)
+
+            output_device = None
+            for output_index in range(len(candidate_splits) - 1, -1, -1):
+                if candidate_splits[output_index] > 0:
+                    output_device = devices[output_index]
+                    break
+
+            weight_name = format_split([weight]).replace(".", "p")
+            candidates.append({
+                "name": f"sweep_{device}_w{weight_name}",
+                "description": (
+                    "Change one existing device split weight while keeping the "
+                    "device order and all other split weights unchanged."
+                ),
+                "device": "/".join(devices),
+                "tensor_split": format_split(candidate_splits),
+                "generation": "device-weight-sweep",
+                "sweep_device": device,
+                "sweep_device_index": index,
+                "sweep_order": sweep_order,
+                "sweep_weight": weight,
+                "output_device_estimate": output_device,
+                "output_endpoint_estimate": device_endpoints.get(output_device),
+                "trace_candidate_cost_ms": 0.0,
+                "trace_cost_source": "not-estimated",
+            })
+            sweep_order += 1
+
+    return candidates
+
+
 def make_candidates(args, devices, splits, device_endpoints, endpoint_metrics, cross_pairs):
     total = sum(splits)
     candidates = []
@@ -470,11 +535,22 @@ def make_candidates(args, devices, splits, device_endpoints, endpoint_metrics, c
         })
 
     candidates.extend(make_spill_candidates(args, devices, splits, device_endpoints, cross_pairs))
+    candidates.extend(make_weight_sweep_candidates(args, devices, splits, device_endpoints))
+    deduped = []
+    seen_placements = set()
+    for candidate in candidates:
+        key = (candidate["device"], candidate["tensor_split"])
+        if key in seen_placements:
+            continue
+        seen_placements.add(key)
+        deduped.append(candidate)
+    candidates = deduped
     non_baseline = sorted(
         candidates[1:],
         key=lambda item: (
             -item.get("trace_candidate_cost_ms", 0.0),
             item.get("omitted_split_ratio", 0.0),
+            item.get("sweep_order", 1000000),
             item["name"],
         ),
     )
@@ -621,6 +697,7 @@ def parse_args():
     parser.add_argument("--include-known-fit-failures", action="store_true", help="emit known non-fitting candidates instead of moving them to rejected_candidates")
     parser.add_argument("--spill-device", action="append", default=[], type=parse_spill_device, metavar="TARGET=SPILL_DEVICE", help="generate same-endpoint spill candidates after TARGET using SPILL_DEVICE; repeatable")
     parser.add_argument("--spill-weight", default=[1.0], type=parse_float_list, help="spill weights to try for each --spill-device, for example 1 or 1/2")
+    parser.add_argument("--sweep-device-weight", action="append", default=[], type=parse_sweep_device_weight, metavar="DEVICE=WEIGHT_LIST", help="generate candidates by changing one existing device split weight, for example RPC0=1/2/4/8")
     parser.add_argument("--max-omitted-ratio", default=0.35, type=float, help="skip candidates that zero more than this split-weight fraction")
     parser.add_argument("--max-candidates", default=6, type=int, help="maximum non-baseline candidates to emit")
     parser.add_argument("--llama-bench", default=None, help="optional llama-bench path for generated bench_rpc_remote commands")
@@ -646,6 +723,27 @@ def parse_args():
         parser.error(
             f"--device has {len(devices)} entries but --tensor-split has "
             f"{len(args.tensor_split)} entries"
+        )
+    unknown_sweep_devices = sorted({
+        device
+        for device, _weights in args.sweep_device_weight
+        if device not in devices
+    })
+    if unknown_sweep_devices:
+        parser.error(
+            "--sweep-device-weight references unknown device(s): "
+            + ", ".join(unknown_sweep_devices)
+        )
+    non_positive_sweep_weights = [
+        f"{device}={format_split([weight])}"
+        for device, weights in args.sweep_device_weight
+        for weight in weights
+        if weight <= 0
+    ]
+    if non_positive_sweep_weights:
+        parser.error(
+            "--sweep-device-weight must use positive weights; invalid: "
+            + ", ".join(non_positive_sweep_weights)
         )
 
     return args

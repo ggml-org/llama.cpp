@@ -399,6 +399,29 @@ change both `--device` and `--tensor-split`. Run them with
 that wins in one noisy discovery run can regress once cache state, prompt size,
 or node load changes.
 
+Use `--sweep-device-weight DEVICE=WEIGHTS` to generate candidates that keep the
+same device order but change one existing positive split weight. This is useful
+when one RPC endpoint exposes a GPU and a CPU and the question is not whether to
+add a new spill device, but how much split weight the already-listed devices
+should receive:
+
+```bash
+python3 tools/rpc/suggest_rpc_placement.py \
+  --trace-stderr baseline.stderr.txt \
+  --rpc "$RPC" \
+  --device RPC0/RPC1 \
+  --device-endpoints RPC0=host-a:50052,RPC1=host-a:50052 \
+  --tensor-split 1/1 \
+  --sweep-device-weight RPC0=1/2/4/8/16
+```
+
+The generated candidates only propose what to benchmark. A heavier GPU-side
+split can improve decode throughput on one model while hurting another model's
+fit, prompt throughput, or output placement, so keep the real-network
+`bench_rpc_sweep.py` comparison as the source of truth. Weight-sweep candidates
+are marked as not trace-estimated because the trace cannot predict whether a
+different positive split weight will improve the real decode path.
+
 To run several suggested splits in one pass, use
 `tools/rpc/bench_rpc_sweep.py`. It writes one JSONL/stderr pair per candidate,
 a `summary.json`, and grep-friendly `ranked.csv` and `ranked.jsonl` files:

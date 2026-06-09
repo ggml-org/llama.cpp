@@ -265,6 +265,15 @@ def summarize_rows(rows):
     return metrics
 
 
+def required_metric_kinds(args):
+    kinds = []
+    if args.prompt > 0:
+        kinds.append("prompt")
+    if args.gen > 0:
+        kinds.append("decode")
+    return kinds
+
+
 def case_tensor_split(args, name):
     if name == "base" and args.base_tensor_split is not None:
         return args.base_tensor_split
@@ -377,10 +386,11 @@ def run_case(args, name, case, env):
         raise RuntimeError(f"{name} {case['error']}; see {stderr_path}")
 
     metrics = summarize_rows(load_jsonl(jsonl_path))
-    if "prompt" not in metrics or "decode" not in metrics:
+    missing_metrics = [kind for kind in required_metric_kinds(args) if kind not in metrics]
+    if missing_metrics:
         case["status"] = "failed"
         case["metrics"] = metrics
-        case["error"] = f"missing prompt or decode metrics in {jsonl_path}"
+        case["error"] = f"missing {', '.join(missing_metrics)} metrics in {jsonl_path}"
         raise RuntimeError(f"{name} {case['error']}")
 
     case["status"] = "ok"
@@ -407,12 +417,24 @@ def percent_delta(patch_value, base_value):
     return (patch_value / base_value - 1.0) * 100.0
 
 
+def measured_metric_kinds(summary):
+    kinds = []
+    for kind in ("prompt", "decode"):
+        if any(
+            kind in case.get("metrics", {})
+            for case in summary.get("cases", {}).values()
+        ):
+            kinds.append(kind)
+    return kinds
+
+
 def build_comparison(summary):
     if "base" not in summary.get("cases", {}) or "patch" not in summary.get("cases", {}):
         return
 
     comparison = {}
-    for kind in ("prompt", "decode"):
+    metric_kinds = measured_metric_kinds(summary)
+    for kind in metric_kinds:
         base_avg = metric_avg(summary, "base", kind)
         patch_avg = metric_avg(summary, "patch", kind)
         comparison[kind] = {
@@ -427,8 +449,11 @@ def build_comparison(summary):
         "patch_elapsed_sec": patch_elapsed,
         "delta_pct": percent_delta(patch_elapsed, base_elapsed),
     }
-    summary["prompt_avg_ts_delta_pct"] = comparison["prompt"]["delta_pct"]
-    summary["decode_avg_ts_delta_pct"] = comparison["decode"]["delta_pct"]
+    summary["measured_metric_kinds"] = metric_kinds
+    if "prompt" in comparison:
+        summary["prompt_avg_ts_delta_pct"] = comparison["prompt"]["delta_pct"]
+    if "decode" in comparison:
+        summary["decode_avg_ts_delta_pct"] = comparison["decode"]["delta_pct"]
     summary["elapsed_delta_pct"] = comparison["elapsed"]["delta_pct"]
     summary["comparison"] = comparison
 
@@ -467,7 +492,7 @@ def parse_args():
     parser.add_argument("--base-rpc", default=None, help="baseline RPC host:port, or comma-separated host:port list")
     parser.add_argument("--patch-rpc", default=None, help="patched RPC host:port, or comma-separated host:port list")
     parser.add_argument("--only", choices=("base", "patch", "both"), default="both", help="run one case or both cases")
-    parser.add_argument("--prompt", default=32, type=int, help="prompt tokens for llama-bench -p")
+    parser.add_argument("--prompt", default=32, type=int, help="prompt tokens for llama-bench -p; use 0 for generation-only runs")
     parser.add_argument("--gen", default=32, type=int, help="generated tokens for llama-bench -n")
     parser.add_argument("--repetitions", default=7, type=int, help="llama-bench repetitions for -r")
     parser.add_argument("--ngl", default=99, type=int, help="GPU layers for llama-bench -ngl")
@@ -503,8 +528,8 @@ def parse_args():
         except argparse.ArgumentTypeError as exc:
             parser.error(str(exc))
 
-    if args.prompt < 1:
-        parser.error("--prompt must be >= 1")
+    if args.prompt < 0:
+        parser.error("--prompt must be >= 0")
     if args.gen < 1:
         parser.error("--gen must be >= 1")
     if args.repetitions < 1:
