@@ -3394,7 +3394,9 @@ static bool ggml_vk_matmul_shmem_support(const vk_device& device, const std::vec
     switch (src0_type) {
     case GGML_TYPE_IQ1_S:
     case GGML_TYPE_IQ1_M:
-        lut_size = 2*2048 + 4*2048;
+        // Regular matmul uses the compact uint16_t IQ1 grid; the expanded
+        // uint32_t grid is only enabled for the q8_1/int-dot vector path.
+        lut_size = 2*2048;
         break;
     case GGML_TYPE_IQ2_XXS:
         lut_size = 8*256;
