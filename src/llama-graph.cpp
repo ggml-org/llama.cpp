@@ -14,6 +14,7 @@
 
 #include <cassert>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 #include <numeric>
 #include <sstream>
@@ -1082,6 +1083,18 @@ ggml_tensor * llm_graph_context::build_cvec(
     return cvec->apply_to(ctx0, cur, il);
 }
 
+// True iff `w` is an NVFP4 W4A16 weight (layer block or LM head).
+static bool nvfp4_w4a16_for_weight(const llama_hparams & hparams, const ggml_tensor * w) {
+    if (w->type != GGML_TYPE_NVFP4) {
+        return false;
+    }
+    int il = -1;
+    if (sscanf(w->name, "blk.%d.", &il) == 1) {
+        return il >= 0 && (uint32_t) il < hparams.n_layer_all && hparams.nvfp4_w4a16_layer_arr[il];
+    }
+    return hparams.nvfp4_w4a16_output && strcmp(w->name, "output.weight") == 0;
+}
+
 ggml_tensor * llm_graph_context::build_lora_mm(
           ggml_tensor * w,
           ggml_tensor * cur,
@@ -1090,6 +1103,11 @@ ggml_tensor * llm_graph_context::build_lora_mm(
 
     if (w_s) {
         res = ggml_mul(ctx0, res, w_s);
+    }
+
+    // W4A16 NVFP4: ask the backend to keep activations (src1) at higher precision
+    if (nvfp4_w4a16_for_weight(hparams, w)) {
+        ggml_mul_mat_set_hint(res, GGML_HINT_NO_QUANT_SRC1);
     }
 
     for (const auto & lora : *loras) {
@@ -1128,6 +1146,11 @@ ggml_tensor * llm_graph_context::build_lora_mm_id(
         s = ggml_get_rows(ctx0, s, ids);
         res = ggml_mul(ctx0, res, s);
     }
+
+    if (nvfp4_w4a16_for_weight(hparams, w)) {
+        ggml_mul_mat_set_hint(res, GGML_HINT_NO_QUANT_SRC1);
+    }
+
     for (const auto & lora : *loras) {
         llama_adapter_lora_weight * lw = lora.first->get_weight(w);
         if (lw == nullptr) {

@@ -1049,6 +1049,19 @@ void llama_model_base::load_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_ATTENTION_CAUSAL,        hparams.causal_attn,     false);
     ml.get_key(LLM_KV_POOLING_TYPE,            hparams.pooling_type,    false);
     ml.get_key(LLM_KV_BLOCK_COUNT,             hparams.n_layer_all);
+
+    // NVFP4 W4A16 flags: a packed array of block indices + LM head bool
+    GGML_ASSERT(hparams.n_layer_all <= LLAMA_MAX_LAYERS);
+    std::vector<uint32_t> nvfp4_w4a16_blocks;
+    ml.get_arr(LLM_KV_GENERAL_NVFP4_W4A16_BLOCKS, nvfp4_w4a16_blocks, false);
+    for (uint32_t il : nvfp4_w4a16_blocks) {
+        if (il >= hparams.n_layer_all) {
+            throw std::runtime_error(format("invalid NVFP4 W4A16 block index %u (n_layer_all = %u)", il, hparams.n_layer_all));
+        }
+        hparams.nvfp4_w4a16_layer_arr[il] = true;
+    }
+    ml.get_key(LLM_KV_GENERAL_NVFP4_W4A16_OUTPUT, hparams.nvfp4_w4a16_output, false);
+
     ml.get_key(LLM_KV_EXPERT_COUNT,            hparams.n_expert,        false);
     ml.get_key(LLM_KV_EXPERT_USED_COUNT,       hparams.n_expert_used,   false);
     ml.get_key(LLM_KV_EXPERT_GROUP_COUNT,      hparams.n_expert_groups, false);

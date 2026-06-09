@@ -3269,7 +3269,9 @@ void ggml_mul_mat_set_prec(
 void ggml_mul_mat_set_hint(
         struct ggml_tensor * a,
         enum ggml_op_hint    hint) {
-    GGML_ASSERT(a->op == GGML_OP_MUL_MAT);
+    // MUL_MAT accepts any hint, but MUL_MAT_ID (MoE experts) only the activation-side hint.
+    GGML_ASSERT(a->op == GGML_OP_MUL_MAT ||
+               (a->op == GGML_OP_MUL_MAT_ID && hint == GGML_HINT_NO_QUANT_SRC1));
 
     const int32_t hint_i32 = (int32_t) hint;
 
