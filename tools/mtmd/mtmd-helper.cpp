@@ -770,6 +770,7 @@ struct mtmd_helper_video {
             cmd.push_back(seek_buf);
         }
 
+        cmd.push_back("-nostdin");
         cmd.push_back("-i");
         // cache:pipe:0 wraps stdin with a seekable in-memory cache, letting ffmpeg seek
         // backwards for container headers (e.g. MP4 moov atom at end of file)
