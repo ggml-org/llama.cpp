@@ -1,9 +1,3 @@
-/**
- * Source of the worker that runs model generated code.
- * Captures console output and the value returned by the code,
- * then reports back to the iframe harness in a single message.
- */
-export const SANDBOX_WORKER_SHIM = `
 const logs = [];
 const fmt = (value) => {
 	if (typeof value === 'string') return value;
@@ -13,9 +7,11 @@ const fmt = (value) => {
 		return String(value);
 	}
 };
-const capture = (level, prefix) => (...args) => {
-	logs.push(prefix + args.map(fmt).join(' '));
-};
+const capture =
+	(level, prefix) =>
+	(...args) => {
+		logs.push(prefix + args.map(fmt).join(' '));
+	};
 console.log = capture('log', '');
 console.info = capture('info', '');
 console.debug = capture('debug', '');
@@ -32,4 +28,3 @@ self.onmessage = async (event) => {
 	}
 	self.postMessage(reply);
 };
-`;

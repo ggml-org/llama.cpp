@@ -1,4 +1,4 @@
-import { SANDBOX_WORKER_SHIM } from './sandbox-worker';
+import WORKER_SHIM from './sandbox-worker.js?raw';
 
 /**
  * Harness loaded as srcdoc into a sandboxed iframe (allow-scripts only).
@@ -8,7 +8,7 @@ import { SANDBOX_WORKER_SHIM } from './sandbox-worker';
  * removing the iframe.
  */
 export const SANDBOX_HARNESS_HTML = `<!doctype html><script>
-const SHIM = ${JSON.stringify(SANDBOX_WORKER_SHIM)};
+const SHIM = ${JSON.stringify(WORKER_SHIM)};
 addEventListener('message', (event) => {
 	const respond = (payload) => parent.postMessage(payload, '*');
 	let worker;

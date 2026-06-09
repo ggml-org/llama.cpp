@@ -1,13 +1,13 @@
 import {
 	NEWLINE_SEPARATOR,
 	SANDBOX_EMPTY_OUTPUT,
-	SANDBOX_HARNESS_HTML,
 	SANDBOX_OUTPUT_MAX_CHARS,
 	SANDBOX_TIMEOUT_MS_DEFAULT,
 	SANDBOX_TIMEOUT_MS_MAX,
 	SANDBOX_TOOL_NAME,
 	SANDBOX_TRUNCATION_NOTICE
 } from '$lib/constants';
+import { SANDBOX_HARNESS_HTML } from './sandbox-harness';
 import type { ToolExecutionResult } from '$lib/types';
 
 interface SandboxReply {
