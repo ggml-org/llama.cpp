@@ -160,6 +160,7 @@ struct diffusion_server {
     bool   topk_tail     = false;
     bool   use_gpu_sampling = false;
     bool   use_device_self_cond = false;
+    bool   use_device_loop = false;
     std::string model_id;
     std::string model_path;
     std::string build_info = "llama.cpp diffusion-gemma-server";
@@ -240,6 +241,10 @@ struct diffusion_server {
 
         int n_blocks_run = 0, n_steps_total = 0;
         bool done = false;
+        const int topk_max_requested =
+            (rq.topk_start > 0 && rq.topk_end > 0) ? std::max(rq.topk_start, rq.topk_end) : rq.topk_fixed;
+        const bool use_device_loop_request = use_device_loop &&
+            (topk_max_requested <= 0 || topk_max_requested <= GPU_SAMPLING_MAX_TOP_K);
 
         const auto t_gen0 = std::chrono::steady_clock::now();
         for (int block = 0; block < max_canvases && !done; ++block) {
@@ -263,6 +268,7 @@ struct diffusion_server {
                 const bool use_gpu_sampling_step = use_gpu_sampling &&
                     (k_step <= 0 || k_step <= GPU_SAMPLING_MAX_TOP_K);
                 const bool use_device_self_cond_step = use_gpu_sampling_step && use_device_self_cond;
+                const bool use_device_loop_step = use_device_loop_request && use_gpu_sampling_step;
 
                 llama_set_causal_attn(ctx, false);
                 llama_set_diffusion_decoder_phase(ctx, true);
@@ -283,6 +289,36 @@ struct diffusion_server {
 
                 std::vector<float> entropy(canvas_length);
                 std::vector<llama_token> sampled(canvas_length);
+
+                if (use_device_loop_step) {
+                    llama_diffusion_sample_params sample_params = {
+                        /* .n_tokens              = */ canvas_length,
+                        /* .top_k                 = */ k_step,
+                        /* .self_cond_top_k       = */ SC_K,
+                        /* .temperature           = */ temp,
+                        /* .seed                  = */ rq.seed,
+                        /* .step                  = */ (uint32_t) n_steps_total,
+                        /* .top_k_tail_correction = */ rq.topk_tail,
+                    };
+                    llama_diffusion_sample_result sample_result = {
+                        /* .sampled         = */ nullptr,
+                        /* .argmax          = */ nullptr,
+                        /* .entropy         = */ nullptr,
+                        /* .self_cond_ids   = */ nullptr,
+                        /* .self_cond_probs = */ nullptr,
+                        /* .final_tokens    = */ cur_step == 1 ? argmax_canvas.data() : nullptr,
+                        /* .update_canvas_on_device = */ cur_step > 1,
+                        /* .entropy_bound   = */ ENTROPY_BOUND,
+                    };
+                    if (!llama_diffusion_sample_topk(ctx, &sample_params, &sample_result)) {
+                        llama_memory_seq_rm(mem, 0, n_past, -1);
+                        out.error = "CUDA diffusion device loop failed at denoising step " +
+                            std::to_string(cur_step) + " (k=" + std::to_string(k_step) + ")";
+                        return out;
+                    }
+                    llama_memory_seq_rm(mem, 0, n_past, -1);
+                    continue;
+                }
 
                 if (!use_device_self_cond_step) {
                     std::fill(sc_probs.begin(), sc_probs.end(), 0.0f);
@@ -674,6 +710,7 @@ int main(int argc, char ** argv) {
     srv.use_gpu_sampling = gpu_sampling_requested &&
                            llama_diffusion_sample_topk_supported(srv.ctx);
     srv.use_device_self_cond = srv.use_gpu_sampling && env_int("DG_DEVICE_SELFCOND", 1) != 0;
+    srv.use_device_loop = srv.use_device_self_cond && env_int("DG_DEVICE_LOOP", 1) != 0;
     llama_set_diffusion_gpu_sampling(srv.ctx, srv.use_gpu_sampling);
     const bool default_topk_gpu_ok = topk_max_requested <= 0 || topk_max_requested <= GPU_SAMPLING_MAX_TOP_K;
 
@@ -682,11 +719,12 @@ int main(int argc, char ** argv) {
     SRV_INF("%s\n", llama_print_system_info());
     SRV_INF("model loaded: '%s' | n_ctx = %d | canvas = %d | denoise steps = %d | 1 slot\n",
             srv.model_id.c_str(), srv.n_ctx, srv.canvas_length, srv.n_steps);
-    SRV_INF("gpu sampling: %s%s%s | top-k fixed=%d anneal=[%d->%d] tail_correction=%d\n",
+    SRV_INF("gpu sampling: %s%s%s%s | top-k fixed=%d anneal=[%d->%d] tail_correction=%d\n",
             srv.use_gpu_sampling ? "on" : "off",
             (!default_topk_gpu_ok ? " (default top-k will use CPU fallback until k <= CUDA limit)" :
              (!gpu_sampling_requested ? " (disabled by DG_GPU_SAMPLING=0)" : "")),
             srv.use_device_self_cond ? " | device self-cond: on" : "",
+            srv.use_device_loop ? " | device loop: on" : "",
             srv.topk_fixed, srv.topk_start, srv.topk_end, srv.topk_tail ? 1 : 0);
 
     // ------------------------------------------------------------------------------------------
@@ -758,6 +796,7 @@ int main(int argc, char ** argv) {
                 {"self_cond_topk", SC_K},
                 {"gpu_sampling", srv.use_gpu_sampling},
                 {"device_self_cond", srv.use_device_self_cond},
+                {"device_loop", srv.use_device_loop},
                 {"top_k", srv.topk_fixed},
                 {"top_k_start", srv.topk_start},
                 {"top_k_end", srv.topk_end},
@@ -865,6 +904,7 @@ int main(int argc, char ** argv) {
                     {"self_cond_topk", SC_K},
                     {"gpu_sampling", srv.use_gpu_sampling},
                     {"device_self_cond", srv.use_device_self_cond},
+                    {"device_loop", srv.use_device_loop},
                     {"top_k", srv.topk_fixed},
                     {"top_k_start", srv.topk_start},
                     {"top_k_end", srv.topk_end},

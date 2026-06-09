@@ -1034,6 +1034,13 @@ extern "C" {
         // sparse self-conditioning directly into the reused decoder graph input tensors.
         int32_t     * self_cond_ids;
         float       * self_cond_probs;
+        // Optional device-resident denoise update. When update_canvas_on_device is true, the CUDA
+        // fast path performs entropy accept/renoise and writes the next canvas into the reused
+        // decoder token input tensor. final_tokens is copied only when requested, typically on
+        // the final denoising step.
+        llama_token * final_tokens;
+        bool          update_canvas_on_device;
+        float         entropy_bound;
     };
 
     // CUDA-only fast path for block-diffusion sampling. When enabled, llama_decode()

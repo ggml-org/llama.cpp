@@ -641,9 +641,10 @@ static void ggml_gallocr_allocate_node(ggml_gallocr_t galloc, struct ggml_tensor
                     continue;
                 }
 
-                // outputs cannot be reused
-                if (parent->flags & GGML_TENSOR_FLAG_OUTPUT || (parent->view_src != NULL && parent->view_src->flags & GGML_TENSOR_FLAG_OUTPUT)) {
-                    AT_PRINTF("not reusing parent %s for %s as it is an output\n", parent->name, node->name);
+                // outputs and persistent inputs cannot be reused
+                if ((parent->flags & (GGML_TENSOR_FLAG_OUTPUT | GGML_TENSOR_FLAG_PERSIST)) ||
+                    (parent->view_src != NULL && (parent->view_src->flags & (GGML_TENSOR_FLAG_OUTPUT | GGML_TENSOR_FLAG_PERSIST)))) {
+                    AT_PRINTF("not reusing parent %s for %s as it is persistent\n", parent->name, node->name);
                     continue;
                 }
 
@@ -688,9 +689,9 @@ static void ggml_gallocr_allocate_node(ggml_gallocr_t galloc, struct ggml_tensor
 }
 
 static void ggml_gallocr_free_node(ggml_gallocr_t galloc, struct ggml_tensor * node) {
-    // graph outputs are never freed
-    if (node->flags & GGML_TENSOR_FLAG_OUTPUT) {
-        AT_PRINTF("not freeing output %s\n", node->name);
+    // graph outputs and persistent inputs are never freed
+    if (node->flags & (GGML_TENSOR_FLAG_OUTPUT | GGML_TENSOR_FLAG_PERSIST)) {
+        AT_PRINTF("not freeing persistent %s\n", node->name);
         return;
     }
 

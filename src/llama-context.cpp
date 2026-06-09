@@ -1189,6 +1189,9 @@ void llama_context::set_diffusion_self_cond_topk(const int32_t * ids, const floa
     diffusion_cond.sc_topk_device_probs_data  = nullptr;
     diffusion_cond.sc_topk_device_ids_bytes   = 0;
     diffusion_cond.sc_topk_device_probs_bytes = 0;
+    diffusion_cond.canvas_tokens_device_ready = false;
+    diffusion_cond.canvas_tokens_device_data  = nullptr;
+    diffusion_cond.canvas_tokens_device_bytes = 0;
 
     if (ids == nullptr || probs == nullptr || k <= 0 || n_tokens <= 0) {
         diffusion_cond.sc_topk = 0;
@@ -1219,6 +1222,35 @@ static ggml_backend_cuda_diffusion_sample_topk_t get_cuda_diffusion_sample_topk_
 
     return (ggml_backend_cuda_diffusion_sample_topk_t)
         ggml_backend_reg_get_proc_address(reg, "ggml_backend_cuda_diffusion_sample_topk");
+}
+
+static bool diffusion_decoder_inputs_device_ready(
+        const llama_diffusion_cond & diffusion_cond,
+        const llm_graph_result * res) {
+    if (!diffusion_cond.decoder_phase ||
+        !diffusion_cond.canvas_tokens_device_ready ||
+        !diffusion_cond.sc_topk_device_ready ||
+        !res) {
+        return false;
+    }
+
+    ggml_tensor * t_tokens = res->get_inp_tokens();
+    if (!t_tokens ||
+        diffusion_cond.canvas_tokens_device_data  != t_tokens->data ||
+        diffusion_cond.canvas_tokens_device_bytes != ggml_nbytes(t_tokens)) {
+        return false;
+    }
+
+    auto * inp_sc = res->get_inp_diffusion_self_cond_topk();
+    if (!inp_sc || !inp_sc->ids || !inp_sc->probs ||
+        diffusion_cond.sc_topk_device_ids_data    != inp_sc->ids->data ||
+        diffusion_cond.sc_topk_device_probs_data  != inp_sc->probs->data ||
+        diffusion_cond.sc_topk_device_ids_bytes   != ggml_nbytes(inp_sc->ids) ||
+        diffusion_cond.sc_topk_device_probs_bytes != ggml_nbytes(inp_sc->probs)) {
+        return false;
+    }
+
+    return true;
 }
 
 bool llama_context::diffusion_sample_topk_supported() const {
@@ -1256,6 +1288,7 @@ bool llama_context::diffusion_sample_topk(
 
     ggml_tensor * t_self_cond_ids   = nullptr;
     ggml_tensor * t_self_cond_probs = nullptr;
+    ggml_tensor * t_canvas_tokens   = nullptr;
     const bool device_self_cond = result->self_cond_ids == nullptr && result->self_cond_probs == nullptr;
     if (device_self_cond) {
         auto * inp = gf_res_prev->get_inp_diffusion_self_cond_topk();
@@ -1266,6 +1299,13 @@ bool llama_context::diffusion_sample_topk(
         t_self_cond_probs = inp->probs;
     } else if (result->self_cond_ids == nullptr || result->self_cond_probs == nullptr) {
         return false;
+    }
+
+    if (result->update_canvas_on_device) {
+        t_canvas_tokens = gf_res_prev->get_inp_tokens();
+        if (!t_canvas_tokens) {
+            return false;
+        }
     }
 
     ggml_cuda_diffusion_sample_params cuda_params = {
@@ -1287,6 +1327,10 @@ bool llama_context::diffusion_sample_topk(
         /* .self_cond_probs = */ result->self_cond_probs,
         /* .self_cond_ids_tensor   = */ t_self_cond_ids,
         /* .self_cond_probs_tensor = */ t_self_cond_probs,
+        /* .canvas_tokens_tensor   = */ t_canvas_tokens,
+        /* .final_tokens           = */ (int32_t *) result->final_tokens,
+        /* .entropy_bound          = */ result->entropy_bound,
+        /* .update_canvas_on_device = */ result->update_canvas_on_device,
     };
 
     const bool ok = sample_proc(backend, t_logits, &cuda_params, &cuda_result);
@@ -1299,6 +1343,11 @@ bool llama_context::diffusion_sample_topk(
         diffusion_cond.sc_topk_device_probs_data  = t_self_cond_probs->data;
         diffusion_cond.sc_topk_device_ids_bytes   = ggml_nbytes(t_self_cond_ids);
         diffusion_cond.sc_topk_device_probs_bytes = ggml_nbytes(t_self_cond_probs);
+    }
+    if (ok && result->update_canvas_on_device) {
+        diffusion_cond.canvas_tokens_device_ready = true;
+        diffusion_cond.canvas_tokens_device_data  = t_canvas_tokens->data;
+        diffusion_cond.canvas_tokens_device_bytes = ggml_nbytes(t_canvas_tokens);
     }
 
     return ok;
@@ -1500,7 +1549,9 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
         //const auto t_start_us = ggml_time_us();
 
         // FIXME this call causes a crash if any model inputs were not used in the graph and were therefore not allocated
-        res->set_inputs(&ubatch);
+        if (!diffusion_decoder_inputs_device_ready(diffusion_cond, res)) {
+            res->set_inputs(&ubatch);
+        }
 
         //LLAMA_LOG_INFO("graph set inputs time: %.3f ms\n", (ggml_time_us() - t_start_us)/1000.0);
     }

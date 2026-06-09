@@ -208,15 +208,17 @@ int main(int argc, char ** argv) {
                                   gpu_sampling_topk_ok &&
                                   llama_diffusion_sample_topk_supported(ctx);
     const bool use_device_self_cond = use_gpu_sampling && env_int("DG_DEVICE_SELFCOND", 1) != 0;
+    const bool use_device_loop      = use_device_self_cond && env_int("DG_DEVICE_LOOP", 1) != 0;
     llama_set_diffusion_gpu_sampling(ctx, use_gpu_sampling);
 
     LOG_INF("diffusion-gemma: prefix=%d canvas=%d max_canvases=%d steps=%d entropy_bound=%.3f temp=[%.2f,%.2f] n_ctx=%d mm=%d\n",
             prefix_len, canvas_length, max_canvases, n_steps, entropy_bound, TEMP_MIN, TEMP_MAX, n_ctx, (int) use_mm);
-    LOG_INF("diffusion-gemma: gpu sampling: %s%s%s\n",
+    LOG_INF("diffusion-gemma: gpu sampling: %s%s%s%s\n",
             use_gpu_sampling ? "on" : "off",
             (!gpu_sampling_topk_ok ? " (top-k exceeds CUDA fast-path limit)" :
              (!gpu_sampling_requested ? " (disabled by DG_GPU_SAMPLING=0)" : "")),
-            use_device_self_cond ? " | device self-cond: on" : "");
+            use_device_self_cond ? " | device self-cond: on" : "",
+            use_device_loop ? " | device loop: on" : "");
     if (topk_fixed > 0 || (topk_start > 0 && topk_end > 0)) {
         LOG_INF("diffusion-gemma: top-k sampling: fixed=%d anneal=[%d->%d] tail_correction=%d (vocab=%d)\n",
                 topk_fixed, topk_start, topk_end, topk_tail, n_vocab);
@@ -349,6 +351,40 @@ int main(int argc, char ** argv) {
         }
         if (k_step <= 0 || k_step >= n_vocab) k_step = 0;
         step_k = k_step;
+
+        if (use_device_loop) {
+            bool sampled_ok = true;
+            const auto t_sample_start = std::chrono::steady_clock::now();
+            llama_diffusion_sample_params sample_params = {
+                /* .n_tokens              = */ canvas_length,
+                /* .top_k                 = */ k_step,
+                /* .self_cond_top_k       = */ SC_K,
+                /* .temperature           = */ temp,
+                /* .seed                  = */ params.sampling.seed == LLAMA_DEFAULT_SEED ? 1234u : params.sampling.seed,
+                /* .step                  = */ (uint32_t) n_steps_total,
+                /* .top_k_tail_correction = */ topk_tail != 0,
+            };
+            llama_diffusion_sample_result sample_result = {
+                /* .sampled         = */ nullptr,
+                /* .argmax          = */ nullptr,
+                /* .entropy         = */ nullptr,
+                /* .self_cond_ids   = */ nullptr,
+                /* .self_cond_probs = */ nullptr,
+                /* .final_tokens    = */ cur_step == 1 ? argmax_canvas.data() : nullptr,
+                /* .update_canvas_on_device = */ cur_step > 1,
+                /* .entropy_bound   = */ entropy_bound,
+            };
+            sampled_ok = llama_diffusion_sample_topk(ctx, &sample_params, &sample_result);
+            sample_sync_s += std::chrono::duration<double>(std::chrono::steady_clock::now() - t_sample_start).count();
+            llama_memory_seq_rm(mem, 0, n_past, -1);
+            if (!sampled_ok) {
+                LOG_ERR("error: CUDA diffusion device loop failed at step %d (k=%d)\n", cur_step, k_step);
+                failed = true;
+                done = true;
+                break;
+            }
+            continue;
+        }
 
         // sparse self-cond for the NEXT step: top-SC_K (id, prob) per position. Cleared each step;
         // unused slots stay (id 0, prob 0) so the graph gather contributes nothing for them.

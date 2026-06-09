@@ -53,13 +53,14 @@ llama_model_diffusion_gemma::~llama_model_diffusion_gemma() {
     }
 }
 
-// Place the token embedding the self-conditioning step needs on an offloaded (GPU) backend.
+// Place the token embedding the diffusion decoder needs on an offloaded (GPU) backend.
 //
 // Primary path (sparse gather): store tok_embd {n_embd, n_vocab} as F16 in tok_embd_gpu on-device.
-// The decoder graph gathers only the top-k rows per position (ggml_get_rows), so this is the whole
-// soft-embedding cost: ~1.47 GiB resident, no per-decode PCIe copy, no full-vocab matmul. F16 (not
-// the native Q4_K) because CUDA get_rows has no Q4_K/Q6_K kernel -- a quantized gather would fall
-// back to CPU every step (a large regression). F16 halves the VRAM vs the F32 dense path.
+// The decoder graph gathers the canvas token rows and the self-conditioning top-k rows from this
+// tensor. This keeps token-id driven embedding lookup on device: ~1.47 GiB resident, no per-decode
+// token-id D2H for CPU row selection, no per-decode embedding H2D. F16 (not the native Q4_K)
+// because CUDA get_rows has no Q4_K/Q6_K kernel -- a quantized gather would fall back to CPU every
+// step (a large regression). F16 halves the VRAM vs the F32 dense path.
 //
 // Fallback path (dense matmul): if the F16 copy can't be allocated, precompute the transposed F32
 // embedding {n_vocab, n_embd} so the dense `probs @ token_embd` matmul (build_input) still runs
@@ -118,7 +119,7 @@ void llama_model_diffusion_gemma::load_arch_post(llama_model_loader & ml) {
         if (tok_embd_gpu_buf) {
             ggml_backend_tensor_set(tok_embd_gpu, half.data(), 0, ggml_nbytes(tok_embd_gpu));
 
-            LLAMA_LOG_INFO("%s: placed self-cond token embedding {%lld, %lld} F16 (%.2f GiB) on %s (gather, k=%lld)\n",
+            LLAMA_LOG_INFO("%s: placed diffusion token embedding {%lld, %lld} F16 (%.2f GiB) on %s (gather, k=%lld)\n",
                            __func__, (long long) n_embd_t, (long long) n_vocab_t,
                            ggml_nbytes(tok_embd_gpu) / (1024.0 * 1024.0 * 1024.0),
                            ggml_backend_buffer_name(tok_embd_gpu->buffer),
@@ -184,7 +185,7 @@ std::unique_ptr<llm_graph_context> llama_model_diffusion_gemma::build_arch_graph
 ggml_tensor * llama_model_diffusion_gemma::graph_base::build_input(bool is_decoder) {
     const auto & dmodel = static_cast<const llama_model_diffusion_gemma &>(model);
 
-    ggml_tensor * inpL = build_inp_embd(model.tok_embd);
+    ggml_tensor * inpL = build_inp_embd(dmodel.tok_embd_gpu ? dmodel.tok_embd_gpu : model.tok_embd);
 
     // scaled word embeddings (sqrt(hidden_size)); raw embeddings input is not scaled
     inpL = ggml_scale(ctx0, inpL, ubatch.token ? sqrtf(n_embd) : 1.0f);
