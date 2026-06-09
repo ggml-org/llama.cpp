@@ -32,7 +32,16 @@ jobs:
       - name: Build application
         env:
           HF_UI_VERSION: ${{ inputs.hf_ui_version || '' }}
+          LLAMA_UI_VERSION: ${{ inputs.hf_ui_version || 'b1234' }}
         run: npm run build
+        working-directory: tools/ui
+
+      - name: Run PWA unit tests (versioned build output)
+        run: npx vitest --project=unit --run tests/unit/pwa.spec.ts
+        working-directory: tools/ui
+
+      - name: Run build-utils unit tests (both paths)
+        run: npx vitest --project=unit --run tests/unit/build-utils.spec.ts
         working-directory: tools/ui
 
       - name: Generate checksums

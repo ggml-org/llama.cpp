@@ -3,14 +3,19 @@ import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 const DIST_DIR = resolve(__dirname, '../../dist');
+const distExists = existsSync(DIST_DIR);
 
+// PWA Build Output tests are integration tests that require a built dist/.
+// CI builds first then runs these tests; local devs should run `npm run build` or use `npm run test:pwa`.
 describe('PWA Build Output', () => {
-	const swContent = existsSync(resolve(DIST_DIR, 'sw.js'))
-		? readFileSync(resolve(DIST_DIR, 'sw.js'), 'utf-8')
-		: null;
-	const indexContent = existsSync(resolve(DIST_DIR, 'index.html'))
-		? readFileSync(resolve(DIST_DIR, 'index.html'), 'utf-8')
-		: null;
+	if (!distExists) {
+		console.warn(`⚠ Skipping PWA Build Output tests - dist/ not found (run 'npm run build' first)`);
+		it('skipped - dist/ not found', () => {});
+		return;
+	}
+
+	const swContent = readFileSync(resolve(DIST_DIR, 'sw.js'), 'utf-8');
+	const indexContent = readFileSync(resolve(DIST_DIR, 'index.html'), 'utf-8');
 
 	describe('Core files exist', () => {
 		it('service worker (sw.js) exists', () => {
@@ -102,19 +107,25 @@ describe('PWA Build Output', () => {
 	});
 
 	describe('index.html content', () => {
-		it('has modulepreload link for bundle.js with version', () => {
+		it('has modulepreload link for bundle.js with version or hash', () => {
 			expect(indexContent).toBeTruthy();
-			expect(indexContent).toMatch(/href="\.\/bundle\.js\?v=/);
+			expect(indexContent).toMatch(
+				/href="\.\/bundle\.js\?v=[a-zA-Z0-9._-]+|href="\.\/bundle\.js\?[a-zA-Z0-9_-]+/
+			);
 		});
 
-		it('has stylesheet link for bundle.css with version', () => {
+		it('has stylesheet link for bundle.css with version or hash', () => {
 			expect(indexContent).toBeTruthy();
-			expect(indexContent).toMatch(/href="\.\/bundle\.css\?v=/);
+			expect(indexContent).toMatch(
+				/href="\.\/bundle\.css\?v=[a-zA-Z0-9._-]+|href="\.\/bundle\.css\?[a-zA-Z0-9_-]+/
+			);
 		});
 
-		it('has dynamic import for bundle.js with version', () => {
+		it('has dynamic import for bundle.js with version or hash', () => {
 			expect(indexContent).toBeTruthy();
-			expect(indexContent).toMatch(/import\("\.\/bundle\.js\?v=/);
+			expect(indexContent).toMatch(
+				/import\("\.\/bundle\.js\?v=[a-zA-Z0-9._-]+|import\("\.\/bundle\.js\?[a-zA-Z0-9_-]+/
+			);
 		});
 
 		it('has __sveltekit__ (not __sveltekit_<hash>)', () => {

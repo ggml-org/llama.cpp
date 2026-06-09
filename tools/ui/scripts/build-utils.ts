@@ -18,10 +18,16 @@ import {
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
+/** Resolve explicit build version from env var. Returns null if not set. */
+export function getExplicitVersion(): string | null {
+	const explicit = process.env.LLAMA_UI_VERSION;
+	return explicit?.trim() || null;
+}
+
 /** Resolve build version: explicit env var (from CMake) > git hash > fallback. */
 export function resolveBuildVersion(): string {
-	const explicit = process.env.LLAMA_UI_VERSION;
-	if (explicit && explicit.trim()) {
+	const explicit = getExplicitVersion();
+	if (explicit) {
 		return explicit;
 	}
 
@@ -86,12 +92,19 @@ export function generateSplashScreenLinks(outDir: string): string[] {
 	return [...lightLinks, ...darkLinks];
 }
 
-/** Rewrite bundle paths in content: hashed paths → static names with content hash as query string. */
-export function rewriteBundlePaths(_content: string): string {
+/** Rewrite bundle paths in content: hashed paths → static names with optional version query string.
+ * If buildVersion is provided, uses `?v=<version>`; otherwise falls back to Vite content hash. */
+export function rewriteBundlePaths(_content: string, buildVersion?: string): string {
 	let result = _content;
-	// Keep the Vite hash as a query string so each build busts the browser cache
-	result = result.replace(REGEX_PATTERNS.BUNDLE_JS_HASH, './bundle.js?$1');
-	result = result.replace(REGEX_PATTERNS.BUNDLE_CSS_HASH, './bundle.css?$1');
+	if (buildVersion) {
+		// Use explicit build version as query string
+		result = result.replace(REGEX_PATTERNS.BUNDLE_JS, `./bundle.js?v=${buildVersion}`);
+		result = result.replace(REGEX_PATTERNS.BUNDLE_CSS, `./bundle.css?v=${buildVersion}`);
+	} else {
+		// Fallback: keep the Vite content hash as query string
+		result = result.replace(REGEX_PATTERNS.BUNDLE_JS_HASH, './bundle.js?$1');
+		result = result.replace(REGEX_PATTERNS.BUNDLE_CSS_HASH, './bundle.css?$1');
+	}
 	result = result.replace(REGEX_PATTERNS.SVELTEKIT_HASH, '__sveltekit__');
 	return result;
 }
