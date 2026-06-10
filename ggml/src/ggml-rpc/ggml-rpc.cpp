@@ -305,10 +305,14 @@ static bool rpc_env_truthy(const char * name) {
     return env != nullptr && env[0] != '\0' && strcmp(env, "0") != 0;
 }
 
+static bool rpc_env_enabled_by_default(const char * name) {
+    const char * env = std::getenv(name);
+    return env == nullptr || env[0] == '\0' || strcmp(env, "0") != 0;
+}
+
 static bool rpc_copy_tensor_async_client_enabled() {
     static const bool enabled = []() {
-        const char * env = std::getenv("GGML_RPC_COPY_TENSOR_ASYNC");
-        return env != nullptr && env[0] != '\0' && strcmp(env, "0") != 0;
+        return rpc_env_enabled_by_default("GGML_RPC_COPY_TENSOR_ASYNC");
     }();
 
     return enabled;
@@ -316,8 +320,7 @@ static bool rpc_copy_tensor_async_client_enabled() {
 
 static bool rpc_get_tensor_async_client_enabled() {
     static const bool enabled = []() {
-        const char * env = std::getenv("GGML_RPC_GET_TENSOR_ASYNC");
-        return env != nullptr && env[0] != '\0' && strcmp(env, "0") != 0;
+        return rpc_env_enabled_by_default("GGML_RPC_GET_TENSOR_ASYNC");
     }();
 
     return enabled;
@@ -325,8 +328,7 @@ static bool rpc_get_tensor_async_client_enabled() {
 
 static bool rpc_get_tensor_batch_client_enabled() {
     static const bool enabled = []() {
-        const char * env = std::getenv("GGML_RPC_GET_TENSOR_BATCH");
-        return env != nullptr && env[0] != '\0' && strcmp(env, "0") != 0;
+        return rpc_env_enabled_by_default("GGML_RPC_GET_TENSOR_BATCH");
     }();
 
     return enabled;

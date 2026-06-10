@@ -501,10 +501,11 @@ throughput.
 
 ### Async same-server copies
 
-Set `GGML_RPC_COPY_TENSOR_ASYNC=1` on the RPC client to send same-server
-RPC-to-RPC tensor copies as one-way `COPY_TENSOR_ASYNC` commands. This avoids a
-client-side response wait at layer or backend split boundaries while preserving
-server-side command order on the same RPC connection.
+By default, the RPC client sends same-server RPC-to-RPC tensor copies as one-way
+`COPY_TENSOR_ASYNC` commands. This avoids a client-side response wait at layer
+or backend split boundaries while preserving server-side command order on the
+same RPC connection. Set `GGML_RPC_COPY_TENSOR_ASYNC=0` on the RPC client to
+disable this optimization.
 
 The optimization is used only when source and destination tensors are RPC
 buffers on the same server and the server advertises support during `HELLO`.
@@ -515,11 +516,12 @@ response-bearing command drains the queued work.
 
 ### Async host readbacks
 
-Set `GGML_RPC_GET_TENSOR_ASYNC=1` on the RPC client to defer receiving
-`GET_TENSOR` responses until backend synchronization. This lets llama.cpp issue
-several small host readbacks, such as backend-sampling outputs, before paying the
-socket response waits. The wire command is still `GET_TENSOR`, so this client
-optimization does not require a new server command.
+By default, the RPC client defers receiving `GET_TENSOR` responses until backend
+synchronization. This lets llama.cpp issue several small host readbacks, such as
+backend-sampling outputs, before paying the socket response waits. The wire
+command is still `GET_TENSOR`, so this client optimization does not require a
+new server command. Set `GGML_RPC_GET_TENSOR_ASYNC=0` on the RPC client to
+disable deferred host readbacks.
 
 Before sending any later non-deferred RPC command on the same socket, the client
 drains pending readbacks first. This preserves response ordering for mixed RPC
@@ -527,15 +529,16 @@ traffic while still allowing grouped async reads when callers use
 `ggml_backend_tensor_get_async`.
 
 Use `GGML_RPC_TRACE=1` to confirm `GET_TENSOR_ASYNC` rows in the slow tensor
-table and compare the `GET_TENSOR` response wait before and after enabling the
-knob.
+table and compare the `GET_TENSOR` response wait with and without the
+optimization.
 
-Set `GGML_RPC_GET_TENSOR_BATCH=1` as well to send pending async readbacks with
-one negotiated `GET_TENSORS` command instead of several small `GET_TENSOR`
-requests. The batched path is used only when the server advertises support
-during `HELLO`; otherwise async readbacks keep the per-request deferred receive
-path. Use trace output to compare `GET_TENSORS` command counts and
-`GET_TENSOR_BATCH` tensor rows against the unbatched async readback path.
+When the server advertises support during `HELLO`, pending async readbacks are
+also sent with one negotiated `GET_TENSORS` command instead of several small
+`GET_TENSOR` requests. Set `GGML_RPC_GET_TENSOR_BATCH=0` on the RPC client to
+disable this batched readback path. If the server does not advertise support,
+async readbacks keep the per-request deferred receive path. Use trace output to
+compare `GET_TENSORS` command counts and `GET_TENSOR_BATCH` tensor rows against
+the unbatched async readback path.
 
 ### RPC tracing
 
