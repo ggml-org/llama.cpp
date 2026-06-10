@@ -1647,11 +1647,12 @@ static common_chat_params common_chat_params_init_lfm2(const common_chat_templat
     data.thinking_start_tag = THINK_START;
     data.thinking_end_tag   = THINK_END;
 
-    auto has_tools         = inputs.tools.is_array() && !inputs.tools.empty();
+    auto has_tools           = inputs.tools.is_array() && !inputs.tools.empty();
+    auto has_response_format = !inputs.json_schema.is_null() && inputs.json_schema.is_object();
     // Gate by reasoning format and whether the template supports <think>
     auto extract_reasoning = inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE &&
                              tmpl.source().find(THINK_START) != std::string::npos;
-    auto include_grammar   = has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE;
+    auto include_grammar   = has_response_format || (has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE);
 
     if (inputs.has_continuation()) {
         const auto & msg = inputs.continue_msg;
@@ -1674,6 +1675,10 @@ static common_chat_params common_chat_params_init_lfm2(const common_chat_templat
         }
 
         if (!has_tools || inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_NONE) {
+            if (has_response_format) {
+                auto response_format = p.content(p.schema(p.json(), "response-format-schema", inputs.json_schema));
+                return generation_prompt + reasoning + response_format + end;
+            }
             return generation_prompt + reasoning + p.content(p.rest()) + end;
         }
         auto tool_calls = p.rule("tool-calls",
@@ -1692,13 +1697,17 @@ static common_chat_params common_chat_params_init_lfm2(const common_chat_templat
     data.parser = parser.save();
 
     if (include_grammar) {
-        data.grammar_lazy = inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_AUTO;
+        data.grammar_lazy = !(has_response_format || (has_tools && inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED));
         data.grammar      = build_grammar([&](const common_grammar_builder & builder) {
             foreach_function(inputs.tools, [&](const json & tool) {
                 const auto & function = tool.at("function");
                 auto         schema   = function.at("parameters");
                 builder.resolve_refs(schema);
             });
+            if (has_response_format) {
+                auto schema = inputs.json_schema;
+                builder.resolve_refs(schema);
+            }
             parser.build_grammar(builder, data.grammar_lazy);
         });
 
