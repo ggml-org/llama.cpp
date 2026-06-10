@@ -352,7 +352,6 @@ static __global__ void k_set_rows_turbo3(
     // ---- Step 6: Pack qs and signs (warp-cooperative, no atomics) ----
     // Each warp handles 32 elements. With QK_TURBO3 > WARP_SIZE, multiple warps
     // share one block and write to different byte offsets within it.
-    const int warp_id = j / WARP_SIZE;
     const int lane    = j % WARP_SIZE;
     const int elem_in_block = j % QK_TURBO3;
     block_turbo3_0 * blk = blk_base + (j / QK_TURBO3);
@@ -720,7 +719,6 @@ static __global__ void k_set_rows_turbo2(
     // ---- Step 6: Pack qs (warp-cooperative, no atomics) ----
     // Each warp handles 32 elements. With QK_TURBO2 > WARP_SIZE, multiple warps
     // share one block and write to different byte offsets within it.
-    const int warp_id = j / WARP_SIZE;
     const int lane    = j % WARP_SIZE;
     const int elem_in_block = j % QK_TURBO2;
     block_turbo2_0 * blk = blk_base + (j / QK_TURBO2);
