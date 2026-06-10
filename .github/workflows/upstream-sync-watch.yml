@@ -58,15 +58,23 @@ jobs:
             echo "| upstream-only commits | \`$behind\` |"
           } >> "$GITHUB_STEP_SUMMARY"
 
-          issue_number=$(gh issue list \
+          issues_enabled=1
+          issue_number=""
+          if ! issue_number=$(gh issue list \
             --state open \
             --search "$title in:title" \
             --json number,title \
-            --jq "map(select(.title == \"$title\")) | .[0].number // empty")
+            --jq "map(select(.title == \"$title\")) | .[0].number // empty" \
+            2>/tmp/upstream-sync-issues.err); then
+            issues_enabled=0
+            issue_error=$(cat /tmp/upstream-sync-issues.err)
+            echo "::warning::GitHub Issues are unavailable for this repository: $issue_error"
+            echo "GitHub Issues are unavailable for this repository, so this workflow will report upstream drift through the run summary and failing check only." >> "$GITHUB_STEP_SUMMARY"
+          fi
 
           if [ "$behind" -eq 0 ]; then
             echo "Fork master is up to date with ggml-org/llama.cpp master." >> "$GITHUB_STEP_SUMMARY"
-            if [ -n "$issue_number" ]; then
+            if [ "$issues_enabled" -eq 1 ] && [ -n "$issue_number" ]; then
               gh issue comment "$issue_number" \
                 --body "Fork master is up to date with ggml-org/llama.cpp master at \`$upstream_sha\`. Closing this tracker."
               gh issue close "$issue_number" --reason completed
@@ -108,10 +116,14 @@ jobs:
 
           cat upstream-sync-report.md >> "$GITHUB_STEP_SUMMARY"
 
-          if [ -n "$issue_number" ]; then
-            gh issue edit "$issue_number" --body-file upstream-sync-report.md
+          if [ "$issues_enabled" -eq 1 ]; then
+            if [ -n "$issue_number" ]; then
+              gh issue edit "$issue_number" --body-file upstream-sync-report.md
+            else
+              gh issue create --title "$title" --body-file upstream-sync-report.md
+            fi
           else
-            gh issue create --title "$title" --body-file upstream-sync-report.md
+            echo "GitHub Issues are disabled; no tracking issue was created or updated." >> "$GITHUB_STEP_SUMMARY"
           fi
 
           echo "Fork master is behind upstream; failing this watchdog run so it is visible." >&2
