@@ -5,9 +5,10 @@
  * Uses the maskable icon as source (white bg, full logo) to avoid
  * the small-colormap pwa icons looking bad when cropped to a circle.
  *
- * Usage: node scripts/make-icons-circular.js [--padding-pct <0-50>]
+ * Usage: node scripts/make-icons-circular.js [--padding-pct <0-50>] [--scale-pct <50-100>]
  *
  * - padding-pct: percentage of icon size kept as padding around the circle (default: 25)
+ * - scale-pct: scale down the source image before cropping (default: 85)
  *
  * maskable-icon and apple-touch-icon are left untouched.
  */
@@ -26,6 +27,12 @@ const paddingPct = process.argv.reduce((acc, arg, i, args) => {
 	if (arg === '--padding-pct' && args[i + 1]) return parseFloat(args[i + 1]);
 	return acc;
 }, 0);
+
+// Scale down the source image before cropping to circle
+const scalePct = process.argv.reduce((acc, arg, i, args) => {
+	if (arg === '--scale-pct' && args[i + 1]) return parseFloat(args[i + 1]);
+	return acc;
+}, 85); // default 85% - icon fills 85% of the circular area
 
 // Source for circular icons: the maskable icon (white bg, full logo)
 const sourceIcon = 'maskable-icon-512x512.png';
@@ -76,17 +83,32 @@ async function makeCircle(targetFilename) {
 		.png()
 		.toFile(tmpMask);
 
-	// Scale source to target size, then apply circular mask
-	const output = await sharp(sourcePath)
-		.resize(size, size, { fit: 'cover', background: { r: 255, g: 255, b: 255, alpha: 1 } })
+	// Step 1: Scale source relative to circle diameter (not full icon), composite centered onto white canvas of full size
+	const circleDiameter = Math.floor(size * (1 - paddingPct / 100));
+	const scaledSize = Math.floor((circleDiameter * scalePct) / 100);
+	const offset = Math.floor((size - scaledSize) / 2);
+
+	const scaledBuf = await sharp(sourcePath)
+		.resize(scaledSize, scaledSize, {
+			fit: 'cover',
+			background: { r: 255, g: 255, b: 255, alpha: 1 }
+		})
 		.ensureAlpha()
+		.png()
+		.toBuffer();
+
+	// Step 2: Composite scaled image onto white background, then apply circular mask
+	const output = await sharp({
+		create: {
+			width: size,
+			height: size,
+			channels: 4,
+			background: { r: 255, g: 255, b: 255, alpha: 1 }
+		}
+	})
 		.composite([
-			{
-				input: tmpMask,
-				top: 0,
-				left: 0,
-				blend: 'dest-in'
-			}
+			{ input: scaledBuf, top: offset, left: offset },
+			{ input: tmpMask, top: 0, left: 0, blend: 'dest-in' }
 		])
 		.png()
 		.toBuffer();
@@ -95,12 +117,12 @@ async function makeCircle(targetFilename) {
 	fs.unlinkSync(tmpMask);
 
 	console.log(
-		`✓ ${targetFilename} → circle from ${sourceIcon}, ${paddingPct}% padding (size=${size}, r=${radius})`
+		`✓ ${targetFilename} → circle from ${sourceIcon}, ${paddingPct}% padding (size=${size}, r=${radius}, scale=${scalePct}%, circleDiameter=${circleDiameter})`
 	);
 }
 
 async function main() {
-	console.log(`Circular mask: ${paddingPct}% padding, source=${sourceIcon}\n`);
+	console.log(`Circular mask: ${paddingPct}% padding, ${scalePct}% scale, source=${sourceIcon}\n`);
 	for (const icon of targetIcons) {
 		await makeCircle(icon);
 	}
