@@ -1,0 +1,118 @@
+name: Upstream Sync Watch
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 */6 * * *'
+  push:
+    branches:
+      - master
+    paths:
+      - '.github/workflows/upstream-sync-watch.yml'
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: upstream-sync-watch
+  cancel-in-progress: true
+
+jobs:
+  upstream-sync-watch:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout fork
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Compare fork with upstream
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          title='Upstream sync needed: ggml-org/llama.cpp master moved'
+
+          git remote add upstream https://github.com/ggml-org/llama.cpp.git
+          git fetch --no-tags upstream master
+
+          fork_sha=$(git rev-parse HEAD)
+          upstream_sha=$(git rev-parse upstream/master)
+          merge_base=$(git merge-base HEAD upstream/master)
+          behind=$(git rev-list --count HEAD..upstream/master)
+          ahead=$(git rev-list --count upstream/master..HEAD)
+          upstream_log=$(git log --oneline --no-merges -n 25 HEAD..upstream/master || true)
+
+          {
+            echo '## Upstream sync status'
+            echo
+            echo "| field | value |"
+            echo "| --- | --- |"
+            echo "| fork head | \`$fork_sha\` |"
+            echo "| upstream head | \`$upstream_sha\` |"
+            echo "| merge base | \`$merge_base\` |"
+            echo "| fork-only commits | \`$ahead\` |"
+            echo "| upstream-only commits | \`$behind\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          issue_number=$(gh issue list \
+            --state open \
+            --search "$title in:title" \
+            --json number,title \
+            --jq "map(select(.title == \"$title\")) | .[0].number // empty")
+
+          if [ "$behind" -eq 0 ]; then
+            echo "Fork master is up to date with ggml-org/llama.cpp master." >> "$GITHUB_STEP_SUMMARY"
+            if [ -n "$issue_number" ]; then
+              gh issue comment "$issue_number" \
+                --body "Fork master is up to date with ggml-org/llama.cpp master at \`$upstream_sha\`. Closing this tracker."
+              gh issue close "$issue_number" --reason completed
+            fi
+            exit 0
+          fi
+
+          {
+            echo "The fork is currently **$behind commits behind** \`ggml-org/llama.cpp:master\` and **$ahead commits ahead**."
+            echo
+            echo "| field | value |"
+            echo "| --- | --- |"
+            echo "| fork head | \`$fork_sha\` |"
+            echo "| upstream head | \`$upstream_sha\` |"
+            echo "| merge base | \`$merge_base\` |"
+            echo
+            echo "This workflow does not merge, rebase, or modify source code. It only reports that upstream moved."
+            echo "Bring upstream into a working branch, rebuild and rerun the RPC performance tests, then update \`master\` after validation."
+            echo
+            echo "Recent upstream commits not in the fork:"
+            echo
+            echo '```text'
+            if [ -n "$upstream_log" ]; then
+              echo "$upstream_log"
+            else
+              echo "(none listed)"
+            fi
+            echo '```'
+            echo
+            echo "Suggested local check:"
+            echo
+            echo '```bash'
+            echo "git fetch origin master"
+            echo "git fetch upstream master"
+            echo "git rev-list --left-right --count origin/master...upstream/master"
+            echo "git log --oneline --left-right --cherry-pick origin/master...upstream/master"
+            echo '```'
+          } > upstream-sync-report.md
+
+          cat upstream-sync-report.md >> "$GITHUB_STEP_SUMMARY"
+
+          if [ -n "$issue_number" ]; then
+            gh issue edit "$issue_number" --body-file upstream-sync-report.md
+          else
+            gh issue create --title "$title" --body-file upstream-sync-report.md
+          fi
+
+          echo "Fork master is behind upstream; failing this watchdog run so it is visible." >&2
+          exit 1
