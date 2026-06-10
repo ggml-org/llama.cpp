@@ -8723,25 +8723,10 @@ static vk_d2d_path ggml_vk_probe_d2d_path(vk_device& src_dev, vk_device& dst_dev
     bool cross_vendor_nvidia = src_nvidia != dst_nvidia;
 
     // 1. dmabuf_p2p — skip if cross-vendor NVIDIA
+    // Try write direction first: dst exports VRAM, src imports and writes into it.
+    // PCIe posted writes are generally faster than reads (5-11x on AMD-to-AMD).
     if (src_dev->external_memory_dma_buf && dst_dev->external_memory_dma_buf && !cross_vendor_nvidia) {
-        // Try src exports VRAM, dst imports (read direction)
         vk_buffer exp_buf, imp_buf;
-        if (ggml_vk_d2d_try_dma_buf(src_dev, dst_dev, VK_D2D_PROBE_SIZE, true, exp_buf, imp_buf)) {
-            if (ggml_vk_d2d_test_copy(dst_dev, imp_buf, VK_D2D_PROBE_SIZE)) {
-                path.method = D2D_DMABUF_P2P;
-                path.reverse_direction = false;
-                path.slots[0].buf_a = exp_buf;
-                path.slots[0].buf_b = imp_buf;
-                path.num_slots = 1;
-                path.size = VK_D2D_PROBE_SIZE;
-                GGML_LOG_DEBUG("ggml_vulkan: d2d %s -> %s: dmabuf_p2p (src exports VRAM)\n",
-                              src_dev->name.c_str(), dst_dev->name.c_str());
-                ggml_vk_d2d_setup_sync(src_dev, dst_dev, path);
-                return path;
-            }
-            ggml_vk_destroy_buffer(exp_buf);
-            ggml_vk_destroy_buffer(imp_buf);
-        }
 
         // Try dst exports VRAM, src imports (write direction)
         if (ggml_vk_d2d_try_dma_buf(dst_dev, src_dev, VK_D2D_PROBE_SIZE, true, exp_buf, imp_buf)) {
@@ -8753,6 +8738,24 @@ static vk_d2d_path ggml_vk_probe_d2d_path(vk_device& src_dev, vk_device& dst_dev
                 path.num_slots = 1;
                 path.size = VK_D2D_PROBE_SIZE;
                 GGML_LOG_DEBUG("ggml_vulkan: d2d %s -> %s: dmabuf_p2p (dst exports VRAM)\n",
+                              src_dev->name.c_str(), dst_dev->name.c_str());
+                ggml_vk_d2d_setup_sync(src_dev, dst_dev, path);
+                return path;
+            }
+            ggml_vk_destroy_buffer(exp_buf);
+            ggml_vk_destroy_buffer(imp_buf);
+        }
+
+        // Try src exports VRAM, dst imports (read direction)
+        if (ggml_vk_d2d_try_dma_buf(src_dev, dst_dev, VK_D2D_PROBE_SIZE, true, exp_buf, imp_buf)) {
+            if (ggml_vk_d2d_test_copy(dst_dev, imp_buf, VK_D2D_PROBE_SIZE)) {
+                path.method = D2D_DMABUF_P2P;
+                path.reverse_direction = false;
+                path.slots[0].buf_a = exp_buf;
+                path.slots[0].buf_b = imp_buf;
+                path.num_slots = 1;
+                path.size = VK_D2D_PROBE_SIZE;
+                GGML_LOG_DEBUG("ggml_vulkan: d2d %s -> %s: dmabuf_p2p (src exports VRAM)\n",
                               src_dev->name.c_str(), dst_dev->name.c_str());
                 ggml_vk_d2d_setup_sync(src_dev, dst_dev, path);
                 return path;
