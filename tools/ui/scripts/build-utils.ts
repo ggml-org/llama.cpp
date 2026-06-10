@@ -8,12 +8,21 @@ import { readdirSync } from 'node:fs';
 import { execSync } from 'node:child_process';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { REGEX_PATTERNS, APPLE_DEVICES } from '../src/lib/constants/pwa';
+import {
+	REGEX_PATTERNS,
+	APPLE_DEVICES,
+	BUNDLE_PATHS,
+	SVELTEKIT_NORMALIZED,
+	SPLASH_LINK
+} from '../src/lib/constants/pwa';
+import { NEWLINE } from '../src/lib/constants/code';
 import type { SplashDimensions } from '../src/lib/types';
 import { SplashOrientation } from '../src/lib/enums/splash.enums';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
+
+const BUNDLE_VERSION = (path: string, version: string) => `${path}?v=${version}`;
 
 /** Resolve explicit build version from env var. Returns null if not set. */
 export function getExplicitVersion(): string | null {
@@ -91,10 +100,10 @@ export function generateSplashScreenLinks(outDir: string): string[] {
 
 		if (isDark) {
 			darkLinks.push(
-				`\t\t<link rel="apple-touch-startup-image" media="${media} and (prefers-color-scheme: dark)" href="${href}">`
+				`${SPLASH_LINK.HTML} media="${media}${SPLASH_LINK.DARK_MEDIA_SUFFIX}" href="${href}">`
 			);
 		} else {
-			lightLinks.push(`\t\t<link rel="apple-touch-startup-image" media="${media}" href="${href}">`);
+			lightLinks.push(`${SPLASH_LINK.HTML} media="${media}" href="${href}">`);
 		}
 	}
 
@@ -107,14 +116,20 @@ export function rewriteBundlePaths(_content: string, buildVersion?: string): str
 	let result = _content;
 	if (buildVersion) {
 		// Use explicit build version as query string
-		result = result.replace(REGEX_PATTERNS.BUNDLE_JS, `./bundle.js?v=${buildVersion}`);
-		result = result.replace(REGEX_PATTERNS.BUNDLE_CSS, `./bundle.css?v=${buildVersion}`);
+		result = result.replace(
+			REGEX_PATTERNS.BUNDLE_JS,
+			BUNDLE_VERSION(BUNDLE_PATHS.JS, buildVersion)
+		);
+		result = result.replace(
+			REGEX_PATTERNS.BUNDLE_CSS,
+			BUNDLE_VERSION(BUNDLE_PATHS.CSS, buildVersion)
+		);
 	} else {
 		// Fallback: keep the Vite content hash as query string
 		result = result.replace(REGEX_PATTERNS.BUNDLE_JS_HASH, './bundle.js?$1');
 		result = result.replace(REGEX_PATTERNS.BUNDLE_CSS_HASH, './bundle.css?$1');
 	}
-	result = result.replace(REGEX_PATTERNS.SVELTEKIT_HASH, '__sveltekit__');
+	result = result.replace(REGEX_PATTERNS.SVELTEKIT_HASH, SVELTEKIT_NORMALIZED);
 	return result;
 }
 
@@ -125,18 +140,24 @@ export function rewriteBundlePaths(_content: string, buildVersion?: string): str
  */
 export function fixServiceWorkerContent(content: string, buildVersion: string): string {
 	let swContent = content;
-	swContent = swContent.replace(REGEX_PATTERNS.BUNDLE_JS, `./bundle.js?v=${buildVersion}`);
-	swContent = swContent.replace(REGEX_PATTERNS.BUNDLE_CSS, `./bundle.css?v=${buildVersion}`);
+	swContent = swContent.replace(
+		REGEX_PATTERNS.BUNDLE_JS,
+		BUNDLE_VERSION(BUNDLE_PATHS.JS, buildVersion)
+	);
+	swContent = swContent.replace(
+		REGEX_PATTERNS.BUNDLE_CSS,
+		BUNDLE_VERSION(BUNDLE_PATHS.CSS, buildVersion)
+	);
 	swContent = swContent.replace(REGEX_PATTERNS.FAVICON_SVG, '"favicon.ico"');
 	swContent = swContent.replace(REGEX_PATTERNS.VERSION_JSON_APP, '"version.json"');
 	swContent = swContent.replace(REGEX_PATTERNS.WORKBOX_IMPORT, '"./workbox"');
 	swContent = swContent.replace(
 		REGEX_PATTERNS.PRECACHE_BUNDLE_JS,
-		`"./bundle.js?v=${buildVersion}"`
+		`"${BUNDLE_VERSION(BUNDLE_PATHS.JS, buildVersion)}"`
 	);
 	swContent = swContent.replace(
 		REGEX_PATTERNS.PRECACHE_BUNDLE_CSS,
-		`"./bundle.css?v=${buildVersion}"`
+		`"${BUNDLE_VERSION(BUNDLE_PATHS.CSS, buildVersion)}"`
 	);
-	return '// Build: ' + buildVersion + '\n' + swContent;
+	return '// Build: ' + buildVersion + NEWLINE + swContent;
 }

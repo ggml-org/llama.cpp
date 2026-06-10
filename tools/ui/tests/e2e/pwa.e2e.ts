@@ -1,10 +1,8 @@
 import { expect, test } from '@playwright/test';
 
-const BASE_URL = 'http://localhost:8181';
-
 test.describe('PWA Service Worker', () => {
 	test('service worker is registered', async ({ page }) => {
-		await page.goto(BASE_URL);
+		await page.goto('/');
 
 		// Wait for service worker to be ready
 		const swURL = await page.evaluate(async () => {
@@ -25,7 +23,7 @@ test.describe('PWA Service Worker', () => {
 	});
 
 	test('service worker has precache configured', async ({ page }) => {
-		await page.goto(BASE_URL);
+		await page.goto('/');
 
 		// Wait for SW to be active
 		await page.evaluate(async () => {
@@ -62,7 +60,7 @@ test.describe('PWA Service Worker', () => {
 		const offlinePage = await context.newPage();
 
 		// First, load the page to ensure SW registers
-		await offlinePage.goto(BASE_URL);
+		await offlinePage.goto('/');
 		await offlinePage.waitForLoadState('networkidle');
 
 		// Wait for SW to be ready
@@ -78,7 +76,7 @@ test.describe('PWA Service Worker', () => {
 
 		// Try to navigate - with hash routing, the app should still be accessible
 		// since the SW has precached the entry point
-		await offlinePage.goto(BASE_URL);
+		await offlinePage.goto('/');
 
 		// Page should have some content (not blank)
 		const bodyText = await offlinePage.locator('body').textContent();
@@ -90,7 +88,7 @@ test.describe('PWA Service Worker', () => {
 
 	test('version.json is accessible and contains version', async ({ page }) => {
 		// Fetch version.json directly
-		const versionResponse = await page.request.get(`${BASE_URL}/version.json`);
+		const versionResponse = await page.request.get('/version.json');
 		expect(versionResponse.ok()).toBeTruthy();
 
 		const versionData = await versionResponse.json();
@@ -100,7 +98,7 @@ test.describe('PWA Service Worker', () => {
 	});
 
 	test('manifest.webmanifest is accessible and valid', async ({ page }) => {
-		const response = await page.request.get(`${BASE_URL}/manifest.webmanifest`);
+		const response = await page.request.get('/manifest.webmanifest');
 		expect(response.ok()).toBeTruthy();
 
 		const manifest = await response.json();
@@ -114,20 +112,20 @@ test.describe('PWA Service Worker', () => {
 
 	test('bundle files are accessible with version query', async ({ page }) => {
 		// Get version from version.json
-		const versionResponse = await page.request.get(`${BASE_URL}/version.json`);
+		const versionResponse = await page.request.get('/version.json');
 		const { version } = await versionResponse.json();
 
 		// Try to fetch bundle.js with version param
-		const bundleResponse = await page.request.get(`${BASE_URL}/bundle.js?v=${version}`);
+		const bundleResponse = await page.request.get(`/bundle.js?v=${version}`);
 		expect(bundleResponse.ok()).toBeTruthy();
 
 		// Try to fetch bundle.css with version param
-		const cssResponse = await page.request.get(`${BASE_URL}/bundle.css?v=${version}`);
+		const cssResponse = await page.request.get(`/bundle.css?v=${version}`);
 		expect(cssResponse.ok()).toBeTruthy();
 	});
 
 	test('index.html contains versioned bundle references', async ({ page }) => {
-		const response = await page.request.get(`${BASE_URL}/index.html`);
+		const response = await page.request.get('/index.html');
 		expect(response.ok()).toBeTruthy();
 
 		const html = await response.text();

@@ -8,7 +8,8 @@ import {
 } from 'node:fs';
 import { resolve } from 'node:path';
 import type { Plugin } from 'vite';
-import { BUILD_CONFIG, REGEX_PATTERNS } from '../src/lib/constants/pwa';
+import { BUILD_CONFIG, REGEX_PATTERNS, SVELTEKIT_NORMALIZED } from '../src/lib/constants/pwa';
+import { TAB, NEWLINE } from '../src/lib/constants/code';
 import {
 	getExplicitVersion,
 	resolveBuildVersion,
@@ -42,12 +43,15 @@ export function llamaCppBuildPlugin(): Plugin {
 					const splashLinks = generateSplashScreenLinks(outDir);
 					if (splashLinks.length > 0) {
 						console.log(`✓ Generated ${splashLinks.length} apple-splash link tags`);
-						const splashHtml = splashLinks.map((l) => '\t\t' + l).join('\n');
-						content = content.replace(/\t*<\/head>/, splashHtml + '\n\t\t</head>');
+						const splashHtml = splashLinks.map((l) => TAB + TAB + l).join(NEWLINE);
+						content = content.replace(
+							REGEX_PATTERNS.HEAD_CLOSE,
+							splashHtml + NEWLINE + TAB + TAB + '</head>'
+						);
 					}
 
 					content = content.replace(/\r/g, '');
-					content = BUILD_CONFIG.GUIDE_COMMENT + '\n' + content;
+					content = BUILD_CONFIG.GUIDE_COMMENT + NEWLINE + content;
 					content = rewriteBundlePaths(content, explicitVersion || undefined);
 
 					writeFileSync(indexPath, content, 'utf-8');
@@ -64,7 +68,7 @@ export function llamaCppBuildPlugin(): Plugin {
 							copyFileSync(resolve(immutableDir, jsFiles[0]), resolve(outDir, 'bundle.js'));
 							const bundleJsPath = resolve(outDir, 'bundle.js');
 							let bundleJs = readFileSync(bundleJsPath, 'utf-8');
-							bundleJs = bundleJs.replace(REGEX_PATTERNS.SVELTEKIT_HASH, '__sveltekit__');
+							bundleJs = bundleJs.replace(REGEX_PATTERNS.SVELTEKIT_HASH, SVELTEKIT_NORMALIZED);
 							writeFileSync(bundleJsPath, bundleJs, 'utf-8');
 							console.log(`✓ Copied ${jsFiles[0]} -> bundle.js`);
 						}

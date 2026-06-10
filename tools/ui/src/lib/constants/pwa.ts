@@ -190,7 +190,8 @@ export const REGEX_PATTERNS = {
 	FAVICON_SVG: /"favicon\.svg"/g,
 	VERSION_JSON_APP: /"_app\/version\.json"/g,
 	PRECACHE_BUNDLE_JS: /"(?:\/_app|_app)\/immutable\/bundle\.[^"]+\.js"/g,
-	PRECACHE_BUNDLE_CSS: /"(?:\/_app|_app)\/immutable\/assets\/bundle\.[^"]+\.css"/g
+	PRECACHE_BUNDLE_CSS: /"(?:\/_app|_app)\/immutable\/assets\/bundle\.[^"]+\.css"/g,
+	HEAD_CLOSE: /\t*<\/head>/
 } as const;
 
 export const CACHE_SETTINGS = {
@@ -298,4 +299,19 @@ export const API_CACHING_PATTERNS = {
 // SvelteKit PWA plugin options
 export const PWA_KIT_OPTIONS = {
 	NAVIGATE_FALLBACK: '/'
+} as const;
+
+// Bundle filenames used across build-utils and vite plugin
+export const BUNDLE_PATHS = {
+	JS: './bundle.js',
+	CSS: './bundle.css'
+} as const;
+
+// SvelteKit hash normalization target
+export const SVELTEKIT_NORMALIZED = '__sveltekit__';
+
+// Splash screen HTML link tag prefix used by generateSplashScreenLinks
+export const SPLASH_LINK = {
+	HTML: '<link rel="apple-touch-startup-image"',
+	DARK_MEDIA_SUFFIX: ' and (prefers-color-scheme: dark)'
 } as const;
