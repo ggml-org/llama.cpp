@@ -182,7 +182,7 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
             return new llama_model_deepseek2ocr(params);
         case LLM_ARCH_DEEPSEEK32:
             return new llama_model_deepseek32(params);
-        case LLM_ARCH_DEEPSEEK_V4_FLASH:
+        case LLM_ARCH_DEEPSEEK4:
             return new llama_model_deepseek_v4_flash(params);
         case LLM_ARCH_GLM_DSA:
             return new llama_model_glm_dsa(params);
@@ -2160,7 +2160,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                         }
                     }
 
-                    if (arch == LLM_ARCH_DEEPSEEK_V4_FLASH) {
+                    if (arch == LLM_ARCH_DEEPSEEK4) {
                         GGML_ASSERT(hparams.swa_type != LLAMA_SWA_TYPE_NONE);
 
                         res = new llama_kv_cache_dsv4(
@@ -2430,7 +2430,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_DEEPSEEK2:
         case LLM_ARCH_DEEPSEEK2OCR:
         case LLM_ARCH_DEEPSEEK32:
-        case LLM_ARCH_DEEPSEEK_V4_FLASH:
+        case LLM_ARCH_DEEPSEEK4:
         case LLM_ARCH_PLM:
         case LLM_ARCH_CHATGLM:
         case LLM_ARCH_GRANITE:

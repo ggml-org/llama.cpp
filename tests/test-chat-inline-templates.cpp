@@ -38,11 +38,11 @@ int main() {
     // identical to the source .jinja file.
     {
         const std::string expected = read_file("models/templates/deepseek-ai-DeepSeek-V4.jinja");
-        const std::string actual   = common_chat_template_inline("deepseek-v4-flash");
+        const std::string actual   = common_chat_template_inline("deepseek4");
 
-        assert(!actual.empty() && "deepseek-v4-flash should have a built-in inline template");
+        assert(!actual.empty() && "deepseek4 should have a built-in inline template");
         assert(actual == expected && "inline template must match the source .jinja byte-for-byte");
-        printf("ok: deepseek-v4-flash inline template matches source (%zu bytes)\n", actual.size());
+        printf("ok: deepseek4 inline template matches source (%zu bytes)\n", actual.size());
     }
 
     // An unregistered architecture returns an empty string (no fallback).

@@ -473,7 +473,7 @@ class DeepseekV32Model(DeepseekV2Model):
 
 @ModelBase.register("DeepseekV4ForCausalLM")
 class DeepseekV4FlashModel(TextModel):
-    model_arch = gguf.MODEL_ARCH.DEEPSEEK_V4_FLASH
+    model_arch = gguf.MODEL_ARCH.DEEPSEEK4
     _skipped_mtp_tensors = 0
 
     def __init__(self, *args, **kwargs):

@@ -8,7 +8,7 @@
 #include <string>
 
 static std::string dsv4_kv(const char * suffix) {
-    return std::string("deepseek-v4-flash.") + suffix;
+    return std::string("deepseek4") + suffix;
 }
 
 static float dsv4_rope_attn_factor(float freq_scale, float ext_factor) {
