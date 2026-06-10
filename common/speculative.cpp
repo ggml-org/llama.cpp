@@ -843,7 +843,8 @@ struct common_speculative_impl_ngram_map_k : public common_speculative_impl {
     common_speculative_impl_ngram_map_k(
             const common_ngram_map & config,
             uint32_t n_seq)
-        : common_speculative_impl(COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K, n_seq)
+        : common_speculative_impl(config.key_only ? COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K
+            : COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V, n_seq)
     {
         for (uint32_t i = 0; i < n_seq; i++) {
             this->config.push_back(config);
