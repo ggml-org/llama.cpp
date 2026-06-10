@@ -71,8 +71,8 @@ llama_context::llama_context(
     cparams.no_perf                 = params.no_perf;
     cparams.warmup                  = false;
 
-    cparams.output_layer_inp.resize(hparams.n_layer_all, false);
-    embd_layer_inp.resize(hparams.n_layer_all);
+    cparams.output_layer_inp.resize(hparams.n_layer(), false);
+    embd_layer_inp.resize(hparams.n_layer());
 
     cparams.ctx_type     = params.ctx_type;
     cparams.pooling_type = params.pooling_type;
@@ -1281,7 +1281,7 @@ bool llama_context::set_adapter_cvec(
 void llama_context::set_output_layer_inp(uint32_t layer_id, bool enable) {
     LLAMA_LOG_DEBUG("%s: layer_id = %d, enable = %d\n", __func__, layer_id, enable);
 
-    GGML_ASSERT(layer_id < model.hparams.n_layer_all);
+    GGML_ASSERT(layer_id < model.hparams.n_layer());
 
     cparams.output_layer_inp[layer_id] = enable;
 
@@ -2111,7 +2111,7 @@ uint32_t llama_context::output_reserve(int32_t n_outputs) {
     const size_t prev_size = buf_output ? ggml_backend_buffer_get_size(buf_output.get()) : 0;
     const size_t new_size  =
         (logits.size + embd.size + embd_nextn.size + embd_layer_inp_float_count + backend_float_count) * sizeof(float) +
-        (                                                                                  backend_token_count) * sizeof(llama_token);
+        (                                                                         backend_token_count) * sizeof(llama_token);
 
     // alloc only when more than the current capacity is required
     // TODO: also consider shrinking the buffer
@@ -2223,12 +2223,13 @@ void llama_context::extract_layer_inputs(const llm_graph_result * res, size_t to
             continue;
         }
         if (!embd_layer_inp[il].has_data()) {
-            continue;
+            GGML_ABORT("output layer input buffer not allocated");
         }
         ggml_tensor * t = res->get_layer_inp((int) il);
         if (!t) {
-            continue;
+            GGML_ABORT("layer input tensor not found");
         }
+
         const size_t nbytes = ggml_nbytes(t);
         const size_t nfloats = nbytes / sizeof(float);
         GGML_ASSERT(n_tokens > 0);
