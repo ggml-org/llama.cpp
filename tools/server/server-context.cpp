@@ -935,9 +935,6 @@ private:
                 return false;
             }
 
-            // eagle3/DFlash: shares target model's token_embd
-            common_speculative_setup_draft_model(model_dft.get(), model_tgt);
-
             auto cparams = common_context_params_to_llama(params_dft);
 
             const bool spec_mtp = std::find(params_base.speculative.types.begin(),

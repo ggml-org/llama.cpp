@@ -159,7 +159,14 @@ llama_model_eagle3::graph<false>::graph(const llama_model & model, const llm_gra
     // eagle3 Decoder receives:
     // 1. Token embeddings (e.g.from eagle3's own tok_embd for Llama 3.3 70B, or target model for Llama 3.1 8B)
     // 2. g_embeddings from encoder
-    GGML_ASSERT(model.tok_embd != nullptr && "EAGLE3 decoder requires token embeddings (own or from target model)");
+    auto * tok_embd = model.tok_embd;
+    if (model.tok_embd == nullptr) {
+        GGML_ASSERT(cparams.ctx_other != nullptr);
+        const auto * model_other = llama_get_model(cparams.ctx_other);
+
+        GGML_ASSERT(model_other->tok_embd != nullptr && "EAGLE3 decoder requires token embeddings (own or from target model)");
+        tok_embd = model_other->tok_embd;
+    }
 
     auto inp = std::make_unique<llm_graph_input_embd>(n_embd);
 
@@ -169,7 +176,7 @@ llama_model_eagle3::graph<false>::graph(const llama_model & model, const llm_gra
     inp->embd = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_embd, n_tokens);
     ggml_set_input(inp->embd);
 
-    ggml_tensor * inp_embd = ggml_get_rows(ctx0, model.tok_embd, inp->tokens);
+    ggml_tensor * inp_embd = ggml_get_rows(ctx0, tok_embd, inp->tokens);
     cb(inp_embd, "inp_embd", -1);
 
     ggml_tensor * inp_g = inp->embd;

@@ -94,10 +94,19 @@ llama_context::llama_context(
     if (model.arch == LLM_ARCH_GEMMA4_ASSISTANT) {
         if (params.ctx_other == nullptr) {
             // TODO: change from runtime_error to llama_exception to avoid printing error message
-            throw std::runtime_error("Gemma4Assistant requires ctx_other to be set (this is normal during memory fitting)");
+            throw std::runtime_error("Gemma4Assistant requires ctx_other to be set (this warning is normal during memory fitting)");
         }
 
         cparams.ctx_other = params.ctx_other;
+    }
+
+    if (model.arch == LLM_ARCH_EAGLE3) {
+        if (model.tok_embd == nullptr) {
+            if (params.ctx_other == nullptr) {
+                throw std::runtime_error("EAGLE3 requires ctx_other to be set (this warning is normal during memory fitting)");
+            }
+            cparams.ctx_other = params.ctx_other;
+        }
     }
 
     // Initialize backend samplers here so they are part of the sampling graph

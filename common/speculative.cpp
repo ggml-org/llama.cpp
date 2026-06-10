@@ -1912,26 +1912,6 @@ void common_speculative_free(common_speculative * spec) {
     delete spec;
 }
 
-void common_speculative_setup_draft_model(struct llama_model * model_dft, const struct llama_model * model_tgt) {
-    if (model_dft == nullptr || model_tgt == nullptr) {
-        return;
-    }
-    if (llama_model_get_tok_embd(model_dft) == nullptr) {
-        ggml_tensor * tgt_tok_embd = llama_model_get_tok_embd(model_tgt);
-        if (tgt_tok_embd != nullptr) {
-            llama_model_set_tok_embd(model_dft, tgt_tok_embd);
-            LOG_INF("%s: draft inheriting target's tok_embd\n", __func__);
-        }
-    }
-    if (llama_model_get_lm_head(model_dft) == nullptr) {
-        ggml_tensor * tgt_lm_head = llama_model_get_lm_head(model_tgt);
-        if (tgt_lm_head != nullptr) {
-            llama_model_set_lm_head(model_dft, tgt_lm_head);
-            LOG_INF("%s: draft inheriting target's lm_head\n", __func__);
-        }
-    }
-}
-
 common_speculative_draft_params & common_speculative_get_draft_params(
         common_speculative * spec,
         llama_seq_id seq_id) {
