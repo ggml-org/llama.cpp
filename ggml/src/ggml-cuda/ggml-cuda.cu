@@ -3863,6 +3863,10 @@ static bool ggml_cuda_can_parse_mm_lane_type(ggml_type type) {
     return ggml_is_quantized(type) || type == GGML_TYPE_F32 || type == GGML_TYPE_F16 || type == GGML_TYPE_BF16;
 }
 
+static bool ggml_cuda_can_fuse_mm_lane_scale(const ggml_tensor * mm) {
+    return mm->src[0]->type == GGML_TYPE_NVFP4;
+}
+
 static bool ggml_cuda_can_parse_mm_lane_bias(const ggml_tensor * mm, const ggml_tensor * bias) {
     if (bias->type != GGML_TYPE_F32 || bias->ne[0] != mm->ne[0]) {
         return false;
@@ -3904,7 +3908,7 @@ static bool ggml_cuda_parse_mul_mat_id_lane(const ggml_cgraph * cgraph, int i, g
         lane.n_nodes++;
     }
 
-    if (!ggml_is_quantized(mm->src[0]->type) || i + lane.n_nodes + 3 >= cgraph->n_nodes) {
+    if (!ggml_is_quantized(mm->src[0]->type) || !ggml_cuda_can_fuse_mm_lane_scale(mm) || i + lane.n_nodes + 3 >= cgraph->n_nodes) {
         return true;
     }
 
@@ -3979,7 +3983,8 @@ static bool ggml_cuda_parse_mul_mat_lane(const ggml_cgraph * cgraph, int i, ggml
         lane.n_nodes++;
     }
 
-    if (!ggml_is_quantized(mm->src[0]->type) || i + lane.n_nodes >= cgraph->n_nodes || cgraph->nodes[i + lane.n_nodes]->op != GGML_OP_MUL) {
+    if (!ggml_is_quantized(mm->src[0]->type) || !ggml_cuda_can_fuse_mm_lane_scale(mm) ||
+            i + lane.n_nodes >= cgraph->n_nodes || cgraph->nodes[i + lane.n_nodes]->op != GGML_OP_MUL) {
         return true;
     }
 
@@ -4094,6 +4099,10 @@ static int ggml_cuda_try_fuse_mm_glu(ggml_backend_cuda_context * cuda_ctx, ggml_
         return 0;
     }
 
+    if ((up->scale != nullptr || gate->scale != nullptr) && !ggml_cuda_can_fuse_mm_lane_scale(up->mm)) {
+        return 0;
+    }
+
     const int out_nodes[] = { glu_idx };
     const int n_nodes = glu_idx - i + 1;
     int external_view_nodes[2];
@@ -4137,6 +4146,10 @@ static int ggml_cuda_try_fuse_mm_scale(ggml_backend_cuda_context * cuda_ctx, ggm
     int external_view_nodes[1];
     int n_external_view_nodes = ggml_cuda_add_mm_lane_external_view_node(lane, external_view_nodes, 0);
     if (!ggml_cuda_can_fuse_parsed_subgraph(cgraph, i, lane.n_nodes, out_nodes, 1, external_view_nodes, n_external_view_nodes)) {
+        return 0;
+    }
+
+    if (!ggml_cuda_can_fuse_mm_lane_scale(lane.mm)) {
         return 0;
     }
 
