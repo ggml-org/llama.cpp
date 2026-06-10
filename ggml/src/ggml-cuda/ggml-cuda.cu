@@ -1873,7 +1873,7 @@ struct ggml_cuda_host_staging_pool {
             return cudaSuccess;
         }
         if (buf) {
-            cudaFreeHost(buf);
+            CUDA_CHECK(cudaFreeHost(buf));
         }
         cudaError_t err = cudaMallocHost(&buf, needed);
         if (err != cudaSuccess) {
@@ -1934,6 +1934,7 @@ static cudaError_t ggml_cuda_copy2d_across_devices(
 
     const auto & info = ggml_cuda_info();
     if (info.peer_access[src_device][dst_device]) {
+#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
         cudaMemcpy3DPeerParms p = {};
         p.dstDevice = dst_device;
         p.dstPtr = make_cudaPitchedPtr(dst, dpitch, dpitch, height);
@@ -1941,6 +1942,12 @@ static cudaError_t ggml_cuda_copy2d_across_devices(
         p.srcPtr = make_cudaPitchedPtr(const_cast<void *>(src), spitch, spitch, height);
         p.extent = make_cudaExtent(width, height, 1);
         return cudaMemcpy3DPeerAsync(&p, dst_stream);
+#else
+        // HIP/MUSA do not provide cudaMemcpy3DPeerAsync; with peer access
+        // enabled a plain device-to-device 2D copy works across devices
+        // (same approach as ggml_cuda_Memcpy2DPeerAsync above).
+        return cudaMemcpy2DAsync(dst, dpitch, src, spitch, width, height, cudaMemcpyDeviceToDevice, dst_stream);
+#endif // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
     }
 
     // Fallback: stage all rows through a single contiguous pinned buffer
