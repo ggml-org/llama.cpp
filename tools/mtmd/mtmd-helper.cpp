@@ -629,9 +629,27 @@ struct mtmd_helper_video {
         ~subprocess_handle() { stop(); }
 
         void stop() {
+#if defined(_WIN32)
+            // go by the process handle rather than the alive flag: a stdout EOF
+            // sets alive=false while the child may still be running
+            if (proc.hProcess) {
+                subprocess_terminate(&proc);
+                // subprocess.h on Windows keeps the read end of the child's stdin
+                // pipe open in proc.hStdInput (the POSIX path closes it right after
+                // spawn); close it once the child exits, otherwise a feeder thread
+                // blocked in fwrite() never sees a broken pipe and the join below
+                // deadlocks
+                WaitForSingleObject(proc.hProcess, 0xFFFFFFFF); // INFINITE
+                if (proc.hStdInput) {
+                    CloseHandle(proc.hStdInput);
+                    proc.hStdInput = SUBPROCESS_NULL;
+                }
+            }
+#else
             if (alive) {
                 subprocess_terminate(&proc);
             }
+#endif
             // join before destroy: feeder holds a FILE* from subprocess_stdin;
             // subprocess_destroy closes it, so the thread must finish first
             if (feeder.joinable()) {
@@ -749,9 +767,9 @@ struct mtmd_helper_video {
         info.width    = width;
         info.height   = height;
         info.fps      = fps_target;
-        LOG_DBG("%s: %ux%u fps=%.2f duration=%.2fs n_frames=%d\n",
-                __func__, width, height, fps_target, duration, info.n_frames);
         info.n_frames = duration > 0.0f ? (int32_t)(duration * fps_target + 0.5f) : -1;
+        LOG_DBG("%s: %ux%u fps=%.2f (source %.2f) duration=%.2fs n_frames=%d\n",
+                __func__, width, height, fps_target, orig_fps, duration, info.n_frames);
         frame_buf.resize((size_t)width * height * 3);
         return true;
     }
