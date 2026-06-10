@@ -2304,6 +2304,9 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             for (size_t i = 1; i < parts.size(); ++i) {
                 params.load_modifier = (llama_load_modifier)(params.load_modifier | llama_load_modifier_from_str(parts[i].c_str()));
             }
+
+            // prevents -lm none+mlock or similar combinations that don't make sense
+            if (params.load_mode == LLAMA_LOAD_MODE_NONE) { params.load_modifier = LLAMA_LOAD_MODIFIER_NONE; }
         }
     ).set_env("LLAMA_ARG_LOAD_MODE"));
     add_opt(common_arg(
