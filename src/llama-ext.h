@@ -114,12 +114,6 @@ LLAMA_API void llama_set_output_layer_inp(struct llama_context * ctx, uint32_t l
 // the layer must have been enabled via llama_set_output_layer_inp
 LLAMA_API float * llama_get_output_layer_inp(struct llama_context * ctx, uint32_t layer_id);
 
-LLAMA_API ggml_tensor * llama_model_get_tok_embd(const struct llama_model * model);
-LLAMA_API void          llama_model_set_tok_embd(      struct llama_model * model, ggml_tensor * tensor);
-
-LLAMA_API ggml_tensor * llama_model_get_lm_head(const struct llama_model * model);
-LLAMA_API void          llama_model_set_lm_head(      struct llama_model * model, ggml_tensor * tensor);
-
 //
 // eagle3/DFlash: consume target model extracted features
 //

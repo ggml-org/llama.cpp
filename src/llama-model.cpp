@@ -2692,22 +2692,6 @@ void llama_model_base::create_tensor_qkv(llama_layer & layer, int bid,
     }
 }
 
-ggml_tensor * llama_model_get_tok_embd(const struct llama_model * model) {
-    return model->tok_embd;
-}
-
-void llama_model_set_tok_embd(struct llama_model * model, ggml_tensor * tensor) {
-    model->tok_embd = tensor;
-}
-
-ggml_tensor * llama_model_get_lm_head(const struct llama_model * model) {
-    return model->output;
-}
-
-void llama_model_set_lm_head(struct llama_model * model, ggml_tensor * tensor) {
-    model->output = tensor;
-}
-
 const int32_t * llama_model_target_extract_layers(const struct llama_model * model) {
     const auto & v = model->target_extract_layers;
     return v.empty() ? nullptr : v.data();

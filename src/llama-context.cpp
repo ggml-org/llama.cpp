@@ -71,6 +71,9 @@ llama_context::llama_context(
     cparams.no_perf                 = params.no_perf;
     cparams.warmup                  = false;
 
+    cparams.output_layer_inp.resize(hparams.n_layer_all, false);
+    embd_layer_inp.resize(hparams.n_layer_all);
+
     cparams.ctx_type     = params.ctx_type;
     cparams.pooling_type = params.pooling_type;
 
@@ -86,9 +89,6 @@ llama_context::llama_context(
     cparams.cb_eval_user_data = params.cb_eval_user_data;
 
     cparams.ctx_other = nullptr;
-
-    cparams.output_layer_inp.resize(hparams.n_layer_all, false);
-    embd_layer_inp.resize(hparams.n_layer_all);
 
     // TODO: more generic
     if (model.arch == LLM_ARCH_GEMMA4_ASSISTANT) {
