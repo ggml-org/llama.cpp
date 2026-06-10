@@ -1712,8 +1712,8 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
 
     // Map [1, ∞) to [1, M]; alpha controls mapping aggressiveness towards M
     auto squash_kappa = [](float kappa) -> float {
-        constexpr float M = 3.0f;
-        constexpr float alpha = 0.3f;
+        constexpr float M = 5.0f;
+        constexpr float alpha = 0.15f;
         if (!std::isfinite(kappa)) { return M; }
 
         return 1.0f + (M - 1.0f) * std::tanh(alpha * std::log(kappa));
