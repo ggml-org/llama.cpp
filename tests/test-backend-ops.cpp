@@ -5853,26 +5853,26 @@ struct test_mul_mat_vec_fusion : public test_case {
 
             auto build_up_lane = [&]() {
                 ggml_tensor * ffn_up = ggml_mul_mat(ctx, up, cur);
+                if (with_lane_scale) {
+                    ffn_up = build_dense_lane_scale(ctx, ffn_up);
+                }
                 if (with_bias) {
                     std::array<int64_t, 4> bias_ne = { ffn_up->ne[0], 1, channels, samples };
                     ggml_tensor * up_bias = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, bias_ne.data());
                     ffn_up = ggml_add(ctx, ffn_up, up_bias);
-                }
-                if (with_lane_scale) {
-                    ffn_up = build_dense_lane_scale(ctx, ffn_up);
                 }
                 return ffn_up;
             };
 
             auto build_gate_lane = [&]() {
                 ggml_tensor * ffn_gate = ggml_mul_mat(ctx, gate, cur);
+                if (with_lane_scale) {
+                    ffn_gate = build_dense_lane_scale(ctx, ffn_gate);
+                }
                 if (with_bias) {
                     std::array<int64_t, 4> bias_ne   = { ffn_gate->ne[0], 1, channels, samples };
                     ggml_tensor * gate_bias = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, bias_ne.data());
                     ffn_gate = ggml_add(ctx, ffn_gate, gate_bias);
-                }
-                if (with_lane_scale) {
-                    ffn_gate = build_dense_lane_scale(ctx, ffn_gate);
                 }
                 return ffn_gate;
             };
@@ -5909,24 +5909,24 @@ struct test_mul_mat_vec_fusion : public test_case {
 
             auto build_up_lane = [&]() {
                 ggml_tensor * ffn_up = ggml_mul_mat_id(ctx, ups, cur, ids);
+                if (with_lane_scale) {
+                    ffn_up = build_id_lane_scale(ctx, ffn_up, ids);
+                }
                 if (with_bias) {
                     ggml_tensor * up_bias_param = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, ffn_up->ne[0], n_mats);
                     ffn_up = ggml_add_id(ctx, ffn_up, up_bias_param, ids);
-                }
-                if (with_lane_scale) {
-                    ffn_up = build_id_lane_scale(ctx, ffn_up, ids);
                 }
                 return ffn_up;
             };
 
             auto build_gate_lane = [&]() {
                 ggml_tensor * ffn_gate = ggml_mul_mat_id(ctx, gates, cur, ids);
+                if (with_lane_scale) {
+                    ffn_gate = build_id_lane_scale(ctx, ffn_gate, ids);
+                }
                 if (with_bias) {
                     ggml_tensor * gate_bias_param = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, ffn_gate->ne[0], n_mats);
                     ffn_gate = ggml_add_id(ctx, ffn_gate, gate_bias_param, ids);
-                }
-                if (with_lane_scale) {
-                    ffn_gate = build_id_lane_scale(ctx, ffn_gate, ids);
                 }
                 return ffn_gate;
             };

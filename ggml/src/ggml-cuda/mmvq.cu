@@ -659,23 +659,23 @@ static __global__ void mul_mat_vec_q(
         if (threadIdx.x < rows_per_cuda_block && (rows_per_cuda_block == 1 || uint32_t(row0 + threadIdx.x) < stride_col_dst)) {
             float result = tmp[j][threadIdx.x];
             if constexpr (has_fusion) {
-                if (use_bias) {
-                    result += x_biases[j];
-                }
                 if constexpr (type == GGML_TYPE_NVFP4) {
                     if (use_scale) {
                         result *= x_scales;
                     }
                 }
+                if (use_bias) {
+                    result += x_biases[j];
+                }
                 if (use_gate) {
                     float gate_value = tmp_gate[j][threadIdx.x];
-                    if (use_gate_bias) {
-                        gate_value += gate_biases[j];
-                    }
                     if constexpr (type == GGML_TYPE_NVFP4) {
                         if (use_gate_scale) {
                             gate_value *= gate_scales;
                         }
+                    }
+                    if (use_gate_bias) {
+                        gate_value += gate_biases[j];
                     }
                     switch (active_glu) {
                         case GGML_GLU_OP_SWIGLU:

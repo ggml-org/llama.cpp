@@ -3847,8 +3847,8 @@ static bool ggml_cuda_can_fuse(const struct ggml_cgraph *                cgraph,
 
 
 // Matched MM lane forms:
-//   MUL_MAT    [ADD]    [MUL scalar_scale]
-//   MUL_MAT_ID [ADD_ID] [RESHAPE -> REPEAT -> GET_ROWS -> MUL expert_scale]
+//   MUL_MAT    [MUL scalar_scale] [ADD]
+//   MUL_MAT_ID [RESHAPE -> REPEAT -> GET_ROWS -> MUL expert_scale] [ADD_ID]
 struct ggml_cuda_mm_lane {
     ggml_tensor * mm = nullptr;
     ggml_tensor * bias_node = nullptr;
@@ -3894,6 +3894,40 @@ static bool ggml_cuda_parse_mul_mat_id_lane(const ggml_cgraph * cgraph, int i, g
     lane.out = mm;
     lane.n_nodes = 1;
 
+    if (ggml_is_quantized(mm->src[0]->type) && ggml_cuda_can_fuse_mm_lane_scale(mm) && i + lane.n_nodes + 3 < cgraph->n_nodes) {
+        ggml_tensor * reshape = cgraph->nodes[i + lane.n_nodes + 0];
+        ggml_tensor * repeat  = cgraph->nodes[i + lane.n_nodes + 1];
+        ggml_tensor * getrows = cgraph->nodes[i + lane.n_nodes + 2];
+        ggml_tensor * mul     = cgraph->nodes[i + lane.n_nodes + 3];
+
+        if (reshape->op == GGML_OP_RESHAPE && repeat->op == GGML_OP_REPEAT &&
+            getrows->op == GGML_OP_GET_ROWS && mul->op == GGML_OP_MUL) {
+            if (repeat->src[0] != reshape || getrows->src[0] != repeat || getrows->src[1] != mm->src[2]) {
+                return false;
+            }
+
+            const bool mul_has_out   = mul->src[0] == lane.out || mul->src[1] == lane.out;
+            const bool mul_has_scale = mul->src[0] == getrows || mul->src[1] == getrows;
+            if (!mul_has_out || !mul_has_scale) {
+                return false;
+            }
+
+            const ggml_tensor * scale = reshape->src[0];
+            if (scale->type != GGML_TYPE_F32 || !ggml_is_contiguous(scale) || ggml_nelements(scale) != mm->src[0]->ne[2]) {
+                return false;
+            }
+
+            if (mul->type != GGML_TYPE_F32 || !ggml_are_same_shape(mul, lane.out)) {
+                return false;
+            }
+
+            lane.scale = scale;
+            lane.scale_view_node = i + lane.n_nodes;
+            lane.out = mul;
+            lane.n_nodes += 4;
+        }
+    }
+
     if (i + lane.n_nodes < cgraph->n_nodes && cgraph->nodes[i + lane.n_nodes]->op == GGML_OP_ADD_ID) {
         ggml_tensor * add = cgraph->nodes[i + lane.n_nodes];
         if (add->src[0] != lane.out || add->src[2] != mm->src[2] || add->type != GGML_TYPE_F32) {
@@ -3908,43 +3942,6 @@ static bool ggml_cuda_parse_mul_mat_id_lane(const ggml_cgraph * cgraph, int i, g
         lane.n_nodes++;
     }
 
-    if (!ggml_is_quantized(mm->src[0]->type) || !ggml_cuda_can_fuse_mm_lane_scale(mm) || i + lane.n_nodes + 3 >= cgraph->n_nodes) {
-        return true;
-    }
-
-    ggml_tensor * reshape = cgraph->nodes[i + lane.n_nodes + 0];
-    ggml_tensor * repeat  = cgraph->nodes[i + lane.n_nodes + 1];
-    ggml_tensor * getrows = cgraph->nodes[i + lane.n_nodes + 2];
-    ggml_tensor * mul     = cgraph->nodes[i + lane.n_nodes + 3];
-
-    if (reshape->op != GGML_OP_RESHAPE || repeat->op != GGML_OP_REPEAT ||
-        getrows->op != GGML_OP_GET_ROWS || mul->op != GGML_OP_MUL) {
-        return true;
-    }
-
-    if (repeat->src[0] != reshape || getrows->src[0] != repeat || getrows->src[1] != mm->src[2]) {
-        return true;
-    }
-
-    const bool mul_has_out   = mul->src[0] == lane.out || mul->src[1] == lane.out;
-    const bool mul_has_scale = mul->src[0] == getrows || mul->src[1] == getrows;
-    if (!mul_has_out || !mul_has_scale) {
-        return true;
-    }
-
-    const ggml_tensor * scale = reshape->src[0];
-    if (scale->type != GGML_TYPE_F32 || !ggml_is_contiguous(scale) || ggml_nelements(scale) != mm->src[0]->ne[2]) {
-        return false;
-    }
-
-    if (mul->type != GGML_TYPE_F32 || !ggml_are_same_shape(mul, lane.out)) {
-        return false;
-    }
-
-    lane.scale = scale;
-    lane.scale_view_node = i + lane.n_nodes;
-    lane.out = mul;
-    lane.n_nodes += 4;
     return true;
 }
 
@@ -3962,6 +3959,29 @@ static bool ggml_cuda_parse_mul_mat_lane(const ggml_cgraph * cgraph, int i, ggml
     lane.mm = mm;
     lane.out = mm;
     lane.n_nodes = 1;
+
+    if (ggml_is_quantized(mm->src[0]->type) && ggml_cuda_can_fuse_mm_lane_scale(mm) &&
+            i + lane.n_nodes < cgraph->n_nodes && cgraph->nodes[i + lane.n_nodes]->op == GGML_OP_MUL) {
+        ggml_tensor * mul = cgraph->nodes[i + lane.n_nodes];
+        const bool mul_lhs_out = mul->src[0] == lane.out;
+        const bool mul_rhs_out = mul->src[1] == lane.out;
+        if (!mul_lhs_out && !mul_rhs_out) {
+            return false;
+        }
+
+        const ggml_tensor * scale = mul_lhs_out ? mul->src[1] : mul->src[0];
+        if (scale->type != GGML_TYPE_F32 || !ggml_is_contiguous(scale) || ggml_nelements(scale) != 1) {
+            return false;
+        }
+
+        if (mul->type != GGML_TYPE_F32 || !ggml_are_same_shape(mul, lane.out)) {
+            return false;
+        }
+
+        lane.scale = scale;
+        lane.out = mul;
+        lane.n_nodes++;
+    }
 
     if (i + lane.n_nodes < cgraph->n_nodes && cgraph->nodes[i + lane.n_nodes]->op == GGML_OP_ADD) {
         ggml_tensor * add = cgraph->nodes[i + lane.n_nodes];
@@ -3983,30 +4003,6 @@ static bool ggml_cuda_parse_mul_mat_lane(const ggml_cgraph * cgraph, int i, ggml
         lane.n_nodes++;
     }
 
-    if (!ggml_is_quantized(mm->src[0]->type) || !ggml_cuda_can_fuse_mm_lane_scale(mm) ||
-            i + lane.n_nodes >= cgraph->n_nodes || cgraph->nodes[i + lane.n_nodes]->op != GGML_OP_MUL) {
-        return true;
-    }
-
-    ggml_tensor * mul = cgraph->nodes[i + lane.n_nodes];
-    const bool mul_lhs_out = mul->src[0] == lane.out;
-    const bool mul_rhs_out = mul->src[1] == lane.out;
-    if (!mul_lhs_out && !mul_rhs_out) {
-        return true;
-    }
-
-    const ggml_tensor * scale = mul_lhs_out ? mul->src[1] : mul->src[0];
-    if (scale->type != GGML_TYPE_F32 || !ggml_is_contiguous(scale) || ggml_nelements(scale) != 1) {
-        return false;
-    }
-
-    if (mul->type != GGML_TYPE_F32 || !ggml_are_same_shape(mul, lane.out)) {
-        return false;
-    }
-
-    lane.scale = scale;
-    lane.out = mul;
-    lane.n_nodes++;
     return true;
 }
 
