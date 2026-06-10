@@ -1867,7 +1867,7 @@ struct markdown_printer : public printer {
             return 6;
         }
         if (field == "load_mode") {
-            return 5;
+            return 10;
         }
         if (field == "flash_attn") {
             return 3;
