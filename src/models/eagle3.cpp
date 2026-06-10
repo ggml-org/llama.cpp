@@ -249,11 +249,6 @@ llama_model_eagle3::graph<false>::graph(const llama_model & model, const llm_gra
                 model.layers[il].wo, NULL, nullptr,
                 Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il);
 
-        if (inp_out_ids) {
-            cur   = ggml_get_rows(ctx0,   cur, inp_out_ids);
-            inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
-        }
-
         // Add residual and update it
         ggml_tensor * ffn_inp = ggml_add(ctx0, cur, inpSA);
         cb(ffn_inp, "ffn_inp", il);
@@ -284,6 +279,10 @@ llama_model_eagle3::graph<false>::graph(const llama_model & model, const llm_gra
     // Output prenorm state (for next token's g_embeddings in autoregressive generation)
     ggml_set_output(cur);
     res->t_h_nextn = cur;
+
+    if (inp_out_ids) {
+        cur = ggml_get_rows(ctx0, cur, inp_out_ids);
+    }
 
     cur = build_norm(cur,
             model.output_norm, NULL,

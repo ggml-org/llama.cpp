@@ -556,13 +556,12 @@ struct common_speculative_impl_draft_eagle3 : public common_speculative_impl {
         // Interleave each extract_layer's hidden state into a contiguous buffer of
         // shape [n_tokens, n_extract_layers * tgt_hidden]. Then run EAGLE3 encoder
         // to get one g_embd row per token.
-        features_buf.assign((size_t) n_tokens * n_embd_enc, 0.0f);
+        features_buf.resize((size_t) n_tokens * n_embd_enc, 0.0f);
 
         for (uint32_t k = 0; k < n_extract_layers; ++k) {
             const float * layer = llama_get_output_layer_inp(ctx_tgt, (uint32_t) extract_layers[k]);
             if (!layer) {
-                GGML_ABORT("EAGLE3: target layer %d input not extracted.",
-                           extract_layers[k]);
+                GGML_ABORT("EAGLE3: target layer %d input not extracted.", extract_layers[k]);
             }
             for (int32_t i = 0; i < n_tokens; ++i) {
                 float * dst = features_buf.data() + (size_t) i * n_embd_enc + k * (size_t) tgt_hidden;
@@ -631,7 +630,7 @@ struct common_speculative_impl_draft_eagle3 : public common_speculative_impl {
             // Fires iff all three preconditions hold:
             //   1) pending_pos_last >= 0
             //   2) pending_pos_last + 1 == pos[beg]
-            //   3) pending_pos_last > dft_pos_max
+            //   3) pending_pos_last > dft_pos_max // TODO: is this check needed?
             const llama_pos pending_pos = pending_pos_last[seq_id];
             if (pending_pos >= 0 && pending_pos + 1 == batch_in.pos[beg]) {
                 const llama_pos dft_pos_max = llama_memory_seq_pos_max(llama_get_memory(ctx_dft), seq_id);
@@ -643,8 +642,7 @@ struct common_speculative_impl_draft_eagle3 : public common_speculative_impl {
             }
 
             for (int32_t k = beg; k < end; ++k) {
-                common_batch_add(batch, batch_in.token[k + 1], batch_in.pos[k],
-                                 { seq_id }, /*logits=*/ false);
+                common_batch_add(batch, batch_in.token[k + 1], batch_in.pos[k], { seq_id }, /*logits=*/ false);
                 std::memcpy(batch.embd + (size_t) (batch.n_tokens - 1) * n_embd_dec,
                             g_embd + (size_t) k * n_embd_dec, row_bytes);
             }
@@ -652,15 +650,11 @@ struct common_speculative_impl_draft_eagle3 : public common_speculative_impl {
             // refresh deferred state
             const int32_t n_rows = end - beg + 1;
             verify_pos_first[seq_id] = batch_in.pos[beg];
-            verify_g_rows[seq_id]    = n_rows;
-            verify_g[seq_id].assign((size_t) n_rows * n_embd_dec, 0.0f);
-            std::memcpy(verify_g[seq_id].data(),
-                        g_embd + (size_t) beg * n_embd_dec,
-                        (size_t) n_rows * row_bytes);
-
-            std::memcpy(pending_g_last[seq_id].data(),
-                        g_embd + (size_t) end * n_embd_dec, row_bytes);
             pending_pos_last[seq_id] = batch_in.pos[end];
+            verify_g_rows[seq_id]    = n_rows;
+            verify_g[seq_id].resize((size_t) n_rows * n_embd_dec, 0.0f);
+            std::memcpy(verify_g[seq_id].data(),       g_embd + (size_t) beg * n_embd_dec, row_bytes * n_rows);
+            std::memcpy(pending_g_last[seq_id].data(), g_embd + (size_t) end * n_embd_dec, row_bytes);
         }
 
         if (batch.n_tokens > 0) {
@@ -767,17 +761,14 @@ struct common_speculative_impl_draft_eagle3 : public common_speculative_impl {
 
                 result.push_back(id);
 
-                if ((params.n_max <= (int) result.size()) ||
-                    (dp.n_max > 0 && dp.n_max <= (int) result.size())) {
+                if (params.n_max <= (int) result.size()) {
                     drafting[seq_id] = false;
                     n_drafting--;
                     continue;
                 }
 
                 common_batch_add(batch, id, pending_pos_last[seq_id] + (i + 1), { seq_id }, true);
-                std::memcpy(batch.embd + (size_t) (batch.n_tokens - 1) * n_embd_dec,
-                            prenorm,
-                            row_bytes);
+                std::memcpy(batch.embd + (size_t) (batch.n_tokens - 1) * n_embd_dec, prenorm, row_bytes);
             }
 
             if (batch.n_tokens == 0) {
@@ -791,6 +782,17 @@ struct common_speculative_impl_draft_eagle3 : public common_speculative_impl {
             }
 
             ++i;
+        }
+
+        for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
+            auto & dp = dparams[seq_id];
+            if (!dp.drafting) {
+                continue;
+            }
+
+            if (dp.result->size() < (size_t) params.n_min) {
+                dp.result->clear();
+            }
         }
     }
 

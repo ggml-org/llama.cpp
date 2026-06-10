@@ -1908,8 +1908,7 @@ int llama_context::decode(const llama_batch & batch_inp) {
                         float       * row_out = logits_out + (size_t) r * n_vocab;
                         const float * row_in  = eagle3_draft_logits.data() + (size_t) r * draft_vocab_size;
 
-                        std::fill(row_out, row_out + n_vocab,
-                                  -std::numeric_limits<float>::infinity());
+                        std::fill(row_out, row_out + n_vocab, -std::numeric_limits<float>::infinity());
 
                         for (int64_t j = 0; j < draft_vocab_size; j++) {
                             const int64_t target_id = j + eagle3_d2t_map[j];
