@@ -31,6 +31,7 @@
 #else
 #define A_TYPE float16_t
 #endif
+#define A_TYPE_PACKED32 f16vec2
 #endif
 
 #if defined(DATA_A_BF16)
@@ -44,6 +45,7 @@
 #else
 #define A_TYPE uint16_t
 #endif
+#define A_TYPE_PACKED32 uint32_t
 #endif
 
 #define QUANT_K_Q4_0 32
@@ -596,9 +598,10 @@ const uint[1024] iq1s_grid_const = {
     0x55dd55df, 0x55d555d7, 0x5503550c, 0x557f5501, 0x5577557d, 0x55405575, 0x555d555f, 0x55555557
 };
 
+#if defined(NEEDS_IQ1S_GRID_GPU)
 // Same content as iq1s_grid_const except each 2-bit value is expanded to 4-bit
 // and has 1 added to it (allows packed values to be extracted with & 0x0F0F0F0F
-// and 0xF0F0F0F0).
+// and 0xF0F0F0F0). This is only used by the q8_1/int-dot vector path.
 const uint32_t[2048] iq1s_grid_gpu_const = {
     0x00000000, 0x00000002, 0x00000101, 0x00000200, 0x00000202, 0x00010001, 0x00010101, 0x00020000,
     0x00020002, 0x00020200, 0x00020202, 0x01000101, 0x01010001, 0x01010100, 0x01010102, 0x01020101,
@@ -857,9 +860,12 @@ const uint32_t[2048] iq1s_grid_gpu_const = {
     0x20222020, 0x20222022, 0x20222220, 0x20222222, 0x21212021, 0x21212120, 0x21212122, 0x22202020,
     0x22202022, 0x22202220, 0x22202222, 0x22212121, 0x22222020, 0x22222022, 0x22222220, 0x22222222,
 };
+#endif
 
 shared uint16_t iq1s_grid[2048];
+#if defined(NEEDS_IQ1S_GRID_GPU)
 shared uint32_t iq1s_grid_gpu[2048];
+#endif
 
 #define NEEDS_INIT_IQ_SHMEM
 void init_iq_shmem(uvec3 wgsize)
@@ -873,12 +879,14 @@ void init_iq_shmem(uvec3 wgsize)
             iq1s_grid[2*idx+1] = g.y;
         }
     }
+#if defined(NEEDS_IQ1S_GRID_GPU)
     [[unroll]] for (uint i = 0; i < iq1s_grid_gpu_const.length(); i += wgsize.x) {
         uint idx = i + gl_LocalInvocationIndex.x;
         if (iq1s_grid_gpu_const.length() % wgsize.x == 0 || idx < iq1s_grid_gpu_const.length()) {
             iq1s_grid_gpu[idx] = iq1s_grid_gpu_const[idx];
         }
     }
+#endif
     barrier();
 }
 #endif
@@ -1722,11 +1730,18 @@ struct block_nvfp4
     uint8_t qs[QUANT_K_NVFP4 / 2];
 };
 
+struct block_nvfp4_packed32
+{
+    uint32_t d[QUANT_K_NVFP4 / 16 / 4];
+    uint32_t qs[QUANT_K_NVFP4 / 2 / 4];
+};
+
 #if defined(DATA_A_NVFP4)
 #define QUANT_K QUANT_K_NVFP4
 #define QUANT_R QUANT_R_NVFP4
 #define QUANT_AUXF 1
 #define A_TYPE block_nvfp4
+#define A_TYPE_PACKED32 block_nvfp4_packed32
 #endif
 
 #if defined(DATA_A_IQ4_NL) || defined(DATA_A_IQ4_XS)

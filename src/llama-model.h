@@ -116,6 +116,7 @@ enum llm_type {
     LLM_TYPE_A13B,
     LLM_TYPE_7B_A1B,
     LLM_TYPE_8B_A1B, // lfm2moe
+    LLM_TYPE_12B_A2_5B,
     LLM_TYPE_16B_A1B,
     LLM_TYPE_21B_A3B, // Ernie MoE small
     LLM_TYPE_24B_A2B, // lfm2moe
@@ -137,12 +138,17 @@ enum llm_type {
     LLM_TYPE_310B_A15B, // /MiMo-V2-Flash
     LLM_TYPE_355B_A32B, // GLM-4.5
     LLM_TYPE_397B_A17B, // Qwen3.5
+    LLM_TYPE_685B_A37B, // DeepSeek V3.2
     LLM_TYPE_744B_A40B, // GLM-5
     LLM_TYPE_E2B,
     LLM_TYPE_E4B,
 };
 
 std::string llama_rope_scaling_type_name(llama_rope_scaling_type rope_scaling_type);
+
+// Map a GGUF activation-name string to llm_ffn_op_type. Returns `fallback` if
+// the string is empty or not recognized.
+llm_ffn_op_type llm_ffn_op_type_from_string(const std::string & name, llm_ffn_op_type fallback);
 
 struct llama_layer_posnet {
     // resnet
@@ -488,7 +494,7 @@ struct llama_layer {
     struct ggml_tensor * indexer_attn_k   = nullptr;
     struct ggml_tensor * indexer_attn_q_b = nullptr; // note: for lora a/b, not bias
 
-    // gemma4 layer output scale
+    // gemma4 layer output scale, reused for talkie embedding skip scale
     struct ggml_tensor * out_scale = nullptr;
 
     struct llama_layer_posnet posnet;
@@ -541,6 +547,10 @@ struct llama_model {
     // NVFP4 per-tensor scale2, input_scale for LM head
     struct ggml_tensor * output_s    = nullptr;
     struct ggml_tensor * output_in_s = nullptr;
+
+    // NextN/MTP model-level projections
+    struct ggml_tensor * nextn_proj_pre  = nullptr;
+    struct ggml_tensor * nextn_proj_post = nullptr;
 
     // classifier
     struct ggml_tensor * cls       = nullptr;
@@ -694,7 +704,9 @@ const char * llm_type_name(llm_type type);
 // convenience macro for loading local variables for load_tensors() in llama_model_base
 // note: cast to int64_t since we will use these for the tensor dimensions
 #define LLAMA_LOAD_LOCALS \
-    const int     n_layer        = hparams.n_layer;          GGML_UNUSED(n_layer); \
+    const int     n_layer        = hparams.n_layer();        GGML_UNUSED(n_layer); \
+    const int     n_layer_all    = hparams.n_layer_all;      GGML_UNUSED(n_layer_all); \
+    const int     n_layer_nextn  = hparams.n_layer_nextn;    GGML_UNUSED(n_layer_nextn); \
     const int64_t n_head         = hparams.n_head();         GGML_UNUSED(n_head); \
     const int64_t n_head_kv      = hparams.n_head_kv();      GGML_UNUSED(n_head_kv); \
     const int64_t n_embd         = hparams.n_embd;           GGML_UNUSED(n_embd); \

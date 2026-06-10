@@ -126,8 +126,22 @@ function(npm_build out_var)
         return()
     endif()
 
-    if(NOT EXISTS "${UI_SOURCE_DIR}/node_modules")
-        message(STATUS "UI: running npm install (first time)")
+    # npm writes node_modules/.package-lock.json on every successful install,
+    # so a package-lock.json newer than this marker means node_modules is stale
+    set(NPM_MARKER "${UI_SOURCE_DIR}/node_modules/.package-lock.json")
+    set(need_install FALSE)
+    if(NOT EXISTS "${NPM_MARKER}")
+        set(need_install TRUE)
+    else()
+        file(TIMESTAMP "${UI_SOURCE_DIR}/package-lock.json" lock_ts)
+        file(TIMESTAMP "${NPM_MARKER}" marker_ts)
+        if(lock_ts STRGREATER marker_ts)
+            set(need_install TRUE)
+        endif()
+    endif()
+
+    if(need_install)
+        message(STATUS "UI: running npm install")
         execute_process(
             COMMAND ${NPM_EXECUTABLE} install
             WORKING_DIRECTORY "${UI_SOURCE_DIR}"

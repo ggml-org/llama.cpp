@@ -331,6 +331,30 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				}
 			},
 			{
+				key: SETTINGS_KEYS.SHOW_MODEL_QUANTIZATION,
+				label: 'Show model quantization information',
+				help: 'Display quantization badges (e.g. Q8_0, Q4_K_M) next to model names throughout the interface.',
+				defaultValue: true,
+				type: SettingsFieldType.CHECKBOX,
+				section: SETTINGS_SECTION_SLUGS.DISPLAY,
+				sync: {
+					serverKey: SETTINGS_KEYS.SHOW_MODEL_QUANTIZATION,
+					paramType: SyncableParameterType.BOOLEAN
+				}
+			},
+			{
+				key: SETTINGS_KEYS.SHOW_MODEL_TAGS,
+				label: 'Show model tags',
+				help: 'Display model tags (e.g. "vision", "reasoning") next to model names throughout the interface.',
+				defaultValue: true,
+				type: SettingsFieldType.CHECKBOX,
+				section: SETTINGS_SECTION_SLUGS.DISPLAY,
+				sync: {
+					serverKey: SETTINGS_KEYS.SHOW_MODEL_TAGS,
+					paramType: SyncableParameterType.BOOLEAN
+				}
+			},
+			{
 				key: SETTINGS_KEYS.ALWAYS_SHOW_AGENTIC_TURNS,
 				label: 'Always show agentic turns in conversation',
 				help: 'Always expand and display agentic loop turns in conversation messages.',
@@ -647,6 +671,14 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				}
 			},
 			{
+				key: SETTINGS_KEYS.ENABLE_THINKING,
+				label: 'Enable thinking',
+				help: 'Enable model thinking/reasoning for each request. When off, the model will skip the thinking phase and go straight to the response.',
+				defaultValue: false,
+				type: SettingsFieldType.CHECKBOX,
+				section: SETTINGS_SECTION_SLUGS.DEVELOPER
+			},
+			{
 				key: SETTINGS_KEYS.SHOW_RAW_OUTPUT_SWITCH,
 				label: 'Enable raw output toggle',
 				help: 'Show toggle button to display messages as plain text instead of Markdown-formatted content',
@@ -659,12 +691,32 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				}
 			},
 			{
-				key: SETTINGS_KEYS.CUSTOM,
+				key: SETTINGS_KEYS.JS_SANDBOX_ENABLED,
+				label: 'JavaScript sandbox tool',
+				help: 'Expose a run_javascript tool to the model. Code runs in a Web Worker inside a sandboxed iframe with an opaque origin, isolated from the WebUI and its API, with a hard timeout.',
+				defaultValue: false,
+				type: SettingsFieldType.CHECKBOX,
+				section: SETTINGS_SECTION_SLUGS.DEVELOPER
+			},
+			{
+				key: SETTINGS_KEYS.CUSTOM_JSON,
 				label: 'Custom JSON',
 				help: 'Custom JSON parameters to send to the API. Must be valid JSON format.',
 				defaultValue: '',
 				type: SettingsFieldType.TEXTAREA,
 				section: SETTINGS_SECTION_SLUGS.DEVELOPER
+			},
+			{
+				key: SETTINGS_KEYS.CUSTOM_CSS,
+				label: 'Custom CSS',
+				help: 'CSS injected into the page at runtime. Set it here, or ship it server side via the --ui-config customCss field.',
+				defaultValue: '',
+				type: SettingsFieldType.TEXTAREA,
+				section: SETTINGS_SECTION_SLUGS.DEVELOPER,
+				sync: {
+					serverKey: SETTINGS_KEYS.CUSTOM_CSS,
+					paramType: SyncableParameterType.STRING
+				}
 			}
 		]
 	},

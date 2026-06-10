@@ -148,6 +148,10 @@ def parse_args() -> argparse.Namespace:
         "--fuse-gate-up-exps", action="store_true",
         help="Fuse gate_exps and up_exps tensors into a single gate_up_exps tensor for MoE models.",
     )
+    parser.add_argument(
+        "--fp8-as-q8", action="store_true",
+        help="Store tensors dequantized from FP8 as Q8_0 instead of BF16/F16.",
+    )
 
     args = parser.parse_args()
     if not args.print_supported_models and args.model is None:
@@ -234,7 +238,7 @@ def main() -> None:
             assert hparams.get("vision_encoder") is not None, "This model does not support multimodal"
             from conversion.pixtral import PixtralModel
             model_class = PixtralModel
-        elif "moe" in hparams:
+        elif hparams.get("moe") is not None:
             from conversion.mistral import MistralMoeModel
             model_class = MistralMoeModel
         else:
@@ -247,8 +251,9 @@ def main() -> None:
 
         if args.mtp or args.no_mtp:
             from conversion.qwen import _Qwen35MtpMixin
-            if not issubclass(model_class, _Qwen35MtpMixin):
-                logger.error("--mtp / --no-mtp are only supported for Qwen3.5/3.6 text variants today")
+            from conversion.step3 import Step35Model
+            if not (issubclass(model_class, _Qwen35MtpMixin) or issubclass(model_class, Step35Model)):
+                logger.error("--mtp / --no-mtp are only supported for Qwen3.5/3.6 and Step3.5 text variants today")
                 sys.exit(1)
             if args.no_mtp:
                 model_class.no_mtp = True
@@ -264,7 +269,8 @@ def main() -> None:
                                      small_first_shard=args.no_tensor_first_split,
                                      remote_hf_model_id=hf_repo_id, disable_mistral_community_chat_template=disable_mistral_community_chat_template,
                                      sentence_transformers_dense_modules=args.sentence_transformers_dense_modules,
-                                     fuse_gate_up_exps=args.fuse_gate_up_exps
+                                     fuse_gate_up_exps=args.fuse_gate_up_exps,
+                                     fp8_as_q8=args.fp8_as_q8,
                                      )
 
         if args.vocab_only:

@@ -169,6 +169,14 @@
 		}
 	});
 
+	// Inject custom CSS at runtime through an action on the head style node
+	// textContent keeps the value as text, never parsed as HTML
+	function customCss(node: HTMLStyleElement) {
+		$effect(() => {
+			node.textContent = (config().customCss as string | undefined) ?? '';
+		});
+	}
+
 	// Fetch router models when in router mode (for status and modalities)
 	// Wait for models to be loaded first, run only once
 	let routerModelsFetched = false;
@@ -227,6 +235,12 @@
 	});
 </script>
 
+<svelte:head>
+	{#if config().customCss}
+		<style use:customCss></style>
+	{/if}
+</svelte:head>
+
 <Tooltip.Provider delayDuration={TOOLTIP_DELAY_DURATION}>
 	<ModeWatcher />
 	<Toaster richColors />
@@ -240,7 +254,7 @@
 	/>
 
 	<Sidebar.Provider bind:open={sidebarOpen}>
-		<div class="flex h-screen w-full">
+		<div class="flex h-dvh w-full">
 			<Sidebar.Root variant="floating" class="h-full"
 				><SidebarNavigation bind:this={chatSidebar} /></Sidebar.Root
 			>
