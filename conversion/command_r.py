@@ -73,9 +73,6 @@ class Cohere2MoeModel(TextModel):
             self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
         self._experts: list[dict[str, Tensor]] = [{} for _ in range(self.block_count)]
 
-    def get_vocab_base_pre(self, tokenizer) -> str:
-        return "cohere2-moe"
-
     def _set_vocab_gpt2(self) -> None:
         tokens, toktypes, tokpre = self.get_vocab_base()
         self.gguf_writer.add_tokenizer_model("gpt2")
