@@ -123,9 +123,9 @@ struct SkillAction {
 
 // List of forbidden commands and chars (security)
 static const std::vector<std::string> FORBIDDEN_COMMANDS = {
-    "bash", "chmod", "chown", "dd", "fdisk", "fish", "format", "halt", "ifconfig", "iptables", "kill",
-    "killall", "ln", "mkfs", "rmdir", "mv", "nc", "netcat", "nmap", "ping", "parted", "perl",
-    "poweroff", "pkill", "reboot", "rm", "scp", "sh", "shutdown", "sudo", "ufw", "zsh"
+    "chmod", "chown", "dd", "fdisk", "fish", "format", "halt", "ifconfig", "iptables", "kill",
+    "killall", "ln", "mkfs", "nc", "netcat", "nmap", "ping", "parted",
+    "poweroff", "pkill", "reboot", "scp", "shutdown", "sudo", "ufw"
 };
 
 static const std::vector<char> FORBIDDEN_CHARS = {
@@ -608,7 +608,7 @@ struct server_tool_grep_search : server_tool {
 //
 
 static constexpr size_t SERVER_TOOL_EXEC_SHELL_COMMAND_MAX_OUTPUT_SIZE = 16 * 1024; // 16 KB
-static constexpr int    SERVER_TOOL_EXEC_SHELL_COMMAND_MAX_TIMEOUT     = 60;        // seconds
+static constexpr int    SERVER_TOOL_EXEC_SHELL_COMMAND_MAX_TIMEOUT     = 600;        // seconds
 
 struct server_tool_exec_shell_command : server_tool {
     server_tool_exec_shell_command() {
