@@ -908,7 +908,7 @@ jobs:
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.21
         with:
-          key: release-ubuntu-24.04-sycl
+          key: release-ubuntu-24.04-sycl-${{ matrix.build }}
 
       - name: Build
         id: cmake_build
