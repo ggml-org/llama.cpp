@@ -46,13 +46,18 @@ RUN apt-get update && \
         intel-opencl-icd && \
     rm -rf /var/lib/apt/lists/*
 
-# Install OpenVINO for Ubuntu 24.04
+# OpenVINO toolkit and GPU/NPU drivers are cached via BuildKit cache mounts to avoid re-downloading on rebuilds.
+# Install OpenVINO for Ubuntu 24.04.
 ARG OPENVINO_VERSION_MAJOR
 ARG OPENVINO_VERSION_FULL
-RUN mkdir -p /opt/intel && \
-    wget https://storage.openvinotoolkit.org/repositories/openvino/packages/${OPENVINO_VERSION_MAJOR}/linux/openvino_toolkit_ubuntu24_${OPENVINO_VERSION_FULL}_x86_64.tgz && \
-    tar -xf openvino_toolkit_ubuntu24_${OPENVINO_VERSION_FULL}_x86_64.tgz && \
-    mv openvino_toolkit_ubuntu24_${OPENVINO_VERSION_FULL}_x86_64 /opt/intel/openvino_${OPENVINO_VERSION_MAJOR} && \
+RUN --mount=type=cache,target=/var/cache/openvino,sharing=locked \
+    mkdir -p /opt/intel && \
+    TGZ=/var/cache/openvino/openvino_toolkit_ubuntu24_${OPENVINO_VERSION_FULL}_x86_64.tgz && \
+    if [ ! -f "$TGZ" ]; then \
+        wget -O "$TGZ" https://storage.openvinotoolkit.org/repositories/openvino/packages/${OPENVINO_VERSION_MAJOR}/linux/openvino_toolkit_ubuntu24_${OPENVINO_VERSION_FULL}_x86_64.tgz; \
+    fi && \
+    tar -xf "$TGZ" -C /opt/intel/ && \
+    mv /opt/intel/openvino_toolkit_ubuntu24_${OPENVINO_VERSION_FULL}_x86_64 /opt/intel/openvino_${OPENVINO_VERSION_MAJOR} && \
     cd /opt/intel/openvino_${OPENVINO_VERSION_MAJOR} && \
     echo "Y" | ./install_dependencies/install_openvino_dependencies.sh && \
     cd - && \
@@ -68,14 +73,14 @@ COPY . .
 RUN bash -c "source ${OpenVINO_DIR}/setupvars.sh && \
     cmake -B build/ReleaseOV -G Ninja \
         -DCMAKE_BUILD_TYPE=Release \
+        -DLLAMA_BUILD_TESTS=OFF \
         -DGGML_OPENVINO=ON && \
     cmake --build build/ReleaseOV --parallel "
 
-# Copy all necessary libraries
+# Copy all necessary libraries (build outputs + OpenVINO runtime libs)
 RUN mkdir -p /app/lib && \
-    find build/ReleaseOV -name '*.so*' -exec cp {} /app/lib \; && \
-    find ${OpenVINO_DIR}/runtime/lib/intel64 -name '*.so*' -exec cp -P {} /app/lib \; 2>/dev/null || \
-    find ${OpenVINO_DIR}/lib/intel64 -name '*.so*' -exec cp -P {} /app/lib \;
+    find build/ReleaseOV -name '*.so*' -exec cp -P {} /app/lib \; && \
+    find "${OpenVINO_DIR}/runtime/lib/intel64" -name '*.so*' -exec cp -P {} /app/lib \;
 
 # Create runtime directories and copy binaries
 RUN mkdir -p /app/full \
@@ -120,33 +125,41 @@ ARG IGC_VERSION_FULL
 ARG COMPUTE_RUNTIME_VERSION
 ARG COMPUTE_RUNTIME_VERSION_FULL
 ARG IGDGMM_VERSION
-RUN mkdir /tmp/neo/ && cd /tmp/neo/ \
-    && wget https://github.com/intel/intel-graphics-compiler/releases/download/${IGC_VERSION}/intel-igc-core-${IGC_VERSION_FULL}_amd64.deb \
-    && wget https://github.com/intel/intel-graphics-compiler/releases/download/${IGC_VERSION}/intel-igc-opencl-${IGC_VERSION_FULL}_amd64.deb \
-    && wget https://github.com/intel/compute-runtime/releases/download/${COMPUTE_RUNTIME_VERSION}/intel-ocloc-dbgsym_${COMPUTE_RUNTIME_VERSION_FULL}_amd64.ddeb \
-    && wget https://github.com/intel/compute-runtime/releases/download/${COMPUTE_RUNTIME_VERSION}/intel-ocloc_${COMPUTE_RUNTIME_VERSION_FULL}_amd64.deb \
-    && wget https://github.com/intel/compute-runtime/releases/download/${COMPUTE_RUNTIME_VERSION}/intel-opencl-icd-dbgsym_${COMPUTE_RUNTIME_VERSION_FULL}_amd64.ddeb \
-    && wget https://github.com/intel/compute-runtime/releases/download/${COMPUTE_RUNTIME_VERSION}/intel-opencl-icd_${COMPUTE_RUNTIME_VERSION_FULL}_amd64.deb \
-    && wget https://github.com/intel/compute-runtime/releases/download/${COMPUTE_RUNTIME_VERSION}/libigdgmm12_${IGDGMM_VERSION}_amd64.deb \
-    && wget https://github.com/intel/compute-runtime/releases/download/${COMPUTE_RUNTIME_VERSION}/libze-intel-gpu1-dbgsym_${COMPUTE_RUNTIME_VERSION_FULL}_amd64.ddeb \
-    && wget https://github.com/intel/compute-runtime/releases/download/${COMPUTE_RUNTIME_VERSION}/libze-intel-gpu1_${COMPUTE_RUNTIME_VERSION_FULL}_amd64.deb \
-    && dpkg --install *.deb \
-    && rm -rf /tmp/neo/
+RUN --mount=type=cache,target=/var/cache/intel-gpu,sharing=locked \
+    set -eux; \
+    cd /var/cache/intel-gpu; \
+    for url in \
+        https://github.com/intel/intel-graphics-compiler/releases/download/${IGC_VERSION}/intel-igc-core-${IGC_VERSION_FULL}_amd64.deb \
+        https://github.com/intel/intel-graphics-compiler/releases/download/${IGC_VERSION}/intel-igc-opencl-${IGC_VERSION_FULL}_amd64.deb \
+        https://github.com/intel/compute-runtime/releases/download/${COMPUTE_RUNTIME_VERSION}/intel-ocloc_${COMPUTE_RUNTIME_VERSION_FULL}_amd64.deb \
+        https://github.com/intel/compute-runtime/releases/download/${COMPUTE_RUNTIME_VERSION}/intel-opencl-icd_${COMPUTE_RUNTIME_VERSION_FULL}_amd64.deb \
+        https://github.com/intel/compute-runtime/releases/download/${COMPUTE_RUNTIME_VERSION}/libigdgmm12_${IGDGMM_VERSION}_amd64.deb \
+        https://github.com/intel/compute-runtime/releases/download/${COMPUTE_RUNTIME_VERSION}/libze-intel-gpu1_${COMPUTE_RUNTIME_VERSION_FULL}_amd64.deb ; do \
+        f=$(basename "$url"); \
+        [ -f "$f" ] || wget -q -O "$f" "$url"; \
+    done; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends ./*.deb; \
+    rm -rf /var/lib/apt/lists/*
 
 # Install NPU drivers
 ARG NPU_DRIVER_VERSION
 ARG NPU_DRIVER_FULL
 ARG LIBZE1_VERSION
-RUN mkdir /tmp/npu/ && cd /tmp/npu/ \
-    && wget https://github.com/intel/linux-npu-driver/releases/download/${NPU_DRIVER_VERSION}/linux-npu-driver-${NPU_DRIVER_FULL}-ubuntu2404.tar.gz \
-    && tar -xf linux-npu-driver-${NPU_DRIVER_FULL}-ubuntu2404.tar.gz \
-    && dpkg --install *.deb \
-    && rm -rf /tmp/npu/
-
-RUN cd /tmp \
-    && wget https://snapshot.ppa.launchpadcontent.net/kobuk-team/intel-graphics/ubuntu/20260324T100000Z/pool/main/l/level-zero-loader/libze1_${LIBZE1_VERSION}_amd64.deb \
-    && dpkg --install libze1_${LIBZE1_VERSION}_amd64.deb \
-    && rm libze1_${LIBZE1_VERSION}_amd64.deb
+RUN --mount=type=cache,target=/var/cache/intel-npu,sharing=locked \
+    set -eux; \
+    TGZ=/var/cache/intel-npu/linux-npu-driver-${NPU_DRIVER_FULL}-ubuntu2404.tar.gz; \
+    if [ ! -f "$TGZ" ]; then \
+        wget -q -O "$TGZ" https://github.com/intel/linux-npu-driver/releases/download/${NPU_DRIVER_VERSION}/linux-npu-driver-${NPU_DRIVER_FULL}-ubuntu2404.tar.gz; \
+    fi; \
+    DEB=/var/cache/intel-npu/libze1_${LIBZE1_VERSION}_amd64.deb; \
+    if [ ! -f "$DEB" ]; then \
+        wget -q -O "$DEB" https://snapshot.ppa.launchpadcontent.net/kobuk-team/intel-graphics/ubuntu/20260324T100000Z/pool/main/l/level-zero-loader/libze1_${LIBZE1_VERSION}_amd64.deb; \
+    fi; \
+    mkdir /tmp/npu/ && cd /tmp/npu/ && tar -xf "$TGZ" && cp "$DEB" .; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends ./*.deb; \
+    rm -rf /tmp/npu/ /var/lib/apt/lists/*
 
 COPY --from=build /app/lib/ /app/
 
@@ -166,22 +179,26 @@ RUN apt-get update && \
     python3 \
     python3-venv \
     python3-pip && \
-    python3 -m venv /ov-venv && \
-    /ov-venv/bin/pip install --no-cache-dir --upgrade pip setuptools wheel && \
-    /ov-venv/bin/pip install --no-cache-dir -r requirements.txt && \
+    python3 -m venv /openvino-venv && \
+    /openvino-venv/bin/pip install --no-cache-dir --upgrade pip setuptools wheel && \
+    /openvino-venv/bin/pip install --no-cache-dir -r requirements.txt && \
     apt-get autoremove -y && \
     apt-get clean && \
     rm -rf /tmp/* /var/tmp/* && \
     find /var/cache/apt/archives /var/lib/apt/lists -not -name lock -type f -delete && \
     find /var/cache -type f -delete
 
-ENTRYPOINT ["/bin/bash", "-c", "source /ov-venv/bin/activate && exec /app/tools.sh \"$@\"", "--"]
+# Activate the venv
+ENV VIRTUAL_ENV=/openvino-venv \
+    PATH=/openvino-venv/bin:$PATH
+
+ENTRYPOINT ["/app/tools.sh"]
 
 
 ### Light, CLI only
 FROM base AS light
 
-COPY --from=build /app/full/llama-cli /app/
+COPY --from=build /app/full/llama-cli /app/full/llama-completion /app/
 
 WORKDIR /app
 
