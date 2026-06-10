@@ -504,7 +504,7 @@ jobs:
     needs: [check-release]
     if: ${{ needs.check-release.outputs.should_release == 'true' }}
 
-    runs-on: windows-2025
+    runs-on: windows-2025-vs2026
 
     permissions:
       actions: write
@@ -535,12 +535,12 @@ jobs:
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.21
         with:
-          key: release-windows-2025-${{ matrix.arch }}-cpu
+          key: release-windows-2025-vs2026-${{ matrix.arch }}-cpu
 
       - name: Build
         shell: cmd
         run: |
-          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" ${{ matrix.arch == 'x64' && 'x64' || 'amd64_arm64' }}
+          call "C:\Program Files\Microsoft Visual Studio\18\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" ${{ matrix.arch == 'x64' && 'x64' || 'amd64_arm64' }}
           cmake -S . -B build -G "Ninja Multi-Config" ^
             -D CMAKE_TOOLCHAIN_FILE=cmake/${{ matrix.arch }}-windows-llvm.cmake ^
             -DLLAMA_BUILD_BORINGSSL=ON ^
@@ -554,12 +554,12 @@ jobs:
       - name: ccache-clear
         uses: ./.github/actions/ccache-clear
         with:
-          key: release-windows-2025-${{ matrix.arch }}-cpu
+          key: release-windows-2025-vs2026-${{ matrix.arch }}-cpu
 
       - name: Pack artifacts
         id: pack_artifacts
         run: |
-          Copy-Item "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Redist\MSVC\14.44.35112\debug_nonredist\${{ matrix.arch }}\Microsoft.VC143.OpenMP.LLVM\libomp140.${{ matrix.arch == 'x64' && 'x86_64' || 'aarch64' }}.dll" .\build\bin\Release\
+          Copy-Item "C:\Program Files\Microsoft Visual Studio\18\Enterprise\VC\Redist\MSVC\14.51.36231\debug_nonredist\${{ matrix.arch }}\Microsoft.VC145.OpenMP.LLVM\libomp140.${{ matrix.arch == 'x64' && 'x86_64' || 'aarch64' }}.dll" .\build\bin\Release\
           7z a -snl llama-bin-win-cpu-${{ matrix.arch }}.zip .\build\bin\Release\*
 
       - name: Upload artifacts

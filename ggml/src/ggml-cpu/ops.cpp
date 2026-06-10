@@ -4008,12 +4008,12 @@ static void ggml_compute_forward_rms_norm_back_f32(
                 // dx := scale(dx, rrms)
                 float * dx = (float *) ((char *) dst->data + i01*nb1 + i02*nb2 + i03*nb3);
 
-                // dx[i00] = (x*(-sum_xdz/sum_eps) + dz) / sqrtf(mean_eps)
-                ggml_vec_cpy_f32  (ne00, dx, x);
-                // ggml_vec_scale_f32(ne00, dx, -mean_xdz/mean_eps);
-                ggml_vec_scale_f32(ne00, dx, (float)(-sum_xdz)/sum_eps);
-                ggml_vec_acc_f32  (ne00, dx, dz);
-                ggml_vec_scale_f32(ne00, dx, rrms);
+                // dx[i00] = (dz + x*(-sum_xdz/sum_eps)) * rrms
+                // note: https://github.com/ggml-org/ggml/issues/1491
+                const float scale_x = (float) (-sum_xdz) / sum_eps;
+                for (int64_t i00 = 0; i00 < ne00; i00++) {
+                    dx[i00] = (dz[i00] + x[i00] * scale_x) * rrms;
+                }
             }
         }
     }
@@ -6728,6 +6728,78 @@ static void ggml_call_mul_mat(ggml_type type, const ggml_compute_params * params
 
 static inline int64_t ggml_wrap_around(int64_t coord, int64_t size) {
     return (coord  + size) % size; // adding size avoids negative number weirdness
+}
+
+// ggml_compute_forward_col2im_1d
+//
+// Scatter-add columns [K*OC, T_in] -> signal [T_out, OC]
+// where T_out = (T_in - 1)*s + K - 2*p.  Gather approach: each output reads ceil(K/s) inputs.
+// Parallelized over the time axis so the split stays balanced whatever OC is.
+// Supports F32, F16, BF16 input/output (same type), F32 accumulator.
+
+template <typename elem_t>
+static void ggml_compute_forward_col2im_1d_impl(
+        const ggml_compute_params * params,
+        ggml_tensor * dst) {
+
+    const ggml_tensor * src = dst->src[0];  // [K*OC, T_in]
+
+    GGML_ASSERT(ggml_is_contiguous(src));
+    GGML_ASSERT(ggml_is_contiguous(dst));
+
+    const int32_t s0 = ((const int32_t *)(dst->op_params))[0];
+    const int32_t OC = ((const int32_t *)(dst->op_params))[1];
+    const int32_t p0 = ((const int32_t *)(dst->op_params))[2];
+
+    const int64_t K_OC = src->ne[0];
+    const int64_t T_in = src->ne[1];
+    const int64_t K    = K_OC / OC;
+    const int64_t T_out = dst->ne[0];
+
+    const elem_t * col_data = (const elem_t *) src->data;
+    elem_t       * dst_data = (elem_t *) dst->data;
+
+    const int ith = params->ith;
+    const int nth = params->nth;
+
+    // Parallelize over the time axis: the split stays balanced whatever OC is,
+    // down to OC = 1 for mono audio, and threads read disjoint column bands
+    const int64_t dr = (T_out + nth - 1) / nth;
+    const int64_t it0 = dr * ith;
+    const int64_t it1 = it0 + dr < T_out ? it0 + dr : T_out;
+
+    for (int64_t oc = 0; oc < OC; oc++) {
+        for (int64_t t_out = it0; t_out < it1; t_out++) {
+            const int64_t t_abs = t_out + p0;  // absolute position in uncropped signal
+            // Gather: find all (t_in, k) where t_in * s + k == t_abs, 0 <= k < K
+            int64_t t_in_min = (t_abs - K + 1 + s0 - 1) / s0;  // ceil((t_abs-K+1)/s)
+            if (t_in_min < 0) t_in_min = 0;
+            int64_t t_in_max = t_abs / s0;
+            if (t_in_max >= T_in) t_in_max = T_in - 1;
+
+            float sum = 0.0f;
+            for (int64_t t_in = t_in_min; t_in <= t_in_max; t_in++) {
+                int64_t k = t_abs - t_in * s0;
+                if (k >= 0 && k < K) {
+                    // col layout: [K*OC, T_in], element (oc*K+k, t_in)
+                    sum += type_conversion_table<elem_t>::to_f32(col_data[(oc * K + k) + t_in * K_OC]);
+                }
+            }
+            // dst layout: [T_out, OC], element (t_out, oc)
+            dst_data[t_out + oc * T_out] = type_conversion_table<elem_t>::from_f32(sum);
+        }
+    }
+}
+
+void ggml_compute_forward_col2im_1d(
+        const ggml_compute_params * params,
+        ggml_tensor * dst) {
+    switch (dst->src[0]->type) {
+        case GGML_TYPE_F32:  ggml_compute_forward_col2im_1d_impl<float>      (params, dst); break;
+        case GGML_TYPE_F16:  ggml_compute_forward_col2im_1d_impl<ggml_fp16_t>(params, dst); break;
+        case GGML_TYPE_BF16: ggml_compute_forward_col2im_1d_impl<ggml_bf16_t>(params, dst); break;
+        default: GGML_ABORT("col2im_1d: unsupported type %d", dst->src[0]->type);
+    }
 }
 
 // ggml_compute_forward_conv_2d

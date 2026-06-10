@@ -69,6 +69,7 @@ export const SETTINGS_KEYS = {
 	ENABLE_THINKING: 'enableThinking',
 	SHOW_RAW_OUTPUT_SWITCH: 'showRawOutputSwitch',
 	// PY_INTERPRETER_ENABLED: 'pyInterpreterEnabled',
+	JS_SANDBOX_ENABLED: 'jsSandboxEnabled',
 	CUSTOM_JSON: 'customJson',
 	CUSTOM_CSS: 'customCss'
 } as const;

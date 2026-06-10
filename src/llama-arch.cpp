@@ -564,6 +564,8 @@ static const std::map<llm_tensor, const char *> LLM_TENSOR_NAMES = {
     { LLM_TENSOR_INDEXER_PROJ,                           "blk.%d.indexer.proj" },
     { LLM_TENSOR_INDEXER_ATTN_K,                         "blk.%d.indexer.attn_k" },
     { LLM_TENSOR_INDEXER_ATTN_Q_B,                       "blk.%d.indexer.attn_q_b" },
+    { LLM_TENSOR_MASKED_EMBD_CENTROIDS,                  "masked_embd_centroids" },
+    { LLM_TENSOR_MASKED_EMBD_ORDERING,                   "masked_embd_ordering" },
     { LLM_TENSOR_EAGLE3_HIDDEN_NORM,                     "blk.%d.hidden_norm" },
     { LLM_TENSOR_EAGLE3_FC,                              "fc" },
     { LLM_TENSOR_EAGLE3_D2T,                             "d2t" },
@@ -791,6 +793,8 @@ static const std::map<llm_tensor, llm_tensor_info> LLM_TENSOR_INFOS = {
     // latent projections feed ggml_mul_mat, the buft probe must use MUL_MAT to keep them on GPU
     {LLM_TENSOR_FFN_LATENT_DOWN,            {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
     {LLM_TENSOR_FFN_LATENT_UP,              {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
+    {LLM_TENSOR_MASKED_EMBD_CENTROIDS,      {LLM_TENSOR_LAYER_INPUT,     GGML_OP_NONE}},
+    {LLM_TENSOR_MASKED_EMBD_ORDERING,       {LLM_TENSOR_LAYER_INPUT,     GGML_OP_NONE}},
     // eagle3
     {LLM_TENSOR_EAGLE3_FC,                  {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_MUL_MAT}},
     {LLM_TENSOR_EAGLE3_HIDDEN_NORM,         {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},

@@ -1360,7 +1360,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     add_opt(common_arg(
         {"--cache-idle-slots"},
         {"--no-cache-idle-slots"},
-        "save and clear idle slots on new task (default: enabled, requires unified KV and cache-ram)",
+        "save idle slots to the prompt cache on new task, and clear them when using unified KV (default: enabled, requires cache-ram)",
         [](common_params & params, bool value) {
             params.cache_idle_slots = value;
         }
@@ -3333,6 +3333,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             common_log_set_file(common_log_main(), value.c_str());
         }
     ).set_env("LLAMA_ARG_LOG_FILE"));
+    add_opt(common_arg(
+        {"--log-prompts-dir"}, "PATH",
+        "Log prompts to directory (only used for debugging, default: disabled)",
+        [](common_params & params, const std::string & value) {
+            params.path_prompts_log_dir = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
     add_opt(common_arg(
         {"--log-colors"}, "[on|off|auto]",
         "Set colored logging ('on', 'off', or 'auto', default: 'auto')\n"
