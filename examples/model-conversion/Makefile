@@ -52,6 +52,10 @@ causal-convert-mm-model:
 	METADATA_OVERRIDE="$(METADATA_OVERRIDE)" \
 	./scripts/causal/convert-model.sh
 
+	$(MAKE) causal-convert-mmproj MM_OUTTYPE="$(MM_OUTTYPE)"
+
+causal-convert-mmproj:
+	$(call validate_model_path,causal-convert-mmproj)
 	@MODEL_NAME="$(MODEL_NAME)" OUTTYPE="$(MM_OUTTYPE)" MODEL_PATH="$(MODEL_PATH)" \
 	METADATA_OVERRIDE="$(METADATA_OVERRIDE)" \
 	./scripts/causal/convert-model.sh --mmproj

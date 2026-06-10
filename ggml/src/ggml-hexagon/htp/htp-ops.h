@@ -20,6 +20,7 @@ enum htp_data_type {
     HTP_TYPE_F32    = 0,
     HTP_TYPE_F16    = 1,
     HTP_TYPE_Q4_0   = 2,
+    HTP_TYPE_Q4_1   = 3,
     HTP_TYPE_Q8_0   = 8,
     HTP_TYPE_IQ4_NL = 20,
     HTP_TYPE_I32    = 26,
@@ -28,6 +29,7 @@ enum htp_data_type {
 
     // types used internally for repack, dyn.quant, etc
     HTP_TYPE_Q4_0x4x2 = 200,
+    HTP_TYPE_Q4_1x4x2,
     HTP_TYPE_Q8_0x4x2,
     HTP_TYPE_MXFP4x4x2,
 
@@ -56,12 +58,14 @@ enum htp_op_code {
     HTP_OP_MUL_MAT,
     HTP_OP_MUL_MAT_ID,
     HTP_OP_RMS_NORM,
+    HTP_OP_RMS_NORM_MUL,
     HTP_OP_UNARY_SILU,
     HTP_OP_UNARY_GELU,
     HTP_OP_UNARY_SIGMOID,
     HTP_OP_UNARY_EXP,
     HTP_OP_UNARY_NEG,
     HTP_OP_UNARY_SOFTPLUS,
+    HTP_OP_UNARY_TANH,
     HTP_OP_GLU_SWIGLU,
     HTP_OP_GLU_SWIGLU_OAI,
     HTP_OP_GLU_GEGLU,
@@ -83,6 +87,13 @@ enum htp_op_code {
     HTP_OP_FILL,
     HTP_OP_DIAG,
     HTP_OP_SOLVE_TRI,
+    HTP_OP_L2_NORM,
+    HTP_OP_GATED_DELTA_NET,
+    HTP_OP_TRI,
+    HTP_OP_PAD,
+    HTP_OP_NORM,
+    HTP_OP_CONCAT,
+
     HTP_OP_INVALID
 };
 
@@ -90,15 +101,11 @@ enum htp_op_code {
 #define HTP_OP_MAX_INPUTS  6    // aka GGML_MAX_SRCS
 #define HTP_OP_MAX_PARAMS  16   // aka GGML_MAX_OP_PARAMS
 
-#define HTP_OP_MAX_BUFS    8
+#define HTP_OP_MAX_BUFS    16
 #define HTP_OP_MAX_REQS    256
 #define HTP_OP_MAX_TENSORS (HTP_OP_MAX_REQS * HTP_OP_MAX_INPUTS + HTP_OP_MAX_REQS)
 
-#if __HVX_ARCH__ < 75
-#define HTP_OP_MAX_VMEM    (3167538380u)
-#else
-#define HTP_OP_MAX_VMEM    (3221225472u)
-#endif
+#define HTP_OP_MAX_VMEM_DEFAULT (3355443200u)
 
 #define HTP_MMAP_MAX_VMEM  (2147483648u)
 

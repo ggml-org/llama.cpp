@@ -1,4 +1,7 @@
 ARG UBUNTU_VERSION=26.04
+ARG BUILD_DATE=N/A
+ARG APP_VERSION=N/A
+ARG APP_REVISION=N/A
 
 FROM ubuntu:$UBUNTU_VERSION AS build
 
@@ -23,6 +26,7 @@ RUN mkdir -p /app/lib && \
 RUN mkdir -p /app/full \
     && cp build/bin/* /app/full \
     && cp *.py /app/full \
+    && cp -r conversion /app/full \
     && cp -r gguf-py /app/full \
     && cp -r requirements /app/full \
     && cp requirements.txt /app/full \
@@ -31,8 +35,21 @@ RUN mkdir -p /app/full \
 ## Base image
 FROM ubuntu:$UBUNTU_VERSION AS base
 
+ARG BUILD_DATE=N/A
+ARG APP_VERSION=N/A
+ARG APP_REVISION=N/A
+ARG IMAGE_URL=https://github.com/ggml-org/llama.cpp
+ARG IMAGE_SOURCE=https://github.com/ggml-org/llama.cpp
+LABEL org.opencontainers.image.created=$BUILD_DATE \
+      org.opencontainers.image.version=$APP_VERSION \
+      org.opencontainers.image.revision=$APP_REVISION \
+      org.opencontainers.image.title="llama.cpp" \
+      org.opencontainers.image.description="LLM inference in C/C++" \
+      org.opencontainers.image.url=$IMAGE_URL \
+      org.opencontainers.image.source=$IMAGE_SOURCE
+
 RUN apt-get update \
-    && apt-get install -y libgomp1 curl libvulkan1 mesa-vulkan-drivers \
+    && apt-get install -y libgomp1 curl ffmpeg libvulkan1 mesa-vulkan-drivers \
     libglvnd0 libgl1 libglx0 libegl1 libgles2 \
     && apt autoremove -y \
     && apt clean -y \

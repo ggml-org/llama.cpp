@@ -701,29 +701,19 @@ size_t validate_utf8(const std::string& text) {
     return len;
 }
 
-// Computes FNV-1a hash of the data
-static std::string fnv_hash(const uint8_t * data, size_t len) {
-    const uint64_t fnv_prime = 0x100000001b3ULL;
-    uint64_t hash = 0xcbf29ce484222325ULL;
-
-    for (size_t i = 0; i < len; ++i) {
-        hash ^= data[i];
-        hash *= fnv_prime;
-    }
-    return std::to_string(hash);
-}
-
-server_tokens process_mtmd_prompt(mtmd_context * mctx, std::string prompt, std::vector<raw_buffer> files) {
+server_tokens process_mtmd_prompt(mtmd_context * mctx, const std::string & prompt, const std::vector<raw_buffer> & files, bool is_placeholder) {
+    // these will be freed upon going out of scope
     mtmd::bitmaps bitmaps;
+    std::vector<mtmd_helper::video_ptr> videos;
     for (auto & file : files) {
-        mtmd::bitmap bmp(mtmd_helper_bitmap_init_from_buf(mctx, file.data(), file.size()));
-        if (!bmp.ptr) {
+        auto out = mtmd_helper_bitmap_init_from_buf(mctx, file.data(), file.size(), is_placeholder);
+        if (!out.bitmap) {
             throw std::runtime_error("Failed to load image or audio file");
         }
-        // calculate bitmap hash (for KV caching)
-        std::string hash = fnv_hash(bmp.data(), bmp.n_bytes());
-        bmp.set_id(hash.c_str());
-        bitmaps.entries.push_back(std::move(bmp));
+        bitmaps.entries.emplace_back(out.bitmap);
+        if (out.video_ctx) {
+            videos.emplace_back(out.video_ctx);
+        }
     }
     // process prompt
     std::vector<server_tokens> inputs;
@@ -1023,6 +1013,20 @@ json oaicompat_chat_params_parse(
                 p["text"] = get_media_marker();
                 p.erase("input_audio");
 
+            } else if (type == "input_video") {
+                if (!opt.allow_video) {
+                    throw std::runtime_error("video input is not supported - hint: if this is unexpected, you may need to provide the mmproj");
+                }
+
+                json input_video  = json_value(p, "input_video", json::object());
+                std::string data  = json_value(input_video, "data", std::string());
+                auto decoded_data = base64_decode(data); // expected to be base64 encoded
+                out_files.push_back(decoded_data);
+
+                p["type"] = "media_marker";
+                p["text"] = get_media_marker();
+                p.erase("input_video");
+
             } else if (type != "text") {
                 throw std::invalid_argument("unsupported content[].type");
             }
@@ -1032,19 +1036,33 @@ json oaicompat_chat_params_parse(
     auto caps = common_chat_templates_get_caps(opt.tmpls.get());
 
     common_chat_templates_inputs inputs;
-    inputs.messages              = common_chat_msgs_parse_oaicompat(messages);
-    inputs.tools                 = common_chat_tools_parse_oaicompat(tools);
-    inputs.tool_choice           = common_chat_tool_choice_parse_oaicompat(tool_choice);
-    inputs.json_schema           = json_schema.is_null() ? "" : json_schema.dump();
-    inputs.grammar               = grammar;
-    inputs.use_jinja             = opt.use_jinja;
-    inputs.parallel_tool_calls   = json_value(body, "parallel_tool_calls", caps["supports_parallel_tool_calls"]);
-    inputs.add_generation_prompt = json_value(body, "add_generation_prompt", true);
-    inputs.reasoning_format      = opt.reasoning_format;
+    inputs.messages               = common_chat_msgs_parse_oaicompat(messages);
+    inputs.tools                  = common_chat_tools_parse_oaicompat(tools);
+    inputs.tool_choice            = common_chat_tool_choice_parse_oaicompat(tool_choice);
+    inputs.json_schema            = json_schema.is_null() ? "" : json_schema.dump();
+    inputs.grammar                = grammar;
+    inputs.use_jinja              = opt.use_jinja;
+    inputs.parallel_tool_calls    = json_value(body, "parallel_tool_calls", caps["supports_parallel_tool_calls"]);
+    inputs.add_generation_prompt  = json_value(body, "add_generation_prompt", true);
+    inputs.continue_final_message = body.contains("continue_final_message") ?
+        common_chat_continuation_parse(body.at("continue_final_message")) :
+        COMMON_CHAT_CONTINUATION_NONE;
+    if (inputs.continue_final_message == COMMON_CHAT_CONTINUATION_NONE && opt.prefill_assistant
+        && !inputs.messages.empty() && inputs.messages.back().role == "assistant") {
+        if (inputs.messages.size() >= 2 && inputs.messages[inputs.messages.size() - 2].role == "assistant") {
+            throw std::invalid_argument("Cannot have 2 or more assistant messages at the end of the list.");
+        }
+        inputs.continue_final_message = COMMON_CHAT_CONTINUATION_AUTO;
+        inputs.add_generation_prompt  = false;
+    }
+    if (inputs.continue_final_message != COMMON_CHAT_CONTINUATION_NONE && inputs.add_generation_prompt) {
+        throw std::invalid_argument("Cannot set both add_generation_prompt and continue_final_message to true.");
+    }
+    inputs.reasoning_format = opt.reasoning_format;
     if (body.contains("reasoning_format")) {
         inputs.reasoning_format = common_reasoning_format_from_name(body.at("reasoning_format").get<std::string>());
     }
-    inputs.enable_thinking       = opt.enable_thinking;
+    inputs.enable_thinking = opt.enable_thinking;
     if (!inputs.tools.empty() && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE) {
         if (body.contains("grammar")) {
             throw std::invalid_argument("Cannot use custom grammar constraints with tools.");
@@ -1069,43 +1087,10 @@ json oaicompat_chat_params_parse(
         throw std::invalid_argument("invalid type for \"enable_thinking\" (expected boolean, got string)");
     }
 
-    // if the assistant message appears at the end of list, we do not add end-of-turn token
-    // for ex. this can be useful to modify the reasoning process in reasoning models
-    bool prefill_assistant_message = !inputs.messages.empty() && inputs.messages.back().role == "assistant" && opt.prefill_assistant;
-    common_chat_msg last_message;
-    if (prefill_assistant_message) {
-        last_message = inputs.messages.back();
-        inputs.messages.pop_back();
-
-        /* sanity check, max one assistant message at the end of the list */
-        if (!inputs.messages.empty() && inputs.messages.back().role == "assistant"){
-            throw std::invalid_argument("Cannot have 2 or more assistant messages at the end of the list.");
-        }
-
-        /* TODO: test this properly */
-        inputs.reasoning_format = COMMON_REASONING_FORMAT_NONE;
-
-        if ( inputs.enable_thinking ) {
-            throw std::invalid_argument("Assistant response prefill is incompatible with enable_thinking.");
-        }
-
-        inputs.add_generation_prompt = true;
-    }
     inputs.force_pure_content = opt.force_pure_content;
 
     // Apply chat template to the list of messages
     auto chat_params = common_chat_templates_apply(opt.tmpls.get(), inputs);
-
-    /* Append assistant prefilled message */
-    if (prefill_assistant_message) {
-        if (!last_message.content_parts.empty()) {
-            for (auto & p : last_message.content_parts) {
-                chat_params.prompt += p.text;
-            }
-        } else {
-            chat_params.prompt += last_message.content;
-        }
-    }
 
     llama_params["chat_format"] = static_cast<int>(chat_params.format);
     llama_params["prompt"]      = chat_params.prompt;
@@ -1129,6 +1114,16 @@ json oaicompat_chat_params_parse(
         llama_params["chat_parser"] = chat_params.parser;
     }
 
+    llama_params["message_spans"] = json::array();
+
+    for (const auto & span : chat_params.message_spans) {
+        llama_params["message_spans"].push_back({
+            { "role", span.role },
+            { "pos",  span.pos  },
+            { "len",  span.len  },
+        });
+    }
+
     // Reasoning budget: pass parameters through to sampling layer
     {
         int reasoning_budget = opt.reasoning_budget;
@@ -1145,6 +1140,7 @@ json oaicompat_chat_params_parse(
             llama_params["reasoning_budget_start_tag"] = chat_params.thinking_start_tag;
             llama_params["reasoning_budget_end_tag"] = chat_params.thinking_end_tag;
             llama_params["reasoning_budget_message"] = opt.reasoning_budget_message;
+            llama_params["reasoning_control"] = json_value(body, "reasoning_control", false);
         }
     }
 

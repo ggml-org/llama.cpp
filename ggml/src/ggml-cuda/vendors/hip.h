@@ -48,6 +48,7 @@
 #define cublasSetMathMode(handle, mode) CUBLAS_STATUS_SUCCESS
 #define cublasSetStream hipblasSetStream
 #define cublasSgemm hipblasSgemm
+#define cublasSgemmStridedBatched hipblasSgemmStridedBatched
 #define cublasStatus_t hipblasStatus_t
 #define cublasOperation_t hipblasOperation_t
 #define cudaDevAttrCooperativeLaunch hipDeviceAttributeCooperativeLaunch
@@ -55,6 +56,7 @@
 #define cudaDeviceDisablePeerAccess hipDeviceDisablePeerAccess
 #define cudaDeviceEnablePeerAccess hipDeviceEnablePeerAccess
 #define cudaDeviceGetAttribute hipDeviceGetAttribute
+#define cudaDeviceGetPCIBusId hipDeviceGetPCIBusId
 #define cudaDeviceProp hipDeviceProp_t
 #define cudaDeviceSynchronize hipDeviceSynchronize
 #define cudaError_t hipError_t
@@ -217,9 +219,9 @@
 #define RDNA3
 #endif // defined(__GFX11__)
 
-#if defined(__gfx1150__) || defined(__gfx1151__)
+#if defined(__gfx1150__) || defined(__gfx1151__) || defined(__gfx1152__) || defined(__gfx1153__)
 #define RDNA3_5
-#endif // defined(__gfx1150__) || defined(__gfx1151__)
+#endif // defined(__gfx1150__) || defined(__gfx1151__) || defined(__gfx1152__) || defined(__gfx1153__)
 
 #if defined(RDNA3) && !defined(RDNA3_5)
 #define RDNA3_0

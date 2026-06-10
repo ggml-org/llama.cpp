@@ -276,6 +276,7 @@ int op_argsort(struct htp_ops_context * octx) {
     octx->src0_spad.data = octx->ctx->vtcm_base;
     octx->src0_spad.size = total_spad_size;
     octx->src0_spad.size_per_thread = spad_per_thread;
+    octx->src0_spad.src  = NULL;
 
     FARF(HIGH, "argsort: %ux%ux%ux%u -> %ux%ux%ux%u (0x%x, 0x%x)",
          octx->src[0]->ne[0], octx->src[0]->ne[1], octx->src[0]->ne[2], octx->src[0]->ne[3],
