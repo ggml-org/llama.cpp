@@ -92,13 +92,6 @@ export const APPLE_DEVICES = {
 
 export type AppleDeviceKey = keyof typeof APPLE_DEVICES;
 
-export enum SplashOrientation {
-	PORTrait = 'portrait',
-	LANDscape = 'landscape'
-}
-
-export type SplashDimensions = { deviceW: number; deviceH: number; dpr: number };
-
 export const PWA_FILE_PATHS = {
 	MANIFEST: '/manifest.webmanifest',
 	SERVICE_WORKER: '/sw.js',
@@ -184,10 +177,10 @@ export const PUBLIC_ENDPOINTS = [
 ] as const;
 
 export const REGEX_PATTERNS = {
-	BUNDLE_JS: /\/_app\/immutable\/bundle\.[^"]+\.js/g,
-	BUNDLE_CSS: /\/_app\/immutable\/assets\/bundle\.[^"]+\.css/g,
-	BUNDLE_JS_HASH: /\/_app\/immutable\/bundle\.([^".]+)\.js/g,
-	BUNDLE_CSS_HASH: /\/_app\/immutable\/assets\/bundle\.([^".]+)\.css/g,
+	BUNDLE_JS: /(?:\/_app|_app)\/immutable\/bundle\.[^"]+\.js/g,
+	BUNDLE_CSS: /(?:\/_app|_app)\/immutable\/assets\/bundle\.[^"]+\.css/g,
+	BUNDLE_JS_HASH: /(?:\/_app|_app)\/immutable\/bundle\.([^".]+)\.js/g,
+	BUNDLE_CSS_HASH: /(?:\/_app|_app)\/immutable\/assets\/bundle\.([^".]+)\.css/g,
 	SVELTEKIT_HASH: /__sveltekit_[a-z0-9]+/g,
 	SPLASH_FILE: /^apple-splash-(portrait|landscape)-(dark-)?(\d+)x(\d+)\.png$/,
 	BUNDLE_JS_FILE: /^bundle\..+\.js$/,
@@ -196,8 +189,8 @@ export const REGEX_PATTERNS = {
 	WORKBOX_IMPORT: /"\.\/workbox-[a-z0-9]+"/g,
 	FAVICON_SVG: /"favicon\.svg"/g,
 	VERSION_JSON_APP: /"_app\/version\.json"/g,
-	PRECACHE_BUNDLE_JS: /"\/?_app\/immutable\/bundle\.[^"]+\.js"/g,
-	PRECACHE_BUNDLE_CSS: /"\/?_app\/immutable\/assets\/bundle\.[^"]+\.css"/g
+	PRECACHE_BUNDLE_JS: /"(?:\/_app|_app)\/immutable\/bundle\.[^"]+\.js"/g,
+	PRECACHE_BUNDLE_CSS: /"(?:\/_app|_app)\/immutable\/assets\/bundle\.[^"]+\.css"/g
 } as const;
 
 export const CACHE_SETTINGS = {
@@ -285,8 +278,6 @@ export const PWA_ASSET_GENERATOR = {
 	XHTML: false,
 	PNG_COMPRESSION_LEVEL: 9,
 	PNG_QUALITY: 60,
-	ORIENTATION_PORTRAIT: 'portrait',
-	ORIENTATION_LANDSCAPE: 'landscape',
 	DARK_PREFIX: 'dark-'
 } as const;
 

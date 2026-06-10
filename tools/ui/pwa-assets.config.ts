@@ -4,6 +4,7 @@ import {
 	minimal2023Preset
 } from '@vite-pwa/assets-generator/config';
 import { THEME_COLORS, PWA_GENERATOR_DEVICES, PWA_ASSET_GENERATOR } from './src/lib/constants/pwa';
+import { SplashOrientation } from './src/lib/enums/splash.enums';
 
 export default defineConfig({
 	headLinkOptions: {
@@ -39,9 +40,7 @@ export default defineConfig({
 				quality: PWA_ASSET_GENERATOR.PNG_QUALITY
 			},
 			name: (landscape, size, dark) => {
-				const orientation = landscape
-					? PWA_ASSET_GENERATOR.ORIENTATION_LANDSCAPE
-					: PWA_ASSET_GENERATOR.ORIENTATION_PORTRAIT;
+				const orientation = landscape ? SplashOrientation.LANDSCAPE : SplashOrientation.PORTRAIT;
 				const darkPrefix = dark ? PWA_ASSET_GENERATOR.DARK_PREFIX : '';
 				return `apple-splash-${orientation}-${darkPrefix}${size.width}x${size.height}.png`;
 			}

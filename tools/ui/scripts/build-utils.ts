@@ -8,12 +8,9 @@ import { readdirSync } from 'node:fs';
 import { execSync } from 'node:child_process';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import {
-	REGEX_PATTERNS,
-	APPLE_DEVICES,
-	SplashOrientation,
-	type SplashDimensions
-} from '../src/lib/constants/pwa';
+import { REGEX_PATTERNS, APPLE_DEVICES } from '../src/lib/constants/pwa';
+import type { SplashDimensions } from '../src/lib/types';
+import { SplashOrientation } from '../src/lib/enums/splash.enums';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -54,8 +51,20 @@ export function generateSplashScreenLinks(outDir: string): string[] {
 	const dimMap = new Map<string, SplashDimensions>();
 	for (const [dims, spec] of Object.entries(APPLE_DEVICES)) {
 		const [w, h] = dims.split('x').map(Number);
+		// logical-point dimensions
 		dimMap.set(`${w}x${h}`, { deviceW: spec.width, deviceH: spec.height, dpr: spec.dpr });
 		dimMap.set(`${h}x${w}`, { deviceW: spec.width, deviceH: spec.height, dpr: spec.dpr });
+		// pixel dimensions (used by actual generated splash files)
+		dimMap.set(`${w * spec.dpr}x${h * spec.dpr}`, {
+			deviceW: spec.width,
+			deviceH: spec.height,
+			dpr: spec.dpr
+		});
+		dimMap.set(`${h * spec.dpr}x${w * spec.dpr}`, {
+			deviceW: spec.width,
+			deviceH: spec.height,
+			dpr: spec.dpr
+		});
 	}
 
 	const lightLinks: string[] = [];
@@ -78,7 +87,7 @@ export function generateSplashScreenLinks(outDir: string): string[] {
 
 		const { deviceW, deviceH, dpr } = spec;
 		const media = `screen and (device-width: ${deviceW}px) and (device-height: ${deviceH}px) and (-webkit-device-pixel-ratio: ${dpr}) and (orientation: ${orientation})`;
-		const href = `/${file}`;
+		const href = `./${file}`;
 
 		if (isDark) {
 			darkLinks.push(

@@ -136,7 +136,7 @@ describe('PWA Build Output', () => {
 
 		it('has PWA manifest link', () => {
 			expect(indexContent).toBeTruthy();
-			expect(indexContent).toMatch(/rel="manifest" href="\/manifest\.webmanifest"/);
+			expect(indexContent).toMatch(/rel="manifest" href="(\.?\/)?manifest\.webmanifest"/);
 		});
 
 		it('has apple-touch-icon link', () => {

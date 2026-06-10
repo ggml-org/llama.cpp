@@ -83,8 +83,8 @@ jobs:
           echo "ui_version=${version}" >> $GITHUB_OUTPUT
 
   macos-cpu:
-    needs: [check_release, get-version]
-    if: ${{ needs.check_release.outputs.should_release == 'true' }}
+    needs: [check-release, get-version]
+    if: ${{ needs.check-release.outputs.should_release == 'true' }}
     strategy:
       matrix:
         include:
@@ -165,8 +165,8 @@ jobs:
           name: llama-bin-macos-${{ matrix.build }}.tar.gz
 
   ubuntu-cpu:
-    needs: [check_release, get-version]
-    if: ${{ needs.check_release.outputs.should_release == 'true' }}
+    needs: [check-release, get-version]
+    if: ${{ needs.check-release.outputs.should_release == 'true' }}
     strategy:
       matrix:
         include:
@@ -252,8 +252,8 @@ jobs:
           name: llama-bin-ubuntu-${{ matrix.build }}.tar.gz
 
   ubuntu-vulkan:
-    needs: [check_release, get-version]
-    if: ${{ needs.check_release.outputs.should_release == 'true' }}
+    needs: [check-release, get-version]
+    if: ${{ needs.check-release.outputs.should_release == 'true' }}
 
     strategy:
       matrix:
@@ -338,8 +338,8 @@ jobs:
           name: llama-bin-ubuntu-vulkan-${{ matrix.build }}.tar.gz
 
   android-arm64:
-    needs: [check_release, get-version]
-    if: ${{ needs.check_release.outputs.should_release == 'true' }}
+    needs: [check-release, get-version]
+    if: ${{ needs.check-release.outputs.should_release == 'true' }}
 
     runs-on: ubuntu-latest
 
@@ -431,8 +431,8 @@ jobs:
           name: llama-bin-android-arm64.tar.gz
 
   ubuntu-24-openvino:
-    needs: [check_release, get-version]
-    if: ${{ needs.check_release.outputs.should_release == 'true' }}
+    needs: [check-release, get-version]
+    if: ${{ needs.check-release.outputs.should_release == 'true' }}
 
     runs-on: ubuntu-24.04
 
@@ -980,8 +980,8 @@ jobs:
           name: llama-bin-ubuntu-sycl-${{ matrix.build }}-x64.tar.gz
 
   ubuntu-22-rocm:
-    needs: [check_release, get-version]
-    if: ${{ needs.check_release.outputs.should_release == 'true' }}
+    needs: [check-release, get-version]
+    if: ${{ needs.check-release.outputs.should_release == 'true' }}
 
     runs-on: ubuntu-22.04
 
@@ -1101,8 +1101,8 @@ jobs:
           name: llama-bin-ubuntu-rocm-${{ env.ROCM_VERSION_SHORT }}-${{ matrix.build }}.tar.gz
 
   windows-hip:
-    needs: [check_release, get-version]
-    if: ${{ needs.check_release.outputs.should_release == 'true' }}
+    needs: [check-release, get-version]
+    if: ${{ needs.check-release.outputs.should_release == 'true' }}
 
     runs-on: windows-2022
 
@@ -1224,9 +1224,9 @@ jobs:
           path: llama-bin-win-hip-${{ matrix.name }}-x64.zip
           name: llama-bin-win-hip-${{ matrix.name }}-x64.zip
 
-  ios-xcode-build:
-    needs: [check_release, get-version]
-    if: ${{ needs.check_release.outputs.should_release == 'true' }}
+  ios-xcode:
+    needs: [check-release, get-version]
+    if: ${{ needs.check-release.outputs.should_release == 'true' }}
     runs-on: macos-26
 
     steps:
@@ -1376,8 +1376,8 @@ jobs:
 #          name: llama-bin-${{ matrix.chip_type }}-openEuler-${{ matrix.arch }}${{ matrix.use_acl_graph == 'on' && '-aclgraph' || '' }}.tar.gz
 
   ui-build:
-    needs: [check_release, get-version]
-    if: ${{ needs.check_release.outputs.should_release == 'true' }}
+    needs: [check-release, get-version]
+    if: ${{ needs.check-release.outputs.should_release == 'true' }}
     uses: ./.github/workflows/ui-build.yml
     with:
       hf_ui_version: ${{ needs.get-version.outputs.ui_version }}

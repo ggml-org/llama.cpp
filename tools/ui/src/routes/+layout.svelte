@@ -263,13 +263,19 @@
 	});
 
 	// Service worker registration and update prompt
+	let swCheckInterval: ReturnType<typeof setInterval> | null = null;
+
 	const {
 		// offlineReady, // to do - add installation banners for iOS
 		needRefresh,
 		updateServiceWorker
 	} = useRegisterSW({
 		onRegisteredSW(swUrl: string, r: ServiceWorkerRegistration | undefined) {
-			setInterval(async () => {
+			// Clear any existing interval to prevent duplicates on HMR / script re-eval
+			if (swCheckInterval) {
+				clearInterval(swCheckInterval);
+			}
+			swCheckInterval = setInterval(async () => {
 				if (!r || r.installing || !navigator?.onLine) return;
 
 				try {

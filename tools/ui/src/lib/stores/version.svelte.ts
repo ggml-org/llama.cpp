@@ -8,6 +8,7 @@
  */
 
 import { browser } from '$app/environment';
+import { base } from '$app/paths';
 
 let version = $state<string>('');
 
@@ -21,7 +22,7 @@ async function loadVersion() {
 	}
 
 	try {
-		const res = await fetch('/version.json');
+		const res = await fetch(`${base}/version.json`, { cache: 'no-store' });
 		if (res.ok) {
 			const data = await res.json();
 			version = data.version ?? '';
