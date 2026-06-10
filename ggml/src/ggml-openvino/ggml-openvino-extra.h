@@ -80,8 +80,21 @@ void ggml_openvino_init_device_config();
 // Get the device name
 const std::string & ggml_openvino_get_device_name();
 
-// Get the value of a specific environment variable
-const char* ggml_openvino_getenv(const char* var);
+// Environment variable accessors. All GGML_OPENVINO_* env vars are read once
+// during backend init and cached on the device config; consumers must go
+// through these helpers (never call ::getenv directly) so behavior stays
+// consistent and centralized.
+//
+// Use ggml_openvino_getenv_str() for string / path values
+// (e.g. GGML_OPENVINO_DEVICE, GGML_OPENVINO_CACHE_DIR). The optional
+// default_value is returned when the var is unset or empty.
+//
+// Use ggml_openvino_getenv_int() for boolean toggles and integer settings.
+// It returns std::atoi(value) when set, otherwise default_value. For
+// boolean use, `if (ggml_openvino_getenv_int(name))` is true iff the value
+// is a non-zero integer (so "0" disables, "1" enables).
+const char * ggml_openvino_getenv_str(const char * var, const char * default_value = nullptr);
+int ggml_openvino_getenv_int(const char * var, int default_value = 0);
 
 // Check if running on NPU
 bool ggml_openvino_is_npu();

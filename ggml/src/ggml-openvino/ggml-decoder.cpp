@@ -54,7 +54,7 @@ GgmlOvDecoder::GgmlOvDecoder(ggml_cgraph * cgraph,
     m_compute_params(compute_params) {
     static bool printed_address_map = false;
     if (!printed_address_map) {
-        if (ggml_openvino_env_flag("GGML_OPENVINO_PRINT_CGRAPH_TENSOR_ADDRESS")) {
+        if (ggml_openvino_getenv_int("GGML_OPENVINO_PRINT_CGRAPH_TENSOR_ADDRESS")) {
             printed_address_map = true;
             print_tensor_address_map(cgraph);
         }
