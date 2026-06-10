@@ -2,7 +2,7 @@
 	import * as Card from '$lib/components/ui/card';
 	import { Button } from '$lib/components/ui/button';
 
-	let { needRefresh: needRefreshProp, updateServiceWorker } = $props();
+	let { needRefresh: needRefreshProp, updateServiceWorker, forceReload } = $props();
 	let needRefresh = $derived(needRefreshProp ?? false);
 </script>
 
@@ -20,6 +20,11 @@
 				size="sm"
 				onclick={() => {
 					updateServiceWorker();
+
+					if (forceReload) {
+						window.location.reload();
+					}
+
 					needRefresh = false;
 				}}
 			>

@@ -35,7 +35,7 @@
 	import { isMobile } from '$lib/stores/viewport.svelte';
 	import { theme } from '$lib/stores/theme.svelte';
 	import { versionStore } from '$lib/stores/version.svelte';
-	import { SETTINGS_KEYS } from '$lib/constants';
+	import { SETTINGS_KEYS, BUILD_VERSION_LOCALSTORAGE_KEY } from '$lib/constants';
 
 	let { children } = $props();
 	let alwaysShowSidebarOnDesktop = $derived(config().alwaysShowSidebarOnDesktop);
@@ -58,6 +58,7 @@
 	let titleUpdateResolve: ((value: boolean) => void) | null = null;
 	const panelNav = useSettingsNavigation();
 	let showBuildVersion = $derived(config()[SETTINGS_KEYS.SHOW_BUILD_VERSION] as boolean);
+	let needRefreshByStorage = $state(false);
 
 	function updateFavicon() {
 		const dark = theme.isSystemDark;
@@ -298,6 +299,22 @@
 			console.error('[PWA] SW registration error:', error);
 		}
 	});
+
+	// Detect non-PWA version mismatch via localStorage
+	$effect(() => {
+		const currentVersion = versionStore.value;
+		if (!currentVersion) return;
+
+		try {
+			const stored = localStorage.getItem(BUILD_VERSION_LOCALSTORAGE_KEY);
+			needRefreshByStorage = !!stored && stored !== currentVersion;
+			if (stored !== currentVersion) {
+				localStorage.setItem(BUILD_VERSION_LOCALSTORAGE_KEY, currentVersion);
+			}
+		} catch {
+			needRefreshByStorage = false;
+		}
+	});
 </script>
 
 <svelte:head>
@@ -321,7 +338,11 @@
 	{#if showBuildVersion && versionStore.value}
 		<span class="text-[10px] tabular-nums text-muted-foreground">{versionStore.value}</span>
 	{/if}
-	<PwaRefreshAlert needRefresh={$needRefresh} {updateServiceWorker} />
+	<PwaRefreshAlert
+		needRefresh={$needRefresh || needRefreshByStorage}
+		forceReload={needRefreshByStorage}
+		{updateServiceWorker}
+	/>
 </div>
 
 <Tooltip.Provider delayDuration={TOOLTIP_DELAY_DURATION}>
