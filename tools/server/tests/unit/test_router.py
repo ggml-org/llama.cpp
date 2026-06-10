@@ -539,3 +539,32 @@ def test_router_delete_model():
     # Model should no longer appear in GET /models
     ids = _get_model_ids(is_reload=False)
     assert MODEL_DOWNLOAD_ID not in ids, f"{MODEL_DOWNLOAD_ID} still present after deletion"
+
+
+def test_router_models_preset_only():
+    """--models-preset-only restricts the router to --models-preset entries,
+    excluding cached models (and --models-dir)."""
+    global server
+
+    preset_path = os.path.join(TMP_DIR, "test_preset_only.ini")
+    with open(preset_path, "w") as f:
+        f.write(
+            "[preset-only-model]\n"
+            "hf-repo = ggml-org/test-model-stories260K\n"
+        )
+
+    server.models_preset = preset_path
+    server.models_preset_only = True
+    server.start()
+
+    try:
+        ids = _get_model_ids(is_reload=False)
+        # Only the preset-declared model is exposed.
+        assert ids == {"preset-only-model"}
+        # Models cached by load_all() (e.g. tinygemma3) are excluded; cached
+        # entries are listed under their "<org>/<repo>:<tag>" id, none of which
+        # should be present.
+        assert "ggml-org/tinygemma3-GGUF:Q8_0" not in ids
+        assert not any("/" in model_id for model_id in ids)
+    finally:
+        os.remove(preset_path)

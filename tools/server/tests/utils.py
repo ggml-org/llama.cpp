@@ -94,6 +94,7 @@ class ServerProcess:
     models_max: int | None = None
     models_preset: str | None = None
     no_models_autoload: bool | None = None
+    models_preset_only: bool | None = None
     lora_files: List[str] | None = None
     enable_ctx_shift: int | None = False
     spec_type: str | None = None
@@ -249,6 +250,8 @@ class ServerProcess:
             server_args.append("--no-ui")
         if self.no_models_autoload:
             server_args.append("--no-models-autoload")
+        if self.models_preset_only:
+            server_args.append("--models-preset-only")
         if self.jinja:
             server_args.append("--jinja")
         else:
