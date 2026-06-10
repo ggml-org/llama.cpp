@@ -86,6 +86,7 @@ enum rpc_cmd {
     RPC_CMD_GET_DEVICE_TYPE,
     RPC_CMD_SET_TENSOR_ZLIB,
     RPC_CMD_COPY_TENSOR_ASYNC,
+    RPC_CMD_GET_TENSORS,
     RPC_CMD_COUNT,
 };
 
@@ -103,6 +104,7 @@ enum rpc_hello_flags : uint8_t {
     RPC_HELLO_FLAG_DEVICE_TYPE = 1 << 1,
     RPC_HELLO_FLAG_SET_TENSOR_ZLIB = 1 << 2,
     RPC_HELLO_FLAG_COPY_TENSOR_ASYNC = 1 << 3,
+    RPC_HELLO_FLAG_GET_TENSORS = 1 << 4,
 };
 
 struct rpc_msg_hello_rsp {
@@ -188,6 +190,10 @@ struct rpc_msg_get_tensor_req {
     rpc_tensor tensor;
     uint64_t offset;
     uint64_t size;
+};
+
+struct rpc_msg_get_tensors_req_header {
+    uint32_t count;
 };
 
 struct rpc_msg_copy_tensor_req {
@@ -311,6 +317,15 @@ static bool rpc_copy_tensor_async_client_enabled() {
 static bool rpc_get_tensor_async_client_enabled() {
     static const bool enabled = []() {
         const char * env = std::getenv("GGML_RPC_GET_TENSOR_ASYNC");
+        return env != nullptr && env[0] != '\0' && strcmp(env, "0") != 0;
+    }();
+
+    return enabled;
+}
+
+static bool rpc_get_tensor_batch_client_enabled() {
+    static const bool enabled = []() {
+        const char * env = std::getenv("GGML_RPC_GET_TENSOR_BATCH");
         return env != nullptr && env[0] != '\0' && strcmp(env, "0") != 0;
     }();
 
@@ -606,6 +621,7 @@ static const char * rpc_cmd_name(enum rpc_cmd cmd) {
         case RPC_CMD_GET_DEVICE_TYPE:   return "GET_DEVICE_TYPE";
         case RPC_CMD_SET_TENSOR_ZLIB:   return "SET_TENSOR_ZLIB";
         case RPC_CMD_COPY_TENSOR_ASYNC: return "COPY_TENSOR_ASYNC";
+        case RPC_CMD_GET_TENSORS:       return "GET_TENSORS";
         case RPC_CMD_COUNT:             break;
     }
 
@@ -1667,16 +1683,19 @@ static bool parse_endpoint(const std::string & endpoint, std::string & host, int
 
 struct rpc_pending_get_tensor {
     socket_ptr sock;
+    rpc_msg_get_tensor_req request;
     void * data;
     size_t size;
     size_t input_size;
     std::string endpoint;
     std::string tensor_name;
     uint64_t trace_start_ns;
+    bool sent;
 };
 
-// Client-only deferred reads. The wire command remains GET_TENSOR; responses
-// are received later by synchronize() or before the next non-deferred RPC send.
+// Client-only deferred reads. Responses are received later by synchronize() or
+// before the next non-deferred RPC send. With batching enabled, requests are
+// also deferred and sent together as GET_TENSORS.
 static std::mutex & rpc_pending_get_tensor_mutex() {
     static std::mutex mutex;
     return mutex;
@@ -1685,54 +1704,6 @@ static std::mutex & rpc_pending_get_tensor_mutex() {
 static std::unordered_map<const socket_t *, std::vector<rpc_pending_get_tensor>> & rpc_pending_get_tensors() {
     static std::unordered_map<const socket_t *, std::vector<rpc_pending_get_tensor>> pending;
     return pending;
-}
-
-static bool rpc_drain_pending_get_tensors(const socket_ptr & sock) {
-    std::vector<rpc_pending_get_tensor> pending;
-    {
-        std::lock_guard<std::mutex> lock(rpc_pending_get_tensor_mutex());
-        auto & all_pending = rpc_pending_get_tensors();
-        auto it = all_pending.find(sock.get());
-        if (it == all_pending.end()) {
-            return true;
-        }
-        pending.swap(it->second);
-        all_pending.erase(it);
-    }
-
-    bool all_ok = true;
-    for (rpc_pending_get_tensor & item : pending) {
-        const uint64_t wait_start_ns = rpc_trace_enabled() ? rpc_trace_now_ns() : 0;
-        bool status = true;
-        uint64_t out_size = 0;
-        status = item.sock->recv_data(&out_size, sizeof(out_size));
-        if (status && out_size != item.size) {
-            status = false;
-        }
-        if (status && item.size > 0) {
-            status = item.sock->recv_data(item.data, item.size);
-        }
-
-        if (rpc_trace_enabled()) {
-            const uint64_t now_ns = rpc_trace_now_ns();
-            rpc_trace_record_pending_one_way_drain(
-                RPC_CMD_GET_TENSOR, item.endpoint, rpc_trace_connection_key(item.sock), now_ns - wait_start_ns, status);
-            rpc_trace_record_client(
-                RPC_CMD_GET_TENSOR, item.endpoint, item.input_size, status ? item.size : 0, now_ns - item.trace_start_ns, true);
-            rpc_trace_record_tensor_op(
-                "GET_TENSOR_ASYNC", item.endpoint, item.tensor_name.c_str(), item.size, now_ns - item.trace_start_ns);
-        }
-        if (status && rpc_compression_probe_enabled()) {
-            rpc_compression_probe_record(
-                "GET_TENSOR_ASYNC", item.endpoint, item.tensor_name.c_str(), (const uint8_t *) item.data, item.size);
-        }
-        if (!status) {
-            all_ok = false;
-            break;
-        }
-    }
-
-    return all_ok;
 }
 
 static bool send_rpc_cmd_request(socket_ptr sock, enum rpc_cmd cmd, const void * input, size_t input_size) {
@@ -1750,6 +1721,148 @@ static bool send_rpc_cmd_request(socket_ptr sock, enum rpc_cmd cmd, const void *
         return false;
     }
     return sock->send_data(input, input_size);
+}
+
+static bool rpc_recv_pending_get_tensor(rpc_pending_get_tensor & item) {
+    const uint64_t wait_start_ns = rpc_trace_enabled() ? rpc_trace_now_ns() : 0;
+    bool status = true;
+    uint64_t out_size = 0;
+    status = item.sock->recv_data(&out_size, sizeof(out_size));
+    if (status && out_size != item.size) {
+        status = false;
+    }
+    if (status && item.size > 0) {
+        status = item.sock->recv_data(item.data, item.size);
+    }
+
+    if (rpc_trace_enabled()) {
+        const uint64_t now_ns = rpc_trace_now_ns();
+        rpc_trace_record_pending_one_way_drain(
+            RPC_CMD_GET_TENSOR, item.endpoint, rpc_trace_connection_key(item.sock), now_ns - wait_start_ns, status);
+        rpc_trace_record_client(
+            RPC_CMD_GET_TENSOR, item.endpoint, item.input_size, status ? item.size : 0, now_ns - item.trace_start_ns, true);
+        rpc_trace_record_tensor_op(
+            "GET_TENSOR_ASYNC", item.endpoint, item.tensor_name.c_str(), item.size, now_ns - item.trace_start_ns);
+    }
+    if (status && rpc_compression_probe_enabled()) {
+        rpc_compression_probe_record(
+            "GET_TENSOR_ASYNC", item.endpoint, item.tensor_name.c_str(), (const uint8_t *) item.data, item.size);
+    }
+
+    return status;
+}
+
+static bool rpc_send_recv_pending_get_tensor_batch(
+        const socket_ptr & sock, std::vector<rpc_pending_get_tensor> & pending, size_t begin, size_t end) {
+    const size_t count = end - begin;
+    if (count == 0 || count > std::numeric_limits<uint32_t>::max()) {
+        return false;
+    }
+    if (count > (std::numeric_limits<size_t>::max() - sizeof(rpc_msg_get_tensors_req_header))/sizeof(rpc_msg_get_tensor_req)) {
+        return false;
+    }
+
+    const size_t input_size = sizeof(rpc_msg_get_tensors_req_header) + count*sizeof(rpc_msg_get_tensor_req);
+    std::vector<uint8_t> input(input_size);
+    rpc_msg_get_tensors_req_header header = { (uint32_t) count };
+    memcpy(input.data(), &header, sizeof(header));
+    uint8_t * request_data = input.data() + sizeof(header);
+
+    uint64_t output_size = 0;
+    for (size_t i = begin; i < end; ++i) {
+        memcpy(request_data + (i - begin)*sizeof(rpc_msg_get_tensor_req), &pending[i].request, sizeof(rpc_msg_get_tensor_req));
+        if (pending[i].size > std::numeric_limits<uint64_t>::max() - output_size) {
+            return false;
+        }
+        output_size += pending[i].size;
+    }
+    if (output_size > std::numeric_limits<size_t>::max()) {
+        return false;
+    }
+
+    const uint64_t start_ns = rpc_trace_enabled() ? rpc_trace_now_ns() : 0;
+    bool status = send_rpc_cmd_request(sock, RPC_CMD_GET_TENSORS, input.data(), input.size());
+    const uint64_t wait_start_ns = rpc_trace_enabled() ? rpc_trace_now_ns() : 0;
+    std::vector<uint8_t> response;
+    if (status) {
+        uint64_t wire_output_size = 0;
+        status = sock->recv_data(&wire_output_size, sizeof(wire_output_size));
+        if (status && wire_output_size != output_size) {
+            status = false;
+        }
+        if (status) {
+            response.resize((size_t) output_size);
+            if (output_size > 0) {
+                status = sock->recv_data(response.data(), response.size());
+            }
+        }
+    }
+
+    if (status) {
+        size_t response_offset = 0;
+        for (size_t i = begin; i < end; ++i) {
+            if (pending[i].size > 0) {
+                memcpy(pending[i].data, response.data() + response_offset, pending[i].size);
+            }
+            response_offset += pending[i].size;
+        }
+    }
+
+    if (rpc_trace_enabled()) {
+        const uint64_t now_ns = rpc_trace_now_ns();
+        rpc_trace_record_pending_one_way_drain(
+            RPC_CMD_GET_TENSORS, sock->label(), rpc_trace_connection_key(sock), now_ns - wait_start_ns, status);
+        rpc_trace_record_client(
+            RPC_CMD_GET_TENSORS, sock->label(), input.size(), status ? output_size : 0, now_ns - start_ns, true);
+        for (size_t i = begin; i < end; ++i) {
+            rpc_trace_record_tensor_op(
+                "GET_TENSOR_BATCH", pending[i].endpoint, pending[i].tensor_name.c_str(),
+                pending[i].size, now_ns - pending[i].trace_start_ns);
+        }
+    }
+    if (status && rpc_compression_probe_enabled()) {
+        for (size_t i = begin; i < end; ++i) {
+            rpc_compression_probe_record(
+                "GET_TENSOR_BATCH", pending[i].endpoint, pending[i].tensor_name.c_str(),
+                (const uint8_t *) pending[i].data, pending[i].size);
+        }
+    }
+
+    return status;
+}
+
+static bool rpc_drain_pending_get_tensors(const socket_ptr & sock) {
+    std::vector<rpc_pending_get_tensor> pending;
+    {
+        std::lock_guard<std::mutex> lock(rpc_pending_get_tensor_mutex());
+        auto & all_pending = rpc_pending_get_tensors();
+        auto it = all_pending.find(sock.get());
+        if (it == all_pending.end()) {
+            return true;
+        }
+        pending.swap(it->second);
+        all_pending.erase(it);
+    }
+
+    for (size_t i = 0; i < pending.size();) {
+        if (pending[i].sent) {
+            if (!rpc_recv_pending_get_tensor(pending[i])) {
+                return false;
+            }
+            ++i;
+            continue;
+        }
+
+        const size_t begin = i;
+        while (i < pending.size() && !pending[i].sent) {
+            ++i;
+        }
+        if (!rpc_send_recv_pending_get_tensor_batch(sock, pending, begin, i)) {
+            return false;
+        }
+    }
+
+    return true;
 }
 
 // RPC request : | rpc_cmd (1 byte) | request_size (8 bytes) | request_data (request_size bytes) |
@@ -1801,24 +1914,29 @@ static bool send_rpc_cmd(socket_ptr sock, enum rpc_cmd cmd, const void * input, 
 static bool send_rpc_get_tensor_async(
         socket_ptr sock, const rpc_msg_get_tensor_req & request, void * data, size_t size,
         const std::string & endpoint, const char * tensor_name) {
+    const bool batch = rpc_get_tensor_batch_client_enabled() && sock->supports_get_tensors();
     const uint64_t start_ns = rpc_trace_enabled() ? rpc_trace_now_ns() : 0;
     const size_t input_size = sizeof(request);
-    bool status = send_rpc_cmd_request(sock, RPC_CMD_GET_TENSOR, &request, input_size);
-    if (!status) {
-        if (rpc_trace_enabled()) {
-            rpc_trace_record_client(RPC_CMD_GET_TENSOR, endpoint, input_size, 0, rpc_trace_now_ns() - start_ns, true);
+    if (!batch) {
+        bool status = send_rpc_cmd_request(sock, RPC_CMD_GET_TENSOR, &request, input_size);
+        if (!status) {
+            if (rpc_trace_enabled()) {
+                rpc_trace_record_client(RPC_CMD_GET_TENSOR, endpoint, input_size, 0, rpc_trace_now_ns() - start_ns, true);
+            }
+            return false;
         }
-        return false;
     }
 
     rpc_pending_get_tensor pending = {
         /* .sock           = */ sock,
+        /* .request        = */ request,
         /* .data           = */ data,
         /* .size           = */ size,
         /* .input_size     = */ input_size,
         /* .endpoint       = */ endpoint,
         /* .tensor_name    = */ tensor_name ? tensor_name : "",
         /* .trace_start_ns = */ start_ns,
+        /* .sent           = */ !batch,
     };
 
     std::lock_guard<std::mutex> lock(rpc_pending_get_tensor_mutex());
@@ -1854,6 +1972,7 @@ static bool negotiate_hello(const std::shared_ptr<socket_t> & sock) {
     sock->set_supports_device_type((response.flags & RPC_HELLO_FLAG_DEVICE_TYPE) != 0);
     sock->set_supports_set_tensor_zlib((response.flags & RPC_HELLO_FLAG_SET_TENSOR_ZLIB) != 0);
     sock->set_supports_copy_tensor_async((response.flags & RPC_HELLO_FLAG_COPY_TENSOR_ASYNC) != 0);
+    sock->set_supports_get_tensors((response.flags & RPC_HELLO_FLAG_GET_TENSORS) != 0);
     return true;
 }
 
@@ -2559,6 +2678,7 @@ public:
     bool set_tensor_zlib(const std::vector<uint8_t> & input);
     bool set_tensor_hash(const rpc_msg_set_tensor_hash_req & request, rpc_msg_set_tensor_hash_rsp & response);
     bool get_tensor(const rpc_msg_get_tensor_req & request, std::vector<uint8_t> & response);
+    bool get_tensors(const std::vector<rpc_msg_get_tensor_req> & requests, std::vector<uint8_t> & response);
     bool copy_tensor(const rpc_msg_copy_tensor_req & request, rpc_msg_copy_tensor_rsp & response);
     bool graph_compute(const std::vector<uint8_t> & input);
     bool graph_recompute(const rpc_msg_graph_recompute_req & request);
@@ -2573,6 +2693,7 @@ public:
     };
 
 private:
+    bool get_tensor_data(const rpc_msg_get_tensor_req & request, void * data);
     bool get_cached_file(uint64_t hash, std::vector<uint8_t> & data);
     void cache_tensor_data(const void * data, size_t size);
     ggml_tensor * deserialize_tensor(struct ggml_context * ctx, const rpc_tensor * tensor);
@@ -2601,6 +2722,7 @@ void rpc_server::hello(rpc_msg_hello_rsp & response) {
     response.flags |= RPC_HELLO_FLAG_SET_TENSOR_ZLIB;
 #endif
     response.flags |= RPC_HELLO_FLAG_COPY_TENSOR_ASYNC;
+    response.flags |= RPC_HELLO_FLAG_GET_TENSORS;
     LOG_DBG("[%s] version: %d.%d.%d, flags: 0x%x\n",
             __func__, response.major, response.minor, response.patch, response.flags);
 }
@@ -3002,7 +3124,7 @@ bool rpc_server::init_tensor(const rpc_msg_init_tensor_req & request) {
     return true;
 }
 
-bool rpc_server::get_tensor(const rpc_msg_get_tensor_req & request, std::vector<uint8_t> & response) {
+bool rpc_server::get_tensor_data(const rpc_msg_get_tensor_req & request, void * data) {
     struct ggml_init_params params {
         /*.mem_size   =*/ ggml_tensor_overhead(),
         /*.mem_buffer =*/ NULL,
@@ -3032,8 +3154,41 @@ bool rpc_server::get_tensor(const rpc_msg_get_tensor_req & request, std::vector<
         }
     }
 
+    ggml_backend_tensor_get(tensor, data, request.offset, request.size);
+    return true;
+}
+
+bool rpc_server::get_tensor(const rpc_msg_get_tensor_req & request, std::vector<uint8_t> & response) {
     response.resize(request.size, 0);
-    ggml_backend_tensor_get(tensor, response.data(), request.offset, request.size);
+    if (!get_tensor_data(request, response.data())) {
+        return false;
+    }
+    return true;
+}
+
+bool rpc_server::get_tensors(const std::vector<rpc_msg_get_tensor_req> & requests, std::vector<uint8_t> & response) {
+    uint64_t total_size = 0;
+    for (const auto & request : requests) {
+        if (request.size > std::numeric_limits<uint64_t>::max() - total_size) {
+            GGML_LOG_ERROR("[%s] batched response size overflow\n", __func__);
+            return false;
+        }
+        total_size += request.size;
+    }
+    if (total_size > std::numeric_limits<size_t>::max()) {
+        GGML_LOG_ERROR("[%s] batched response too large: %" PRIu64 "\n", __func__, total_size);
+        return false;
+    }
+
+    response.resize((size_t) total_size, 0);
+    size_t response_offset = 0;
+    for (const auto & request : requests) {
+        if (!get_tensor_data(request, response.data() + response_offset)) {
+            return false;
+        }
+        response_offset += (size_t) request.size;
+    }
+
     return true;
 }
 
@@ -3475,6 +3630,38 @@ static void rpc_serve_client(const std::vector<ggml_backend_t> & backends, const
                 }
                 std::vector<uint8_t> response;
                 if (!server.get_tensor(request, response)) {
+                    return;
+                }
+                if (!send_msg(sock, response.data(), response.size())) {
+                    return;
+                }
+                break;
+            }
+            case RPC_CMD_GET_TENSORS: {
+                std::vector<uint8_t> input;
+                if (!recv_msg(sock, input)) {
+                    return;
+                }
+                if (input.size() < sizeof(rpc_msg_get_tensors_req_header)) {
+                    return;
+                }
+                rpc_msg_get_tensors_req_header header;
+                memcpy(&header, input.data(), sizeof(header));
+                const size_t count = header.count;
+                if (count > (std::numeric_limits<size_t>::max() - sizeof(header))/sizeof(rpc_msg_get_tensor_req)) {
+                    return;
+                }
+                const size_t expected_size = sizeof(header) + count*sizeof(rpc_msg_get_tensor_req);
+                if (input.size() != expected_size) {
+                    return;
+                }
+
+                std::vector<rpc_msg_get_tensor_req> requests(count);
+                if (count > 0) {
+                    memcpy(requests.data(), input.data() + sizeof(header), count*sizeof(rpc_msg_get_tensor_req));
+                }
+                std::vector<uint8_t> response;
+                if (!server.get_tensors(requests, response)) {
                     return;
                 }
                 if (!send_msg(sock, response.data(), response.size())) {

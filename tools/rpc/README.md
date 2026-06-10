@@ -530,6 +530,13 @@ Use `GGML_RPC_TRACE=1` to confirm `GET_TENSOR_ASYNC` rows in the slow tensor
 table and compare the `GET_TENSOR` response wait before and after enabling the
 knob.
 
+Set `GGML_RPC_GET_TENSOR_BATCH=1` as well to send pending async readbacks with
+one negotiated `GET_TENSORS` command instead of several small `GET_TENSOR`
+requests. The batched path is used only when the server advertises support
+during `HELLO`; otherwise async readbacks keep the per-request deferred receive
+path. Use trace output to compare `GET_TENSORS` command counts and
+`GET_TENSOR_BATCH` tensor rows against the unbatched async readback path.
+
 ### RPC tracing
 
 Set `GGML_RPC_TRACE=1` on the RPC client to print a summary of RPC command
