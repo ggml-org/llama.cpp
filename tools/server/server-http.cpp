@@ -435,7 +435,7 @@ bool server_http_context::init(const common_params & params) {
                 };
             };
 
-            srv->Get(params.api_prefix + "/",                               serve_asset_cached("index.html",                   "text/html; charset=utf-8",                 true));
+            srv->Get(params.api_prefix + "/",                               serve_asset_nocache("index.html",                   "text/html; charset=utf-8",                 true));
             srv->Get(params.api_prefix + "/bundle.js",                      serve_asset_cached("bundle.js",                    "application/javascript; charset=utf-8",    false));
             srv->Get(params.api_prefix + "/bundle.css",                     serve_asset_cached("bundle.css",                   "text/css; charset=utf-8",                  false));
             srv->Get(params.api_prefix + "/favicon.ico",                    serve_asset_cached("favicon.ico",                  "image/x-icon",                             false));

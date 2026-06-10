@@ -42,9 +42,9 @@ test.describe('PWA Service Worker', () => {
 		const swResponse = await page.request.get(swActive!);
 		const swContent = await swResponse.text();
 
-		// Verify precache contains versioned bundle URLs
-		expect(swContent).toMatch(/"\.\/bundle\.js\?v=/);
-		expect(swContent).toMatch(/"\.\/bundle\.css\?v=/);
+		// Verify precache contains ?cache=true bundle URLs
+		expect(swContent).toMatch(/"\.\/bundle\.js\?cache=true"/);
+		expect(swContent).toMatch(/"\.\/bundle\.css\?cache=true"/);
 
 		// Verify other expected precache entries
 		expect(swContent).toMatch(/"manifest\.webmanifest"/);
@@ -104,7 +104,7 @@ test.describe('PWA Service Worker', () => {
 		const manifest = await response.json();
 		expect(manifest).toHaveProperty('name', 'llama-ui');
 		expect(manifest).toHaveProperty('short_name', 'llama-ui');
-		expect(manifest).toHaveProperty('start_url', './?pwa=1');
+		expect(manifest).toHaveProperty('start_url', './?cache=true');
 		expect(manifest).toHaveProperty('display', 'standalone');
 		expect(manifest.icons).toBeTruthy();
 		expect(manifest.icons.length).toBeGreaterThan(0);
@@ -130,17 +130,11 @@ test.describe('PWA Service Worker', () => {
 
 		const html = await response.text();
 
-		// Should have modulepreload with version or content-hashed bundle.js (relative path)
-		expect(html).toMatch(
-			/href="\.\/bundle\.js\?v=[a-zA-Z0-9._-]+|href="\.\/bundle\.js\?[a-zA-Z0-9_-]+/
-		);
-		// Should have stylesheet with version or content-hashed bundle.css (relative path)
-		expect(html).toMatch(
-			/href="\.\/bundle\.css\?v=[a-zA-Z0-9._-]+|href="\.\/bundle\.css\?[a-zA-Z0-9_-]+/
-		);
-		// Should have dynamic import with version or content hash
-		expect(html).toMatch(
-			/import\("\.\/bundle\.js\?v=[a-zA-Z0-9._-]+|import\("\.\/bundle\.js\?[a-zA-Z0-9_-]+/
-		);
+		// Should have modulepreload with ?cache=true bundle.js (relative path)
+		expect(html).toMatch(/href="\.\/bundle\.js\?cache=true"/);
+		// Should have stylesheet with ?cache=true bundle.css (relative path)
+		expect(html).toMatch(/href="\.\/bundle\.css\?cache=true"/);
+		// Should have dynamic import with ?cache=true
+		expect(html).toMatch(/import\("\.\/bundle\.js\?cache=true"\)/);
 	});
 });

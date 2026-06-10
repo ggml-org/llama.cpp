@@ -11,7 +11,6 @@ import type { Plugin } from 'vite';
 import { BUILD_CONFIG, REGEX_PATTERNS, SVELTEKIT_NORMALIZED } from '../src/lib/constants/pwa';
 import { TAB, NEWLINE } from '../src/lib/constants/code';
 import {
-	getExplicitVersion,
 	resolveBuildVersion,
 	generateSplashScreenLinks,
 	rewriteBundlePaths,
@@ -32,7 +31,6 @@ export function llamaCppBuildPlugin(): Plugin {
 					if (processed) return;
 					processed = true;
 
-					const explicitVersion = getExplicitVersion();
 					const buildVersion = resolveBuildVersion();
 					const outDir = resolve(OUTPUT_DIR);
 					const indexPath = resolve(outDir, 'index.html');
@@ -52,7 +50,7 @@ export function llamaCppBuildPlugin(): Plugin {
 
 					content = content.replace(/\r/g, '');
 					content = BUILD_CONFIG.GUIDE_COMMENT + NEWLINE + content;
-					content = rewriteBundlePaths(content, explicitVersion || undefined);
+					content = rewriteBundlePaths(content);
 
 					writeFileSync(indexPath, content, 'utf-8');
 					console.log('✓ Updated index.html');

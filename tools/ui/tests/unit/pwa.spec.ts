@@ -71,16 +71,16 @@ describe('PWA Build Output', () => {
 			expect(swContent).toMatch(/define\(\[\"\.\/workbox\"\]/);
 		});
 
-		it('precache contains bundle.js with version param', () => {
+		it('precache contains bundle.js with cache param', () => {
 			expect(swContent).toBeTruthy();
-			// Should have precache entry with ?v= query param
-			expect(swContent).toMatch(/"\.\/bundle\.js\?v=/);
+			// Should have precache entry with ?cache=true for SW caching
+			expect(swContent).toMatch(/"\.\/bundle\.js\?cache=true"/);
 		});
 
-		it('precache contains bundle.css with version param', () => {
+		it('precache contains bundle.css with cache param', () => {
 			expect(swContent).toBeTruthy();
-			// Should have precache entry with ?v= query param
-			expect(swContent).toMatch(/"\.\/bundle\.css\?v=/);
+			// Should have precache entry with ?cache=true for SW caching
+			expect(swContent).toMatch(/"\.\/bundle\.css\?cache=true"/);
 		});
 
 		it('precache contains version.json (not _app/version.json)', () => {
@@ -107,25 +107,19 @@ describe('PWA Build Output', () => {
 	});
 
 	describe('index.html content', () => {
-		it('has modulepreload link for bundle.js with version or hash', () => {
+		it('has modulepreload link for bundle.js with ?cache=true', () => {
 			expect(indexContent).toBeTruthy();
-			expect(indexContent).toMatch(
-				/href="\.\/bundle\.js\?v=[a-zA-Z0-9._-]+|href="\.\/bundle\.js\?[a-zA-Z0-9_-]+/
-			);
+			expect(indexContent).toMatch(/href="\.\/bundle\.js\?cache=true"/);
 		});
 
-		it('has stylesheet link for bundle.css with version or hash', () => {
+		it('has stylesheet link for bundle.css with ?cache=true', () => {
 			expect(indexContent).toBeTruthy();
-			expect(indexContent).toMatch(
-				/href="\.\/bundle\.css\?v=[a-zA-Z0-9._-]+|href="\.\/bundle\.css\?[a-zA-Z0-9_-]+/
-			);
+			expect(indexContent).toMatch(/href="\.\/bundle\.css\?cache=true"/);
 		});
 
-		it('has dynamic import for bundle.js with version or hash', () => {
+		it('has dynamic import for bundle.js with ?cache=true', () => {
 			expect(indexContent).toBeTruthy();
-			expect(indexContent).toMatch(
-				/import\("\.\/bundle\.js\?v=[a-zA-Z0-9._-]+|import\("\.\/bundle\.js\?[a-zA-Z0-9_-]+/
-			);
+			expect(indexContent).toMatch(/import\("\.\/bundle\.js\?cache=true"\)/);
 		});
 
 		it('has __sveltekit__ (not __sveltekit_<hash>)', () => {

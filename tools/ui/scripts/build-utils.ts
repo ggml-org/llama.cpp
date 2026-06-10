@@ -22,7 +22,8 @@ import { SplashOrientation } from '../src/lib/enums/splash.enums';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-const BUNDLE_VERSION = (path: string, version: string) => `${path}?v=${version}`;
+// SW-cached bundle URL: ?cache=true enables the SW to precache the app for PWA install.
+const BUNDLE_CACHED = (path: string) => `${path}?cache=true`;
 
 /** Resolve explicit build version from env var. Returns null if not set. */
 export function getExplicitVersion(): string | null {
@@ -110,67 +111,50 @@ export function generateSplashScreenLinks(outDir: string): string[] {
 	return [...lightLinks, ...darkLinks];
 }
 
-/** Rewrite bundle paths in content: hashed paths → static names with optional version query string.
- * If buildVersion is provided, uses `?v=<version>`; otherwise falls back to Vite content hash. */
-export function rewriteBundlePaths(_content: string, buildVersion?: string): string {
+/** Rewrite bundle paths in content: hashed paths → static names with ?cache=true.
+ * This allows the SW to precache the PWA entry while keeping the uncached URL fresh. */
+export function rewriteBundlePaths(_content: string): string {
 	let result = _content;
-	if (buildVersion) {
-		// Use explicit build version as query string
-		result = result.replace(
-			REGEX_PATTERNS.BUNDLE_JS,
-			BUNDLE_VERSION(BUNDLE_PATHS.JS, buildVersion)
-		);
-		result = result.replace(
-			REGEX_PATTERNS.BUNDLE_CSS,
-			BUNDLE_VERSION(BUNDLE_PATHS.CSS, buildVersion)
-		);
-	} else {
-		// Fallback: keep the Vite content hash as query string
-		result = result.replace(REGEX_PATTERNS.BUNDLE_JS_HASH, './bundle.js?$1');
-		result = result.replace(REGEX_PATTERNS.BUNDLE_CSS_HASH, './bundle.css?$1');
-	}
+	result = result.replace(REGEX_PATTERNS.BUNDLE_JS, BUNDLE_CACHED(BUNDLE_PATHS.JS));
+	result = result.replace(REGEX_PATTERNS.BUNDLE_CSS, BUNDLE_CACHED(BUNDLE_PATHS.CSS));
 	result = result.replace(REGEX_PATTERNS.SVELTEKIT_HASH, SVELTEKIT_NORMALIZED);
 	return result;
 }
 
 /**
  * Fix sw.js: rewrite _app paths, favicon.svg → favicon.ico, workbox-*.js → workbox.js.
+ * Use ?cache=true for all SW-cached assets so the PWA is installable.
+ * The uncached entry (/ without param) stays fresh and triggers version detection.
  * Inject build version as a comment so SW content differs between builds,
  * triggering browser to detect a new service worker and fire needRefresh.
  */
 export function fixServiceWorkerContent(content: string, buildVersion: string): string {
 	let swContent = content;
-	swContent = swContent.replace(
-		REGEX_PATTERNS.BUNDLE_JS,
-		BUNDLE_VERSION(BUNDLE_PATHS.JS, buildVersion)
-	);
-	swContent = swContent.replace(
-		REGEX_PATTERNS.BUNDLE_CSS,
-		BUNDLE_VERSION(BUNDLE_PATHS.CSS, buildVersion)
-	);
+	swContent = swContent.replace(REGEX_PATTERNS.BUNDLE_JS, BUNDLE_CACHED(BUNDLE_PATHS.JS));
+	swContent = swContent.replace(REGEX_PATTERNS.BUNDLE_CSS, BUNDLE_CACHED(BUNDLE_PATHS.CSS));
 	swContent = swContent.replace(REGEX_PATTERNS.FAVICON_SVG, '"favicon.ico"');
 	swContent = swContent.replace(REGEX_PATTERNS.VERSION_JSON_APP, '"version.json"');
 	swContent = swContent.replace(REGEX_PATTERNS.WORKBOX_IMPORT, '"./workbox"');
 	swContent = swContent.replace(
 		REGEX_PATTERNS.PRECACHE_BUNDLE_JS,
-		`"${BUNDLE_VERSION(BUNDLE_PATHS.JS, buildVersion)}"`
+		`"${BUNDLE_CACHED(BUNDLE_PATHS.JS)}"`
 	);
 	swContent = swContent.replace(
 		REGEX_PATTERNS.PRECACHE_BUNDLE_CSS,
-		`"${BUNDLE_VERSION(BUNDLE_PATHS.CSS, buildVersion)}"`
+		`"${BUNDLE_CACHED(BUNDLE_PATHS.CSS)}"`
 	);
 
-	// Navigation precache entry and fallback resolve relative to the SW location
-	// so the app installs under any base path, with ?pwa=1 to identify the PWA entrypoint
-	swContent = swContent.replace('url:"/",revision', 'url:"./?pwa=1",revision');
-	swContent = swContent.replace('url:"./",revision', 'url:"./?pwa=1",revision');
+	// Navigation precache entry and fallback: SW caches the ?cache=true variant
+	// for the PWA entry, while the uncached / stays fresh for version detection.
+	swContent = swContent.replace('url:"/",revision', 'url:"./?cache=true",revision');
+	swContent = swContent.replace('url:"./",revision', 'url:"./?cache=true",revision');
 	swContent = swContent.replace(
 		'createHandlerBoundToURL("/")',
-		'createHandlerBoundToURL("./?pwa=1")'
+		'createHandlerBoundToURL("./?cache=true")'
 	);
 	swContent = swContent.replace(
 		'createHandlerBoundToURL("./")',
-		'createHandlerBoundToURL("./?pwa=1")'
+		'createHandlerBoundToURL("./?cache=true")'
 	);
 
 	return '// Build: ' + buildVersion + NEWLINE + swContent;

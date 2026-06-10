@@ -47,7 +47,7 @@ export const PWA_MANIFEST = {
 	name: APP_NAME,
 	short_name: APP_NAME,
 	description: 'Local AI chat interface powered by llama.cpp',
-	start_url: './?pwa=1',
+	start_url: './?cache=true',
 	display: 'standalone' as const,
 	background_color: THEME_COLORS.BACKGROUND_LIGHT,
 	theme_color: THEME_COLORS.BACKGROUND_LIGHT,
@@ -298,8 +298,13 @@ export const API_CACHING_PATTERNS = {
 
 // SvelteKit PWA plugin options
 export const PWA_KIT_OPTIONS = {
-	NAVIGATE_FALLBACK: './?pwa=1'
+	NAVIGATE_FALLBACK: './?cache=true'
 } as const;
+
+/** Query param for SW-cached PWA entrypoint. The SW precaches assets with this
+ *  param so the PWA is installable. The uncached URL (no param) always stays
+ *  fresh, allowing the SW to detect server upgrades via version.json. */
+export const CACHE_QUERY_PARAM = 'cache=true' as const;
 
 /** Query param appended to the PWA entrypoint so the frontend can distinguish
  *  between "running as installed PWA" vs "running in a browser tab". */

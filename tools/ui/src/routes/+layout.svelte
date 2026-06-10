@@ -300,17 +300,17 @@
 		}
 	});
 
-	// Detect non-PWA version mismatch via localStorage
+	// Detect non-PWA version mismatch via localStorage.
+	// The uncached URL always stays fresh; version.json is not cached by the SW.
+	// This comparison detects server upgrades for non-PWA users.
 	$effect(() => {
 		const currentVersion = versionStore.value;
 		if (!currentVersion) return;
 
 		try {
-			const stored = localStorage.getItem(BUILD_VERSION_LOCALSTORAGE_KEY);
-			needRefreshByStorage = !!stored && stored !== currentVersion;
-			if (stored !== currentVersion) {
-				localStorage.setItem(BUILD_VERSION_LOCALSTORAGE_KEY, currentVersion);
-			}
+			const storedVersion = localStorage.getItem(BUILD_VERSION_LOCALSTORAGE_KEY);
+			needRefreshByStorage = !!storedVersion && storedVersion !== currentVersion;
+			localStorage.setItem(BUILD_VERSION_LOCALSTORAGE_KEY, currentVersion);
 		} catch {
 			needRefreshByStorage = false;
 		}

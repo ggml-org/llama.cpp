@@ -5,6 +5,10 @@
  * Vite production build. In dev mode (via `npm run dev`), falls back to
  * `import.meta.env.DEV`'s truthy value as a placeholder since the artifact
  * is not produced.
+ *
+ * The version string is used for version mismatch detection (non-PWA users).
+ * The SW caches the `?cache=true` variant so the PWA is installable, while
+ * the uncached URL always stays fresh for server-upgrade detection.
  */
 
 import { browser } from '$app/environment';
