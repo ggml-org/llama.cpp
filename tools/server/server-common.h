@@ -198,6 +198,9 @@ public:
     // for compatibility with speculative decoding, ctx shift, slot save/load
     const llama_tokens & get_tokens() const;
 
+    // tokens including LLAMA_TOKEN_NULL placeholders for media chunks
+    const llama_tokens & get_raw_tokens() const;
+
     llama_tokens get_text_tokens() const;
 
     // for compatibility with speculative decoding

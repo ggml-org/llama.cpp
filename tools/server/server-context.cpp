@@ -3728,7 +3728,7 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
 
             task.tokens = std::move(inputs[i]);
             task.params = server_task::params_from_json_cmpl(
-                    task.tokens.get_tokens(),
+                    task.tokens.get_raw_tokens(),
                     ctx_server.vocab,
                     params,
                     meta->slot_n_ctx,
