@@ -9144,6 +9144,9 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
                                 continue;
                             }
                             for (bool with_lane_scale : {false, true}) {
+                                if (with_lane_scale && type != GGML_TYPE_NVFP4) {
+                                    continue;
+                                }
                                 for (bool gate_first : {false, true}) {
                                     if (!with_gate && gate_first) {
                                         continue;
