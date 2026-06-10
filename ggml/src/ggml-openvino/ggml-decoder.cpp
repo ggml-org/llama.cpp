@@ -1267,6 +1267,7 @@ std::string GgmlOvDecoder::compute_op_type(const ggml_tensor * node) {
         {GGML_OP_ACC,             "GGML_OP_ACC"            },
         {GGML_OP_ADD,             "GGML_OP_ADD"            },
         {GGML_OP_ADD1,            "GGML_OP_ADD1"           },
+        {GGML_OP_ADD_ID,          "GGML_OP_ADD_ID"         },
         {GGML_OP_CONCAT,          "GGML_OP_CONCAT"         },
         {GGML_OP_CONT,            "GGML_OP_CONT"           },
         {GGML_OP_DIV,             "GGML_OP_DIV"            },
