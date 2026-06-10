@@ -2024,10 +2024,6 @@ void ggml_gemv_q6_K_8x8_q8_K(int                        n,
                 acc_f32_1 = svdup_n_f32(0); //not needed
 
                 for (int b = 0; b < nb; b++) {
-                    // svfloat16_t h = svld1_f16(svwhilelt_b16(0, 4), (const __fp16 *)q6_ptr[b].d);
-                    // print_neon_f16("h: ", vld1_f16((const __fp16 *) q6_ptr[b].d));
-                    // print_sve_f16("h: ", svld1_f16(svwhilelt_b16(0, 4), (const __fp16 *)q6_ptr[b].d));
-                    // svfloat32_t q6_d_0 = svcvt_f32_f16_x(svptrue_b16(), svld1(svwhilelt_b16(0, 4), (const __fp16 *)q6_ptr[b].d)); // d0 d1 d2 d3
                     svfloat32_t q6_d_0 = svcvt_f32_f16_z(svwhilelt_b32((uint64_t)0, (uint64_t)4), svzip1_f16(svld1_f16(svwhilelt_b16(0, 4), (const __fp16 *)q6_ptr[b].d), svdup_n_f16((__fp16)0.0)));
                     svfloat32_t q6_d_1 = svcvt_f32_f16_z(svwhilelt_b32((uint64_t)0, (uint64_t)4), svzip1_f16(svld1_f16(svwhilelt_b16(0, 4), (const __fp16 *)q6_ptr[b].d+4), svdup_n_f16((__fp16)0.0))); // d4 d5 d6 d7
                     // svfloat32_t q6_d = svcvt_f32_f16_z(svwhilelt_b32((uint64_t)0, (uint64_t)4), svzip1_f16(svld1_f16(svwhilelt_b16(0, 4), (const __fp16 *)q6_ptr[b].d), svdup_n_f16((__fp16)0.0))); // d4 d5 d6 d7
@@ -2066,8 +2062,8 @@ void ggml_gemv_q6_K_8x8_q8_K(int                        n,
                     // std::exit(EXIT_SUCCESS);
 
                     // Compute bias per column using q8 bsums and preloaded scales to skip the -32 shift
-                    // svint32_t bias_lo = svdup_s32(0);
-                    // svint32_t bias_hi = svdup_s32(0);
+                    svint32_t bias_lo = svdup_s32(0);
+                    svint32_t bias_hi = svdup_s32(0);
                     svint32_t bias_all = svdup_s32(0);
 
                     // Load bsums in chunks of 4 to process with vectorized operations
@@ -2120,7 +2116,7 @@ void ggml_gemv_q6_K_8x8_q8_K(int                        n,
                     // print_sve_s32("bias_lo", bias_lo);
                     // print_sve_s32("bias_hi", bias_hi);
                     // print_sve_s32("bias_all", bias_all);
-                    // // std::exit(EXIT_SUCCESS);
+                    // std::exit(EXIT_SUCCESS);
 
                     // Process two 128-value halves per superblock
                     for (int half = 0; half < 2; half++) {
@@ -2161,10 +2157,9 @@ void ggml_gemv_q6_K_8x8_q8_K(int                        n,
                             svuint8_t q6_ql_0_01 = svld1_u8(svptrue_b8(), ptr);
                             svuint8_t q6_ql_0_23 = svld1_u8(svptrue_b8(), ptr + 32);
 
-                            // print_sve_u8("q6_ql_0_0: ", q6_ql_0_0);
-                            // print_sve_u8("q6_ql_0_1: ", q6_ql_0_1);
-                            // print_sve_u8("q6_ql_0_01: ", q6_ql_0_01);
-                            // // std::exit(EXIT_SUCCESS);
+                            // print_sve_u8("q6_ql_0_2: ", q6_ql_0_2);
+                            // print_sve_u8("q6_ql_0_3: ", q6_ql_0_3);
+                            // print_sve_u8("q6_ql_0_23: ", q6_ql_0_23);
 
                             // svuint8x4_t q6_ql_1 = svld1_u8_x4(svwhilelt_b8(0, 16), ql_base + ql_off_base + 64);
                             ptr = ql_base + ql_off_base + 64;
@@ -2189,6 +2184,10 @@ void ggml_gemv_q6_K_8x8_q8_K(int                        n,
 
                             svuint8_t q6_qh_0_01 = svld1_u8(svptrue_b8(), ptr);
                             svuint8_t q6_qh_0_23 = svld1_u8(svptrue_b8(), ptr + 32);
+
+                            // print_sve_u8("q6_qh_0_2: ", q6_qh_0_2);
+                            // print_sve_u8("q6_qh_0_3: ", q6_qh_0_3);
+                            // print_sve_u8("q6_qh_0_23: ", q6_qh_0_23);
                             
                             //svuint8x4_t q6_qh_1 = svld1_u8_x4(svwhilelt_b8(0, 16), qh_base + qh_off_base + 64);
                             ptr = qh_base + qh_off_base + 64;
@@ -2199,6 +2198,11 @@ void ggml_gemv_q6_K_8x8_q8_K(int                        n,
 
                             svuint8_t q6_qh_1_01 = svld1_u8(svptrue_b8(), ptr);
                             svuint8_t q6_qh_1_23 = svld1_u8(svptrue_b8(), ptr + 32);
+
+                            // print_sve_u8("q6_qh_1_2: ", q6_qh_1_2);
+                            // print_sve_u8("q6_qh_1_3: ", q6_qh_1_3);
+                            // print_sve_u8("q6_qh_1_23: ", q6_qh_1_23);
+                            // std::exit(EXIT_SUCCESS);
 
                             // Adjust qh for subblocks 2 and 3 (shift right by 2)
                             if (sb > 1) {
@@ -2255,6 +2259,9 @@ void ggml_gemv_q6_K_8x8_q8_K(int                        n,
                             //     // Extract high 2 bits for upper nibble reconstruction
                             //     const svuint8_t q6_qs_cp_0_hh = svand_u8_x(svwhilelt_b8(0, 16), q6_qs_cp_0_h, mask_hi);
                             //     const svuint8_t q6_qs_cp_1_hh = svand_u8_x(svwhilelt_b8(0, 16), q6_qs_cp_1_h, mask_hi);
+
+                            //     // print_sve_u8("q6_qs_cp_0_hh", q6_qs_cp_0_hh);
+                            //     // print_sve_u8("q6_qs_cp_1_hh", q6_qs_cp_1_hh);
                                 
                             //     // q6 = (low4 | high2<<4), without -32 bias (handled via bsums)
                             //     svbool_t pg = svwhilelt_b8(0, 16);
@@ -2319,9 +2326,17 @@ void ggml_gemv_q6_K_8x8_q8_K(int                        n,
                             //         acc_3 = svmla_s32_m(pg2, acc_3, sum_h, scale_vec_h);
                             //     }
                             // }   
+
+                            // std::cout<<"CP=4 Loop: "<<std::endl;
+                            // print_sve_s32("acc_0", acc_0);
+                            // print_sve_s32("acc_1", acc_1);
+                            // print_sve_s32("acc_2", acc_2);
+                            // print_sve_s32("acc_3", acc_3);
                             
                             // New cp loop ~ should run only 2 times
                             for (int cp = 0; cp <col_pairs/2; cp++) {    
+                                // print_sve_s32("acc_01", acc_01);
+                                // print_sve_s32("acc_23", acc_23);
                                 svuint8_t q6_qs_cp_0_l, q6_qs_cp_1_l, q6_qs_cp_0_h, q6_qs_cp_1_h;
 
                                 if(cp == 0){
@@ -2388,8 +2403,8 @@ void ggml_gemv_q6_K_8x8_q8_K(int                        n,
                                 const int scale_idx_l = half * 8 + sb;
                                 const int scale_idx_h = half * 8 + sb + 4;
 
-                                svint32_t scale_vec_l = svld1sh_s32(svwhilelt_b32(0, 4), &q6_scales[scale_idx_l * 8 + cp * 2]);
-                                svint32_t scale_vec_h = svld1sh_s32(svwhilelt_b32(0, 4), &q6_scales[scale_idx_h * 8 + cp * 2]);
+                                svint32_t scale_vec_l = svld1sh_s32(svwhilelt_b32(0, 4), &q6_scales[scale_idx_l * 8 + cp * 4]);
+                                svint32_t scale_vec_h = svld1sh_s32(svwhilelt_b32(0, 4), &q6_scales[scale_idx_h * 8 + cp * 4]);
 
                                 if (cp == 0){
                                     acc_01 = svmla_s32_m(svwhilelt_b32(0, 4), acc_01, sum_l, scale_vec_l);
@@ -2401,6 +2416,11 @@ void ggml_gemv_q6_K_8x8_q8_K(int                        n,
                                     acc_23 = svmla_s32_m(svwhilelt_b32(0, 4), acc_23, sum_h, scale_vec_h);
                                 }
                             }
+
+                            // std::cout<<"CP=2 Loop: "<<std::endl;
+                            // print_sve_s32("acc_01", acc_01);
+                            // print_sve_s32("acc_23", acc_23);
+                            // std::exit(EXIT_SUCCESS);
                             // print_sve_s32("acc_0", acc_0);
                             // print_sve_s32("acc_1", acc_1);
                             // print_sve_s32("acc_2", acc_2);
