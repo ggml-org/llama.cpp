@@ -466,7 +466,7 @@ struct llama_layer {
     // openai-moe
     struct ggml_tensor * attn_sinks = nullptr;
 
-    // DeepSeek-V4 Flash
+    // DeepSeek-V4
     struct ggml_tensor * attn_kv_norm = nullptr;
     struct ggml_tensor * hc_attn_fn   = nullptr;
     struct ggml_tensor * hc_attn_base = nullptr;
@@ -573,7 +573,7 @@ struct llama_model {
     struct ggml_tensor * nextn_proj_pre  = nullptr;
     struct ggml_tensor * nextn_proj_post = nullptr;
 
-    // DeepSeek-V4 Flash
+    // DeepSeek-V4
     struct ggml_tensor * hc_head_fn    = nullptr;
     struct ggml_tensor * hc_head_base  = nullptr;
     struct ggml_tensor * hc_head_scale = nullptr;

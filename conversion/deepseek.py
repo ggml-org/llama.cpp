@@ -472,7 +472,7 @@ class DeepseekV32Model(DeepseekV2Model):
 
 
 @ModelBase.register("DeepseekV4ForCausalLM")
-class DeepseekV4FlashModel(TextModel):
+class DeepseekV4Model(TextModel):
     model_arch = gguf.MODEL_ARCH.DEEPSEEK4
     _skipped_mtp_tensors = 0
 

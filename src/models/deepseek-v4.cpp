@@ -8,7 +8,7 @@
 #include <string>
 
 static std::string dsv4_kv(const char * suffix) {
-    return std::string("deepseek4") + suffix;
+    return std::string("deepseek4.") + suffix;
 }
 
 static float dsv4_rope_attn_factor(float freq_scale, float ext_factor) {
@@ -19,7 +19,7 @@ static float dsv4_rope_attn_factor(float freq_scale, float ext_factor) {
     return 1.0f / (1.0f + 0.1f*logf(1.0f/freq_scale));
 }
 
-void llama_model_deepseek_v4_flash::load_arch_hparams(llama_model_loader & ml) {
+void llama_model_deepseek4::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
     ml.get_key(LLM_KV_ATTENTION_Q_LORA_RANK,       hparams.n_lora_q);
     ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW,    hparams.n_swa);
@@ -46,7 +46,7 @@ void llama_model_deepseek_v4_flash::load_arch_hparams(llama_model_loader & ml) {
     uint32_t n_compress_ratios = 0;
     ml.get_arr_n(dsv4_kv("attention.compress_ratios"), n_compress_ratios);
     if (n_compress_ratios < hparams.n_layer) {
-        throw std::runtime_error("DeepSeek-V4 Flash compress_ratios is shorter than block_count");
+        throw std::runtime_error("DeepSeek-V4 compress_ratios is shorter than block_count");
     }
     ml.get_arr(dsv4_kv("attention.compress_ratios"), hparams.dsv4_compress_ratios);
 
@@ -55,10 +55,10 @@ void llama_model_deepseek_v4_flash::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(dsv4_kv("moe.score_func"),  score_func);
     ml.get_key(dsv4_kv("moe.topk_method"), topk_method);
     if (score_func != "sqrtsoftplus") {
-        throw std::runtime_error("DeepSeek-V4 Flash loader currently expects sqrtsoftplus MoE scoring");
+        throw std::runtime_error("DeepSeek-V4 loader currently expects sqrtsoftplus MoE scoring");
     }
     if (topk_method != "noaux_tc") {
-        throw std::runtime_error("DeepSeek-V4 Flash loader currently expects noaux_tc MoE top-k");
+        throw std::runtime_error("DeepSeek-V4 loader currently expects noaux_tc MoE top-k");
     }
 
     hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
@@ -70,7 +70,7 @@ void llama_model_deepseek_v4_flash::load_arch_hparams(llama_model_loader & ml) {
     }
 }
 
-void llama_model_deepseek_v4_flash::load_arch_tensors(llama_model_loader &) {
+void llama_model_deepseek4::load_arch_tensors(llama_model_loader &) {
     LLAMA_LOAD_LOCALS;
 
     const int64_t q_lora_rank     = hparams.n_lora_q;
@@ -133,7 +133,7 @@ void llama_model_deepseek_v4_flash::load_arch_tensors(llama_model_loader &) {
                 layer.indexer_comp_ape   = create_tensor(tn(LLM_TENSOR_INDEXER_COMPRESSOR_APE,   nullptr,  i), {2 * n_embd_indexer, ratio}, 0);
                 layer.indexer_comp_norm  = create_tensor(tn(LLM_TENSOR_INDEXER_COMPRESSOR_NORM,  "weight", i), {n_embd_indexer}, 0);
             } else if (ratio != 128) {
-                throw std::runtime_error("DeepSeek-V4 Flash loader only supports compression ratios 0, 4, and 128");
+                throw std::runtime_error("DeepSeek-V4 loader only supports compression ratios 0, 4, and 128");
             }
         }
 
@@ -155,7 +155,7 @@ void llama_model_deepseek_v4_flash::load_arch_tensors(llama_model_loader &) {
     }
 }
 
-std::unique_ptr<llm_graph_context> llama_model_deepseek_v4_flash::build_arch_graph(const llm_graph_params & params) const {
+std::unique_ptr<llm_graph_context> llama_model_deepseek4::build_arch_graph(const llm_graph_params & params) const {
     return std::make_unique<graph>(*this, params);
 }
 
@@ -207,7 +207,7 @@ static ggml_tensor * dsv4_hc_affine(
     return x;
 }
 
-ggml_tensor * llama_model_deepseek_v4_flash::graph::build_hc_weighted_sum(
+ggml_tensor * llama_model_deepseek4::graph::build_hc_weighted_sum(
         ggml_tensor * x,
         ggml_tensor * weights) const {
     const int64_t hc = hparams.dsv4_hc_mult;
@@ -225,7 +225,7 @@ ggml_tensor * llama_model_deepseek_v4_flash::graph::build_hc_weighted_sum(
     return acc;
 }
 
-ggml_tensor * llama_model_deepseek_v4_flash::graph::build_hc_sinkhorn(
+ggml_tensor * llama_model_deepseek4::graph::build_hc_sinkhorn(
         ggml_tensor * comb,
         int           il) const {
     GGML_UNUSED(il);
@@ -262,7 +262,7 @@ ggml_tensor * llama_model_deepseek_v4_flash::graph::build_hc_sinkhorn(
     return comb;
 }
 
-ggml_tensor * llama_model_deepseek_v4_flash::graph::build_hc_pre(
+ggml_tensor * llama_model_deepseek4::graph::build_hc_pre(
         ggml_tensor * x,
         ggml_tensor * hc_fn,
         ggml_tensor * hc_scale,
@@ -314,7 +314,7 @@ ggml_tensor * llama_model_deepseek_v4_flash::graph::build_hc_pre(
     return build_hc_weighted_sum(x, pre);
 }
 
-ggml_tensor * llama_model_deepseek_v4_flash::graph::build_hc_post(
+ggml_tensor * llama_model_deepseek4::graph::build_hc_post(
         ggml_tensor * x,
         ggml_tensor * residual,
         ggml_tensor * post,
@@ -343,7 +343,7 @@ ggml_tensor * llama_model_deepseek_v4_flash::graph::build_hc_post(
     return out;
 }
 
-ggml_tensor * llama_model_deepseek_v4_flash::graph::build_hc_head(
+ggml_tensor * llama_model_deepseek4::graph::build_hc_head(
         ggml_tensor * x,
         ggml_tensor * hc_fn,
         ggml_tensor * hc_scale,
@@ -367,7 +367,7 @@ ggml_tensor * llama_model_deepseek_v4_flash::graph::build_hc_head(
     return build_hc_weighted_sum(x, pre);
 }
 
-ggml_tensor * llama_model_deepseek_v4_flash::graph::build_hca_compressed_kv_from_state(
+ggml_tensor * llama_model_deepseek4::graph::build_hca_compressed_kv_from_state(
         ggml_tensor * kv_state,
         ggml_tensor * score_state,
         ggml_tensor * state_read_idxs,
@@ -425,7 +425,7 @@ ggml_tensor * llama_model_deepseek_v4_flash::graph::build_hca_compressed_kv_from
     return comp;
 }
 
-ggml_tensor * llama_model_deepseek_v4_flash::graph::build_overlap_compressed_kv_from_state(
+ggml_tensor * llama_model_deepseek4::graph::build_overlap_compressed_kv_from_state(
         ggml_tensor * kv_state,
         ggml_tensor * score_state,
         ggml_tensor * state_read_idxs,
@@ -507,7 +507,7 @@ ggml_tensor * llama_model_deepseek_v4_flash::graph::build_overlap_compressed_kv_
     return comp;
 }
 
-ggml_tensor * llama_model_deepseek_v4_flash::graph::build_lid_top_k(
+ggml_tensor * llama_model_deepseek4::graph::build_lid_top_k(
         const llama_model & model,
         llm_graph_input_dsv4 * inp_dsv4,
         ggml_tensor * qr,
@@ -597,7 +597,7 @@ ggml_tensor * llama_model_deepseek_v4_flash::graph::build_lid_top_k(
     return top_k;
 }
 
-ggml_tensor * llama_model_deepseek_v4_flash::graph::build_top_k_mask(
+ggml_tensor * llama_model_deepseek4::graph::build_top_k_mask(
         ggml_tensor * kq_mask,
         ggml_tensor * top_k,
         const char * name,
@@ -626,7 +626,7 @@ ggml_tensor * llama_model_deepseek_v4_flash::graph::build_top_k_mask(
     return kq_mask_top_k;
 }
 
-ggml_tensor * llama_model_deepseek_v4_flash::graph::build_csa_lid_attention(
+ggml_tensor * llama_model_deepseek4::graph::build_csa_lid_attention(
         const llama_model & model,
         llm_graph_input_dsv4 * inp_dsv4,
         llm_graph_input_attn_kv_iswa * inp_attn,
@@ -689,7 +689,7 @@ ggml_tensor * llama_model_deepseek_v4_flash::graph::build_csa_lid_attention(
     return out;
 }
 
-ggml_tensor * llama_model_deepseek_v4_flash::graph::build_hca_attention(
+ggml_tensor * llama_model_deepseek4::graph::build_hca_attention(
         llm_graph_input_dsv4 * inp_dsv4,
         llm_graph_input_attn_kv_iswa * inp_attn,
         ggml_tensor * q,
@@ -746,7 +746,7 @@ ggml_tensor * llama_model_deepseek_v4_flash::graph::build_hca_attention(
     return out;
 }
 
-ggml_tensor * llama_model_deepseek_v4_flash::graph::build_raw_attention(
+ggml_tensor * llama_model_deepseek4::graph::build_raw_attention(
         llm_graph_input_attn_kv_iswa * inp_attn,
         ggml_tensor * q,
         ggml_tensor * kv,
@@ -782,7 +782,7 @@ ggml_tensor * llama_model_deepseek_v4_flash::graph::build_raw_attention(
     return out;
 }
 
-ggml_tensor * llama_model_deepseek_v4_flash::graph::build_attention(
+ggml_tensor * llama_model_deepseek4::graph::build_attention(
         const llama_model & model,
         llm_graph_input_dsv4 * inp_dsv4,
         ggml_tensor * cur,
@@ -1080,7 +1080,7 @@ ggml_tensor * llama_model_deepseek_v4_flash::graph::build_attention(
     return out;
 }
 
-llama_model_deepseek_v4_flash::graph::graph(const llama_model & model, const llm_graph_params & params) :
+llama_model_deepseek4::graph::graph(const llama_model & model, const llm_graph_params & params) :
     llm_graph_context(params) {
     ggml_tensor * cur;
 
