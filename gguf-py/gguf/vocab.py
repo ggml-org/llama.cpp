@@ -246,6 +246,11 @@ class SpecialVocab:
                             if special_first := tmpl_single[0].get('SpecialToken', {}).get('id'):
                                 if not tokenizer_config:
                                     special_bos = special_first
+                                elif special_first not in (special_bos, special_cls):
+                                    if not special_bos:
+                                        tokenizer_config['bos_token'] = special_bos = special_first
+                                    if not special_cls:
+                                        tokenizer_config['cls_token'] = special_cls = special_first
                                 self.add_special_token['bos'] = True if special_first in (special_bos, special_cls) else False
                                 if special_first not in (special_bos, special_cls):
                                     logger.warning(f'Unknown leading special token {special_first!r} in TemplateProcessing<single>')
