@@ -213,6 +213,71 @@ def test_router_api_key_required():
     assert "error" not in authed.body
 
 
+def test_router_ssl_env_does_not_leak_to_child(monkeypatch, tmp_path):
+    global server
+
+    key_file = tmp_path / "key.pem"
+    cert_file = tmp_path / "cert.pem"
+    subprocess.run(
+        [
+            "openssl",
+            "req",
+            "-x509",
+            "-newkey",
+            "rsa:2048",
+            "-nodes",
+            "-keyout",
+            str(key_file),
+            "-out",
+            str(cert_file),
+            "-days",
+            "1",
+            "-subj",
+            "/CN=localhost",
+        ],
+        check=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+    monkeypatch.setenv("LLAMA_ARG_SSL_KEY_FILE", str(key_file))
+    monkeypatch.setenv("LLAMA_ARG_SSL_CERT_FILE", str(cert_file))
+    monkeypatch.setenv("LLAMA_ARG_MODELS_DIR", str(tmp_path))
+    monkeypatch.setenv("LLAMA_ARG_MODELS_AUTOLOAD", "enabled")
+    monkeypatch.setenv("LLAMA_ARG_MODELS_MAX", "1")
+
+    source_model = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)),
+        "..",
+        "..",
+        "tmp",
+        "models--ggml-org--models",
+        "blobs",
+        "270cba1bd5109f42d03350f60406024560464db173c0e387d91f0426d3bd256d",
+    )
+    model_path = tmp_path / "stories260K.gguf"
+    subprocess.run(["cp", source_model, str(model_path)], check=True)
+
+    server.server_ssl = True
+    server.verify_ssl = False
+    server.models_dir = str(tmp_path)
+    server.server_port = 2224
+    server.start()
+
+    res = server.make_request(
+        "POST",
+        "/v1/chat/completions",
+        data={
+            "model": "stories260K",
+            "messages": [{"role": "user", "content": "Hello"}],
+            "max_tokens": 4,
+        },
+    )
+
+    assert res.status_code == 200
+    assert "error" not in res.body
+
+
 def test_router_reload_models():
     """POST /models/reload re-reads the INI preset and updates the model list."""
     global server
