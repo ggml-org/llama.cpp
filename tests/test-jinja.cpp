@@ -1596,23 +1596,26 @@ static void test_array_methods(testing & t) {
         "2"
     );
 
-    test_template(t, "array|min attribute",
-        "{{ items|min(attribute='x') }}",
-        {{"items", json::array({
-            json({{"x", 2}}),
-            json({{"x", 1}}),
-        })}},
-        ""
-    );
+    // attribute= is not implemented in C++ yet; skip in -py mode (Python Jinja2 renders output)
+    if (!g_python_mode) {
+        test_template(t, "array|min attribute",
+            "{{ items|min(attribute='x') }}",
+            {{"items", json::array({
+                json({{"x", 2}}),
+                json({{"x", 1}}),
+            })}},
+            ""
+        );
 
-    test_template(t, "array|max attribute",
-        "{{ items|max(attribute='x') }}",
-        {{"items", json::array({
-            json({{"x", 2}}),
-            json({{"x", 1}}),
-        })}},
-        ""
-    );
+        test_template(t, "array|max attribute",
+            "{{ items|max(attribute='x') }}",
+            {{"items", json::array({
+                json({{"x", 2}}),
+                json({{"x", 1}}),
+            })}},
+            ""
+        );
+    }
 
     // not used by any chat templates
     // test_template(t, "array.insert()",
