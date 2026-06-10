@@ -4,7 +4,7 @@ on:
   workflow_dispatch: # allows manual triggering
   push:
     branches:
-      - '*'
+      - master
     paths: [
       '.github/workflows/build-sycl.yml',
       '**/CMakeLists.txt',
@@ -81,7 +81,7 @@ jobs:
         with:
           key: sycl-ubuntu-24-${{ matrix.build }}
           evict-old-files: 1d
-          #save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
       - name: Build
         id: cmake_build
@@ -134,8 +134,7 @@ jobs:
           key: sycl-windows-latest
           variant: ccache
           evict-old-files: 1d
-
-          #save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
       # TODO: add ssl support ; we will also need to modify win-build-sycl.bat to accept user-specified args
 
