@@ -771,35 +771,30 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                 }
                 auto p = string_split<std::string>(argv[i], split_delim);
 
-                std::vector<llama_load_mode> modes;
-                std::vector<llama_load_modifier> modifiers;
                 for (const auto & m : p) {
-                    llama_load_mode mode;
-                    llama_load_modifier modifier;
-                    if (m == "none") {
-                        mode = LLAMA_LOAD_MODE_NONE;
-                        modifier = LLAMA_LOAD_MODIFIER_NONE;
-                    } else if (m == "mmap") {
-                        mode = LLAMA_LOAD_MODE_MMAP;
-                        modifier = LLAMA_LOAD_MODIFIER_NONE;
-                    } else if (m == "dio") {
-                        mode = LLAMA_LOAD_MODE_DIRECT_IO;
-                        modifier = LLAMA_LOAD_MODIFIER_NONE;
-                    } else if (m == "mmap+mlock") {
-                        mode = LLAMA_LOAD_MODE_MMAP;
-                        modifier = LLAMA_LOAD_MODIFIER_MLOCK;
-                    } else {
+                    try {
+                        const std::vector<std::string> parts = string_split<std::string>(m, '+');
+                        params.load_mode.push_back(llama_load_mode_from_str(parts[0].c_str()));
+
+                        llama_load_modifier modifier = LLAMA_LOAD_MODIFIER_NONE;
+                        for (size_t j = 1; j < parts.size(); ++j) {
+                            modifier = (llama_load_modifier)(modifier | llama_load_modifier_from_str(parts[j].c_str()));
+                        }
+
+                        // prevents -lm none+mlock or similar combinations that don't make sense
+                        if (params.load_mode.back() == LLAMA_LOAD_MODE_NONE) {
+                            modifier = LLAMA_LOAD_MODIFIER_NONE;
+                        }
+
+                        params.load_modifier.push_back(modifier);
+                    } catch (const std::invalid_argument &) {
                         invalid_param = true;
                         break;
                     }
-                    modes.push_back(mode);
-                    modifiers.push_back(modifier);
                 }
                 if (invalid_param) {
                     break;
                 }
-                params.load_mode.insert(params.load_mode.end(), modes.begin(), modes.end());
-                params.load_modifier.insert(params.load_modifier.end(), modifiers.begin(), modifiers.end());
             } else if (arg == "-mg" || arg == "--main-gpu") {
                 if (++i >= argc) {
                     invalid_param = true;
@@ -1684,7 +1679,9 @@ struct test {
                                             devices_to_string(devices),
                                             tensor_split_str,
                                             tensor_buft_overrides_str,
-                                            llama_load_mode_name(load_mode),
+                                            std::strcmp(llama_load_modifier_name(load_modifier), "none") == 0
+                                                ? llama_load_mode_name(load_mode)
+                                                : std::string(llama_load_mode_name(load_mode)) + "+" + llama_load_modifier_name(load_modifier),
                                             std::to_string(embeddings),
                                             std::to_string(no_op_offload),
                                             std::to_string(no_host),
@@ -2002,7 +1999,8 @@ struct markdown_printer : public printer {
         if (params.tensor_buft_overrides.size() > 1 || !vec_vec_tensor_buft_override_equal(params.tensor_buft_overrides, cmd_params_defaults.tensor_buft_overrides)) {
             fields.emplace_back("tensor_buft_overrides");
         }
-        if (params.load_mode.size() > 1 || params.load_mode != cmd_params_defaults.load_mode) {
+        if (params.load_mode.size() > 1 || params.load_mode != cmd_params_defaults.load_mode
+            || params.load_modifier.size() > 1 || params.load_modifier != cmd_params_defaults.load_modifier) {
             fields.emplace_back("load_mode");
         }
         if (params.embeddings.size() > 1 || params.embeddings != cmd_params_defaults.embeddings) {
