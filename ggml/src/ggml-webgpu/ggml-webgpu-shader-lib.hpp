@@ -448,15 +448,19 @@ struct ggml_webgpu_upscale_pipeline_key_hash {
 /** Concat **/
 
 struct ggml_webgpu_concat_pipeline_key {
-    int type;
+    int  type;
+    bool src_overlap;
 
-    bool operator==(const ggml_webgpu_concat_pipeline_key & other) const { return type == other.type; }
+    bool operator==(const ggml_webgpu_concat_pipeline_key & other) const {
+        return type == other.type && src_overlap == other.src_overlap;
+    }
 };
 
 struct ggml_webgpu_concat_pipeline_key_hash {
     size_t operator()(const ggml_webgpu_concat_pipeline_key & key) const {
         size_t seed = 0;
         ggml_webgpu_hash_combine(seed, key.type);
+        ggml_webgpu_hash_combine(seed, key.src_overlap);
         return seed;
     }
 };
@@ -640,7 +644,8 @@ inline size_t ggml_webgpu_flash_attn_tensor_offset(const ggml_tensor * tensor) {
 
 inline bool ggml_webgpu_flash_attn_float_vec4_aligned(const ggml_tensor * K, size_t storage_offset_alignment) {
     const uint32_t offset_elems =
-        (uint32_t) ((ggml_webgpu_flash_attn_tensor_offset(K) & (storage_offset_alignment - 1)) / ggml_type_size(K->type));
+        (uint32_t) ((ggml_webgpu_flash_attn_tensor_offset(K) & (storage_offset_alignment - 1)) /
+                    ggml_type_size(K->type));
     return offset_elems % GGML_WEBGPU_FLASH_ATTN_TILE_KV_VEC_WIDTH == 0u;
 }
 
@@ -651,8 +656,10 @@ inline bool ggml_webgpu_flash_attn_float_vec4_aligned(const ggml_tensor * K,
            ggml_webgpu_flash_attn_float_vec4_aligned(V, storage_offset_alignment);
 }
 
-inline bool ggml_webgpu_flash_attn_kv_direct(
-    const ggml_tensor * Q, const ggml_tensor * K, const ggml_tensor * V, uint32_t kv_direct_align) {
+inline bool ggml_webgpu_flash_attn_kv_direct(const ggml_tensor * Q,
+                                             const ggml_tensor * K,
+                                             const ggml_tensor * V,
+                                             uint32_t            kv_direct_align) {
     return K->type == GGML_TYPE_F16 && V->type == GGML_TYPE_F16 && (Q->ne[0] % kv_direct_align == 0) &&
            (K->ne[1] % GGML_WEBGPU_KV_SEQ_PAD == 0);
 }
@@ -667,10 +674,10 @@ inline ggml_webgpu_flash_attn_common_pipeline_key ggml_webgpu_flash_attn_make_co
     key.dst_type                                   = context.dst->type;
     key.head_dim_qk                                = (uint32_t) context.src0->ne[0];
     key.head_dim_v                                 = (uint32_t) context.src2->ne[0];
-    key.kv_direct          = ggml_webgpu_flash_attn_kv_direct(context.src0, context.src1, context.src2, kv_direct_align);
-    key.kv_overlap         = ggml_webgpu_tensor_overlap(context.src1, context.src2);
-    key.has_mask           = context.src3 != nullptr;
-    key.has_sinks          = context.src4 != nullptr;
+    key.kv_direct  = ggml_webgpu_flash_attn_kv_direct(context.src0, context.src1, context.src2, kv_direct_align);
+    key.kv_overlap = ggml_webgpu_tensor_overlap(context.src1, context.src2);
+    key.has_mask   = context.src3 != nullptr;
+    key.has_sinks  = context.src4 != nullptr;
     key.uses_logit_softcap = ggml_get_op_params_f32(context.dst, 2) != 0.0f;
     return key;
 }
@@ -1723,7 +1730,7 @@ class ggml_webgpu_shader_lib {
         key.type                              = context.dst->type;
         key.d_state                           = (int) context.src0->ne[0];
         key.xbc_overlap                       = ggml_webgpu_tensor_overlap(context.src1, context.src4) &&
-                          ggml_webgpu_tensor_overlap(context.src1, context.src5);
+                                                ggml_webgpu_tensor_overlap(context.src1, context.src5);
 
         auto it = ssm_scan_pipelines.find(key);
         if (it != ssm_scan_pipelines.end()) {
@@ -2634,6 +2641,7 @@ class ggml_webgpu_shader_lib {
     webgpu_pipeline get_concat_pipeline(const ggml_webgpu_shader_lib_context & context) {
         ggml_webgpu_concat_pipeline_key key = {};
         key.type                            = context.dst->type;
+        key.src_overlap                     = ggml_webgpu_tensor_overlap(context.src0, context.src1);
 
         auto it = concat_pipelines.find(key);
         if (it != concat_pipelines.end()) {
@@ -2656,11 +2664,17 @@ class ggml_webgpu_shader_lib {
                 GGML_ABORT("Unsupported type for concat shader");
         }
 
+        if (key.src_overlap) {
+            defines.push_back("SRC_OVERLAP");
+            variant += "_src_overlap";
+        }
+
         defines.push_back(std::string("WG_SIZE=") + std::to_string(context.max_wg_size));
 
         auto processed           = preprocessor.preprocess(wgsl_concat, defines);
-        auto decisions           = std::make_shared<ggml_webgpu_generic_shader_decisions>();
+        auto decisions           = std::make_shared<ggml_webgpu_binary_shader_decisions>();
         decisions->wg_size       = context.max_wg_size;
+        decisions->src_overlap   = key.src_overlap;
         webgpu_pipeline pipeline = ggml_webgpu_create_pipeline(device, processed, variant);
         pipeline.context         = decisions;
         concat_pipelines[key]    = pipeline;

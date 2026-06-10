@@ -258,7 +258,8 @@ llama_tokens tokenize_mixed(const llama_vocab * vocab, const json & json_prompt,
 size_t validate_utf8(const std::string& text);
 
 // process mtmd prompt, return the server_tokens containing both text tokens and media chunks
-server_tokens process_mtmd_prompt(mtmd_context * mctx, std::string prompt, std::vector<raw_buffer> files);
+// if is_placeholder is true, the media chunk will be treated as placeholder for counting tokens; the output tokens are not usable for actual inference (e.g. for submitting a task to server_queue)
+server_tokens process_mtmd_prompt(mtmd_context * mctx, const std::string & prompt, const std::vector<raw_buffer> & files, bool is_placeholder = false);
 
 /**
  * break the input "prompt" object into multiple prompt if needed, then tokenize them
@@ -293,6 +294,7 @@ struct server_chat_params {
     common_chat_templates_ptr tmpls;
     bool allow_image;
     bool allow_audio;
+    bool allow_video;
     bool enable_thinking = true;
     int  reasoning_budget = -1;
     std::string reasoning_budget_message;
