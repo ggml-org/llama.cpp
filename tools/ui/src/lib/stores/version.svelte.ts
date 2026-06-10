@@ -9,6 +9,7 @@
 
 import { browser } from '$app/environment';
 import { base } from '$app/paths';
+import { SvelteURLSearchParams } from 'svelte/reactivity';
 
 let version = $state<string>('');
 
@@ -33,6 +34,12 @@ async function loadVersion() {
 }
 
 loadVersion();
+
+/** Returns true when the app is running as an installed PWA (via ?pwa=1 in the URL).
+ *  This allows the frontend to distinguish "running as installed app" vs "running in browser". */
+export function isPwaMode(): boolean {
+	return browser && new SvelteURLSearchParams(window.location.search).has('pwa');
+}
 
 export const versionStore = {
 	get value(): string {

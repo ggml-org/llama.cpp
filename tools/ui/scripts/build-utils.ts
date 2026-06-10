@@ -161,9 +161,17 @@ export function fixServiceWorkerContent(content: string, buildVersion: string): 
 	);
 
 	// Navigation precache entry and fallback resolve relative to the SW location
-	// so the app installs under any base path
-	swContent = swContent.replace('url:"/",revision', 'url:"./",revision');
-	swContent = swContent.replace('createHandlerBoundToURL("/")', 'createHandlerBoundToURL("./")');
+	// so the app installs under any base path, with ?pwa=1 to identify the PWA entrypoint
+	swContent = swContent.replace('url:"/",revision', 'url:"./?pwa=1",revision');
+	swContent = swContent.replace('url:"./",revision', 'url:"./?pwa=1",revision');
+	swContent = swContent.replace(
+		'createHandlerBoundToURL("/")',
+		'createHandlerBoundToURL("./?pwa=1")'
+	);
+	swContent = swContent.replace(
+		'createHandlerBoundToURL("./")',
+		'createHandlerBoundToURL("./?pwa=1")'
+	);
 
 	return '// Build: ' + buildVersion + NEWLINE + swContent;
 }

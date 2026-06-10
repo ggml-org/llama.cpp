@@ -47,7 +47,7 @@ export const PWA_MANIFEST = {
 	name: APP_NAME,
 	short_name: APP_NAME,
 	description: 'Local AI chat interface powered by llama.cpp',
-	start_url: './',
+	start_url: './?pwa=1',
 	display: 'standalone' as const,
 	background_color: THEME_COLORS.BACKGROUND_LIGHT,
 	theme_color: THEME_COLORS.BACKGROUND_LIGHT,
@@ -298,8 +298,12 @@ export const API_CACHING_PATTERNS = {
 
 // SvelteKit PWA plugin options
 export const PWA_KIT_OPTIONS = {
-	NAVIGATE_FALLBACK: './'
+	NAVIGATE_FALLBACK: './?pwa=1'
 } as const;
+
+/** Query param appended to the PWA entrypoint so the frontend can distinguish
+ *  between "running as installed PWA" vs "running in a browser tab". */
+export const PWA_QUERY_PARAM = 'pwa' as const;
 
 // Bundle filenames used across build-utils and vite plugin
 export const BUNDLE_PATHS = {
