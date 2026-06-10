@@ -63,7 +63,9 @@ const char * llama_load_modifier_name(uint32_t load_modifier) {
         return "none";
     }
 
-    thread_local std::string result;
+    static std::string result;
+    result.clear(); // fixes a bug where the previous modifier will remain in the string
+
     auto add = [&](const char * name) {
         if (!result.empty()) {
             result += ",";
