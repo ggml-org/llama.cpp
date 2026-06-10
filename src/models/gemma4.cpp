@@ -312,9 +312,9 @@ llama_model_gemma4::graph::graph(const llama_model & model, const llm_graph_para
             cb(cur_moe, "ffn_norm_2", il);
 
             // custom MoE logits calculation (router operates on attn_out, not cur)
-            ggml_tensor * tmp = ggml_rms_norm(ctx0, attn_out, hparams.f_norm_rms_eps);
+            // fuse rms_norm + mul(ffn_gate_inp_s) into one RMS_NORM_MUL dispatch; keep constant scale separate
+            ggml_tensor * tmp = build_norm(attn_out, model.layers[il].ffn_gate_inp_s, nullptr, LLM_NORM_RMS, il);
             tmp = ggml_scale(ctx0, tmp, 1.0f / sqrtf((float) n_embd));
-            tmp = ggml_mul(ctx0, tmp, model.layers[il].ffn_gate_inp_s);
             ggml_tensor * logits = build_lora_mm(model.layers[il].ffn_gate_inp, tmp); // [n_expert, n_tokens]
             cb(logits, "ffn_moe_logits", il);
 

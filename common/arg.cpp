@@ -2321,6 +2321,25 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ));
     add_opt(common_arg(
+        {"-cw"}, "MODE",
+        "load-time compressed-weight cache (Q4_0) for quick MoE path. "
+        "MODE in {auto, on, off}. Default: auto. auto enables on Intel Xe2+, off elsewhere. Pass 'on' to force enable, or 'off' to force disable. "
+        "When active, mmap is disabled automatically. "
+        "PPL will drop ~4% once feature is enabled, but tg perf get boost ~30%. "
+        "GSM8K N=200, -cw on: 194/200 = 97.00% for Qwen3.6-35B-A3B-UD-Q4_K_M.",
+        [](common_params & params, const std::string & value) {
+            if (value == "on" || value == "1" || value == "true") {
+                params.cw = 1;
+            } else if (value == "off" || value == "0" || value == "false") {
+                params.cw = 0;
+            } else if (value == "auto" || value == "-1") {
+                params.cw = -1;
+            } else {
+                throw std::invalid_argument("invalid -cw value: '" + value + "' (expected auto|on|off)");
+            }
+        }
+    ).set_env("LLAMA_ARG_CW"));
+    add_opt(common_arg(
         {"-ot", "--override-tensor"}, "<tensor name pattern>=<buffer type>,...",
         "override tensor buffer type", [](common_params & params, const std::string & value) {
             parse_tensor_buffer_overrides(value, params.tensor_buft_overrides);
