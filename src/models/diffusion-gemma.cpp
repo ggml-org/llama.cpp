@@ -175,7 +175,6 @@ void llama_model_diffusion_gemma::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_ROPE_FREQ_BASE_SWA,          hparams.rope_freq_base_train_swa, false);
     ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH,  hparams.n_ff_exp, false);
     ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW,    hparams.n_swa);
-    if (getenv("DG_NSWA")) { hparams.n_swa = (uint32_t) atoi(getenv("DG_NSWA")); } // debug: SWA sweep
     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
     ml.get_key(LLM_KV_ATTENTION_KEY_LENGTH_SWA,    hparams.n_embd_head_k_swa);
     ml.get_key(LLM_KV_ATTENTION_VALUE_LENGTH_SWA,  hparams.n_embd_head_v_swa);
@@ -276,9 +275,6 @@ void llama_model_diffusion_gemma::load_arch_tensors(llama_model_loader &) {
         // per-expert scale (router.per_expert_scale) is loaded as ffn_down_exps_s
     }
 }
-
-// fwd decl: debug-only per-layer K,V capture buffer allocator (defined below)
-static void dg_ensure_dbg(const llama_model_diffusion_gemma & m, int64_t hd, int64_t nkv, int64_t P);
 
 // fwd decl: lazily build the transposed/dequantized SC soft-embedding weight (defined below)
 static void dg_ensure_sc_embT(const llama_model_diffusion_gemma & m);
@@ -424,18 +420,6 @@ llama_model_diffusion_gemma::graph::graph(const llama_model & model, const llm_g
         ggml_tensor * Kcur = kv.k;
         ggml_tensor * Vcur = kv.v;
 
-        // debug-only (DG_DUMP_KV_LAYER): capture prompt-region Kcur/Vcur to compare PREFILL vs UNIFIED
-        {
-            static const int dbg_layer = getenv("DG_DUMP_KV_LAYER") ? atoi(getenv("DG_DUMP_KV_LAYER")) : -1;
-            if (il == dbg_layer && !is_decode && P > 0) {
-                dg_ensure_dbg(dmodel, n_embd_head, n_head_kv, P);
-                ggml_tensor * dk = ggml_view_3d(ctx0, Kcur, n_embd_head, n_head_kv, P, Kcur->nb[1], Kcur->nb[2], 0);
-                ggml_tensor * dv = ggml_view_3d(ctx0, Vcur, n_embd_head, n_head_kv, P, Vcur->nb[1], Vcur->nb[2], 0);
-                ggml_build_forward_expand(gf, ggml_cpy(ctx0, dk, dmodel.dbg_k));
-                ggml_build_forward_expand(gf, ggml_cpy(ctx0, dv, dmodel.dbg_v));
-            }
-        }
-
         if (is_prefill) {
             // PREFILL: persist this layer's prompt K,V (F32) into the store for the block's DECODE steps
             ggml_tensor * sk = ggml_view_3d(ctx0, dmodel.pkv_k[il], n_embd_head, n_head_kv, n_tokens,
@@ -539,8 +523,6 @@ void llama_diffusion_set_sc(struct llama_model * model, const float * sc_logits,
 llama_model_diffusion_gemma::~llama_model_diffusion_gemma() {
     if (pkv_buf) { ggml_backend_buffer_free(pkv_buf); pkv_buf = nullptr; }
     if (pkv_ctx) { ggml_free(pkv_ctx); pkv_ctx = nullptr; }
-    if (dbg_buf) { ggml_backend_buffer_free(dbg_buf); dbg_buf = nullptr; }
-    if (dbg_ctx) { ggml_free(dbg_ctx); dbg_ctx = nullptr; }
     if (sc_embT_buf) { ggml_backend_buffer_free(sc_embT_buf); sc_embT_buf = nullptr; }
     if (sc_embT_ctx) { ggml_free(sc_embT_ctx); sc_embT_ctx = nullptr; }
 }
@@ -609,23 +591,6 @@ static void dg_ensure_sc_embT(const llama_model_diffusion_gemma & m) {
     ggml_backend_tensor_set(m.sc_embT, dstT.data(), 0, dstT.size() * sizeof(ggml_fp16_t));
 }
 
-// debug-only: (re)allocate the [hd, nkv, P] read-back buffer for the per-layer K,V spot-check.
-static void dg_ensure_dbg(const llama_model_diffusion_gemma & m, int64_t hd, int64_t nkv, int64_t P) {
-    if (m.dbg_buf && m.dbg_k && m.dbg_k->ne[0] == hd && m.dbg_k->ne[1] == nkv && m.dbg_k->ne[2] == P) {
-        return;
-    }
-    if (m.dbg_buf) { ggml_backend_buffer_free(m.dbg_buf); m.dbg_buf = nullptr; }
-    if (m.dbg_ctx) { ggml_free(m.dbg_ctx); m.dbg_ctx = nullptr; }
-    ggml_init_params ip = { ggml_tensor_overhead() * 4, nullptr, true };
-    m.dbg_ctx = ggml_init(ip);
-    m.dbg_k = ggml_new_tensor_3d(m.dbg_ctx, GGML_TYPE_F32, hd, nkv, P);
-    m.dbg_v = ggml_new_tensor_3d(m.dbg_ctx, GGML_TYPE_F32, hd, nkv, P);
-    ggml_backend_dev_t dev = m.dev_layer(0);
-    ggml_backend_buffer_type_t buft = dev ? ggml_backend_dev_buffer_type(dev) : ggml_backend_cpu_buffer_type();
-    m.dbg_buf = ggml_backend_alloc_ctx_tensors_from_buft(m.dbg_ctx, buft);
-    GGML_ASSERT(m.dbg_buf != nullptr);
-}
-
 // Lazily (re)allocate the device-resident F32 prompt-KV store (per-layer K,V, grow-only) for a prompt
 // of length P, on layer-0's buffer type (single-GPU; cross-device would need a per-buft context map).
 static void dg_ensure_pkv_store(const llama_model_diffusion_gemma & m, int64_t P) {
@@ -678,22 +643,4 @@ void llama_diffusion_set_phase(struct llama_model * model, int phase, int32_t P)
     if (phase != llama_model_diffusion_gemma::PKV_UNIFIED && P > 0) {
         dg_ensure_pkv_store(*dm, P);
     }
-}
-
-// Debug-only read-back of the captured per-layer prompt K,V (DG_DUMP_KV_LAYER).
-void llama_diffusion_dbg_kv_dims(const struct llama_model * model, int64_t * ne0, int64_t * ne1, int64_t * ne2) {
-    auto * dm = dynamic_cast<const llama_model_diffusion_gemma *>(model);
-    const bool have = dm && dm->dbg_k;
-    if (ne0) *ne0 = have ? dm->dbg_k->ne[0] : 0;
-    if (ne1) *ne1 = have ? dm->dbg_k->ne[1] : 0;
-    if (ne2) *ne2 = have ? dm->dbg_k->ne[2] : 0;
-}
-
-void llama_diffusion_dbg_kv_get(const struct llama_model * model, float * k_out, float * v_out) {
-    auto * dm = dynamic_cast<const llama_model_diffusion_gemma *>(model);
-    if (!dm || !dm->dbg_k || !dm->dbg_v) {
-        return;
-    }
-    ggml_backend_tensor_get(dm->dbg_k, k_out, 0, ggml_nbytes(dm->dbg_k));
-    ggml_backend_tensor_get(dm->dbg_v, v_out, 0, ggml_nbytes(dm->dbg_v));
 }

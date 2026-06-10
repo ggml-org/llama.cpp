@@ -187,25 +187,6 @@ int main(int argc, char ** argv) {
     fclose(out);
     fprintf(stderr, "wrote %d x %d float32 logits to %s\n", C, n_vocab, out_path);
 
-    // debug-only (DG_DUMP_KV_LAYER): write the captured prompt Kcur/Vcur to <out>.dbgK / <out>.dbgV
-    if (getenv("DG_DUMP_KV_LAYER")) {
-        int64_t a = 0, b = 0, c = 0;
-        llama_diffusion_dbg_kv_dims(model, &a, &b, &c);
-        if (a > 0) {
-            const size_t n = (size_t) a * b * c;
-            std::vector<float> kk(n), vv(n);
-            llama_diffusion_dbg_kv_get(model, kk.data(), vv.data());
-            std::string kp = std::string(out_path) + ".dbgK";
-            std::string vp = std::string(out_path) + ".dbgV";
-            FILE * fk = fopen(kp.c_str(), "wb"); fwrite(kk.data(), 4, n, fk); fclose(fk);
-            FILE * fv = fopen(vp.c_str(), "wb"); fwrite(vv.data(), 4, n, fv); fclose(fv);
-            fprintf(stderr, "dumped dbg KV layer %s dims %lldx%lldx%lld -> %s/.dbgV\n",
-                    getenv("DG_DUMP_KV_LAYER"), (long long) a, (long long) b, (long long) c, kp.c_str());
-        } else {
-            fprintf(stderr, "DG_DUMP_KV_LAYER set but nothing captured (P=0 or layer out of range)\n");
-        }
-    }
-
     llama_free(ctx);
     llama_model_free(model);
     llama_backend_free();

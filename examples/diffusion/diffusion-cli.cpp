@@ -7,8 +7,16 @@
 #include "log.h"
 
 #include <limits.h>
-#include <sys/ioctl.h>
-#include <unistd.h>
+#if defined(_WIN32)
+#    define WIN32_LEAN_AND_MEAN
+#    ifndef NOMINMAX
+#        define NOMINMAX
+#    endif
+#    include <windows.h>
+#else
+#    include <sys/ioctl.h>
+#    include <unistd.h>
+#endif
 
 #include <algorithm>
 #include <clocale>
@@ -30,6 +38,27 @@ struct callback_data {
     int32_t             term_cols;
     int32_t             vis_prev_rows;     // visual mode: rows the previous frame advanced (for cursor-up)
 };
+
+// Query the terminal size for the visual viewport; fall back to 24x80 when it can't be read (piped output).
+static void get_terminal_size(int32_t & rows, int32_t & cols) {
+    rows = 24;
+    cols = 80;
+#if defined(_WIN32)
+    CONSOLE_SCREEN_BUFFER_INFO csbi;
+    if (GetConsoleScreenBufferInfo(GetStdHandle(STD_OUTPUT_HANDLE), &csbi)) {
+        const int r = csbi.srWindow.Bottom - csbi.srWindow.Top + 1;
+        const int c = csbi.srWindow.Right  - csbi.srWindow.Left + 1;
+        if (r > 1) { rows = r; }
+        if (c > 0) { cols = c; }
+    }
+#else
+    struct winsize ws;
+    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0 && ws.ws_row > 1) {
+        rows = ws.ws_row;
+        cols = ws.ws_col > 0 ? ws.ws_col : 80;
+    }
+#endif
+}
 
 static bool diffusion_step_callback(int32_t             step,
                                     int32_t             total_steps,
@@ -438,13 +467,7 @@ int main(int argc, char ** argv) {
         cb_data.blocks_seen = 0;
         int region_rows = 0;
         if (visual_mode) {
-            struct winsize ws;
-            cb_data.term_rows = 24;
-            cb_data.term_cols = 80;
-            if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0 && ws.ws_row > 1) {
-                cb_data.term_rows = ws.ws_row;
-                cb_data.term_cols = ws.ws_col > 0 ? ws.ws_col : 80;
-            }
+            get_terminal_size(cb_data.term_rows, cb_data.term_cols);
             cb_data.vis_prev_rows = 0;
             region_rows = std::max(1, cb_data.term_rows - 1);
             common_log_flush(common_log_main());           // flush pending logs before reserving the region

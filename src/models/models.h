@@ -859,12 +859,6 @@ struct llama_model_diffusion_gemma : public llama_model_base {
     mutable ggml_context        * pkv_ctx = nullptr;
     mutable ggml_backend_buffer_t pkv_buf = nullptr;
 
-    // debug-only (DG_DUMP_KV_LAYER): capture one layer's prompt Kcur/Vcur for the exactness spot-check
-    mutable ggml_context        * dbg_ctx = nullptr;
-    mutable ggml_backend_buffer_t dbg_buf = nullptr;
-    mutable ggml_tensor         * dbg_k   = nullptr;
-    mutable ggml_tensor         * dbg_v   = nullptr;
-
     ~llama_model_diffusion_gemma() override;
 
     struct graph : public llm_graph_context {

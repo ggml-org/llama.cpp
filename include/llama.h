@@ -576,13 +576,6 @@ extern "C" {
                            int   phase,
                        int32_t   P);
 
-    // DiffusionGemma debug-only (DG_DUMP_KV_LAYER): read back a layer's captured prompt Kcur/Vcur. dims
-    // returns the [n_embd_head, n_head_kv, P] shape (zeros if none); get copies the F32 K and V out.
-    LLAMA_API void llama_diffusion_dbg_kv_dims(const struct llama_model * model,
-                                               int64_t * ne0, int64_t * ne1, int64_t * ne2);
-    LLAMA_API void llama_diffusion_dbg_kv_get (const struct llama_model * model,
-                                               float * k_out, float * v_out);
-
     LLAMA_API int32_t llama_model_n_ctx_train(const struct llama_model * model);
     LLAMA_API int32_t llama_model_n_embd     (const struct llama_model * model);
     LLAMA_API int32_t llama_model_n_embd_inp (const struct llama_model * model);

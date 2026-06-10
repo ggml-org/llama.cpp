@@ -29,6 +29,7 @@ class DiffusionGemmaModel(Gemma4Model):
         tokens, scores, toktypes = super()._create_vocab_sentencepiece()
         # Some Gemma special tokens ship non-control ('</s>', and tool/channel tokens with asymmetric
         # '<|...>' / '<...|>' brackets the generic heuristic misses); tag them control so the vocab is correct.
+
         def looks_control(s: str) -> bool:
             return (s in ("<s>", "</s>")
                     or (s.startswith("<|") and s.endswith(">"))    # <|tool_response>, <|...|>
