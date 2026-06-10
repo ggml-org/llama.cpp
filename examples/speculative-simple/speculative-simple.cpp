@@ -75,6 +75,16 @@ int main(int argc, char ** argv) {
         }
 
         auto cparams = common_context_params_to_llama(params_dft);
+
+        const bool spec_mtp = std::find(params.speculative.types.begin(),
+                                        params.speculative.types.end(),
+                                        COMMON_SPECULATIVE_TYPE_DRAFT_MTP) != params.speculative.types.end();
+        if (spec_mtp) {
+            cparams.ctx_type = LLAMA_CONTEXT_TYPE_MTP;
+        }
+        cparams.n_rs_seq  = 0;
+        cparams.ctx_other = ctx_tgt;   // ctx_tgt already loaded above (line 44)
+
         ctx_dft.reset(llama_init_from_model(model_dft.get(), cparams));
 
         params.speculative.draft.ctx_tgt = ctx_tgt;
@@ -228,9 +238,9 @@ int main(int argc, char ** argv) {
         }
 
         // evaluate the same batch with the draft model
-        {
-            // TODO: extend to support MTP, Eagle, etc. See server code for reference
-            llama_decode(ctx_dft.get(), batch_tgt);
+        if (!common_speculative_process(spec, batch_tgt)) {
+            LOG_ERR("%s: failed to process speculative batch\n", __func__);
+            return 1;
         }
 
         // only save the sampler sampler state if we use checkpoints
