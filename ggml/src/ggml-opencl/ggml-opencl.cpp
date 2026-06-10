@@ -17750,7 +17750,7 @@ static void ggml_cl_gated_delta_net(ggml_backend_t backend, ggml_tensor * dst) {
     const cl_uint H_v      = (cl_uint) src_v->ne[1];
     const cl_uint n_tokens = (cl_uint) src_v->ne[2];
     const cl_uint n_seqs   = (cl_uint) src_v->ne[3];
-    const cl_uint K        = (cl_uint) src_state->ne[1];
+    const cl_uint K        = (cl_uint) ggml_get_op_params_i32(dst, 0);
 
     int si;
     switch (S_v) {

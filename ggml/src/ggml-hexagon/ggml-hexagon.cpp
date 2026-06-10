@@ -2538,7 +2538,7 @@ static bool ggml_hexagon_supported_gated_delta_net(const struct ggml_hexagon_ses
     const int64_t H        = v->ne[1];
     const int64_t n_tokens = v->ne[2];
     const int64_t n_seqs   = v->ne[3];
-    const int64_t K        = state->ne[1];
+    const int64_t K        = ggml_get_op_params_i32(op, 0);
 
     if (S_v <= 0 || S_v > 128 || H <= 0 || n_tokens <= 0 || n_seqs <= 0) {
         return false;
@@ -2551,7 +2551,8 @@ static bool ggml_hexagon_supported_gated_delta_net(const struct ggml_hexagon_ses
     if ((g->ne[0] != 1 && g->ne[0] != S_v) || beta->ne[0] != 1) {
         return false;
     }
-    if (ggml_nelements(state) != S_v * S_v * H * n_seqs * K) {
+    // state holds s0 only [S_v, S_v, H, n_seqs]; K is op param 0.
+    if (ggml_nelements(state) != S_v * S_v * H * n_seqs) {
         return false;
     }
     if (dst->ne[0] != S_v * H || dst->ne[1] != n_tokens * n_seqs + S_v * n_seqs * K) {

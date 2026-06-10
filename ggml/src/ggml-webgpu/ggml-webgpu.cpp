@@ -1245,7 +1245,7 @@ static webgpu_encoded_op ggml_webgpu_gated_delta_net(webgpu_context & ctx,
     const uint32_t h        = (uint32_t) src2->ne[1];
     const uint32_t n_tokens = (uint32_t) src2->ne[2];
     const uint32_t n_seqs   = (uint32_t) src2->ne[3];
-    const uint32_t K        = (uint32_t) src5->ne[1];
+    const uint32_t K        = (uint32_t) ggml_get_op_params_i32(dst, 0);
     const float    scale    = 1.0f / sqrtf((float) s_v);
     uint32_t       scale_u32;
     memcpy(&scale_u32, &scale, sizeof(scale_u32));
