@@ -658,6 +658,22 @@ static bool handcrafted_check_tensors(const gguf_context * gguf_ctx, const unsig
             if (gguf_get_tensor_type(gguf_ctx, id) != type) {
                 ok = false;
             }
+
+            uint32_t n_dims = 1;
+            for (int j = GGML_MAX_DIMS - 1; j >= 1; --j) {
+                if (shape[j] != 1) {
+                    n_dims = j + 1;
+                    break;
+                }
+            }
+            if (gguf_get_tensor_n_dims(gguf_ctx, id) != n_dims) {
+                ok = false;
+            }
+            for (int j = 0; j < GGML_MAX_DIMS; ++j) {
+                if (gguf_get_tensor_dim(gguf_ctx, id, j) != shape[j]) {
+                    ok = false;
+                }
+            }
         } else {
             ok = false;
             continue;
