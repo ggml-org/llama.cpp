@@ -1666,7 +1666,7 @@ struct llama_model_lfm2 : public llama_model_base {
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
-    template <bool iswa>
+    template <bool iswa, bool embed>
     struct graph : public llm_graph_context {
         graph(const llama_model & model, const llm_graph_params & params);
     };
@@ -1681,7 +1681,7 @@ struct llama_model_lfm2moe : public llama_model_base {
     void load_arch_tensors(llama_model_loader & ml) override;
 
     template <bool iswa>
-    using graph = llama_model_lfm2::graph<iswa>;
+    using graph = llama_model_lfm2::graph<iswa, false>;
 
     std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
 };

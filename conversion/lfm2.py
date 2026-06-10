@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Any, Callable, Iterable, TYPE_CHECKING
 
 import torch
@@ -81,6 +82,61 @@ class LFM2ColBertModel(LFM2Model):
         tensors_file = self.dir_model / "1_Dense" / "model.safetensors"
         assert tensors_file.is_file()
         tensor = load_file(tensors_file)["linear.weight"]
+        self.gguf_writer.add_embedding_length_out(tensor.shape[0])
+        yield f"{self.dense_tensor_name}.weight", tensor.clone()
+
+
+@ModelBase.register("Lfm2BidirectionalModel")
+class LFM2BidirectionalModel(LFM2Model):
+    model_arch = gguf.MODEL_ARCH.LFM2_BIDIR
+    dense_tensor_name = "dense_2"
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        self.gguf_writer.add_causal_attention(False)
+
+        pooling_config = self.dir_model / "1_Pooling" / "config.json"
+        dense_config = self.dir_model / "1_Dense" / "config.json"
+        try:
+            with pooling_config.open(encoding="utf-8") as f:
+                pooling = json.load(f)
+        except FileNotFoundError:
+            try:
+                with dense_config.open("rb"):
+                    pass
+            except FileNotFoundError:
+                return
+            self.gguf_writer.add_pooling_type(gguf.PoolingType.NONE)
+            return
+
+        if pooling.get("pooling_mode_cls_token"):
+            self.gguf_writer.add_pooling_type(gguf.PoolingType.CLS)
+        elif pooling.get("pooling_mode_mean_tokens"):
+            self.gguf_writer.add_pooling_type(gguf.PoolingType.MEAN)
+        elif pooling.get("pooling_mode_lasttoken"):
+            self.gguf_writer.add_pooling_type(gguf.PoolingType.LAST)
+        else:
+            raise NotImplementedError("Only CLS, MEAN, and LAST LFM2 bidirectional pooling are supported")
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        if not name.startswith(self.dense_tensor_name):
+            name = "model." + name
+
+        if "conv.conv" in name:
+            yield from TextModel.modify_tensors(self, data_torch, name, bid)
+            return
+
+        yield from super().modify_tensors(data_torch, name, bid)
+
+    def generate_extra_tensors(self) -> Iterable[tuple[str, Tensor]]:
+        from safetensors.torch import load_file
+
+        tensors_file = self.dir_model / "1_Dense" / "model.safetensors"
+        try:
+            tensor = load_file(tensors_file)["linear.weight"]
+        except FileNotFoundError:
+            return
+
         self.gguf_writer.add_embedding_length_out(tensor.shape[0])
         yield f"{self.dense_tensor_name}.weight", tensor.clone()
 

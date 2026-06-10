@@ -1124,6 +1124,10 @@ struct ggml_tensor * llama_model_loader::create_tensor(
             op = info.op;
         }
 
+        if (get_arch() == LLM_ARCH_LFM2_BIDIR && tn.tensor == LLM_TENSOR_SHORTCONV_CONV) {
+            op = GGML_OP_IM2COL;
+        }
+
         // sanity checks
         if (info.layer == LLM_TENSOR_LAYER_INPUT || info.layer == LLM_TENSOR_LAYER_OUTPUT) {
             if (tn.bid != -1) {

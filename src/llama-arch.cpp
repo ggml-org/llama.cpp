@@ -115,6 +115,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
     { LLM_ARCH_SMOLLM3,          "smollm3"          },
     { LLM_ARCH_OPENAI_MOE,       "gpt-oss"          },
     { LLM_ARCH_LFM2,             "lfm2"             },
+    { LLM_ARCH_LFM2_BIDIR,       "lfm2-bidir"       },
     { LLM_ARCH_LFM2MOE,          "lfm2moe"          },
     { LLM_ARCH_DREAM,            "dream"            },
     { LLM_ARCH_SMALLTHINKER,     "smallthinker"     },
@@ -939,6 +940,7 @@ bool llm_arch_supports_sm_tensor(const llm_arch & arch) {
         case LLM_ARCH_NEMOTRON_H_MOE:
         case LLM_ARCH_GRANITE_HYBRID:
         case LLM_ARCH_LFM2:
+        case LLM_ARCH_LFM2_BIDIR:
         case LLM_ARCH_LFM2MOE:
         case LLM_ARCH_MINIMAX_M2:
         case LLM_ARCH_MISTRAL4:

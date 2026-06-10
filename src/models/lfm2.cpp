@@ -34,10 +34,14 @@ void llama_model_lfm2::load_arch_tensors(llama_model_loader &) {
     tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, 0);
 
     output_norm = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM_LFM2, "weight"), {n_embd}, 0);
-    output      = create_tensor(tn(LLM_TENSOR_OUTPUT,           "weight"), {n_embd, n_vocab}, TENSOR_NOT_REQUIRED);
 
-    if (output == NULL) {
-        output = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, TENSOR_DUPLICATED);
+    // the embedding graph has no lm_head - skip the output tensor to avoid duplicating the token embeddings
+    if (arch != LLM_ARCH_LFM2_BIDIR) {
+        output = create_tensor(tn(LLM_TENSOR_OUTPUT, "weight"), {n_embd, n_vocab}, TENSOR_NOT_REQUIRED);
+
+        if (output == NULL) {
+            output = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, TENSOR_DUPLICATED);
+        }
     }
 
     for (int i = 0; i < n_layer; ++i) {
@@ -72,7 +76,11 @@ void llama_model_lfm2::load_arch_tensors(llama_model_loader &) {
 
             layer.wo = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_embd, n_embd}, 0);
         } else {
-            layer.shortconv.conv     = create_tensor(tn(LLM_TENSOR_SHORTCONV_CONV,    "weight", i), {hparams.n_shortconv_l_cache, n_embd}, 0);
+            if (arch == LLM_ARCH_LFM2_BIDIR) {
+                layer.shortconv.conv = create_tensor(tn(LLM_TENSOR_SHORTCONV_CONV, "weight", i), {hparams.n_shortconv_l_cache, 1, n_embd}, 0);
+            } else {
+                layer.shortconv.conv = create_tensor(tn(LLM_TENSOR_SHORTCONV_CONV, "weight", i), {hparams.n_shortconv_l_cache, n_embd}, 0);
+            }
             layer.shortconv.in_proj  = create_tensor(tn(LLM_TENSOR_SHORTCONV_INPROJ,  "weight", i), {n_embd, 3 * n_embd}, 0);
             layer.shortconv.out_proj = create_tensor(tn(LLM_TENSOR_SHORTCONV_OUTPROJ, "weight", i), {n_embd, n_embd}, 0);
         }
@@ -84,19 +92,26 @@ void llama_model_lfm2::load_arch_tensors(llama_model_loader &) {
 }
 
 std::unique_ptr<llm_graph_context> llama_model_lfm2::build_arch_graph(const llm_graph_params & params) const {
+    if (arch == LLM_ARCH_LFM2_BIDIR) {
+        return std::make_unique<graph<false, true>>(*this, params);
+    }
+
     if (hparams.swa_type == LLAMA_SWA_TYPE_STANDARD) {
-        return std::make_unique<graph<true>>(*this, params);
+        return std::make_unique<graph<true, false>>(*this, params);
     } else {
-        return std::make_unique<graph<false>>(*this, params);
+        return std::make_unique<graph<false, false>>(*this, params);
     }
 }
 
-template <bool iswa>
-llama_model_lfm2::graph<iswa>::graph(const llama_model & model, const llm_graph_params & params) :
+template <bool iswa, bool embed>
+llama_model_lfm2::graph<iswa, embed>::graph(const llama_model & model, const llm_graph_params & params) :
     llm_graph_context(params) {
-    using inp_hybrid_type = std::conditional_t<iswa, llm_graph_input_mem_hybrid_iswa,  llm_graph_input_mem_hybrid>;
-    using inp_attn_type   = std::conditional_t<iswa, llm_graph_input_attn_kv_iswa,     llm_graph_input_attn_kv>;
-    using mem_hybrid_ctx  = std::conditional_t<iswa, llama_memory_hybrid_iswa_context, llama_memory_hybrid_context>;
+    static_assert(!(iswa && embed), "LFM2 embedding graph does not use SWA cache inputs");
+
+    using inp_hybrid_type  = std::conditional_t<iswa,  llm_graph_input_mem_hybrid_iswa,  llm_graph_input_mem_hybrid>;
+    using inp_attn_kv_type = std::conditional_t<iswa,  llm_graph_input_attn_kv_iswa,     llm_graph_input_attn_kv>;
+    using inp_attn_type    = std::conditional_t<embed, llm_graph_input_attn_no_cache,    inp_attn_kv_type>;
+    using mem_hybrid_ctx   = std::conditional_t<iswa,  llama_memory_hybrid_iswa_context, llama_memory_hybrid_context>;
 
     // lambda helpers for readability
     auto build_dense_feed_forward = [&model, this](ggml_tensor * cur, int il) -> ggml_tensor * {
@@ -156,64 +171,156 @@ llama_model_lfm2::graph<iswa>::graph(const llama_model & model, const llm_graph_
     auto build_shortconv_block = [&model, this](ggml_tensor *        cur,
                                                 llm_graph_input_rs * inp_recr,
                                                 int                  il) -> ggml_tensor * {
-        const auto * mctx_cur = static_cast<const mem_hybrid_ctx *>(mctx)->get_recr();
-        const uint32_t kv_head      = mctx_cur->get_head();
-        const int64_t  n_seq_tokens = ubatch.n_seq_tokens;
-        const int64_t  n_seqs       = ubatch.n_seqs;
-        GGML_ASSERT(n_seqs != 0);
-        GGML_ASSERT(ubatch.equal_seqs());
-        GGML_ASSERT(ubatch.n_tokens == n_seq_tokens * n_seqs);
-
-        GGML_ASSERT(hparams.n_shortconv_l_cache > 1);
-        const uint32_t d_conv = hparams.n_shortconv_l_cache - 1;
-
-        // {n_embd, n_tokens} => {n_embd, n_seq_tokens, n_seqs}
-        cur = ggml_reshape_3d(ctx0, cur, cur->ne[0], n_seq_tokens, n_seqs);
-
-        auto * bcx = build_lora_mm(model.layers[il].shortconv.in_proj, cur);
-        cb(bcx, "model.layers.{}.conv.in_proj", il);
-
         constexpr auto n_chunks = 3;
-        GGML_ASSERT(bcx->ne[0] % n_chunks == 0);
-        const auto chunk_size = bcx->ne[0] / n_chunks;
-        auto *     b          = ggml_view_3d(ctx0, bcx, chunk_size, bcx->ne[1], bcx->ne[2], bcx->nb[1], bcx->nb[2],
-                                             0 * chunk_size * ggml_element_size(bcx));
-        auto *     c          = ggml_view_3d(ctx0, bcx, chunk_size, bcx->ne[1], bcx->ne[2], bcx->nb[1], bcx->nb[2],
-                                             1 * chunk_size * ggml_element_size(bcx));
-        auto *     x          = ggml_view_3d(ctx0, bcx, chunk_size, bcx->ne[1], bcx->ne[2], bcx->nb[1], bcx->nb[2],
-                                             2 * chunk_size * ggml_element_size(bcx));
 
-        auto * bx = ggml_transpose(ctx0, ggml_mul(ctx0, b, x));
+        if constexpr (embed) {
+            const int64_t n_tokens = ubatch.n_tokens;
+            GGML_ASSERT(n_tokens != 0);
 
-        // read conv state
-        auto * conv_state = mctx_cur->get_r_l(il);
-        auto * conv_rs    = build_rs(inp_recr, conv_state, hparams.n_embd_r(), n_seqs);
-        auto * conv       = ggml_reshape_3d(ctx0, conv_rs, d_conv, hparams.n_embd, n_seqs);
+            auto * bcx = build_lora_mm(model.layers[il].shortconv.in_proj, cur);
+            cb(bcx, "model.layers.{}.conv.in_proj", il);
 
-        bx = ggml_concat(ctx0, conv, bx, 0);
-        GGML_ASSERT(bx->ne[0] > conv->ne[0]);
+            GGML_ASSERT(bcx->ne[0] % n_chunks == 0);
+            const auto chunk_size = bcx->ne[0] / n_chunks;
+            auto *     b          = ggml_view_2d(ctx0, bcx, chunk_size, n_tokens, bcx->nb[1],
+                                                 0 * chunk_size * ggml_element_size(bcx));
+            auto *     c          = ggml_view_2d(ctx0, bcx, chunk_size, n_tokens, bcx->nb[1],
+                                                 1 * chunk_size * ggml_element_size(bcx));
+            auto *     x          = ggml_view_2d(ctx0, bcx, chunk_size, n_tokens, bcx->nb[1],
+                                                 2 * chunk_size * ggml_element_size(bcx));
 
-        // last d_conv columns is a new conv state
-        auto * new_conv = ggml_view_3d(ctx0, bx, conv->ne[0], bx->ne[1], bx->ne[2], bx->nb[1], bx->nb[2],
-                                       (bx->ne[0] - conv->ne[0]) * ggml_element_size(bx));
-        GGML_ASSERT(ggml_are_same_shape(conv, new_conv));
+            auto * conv_kernel = model.layers[il].shortconv.conv;
+            GGML_ASSERT(conv_kernel->ne[0] == hparams.n_shortconv_l_cache);
+            GGML_ASSERT(conv_kernel->ne[1] == 1);
+            GGML_ASSERT(conv_kernel->ne[2] == chunk_size);
 
-        // write new conv conv state
-        ggml_build_forward_expand(gf, ggml_cpy(ctx0, new_conv,
-                                               ggml_view_1d(ctx0, conv_state, ggml_nelements(new_conv),
-                                                            kv_head * d_conv * n_embd * ggml_element_size(new_conv))));
+            // The short-conv weight is stored as F32, but the CPU im2col backing
+            // ggml_conv_1d_dw_ph requires an F16 kernel; cast once per layer so
+            // the model runs on the CPU backend (Metal tolerates F32 either way).
+            if (conv_kernel->type != GGML_TYPE_F16) {
+                conv_kernel = ggml_cast(ctx0, conv_kernel, GGML_TYPE_F16);
+            }
 
-        auto * conv_kernel = model.layers[il].shortconv.conv;
-        auto * conv_out    = ggml_ssm_conv(ctx0, bx, conv_kernel);
-        cb(conv_out, "model.layers.{}.conv.conv", il);
+            std::vector<std::pair<int64_t, int64_t>> spans;
+            if (ubatch.equal_seqs()) {
+                const int64_t n_seq_tokens = ubatch.n_seq_tokens;
+                const int64_t n_seqs       = ubatch.n_seqs;
+                GGML_ASSERT(n_seqs != 0);
+                GGML_ASSERT(n_tokens == n_seq_tokens * n_seqs);
+                spans.reserve(n_seqs);
+                for (int64_t is = 0; is < n_seqs; ++is) {
+                    spans.emplace_back(is * n_seq_tokens, n_seq_tokens);
+                }
+            } else {
+                GGML_ASSERT(ubatch.n_seq_id != nullptr);
+                GGML_ASSERT(ubatch.seq_id != nullptr);
 
-        auto * y = ggml_mul(ctx0, c, conv_out);
-        y        = build_lora_mm(model.layers[il].shortconv.out_proj, y);
-        cb(y, "model.layers.{}.conv.out_proj", il);
-        // {n_embd, n_seq_tokens, n_seqs} => {n_embd, n_tokens}
-        y = ggml_reshape_2d(ctx0, y, y->ne[0], n_seq_tokens * n_seqs);
+                auto same_seq_set = [](const llama_ubatch & ubatch, int64_t a, int64_t b) {
+                    if (ubatch.n_seq_id[a] != ubatch.n_seq_id[b]) {
+                        return false;
+                    }
+                    for (int32_t is = 0; is < ubatch.n_seq_id[a]; ++is) {
+                        if (ubatch.seq_id[a][is] != ubatch.seq_id[b][is]) {
+                            return false;
+                        }
+                    }
+                    return true;
+                };
 
-        return y;
+                for (int64_t i = 0; i < n_tokens;) {
+                    int64_t j = i + 1;
+                    while (j < n_tokens && same_seq_set(ubatch, i, j)) {
+                        ++j;
+                    }
+                    spans.emplace_back(i, j - i);
+                    i = j;
+                }
+            }
+
+            // ggml_conv_1d_dw_ph currently only supports one sequence per op.
+            // Keep contiguous sequence spans separate so centered padding does
+            // not bleed across sequence boundaries.
+            ggml_tensor * y = nullptr;
+            for (const auto & span : spans) {
+                const int64_t i0  = span.first;
+                const int64_t len = span.second;
+
+                auto * b_seq = ggml_view_2d(ctx0, b, chunk_size, len, b->nb[1], i0 * b->nb[1]);
+                auto * c_seq = ggml_view_2d(ctx0, c, chunk_size, len, c->nb[1], i0 * c->nb[1]);
+                auto * x_seq = ggml_view_2d(ctx0, x, chunk_size, len, x->nb[1], i0 * x->nb[1]);
+
+                auto * bx       = ggml_cont(ctx0, ggml_transpose(ctx0, ggml_mul(ctx0, b_seq, x_seq)));
+                auto * conv_out = ggml_conv_1d_dw_ph(ctx0, conv_kernel, bx, 1, 1);
+                cb(conv_out, "model.layers.{}.conv.conv", il);
+
+                conv_out    = ggml_cont(ctx0, ggml_transpose(ctx0, conv_out));
+                auto * y_seq = ggml_mul(ctx0, c_seq, conv_out);
+                y_seq        = build_lora_mm(model.layers[il].shortconv.out_proj, y_seq);
+                cb(y_seq, "model.layers.{}.conv.out_proj", il);
+
+                y = y == nullptr ? y_seq : ggml_concat(ctx0, y, y_seq, 1);
+            }
+
+            return y;
+        } else {
+            const auto * mctx_cur = static_cast<const mem_hybrid_ctx *>(mctx)->get_recr();
+            const uint32_t kv_head      = mctx_cur->get_head();
+            const int64_t  n_seq_tokens = ubatch.n_seq_tokens;
+            const int64_t  n_seqs       = ubatch.n_seqs;
+            GGML_ASSERT(n_seqs != 0);
+            GGML_ASSERT(ubatch.equal_seqs());
+            GGML_ASSERT(ubatch.n_tokens == n_seq_tokens * n_seqs);
+
+            GGML_ASSERT(hparams.n_shortconv_l_cache > 1);
+            const uint32_t d_conv = hparams.n_shortconv_l_cache - 1;
+
+            // {n_embd, n_tokens} => {n_embd, n_seq_tokens, n_seqs}
+            cur = ggml_reshape_3d(ctx0, cur, cur->ne[0], n_seq_tokens, n_seqs);
+
+            auto * bcx = build_lora_mm(model.layers[il].shortconv.in_proj, cur);
+            cb(bcx, "model.layers.{}.conv.in_proj", il);
+
+            GGML_ASSERT(bcx->ne[0] % n_chunks == 0);
+            const auto chunk_size = bcx->ne[0] / n_chunks;
+            auto *     b          = ggml_view_3d(ctx0, bcx, chunk_size, bcx->ne[1], bcx->ne[2], bcx->nb[1], bcx->nb[2],
+                                                 0 * chunk_size * ggml_element_size(bcx));
+            auto *     c          = ggml_view_3d(ctx0, bcx, chunk_size, bcx->ne[1], bcx->ne[2], bcx->nb[1], bcx->nb[2],
+                                                 1 * chunk_size * ggml_element_size(bcx));
+            auto *     x          = ggml_view_3d(ctx0, bcx, chunk_size, bcx->ne[1], bcx->ne[2], bcx->nb[1], bcx->nb[2],
+                                                 2 * chunk_size * ggml_element_size(bcx));
+
+            auto * bx = ggml_transpose(ctx0, ggml_mul(ctx0, b, x));
+
+            // read conv state
+            auto * conv_state = mctx_cur->get_r_l(il);
+            auto * conv_rs    = build_rs(inp_recr, conv_state, hparams.n_embd_r(), n_seqs);
+            auto * conv       = ggml_reshape_3d(ctx0, conv_rs, d_conv, hparams.n_embd, n_seqs);
+
+            bx = ggml_concat(ctx0, conv, bx, 0);
+            GGML_ASSERT(bx->ne[0] > conv->ne[0]);
+
+            // last d_conv columns is a new conv state
+            auto * new_conv = ggml_view_3d(ctx0, bx, conv->ne[0], bx->ne[1], bx->ne[2], bx->nb[1], bx->nb[2],
+                                           (bx->ne[0] - conv->ne[0]) * ggml_element_size(bx));
+            GGML_ASSERT(ggml_are_same_shape(conv, new_conv));
+
+            // write new conv conv state
+            ggml_build_forward_expand(gf, ggml_cpy(ctx0, new_conv,
+                                                   ggml_view_1d(ctx0, conv_state, ggml_nelements(new_conv),
+                                                                kv_head * d_conv * n_embd * ggml_element_size(new_conv))));
+
+            auto * conv_kernel = model.layers[il].shortconv.conv;
+            auto * conv_out    = ggml_ssm_conv(ctx0, bx, conv_kernel);
+            cb(conv_out, "model.layers.{}.conv.conv", il);
+
+            auto * y = ggml_mul(ctx0, c, conv_out);
+            y        = build_lora_mm(model.layers[il].shortconv.out_proj, y);
+            cb(y, "model.layers.{}.conv.out_proj", il);
+            // {n_embd, n_seq_tokens, n_seqs} => {n_embd, n_tokens}
+            y = ggml_reshape_2d(ctx0, y, y->ne[0], n_seq_tokens * n_seqs);
+
+            return y;
+        }
     };
 
     // actual graph construction starts here
@@ -222,11 +329,19 @@ llama_model_lfm2::graph<iswa>::graph(const llama_model & model, const llm_graph_
 
     ggml_build_forward_expand(gf, cur);
 
-    inp_hybrid_type * inp_hybrid = nullptr;
-    if constexpr (iswa) {
-        inp_hybrid = build_inp_mem_hybrid_iswa();
+    inp_attn_type *      inp_attn = nullptr;
+    llm_graph_input_rs * inp_recr = nullptr;
+    if constexpr (embed) {
+        inp_attn = build_attn_inp_no_cache();
     } else {
-        inp_hybrid = build_inp_mem_hybrid();
+        inp_hybrid_type * inp_hybrid = nullptr;
+        if constexpr (iswa) {
+            inp_hybrid = build_inp_mem_hybrid_iswa();
+        } else {
+            inp_hybrid = build_inp_mem_hybrid();
+        }
+        inp_attn = inp_hybrid->get_attn();
+        inp_recr = inp_hybrid->get_recr();
     }
 
     ggml_tensor * inp_pos     = build_inp_pos();
@@ -239,8 +354,8 @@ llama_model_lfm2::graph<iswa>::graph(const llama_model & model, const llm_graph_
         cur             = build_norm(cur, model.layers[il].attn_norm, NULL, LLM_NORM_RMS, il);
         cb(cur, "model.layers.{}.operator_norm", il);
 
-        cur = hparams.is_recr(il) ? build_shortconv_block(cur, inp_hybrid->get_recr(), il) :
-                                    build_attn_block(cur, inp_pos, inp_hybrid->get_attn(), il);
+        cur = hparams.is_recr(il) ? build_shortconv_block(cur, inp_recr, il) :
+                                    build_attn_block(cur, inp_pos, inp_attn, il);
 
         if (il == n_layer - 1 && inp_out_ids) {
             cur      = ggml_get_rows(ctx0, cur, inp_out_ids);
@@ -266,14 +381,17 @@ llama_model_lfm2::graph<iswa>::graph(const llama_model & model, const llm_graph_
     cb(cur, "result_norm", -1);
     res->t_embd = cur;
 
-    cur = build_lora_mm(model.output, cur, model.output_s);
-    cb(cur, "result_output", -1);
+    if constexpr (!embed) {
+        cur = build_lora_mm(model.output, cur, model.output_s);
+        cb(cur, "result_output", -1);
 
-    res->t_logits = cur;
+        res->t_logits = cur;
+    }
 
     ggml_build_forward_expand(gf, cur);
 }
 
 // Explicit template instantiations
-template struct llama_model_lfm2::graph<true>;
-template struct llama_model_lfm2::graph<false>;
+template struct llama_model_lfm2::graph<true, false>;
+template struct llama_model_lfm2::graph<false, false>;
+template struct llama_model_lfm2::graph<false, true>;

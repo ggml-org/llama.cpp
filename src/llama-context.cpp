@@ -2320,6 +2320,18 @@ uint32_t llama_context::graph_max_nodes(uint32_t n_tokens) const {
     if (model.arch == LLM_ARCH_QWEN3NEXT || model.arch == LLM_ARCH_KIMI_LINEAR || model.arch == LLM_ARCH_QWEN35 || model.arch == LLM_ARCH_QWEN35MOE) {
         return std::max<uint32_t>(n_tokens * 40, 32u * model.n_tensors());
     }
+    if (model.arch == LLM_ARCH_LFM2_BIDIR) {
+        uint32_t n_shortconv = 0;
+        for (uint32_t il = 0; il < model.hparams.n_layer(); ++il) {
+            if (model.hparams.is_recr(il)) {
+                ++n_shortconv;
+            }
+        }
+        const uint32_t seq_shortconv_nodes = 16u * n_shortconv * cparams.n_seq_max;
+        return std::max<uint32_t>(
+                std::max<uint32_t>(n_tokens * 40, 32u * model.n_tensors()),
+                32u * model.n_tensors() + seq_shortconv_nodes);
+    }
     uint32_t res = std::max<uint32_t>(1024u, 8u*model.n_tensors());
     for (const auto & lora : model.loras) {
         res += lora->get_n_nodes();

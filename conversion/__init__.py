@@ -123,6 +123,7 @@ TEXT_MODEL_MAP: dict[str, str] = {
     "LLaDAModelLM": "llada",
     "LLaMAForCausalLM": "llama",
     "Lfm25AudioTokenizer": "lfm2",
+    "Lfm2BidirectionalModel": "lfm2",
     "Lfm2ForCausalLM": "lfm2",
     "Lfm2Model": "lfm2",
     "Lfm2MoeForCausalLM": "lfm2",
