@@ -159,5 +159,11 @@ export function fixServiceWorkerContent(content: string, buildVersion: string): 
 		REGEX_PATTERNS.PRECACHE_BUNDLE_CSS,
 		`"${BUNDLE_VERSION(BUNDLE_PATHS.CSS, buildVersion)}"`
 	);
+
+	// Navigation precache entry and fallback resolve relative to the SW location
+	// so the app installs under any base path
+	swContent = swContent.replace('url:"/",revision', 'url:"./",revision');
+	swContent = swContent.replace('createHandlerBoundToURL("/")', 'createHandlerBoundToURL("./")');
+
 	return '// Build: ' + buildVersion + NEWLINE + swContent;
 }

@@ -28,10 +28,10 @@ export const THEME_COLORS = {
 } as const;
 
 export const FAVICON_PATHS = {
-	ICO_LIGHT: '/favicon.ico',
-	ICO_DARK: '/favicon-dark.ico',
-	SVG_LIGHT: '/favicon.svg',
-	SVG_DARK: '/favicon-dark.svg'
+	ICO_LIGHT: 'favicon.ico',
+	ICO_DARK: 'favicon-dark.ico',
+	SVG_LIGHT: 'favicon.svg',
+	SVG_DARK: 'favicon-dark.svg'
 } as const;
 
 export const FAVICON_SELECTORS = {
@@ -40,7 +40,7 @@ export const FAVICON_SELECTORS = {
 } as const;
 
 export const APPLE_ASSETS = {
-	TOUCH_ICON: '/apple-touch-icon-180x180.png'
+	TOUCH_ICON: 'apple-touch-icon-180x180.png'
 } as const;
 
 export const PWA_MANIFEST = {
@@ -52,11 +52,11 @@ export const PWA_MANIFEST = {
 	background_color: THEME_COLORS.BACKGROUND_LIGHT,
 	theme_color: THEME_COLORS.BACKGROUND_LIGHT,
 	icons: [
-		{ src: '/pwa-64x64.png', sizes: '64x64', type: 'image/png' },
-		{ src: '/pwa-192x192.png', sizes: '192x192', type: 'image/png' },
-		{ src: '/pwa-512x512.png', sizes: '512x512', type: 'image/png', purpose: 'any' as const },
+		{ src: 'pwa-64x64.png', sizes: '64x64', type: 'image/png' },
+		{ src: 'pwa-192x192.png', sizes: '192x192', type: 'image/png' },
+		{ src: 'pwa-512x512.png', sizes: '512x512', type: 'image/png', purpose: 'any' as const },
 		{
-			src: '/maskable-icon-512x512.png',
+			src: 'maskable-icon-512x512.png',
 			sizes: '512x512',
 			type: 'image/png',
 			purpose: 'maskable' as const
@@ -275,7 +275,7 @@ export const PWA_ASSET_GENERATOR = {
 	SPLASH_PADDING: 0.75,
 	FIT_MODE: 'contain',
 	ADD_MEDIA_SCREEN: true,
-	BASE_PATH: '/',
+	BASE_PATH: './',
 	XHTML: false,
 	PNG_COMPRESSION_LEVEL: 9,
 	PNG_QUALITY: 60,
@@ -298,7 +298,7 @@ export const API_CACHING_PATTERNS = {
 
 // SvelteKit PWA plugin options
 export const PWA_KIT_OPTIONS = {
-	NAVIGATE_FALLBACK: '/'
+	NAVIGATE_FALLBACK: './'
 } as const;
 
 // Bundle filenames used across build-utils and vite plugin
