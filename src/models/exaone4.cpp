@@ -1,7 +1,7 @@
 #include "models.h"
 
 void llama_model_exaone4::load_arch_hparams(llama_model_loader & ml) {
-    if (hparams.n_layer == 64) {    // 32B
+    if (hparams.n_layer() == 64) {    // 32B
         hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
         hparams.n_swa = 4096;
         uint32_t swa_period = 4;
@@ -16,7 +16,7 @@ void llama_model_exaone4::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW,    hparams.n_swa, false);
     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
 
-    switch (hparams.n_layer) {
+    switch (hparams.n_layer()) {
         case 30: type = LLM_TYPE_1_2B; break;
         case 64: type = LLM_TYPE_32B; break;
         default: type = LLM_TYPE_UNKNOWN;

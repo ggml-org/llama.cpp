@@ -232,7 +232,7 @@ void main() {
                             uint coord = (j * Bc + c) * k_stride * BLOCK_SIZE_K + 4 * d;
                             uint ib = coord / BLOCK_SIZE_K;
                             uint iqs = (coord % BLOCK_SIZE_K);
-                            K_Tf = dequantize4(ib, iqs, k_offset, BINDING_IDX_K);
+                            K_Tf = f16vec4(dequantize4(ib, iqs, k_offset, BINDING_IDX_K));
                         } else {
 #if !defined(DATA_A_TURBO3_0)
                             K_Tf = f16vec4(data_kv4[k_offset / 4 + (j * Bc + c) * k_stride / 4 + d]);
@@ -274,7 +274,7 @@ void main() {
                                 uint coord = (j * Bc + row) * k_stride * BLOCK_SIZE_K + d * 16 + col_vec * 4;
                                 uint ib = coord / BLOCK_SIZE_K;
                                 uint iqs = (coord % BLOCK_SIZE_K);
-                                K_Tf = dequantize4(ib, iqs, k_offset, BINDING_IDX_K);
+                                K_Tf = f16vec4(dequantize4(ib, iqs, k_offset, BINDING_IDX_K));
                             } else {
 #if !defined(DATA_A_TURBO3_0)
                                 K_Tf = f16vec4(data_kv4[k_offset / 4 + (j * Bc + row) * k_stride / 4 + d * 16 / 4 + col_vec]);
@@ -403,7 +403,7 @@ void main() {
                             uint coord = (j * Bc + c) * v_stride * BLOCK_SIZE_V + 4 * d;
                             uint ib = coord / BLOCK_SIZE_V;
                             uint iqs = (coord % BLOCK_SIZE_V);
-                            V_Tf = dequantize4(ib, iqs, v_offset, BINDING_IDX_V);
+                            V_Tf = f16vec4(dequantize4(ib, iqs, v_offset, BINDING_IDX_V));
                         } else {
 #if !defined(DATA_A_TURBO3_0)
                             V_Tf = f16vec4(data_vv4[v_offset / 4 + (j * Bc + c) * v_stride / 4 + d]);
@@ -453,7 +453,7 @@ void main() {
 
                     if (!KV_bounds_check || (v_row < KV && v_col < HSV)) {
                         if (USE_DECODE_V) {
-                            kvsh[row * vsh_stride + col] = dequantize4(ib, iqs, v_offset, BINDING_IDX_V);
+                            kvsh[row * vsh_stride + col] = f16vec4(dequantize4(ib, iqs, v_offset, BINDING_IDX_V));
                         } else {
 #if !defined(DATA_A_TURBO3_0)
                             kvsh[row * vsh_stride + col] = data_vv4[(v_offset + v_row * v_stride + v_col) / 4];

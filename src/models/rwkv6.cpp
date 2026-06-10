@@ -9,7 +9,7 @@ void llama_model_rwkv6::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_RESCALE_EVERY_N_LAYERS,      hparams.rescale_every_n_layers, false);
     ml.get_key(LLM_KV_TOKEN_SHIFT_COUNT,           hparams.token_shift_count, false);
 
-    switch (hparams.n_layer) {
+    switch (hparams.n_layer()) {
         case 24: type = LLM_TYPE_1_6B; break;
         case 32:
             switch (hparams.n_embd) {

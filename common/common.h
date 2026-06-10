@@ -299,11 +299,13 @@ struct common_params_model {
 
 // draft-model-based speculative decoding parameters
 struct common_params_speculative_draft {
-    int32_t n_max = 16; // maximum number of tokens to draft during speculative decoding
-    int32_t n_min = 0;  // minimum number of draft tokens to use for speculative decoding
+    int32_t n_max = 3; // maximum number of tokens to draft during speculative decoding
+    int32_t n_min = 0; // minimum number of draft tokens to use for speculative decoding
 
-    float p_split = 0.1f;  // speculative decoding split probability
-    float p_min   = 0.75f; // minimum speculative decoding probability (greedy) // TODO: change default to 0.0f
+    float p_split = 0.1f; // speculative decoding split probability
+    float p_min   = 0.0f; // minimum speculative decoding probability (greedy)
+
+    bool backend_sampling = true; // offload draft sampling to the backend (default: on)
 
     common_params_model mparams;
 
@@ -428,6 +430,7 @@ struct common_params {
     int32_t n_keep                =     0; // number of tokens to keep from initial prompt
     int32_t n_chunks              =    -1; // max number of chunks to process (-1 = unlimited)
     int32_t n_parallel            =     1; // number of parallel sequences to decode
+    int32_t n_outputs_max         =     0; // max outputs supported by the context (0 = derive)
     int32_t n_sequences           =     1; // number of sequences to decode
     int32_t grp_attn_n            =     1; // group-attention factor
     int32_t grp_attn_w            =   512; // group-attention width

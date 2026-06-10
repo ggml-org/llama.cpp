@@ -1,4 +1,3 @@
-
 #include "server-context.h"
 #include "server-chat.h"
 #include "server-common.h"
@@ -14,6 +13,11 @@
 #include "speculative.h"
 #include "mtmd.h"
 #include "mtmd-helper.h"
+
+#include "ggml-cpp.h"
+
+// TODO: tmp until the mtmd draft processing is refactored [TAG_MTMD_DRAFT_PROCESSING]
+#include "../../src/llama-ext.h"
 
 #include <algorithm>
 #include <cstddef>
@@ -36,6 +40,21 @@
 using json = nlohmann::ordered_json;
 
 constexpr int HTTP_POLLING_SECONDS = 1;
+
+static uint32_t server_n_outputs_max(const common_params & params) {
+    const uint32_t n_batch  = params.n_batch;
+
+    if (params.embedding ||
+            (params.pooling_type != LLAMA_POOLING_TYPE_UNSPECIFIED && params.pooling_type != LLAMA_POOLING_TYPE_NONE)) {
+        return n_batch;
+    }
+
+    const uint32_t n_outputs_per_seq = 1 + common_speculative_n_max(&params.speculative);
+
+    const uint64_t n_outputs = (uint64_t) params.n_parallel * n_outputs_per_seq;
+
+    return std::max<uint32_t>(1, std::min<uint64_t>(n_batch, n_outputs));
+}
 
 // state diagram: https://github.com/ggml-org/llama.cpp/pull/9283
 enum slot_state {
@@ -241,11 +260,12 @@ struct server_slot {
 
     bool need_embd() const {
         GGML_ASSERT(task);
-        return task->need_embd();
+        return task->need_embd() || (spec && common_speculative_need_embd(spec));
     }
 
-    bool need_embd_pre_norm() const {
-        return spec && common_speculative_need_embd(spec);
+    bool need_embd_nextn() const {
+        GGML_ASSERT(task);
+        return spec && common_speculative_need_embd_nextn(spec);
     }
 
     // if the context does not have a memory module then all embeddings have to be computed within a single ubatch
@@ -742,6 +762,11 @@ private:
         SRV_INF("loading model '%s'\n", params.model.path.c_str());
 
         params_base = params;
+        params_base.n_outputs_max = server_n_outputs_max(params_base);
+
+        // note: upstream's --fit VRAM pre-estimation for the mmproj / draft-MTP
+        // context (mtmd_get_memory_usage + common_get_device_memory_data) is not
+        // carried on this fork yet; MTP itself does not depend on it.
 
         llama_init = common_init_from_params(params_base);
 
@@ -793,16 +818,17 @@ private:
             const bool spec_mtp = std::find(params_base.speculative.types.begin(),
                                             params_base.speculative.types.end(),
                                             COMMON_SPECULATIVE_TYPE_DRAFT_MTP) != params_base.speculative.types.end();
+
             if (spec_mtp) {
                 cparams.ctx_type = LLAMA_CONTEXT_TYPE_MTP;
             }
 
             // note: for small models maybe we can set this to the maximum possible draft from all speculative types
             //       the extra memory for small models is likely negligible?
-            cparams.n_rs_seq = 0;
-            ctx_dft.reset(llama_init_from_model(model_dft.get(), cparams));
+            cparams.n_rs_seq  = 0;
+            cparams.ctx_other = ctx_tgt;
 
-            ctx_dft_seq_rm_type = common_context_can_seq_rm(ctx_dft.get());
+            ctx_dft.reset(llama_init_from_model(model_dft.get(), cparams));
 
             params_base.speculative.draft.ctx_tgt = ctx_tgt;
             params_base.speculative.draft.ctx_dft = ctx_dft.get();
@@ -812,16 +838,18 @@ private:
                     params_base.model.path.c_str());
 
             auto cparams_mtp = common_context_params_to_llama(params_base);
-            cparams_mtp.ctx_type = LLAMA_CONTEXT_TYPE_MTP;
-            cparams_mtp.n_rs_seq = 0;
+            cparams_mtp.ctx_type      = LLAMA_CONTEXT_TYPE_MTP;
+            cparams_mtp.type_k        = params_base.speculative.draft.cache_type_k;
+            cparams_mtp.type_v        = params_base.speculative.draft.cache_type_v;
+            cparams_mtp.n_rs_seq      = 0;
+            cparams_mtp.n_outputs_max = params_base.n_parallel;
+            cparams_mtp.ctx_other     = ctx_tgt;
 
             ctx_dft.reset(llama_init_from_model(model_tgt, cparams_mtp));
             if (ctx_dft == nullptr) {
                 SRV_ERR("%s", "failed to create MTP context\n");
                 return false;
             }
-
-            ctx_dft_seq_rm_type = common_context_can_seq_rm(ctx_dft.get());
 
             params_base.speculative.draft.ctx_tgt = ctx_tgt;
             params_base.speculative.draft.ctx_dft = ctx_dft.get();
@@ -918,6 +946,10 @@ private:
             } catch (const std::exception & e) {
                 SRV_ERR("failed to initialize speculative decoding context: %s\n", e.what());
             }
+        }
+
+        if (ctx_dft) {
+            ctx_dft_seq_rm_type = common_context_can_seq_rm(ctx_dft.get());
         }
 
         if (spec) {
@@ -2856,10 +2888,11 @@ private:
                             continue;
                         }
 
-                        if (ctx_dft) {
+                        if (ctx_dft && llama_get_ctx_other(ctx_dft.get()) != ctx_tgt) {
                             // TODO: in the future, figure out how to infuse target embeddings to the images
                             //       for now, we skip this for simplicity
                             //       maybe we simply need to call `common_speculative_process()` on the mtmd batches in the `process_chunk` above?
+                            //       [TAG_MTMD_DRAFT_PROCESSING]
                             res = input_tokens.process_chunk(ctx_dft.get(), mctx, slot.prompt.n_tokens(), slot.prompt.tokens.pos_next(), slot.id, n_tokens_out);
                             if (res != 0) {
                                 GGML_ABORT("failed to process multi-modal data on draft context\n");
@@ -2893,6 +2926,9 @@ private:
                             break;
                         }
 
+                        // embedding requires all tokens in the batch to be output;
+                        // MTP also wants logits at every prompt position so the
+                        // streaming hook can mirror t_h_nextn into ctx_dft.
                         common_batch_add(batch,
                             cur_tok,
                             slot.prompt.tokens.pos_next(),

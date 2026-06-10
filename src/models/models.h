@@ -66,9 +66,6 @@ struct llm_build_delta_net_base : public llm_graph_context {
                 ggml_tensor * s,
                         int   il);
 
-    // true when speculative rollback is enabled and the batch fits in the rs cache
-    bool keep_rs() const;
-
     // read conv state from cache, concat with qkv_mixed, write back (single slot or per-token)
     // qkv_mixed: (qkv_dim, n_seq_tokens, n_seqs); returns conv_input: (kernel_size + n_seq_tokens - 1, channels, n_seqs)
     ggml_tensor * build_conv_state(
@@ -794,6 +791,19 @@ struct llama_model_gemma4 : public llama_model_base {
         // TODO: refactor in common "per-layer" functionality [TAG_PER_LAYER]
         ggml_tensor * build_inp_per_layer();
         ggml_tensor * project_per_layer_inputs(ggml_tensor * inp_batch, ggml_tensor * inp_per_layer);
+    };
+
+    std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
+};
+
+
+struct llama_model_gemma4_assistant : public llama_model_base {
+    llama_model_gemma4_assistant(const struct llama_model_params & params) : llama_model_base(params) {}
+    void load_arch_hparams(llama_model_loader & ml) override;
+    void load_arch_tensors(llama_model_loader & ml) override;
+
+    struct graph : public llm_graph_context {
+        graph(const llama_model & model, const llm_graph_params & params);
     };
 
     std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
