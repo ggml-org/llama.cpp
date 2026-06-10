@@ -922,6 +922,16 @@ static bool is_op_unsupported_case(const ggml_tensor * op) {
         }
         break;
     }
+    case GGML_OP_ADD_ID: {
+        // Keep support aligned with the CPU backend implementation, which only handles f32 inputs/output and i32 ids.
+        if (op->type != GGML_TYPE_F32 ||
+            op->src[0]->type != GGML_TYPE_F32 ||
+            op->src[1]->type != GGML_TYPE_F32 ||
+            op->src[2]->type != GGML_TYPE_I32) {
+            return true;
+        }
+        break;
+    }
     case GGML_OP_DIV: {
         bool requires_broadcast = false;
         for (int i = 0; i < 4; i++) {
