@@ -3,6 +3,8 @@ import {
 	defineConfig,
 	minimal2023Preset
 } from '@vite-pwa/assets-generator/config';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { THEME_COLORS, PWA_GENERATOR_DEVICES, PWA_ASSET_GENERATOR } from './src/lib/constants/pwa';
 import { SplashOrientation } from './src/lib/enums/splash.enums';
 
@@ -24,8 +26,6 @@ export default defineConfig({
 			},
 			darkImageResolver: async (imageName: string) => {
 				if (imageName.endsWith('favicon.svg')) {
-					const { resolve } = await import('node:path');
-					const { readFileSync } = await import('node:fs');
 					return readFileSync(resolve('static/favicon-dark.svg'));
 				}
 			},
