@@ -4,8 +4,10 @@ import { MimeTypeImage } from '$lib/enums';
 // we lazily load this decoder from a CDN when needed, and cache it for future conversions
 const HEIC_TO_CDN_URL = 'https://cdn.jsdelivr.net/npm/heic-to@1.5.2/dist/heic-to.js';
 
+const HEIC_JPEG_QUALITY = 0.85;
+
 interface HeicToModule {
-	heicTo(args: { blob: Blob; type: string }): Promise<Blob>;
+	heicTo(args: { blob: Blob; type: string; quality?: number }): Promise<Blob>;
 }
 
 let modulePromise: Promise<HeicToModule> | null = null;
@@ -23,19 +25,23 @@ function getHeicTo(): Promise<HeicToModule> {
 }
 
 /**
- * Convert a HEIC/HEIF file to a PNG data URL
+ * Convert a HEIC/HEIF file to a compressed JPEG data URL
  * @param file - The HEIC/HEIF file to convert
- * @returns Promise resolving to PNG data URL
+ * @returns Promise resolving to JPEG data URL
  */
-export async function heicFileToPngDataURL(file: File | Blob): Promise<string> {
+export async function heicFileToJpegDataURL(file: File | Blob): Promise<string> {
 	const { heicTo } = await getHeicTo();
-	const pngBlob = await heicTo({ blob: file, type: MimeTypeImage.PNG });
+	const jpegBlob = await heicTo({
+		blob: file,
+		type: MimeTypeImage.JPEG,
+		quality: HEIC_JPEG_QUALITY
+	});
 
 	return new Promise((resolve, reject) => {
 		const reader = new FileReader();
 		reader.onload = () => resolve(reader.result as string);
 		reader.onerror = () => reject(reader.error);
-		reader.readAsDataURL(pngBlob);
+		reader.readAsDataURL(jpegBlob);
 	});
 }
 
