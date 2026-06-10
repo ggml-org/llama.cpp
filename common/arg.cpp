@@ -3145,6 +3145,14 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_MODELS_AUTOLOAD"));
     add_opt(common_arg(
+        {"--models-preset-only"},
+        {"--no-models-preset-only"},
+        string_format("for router server, serve only models from --models-preset, ignoring cached and --models-dir models (default: %s)", params.models_preset_only ? "enabled" : "disabled"),
+        [](common_params & params, bool value) {
+            params.models_preset_only = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_MODELS_PRESET_ONLY"));
+    add_opt(common_arg(
         {"--jinja"},
         {"--no-jinja"},
         string_format("whether to use jinja template engine for chat (default: %s)", params.use_jinja ? "enabled" : "disabled"),

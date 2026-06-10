@@ -219,6 +219,7 @@ For the full list of features, please refer to [server's changelog](https://gith
 | `--models-preset PATH` | path to INI file containing model presets for the router server (default: disabled)<br/>(env: LLAMA_ARG_MODELS_PRESET) |
 | `--models-max N` | for router server, maximum number of models to load simultaneously (default: 4, 0 = unlimited)<br/>(env: LLAMA_ARG_MODELS_MAX) |
 | `--models-autoload, --no-models-autoload` | for router server, whether to automatically load models (default: enabled)<br/>(env: LLAMA_ARG_MODELS_AUTOLOAD) |
+| `--models-preset-only, --no-models-preset-only` | for router server, serve only models from `--models-preset`, ignoring cached and `--models-dir` models (default: disabled)<br/>(env: LLAMA_ARG_MODELS_PRESET_ONLY) |
 | `--jinja, --no-jinja` | whether to use jinja template engine for chat (default: enabled)<br/>(env: LLAMA_ARG_JINJA) |
 | `--reasoning-format FORMAT` | controls whether thought tags are allowed and/or extracted from the response, and in which format they're returned; one of:<br/>- none: leaves thoughts unparsed in `message.content`<br/>- deepseek: puts thoughts in `message.reasoning_content`<br/>- deepseek-legacy: keeps `<think>` tags in `message.content` while also populating `message.reasoning_content`<br/>(default: auto)<br/>(env: LLAMA_ARG_THINK) |
 | `-rea, --reasoning [on\|off\|auto]` | Use reasoning/thinking in the chat ('on', 'off', or 'auto', default: 'auto' (detect from template))<br/>(env: LLAMA_ARG_REASONING) |
@@ -1576,6 +1577,8 @@ There are 3 possible sources for model files:
 1. Cached models (controlled by the `LLAMA_CACHE` environment variable)
 2. Custom model directory (set via the `--models-dir` argument)
 3. Custom preset (set via the `--models-preset` argument)
+
+To serve only the models declared in `--models-preset` and ignore sources 1 and 2, pass `--models-preset-only`. This is useful when the cache contains many models that should not be exposed by the router.
 
 By default, the router looks for models in the cache. You can add Hugging Face models to the cache with:
 

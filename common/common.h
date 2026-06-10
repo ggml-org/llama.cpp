@@ -645,6 +645,7 @@ struct common_params {
     std::string models_preset = ""; // directory containing model presets for the router server
     int models_max = 4;             // maximum number of models to load simultaneously
     bool models_autoload = true;    // automatically load models when requested via the router server
+    bool models_preset_only = false; // serve only --models-preset entries (skip cache and --models-dir)
 
     bool log_json = false;
 
