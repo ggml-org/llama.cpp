@@ -5,6 +5,7 @@ import math
 
 from typing import Callable, Iterable, TYPE_CHECKING
 
+import numpy as np
 import torch
 
 if TYPE_CHECKING:
@@ -65,6 +66,7 @@ class LlamaModel(TextModel):
 
             if "text_config" in target_config:
                 target_config = {**target_config, **target_config["text_config"]}
+            self.target_vocab_size = target_config["vocab_size"]
 
             # extract_layers: derived from target model layer count (low/mid/high)
             target_num_layers = target_config["num_hidden_layers"]
@@ -316,11 +318,18 @@ class LlamaModel(TextModel):
 
         super().prepare_tensors()
 
-        # eagle3: write d2t as int64 directly (not converted to F32)
+        # eagle3: write d2t as absolute target token ids
         if getattr(self, 'is_eagle3', False) and hasattr(self, '_eagle3_int_tensors'):
             for name, data_torch in self._eagle3_int_tensors.items():
                 old_dtype = eagle3_original_dtypes.get(name, data_torch.dtype)
-                data = data_torch.to(torch.int64).numpy()
+                data = data_torch.to(torch.int64).cpu().numpy()
+                if name == "d2t":
+                    data = data.reshape(-1)
+                    data = data + np.arange(data.size, dtype=np.int64)
+                    if np.any((data < 0) | (data >= self.target_vocab_size)):
+                        raise ValueError(f"EAGLE-3 d2t target ids out of range for target vocab size {self.target_vocab_size}")
+                    if np.unique(data).size != data.size:
+                        raise ValueError("EAGLE-3 d2t contains duplicate target ids")
                 data_qtype = gguf.GGMLQuantizationType.I64
 
                 shape_str = f"{{{', '.join(str(n) for n in reversed(data.shape))}}}"

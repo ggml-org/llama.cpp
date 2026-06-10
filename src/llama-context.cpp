@@ -1893,41 +1893,7 @@ int llama_context::decode(const llama_batch & batch_inp) {
             if (n_outputs) {
                 GGML_ASSERT( n_outputs_prev + n_outputs <= n_outputs_all);
                 GGML_ASSERT((n_outputs_prev + n_outputs)*n_vocab <= (int64_t) logits.size);
-
-                // eagle3: Map draft vocab to target vocab
-                if (model.arch == LLM_ARCH_EAGLE3 && model.d2t) {
-                    static thread_local std::vector<int64_t> eagle3_d2t_map;
-                    static thread_local std::vector<float>   eagle3_draft_logits;
-
-                    const int64_t draft_vocab_size = t_logits->ne[0];
-
-                    if (eagle3_d2t_map.empty()) {
-                        eagle3_d2t_map.resize(model.d2t->ne[0]);
-                        ggml_backend_tensor_get(model.d2t, eagle3_d2t_map.data(), 0,
-                                                eagle3_d2t_map.size() * sizeof(int64_t));
-                    }
-
-                    // remap every output row (one per sequence) from draft vocab to target vocab.
-                    eagle3_draft_logits.resize((size_t) n_outputs * draft_vocab_size);
-                    ggml_backend_tensor_get_async(backend_res, t_logits, eagle3_draft_logits.data(),
-                                                  0, (size_t) n_outputs * draft_vocab_size * sizeof(float));
-                    synchronize();
-
-                    for (uint32_t r = 0; r < n_outputs; r++) {
-                        float       * row_out = logits_out + (size_t) r * n_vocab;
-                        const float * row_in  = eagle3_draft_logits.data() + (size_t) r * draft_vocab_size;
-
-                        std::fill(row_out, row_out + n_vocab, -std::numeric_limits<float>::infinity());
-
-                        for (int64_t j = 0; j < draft_vocab_size; j++) {
-                            const int64_t target_id = j + eagle3_d2t_map[j];
-                            GGML_ASSERT(target_id >= 0 && target_id < n_vocab);
-                            row_out[target_id] = row_in[j];
-                        }
-                    }
-                } else {
-                    ggml_backend_tensor_get_async(backend_res, t_logits, logits_out, 0, n_outputs*n_vocab*sizeof(float));
-                }
+                ggml_backend_tensor_get_async(backend_res, t_logits, logits_out, 0, n_outputs*n_vocab*sizeof(float));
             }
         }
 

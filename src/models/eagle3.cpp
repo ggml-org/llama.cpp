@@ -299,6 +299,21 @@ llama_model_eagle3::graph<false>::graph(const llama_model & model, const llm_gra
     // lm_head - projects to draft vocabulary
     cur = build_lora_mm(model.output, cur);
 
+    if (model.d2t) {
+        const int64_t n_draft_vocab = cur->ne[0];
+        const int64_t n_outputs     = cur->ne[1];
+        const int64_t n_vocab       = (int64_t) model.vocab.n_tokens();
+
+        GGML_ASSERT(model.d2t->type == GGML_TYPE_I64);
+        GGML_ASSERT(model.d2t->ne[0] == n_draft_vocab);
+
+        ggml_tensor * logits = ggml_fill(ctx0, ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, 1, n_vocab, n_outputs), -INFINITY);
+        cur = ggml_set_rows(ctx0, logits,
+                ggml_reshape_3d(ctx0, cur,       1,             n_draft_vocab, n_outputs),
+                ggml_reshape_3d(ctx0, model.d2t, n_draft_vocab, 1,             1));
+        cur = ggml_reshape_2d(ctx0, cur, n_vocab, n_outputs);
+    }
+
     cb(cur, "result_output", -1);
     res->t_logits = cur;
 
