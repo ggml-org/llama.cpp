@@ -123,7 +123,7 @@ static bool is_pow2(uint32_t x) { return x > 1 && (x & (x-1)) == 0; }
 #define VK_VENDOR_ID_NVIDIA 0x10de
 #define VK_VENDOR_ID_QUALCOMM 0x5143
 
-#define VK_DEVICE_ID_MI50 0x66a1
+#define VK_DRIVER_VERSION_MI50 VK_MAKE_VERSION(26, 0, 3) // tested with driver 26.0.3 on mi50
 
 #define VK_DEVICE_DESCRIPTOR_POOL_SIZE 256
 
@@ -5590,7 +5590,7 @@ static vk_device ggml_vk_get_device(size_t idx) {
         }
 
         // Enable subgroup operations on AMD GCN 5.0/5.1 GPUs
-        device->subgroups_gcn_enabled = (device->vendor_id == VK_VENDOR_ID_AMD && device->properties.vendorID == VK_DEVICE_ID_MI50);
+        device->subgroups_gcn_enabled = (device->vendor_id == VK_VENDOR_ID_AMD && device->properties.driverVersion == VK_DRIVER_VERSION_MI50);
         if (device->subgroups_gcn_enabled) {
             GGML_LOG_DEBUG("ggml_vulkan: subgroup operations enabled on AMD GCN GPU: %s\n", device->properties.deviceName.data());
         }
