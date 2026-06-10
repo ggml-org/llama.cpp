@@ -329,7 +329,7 @@ llama_model_cohere2_moe::graph_mtp::graph_mtp(const llama_model & model, const l
 
     ggml_tensor * inp_pos     = build_inp_pos();
     ggml_tensor * inp_out_ids = build_inp_out_ids();
-    auto * inp_attn = build_attn_inp_kv();
+    auto * inp_attn = build_attn_inp_kv_iswa();
 
     ggml_tensor * h_norm = build_norm(h_embd, layer.nextn.hnorm, nullptr, LLM_NORM_RMS, il);
     cb(h_norm, "mtp_hnorm", il);
