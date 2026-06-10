@@ -864,8 +864,6 @@ static void mul_mat_vec_q_switch_ncols_dst(
     const int warp_size = ggml_cuda_info().devices[device].warp_size;
     const mmvq_parameter_table_id table_id  = get_device_table_id(cc);
 
-    const bool has_fusion = fusion.gate != nullptr || fusion.x_bias != nullptr || fusion.gate_bias != nullptr ||
-                            fusion.x_scale != nullptr || fusion.gate_scale != nullptr;
     const bool has_ids = ids != nullptr;
 
     const auto should_use_small_k = [&](int c_ncols_dst) {
@@ -1004,8 +1002,6 @@ static void mul_mat_vec_q_switch_ncols_dst(
             GGML_ABORT("fatal error");
             break;
     }
-
-    GGML_UNUSED(has_fusion);
 }
 static void mul_mat_vec_q_switch_type(
         const void * vx, const ggml_type type_x, const void * vy, const int32_t * ids, const ggml_cuda_mm_fusion_args_device fusion, float * dst,
@@ -1185,6 +1181,8 @@ void ggml_cuda_mul_mat_vec_q(
     if (fusion) {
         GGML_ASSERT( !ids || dst->ne[2] == 1);
         GGML_ASSERT(  ids || dst->ne[1] == 1);
+        // Scale fusion is only allowed for NVFP4 currently as the cost of checking this at run-time in the prologue is
+        // non-negligible for some models such as gpt-oss-20b
         GGML_ASSERT((fusion->x_scale == nullptr && fusion->gate_scale == nullptr) || src0->type == GGML_TYPE_NVFP4);
 
         if (fusion->x_bias) {
