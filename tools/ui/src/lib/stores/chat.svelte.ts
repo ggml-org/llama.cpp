@@ -652,6 +652,10 @@ class ChatStore {
 
 		// Mutable state for the current message being streamed
 		let currentMessageId = assistantMessage.id;
+		// tail of this stream's message chain; parent for new tool result/assistant
+		// messages. Not derived from activeMessages, which tracks whichever conversation
+		// the user is currently viewing (and is empty on the new-chat route)
+		let lastMessageId = assistantMessage.id;
 		let streamedContent = '';
 		let streamedReasoningContent = '';
 		let resolvedModel: string | null = null;
@@ -799,8 +803,9 @@ class ChatStore {
 						children: [],
 						extra: extras
 					},
-					currentMessageId
+					lastMessageId
 				);
+				lastMessageId = msg.id;
 				conversationsStore.addMessageToActive(msg, convId);
 				await conversationsStore.updateCurrentNode(msg.id, convId);
 				return msg;
@@ -810,8 +815,6 @@ class ChatStore {
 				streamedContent = '';
 				streamedReasoningContent = '';
 
-				const lastMsg =
-					conversationsStore.activeMessages[conversationsStore.activeMessages.length - 1];
 				const msg = await DatabaseService.createMessageBranch(
 					{
 						convId,
@@ -823,8 +826,9 @@ class ChatStore {
 						children: [],
 						model: resolvedModel
 					},
-					lastMsg.id
+					lastMessageId
 				);
+				lastMessageId = msg.id;
 				conversationsStore.addMessageToActive(msg, convId);
 				currentMessageId = msg.id;
 				return msg;
