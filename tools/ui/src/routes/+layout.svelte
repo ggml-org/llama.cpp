@@ -34,7 +34,7 @@
 	import { conversations } from '$lib/stores/conversations.svelte';
 	import { isMobile } from '$lib/stores/viewport.svelte';
 	import { theme } from '$lib/stores/theme.svelte';
-	import { versionStore } from '$lib/stores/version.svelte';
+	import { buildInfoStore } from '$lib/stores/build-info.svelte';
 	import { SETTINGS_KEYS, BUILD_VERSION_LOCALSTORAGE_KEY } from '$lib/constants';
 
 	let { children } = $props();
@@ -304,7 +304,7 @@
 	// The uncached URL always stays fresh; version.json is not cached by the SW.
 	// This comparison detects server upgrades for non-PWA users.
 	$effect(() => {
-		const currentVersion = versionStore.value;
+		const currentVersion = buildInfoStore.value;
 		if (!currentVersion) return;
 
 		try {
@@ -335,8 +335,8 @@
 
 <!-- PWA update prompt + version -->
 <div class="fixed right-4 bottom-4 z-[9999] flex flex-col items-end gap-1">
-	{#if showBuildVersion && versionStore.value}
-		<span class="text-[10px] tabular-nums text-muted-foreground">{versionStore.value}</span>
+	{#if showBuildVersion && buildInfoStore.value}
+		<span class="text-[10px] tabular-nums text-muted-foreground">{buildInfoStore.value}</span>
 	{/if}
 	<PwaRefreshAlert
 		needRefresh={$needRefresh || needRefreshByStorage}

@@ -4,7 +4,7 @@
 	"version": "1.0.0",
 	"type": "module",
 	"scripts": {
-		"build": "npm run build-pwa-assets && vite build",
+		"build": "vite build",
 		"build-pwa-assets": "npx @vite-pwa/assets-generator --root . --config pwa-assets.config.ts && npx @vite-pwa/assets-generator --root . --config pwa-assets-dark.config.ts && node scripts/make-icons-circular.js",
 		"dev": "bash scripts/dev.sh",
 		"preview": "vite preview",
@@ -24,7 +24,7 @@
 		"test:ui": "vitest --project=ui",
 		"storybook": "storybook dev -p 6006",
 		"build-storybook": "storybook build",
-		"cleanup": "rm -rf .svelte-kit build node_modules test-results dist dev-dist debug-storybook.log static/pwa-*.png static/maskable-icon-*.png static/apple-touch-icon-*.png static/apple-splash-*.png static/favicon.ico"
+		"cleanup": "rm -rf .svelte-kit build node_modules test-results dist dev-dist debug-storybook.log static/pwa-*.png static/maskable-icon-*.png static/apple-touch-icon-*.png static/apple-splash-*.png static/favicon*.ico"
 	},
 	"devDependencies": {
 		"@chromatic-com/storybook": "5.0.0",

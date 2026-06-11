@@ -231,8 +231,6 @@ bool server_http_context::init(const common_params & params) {
             "/v1/models",
             "/",
             "/index.html",
-            "/bundle.js",
-            "/bundle.css",
             // PWA assets
             "/favicon.ico",
             "/favicon-dark.ico",
@@ -248,7 +246,9 @@ bool server_http_context::init(const common_params & params) {
             "/manifest.webmanifest",
             "/sw.js",
             "/version.json",
-            "/workbox.js"
+            "/workbox-<hash>.js",
+            "/_app/version.json",
+            "/build.json"
         };
         // Add all splash screen endpoints
         auto splash = generate_splash_endpoints();
@@ -266,6 +266,11 @@ bool server_http_context::init(const common_params & params) {
 
         // If path is public or static file, skip validation
         if (get_public_endpoints.find(req.path) != get_public_endpoints.end()) {
+            return true;
+        }
+        // Static assets (_app/ files, workbox runtime). These are embedded at build time
+        // so no API key is needed — browsers fetch them directly.
+        if (req.path.find("/_app/") == 0 || req.path.find("/workbox-") == 0) {
             return true;
         }
 
@@ -391,8 +396,8 @@ bool server_http_context::init(const common_params & params) {
 #if defined(LLAMA_UI_HAS_ASSETS)
             // Embedded assets are immutable — cache aggressively for PWA/sw offline support.
             // PWA runtime files (sw.js, manifest, version.json) use no-cache for revalidation.
-            // sw.js includes an injected build comment so content differs between builds,
-            // triggering the browser to detect a new SW and fire needRefresh.
+            // Bundle files use Vite content hashes (bundle.<hash>.js/css) so each build
+            // produces a different filename — browsers naturally get a fresh copy on upgrade.
             auto serve_asset_cached = [](const std::string & name, const char * mime, bool with_isolation_headers) {
                 return [name, mime, with_isolation_headers](const httplib::Request & req, httplib::Response & res) {
                     const llama_ui_asset * a = llama_ui_find_asset(name.c_str());
@@ -435,9 +440,47 @@ bool server_http_context::init(const common_params & params) {
                 };
             };
 
-            srv->Get(params.api_prefix + "/",                               serve_asset_nocache("index.html",                   "text/html; charset=utf-8",                 true));
-            srv->Get(params.api_prefix + "/bundle.js",                      serve_asset_cached("bundle.js",                    "application/javascript; charset=utf-8",    false));
-            srv->Get(params.api_prefix + "/bundle.css",                     serve_asset_cached("bundle.css",                   "text/css; charset=utf-8",                  false));
+            // Bundle files in _app/immutable/ — SvelteKit outputs them here and index.html
+            // and sw.js reference them via these paths (vanilla build, no plugin).
+            auto serve_bundle = [serve_asset_cached](const httplib::Request & req, httplib::Response & res) {
+                std::string path = req.path;
+                std::string name;
+                const char * mime;
+                if (path.rfind("/_app/immutable/bundle.", 0) == 0 && path.size() > 22) {
+                    name = path.substr(1);  // strip leading /
+                    mime = "application/javascript; charset=utf-8";
+                } else if (path.rfind("/_app/immutable/assets/bundle.", 0) == 0 && path.size() > 30) {
+                    name = path.substr(1);  // strip leading /
+                    mime = "text/css; charset=utf-8";
+                } else {
+                    res.status = 404;
+                    return false;
+                }
+                return serve_asset_cached(name, mime, false)(req, res);
+            };
+
+            // _app/ paths — vanilla SvelteKit output, index.html and sw.js reference
+            // bundles and version.json here directly.
+            srv->Get(params.api_prefix + R"(/_app/immutable/bundle\.[^/]+\.js)",  serve_bundle);
+            srv->Get(params.api_prefix + R"(/_app/immutable/assets/bundle\.[^/]+\.css)", serve_bundle);
+            srv->Get(params.api_prefix + "/_app/version.json",                    serve_asset_cached("_app/version.json", "application/json; charset=utf-8", false));
+
+            auto serve_workbox = [serve_asset_cached](const httplib::Request & req, httplib::Response & res) {
+                std::string name = req.path.substr(1);
+                if (name.rfind("workbox-", 0) == 0 && name.size() > 10) {
+                    return serve_asset_cached(name, "application/javascript; charset=utf-8", false)(req, res);
+                }
+                res.status = 404;
+                return false;
+            };
+            srv->Get(params.api_prefix + R"(/workbox-[^/]+\.js)",               serve_workbox);
+            srv->Get(params.api_prefix + R"(/sw\.js)",                          serve_asset_cached("sw.js",               "application/javascript; charset=utf-8", false));
+            srv->Get(params.api_prefix + "/manifest.webmanifest",                serve_asset_cached("manifest.webmanifest", "application/manifest+json; charset=utf-8", false));
+            srv->Get(params.api_prefix + "/version.json",                        serve_asset_cached("_app/version.json",  "application/json; charset=utf-8",       false));
+            srv->Get(params.api_prefix + "/build.json",                          serve_asset_cached("build.json",         "application/json; charset=utf-8",       false));
+
+            // Finally serve index.html for all other routes (SPA fallback)
+            srv->Get(params.api_prefix + "/",                               serve_asset_cached("index.html",                   "text/html; charset=utf-8",                 true));
             srv->Get(params.api_prefix + "/favicon.ico",                    serve_asset_cached("favicon.ico",                  "image/x-icon",                             false));
             srv->Get(params.api_prefix + "/favicon-dark.ico",                serve_asset_cached("favicon-dark.ico",              "image/x-icon",                             false));
             srv->Get(params.api_prefix + "/favicon.svg",                    serve_asset_cached("favicon.svg",                  "image/svg+xml",                            false));
@@ -496,7 +539,7 @@ bool server_http_context::init(const common_params & params) {
             srv->Get(params.api_prefix + "/manifest.webmanifest",           serve_asset_nocache("manifest.webmanifest",        "application/manifest+json",                false));
             srv->Get(params.api_prefix + "/sw.js",                          serve_asset_nocache("sw.js",                       "application/javascript; charset=utf-8",    false));
             srv->Get(params.api_prefix + "/version.json",                   serve_asset_nocache("version.json",                 "application/json",                         false));
-            srv->Get(params.api_prefix + "/workbox.js",                     serve_asset_cached("workbox.js",                   "application/javascript; charset=utf-8",    false));
+
 #endif
         }
     }

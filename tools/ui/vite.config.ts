@@ -5,9 +5,9 @@ import { dirname, resolve } from 'path';
 import { fileURLToPath } from 'url';
 
 import { defineConfig, searchForWorkspaceRoot } from 'vite';
-import devtoolsJson from 'vite-plugin-devtools-json';
 import { storybookTest } from '@storybook/addon-vitest/vitest-plugin';
-import { llamaCppBuildPlugin } from './scripts/vite-plugin-llama-cpp-build';
+import { splashScreenPlugin } from './scripts/vite-plugin-splash-screen';
+import { buildInfoPlugin } from './scripts/vite-plugin-build-info';
 import { playwright } from '@vitest/browser-playwright';
 import {
 	PWA_MANIFEST,
@@ -106,8 +106,8 @@ export default defineConfig({
 				includeVersionFile: true
 			}
 		}),
-		devtoolsJson(),
-		llamaCppBuildPlugin()
+		splashScreenPlugin(),
+		buildInfoPlugin()
 	],
 
 	test: {
