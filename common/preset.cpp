@@ -401,7 +401,7 @@ common_presets common_preset_context::load_from_models_dir(const std::string & m
             if (string_ends_with(file.name, ".gguf")) {
                 if (file.name.find("mmproj") != std::string::npos) {
                     mmproj_file = file;
-                } else if (file.name.find("mtp-") != std::string::npos) {
+                } else if (file.name.rfind("mtp-", 0) != std::string::npos) {
                     mtp_file = file;
                 } else if (file.name.find("-00001-of-") != std::string::npos) {
                     first_shard_file = file;
