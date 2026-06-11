@@ -514,6 +514,7 @@ void diffusion_generate_entropy_bound(llama_context *             ctx,
     float   prev_temp_inv = 1.0f;
     int     held          = 0;
     bool    finished      = false;
+    bool    device_sample_ok = gpu_sample_reduce;   // latched off if a backend (e.g. Metal) can't device-sample
 
     for (int32_t cur_step = S; cur_step >= 1 && !finished; --cur_step) {
         const int32_t step_idx = S - cur_step;                    // 0-based
@@ -553,7 +554,7 @@ void diffusion_generate_entropy_bound(llama_context *             ctx,
 
         // Stage-1: when on, skip the 268 MB logits D2H + host reductions and sample on the GPU from sc_dev.
         // DG_DEVSAMPLE_CHECK forces both paths so we can diff them; it needs the host logits, so fetch them.
-        const bool gpu_reduce  = dev_sc && gpu_sample_reduce;
+        const bool gpu_reduce  = dev_sc && device_sample_ok;
         const bool want_logits = !gpu_reduce || std::getenv("DG_DEVSAMPLE_CHECK") || std::getenv("DG_SC_CHECK");
         const float * logits = nullptr;                           // canvas rows packed: [C or max_length, n_vocab]
         if (want_logits) {
@@ -638,7 +639,12 @@ void diffusion_generate_entropy_bound(llama_context *             ctx,
             // entropy differ only by the parallel-reduction order, so some sampled tokens may shift near ties.
             if (!llama_diffusion_device_sample(model, u.data(), argmax_canvas.data(), entropy.data(),
                                                denoiser.data(), C, temp_inv)) {
-                LOG_ERR("%s: device sample failed at step %d; falling back to host\n", __func__, step_idx);
+                // Some backends (e.g. Metal) cannot run the on-device sampler. Warn once and use the host
+                // reduction for the rest of the run instead of retrying (and logging) on every step.
+                if (device_sample_ok) {
+                    LOG_WRN("%s: on-device sampling unsupported on this backend; using host sampling\n", __func__);
+                    device_sample_ok = false;
+                }
                 if (!logits) { logits = llama_get_logits(ctx); }
                 run_host_worker();
             } else if (std::getenv("DG_DEVSAMPLE_CHECK")) {
