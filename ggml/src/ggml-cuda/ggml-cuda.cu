@@ -4131,9 +4131,9 @@ static int ggml_cuda_try_fuse_mm_glu(ggml_backend_cuda_context * cuda_ctx, ggml_
     return 0;
 }
 
-static int ggml_cuda_try_fuse_mm_scale(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph * cgraph, int i) {
+static int ggml_cuda_try_fuse_mm_lane(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph * cgraph, int i) {
     ggml_cuda_mm_lane lane;
-    if (!ggml_cuda_parse_mm_lane(cgraph, i, lane) || lane.scale == nullptr) {
+    if (!ggml_cuda_parse_mm_lane(cgraph, i, lane) || (lane.scale == nullptr && lane.bias == nullptr)) {
         return 0;
     }
 
@@ -4145,51 +4145,36 @@ static int ggml_cuda_try_fuse_mm_scale(ggml_backend_cuda_context * cuda_ctx, ggm
         return 0;
     }
 
-    if (!ggml_cuda_can_fuse_mm_lane_scale(lane.mm)) {
-        return 0;
-    }
-
-    if (!ggml_cuda_should_fuse_mul_mat_vec_q(lane.mm)) {
-        return 0;
-    }
-
     ggml_cuda_mm_fusion_args_host fusion_data{};
     fusion_data.x_bias  = lane.bias;
     fusion_data.x_scale = lane.scale;
 
     const ggml_tensor * ids = lane.mm->op == GGML_OP_MUL_MAT_ID ? lane.mm->src[2] : nullptr;
-    ggml_cuda_mul_mat_vec_q(*cuda_ctx, lane.mm->src[0], lane.mm->src[1], ids, lane.out, &fusion_data);
-    return lane.n_nodes - 1;
-}
 
-static int ggml_cuda_try_fuse_mm_bias(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph * cgraph, int i) {
-    ggml_cuda_mm_lane lane;
-    if (!ggml_cuda_parse_mm_lane(cgraph, i, lane) || lane.bias == nullptr) {
-        return 0;
+    // Lane scale fusion is implemented by MMVQ only because it is limited to NVFP4.
+    // This path owns scale lanes, including scale followed by bias.
+    if (lane.scale != nullptr) {
+        if (!ggml_cuda_can_fuse_mm_lane_scale(lane.mm)) {
+            return 0;
+        }
+
+        if (!ggml_cuda_should_fuse_mul_mat_vec_q(lane.mm)) {
+            return 0;
+        }
+
+        ggml_cuda_mul_mat_vec_q(*cuda_ctx, lane.mm->src[0], lane.mm->src[1], ids, lane.out, &fusion_data);
+        return lane.n_nodes - 1;
     }
 
-    const int bias_idx = i + 1;
-    if (bias_idx >= cgraph->n_nodes || cgraph->nodes[bias_idx] != lane.bias_node) {
-        return 0;
-    }
-
-    const int out_nodes[] = { bias_idx };
-    if (!ggml_cuda_can_fuse_parsed_subgraph(cgraph, i, 2, out_nodes, 1)) {
-        return 0;
-    }
-
-    ggml_cuda_mm_fusion_args_host fusion_data{};
-    fusion_data.x_bias = lane.bias;
-
-    const ggml_tensor * ids = lane.mm->op == GGML_OP_MUL_MAT_ID ? lane.mm->src[2] : nullptr;
+    // Bias-only lanes can use either MMVF or MMVQ.
     if (ggml_cuda_should_fuse_mul_mat_vec_f(lane.mm)) {
-        ggml_cuda_mul_mat_vec_f(*cuda_ctx, lane.mm->src[0], lane.mm->src[1], ids, lane.bias_node, &fusion_data);
-        return 1;
+        ggml_cuda_mul_mat_vec_f(*cuda_ctx, lane.mm->src[0], lane.mm->src[1], ids, lane.out, &fusion_data);
+        return lane.n_nodes - 1;
     }
 
     if (ggml_cuda_should_fuse_mul_mat_vec_q(lane.mm)) {
-        ggml_cuda_mul_mat_vec_q(*cuda_ctx, lane.mm->src[0], lane.mm->src[1], ids, lane.bias_node, &fusion_data);
-        return 1;
+        ggml_cuda_mul_mat_vec_q(*cuda_ctx, lane.mm->src[0], lane.mm->src[1], ids, lane.out, &fusion_data);
+        return lane.n_nodes - 1;
     }
 
     return 0;
@@ -4362,21 +4347,16 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
         }
     }
 
-    // Two-lane MM GLU fusion. Each lane is MUL_MAT[_ID] plus optional bias and optional quantized post-scale.
+    // Two-lane MM GLU fusion. Each lane is MUL_MAT[_ID] + optional scale + optional bias
     int fused_mm_glu_nodes = ggml_cuda_try_fuse_mm_glu(cuda_ctx, cgraph, i);
     if (fused_mm_glu_nodes > 0) {
         return fused_mm_glu_nodes;
     }
 
-    // Single-lane quantized MM post-scale fusion.
-    int fused_scale_nodes = ggml_cuda_try_fuse_mm_scale(cuda_ctx, cgraph, i);
-    if (fused_scale_nodes > 0) {
-        return fused_scale_nodes;
-    }
-
-    int fused_bias_nodes = ggml_cuda_try_fuse_mm_bias(cuda_ctx, cgraph, i);
-    if (fused_bias_nodes > 0) {
-        return fused_bias_nodes;
+    // Single-lane MM fusion. The lane is MUL_MAT[_ID] + optional scale + optional bias.
+    int fused_mm_lane_nodes = ggml_cuda_try_fuse_mm_lane(cuda_ctx, cgraph, i);
+    if (fused_mm_lane_nodes > 0) {
+        return fused_mm_lane_nodes;
     }
 
     if (ggml_cuda_can_fuse(cgraph, i, { GGML_OP_RMS_NORM, GGML_OP_MUL, GGML_OP_ADD }, {})) {
