@@ -766,6 +766,8 @@ int main(int argc, char ** argv) {
     model_params.n_gpu_layers = params.n_gpu_layers >= 0 ? params.n_gpu_layers : 999;
     model_params.devices      = params.devices.data();
     model_params.use_mmap     = params.use_mmap;
+    model_params.use_extra_bufts = !params.no_extra_bufts;
+    model_params.no_host         = params.no_host;
 
     diffusion_server srv;
     srv.model = llama_model_load_from_file(params.model.path.c_str(), model_params);
