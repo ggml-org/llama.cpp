@@ -54,7 +54,7 @@ void llama_model_eagle3::load_arch_tensors(llama_model_loader &) {
 
     // Output layer (uses draft vocab size)
     output_norm = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd}, 0);
-    output      = create_tensor(tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_draft_vocab}, 0);
+    output      = create_tensor(tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_draft_vocab}, TENSOR_NOT_REQUIRED);
 
     // Token embeddings (optional - Llama 3.3 70B EAGLE3 has its own)
     const struct ggml_tensor * tok_embd_meta = ml->get_tensor_meta(tn(LLM_TENSOR_TOKEN_EMBD, "weight").str().c_str());
@@ -295,7 +295,16 @@ llama_model_eagle3::graph<false>::graph(const llama_model & model, const llm_gra
     cb(cur, "result_norm", -1);
 
     // lm_head - projects to draft vocabulary
-    cur = build_lora_mm(model.output, cur);
+    // if the draft has no own output projection, inherit the target model's lm_head
+    auto * output = model.output;
+    if (output == nullptr) {
+        GGML_ASSERT(cparams.ctx_other != nullptr);
+        const auto * model_other = llama_get_model(cparams.ctx_other);
+
+        GGML_ASSERT(model_other->output != nullptr && "EAGLE3 decoder requires an output projection (own or from target model)");
+        output = model_other->output;
+    }
+    cur = build_lora_mm(output, cur);
 
     if (model.d2t) {
         const int64_t n_draft_vocab = cur->ne[0];
