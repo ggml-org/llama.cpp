@@ -59,4 +59,5 @@
 {%- endfor %}
 {%- if add_generation_prompt %}
     {{- '<|im_start|>assistant\n<think>\n' }}
+    {%- if not enable_thinking -%}{{- '</think>' -}}{%- endif -%}
 {%- endif %}

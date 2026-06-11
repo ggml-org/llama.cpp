@@ -2,6 +2,7 @@
 #include <assert.h>
 
 #include "mtmd.h"
+#include "mtmd-helper.h"
 
 int main(void) {
     printf("\n\nTesting libmtmd C API...\n");
@@ -16,6 +17,11 @@ int main(void) {
         fprintf(stderr, "Failed to create input chunks\n");
         return 1;
     }
+
+    // simple test for the helper
+    size_t n_tokens_total = mtmd_helper_get_n_tokens(chunks);
+    printf("Total tokens in chunks: %zu\n", n_tokens_total);
+    assert(n_tokens_total > 0);
 
     size_t n_chunks = mtmd_input_chunks_size(chunks);
     printf("Number of chunks: %zu\n", n_chunks);
@@ -41,8 +47,10 @@ int main(void) {
         } else if (type == MTMD_INPUT_CHUNK_TYPE_IMAGE) {
             const mtmd_image_tokens * image_tokens = mtmd_input_chunk_get_tokens_image(chunk);
             size_t n_tokens = mtmd_image_tokens_get_n_tokens(image_tokens);
-            size_t nx = mtmd_image_tokens_get_nx(image_tokens);
-            size_t ny = mtmd_image_tokens_get_ny(image_tokens);
+            // get position of the last token, which should be (nx - 1, ny - 1)
+            struct mtmd_decoder_pos pos = mtmd_image_tokens_get_decoder_pos(image_tokens, 0, n_tokens - 1);
+            size_t nx = pos.x + 1;
+            size_t ny = pos.y + 1;
             const char * id = mtmd_image_tokens_get_id(image_tokens);
             assert(n_tokens > 0);
             assert(nx > 0);

@@ -5,23 +5,23 @@ on:
 
 jobs:
   linux:
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, Linux, CPU]
     steps:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
-      - name: Install dependencies
-        run: |
-          sudo apt update
-          sudo apt install -y build-essential tcl
-
       - name: Build
         run: |
           PREFIX="$(pwd)"/inst
-          cmake -S . -B build -DCMAKE_PREFIX_PATH="$PREFIX" \
-                -DLLAMA_OPENSSL=OFF -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_TOOLS=OFF \
-                -DLLAMA_BUILD_EXAMPLES=OFF -DCMAKE_BUILD_TYPE=Release
+          cmake -S . -B build \
+                -DCMAKE_PREFIX_PATH="$PREFIX" \
+                -DLLAMA_OPENSSL=OFF \
+                -DLLAMA_BUILD_TESTS=OFF \
+                -DLLAMA_BUILD_TOOLS=OFF \
+                -DLLAMA_BUILD_EXAMPLES=OFF \
+                -DLLAMA_BUILD_APP=OFF \
+                -DCMAKE_BUILD_TYPE=Release
           cmake --build build --config Release
           cmake --install build --prefix "$PREFIX" --config Release
 

@@ -3,6 +3,7 @@
   glibc,
   config,
   stdenv,
+  stdenvNoCC,
   runCommand,
   cmake,
   ninja,
@@ -16,8 +17,11 @@
   rocmPackages,
   vulkan-headers,
   vulkan-loader,
-  curl,
+  openssl,
   shaderc,
+  spirv-headers,
+  nodejs,
+  importNpmLock,
   useBlas ?
     builtins.all (x: !x) [
       useCuda
@@ -41,6 +45,7 @@
   effectiveStdenv ? if useCuda then cudaPackages.backendStdenv else stdenv,
   enableStatic ? effectiveStdenv.hostPlatform.isStatic,
   precompileMetalShaders ? false,
+  useWebUi ? true,
 }:
 
 let
@@ -101,6 +106,7 @@ let
     vulkan-headers
     vulkan-loader
     shaderc
+    spirv-headers
   ];
 in
 
@@ -127,7 +133,31 @@ effectiveStdenv.mkDerivation (finalAttrs: {
     src = lib.cleanSource ../../.;
   };
 
-  postPatch = ''
+  # Builds the webui locally, taking care not to require updating any sha256 hash.
+  webui = stdenvNoCC.mkDerivation {
+    pname = "webui";
+    version = llamaVersion;
+    src = lib.cleanSource ../../tools/ui;
+
+    nativeBuildInputs = [
+      nodejs
+      importNpmLock.linkNodeModulesHook
+    ];
+
+    # no sha256 required when using buildNodeModules
+    npmDeps = importNpmLock.buildNodeModules {
+      npmRoot = ../../tools/ui;
+      inherit nodejs;
+    };
+
+    installPhase = ''
+      LLAMA_UI_OUT_DIR=$out npm run build --offline
+    '';
+  };
+
+  postPatch = lib.optionalString useWebUi ''
+    cp -r ${finalAttrs.webui} tools/ui/dist
+    chmod -R u+w tools/ui/dist
   '';
 
   # With PR#6015 https://github.com/ggml-org/llama.cpp/pull/6015,
@@ -159,11 +189,13 @@ effectiveStdenv.mkDerivation (finalAttrs: {
     ++ optionals useMpi [ mpi ]
     ++ optionals useRocm rocmBuildInputs
     ++ optionals useBlas [ blas ]
-    ++ optionals useVulkan vulkanBuildInputs;
+    ++ optionals useVulkan vulkanBuildInputs
+    ++ [ openssl ];
 
   cmakeFlags =
     [
       (cmakeBool "LLAMA_BUILD_SERVER" true)
+      (cmakeBool "LLAMA_BUILD_WEBUI" useWebUi)
       (cmakeBool "BUILD_SHARED_LIBS" (!enableStatic))
       (cmakeBool "CMAKE_SKIP_BUILD_RPATH" true)
       (cmakeBool "GGML_NATIVE" false)

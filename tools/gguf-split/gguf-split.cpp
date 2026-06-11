@@ -1,11 +1,15 @@
+#include "llama.h"
+
+#include "build-info.h"
+#include "common.h"
+
 #include "ggml.h"
 #include "gguf.h"
-#include "llama.h"
-#include "common.h"
 
 #include <algorithm>
 #include <cinttypes>
 #include <climits>
+#include <clocale>
 #include <cstdio>
 #include <cstdlib>
 #include <stdexcept>
@@ -100,8 +104,8 @@ static void split_params_parse_ex(int argc, const char ** argv, split_params & p
             split_print_usage(argv[0]);
             exit(0);
         } else if (arg == "--version") {
-            fprintf(stderr, "version: %d (%s)\n", LLAMA_BUILD_NUMBER, LLAMA_COMMIT);
-            fprintf(stderr, "built with %s for %s\n", LLAMA_COMPILER, LLAMA_BUILD_TARGET);
+            fprintf(stderr, "version: %d (%s)\n", llama_build_number(), llama_commit());
+            fprintf(stderr, "built with %s for %s\n", llama_compiler(), llama_build_target());
             exit(0);
         } else if (arg == "--dry-run") {
             arg_found = true;
@@ -567,6 +571,8 @@ static void gguf_merge(const split_params & split_params) {
 }
 
 int main(int argc, const char ** argv) {
+    std::setlocale(LC_NUMERIC, "C");
+
     split_params params;
     split_params_parse(argc, argv, params);
 

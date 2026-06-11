@@ -1,10 +1,14 @@
 # mtmd
 
+set(MTMD_VIDEO ON CACHE BOOL "enable video support in mtmd (requires ffmpeg binary in PATH)")
+# TODO: add MTMD_VIDEO_METHOD in the future to select between ffmpeg and other backends
+
 find_package(Threads REQUIRED)
 
 add_library(mtmd
             mtmd.cpp
             mtmd-audio.cpp
+            mtmd-image.cpp
             mtmd.h
             mtmd-helper.cpp
             mtmd-helper.h
@@ -16,7 +20,16 @@ add_library(mtmd
             models/models.h
             models/cogvlm.cpp
             models/conformer.cpp
+            models/dotsocr.cpp
+            models/exaone4_5.cpp
+            models/gemma4a.cpp
+            models/gemma4v.cpp
+            models/gemma4ua.cpp
+            models/gemma4uv.cpp
             models/glm4v.cpp
+            models/granite-speech.cpp
+            models/granite4-vision.cpp
+            models/hunyuanvl.cpp
             models/internvl.cpp
             models/kimivl.cpp
             models/kimik25.cpp
@@ -28,10 +41,16 @@ add_library(mtmd
             models/pixtral.cpp
             models/qwen2vl.cpp
             models/qwen3vl.cpp
+            models/mimovl.cpp
+            models/qwen3a.cpp
+            models/step3vl.cpp
             models/siglip.cpp
             models/whisper-enc.cpp
+            models/deepseekocr.cpp
+            models/deepseekocr2.cpp
             models/mobilenetv5.cpp
             models/youtuvl.cpp
+            models/yasa2.cpp
             )
 
 set_target_properties(mtmd PROPERTIES
@@ -46,6 +65,10 @@ target_include_directories(mtmd PUBLIC  .)
 target_include_directories(mtmd PRIVATE ../..)
 target_include_directories(mtmd PRIVATE ../../vendor)
 target_compile_features   (mtmd PRIVATE cxx_std_17)
+
+if (MTMD_VIDEO)
+    target_compile_definitions(mtmd PRIVATE MTMD_VIDEO)
+endif()
 
 if (BUILD_SHARED_LIBS)
     set_target_properties     (mtmd PROPERTIES POSITION_INDEPENDENT_CODE ON)
@@ -62,6 +85,10 @@ set_target_properties(mtmd
     PROPERTIES
     PUBLIC_HEADER "${MTMD_PUBLIC_HEADERS}")
 
+set_target_properties(mtmd
+    PROPERTIES
+    PRIVATE_HEADER debug/mtmd-debug.h)
+
 install(TARGETS mtmd LIBRARY PUBLIC_HEADER)
 
 if (NOT MSVC)
@@ -69,17 +96,22 @@ if (NOT MSVC)
     target_compile_options(mtmd PRIVATE -Wno-cast-qual)
 endif()
 
+if (ANDROID)
+    # miniaudio.h defines ma_android_sdk_version() without a prior prototype
+    target_compile_options(mtmd PRIVATE -Wno-missing-prototypes)
+endif()
+
 if (TARGET BUILD_INFO)
     add_dependencies(mtmd        BUILD_INFO)
     add_dependencies(mtmd-helper BUILD_INFO)
 endif()
 
-# if mtmd is linked against common, we throw an error
+# if mtmd is linked against llama-common, we throw an error
 if (TARGET mtmd)
     get_target_property(libs mtmd LINK_LIBRARIES)
-    if (libs AND "common" IN_LIST libs)
+    if (libs AND "llama-common" IN_LIST libs)
         message(FATAL_ERROR "mtmd is designed to be a public library.\n"
-                            "It must not link against common")
+                            "It must not link against llama-common")
     endif()
 endif()
 
@@ -94,5 +126,11 @@ set_target_properties  (${TARGET} PROPERTIES OUTPUT_NAME llama-mtmd-cli)
 if(LLAMA_TOOLS_INSTALL)
     install(TARGETS ${TARGET} RUNTIME)
 endif()
-target_link_libraries  (${TARGET} PRIVATE common mtmd Threads::Threads)
+target_link_libraries  (${TARGET} PRIVATE llama-common mtmd Threads::Threads)
 target_compile_features(${TARGET} PRIVATE cxx_std_17)
+
+# mtmd-debug tool
+add_executable(llama-mtmd-debug debug/mtmd-debug.cpp)
+set_target_properties(llama-mtmd-debug PROPERTIES OUTPUT_NAME llama-mtmd-debug)
+target_link_libraries(llama-mtmd-debug PRIVATE llama-common mtmd Threads::Threads)
+target_compile_features(llama-mtmd-debug PRIVATE cxx_std_17)

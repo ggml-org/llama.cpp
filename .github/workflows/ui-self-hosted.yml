@@ -1,0 +1,118 @@
+name: UI (self-hosted)
+
+# these are the same as ui.yml, but with self-hosted runners
+# the runners come with pre-installed Playwright browsers version: 1.56.1
+# the jobs are much lighter because they don't need to install node and playwright browsers
+
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: 'Commit SHA1 to build'
+        required: false
+        type: string
+  push:
+    branches:
+      - master
+    paths: [
+      '.github/workflows/ui-self-hosted.yml',
+      '.github/workflows/ui-build-self-hosted.yml',
+      'tools/ui/**.*',
+      'tools/server/tests/**.*'
+    ]
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths: [
+      '.github/workflows/ui-self-hosted.yml',
+      '.github/workflows/ui-build-self-hosted.yml',
+      'tools/ui/**.*',
+      'tools/server/tests/**.*'
+    ]
+
+env:
+  LLAMA_ARG_LOG_COLORS: 1
+  LLAMA_ARG_LOG_PREFIX: 1
+  LLAMA_ARG_LOG_TIMESTAMPS: 1
+  LLAMA_ARG_LOG_VERBOSITY: 10
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  ui-build:
+    name: Build static output
+    uses: ./.github/workflows/ui-build-self-hosted.yml
+
+  ui-checks:
+    name: Checks
+    needs: ui-build
+    runs-on: [self-hosted, PLAYWRIGHT]
+    continue-on-error: true
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.inputs.sha || github.event.pull_request.head.sha || github.sha || github.head_ref || github.ref_name }}
+
+      - name: Install dependencies
+        id: setup
+        run: npm ci
+        working-directory: tools/ui
+
+      - name: Run type checking
+        if: ${{ always() && steps.setup.conclusion == 'success' }}
+        run: npm run check
+        working-directory: tools/ui
+
+      - name: Run linting
+        if: ${{ always() && steps.setup.conclusion == 'success' }}
+        run: npm run lint
+        working-directory: tools/ui
+
+      - name: Run Client tests
+        if: ${{ always() }}
+        run: npm run test:client
+        working-directory: tools/ui
+
+      - name: Run Unit tests
+        if: ${{ always() }}
+        run: npm run test:unit
+        working-directory: tools/ui
+
+  e2e-tests:
+    name: E2E Tests
+    needs: ui-build
+    runs-on: [self-hosted, PLAYWRIGHT]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.inputs.sha || github.event.pull_request.head.sha || github.sha || github.head_ref || github.ref_name }}
+
+      - name: Install dependencies
+        id: setup
+        run: npm ci
+        working-directory: tools/ui
+
+      - name: Build application
+        if: ${{ always() && steps.setup.conclusion == 'success' }}
+        run: npm run build
+        working-directory: tools/ui
+
+      - name: Build Storybook
+        if: ${{ always() }}
+        run: npm run build-storybook
+        working-directory: tools/ui
+
+      - name: Run UI tests
+        if: ${{ always() }}
+        run: npm run test:ui -- --testTimeout=60000
+        working-directory: tools/ui
+
+      - name: Run E2E tests
+        if: ${{ always() }}
+        run: npm run test:e2e
+        working-directory: tools/ui

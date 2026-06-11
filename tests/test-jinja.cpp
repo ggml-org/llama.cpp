@@ -387,6 +387,24 @@ static void test_expressions(testing & t) {
         "Bob"
     );
 
+    test_template(t, "empty computed member defaults to undefined",
+        "{{ a[]|default('fallback') }}",
+        {{"a", {{"name", "Bob"}}}},
+        "fallback"
+    );
+
+    test_template(t, "empty computed member is undefined",
+        "{{ a[] is undefined }}",
+        {{"a", {{"name", "Bob"}}}},
+        "True"
+    );
+
+    test_template(t, "undefined computed member is undefined",
+        "{{ a[undefined] is undefined }}",
+        {{"a", {{"name", "Bob"}}}},
+        "True"
+    );
+
     test_template(t, "array access",
         "{{ items[1] }}",
         {{"items", json::array({"a", "b", "c"})}},
@@ -427,6 +445,18 @@ static void test_expressions(testing & t) {
         "{{ 'hello' ~ ' ' ~ 'world' }}",
         json::object(),
         "hello world"
+    );
+
+    test_template(t, "string repetition",
+        "{{ 'ab' * 3 }}",
+        json::object(),
+        "ababab"
+    );
+
+    test_template(t, "reversed string repetition",
+        "{{ 3 * 'ab' }}",
+        json::object(),
+        "ababab"
     );
 
     test_template(t, "ternary",
@@ -503,6 +533,18 @@ static void test_filters(testing & t) {
         "{{ 'HELLO'|lower }}",
         json::object(),
         "hello"
+    );
+
+    test_template(t, "upper array",
+        "{{ items|upper }}",
+        {{"items", json::array({"hello", "world"})}},
+        "['HELLO', 'WORLD']"
+    );
+
+    test_template(t, "upper dict",
+        "{{ items|upper }}",
+        {{"items", {{"hello", "world"}}}},
+        "{'HELLO': 'WORLD'}"
     );
 
     test_template(t, "capitalize",
@@ -663,6 +705,33 @@ static void test_filters(testing & t) {
         "\"\\u2713\""
     );
 
+    test_template(t, "tojson ensure_ascii=true nested object",
+        "{{ data|tojson(ensure_ascii=true) }}",
+        {{"data", {
+            {"text", "\u2713"},
+            {"items", json::array({"é", {{"snowman", "☃"}}})}
+        }}},
+        "{\"text\": \"\\u2713\", \"items\": [\"\\u00e9\", {\"snowman\": \"\\u2603\"}]}"
+    );
+
+    test_template(t, "tojson ensure_ascii=true indent=2",
+        "{{ data|tojson(ensure_ascii=true, indent=2) }}",
+        {{"data", {
+            {"text", "\u2713"},
+            {"nested", {{"accent", "é"}}}
+        }}},
+        "{\n  \"text\": \"\\u2713\",\n  \"nested\": {\n    \"accent\": \"\\u00e9\"\n  }\n}"
+    );
+
+    test_template(t, "tojson ensure_ascii=true preserves existing escapes",
+        "{{ data|tojson(ensure_ascii=true) }}",
+        {{"data", {
+            {"emoji", "😀"},
+            {"line", "a\nb"}
+        }}},
+        "{\"emoji\": \"\\ud83d\\ude00\", \"line\": \"a\\nb\"}"
+    );
+
     test_template(t, "tojson sort_keys=true",
         "{{ data|tojson(sort_keys=true) }}",
         {{"data", {{"b", 2}, {"a", 1}}}},
@@ -739,6 +808,12 @@ static void test_filters(testing & t) {
         "{{ '  HELLO  '|trim|lower }}",
         json::object(),
         "hello"
+    );
+
+    test_template(t, "int filter on integer is identity",
+        "{{ value|int }}",
+        {{"value", 7}},
+        "7"
     );
 
     test_template(t, "none to string",
@@ -883,6 +958,24 @@ static void test_macros(testing & t) {
         "{% macro greet(name='Guest') %}Hi {{ name }}{% endmacro %}{{ greet() }}",
         json::object(),
         "Hi Guest"
+    );
+
+    test_template(t, "macro kwargs input",
+        "{% macro my_func(a, b=False) %}{% if b %}{{ a }}{% else %}nope{% endif %}{% endmacro %}{{ my_func(1, b=True) }}",
+        json::object(),
+        "1"
+    );
+
+    test_template(t, "macro with multiple args",
+        "{% macro add(a, b, c=0) %}{{ a + b + c }}{% endmacro %}{{ add(1, 2) }},{{ add(1, 2, 3) }},{{ add(1, b=10) }},{{ add(1, 2, c=5) }}",
+        json::object(),
+        "3,6,11,8"
+    );
+
+    test_template(t, "macro with kwarg out-of-order input",
+        "{% macro greet(first, last, greeting='Hello') %}{{ greeting }}, {{ first }} {{ last }}{% endmacro %}{{ greet(last='Smith', first='John') }},{{ greet(last='Doe', greeting='Hi', first='Jane') }}",
+        json::object(),
+        "Hello, John Smith,Hi, Jane Doe"
     );
 }
 
@@ -1897,8 +1990,9 @@ import sys
 from datetime import datetime
 from jinja2.sandbox import SandboxedEnvironment
 
-tmpl = json.loads(sys.argv[1])
-vars_json = json.loads(sys.argv[2])
+merged_input = json.loads(sys.stdin.buffer.read().decode("utf-8"))
+tmpl = merged_input["tmpl"]
+vars_json = merged_input["vars"]
 
 env = SandboxedEnvironment(
     trim_blocks=True,
@@ -1915,14 +2009,15 @@ env.globals["raise_exception"] = raise_exception
 
 template = env.from_string(tmpl)
 result = template.render(**vars_json)
-print(result, end='')
+sys.stdout.buffer.write(result.encode())
 )";
 
 static void test_template_py(testing & t, const std::string & name, const std::string & tmpl, const json & vars, const std::string & expect) {
     t.test(name, [&tmpl, &vars, &expect](testing & t) {
         // Prepare arguments
-        std::string tmpl_json = json(tmpl).dump();
-        std::string vars_json = vars.dump();
+        json merged;
+        merged["tmpl"] = json(tmpl);
+        merged["vars"] = vars;
 
 #ifdef _WIN32
         const char * python_executable = "python.exe";
@@ -1930,7 +2025,7 @@ static void test_template_py(testing & t, const std::string & name, const std::s
         const char * python_executable = "python3";
 #endif
 
-        const char * command_line[] = {python_executable, "-c", py_script.c_str(), tmpl_json.c_str(), vars_json.c_str(), NULL};
+        const char * command_line[] = {python_executable, "-c", py_script.c_str(), NULL};
 
         struct subprocess_s subprocess;
         int options = subprocess_option_combined_stdout_stderr
@@ -1944,6 +2039,20 @@ static void test_template_py(testing & t, const std::string & name, const std::s
             t.assert_true("subprocess creation", false);
             return;
         }
+        FILE * p_stdin = subprocess_stdin(&subprocess);
+
+        // Write input
+        std::string input = merged.dump();
+        auto written = fwrite(input.c_str(), 1, input.size(), p_stdin);
+        if (written != input.size()) {
+            t.log("Failed to write complete input to subprocess stdin");
+            t.assert_true("subprocess stdin write", false);
+            subprocess_destroy(&subprocess);
+            return;
+        }
+        fflush(p_stdin);
+        fclose(p_stdin); // Close stdin to signal EOF to the Python process
+        subprocess.stdin_file = nullptr;
 
         // Read output
         std::string output;
@@ -2248,6 +2357,7 @@ static void test_fuzzing(testing & t) {
 
     t.test("malformed templates (should error, not crash)", [&](testing & t) {
         const std::vector<std::string> malformed = {
+            "",
             "{{ x",
             "{% if %}",
             "{% for %}",
@@ -2267,6 +2377,11 @@ static void test_fuzzing(testing & t) {
         };
         for (const auto & tmpl : malformed) {
             t.assert_true("malformed: " + tmpl, fuzz_test_template(tmpl, json::object()));
+        }
+        std::string tmpl = "{% for message in messages %}{{ message.role | string }} : {{ message.content if ('content' in message and message.content is not none) }}{% endfor %";
+        while (tmpl.length() > 0) {
+            t.assert_true("malformed: " + tmpl, fuzz_test_template(tmpl, json::object()));
+            tmpl.pop_back();
         }
     });
 
@@ -2387,5 +2502,13 @@ static void test_fuzzing(testing & t) {
 
             t.assert_true("builtin " + type_name + "." + fn_name + " #" + std::to_string(i), fuzz_test_template(tmpl, vars));
         }
+    });
+
+    t.test("tojson ensure_ascii=true with invalid utf-8", [&](testing & t) {
+        t.assert_true("invalid utf-8 does not crash",
+            fuzz_test_template(
+                "{{ data|tojson(ensure_ascii=true) }}",
+                {{"data", std::string("hello\xfe\xffworld")}}
+            ));
     });
 }
