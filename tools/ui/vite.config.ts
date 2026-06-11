@@ -8,6 +8,7 @@ import { defineConfig, searchForWorkspaceRoot } from 'vite';
 import { storybookTest } from '@storybook/addon-vitest/vitest-plugin';
 import { splashScreenPlugin } from './scripts/vite-plugin-splash-screen';
 import { buildInfoPlugin } from './scripts/vite-plugin-build-info';
+import { relativizeBasePlugin } from './scripts/vite-plugin-relativize-base';
 import { playwright } from '@vitest/browser-playwright';
 import {
 	PWA_MANIFEST,
@@ -106,7 +107,8 @@ export default defineConfig({
 			}
 		}),
 		splashScreenPlugin(),
-		buildInfoPlugin()
+		buildInfoPlugin(),
+		relativizeBasePlugin()
 	],
 
 	test: {

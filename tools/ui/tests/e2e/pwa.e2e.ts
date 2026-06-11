@@ -99,8 +99,8 @@ test.describe('PWA Service Worker', () => {
 		const html = await response.text();
 
 		// SvelteKit outputs content-hashed bundle names in _app/immutable/
-		expect(html).toMatch(/href="\/_app\/immutable\/bundle\.[a-zA-Z0-9-]+\.js"/);
-		expect(html).toMatch(/href="\/_app\/immutable\/assets\/bundle\.[a-zA-Z0-9-]+\.css"/);
-		expect(html).toMatch(/import\("\/_app\/immutable\/bundle\.[a-zA-Z0-9-]+\.js"\)/);
+		expect(html).toMatch(/href="(\.\/|\/)\_app\/immutable\/bundle\.[a-zA-Z0-9-]+\.js"/);
+		expect(html).toMatch(/href="(\.\/|\/)\_app\/immutable\/assets\/bundle\.[a-zA-Z0-9-]+\.css"/);
+		expect(html).toMatch(/import\("(\.\/|\/)\_app\/immutable\/bundle\.[a-zA-Z0-9-]+\.js"\)/);
 	});
 });
