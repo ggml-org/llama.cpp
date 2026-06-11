@@ -455,6 +455,11 @@ void diffusion_generate_entropy_bound(llama_context *             ctx,
     const int32_t C       = params.max_length - n_input;            // canvas length
     const int32_t S       = std::max(1, params.max_denoising_steps);
 
+    // device-resident SC: source self-conditioning from a persistent device buffer (written in-graph from
+    // the prev step's logits) instead of the 268 MB host upload each step. Exact: SC values/math unchanged.
+    const bool dev_sc = params.gpu_sampling;
+    llama_diffusion_set_device_sc(model, dev_sc);
+
     llama_set_causal_attn(ctx, false);
     std::copy(input_tokens, input_tokens + n_input, output_tokens);
 
@@ -467,7 +472,8 @@ void diffusion_generate_entropy_bound(llama_context *             ctx,
         current_canvas[i] = vocab_dist(rng);                      // random init (not mask)
     }
 
-    std::vector<float>       sc_buffer((size_t) C * n_vocab, 0.0f); // previous step's raw logits, for self-cond
+    // previous step's raw logits, for self-cond (host upload path only; device SC keeps them on-device)
+    std::vector<float>       sc_buffer((size_t) (dev_sc ? 0 : C) * n_vocab, 0.0f);
     std::vector<llama_token> argmax_canvas(C, 0);                  // model's best prediction = the output
     std::vector<llama_token> prev_argmax(C, -1);                  // stability history (-1 -> step 0 is unstable)
     std::vector<float>       entropy(C);
@@ -534,14 +540,38 @@ void diffusion_generate_entropy_bound(llama_context *             ctx,
             }
         }
 
-        // self-conditioning = softmax(previous step's logits / previous t); gated off on the first step
-        llama_diffusion_set_sc(model, sc_buffer.data(), step_idx == 0 ? 0.0f : 1.0f, prev_temp_inv, true);
+        // self-conditioning = softmax(previous step's logits / previous t); gated off on the first step.
+        // device SC ignores the host pointer (reads sc_dev), so pass nullptr; the gate + temp are identical.
+        llama_diffusion_set_sc(model, dev_sc ? nullptr : sc_buffer.data(),
+                               step_idx == 0 ? 0.0f : 1.0f, prev_temp_inv, true);
 
         if (llama_decode(ctx, batch) != 0) {
             LOG_ERR("%s: failed to decode at step %d\n", __func__, step_idx);
             break;
         }
         const float * logits = llama_get_logits(ctx);             // canvas rows packed: [C or max_length, n_vocab]
+
+        // debug: verify the device SC buffer captured exactly this step's canvas logits (== what the host
+        // path uploads next step). Single-run check, independent of cross-run nondeterminism. DG_SC_CHECK=1.
+        if (dev_sc && std::getenv("DG_SC_CHECK")) {
+            static std::vector<float> sc_dbg;
+            sc_dbg.resize((size_t) C * n_vocab);
+            const size_t got = llama_diffusion_debug_get_sc_dev(model, sc_dbg.data(), sc_dbg.size());
+            double maxabs = 0.0; size_t nmiss = 0; double sumabs = 0.0;
+            for (int32_t pos = 0; pos < C; pos++) {
+                const float * hrow = logits + (size_t) (logit_off + pos) * n_vocab;
+                const float * drow = sc_dbg.data() + (size_t) pos * n_vocab;
+                for (int32_t v = 0; v < n_vocab; v++) {
+                    const double d = std::fabs((double) hrow[v] - (double) drow[v]);
+                    sumabs += d;
+                    if (d > maxabs) { maxabs = d; }
+                    if (d != 0.0) { nmiss++; }
+                }
+            }
+            LOG_INF("DG_SC_CHECK step %d: got=%zu maxabs=%.6g sumabs=%.6g nmiss=%zu/%zu sc_dev[0]=%.4f host[0]=%.4f\n",
+                    step_idx, got, maxabs, sumabs, nmiss, (size_t) C * n_vocab,
+                    sc_dbg.empty() ? 0.0f : sc_dbg[0], logits[(size_t) logit_off * n_vocab]);
+        }
 
         // pre-draw the step's randomness single-threaded so the output is seed-reproducible
         for (int32_t pos = 0; pos < C; pos++) {
@@ -575,7 +605,10 @@ void diffusion_generate_entropy_bound(llama_context *             ctx,
                 entropy[pos]       = H;
                 argmax_canvas[pos] = amax;
                 denoiser[pos]      = sampled;
-                std::memcpy(sc_buffer.data() + (size_t) pos * n_vocab, row, n_vocab * sizeof(float));
+                // device SC keeps prev-step logits on-device (cpy in-graph), so no host stash needed
+                if (!dev_sc) {
+                    std::memcpy(sc_buffer.data() + (size_t) pos * n_vocab, row, n_vocab * sizeof(float));
+                }
             }
         };
         {
@@ -623,6 +656,9 @@ void diffusion_generate_entropy_bound(llama_context *             ctx,
 
     if (params.kv_cache) {
         llama_diffusion_set_phase(model, /*PKV_UNIFIED=*/0, 0);  // restore default for later turns / masked path
+    }
+    if (dev_sc) {
+        llama_diffusion_set_device_sc(model, false);             // restore host SC path for later turns
     }
     llama_batch_free(batch);
     n_generated = params.max_length;

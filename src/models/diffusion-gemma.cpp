@@ -278,6 +278,8 @@ void llama_model_diffusion_gemma::load_arch_tensors(llama_model_loader &) {
 
 // fwd decl: lazily build the transposed/dequantized SC soft-embedding weight (defined below)
 static void dg_ensure_sc_embT(const llama_model_diffusion_gemma & m);
+// fwd decl: lazily (re)allocate the device-resident prev-step canvas-logits buffer for device SC (defined below)
+static void dg_ensure_sc_dev(const llama_model_diffusion_gemma & m, int64_t C);
 
 std::unique_ptr<llm_graph_context> llama_model_diffusion_gemma::build_arch_graph(const llm_graph_params & params) const {
     return std::make_unique<graph>(*this, params);
@@ -326,11 +328,20 @@ llama_model_diffusion_gemma::graph::graph(const llama_model & model, const llm_g
             canvas = ggml_cont(ctx0, canvas);
 
             // previous step's raw logits [n_vocab, Cc]
-            auto inp_sc = std::make_unique<llm_graph_input_sc>(dmodel.sc_logits_ptr, n_vocab, Cc);
-            inp_sc->sc_logits = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_vocab, Cc);
-            ggml_set_input(inp_sc->sc_logits);
-            ggml_tensor * sc_logits = inp_sc->sc_logits;
-            res->add_input(std::move(inp_sc));
+            ggml_tensor * sc_logits;
+            if (dmodel.sc_device_resident) {
+                // device-resident: read the persistent sc_dev buffer the prior step's lm_head wrote into
+                // (see the ggml_cpy after t_logits below). No host input/upload. Values are identical to
+                // the host path, so the SC math and the forward stay bit-for-bit the same.
+                dg_ensure_sc_dev(dmodel, Cc);
+                sc_logits = dmodel.sc_dev;
+            } else {
+                auto inp_sc = std::make_unique<llm_graph_input_sc>(dmodel.sc_logits_ptr, n_vocab, Cc);
+                inp_sc->sc_logits = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_vocab, Cc);
+                ggml_set_input(inp_sc->sc_logits);
+                sc_logits = inp_sc->sc_logits;
+                res->add_input(std::move(inp_sc));
+            }
 
             // raw/temperature, then softmax over vocab (fp32)
             ggml_tensor * probs = ggml_soft_max(ctx0, ggml_scale(ctx0, sc_logits, dmodel.sc_temp_inv));
@@ -504,6 +515,20 @@ llama_model_diffusion_gemma::graph::graph(const llama_model & model, const llm_g
     res->t_logits = cur;
 
     ggml_build_forward_expand(gf, cur);
+
+    // device SC: persist this step's canvas logits (last C rows) into sc_dev for the next step to read on-
+    // device, no host round-trip. The cpy is downstream of the SC read in the DAG, so topo order runs
+    // read-before-write on the single buffer (no hazard). F32->F32 = the exact bytes the host path uploads.
+    if (dmodel.sc_enabled && dmodel.sc_device_resident && C > 0) {
+        dg_ensure_sc_dev(dmodel, C);
+        const int64_t n_out   = cur->ne[1];
+        const int64_t n_vocab = cur->ne[0];
+        GGML_ASSERT(n_out >= C && "device SC expects the canvas rows to be present in the output logits");
+        ggml_tensor * canvas_logits = ggml_view_2d(ctx0, cur, n_vocab, C,
+                                                   cur->nb[1], (n_out - C) * cur->nb[1]);
+        ggml_tensor * sc_cpy = ggml_cpy(ctx0, canvas_logits, dmodel.sc_dev);
+        ggml_build_forward_expand(gf, sc_cpy);
+    }
 }
 
 // Public API: set per-request self-conditioning (no-op on other models). sc_logits is borrowed and
@@ -520,11 +545,34 @@ void llama_diffusion_set_sc(struct llama_model * model, const float * sc_logits,
     dm->sc_enabled    = enabled;
 }
 
+// Public API: opt into device-resident self-conditioning (no-op on other models). See llama.h.
+void llama_diffusion_set_device_sc(struct llama_model * model, bool enabled) {
+    auto * dm = dynamic_cast<llama_model_diffusion_gemma *>(model);
+    if (!dm) {
+        return;
+    }
+    dm->sc_device_resident = enabled;
+}
+
+// Debug only: copy the device SC buffer (sc_dev) to host; returns floats copied (0 if none). Verifies
+// sc_dev == the canvas logits the host path would upload. Off the hot path.
+size_t llama_diffusion_debug_get_sc_dev(const struct llama_model * model, float * dst, size_t max_elems) {
+    const auto * dm = dynamic_cast<const llama_model_diffusion_gemma *>(model);
+    if (!dm || dm->sc_dev == nullptr || dst == nullptr) {
+        return 0;
+    }
+    const size_t n = std::min(max_elems, (size_t) ggml_nelements(dm->sc_dev));
+    ggml_backend_tensor_get(dm->sc_dev, dst, 0, n * sizeof(float));
+    return n;
+}
+
 llama_model_diffusion_gemma::~llama_model_diffusion_gemma() {
     if (pkv_buf) { ggml_backend_buffer_free(pkv_buf); pkv_buf = nullptr; }
     if (pkv_ctx) { ggml_free(pkv_ctx); pkv_ctx = nullptr; }
     if (sc_embT_buf) { ggml_backend_buffer_free(sc_embT_buf); sc_embT_buf = nullptr; }
     if (sc_embT_ctx) { ggml_free(sc_embT_ctx); sc_embT_ctx = nullptr; }
+    if (sc_dev_buf)  { ggml_backend_buffer_free(sc_dev_buf);  sc_dev_buf  = nullptr; }
+    if (sc_dev_ctx)  { ggml_free(sc_dev_ctx);  sc_dev_ctx  = nullptr; }
 }
 
 // Build the SC soft-embedding weight once: tok_embd dequantized + transposed to [n_vocab, n_embd] F16
@@ -589,6 +637,31 @@ static void dg_ensure_sc_embT(const llama_model_diffusion_gemma & m) {
     }
 
     ggml_backend_tensor_set(m.sc_embT, dstT.data(), 0, dstT.size() * sizeof(ggml_fp16_t));
+}
+
+// Lazily (re)allocate the device prev-step canvas-logits buffer [n_vocab, C] F32 (grow-only) on layer-0's
+// buft. Zero-init so step 0 (SC gated off) reads finite values: soft_max(0)=uniform x 0 gate, no NaN.
+static void dg_ensure_sc_dev(const llama_model_diffusion_gemma & m, int64_t C) {
+    const int64_t n_vocab = m.tok_embd->ne[1];
+    if (m.sc_dev != nullptr && m.sc_dev_C >= C) {
+        return;
+    }
+    if (m.sc_dev_buf) { ggml_backend_buffer_free(m.sc_dev_buf); m.sc_dev_buf = nullptr; }
+    if (m.sc_dev_ctx) { ggml_free(m.sc_dev_ctx); m.sc_dev_ctx = nullptr; }
+
+    ggml_init_params ip = { ggml_tensor_overhead() * 2, nullptr, /*.no_alloc =*/ true };
+    m.sc_dev_ctx = ggml_init(ip);
+    GGML_ASSERT(m.sc_dev_ctx != nullptr);
+    m.sc_dev = ggml_new_tensor_2d(m.sc_dev_ctx, GGML_TYPE_F32, n_vocab, C);
+    ggml_set_name(m.sc_dev, "sc_dev");
+
+    ggml_backend_dev_t dev = m.dev_layer(0);
+    ggml_backend_buffer_type_t buft = dev ? ggml_backend_dev_buffer_type(dev)
+                                          : ggml_backend_cpu_buffer_type();
+    m.sc_dev_buf = ggml_backend_alloc_ctx_tensors_from_buft(m.sc_dev_ctx, buft);
+    GGML_ASSERT(m.sc_dev_buf != nullptr);
+    ggml_backend_buffer_clear(m.sc_dev_buf, 0);  // step-0 safety (see above)
+    m.sc_dev_C = C;
 }
 
 // Lazily (re)allocate the device-resident F32 prompt-KV store (per-layer K,V, grow-only) for a prompt

@@ -354,9 +354,21 @@ int main(int argc, char ** argv) {
             }
         }
 
-        LOG_INF("diffusion_eb: max_steps=%d t=[%.3f,%.3f] entropy_bound=%.4f stability=%d confidence=%.4f kv_cache=%s\n",
+        // device-resident SC: auto (default) and on enable it on a single device; sc_dev is single-device
+        // like the prompt-KV store, so auto-disable on multi-GPU. SC inputs are bit-identical to host SC.
+        if (params.diffusion.eb_gpu_sampling == 2) {  // off
+            eb_params.gpu_sampling = false;
+        } else {  // auto (default) or on
+            eb_params.gpu_sampling = (gpu_devs <= 1);
+            if (gpu_devs > 1) {
+                LOG_INF("diffusion_eb: gpu sampling off (%d GPUs; sc_dev is single-device)\n", gpu_devs);
+            }
+        }
+
+        LOG_INF("diffusion_eb: max_steps=%d t=[%.3f,%.3f] entropy_bound=%.4f stability=%d confidence=%.4f kv_cache=%s gpu_sampling=%s\n",
                 eb_params.max_denoising_steps, eb_params.t_min, eb_params.t_max, eb_params.entropy_bound,
-                eb_params.stability_threshold, eb_params.confidence_threshold, eb_params.kv_cache ? "on" : "off");
+                eb_params.stability_threshold, eb_params.confidence_threshold, eb_params.kv_cache ? "on" : "off",
+                eb_params.gpu_sampling ? "on" : "off");
     }
 
     // Trim a denoised canvas: cut at the first end-of-generation token, or (checkpoints often emit no stop
@@ -507,8 +519,21 @@ int main(int argc, char ** argv) {
         }
         LOG("\n%s\n", response.c_str());
         if (use_eb && cb_data.steps_seen > 0) {
+            const double total_ms = turn_us / 1000.0;
+            const double per_step = total_ms / cb_data.steps_seen;
             LOG("total time: %.2fms, time per step: %.2fms (%d steps over %d blocks, entropy-bound)\n",
-                turn_us / 1000.0, turn_us / 1000.0 / cb_data.steps_seen, cb_data.steps_seen, cb_data.blocks_seen);
+                total_ms, per_step, cb_data.steps_seen, cb_data.blocks_seen);
+            // effective tok/s = canvas tokens this turn / wall time; in-step parallel = canvas / per-step
+            // (every canvas position is refined each step; step count divides it down to effective).
+            if (canvas_length > 0 && cb_data.blocks_seen > 0) {
+                const int    gen_toks = (int) canvas_length * cb_data.blocks_seen;
+                const double eff_tps  = gen_toks * 1000.0 / total_ms;
+                const double par_tps  = canvas_length * 1000.0 / per_step;
+                LOG("throughput: %.1f tok/s (%d tok in %.2fms), in-step parallel %.0f tok/s "
+                    "(%d-tok canvas x %.1f steps/block)\n",
+                    eff_tps, gen_toks, total_ms, par_tps, (int) canvas_length,
+                    (double) cb_data.steps_seen / cb_data.blocks_seen);
+            }
         }
         return response;
     };
@@ -528,6 +553,8 @@ int main(int argc, char ** argv) {
             messages.push_back(make_msg("system", params.system_prompt));
         }
 
+        LOG_INF("conversation mode: /help for commands, /clear to reset, /exit to quit\n");
+
         std::string pending = params.prompt;  // optional first user turn supplied via -p
         while (true) {
             std::string user;
@@ -543,6 +570,21 @@ int main(int argc, char ** argv) {
                 }
                 if (user == "/exit" || user == "/quit") {
                     break;
+                }
+                if (user == "/help" || user == "/?") {
+                    LOG("commands:\n"
+                        "  /help, /?      show this message\n"
+                        "  /clear         clear the conversation history (keeps the system prompt)\n"
+                        "  /exit, /quit   end the session\n");
+                    continue;
+                }
+                if (user == "/clear") {
+                    messages.clear();
+                    if (!params.system_prompt.empty()) {
+                        messages.push_back(make_msg("system", params.system_prompt));
+                    }
+                    LOG("conversation history cleared\n");
+                    continue;
                 }
                 if (user.empty()) {
                     continue;

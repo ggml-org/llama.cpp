@@ -568,6 +568,19 @@ extern "C" {
                          float   temp_inv,
                           bool   enabled);
 
+    // DiffusionGemma device-resident self-conditioning: when enabled, the SC input is read from a persistent
+    // device buffer (written in-graph from the previous step's logits) instead of a per-step host upload. The
+    // SC math is unchanged/bit-identical; single-device only. No-op for other models. Caller restores false.
+    LLAMA_API void llama_diffusion_set_device_sc(
+            struct llama_model * model,
+                          bool   enabled);
+
+    // Debug only: copy the device SC buffer (sc_dev) to host; returns number of floats copied (0 if none).
+    LLAMA_API size_t llama_diffusion_debug_get_sc_dev(
+            const struct llama_model * model,
+                               float * dst,
+                              size_t   max_elems);
+
     // DiffusionGemma prompt KV caching: select the forward phase for the next llama_decode (P = block
     // prompt length; no-op otherwise).  0 = UNIFIED (no-cache [prompt|canvas]),  1 = PREFILL (forward the
     // P prompt tokens, write the K,V store),  2 = DECODE (forward the canvas, read the cached prompt K,V).

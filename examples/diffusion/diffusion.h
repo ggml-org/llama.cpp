@@ -75,6 +75,9 @@ struct diffusion_eb_params {
     int32_t max_length           = 0;      // n_input + canvas_length
     bool    kv_cache             = false;  // prefix-KV-cache the prompt (PREFILL once, decode canvas-only
                                            // per step) instead of re-decoding [prompt|canvas] every step
+    bool    gpu_sampling         = false;  // device-resident self-conditioning: keep the prev step's canvas
+                                           // logits on-device for SC instead of a per-step 268 MB host upload
+                                           // (exact; the SC math/values are unchanged)
 
     diffusion_step_callback_t step_callback           = nullptr;
     void *                    step_callback_user_data = nullptr;

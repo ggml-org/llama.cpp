@@ -844,6 +844,15 @@ struct llama_model_diffusion_gemma : public llama_model_base {
     mutable ggml_context        * sc_embT_ctx = nullptr;
     mutable ggml_backend_buffer_t sc_embT_buf = nullptr;
 
+    // device-resident self-conditioning (opt-in via llama_diffusion_set_device_sc): keep the prev step's
+    // raw canvas logits in sc_dev (device) and read SC from it instead of a per-step 268 MB host upload.
+    // Bit-identical to the host path (same F32 logits); single-device, like the PKV store.
+    mutable bool                  sc_device_resident = false;
+    mutable ggml_tensor         * sc_dev      = nullptr;  // [n_vocab, sc_dev_C] F32 prev-step canvas logits
+    mutable ggml_context        * sc_dev_ctx  = nullptr;
+    mutable ggml_backend_buffer_t sc_dev_buf  = nullptr;
+    mutable int64_t               sc_dev_C    = 0;        // allocated canvas capacity (grow-only)
+
     // prompt KV caching: the prompt's per-layer K,V are step-invariant, so compute once per block and
     // reuse across denoising steps instead of recomputing the whole [prompt|canvas] forward.
     //   PKV_UNIFIED : no-cache forward over [prompt|canvas] (default + safety fallback).
