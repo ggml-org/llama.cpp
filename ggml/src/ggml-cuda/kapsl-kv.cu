@@ -124,6 +124,21 @@ void ggml_cuda_op_kapsl_kv_write(ggml_backend_cuda_context & ctx, ggml_tensor * 
     }
 }
 
+// Tiled paged attention with online softmax.
+//
+// Each thread block handles one (token, q_head) pair. The context is walked
+// in tiles of KAPSL_ATTN_TILE positions: threads cooperatively score the tile
+// into shared memory, block-reduce the tile max and sum, rescale the running
+// accumulator when the max moves, then accumulate V with each thread owning a
+// strided subset of head dims. Shared memory usage is constant in context
+// length, so long contexts never exceed the per-block shared memory limit.
+
+#define KAPSL_ATTN_THREADS 256
+#define KAPSL_ATTN_TILE    256
+// Per-thread output accumulator registers: supports head_dim up to
+// KAPSL_ATTN_THREADS * KAPSL_ATTN_MAX_DIMS_PER_THREAD.
+#define KAPSL_ATTN_MAX_DIMS_PER_THREAD 4
+
 template<typename q_t, typename pos_t>
 static __global__ void kapsl_paged_attn_kernel(
         float     * __restrict__ out,
@@ -147,72 +162,133 @@ static __global__ void kapsl_paged_attn_kernel(
         int64_t out_nb2) {
     const int64_t token  = blockIdx.x;
     const int64_t q_head = blockIdx.y;
-    const int64_t d      = threadIdx.x;
+    const int     tid      = threadIdx.x;
+    const int     nthreads = blockDim.x;
 
-    if (token >= n_tokens || q_head >= n_q_heads || d >= head_dim) {
+    if (token >= n_tokens || q_head >= n_q_heads) {
         return;
     }
 
-    const int64_t ctx_len = (int64_t) positions[token] + 1;
-    if (ctx_len <= 0) {
-        return;
-    }
-
-    const int64_t kv_head = q_head * n_kv_heads / n_q_heads;
+    const int64_t kv_head        = q_head * n_kv_heads / n_q_heads;
     const int64_t kv_head_stride = block_size * head_dim;
     const int64_t kv_type_stride = n_kv_heads * kv_head_stride;
     const int64_t block_stride   = 2 * kv_type_stride;
 
-    float max_score = -3.402823466e+38F;
-    for (int64_t pos = 0; pos < ctx_len; ++pos) {
-        const int64_t logical_block = pos / block_size;
-        const int64_t pos_in_block  = pos - logical_block * block_size;
-        const int64_t phys_block    = block_table[layer_id * block_table_layer_stride + logical_block];
+    const int * bt = block_table + layer_id * block_table_layer_stride;
 
-        const half * k_ptr = kv_pool
-            + phys_block * block_stride
-            + kv_head * kv_head_stride
-            + pos_in_block * head_dim;
+    // Dynamic shared memory: head_dim floats of query + one tile of scores.
+    extern __shared__ float smem[];
+    float * q_smem    = smem;
+    float * tile_smem = smem + head_dim;
+    __shared__ float red_smem[KAPSL_ATTN_THREADS];
 
-        float dot = 0.0f;
-        for (int64_t kd = 0; kd < head_dim; ++kd) {
-            const int64_t q_off = kd * q_nb0 + q_head * q_nb1 + token * q_nb2;
-            dot += kapsl_to_float(q[q_off]) * __half2float(k_ptr[kd]);
+    for (int64_t d = tid; d < head_dim; d += nthreads) {
+        q_smem[d] = kapsl_to_float(q[d * q_nb0 + q_head * q_nb1 + token * q_nb2]);
+    }
+    __syncthreads();
+
+    float acc[KAPSL_ATTN_MAX_DIMS_PER_THREAD];
+#pragma unroll
+    for (int j = 0; j < KAPSL_ATTN_MAX_DIMS_PER_THREAD; ++j) {
+        acc[j] = 0.0f;
+    }
+    float running_max = -3.402823466e+38F;
+    float running_sum = 0.0f;
+
+    const int64_t ctx_len = (int64_t) positions[token] + 1;
+
+    for (int64_t tile_start = 0; tile_start < ctx_len; tile_start += KAPSL_ATTN_TILE) {
+        const int tile_len = (int) min((int64_t) KAPSL_ATTN_TILE, ctx_len - tile_start);
+
+        // Score this tile: each thread computes full Q·K dots for a strided
+        // set of positions.
+        for (int i = tid; i < tile_len; i += nthreads) {
+            const int64_t pos          = tile_start + i;
+            const int64_t pos_in_block = pos % block_size;
+            const int64_t phys_block   = bt[pos / block_size];
+
+            const half * k_ptr = kv_pool
+                + phys_block * block_stride
+                + kv_head * kv_head_stride
+                + pos_in_block * head_dim;
+
+            float dot = 0.0f;
+            for (int64_t d = 0; d < head_dim; ++d) {
+                dot += q_smem[d] * __half2float(k_ptr[d]);
+            }
+            tile_smem[i] = dot * scale;
         }
-        dot *= scale;
-        max_score = fmaxf(max_score, dot);
+        __syncthreads();
+
+        // Block-reduce the tile max.
+        float tile_max = -3.402823466e+38F;
+        for (int i = tid; i < tile_len; i += nthreads) {
+            tile_max = fmaxf(tile_max, tile_smem[i]);
+        }
+        red_smem[tid] = tile_max;
+        __syncthreads();
+        for (int s = nthreads / 2; s > 0; s >>= 1) {
+            if (tid < s) {
+                red_smem[tid] = fmaxf(red_smem[tid], red_smem[tid + s]);
+            }
+            __syncthreads();
+        }
+        const float new_max = fmaxf(running_max, red_smem[0]);
+        __syncthreads();
+
+        // Rescale the running state to the new max before folding in the tile.
+        const float correction = running_sum > 0.0f ? expf(running_max - new_max) : 0.0f;
+        running_sum *= correction;
+#pragma unroll
+        for (int j = 0; j < KAPSL_ATTN_MAX_DIMS_PER_THREAD; ++j) {
+            acc[j] *= correction;
+        }
+
+        // Exponentiate the tile in place and block-reduce its sum.
+        float tile_sum = 0.0f;
+        for (int i = tid; i < tile_len; i += nthreads) {
+            const float w = expf(tile_smem[i] - new_max);
+            tile_smem[i] = w;
+            tile_sum += w;
+        }
+        red_smem[tid] = tile_sum;
+        __syncthreads();
+        for (int s = nthreads / 2; s > 0; s >>= 1) {
+            if (tid < s) {
+                red_smem[tid] += red_smem[tid + s];
+            }
+            __syncthreads();
+        }
+        running_sum += red_smem[0];
+
+        // Accumulate V: threads own head dims, positions read coalesced.
+        for (int i = 0; i < tile_len; ++i) {
+            const int64_t pos          = tile_start + i;
+            const int64_t pos_in_block = pos % block_size;
+            const int64_t phys_block   = bt[pos / block_size];
+
+            const half * v_ptr = kv_pool
+                + phys_block * block_stride
+                + kv_type_stride
+                + kv_head * kv_head_stride
+                + pos_in_block * head_dim;
+
+            const float w = tile_smem[i];
+            int j = 0;
+            for (int64_t d = tid; d < head_dim; d += nthreads, ++j) {
+                acc[j] += w * __half2float(v_ptr[d]);
+            }
+        }
+        __syncthreads();
+
+        running_max = new_max;
     }
 
-    float sum = 0.0f;
-    float acc = 0.0f;
-    for (int64_t pos = 0; pos < ctx_len; ++pos) {
-        const int64_t logical_block = pos / block_size;
-        const int64_t pos_in_block  = pos - logical_block * block_size;
-        const int64_t phys_block    = block_table[layer_id * block_table_layer_stride + logical_block];
-
-        const half * k_ptr = kv_pool
-            + phys_block * block_stride
-            + kv_head * kv_head_stride
-            + pos_in_block * head_dim;
-        const half * v_ptr = kv_pool
-            + phys_block * block_stride
-            + kv_type_stride
-            + kv_head * kv_head_stride
-            + pos_in_block * head_dim;
-
-        float dot = 0.0f;
-        for (int64_t kd = 0; kd < head_dim; ++kd) {
-            const int64_t q_off = kd * q_nb0 + q_head * q_nb1 + token * q_nb2;
-            dot += kapsl_to_float(q[q_off]) * __half2float(k_ptr[kd]);
-        }
-
-        const float weight = expf(dot * scale - max_score);
-        sum += weight;
-        acc += weight * __half2float(v_ptr[d]);
+    const float inv_sum = running_sum > 0.0f ? 1.0f / running_sum : 0.0f;
+    int j = 0;
+    for (int64_t d = tid; d < head_dim; d += nthreads, ++j) {
+        out[d * out_nb0 + q_head * out_nb1 + token * out_nb2] = acc[j] * inv_sum;
     }
-
-    const int64_t out_off = d * out_nb0 + q_head * out_nb1 + token * out_nb2;
-    out[out_off] = sum > 0.0f ? acc / sum : 0.0f;
 }
 
 template<typename q_t, typename pos_t>
@@ -232,11 +308,14 @@ static void kapsl_paged_attn_cuda(ggml_backend_cuda_context & ctx, ggml_tensor *
     const int64_t n_heads  = q->ne[1];
     const int64_t n_tokens = q->ne[2];
 
-    const dim3 block((uint32_t) head_dim);
+    GGML_ASSERT(head_dim <= KAPSL_ATTN_THREADS * KAPSL_ATTN_MAX_DIMS_PER_THREAD);
+
+    const dim3 block(KAPSL_ATTN_THREADS);
     const dim3 grid((uint32_t) n_tokens, (uint32_t) n_heads);
+    const size_t shared_bytes = (size_t) (head_dim + KAPSL_ATTN_TILE) * sizeof(float);
 
     if (head_dim > 0 && n_heads > 0 && n_tokens > 0) {
-        kapsl_paged_attn_kernel<<<grid, block, 0, ctx.stream()>>>(
+        kapsl_paged_attn_kernel<<<grid, block, shared_bytes, ctx.stream()>>>(
                 (float *) dst->data,
                 (const q_t *) q->data,
                 (const half *) kv_pool->data,
