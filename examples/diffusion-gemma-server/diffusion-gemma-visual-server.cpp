@@ -4,21 +4,29 @@
 // raw-logits server, NO [C, n_vocab] logits are shipped to the client and no host-side sampling happens:
 // argmax/entropy/multinomial and self-conditioning stay on the GPU (Stage 1 + Stage 2).
 //
+// Tokenization, chat templating and detokenization all happen here, from the GGUF's own embedded tokenizer
+// + chat template (same path as llama-diffusion-cli), so the client needs no tokenizer files of its own.
+//
 // Protocol (synchronous, one request per line on stdin):
 //   stdin  : a line containing a request-file path R
-//   file R : int32 P, int32 n_blocks, int32 seed, then P prompt token ids
+//   file R : UTF-8 JSON  {"seed": <int>, "n_blocks": <int>, "messages": [ {"role","content"}, ... ]}
+//            (messages are OpenAI chat-completion format; the GGUF chat template is applied here)
 //   stdout : a stream of newline records, then "DONE":
-//              F <block> <step> <total> <n_canvas> <tok0> <tok1> ...   one per denoising step (argmax canvas)
-//              C <block> <n_commit> <tok0> <tok1> ...                  the trimmed committed block ids
-//              DONE                                                    end of this request
-//              ERR <msg>                                              request failed
+//              F <block> <step> <total> <json-string>   one per denoising step (current canvas, decoded)
+//              C <block> <json-string>                  cumulative committed answer text after this block
+//              DONE                                      end of this request
+//              ERR <msg>                                request failed
 //   "QUIT"/EOF -> exit.
 //
 // Usage: llama-diffusion-gemma-visual-server <model.gguf>   (env NGL for gpu layers, MAXTOK, FA for flash-attn)
 
 #include "llama.h"
 #include "ggml-backend.h"
+#include "common.h"
+#include "chat.h"
 #include "../diffusion/diffusion.h"
+
+#include <nlohmann/json.hpp>
 
 #include <cstdio>
 #include <cstdint>
@@ -27,34 +35,37 @@
 #include <string>
 #include <vector>
 
-static std::vector<int32_t> read_i32_file(const std::string & path) {
+static std::string read_text_file(const std::string & path) {
     FILE * f = fopen(path.c_str(), "rb");
     if (!f) return {};
     fseek(f, 0, SEEK_END); long sz = ftell(f); fseek(f, 0, SEEK_SET);
-    std::vector<int32_t> v(sz / 4);
-    if (!v.empty() && fread(v.data(), 4, v.size(), f) != v.size()) { fclose(f); return {}; }
+    std::string s;
+    if (sz > 0) {
+        s.resize((size_t) sz);
+        if (fread(&s[0], 1, (size_t) sz, f) != (size_t) sz) { fclose(f); return {}; }
+    }
     fclose(f);
-    return v;
+    return s;
 }
 
-// per-request callback state: which block we are on, and where to stream frames
+// per-request callback state: which block we are on, where to stream frames, and how to decode them
 struct vis_cb_data {
-    int    block   = 0;
-    int    n_input = 0;
-    FILE * out     = nullptr;
+    int                  block   = 0;
+    int                  n_input = 0;
+    FILE *               out     = nullptr;
+    const llama_vocab *  vocab   = nullptr;
 };
 
-// Stream the current argmax canvas (tokens[n_input .. n_tokens)) as one "F" record per denoising step.
+// Stream the current argmax canvas (tokens[n_input .. n_tokens)) as one "F" record per denoising step,
+// decoded to text and JSON-escaped so it survives the line protocol intact (spaces/newlines/unicode).
 static bool vis_step_callback(int32_t step, int32_t total_steps, const llama_token * tokens,
                               int32_t n_tokens, void * user_data) {
     auto * d = (vis_cb_data *) user_data;
     const int n_canvas = n_tokens - d->n_input;
     if (n_canvas <= 0) return true;
-    fprintf(d->out, "F %d %d %d %d", d->block, step, total_steps, n_canvas);
-    for (int i = d->n_input; i < n_tokens; i++) {
-        fprintf(d->out, " %d", (int) tokens[i]);
-    }
-    fputc('\n', d->out);
+    std::vector<llama_token> canvas(tokens + d->n_input, tokens + n_tokens);
+    const std::string text = common_detokenize(d->vocab, canvas, /*special*/ false);
+    fprintf(d->out, "F %d %d %d %s\n", d->block, step, total_steps, nlohmann::json(text).dump().c_str());
     fflush(d->out);
     return true;
 }
@@ -99,6 +110,9 @@ int main(int argc, char ** argv) {
     if (!llama_model_is_diffusion(model)) { fprintf(stderr, "not a diffusion model\n"); return 1; }
     const llama_vocab * vocab = llama_model_get_vocab(model);
     const int n_vocab = llama_vocab_n_tokens(vocab);
+
+    // chat template + tokenizer come from the GGUF itself (same as the CLI): no client-side tokenizer needed
+    common_chat_templates_ptr chat_templates = common_chat_templates_init(model, "");
 
     int64_t canvas_length = 0;
     {
@@ -161,15 +175,28 @@ int main(int argc, char ** argv) {
         if (L == 0) continue;
         if (strcmp(line, "QUIT") == 0) break;
 
-        std::vector<int32_t> req = read_i32_file(line);
-        if (req.size() < 3) { printf("ERR badreq\n"); fflush(stdout); continue; }
-        const int P        = req[0];
-        const int n_blocks = req[1];
-        const int seed     = req[2];
-        if (P <= 0 || (int) req.size() != 3 + P) { printf("ERR badsize\n"); fflush(stdout); continue; }
+        // parse the request file: {"seed", "n_blocks", "messages":[...]} -> chat template -> token prefix
+        int seed = 0, n_blocks = 1;
+        std::vector<llama_token> prefix;
+        try {
+            const std::string raw = read_text_file(line);
+            if (raw.empty()) { printf("ERR badreq\n"); fflush(stdout); continue; }
+            const nlohmann::ordered_json req = nlohmann::ordered_json::parse(raw);
+            seed     = req.value("seed", 0);
+            n_blocks = req.value("n_blocks", 1);
+            std::vector<common_chat_msg> messages = common_chat_msgs_parse_oaicompat(req.at("messages"));
+            common_chat_templates_inputs inputs;
+            inputs.messages              = messages;
+            inputs.add_generation_prompt = true;
+            const std::string prompt = common_chat_templates_apply(chat_templates.get(), inputs).prompt;
+            prefix = common_tokenize(vocab, prompt, /*add special*/ true, /*parse special*/ true);
+        } catch (const std::exception & e) {
+            printf("ERR parse %s\n", e.what()); fflush(stdout); continue;
+        }
+        if (prefix.empty()) { printf("ERR emptyprompt\n"); fflush(stdout); continue; }
 
-        // prefix grows as each block commits; start from the prompt ids
-        std::vector<llama_token> prefix(req.begin() + 3, req.begin() + 3 + P);
+        const int P = (int) prefix.size();          // original prompt length; the answer is what grows past it
+        std::vector<llama_token> answer;             // cumulative committed canvas tokens (across blocks)
 
         for (int b = 0; b < std::max(1, n_blocks); b++) {
             const int32_t prefix_len = (int32_t) prefix.size();
@@ -180,7 +207,7 @@ int main(int argc, char ** argv) {
             eb.max_length              = max_length;
             eb.seed                    = seed + b;   // distinct per block, deterministic from the request seed
             eb.visual_mode             = true;
-            vis_cb_data cb{ b, prefix_len, stdout };
+            vis_cb_data cb{ b, prefix_len, stdout, vocab };
             eb.step_callback           = vis_step_callback;
             eb.step_callback_user_data = &cb;
 
@@ -191,13 +218,14 @@ int main(int argc, char ** argv) {
             const llama_token * canvas = output_tokens.data() + prefix_len;
             const size_t cut = trim_canvas(vocab, canvas, (size_t) canvas_length);
 
-            printf("C %d %d", b, (int) cut);
-            for (size_t i = 0; i < cut; i++) printf(" %d", (int) canvas[i]);
-            printf("\n"); fflush(stdout);
+            answer.insert(answer.end(), canvas, canvas + cut);
+            const std::string answer_text = common_detokenize(vocab, answer, /*special*/ false);
+            printf("C %d %s\n", b, nlohmann::json(answer_text).dump().c_str()); fflush(stdout);
 
             if (cut < (size_t) canvas_length) break;                 // eog / repetition loop: answer complete
             prefix.insert(prefix.end(), canvas, canvas + cut);       // commit the block, denoise the next
         }
+        (void) P;
         printf("DONE\n"); fflush(stdout);
     }
 
