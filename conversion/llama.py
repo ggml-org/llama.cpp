@@ -68,11 +68,11 @@ class LlamaModel(TextModel):
                 target_config = {**target_config, **target_config["text_config"]}
             self.target_vocab_size = target_config["vocab_size"]
 
-            # extract_layers: derived from target model layer count (low/mid/high)
+            # target_layers: derived from target model layer count (low/mid/high)
             target_num_layers = target_config["num_hidden_layers"]
-            extract_layers = [2, target_num_layers // 2, target_num_layers - 3]
-            logger.info(f"EAGLE-3: extract_layers = {extract_layers} (target model has {target_num_layers} layers)")
-            self.gguf_writer.add_array(f"{self.gguf_writer.arch}.extract_layers", extract_layers)
+            target_layers = [2, target_num_layers // 2, target_num_layers - 3]
+            logger.info(f"EAGLE-3: target_layers = {target_layers} (target model has {target_num_layers} layers)")
+            self.gguf_writer.add_array(f"{self.gguf_writer.arch}.target_layers", target_layers)
 
             # target_hidden_size: prefer eagle3 config, fallback to target config
             if eagle3_raw_config.get("target_hidden_size") is not None:

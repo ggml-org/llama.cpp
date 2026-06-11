@@ -3,29 +3,29 @@
 void llama_model_eagle3::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
 
-    if (!ml.get_arr(LLM_KV_EAGLE3_EXTRACT_LAYERS, target_extract_layers, false)) {
+    if (!ml.get_arr(LLM_KV_TARGET_LAYERS, target_layer_ids, false)) {
         throw std::runtime_error("EAGLE3 model requires 'extract_layers' in GGUF metadata");
     }
-    if (target_extract_layers.size() != 3) {
+    if (target_layer_ids.size() != 3) {
         throw std::runtime_error("EAGLE3 requires exactly 3 entries in 'extract_layers'");
     }
     LLAMA_LOG_INFO("%s: EAGLE3 extract_layers = [%d, %d, %d]\n", __func__,
-            target_extract_layers[0],
-            target_extract_layers[1],
-            target_extract_layers[2]);
+            target_layer_ids[0],
+            target_layer_ids[1],
+            target_layer_ids[2]);
 
     uint32_t n_embd_tgt = 0;
 
-    ml.get_key(LLM_KV_EAGLE3_TARGET_HIDDEN_SIZE, n_embd_tgt);
+    ml.get_key(LLM_KV_TARGET_HIDDEN_SIZE, n_embd_tgt);
     LLAMA_LOG_INFO("%s: EAGLE3 n_embd_tgt = %u (draft n_embd = %u)\n", __func__, n_embd_tgt, hparams.n_embd);
 
-    hparams.n_embd_inp_impl = (uint32_t) target_extract_layers.size() * n_embd_tgt;
+    hparams.n_embd_inp_impl = (uint32_t) target_layer_ids.size() * n_embd_tgt;
 
     // eagle3 norm_before_residual (optional, default false)
     // compatible with Readhat eagle3 speculator model
-    ml.get_key(LLM_KV_EAGLE3_NORM_BEFORE_RESIDUAL, hparams.norm_before_residual, false);
+    ml.get_key(LLM_KV_NORM_BEFORE_RESIDUAL, hparams.norm_before_residual, false);
     if (hparams.norm_before_residual) {
-        LLAMA_LOG_INFO("%s: EAGLE3 norm_before_residual = true\n", __func__);
+        LLAMA_LOG_INFO("%s: EAGLE3gnorm_before_residual = true\n", __func__);
     }
 
     type = LLM_TYPE_UNKNOWN;
@@ -43,7 +43,7 @@ void llama_model_eagle3::load_arch_tensors(llama_model_loader &) {
     const struct ggml_tensor * d2t_meta = ml->get_tensor_meta("d2t");
     if (d2t_meta) {
         n_draft_vocab = d2t_meta->ne[0]; // update draft vocab size
-        d2t = create_tensor(tn(LLM_TENSOR_EAGLE3_D2T), {n_draft_vocab}, 0);
+        d2t = create_tensor(tn(LLM_TENSOR_D2T), {n_draft_vocab}, 0);
         LLAMA_LOG_INFO("%s: EAGLE3 using d2t mapping (draft_vocab_size = %lld)\n", __func__, (long long)n_draft_vocab);
     } else {
         d2t = nullptr; // no d2t, use default vocab size
@@ -51,7 +51,7 @@ void llama_model_eagle3::load_arch_tensors(llama_model_loader &) {
     }
 
     // Feature fusion layer: projects 3 target layers to draft hidden size
-    fc = create_tensor(tn(LLM_TENSOR_EAGLE3_FC, "weight"), {n_embd_inp, n_embd}, 0);
+    fc = create_tensor(tn(LLM_TENSOR_FC, "weight"), {n_embd_inp, n_embd}, 0);
 
     // Output layer (uses draft vocab size)
     output_norm = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd}, 0);

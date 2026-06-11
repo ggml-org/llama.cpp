@@ -416,11 +416,12 @@ struct common_speculative_impl_draft_eagle3 : public common_speculative_impl {
 
     std::vector<common_sampler_ptr> smpls;
 
-    int32_t         n_embd_dec       = 0;       // draft hidden size
-    int32_t         n_embd_enc       = 0;       // n_extract_layers * target_hidden_size
-    int32_t         n_embd_tgt       = 0;       // target model hidden size
-    const int32_t * extract_layers   = nullptr; // model_dft's extract layer indices
-    uint32_t        n_extract_layers = 0;
+    int32_t n_embd_dec = 0;       // draft hidden size
+    int32_t n_embd_enc = 0;       // target_layer_ids_n * target_hidden_size
+    int32_t n_embd_tgt = 0;       // target model hidden size
+
+    const int32_t * target_layer_ids   = nullptr; // model_dft's extract layer indices
+    uint32_t        target_layer_ids_n = 0;
 
     // [per-seq] deferred boundary state
     std::vector<std::vector<float>> pending_g_last;
@@ -449,16 +450,16 @@ struct common_speculative_impl_draft_eagle3 : public common_speculative_impl {
         const llama_model * model_dft = llama_get_model(ctx_dft);
         const llama_model * model_tgt = llama_get_model(ctx_tgt);
 
-        extract_layers   = llama_model_target_extract_layers  (model_dft);
-        n_extract_layers = llama_model_n_target_extract_layers(model_dft);
-        if (n_extract_layers != 3) {
+        target_layer_ids   = llama_model_target_layer_ids  (model_dft);
+        target_layer_ids_n = llama_model_target_layer_ids_n(model_dft);
+        if (target_layer_ids_n != 3) {
             throw std::runtime_error("draft model is not eagle3 (expected 3 extract layers, got " +
-                                     std::to_string(n_extract_layers) + ")");
+                                     std::to_string(target_layer_ids_n) + ")");
         }
 
         n_embd_tgt = llama_model_n_embd(model_tgt);
         n_embd_dec = llama_model_n_embd(model_dft);
-        n_embd_enc = (int32_t) n_extract_layers * n_embd_tgt;
+        n_embd_enc = (int32_t) target_layer_ids_n * n_embd_tgt;
 
         const int32_t n_b = (int32_t) llama_n_batch(ctx_dft);
         batch = llama_batch_init(/*n_tokens=*/ n_b, /*embd=*/ n_embd_dec, /*n_seq_max=*/ 1);
@@ -476,8 +477,8 @@ struct common_speculative_impl_draft_eagle3 : public common_speculative_impl {
         }
 
         // turn on extraction of the target layers' input embeddings
-        for (uint32_t k = 0; k < n_extract_layers; ++k) {
-            llama_set_embeddings_layer_inp(ctx_tgt, (uint32_t) extract_layers[k], true);
+        for (uint32_t k = 0; k < target_layer_ids_n; ++k) {
+            llama_set_embeddings_layer_inp(ctx_tgt, (uint32_t) target_layer_ids[k], true);
         }
 
         // turn on extraction of the draft model's pre-norm hidden state
@@ -548,14 +549,14 @@ struct common_speculative_impl_draft_eagle3 : public common_speculative_impl {
         auto * ctx_dft = this->params.ctx_dft;
 
         // Interleave each extract_layer's hidden state into a contiguous buffer of
-        // shape [n_tokens, n_extract_layers * n_embd_tgt]. Then run EAGLE3 encoder
+        // shape [n_tokens, target_layer_ids_n * n_embd_tgt]. Then run EAGLE3 encoder
         // to get one g_embd row per token.
         features_buf.resize((size_t) n_tokens * n_embd_enc, 0.0f);
 
-        for (uint32_t k = 0; k < n_extract_layers; ++k) {
-            const float * layer = llama_get_embeddings_layer_inp(ctx_tgt, (uint32_t) extract_layers[k]);
+        for (uint32_t k = 0; k < target_layer_ids_n; ++k) {
+            const float * layer = llama_get_embeddings_layer_inp(ctx_tgt, (uint32_t) target_layer_ids[k]);
             if (!layer) {
-                GGML_ABORT("EAGLE3: target layer %d input not extracted.", extract_layers[k]);
+                GGML_ABORT("EAGLE3: target layer %d input not extracted.", target_layer_ids[k]);
             }
             for (int32_t i = 0; i < n_tokens; ++i) {
                 float * dst = features_buf.data() + (size_t) i * n_embd_enc + k * (size_t) n_embd_tgt;

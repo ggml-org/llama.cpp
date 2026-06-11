@@ -154,9 +154,9 @@ class Keys:
         HIDDEN_ACT                        = "{arch}.hidden_activation"
         DENSE_FEAT_IN_SIZE                = "{arch}.{dense}_feat_in"
         DENSE_FEAT_OUT_SIZE               = "{arch}.{dense}_feat_out"
-        EAGLE3_EXTRACT_LAYERS             = "{arch}.extract_layers"
-        EAGLE3_TARGET_HIDDEN_SIZE         = "{arch}.target_hidden_size"
-        EAGLE3_NORM_BEFORE_RESIDUAL       = "{arch}.norm_before_residual"
+        TARGET_LAYERS                     = "{arch}.target_layers"
+        TARGET_HIDDEN_SIZE                = "{arch}.target_hidden_size"
+        NORM_BEFORE_RESIDUAL              = "{arch}.norm_before_residual"
 
     class Attention:
         HEAD_COUNT                   = "{arch}.attention.head_count"
@@ -904,17 +904,17 @@ class MODEL_TENSOR(IntEnum):
     A_PER_DIM_K_SCALE     = auto() # gemma4
     A_PER_DIM_SCALE       = auto() # gemma4
     # nextn/mtp
-    NEXTN_PROJ_PRE       = auto()
-    NEXTN_PROJ_POST      = auto()
-    NEXTN_EH_PROJ        = auto()
-    NEXTN_EMBED_TOKENS   = auto()
-    NEXTN_ENORM          = auto()
-    NEXTN_HNORM          = auto()
+    NEXTN_PROJ_PRE         = auto()
+    NEXTN_PROJ_POST        = auto()
+    NEXTN_EH_PROJ          = auto()
+    NEXTN_EMBED_TOKENS     = auto()
+    NEXTN_ENORM            = auto()
+    NEXTN_HNORM            = auto()
     NEXTN_SHARED_HEAD_HEAD = auto()
     NEXTN_SHARED_HEAD_NORM = auto()
     # eagle3
-    EAGLE3_FC          = auto()  # feature fusion layer
-    EAGLE3_D2T         = auto()  # draft to target vocabulary mapping
+    FC                     = auto()  # feature fusion layer
+    D2T                    = auto()  # draft to target vocabulary mapping
     # lfm2 audio
     A_ENC_NORM_CONV        = auto()
     A_ENC_LINEAR_POS       = auto()
@@ -1102,8 +1102,8 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.POS_EMBD:                  "position_embd",
     MODEL_TENSOR.OUTPUT_NORM:               "output_norm",
     MODEL_TENSOR.OUTPUT:                    "output",
-    MODEL_TENSOR.DENSE_2_OUT:                "dense_2", # embeddinggemma 2_Dense
-    MODEL_TENSOR.DENSE_3_OUT:                "dense_3", # embeddinggemma 2_Dense
+    MODEL_TENSOR.DENSE_2_OUT:               "dense_2", # embeddinggemma 2_Dense
+    MODEL_TENSOR.DENSE_3_OUT:               "dense_3", # embeddinggemma 2_Dense
     MODEL_TENSOR.ROPE_FREQS:                "rope_freqs",
     MODEL_TENSOR.ROPE_FACTORS_LONG:         "rope_factors_long",
     MODEL_TENSOR.ROPE_FACTORS_SHORT:        "rope_factors_short",
@@ -1495,8 +1495,8 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.NEXTN_HNORM:               "blk.{bid}.nextn.hnorm",
     MODEL_TENSOR.NEXTN_SHARED_HEAD_HEAD:    "blk.{bid}.nextn.shared_head_head",
     MODEL_TENSOR.NEXTN_SHARED_HEAD_NORM:    "blk.{bid}.nextn.shared_head_norm",
-    MODEL_TENSOR.EAGLE3_FC:                 "fc",
-    MODEL_TENSOR.EAGLE3_D2T:                "d2t",
+    MODEL_TENSOR.FC:                        "fc",
+    MODEL_TENSOR.D2T:                       "d2t",
 }
 
 MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
@@ -4052,8 +4052,8 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_GATE,
         MODEL_TENSOR.FFN_DOWN,
         MODEL_TENSOR.FFN_UP,
-        MODEL_TENSOR.EAGLE3_FC,
-        MODEL_TENSOR.EAGLE3_D2T,
+        MODEL_TENSOR.FC,
+        MODEL_TENSOR.D2T,
     ],
     MODEL_ARCH.MISTRAL4: [
         MODEL_TENSOR.TOKEN_EMBD,

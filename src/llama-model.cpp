@@ -2692,11 +2692,11 @@ void llama_model_base::create_tensor_qkv(llama_layer & layer, int bid,
     }
 }
 
-const int32_t * llama_model_target_extract_layers(const struct llama_model * model) {
-    const auto & v = model->target_extract_layers;
+const int32_t * llama_model_target_layer_ids(const struct llama_model * model) {
+    const auto & v = model->target_layer_ids;
     return v.empty() ? nullptr : v.data();
 }
 
-uint32_t llama_model_n_target_extract_layers(const struct llama_model * model) {
-    return (uint32_t) model->target_extract_layers.size();
+uint32_t llama_model_target_layer_ids_n(const struct llama_model * model) {
+    return (uint32_t) model->target_layer_ids.size();
 }
