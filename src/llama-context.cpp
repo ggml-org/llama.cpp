@@ -1380,9 +1380,7 @@ int llama_context::encode(const llama_batch & batch_inp) {
     const auto & hparams = model.hparams;
 
     // eagle3/DFlash: features as encoder input, and non-draft paths fall back to model's input dim
-    const int64_t n_embd = (hparams.n_embd_target_features > 0 && batch_inp.embd)
-                             ? (int64_t) hparams.n_embd_target_features
-                             : hparams.n_embd_inp();
+    const int64_t n_embd = hparams.n_embd_inp();
     const int64_t n_vocab = model.vocab.n_tokens();
 
     // note: during encode, we always pass the full sequence starting from pos = 0

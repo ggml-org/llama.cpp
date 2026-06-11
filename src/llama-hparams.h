@@ -236,9 +236,8 @@ struct llama_hparams {
     std::array<int32_t, LLAMA_MAX_LAYERS> deepstack_mapping_arr;
 
     // eagle3/DFlash sahred params
-    // n_embd_target_features = n_extract * target_hidden_size (encoder input dim)
-    uint32_t n_embd_target_features = 0;
-    uint32_t target_hidden_size     = 0;
+    // n_embd_impl = n_extract * target_hidden_size (encoder input dim)
+    uint32_t target_hidden_size = 0;
     // eagle3: whether to apply hidden_norm before storing residual
     bool eagle3_norm_before_residual = false;
 
