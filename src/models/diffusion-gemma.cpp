@@ -3,6 +3,8 @@
 #include "ggml-backend.h"
 #include "ggml-alloc.h"
 
+#include <algorithm>
+
 // diffusion_gemma reuses the gemma4 decoder block (tensor layout + per-layer math) but runs
 // as a bidirectional (non-causal) block-diffusion denoiser over a canvas, with KV-cache reuse:
 // the prompt / previously-finalized canvases form a causal, read-only prefix in the unified
@@ -10,7 +12,7 @@
 // (self-conditioned, bidirectional), rolling back its own K/V afterwards.
 //
 // Two graph variants are provided (see build_arch_graph): a single phase-branching graph, and
-// a separate encoder/decoder pair (DG_SEPARATE_ENC_DEC). Both reuse the gemma4 transformer
+// a separate encoder/decoder pair (--diffusion-separate-encoder-decoder). Both reuse the gemma4 transformer
 // body and differ only in input-embedding handling (encoder: plain; decoder: self-conditioned).
 
 void llama_model_diffusion_gemma::load_arch_hparams(llama_model_loader & ml) {
@@ -169,10 +171,10 @@ std::unique_ptr<llm_graph_context> llama_model_diffusion_gemma::build_arch_graph
     const bool is_decoder = params.diffusion && params.diffusion->decoder_phase;
 
     // Variant B ("separate encoder and decoder block", shared weights): opt-in via
-    // DG_SEPARATE_ENC_DEC. Two distinct graphs are built per phase. Functionally identical
+    // --diffusion-separate-encoder-decoder. Two distinct graphs are built per phase. Functionally identical
     // to Variant A here (the checkpoint shares encoder/decoder weights); the split mirrors
     // the HF two-stack structure and generalizes to a checkpoint with distinct weights.
-    if (getenv("DG_SEPARATE_ENC_DEC")) {
+    if (params.diffusion && params.diffusion->separate_encoder_decoder) {
         if (is_decoder) {
             return std::make_unique<graph_decoder>(*this, params);
         }
@@ -203,7 +205,9 @@ ggml_tensor * llama_model_diffusion_gemma::graph_base::build_input(bool is_decod
             // position; gather just those k embedding rows and blend them, instead of the dense
             // full-vocab `probs @ token_embd` matmul. Gather width is fixed (N_SC_TOPK) so the
             // graph shape is constant; unused slots carry prob 0 (the CLI zero-pads).
-            const int64_t k = llama_model_diffusion_gemma::N_SC_TOPK;
+            const int64_t k = diffusion ?
+                std::min<int64_t>(std::max<int64_t>(diffusion->self_cond_top_k, 1), llama_model_diffusion_gemma::N_SC_TOPK) :
+                llama_model_diffusion_gemma::N_SC_TOPK;
             auto * inp = build_inp_diffusion_self_cond_topk(k);
             ggml_tensor * ids   = inp->ids;                                                // I32 {k*n_tokens}
             ggml_tensor * probs = inp->probs;                                              // F32 {k, n_tokens}

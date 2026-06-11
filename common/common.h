@@ -390,6 +390,10 @@ struct common_params_vocoder {
 struct common_params_diffusion {
     int32_t steps         = 128;
     bool    visual_mode   = false;
+    bool    gpu_sampling  = true;  // use CUDA diffusion sampling fast path when available
+    bool    device_self_cond = true;  // keep diffusion self-conditioning state on device
+    bool    device_denoise_loop = true; // update diffusion canvas/stop state on device
+    bool    pin_host_outputs = false; // register compact D2H output buffers as pinned host memory
 
     float   eps           = 0;        // epsilon for timesteps
     int32_t block_length  = 0;        // block length for generation
@@ -404,6 +408,13 @@ struct common_params_diffusion {
     int32_t top_k_start        = 0;     // anneal top-k from this (first/high-entropy step) ...
     int32_t top_k_end          = 0;     // ... to this (last step); both > 0 enables annealing
     bool    top_k_tail_correction = false; // use exact full-vocab entropy for accept/stop
+    int32_t default_top_k      = 0;     // top-k used when --top-k is not explicitly provided
+    int32_t force_top_k        = 0;     // server: override per-request top_k when > 0
+    int32_t self_cond_top_k    = 256;   // sparse self-conditioning gather width
+    uint32_t input_gpu_groups  = 63;    // decoder input tensor groups assigned to GPU backend
+
+    bool    cuda_fast_top_k    = true;  // use CUDA fast top-k selection path
+    bool    separate_encoder_decoder = false; // build separate diffusion encoder/decoder graph variants
 };
 
 // reasoning API response format (not to be confused as chat template's reasoning format)

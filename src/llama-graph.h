@@ -115,6 +115,10 @@ struct llama_diffusion_cond {
     // superset graph (the decoder adds the self-conditioning input + block on top of the
     // encoder graph). The caller sets the actual phase before every decode.
     bool decoder_phase = true;
+
+    int64_t self_cond_top_k = 256;
+    uint32_t input_gpu_groups = 63;
+    bool separate_encoder_decoder = false;
 };
 
 struct llm_graph_params;

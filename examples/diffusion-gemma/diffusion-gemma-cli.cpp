@@ -21,12 +21,14 @@
 #include "log.h"
 #include "mtmd.h"
 #include "mtmd-helper.h"
+#ifdef GGML_USE_CUDA
+#include "ggml-cuda.h"
+#endif
 
 #include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
-#include <functional>
 #include <numeric>
 #include <random>
 #include <utility>
@@ -42,9 +44,38 @@ static constexpr float CONFIDENCE_THRESHOLD   = 0.005f; // StableAndConfident.co
 static constexpr int   STABILITY_THRESHOLD    = 1;      // StableAndConfident.stability_threshold
 static constexpr int   GPU_SAMPLING_MAX_TOP_K = 1024;   // small top-k sort kernel limit
 
-static int env_int(const char * name, int def) {
-    const char * v = getenv(name);
-    return v ? atoi(v) : def;
+#ifdef GGML_USE_CUDA
+struct diffusion_cuda_host_pin {
+    diffusion_cuda_host_pin(void * ptr, size_t size, bool enabled) : ptr(ptr), size(size) {
+        registered = enabled && ptr && size && ggml_backend_cuda_register_host_buffer(ptr, size);
+    }
+
+    ~diffusion_cuda_host_pin() {
+        if (registered) {
+            ggml_backend_cuda_unregister_host_buffer(ptr);
+        }
+    }
+
+    diffusion_cuda_host_pin(const diffusion_cuda_host_pin &) = delete;
+    diffusion_cuda_host_pin & operator=(const diffusion_cuda_host_pin &) = delete;
+
+    void * ptr = nullptr;
+    size_t size = 0;
+    bool registered = false;
+};
+#else
+struct diffusion_cuda_host_pin {
+    diffusion_cuda_host_pin(void *, size_t, bool) {}
+};
+#endif
+
+static int diffusion_self_cond_top_k(const common_params & params) {
+    constexpr int def = 256;
+    const int k = params.diffusion.self_cond_top_k;
+    if (k <= 0) {
+        return def;
+    }
+    return std::min(k, def);
 }
 
 // apply the model's chat template to the user prompt (this is a chat-trained model)
@@ -59,22 +90,40 @@ static std::string format_chat(llama_model * model, const std::string & prompt) 
     return common_chat_templates_apply(tmpls.get(), inputs).prompt;
 }
 
+static void diffusion_gemma_print_usage(int, char **) {
+    printf("\nDiffusion-Gemma options:\n");
+    printf("  --diffusion-timing                    print diffusion decode/sample timing breakdown\n");
+}
+
 int main(int argc, char ** argv) {
+    bool log_step_timing = false;
+    std::vector<char *> fwd;
+    fwd.push_back(argv[0]);
+    for (int i = 1; i < argc; ++i) {
+        const std::string arg = argv[i];
+        if (arg == "--diffusion-timing") {
+            log_step_timing = true;
+        } else {
+            fwd.push_back(argv[i]);
+        }
+    }
+
     common_params params;
-    if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_DIFFUSION)) {
+    params.diffusion.steps = DEF_MAX_DENOISE_STEPS;
+    if (!common_params_parse((int) fwd.size(), fwd.data(), params, LLAMA_EXAMPLE_DIFFUSION, diffusion_gemma_print_usage)) {
         return 1;
     }
     common_init();
 
-    // diffusion config (env-overridable for quick CPU testing)
-    // canvas_length is fixed at the trained block size (256); overriding it is for experiments only.
-    const int   canvas_length = env_int("DG_CANVAS", DEF_CANVAS_LENGTH);
-    const int   n_steps       = env_int("DG_STEPS", DEF_MAX_DENOISE_STEPS);
+    // diffusion config
+    // canvas_length is fixed at the trained block size (256).
+    const int   canvas_length = DEF_CANVAS_LENGTH;
+    const int   n_steps       = std::max(params.diffusion.steps, 1);
     // number of autoregressive canvas blocks = ceil(-n / canvas_length), i.e. -n is the total
     // number of tokens to generate (e.g. -n 256 -> 1 canvas, -n 512 -> 2, -n 1024 -> 4). The
-    // model may stop earlier on an EOG token. DG_MAX_CANVASES overrides; default (no -n) is 1.
+    // model may stop earlier on an EOG token; default (no -n) is 1.
     const int   blocks_from_n = params.n_predict > 0 ? (params.n_predict + canvas_length - 1) / canvas_length : 1;
-    const int   max_canvases  = std::max(env_int("DG_MAX_CANVASES", blocks_from_n), 1); // autoregressive blocks
+    const int   max_canvases  = std::max(blocks_from_n, 1); // autoregressive blocks
     const float entropy_bound = ENTROPY_BOUND;
 
     // top-k host sampling (CLI flags; default = full softmax over the whole vocab):
@@ -85,10 +134,11 @@ int main(int argc, char ** argv) {
     // --top-k uses its own "0 = disabled" convention and is applied only when explicitly passed.
     const int topk_fixed = (params.sampling.user_sampling_config & common_params_sampling_config::COMMON_PARAMS_SAMPLING_CONFIG_TOP_K)
                          ? params.sampling.top_k
-                         : 0;
+                         : std::max(params.diffusion.default_top_k, 0);
     const int topk_start = params.diffusion.top_k_start;
     const int topk_end   = params.diffusion.top_k_end;
     const int topk_tail  = params.diffusion.top_k_tail_correction ? 1 : 0;
+    const int SC_K       = diffusion_self_cond_top_k(params);
 
     llama_backend_init();
 
@@ -189,6 +239,9 @@ int main(int argc, char ** argv) {
     ctx_params.n_batch  = n_ub;
     ctx_params.n_ubatch = n_ub;
     ctx_params.no_perf  = params.no_perf;
+    ctx_params.diffusion_self_cond_top_k = SC_K;
+    ctx_params.diffusion_input_gpu_groups = params.diffusion.input_gpu_groups;
+    ctx_params.diffusion_separate_encoder_decoder = params.diffusion.separate_encoder_decoder;
 
     llama_context * ctx = llama_init_from_model(model, ctx_params);
     if (!ctx) {
@@ -202,13 +255,13 @@ int main(int argc, char ** argv) {
 
     const int topk_max_requested =
         (topk_start > 0 && topk_end > 0) ? std::max(topk_start, topk_end) : topk_fixed;
-    const bool gpu_sampling_requested = env_int("DG_GPU_SAMPLING", 1) != 0;
+    const bool gpu_sampling_requested = params.diffusion.gpu_sampling;
     const bool gpu_sampling_topk_ok = topk_max_requested <= 0 || topk_max_requested <= GPU_SAMPLING_MAX_TOP_K;
     const bool use_gpu_sampling = gpu_sampling_requested &&
                                   gpu_sampling_topk_ok &&
                                   llama_diffusion_sample_topk_supported(ctx);
-    const bool use_device_self_cond = use_gpu_sampling && env_int("DG_DEVICE_SELFCOND", 1) != 0;
-    const bool use_device_loop      = use_device_self_cond && env_int("DG_DEVICE_LOOP", 1) != 0;
+    const bool use_device_self_cond = use_gpu_sampling && params.diffusion.device_self_cond;
+    const bool use_device_loop      = use_device_self_cond && params.diffusion.device_denoise_loop;
     const int device_early_stop_interval = use_device_loop ? 1 : 0;
     llama_set_diffusion_gpu_sampling(ctx, use_gpu_sampling);
 
@@ -217,7 +270,7 @@ int main(int argc, char ** argv) {
     LOG_INF("diffusion-gemma: gpu sampling: %s%s%s%s\n",
             use_gpu_sampling ? "on" : "off",
             (!gpu_sampling_topk_ok ? " (top-k exceeds CUDA fast-path limit)" :
-             (!gpu_sampling_requested ? " (disabled by DG_GPU_SAMPLING=0)" : "")),
+             (!gpu_sampling_requested ? " (disabled by --no-diffusion-gpu-sampling)" : "")),
             use_device_self_cond ? " | device self-cond: on" : "",
             use_device_loop ? " | device loop: on" : "");
     if (device_early_stop_interval > 0) {
@@ -287,10 +340,15 @@ int main(int argc, char ** argv) {
     // (renormalized) softmax probabilities per position. Fed to the next decode (Option-2 graph
     // gather: the decoder gathers just these SC_K embedding rows and blends them, instead of a
     // dense full-vocab probs @ token_embd matmul). Zero probs => no self-conditioning (step 1).
-    // SC_K must match llama_model_diffusion_gemma::N_SC_TOPK (the graph's fixed gather width).
-    const int SC_K = 256;
+    // SC_K must not exceed the graph's maximum gather width.
     std::vector<int32_t> sc_ids ((size_t) SC_K * canvas_length, 0);
     std::vector<float>   sc_probs((size_t) SC_K * canvas_length, 0.0f);
+    int32_t stop_flag = 0;
+
+    const bool pin_host_outputs = params.diffusion.pin_host_outputs;
+    diffusion_cuda_host_pin pin_argmax_canvas(
+            argmax_canvas.data(), argmax_canvas.size() * sizeof(argmax_canvas[0]), pin_host_outputs);
+    diffusion_cuda_host_pin pin_stop_flag(&stop_flag, sizeof(stop_flag), pin_host_outputs);
 
     // all generated tokens across the autoregressive canvas blocks
     std::vector<llama_token> generated;
@@ -300,7 +358,6 @@ int main(int argc, char ** argv) {
     int n_blocks_run  = 0;
     int n_steps_total = 0;
     const auto t_gen_start = std::chrono::steady_clock::now();
-    const bool log_step_timing = env_int("DG_TIMING", 0) != 0;
     double decode_enqueue_s = 0.0;
     double sample_sync_s    = 0.0;
     double host_loop_s      = 0.0;
@@ -362,7 +419,7 @@ int main(int argc, char ** argv) {
             const bool use_device_early_stop = device_early_stop_interval > 0;
             const bool reset_stop_state = use_device_early_stop && block_step == 1;
             const bool check_stop = use_device_early_stop;
-            int32_t stop_flag = 0;
+            stop_flag = 0;
             const auto t_sample_start = std::chrono::steady_clock::now();
             llama_diffusion_sample_params sample_params = {
                 /* .n_tokens              = */ canvas_length,
@@ -372,6 +429,7 @@ int main(int argc, char ** argv) {
                 /* .seed                  = */ params.sampling.seed == LLAMA_DEFAULT_SEED ? 1234u : params.sampling.seed,
                 /* .step                  = */ (uint32_t) n_steps_total,
                 /* .top_k_tail_correction = */ topk_tail != 0,
+                /* .cuda_fast_top_k       = */ params.diffusion.cuda_fast_top_k,
             };
             llama_diffusion_sample_result sample_result = {
                 /* .sampled         = */ nullptr,
@@ -422,6 +480,7 @@ int main(int argc, char ** argv) {
                 /* .seed                  = */ params.sampling.seed == LLAMA_DEFAULT_SEED ? 1234u : params.sampling.seed,
                 /* .step                  = */ (uint32_t) n_steps_total,
                 /* .top_k_tail_correction = */ topk_tail != 0,
+                /* .cuda_fast_top_k       = */ params.diffusion.cuda_fast_top_k,
             };
             llama_diffusion_sample_result sample_result = {
                 /* .sampled         = */ sampled.data(),

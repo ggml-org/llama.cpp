@@ -4,8 +4,6 @@
 
 #include <algorithm>
 #include <cfloat>
-#include <cstdlib>
-#include <cstring>
 #include <map>
 #include <mutex>
 
@@ -24,11 +22,6 @@ static int next_power_of_2_host(int x) {
         n <<= 1;
     }
     return n;
-}
-
-static bool diffusion_fast_topk_enabled() {
-    const char * v = std::getenv("GGML_CUDA_DIFFUSION_FAST_TOPK");
-    return !v || std::strcmp(v, "0") != 0;
 }
 
 struct diffusion_sample_scratch {
@@ -656,7 +649,7 @@ bool ggml_cuda_diffusion_sample_topk(
     int * top_ids = scratch->top_ids;
     bool top_ids_sorted = false;
 
-    const bool use_fast_topk = diffusion_fast_topk_enabled() && heap_k <= 1024 && n_vocab >= heap_k;
+    const bool use_fast_topk = params->fast_top_k && heap_k <= 1024 && n_vocab >= heap_k;
     bool sync_required = !use_fast_topk;
     if (use_fast_topk) {
         diffusion_select_topk_local(logits_d, top_ids, n_vocab, n_tokens, heap_k, stream);

@@ -52,6 +52,7 @@ struct ggml_cuda_diffusion_sample_params {
     uint32_t seed;
     uint32_t step;
     bool     top_k_tail_correction;
+    bool     fast_top_k;
 };
 
 struct ggml_cuda_diffusion_sample_result {

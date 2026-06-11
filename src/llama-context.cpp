@@ -209,6 +209,10 @@ llama_context::llama_context(
 
     cparams.n_outputs_max = params.n_outputs_max == 0 || llama_model_has_encoder(&model) ? cparams.n_batch : params.n_outputs_max;
 
+    diffusion_cond.self_cond_top_k = params.diffusion_self_cond_top_k > 0 ? params.diffusion_self_cond_top_k : 256;
+    diffusion_cond.input_gpu_groups = params.diffusion_input_gpu_groups;
+    diffusion_cond.separate_encoder_decoder = params.diffusion_separate_encoder_decoder;
+
     cparams.op_offload = params.op_offload;
     cparams.kv_unified = params.kv_unified;
 
@@ -1317,6 +1321,7 @@ bool llama_context::diffusion_sample_topk(
         /* .seed                  = */ params->seed,
         /* .step                  = */ params->step,
         /* .top_k_tail_correction = */ params->top_k_tail_correction,
+        /* .fast_top_k            = */ params->cuda_fast_top_k,
     };
 
     ggml_cuda_diffusion_sample_result cuda_result = {
@@ -3658,6 +3663,8 @@ llama_context_params llama_context_default_params() {
         /*.n_seq_max                   =*/ 1,
         /*.n_rs_seq                    =*/ 0,
         /*.n_outputs_max               =*/ 0,
+        /*.diffusion_self_cond_top_k   =*/ 256,
+        /*.diffusion_input_gpu_groups  =*/ 63,
         /*.n_threads                   =*/ GGML_DEFAULT_N_THREADS, // TODO: better default
         /*.n_threads_batch             =*/ GGML_DEFAULT_N_THREADS,
         /*.ctx_type                    =*/ LLAMA_CONTEXT_TYPE_DEFAULT,
@@ -3685,6 +3692,7 @@ llama_context_params llama_context_default_params() {
         /*.op_offload                  =*/ true,
         /*.swa_full                    =*/ true,
         /*.kv_unified                  =*/ false,
+        /*.diffusion_separate_encoder_decoder =*/ false,
         /*.sampler                     =*/ nullptr,
         /*.n_sampler                   =*/ 0,
         /*.ctx_other                   =*/ nullptr,

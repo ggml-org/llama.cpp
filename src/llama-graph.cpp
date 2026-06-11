@@ -1212,15 +1212,12 @@ void llm_graph_context::set_diffusion_input_backend(ggml_tensor * tensor, uint32
         return;
     }
 
-    static const uint32_t enabled_groups = [] {
-        const char * env = getenv("DG_GPU_INPUT_GROUPS");
-        // Keep the default to inputs used by the fixed diffusion decoder graph:
-        // canvas/self-cond, positions, attention scale, KV indices, masks and
-        // rotary helpers. Mark them as outputs too, matching ggml-backend's
-        // existing copy-tensor convention, so the allocator will not overwrite
-        // them between denoising replays.
-        return env ? (uint32_t) strtoul(env, nullptr, 0) : 63u; // 1|2|4|8|16|32
-    }();
+    // Keep the default to inputs used by the fixed diffusion decoder graph:
+    // canvas/self-cond, positions, attention scale, KV indices, masks and
+    // rotary helpers. Mark them as outputs too, matching ggml-backend's
+    // existing copy-tensor convention, so the allocator will not overwrite
+    // them between denoising replays.
+    const uint32_t enabled_groups = diffusion->input_gpu_groups;
     if ((enabled_groups & group) == 0) {
         return;
     }
