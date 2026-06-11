@@ -555,7 +555,6 @@ static __global__ void mul_mat_vec_q(
         const uint32_t channel_bias = ids ? channel_x : channel_dst;
         if (threadIdx.x < rows_per_cuda_block && threadIdx.y == 0 &&
             (rows_per_cuda_block == 1 || uint32_t(row0 + threadIdx.x) < stride_col_dst)) {
-            const uint32_t channel_bias = ids ? channel_x : channel_dst;
             if (use_bias) {
                 x_bias = x_bias + sample_dst * stride_sample_dst + channel_bias * stride_channel_dst + row0;
 #pragma unroll
@@ -563,20 +562,20 @@ static __global__ void mul_mat_vec_q(
                     x_biases[j] = x_bias[j * stride_col_dst + threadIdx.x];
                 }
             }
-        }
-        if (use_gate_bias) {
-            gate_bias = gate_bias + sample_dst * stride_sample_dst + channel_bias * stride_channel_dst + row0;
+            if (use_gate_bias) {
+                gate_bias = gate_bias + sample_dst * stride_sample_dst + channel_bias * stride_channel_dst + row0;
 #pragma unroll
-            for (int j = 0; j < ncols_dst; ++j) {
-                gate_biases[j] = gate_bias[j * stride_col_dst + threadIdx.x];
+                for (int j = 0; j < ncols_dst; ++j) {
+                    gate_biases[j] = gate_bias[j * stride_col_dst + threadIdx.x];
+                }
             }
-        }
-        if constexpr (type == GGML_TYPE_NVFP4) {
-            if (use_scale) {
-                x_scales = x_scale[ids ? channel_x : 0];
-            }
-            if (use_gate_scale) {
-                gate_scales = gate_scale[ids ? channel_x : 0];
+            if constexpr (type == GGML_TYPE_NVFP4) {
+                if (use_scale) {
+                    x_scales = x_scale[ids ? channel_x : 0];
+                }
+                if (use_gate_scale) {
+                    gate_scales = gate_scale[ids ? channel_x : 0];
+                }
             }
         }
     }
