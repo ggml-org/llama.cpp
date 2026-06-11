@@ -192,8 +192,6 @@ llama_model_eagle3::graph<false>::graph(const llama_model & model, const llm_gra
 
     const float kq_scale = 1.0f/sqrtf(float(n_embd_head));
 
-    ggml_tensor * inp_out_ids = build_inp_out_ids();
-
     // Single decoder layer (il = 0)
     const int il = 0;
     {
@@ -285,10 +283,6 @@ llama_model_eagle3::graph<false>::graph(const llama_model & model, const llm_gra
     // Output prenorm state (for next token's g_embeddings in autoregressive generation)
     ggml_set_output(cur);
     res->t_h_nextn = cur;
-
-    if (inp_out_ids) {
-        cur = ggml_get_rows(ctx0, cur, inp_out_ids);
-    }
 
     cur = build_norm(cur,
             model.output_norm, NULL,

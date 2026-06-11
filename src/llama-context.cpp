@@ -1152,6 +1152,7 @@ void llama_context::set_embeddings_layer_inp(uint32_t lid, bool enable) {
 
     cparams.embeddings_layer_inp[lid] = enable;
 
+    // note: without this reserve, the draft acceptance drops to zero. not sure why - this is unexpected
     sched_need_reserve = true;
 }
 
