@@ -71,7 +71,7 @@ llama_context::llama_context(
     cparams.no_perf                 = params.no_perf;
     cparams.warmup                  = false;
 
-    cparams.output_layer_inp.resize(hparams.n_layer(), false);
+    cparams.embeddings_layer_inp.resize(hparams.n_layer(), false);
     embd_layer_inp.resize(hparams.n_layer());
 
     cparams.ctx_type     = params.ctx_type;
@@ -1150,7 +1150,7 @@ void llama_context::set_embeddings_layer_inp(uint32_t lid, bool enable) {
 
     GGML_ASSERT(lid < model.hparams.n_layer());
 
-    cparams.output_layer_inp[lid] = enable;
+    cparams.embeddings_layer_inp[lid] = enable;
 
     sched_need_reserve = true;
 }
@@ -2089,7 +2089,7 @@ uint32_t llama_context::output_reserve(int32_t n_outputs) {
         embd_nextn.size = (size_t) n_embd_out * n_batch;
     }
 
-    for (bool enabled : cparams.output_layer_inp) {
+    for (bool enabled : cparams.embeddings_layer_inp) {
         if (enabled) {
             embd_layer_inp_float_count += (size_t) n_embd * n_batch;
         }
@@ -2162,7 +2162,7 @@ uint32_t llama_context::output_reserve(int32_t n_outputs) {
     offset += embd_nextn.size * sizeof(float);
 
     for (uint32_t il = 0; il < embd_layer_inp.size(); ++il) {
-        if (cparams.output_layer_inp[il]) {
+        if (cparams.embeddings_layer_inp[il]) {
             embd_layer_inp[il] = buffer_view<float>{(float *) (base + offset), (size_t) n_embd * n_batch};
             offset += embd_layer_inp[il].size * sizeof(float);
         } else {
@@ -2217,8 +2217,8 @@ uint32_t llama_context::output_reserve(int32_t n_outputs) {
 }
 
 void llama_context::extract_layer_inputs(const llm_graph_result * res, size_t token_offset, size_t n_tokens) {
-    for (uint32_t il = 0; il < cparams.output_layer_inp.size(); ++il) {
-        if (!cparams.output_layer_inp[il]) {
+    for (uint32_t il = 0; il < cparams.embeddings_layer_inp.size(); ++il) {
+        if (!cparams.embeddings_layer_inp[il]) {
             continue;
         }
         if (!embd_layer_inp[il].has_data()) {

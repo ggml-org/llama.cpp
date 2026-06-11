@@ -950,9 +950,9 @@ void llm_graph_result::set_outputs(const llm_graph_params & params) {
         ggml_set_output(t_h_nextn);
     }
     {
-        const auto & output_layer_inp = params.cparams.output_layer_inp;
-        for (size_t il = 0; il < output_layer_inp.size(); ++il) {
-            if (output_layer_inp[il]) {
+        const auto & embeddings_layer_inp = params.cparams.embeddings_layer_inp;
+        for (size_t il = 0; il < embeddings_layer_inp.size(); ++il) {
+            if (embeddings_layer_inp[il]) {
                 ggml_set_output(t_layer_inp[il]);
             }
         }
