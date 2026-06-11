@@ -2272,6 +2272,9 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             if (value) {
                 params.load_mode = LLAMA_LOAD_MODE_MMAP;
                 params.load_modifier = LLAMA_LOAD_MODIFIER_NONE;
+            } else {
+                params.load_mode = LLAMA_LOAD_MODE_NONE;
+                params.load_modifier = LLAMA_LOAD_MODIFIER_NONE;
             }
         }
     ).set_env("LLAMA_ARG_MMAP"));
@@ -2283,6 +2286,9 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             LOG_WRN("DEPRECATED: --direct-io and --no-direct-io are deprecated. use --load-mode dio instead\n");
             if (value) {
                 params.load_mode = LLAMA_LOAD_MODE_DIRECT_IO;
+                params.load_modifier = LLAMA_LOAD_MODIFIER_NONE;
+            } else {
+                params.load_mode = LLAMA_LOAD_MODE_NONE;
                 params.load_modifier = LLAMA_LOAD_MODIFIER_NONE;
             }
         }
