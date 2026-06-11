@@ -372,7 +372,14 @@ class Keys:
             HEAD_COUNT      = "clip.audio.projector.head_count"
 
     class Diffusion:
-        SHIFT_LOGITS        = "diffusion.shift_logits"
+        SHIFT_LOGITS         = "diffusion.shift_logits"
+        CANVAS_LENGTH        = "diffusion.canvas_length"
+        EB_MAX_STEPS         = "diffusion.eb_max_steps"
+        EB_T_MIN             = "diffusion.eb_t_min"
+        EB_T_MAX             = "diffusion.eb_t_max"
+        EB_ENTROPY_BOUND     = "diffusion.eb_entropy_bound"
+        EB_STABILITY         = "diffusion.eb_stability_threshold"
+        EB_CONFIDENCE        = "diffusion.eb_confidence_threshold"
 
     class xIELU:
         ALPHA_P             = "xielu.alpha_p"
@@ -603,6 +610,11 @@ class MODEL_TENSOR(IntEnum):
     SELF_COND_GATE       = auto() # diffusion-gemma
     SELF_COND_UP         = auto() # diffusion-gemma
     SELF_COND_DOWN       = auto() # diffusion-gemma
+    ENC_LAYER_OUT_SCALE  = auto() # diffusion-gemma (encoder-mode per-layer scalar)
+    SC_PRE_NORM          = auto() # diffusion-gemma self-conditioning
+    SC_GATE              = auto() # diffusion-gemma self-conditioning
+    SC_UP                = auto() # diffusion-gemma self-conditioning
+    SC_DOWN              = auto() # diffusion-gemma self-conditioning
     PER_LAYER_TOKEN_EMBD = auto() # gemma3n
     PER_LAYER_MODEL_PROJ = auto() # gemma3n
     PER_LAYER_INP_GATE   = auto() # gemma3n
@@ -1163,6 +1175,11 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.SELF_COND_GATE:            "self_cond_gate",                 # diffusion-gemma
     MODEL_TENSOR.SELF_COND_UP:              "self_cond_up",                   # diffusion-gemma
     MODEL_TENSOR.SELF_COND_DOWN:            "self_cond_down",                 # diffusion-gemma
+    MODEL_TENSOR.ENC_LAYER_OUT_SCALE:       "blk.{bid}.enc_layer_output_scale", # diffusion-gemma
+    MODEL_TENSOR.SC_PRE_NORM:               "self_cond_pre_norm",             # diffusion-gemma
+    MODEL_TENSOR.SC_GATE:                   "self_cond_gate",                 # diffusion-gemma
+    MODEL_TENSOR.SC_UP:                     "self_cond_up",                   # diffusion-gemma
+    MODEL_TENSOR.SC_DOWN:                   "self_cond_down",                 # diffusion-gemma
     MODEL_TENSOR.PER_LAYER_TOKEN_EMBD:      "per_layer_token_embd",           # gemma3n
     MODEL_TENSOR.PER_LAYER_MODEL_PROJ:      "per_layer_model_proj",           # gemma3n
     MODEL_TENSOR.PER_LAYER_PROJ_NORM:       "per_layer_proj_norm",            # gemma3n
@@ -2658,10 +2675,11 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_POST_NORM_1,
         MODEL_TENSOR.FFN_POST_NORM_2,
         MODEL_TENSOR.LAYER_OUT_SCALE,
-        MODEL_TENSOR.SELF_COND_NORM,
-        MODEL_TENSOR.SELF_COND_GATE,
-        MODEL_TENSOR.SELF_COND_UP,
-        MODEL_TENSOR.SELF_COND_DOWN,
+        MODEL_TENSOR.ENC_LAYER_OUT_SCALE,
+        MODEL_TENSOR.SC_PRE_NORM,
+        MODEL_TENSOR.SC_GATE,
+        MODEL_TENSOR.SC_UP,
+        MODEL_TENSOR.SC_DOWN,
     ],
     MODEL_ARCH.GEMMA_EMBEDDING: [
         MODEL_TENSOR.TOKEN_EMBD,

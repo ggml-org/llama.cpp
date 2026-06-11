@@ -32,10 +32,14 @@ void llama_model_diffusion_gemma::load_arch_tensors(llama_model_loader & ml) {
     // self_conditioning is a gated MLP at hidden_size -> intermediate_size -> hidden_size
     const int64_t n_ff_sc = n_ff;
 
-    self_cond_norm = create_tensor(tn(LLM_TENSOR_SELF_COND_NORM, "weight"), {n_embd},           0);
-    self_cond_gate = create_tensor(tn(LLM_TENSOR_SELF_COND_GATE, "weight"), {n_embd,  n_ff_sc}, 0);
-    self_cond_up   = create_tensor(tn(LLM_TENSOR_SELF_COND_UP,   "weight"), {n_embd,  n_ff_sc}, 0);
-    self_cond_down = create_tensor(tn(LLM_TENSOR_SELF_COND_DOWN, "weight"), {n_ff_sc, n_embd},  0);
+    self_cond_norm = create_tensor(tn(LLM_TENSOR_SC_PRE_NORM, "weight"), {n_embd}, 0);
+    self_cond_gate = create_tensor(tn(LLM_TENSOR_SC_GATE,     "weight"), {n_embd,  n_ff_sc}, 0);
+    self_cond_up   = create_tensor(tn(LLM_TENSOR_SC_UP,       "weight"), {n_embd,  n_ff_sc}, 0);
+    self_cond_down = create_tensor(tn(LLM_TENSOR_SC_DOWN,     "weight"), {n_ff_sc, n_embd},  0);
+
+    for (int i = 0; i < n_layer; ++i) {
+        create_tensor(tn(LLM_TENSOR_ENC_LAYER_OUT_SCALE, "weight", i), {1u}, 0);
+    }
 }
 
 llama_model_diffusion_gemma::~llama_model_diffusion_gemma() {
