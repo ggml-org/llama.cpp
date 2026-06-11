@@ -40,7 +40,19 @@
 		DATA_ERROR_BOUND_ATTR,
 		DATA_ERROR_HANDLED_ATTR,
 		BOOL_TRUE_STRING,
-		SETTINGS_KEYS
+		SETTINGS_KEYS,
+		MERMAID_WRAPPER_CLASS,
+		MERMAID_BLOCK_CLASS,
+		MERMAID_LANGUAGE,
+		MERMAID_SYNTAX_ATTR,
+		MERMAID_RENDERED_ATTR,
+		SVG_WRAPPER_CLASS,
+		SVG_BLOCK_CLASS,
+		SVG_LANGUAGE,
+		XML_LANGUAGE,
+		SVG_TAG_PREFIX,
+		SVG_SOURCE_ATTR,
+		SVG_RENDERED_ATTR
 	} from '$lib/constants';
 	import { ColorMode, UrlProtocol } from '$lib/enums';
 	import { FileTypeText } from '$lib/enums/files.enums';
@@ -83,8 +95,9 @@
 	const streamingSvgCode = $derived.by(() => {
 		const block = incompleteCodeBlock;
 		if (!block) return null;
-		if (block.language === 'svg') return block.code;
-		if (block.language === 'xml' && block.code.trimStart().startsWith('<svg')) return block.code;
+		if (block.language === SVG_LANGUAGE) return block.code;
+		if (block.language === XML_LANGUAGE && block.code.trimStart().startsWith(SVG_TAG_PREFIX))
+			return block.code;
 		return null;
 	});
 	const liveSvgHtml = $derived(streamingSvgCode !== null ? sanitizeSvg(streamingSvgCode) : '');
@@ -135,7 +148,7 @@
 			.use(rehypeRestoreTableHtml) // Restore limited HTML (e.g., <br>, <ul>) inside Markdown tables
 			.use(rehypeEnhanceLinks) // Add target="_blank" to links
 			.use(rehypeMermaidPre) // Convert mermaid blocks to <pre class="mermaid">
-			.use(rehypeSvgPre) // Convert svg blocks to <pre class="svg-diagram">
+			.use(rehypeSvgPre) // Convert svg blocks to <pre class="svg-block">
 			.use(rehypeEnhanceCodeBlocks) // Wrap code blocks with header and actions
 			.use(rehypeEnhanceMermaidBlocks) // Wrap mermaid blocks with header and actions
 			.use(rehypeEnhanceSvgBlocks) // Wrap svg blocks with header and actions
@@ -475,17 +488,19 @@
 		const target = event.target as HTMLElement;
 
 		// Check if clicking on copy or preview button in mermaid block
-		const copyBtn = target.closest('.mermaid-block-wrapper .copy-code-btn');
-		const previewBtn = target.closest('.mermaid-block-wrapper .preview-code-btn');
+		const copyBtn = target.closest(`.${MERMAID_WRAPPER_CLASS} .copy-code-btn`);
+		const previewBtn = target.closest(`.${MERMAID_WRAPPER_CLASS} .preview-code-btn`);
 
 		if (copyBtn || previewBtn) {
-			const wrapper = target.closest('.mermaid-block-wrapper');
+			const wrapper = target.closest(`.${MERMAID_WRAPPER_CLASS}`);
 			if (!wrapper) return;
 
-			const preElement = wrapper.querySelector<HTMLElement>('pre.mermaid[data-mermaid-syntax]');
+			const preElement = wrapper.querySelector<HTMLElement>(
+				`pre.${MERMAID_BLOCK_CLASS}[${MERMAID_SYNTAX_ATTR}]`
+			);
 			if (!preElement) return;
 
-			const mermaidSyntax = preElement.dataset.mermaidSyntax ?? '';
+			const mermaidSyntax = preElement.getAttribute(MERMAID_SYNTAX_ATTR) ?? '';
 
 			if (copyBtn) {
 				event.preventDefault();
@@ -510,21 +525,23 @@
 		}
 
 		// Check if clicking on copy or preview button in svg block
-		const svgCopyBtn = target.closest('.svg-block-wrapper .copy-code-btn');
-		const svgPreviewBtn = target.closest('.svg-block-wrapper .preview-code-btn');
+		const svgCopyBtn = target.closest(`.${SVG_WRAPPER_CLASS} .copy-code-btn`);
+		const svgPreviewBtn = target.closest(`.${SVG_WRAPPER_CLASS} .preview-code-btn`);
 
 		if (svgCopyBtn || svgPreviewBtn) {
-			const wrapper = target.closest('.svg-block-wrapper');
+			const wrapper = target.closest(`.${SVG_WRAPPER_CLASS}`);
 			if (!wrapper) return;
 
-			const preElement = wrapper.querySelector<HTMLElement>('pre.svg-diagram[data-svg-source]');
+			const preElement = wrapper.querySelector<HTMLElement>(
+				`pre.${SVG_BLOCK_CLASS}[${SVG_SOURCE_ATTR}]`
+			);
 			if (!preElement) return;
 
 			if (svgCopyBtn) {
 				event.preventDefault();
 				event.stopPropagation();
 				try {
-					await copyToClipboard(preElement.dataset.svgSource ?? '');
+					await copyToClipboard(preElement.getAttribute(SVG_SOURCE_ATTR) ?? '');
 				} catch (error) {
 					console.error('Failed to copy svg source:', error);
 				}
@@ -543,7 +560,7 @@
 		}
 
 		// Open preview when clicking on the rendered svg diagram itself
-		const svgEl = target.closest('pre.svg-diagram');
+		const svgEl = target.closest(`pre.${SVG_BLOCK_CLASS}`);
 		if (svgEl) {
 			const svg = svgEl.querySelector('svg');
 			if (!svg) return;
@@ -553,7 +570,7 @@
 		}
 
 		// Otherwise, open preview when clicking on the mermaid diagram itself
-		const mermaidEl = target.closest('.mermaid');
+		const mermaidEl = target.closest(`.${MERMAID_BLOCK_CLASS}`);
 		if (!mermaidEl) return;
 
 		const svg = mermaidEl.querySelector('svg');
@@ -583,12 +600,14 @@
 	async function renderMermaidDiagrams() {
 		if (!containerRef) return;
 
-		const nodes = containerRef.querySelectorAll('pre.mermaid:not([data-mermaid-rendered])');
+		const nodes = containerRef.querySelectorAll(
+			`pre.${MERMAID_BLOCK_CLASS}:not([${MERMAID_RENDERED_ATTR}])`
+		);
 		if (nodes.length === 0) return;
 
 		// Mark nodes immediately to prevent duplicate renders if called again during streaming.
 		// This avoids needing a guard that would block node discovery.
-		nodes.forEach((node) => node.setAttribute('data-mermaid-rendered', 'true'));
+		nodes.forEach((node) => node.setAttribute(MERMAID_RENDERED_ATTR, 'true'));
 
 		// Read mode before await so Svelte tracks it reactively.
 		const isDark = mode.current === ColorMode.DARK;
@@ -630,14 +649,14 @@
 		if (!containerRef) return;
 
 		const nodes = containerRef.querySelectorAll<HTMLElement>(
-			'pre.svg-diagram:not([data-svg-rendered])'
+			`pre.${SVG_BLOCK_CLASS}:not([${SVG_RENDERED_ATTR}])`
 		);
 		if (nodes.length === 0) return;
 
 		nodes.forEach((node) => {
-			node.setAttribute('data-svg-rendered', 'true');
+			node.setAttribute(SVG_RENDERED_ATTR, 'true');
 
-			const source = node.getAttribute('data-svg-source') ?? node.textContent ?? '';
+			const source = node.getAttribute(SVG_SOURCE_ATTR) ?? node.textContent ?? '';
 			const clean = sanitizeSvg(source);
 
 			if (clean) {
@@ -771,7 +790,7 @@
 	{/if}
 
 	{#if incompleteCodeBlock}
-		{#if incompleteCodeBlock.language === 'mermaid'}
+		{#if incompleteCodeBlock.language === MERMAID_LANGUAGE}
 			<div class="mermaid-block-wrapper streaming-mermaid-block">
 				<div class="code-block-header">
 					<span class="code-language">mermaid</span>
@@ -802,7 +821,9 @@
 				{#if liveSvgHtml}
 					<div class="svg-scroll-container">
 						<!-- eslint-disable-next-line no-at-html-tags -->
-						<pre class="svg-diagram" data-svg-rendered="true">{@html liveSvgHtml}</pre>
+						<pre
+							class={SVG_BLOCK_CLASS}
+							{...{ [SVG_RENDERED_ATTR]: 'true' }}>{@html liveSvgHtml}</pre>
 					</div>
 				{:else}
 					<div class="mermaid-loading-placeholder">

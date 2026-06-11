@@ -1,7 +1,7 @@
 /**
- * Rehype plugin to enhance svg diagram blocks with wrapper, header, and action buttons.
+ * Rehype plugin to enhance svg blocks with wrapper, header, and action buttons.
  *
- * Wraps <pre class="svg-diagram"> elements with a container that includes:
+ * Wraps <pre class="svg-block"> elements with a container that includes:
  * - Language label ("svg")
  * - Copy button (copies svg source to clipboard)
  * - Preview button (opens fullscreen preview dialog)
@@ -12,7 +12,14 @@
 import type { Plugin } from 'unified';
 import type { Root, Element, ElementContent } from 'hast';
 import { visit } from 'unist-util-visit';
-import { SVG_WRAPPER_CLASS, SVG_SCROLL_CONTAINER_CLASS } from '$lib/constants';
+import {
+	SVG_WRAPPER_CLASS,
+	SVG_SCROLL_CONTAINER_CLASS,
+	SVG_BLOCK_CLASS,
+	SVG_LANGUAGE,
+	SVG_SOURCE_ATTR,
+	SVG_ID_ATTR
+} from '$lib/constants';
 import {
 	createBlockHeader,
 	createCopyButton,
@@ -35,11 +42,11 @@ export const rehypeEnhanceSvgBlocks: Plugin<[], Root> = () => {
 			const className = node.properties?.className;
 			if (!Array.isArray(className)) return;
 
-			const isSvg = className.some((cls) => typeof cls === 'string' && cls === 'svg-diagram');
+			const isSvg = className.some((cls) => typeof cls === 'string' && cls === SVG_BLOCK_CLASS);
 
 			if (!isSvg) return;
 
-			const svgId = generateBlockId('svg', 'idxSvgBlock');
+			const svgId = generateBlockId(SVG_LANGUAGE, 'idxSvgBlock');
 
 			// Extract the svg source (text content of the pre element)
 			const svgSource = node.children
@@ -52,18 +59,18 @@ export const rehypeEnhanceSvgBlocks: Plugin<[], Root> = () => {
 			// Store the svg source in data attribute for copy and render
 			node.properties = {
 				...node.properties,
-				'data-svg-source': svgSource,
-				'data-svg-id': svgId
+				[SVG_SOURCE_ATTR]: svgSource,
+				[SVG_ID_ATTR]: svgId
 			};
 
 			const actions = [
-				createCopyButton(svgId, 'data-svg-id', 'Copy svg source'),
-				createPreviewButton(svgId, 'data-svg-id', 'Preview svg')
+				createCopyButton(svgId, SVG_ID_ATTR, 'Copy svg source'),
+				createPreviewButton(svgId, SVG_ID_ATTR, 'Preview svg')
 			];
 
-			const header = createBlockHeader('svg', svgId, 'data-svg-id', actions);
+			const header = createBlockHeader(SVG_LANGUAGE, svgId, SVG_ID_ATTR, actions);
 			const wrapper = createWrapper(header, node, SVG_WRAPPER_CLASS, SVG_SCROLL_CONTAINER_CLASS, {
-				'data-svg-id': svgId
+				[SVG_ID_ATTR]: svgId
 			});
 
 			// Replace pre with wrapper in parent

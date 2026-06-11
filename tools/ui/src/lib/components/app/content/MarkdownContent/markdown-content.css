@@ -562,7 +562,7 @@ div.markdown-user-content :global(.table-wrapper) {
 
 /* Mermaid and svg diagram blocks share the same block styling */
 .markdown-content :global(pre.mermaid),
-.markdown-content :global(pre.svg-diagram) {
+.markdown-content :global(pre.svg-block) {
 	background: transparent;
 	border: none;
 	padding: 0;
@@ -581,17 +581,17 @@ div.markdown-user-content :global(.table-wrapper) {
 
 /* Hide svg source until rendered - prevents flash. A rendered-but-unsanitized
    block (oversized source) keeps its raw text visible as a safe fallback. */
-.markdown-content :global(pre.svg-diagram:not([data-svg-rendered])) {
+.markdown-content :global(pre.svg-block:not([data-svg-rendered])) {
 	display: none;
 }
 
 .markdown-content :global(pre.mermaid:hover),
-.markdown-content :global(pre.svg-diagram:hover) {
+.markdown-content :global(pre.svg-block:hover) {
 	opacity: 0.85;
 }
 
 .markdown-content :global(pre.mermaid svg),
-.markdown-content :global(pre.svg-diagram svg) {
+.markdown-content :global(pre.svg-block svg) {
 	max-width: 90%;
 	margin: 0 auto;
 	height: auto;
@@ -664,7 +664,7 @@ div.markdown-user-content :global(.table-wrapper) {
 
 /* Diagram pre element - remove default margins */
 .markdown-content :global(.mermaid-block-wrapper pre.mermaid),
-.markdown-content :global(.svg-block-wrapper pre.svg-diagram) {
+.markdown-content :global(.svg-block-wrapper pre.svg-block) {
 	background: transparent;
 	border: none;
 	padding: 0;
@@ -673,7 +673,7 @@ div.markdown-user-content :global(.table-wrapper) {
 }
 
 .markdown-content :global(.mermaid-block-wrapper pre.mermaid svg),
-.markdown-content :global(.svg-block-wrapper pre.svg-diagram svg) {
+.markdown-content :global(.svg-block-wrapper pre.svg-block svg) {
 	width: unset !important;
 	height: auto;
 	display: block;
