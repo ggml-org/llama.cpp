@@ -123,14 +123,14 @@ static std::map<int, dg_devsample_scratch> g_dg_devsample;
 
 static void dg_devsample_reserve(dg_devsample_scratch & s, int n) {
     if (s.cap >= n) { return; }
-    if (s.u)       { cudaFree(s.u); }
-    if (s.argmax)  { cudaFree(s.argmax); }
-    if (s.entropy) { cudaFree(s.entropy); }
-    if (s.sampled) { cudaFree(s.sampled); }
-    cudaMalloc((void **) &s.u,       (size_t) n * sizeof(float));
-    cudaMalloc((void **) &s.argmax,  (size_t) n * sizeof(int));
-    cudaMalloc((void **) &s.entropy, (size_t) n * sizeof(float));
-    cudaMalloc((void **) &s.sampled, (size_t) n * sizeof(int));
+    if (s.u)       { CUDA_CHECK(cudaFree(s.u)); }
+    if (s.argmax)  { CUDA_CHECK(cudaFree(s.argmax)); }
+    if (s.entropy) { CUDA_CHECK(cudaFree(s.entropy)); }
+    if (s.sampled) { CUDA_CHECK(cudaFree(s.sampled)); }
+    CUDA_CHECK(cudaMalloc((void **) &s.u,       (size_t) n * sizeof(float)));
+    CUDA_CHECK(cudaMalloc((void **) &s.argmax,  (size_t) n * sizeof(int)));
+    CUDA_CHECK(cudaMalloc((void **) &s.entropy, (size_t) n * sizeof(float)));
+    CUDA_CHECK(cudaMalloc((void **) &s.sampled, (size_t) n * sizeof(int)));
     s.cap = n;
 }
 
@@ -152,35 +152,27 @@ bool ggml_cuda_diffusion_sample(
     if (n_vocab <= 0 || (int) ggml_nrows(logits) < n_tokens) {
         return false;
     }
+    if (!logits->buffer || ggml_backend_buffer_is_host(logits->buffer)) {
+        return false;  // host tensor -> caller falls back to the host path
+    }
     const float * logits_d = (const float *) logits->data;
 
-    // resolve the device that owns the tensor data and run there; caller has already synchronized the
-    // backend, so the default stream is safe to use for the launch + readback.
-    cudaPointerAttributes attr = {};
-    if (cudaPointerGetAttributes(&attr, logits_d) != cudaSuccess ||
-        attr.type != cudaMemoryTypeDevice) {
-        cudaGetLastError();
-        return false;
-    }
-    int prev_device = 0;
-    cudaGetDevice(&prev_device);
-    cudaSetDevice(attr.device);
+    // gated to a single CUDA device, so the tensor is on the current device; run there on the default
+    // stream (the caller has already synchronized the backend).
+    int device = 0;
+    CUDA_CHECK(cudaGetDevice(&device));
 
-    {
-        std::lock_guard<std::mutex> lock(g_dg_devsample_mutex);
-        dg_devsample_scratch & s = g_dg_devsample[attr.device];
-        dg_devsample_reserve(s, n_tokens);
+    std::lock_guard<std::mutex> lock(g_dg_devsample_mutex);
+    dg_devsample_scratch & s = g_dg_devsample[device];
+    dg_devsample_reserve(s, n_tokens);
 
-        cudaMemcpyAsync(s.u, u_host, (size_t) n_tokens * sizeof(float), cudaMemcpyHostToDevice, 0);
-        diffusion_dense_sample_kernel<<<n_tokens, 256, 0, 0>>>(
-                logits_d, s.u, s.argmax, s.entropy, s.sampled, n_vocab, inv_temp);
-        cudaMemcpyAsync(argmax_host,  s.argmax,  (size_t) n_tokens * sizeof(int),   cudaMemcpyDeviceToHost, 0);
-        cudaMemcpyAsync(entropy_host, s.entropy, (size_t) n_tokens * sizeof(float), cudaMemcpyDeviceToHost, 0);
-        cudaMemcpyAsync(sampled_host, s.sampled, (size_t) n_tokens * sizeof(int),   cudaMemcpyDeviceToHost, 0);
-        cudaStreamSynchronize(0);
-    }
-
-    const cudaError_t err = cudaGetLastError();
-    cudaSetDevice(prev_device);
-    return err == cudaSuccess;
+    CUDA_CHECK(cudaMemcpyAsync(s.u, u_host, (size_t) n_tokens * sizeof(float), cudaMemcpyHostToDevice, 0));
+    diffusion_dense_sample_kernel<<<n_tokens, 256, 0, 0>>>(
+            logits_d, s.u, s.argmax, s.entropy, s.sampled, n_vocab, inv_temp);
+    CUDA_CHECK(cudaGetLastError());
+    CUDA_CHECK(cudaMemcpyAsync(argmax_host,  s.argmax,  (size_t) n_tokens * sizeof(int),   cudaMemcpyDeviceToHost, 0));
+    CUDA_CHECK(cudaMemcpyAsync(entropy_host, s.entropy, (size_t) n_tokens * sizeof(float), cudaMemcpyDeviceToHost, 0));
+    CUDA_CHECK(cudaMemcpyAsync(sampled_host, s.sampled, (size_t) n_tokens * sizeof(int),   cudaMemcpyDeviceToHost, 0));
+    CUDA_CHECK(cudaStreamSynchronize(0));
+    return true;
 }
