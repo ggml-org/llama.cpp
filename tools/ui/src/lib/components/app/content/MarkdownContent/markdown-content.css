@@ -603,8 +603,7 @@ div.markdown-user-content :global(.table-wrapper) {
 	opacity: 0.85;
 }
 
-.markdown-content :global(pre.mermaid svg),
-.markdown-content :global(pre.svg-block svg) {
+.markdown-content :global(pre.mermaid svg) {
 	max-width: 90%;
 	margin: 0 auto;
 	height: auto;
