@@ -262,7 +262,8 @@ int main(int argc, char ** argv) {
                                   llama_diffusion_sample_topk_supported(ctx);
     const bool use_device_self_cond = use_gpu_sampling && params.diffusion.device_self_cond;
     const bool use_device_loop      = use_device_self_cond && params.diffusion.device_denoise_loop;
-    const int device_early_stop_interval = use_device_loop ? 1 : 0;
+    const int device_early_stop_interval =
+        use_device_loop && !params.diffusion.run_max_denoising_step ? 1 : 0;
     llama_set_diffusion_gpu_sampling(ctx, use_gpu_sampling);
 
     LOG_INF("diffusion-gemma: prefix=%d canvas=%d max_canvases=%d steps=%d entropy_bound=%.3f temp=[%.2f,%.2f] n_ctx=%d mm=%d\n",
@@ -275,6 +276,8 @@ int main(int argc, char ** argv) {
             use_device_loop ? " | device loop: on" : "");
     if (device_early_stop_interval > 0) {
         LOG_INF("diffusion-gemma: device early-stop interval=%d\n", device_early_stop_interval);
+    } else if (use_device_loop && params.diffusion.run_max_denoising_step) {
+        LOG_INF("diffusion-gemma: device early-stop polling disabled; running max denoising steps\n");
     }
     if (topk_fixed > 0 || (topk_start > 0 && topk_end > 0)) {
         LOG_INF("diffusion-gemma: top-k sampling: fixed=%d anneal=[%d->%d] tail_correction=%d (vocab=%d)\n",

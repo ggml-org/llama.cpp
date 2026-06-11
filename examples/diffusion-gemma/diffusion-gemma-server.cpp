@@ -796,7 +796,8 @@ int main(int argc, char ** argv) {
                            llama_diffusion_sample_topk_supported(srv.ctx);
     srv.use_device_self_cond = srv.use_gpu_sampling && params.diffusion.device_self_cond;
     srv.use_device_loop = srv.use_device_self_cond && params.diffusion.device_denoise_loop;
-    srv.device_early_stop_interval = srv.use_device_loop ? 1 : 0;
+    srv.device_early_stop_interval =
+        srv.use_device_loop && !params.diffusion.run_max_denoising_step ? 1 : 0;
     llama_set_diffusion_gpu_sampling(srv.ctx, srv.use_gpu_sampling);
     const bool default_topk_gpu_ok = topk_max_requested <= 0 || topk_max_requested <= GPU_SAMPLING_MAX_TOP_K;
 
@@ -814,6 +815,8 @@ int main(int argc, char ** argv) {
             srv.topk_fixed, srv.topk_start, srv.topk_end, srv.topk_tail ? 1 : 0);
     if (srv.device_early_stop_interval > 0) {
         SRV_INF("device early-stop interval: %d\n", srv.device_early_stop_interval);
+    } else if (srv.use_device_loop && params.diffusion.run_max_denoising_step) {
+        SRV_INF("%s\n", "device early-stop polling disabled; running max denoising steps");
     }
     if (srv.diffusion.force_top_k > 0) {
         SRV_INF("forcing request top-k to %d via --diffusion-force-top-k\n", srv.diffusion.force_top_k);

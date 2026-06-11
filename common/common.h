@@ -393,6 +393,7 @@ struct common_params_diffusion {
     bool    gpu_sampling  = true;  // use CUDA diffusion sampling fast path when available
     bool    device_self_cond = true;  // keep diffusion self-conditioning state on device
     bool    device_denoise_loop = true; // update diffusion canvas/stop state on device
+    bool    run_max_denoising_step = false; // skip device stop polling and run the full denoising schedule
     bool    pin_host_outputs = false; // register compact D2H output buffers as pinned host memory
 
     float   eps           = 0;        // epsilon for timesteps

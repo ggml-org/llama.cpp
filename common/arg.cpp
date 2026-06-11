@@ -3855,6 +3855,11 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params) { params.diffusion.device_denoise_loop = false; }
     ).set_examples({ LLAMA_EXAMPLE_DIFFUSION }));
     add_opt(common_arg(
+        {"--run-max-denoising-step"},
+        "skip device stop-state polling and run the full block-diffusion denoising schedule",
+        [](common_params & params) { params.diffusion.run_max_denoising_step = true; }
+    ).set_examples({ LLAMA_EXAMPLE_DIFFUSION }));
+    add_opt(common_arg(
         {"--diffusion-pin-host-outputs"},
         "register compact diffusion output buffers as pinned host memory",
         [](common_params & params) { params.diffusion.pin_host_outputs = true; }
