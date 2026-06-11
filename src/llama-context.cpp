@@ -1622,7 +1622,9 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
         //const auto t_start_us = ggml_time_us();
 
         // FIXME this call causes a crash if any model inputs were not used in the graph and were therefore not allocated
-        if (!diffusion_decoder_inputs_device_ready(diffusion_cond, res)) {
+        const bool diffusion_inputs_ready = model.arch == LLM_ARCH_DIFFUSION_GEMMA &&
+            diffusion_decoder_inputs_device_ready(diffusion_cond, res);
+        if (!diffusion_inputs_ready) {
             res->set_inputs(&ubatch);
         }
 

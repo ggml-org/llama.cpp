@@ -1237,7 +1237,7 @@ llm_graph_context::llm_graph_context(const llm_graph_params & params) :
     gf               (res->get_gf()) {
         res->set_params(params);
         ggml_graph_set_flag(gf, GGML_CGRAPH_FLAG_DIFFUSION_DECODER,
-                llm_arch_is_diffusion(arch) && diffusion && diffusion->decoder_phase);
+                arch == LLM_ARCH_DIFFUSION_GEMMA && diffusion && diffusion->decoder_phase);
     }
 
 void llm_graph_context::cb(ggml_tensor * cur, const char * name, int il) const {
@@ -1247,7 +1247,7 @@ void llm_graph_context::cb(ggml_tensor * cur, const char * name, int il) const {
 }
 
 void llm_graph_context::set_diffusion_input_backend(ggml_tensor * tensor, uint32_t group) const {
-    if (!diffusion || !diffusion->decoder_phase || !sched || !tensor) {
+    if (arch != LLM_ARCH_DIFFUSION_GEMMA || !diffusion || !diffusion->decoder_phase || !sched || !tensor) {
         return;
     }
 
@@ -2147,7 +2147,7 @@ ggml_tensor * llm_graph_context::build_inp_attn_scale() const {
 }
 
 ggml_tensor * llm_graph_context::build_inp_out_ids() const {
-    if (diffusion && diffusion->decoder_phase && n_outputs == n_tokens) {
+    if (arch == LLM_ARCH_DIFFUSION_GEMMA && diffusion && diffusion->decoder_phase && n_outputs == n_tokens) {
         return nullptr;
     }
 
