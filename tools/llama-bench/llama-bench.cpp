@@ -764,7 +764,7 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                     break;
                 }
                 params.split_mode.insert(params.split_mode.end(), modes.begin(), modes.end());
-            } else if (arg == "-lm" || arg == "--load_mode") {
+            } else if (arg == "-lm" || arg == "--load-mode") {
                 if (++i >= argc) {
                     invalid_param = true;
                     break;
