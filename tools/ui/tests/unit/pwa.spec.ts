@@ -124,20 +124,20 @@ describe('PWA Build Output', () => {
 		it('has modulepreload link for SvelteKit bundle with content hash', () => {
 			expect(indexContent).toBeTruthy();
 			// SvelteKit generates hashed bundle names in _app/immutable/
-			expect(indexContent).toMatch(/href="(\.\/|\/)\_app\/immutable\/bundle\.[a-zA-Z0-9_-]+\.js"/);
+			expect(indexContent).toMatch(/href="(\.\/|\/)_app\/immutable\/bundle\.[a-zA-Z0-9_-]+\.js"/);
 		});
 
 		it('has stylesheet link for SvelteKit bundle.css with content hash', () => {
 			expect(indexContent).toBeTruthy();
 			expect(indexContent).toMatch(
-				/href="(\.\/|\/)\_app\/immutable\/assets\/bundle\.[a-zA-Z0-9_-]+\.css"/
+				/href="(\.\/|\/)_app\/immutable\/assets\/bundle\.[a-zA-Z0-9_-]+\.css"/
 			);
 		});
 
 		it('has dynamic import for SvelteKit bundle with content hash', () => {
 			expect(indexContent).toBeTruthy();
 			expect(indexContent).toMatch(
-				/import\("(\.\/|\/)\_app\/immutable\/bundle\.[a-zA-Z0-9_-]+\.js"\)/
+				/import\("(\.\/|\/)_app\/immutable\/bundle\.[a-zA-Z0-9_-]+\.js"\)/
 			);
 		});
 
@@ -160,7 +160,7 @@ describe('PWA Build Output', () => {
 		it('has _app paths for SvelteKit bundles', () => {
 			expect(indexContent).toBeTruthy();
 			// SvelteKit uses _app paths for hashed assets
-			expect(indexContent).toMatch(/\_app\//);
+			expect(indexContent).toMatch(/_app\//);
 		});
 	});
 
