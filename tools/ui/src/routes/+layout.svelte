@@ -15,7 +15,7 @@
 	} from '$lib/components/app';
 	import { PwaMetaTags, PwaRefreshAlert } from '$lib/components/pwa';
 	import { pwaAssetsHead } from 'virtual:pwa-assets/head';
-	import { useRegisterSW } from 'virtual:pwa-register/svelte';
+
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
 	import * as Sidebar from '$lib/components/ui/sidebar/index.js';
 	import * as Tooltip from '$lib/components/ui/tooltip';
@@ -28,15 +28,16 @@
 	import { modelsStore } from '$lib/stores/models.svelte';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import { TOOLTIP_DELAY_DURATION } from '$lib/constants';
-	import { FAVICON_PATHS, FAVICON_SELECTORS, SW_CONFIG } from '$lib/constants/pwa';
+	import { FAVICON_PATHS, FAVICON_SELECTORS } from '$lib/constants/pwa';
 	import { useKeyboardShortcuts } from '$lib/hooks/use-keyboard-shortcuts.svelte';
+	import { usePwa } from '$lib/hooks/use-pwa.svelte';
 	import { useSettingsNavigation } from '$lib/hooks/use-settings-navigation.svelte';
 	import { conversations } from '$lib/stores/conversations.svelte';
 	import { isMobile } from '$lib/stores/viewport.svelte';
 	import { theme } from '$lib/stores/theme.svelte';
 	import { buildInfoStore } from '$lib/stores/build-info.svelte';
-	import { versionStore } from '$lib/stores/version.svelte';
-	import { SETTINGS_KEYS, BUILD_VERSION_LOCALSTORAGE_KEY } from '$lib/constants';
+
+	import { SETTINGS_KEYS } from '$lib/constants';
 
 	let { children } = $props();
 	let alwaysShowSidebarOnDesktop = $derived(config().alwaysShowSidebarOnDesktop);
@@ -53,13 +54,15 @@
 		  }
 		| undefined = $state();
 
+	let showBuildVersion = $derived(config()[SETTINGS_KEYS.SHOW_BUILD_VERSION] as boolean);
+
 	let titleUpdateDialogOpen = $state(false);
 	let titleUpdateCurrentTitle = $state('');
 	let titleUpdateNewTitle = $state('');
 	let titleUpdateResolve: ((value: boolean) => void) | null = null;
+
 	const panelNav = useSettingsNavigation();
-	let showBuildVersion = $derived(config()[SETTINGS_KEYS.SHOW_BUILD_VERSION] as boolean);
-	let needRefreshByStorage = $state(false);
+	const { needRefresh, updateServiceWorker, needRefreshByStorage } = usePwa();
 
 	function updateFavicon() {
 		const dark = theme.isSystemDark;
@@ -262,59 +265,6 @@
 				});
 			}
 		);
-	});
-
-	// Service worker registration and update prompt
-	let swCheckInterval: ReturnType<typeof setInterval> | null = null;
-
-	const {
-		// offlineReady, // to do - add installation banners for iOS
-		needRefresh,
-		updateServiceWorker
-	} = useRegisterSW({
-		onRegisteredSW(swUrl: string, r: ServiceWorkerRegistration | undefined) {
-			// Clear any existing interval to prevent duplicates on HMR / script re-eval
-			if (swCheckInterval) {
-				clearInterval(swCheckInterval);
-			}
-			swCheckInterval = setInterval(async () => {
-				if (!r || r.installing || !navigator?.onLine) return;
-
-				try {
-					const resp = await fetch(swUrl, {
-						cache: SW_CONFIG.UPDATE_FETCH_OPTIONS.CACHE,
-						headers: {
-							cache: SW_CONFIG.UPDATE_FETCH_OPTIONS.HEADERS.CACHE,
-							'cache-control': SW_CONFIG.UPDATE_FETCH_OPTIONS.HEADERS.CACHE_CONTROL
-						}
-					});
-					if (resp?.status === 200) {
-						await r.update();
-					}
-				} catch (e) {
-					console.error(e);
-				}
-			}, SW_CONFIG.CHECK_INTERVAL_MS);
-		},
-		onRegisterError(error: unknown) {
-			console.error('[PWA] SW registration error:', error);
-		}
-	});
-
-	// Detect version mismatch via localStorage.
-	// _app/version.json is SvelteKit's native version file for PWA cache invalidation.
-	// This comparison detects server upgrades for non-PWA users.
-	$effect(() => {
-		const currentVersion = versionStore.value;
-		if (!currentVersion) return;
-
-		try {
-			const storedVersion = localStorage.getItem(BUILD_VERSION_LOCALSTORAGE_KEY);
-			needRefreshByStorage = !!storedVersion && storedVersion !== currentVersion;
-			localStorage.setItem(BUILD_VERSION_LOCALSTORAGE_KEY, currentVersion);
-		} catch {
-			needRefreshByStorage = false;
-		}
 	});
 </script>
 
