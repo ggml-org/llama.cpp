@@ -1,6 +1,7 @@
 ARG UBUNTU_VERSION=24.04
 # This needs to generally match the container host's environment.
 ARG CUDA_VERSION=12.8.1
+ARG GCC_VERSION=14
 # Target the CUDA build image
 ARG BASE_CUDA_DEV_CONTAINER=nvidia/cuda:${CUDA_VERSION}-devel-ubuntu${UBUNTU_VERSION}
 
@@ -12,13 +13,14 @@ ARG APP_REVISION=N/A
 
 FROM ${BASE_CUDA_DEV_CONTAINER} AS build
 
+ARG GCC_VERSION
 # CUDA architecture to build for (defaults to all supported archs)
 ARG CUDA_DOCKER_ARCH=default
 
 RUN apt-get update && \
-    apt-get install -y gcc-14 g++-14 build-essential cmake python3 python3-pip git libssl-dev libgomp1
+    apt-get install -y gcc-${GCC_VERSION} g++-${GCC_VERSION} build-essential cmake python3 python3-pip git libssl-dev libgomp1
 
-ENV CC=gcc-14 CXX=g++-14 CUDAHOSTCXX=g++-14
+ENV CC=gcc-${GCC_VERSION} CXX=g++-${GCC_VERSION} CUDAHOSTCXX=g++-${GCC_VERSION}
 
 WORKDIR /app
 
