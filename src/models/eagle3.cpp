@@ -14,11 +14,12 @@ void llama_model_eagle3::load_arch_hparams(llama_model_loader & ml) {
             target_extract_layers[1],
             target_extract_layers[2]);
 
-    ml.get_key(LLM_KV_EAGLE3_TARGET_HIDDEN_SIZE, hparams.target_hidden_size);
-    LLAMA_LOG_INFO("%s: EAGLE3 target_hidden_size = %u (draft n_embd = %u)\n", __func__,
-            hparams.target_hidden_size, hparams.n_embd);
+    uint32_t n_embd_tgt = 0;
 
-    hparams.n_embd_inp_impl = (uint32_t) target_extract_layers.size() * hparams.target_hidden_size;
+    ml.get_key(LLM_KV_EAGLE3_TARGET_HIDDEN_SIZE, n_embd_tgt);
+    LLAMA_LOG_INFO("%s: EAGLE3 n_embd_tgt = %u (draft n_embd = %u)\n", __func__, n_embd_tgt, hparams.n_embd);
+
+    hparams.n_embd_inp_impl = (uint32_t) target_extract_layers.size() * n_embd_tgt;
 
     // eagle3 norm_before_residual (optional, default false)
     // compatible with Readhat eagle3 speculator model

@@ -236,10 +236,6 @@ struct llama_hparams {
     // >=0 => input embedding index for deepstack injection
     std::array<int32_t, LLAMA_MAX_LAYERS> deepstack_mapping_arr;
 
-    // eagle3/DFlash sahred params
-    // n_embd_inp = n_extract * target_hidden_size (encoder input dim)
-    uint32_t target_hidden_size = 0;
-
     // gemma4 per-layer embedding
     uint32_t n_embd_per_layer = 0;
 

@@ -418,7 +418,7 @@ struct common_speculative_impl_draft_eagle3 : public common_speculative_impl {
 
     int32_t         n_embd_dec       = 0;       // draft hidden size
     int32_t         n_embd_enc       = 0;       // n_extract_layers * target_hidden_size
-    int32_t         tgt_hidden       = 0;       // target model hidden size
+    int32_t         n_embd_tgt       = 0;       // target model hidden size
     const int32_t * extract_layers   = nullptr; // model_dft's extract layer indices
     uint32_t        n_extract_layers = 0;
 
@@ -456,15 +456,9 @@ struct common_speculative_impl_draft_eagle3 : public common_speculative_impl {
                                      std::to_string(n_extract_layers) + ")");
         }
 
-        tgt_hidden = (int32_t) llama_model_target_hidden_size(model_dft);
-        if (tgt_hidden != llama_model_n_embd(model_tgt)) {
-            throw std::runtime_error("EAGLE3 target_hidden_size mismatch (draft expects " +
-                                     std::to_string(tgt_hidden) + ", target n_embd is " +
-                                     std::to_string(llama_model_n_embd(model_tgt)) + ")");
-        }
-
+        n_embd_tgt = llama_model_n_embd(model_tgt);
         n_embd_dec = llama_model_n_embd(model_dft);
-        n_embd_enc = (int32_t) n_extract_layers * tgt_hidden;
+        n_embd_enc = (int32_t) n_extract_layers * n_embd_tgt;
 
         const int32_t n_b = (int32_t) llama_n_batch(ctx_dft);
         batch = llama_batch_init(/*n_tokens=*/ n_b, /*embd=*/ n_embd_dec, /*n_seq_max=*/ 1);
@@ -554,7 +548,7 @@ struct common_speculative_impl_draft_eagle3 : public common_speculative_impl {
         auto * ctx_dft = this->params.ctx_dft;
 
         // Interleave each extract_layer's hidden state into a contiguous buffer of
-        // shape [n_tokens, n_extract_layers * tgt_hidden]. Then run EAGLE3 encoder
+        // shape [n_tokens, n_extract_layers * n_embd_tgt]. Then run EAGLE3 encoder
         // to get one g_embd row per token.
         features_buf.resize((size_t) n_tokens * n_embd_enc, 0.0f);
 
@@ -564,9 +558,9 @@ struct common_speculative_impl_draft_eagle3 : public common_speculative_impl {
                 GGML_ABORT("EAGLE3: target layer %d input not extracted.", extract_layers[k]);
             }
             for (int32_t i = 0; i < n_tokens; ++i) {
-                float * dst = features_buf.data() + (size_t) i * n_embd_enc + k * (size_t) tgt_hidden;
-                const float * src = layer + (size_t) i * tgt_hidden;
-                std::memcpy(dst, src, (size_t) tgt_hidden * sizeof(float));
+                float * dst = features_buf.data() + (size_t) i * n_embd_enc + k * (size_t) n_embd_tgt;
+                const float * src = layer + (size_t) i * n_embd_tgt;
+                std::memcpy(dst, src, (size_t) n_embd_tgt * sizeof(float));
             }
         }
 

@@ -2700,7 +2700,3 @@ const int32_t * llama_model_target_extract_layers(const struct llama_model * mod
 uint32_t llama_model_n_target_extract_layers(const struct llama_model * model) {
     return (uint32_t) model->target_extract_layers.size();
 }
-
-uint32_t llama_model_target_hidden_size(const struct llama_model * model) {
-    return model->hparams.target_hidden_size;
-}
