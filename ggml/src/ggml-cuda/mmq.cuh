@@ -4,7 +4,9 @@
 #include "vecdotq.cuh"
 #include "mma.cuh"
 
+#include <algorithm>
 #include <climits>
+#include <cstdlib>
 #include <cstdint>
 
 using namespace ggml_cuda_mma;
@@ -13,6 +15,16 @@ using namespace ggml_cuda_mma;
 #define MMQ_ITER_K             256
 #define MMQ_ITER_K_FP4         512
 #define MMQ_NWARPS               8
+
+static bool mmq_env_enabled(const char * name, const bool default_value = false) {
+    const char * v = std::getenv(name);
+    return v ? std::atoi(v) != 0 : default_value;
+}
+
+static int mmq_env_int(const char * name, const int default_value) {
+    const char * v = std::getenv(name);
+    return v ? std::atoi(v) : default_value;
+}
 
 typedef void (*load_tiles_mmq_t)(const char * __restrict__ x, int * x_tile, const int kbx0, const int i_max, const int stride);
 typedef void (*vec_dot_mmq_t)(const int * __restrict__ x, const int * __restrict__ y, float * __restrict__ sum, const int k00);
@@ -4060,7 +4072,18 @@ void mul_mat_q_case(ggml_backend_cuda_context & ctx, const mmq_args & args, cuda
     const int warp_size = ggml_cuda_info().devices[id].warp_size;
     const int nwarps    = mmq_get_nwarps_host(cc, warp_size);
 
-    const int mmq_x_max = get_mmq_x_max_host(cc);
+    int mmq_x_max = get_mmq_x_max_host(cc);
+    const bool mmq_max_x_env_allowed =
+        GGML_CUDA_CC_IS_NVIDIA(cc) &&
+        ((cc >= GGML_CUDA_CC_ADA_LOVELACE && cc < GGML_CUDA_CC_HOPPER) ||
+         (cc >= GGML_CUDA_CC_BLACKWELL && cc < GGML_CUDA_CC_RUBIN));
+
+    if (mmq_max_x_env_allowed && mmq_env_enabled("GGML_CUDA_MMQ_MAX_X")) {
+        const int mmq_x_max_env = mmq_env_int("GGML_CUDA_MMQ_MAX_X", mmq_x_max);
+        if (mmq_x_max_env > 0) {
+            mmq_x_max = std::min(mmq_x_max, std::max(8, 8 * (mmq_x_max_env / 8)));
+        }
+    }
     const int mmq_y = get_mmq_y_host(cc);
 
     int mmq_x_best  = 0;

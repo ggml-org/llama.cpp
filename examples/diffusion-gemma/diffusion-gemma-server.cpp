@@ -93,6 +93,23 @@ static int diffusion_self_cond_top_k(const common_params & params) {
     return std::min(k, DEF_SC_K);
 }
 
+static void diffusion_set_env(const char * name, const std::string & value) {
+#ifdef _WIN32
+    _putenv_s(name, value.c_str());
+#else
+    setenv(name, value.c_str(), 1);
+#endif
+}
+
+static void diffusion_configure_cuda_mmq_env(const common_params_diffusion & params) {
+    if (params.cuda_mmq_max_x < 0) {
+        return;
+    }
+
+    diffusion_set_env("GGML_CUDA_MMQ_MAX_X", std::to_string(params.cuda_mmq_max_x));
+    SRV_INF("GGML_CUDA_MMQ_MAX_X=%d\n", params.cuda_mmq_max_x);
+}
+
 // ------------------------------------------------------------------------------------------------
 // per-request generation parameters and result
 // ------------------------------------------------------------------------------------------------
@@ -729,6 +746,11 @@ int main(int argc, char ** argv) {
         return 1;
     }
     common_init();
+    if (params.diffusion.cuda_mmq_max_x < -1) {
+        SRV_ERR("%s\n", "--diffusion-cuda-mmq-max-x must be -1, 0, or a positive value");
+        return 1;
+    }
+    diffusion_configure_cuda_mmq_env(params.diffusion);
     if (!params.diffusion.device_self_cond && params.diffusion.fused_self_cond_embd) {
         SRV_WRN("%s\n", "disabling fused self-conditioning embedding because device self-conditioning is disabled");
         params.diffusion.fused_self_cond_embd = false;
@@ -917,6 +939,7 @@ int main(int argc, char ** argv) {
                 {"cuda_fused_top_k_sample", srv.diffusion.cuda_fused_top_k_sample},
                 {"cuda_parallel_full_softmax", srv.diffusion.cuda_parallel_full_softmax},
                 {"cuda_fused_full_softmax", srv.diffusion.cuda_fused_full_softmax},
+                {"cuda_mmq_max_x", srv.diffusion.cuda_mmq_max_x},
                 {"top_k", srv.topk_fixed},
                 {"top_k_start", srv.topk_start},
                 {"top_k_end", srv.topk_end},
@@ -1034,6 +1057,7 @@ int main(int argc, char ** argv) {
                     {"cuda_fused_top_k_sample", srv.diffusion.cuda_fused_top_k_sample},
                     {"cuda_parallel_full_softmax", srv.diffusion.cuda_parallel_full_softmax},
                     {"cuda_fused_full_softmax", srv.diffusion.cuda_fused_full_softmax},
+                    {"cuda_mmq_max_x", srv.diffusion.cuda_mmq_max_x},
                     {"top_k", srv.topk_fixed},
                     {"top_k_start", srv.topk_start},
                     {"top_k_end", srv.topk_end},

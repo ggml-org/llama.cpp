@@ -421,6 +421,7 @@ struct common_params_diffusion {
     bool    cuda_fused_top_k_sample        = true;
     bool    cuda_parallel_full_softmax     = false;
     bool    cuda_fused_full_softmax        = true;
+    int32_t cuda_mmq_max_x                 = -1; // -1 = leave GGML_CUDA_MMQ_MAX_X unchanged
 
     // Diffusion graph-shape knobs.
     bool    fused_self_cond_embd       = true;

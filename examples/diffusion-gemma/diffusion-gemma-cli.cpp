@@ -29,8 +29,10 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <numeric>
 #include <random>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -78,6 +80,23 @@ static int diffusion_self_cond_top_k(const common_params & params) {
     return std::min(k, def);
 }
 
+static void diffusion_set_env(const char * name, const std::string & value) {
+#ifdef _WIN32
+    _putenv_s(name, value.c_str());
+#else
+    setenv(name, value.c_str(), 1);
+#endif
+}
+
+static void diffusion_configure_cuda_mmq_env(const common_params_diffusion & params) {
+    if (params.cuda_mmq_max_x < 0) {
+        return;
+    }
+
+    diffusion_set_env("GGML_CUDA_MMQ_MAX_X", std::to_string(params.cuda_mmq_max_x));
+    LOG_INF("diffusion-gemma: GGML_CUDA_MMQ_MAX_X=%d\n", params.cuda_mmq_max_x);
+}
+
 // apply the model's chat template to the user prompt (this is a chat-trained model)
 static std::string format_chat(llama_model * model, const std::string & prompt) {
     auto tmpls = common_chat_templates_init(model, "");
@@ -114,6 +133,11 @@ int main(int argc, char ** argv) {
         return 1;
     }
     common_init();
+    if (params.diffusion.cuda_mmq_max_x < -1) {
+        LOG_ERR("--diffusion-cuda-mmq-max-x must be -1, 0, or a positive value\n");
+        return 1;
+    }
+    diffusion_configure_cuda_mmq_env(params.diffusion);
     if (!params.diffusion.device_self_cond && params.diffusion.fused_self_cond_embd) {
         LOG_WRN("disabling fused self-conditioning embedding because device self-conditioning is disabled\n");
         params.diffusion.fused_self_cond_embd = false;

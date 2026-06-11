@@ -3963,6 +3963,11 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params) { params.diffusion.cuda_fast_top_k = false; }
     ).set_examples({ LLAMA_EXAMPLE_DIFFUSION }));
     add_opt(common_arg(
+        {"--diffusion-cuda-mmq-max-x"}, "N",
+        "set GGML_CUDA_MMQ_MAX_X for Ada/Blackwell CUDA MMQ tile selection (-1 = leave env, 0 = disable override)",
+        [](common_params & params, int value) { params.diffusion.cuda_mmq_max_x = value; }
+    ).set_examples({ LLAMA_EXAMPLE_DIFFUSION }));
+    add_opt(common_arg(
         {"--top-k-start"}, "N",
         "block-diffusion: anneal top-k from N at the first (high-entropy) denoising step (with --top-k-end)",
         [](common_params & params, int value) { params.diffusion.top_k_start = value; }
