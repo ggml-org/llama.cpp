@@ -104,10 +104,27 @@ int llama_server(int argc, char ** argv) {
     }
 
     if (params.n_parallel < 0) {
-        SRV_INF("%s", "n_parallel is set to auto, using n_parallel = 4 and kv_unified = true\n");
-
-        params.n_parallel = 4;
-        params.kv_unified = true;
+        if (is_router_server && !params.models_preset.empty()) {
+            // check [*] global section of the models preset for an explicit n_parallel value
+            try {
+                common_preset_context tmp_ctx(LLAMA_EXAMPLE_SERVER);
+                common_preset global;
+                tmp_ctx.load_from_ini(params.models_preset, global);
+                std::string val;
+                if (global.get_option("LLAMA_ARG_N_PARALLEL", val)) {
+                    params.n_parallel = std::stoi(val);
+                }
+            } catch (const std::exception &) {}
+        }
+        if (params.n_parallel < 0) {
+            if (!is_router_server) {
+                SRV_INF("%s", "n_parallel is set to auto, using n_parallel = 4 and kv_unified = true\n");
+                params.n_parallel = 4;
+                params.kv_unified = true;
+            } else {
+                params.n_parallel = 1;
+            }
+        }
     }
 
     // for consistency between server router mode and single-model mode, we set the same model name as alias
