@@ -1,10 +1,9 @@
 import { MimeTypeImage } from '$lib/enums';
+import { HEIC_JPEG_QUALITY } from '$lib/constants/image-size';
 
 // heic requires a relatively large decoder, in order to reduce primary bundle size
 // we lazily load this decoder from a CDN when needed, and cache it for future conversions
 const HEIC_TO_CDN_URL = 'https://cdn.jsdelivr.net/npm/heic-to@1.5.2/dist/heic-to.js';
-
-const HEIC_JPEG_QUALITY = 0.85;
 
 interface HeicToModule {
 	heicTo(args: { blob: Blob; type: string; quality?: number }): Promise<Blob>;
