@@ -560,9 +560,9 @@ div.markdown-user-content :global(.table-wrapper) {
 	border-color: var(--primary);
 }
 
-/* Mermaid and svg diagram blocks share the same block styling */
+/* Mermaid and svg blocks share the same block styling */
 .markdown-content :global(pre.mermaid),
-.markdown-content :global(pre.svg-block) {
+.markdown-content :global(.svg-block) {
 	background: transparent;
 	border: none;
 	padding: 0;
@@ -571,6 +571,11 @@ div.markdown-user-content :global(.table-wrapper) {
 	cursor: pointer;
 	transition: opacity 0.15s ease;
 	position: relative;
+}
+
+/* The svg block fills its flex container so the shadow host has a definite width to render into */
+.markdown-content :global(.svg-block) {
+	width: 100%;
 }
 
 /* Hide mermaid code text until rendered - prevents flash */
@@ -586,12 +591,11 @@ div.markdown-user-content :global(.table-wrapper) {
 }
 
 .markdown-content :global(pre.mermaid:hover),
-.markdown-content :global(pre.svg-block:hover) {
+.markdown-content :global(.svg-block:hover) {
 	opacity: 0.85;
 }
 
-.markdown-content :global(pre.mermaid svg),
-.markdown-content :global(pre.svg-block svg) {
+.markdown-content :global(pre.mermaid svg) {
 	max-width: 90%;
 	margin: 0 auto;
 	height: auto;
@@ -672,8 +676,7 @@ div.markdown-user-content :global(.table-wrapper) {
 	text-align: center;
 }
 
-.markdown-content :global(.mermaid-block-wrapper pre.mermaid svg),
-.markdown-content :global(.svg-block-wrapper pre.svg-block svg) {
+.markdown-content :global(.mermaid-block-wrapper pre.mermaid svg) {
 	width: unset !important;
 	height: auto;
 	display: block;

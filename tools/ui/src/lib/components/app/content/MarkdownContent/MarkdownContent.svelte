@@ -52,12 +52,14 @@
 		XML_LANGUAGE,
 		SVG_TAG_PREFIX,
 		SVG_SOURCE_ATTR,
-		SVG_RENDERED_ATTR
+		SVG_RENDERED_ATTR,
+		SVG_INLINE_SHADOW_STYLE
 	} from '$lib/constants';
 	import { ColorMode, UrlProtocol } from '$lib/enums';
 	import { FileTypeText } from '$lib/enums/files.enums';
 	import { highlightCode, detectIncompleteCodeBlock, type IncompleteCodeBlock } from '$lib/utils';
 	import { sanitizeSvg } from '$lib/utils/sanitize-svg';
+	import { mountSvgShadow } from '$lib/utils/svg-shadow';
 	import '$styles/katex-custom.scss';
 	import githubDarkCss from 'highlight.js/styles/github-dark.css?inline';
 	import githubLightCss from 'highlight.js/styles/github.css?inline';
@@ -106,6 +108,18 @@
 	let previewLanguage = $state('text');
 	let mermaidPreviewOpen = $state(false);
 	let mermaidPreviewSvgHtml = $state('');
+	let svgPreviewLive = $state(false);
+	let streamingSvgHost = $state<HTMLDivElement | null>(null);
+
+	// While the zoom dialog is open on a streaming svg, mirror the live render into it
+	$effect(() => {
+		if (svgPreviewLive && liveSvgHtml) mermaidPreviewSvgHtml = liveSvgHtml;
+	});
+
+	// Mount the streaming svg into its shadow host on every chunk so it renders live
+	$effect(() => {
+		if (streamingSvgHost) mountSvgShadow(streamingSvgHost, liveSvgHtml, SVG_INLINE_SHADOW_STYLE);
+	});
 
 	let streamingCodeScrollContainer = $state<HTMLDivElement>();
 
@@ -519,6 +533,7 @@
 				const svg = preElement.querySelector('svg');
 				if (!svg) return;
 				mermaidPreviewSvgHtml = svg.outerHTML;
+				svgPreviewLive = false;
 				mermaidPreviewOpen = true;
 				return;
 			}
@@ -551,20 +566,24 @@
 			if (svgPreviewBtn) {
 				event.preventDefault();
 				event.stopPropagation();
-				const svg = preElement.querySelector('svg');
-				if (!svg) return;
-				mermaidPreviewSvgHtml = svg.outerHTML;
+				mermaidPreviewSvgHtml = sanitizeSvg(preElement.getAttribute(SVG_SOURCE_ATTR) ?? '');
+				svgPreviewLive = false;
 				mermaidPreviewOpen = true;
 				return;
 			}
 		}
 
-		// Open preview when clicking on the rendered svg diagram itself
-		const svgEl = target.closest(`pre.${SVG_BLOCK_CLASS}`);
+		// Open preview when clicking the svg block itself. A final block carries its
+		// source, a streaming block does not and is mirrored live into the dialog.
+		const svgEl = target.closest(`.${SVG_BLOCK_CLASS}`);
 		if (svgEl) {
-			const svg = svgEl.querySelector('svg');
-			if (!svg) return;
-			mermaidPreviewSvgHtml = svg.outerHTML;
+			const source = svgEl.getAttribute(SVG_SOURCE_ATTR);
+			if (source !== null) {
+				mermaidPreviewSvgHtml = sanitizeSvg(source);
+				svgPreviewLive = false;
+			} else {
+				svgPreviewLive = true;
+			}
 			mermaidPreviewOpen = true;
 			return;
 		}
@@ -577,6 +596,7 @@
 		if (!svg) return;
 
 		mermaidPreviewSvgHtml = svg.outerHTML;
+		svgPreviewLive = false;
 		mermaidPreviewOpen = true;
 	}
 
@@ -588,6 +608,7 @@
 		mermaidPreviewOpen = open;
 		if (!open) {
 			mermaidPreviewSvgHtml = '';
+			svgPreviewLive = false;
 		}
 	}
 
@@ -660,7 +681,10 @@
 			const clean = sanitizeSvg(source);
 
 			if (clean) {
-				node.innerHTML = clean;
+				node.textContent = '';
+				const host = document.createElement('div');
+				node.appendChild(host);
+				mountSvgShadow(host, clean, SVG_INLINE_SHADOW_STYLE);
 			}
 		});
 	}
@@ -820,10 +844,9 @@
 				</div>
 				{#if liveSvgHtml}
 					<div class="svg-scroll-container">
-						<!-- eslint-disable-next-line no-at-html-tags -->
-						<pre
-							class={SVG_BLOCK_CLASS}
-							{...{ [SVG_RENDERED_ATTR]: 'true' }}>{@html liveSvgHtml}</pre>
+						<div class={SVG_BLOCK_CLASS}>
+							<div bind:this={streamingSvgHost}></div>
+						</div>
 					</div>
 				{:else}
 					<div class="mermaid-loading-placeholder">
