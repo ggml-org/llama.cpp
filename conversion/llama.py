@@ -231,7 +231,7 @@ class LlamaModel(TextModel):
                 # not used at runtime, skip
                 return
             if name == "model.layers.0.hidden_norm.weight":
-                yield ("blk.0.hidden_norm.weight", data_torch)
+                yield ("blk.0.attn_norm_2.weight", data_torch)
                 return
 
         n_head = self.find_hparam(["n_heads", "num_attention_heads"])

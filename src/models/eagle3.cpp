@@ -72,14 +72,14 @@ void llama_model_eagle3::load_arch_tensors(llama_model_loader &) {
         // input_layernorm: applied to token embeddings
         layer.attn_norm = create_tensor(tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd}, 0);
 
+        // eagle3 specific: hidden_norm applied to fused target features
+        layer.attn_norm_2 = create_tensor(tn(LLM_TENSOR_ATTN_NORM_2, "weight", i), {n_embd}, 0);
+
         // Attention takes input_embeds_normed + fused_target_normed as input
         layer.wq = create_tensor(tn(LLM_TENSOR_ATTN_Q,   "weight", i), {n_embd_attn_input, n_embd_head_k * n_head}, 0);
         layer.wk = create_tensor(tn(LLM_TENSOR_ATTN_K,   "weight", i), {n_embd_attn_input, n_embd_k_gqa}, 0);
         layer.wv = create_tensor(tn(LLM_TENSOR_ATTN_V,   "weight", i), {n_embd_attn_input, n_embd_v_gqa}, 0);
         layer.wo = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_embd_head_k * n_head, n_embd}, 0);
-
-        // eagle3 specific: hidden_norm applied to fused target features
-        layer.eagle3_hidden_norm = create_tensor(tn(LLM_TENSOR_EAGLE3_HIDDEN_NORM, "weight", i), {n_embd}, 0);
 
         layer.ffn_norm = create_tensor(tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd}, 0);
         layer.ffn_gate = create_tensor(tn(LLM_TENSOR_FFN_GATE, "weight", i), {n_embd,   n_ff}, 0);
@@ -205,7 +205,7 @@ llama_model_eagle3::graph<false>::graph(const llama_model & model, const llm_gra
 
         // Apply hidden_norm to inp_g
         ggml_tensor * g_norm = build_norm(inp_g,
-                model.layers[il].eagle3_hidden_norm, NULL,
+                model.layers[il].attn_norm_2, NULL,
                 LLM_NORM_RMS, -1);
         cb(g_norm, "g_norm", il);
 
