@@ -1076,6 +1076,11 @@ struct vk_d2d_path {
     // reset between evaluations. high_water_mark drives buffer resizing.
     size_t alloc_offset = 0;
     size_t high_water_mark = 0;
+
+    // Semi-async: tracks whether a deferred hop2 is pending in the dst
+    // compute context, so back-to-back copies flush before overwriting
+    // the shared buffer.
+    bool semi_async_pending = false;
 };
 #endif
 
@@ -8973,7 +8978,7 @@ static bool ggml_vk_d2d_is_async_capable(vk_device& src_dev, vk_device& dst_dev)
     std::lock_guard<std::mutex> guard(vk_d2d_cache_mutex);
     auto key = std::make_pair(src_dev.get(), dst_dev.get());
     auto it = vk_d2d_cache.find(key);
-    return it != vk_d2d_cache.end() && it->second.sync_method != D2D_SYNC_NONE;
+    return it != vk_d2d_cache.end() && it->second.method != D2D_STAGING;
 }
 
 static bool ggml_vk_buffer_copy_async_d2d_timeline(
@@ -9138,6 +9143,50 @@ static bool ggml_vk_buffer_copy_async_d2d_syncfd(
     return true;
 }
 
+static constexpr size_t D2D_SEMIASYNC_THRESHOLD = 1 * 1024 * 1024;
+
+static bool ggml_vk_buffer_copy_async_d2d_semiasync(
+        ggml_backend_vk_context * dst_ctx,
+        vk_buffer& dst, size_t dst_offset,
+        vk_buffer& src, size_t src_offset,
+        size_t size,
+        vk_d2d_path& path) {
+
+    vk_d2d_path::slot& slot = path.slots[0];
+    vk_buffer& src_side_buf = path.reverse_direction ? slot.buf_b : slot.buf_a;
+    vk_buffer& dst_side_buf = path.reverse_direction ? slot.buf_a : slot.buf_b;
+
+    if (path.semi_async_pending) {
+        ggml_vk_synchronize(dst_ctx);
+        path.semi_async_pending = false;
+    }
+
+    // Hop 1: synchronous copy on src device (VRAM -> shared buffer)
+    {
+        std::lock_guard<std::recursive_mutex> guard(src->device->mutex);
+        vk_context hop1_ctx = ggml_vk_create_temporary_context(src->device->compute_queue.cmd_pool);
+        ggml_vk_ctx_begin(src->device, hop1_ctx);
+
+        VkBufferCopy bc{ src_offset, 0, size };
+        vkCmdCopyBuffer(hop1_ctx->s->buffer->buf, (VkBuffer)src->buffer, (VkBuffer)src_side_buf->buffer, 1, &bc);
+
+        ggml_vk_ctx_end(hop1_ctx);
+        ggml_vk_submit(hop1_ctx, src->device->fence);
+        VK_CHECK(src->device->device.waitForFences({ src->device->fence }, true, UINT64_MAX), "d2d_semiasync hop1 waitForFences");
+        src->device->device.resetFences({ src->device->fence });
+    }
+
+    // Hop 2: deferred into dst compute context (shared buffer -> dst VRAM)
+    vk_context compute_ctx = ggml_vk_get_compute_ctx(dst_ctx);
+    ggml_vk_ctx_begin(dst->device, compute_ctx);
+
+    VkBufferCopy bc2{ 0, dst_offset, size };
+    vkCmdCopyBuffer(compute_ctx->s->buffer->buf, (VkBuffer)dst_side_buf->buffer, (VkBuffer)dst->buffer, 1, &bc2);
+
+    path.semi_async_pending = true;
+    return true;
+}
+
 static bool ggml_vk_buffer_copy_async_d2d(
         ggml_backend_vk_context * src_ctx,
         ggml_backend_vk_context * dst_ctx,
@@ -9148,7 +9197,7 @@ static bool ggml_vk_buffer_copy_async_d2d(
 
     vk_d2d_path& path = ggml_vk_get_d2d_path(src->device, dst->device, size);
 
-    if (path.sync_method == D2D_SYNC_NONE || path.method == D2D_STAGING) {
+    if (path.method == D2D_STAGING) {
         return false;
     }
 
@@ -9157,7 +9206,11 @@ static bool ggml_vk_buffer_copy_async_d2d(
         return ggml_vk_buffer_copy_async_d2d_timeline(compute_ctx, dst, dst_offset, src, src_offset, size, path);
     }
 
-    return ggml_vk_buffer_copy_async_d2d_syncfd(dst_ctx, dst, dst_offset, src, src_offset, size, path);
+    if (path.sync_method == D2D_SYNC_SYNCFD && size >= D2D_SEMIASYNC_THRESHOLD) {
+        return ggml_vk_buffer_copy_async_d2d_syncfd(dst_ctx, dst, dst_offset, src, src_offset, size, path);
+    }
+
+    return ggml_vk_buffer_copy_async_d2d_semiasync(dst_ctx, dst, dst_offset, src, src_offset, size, path);
 }
 #endif
 
