@@ -604,7 +604,7 @@ div.markdown-user-content :global(.table-wrapper) {
 }
 
 .markdown-content :global(pre.mermaid svg),
-.markdown-content :global(pre.svg-diagram svg) {
+.markdown-content :global(pre.svg-block svg) {
 	max-width: 90%;
 	margin: 0 auto;
 	height: auto;
