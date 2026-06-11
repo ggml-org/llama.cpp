@@ -278,7 +278,7 @@ struct ggml_backend_registry {
         // remove devices
         devices.erase(
             std::remove_if(devices.begin(), devices.end(),
-                            [reg](ggml_backend_dev_t dev) { return dev != nullptr && ggml_backend_dev_backend_reg(dev) == reg; }),
+                            [reg](ggml_backend_dev_t dev) { return ggml_backend_dev_backend_reg(dev) == reg; }),
             devices.end());
 
         // remove backend
@@ -342,9 +342,6 @@ ggml_backend_dev_t ggml_backend_dev_get(size_t index) {
 ggml_backend_dev_t ggml_backend_dev_by_name(const char * name) {
     for (size_t i = 0; i < ggml_backend_dev_count(); i++) {
         ggml_backend_dev_t dev = ggml_backend_dev_get(i);
-        if (!dev) {
-            continue;
-        }
         if (striequals(ggml_backend_dev_name(dev), name)) {
             return dev;
         }
@@ -355,9 +352,6 @@ ggml_backend_dev_t ggml_backend_dev_by_name(const char * name) {
 ggml_backend_dev_t ggml_backend_dev_by_type(enum ggml_backend_dev_type type) {
     for (size_t i = 0; i < ggml_backend_dev_count(); i++) {
         ggml_backend_dev_t dev = ggml_backend_dev_get(i);
-        if (!dev) {
-            continue;
-        }
         if (ggml_backend_dev_type(dev) == type) {
             return dev;
         }
