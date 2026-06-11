@@ -59,8 +59,7 @@ export default defineConfig({
 			workbox: {
 				// Match all static assets in the build output.
 				// Uses '**/' because SvelteKit outputs files under _app/immutable/
-				// subdirectories; the llama-cpp-build plugin flattens them after
-				// the SW is generated.
+				// subdirectories.
 				globPatterns: GLOB_PATTERNS,
 
 				maximumFileSizeToCacheInBytes: CACHE_SETTINGS.MAX_FILE_SIZE_BYTES,

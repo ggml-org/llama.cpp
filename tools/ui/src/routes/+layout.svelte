@@ -35,6 +35,7 @@
 	import { isMobile } from '$lib/stores/viewport.svelte';
 	import { theme } from '$lib/stores/theme.svelte';
 	import { buildInfoStore } from '$lib/stores/build-info.svelte';
+	import { versionStore } from '$lib/stores/version.svelte';
 	import { SETTINGS_KEYS, BUILD_VERSION_LOCALSTORAGE_KEY } from '$lib/constants';
 
 	let { children } = $props();
@@ -300,11 +301,11 @@
 		}
 	});
 
-	// Detect non-PWA version mismatch via localStorage.
-	// The uncached URL always stays fresh; version.json is not cached by the SW.
+	// Detect version mismatch via localStorage.
+	// _app/version.json is SvelteKit's native version file for PWA cache invalidation.
 	// This comparison detects server upgrades for non-PWA users.
 	$effect(() => {
-		const currentVersion = buildInfoStore.value;
+		const currentVersion = versionStore.value;
 		if (!currentVersion) return;
 
 		try {

@@ -47,7 +47,7 @@ export const PWA_MANIFEST = {
 	name: APP_NAME,
 	short_name: APP_NAME,
 	description: 'Local AI chat interface powered by llama.cpp',
-	start_url: './?cache=true',
+	start_url: './',
 	display: 'standalone' as const,
 	background_color: THEME_COLORS.BACKGROUND_LIGHT,
 	theme_color: THEME_COLORS.BACKGROUND_LIGHT,
@@ -270,7 +270,7 @@ export const API_CACHING_PATTERNS = {
 
 // SvelteKit PWA plugin options
 export const PWA_KIT_OPTIONS = {
-	NAVIGATE_FALLBACK: './?cache=true'
+	NAVIGATE_FALLBACK: './'
 } as const;
 
 export const APPLE_META_TAGS = {
