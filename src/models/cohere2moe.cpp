@@ -1,6 +1,6 @@
 #include "models.h"
 
-void llama_model_cohere2_moe::load_arch_hparams(llama_model_loader & ml) {
+void llama_model_cohere2moe::load_arch_hparams(llama_model_loader & ml) {
     // Cohere2 MoE checkpoints supported here use RMSNorm; dense Cohere2 uses LayerNorm.
     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
     ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW,    hparams.n_swa);
@@ -23,8 +23,9 @@ void llama_model_cohere2_moe::load_arch_hparams(llama_model_loader & ml) {
 
     hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
     uint32_t swa_period = 4;
-    if (!ml.get_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, hparams.is_swa_impl, false)) {
-        ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, swa_period, false);
+    if (ml.get_key_or_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, swa_period, false)) {
+        hparams.set_swa_pattern(swa_period, true);
+    } else if (!ml.get_key_or_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, hparams.is_swa_impl, hparams.n_layer(), false)) {
         hparams.set_swa_pattern(swa_period, true);
     }
 
@@ -38,7 +39,7 @@ void llama_model_cohere2_moe::load_arch_hparams(llama_model_loader & ml) {
     }
 }
 
-void llama_model_cohere2_moe::load_arch_tensors(llama_model_loader & ml) {
+void llama_model_cohere2moe::load_arch_tensors(llama_model_loader & ml) {
     LLAMA_LOAD_LOCALS;
 
     const bool mtp_only = (hparams.n_layer_nextn > 0) && (ml.get_weight("blk.0.attn_norm.weight") == nullptr);
@@ -139,14 +140,14 @@ void llama_model_cohere2_moe::load_arch_tensors(llama_model_loader & ml) {
     }
 }
 
-std::unique_ptr<llm_graph_context> llama_model_cohere2_moe::build_arch_graph(const llm_graph_params & params) const {
+std::unique_ptr<llm_graph_context> llama_model_cohere2moe::build_arch_graph(const llm_graph_params & params) const {
     if (params.gtype == LLM_GRAPH_TYPE_DECODER_MTP) {
         return std::make_unique<graph_mtp>(*this, params);
     }
     return std::make_unique<graph>(*this, params);
 }
 
-llama_model_cohere2_moe::graph::graph(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
+llama_model_cohere2moe::graph::graph(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
     const int64_t n_embd_head = hparams.n_embd_head_v();
 
     GGML_ASSERT(n_embd_head == hparams.n_embd_head_k());
@@ -284,7 +285,7 @@ llama_model_cohere2_moe::graph::graph(const llama_model & model, const llm_graph
     ggml_build_forward_expand(gf, cur);
 }
 
-llama_model_cohere2_moe::graph_mtp::graph_mtp(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
+llama_model_cohere2moe::graph_mtp::graph_mtp(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
     GGML_ASSERT(hparams.n_layer_nextn > 0 && "COHERE2MOE MTP requires n_layer_nextn > 0");
     GGML_ASSERT(hparams.n_layer_nextn == 1 && "COHERE2MOE MTP currently only supports a single MTP block");
 

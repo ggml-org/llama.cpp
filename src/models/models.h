@@ -924,8 +924,8 @@ struct llama_model_cohere2 : public llama_model_base {
 };
 
 
-struct llama_model_cohere2_moe : public llama_model_base {
-    llama_model_cohere2_moe(const struct llama_model_params & params) : llama_model_base(params) {}
+struct llama_model_cohere2moe : public llama_model_base {
+    llama_model_cohere2moe(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 

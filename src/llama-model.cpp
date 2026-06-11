@@ -156,7 +156,7 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
         case LLM_ARCH_COHERE2:
             return new llama_model_cohere2(params);
         case LLM_ARCH_COHERE2MOE:
-            return new llama_model_cohere2_moe(params);
+            return new llama_model_cohere2moe(params);
         case LLM_ARCH_DBRX:
             return new llama_model_dbrx(params);
         case LLM_ARCH_OLMO:

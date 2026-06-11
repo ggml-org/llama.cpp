@@ -81,10 +81,6 @@ class Cohere2MoeModel(TextModel):
         self.gguf_writer.add_token_types(toktypes)
 
         special_vocab = gguf.SpecialVocab(self.dir_model, load_merges=True)
-        chat_template_jinja = self.dir_model / "chat_template.jinja"
-        if chat_template_jinja.is_file():
-            with open(chat_template_jinja, "r", encoding="utf-8") as f:
-                special_vocab.chat_template = f.read()
         special_vocab.add_to_gguf(self.gguf_writer)
 
     def set_gguf_parameters(self):
