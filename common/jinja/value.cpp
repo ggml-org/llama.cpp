@@ -530,6 +530,46 @@ const func_builtins & global_builtins() {
     return builtins;
 }
 
+value try_builtin_func(context & ctx, const std::string & name, value & input, bool undef_on_missing) {
+    JJ_DEBUG("Trying built-in function '%s' for type %s", name.c_str(), input->type().c_str());
+    if (ctx.is_get_stats) {
+        value_t::stats_t::mark_used(input);
+        input->stats.ops.insert(name);
+    }
+    auto builtins = input->get_builtins();
+    auto it = builtins.find(name);
+    if (it != builtins.end()) {
+        JJ_DEBUG("Binding built-in '%s'", name.c_str());
+        return mk_val<value_func>(name, it->second, input);
+    }
+    if (undef_on_missing) {
+        return mk_val<value_undefined>(name);
+    }
+    throw std::runtime_error("Unknown (built-in) filter '" + name + "' for type " + input->type());
+}
+
+value apply_filter(context & ctx, std::string filter_id, value input, const func_args & args) {
+    if (filter_id == "trim") {
+        filter_id = "strip";
+    }
+
+    // TODO: Refactor filters so this coercion can be done automatically
+    if (!input->is_undefined() && !is_val<value_string>(input) && (
+        filter_id == "capitalize" ||
+        filter_id == "lower" ||
+        filter_id == "replace" ||
+        filter_id == "strip" ||
+        filter_id == "title" ||
+        filter_id == "upper" ||
+        filter_id == "wordcount"
+    )) {
+        JJ_DEBUG("Coercing %s to String for '%s' filter", input->type().c_str(), filter_id.c_str());
+        input = mk_val<value_string>(input->as_string());
+    }
+
+    return try_builtin_func(ctx, filter_id, input)->invoke(args);
+}
+
 
 const func_builtins & value_int_t::get_builtins() const {
     static const func_builtins builtins = {
@@ -890,6 +930,10 @@ const func_builtins & value_bool_t::get_builtins() const {
     throw not_implemented_exception("Array unique builtin not implemented");
 }
 
+[[noreturn]] static value array_sum_not_implemented(const func_args &) {
+    throw not_implemented_exception("Array sum builtin not implemented");
+}
+
 const func_builtins & value_array_t::get_builtins() const {
     static const func_builtins builtins = {
         {"default", default_value},
@@ -956,6 +1000,7 @@ const func_builtins & value_array_t::get_builtins() const {
         {"select", selectattr<false>},
         {"rejectattr", selectattr<true>},
         {"reject", selectattr<true>},
+        {"sum", array_sum_not_implemented},
         {"join", [](const func_args & args) -> value {
             args.ensure_count(1, 3);
             if (!is_val<value_array>(args.get_pos(0))) {
@@ -1006,7 +1051,22 @@ const func_builtins & value_array_t::get_builtins() const {
                 throw raised_exception("map: first argument must be an array");
             }
             if (!is_val<value_kwarg>(args.get_args().at(1))) {
-                throw not_implemented_exception("map: filter-mapping not implemented");
+                value filter = args.get_pos(1);
+                if (!is_val<value_string>(filter)) {
+                    throw raised_exception("map: filter name must be a string");
+                }
+                auto out = mk_val<value_array>();
+                func_args filter_args(args.ctx);
+                const auto & all_args = args.get_args();
+                for (size_t i = 2; i < all_args.size(); ++i) {
+                    filter_args.push_back(all_args[i]);
+                }
+                const std::string filter_id = filter->as_string().str();
+                auto arr = args.get_pos(0)->as_array();
+                for (const auto & item : arr) {
+                    out->push_back(apply_filter(args.ctx, filter_id, item, filter_args));
+                }
+                return is_val<value_tuple>(args.get_pos(0)) ? mk_val<value_tuple>(std::move(out->as_array())) : out;
             }
             value val       = args.get_pos(0);
             value attribute = args.get_kwarg_or_pos("attribute", 1);

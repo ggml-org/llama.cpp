@@ -293,24 +293,6 @@ value binary_expression::execute_impl(context & ctx) {
     throw std::runtime_error("Unknown operator \"" + op.value + "\" between " + left_val->type() + " and " + right_val->type());
 }
 
-static value try_builtin_func(context & ctx, const std::string & name, value & input, bool undef_on_missing = false) {
-    JJ_DEBUG("Trying built-in function '%s' for type %s", name.c_str(), input->type().c_str());
-    if (ctx.is_get_stats) {
-        value_t::stats_t::mark_used(input);
-        input->stats.ops.insert(name);
-    }
-    auto builtins = input->get_builtins();
-    auto it = builtins.find(name);
-    if (it != builtins.end()) {
-        JJ_DEBUG("Binding built-in '%s'", name.c_str());
-        return mk_val<value_func>(name, it->second, input);
-    }
-    if (undef_on_missing) {
-        return mk_val<value_undefined>(name);
-    }
-    throw std::runtime_error("Unknown (built-in) filter '" + name + "' for type " + input->type());
-}
-
 value filter_expression::execute_impl(context & ctx) {
     value input = operand ? operand->execute(ctx) : val;
 
@@ -318,25 +300,8 @@ value filter_expression::execute_impl(context & ctx) {
 
     if (is_stmt<identifier>(filter)) {
         auto filter_id = cast_stmt<identifier>(filter)->val;
-
-        if (filter_id == "trim") {
-            filter_id = "strip"; // alias
-        }
         JJ_DEBUG("Applying filter '%s' to %s", filter_id.c_str(), input->type().c_str());
-        // TODO: Refactor filters so this coercion can be done automatically
-        if (!input->is_undefined() && !is_val<value_string>(input) && (
-            filter_id == "capitalize" ||
-            filter_id == "lower" ||
-            filter_id == "replace" ||
-            filter_id == "strip" ||
-            filter_id == "title" ||
-            filter_id == "upper" ||
-            filter_id == "wordcount"
-        )) {
-            JJ_DEBUG("Coercing %s to String for '%s' filter", input->type().c_str(), filter_id.c_str());
-            input = mk_val<value_string>(input->as_string());
-        }
-        return try_builtin_func(ctx, filter_id, input)->invoke(func_args(ctx));
+        return apply_filter(ctx, filter_id, input, func_args(ctx));
 
     } else if (is_stmt<call_expression>(filter)) {
         auto call = cast_stmt<call_expression>(filter);
@@ -345,16 +310,13 @@ value filter_expression::execute_impl(context & ctx) {
         }
         auto filter_id = cast_stmt<identifier>(call->callee)->val;
 
-        if (filter_id == "trim") {
-            filter_id = "strip"; // alias
-        }
         JJ_DEBUG("Applying filter '%s' with arguments to %s", filter_id.c_str(), input->type().c_str());
         func_args args(ctx);
         for (const auto & arg_expr : call->args) {
             args.push_back(arg_expr->execute(ctx));
         }
 
-        return try_builtin_func(ctx, filter_id, input)->invoke(args);
+        return apply_filter(ctx, filter_id, input, args);
 
     } else {
         throw std::runtime_error("Invalid filter expression");
