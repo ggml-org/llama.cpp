@@ -94,20 +94,22 @@ int llama_server(int argc, char ** argv) {
     const bool is_router_server = params.model.path.empty();
     common_params_print_info(params, !is_router_server);
 
-    // validate batch size for embeddings
-    // embeddings require all tokens to be processed in a single ubatch
-    // see https://github.com/ggml-org/llama.cpp/issues/12836
-    if (params.embedding && params.n_batch > params.n_ubatch) {
-        SRV_WRN("embeddings enabled with n_batch (%d) > n_ubatch (%d)\n", params.n_batch, params.n_ubatch);
-        SRV_WRN("setting n_batch = n_ubatch = %d to avoid assertion failure\n", params.n_ubatch);
-        params.n_batch = params.n_ubatch;
-    }
+    if (!is_router_server) {
+        // validate batch size for embeddings
+        // embeddings require all tokens to be processed in a single ubatch
+        // see https://github.com/ggml-org/llama.cpp/issues/12836
+        if (params.embedding && params.n_batch > params.n_ubatch) {
+            SRV_WRN("embeddings enabled with n_batch (%d) > n_ubatch (%d)\n", params.n_batch, params.n_ubatch);
+            SRV_WRN("setting n_batch = n_ubatch = %d to avoid assertion failure\n", params.n_ubatch);
+            params.n_batch = params.n_ubatch;
+        }
 
-    if (params.n_parallel < 0) {
-        SRV_INF("%s", "n_parallel is set to auto, using n_parallel = 4 and kv_unified = true\n");
+        if (params.n_parallel < 0) {
+            SRV_INF("%s", "n_parallel is set to auto, using n_parallel = 4 and kv_unified = true\n");
 
-        params.n_parallel = 4;
-        params.kv_unified = true;
+            params.n_parallel = 4;
+            params.kv_unified = true;
+        }
     }
 
     // for consistency between server router mode and single-model mode, we set the same model name as alias
