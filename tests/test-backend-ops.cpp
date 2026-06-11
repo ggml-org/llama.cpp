@@ -3766,13 +3766,18 @@ struct test_ssm_scan : public test_case {
 
     test_ssm_scan(ggml_type type = GGML_TYPE_F32,
             int64_t d_state = 32,
-            int64_t head_dim = 1, // non-zero for Mamba-2
+            int64_t head_dim = 1, // 1 = Mamba-1; > 1 = Mamba-2 (scalar A per head)
             int64_t n_head  = 32,
             int64_t n_group = 1,
             int64_t n_seq_tokens = 32,
             int64_t n_seqs = 32,
             bool xbc_overlap = false)
         : type(type), d_state(d_state), head_dim(head_dim), n_head(n_head), n_group(n_group), n_seq_tokens(n_seq_tokens), n_seqs(n_seqs), xbc_overlap(xbc_overlap) {}
+
+    double max_nmse_err() override {
+        // SSD path (head_dim > 1) uses FP16 intermediates (M matrix, X_dt); Mamba-1 is pure FP32.
+        return (head_dim > 1) ? 2e-7 : 1e-7;
+    }
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         ggml_tensor * s   = ggml_new_tensor_4d(ctx, type, d_state,  head_dim,     n_head,       n_seqs);
@@ -3800,16 +3805,14 @@ struct test_ssm_scan : public test_case {
         return out;
     }
 
-    // similar to test_mul_mat_id
+
     void initialize_tensors(ggml_context * ctx) override {
         std::random_device rd;
         std::default_random_engine rng(rd());
-        // Tensor order: s(0), x(1), dt(2), A(3), B(4), C(5), ids(6)
-        int tensor_idx = 0;
         for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
             if (t->type == GGML_TYPE_I32) {
-                if (ggml_is_view_op(t->op)) { tensor_idx++; continue; }
-                // ids
+                if (ggml_is_view_op(t->op)) { continue; }
+                // ids: permutation of [0..n_seqs)
                 for (int64_t r = 0; r < ggml_nrows(t); r++) {
                     std::vector<int32_t> data(t->ne[0]);
                     for (int i = 0; i < t->ne[0]; i++) {
@@ -3818,19 +3821,23 @@ struct test_ssm_scan : public test_case {
                     std::shuffle(data.begin(), data.end(), rng);
                     ggml_backend_tensor_set(t, data.data(), r * t->nb[1], t->ne[0] * sizeof(int32_t));
                 }
-            } else if (tensor_idx == 3) {
-                // A: always negative (decay); moderate range
-                init_tensor_uniform(t, -1.0f, -0.5f);
-            } else if (tensor_idx == 2) {
-                // dt (pre-softplus): softplus([-4, -1]) ~= [0.018, 0.31]
-                init_tensor_uniform(t, -4.0f, -1.0f);
-            } else if (tensor_idx == 0) {
-                // s (initial state): zero as in real inference
+            } else if (ggml_is_view_op(t->op)) {
+                continue;
+            } else if (t->ne[0] == d_state && t->ne[1] == head_dim && t->ne[2] == n_head) {
+                // s {d_state, head_dim, n_head, n_seqs}: zero initial state.
+                // ne[2] == n_head disambiguates from B/C {d_state, n_group, n_seq_tokens, n_seqs}
+                // which otherwise collide when n_group == head_dim (e.g. Mamba-1).
                 init_tensor_uniform(t, 0.0f, 0.0f);
+            } else if (t->ne[0] == n_head && t->ne[1] == n_seq_tokens) {
+                // dt {n_head, n_seq_tokens, n_seqs}: pre-softplus values
+                init_tensor_uniform(t, -4.0f, -1.0f);
+            } else if (t->ne[1] == n_head && t->ne[2] == 1) {
+                // A {1 or d_state, n_head}: negative decay (2-D tensor, ne[2]==1 distinguishes from 3-D/4-D tensors)
+                init_tensor_uniform(t, -1.0f, -0.5f);
             } else {
-                init_tensor_uniform(t);
+                // x, B, C: [-0.5, 0.5] keeps intermediate calculations from overflowing
+                init_tensor_uniform(t, -0.5f, 0.5f);
             }
-            tensor_idx++;
         }
     }
 };
@@ -8370,8 +8377,9 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_ssm_scan(GGML_TYPE_F32, 128, 64, 16, 2, 32, 4)); // Mamba-2
     test_cases.emplace_back(new test_ssm_scan(GGML_TYPE_F32, 256, 64,  8, 2, 32, 4)); // Falcon-H1
     test_cases.emplace_back(new test_ssm_scan(GGML_TYPE_F32, 128, 128, 4, 4, 16, 2, true)); // x/B/C overlap
-    test_cases.emplace_back(new test_ssm_scan(GGML_TYPE_F32, 128, 64, 80, 8, 128, 1)); // Mamba-2 SSD path
-    test_cases.emplace_back(new test_ssm_scan(GGML_TYPE_F32, 128, 80, 128, 1, 128, 1)); // Nemotron-9B SSD path
+    test_cases.emplace_back(new test_ssm_scan(GGML_TYPE_F32, 128, 80, 128, 1, 256, 1)); // Nemotron-9B SSD path
+    test_cases.emplace_back(new test_ssm_scan(GGML_TYPE_F32, 128, 80, 128, 1, 512, 1)); // Nemotron-9B SSD multi-chunk (2 aligned chunks)
+    test_cases.emplace_back(new test_ssm_scan(GGML_TYPE_F32, 128, 64, 80, 8, 300, 2)); // Mamba-2 SSD multi-chunk (partial 2nd chunk, 2 seqs)
 
     test_cases.emplace_back(new test_rwkv_wkv6(GGML_TYPE_F32, 32, 64, 1, 1));
     test_cases.emplace_back(new test_rwkv_wkv6(GGML_TYPE_F32, 32, 64, 32, 1));
