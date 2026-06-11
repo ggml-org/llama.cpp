@@ -859,16 +859,22 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                 auto p = string_split<bool>(argv[i], split_delim);
 
                 std::vector<llama_load_mode> modes;
+                std::vector<llama_load_modifier> modifiers;
                 for (const auto & m : p) {
                     llama_load_mode mode;
+                    llama_load_modifier modifier;
                     if (m) {
-                        mode = LLAMA_LOAD_MODE_MMAP;
+                        mode     = LLAMA_LOAD_MODE_MMAP;
+                        modifier = LLAMA_LOAD_MODIFIER_NONE;
                     } else {
-                        mode = LLAMA_LOAD_MODE_NONE;
+                        mode     = LLAMA_LOAD_MODE_NONE;
+                        modifier = LLAMA_LOAD_MODIFIER_NONE;
                     }
                     modes.push_back(mode);
+                    modifiers.push_back(modifier);
                 }
                 params.load_mode.insert(params.load_mode.end(), modes.begin(), modes.end());
+                params.load_modifier.insert(params.load_modifier.end(), modifiers.begin(), modifiers.end());
             } else if (arg == "-dio" || arg == "--direct-io") {
                 if (++i >= argc) {
                     invalid_param = true;
@@ -878,16 +884,22 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                 auto p = string_split<bool>(argv[i], split_delim);
 
                 std::vector<llama_load_mode> modes;
+                std::vector<llama_load_modifier> modifiers;
                 for (const auto & m : p) {
                     llama_load_mode mode;
+                    llama_load_modifier modifier;
                     if (m) {
-                        mode = LLAMA_LOAD_MODE_DIRECT_IO;
+                        mode     = LLAMA_LOAD_MODE_DIRECT_IO;
+                        modifier = LLAMA_LOAD_MODIFIER_NONE;
                     } else {
-                        mode = LLAMA_LOAD_MODE_NONE;
+                        mode     = LLAMA_LOAD_MODE_NONE;
+                        modifier = LLAMA_LOAD_MODIFIER_NONE;
                     }
                     modes.push_back(mode);
+                    modifiers.push_back(modifier);
                 }
                 params.load_mode.insert(params.load_mode.end(), modes.begin(), modes.end());
+                params.load_modifier.insert(params.load_modifier.end(), modifiers.begin(), modifiers.end());
             } else if (arg == "-embd" || arg == "--embeddings") {
                 if (++i >= argc) {
                     invalid_param = true;
