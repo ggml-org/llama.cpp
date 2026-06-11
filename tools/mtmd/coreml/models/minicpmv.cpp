@@ -56,14 +56,19 @@ static void setup(context &                  ctx,
     hp.image_size         = IMAGE_SIZE;
     hp.patch_size         = PATCH_SIZE;
     // Determine minicpmv_version from the bundle's userDefinedMetadata.
-    // For slice layout purposes (mtmd.cpp) versions 3+ all use the same
-    // MINICPMV_2_6 template; the version marker still drives projector
-    // selection in clip.cpp and must be accurate for each variant.
-    int ver = 4;
-    if (!meta.base_model.empty()) {
-        if (meta.base_model.find("4.0") != std::string::npos) {
-            ver = 3;
-        }
+    // For slice layout purposes versions 3+ all use the MINICPMV_2_6
+    // template; the version marker drives projector selection in clip.cpp
+    // and must be accurate for each variant.
+    int ver = 6;
+    const auto & bm = meta.base_model;
+    if (bm.find("4.0") != std::string::npos) {
+        ver = 5;
+    } else if (bm.find("4.5") != std::string::npos) {
+        ver = 6;
+    } else if (bm.find("4.6") != std::string::npos) {
+        ver = 6;
+    } else if (bm.find("o") != std::string::npos) {
+        ver = 100045;  // MiniCPM-o 4.5
     }
     hp.minicpmv_version   = ver;
     hp.minicpmv_query_num = ctx.n_tokens_out;

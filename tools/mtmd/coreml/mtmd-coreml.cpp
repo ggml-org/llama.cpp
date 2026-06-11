@@ -32,6 +32,7 @@ context::~context() {
 const std::vector<const model_adapter *> & all_adapters() {
     static const std::vector<const model_adapter *> regs = {
         &models::minicpmv::g_adapter,
+        &models::llava::g_adapter,
     };
     return regs;
 }

@@ -32,10 +32,14 @@ coreml/
 ├── backend.h               # C++ header: load / unload / predict_single_output
 ├── backend.mm              # ObjC++ implementation (the only file touching CoreML.framework)
 ├── export_coreml.py        # Python: HF model → .mlpackage export script
+├── mtmd-coreml.h           # C++ adapter interface, context, metadata parsing
+├── mtmd-coreml.cpp         # C++ registry, metadata.json parsing, init/encode orchestration
 └── models/
     ├── models.h            # C++ adapter registry
     ├── minicpmv.cpp        # C++ MiniCPM-V adapter
-    └── modeling_siglip.py  # Python SigLIP ViT model definitions (shared by exporters)
+    ├── llava.cpp           # C++ Llava adapter
+    ├── modeling_siglip.py  # Python SigLIP ViT model definitions
+    └── modeling_clip.py    # Python CLIP ViT model definitions
 ```
 
 ## Quick start

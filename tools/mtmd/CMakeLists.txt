@@ -63,6 +63,7 @@ if (MTMD_COREML)
         coreml/backend.mm
         coreml/models/models.h
         coreml/models/minicpmv.cpp
+        coreml/models/llava.cpp
     )
 
     target_compile_definitions(mtmd PRIVATE MTMD_USE_COREML)

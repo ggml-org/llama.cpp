@@ -11,3 +11,7 @@
 namespace mtmd_coreml::models::minicpmv {
 extern const model_adapter g_adapter;
 } // namespace mtmd_coreml::models::minicpmv
+
+namespace mtmd_coreml::models::llava {
+extern const model_adapter g_adapter;
+} // namespace mtmd_coreml::models::llava
