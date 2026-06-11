@@ -205,6 +205,13 @@ int main(int argc, char ** argv) {
                 params.n_predict, blocks, params.n_ubatch, params.n_batch, params.n_ctx, cl);
     }
 
+    // --fit (auto context/layer fitting) runs inside common_init_from_params, which this runner does not
+    // use: it sizes context from -n and the canvas above. Tell the user so --fit is not silently ignored.
+    if (params.fit_params) {
+        LOG_INF("diffusion: --fit has no effect here; context is sized from -n and the canvas. "
+                "Set -ngl / --n-cpu-moe to control device memory.\n");
+    }
+
     llama_context_params ctx_params = llama_context_default_params();
     ctx_params.n_ctx                = params.n_ctx;
     ctx_params.n_batch              = params.n_batch;
