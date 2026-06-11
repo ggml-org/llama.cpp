@@ -2272,8 +2272,10 @@ void llama_context::output_reorder() {
 
         if (embd_layer_inp.size() > 0) {
             for (int lid = 0; lid < (int) embd_layer_inp.size(); ++lid) {
-                for (uint64_t k = 0; k < n_embd; ++k) {
-                    std::swap(embd_layer_inp[lid].data[i0*n_embd + k], embd_layer_inp[lid].data[i1*n_embd + k]);
+                if (embd_layer_inp[lid].size > 0) {
+                    for (uint64_t k = 0; k < n_embd; ++k) {
+                        std::swap(embd_layer_inp[lid].data[i0*n_embd + k], embd_layer_inp[lid].data[i1*n_embd + k]);
+                    }
                 }
             }
         }
