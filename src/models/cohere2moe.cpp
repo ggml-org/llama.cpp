@@ -25,8 +25,8 @@ void llama_model_cohere2moe::load_arch_hparams(llama_model_loader & ml) {
     uint32_t swa_period = 4;
     if (ml.get_key_or_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, swa_period, false)) {
         hparams.set_swa_pattern(swa_period, true);
-    } else if (!ml.get_key_or_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, hparams.is_swa_impl, hparams.n_layer(), false)) {
-        hparams.set_swa_pattern(swa_period, true);
+    } else {
+        ml.get_key_or_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, hparams.is_swa_impl, hparams.n_layer());
     }
 
     hparams.rope_freq_base_train_swa  = hparams.rope_freq_base_train;
