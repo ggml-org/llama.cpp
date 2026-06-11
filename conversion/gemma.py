@@ -764,6 +764,7 @@ class Gemma4Model(Gemma3Model):
 
         yield from super().modify_tensors(data_torch, name, bid)
 
+
 @ModelBase.register("Gemma4UnifiedForConditionalGeneration")
 class Gemma4UnifiedModel(Gemma4Model):
     model_arch = gguf.MODEL_ARCH.GEMMA4
@@ -906,6 +907,7 @@ class Gemma4VisionAudioModel(MmprojModel):
                 data_torch = data_torch.permute(0, 3, 1, 2).contiguous()
             mapped_name = self.map_tensor_name(name, (".weight", ".bias", ".input_max", ".input_min", ".output_max", ".output_min"))
             yield (mapped_name, data_torch)
+
 
 @ModelBase.register("Gemma4UnifiedForConditionalGeneration")
 class Gemma4UnifiedVisionAudioModel(Gemma4VisionAudioModel):
