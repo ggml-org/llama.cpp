@@ -575,6 +575,10 @@ struct common_params {
     std::vector<std::string> image; // path to image file(s) ; TODO: change the name to "media"
     int image_min_tokens = -1;
     int image_max_tokens = -1;
+    // for video input
+    float       video_fps                   = 4.0f;
+    int64_t     video_timestamp_interval_ms = 5000;
+    std::string video_ffmpeg_bin_dir        = "";
 
     // finetune
     struct lr_opt lr;

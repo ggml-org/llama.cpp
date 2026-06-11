@@ -175,13 +175,14 @@ For the full list of features, please refer to [server's changelog](https://gith
 | `-np, --parallel N` | number of server slots (default: -1, -1 = auto)<br/>(env: LLAMA_ARG_N_PARALLEL) |
 | `-cb, --cont-batching, -nocb, --no-cont-batching` | whether to enable continuous batching (a.k.a dynamic batching) (default: enabled)<br/>(env: LLAMA_ARG_CONT_BATCHING) |
 | `-mm, --mmproj FILE` | path to a multimodal projector file. see tools/mtmd/README.md<br/>note: if -hf is used, this argument can be omitted<br/>(env: LLAMA_ARG_MMPROJ) |
-| `-tk, --talker-model FILE` | path to the qwen3-omni talker gguf, enables the /v1/audio/speech endpoint<br/>(env: LLAMA_ARG_TALKER_MODEL) |
-| `-c2w, --code2wav-model FILE` | path to the qwen3-omni code2wav gguf, the talker code detokenizer<br/>(env: LLAMA_ARG_CODE2WAV_MODEL) |
 | `-mmu, --mmproj-url URL` | URL to a multimodal projector file. see tools/mtmd/README.md<br/>(env: LLAMA_ARG_MMPROJ_URL) |
 | `--mmproj-auto, --no-mmproj, --no-mmproj-auto` | whether to use multimodal projector file (if available), useful when using -hf (default: enabled)<br/>(env: LLAMA_ARG_MMPROJ_AUTO) |
 | `--mmproj-offload, --no-mmproj-offload` | whether to enable GPU offloading for multimodal projector (default: enabled)<br/>(env: LLAMA_ARG_MMPROJ_OFFLOAD) |
 | `--image-min-tokens N` | minimum number of tokens each image can take, only used by vision models with dynamic resolution (default: read from model)<br/>(env: LLAMA_ARG_IMAGE_MIN_TOKENS) |
 | `--image-max-tokens N` | maximum number of tokens each image can take, only used by vision models with dynamic resolution (default: read from model)<br/>(env: LLAMA_ARG_IMAGE_MAX_TOKENS) |
+| `--video-fps N` | target video frame rate (default: 4.0)<br/>(env: LLAMA_ARG_VIDEO_FPS) |
+| `--video-timestamp-interval N` | interval in milliseconds between text timestamps (default: 5000)<br/>(env: LLAMA_ARG_VIDEO_TIMESTAMP_INTERVAL) |
+| `--video-ffmpeg-dir DIR` | path to the directory containing ffmpeg and ffprobe (default: search in PATH)<br/>(env: LLAMA_ARG_VIDEO_FFMPEG_DIR) |
 | `-a, --alias STRING` | set model name aliases, comma-separated (to be used by API)<br/>(env: LLAMA_ARG_ALIAS) |
 | `--tags STRING` | set model tags, comma-separated (informational, not used for routing)<br/>(env: LLAMA_ARG_TAGS) |
 | `--embd-normalize N` | normalisation for embeddings (default: 2) (-1=none, 0=max absolute int16, 1=taxicab, 2=euclidean, >2=p-norm) |
@@ -207,6 +208,7 @@ For the full list of features, please refer to [server's changelog](https://gith
 | `--ssl-cert-file FNAME` | path to file a PEM-encoded SSL certificate<br/>(env: LLAMA_ARG_SSL_CERT_FILE) |
 | `--chat-template-kwargs STRING` | sets additional params for the json template parser, must be a valid json object string, e.g. '{"key1":"value1","key2":"value2"}'<br/>(env: LLAMA_ARG_CHAT_TEMPLATE_KWARGS) |
 | `-to, --timeout N` | server read/write timeout in seconds (default: 3600)<br/>(env: LLAMA_ARG_TIMEOUT) |
+| `--sse-ping-interval N` | server SSE ping interval in seconds (-1 = disabled, default: 30)<br/>(env: LLAMA_ARG_SSE_PING_INTERVAL) |
 | `--threads-http N` | number of threads used to process HTTP requests (default: -1)<br/>(env: LLAMA_ARG_THREADS_HTTP) |
 | `--cache-prompt, --no-cache-prompt` | whether to enable prompt caching (default: enabled)<br/>(env: LLAMA_ARG_CACHE_PROMPT) |
 | `--cache-reuse N` | min chunk size to attempt reusing from the cache via KV shifting, requires prompt caching to be enabled (default: 0)<br/>[(card)](https://ggml.ai/f0.png)<br/>(env: LLAMA_ARG_CACHE_REUSE) |

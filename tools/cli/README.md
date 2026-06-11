@@ -161,9 +161,12 @@
 | `-mmu, --mmproj-url URL` | URL to a multimodal projector file. see tools/mtmd/README.md<br/>(env: LLAMA_ARG_MMPROJ_URL) |
 | `--mmproj-auto, --no-mmproj, --no-mmproj-auto` | whether to use multimodal projector file (if available), useful when using -hf (default: enabled)<br/>(env: LLAMA_ARG_MMPROJ_AUTO) |
 | `--mmproj-offload, --no-mmproj-offload` | whether to enable GPU offloading for multimodal projector (default: enabled)<br/>(env: LLAMA_ARG_MMPROJ_OFFLOAD) |
-| `--image, --audio FILE` | path to an image or audio file. use with multimodal models, use comma-separated values for multiple files |
+| `--image, --audio, --video FILE` | path to an image, audio, or video file. use with multimodal models, use comma-separated values for multiple files |
 | `--image-min-tokens N` | minimum number of tokens each image can take, only used by vision models with dynamic resolution (default: read from model)<br/>(env: LLAMA_ARG_IMAGE_MIN_TOKENS) |
 | `--image-max-tokens N` | maximum number of tokens each image can take, only used by vision models with dynamic resolution (default: read from model)<br/>(env: LLAMA_ARG_IMAGE_MAX_TOKENS) |
+| `--video-fps N` | target video frame rate (default: 4.0)<br/>(env: LLAMA_ARG_VIDEO_FPS) |
+| `--video-timestamp-interval N` | interval in milliseconds between text timestamps (default: 5000)<br/>(env: LLAMA_ARG_VIDEO_TIMESTAMP_INTERVAL) |
+| `--video-ffmpeg-dir DIR` | path to the directory containing ffmpeg and ffprobe (default: search in PATH)<br/>(env: LLAMA_ARG_VIDEO_FFMPEG_DIR) |
 | `--chat-template-kwargs STRING` | sets additional params for the json template parser, must be a valid json object string, e.g. '{"key1":"value1","key2":"value2"}'<br/>(env: LLAMA_ARG_CHAT_TEMPLATE_KWARGS) |
 | `--jinja, --no-jinja` | whether to use jinja template engine for chat (default: enabled)<br/>(env: LLAMA_ARG_JINJA) |
 | `--reasoning-format FORMAT` | controls whether thought tags are allowed and/or extracted from the response, and in which format they're returned; one of:<br/>- none: leaves thoughts unparsed in `message.content`<br/>- deepseek: puts thoughts in `message.reasoning_content`<br/>- deepseek-legacy: keeps `<think>` tags in `message.content` while also populating `message.reasoning_content`<br/>(default: auto)<br/>(env: LLAMA_ARG_THINK) |

@@ -126,7 +126,9 @@ struct mtmd_helper_video_init_params {
     // TODO @ngxson : allow "placeholder" bitmap output for counting tokens
 };
 
-MTMD_API struct mtmd_helper_video_init_params mtmd_helper_video_init_params_default(void);
+// note: setter is NOT thread-safe, should only be called on application startup
+MTMD_API struct mtmd_helper_video_init_params mtmd_helper_video_get_default_params(void);
+MTMD_API void mtmd_helper_video_set_default_params(struct mtmd_helper_video_init_params params);
 
 // returns NULL on failure (ffprobe not found, file unreadable, etc.)
 MTMD_API mtmd_helper_video * mtmd_helper_video_init(

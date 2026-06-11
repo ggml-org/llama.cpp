@@ -2243,6 +2243,27 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.image_max_tokens = value;
         }
     ).set_examples(mmproj_examples).set_env("LLAMA_ARG_IMAGE_MAX_TOKENS"));
+    add_opt(common_arg(
+        {"--video-fps"}, "N",
+        string_format("target video frame rate (default: %.1f)", params.video_fps),
+        [](common_params & params, const std::string & value) {
+            params.video_fps = std::stof(value);
+        }
+    ).set_examples(mmproj_examples).set_env("LLAMA_ARG_VIDEO_FPS"));
+    add_opt(common_arg(
+        {"--video-timestamp-interval"}, "N",
+        string_format("interval in milliseconds between text timestamps (default: %" PRId64 ")", params.video_timestamp_interval_ms),
+        [](common_params & params, int value) {
+            params.video_timestamp_interval_ms = value;
+        }
+    ).set_examples(mmproj_examples).set_env("LLAMA_ARG_VIDEO_TIMESTAMP_INTERVAL"));
+    add_opt(common_arg(
+        {"--video-ffmpeg-dir"}, "DIR",
+        "path to the directory containing ffmpeg and ffprobe (default: search in PATH)",
+        [](common_params & params, const std::string & value) {
+            params.video_ffmpeg_bin_dir = value;
+        }
+    ).set_examples(mmproj_examples).set_env("LLAMA_ARG_VIDEO_FFMPEG_DIR"));
     if (llama_supports_rpc()) {
         add_opt(common_arg(
             {"--rpc"}, "SERVERS",

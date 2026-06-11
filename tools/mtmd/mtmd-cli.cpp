@@ -153,6 +153,15 @@ struct mtmd_cli_context {
             LOG_ERR("Failed to load vision model from %s\n", clip_path);
             exit(1);
         }
+
+        {
+            auto video_params = mtmd_helper_video_get_default_params();
+            video_params.fps_target = params.video_fps;
+            video_params.timestamp_interval_ms = params.video_timestamp_interval_ms;
+            video_params.ffmpeg_bin_dir = params.video_ffmpeg_bin_dir.empty()
+                                ? nullptr : params.video_ffmpeg_bin_dir.c_str();
+            mtmd_helper_video_set_default_params(video_params);
+        }
     }
 
     bool check_antiprompt(const llama_tokens & generated_tokens) {
