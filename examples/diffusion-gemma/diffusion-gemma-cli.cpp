@@ -115,8 +115,8 @@ int main(int argc, char ** argv) {
     }
     common_init();
     if (!params.diffusion.device_self_cond && params.diffusion.fused_self_cond_embd) {
-        LOG_ERR("--no-diffusion-device-selfcond cannot be used with --diffusion-fused-self-cond-embd\n");
-        return 1;
+        LOG_WRN("disabling fused self-conditioning embedding because device self-conditioning is disabled\n");
+        params.diffusion.fused_self_cond_embd = false;
     }
 
     // diffusion config

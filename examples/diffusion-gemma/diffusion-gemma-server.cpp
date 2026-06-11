@@ -730,8 +730,8 @@ int main(int argc, char ** argv) {
     }
     common_init();
     if (!params.diffusion.device_self_cond && params.diffusion.fused_self_cond_embd) {
-        SRV_ERR("%s\n", "--no-diffusion-device-selfcond cannot be used with --diffusion-fused-self-cond-embd");
-        return 1;
+        SRV_WRN("%s\n", "disabling fused self-conditioning embedding because device self-conditioning is disabled");
+        params.diffusion.fused_self_cond_embd = false;
     }
     params.diffusion.self_cond_top_k = diffusion_self_cond_top_k(params);
 

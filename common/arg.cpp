@@ -3847,7 +3847,10 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     add_opt(common_arg(
         {"--no-diffusion-device-selfcond"},
         "disable device-resident block-diffusion self-conditioning",
-        [](common_params & params) { params.diffusion.device_self_cond = false; }
+        [](common_params & params) {
+            params.diffusion.device_self_cond = false;
+            params.diffusion.fused_self_cond_embd = false;
+        }
     ).set_examples({ LLAMA_EXAMPLE_DIFFUSION }));
     add_opt(common_arg(
         {"--no-diffusion-device-denoise-loop"},
@@ -3890,9 +3893,19 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params) { params.diffusion.fused_self_cond_embd = true; }
     ).set_examples({ LLAMA_EXAMPLE_DIFFUSION }));
     add_opt(common_arg(
+        {"--no-diffusion-fused-self-cond-embd"},
+        "disable fused device self-conditioning embedding input for block diffusion",
+        [](common_params & params) { params.diffusion.fused_self_cond_embd = false; }
+    ).set_examples({ LLAMA_EXAMPLE_DIFFUSION }));
+    add_opt(common_arg(
         {"--diffusion-fuse-final-softcap"},
         "move final logit softcap into the CUDA diffusion sampling kernel",
         [](common_params & params) { params.diffusion.fuse_final_logit_softcap = true; }
+    ).set_examples({ LLAMA_EXAMPLE_DIFFUSION }));
+    add_opt(common_arg(
+        {"--no-diffusion-fuse-final-softcap"},
+        "disable fused final logit softcap in the CUDA diffusion sampling kernel",
+        [](common_params & params) { params.diffusion.fuse_final_logit_softcap = false; }
     ).set_examples({ LLAMA_EXAMPLE_DIFFUSION }));
     add_opt(common_arg(
         {"--diffusion-separate-encoder-decoder"},
@@ -3905,14 +3918,29 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params) { params.diffusion.cuda_direct_self_cond = true; }
     ).set_examples({ LLAMA_EXAMPLE_DIFFUSION }));
     add_opt(common_arg(
+        {"--no-diffusion-cuda-direct-self-cond"},
+        "disable direct CUDA diffusion self-conditioning writes into decoder graph inputs",
+        [](common_params & params) { params.diffusion.cuda_direct_self_cond = false; }
+    ).set_examples({ LLAMA_EXAMPLE_DIFFUSION }));
+    add_opt(common_arg(
         {"--diffusion-cuda-final-tokens-on-stop"},
         "copy final diffusion tokens only when the device stop condition is reached",
         [](common_params & params) { params.diffusion.cuda_final_tokens_on_stop = true; }
     ).set_examples({ LLAMA_EXAMPLE_DIFFUSION }));
     add_opt(common_arg(
+        {"--no-diffusion-cuda-final-tokens-on-stop"},
+        "copy final diffusion tokens every denoising step",
+        [](common_params & params) { params.diffusion.cuda_final_tokens_on_stop = false; }
+    ).set_examples({ LLAMA_EXAMPLE_DIFFUSION }));
+    add_opt(common_arg(
         {"--diffusion-cuda-fused-top-k-sample"},
         "fuse CUDA diffusion top-k selection and sampling",
         [](common_params & params) { params.diffusion.cuda_fused_top_k_sample = true; }
+    ).set_examples({ LLAMA_EXAMPLE_DIFFUSION }));
+    add_opt(common_arg(
+        {"--no-diffusion-cuda-fused-top-k-sample"},
+        "disable fused CUDA diffusion top-k selection and sampling",
+        [](common_params & params) { params.diffusion.cuda_fused_top_k_sample = false; }
     ).set_examples({ LLAMA_EXAMPLE_DIFFUSION }));
     add_opt(common_arg(
         {"--diffusion-cuda-parallel-full-softmax"},

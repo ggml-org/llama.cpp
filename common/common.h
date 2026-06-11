@@ -416,15 +416,15 @@ struct common_params_diffusion {
 
     // CUDA diffusion sampling fast-path knobs.
     bool    cuda_fast_top_k                = true;
-    bool    cuda_direct_self_cond          = false;
-    bool    cuda_final_tokens_on_stop      = false;
-    bool    cuda_fused_top_k_sample        = false;
+    bool    cuda_direct_self_cond          = true;
+    bool    cuda_final_tokens_on_stop      = true;
+    bool    cuda_fused_top_k_sample        = true;
     bool    cuda_parallel_full_softmax     = false;
     bool    cuda_fused_full_softmax        = true;
 
     // Diffusion graph-shape knobs.
-    bool    fused_self_cond_embd       = false;
-    bool    fuse_final_logit_softcap   = false;
+    bool    fused_self_cond_embd       = true;
+    bool    fuse_final_logit_softcap   = true;
     bool    separate_encoder_decoder   = false;
 };
 
