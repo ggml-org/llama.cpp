@@ -414,8 +414,18 @@ struct common_params_diffusion {
     int32_t self_cond_top_k    = 256;   // sparse self-conditioning gather width
     uint32_t input_gpu_groups  = 63;    // decoder input tensor groups assigned to GPU backend
 
-    bool    cuda_fast_top_k    = true;  // use CUDA fast top-k selection path
-    bool    separate_encoder_decoder = false; // build separate diffusion encoder/decoder graph variants
+    // CUDA diffusion sampling fast-path knobs. Defaults preserve behavior when no tuning flags are passed.
+    bool    cuda_fast_top_k                = true;
+    bool    cuda_direct_self_cond          = false;
+    bool    cuda_final_tokens_on_stop      = false;
+    bool    cuda_fused_top_k_sample        = false;
+    bool    cuda_parallel_full_softmax     = false;
+    bool    cuda_fused_full_softmax        = false;
+
+    // Diffusion graph-shape knobs.
+    bool    fused_self_cond_embd       = false;
+    bool    fuse_final_logit_softcap   = false;
+    bool    separate_encoder_decoder   = false;
 };
 
 // reasoning API response format (not to be confused as chat template's reasoning format)

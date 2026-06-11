@@ -12,6 +12,8 @@
 #include "llama-memory-hybrid-iswa.h"
 #include "llama-memory-recurrent.h"
 
+#include "../ggml/src/ggml-impl.h"
+
 #include <cassert>
 #include <cmath>
 #include <cstdlib>
@@ -451,6 +453,28 @@ void llm_graph_input_diffusion_self_cond_topk::set_input(const llama_ubatch * ub
         ggml_backend_tensor_set(ids,   zeros_id.data(), 0, n_id_bytes);
         ggml_backend_tensor_set(probs, zeros_pr.data(), 0, n_pr_bytes);
     }
+}
+
+void llm_graph_input_diffusion_self_cond_embd::set_input(const llama_ubatch * ubatch) {
+    GGML_UNUSED(ubatch);
+
+    if (!embd) {
+        return;
+    }
+    assert(embd->type == GGML_TYPE_F32);
+
+    const size_t n_bytes = ggml_nbytes(embd);
+    const bool have_device = diffusion
+        && diffusion->sc_embd_device_ready
+        && diffusion->sc_embd_device_data  == embd->data
+        && diffusion->sc_embd_device_bytes == n_bytes;
+
+    if (have_device) {
+        return;
+    }
+
+    std::vector<uint8_t> zeros(n_bytes, 0);
+    ggml_backend_tensor_set(embd, zeros.data(), 0, n_bytes);
 }
 
 template <typename T>
@@ -1021,6 +1045,9 @@ void llm_graph_result::reset() {
     t_logits      = nullptr;
     t_embd        = nullptr;
     t_embd_pooled = nullptr;
+    t_h_nextn     = nullptr;
+    t_h_pre_norm  = nullptr;
+    t_diffusion_token_embd = nullptr;
 
     t_layer_inp.resize(LLAMA_MAX_LAYERS);
     std::fill(t_layer_inp.begin(), t_layer_inp.end(), nullptr);
@@ -1057,6 +1084,16 @@ llm_graph_input_diffusion_self_cond_topk * llm_graph_result::get_inp_diffusion_s
     for (auto & input : inputs) {
         if (auto * topk = dynamic_cast<llm_graph_input_diffusion_self_cond_topk *>(input.get())) {
             return topk;
+        }
+    }
+
+    return nullptr;
+}
+
+llm_graph_input_diffusion_self_cond_embd * llm_graph_result::get_inp_diffusion_self_cond_embd() const {
+    for (auto & input : inputs) {
+        if (auto * embd = dynamic_cast<llm_graph_input_diffusion_self_cond_embd *>(input.get())) {
+            return embd;
         }
     }
 
@@ -1199,6 +1236,8 @@ llm_graph_context::llm_graph_context(const llm_graph_params & params) :
     ctx0             (res->get_ctx()),
     gf               (res->get_gf()) {
         res->set_params(params);
+        ggml_graph_set_flag(gf, GGML_CGRAPH_FLAG_DIFFUSION_DECODER,
+                llm_arch_is_diffusion(arch) && diffusion && diffusion->decoder_phase);
     }
 
 void llm_graph_context::cb(ggml_tensor * cur, const char * name, int il) const {
@@ -2214,6 +2253,20 @@ llm_graph_input_diffusion_self_cond_topk * llm_graph_context::build_inp_diffusio
     res->add_input(std::move(inp));
 
     return ptr;
+}
+
+ggml_tensor * llm_graph_context::build_inp_diffusion_self_cond_embd(int64_t n_embd) const {
+    auto inp = std::make_unique<llm_graph_input_diffusion_self_cond_embd>(diffusion);
+
+    auto & cur = inp->embd;
+
+    cur = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_embd, n_tokens);
+    ggml_set_input(cur);
+    set_diffusion_input_backend(cur);
+
+    res->add_input(std::move(inp));
+
+    return cur;
 }
 
 ggml_tensor * llm_graph_context::build_inp_pos_bucket_enc() const {

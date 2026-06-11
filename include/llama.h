@@ -384,6 +384,8 @@ extern "C" {
         bool kv_unified;  // use a unified buffer across the input sequences when computing the attention
                           // try to disable when n_seq_max > 1 for improved performance when the sequences do not share a large prefix
                           // ref: https://github.com/ggml-org/llama.cpp/pull/14363
+        bool diffusion_fused_self_cond_embd;     // use fused diffusion self-conditioning embedding input [EXPERIMENTAL]
+        bool diffusion_fuse_final_logit_softcap; // move diffusion final softcap into sampling [EXPERIMENTAL]
         bool diffusion_separate_encoder_decoder; // build separate diffusion encoder/decoder graph variants [EXPERIMENTAL]
 
         // [EXPERIMENTAL]
@@ -1028,6 +1030,11 @@ extern "C" {
         uint32_t step;
         bool     top_k_tail_correction;
         bool     cuda_fast_top_k;
+        bool     cuda_direct_self_cond;
+        bool     cuda_final_tokens_on_stop;
+        bool     cuda_fused_top_k_sample;
+        bool     cuda_parallel_full_softmax;
+        bool     cuda_fused_full_softmax;
     };
 
     struct llama_diffusion_sample_result {

@@ -346,6 +346,11 @@ struct diffusion_server {
                         /* .step                  = */ (uint32_t) n_steps_total,
                         /* .top_k_tail_correction = */ rq.topk_tail,
                         /* .cuda_fast_top_k       = */ diffusion.cuda_fast_top_k,
+                        /* .cuda_direct_self_cond = */ diffusion.cuda_direct_self_cond,
+                        /* .cuda_final_tokens_on_stop = */ diffusion.cuda_final_tokens_on_stop && device_early_stop_interval > 0,
+                        /* .cuda_fused_top_k_sample = */ diffusion.cuda_fused_top_k_sample,
+                        /* .cuda_parallel_full_softmax = */ diffusion.cuda_parallel_full_softmax,
+                        /* .cuda_fused_full_softmax = */ diffusion.cuda_fused_full_softmax,
                     };
                     llama_diffusion_sample_result sample_result = {
                         /* .sampled         = */ nullptr,
@@ -391,6 +396,11 @@ struct diffusion_server {
                         /* .step                  = */ (uint32_t) n_steps_total,
                         /* .top_k_tail_correction = */ rq.topk_tail,
                         /* .cuda_fast_top_k       = */ diffusion.cuda_fast_top_k,
+                        /* .cuda_direct_self_cond = */ diffusion.cuda_direct_self_cond,
+                        /* .cuda_final_tokens_on_stop = */ diffusion.cuda_final_tokens_on_stop && device_early_stop_interval > 0,
+                        /* .cuda_fused_top_k_sample = */ diffusion.cuda_fused_top_k_sample,
+                        /* .cuda_parallel_full_softmax = */ diffusion.cuda_parallel_full_softmax,
+                        /* .cuda_fused_full_softmax = */ diffusion.cuda_fused_full_softmax,
                     };
                     llama_diffusion_sample_result sample_result = {
                         /* .sampled         = */ sampled.data(),
@@ -719,6 +729,10 @@ int main(int argc, char ** argv) {
         return 1;
     }
     common_init();
+    if (!params.diffusion.device_self_cond && params.diffusion.fused_self_cond_embd) {
+        SRV_ERR("%s\n", "--no-diffusion-device-selfcond cannot be used with --diffusion-fused-self-cond-embd");
+        return 1;
+    }
     params.diffusion.self_cond_top_k = diffusion_self_cond_top_k(params);
 
     llama_backend_init();
@@ -776,6 +790,8 @@ int main(int argc, char ** argv) {
     ctx_params.no_perf  = params.no_perf;
     ctx_params.diffusion_self_cond_top_k = srv.diffusion.self_cond_top_k;
     ctx_params.diffusion_input_gpu_groups = srv.diffusion.input_gpu_groups;
+    ctx_params.diffusion_fused_self_cond_embd = srv.diffusion.fused_self_cond_embd;
+    ctx_params.diffusion_fuse_final_logit_softcap = srv.diffusion.fuse_final_logit_softcap;
     ctx_params.diffusion_separate_encoder_decoder = srv.diffusion.separate_encoder_decoder;
 
     srv.ctx = llama_init_from_model(srv.model, ctx_params);
@@ -893,6 +909,14 @@ int main(int argc, char ** argv) {
                 {"device_self_cond", srv.use_device_self_cond},
                 {"device_loop", srv.use_device_loop},
                 {"device_early_stop_interval", srv.device_early_stop_interval},
+                {"run_max_denoising_step", srv.diffusion.run_max_denoising_step},
+                {"fused_self_cond_embd", srv.diffusion.fused_self_cond_embd},
+                {"fuse_final_logit_softcap", srv.diffusion.fuse_final_logit_softcap},
+                {"cuda_direct_self_cond", srv.diffusion.cuda_direct_self_cond},
+                {"cuda_final_tokens_on_stop", srv.diffusion.cuda_final_tokens_on_stop},
+                {"cuda_fused_top_k_sample", srv.diffusion.cuda_fused_top_k_sample},
+                {"cuda_parallel_full_softmax", srv.diffusion.cuda_parallel_full_softmax},
+                {"cuda_fused_full_softmax", srv.diffusion.cuda_fused_full_softmax},
                 {"top_k", srv.topk_fixed},
                 {"top_k_start", srv.topk_start},
                 {"top_k_end", srv.topk_end},
@@ -1002,6 +1026,14 @@ int main(int argc, char ** argv) {
                     {"device_self_cond", srv.use_device_self_cond},
                     {"device_loop", srv.use_device_loop},
                     {"device_early_stop_interval", srv.device_early_stop_interval},
+                    {"run_max_denoising_step", srv.diffusion.run_max_denoising_step},
+                    {"fused_self_cond_embd", srv.diffusion.fused_self_cond_embd},
+                    {"fuse_final_logit_softcap", srv.diffusion.fuse_final_logit_softcap},
+                    {"cuda_direct_self_cond", srv.diffusion.cuda_direct_self_cond},
+                    {"cuda_final_tokens_on_stop", srv.diffusion.cuda_final_tokens_on_stop},
+                    {"cuda_fused_top_k_sample", srv.diffusion.cuda_fused_top_k_sample},
+                    {"cuda_parallel_full_softmax", srv.diffusion.cuda_parallel_full_softmax},
+                    {"cuda_fused_full_softmax", srv.diffusion.cuda_fused_full_softmax},
                     {"top_k", srv.topk_fixed},
                     {"top_k_start", srv.topk_start},
                     {"top_k_end", srv.topk_end},

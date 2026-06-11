@@ -52,7 +52,13 @@ struct ggml_cuda_diffusion_sample_params {
     uint32_t seed;
     uint32_t step;
     bool     top_k_tail_correction;
+    float    logit_softcap;
     bool     fast_top_k;
+    bool     direct_self_cond;
+    bool     final_tokens_on_stop;
+    bool     fused_top_k_sample;
+    bool     parallel_full_softmax;
+    bool     fused_full_softmax;
 };
 
 struct ggml_cuda_diffusion_sample_result {
@@ -63,6 +69,8 @@ struct ggml_cuda_diffusion_sample_result {
     float   * self_cond_probs;
     struct ggml_tensor * self_cond_ids_tensor;
     struct ggml_tensor * self_cond_probs_tensor;
+    struct ggml_tensor * self_cond_embd_tensor;
+    const struct ggml_tensor * token_embd_tensor;
     struct ggml_tensor * canvas_tokens_tensor;
     int32_t * final_tokens;
     int32_t * stop;

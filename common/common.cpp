@@ -1599,6 +1599,8 @@ struct llama_context_params common_context_params_to_llama(const common_params &
     cparams.kv_unified        = params.kv_unified;
     cparams.diffusion_self_cond_top_k = params.diffusion.self_cond_top_k;
     cparams.diffusion_input_gpu_groups = params.diffusion.input_gpu_groups;
+    cparams.diffusion_fused_self_cond_embd = params.diffusion.fused_self_cond_embd;
+    cparams.diffusion_fuse_final_logit_softcap = params.diffusion.fuse_final_logit_softcap;
     cparams.diffusion_separate_encoder_decoder = params.diffusion.separate_encoder_decoder;
 
     cparams.type_k = params.cache_type_k;

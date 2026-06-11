@@ -3885,9 +3885,44 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params, int value) { params.diffusion.force_top_k = value; }
     ).set_examples({ LLAMA_EXAMPLE_DIFFUSION }));
     add_opt(common_arg(
+        {"--diffusion-fused-self-cond-embd"},
+        "use fused device self-conditioning embedding input for block diffusion",
+        [](common_params & params) { params.diffusion.fused_self_cond_embd = true; }
+    ).set_examples({ LLAMA_EXAMPLE_DIFFUSION }));
+    add_opt(common_arg(
+        {"--diffusion-fuse-final-softcap"},
+        "move final logit softcap into the CUDA diffusion sampling kernel",
+        [](common_params & params) { params.diffusion.fuse_final_logit_softcap = true; }
+    ).set_examples({ LLAMA_EXAMPLE_DIFFUSION }));
+    add_opt(common_arg(
         {"--diffusion-separate-encoder-decoder"},
         "build separate block-diffusion encoder and decoder graph variants",
         [](common_params & params) { params.diffusion.separate_encoder_decoder = true; }
+    ).set_examples({ LLAMA_EXAMPLE_DIFFUSION }));
+    add_opt(common_arg(
+        {"--diffusion-cuda-direct-self-cond"},
+        "write CUDA diffusion self-conditioning directly into decoder graph inputs",
+        [](common_params & params) { params.diffusion.cuda_direct_self_cond = true; }
+    ).set_examples({ LLAMA_EXAMPLE_DIFFUSION }));
+    add_opt(common_arg(
+        {"--diffusion-cuda-final-tokens-on-stop"},
+        "copy final diffusion tokens only when the device stop condition is reached",
+        [](common_params & params) { params.diffusion.cuda_final_tokens_on_stop = true; }
+    ).set_examples({ LLAMA_EXAMPLE_DIFFUSION }));
+    add_opt(common_arg(
+        {"--diffusion-cuda-fused-top-k-sample"},
+        "fuse CUDA diffusion top-k selection and sampling",
+        [](common_params & params) { params.diffusion.cuda_fused_top_k_sample = true; }
+    ).set_examples({ LLAMA_EXAMPLE_DIFFUSION }));
+    add_opt(common_arg(
+        {"--diffusion-cuda-parallel-full-softmax"},
+        "parallelize CUDA diffusion full-vocab sampling when top-k is 0",
+        [](common_params & params) { params.diffusion.cuda_parallel_full_softmax = true; }
+    ).set_examples({ LLAMA_EXAMPLE_DIFFUSION }));
+    add_opt(common_arg(
+        {"--diffusion-cuda-fused-full-softmax"},
+        "fuse CUDA diffusion full-vocab softmax sampling and self-conditioning",
+        [](common_params & params) { params.diffusion.cuda_fused_full_softmax = true; }
     ).set_examples({ LLAMA_EXAMPLE_DIFFUSION }));
     add_opt(common_arg(
         {"--no-diffusion-cuda-fast-top-k"},

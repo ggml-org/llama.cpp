@@ -192,6 +192,9 @@ ggml_tensor * llama_model_diffusion_gemma::graph_base::build_input(bool is_decod
     const auto & dmodel = static_cast<const llama_model_diffusion_gemma &>(model);
 
     ggml_tensor * inpL = build_inp_embd(dmodel.tok_embd_gpu ? dmodel.tok_embd_gpu : model.tok_embd);
+    if (dmodel.tok_embd_gpu) {
+        res->t_diffusion_token_embd = dmodel.tok_embd_gpu;
+    }
 
     // scaled word embeddings (sqrt(hidden_size)); raw embeddings input is not scaled
     inpL = ggml_scale(ctx0, inpL, ubatch.token ? sqrtf(n_embd) : 1.0f);
@@ -200,7 +203,9 @@ ggml_tensor * llama_model_diffusion_gemma::graph_base::build_input(bool is_decod
     if (is_decoder) {
         ggml_tensor * soft; // soft-embedding {n_embd, n_tokens}: blend of the previous step's
                             // predicted token embeddings, scaled by sqrt(n_embd)
-        if (dmodel.tok_embd_gpu) {
+        if (dmodel.tok_embd_gpu && diffusion && diffusion->fused_self_cond_embd) {
+            soft = build_inp_diffusion_self_cond_embd(n_embd);
+        } else if (dmodel.tok_embd_gpu) {
             // Sparse gather path (Option-2): the previous step's top-k token ids+probs are fed per
             // position; gather just those k embedding rows and blend them, instead of the dense
             // full-vocab `probs @ token_embd` matmul. Gather width is fixed (N_SC_TOPK) so the
@@ -427,7 +432,10 @@ void llama_model_diffusion_gemma::graph_base::build_transformer(ggml_tensor * in
 
     cur = build_lora_mm(model.output, cur, model.output_s);
 
-    if (hparams.f_final_logit_softcapping) {
+    const bool fuse_final_softcap =
+        diffusion && diffusion->decoder_phase && diffusion->fuse_final_logit_softcap;
+
+    if (hparams.f_final_logit_softcapping && !fuse_final_softcap) {
         cur = ggml_scale(ctx0, cur, 1.0f / hparams.f_final_logit_softcapping);
         cur = ggml_tanh(ctx0, cur);
         cur = ggml_scale(ctx0, cur, hparams.f_final_logit_softcapping);

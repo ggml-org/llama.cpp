@@ -326,6 +326,10 @@ enum ggml_cgraph_eval_order {
     GGML_CGRAPH_EVAL_ORDER_COUNT
 };
 
+enum ggml_cgraph_flag {
+    GGML_CGRAPH_FLAG_DIFFUSION_DECODER = 1u << 0,
+};
+
 struct ggml_cgraph {
     int size;    // maximum number of nodes/leafs/grads/grad_accs
     int n_nodes; // number of nodes currently in use
@@ -341,10 +345,24 @@ struct ggml_cgraph {
 
     enum ggml_cgraph_eval_order order;
 
+    uint32_t flags;
+
     // an optional identifier that can be utilized to recognize same graphs if two non-zero values match
     // a value of 0 means it is not set and should be ignored
     uint64_t uid;
 };
+
+static inline void ggml_graph_set_flag(struct ggml_cgraph * cgraph, enum ggml_cgraph_flag flag, bool enabled) {
+    if (enabled) {
+        cgraph->flags |= (uint32_t) flag;
+    } else {
+        cgraph->flags &= ~((uint32_t) flag);
+    }
+}
+
+static inline bool ggml_graph_has_flag(const struct ggml_cgraph * cgraph, enum ggml_cgraph_flag flag) {
+    return (cgraph->flags & (uint32_t) flag) != 0;
+}
 
 // returns a slice of cgraph with nodes [i0, i1)
 // the slice does not have leafs or gradients

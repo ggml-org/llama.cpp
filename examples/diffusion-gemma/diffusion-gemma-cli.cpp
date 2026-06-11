@@ -114,6 +114,10 @@ int main(int argc, char ** argv) {
         return 1;
     }
     common_init();
+    if (!params.diffusion.device_self_cond && params.diffusion.fused_self_cond_embd) {
+        LOG_ERR("--no-diffusion-device-selfcond cannot be used with --diffusion-fused-self-cond-embd\n");
+        return 1;
+    }
 
     // diffusion config
     // canvas_length is fixed at the trained block size (256).
@@ -241,6 +245,8 @@ int main(int argc, char ** argv) {
     ctx_params.no_perf  = params.no_perf;
     ctx_params.diffusion_self_cond_top_k = SC_K;
     ctx_params.diffusion_input_gpu_groups = params.diffusion.input_gpu_groups;
+    ctx_params.diffusion_fused_self_cond_embd = params.diffusion.fused_self_cond_embd;
+    ctx_params.diffusion_fuse_final_logit_softcap = params.diffusion.fuse_final_logit_softcap;
     ctx_params.diffusion_separate_encoder_decoder = params.diffusion.separate_encoder_decoder;
 
     llama_context * ctx = llama_init_from_model(model, ctx_params);
@@ -433,6 +439,11 @@ int main(int argc, char ** argv) {
                 /* .step                  = */ (uint32_t) n_steps_total,
                 /* .top_k_tail_correction = */ topk_tail != 0,
                 /* .cuda_fast_top_k       = */ params.diffusion.cuda_fast_top_k,
+                /* .cuda_direct_self_cond = */ params.diffusion.cuda_direct_self_cond,
+                /* .cuda_final_tokens_on_stop = */ params.diffusion.cuda_final_tokens_on_stop && device_early_stop_interval > 0,
+                /* .cuda_fused_top_k_sample = */ params.diffusion.cuda_fused_top_k_sample,
+                /* .cuda_parallel_full_softmax = */ params.diffusion.cuda_parallel_full_softmax,
+                /* .cuda_fused_full_softmax = */ params.diffusion.cuda_fused_full_softmax,
             };
             llama_diffusion_sample_result sample_result = {
                 /* .sampled         = */ nullptr,
@@ -484,6 +495,11 @@ int main(int argc, char ** argv) {
                 /* .step                  = */ (uint32_t) n_steps_total,
                 /* .top_k_tail_correction = */ topk_tail != 0,
                 /* .cuda_fast_top_k       = */ params.diffusion.cuda_fast_top_k,
+                /* .cuda_direct_self_cond = */ params.diffusion.cuda_direct_self_cond,
+                /* .cuda_final_tokens_on_stop = */ params.diffusion.cuda_final_tokens_on_stop && device_early_stop_interval > 0,
+                /* .cuda_fused_top_k_sample = */ params.diffusion.cuda_fused_top_k_sample,
+                /* .cuda_parallel_full_softmax = */ params.diffusion.cuda_parallel_full_softmax,
+                /* .cuda_fused_full_softmax = */ params.diffusion.cuda_fused_full_softmax,
             };
             llama_diffusion_sample_result sample_result = {
                 /* .sampled         = */ sampled.data(),
