@@ -47,6 +47,8 @@ foreach(KERNEL ${KERNELS})
         ${CMAKE_CURRENT_SOURCE_DIR}/src
         ${CMAKE_CURRENT_SOURCE_DIR}/..
         ${CMAKE_CURRENT_BINARY_DIR}
+        ${CMAKE_SOURCE_DIR}/ggml/include
+        ${CMAKE_SOURCE_DIR}/ggml/src
     )
     target_link_libraries(${KERNEL}.elf PRIVATE et-common-libs::cm-umode)
     # C-only flags — must not apply to .S files
@@ -102,6 +104,8 @@ foreach(UK_KERNEL ${UBERKERNEL_SUPPORTED_KERNELS})
         ${CMAKE_CURRENT_SOURCE_DIR}/src
         ${CMAKE_CURRENT_SOURCE_DIR}/..
         ${CMAKE_CURRENT_BINARY_DIR}
+        ${CMAKE_SOURCE_DIR}/ggml/include
+        ${CMAKE_SOURCE_DIR}/ggml/src
     )
     target_link_libraries(${_obj} PRIVATE et-common-libs::cm-umode)
     target_compile_options(${_obj} PRIVATE
