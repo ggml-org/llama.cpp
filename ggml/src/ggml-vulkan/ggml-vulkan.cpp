@@ -6202,6 +6202,7 @@ static vk_device ggml_vk_get_device(size_t idx) {
                 break;
             }
 
+#if VK_HEADER_VERSION >= 287
             // Honeykrisp driver for Asahi Linux doesn't report VK_VENDOR_ID_APPLE.
             // Check for Honeykrisp driver and force same configuration as the VK_VENDOR_ID_APPLE case.
             if (device->driver_id == vk::DriverId::eMesaHoneykrisp) {
@@ -6212,6 +6213,7 @@ static vk_device ggml_vk_get_device(size_t idx) {
                 device->mul_mat_id_m[i] = true;
                 device->mul_mat_id_s[i] = false;
             }
+#endif
 
             device->mul_mat_l_int[i]    = device->mul_mat_l[i];
             device->mul_mat_m_int[i]    = device->mul_mat_m[i];
