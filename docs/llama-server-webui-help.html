@@ -1,0 +1,1390 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>llama-server WebUI 设置完全指南</title>
+<style>
+  :root {
+    --bg: #1a1a2e;
+    --card-bg: #16213e;
+    --card-hover: #1a2755;
+    --text: #e0e0e0;
+    --text-secondary: #a0a0b8;
+    --accent: #4fc3f7;
+    --accent2: #66bb6a;
+    --warn: #ffb74d;
+    --danger: #ef5350;
+    --border: #2a2a4a;
+    --code-bg: #0d1117;
+    --tag-bg: #2d2d5e;
+    --tag-text: #8be9fd;
+    --table-stripe: rgba(79, 195, 247, 0.04);
+    --radius: 10px;
+    --radius-sm: 6px;
+    --shadow: 0 4px 24px rgba(0,0,0,0.3);
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans SC", "Microsoft YaHei", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.7;
+    padding: 0;
+  }
+
+  /* Header */
+  .hero {
+    background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+    border-bottom: 2px solid var(--accent);
+    padding: 48px 32px 40px;
+    text-align: center;
+    position: sticky;
+    top: 0;
+    z-index: 100;
+  }
+  .hero h1 {
+    font-size: 2.2em;
+    color: var(--accent);
+    margin-bottom: 8px;
+    letter-spacing: -0.5px;
+  }
+  .hero .subtitle {
+    color: var(--text-secondary);
+    font-size: 1.05em;
+  }
+  .hero .model-badge {
+    display: inline-block;
+    background: var(--tag-bg);
+    color: var(--tag-text);
+    padding: 4px 16px;
+    border-radius: 20px;
+    font-size: 0.85em;
+    margin-top: 12px;
+    font-family: 'SF Mono', 'Consolas', monospace;
+  }
+
+  /* Nav */
+  .nav-bar {
+    position: sticky;
+    top: 164px;
+    z-index: 99;
+    background: rgba(22, 33, 62, 0.95);
+    backdrop-filter: blur(12px);
+    border-bottom: 1px solid var(--border);
+    padding: 10px 32px;
+    display: flex;
+    gap: 8px;
+    overflow-x: auto;
+    flex-wrap: wrap;
+  }
+  .nav-bar a {
+    color: var(--text-secondary);
+    text-decoration: none;
+    padding: 6px 14px;
+    border-radius: 20px;
+    font-size: 0.88em;
+    white-space: nowrap;
+    transition: all 0.2s;
+    border: 1px solid transparent;
+  }
+  .nav-bar a:hover {
+    color: var(--accent);
+    border-color: var(--accent);
+    background: rgba(79, 195, 247, 0.08);
+  }
+  .nav-bar a.active {
+    color: var(--bg);
+    background: var(--accent);
+  }
+
+  /* Main content */
+  .container {
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 32px 24px 80px;
+  }
+
+  /* Section cards */
+  .section {
+    margin-bottom: 48px;
+    scroll-margin-top: 230px;
+  }
+  .section-header {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    margin-bottom: 20px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--border);
+  }
+  .section-number {
+    background: var(--accent);
+    color: var(--bg);
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: bold;
+    font-size: 1.1em;
+    flex-shrink: 0;
+  }
+  .section-header h2 {
+    font-size: 1.5em;
+    color: var(--accent);
+  }
+
+  /* Tables */
+  .param-table {
+    width: 100%;
+    border-collapse: collapse;
+    background: var(--card-bg);
+    border-radius: var(--radius);
+    overflow: hidden;
+    box-shadow: var(--shadow);
+    margin-bottom: 16px;
+  }
+  .param-table thead {
+    background: rgba(79, 195, 247, 0.12);
+  }
+  .param-table th {
+    padding: 14px 16px;
+    text-align: left;
+    font-size: 0.82em;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--accent);
+    border-bottom: 1px solid var(--border);
+  }
+  .param-table td {
+    padding: 12px 16px;
+    border-bottom: 1px solid rgba(42, 42, 74, 0.5);
+    font-size: 0.93em;
+    vertical-align: top;
+  }
+  .param-table tr:hover td {
+    background: var(--table-stripe);
+  }
+  .param-table tr:last-child td {
+    border-bottom: none;
+  }
+  .param-table td:first-child {
+    width: 24%;
+    font-weight: 600;
+    color: #fff;
+    font-family: 'SF Mono', 'Consolas', 'Fira Code', monospace;
+    font-size: 0.88em;
+  }
+  .param-table td:nth-child(2) {
+    width: 12%;
+    color: var(--accent2);
+    font-family: 'SF Mono', 'Consolas', monospace;
+    font-size: 0.85em;
+    text-align: center;
+  }
+  .param-table td:nth-child(3) {
+    width: 34%;
+  }
+  .param-table td:nth-child(4) {
+    width: 30%;
+  }
+
+  /* Tags */
+  .tag {
+    display: inline-block;
+    padding: 3px 10px;
+    border-radius: 4px;
+    font-size: 0.78em;
+    font-weight: 600;
+    letter-spacing: 0.3px;
+  }
+  .tag-critical { background: rgba(239, 83, 80, 0.15); color: #ef5350; }
+  .tag-recommend { background: rgba(102, 187, 106, 0.15); color: #66bb6a; }
+  .tag-info { background: rgba(79, 195, 247, 0.12); color: #4fc3f7; }
+  .tag-warn { background: rgba(255, 183, 77, 0.15); color: #ffb74d; }
+  .tag-default { background: rgba(160, 160, 184, 0.1); color: #a0a0b8; }
+
+  /* Scenario boxes */
+  .scenario-box {
+    background: var(--card-bg);
+    border-left: 4px solid var(--accent);
+    border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+    padding: 16px 20px;
+    margin: 16px 0;
+  }
+  .scenario-box h4 {
+    color: var(--accent);
+    margin-bottom: 10px;
+    font-size: 0.95em;
+  }
+  .scenario-box table {
+    width: 100%;
+    border-collapse: collapse;
+  }
+  .scenario-box td {
+    padding: 6px 10px;
+    font-size: 0.9em;
+    border-bottom: 1px solid rgba(42, 42, 74, 0.3);
+  }
+  .scenario-box td:first-child {
+    color: var(--accent2);
+    font-weight: 600;
+    white-space: nowrap;
+    width: 18%;
+  }
+
+  /* Detail explainer */
+  .detail-box {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 16px 20px;
+    margin: 12px 0;
+    font-size: 0.9em;
+  }
+  .detail-box strong {
+    color: var(--accent);
+  }
+  .detail-box ul {
+    margin: 8px 0 0 18px;
+  }
+  .detail-box li {
+    margin-bottom: 4px;
+  }
+
+  /* Code */
+  code {
+    background: var(--code-bg);
+    color: #e6db74;
+    padding: 2px 6px;
+    border-radius: 3px;
+    font-size: 0.9em;
+    font-family: 'SF Mono', 'Consolas', 'Fira Code', monospace;
+  }
+
+  /* Warning card */
+  .warning-card {
+    background: rgba(255, 183, 77, 0.08);
+    border: 1px solid rgba(255, 183, 77, 0.3);
+    border-radius: var(--radius);
+    padding: 16px 20px;
+    margin: 20px 0;
+  }
+  .warning-card strong {
+    color: var(--warn);
+  }
+
+  /* Danger card */
+  .danger-card {
+    background: rgba(239, 83, 80, 0.08);
+    border: 1px solid rgba(239, 83, 80, 0.3);
+    border-radius: var(--radius);
+    padding: 16px 20px;
+    margin: 20px 0;
+  }
+  .danger-card strong {
+    color: var(--danger);
+  }
+
+  /* TOC */
+  .toc {
+    background: var(--card-bg);
+    border-radius: var(--radius);
+    padding: 24px 28px;
+    margin-bottom: 40px;
+    box-shadow: var(--shadow);
+  }
+  .toc h3 {
+    color: var(--accent);
+    margin-bottom: 14px;
+    font-size: 1.1em;
+  }
+  .toc ol {
+    columns: 2;
+    column-gap: 32px;
+  }
+  .toc li {
+    margin-bottom: 6px;
+    font-size: 0.92em;
+    break-inside: avoid;
+  }
+  .toc a {
+    color: var(--text-secondary);
+    text-decoration: none;
+    transition: color 0.2s;
+  }
+  .toc a:hover {
+    color: var(--accent);
+  }
+
+  /* Quick start */
+  .quick-start {
+    background: linear-gradient(135deg, rgba(102, 187, 106, 0.1) 0%, rgba(79, 195, 247, 0.1) 100%);
+    border: 1px solid rgba(102, 187, 106, 0.3);
+    border-radius: var(--radius);
+    padding: 24px 28px;
+    margin-bottom: 40px;
+  }
+  .quick-start h3 {
+    color: var(--accent2);
+    margin-bottom: 12px;
+  }
+  .quick-start ol {
+    margin-left: 20px;
+  }
+  .quick-start li {
+    margin-bottom: 8px;
+  }
+
+  /* Responsive */
+  @media (max-width: 768px) {
+    .hero { padding: 32px 16px; }
+    .hero h1 { font-size: 1.5em; }
+    .nav-bar { padding: 8px 12px; gap: 4px; }
+    .nav-bar a { font-size: 0.78em; padding: 4px 10px; }
+    .container { padding: 16px 12px 60px; }
+    .param-table {
+      display: block;
+      overflow-x: auto;
+    }
+    .param-table td { font-size: 0.82em; padding: 8px 10px; }
+    .toc ol { columns: 1; }
+  }
+
+  /* Print */
+  @media print {
+    .nav-bar { display: none; }
+    .hero { position: static; }
+    .section { break-inside: avoid; }
+  }
+
+  /* Smooth scroll */
+  html { scroll-behavior: smooth; }
+
+  /* Tool table special */
+  .tools-table td:nth-child(3) { text-align: center; }
+  .tools-table td:nth-child(4) { text-align: center; }
+</style>
+</head>
+<body>
+
+<!-- Hero -->
+<header class="hero">
+  <h1>🦙 llama-server WebUI 设置完全指南</h1>
+  <p class="subtitle">涵盖全部 9 个设置面板的详细参数说明、推荐值及调优建议</p>
+  <span class="model-badge">Gemma-4 12B Q4_K_M · llama.cpp · port 8080</span>
+</header>
+
+<!-- Nav -->
+<nav class="nav-bar" id="nav">
+  <a href="#general">General</a>
+  <a href="#display">Display</a>
+  <a href="#sampling">Sampling</a>
+  <a href="#penalties">Penalties</a>
+  <a href="#agentic">Agentic</a>
+  <a href="#developer">Developer</a>
+  <a href="#mcp">MCP</a>
+  <a href="#tools">Tools</a>
+  <a href="#import-export">Import/Export</a>
+</nav>
+
+<div class="container">
+
+<!-- Quick Start -->
+<div class="quick-start">
+  <h3>⚡ 快速调优：一分钟改完</h3>
+  <p style="margin-bottom:10px;font-size:0.92em;">如果你是 Gemma-4 12B Q4 本地部署，按下面顺序改这 5 个设置就能明显提升体验：</p>
+  <ol>
+    <li><strong>Sampling → Temperature</strong>：改成 <code>0.3</code>（稳定性优先）</li>
+    <li><strong>Sampling → Max tokens</strong>：改成 <code>4096</code>（防止超时崩溃）</li>
+    <li><strong>Penalties → Repeat penalty</strong>：改成 <code>1.15</code>（防复读）</li>
+    <li><strong>Penalties → DRY multiplier</strong>：改成 <code>0.8</code>（智能防复读）</li>
+    <li><strong>Agentic → Agentic turns</strong>：改成 <code>3</code>（防止无限循环）</li>
+  </ol>
+</div>
+
+<!-- TOC -->
+<div class="toc">
+  <h3>📑 目录</h3>
+  <ol>
+    <li><a href="#general">General · 通用设置</a></li>
+    <li><a href="#display">Display · 显示设置</a></li>
+    <li><a href="#sampling">Sampling · 采样参数</a></li>
+    <li><a href="#penalties">Penalties · 惩罚参数</a></li>
+    <li><a href="#agentic">Agentic · 智能代理</a></li>
+    <li><a href="#developer">Developer · 开发者选项</a></li>
+    <li><a href="#mcp">MCP · 模型上下文协议</a></li>
+    <li><a href="#tools">Tools · 工具管理</a></li>
+    <li><a href="#import-export">Import/Export · 导入导出</a></li>
+  </ol>
+</div>
+
+<!-- ==================== GENERAL ==================== -->
+<div class="section" id="general">
+  <div class="section-header">
+    <span class="section-number">1</span>
+    <h2>General · 通用设置</h2>
+  </div>
+
+  <table class="param-table">
+    <thead>
+      <tr>
+        <th>设置</th>
+        <th>默认值</th>
+        <th>说明</th>
+        <th>推荐</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Show system message in conversations</td>
+        <td>✅ ON</td>
+        <td>在对话中显示系统提示词。开启后你能看到模型收到的完整 prompt（包括工具定义、规则等），对调试极其有用。</td>
+        <td><span class="tag tag-recommend">保持开启</span><br>调试时能看到模型实际收到了什么指令</td>
+      </tr>
+      <tr>
+        <td>Paste long text to file length</td>
+        <td>2500</td>
+        <td>当你粘贴超过此字符数的文本时，自动转为文件附件发送，避免撑爆输入框和浪费上下文。</td>
+        <td><span class="tag tag-info">1000~2500</span><br>本地模型上下文紧张，设小一点更好（如 1000）</td>
+      </tr>
+      <tr>
+        <td>Send message on Enter</td>
+        <td>✅ ON</td>
+        <td>按 Enter 直接发送消息。关闭后需要 Ctrl+Enter 发送，Enter 用于换行。</td>
+        <td><span class="tag tag-default">按个人习惯</span></td>
+      </tr>
+      <tr>
+        <td>Copy text attachments as plain text</td>
+        <td>❌ OFF</td>
+        <td>复制带附件消息时，把附件内容合并为纯文本输出。</td>
+        <td><span class="tag tag-default">按需开启</span></td>
+      </tr>
+      <tr>
+        <td>Enable "Continue" button</td>
+        <td>❌ OFF</td>
+        <td>显示"继续"按钮。当模型回答因 max_tokens 限制中断时，点击继续让模型接着生成。</td>
+        <td><span class="tag tag-critical">强烈建议开启</span><br>本地模型经常超时或截断，这是救命按钮</td>
+      </tr>
+      <tr>
+        <td>Parse PDF as image</td>
+        <td>❌ OFF</td>
+        <td>把 PDF 当作图片解析（OCR），而非提取文本。非视觉模型（如 Gemma-4）会自动回退到文本模式。</td>
+        <td><span class="tag tag-info">Gemma-4 不支持，开了也无效</span></td>
+      </tr>
+      <tr>
+        <td>Ask for confirmation before changing conversation title</td>
+        <td>❌ OFF</td>
+        <td>修改对话标题前弹出确认对话框。</td>
+        <td><span class="tag tag-default">随意</span></td>
+      </tr>
+      <tr>
+        <td>Use first non-empty line for conversation title</td>
+        <td>❌ OFF</td>
+        <td>使用第一条消息的第一行作为对话标题。快速但不够智能。</td>
+        <td><span class="tag tag-default">随意</span></td>
+      </tr>
+      <tr>
+        <td>Use LLM to generate conversation title</td>
+        <td>❌ OFF</td>
+        <td>让模型根据首条消息自动生成标题。</td>
+        <td><span class="tag tag-warn">别开！</span><br>每次新建对话多一次推理请求，浪费本地算力和时间</td>
+      </tr>
+      <tr>
+        <td>LLM title generation prompt</td>
+        <td>（模板文本）</td>
+        <td>标题生成的 prompt 模板，<code>{{USER}}</code> 和 <code>{{ASSISTANT}}</code> 是占位符。</td>
+        <td><span class="tag tag-default">只在上面那个开关开启时有效</span></td>
+      </tr>
+      <tr>
+        <td>Maximum image resolution (megapixels)</td>
+        <td>0</td>
+        <td>图片超过此分辨率时自动缩放后再发给模型。<code>0</code> 表示不限制。</td>
+        <td><span class="tag tag-info">非视觉模型无效</span></td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+<!-- ==================== DISPLAY ==================== -->
+<div class="section" id="display">
+  <div class="section-header">
+    <span class="section-number">2</span>
+    <h2>Display · 显示设置</h2>
+  </div>
+
+  <table class="param-table">
+    <thead>
+      <tr>
+        <th>设置</th>
+        <th>默认值</th>
+        <th>说明</th>
+        <th>推荐</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Show message generation statistics</td>
+        <td>❌ OFF</td>
+        <td>在每条回复下方显示生成统计：每秒 tokens 数、总 token 数、耗时等。</td>
+        <td><span class="tag tag-critical">强烈建议开启</span><br>调试本地模型性能必备</td>
+      </tr>
+      <tr>
+        <td>Show thought in progress</td>
+        <td>✅ ON</td>
+        <td>推理过程中实时展开模型的思考链（thinking/reasoning）。</td>
+        <td><span class="tag tag-recommend">保持开启</span><br>Gemma-4 有 thinking 能力</td>
+      </tr>
+      <tr>
+        <td>Show tool call in progress</td>
+        <td>❌ OFF</td>
+        <td>工具调用时自动展开详情，完成后保持展开。配合 <code>--tools all</code> 必备。</td>
+        <td><span class="tag tag-critical">强烈建议开启</span><br>不开看不到工具调用过程</td>
+      </tr>
+      <tr>
+        <td>Keep stats visible after generation</td>
+        <td>❌ OFF</td>
+        <td>生成结束后保留统计信息不折叠。</td>
+        <td><span class="tag tag-info">开了上面的就顺带开</span></td>
+      </tr>
+      <tr>
+        <td>Show microphone on empty input</td>
+        <td>❌ OFF</td>
+        <td>输入框为空时显示麦克风按钮。仅音频模态模型可用。</td>
+        <td><span class="tag tag-warn">Gemma-4 不支持，别开</span></td>
+      </tr>
+      <tr>
+        <td>Render user content as Markdown</td>
+        <td>✅ ON</td>
+        <td>用 Markdown 格式渲染你发送的消息。</td>
+        <td><span class="tag tag-recommend">保持开启</span></td>
+      </tr>
+      <tr>
+        <td>Use full height code blocks</td>
+        <td>❌ OFF</td>
+        <td>代码块按原始高度完整显示，不做截断。</td>
+        <td><span class="tag tag-info">看代码多的话开启</span></td>
+      </tr>
+      <tr>
+        <td>Disable automatic scroll</td>
+        <td>❌ OFF</td>
+        <td>关闭流式输出时的自动滚动。</td>
+        <td><span class="tag tag-default">一般不需要</span></td>
+      </tr>
+      <tr>
+        <td>Always show sidebar on desktop</td>
+        <td>❌ OFF</td>
+        <td>桌面端侧边栏常驻显示，不自动隐藏。</td>
+        <td><span class="tag tag-default">随意</span></td>
+      </tr>
+      <tr>
+        <td>Show raw model names</td>
+        <td>❌ OFF</td>
+        <td>显示完整模型标识符而非解析后的友好名称。</td>
+        <td><span class="tag tag-default">无所谓</span></td>
+      </tr>
+      <tr>
+        <td>Always show agentic turns in conversation</td>
+        <td>❌ OFF</td>
+        <td>始终展开显示 Agent 循环每一步的工具调用结果。能看到"思考→调工具→拿结果→继续"全链路。</td>
+        <td><span class="tag tag-critical">强烈建议开启</span><br>使用 tools 后这是最关键的调试窗口</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+<!-- ==================== SAMPLING ==================== -->
+<div class="section" id="sampling">
+  <div class="section-header">
+    <span class="section-number">3</span>
+    <h2>Sampling · 采样参数</h2>
+  </div>
+
+  <div class="warning-card">
+    <strong>⚠️ 核心页面！</strong> 采样参数直接决定模型输出的质量、创造性和稳定性。本地 12B 模型尤其需要精心调节。
+  </div>
+
+  <table class="param-table">
+    <thead>
+      <tr>
+        <th>参数</th>
+        <th>默认</th>
+        <th>说明与取值影响</th>
+        <th>推荐值</th>
+      </tr>
+    </thead>
+    <tbody>
+      <!-- Temperature -->
+      <tr>
+        <td>Temperature</td>
+        <td>1</td>
+        <td>
+          <strong>控制随机性的核心参数。</strong><br>
+          <code>0</code>：完全确定性输出，每次结果相同（适合代码生成、数据提取）<br>
+          <code>0.1~0.3</code>：高度确定性，输出稳定可靠<br>
+          <code>0.5~0.7</code>：轻微随机，适合正常对话<br>
+          <code>0.8~1.0</code>：标准输出，有一定创造性<br>
+          <code>1.0~1.5</code>：高创造性，但可能输出不稳定<br>
+          <code>&gt;1.5</code>：天马行空，容易胡说八道
+          <div class="detail-box">
+            <strong>典型场景：</strong>
+            <ul>
+              <li>写代码/数学推理 → <code>0.1~0.3</code></li>
+              <li>工具调用/Agent 循环 → <code>0.2~0.5</code></li>
+              <li>日常聊天 → <code>0.6~0.8</code></li>
+              <li>创意写作/头脑风暴 → <code>1.0~1.2</code></li>
+            </ul>
+          </div>
+        </td>
+        <td>
+          <span class="tag tag-recommend">稳定模式: 0.3</span><br>
+          <span class="tag tag-info">聊天模式: 0.7</span><br>
+          <span class="tag tag-default">创意模式: 1.1</span>
+        </td>
+      </tr>
+
+      <!-- Top K -->
+      <tr>
+        <td>Top K</td>
+        <td>64</td>
+        <td>
+          <strong>候选 token 池大小。</strong>模型只从概率最高的 K 个 token 里选。<br>
+          <code>1</code>：只看概率最高的 token（极度确定，适合翻译）<br>
+          <code>10~20</code>：小候选池，输出很保守<br>
+          <code>40~60</code>：标准范围<br>
+          <code>80~120</code>：大候选池，输出更多样<br>
+          <code>0</code>：关闭 Top K 采样（全选，不推荐）
+        </td>
+        <td><span class="tag tag-recommend">30~50</span><br>配合 Temperature 一起调</td>
+      </tr>
+
+      <!-- Top P -->
+      <tr>
+        <td>Top P</td>
+        <td>0.95</td>
+        <td>
+          <strong>核采样阈值。</strong>从累积概率达到 P 的最小 token 集合中采样。比 Top K 更智能——当模型对某个词极度自信时（概率 0.99），就直接选它，不凑候选池。<br>
+          <code>0.5</code>：只看前几个高概率 token，输出很保守<br>
+          <code>0.8~0.9</code>：中等范围，适合工具调用<br>
+          <code>0.92~0.98</code>：标准范围<br>
+          <code>1.0</code>：不限制（等效于只看 Temperature）
+          <div class="detail-box">
+            <strong>Top K vs Top P：选哪个？</strong><br>
+            一般只用一个，推荐用 Top P（更智能适应）。如果要同时用，先跑 Top K 再跑 Top P，即 <code>samplers 顺序中 top_k 应在 top_p 前面</code>。
+          </div>
+        </td>
+        <td><span class="tag tag-recommend">0.9</span><br>配合工具调用时收紧到 0.85</td>
+      </tr>
+
+      <!-- Min P -->
+      <tr>
+        <td>Min P</td>
+        <td>0.05</td>
+        <td>
+          过滤掉概率低于"最高概率 token × Min P"的 token。防止模型偶尔抽风选到极低概率的词。<br>
+          <code>0</code>：不过滤（可能偶尔抽风）<br>
+          <code>0.02~0.05</code>：轻微过滤，标准设置<br>
+          <code>0.1~0.2</code>：较强制过滤，输出更保守
+        </td>
+        <td><span class="tag tag-default">保持 0.05</span></td>
+      </tr>
+
+      <!-- Typical P -->
+      <tr>
+        <td>Typical P</td>
+        <td>（空）</td>
+        <td>
+          按 token log-prob 与信息熵的差值排序筛选。这是一种更高级的采样方式。<br>
+          设为空 = 不启用。一般不需要碰。
+        </td>
+        <td><span class="tag tag-default">不填，不启用</span></td>
+      </tr>
+
+      <!-- XTC -->
+      <tr>
+        <td>XTC probability</td>
+        <td>0</td>
+        <td>
+          实验性功能。XTC（eXclude Top Choices）采样器：以一定概率剪掉最可能的 token，强制模型探索次优选择。<br>
+          <code>0</code>：关闭（推荐）<br>
+          <code>0.3~0.5</code>：中等强度探索<br>
+          <code>0.7~1.0</code>：强力探索，输出会很 wild
+        </td>
+        <td><span class="tag tag-warn">保持 0</span>，实验性功能不稳定</td>
+      </tr>
+      <tr>
+        <td>XTC threshold</td>
+        <td>0.1</td>
+        <td>XTC 裁剪的阈值。只有概率低于此值的 token 会被考虑剪掉。</td>
+        <td><span class="tag tag-warn">同上，不用动</span></td>
+      </tr>
+
+      <!-- Dynamic temperature -->
+      <tr>
+        <td>Dynamic temperature range</td>
+        <td>0</td>
+        <td>
+          动态温度范围。根据当前生成内容的"熵"自动调节温度。<br>
+          <code>0</code>：关闭动态温度<br>
+          <code>0.2~0.5</code>：轻微动态调节<br>
+          一般不需要开，手动调 Temperature 就够了。
+        </td>
+        <td><span class="tag tag-default">保持 0</span></td>
+      </tr>
+      <tr>
+        <td>Dynamic temperature exponent</td>
+        <td>1</td>
+        <td>动态温度的平滑指数。控制温度变化的陡峭程度。</td>
+        <td><span class="tag tag-default">保持默认</span></td>
+      </tr>
+
+      <!-- Max tokens -->
+      <tr>
+        <td>Max tokens</td>
+        <td>-1</td>
+        <td>
+          <strong>单次回复最大 token 数。</strong> <code>-1</code> = 无限制，直到模型自己停下或上下文耗尽。<br>
+          <code>-1</code>：⚠️ 本地模型高危！可能一直生成到上下文溢出或超时崩溃<br>
+          <code>512</code>：极短回复<br>
+          <code>1024~2048</code>：中等长度<br>
+          <code>4096~8192</code>：长文本/代码生成<br>
+          <code>16384</code>：超长输出（不推荐本地模型）
+          <div class="detail-box">
+            <strong>为什么不能设 -1？</strong><br>
+            本地模型缺乏云端 API 的全套安全截断机制。设 -1 时，如果模型"不知道停"（尤其是 Penalities 没调好的情况下），会一直狂生成直到上下文溢出或推理超时，然后整个 llama-server 崩溃退出。你昨天的崩溃就是这个原因之一。
+          </div>
+        </td>
+        <td>
+          <span class="tag tag-critical">一定不能设 -1！</span><br>
+          <span class="tag tag-recommend">代码/工具: 8192</span><br>
+          <span class="tag tag-info">聊天: 4096</span><br>
+          <span class="tag tag-default">小任务: 2048</span>
+        </td>
+      </tr>
+
+      <!-- Samplers order -->
+      <tr>
+        <td>Samplers</td>
+        <td>（长链）</td>
+        <td>
+          采样器的执行顺序链。默认顺序是经过验证的最优顺序：<br>
+          <code>penalties → dry → top_n_sigma → top_k → typ_p → top_p → min_p → xtc → temperature</code><br>
+          <strong>不要随便改顺序！</strong> 乱序可能导致参数互相干扰。
+        </td>
+        <td><span class="tag tag-warn">不要改！</span></td>
+      </tr>
+
+      <!-- Backend sampling -->
+      <tr>
+        <td>Backend sampling</td>
+        <td>❌ OFF</td>
+        <td>让采样器在 GPU/CUDA 后端上运行，加速采样过程。有 CUDA 加速时可开启。</td>
+        <td><span class="tag tag-info">有 GPU 建议开启</span></td>
+      </tr>
+    </tbody>
+  </table>
+
+  <!-- Scenario presets -->
+  <div class="scenario-box">
+    <h4>📋 采样参数场景预设</h4>
+    <table>
+      <tr>
+        <td>🔧 稳定干活</td>
+        <td>
+          Temperature <code>0.3</code> · Top K <code>40</code> · Top P <code>0.85</code> · Max tokens <code>8192</code>
+        </td>
+      </tr>
+      <tr>
+        <td>💬 正常聊天</td>
+        <td>
+          Temperature <code>0.7</code> · Top K <code>50</code> · Top P <code>0.95</code> · Max tokens <code>4096</code>
+        </td>
+      </tr>
+      <tr>
+        <td>🎨 创意生成</td>
+        <td>
+          Temperature <code>1.1</code> · Top K <code>80</code> · Top P <code>0.98</code> · Max tokens <code>8192</code>
+        </td>
+      </tr>
+      <tr>
+        <td>⚡ 快速测试</td>
+        <td>
+          Temperature <code>0.5</code> · Top K <code>30</code> · Top P <code>0.9</code> · Max tokens <code>2048</code>
+        </td>
+      </tr>
+    </table>
+  </div>
+</div>
+
+<!-- ==================== PENALTIES ==================== -->
+<div class="section" id="penalties">
+  <div class="section-header">
+    <span class="section-number">4</span>
+    <h2>Penalties · 惩罚参数</h2>
+  </div>
+
+  <div class="warning-card">
+    <strong>⚠️ 防复读的核心页面！</strong> 本地模型在长文本生成时极易陷入死循环复读。惩罚参数就是刹车系统。
+  </div>
+
+  <table class="param-table">
+    <thead>
+      <tr>
+        <th>参数</th>
+        <th>默认</th>
+        <th>说明与取值影响</th>
+        <th>推荐值</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Repeat last N</td>
+        <td>64</td>
+        <td>
+          回看最近 N 个 token 来判断重复。只影响 Repeat penalty 的作用范围。<br>
+          <code>32~64</code>：标准范围，适合短对话<br>
+          <code>128~256</code>：大窗口，能检测更远的重复（但计算量大）<br>
+          <code>-1</code>：回看全部上下文
+        </td>
+        <td><span class="tag tag-default">64~128</span></td>
+      </tr>
+
+      <tr>
+        <td>Repeat penalty</td>
+        <td>1</td>
+        <td>
+          <strong>最常用的防复读参数。</strong> 对已出现过的 token 施加惩罚，降低其被再次选中的概率。<br>
+          <code>1.0</code>：不惩罚（关闭）<br>
+          <code>1.05~1.15</code>：轻微惩罚，适合正常对话<br>
+          <code>1.15~1.3</code>：中等惩罚，适合长文本生成<br>
+          <code>1.3~1.5</code>：强力惩罚，适合极度复读场景，但可能导致输出不自然<br>
+          <code>&gt;1.5</code>：过度惩罚，模型会刻意回避常用词，输出怪异
+          <div class="detail-box">
+            <strong>副作用：</strong> Repeat penalty 太高会导致模型回避正常高频词（如"的"、"是"），输出变得不自然甚至语法错乱。从 1.1 开始试，逐步微调。
+          </div>
+        </td>
+        <td>
+          <span class="tag tag-recommend">1.1~1.2</span><br>
+          本地模型建议 1.15
+        </td>
+      </tr>
+
+      <tr>
+        <td>Presence penalty</td>
+        <td>0</td>
+        <td>
+          对已出现过的 token 直接扣分，不管出现了几次。鼓励模型使用新词。<br>
+          <code>0</code>：关闭<br>
+          <code>0.1~0.3</code>：轻微鼓励新词<br>
+          <code>0.5~1.0</code>：强力鼓励新词，但可能变得啰嗦绕圈<br>
+          <code>&gt;1.0</code>：过度偏执于用新词
+          <div class="detail-box">
+            <strong>Presence vs Frequency：</strong>
+            <ul>
+              <li><strong>Presence penalty</strong>：出现过的 token 统一罚一次</li>
+              <li><strong>Frequency penalty</strong>：按出现次数累计惩罚</li>
+              <li>一般用 Repeat penalty 就够了，这两个保持 0</li>
+            </ul>
+          </div>
+        </td>
+        <td><span class="tag tag-default">保持 0</span></td>
+      </tr>
+
+      <tr>
+        <td>Frequency penalty</td>
+        <td>0</td>
+        <td>
+          按 token 出现次数累积惩罚。出现越多罚越狠。<br>
+          <code>0</code>：关闭<br>
+          <code>0.1~0.3</code>：轻微<br>
+          <code>0.5~1.0</code>：中等，强制词汇多样性
+        </td>
+        <td><span class="tag tag-default">保持 0</span></td>
+      </tr>
+
+      <!-- DRY -->
+      <tr>
+        <td>DRY multiplier</td>
+        <td>0</td>
+        <td>
+          <strong>🆕 智能防复读大杀器！</strong> DRY (Don't Repeat Yourself) 是 llama.cpp 的特色功能，能检测语义级重复（而不仅仅是 token 级重复）。<br>
+          <code>0</code>：关闭 DRY<br>
+          <code>0.2~0.5</code>：轻微阻止重复<br>
+          <code>0.6~1.0</code>：标准推荐范围<br>
+          <code>1.0~1.5</code>：强力阻止重复<br>
+          <code>&gt;1.5</code>：可能过度限制，输出变短
+          <div class="detail-box">
+            <strong>为什么 DRY 比 Repeat penalty 更智能？</strong><br>
+            Repeat penalty 是机械地惩罚每个见过的 token；DRY 会检测"语义片段"的重复——比如模型一直在说类似的句式、结构，即使 token 不完全一样，DRY 也能识别并打断。对长文本/代码生成场景，DRY 是唯一可靠的反复读机制。
+          </div>
+        </td>
+        <td>
+          <span class="tag tag-critical">强烈建议开启！</span><br>
+          <span class="tag tag-recommend">0.6~1.0</span><br>
+          本地模型入门：0.8
+        </td>
+      </tr>
+      <tr>
+        <td>DRY base</td>
+        <td>1.75</td>
+        <td>DRY 惩罚的基数。控制 DRY 惩罚的基准强度。</td>
+        <td><span class="tag tag-default">保持 1.75</span></td>
+      </tr>
+      <tr>
+        <td>DRY allowed length</td>
+        <td>2</td>
+        <td>
+          允许重复的最短片段长度。只有长度 >= 此值的连续片段才算重复。<br>
+          <code>1</code>：连单字重复都检测（太敏感）<br>
+          <code>2</code>：标准设置<br>
+          <code>3~5</code>：只检测较长片段的重复
+        </td>
+        <td><span class="tag tag-default">保持 2</span></td>
+      </tr>
+      <tr>
+        <td>DRY penalty last N</td>
+        <td>-1</td>
+        <td>
+          DRY 的作用范围（回看 token 数）。<br>
+          <code>-1</code>：使用全部上下文（推荐）<br>
+          <code>512~2048</code>：限制回看范围，降低计算量
+        </td>
+        <td><span class="tag tag-recommend">保持 -1</span></td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="scenario-box">
+    <h4>📋 防复读方案对比</h4>
+    <table>
+      <tr>
+        <td>短对话 (&lt;2K)</td>
+        <td>Repeat penalty <code>1.1</code> 就够了</td>
+      </tr>
+      <tr>
+        <td>长文本/代码</td>
+        <td>Repeat penalty <code>1.15</code> + DRY <code>0.8</code></td>
+      </tr>
+      <tr>
+        <td>严重复读场景</td>
+        <td>Repeat penalty <code>1.2</code> + DRY <code>1.0</code></td>
+      </tr>
+      <tr>
+        <td>高创造性（可接受偶尔重复）</td>
+        <td>Repeat penalty <code>1.05</code> + DRY <code>0.3</code></td>
+      </tr>
+    </table>
+  </div>
+</div>
+
+<!-- ==================== AGENTIC ==================== -->
+<div class="section" id="agentic">
+  <div class="section-header">
+    <span class="section-number">5</span>
+    <h2>Agentic · 智能代理循环</h2>
+  </div>
+
+  <table class="param-table">
+    <thead>
+      <tr>
+        <th>参数</th>
+        <th>默认值</th>
+        <th>说明与取值影响</th>
+        <th>推荐</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Agentic turns</td>
+        <td>10</td>
+        <td>
+          <strong>工具执行的最大循环次数。</strong> 达到上限后强制停止 Agent 循环。<br>
+          <code>1~2</code>：只允许一轮工具调用（极度保守）<br>
+          <code>3~5</code>：允许 2-3 轮工具调用，适合大多数场景<br>
+          <code>6~8</code>：适合复杂多步任务<br>
+          <code>10</code>：默认值<br>
+          <code>&gt;10</code>：可能陷入无限循环，浪费大量时间
+          <div class="detail-box">
+            <strong>对本地模型的影响：</strong><br>
+            每多一轮 = 多一次完整的推理请求。12B 模型每次推理 60~150 秒，10 轮最坏情况 = <strong>25 分钟</strong>！实际使用中 80% 的任务 2-3 轮就完成了。
+          </div>
+        </td>
+        <td>
+          <span class="tag tag-recommend">3~5</span><br>
+          本地模型建议 3
+        </td>
+      </tr>
+      <tr>
+        <td>Max lines per tool preview</td>
+        <td>25</td>
+        <td>
+          工具输出在对话记录中保留的最后 N 行。中间内容会被丢弃以节省上下文。<br>
+          <code>10</code>：只保留最后 10 行（非常省上下文）<br>
+          <code>25</code>：标准设置<br>
+          <code>50~100</code>：保留更多细节（更耗上下文）<br>
+          <code>0</code>：不保留工具输出预览
+        </td>
+        <td><span class="tag tag-default">25</span><br>本地模型上下文紧张，不宜过大</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+<!-- ==================== DEVELOPER ==================== -->
+<div class="section" id="developer">
+  <div class="section-header">
+    <span class="section-number">6</span>
+    <h2>Developer · 开发者选项</h2>
+  </div>
+
+  <table class="param-table">
+    <thead>
+      <tr>
+        <th>设置</th>
+        <th>默认值</th>
+        <th>说明与取值影响</th>
+        <th>推荐</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Pre-fill KV cache after response</td>
+        <td>❌ OFF</td>
+        <td>
+          <strong>免费的性能加速器！</strong> 每次回复完成后，后台自动把对话重新提交给服务端做 KV cache 预填充。下次请求时 prompt 已经编码好了，<strong>首 token 延迟大幅降低</strong>。<br>
+          <div class="detail-box">
+            <strong>效果：</strong> 省掉每次 5~15 秒的首 token 延迟。对多轮对话体验提升显著。<br>
+            <strong>代价：</strong> 后台会占用一点 CPU/GPU 做预计算。对长上下文对话尤其有效。<br>
+            <strong>⚠️ 已知问题：</strong> 在某些 llama.cpp 版本中，此功能可能触发 KV cache 检查点恢复问题（你昨天的崩溃根源）。如果开启后遇到崩溃，先关掉这个排查。
+          </div>
+        </td>
+        <td>
+          <span class="tag tag-recommend">建议开启</span><br>
+          有崩溃风险时先关闭排查
+        </td>
+      </tr>
+      <tr>
+        <td>Disable reasoning content parsing</td>
+        <td>❌ OFF</td>
+        <td>关闭推理内容解析，让 thinking tokens 以内联方式返回而不是提取到单独字段。</td>
+        <td><span class="tag tag-default">保持关闭</span></td>
+      </tr>
+      <tr>
+        <td>Exclude reasoning from context</td>
+        <td>❌ OFF</td>
+        <td>发送消息前剥离历史中的 thinking 内容，不让模型看到自己之前的思考链。</td>
+        <td><span class="tag tag-default">保持关闭</span></td>
+      </tr>
+      <tr>
+        <td>Enable raw output toggle</td>
+        <td>❌ OFF</td>
+        <td>显示一个切换按钮，可以在 Markdown 和纯文本之间切换显示。</td>
+        <td><span class="tag tag-info">调试时有用</span></td>
+      </tr>
+      <tr>
+        <td>Custom JSON</td>
+        <td>空</td>
+        <td>
+          自定义 JSON 参数，会原样发送给 API。<br>
+          示例：<br>
+          <code>{"seed": 42, "stop": ["\n\n\n"], "logprobs": true}</code><br>
+          可以覆盖任何 UI 未暴露的参数。
+        </td>
+        <td><span class="tag tag-default">高级用户按需使用</span></td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="detail-box">
+    <strong>💡 Custom JSON 常用参数：</strong>
+    <ul>
+      <li><code>"seed": 42</code> — 固定随机种子，让输出可复现（调试用）</li>
+      <li><code>"stop": ["\n\n\n"]</code> — 遇到三个连续换行就停止（防止无限生成）</li>
+      <li><code>"mirostat": 2, "mirostat_tau": 5</code> — 启用 Mirostat v2 采样器（替代 Temperature/Top-P 的另一种方案）</li>
+      <li><code>"logprobs": true, "top_logprobs": 3</code> — 返回 top-3 token 的概率分布（调试用）</li>
+    </ul>
+  </div>
+</div>
+
+<!-- ==================== MCP ==================== -->
+<div class="section" id="mcp">
+  <div class="section-header">
+    <span class="section-number">7</span>
+    <h2>MCP · 模型上下文协议</h2>
+  </div>
+
+  <table class="param-table">
+    <thead>
+      <tr>
+        <th>参数</th>
+        <th>默认值</th>
+        <th>说明与取值影响</th>
+        <th>推荐</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Request timeout (seconds)</td>
+        <td>300</td>
+        <td>
+          单次 MCP 工具调用的超时时间（秒）。<br>
+          <code>30~60</code>：快速超时，适合本地 MCP 服务<br>
+          <code>120~300</code>：标准设置，适合网络 MCP<br>
+          <code>600+</code>：长超时，适合需要大量计算的服务<br>
+          可按每个 MCP 服务器单独覆盖。
+        </td>
+        <td><span class="tag tag-default">300</span><br>外部搜索服务建议 60~120</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="detail-box">
+    <strong>📡 关于 MCP 的说明：</strong><br>
+    MCP（Model Context Protocol）允许你通过 <code>--ui-mcp-proxy</code> 启动参数让 llama-server 代理外部 MCP 服务，扩展模型的能力（如网络搜索、数据库查询等）。你之前用 <code>--ui-mcp-proxy</code> 连 anysearch.com 但连不上（日志里的 <code>Failed to read connection</code> 错误），是网络问题，不是参数问题。
+  </div>
+</div>
+
+<!-- ==================== TOOLS ==================== -->
+<div class="section" id="tools">
+  <div class="section-header">
+    <span class="section-number">8</span>
+    <h2>Tools · 工具管理</h2>
+  </div>
+
+  <div class="warning-card">
+    <strong>⚠️ 工具是通过 <code>--tools</code> 启动参数启用的，WebUI 里只能看到状态和权限。</strong> 修改工具配置需要重启 llama-server。
+  </div>
+
+  <h3 style="color:var(--accent);margin:20px 0 12px;">Built-in Tools（8个内置工具）</h3>
+
+  <table class="param-table tools-table">
+    <thead>
+      <tr>
+        <th>工具名</th>
+        <th>功能说明</th>
+        <th>可设为 Always allow</th>
+        <th>风险等级</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>read_file</td>
+        <td>读取文件内容。可指定路径和读取范围。</td>
+        <td>✅ 安全</td>
+        <td><span class="tag tag-recommend">低</span></td>
+      </tr>
+      <tr>
+        <td>file_glob_search</td>
+        <td>通配符搜索文件（如 <code>*.py</code>、<code>src/**/*.ts</code>）。</td>
+        <td>✅ 安全</td>
+        <td><span class="tag tag-recommend">低</span></td>
+      </tr>
+      <tr>
+        <td>grep_search</td>
+        <td>基于 ripgrep 的文件内容搜索，支持正则表达式。</td>
+        <td>✅ 安全</td>
+        <td><span class="tag tag-recommend">低</span></td>
+      </tr>
+      <tr>
+        <td>exec_shell_command</td>
+        <td>执行任意 Shell 命令。</td>
+        <td>⚠️ 高危</td>
+        <td><span class="tag tag-critical">极高</span></td>
+      </tr>
+      <tr>
+        <td>write_file</td>
+        <td>写入/覆盖文件内容。</td>
+        <td>⚠️ 中危</td>
+        <td><span class="tag tag-warn">中</span></td>
+      </tr>
+      <tr>
+        <td>edit_file</td>
+        <td>精确编辑文件（字符串替换方式）。</td>
+        <td>⚠️ 中危</td>
+        <td><span class="tag tag-warn">中</span></td>
+      </tr>
+      <tr>
+        <td>apply_diff</td>
+        <td>应用 unified diff 格式的补丁。</td>
+        <td>⚠️ 中危</td>
+        <td><span class="tag tag-warn">中</span></td>
+      </tr>
+      <tr>
+        <td>get_datetime</td>
+        <td>获取当前系统时间。</td>
+        <td>✅ 安全</td>
+        <td><span class="tag tag-recommend">低</span></td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h3 style="color:var(--accent);margin:20px 0 12px;">SentiSearch Tools（4个搜索工具）</h3>
+
+  <table class="param-table tools-table">
+    <thead>
+      <tr>
+        <th>工具名</th>
+        <th>功能说明</th>
+        <th>Always allow</th>
+        <th>说明</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>batch_search</td>
+        <td>批量执行多个搜索查询。</td>
+        <td>✅</td>
+        <td>适合需要同时查多个关键词的场景</td>
+      </tr>
+      <tr>
+        <td>extract</td>
+        <td>从指定 URL 提取网页内容。</td>
+        <td>✅</td>
+        <td>读取网页全文</td>
+      </tr>
+      <tr>
+        <td>get_sub_domains</td>
+        <td>获取指定域名的子域名列表。</td>
+        <td>✅</td>
+        <td>域名分析用</td>
+      </tr>
+      <tr>
+        <td>search</td>
+        <td>执行网络搜索。</td>
+        <td>✅</td>
+        <td>核心搜索功能</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="scenario-box">
+    <h4>🔒 工具安全配置建议</h4>
+    <table>
+      <tr>
+        <td>只读模式</td>
+        <td><code>--tools read_file,file_glob_search,grep_search,get_datetime</code></td>
+      </tr>
+      <tr>
+        <td>读写模式</td>
+        <td><code>--tools read_file,write_file,edit_file,file_glob_search,grep_search,get_datetime</code></td>
+      </tr>
+      <tr>
+        <td>全功能模式</td>
+        <td><code>--tools all</code></td>
+      </tr>
+      <tr>
+        <td>高危模式</td>
+        <td>包含 <code>exec_shell_command</code> — 只在完全信任的环境使用</td>
+      </tr>
+    </table>
+  </div>
+
+  <div class="detail-box">
+    <strong>📌 Always allow 说明：</strong><br>
+    <ul>
+      <li><strong>Enabled</strong>：工具可用。模型调用时需要弹窗确认。</li>
+      <li><strong>Always allow</strong>：跳过确认弹窗，直接执行。对搜索类工具可放心开，对文件写入类工具建议留弹窗确认。</li>
+    </ul>
+  </div>
+</div>
+
+<!-- ==================== IMPORT/EXPORT ==================== -->
+<div class="section" id="import-export">
+  <div class="section-header">
+    <span class="section-number">9</span>
+    <h2>Import/Export · 导入导出</h2>
+  </div>
+
+  <table class="param-table">
+    <thead>
+      <tr>
+        <th>功能</th>
+        <th>说明</th>
+        <th>注意事项</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Export conversations</td>
+        <td>导出所有对话记录为 JSON 文件（含消息、附件、历史）。</td>
+        <td>适合备份或迁移到其他实例。文件可能很大。</td>
+      </tr>
+      <tr>
+        <td>Import conversations</td>
+        <td>从 JSON 文件导入对话记录。与现有对话合并。</td>
+        <td>支持从其他 llama-server 实例导出的数据迁移。</td>
+      </tr>
+      <tr>
+        <td>Delete All</td>
+        <td>
+          <strong>永久删除所有对话！</strong> 不可恢复！
+        </td>
+        <td><span class="tag tag-critical">操作前务必先导出备份！</span></td>
+      </tr>
+      <tr>
+        <td>Export Settings</td>
+        <td>导出所有 WebUI 设置为 JSON 文件。</td>
+        <td>适合备份调好的参数配置。</td>
+      </tr>
+      <tr>
+        <td>Import Settings</td>
+        <td>从 JSON 文件导入 WebUI 设置。</td>
+        <td>覆盖现有设置。建议先导出当前设置做备份。</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="danger-card">
+    <strong>⚠️ 所有设置存储在浏览器的 localStorage 中</strong> — 清除浏览器数据会丢失所有设置！建议定期 Export Settings 备份。
+  </div>
+</div>
+
+<!-- ==================== FOOTER ==================== -->
+<div class="scenario-box" style="margin-top:48px;border-left-color:var(--accent2);">
+  <h4>🦙 推荐启动命令（Gemma-4 12B Q4 稳定版）</h4>
+  <code style="display:block;background:var(--code-bg);padding:16px;border-radius:6px;font-size:0.9em;word-break:break-all;">
+    .\llama-server -m models\gemma-4-12b-it-Q4_K_M.gguf \<br>
+    &nbsp;&nbsp;--port 8080 --host 0.0.0.0 \<br>
+    &nbsp;&nbsp;-c 16384 -ngl 999 \<br>
+    &nbsp;&nbsp;--tools read_file,write_file,edit_file,file_glob_search,grep_search,get_datetime \<br>
+    &nbsp;&nbsp;--parallel 1
+  </code>
+  <p style="margin-top:12px;font-size:0.85em;color:var(--text-secondary);">
+    ⚡ 去掉 <code>--cache-ram 0</code>（防崩溃） · 去掉 <code>--ui-mcp-proxy</code>（anysearch 连不上） · 上下文降到 16K · 单 slot · 关掉 shell 执行工具
+  </p>
+</div>
+
+<p style="text-align:center;color:var(--text-secondary);margin-top:32px;font-size:0.85em;">
+  最后更新：2026-06-11 · llama-server WebUI · Gemma-4 12B Q4_K_M
+</p>
+
+</div>
+
+<script>
+// Highlight active nav item on scroll
+const sections = document.querySelectorAll('.section');
+const navLinks = document.querySelectorAll('.nav-bar a');
+
+window.addEventListener('scroll', () => {
+  let current = '';
+  sections.forEach(section => {
+    const sectionTop = section.offsetTop - 250;
+    if (window.scrollY >= sectionTop) {
+      current = section.getAttribute('id');
+    }
+  });
+  navLinks.forEach(link => {
+    link.classList.remove('active');
+    if (link.getAttribute('href') === '#' + current) {
+      link.classList.add('active');
+    }
+  });
+});
+</script>
+
+</body>
+</html>
