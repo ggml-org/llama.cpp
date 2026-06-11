@@ -458,6 +458,7 @@ void diffusion_generate_entropy_bound(llama_context *             ctx,
     // device-resident SC: source self-conditioning from a persistent device buffer (written in-graph from
     // the prev step's logits) instead of the 268 MB host upload each step. Exact: SC values/math unchanged.
     const bool dev_sc = params.gpu_sampling;
+    const bool gpu_sample_reduce = params.gpu_sample_reduce && dev_sc;  // Stage-1: sample from sc_dev on-device
     llama_diffusion_set_device_sc(model, dev_sc);
 
     llama_set_causal_attn(ctx, false);
@@ -549,11 +550,21 @@ void diffusion_generate_entropy_bound(llama_context *             ctx,
             LOG_ERR("%s: failed to decode at step %d\n", __func__, step_idx);
             break;
         }
-        const float * logits = llama_get_logits(ctx);             // canvas rows packed: [C or max_length, n_vocab]
+
+        // Stage-1: when on, skip the 268 MB logits D2H + host reductions and sample on the GPU from sc_dev.
+        // DG_DEVSAMPLE_CHECK forces both paths so we can diff them; it needs the host logits, so fetch them.
+        const bool gpu_reduce  = dev_sc && gpu_sample_reduce;
+        const bool want_logits = !gpu_reduce || std::getenv("DG_DEVSAMPLE_CHECK") || std::getenv("DG_SC_CHECK");
+        const float * logits = nullptr;                           // canvas rows packed: [C or max_length, n_vocab]
+        if (want_logits) {
+            logits = llama_get_logits(ctx);
+        } else {
+            llama_synchronize(ctx);                               // sc_dev write must complete before we read it
+        }
 
         // debug: verify the device SC buffer captured exactly this step's canvas logits (== what the host
         // path uploads next step). Single-run check, independent of cross-run nondeterminism. DG_SC_CHECK=1.
-        if (dev_sc && std::getenv("DG_SC_CHECK")) {
+        if (dev_sc && logits && std::getenv("DG_SC_CHECK")) {
             static std::vector<float> sc_dbg;
             sc_dbg.resize((size_t) C * n_vocab);
             const size_t got = llama_diffusion_debug_get_sc_dev(model, sc_dbg.data(), sc_dbg.size());
@@ -611,7 +622,7 @@ void diffusion_generate_entropy_bound(llama_context *             ctx,
                 }
             }
         };
-        {
+        auto run_host_worker = [&]() {
             std::vector<std::thread> pool;
             const int32_t chunk = (C + (int32_t) nth - 1) / (int32_t) nth;
             for (unsigned ti = 0; ti < nth; ti++) {
@@ -620,6 +631,41 @@ void diffusion_generate_entropy_bound(llama_context *             ctx,
                 if (p0 < p1) { pool.emplace_back(worker, p0, p1); }
             }
             for (auto & th : pool) { th.join(); }
+        };
+
+        if (gpu_reduce) {
+            // Stage-1: argmax/entropy/sampled straight from sc_dev. argmax matches the host bit-for-bit; Z and
+            // entropy differ only by the parallel-reduction order, so some sampled tokens may shift near ties.
+            if (!llama_diffusion_device_sample(model, u.data(), argmax_canvas.data(), entropy.data(),
+                                               denoiser.data(), C, temp_inv)) {
+                LOG_ERR("%s: device sample failed at step %d; falling back to host\n", __func__, step_idx);
+                if (!logits) { logits = llama_get_logits(ctx); }
+                run_host_worker();
+            } else if (std::getenv("DG_DEVSAMPLE_CHECK")) {
+                // run the host worker into shadow buffers with the SAME u and diff: argmax must be exact.
+                std::vector<llama_token> h_argmax = argmax_canvas, h_denoise = denoiser;
+                std::vector<float>       h_entropy = entropy;
+                std::vector<llama_token> d_argmax = argmax_canvas, d_denoise = denoiser;
+                std::vector<float>       d_entropy = entropy;
+                std::swap(argmax_canvas, h_argmax); std::swap(denoiser, h_denoise); std::swap(entropy, h_entropy);
+                run_host_worker();  // fills argmax_canvas/denoiser/entropy from host
+                int  amax_mismatch = 0, tok_diff = 0; double max_dH = 0.0, max_relZ = 0.0;
+                for (int32_t pos = 0; pos < C; pos++) {
+                    if (argmax_canvas[pos] != d_argmax[pos]) { amax_mismatch++; }
+                    if (denoiser[pos]      != d_denoise[pos]) { tok_diff++; }
+                    const double dH = std::fabs((double) entropy[pos] - (double) d_entropy[pos]);
+                    if (dH > max_dH) { max_dH = dH; }
+                    const double relZ = std::fabs((double) entropy[pos] - (double) d_entropy[pos]) /
+                                        (std::fabs((double) entropy[pos]) + 1e-6);
+                    if (relZ > max_relZ) { max_relZ = relZ; }
+                }
+                LOG_INF("DG_DEVSAMPLE_CHECK step %d: amax_mismatch=%d/%d tok_diff=%d/%d max|dH|=%.3e max_relH=%.3e\n",
+                        step_idx, amax_mismatch, C, tok_diff, C, max_dH, max_relZ);
+                // keep the DEVICE result for the actual run (host shadow was only for the diff)
+                std::swap(argmax_canvas, d_argmax); std::swap(denoiser, d_denoise); std::swap(entropy, d_entropy);
+            }
+        } else {
+            run_host_worker();
         }
 
         // accept the lowest-entropy positions within the MI bound (sum of strictly-earlier entropies <= bound)

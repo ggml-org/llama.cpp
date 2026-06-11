@@ -365,10 +365,22 @@ int main(int argc, char ** argv) {
             }
         }
 
-        LOG_INF("diffusion_eb: max_steps=%d t=[%.3f,%.3f] entropy_bound=%.4f stability=%d confidence=%.4f kv_cache=%s gpu_sampling=%s\n",
+        // Stage-1 device sample reduction: auto (default) = on for single-GPU; needs gpu_sampling/sc_dev.
+        if (params.diffusion.eb_gpu_sample_reduce == 2) {  // off
+            eb_params.gpu_sample_reduce = false;
+        } else {  // auto or on
+            eb_params.gpu_sample_reduce = eb_params.gpu_sampling && (gpu_devs == 1);
+            if (!eb_params.gpu_sampling) {
+                LOG_INF("diffusion_eb: gpu sample reduce off (needs --diffusion-gpu-sampling on / sc_dev)\n");
+            } else if (gpu_devs != 1) {
+                LOG_INF("diffusion_eb: gpu sample reduce off (%d GPUs; needs a single CUDA device)\n", gpu_devs);
+            }
+        }
+
+        LOG_INF("diffusion_eb: max_steps=%d t=[%.3f,%.3f] entropy_bound=%.4f stability=%d confidence=%.4f kv_cache=%s gpu_sampling=%s sample_reduce=%s\n",
                 eb_params.max_denoising_steps, eb_params.t_min, eb_params.t_max, eb_params.entropy_bound,
                 eb_params.stability_threshold, eb_params.confidence_threshold, eb_params.kv_cache ? "on" : "off",
-                eb_params.gpu_sampling ? "on" : "off");
+                eb_params.gpu_sampling ? "on" : "off", eb_params.gpu_sample_reduce ? "on" : "off");
     }
 
     // Trim a denoised canvas: cut at the first end-of-generation token, or (checkpoints often emit no stop

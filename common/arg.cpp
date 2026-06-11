@@ -3975,6 +3975,17 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({ LLAMA_EXAMPLE_DIFFUSION }));
     add_opt(common_arg(
+        {"--diffusion-gpu-sample-reduce"}, "MODE",
+        "entropy-bound: Stage-1 device-side argmax/entropy/sampling reduction read straight from sc_dev "
+        "(needs --diffusion-gpu-sampling on): auto|on|off (default: auto = on for single-GPU canvas)",
+        [](common_params & params, const std::string & value) {
+            if      (value == "off")  { params.diffusion.eb_gpu_sample_reduce = 2; }
+            else if (value == "on")   { params.diffusion.eb_gpu_sample_reduce = 1; }
+            else if (value == "auto") { params.diffusion.eb_gpu_sample_reduce = 0; }
+            else { throw std::invalid_argument("--diffusion-gpu-sample-reduce must be auto|on|off"); }
+        }
+    ).set_examples({ LLAMA_EXAMPLE_DIFFUSION }));
+    add_opt(common_arg(
         { "-lr", "--learning-rate" }, "ALPHA",
         string_format("adamw or sgd optimizer alpha (default: %.2g); note: sgd alpha recommended ~10x (no momentum)", (double) params.lr.lr0),
         [](common_params & params, const std::string & value) { params.lr.lr0 = std::stof(value); }

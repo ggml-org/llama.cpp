@@ -566,6 +566,29 @@ size_t llama_diffusion_debug_get_sc_dev(const struct llama_model * model, float 
     return n;
 }
 
+// Stage-1 device sampling entry. Fetches the CUDA backend's dense sampler via the backend-reg proc address
+// (keeps the llama<->ggml-cuda link at the existing backend boundary) and runs it on sc_dev. Returns false
+// for non-DiffusionGemma / no sc_dev / non-CUDA builds so the caller falls back to the host path.
+typedef bool (*dg_cuda_sample_fn)(struct ggml_tensor *, const float *, int *, float *, int *, int, float);
+
+bool llama_diffusion_device_sample(const struct llama_model * model, const float * u, int * argmax,
+                                   float * entropy, int * sampled, int n_tokens, float inv_temp) {
+    const auto * dm = dynamic_cast<const llama_model_diffusion_gemma *>(model);
+    if (!dm || dm->sc_dev == nullptr || !u || !argmax || !entropy || !sampled || n_tokens <= 0) {
+        return false;
+    }
+    ggml_backend_reg_t reg = ggml_backend_reg_by_name("CUDA");
+    if (!reg) {
+        return false;
+    }
+    static dg_cuda_sample_fn fn =
+        (dg_cuda_sample_fn) ggml_backend_reg_get_proc_address(reg, "ggml_backend_cuda_diffusion_sample");
+    if (!fn) {
+        return false;
+    }
+    return fn(dm->sc_dev, u, argmax, entropy, sampled, n_tokens, inv_temp);
+}
+
 llama_model_diffusion_gemma::~llama_model_diffusion_gemma() {
     if (pkv_buf) { ggml_backend_buffer_free(pkv_buf); pkv_buf = nullptr; }
     if (pkv_ctx) { ggml_free(pkv_ctx); pkv_ctx = nullptr; }

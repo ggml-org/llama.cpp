@@ -581,6 +581,21 @@ extern "C" {
                                float * dst,
                               size_t   max_elems);
 
+    // DiffusionGemma Stage-1 device sampling: argmax/entropy/one multinomial draw per canvas position read
+    // directly from the device SC buffer (sc_dev), removing the per-step full-canvas logits download + host
+    // reductions. u is [n_tokens] host pre-drawn uniforms (the host RNG stream, for reproducibility); argmax,
+    // entropy, sampled are [n_tokens] host outputs. Caller MUST llama_synchronize(ctx) first. Requires a
+    // single CUDA device + device-resident SC on. Returns false (caller falls back to the host path) when
+    // unavailable. argmax matches the host bit-for-bit; entropy/sampled differ only by FP reduction order.
+    LLAMA_API bool llama_diffusion_device_sample(
+            const struct llama_model * model,
+                       const float   * u,
+                               int   * argmax,
+                             float   * entropy,
+                               int   * sampled,
+                               int     n_tokens,
+                             float     inv_temp);
+
     // DiffusionGemma prompt KV caching: select the forward phase for the next llama_decode (P = block
     // prompt length; no-op otherwise).  0 = UNIFIED (no-cache [prompt|canvas]),  1 = PREFILL (forward the
     // P prompt tokens, write the K,V store),  2 = DECODE (forward the canvas, read the cached prompt K,V).

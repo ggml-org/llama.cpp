@@ -404,6 +404,7 @@ struct common_params_diffusion {
     int32_t eb_max_steps     = -1;
     int32_t eb_kv_cache      = 0;     // prefix KV cache: 0=auto (on for single-GPU canvas), 1=on, 2=off
     int32_t eb_gpu_sampling  = 0;     // device-resident SC: 0=auto (on for single-GPU canvas), 1=on, 2=off
+    int32_t eb_gpu_sample_reduce = 0; // Stage-1 device argmax/entropy/sample reduction: 0=auto (on for single-GPU), 1=on, 2=off
 };
 
 // reasoning API response format (not to be confused as chat template's reasoning format)

@@ -78,6 +78,9 @@ struct diffusion_eb_params {
     bool    gpu_sampling         = false;  // device-resident self-conditioning: keep the prev step's canvas
                                            // logits on-device for SC instead of a per-step 268 MB host upload
                                            // (exact; the SC math/values are unchanged)
+    bool    gpu_sample_reduce    = false;  // Stage-1: argmax/entropy/one multinomial draw per position done on
+                                           // the GPU from sc_dev (skips the 268 MB logits D2H + host reductions).
+                                           // Requires gpu_sampling. FP-equivalent: argmax exact, Z/entropy ~1e-4.
 
     diffusion_step_callback_t step_callback           = nullptr;
     void *                    step_callback_user_data = nullptr;
