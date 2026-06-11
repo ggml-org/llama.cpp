@@ -483,7 +483,7 @@ struct common_speculative_impl_draft_eagle3 : public common_speculative_impl {
 
         // turn on extraction of the target layers' input embeddings
         for (uint32_t k = 0; k < n_extract_layers; ++k) {
-            llama_set_output_layer_inp(ctx_tgt, (uint32_t) extract_layers[k], true);
+            llama_set_embeddings_layer_inp(ctx_tgt, (uint32_t) extract_layers[k], true);
         }
 
         // turn on extraction of the draft model's pre-norm hidden state
@@ -559,7 +559,7 @@ struct common_speculative_impl_draft_eagle3 : public common_speculative_impl {
         features_buf.resize((size_t) n_tokens * n_embd_enc, 0.0f);
 
         for (uint32_t k = 0; k < n_extract_layers; ++k) {
-            const float * layer = llama_get_output_layer_inp(ctx_tgt, (uint32_t) extract_layers[k]);
+            const float * layer = llama_get_embeddings_layer_inp(ctx_tgt, (uint32_t) extract_layers[k]);
             if (!layer) {
                 GGML_ABORT("EAGLE3: target layer %d input not extracted.", extract_layers[k]);
             }

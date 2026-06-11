@@ -950,6 +950,14 @@ float * llama_context::get_embeddings_nextn_ith(int32_t i) {
     }
 }
 
+float * llama_context::get_embeddings_layer_inp(uint32_t lid) {
+    output_reorder();
+
+    GGML_ASSERT(lid < embd_layer_inp.size() && embd_layer_inp[lid].has_data());
+
+    return embd_layer_inp[lid].data;
+}
+
 llama_token llama_context::get_sampled_token_ith(int32_t idx) {
     output_reorder();
 
@@ -1137,6 +1145,16 @@ void llama_context::set_embeddings_nextn(bool value, bool masked) {
     cparams.embeddings_nextn_masked = masked;
 }
 
+void llama_context::set_embeddings_layer_inp(uint32_t lid, bool enable) {
+    LLAMA_LOG_DEBUG("%s: lid = %d, enable = %d\n", __func__, lid, enable);
+
+    GGML_ASSERT(lid < model.hparams.n_layer());
+
+    cparams.output_layer_inp[lid] = enable;
+
+    sched_need_reserve = true;
+}
+
 void llama_context::set_causal_attn(bool value) {
     LLAMA_LOG_DEBUG("%s: value = %d\n", __func__, value);
 
@@ -1276,23 +1294,6 @@ bool llama_context::set_adapter_cvec(
     sched_need_reserve = true;
 
     return res;
-}
-
-void llama_context::set_output_layer_inp(uint32_t layer_id, bool enable) {
-    LLAMA_LOG_DEBUG("%s: layer_id = %d, enable = %d\n", __func__, layer_id, enable);
-
-    GGML_ASSERT(layer_id < model.hparams.n_layer());
-
-    cparams.output_layer_inp[layer_id] = enable;
-
-    sched_need_reserve = true;
-}
-
-float * llama_context::get_output_layer_inp(uint32_t layer_id) {
-    if (layer_id >= embd_layer_inp.size() || !embd_layer_inp[layer_id].has_data()) {
-        return nullptr;
-    }
-    return embd_layer_inp[layer_id].data;
 }
 
 llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, llm_graph_type gtype, llama_memory_context_i * mctx, ggml_status & ret) {
@@ -2266,6 +2267,14 @@ void llama_context::output_reorder() {
         if (embd_nextn.size > 0) {
             for (uint64_t k = 0; k < n_embd; k++) {
                 std::swap(embd_nextn.data[i0*n_embd + k], embd_nextn.data[i1*n_embd + k]);
+            }
+        }
+
+        if (embd_layer_inp.size() > 0) {
+            for (int lid = 0; lid < (int) embd_layer_inp.size(); ++lid) {
+                for (uint64_t k = 0; k < n_embd; ++k) {
+                    std::swap(embd_layer_inp[lid].data[i0*n_embd + k], embd_layer_inp[lid].data[i1*n_embd + k]);
+                }
             }
         }
 
@@ -3683,6 +3692,10 @@ void llama_set_embeddings_nextn(llama_context * ctx, bool value, bool masked) {
     ctx->set_embeddings_nextn(value, masked);
 }
 
+void llama_set_embeddings_layer_inp(llama_context * ctx, uint32_t lid, bool value) {
+    ctx->set_embeddings_layer_inp(lid, value);
+}
+
 llama_memory_t llama_get_memory(const struct llama_context * ctx) {
     if (!ctx) {
         return nullptr;
@@ -3701,6 +3714,12 @@ float * llama_get_embeddings_nextn_ith(llama_context * ctx, int32_t i) {
     ctx->synchronize();
 
     return ctx->get_embeddings_nextn_ith(i);
+}
+
+float * llama_get_embeddings_layer_inp(llama_context * ctx, uint32_t lid) {
+    ctx->synchronize();
+
+    return ctx->get_embeddings_layer_inp(lid);
 }
 
 bool llama_set_sampler(llama_context * ctx, llama_seq_id seq_id, llama_sampler * smpl) {
@@ -4107,14 +4126,4 @@ llama_memory_breakdown llama_get_memory_breakdown(const struct llama_context * c
 
 llama_context * llama_get_ctx_other(struct llama_context * ctx) {
     return ctx->get_cparams().ctx_other;
-}
-
-void llama_set_output_layer_inp(struct llama_context * ctx, uint32_t layer_id, bool enable) {
-    ctx->set_output_layer_inp(layer_id, enable);
-}
-
-float * llama_get_output_layer_inp(struct llama_context * ctx, uint32_t layer_id) {
-    ctx->synchronize();
-
-    return ctx->get_output_layer_inp(layer_id);
 }
