@@ -414,13 +414,13 @@ struct common_params_diffusion {
     int32_t self_cond_top_k    = 256;   // sparse self-conditioning gather width
     uint32_t input_gpu_groups  = 63;    // decoder input tensor groups assigned to GPU backend
 
-    // CUDA diffusion sampling fast-path knobs. Defaults preserve behavior when no tuning flags are passed.
+    // CUDA diffusion sampling fast-path knobs.
     bool    cuda_fast_top_k                = true;
     bool    cuda_direct_self_cond          = false;
     bool    cuda_final_tokens_on_stop      = false;
     bool    cuda_fused_top_k_sample        = false;
     bool    cuda_parallel_full_softmax     = false;
-    bool    cuda_fused_full_softmax        = false;
+    bool    cuda_fused_full_softmax        = true;
 
     // Diffusion graph-shape knobs.
     bool    fused_self_cond_embd       = false;

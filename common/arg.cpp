@@ -3925,6 +3925,11 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params) { params.diffusion.cuda_fused_full_softmax = true; }
     ).set_examples({ LLAMA_EXAMPLE_DIFFUSION }));
     add_opt(common_arg(
+        {"--no-diffusion-cuda-fused-full-softmax"},
+        "disable fused CUDA diffusion full-vocab softmax sampling path",
+        [](common_params & params) { params.diffusion.cuda_fused_full_softmax = false; }
+    ).set_examples({ LLAMA_EXAMPLE_DIFFUSION }));
+    add_opt(common_arg(
         {"--no-diffusion-cuda-fast-top-k"},
         "disable CUDA diffusion CUB/fast top-k selection path",
         [](common_params & params) { params.diffusion.cuda_fast_top_k = false; }
