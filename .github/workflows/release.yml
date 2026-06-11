@@ -811,6 +811,11 @@ jobs:
             -DLLAMA_BUILD_BORINGSSL=ON
           cmake --build build --target ggml-sycl -j
 
+      - name: ccache-clear
+        uses: ./.github/actions/ccache-clear
+        with:
+          key: release-windows-2022-x64-sycl
+
       - name: Build the release package
         id: pack_artifacts
         run: |
@@ -924,6 +929,11 @@ jobs:
             -DGGML_NATIVE=OFF \
             -DGGML_SYCL_F16=${{ matrix.fp16 }}
           time cmake --build build --config Release -j $(nproc)
+
+      - name: ccache-clear
+        uses: ./.github/actions/ccache-clear
+        with:
+          key: release-ubuntu-24.04-sycl-${{ matrix.build }}
 
       - name: Determine tag name
         id: tag
