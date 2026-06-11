@@ -727,6 +727,7 @@ Pass these via `CXXFLAGS` or add a one-off `#define` to enable a flag on the spo
 |-----------------|----------------------------------------------------------------------------------|
 | DEBUG_SYCL_POOL | Enable device memory pool logging on teardown. Useful for profiling allocations. |
 | DEBUG_SYCL_MALLOC | Enable verbose per-call logging of device pool alloc/free operations. |
+| GGML_SYCL_DEV2DEV_MEMCPY | Choose the SYCL or L0 API in dev2dev memory copy.<br>Value: <br>*  0: SYCL API (default)<br>* 1: L0 API -- L0 API is found to lead to abnormal crash in some case. This debug flag is used to check the issue.|
 
 ## Design Rule
 
