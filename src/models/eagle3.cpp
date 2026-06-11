@@ -22,8 +22,8 @@ void llama_model_eagle3::load_arch_hparams(llama_model_loader & ml) {
 
     // eagle3 norm_before_residual (optional, default false)
     // compatible with Readhat eagle3 speculator model
-    ml.get_key(LLM_KV_EAGLE3_NORM_BEFORE_RESIDUAL, hparams.eagle3_norm_before_residual, false);
-    if (hparams.eagle3_norm_before_residual) {
+    ml.get_key(LLM_KV_EAGLE3_NORM_BEFORE_RESIDUAL, hparams.norm_before_residual, false);
+    if (hparams.norm_before_residual) {
         LLAMA_LOG_INFO("%s: EAGLE3 norm_before_residual = true\n", __func__);
     }
 
@@ -212,7 +212,7 @@ llama_model_eagle3::graph<false>::graph(const llama_model & model, const llm_gra
         // - false (default): use raw inp_g for residual
         // - true: use normalized g_norm for residual
         // inpL is the concatenated input (normalized inp_embd + normalized inp_g)
-        ggml_tensor * inpSA = hparams.eagle3_norm_before_residual ? g_norm : inpL;
+        ggml_tensor * inpSA = hparams.norm_before_residual ? g_norm : inpL;
 
         // Concatenate normalized inp_embd and normalized inp_g
         cur = ggml_concat(ctx0, embd_norm, g_norm, il);
