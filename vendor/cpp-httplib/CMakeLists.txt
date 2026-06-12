@@ -81,7 +81,7 @@ if (LLAMA_BUILD_BORINGSSL)
     target_link_libraries(${TARGET} PUBLIC ssl crypto)
 
 elseif (LLAMA_BUILD_LIBRESSL)
-    set(LIBRESSL_VERSION "4.3.1" CACHE STRING "LibreSSL version")
+    set(LIBRESSL_VERSION "4.3.2" CACHE STRING "LibreSSL version")
 
     message(STATUS "Fetching LibreSSL version ${LIBRESSL_VERSION}")
 
