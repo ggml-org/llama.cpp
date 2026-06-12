@@ -1408,7 +1408,7 @@ jobs:
       - macos-cpu
       - ios-xcode
       #- openEuler-cann
-      - ui
+      - ui-build
 
     outputs:
       tag_name: ${{ steps.tag.outputs.name }}
