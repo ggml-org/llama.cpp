@@ -17,6 +17,7 @@
 
 static constexpr uint32_t DSV4_CSA_RATIO = 4;
 static constexpr uint32_t DSV4_HCA_RATIO = 128;
+static constexpr uint32_t DSV4_CSA_GRAPH_RAW_BUCKET = DSV4_HCA_RATIO;
 
 static constexpr uint32_t DSV4_STATE_MAGIC         = 0x34565344; // DSV4
 static constexpr uint32_t DSV4_STATE_VERSION       = 1;
@@ -226,6 +227,7 @@ static llama_kv_cache_dsv4_context::comp_plan dsv4_build_comp_plan(
     };
 
     std::vector<persist_row> persist_rows;
+    llama_pos max_pos = -1;
 
     // For the overlap compressor, build_overlap_compressed_kv_from_state() consumes
     // state_read_idxs as two contiguous halves: the first ratio*n_blocks entries are
@@ -272,6 +274,7 @@ static llama_kv_cache_dsv4_context::comp_plan dsv4_build_comp_plan(
         }
 
         const llama_seq_id seq_id = ubatch.seq_id[i][0];
+        max_pos = std::max(max_pos, pos);
 
         const int64_t stream_off = n_stream > 1 ? (int64_t) seq_id*state_size : 0;
 
@@ -323,6 +326,36 @@ static llama_kv_cache_dsv4_context::comp_plan dsv4_build_comp_plan(
         }
     }
 
+    if (ratio == DSV4_CSA_RATIO && plan.state_write_idxs.empty() && !plan.state_idxs.empty()) {
+        assert(kv_size > 0);
+
+        uint32_t i = 0;
+        while (i < ubatch.n_tokens && ubatch.pos[i] < 0) {
+            ++i;
+        }
+        assert(i < ubatch.n_tokens);
+
+        const llama_pos    pos    = ubatch.pos[i];
+        const llama_seq_id seq_id = ubatch.seq_id[i][0];
+        const int64_t cache_off = n_stream > 1 && seq_id >= 0 ? (int64_t) seq_id*kv_size : 0;
+        const int32_t source_idx = state_source_idx(seq_id, pos);
+
+        plan.state_write_idxs.push_back(cache_off + kv_size - 1);
+        plan.state_write_pos .push_back(0);
+        plan.state_write_end .push_back(-1);
+
+        if (overlap) {
+            for (uint32_t j = 0; j < ratio; ++j) {
+                overlap_prev_reads.push_back(source_idx);
+                overlap_cur_reads .push_back(source_idx);
+            }
+        } else {
+            for (uint32_t j = 0; j < ratio; ++j) {
+                plan.state_read_idxs.push_back(source_idx);
+            }
+        }
+    }
+
     if (overlap) {
         // [ all blocks' prev-window indices | all blocks' cur-window indices ]
         plan.state_read_idxs.reserve(overlap_prev_reads.size() + overlap_cur_reads.size());
@@ -330,6 +363,19 @@ static llama_kv_cache_dsv4_context::comp_plan dsv4_build_comp_plan(
                 overlap_prev_reads.begin(), overlap_prev_reads.end());
         plan.state_read_idxs.insert(plan.state_read_idxs.end(),
                 overlap_cur_reads.begin(), overlap_cur_reads.end());
+    }
+
+    if (ratio == DSV4_CSA_RATIO && max_pos >= 0) {
+        const int64_t raw_bucket = DSV4_CSA_GRAPH_RAW_BUCKET;
+        const int64_t pos_p1     = max_pos + 1;
+        int64_t n_raw_buckets    = (pos_p1 + raw_bucket - 1)/raw_bucket;
+        if (pos_p1 % raw_bucket == 0) {
+            ++n_raw_buckets;
+        }
+
+        const int64_t bucketed_tokens = n_raw_buckets * raw_bucket;
+        const int64_t bucketed_n_kv   = (bucketed_tokens + ratio - 1)/ratio;
+        plan.n_kv = std::min<int64_t>(kv_size, std::max<int64_t>(plan.n_kv, bucketed_n_kv));
     }
 
     std::sort(persist_rows.begin(), persist_rows.end(),

@@ -175,6 +175,7 @@ public:
         std::vector<int32_t> state_read_idxs;
 
         // Final compressed-cache row ids written by state-backed commits.
+        // A non-boundary CSA/LID decode step can target a masked scratch row.
         std::vector<int64_t> state_write_idxs;
 
         // RoPE positions for state-backed commits.
@@ -186,7 +187,8 @@ public:
         // Number of completed compressed rows visible for each query token.
         std::vector<int32_t> n_visible;
 
-        // Maximum compressed rows visible to this ubatch.
+        // Graph-width for compressed rows. This can be larger than n_visible
+        // so masked padding rows do not force a new graph at every CSA block.
         int64_t n_kv = 0;
     };
 

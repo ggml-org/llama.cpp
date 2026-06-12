@@ -894,31 +894,29 @@ ggml_tensor * llama_model_deepseek4::graph::build_attention(
         csa_state_score = ggml_add(ctx0, csa_state_score, csa_ape_rows);
         cb(csa_state_score, "csa_state_score_ape", il);
 
-        ggml_tensor * csa_state_dep = nullptr;
-        if (inp_dsv4->get_csa().state_write_idxs) {
-            ggml_tensor * csa_source_kv = ggml_concat(ctx0,
-                    inp_dsv4->mctx->get_csa_state()->get_kv(ctx0, il), csa_state_kv, 1);
-            ggml_tensor * csa_source_score = ggml_concat(ctx0,
-                    inp_dsv4->mctx->get_csa_state()->get_score(ctx0, il), csa_state_score, 1);
+        GGML_ASSERT(inp_dsv4->get_csa().state_write_idxs);
 
-            ggml_tensor * kv_comp_csa_state = build_overlap_compressed_kv_from_state(
-                    csa_source_kv,
-                    csa_source_score,
-                    inp_dsv4->get_csa().state_read_idxs,
-                    inp_dsv4->get_csa().state_write_pos,
-                    layer.attn_comp_norm,
-                    DSV4_CSA_RATIO,
-                    n_embd_head,
-                    "csa_state_compress",
-                    il);
+        ggml_tensor * csa_source_kv = ggml_concat(ctx0,
+                inp_dsv4->mctx->get_csa_state()->get_kv(ctx0, il), csa_state_kv, 1);
+        ggml_tensor * csa_source_score = ggml_concat(ctx0,
+                inp_dsv4->mctx->get_csa_state()->get_score(ctx0, il), csa_state_score, 1);
 
-            ggml_build_forward_expand(gf, inp_dsv4->mctx->get_csa()->cpy_k(ctx0,
-                        kv_comp_csa_state, inp_dsv4->get_csa().state_write_idxs, il));
-            csa_state_dep = kv_comp_csa_state;
-        }
+        ggml_tensor * kv_comp_csa_state = build_overlap_compressed_kv_from_state(
+                csa_source_kv,
+                csa_source_score,
+                inp_dsv4->get_csa().state_read_idxs,
+                inp_dsv4->get_csa().state_write_pos,
+                layer.attn_comp_norm,
+                DSV4_CSA_RATIO,
+                n_embd_head,
+                "csa_state_compress",
+                il);
 
-        csa_state_kv    = dsv4_with_zero_dep(ctx0, csa_state_kv,    csa_state_dep);
-        csa_state_score = dsv4_with_zero_dep(ctx0, csa_state_score, csa_state_dep);
+        ggml_build_forward_expand(gf, inp_dsv4->mctx->get_csa()->cpy_k(ctx0,
+                    kv_comp_csa_state, inp_dsv4->get_csa().state_write_idxs, il));
+
+        csa_state_kv    = dsv4_with_zero_dep(ctx0, csa_state_kv,    kv_comp_csa_state);
+        csa_state_score = dsv4_with_zero_dep(ctx0, csa_state_score, kv_comp_csa_state);
 
         ggml_tensor * csa_persist_kv = ggml_get_rows(ctx0, csa_state_kv, inp_dsv4->get_csa().state_persist_src_idxs);
         ggml_tensor * csa_persist_score = ggml_get_rows(ctx0, csa_state_score, inp_dsv4->get_csa().state_persist_src_idxs);
@@ -946,36 +944,34 @@ ggml_tensor * llama_model_deepseek4::graph::build_attention(
         lid_state_score = ggml_add(ctx0, lid_state_score, lid_ape_rows);
         cb(lid_state_score, "lid_state_score_ape", il);
 
-        ggml_tensor * lid_state_dep = nullptr;
-        if (inp_dsv4->get_lid().state_write_idxs) {
-            ggml_tensor * lid_source_kv = ggml_concat(ctx0,
-                    inp_dsv4->mctx->get_lid_state()->get_kv(ctx0, il), lid_state_kv, 1);
-            ggml_tensor * lid_source_score = ggml_concat(ctx0,
-                    inp_dsv4->mctx->get_lid_state()->get_score(ctx0, il), lid_state_score, 1);
+        GGML_ASSERT(inp_dsv4->get_lid().state_write_idxs);
 
-            ggml_tensor * kv_comp_lid_state = build_overlap_compressed_kv_from_state(
-                    lid_source_kv,
-                    lid_source_score,
-                    inp_dsv4->get_lid().state_read_idxs,
-                    inp_dsv4->get_lid().state_write_pos,
-                    layer.indexer_comp_norm,
-                    DSV4_CSA_RATIO,
-                    hparams.indexer_head_size,
-                    "lid_state_compress",
-                    il);
+        ggml_tensor * lid_source_kv = ggml_concat(ctx0,
+                inp_dsv4->mctx->get_lid_state()->get_kv(ctx0, il), lid_state_kv, 1);
+        ggml_tensor * lid_source_score = ggml_concat(ctx0,
+                inp_dsv4->mctx->get_lid_state()->get_score(ctx0, il), lid_state_score, 1);
 
-            if (inp_dsv4->get_lid().k_rot) {
-                kv_comp_lid_state = ggml_mul_mat(ctx0, inp_dsv4->get_lid().k_rot, kv_comp_lid_state);
-                cb(kv_comp_lid_state, "lid_state_compress_rot", il);
-            }
+        ggml_tensor * kv_comp_lid_state = build_overlap_compressed_kv_from_state(
+                lid_source_kv,
+                lid_source_score,
+                inp_dsv4->get_lid().state_read_idxs,
+                inp_dsv4->get_lid().state_write_pos,
+                layer.indexer_comp_norm,
+                DSV4_CSA_RATIO,
+                hparams.indexer_head_size,
+                "lid_state_compress",
+                il);
 
-            ggml_build_forward_expand(gf, inp_dsv4->mctx->get_lid()->cpy_k(ctx0,
-                        kv_comp_lid_state, inp_dsv4->get_lid().state_write_idxs, il));
-            lid_state_dep = kv_comp_lid_state;
+        if (inp_dsv4->get_lid().k_rot) {
+            kv_comp_lid_state = ggml_mul_mat(ctx0, inp_dsv4->get_lid().k_rot, kv_comp_lid_state);
+            cb(kv_comp_lid_state, "lid_state_compress_rot", il);
         }
 
-        lid_state_kv    = dsv4_with_zero_dep(ctx0, lid_state_kv,    lid_state_dep);
-        lid_state_score = dsv4_with_zero_dep(ctx0, lid_state_score, lid_state_dep);
+        ggml_build_forward_expand(gf, inp_dsv4->mctx->get_lid()->cpy_k(ctx0,
+                    kv_comp_lid_state, inp_dsv4->get_lid().state_write_idxs, il));
+
+        lid_state_kv    = dsv4_with_zero_dep(ctx0, lid_state_kv,    kv_comp_lid_state);
+        lid_state_score = dsv4_with_zero_dep(ctx0, lid_state_score, kv_comp_lid_state);
 
         ggml_tensor * lid_persist_kv = ggml_get_rows(ctx0, lid_state_kv, inp_dsv4->get_lid().state_persist_src_idxs);
         ggml_tensor * lid_persist_score = ggml_get_rows(ctx0, lid_state_score, inp_dsv4->get_lid().state_persist_src_idxs);

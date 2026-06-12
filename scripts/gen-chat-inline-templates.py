@@ -84,17 +84,22 @@ def main() -> None:
         arch, rel = match.group(1), match.group(2)
         # read the template verbatim (no newline translation) so the embedded
         # string is a byte-for-byte copy of the source .jinja file
-        content = (repo_root / rel).read_text(encoding="utf-8", newline="")
+        # Path.read_text() only grew a newline param in python 3.13
+        with open(repo_root / rel, encoding="utf-8", newline="") as f:
+            content = f.read()
         entries.append((arch, rel, content))
 
     text = render(entries)
 
     output = Path(args.output)
     # write only when the content changes to avoid spurious rebuilds
-    if output.exists() and output.read_text(encoding="utf-8", newline="") == text:
-        return
+    if output.exists():
+        with open(output, encoding="utf-8", newline="") as f:
+            if f.read() == text:
+                return
     output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(text, encoding="utf-8", newline="")
+    with open(output, "w", encoding="utf-8", newline="") as f:
+        f.write(text)
 
 
 if __name__ == "__main__":
