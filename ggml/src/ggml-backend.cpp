@@ -12,6 +12,11 @@
 #include "ggml-backend-impl.h"
 #include "ggml-alloc.h"
 #include "ggml-impl.h"
+#include "ggml-backend-moe-cache.h"
+
+// MoE expert cache function table; populated by the CUDA backend at registry
+// init when GGML_CUDA_MOE_CACHE=1, consumed by the CPU mul_mat_id kernel.
+struct ggml_moe_cache_api ggml_moe_cache = {};
 
 #include <assert.h>
 #include <limits.h>
@@ -107,6 +112,15 @@ const char * ggml_backend_buffer_name(ggml_backend_buffer_t buffer) {
 void ggml_backend_buffer_free(ggml_backend_buffer_t buffer) {
     if (buffer == NULL) {
         return;
+    }
+
+    // MoE expert cache: host weight buffers can back queued cache-fill jobs;
+    // notify before the memory goes away (no-op when the cache is inactive)
+    if (ggml_moe_cache.invalidate && buffer->iface.get_base && ggml_backend_buffer_is_host(buffer)) {
+        void * base = ggml_backend_buffer_get_base(buffer);
+        if (base) {
+            ggml_moe_cache.invalidate(base, ggml_backend_buffer_get_size(buffer));
+        }
     }
 
     if (buffer->iface.free_buffer != NULL) {
@@ -1659,6 +1673,15 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                     }
                     copy_experts(first_id, last_id);
                 } else {
+                    // MoE expert cache dst handoff: if the cache populated this
+                    // input's GPU copy directly (down-projection rows), skip the
+                    // round-trip copy AND the blocking sync — the cache installed
+                    // a stream-order dependency on this backend instead.
+                    if (ggml_moe_cache.redirect_finalize &&
+                        ggml_moe_cache.redirect_finalize(input->data, split_backend)) {
+                        continue;
+                    }
+
                     // try async copy, but if not possible, we can still use a sync copy without synchronizing the dst backend, since we handle the synchronization here with multiple copies and events
                     // TODO: add public function to facilitate this, since applications do not have direct access to the backend interface
                     if (!split_backend->iface.cpy_tensor_async || !split_backend->iface.cpy_tensor_async(input_backend, split_backend, input, input_cpy)) {
@@ -1669,6 +1692,42 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                             ggml_backend_synchronize(split_backend);
                         }
                         ggml_backend_tensor_copy(input, input_cpy);
+                    }
+                }
+            }
+        }
+
+        // MoE expert cache dst handoff: before running a CPU split that ends in a
+        // MUL_MAT_ID, offer the cache the GPU-side copy tensor of that dst so it
+        // can scatter its GPU-computed rows directly (skipping the host round
+        // trip). Engaged only with a single, unique CUDA consumer and one copy.
+        // note: the CPU backend is always the last one (asserted in sched_new);
+        // do NOT use ggml_backend_dev_type here — the CUDA implementation calls
+        // cudaGetDeviceProperties (~ms per call!) and this runs per split.
+        if (ggml_moe_cache.redirect_offer && sched->n_copies == 1 &&
+            split->graph.n_nodes > 0 &&
+            split_backend_id == sched->n_backends - 1) {
+            ggml_tensor * last = split->graph.nodes[split->graph.n_nodes - 1];
+            if (last->op == GGML_OP_MUL_MAT_ID && !(last->flags & GGML_TENSOR_FLAG_OUTPUT)) {
+                int consumer_split = -1;
+                int n_consumers = 0;
+                for (int j = split_id + 1; j < sched->n_splits && n_consumers < 2; j++) {
+                    for (int k = 0; k < splits[j].n_inputs; k++) {
+                        if (splits[j].inputs[k] == last) {
+                            n_consumers++;
+                            consumer_split = j;
+                            break;
+                        }
+                    }
+                }
+                if (n_consumers == 1) {
+                    ggml_backend_t cons_backend = sched->backends[splits[consumer_split].backend_id];
+                    ggml_tensor * cpy = tensor_copy(last, splits[consumer_split].backend_id, sched->cur_copy);
+                    if (cpy && cpy->data && splits[consumer_split].backend_id != sched->n_backends - 1 &&
+                        ggml_is_contiguous(last)) {
+                        ggml_moe_cache.redirect_offer(last->data, last->nb[1],
+                                                            last->ne[1] * last->ne[2],
+                                                            cpy->data, cons_backend);
                     }
                 }
             }
