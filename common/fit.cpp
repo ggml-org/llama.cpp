@@ -34,7 +34,8 @@ std::vector<llama_device_memory_data> common_get_device_memory_data(
         uint32_t & hp_ngl,
         uint32_t & hp_n_ctx_train,
         uint32_t & hp_n_expert,
-        ggml_log_level log_level) {
+        ggml_log_level log_level,
+        uint64_t * model_size = nullptr) {
     struct user_data_t {
         struct {
             ggml_log_callback callback;
@@ -72,6 +73,9 @@ std::vector<llama_device_memory_data> common_get_device_memory_data(
 
     const size_t nd = llama_model_n_devices(model);
     std::vector<llama_device_memory_data> ret(nd + 1);
+    if (model_size) {
+        *model_size = llama_model_size(model);
+    }
 
     llama_memory_breakdown memory_breakdown = llama_get_memory_breakdown(ctx);
 
@@ -87,13 +91,19 @@ std::vector<llama_device_memory_data> common_get_device_memory_data(
         if (!dev) {
             continue;
         }
-        for (size_t i = 0; i < nd; i++) {
+        size_t i = 0;
+        for (; i < nd; i++) {
             if (dev == llama_model_get_device(model, i)) {
                 ret[i].mb.model   += mb.model;
                 ret[i].mb.context += mb.context;
                 ret[i].mb.compute += mb.compute;
                 break;
             }
+        }
+        if (i == nd && ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_CPU) {
+            ret.back().mb.model   += mb.model;
+            ret.back().mb.context += mb.context;
+            ret.back().mb.compute += mb.compute;
         }
     }
 
@@ -169,8 +179,10 @@ static void common_params_fit_impl(
     // step 1: get data for default parameters and check whether any changes are necessary in the first place
 
     LOG_TRC("%s: getting device memory data for initial parameters:\n", __func__);
-    const dmds_t dmds_full = common_get_device_memory_data(path_model, mparams, cparams, devs, hp_ngl, hp_nct, hp_nex, log_level);
+    uint64_t model_size = 0;
+    const dmds_t dmds_full = common_get_device_memory_data(path_model, mparams, cparams, devs, hp_ngl, hp_nct, hp_nex, log_level, &model_size);
     const size_t nd = devs.size(); // number of devices
+    const bool is_single_igpu = nd == 1 && ggml_backend_dev_type(devs[0]) == GGML_BACKEND_DEVICE_TYPE_IGPU;
 
     std::vector<int64_t> margins; // this function uses int64_t rather than size_t for memory sizes to more conveniently handle deficits
     margins.reserve(nd);
@@ -206,11 +218,26 @@ static void common_params_fit_impl(
     std::vector<int64_t> projected_free_per_device;
     projected_free_per_device.reserve(nd);
 
+    auto projected_device_used = [&](const dmds_t & dmds, size_t id) -> int64_t {
+        // Account for host-side model/context/compute buffers when projecting device memory pressure.
+        if (!is_single_igpu) {
+            return dmds[id].mb.total();
+        }
+        const int64_t model = int64_t(dmds[0].mb.model) + int64_t(dmds.back().mb.model);
+        // Without mmap/direct I/O, loading can add transient host-side pressure.
+        // Needed because the exact post-load memory state is unavailable without a second fit pass.
+        const int64_t load_pressure = (!mparams->use_mmap && !mparams->use_direct_io) ? int64_t(model_size / 5) : 0;
+        const int64_t context_compute = int64_t(dmds[0].mb.context) + int64_t(dmds[0].mb.compute) +
+            int64_t(dmds.back().mb.context) + int64_t(dmds.back().mb.compute);
+        return std::max(int64_t(dmds[0].mb.model) + context_compute,
+                model + load_pressure + context_compute - int64_t(dmds_full.back().free) + int64_t(dmds_full[0].free));
+    };
+
     if (nd == 0) {
         sum_projected_used = dmds_full.back().mb.total();
-        sum_free           = dmds_full.back().total;
+        sum_free           = dmds_full.back().free;
         sum_projected_free = sum_free - sum_projected_used;
-        LOG_INF("%s: projected to use %" PRId64 " MiB of host memory vs. %" PRId64 " MiB of total host memory\n",
+        LOG_INF("%s: projected to use %" PRId64 " MiB of host memory vs. %" PRId64 " MiB of free host memory\n",
             __func__, sum_projected_used/MiB, sum_free/MiB);
         if (sum_projected_free >= margins[0]) {
             LOG_TRC("%s: will leave %" PRId64 " >= %" PRId64 " MiB of system memory, no changes needed\n",
@@ -224,7 +251,7 @@ static void common_params_fit_impl(
         for (size_t id = 0; id < nd; id++) {
             const llama_device_memory_data & dmd = dmds_full[id];
 
-            const int64_t projected_used = dmd.mb.total();
+            const int64_t projected_used = projected_device_used(dmds_full, id);
             const int64_t projected_free = dmd.free - projected_used;
             projected_free_per_device.push_back(projected_free);
 
@@ -309,7 +336,7 @@ static void common_params_fit_impl(
                         sum_projected_used_min_ctx = dmds_min_ctx.back().mb.total();
                     } else {
                         for (size_t id = 0; id < nd; id++) {
-                            sum_projected_used_min_ctx += dmds_min_ctx[id].mb.total();
+                            sum_projected_used_min_ctx += projected_device_used(dmds_min_ctx, id);
                         }
                     }
                     if (sum_used_target > sum_projected_used_min_ctx) {
@@ -490,13 +517,13 @@ static void common_params_fit_impl(
             const ngl_t & n = ngl_per_device[id];
             LOG_TRC(
                 "%s: id=%zu, n_layer=%2" PRIu32 ", n_part=%2" PRIu32 ", overflow_type=%d, mem=%6" PRId64 " MiB\n",
-                func_name, id, n.n_layer, n.n_part, int(n.overflow_type), dmd_nl[id].mb.total()/MiB);
+                func_name, id, n.n_layer, n.n_part, int(n.overflow_type), projected_device_used(dmd_nl, id)/MiB);
         }
 
         std::vector<int64_t> ret;
         ret.reserve(nd);
         for (size_t id = 0; id < nd; id++) {
-            ret.push_back(dmd_nl[id].mb.total());
+            ret.push_back(projected_device_used(dmd_nl, id));
         }
         return ret;
     };
@@ -515,7 +542,7 @@ static void common_params_fit_impl(
 
         for (size_t id = 0; id < nd; id++) {
             global_surplus_cpu_moe += dmds_cpu_moe[id].free;
-            global_surplus_cpu_moe -= int64_t(dmds_cpu_moe[id].mb.total()) + margins[id];
+            global_surplus_cpu_moe -= projected_device_used(dmds_cpu_moe, id) + margins[id];
         }
 
         if (global_surplus_cpu_moe > 0) {
