@@ -676,7 +676,7 @@ static __global__ void mul_mat_vec_q(
 // Block: (warp_size, ncols_dst) - each warp handles one token independently.
 // No shared memory reduction needed since each warp works alone.
 template <ggml_type type, int c_rows_per_block>
-__launch_bounds__(get_mmvq_mmid_max_batch_for_device<type>()*ggml_cuda_get_physical_warp_size(), 1)
+__launch_bounds__(MMVQ_MAX_BATCH_SIZE*ggml_cuda_get_physical_warp_size(), 1)
 static __global__ void mul_mat_vec_q_moe(
         const void * __restrict__ vx, const void * __restrict__ vy, const int32_t * __restrict__ ids,
         float * __restrict__ dst,
