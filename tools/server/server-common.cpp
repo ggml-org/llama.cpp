@@ -537,7 +537,9 @@ int32_t server_tokens::process_chunk(
             size_t idx,
             llama_pos pos,
             int32_t seq_id,
-            size_t & n_tokens_out) const {
+            size_t & n_tokens_out,
+            mtmd_helper_post_decode_callback callback,
+            void * user_data) const {
     const auto & chunk = find_chunk(idx);
     const char * name = mtmd_input_chunk_get_type(chunk.get()) == MTMD_INPUT_CHUNK_TYPE_IMAGE
                         ? "image" : "audio";
@@ -551,7 +553,9 @@ int32_t server_tokens::process_chunk(
         seq_id,
         n_batch,
         true, // logits last
-        &new_n_past);
+        &new_n_past,
+        callback,
+        user_data);
     SRV_INF("%s processed in %" PRId64 " ms\n", name, ggml_time_ms() - t0);
     if (result != 0) {
         LOG_ERR("mtmd_helper_eval failed with status %d", result);

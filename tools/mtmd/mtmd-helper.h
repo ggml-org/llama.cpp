@@ -80,8 +80,12 @@ MTMD_API int32_t mtmd_helper_eval_chunks(mtmd_context * ctx,
                                          bool logits_last,
                                          llama_pos * new_n_past);
 
+typedef int32_t (*mtmd_helper_post_decode_callback)(struct llama_batch * batch, void * user_data);
+
 // works like mtmd_helper_eval_chunks(), but only for a single chunk
 // this function is NOT thread-safe
+// callback invoked after each successful llama_decode() call within the mtmd helpers.
+// returns 0 on success, non-zero to signal failure (which will abort the eval).
 MTMD_API int32_t mtmd_helper_eval_chunk_single(mtmd_context * ctx,
                                                struct llama_context * lctx,
                                                const mtmd_input_chunk * chunk,
@@ -89,7 +93,9 @@ MTMD_API int32_t mtmd_helper_eval_chunk_single(mtmd_context * ctx,
                                                llama_seq_id seq_id,
                                                int32_t n_batch,
                                                bool logits_last,
-                                               llama_pos * new_n_past);
+                                               llama_pos * new_n_past,
+                                               mtmd_helper_post_decode_callback callback,
+                                               void * user_data);
 
 // helper function to decode an image whose embeddings have already been calculated
 // this helper will handle batching and pre/post decoding setup (for ex. gemma 3 requires non-causal attention)
@@ -101,7 +107,9 @@ MTMD_API int32_t mtmd_helper_decode_image_chunk(mtmd_context * ctx,
                                                 llama_pos n_past,
                                                 llama_seq_id seq_id,
                                                 int32_t n_batch,
-                                                llama_pos * new_n_past);
+                                                llama_pos * new_n_past,
+                                                mtmd_helper_post_decode_callback callback,
+                                                void * user_data);
 
 //
 // video input helpers (requires ffmpeg/ffprobe installed on the system)

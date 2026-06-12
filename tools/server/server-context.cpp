@@ -17,7 +17,7 @@
 
 #include "ggml-cpp.h"
 
-// TODO: tmp until the mtmd draft processing is refactored [TAG_MTMD_DRAFT_PROCESSING]
+// TODO: tmp until the common_get_device_memory_data is refactored
 #include "../../src/llama-ext.h"
 
 #include <algorithm>
@@ -2984,25 +2984,26 @@ private:
 
                     // check if we should process the image
                     while (slot.prompt.n_tokens() < slot.task->n_tokens() && input_tokens[slot.prompt.n_tokens()] == LLAMA_TOKEN_NULL) {
-                        // process the image
+                        // process the image; the post-decode callback keeps the draft context in sync
+                        static auto mtmd_post_decode_callback = [](struct llama_batch * batch, void * user_data) -> int32_t {
+                            server_context_impl * impl = static_cast<server_context_impl *>(user_data);
+                            if (impl->spec && !common_speculative_process(impl->spec.get(), *batch)) {
+                                return -1;
+                            }
+                            return 0;
+                        };
+
                         size_t n_tokens_out = 0;
-                        int32_t res = input_tokens.process_chunk(ctx_tgt, mctx, slot.prompt.n_tokens(), slot.prompt.tokens.pos_next(), slot.id, n_tokens_out);
+                        int32_t res = input_tokens.process_chunk(
+                            ctx_tgt, mctx,
+                            slot.prompt.n_tokens(), slot.prompt.tokens.pos_next(), slot.id,
+                            n_tokens_out,
+                            mtmd_post_decode_callback, this);
                         if (res != 0) {
                             SLT_ERR(slot, "failed to process image, res = %d\n", res);
                             send_error(slot, "failed to process image", ERROR_TYPE_SERVER);
                             slot.release();
                             continue;
-                        }
-
-                        if (ctx_dft && llama_get_ctx_other(ctx_dft.get()) != ctx_tgt) {
-                            // TODO: in the future, figure out how to infuse target embeddings to the images
-                            //       for now, we skip this for simplicity
-                            //       maybe we simply need to call `common_speculative_process()` on the mtmd batches in the `process_chunk` above?
-                            //       [TAG_MTMD_DRAFT_PROCESSING]
-                            res = input_tokens.process_chunk(ctx_dft.get(), mctx, slot.prompt.n_tokens(), slot.prompt.tokens.pos_next(), slot.id, n_tokens_out);
-                            if (res != 0) {
-                                GGML_ABORT("failed to process multi-modal data on draft context\n");
-                            }
                         }
 
                         slot.n_prompt_tokens_processed += n_tokens_out;
