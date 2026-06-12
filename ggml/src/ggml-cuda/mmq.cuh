@@ -4066,7 +4066,7 @@ void mul_mat_q_case(ggml_backend_cuda_context & ctx, const mmq_args & args, cuda
     int mmq_x_best  = 0;
     int ntiles_x_best = INT_MAX;
 
-        int64_t ncols_picker = args.ncols_max;
+    int64_t ncols_picker = args.ncols_max;
     if (args.expert_bounds != nullptr && GGML_CUDA_CC_IS_RDNA3(cc) && args.nchannels_x > 0) {
         // In routed MoE, ncols_max is the worst-case per-expert width. Size the
         // MMQ N-tile from the typical routed width while it is below the RDNA3
