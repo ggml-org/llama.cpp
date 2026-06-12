@@ -43,8 +43,8 @@ OutputVector translate_norm(const NodeContext & context) {
     memcpy(&eps, context.get_output_op_params(), sizeof(float));
 
     // Step 6: Calculate std = sqrt(variance + eps)
-    auto std_dev = std::make_shared<ov::op::v0::Sqrt>(
-        std::make_shared<ov::op::v1::Add>(variance, ov::op::v0::Constant::create(ov::element::f32, ov::Shape{1}, {eps})));
+    auto std_dev = std::make_shared<ov::op::v0::Sqrt>(std::make_shared<ov::op::v1::Add>(
+        variance, ov::op::v0::Constant::create(ov::element::f32, ov::Shape{1}, {eps})));
 
     // Step 7: Normalize: output = (input - mean) / std
     auto res = std::make_shared<ov::op::v1::Divide>(centered, std_dev);

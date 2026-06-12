@@ -5,7 +5,6 @@
 #include <climits>
 #include <cstdint>
 #include <memory>
-#include <vector>
 #include <openvino/core/node.hpp>
 #include <openvino/op/add.hpp>
 #include <openvino/op/concat.hpp>
@@ -13,6 +12,7 @@
 #include <openvino/op/reshape.hpp>
 #include <openvino/op/slice.hpp>
 #include <openvino/op/transpose.hpp>
+#include <vector>
 
 namespace ov {
 namespace frontend {
@@ -37,7 +37,7 @@ OutputVector translate_permute(const NodeContext & context) {
         src = process_view_input_new(context, 0);
     }
     std::vector<int64_t> perm_values{0, 2, 1, 3};
-    const int32_t* op_params = context.get_output_op_params();
+    const int32_t * op_params = context.get_output_op_params();
     if (op_params != nullptr) {
         for (size_t input_axis = 0; input_axis < perm_values.size(); ++input_axis) {
             const size_t output_axis = static_cast<size_t>(op_params[input_axis]);
@@ -117,7 +117,8 @@ OutputVector translate_permute(const NodeContext & context) {
             if (n_seq == 1) {
                 after_seq_slice = src_reshaped;
             } else {
-                after_seq_slice = std::make_shared<ov::op::v8::Slice>(src_reshaped, seq_active_start, seq_active_end, one, zero);
+                after_seq_slice =
+                    std::make_shared<ov::op::v8::Slice>(src_reshaped, seq_active_start, seq_active_end, one, zero);
             }
             auto slice2 = std::make_shared<ov::op::v8::Slice>(after_seq_slice, zero, attention_size, one, one);
             res = std::make_shared<ov::op::v1::Transpose>(slice2, perm);
@@ -130,7 +131,8 @@ OutputVector translate_permute(const NodeContext & context) {
             if (n_seq == 1) {
                 after_seq_slice = src_reshaped;
             } else {
-                after_seq_slice = std::make_shared<ov::op::v8::Slice>(src_reshaped, seq_active_start, seq_active_end, one, zero);
+                after_seq_slice =
+                    std::make_shared<ov::op::v8::Slice>(src_reshaped, seq_active_start, seq_active_end, one, zero);
             }
             auto slice2 = std::make_shared<ov::op::v8::Slice>(after_seq_slice, zero, attention_size, one, three);
             res = slice2;

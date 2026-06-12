@@ -1,9 +1,11 @@
 #include "../op_table.h"
 #include "../utils.h"
+
 #include <openvino/op/constant.hpp>
 #include <openvino/op/reshape.hpp>
 #include <openvino/op/slice.hpp>
 #include <set>
+
 namespace ov {
 namespace frontend {
 namespace ggml {
@@ -26,11 +28,15 @@ OutputVector translate_view(const NodeContext & context) {
 
     int64_t src_elems = 1, dst_elems = 1;
     for (int64_t i = 0; i < src_shape.rank().get_length(); ++i) {
-        if (src_shape[i].is_dynamic()) return {input};
+        if (src_shape[i].is_dynamic()) {
+            return {input};
+        }
         src_elems *= src_shape[i].get_length();
     }
     for (int64_t i = 0; i < dst_shape.rank().get_length(); ++i) {
-        if (dst_shape[i].is_dynamic()) return {input};
+        if (dst_shape[i].is_dynamic()) {
+            return {input};
+        }
         dst_elems *= dst_shape[i].get_length();
     }
 
@@ -82,7 +88,9 @@ OutputVector translate_view(const NodeContext & context) {
         ov_stride_for_dim *= src_ov_shape[i];
     }
     size_t elem_size = src_stride.back();
-    if (elem_size == 0) elem_size = 1;
+    if (elem_size == 0) {
+        elem_size = 1;
+    }
 
     int64_t begin_val = 0;
     if (ov_stride_for_dim > 0 && elem_size > 0) {
@@ -94,12 +102,11 @@ OutputVector translate_view(const NodeContext & context) {
         return {input};
     }
 
-    auto sliced = std::make_shared<ov::op::v8::Slice>(
-        input,
-        ov::op::v0::Constant::create(ov::element::i64, {1}, {begin_val}),
-        ov::op::v0::Constant::create(ov::element::i64, {1}, {end_val}),
-        ov::op::v0::Constant::create(ov::element::i64, {1}, {1}),
-        ov::op::v0::Constant::create(ov::element::i64, {1}, {slice_dim}));
+    auto sliced =
+        std::make_shared<ov::op::v8::Slice>(input, ov::op::v0::Constant::create(ov::element::i64, {1}, {begin_val}),
+                                            ov::op::v0::Constant::create(ov::element::i64, {1}, {end_val}),
+                                            ov::op::v0::Constant::create(ov::element::i64, {1}, {1}),
+                                            ov::op::v0::Constant::create(ov::element::i64, {1}, {slice_dim}));
 
     sliced->set_friendly_name(context.get_output_name());
     return {sliced->output(0)};

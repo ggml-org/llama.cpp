@@ -2,9 +2,9 @@
 #include "../op_table.h"
 #include "../utils.h"
 
-#include <cstring>
-#include <cstdint>
 #include <cmath>
+#include <cstdint>
+#include <cstring>
 #include <memory>
 #include <openvino/frontend/exception.hpp>
 #include <openvino/op/add.hpp>
@@ -36,7 +36,8 @@ OutputVector translate_soft_max(const NodeContext & context) {
 
     // Apply scale first: logits = src0 * scale
     if (scale != 1.0f) {
-        auto scale_const = std::make_shared<ov::op::v0::Constant>(ov::element::f32, ov::Shape{}, std::vector<float>{scale});
+        auto scale_const =
+            std::make_shared<ov::op::v0::Constant>(ov::element::f32, ov::Shape{}, std::vector<float>{scale});
         logits = std::make_shared<ov::op::v1::Multiply>(logits, scale_const);
     }
 
@@ -63,8 +64,7 @@ OutputVector translate_soft_max(const NodeContext & context) {
 
         if (max_bias > 0.0f) {
             auto out_shape = context.get_output_shape().to_shape();
-            FRONT_END_CHECK_IMPLEMENTED(out_shape.size() == 4,
-                                        "OpenVINO softmax ALiBi path expects rank-4 tensor");
+            FRONT_END_CHECK_IMPLEMENTED(out_shape.size() == 4, "OpenVINO softmax ALiBi path expects rank-4 tensor");
 
             const uint32_t n_head = static_cast<uint32_t>(out_shape[1]);
             FRONT_END_CHECK_IMPLEMENTED(n_head > 0, "OpenVINO softmax ALiBi path expects n_head > 0");
@@ -75,8 +75,8 @@ OutputVector translate_soft_max(const NodeContext & context) {
 
             std::vector<float> slopes(n_head);
             for (uint32_t h = 0; h < n_head; ++h) {
-                slopes[h] = h < n_head_log2 ? std::pow(m0, static_cast<float>(h + 1))
-                                             : std::pow(m1, static_cast<float>(2 * (h - n_head_log2) + 1));
+                slopes[h] = h < n_head_log2 ? std::pow(m0, static_cast<float>(h + 1)) :
+                                              std::pow(m1, static_cast<float>(2 * (h - n_head_log2) + 1));
             }
 
             ov::Output<ov::Node> slope_node =
@@ -85,8 +85,8 @@ OutputVector translate_soft_max(const NodeContext & context) {
                 slope_node = std::make_shared<ov::op::v0::Convert>(slope_node, mask.get_element_type());
             }
 
-            auto slope_shape = std::make_shared<ov::op::v0::Constant>(ov::element::i64, ov::Shape{4},
-                                                                       std::vector<int64_t>{1, static_cast<int64_t>(n_head), 1, 1});
+            auto slope_shape = std::make_shared<ov::op::v0::Constant>(
+                ov::element::i64, ov::Shape{4}, std::vector<int64_t>{1, static_cast<int64_t>(n_head), 1, 1});
             auto slope_4d = std::make_shared<ov::op::v1::Reshape>(slope_node, slope_shape, false);
             mask = std::make_shared<ov::op::v1::Multiply>(mask, slope_4d);
         }

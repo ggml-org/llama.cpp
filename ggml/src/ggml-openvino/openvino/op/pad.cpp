@@ -6,8 +6,8 @@
 #include <openvino/op/constant.hpp>
 #include <openvino/op/gather.hpp>
 #include <openvino/op/pad.hpp>
-#include <openvino/op/shape_of.hpp>
 #include <openvino/op/reshape.hpp>
+#include <openvino/op/shape_of.hpp>
 #include <vector>
 
 namespace ov {
@@ -68,8 +68,8 @@ OutputVector translate_pad(const NodeContext & context) {
     const int32_t * op_params = context.get_output_op_params();
     FRONT_END_CHECK_IMPLEMENTED(op_params != nullptr, "PAD requires output op params");
 
-    const std::array<int32_t, 8> pads = {
-        op_params[0], op_params[1], op_params[2], op_params[3], op_params[4], op_params[5], op_params[6], op_params[7]};
+    const std::array<int32_t, 8> pads = {op_params[0], op_params[1], op_params[2], op_params[3],
+                                         op_params[4], op_params[5], op_params[6], op_params[7]};
     const bool circular = op_params[8] != 0;
 
     if (circular) {
@@ -83,7 +83,8 @@ OutputVector translate_pad(const NodeContext & context) {
     auto pads_begin_node = ov::op::v0::Constant::create(ov::element::i64, {pads_begin.size()}, pads_begin);
     auto pads_end_node = ov::op::v0::Constant::create(ov::element::i64, {pads_end.size()}, pads_end);
     auto pad_value = ov::op::v0::Constant::create(context.get_input_type(0), ov::Shape{}, {0});
-    auto res = std::make_shared<ov::op::v1::Pad>(input, pads_begin_node, pads_end_node, pad_value, ov::op::PadMode::CONSTANT);
+    auto res =
+        std::make_shared<ov::op::v1::Pad>(input, pads_begin_node, pads_end_node, pad_value, ov::op::PadMode::CONSTANT);
 
     return rename_outputs_with_suffix({res}, context.get_name());
 }

@@ -3,9 +3,9 @@
 #include "../utils.h"
 
 #include <memory>
+#include <openvino/op/constant.hpp>
 #include <openvino/op/convert.hpp>
 #include <openvino/op/reshape.hpp>
-#include <openvino/op/constant.hpp>
 
 namespace ov {
 namespace frontend {

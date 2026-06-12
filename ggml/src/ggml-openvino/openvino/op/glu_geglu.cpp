@@ -36,12 +36,12 @@ OutputVector translate_glu_geglu(const NodeContext & context) {
         int64_t last_dim_val = combined_shape[combined_shape.rank().get_length() - 1].get_length();
         int64_t nc = last_dim_val / 2;
 
-        auto axis   = ov::op::v0::Constant::create(ov::element::i64, {1}, {-1});
-        auto step   = ov::op::v0::Constant::create(ov::element::i64, {1}, {1});
+        auto axis = ov::op::v0::Constant::create(ov::element::i64, {1}, {-1});
+        auto step = ov::op::v0::Constant::create(ov::element::i64, {1}, {1});
         auto start0 = ov::op::v0::Constant::create(ov::element::i64, {1}, {0});
-        auto stop0  = ov::op::v0::Constant::create(ov::element::i64, {1}, {nc});
+        auto stop0 = ov::op::v0::Constant::create(ov::element::i64, {1}, {nc});
         auto start1 = ov::op::v0::Constant::create(ov::element::i64, {1}, {nc});
-        auto stop1  = ov::op::v0::Constant::create(ov::element::i64, {1}, {2 * nc});
+        auto stop1 = ov::op::v0::Constant::create(ov::element::i64, {1}, {2 * nc});
 
         src0 = std::make_shared<ov::op::v8::Slice>(combined, start0, stop0, step, axis);
         src1 = std::make_shared<ov::op::v8::Slice>(combined, start1, stop1, step, axis);
@@ -55,8 +55,8 @@ OutputVector translate_glu_geglu(const NodeContext & context) {
 
     if (context.is_static()) {
         // TODO: Temporary solution for NPU accuracy issue due to fp16 overflow
-       // To be removed once permanent solution is implemented
-       // Justification:
+        // To be removed once permanent solution is implemented
+        // Justification:
         // For |x| > 5, GELU(x) ≈ max(x, 0)  (behaves like ReLU)
         // So Clamp(-10, 10) only affects values where GELU would return ≈ x anyway.
         // The only loss: values > 10 get mapped to 10 instead of x.

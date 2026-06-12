@@ -132,9 +132,9 @@ struct ggml_openvino_weight_extra : public ggml_openvino_extra_base {
 
 // Extra data for quantized weight tensors - stores extracted weights/scales/zp and weight node
 struct ggml_openvino_quantized_weight_extra : public ggml_openvino_extra_base {
-    ov::Tensor weights;   // U4 or U8 extracted weights
-    ov::Tensor scales;    // F16 scales
-    ov::Tensor zp;        // U4 or U8 zero points (same type as weights)
+    ov::Tensor weights;                     // U4 or U8 extracted weights
+    ov::Tensor scales;                      // F16 scales
+    ov::Tensor zp;                          // U4 or U8 zero points (same type as weights)
     std::shared_ptr<ov::Node> weight_node;  // Pre-built OpenVINO weight subgraph
 
     ggml_openvino_quantized_weight_extra(ov::Tensor w, ov::Tensor s, ov::Tensor z, std::shared_ptr<ov::Node> n) :
@@ -149,8 +149,9 @@ struct ggml_openvino_quantized_weight_extra : public ggml_openvino_extra_base {
 struct ggml_openvino_tensor_extra : public ggml_openvino_extra_base {
     std::shared_ptr<ov::Tensor> tensor;  // For direct use with infer_request
 
-    explicit ggml_openvino_tensor_extra(std::shared_ptr<ov::Tensor> t)
-        : ggml_openvino_extra_base(Type::TENSOR), tensor(std::move(t)) {}
+    explicit ggml_openvino_tensor_extra(std::shared_ptr<ov::Tensor> t) :
+        ggml_openvino_extra_base(Type::TENSOR),
+        tensor(std::move(t)) {}
 };
 
 // =====================================================
@@ -169,11 +170,11 @@ struct ggml_openvino_extracted_layout {
     size_t zp_size = 0;         // Size of zero points in bytes (U4 or U8)
     bool is_u4;                 // true for U4 weights, false for U8
     int64_t weights_per_block;  // weights per scale/zp block
-    bool is_symmetric;        // true for symmetric quantization
+    bool is_symmetric;          // true for symmetric quantization
 
     // Requantization info
-    bool is_requant = false;                      // true if this tensor needs requantization
-    std::optional<ExtraQuantType> requant_type;   // target requant type if is_requant
+    bool is_requant = false;                     // true if this tensor needs requantization
+    std::optional<ExtraQuantType> requant_type;  // target requant type if is_requant
 };
 
 // Calculate the buffer layout for extracted quantized data

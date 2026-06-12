@@ -4,14 +4,14 @@
 #include "ggml-backend.h"
 #include "ggml-impl.h"
 #include "ggml-openvino-extra.h"
-#include "ggml-openvino/utils.h"
 #include "ggml-openvino/openvino/op_table.h"
+#include "ggml-openvino/utils.h"
 #include "ggml-quants.h"
 #include "ggml.h"
 
 #include <atomic>
-#include <cstdlib>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <memory>
 #include <mutex>
@@ -367,11 +367,9 @@ static bool ggml_backend_openvino_buffer_cpy_tensor(ggml_backend_buffer_t buffer
             ggml_backend_openvino_buffer_context * src_ctx =
                 (ggml_backend_openvino_buffer_context *) src->buffer->context;
             if (src_ctx->is_remote) {
-                cl_int err =
-                    mem_cpy_fn(queue, CL_TRUE, dst->data, src->data, ggml_nbytes(src), 0, nullptr, nullptr);
+                cl_int err = mem_cpy_fn(queue, CL_TRUE, dst->data, src->data, ggml_nbytes(src), 0, nullptr, nullptr);
                 if (err != CL_SUCCESS) {
-                    GGML_LOG_ERROR("%s: clEnqueueMemcpyINTEL (device-to-device) failed with error %d\n", __func__,
-                                   err);
+                    GGML_LOG_ERROR("%s: clEnqueueMemcpyINTEL (device-to-device) failed with error %d\n", __func__, err);
                     return false;
                 }
                 return true;
@@ -825,9 +823,12 @@ static bool is_gemma3n_flash_attn_pattern(const ggml_tensor * op) {
         return false;
     }
 
-    const ggml_tensor * q_base = op->src[0] != nullptr && op->src[0]->src[0] != nullptr ? op->src[0]->src[0]->src[0] : nullptr;
-    const ggml_tensor * k_base = op->src[1] != nullptr && op->src[1]->src[0] != nullptr ? op->src[1]->src[0]->src[0] : nullptr;
-    const ggml_tensor * v_base = op->src[2] != nullptr && op->src[2]->src[0] != nullptr ? op->src[2]->src[0]->src[0] : nullptr;
+    const ggml_tensor * q_base =
+        op->src[0] != nullptr && op->src[0]->src[0] != nullptr ? op->src[0]->src[0]->src[0] : nullptr;
+    const ggml_tensor * k_base =
+        op->src[1] != nullptr && op->src[1]->src[0] != nullptr ? op->src[1]->src[0]->src[0] : nullptr;
+    const ggml_tensor * v_base =
+        op->src[2] != nullptr && op->src[2]->src[0] != nullptr ? op->src[2]->src[0]->src[0] : nullptr;
 
     if (q_base == nullptr || q_base->op != GGML_OP_ROPE) {
         return false;
@@ -836,8 +837,8 @@ static bool is_gemma3n_flash_attn_pattern(const ggml_tensor * op) {
     // gemma3n direct attention path (no KV cache): q=ROPE, k=ROPE, v=RMS_NORM
     // Only match this specific pattern to avoid falsely catching other models
     // (e.g. Gemma4) that also use scale=1.0 with KV-cache backed attention.
-    const bool is_qkv_direct = k_base != nullptr && v_base != nullptr &&
-                               k_base->op == GGML_OP_ROPE && v_base->op == GGML_OP_RMS_NORM;
+    const bool is_qkv_direct =
+        k_base != nullptr && v_base != nullptr && k_base->op == GGML_OP_ROPE && v_base->op == GGML_OP_RMS_NORM;
 
     return is_qkv_direct;
 }
@@ -877,7 +878,7 @@ static bool mul_mat_id_requires_large_tmp(const ggml_tensor * op) {
         return true;
     }
 
-    static constexpr size_t mul_mat_id_tmp_limit = 1ULL << 30; // 1 GiB
+    static constexpr size_t mul_mat_id_tmp_limit = 1ULL << 30;  // 1 GiB
     return tmp_bytes > mul_mat_id_tmp_limit;
 }
 
@@ -924,9 +925,7 @@ static bool is_op_unsupported_case(const ggml_tensor * op) {
     }
     case GGML_OP_ADD_ID: {
         // Keep support aligned with the CPU backend implementation, which only handles f32 inputs/output and i32 ids.
-        if (op->type != GGML_TYPE_F32 ||
-            op->src[0]->type != GGML_TYPE_F32 ||
-            op->src[1]->type != GGML_TYPE_F32 ||
+        if (op->type != GGML_TYPE_F32 || op->src[0]->type != GGML_TYPE_F32 || op->src[1]->type != GGML_TYPE_F32 ||
             op->src[2]->type != GGML_TYPE_I32) {
             return true;
         }
@@ -973,8 +972,7 @@ static bool is_op_unsupported_case(const ggml_tensor * op) {
         // GPU execution of the MoE routing weights softmax is numerically unstable
         // when fused with the surrounding GET_ROWS/reshape path. Keep this softmax
         // on CPU so the scheduler splits at the same boundary that restores parity.
-        if (op->src[0] != nullptr && op->src[0]->op == GGML_OP_RESHAPE &&
-            op->src[0]->src[0] != nullptr &&
+        if (op->src[0] != nullptr && op->src[0]->op == GGML_OP_RESHAPE && op->src[0]->src[0] != nullptr &&
             strncmp(op->src[0]->src[0]->name, "ffn_moe_weights", sizeof("ffn_moe_weights") - 1) == 0) {
             return true;
         }
@@ -989,7 +987,7 @@ static bool is_op_unsupported_case(const ggml_tensor * op) {
         if (op->src[0]->op == GGML_OP_PERMUTE) {
             return true;
         }
-         break;
+        break;
     }
     case GGML_OP_CLAMP: {
         if (strncmp(op->name, "ffn_moe_weights_sum_clamped", sizeof("ffn_moe_weights_sum_clamped") - 1) == 0) {
@@ -1166,9 +1164,9 @@ static bool is_op_unsupported_case(const ggml_tensor * op) {
 static bool ggml_backend_openvino_device_supports_op(ggml_backend_dev_t dev, const ggml_tensor * op) {
     GGML_ASSERT(dev->reg != nullptr);
 
-    static std::unordered_set<ggml_type> supported_types{GGML_TYPE_F32,  GGML_TYPE_F16,  GGML_TYPE_BF16, GGML_TYPE_I64,
-                                               GGML_TYPE_I32,  GGML_TYPE_Q4_0, GGML_TYPE_Q4_1, GGML_TYPE_Q4_K,
-                                               GGML_TYPE_Q5_1, GGML_TYPE_Q5_K, GGML_TYPE_Q8_0, GGML_TYPE_Q6_K};
+    static std::unordered_set<ggml_type> supported_types{
+        GGML_TYPE_F32,  GGML_TYPE_F16,  GGML_TYPE_BF16, GGML_TYPE_I64,  GGML_TYPE_I32,  GGML_TYPE_Q4_0,
+        GGML_TYPE_Q4_1, GGML_TYPE_Q4_K, GGML_TYPE_Q5_1, GGML_TYPE_Q5_K, GGML_TYPE_Q8_0, GGML_TYPE_Q6_K};
 
     // derive supported op sets from the op_table map, keys in
     // the map use the full macro name (e.g. "GGML_OP_ADD"), while

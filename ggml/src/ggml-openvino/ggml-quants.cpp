@@ -158,8 +158,8 @@ void extract_q5_1_data(const ggml_tensor * tensor,
             const uint8_t hi = qs[j] >> 4;
             const uint8_t bit_lo = (qh >> j) & 1;
             const uint8_t bit_hi = (qh >> (j + qk / 2)) & 1;
-            dst[j] = lo | (bit_lo << 4);                 // first 16 weights
-            dst[j + qk / 2] = hi | (bit_hi << 4);        // last 16 weights
+            dst[j] = lo | (bit_lo << 4);           // first 16 weights
+            dst[j + qk / 2] = hi | (bit_hi << 4);  // last 16 weights
         }
     };
 

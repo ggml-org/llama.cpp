@@ -69,8 +69,8 @@ OutputVector translate_mul_mat_id(const NodeContext & context) {
             get_dimensions(activations_shape, {2}),
         },
         0);
-    ov::Output<ov::Node> acts_broadcasted = std::make_shared<ov::op::v3::Broadcast>(activations, acts_target_dims,
-                                                                                     ov::op::BroadcastType::BIDIRECTIONAL);
+    ov::Output<ov::Node> acts_broadcasted =
+        std::make_shared<ov::op::v3::Broadcast>(activations, acts_target_dims, ov::op::BroadcastType::BIDIRECTIONAL);
 
     auto unsqueeze_axes = ov::op::v0::Constant::create(ov::element::i64, {1}, {2});
     auto activations_expanded = std::make_shared<ov::op::v0::Unsqueeze>(acts_broadcasted, unsqueeze_axes);
@@ -79,8 +79,7 @@ OutputVector translate_mul_mat_id(const NodeContext & context) {
     auto output_shape = context.get_output_shape();
     FRONT_END_OP_CONVERSION_CHECK(output_shape.rank().is_static() && output_shape.rank().get_length() == 4,
                                   "Unexpected MUL_MAT_ID output rank");
-    FRONT_END_OP_CONVERSION_CHECK(output_shape[3].is_static(),
-                                  "Expected static row dimension for MUL_MAT_ID output");
+    FRONT_END_OP_CONVERSION_CHECK(output_shape[3].is_static(), "Expected static row dimension for MUL_MAT_ID output");
     const auto row_dim_value = output_shape[3].get_length();
     auto row_dim = ov::op::v0::Constant::create(ov::element::i64, {1}, {row_dim_value});
 

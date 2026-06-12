@@ -80,7 +80,6 @@ ov::pass::MakeStateful::ParamResPairs get_kv_param_res_pairs(
 
 void add_sliced_mask_stateful(TensorMap & tensor_map) {
     auto create_sliced_mask = [&](const std::string & mask_name, const std::string & sliced_name) {
-
         if ((tensor_map.find(mask_name) != tensor_map.end()) &&
             (tensor_map.find("token_len_per_seq") != tensor_map.end())) {
             auto token_len_per_seq = tensor_map.at("token_len_per_seq").get_node_shared_ptr();
@@ -104,9 +103,6 @@ void add_sliced_mask_stateful(TensorMap & tensor_map) {
             mask_sliced = std::make_shared<ov::op::v8::Slice>(mask, zero, last_inp_pos_inc, step, axes);
             mask_sliced = std::make_shared<ov::op::v0::Convert>(mask_sliced, ov::element::f16);
             mask_sliced->set_friendly_name(sliced_name);
-
-
-
 
             tensor_map.insert({sliced_name, mask_sliced->output(0)});
         }
@@ -295,19 +291,19 @@ std::shared_ptr<Model> TranslateSession::apply_transformations(std::shared_ptr<M
         if (ggml_model_decoder->is_stateful()) {
             auto output_names = ggml_model_decoder->get_model_output_names();
             std::map<std::string, int> model_output_indexes;
-            for (size_t i=0; i<output_names.size(); i++) {
+            for (size_t i = 0; i < output_names.size(); i++) {
                 model_output_indexes.insert(std::make_pair(output_names[i], i));
             }
             ov::preprocess::PrePostProcessor ppp(model);
-            for (size_t i=0; i<model->get_output_size(); i++) {
+            for (size_t i = 0; i < model->get_output_size(); i++) {
                 auto output_friendly_name = model->output(i).get_node_shared_ptr()->get_friendly_name();
                 auto output_id = model_output_indexes[output_friendly_name];
                 auto model_output_shape = model->output(i).get_partial_shape();
                 auto decoder_output_shape = ggml_model_decoder->get_output_shape(output_id);
-                if (model_output_shape.rank().is_static() && decoder_output_shape.rank().is_static()
-                    && model_output_shape.rank().get_length() + 1 == decoder_output_shape.rank().get_length()
-                    && decoder_output_shape[0].is_static() && decoder_output_shape[0].get_length() == 1) {
-                    ppp.output(i).postprocess().custom([](const ov::Output<ov::Node>& node) {
+                if (model_output_shape.rank().is_static() && decoder_output_shape.rank().is_static() &&
+                    model_output_shape.rank().get_length() + 1 == decoder_output_shape.rank().get_length() &&
+                    decoder_output_shape[0].is_static() && decoder_output_shape[0].get_length() == 1) {
+                    ppp.output(i).postprocess().custom([](const ov::Output<ov::Node> & node) {
                         auto axes = ov::op::v0::Constant::create(ov::element::i32, ov::Shape{1}, {0});
                         return std::make_shared<ov::op::v0::Unsqueeze>(node, axes);
                     });

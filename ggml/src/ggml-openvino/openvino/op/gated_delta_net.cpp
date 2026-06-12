@@ -94,37 +94,37 @@ static OutputVector translate_gated_delta_net_ref(const NodeContext & context) {
     // OV:   g[B, T, H_v, 1 or S_v], beta[B, T, H_v, 1]
     // ggml: state[S_v, S_v, H_v, B]
     // OV:   state[B, H_v, S_v, S_v]
-    auto q     = process_view_input_new(context, 0);
-    auto k     = process_view_input_new(context, 1);
-    auto v     = process_view_input_new(context, 2);
-    auto g     = process_view_input_new(context, 3);
-    auto beta  = process_view_input_new(context, 4);
+    auto q = process_view_input_new(context, 0);
+    auto k = process_view_input_new(context, 1);
+    auto v = process_view_input_new(context, 2);
+    auto g = process_view_input_new(context, 3);
+    auto beta = process_view_input_new(context, 4);
     auto state = process_view_input_new(context, 5);
 
     auto v_shape = context.get_input_shape(2).to_shape();  // [B, T, H_v, S_v]
     auto q_shape = context.get_input_shape(0).to_shape();  // [B, T, H_k, S_k]
     auto g_shape = context.get_input_shape(3).to_shape();  // [B, T, H_v, 1 or S_v]
 
-    const int64_t B     = v_shape[0];
-    const int64_t T     = v_shape[1];
-    const int64_t H_v   = v_shape[2];
-    const int64_t S_v   = v_shape[3];
-    const int64_t H_k   = q_shape[2];
-    const bool    kda   = (g_shape[3] == (size_t) S_v);
+    const int64_t B = v_shape[0];
+    const int64_t T = v_shape[1];
+    const int64_t H_v = v_shape[2];
+    const int64_t S_v = v_shape[3];
+    const int64_t H_k = q_shape[2];
+    const bool kda = (g_shape[3] == (size_t) S_v);
 
-    const int64_t rq1   = H_v / H_k;  // head repeat factor
-    const float   scale = 1.0f / std::sqrt((float) S_v);
+    const int64_t rq1 = H_v / H_k;  // head repeat factor
+    const float scale = 1.0f / std::sqrt((float) S_v);
 
     auto axis_1 = ov::op::v0::Constant::create(ov::element::i64, {1}, {1});
     auto axis_2 = ov::op::v0::Constant::create(ov::element::i64, {1}, {2});
 
     // Transpose inputs from [B, T, H, S] to [B, H, T, S] for easier per-head processing
     auto perm_0213 = ov::op::v0::Constant::create(ov::element::i64, {4}, std::vector<int64_t>{0, 2, 1, 3});
-    auto q_t = std::make_shared<ov::op::v1::Transpose>(q, perm_0213);      // [B, H_k, T, S_k]
-    auto k_t = std::make_shared<ov::op::v1::Transpose>(k, perm_0213);      // [B, H_k, T, S_k]
-    auto v_t = std::make_shared<ov::op::v1::Transpose>(v, perm_0213);      // [B, H_v, T, S_v]
-    auto g_t = std::make_shared<ov::op::v1::Transpose>(g, perm_0213);      // [B, H_v, T, 1 or S_v]
-    auto beta_t = std::make_shared<ov::op::v1::Transpose>(beta, perm_0213); // [B, H_v, T, 1]
+    auto q_t = std::make_shared<ov::op::v1::Transpose>(q, perm_0213);        // [B, H_k, T, S_k]
+    auto k_t = std::make_shared<ov::op::v1::Transpose>(k, perm_0213);        // [B, H_k, T, S_k]
+    auto v_t = std::make_shared<ov::op::v1::Transpose>(v, perm_0213);        // [B, H_v, T, S_v]
+    auto g_t = std::make_shared<ov::op::v1::Transpose>(g, perm_0213);        // [B, H_v, T, 1 or S_v]
+    auto beta_t = std::make_shared<ov::op::v1::Transpose>(beta, perm_0213);  // [B, H_v, T, 1]
 
     // Broadcast Q, K heads to match V heads if GQA is used (H_v > H_k)
     ov::Output<ov::Node> q_bh = q_t;
@@ -133,10 +133,11 @@ static OutputVector translate_gated_delta_net_ref(const NodeContext & context) {
         auto q_unsq = std::make_shared<ov::op::v0::Unsqueeze>(q_t, axis_2);  // [B, H_k, 1, T, S]
         auto k_unsq = std::make_shared<ov::op::v0::Unsqueeze>(k_t, axis_2);  // [B, H_k, 1, T, S]
 
-        auto bcast_shape = ov::op::v0::Constant::create(
-            ov::element::i64, {5}, std::vector<int64_t>{1, 1, rq1, 1, 1});
-        auto q_bcast = std::make_shared<ov::op::v3::Broadcast>(q_unsq, bcast_shape, ov::op::BroadcastType::BIDIRECTIONAL);
-        auto k_bcast = std::make_shared<ov::op::v3::Broadcast>(k_unsq, bcast_shape, ov::op::BroadcastType::BIDIRECTIONAL);
+        auto bcast_shape = ov::op::v0::Constant::create(ov::element::i64, {5}, std::vector<int64_t>{1, 1, rq1, 1, 1});
+        auto q_bcast =
+            std::make_shared<ov::op::v3::Broadcast>(q_unsq, bcast_shape, ov::op::BroadcastType::BIDIRECTIONAL);
+        auto k_bcast =
+            std::make_shared<ov::op::v3::Broadcast>(k_unsq, bcast_shape, ov::op::BroadcastType::BIDIRECTIONAL);
 
         // Transpose [B, H_k, rq1, T, S] -> [B, rq1, H_k, T, S] so that reshape merges
         // as [rq1, H_k] giving repeat-blocks pattern matching CPU: iq1 = iv1 % H_k
@@ -144,8 +145,7 @@ static OutputVector translate_gated_delta_net_ref(const NodeContext & context) {
         auto q_transposed = std::make_shared<ov::op::v1::Transpose>(q_bcast, perm_5d);
         auto k_transposed = std::make_shared<ov::op::v1::Transpose>(k_bcast, perm_5d);
 
-        auto new_shape = ov::op::v0::Constant::create(
-            ov::element::i64, {4}, std::vector<int64_t>{B, H_v, T, S_v});
+        auto new_shape = ov::op::v0::Constant::create(ov::element::i64, {4}, std::vector<int64_t>{B, H_v, T, S_v});
         q_bh = std::make_shared<ov::op::v1::Reshape>(q_transposed, new_shape, false);
         k_bh = std::make_shared<ov::op::v1::Reshape>(k_transposed, new_shape, false);
     }
@@ -156,11 +156,11 @@ static OutputVector translate_gated_delta_net_ref(const NodeContext & context) {
         return std::make_shared<ov::op::v1::Reshape>(x, shape, false);
     };
 
-    auto q_m = merge_bh(q_bh, S_v);                // [B*H_v, T, S_v]
-    auto k_m = merge_bh(k_bh, S_v);                // [B*H_v, T, S_v]
-    auto v_m = merge_bh(v_t, S_v);                 // [B*H_v, T, S_v]
-    auto g_m = merge_bh(g_t, kda ? S_v : 1);       // [B*H_v, T, 1 or S_v]
-    auto beta_m = merge_bh(beta_t, 1);             // [B*H_v, T, 1]
+    auto q_m = merge_bh(q_bh, S_v);           // [B*H_v, T, S_v]
+    auto k_m = merge_bh(k_bh, S_v);           // [B*H_v, T, S_v]
+    auto v_m = merge_bh(v_t, S_v);            // [B*H_v, T, S_v]
+    auto g_m = merge_bh(g_t, kda ? S_v : 1);  // [B*H_v, T, 1 or S_v]
+    auto beta_m = merge_bh(beta_t, 1);        // [B*H_v, T, 1]
 
     // State: [B, H_v, S_v, S_v] -> [B*H_v, S_v, S_v]
     auto state_shape = ov::op::v0::Constant::create(ov::element::i64, {3}, std::vector<int64_t>{B * H_v, S_v, S_v});
@@ -171,12 +171,12 @@ static OutputVector translate_gated_delta_net_ref(const NodeContext & context) {
     // --- Build Loop body ---
     // Body parameters (no iteration counter needed, use -1 in special ports)
     auto body_state = std::make_shared<ov::op::v0::Parameter>(ov::element::f32, ov::PartialShape::dynamic());
-    auto body_q     = std::make_shared<ov::op::v0::Parameter>(ov::element::f32, ov::PartialShape::dynamic());
-    auto body_k     = std::make_shared<ov::op::v0::Parameter>(ov::element::f32, ov::PartialShape::dynamic());
-    auto body_v     = std::make_shared<ov::op::v0::Parameter>(ov::element::f32, ov::PartialShape::dynamic());
-    auto body_g     = std::make_shared<ov::op::v0::Parameter>(ov::element::f32, ov::PartialShape::dynamic());
-    auto body_beta  = std::make_shared<ov::op::v0::Parameter>(ov::element::f32, ov::PartialShape::dynamic());
-    auto body_iter  = std::make_shared<ov::op::v0::Parameter>(ov::element::i64, ov::Shape{1});
+    auto body_q = std::make_shared<ov::op::v0::Parameter>(ov::element::f32, ov::PartialShape::dynamic());
+    auto body_k = std::make_shared<ov::op::v0::Parameter>(ov::element::f32, ov::PartialShape::dynamic());
+    auto body_v = std::make_shared<ov::op::v0::Parameter>(ov::element::f32, ov::PartialShape::dynamic());
+    auto body_g = std::make_shared<ov::op::v0::Parameter>(ov::element::f32, ov::PartialShape::dynamic());
+    auto body_beta = std::make_shared<ov::op::v0::Parameter>(ov::element::f32, ov::PartialShape::dynamic());
+    auto body_iter = std::make_shared<ov::op::v0::Parameter>(ov::element::i64, ov::Shape{1});
 
     // Condition output (always true - we rely on trip_count for termination)
     auto body_cond_out = ov::op::v0::Constant::create(ov::element::boolean, ov::Shape{1}, std::vector<bool>{true});
@@ -189,38 +189,38 @@ static OutputVector translate_gated_delta_net_ref(const NodeContext & context) {
     auto b_t_cur = std::make_shared<ov::op::v8::Gather>(body_beta, body_iter, axis_1);  // [B*H_v, 1, 1]
 
     // Squeeze token dim
-    auto q_cur = std::make_shared<ov::op::v0::Squeeze>(q_t_cur, axis_1);   // [B*H_v, S_v]
-    auto k_cur = std::make_shared<ov::op::v0::Squeeze>(k_t_cur, axis_1);   // [B*H_v, S_v]
-    auto v_cur = std::make_shared<ov::op::v0::Squeeze>(v_t_cur, axis_1);   // [B*H_v, S_v]
-    auto g_cur = std::make_shared<ov::op::v0::Squeeze>(g_t_cur, axis_1);   // [B*H_v, 1 or S_v]
-    auto b_cur = std::make_shared<ov::op::v0::Squeeze>(b_t_cur, axis_1);   // [B*H_v, 1]
+    auto q_cur = std::make_shared<ov::op::v0::Squeeze>(q_t_cur, axis_1);  // [B*H_v, S_v]
+    auto k_cur = std::make_shared<ov::op::v0::Squeeze>(k_t_cur, axis_1);  // [B*H_v, S_v]
+    auto v_cur = std::make_shared<ov::op::v0::Squeeze>(v_t_cur, axis_1);  // [B*H_v, S_v]
+    auto g_cur = std::make_shared<ov::op::v0::Squeeze>(g_t_cur, axis_1);  // [B*H_v, 1 or S_v]
+    auto b_cur = std::make_shared<ov::op::v0::Squeeze>(b_t_cur, axis_1);  // [B*H_v, 1]
 
     // Step 1: Apply decay gate to state
-    auto exp_g = std::make_shared<ov::op::v0::Exp>(g_cur);                            // [B*H_v, 1 or S_v]
-    auto exp_g_unsq = std::make_shared<ov::op::v0::Unsqueeze>(exp_g, axis_1);         // [B*H_v, 1, 1 or S_v]
+    auto exp_g = std::make_shared<ov::op::v0::Exp>(g_cur);                                // [B*H_v, 1 or S_v]
+    auto exp_g_unsq = std::make_shared<ov::op::v0::Unsqueeze>(exp_g, axis_1);             // [B*H_v, 1, 1 or S_v]
     auto state_decayed = std::make_shared<ov::op::v1::Multiply>(body_state, exp_g_unsq);  // [B*H_v, S_v, S_v]
 
     // Step 2: delta = (v - S @ k) * beta
-    auto k_col = std::make_shared<ov::op::v0::Unsqueeze>(k_cur, axis_2);              // [B*H_v, S_v, 1]
+    auto k_col = std::make_shared<ov::op::v0::Unsqueeze>(k_cur, axis_2);                 // [B*H_v, S_v, 1]
     auto sk = std::make_shared<ov::op::v0::MatMul>(state_decayed, k_col, false, false);  // [B*H_v, S_v, 1]
-    auto sk_sq = std::make_shared<ov::op::v0::Squeeze>(sk, axis_2);                   // [B*H_v, S_v]
-    auto v_minus_sk = std::make_shared<ov::op::v1::Subtract>(v_cur, sk_sq);           // [B*H_v, S_v]
-    auto delta = std::make_shared<ov::op::v1::Multiply>(v_minus_sk, b_cur);           // [B*H_v, S_v]
+    auto sk_sq = std::make_shared<ov::op::v0::Squeeze>(sk, axis_2);                      // [B*H_v, S_v]
+    auto v_minus_sk = std::make_shared<ov::op::v1::Subtract>(v_cur, sk_sq);              // [B*H_v, S_v]
+    auto delta = std::make_shared<ov::op::v1::Multiply>(v_minus_sk, b_cur);              // [B*H_v, S_v]
 
     // Step 3: state += outer(delta, k)
-    auto delta_col = std::make_shared<ov::op::v0::Unsqueeze>(delta, axis_2);          // [B*H_v, S_v, 1]
-    auto k_row = std::make_shared<ov::op::v0::Unsqueeze>(k_cur, axis_1);              // [B*H_v, 1, S_v]
+    auto delta_col = std::make_shared<ov::op::v0::Unsqueeze>(delta, axis_2);                 // [B*H_v, S_v, 1]
+    auto k_row = std::make_shared<ov::op::v0::Unsqueeze>(k_cur, axis_1);                     // [B*H_v, 1, S_v]
     auto outer_prod = std::make_shared<ov::op::v0::MatMul>(delta_col, k_row, false, false);  // [B*H_v, S_v, S_v]
-    auto state_updated = std::make_shared<ov::op::v1::Add>(state_decayed, outer_prod);  // [B*H_v, S_v, S_v]
+    auto state_updated = std::make_shared<ov::op::v1::Add>(state_decayed, outer_prod);       // [B*H_v, S_v, S_v]
 
     // Step 4: attn_out = S @ q * scale
-    auto q_col = std::make_shared<ov::op::v0::Unsqueeze>(q_cur, axis_2);              // [B*H_v, S_v, 1]
+    auto q_col = std::make_shared<ov::op::v0::Unsqueeze>(q_cur, axis_2);                 // [B*H_v, S_v, 1]
     auto sq = std::make_shared<ov::op::v0::MatMul>(state_updated, q_col, false, false);  // [B*H_v, S_v, 1]
-    auto sq_squeezed = std::make_shared<ov::op::v0::Squeeze>(sq, axis_2);             // [B*H_v, S_v]
-    auto attn_out = std::make_shared<ov::op::v1::Multiply>(sq_squeezed, scale_const); // [B*H_v, S_v]
+    auto sq_squeezed = std::make_shared<ov::op::v0::Squeeze>(sq, axis_2);                // [B*H_v, S_v]
+    auto attn_out = std::make_shared<ov::op::v1::Multiply>(sq_squeezed, scale_const);    // [B*H_v, S_v]
 
     // Unsqueeze attn_out to [B*H_v, 1, S_v] for scan output concatenation
-    auto attn_out_unsq = std::make_shared<ov::op::v0::Unsqueeze>(attn_out, axis_1);   // [B*H_v, 1, S_v]
+    auto attn_out_unsq = std::make_shared<ov::op::v0::Unsqueeze>(attn_out, axis_1);  // [B*H_v, 1, S_v]
 
     // --- Assemble Loop ---
     // Body: results = [condition, state_updated, attn_out_unsq]
@@ -255,8 +255,7 @@ static OutputVector translate_gated_delta_net_ref(const NodeContext & context) {
     // attn: [B, T, H_v, S_v] row-major, state: [B, H_v, S_v, S_v] row-major
 
     // attn: [B*H_v, T, S_v] -> [B, H_v, T, S_v] -> transpose to [B, T, H_v, S_v] -> flatten
-    auto attn_4d_shape = ov::op::v0::Constant::create(
-        ov::element::i64, {4}, std::vector<int64_t>{B, H_v, T, S_v});
+    auto attn_4d_shape = ov::op::v0::Constant::create(ov::element::i64, {4}, std::vector<int64_t>{B, H_v, T, S_v});
     auto attn_4d = std::make_shared<ov::op::v1::Reshape>(attn_concat_out, attn_4d_shape, false);
     auto attn_perm = std::make_shared<ov::op::v1::Transpose>(attn_4d, perm_0213);  // [B, T, H_v, S_v]
 
@@ -264,15 +263,14 @@ static OutputVector translate_gated_delta_net_ref(const NodeContext & context) {
     auto attn_1d = std::make_shared<ov::op::v1::Reshape>(attn_perm, flat_shape_1d, false);
 
     // state: [B*H_v, S_v, S_v] -> [B, H_v, S_v, S_v] -> flatten
-    auto state_4d_shape = ov::op::v0::Constant::create(
-        ov::element::i64, {4}, std::vector<int64_t>{B, H_v, S_v, S_v});
+    auto state_4d_shape = ov::op::v0::Constant::create(ov::element::i64, {4}, std::vector<int64_t>{B, H_v, S_v, S_v});
     auto state_4d = std::make_shared<ov::op::v1::Reshape>(final_state_out, state_4d_shape, false);
     auto state_1d = std::make_shared<ov::op::v1::Reshape>(state_4d, flat_shape_1d, false);
 
     // Concat [attn | state] and reshape to final output
     auto packed = std::make_shared<ov::op::v0::Concat>(ov::OutputVector{attn_1d, state_1d}, 0);
-    auto out_shape = ov::op::v0::Constant::create(
-        ov::element::i64, {4}, std::vector<int64_t>{1, 1, T * B + S_v * B, S_v * H_v});
+    auto out_shape =
+        ov::op::v0::Constant::create(ov::element::i64, {4}, std::vector<int64_t>{1, 1, T * B + S_v * B, S_v * H_v});
     auto res = std::make_shared<ov::op::v1::Reshape>(packed, out_shape, false);
 
     return rename_outputs_with_suffix({res}, context.get_name());

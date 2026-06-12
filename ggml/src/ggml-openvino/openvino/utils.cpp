@@ -124,7 +124,8 @@ std::pair<ov::Output<Node>, ov::Output<Node>> make_sin_cos(int32_t * rope_params
                                                            bool imrope,
                                                            bool stateful) {
     if (stateful) {
-        inp_pos = std::make_shared<ov::op::v0::Squeeze>(inp_pos, ov::op::v0::Constant::create(ov::element::i64, {1}, {0}));
+        inp_pos =
+            std::make_shared<ov::op::v0::Squeeze>(inp_pos, ov::op::v0::Constant::create(ov::element::i64, {1}, {0}));
         inp_pos = std::make_shared<ov::op::v0::Convert>(inp_pos, ov::element::f32);
         auto pos_perm =
             std::make_shared<ov::op::v0::Constant>(ov::element::i64, ov::Shape{3}, std::vector<int64_t>{2, 1, 0});
@@ -213,8 +214,9 @@ std::pair<ov::Output<Node>, ov::Output<Node>> make_sin_cos(int32_t * rope_params
             }
             auto one_minus_ramp = std::make_shared<ov::op::v1::Subtract>(one, ramp_mix);
 
-            theta = std::make_shared<ov::op::v1::Add>(std::make_shared<ov::op::v1::Multiply>(theta_interp, one_minus_ramp),
-                                                      std::make_shared<ov::op::v1::Multiply>(theta_extrap, ramp_mix));
+            theta =
+                std::make_shared<ov::op::v1::Add>(std::make_shared<ov::op::v1::Multiply>(theta_interp, one_minus_ramp),
+                                                  std::make_shared<ov::op::v1::Multiply>(theta_extrap, ramp_mix));
             mscale *= (1.0f + 0.1f * std::log(1.0f / freq_scale));
         }
     }
@@ -326,10 +328,8 @@ ov::Output<ov::Node> process_view_input_new(const NodeContext & context, int inp
                 }
 
                 if (suffix_ok && view_src_stride_v[split_dim] > 0) {
-                    size_t relative_offset = view_offset >= view_src_offset ?
-                        view_offset - view_src_offset : 0;
-                    int64_t split_index = static_cast<int64_t>(
-                        relative_offset / view_src_stride_v[split_dim]);
+                    size_t relative_offset = view_offset >= view_src_offset ? view_offset - view_src_offset : 0;
+                    int64_t split_index = static_cast<int64_t>(relative_offset / view_src_stride_v[split_dim]);
 
                     if (split_index >= 0 && split_index < num_splits) {
                         auto src_node = input.get_node_shared_ptr();
@@ -337,10 +337,10 @@ ov::Output<ov::Node> process_view_input_new(const NodeContext & context, int inp
                         auto & rt_info = src_node->get_rt_info();
 
                         if (rt_info.find(rt_key) == rt_info.end()) {
-                            auto axis_const = ov::op::v0::Constant::create(
-                                ov::element::i64, {}, {static_cast<int64_t>(split_dim)});
-                            auto split_node = std::make_shared<ov::op::v1::Split>(
-                                input, axis_const, static_cast<size_t>(num_splits));
+                            auto axis_const =
+                                ov::op::v0::Constant::create(ov::element::i64, {}, {static_cast<int64_t>(split_dim)});
+                            auto split_node =
+                                std::make_shared<ov::op::v1::Split>(input, axis_const, static_cast<size_t>(num_splits));
                             split_node->set_friendly_name(src_node->get_friendly_name() + "_split");
                             rt_info[rt_key] = split_node;
                         }
@@ -354,17 +354,11 @@ ov::Output<ov::Node> process_view_input_new(const NodeContext & context, int inp
     }
 
     // Lambda function to process a single view operation
-    auto process_single_view = [](ov::Output<ov::Node> current,
-                                  size_t view_offset,
-                                  const std::vector<size_t> & view_stride,
-                                  const ov::Shape & view_ggml_shape,
-                                  const ov::PartialShape & view_ov_shape,
-                                  const std::string & view_name,
-                                  size_t view_src_offset,
-                                  const std::vector<size_t> & view_src_stride,
-                                  const ov::Shape & view_src_ggml_shape,
-                                  const ov::PartialShape & view_src_ov_shape,
-                                  const std::string & view_src_name) -> ov::Output<ov::Node> {
+    auto process_single_view =
+        [](ov::Output<ov::Node> current, size_t view_offset, const std::vector<size_t> & view_stride,
+           const ov::Shape & view_ggml_shape, const ov::PartialShape & view_ov_shape, const std::string & view_name,
+           size_t view_src_offset, const std::vector<size_t> & view_src_stride, const ov::Shape & view_src_ggml_shape,
+           const ov::PartialShape & view_src_ov_shape, const std::string & view_src_name) -> ov::Output<ov::Node> {
         auto build_reshape_pattern = [](const ov::PartialShape & target_ov_shape,
                                         const ov::Shape & target_ggml_shape) -> std::vector<int64_t> {
             const size_t ndims = target_ggml_shape.size();
@@ -395,8 +389,7 @@ ov::Output<ov::Node> process_view_input_new(const NodeContext & context, int inp
         };
 
         auto build_prefix_tail_reshape_pattern = [](const ov::PartialShape & target_ov_shape,
-                                                    const ov::Shape & target_ggml_shape,
-                                                    size_t prefix_dims,
+                                                    const ov::Shape & target_ggml_shape, size_t prefix_dims,
                                                     int64_t tail_dim) -> std::vector<int64_t> {
             std::vector<int64_t> reshape_pattern(prefix_dims + 1);
             size_t dynamic_dims = 0;
@@ -467,14 +460,13 @@ ov::Output<ov::Node> process_view_input_new(const NodeContext & context, int inp
                 const int64_t dim_size = static_cast<int64_t>(view_src_ggml_shape[slice_dim]);
 
                 if (view_stride[slice_dim] > 0 && relative_offset % view_stride[slice_dim] == 0) {
-                    const int64_t begin_val =
-                        static_cast<int64_t>((relative_offset / view_stride[slice_dim]) % static_cast<size_t>(dim_size));
+                    const int64_t begin_val = static_cast<int64_t>((relative_offset / view_stride[slice_dim]) %
+                                                                   static_cast<size_t>(dim_size));
                     const int64_t end_val = begin_val + static_cast<int64_t>(view_ggml_shape[slice_dim]);
 
                     if (begin_val >= 0 && end_val <= dim_size) {
                         auto sliced = std::make_shared<ov::op::v8::Slice>(
-                            current,
-                            ov::op::v0::Constant::create(ov::element::i64, {1}, {begin_val}),
+                            current, ov::op::v0::Constant::create(ov::element::i64, {1}, {begin_val}),
                             ov::op::v0::Constant::create(ov::element::i64, {1}, {end_val}),
                             ov::op::v0::Constant::create(ov::element::i64, {1}, {1}),
                             ov::op::v0::Constant::create(ov::element::i64, {1}, {slice_dim}));
@@ -503,7 +495,8 @@ ov::Output<ov::Node> process_view_input_new(const NodeContext & context, int inp
                 const size_t elem_stride = view_stride[ndims - 1];
                 int64_t tail_begin = 0;
                 if (elem_stride > 0) {
-                    tail_begin = static_cast<int64_t>((relative_offset / elem_stride) % static_cast<size_t>(tail_src_elems));
+                    tail_begin =
+                        static_cast<int64_t>((relative_offset / elem_stride) % static_cast<size_t>(tail_src_elems));
                 }
                 const int64_t tail_end = tail_begin + tail_dst_elems;
 
@@ -516,21 +509,17 @@ ov::Output<ov::Node> process_view_input_new(const NodeContext & context, int inp
                     const size_t flat_ndims = flat_shape.size();
 
                     auto flat = std::make_shared<ov::op::v1::Reshape>(
-                        current,
-                        ov::op::v0::Constant::create(ov::element::i64, {flat_ndims}, flat_shape),
-                        false);
+                        current, ov::op::v0::Constant::create(ov::element::i64, {flat_ndims}, flat_shape), false);
 
                     auto sliced = std::make_shared<ov::op::v8::Slice>(
-                        flat,
-                        ov::op::v0::Constant::create(ov::element::i64, {1}, {tail_begin}),
+                        flat, ov::op::v0::Constant::create(ov::element::i64, {1}, {tail_begin}),
                         ov::op::v0::Constant::create(ov::element::i64, {1}, {tail_end}),
                         ov::op::v0::Constant::create(ov::element::i64, {1}, {1}),
                         ov::op::v0::Constant::create(ov::element::i64, {1}, {slice_dim}));
 
                     if (view_ov_shape.is_static()) {
                         auto reshaped = std::make_shared<ov::op::v1::Reshape>(
-                            sliced,
-                            ov::op::v0::Constant::create(ov::element::i64, {ndims}, view_ov_shape.to_shape()),
+                            sliced, ov::op::v0::Constant::create(ov::element::i64, {ndims}, view_ov_shape.to_shape()),
                             false);
                         reshaped->set_friendly_name(view_name);
                         return reshaped;
@@ -568,8 +557,7 @@ ov::Output<ov::Node> process_view_input_new(const NodeContext & context, int inp
 
             if (in_bounds && remaining_offset == 0) {
                 auto sliced = std::make_shared<ov::op::v8::Slice>(
-                    current,
-                    ov::op::v0::Constant::create(ov::element::i64, {ndims}, begin),
+                    current, ov::op::v0::Constant::create(ov::element::i64, {ndims}, begin),
                     ov::op::v0::Constant::create(ov::element::i64, {ndims}, end),
                     ov::op::v0::Constant::create(ov::element::i64, {ndims}, step),
                     ov::op::v0::Constant::create(ov::element::i64, {ndims}, axes));
@@ -610,14 +598,10 @@ ov::Output<ov::Node> process_view_input_new(const NodeContext & context, int inp
 
                         if (begin_val >= 0 && end_val <= dim_size) {
                             auto sliced = std::make_shared<ov::op::v8::Slice>(
-                                current,
-                                ov::op::v0::Constant::create(ov::element::i64, {1}, {begin_val}),
+                                current, ov::op::v0::Constant::create(ov::element::i64, {1}, {begin_val}),
                                 ov::op::v0::Constant::create(ov::element::i64, {1}, {end_val}),
                                 ov::op::v0::Constant::create(ov::element::i64, {1}, {1}),
-                                ov::op::v0::Constant::create(
-                                    ov::element::i64,
-                                    {1},
-                                    {static_cast<int64_t>(slice_dim)}));
+                                ov::op::v0::Constant::create(ov::element::i64, {1}, {static_cast<int64_t>(slice_dim)}));
                             sliced->set_friendly_name(view_name);
                             return sliced;
                         }
@@ -694,8 +678,7 @@ ov::Output<ov::Node> process_view_input_new(const NodeContext & context, int inp
 
                 if (is_regular_slice && remaining_offset == 0) {
                     auto sliced = std::make_shared<ov::op::v8::Slice>(
-                        current,
-                        ov::op::v0::Constant::create(ov::element::i64, {ndims}, begin),
+                        current, ov::op::v0::Constant::create(ov::element::i64, {ndims}, begin),
                         ov::op::v0::Constant::create(ov::element::i64, {ndims}, end),
                         ov::op::v0::Constant::create(ov::element::i64, {ndims}, step),
                         ov::op::v0::Constant::create(ov::element::i64, {ndims}, axes));
@@ -734,36 +717,29 @@ ov::Output<ov::Node> process_view_input_new(const NodeContext & context, int inp
 
                         if (tail_begin >= 0 && tail_end <= static_cast<int64_t>(src_tail_elems)) {
                             auto prefix_tail_pattern = build_prefix_tail_reshape_pattern(
-                                view_ov_shape,
-                                view_ggml_shape,
-                                suffix_start,
-                                static_cast<int64_t>(src_tail_elems));
+                                view_ov_shape, view_ggml_shape, suffix_start, static_cast<int64_t>(src_tail_elems));
 
                             auto prefix_tail = std::make_shared<ov::op::v1::Reshape>(
                                 current,
-                                ov::op::v0::Constant::create(
-                                    ov::element::i64,
-                                    {prefix_tail_pattern.size()},
-                                    prefix_tail_pattern),
+                                ov::op::v0::Constant::create(ov::element::i64, {prefix_tail_pattern.size()},
+                                                             prefix_tail_pattern),
                                 false);
 
                             ov::Output<ov::Node> selected = prefix_tail;
                             if (tail_begin != 0 || tail_end != static_cast<int64_t>(src_tail_elems)) {
                                 selected = std::make_shared<ov::op::v8::Slice>(
-                                    prefix_tail,
-                                    ov::op::v0::Constant::create(ov::element::i64, {1}, {tail_begin}),
+                                    prefix_tail, ov::op::v0::Constant::create(ov::element::i64, {1}, {tail_begin}),
                                     ov::op::v0::Constant::create(ov::element::i64, {1}, {tail_end}),
                                     ov::op::v0::Constant::create(ov::element::i64, {1}, {1}),
-                                    ov::op::v0::Constant::create(
-                                        ov::element::i64,
-                                        {1},
-                                        {static_cast<int64_t>(suffix_start)}));
+                                    ov::op::v0::Constant::create(ov::element::i64, {1},
+                                                                 {static_cast<int64_t>(suffix_start)}));
                             }
 
                             auto reshape_pattern = build_reshape_pattern(view_ov_shape, view_ggml_shape);
                             auto reshaped = std::make_shared<ov::op::v1::Reshape>(
                                 selected,
-                                ov::op::v0::Constant::create(ov::element::i64, {reshape_pattern.size()}, reshape_pattern),
+                                ov::op::v0::Constant::create(ov::element::i64, {reshape_pattern.size()},
+                                                             reshape_pattern),
                                 false);
                             reshaped->set_friendly_name(view_name);
                             return reshaped;
@@ -813,16 +789,8 @@ ov::Output<ov::Node> process_view_input_new(const NodeContext & context, int inp
         //           << view_src_ggml_shape[2] << "," << view_src_ggml_shape[3]
         //           << "], source ov shape = " << view_src_ov_shape << std::endl;
 
-        current = process_single_view(current,
-                                      view_offset,
-                                      view_stride,
-                                      view_ggml_shape,
-                                      view_ov_shape,
-                                      view_name,
-                                      view_src_offset,
-                                      view_src_stride,
-                                      view_src_ggml_shape,
-                                      view_src_ov_shape,
+        current = process_single_view(current, view_offset, view_stride, view_ggml_shape, view_ov_shape, view_name,
+                                      view_src_offset, view_src_stride, view_src_ggml_shape, view_src_ov_shape,
                                       view_src_name);
     }
 

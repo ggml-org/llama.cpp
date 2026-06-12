@@ -22,26 +22,21 @@ OutputVector translate_argsort(const NodeContext & context) {
 
     ov::op::v11::TopK::Mode mode;
     switch (order) {
-        case GGML_SORT_ORDER_ASC:
-            mode = ov::op::v11::TopK::Mode::MIN;
-            break;
-        case GGML_SORT_ORDER_DESC:
-            mode = ov::op::v11::TopK::Mode::MAX;
-            break;
-        default:
-            FRONT_END_OP_CONVERSION_CHECK(false, "Unsupported GGML_OP_ARGSORT order: ", order);
+    case GGML_SORT_ORDER_ASC:
+        mode = ov::op::v11::TopK::Mode::MIN;
+        break;
+    case GGML_SORT_ORDER_DESC:
+        mode = ov::op::v11::TopK::Mode::MAX;
+        break;
+    default:
+        FRONT_END_OP_CONVERSION_CHECK(false, "Unsupported GGML_OP_ARGSORT order: ", order);
     }
 
     auto k = std::make_shared<ov::op::v0::Squeeze>(get_dimensions(input.get_node_shared_ptr(), {3}),
                                                    ov::op::v0::Constant::create(ov::element::i64, {1}, {0}));
 
-    auto topk = std::make_shared<ov::op::v11::TopK>(input,
-                                                    k,
-                                                    3,
-                                                    mode,
-                                                    ov::op::v11::TopK::SortType::SORT_VALUES,
-                                                    context.get_output_type(),
-                                                    false);
+    auto topk = std::make_shared<ov::op::v11::TopK>(input, k, 3, mode, ov::op::v11::TopK::SortType::SORT_VALUES,
+                                                    context.get_output_type(), false);
 
     return rename_outputs_with_suffix({topk->output(1)}, context.get_name());
 }

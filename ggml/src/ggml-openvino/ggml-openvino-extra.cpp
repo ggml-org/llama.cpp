@@ -27,7 +27,7 @@ void ggml_openvino_device_config::init() {
     // All recognized GGML_OPENVINO_* env vars. Their values are cached here
     // once at backend init time and read back via ggml_openvino_getenv_str()
     // (raw string) or ggml_openvino_getenv_int() (integer / boolean toggle).
-    static constexpr const char* env_var_names[] = {
+    static constexpr const char * env_var_names[] = {
         // String values (use ggml_openvino_getenv_str)
         "GGML_OPENVINO_DEVICE",
         "GGML_OPENVINO_CACHE_DIR",
@@ -47,7 +47,7 @@ void ggml_openvino_device_config::init() {
         "GGML_OPENVINO_MANUAL_GQA_ATTN",
     };
 
-    for (const char* const & env_var : env_var_names) {
+    for (const char * const & env_var : env_var_names) {
         auto * env = getenv(env_var);
         if (env) {
             environment_variables[env_var] = env;
@@ -222,7 +222,8 @@ std::optional<ExtraQuantType> ggml_openvino_get_requant_type(const ggml_tensor *
         return std::nullopt;
     }
     if (strncmp(tensor->name, "token_embd.weight", 17) == 0) {
-        return ((ggml_openvino_is_npu() && tensor->type == GGML_TYPE_Q6_K) ? ExtraQuantType::F16 : ExtraQuantType::Q8_0_C);
+        return ((ggml_openvino_is_npu() && tensor->type == GGML_TYPE_Q6_K) ? ExtraQuantType::F16 :
+                                                                             ExtraQuantType::Q8_0_C);
     }
     if (strncmp(tensor->name, "output.weight", 13) == 0) {
         return ExtraQuantType::Q8_0_C;

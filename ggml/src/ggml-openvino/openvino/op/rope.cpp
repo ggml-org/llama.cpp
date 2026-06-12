@@ -69,7 +69,8 @@ OutputVector translate_rope(const NodeContext & context) {
             data_node = std::make_shared<ov::op::v1::Reshape>(data_node, data_shape, false);
         } else {
             auto data_shape = ov::op::v0::Constant::create(
-                ov::element::i64, {4}, std::vector<int64_t>{1, -1, (int64_t) output_shape[2], (int64_t) output_shape[3]});
+                ov::element::i64, {4},
+                std::vector<int64_t>{1, -1, (int64_t) output_shape[2], (int64_t) output_shape[3]});
             data_node = std::make_shared<ov::op::v1::Reshape>(data_node, data_shape, false);
         }
     }
@@ -114,13 +115,13 @@ OutputVector translate_rope(const NodeContext & context) {
             data_node = std::make_shared<ov::op::v1::Reshape>(data_node, r4_shape, false);
         }
         const int64_t head_size = static_cast<int64_t>(output_shape[3]);
-        const int64_t n_heads   = static_cast<int64_t>(output_shape[2]);
-        const int64_t half      = head_size / 2;
+        const int64_t n_heads = static_cast<int64_t>(output_shape[2]);
+        const int64_t half = head_size / 2;
 
         auto neg_one_f = ov::op::v0::Constant::create(data_node->get_element_type(), ov::Shape{}, {-1.0f});
 
-        auto paired_shape = ov::op::v0::Constant::create(
-            ov::element::i64, {5}, std::vector<int64_t>{1, -1, n_heads, half, 2});
+        auto paired_shape =
+            ov::op::v0::Constant::create(ov::element::i64, {5}, std::vector<int64_t>{1, -1, n_heads, half, 2});
         auto x_paired = std::make_shared<ov::op::v1::Reshape>(data_node, paired_shape, false);
 
         auto split_axis = ov::op::v0::Constant::create(ov::element::i64, ov::Shape{}, {-1});
@@ -129,26 +130,23 @@ OutputVector translate_rope(const NodeContext & context) {
         Output<Node> x1 = data_split->outputs()[1];
 
         auto x1_neg = std::make_shared<ov::op::v1::Multiply>(x1, neg_one_f);
-        auto x_rotated_paired =
-            std::make_shared<ov::op::v0::Concat>(ov::OutputVector{x1_neg, x0}, -1);
+        auto x_rotated_paired = std::make_shared<ov::op::v0::Concat>(ov::OutputVector{x1_neg, x0}, -1);
 
-        auto flat_shape = ov::op::v0::Constant::create(
-            ov::element::i64, {4}, std::vector<int64_t>{1, -1, n_heads, head_size});
-        auto x_rotated =
-            std::make_shared<ov::op::v1::Reshape>(x_rotated_paired, flat_shape, false);
+        auto flat_shape =
+            ov::op::v0::Constant::create(ov::element::i64, {4}, std::vector<int64_t>{1, -1, n_heads, head_size});
+        auto x_rotated = std::make_shared<ov::op::v1::Reshape>(x_rotated_paired, flat_shape, false);
 
         // Expand cos/sin from [..., head_size/2] to [..., head_size] by repeating each
         // entry twice. Use special_zero on the final Reshape so the seq dim passes
         // through dynamically. Final rank is 4 to satisfy the matcher's predicate.
         auto expand_cos_sin = [&](Output<Node> cs) {
-            auto cs_unsq = std::make_shared<ov::op::v0::Unsqueeze>(
-                cs, ov::op::v0::Constant::create(ov::element::i64, {1}, {-1}));
-            auto bcast_target = ov::op::v0::Constant::create(
-                ov::element::i64, {5}, std::vector<int64_t>{1, 1, 1, half, 2});
-            auto bcast = std::make_shared<ov::op::v3::Broadcast>(
-                cs_unsq, bcast_target, ov::op::BroadcastType::BIDIRECTIONAL);
-            auto flat = ov::op::v0::Constant::create(
-                ov::element::i64, {4}, std::vector<int64_t>{0, 0, 0, head_size});
+            auto cs_unsq =
+                std::make_shared<ov::op::v0::Unsqueeze>(cs, ov::op::v0::Constant::create(ov::element::i64, {1}, {-1}));
+            auto bcast_target =
+                ov::op::v0::Constant::create(ov::element::i64, {5}, std::vector<int64_t>{1, 1, 1, half, 2});
+            auto bcast =
+                std::make_shared<ov::op::v3::Broadcast>(cs_unsq, bcast_target, ov::op::BroadcastType::BIDIRECTIONAL);
+            auto flat = ov::op::v0::Constant::create(ov::element::i64, {4}, std::vector<int64_t>{0, 0, 0, head_size});
             return std::make_shared<ov::op::v1::Reshape>(bcast, flat, true);
         };
         Output<Node> cos_full = expand_cos_sin(cos_theta_node);
@@ -214,7 +212,8 @@ OutputVector translate_rope(const NodeContext & context) {
         res = std::make_shared<ov::op::v0::Concat>(ov::OutputVector{first_half_node, second_half_node}, -1);
     } else if (mode == TYPE_IMROPE) {
         int64_t n_dims = data_node->get_output_partial_shape(0)[3].get_length();
-        auto cos_sin_shape = std::make_shared<ov::op::v0::Constant>(ov::element::i64, ov::Shape{4}, std::vector<int64_t>{1,-1,1,(n_dims >> 1)});
+        auto cos_sin_shape = std::make_shared<ov::op::v0::Constant>(ov::element::i64, ov::Shape{4},
+                                                                    std::vector<int64_t>{1, -1, 1, (n_dims >> 1)});
         auto cos_reshaped = std::make_shared<ov::op::v1::Reshape>(cos_theta_node, cos_sin_shape, true);
         auto sin_reshaped = std::make_shared<ov::op::v1::Reshape>(sin_theta_node, cos_sin_shape, true);
 

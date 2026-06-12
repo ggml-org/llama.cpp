@@ -34,12 +34,12 @@ OutputVector translate_reshape(const NodeContext & context) {
     if (op_case == 1) {
         if (context.is_stateful()) {
             new_shape_node = ov::op::v0::Constant::create(
-                ov::element::i64, {3},
-                std::vector<int64_t>{-1, (int64_t) output_shape[2], (int64_t) output_shape[3]});
+                ov::element::i64, {3}, std::vector<int64_t>{-1, (int64_t) output_shape[2], (int64_t) output_shape[3]});
         } else {
             new_shape_node = ov::op::v0::Constant::create(
                 ov::element::i64, {4},
-                std::vector<int64_t>{(int64_t) output_shape[0], -1, (int64_t) output_shape[2], (int64_t) output_shape[3]});
+                std::vector<int64_t>{(int64_t) output_shape[0], -1, (int64_t) output_shape[2],
+                                     (int64_t) output_shape[3]});
         }
     } else if (op_case == 2) {
         new_shape_node = ov::op::v0::Constant::create(

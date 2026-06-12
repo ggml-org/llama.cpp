@@ -2,6 +2,7 @@
 #include "../op_table.h"
 #include "../utils.h"
 
+#include <memory>
 #include <openvino/core/node.hpp>
 #include <openvino/core/node_output.hpp>
 #include <openvino/op/add.hpp>
@@ -10,8 +11,6 @@
 #include <openvino/op/gather.hpp>
 #include <openvino/op/reshape.hpp>
 #include <openvino/op/shape_of.hpp>
-
-#include <memory>
 
 namespace ov {
 namespace frontend {

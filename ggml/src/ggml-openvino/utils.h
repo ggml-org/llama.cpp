@@ -44,6 +44,7 @@ struct graph_key_hash {
 
 struct decoder_runtime_ctx {
     decoder_runtime_ctx(std::shared_ptr<std::mutex> mutex) : mutex(std::move(mutex)) {}
+
     std::shared_ptr<std::mutex> mutex;
     std::shared_ptr<GgmlOvDecoder> ptr;
 };
@@ -63,11 +64,7 @@ struct ov_runtime_context {
     std::map<std::string, std::string> kv_state_input_name_map;
     std::atomic<int> backend_count;
 
-    ov_runtime_context() :
-        device("CPU"),
-        stateful(false),
-        stateful_kv_size(0),
-        backend_count(0) {}
+    ov_runtime_context() : device("CPU"), stateful(false), stateful_kv_size(0), backend_count(0) {}
 
     void clear_caches() {
         std::lock_guard<std::mutex> lock(ctx_mutex);

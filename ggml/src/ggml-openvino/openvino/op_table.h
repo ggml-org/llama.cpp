@@ -8,7 +8,7 @@ namespace ggml {
 
 namespace op {
 
-#define GGML_OP_CONVERTER(op) OutputVector op(const NodeContext& context)
+#define GGML_OP_CONVERTER(op) OutputVector op(const NodeContext & context)
 
 GGML_OP_CONVERTER(translate_cont);
 GGML_OP_CONVERTER(translate_concat);
@@ -43,7 +43,7 @@ GGML_OP_CONVERTER(translate_ssm_conv);
 GGML_OP_CONVERTER(translate_gated_delta_net);
 GGML_OP_CONVERTER(translate_repeat);
 
-} // namespace op
+}  // namespace op
 
 std::unordered_map<std::string, CreatorFunction> get_supported_ops();
 
