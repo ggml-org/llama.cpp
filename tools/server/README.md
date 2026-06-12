@@ -196,7 +196,7 @@ For the full list of features, please refer to [server's changelog](https://gith
 | `--ui-config-file PATH` | JSON file that provides default UI settings (overrides UI defaults)<br/>(env: LLAMA_ARG_UI_CONFIG_FILE) |
 | `--webui-mcp-proxy, --no-webui-mcp-proxy` | [DEPRECATED: use --ui-mcp-proxy/--no-ui-mcp-proxy] experimental: whether to enable MCP CORS proxy<br/>(env: LLAMA_ARG_WEBUI_MCP_PROXY) |
 | `--ui-mcp-proxy, --no-ui-mcp-proxy` | experimental: whether to enable MCP CORS proxy - do not enable in untrusted environments (default: disabled)<br/>(env: LLAMA_ARG_UI_MCP_PROXY) |
-| `--tools TOOL1,TOOL2,...` | experimental: whether to enable built-in tools for AI agents - do not enable in untrusted environments (default: no tools)<br/>specify "all" to enable all tools<br/>available tools: read_file, file_glob_search, grep_search, exec_shell_command, write_file, edit_file, apply_diff, get_datetime, load_skills, exec_skills<br/>(env: LLAMA_ARG_TOOLS) |
+| `--tools TOOL1,TOOL2,...` | experimental: whether to enable built-in tools for AI agents - do not enable in untrusted environments (default: no tools)<br/>specify "all" to enable all tools<br/>available tools: read_file, file_glob_search, grep_search, exec_shell_command, write_file, edit_file, apply_diff, get_datetime, load_user_tools, execute_user_tools<br/>(env: LLAMA_ARG_TOOLS) |
 | `--webui, --no-webui` | [DEPRECATED: use --ui/--no-ui] whether to enable the Web UI<br/>(env: LLAMA_ARG_WEBUI) |
 | `--ui, --no-ui` | whether to enable the Web UI (default: enabled)<br/>(env: LLAMA_ARG_UI) |
 | `--embedding, --embeddings` | restrict to only support embedding use case; use only with dedicated embedding models (default: disabled)<br/>(env: LLAMA_ARG_EMBEDDINGS) |
@@ -331,21 +331,21 @@ The server includes a set of built-in tools that enable the LLM to access the lo
 
 To use this feature, start the server with `--tools all`. You can also enable only specific tools by passing a comma-separated list: `--tools name1,name2,...`. Run `--help` for the full list of available tool names.
 
-The skills support is handled with the `load_skills` to load e.g. a `SKILLS.md` file, and `execute_skills` to allow execution of loaded skills. The `SKILLS.md` file defines the additional skills in a Markdown file containing lines with format:
+The user tools support is handled with the `load_user_tools` to load e.g. a `TOOLS.md` file, and `execute_user_tools` to allow execution of loaded tools. The `TOOLS.md` file defines the additional tools in a Markdown file containing lines with format:
 ```
-- **skill_name**: Description in free format (command: `command to execute`)
+- **tool_name**: Description in free format (command: `command to execute`)
 ```
 It is possible to use `{symbol}` in commands for further substitution from the conversation context. For security reasons, the scope of allowed commands and symbols is limited.
 
-An exeample of `SKILLS.md` is:
+An exeample of `TOOLS.md` is:
 ```
-# Skills/Agents Definition
+# Tools/Agents Definition
 - **web_search**: Search the web for a query (command: `websearch "{query}"`)
 - **read_file**: Read a file and return its content (command: `cat "{path}"`)
 - **summarize**: Summarize a text (command: `python summarize.py "{text}"`)
 ```
 
-To trigger these skills, save the file e.g. in your home directory and request `load skills from my home` in the conversation.
+To trigger these tools, save the file e.g. in your home directory and request `load user tools from my home` in the conversation.
 
 ## Build
 

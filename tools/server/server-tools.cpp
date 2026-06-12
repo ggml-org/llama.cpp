@@ -114,11 +114,11 @@ json server_tool::to_json() {
     };
 }
 
-// Structure pour représenter une action (skill/agent)
-struct SkillAction {
-    std::string name;        // Nom de l'action (ex: "web_search")
-    std::string description; // Description de l'action
-    std::string command;     // Commande associée (ex: "websearch {query}")
+// Structure to represent a user tool/action
+struct ToolAction {
+    std::string name;        // Name of user tool/action (ex: "web_search")
+    std::string description; // Description of user tool/action
+    std::string command;     // Associated command (ex: "websearch {query}")
 };
 
 // List of forbidden commands and chars (security)
@@ -132,8 +132,8 @@ static const std::vector<char> FORBIDDEN_CHARS = {
     '|', '&', '>', '<', '$', '`', '(', ')', '{', '}', '[', ']', '!', '\\', '\''
 };
 
-// Store global skills (load_skills)
-static std::vector<SkillAction> global_skills;
+// Store global tools (load_user_tools)
+static std::vector<ToolAction> global_tools;
 
 // Check if command contains forbidden elements
 static bool is_command_safe(const std::string& command) {
@@ -159,35 +159,31 @@ static bool is_command_safe(const std::string& command) {
     return true;
 }
 
-//
-// execute_skils: execute user-side skills
-//
-
 
 //
-// load_skills: load SKILLS.md user-side skills
+// load_user_tools: load TOOLS.md user-side tools
 //
 
-// The SKILLS.md file should have the following syntax:
+// The TOOLS.md file should have the following syntax:
 //
-// # Skills/Agents Definition
+// # Tools/Agents Definition
 //
 // - **web_search**: Search the web for a query (command: `websearch "{query}"`)
 // - **read_file**: Read a file and return its content (command: `cat "{path}"`)
 // - **summarize**: Summarize a text (command: `python summarize.py "{text}"`)
 
-struct server_tool_load_skills : server_tool {
-    std::vector<SkillAction> actions; // Liste des actions chargées
+struct server_tool_load_user_tools : server_tool {
+    std::vector<ToolAction> actions; // Liste des actions chargées
 
-    server_tool_load_skills() {
-        name = "load_skills";
-        display_name = "Load Skills/Agents";
+    server_tool_load_user_tools() {
+        name = "load_user_tools";
+        display_name = "Load Tools/Agents";
         permission_write = false;
     }
 
     // Parse une ligne au format Markdown (ex: "- **web_search**: description (command: `websearch {query}`)")
-    SkillAction parse_skill_line(const std::string& line) {
-        SkillAction action;
+    ToolAction parse_skill_line(const std::string& line) {
+        ToolAction action;
         // Regex mise à jour pour correspondre à votre format
         std::regex skill_regex(R"(\*\*(.*?)\*\*: (.*?) \(command: `(.*?)`\))");
         std::smatch matches;
@@ -203,7 +199,7 @@ struct server_tool_load_skills : server_tool {
     }
 
     // Charge les actions depuis un fichier Markdown
-    bool load_skills_from_file(const std::string& path) {
+    bool load_user_tools_from_file(const std::string& path) {
         std::ifstream file(path);
         if (!file.is_open()) {
             return false;
@@ -215,7 +211,7 @@ struct server_tool_load_skills : server_tool {
             // Ignorer les lignes vides ou les titres
             if (line.empty() || line[0] == '#') continue;
 
-            SkillAction action = parse_skill_line(line);
+            ToolAction action = parse_skill_line(line);
             if (!action.name.empty()) {
                 actions.push_back(action);
             }
@@ -228,12 +224,12 @@ struct server_tool_load_skills : server_tool {
             {"type", "function"},
             {"function", {
                 {"name", name},
-                {"description", "Load a SKILLS.md or AGENTS.md file and extract available actions. "
+                {"description", "Load a TOOLS.md file and extract available actions. "
                     "Commands are validated for security. Unsafe commands are skipped."},
                     {"parameters", {
                         {"type", "object"},
                         {"properties", {
-                            {"path", {{"type", "string"}, {"description", "Path to the SKILLS.md or AGENTS.md file"}}},
+                            {"path", {{"type", "string"}, {"description", "Path to the TOOLS.md file"}}},
                         }},
                         {"required", json::array({"path"})},
                     }},
@@ -244,12 +240,12 @@ struct server_tool_load_skills : server_tool {
     json invoke(json params) override {
         std::string path = params.at("path").get<std::string>();
 
-        if (!load_skills_from_file(path)) {
+        if (!load_user_tools_from_file(path)) {
             return {{"error", "Failed to open or parse file: " + path}};
         }
 
-        // Store the loaded skills globally
-        global_skills = actions;
+        // Store the loaded tools globally
+        global_tools = actions;
 
         json actions_json = json::array();
         for (const auto& action : actions) {
@@ -268,6 +264,10 @@ struct server_tool_load_skills : server_tool {
     }
 };
 
+//
+// execute_skils: execute user-side tools
+//
+
 struct server_tool_execute_skill : server_tool {
 
     server_tool_execute_skill() {
@@ -281,8 +281,8 @@ struct server_tool_execute_skill : server_tool {
             {"type", "function"},
             {"function", {
                 {"name", name},
-                {"description", "Execute a skill/action loaded from SKILLS.md or AGENTS.md. "
-                    "The skill must be loaded first using the 'load_skills' tool. "
+                {"description", "Execute a skill/action loaded from TOOLS.md. "
+                    "The skill must be loaded first using the 'load_user_tools' tool. "
                     "Commands are validated for security before execution."},
                     {"parameters", {
                         {"type", "object"},
@@ -300,13 +300,13 @@ struct server_tool_execute_skill : server_tool {
         std::string skill_name = params.at("skill_name").get<std::string>();
         json args = json_value(params, "args", json::object());
 
-        // Use the global skills list
+        // Use the global tools list
         auto it = std::find_if(
-            global_skills.begin(), global_skills.end(),
-                               [&skill_name](const SkillAction& action) { return action.name == skill_name; }
+            global_tools.begin(), global_tools.end(),
+                               [&skill_name](const ToolAction& action) { return action.name == skill_name; }
         );
 
-        if (it == global_skills.end()) {
+        if (it == global_tools.end()) {
             return {{"error", "Skill not found: " + skill_name}};
         }
 
@@ -982,7 +982,7 @@ static std::vector<std::unique_ptr<server_tool>> build_tools() {
     tools.push_back(std::make_unique<server_tool_edit_file>());
     tools.push_back(std::make_unique<server_tool_apply_diff>());
     tools.push_back(std::make_unique<server_tool_get_datetime>());
-    tools.push_back(std::make_unique<server_tool_load_skills>());
+    # tools.push_back(std::make_unique<server_tool_load_user_tools>());
     tools.push_back(std::make_unique<server_tool_execute_skill>());
     return tools;
 }
