@@ -6,6 +6,7 @@
 // self-conditioning (temp_inv=1), else the zero-SC path.
 
 #include "llama.h"
+#include "ggml-backend.h"
 
 #include <cstdio>
 #include <cstdint>
@@ -56,6 +57,7 @@ int main(int argc, char ** argv) {
     fprintf(stderr, "prompt=%d canvas=%d total=%d\n", P, C, N);
 
     llama_backend_init();
+    ggml_backend_load_all(); // load dynamic backends so NGL can offload to GPU
 
     llama_model_params mparams = llama_model_default_params();
     mparams.n_gpu_layers = atoi(getenv("NGL") ? getenv("NGL") : "0");
