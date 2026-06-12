@@ -116,27 +116,9 @@ int llama_server(int argc, char ** argv) {
                                      params.n_ctx == 0 &&
                                      (uint32_t) params.fit_params_min_ctx != UINT32_MAX;
 
-    // ctx_pool_slots overcommits the pool; only meaningful with an auto-sized, unified pool
-    if (params.ctx_pool_slots > 0) {
-        if (!ctx_pool_auto_sized) {
-            SRV_WRN("%s", "--ctx-pool-slots requires --ctx-per-slot and no explicit -c, disabling\n");
-            params.ctx_pool_slots = 0;
-        } else if (!params.kv_unified) {
-            SRV_WRN("%s",
-                    "--ctx-pool-slots requires --kv-unified (non-unified KV gives each slot its "
-                    "own partition), disabling\n");
-            params.ctx_pool_slots = 0;
-        } else if (params.ctx_pool_slots > params.n_parallel) {
-            SRV_WRN("--ctx-pool-slots (%d) exceeds n_parallel (%d), clamping\n", params.ctx_pool_slots,
-                    params.n_parallel);
-            params.ctx_pool_slots = params.n_parallel;
-        }
-    }
-
     if (ctx_pool_auto_sized) {
-        const int32_t pool_slots = params.ctx_pool_slots > 0 ? params.ctx_pool_slots : params.n_parallel;
-        params.n_ctx             = pool_slots * params.n_ctx_per_slot;
-        SRV_INF("--ctx-per-slot: sizing KV pool to pool_slots * ctx_per_slot = %d * %d = %d\n", pool_slots,
+        params.n_ctx = params.n_parallel * params.n_ctx_per_slot;
+        SRV_INF("--ctx-per-slot: sizing KV pool to n_parallel * ctx_per_slot = %d * %d = %d\n", params.n_parallel,
                 params.n_ctx_per_slot, params.n_ctx);
     }
 
