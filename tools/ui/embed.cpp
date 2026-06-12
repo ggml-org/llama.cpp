@@ -7,16 +7,17 @@
 // dir-relative paths with forward slashes. Without <asset_dir>, emits an
 // empty asset table.
 
+#include <inttypes.h>
 #include <stdarg.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <string>
 #include <vector>
-#include <cinttypes>
-#include <cstdint>
 
 // Computes FNV-1a hash of the data
 static uint64_t fnv_hash(const uint8_t * data, size_t len) {
