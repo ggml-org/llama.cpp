@@ -2024,8 +2024,8 @@ struct ggml_backend_vk_context {
 
     size_t semaphore_idx, event_idx;
     ggml_vk_garbage_collector gc;
-    size_t prealloc_size_x, prealloc_size_y, prealloc_size_split_k, prealloc_size_add_rms_partials, prealloc_size_add_rms_partials_offset, prealloc_fattn_temp_size;
-    vk_buffer prealloc_x, prealloc_y, prealloc_split_k, prealloc_add_rms_partials, sync_staging, prealloc_fattn_temp;
+    size_t prealloc_size_x, prealloc_size_y, prealloc_size_split_k, prealloc_size_add_rms_partials, prealloc_size_add_rms_partials_offset;
+    vk_buffer prealloc_x, prealloc_y, prealloc_split_k, prealloc_add_rms_partials, sync_staging;
     vk::Fence fence, almost_ready_fence;
     bool submit_pending {};
     bool almost_ready_fence_pending {};
@@ -7028,7 +7028,6 @@ static void ggml_vk_init(ggml_backend_vk_context * ctx, size_t idx) {
     ctx->prealloc_size_x = 0;
     ctx->prealloc_size_y = 0;
     ctx->prealloc_size_split_k = 0;
-    ctx->prealloc_fattn_temp_size = 0;
     // Fixed size of 1KB, for deterministic behavior
     ctx->prealloc_size_add_rms_partials = 1024;
 
@@ -10331,7 +10330,7 @@ static void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx
     size_t size_global_max = 0;
     size_t m_p = 4096;
     if (xe_fa_opt){
-        std::lock_guard<std::recursive_mutex> guard(ctx->device->mutex);
+        std::lock_guard<std::mutex> guard(ctx->device->compile_mutex);
         int64_t batches = neq3;
         uint64_t x_ne = ggml_nelements(q);
         const size_t hdim_reserved_p_decode = 32 * 1024;
@@ -10354,10 +10353,6 @@ static void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx
             else {
                 pipelines[{(uint32_t)neq0, qk_ratio}] = xe_fa_pipeline_dual_phases = std::make_pair(std::make_shared<vk_pipeline_struct>(), std::make_shared<vk_pipeline_struct>());
             }
-            ggml_pipeline_request_descriptor_sets(ctx, xe_fa_pipeline_dual_phases.first, 1);
-            assert(xe_fa_pipeline_dual_phases.first);
-            ggml_pipeline_request_descriptor_sets(ctx, xe_fa_pipeline_dual_phases.second, 1);
-            assert(xe_fa_pipeline_dual_phases.second);
         }
         else {
             if (neq0 > 128) {
@@ -10369,10 +10364,6 @@ static void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx
                 else {
                     pipelines[{(uint32_t)neq0, qk_ratio}] = xe_fa_pipeline_dual_phases = std::make_pair(std::make_shared<vk_pipeline_struct>(), std::make_shared<vk_pipeline_struct>());
                 }
-                ggml_pipeline_request_descriptor_sets(ctx, xe_fa_pipeline_dual_phases.first, 1);
-                assert(xe_fa_pipeline_dual_phases.first);
-                ggml_pipeline_request_descriptor_sets(ctx, xe_fa_pipeline_dual_phases.second, 1);
-                assert(xe_fa_pipeline_dual_phases.second);
                 fa_copy_qstate = true;
             }
             else {
@@ -10384,8 +10375,6 @@ static void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx
                 else {
                     pipelines[{(uint32_t)neq0, qk_ratio}] = xe_fa_pipeline_dual_phases.first = std::make_shared<vk_pipeline_struct>();
                 }
-                ggml_pipeline_request_descriptor_sets(ctx, xe_fa_pipeline_dual_phases.first, 1);
-                assert(xe_fa_pipeline_dual_phases.first);
             }
         }
 
@@ -10401,9 +10390,12 @@ static void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx
             tmp_size = std::max(tmp_size, prefill_temp_size);
         }
 
-        if (ctx->prealloc_fattn_temp_size < tmp_size) {
-            ctx->prealloc_fattn_temp_size = tmp_size;
+        if (ctx->prealloc_size_y < tmp_size) {
+            ctx->prealloc_size_y = tmp_size;
             ggml_vk_preallocate_buffers(ctx, subctx);
+        }
+        if (ctx->prealloc_y_need_sync) {
+            ggml_vk_sync_buffers(ctx, subctx);
         }
     }
 
@@ -10578,7 +10570,7 @@ static void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx
         auto to_fp16_vk_0 = ggml_vk_get_to_fp16(ctx, q->type);
         uint64_t x_ne = ggml_nelements(q);
         int64_t batches = neq3;
-        vk_subbuffer q_temp_buf = fa_copy_qstate ? ggml_vk_subbuffer(ctx, ctx->prealloc_fattn_temp, 0) : q_buf;
+        vk_subbuffer q_temp_buf = fa_copy_qstate ? ggml_vk_subbuffer(ctx, ctx->prealloc_y, 0) : q_buf;
         vk_fa_xe_opt_push_constants fattn_consts;
         int32_t gqa_ratio_pow2 = (int32_t)(1 << power_of_2(qk_ratio));
         int32_t qk_groups = qk_ratio / gqa_ratio_pow2;
@@ -10616,29 +10608,33 @@ static void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx
             ggml_vk_sync_buffers(ctx, subctx);
             ggml_pipeline_request_descriptor_sets(ctx, to_fp16_vk_0, 1);
             ggml_vk_dispatch_pipeline(ctx, subctx, to_fp16_vk_0, { q_buf, q_temp_buf }, pc_cpy_fp16, { (uint32_t)(x_ne), 1, 1 });
+            ctx->prealloc_y_need_sync = true;
         }
 
         if (neq1 == 1) {
             size_t size_decode_p = neq3 * neq2 * nek1 * sizeof(float);
-            vk_subbuffer p_temp_buf = ggml_vk_subbuffer(ctx, ctx->prealloc_fattn_temp, 0);
-            vk_subbuffer max_temp_buf = ggml_vk_subbuffer(ctx, ctx->prealloc_fattn_temp, size_decode_p);
+            vk_subbuffer p_temp_buf = ggml_vk_subbuffer(ctx, ctx->prealloc_y, 0);
+            vk_subbuffer max_temp_buf = ggml_vk_subbuffer(ctx, ctx->prealloc_y, size_decode_p);
             ggml_vk_sync_buffers(ctx, subctx);
+            ggml_pipeline_request_descriptor_sets(ctx, xe_fa_pipeline_dual_phases.first, 1);
             ggml_vk_dispatch_pipeline(ctx, subctx, xe_fa_pipeline_dual_phases.first,
                 { q_temp_buf, k_buf, mask_buf, p_temp_buf, max_temp_buf },
                 fattn_consts, { (uint32_t)nek2, (uint32_t)nek1, (uint32_t)batches });
             ggml_vk_sync_buffers(ctx, subctx);
+            ggml_pipeline_request_descriptor_sets(ctx, xe_fa_pipeline_dual_phases.second, 1);
             ggml_vk_dispatch_pipeline(ctx, subctx, xe_fa_pipeline_dual_phases.second,
                 { p_temp_buf, v_buf, max_temp_buf, sinks_buf, dst_buf },
                 fattn_consts, { (uint32_t)neq0, (uint32_t)nek2, (uint32_t)batches });
+            ctx->prealloc_y_need_sync = true;
         }
         else if (xe_fa_pipeline_dual_phases.second != nullptr && neq1 > 1) { // 2 phase prefill
             size_t temp_offset = 0;
             if (fa_copy_qstate) { temp_offset += x_ne * sizeof(uint16_t); }
-            vk_subbuffer p_temp_buf = ggml_vk_subbuffer(ctx, ctx->prealloc_fattn_temp, temp_offset);
+            vk_subbuffer p_temp_buf = ggml_vk_subbuffer(ctx, ctx->prealloc_y, temp_offset);
             temp_offset += size_p;
-            vk_subbuffer group_max_temp_buf = ggml_vk_subbuffer(ctx, ctx->prealloc_fattn_temp, temp_offset);
+            vk_subbuffer group_max_temp_buf = ggml_vk_subbuffer(ctx, ctx->prealloc_y, temp_offset);
             temp_offset += size_group_max;
-            vk_subbuffer global_max_temp_buf = ggml_vk_subbuffer(ctx, ctx->prealloc_fattn_temp, temp_offset);
+            vk_subbuffer global_max_temp_buf = ggml_vk_subbuffer(ctx, ctx->prealloc_y, temp_offset);
             temp_offset += size_global_max;
             uint32_t q_len = neq1;
             int32_t gqa_ratio = (int32_t)(1 << power_of_2(qk_ratio));
@@ -10684,8 +10680,10 @@ static void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx
                 m_batch_buf.offset += mask ? (mask->nb[3]) : 0;
                 o_batch_buf.offset += nb3;
             }
+            ctx->prealloc_y_need_sync = true;
         }
         else {
+            ggml_pipeline_request_descriptor_sets(ctx, xe_fa_pipeline_dual_phases.first, 1);
             ggml_vk_dispatch_pipeline(ctx, subctx, xe_fa_pipeline_dual_phases.first,
                 { q_temp_buf, k_buf, v_buf, mask_buf, sinks_buf, dst_buf },
                 fattn_consts, { (uint32_t)neq1, (uint32_t)(qk_groups * nek2), (uint32_t)batches });
@@ -14469,14 +14467,6 @@ static void ggml_vk_preallocate_buffers(ggml_backend_vk_context * ctx, vk_contex
         }
         ctx->prealloc_add_rms_partials = ggml_vk_create_buffer_device(ctx->device, ctx->prealloc_size_add_rms_partials);
     }
-    if (ctx->prealloc_fattn_temp == nullptr || (ctx->prealloc_fattn_temp_size > 0 && ctx->prealloc_fattn_temp->size < ctx->prealloc_fattn_temp_size)) {
-        VK_LOG_MEMORY("ggml_vk_preallocate_buffers(prealloc_fattn_temp_size: " << ctx->prealloc_fattn_temp_size << ")");
-        // Resize buffer
-        if (ctx->prealloc_fattn_temp != nullptr) {
-            ggml_vk_destroy_buffer(ctx->prealloc_fattn_temp);
-        }
-        ctx->prealloc_fattn_temp = ggml_vk_create_buffer_device(ctx->device, ctx->prealloc_fattn_temp_size);
-    }
 }
 
 static void ggml_vk_compute_forward(ggml_backend_vk_context* ctx, ggml_cgraph * cgraph, ggml_tensor* tensor, int tensor_idx, bool almost_ready);
@@ -15088,7 +15078,6 @@ static void ggml_vk_cleanup(ggml_backend_vk_context * ctx) {
     ggml_vk_destroy_buffer(ctx->prealloc_y);
     ggml_vk_destroy_buffer(ctx->prealloc_split_k);
     ggml_vk_destroy_buffer(ctx->prealloc_add_rms_partials);
-    ggml_vk_destroy_buffer(ctx->prealloc_fattn_temp);
     ggml_vk_destroy_buffer(ctx->sync_staging);
 
     ctx->prealloc_y_last_pipeline_used = nullptr;
@@ -15098,7 +15087,6 @@ static void ggml_vk_cleanup(ggml_backend_vk_context * ctx) {
     ctx->prealloc_size_x = 0;
     ctx->prealloc_size_y = 0;
     ctx->prealloc_size_split_k = 0;
-    ctx->prealloc_fattn_temp_size = 0;
 
     for (auto& event : ctx->gc.events) {
         ctx->device->device.destroyEvent(event);
