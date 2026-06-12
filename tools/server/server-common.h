@@ -5,7 +5,6 @@
 #include "llama.h"
 #include "chat.h"
 #include "mtmd.h"
-#include "mtmd-helper.h"
 
 #define JSON_ASSERT GGML_ASSERT
 #include <nlohmann/json.hpp>
@@ -219,16 +218,15 @@ public:
     bool validate(const struct llama_context * ctx) const;
 
     // encode and decode the image chunk.
-    // if callback is non-NULL, it is invoked after each successful llama_decode() call.
+    // if ctx_dft is non-NULL, the batch is also decoded on the draft context.
     int32_t process_chunk(
-                llama_context * ctx,
                 mtmd_context * mctx,
+                llama_context * ctx_tgt,
+                llama_context * ctx_dft,
                 size_t idx,
                 llama_pos pos,
                 int32_t seq_id,
-                size_t & n_tokens_out,
-                mtmd_helper_post_decode_callback callback,
-                void * user_data) const;
+                size_t & n_tokens_out) const;
 
     server_tokens clone() const;
 };

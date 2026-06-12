@@ -2984,21 +2984,12 @@ private:
 
                     // check if we should process the image
                     while (slot.prompt.n_tokens() < slot.task->n_tokens() && input_tokens[slot.prompt.n_tokens()] == LLAMA_TOKEN_NULL) {
-                        // process the image; the post-decode callback keeps the draft context in sync
-                        static auto mtmd_post_decode_callback = [](struct llama_batch * batch, void * user_data) -> int32_t {
-                            server_context_impl * impl = static_cast<server_context_impl *>(user_data);
-                            if (impl->spec && !common_speculative_process(impl->spec.get(), *batch)) {
-                                return -1;
-                            }
-                            return 0;
-                        };
-
+                        // process the image; ctx_dft keeps the draft context in sync
                         size_t n_tokens_out = 0;
                         int32_t res = input_tokens.process_chunk(
-                            ctx_tgt, mctx,
+                            mctx, ctx_tgt, ctx_dft.get(),
                             slot.prompt.n_tokens(), slot.prompt.tokens.pos_next(), slot.id,
-                            n_tokens_out,
-                            mtmd_post_decode_callback, this);
+                            n_tokens_out);
                         if (res != 0) {
                             SLT_ERR(slot, "failed to process image, res = %d\n", res);
                             send_error(slot, "failed to process image", ERROR_TYPE_SERVER);

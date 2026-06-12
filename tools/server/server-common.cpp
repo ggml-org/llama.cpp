@@ -531,31 +531,36 @@ bool server_tokens::validate(const struct llama_context * ctx) const {
     return true;
 }
 
+// post-decode callback: decode the batch on the draft context
+static int32_t server_tokens_process_chunk_callback(struct llama_batch * batch, void * user_data) {
+    llama_context * ctx_dft = static_cast<llama_context *>(user_data);
+    return llama_decode(ctx_dft, *batch);
+}
+
 int32_t server_tokens::process_chunk(
-            llama_context * ctx,
             mtmd_context * mctx,
+            llama_context * ctx_tgt,
+            llama_context * ctx_dft,
             size_t idx,
             llama_pos pos,
             int32_t seq_id,
-            size_t & n_tokens_out,
-            mtmd_helper_post_decode_callback callback,
-            void * user_data) const {
+            size_t & n_tokens_out) const {
     const auto & chunk = find_chunk(idx);
     const char * name = mtmd_input_chunk_get_type(chunk.get()) == MTMD_INPUT_CHUNK_TYPE_IMAGE
                         ? "image" : "audio";
     SRV_INF("processing %s...\n", name);
-    int32_t n_batch = llama_n_batch(ctx);
+    int32_t n_batch = llama_n_batch(ctx_tgt);
     int64_t t0 = ggml_time_ms();
     llama_pos new_n_past; // unused for now
-    int32_t result = mtmd_helper_eval_chunk_single(mctx, ctx,
+    int32_t result = mtmd_helper_eval_chunk_single(mctx, ctx_tgt,
         chunk.get(),
         pos,
         seq_id,
         n_batch,
         true, // logits last
         &new_n_past,
-        callback,
-        user_data);
+        ctx_dft ? server_tokens_process_chunk_callback : nullptr,
+        ctx_dft);
     SRV_INF("%s processed in %" PRId64 " ms\n", name, ggml_time_ms() - t0);
     if (result != 0) {
         LOG_ERR("mtmd_helper_eval failed with status %d", result);
