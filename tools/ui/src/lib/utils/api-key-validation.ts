@@ -28,7 +28,8 @@ export async function validateApiKey(fetch: typeof globalThis.fetch): Promise<vo
 			Authorization: `Bearer ${apiKey}`
 		};
 
-		const response = await fetch(base + API_PROPS.LIST, { headers });
+		const apiBase = config().apiBase ?? base;
+		const response = await fetch(apiBase + API_PROPS.LIST, { headers });
 
 		if (!response.ok) {
 			if (response.status === 401 || response.status === 403) {

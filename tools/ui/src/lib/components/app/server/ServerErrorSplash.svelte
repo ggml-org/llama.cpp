@@ -68,7 +68,8 @@
 			settingsStore.updateConfig(SETTINGS_KEYS.API_KEY, apiKeyInput.trim());
 
 			// Test the API key by making a real request to the server
-			const response = await fetch(base + API_PROPS.LIST, {
+			const apiBase = config().apiBase ?? base;
+			const response = await fetch(apiBase + API_PROPS.LIST, {
 				headers: {
 					'Content-Type': 'application/json',
 					Authorization: `Bearer ${apiKeyInput.trim()}`

@@ -104,8 +104,9 @@
 					'Content-Type': 'application/json',
 					Authorization: `Bearer ${apiKey.trim()}`
 				};
+				const apiBase = config().apiBase ?? base;
 
-				fetch(base + API_PROPS.LIST, { headers })
+				fetch(apiBase + API_PROPS.LIST, { headers })
 					.then((response) => {
 						if (response.status === 401 || response.status === 403) {
 							window.location.reload();

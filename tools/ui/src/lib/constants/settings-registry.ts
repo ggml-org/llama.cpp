@@ -23,7 +23,7 @@ import type {
 	SettingsSectionEntry,
 	SettingsSection
 } from '$lib/types';
-import { CLI_FLAGS, DEFAULT_MCP_CONFIG, API_KEY } from '$lib/constants';
+import { CLI_FLAGS, DEFAULT_MCP_CONFIG } from '$lib/constants';
 import McpLogo from '$lib/components/app/mcp/McpLogo.svelte';
 import { SETTINGS_KEYS } from './settings-keys';
 import { ROUTES, SETTINGS_SECTION_SLUGS } from './routes';
@@ -73,10 +73,18 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				sync: { serverKey: SETTINGS_KEYS.THEME, paramType: SyncableParameterType.STRING }
 			},
 			{
+				key: SETTINGS_KEYS.API_BASE,
+				label: 'API Base',
+				help: 'API Base URL of remote llama-server. If empty, defaults to the current origin, e.g. http://localhost:8080.',
+				defaultValue: '',
+				type: SettingsFieldType.INPUT,
+				section: SETTINGS_SECTION_SLUGS.GENERAL
+			},
+			{
 				key: SETTINGS_KEYS.API_KEY,
 				label: 'API Key',
 				help: `Set the API Key if you are using <code> ${CLI_FLAGS.API_KEY} </code> option for the server.`,
-				defaultValue: API_KEY,
+				defaultValue: '',
 				type: SettingsFieldType.INPUT,
 				section: SETTINGS_SECTION_SLUGS.GENERAL
 			},
