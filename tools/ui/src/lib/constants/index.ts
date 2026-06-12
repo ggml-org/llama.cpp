@@ -37,6 +37,7 @@ export * from './model-id';
 export * from './precision';
 export * from './processing-info';
 export * from './routes';
+export * from './sandbox';
 export * from './settings-keys';
 export * from './settings-registry';
 export * from './supported-file-types';

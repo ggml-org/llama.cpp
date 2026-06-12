@@ -123,7 +123,8 @@ kernel void kernel_gated_delta_net(
     const uint iq3 = seq_id / rq3; // seq index for Q and K
 
     const uint state_size = S_V * S_V;
-    const uint state_base = (seq_id * K * H_v + head_id) * state_size;
+    // input state holds s0 only [S_v, S_v, H, n_seqs]: per-seq stride is H*D.
+    const uint state_base = (seq_id * H_v + head_id) * state_size;
     const uint q_off_base  = iq3 * sq3 + iq1 * sq1;
     const uint v_off_base  = seq_id * sv3 + head_id * sv1;
     const uint gb_off_base = seq_id * sb3 + head_id * sb1;
@@ -143,7 +144,8 @@ kernel void kernel_gated_delta_net(
         }
     }
 
-    const int shift = (int)n_tokens - (int)K;
+    // snapshot slot mapping: slot 0 = most recent state, slot s = s tokens back.
+    // When n_tokens < K only slots 0..n_tokens-1 are written; older slots are caller-owned.
     uint attn_off = (seq_id * n_tokens * H_v + head_id) * S_V;
 
     for (uint t = 0; t < n_tokens; t++) {
@@ -219,7 +221,7 @@ kernel void kernel_gated_delta_net(
         attn_off += S_V * H_v;
 
         if (K > 1u) {
-            const int target_slot = (int)t - shift;
+            const int target_slot = (int)n_tokens - 1 - (int)t;
             if (target_slot >= 0 && target_slot < (int)K) {
                 #pragma unroll
                 for (uint cg = 0; cg < COLS_PER_LANE_GROUP; cg++) {

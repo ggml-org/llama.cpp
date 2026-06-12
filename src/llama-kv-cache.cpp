@@ -90,12 +90,26 @@ llama_kv_cache::llama_kv_cache(
                  uint32_t   n_pad,
                  uint32_t   n_swa,
            llama_swa_type   swa_type,
-           llama_memory_t   mem_src,
+           llama_memory_t   mem_other,
     const layer_filter_cb & filter,
     const  layer_reuse_cb & reuse,
     const  layer_share_cb & share) :
     model(model), hparams(hparams), v_trans(v_trans),
-    n_seq_max(n_seq_max), n_stream(unified ? 1 : n_seq_max), n_pad(n_pad), n_swa(n_swa), swa_type(swa_type) {
+    n_seq_max(n_seq_max), n_stream(unified ? 1 : n_seq_max), n_pad(n_pad), n_swa(n_swa), swa_type(swa_type),
+    other(static_cast<llama_kv_cache *>(mem_other)),
+    v_cells_impl(other ? other->v_cells_impl : std::make_shared<llama_kv_cells_vec>()),
+    v_cells(*v_cells_impl) {
+
+    // shared cells view the source cache's K/V tensors, so the cell count
+    // follows the source allocation: a fitted target can be smaller than the
+    // draft default and oversized views would overflow the source tensors
+    if (other) {
+        const uint32_t size_other = other->get_size();
+        if (kv_size != size_other) {
+            LLAMA_LOG_WARN("%s: kv_size = %u overridden to %u to match the shared source cache\n", __func__, kv_size, size_other);
+            kv_size = size_other;
+        }
+    }
 
     GGML_ASSERT(kv_size % n_pad == 0);
 
@@ -304,28 +318,37 @@ llama_kv_cache::llama_kv_cache(
                 ggml_type_name(type_v), (float)memory_size_v / (1024.0f * 1024.0f));
     }
 
-    const char * LLAMA_ATTN_ROT_DISABLE = getenv("LLAMA_ATTN_ROT_DISABLE");
-    const bool attn_rot_disable = LLAMA_ATTN_ROT_DISABLE ? atoi(LLAMA_ATTN_ROT_DISABLE) : false;
-    if (attn_rot_disable) {
-        LLAMA_LOG_WARN("%s: attention rotation force disabled (LLAMA_ATTN_ROT_DISABLE)\n", __func__);
+    // TODO: refactor [TAG_KV_CACHE_SHARE_CELLS]
+    if (other) {
+        n_embd_head_k_all = other->n_embd_head_k_all;
+        n_embd_head_v_all = other->n_embd_head_v_all;
+
+        attn_rot_k = other->attn_rot_k;
+        attn_rot_v = other->attn_rot_v;
+    } else {
+        const char * LLAMA_ATTN_ROT_DISABLE = getenv("LLAMA_ATTN_ROT_DISABLE");
+        const bool attn_rot_disable = LLAMA_ATTN_ROT_DISABLE ? atoi(LLAMA_ATTN_ROT_DISABLE) : false;
+        if (attn_rot_disable) {
+            LLAMA_LOG_WARN("%s: attention rotation force disabled (LLAMA_ATTN_ROT_DISABLE)\n", __func__);
+        }
+
+        attn_rot_k =
+            !attn_rot_disable &&
+            n_embd_head_k_all > 0 &&
+            ggml_is_quantized(type_k) &&
+            hparams.n_embd_head_k() % 64 == 0;
+
+        // always create Hadamard rotation tensors for DeepSeek V3.2 DSA lightning indexer
+        if (model.arch == LLM_ARCH_DEEPSEEK32 && hparams.n_embd_head_k_full == hparams.indexer_head_size) {
+            attn_rot_k = true;
+        }
+
+        attn_rot_v =
+            !attn_rot_disable &&
+            n_embd_head_v_all > 0 &&
+            ggml_is_quantized(type_v) &&
+            hparams.n_embd_head_v() % 64 == 0;
     }
-
-    attn_rot_k =
-        !attn_rot_disable &&
-        n_embd_head_k_all > 0 &&
-        ggml_is_quantized(type_k) &&
-        hparams.n_embd_head_k() % 64 == 0;
-
-    // always create Hadamard rotation tensors for DeepSeek V3.2 DSA lightning indexer
-    if (model.arch == LLM_ARCH_DEEPSEEK32 && hparams.n_embd_head_k_full == hparams.indexer_head_size) {
-        attn_rot_k = true;
-    }
-
-    attn_rot_v =
-        !attn_rot_disable &&
-        n_embd_head_v_all > 0 &&
-        ggml_is_quantized(type_v) &&
-        hparams.n_embd_head_v() % 64 == 0;
 
     LLAMA_LOG_INFO("%s: attn_rot_k = %d, n_embd_head_k_all = %d\n", __func__, attn_rot_k, n_embd_head_k_all);
     LLAMA_LOG_INFO("%s: attn_rot_v = %d, n_embd_head_k_all = %d\n", __func__, attn_rot_v, n_embd_head_v_all);
@@ -1085,7 +1108,6 @@ llama_kv_cache::slot_info llama_kv_cache::find_slot(const llama_ubatch & ubatch,
 void llama_kv_cache::apply_ubatch(const slot_info & sinfo, const llama_ubatch & ubatch) {
     // TODO: refactor [TAG_KV_CACHE_SHARE_CELLS]
     if (other) {
-        v_cells = other->v_cells;
         return;
     }
 

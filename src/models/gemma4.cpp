@@ -155,12 +155,14 @@ public:
     }
     virtual ~llm_graph_input_logits_bias() = default;
 
-    void set_input(const llama_ubatch *) override {
+    void set_input(const llama_ubatch * /*ubatch*/) override {
         const int64_t n_vocab = arr.size();
         ggml_backend_tensor_set(logits_bias, arr.data(), 0, n_vocab*ggml_element_size(logits_bias));
     }
 
-    // bool can_reuse(const llm_graph_params & params) override;
+    bool can_reuse(const llm_graph_params & /*params*/) override {
+        return true;
+    }
 
     ggml_tensor * logits_bias = nullptr; // F32 [n_vocab]
 
@@ -207,6 +209,8 @@ llama_model_gemma4::graph::graph(const llama_model & model, const llm_graph_para
         const float freq_base_l  = model.get_rope_freq_base(cparams, il);
         const float freq_scale_l = model.get_rope_freq_scale(cparams, il);
         const int   n_rot_l      = hparams.n_rot(il);
+
+        res->t_layer_inp[il] = inpL;
 
         // norm
         cur = build_norm(inpL, model.layers[il].attn_norm, nullptr, LLM_NORM_RMS, il);

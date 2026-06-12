@@ -35,6 +35,10 @@ struct mtmd_bitmap {
     std::string id; // optional user-defined id, for ex: can be set to image hash, useful for KV cache tracking
     bool is_audio = false; // true if the bitmap is audio
 
+    // lazy-loaded bitmap
+    mtmd_bitmap_lazy_callback lazy_callback = nullptr;
+    void * lazy_user_data = nullptr;
+
     mtmd_bitmap(const unsigned char * data, uint32_t nx, uint32_t ny)
         : nx(nx), ny(ny), is_audio(false) {
         if (data) {
@@ -732,30 +736,111 @@ void mtmd_free(mtmd_context * ctx) {
 
 struct mtmd_tokenizer {
     mtmd_context * ctx;
-    std::vector<const mtmd_bitmap *> bitmaps;
 
     std::string input_text;
     bool add_special;
     bool parse_special;
     const llama_vocab * vocab;
 
+    struct part {
+        std::string text;
+        const mtmd_bitmap * bitmap;
+    };
+    std::vector<part> parts;
+    // these will be freed when mtmd_tokenizer finishes
+    std::vector<mtmd::bitmap> bm_from_lazy; // TODO @ngxson : refactor, free bm_from_lazy progressively
+    std::vector<const char *> text_from_lazy;
+
     mtmd_input_chunks cur;
     uint32_t n_images_added = 0; // 0-based index assigned to the next image chunk
 
+    ~mtmd_tokenizer() {
+        // note: mtmd::bitmap is already RAII
+        for (auto & str : text_from_lazy) {
+            free((void *)str);
+        }
+    }
+
     mtmd_tokenizer(mtmd_context * ctx,
             const mtmd_input_text * text,
-            const mtmd_bitmap ** bitmaps,
-            size_t n_bitmaps) : ctx(ctx), bitmaps(bitmaps, bitmaps + n_bitmaps) {
+            const mtmd_bitmap ** bmps,
+            size_t n_bitmaps) : ctx(ctx) {
         add_special   = text->add_special;
         parse_special = text->parse_special;
         input_text    = text->text;
         vocab         = ctx->vocab;
+
+        std::vector<const mtmd_bitmap *> bitmaps(bmps, bmps + n_bitmaps);
+        auto parts_str = split_text(input_text, ctx->media_marker);
+        size_t i_bm = 0;
+        for (const auto & part : parts_str) {
+            if (part == ctx->media_marker) {
+                if (i_bm >= bitmaps.size()) {
+                    throw std::runtime_error(string_format("number of media markers in text (%zu) exceeds number of bitmaps (%zu)", i_bm + 1, bitmaps.size()));
+                }
+                parts.push_back({"", bitmaps[i_bm++]});
+            } else {
+                parts.push_back({std::move(part), nullptr});
+            }
+        }
+
+        size_t n_markers = 0;
+        for (const auto & part : parts) {
+            if (part.bitmap != nullptr) {
+                n_markers++;
+            }
+        }
+        if (n_markers != bitmaps.size()) {
+            throw std::runtime_error(string_format("number of media markers in text (%zu) does not match number of bitmaps (%zu)", n_markers, bitmaps.size()));
+        }
+
+        expand_lazy_bitmaps();
+    }
+
+    void expand_lazy_bitmaps() {
+        std::vector<part> expanded;
+        expanded.reserve(parts.size());
+        for (auto & p : parts) {
+            if (p.bitmap != nullptr && p.bitmap->lazy_callback) {
+                LOG_DBG("%s: expanding lazy bitmap\n", __func__);
+                for (size_t i = 0;; i++) {
+                    char * out_str = nullptr;
+                    mtmd_bitmap * out_bm = nullptr;
+                    int res = p.bitmap->lazy_callback(i,
+                                    p.bitmap->lazy_user_data,
+                                    &out_bm,
+                                    &out_str);
+                    if (out_bm && out_str) {
+                        throw std::runtime_error(string_format("lazy callback cannot return both bitmap and text"));
+                    }
+                    if (res == 0) {
+                        // OK, append the returned chunk; lazy part is not yet added
+                        if (out_bm) {
+                            auto & ptr = bm_from_lazy.emplace_back(out_bm); // remember to free it later
+                            expanded.push_back({"", ptr.ptr.get()});
+                            LOG_DBG("%s: lazy callback returned bitmap with dimensions %d x %d\n", __func__, out_bm->nx, out_bm->ny);
+                        } else if (out_str) {
+                            auto & ptr = text_from_lazy.emplace_back(out_str); // remember to free it later
+                            expanded.push_back({ptr, nullptr});
+                            LOG_DBG("%s: lazy callback returned text: %s\n", __func__, out_str);
+                        }
+                    } else if (res == -1) {
+                        // EOF: lazy part removes itself (not added to expanded)
+                        break;
+                    } else if (res == -2) {
+                        // error
+                        throw std::runtime_error(string_format("lazy callback returned error"));
+                    }
+                }
+            } else {
+                expanded.push_back(std::move(p));
+            }
+        }
+        parts = std::move(expanded);
     }
 
     int32_t tokenize(mtmd_input_chunks * output) {
         cur.entries.clear();
-        std::vector<std::string> parts = split_text(input_text, ctx->media_marker);
-        size_t i_bm = 0; // index of the current bitmap
 
         // [QWEN_VIDEO] handle frame merging for models that support it (i.e. qwen-vl)
         int n_merge_frames = 1;
@@ -764,53 +849,50 @@ struct mtmd_tokenizer {
             GGML_ASSERT(n_merge_frames <= 2 && "we only support merging maximum 2 images for now; open an issue if this model supports merging more");
         }
 
+        // Build merged_bitmaps: each entry is a group of 1 or 2 bitmaps.
+        // For consecutive mergeable bitmap parts, merge them and collapse the second part out of this->parts.
         std::vector<std::vector<const mtmd_bitmap *>> merged_bitmaps;
         if (n_merge_frames > 1) {
-            size_t i_bm_scan = 0;
             for (size_t i = 0; i < parts.size(); ++i) {
-                if (parts[i] != ctx->media_marker) {
+                if (parts[i].bitmap == nullptr) {
                     continue;
                 }
-                if (i + 1 < parts.size()
-                        && parts[i + 1] == ctx->media_marker
-                        && i_bm_scan + 1 < bitmaps.size()) {
-                    const mtmd_bitmap * bm_a = bitmaps[i_bm_scan];
-                    const mtmd_bitmap * bm_b = bitmaps[i_bm_scan + 1];
+                if (i + 1 < parts.size() && parts[i + 1].bitmap != nullptr) {
+                    const mtmd_bitmap * bm_a = parts[i].bitmap;
+                    const mtmd_bitmap * bm_b = parts[i + 1].bitmap;
                     if (bm_a->can_batch_with(*bm_b)) {
-                        LOG_DBG("%s: merging 2 frames at bitmap index %zu and %zu\n", __func__, i_bm_scan, i_bm_scan + 1);
+                        LOG_DBG("%s: merging 2 frames at part index %zu and %zu\n", __func__, i, i + 1);
                         merged_bitmaps.push_back({bm_a, bm_b});
-                        parts.erase(parts.begin() + i + 1); // remove the second marker
-                        i_bm_scan += 2;
+                        parts.erase(parts.begin() + i + 1); // collapse the second bitmap part
                         continue;
                     }
                 }
-                LOG_DBG("%s: no merging for bitmap index %zu\n", __func__, i_bm_scan);
-                merged_bitmaps.push_back({bitmaps[i_bm_scan]});
-                ++i_bm_scan;
+                LOG_DBG("%s: no merging for part index %zu\n", __func__, i);
+                merged_bitmaps.push_back({parts[i].bitmap});
             }
         } else {
-            for (size_t i = 0; i < bitmaps.size(); ++i) {
-                merged_bitmaps.push_back({bitmaps[i]});
+            for (const auto & p : parts) {
+                if (p.bitmap != nullptr) {
+                    merged_bitmaps.push_back({p.bitmap});
+                }
             }
         }
 
-        i_bm = 0;
-        for (auto & part : parts) {
-            if (part == ctx->media_marker) {
-                // this is a marker, we should add the next bitmap
+        size_t i_bm = 0;
+        for (const auto & p : parts) {
+            if (p.bitmap != nullptr) {
                 if (i_bm >= merged_bitmaps.size()) {
                     LOG_ERR("%s: error: number of bitmaps (%zu) does not match number of markers (%zu)\n",
                             __func__, merged_bitmaps.size(), parts.size() - 1);
                     return 1;
                 }
-                auto & bmps = merged_bitmaps[i_bm++];
+                auto bmps = merged_bitmaps[i_bm++];
                 int32_t res = add_media(bmps);
                 if (res != 0) {
                     return res;
                 }
             } else {
-                // this is a text part, we should add it as text
-                add_text(part, parse_special);
+                add_text(p.text, parse_special);
             }
         }
 
@@ -1236,8 +1318,13 @@ int32_t mtmd_tokenize(mtmd_context * ctx,
             const mtmd_input_text * text,
             const mtmd_bitmap ** bitmaps,
             size_t n_bitmaps) {
-    mtmd_tokenizer tokenizer(ctx, text, bitmaps, n_bitmaps);
-    return tokenizer.tokenize(output);
+    try {
+        mtmd_tokenizer tokenizer(ctx, text, bitmaps, n_bitmaps);
+        return tokenizer.tokenize(output);
+    } catch (const std::exception & e) {
+        LOG_ERR("%s: error: %s\n", __func__, e.what());
+        return 2;
+    }
 }
 
 int32_t mtmd_encode_chunk(mtmd_context * ctx, const mtmd_input_chunk * chunk) {
@@ -1373,6 +1460,10 @@ int mtmd_get_audio_sample_rate(const mtmd_context * ctx) {
     return clip_get_hparams(ctx->ctx_a)->audio_sample_rate;
 }
 
+const char * mtmd_get_marker(const mtmd_context * ctx) {
+    return ctx->media_marker.c_str();
+}
+
 //
 // public API functions
 //
@@ -1405,10 +1496,16 @@ uint32_t mtmd_bitmap_get_ny(const mtmd_bitmap * bitmap) {
 }
 
 const unsigned char * mtmd_bitmap_get_data(const mtmd_bitmap * bitmap) {
+    if (bitmap->is_placeholder()) {
+        return nullptr;
+    }
     return bitmap->get_ro_buf().data();
 }
 
 size_t mtmd_bitmap_get_n_bytes(const mtmd_bitmap * bitmap) {
+    if (bitmap->is_placeholder()) {
+        return 0;
+    }
     return bitmap->get_ro_buf().size();
 }
 
@@ -1426,6 +1523,18 @@ void mtmd_bitmap_set_id(mtmd_bitmap * bitmap, const char * id) {
     } else {
         bitmap->id.clear();
     }
+}
+
+mtmd_bitmap * mtmd_bitmap_init_lazy(mtmd_context * ctx,
+                                    const char * id,
+                                    void * user_data,
+                                    mtmd_bitmap_lazy_callback callback) {
+    GGML_UNUSED(ctx); // reserved for future use
+    mtmd_bitmap * bitmap = new mtmd_bitmap(nullptr, 0, 0);
+    bitmap->lazy_callback = callback;
+    bitmap->lazy_user_data = user_data;
+    mtmd_bitmap_set_id(bitmap, id);
+    return bitmap;
 }
 
 void mtmd_bitmap_free(mtmd_bitmap * bitmap) {

@@ -12,7 +12,7 @@ void llama_model_gemma4_assistant::load_arch_hparams(llama_model_loader & ml) {
     hparams.f_attention_scale = 1.0f;
 
     ml.get_key(LLM_KV_NEXTN_PREDICT_LAYERS, hparams.n_layer_nextn, false);
-    GGML_ASSERT(hparams.n_layer_nextn <= hparams.n_layer_all && "n_layer_nextn must be <= n_layer_impl");
+    GGML_ASSERT(hparams.n_layer_nextn == hparams.n_layer_all && "n_layer_nextn must be == n_layer_impl");
 
     ml.get_key(LLM_KV_ROPE_FREQ_BASE_SWA,           hparams.rope_freq_base_train_swa, false);
     ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW,     hparams.n_swa);
@@ -39,8 +39,11 @@ void llama_model_gemma4_assistant::load_arch_tensors(llama_model_loader &) {
 
     output_norm = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM, "weight"), { n_embd }, 0);
 
+    create_tensor(tn(LLM_TENSOR_MASKED_EMBD_CENTROIDS, "weight"), {}, TENSOR_NOT_REQUIRED);
+    create_tensor(tn(LLM_TENSOR_MASKED_EMBD_ORDERING),  {}, TENSOR_NOT_REQUIRED);
+
     const int64_t n_embd_backbone = hparams.n_embd_inp();
-    nextn_post_proj = create_tensor(tn(LLM_TENSOR_NEXTN_POST_PROJ, "weight"), { n_embd, n_embd_backbone }, 0);
+    nextn_proj_post = create_tensor(tn(LLM_TENSOR_NEXTN_PROJ_POST, "weight"), { n_embd, n_embd_backbone }, 0);
 
     int rope_freqs_flag = 0;
 
@@ -52,7 +55,7 @@ void llama_model_gemma4_assistant::load_arch_tensors(llama_model_loader &) {
         const int64_t n_ff        = hparams.n_ff(i);
 
         if (i == 0) {
-            nextn_pre_proj = create_tensor(tn(LLM_TENSOR_NEXTN_PRE_PROJ, "weight", i), { 2*n_embd_backbone, n_embd }, 0);
+            nextn_proj_pre = create_tensor(tn(LLM_TENSOR_NEXTN_PROJ_PRE, "weight", i), { 2*n_embd_backbone, n_embd }, 0);
         }
 
         layer.attn_norm = create_tensor(tn(LLM_TENSOR_ATTN_NORM, "weight", i), { n_embd }, 0);
@@ -105,17 +108,17 @@ llama_model_gemma4_assistant::graph::graph(const llama_model & model, const llm_
         res->add_input(std::move(inp));
     }
 
-    GGML_ASSERT(cparams.ctx_src != nullptr);
-    const auto * model_src = llama_get_model(cparams.ctx_src);
+    GGML_ASSERT(cparams.ctx_other != nullptr);
+    const auto * model_other = llama_get_model(cparams.ctx_other);
 
-    ggml_tensor * x = ggml_get_rows(ctx0, model_src->tok_embd, inp_tokens);
+    ggml_tensor * x = ggml_get_rows(ctx0, model_other->tok_embd, inp_tokens);
     x = ggml_scale(ctx0, x, sqrtf((float) n_embd_backbone));
     cb(x, "inp_embd_target", -1);
 
     ggml_tensor * xh = ggml_concat(ctx0, x, inp_h, 0);
     cb(xh, "inp_xh", -1);
 
-    ggml_tensor * cur = ggml_mul_mat(ctx0, model.nextn_pre_proj, xh);
+    ggml_tensor * cur = ggml_mul_mat(ctx0, model.nextn_proj_pre, xh);
     cb(cur, "pre_proj", -1);
 
     auto *        inp_attn    = build_attn_inp_kv_iswa();
@@ -191,7 +194,7 @@ llama_model_gemma4_assistant::graph::graph(const llama_model & model, const llm_
     cb(logits, "result_output", -1);
     res->t_logits = logits;
 
-    ggml_tensor * h_next = ggml_mul_mat(ctx0, model.nextn_post_proj, cur);
+    ggml_tensor * h_next = ggml_mul_mat(ctx0, model.nextn_proj_post, cur);
     cb(h_next, "h_nextn", -1);
     res->t_h_nextn = h_next;
 
