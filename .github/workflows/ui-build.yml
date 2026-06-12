@@ -32,7 +32,7 @@ jobs:
       - name: Build application
         env:
           HF_UI_VERSION: ${{ inputs.hf_ui_version || '' }}
-          LLAMA_UI_VERSION: ${{ inputs.hf_ui_version || 'b0000' }}
+          LLAMA_BUILD_NUMBER: ${{ inputs.hf_ui_version || 'b0000' }}
         run: npm run build
         working-directory: tools/ui
 
