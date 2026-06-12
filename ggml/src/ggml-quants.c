@@ -410,9 +410,10 @@ void dequantize_row_q4_0(const block_q4_0 * GGML_RESTRICT x, float * GGML_RESTRI
 
         for (int j = 0; j < qk/2; ++j) {
             const int x0 = (x[i].qs[j] & 0x0F) - 8;
-            const int x1 = (x[i].qs[j] >>   4) - 8;
-
             y[i*qk + j + 0   ] = x0*d;
+        }
+        for (int j = 0; j < qk/2; ++j) {
+            const int x1 = (x[i].qs[j] >>   4) - 8;
             y[i*qk + j + qk/2] = x1*d;
         }
     }
@@ -431,9 +432,10 @@ void dequantize_row_q4_1(const block_q4_1 * GGML_RESTRICT x, float * GGML_RESTRI
 
         for (int j = 0; j < qk/2; ++j) {
             const int x0 = (x[i].qs[j] & 0x0F);
-            const int x1 = (x[i].qs[j] >>   4);
-
             y[i*qk + j + 0   ] = x0*d + m;
+        }
+        for (int j = 0; j < qk/2; ++j) {
+            const int x1 = (x[i].qs[j] >>   4);
             y[i*qk + j + qk/2] = x1*d + m;
         }
     }
@@ -454,12 +456,12 @@ void dequantize_row_q5_0(const block_q5_0 * GGML_RESTRICT x, float * GGML_RESTRI
 
         for (int j = 0; j < qk/2; ++j) {
             const uint8_t xh_0 = ((qh >> (j +  0)) << 4) & 0x10;
-            const uint8_t xh_1 = ((qh >> (j + 12))     ) & 0x10;
-
             const int32_t x0 = ((x[i].qs[j] & 0x0F) | xh_0) - 16;
-            const int32_t x1 = ((x[i].qs[j] >>   4) | xh_1) - 16;
-
             y[i*qk + j + 0   ] = x0*d;
+        }
+        for (int j = 0; j < qk/2; ++j) {
+            const uint8_t xh_1 = ((qh >> (j + 12))     ) & 0x10;
+            const int32_t x1 = ((x[i].qs[j] >>   4) | xh_1) - 16;
             y[i*qk + j + qk/2] = x1*d;
         }
     }
@@ -481,12 +483,12 @@ void dequantize_row_q5_1(const block_q5_1 * GGML_RESTRICT x, float * GGML_RESTRI
 
         for (int j = 0; j < qk/2; ++j) {
             const uint8_t xh_0 = ((qh >> (j +  0)) << 4) & 0x10;
-            const uint8_t xh_1 = ((qh >> (j + 12))     ) & 0x10;
-
             const int x0 = (x[i].qs[j] & 0x0F) | xh_0;
-            const int x1 = (x[i].qs[j] >>   4) | xh_1;
-
             y[i*qk + j + 0   ] = x0*d + m;
+        }
+        for (int j = 0; j < qk/2; ++j) {
+            const uint8_t xh_1 = ((qh >> (j + 12))     ) & 0x10;
+            const int x1 = (x[i].qs[j] >>   4) | xh_1;
             y[i*qk + j + qk/2] = x1*d + m;
         }
     }
