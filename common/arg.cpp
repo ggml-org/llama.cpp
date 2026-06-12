@@ -635,14 +635,17 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
         throw std::invalid_argument("error: --prompt-cache-all not supported in interactive mode yet\n");
     }
 
+    // with --server-base, the model is provided by the external server
+    const bool has_remote_server = !params.server_base.empty();
+
     // handle model and download
-    if (!skip_model_download) {
+    if (!skip_model_download && !has_remote_server) {
         common_params_handle_models(params, ctx_arg.ex);
     }
 
-    // model is required (except for server)
+    // model is required (except for server, or when an external server provides it)
     // TODO @ngxson : maybe show a list of available models in CLI in this case
-    if (params.model.path.empty() && ctx_arg.ex != LLAMA_EXAMPLE_SERVER && !skip_model_download && !params.usage && !params.completion) {
+    if (params.model.path.empty() && ctx_arg.ex != LLAMA_EXAMPLE_SERVER && !skip_model_download && !params.usage && !params.completion && !has_remote_server) {
         throw std::invalid_argument("error: --model is required\n");
     }
 
@@ -1547,6 +1550,15 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.single_turn = true;
         }
     ).set_examples({LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI}));
+    add_opt(common_arg(
+        {"--server-base"}, "URL",
+        "base url of an external llama-server instance to connect to, e.g. http://localhost:8080\n"
+        "when set, llama-cli does not spawn a local server and model args are ignored\n"
+        "(default: unset, spawn a local llama-server)",
+        [](common_params & params, const std::string & value) {
+            params.server_base = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SERVER_BASE"));
     add_opt(common_arg(
         {"-i", "--interactive"},
         string_format("run in interactive mode (default: %s)", params.interactive ? "true" : "false"),

@@ -57,3 +57,8 @@ install(TARGETS ${TARGET} RUNTIME)
 
 target_link_libraries(${TARGET} PRIVATE llama-server-impl)
 target_compile_features(${TARGET} PRIVATE cxx_std_17)
+
+if (TARGET llama-cli)
+    # llama-cli spawns llama-server at runtime when no --server-base is given
+    add_dependencies(llama-cli llama-server)
+endif()

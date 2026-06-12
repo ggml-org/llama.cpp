@@ -2,11 +2,21 @@
 
 set(TARGET llama-cli-impl)
 
-add_library(${TARGET} cli.cpp)
+add_library(${TARGET}
+    cli.cpp
+    cli-client.cpp
+    cli-client.h
+    cli-context.cpp
+    cli-context.h
+    cli-server.cpp
+    cli-server.h
+    cli-view.cpp
+    cli-view.h
+)
 set_target_properties(${TARGET} PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
 
-target_include_directories(${TARGET} PUBLIC ${CMAKE_CURRENT_SOURCE_DIR} ../server)
-target_link_libraries(${TARGET} PUBLIC server-context llama-common ${CMAKE_THREAD_LIBS_INIT})
+target_include_directories(${TARGET} PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(${TARGET} PUBLIC llama-common cpp-httplib ${CMAKE_THREAD_LIBS_INIT})
 
 if(LLAMA_TOOLS_INSTALL)
     install(TARGETS ${TARGET} LIBRARY)

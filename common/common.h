@@ -563,6 +563,8 @@ struct common_params {
 
     bool single_turn       = false; // single turn chat conversation
 
+    std::string server_base = ""; // base url of an external llama-server to connect to (CLI) // NOLINT
+
     ggml_type cache_type_k = GGML_TYPE_F16; // KV cache data type for the K
     ggml_type cache_type_v = GGML_TYPE_F16; // KV cache data type for the V
 
