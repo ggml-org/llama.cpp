@@ -10,6 +10,9 @@
 #include "mtmd.h"
 #include "mtmd-helper.h"
 
+#include <sys/stat.h>
+
+#include <string>
 #include <vector>
 #include <limits.h>
 #include <cinttypes>
@@ -30,6 +33,20 @@
 // volatile, because of signal being an interrupt
 static volatile bool g_is_generating = false;
 static volatile bool g_is_interrupted = false;
+
+// Detect whether a path is a CoreML .mlmodelc bundle
+static bool is_coreml_bundle(const std::string & path) {
+    struct stat st;
+    // check metadata.json (most reliable across compiled / uncompiled bundles)
+    if (stat((path + "/metadata.json").c_str(), &st) == 0) {
+        return true;
+    }
+    // check .mlmodelc extension (compiled bundle directory)
+    if (path.size() > 9 && path.substr(path.size() - 9) == ".mlmodelc") {
+        return true;
+    }
+    return false;
+}
 
 /**
  * Please note that this is NOT a production-ready stuff.
@@ -136,21 +153,34 @@ struct mtmd_cli_context {
 
     void init_vision_context(common_params & params) {
         const char * clip_path = params.mmproj.path.c_str();
+
         mtmd_context_params mparams = mtmd_context_params_default();
-        mparams.use_gpu          = params.mmproj_use_gpu;
-        mparams.print_timings    = true;
-        mparams.n_threads        = params.cpuparams.n_threads;
-        mparams.flash_attn_type  = params.flash_attn_type;
-        mparams.warmup           = params.warmup;
-        mparams.image_min_tokens = params.image_min_tokens;
-        mparams.image_max_tokens = params.image_max_tokens;
+        mparams.use_gpu           = params.mmproj_use_gpu;
+        mparams.print_timings     = true;
+        mparams.n_threads         = params.cpuparams.n_threads;
+        mparams.flash_attn_type   = params.flash_attn_type;
+        mparams.warmup            = params.warmup;
+        mparams.image_min_tokens  = params.image_min_tokens;
+        mparams.image_max_tokens  = params.image_max_tokens;
+
+        // if --mmproj points to a CoreML bundle (.mlmodelc dir or metadata.json),
+        // use it as the CoreML vision backend instead of loading as a GGUF mmproj
+        const std::string mmproj_path = params.mmproj.path;
+        const bool is_coreml = is_coreml_bundle(mmproj_path);
+        if (is_coreml) {
+            mparams.coreml_model_path = clip_path;
+            clip_path = "";
+        } else {
+            mparams.coreml_model_path = nullptr;
+        }
+
         if (std::getenv("MTMD_DEBUG_GRAPH") != nullptr) {
             mparams.cb_eval_user_data = &cb_data;
             mparams.cb_eval = common_debug_cb_eval;
         }
         ctx_vision.reset(mtmd_init_from_file(clip_path, model, mparams));
         if (!ctx_vision.get()) {
-            LOG_ERR("Failed to load vision model from %s\n", clip_path);
+            LOG_ERR("Failed to load vision model from %s\n", mmproj_path.c_str());
             exit(1);
         }
     }

@@ -3,6 +3,9 @@
 #include "mtmd.h"
 #include "mtmd-audio.h"
 #include "mtmd-image.h"
+#ifdef MTMD_USE_COREML
+#include "coreml/mtmd-coreml.h"
+#endif
 #include "debug/mtmd-debug.h"
 
 #include "llama.h"
@@ -186,17 +189,18 @@ static clip_flash_attn_type mtmd_get_clip_flash_attn_type(enum llama_flash_attn_
 
 mtmd_context_params mtmd_context_params_default() {
     mtmd_context_params params {
-        /* use_gpu           */ true,
-        /* print_timings     */ true,
-        /* n_threads         */ 4,
-        /* image_marker      */ nullptr,
-        /* media_marker      */ mtmd_default_marker(),
-        /* flash_attn_type   */ LLAMA_FLASH_ATTN_TYPE_AUTO,
-        /* warmup            */ true,
-        /* image_min_tokens  */ -1,
-        /* image_max_tokens  */ -1,
-        /* cb_eval           */ nullptr,
-        /* cb_eval_user_data */ nullptr,
+        /* use_gpu            */ true,
+        /* print_timings      */ true,
+        /* n_threads          */ 4,
+        /* image_marker       */ nullptr,
+        /* media_marker       */ mtmd_default_marker(),
+        /* flash_attn_type    */ LLAMA_FLASH_ATTN_TYPE_AUTO,
+        /* warmup             */ true,
+        /* image_min_tokens   */ -1,
+        /* image_max_tokens   */ -1,
+        /* coreml_model_path  */ nullptr,
+        /* cb_eval            */ nullptr,
+        /* cb_eval_user_data  */ nullptr,
     };
     return params;
 }
@@ -204,6 +208,13 @@ mtmd_context_params mtmd_context_params_default() {
 struct mtmd_context {
     struct clip_ctx * ctx_v; // vision
     struct clip_ctx * ctx_a; // audio
+#ifdef MTMD_USE_COREML
+    // Optional CoreML vision backend. When set, image encoding is dispatched
+    // to it in mtmd_encode_chunk(); ctx_v may be null. Declared BEFORE
+    // image_preproc so it outlives the borrowed preprocessor on destruction
+    // (image_preproc holds a reference to hparams owned by ctx_coreml).
+    std::unique_ptr<mtmd_coreml::context> ctx_coreml;
+#endif
     std::vector<float> image_embd_v; // image embedding vector
 
     bool print_timings;
@@ -278,6 +289,32 @@ struct mtmd_context {
             }
         }
 
+        const bool want_coreml =
+            ctx_params.coreml_model_path != nullptr && ctx_params.coreml_model_path[0] != '\0';
+        const bool have_mmproj = mmproj_fname != nullptr && mmproj_fname[0] != '\0';
+
+#ifdef MTMD_USE_COREML
+        if (want_coreml) {
+            ctx_coreml = mtmd_coreml::init_from_file(ctx_params.coreml_model_path, text_model);
+            if (!ctx_coreml) {
+                throw std::runtime_error(string_format(
+                    "Failed to initialize CoreML backend from %s\n",
+                    ctx_params.coreml_model_path));
+            }
+            if (n_embd_text > 0 && n_embd_text != mtmd_coreml::n_embd(*ctx_coreml)) {
+                throw std::runtime_error(string_format(
+                    "mismatch between text model (n_embd = %d) and CoreML backend (n_embd = %d)\n"
+                    "hint: the .mlmodelc bundle was built for a different LLM\n",
+                    n_embd_text, mtmd_coreml::n_embd(*ctx_coreml)));
+            }
+        }
+#else
+        if (want_coreml) {
+            throw std::runtime_error(
+                "CoreML backend was not compiled in (rebuild with -DMTMD_COREML=ON)");
+        }
+#endif
+
         clip_context_params ctx_clip_params {
             /* use_gpu           */ ctx_params.use_gpu,
             /* flash_attn_type   */ mtmd_get_clip_flash_attn_type(ctx_params.flash_attn_type),
@@ -289,11 +326,13 @@ struct mtmd_context {
             /* no_alloc          */ no_alloc,
         };
 
-        auto res = clip_init(mmproj_fname, ctx_clip_params);
-        ctx_v = res.ctx_v;
-        ctx_a = res.ctx_a;
-        if (!ctx_v && !ctx_a) {
-            throw std::runtime_error(string_format("Failed to load CLIP model from %s\n", mmproj_fname));
+        if (have_mmproj) {
+            auto res = clip_init(mmproj_fname, ctx_clip_params);
+            ctx_v = res.ctx_v;
+            ctx_a = res.ctx_a;
+            if (!ctx_v && !ctx_a) {
+                throw std::runtime_error(string_format("Failed to load CLIP model from %s\n", mmproj_fname));
+            }
         }
 
         // if both vision and audio mmproj are present, we need to validate their n_embd
@@ -309,18 +348,36 @@ struct mtmd_context {
 
         // since we already validate n_embd of vision and audio mmproj,
         // we can safely assume that they are the same
-        int n_embd_clip = clip_n_mmproj_embd(ctx_v ? ctx_v : ctx_a);
-        if (n_embd_text > 0 && n_embd_text != n_embd_clip) {
-            throw std::runtime_error(string_format(
-                "mismatch between text model (n_embd = %d) and mmproj (n_embd = %d)\n"
-                "hint: you may be using wrong mmproj\n",
-                n_embd_text, n_embd_clip));
+        if (ctx_v || ctx_a) {
+            int n_embd_clip = clip_n_mmproj_embd(ctx_v ? ctx_v : ctx_a);
+            if (n_embd_text > 0 && n_embd_text != n_embd_clip) {
+                throw std::runtime_error(string_format(
+                    "mismatch between text model (n_embd = %d) and mmproj (n_embd = %d)\n"
+                    "hint: you may be using wrong mmproj\n",
+                    n_embd_text, n_embd_clip));
+            }
         }
         if (ctx_v) {
             init_vision();
         }
         if (ctx_a) {
             init_audio();
+        }
+#ifdef MTMD_USE_COREML
+        if (ctx_coreml && !ctx_v) {
+            // CoreML-only mode: no mmproj was loaded, so init_vision() was
+            // skipped; still need slice template + image markers.
+            init_vision_from_coreml();
+        }
+#endif
+
+        if (!ctx_v && !ctx_a
+#ifdef MTMD_USE_COREML
+            && !ctx_coreml
+#endif
+            ) {
+            throw std::runtime_error(
+                "no vision/audio backend was initialized; pass --mmproj");
         }
     }
 
@@ -589,6 +646,33 @@ struct mtmd_context {
 
         GGML_ASSERT(image_preproc != nullptr);
     }
+
+#ifdef MTMD_USE_COREML
+    // CoreML-only initialization: no clip_ctx is available, so we set the
+    // image markers + slice template directly from the adapter's hparams,
+    // and we borrow the preprocessor built by the adapter.
+    void init_vision_from_coreml() {
+        GGML_ASSERT(ctx_coreml != nullptr);
+        const int v = ctx_coreml->hparams.minicpmv_version;
+        if (v >= 3) {
+            // minicpm-v 2.6+ layout (used by both 4.0 and 4.6 adapters):
+            //   <image> (overview) </image>
+            //   <slice> (slice) </slice><slice> (slice) </slice>\n ...
+            slice_tmpl        = MTMD_SLICE_TMPL_MINICPMV_2_6;
+            tok_ov_img_start  = {lookup_token("<image>")};
+            tok_ov_img_end    = {lookup_token("</image>")};
+            tok_sli_img_start = {lookup_token("<slice>")};
+            tok_sli_img_end   = {lookup_token("</slice>")};
+            tok_row_end       = {lookup_token("\n")};
+            tok_row_end_trail = false;
+            ov_img_first      = true;
+        } else {
+            throw std::runtime_error("unsupported CoreML adapter hparams for vision init");
+        }
+        image_preproc = std::move(ctx_coreml->image_preproc);
+        GGML_ASSERT(image_preproc != nullptr);
+    }
+#endif
 
     void init_audio() {
         GGML_ASSERT(ctx_a != nullptr);
@@ -968,7 +1052,12 @@ struct mtmd_tokenizer {
         if (!bitmaps[0]->is_audio) {
             // handle image
 
-            if (!ctx->ctx_v) {
+            const bool has_vision = ctx->ctx_v != nullptr
+#ifdef MTMD_USE_COREML
+                                    || ctx->ctx_coreml != nullptr
+#endif
+                                    ;
+            if (!has_vision) {
                 LOG_ERR("%s: error: model does not support vision input\n", __func__);
                 return 2;
             }
@@ -1332,6 +1421,24 @@ int32_t mtmd_encode_chunk(mtmd_context * ctx, const mtmd_input_chunk * chunk) {
         LOG_WRN("mtmd_encode_chunk has no effect for text chunks\n");
         return 0;
     } else if (chunk->type == MTMD_INPUT_CHUNK_TYPE_IMAGE) {
+#ifdef MTMD_USE_COREML
+        if (ctx->ctx_coreml) {
+            // CoreML path takes precedence over clip when both are available.
+            const auto & entries        = chunk->tokens_image->batch_f32.entries;
+            const int    n_tok_per_sli  = mtmd_coreml::n_output_tokens(*ctx->ctx_coreml);
+            const int    n_embd_out     = mtmd_coreml::n_embd(*ctx->ctx_coreml);
+            ctx->image_embd_v.resize((size_t)chunk->tokens_image->n_tokens() * n_embd_out);
+            for (size_t i = 0; i < entries.size(); ++i) {
+                if (!mtmd_coreml::encode(
+                        *ctx->ctx_coreml, *entries[i],
+                        ctx->image_embd_v.data() + i * (size_t)n_tok_per_sli * n_embd_out)) {
+                    LOG_ERR("%s: CoreML encode failed for slice %zu\n", __func__, i);
+                    return 1;
+                }
+            }
+            return 0;
+        }
+#endif
         if (!ctx->ctx_v) {
             LOG_ERR("%s: model does not support vision input\n", __func__);
             return 1;
@@ -1446,7 +1553,11 @@ bool mtmd_decode_use_mrope(const mtmd_context * ctx) {
 }
 
 bool mtmd_support_vision(const mtmd_context * ctx) {
-    return ctx->ctx_v != nullptr;
+    return ctx->ctx_v != nullptr
+#ifdef MTMD_USE_COREML
+           || ctx->ctx_coreml != nullptr
+#endif
+           ;
 }
 
 bool mtmd_support_audio(const mtmd_context * ctx) {

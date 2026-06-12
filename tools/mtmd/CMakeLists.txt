@@ -5,6 +5,8 @@ set(MTMD_VIDEO ON CACHE BOOL "enable video support in mtmd (requires ffmpeg bina
 
 find_package(Threads REQUIRED)
 
+option(MTMD_COREML "mtmd: enable Apple CoreML vision backend (Apple platforms only)" OFF)
+
 add_library(mtmd
             mtmd.cpp
             mtmd-audio.cpp
@@ -52,6 +54,31 @@ add_library(mtmd
             models/youtuvl.cpp
             models/yasa2.cpp
             )
+
+if (MTMD_COREML)
+    if (NOT APPLE)
+        message(FATAL_ERROR "MTMD_COREML is only supported on Apple platforms")
+    endif()
+
+    target_sources(mtmd PRIVATE
+        coreml/mtmd-coreml.cpp
+        coreml/mtmd-coreml.h
+        coreml/backend.h
+        coreml/backend.mm
+        coreml/models/models.h
+        coreml/models/minicpmv.cpp
+        coreml/models/llava.cpp
+    )
+
+    target_compile_definitions(mtmd PRIVATE MTMD_USE_COREML)
+
+    set_source_files_properties(coreml/backend.mm PROPERTIES COMPILE_FLAGS "-fobjc-arc")
+
+    target_link_libraries(mtmd PRIVATE
+        "-framework Foundation"
+        "-framework CoreML"
+    )
+endif()
 
 set_target_properties(mtmd PROPERTIES
     VERSION ${LLAMA_INSTALL_VERSION}
