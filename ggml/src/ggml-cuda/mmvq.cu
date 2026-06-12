@@ -1250,3 +1250,34 @@ void ggml_cuda_op_mul_mat_vec_q(
 
     GGML_UNUSED_VARS(src1, dst, src1_ddf_i, src1_ncols, src1_padded_row_size);
 }
+
+void ggml_cuda_moe_cache_mmv(
+    const void * pool, ggml_type type0, const char * act_q8, const int32_t * ids_dev,
+    float * dst_dev, int64_t n_in, int64_t n_out, int64_t n_slots,
+    int64_t slot_stride_bytes, int64_t n_hits, int64_t act_rows, cudaStream_t stream,
+    const void * gate_pool, int glu_op) {
+
+    const int64_t ts0 = ggml_type_size(type0);
+    GGML_ASSERT(slot_stride_bytes % ts0 == 0);
+
+    const int64_t ne10_padded = GGML_PAD(n_in, MATRIX_ROW_PADDING);
+
+    const int64_t s01 = ggml_row_size(type0, n_in) / ts0; // blocks per weight row
+    const int64_t s02 = slot_stride_bytes / ts0;          // blocks per slot
+    const int64_t s11 = ne10_padded / QK8_1;              // q8_1 blocks per act row
+    const int64_t s12 = act_rows * s11;
+
+    ggml_cuda_mm_fusion_args_device fusion_local{};
+    if (gate_pool != nullptr) {
+        fusion_local.gate   = gate_pool;
+        fusion_local.glu_op = (ggml_glu_op)glu_op;
+    }
+
+    // parameter mapping mirrors the ids-branch of ggml_cuda_mul_mat_vec_q with
+    // ne12 = ne13 = 1 (single token), ne1 = n_hits, ne2 = ne3 = 1.
+    mul_mat_vec_q_switch_type(
+        pool, type0, act_q8, ids_dev, fusion_local, dst_dev, n_in,
+        n_out, /*ncols_dst=*/1,             s01, /*stride_col_y=*/s12, /*stride_col_dst=*/n_out*n_hits,
+        n_slots, /*nchannels_y=*/act_rows, /*nchannels_dst=*/n_hits, s02, /*stride_channel_y=*/s11, /*stride_channel_dst=*/n_out,
+        /*ne03=*/1, /*ne3=*/1,              /*s03=*/s02*n_slots, /*s13=*/s12, /*s3=*/n_out*n_hits, /*ids_stride=*/n_hits, stream);
+}

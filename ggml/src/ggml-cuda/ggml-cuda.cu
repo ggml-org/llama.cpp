@@ -4,6 +4,7 @@
 
 #include "ggml-cuda/allreduce.cuh"
 #include "ggml-cuda/common.cuh"
+#include "ggml-cuda/moe-cache.cuh"
 #include "ggml-cuda/acc.cuh"
 #include "ggml-cuda/add-id.cuh"
 #include "ggml-cuda/arange.cuh"
@@ -442,6 +443,15 @@ struct ggml_cuda_pool_leg : public ggml_cuda_pool {
             CUDA_CHECK(cudaDeviceSynchronize());
             clear_pool();
             err = ggml_cuda_device_malloc(&ptr, look_ahead_size, device);
+            if (err == cudaErrorMemoryAllocation) {
+                // last resort: the expert cache surrenders its slabs (no-op
+                // when inactive); one degraded decode beats a process abort
+
+                (void)cudaGetLastError();
+                if (ggml_moe_cache_trim(device) > 0) {
+                    err = ggml_cuda_device_malloc(&ptr, look_ahead_size, device);
+                }
+            }
             if (err == cudaSuccess) {
                 GGML_LOG_DEBUG(GGML_CUDA_NAME " pool[%d]: retry succeeded\n", device);
             }
@@ -5693,6 +5703,9 @@ ggml_backend_reg_t ggml_backend_cuda_reg() {
         if (!initialized) {
             ggml_backend_cuda_reg_context * ctx = new ggml_backend_cuda_reg_context;
             const int min_batch_size = getenv("GGML_OP_OFFLOAD_MIN_BATCH") ? atoi(getenv("GGML_OP_OFFLOAD_MIN_BATCH")) : 32;
+
+            // MoE expert cache (GGML_CUDA_MOE_CACHE=1): wires the CPU mul_mat_id GPU-row path
+            ggml_moe_cache_register();
 
             for (int i = 0; i < ggml_cuda_info().device_count; i++) {
                 ggml_backend_cuda_device_context * dev_ctx = new ggml_backend_cuda_device_context;
