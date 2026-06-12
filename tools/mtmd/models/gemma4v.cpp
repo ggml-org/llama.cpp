@@ -10,7 +10,7 @@ ggml_cgraph * clip_graph_gemma4v::build() {
     ggml_set_name(inp_raw, "inp_raw_scaled");
 
     ggml_tensor * inp = ggml_conv_2d(ctx0, model.patch_embeddings_0, inp_raw, patch_size, patch_size, 0, 0, 1, 1);
-    inp = ggml_reshape_2d(ctx0, inp, n_patches, n_embd);
+    inp = ggml_reshape_3d(ctx0, inp, n_patches, n_embd, n_batch);
     inp = ggml_cont(ctx0, ggml_transpose(ctx0, inp));
     ggml_set_name(inp, "inp");
     // note: no patch bias
@@ -51,10 +51,11 @@ ggml_cgraph * clip_graph_gemma4v::build() {
         // first half
         ggml_tensor * first;
         {
-            first = ggml_view_3d(ctx0, cur,
-                n_dim/2, n_head, n_pos,
+            first = ggml_view_4d(ctx0, cur,
+                n_dim/2, n_head, n_pos, n_batch,
                 cur->nb[1],
                 cur->nb[2],
+                cur->nb[3],
                 0);
             first = ggml_rope_ext(
                 ctx0,
@@ -70,10 +71,11 @@ ggml_cgraph * clip_graph_gemma4v::build() {
         // second half
         ggml_tensor * second;
         {
-            second = ggml_view_3d(ctx0, cur,
-                n_dim/2, n_head, n_pos,
+            second = ggml_view_4d(ctx0, cur,
+                n_dim/2, n_head, n_pos, n_batch,
                 cur->nb[1],
                 cur->nb[2],
+                cur->nb[3],
                 n_dim/2 * ggml_element_size(cur));
             second = ggml_rope_ext(
                 ctx0,
@@ -103,14 +105,14 @@ ggml_cgraph * clip_graph_gemma4v::build() {
         const int kernel_size = hparams.n_merge;
         GGML_ASSERT(kernel_size > 0);
 
-        // [n_embd, n_patches] -> [n_patches_x, n_patches_y, n_embd, 1]
-        cur = ggml_cont_4d(ctx0, ggml_transpose(ctx0, cur), n_patches_x, n_patches_y, n_embd, 1);
+        // [n_embd, n_patches] -> [n_patches_x, n_patches_y, n_embd, n_batch]
+        cur = ggml_cont_4d(ctx0, ggml_transpose(ctx0, cur), n_patches_x, n_patches_y, n_embd, n_batch);
         cur = ggml_pool_2d(ctx0, cur, GGML_OP_POOL_AVG,
                            kernel_size, kernel_size, kernel_size, kernel_size, 0, 0);
         const int out_x = n_patches_x / kernel_size;
         const int out_y = n_patches_y / kernel_size;
-        // [out_x, out_y, n_embd, 1] -> [n_embd, out_x * out_y]
-        cur = ggml_reshape_3d(ctx0, cur, out_x * out_y, n_embd, 1);
+        // [out_x, out_y, n_embd, n_batch] -> [n_embd, out_x * out_y, n_batch]
+        cur = ggml_reshape_3d(ctx0, cur, out_x * out_y, n_embd, n_batch);
         cur = ggml_cont(ctx0, ggml_transpose(ctx0, cur));
         cur = ggml_scale(ctx0, cur, sqrtf((float)n_embd));
         cb(cur, "pooled", -1);

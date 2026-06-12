@@ -63,6 +63,7 @@ struct mtmd_bitmap;
 struct mtmd_image_tokens;
 struct mtmd_input_chunk;
 struct mtmd_input_chunks;
+struct mtmd_batch;
 
 struct mtmd_input_text {
     const char * text;
@@ -80,6 +81,7 @@ typedef struct mtmd_image_tokens mtmd_image_tokens;
 typedef struct mtmd_input_chunk  mtmd_input_chunk;
 typedef struct mtmd_input_chunks mtmd_input_chunks;
 typedef struct mtmd_input_text   mtmd_input_text;
+typedef struct mtmd_batch        mtmd_batch;
 
 struct mtmd_context_params {
     bool use_gpu;
@@ -97,6 +99,11 @@ struct mtmd_context_params {
     // callback function passed over to mtmd proper
     ggml_backend_sched_eval_callback cb_eval;
     void * cb_eval_user_data;
+
+    // batching params
+    int32_t batch_max_tokens; // maximum number of output tokens in a batch
+                              // (note: this is not a hard-limit, the first image will always be added even if it exceeds this limit)
+                              // (default: 1024)
 };
 
 MTMD_API const char * mtmd_default_marker(void);
@@ -265,12 +272,12 @@ MTMD_API int32_t mtmd_tokenize(mtmd_context * ctx,
                                const mtmd_bitmap ** bitmaps,
                                size_t n_bitmaps);
 
-// returns 0 on success
-// TODO: deprecate
-MTMD_API int32_t mtmd_encode(mtmd_context * ctx,
-                             const mtmd_image_tokens * image_tokens);
+DEPRECATED(MTMD_API int32_t mtmd_encode(mtmd_context * ctx, const mtmd_image_tokens * image_tokens),
+           "use mtmd_encode_chunk() instead");
 
+// text chunk will be ignored silently, only media chunk will be encoded
 // returns 0 on success
+// returns 1 on generic error
 MTMD_API int32_t mtmd_encode_chunk(mtmd_context * ctx,
                                    const mtmd_input_chunk * chunk);
 
@@ -278,6 +285,26 @@ MTMD_API int32_t mtmd_encode_chunk(mtmd_context * ctx,
 // the reading size (in bytes) is equal to:
 // llama_model_n_embd_inp(model) * mtmd_input_chunk_get_n_tokens(chunk) * sizeof(float)
 MTMD_API float * mtmd_get_output_embd(mtmd_context * ctx);
+
+
+// batch encoding API
+// chunks are not owned by the batch, they will not be freed by mtmd_batch_free()
+// batch is valid for a given context, cannot be shared across contexts
+MTMD_API mtmd_batch * mtmd_batch_init(mtmd_context * ctx);
+MTMD_API void         mtmd_batch_free(mtmd_batch * batch);
+
+// only media chunks are allowed, text chunks will be rejected
+// returns 0 on success
+// returns 1 on generic error
+// returns 2 if the batch is too large (chunk won't be added)
+// returns 3 if it cannot be batched with the existing chunks in the batch
+MTMD_API int32_t mtmd_batch_add_chunk(mtmd_batch * batch, const mtmd_input_chunk * chunk);
+
+// returns 0 on success
+// returns 1 on generic error
+MTMD_API int32_t mtmd_batch_encode(mtmd_batch * batch);
+MTMD_API float * mtmd_batch_get_output_embd(mtmd_batch * batch, const mtmd_input_chunk * chunk);
+
 
 // Set callback for all future logging events.
 // If this is not called, or NULL is supplied, everything is output on stderr.
@@ -335,6 +362,11 @@ struct mtmd_input_chunk_deleter {
     void operator()(mtmd_input_chunk * val) { mtmd_input_chunk_free(val); }
 };
 using input_chunk_ptr = std::unique_ptr<mtmd_input_chunk, mtmd_input_chunk_deleter>;
+
+struct mtmd_batch_deleter {
+    void operator()(mtmd_batch * val) { mtmd_batch_free(val); }
+};
+using batch_ptr = std::unique_ptr<mtmd_batch, mtmd_batch_deleter>;
 
 struct bitmap {
     bitmap_ptr ptr;

@@ -67,8 +67,8 @@ MTMD_API void mtmd_helper_image_get_decoder_pos(const mtmd_image_tokens * image,
 
 // helper function that automatically:
 // 1. run llama_decode() on text chunks
-// 2. run mtmd_encode() on image chunks, then mtmd_get_output_embd() and then llama_decode()
-// if any of the mtmd_encode() or llama_decode() calls return non-zero, stop and forward the error
+// 2. run mtmd_encode_chunk() on image chunks, then mtmd_get_output_embd() and then llama_decode()
+// if any of the mtmd_encode_chunk() or llama_decode() calls return non-zero, stop and forward the error
 // otherwise, returns 0 on success
 // this function is NOT thread-safe
 MTMD_API int32_t mtmd_helper_eval_chunks(mtmd_context * ctx,
@@ -157,12 +157,15 @@ MTMD_API int32_t mtmd_helper_video_read_next(mtmd_helper_video * ctx,
 } // extern "C"
 #endif
 
+#ifdef __cplusplus
+#include <set>
+#include <memory>
+
+namespace mtmd_helper {
+
 //
 // C++ wrappers
 //
-
-#ifdef __cplusplus
-namespace mtmd_helper {
 
 // video-related C++ wrappers
 struct mtmd_helper_video_deleter {

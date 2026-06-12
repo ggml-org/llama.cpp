@@ -69,8 +69,8 @@ struct mtmd_bitmap {
         return data.size();
     }
 
-    bool can_batch_with(const mtmd_bitmap & other) const {
-        // [QWEN_VIDEO] can batch if both are images with same size
+    bool can_merge_with(const mtmd_bitmap & other) const {
+        // [QWEN_VIDEO] can (temporal) merge if both are images with same size
         return !is_audio && !other.is_audio && nx == other.nx && ny == other.ny;
     }
 
@@ -90,12 +90,24 @@ struct mtmd_image_tokens {
     uint32_t ny = 0; // number of tokens in y direction
     mtmd_pos_type pos = MTMD_POS_TYPE_NORMAL;
     uint32_t image_idx = 0; // 0-based position of this image among image chunks in the prompt(used by pos == MTMD_POS_TYPE_HUNYUANVL)
+    uint32_t n_temporal_merge = 1; // for qwen-vl style temporal merge
     uint32_t n_tokens() const {
         if (pos == MTMD_POS_TYPE_HUNYUANVL) {
             // [BOI] [row0 tokens + newline] ... [row(ny-1) tokens + newline] [EOI]
             return (nx + 1) * ny + 2;
         }
-        return nx * ny;
+        // [QWEN_VIDEO] this logic is quite ugly, it's mostly to make qwen-vl temporal merge work, can be improved in the future
+        if (batch_f32.entries.size() == 1 || n_temporal_merge == 1) {
+            return nx * ny;
+        }
+        uint32_t nz = batch_f32.entries.size();
+        // TODO: simplify this by repeating the last frame until it fits the temporal merge
+        if (nz % n_temporal_merge != 0) {
+            nz = nz / n_temporal_merge + 1;
+        } else {
+            nz = nz / n_temporal_merge;
+        }
+        return nx * ny * nz;
     }
     clip_image_f32_batch batch_f32; // preprocessed image patches
     std::string id; // optional user-defined ID, useful for KV cache tracking
@@ -110,12 +122,17 @@ struct mtmd_image_tokens {
         return false;
     }
 
+    bool can_batch_with(const mtmd_image_tokens & other) {
+        return nx == other.nx && ny == other.ny && pos == other.pos;
+    }
+
     mtmd_image_tokens clone() {
         return mtmd_image_tokens{
             nx,
             ny,
             pos,
             image_idx,
+            n_temporal_merge,
             batch_f32.clone(),
             id
         };
@@ -153,10 +170,47 @@ struct mtmd_input_chunk {
     std::vector<llama_token> tokens_text;
     mtmd_image_tokens_ptr tokens_image;
     mtmd_audio_tokens_ptr tokens_audio;
+
+    bool can_batch_with(const mtmd_input_chunk & other) const {
+        if (type != other.type) {
+            return false;
+        }
+
+        if (tokens_image && other.tokens_image) {
+            return tokens_image->can_batch_with(*other.tokens_image);
+        }
+
+        // TODO: allow batching audio chunks of the same size
+
+        return false;
+    }
+
+    bool is_placeholder() const {
+        if (type == MTMD_INPUT_CHUNK_TYPE_IMAGE) {
+            return tokens_image && tokens_image->is_placeholder();
+        } else if (type == MTMD_INPUT_CHUNK_TYPE_AUDIO) {
+            return tokens_audio && tokens_audio->is_placeholder();
+        }
+        return false;
+    }
 };
 
 struct mtmd_input_chunks {
     std::vector<mtmd_input_chunk> entries;
+};
+
+struct mtmd_batch {
+    mtmd_context * ctx;
+    std::vector<const mtmd_input_chunk *> entries;
+    std::vector<float> output_embd; // aggregated output embedding for the whole batch
+    mtmd_batch(mtmd_context * ctx): ctx(ctx) {}
+    int32_t n_tokens() const {
+        int32_t n = 0;
+        for (const auto * chunk : entries) {
+            n += mtmd_input_chunk_get_n_tokens(chunk);
+        }
+        return n;
+    }
 };
 
 // slice template, used by some llava-uhd models to correctly place the special tokens around image embeddings
@@ -197,6 +251,7 @@ mtmd_context_params mtmd_context_params_default() {
         /* image_max_tokens  */ -1,
         /* cb_eval           */ nullptr,
         /* cb_eval_user_data */ nullptr,
+        /* batch_max_tokens  */ 1024,
     };
     return params;
 }
@@ -204,7 +259,7 @@ mtmd_context_params mtmd_context_params_default() {
 struct mtmd_context {
     struct clip_ctx * ctx_v; // vision
     struct clip_ctx * ctx_a; // audio
-    std::vector<float> image_embd_v; // image embedding vector
+    std::vector<float> out_embd; // image embedding vector
 
     bool print_timings;
     int n_threads;
@@ -239,17 +294,21 @@ struct mtmd_context {
     std::unique_ptr<mtmd_audio_preprocessor> audio_preproc;
     std::unique_ptr<mtmd_image_preprocessor> image_preproc;
 
+    // batching
+    int32_t batch_max_tokens;
+
     // TODO @ngxson : add timings
 
     mtmd_context(const char * mmproj_fname,
                    const llama_model * text_model,
                    const mtmd_context_params & ctx_params,
                    bool no_alloc = false) :
-        print_timings(ctx_params.print_timings),
-        n_threads    (ctx_params.n_threads),
-        media_marker (ctx_params.media_marker),
-        n_embd_text  (text_model ? llama_model_n_embd_inp(text_model) : -1),
-        vocab        (text_model ? llama_model_get_vocab(text_model) : nullptr)
+        print_timings   (ctx_params.print_timings),
+        n_threads       (ctx_params.n_threads),
+        media_marker    (ctx_params.media_marker),
+        n_embd_text     (text_model ? llama_model_n_embd_inp(text_model) : -1),
+        vocab           (text_model ? llama_model_get_vocab(text_model) : nullptr),
+        batch_max_tokens(ctx_params.batch_max_tokens)
     {
         if (ctx_params.image_marker != nullptr) {
             throw std::runtime_error("custom image_marker is not supported anymore, use media_marker instead");
@@ -680,6 +739,16 @@ struct mtmd_context {
         return ctx_a ? clip_get_projector_type(ctx_a) : PROJECTOR_TYPE_UNKNOWN;
     }
 
+    int64_t n_embd_out() const {
+        if (ctx_v) {
+            return clip_n_mmproj_embd(ctx_v);
+        } else if (ctx_a) {
+            return clip_n_mmproj_embd(ctx_a);
+        } else {
+            throw std::runtime_error("no CLIP model loaded");
+        }
+    }
+
     ~mtmd_context() {
         clip_free(ctx_a);
         clip_free(ctx_v);
@@ -845,7 +914,7 @@ struct mtmd_tokenizer {
         // [QWEN_VIDEO] handle frame merging for models that support it (i.e. qwen-vl)
         int n_merge_frames = 1;
         if (ctx->ctx_v) {
-            n_merge_frames = clip_model_n_batch_max(ctx->ctx_v);
+            n_merge_frames = clip_model_n_temporal_merge(ctx->ctx_v);
             GGML_ASSERT(n_merge_frames <= 2 && "we only support merging maximum 2 images for now; open an issue if this model supports merging more");
         }
 
@@ -860,7 +929,7 @@ struct mtmd_tokenizer {
                 if (i + 1 < parts.size() && parts[i + 1].bitmap != nullptr) {
                     const mtmd_bitmap * bm_a = parts[i].bitmap;
                     const mtmd_bitmap * bm_b = parts[i + 1].bitmap;
-                    if (bm_a->can_batch_with(*bm_b)) {
+                    if (bm_a->can_merge_with(*bm_b)) {
                         LOG_DBG("%s: merging 2 frames at part index %zu and %zu\n", __func__, i, i + 1);
                         merged_bitmaps.push_back({bm_a, bm_b});
                         parts.erase(parts.begin() + i + 1); // collapse the second bitmap part
@@ -1103,13 +1172,17 @@ struct mtmd_tokenizer {
                 size_t n_tokens = 0;
                 for (const auto & e : batch_f32.entries) {
                     n_tokens += clip_n_output_tokens(ctx->ctx_v, e.get());
-                    if (clip_model_n_batch_max(ctx->ctx_v) == 2) {
+                    if (clip_model_n_temporal_merge(ctx->ctx_v) == 2) {
                         // [QWEN_VIDEO] pair input is merged to the same embd, so only count as one image
                         break;
                     }
                 }
 
                 mtmd_image_tokens_ptr image_tokens(new mtmd_image_tokens);
+
+                // [QWEN_VIDEO] improve this in the future
+                image_tokens->n_temporal_merge = clip_model_n_temporal_merge(ctx->ctx_v);
+
                 if (mtmd_decode_use_mrope(ctx)) {
                     // for Qwen2VL, we need this information for M-RoPE decoding positions
                     image_tokens->nx = clip_n_output_tokens_x(ctx->ctx_v, batch_f32.entries[0].get());
@@ -1327,60 +1400,18 @@ int32_t mtmd_tokenize(mtmd_context * ctx,
     }
 }
 
-int32_t mtmd_encode_chunk(mtmd_context * ctx, const mtmd_input_chunk * chunk) {
-    if (chunk->type == MTMD_INPUT_CHUNK_TYPE_TEXT) {
-        LOG_WRN("mtmd_encode_chunk has no effect for text chunks\n");
-        return 0;
-    } else if (chunk->type == MTMD_INPUT_CHUNK_TYPE_IMAGE) {
-        if (!ctx->ctx_v) {
-            LOG_ERR("%s: model does not support vision input\n", __func__);
-            return 1;
-        }
-        if (chunk->tokens_image == nullptr) {
-            LOG_ERR("%s: image tokens are null\n", __func__);
-            return 1;
-        }
-        if (chunk->tokens_image->is_placeholder()) {
-            LOG_ERR("%s: image tokens batch is placeholder\n", __func__);
-            return 1;
-        }
-        return mtmd_encode(ctx, chunk->tokens_image.get());
-    } else if (chunk->type == MTMD_INPUT_CHUNK_TYPE_AUDIO) {
-        if (!ctx->ctx_a) {
-            LOG_ERR("%s: model does not support audio input\n", __func__);
-            return 1;
-        }
-        if (chunk->tokens_audio == nullptr) {
-            LOG_ERR("%s: audio tokens are null\n", __func__);
-            return 1;
-        }
-        if (chunk->tokens_audio->is_placeholder()) {
-            LOG_ERR("%s: audio tokens batch is placeholder\n", __func__);
-            return 1;
-        }
-        int n_mmproj_embd = ctx->n_embd_text;
-        ctx->image_embd_v.resize(chunk->tokens_audio->n_tokens * n_mmproj_embd);
-        bool ok = clip_image_batch_encode(
-            ctx->ctx_a,
-            ctx->n_threads,
-            &chunk->tokens_audio->batch_f32,
-            ctx->image_embd_v.data());
-        return ok ? 0 : 1;
-    }
-
-    LOG_ERR("%s: unknown chunk type %d\n", __func__, (int)chunk->type);
-    return 1;
-}
-
-int32_t mtmd_encode(mtmd_context * ctx, const mtmd_image_tokens * image_tokens) {
+static int32_t mtmd_encode_impl(mtmd_context * ctx, const mtmd_image_tokens * image_tokens, std::vector<float> & out_embd) {
     clip_ctx * ctx_clip = ctx->ctx_v;
     if (!ctx_clip) {
         LOG_ERR("%s: this API does not support non-vision input, please use mtmd_encode_chunk instead\n", __func__);
         return 1;
     }
     auto proj_type = clip_get_projector_type(ctx_clip);
-    int n_mmproj_embd = clip_n_mmproj_embd(ctx_clip);
-    ctx->image_embd_v.resize(image_tokens->n_tokens() * n_mmproj_embd);
+
+    int n_embd_out = ctx->n_embd_out();
+    auto n_tokens_out = image_tokens->n_tokens();
+    out_embd.resize((size_t)n_embd_out * n_tokens_out);
+
     bool ok = false;
 
     if (clip_is_llava(ctx_clip)
@@ -1400,12 +1431,19 @@ int32_t mtmd_encode(mtmd_context * ctx, const mtmd_image_tokens * image_tokens) 
                 return 1;
             }
             int n_tokens_per_image = clip_n_output_tokens(ctx_clip, entries[i].get());
-            ok = clip_image_encode(
+            std::vector<float> tmp_embd((size_t)n_tokens_per_image * n_embd_out);
+            bool ok_i = clip_image_encode(
                 ctx_clip,
                 ctx->n_threads,
                 entries[i].get(),
-                ctx->image_embd_v.data() + offset);
-            offset += static_cast<size_t>(n_mmproj_embd) * n_tokens_per_image;
+                tmp_embd);
+            if (!ok_i) {
+                LOG_ERR("%s: failed to encode image %zu\n", __func__, i);
+                return 1;
+            }
+            ok = true;
+            std::copy(tmp_embd.begin(), tmp_embd.end(), out_embd.begin() + offset);
+            offset += static_cast<size_t>(n_embd_out) * n_tokens_per_image;
         }
     } else {
         if (image_tokens->is_placeholder()) {
@@ -1416,14 +1454,206 @@ int32_t mtmd_encode(mtmd_context * ctx, const mtmd_image_tokens * image_tokens) 
             ctx_clip,
             ctx->n_threads,
             &image_tokens->batch_f32,
-            ctx->image_embd_v.data());
+            out_embd);
     }
 
     return ok ? 0 : 1;
 }
 
+static int32_t mtmd_encode_chunk_impl(mtmd_context * ctx, const mtmd_input_chunk * chunk, std::vector<float> & out_embd) {
+    if (chunk->type == MTMD_INPUT_CHUNK_TYPE_TEXT) {
+        LOG_WRN("mtmd_encode_chunk has no effect for text chunks\n");
+        return 0;
+    } else if (chunk->type == MTMD_INPUT_CHUNK_TYPE_IMAGE) {
+        if (!ctx->ctx_v) {
+            LOG_ERR("%s: model does not support vision input\n", __func__);
+            return 1;
+        }
+        if (chunk->tokens_image == nullptr) {
+            LOG_ERR("%s: image tokens are null\n", __func__);
+            return 1;
+        }
+        if (chunk->tokens_image->is_placeholder()) {
+            LOG_ERR("%s: image tokens batch is placeholder\n", __func__);
+            return 1;
+        }
+        return mtmd_encode_impl(ctx, chunk->tokens_image.get(), out_embd);
+    } else if (chunk->type == MTMD_INPUT_CHUNK_TYPE_AUDIO) {
+        if (!ctx->ctx_a) {
+            LOG_ERR("%s: model does not support audio input\n", __func__);
+            return 1;
+        }
+        if (chunk->tokens_audio == nullptr) {
+            LOG_ERR("%s: audio tokens are null\n", __func__);
+            return 1;
+        }
+        if (chunk->tokens_audio->is_placeholder()) {
+            LOG_ERR("%s: audio tokens batch is placeholder\n", __func__);
+            return 1;
+        }
+        int n_mmproj_embd = ctx->n_embd_out();
+        out_embd.resize((size_t)chunk->tokens_audio->n_tokens * n_mmproj_embd);
+        bool ok = clip_image_batch_encode(
+            ctx->ctx_a,
+            ctx->n_threads,
+            &chunk->tokens_audio->batch_f32,
+            out_embd);
+        return ok ? 0 : 1;
+    }
+
+    LOG_ERR("%s: unknown chunk type %d\n", __func__, (int)chunk->type);
+    return 1;
+}
+
+int32_t mtmd_encode_chunk(mtmd_context * ctx, const mtmd_input_chunk * chunk) {
+    // this is the non-batching version
+    try {
+        return mtmd_encode_chunk_impl(ctx, chunk, ctx->out_embd);
+    } catch (const std::exception & e) {
+        LOG_ERR("%s: error: %s\n", __func__, e.what());
+        return 1;
+    }
+}
+
+int32_t mtmd_encode(mtmd_context * ctx, const mtmd_image_tokens * image_tokens) {
+    try {
+        return mtmd_encode_impl(ctx, image_tokens, ctx->out_embd);
+    } catch (const std::exception & e) {
+        LOG_ERR("%s: error: %s\n", __func__, e.what());
+        return 1;
+    }
+}
+
 float * mtmd_get_output_embd(mtmd_context * ctx) {
-    return ctx->image_embd_v.data();
+    return ctx->out_embd.data();
+}
+
+mtmd_batch * mtmd_batch_init(mtmd_context * ctx) {
+    return new mtmd_batch(ctx);
+}
+
+void mtmd_batch_free(mtmd_batch * batch) {
+    if (batch) {
+        delete batch;
+    }
+}
+
+int32_t mtmd_batch_add_chunk(mtmd_batch * batch, const mtmd_input_chunk * chunk) {
+    if (chunk->type == MTMD_INPUT_CHUNK_TYPE_TEXT) {
+        LOG_ERR("%s: text chunk is not supported in batch\n", __func__);
+        return 1;
+    }
+
+    auto * ctx = batch->ctx->get_clip_ctx(chunk);
+    if (!ctx) {
+        LOG_ERR("%s: model does not support input chunk type %d\n", __func__, (int)chunk->type);
+        return 1;
+    }
+
+    if (batch->entries.empty()) {
+        // batch must have at least one chunk
+        batch->entries.push_back(chunk);
+        return 0;
+    }
+
+    if (!clip_support_batch(ctx)) {
+        // if no batching support, batch can only have one single chunk
+        return 2; // "batch too large" error code
+    }
+
+    int32_t new_n_tokens = batch->n_tokens() + (int32_t)mtmd_input_chunk_get_n_tokens(chunk);
+    if (new_n_tokens > batch->ctx->batch_max_tokens) {
+        return 2; // "batch too large" error code
+    }
+
+    auto & first_chunk = batch->entries[0];
+    if (first_chunk->can_batch_with(*chunk)) {
+        batch->entries.push_back(chunk);
+        return 0;
+    }
+
+    return 3; // "cannot batch" error code
+}
+
+static int32_t mtmd_batch_encode_impl(mtmd_batch * batch) {
+    if (batch->entries.empty()) {
+        LOG_ERR("%s: batch is empty\n", __func__);
+        return 1;
+    }
+    for (const auto * chunk : batch->entries) {
+        if (chunk->is_placeholder()) {
+            LOG_ERR("%s: chunk is placeholder\n", __func__);
+            return 1;
+        }
+    }
+
+    // represent the whole batch as one single chunk
+    mtmd::input_chunk_ptr batch_chunk(mtmd_input_chunk_copy(batch->entries[0]));
+    if (batch_chunk->tokens_image) {
+        auto & b0_f32 = batch_chunk->tokens_image->batch_f32;
+        // copy all entries from other chunks into the first chunk's batch_f32
+        // note: skip first entry because it's already in batch_chunk
+        for (size_t ic = 1; ic < batch->entries.size(); ic++) {
+            auto & chunk = batch->entries[ic];
+            GGML_ASSERT(chunk->tokens_image);
+            auto b1_f32 = chunk->tokens_image->batch_f32.clone();
+            for (size_t i = 0; i < b1_f32.entries.size(); i++) {
+                b0_f32.entries.push_back(std::move(b1_f32.entries[i]));
+            }
+        }
+    } else if (batch_chunk->tokens_audio) {
+        auto & b0_f32 = batch_chunk->tokens_audio->batch_f32;
+        // copy all entries from other chunks into the first chunk's batch_f32
+        // note: skip first entry because it's already in batch_chunk
+        for (size_t ic = 1; ic < batch->entries.size(); ic++) {
+            auto & chunk = batch->entries[ic];
+            GGML_ASSERT(chunk->tokens_audio);
+            auto b1_f32 = chunk->tokens_audio->batch_f32.clone();
+            for (size_t i = 0; i < b1_f32.entries.size(); i++) {
+                b0_f32.entries.push_back(std::move(b1_f32.entries[i]));
+            }
+        }
+    } else {
+        LOG_ERR("%s: unsupported chunk type\n", __func__);
+        return 1;
+    }
+
+    LOG_DBG("%s: encoding batch with %zu entries and total %zu tokens\n",
+            __func__, batch->entries.size(), mtmd_input_chunk_get_n_tokens(batch_chunk.get()));
+    int32_t res = mtmd_encode_chunk_impl(
+        batch->ctx,
+        batch_chunk.get(),
+        batch->output_embd);
+    return res;
+}
+
+int32_t mtmd_batch_encode(mtmd_batch * batch) {
+    try {
+        return mtmd_batch_encode_impl(batch);
+    } catch (const std::exception & e) {
+        LOG_ERR("%s: error: %s\n", __func__, e.what());
+        return 1;
+    }
+}
+
+float * mtmd_batch_get_output_embd(mtmd_batch * batch, const mtmd_input_chunk * chunk) {
+    if (batch->output_embd.empty()) {
+        LOG_ERR("%s: batch has not been encoded yet\n", __func__);
+        return nullptr;
+    }
+    size_t offset = 0;
+    const size_t n_embd = batch->ctx->n_embd_out();
+    for (const auto * c : batch->entries) {
+        size_t offset_prev = offset;
+        size_t n_tokens = mtmd_input_chunk_get_n_tokens(c);
+        offset += n_tokens * n_embd;
+        GGML_ASSERT(offset_prev <  batch->output_embd.size());
+        GGML_ASSERT(offset      <= batch->output_embd.size());
+        if (c == chunk) {
+            return &batch->output_embd.data()[offset_prev];
+        }
+    }
+    return nullptr; // not found
 }
 
 bool mtmd_decode_use_non_causal(const mtmd_context * ctx, const mtmd_input_chunk * chunk) {
@@ -1801,7 +2031,7 @@ static void mtmd_debug_encode_impl(mtmd_context * ctx, clip_ctx * ctx_clip, clip
         ctx_clip,
         ctx->n_threads,
         &image,
-        embd_output.data());
+        embd_output);
     if (!ok) {
         LOG_ERR("%s: failed to encode image\n", __func__);
     }

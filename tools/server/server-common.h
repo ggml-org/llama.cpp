@@ -180,6 +180,10 @@ public:
 
     const mtmd::input_chunk_ptr & find_chunk(size_t idx) const;
 
+    // find next media chunk after idx
+    // returns a pair of pointer to the chunk (nullptr if not found) and its start index in tokens
+    std::pair<const mtmd::input_chunk_ptr *, size_t> find_next_media_chunk(size_t idx) const;
+
     void push_back(llama_token tok);
 
     // will create a copy of the chunk if it contains non-text data
