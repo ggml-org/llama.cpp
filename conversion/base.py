@@ -94,6 +94,7 @@ class ModelBase:
     metadata: gguf.Metadata
     dir_model_card: Path
     remote_hf_model_id: str | None
+    target_model_dir: Path | None
 
     # subclasses should define this!
     model_arch: gguf.MODEL_ARCH
@@ -119,6 +120,7 @@ class ModelBase:
                  small_first_shard: bool = False, hparams: dict[str, Any] | None = None, remote_hf_model_id: str | None = None,
                  disable_mistral_community_chat_template: bool = False,
                  sentence_transformers_dense_modules: bool = False,
+                 target_model_dir: Path | None = None,
                  fuse_gate_up_exps: bool = False,
                  fp8_as_q8: bool = False):
         if type(self) is ModelBase or \
@@ -139,6 +141,7 @@ class ModelBase:
         self.dry_run = dry_run
         self.remote_hf_model_id = remote_hf_model_id
         self.sentence_transformers_dense_modules = sentence_transformers_dense_modules
+        self.target_model_dir = target_model_dir
         self.fuse_gate_up_exps = fuse_gate_up_exps
         self._gate_exp_buffer: dict[int, Tensor] = {}
         self._up_exp_buffer: dict[int, Tensor] = {}
@@ -2481,6 +2484,7 @@ class LazyTorchTensor(gguf.LazyBase):
         torch.float16: np.float16,
         torch.float32: np.float32,
         torch.uint8: np.uint8,
+        torch.int64: np.int64,
     }
 
     # only used when byteswapping data. Only correct size is needed

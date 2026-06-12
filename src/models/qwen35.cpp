@@ -173,7 +173,7 @@ llama_model_qwen35::graph::graph(const llama_model & model, const llm_graph_para
         }
 
         if (il == n_layer - 1 && inp_out_ids && cparams.embeddings_nextn_masked) {
-            cur   = ggml_get_rows(ctx0, cur, inp_out_ids);
+            cur   = ggml_get_rows(ctx0, cur,   inp_out_ids);
             inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
         }
 

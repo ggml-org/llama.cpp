@@ -5,12 +5,13 @@ import math
 
 from typing import Callable, Iterable, TYPE_CHECKING
 
+import numpy as np
 import torch
 
 if TYPE_CHECKING:
     from torch import Tensor
 
-from .base import ModelBase, TextModel, gguf
+from .base import ModelBase, TextModel, gguf, logger
 
 
 @ModelBase.register(
@@ -21,6 +22,9 @@ from .base import ModelBase, TextModel, gguf
     "VLlama3ForCausalLM",
     "LlavaForConditionalGeneration",
     "VoxtralForConditionalGeneration",
+    "LlamaForCausalLMEagle3",
+    "Eagle3Speculator",
+    "Eagle3DraftModel",
     "IQuestCoderForCausalLM",
     "LlamaModel")
 class LlamaModel(TextModel):
@@ -39,7 +43,61 @@ class LlamaModel(TextModel):
             hparams = ModelBase.load_hparams(self.dir_model, is_mistral_format=False)
             self.origin_hf_arch = hparams.get('architectures', [None])[0]
 
+        # Detect eagle3 draft checkpoint by hparams (some models don't use a distinct HF arch name)
+        if "draft_vocab_size" in self.hparams and self.hparams["num_hidden_layers"] == 1:
+            self.is_eagle3 = True
+            self.model_arch = gguf.MODEL_ARCH.EAGLE3
+            logger.info("Detected EAGLE-3 draft model, switching to EAGLE3 architecture")
+            # Re-initialize tensor_map with eagle3 architecture
+            self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
+            # Update gguf_writer architecture
+            self.gguf_writer.arch = gguf.MODEL_ARCH_NAMES[self.model_arch]
+            self.gguf_writer.add_architecture()
+            if self.target_model_dir is None:
+                raise ValueError(
+                    "EAGLE-3 model requires --target-model-dir to be specified. "
+                    "Please provide the path to the target model directory to read config.json"
+                )
+            # Read both eagle3 raw config and target model config
+            with open(self.dir_model / "config.json", 'r', encoding='utf-8') as f:
+                eagle3_raw_config = json.load(f)
+            with open(self.target_model_dir / "config.json", 'r', encoding='utf-8') as f:
+                target_config = json.load(f)
+
+            if "text_config" in target_config:
+                target_config = {**target_config, **target_config["text_config"]}
+            self.target_vocab_size = target_config["vocab_size"]
+
+            # target_layers: derived from target model layer count (low/mid/high)
+            target_num_layers = target_config["num_hidden_layers"]
+            target_layers = [2, target_num_layers // 2, target_num_layers - 3]
+            logger.info(f"EAGLE-3: target_layers = {target_layers} (target model has {target_num_layers} layers)")
+            self.gguf_writer.add_array(f"{self.gguf_writer.arch}.target_layers", target_layers)
+
+            # target_hidden_size: prefer eagle3 config, fallback to target config
+            if eagle3_raw_config.get("target_hidden_size") is not None:
+                target_hidden_size = eagle3_raw_config["target_hidden_size"]
+                src = "EAGLE-3 config"
+            else:
+                target_hidden_size = target_config["hidden_size"]
+                src = "target model config"
+            logger.info(f"EAGLE-3: target_hidden_size = {target_hidden_size} (from {src})")
+            self.gguf_writer.add_uint32(f"{self.gguf_writer.arch}.target_hidden_size", target_hidden_size)
+
+            # norm_before_residual (RedHat-style eagle3 specific)
+            norm_before_residual = eagle3_raw_config.get("norm_before_residual", False)
+            logger.info(f"EAGLE-3: norm_before_residual = {norm_before_residual}")
+            self.gguf_writer.add_bool(f"{self.gguf_writer.arch}.norm_before_residual", norm_before_residual)
+
     def set_vocab(self):
+        # eagle3: use tokenizer from target model if provided
+        original_dir_model = None
+        if getattr(self, 'is_eagle3', False):
+            assert self.target_model_dir is not None
+            logger.info(f"EAGLE-3: Using tokenizer from target model: {self.target_model_dir}")
+            original_dir_model = self.dir_model
+            self.dir_model = self.target_model_dir
+
         if self.origin_hf_arch == "GlmasrModel":
             return self._set_vocab_glmedge()
 
@@ -85,6 +143,10 @@ class LlamaModel(TextModel):
         if self.hparams.get("vocab_size", 32000) == 49152:
             self.gguf_writer.add_add_bos_token(False)
 
+        # eagle3: Restore original dir_model
+        if original_dir_model is not None:
+            self.dir_model = original_dir_model
+
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
         hparams = self.hparams
@@ -129,7 +191,49 @@ class LlamaModel(TextModel):
 
         return super().filter_tensors((name, gen))
 
+    def index_tensors(self, remote_hf_model_id: str | None = None) -> dict[str, Callable[[], Tensor]]:
+        tensors = super().index_tensors(remote_hf_model_id)
+
+        # Handle Eagle3Speculator nested config
+        if "transformer_layer_config" in self.hparams:
+            self.hparams = {**self.hparams, **self.hparams["transformer_layer_config"]}
+
+        # eagle3 detection
+        if "draft_vocab_size" in self.hparams and self.hparams["num_hidden_layers"] == 1:
+            logger.info("EAGLE-3: renaming midlayer.* / layers.0.* to model.layers.0.*")
+            new_tensors = {}
+            for name, gen in tensors.items():
+                if name.startswith("midlayer."):
+                    new_name = "model.layers.0." + name[len("midlayer."):]
+                    new_tensors[new_name] = gen
+                elif name.startswith("layers.0."):  # Eagle3Speculator format
+                    new_name = "model." + name
+                    new_tensors[new_name] = gen
+                else:
+                    new_tensors[name] = gen
+            return new_tensors
+
+        return tensors
+
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        # eagle3: special tensors that bypass standard llama mapping
+        if getattr(self, 'is_eagle3', False):
+            if name == "fc.weight":
+                yield (name, data_torch)
+                return
+            if name == "d2t":
+                # store for manual int64 handling in prepare_tensors (avoid F32 conversion)
+                if not hasattr(self, '_eagle3_int_tensors'):
+                    self._eagle3_int_tensors = {}
+                self._eagle3_int_tensors[name] = data_torch
+                return
+            if name == "t2d":
+                # not used at runtime, skip
+                return
+            if name.endswith(".hidden_norm.weight"):
+                yield (self.format_tensor_name(gguf.MODEL_TENSOR.ATTN_NORM_2, bid), data_torch)
+                return
+
         n_head = self.find_hparam(["n_heads", "num_attention_heads"])
         n_kv_head = self.find_hparam(["n_kv_heads", "num_key_value_heads"])
 
@@ -205,7 +309,32 @@ class LlamaModel(TextModel):
                 yield (self.format_tensor_name(gguf.MODEL_TENSOR.ROPE_FREQS), torch.tensor(rope_factors, dtype=torch.float32))
 
     def prepare_tensors(self):
+        # eagle3: collect d2t original dtype before parent converts tensors to F32
+        eagle3_original_dtypes = {}
+        if getattr(self, 'is_eagle3', False):
+            for name, data_torch in self.get_tensors():
+                if name == "d2t":
+                    eagle3_original_dtypes[name] = data_torch.dtype
+
         super().prepare_tensors()
+
+        # eagle3: write d2t as absolute target token ids
+        if getattr(self, 'is_eagle3', False) and hasattr(self, '_eagle3_int_tensors'):
+            for name, data_torch in self._eagle3_int_tensors.items():
+                old_dtype = eagle3_original_dtypes.get(name, data_torch.dtype)
+                data = data_torch.to(torch.int64).cpu().numpy()
+                if name == "d2t":
+                    data = data.reshape(-1)
+                    data = data + np.arange(data.size, dtype=np.int64)
+                    if np.any((data < 0) | (data >= self.target_vocab_size)):
+                        raise ValueError(f"EAGLE-3 d2t target ids out of range for target vocab size {self.target_vocab_size}")
+                    if np.unique(data).size != data.size:
+                        raise ValueError("EAGLE-3 d2t contains duplicate target ids")
+                data_qtype = gguf.GGMLQuantizationType.I64
+
+                shape_str = f"{{{', '.join(str(n) for n in reversed(data.shape))}}}"
+                logger.info(f"{name + ',':<30} {old_dtype} --> {data_qtype.name}, shape = {shape_str}")
+                self.gguf_writer.add_tensor(name, data, raw_dtype=data_qtype)
 
         if self._experts is not None:
             # flatten `list[dict[str, Tensor]]` into `list[str]`
