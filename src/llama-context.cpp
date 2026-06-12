@@ -3515,6 +3515,10 @@ const llama_model * llama_get_model(const llama_context * ctx) {
     return &ctx->get_model();
 }
 
+ggml_backend_sched_t llama_get_sched(const llama_context * ctx) {
+    return ctx->get_sched();
+}
+
 enum llama_pooling_type llama_pooling_type(const llama_context * ctx) {
     return ctx->pooling_type();
 }

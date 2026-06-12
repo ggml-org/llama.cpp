@@ -97,6 +97,11 @@ struct mtmd_context_params {
     // callback function passed over to mtmd proper
     ggml_backend_sched_eval_callback cb_eval;
     void * cb_eval_user_data;
+
+    // optional: share an existing scheduler (e.g. from llama_context via llama_get_sched())
+    // instead of creating a separate one, saving compute buffer memory
+    // caller must ensure the scheduler outlives the mtmd context
+    ggml_backend_sched_t sched;
 };
 
 MTMD_API const char * mtmd_default_marker(void);
