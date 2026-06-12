@@ -440,6 +440,7 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("  -hft, --hf-token <token>                    Hugging Face access token\n");
     printf("                                              (default: value from HF_TOKEN environment variable)\n");
     printf("  --offline                                   Offline mode: forces use of cache, prevents network access\n");
+    printf("                                              (default: disabled)\n");
     printf("  -p, --n-prompt <n>                          (default: %s)\n", join(cmd_params_defaults.n_prompt, ",").c_str());
     printf("  -n, --n-gen <n>                             (default: %s)\n", join(cmd_params_defaults.n_gen, ",").c_str());
     printf("  -pg <pp,tg>                                 (default: %s)\n", join(transform_to_str(cmd_params_defaults.n_pg, pair_str), ",").c_str());

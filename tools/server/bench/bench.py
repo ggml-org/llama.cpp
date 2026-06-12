@@ -40,7 +40,7 @@ def main(args_in: list[str] | None = None) -> None:
                         required=True)
     parser.add_argument("--hf-repo", type=str, help="Hugging Face model repository", required=True)
     parser.add_argument("--hf-file", type=str, help="Hugging Face model file", required=True)
-    parser.add_argument("--offline", action="store_true", help="Offline mode: forces use of cache, prevents network access")
+    parser.add_argument("--offline", action="store_true", default=False, help="Offline mode: forces use of cache, prevents network access")
     parser.add_argument("-ngl", "--n-gpu-layers", type=int, help="layers to the GPU for computation", required=True)
     parser.add_argument("--ctx-size", type=int, help="Set the size of the prompt context", required=True)
     parser.add_argument("--parallel", type=int, help="Set the number of slots for process requests", required=True)
