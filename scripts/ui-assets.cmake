@@ -4,8 +4,9 @@
 #   1. Pre-built assets in SRC_DIST_DIR (manually built by user)
 #   2. If BUILD_UI=ON: npm build
 #   3. If above did not produce assets and HF_ENABLED=ON: HF Bucket download
+#      of dist.tar.gz (verified against dist.tar.gz.sha256)
 
-cmake_minimum_required(VERSION 3.16)
+cmake_minimum_required(VERSION 3.18)
 
 set(UI_SOURCE_DIR     "" CACHE STRING "UI source directory (to run npm build)")
 set(UI_BINARY_DIR     "" CACHE STRING "UI binary directory (to store generated files)")
@@ -16,76 +17,17 @@ set(HF_ENABLED        "" CACHE STRING "Whether to allow HF Bucket download (ON/O
 set(BUILD_UI          "" CACHE STRING "Build UI via npm (ON/OFF)")
 set(LLAMA_UI_EMBED    "" CACHE STRING "Path to llama-ui-embed helper")
 
-# IMPORTANT: When adding PWA assets, sync across all 3 places:
+# IMPORTANT: When adding PWA assets, sync across both places:
 #   1. tools/ui/src/lib/constants/pwa.ts   (APPLE_DEVICES, PUBLIC_ENDPOINTS)
 #   2. tools/server/server-http.cpp        (public_endpoints)
-#   3. scripts/ui-assets.cmake             (ASSETS list)
 # - C++ (server-http.cpp) - public endpoints (splash screens generated via helper)
 # - TypeScript (constants/pwa.ts) - APPLE_DEVICES, PWA_MANIFEST, PUBLIC_ENDPOINTS
 #
 # When adding/changing PWA assets, update tools/ui/src/lib/constants/pwa.ts first,
-# then sync any new file names here and in server-http.cpp.
-set(ASSETS
+# then sync any new file names in server-http.cpp.
+set(REQUIRED_ASSETS
     index.html
     loading.html
-    # PWA assets
-    favicon.ico
-    favicon-dark.ico
-    favicon.svg
-    favicon-dark.svg
-    pwa-64x64.png
-    pwa-192x192.png
-    pwa-512x512.png
-    maskable-icon-512x512.png
-    apple-touch-icon-180x180.png
-    # iOS splash screens
-    apple-splash-portrait-640x1136.png
-    apple-splash-landscape-1136x640.png
-    apple-splash-portrait-750x1334.png
-    apple-splash-landscape-1334x750.png
-    apple-splash-portrait-1170x2532.png
-    apple-splash-landscape-2532x1170.png
-    apple-splash-portrait-1179x2556.png
-    apple-splash-landscape-2556x1179.png
-    apple-splash-portrait-1206x2622.png
-    apple-splash-landscape-2622x1206.png
-    apple-splash-portrait-1284x2778.png
-    apple-splash-landscape-2778x1284.png
-    apple-splash-portrait-1290x2796.png
-    apple-splash-landscape-2796x1290.png
-    apple-splash-portrait-1320x2868.png
-    apple-splash-landscape-2868x1320.png
-    apple-splash-portrait-1488x2266.png
-    apple-splash-landscape-2266x1488.png
-    apple-splash-portrait-1640x2360.png
-    apple-splash-landscape-2360x1640.png
-    apple-splash-portrait-1668x2388.png
-    apple-splash-landscape-2388x1668.png
-    apple-splash-portrait-2048x2732.png
-    apple-splash-landscape-2732x2048.png
-    # iOS dark splash screens
-    apple-splash-portrait-dark-640x1136.png
-    apple-splash-landscape-dark-1136x640.png
-    apple-splash-portrait-dark-750x1334.png
-    apple-splash-landscape-dark-1334x750.png
-    apple-splash-portrait-dark-1170x2532.png
-    apple-splash-landscape-dark-2532x1170.png
-    apple-splash-portrait-dark-1179x2556.png
-    apple-splash-landscape-dark-2556x1179.png
-    apple-splash-portrait-dark-1206x2622.png
-    apple-splash-landscape-dark-2622x1206.png
-    apple-splash-portrait-dark-1284x2778.png
-    apple-splash-landscape-dark-2778x1284.png
-    apple-splash-portrait-dark-1290x2796.png
-    apple-splash-landscape-dark-2796x1290.png
-    apple-splash-portrait-dark-1320x2868.png
-    apple-splash-landscape-dark-2868x1320.png
-    apple-splash-portrait-dark-1640x2360.png
-    apple-splash-landscape-dark-2360x1640.png
-    apple-splash-portrait-dark-1668x2388.png
-    apple-splash-landscape-dark-2388x1668.png
-    apple-splash-portrait-dark-2048x2732.png
-    apple-splash-landscape-dark-2732x2048.png
     manifest.webmanifest
     sw.js
     _app/version.json
@@ -98,10 +40,10 @@ set(STAMP_FILE   "${UI_BINARY_DIR}/.ui-stamp")
 set(UI_CPP       "${UI_BINARY_DIR}/ui.cpp")
 set(UI_H         "${UI_BINARY_DIR}/ui.h")
 
-function(assets_present out_var)
+function(assets_present dir out_var)
     set(present TRUE)
-    foreach(asset ${ASSETS})
-        if(NOT EXISTS "${DIST_DIR}/${asset}")
+    foreach(asset ${REQUIRED_ASSETS})
+        if(NOT EXISTS "${dir}/${asset}")
             set(present FALSE)
             break()
         endif()
@@ -109,30 +51,10 @@ function(assets_present out_var)
     set(${out_var} ${present} PARENT_SCOPE)
 endfunction()
 
-function(copy_src_dist out_var)
-    set(${out_var} FALSE PARENT_SCOPE)
-
-    foreach(asset ${ASSETS})
-        if(NOT EXISTS "${SRC_DIST_DIR}/${asset}")
-            return()
-        endif()
-    endforeach()
-
-    file(MAKE_DIRECTORY "${DIST_DIR}")
-    message(STATUS "UI: using pre-built assets from ${SRC_DIST_DIR}")
-    foreach(asset ${ASSETS})
-        execute_process(
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                "${SRC_DIST_DIR}/${asset}" "${DIST_DIR}/${asset}"
-        )
-    endforeach()
-    set(${out_var} TRUE PARENT_SCOPE)
-endfunction()
-
 function(npm_build_should_skip out_var)
     set(${out_var} FALSE PARENT_SCOPE)
 
-    assets_present(present)
+    assets_present("${DIST_DIR}" present)
     if(NOT present)
         return()
     endif()
@@ -240,7 +162,7 @@ function(npm_build out_var)
         return()
     endif()
 
-    assets_present(present)
+    assets_present("${DIST_DIR}" present)
     if(NOT present)
         message(STATUS "UI: npm build finished but assets missing in ${DIST_DIR}")
         return()
@@ -272,7 +194,7 @@ function(hf_download version out_var out_resolved)
     set(${out_var}      FALSE PARENT_SCOPE)
     set(${out_resolved} ""    PARENT_SCOPE)
 
-    file(MAKE_DIRECTORY "${DIST_DIR}")
+    set(archive "${UI_BINARY_DIR}/dist.tar.gz")
 
     set(candidates "")
     if(NOT "${version}" STREQUAL "")
@@ -283,87 +205,68 @@ function(hf_download version out_var out_resolved)
     foreach(resolved ${candidates})
         set(base "https://huggingface.co/buckets/ggml-org/${HF_BUCKET}/resolve/${resolved}")
 
-        message(STATUS "UI: downloading from ${resolved}: ${base}")
+        message(STATUS "UI: downloading from ${resolved}: ${base}/dist.tar.gz")
 
-        set(ok TRUE)
-        foreach(asset ${ASSETS})
-            file(DOWNLOAD "${base}/${asset}?download=true" "${DIST_DIR}/${asset}"
-                STATUS status TIMEOUT 60
-            )
-            list(GET status 0 rc)
-            if(NOT rc EQUAL 0)
-                list(GET status 1 errmsg)
-                message(STATUS "UI: download ${asset} from ${resolved} failed: ${errmsg}")
-                set(ok FALSE)
-                break()
-            endif()
-            message(STATUS "UI: downloaded ${asset}")
-        endforeach()
-
-        if(NOT ok)
+        file(DOWNLOAD "${base}/dist.tar.gz?download=true" "${archive}"
+            STATUS status TIMEOUT 300
+        )
+        list(GET status 0 rc)
+        if(NOT rc EQUAL 0)
+            list(GET status 1 errmsg)
+            message(STATUS "UI: download dist.tar.gz from ${resolved} failed: ${errmsg}")
             continue()
         endif()
 
-        # Best-effort checksum verification
-        file(DOWNLOAD "${base}/checksums.txt?download=true" "${DIST_DIR}/checksums.txt"
-            STATUS cs_status TIMEOUT 30
+        file(DOWNLOAD "${base}/dist.tar.gz.sha256?download=true" "${archive}.sha256"
+            STATUS status TIMEOUT 30
         )
-        list(GET cs_status 0 cs_rc)
-        if(cs_rc EQUAL 0)
-            message(STATUS "UI: verifying checksums")
-            file(STRINGS "${DIST_DIR}/checksums.txt" cs_lines)
-            foreach(asset ${ASSETS})
-                file(SHA256 "${DIST_DIR}/${asset}" h)
-                string(TOLOWER "${h}" h)
-                string(REGEX MATCH "${h}[ \t]+${asset}" m "${cs_lines}")
-                if(NOT m)
-                    message(WARNING "UI: checksum verification failed for ${asset}")
-                    set(ok FALSE)
-                    break()
-                endif()
-            endforeach()
-            if(ok)
-                message(STATUS "UI: all checksums verified")
-            endif()
+        list(GET status 0 rc)
+        if(NOT rc EQUAL 0)
+            list(GET status 1 errmsg)
+            message(STATUS "UI: download dist.tar.gz.sha256 from ${resolved} failed: ${errmsg}")
+            continue()
         endif()
 
-        if(ok)
-            set(${out_var}      TRUE         PARENT_SCOPE)
-            set(${out_resolved} "${resolved}" PARENT_SCOPE)
-            return()
+        # Validate sha256 checkums
+        file(READ "${archive}.sha256" expected)
+        string(REGEX MATCH "^[0-9a-fA-F]+" expected "${expected}")
+        string(TOLOWER "${expected}" expected)
+        file(SHA256 "${archive}" actual)
+        if("${expected}" STREQUAL "" OR NOT "${actual}" STREQUAL "${expected}")
+            message(STATUS "UI: checksum mismatch for dist.tar.gz from ${resolved}")
+            continue()
         endif()
+
+        # Clear DIST_DIR to remove stale files first
+        file(REMOVE_RECURSE "${DIST_DIR}")
+
+        file(ARCHIVE_EXTRACT INPUT "${archive}" DESTINATION "${DIST_DIR}")
+
+        assets_present("${DIST_DIR}" present)
+        if(NOT present)
+            message(STATUS "UI: archive from ${resolved} is missing required assets")
+            continue()
+        endif()
+
+        message(STATUS "UI: archive verified and extracted")
+        set(${out_var}      TRUE          PARENT_SCOPE)
+        set(${out_resolved} "${resolved}" PARENT_SCOPE)
+        return()
     endforeach()
 endfunction()
 
-function(emit_files)
-    assets_present(present)
+function(emit_files dist_dir)
+    assets_present("${dist_dir}" present)
 
     set(args "${UI_CPP}" "${UI_H}")
     if(present)
-        foreach(asset ${ASSETS})
-            list(APPEND args "${asset}" "${DIST_DIR}/${asset}")
-        endforeach()
-
-        # Bundle files live in _app/immutable/ — vanilla SvelteKit output, no plugin
-        # rewriting. Embedded names must match the exact _app/ paths that index.html
-        # and sw.js reference.
-        file(GLOB_RECURSE detected_bundle_js "${DIST_DIR}/_app/immutable/bundle.*.js")
-        file(GLOB_RECURSE detected_bundle_css "${DIST_DIR}/_app/immutable/assets/bundle.*.css")
-        file(GLOB_RECURSE detected_workbox "${DIST_DIR}/workbox-*.js")
-        # Compute relative path from DIST_DIR to each found file.
-        # e.g. /path/to/build/tools/ui/dist/_app/immutable/bundle.XXX.js
-        #      -> _app/immutable/bundle.XXX.js
-        foreach(f ${detected_bundle_js})
-            string(REPLACE "${DIST_DIR}/" "" rel "${f}")
-            list(APPEND args "${rel}" "${f}")
-        endforeach()
-        foreach(f ${detected_bundle_css})
-            string(REPLACE "${DIST_DIR}/" "" rel "${f}")
-            list(APPEND args "${rel}" "${f}")
-        endforeach()
-        foreach(f ${detected_workbox})
-            string(REPLACE "${DIST_DIR}/" "" rel "${f}")
-            list(APPEND args "${rel}" "${f}")
+        # Embed every file in dist_dir. Embedded names are dist_dir-relative,
+        # matching the exact paths index.html and sw.js reference (including
+        # the hash-named _app/immutable/* bundles and workbox-*.js).
+        file(GLOB_RECURSE dist_files RELATIVE "${dist_dir}" "${dist_dir}/*")
+        list(SORT dist_files)
+        foreach(rel ${dist_files})
+            list(APPEND args "${rel}" "${dist_dir}/${rel}")
         endforeach()
     endif()
 
@@ -384,9 +287,10 @@ endfunction()
 # ---------------------------------------------------------------------------
 # 1. Priority 1: pre-built assets supplied in tools/ui/dist
 # ---------------------------------------------------------------------------
-copy_src_dist(SRC_OK)
+assets_present("${SRC_DIST_DIR}" SRC_OK)
 if(SRC_OK)
-    emit_files()
+    message(STATUS "UI: using pre-built assets from ${SRC_DIST_DIR}")
+    emit_files("${SRC_DIST_DIR}")
     return()
 endif()
 
@@ -419,7 +323,7 @@ if(NOT provisioned AND HF_ENABLED)
         endif()
     endif()
 
-    assets_present(have_assets)
+    assets_present("${DIST_DIR}" have_assets)
     if(stamp_ok AND have_assets)
         message(STATUS "UI: HF stamp '${stamped}' matches version, skipping HF fetch")
         set(provisioned TRUE)
@@ -439,7 +343,7 @@ endif()
 # 4. Fallback: warn about stale or missing assets, then emit whatever we have
 # ---------------------------------------------------------------------------
 if(NOT provisioned)
-    assets_present(have_assets)
+    assets_present("${DIST_DIR}" have_assets)
     if(have_assets)
         message(WARNING "UI: provisioning failed; embedding stale assets from ${DIST_DIR}")
     else()
@@ -451,4 +355,4 @@ if(NOT provisioned)
     endif()
 endif()
 
-emit_files()
+emit_files("${DIST_DIR}")
