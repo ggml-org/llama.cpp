@@ -62,7 +62,9 @@
 	let titleUpdateResolve: ((value: boolean) => void) | null = null;
 
 	const panelNav = useSettingsNavigation();
-	const { needRefresh, updateServiceWorker, needRefreshByStorage } = usePwa();
+	// Keep the hook object intact: destructuring needRefreshByStorage reads the getter once and freezes it
+	const pwa = usePwa();
+	const { needRefresh, updateServiceWorker } = pwa;
 
 	function updateFavicon() {
 		const dark = theme.isSystemDark;
@@ -290,8 +292,8 @@
 		<span class="text-[10px] tabular-nums text-muted-foreground">{buildInfoStore.value}</span>
 	{/if}
 	<PwaRefreshAlert
-		needRefresh={$needRefresh || needRefreshByStorage}
-		forceReload={needRefreshByStorage}
+		needRefresh={$needRefresh || pwa.needRefreshByStorage}
+		forceReload={pwa.needRefreshByStorage}
 		{updateServiceWorker}
 	/>
 </div>
