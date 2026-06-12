@@ -46,7 +46,7 @@ struct llm_build_delta_net_base : public llm_graph_context {
                 ggml_tensor * s,
                 int           il);
 
-    // use the ggml_gated_delta_net fused operator (K=1; state has shape (D, 1, n_seqs))
+    // use the ggml_gated_delta_net fused operator (K=1; state has shape [S_v, S_v, H_v, n_seqs])
     std::pair<ggml_tensor *, ggml_tensor *> build_delta_net_fused(
                 ggml_tensor * q,
                 ggml_tensor * k,
@@ -816,6 +816,19 @@ struct llama_model_gemma4 : public llama_model_base {
         // TODO: refactor in common "per-layer" functionality [TAG_PER_LAYER]
         ggml_tensor * build_inp_per_layer();
         ggml_tensor * project_per_layer_inputs(ggml_tensor * inp_batch, ggml_tensor * inp_per_layer);
+    };
+
+    std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
+};
+
+
+struct llama_model_gemma4_assistant : public llama_model_base {
+    llama_model_gemma4_assistant(const struct llama_model_params & params) : llama_model_base(params) {}
+    void load_arch_hparams(llama_model_loader & ml) override;
+    void load_arch_tensors(llama_model_loader & ml) override;
+
+    struct graph : public llm_graph_context {
+        graph(const llama_model & model, const llm_graph_params & params);
     };
 
     std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;

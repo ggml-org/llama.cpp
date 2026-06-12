@@ -21,7 +21,7 @@ ggml_cgraph * clip_graph_parakeet::build() {
 }
 
 ggml_tensor * clip_graph_parakeet::parakeet_build_graph_conv() {
-    ggml_tensor * inp = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, img.ny, img.nx, 1);
+    ggml_tensor * inp = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, img.ny(), img.nx(), 1);
     ggml_set_name(inp, "inp_raw");
     ggml_set_input(inp);
 

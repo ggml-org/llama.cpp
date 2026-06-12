@@ -393,6 +393,7 @@ namespace GGUFMeta {
     }
 
     template bool llama_model_loader::get_arr<std::vector<std::string>>(enum llm_kv kid, std::vector<std::string> & result, bool required);
+    template bool llama_model_loader::get_arr<std::array<int32_t, 512>>(enum llm_kv kid, std::array<int32_t, 512> & result, bool required);
 
     template<typename T>
     bool llama_model_loader::get_key(const std::string & key, T & result, bool required) {
@@ -1050,10 +1051,10 @@ struct ggml_tensor * llama_model_loader::create_tensor(
         if (it == ctx_map.end()) {
             // one ggml context per buffer type
             int max_n_tensors = n_tensors;
-            max_n_tensors += 1;                 // duplicated output tensor
-            max_n_tensors += hparams.n_layer*2; // duplicated rope freq tensors
+            max_n_tensors += 1;                   // duplicated output tensor
+            max_n_tensors += hparams.n_layer()*2; // duplicated rope freq tensors
             if (files.empty()) {
-                max_n_tensors += hparams.n_layer*256; // this should be well above what any model actually uses
+                max_n_tensors += hparams.n_layer()*256; // this should be well above what any model actually uses
             }
             const size_t ctx_size = ggml_tensor_overhead()*max_n_tensors;
 

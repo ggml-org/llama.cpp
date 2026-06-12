@@ -14,7 +14,7 @@ void llama_model_kimi_linear::load_arch_hparams(llama_model_loader & ml) {
 
     // Mark KDA layers as recurrent using n_head_kv pattern (like Jamba)
     // Set n_head_kv = 0 for KDA layers (recurrent), n_head_kv = n_head for MLA layers (attention)
-    for (uint32_t i = 0; i < hparams.n_layer; ++i) {
+    for (uint32_t i = 0; i < hparams.n_layer(); ++i) {
         hparams.is_recr_impl[i] = hparams.n_head_kv(i) == 0;  // KDA layers are recurrent
     }
 
@@ -25,7 +25,7 @@ void llama_model_kimi_linear::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_EXPERT_WEIGHTS_SCALE,              hparams.expert_weights_scale, false);
     ml.get_key(LLM_KV_EXPERT_GATING_FUNC,                hparams.expert_gating_func);
 
-    switch (hparams.n_layer) {
+    switch (hparams.n_layer()) {
         case 27: type = LLM_TYPE_48B_A3B; break; // Kimi-Linear-48B-A3B
         default: type = LLM_TYPE_UNKNOWN;
     }

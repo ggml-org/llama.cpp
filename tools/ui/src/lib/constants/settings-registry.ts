@@ -691,6 +691,14 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				}
 			},
 			{
+				key: SETTINGS_KEYS.JS_SANDBOX_ENABLED,
+				label: 'JavaScript sandbox tool',
+				help: 'Expose a run_javascript tool to the model. Code runs in a Web Worker inside a sandboxed iframe with an opaque origin, isolated from the WebUI and its API, with a hard timeout.',
+				defaultValue: false,
+				type: SettingsFieldType.CHECKBOX,
+				section: SETTINGS_SECTION_SLUGS.DEVELOPER
+			},
+			{
 				key: SETTINGS_KEYS.CUSTOM_JSON,
 				label: 'Custom JSON',
 				help: 'Custom JSON parameters to send to the API. Must be valid JSON format.',

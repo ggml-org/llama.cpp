@@ -558,7 +558,7 @@ struct ggml_backend_opencl_context {
     cl_kernel kernel_set_rows_f32_i64, kernel_set_rows_f32_i32, kernel_set_rows_f16_i64, kernel_set_rows_f16_i32;
     cl_kernel kernel_rope_norm_f32, kernel_rope_norm_f16, kernel_rope_neox_f32, kernel_rope_neox_f16;
     cl_kernel kernel_rope_multi_f32, kernel_rope_multi_f16, kernel_rope_vision_f32, kernel_rope_vision_f16;
-    cl_kernel kernel_cpy_f16_f16, kernel_cpy_f16_f32, kernel_cpy_f32_f16, kernel_cpy_f32_f32, kernel_cpy_i32_i32;
+    cl_kernel kernel_cpy_f16_f16, kernel_cpy_f16_f32, kernel_cpy_f32_f16, kernel_cpy_f32_f32, kernel_cpy_f32_f32_pack, kernel_cpy_i32_i32;
     cl_kernel kernel_mul_mat_f32_f32;
     cl_kernel kernel_mul_mat_f16_f16;
     cl_kernel kernel_mul_mat_f16_f32_1row;
@@ -639,7 +639,7 @@ struct ggml_backend_opencl_context {
     cl_kernel kernel_softplus_f16, kernel_softplus_f16_4, kernel_softplus_f16_nc;
     cl_kernel kernel_upscale;
     cl_kernel kernel_upscale_bilinear;
-    cl_kernel kernel_concat_f32;
+    cl_kernel kernel_concat_f32, kernel_concat_f32_pack;
     cl_kernel kernel_conv_2d_f16;
     cl_kernel kernel_conv_2d_f32;
     cl_kernel kernel_conv_2d_f16_f32;
@@ -1121,6 +1121,7 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx) {
         CL_CHECK((backend_ctx->kernel_cpy_f16_f32 = clCreateKernel(prog, "kernel_cpy_f16_f32", &err), err));
         CL_CHECK((backend_ctx->kernel_cpy_f32_f16 = clCreateKernel(prog, "kernel_cpy_f32_f16", &err), err));
         CL_CHECK((backend_ctx->kernel_cpy_f32_f32 = clCreateKernel(prog, "kernel_cpy_f32_f32", &err), err));
+        CL_CHECK((backend_ctx->kernel_cpy_f32_f32_pack = clCreateKernel(prog, "kernel_cpy_f32_f32_pack", &err), err));
         CL_CHECK((backend_ctx->kernel_cpy_i32_i32 = clCreateKernel(prog, "kernel_cpy_i32_i32", &err), err));
         GGML_LOG_CONT(".");
     }
@@ -2615,6 +2616,7 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx) {
         cl_program prog =
             build_program_from_source(backend_ctx->context, backend_ctx->device, kernel_src.c_str(), compile_opts);
         CL_CHECK((backend_ctx->kernel_concat_f32 = clCreateKernel(prog, "kernel_concat_f32", &err), err));
+        CL_CHECK((backend_ctx->kernel_concat_f32_pack = clCreateKernel(prog, "kernel_concat_f32_pack", &err), err));
         CL_CHECK(clReleaseProgram(prog));
         GGML_LOG_CONT(".");
     }
@@ -8552,7 +8554,14 @@ static void ggml_cl_get_rows(ggml_backend_t backend, const ggml_tensor * src0, c
         nth *= 2;
     }
 
-    size_t global_work_size[] = {(size_t)ne10*nth, (size_t)ne11, (size_t)ne12};
+    int nchunks = 1;
+    if (src0->type == GGML_TYPE_F32) {
+        const int chunk_target = nth * 4;
+        nchunks = (ne00 + chunk_target - 1) / chunk_target;
+        nchunks = MAX(1, MIN(nchunks, 64));
+    }
+
+    size_t global_work_size[] = {(size_t)ne10*nth*nchunks, (size_t)ne11, (size_t)ne12};
     size_t local_work_size[] = {(size_t)nth, 1, 1};
 
     backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
@@ -11128,7 +11137,9 @@ static void ggml_cl_concat(ggml_backend_t backend, const ggml_tensor * src0, con
 
     int nth = MIN(64, ne0);
 
-    cl_kernel kernel = backend_ctx->kernel_concat_f32;
+    const bool concat_pack = (dim == 0 && ne0 < 32);
+    cl_kernel kernel = concat_pack ? backend_ctx->kernel_concat_f32_pack
+                                   : backend_ctx->kernel_concat_f32;
 
     CL_CHECK(clSetKernelArg(kernel,  0, sizeof(cl_mem),   &extra0->data_device));
     CL_CHECK(clSetKernelArg(kernel,  1, sizeof(cl_ulong), &offset0));
@@ -11155,10 +11166,28 @@ static void ggml_cl_concat(ggml_backend_t backend, const ggml_tensor * src0, con
     CL_CHECK(clSetKernelArg(kernel, 22, sizeof(cl_ulong), &nb3));
     CL_CHECK(clSetKernelArg(kernel, 23, sizeof(cl_int),   &dim));
 
-    size_t global_work_size[] = {(size_t)ne1*nth, (size_t)ne2, (size_t)ne3};
-    size_t local_work_size[] = {(size_t)nth, 1, 1};
+    if (concat_pack) {
+        // packed kernel needs the dst dims to unflatten its 1-D row index.
+        CL_CHECK(clSetKernelArg(kernel, 24, sizeof(int), &ne1));
+        CL_CHECK(clSetKernelArg(kernel, 25, sizeof(int), &ne2));
+        CL_CHECK(clSetKernelArg(kernel, 26, sizeof(int), &ne3));
 
-    backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
+        const int maxwg = (int)backend_ctx->get_kernel_workgroup_size(kernel);
+        const int base  = MIN(64, maxwg);
+        const int tpr   = MIN(ne0, base);                 // threads per row
+        const int rpw   = MAX(1, base / tpr);             // rows per workgroup
+        const int lsz   = tpr * rpw;
+        const int nrows = ne1*ne2*ne3;
+        const int nwg   = (nrows + rpw - 1) / rpw;
+        size_t global_work_size[] = {(size_t)nwg*lsz, 1, 1};
+        size_t local_work_size[]  = {(size_t)lsz, 1, 1};
+        backend_ctx->enqueue_ndrange_kernel(kernel, 1, global_work_size, local_work_size, dst);
+    } else {
+        size_t global_work_size[] = {(size_t)ne1*nth, (size_t)ne2, (size_t)ne3};
+        size_t local_work_size[] = {(size_t)nth, 1, 1};
+
+        backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
+    }
 }
 
 static void ggml_cl_timestep_embedding(ggml_backend_t backend, const ggml_tensor * src0, ggml_tensor * dst) {
@@ -14536,7 +14565,7 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
             } else if (backend_ctx->gpu_family == ADRENO) {
                 nth0 = 64;
                 nth1 = 2;
-                ndst = 4;
+                ndst = 16;
             } else {
                 GGML_ASSERT(false && "TODO: Unknown GPU");
             }
@@ -16633,7 +16662,8 @@ static void ggml_cl_cpy(ggml_backend_t backend, const ggml_tensor * src0, const 
                     kernel = backend_ctx->kernel_cpy_f32_f16;
                     break;
                 case GGML_TYPE_F32:
-                    kernel = backend_ctx->kernel_cpy_f32_f32;
+                    kernel = ne00 < 32 ? backend_ctx->kernel_cpy_f32_f32_pack
+                                       : backend_ctx->kernel_cpy_f32_f32;
                     break;
                 default:
                     GGML_ASSERT(false && "not implemented");
@@ -16685,12 +16715,27 @@ static void ggml_cl_cpy(ggml_backend_t backend, const ggml_tensor * src0, const 
     CL_CHECK(clSetKernelArg(kernel, 18, sizeof(cl_ulong), &nb12));
     CL_CHECK(clSetKernelArg(kernel, 19, sizeof(cl_ulong), &nb13));
 
-    const int nth = MIN(64, ne00);
+    if (kernel == backend_ctx->kernel_cpy_f32_f32_pack) {
+        const int maxwg = (int)backend_ctx->get_kernel_workgroup_size(kernel);
+        const int base  = MIN(64, maxwg);
+        const int tpr   = MIN(ne00, base);                 // threads per row
+        const int rpw   = MAX(1, base / tpr);              // rows per workgroup
+        const int lsz   = tpr * rpw;                       // <= base <= maxwg
+        const int nrows = ne01*ne02*ne03;
+        const int nwg   = (nrows + rpw - 1) / rpw;
 
-    size_t global_work_size[] = {(size_t)ne01*nth, (size_t)ne02, (size_t)ne03};
-    size_t local_work_size[] = {(size_t)nth, 1, 1};
+        size_t global_work_size[] = {(size_t)nwg*lsz, 1, 1};
+        size_t local_work_size[]  = {(size_t)lsz, 1, 1};
 
-    backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, src1);
+        backend_ctx->enqueue_ndrange_kernel(kernel, 1, global_work_size, local_work_size, src1);
+    } else {
+        const int nth = MIN(64, ne00);
+
+        size_t global_work_size[] = {(size_t)ne01*nth, (size_t)ne02, (size_t)ne03};
+        size_t local_work_size[] = {(size_t)nth, 1, 1};
+
+        backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, src1);
+    }
 }
 
 static void ggml_cl_dup(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
@@ -17705,7 +17750,7 @@ static void ggml_cl_gated_delta_net(ggml_backend_t backend, ggml_tensor * dst) {
     const cl_uint H_v      = (cl_uint) src_v->ne[1];
     const cl_uint n_tokens = (cl_uint) src_v->ne[2];
     const cl_uint n_seqs   = (cl_uint) src_v->ne[3];
-    const cl_uint K        = (cl_uint) src_state->ne[1];
+    const cl_uint K        = (cl_uint) ggml_get_op_params_i32(dst, 0);
 
     int si;
     switch (S_v) {

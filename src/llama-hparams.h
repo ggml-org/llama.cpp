@@ -48,11 +48,14 @@ struct llama_hparams {
 
     uint32_t n_ctx_train; // context size the model was trained on
     uint32_t n_embd;
-    uint32_t n_layer;
-    int32_t  n_layer_kv_from_start = -1; // if non-negative, the first n_layer_kv_from_start layers have KV cache
+    uint32_t n_layer_all;
+    uint32_t n_layer_nextn = 0;
     uint32_t n_expert = 0;
     uint32_t n_expert_used = 0;
     uint32_t n_rel_attn_bkts = 0;
+
+    // TODO: this needs to be reworked
+    int32_t  n_layer_kv_from_start = -1; // if non-negative, the first n_layer_kv_from_start layers have KV cache
 
     // different head size for full_attention and SWA layers
     uint32_t n_embd_head_k_full; // dimension of keys (d_k). d_q is assumed to be the same, but there are n_head q heads, and only n_head_kv k-v heads
@@ -96,9 +99,6 @@ struct llama_hparams {
     uint32_t expert_gating_func   = LLAMA_EXPERT_GATING_FUNC_TYPE_NONE;
     uint32_t moe_every_n_layers   = 0;
     uint32_t moe_latent_size      = 0;
-    uint32_t nextn_predict_layers = 0;
-
-    bool kv_only_nextn = false; // if true, only the last nextn_predict_layers blocks have a KV cache (MTP head arches)
 
     float f_norm_eps;
     float f_norm_rms_eps;
@@ -185,6 +185,9 @@ struct llama_hparams {
     // for Classifiers
     uint32_t n_cls_out = 1;
 
+    // input embedding dimension (0 = use n_embd)
+    uint32_t n_embd_inp_impl = 0;
+
     // output embedding dimension (0 = use n_embd)
     uint32_t n_embd_out_impl = 0;
 
@@ -219,7 +222,18 @@ struct llama_hparams {
     uint32_t indexer_top_k     = 0;
 
     // qwen3vl deepstack
+    // When parsed from GGUF, this implies the first N layers consume the first
+    // N deepstack embeddings. Use deepstack_mapping_arr if you need a more
+    // complex mapping. If using deepstack_mapping_arr, also make sure to set
+    // n_deepstack_layers to the number of unique deepstack layers so that
+    // n_embd_imp is accurate (see granite.cpp).
+    // TODO: can be expressed via the `new n_embd_inp_impl` and remove this param
     uint32_t n_deepstack_layers = 0;
+
+    // deepstack layer array (Granite4 Vision)
+    // -1  => no deepstack
+    // >=0 => input embedding index for deepstack injection
+    std::array<int32_t, LLAMA_MAX_LAYERS> deepstack_mapping_arr;
 
     // gemma4 per-layer embedding
     uint32_t n_embd_per_layer = 0;
@@ -272,8 +286,7 @@ struct llama_hparams {
 
     bool is_swa(uint32_t il) const;
 
-    // TODO: implement
-    //void set_recr_pattern(uint32_t n_pattern, bool dense_first = false);
+    void set_recr_pattern(uint32_t n_pattern, bool dense_first = false);
 
     // whether or not the given layer is recurrent (for hybrid models)
     bool is_recr(uint32_t il) const;
@@ -329,8 +342,8 @@ struct llama_hparams {
 
     bool has_kv(uint32_t il) const;
 
-    // number of layers for which has_kv() returns true
-    uint32_t n_layer_kv() const;
+    // number of effective layers (excludes nextn layers)
+    uint32_t n_layer() const;
 
     // note that this function uses different SWA parameters from those in the hparams
     // note: inlined on purpose for performance reasons

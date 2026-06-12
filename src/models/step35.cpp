@@ -23,16 +23,16 @@ void llama_model_step35::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW,  hparams.n_swa);
     ml.get_key(LLM_KV_ROPE_FREQ_BASE_SWA,        hparams.rope_freq_base_train_swa, false);
 
-    ml.get_key_or_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, hparams.is_swa_impl, hparams.n_layer);
+    ml.get_key_or_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, hparams.is_swa_impl, hparams.n_layer());
 
-    ml.get_key_or_arr(LLM_KV_SWIGLU_CLAMP_EXP,   hparams.swiglu_clamp_exp,   hparams.n_layer, false);
-    ml.get_key_or_arr(LLM_KV_SWIGLU_CLAMP_SHEXP, hparams.swiglu_clamp_shexp, hparams.n_layer, false);
+    ml.get_key_or_arr(LLM_KV_SWIGLU_CLAMP_EXP,   hparams.swiglu_clamp_exp,   hparams.n_layer(), false);
+    ml.get_key_or_arr(LLM_KV_SWIGLU_CLAMP_SHEXP, hparams.swiglu_clamp_shexp, hparams.n_layer(), false);
 
     // NextN/MTP (Step3p5): extra decoder block appended beyond the main stack.
-    ml.get_key(LLM_KV_NEXTN_PREDICT_LAYERS, hparams.nextn_predict_layers, false);
-    GGML_ASSERT(hparams.nextn_predict_layers < hparams.n_layer && "nextn_predict_layers must be < n_layer");
+    ml.get_key(LLM_KV_NEXTN_PREDICT_LAYERS, hparams.n_layer_nextn, false);
+    GGML_ASSERT(hparams.n_layer_nextn < hparams.n_layer_all && "n_layer_nextn must be < n_layer_impl");
 
-    switch (hparams.n_layer - hparams.nextn_predict_layers) {
+    switch (hparams.n_layer()) {
         case 45: type = LLM_TYPE_196B_A11B; break;
         default: type = LLM_TYPE_UNKNOWN;
     }
@@ -41,15 +41,12 @@ void llama_model_step35::load_arch_hparams(llama_model_loader & ml) {
 void llama_model_step35::load_arch_tensors(llama_model_loader & ml) {
     LLAMA_LOAD_LOCALS;
 
-    const uint32_t n_main = n_layer - hparams.nextn_predict_layers;
-    const bool mtp_only   = (hparams.nextn_predict_layers > 0) &&
-                            (ml.get_weight("blk.0.attn_norm.weight") == nullptr);
+    const bool mtp_only = (hparams.n_layer_nextn > 0) && (ml.get_weight("blk.0.attn_norm.weight") == nullptr);
     // Trunk-only: the GGUF declares MTP layers in metadata but the actual MTP
     // tensors live in a separate file (e.g. user split target/draft). Mark
     // MTP tensors NOT_REQUIRED so the trunk loads cleanly.
-    const std::string mtp_probe = "blk." + std::to_string(n_main) + ".nextn.eh_proj.weight";
-    const bool trunk_only = (hparams.nextn_predict_layers > 0) &&
-                            (ml.get_weight(mtp_probe.c_str()) == nullptr);
+    const std::string mtp_probe = "blk." + std::to_string(n_layer) + ".nextn.eh_proj.weight";
+    const bool trunk_only = (hparams.n_layer_nextn > 0) && (ml.get_weight(mtp_probe.c_str()) == nullptr);
     const int trunk_flags = mtp_only  ? TENSOR_NOT_REQUIRED : 0;
     const int mtp_flags   = trunk_only ? TENSOR_NOT_REQUIRED : 0;
 
@@ -176,7 +173,7 @@ void llama_model_step35::load_arch_tensors(llama_model_loader & ml) {
         layer.nextn.shared_head_norm = create_tensor(tn(LLM_TENSOR_NEXTN_SHARED_HEAD_NORM, "weight", i), { n_embd },              TENSOR_NOT_REQUIRED);
     };
 
-    for (int i = 0; i < (int) n_main; ++i) {
+    for (int i = 0; i < n_layer; ++i) {
         load_block_trunk(i, trunk_flags);
     }
     // Only the first MTP block (i == n_main) is required at runtime — the
@@ -184,8 +181,8 @@ void llama_model_step35::load_arch_tensors(llama_model_loader & ml) {
     // Trailing MTP blocks are loaded if present (so an un-pruned GGUF with
     // all MTP layers still works) but tolerated when absent via the pruning
     // path. See scripts/prune_step35_extra_mtp.py for the pruner.
-    for (int i = (int) n_main; i < n_layer; ++i) {
-        load_block_mtp(i, /*is_first_mtp=*/ i == (int) n_main);
+    for (int i = n_layer; i < n_layer_all; ++i) {
+        load_block_mtp(i, /*is_first_mtp=*/ i == n_layer);
     }
 }
 
@@ -206,8 +203,7 @@ llama_model_step35::graph::graph(const llama_model & model, const llm_graph_para
     ggml_tensor * inp_out_ids = build_inp_out_ids();
 
     // MTP/NextN layers are loaded as extra decoder blocks but not executed in the main pass.
-    const int n_transformer_layers = n_layer - (int) hparams.nextn_predict_layers;
-    for (int il = 0; il < n_transformer_layers; ++il) {
+    for (int il = 0; il < n_layer; ++il) {
         ggml_tensor * inpSA = inpL;
 
         const uint32_t n_head_l    = hparams.n_head(il);
@@ -294,7 +290,7 @@ llama_model_step35::graph::graph(const llama_model & model, const llm_graph_para
             cb(cur, "attn_proj", il);
         }
 
-        if (il == n_transformer_layers - 1 && inp_out_ids && cparams.embeddings_nextn_masked) {
+        if (il == n_layer - 1 && inp_out_ids && cparams.embeddings_nextn_masked) {
             cur   = ggml_get_rows(ctx0, cur, inp_out_ids);
             inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
         }
@@ -374,7 +370,7 @@ llama_model_step35::graph::graph(const llama_model & model, const llm_graph_para
 // LLM_GRAPH_TYPE_DECODER_MTP draft head for Step3p5 (MoE)
 llama_model_step35::graph_mtp::graph_mtp(const llama_model & model, const llm_graph_params & params)
     : llm_graph_context(params) {
-    GGML_ASSERT(hparams.nextn_predict_layers > 0 && "STEP35 MTP requires nextn_predict_layers > 0");
+    GGML_ASSERT(hparams.n_layer_nextn > 0 && "STEP35 MTP requires n_layer_nextn > 0");
 
     // Single-block MTP only: always run the first trained MTP block (Qwen
     // MTP / vLLM single-MTP-layer style). Multi-block round-robin proved to
@@ -382,7 +378,7 @@ llama_model_step35::graph_mtp::graph_mtp(const llama_model & model, const llm_gr
     // blocks are loaded with TENSOR_NOT_REQUIRED so pruned GGUFs (with just
     // block 0) also work — see load_arch_tensors below and
     // scripts/prune_step35_extra_mtp.py.
-    const int il       = (int) hparams.n_layer - (int) hparams.nextn_predict_layers;
+    const int il = hparams.n_layer();
     const auto & layer = model.layers[il];
 
     GGML_ASSERT(layer.nextn.eh_proj && "MTP block missing nextn.eh_proj");
