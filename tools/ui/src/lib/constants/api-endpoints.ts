@@ -6,18 +6,22 @@ export const API_MODELS = {
 
 // chat completion routes, the control route drives realtime inference (e.g. end reasoning)
 export const API_CHAT = {
-	COMPLETIONS: './v1/chat/completions',
-	CONTROL: './v1/chat/completions/control'
+	COMPLETIONS: '/v1/chat/completions',
+	CONTROL: '/v1/chat/completions/control'
 };
 
 // slot introspection, requires the --slots flag on the server
 export const API_SLOTS = {
-	LIST: './slots'
+	LIST: '/slots'
 };
 
 export const API_TOOLS = {
 	LIST: '/tools',
 	EXECUTE: '/tools'
+};
+
+export const API_PROPS = {
+	LIST: '/props'
 };
 
 /** CORS proxy endpoint path */

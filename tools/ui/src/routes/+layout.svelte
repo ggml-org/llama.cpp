@@ -25,7 +25,7 @@
 	import { Toaster } from 'svelte-sonner';
 	import { modelsStore } from '$lib/stores/models.svelte';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
-	import { TOOLTIP_DELAY_DURATION } from '$lib/constants';
+	import { TOOLTIP_DELAY_DURATION, API_PROPS } from '$lib/constants';
 	import { useKeyboardShortcuts } from '$lib/hooks/use-keyboard-shortcuts.svelte';
 	import { useSettingsNavigation } from '$lib/hooks/use-settings-navigation.svelte';
 	import { conversations } from '$lib/stores/conversations.svelte';
@@ -104,8 +104,9 @@
 					'Content-Type': 'application/json',
 					Authorization: `Bearer ${apiKey.trim()}`
 				};
+				const apiBase = config().apiBase ?? base;
 
-				fetch(`${base}/props`, { headers })
+				fetch(apiBase + API_PROPS.LIST, { headers })
 					.then((response) => {
 						if (response.status === 401 || response.status === 403) {
 							window.location.reload();
