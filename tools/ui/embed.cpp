@@ -17,6 +17,7 @@
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 // Computes FNV-1a hash of the data
@@ -101,6 +102,32 @@ struct asset_entry {
     std::filesystem::path path;
 };
 
+static const char * mime_from_name(const std::string & name) {
+    static const std::unordered_map<std::string, const char *> mime_types = {
+        { "html",        "text/html; charset=utf-8" },
+        { "js",          "application/javascript; charset=utf-8" },
+        { "mjs",         "application/javascript; charset=utf-8" },
+        { "css",         "text/css; charset=utf-8" },
+        { "json",        "application/json; charset=utf-8" },
+        { "webmanifest", "application/manifest+json; charset=utf-8" },
+        { "svg",         "image/svg+xml" },
+        { "png",         "image/png" },
+        { "jpg",         "image/jpeg" },
+        { "jpeg",        "image/jpeg" },
+        { "webp",        "image/webp" },
+        { "ico",         "image/x-icon" },
+        { "txt",         "text/plain; charset=utf-8" },
+        { "wasm",        "application/wasm" },
+        { "woff2",       "font/woff2" },
+    };
+
+    const auto dot = name.find_last_of('.');
+    const std::string ext = (dot == std::string::npos) ? "" : name.substr(dot + 1);
+
+    const auto it = mime_types.find(ext);
+    return it != mime_types.end() ? it->second : "application/octet-stream";
+}
+
 int main(int argc, char ** argv) {
     if (argc < 3 || argc > 4) {
         fprintf(stderr, "usage: %s <out_cpp> <out_h> [<asset_dir>]\n", argv[0]);
@@ -135,23 +162,29 @@ int main(int argc, char ** argv) {
     const int n_assets = static_cast<int>(assets.size());
 
     std::string h;
-    h += "#pragma once\n\n#include <stddef.h>\n\n";
+    h += "#pragma once\n\n#include <stddef.h>\n#include <string_view>\n\n";
     if (n_assets > 0) {
         h += "#define LLAMA_UI_HAS_ASSETS 1\n\n";
     }
     h +=
         "struct llama_ui_asset {\n"
-        "    const char *          name;\n"
+        "    std::string_view      name;\n"
         "    const unsigned char * data;\n"
         "    size_t                size;\n"
-        "    const char *          etag;\n"
+        "    std::string_view      etag;\n"
+        "    std::string_view      mime;\n"
         "};\n\n"
-        "const llama_ui_asset * llama_ui_find_asset(const char * name);\n";
+        "// all embedded assets, sorted by name\n"
+        "const llama_ui_asset * llama_ui_assets(size_t & count);\n"
+        "const llama_ui_asset * llama_ui_find_asset(std::string_view name);\n";
 
     std::string cpp;
-    cpp += "#include \"ui.h\"\n\n#include <string.h>\n\n";
+    cpp += "#include \"ui.h\"\n\n";
 
     if (n_assets > 0) {
+        std::vector<std::string> rows;
+        rows.reserve(n_assets);
+
         for (int i = 0; i < n_assets; i++) {
             std::vector<unsigned char> bytes;
             if (!read_file(assets[i].path, bytes)) {
@@ -159,25 +192,28 @@ int main(int argc, char ** argv) {
             }
             cpp += fmt("static const unsigned char asset_%d_data[] = {", i);
             append_bytes_hex(cpp, bytes);
+            cpp += "};\n";
+
             const auto hash = fnv_hash(bytes.data(), bytes.size());
-
-            cpp += fmt("};\nstatic const size_t        asset_%d_size = %zu;\n",
-                       i, bytes.size());
-            cpp += fmt("static const char        asset_%d_etag[] = \"\\\"0x%016" PRIx64 "\\\"\";\n\n",
-                       i, hash);
+            rows.push_back(fmt("    { \"%s\", asset_%d_data, %zu, \"\\\"0x%016" PRIx64 "\\\"\", \"%s\" },\n",
+                               assets[i].name.c_str(), i, bytes.size(), hash, mime_from_name(assets[i].name)));
         }
+        cpp += "\n";
 
-        cpp += "static const llama_ui_asset g_assets[] = {\n";
-        for (int i = 0; i < n_assets; i++) {
-            cpp += fmt("    { \"%s\", asset_%d_data, asset_%d_size, asset_%d_etag },\n",
-                       assets[i].name.c_str(), i, i, i);
+        cpp += "static constexpr llama_ui_asset g_assets[] = {\n";
+        for (const auto & row : rows) {
+            cpp += row;
         }
         cpp += "};\n\n";
 
         cpp +=
-            "const llama_ui_asset * llama_ui_find_asset(const char * name) {\n"
+            "const llama_ui_asset * llama_ui_assets(size_t & count) {\n"
+            "    count = sizeof(g_assets) / sizeof(g_assets[0]);\n"
+            "    return g_assets;\n"
+            "}\n\n"
+            "const llama_ui_asset * llama_ui_find_asset(std::string_view name) {\n"
             "    for (const auto & a : g_assets) {\n"
-            "        if (strcmp(a.name, name) == 0) {\n"
+            "        if (a.name == name) {\n"
             "            return &a;\n"
             "        }\n"
             "    }\n"
@@ -185,7 +221,11 @@ int main(int argc, char ** argv) {
             "}\n";
     } else {
         cpp +=
-            "const llama_ui_asset * llama_ui_find_asset(const char *) {\n"
+            "const llama_ui_asset * llama_ui_assets(size_t & count) {\n"
+            "    count = 0;\n"
+            "    return nullptr;\n"
+            "}\n\n"
+            "const llama_ui_asset * llama_ui_find_asset(std::string_view) {\n"
             "    return nullptr;\n"
             "}\n";
     }

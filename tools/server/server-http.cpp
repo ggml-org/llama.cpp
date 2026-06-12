@@ -9,7 +9,9 @@
 #include <future>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <thread>
+#include <unordered_set>
 
 //
 // HTTP implementation using cpp-httplib
@@ -170,102 +172,45 @@ bool server_http_context::init(const common_params & params) {
     }
 
     //
-    // Helper: Generate iOS splash screen paths from device dimensions
-    // This centralizes PWA asset paths to avoid duplication across CMake, C++, and TypeScript.
-    // Source of truth: tools/ui/src/lib/constants/pwa.ts (APPLE_DEVICES)
-    //
-    auto generate_splash_endpoints = []() -> std::vector<std::string> {
-        // Apple device dimensions (width x height) with orientation and color scheme
-        // Format: "orientation-dimension1xdimension2.png" or "orientation-dark-dimension1xdimension2.png"
-        // Based on https://developer.apple.com/design/human-interface-guidelines/app-icons
-        static const std::vector<std::pair<std::string, std::string>> splash_specs = {
-            // Portrait screens (light)
-            {"portrait", "640x1136"},     {"portrait", "750x1334"},
-            {"portrait", "1170x2532"},    {"portrait", "1179x2556"},
-            {"portrait", "1206x2622"},    {"portrait", "1284x2778"},
-            {"portrait", "1290x2796"},    {"portrait", "1320x2868"},
-            {"portrait", "1488x2266"},    {"portrait", "1640x2360"},
-            {"portrait", "1668x2388"},    {"portrait", "2048x2732"},
-            // Landscape screens (light) - dimensions swapped
-            {"landscape", "1136x640"},    {"landscape", "1334x750"},
-            {"landscape", "2532x1170"},   {"landscape", "2556x1179"},
-            {"landscape", "2622x1206"},   {"landscape", "2778x1284"},
-            {"landscape", "2796x1290"},   {"landscape", "2868x1320"},
-            {"landscape", "2266x1488"},   {"landscape", "2360x1640"},
-            {"landscape", "2388x1668"},   {"landscape", "2732x2048"},
-            // Portrait screens (dark)
-            {"portrait-dark", "640x1136"}, {"portrait-dark", "750x1334"},
-            {"portrait-dark", "1170x2532"}, {"portrait-dark", "1179x2556"},
-            {"portrait-dark", "1206x2622"}, {"portrait-dark", "1284x2778"},
-            {"portrait-dark", "1290x2796"}, {"portrait-dark", "1320x2868"},
-            {"portrait-dark", "1488x2266"}, {"portrait-dark", "1640x2360"},
-            {"portrait-dark", "1668x2388"}, {"portrait-dark", "2048x2732"},
-            // Landscape screens (dark)
-            {"landscape-dark", "1136x640"}, {"landscape-dark", "1334x750"},
-            {"landscape-dark", "2532x1170"}, {"landscape-dark", "2556x1179"},
-            {"landscape-dark", "2622x1206"}, {"landscape-dark", "2778x1284"},
-            {"landscape-dark", "2796x1290"}, {"landscape-dark", "2868x1320"},
-            {"landscape-dark", "2266x1488"}, {"landscape-dark", "2360x1640"},
-            {"landscape-dark", "2388x1668"}, {"landscape-dark", "2732x2048"}
-        };
-
-        std::vector<std::string> endpoints;
-        endpoints.reserve(splash_specs.size());
-        for (const auto & [orientation, dimensions] : splash_specs) {
-            endpoints.push_back("/apple-splash-" + orientation + "-" + dimensions + ".png");
-        }
-        return endpoints;
-    };
-
-    //
     // Middlewares
     //
 
-    // Public endpoints list - includes health, UI, and PWA assets
+    // Public endpoints list
     // Source of truth for splash screen paths: tools/ui/src/lib/constants/pwa.ts (APPLE_DEVICES)
-    static const std::unordered_set<std::string> get_public_endpoints = [generate_splash_endpoints]() {
-        std::unordered_set<std::string> endpoints {
-            "/health",
-            "/v1/health",
-            "/models",
-            "/v1/models",
+    std::unordered_set<std::string> public_endpoints = {
+        "/health",
+        "/v1/health",
+        "/models",
+        "/v1/models",
+    };
+    if (params.ui) {
+        public_endpoints.insert({
             "/",
             "/index.html",
-            // PWA assets
             "/favicon.ico",
-            "/favicon-dark.ico",
             "/favicon.svg",
-            "/favicon-dark.svg",
-            "/pwa-64x64.png",
-            "/pwa-192x192.png",
-            "/pwa-512x512.png",
-            "/maskable-icon-512x512.png",
-            "/apple-touch-icon-180x180.png",
-            // iOS splash screens (generated from APPLE_DEVICES in TypeScript)
-            // PWA runtime files
             "/manifest.webmanifest",
             "/sw.js",
             "/version.json",
-            "/workbox-<hash>.js",
-            "/_app/version.json",
-            "/build.json"
-        };
-        // Add all splash screen endpoints
-        auto splash = generate_splash_endpoints();
-        for (const auto & path : splash) {
-            endpoints.insert(path);
+            "/build.json",
+        });
+#if defined(LLAMA_UI_HAS_ASSETS)
+        size_t n_assets = 0;
+        const llama_ui_asset * assets = llama_ui_assets(n_assets);
+        for (size_t i = 0; i < n_assets; i++) {
+            public_endpoints.insert("/" + std::string(assets[i].name));
         }
-        return endpoints;
-    }();
+#endif
+    }
 
-    auto middleware_validate_api_key = [api_keys = params.api_keys](const httplib::Request & req, httplib::Response & res) {
+    auto middleware_validate_api_key = [api_keys = params.api_keys, public_endpoints = std::move(public_endpoints)](const httplib::Request & req, httplib::Response & res) {
         // If API key is not set, skip validation
         if (api_keys.empty()) {
             return true;
         }
 
         // If path is public or static file, skip validation
-        if (get_public_endpoints.find(req.path) != get_public_endpoints.end()) {
+        if (public_endpoints.find(req.path) != public_endpoints.end()) {
             return true;
         }
         // Static assets (_app/ files, workbox runtime). These are embedded at build time
@@ -317,7 +262,7 @@ bool server_http_context::init(const common_params & params) {
                 req.path == "/" || (!tmp.empty() && tmp.back() == "html")) {
                 if (const llama_ui_asset * a = llama_ui_find_asset("loading.html")) {
                     res.status = 503;
-                    res.set_content(reinterpret_cast<const char*>(a->data), a->size, "text/html; charset=utf-8");
+                    res.set_content(reinterpret_cast<const char *>(a->data), a->size, std::string(a->mime));
                     return false;
                 }
             }
@@ -394,152 +339,53 @@ bool server_http_context::init(const common_params & params) {
             }
         } else {
 #if defined(LLAMA_UI_HAS_ASSETS)
+            // Register one route per embedded asset.
             // Embedded assets are immutable — cache aggressively for PWA/sw offline support.
-            // PWA runtime files (sw.js, manifest, version.json) use no-cache for revalidation.
+            // PWA runtime files (sw.js, manifest, version.json, build.json) use no-cache for revalidation.
             // Bundle files use Vite content hashes (bundle.<hash>.js/css) so each build
             // produces a different filename — browsers naturally get a fresh copy on upgrade.
-            auto serve_asset_cached = [](const std::string & name, const char * mime, bool with_isolation_headers) {
-                return [name, mime, with_isolation_headers](const httplib::Request & req, httplib::Response & res) {
-                    const llama_ui_asset * a = llama_ui_find_asset(name.c_str());
-                    if (!a) {
-                        res.status = 404;
-                        return false;
-                    }
-                    res.set_header("ETag", a->etag);
+            auto is_nocache = [](std::string_view name) {
+                return name == "sw.js"
+                    || name == "manifest.webmanifest"
+                    || name == "_app/version.json"
+                    || name == "build.json";
+            };
+
+            auto serve_asset = [is_nocache](const llama_ui_asset * a) {
+                // COEP and COOP headers, required by pyodide (python interpreter)
+                const bool isolation = a->name == "index.html";
+                const bool no_cache  = is_nocache(a->name);
+                return [a, isolation, no_cache](const httplib::Request & req, httplib::Response & res) {
+                    res.set_header("ETag", std::string(a->etag));
                     // Check If-None-Match for conditional GET (304 Not Modified)
                     if (const std::string & inm = req.get_header_value("If-None-Match");
-                        !inm.empty() && (inm == a->etag || inm == std::string("W/") + a->etag)) {
+                        !inm.empty() && (inm == a->etag || inm == "W/" + std::string(a->etag))) {
                         res.status = 304;
-                        return false;
+                        return;
                     }
-                    if (with_isolation_headers) {
-                        // COEP and COOP headers, required by pyodide (python interpreter)
+                    if (isolation) {
                         res.set_header("Cross-Origin-Embedder-Policy", "require-corp");
                         res.set_header("Cross-Origin-Opener-Policy", "same-origin");
                     }
-                    res.set_header("Cache-Control", "public, max-age=31536000, immutable");
-                    res.set_content(reinterpret_cast<const char*>(a->data), a->size, mime);
-                    return false;
+                    res.set_header("Cache-Control", no_cache ? "no-cache" : "public, max-age=31536000, immutable");
+                    res.set_content(reinterpret_cast<const char *>(a->data), a->size, std::string(a->mime));
                 };
             };
 
-            auto serve_asset_nocache = [](const std::string & name, const char * mime, bool with_isolation_headers) {
-                return [name, mime, with_isolation_headers](const httplib::Request & /*req*/, httplib::Response & res) {
-                    const llama_ui_asset * a = llama_ui_find_asset(name.c_str());
-                    if (!a) {
-                        res.status = 404;
-                        return false;
-                    }
-                    if (with_isolation_headers) {
-                        res.set_header("Cross-Origin-Embedder-Policy", "require-corp");
-                        res.set_header("Cross-Origin-Opener-Policy", "same-origin");
-                    }
-                    res.set_header("Cache-Control", "no-cache");
-                    res.set_content(reinterpret_cast<const char*>(a->data), a->size, mime);
-                    return false;
-                };
-            };
+            size_t n_assets = 0;
+            const llama_ui_asset * assets = llama_ui_assets(n_assets);
+            for (size_t i = 0; i < n_assets; i++) {
+                const llama_ui_asset * a = &assets[i];
+                srv->Get(params.api_prefix + "/" + std::string(a->name), serve_asset(a));
+            }
 
-            // Bundle files in _app/immutable/ — SvelteKit outputs them here and index.html
-            // and sw.js reference them via these paths (vanilla build, no plugin).
-            auto serve_bundle = [serve_asset_cached](const httplib::Request & req, httplib::Response & res) {
-                std::string path = req.path;
-                std::string name;
-                const char * mime;
-                if (path.rfind("/_app/immutable/bundle.", 0) == 0 && path.size() > 22) {
-                    name = path.substr(1);  // strip leading /
-                    mime = "application/javascript; charset=utf-8";
-                } else if (path.rfind("/_app/immutable/assets/bundle.", 0) == 0 && path.size() > 30) {
-                    name = path.substr(1);  // strip leading /
-                    mime = "text/css; charset=utf-8";
-                } else {
-                    res.status = 404;
-                    return false;
-                }
-                return serve_asset_cached(name, mime, false)(req, res);
-            };
-
-            // _app/ paths — vanilla SvelteKit output, index.html and sw.js reference
-            // bundles and version.json here directly.
-            srv->Get(params.api_prefix + R"(/_app/immutable/bundle\.[^/]+\.js)",  serve_bundle);
-            srv->Get(params.api_prefix + R"(/_app/immutable/assets/bundle\.[^/]+\.css)", serve_bundle);
-            srv->Get(params.api_prefix + "/_app/version.json",                    serve_asset_cached("_app/version.json", "application/json; charset=utf-8", false));
-
-            auto serve_workbox = [serve_asset_cached](const httplib::Request & req, httplib::Response & res) {
-                std::string name = req.path.substr(1);
-                if (name.rfind("workbox-", 0) == 0 && name.size() > 10) {
-                    return serve_asset_cached(name, "application/javascript; charset=utf-8", false)(req, res);
-                }
-                res.status = 404;
-                return false;
-            };
-            srv->Get(params.api_prefix + R"(/workbox-[^/]+\.js)",               serve_workbox);
-            srv->Get(params.api_prefix + R"(/sw\.js)",                          serve_asset_cached("sw.js",               "application/javascript; charset=utf-8", false));
-            srv->Get(params.api_prefix + "/manifest.webmanifest",                serve_asset_cached("manifest.webmanifest", "application/manifest+json; charset=utf-8", false));
-            srv->Get(params.api_prefix + "/version.json",                        serve_asset_cached("_app/version.json",  "application/json; charset=utf-8",       false));
-            srv->Get(params.api_prefix + "/build.json",                          serve_asset_cached("build.json",         "application/json; charset=utf-8",       false));
-
-            // Finally serve index.html for all other routes (SPA fallback)
-            srv->Get(params.api_prefix + "/",                               serve_asset_cached("index.html",                   "text/html; charset=utf-8",                 true));
-            srv->Get(params.api_prefix + "/favicon.ico",                    serve_asset_cached("favicon.ico",                  "image/x-icon",                             false));
-            srv->Get(params.api_prefix + "/favicon-dark.ico",                serve_asset_cached("favicon-dark.ico",              "image/x-icon",                             false));
-            srv->Get(params.api_prefix + "/favicon.svg",                    serve_asset_cached("favicon.svg",                  "image/svg+xml",                            false));
-            srv->Get(params.api_prefix + "/favicon-dark.svg",              serve_asset_cached("favicon-dark.svg",            "image/svg+xml",                            false));
-            srv->Get(params.api_prefix + "/pwa-64x64.png",                  serve_asset_cached("pwa-64x64.png",                "image/png",                                false));
-            srv->Get(params.api_prefix + "/pwa-192x192.png",                serve_asset_cached("pwa-192x192.png",              "image/png",                                false));
-            srv->Get(params.api_prefix + "/pwa-512x512.png",                serve_asset_cached("pwa-512x512.png",              "image/png",                                false));
-            srv->Get(params.api_prefix + "/maskable-icon-512x512.png",      serve_asset_cached("maskable-icon-512x512.png",    "image/png",                                false));
-            srv->Get(params.api_prefix + "/apple-touch-icon-180x180.png",   serve_asset_cached("apple-touch-icon-180x180.png", "image/png",                                false));
-            srv->Get(params.api_prefix + "/apple-splash-portrait-640x1136.png",          serve_asset_cached("apple-splash-portrait-640x1136.png",          "image/png", false));
-            srv->Get(params.api_prefix + "/apple-splash-landscape-1136x640.png",         serve_asset_cached("apple-splash-landscape-1136x640.png",         "image/png", false));
-            srv->Get(params.api_prefix + "/apple-splash-portrait-750x1334.png",          serve_asset_cached("apple-splash-portrait-750x1334.png",          "image/png", false));
-            srv->Get(params.api_prefix + "/apple-splash-landscape-1334x750.png",         serve_asset_cached("apple-splash-landscape-1334x750.png",         "image/png", false));
-            srv->Get(params.api_prefix + "/apple-splash-portrait-1170x2532.png",         serve_asset_cached("apple-splash-portrait-1170x2532.png",         "image/png", false));
-            srv->Get(params.api_prefix + "/apple-splash-landscape-2532x1170.png",        serve_asset_cached("apple-splash-landscape-2532x1170.png",        "image/png", false));
-            srv->Get(params.api_prefix + "/apple-splash-portrait-1179x2556.png",         serve_asset_cached("apple-splash-portrait-1179x2556.png",         "image/png", false));
-            srv->Get(params.api_prefix + "/apple-splash-landscape-2556x1179.png",        serve_asset_cached("apple-splash-landscape-2556x1179.png",        "image/png", false));
-            srv->Get(params.api_prefix + "/apple-splash-portrait-1206x2622.png",         serve_asset_cached("apple-splash-portrait-1206x2622.png",         "image/png", false));
-            srv->Get(params.api_prefix + "/apple-splash-landscape-2622x1206.png",        serve_asset_cached("apple-splash-landscape-2622x1206.png",        "image/png", false));
-            srv->Get(params.api_prefix + "/apple-splash-portrait-1284x2778.png",         serve_asset_cached("apple-splash-portrait-1284x2778.png",         "image/png", false));
-            srv->Get(params.api_prefix + "/apple-splash-landscape-2778x1284.png",        serve_asset_cached("apple-splash-landscape-2778x1284.png",        "image/png", false));
-            srv->Get(params.api_prefix + "/apple-splash-portrait-1290x2796.png",         serve_asset_cached("apple-splash-portrait-1290x2796.png",         "image/png", false));
-            srv->Get(params.api_prefix + "/apple-splash-landscape-2796x1290.png",        serve_asset_cached("apple-splash-landscape-2796x1290.png",        "image/png", false));
-            srv->Get(params.api_prefix + "/apple-splash-portrait-1320x2868.png",         serve_asset_cached("apple-splash-portrait-1320x2868.png",         "image/png", false));
-            srv->Get(params.api_prefix + "/apple-splash-landscape-2868x1320.png",        serve_asset_cached("apple-splash-landscape-2868x1320.png",        "image/png", false));
-            srv->Get(params.api_prefix + "/apple-splash-portrait-1488x2266.png",         serve_asset_cached("apple-splash-portrait-1488x2266.png",         "image/png", false));
-            srv->Get(params.api_prefix + "/apple-splash-landscape-2266x1488.png",        serve_asset_cached("apple-splash-landscape-2266x1488.png",        "image/png", false));
-            srv->Get(params.api_prefix + "/apple-splash-portrait-1640x2360.png",         serve_asset_cached("apple-splash-portrait-1640x2360.png",         "image/png", false));
-            srv->Get(params.api_prefix + "/apple-splash-landscape-2360x1640.png",        serve_asset_cached("apple-splash-landscape-2360x1640.png",        "image/png", false));
-            srv->Get(params.api_prefix + "/apple-splash-portrait-1668x2388.png",         serve_asset_cached("apple-splash-portrait-1668x2388.png",         "image/png", false));
-            srv->Get(params.api_prefix + "/apple-splash-landscape-2388x1668.png",        serve_asset_cached("apple-splash-landscape-2388x1668.png",        "image/png", false));
-            srv->Get(params.api_prefix + "/apple-splash-portrait-2048x2732.png",         serve_asset_cached("apple-splash-portrait-2048x2732.png",         "image/png", false));
-            srv->Get(params.api_prefix + "/apple-splash-landscape-2732x2048.png",        serve_asset_cached("apple-splash-landscape-2732x2048.png",        "image/png", false));
-            srv->Get(params.api_prefix + "/apple-splash-portrait-dark-640x1136.png",     serve_asset_cached("apple-splash-portrait-dark-640x1136.png",     "image/png", false));
-            srv->Get(params.api_prefix + "/apple-splash-landscape-dark-1136x640.png",    serve_asset_cached("apple-splash-landscape-dark-1136x640.png",    "image/png", false));
-            srv->Get(params.api_prefix + "/apple-splash-portrait-dark-750x1334.png",     serve_asset_cached("apple-splash-portrait-dark-750x1334.png",     "image/png", false));
-            srv->Get(params.api_prefix + "/apple-splash-landscape-dark-1334x750.png",    serve_asset_cached("apple-splash-landscape-dark-1334x750.png",    "image/png", false));
-            srv->Get(params.api_prefix + "/apple-splash-portrait-dark-1170x2532.png",    serve_asset_cached("apple-splash-portrait-dark-1170x2532.png",    "image/png", false));
-            srv->Get(params.api_prefix + "/apple-splash-landscape-dark-2532x1170.png",   serve_asset_cached("apple-splash-landscape-dark-2532x1170.png",   "image/png", false));
-            srv->Get(params.api_prefix + "/apple-splash-portrait-dark-1179x2556.png",    serve_asset_cached("apple-splash-portrait-dark-1179x2556.png",    "image/png", false));
-            srv->Get(params.api_prefix + "/apple-splash-landscape-dark-2556x1179.png",   serve_asset_cached("apple-splash-landscape-dark-2556x1179.png",   "image/png", false));
-            srv->Get(params.api_prefix + "/apple-splash-portrait-dark-1206x2622.png",    serve_asset_cached("apple-splash-portrait-dark-1206x2622.png",    "image/png", false));
-            srv->Get(params.api_prefix + "/apple-splash-landscape-dark-2622x1206.png",   serve_asset_cached("apple-splash-landscape-dark-2622x1206.png",   "image/png", false));
-            srv->Get(params.api_prefix + "/apple-splash-portrait-dark-1284x2778.png",    serve_asset_cached("apple-splash-portrait-dark-1284x2778.png",    "image/png", false));
-            srv->Get(params.api_prefix + "/apple-splash-landscape-dark-2778x1284.png",   serve_asset_cached("apple-splash-landscape-dark-2778x1284.png",   "image/png", false));
-            srv->Get(params.api_prefix + "/apple-splash-portrait-dark-1290x2796.png",    serve_asset_cached("apple-splash-portrait-dark-1290x2796.png",    "image/png", false));
-            srv->Get(params.api_prefix + "/apple-splash-landscape-dark-2796x1290.png",   serve_asset_cached("apple-splash-landscape-dark-2796x1290.png",   "image/png", false));
-            srv->Get(params.api_prefix + "/apple-splash-portrait-dark-1320x2868.png",    serve_asset_cached("apple-splash-portrait-dark-1320x2868.png",    "image/png", false));
-            srv->Get(params.api_prefix + "/apple-splash-landscape-dark-2868x1320.png",   serve_asset_cached("apple-splash-landscape-dark-2868x1320.png",   "image/png", false));
-            srv->Get(params.api_prefix + "/apple-splash-portrait-dark-1640x2360.png",    serve_asset_cached("apple-splash-portrait-dark-1640x2360.png",    "image/png", false));
-            srv->Get(params.api_prefix + "/apple-splash-landscape-dark-2360x1640.png",   serve_asset_cached("apple-splash-landscape-dark-2360x1640.png",   "image/png", false));
-            srv->Get(params.api_prefix + "/apple-splash-portrait-dark-1668x2388.png",    serve_asset_cached("apple-splash-portrait-dark-1668x2388.png",    "image/png", false));
-            srv->Get(params.api_prefix + "/apple-splash-landscape-dark-2388x1668.png",   serve_asset_cached("apple-splash-landscape-dark-2388x1668.png",   "image/png", false));
-            srv->Get(params.api_prefix + "/apple-splash-portrait-dark-2048x2732.png",    serve_asset_cached("apple-splash-portrait-dark-2048x2732.png",    "image/png", false));
-            srv->Get(params.api_prefix + "/apple-splash-landscape-dark-2732x2048.png",   serve_asset_cached("apple-splash-landscape-dark-2732x2048.png",   "image/png", false));
-            srv->Get(params.api_prefix + "/manifest.webmanifest",           serve_asset_nocache("manifest.webmanifest",        "application/manifest+json",                false));
-            srv->Get(params.api_prefix + "/sw.js",                          serve_asset_nocache("sw.js",                       "application/javascript; charset=utf-8",    false));
-            srv->Get(params.api_prefix + "/version.json",                   serve_asset_nocache("version.json",                 "application/json",                         false));
-
+            // aliases
+            if (const llama_ui_asset * a = llama_ui_find_asset("index.html")) {
+                srv->Get(params.api_prefix + "/", serve_asset(a));
+            }
+            if (const llama_ui_asset * a = llama_ui_find_asset("_app/version.json")) {
+                srv->Get(params.api_prefix + "/version.json", serve_asset(a));
+            }
 #endif
         }
     }

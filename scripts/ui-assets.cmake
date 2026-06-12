@@ -17,14 +17,10 @@ set(HF_ENABLED        "" CACHE STRING "Whether to allow HF Bucket download (ON/O
 set(BUILD_UI          "" CACHE STRING "Build UI via npm (ON/OFF)")
 set(LLAMA_UI_EMBED    "" CACHE STRING "Path to llama-ui-embed helper")
 
-# IMPORTANT: When adding PWA assets, sync across both places:
-#   1. tools/ui/src/lib/constants/pwa.ts   (APPLE_DEVICES, PUBLIC_ENDPOINTS)
-#   2. tools/server/server-http.cpp        (public_endpoints)
-# - C++ (server-http.cpp) - public endpoints (splash screens generated via helper)
-# - TypeScript (constants/pwa.ts) - APPLE_DEVICES, PWA_MANIFEST, PUBLIC_ENDPOINTS
+# IMPORTANT: When adding PWA assets, sync:
+#   - tools/ui/src/lib/constants/pwa.ts   (APPLE_DEVICES, PWA_MANIFEST)
 #
-# When adding/changing PWA assets, update tools/ui/src/lib/constants/pwa.ts first,
-# then sync any new file names in server-http.cpp.
+# The HTTP server registers routes and public endpoints for every embedded asset.
 set(REQUIRED_ASSETS
     index.html
     loading.html
@@ -203,7 +199,7 @@ function(hf_download version out_var out_resolved)
     list(APPEND candidates "latest")
 
     foreach(resolved ${candidates})
-        set(base "https://huggingface.co/buckets/ggml-org/${HF_BUCKET}/resolve/${resolved}")
+        set(base "https://huggingface.co/buckets/${HF_BUCKET}/resolve/${resolved}")
 
         message(STATUS "UI: downloading from ${resolved}: ${base}/dist.tar.gz")
 
