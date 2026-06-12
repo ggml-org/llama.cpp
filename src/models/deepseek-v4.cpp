@@ -28,8 +28,8 @@ void llama_model_deepseek4::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_EXPERT_SHARED_COUNT,         hparams.n_expert_shared);
     ml.get_key(LLM_KV_EXPERT_WEIGHTS_SCALE,        hparams.expert_weights_scale);
     ml.get_key(LLM_KV_EXPERT_WEIGHTS_NORM,         hparams.expert_weights_norm);
-    ml.get_key_or_arr(LLM_KV_SWIGLU_CLAMP_EXP,     hparams.swiglu_clamp_exp,   hparams.n_layer);
-    ml.get_key_or_arr(LLM_KV_SWIGLU_CLAMP_SHEXP,   hparams.swiglu_clamp_shexp, hparams.n_layer);
+    ml.get_key_or_arr(LLM_KV_SWIGLU_CLAMP_EXP,     hparams.swiglu_clamp_exp,   hparams.n_layer());
+    ml.get_key_or_arr(LLM_KV_SWIGLU_CLAMP_SHEXP,   hparams.swiglu_clamp_shexp, hparams.n_layer());
 
     ml.get_key(LLM_KV_ATTENTION_INDEXER_HEAD_COUNT, hparams.indexer_n_head);
     ml.get_key(LLM_KV_ATTENTION_INDEXER_KEY_LENGTH, hparams.indexer_head_size);
@@ -45,7 +45,7 @@ void llama_model_deepseek4::load_arch_hparams(llama_model_loader & ml) {
 
     uint32_t n_compress_ratios = 0;
     ml.get_arr_n(dsv4_kv("attention.compress_ratios"), n_compress_ratios);
-    if (n_compress_ratios < hparams.n_layer) {
+    if (n_compress_ratios < hparams.n_layer()) {
         throw std::runtime_error("DeepSeek-V4 compress_ratios is shorter than block_count");
     }
     ml.get_arr(dsv4_kv("attention.compress_ratios"), hparams.dsv4_compress_ratios);
@@ -64,7 +64,7 @@ void llama_model_deepseek4::load_arch_hparams(llama_model_loader & ml) {
     hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
     hparams.set_swa_pattern(0);
 
-    switch (hparams.n_layer) {
+    switch (hparams.n_layer()) {
         case 43: type = LLM_TYPE_UNKNOWN; break;
         default: type = LLM_TYPE_UNKNOWN;
     }
@@ -653,18 +653,12 @@ ggml_tensor * llama_model_deepseek4::graph::build_csa_lid_attention(
     ggml_build_forward_expand(gf, mctx_swa->cpy_k(ctx0, kv, inp_attn->get_k_idxs_swa(), il));
 
     ggml_tensor * raw_k = mctx_swa->get_k(ctx0, il);
-    if (raw_k->type != GGML_TYPE_F32) {
-        raw_k = ggml_cast(ctx0, raw_k, GGML_TYPE_F32);
-    }
     cb(raw_k, "csa_raw_k", il);
 
     ggml_tensor * csa_k = inp_dsv4->mctx->get_csa()->get_k(ctx0, il);
     const int64_t n_csa = inp_csa.kq_mask->ne[0];
     GGML_ASSERT(n_csa > 0);
     GGML_ASSERT(n_csa <= csa_k->ne[2]);
-    if (csa_k->type != GGML_TYPE_F32) {
-        csa_k = ggml_cast(ctx0, csa_k, GGML_TYPE_F32);
-    }
 
     csa_k = ggml_view_4d(ctx0, csa_k,
             csa_k->ne[0], csa_k->ne[1], n_csa, csa_k->ne[3],
@@ -676,6 +670,9 @@ ggml_tensor * llama_model_deepseek4::graph::build_csa_lid_attention(
 
     ggml_tensor * raw_mask = inp_attn->get_kq_mask_swa();
     ggml_tensor * csa_mask = build_top_k_mask(inp_csa.kq_mask, top_k, "csa_top_k_mask", il);
+    if (cparams.flash_attn && csa_mask->type != GGML_TYPE_F16) {
+        csa_mask = ggml_cast(ctx0, csa_mask, GGML_TYPE_F16);
+    }
     if (raw_mask->type != csa_mask->type) {
         raw_mask = ggml_cast(ctx0, raw_mask, csa_mask->type);
     }
@@ -710,18 +707,12 @@ ggml_tensor * llama_model_deepseek4::graph::build_hca_attention(
     ggml_build_forward_expand(gf, mctx_swa->cpy_k(ctx0, kv, inp_attn->get_k_idxs_swa(), il));
 
     ggml_tensor * raw_k = mctx_swa->get_k(ctx0, il);
-    if (raw_k->type != GGML_TYPE_F32) {
-        raw_k = ggml_cast(ctx0, raw_k, GGML_TYPE_F32);
-    }
     cb(raw_k, "hca_raw_k", il);
 
     ggml_tensor * hca_k = inp_dsv4->mctx->get_hca()->get_k(ctx0, il);
     const int64_t n_hca = inp_hca.kq_mask->ne[0];
     GGML_ASSERT(n_hca > 0);
     GGML_ASSERT(n_hca <= hca_k->ne[2]);
-    if (hca_k->type != GGML_TYPE_F32) {
-        hca_k = ggml_cast(ctx0, hca_k, GGML_TYPE_F32);
-    }
 
     hca_k = ggml_view_4d(ctx0, hca_k,
             hca_k->ne[0], hca_k->ne[1], n_hca, hca_k->ne[3],
@@ -733,6 +724,9 @@ ggml_tensor * llama_model_deepseek4::graph::build_hca_attention(
 
     ggml_tensor * raw_mask = inp_attn->get_kq_mask_swa();
     ggml_tensor * hca_mask = inp_hca.kq_mask;
+    if (cparams.flash_attn && hca_mask->type != GGML_TYPE_F16) {
+        hca_mask = ggml_cast(ctx0, hca_mask, GGML_TYPE_F16);
+    }
     if (raw_mask->type != hca_mask->type) {
         raw_mask = ggml_cast(ctx0, raw_mask, hca_mask->type);
     }
@@ -868,9 +862,6 @@ ggml_tensor * llama_model_deepseek4::graph::build_attention(
         cb(hca_state_score, "hca_state_score", il);
 
         ggml_tensor * ape = layer.attn_comp_ape;
-        if (ape->type != GGML_TYPE_F32) {
-            ape = ggml_cast(ctx0, ape, GGML_TYPE_F32);
-        }
 
         ggml_tensor * ape_rows = ggml_get_rows(ctx0, ape, inp_dsv4->get_hca().state_pos);
         hca_state_score = ggml_add(ctx0, hca_state_score, ape_rows);
@@ -886,9 +877,6 @@ ggml_tensor * llama_model_deepseek4::graph::build_attention(
         cb(csa_state_score, "csa_state_score", il);
 
         ggml_tensor * csa_ape = layer.attn_comp_ape;
-        if (csa_ape->type != GGML_TYPE_F32) {
-            csa_ape = ggml_cast(ctx0, csa_ape, GGML_TYPE_F32);
-        }
 
         ggml_tensor * csa_ape_rows = ggml_get_rows(ctx0, csa_ape, inp_dsv4->get_csa().state_pos);
         csa_state_score = ggml_add(ctx0, csa_state_score, csa_ape_rows);
@@ -936,9 +924,6 @@ ggml_tensor * llama_model_deepseek4::graph::build_attention(
         cb(lid_state_score, "lid_state_score", il);
 
         ggml_tensor * lid_ape = layer.indexer_comp_ape;
-        if (lid_ape->type != GGML_TYPE_F32) {
-            lid_ape = ggml_cast(ctx0, lid_ape, GGML_TYPE_F32);
-        }
 
         ggml_tensor * lid_ape_rows = ggml_get_rows(ctx0, lid_ape, inp_dsv4->get_lid().state_pos);
         lid_state_score = ggml_add(ctx0, lid_state_score, lid_ape_rows);
