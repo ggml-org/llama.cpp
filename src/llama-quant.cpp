@@ -1359,7 +1359,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
             scores.push_back({ name, score });
         }
 
-        cnif(mse_scores, 0.35f);
+        cnif(mse_scores, 0.40f);
         cnif(wce_scores, 0.25f);
     }
 
