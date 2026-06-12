@@ -100,7 +100,6 @@ class Cohere2MoeModel(TextModel):
         self.gguf_writer.add_expert_feed_forward_length(expert_intermediate_size)
         self.gguf_writer.add_leading_dense_block_count(n_dense_lead)
         self.gguf_writer.add_expert_weights_norm(hparams.get("norm_topk_prob", False))
-        self.gguf_writer.add_expert_gating_func(gguf.ExpertGatingFuncType.SIGMOID)
         if (num_shared_experts := hparams.get("num_shared_experts", 0)) > 0:
             if hparams.get("shared_expert_combination_strategy", "average") != "average":
                 raise ValueError("Cohere2 MoE only supports average shared expert combination")
