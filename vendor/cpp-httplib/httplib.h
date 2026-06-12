@@ -8,8 +8,8 @@
 #ifndef CPPHTTPLIB_HTTPLIB_H
 #define CPPHTTPLIB_HTTPLIB_H
 
-#define CPPHTTPLIB_VERSION "0.45.1"
-#define CPPHTTPLIB_VERSION_NUM "0x002d01"
+#define CPPHTTPLIB_VERSION "0.47.0"
+#define CPPHTTPLIB_VERSION_NUM "0x002f00"
 
 #ifdef _WIN32
 #if defined(_WIN32_WINNT) && _WIN32_WINNT < 0x0A00
@@ -809,6 +809,11 @@ enum class SSLVerifierResponse {
   // connection certificate was processed but is rejected
   CertificateRejected
 };
+
+// System CA loading policy for SSL clients. Auto (the default) loads system
+// CA certs only when no custom CA is configured; enable_system_ca() switches
+// to an explicit policy.
+enum class SystemCAMode { Auto, Enabled, Disabled };
 
 enum StatusCode {
   // Information responses
@@ -1643,6 +1648,8 @@ public:
   using Expect100ContinueHandler =
       std::function<int(const Request &, Response &)>;
 
+  using StartHandler = std::function<void()>;
+
   using WebSocketHandler =
       std::function<void(const Request &, ws::WebSocket &)>;
   using SubProtocolSelector =
@@ -1694,6 +1701,9 @@ public:
   Server &set_pre_request_handler(HandlerWithResponse handler);
 
   Server &set_expect_100_continue_handler(Expect100ContinueHandler handler);
+
+  Server &set_start_handler(StartHandler handler);
+
   Server &set_logger(Logger logger);
   Server &set_pre_compression_logger(Logger logger);
   Server &set_error_logger(ErrorLogger error_logger);
@@ -1807,8 +1817,8 @@ private:
                              const std::string &etag, time_t mtime) const;
   bool check_if_range(Request &req, const std::string &etag,
                       time_t mtime) const;
-  bool dispatch_request(Request &req, Response &res,
-                        const Handlers &handlers) const;
+  bool dispatch_request(Request &req, Response &res, const Handlers &handlers,
+                        Stream &strm);
   bool dispatch_request_for_content_reader(
       Request &req, Response &res, ContentReader content_reader,
       const HandlersForContentReader &handlers) const;
@@ -1883,6 +1893,7 @@ private:
   Handler post_routing_handler_;
   HandlerWithResponse pre_request_handler_;
   Expect100ContinueHandler expect_100_continue_handler_;
+  StartHandler start_handler_;
 
   mutable std::mutex logger_mutex_;
   Logger logger_;
@@ -2023,6 +2034,31 @@ inline ssize_t read_body_content(Stream *stream, BodyReader &br, char *buf,
 }
 
 class decompressor;
+
+enum class NoProxyKind {
+  Wildcard,       // "*"
+  HostnameSuffix, // "example.com" or ".example.com"
+  IPv4Cidr,       // "10.0.0.0/8" (or single IP, treated as /32)
+  IPv6Cidr,       // "fe80::/10" (or single IP, treated as /128)
+};
+
+// Unified 16-byte buffer holding either a v4 (first 4 bytes) or v6 address.
+// Lets one CIDR matcher cover both families.
+using IPBytes = std::array<uint8_t, 16>;
+
+struct NoProxyEntry {
+  NoProxyKind kind = NoProxyKind::Wildcard;
+  std::string hostname_pattern; // lowercased, leading/trailing dot stripped
+  IPBytes net{};
+  int prefix_bits = 0;
+};
+
+struct NormalizedTarget {
+  std::string hostname; // lowercase; brackets and trailing dot removed
+  bool is_ipv4 = false;
+  bool is_ipv6 = false;
+  IPBytes ip{};
+};
 
 } // namespace detail
 
@@ -2240,6 +2276,7 @@ public:
   void set_proxy_basic_auth(const std::string &username,
                             const std::string &password);
   void set_proxy_bearer_token_auth(const std::string &token);
+  void set_no_proxy(const std::vector<std::string> &patterns);
 
   void set_logger(Logger logger);
   void set_error_logger(ErrorLogger error_logger);
@@ -2265,16 +2302,19 @@ protected:
       std::chrono::time_point<std::chrono::steady_clock> start_time,
       Response &res, bool &success, Error &error);
 
+  bool is_proxy_enabled_for_host(const std::string &host) const;
+
   // All of:
   //   shutdown_ssl
   //   shutdown_socket
   //   close_socket
-  // should ONLY be called when socket_mutex_ is locked.
-  // Also, shutdown_ssl and close_socket should also NOT be called concurrently
-  // with a DIFFERENT thread sending requests using that socket.
+  //   disconnect
+  // should ONLY be called when socket_mutex_ is locked, and only when
+  // no other thread is using the socket.
   virtual void shutdown_ssl(Socket &socket, bool shutdown_gracefully);
   void shutdown_socket(Socket &socket) const;
   void close_socket(Socket &socket);
+  void disconnect(bool gracefully);
 
   bool process_request(Stream &strm, Request &req, Response &res,
                        bool close_connection, Error &error);
@@ -2352,6 +2392,11 @@ protected:
   std::string proxy_basic_auth_password_;
   std::string proxy_bearer_token_auth_token_;
 
+  std::vector<detail::NoProxyEntry> no_proxy_entries_;
+
+  mutable detail::NormalizedTarget host_normalized_;
+  mutable bool host_normalized_valid_ = false;
+
   mutable std::mutex logger_mutex_;
   Logger logger_;
   ErrorLogger error_logger_;
@@ -2411,6 +2456,7 @@ public:
                         const std::string &ca_cert_dir_path = std::string());
   void enable_server_certificate_verification(bool enabled);
   void enable_server_hostname_verification(bool enabled);
+  void enable_system_ca(bool enabled);
 
 protected:
   std::string digest_auth_username_;
@@ -2421,6 +2467,7 @@ protected:
   std::string ca_cert_dir_path_;
   bool server_certificate_verification_ = true;
   bool server_hostname_verification_ = true;
+  SystemCAMode system_ca_mode_ = SystemCAMode::Auto;
   std::string ca_cert_pem_; // Store CA cert PEM for redirect transfer
   int last_ssl_error_ = 0;
   uint64_t last_backend_error_ = 0;
@@ -2612,6 +2659,7 @@ public:
   void set_proxy_basic_auth(const std::string &username,
                             const std::string &password);
   void set_proxy_bearer_token_auth(const std::string &token);
+  void set_no_proxy(const std::vector<std::string> &patterns);
   void set_logger(Logger logger);
   void set_error_logger(ErrorLogger error_logger);
 
@@ -2626,6 +2674,7 @@ public:
                              const std::string &password);
   void enable_server_certificate_verification(bool enabled);
   void enable_server_hostname_verification(bool enabled);
+  void enable_system_ca(bool enabled);
   void set_ca_cert_path(const std::string &ca_cert_file_path,
                         const std::string &ca_cert_dir_path = std::string());
 
@@ -2762,6 +2811,11 @@ private:
   tls::ctx_t ctx_ = nullptr;
   std::mutex ctx_mutex_;
   std::once_flag initialize_cert_;
+
+  // Tracks whether a custom CA store was applied via set_ca_cert_store(),
+  // since the store handle itself is owned by ctx_ and leaves no other trace.
+  // Used to keep custom CA configuration exclusive with system CA loading.
+  bool ca_cert_store_set_ = false;
 
   long verify_result_ = 0;
 
@@ -3807,11 +3861,14 @@ public:
   void set_socket_options(SocketOptions socket_options);
   void set_connection_timeout(time_t sec, time_t usec = 0);
   void set_interface(const std::string &intf);
+  void set_hostname_addr_map(std::map<std::string, std::string> addr_map);
 
 #ifdef CPPHTTPLIB_SSL_ENABLED
   void set_ca_cert_path(const std::string &path);
   void set_ca_cert_store(tls::ca_store_t store);
+  void load_ca_cert_store(const char *ca_cert, std::size_t size);
   void enable_server_certificate_verification(bool enabled);
+  void enable_system_ca(bool enabled);
 #endif
 
 private:
@@ -3841,12 +3898,17 @@ private:
   time_t connection_timeout_usec_ = CPPHTTPLIB_CONNECTION_TIMEOUT_USECOND;
   std::string interface_;
 
+  // Hostname-IP map
+  std::map<std::string, std::string> addr_map_;
+
 #ifdef CPPHTTPLIB_SSL_ENABLED
   bool is_ssl_ = false;
   tls::ctx_t tls_ctx_ = nullptr;
   tls::session_t tls_session_ = nullptr;
   std::string ca_cert_file_path_;
-  tls::ca_store_t ca_cert_store_ = nullptr;
+  bool custom_ca_loaded_ = false;
+  bool certs_loaded_ = false;
+  SystemCAMode system_ca_mode_ = SystemCAMode::Auto;
   bool server_certificate_verification_ = true;
 #endif
 };

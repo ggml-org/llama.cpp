@@ -1,8 +1,8 @@
 name: UI (self-hosted)
 
 # these are the same as ui.yml, but with self-hosted runners
-# the runners come with pre-installed Playwright browsers version: 1.56.1
-# the jobs are much lighter because they don't need to install node and playwright browsers
+# the jobs are lighter because they don't need to install Node.js or Playwright browsers
+# the runner has pre-installed Playwright browsers for @playwright/test (1.56.1) at /ms-playwright/
 
 on:
   workflow_dispatch:
@@ -16,7 +16,7 @@ on:
       - master
     paths: [
       '.github/workflows/ui-self-hosted.yml',
-      '.github/workflows/ui-build.yml',
+      '.github/workflows/ui-build-self-hosted.yml',
       'tools/ui/**.*',
       'tools/server/tests/**.*'
     ]
@@ -24,16 +24,16 @@ on:
     types: [opened, synchronize, reopened]
     paths: [
       '.github/workflows/ui-self-hosted.yml',
-      '.github/workflows/ui-build.yml',
+      '.github/workflows/ui-build-self-hosted.yml',
       'tools/ui/**.*',
       'tools/server/tests/**.*'
     ]
 
 env:
-  LLAMA_LOG_COLORS: 1
-  LLAMA_LOG_PREFIX: 1
-  LLAMA_LOG_TIMESTAMPS: 1
-  LLAMA_LOG_VERBOSITY: 10
+  LLAMA_ARG_LOG_COLORS: 1
+  LLAMA_ARG_LOG_PREFIX: 1
+  LLAMA_ARG_LOG_TIMESTAMPS: 1
+  LLAMA_ARG_LOG_VERBOSITY: 10
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}-${{ github.head_ref || github.run_id }}
@@ -42,7 +42,7 @@ concurrency:
 jobs:
   ui-build:
     name: Build static output
-    uses: ./.github/workflows/ui-build.yml
+    uses: ./.github/workflows/ui-build-self-hosted.yml
 
   ui-checks:
     name: Checks
@@ -61,6 +61,12 @@ jobs:
         run: npm ci
         working-directory: tools/ui
 
+      - name: Download built UI artifacts
+        uses: actions/download-artifact@v6
+        with:
+          name: ui-build
+          path: tools/ui/dist/
+
       - name: Run type checking
         if: ${{ always() && steps.setup.conclusion == 'success' }}
         run: npm run check
@@ -72,12 +78,12 @@ jobs:
         working-directory: tools/ui
 
       - name: Run Client tests
-        if: ${{ always() }}
+        if: ${{ always() && steps.setup.conclusion == 'success' }}
         run: npm run test:client
         working-directory: tools/ui
 
       - name: Run Unit tests
-        if: ${{ always() }}
+        if: ${{ always() && steps.setup.conclusion == 'success' }}
         run: npm run test:unit
         working-directory: tools/ui
 
@@ -97,22 +103,23 @@ jobs:
         run: npm ci
         working-directory: tools/ui
 
-      - name: Build application
-        if: ${{ always() && steps.setup.conclusion == 'success' }}
-        run: npm run build
-        working-directory: tools/ui
+      - name: Download built UI artifacts
+        uses: actions/download-artifact@v6
+        with:
+          name: ui-build
+          path: tools/ui/dist/
 
       - name: Build Storybook
-        if: ${{ always() }}
+        if: ${{ always() && steps.setup.conclusion == 'success' }}
         run: npm run build-storybook
         working-directory: tools/ui
 
       - name: Run UI tests
-        if: ${{ always() }}
+        if: ${{ always() && steps.setup.conclusion == 'success' }}
         run: npm run test:ui -- --testTimeout=60000
         working-directory: tools/ui
 
       - name: Run E2E tests
-        if: ${{ always() }}
+        if: ${{ always() && steps.setup.conclusion == 'success' }}
         run: npm run test:e2e
         working-directory: tools/ui

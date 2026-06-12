@@ -499,6 +499,7 @@ task_params server_task::params_from_json_cmpl(
         const auto end_tag   = json_value(data, "reasoning_budget_end_tag", std::string());
         const auto message   = json_value(data, "reasoning_budget_message", std::string());
         params.sampling.reasoning_budget_tokens = budget;
+        params.sampling.reasoning_control = json_value(data, "reasoning_control", false);
 
         if (!start_tag.empty()) {
             params.sampling.reasoning_budget_start = common_tokenize(vocab, start_tag, false, true);
@@ -604,7 +605,7 @@ task_params server_task::params_from_json_cmpl(
         const auto samplers = data.find("samplers");
         if (samplers != data.end()) {
             if (samplers->is_array()) {
-                params.sampling.samplers = common_sampler_types_from_names(*samplers, false);
+                params.sampling.samplers = common_sampler_types_from_names(*samplers);
             } else if (samplers->is_string()){
                 params.sampling.samplers = common_sampler_types_from_chars(samplers->get<std::string>());
             }
@@ -1392,6 +1393,9 @@ json server_task_result_cmpl_final::to_json_anthropic_stream() {
 //
 void server_task_result_cmpl_partial::update(task_result_state & state) {
     is_updated = true;
+    if (is_begin) {
+        return; // begin marker only flushes headers, skip parsing
+    }
     state.update_chat_msg(content, true, oaicompat_msg_diffs);
 
     // Copy current state for use in to_json_*() (reflects state BEFORE this chunk)
@@ -1422,6 +1426,9 @@ void server_task_result_cmpl_partial::update(task_result_state & state) {
 
 json server_task_result_cmpl_partial::to_json() {
     GGML_ASSERT(is_updated && "update() must be called before to_json()");
+    if (is_begin) {
+        return nullptr; // simply signal to HTTP handler to send the headers and status code
+    }
     switch (res_type) {
         case TASK_RESPONSE_TYPE_NONE:
             return to_json_non_oaicompat();

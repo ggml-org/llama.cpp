@@ -30,13 +30,35 @@ concurrency:
 env:
   GGML_NLOOP: 3
   GGML_N_THREADS: 1
-  LLAMA_LOG_COLORS: 1
-  LLAMA_LOG_PREFIX: 1
-  LLAMA_LOG_TIMESTAMPS: 1
+  LLAMA_ARG_LOG_COLORS: 1
+  LLAMA_ARG_LOG_PREFIX: 1
+  LLAMA_ARG_LOG_TIMESTAMPS: 1
 
 jobs:
+  format:
+    runs-on: ubuntu-24.04
 
-  macOS-latest-arm64-webgpu:
+    steps:
+      - name: Clone
+        uses: actions/checkout@v6
+
+      - name: Install clang-format 22
+        run: |
+          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key |
+            sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc > /dev/null
+          sudo add-apt-repository -y \
+            "deb http://apt.llvm.org/noble/ llvm-toolchain-noble-22 main"
+          sudo apt-get update
+          sudo apt-get install -y clang-format-22
+
+      - name: Check formatting
+        run: |
+          find ggml/src/ggml-webgpu \
+            -type f \( -name '*.cpp' -o -name '*.hpp' -o -name '*.h' \) \
+            -print0 |
+            xargs -0 clang-format-22 --dry-run --Werror
+
+  macos:
     runs-on: macos-latest
 
     steps:
@@ -47,7 +69,7 @@ jobs:
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.21
         with:
-          key: macOS-latest-arm64-webgpu
+          key: webgpu-macos-latest
           evict-old-files: 1d
           save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
@@ -77,7 +99,7 @@ jobs:
           cd build
           ctest -L main --verbose --timeout 900
 
-  ubuntu-24-webgpu:
+  ubuntu:
     runs-on: ubuntu-24.04
 
     steps:
@@ -88,7 +110,7 @@ jobs:
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.21
         with:
-          key: ubuntu-24-webgpu
+          key: webgpu-ubuntu-24.04
           evict-old-files: 1d
           save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
@@ -99,25 +121,6 @@ jobs:
           sudo apt-get update -y
           sudo apt-get install -y build-essential mesa-vulkan-drivers \
             libxcb-xinput0 libxcb-xinerama0 libxcb-cursor-dev libssl-dev
-
-      - name: Get latest Vulkan SDK version
-        id: vulkan_sdk_version
-        run: |
-          echo "VULKAN_SDK_VERSION=$(curl https://vulkan.lunarg.com/sdk/latest/linux.txt)" >> "$GITHUB_ENV"
-
-      - name: Use Vulkan SDK Cache
-        uses: actions/cache@v5
-        id: cache-sdk
-        with:
-          path: ./vulkan_sdk
-          key: vulkan-sdk-${{ env.VULKAN_SDK_VERSION }}-${{ runner.os }}
-
-      - name: Setup Vulkan SDK
-        if: steps.cache-sdk.outputs.cache-hit != 'true'
-        uses: ./.github/actions/linux-setup-vulkan
-        with:
-          path: ./vulkan_sdk
-          version: ${{ env.VULKAN_SDK_VERSION }}
 
       - name: Dawn Dependency
         id: dawn-depends
@@ -149,13 +152,20 @@ jobs:
           # test-backend-ops is too slow on llvmpipe, skip it
           ctest -L main -E test-backend-ops --verbose --timeout 900
 
-  ubuntu-24-webgpu-wasm:
-    runs-on: ${{ 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
+  ubuntu-wasm:
+    runs-on: ubuntu-24.04-arm
 
     steps:
       - name: Clone
         id: checkout
         uses: actions/checkout@v6
+
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.21
+        with:
+          key: webgpu-ubuntu-24.04-arm-wasm
+          evict-old-files: 1d
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
       - name: Install Emscripten
         run: |

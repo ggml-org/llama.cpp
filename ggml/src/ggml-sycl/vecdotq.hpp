@@ -394,6 +394,41 @@ template <> struct reorder_vec_dot_q_sycl<GGML_TYPE_Q8_0> {
     }
 };
 
+template <> struct reorder_vec_dot_q_sycl<GGML_TYPE_Q3_K> {
+    static constexpr ggml_type gtype = GGML_TYPE_Q3_K;
+
+    using q3_k_block  = ggml_sycl_reordered::block_q_t<GGML_TYPE_Q3_K>;
+    using q3_k_traits = typename q3_k_block::traits;
+
+    __dpct_inline__ float operator()(const void * __restrict__ vbq, const std::pair<int, int> ibx_offset,
+                                     const std::pair<int, int> d_offset, const int8_t * q8_1_quant_ptr,
+                                     const sycl::half2 * q8_1_ds, const int & iqs) {
+        const uint8_t *  base   = static_cast<const uint8_t *>(vbq);
+        const uint8_t *  qs     = base + ibx_offset.first;
+        const uint8_t *  hmask  = base + ibx_offset.second;
+        const uint8_t *  scales = base + d_offset.first;
+        const ggml_half  d      = *reinterpret_cast<const ggml_half *>(base + d_offset.second);
+
+        const int bq8_offset   = QR3_K * (iqs / (QI3_K / 2));
+        const int scale_offset = iqs - iqs % QI8_1 + (iqs % QI8_1) / (QI8_1 / 2);
+
+        const int vl = get_int_from_uint8(qs, iqs);
+        const int vh = ~get_int_from_uint8(hmask, iqs % (QI3_K / 2)) >> bq8_offset;
+
+        int   u[QR3_K];
+        float d8[QR3_K];
+
+#pragma unroll
+        for (int i = 0; i < QR3_K; ++i) {
+            const int8_t * quant_base_ptr = q8_1_quant_ptr + (bq8_offset + i) * QK8_1;
+            u[i]                          = get_int_from_int8_aligned(quant_base_ptr, iqs % QI8_1);
+            d8[i]                         = (*(q8_1_ds + bq8_offset + i))[0];
+        }
+
+        return vec_dot_q3_K_q8_1_impl_mmvq(vl, vh, u, scales, scale_offset, static_cast<float>(d), d8);
+    }
+};
+
 static inline float vec_dot_q4_K_q8_1_common(const int * __restrict__ q4, const uint16_t * __restrict__ scales,
                                              const ggml_half2 & dm, const block_q8_1 * __restrict__ bq8_1,
                                              const int &        iqs) {

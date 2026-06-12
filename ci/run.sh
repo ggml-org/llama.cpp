@@ -66,6 +66,8 @@ fi
 
 if [ ! -z ${GG_BUILD_METAL} ]; then
     CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_METAL=ON"
+else
+    CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_METAL=OFF"
 fi
 
 if [ ! -z ${GG_BUILD_CUDA} ]; then
@@ -114,10 +116,7 @@ fi
 if [ ! -z ${GG_BUILD_VULKAN} ]; then
     CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_VULKAN=1"
 
-    # if on Mac, disable METAL
     if [[ "$OSTYPE" == "darwin"* ]]; then
-        CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_METAL=OFF -DGGML_BLAS=OFF"
-
         MACOS_RUNNER_CUSTOM_VULKAN_CMAKE_LOCATION="/usr/local/lib/cmake/vulkan"
         MACOS_RUNNER_CUSTOM_SPIRV_HEADERS_LOCATION="${MACOS_RUNNER_CUSTOM_VULKAN_CMAKE_LOCATION}/SPIRV-Headers/SPIRV-HeadersConfig.cmake"
         if [[ -f "${MACOS_RUNNER_CUSTOM_SPIRV_HEADERS_LOCATION}" || -h "${MACOS_RUNNER_CUSTOM_SPIRV_HEADERS_LOCATION}" ]]; then
@@ -133,7 +132,7 @@ if [ ! -z ${GG_BUILD_VULKAN} ]; then
 fi
 
 if [ ! -z ${GG_BUILD_WEBGPU} ]; then
-    CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_WEBGPU=1 -DGGML_METAL=OFF -DGGML_BLAS=OFF"
+    CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_WEBGPU=1"
 
     if [ ! -z "${GG_BUILD_WEBGPU_DAWN_PREFIX}" ]; then
         if [ -z "${CMAKE_PREFIX_PATH}" ]; then
@@ -167,6 +166,8 @@ fi
 
 if [ ! -z ${GG_BUILD_BLAS} ]; then
     CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_BLAS=ON -DGGML_BLAS_VENDOR=${GG_BUILD_BLAS_VENDOR:-OpenBLAS}"
+else
+    CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_BLAS=OFF"
 fi
 
 if [ ! -z ${GG_BUILD_OPENVINO} ]; then
@@ -700,8 +701,8 @@ function gg_sum_test_backend_ops_cpu {
 
 ## main
 
-export LLAMA_LOG_PREFIX=1
-export LLAMA_LOG_TIMESTAMPS=1
+export LLAMA_ARG_LOG_PREFIX=1
+export LLAMA_ARG_LOG_TIMESTAMPS=1
 
 if [ -z ${GG_BUILD_LOW_PERF} ]; then
     # Create symlink: ./llama.cpp/models-mnt -> $MNT/models

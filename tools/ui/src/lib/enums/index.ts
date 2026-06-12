@@ -19,6 +19,8 @@ export {
 	ReasoningFormat
 } from './chat.enums';
 
+export { ReasoningEffort } from './reasoning-effort.enums';
+
 export {
 	FileTypeCategory,
 	FileTypeImage,
@@ -61,3 +63,5 @@ export { ColorMode, HtmlInputType, McpPromptVariant, TooltipSide, UrlProtocol } 
 export { KeyboardKey } from './keyboard.enums';
 
 export { ToolSource, ToolPermissionDecision, ToolResponseField } from './tools.enums';
+
+export { SplashOrientation } from './splash.enums';

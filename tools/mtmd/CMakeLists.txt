@@ -1,5 +1,8 @@
 # mtmd
 
+set(MTMD_VIDEO ON CACHE BOOL "enable video support in mtmd (requires ffmpeg binary in PATH)")
+# TODO: add MTMD_VIDEO_METHOD in the future to select between ffmpeg and other backends
+
 find_package(Threads REQUIRED)
 
 add_library(mtmd
@@ -18,10 +21,14 @@ add_library(mtmd
             models/cogvlm.cpp
             models/conformer.cpp
             models/dotsocr.cpp
+            models/exaone4_5.cpp
             models/gemma4a.cpp
             models/gemma4v.cpp
+            models/gemma4ua.cpp
+            models/gemma4uv.cpp
             models/glm4v.cpp
             models/granite-speech.cpp
+            models/granite4-vision.cpp
             models/hunyuanvl.cpp
             models/internvl.cpp
             models/kimivl.cpp
@@ -40,6 +47,7 @@ add_library(mtmd
             models/siglip.cpp
             models/whisper-enc.cpp
             models/deepseekocr.cpp
+            models/deepseekocr2.cpp
             models/mobilenetv5.cpp
             models/youtuvl.cpp
             models/yasa2.cpp
@@ -57,6 +65,10 @@ target_include_directories(mtmd PUBLIC  .)
 target_include_directories(mtmd PRIVATE ../..)
 target_include_directories(mtmd PRIVATE ../../vendor)
 target_compile_features   (mtmd PRIVATE cxx_std_17)
+
+if (MTMD_VIDEO)
+    target_compile_definitions(mtmd PRIVATE MTMD_VIDEO)
+endif()
 
 if (BUILD_SHARED_LIBS)
     set_target_properties     (mtmd PROPERTIES POSITION_INDEPENDENT_CODE ON)

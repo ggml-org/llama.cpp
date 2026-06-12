@@ -26,10 +26,10 @@ on:
     ]
 
 env:
-  LLAMA_LOG_COLORS: 1
-  LLAMA_LOG_PREFIX: 1
-  LLAMA_LOG_TIMESTAMPS: 1
-  LLAMA_LOG_VERBOSITY: 10
+  LLAMA_ARG_LOG_COLORS: 1
+  LLAMA_ARG_LOG_PREFIX: 1
+  LLAMA_ARG_LOG_TIMESTAMPS: 1
+  LLAMA_ARG_LOG_VERBOSITY: 10
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}-${{ github.head_ref || github.run_id }}
@@ -43,7 +43,7 @@ jobs:
   ui-checks:
     name: Checks
     needs: ui-build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     continue-on-error: true
     steps:
       - name: Checkout code
@@ -59,6 +59,12 @@ jobs:
           node-version: "24"
           cache: "npm"
           cache-dependency-path: "tools/ui/package-lock.json"
+
+      - name: Download built UI artifacts
+        uses: actions/download-artifact@v6
+        with:
+          name: ui-build
+          path: tools/ui/dist/
 
       - name: Install dependencies
         id: setup
@@ -87,7 +93,7 @@ jobs:
         run: npm run test:client
         working-directory: tools/ui
 
-      - name: Run Unit tests
+      - name: Run Unit tests (uses pre-built dist/ from ui-build)
         if: ${{ always() && steps.playwright.conclusion == 'success' }}
         run: npm run test:unit
         working-directory: tools/ui
@@ -95,7 +101,7 @@ jobs:
   e2e-tests:
     name: E2E Tests
     needs: ui-build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
@@ -117,10 +123,11 @@ jobs:
         run: npm ci
         working-directory: tools/ui
 
-      - name: Build application
-        if: ${{ always() && steps.setup.conclusion == 'success' }}
-        run: npm run build
-        working-directory: tools/ui
+      - name: Download built UI artifacts (reuses ui-build)
+        uses: actions/download-artifact@v6
+        with:
+          name: ui-build
+          path: tools/ui/dist/
 
       - name: Install Playwright browsers
         id: playwright
@@ -138,7 +145,7 @@ jobs:
         run: npm run test:ui -- --testTimeout=60000
         working-directory: tools/ui
 
-      - name: Run E2E tests
+      - name: Run E2E tests (uses pre-built dist/ from ui-build)
         if: ${{ always() && steps.playwright.conclusion == 'success' }}
         run: npm run test:e2e
         working-directory: tools/ui

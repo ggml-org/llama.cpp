@@ -57,11 +57,21 @@ LABEL org.opencontainers.image.created=$BUILD_DATE \
       org.opencontainers.image.url=$IMAGE_URL \
       org.opencontainers.image.source=$IMAGE_SOURCE
 
-ARG IGC_VERSION=v2.20.5
-ARG IGC_VERSION_FULL=2_2.20.5+19972
-ARG COMPUTE_RUNTIME_VERSION=25.40.35563.10
-ARG COMPUTE_RUNTIME_VERSION_FULL=25.40.35563.10-0
-ARG IGDGMM_VERSION=22.8.2
+#Following versions are for multiple GPUs, since 26.x has known issue:
+#   https://github.com/ggml-org/llama.cpp/issues/21747,
+#   https://github.com/intel/compute-runtime/issues/921.
+#ARG IGC_VERSION=v2.20.5
+#ARG IGC_VERSION_FULL=2_2.20.5+19972
+#ARG COMPUTE_RUNTIME_VERSION=25.40.35563.10
+#ARG COMPUTE_RUNTIME_VERSION_FULL=25.40.35563.10-0
+#ARG IGDGMM_VERSION=22.8.2
+
+
+ARG IGC_VERSION=v2.34.4
+ARG IGC_VERSION_FULL=2_2.34.4+21428
+ARG COMPUTE_RUNTIME_VERSION=26.18.38308.1
+ARG COMPUTE_RUNTIME_VERSION_FULL=26.18.38308.1-0
+ARG IGDGMM_VERSION=22.10.0
 RUN mkdir /tmp/neo/ && cd /tmp/neo/ \
   && wget https://github.com/intel/intel-graphics-compiler/releases/download/$IGC_VERSION/intel-igc-core-${IGC_VERSION_FULL}_amd64.deb \
   && wget https://github.com/intel/intel-graphics-compiler/releases/download/$IGC_VERSION/intel-igc-opencl-${IGC_VERSION_FULL}_amd64.deb \
@@ -75,7 +85,7 @@ RUN mkdir /tmp/neo/ && cd /tmp/neo/ \
   && dpkg --install *.deb
 
 RUN apt-get update \
-    && apt-get install -y libgomp1 curl \
+    && apt-get install -y libgomp1 curl ffmpeg \
     && apt autoremove -y \
     && apt clean -y \
     && rm -rf /tmp/* /var/tmp/* \
