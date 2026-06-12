@@ -347,13 +347,15 @@ int32_t mtmd_helper_eval_chunk_single(mtmd_context * ctx,
         void * user_data) {
     GGML_ASSERT(n_batch > 0);
     int32_t ret;
-    llama_batch text_batch = llama_batch_init(n_batch, 0, 1);
     auto chunk_type = mtmd_input_chunk_get_type(chunk);
 
     if (chunk_type == MTMD_INPUT_CHUNK_TYPE_TEXT) {
         size_t n_tokens;
         const auto tokens = mtmd_input_chunk_get_tokens_text(chunk, &n_tokens);
+
         // LOG_INF("decoding text chunk, n_tokens = %zu\n", n_tokens);
+        llama_batch text_batch = llama_batch_init(n_batch, 0, 1);
+
         size_t i = 0;
         while (i < n_tokens) { // split into batches
             text_batch.n_tokens = 0; // clear the batch
@@ -388,6 +390,7 @@ int32_t mtmd_helper_eval_chunk_single(mtmd_context * ctx,
             *new_n_past += text_batch.n_tokens;
         }
 
+        llama_batch_free(text_batch);
     } else if (chunk_type == MTMD_INPUT_CHUNK_TYPE_IMAGE || chunk_type == MTMD_INPUT_CHUNK_TYPE_AUDIO) {
         const char * name = chunk_type == MTMD_INPUT_CHUNK_TYPE_IMAGE ? "image" : "audio";
         int64_t t0 = ggml_time_ms();
@@ -397,7 +400,6 @@ int32_t mtmd_helper_eval_chunk_single(mtmd_context * ctx,
         ret = mtmd_encode_chunk(ctx, chunk);
         if (ret != 0) {
             LOG_ERR("failed to encode %s slice\n", name);
-            llama_batch_free(text_batch);
             return ret;
         }
 
@@ -407,14 +409,12 @@ int32_t mtmd_helper_eval_chunk_single(mtmd_context * ctx,
         ret = mtmd_helper_decode_image_chunk(ctx, lctx, chunk, embd, n_past, seq_id, n_batch, new_n_past, callback, user_data);
         if (ret != 0) {
             LOG_ERR("failed to decode %s\n", name);
-            llama_batch_free(text_batch);
             return ret;
         }
     } else {
         GGML_ABORT("chunk type not supported");
     }
 
-    llama_batch_free(text_batch);
     return 0;
 }
 
