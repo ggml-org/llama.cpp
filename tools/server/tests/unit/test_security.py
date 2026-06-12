@@ -26,7 +26,7 @@ def test_access_static_assets_without_api_key():
     """Static web UI assets should not require API key authentication (issue #21229)"""
     global server
     server.start()
-    for path in ["/", "/bundle.js", "/bundle.css"]:
+    for path in ["/", "/sw.js", "/manifest.webmanifest", "/_app/version.json"]:
         res = server.make_request("GET", path)
         assert res.status_code == 200, f"Expected 200 for {path}, got {res.status_code}"
 

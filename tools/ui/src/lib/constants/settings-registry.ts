@@ -365,6 +365,14 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 					serverKey: SETTINGS_KEYS.ALWAYS_SHOW_AGENTIC_TURNS,
 					paramType: SyncableParameterType.BOOLEAN
 				}
+			},
+			{
+				key: SETTINGS_KEYS.SHOW_BUILD_VERSION,
+				label: 'Show build version information',
+				help: 'Display the current build version in the bottom-right corner of the interface.',
+				defaultValue: false,
+				type: SettingsFieldType.CHECKBOX,
+				section: SETTINGS_SECTION_SLUGS.DISPLAY
 			}
 		]
 	},

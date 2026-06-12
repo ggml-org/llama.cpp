@@ -63,3 +63,5 @@ export { ColorMode, HtmlInputType, McpPromptVariant, TooltipSide, UrlProtocol } 
 export { KeyboardKey } from './keyboard.enums';
 
 export { ToolSource, ToolPermissionDecision, ToolResponseField } from './tools.enums';
+
+export { SplashOrientation } from './splash.enums';

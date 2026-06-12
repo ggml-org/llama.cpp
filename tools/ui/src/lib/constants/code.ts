@@ -1,4 +1,5 @@
 export const NEWLINE = '\n';
+export const TAB = '\t';
 export const DEFAULT_LANGUAGE = 'text';
 export const LANG_PATTERN = /^(\w*)\n?/;
 export const AMPERSAND_REGEX = /&/g;

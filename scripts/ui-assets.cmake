@@ -16,11 +16,80 @@ set(HF_ENABLED        "" CACHE STRING "Whether to allow HF Bucket download (ON/O
 set(BUILD_UI          "" CACHE STRING "Build UI via npm (ON/OFF)")
 set(LLAMA_UI_EMBED    "" CACHE STRING "Path to llama-ui-embed helper")
 
+# IMPORTANT: When adding PWA assets, sync across all 3 places:
+#   1. tools/ui/src/lib/constants/pwa.ts   (APPLE_DEVICES, PUBLIC_ENDPOINTS)
+#   2. tools/server/server-http.cpp        (public_endpoints)
+#   3. scripts/ui-assets.cmake             (ASSETS list)
+# - C++ (server-http.cpp) - public endpoints (splash screens generated via helper)
+# - TypeScript (constants/pwa.ts) - APPLE_DEVICES, PWA_MANIFEST, PUBLIC_ENDPOINTS
+#
+# When adding/changing PWA assets, update tools/ui/src/lib/constants/pwa.ts first,
+# then sync any new file names here and in server-http.cpp.
 set(ASSETS
-    bundle.css
-    bundle.js
     index.html
     loading.html
+    # PWA assets
+    favicon.ico
+    favicon-dark.ico
+    favicon.svg
+    favicon-dark.svg
+    pwa-64x64.png
+    pwa-192x192.png
+    pwa-512x512.png
+    maskable-icon-512x512.png
+    apple-touch-icon-180x180.png
+    # iOS splash screens
+    apple-splash-portrait-640x1136.png
+    apple-splash-landscape-1136x640.png
+    apple-splash-portrait-750x1334.png
+    apple-splash-landscape-1334x750.png
+    apple-splash-portrait-1170x2532.png
+    apple-splash-landscape-2532x1170.png
+    apple-splash-portrait-1179x2556.png
+    apple-splash-landscape-2556x1179.png
+    apple-splash-portrait-1206x2622.png
+    apple-splash-landscape-2622x1206.png
+    apple-splash-portrait-1284x2778.png
+    apple-splash-landscape-2778x1284.png
+    apple-splash-portrait-1290x2796.png
+    apple-splash-landscape-2796x1290.png
+    apple-splash-portrait-1320x2868.png
+    apple-splash-landscape-2868x1320.png
+    apple-splash-portrait-1488x2266.png
+    apple-splash-landscape-2266x1488.png
+    apple-splash-portrait-1640x2360.png
+    apple-splash-landscape-2360x1640.png
+    apple-splash-portrait-1668x2388.png
+    apple-splash-landscape-2388x1668.png
+    apple-splash-portrait-2048x2732.png
+    apple-splash-landscape-2732x2048.png
+    # iOS dark splash screens
+    apple-splash-portrait-dark-640x1136.png
+    apple-splash-landscape-dark-1136x640.png
+    apple-splash-portrait-dark-750x1334.png
+    apple-splash-landscape-dark-1334x750.png
+    apple-splash-portrait-dark-1170x2532.png
+    apple-splash-landscape-dark-2532x1170.png
+    apple-splash-portrait-dark-1179x2556.png
+    apple-splash-landscape-dark-2556x1179.png
+    apple-splash-portrait-dark-1206x2622.png
+    apple-splash-landscape-dark-2622x1206.png
+    apple-splash-portrait-dark-1284x2778.png
+    apple-splash-landscape-dark-2778x1284.png
+    apple-splash-portrait-dark-1290x2796.png
+    apple-splash-landscape-dark-2796x1290.png
+    apple-splash-portrait-dark-1320x2868.png
+    apple-splash-landscape-dark-2868x1320.png
+    apple-splash-portrait-dark-1640x2360.png
+    apple-splash-landscape-dark-2360x1640.png
+    apple-splash-portrait-dark-1668x2388.png
+    apple-splash-landscape-dark-2388x1668.png
+    apple-splash-portrait-dark-2048x2732.png
+    apple-splash-landscape-dark-2732x2048.png
+    manifest.webmanifest
+    sw.js
+    _app/version.json
+    build.json
 )
 
 set(DIST_DIR     "${UI_BINARY_DIR}/dist")
@@ -159,7 +228,7 @@ function(npm_build out_var)
 
     message(STATUS "UI: running npm run build, output -> ${DIST_DIR}")
     execute_process(
-        COMMAND ${CMAKE_COMMAND} -E env "LLAMA_UI_OUT_DIR=${DIST_DIR}"
+        COMMAND ${CMAKE_COMMAND} -E env "LLAMA_UI_OUT_DIR=${DIST_DIR}" "LLAMA_UI_VERSION=${HF_VERSION}" "LLAMA_BUILD_NUMBER=${LLAMA_BUILD_NUMBER}"
                 ${NPM_EXECUTABLE} run build
         WORKING_DIRECTORY "${UI_SOURCE_DIR}"
         RESULT_VARIABLE rc
@@ -274,7 +343,34 @@ function(emit_files)
         foreach(asset ${ASSETS})
             list(APPEND args "${asset}" "${DIST_DIR}/${asset}")
         endforeach()
+
+        # Bundle files live in _app/immutable/ — vanilla SvelteKit output, no plugin
+        # rewriting. Embedded names must match the exact _app/ paths that index.html
+        # and sw.js reference.
+        file(GLOB_RECURSE detected_bundle_js "${DIST_DIR}/_app/immutable/bundle.*.js")
+        file(GLOB_RECURSE detected_bundle_css "${DIST_DIR}/_app/immutable/assets/bundle.*.css")
+        file(GLOB_RECURSE detected_workbox "${DIST_DIR}/workbox-*.js")
+        # Compute relative path from DIST_DIR to each found file.
+        # e.g. /path/to/build/tools/ui/dist/_app/immutable/bundle.XXX.js
+        #      -> _app/immutable/bundle.XXX.js
+        foreach(f ${detected_bundle_js})
+            string(REPLACE "${DIST_DIR}/" "" rel "${f}")
+            list(APPEND args "${rel}" "${f}")
+        endforeach()
+        foreach(f ${detected_bundle_css})
+            string(REPLACE "${DIST_DIR}/" "" rel "${f}")
+            list(APPEND args "${rel}" "${f}")
+        endforeach()
+        foreach(f ${detected_workbox})
+            string(REPLACE "${DIST_DIR}/" "" rel "${f}")
+            list(APPEND args "${rel}" "${f}")
+        endforeach()
     endif()
+
+    # Create build.json with the llama.cpp build number for UI version display.
+    # This is separate from SvelteKit's _app/version.json (used for SW cache invalidation).
+    # build.json is generated by the vite plugin (buildInfoPlugin) during npm build.
+    # CMake just embeds it from the dist that npm produced.
 
     execute_process(
         COMMAND "${LLAMA_UI_EMBED}" ${args}
@@ -300,6 +396,8 @@ endif()
 set(provisioned FALSE)
 
 if(BUILD_UI)
+    # Resolve version from git build-info if not explicitly set
+    resolve_version(HF_VERSION)
     npm_build(NPM_OK)
     if(NPM_OK)
         set(provisioned TRUE)

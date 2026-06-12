@@ -59,8 +59,31 @@ jobs:
             echo "should_release=false" >> $GITHUB_OUTPUT
           fi
 
+  get-version:
+    runs-on: ubuntu-slim
+    outputs:
+      ui_version: ${{ steps.version.outputs.ui_version }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - id: version
+        run: |
+          # Resolve UI version: BUILD_NUMBER from cmake/build-info.cmake > git hash + epoch > fallback
+          version=""
+          if grep -q "BUILD_NUMBER" cmake/build-info.cmake; then
+            build_number=$(grep "set(BUILD_NUMBER" cmake/build-info.cmake | grep -oP '\d+')
+            if [ -n "$build_number" ] && [ "$build_number" -gt 0 ]; then
+              version="b${build_number}"
+            fi
+          fi
+          if [ -z "$version" ]; then
+            version=$(git rev-parse --short HEAD)-$(date +%s)
+          fi
+          echo "ui_version=${version}" >> $GITHUB_OUTPUT
+
   macos-cpu:
-    needs: [check-release]
+    needs: [check-release, get-version]
     if: ${{ needs.check-release.outputs.should_release == 'true' }}
     strategy:
       matrix:
@@ -116,6 +139,7 @@ jobs:
             -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
             -DLLAMA_FATAL_WARNINGS=ON \
             -DLLAMA_BUILD_BORINGSSL=ON \
+            -DHF_UI_VERSION=${{ needs.get-version.outputs.ui_version }} \
             ${{ env.CMAKE_ARGS }}
           cmake --build build --config Release -j $(sysctl -n hw.logicalcpu)
 
@@ -141,7 +165,7 @@ jobs:
           name: llama-bin-macos-${{ matrix.build }}.tar.gz
 
   ubuntu-cpu:
-    needs: [check-release]
+    needs: [check-release, get-version]
     if: ${{ needs.check-release.outputs.should_release == 'true' }}
     strategy:
       matrix:
@@ -201,6 +225,7 @@ jobs:
             -DGGML_NATIVE=OFF \
             -DGGML_CPU_ALL_VARIANTS=ON \
             -DLLAMA_FATAL_WARNINGS=ON \
+            -DHF_UI_VERSION=${{ needs.get-version.outputs.ui_version }}
             ${{ env.CMAKE_ARGS }}
           cmake --build build --config Release -j $(nproc)
 
@@ -227,7 +252,7 @@ jobs:
           name: llama-bin-ubuntu-${{ matrix.build }}.tar.gz
 
   ubuntu-vulkan:
-    needs: [check-release]
+    needs: [check-release, get-version]
     if: ${{ needs.check-release.outputs.should_release == 'true' }}
 
     strategy:
@@ -287,6 +312,7 @@ jobs:
             -DGGML_NATIVE=OFF \
             -DGGML_CPU_ALL_VARIANTS=ON \
             -DGGML_VULKAN=ON \
+            -DHF_UI_VERSION=${{ needs.get-version.outputs.ui_version }}
             ${{ env.CMAKE_ARGS }}
           cmake --build build --config Release -j $(nproc)
 
@@ -312,7 +338,7 @@ jobs:
           name: llama-bin-ubuntu-vulkan-${{ matrix.build }}.tar.gz
 
   android-arm64:
-    needs: [check-release]
+    needs: [check-release, get-version]
     if: ${{ needs.check-release.outputs.should_release == 'true' }}
 
     runs-on: ubuntu-latest
@@ -379,6 +405,7 @@ jobs:
             -DLLAMA_FATAL_WARNINGS=ON \
             -DGGML_OPENMP=OFF \
             -DLLAMA_BUILD_BORINGSSL=ON \
+            -DHF_UI_VERSION=${{ needs.get-version.outputs.ui_version }}
             ${{ env.CMAKE_ARGS }}
           cmake --build build --config Release -j $(nproc)
 
@@ -404,7 +431,7 @@ jobs:
           name: llama-bin-android-arm64.tar.gz
 
   ubuntu-24-openvino:
-    needs: [check-release]
+    needs: [check-release, get-version]
     if: ${{ needs.check-release.outputs.should_release == 'true' }}
 
     runs-on: ubuntu-24.04
@@ -476,7 +503,8 @@ jobs:
           source ./openvino_toolkit/setupvars.sh
           cmake -B build/ReleaseOV -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
-            -DGGML_OPENVINO=ON
+            -DGGML_OPENVINO=ON \
+            -DHF_UI_VERSION=${{ needs.get-version.outputs.ui_version }}
           cmake --build build/ReleaseOV --config Release -j $(nproc)
 
       - name: ccache-clear
@@ -952,7 +980,7 @@ jobs:
           name: llama-bin-ubuntu-sycl-${{ matrix.build }}-x64.tar.gz
 
   ubuntu-22-rocm:
-    needs: [check-release]
+    needs: [check-release, get-version]
     if: ${{ needs.check-release.outputs.should_release == 'true' }}
 
     runs-on: ubuntu-22.04
@@ -1044,6 +1072,7 @@ jobs:
             -DGGML_HIP=ON \
             -DHIP_PLATFORM=amd \
             -DGGML_HIP_ROCWMMA_FATTN=ON \
+            -DHF_UI_VERSION=${{ needs.get-version.outputs.ui_version }} \
             ${{ env.CMAKE_ARGS }}
           cmake --build build --config Release -j $(nproc)
 
@@ -1072,7 +1101,7 @@ jobs:
           name: llama-bin-ubuntu-rocm-${{ env.ROCM_VERSION_SHORT }}-${{ matrix.build }}.tar.gz
 
   windows-hip:
-    needs: [check-release]
+    needs: [check-release, get-version]
     if: ${{ needs.check-release.outputs.should_release == 'true' }}
 
     runs-on: windows-2022
@@ -1168,6 +1197,7 @@ jobs:
             -DGPU_TARGETS="${{ matrix.gpu_targets }}" `
             -DGGML_HIP_ROCWMMA_FATTN=ON `
             -DGGML_HIP=ON `
+            -DHF_UI_VERSION=${{ needs.get-version.outputs.ui_version }} `
             -DLLAMA_BUILD_BORINGSSL=ON
           cmake --build build --target ggml-hip -j ${env:NUMBER_OF_PROCESSORS}
           md "build\bin\rocblas\library\"
@@ -1195,7 +1225,7 @@ jobs:
           name: llama-bin-win-hip-${{ matrix.name }}-x64.zip
 
   ios-xcode:
-    needs: [check-release]
+    needs: [check-release, get-version]
     if: ${{ needs.check-release.outputs.should_release == 'true' }}
     runs-on: macos-26
 
@@ -1225,6 +1255,7 @@ jobs:
             -DCMAKE_SYSTEM_NAME=iOS \
             -DCMAKE_OSX_DEPLOYMENT_TARGET=16.0 \
             -DCMAKE_XCODE_ATTRIBUTE_DEVELOPMENT_TEAM=ggml
+            -DHF_UI_VERSION=${{ needs.get-version.outputs.ui_version }}
           cmake --build build --config Release -j $(sysctl -n hw.logicalcpu) -- CODE_SIGNING_ALLOWED=NO
 
       - name: xcodebuild for swift package
@@ -1344,10 +1375,12 @@ jobs:
 #          path: llama-${{ steps.tag.outputs.name }}-bin-${{ matrix.chip_type }}-openEuler-${{ matrix.arch }}${{ matrix.use_acl_graph == 'on' && '-aclgraph' || '' }}.tar.gz
 #          name: llama-bin-${{ matrix.chip_type }}-openEuler-${{ matrix.arch }}${{ matrix.use_acl_graph == 'on' && '-aclgraph' || '' }}.tar.gz
 
-  ui:
-    needs: [check-release]
+  ui-build:
+    needs: [check-release, get-version]
     if: ${{ needs.check-release.outputs.should_release == 'true' }}
     uses: ./.github/workflows/ui-build.yml
+    with:
+      hf_ui_version: ${{ needs.get-version.outputs.ui_version }}
 
   release:
     if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
@@ -1360,6 +1393,7 @@ jobs:
     runs-on: ubuntu-slim
 
     needs:
+      - get-version
       - windows
       - windows-cpu
       - windows-cuda

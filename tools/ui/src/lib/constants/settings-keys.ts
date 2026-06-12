@@ -31,6 +31,7 @@ export const SETTINGS_KEYS = {
 	SHOW_RAW_MODEL_NAMES: 'showRawModelNames',
 	SHOW_MODEL_QUANTIZATION: 'showModelQuantization',
 	SHOW_MODEL_TAGS: 'showModelTags',
+	SHOW_BUILD_VERSION: 'showBuildVersion',
 	SHOW_SYSTEM_MESSAGE: 'showSystemMessage',
 	// Sampling
 	TEMPERATURE: 'temperature',

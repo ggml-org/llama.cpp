@@ -3,6 +3,7 @@
 
 export * from './agentic';
 export * from './api-endpoints';
+export * from './app';
 export * from './attachment-labels';
 export * from './database';
 export * from './reasoning-effort';
@@ -36,6 +37,7 @@ export * from './message-export';
 export * from './model-id';
 export * from './precision';
 export * from './processing-info';
+export * from './pwa';
 export * from './routes';
 export * from './sandbox';
 export * from './settings-keys';

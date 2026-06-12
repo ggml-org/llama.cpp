@@ -40,6 +40,9 @@ export const DEPRECATED_MCP_DEFAULT_ENABLED_LOCALSTORAGE_KEY = `${STORAGE_APP_NA
 /** @deprecated Use {@link USER_OVERRIDES_LOCALSTORAGE_KEY} instead */
 export const DEPRECATED_USER_OVERRIDES_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME_DEPRECATED}.userOverrides`;
 
+/** Build version stored in localStorage for non-PWA update detection */
+export const BUILD_VERSION_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.buildVersion`;
+
 /** Maps new keys to their deprecated fallback keys */
 export const NEW_TO_DEPRECATED_MAP: Record<string, string> = {
 	[ALWAYS_ALLOWED_TOOLS_LOCALSTORAGE_KEY]: DEPRECATED_ALWAYS_ALLOWED_TOOLS_LOCALSTORAGE_KEY,
