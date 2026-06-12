@@ -575,12 +575,6 @@ extern "C" {
             struct llama_model * model,
                           bool   enabled);
 
-    // Debug only: copy the device SC buffer (sc_dev) to host; returns number of floats copied (0 if none).
-    LLAMA_API size_t llama_diffusion_debug_get_sc_dev(
-            const struct llama_model * model,
-                               float * dst,
-                              size_t   max_elems);
-
     // DiffusionGemma Stage-1 device sampling: argmax/entropy/one multinomial draw per canvas position read
     // directly from the device SC buffer (sc_dev), removing the per-step full-canvas logits download + host
     // reductions. u is [n_tokens] host pre-drawn uniforms (the host RNG stream, for reproducibility); argmax,

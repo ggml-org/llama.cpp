@@ -553,36 +553,13 @@ void diffusion_generate_entropy_bound(llama_context *             ctx,
         }
 
         // Stage-1: when on, skip the 268 MB logits D2H + host reductions and sample on the GPU from sc_dev.
-        // DG_DEVSAMPLE_CHECK forces both paths so we can diff them; it needs the host logits, so fetch them.
         const bool gpu_reduce  = dev_sc && device_sample_ok;
-        const bool want_logits = !gpu_reduce || std::getenv("DG_DEVSAMPLE_CHECK") || std::getenv("DG_SC_CHECK");
+        const bool want_logits = !gpu_reduce;
         const float * logits = nullptr;                           // canvas rows packed: [C or max_length, n_vocab]
         if (want_logits) {
             logits = llama_get_logits(ctx);
         } else {
             llama_synchronize(ctx);                               // sc_dev write must complete before we read it
-        }
-
-        // debug: verify the device SC buffer captured exactly this step's canvas logits (== what the host
-        // path uploads next step). Single-run check, independent of cross-run nondeterminism. DG_SC_CHECK=1.
-        if (dev_sc && logits && std::getenv("DG_SC_CHECK")) {
-            static std::vector<float> sc_dbg;
-            sc_dbg.resize((size_t) C * n_vocab);
-            const size_t got = llama_diffusion_debug_get_sc_dev(model, sc_dbg.data(), sc_dbg.size());
-            double maxabs = 0.0; size_t nmiss = 0; double sumabs = 0.0;
-            for (int32_t pos = 0; pos < C; pos++) {
-                const float * hrow = logits + (size_t) (logit_off + pos) * n_vocab;
-                const float * drow = sc_dbg.data() + (size_t) pos * n_vocab;
-                for (int32_t v = 0; v < n_vocab; v++) {
-                    const double d = std::fabs((double) hrow[v] - (double) drow[v]);
-                    sumabs += d;
-                    if (d > maxabs) { maxabs = d; }
-                    if (d != 0.0) { nmiss++; }
-                }
-            }
-            LOG_INF("DG_SC_CHECK step %d: got=%zu maxabs=%.6g sumabs=%.6g nmiss=%zu/%zu sc_dev[0]=%.4f host[0]=%.4f\n",
-                    step_idx, got, maxabs, sumabs, nmiss, (size_t) C * n_vocab,
-                    sc_dbg.empty() ? 0.0f : sc_dbg[0], logits[(size_t) logit_off * n_vocab]);
         }
 
         // pre-draw the step's randomness single-threaded so the output is seed-reproducible
@@ -647,28 +624,6 @@ void diffusion_generate_entropy_bound(llama_context *             ctx,
                 }
                 if (!logits) { logits = llama_get_logits(ctx); }
                 run_host_worker();
-            } else if (std::getenv("DG_DEVSAMPLE_CHECK")) {
-                // run the host worker into shadow buffers with the SAME u and diff: argmax must be exact.
-                std::vector<llama_token> h_argmax = argmax_canvas, h_denoise = denoiser;
-                std::vector<float>       h_entropy = entropy;
-                std::vector<llama_token> d_argmax = argmax_canvas, d_denoise = denoiser;
-                std::vector<float>       d_entropy = entropy;
-                std::swap(argmax_canvas, h_argmax); std::swap(denoiser, h_denoise); std::swap(entropy, h_entropy);
-                run_host_worker();  // fills argmax_canvas/denoiser/entropy from host
-                int  amax_mismatch = 0, tok_diff = 0; double max_dH = 0.0, max_relZ = 0.0;
-                for (int32_t pos = 0; pos < C; pos++) {
-                    if (argmax_canvas[pos] != d_argmax[pos]) { amax_mismatch++; }
-                    if (denoiser[pos]      != d_denoise[pos]) { tok_diff++; }
-                    const double dH = std::fabs((double) entropy[pos] - (double) d_entropy[pos]);
-                    if (dH > max_dH) { max_dH = dH; }
-                    const double relZ = std::fabs((double) entropy[pos] - (double) d_entropy[pos]) /
-                                        (std::fabs((double) entropy[pos]) + 1e-6);
-                    if (relZ > max_relZ) { max_relZ = relZ; }
-                }
-                LOG_INF("DG_DEVSAMPLE_CHECK step %d: amax_mismatch=%d/%d tok_diff=%d/%d max|dH|=%.3e max_relH=%.3e\n",
-                        step_idx, amax_mismatch, C, tok_diff, C, max_dH, max_relZ);
-                // keep the DEVICE result for the actual run (host shadow was only for the diff)
-                std::swap(argmax_canvas, d_argmax); std::swap(denoiser, d_denoise); std::swap(entropy, d_entropy);
             }
         } else {
             run_host_worker();

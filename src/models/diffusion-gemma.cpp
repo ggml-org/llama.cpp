@@ -554,18 +554,6 @@ void llama_diffusion_set_device_sc(struct llama_model * model, bool enabled) {
     dm->sc_device_resident = enabled;
 }
 
-// Debug only: copy the device SC buffer (sc_dev) to host; returns floats copied (0 if none). Verifies
-// sc_dev == the canvas logits the host path would upload. Off the hot path.
-size_t llama_diffusion_debug_get_sc_dev(const struct llama_model * model, float * dst, size_t max_elems) {
-    const auto * dm = dynamic_cast<const llama_model_diffusion_gemma *>(model);
-    if (!dm || dm->sc_dev == nullptr || dst == nullptr) {
-        return 0;
-    }
-    const size_t n = std::min(max_elems, (size_t) ggml_nelements(dm->sc_dev));
-    ggml_backend_tensor_get(dm->sc_dev, dst, 0, n * sizeof(float));
-    return n;
-}
-
 // Stage-1 device sampling entry. Fetches the CUDA backend's dense sampler via the backend-reg proc address
 // (keeps the llama<->ggml-cuda link at the existing backend boundary) and runs it on sc_dev. Returns false
 // for non-DiffusionGemma / no sc_dev / non-CUDA builds so the caller falls back to the host path.
