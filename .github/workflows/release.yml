@@ -809,7 +809,7 @@ jobs:
             -DGGML_BACKEND_DL=ON -DBUILD_SHARED_LIBS=ON ^
             -DGGML_CPU=OFF -DGGML_SYCL=ON ^
             -DLLAMA_BUILD_BORINGSSL=ON
-          cmake --build build --target ggml-sycl -j
+          cmake --build build --target ggml-sycl -j %NUMBER_OF_PROCESSORS%
 
       - name: ccache-clear
         uses: ./.github/actions/ccache-clear
