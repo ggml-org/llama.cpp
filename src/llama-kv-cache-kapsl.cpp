@@ -361,7 +361,10 @@ bool llama_kv_cache_kapsl::reserve_for_tokens(uint32_t tokens_needed) {
     if (tokens_needed == 0) {
         return true;
     }
-    if (has_reservation && tokens_needed <= n_reserved_tokens) {
+    const uint32_t block_size = std::max<uint32_t>(pool->block_size, 1);
+    const uint32_t logical_blocks = (tokens_needed + block_size - 1) / block_size;
+    if (has_reservation && logical_blocks <= n_reserved_blocks) {
+        n_reserved_tokens = std::max(n_reserved_tokens, tokens_needed);
         if (pool->touch != nullptr) {
             return pool->touch(pool->user_data, session_id);
         }
