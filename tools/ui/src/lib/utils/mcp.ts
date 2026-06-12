@@ -41,10 +41,22 @@ import type { MimeTypeUnion } from '$lib/types/common';
 export function detectMcpTransportFromUrl(url: string): MCPTransportType {
 	const normalized = url.trim().toLowerCase();
 
-	return normalized.startsWith(UrlProtocol.WEBSOCKET) ||
+	if (
+		normalized.startsWith(UrlProtocol.WEBSOCKET) ||
 		normalized.startsWith(UrlProtocol.WEBSOCKET_SECURE)
-		? MCPTransportType.WEBSOCKET
-		: MCPTransportType.STREAMABLE_HTTP;
+	) {
+		return MCPTransportType.WEBSOCKET;
+	}
+
+	if (
+		normalized.endsWith('/sse') ||
+		normalized.endsWith('/sse/') ||
+		normalized.includes('/sse?')
+	) {
+		return MCPTransportType.SSE;
+	}
+
+	return MCPTransportType.STREAMABLE_HTTP;
 }
 
 /**
