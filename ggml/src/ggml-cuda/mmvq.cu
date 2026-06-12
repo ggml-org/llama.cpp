@@ -67,12 +67,15 @@ enum mmvq_parameter_table_id {
     MMVQ_PARAMETERS_GCN,
     MMVQ_PARAMETERS_RDNA2,
     MMVQ_PARAMETERS_RDNA3_0,
+    MMVQ_PARAMETERS_RDNA3_0_GFX1103,
     MMVQ_PARAMETERS_RDNA4
 };
 
 static constexpr __device__ mmvq_parameter_table_id get_device_table_id() {
 #if defined(RDNA4)
     return MMVQ_PARAMETERS_RDNA4;
+#elif defined(__gfx1103__)
+    return MMVQ_PARAMETERS_RDNA3_0_GFX1103; // select before RDNA3_0: gfx1103 would otherwise fall into that table.
 #elif defined(RDNA3_0)
     return MMVQ_PARAMETERS_RDNA3_0;
 #elif defined(RDNA2) || defined(RDNA3_5)
@@ -89,6 +92,9 @@ static constexpr __device__ mmvq_parameter_table_id get_device_table_id() {
 static __host__ mmvq_parameter_table_id get_device_table_id(int cc) {
     if (GGML_CUDA_CC_IS_RDNA4(cc)) {
         return MMVQ_PARAMETERS_RDNA4;
+    }
+    if (cc == GGML_CUDA_CC_OFFSET_AMD + 0x1103) {
+        return MMVQ_PARAMETERS_RDNA3_0_GFX1103;
     }
     if (GGML_CUDA_CC_IS_RDNA3_0(cc)) {
         return MMVQ_PARAMETERS_RDNA3_0;
@@ -400,6 +406,25 @@ static constexpr __host__ __device__ int calc_nwarps(ggml_type type, int ncols_d
             }
         }
         return 1;
+    }
+    if (table_id == MMVQ_PARAMETERS_RDNA3_0_GFX1103) {
+        // gfx1103 (Phoenix iGPU): at ncols_dst == 1 these mul_mat_vec_q launches
+        // otherwise split a 64 thread workgroup into two 32 lane waves
+        // one wave per workgroup avoids the gfx1103-specific decode regression
+        // on this path.
+        if (ncols_dst == 1) {
+            switch (type) {
+                case GGML_TYPE_Q4_K:
+                case GGML_TYPE_Q5_0:
+                case GGML_TYPE_Q5_K:
+                case GGML_TYPE_Q6_K:
+                case GGML_TYPE_Q8_0:
+                    return 1;
+                default:
+                    break;
+            }
+        }
+        return calc_nwarps(type, ncols_dst, MMVQ_PARAMETERS_RDNA3_0);
     }
     if (table_id == MMVQ_PARAMETERS_RDNA3_0) {
         // RDNA3 (W7900): stricter whitelist than RDNA4.
