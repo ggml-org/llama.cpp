@@ -264,6 +264,39 @@ Specifies a comma-separated list of speculative decoding types to use.
 ./llama-server [...] --spec-type ngram-mod,ngram-map-k4v
 ```
 
+### Tuning `draft-mtp`
+
+`draft-mtp` drafts with the model's own NextN/MTP head, applied autoregressively (the head is
+re-run on its own output hidden state to extend the draft), so acceptance falls off with draft
+depth. Two options dominate throughput:
+
+- `--draft-p-min` (default `0`): the head only proposes a token while its top probability is
+  `>= p_min`. At the default `0`, every draft up to `--spec-draft-n-max` is proposed regardless
+  of confidence, so low-confidence deep drafts are generated and then rejected by the target,
+  wasting a verification pass.
+- `--spec-draft-n-max` (default `3`): maximum draft length. Because MTP is a single head chained
+  autoregressively (rather than `num_nextn_predict_layers` distinct heads), large depths mostly
+  add rejected drafts.
+
+With the defaults, `draft-mtp` can be **slower than no speculation**. Set a confidence gate and a
+small depth:
+
+```bash
+./llama-server -m model-with-mtp.gguf --spec-type draft-mtp \
+    --spec-draft-n-max 2 --draft-p-min 0.6
+```
+
+Measured on StepFun Step-3.x-Flash (`step35`, Q3_K_M) on a single NVIDIA GB10, greedy,
+`-np 1 -c 512 -ub 64`:
+
+| Config | Decode tok/s | Draft acceptance |
+|---|---|---|
+| no speculation | 26.7 | — |
+| `--spec-draft-n-max 3 --draft-p-min 0` (defaults) | 23.5 | 34% |
+| `--spec-draft-n-max 2 --draft-p-min 0` | 29.6 | 54% |
+| `--spec-draft-n-max 2 --draft-p-min 0.6` | **30.5** | **94%** |
+| `--spec-draft-n-max 2 --draft-p-min 0.85` | 29.5 | 97% |
+
 ### `--spec-ngram-*-size-n N`
 
 Sets the size N of the lookup n-gram for n-gram map based speculative decoding.
