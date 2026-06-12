@@ -646,6 +646,32 @@ class ModelBase:
             return gguf.GGMLQuantizationType.Q8_0
         return False
 
+    def _can_write_bf16_raw(self, data_torch: Tensor, data_qtype: gguf.GGMLQuantizationType) -> bool:
+        native_endianess = gguf.GGUFEndian.BIG if sys.byteorder == "big" else gguf.GGUFEndian.LITTLE
+        return (
+            data_qtype == gguf.GGMLQuantizationType.BF16
+            and data_torch.dtype == torch.bfloat16
+            and self.endianess == native_endianess
+        )
+
+    @staticmethod
+    def _bf16_tensor_to_gguf_bytes(data_torch: Tensor) -> np.ndarray:
+        raw_shape = gguf.quant_shape_to_byte_shape(tuple(data_torch.shape), gguf.GGMLQuantizationType.BF16)
+
+        def as_uint8(tensor: Tensor) -> Tensor:
+            return tensor.contiguous().view(torch.uint8).reshape(raw_shape)
+
+        if isinstance(data_torch, LazyTorchTensor):
+            raw_torch = LazyTorchTensor(
+                meta=LazyTorchTensor.meta_with_dtype_and_shape(torch.uint8, raw_shape),
+                args=(data_torch,),
+                func=as_uint8,
+            )
+        else:
+            raw_torch = as_uint8(data_torch)
+
+        return raw_torch.numpy()
+
     # some models need extra generated tensors (like rope_freqs)
     def generate_extra_tensors(self) -> Iterable[tuple[str, Tensor]]:
         return ()
@@ -867,10 +893,6 @@ class ModelBase:
 
             old_dtype = data_torch.dtype
 
-            # convert any unsupported data types to float32
-            if data_torch.dtype not in (torch.float16, torch.float32):
-                data_torch = data_torch.to(torch.float32)
-
             # use the first number-like part of the tensor name as the block id
             bid = None
             for part in name.split("."):
@@ -881,9 +903,7 @@ class ModelBase:
             for new_name, data_torch in (self.modify_tensors(data_torch, name, bid)):
                 # TODO: why do we squeeze here?
                 # data = data_torch.squeeze().numpy()
-                data = data_torch.numpy()
-
-                n_dims = len(data.shape)
+                n_dims = len(data_torch.shape)
                 data_qtype: gguf.GGMLQuantizationType | bool = self.tensor_force_quant(name, new_name, bid, n_dims)
 
                 # Most of the codebase that takes in 1D tensors or norms only handles F32 tensors
@@ -961,12 +981,21 @@ class ModelBase:
                     else:
                         raise ValueError(f"Unknown file type: {self.ftype.name}")
 
-                try:
-                    data = gguf.quants.quantize(data, data_qtype)
-                except gguf.QuantError as e:
-                    logger.warning("%s, %s", e, "falling back to F16")
-                    data_qtype = gguf.GGMLQuantizationType.F16
-                    data = gguf.quants.quantize(data, data_qtype)
+                if self._can_write_bf16_raw(data_torch, data_qtype):
+                    data = self._bf16_tensor_to_gguf_bytes(data_torch)
+                else:
+                    # convert any unsupported data types to float32
+                    if data_torch.dtype not in (torch.float16, torch.float32):
+                        data_torch = data_torch.to(torch.float32)
+
+                    data = data_torch.numpy()
+
+                    try:
+                        data = gguf.quants.quantize(data, data_qtype)
+                    except gguf.QuantError as e:
+                        logger.warning("%s, %s", e, "falling back to F16")
+                        data_qtype = gguf.GGMLQuantizationType.F16
+                        data = gguf.quants.quantize(data, data_qtype)
 
                 shape = gguf.quant_shape_from_byte_shape(data.shape, data_qtype) if data.dtype == np.uint8 else data.shape
 
