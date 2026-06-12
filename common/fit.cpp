@@ -1,4 +1,8 @@
 #include "fit.h"
+#include "gguf.h"
+
+#include <cstring>
+#include <sys/stat.h>
 
 #include "log.h"
 
@@ -148,6 +152,88 @@ std::vector<llama_device_memory_data> common_get_device_memory_data(
     llama_log_set(ud.original_logger.callback, ud.original_logger.user_data);
 
     return ret;
+}
+
+// MoE expert cache placement preference: when a MoE model's experts cannot
+// all return to VRAM anyway, leaving ALL of them on the CPU and giving the
+// spare VRAM to the dynamic expert cache measures faster than any static
+// partial placement (754B: 19.2 vs 14.0 t/s; 397B: 33.3 vs 28.2). Only models
+// above the cache's expert-size gate qualify — below it the cache would stay
+// dormant and a static placement is strictly better.
+// scan one gguf file for a routed-expert tensor; returns -1 if none found,
+// else per-expert KiB (needs n_expert > 0)
+static long common_moe_cache_expert_kib_in_file(const char * path, int64_t n_expert) {
+    struct gguf_init_params ip = { /*no_alloc=*/ true, /*ctx=*/ nullptr };
+    struct gguf_context * gctx = gguf_init_from_file(path, ip);
+    if (!gctx) return -1;
+    long kib = -1;
+    const int64_t n_tensors = gguf_get_n_tensors(gctx);
+    for (int64_t i = 0; i < n_tensors; i++) {
+        const char * name = gguf_get_tensor_name(gctx, i);
+        if (!strstr(name, "ffn_up_exps") && !strstr(name, "ffn_gate_exps")) continue;
+        if (n_expert > 0) {
+            kib = (long)(gguf_get_tensor_size(gctx, i) / n_expert / 1024);
+        }
+        break;
+    }
+    gguf_free(gctx);
+    return kib;
+}
+
+static bool common_moe_cache_prefers_cpu_moe(const char * path_model, size_t usable_vram, size_t n_devices) {
+    const char * e = getenv("GGML_CUDA_MOE_CACHE");
+    if (e && atoi(e) == 0) return false;            // explicitly off
+    long min_kb = 256;
+    if (const char * m = getenv("GGML_CUDA_MOE_CACHE_MIN_EXPERT_KB")) min_kb = atol(m);
+
+    // expert count from part-1 metadata
+    int64_t n_expert = 0;
+    {
+        struct gguf_init_params ip = { /*no_alloc=*/ true, /*ctx=*/ nullptr };
+        struct gguf_context * gctx = gguf_init_from_file(path_model, ip);
+        if (!gctx) return false;
+        const int64_t kid = gguf_find_key(gctx, "general.architecture");
+        if (kid >= 0) {
+            std::string arch = gguf_get_val_str(gctx, kid);
+            const int64_t kex = gguf_find_key(gctx, (arch + ".expert_count").c_str());
+            if (kex >= 0) n_expert = gguf_get_val_u32(gctx, kex);
+        }
+        gguf_free(gctx);
+    }
+    if (n_expert <= 0) return false;
+
+    long kib = common_moe_cache_expert_kib_in_file(path_model, n_expert);
+    size_t model_bytes = 0;
+    {
+        // total bytes across split parts (placement economics needs the ratio)
+        const char * tag = strstr(path_model, "-00001-of-");
+        int n_parts = 1;
+        if (tag) n_parts = atoi(tag + strlen("-00001-of-"));
+        for (int part = 1; part <= (n_parts > 0 ? n_parts : 1); part++) {
+            std::string p(path_model);
+            if (tag) {
+                char rep_[16];
+                snprintf(rep_, sizeof(rep_), "-%05d-of-", part);
+                p.replace(tag - path_model, strlen("-00001-of-"), rep_);
+            }
+            struct stat st;
+            if (stat(p.c_str(), &st) == 0) model_bytes += (size_t)st.st_size;
+            if (kib < 0 && part >= 2) {
+                kib = common_moe_cache_expert_kib_in_file(p.c_str(), n_expert);
+            }
+        }
+    }
+    if (kib < min_kb) return false;
+
+    // Placement economics, calibrated on 6 measured configs (see
+    // MOE_CACHE_READINESS.md + matrix): the dynamic cache beats a static partial
+    // placement only for LARGE spills (static could fit < ~55% of the model),
+    // and on few devices only with big experts (per-device dispatch-chain
+    // serialization: 122B/MiniMax on one 3090 lose 6-18%, 4x 3090 wins).
+    const double spill_ratio = usable_vram > 0 ? (double)model_bytes / (double)usable_vram : 99.0;
+    if (spill_ratio < 1.8) return false;
+    if (n_devices < 2 && kib < 2048) return false;
+    return true;
 }
 
 static void common_params_fit_impl(
@@ -619,6 +705,12 @@ static void common_params_fit_impl(
         return;
     }
 
+    // expert-cache placement preference: snapshot the all-experts-on-CPU
+    // placement; if step 4 cannot return ALL experts to VRAM we prefer this
+    // snapshot (spare VRAM goes to the dynamic cache instead of a static mix)
+    const std::vector<ngl_t> ngl_all_cpu_moe = ngl_per_device;
+    const std::vector<ggml_backend_buffer_type_t> overflow_bufts_cpu_moe = overflow_bufts;
+
     // step 4: for a MoE model where all dense tensors fit,
     //     convert the dense-only layers in the back to full layers in the front until all devices are full
     // essentially the same procedure as for the dense-only layers except front-to-back
@@ -760,6 +852,23 @@ static void common_params_fit_impl(
             __func__, dev_names[id].c_str(), ngl_per_device[id].n_layer, ngl_per_device[id].n_part, mem[id]/MiB, projected_margin/MiB);
     }
 
+    {
+        uint32_t n_dense_only = 0;
+        for (size_t id = 0; id < nd; id++) {
+            n_dense_only += ngl_per_device[id].n_part;
+        }
+        size_t usable_vram = 0;
+        for (size_t id = 0; id < nd; id++) {
+            usable_vram += dmds_full[id].free > margins[id] ? dmds_full[id].free - margins[id] : 0;
+        }
+        if (n_dense_only > 0 && common_moe_cache_prefers_cpu_moe(path_model, usable_vram, nd)) {
+            LOG_INF("%s: experts cannot all fit in VRAM; expert cache active -> "
+                    "keeping ALL experts on CPU, spare VRAM goes to the dynamic cache "
+                    "(GGML_CUDA_MOE_CACHE=0 restores static placement)\n", __func__);
+            set_ngl_tensor_split_tbo(ngl_all_cpu_moe, overflow_bufts_cpu_moe, *mparams);
+            return;
+        }
+    }
     set_ngl_tensor_split_tbo(ngl_per_device, overflow_bufts, *mparams);
 }
 
