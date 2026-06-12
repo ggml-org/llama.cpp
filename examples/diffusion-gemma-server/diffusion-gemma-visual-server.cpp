@@ -58,6 +58,7 @@ struct vis_cb_data {
     int                  block   = 0;
     int                  n_input = 0;
     int                  steps   = 0;     // denoising steps emitted for this block (one F record per step)
+    int64_t              viz_us  = 0;     // host time spent emitting frames (detok + json + flush), excluded from decode
     FILE *               out     = nullptr;
     const llama_vocab *  vocab   = nullptr;
 };
@@ -70,10 +71,15 @@ static bool vis_step_callback(int32_t step, int32_t total_steps, const llama_tok
     d->steps++;
     const int n_canvas = n_tokens - d->n_input;
     if (n_canvas <= 0) return true;
+    // The decoder calls this synchronously between GPU steps, so the detok + JSON + flush here is pure host
+    // overhead added to the generation loop. Time it so STATS can report model decode time separately from
+    // the visualization cost (this is exactly why the visualization-inclusive tok/s looks ~10x slow).
+    const int64_t t0 = ggml_time_us();
     std::vector<llama_token> canvas(tokens + d->n_input, tokens + n_tokens);
     const std::string text = common_detokenize(d->vocab, canvas, /*special*/ false);
     fprintf(d->out, "F %d %d %d %s\n", d->block, step, total_steps, nlohmann::json(text).dump().c_str());
     fflush(d->out);
+    d->viz_us += ggml_time_us() - t0;
     return true;
 }
 
@@ -269,8 +275,9 @@ int main(int argc, char ** argv) {
         std::vector<llama_token> answer;             // cumulative committed canvas tokens (across blocks)
 
         const int64_t t_prompt = ggml_time_us();     // template + tokenize done
-        int blocks_run  = 0;
-        int total_steps = 0;
+        int blocks_run    = 0;
+        int total_steps   = 0;
+        int64_t total_viz_us = 0;                     // cumulative host visualization time (frames + commits)
 
         for (int b = 0; b < std::max(1, n_blocks); b++) {
             const int32_t prefix_len = (int32_t) prefix.size();
@@ -285,7 +292,7 @@ int main(int argc, char ** argv) {
             eb.max_length              = max_length;
             eb.seed                    = seed + b;   // distinct per block, deterministic from the request seed
             eb.visual_mode             = true;
-            vis_cb_data cb{ b, prefix_len, 0, stdout, vocab };
+            vis_cb_data cb{ b, prefix_len, 0, 0, stdout, vocab };
             eb.step_callback           = vis_step_callback;
             eb.step_callback_user_data = &cb;
 
@@ -294,14 +301,17 @@ int main(int argc, char ** argv) {
             if (n_generated <= prefix_len) { if (b == 0) printf("ERR gen\n"); break; }
 
             blocks_run++;
-            total_steps += cb.steps;
+            total_steps   += cb.steps;
+            total_viz_us  += cb.viz_us;
 
             const llama_token * canvas = output_tokens.data() + prefix_len;
             const size_t cut = trim_canvas(vocab, canvas, (size_t) canvas_length);
 
+            const int64_t tc0 = ggml_time_us();   // the commit detok + emit is visualization overhead too
             answer.insert(answer.end(), canvas, canvas + cut);
             const std::string answer_text = common_detokenize(vocab, answer, /*special*/ false);
             printf("C %d %s\n", b, nlohmann::json(answer_text).dump().c_str()); fflush(stdout);
+            total_viz_us += ggml_time_us() - tc0;
 
             if (cut < (size_t) canvas_length) break;                 // eog / repetition loop: answer complete
             prefix.insert(prefix.end(), canvas, canvas + cut);       // commit the block, denoise the next
@@ -309,11 +319,15 @@ int main(int argc, char ** argv) {
 
         if (blocks_run > 0) {
             const int64_t t_gen = ggml_time_us();
-            const double prompt_ms    = (double) (t_prompt - t_req0) / 1000.0;
-            const double predicted_ms = (double) (t_gen - t_prompt) / 1000.0;
-            printf("STATS prompt_n=%d predicted_n=%d prompt_ms=%.3f predicted_ms=%.3f "
+            // prompt_prepare_ms = host template+tokenize (NOT a GPU prefill, so no prompt tok/s).
+            // wall_ms = the generation loop the user waited on (model compute + visualization emission).
+            // decode_ms = wall minus the host visualization overhead = a fair estimate of model compute.
+            const double prompt_prepare_ms = (double) (t_prompt - t_req0) / 1000.0;
+            const double wall_ms           = (double) (t_gen - t_prompt) / 1000.0;
+            const double decode_ms         = (double) ((t_gen - t_prompt) - total_viz_us) / 1000.0;
+            printf("STATS prompt_n=%d predicted_n=%d prompt_prepare_ms=%.3f wall_ms=%.3f decode_ms=%.3f "
                    "blocks=%d steps=%d canvas=%d n_ctx=%d\n",
-                   P, (int) answer.size(), prompt_ms, predicted_ms,
+                   P, (int) answer.size(), prompt_prepare_ms, wall_ms, decode_ms,
                    blocks_run, total_steps, (int) canvas_length, MAXTOK);
             fflush(stdout);
         }
