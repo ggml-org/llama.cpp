@@ -1,10 +1,13 @@
 #include "models.h"
 
 void llama_model_cohere2moe::load_arch_hparams(llama_model_loader & ml) {
-    ml.get_key(LLM_KV_ATTENTION_LAYERNORM_EPS,     hparams.f_norm_eps,     false);
-    ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps, false);
-    if (hparams.f_norm_eps == 0.0f && hparams.f_norm_rms_eps == 0.0f) {
+    const bool found_norm     = ml.get_key(LLM_KV_ATTENTION_LAYERNORM_EPS,     hparams.f_norm_eps,     false);
+    const bool found_norm_rms = ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps, false);
+    if (!found_norm && !found_norm_rms) {
         throw std::runtime_error("missing Cohere2 MoE norm epsilon");
+    }
+    if (!found_norm_rms) {
+        hparams.f_norm_rms_eps = 0.0f;
     }
 
     ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW,    hparams.n_swa);
