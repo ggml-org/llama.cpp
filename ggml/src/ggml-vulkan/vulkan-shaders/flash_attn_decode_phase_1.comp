@@ -76,6 +76,7 @@ void main() {
   const uint offsetSlmLoadPv = (localLinearId * O_COUNT * GROUPSIZE + lane);
   const uint offsetBaseM = d * p.batchStrideM + v * MATP_REDUCE + lane;
   const float16_t fp16SoftmaxScale = float16_t(p.softMaxScale);
+  const float fp32Min = uintBitsToFloat(0xFEFFFFFF);
   f16mat2x4 matK[K_COUNT];
   float matQ[GQA_RATIO];
   float fp32P[GQA_RATIO];
@@ -144,14 +145,13 @@ void main() {
         fp32O[oc][os] = fp32O[oc][os] + maskFp32[os];
       }
 
-      float maxTemp = fp32O[oc][0];
-      [[unroll]] for (uint os = 1; os < MATP_REDUCE / WARPSIZE; os++) {
+      float maxTemp = fp32Min;
+      [[unroll]] for (uint os = 0; os < MATP_REDUCE / WARPSIZE; os++) {
         maxTemp = max(maxTemp, fp32O[oc][os]);
       }
       maxOut[oc] = subgroupMax(maxTemp);
       [[unroll]] for (uint os = 0; os < MATP_REDUCE / WARPSIZE; os++) {
         fp32O[oc][os] = exp(fp32O[oc][os] - maxOut[oc]);
-        fp32O[oc][os] = maskFp32[os] < -1e38 ? 0.0f : fp32O[oc][os];
       }
     }
 
