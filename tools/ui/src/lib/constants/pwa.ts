@@ -284,3 +284,62 @@ export const SPLASH_LINK = {
 	HTML: '<link rel="apple-touch-startup-image"',
 	DARK_MEDIA_SUFFIX: ' and (prefers-color-scheme: dark)'
 } as const;
+
+// SvelteKit PWA plugin configuration — used by @vite.config.ts
+import type { SvelteKitPWAOptions } from '@vite-pwa/sveltekit';
+
+export const SVELTEKIT_PWA_OPTIONS: SvelteKitPWAOptions = {
+	// Strategy: generateSW - the plugin generates a service worker automatically
+	// using Workbox. For a custom SW, use 'injectManifest' instead.
+	// Manifest configuration
+	manifest: PWA_MANIFEST,
+
+	// Workbox configuration for generateSW strategy
+	workbox: {
+		// Match all static assets in the build output.
+		// Uses '**/' because SvelteKit outputs files under _app/immutable/
+		// subdirectories.
+		globPatterns: GLOB_PATTERNS,
+		maximumFileSizeToCacheInBytes: CACHE_SETTINGS.MAX_FILE_SIZE_BYTES,
+
+		// Runtime caching for API calls - use NetworkFirst so APIs are always fresh
+		runtimeCaching: [
+			{
+				urlPattern: API_CACHING_PATTERNS.V1_API,
+				handler: RUNTIME_CACHING.HANDLER,
+				options: {
+					cacheName: RUNTIME_CACHING.CACHE_NAME,
+					expiration: {
+						maxEntries: CACHE_SETTINGS.API_CACHE_MAX_ENTRIES,
+						maxAgeSeconds: CACHE_SETTINGS.API_CACHE_MAX_AGE_SECONDS
+					}
+				}
+			},
+			{
+				urlPattern: API_CACHING_PATTERNS.STATIC_API,
+				handler: RUNTIME_CACHING.HANDLER,
+				options: {
+					cacheName: RUNTIME_CACHING.CACHE_NAME,
+					expiration: {
+						maxEntries: CACHE_SETTINGS.API_CACHE_MAX_ENTRIES,
+						maxAgeSeconds: CACHE_SETTINGS.API_CACHE_MAX_AGE_SECONDS
+					}
+				}
+			}
+		]
+	},
+
+	devOptions: {
+		enabled: true,
+		suppressWarnings: true,
+		// Use PWA_KIT_OPTIONS.NAVIGATE_FALLBACK to match production SW behaviour
+		// (navigateFallback defaults to the configured base path, which is '/' for this SPA).
+		navigateFallback: PWA_KIT_OPTIONS.NAVIGATE_FALLBACK
+	},
+
+	// SvelteKit-specific options
+	kit: {
+		// Include version file for proper cache invalidation
+		includeVersionFile: true
+	}
+};

@@ -10,14 +10,7 @@ import { splashScreenPlugin } from './scripts/vite-plugin-splash-screen';
 import { buildInfoPlugin } from './scripts/vite-plugin-build-info';
 import { relativizeBasePlugin } from './scripts/vite-plugin-relativize-base';
 import { playwright } from '@vitest/browser-playwright';
-import {
-	PWA_MANIFEST,
-	CACHE_SETTINGS,
-	GLOB_PATTERNS,
-	RUNTIME_CACHING,
-	API_CACHING_PATTERNS,
-	PWA_KIT_OPTIONS
-} from './src/lib/constants/pwa';
+import { SVELTEKIT_PWA_OPTIONS } from './src/lib/constants/pwa';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -50,62 +43,7 @@ export default defineConfig({
 	plugins: [
 		tailwindcss(),
 		sveltekit(),
-		SvelteKitPWA({
-			// Strategy: generateSW - the plugin generates a service worker automatically
-			// using Workbox. For a custom SW, use 'injectManifest' instead.
-			// Manifest configuration
-			manifest: PWA_MANIFEST,
-
-			// Workbox configuration for generateSW strategy
-			workbox: {
-				// Match all static assets in the build output.
-				// Uses '**/' because SvelteKit outputs files under _app/immutable/
-				// subdirectories.
-				globPatterns: GLOB_PATTERNS,
-
-				maximumFileSizeToCacheInBytes: CACHE_SETTINGS.MAX_FILE_SIZE_BYTES,
-
-				// Runtime caching for API calls - use NetworkFirst so APIs are always fresh
-				runtimeCaching: [
-					{
-						urlPattern: API_CACHING_PATTERNS.V1_API,
-						handler: RUNTIME_CACHING.HANDLER,
-						options: {
-							cacheName: RUNTIME_CACHING.CACHE_NAME,
-							expiration: {
-								maxEntries: CACHE_SETTINGS.API_CACHE_MAX_ENTRIES,
-								maxAgeSeconds: CACHE_SETTINGS.API_CACHE_MAX_AGE_SECONDS
-							}
-						}
-					},
-					{
-						urlPattern: API_CACHING_PATTERNS.STATIC_API,
-						handler: RUNTIME_CACHING.HANDLER,
-						options: {
-							cacheName: RUNTIME_CACHING.CACHE_NAME,
-							expiration: {
-								maxEntries: CACHE_SETTINGS.API_CACHE_MAX_ENTRIES,
-								maxAgeSeconds: CACHE_SETTINGS.API_CACHE_MAX_AGE_SECONDS
-							}
-						}
-					}
-				]
-			},
-
-			devOptions: {
-				enabled: true,
-				suppressWarnings: true,
-				// Use PWA_KIT_OPTIONS.NAVIGATE_FALLBACK to match production SW behaviour
-				// (navigateFallback defaults to the configured base path, which is '/' for this SPA).
-				navigateFallback: PWA_KIT_OPTIONS.NAVIGATE_FALLBACK
-			},
-
-			// SvelteKit-specific options
-			kit: {
-				// Include version file for proper cache invalidation
-				includeVersionFile: true
-			}
-		}),
+		SvelteKitPWA(SVELTEKIT_PWA_OPTIONS),
 		splashScreenPlugin(),
 		buildInfoPlugin(),
 		relativizeBasePlugin()
