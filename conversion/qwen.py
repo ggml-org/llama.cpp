@@ -83,7 +83,57 @@ class Qwen2MoeModel(TextModel):
 
     _experts: list[dict[str, Tensor]] | None = None
 
+    _switch_mlp_buf: dict[int, dict[str, Tensor]] | None = None
+
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        # handle Qwen3.6 MoE switch_mlp tensors
+        # switch_mlp is Qwen3.6's name for the merged expert block.
+        # These are already 3D tensors [n_experts, dim, dim] but with
+        # separate gate_proj and up_proj that need fusing into gate_up_proj.
+        if "mlp.switch_mlp." in name:
+            # Strip language_model. prefix if present
+            clean_name = name.replace("language_model.", "")
+
+            if "switch_mlp.down_proj" in clean_name:
+                # down_proj can be yielded directly as experts.down_proj
+                mapped = clean_name.replace("switch_mlp.", "experts.")
+                if not mapped.endswith(".weight"):
+                    mapped += ".weight"
+                yield from super().modify_tensors(data_torch, mapped, bid)
+                return
+
+            if "switch_mlp.gate_proj" in clean_name or "switch_mlp.up_proj" in clean_name:
+                # Collect gate_proj and up_proj, fuse when both available
+                assert bid is not None
+                if self._switch_mlp_buf is None:
+                    self._switch_mlp_buf = {}
+                if bid not in self._switch_mlp_buf:
+                    self._switch_mlp_buf[bid] = {}
+                self._switch_mlp_buf[bid][clean_name] = data_torch
+
+                # Check if we have both gate and up for this block
+                gate_key = None
+                up_key = None
+                for k in self._switch_mlp_buf[bid]:
+                    if "gate_proj" in k:
+                        gate_key = k
+                    if "up_proj" in k:
+                        up_key = k
+
+                if gate_key and up_key:
+                    gate = self._switch_mlp_buf[bid].pop(gate_key)
+                    up = self._switch_mlp_buf[bid].pop(up_key)
+                    # Fuse: concat along intermediate_size dim (dim=1 for 3D)
+                    cat_dim = 1 if gate.ndim == 3 else 0
+                    fused = torch.cat([gate, up], dim=cat_dim)
+                    fused_name = f"model.layers.{bid}.mlp.experts.gate_up_proj.weight"
+                    yield from super().modify_tensors(fused, fused_name, bid)
+                return
+
+        # Strip language_model. prefix for other tensors too
+        if name.startswith("language_model."):
+            name = name.replace("language_model.", "")
+
         # handle aggregated expert tensors
         # GGUF stores dimensions reversed from PyTorch, so:
         # PyTorch (A,B,C) -> GGUF writes [C,B,A] -> GGML reads ne={C,B,A}
