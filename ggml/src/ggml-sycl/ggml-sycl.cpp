@@ -3887,6 +3887,55 @@ static bool reorder_qw_q5_k_moe(uint8_t * data_device, size_t expert_bytes, int6
     return true;
 }
 
+// Reorder each Q6_K expert slice into [ql][qh][scales][d].
+static bool reorder_qw_q6_k_moe(uint8_t * data_device, size_t expert_bytes, int64_t n_expert, dpct::queue_ptr stream) {
+    GGML_ASSERT(expert_bytes % sizeof(block_q6_K) == 0);
+    const int    blocks_per_expert = (int) (expert_bytes / sizeof(block_q6_K));
+    const size_t total_bytes       = expert_bytes * (size_t) n_expert;
+
+    sycl_reorder_temp_buffer tmp(stream, total_bytes);
+    if (!tmp) {
+        GGML_LOG_WARN("%s: failed to allocate %zu bytes for reorder temp buffer, skipping reorder\n", __func__, total_bytes);
+        return false;
+    }
+    uint8_t * tmp_buf = static_cast<uint8_t *>(tmp.ptr);
+
+    sycl::event copy_event;
+    SYCL_CHECK(CHECK_TRY_ERROR(copy_event = stream->memcpy(tmp_buf, data_device, total_bytes)));
+    if (!g_ggml_sycl_use_async_mem_op) {
+        copy_event.wait();
+    }
+
+    const int total_blocks = blocks_per_expert * (int) n_expert;
+    auto reorder_event = stream->parallel_for(total_blocks, [=](auto gb_) {
+        const int          gb   = gb_;
+        const int          e    = gb / blocks_per_expert;
+        const int          ib   = gb % blocks_per_expert;
+        const block_q6_K * x    = (const block_q6_K *) (tmp_buf + (size_t) e * expert_bytes);
+        uint8_t *          base = data_device + (size_t) e * expert_bytes;
+
+        auto * ql_ptr     = base;
+        auto * qh_ptr     = ql_ptr + (QK_K / 2) * blocks_per_expert;
+        auto * scales_ptr = qh_ptr + (QK_K / 4) * blocks_per_expert;
+        auto * d_ptr      = (sycl::half *) (scales_ptr + (QK_K / 16) * blocks_per_expert);
+
+        for (int j = 0; j < QK_K / 2; ++j) {
+            ql_ptr[ib * (QK_K / 2) + j] = x[ib].ql[j];
+        }
+        for (int j = 0; j < QK_K / 4; ++j) {
+            qh_ptr[ib * (QK_K / 4) + j] = x[ib].qh[j];
+        }
+        for (int j = 0; j < QK_K / 16; ++j) {
+            scales_ptr[ib * (QK_K / 16) + j] = x[ib].scales[j];
+        }
+        d_ptr[ib] = x[ib].d;
+    });
+    if (!g_ggml_sycl_use_async_mem_op) {
+        reorder_event.wait_and_throw();
+    }
+    return true;
+}
+
 static bool reorder_qw_q3_k(uint8_t * data_device, size_t size, size_t offset, dpct::queue_ptr stream) {
     GGML_ASSERT(size % sizeof(block_q3_K) == 0);
     GGML_ASSERT(offset % sizeof(block_q3_K) == 0);
@@ -4051,6 +4100,8 @@ static bool reorder_qw(const ggml_tensor * src0, dpct::queue_ptr stream) {
                 return reorder_qw_q4_k_moe(data_device, src0->nb[2], src0->ne[2], stream);
             case GGML_TYPE_Q5_K:
                 return reorder_qw_q5_k_moe(data_device, src0->nb[2], src0->ne[2], stream);
+            case GGML_TYPE_Q6_K:
+                return reorder_qw_q6_k_moe(data_device, src0->nb[2], src0->ne[2], stream);
             default:
                 return false;
         }
@@ -4122,7 +4173,7 @@ static void opt_for_reorder_id(ggml_backend_sycl_context * ctx, const ggml_tenso
     if (g_ggml_sycl_disable_optimize || !ctx->opt_feature.reorder) {
         return;
     }
-    if (src0->type != GGML_TYPE_Q4_K && src0->type != GGML_TYPE_Q5_K) {
+    if (src0->type != GGML_TYPE_Q4_K && src0->type != GGML_TYPE_Q5_K && src0->type != GGML_TYPE_Q6_K) {
         return;
     }
     ggml_tensor_extra_gpu * extra = static_cast<ggml_tensor_extra_gpu *>(src0->extra);
