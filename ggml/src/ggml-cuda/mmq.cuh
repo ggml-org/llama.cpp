@@ -1472,6 +1472,18 @@ void mul_mat_q_switch_J(ggml_backend_cuda_context & ctx, const mmq_args & args, 
     const int    cc    = ggml_cuda_info().devices[id].cc;
     const size_t smpbo = ggml_cuda_info().devices[id].smpbo;
 
+    int64_t ncols_picker = args.ncols_max;
+    if (args.expert_bounds != nullptr && GGML_CUDA_CC_IS_RDNA3(cc) && args.nchannels_x > 0) {
+        // In routed MoE, ncols_max is the worst-case per-expert width. Size the
+        // MMQ N-tile from the typical routed width while it is below the RDNA3
+        // max tile width. The launch grid still uses args.ncols_max.
+        const int     J_max         = ggml_cuda_mmq_get_J_max(type, fallback, cc, 128);
+        const int64_t ncols_typical = (args.ncols_dst + args.nchannels_x - 1) / args.nchannels_x;
+        if (ncols_typical >= 1 && ncols_typical < J_max && ncols_typical < ncols_picker) {
+            ncols_picker = ncols_typical;
+        }
+    }
+
     int J_best        = 0;
     int ntiles_J_best = INT_MAX;
 
@@ -1485,7 +1497,7 @@ void mul_mat_q_switch_J(ggml_backend_cuda_context & ctx, const mmq_args & args, 
             continue;
         }
 
-        const int ntiles_x = (args.ncols_max + config.J - 1) / config.J;
+        const int ntiles_x = (ncols_picker + config.J - 1) / config.J;
 
         if (ntiles_x < ntiles_J_best) {
             J_best = J;
