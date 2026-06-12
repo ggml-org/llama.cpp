@@ -1,7 +1,12 @@
 #include "models.h"
 
 void llama_model_cohere2moe::load_arch_hparams(llama_model_loader & ml) {
-    ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
+    ml.get_key(LLM_KV_ATTENTION_LAYERNORM_EPS,     hparams.f_norm_eps,     false);
+    ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps, false);
+    if (hparams.f_norm_eps == 0.0f && hparams.f_norm_rms_eps == 0.0f) {
+        throw std::runtime_error("missing Cohere2 MoE norm epsilon");
+    }
+
     ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW,    hparams.n_swa);
     ml.get_key(LLM_KV_LOGIT_SCALE,                 hparams.f_logit_scale);
     ml.get_key(LLM_KV_LEADING_DENSE_BLOCK_COUNT,   hparams.n_layer_dense_lead);
@@ -151,6 +156,7 @@ llama_model_cohere2moe::graph::graph(const llama_model & model, const llm_graph_
     GGML_ASSERT(n_embd_head == hparams.n_embd_head_k());
     GGML_ASSERT(n_embd_head == n_rot);
 
+    const llm_norm_type cohere2moe_norm_type = hparams.f_norm_rms_eps == 0.0f ? LLM_NORM : LLM_NORM_RMS;
     const float f_logit_scale = hparams.f_logit_scale;
     ggml_tensor * cur;
     ggml_tensor * inpL = build_inp_embd(model.tok_embd);
@@ -165,7 +171,7 @@ llama_model_cohere2moe::graph::graph(const llama_model & model, const llm_graph_
         // Dense-prefix full-attention layers use RoPE; later layers follow the SWA pattern.
         const bool force_rope = static_cast<uint32_t>(il) < hparams.n_layer_dense_lead;
 
-        cur = build_norm(inpL, model.layers[il].attn_norm, nullptr, LLM_NORM_RMS, il);
+        cur = build_norm(inpL, model.layers[il].attn_norm, nullptr, cohere2moe_norm_type, il);
         cb(cur, "attn_norm", il);
 
         ggml_tensor * ffn_inp = cur;
@@ -259,7 +265,7 @@ llama_model_cohere2moe::graph::graph(const llama_model & model, const llm_graph_
     }
 
     cur = inpL;
-    cur = build_norm(cur, model.output_norm, nullptr, LLM_NORM_RMS, -1);
+    cur = build_norm(cur, model.output_norm, nullptr, cohere2moe_norm_type, -1);
 
     cb(cur, "h_nextn", -1);
     res->t_h_nextn = cur;
@@ -298,6 +304,8 @@ llama_model_cohere2moe::graph_mtp::graph_mtp(const llama_model & model, const ll
     GGML_ASSERT(layer.nextn.hnorm   && "MTP block missing nextn.hnorm");
     GGML_ASSERT(layer.ffn_gate_inp  && "MTP block missing ffn_gate_inp");
 
+    const llm_norm_type cohere2moe_norm_type = hparams.f_norm_rms_eps == 0.0f ? LLM_NORM : LLM_NORM_RMS;
+
     // TODO: extract in a common llm_graph_context::build_inp_embd_h()
     auto inp = std::make_unique<llm_graph_input_embd_h>(hparams.n_embd);
 
@@ -330,10 +338,10 @@ llama_model_cohere2moe::graph_mtp::graph_mtp(const llama_model & model, const ll
     ggml_tensor * inp_out_ids = build_inp_out_ids();
     auto * inp_attn = build_attn_inp_kv_iswa();
 
-    ggml_tensor * h_norm = build_norm(h_embd, layer.nextn.hnorm, nullptr, LLM_NORM_RMS, il);
+    ggml_tensor * h_norm = build_norm(h_embd, layer.nextn.hnorm, nullptr, cohere2moe_norm_type, il);
     cb(h_norm, "mtp_hnorm", il);
 
-    ggml_tensor * e_norm = build_norm(tok_embd, layer.nextn.enorm, nullptr, LLM_NORM_RMS, il);
+    ggml_tensor * e_norm = build_norm(tok_embd, layer.nextn.enorm, nullptr, cohere2moe_norm_type, il);
     cb(e_norm, "mtp_enorm", il);
 
     ggml_tensor * concat = ggml_concat(ctx0, e_norm, h_norm, /*dim=*/ 0);
@@ -344,7 +352,7 @@ llama_model_cohere2moe::graph_mtp::graph_mtp(const llama_model & model, const ll
 
     ggml_tensor * inpL = cur;
 
-    cur = build_norm(cur, layer.attn_norm, nullptr, LLM_NORM_RMS, il);
+    cur = build_norm(cur, layer.attn_norm, nullptr, cohere2moe_norm_type, il);
     cb(cur, "mtp_attn_norm", il);
     ggml_tensor * ffn_inp = cur;
 
@@ -409,7 +417,7 @@ llama_model_cohere2moe::graph_mtp::graph_mtp(const llama_model & model, const ll
             ? layer.nextn.shared_head_norm
             : model.output_norm;
     GGML_ASSERT(head_norm_w && "COHERE2MOE MTP: missing both nextn.shared_head_norm and output_norm");
-    cur = build_norm(cur, head_norm_w, nullptr, LLM_NORM_RMS, -1);
+    cur = build_norm(cur, head_norm_w, nullptr, cohere2moe_norm_type, -1);
 
     cb(cur, "h_nextn", -1);
     res->t_h_nextn = cur;

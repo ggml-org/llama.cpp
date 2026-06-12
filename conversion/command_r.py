@@ -135,6 +135,12 @@ class Cohere2MoeModel(TextModel):
         return name, gen
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        if name.endswith(".bias"):
+            if torch.any(data_torch != 0):
+                raise ValueError(f"Bias tensor {name!r} is not zero.")
+            logger.debug(f"Skipping bias tensor {name!r}.")
+            return
+
         if (m := self._expert_tensor_re.fullmatch(name)) is not None:
             n_experts = self.hparams["num_experts"]
             layer_idx = int(m.group(1))
