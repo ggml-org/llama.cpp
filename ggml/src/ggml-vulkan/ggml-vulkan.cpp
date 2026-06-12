@@ -5588,8 +5588,7 @@ static vk_device ggml_vk_get_device(size_t idx) {
         }
 
         // Enable subgroup operations on AMD GCN 5.0/5.1 GPUs
-        device->subgroups_gcn_enabled = (device->vendor_id == VK_VENDOR_ID_AMD && device->architecture == AMD_GCN &&
-            device->driver_id != vk::DriverId::eMesaRadv);
+        device->subgroups_gcn_enabled = (device->vendor_id == VK_VENDOR_ID_AMD && device->driver_id != vk::DriverId::eMesaRadv);
         if (device->subgroups_gcn_enabled) {
             GGML_LOG_DEBUG("ggml_vulkan: subgroup operations enabled on AMD GCN GPU: %s\n", device->properties.deviceName.data());
         }
