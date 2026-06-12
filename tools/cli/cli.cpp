@@ -169,8 +169,8 @@ int llama_cli(int argc, char ** argv) {
 
     // TODO: maybe support it later?
     if (params.conversation_mode == COMMON_CONVERSATION_MODE_DISABLED) {
-        g_view.print_error("--no-conversation is not supported by llama-cli\n");
-        g_view.print_error("please use llama-completion instead\n");
+        g_view.show_error("--no-conversation is not supported by llama-cli\n"
+                          "please use llama-completion instead");
     }
 
     // TODO: avoid using atexit() here by making `console` a singleton

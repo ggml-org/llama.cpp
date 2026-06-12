@@ -19,11 +19,6 @@
 // set by the SIGINT handler; cleared once the interrupt has been handled
 extern std::atomic<bool> g_cli_interrupted;
 
-struct cli_timings {
-    double prompt_per_second    = 0.0;
-    double predicted_per_second = 0.0;
-};
-
 struct cli_context {
     common_params params;
 

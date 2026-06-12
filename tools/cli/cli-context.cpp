@@ -10,16 +10,6 @@
 #include <map>
 #include <set>
 
-static const char * LLAMA_ASCII_LOGO = R"(
-▄▄ ▄▄
-██ ██
-██ ██  ▀▀█▄ ███▄███▄  ▀▀█▄    ▄████ ████▄ ████▄
-██ ██ ▄█▀██ ██ ██ ██ ▄█▀██    ██    ██ ██ ██ ██
-██ ██ ▀█▄██ ██ ██ ██ ▀█▄██ ██ ▀████ ████▀ ████▀
-                                    ██    ██
-                                    ▀▀    ▀▀
-)";
-
 std::atomic<bool> g_cli_interrupted = false;
 
 static bool should_stop() {
@@ -119,34 +109,30 @@ bool cli_context::init(int argc, char ** argv) {
         }
         client.server_base = base;
 
-        view.print("Connecting to " + client.server_base + " ... ");
-        view.spinner_start();
+        view.show_loading("Connecting to " + client.server_base);
     } else {
         if (params.model.path.empty() && params.model.url.empty() &&
                 params.model.hf_repo.empty() && params.model.docker_repo.empty()) {
-            view.print_error("no model specified\n");
-            view.print("use -m <file.gguf> or -hf <user/repo> to run a local model,\n"
-                       "or --server-base <url> to connect to a running llama-server\n");
+            view.show_error("no model specified");
+            view.show_message("use -m <file.gguf> or -hf <user/repo> to run a local model,\n"
+                              "or --server-base <url> to connect to a running llama-server");
             return false;
         }
 
         const bool pass_output = params.verbosity >= LOG_LEVEL_INFO;
 
-        view.print("Loading model... ");
-        view.spinner_start();
+        view.show_loading("Loading model");
 
         server.emplace();
         if (!server->start(filter_server_args(argc, argv), pass_output)) {
-            view.spinner_stop();
-            view.print_error("\n" + server->last_error + "\n");
+            view.show_error(server->last_error);
             return false;
         }
         if (!server->wait_ready(should_stop)) {
-            view.spinner_stop();
             if (!should_stop()) {
-                view.print_error("\nthe server exited before becoming ready\n");
+                view.show_error("the server exited before becoming ready");
                 if (!pass_output) {
-                    view.print(server->recent_output());
+                    view.show_message(server->recent_output());
                 }
             }
             return false;
@@ -166,17 +152,15 @@ bool cli_context::init(int argc, char ** argv) {
         client.last_error = e.what();
     }
     if (!healthy) {
-        view.spinner_stop();
         if (!should_stop()) {
-            view.print_error("\n" + client.last_error + "\n");
+            view.show_error(client.last_error);
         }
         return false;
     }
 
     fetch_server_props();
 
-    view.spinner_stop();
-    view.print("\n");
+    view.hide_loading();
 
     return true;
 }
@@ -277,24 +261,14 @@ bool cli_context::generate_completion(std::string & assistant_content, cli_timin
         {"timings_per_token", true},
     };
 
-    bool is_thinking   = false;
-    bool spinner_alive = true;
-    bool stream_error  = false;
+    bool stream_error = false;
 
-    auto stop_spinner = [&]() {
-        if (spinner_alive) {
-            spinner_alive = false;
-            view.spinner_stop();
-        }
-    };
-
-    view.spinner_start();
+    view.begin_response();
 
     json err = client.create_chat_completion(body, should_stop, [&](const json & chunk) {
         if (chunk.contains("error")) {
-            stop_spinner();
             stream_error = true;
-            view.print_error("Error: " + format_error_message(chunk) + "\n");
+            view.show_error(format_error_message(chunk));
             return;
         }
         if (chunk.contains("timings")) {
@@ -313,83 +287,57 @@ bool cli_context::generate_completion(std::string & assistant_content, cli_timin
         if (delta.contains("reasoning_content") && delta.at("reasoning_content").is_string()) {
             const std::string text = delta.at("reasoning_content").get<std::string>();
             if (!text.empty()) {
-                stop_spinner();
-                if (!is_thinking) {
-                    view.print_reasoning("[Start thinking]\n");
-                    is_thinking = true;
-                }
-                view.print_reasoning(text);
-                view.flush();
+                view.on_reasoning_delta(text);
             }
         }
         if (delta.contains("content") && delta.at("content").is_string()) {
             const std::string text = delta.at("content").get<std::string>();
             if (!text.empty()) {
-                stop_spinner();
-                if (is_thinking) {
-                    view.print_reasoning("\n[End thinking]\n\n");
-                    is_thinking = false;
-                }
                 assistant_content += text;
-                view.print(text);
-                view.flush();
+                view.on_content_delta(text);
             }
         }
     });
 
-    stop_spinner();
+    view.end_response();
     g_cli_interrupted.store(false);
 
     if (!err.is_null()) {
-        view.print_error("Error: " + format_error_message(err) + "\n");
+        view.show_error(format_error_message(err));
         return false;
     }
     return !stream_error;
 }
 
 int cli_context::run() {
-    std::string modalities = "text";
-    if (has_vision) {
-        modalities += ", vision";
-    }
-    if (has_audio) {
-        modalities += ", audio";
-    }
-    if (has_video) {
-        modalities += ", video";
-    }
-
     add_system_prompt();
 
-    view.print("\n");
-    view.print(LLAMA_ASCII_LOGO);
-    view.print("\n");
-    if (!build_info.empty()) {
-        view.print(string_format("build      : %s\n", build_info.c_str()));
-    }
-    view.print(string_format("model      : %s\n", model_name.empty() ? "(unknown)" : model_name.c_str()));
-    view.print(string_format("server     : %s%s\n", client.server_base.c_str(), server ? " (managed by llama-cli)" : ""));
-    view.print(string_format("modalities : %s\n", modalities.c_str()));
-    if (!params.system_prompt.empty()) {
-        view.print("using custom system prompt\n");
-    }
-    view.print("\n");
-    view.print("available commands:\n");
-    view.print("  /exit or Ctrl+C     stop or exit\n");
-    view.print("  /regen              regenerate the last response\n");
-    view.print("  /clear              clear the chat history\n");
-    view.print("  /read <file>        add a text file\n");
-    view.print("  /glob <pattern>     add text files using globbing pattern\n");
+    cli_server_info info;
+    info.build_info        = build_info;
+    info.model_name        = model_name;
+    info.server_base       = client.server_base;
+    info.is_local_server   = server.has_value();
+    info.has_system_prompt = !params.system_prompt.empty();
+    info.has_vision        = has_vision;
+    info.has_audio         = has_audio;
+    info.has_video         = has_video;
+    info.commands = {
+        {"/exit or Ctrl+C", "stop or exit"},
+        {"/regen",          "regenerate the last response"},
+        {"/clear",          "clear the chat history"},
+        {"/read <file>",    "add a text file"},
+        {"/glob <pattern>", "add text files using globbing pattern"},
+    };
     if (has_vision) {
-        view.print("  /image <file>       add an image file\n");
+        info.commands.push_back({"/image <file>", "add an image file"});
     }
     if (has_audio) {
-        view.print("  /audio <file>       add an audio file\n");
+        info.commands.push_back({"/audio <file>", "add an audio file"});
     }
     if (has_video) {
-        view.print("  /video <file>       add a video file\n");
+        info.commands.push_back({"/video <file>", "add a video file"});
     }
-    view.print("\n");
+    view.show_banner(info);
 
     // interactive loop
     std::string cur_msg;
@@ -397,7 +345,7 @@ int cli_context::run() {
     auto add_text_file = [&](const std::string & fname) -> bool {
         std::ifstream file(fname, std::ios::binary);
         if (!file) {
-            view.print_error(string_format("file does not exist or cannot be opened: '%s'\n", fname.c_str()));
+            view.show_error(string_format("file does not exist or cannot be opened: '%s'", fname.c_str()));
             return false;
         }
         std::string content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
@@ -405,14 +353,14 @@ int cli_context::run() {
         cur_msg += fname;
         cur_msg += " ---\n";
         cur_msg += content;
-        view.print(string_format("Loaded text from '%s'\n", fname.c_str()));
+        view.show_message(string_format("Loaded text from '%s'", fname.c_str()));
         return true;
     };
 
     while (true) {
         std::string buffer;
         if (params.prompt.empty()) {
-            view.print_user("\n> ");
+            view.prompt_user();
             std::string line;
             bool another_line = true;
             do {
@@ -423,20 +371,16 @@ int cli_context::run() {
             // process input prompt from args
             for (auto & fname : params.image) {
                 if (!stage_media_file(fname, media_type_from_ext(fname))) {
-                    view.print_error(string_format("file does not exist or cannot be opened: '%s'\n", fname.c_str()));
+                    view.show_error(string_format("file does not exist or cannot be opened: '%s'", fname.c_str()));
                     break;
                 }
-                view.print(string_format("Loaded media from '%s'\n", fname.c_str()));
+                view.show_message(string_format("Loaded media from '%s'", fname.c_str()));
             }
             buffer = params.prompt;
-            if (buffer.size() > 500) {
-                view.print_user(string_format("\n> %s ... (truncated)\n", buffer.substr(0, 500).c_str()));
-            } else {
-                view.print_user(string_format("\n> %s\n", buffer.c_str()));
-            }
+            view.echo_user(buffer);
             params.prompt.clear(); // only use it once
         }
-        view.print("\n");
+        view.end_user_input();
 
         if (should_stop()) {
             g_cli_interrupted.store(false);
@@ -464,7 +408,7 @@ int cli_context::run() {
                 messages.erase(last_idx);
                 add_user_msg = false;
             } else {
-                view.print_error("No message to regenerate.\n");
+                view.show_error("No message to regenerate.");
                 continue;
             }
         } else if (string_starts_with(buffer, "/clear")) {
@@ -472,7 +416,7 @@ int cli_context::run() {
             add_system_prompt();
 
             pending_media = json::array();
-            view.print("Chat history cleared.\n");
+            view.show_message("Chat history cleared.");
             continue;
         } else if (
                 (string_starts_with(buffer, "/image ") && has_vision) ||
@@ -482,10 +426,10 @@ int cli_context::run() {
             // just in case (bad copy-paste for example), we strip all trailing/leading spaces
             std::string fname = string_strip(buffer.substr(7));
             if (!stage_media_file(fname, type)) {
-                view.print_error(string_format("file does not exist or cannot be opened: '%s'\n", fname.c_str()));
+                view.show_error(string_format("file does not exist or cannot be opened: '%s'", fname.c_str()));
                 continue;
             }
-            view.print(string_format("Loaded media from '%s'\n", fname.c_str()));
+            view.show_message(string_format("Loaded media from '%s'", fname.c_str()));
             continue;
         } else if (string_starts_with(buffer, "/read ")) {
             std::string fname = string_strip(buffer.substr(6));
@@ -539,7 +483,7 @@ int cli_context::run() {
                 }
 
                 if (++count >= FILE_GLOB_MAX_RESULTS) {
-                    view.print_error(string_format("Maximum number of globbed files allowed (%zu) reached.\n", FILE_GLOB_MAX_RESULTS));
+                    view.show_error(string_format("Maximum number of globbed files allowed (%zu) reached.", FILE_GLOB_MAX_RESULTS));
                     break;
                 }
             }
@@ -561,11 +505,9 @@ int cli_context::run() {
             {"role",    "assistant"},
             {"content", assistant_content}
         });
-        view.print("\n");
 
         if (params.show_timings) {
-            view.print_info(string_format("\n[ Prompt: %.1f t/s | Generation: %.1f t/s ]\n",
-                    timings.prompt_per_second, timings.predicted_per_second));
+            view.show_timings(timings);
         }
 
         if (params.single_turn) {
@@ -573,7 +515,7 @@ int cli_context::run() {
         }
     }
 
-    view.print("\nExiting...\n");
+    view.show_message("Exiting...");
 
     return 0;
 }
