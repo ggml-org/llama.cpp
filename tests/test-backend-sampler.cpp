@@ -89,6 +89,7 @@ struct test_context {
         cparams.n_batch = 512;
         cparams.samplers = configs.data();
         cparams.n_samplers = configs.size();
+        cparams.kv_unified = true;
 
         // If n_seq_max is not specified, calculate it from configs
         if (n_seq_max < 0) {
@@ -105,8 +106,6 @@ struct test_context {
         if (!ctx) {
             throw std::runtime_error("failed to create context");
         }
-
-        llama_set_warmup(ctx.get(), false);
 
         vocab = llama_model_get_vocab(model);
         n_vocab = llama_vocab_n_tokens(vocab);

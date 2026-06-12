@@ -2,7 +2,9 @@
 
 // Row reduction kernel template - compute sum (norm=false) or mean (norm=true)
 template <bool norm>
-static __global__ void reduce_rows_f32(const float * __restrict__ x, float * __restrict__ dst, const int ncols) {
+static __global__ void reduce_rows_f32(const float * x_ptr, float * dst_ptr, const int ncols) {
+    const float * GGML_CUDA_RESTRICT x   = x_ptr;
+    float       * GGML_CUDA_RESTRICT dst = dst_ptr;
     const int row = blockIdx.x;
     const int col = threadIdx.x;
 
@@ -10,6 +12,8 @@ static __global__ void reduce_rows_f32(const float * __restrict__ x, float * __r
     const int num_unroll = 8;
     float     temp[num_unroll];
     float     sum_temp[num_unroll] = { 0.0f };
+
+    ggml_cuda_pdl_sync();
     for (int i = col; i < ncols;) {
         for (int j = 0; j < num_unroll; ++j) {
             if (i < ncols) {

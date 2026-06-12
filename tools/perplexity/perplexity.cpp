@@ -1,12 +1,14 @@
 #include "arg.h"
 #include "common.h"
+#include "fit.h"
 #include "log.h"
 #include "llama.h"
 
-#include <chrono>
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <chrono>
+#include <clocale>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -155,7 +157,7 @@ static void process_logits(std::ostream& out, int n_vocab, const float * logits,
                 break;
             }
             lock.unlock();
-            const double v = log_softmax(n_vocab, logits + size_t(i)*n_vocab, log_probs.data() + i*nv, tokens[i+1]);
+            const double v = log_softmax(n_vocab, logits + size_t(i)*n_vocab, log_probs.data() + size_t(i)*nv, tokens[i+1]);
             local_nll += v;
             local_nll2 += v*v;
         }
@@ -167,7 +169,7 @@ static void process_logits(std::ostream& out, int n_vocab, const float * logits,
     for (auto & w : workers) {
         w.join();
     }
-    out.write((const char *)log_probs.data(), n_token*nv*sizeof(uint16_t));
+    out.write((const char *)log_probs.data(), size_t(n_token)*nv*sizeof(uint16_t));
 }
 
 struct kl_divergence_result {
@@ -277,7 +279,7 @@ static void process_logits(int n_vocab, const float * logits, const int * tokens
                 break;
             }
             lock.unlock();
-            std::pair<double, float> v = log_softmax(n_vocab, logits + size_t(i)*n_vocab, base_log_probs.data() + i*nv, tokens[i+1], local_kld);
+            std::pair<double, float> v = log_softmax(n_vocab, logits + size_t(i)*n_vocab, base_log_probs.data() + size_t(i)*nv, tokens[i+1], local_kld);
             kld_values[i]    = (float)v.first;
             p_diff_values[i] = v.second;
         }
@@ -522,7 +524,7 @@ static results_perplexity perplexity(llama_context * ctx, const common_params & 
         logits_stream.write((const char *)&n_chunk, sizeof(n_chunk));
         logits_stream.write((const char *)tokens.data(), n_chunk*n_ctx*sizeof(tokens[0]));
         const int nv = 2*((n_vocab + 1)/2) + 4;
-        log_probs.resize(n_ctx * nv);
+        log_probs.resize(size_t(n_ctx) * nv);
     }
 
     // We get the logits for all the tokens in the context window (params.n_ctx)
@@ -921,7 +923,7 @@ static void hellaswag_score(llama_context * ctx, const common_params & params) {
         }
 
         if (i0 == i1) {
-            LOG_ERR("%s : task %zu does not fit in the context window (requires %lu tokens)\n", __func__, i0, hs_data[i0].required_tokens);
+            LOG_ERR("%s : task %zu does not fit in the context window (requires %zu tokens)\n", __func__, i0, hs_data[i0].required_tokens);
             return;
         }
 
@@ -1214,7 +1216,7 @@ static void winogrande_score(llama_context * ctx, const common_params & params) 
         }
 
         if (i0 == i1) {
-            LOG_ERR("%s : task %zu does not fit in the context window (requires %lu tokens)\n", __func__, i0, data[i0].required_tokens);
+            LOG_ERR("%s : task %zu does not fit in the context window (requires %zu tokens)\n", __func__, i0, data[i0].required_tokens);
             return;
         }
 
@@ -1593,7 +1595,7 @@ static void multiple_choice_score(llama_context * ctx, const common_params & par
         }
 
         if (i0 == i1) {
-            LOG_ERR("%s : task %zu does not fit in the context window (requires %lu tokens)\n", __func__, i0, tasks[i0].required_tokens);
+            LOG_ERR("%s : task %zu does not fit in the context window (requires %zu tokens)\n", __func__, i0, tasks[i0].required_tokens);
             return;
         }
 
@@ -2003,17 +2005,22 @@ static void kl_divergence(llama_context * ctx, const common_params & params) {
     LOG("Same top p: %6.3lf ± %5.3lf %%\n", 100.0*same_top_p, 100.0*sqrt(same_top_p*(1.0 - same_top_p)/(kld.count - 1)));
 }
 
-int main(int argc, char ** argv) {
+// satisfies -Wmissing-declarations
+int llama_perplexity(int argc, char ** argv);
+
+int llama_perplexity(int argc, char ** argv) {
+    std::setlocale(LC_NUMERIC, "C");
+
     common_params params;
 
     params.n_ctx = 512;
     params.escape = false;
 
+    common_init();
+
     if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_PERPLEXITY)) {
         return 1;
     }
-
-    common_init();
 
     const int32_t n_ctx = params.n_ctx;
 
@@ -2022,21 +2029,14 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
-    const bool ppl = !params.hellaswag && !params.winogrande && !params.multiple_choice && !params.kl_divergence;
-
-    if (ppl || params.kl_divergence) {
-        const int32_t n_seq = std::max(1, params.n_batch / n_ctx);
-        const int32_t n_kv = n_seq * n_ctx;
-
-        params.n_parallel = n_seq;
-        params.n_ctx      = n_kv;
-
-        params.n_batch = std::min(params.n_batch, n_kv);
-    } else {
-        params.n_batch = std::min(params.n_batch, params.n_ctx);
-        // ensure there's at least enough seq_ids for HellaSwag
+    if (params.hellaswag || params.winogrande || params.multiple_choice) {
         params.n_parallel = std::max(4, params.n_parallel);
+        params.kv_unified = true;
+    } else { // Perplexity & KL divergence
+        params.n_parallel = std::max(1, params.n_batch / n_ctx);
     }
+    params.n_ctx = params.n_parallel * n_ctx;
+    params.n_batch = std::min(params.n_batch, params.n_ctx);
 
     if (params.ppl_stride > 0) {
         LOG_INF("Will perform strided perplexity calculation -> adjusting context size from %d to %d\n",
@@ -2053,8 +2053,13 @@ int main(int argc, char ** argv) {
     auto * model = llama_init->model();
     auto * ctx   = llama_init->context();
 
-    if (model == NULL) {
+    if (model == nullptr) {
         LOG_ERR("%s: unable to load model\n", __func__);
+        return 1;
+    }
+
+    if (ctx == nullptr) {
+        LOG_ERR("%s: failed to create context\n", __func__);
         return 1;
     }
 
@@ -2086,7 +2091,7 @@ int main(int argc, char ** argv) {
 
     LOG("\n");
     llama_perf_context_print(ctx);
-    llama_memory_breakdown_print(ctx);
+    common_memory_breakdown_print(ctx);
 
     llama_backend_free();
 

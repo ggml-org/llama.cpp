@@ -138,7 +138,7 @@ class LazyBase(ABC, metaclass=LazyMeta):
                     if isinstance(meta_noop, tuple):
                         dtype, shape = meta_noop
                         assert callable(shape)
-                        res = cls.meta_with_dtype_and_shape(dtype, shape(res.shape))
+                        res = cls.meta_with_dtype_and_shape(dtype, shape(res.shape))  # ty: ignore[call-top-callable]
                     else:
                         res = cls.meta_with_dtype_and_shape(meta_noop, res.shape)
 

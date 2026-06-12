@@ -195,7 +195,7 @@ struct tile_config_t{
 // will be needed.
 //
 // Here another commonly used pattern 1-3-3 is skipped, as it is mostly used when m <=16;
-// and the sinlge batch gemm (m=1) has a special fast path with `avx512-vnni`.
+// and the single batch gemm (m=1) has a special fast path with `avx512-vnni`.
 //
 // ref: https://www.intel.com/content/www/us/en/developer/articles/code-sample/
 //    advanced-matrix-extensions-intrinsics-functions.html
@@ -1379,8 +1379,8 @@ struct tinygemm_kernel_vnni<block_q8_0, block_q4_0, float, BLOCK_M, BLOCK_N, BLO
         // sum of offsets, shared across COLS
         //
         // avx512-vnni does not have `_mm512_dpbssd_epi32`,
-        // need to transfrom ss to us:
-        //   a * (b - 8) is equavilent to b * a - 8 * a
+        // need to transform ss to us:
+        //   a * (b - 8) is equivalent to b * a - 8 * a
         //   s    u   u                   u   s   u   s
         //
         __m512i vcomp;
@@ -2005,12 +2005,12 @@ void tinygemm_kernel_amx(int M, int N, int KB, const void * RESTRICT _A, const v
     const int lda = KB * sizeof(TA);
     //const int ldb = KB * sizeof(TB);
 
-    static thread_local packed_B_t Tile0[TILE_N * TILE_K];
-    static thread_local packed_B_t Tile1[TILE_N * TILE_K];
-    static thread_local int8_t Tile23[TILE_M * TILE_K];
+    alignas(64) static thread_local packed_B_t Tile0[TILE_N * TILE_K];
+    alignas(64) static thread_local packed_B_t Tile1[TILE_N * TILE_K];
+    alignas(64) static thread_local int8_t Tile23[TILE_M * TILE_K];
 
-    static thread_local int32_t TileC0[TILE_M * TILE_N * 4];
-    static thread_local int32_t TileC1[TILE_M * TILE_N * 4];
+    alignas(64) static thread_local int32_t TileC0[TILE_M * TILE_N * 4];
+    alignas(64) static thread_local int32_t TileC1[TILE_M * TILE_N * 4];
 
     // double buffering C to interleave avx512 and amx
     int32_t * C_cur = TileC0;
@@ -2187,21 +2187,21 @@ void tinygemm_kernel_amx(int M, int N, int KB, const void * RESTRICT _A, const v
     const int m1 = std::max(M - TILE_M, 0);
     //const int lda = KB * sizeof(TA);
 
-    static thread_local int8_t Tile0[TILE_N * TILE_K];
-    static thread_local int8_t Tile1[TILE_N * TILE_K];
-    static thread_local int8_t Tile23[TILE_M * TILE_K];
+    alignas(64) static thread_local int8_t Tile0[TILE_N * TILE_K];
+    alignas(64) static thread_local int8_t Tile1[TILE_N * TILE_K];
+    alignas(64) static thread_local int8_t Tile23[TILE_M * TILE_K];
 
     // mat mul result for each group
-    static thread_local int32_t Tile4[TILE_M * TILE_N];
-    static thread_local int32_t Tile5[TILE_M * TILE_N];
-    static thread_local int32_t Tile6[TILE_M * TILE_N];
-    static thread_local int32_t Tile7[TILE_M * TILE_N];
+    alignas(64) static thread_local int32_t Tile4[TILE_M * TILE_N];
+    alignas(64) static thread_local int32_t Tile5[TILE_M * TILE_N];
+    alignas(64) static thread_local int32_t Tile6[TILE_M * TILE_N];
+    alignas(64) static thread_local int32_t Tile7[TILE_M * TILE_N];
 
     // sum of each QK_K block, contains 8 groups, int32
-    static thread_local int32_t Sumi4[TILE_M * TILE_N];
-    static thread_local int32_t Sumi5[TILE_M * TILE_N];
-    static thread_local int32_t Sumi6[TILE_M * TILE_N];
-    static thread_local int32_t Sumi7[TILE_M * TILE_N];
+    alignas(64) static thread_local int32_t Sumi4[TILE_M * TILE_N];
+    alignas(64) static thread_local int32_t Sumi5[TILE_M * TILE_N];
+    alignas(64) static thread_local int32_t Sumi6[TILE_M * TILE_N];
+    alignas(64) static thread_local int32_t Sumi7[TILE_M * TILE_N];
 
     const int k_group_size = std::is_same<TB, block_q6_K>::value ? 16 : 32;
     for (int i = 0; i < KB; ++i) {

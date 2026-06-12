@@ -23,6 +23,9 @@ enum llama_swa_type {
     LLAMA_SWA_TYPE_SYMMETRIC = 3,
 };
 
+// forward declaration; full definition in llama-graph.h
+enum llm_ffn_op_type : int;
+
 struct llama_hparams_posnet {
     uint32_t n_embd;
     uint32_t n_layer;
@@ -34,22 +37,36 @@ struct llama_hparams_convnext {
 };
 
 struct llama_hparams {
+    // note: use the `_impl` suffix to avoid name conflict between members and getters
+    //       for example: n_embd_out() vs n_embd_out_impl
+
     bool vocab_only;
     bool no_alloc;
     bool rope_finetuned;
     bool use_par_res;
     bool swin_norm;
+    bool norm_before_residual = false;
 
     uint32_t n_ctx_train; // context size the model was trained on
     uint32_t n_embd;
-    uint32_t n_layer;
-    int32_t n_layer_kv_from_start = -1; // if non-negative, the first n_layer_kv_from_start layers have KV cache
-    uint32_t n_rot;
-    uint32_t n_embd_head_k; // dimension of keys (d_k). d_q is assumed to be the same, but there are n_head q heads, and only n_head_kv k-v heads
-    uint32_t n_embd_head_v; // dimension of values (d_v) aka n_embd_head
+    uint32_t n_layer_all;
+    uint32_t n_layer_nextn = 0;
     uint32_t n_expert = 0;
     uint32_t n_expert_used = 0;
     uint32_t n_rel_attn_bkts = 0;
+
+    // TODO: this needs to be reworked
+    int32_t  n_layer_kv_from_start = -1; // if non-negative, the first n_layer_kv_from_start layers have KV cache
+
+    // different head size for full_attention and SWA layers
+    uint32_t n_embd_head_k_full; // dimension of keys (d_k). d_q is assumed to be the same, but there are n_head q heads, and only n_head_kv k-v heads
+    uint32_t n_embd_head_v_full; // dimension of values (d_v) aka n_embd_head
+    uint32_t n_embd_head_k_swa;
+    uint32_t n_embd_head_v_swa;
+
+    // different RoPE dimensions for full_attention and SWA layers
+    uint32_t n_rot_full;
+    uint32_t n_rot_swa;
 
     // note: deepseek2 using MLA converts into MQA with larger heads, then decompresses to MHA
     uint32_t n_embd_head_k_mla_impl = 0;
@@ -82,7 +99,7 @@ struct llama_hparams {
     bool     expert_weights_norm  = false;
     uint32_t expert_gating_func   = LLAMA_EXPERT_GATING_FUNC_TYPE_NONE;
     uint32_t moe_every_n_layers   = 0;
-    uint32_t nextn_predict_layers = 0;
+    uint32_t moe_latent_size      = 0;
 
     float f_norm_eps;
     float f_norm_rms_eps;
@@ -108,6 +125,7 @@ struct llama_hparams {
     float    rope_freq_base_train_swa  = 10000.0f;
     float    rope_freq_scale_train;
     float    rope_freq_scale_train_swa = 1.0f;
+    float    rope_scaling_alpha        = 0.0f;  // NTK-aware alpha for XDRoPE
 
     uint32_t n_ctx_orig_yarn;
     float    rope_yarn_log_mul = 0.0f;
@@ -123,11 +141,15 @@ struct llama_hparams {
     llama_swa_type swa_type = LLAMA_SWA_TYPE_NONE;
     // the size of the sliding window (0 - no SWA)
     uint32_t n_swa = 0;
-    // if swa_layers[il] == 1, then layer il is SWA
-    // if swa_layers[il] == 0, then layer il is dense (i.e. non-SWA)
+
+    // if is_swa_impl[il] == 1, then layer il is SWA
+    // if is_swa_impl[il] == 0, then layer il is dense (i.e. non-SWA)
     // by default, all layers are dense
     // note: using uint32_t type for compatibility reason
-    std::array<uint32_t, LLAMA_MAX_LAYERS> swa_layers;
+    std::array<uint32_t, LLAMA_MAX_LAYERS> is_swa_impl;
+
+    // for hybrid state space models
+    std::array<uint32_t, LLAMA_MAX_LAYERS> is_recr_impl;
 
     // for State Space Models
     uint32_t ssm_d_conv  = 0;
@@ -138,9 +160,6 @@ struct llama_hparams {
 
     // for Kimi Linear KDA
     uint32_t n_embd_head_kda = 0;
-
-    // for hybrid state space models
-    std::array<bool, LLAMA_MAX_LAYERS> recurrent_layer_arr;
 
     bool ssm_dt_b_c_rms = false;
 
@@ -157,6 +176,8 @@ struct llama_hparams {
     float    f_attn_out_scale = 0.0f;
     uint32_t attn_temp_length = 0;
 
+    float    f_attn_value_scale = 0.0f;
+
     bool causal_attn   = true;
     bool use_alibi     = false;
     bool attn_soft_cap = false;
@@ -164,6 +185,9 @@ struct llama_hparams {
 
     // for Classifiers
     uint32_t n_cls_out = 1;
+
+    // input embedding dimension (0 = use n_embd)
+    uint32_t n_embd_inp_impl = 0;
 
     // output embedding dimension (0 = use n_embd)
     uint32_t n_embd_out_impl = 0;
@@ -199,7 +223,21 @@ struct llama_hparams {
     uint32_t indexer_top_k     = 0;
 
     // qwen3vl deepstack
+    // When parsed from GGUF, this implies the first N layers consume the first
+    // N deepstack embeddings. Use deepstack_mapping_arr if you need a more
+    // complex mapping. If using deepstack_mapping_arr, also make sure to set
+    // n_deepstack_layers to the number of unique deepstack layers so that
+    // n_embd_imp is accurate (see granite.cpp).
+    // TODO: can be expressed via the `new n_embd_inp_impl` and remove this param
     uint32_t n_deepstack_layers = 0;
+
+    // deepstack layer array (Granite4 Vision)
+    // -1  => no deepstack
+    // >=0 => input embedding index for deepstack injection
+    std::array<int32_t, LLAMA_MAX_LAYERS> deepstack_mapping_arr;
+
+    // gemma4 per-layer embedding
+    uint32_t n_embd_per_layer = 0;
 
     // needed by encoder-decoder models (e.g. T5, FLAN-T5)
     // ref: https://github.com/ggml-org/llama.cpp/pull/8141
@@ -210,6 +248,14 @@ struct llama_hparams {
     enum llama_rope_type         rope_type               = LLAMA_ROPE_TYPE_NONE;
     enum llama_rope_scaling_type rope_scaling_type_train = LLAMA_ROPE_SCALING_TYPE_NONE;
 
+
+    // Resolved FFN gated activation flavor for archs that read
+    // `<arch>.hidden_activation` from the GGUF (e.g. ModernBert derivatives).
+    // Defaults to LLM_FFN_NONE (sentinel = 0); the mapping from the GGUF
+    // string to a real op is done at hparam-load time via
+    // llm_ffn_op_type_from_string() in llama-model.cpp, mirroring how
+    // rope_scaling_type_train is handled.
+    enum llm_ffn_op_type llm_ffn_op;
 
     // Step35: optional per-layer clamps for (Swi)GLU
     std::array<float, LLAMA_MAX_LAYERS> swiglu_clamp_exp; // clamping for expert FFN
@@ -239,6 +285,13 @@ struct llama_hparams {
     // return true if one of the layers is SWA
     bool is_swa_any() const;
 
+    bool is_swa(uint32_t il) const;
+
+    void set_recr_pattern(uint32_t n_pattern, bool dense_first = false);
+
+    // whether or not the given layer is recurrent (for hybrid models)
+    bool is_recr(uint32_t il) const;
+
     uint32_t n_head(uint32_t il = 0) const;
 
     uint32_t n_head_kv(uint32_t il = 0) const;
@@ -247,11 +300,17 @@ struct llama_hparams {
 
     uint32_t n_gqa(uint32_t il = 0) const;
 
+    uint32_t n_rot(uint32_t il = 0) const;
+
     // dimension of main + auxiliary input embeddings
     uint32_t n_embd_inp() const;
 
     // dimension of output embeddings
     uint32_t n_embd_out() const;
+
+    // dimension of key/value embeddings for each head (per layer)
+    uint32_t n_embd_head_k(uint32_t il = 0) const;
+    uint32_t n_embd_head_v(uint32_t il = 0) const;
 
     // dimension of key embeddings across all k-v heads
     uint32_t n_embd_k_gqa(uint32_t il = 0) const;
@@ -274,12 +333,7 @@ struct llama_hparams {
     // dimension of the recurrent state embeddings
     uint32_t n_embd_s() const;
 
-    // whether or not the given layer is recurrent (for hybrid models)
-    bool is_recurrent(uint32_t il) const;
-
     uint32_t n_pos_per_embd() const;
-
-    bool is_swa(uint32_t il) const;
 
     // note: currently only support if either all or none of the layers are MLA
     bool is_mla() const;
@@ -289,8 +343,8 @@ struct llama_hparams {
 
     bool has_kv(uint32_t il) const;
 
-    // number of layers for which has_kv() returns true
-    uint32_t n_layer_kv() const;
+    // number of effective layers (excludes nextn layers)
+    uint32_t n_layer() const;
 
     // note that this function uses different SWA parameters from those in the hparams
     // note: inlined on purpose for performance reasons

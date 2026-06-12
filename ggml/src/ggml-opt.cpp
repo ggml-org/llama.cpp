@@ -3,6 +3,7 @@
 #include "ggml.h"
 #include "ggml-alloc.h"
 #include "ggml-backend.h"
+#include "ggml-backend-impl.h"
 #include "ggml-impl.h"
 
 #include <algorithm>
@@ -589,6 +590,7 @@ void ggml_opt_free(ggml_opt_context_t opt_ctx) {
     ggml_backend_buffer_free(opt_ctx->buf_cpu);
     ggml_free(opt_ctx->ctx_static);
     ggml_free(opt_ctx->ctx_cpu);
+    ggml_free(opt_ctx->ctx_copy);
     delete opt_ctx;
 }
 
@@ -852,15 +854,37 @@ void ggml_opt_eval(ggml_opt_context_t opt_ctx, ggml_opt_result_t result) {
 
     GGML_ASSERT(ggml_is_scalar(opt_ctx->loss));
     GGML_ASSERT(opt_ctx->loss->type == GGML_TYPE_F32);
+
+    auto try_borrow = [&](struct ggml_tensor * tensor, auto func_borrow, auto func_get) {
+        ggml_backend_t backend = ggml_backend_sched_get_tensor_backend(opt_ctx->backend_sched, tensor);
+        void * borrowed = ggml_backend_tensor_try_borrow(backend, tensor);
+        if (borrowed) {
+            func_borrow(borrowed);
+            ggml_backend_tensor_release(tensor, borrowed);
+            return true;
+        }
+        func_get();
+        return false;
+    };
+
     float loss;
-    ggml_backend_tensor_get(opt_ctx->loss, &loss, 0, ggml_nbytes(opt_ctx->loss));
+    try_borrow(opt_ctx->loss,
+               [&](void * ptr) { loss = *(float *) ptr; },
+               [&]() { ggml_backend_tensor_get(opt_ctx->loss, &loss, 0, ggml_nbytes(opt_ctx->loss)); });
     result->loss.push_back(loss);
 
     if (opt_ctx->pred) {
         GGML_ASSERT(opt_ctx->pred->type == GGML_TYPE_I32);
-        std::vector<int32_t> pred(ndata);
-        ggml_backend_tensor_get(opt_ctx->pred, pred.data(), 0, ggml_nbytes(opt_ctx->pred));
-        result->pred.insert(result->pred.end(), pred.begin(), pred.end());
+        try_borrow(opt_ctx->pred,
+                   [&](void * ptr) {
+                       const int32_t * pred_ptr = (const int32_t *) ptr;
+                       result->pred.insert(result->pred.end(), pred_ptr, pred_ptr + ndata);
+                   },
+                   [&]() {
+                       std::vector<int32_t> pred_tmp(ndata);
+                       ggml_backend_tensor_get(opt_ctx->pred, pred_tmp.data(), 0, ggml_nbytes(opt_ctx->pred));
+                       result->pred.insert(result->pred.end(), pred_tmp.begin(), pred_tmp.end());
+                   });
     }
 
     if (!opt_ctx->ncorrect || result->ncorrect < 0) {
@@ -871,7 +895,9 @@ void ggml_opt_eval(ggml_opt_context_t opt_ctx, ggml_opt_result_t result) {
     GGML_ASSERT(ggml_is_scalar(opt_ctx->ncorrect));
     GGML_ASSERT(opt_ctx->ncorrect->type == GGML_TYPE_I64);
     int64_t ncorrect;
-    ggml_backend_tensor_get(opt_ctx->ncorrect, &ncorrect, 0, ggml_nbytes(opt_ctx->ncorrect));
+    try_borrow(opt_ctx->ncorrect,
+               [&](void * ptr) { ncorrect = *(int64_t *) ptr; },
+               [&]() { ggml_backend_tensor_get(opt_ctx->ncorrect, &ncorrect, 0, ggml_nbytes(opt_ctx->ncorrect)); });
     result->ncorrect += ncorrect;
 }
 

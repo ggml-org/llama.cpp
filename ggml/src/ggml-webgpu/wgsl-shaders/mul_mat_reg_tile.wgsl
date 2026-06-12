@@ -1,17 +1,19 @@
 enable f16;
 
+#define DECLARE_BYTE_LOADERS_SRC0
 #include "common_decls.tmpl"
+
 #include "mul_mat_decls.tmpl"
 
 #ifdef VEC
-fn store_val(acc: array<array<f16, TILE_N>, TILE_M>, tn: u32, tm: u32) -> vec4<f32> {
-    return vec4<f32>(f32(acc[tm][tn]), f32(acc[tm + 1][tn]), f32(acc[tm + 2][tn]), f32(acc[tm + 3][tn]));
+fn store_val(acc: array<array<f32, TILE_N>, TILE_M>, tn: u32, tm: u32) -> vec4<f32> {
+    return vec4<f32>(acc[tm][tn], acc[tm + 1][tn], acc[tm + 2][tn], acc[tm + 3][tn]);
 }
 #endif
 
 #ifdef SCALAR
-fn store_val(acc: array<array<f16, TILE_N>, TILE_M>, tn: u32, tm: u32) -> f32 {
-    return f32(acc[tm][tn]);
+fn store_val(acc: array<array<f32, TILE_N>, TILE_M>, tn: u32, tm: u32) -> f32 {
+    return acc[tm][tn];
 }
 #endif
 
@@ -50,11 +52,13 @@ fn get_local_m(thread_id: u32) -> u32 {
 const TOTAL_WORKGROUP_SIZE = WORKGROUP_SIZE_M * WORKGROUP_SIZE_N;
 const TILE_SRC0_SHMEM = TILE_K * WORKGROUP_SIZE_M * TILE_M;
 const TILE_SRC1_SHMEM = TILE_K * WORKGROUP_SIZE_N * TILE_N;
+
 var<workgroup> shmem: array<f16, TILE_SRC0_SHMEM + TILE_SRC1_SHMEM>;
 
 @compute @workgroup_size(TOTAL_WORKGROUP_SIZE)
 fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
-        @builtin(local_invocation_id) local_id: vec3<u32>) {
+        @builtin(local_invocation_id) local_id: vec3<u32>,
+        @builtin(num_workgroups) num_wg: vec3<u32>) {
 
     let thread_id = local_id.x;
     let local_m = get_local_m(thread_id);
@@ -64,9 +68,16 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
     let wg_m_count = (params.m + WORKGROUP_SIZE_M * TILE_M - 1u) / (WORKGROUP_SIZE_M * TILE_M);
     let wg_per_matrix = wg_m_count * wg_n_count;
 
-    let batch_idx = wg_id.x / wg_per_matrix;
+    let wg_linear = wg_id.y * num_wg.x + wg_id.x;
 
-    let wg_in_batch = wg_id.x % wg_per_matrix;
+    let batch_idx = wg_linear / wg_per_matrix;
+
+    let total_batches = params.bs02 * params.broadcast2 * params.bs03 * params.broadcast3;
+    if (batch_idx >= total_batches) {
+        return;
+    }
+
+    let wg_in_batch = wg_linear % wg_per_matrix;
     let wg_m = wg_in_batch % wg_m_count;
     let wg_n = wg_in_batch / wg_m_count;
 
@@ -89,7 +100,7 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
     let offset_m = wg_m * WORKGROUP_SIZE_M * TILE_M;
     let offset_n = wg_n * WORKGROUP_SIZE_N * TILE_N;
 
-    var acc: array<array<f16, TILE_N>, TILE_M>;
+    var acc: array<array<f32, TILE_N>, TILE_M>;
 
     for (var k_outer = 0u; k_outer < params.k; k_outer += TILE_K) {
 
@@ -113,7 +124,7 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
                 let src1_idx = src1_n * TILE_K + k_inner;
                 let src1_val = shmem[TILE_SRC0_SHMEM + src1_idx];
                 for (var tm = 0u; tm < TILE_M; tm++) {
-                      acc[tm][tn] += src0_tile[tm] * src1_val;
+                      acc[tm][tn] += f32(src0_tile[tm]) * f32(src1_val);
                 }
             }
         }

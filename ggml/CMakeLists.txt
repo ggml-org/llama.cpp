@@ -1,11 +1,14 @@
 cmake_minimum_required(VERSION 3.14...3.28) # for add_link_options and implicit target directories.
+
 project("ggml" C CXX ASM)
 
 ### GGML Version
 set(GGML_VERSION_MAJOR 0)
-set(GGML_VERSION_MINOR 9)
-set(GGML_VERSION_PATCH 7)
+set(GGML_VERSION_MINOR 15)
+set(GGML_VERSION_PATCH 0)
 set(GGML_VERSION_BASE "${GGML_VERSION_MAJOR}.${GGML_VERSION_MINOR}.${GGML_VERSION_PATCH}")
+
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake/")
 
 find_program(GIT_EXE NAMES git git.exe NO_CMAKE_FIND_ROOT_PATH)
 if(GIT_EXE)
@@ -166,15 +169,16 @@ if (NOT MSVC)
     option(GGML_AMX_INT8     "ggml: enable AMX-INT8"         OFF)
     option(GGML_AMX_BF16     "ggml: enable AMX-BF16"         OFF)
 endif()
-option(GGML_LASX             "ggml: enable lasx"             ON)
-option(GGML_LSX              "ggml: enable lsx"              ON)
-option(GGML_RVV              "ggml: enable rvv"              ON)
-option(GGML_RV_ZFH           "ggml: enable riscv zfh"        ON)
-option(GGML_RV_ZVFH          "ggml: enable riscv zvfh"       ON)
-option(GGML_RV_ZICBOP        "ggml: enable riscv zicbop"     ON)
-option(GGML_RV_ZIHINTPAUSE   "ggml: enable riscv zihintpause "  ON)
-option(GGML_XTHEADVECTOR     "ggml: enable xtheadvector"     OFF)
-option(GGML_VXE              "ggml: enable vxe"              ${GGML_NATIVE})
+option(GGML_LASX             "ggml: enable lasx"              ON)
+option(GGML_LSX              "ggml: enable lsx"               ON)
+option(GGML_RVV              "ggml: enable rvv"               ON)
+option(GGML_RV_ZFH           "ggml: enable riscv zfh"         ON)
+option(GGML_RV_ZVFH          "ggml: enable riscv zvfh"        ON)
+option(GGML_RV_ZICBOP        "ggml: enable riscv zicbop"      ON)
+option(GGML_RV_ZIHINTPAUSE   "ggml: enable riscv zihintpause" ON)
+option(GGML_RV_ZVFBFWMA      "ggml: enable riscv zvfbfwma"    OFF)
+option(GGML_XTHEADVECTOR     "ggml: enable xtheadvector"      OFF)
+option(GGML_VXE              "ggml: enable vxe"               ${GGML_NATIVE})
 
 option(GGML_CPU_ALL_VARIANTS "ggml: build all variants of the CPU backend (requires GGML_BACKEND_DL)" OFF)
 set(GGML_CPU_ARM_ARCH        "" CACHE STRING "ggml: CPU architecture for ARM")
@@ -203,12 +207,14 @@ option(GGML_CUDA_NO_VMM                     "ggml: do not try to use CUDA VMM"  
 option(GGML_CUDA_FA                         "ggml: compile ggml FlashAttention CUDA kernels"  ON)
 option(GGML_CUDA_FA_ALL_QUANTS              "ggml: compile all quants for FlashAttention"     OFF)
 option(GGML_CUDA_GRAPHS                     "ggml: use CUDA graphs (llama.cpp only)"          ${GGML_CUDA_GRAPHS_DEFAULT})
+option(GGML_CUDA_NCCL                       "ggml: use NVIDIA Collective Comm. Library"       ON)
 set   (GGML_CUDA_COMPRESSION_MODE "size" CACHE STRING
                                             "ggml: cuda link binary compression mode; requires cuda 12.8+")
 set_property(CACHE GGML_CUDA_COMPRESSION_MODE PROPERTY STRINGS "none;speed;balance;size")
 
 option(GGML_HIP                             "ggml: use HIP"                                   OFF)
-option(GGML_HIP_GRAPHS                      "ggml: use HIP graph, experimental, slow"         OFF)
+option(GGML_HIP_GRAPHS                      "ggml: use HIP graph"                              ON)
+option(GGML_HIP_RCCL                        "ggml: use ROCm Collective Comm. Library"         OFF)
 option(GGML_HIP_NO_VMM                      "ggml: do not try to use HIP VMM"                 ON)
 option(GGML_HIP_ROCWMMA_FATTN               "ggml: enable rocWMMA for FlashAttention"         OFF)
 option(GGML_HIP_MMQ_MFMA                    "ggml: enable MFMA MMA for CDNA in MMQ"           ON)
@@ -242,18 +248,22 @@ option(GGML_RPC                             "ggml: use RPC"                     
 option(GGML_SYCL                            "ggml: use SYCL"                                  OFF)
 option(GGML_SYCL_F16                        "ggml: use 16 bit floats for sycl calculations"   OFF)
 option(GGML_SYCL_GRAPH                      "ggml: enable graphs in the SYCL backend"         ON)
+option(GGML_SYCL_HOST_MEM_FALLBACK          "ggml: allow host memory fallback in SYCL reorder (requires kernel 6.8+)" ON)
+option(GGML_SYCL_SUPPORT_LEVEL_ZERO         "ggml: use Level Zero API in SYCL backend"  ON)
 option(GGML_SYCL_DNN                        "ggml: enable oneDNN in the SYCL backend"         ON)
 set   (GGML_SYCL_TARGET "INTEL" CACHE STRING
                                             "ggml: sycl target device")
 set   (GGML_SYCL_DEVICE_ARCH "" CACHE STRING
                                             "ggml: sycl device architecture")
 
+option(GGML_OPENVINO                        "ggml: use OPENVINO"                              OFF)
+
 option(GGML_OPENCL                          "ggml: use OpenCL"                                OFF)
 option(GGML_OPENCL_PROFILING                "ggml: use OpenCL profiling (increases overhead)" OFF)
 option(GGML_OPENCL_EMBED_KERNELS            "ggml: embed kernels"                             ON)
 option(GGML_OPENCL_USE_ADRENO_KERNELS       "ggml: use optimized kernels for Adreno"          ON)
 set   (GGML_OPENCL_TARGET_VERSION "300" CACHE STRING
-                                            "gmml: OpenCL API version to target")
+                                            "ggml: OpenCL API version to target")
 
 option(GGML_HEXAGON                         "ggml: enable Hexagon backend"                    OFF)
 set(GGML_HEXAGON_FP32_QUANTIZE_GROUP_SIZE 128 CACHE STRING "ggml: quantize group size (32, 64, or 128)")
@@ -327,6 +337,7 @@ set(GGML_PUBLIC_HEADERS
     include/ggml-vulkan.h
     include/ggml-webgpu.h
     include/ggml-zendnn.h
+    include/ggml-openvino.h
     include/gguf.h)
 
 set_target_properties(ggml PROPERTIES PUBLIC_HEADER "${GGML_PUBLIC_HEADERS}")
@@ -342,7 +353,7 @@ if (GGML_STANDALONE)
         @ONLY)
 
     install(FILES ${CMAKE_CURRENT_BINARY_DIR}/ggml.pc
-        DESTINATION share/pkgconfig)
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}/pkgconfig)
 endif()
 
 #

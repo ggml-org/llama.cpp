@@ -8,6 +8,11 @@ endif()
 
 find_package(Vulkan COMPONENTS glslc REQUIRED)
 
+if (DEFINED ENV{VULKAN_SDK})
+    list(APPEND CMAKE_PREFIX_PATH "$ENV{VULKAN_SDK}")
+endif()
+find_package(SPIRV-Headers CONFIG REQUIRED)
+
 if (CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
     # Parallel build object files
     add_definitions(/MP)
@@ -75,6 +80,12 @@ if (Vulkan_FOUND)
     )
 
     test_shader_extension_support(
+        "GL_NV_cooperative_matrix_decode_vector"
+        "${CMAKE_CURRENT_SOURCE_DIR}/vulkan-shaders/feature-tests/coopmat2_decode_vector.comp"
+        "GGML_VULKAN_COOPMAT2_DECODE_VECTOR_GLSLC_SUPPORT"
+    )
+
+    test_shader_extension_support(
         "GL_EXT_integer_dot_product"
         "${CMAKE_CURRENT_SOURCE_DIR}/vulkan-shaders/feature-tests/integer_dot.comp"
         "GGML_VULKAN_INTEGER_DOT_GLSLC_SUPPORT"
@@ -90,7 +101,7 @@ if (Vulkan_FOUND)
     target_include_directories(ggml-vulkan PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
 
     # Workaround to the "can't dereference invalidated vector iterator" bug in clang-cl debug build
-    # Posssibly relevant: https://stackoverflow.com/questions/74748276/visual-studio-no-displays-the-correct-length-of-stdvector
+    # Possibly relevant: https://stackoverflow.com/questions/74748276/visual-studio-no-displays-the-correct-length-of-stdvector
     if (MSVC AND CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
         add_compile_definitions(_ITERATOR_DEBUG_LEVEL=0)
     endif()

@@ -381,7 +381,6 @@ server_task_result_ptr server_response_reader::next(const std::function<bool()> 
         if (result == nullptr) {
             // timeout, check stop condition
             if (should_stop()) {
-                SRV_DBG("%s", "stopping wait for next result due to should_stop condition\n");
                 return nullptr;
             }
         } else {

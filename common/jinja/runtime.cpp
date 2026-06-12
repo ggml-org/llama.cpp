@@ -114,8 +114,10 @@ value binary_expression::execute_impl(context & ctx) {
 
     // Logical operators
     if (op.value == "and") {
+        JJ_DEBUG("Executing logical test: %s AND %s", left->type().c_str(), right->type().c_str());
         return left_val->as_bool() ? right->execute(ctx) : std::move(left_val);
     } else if (op.value == "or") {
+        JJ_DEBUG("Executing logical test: %s OR %s", left->type().c_str(), right->type().c_str());
         return left_val->as_bool() ? std::move(left_val) : right->execute(ctx);
     }
 
@@ -249,6 +251,23 @@ value binary_expression::execute_impl(context & ctx) {
         return res;
     }
 
+    // Python-style string repetition
+    // TODO: support array/tuple repetition (e.g., [1, 2] * 3 → [1, 2, 1, 2, 1, 2])
+    if (op.value == "*" &&
+            ((is_val<value_string>(left_val) && is_val<value_int>(right_val)) ||
+             (is_val<value_int>(left_val) && is_val<value_string>(right_val)))) {
+        const auto & str = is_val<value_string>(left_val) ? left_val->as_string() : right_val->as_string();
+        const int64_t repeat = is_val<value_int>(right_val) ? right_val->as_int() : left_val->as_int();
+        auto res = mk_val<value_string>();
+        if (repeat <= 0) {
+            return res;
+        }
+        for (int64_t i = 0; i < repeat; ++i) {
+            res->val_str = res->val_str.append(str);
+        }
+        return res;
+    }
+
     // String membership
     if (is_val<value_string>(left_val) && is_val<value_string>(right_val)) {
         // case: "a" in "abc"
@@ -304,6 +323,19 @@ value filter_expression::execute_impl(context & ctx) {
             filter_id = "strip"; // alias
         }
         JJ_DEBUG("Applying filter '%s' to %s", filter_id.c_str(), input->type().c_str());
+        // TODO: Refactor filters so this coercion can be done automatically
+        if (!input->is_undefined() && !is_val<value_string>(input) && (
+            filter_id == "capitalize" ||
+            filter_id == "lower" ||
+            filter_id == "replace" ||
+            filter_id == "strip" ||
+            filter_id == "title" ||
+            filter_id == "upper" ||
+            filter_id == "wordcount"
+        )) {
+            JJ_DEBUG("Coercing %s to String for '%s' filter", input->type().c_str(), filter_id.c_str());
+            input = mk_val<value_string>(input->as_string());
+        }
         return try_builtin_func(ctx, filter_id, input)->invoke(func_args(ctx));
 
     } else if (is_stmt<call_expression>(filter)) {
@@ -665,8 +697,9 @@ value macro_statement::execute_impl(context & ctx) {
                 if (is_stmt<identifier>(this->args[i])) {
                     // normal parameter
                     std::string param_name = cast_stmt<identifier>(this->args[i])->val;
-                    JJ_DEBUG("  Binding parameter '%s' to argument of type %s", param_name.c_str(), args.get_pos(i)->type().c_str());
-                    macro_ctx.set_val(param_name, args.get_pos(i));
+                    value param_value = args.get_kwarg_or_pos(param_name, i);
+                    JJ_DEBUG("  Binding parameter '%s' to argument of type %s", param_name.c_str(), param_value->type().c_str());
+                    macro_ctx.set_val(param_name, param_value);
                 } else if (is_stmt<keyword_argument_expression>(this->args[i])) {
                     // default argument used as normal parameter
                     auto kwarg = cast_stmt<keyword_argument_expression>(this->args[i]);
@@ -674,8 +707,9 @@ value macro_statement::execute_impl(context & ctx) {
                         throw std::runtime_error("Keyword argument key must be an identifier in macro '" + name + "'");
                     }
                     std::string param_name = cast_stmt<identifier>(kwarg->key)->val;
-                    JJ_DEBUG("  Binding parameter '%s' to argument of type %s", param_name.c_str(), args.get_pos(i)->type().c_str());
-                    macro_ctx.set_val(param_name, args.get_pos(i));
+                    value param_value = args.get_kwarg_or_pos(param_name, i);
+                    JJ_DEBUG("  Binding parameter '%s' to argument of type %s", param_name.c_str(), param_value->type().c_str());
+                    macro_ctx.set_val(param_name, param_value);
                 } else {
                     throw std::runtime_error("Invalid parameter type in macro '" + name + "'");
                 }
@@ -767,9 +801,14 @@ value member_expression::execute_impl(context & ctx) {
     }
 
     JJ_DEBUG("Member expression on object type %s, property type %s", object->type().c_str(), property->type().c_str());
-    ensure_key_type_allowed(property);
-
     value val = mk_val<value_undefined>("object_property");
+
+    if (property->is_undefined()) {
+        JJ_DEBUG("%s", "Member expression property is undefined, returning undefined");
+        return val;
+    }
+
+    ensure_key_type_allowed(property);
 
     if (is_val<value_undefined>(object)) {
         JJ_DEBUG("%s", "Accessing property on undefined object, returning undefined");
@@ -838,7 +877,7 @@ value call_expression::execute_impl(context & ctx) {
     for (auto & arg_stmt : this->args) {
         auto arg_val = arg_stmt->execute(ctx);
         JJ_DEBUG("  Argument type: %s", arg_val->type().c_str());
-        args.push_back(std::move(arg_val));
+        args.push_back(arg_val);
     }
     // execute callee
     value callee_val = callee->execute(ctx);

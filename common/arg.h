@@ -25,7 +25,8 @@ struct common_arg {
     const char * value_hint_2 = nullptr; // for second arg value
     const char * env          = nullptr;
     std::string help;
-    bool is_sparam = false; // is current arg a sampling param?
+    bool is_sampling = false; // is current arg a sampling param?
+    bool is_spec = false; // is current arg a speculative decoding param?
     bool is_preset_only = false; // is current arg preset-only (not treated as CLI arg)
     void (*handler_void)   (common_params & params) = nullptr;
     void (*handler_string) (common_params & params, const std::string &) = nullptr;
@@ -74,7 +75,8 @@ struct common_arg {
     common_arg & set_examples(std::initializer_list<enum llama_example> examples);
     common_arg & set_excludes(std::initializer_list<enum llama_example> excludes);
     common_arg & set_env(const char * env);
-    common_arg & set_sparam();
+    common_arg & set_sampling();
+    common_arg & set_spec();
     common_arg & set_preset_only();
     bool in_example(enum llama_example ex);
     bool is_exclude(enum llama_example ex);
@@ -126,6 +128,12 @@ bool common_params_to_map(int argc, char ** argv, llama_example ex, std::map<com
 // these arguments are not treated as command line arguments
 // see: https://github.com/ggml-org/llama.cpp/issues/18163
 void common_params_add_preset_options(std::vector<common_arg> & args);
+
+// populate model paths (main model, mmproj, etc) from -hf if necessary
+// return true if the model is ready to use
+// throw an exception if there is an error that prevents the model from being used (e.g. network error, model not found, etc)
+// if params.skip_download is true, no downloads will be attempted. return false if the model is invalid or missing (e.g. ETag check failed)
+bool common_params_handle_models(common_params & params, llama_example curr_ex);
 
 // initialize argument parser context - used by test-arg-parser and preset
 common_params_context common_params_parser_init(common_params & params, llama_example ex, void(*print_usage)(int, char **) = nullptr);

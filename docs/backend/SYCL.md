@@ -5,10 +5,12 @@
 - [News](#news)
 - [OS](#os)
 - [Hardware](#hardware)
+- [Performance Reference](#performance-reference)
 - [Docker](#docker)
 - [Linux](#linux)
-- [Windows](#windows)
+- [Windows](#windows-1)
 - [Environment Variable](#environment-variable)
+- [Design Rule](#design-rule)
 - [Known Issue](#known-issues)
 - [Q&A](#qa)
 - [TODO](#todo)
@@ -30,6 +32,8 @@ SYCL cross-platform capabilities enable support for other vendor GPUs as well.
 
 ## Recommended Release
 
+### Windows
+
 The following releases are verified and recommended:
 
 |Commit ID|Tag|Release|Verified  Platform| Update date|
@@ -38,8 +42,23 @@ The following releases are verified and recommended:
 |3bcd40b3c593d14261fb2abfabad3c0fb5b9e318|b4040 |[llama-b4040-bin-win-sycl-x64.zip](https://github.com/ggml-org/llama.cpp/releases/download/b4040/llama-b4040-bin-win-sycl-x64.zip) |Arc A770/Linux/oneAPI 2024.1<br>MTL Arc GPU/Windows 11/oneAPI 2024.1| 2024-11-19|
 |fb76ec31a9914b7761c1727303ab30380fd4f05c|b3038 |[llama-b3038-bin-win-sycl-x64.zip](https://github.com/ggml-org/llama.cpp/releases/download/b3038/llama-b3038-bin-win-sycl-x64.zip) |Arc A770/Linux/oneAPI 2024.1<br>MTL Arc GPU/Windows 11/oneAPI 2024.1||
 
+### Ubuntu 24.04
+
+The release packages for Ubuntu 24.04 x64 (FP32/FP16) only include the binary files of the llama.cpp SYCL backend. They require the target machine to have pre-installed Intel GPU drivers and oneAPI packages that are the same version as the build package. To get the version and installation info, refer to [.github/workflows/release.yml#L713](../../.github/workflows/release.yml#L713): ubuntu-24-sycl -> Download & Install oneAPI.
+
+It is recommended to use them with [Intel Docker](https://hub.docker.com/r/intel/deep-learning-essentials).
+
+The packages for FP32 and FP16 would have different accuracy and performance on LLMs. Please choose it according to the test result.
 
 ## News
+
+- 2026.04-05
+  - Optimize mul_mat by reorder feature for data type: Q4_K, Q5_K, Q6_K, Q8_0.
+  - Fused MoE.
+  - Upgrate CI and built package for oneAPI 2025.3.3, support Ubuntu 24.04 built package.
+
+- 2026.03
+  - Support Flash-Attention: less memory usage, performance impact depends on LLM.
 
 - 2026.02
   - Remove support for Nvidia & AMD GPU, because the oneAPI plugin for Nvidia & AMD GPU is unavailable: download/installation channels are out of work. User can't build up the software for Nvidia & AMD GPU.
@@ -131,37 +150,16 @@ On older Intel GPUs, you may try [OpenCL](/docs/backend/OPENCL.md) although the 
 
 NA
 
+## Performance Reference
+
+
+To get the supported LLMs, GPUs, and performance reference, please check [Performance of llama.cpp on Intel GPU with SYCL backend](https://github.com/ggml-org/llama.cpp/discussions/23313).
+
+You could update your test result in it directly.
+
 ## Docker
 
-The docker build option is currently limited to *Intel GPU* targets.
-
-### Build image
-
-```sh
-# Using FP32
-docker build -t llama-cpp-sycl --build-arg="GGML_SYCL_F16=OFF" --target light -f .devops/intel.Dockerfile .
-
-# Using FP16
-docker build -t llama-cpp-sycl --build-arg="GGML_SYCL_F16=ON" --target light -f .devops/intel.Dockerfile .
-```
-
-*Notes*:
-
-You can also use the `.devops/llama-server-intel.Dockerfile`, which builds the *"server"* alternative.
-Check the [documentation for Docker](../docker.md) to see the available images.
-
-### Run container
-
-```sh
-# First, find all the DRI cards
-ls -la /dev/dri
-# Then, pick the card that you want to use (here for e.g. /dev/dri/card1).
-docker run -it --rm -v "/path/to/models:/models" --device /dev/dri/renderD128:/dev/dri/renderD128 --device /dev/dri/card0:/dev/dri/card0 llama-cpp-sycl -m /models/7B/ggml-model-q4_0.gguf -p "Building a website can be done in 10 simple steps:" -n 400 -e -ngl 33 -c 4096 -s 0
-```
-
-*Notes:*
-- Docker has been tested successfully on native Linux. WSL support has not been verified yet.
-- You may need to install Intel GPU driver on the **host** machine *(Please refer to the [Linux configuration](#linux) for details)*.
+Please refer to [Docker with SYCL](../docker.md#docker-with-sycl) for details.
 
 ## Linux
 
@@ -171,7 +169,7 @@ docker run -it --rm -v "/path/to/models:/models" --device /dev/dri/renderD128:/d
 
   - **Intel GPU**
 
-Intel data center GPUs drivers installation guide and download page can be found here: [Get intel dGPU Drivers](https://dgpu-docs.intel.com/driver/installation.html#ubuntu-install-steps).
+Intel data center GPUs drivers installation guide and download page can be found here: [Get Intel dGPU Drivers](https://dgpu-docs.intel.com/driver/installation.html#ubuntu-install-steps).
 
 *Note*: for client GPUs *(iGPU & Arc A-Series)*, please refer to the [client iGPU driver installation](https://dgpu-docs.intel.com/driver/client/overview.html).
 
@@ -221,10 +219,11 @@ Please follow the instructions for downloading and installing the Toolkit for Li
 
 Following guidelines/code snippets assume the default installation values. Otherwise, please make sure the necessary changes are reflected where applicable.
 
-Upon a successful installation, SYCL is enabled for the available intel devices, along with relevant libraries such as oneAPI oneDNN for Intel GPUs.
+Upon a successful installation, SYCL is enabled for the available Intel devices, along with relevant libraries such as oneAPI oneDNN for Intel GPUs.
 
 |Verified release|
 |-|
+|2025.3.3 |
 |2025.2.1|
 |2025.1|
 |2024.1|
@@ -299,7 +298,7 @@ Similar to the native `sycl-ls`, available SYCL devices can be queried as follow
 ./build/bin/llama-ls-sycl-device
 ```
 
-This command will only display the selected backend that is supported by SYCL. The default backend is level_zero. For example, in a system with 2 *intel GPU* it would look like the following:
+This command will only display the selected backend that is supported by SYCL. The default backend is level_zero. For example, in a system with 2 *Intel GPU* it would look like the following:
 ```
 found 2 SYCL devices:
 
@@ -333,6 +332,12 @@ Choose one of following methods to run.
 
 ```sh
 ./examples/sycl/test.sh
+```
+
+- Run llama-server:
+
+```sh
+./examples/sycl/start-svr.sh -m PATH/MODEL_FILE
 ```
 
 2. Command line
@@ -378,17 +383,27 @@ use 1 SYCL GPUs: [0] with Max compute units:512
 
 ## Windows
 
-### I. Setup Environment
-
-1. Install GPU driver
+### Install GPU driver
 
 Intel GPU drivers instructions guide and download page can be found here: [Get Intel GPU Drivers](https://www.intel.com/content/www/us/en/products/docs/discrete-gpus/arc/software/drivers.html).
 
-2. Install Visual Studio
+### Option 1: download the binary package directly
+
+Download the binary package for Windows from: https://github.com/ggml-org/llama.cpp/releases.
+
+Extract the package to local folder, run the llama tools directly. Refer to [Run the inference](#iii-run-the-inference-1).
+
+Note, the package includes the SYCL running time and all depended dll files, no need to install oneAPI package and activte them.
+
+### Option 2: build locally from the source code.
+
+#### I. Setup environment
+
+1. Install Visual Studio
 
 If you already have a recent version of Microsoft Visual Studio, you can skip this step. Otherwise, please refer to the official download page for [Microsoft Visual Studio](https://visualstudio.microsoft.com/).
 
-3. Install Intel® oneAPI Base toolkit
+2. Install Intel® oneAPI Base toolkit
 
 SYCL backend depends on:
   - Intel® oneAPI DPC++/C++ compiler/running-time.
@@ -429,7 +444,7 @@ In the oneAPI command line, run the following to print the available SYCL device
 sycl-ls.exe
 ```
 
-There should be one or more *level-zero* GPU devices displayed as **[ext_oneapi_level_zero:gpu]**. Below is example of such output detecting an *intel Iris Xe* GPU as a Level-zero SYCL device:
+There should be one or more *level-zero* GPU devices displayed as **[ext_oneapi_level_zero:gpu]**. Below is example of such output detecting an *Intel Iris Xe* GPU as a Level-zero SYCL device:
 
 Output (example):
 ```
@@ -439,25 +454,25 @@ Output (example):
 [ext_oneapi_level_zero:gpu:0] Intel(R) Level-Zero, Intel(R) Iris(R) Xe Graphics 1.3 [1.3.28044]
 ```
 
-4. Install build tools
+3. Install build tools
 
 a. Download & install cmake for Windows: https://cmake.org/download/ (CMake can also be installed from Visual Studio Installer)
 b. The new Visual Studio will install Ninja as default. (If not, please install it manually: https://ninja-build.org/)
 
 
-### II. Build llama.cpp
+#### II. Build llama.cpp
 
 You could download the release package for Windows directly, which including binary files and depended oneAPI dll files.
 
 Choose one of following methods to build from source code.
 
-#### 1. Script
+##### Option 1: Script
 
 ```sh
 .\examples\sycl\win-build-sycl.bat
 ```
 
-#### 2. CMake
+##### Option 2: CMake
 
 On the oneAPI command line window, step into the llama.cpp main directory and run the following:
 
@@ -486,7 +501,7 @@ cmake --preset x64-windows-sycl-debug
 cmake --build build-x64-windows-sycl-debug -j --target llama-completion
 ```
 
-#### 3. Visual Studio
+##### Option 3: Visual Studio
 
 You have two options to use Visual Studio to build llama.cpp:
 - As CMake Project using CMake presets.
@@ -496,7 +511,7 @@ You have two options to use Visual Studio to build llama.cpp:
 
 All following commands are executed in PowerShell.
 
-##### - Open as a CMake Project
+###### - Open as a CMake Project
 
 You can use Visual Studio to open the `llama.cpp` folder directly as a CMake project. Before compiling, select one of the SYCL CMake presets:
 
@@ -511,7 +526,7 @@ You can use Visual Studio to open the `llama.cpp` folder directly as a CMake pro
     cmake --build build --config Release -j --target llama-completion
     ```
 
-##### - Generating a Visual Studio Solution
+###### - Generating a Visual Studio Solution
 
 You can use Visual Studio solution to build and work on llama.cpp on Windows. You need to convert the CMake Project into a `.sln` file.
 
@@ -599,7 +614,7 @@ found 2 SYCL devices:
 
 ```
 
-#### Choose level-zero devices
+##### Choose level-zero devices
 
 |Chosen Device ID|Setting|
 |-|-|
@@ -607,14 +622,22 @@ found 2 SYCL devices:
 |1|`set ONEAPI_DEVICE_SELECTOR="level_zero:1"`|
 |0 & 1|`set ONEAPI_DEVICE_SELECTOR="level_zero:0;level_zero:1"` or `set ONEAPI_DEVICE_SELECTOR="level_zero:*"`|
 
-#### Execute
+##### Execute
 
 Choose one of following methods to run.
 
 1. Script
 
+- Run test:
+
 ```
 examples\sycl\win-test.bat
+```
+
+- Run llama-server:
+
+```
+examples\sycl\win-start-svr.bat -m PATH\MODEL_FILE
 ```
 
 2. Command line
@@ -665,7 +688,7 @@ use 1 SYCL GPUs: [0] with Max compute units:512
 
 ## Environment Variable
 
-#### Build
+### Build
 
 | Name               | Value                                 | Function                                    |
 |--------------------|---------------------------------------|---------------------------------------------|
@@ -673,29 +696,69 @@ use 1 SYCL GPUs: [0] with Max compute units:512
 | GGML_SYCL_TARGET   | INTEL *(default)*                     | Set the SYCL target device type.            |
 | GGML_SYCL_DEVICE_ARCH | Optional                           | Set the SYCL device architecture. Setting the device architecture can improve the performance. See the table [--offload-arch](https://github.com/intel/llvm/blob/sycl/sycl/doc/design/OffloadDesign.md#--offload-arch) for a list of valid architectures. |
 | GGML_SYCL_F16      | OFF *(default)* \|ON *(optional)*     | Enable FP16 build with SYCL code path. (1.) |
-| GGML_SYCL_GRAPH    | OFF *(default)* \|ON *(Optional)*     | Enable build with [SYCL Graph extension](https://github.com/intel/llvm/blob/sycl/sycl/doc/extensions/experimental/sycl_ext_oneapi_graph.asciidoc). |
+| GGML_SYCL_GRAPH    | ON *(default)* \|OFF *(Optional)*     | Enable build with [SYCL Graph extension](https://github.com/intel/llvm/blob/sycl/sycl/doc/extensions/experimental/sycl_ext_oneapi_graph.asciidoc). |
 | GGML_SYCL_DNN      | ON *(default)* \|OFF *(Optional)*     | Enable build with oneDNN.                   |
+| GGML_SYCL_HOST_MEM_FALLBACK | ON *(default)* \|OFF *(Optional)* | Allow host memory fallback when device memory is full during quantized weight reorder. Enables inference to continue at reduced speed (reading over PCIe) instead of failing. Requires Linux kernel 6.8+. |
+| GGML_SYCL_SUPPORT_LEVEL_ZERO | ON *(default)* \|OFF *(Optional)* | Enable Level Zero API for device memory allocation. Requires Level Zero headers/library at build time and Intel GPU driver (Level Zero runtime) at run time. Reduces system RAM usage during multi-GPU inference. |
 | CMAKE_C_COMPILER   | `icx` *(Linux)*, `icx/cl` *(Windows)* | Set `icx` compiler for SYCL code path.      |
 | CMAKE_CXX_COMPILER | `icpx` *(Linux)*, `icx` *(Windows)*   | Set `icpx/icx` compiler for SYCL code path. |
 
 1. FP32 or FP16 have different performance impact to LLM. Recommended to test them for better prompt processing performance on your models. You need to rebuild the code after change `GGML_SYCL_F16=OFF/ON`.
 
-#### Runtime
+### Runtime
 
 | Name              | Value            | Function                                                                                                                  |
 |-------------------|------------------|---------------------------------------------------------------------------------------------------------------------------|
 | GGML_SYCL_DEBUG   | 0 (default) or 1 | Enable log function by macro: GGML_SYCL_DEBUG                                                                             |
-| GGML_SYCL_DISABLE_OPT | 0 (default) or 1 | Disable optimize features for Intel GPUs. (Recommended to 1 for intel devices older than Gen 10) |
+| GGML_SYCL_ENABLE_FLASH_ATTN | 1 (default) or 0| Enable Flash-Attention. It can reduce memory usage. The performance impact depends on the LLM.|
+| GGML_SYCL_DISABLE_OPT | 0 (default) or 1 | Disable optimize features for Intel GPUs. (Recommended to 1 for Intel devices older than Gen 10) |
 | GGML_SYCL_DISABLE_GRAPH | 0 or 1 (default) | Disable running computations through SYCL Graphs feature. Disabled by default because SYCL Graph is still on development, no better performance. |
+| GGML_SYCL_ENABLE_LEVEL_ZERO | 1 (default) or 0 | Use Level Zero API for device memory allocation instead of SYCL. Reduces system RAM usage on Intel dGPUs by avoiding DMA-buf/TTM host memory staging. Requires GGML_SYCL_SUPPORT_LEVEL_ZERO=ON at build time. |
 | GGML_SYCL_DISABLE_DNN | 0 (default) or 1 | Disable running computations through oneDNN and always use oneMKL. |
+| GGML_SYCL_ENABLE_VMM | 0 or 1 (default) | Enable the virtual-memory device pool. |
 | ZES_ENABLE_SYSMAN | 0 (default) or 1 | Support to get free memory of GPU by sycl::aspect::ext_intel_free_memory.<br>Recommended to use when --split-mode = layer |
-| UR_L0_ENABLE_RELAXED_ALLOCATION_LIMITS | 0 (default) or 1 | Support malloc device memory more than 4GB.|
+| UR_L0_ENABLE_RELAXED_ALLOCATION_LIMITS | 0 (default) or 1 | Allow SYCL/Unified Runtime Level Zero device allocations larger than 4 GiB. llama.cpp's direct Level Zero allocation path requests the relaxed maximum-size limit itself when GGML_SYCL_ENABLE_LEVEL_ZERO=1. |
 
+## Compile-time Flags
 
+Pass these via `CXXFLAGS` or add a one-off `#define` to enable a flag on the spot.
+
+| Name            | Function                                                                         |
+|-----------------|----------------------------------------------------------------------------------|
+| DEBUG_SYCL_POOL | Enable device memory pool logging on teardown. Useful for profiling allocations. |
+| DEBUG_SYCL_MALLOC | Enable verbose per-call logging of device pool alloc/free operations. |
+
+## Design Rule
+
+- Open to all contributors.
+
+- All code change should be useful to user:
+    - Fix bug.
+    - Add new function.
+    - Improve the performance/usage.
+    - Make code be easy to maintain.
+    - ...
+
+- Don't accept the codes of following cases:
+    - Break legacy function.
+    - Reduce the performance of legacy case in default.
+    - Not completed work/the functionality cannot be demonstrated.
+
+- Encourage to use environment variable to control features to be opened/closed.
+    - User can evaluate the feature without rebuild the code.
+    - Recommend the best features to user by setting them be opened as default.
+
+- Design the code based on the published official releases of oneAPI packages: compiler, library, driver, OS kernel.
+
+- Developers need to maintain the code they submit.
 
 ## Known Issues
 
 - `Split-mode:[row]` is not supported.
+
+- Missed the AOT (Ahead-of-Time) in building.
+  - Good: Builds quickly, smaller size of binary file.
+  - Bad: The startup is slow (JIT) in first time, but subsequent performance is unaffected.
 
 ## Q&A
 
@@ -708,7 +771,7 @@ use 1 SYCL GPUs: [0] with Max compute units:512
 
   - Remove **build** folder or try a clean-build.
 
-- I can **not** see `[ext_oneapi_level_zero:gpu]` afer installing the GPU driver on Linux.
+- I can **not** see `[ext_oneapi_level_zero:gpu]` after installing the GPU driver on Linux.
 
   Please double-check with `sudo sycl-ls`.
 
@@ -739,14 +802,14 @@ use 1 SYCL GPUs: [0] with Max compute units:512
 
 - `ggml_backend_sycl_buffer_type_alloc_buffer: can't allocate 5000000000 Bytes of memory on device`
 
-  You need to enable to support 4GB memory malloc by:
+  With the default `GGML_SYCL_ENABLE_LEVEL_ZERO=1`, llama.cpp requests Level Zero's relaxed maximum-size allocation limit directly. If Level Zero support is disabled at build time or runtime and the allocation goes through SYCL/Unified Runtime instead, enable support for allocations larger than 4 GiB by:
   ```
     export UR_L0_ENABLE_RELAXED_ALLOCATION_LIMITS=1
     set UR_L0_ENABLE_RELAXED_ALLOCATION_LIMITS=1
   ```
 
 ### **GitHub contribution**:
-Please add the `SYCL :` prefix/tag in issues/PRs titles to help the SYCL contributors to check/address them without delay.
+Please add the `[SYCL]` prefix/tag in issues/PRs titles to help the SYCL contributors to check/address them without delay.
 
 ## TODO
 

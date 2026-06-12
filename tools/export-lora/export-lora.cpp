@@ -5,6 +5,7 @@
 #include "arg.h"
 #include "common.h"
 
+#include <clocale>
 #include <map>
 #include <vector>
 #include <string>
@@ -411,9 +412,13 @@ static void print_usage(int, char ** argv) {
 }
 
 int main(int argc, char ** argv) {
+    std::setlocale(LC_NUMERIC, "C");
+
     common_params params;
 
     params.out_file = "ggml-lora-merged-f16.gguf";
+
+    common_init();
 
     if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_EXPORT_LORA, print_usage)) {
         return 1;

@@ -63,10 +63,9 @@ set(GGML_OPENCL_KERNELS
     cpy
     cvt
     diag_mask_inf
+    diag
     div
     gelu
-    gemv_noshuffle_general
-    gemv_noshuffle
     get_rows
     glu
     group_norm
@@ -74,7 +73,6 @@ set(GGML_OPENCL_KERNELS
     im2col_f32
     im2col_f16
     mean
-    mul_mat_Ab_Bi_8x4
     mul_mv_f16_f16
     mul_mv_f16_f32_1row
     mul_mv_f16_f32_l4
@@ -88,10 +86,19 @@ set(GGML_OPENCL_KERNELS
     mul_mv_q4_1_f32
     mul_mv_q4_1_f32_flat
     mul_mv_q4_k_f32
+    mul_mv_q4_k_f32_flat
+    mul_mv_q5_0_f32
+    mul_mv_q5_0_f32_flat
+    mul_mv_q5_1_f32
+    mul_mv_q5_1_f32_flat
+    mul_mv_q5_k_f32
+    mul_mv_q5_k_f32_flat
     mul_mv_q6_k_f32
     mul_mv_q6_k_f32_flat
     mul_mv_q8_0_f32
     mul_mv_q8_0_f32_flat
+    mul_mv_iq4_nl_f32
+    mul_mv_iq4_nl_f32_flat
     mul_mv_mxfp4_f32
     mul_mv_mxfp4_f32_flat
     mul_mv_id_q4_0_f32_8x_flat
@@ -99,19 +106,61 @@ set(GGML_OPENCL_KERNELS
     mul_mv_id_q8_0_f32_flat
     mul_mv_id_mxfp4_f32
     mul_mv_id_mxfp4_f32_flat
+    gemm_moe_q4_0_f32_ns
+    gemv_moe_q4_0_f32_ns
+    gemm_moe_q4_1_f32_ns
+    gemv_moe_q4_1_f32_ns
+    gemm_moe_q5_0_f32_ns
+    gemv_moe_q5_0_f32_ns
+    gemm_moe_q5_1_f32_ns
+    gemv_moe_q5_1_f32_ns
+    gemm_moe_q4_k_f32_ns
+    gemv_moe_q4_k_f32_ns
+    gemm_moe_q5_k_f32_ns
+    gemv_moe_q5_k_f32_ns
+    gemm_moe_q6_k_f32_ns
+    gemv_moe_q6_k_f32_ns
     gemm_moe_mxfp4_f32
     gemv_moe_mxfp4_f32
+    gemm_moe_mxfp4_f32_ns
+    gemv_moe_mxfp4_f32_ns
+    moe_reorder_b
+    moe_sort_by_expert
     mul_mm_f32_f32_l4_lm
     mul_mm_f16_f32_l4_lm
     mul_mm_q4_0_f32_l4_lm
     mul_mm_q4_1_f32_l4_lm
+    mul_mm_q5_0_f32_l4_lm
+    mul_mm_q5_1_f32_l4_lm
     mul_mm_q8_0_f32_l4_lm
+    mul_mm_iq4_nl_f32_l4_lm
+    mul_mm_q4_k_f32_l4_lm
+    mul_mm_q5_k_f32_l4_lm
     mul_mm_q6_k_f32_l4_lm
-    mul_mm_q8_0_f32_8x4
-    gemv_noshuffle_general_q8_0_f32
+    gemv_noshuffle_q4_0_f32
+    gemv_noshuffle_q4_0_f32_spec
+    gemm_noshuffle_q4_0_f32
+    gemv_noshuffle_q4_1_f32
+    gemm_noshuffle_q4_1_f32
+    gemv_noshuffle_q5_0_f32
+    gemm_noshuffle_q5_0_f32
+    gemv_noshuffle_q5_1_f32
+    gemm_noshuffle_q5_1_f32
+    gemv_noshuffle_iq4_nl_f32
+    gemm_noshuffle_iq4_nl_f32
+    gemv_noshuffle_q8_0_f32
+    gemm_noshuffle_q8_0_f32
+    gemv_noshuffle_q4_k_f32
+    gemm_noshuffle_q4_k_f32
+    gemv_noshuffle_q6_k_f32
+    gemm_noshuffle_q6_k_f32
+    gemv_noshuffle_q5_k_f32
+    gemm_noshuffle_q5_k_f32
     mul
+    neg
     norm
     relu
+    l2_norm
     rms_norm
     rope
     scale
@@ -125,13 +174,16 @@ set(GGML_OPENCL_KERNELS
     sqr
     sqrt
     ssm_conv
+    gated_delta_net
     sub
     sum_rows
+    cumsum
     transpose
     concat
     tsembd
     upscale
     tanh
+    exp
     expm1
     softplus
     pad
@@ -144,6 +196,10 @@ set(GGML_OPENCL_KERNELS
     flash_attn_f16
     flash_attn_f32
 )
+
+if (GGML_OPENCL_USE_ADRENO_KERNELS)
+    list(APPEND GGML_OPENCL_KERNELS gemm_xmem_f16_f32_os8)
+endif ()
 
 foreach (K ${GGML_OPENCL_KERNELS})
     ggml_opencl_add_kernel(${K})

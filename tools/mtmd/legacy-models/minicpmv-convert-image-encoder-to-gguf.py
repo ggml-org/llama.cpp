@@ -186,7 +186,7 @@ def trunc_normal_tf_(
     best when :math:`a \\leq \text{mean} \\leq b`.
     NOTE: this 'tf' variant behaves closer to Tensorflow / JAX impl where the
     bounds [a, b] are applied when sampling the normal distribution with mean=0, std=1.0
-    and the result is subsquently scaled and shifted by the mean and std args.
+    and the result is subsequently scaled and shifted by the mean and std args.
     Args:
         tensor: an n-dimensional `torch.Tensor`
         mean: the mean of the normal distribution

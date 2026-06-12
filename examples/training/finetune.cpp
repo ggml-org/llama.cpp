@@ -3,6 +3,7 @@
 #include "log.h"
 #include "llama.h"
 
+#include <clocale>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -14,8 +15,12 @@
 #endif
 
 int main(int argc, char ** argv) {
+    std::setlocale(LC_NUMERIC, "C");
+
     common_params params;
     params.escape = false;
+
+    common_init();
 
     if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_FINETUNE)) {
         return 1;
@@ -35,7 +40,6 @@ int main(int argc, char ** argv) {
         params.cache_type_v = GGML_TYPE_F32;
     }
 
-    common_init();
     llama_backend_init();
     llama_numa_init(params.numa);
     // load the model and apply lora adapter, if any

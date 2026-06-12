@@ -6,6 +6,7 @@
 #include "llama.h"
 #include "chat.h"
 
+#include <clocale>
 #include <cstdio>
 #include <cstring>
 #include <ctime>
@@ -32,12 +33,8 @@
 #endif
 
 static llama_context           ** g_ctx;
-static llama_model             ** g_model;
 static common_sampler          ** g_smpl;
 static common_params            * g_params;
-static std::vector<llama_token> * g_input_tokens;
-static std::ostringstream       * g_output_ss;
-static std::vector<llama_token> * g_output_tokens;
 static bool is_interacting  = false;
 static bool need_insert_eot = false;
 
@@ -83,15 +80,20 @@ static void sigint_handler(int signo) {
 }
 #endif
 
-int main(int argc, char ** argv) {
+// satisfies -Wmissing-declarations
+int llama_completion(int argc, char ** argv);
+
+int llama_completion(int argc, char ** argv) {
+    std::setlocale(LC_NUMERIC, "C");
+
     common_params params;
     g_params = &params;
+
+    common_init();
 
     if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_COMPLETION, print_usage)) {
         return 1;
     }
-
-    common_init();
 
     auto & sparams = params.sampling;
 
@@ -130,7 +132,6 @@ int main(int argc, char ** argv) {
     llama_context * ctx = nullptr;
     common_sampler * smpl = nullptr;
 
-    g_model = &model;
     g_ctx = &ctx;
     g_smpl = &smpl;
 
@@ -305,6 +306,7 @@ int main(int argc, char ** argv) {
                 inputs.use_jinja = g_params->use_jinja;
                 inputs.messages = chat_msgs;
                 inputs.add_generation_prompt = !params.prompt.empty();
+                inputs.force_pure_content = params.force_pure_content_parser;
 
                 prompt = common_chat_templates_apply(chat_templates.get(), inputs).prompt;
             }
@@ -366,17 +368,11 @@ int main(int argc, char ** argv) {
                         __func__, n_match, embd_inp.size());
             }
 
-            if (session_tokens.size() == n_match) {
-                // [TAG_CONTEXT_STATE_LOGITS]
-                // in this case, we are going to reuse the logits from the session
-                // if we ever decide to remove the logits from the session, we need to handle this somehow
-                // ref: https://github.com/ggml-org/llama.cpp/pull/18862#issuecomment-3756330941
-            }
-
             // remove any "future" tokens that we might have inherited from the previous session
             if (session_tokens.size() > n_match) {
-                if (!llama_memory_seq_rm(mem, -1, n_match, -1)) {
-                    LOG_WRN("%s: unable to resuse common prefix (for example, when the memory is recurrent)\n", __func__);
+                llama_pos pos = n_match > 0 ? (llama_pos)(n_match - 1) : 0;
+                if (!llama_memory_seq_rm(mem, -1, pos, -1)) {
+                    LOG_WRN("%s: unable to reuse common prefix (for example, when the memory is recurrent)\n", __func__);
                     llama_memory_clear(mem, true);
                     session_tokens.clear();
                     n_match = 0;
@@ -391,7 +387,7 @@ int main(int argc, char ** argv) {
         // Logits are not stored as part of the session state so we need to
         // "replay" the last token to get logits for sampling.
         if (!session_tokens.empty() && n_match > 0 && n_match == session_tokens.size()) {
-            if (!common_replay_last_token(ctx, session_tokens.back(), n_match)) {
+            if (!common_replay_last_token(ctx, session_tokens.back(), n_match - 1)) {
                 return 1;
             }
 
@@ -548,9 +544,9 @@ int main(int argc, char ** argv) {
     int n_consumed         = 0;
     int n_session_consumed = 0;
 
-    std::vector<int>   input_tokens;  g_input_tokens  = &input_tokens;
-    std::vector<int>   output_tokens; g_output_tokens = &output_tokens;
-    std::ostringstream output_ss;     g_output_ss     = &output_ss;
+    std::vector<int>   input_tokens;
+    std::vector<int>   output_tokens;
+    std::ostringstream output_ss;
     std::ostringstream assistant_ss; // for storing current assistant message, used in conversation mode
 
     // the first thing we will do is to output the prompt, so set color accordingly
@@ -688,12 +684,14 @@ int main(int argc, char ** argv) {
             if (!embd.empty()) {
                 const bool is_last_batch = (n_consumed >= (int) embd_inp.size());
                 const bool save_now = session_do_save && is_last_batch;
-                if (!common_prompt_batch_decode(ctx, embd, n_past, params.n_batch, path_session, save_now)) {
+                session_tokens.insert(session_tokens.end(), embd.begin(), embd.end());
+                if (!common_prompt_batch_decode(ctx, session_tokens, embd.size(), n_past, params.n_batch, path_session, save_now)) {
                     return 1;
                 }
-                session_tokens.insert(session_tokens.end(), embd.begin(), embd.begin());
-                n_session_consumed = session_tokens.size();
-                session_do_save = false;
+                n_session_consumed += embd.size();
+                if (save_now) {
+                    session_do_save = false;
+                }
 
                 LOG_DBG("n_past = %d\n", n_past);
 
@@ -984,7 +982,10 @@ int main(int argc, char ** argv) {
 
     if (!path_session.empty() && params.prompt_cache_all && !params.prompt_cache_ro) {
         LOG("\n%s: saving final output to session file '%s'\n", __func__, path_session.c_str());
+        session_tokens.insert(session_tokens.end(), embd.begin(), embd.end());
         llama_state_save_file(ctx, path_session.c_str(), session_tokens.data(), session_tokens.size());
+        LOG_INF("saved final session to %s, n_tokens = %zu\n", path_session.data(), session_tokens.size());
+
     }
 
     LOG("\n\n");
