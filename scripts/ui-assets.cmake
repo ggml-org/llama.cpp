@@ -260,14 +260,11 @@ function(emit_files dist_dir)
 
     set(args "${UI_CPP}" "${UI_H}")
     if(present)
-        # Embed every file in dist_dir. Embedded names are dist_dir-relative,
-        # matching the exact paths index.html and sw.js reference (including
-        # the hash-named _app/immutable/* bundles and workbox-*.js).
-        file(GLOB_RECURSE dist_files RELATIVE "${dist_dir}" "${dist_dir}/*")
-        list(SORT dist_files)
-        foreach(rel ${dist_files})
-            list(APPEND args "${rel}" "${dist_dir}/${rel}")
-        endforeach()
+        # llama-ui-embed embeds every file under dist_dir; embedded names are
+        # dist_dir-relative, matching the exact paths index.html and sw.js
+        # reference (including the hash-named _app/immutable/* bundles and
+        # workbox-*.js). Without the dir it emits an empty asset table.
+        list(APPEND args "${dist_dir}")
     endif()
 
     # Create build.json with the llama.cpp build number for UI version display.

@@ -1,11 +1,17 @@
 // llama-ui-embed: generate ui.cpp / ui.h that embed UI assets as C arrays.
 //
 // Usage:
-//   llama-ui-embed <out_cpp> <out_h> [<asset_name> <asset_path>]...
+//   llama-ui-embed <out_cpp> <out_h> [<asset_dir>]
+//
+// Embeds every regular file under <asset_dir>. Asset names are the
+// dir-relative paths with forward slashes. Without <asset_dir>, emits an
+// empty asset table.
 
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
+#include <algorithm>
+#include <filesystem>
 #include <fstream>
 #include <string>
 #include <vector>
@@ -24,10 +30,10 @@ static uint64_t fnv_hash(const uint8_t * data, size_t len) {
     return hash;
 }
 
-static bool read_file(const std::string & path, std::vector<unsigned char> & out) {
+static bool read_file(const std::filesystem::path & path, std::vector<unsigned char> & out) {
     std::ifstream f(path, std::ios::binary | std::ios::ate);
     if (!f) {
-        fprintf(stderr, "embed: cannot open %s\n", path.c_str());
+        fprintf(stderr, "embed: cannot open %s\n", path.string().c_str());
         return false;
     }
     const auto sz = f.tellg();
@@ -89,15 +95,43 @@ static std::string fmt(const char * pattern, ...) {
     return (n > 0) ? std::string(tmp, static_cast<size_t>(n)) : std::string();
 }
 
+struct asset_entry {
+    std::string           name;
+    std::filesystem::path path;
+};
+
 int main(int argc, char ** argv) {
-    if (argc < 3 || ((argc - 3) % 2) != 0) {
-        fprintf(stderr, "usage: %s <out_cpp> <out_h> [<name> <path>]...\n", argv[0]);
+    if (argc < 3 || argc > 4) {
+        fprintf(stderr, "usage: %s <out_cpp> <out_h> [<asset_dir>]\n", argv[0]);
         return 1;
     }
 
     const std::string out_cpp = argv[1];
     const std::string out_h   = argv[2];
-    const int n_assets = (argc - 3) / 2;
+
+    std::vector<asset_entry> assets;
+    if (argc == 4) {
+        const std::filesystem::path dir = argv[3];
+
+        std::error_code ec;
+        std::filesystem::recursive_directory_iterator it(dir, ec);
+        if (ec) {
+            fprintf(stderr, "embed: cannot iterate %s: %s\n", argv[3], ec.message().c_str());
+            return 1;
+        }
+        for (const auto & entry : it) {
+            if (!entry.is_regular_file()) {
+                continue;
+            }
+            assets.push_back({ entry.path().lexically_relative(dir).generic_string(), entry.path() });
+        }
+
+        // directory iteration order is unspecified; sort for reproducible output
+        std::sort(assets.begin(), assets.end(),
+                  [](const asset_entry & a, const asset_entry & b) { return a.name < b.name; });
+    }
+
+    const int n_assets = static_cast<int>(assets.size());
 
     std::string h;
     h += "#pragma once\n\n#include <stddef.h>\n\n";
@@ -118,9 +152,8 @@ int main(int argc, char ** argv) {
 
     if (n_assets > 0) {
         for (int i = 0; i < n_assets; i++) {
-            const char * path = argv[3 + i * 2 + 1];
             std::vector<unsigned char> bytes;
-            if (!read_file(path, bytes)) {
+            if (!read_file(assets[i].path, bytes)) {
                 return 1;
             }
             cpp += fmt("static const unsigned char asset_%d_data[] = {", i);
@@ -136,7 +169,7 @@ int main(int argc, char ** argv) {
         cpp += "static const llama_ui_asset g_assets[] = {\n";
         for (int i = 0; i < n_assets; i++) {
             cpp += fmt("    { \"%s\", asset_%d_data, asset_%d_size, asset_%d_etag },\n",
-                       argv[3 + i * 2], i, i, i);
+                       assets[i].name.c_str(), i, i, i);
         }
         cpp += "};\n\n";
 
