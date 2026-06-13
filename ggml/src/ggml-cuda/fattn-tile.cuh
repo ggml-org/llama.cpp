@@ -822,9 +822,9 @@ static __global__ void flash_attn_tile(
     // Skip unused kernel variants for faster compilation:
 
     if (
-#ifdef GGML_USE_WMMA_FATTN
+#if defined(GGML_USE_WMMA_FATTN) && !defined(RDNA3_5)
             (ncols2 != 1 && DV != 40 && DV != 72 && DV != 512) ||
-#endif // GGML_USE_WMMA_FATTN
+#endif // defined(GGML_USE_WMMA_FATTN) && !defined(RDNA3_5)
             (use_logit_softcap && !(DV == 128 || DV == 256 || DV == 512))
     ) {
         GGML_UNUSED_VARS(Q, K, V, mask, sinks, KV_max, dst, dst_meta, scale,

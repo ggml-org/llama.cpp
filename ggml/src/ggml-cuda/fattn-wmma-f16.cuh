@@ -28,7 +28,7 @@ static bool ggml_cuda_should_use_wmma_fattn(const int cc) {
     return false;
 #else
     if ((GGML_CUDA_CC_IS_NVIDIA(cc) && ggml_cuda_highest_compiled_arch(cc) == GGML_CUDA_CC_VOLTA) ||
-        GGML_CUDA_CC_IS_RDNA3(cc) || GGML_CUDA_CC_IS_MTHREADS(cc)) {
+        GGML_CUDA_CC_IS_RDNA3_0(cc) || GGML_CUDA_CC_IS_MTHREADS(cc)) {
         return true;
     } else if (GGML_CUDA_CC_IS_CDNA(cc)){
 #if defined(GGML_HIP_ROCWMMA_FATTN) && (ROCWMMA_VERSION_MAJOR < 2 || ROCWMMA_VERSION_MINOR > 0 || ROCWMMA_VERSION_PATCH > 0)
