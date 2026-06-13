@@ -32,20 +32,13 @@ jobs:
       - name: Build application
         env:
           HF_UI_VERSION: ${{ inputs.hf_ui_version || '' }}
-          LLAMA_UI_VERSION: ${{ inputs.hf_ui_version || 'b0000' }}
+          LLAMA_BUILD_NUMBER: ${{ inputs.hf_ui_version || 'b0000' }}
         run: npm run build
         working-directory: tools/ui
 
       - name: Run PWA unit tests (versioned build output)
         run: npx vitest --project=unit --run tests/unit/pwa.spec.ts
         working-directory: tools/ui
-
-      - name: Generate checksums
-        run: |
-          cd tools/ui/dist
-          for f in *; do
-            sha256sum "$f" | awk '{print $1, $2}' >> checksums.txt
-          done
 
       - name: Upload built UI
         uses: actions/upload-artifact@v6

@@ -23,8 +23,7 @@ export function buildInfoPlugin(): Plugin {
 					if (processed) return;
 					processed = true;
 
-					const buildNumber = process.env.LLAMA_BUILD_NUMBER;
-					if (!buildNumber) return;
+					const buildNumber = process.env.LLAMA_BUILD_NUMBER || 'b0000';
 
 					const outDir = resolve(OUTPUT_DIR);
 					const indexPath = resolve(outDir, 'index.html');

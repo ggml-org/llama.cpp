@@ -1,6 +1,6 @@
 set(TARGET llama-ui)
 
-set(LLAMA_UI_HF_BUCKET "llama-ui" CACHE STRING "Hugging Face bucket name for prebuilt UI assets")
+set(LLAMA_UI_HF_BUCKET "ggml-org/llama-ui" CACHE STRING "Hugging Face bucket name for prebuilt UI assets")
 
 # Backward compat: forward old var to new one
 if(DEFINED LLAMA_BUILD_WEBUI)
