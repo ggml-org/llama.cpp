@@ -435,6 +435,24 @@ static void test_expressions(testing & t) {
         "('c', 'b', 'a')"
     );
 
+    test_template(t, "string slice negative step",
+        "{{ 'abcdef'[::-2] }}",
+        json::object(),
+        "fdb"
+    );
+
+    test_template(t, "string slice negative start and step",
+        "{{ 'abcdef'[-1:1:-1] }}",
+        json::object(),
+        "fedc"
+    );
+
+    test_template(t, "string slice negative start, stop and step",
+        "{{ 'abcdef'[-1:-5:-1] }}",
+        json::object(),
+        "fedc"
+    );
+
     test_template(t, "arithmetic",
         "{{ (a + b) * c }}",
         {{"a", 2}, {"b", 3}, {"c", 4}},

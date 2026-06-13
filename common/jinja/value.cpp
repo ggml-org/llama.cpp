@@ -90,14 +90,14 @@ static T slice(const T & array, int64_t start, int64_t stop, int64_t step = 1) {
             stop_val = std::min(stop_val, len);
         }
     } else {
-        start_val = len - 1;
+        start_val = start;
         if (start_val < 0) {
-            start_val = std::max(len + start_val, (int64_t)-1);
+            start_val = std::max(len + start_val, (int64_t)0);
         } else {
             start_val = std::min(start_val, len - 1);
         }
 
-        stop_val = -1;
+        stop_val = stop;
         if (stop_val < -1) {
             stop_val = std::max(len + stop_val, (int64_t)-1);
         } else {
