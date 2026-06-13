@@ -80,6 +80,8 @@ struct server_slot {
 
     // multimodal
     mtmd_context * mctx = nullptr;
+    mtmd::batch_ptr mbatch = nullptr;
+    std::array<llama_context *, 2> mtgt = {nullptr, nullptr}; // [0] for main context, [1] for optional draft context
 
     // speculative decoding
     common_speculative * spec;
@@ -239,6 +241,18 @@ struct server_slot {
 
         // clear alora start
         alora_invocation_start = -1;
+
+        // clear multimodal state
+        mbatch.reset();
+        mtgt[0] = ctx_tgt;
+        mtgt[1] = nullptr;
+        if (ctx_dft && llama_get_ctx_other(ctx_dft) != ctx_tgt) {
+            // TODO: in the future, figure out how to infuse target embeddings to the images
+            //       for now, we re-decode the same chunk in both ctx_tgt and ctx_dft
+            //       maybe we simply need to call `common_speculative_process()` ?
+            //       [TAG_MTMD_DRAFT_PROCESSING]
+            mtgt[1] = ctx_dft;
+        }
     }
 
     void init_sampler() const {
@@ -578,6 +592,87 @@ struct server_slot {
         other.prompt = prompt.clone();
         other.init_sampler();
     }
+
+    // returns 0 on success
+    // caller need to update prompt.tokens after a successful call to keep track of the processing progress
+    int process_mtmd_chunk(size_t idx, size_t & n_tokens_out) {
+        GGML_ASSERT(mctx);
+        const auto & input_tokens = task->tokens;
+        auto & chunk = input_tokens.find_chunk(idx);
+        int32_t res = 0;
+
+        auto try_decode = [&]() -> int32_t {
+            if (mbatch) {
+                float * embd = mtmd_batch_get_output_embd(mbatch.get(), chunk.get());
+                if (embd) {
+                    for (auto * lctx : mtgt) {
+                        if (lctx == nullptr) {
+                            continue;
+                        }
+                        llama_pos new_n_past; // unused for now
+                        res = mtmd_helper_decode_image_chunk(
+                            mctx,
+                            lctx,
+                            chunk.get(),
+                            embd,
+                            prompt.tokens.pos_next(),
+                            id,
+                            llama_n_batch(lctx),
+                            &new_n_past
+                        );
+                        if (res != 0) {
+                            SLT_ERR(*this, "failed to decode mtmd chunk, idx = %zu, res = %d\n", idx, res);
+                            return -1;
+                        }
+                    }
+                    n_tokens_out = mtmd_input_chunk_get_n_tokens(chunk.get());
+                    return 0; // success
+                }
+            }
+            return 1; // (non-error) need to create & encode batch
+        };
+
+        // if the batch is already exist, try searching & encode
+        res = try_decode();
+        if (res == 0) {
+            return 0;
+        } else if (res < 0) {
+            // fatal error
+            return res;
+        }
+
+        // otherwise, the batch is either uninitialized or is used up
+        // we need to create & encode a new batch
+        mbatch.reset(mtmd_batch_init(mctx));
+        res = mtmd_batch_add_chunk(mbatch.get(), chunk.get());
+        GGML_ASSERT(res == 0); // we should never have an empty batch
+
+        // try batching as much as possible
+        int n_added = 1;
+        size_t idx_cur = idx;
+        while (res == 0) {
+            auto [next_chunk, next_idx] = input_tokens.find_next_media_chunk(idx_cur);
+            if (next_chunk == nullptr) {
+                break;
+            }
+            res = mtmd_batch_add_chunk(mbatch.get(), next_chunk->get());
+            n_added += (res == 0 ? 1 : 0);
+            idx_cur = next_idx;
+            SLT_DBG(*this, "try adding media chunk idx = %zu to batch, res = %d\n", next_idx, res);
+            // if res != 0, batch is full or chunk is not compatible -> this loop breaks
+        }
+
+        // TODO @ngxson : move this log line to debug when it become more stable
+        SLT_INF(*this, "encoding mtmd batch from idx = %zu, n_chunks = %d\n", idx, n_added);
+
+        res = mtmd_batch_encode(mbatch.get());
+        if (res != 0) {
+            SLT_ERR(*this, "failed to encode mtmd batch for chunk idx = %zu, res = %d\n", idx, res);
+            return -1;
+        }
+
+        return try_decode();
+    }
 };
 
 
@@ -781,6 +876,7 @@ private:
             mparams.warmup           = params_base.warmup;
             mparams.image_min_tokens = params_base.image_min_tokens;
             mparams.image_max_tokens = params_base.image_max_tokens;
+            mparams.batch_max_tokens = params_base.mtmd_batch_max_tokens;
             mparams.media_marker     = get_media_marker();
         }
 
@@ -866,10 +962,7 @@ private:
                     }
 
                     for (size_t j = 0; j < devs.size(); ++j) {
-                        const size_t bytes =
-                            (measure_model_bytes ? dmd[j].mb.model : 0) +
-                            dmd[j].mb.context +
-                            dmd[j].mb.compute;
+                        const size_t bytes = (measure_model_bytes ? dmd[j].model : 0) + dmd[j].context + dmd[j].compute;
                         total += bytes;
                         for (size_t i = 0; i < tgt_devices.size(); i++) {
                             if (tgt_devices[i] == devs[j]) {
@@ -2928,7 +3021,7 @@ private:
                                 send_partial_response(slot, {}, false, true);
                             }
                         }
-                    }
+                    } // end of SLOT_STATE_STARTED
 
                     if (!slot.can_split()) {
                         // cannot fit the prompt in the current batch - will try next iter
@@ -2983,10 +3076,18 @@ private:
                     bool has_mtmd = false;
 
                     // check if we should process the image
-                    while (slot.prompt.n_tokens() < slot.task->n_tokens() && input_tokens[slot.prompt.n_tokens()] == LLAMA_TOKEN_NULL) {
+                    while (true) {
+                        auto cur_token_idx = slot.prompt.n_tokens();
+                        if (
+                            cur_token_idx >= slot.task->n_tokens() ||
+                            input_tokens[cur_token_idx] != LLAMA_TOKEN_NULL // encountered a text token
+                        ) {
+                            break;
+                        }
+
                         // process the image
                         size_t n_tokens_out = 0;
-                        int32_t res = input_tokens.process_chunk(ctx_tgt, mctx, slot.prompt.n_tokens(), slot.prompt.tokens.pos_next(), slot.id, n_tokens_out);
+                        int32_t res = slot.process_mtmd_chunk(cur_token_idx, n_tokens_out);
                         if (res != 0) {
                             SLT_ERR(slot, "failed to process image, res = %d\n", res);
                             send_error(slot, "failed to process image", ERROR_TYPE_SERVER);
@@ -2994,22 +3095,11 @@ private:
                             continue;
                         }
 
-                        if (ctx_dft && llama_get_ctx_other(ctx_dft.get()) != ctx_tgt) {
-                            // TODO: in the future, figure out how to infuse target embeddings to the images
-                            //       for now, we skip this for simplicity
-                            //       maybe we simply need to call `common_speculative_process()` on the mtmd batches in the `process_chunk` above?
-                            //       [TAG_MTMD_DRAFT_PROCESSING]
-                            res = input_tokens.process_chunk(ctx_dft.get(), mctx, slot.prompt.n_tokens(), slot.prompt.tokens.pos_next(), slot.id, n_tokens_out);
-                            if (res != 0) {
-                                GGML_ABORT("failed to process multi-modal data on draft context\n");
-                            }
-                        }
-
                         slot.n_prompt_tokens_processed += n_tokens_out;
 
                         // add the image chunk to cache
                         {
-                            const auto & chunk = input_tokens.find_chunk(slot.prompt.n_tokens());
+                            const auto & chunk = input_tokens.find_chunk(cur_token_idx);
                             slot.prompt.tokens.push_back(chunk.get()); // copy
                         }
 
