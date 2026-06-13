@@ -122,9 +122,9 @@ llama_model_cohere2::graph::graph(const llama_model & model, const llm_graph_par
         // feed-forward network
         {
             cur = build_ffn(ffn_inp,
-                    model.layers[il].ffn_up, NULL, NULL,
-                    model.layers[il].ffn_gate, NULL, NULL,
-                    model.layers[il].ffn_down, NULL, NULL,
+                    model.layers[il].ffn_up, NULL, model.layers[il].ffn_up_s,
+                    model.layers[il].ffn_gate, NULL, model.layers[il].ffn_gate_s,
+                    model.layers[il].ffn_down, NULL, model.layers[il].ffn_down_s,
                     NULL, LLM_FFN_SILU, LLM_FFN_PAR, il);
             cb(cur, "ffn_out", il);
         }

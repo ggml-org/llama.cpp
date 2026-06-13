@@ -66,6 +66,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
     { LLM_ARCH_XVERSE,           "xverse"           },
     { LLM_ARCH_COMMAND_R,        "command-r"        },
     { LLM_ARCH_COHERE2,          "cohere2"          },
+    { LLM_ARCH_COHERE2MOE,       "cohere2moe"       },
     { LLM_ARCH_DBRX,             "dbrx"             },
     { LLM_ARCH_OLMO,             "olmo"             },
     { LLM_ARCH_OLMO2,            "olmo2"            },

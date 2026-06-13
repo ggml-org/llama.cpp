@@ -157,6 +157,8 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
             return new llama_model_command_r(params);
         case LLM_ARCH_COHERE2:
             return new llama_model_cohere2(params);
+        case LLM_ARCH_COHERE2MOE:
+            return new llama_model_cohere2moe(params);
         case LLM_ARCH_DBRX:
             return new llama_model_dbrx(params);
         case LLM_ARCH_OLMO:
@@ -1467,9 +1469,12 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
     }
     ml.done_getting_tensors();
 
+    // Tied NVFP4 output is valid when no separate LM-head scale tensors are present.
+    // If sidecar scales exist, the output weight must be an actual output tensor.
     GGML_ASSERT(!(output && tok_embd &&
             strcmp(output->name, tok_embd->name) == 0 &&
-            output->type == GGML_TYPE_NVFP4));
+            output->type == GGML_TYPE_NVFP4 &&
+            (output_s || output_in_s)));
     // populate tensors_by_name
     for (auto & [_, ctx_ptr] : ml.ctx_map) {
         for (auto * cur = ggml_get_first_tensor(ctx_ptr.get()); cur != NULL; cur = ggml_get_next_tensor(ctx_ptr.get(), cur)) {
@@ -1844,6 +1849,7 @@ void llama_model::print_info() const {
         }
 
         if (arch == LLM_ARCH_MELLUM ||
+                arch == LLM_ARCH_COHERE2MOE ||
                 arch == LLM_ARCH_QWEN3MOE ||
                 arch == LLM_ARCH_OPENAI_MOE ||
                 arch == LLM_ARCH_QWEN3VLMOE ||
@@ -2389,6 +2395,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_XVERSE:
         case LLM_ARCH_COMMAND_R:
         case LLM_ARCH_COHERE2:
+        case LLM_ARCH_COHERE2MOE:
         case LLM_ARCH_OLMO:
         case LLM_ARCH_ARCTIC:
         case LLM_ARCH_DEEPSEEK:
