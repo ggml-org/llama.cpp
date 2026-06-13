@@ -225,7 +225,7 @@ jobs:
             -DGGML_NATIVE=OFF \
             -DGGML_CPU_ALL_VARIANTS=ON \
             -DLLAMA_FATAL_WARNINGS=ON \
-            -DHF_UI_VERSION=${{ needs.get-version.outputs.ui_version }}
+            -DHF_UI_VERSION=${{ needs.get-version.outputs.ui_version }} \
             ${{ env.CMAKE_ARGS }}
           cmake --build build --config Release -j $(nproc)
 
@@ -312,7 +312,7 @@ jobs:
             -DGGML_NATIVE=OFF \
             -DGGML_CPU_ALL_VARIANTS=ON \
             -DGGML_VULKAN=ON \
-            -DHF_UI_VERSION=${{ needs.get-version.outputs.ui_version }}
+            -DHF_UI_VERSION=${{ needs.get-version.outputs.ui_version }} \
             ${{ env.CMAKE_ARGS }}
           cmake --build build --config Release -j $(nproc)
 
@@ -405,7 +405,7 @@ jobs:
             -DLLAMA_FATAL_WARNINGS=ON \
             -DGGML_OPENMP=OFF \
             -DLLAMA_BUILD_BORINGSSL=ON \
-            -DHF_UI_VERSION=${{ needs.get-version.outputs.ui_version }}
+            -DHF_UI_VERSION=${{ needs.get-version.outputs.ui_version }} \
             ${{ env.CMAKE_ARGS }}
           cmake --build build --config Release -j $(nproc)
 
@@ -1350,7 +1350,7 @@ jobs:
             -DLLAMA_BUILD_SERVER=OFF \
             -DCMAKE_SYSTEM_NAME=iOS \
             -DCMAKE_OSX_DEPLOYMENT_TARGET=16.0 \
-            -DCMAKE_XCODE_ATTRIBUTE_DEVELOPMENT_TEAM=ggml
+            -DCMAKE_XCODE_ATTRIBUTE_DEVELOPMENT_TEAM=ggml \
             -DHF_UI_VERSION=${{ needs.get-version.outputs.ui_version }}
           cmake --build build --config Release -j $(sysctl -n hw.logicalcpu) -- CODE_SIGNING_ALLOWED=NO
 
@@ -1505,7 +1505,7 @@ jobs:
       - macos-cpu
       - ios-xcode
       #- openEuler-cann
-      - ui
+      - ui-build
 
     outputs:
       tag_name: ${{ steps.tag.outputs.name }}
@@ -1605,7 +1605,8 @@ jobs:
             - [Ubuntu arm64 (Vulkan)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-ubuntu-vulkan-arm64.tar.gz)
             - [Ubuntu x64 (ROCm 7.2)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-ubuntu-rocm-7.2-x64.tar.gz)
             - [Ubuntu x64 (OpenVINO)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-ubuntu-openvino-${{ needs.ubuntu-24-openvino.outputs.openvino_version }}-x64.tar.gz)
-            - Ubuntu x64 (SYCL FP32) [DISABLED](https://github.com/ggml-org/llama.cpp/pull/23705)
+            - [Ubuntu x64 (SYCL FP32)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-ubuntu-sycl-fp32-x64.tar.gz)
+            - [Ubuntu x64 (SYCL FP16)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-ubuntu-sycl-fp16-x64.tar.gz)
 
             **Android:**
             - [Android arm64 (CPU)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-android-arm64.tar.gz)
@@ -1617,7 +1618,7 @@ jobs:
             - [Windows x64 (CUDA 13)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-win-cuda-13.3-x64.zip) - [CUDA 13.3 DLLs](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/cudart-llama-bin-win-cuda-13.3-x64.zip)
             - [Windows x64 (Vulkan)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-win-vulkan-x64.zip)
             - [Windows x64 (OpenVINO)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-win-openvino-${{ needs.windows-openvino.outputs.openvino_version }}-x64.zip)
-            - Windows x64 (SYCL) [DISABLED](https://github.com/ggml-org/llama.cpp/pull/23705)
+            - [Windows x64 (SYCL)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-win-sycl-x64.zip)
             - [Windows x64 (HIP)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-win-hip-radeon-x64.zip)
 
             **openEuler:**

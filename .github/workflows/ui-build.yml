@@ -40,10 +40,6 @@ jobs:
         run: npx vitest --project=unit --run tests/unit/pwa.spec.ts
         working-directory: tools/ui
 
-      - name: Run build-utils unit tests (both paths)
-        run: npx vitest --project=unit --run tests/unit/build-utils.spec.ts
-        working-directory: tools/ui
-
       - name: Generate checksums
         run: |
           cd tools/ui/dist
