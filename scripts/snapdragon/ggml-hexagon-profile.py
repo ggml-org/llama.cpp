@@ -117,10 +117,14 @@ def parse_log(file_path, pmu_index=None):
             if cycles_start_raw:
                 unwrapped_cycles_start = unwrapper.unwrap(int(cycles_start_raw))
 
+            idx = line.find("profile-op ")
+            op_text = line[idx + 11:].strip() if idx != -1 else line.strip()
+
             current_op = {
                 'name':         op_match.group('op_name'),
                 'dims':         op_match.group('dims').strip(),
                 'types':        op_match.group('types').strip(),
+                'op_text':      op_text,
                 'usec':         int(op_match.group('usec')),
                 'cycles':       int(op_match.group('cycles')),
                 'cycles_start': int(cycles_start_raw) if cycles_start_raw else None,
@@ -277,225 +281,6 @@ def print_ascii_summary(op_name, dims, types, usec, cycles, events, evt_val=None
         logger.info(f"  {thread_name:<16}: " + " | ".join(evt_strs))
 
 
-def save_perfetto_trace(ops, output_path, limit=None, op_filter=None):
-    filtered_ops = []
-    for op in ops:
-        if op_filter and not op['name'].startswith(op_filter):
-            continue
-        filtered_ops.append(op)
-
-    if limit is not None:
-        filtered_ops = filtered_ops[:limit]
-
-    if not filtered_ops:
-        return
-
-    # Compute average frequency
-    frequencies = []
-    for op in filtered_ops:
-        if op['usec'] > 0 and op['cycles'] > 0:
-            frequencies.append(op['cycles'] / op['usec'])
-    avg_freq_mhz = statistics.mean(frequencies) if frequencies else 1000.0
-    if avg_freq_mhz <= 0:
-        avg_freq_mhz = 1000.0
-
-    # Assign start and end cycles to each operator
-    for op in filtered_ops:
-        op['start_cycles'] = op['unwrapped_cycles_start']
-        op['end_cycles'] = op['start_cycles'] + op['cycles']
-
-    global_min_cyc = min(op['start_cycles'] for op in filtered_ops)
-
-    global_start_offset_us = 0.0
-    for op in filtered_ops:
-        if op['abs_usec'] > 0:
-            global_start_offset_us = op['abs_usec'] - ((op['start_cycles'] - global_min_cyc) / avg_freq_mhz)
-            break
-    if global_start_offset_us < 0.0:
-        global_start_offset_us = 0.0
-
-    for op in filtered_ops:
-        op['global_start_us'] = global_start_offset_us + (op['start_cycles'] - global_min_cyc) / avg_freq_mhz
-        op['global_end_us'] = global_start_offset_us + (op['end_cycles'] - global_min_cyc) / avg_freq_mhz
-
-    completed_events = []
-    for op in filtered_ops:
-        events = op['trace_events']
-        if not events:
-            continue
-        events = sorted(events, key=lambda e: e['unwrapped_cycles'])
-
-        active_starts = {}
-        for e in events:
-            t = e['thread']
-            evt = e['event']
-            info = e['info']
-            state = e['state']
-            cyc = e['unwrapped_cycles']
-
-            key = (t, evt, info)
-            if state == 'start':
-                active_starts[key] = cyc
-            elif state == 'stop':
-                if key in active_starts:
-                    start_cyc = active_starts[key]
-                    del active_starts[key]
-                    completed_events.append({
-                        'thread': t,
-                        'event': evt,
-                        'info': info,
-                        'start_cyc': start_cyc,
-                        'end_cyc': cyc,
-                        'op_name': op['name']
-                    })
-
-    completed_events.sort(key=lambda e: e['start_cyc'])
-
-    # Map physical thread to tid and track types
-    event_types = {}
-    used_tids = {}
-    for e in completed_events:
-        t = e['thread']
-        evt = e['event']
-        
-        # Map specialized events to parent tracks based on type and thread ID
-        norm_evt = normalize_event_name(evt)
-        if norm_evt == "DMA":
-            track_evt = "DMA"
-        elif t == 10:
-            track_evt = "HMX"
-        else:
-            track_evt = "HVX"
-
-        if track_evt not in event_types:
-            event_types[track_evt] = len(event_types) + 1
-        evt_id = event_types[track_evt]
-        # Map physical thread to sorted virtual thread position:
-        # HMX (t = 10) goes to position 1.
-        # HVX (t = 0..9) goes to position t + 2.
-        t_sort = 1 if t == 10 else t + 2
-        tid = t_sort * 1000 + evt_id * 100
-        e['tid'] = tid
-        used_tids[tid] = (t, track_evt)
-
-    # Convert event times to microseconds and apply clamp rounded to 1ns resolution (3 decimals)
-    for e in completed_events:
-        start_us = global_start_offset_us + (e['start_cyc'] - global_min_cyc) / avg_freq_mhz
-        dur_us = (e['end_cyc'] - e['start_cyc']) / avg_freq_mhz
-        e['ts'] = round(start_us, 3)
-        e['dur'] = round(max(dur_us, 0.1), 3)
-
-    # Resolve overlapping events per virtual track (tid) in microsecond domain with 1ns resolution
-    events_by_tid = {}
-    for e in completed_events:
-        tid = e['tid']
-        if tid not in events_by_tid:
-            events_by_tid[tid] = []
-        events_by_tid[tid].append(e)
-
-    for tid, evs in events_by_tid.items():
-        evs.sort(key=lambda x: x['ts'])
-        last_end_us = 0.0
-        for e in evs:
-            if e['ts'] < last_end_us:
-                e['ts'] = round(last_end_us, 3)
-            last_end_us = round(e['ts'] + e['dur'], 3)
-
-    trace_events = []
-    trace_events.append({
-        "name": "process_name",
-        "ph": "M",
-        "pid": 1,
-        "args": {"name": "HTP NPU"}
-    })
-
-    trace_events.append({
-        "name": "thread_name",
-        "ph": "M",
-        "pid": 1,
-        "tid": 0,
-        "args": {"name": "Operators"}
-    })
-    trace_events.append({
-        "name": "thread_sort_index",
-        "ph": "M",
-        "pid": 1,
-        "tid": 0,
-        "args": {"sort_index": 0}
-    })
-
-    for tid in sorted(used_tids.keys()):
-        t, evt = used_tids[tid]
-        name = f"T{t} {evt}"
-        trace_events.append({
-            "name": "thread_name",
-            "ph": "M",
-            "pid": 1,
-            "tid": tid,
-            "args": {"name": name}
-        })
-        trace_events.append({
-            "name": "thread_sort_index",
-            "ph": "M",
-            "pid": 1,
-            "tid": tid,
-            "args": {"sort_index": tid}
-        })
-
-    last_op_end_us = 0.0
-    for op in filtered_ops:
-        op_start_us = round(op['global_start_us'], 3)
-        op_dur_us = round(op['global_end_us'] - op['global_start_us'], 3)
-        if op_start_us < last_op_end_us:
-            op_start_us = last_op_end_us
-        clamped_dur = round(max(op_dur_us, 0.1), 3)
-        trace_events.append({
-            "name": f"{op['name']} ({op['dims']})",
-            "cat": "operator",
-            "ph": "X",
-            "ts": op_start_us,
-            "dur": clamped_dur,
-            "pid": 1,
-            "tid": 0,
-            "args": {
-                "dtypes": op['types'],
-                "cycles": op['cycles'],
-                "usec": op['usec']
-            }
-        })
-        last_op_end_us = round(op_start_us + clamped_dur, 3)
-
-    for e in completed_events:
-        norm_name = normalize_event_name(e['event'])
-        name = f"DMA {e['info']}" if norm_name == "DMA" else norm_name
-        trace_events.append({
-            "name": name,
-            "cat": "trace",
-            "ph": "X",
-            "ts": e['ts'],
-            "dur": e['dur'],
-            "pid": 1,
-            "tid": e['tid'],
-            "args": {
-                "info": e['info'],
-                "op": e['op_name']
-            }
-        })
-
-    import json
-    import gzip
-    try:
-        if output_path.endswith('.gz'):
-            f = gzip.open(output_path, 'wt', encoding='utf-8')
-        else:
-            f = open(output_path, 'w', encoding='utf-8')
-        with f:
-            json.dump({"traceEvents": trace_events}, f)
-        logger.info(f"Successfully saved Perfetto trace to {output_path}")
-    except Exception as ex:
-        logger.error(f"Failed to write Perfetto trace to {output_path}: {ex}")
-
-
 def generate_report(ops, top_n, width_overrides, sort_col, pmu_name=None):
     if not ops:
         logger.info("No valid records found.")
@@ -594,9 +379,11 @@ def main():
     parser.add_argument("--width", action='append', default=['dims:40'], help="Override column width, e.g. --width dims:50")
     parser.add_argument("--timeline", type=str, nargs='?', const='summary', choices=["summary", "diagram"],
                         help="Output ASCII art event summary or timing diagram (default: summary)")
-    parser.add_argument("--filter", type=str, help="Filter ASCII timeline/summary by op name prefix")
-    parser.add_argument("--perfetto", type=str, help="Output Perfetto JSON trace file path")
-    parser.add_argument("--limit", type=int, help="Limit number of ops in Perfetto trace")
+    parser.add_argument("--filter", type=str, help="Regex filter matching against the original profile-op line")
+    
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument("--head", type=int, help="Limit to first N ops")
+    group.add_argument("--tail", type=int, help="Limit to last N ops")
 
     args = parser.parse_args()
 
@@ -618,15 +405,23 @@ def main():
     final_pmu_name = (args.pmu_name or f"#{args.pmu_index}") if args.pmu_index is not None else None
     ops = parse_log(args.logfile, pmu_index=args.pmu_index)
 
-    if args.perfetto:
-        save_perfetto_trace(ops, args.perfetto, limit=args.limit, op_filter=args.filter)
+    if args.filter:
+        try:
+            filter_re = re.compile(args.filter)
+        except re.error as e:
+            logger.error(f"Invalid regex filter: {e}")
+            sys.exit(1)
+        ops = [op for op in ops if filter_re.search(op['op_text'])]
+
+    if args.head is not None:
+        ops = ops[:args.head]
+    elif args.tail is not None:
+        ops = ops[-args.tail:]
 
     if args.timeline:
         logger.info(f"\n# ASCII Timing {args.timeline.capitalize()}\n")
         printed_cnt = 0
         for op in ops:
-            if args.filter and not op['name'].startswith(args.filter):
-                continue
             if args.timeline == "summary":
                 print_ascii_summary(op['name'], op['dims'], op['types'], op['usec'], op['cycles'], op['trace_events'], op.get('evt_val'))
             elif args.timeline == "diagram":

@@ -69,11 +69,15 @@ def parse_log(file_path):
             if cycles_start_raw:
                 unwrapped_cycles_start = unwrapper.unwrap(int(cycles_start_raw))
 
+            idx = line.find("profile-op ")
+            op_text = line[idx + 11:].strip() if idx != -1 else line.strip()
+
             current_op = {
                 'name':         op_match.group('op_name'),
                 'dims':         op_match.group('dims').strip() if op_match.group('dims') else '',
                 'types':        op_match.group('types').strip() if op_match.group('types') else '',
                 'strides':      op_match.group('strides').strip() if op_match.group('strides') else '',
+                'op_text':      op_text,
                 'usec':         int(op_match.group('usec')),
                 'cycles':       int(op_match.group('cycles')),
                 'cycles_start': int(cycles_start_raw) if cycles_start_raw else None,
@@ -191,16 +195,7 @@ def write_trace_packet_to_file(f, packet_bytes):
 
 # --- End Protobuf Encoder ---
 
-def generate_perfetto_trace(ops, output_path, limit=None, op_filter=None):
-    filtered_ops = []
-    for op in ops:
-        if op_filter and not op['name'].startswith(op_filter):
-            continue
-        filtered_ops.append(op)
-
-    if limit is not None:
-        filtered_ops = filtered_ops[:limit]
-
+def generate_perfetto_trace(filtered_ops, output_path):
     if not filtered_ops:
         logger.warning("No operators found after filtering.")
         return
@@ -419,14 +414,31 @@ def main():
     parser = argparse.ArgumentParser(description="Convert Hexagon Op profile logs to native Perfetto Protobuf traces.")
     parser.add_argument("logfile", help="Path to hex-log profile file")
     parser.add_argument("-o", "--output", default="optrace.perfetto-trace", help="Output trace file path (default: optrace.perfetto-trace)")
-    parser.add_argument("--limit", type=int, help="Limit number of ops in trace")
-    parser.add_argument("--filter", type=str, help="Filter by op name prefix")
+    parser.add_argument("--filter", type=str, help="Regex filter matching against the original profile-op line")
+    
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument("--head", type=int, help="Limit to first N ops")
+    group.add_argument("--tail", type=int, help="Limit to last N ops")
 
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format='%(message)s')
 
     ops = parse_log(args.logfile)
-    generate_perfetto_trace(ops, args.output, limit=args.limit, op_filter=args.filter)
+
+    if args.filter:
+        try:
+            filter_re = re.compile(args.filter)
+        except re.error as e:
+            logger.error(f"Invalid regex filter: {e}")
+            sys.exit(1)
+        ops = [op for op in ops if filter_re.search(op['op_text'])]
+
+    if args.head is not None:
+        ops = ops[:args.head]
+    elif args.tail is not None:
+        ops = ops[-args.tail:]
+
+    generate_perfetto_trace(ops, args.output)
 
 if __name__ == "__main__":
     main()
