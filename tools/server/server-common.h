@@ -294,6 +294,7 @@ struct server_chat_params {
     common_chat_templates_ptr tmpls;
     bool allow_image;
     bool allow_audio;
+    bool allow_video;
     bool enable_thinking = true;
     int  reasoning_budget = -1;
     std::string reasoning_budget_message;
