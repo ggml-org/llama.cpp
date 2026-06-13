@@ -3,14 +3,14 @@
 exclude: prompts/.*.txt
 repos:
 - repo: https://github.com/pre-commit/pre-commit-hooks
-  rev: v4.6.0
+  rev: 3e8a8703264a2f4a69428a0aa4dcb512790b2c8c  # frozen: v6.0.0
   hooks:
   - id: trailing-whitespace
   - id: end-of-file-fixer
   - id: check-yaml
   - id: check-added-large-files
 - repo: https://github.com/PyCQA/flake8
-  rev: 7.0.0
+  rev: d93590f5be797aabb60e3b09f2f52dddb02f349f  # frozen: 7.3.0
   hooks:
   -   id: flake8
       additional_dependencies: [flake8-debug]
