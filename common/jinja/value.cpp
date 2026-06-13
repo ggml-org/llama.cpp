@@ -732,7 +732,7 @@ const func_builtins & value_string_t::get_builtins() const {
                 size_t pos = 0;
                 if (old_str.empty()) {
                     std::string new_res;
-                    new_res.reserve(str.length() * 2 + 1);
+                    new_res.reserve(str.length() + new_str.length() * (str.length() + 1));
                     new_res += new_str;
                     for (const char c : str) {
                         new_res.push_back(c);
