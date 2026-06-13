@@ -548,6 +548,10 @@ struct llama_model {
     struct ggml_tensor * output_s    = nullptr;
     struct ggml_tensor * output_in_s = nullptr;
 
+    // NextN/MTP model-level projections
+    struct ggml_tensor * nextn_proj_pre  = nullptr;
+    struct ggml_tensor * nextn_proj_post = nullptr;
+
     // classifier
     struct ggml_tensor * cls       = nullptr;
     struct ggml_tensor * cls_b     = nullptr;
@@ -564,6 +568,13 @@ struct llama_model {
     struct ggml_tensor * per_layer_tok_embd   = nullptr;
     struct ggml_tensor * per_layer_model_proj = nullptr;
     struct ggml_tensor * per_layer_proj_norm  = nullptr;
+
+    // eagle3
+    struct ggml_tensor * fc  = nullptr;  // feature fusion layer
+    struct ggml_tensor * d2t = nullptr;  // draft to target vocabulary mapping
+
+    // unified vector to store target-model extracted layer ids in eagle3, dflash, etc.
+    std::vector<int32_t> target_layer_ids;
 
     std::vector<llama_layer> layers;
 
@@ -702,6 +713,7 @@ const char * llm_type_name(llm_type type);
 #define LLAMA_LOAD_LOCALS \
     const int     n_layer        = hparams.n_layer();        GGML_UNUSED(n_layer); \
     const int     n_layer_all    = hparams.n_layer_all;      GGML_UNUSED(n_layer_all); \
+    const int     n_layer_nextn  = hparams.n_layer_nextn;    GGML_UNUSED(n_layer_nextn); \
     const int64_t n_head         = hparams.n_head();         GGML_UNUSED(n_head); \
     const int64_t n_head_kv      = hparams.n_head_kv();      GGML_UNUSED(n_head_kv); \
     const int64_t n_embd         = hparams.n_embd;           GGML_UNUSED(n_embd); \

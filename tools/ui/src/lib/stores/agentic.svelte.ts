@@ -29,6 +29,7 @@ import { permissionsStore } from '$lib/stores/permissions.svelte';
 import { ToolSource, ToolPermissionDecision } from '$lib/enums';
 import { SvelteMap } from 'svelte/reactivity';
 import { ToolsService } from '$lib/services/tools.service';
+import { SandboxService } from '$lib/services/sandbox.service';
 import { isAbortError } from '$lib/utils';
 import { DEFAULT_AGENTIC_CONFIG, NEWLINE_SEPARATOR } from '$lib/constants';
 import {
@@ -781,6 +782,13 @@ class AgenticStore {
 						if (toolSource === ToolSource.BUILTIN) {
 							const args = this.parseToolArguments(toolCall.function.arguments);
 							const executionResult = await ToolsService.executeTool(toolName, args, signal);
+
+							result = executionResult.content;
+
+							if (executionResult.isError) toolSuccess = false;
+						} else if (toolSource === ToolSource.FRONTEND) {
+							const args = this.parseToolArguments(toolCall.function.arguments);
+							const executionResult = await SandboxService.executeTool(toolName, args, signal);
 
 							result = executionResult.content;
 

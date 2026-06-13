@@ -34,7 +34,6 @@ import type {
 import { modelsStore } from '$lib/stores/models.svelte';
 import { settingsStore } from '../stores/settings.svelte';
 import { capImageDataURLSize } from '../utils/cap-img-size';
-import { MEGAPIXELS_TO_PIXELS } from '$lib/constants/image-size';
 
 function getAudioInputFormat(mimeType: string): AudioInputFormat {
 	const normalizedMimeType = mimeType.trim().toLowerCase();
@@ -961,10 +960,11 @@ export class ChatService {
 
 		for (const image of imageFiles) {
 			const maxImageResolution = settingsStore.getConfig(SETTINGS_KEYS.MAX_IMAGE_RESOLUTION);
-			let base64Url = image.base64Url;
-			if (maxImageResolution > 1 / MEGAPIXELS_TO_PIXELS) {
-				base64Url = await capImageDataURLSize(image.base64Url, maxImageResolution);
-			}
+
+			// Caps the resolution and bakes the jpeg exif orientation in one pass,
+			// untouched images pass through as is
+			const base64Url = await capImageDataURLSize(image.base64Url, maxImageResolution);
+
 			contentParts.push({
 				type: ContentPartType.IMAGE_URL,
 				image_url: { url: base64Url }
