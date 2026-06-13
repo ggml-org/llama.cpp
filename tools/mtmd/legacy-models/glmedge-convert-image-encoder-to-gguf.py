@@ -150,7 +150,7 @@ if args.use_f32:
 
 vision_config = SiglipVisionConfig(**v_hparams)
 model = SiglipVisionModel(vision_config)
-model.load_state_dict(torch.load(os.path.join(dir_model, "glm.clip")))
+model.load_state_dict(torch.load(os.path.join(dir_model, "glm.clip"), weights_only=True))
 
 fname_middle = None
 has_text_encoder = False
@@ -221,7 +221,7 @@ fout.add_bool("clip.use_gelu", True)
 
 if has_glm_projector:
     # model.vision_model.encoder.layers.pop(-1)  # pyright: ignore[reportAttributeAccessIssue]
-    projector = torch.load(args.llava_projector)
+    projector = torch.load(args.llava_projector, weights_only=True)
     for name, data in projector.items():
         name = get_tensor_name(name)
         # pw and dw conv ndim==4

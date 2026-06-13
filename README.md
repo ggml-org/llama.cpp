@@ -8,7 +8,7 @@
 [![Docker](https://github.com/ggml-org/llama.cpp/actions/workflows/docker.yml/badge.svg)](https://github.com/ggml-org/llama.cpp/actions/workflows/docker.yml)
 [![Winget](https://github.com/ggml-org/llama.cpp/actions/workflows/winget.yml/badge.svg)](https://github.com/ggml-org/llama.cpp/actions/workflows/winget.yml)
 
-[Manifesto](https://github.com/ggml-org/llama.cpp/discussions/205) / [ggml](https://github.com/ggml-org/ggml) / [ops](https://github.com/ggml-org/llama.cpp/blob/master/docs/ops.md)
+[Manifesto](https://github.com/ggml-org/llama.cpp/discussions/205) / [ggml](https://github.com/ggml-org/ggml) / [ops](docs/ops.md)
 
 LLM inference in C/C++
 
@@ -295,7 +295,7 @@ Instructions for adding support for new models: [HOWTO-add-model.md](docs/develo
 | [OpenCL](docs/backend/OPENCL.md) | Adreno GPU |
 | [IBM zDNN](docs/backend/zDNN.md) | IBM Z & LinuxONE |
 | [WebGPU](docs/build.md#webgpu) | All |
-| [RPC](https://github.com/ggml-org/llama.cpp/tree/master/tools/rpc) | All |
+| [RPC](tools/rpc) | All |
 | [Hexagon [In Progress]](docs/backend/snapdragon/README.md) | Snapdragon |
 | [VirtGPU](docs/backend/VirtGPU.md) | VirtGPU APIR |
 
@@ -467,7 +467,10 @@ To learn more about model quantization, [read this documentation](tools/quantize
     <summary>Measure KL divergence</summary>
 
     ```bash
-    # TODO
+    # Measure KL divergence between two runs (e.g. different backends or configs)
+    llama-perplexity -m model.gguf -f prompts/wiki.test -ngl 99 2>&1 | tee run1.log
+    llama-perplexity -m model.gguf -f prompts/wiki.test -ngl 99 --different-flag 2>&1 | tee run2.log
+    python3 scripts/compare-logprobs.py --a run1.log --b run2.log
     ```
 
     </details>

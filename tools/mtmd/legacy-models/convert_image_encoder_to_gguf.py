@@ -354,7 +354,7 @@ if has_llava_projector:
     else:
         model.vision_model.encoder.layers = model.vision_model.encoder.layers[:max(feature_layers)]
 
-    projector = torch.load(args.llava_projector)
+    projector = torch.load(args.llava_projector, weights_only=True)
     for name, data in projector.items():
         name = get_tensor_name(name)
         # pw and dw conv ndim==4

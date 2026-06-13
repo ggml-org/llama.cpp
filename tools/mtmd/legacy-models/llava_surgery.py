@@ -10,7 +10,7 @@ args = ap.parse_args()
 
 # find the model part that includes the the multimodal projector weights
 path = sorted(glob.glob(f"{args.model}/pytorch_model*.bin"))[-1]
-checkpoint = torch.load(path)
+checkpoint = torch.load(path, weights_only=True)
 
 # get a list of mm tensor names
 mm_tensors = [k for k, v in checkpoint.items() if k.startswith("model.mm_projector")]

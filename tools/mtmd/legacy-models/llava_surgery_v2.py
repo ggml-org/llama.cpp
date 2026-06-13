@@ -22,7 +22,7 @@ def load_model(file_path):
                 print(f"{key} : {tensors[key].shape}")
         return tensors, 'safetensor'
     else:
-        return torch.load(file_path, map_location=torch.device('cpu')), 'pytorch'
+        return torch.load(file_path, map_location=torch.device('cpu'), weights_only=True), 'pytorch'
 
 
 # Unified saving function

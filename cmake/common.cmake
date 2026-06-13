@@ -27,7 +27,8 @@ function(llama_add_compile_flags)
             add_compile_options("$<$<COMPILE_LANGUAGE:C>:${C_FLAGS};${GF_C_FLAGS}>"
                                 "$<$<COMPILE_LANGUAGE:CXX>:${CXX_FLAGS};${GF_CXX_FLAGS}>")
         else()
-            # todo : msvc
+            # msvc warnings
+            add_compile_options(/W4 /wd4005 /wd4244 /wd4267 /wd4305 /wd4456 /wd4457 /wd4458 /wd4459 /wd4566 /wd4702 /wd4996 /wd5054)
             set(C_FLAGS   "" PARENT_SCOPE)
             set(CXX_FLAGS "" PARENT_SCOPE)
         endif()

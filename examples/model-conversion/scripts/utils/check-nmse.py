@@ -41,7 +41,7 @@ def load_logits(file_path):
                         value = float(line.strip())
                     data.append(value)
             return np.array(data, dtype=np.float32)
-        except:
+        except (ValueError, IOError, OSError):
             return np.loadtxt(file_path, dtype=np.float32)
 
 def interpret_nmse(nmse):

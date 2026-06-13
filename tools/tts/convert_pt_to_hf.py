@@ -23,7 +23,7 @@ path_dst = os.path.dirname(model_path)
 
 print(f"Loading model from {model_path}")
 
-model = torch.load(model_path, map_location='cpu')
+model = torch.load(model_path, map_location='cpu', weights_only=True)
 
 #print(model)
 
