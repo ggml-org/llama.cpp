@@ -215,7 +215,24 @@ int main(int argc, char ** argv) {
             MAXTOK = N;
             break;
         }
-        if (!ctx) { fprintf(stderr, "failed to auto-size a context that fits VRAM\n"); return 1; }
+        if (!ctx) {
+            // last resort: reuse the floor context (it allocated above) so a tight-VRAM GPU still loads
+            int N = std::max((int) canvas_length, (int) ((floor_ctx / canvas_length) * canvas_length));
+            ctx = llama_init_from_model(model, make_cparams(N));
+            if (ctx) {
+                MAXTOK = N;
+                size_t f = 0, t = 0; if (gpu_dev) ggml_backend_dev_memory(gpu_dev, &f, &t);
+                fprintf(stderr, "warning: low VRAM -- using minimal context MAXTOK=%d (%zu MiB free); "
+                        "long turns may run out of memory\n", MAXTOK, f / (1024 * 1024));
+            }
+        }
+        if (!ctx) {
+            size_t f = 0, t = 0; if (gpu_dev) ggml_backend_dev_memory(gpu_dev, &f, &t);
+            fprintf(stderr, "failed to auto-size a context that fits VRAM (free=%zu MiB, total=%zu MiB): the "
+                    "model is too large for this GPU. Try a smaller quant, lower NGL, or a GPU with more VRAM.\n",
+                    f / (1024 * 1024), t / (1024 * 1024));
+            return 1;
+        }
     }
     llama_set_causal_attn(ctx, false);
 
@@ -310,7 +327,8 @@ int main(int argc, char ** argv) {
 
             const int64_t tc0 = ggml_time_us();   // the commit detok + emit is visualization overhead too
             answer.insert(answer.end(), canvas, canvas + cut);
-            const std::string answer_text = common_detokenize(vocab, answer, /*special*/ false);
+            // special=true: keep the <|channel> markers so the client can split out the reasoning
+            const std::string answer_text = common_detokenize(vocab, answer, /*special*/ true);
             printf("C %d %s\n", b, nlohmann::json(answer_text).dump().c_str()); fflush(stdout);
             total_viz_us += ggml_time_us() - tc0;
 
