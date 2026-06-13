@@ -175,7 +175,7 @@ struct server_tool_load_user_tools : server_tool {
 
     server_tool_load_user_tools() {
         name = "load_user_tools";
-        display_name = "Load Tools/Agents";
+        display_name = "Load User Tools/Agents";
         permission_write = false;
     }
 
@@ -222,7 +222,7 @@ struct server_tool_load_user_tools : server_tool {
             {"type", "function"},
             {"function", {
                 {"name", name},
-                {"description", "Load a TOOLS.md file and extract available actions. "
+                {"description", "Load e.g. a TOOLS.md file and extract available actions. "
                     "Commands are validated for security. Unsafe commands are skipped."},
                     {"parameters", {
                         {"type", "object"},
@@ -263,14 +263,14 @@ struct server_tool_load_user_tools : server_tool {
 };
 
 //
-// execute_skils: execute user-side tools
+// execute_user_tool: execute user-side tools
 //
 
-struct server_tool_execute_tool : server_tool {
+struct server_tool_execute_user_tool : server_tool {
 
-    server_tool_execute_tool() {
-        name = "execute_tool";
-        display_name = "Execute Skill";
+    server_tool_execute_user_tool() {
+        name = "execute_user_tool";
+        display_name = "Execute User Tool";
         permission_write = false;
     }
 
@@ -279,7 +279,7 @@ struct server_tool_execute_tool : server_tool {
             {"type", "function"},
             {"function", {
                 {"name", name},
-                {"description", "Execute a tool/action loaded from TOOLS.md. "
+                {"description", "Execute a tool/action loaded from e.g. TOOLS.md. "
                     "The tool must be loaded first using the 'load_user_tools' tool. "
                     "Commands are validated for security before execution."},
                     {"parameters", {
@@ -305,7 +305,7 @@ struct server_tool_execute_tool : server_tool {
         );
 
         if (it == global_tools.end()) {
-            return {{"error", "Skill not found: " + tool_name}};
+            return {{"error", "Tool not found: " + tool_name}};
         }
 
         // Replace placeholders in the command
@@ -325,7 +325,7 @@ struct server_tool_execute_tool : server_tool {
         // Security validation
         if (!is_command_safe(command)) {
             return {
-                {"error", "Command blocked for security reasons: '" + command + "' contains forbidden keywords or characters."},
+                {"error", "Command blocked for security reasons: '" + command + "' contains forbidden characters."},
                 {"forbidden_chars", [&]() {
                   std::string forbidden;
                   for (const auto& seq : FORBIDDEN_SEQUENCES) {
@@ -985,7 +985,7 @@ static std::vector<std::unique_ptr<server_tool>> build_tools() {
     tools.push_back(std::make_unique<server_tool_edit_file>());
     tools.push_back(std::make_unique<server_tool_apply_diff>());
     tools.push_back(std::make_unique<server_tool_get_datetime>());
-    tools.push_back(std::make_unique<server_tool_execute_tool>());
+    tools.push_back(std::make_unique<server_tool_execute_user_tool>());
     return tools;
 }
 
