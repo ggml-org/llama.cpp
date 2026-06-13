@@ -368,10 +368,10 @@ static void fa_k_interleave_thread(unsigned int n, unsigned int i, void * data) 
     }
 
     struct htp_thread_trace * tr = factx->octx->ctx ? &factx->octx->ctx->trace[i] : NULL;
-    htp_trace_event_start(tr, HTP_TRACE_EVT_HVX, i);
+    htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, start);
     hmx_interleave_rows_to_tiles(factx->vtcm_k_tiles, factx->vtcm_k_fp16[args->buf_idx], total_rows, (int) factx->DK,
                              (int) args->src_stride, start, end);
-    htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX, i);
+    htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, start);
 }
 
 static void fa_phase_k_interleave(struct hmx_fa_context * factx, int kv_rows, size_t src_stride, size_t buf_idx) {
@@ -412,10 +412,10 @@ static void fa_v_interleave_thread(unsigned int n, unsigned int i, void * data) 
     __fp16 * v_tiles_dest = factx->use_pipeline ? factx->vtcm_v_tiles[args->buf_idx] : factx->vtcm_v_tiles[0];
 
     struct htp_thread_trace * tr = factx->octx->ctx ? &factx->octx->ctx->trace[i] : NULL;
-    htp_trace_event_start(tr, HTP_TRACE_EVT_HVX, i);
+    htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, start);
     hmx_interleave_cols_to_tiles(v_tiles_dest, factx->vtcm_v_fp16[args->buf_idx], total_rows, (int) factx->DV,
                              (int) args->src_stride, (int) args->n_col_tiles, start, end);
-    htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX, i);
+    htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, start);
 }
 
 static void fa_phase_v_interleave(struct hmx_fa_context * factx,
@@ -469,7 +469,7 @@ static void fa_q_load_thread(unsigned int n, unsigned int i, void * data) {
     }
 
     struct htp_thread_trace * tr = factx->octx->ctx ? &factx->octx->ctx->trace[i] : NULL;
-    htp_trace_event_start(tr, HTP_TRACE_EVT_HVX, i);
+    htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, start);
 
     const struct htp_tensor * q       = args->q;
     const uint32_t            q_start = args->q_start;
@@ -524,7 +524,7 @@ static void fa_q_load_thread(unsigned int n, unsigned int i, void * data) {
             }
         }
     }
-    htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX, i);
+    htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, start);
 }
 
 static void fa_phase_q_load(struct hmx_fa_context *   factx,
@@ -577,7 +577,7 @@ static void fa_o_store_thread(unsigned int n, unsigned int i, void * data) {
     }
 
     struct htp_thread_trace * tr = factx->octx->ctx ? &factx->octx->ctx->trace[i] : NULL;
-    htp_trace_event_start(tr, HTP_TRACE_EVT_HVX, i);
+    htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, start);
 
     const struct htp_tensor * dst        = args->dst;
     const __fp16 *            o_tile_src = args->o_tile_src;
@@ -624,7 +624,7 @@ static void fa_o_store_thread(unsigned int n, unsigned int i, void * data) {
             }
         }
     }
-    htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX, i);
+    htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, start);
 }
 
 static void fa_phase_o_store(struct hmx_fa_context *   factx,
@@ -695,7 +695,7 @@ static void fa_softmax_thread(unsigned int n, unsigned int i, void * data) {
     }
 
     struct htp_thread_trace * tr = factx->octx->ctx ? &factx->octx->ctx->trace[i] : NULL;
-    htp_trace_event_start(tr, HTP_TRACE_EVT_HVX, i);
+    htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, vec_start);
 
     // Per-thread row scratch: thread i uses bufs at offset i * 2 * stride
     const size_t row_buf_stride = factx->row_buf_stride;
@@ -967,7 +967,7 @@ static void fa_softmax_thread(unsigned int n, unsigned int i, void * data) {
         factx->vtcm_s_rowmax[r_vec_idx] = rowmax_acc_v;
         factx->vtcm_p_rowsum[r_vec_idx] = rowsum_acc_v;
     }
-    htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX, i);
+    htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, vec_start);
 }
 
 // Serial m/l update + build_D.  Must run after softmax barrier (s_rowmax written by all threads).
@@ -1685,7 +1685,7 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
                             __builtin_assume(n_col_tiles > 0);
                             __builtin_assume(n_dot_tiles > 0);
 
-                            htp_trace_event_start(tr, HTP_TRACE_EVT_HMX, HTP_MAX_NTHREADS);
+                            htp_trace_event_start(tr, HTP_TRACE_EVT_HMX_COMP, HTP_MAX_NTHREADS);
                             Q6_bias_mxmem2_A((void *) factx.vtcm_hmx_scales_qk);
                             for (size_t r = 0; r < n_row_tiles; ++r) {
                                 for (size_t c = 0; c < n_col_tiles; ++c) {
@@ -1701,7 +1701,7 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
                                     Q6_mxmem_AR_after_hf(out_tile, 0);
                                 }
                             }
-                            htp_trace_event_stop(tr, HTP_TRACE_EVT_HMX, HTP_MAX_NTHREADS);
+                            htp_trace_event_stop(tr, HTP_TRACE_EVT_HMX_COMP, HTP_MAX_NTHREADS);
                         }
 
                         // Pop mask DMA
@@ -1742,7 +1742,7 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
                             __builtin_assume(n_col_tiles > 0);
                             __builtin_assume(DV_tiles > 0);
 
-                            htp_trace_event_start(tr, HTP_TRACE_EVT_HMX, HTP_MAX_NTHREADS);
+                            htp_trace_event_start(tr, HTP_TRACE_EVT_HMX_COMP, HTP_MAX_NTHREADS);
                             Q6_bias_mxmem2_A((void *) factx.vtcm_hmx_scales_id);
                             for (size_t r = 0; r < n_row_tiles; ++r) {
                                 for (size_t c = 0; c < DV_tiles; ++c) {
@@ -1764,7 +1764,7 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
                                     Q6_mxmem_AR_after_hf(o_tile_out, 0);
                                 }
                             }
-                            htp_trace_event_stop(tr, HTP_TRACE_EVT_HMX, HTP_MAX_NTHREADS);
+                            htp_trace_event_stop(tr, HTP_TRACE_EVT_HMX_COMP, HTP_MAX_NTHREADS);
                             hex_swap_ptr((void **) &o_tile_curr, (void **) &o_tile_prev);
                         }
 
@@ -1795,7 +1795,7 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
                         __builtin_assume(n_row_tiles > 0);
                         __builtin_assume(DV_tiles > 0);
 
-                        htp_trace_event_start(tr, HTP_TRACE_EVT_HMX, HTP_MAX_NTHREADS);
+                        htp_trace_event_start(tr, HTP_TRACE_EVT_HMX_COMP, HTP_MAX_NTHREADS);
                         Q6_bias_mxmem2_A((void *) factx.vtcm_hmx_scales_id);
                         for (size_t r = 0; r < n_row_tiles; ++r) {
                             for (size_t c = 0; c < DV_tiles; ++c) {
@@ -1808,7 +1808,7 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
                                 Q6_mxmem_AR_after_hf(o_out, 0);
                             }
                         }
-                        htp_trace_event_stop(tr, HTP_TRACE_EVT_HMX, HTP_MAX_NTHREADS);
+                        htp_trace_event_stop(tr, HTP_TRACE_EVT_HMX_COMP, HTP_MAX_NTHREADS);
                     }
                 }
 

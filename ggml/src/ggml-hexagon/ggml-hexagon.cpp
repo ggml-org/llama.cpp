@@ -121,14 +121,15 @@ static void ggml_hexagon_dump_op_supp(const std::string &sess_name, const struct
 
 static const char * htp_event_name(uint16_t id) {
     switch (id) {
-        case HTP_TRACE_EVT_QUANT:      return "QUANT";
-        case HTP_TRACE_EVT_DEQUANT:    return "DEQUANT";
-        case HTP_TRACE_EVT_HMX:        return "HMX";
-        case HTP_TRACE_EVT_HVX:        return "HVX";
-        case HTP_TRACE_EVT_TRANS_ACT:  return "TRANS_ACT";
-        case HTP_TRACE_EVT_TRANS_OUT:  return "TRANS_OUT";
-        case HTP_TRACE_EVT_DMA:        return "DMA";
-        default:                       return "UNKNOWN";
+        case HTP_TRACE_EVT_DMA:            return "DMA";
+        case HTP_TRACE_EVT_HVX_COMP:       return "HVX_COMP";
+        case HTP_TRACE_EVT_HVX_A_QUANT:    return "HVX_A_QUANT";
+        case HTP_TRACE_EVT_HVX_A_PREP:     return "HVX_A_PREP";
+        case HTP_TRACE_EVT_HVX_W_DEQUANT:  return "HVX_W_DEQUANT";
+        case HTP_TRACE_EVT_HVX_W_PREP:     return "HVX_W_PREP";
+        case HTP_TRACE_EVT_HVX_O_PROC:     return "HVX_O_PROC";
+        case HTP_TRACE_EVT_HMX_COMP:       return "HMX_COMP";
+        default:                           return "UNKNOWN";
     }
 }
 

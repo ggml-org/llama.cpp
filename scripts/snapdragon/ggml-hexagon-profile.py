@@ -29,10 +29,23 @@ op_pattern = re.compile(
 )
 
 trace_pattern = re.compile(
-    r"trace-op\s+(?P<op_name>[A-Z_0-9+]+):\s+thread\s+(?P<thread>\d+)\s+event\s+(?P<event>[A-Z_]+)\s+info\s+(?P<info>\d+)\s+(?P<state>start|stop)\s+(?P<cycles>\d+)"
+    r"trace-op\s+(?P<op_name>[A-Z_0-9+]+):\s+thread\s+(?P<thread>\d+)\s+event\s+(?P<event>[A-Z_0-9\-]+)\s+info\s+(?P<info>\d+)\s+(?P<state>start|stop)\s+(?P<cycles>\d+)"
 )
 
 logger = logging.getLogger("ggml-hexagon-profile")
+
+
+def normalize_event_name(evt_type):
+    if evt_type == "HVX_COMP":
+        return "V-COMP"
+    if evt_type == "HMX_COMP":
+        return "M-COMP"
+
+    # Strip HVX_ or HMX_ prefixes
+    name = evt_type
+    if name.startswith("HVX_") or name.startswith("HMX_"):
+        name = name[4:]
+    return name.replace("_", "-")
 
 
 class CycleUnwrapper:
@@ -157,16 +170,6 @@ def print_ascii_timeline(op_name, dims, types, usec, cycles, events, evt_val=Non
 
     thread_stacks = [[] for _ in range(11)]
 
-    event_char_map = {
-        'QUANT': 'Q',
-        'DEQUANT': 'D',
-        'HMX': 'H',
-        'HVX': 'V',
-        'TRANS_ACT': 'A',
-        'TRANS_OUT': 'O',
-        'DMA': 'M'
-    }
-
     for e in events:
         t = e['thread']
         if t < 0 or t > 10:
@@ -179,7 +182,26 @@ def print_ascii_timeline(op_name, dims, types, usec, cycles, events, evt_val=Non
 
         state = e['state']
         evt_type = e['event']
-        char = event_char_map.get(evt_type, '?')
+
+        # Determine char representing the event
+        norm_evt = normalize_event_name(evt_type)
+        char = '?'
+        if norm_evt == 'V-COMP':
+            char = 'V'
+        elif norm_evt == 'M-COMP':
+            char = 'H'
+        elif norm_evt == 'A-QUANT':
+            char = 'Q'
+        elif norm_evt == 'A-PREP':
+            char = 'A'
+        elif norm_evt == 'W-DEQUANT':
+            char = 'D'
+        elif norm_evt == 'O-PROC':
+            char = 'O'
+        elif norm_evt == 'W-PREP':
+            char = 'P'
+        elif norm_evt == 'DMA':
+            char = 'M'
 
         if state == 'start':
             thread_stacks[t].append(char)
@@ -240,10 +262,11 @@ def print_ascii_summary(op_name, dims, types, usec, cycles, events, evt_val=None
                 else:
                     dur = (cyc + 0x100000000) - start_cyc
 
-                thread_totals[t][evt] += dur
+                norm_evt = normalize_event_name(evt)
+                thread_totals[t][norm_evt] += dur
 
     for t in sorted(thread_totals.keys()):
-        thread_name = f"Thread {t}" if t != 10 else "Thread 10 (HMX)"
+        thread_name = f"Thread {t} (HVX)" if t != 10 else "Thread 10 (HMX)"
         sorted_evts = sorted(thread_totals[t].items(), key=lambda item: item[1], reverse=True)
         
         evt_strs = []
@@ -327,41 +350,56 @@ def save_perfetto_trace(ops, output_path, limit=None, op_filter=None):
                     })
 
     completed_events.sort(key=lambda e: e['start_cyc'])
-    active_slots = defaultdict(list)
-    for e in completed_events:
-        t = e['thread']
-        evt = e['event']
-        start_cyc = e['start_cyc']
-        end_cyc = e['end_cyc']
 
-        slots = active_slots[(t, evt)]
-        allocated_slot = -1
-        for idx, slot_end_cyc in enumerate(slots):
-            if slot_end_cyc <= start_cyc:
-                slots[idx] = end_cyc
-                allocated_slot = idx
-                break
-        if allocated_slot == -1:
-            slots.append(end_cyc)
-            allocated_slot = len(slots) - 1
-        e['slot'] = allocated_slot
-
+    # Map physical thread to tid and track types
     event_types = {}
     used_tids = {}
     for e in completed_events:
         t = e['thread']
         evt = e['event']
-        slot = e['slot']
-        if evt not in event_types:
-            event_types[evt] = len(event_types) + 1
-        evt_id = event_types[evt]
+        
+        # Map specialized events to parent tracks based on type and thread ID
+        norm_evt = normalize_event_name(evt)
+        if norm_evt == "DMA":
+            track_evt = "DMA"
+        elif t == 10:
+            track_evt = "HMX"
+        else:
+            track_evt = "HVX"
+
+        if track_evt not in event_types:
+            event_types[track_evt] = len(event_types) + 1
+        evt_id = event_types[track_evt]
         # Map physical thread to sorted virtual thread position:
         # HMX (t = 10) goes to position 1.
         # HVX (t = 0..9) goes to position t + 2.
         t_sort = 1 if t == 10 else t + 2
-        tid = t_sort * 1000 + evt_id * 100 + slot
+        tid = t_sort * 1000 + evt_id * 100
         e['tid'] = tid
-        used_tids[tid] = (t, evt, slot)
+        used_tids[tid] = (t, track_evt)
+
+    # Convert event times to microseconds and apply clamp rounded to 1ns resolution (3 decimals)
+    for e in completed_events:
+        start_us = global_start_offset_us + (e['start_cyc'] - global_min_cyc) / avg_freq_mhz
+        dur_us = (e['end_cyc'] - e['start_cyc']) / avg_freq_mhz
+        e['ts'] = round(start_us, 3)
+        e['dur'] = round(max(dur_us, 0.1), 3)
+
+    # Resolve overlapping events per virtual track (tid) in microsecond domain with 1ns resolution
+    events_by_tid = {}
+    for e in completed_events:
+        tid = e['tid']
+        if tid not in events_by_tid:
+            events_by_tid[tid] = []
+        events_by_tid[tid].append(e)
+
+    for tid, evs in events_by_tid.items():
+        evs.sort(key=lambda x: x['ts'])
+        last_end_us = 0.0
+        for e in evs:
+            if e['ts'] < last_end_us:
+                e['ts'] = round(last_end_us, 3)
+            last_end_us = round(e['ts'] + e['dur'], 3)
 
     trace_events = []
     trace_events.append({
@@ -387,10 +425,8 @@ def save_perfetto_trace(ops, output_path, limit=None, op_filter=None):
     })
 
     for tid in sorted(used_tids.keys()):
-        t, evt, slot = used_tids[tid]
+        t, evt = used_tids[tid]
         name = f"T{t} {evt}"
-        if slot > 0:
-            name += f" [{slot}]"
         trace_events.append({
             "name": "thread_name",
             "ph": "M",
@@ -408,16 +444,17 @@ def save_perfetto_trace(ops, output_path, limit=None, op_filter=None):
 
     last_op_end_us = 0.0
     for op in filtered_ops:
-        op_start_us = op['global_start_us']
-        op_dur_us = op['global_end_us'] - op['global_start_us']
+        op_start_us = round(op['global_start_us'], 3)
+        op_dur_us = round(op['global_end_us'] - op['global_start_us'], 3)
         if op_start_us < last_op_end_us:
             op_start_us = last_op_end_us
+        clamped_dur = round(max(op_dur_us, 0.1), 3)
         trace_events.append({
             "name": f"{op['name']} ({op['dims']})",
             "cat": "operator",
             "ph": "X",
             "ts": op_start_us,
-            "dur": max(op_dur_us, 0.1),
+            "dur": clamped_dur,
             "pid": 1,
             "tid": 0,
             "args": {
@@ -426,17 +463,17 @@ def save_perfetto_trace(ops, output_path, limit=None, op_filter=None):
                 "usec": op['usec']
             }
         })
-        last_op_end_us = op_start_us + op_dur_us
+        last_op_end_us = round(op_start_us + clamped_dur, 3)
 
     for e in completed_events:
-        start_us = global_start_offset_us + (e['start_cyc'] - global_min_cyc) / avg_freq_mhz
-        dur_us = (e['end_cyc'] - e['start_cyc']) / avg_freq_mhz
+        norm_name = normalize_event_name(e['event'])
+        name = f"DMA {e['info']}" if norm_name == "DMA" else norm_name
         trace_events.append({
-            "name": e['event'],
+            "name": name,
             "cat": "trace",
             "ph": "X",
-            "ts": start_us,
-            "dur": max(dur_us, 0.1),
+            "ts": e['ts'],
+            "dur": e['dur'],
             "pid": 1,
             "tid": e['tid'],
             "args": {

@@ -160,19 +160,22 @@ enum htp_profiler_mode {
 };
 
 enum htp_trace_event_id {
-    HTP_TRACE_EVT_QUANT               = 0,
-    HTP_TRACE_EVT_DEQUANT             = 1,
-    HTP_TRACE_EVT_HMX                 = 2,
-    HTP_TRACE_EVT_HVX                 = 3,
-    HTP_TRACE_EVT_TRANS_ACT           = 4,
-    HTP_TRACE_EVT_TRANS_OUT           = 5,
-    HTP_TRACE_EVT_DMA                 = 6,
+    HTP_TRACE_EVT_DMA                 = 0,
+
+    HTP_TRACE_EVT_HVX_COMP            = 20,
+    HTP_TRACE_EVT_HVX_A_QUANT         = 21,
+    HTP_TRACE_EVT_HVX_A_PREP          = 22,
+    HTP_TRACE_EVT_HVX_W_DEQUANT       = 23,
+    HTP_TRACE_EVT_HVX_W_PREP          = 24,
+    HTP_TRACE_EVT_HVX_O_PROC          = 25,
+
+    HTP_TRACE_EVT_HMX_COMP            = 40,
 };
 
 struct htp_trace_desc {
+    uint32_t cycles;  // lower 32-bits of cycle counter
     uint16_t id;      // Event ID
     uint16_t info;    // bit 15: is_stop. bits 14-0: tile/chunk index or other metadata.
-    uint32_t cycles;  // lower 32-bits of cycle counter
 };
 
 #define HTP_PROF_PMU_NCNT 8
