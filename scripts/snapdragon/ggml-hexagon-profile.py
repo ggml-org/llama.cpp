@@ -25,10 +25,32 @@ COL_MAP = {
 }
 
 op_pattern = re.compile(
-    r"profile-op\s+(?P<op_name>[A-Z_0-9+]+):\s+.*?\s+:\s+(?P<dims>[\d:x\s\->!]+)\s+:\s+(?P<types>[a-z\d_\s\->x]+)\s+:\s+.*?\s+(?:op-)?usec\s+(?P<usec>\d+)\s+(?:op-)?cycles\s+(?P<cycles>\d+)(?:\s+pmu\s+\[(?P<pmu>[\d,\s]+)\])?"
+    r"profile-op\s+(?P<op_name>[A-Z_0-9+]+):\s+.*?\s+:\s+(?P<dims>[\d:x\s\->!]+)\s+:\s+(?P<types>[a-z\d_\s\->x]+)\s+:\s+.*?\s+(?:op-)?usec\s+(?P<usec>\d+)\s+(?:op-)?cycles\s+(?P<cycles>\d+)(?:\s+start\s+(?P<start>\d+))?(?:\s+mhz\s+(?P<mhz>[\d.]+))?(?:\s+pmu\s+\[(?P<pmu>[\d,\s]+)\])?(?:\s+evt\s+\[(?P<evt>[\d,\s]+)\])?"
+)
+
+trace_pattern = re.compile(
+    r"trace-op\s+(?P<op_name>[A-Z_0-9+]+):\s+thread\s+(?P<thread>\d+)\s+event\s+(?P<event>[A-Z_]+)\s+info\s+(?P<info>\d+)\s+(?P<state>start|stop)\s+(?P<cycles>\d+)"
 )
 
 logger = logging.getLogger("ggml-hexagon-profile")
+
+
+class CycleUnwrapper:
+    def __init__(self):
+        self.last_raw = None
+        self.high_part = 0
+
+    def unwrap(self, raw):
+        if self.last_raw is None:
+            self.last_raw = raw
+            return raw
+        diff = raw - self.last_raw
+        if diff < -0x80000000:
+            self.high_part += 0x100000000
+        elif diff > 0x80000000:
+            self.high_part -= 0x100000000
+        self.last_raw = raw
+        return raw + self.high_part
 
 
 def parse_log(file_path, pmu_index=None):
@@ -42,32 +64,399 @@ def parse_log(file_path, pmu_index=None):
         sys.exit(1)
 
     all_ops = []
+    current_op = None
+
+    timestamp_pattern = re.compile(r"^(?P<min>\d+)\.(?P<sec>\d+)\.(?P<ms>\d+)\.(?P<us>\d+)\s+[A-Z]\s+")
+    unwrapper = CycleUnwrapper()
+
     for line in f:
-        match = op_pattern.search(line)
-        if not match: continue
+        ts_match = timestamp_pattern.match(line)
+        abs_usec = 0
+        if ts_match:
+            abs_usec = (
+                (int(ts_match.group('min')) * 60 + int(ts_match.group('sec'))) * 1000000
+                + int(ts_match.group('ms')) * 1000
+                + int(ts_match.group('us'))
+            )
 
-        pmu_raw = match.group('pmu')
-        pmu_val = None
-        if pmu_raw and pmu_index is not None:
-            try:
-                pmu_list = [int(x.strip()) for x in pmu_raw.split(',')]
-                if len(pmu_list) > pmu_index:
-                    pmu_val = pmu_list[pmu_index]
-            except (ValueError, IndexError):
-                pmu_val = None
+        op_match = op_pattern.search(line)
+        if op_match:
+            pmu_raw = op_match.group('pmu')
+            pmu_val = None
+            if pmu_raw and pmu_index is not None:
+                try:
+                    pmu_list = [int(x.strip()) for x in pmu_raw.split(',')]
+                    if len(pmu_list) > pmu_index:
+                        pmu_val = pmu_list[pmu_index]
+                except (ValueError, IndexError):
+                    pmu_val = None
 
-        all_ops.append({
-            'name':    match.group('op_name'),
-            'dims':    match.group('dims').strip(),
-            'types':   match.group('types').strip(),
-            'usec':    int(match.group('usec')),
-            'cycles':  int(match.group('cycles')),
-            'pmu_val': pmu_val
-        })
+            evt_raw = op_match.group('evt')
+            evt_val = None
+            if evt_raw:
+                try:
+                    evt_val = [int(x.strip()) for x in evt_raw.split(',')]
+                except ValueError:
+                    evt_val = None
+
+            cycles_start_raw = op_match.group('start')
+            unwrapped_cycles_start = None
+            if cycles_start_raw:
+                unwrapped_cycles_start = unwrapper.unwrap(int(cycles_start_raw))
+
+            current_op = {
+                'name':         op_match.group('op_name'),
+                'dims':         op_match.group('dims').strip(),
+                'types':        op_match.group('types').strip(),
+                'usec':         int(op_match.group('usec')),
+                'cycles':       int(op_match.group('cycles')),
+                'cycles_start': int(cycles_start_raw) if cycles_start_raw else None,
+                'unwrapped_cycles_start': unwrapped_cycles_start,
+                'pmu_val':      pmu_val,
+                'evt_val':      evt_val,
+                'abs_usec':     abs_usec,
+                'trace_events': []
+            }
+            all_ops.append(current_op)
+            continue
+
+        trace_match = trace_pattern.search(line)
+        if trace_match and current_op:
+            if trace_match.group('op_name') == current_op['name']:
+                raw_cyc = int(trace_match.group('cycles'))
+                current_op['trace_events'].append({
+                    'thread': int(trace_match.group('thread')),
+                    'event':  trace_match.group('event'),
+                    'info':   int(trace_match.group('info')),
+                    'cycles': raw_cyc,
+                    'unwrapped_cycles': unwrapper.unwrap(raw_cyc),
+                    'state':  trace_match.group('state')
+                })
 
     f.close()
-
     return all_ops
+
+
+def print_ascii_timeline(op_name, dims, types, usec, cycles, events, evt_val=None):
+    evt_str = ""
+    if evt_val:
+        evt_str = " - evt [" + ",".join(str(x) for x in evt_val) + "]"
+    logger.info("=" * 100)
+    logger.info(f"{op_name} ({dims} : {types}) - {usec} usec {cycles} cycles{evt_str}")
+    logger.info("=" * 100)
+
+    events = sorted(events, key=lambda e: e['cycles'])
+    if not events:
+        logger.info("  No trace events recorded.")
+        return
+
+    min_cycles = events[0]['cycles']
+
+    logger.info(f"Cycles      %-30s" % "EventDetails" + " ".join(f"T{i:<2}" for i in range(10)) + " HMX")
+    logger.info("-" * 100)
+
+    thread_stacks = [[] for _ in range(11)]
+
+    event_char_map = {
+        'QUANT': 'Q',
+        'DEQUANT': 'D',
+        'HMX': 'H',
+        'HVX': 'V',
+        'TRANS_ACT': 'A',
+        'TRANS_OUT': 'O',
+        'DMA': 'M'
+    }
+
+    for e in events:
+        t = e['thread']
+        if t < 0 or t > 10:
+            continue
+
+        if e['cycles'] >= min_cycles:
+            rel_cycles = e['cycles'] - min_cycles
+        else:
+            rel_cycles = (e['cycles'] + 0x100000000) - min_cycles
+
+        state = e['state']
+        evt_type = e['event']
+        char = event_char_map.get(evt_type, '?')
+
+        if state == 'start':
+            thread_stacks[t].append(char)
+        elif state == 'stop':
+            if thread_stacks[t]:
+                if thread_stacks[t][-1] == char:
+                    thread_stacks[t].pop()
+                elif char in thread_stacks[t]:
+                    thread_stacks[t].remove(char)
+                else:
+                    thread_stacks[t].pop()
+
+        cols = []
+        for i in range(11):
+            if thread_stacks[i]:
+                cols.append(f"[{thread_stacks[i][-1]}]")
+            else:
+                cols.append(" | ")
+
+        evt_desc = f"T{t}: {evt_type} {state} ({e['info']})"
+        logger.info(f"{rel_cycles:10d}  %-30s" % evt_desc + " ".join(cols[:10]) + "  " + cols[10])
+    logger.info("-" * 100)
+
+
+def print_ascii_summary(op_name, dims, types, usec, cycles, events, evt_val=None):
+    evt_str = ""
+    if evt_val:
+        evt_str = " - evt [" + ",".join(str(x) for x in evt_val) + "]"
+    logger.info("=" * 100)
+    logger.info(f"{op_name} ({dims} : {types}) - {usec} usec {cycles} cycles{evt_str}")
+    logger.info("=" * 100)
+
+    events = sorted(events, key=lambda e: e['cycles'])
+    if not events:
+        logger.info("  No trace events recorded.")
+        return
+
+    active_starts = {}
+    thread_totals = defaultdict(lambda: defaultdict(int))
+
+    for e in events:
+        t = e['thread']
+        evt = e['event']
+        info = e['info']
+        cyc = e['cycles']
+        state = e['state']
+
+        key = (t, evt, info)
+        if state == 'start':
+            active_starts[key] = cyc
+        elif state == 'stop':
+            if key in active_starts:
+                start_cyc = active_starts[key]
+                del active_starts[key]
+
+                if cyc >= start_cyc:
+                    dur = cyc - start_cyc
+                else:
+                    dur = (cyc + 0x100000000) - start_cyc
+
+                thread_totals[t][evt] += dur
+
+    for t in sorted(thread_totals.keys()):
+        thread_name = f"Thread {t}" if t != 10 else "Thread 10 (HMX)"
+        sorted_evts = sorted(thread_totals[t].items(), key=lambda item: item[1], reverse=True)
+        
+        evt_strs = []
+        for evt, dur in sorted_evts:
+            pct = (dur / cycles * 100) if cycles > 0 else 0
+            evt_strs.append(f"{evt} {dur} ({pct:.1f}%)")
+            
+        logger.info(f"  {thread_name:<16}: " + " | ".join(evt_strs))
+
+
+def save_perfetto_trace(ops, output_path, limit=None, op_filter=None):
+    filtered_ops = []
+    for op in ops:
+        if op_filter and not op['name'].startswith(op_filter):
+            continue
+        filtered_ops.append(op)
+
+    if limit is not None:
+        filtered_ops = filtered_ops[:limit]
+
+    if not filtered_ops:
+        return
+
+    # Compute average frequency
+    frequencies = []
+    for op in filtered_ops:
+        if op['usec'] > 0 and op['cycles'] > 0:
+            frequencies.append(op['cycles'] / op['usec'])
+    avg_freq_mhz = statistics.mean(frequencies) if frequencies else 1000.0
+    if avg_freq_mhz <= 0:
+        avg_freq_mhz = 1000.0
+
+    # Assign start and end cycles to each operator
+    for op in filtered_ops:
+        op['start_cycles'] = op['unwrapped_cycles_start']
+        op['end_cycles'] = op['start_cycles'] + op['cycles']
+
+    global_min_cyc = min(op['start_cycles'] for op in filtered_ops)
+
+    global_start_offset_us = 0.0
+    for op in filtered_ops:
+        if op['abs_usec'] > 0:
+            global_start_offset_us = op['abs_usec'] - ((op['start_cycles'] - global_min_cyc) / avg_freq_mhz)
+            break
+    if global_start_offset_us < 0.0:
+        global_start_offset_us = 0.0
+
+    for op in filtered_ops:
+        op['global_start_us'] = global_start_offset_us + (op['start_cycles'] - global_min_cyc) / avg_freq_mhz
+        op['global_end_us'] = global_start_offset_us + (op['end_cycles'] - global_min_cyc) / avg_freq_mhz
+
+    completed_events = []
+    for op in filtered_ops:
+        events = op['trace_events']
+        if not events:
+            continue
+        events = sorted(events, key=lambda e: e['unwrapped_cycles'])
+
+        active_starts = {}
+        for e in events:
+            t = e['thread']
+            evt = e['event']
+            info = e['info']
+            state = e['state']
+            cyc = e['unwrapped_cycles']
+
+            key = (t, evt, info)
+            if state == 'start':
+                active_starts[key] = cyc
+            elif state == 'stop':
+                if key in active_starts:
+                    start_cyc = active_starts[key]
+                    del active_starts[key]
+                    completed_events.append({
+                        'thread': t,
+                        'event': evt,
+                        'info': info,
+                        'start_cyc': start_cyc,
+                        'end_cyc': cyc,
+                        'op_name': op['name']
+                    })
+
+    completed_events.sort(key=lambda e: e['start_cyc'])
+    active_slots = defaultdict(list)
+    for e in completed_events:
+        t = e['thread']
+        evt = e['event']
+        start_cyc = e['start_cyc']
+        end_cyc = e['end_cyc']
+
+        slots = active_slots[(t, evt)]
+        allocated_slot = -1
+        for idx, slot_end_cyc in enumerate(slots):
+            if slot_end_cyc <= start_cyc:
+                slots[idx] = end_cyc
+                allocated_slot = idx
+                break
+        if allocated_slot == -1:
+            slots.append(end_cyc)
+            allocated_slot = len(slots) - 1
+        e['slot'] = allocated_slot
+
+    event_types = {}
+    used_tids = {}
+    for e in completed_events:
+        t = e['thread']
+        evt = e['event']
+        slot = e['slot']
+        if evt not in event_types:
+            event_types[evt] = len(event_types) + 1
+        evt_id = event_types[evt]
+        # Map physical thread to sorted virtual thread position:
+        # HMX (t = 10) goes to position 1.
+        # HVX (t = 0..9) goes to position t + 2.
+        t_sort = 1 if t == 10 else t + 2
+        tid = t_sort * 1000 + evt_id * 100 + slot
+        e['tid'] = tid
+        used_tids[tid] = (t, evt, slot)
+
+    trace_events = []
+    trace_events.append({
+        "name": "process_name",
+        "ph": "M",
+        "pid": 1,
+        "args": {"name": "HTP NPU"}
+    })
+
+    trace_events.append({
+        "name": "thread_name",
+        "ph": "M",
+        "pid": 1,
+        "tid": 0,
+        "args": {"name": "Operators"}
+    })
+    trace_events.append({
+        "name": "thread_sort_index",
+        "ph": "M",
+        "pid": 1,
+        "tid": 0,
+        "args": {"sort_index": 0}
+    })
+
+    for tid in sorted(used_tids.keys()):
+        t, evt, slot = used_tids[tid]
+        name = f"T{t} {evt}"
+        if slot > 0:
+            name += f" [{slot}]"
+        trace_events.append({
+            "name": "thread_name",
+            "ph": "M",
+            "pid": 1,
+            "tid": tid,
+            "args": {"name": name}
+        })
+        trace_events.append({
+            "name": "thread_sort_index",
+            "ph": "M",
+            "pid": 1,
+            "tid": tid,
+            "args": {"sort_index": tid}
+        })
+
+    last_op_end_us = 0.0
+    for op in filtered_ops:
+        op_start_us = op['global_start_us']
+        op_dur_us = op['global_end_us'] - op['global_start_us']
+        if op_start_us < last_op_end_us:
+            op_start_us = last_op_end_us
+        trace_events.append({
+            "name": f"{op['name']} ({op['dims']})",
+            "cat": "operator",
+            "ph": "X",
+            "ts": op_start_us,
+            "dur": max(op_dur_us, 0.1),
+            "pid": 1,
+            "tid": 0,
+            "args": {
+                "dtypes": op['types'],
+                "cycles": op['cycles'],
+                "usec": op['usec']
+            }
+        })
+        last_op_end_us = op_start_us + op_dur_us
+
+    for e in completed_events:
+        start_us = global_start_offset_us + (e['start_cyc'] - global_min_cyc) / avg_freq_mhz
+        dur_us = (e['end_cyc'] - e['start_cyc']) / avg_freq_mhz
+        trace_events.append({
+            "name": e['event'],
+            "cat": "trace",
+            "ph": "X",
+            "ts": start_us,
+            "dur": max(dur_us, 0.1),
+            "pid": 1,
+            "tid": e['tid'],
+            "args": {
+                "info": e['info'],
+                "op": e['op_name']
+            }
+        })
+
+    import json
+    import gzip
+    try:
+        if output_path.endswith('.gz'):
+            f = gzip.open(output_path, 'wt', encoding='utf-8')
+        else:
+            f = open(output_path, 'w', encoding='utf-8')
+        with f:
+            json.dump({"traceEvents": trace_events}, f)
+        logger.info(f"Successfully saved Perfetto trace to {output_path}")
+    except Exception as ex:
+        logger.error(f"Failed to write Perfetto trace to {output_path}: {ex}")
 
 
 def generate_report(ops, top_n, width_overrides, sort_col, pmu_name=None):
@@ -115,7 +504,6 @@ def generate_report(ops, top_n, width_overrides, sort_col, pmu_name=None):
 
     # Sorting logic
     actual_sort_key = COL_MAP[sort_col][2]
-    # We sort numeric fields descending, strings (op/dims) ascending
     is_numeric    = actual_sort_key.startswith("_") or actual_sort_key == "count"
     sorted_groups = sorted(group_stats, key=lambda x: x[actual_sort_key], reverse=is_numeric)[:top_n]
 
@@ -167,12 +555,16 @@ def main():
     parser.add_argument("--pmu-index", type=int)
     parser.add_argument("--pmu-name", type=str)
     parser.add_argument("--width", action='append', default=['dims:40'], help="Override column width, e.g. --width dims:50")
+    parser.add_argument("--timeline", type=str, nargs='?', const='summary', choices=["summary", "diagram"],
+                        help="Output ASCII art event summary or timing diagram (default: summary)")
+    parser.add_argument("--filter", type=str, help="Filter ASCII timeline/summary by op name prefix")
+    parser.add_argument("--perfetto", type=str, help="Output Perfetto JSON trace file path")
+    parser.add_argument("--limit", type=int, help="Limit number of ops in Perfetto trace")
 
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format='%(message)s')
 
-    # Sort validation: can't sort by PMU if index isn't provided
     if "pmu" in args.sort and args.pmu_index is None:
         logger.error(f"Cannot sort by '{args.sort}' without --pmu-index.")
         sys.exit(1)
@@ -188,7 +580,25 @@ def main():
 
     final_pmu_name = (args.pmu_name or f"#{args.pmu_index}") if args.pmu_index is not None else None
     ops = parse_log(args.logfile, pmu_index=args.pmu_index)
-    generate_report(ops, args.top, overrides, args.sort, pmu_name=final_pmu_name)
+
+    if args.perfetto:
+        save_perfetto_trace(ops, args.perfetto, limit=args.limit, op_filter=args.filter)
+
+    if args.timeline:
+        logger.info(f"\n# ASCII Timing {args.timeline.capitalize()}\n")
+        printed_cnt = 0
+        for op in ops:
+            if args.filter and not op['name'].startswith(args.filter):
+                continue
+            if args.timeline == "summary":
+                print_ascii_summary(op['name'], op['dims'], op['types'], op['usec'], op['cycles'], op['trace_events'], op.get('evt_val'))
+            elif args.timeline == "diagram":
+                print_ascii_timeline(op['name'], op['dims'], op['types'], op['usec'], op['cycles'], op['trace_events'], op.get('evt_val'))
+            printed_cnt += 1
+            if printed_cnt >= args.top:
+                break
+    else:
+        generate_report(ops, args.top, overrides, args.sort, pmu_name=final_pmu_name)
 
 
 if __name__ == "__main__":

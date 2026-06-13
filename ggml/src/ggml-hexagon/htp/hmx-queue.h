@@ -47,6 +47,7 @@ struct hmx_queue {
     void *           stack;
     uint32_t         hap_rctx;
     bool             hmx_locked;
+    struct htp_thread_trace * trace;
 };
 
 struct hmx_queue * hmx_queue_create(size_t capacity, uint32_t hap_rctx);
