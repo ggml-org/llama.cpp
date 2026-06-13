@@ -37,6 +37,14 @@ class TensorNameMap:
             "model.embed",                               # talkie
         ),
 
+        # Masked embeddings
+        MODEL_TENSOR.MASKED_EMBD_CENTROIDS: (
+            "masked_embedding.centroids",                # gemma-4 E2B/E4B assistants
+        ),
+        MODEL_TENSOR.MASKED_EMBD_ORDERING: (
+            "masked_embedding.token_ordering",           # gemma-4 E2B/E4B assistants
+        ),
+
         # Token type embeddings
         MODEL_TENSOR.TOKEN_TYPES: (
             "embeddings.token_type_embeddings",  # bert nomic-bert
@@ -2367,6 +2375,14 @@ class TensorNameMap:
         ),
 
         # NextN/MTP tensors
+        MODEL_TENSOR.NEXTN_PROJ_PRE: (
+            "pre_projection",
+        ),
+
+        MODEL_TENSOR.NEXTN_PROJ_POST: (
+            "post_projection",
+        ),
+
         MODEL_TENSOR.NEXTN_EH_PROJ: (
             "model.layers.{bid}.eh_proj",
         ),

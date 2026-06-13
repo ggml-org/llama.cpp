@@ -13,6 +13,8 @@
 		DialogConversationTitleUpdate,
 		SidebarNavigation
 	} from '$lib/components/app';
+	import { PwaMetaTags, PwaRefreshAlert } from '$lib/components/pwa';
+	import { pwaAssetsHead } from 'virtual:pwa-assets/head';
 
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
 	import * as Sidebar from '$lib/components/ui/sidebar/index.js';
@@ -26,10 +28,16 @@
 	import { modelsStore } from '$lib/stores/models.svelte';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import { TOOLTIP_DELAY_DURATION } from '$lib/constants';
+	import { FAVICON_PATHS, FAVICON_SELECTORS } from '$lib/constants/pwa';
 	import { useKeyboardShortcuts } from '$lib/hooks/use-keyboard-shortcuts.svelte';
+	import { usePwa } from '$lib/hooks/use-pwa.svelte';
 	import { useSettingsNavigation } from '$lib/hooks/use-settings-navigation.svelte';
 	import { conversations } from '$lib/stores/conversations.svelte';
 	import { isMobile } from '$lib/stores/viewport.svelte';
+	import { theme } from '$lib/stores/theme.svelte';
+	import { buildInfoStore } from '$lib/stores/build-info.svelte';
+
+	import { SETTINGS_KEYS } from '$lib/constants';
 
 	let { children } = $props();
 	let alwaysShowSidebarOnDesktop = $derived(config().alwaysShowSidebarOnDesktop);
@@ -46,11 +54,31 @@
 		  }
 		| undefined = $state();
 
+	let showBuildVersion = $derived(config()[SETTINGS_KEYS.SHOW_BUILD_VERSION] as boolean);
+
 	let titleUpdateDialogOpen = $state(false);
 	let titleUpdateCurrentTitle = $state('');
 	let titleUpdateNewTitle = $state('');
 	let titleUpdateResolve: ((value: boolean) => void) | null = null;
+
 	const panelNav = useSettingsNavigation();
+	// Keep the hook object intact: destructuring needRefreshByStorage reads the getter once and freezes it
+	const pwa = usePwa();
+	const { needRefresh, updateServiceWorker } = pwa;
+
+	function updateFavicon() {
+		const dark = theme.isSystemDark;
+
+		let icoLink = document.querySelector(FAVICON_SELECTORS.ICO_48X48) as HTMLLinkElement | null;
+		if (icoLink) {
+			icoLink.href = dark ? FAVICON_PATHS.ICO_DARK : FAVICON_PATHS.ICO_LIGHT;
+		}
+
+		let svgLink = document.querySelector(FAVICON_SELECTORS.SVG_ANY) as HTMLLinkElement | null;
+		if (svgLink) {
+			svgLink.href = dark ? FAVICON_PATHS.SVG_DARK : FAVICON_PATHS.SVG_LIGHT;
+		}
+	}
 
 	function navigateToConversation(direction: -1 | 1) {
 		const allConvs = conversations();
@@ -137,7 +165,14 @@
 	}
 
 	onMount(() => {
+		updateFavicon();
 		mounted = true;
+	});
+
+	$effect(() => {
+		void theme.isSystemDark;
+
+		updateFavicon();
 	});
 
 	$effect(() => {
@@ -236,13 +271,36 @@
 </script>
 
 <svelte:head>
+	{#if pwaAssetsHead.themeColor}
+		<meta name="theme-color" content={pwaAssetsHead.themeColor.content} />
+	{/if}
+
 	{#if config().customCss}
 		<style use:customCss></style>
 	{/if}
+
+	{#each pwaAssetsHead.links as link (link.href)}
+		<link {...link} />
+	{/each}
+
+	<PwaMetaTags />
 </svelte:head>
+
+<!-- PWA update prompt + version -->
+<div class="fixed right-4 bottom-4 z-[9999] flex flex-col items-end gap-1">
+	{#if showBuildVersion && buildInfoStore.value}
+		<span class="text-[10px] tabular-nums text-muted-foreground">{buildInfoStore.value}</span>
+	{/if}
+	<PwaRefreshAlert
+		needRefresh={$needRefresh || pwa.needRefreshByStorage}
+		forceReload={pwa.needRefreshByStorage}
+		{updateServiceWorker}
+	/>
+</div>
 
 <Tooltip.Provider delayDuration={TOOLTIP_DELAY_DURATION}>
 	<ModeWatcher />
+
 	<Toaster richColors />
 
 	<DialogConversationTitleUpdate
@@ -285,9 +343,9 @@
 				/>
 			{/if}
 
-			<Sidebar.Inset class="flex flex-1 flex-col overflow-hidden"
-				>{@render children?.()}</Sidebar.Inset
-			>
+			<Sidebar.Inset class="flex flex-1 flex-col overflow-hidden">
+				{@render children?.()}
+			</Sidebar.Inset>
 		</div>
 	</Sidebar.Provider>
 </Tooltip.Provider>

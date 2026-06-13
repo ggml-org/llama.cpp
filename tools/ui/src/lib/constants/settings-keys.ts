@@ -31,6 +31,7 @@ export const SETTINGS_KEYS = {
 	SHOW_RAW_MODEL_NAMES: 'showRawModelNames',
 	SHOW_MODEL_QUANTIZATION: 'showModelQuantization',
 	SHOW_MODEL_TAGS: 'showModelTags',
+	SHOW_BUILD_VERSION: 'showBuildVersion',
 	SHOW_SYSTEM_MESSAGE: 'showSystemMessage',
 	// Sampling
 	TEMPERATURE: 'temperature',
@@ -69,6 +70,7 @@ export const SETTINGS_KEYS = {
 	ENABLE_THINKING: 'enableThinking',
 	SHOW_RAW_OUTPUT_SWITCH: 'showRawOutputSwitch',
 	// PY_INTERPRETER_ENABLED: 'pyInterpreterEnabled',
+	JS_SANDBOX_ENABLED: 'jsSandboxEnabled',
 	CUSTOM_JSON: 'customJson',
 	CUSTOM_CSS: 'customCss'
 } as const;
