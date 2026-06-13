@@ -264,7 +264,7 @@ def generate_perfetto_trace(filtered_ops, output_path):
         evt = e['event']
         ts = e['ts_ns']
         dur = e['dur_ns']
-        
+
         norm_evt = normalize_event_name(evt)
         if norm_evt == "DMA":
             track_key = (t, "DMA")
@@ -291,7 +291,7 @@ def generate_perfetto_trace(filtered_ops, output_path):
         t = e['thread']
         evt = e['event']
         slot = e['slot']
-        
+
         norm_evt = normalize_event_name(evt)
         if norm_evt == "DMA":
             track_evt = "DMA"
@@ -415,7 +415,7 @@ def main():
     parser.add_argument("logfile", help="Path to hex-log profile file")
     parser.add_argument("-o", "--output", default="optrace.perfetto-trace", help="Output trace file path (default: optrace.perfetto-trace)")
     parser.add_argument("--filter", type=str, help="Regex filter matching against the original profile-op line")
-    
+
     group = parser.add_mutually_exclusive_group()
     group.add_argument("--head", type=int, help="Limit to first N ops")
     group.add_argument("--tail", type=int, help="Limit to last N ops")

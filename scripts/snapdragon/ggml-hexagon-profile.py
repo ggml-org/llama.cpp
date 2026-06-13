@@ -272,12 +272,12 @@ def print_ascii_summary(op_name, dims, types, usec, cycles, events, evt_val=None
     for t in sorted(thread_totals.keys()):
         thread_name = f"Thread {t} (HVX)" if t != 10 else "Thread 10 (HMX)"
         sorted_evts = sorted(thread_totals[t].items(), key=lambda item: item[1], reverse=True)
-        
+
         evt_strs = []
         for evt, dur in sorted_evts:
             pct = (dur / cycles * 100) if cycles > 0 else 0
             evt_strs.append(f"{evt} {dur} ({pct:.1f}%)")
-            
+
         logger.info(f"  {thread_name:<16}: " + " | ".join(evt_strs))
 
 
@@ -380,7 +380,7 @@ def main():
     parser.add_argument("--timeline", type=str, nargs='?', const='summary', choices=["summary", "diagram"],
                         help="Output ASCII art event summary or timing diagram (default: summary)")
     parser.add_argument("--filter", type=str, help="Regex filter matching against the original profile-op line")
-    
+
     group = parser.add_mutually_exclusive_group()
     group.add_argument("--head", type=int, help="Limit to first N ops")
     group.add_argument("--tail", type=int, help="Limit to last N ops")
