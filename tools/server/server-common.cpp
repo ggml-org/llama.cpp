@@ -344,6 +344,14 @@ const mtmd::input_chunk_ptr & server_tokens::find_chunk(size_t idx) const {
     throw std::runtime_error("Chunk not found");
 }
 
+std::pair<const mtmd::input_chunk_ptr *, size_t> server_tokens::find_next_media_chunk(size_t idx) const {
+    auto it = map_idx_to_media.upper_bound(idx);
+    if (it != map_idx_to_media.end()) {
+        return { &it->second, it->first };
+    }
+    return { nullptr, 0 };
+}
+
 void server_tokens::push_back(llama_token tok) {
     if (tok == LLAMA_TOKEN_NULL) {
         throw std::runtime_error("Invalid token");
@@ -1128,9 +1136,14 @@ json oaicompat_chat_params_parse(
     {
         // Per-request overrides, read before writing to llama_params so the generic copy
         // loop (which skips keys already present) won't clobber the caller-supplied values.
-        int reasoning_budget = json_value(body, "reasoning_budget_tokens", opt.reasoning_budget);
-        if (reasoning_budget == -1 && body.contains("thinking_budget_tokens")) {
+        // Precedence: canonical reasoning_budget_tokens > Anthropic thinking_budget_tokens
+        // alias > server-level default.
+        int reasoning_budget = json_value(body, "reasoning_budget_tokens", -1);
+        if (reasoning_budget == -1) {
             reasoning_budget = json_value(body, "thinking_budget_tokens", -1);
+        }
+        if (reasoning_budget == -1) {
+            reasoning_budget = opt.reasoning_budget;
         }
         std::string reasoning_budget_message = json_value(body, "reasoning_budget_message", opt.reasoning_budget_message);
 
