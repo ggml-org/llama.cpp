@@ -18,6 +18,7 @@ trace_pattern = re.compile(
     r"trace-op\s+(?P<op_name>[A-Z_0-9+]+):\s+thread\s+(?P<thread>\d+)\s+event\s+(?P<event>[A-Z_0-9\-]+)\s+info\s+(?P<info>\d+)\s+(?P<state>start|stop)\s+(?P<cycles>\d+)"
 )
 
+
 def normalize_event_name(evt_type):
     if evt_type == "HVX_COMP":
         return "V-COMP"
@@ -27,6 +28,7 @@ def normalize_event_name(evt_type):
     if name.startswith("HVX_") or name.startswith("HMX_"):
         name = name[4:]
     return name.replace("_", "-")
+
 
 class CycleUnwrapper:
     def __init__(self):
@@ -44,6 +46,7 @@ class CycleUnwrapper:
             self.high_part -= 0x100000000
         self.last_raw = raw
         return raw + self.high_part
+
 
 def parse_log(file_path):
     try:
@@ -104,7 +107,8 @@ def parse_log(file_path):
     f.close()
     return all_ops
 
-# --- Zero-Dependency Protobuf Encoder ---
+# --- Simple protobuf encoder ---
+
 
 def write_varint(val):
     if val < 0:
@@ -120,27 +124,34 @@ def write_varint(val):
             break
     return bytes(res)
 
+
 def pb_field(num, wire, data):
     return write_varint((num << 3) | wire) + data
+
 
 def pb_varint(num, val):
     return pb_field(num, 0, write_varint(val))
 
+
 def pb_length_delimited(num, data):
     return pb_field(num, 2, write_varint(len(data)) + data)
+
 
 def pb_string(num, text):
     return pb_length_delimited(num, text.encode('utf-8'))
 
+
 # Message Encoders
 def make_process_descriptor(pid, name):
     return pb_varint(1, pid) + pb_string(6, name)
+
 
 def make_thread_descriptor(pid, tid, name, sort_index=None):
     payload = pb_varint(1, pid) + pb_varint(2, tid) + pb_string(5, name)
     if sort_index is not None:
         payload += pb_varint(3, sort_index)
     return payload
+
 
 def make_track_descriptor(uuid, name=None, parent_uuid=None, thread=None, process=None, sibling_merge_behavior=None, child_ordering=None, sibling_order_rank=None):
     payload = pb_varint(1, uuid)
@@ -160,6 +171,7 @@ def make_track_descriptor(uuid, name=None, parent_uuid=None, thread=None, proces
         payload += pb_varint(12, sibling_order_rank)
     return payload
 
+
 def make_debug_annotation(name, string_val=None, int_val=None):
     payload = pb_string(10, name)
     if string_val is not None:
@@ -167,6 +179,7 @@ def make_debug_annotation(name, string_val=None, int_val=None):
     elif int_val is not None:
         payload += pb_varint(4, int_val)
     return payload
+
 
 def make_track_event(event_type, track_uuid, name=None, category=None, debug_annotations=None):
     payload = pb_varint(9, event_type)
@@ -180,6 +193,7 @@ def make_track_event(event_type, track_uuid, name=None, category=None, debug_ann
             payload += pb_length_delimited(4, da)
     return payload
 
+
 def make_trace_packet(timestamp, track_event=None, track_descriptor=None, seq_id=1):
     payload = pb_varint(8, timestamp)
     payload += pb_varint(10, seq_id)
@@ -189,11 +203,13 @@ def make_trace_packet(timestamp, track_event=None, track_descriptor=None, seq_id
         payload += pb_length_delimited(60, track_descriptor)
     return payload
 
+
 def write_trace_packet_to_file(f, packet_bytes):
     # Write as field 1 of top-level Trace message
     f.write(pb_length_delimited(1, packet_bytes))
 
 # --- End Protobuf Encoder ---
+
 
 def generate_perfetto_trace(filtered_ops, output_path):
     if not filtered_ops:
@@ -410,6 +426,7 @@ def generate_perfetto_trace(filtered_ops, output_path):
 
     logger.info(f"Successfully generated Perfetto trace at {output_path}")
 
+
 def main():
     parser = argparse.ArgumentParser(description="Convert Hexagon Op profile logs to native Perfetto Protobuf traces.")
     parser.add_argument("logfile", help="Path to hex-log profile file")
@@ -439,6 +456,7 @@ def main():
         ops = ops[-args.tail:]
 
     generate_perfetto_trace(ops, args.output)
+
 
 if __name__ == "__main__":
     main()

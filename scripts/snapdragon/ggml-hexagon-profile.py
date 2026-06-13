@@ -169,7 +169,7 @@ def print_ascii_timeline(op_name, dims, types, usec, cycles, events, evt_val=Non
 
     min_cycles = events[0]['cycles']
 
-    logger.info(f"Cycles      %-30s" % "EventDetails" + " ".join(f"T{i:<2}" for i in range(10)) + " HMX")
+    logger.info("Cycles      %-30s" % "EventDetails" + " ".join(f"T{i:<2}" for i in range(10)) + " HMX")
     logger.info("-" * 100)
 
     thread_stacks = [[] for _ in range(11)]
