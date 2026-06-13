@@ -513,8 +513,8 @@ struct llama_device {
 };
 
 struct llama_meta_device_get_split_state_userdata {
-    size_t                     n_devices;
-    const struct llama_model * model;
+    size_t                     n_devices = 0;
+    const struct llama_model * model     = nullptr;
 };
 
 struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const struct ggml_tensor * tensor, void * userdata);
@@ -616,6 +616,8 @@ struct llama_model {
     size_t n_devices() const;
     const float * tensor_split() const;
 
+    void own_tensor_split(size_t n);
+
     uint32_t n_gpu_layers() const;
     llama_split_mode split_mode() const;
 
@@ -656,6 +658,8 @@ struct llama_model {
 
 protected:
     llama_model_params params;
+
+    std::vector<float> tensor_split_owned;
 
     struct impl;
     std::unique_ptr<impl> pimpl;
