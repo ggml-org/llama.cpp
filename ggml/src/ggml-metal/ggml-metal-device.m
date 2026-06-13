@@ -104,26 +104,26 @@ int ggml_metal_pipeline_max_theads_per_threadgroup(struct ggml_metal_pipeline_wi
 //   X(suffix, name): name is both the kernels/<name>.metal basename and the
 //   ggml_metallib_<name>_{start,end} embed-symbol stem.
 #define GGML_METAL_LIBS \
-    X(FA,         fa)         \
-    X(MUL_MV,     mul_mv)     \
-    X(MUL_MM,     mul_mm)     \
-    X(QUANTIZE,   quantize)   \
-    X(SOFTMAX,    softmax)    \
-    X(NORM,       norm)       \
-    X(UNARY,      unary)      \
-    X(BINBCAST,   binbcast)   \
-    X(REDUCE,     reduce)     \
-    X(TRI,        tri)        \
-    X(SSM,        ssm)        \
-    X(WKV,        wkv)        \
-    X(GLA,        gla)        \
-    X(SOLVE_TRI,  solve_tri)  \
-    X(ROPE,       rope)       \
-    X(CONV,       conv)       \
-    X(UPSCALE,    upscale)    \
-    X(ARGSORT,    argsort)    \
-    X(POOL,       pool)       \
-    X(MISC,       misc)
+    X(FA,              fa)             \
+    X(MUL_MV,          mul_mv)         \
+    X(MUL_MM,          mul_mm)         \
+    X(QUANTIZE,        quantize)       \
+    X(SOFTMAX,         softmax)        \
+    X(NORM,            norm)           \
+    X(UNARY,           unary)          \
+    X(BINBCAST,        binbcast)       \
+    X(REDUCE,          reduce)         \
+    X(TRI,             tri)            \
+    X(SSM,             ssm)            \
+    X(WKV,             wkv)            \
+    X(GATED_DELTA_NET, gated_delta_net)\
+    X(SOLVE_TRI,       solve_tri)      \
+    X(ROPE,            rope)           \
+    X(CONV,            conv)           \
+    X(UPSCALE,         upscale)        \
+    X(ARGSORT,         argsort)        \
+    X(POOL,            pool)           \
+    X(MISC,            misc)
 
 enum ggml_metal_lib_kind {
 #define X(e, s) GGML_METAL_LIB_##e,
@@ -272,6 +272,101 @@ static NSString * ggml_metal_library_flatten_source(NSString * path_source, NSEr
     return src;
 }
 
+// Compile all per-kind libraries in parallel. `source_for_kind` returns the MSL
+// source for a kind (the helper takes ownership and releases it), or nil with
+// *err set on failure. On success the objs[] slots are populated and the routing
+// index is built; on any failure every error is logged and false is returned
+// (the caller is responsible for freeing `res`).
+static bool ggml_metal_library_compile_all(
+        ggml_metal_library_t res,
+        id<MTLDevice> device,
+        NSDictionary * prep,
+        NSString * (^source_for_kind)(int kind, NSError ** err),
+        const char * origin) {
+    const int64_t t_start = ggml_time_us();
+
+    int64_t  * t_per_lib   = calloc(GGML_METAL_LIB_COUNT, sizeof(int64_t));
+    NSError ** err_per_lib = calloc(GGML_METAL_LIB_COUNT, sizeof(NSError *));
+    __block atomic_bool any_failure = false;
+
+    dispatch_group_t group = dispatch_group_create();
+    dispatch_queue_t queue = dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0);
+
+    for (int kind = 0; kind < GGML_METAL_LIB_COUNT; ++kind) {
+        dispatch_group_async(group, queue, ^{
+
+            const int64_t t0 = ggml_time_us();
+
+            NSError * error = nil;
+
+            NSString * src = source_for_kind(kind, &error);
+            if (!src) {
+                err_per_lib[kind] = [error retain];
+                atomic_store(&any_failure, true);
+                return;
+            }
+
+            id<MTLLibrary> lib = nil;
+
+            @autoreleasepool {
+                MTLCompileOptions * options = [MTLCompileOptions new];
+                options.preprocessorMacros = prep;
+
+                lib = [device newLibraryWithSource:src options:options error:&error];
+
+                [options release];
+
+                // retain the error before the autorelease pool drains it
+                if (!lib) {
+                    err_per_lib[kind] = [error retain];
+                }
+            }
+
+            [src release];
+
+            t_per_lib[kind] = ggml_time_us() - t0;
+
+            if (!lib) {
+                atomic_store(&any_failure, true);
+                return;
+            }
+
+            res->objs[kind] = lib;
+        });
+    }
+    dispatch_group_wait(group, DISPATCH_TIME_FOREVER);
+    dispatch_release(group);
+
+    const bool ok = !atomic_load(&any_failure);
+
+    if (ok) {
+        const int64_t t_total = ggml_time_us() - t_start;
+        int64_t t_max = 0;
+        for (int kind = 0; kind < GGML_METAL_LIB_COUNT; ++kind) {
+            GGML_LOG_DEBUG("%s: compiled '%s' library in %.3f sec\n",
+                           __func__, k_lib_names[kind], t_per_lib[kind] / 1e6);
+            if (t_per_lib[kind] > t_max) t_max = t_per_lib[kind];
+        }
+        GGML_LOG_INFO("%s: loaded %d libraries from %s in %.3f sec (max single = %.3f sec)\n",
+                      __func__, GGML_METAL_LIB_COUNT, origin, t_total / 1e6, t_max / 1e6);
+
+        ggml_metal_library_build_index(res);
+    } else {
+        for (int kind = 0; kind < GGML_METAL_LIB_COUNT; ++kind) {
+            if (err_per_lib[kind]) {
+                GGML_LOG_ERROR("%s: failed to build '%s' library: %s\n", __func__,
+                               k_lib_names[kind], [[err_per_lib[kind] description] UTF8String]);
+                [err_per_lib[kind] release];
+            }
+        }
+    }
+
+    free(err_per_lib);
+    free(t_per_lib);
+
+    return ok;
+}
+
 ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
     id<MTLDevice> device = ggml_metal_device_get_obj(dev);
 
@@ -292,8 +387,6 @@ ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
     [prep setObject:@"1" forKey:@"GGML_METAL_EMBED_LIBRARY"];
 #endif
 
-    const int64_t t_start = ggml_time_us();
-
 #if GGML_METAL_EMBED_LIBRARY
     GGML_LOG_INFO("%s: using embedded metal library\n", __func__);
 
@@ -302,82 +395,29 @@ ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
     GGML_METAL_LIBS
 #undef X
 
-    NSString ** src_per_kind = calloc(GGML_METAL_LIB_COUNT, sizeof(NSString *));
-#define X(e, s) \
-    src_per_kind[GGML_METAL_LIB_##e] = [[NSString alloc] initWithBytes:ggml_metallib_##s##_start \
-                                                                length:(ggml_metallib_##s##_end - ggml_metallib_##s##_start) \
-                                                              encoding:NSUTF8StringEncoding];
+    static const char * const lib_start[GGML_METAL_LIB_COUNT] = {
+#define X(e, s) [GGML_METAL_LIB_##e] = ggml_metallib_##s##_start,
     GGML_METAL_LIBS
 #undef X
+    };
+    static const char * const lib_end[GGML_METAL_LIB_COUNT] = {
+#define X(e, s) [GGML_METAL_LIB_##e] = ggml_metallib_##s##_end,
+    GGML_METAL_LIBS
+#undef X
+    };
 
-    int64_t * t_per_lib = calloc(GGML_METAL_LIB_COUNT, sizeof(int64_t));
-    NSError ** err_per_lib = calloc(GGML_METAL_LIB_COUNT, sizeof(NSError *));
-    __block atomic_bool any_failure = false;
+    const bool ok = ggml_metal_library_compile_all(res, device, prep,
+        ^NSString * (int kind, NSError ** err) {
+            (void) err;
+            return [[NSString alloc] initWithBytes:lib_start[kind]
+                                            length:(lib_end[kind] - lib_start[kind])
+                                          encoding:NSUTF8StringEncoding];
+        }, "embedded data");
 
-    dispatch_group_t group = dispatch_group_create();
-    dispatch_queue_t queue = dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0);
-
-    for (int kind = 0; kind < GGML_METAL_LIB_COUNT; ++kind) {
-        dispatch_group_async(group, queue, ^{
-
-            const int64_t t0 = ggml_time_us();
-            NSError * error = nil;
-            id<MTLLibrary> lib = nil;
-
-            @autoreleasepool {
-                MTLCompileOptions * options = [MTLCompileOptions new];
-                options.preprocessorMacros = prep;
-
-                lib = [device newLibraryWithSource:src_per_kind[kind] options:options error:&error];
-
-                [options release];
-            }
-
-            t_per_lib[kind] = ggml_time_us() - t0;
-
-            if (!lib) {
-                err_per_lib[kind] = [error retain];
-                atomic_store(&any_failure, true);
-                return;
-            }
-
-            res->objs[kind] = lib;
-        });
-    }
-    dispatch_group_wait(group, DISPATCH_TIME_FOREVER);
-
-    for (int kind = 0; kind < GGML_METAL_LIB_COUNT; ++kind) {
-        [src_per_kind[kind] release];
-    }
-    free(src_per_kind);
-
-    if (atomic_load(&any_failure)) {
-        for (int kind = 0; kind < GGML_METAL_LIB_COUNT; ++kind) {
-            if (err_per_lib[kind]) {
-                GGML_LOG_ERROR("%s: failed to compile '%s' library: %s\n", __func__,
-                               k_lib_names[kind], [[err_per_lib[kind] description] UTF8String]);
-                [err_per_lib[kind] release];
-            }
-        }
-        free(err_per_lib);
-        free(t_per_lib);
+    if (!ok) {
         ggml_metal_library_free(res);
         return NULL;
     }
-    free(err_per_lib);
-
-    const int64_t t_total = ggml_time_us() - t_start;
-    int64_t t_max = 0;
-    for (int kind = 0; kind < GGML_METAL_LIB_COUNT; ++kind) {
-        GGML_LOG_DEBUG("%s: compiled '%s' library in %.3f sec\n",
-                       __func__, k_lib_names[kind], t_per_lib[kind] / 1e6);
-        if (t_per_lib[kind] > t_max) t_max = t_per_lib[kind];
-    }
-    free(t_per_lib);
-    GGML_LOG_INFO("%s: loaded %d libraries from embedded data in %.3f sec (max single = %.3f sec)\n",
-                  __func__, GGML_METAL_LIB_COUNT, t_total / 1e6, t_max / 1e6);
-
-    ggml_metal_library_build_index(res);
 
     return res;
 #else
@@ -386,6 +426,8 @@ ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
 #else
     NSBundle * bundle = [NSBundle bundleForClass:[GGMLMetalClass class]];
 #endif
+
+    const int64_t t_start = ggml_time_us();
 
     NSError * error = nil;
     NSString * path_lib = [bundle pathForResource:@"default" ofType:@"metallib"];
@@ -446,13 +488,8 @@ ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
         GGML_LOG_INFO("%s: GGML_METAL_PATH_RESOURCES = %s\n", __func__, [path_resource UTF8String]);
     }
 
-    int64_t * t_per_lib = calloc(GGML_METAL_LIB_COUNT, sizeof(int64_t));
-    NSError ** err_per_lib = calloc(GGML_METAL_LIB_COUNT, sizeof(NSError *));
-    __block atomic_bool any_failure = false;
-
-    dispatch_group_t group = dispatch_group_create();
-    dispatch_queue_t queue = dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0);
-
+    // resolve each kind's source path up front (file lookup/logging stays on the calling thread)
+    NSString ** path_per_kind = calloc(GGML_METAL_LIB_COUNT, sizeof(NSString *));
     for (int kind = 0; kind < GGML_METAL_LIB_COUNT; ++kind) {
         NSString * rel = [NSString stringWithFormat:@"kernels/%s.metal", k_lib_names[kind]];
 
@@ -469,74 +506,25 @@ ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
             path_source = rel;
         }
 
-        GGML_LOG_INFO("%s: loading '%s'\n", __func__, [path_source UTF8String]);
+        GGML_LOG_DEBUG("%s: loading '%s'\n", __func__, [path_source UTF8String]);
 
-        dispatch_group_async(group, queue, ^{
-
-            const int64_t t0 = ggml_time_us();
-
-            NSError * file_err = nil;
-            NSString * src = ggml_metal_library_flatten_source(path_source, &file_err);
-            if (!src) {
-                err_per_lib[kind] = [file_err retain];
-                atomic_store(&any_failure, true);
-                return;
-            }
-
-            NSError * compile_err = nil;
-            id<MTLLibrary> lib = nil;
-
-            @autoreleasepool {
-                MTLCompileOptions * options = [MTLCompileOptions new];
-                options.preprocessorMacros = prep;
-
-                lib = [device newLibraryWithSource:src options:options error:&compile_err];
-
-                [options release];
-            }
-
-            [src release];
-
-            t_per_lib[kind] = ggml_time_us() - t0;
-
-            if (!lib) {
-                err_per_lib[kind] = [compile_err retain];
-                atomic_store(&any_failure, true);
-                return;
-            }
-
-            res->objs[kind] = lib;
-        });
+        path_per_kind[kind] = [path_source retain];
     }
-    dispatch_group_wait(group, DISPATCH_TIME_FOREVER);
 
-    if (atomic_load(&any_failure)) {
-        for (int kind = 0; kind < GGML_METAL_LIB_COUNT; ++kind) {
-            if (err_per_lib[kind]) {
-                GGML_LOG_ERROR("%s: failed to build '%s' library: %s\n", __func__,
-                               k_lib_names[kind], [[err_per_lib[kind] description] UTF8String]);
-                [err_per_lib[kind] release];
-            }
-        }
-        free(err_per_lib);
-        free(t_per_lib);
+    const bool ok = ggml_metal_library_compile_all(res, device, prep,
+        ^NSString * (int kind, NSError ** err) {
+            return ggml_metal_library_flatten_source(path_per_kind[kind], err);
+        }, "source");
+
+    for (int kind = 0; kind < GGML_METAL_LIB_COUNT; ++kind) {
+        [path_per_kind[kind] release];
+    }
+    free(path_per_kind);
+
+    if (!ok) {
         ggml_metal_library_free(res);
         return NULL;
     }
-    free(err_per_lib);
-
-    const int64_t t_total = ggml_time_us() - t_start;
-    int64_t t_max = 0;
-    for (int kind = 0; kind < GGML_METAL_LIB_COUNT; ++kind) {
-        GGML_LOG_DEBUG("%s: compiled '%s' library in %.3f sec\n",
-                       __func__, k_lib_names[kind], t_per_lib[kind] / 1e6);
-        if (t_per_lib[kind] > t_max) t_max = t_per_lib[kind];
-    }
-    free(t_per_lib);
-    GGML_LOG_INFO("%s: loaded %d libraries from source in %.3f sec (max single = %.3f sec)\n",
-                  __func__, GGML_METAL_LIB_COUNT, t_total / 1e6, t_max / 1e6);
-
-    ggml_metal_library_build_index(res);
 
     return res;
 #endif

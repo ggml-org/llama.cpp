@@ -41,7 +41,7 @@ set(METALLIB_KERNEL_SOURCES
     kernels/tri.metal
     kernels/ssm.metal
     kernels/wkv.metal
-    kernels/gla.metal
+    kernels/gated_delta_net.metal
     kernels/solve_tri.metal
     kernels/rope.metal
     kernels/conv.metal
@@ -168,7 +168,6 @@ else()
         COMMAND rm -f ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/ggml-common.h
         COMMAND rm -f ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/ggml-metal-impl.h
         COMMAND rm -rf ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/kernels
-        COMMAND rm -f ${AIR_FILES}
         DEPENDS ${AIR_FILES}
         COMMENT "Linking Metal kernels into default.metallib"
     )
