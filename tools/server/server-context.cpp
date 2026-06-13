@@ -2977,6 +2977,17 @@ private:
 
                                     bool do_reset = it == slot.prompt.checkpoints.rend();
 
+                                    // eagle3 draft is one position behind the target due to deferred boundary), so it
+                                    // can't resume from a checkpoint restored on a recurrent/hybrid target; re-process fully instead.
+                                    const bool spec_eagle3 = std::find(params_base.speculative.types.begin(), params_base.speculative.types.end(),
+                                                                       COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3) != params_base.speculative.types.end();
+                                    if (!do_reset && spec_eagle3 &&
+                                            (ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_FULL ||
+                                             ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_RS)) {
+                                        SLT_WRN(slot, "%s", "eagle3 draft cannot resume from a recurrent/hybrid checkpoint, forcing full re-processing\n");
+                                        do_reset = true;
+                                    }
+
                                     if (!do_reset) {
                                         // restore the context checkpoint
                                         it->load_tgt(ctx_tgt,       slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
