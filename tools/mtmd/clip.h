@@ -20,6 +20,12 @@ struct clip_image_size {
     bool operator==(const clip_image_size & other) const {
         return width == other.width && height == other.height;
     }
+    bool operator!=(const clip_image_size & other) const {
+        return !(*this == other);
+    }
+    int area() const {
+        return width * height;
+    }
 };
 
 struct clip_image_f32;
@@ -91,8 +97,8 @@ size_t clip_image_f32_batch_nx(const struct clip_image_f32_batch * batch, int id
 size_t clip_image_f32_batch_ny(const struct clip_image_f32_batch * batch, int idx); // equivalent to batch[idx]->ny
 struct clip_image_f32 * clip_image_f32_get_img(const struct clip_image_f32_batch * batch, int idx); // equivalent to batch[idx]->data
 
-bool clip_image_encode      (struct clip_ctx * ctx, int n_threads, struct clip_image_f32 * img, float * vec);
-bool clip_image_batch_encode(struct clip_ctx * ctx, int n_threads, const struct clip_image_f32_batch * imgs, float * vec);
+bool clip_image_encode      (struct clip_ctx * ctx, int n_threads, struct clip_image_f32 * img, std::vector<float> & out_vec);
+bool clip_image_batch_encode(struct clip_ctx * ctx, int n_threads, const struct clip_image_f32_batch * imgs, std::vector<float> & out_batch_embd);
 
 bool clip_is_llava(const struct clip_ctx * ctx);
 // note for contributor: this clip_is_(model) pattern is deprecated
@@ -100,6 +106,10 @@ bool clip_is_llava(const struct clip_ctx * ctx);
 
 bool clip_has_vision_encoder(const struct clip_ctx * ctx);
 bool clip_has_audio_encoder(const struct clip_ctx * ctx);
+
+bool clip_support_batch(const struct clip_ctx * ctx);
+
+int clip_model_n_temporal_merge(const struct clip_ctx * ctx); // TODO @ngxson : remove, refactor this
 
 std::map<ggml_backend_dev_t, size_t> clip_get_mem_usage(const struct clip_ctx * ctx);
 

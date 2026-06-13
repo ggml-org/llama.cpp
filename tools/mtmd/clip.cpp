@@ -171,6 +171,8 @@ struct clip_ctx {
     std::map<ggml_backend_dev_t, size_t> mem_usage;
     std::map<ggml_backend_dev_t, size_t> mem_compute;
 
+    bool support_batch = false;
+
     clip_ctx(clip_context_params & ctx_params) {
         flash_attn_type = ctx_params.flash_attn_type;
         no_alloc = ctx_params.no_alloc;
@@ -314,10 +316,16 @@ ggml_tensor * clip_graph::build_vit(
             std::function<ggml_tensor *(ggml_tensor *, const clip_layer &)> add_pos,
             const build_vit_opts & opts
         ) {
+    // batch dim: inp is [n_embd, n_pos, B]
+    const int64_t B = inp->ne[2];
+
     if (learned_pos_embd) {
         inp = ggml_add(ctx0, inp, learned_pos_embd);
         cb(inp, "pos_embed", -1);
     }
+
+    // flatten batch; unflatten again in attention
+    inp = ggml_reshape_2d(ctx0, inp, n_embd, n_pos * B);
 
     ggml_tensor * inpL = inp;
 
@@ -348,20 +356,24 @@ ggml_tensor * clip_graph::build_vit(
                     cur = ggml_add(ctx0, cur, layer.qkv_b);
                 }
 
-                Qcur = ggml_view_3d(ctx0, cur, d_head, n_head, n_pos,
-                    /* nb1    */ ggml_row_size(cur->type, d_head),
-                    /* nb2    */ cur->nb[1],
-                    /* offset */ 0);
+                // Q/K/V as [d_head, n_head, n_pos, B], the batch stride is cur->nb[1]*n_pos.
+                Qcur = ggml_view_4d(ctx0, cur, d_head, n_head, n_pos, B,
+                /* nb1    */ ggml_row_size(cur->type, d_head),
+                /* nb2    */ cur->nb[1],
+                /* nb3    */ cur->nb[1] * n_pos,
+                /* offset */ 0);
 
-                Kcur = ggml_view_3d(ctx0, cur, d_head, n_head, n_pos,
-                    /* nb1    */ ggml_row_size(cur->type, d_head),
-                    /* nb2    */ cur->nb[1],
-                    /* offset */ ggml_row_size(cur->type, n_embd));
+                Kcur = ggml_view_4d(ctx0, cur, d_head, n_head, n_pos, B,
+                /* nb1    */ ggml_row_size(cur->type, d_head),
+                /* nb2    */ cur->nb[1],
+                /* nb3    */ cur->nb[1] * n_pos,
+                /* offset */ ggml_row_size(cur->type, n_embd));
 
-                Vcur = ggml_view_3d(ctx0, cur, d_head, n_head, n_pos,
-                    /* nb1    */ ggml_row_size(cur->type, d_head),
-                    /* nb2    */ cur->nb[1],
-                    /* offset */ ggml_row_size(cur->type, 2 * n_embd));
+                Vcur = ggml_view_4d(ctx0, cur, d_head, n_head, n_pos, B,
+                /* nb1    */ ggml_row_size(cur->type, d_head),
+                /* nb2    */ cur->nb[1],
+                /* nb3    */ cur->nb[1] * n_pos,
+                /* offset */ ggml_row_size(cur->type, 2 * n_embd));
 
                 if (layer.q_norm) {
                     GGML_ASSERT(layer.q_norm->ne[0] == Qcur->ne[0]);
@@ -406,9 +418,9 @@ ggml_tensor * clip_graph::build_vit(
                     }
                 }
 
-                Qcur = ggml_reshape_3d(ctx0, Qcur, d_head, n_head,    n_pos);
-                Kcur = ggml_reshape_3d(ctx0, Kcur, d_head, n_head_kv, n_pos);
-                Vcur = ggml_reshape_3d(ctx0, Vcur, d_head, n_head_kv, n_pos);
+                Qcur = ggml_reshape_4d(ctx0, Qcur, d_head, n_head,    n_pos, B);
+                Kcur = ggml_reshape_4d(ctx0, Kcur, d_head, n_head_kv, n_pos, B);
+                Vcur = ggml_reshape_4d(ctx0, Vcur, d_head, n_head_kv, n_pos, B);
 
                 if (norm_per_head) {
                     if (layer.q_norm) {
@@ -438,6 +450,7 @@ ggml_tensor * clip_graph::build_vit(
                 cb(Vcur, "Vcur_normed", il);
             }
 
+            // build_attn returns a flat 2D [n_embd, n_pos*B]
             cur = build_attn(layer.o_w, layer.o_b,
                 Qcur, Kcur, Vcur, opts.attn_mask, kq_scale, il);
             cb(cur, "attn_out", il);
@@ -509,6 +522,10 @@ ggml_tensor * clip_graph::build_vit(
     if (model.post_ln_w) {
         inpL = build_norm(inpL, model.post_ln_w, model.post_ln_b, norm_t, eps, -1);
     }
+
+    // restore the batch dim
+    GGML_ASSERT(inpL->ne[1] % B == 0);
+    inpL = ggml_reshape_3d(ctx0, inpL, n_embd, inpL->ne[1] / B, B);
     return inpL;
 }
 
@@ -527,7 +544,7 @@ ggml_tensor * clip_graph::build_inp() {
 }
 
 ggml_tensor * clip_graph::build_inp_raw(int channels) {
-    ggml_tensor * inp_raw = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, img.nx(), img.ny(), channels);
+    ggml_tensor * inp_raw = ggml_new_tensor_4d(ctx0, GGML_TYPE_F32, img.nx(), img.ny(), channels, n_batch);
     ggml_set_name(inp_raw, "inp_raw");
     ggml_set_input(inp_raw);
     return inp_raw;
@@ -847,9 +864,7 @@ ggml_tensor * clip_graph::build_patch_merge_permute(ggml_tensor * cur, int scale
     return cur;
 }
 
-static ggml_cgraph * clip_image_build_graph(clip_ctx * ctx, const clip_image_f32_batch & imgs) {
-    GGML_ASSERT(imgs.entries.size() == 1 && "n_batch > 1 is not supported");
-
+static std::unique_ptr<clip_graph> clip_get_graph_builder(clip_ctx * ctx, const clip_image_f32_batch & imgs) {
     const clip_image_f32 & img = *imgs.entries[0];
     std::unique_ptr<clip_graph> builder;
 
@@ -1009,7 +1024,10 @@ static ggml_cgraph * clip_image_build_graph(clip_ctx * ctx, const clip_image_f32
             GGML_ABORT("missing cgraph builder");
     }
 
-    return builder->build();
+    // TODO [QWEN_VIDEO]: improve this in the future
+    builder->n_batch = imgs.entries.size();
+
+    return builder;
 }
 
 //
@@ -2803,7 +2821,7 @@ struct clip_model_loader {
         std::vector<support_info_op> ops;
     };
 
-    static void warmup(clip_ctx & ctx_clip) {
+    static clip_image_f32_batch get_dummy_batch(clip_ctx & ctx_clip) {
         // create a fake batch
         const auto & hparams = ctx_clip.model.hparams;
         clip_image_f32_batch batch;
@@ -2817,6 +2835,20 @@ struct clip_model_loader {
             LOG_INF("%s: warmup with audio size = %d\n", __func__, hparams.warmup_audio_size);
         }
         batch.entries.push_back(std::move(img));
+        return batch;
+    }
+
+    static void init_ctx(clip_ctx & ctx_clip) {
+        ctx_clip.buf_compute_meta.resize(ctx_clip.max_nodes * ggml_tensor_overhead() + ggml_graph_overhead());
+
+        // check batching support
+        auto batch = get_dummy_batch(ctx_clip);
+        auto builder = clip_get_graph_builder(&ctx_clip, batch);
+        ctx_clip.support_batch = builder->support_batch();
+    }
+
+    static void warmup(clip_ctx & ctx_clip) {
+        auto batch = get_dummy_batch(ctx_clip);
         warmup(ctx_clip, batch);
     }
 
@@ -2889,9 +2921,7 @@ struct clip_model_loader {
 
     // only initialize backend buffers, but do not allocate them yet
     static support_info_graph reserve_compute_meta(clip_ctx & ctx_clip, const clip_image_f32_batch & batch) {
-        ctx_clip.buf_compute_meta.resize(ctx_clip.max_nodes * ggml_tensor_overhead() + ggml_graph_overhead());
-
-        ggml_cgraph * gf = clip_image_build_graph(&ctx_clip, batch);
+        ggml_cgraph * gf = clip_get_graph_builder(&ctx_clip, batch)->build();
         ggml_backend_sched_reserve(ctx_clip.sched.get(), gf);
 
         ctx_clip.mem_compute.clear();
@@ -3054,6 +3084,7 @@ struct clip_init_result clip_init(const char * fname, struct clip_context_params
             ctx_vision = new clip_ctx(ctx_params);
             loader.load_hparams(ctx_vision->model, CLIP_MODALITY_VISION);
             loader.load_tensors(*ctx_vision);
+            loader.init_ctx(*ctx_vision);
             if (ctx_params.warmup) {
                 loader.warmup(*ctx_vision);
             }
@@ -3067,6 +3098,7 @@ struct clip_init_result clip_init(const char * fname, struct clip_context_params
             ctx_audio = new clip_ctx(ctx_params);
             loader.load_hparams(ctx_audio->model, CLIP_MODALITY_AUDIO);
             loader.load_tensors(*ctx_audio);
+            loader.init_ctx(*ctx_audio);
             if (ctx_params.warmup) {
                 loader.warmup(*ctx_audio);
             }
@@ -3468,23 +3500,23 @@ int clip_n_output_tokens(const struct clip_ctx * ctx, struct clip_image_f32 * im
     return n_patches;
 }
 
-bool clip_image_encode(struct clip_ctx * ctx, const int n_threads, clip_image_f32 * img, float * vec) {
+bool clip_image_encode(struct clip_ctx * ctx, const int n_threads, clip_image_f32 * img, std::vector<float> & out_vec) {
     clip_image_f32_batch imgs;
     clip_image_f32_ptr img_copy(clip_image_f32_init());
     *img_copy = *img;
     imgs.entries.push_back(std::move(img_copy));
 
-    return clip_image_batch_encode(ctx, n_threads, &imgs, vec);
+    return clip_image_batch_encode(ctx, n_threads, &imgs, out_vec);
 }
 
-bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_image_f32_batch * imgs_c_ptr, float * vec) {
+bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_image_f32_batch * imgs_c_ptr, std::vector<float> & out_batch_embd) {
     const clip_image_f32_batch & imgs = *imgs_c_ptr;
-    int batch_size = imgs.entries.size();
+    int n_batch_cur = imgs.entries.size();
 
-    // TODO @ngxson : implement batch size > 1 as a loop
-    //                we don't need true batching support because the cgraph will gonna be big anyway
-    if (batch_size != 1) {
-        return false; // only support batch size of 1
+    // [QWEN_VIDEO] for video models, the batch dimension is used as temporal dimension for merged frames
+    if (!ctx->support_batch && n_batch_cur > clip_model_n_temporal_merge(ctx)) {
+        LOG_ERR("%s: batch size %d exceeds maximum supported batch/temporal-merge size %d\n", __func__, n_batch_cur, clip_model_n_temporal_merge(ctx));
+        return false;
     }
 
     // if buffers are not allocated, we need to do a warmup run to allocate them
@@ -3494,7 +3526,7 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
 
     // build the inference graph
     ggml_backend_sched_reset(ctx->sched.get());
-    ggml_cgraph * gf = clip_image_build_graph(ctx, imgs);
+    ggml_cgraph * gf = clip_get_graph_builder(ctx, imgs)->build();
     ggml_backend_sched_alloc_graph(ctx->sched.get(), gf);
 
     // set inputs
@@ -3555,18 +3587,21 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
         // └─────┘ │
         //   ──────┘ x B
 
-        for (size_t i = 0; i < imgs.entries.size(); i++) {
-            const int nx = imgs.entries[i]->nx();
-            const int ny = imgs.entries[i]->ny();
-            const int n = nx * ny;
+        // IMPORTANT: [QWEN_VIDEO] the batch dim is currently used for temporal dim in Qwen-VL models
+        // All entries must have the same spatial size (enforced by can_batch_with() during merging)
+        {
+            const int nx = imgs.entries[0]->nx();
+            const int ny = imgs.entries[0]->ny();
+            const int n  = nx * ny;
 
-            for (int b = 0; b < batch_size; b++) {
+            for (int b = 0; b < n_batch_cur; b++) {
+                LOG_DBG("%s: copying image %d/%d to input buffer (nx=%d, ny=%d)\n", __func__, b+1, n_batch_cur, nx, ny);
                 const auto & buf = imgs.entries[b]->get_ro_buf();
                 float * batch_entry = inp_raw.data() + b * (3*n);
                 for (int y = 0; y < ny; y++) {
                     for (int x = 0; x < nx; x++) {
-                        size_t base_src = 3*(y * nx + x); // idx of the first channel
-                        size_t base_dst =    y * nx + x;  // idx of the first channel
+                        size_t base_src = 3*(y * nx + x);
+                        size_t base_dst =    y * nx + x;
                         batch_entry[      base_dst] = buf[base_src    ];
                         batch_entry[1*n + base_dst] = buf[base_src + 1];
                         batch_entry[2*n + base_dst] = buf[base_src + 2];
@@ -4395,7 +4430,7 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
     // the last node is the embedding tensor
     ggml_tensor * embeddings = ggml_graph_node(gf, -1);
 
-    // sanity check (only support batch size of 1 for now)
+    // sanity check (assuming that all images in batch have the same number of tokens, so we only check the first one)
     const int n_tokens_out = embeddings->ne[1];
     const int expected_n_tokens_out = clip_n_output_tokens(ctx, imgs.entries[0].get());
     if (n_tokens_out != expected_n_tokens_out) {
@@ -4403,16 +4438,26 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
         GGML_ABORT("Invalid number of output tokens");
     }
 
-    // copy the embeddings to the location passed by the user
-    if (vec != nullptr) {
-        ggml_backend_tensor_get(embeddings, vec, 0, ggml_nbytes(embeddings));
+    LOG_DBG("%s: output embedding shape [%d, %d, %d]\n", __func__,
+        (int)embeddings->ne[0], (int)embeddings->ne[1], (int)embeddings->ne[2]);
+
+    // copy output to user buffer if provided
+    // if output is empty, skip the copy
+    if (!out_batch_embd.empty()) {
+        if (out_batch_embd.size() != (size_t)ggml_nelements(embeddings)) {
+            LOG_ERR("%s: output buffer has %zu elements but expected %zu\n", __func__, out_batch_embd.size(), (size_t)ggml_nelements(embeddings));
+            GGML_ABORT("Output buffer size mismatch");
+        }
+        ggml_backend_tensor_get(embeddings, out_batch_embd.data(), 0, ggml_nbytes(embeddings));
+    } else {
+        LOG_WRN("%s: output buffer is empty, skipping copy\n", __func__);
     }
 
     // Debug: dump final embeddings if MTMD_DEBUG_EMBEDDINGS is set
     if (ctx->debug_output_embeddings) {
         const int64_t n_embd = embeddings->ne[0];
         const int64_t n_tokens = embeddings->ne[1];
-        std::vector<float> emb_data(n_embd * n_tokens);
+        std::vector<float> emb_data(ggml_nelements(embeddings));
         ggml_backend_tensor_get(embeddings, emb_data.data(), 0, ggml_nbytes(embeddings));
 
         LOG_INF("\n=== MTMD_DEBUG_EMBEDDINGS ===\n");
@@ -4547,6 +4592,24 @@ bool clip_has_vision_encoder(const struct clip_ctx * ctx) {
 
 bool clip_has_audio_encoder(const struct clip_ctx * ctx) {
     return ctx->model.modality == CLIP_MODALITY_AUDIO;
+}
+
+bool clip_support_batch(const struct clip_ctx * ctx) {
+    return ctx->support_batch;
+}
+
+// TODO @ngxson : this is no longer correct with mtmd_batch API
+// this was only meant to be used by qwen-vl-based models, to fuse 2 input images into one (qwen-vl video support)
+// this logic should be refactored in near future to distinctly handle "merge frames" and "batching"
+int clip_model_n_temporal_merge(const struct clip_ctx * ctx) {
+    switch (ctx->proj_type()) {
+        case PROJECTOR_TYPE_QWEN2VL:
+        case PROJECTOR_TYPE_QWEN25VL:
+        case PROJECTOR_TYPE_QWEN3VL:
+            return 2;
+        default:
+            return 1;
+    }
 }
 
 //

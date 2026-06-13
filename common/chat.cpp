@@ -1625,8 +1625,17 @@ static common_chat_params common_chat_params_init_lfm2(const common_chat_templat
     const std::string THINK_END       = "</think>";
     const std::string GEN_PROMPT      = "<|im_start|>assistant\n";
 
-    data.prompt            = common_chat_template_direct_apply_impl(tmpl, inputs);
-    data.generation_prompt = common_chat_template_generation_prompt_impl(tmpl, inputs);
+    // Copy reasoning to the "thinking" field the template expects
+    auto adjusted_messages = json::array();
+    for (auto msg : inputs.messages) {
+        if (msg.contains("reasoning_content") && msg.at("reasoning_content").is_string()) {
+            msg["thinking"] = msg.at("reasoning_content");
+        }
+        adjusted_messages.push_back(msg);
+    }
+
+    data.prompt            = common_chat_template_direct_apply_impl(tmpl, inputs, adjusted_messages);
+    data.generation_prompt = common_chat_template_generation_prompt_impl(tmpl, inputs, adjusted_messages);
     data.format            = COMMON_CHAT_FORMAT_PEG_NATIVE;
     data.supports_thinking = true;
     data.preserved_tokens  = { TOOL_CALL_START, TOOL_CALL_END, THINK_START, THINK_END };
@@ -1638,9 +1647,12 @@ static common_chat_params common_chat_params_init_lfm2(const common_chat_templat
     data.thinking_start_tag = THINK_START;
     data.thinking_end_tag   = THINK_END;
 
-    auto has_tools         = inputs.tools.is_array() && !inputs.tools.empty();
-    auto extract_reasoning = inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE;
-    auto include_grammar   = has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE;
+    auto has_tools           = inputs.tools.is_array() && !inputs.tools.empty();
+    auto has_response_format = !inputs.json_schema.is_null() && inputs.json_schema.is_object();
+    // Gate by reasoning format and whether the template supports <think>
+    auto extract_reasoning = inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE &&
+                             tmpl.source().find(THINK_START) != std::string::npos;
+    auto include_grammar   = has_response_format || (has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE);
 
     if (inputs.has_continuation()) {
         const auto & msg = inputs.continue_msg;
@@ -1658,11 +1670,15 @@ static common_chat_params common_chat_params_init_lfm2(const common_chat_templat
         auto end = p.end();
 
         auto reasoning = p.eps();
-        if (extract_reasoning && inputs.enable_thinking) {
+        if (extract_reasoning) {
             reasoning = p.optional(THINK_START + p.reasoning(p.until(THINK_END)) + THINK_END);
         }
 
         if (!has_tools || inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_NONE) {
+            if (has_response_format) {
+                auto response_format = p.content(p.schema(p.json(), "response-format-schema", inputs.json_schema));
+                return generation_prompt + reasoning + response_format + end;
+            }
             return generation_prompt + reasoning + p.content(p.rest()) + end;
         }
         auto tool_calls = p.rule("tool-calls",
@@ -1681,13 +1697,17 @@ static common_chat_params common_chat_params_init_lfm2(const common_chat_templat
     data.parser = parser.save();
 
     if (include_grammar) {
-        data.grammar_lazy = inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_AUTO;
+        data.grammar_lazy = !(has_response_format || (has_tools && inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED));
         data.grammar      = build_grammar([&](const common_grammar_builder & builder) {
             foreach_function(inputs.tools, [&](const json & tool) {
                 const auto & function = tool.at("function");
                 auto         schema   = function.at("parameters");
                 builder.resolve_refs(schema);
             });
+            if (has_response_format) {
+                auto schema = inputs.json_schema;
+                builder.resolve_refs(schema);
+            }
             parser.build_grammar(builder, data.grammar_lazy);
         });
 

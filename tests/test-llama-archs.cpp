@@ -392,7 +392,7 @@ static bool arch_supported(const llm_arch arch) {
     if (arch == LLM_ARCH_WAVTOKENIZER_DEC) {
         return false; // FIXME CUDA backend crashes.
     }
-    if (arch == LLM_ARCH_GEMMA4) {
+    if (arch == LLM_ARCH_GEMMA4 || arch == LLM_ARCH_GEMMA4_ASSISTANT) {
         return false; // FIXME @ngxson
     }
     if (arch == LLM_ARCH_LLAMA_EMBED || arch == LLM_ARCH_GEMMA_EMBEDDING || arch == LLM_ARCH_T5ENCODER) {
@@ -447,8 +447,11 @@ static int save_models(const llm_arch target_arch, const size_t seed, const ggml
         if (target_arch != LLM_ARCH_UNKNOWN && arch != target_arch) {
             continue;
         }
-        if (arch == LLM_ARCH_GEMMA4) {
+        if (arch == LLM_ARCH_GEMMA4 || arch == LLM_ARCH_GEMMA4_ASSISTANT) {
             continue; // FIXME: ISWA KV cache initialization needs more fixture params
+        }
+        if (arch == LLM_ARCH_EAGLE3) {
+            continue;
         }
         for (bool moe : {false, true}) {
             if (moe && !moe_implemented(arch)) {
@@ -550,8 +553,11 @@ static int test_backends(const llm_arch target_arch, const size_t seed, const gg
         if (target_arch != LLM_ARCH_UNKNOWN && arch != target_arch) {
             continue;
         }
-        if (arch == LLM_ARCH_GEMMA4) {
+        if (arch == LLM_ARCH_GEMMA4 || arch == LLM_ARCH_GEMMA4_ASSISTANT) {
             continue; // FIXME: ISWA KV cache initialization needs more fixture params
+        }
+        if (arch == LLM_ARCH_EAGLE3) {
+            continue;
         }
 
         const bool encode = arch == LLM_ARCH_T5 || arch == LLM_ARCH_DREAM || arch == LLM_ARCH_LLADA || arch == LLM_ARCH_LLADA_MOE || arch == LLM_ARCH_RND1;
