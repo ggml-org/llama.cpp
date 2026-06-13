@@ -6,6 +6,7 @@ import re
 import argparse
 import statistics
 import logging
+from typing import Any, Dict, List, Optional
 from collections import defaultdict
 
 logger = logging.getLogger("ggml-hexagon-trace")
@@ -58,8 +59,8 @@ def parse_log(file_path):
         logger.error(f"file '{file_path}' not found.")
         sys.exit(1)
 
-    all_ops = []
-    current_op = None
+    all_ops: List[Dict[str, Any]] = []
+    current_op: Optional[Dict[str, Any]] = None
     unwrapper = CycleUnwrapper()
     line_idx = 0
 

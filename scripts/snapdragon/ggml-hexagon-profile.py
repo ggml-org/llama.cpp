@@ -6,6 +6,7 @@ import re
 import argparse
 import statistics
 import logging
+from typing import Any, Dict, List, Optional
 
 from collections import defaultdict
 
@@ -76,8 +77,8 @@ def parse_log(file_path, pmu_index=None):
         logger.error(f"file '{file_path}' not found.")
         sys.exit(1)
 
-    all_ops = []
-    current_op = None
+    all_ops: List[Dict[str, Any]] = []
+    current_op: Optional[Dict[str, Any]] = None
 
     timestamp_pattern = re.compile(r"^(?P<min>\d+)\.(?P<sec>\d+)\.(?P<ms>\d+)\.(?P<us>\d+)\s+[A-Z]\s+")
     unwrapper = CycleUnwrapper()
@@ -342,7 +343,7 @@ def generate_report(ops, top_n, width_overrides, sort_col, pmu_name=None):
         if "pmu" in col_name and pmu_name:
             header_text = header_text.replace("PMU", pmu_name)
 
-        natural_width = max([len(row[data_key]) for row in sorted_groups] + [len(header_text)])
+        natural_width = max([len(str(row[data_key])) for row in sorted_groups] + [len(header_text)])
         target_width  = width_overrides.get(col_name, natural_width)
 
         if target_width == 0:
@@ -362,7 +363,7 @@ def generate_report(ops, top_n, width_overrides, sort_col, pmu_name=None):
     for group in sorted_groups:
         row_vals = []
         for i, key in enumerate(final_keys):
-            val = group[key]
+            val = str(group[key])
             if len(val) > final_widths[i]:
                 val = val[:final_widths[i] - 3] + "..."
             row_vals.append(f"{val:<{final_widths[i]}}")
