@@ -52,6 +52,7 @@ public:
         if (pool_buffer != nullptr) {
             ggml_backend_buffer_free(pool_buffer);
         }
+        std::free(dummy_block_table);
     }
 
     bool next() override {
@@ -219,26 +220,40 @@ private:
     }
 
     ggml_backend_buffer_t ensure_block_table_buffer() const {
-        if (pool == nullptr || pool->block_table_device == nullptr) {
-            GGML_ABORT("llama_kv_cache_kapsl_context has no Kapsl block table");
+        if (pool == nullptr) {
+            GGML_ABORT("llama_kv_cache_kapsl_context has no external pool");
         }
-        if (block_table_buffer != nullptr) {
+
+        const size_t block_table_bytes = block_table_size_bytes();
+        void * block_table_ptr = pool->block_table_device;
+        const bool use_dummy_table = block_table_ptr == nullptr;
+        if (use_dummy_table) {
+            block_table_ptr = ensure_dummy_block_table(block_table_bytes);
+        }
+
+        if (block_table_buffer != nullptr && block_table_buffer_ptr == block_table_ptr) {
             return block_table_buffer;
         }
 
-        const size_t block_table_bytes =
-            (size_t) pool->n_layers *
-            pool->block_table_layer_stride *
-            sizeof(uint32_t);
+        if (block_table_buffer != nullptr) {
+            ggml_backend_buffer_free(block_table_buffer);
+            block_table_buffer = nullptr;
+            block_table_buffer_ptr = nullptr;
+        }
 
 #if defined(GGML_USE_CUDA)
-        block_table_buffer = ggml_backend_cuda_buffer_from_device_ptr(
-                (int) pool->device_id,
-                pool->block_table_device,
-                block_table_bytes);
+        if (use_dummy_table) {
+            block_table_buffer = ggml_backend_cpu_buffer_from_ptr(block_table_ptr, block_table_bytes);
+        } else {
+            block_table_buffer = ggml_backend_cuda_buffer_from_device_ptr(
+                    (int) pool->device_id,
+                    block_table_ptr,
+                    block_table_bytes);
+        }
         if (block_table_buffer == nullptr) {
             GGML_ABORT("failed to wrap Kapsl CUDA block table");
         }
+        block_table_buffer_ptr = block_table_ptr;
         return block_table_buffer;
 #else
         GGML_UNUSED(block_table_bytes);
@@ -291,6 +306,7 @@ private:
 
     ggml_tensor * make_block_table_tensor(ggml_context * ctx) const {
         ggml_backend_buffer_t buffer = ensure_block_table_buffer();
+        GGML_ASSERT(block_table_buffer_ptr != nullptr);
 
         ggml_tensor * tensor = ggml_new_tensor_2d(
                 ctx,
@@ -298,11 +314,38 @@ private:
                 pool->block_table_layer_stride,
                 pool->n_layers);
 
-        if (ggml_backend_tensor_alloc(buffer, tensor, pool->block_table_device) != GGML_STATUS_SUCCESS) {
+        if (ggml_backend_tensor_alloc(buffer, tensor, block_table_buffer_ptr) != GGML_STATUS_SUCCESS) {
             GGML_ABORT("failed to allocate Kapsl external block table tensor");
         }
 
         return tensor;
+    }
+
+    size_t block_table_size_bytes() const {
+        return (size_t) pool->n_layers *
+            pool->block_table_layer_stride *
+            sizeof(uint32_t);
+    }
+
+    void * ensure_dummy_block_table(size_t block_table_bytes) const {
+        if (dummy_block_table != nullptr && dummy_block_table_bytes == block_table_bytes) {
+            return dummy_block_table;
+        }
+
+        std::free(dummy_block_table);
+        dummy_block_table = nullptr;
+        dummy_block_table_bytes = 0;
+
+        constexpr size_t alignment = 64;
+        void * ptr = nullptr;
+        if (posix_memalign(&ptr, alignment, block_table_bytes) != 0) {
+            GGML_ABORT("failed to allocate aligned Kapsl dummy block table");
+        }
+        std::memset(ptr, 0, block_table_bytes);
+
+        dummy_block_table = ptr;
+        dummy_block_table_bytes = block_table_bytes;
+        return dummy_block_table;
     }
 
     static void set_input_positions(ggml_tensor * dst, const llama_ubatch * ubatch) {
@@ -326,6 +369,9 @@ private:
     std::vector<llama_ubatch> ubatches;
     mutable ggml_backend_buffer_t pool_buffer = nullptr;
     mutable ggml_backend_buffer_t block_table_buffer = nullptr;
+    mutable void * block_table_buffer_ptr = nullptr;
+    mutable void * dummy_block_table = nullptr;
+    mutable size_t dummy_block_table_bytes = 0;
 };
 
 } // namespace
