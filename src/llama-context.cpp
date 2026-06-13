@@ -22,6 +22,10 @@
 // llama_context
 //
 
+class llama_exception : public std::runtime_error {
+    using std::runtime_error::runtime_error;
+};
+
 static llm_graph_type ctx_type_to_graph_type(llama_context_type ctx_type) {
     switch (ctx_type) {
         case LLAMA_CONTEXT_TYPE_DEFAULT: return LLM_GRAPH_TYPE_DEFAULT;
@@ -93,8 +97,7 @@ llama_context::llama_context(
     // TODO: more generic
     if (model.arch == LLM_ARCH_GEMMA4_ASSISTANT) {
         if (params.ctx_other == nullptr) {
-            // TODO: change from runtime_error to llama_exception to avoid printing error message
-            throw std::runtime_error("Gemma4Assistant requires ctx_other to be set (this warning is normal during memory fitting)");
+            throw llama_exception("Gemma4Assistant requires ctx_other to be set (this warning is normal during memory fitting)");
         }
 
         cparams.ctx_other = params.ctx_other;
@@ -3560,6 +3563,8 @@ llama_context * llama_init_from_model(
     try {
         auto * ctx = new llama_context(*model, params);
         return ctx;
+    } catch (const llama_exception & err) {
+        LLAMA_LOG_WARN("%s: failed to initialize the context: %s\n", __func__, err.what());
     } catch (const std::exception & err) {
         LLAMA_LOG_ERROR("%s: failed to initialize the context: %s\n", __func__, err.what());
     }
