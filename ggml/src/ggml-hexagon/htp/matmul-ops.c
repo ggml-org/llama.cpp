@@ -498,55 +498,55 @@ static void vec_dot_f16_f32_uu_1x1(const int n, float * restrict s, const void *
     hvx_vec_store_u(&s[0], 4, rsum);
 }
 
-#define htp_matmul_tensors_preamble                                                                                     \
-    const struct htp_tensor * restrict src0 = octx->src[0];                                                             \
-    const struct htp_tensor * restrict src1 = octx->src[1];                                                             \
-    const struct htp_tensor * restrict src2 = octx->src[2];                                                             \
-    const struct htp_tensor * restrict  dst = octx->dst;                                                                \
-    struct htp_spad * restrict src0_spad = &octx->src0_spad;                                                            \
-    struct htp_spad * restrict src1_spad = &octx->src1_spad;                                                            \
-    struct htp_spad * restrict dst_spad  = &octx->dst_spad;                                                             \
-                                                                                                                        \
-    const uint32_t ne00 = src0->ne[0];                                                                                  \
-    const uint32_t ne01 = src0->ne[1];                                                                                  \
-    const uint32_t ne02 = src0->ne[2];                                                                                  \
-    const uint32_t ne03 = src0->ne[3];                                                                                  \
-                                                                                                                        \
-    const uint32_t ne10 = src1->ne[0];                                                                                  \
-    const uint32_t ne11 = src1->ne[1];                                                                                  \
-    const uint32_t ne12 = src1->ne[2];                                                                                  \
-    const uint32_t ne13 = src1->ne[3];                                                                                  \
-                                                                                                                        \
-    const uint32_t ne20 = src2->ne[0];                                                                                  \
-    const uint32_t ne21 = src2->ne[1];                                                                                  \
-    const uint32_t ne22 = src2->ne[2];                                                                                  \
-    const uint32_t ne23 = src2->ne[3];                                                                                  \
-                                                                                                                        \
-    const uint32_t ne0 = dst->ne[0];                                                                                    \
-    const uint32_t ne1 = dst->ne[1];                                                                                    \
-    const uint32_t ne2 = dst->ne[2];                                                                                    \
-    const uint32_t ne3 = dst->ne[3];                                                                                    \
-                                                                                                                        \
-    const uint32_t nb00 = src0->nb[0];                                                                                  \
-    const uint32_t nb01 = src0->nb[1];                                                                                  \
-    const uint32_t nb02 = src0->nb[2];                                                                                  \
-    const uint32_t nb03 = src0->nb[3];                                                                                  \
-                                                                                                                        \
-    const uint32_t nb10 = src1->nb[0];                                                                                  \
-    const uint32_t nb11 = src1->nb[1];                                                                                  \
-    const uint32_t nb12 = src1->nb[2];                                                                                  \
-    const uint32_t nb13 = src1->nb[3];                                                                                  \
-                                                                                                                        \
-    const uint32_t nb0 = dst->nb[0];                                                                                    \
-    const uint32_t nb1 = dst->nb[1];                                                                                    \
-    const uint32_t nb2 = dst->nb[2];                                                                                    \
+#define htp_matmul_tensors_preamble                             \
+    const struct htp_tensor * restrict src0 = octx->src[0];     \
+    const struct htp_tensor * restrict src1 = octx->src[1];     \
+    const struct htp_tensor * restrict src2 = octx->src[2];     \
+    const struct htp_tensor * restrict  dst = octx->dst;        \
+    struct htp_spad * restrict src0_spad = &octx->src0_spad;    \
+    struct htp_spad * restrict src1_spad = &octx->src1_spad;    \
+    struct htp_spad * restrict dst_spad  = &octx->dst_spad;     \
+                                                                \
+    const uint32_t ne00 = src0->ne[0];                          \
+    const uint32_t ne01 = src0->ne[1];                          \
+    const uint32_t ne02 = src0->ne[2];                          \
+    const uint32_t ne03 = src0->ne[3];                          \
+                                                                \
+    const uint32_t ne10 = src1->ne[0];                          \
+    const uint32_t ne11 = src1->ne[1];                          \
+    const uint32_t ne12 = src1->ne[2];                          \
+    const uint32_t ne13 = src1->ne[3];                          \
+                                                                \
+    const uint32_t ne20 = src2->ne[0];                          \
+    const uint32_t ne21 = src2->ne[1];                          \
+    const uint32_t ne22 = src2->ne[2];                          \
+    const uint32_t ne23 = src2->ne[3];                          \
+                                                                \
+    const uint32_t ne0 = dst->ne[0];                            \
+    const uint32_t ne1 = dst->ne[1];                            \
+    const uint32_t ne2 = dst->ne[2];                            \
+    const uint32_t ne3 = dst->ne[3];                            \
+                                                                \
+    const uint32_t nb00 = src0->nb[0];                          \
+    const uint32_t nb01 = src0->nb[1];                          \
+    const uint32_t nb02 = src0->nb[2];                          \
+    const uint32_t nb03 = src0->nb[3];                          \
+                                                                \
+    const uint32_t nb10 = src1->nb[0];                          \
+    const uint32_t nb11 = src1->nb[1];                          \
+    const uint32_t nb12 = src1->nb[2];                          \
+    const uint32_t nb13 = src1->nb[3];                          \
+                                                                \
+    const uint32_t nb0 = dst->nb[0];                            \
+    const uint32_t nb1 = dst->nb[1];                            \
+    const uint32_t nb2 = dst->nb[2];                            \
     const uint32_t nb3 = dst->nb[3];
 
-#define htp_matmul_preamble                                                                                             \
-    struct htp_matmul_context * mmctx = data;                                                                           \
-    struct htp_ops_context * octx  = mmctx->octx;                                                                       \
-    htp_matmul_tensors_preamble;                                                                                        \
-    dma_queue *dma_queue           = octx->ctx->dma[ith];                                                               \
+#define htp_matmul_preamble                                             \
+    struct htp_matmul_context * mmctx = data;                           \
+    struct htp_ops_context * octx  = mmctx->octx;                       \
+    htp_matmul_tensors_preamble;                                        \
+    dma_queue *dma_queue           = octx->ctx->dma[ith];               \
     uint32_t src0_nrows_per_thread = mmctx->src0_nrows_per_thread;
 
 // *** matmul with support for 4d tensors and full broadcasting
@@ -976,13 +976,84 @@ static void tiled_vec_dot_q4_0_32x1(const int n, float * restrict s, const void 
     const uint8_t * restrict y_q = vy;
     const uint8_t * restrict y_d = y_q + n;
 
-    HVX_Vector v_sum_float = Q6_V_vzero();
+    HVX_Vector v_sum_float_0 = Q6_V_vzero();
+    HVX_Vector v_sum_float_1 = Q6_V_vzero();
+    HVX_Vector v_sum_float_2 = Q6_V_vzero();
+    HVX_Vector v_sum_float_3 = Q6_V_vzero();
+
     HVX_Vector mask_h4 = Q6_Vb_vsplat_R(0x0F);
     HVX_Vector i8 = Q6_Vb_vsplat_R(8);
 
     uint32_t n_k_tiles = n / 32;
+    uint32_t n_k_tiles_x4 = n_k_tiles & ~3U;
+    uint32_t kt = 0;
+    HVX_Vector v_scale_all;
+    for (; kt < n_k_tiles_x4; kt += 4) {
+        const HVX_UVector * restrict vptr0 = (const HVX_UVector *) (tile_ptr + (kt + 0) * 576);
+        const HVX_UVector * restrict vptr1 = (const HVX_UVector *) (tile_ptr + (kt + 1) * 576);
+        const HVX_UVector * restrict vptr2 = (const HVX_UVector *) (tile_ptr + (kt + 2) * 576);
+        const HVX_UVector * restrict vptr3 = (const HVX_UVector *) (tile_ptr + (kt + 3) * 576);
+
+        HVX_Vector v_act_all = hvx_vmem(y_q + kt * 32);
+        HVX_Vector v_act0 = v_act_all;
+        HVX_Vector v_act1 = Q6_V_vror_VR(v_act_all, 32);
+        HVX_Vector v_act2 = Q6_V_vror_VR(v_act_all, 64);
+        HVX_Vector v_act3 = Q6_V_vror_VR(v_act_all, 96);
+
+        HVX_Vector v_sum0 = accum_4bit_32x1(vptr0, v_act0, mask_h4, i8);
+        HVX_Vector v_sum1 = accum_4bit_32x1(vptr1, v_act1, mask_h4, i8);
+        HVX_Vector v_sum2 = accum_4bit_32x1(vptr2, v_act2, mask_h4, i8);
+        HVX_Vector v_sum3 = accum_4bit_32x1(vptr3, v_act3, mask_h4, i8);
+
+        HVX_Vector v_sum_sf0 = Q6_Vsf_equals_Vw(v_sum0);
+        HVX_Vector v_sum_sf1 = Q6_Vsf_equals_Vw(v_sum1);
+        HVX_Vector v_sum_sf2 = Q6_Vsf_equals_Vw(v_sum2);
+        HVX_Vector v_sum_sf3 = Q6_Vsf_equals_Vw(v_sum3);
+
+        if (kt % 64 == 0) {
+            v_scale_all = hvx_vmem(y_d + kt * 2);
+        }
+
+        uint32_t offset = (kt % 64) * 2;
+        HVX_Vector v_scale_all_rot = Q6_V_vror_VR(v_scale_all, offset);
+        HVX_Vector v_scale_a_f16_0 = hvx_vec_repl_f16(v_scale_all_rot);
+        HVX_Vector v_scale_a_f16_1 = hvx_vec_repl_f16(Q6_V_vror_VR(v_scale_all_rot, 2));
+        HVX_Vector v_scale_a_f16_2 = hvx_vec_repl_f16(Q6_V_vror_VR(v_scale_all_rot, 4));
+        HVX_Vector v_scale_a_f16_3 = hvx_vec_repl_f16(Q6_V_vror_VR(v_scale_all_rot, 6));
+
+        HVX_Vector v_scale_w0 = vptr0[4];
+        HVX_Vector v_scale_w1 = vptr1[4];
+        HVX_Vector v_scale_w2 = vptr2[4];
+        HVX_Vector v_scale_w3 = vptr3[4];
+
+        HVX_Vector v_scale_comb0 = hvx_vec_mul_f16_f16_to_f32_lower32(v_scale_w0, v_scale_a_f16_0);
+        HVX_Vector v_scale_comb1 = hvx_vec_mul_f16_f16_to_f32_lower32(v_scale_w1, v_scale_a_f16_1);
+        HVX_Vector v_scale_comb2 = hvx_vec_mul_f16_f16_to_f32_lower32(v_scale_w2, v_scale_a_f16_2);
+        HVX_Vector v_scale_comb3 = hvx_vec_mul_f16_f16_to_f32_lower32(v_scale_w3, v_scale_a_f16_3);
+
+        HVX_Vector v_sum_scaled0 = hvx_vec_mul_f32_f32(v_sum_sf0, v_scale_comb0);
+        HVX_Vector v_sum_scaled1 = hvx_vec_mul_f32_f32(v_sum_sf1, v_scale_comb1);
+        HVX_Vector v_sum_scaled2 = hvx_vec_mul_f32_f32(v_sum_sf2, v_scale_comb2);
+        HVX_Vector v_sum_scaled3 = hvx_vec_mul_f32_f32(v_sum_sf3, v_scale_comb3);
+
+        v_sum_float_0 = hvx_vec_add_f32_f32(v_sum_float_0, v_sum_scaled0);
+        v_sum_float_1 = hvx_vec_add_f32_f32(v_sum_float_1, v_sum_scaled1);
+        v_sum_float_2 = hvx_vec_add_f32_f32(v_sum_float_2, v_sum_scaled2);
+        v_sum_float_3 = hvx_vec_add_f32_f32(v_sum_float_3, v_sum_scaled3);
+    }
+
+    HVX_Vector v_sum_float;
+    if (n_k_tiles_x4 > 0) {
+        v_sum_float = hvx_vec_add_f32_f32(
+            hvx_vec_add_f32_f32(v_sum_float_0, v_sum_float_1),
+            hvx_vec_add_f32_f32(v_sum_float_2, v_sum_float_3)
+        );
+    } else {
+        v_sum_float = Q6_V_vzero();
+    }
+
     HVX_Vector v_act_all;
-    for (uint32_t kt = 0; kt < n_k_tiles; kt++) {
+    for (; kt < n_k_tiles; kt++) {
         const HVX_UVector * restrict vptr = (const HVX_UVector *) (tile_ptr + kt * 576);
 
         HVX_Vector v_act = hvx_vec_load_act_tile(y_q, kt, &v_act_all);
@@ -1051,12 +1122,106 @@ static void tiled_vec_dot_q4_1_32x1(const int n, float * restrict s, const void 
     const uint8_t * restrict y_q = vy;
     const uint8_t * restrict y_d = y_q + n;
 
-    HVX_Vector v_sum_float = Q6_V_vzero();
+    HVX_Vector v_sum_float_0 = Q6_V_vzero();
+    HVX_Vector v_sum_float_1 = Q6_V_vzero();
+    HVX_Vector v_sum_float_2 = Q6_V_vzero();
+    HVX_Vector v_sum_float_3 = Q6_V_vzero();
+
     HVX_Vector mask_h4 = Q6_Vb_vsplat_R(0x0F);
 
     uint32_t n_k_tiles = n / 32;
+    uint32_t n_k_tiles_x4 = n_k_tiles & ~3U;
+    uint32_t kt = 0;
+    HVX_Vector v_scale_all;
+    for (; kt < n_k_tiles_x4; kt += 4) {
+        const HVX_UVector * restrict vptr0 = (const HVX_UVector *) (tile_ptr + (kt + 0) * 640);
+        const HVX_UVector * restrict vptr1 = (const HVX_UVector *) (tile_ptr + (kt + 1) * 640);
+        const HVX_UVector * restrict vptr2 = (const HVX_UVector *) (tile_ptr + (kt + 2) * 640);
+        const HVX_UVector * restrict vptr3 = (const HVX_UVector *) (tile_ptr + (kt + 3) * 640);
+
+        HVX_Vector v_act_all = hvx_vmem(y_q + kt * 32);
+        HVX_Vector v_act0 = v_act_all;
+        HVX_Vector v_act1 = Q6_V_vror_VR(v_act_all, 32);
+        HVX_Vector v_act2 = Q6_V_vror_VR(v_act_all, 64);
+        HVX_Vector v_act3 = Q6_V_vror_VR(v_act_all, 96);
+
+        HVX_Vector v_sum0 = accum_4bit_32x1(vptr0, v_act0, mask_h4, Q6_V_vzero());
+        HVX_Vector v_sum1 = accum_4bit_32x1(vptr1, v_act1, mask_h4, Q6_V_vzero());
+        HVX_Vector v_sum2 = accum_4bit_32x1(vptr2, v_act2, mask_h4, Q6_V_vzero());
+        HVX_Vector v_sum3 = accum_4bit_32x1(vptr3, v_act3, mask_h4, Q6_V_vzero());
+
+        HVX_Vector v_sum_sf0 = Q6_Vsf_equals_Vw(v_sum0);
+        HVX_Vector v_sum_sf1 = Q6_Vsf_equals_Vw(v_sum1);
+        HVX_Vector v_sum_sf2 = Q6_Vsf_equals_Vw(v_sum2);
+        HVX_Vector v_sum_sf3 = Q6_Vsf_equals_Vw(v_sum3);
+
+        if (kt % 32 == 0) {
+            v_scale_all = hvx_vmem(y_d + kt * 4);
+        }
+
+        uint32_t offset = (kt % 32) * 4;
+        HVX_Vector v_scale_all_rot = Q6_V_vror_VR(v_scale_all, offset);
+        HVX_Vector v_scale_a_f16_0 = hvx_vec_repl_f16(v_scale_all_rot);
+        HVX_Vector v_sum_a_f16_0   = hvx_vec_repl_f16(Q6_V_vror_VR(v_scale_all_rot, 2));
+        HVX_Vector v_scale_a_f16_1 = hvx_vec_repl_f16(Q6_V_vror_VR(v_scale_all_rot, 4));
+        HVX_Vector v_sum_a_f16_1   = hvx_vec_repl_f16(Q6_V_vror_VR(v_scale_all_rot, 6));
+        HVX_Vector v_scale_a_f16_2 = hvx_vec_repl_f16(Q6_V_vror_VR(v_scale_all_rot, 8));
+        HVX_Vector v_sum_a_f16_2   = hvx_vec_repl_f16(Q6_V_vror_VR(v_scale_all_rot, 10));
+        HVX_Vector v_scale_a_f16_3 = hvx_vec_repl_f16(Q6_V_vror_VR(v_scale_all_rot, 12));
+        HVX_Vector v_sum_a_f16_3   = hvx_vec_repl_f16(Q6_V_vror_VR(v_scale_all_rot, 14));
+
+        HVX_Vector v_scale_offset0 = vptr0[4];
+        HVX_Vector v_scale_offset1 = vptr1[4];
+        HVX_Vector v_scale_offset2 = vptr2[4];
+        HVX_Vector v_scale_offset3 = vptr3[4];
+
+        HVX_VectorPair p_deal0 = Q6_W_vdeal_VVR(v_scale_offset0, v_scale_offset0, -2);
+        HVX_VectorPair p_deal1 = Q6_W_vdeal_VVR(v_scale_offset1, v_scale_offset1, -2);
+        HVX_VectorPair p_deal2 = Q6_W_vdeal_VVR(v_scale_offset2, v_scale_offset2, -2);
+        HVX_VectorPair p_deal3 = Q6_W_vdeal_VVR(v_scale_offset3, v_scale_offset3, -2);
+
+        HVX_Vector v_scale0 = Q6_V_lo_W(p_deal0);
+        HVX_Vector v_offset0 = Q6_V_hi_W(p_deal0);
+        HVX_Vector v_scale1 = Q6_V_lo_W(p_deal1);
+        HVX_Vector v_offset1 = Q6_V_hi_W(p_deal1);
+        HVX_Vector v_scale2 = Q6_V_lo_W(p_deal2);
+        HVX_Vector v_offset2 = Q6_V_hi_W(p_deal2);
+        HVX_Vector v_scale3 = Q6_V_lo_W(p_deal3);
+        HVX_Vector v_offset3 = Q6_V_hi_W(p_deal3);
+
+        HVX_Vector v_scale_comb0 = hvx_vec_mul_f16_f16_to_f32_lower32(v_scale0, v_scale_a_f16_0);
+        HVX_Vector v_scale_comb1 = hvx_vec_mul_f16_f16_to_f32_lower32(v_scale1, v_scale_a_f16_1);
+        HVX_Vector v_scale_comb2 = hvx_vec_mul_f16_f16_to_f32_lower32(v_scale2, v_scale_a_f16_2);
+        HVX_Vector v_scale_comb3 = hvx_vec_mul_f16_f16_to_f32_lower32(v_scale3, v_scale_a_f16_3);
+
+        HVX_Vector v_scaled_dot0 = hvx_vec_mul_f32_f32(v_sum_sf0, v_scale_comb0);
+        HVX_Vector v_scaled_dot1 = hvx_vec_mul_f32_f32(v_sum_sf1, v_scale_comb1);
+        HVX_Vector v_scaled_dot2 = hvx_vec_mul_f32_f32(v_sum_sf2, v_scale_comb2);
+        HVX_Vector v_scaled_dot3 = hvx_vec_mul_f32_f32(v_sum_sf3, v_scale_comb3);
+
+        HVX_Vector v_scaled_offset0 = hvx_vec_mul_f16_f16_to_f32_lower32(v_offset0, v_sum_a_f16_0);
+        HVX_Vector v_scaled_offset1 = hvx_vec_mul_f16_f16_to_f32_lower32(v_offset1, v_sum_a_f16_1);
+        HVX_Vector v_scaled_offset2 = hvx_vec_mul_f16_f16_to_f32_lower32(v_offset2, v_sum_a_f16_2);
+        HVX_Vector v_scaled_offset3 = hvx_vec_mul_f16_f16_to_f32_lower32(v_offset3, v_sum_a_f16_3);
+
+        v_sum_float_0 = hvx_vec_add_f32_f32(v_sum_float_0, hvx_vec_add_f32_f32(v_scaled_dot0, v_scaled_offset0));
+        v_sum_float_1 = hvx_vec_add_f32_f32(v_sum_float_1, hvx_vec_add_f32_f32(v_scaled_dot1, v_scaled_offset1));
+        v_sum_float_2 = hvx_vec_add_f32_f32(v_sum_float_2, hvx_vec_add_f32_f32(v_scaled_dot2, v_scaled_offset2));
+        v_sum_float_3 = hvx_vec_add_f32_f32(v_sum_float_3, hvx_vec_add_f32_f32(v_scaled_dot3, v_scaled_offset3));
+    }
+
+    HVX_Vector v_sum_float;
+    if (n_k_tiles_x4 > 0) {
+        v_sum_float = hvx_vec_add_f32_f32(
+            hvx_vec_add_f32_f32(v_sum_float_0, v_sum_float_1),
+            hvx_vec_add_f32_f32(v_sum_float_2, v_sum_float_3)
+        );
+    } else {
+        v_sum_float = Q6_V_vzero();
+    }
+
     HVX_Vector v_act_all;
-    for (uint32_t kt = 0; kt < n_k_tiles; kt++) {
+    for (; kt < n_k_tiles; kt++) {
         const HVX_UVector * restrict vptr = (const HVX_UVector *) (tile_ptr + kt * 640);
 
         HVX_Vector v_act = hvx_vec_load_act_tile(y_q, kt, &v_act_all);
@@ -1144,11 +1309,81 @@ static void tiled_vec_dot_q8_0_32x1(const int n, float * restrict s, const void 
     const uint8_t * restrict y_q = vy;
     const uint8_t * restrict y_d = y_q + n;
 
-    HVX_Vector v_sum_float = Q6_V_vzero();
+    HVX_Vector v_sum_float_0 = Q6_V_vzero();
+    HVX_Vector v_sum_float_1 = Q6_V_vzero();
+    HVX_Vector v_sum_float_2 = Q6_V_vzero();
+    HVX_Vector v_sum_float_3 = Q6_V_vzero();
 
     uint32_t n_k_tiles = n / 32;
+    uint32_t n_k_tiles_x4 = n_k_tiles & ~3U;
+    uint32_t kt = 0;
+    HVX_Vector v_scale_all;
+    for (; kt < n_k_tiles_x4; kt += 4) {
+        const HVX_UVector * restrict vptr0 = (const HVX_UVector *) (tile_ptr + (kt + 0) * 1088);
+        const HVX_UVector * restrict vptr1 = (const HVX_UVector *) (tile_ptr + (kt + 1) * 1088);
+        const HVX_UVector * restrict vptr2 = (const HVX_UVector *) (tile_ptr + (kt + 2) * 1088);
+        const HVX_UVector * restrict vptr3 = (const HVX_UVector *) (tile_ptr + (kt + 3) * 1088);
+
+        HVX_Vector v_act_all = hvx_vmem(y_q + kt * 32);
+        HVX_Vector v_act0 = v_act_all;
+        HVX_Vector v_act1 = Q6_V_vror_VR(v_act_all, 32);
+        HVX_Vector v_act2 = Q6_V_vror_VR(v_act_all, 64);
+        HVX_Vector v_act3 = Q6_V_vror_VR(v_act_all, 96);
+
+        HVX_Vector v_sum0 = accum_8bit_32x1(vptr0, v_act0);
+        HVX_Vector v_sum1 = accum_8bit_32x1(vptr1, v_act1);
+        HVX_Vector v_sum2 = accum_8bit_32x1(vptr2, v_act2);
+        HVX_Vector v_sum3 = accum_8bit_32x1(vptr3, v_act3);
+
+        HVX_Vector v_sum_sf0 = Q6_Vsf_equals_Vw(v_sum0);
+        HVX_Vector v_sum_sf1 = Q6_Vsf_equals_Vw(v_sum1);
+        HVX_Vector v_sum_sf2 = Q6_Vsf_equals_Vw(v_sum2);
+        HVX_Vector v_sum_sf3 = Q6_Vsf_equals_Vw(v_sum3);
+
+        if (kt % 64 == 0) {
+            v_scale_all = hvx_vmem(y_d + kt * 2);
+        }
+
+        uint32_t offset = (kt % 64) * 2;
+        HVX_Vector v_scale_all_rot = Q6_V_vror_VR(v_scale_all, offset);
+        HVX_Vector v_scale_a_f16_0 = hvx_vec_repl_f16(v_scale_all_rot);
+        HVX_Vector v_scale_a_f16_1 = hvx_vec_repl_f16(Q6_V_vror_VR(v_scale_all_rot, 2));
+        HVX_Vector v_scale_a_f16_2 = hvx_vec_repl_f16(Q6_V_vror_VR(v_scale_all_rot, 4));
+        HVX_Vector v_scale_a_f16_3 = hvx_vec_repl_f16(Q6_V_vror_VR(v_scale_all_rot, 6));
+
+        HVX_Vector v_scale_w0 = vptr0[8];
+        HVX_Vector v_scale_w1 = vptr1[8];
+        HVX_Vector v_scale_w2 = vptr2[8];
+        HVX_Vector v_scale_w3 = vptr3[8];
+
+        HVX_Vector v_scale_comb0 = hvx_vec_mul_f16_f16_to_f32_lower32(v_scale_w0, v_scale_a_f16_0);
+        HVX_Vector v_scale_comb1 = hvx_vec_mul_f16_f16_to_f32_lower32(v_scale_w1, v_scale_a_f16_1);
+        HVX_Vector v_scale_comb2 = hvx_vec_mul_f16_f16_to_f32_lower32(v_scale_w2, v_scale_a_f16_2);
+        HVX_Vector v_scale_comb3 = hvx_vec_mul_f16_f16_to_f32_lower32(v_scale_w3, v_scale_a_f16_3);
+
+        HVX_Vector v_sum_scaled0 = hvx_vec_mul_f32_f32(v_sum_sf0, v_scale_comb0);
+        HVX_Vector v_sum_scaled1 = hvx_vec_mul_f32_f32(v_sum_sf1, v_scale_comb1);
+        HVX_Vector v_sum_scaled2 = hvx_vec_mul_f32_f32(v_sum_sf2, v_scale_comb2);
+        HVX_Vector v_sum_scaled3 = hvx_vec_mul_f32_f32(v_sum_sf3, v_scale_comb3);
+
+        v_sum_float_0 = hvx_vec_add_f32_f32(v_sum_float_0, v_sum_scaled0);
+        v_sum_float_1 = hvx_vec_add_f32_f32(v_sum_float_1, v_sum_scaled1);
+        v_sum_float_2 = hvx_vec_add_f32_f32(v_sum_float_2, v_sum_scaled2);
+        v_sum_float_3 = hvx_vec_add_f32_f32(v_sum_float_3, v_sum_scaled3);
+    }
+
+    HVX_Vector v_sum_float;
+    if (n_k_tiles_x4 > 0) {
+        v_sum_float = hvx_vec_add_f32_f32(
+            hvx_vec_add_f32_f32(v_sum_float_0, v_sum_float_1),
+            hvx_vec_add_f32_f32(v_sum_float_2, v_sum_float_3)
+        );
+    } else {
+        v_sum_float = Q6_V_vzero();
+    }
+
     HVX_Vector v_act_all;
-    for (uint32_t kt = 0; kt < n_k_tiles; kt++) {
+    for (; kt < n_k_tiles; kt++) {
         const HVX_UVector * restrict vptr = (const HVX_UVector *) (tile_ptr + kt * 1088);
 
         HVX_Vector v_act = hvx_vec_load_act_tile(y_q, kt, &v_act_all);
@@ -1215,13 +1450,84 @@ static void tiled_vec_dot_iq4nl_32x1(const int n, float * restrict s, const void
     const uint8_t * restrict y_q = vy;
     const uint8_t * restrict y_d = y_q + n;
 
-    HVX_Vector v_sum_float = Q6_V_vzero();
+    HVX_Vector v_sum_float_0 = Q6_V_vzero();
+    HVX_Vector v_sum_float_1 = Q6_V_vzero();
+    HVX_Vector v_sum_float_2 = Q6_V_vzero();
+    HVX_Vector v_sum_float_3 = Q6_V_vzero();
+
     HVX_Vector mask_h4 = Q6_Vb_vsplat_R(0x0F);
     HVX_Vector lut = *(const HVX_Vector *) kvalues_iq4nl_lut;
 
     uint32_t n_k_tiles = n / 32;
+    uint32_t n_k_tiles_x4 = n_k_tiles & ~3U;
+    uint32_t kt = 0;
+    HVX_Vector v_scale_all;
+    for (; kt < n_k_tiles_x4; kt += 4) {
+        const HVX_UVector * restrict vptr0 = (const HVX_UVector *) (tile_ptr + (kt + 0) * 576);
+        const HVX_UVector * restrict vptr1 = (const HVX_UVector *) (tile_ptr + (kt + 1) * 576);
+        const HVX_UVector * restrict vptr2 = (const HVX_UVector *) (tile_ptr + (kt + 2) * 576);
+        const HVX_UVector * restrict vptr3 = (const HVX_UVector *) (tile_ptr + (kt + 3) * 576);
+
+        HVX_Vector v_act_all = hvx_vmem(y_q + kt * 32);
+        HVX_Vector v_act0 = v_act_all;
+        HVX_Vector v_act1 = Q6_V_vror_VR(v_act_all, 32);
+        HVX_Vector v_act2 = Q6_V_vror_VR(v_act_all, 64);
+        HVX_Vector v_act3 = Q6_V_vror_VR(v_act_all, 96);
+
+        HVX_Vector v_sum0 = accum_4bit_32x1_lut(vptr0, v_act0, mask_h4, lut);
+        HVX_Vector v_sum1 = accum_4bit_32x1_lut(vptr1, v_act1, mask_h4, lut);
+        HVX_Vector v_sum2 = accum_4bit_32x1_lut(vptr2, v_act2, mask_h4, lut);
+        HVX_Vector v_sum3 = accum_4bit_32x1_lut(vptr3, v_act3, mask_h4, lut);
+
+        HVX_Vector v_sum_sf0 = Q6_Vsf_equals_Vw(v_sum0);
+        HVX_Vector v_sum_sf1 = Q6_Vsf_equals_Vw(v_sum1);
+        HVX_Vector v_sum_sf2 = Q6_Vsf_equals_Vw(v_sum2);
+        HVX_Vector v_sum_sf3 = Q6_Vsf_equals_Vw(v_sum3);
+
+        if (kt % 64 == 0) {
+            v_scale_all = hvx_vmem(y_d + kt * 2);
+        }
+
+        uint32_t offset = (kt % 64) * 2;
+        HVX_Vector v_scale_all_rot = Q6_V_vror_VR(v_scale_all, offset);
+        HVX_Vector v_scale_a_f16_0 = hvx_vec_repl_f16(v_scale_all_rot);
+        HVX_Vector v_scale_a_f16_1 = hvx_vec_repl_f16(Q6_V_vror_VR(v_scale_all_rot, 2));
+        HVX_Vector v_scale_a_f16_2 = hvx_vec_repl_f16(Q6_V_vror_VR(v_scale_all_rot, 4));
+        HVX_Vector v_scale_a_f16_3 = hvx_vec_repl_f16(Q6_V_vror_VR(v_scale_all_rot, 6));
+
+        HVX_Vector v_scale_w0 = vptr0[4];
+        HVX_Vector v_scale_w1 = vptr1[4];
+        HVX_Vector v_scale_w2 = vptr2[4];
+        HVX_Vector v_scale_w3 = vptr3[4];
+
+        HVX_Vector v_scale_comb0 = hvx_vec_mul_f16_f16_to_f32_lower32(v_scale_w0, v_scale_a_f16_0);
+        HVX_Vector v_scale_comb1 = hvx_vec_mul_f16_f16_to_f32_lower32(v_scale_w1, v_scale_a_f16_1);
+        HVX_Vector v_scale_comb2 = hvx_vec_mul_f16_f16_to_f32_lower32(v_scale_w2, v_scale_a_f16_2);
+        HVX_Vector v_scale_comb3 = hvx_vec_mul_f16_f16_to_f32_lower32(v_scale_w3, v_scale_a_f16_3);
+
+        HVX_Vector v_sum_scaled0 = hvx_vec_mul_f32_f32(v_sum_sf0, v_scale_comb0);
+        HVX_Vector v_sum_scaled1 = hvx_vec_mul_f32_f32(v_sum_sf1, v_scale_comb1);
+        HVX_Vector v_sum_scaled2 = hvx_vec_mul_f32_f32(v_sum_sf2, v_scale_comb2);
+        HVX_Vector v_sum_scaled3 = hvx_vec_mul_f32_f32(v_sum_sf3, v_scale_comb3);
+
+        v_sum_float_0 = hvx_vec_add_f32_f32(v_sum_float_0, v_sum_scaled0);
+        v_sum_float_1 = hvx_vec_add_f32_f32(v_sum_float_1, v_sum_scaled1);
+        v_sum_float_2 = hvx_vec_add_f32_f32(v_sum_float_2, v_sum_scaled2);
+        v_sum_float_3 = hvx_vec_add_f32_f32(v_sum_float_3, v_sum_scaled3);
+    }
+
+    HVX_Vector v_sum_float;
+    if (n_k_tiles_x4 > 0) {
+        v_sum_float = hvx_vec_add_f32_f32(
+            hvx_vec_add_f32_f32(v_sum_float_0, v_sum_float_1),
+            hvx_vec_add_f32_f32(v_sum_float_2, v_sum_float_3)
+        );
+    } else {
+        v_sum_float = Q6_V_vzero();
+    }
+
     HVX_Vector v_act_all;
-    for (uint32_t kt = 0; kt < n_k_tiles; kt++) {
+    for (; kt < n_k_tiles; kt++) {
         const HVX_UVector * restrict vptr = (const HVX_UVector *) (tile_ptr + kt * 576);
 
         HVX_Vector v_act = hvx_vec_load_act_tile(y_q, kt, &v_act_all);
@@ -1290,15 +1596,101 @@ static void tiled_vec_dot_mxfp4_32x1(const int n, float * restrict s, const void
     const uint8_t * restrict y_q = vy;
     const uint8_t * restrict y_d = y_q + n;
 
-    HVX_Vector v_sum_float = Q6_V_vzero();
+    HVX_Vector v_sum_float_0 = Q6_V_vzero();
+    HVX_Vector v_sum_float_1 = Q6_V_vzero();
+    HVX_Vector v_sum_float_2 = Q6_V_vzero();
+    HVX_Vector v_sum_float_3 = Q6_V_vzero();
+
     HVX_Vector mask_h4 = Q6_Vb_vsplat_R(0x0F);
     HVX_Vector lut = *(const HVX_Vector *) kvalues_mxfp4_lut;
     HVX_Vector expand = *(const HVX_Vector *) expand_x32_e8m0;
     HVX_Vector e8m0_mask = Q6_V_vsplat_R(0x000000ff);
 
     uint32_t n_k_tiles = n / 32;
+    uint32_t n_k_tiles_x4 = n_k_tiles & ~3U;
+    uint32_t kt = 0;
+    HVX_Vector v_scale_all;
+    for (; kt < n_k_tiles_x4; kt += 4) {
+        const HVX_UVector * restrict vptr0 = (const HVX_UVector *) (tile_ptr + (kt + 0) * 544);
+        const HVX_UVector * restrict vptr1 = (const HVX_UVector *) (tile_ptr + (kt + 1) * 544);
+        const HVX_UVector * restrict vptr2 = (const HVX_UVector *) (tile_ptr + (kt + 2) * 544);
+        const HVX_UVector * restrict vptr3 = (const HVX_UVector *) (tile_ptr + (kt + 3) * 544);
+
+        HVX_Vector v_act_all = hvx_vmem(y_q + kt * 32);
+        HVX_Vector v_act0 = v_act_all;
+        HVX_Vector v_act1 = Q6_V_vror_VR(v_act_all, 32);
+        HVX_Vector v_act2 = Q6_V_vror_VR(v_act_all, 64);
+        HVX_Vector v_act3 = Q6_V_vror_VR(v_act_all, 96);
+
+        HVX_Vector v_sum0 = accum_4bit_32x1_lut(vptr0, v_act0, mask_h4, lut);
+        HVX_Vector v_sum1 = accum_4bit_32x1_lut(vptr1, v_act1, mask_h4, lut);
+        HVX_Vector v_sum2 = accum_4bit_32x1_lut(vptr2, v_act2, mask_h4, lut);
+        HVX_Vector v_sum3 = accum_4bit_32x1_lut(vptr3, v_act3, mask_h4, lut);
+
+        HVX_Vector v_sum_sf0 = Q6_Vsf_equals_Vw(v_sum0);
+        HVX_Vector v_sum_sf1 = Q6_Vsf_equals_Vw(v_sum1);
+        HVX_Vector v_sum_sf2 = Q6_Vsf_equals_Vw(v_sum2);
+        HVX_Vector v_sum_sf3 = Q6_Vsf_equals_Vw(v_sum3);
+
+        if (kt % 64 == 0) {
+            v_scale_all = hvx_vmem(y_d + kt * 2);
+        }
+
+        uint32_t offset = (kt % 64) * 2;
+        HVX_Vector v_scale_all_rot = Q6_V_vror_VR(v_scale_all, offset);
+        HVX_Vector v_scale_a_f16_0 = hvx_vec_repl_f16(v_scale_all_rot);
+        HVX_Vector v_scale_a_f16_1 = hvx_vec_repl_f16(Q6_V_vror_VR(v_scale_all_rot, 2));
+        HVX_Vector v_scale_a_f16_2 = hvx_vec_repl_f16(Q6_V_vror_VR(v_scale_all_rot, 4));
+        HVX_Vector v_scale_a_f16_3 = hvx_vec_repl_f16(Q6_V_vror_VR(v_scale_all_rot, 6));
+
+        HVX_Vector v_scale_a_f32_0 = hvx_vec_f16_to_f32_lower32(v_scale_a_f16_0);
+        HVX_Vector v_scale_a_f32_1 = hvx_vec_f16_to_f32_lower32(v_scale_a_f16_1);
+        HVX_Vector v_scale_a_f32_2 = hvx_vec_f16_to_f32_lower32(v_scale_a_f16_2);
+        HVX_Vector v_scale_a_f32_3 = hvx_vec_f16_to_f32_lower32(v_scale_a_f16_3);
+
+        HVX_Vector v_scale_w0 = * (const HVX_UVector *) (tile_ptr + (kt + 0) * 544 + 512);
+        HVX_Vector v_scale_w1 = * (const HVX_UVector *) (tile_ptr + (kt + 1) * 544 + 512);
+        HVX_Vector v_scale_w2 = * (const HVX_UVector *) (tile_ptr + (kt + 2) * 544 + 512);
+        HVX_Vector v_scale_w3 = * (const HVX_UVector *) (tile_ptr + (kt + 3) * 544 + 512);
+
+        HVX_Vector r0_d0 = Q6_V_vand_VV(Q6_V_vdelta_VV(v_scale_w0, expand), e8m0_mask);
+        HVX_Vector r0_d1 = Q6_V_vand_VV(Q6_V_vdelta_VV(v_scale_w1, expand), e8m0_mask);
+        HVX_Vector r0_d2 = Q6_V_vand_VV(Q6_V_vdelta_VV(v_scale_w2, expand), e8m0_mask);
+        HVX_Vector r0_d3 = Q6_V_vand_VV(Q6_V_vdelta_VV(v_scale_w3, expand), e8m0_mask);
+
+        HVX_Vector v_scale_w_f32_0 = Q6_Vw_vasl_VwR(r0_d0, 23);
+        HVX_Vector v_scale_w_f32_1 = Q6_Vw_vasl_VwR(r0_d1, 23);
+        HVX_Vector v_scale_w_f32_2 = Q6_Vw_vasl_VwR(r0_d2, 23);
+        HVX_Vector v_scale_w_f32_3 = Q6_Vw_vasl_VwR(r0_d3, 23);
+
+        HVX_Vector v_scale_comb0 = hvx_vec_mul_f32_f32(v_scale_w_f32_0, v_scale_a_f32_0);
+        HVX_Vector v_scale_comb1 = hvx_vec_mul_f32_f32(v_scale_w_f32_1, v_scale_a_f32_1);
+        HVX_Vector v_scale_comb2 = hvx_vec_mul_f32_f32(v_scale_w_f32_2, v_scale_a_f32_2);
+        HVX_Vector v_scale_comb3 = hvx_vec_mul_f32_f32(v_scale_w_f32_3, v_scale_a_f32_3);
+
+        HVX_Vector v_sum_scaled0 = hvx_vec_mul_f32_f32(v_sum_sf0, v_scale_comb0);
+        HVX_Vector v_sum_scaled1 = hvx_vec_mul_f32_f32(v_sum_sf1, v_scale_comb1);
+        HVX_Vector v_sum_scaled2 = hvx_vec_mul_f32_f32(v_sum_sf2, v_scale_comb2);
+        HVX_Vector v_sum_scaled3 = hvx_vec_mul_f32_f32(v_sum_sf3, v_scale_comb3);
+
+        v_sum_float_0 = hvx_vec_add_f32_f32(v_sum_float_0, v_sum_scaled0);
+        v_sum_float_1 = hvx_vec_add_f32_f32(v_sum_float_1, v_sum_scaled1);
+        v_sum_float_2 = hvx_vec_add_f32_f32(v_sum_float_2, v_sum_scaled2);
+        v_sum_float_3 = hvx_vec_add_f32_f32(v_sum_float_3, v_sum_scaled3);
+    }
+
+    HVX_Vector v_sum_float;
+    if (n_k_tiles_x4 > 0) {
+        v_sum_float = hvx_vec_add_f32_f32(
+            hvx_vec_add_f32_f32(v_sum_float_0, v_sum_float_1),
+            hvx_vec_add_f32_f32(v_sum_float_2, v_sum_float_3)
+        );
+    } else {
+        v_sum_float = Q6_V_vzero();
+    }
+
     HVX_Vector v_act_all;
-    for (uint32_t kt = 0; kt < n_k_tiles; kt++) {
+    for (; kt < n_k_tiles; kt++) {
         const HVX_UVector * restrict vptr = (const HVX_UVector *) (tile_ptr + kt * 544);
 
         HVX_Vector v_act = hvx_vec_load_act_tile(y_q, kt, &v_act_all);
@@ -1311,14 +1703,16 @@ static void tiled_vec_dot_mxfp4_32x1(const int n, float * restrict s, const void
         r0_d = Q6_V_vand_VV(r0_d, e8m0_mask);
         HVX_Vector v_scale_w_f32 = Q6_Vw_vasl_VwR(r0_d, 23);
 
-        float scale_a = (float) ((const __fp16 *) y_d)[kt] * 0.5f;
-        HVX_Vector v_scale_a = hvx_vec_splat_f32(scale_a);
+        HVX_Vector v_scale_a_f16 = hvx_vec_repl_f16(hvx_vmemu(y_d + kt * 2));
+        HVX_Vector v_scale_a = hvx_vec_f16_to_f32_lower32(v_scale_a_f16);
 
         HVX_Vector v_scale_comb = hvx_vec_mul_f32_f32(v_scale_w_f32, v_scale_a);
         HVX_Vector v_sum_scaled = hvx_vec_mul_f32_f32(v_sum_sf, v_scale_comb);
 
         v_sum_float = hvx_vec_add_f32_f32(v_sum_float, v_sum_scaled);
     }
+
+    v_sum_float = hvx_vec_mul_f32_f32(v_sum_float, hvx_vec_splat_f32(0.5f));
 
     hvx_vec_store_u(s, valid_rows * sizeof(float), v_sum_float);
 }
@@ -1358,10 +1752,10 @@ static void tiled_vec_dot_mxfp4_32x2(const int n, float * restrict s0, float * r
         r0_d = Q6_V_vand_VV(r0_d, e8m0_mask);
         HVX_Vector v_scale_w_f32 = Q6_Vw_vasl_VwR(r0_d, 23);
 
-        float scale_a_c0 = (float) ((const __fp16 *) y0_d)[kt] * 0.5f;
-        float scale_a_c1 = (float) ((const __fp16 *) y1_d)[kt] * 0.5f;
-        HVX_Vector v_scale_a_c0 = hvx_vec_splat_f32(scale_a_c0);
-        HVX_Vector v_scale_a_c1 = hvx_vec_splat_f32(scale_a_c1);
+        HVX_Vector v_scale_a_c0_f16 = hvx_vec_repl_f16(hvx_vmemu(y0_d + kt * 2));
+        HVX_Vector v_scale_a_c1_f16 = hvx_vec_repl_f16(hvx_vmemu(y1_d + kt * 2));
+        HVX_Vector v_scale_a_c0     = hvx_vec_f16_to_f32_lower32(v_scale_a_c0_f16);
+        HVX_Vector v_scale_a_c1     = hvx_vec_f16_to_f32_lower32(v_scale_a_c1_f16);
 
         HVX_Vector v_scale_comb_c0 = hvx_vec_mul_f32_f32(v_scale_w_f32, v_scale_a_c0);
         HVX_Vector v_scale_comb_c1 = hvx_vec_mul_f32_f32(v_scale_w_f32, v_scale_a_c1);
@@ -1372,6 +1766,9 @@ static void tiled_vec_dot_mxfp4_32x2(const int n, float * restrict s0, float * r
         v_sum_float_c0 = hvx_vec_add_f32_f32(v_sum_float_c0, v_sum_scaled_c0);
         v_sum_float_c1 = hvx_vec_add_f32_f32(v_sum_float_c1, v_sum_scaled_c1);
     }
+
+    v_sum_float_c0 = hvx_vec_mul_f32_f32(v_sum_float_c0, hvx_vec_splat_f32(0.5f));
+    v_sum_float_c1 = hvx_vec_mul_f32_f32(v_sum_float_c1, hvx_vec_splat_f32(0.5f));
 
     hvx_vec_store_u(s0, valid_rows * sizeof(float), v_sum_float_c0);
     hvx_vec_store_u(s1, valid_rows * sizeof(float), v_sum_float_c1);
@@ -1430,7 +1827,7 @@ static void matmul_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, void
         int valid_rows = (int)ne0 - (int)(ct * 32);                                                                                 \
         valid_rows = MIN(32, MAX(0, valid_rows));                                                                                   \
                                                                                                                                     \
-        htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, ith);                                                                          \
+        htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, ith);                                                                     \
         uint32_t ir1 = 0;                                                                                                           \
         for (; ir1 + 1 < src1_nrows; ir1 += 2) {                                                                                    \
             const uint8_t * restrict src1_col0 = (const uint8_t *) (src1_data + (ir1+0) * src1_stride);                             \
@@ -1451,7 +1848,7 @@ static void matmul_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, void
                                                                                                                                     \
             DOT_2X1(ne10, dst_ptr, w_tile, src1_col, valid_rows);                                                                   \
         }                                                                                                                           \
-        htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, ith);                                                                           \
+        htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, ith);                                                                      \
                                                                                                                                     \
         if (push_ct < ct_end) {                                                                                                     \
             dma_queue_push(dma_queue, dma_make_ptr((uint8_t *)w_tile, src0_row + push_ct * tile_row_stride),                        \
@@ -1525,9 +1922,9 @@ static void matvec_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, void
         int valid_rows = (int)ne0 - (int)(ct * 32);                                                                                 \
         valid_rows = MIN(32, MAX(0, valid_rows));                                                                                   \
                                                                                                                                     \
-        htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, ith);                                                                          \
+        htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, ith);                                                                     \
         DOT_2X1(ne10, dst_ptr, w_tile, src1_col, valid_rows);                                                                       \
-        htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, ith);                                                                           \
+        htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, ith);                                                                      \
                                                                                                                                     \
         if (push_ct < ct_end) {                                                                                                     \
             dma_queue_push(dma_queue, dma_make_ptr((uint8_t *)w_tile, src0_row + push_ct * tile_row_stride),                        \
@@ -1625,7 +2022,7 @@ static void matmul_qkv_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, 
             int valid_rows = (int)src0->ne[1] - (int)(ct * 32);                                                                         \
             valid_rows = MIN(32, MAX(0, valid_rows));                                                                                   \
                                                                                                                                         \
-            htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, ith);                                                                          \
+            htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, ith);                                                                     \
             uint32_t ir1 = 0;                                                                                                           \
             for (; ir1 + 1 < src1_nrows; ir1 += 2) {                                                                                    \
                 const uint8_t * restrict src1_col0 = (const uint8_t *) (src1_data + (ir1+0) * src1_stride);                             \
@@ -1657,7 +2054,7 @@ static void matmul_qkv_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, 
                 DOT_2X1(ne10, dst_ptr_k, w_tile_k, src1_col, valid_rows);                                                               \
                 DOT_2X1(ne10, dst_ptr_v, w_tile_v, src1_col, valid_rows);                                                               \
             }                                                                                                                           \
-            htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, ith);                                                                           \
+            htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, ith);                                                                      \
                                                                                                                                         \
             if (push_ct < ct_end_kv) {                                                                                                  \
                 dma_queue_push(dma_queue, dma_make_ptr((uint8_t *)w_tile_k, src0_row + push_ct * tile_row_stride),                      \
@@ -1693,7 +2090,7 @@ static void matmul_qkv_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, 
             int valid_rows = (int)src3->ne[1] - (int)(ct * 32);                                                                         \
             valid_rows = MIN(32, MAX(0, valid_rows));                                                                                   \
                                                                                                                                         \
-            htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, ith);                                                                          \
+            htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, ith);                                                                     \
             uint32_t ir1 = 0;                                                                                                           \
             for (; ir1 + 1 < src1_nrows; ir1 += 2) {                                                                                    \
                 const uint8_t * restrict src1_col0 = (const uint8_t *) (src1_data + (ir1+0) * src1_stride);                             \
@@ -1715,7 +2112,7 @@ static void matmul_qkv_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, 
                                                                                                                                         \
                 DOT_2X1(ne10, dst_ptr_q, w_tile_q, src1_col, valid_rows);                                                               \
             }                                                                                                                           \
-            htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, ith);                                                                           \
+            htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, ith);                                                                      \
                                                                                                                                         \
             if (push_ct < ct_end_q) {                                                                                                   \
                 dma_queue_push(dma_queue, dma_make_ptr((uint8_t *)w_tile_q, src3_row + push_ct * tile_row_stride),                      \
@@ -1737,120 +2134,120 @@ static void matmul_qkv_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, 
 }
 
 
-#define MATMUL_FFN_2D_REPACKED_IMPL(SUFFIX, TILE_SIZE, DOT_2X2, DOT_2X1)                                                                                                    \
-static void matmul_ffn_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, void * data) {                                                                              \
-    struct htp_matmul_context * mmctx = data;                                                                                                                               \
-    struct htp_ops_context * octx = mmctx->octx;                                                                                                                            \
-                                                                                                                                                                            \
-    const struct htp_tensor * restrict src0 = octx->src[0]; /* Wgate */                                                                                                     \
-    const struct htp_tensor * restrict src1 = octx->src[1]; /* y */                                                                                                         \
-    const struct htp_tensor * restrict src2 = octx->src[2]; /* Wup */                                                                                                       \
-    const struct htp_tensor * restrict dst_gate = octx->dsts[0];                                                                                                            \
-    const struct htp_tensor * restrict dst_up = octx->dsts[1];                                                                                                              \
-                                                                                                                                                                            \
-    struct htp_spad * restrict src0_spad = &octx->src0_spad; /* Wgate */                                                                                                    \
-    struct htp_spad * restrict src2_spad = &octx->src2_spad; /* Wup */                                                                                                      \
-    struct htp_spad * restrict src1_spad = &octx->src1_spad; /* y */                                                                                                        \
-                                                                                                                                                                            \
-    const uint32_t ne00 = src0->ne[0];                                                                                                                                      \
-    const uint32_t ne01 = src0->ne[1];                                                                                                                                      \
-    const uint32_t ne10 = src1->ne[0];                                                                                                                                      \
-    const uint32_t src1_nrows = src1->ne[1] * src1->ne[2] * src1->ne[3];                                                                                                    \
-                                                                                                                                                                            \
-    const size_t dst_row_size  = dst_gate->nb[1];                                                                                                                           \
-    const size_t src1_stride = src1_spad->stride;                                                                                                                           \
-                                                                                                                                                                            \
-    uint8_t * restrict spad_src0 = src0_spad->data + src0_spad->size_per_thread * ith;                                                                                      \
-    uint8_t * restrict spad_src2 = src2_spad->data + src2_spad->size_per_thread * ith;                                                                                      \
-    uint8_t * restrict src1_data = src1_spad->data;                                                                                                                         \
-                                                                                                                                                                            \
-    volatile uint64_t t1, t2;                                                                                                                                               \
-    t1 = HAP_perf_get_qtimer_count();                                                                                                                                       \
-                                                                                                                                                                            \
-    struct htp_thread_trace * tr = octx->ctx ? &octx->ctx->trace[ith] : NULL;                                                                                               \
-                                                                                                                                                                            \
-    const uint8_t * restrict src0_row = (const uint8_t *) src0->data;                                                                                                       \
-    const uint8_t * restrict src2_row = (const uint8_t *) src2->data;                                                                                                       \
-                                                                                                                                                                            \
-    const uint32_t tile_size = TILE_SIZE;                                                                                                                                   \
-                                                                                                                                                                            \
-    uint32_t n_k_tiles_w = ne00 / 32;                                                                                                                                       \
-    uint32_t n_k_tiles_a = ne10 / 32;                                                                                                                                       \
-    uint32_t tile_row_stride = n_k_tiles_w * tile_size;                                                                                                                     \
-    uint32_t tile_row_transfer_size = n_k_tiles_a * tile_size;                                                                                                              \
-                                                                                                                         dma_queue * dma_queue = octx->ctx->dma[ith];       \
-                                                                                                                                                                            \
-    const uint32_t src0_nrows = ne01 * src0->ne[2] * src0->ne[3];                                                                                                           \
-    const uint32_t src0_start_row = mmctx->src0_nrows_per_thread * ith;                                                                                                     \
-    const uint32_t src0_end_row   = MIN(src0_start_row + mmctx->src0_nrows_per_thread, src0_nrows);                                                                         \
-                                                                                                                                                                            \
-    uint32_t ct_start = src0_start_row / 32;                                                                                                                                \
-    uint32_t ct_end   = (src0_end_row + 31) / 32;                                                                                                                           \
-                                                                                                                                                                            \
-    uint32_t push_ct = ct_start;                                                                                                                                            \
-    for (uint32_t d = 0; d < DMA_DEPTH && push_ct < ct_end; d++, push_ct++) {                                                                                               \
-        dma_queue_push(dma_queue, dma_make_ptr(spad_src0 + d * tile_row_transfer_size, src0_row + push_ct * tile_row_stride),                                               \
-                       tile_row_transfer_size, tile_row_transfer_size, tile_row_transfer_size, 1);                                                                          \
-        dma_queue_push(dma_queue, dma_make_ptr(spad_src2 + d * tile_row_transfer_size, src2_row + push_ct * tile_row_stride),                                               \
-                       tile_row_transfer_size, tile_row_transfer_size, tile_row_transfer_size, 1);                                                                          \
-    }                                                                                                                                                                       \
-                                                                                                                                                                            \
-    for (uint32_t ct = ct_start; ct < ct_end; ct++) {                                                                                                                       \
-        const uint8_t * w_tile_gate = dma_queue_pop(dma_queue).dst;                                                                                                         \
-        const uint8_t * w_tile_up   = dma_queue_pop(dma_queue).dst;                                                                                                         \
-                                                                                                                                                                            \
-        int valid_rows = (int)ne01 - (int)(ct * 32);                                                                                                                        \
-        valid_rows = MIN(32, MAX(0, valid_rows));                                                                                                                           \
-                                                                                                                                                                            \
-        htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, ith);                                                                                                                  \
-        uint32_t ir1 = 0;                                                                                                                                                   \
-        for (; ir1 + 1 < src1_nrows; ir1 += 2) {                                                                                                                            \
-            const uint8_t * restrict src1_col0 = (const uint8_t *) (src1_data + (ir1+0) * src1_stride);                                                                     \
-            const uint8_t * restrict src1_col1 = (const uint8_t *) (src1_data + (ir1+1) * src1_stride);                                                                     \
-                                                                                                                                                                            \
-            float * restrict dst_row0_gate = (float *) (dst_gate->data + ((ir1+0) * dst_row_size));                                                                         \
-            float * restrict dst_row1_gate = (float *) (dst_gate->data + ((ir1+1) * dst_row_size));                                                                         \
-            float * dst_ptr0_gate = &dst_row0_gate[ct * 32];                                                                                                                \
-            float * dst_ptr1_gate = &dst_row1_gate[ct * 32];                                                                                                                \
-                                                                                                                                                                            \
-            float * restrict dst_row0_up = (float *) (dst_up->data + ((ir1+0) * dst_row_size));                                                                             \
-            float * restrict dst_row1_up = (float *) (dst_up->data + ((ir1+1) * dst_row_size));                                                                             \
-            float * dst_ptr0_up = &dst_row0_up[ct * 32];                                                                                                                    \
-            float * dst_ptr1_up = &dst_row1_up[ct * 32];                                                                                                                    \
-                                                                                                                                                                            \
-            DOT_2X2(ne10, dst_ptr0_gate, dst_ptr1_gate, w_tile_gate, src1_col0, src1_col1, valid_rows);                                                                     \
-            DOT_2X2(ne10, dst_ptr0_up, dst_ptr1_up, w_tile_up, src1_col0, src1_col1, valid_rows);                                                                           \
-        }                                                                                                                                                                   \
-                                                                                                                                                                            \
-        for (; ir1 < src1_nrows; ++ir1) {                                                                                                                                   \
-            const uint8_t * restrict src1_col = (const uint8_t *) (src1_data + ir1 * src1_stride);                                                                          \
-                                                                                                                                                                            \
-            float * restrict dst_row_gate = (float *) (dst_gate->data + (ir1 * dst_row_size));                                                                              \
-            float * dst_ptr_gate = &dst_row_gate[ct * 32];                                                                                                                  \
-                                                                                                                                                                            \
-            float * restrict dst_row_up = (float *) (dst_up->data + (ir1 * dst_row_size));                                                                                  \
-            float * dst_ptr_up = &dst_row_up[ct * 32];                                                                                                                      \
-                                                                                                                                                                            \
-            DOT_2X1(ne10, dst_ptr_gate, w_tile_gate, src1_col, valid_rows);                                                                                                 \
-            DOT_2X1(ne10, dst_ptr_up, w_tile_up, src1_col, valid_rows);                                                                                                     \
-        }                                                                                                                                                                   \
-        htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, ith);                                                                                                                   \
-                                                                                                                                                                            \
-        if (push_ct < ct_end) {                                                                                                                                             \
-            dma_queue_push(dma_queue, dma_make_ptr((uint8_t *)w_tile_gate, src0_row + push_ct * tile_row_stride),                                                           \
-                           tile_row_transfer_size, tile_row_transfer_size, tile_row_transfer_size, 1);                                                                      \
-            dma_queue_push(dma_queue, dma_make_ptr((uint8_t *)w_tile_up, src2_row + push_ct * tile_row_stride),                                                             \
-                           tile_row_transfer_size, tile_row_transfer_size, tile_row_transfer_size, 1);                                                                      \
-            push_ct++;                                                                                                                                                      \
-        }                                                                                                                                                                   \
-    }                                                                                                                                                                       \
-                                                                                                                                                                            \
-    t2 = HAP_perf_get_qtimer_count();                                                                                                                                       \
-                                                                                                                                                                            \
-    FARF(HIGH, "matmul-ffn-repacked-%s %u/%u: %ux%ux%ux%u (%u:%u) * %ux%ux%ux%u -> %ux%ux%ux%u usec %u\n", mmctx->type, ith, nth,                                           \
-         src0->ne[0], src0->ne[1], src0->ne[2], src0->ne[3], src0_start_row, src0_end_row, src1->ne[0], src1->ne[1],                                                        \
-         src1->ne[2], src1->ne[3], dst_gate->ne[0], dst_gate->ne[1], dst_gate->ne[2], dst_gate->ne[3],                                                                      \
-         (unsigned) HAP_perf_qtimer_count_to_us(t2 - t1));                                                                                                                  \
+#define MATMUL_FFN_2D_REPACKED_IMPL(SUFFIX, TILE_SIZE, DOT_2X2, DOT_2X1)                                                                \
+static void matmul_ffn_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, void * data) {                                          \
+    struct htp_matmul_context * mmctx = data;                                                                                           \
+    struct htp_ops_context * octx = mmctx->octx;                                                                                        \
+                                                                                                                                        \
+    const struct htp_tensor * restrict src0 = octx->src[0]; /* Wgate */                                                                 \
+    const struct htp_tensor * restrict src1 = octx->src[1]; /* y */                                                                     \
+    const struct htp_tensor * restrict src2 = octx->src[2]; /* Wup */                                                                   \
+    const struct htp_tensor * restrict dst_gate = octx->dsts[0];                                                                        \
+    const struct htp_tensor * restrict dst_up = octx->dsts[1];                                                                          \
+                                                                                                                                        \
+    struct htp_spad * restrict src0_spad = &octx->src0_spad; /* Wgate */                                                                \
+    struct htp_spad * restrict src2_spad = &octx->src2_spad; /* Wup */                                                                  \
+    struct htp_spad * restrict src1_spad = &octx->src1_spad; /* y */                                                                    \
+                                                                                                                                        \
+    const uint32_t ne00 = src0->ne[0];                                                                                                  \
+    const uint32_t ne01 = src0->ne[1];                                                                                                  \
+    const uint32_t ne10 = src1->ne[0];                                                                                                  \
+    const uint32_t src1_nrows = src1->ne[1] * src1->ne[2] * src1->ne[3];                                                                \
+                                                                                                                                        \
+    const size_t dst_row_size  = dst_gate->nb[1];                                                                                       \
+    const size_t src1_stride = src1_spad->stride;                                                                                       \
+                                                                                                                                        \
+    uint8_t * restrict spad_src0 = src0_spad->data + src0_spad->size_per_thread * ith;                                                  \
+    uint8_t * restrict spad_src2 = src2_spad->data + src2_spad->size_per_thread * ith;                                                  \
+    uint8_t * restrict src1_data = src1_spad->data;                                                                                     \
+                                                                                                                                        \
+    volatile uint64_t t1, t2;                                                                                                           \
+    t1 = HAP_perf_get_qtimer_count();                                                                                                   \
+                                                                                                                                        \
+    struct htp_thread_trace * tr = octx->ctx ? &octx->ctx->trace[ith] : NULL;                                                           \
+                                                                                                                                        \
+    const uint8_t * restrict src0_row = (const uint8_t *) src0->data;                                                                   \
+    const uint8_t * restrict src2_row = (const uint8_t *) src2->data;                                                                   \
+                                                                                                                                        \
+    const uint32_t tile_size = TILE_SIZE;                                                                                               \
+                                                                                                                                        \
+    uint32_t n_k_tiles_w = ne00 / 32;                                                                                                   \
+    uint32_t n_k_tiles_a = ne10 / 32;                                                                                                   \
+    uint32_t tile_row_stride = n_k_tiles_w * tile_size;                                                                                 \
+    uint32_t tile_row_transfer_size = n_k_tiles_a * tile_size;                                                                          \
+    dma_queue * dma_queue = octx->ctx->dma[ith];                                                                                        \
+                                                                                                                                        \
+    const uint32_t src0_nrows = ne01 * src0->ne[2] * src0->ne[3];                                                                       \
+    const uint32_t src0_start_row = mmctx->src0_nrows_per_thread * ith;                                                                 \
+    const uint32_t src0_end_row   = MIN(src0_start_row + mmctx->src0_nrows_per_thread, src0_nrows);                                     \
+                                                                                                                                        \
+    uint32_t ct_start = src0_start_row / 32;                                                                                            \
+    uint32_t ct_end   = (src0_end_row + 31) / 32;                                                                                       \
+                                                                                                                                        \
+    uint32_t push_ct = ct_start;                                                                                                        \
+    for (uint32_t d = 0; d < DMA_DEPTH && push_ct < ct_end; d++, push_ct++) {                                                           \
+        dma_queue_push(dma_queue, dma_make_ptr(spad_src0 + d * tile_row_transfer_size, src0_row + push_ct * tile_row_stride),           \
+                       tile_row_transfer_size, tile_row_transfer_size, tile_row_transfer_size, 1);                                      \
+        dma_queue_push(dma_queue, dma_make_ptr(spad_src2 + d * tile_row_transfer_size, src2_row + push_ct * tile_row_stride),           \
+                       tile_row_transfer_size, tile_row_transfer_size, tile_row_transfer_size, 1);                                      \
+    }                                                                                                                                   \
+                                                                                                                                        \
+    for (uint32_t ct = ct_start; ct < ct_end; ct++) {                                                                                   \
+        const uint8_t * w_tile_gate = dma_queue_pop(dma_queue).dst;                                                                     \
+        const uint8_t * w_tile_up   = dma_queue_pop(dma_queue).dst;                                                                     \
+                                                                                                                                        \
+        int valid_rows = (int)ne01 - (int)(ct * 32);                                                                                    \
+        valid_rows = MIN(32, MAX(0, valid_rows));                                                                                       \
+                                                                                                                                        \
+        htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, ith);                                                                         \
+        uint32_t ir1 = 0;                                                                                                               \
+        for (; ir1 + 1 < src1_nrows; ir1 += 2) {                                                                                        \
+            const uint8_t * restrict src1_col0 = (const uint8_t *) (src1_data + (ir1+0) * src1_stride);                                 \
+            const uint8_t * restrict src1_col1 = (const uint8_t *) (src1_data + (ir1+1) * src1_stride);                                 \
+                                                                                                                                        \
+            float * restrict dst_row0_gate = (float *) (dst_gate->data + ((ir1+0) * dst_row_size));                                     \
+            float * restrict dst_row1_gate = (float *) (dst_gate->data + ((ir1+1) * dst_row_size));                                     \
+            float * dst_ptr0_gate = &dst_row0_gate[ct * 32];                                                                            \
+            float * dst_ptr1_gate = &dst_row1_gate[ct * 32];                                                                            \
+                                                                                                                                        \
+            float * restrict dst_row0_up = (float *) (dst_up->data + ((ir1+0) * dst_row_size));                                         \
+            float * restrict dst_row1_up = (float *) (dst_up->data + ((ir1+1) * dst_row_size));                                         \
+            float * dst_ptr0_up = &dst_row0_up[ct * 32];                                                                                \
+            float * dst_ptr1_up = &dst_row1_up[ct * 32];                                                                                \
+                                                                                                                                        \
+            DOT_2X2(ne10, dst_ptr0_gate, dst_ptr1_gate, w_tile_gate, src1_col0, src1_col1, valid_rows);                                 \
+            DOT_2X2(ne10, dst_ptr0_up, dst_ptr1_up, w_tile_up, src1_col0, src1_col1, valid_rows);                                       \
+        }                                                                                                                               \
+                                                                                                                                        \
+        for (; ir1 < src1_nrows; ++ir1) {                                                                                               \
+            const uint8_t * restrict src1_col = (const uint8_t *) (src1_data + ir1 * src1_stride);                                      \
+                                                                                                                                        \
+            float * restrict dst_row_gate = (float *) (dst_gate->data + (ir1 * dst_row_size));                                          \
+            float * dst_ptr_gate = &dst_row_gate[ct * 32];                                                                              \
+                                                                                                                                        \
+            float * restrict dst_row_up = (float *) (dst_up->data + (ir1 * dst_row_size));                                              \
+            float * dst_ptr_up = &dst_row_up[ct * 32];                                                                                  \
+                                                                                                                                        \
+            DOT_2X1(ne10, dst_ptr_gate, w_tile_gate, src1_col, valid_rows);                                                             \
+            DOT_2X1(ne10, dst_ptr_up, w_tile_up, src1_col, valid_rows);                                                                 \
+        }                                                                                                                               \
+        htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, ith);                                                                          \
+                                                                                                                                        \
+        if (push_ct < ct_end) {                                                                                                         \
+            dma_queue_push(dma_queue, dma_make_ptr((uint8_t *)w_tile_gate, src0_row + push_ct * tile_row_stride),                       \
+                           tile_row_transfer_size, tile_row_transfer_size, tile_row_transfer_size, 1);                                  \
+            dma_queue_push(dma_queue, dma_make_ptr((uint8_t *)w_tile_up, src2_row + push_ct * tile_row_stride),                         \
+                           tile_row_transfer_size, tile_row_transfer_size, tile_row_transfer_size, 1);                                  \
+            push_ct++;                                                                                                                  \
+        }                                                                                                                               \
+    }                                                                                                                                   \
+                                                                                                                                        \
+    t2 = HAP_perf_get_qtimer_count();                                                                                                   \
+                                                                                                                                        \
+    FARF(HIGH, "matmul-ffn-repacked-%s %u/%u: %ux%ux%ux%u (%u:%u) * %ux%ux%ux%u -> %ux%ux%ux%u usec %u\n", mmctx->type, ith, nth,       \
+         src0->ne[0], src0->ne[1], src0->ne[2], src0->ne[3], src0_start_row, src0_end_row, src1->ne[0], src1->ne[1],                    \
+         src1->ne[2], src1->ne[3], dst_gate->ne[0], dst_gate->ne[1], dst_gate->ne[2], dst_gate->ne[3],                                  \
+         (unsigned) HAP_perf_qtimer_count_to_us(t2 - t1));                                                                              \
 }
 
 
