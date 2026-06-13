@@ -34,12 +34,18 @@ void common_fit_print(
 
 void common_memory_breakdown_print(const llama_context * ctx);
 
-// TODO: convert this to common_device_memory_data that wraps llama_device_memory_data
-//       add API for accessing the internal `llama-ext.h` information
-struct llama_device_memory_data;
+struct common_device_memory_data {
+    int64_t total;
+    int64_t free;
+    size_t  model;
+    size_t  context;
+    size_t  compute;
+};
+
+using common_device_memory_data_vec = std::vector<common_device_memory_data>;
 
 // Load a model + context with no_alloc and return the per-device memory breakdown.
-std::vector<llama_device_memory_data> common_get_device_memory_data(
+common_device_memory_data_vec common_get_device_memory_data(
                          const char * path_model,
            const llama_model_params * mparams,
          const llama_context_params * cparams,
