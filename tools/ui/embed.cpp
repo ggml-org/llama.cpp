@@ -3,7 +3,8 @@
 // Usage:
 //   llama-ui-embed <out_cpp> <out_h> [<asset_dir>]
 //
-// Embeds every regular file directly under <asset_dir> (non-recursive).
+// Recursively embeds every regular file under <asset_dir>.
+// Asset names are relative paths from <asset_dir> (e.g. "_app/immutable/bundle.HASH.js").
 // Without <asset_dir>, emits an empty asset table.
 
 #include <inttypes.h>
@@ -15,6 +16,7 @@
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -103,7 +105,24 @@ static bool write_if_different(const std::string & path, const std::string & con
     if (!content.empty()) {
         out.write(content.data(), static_cast<std::streamsize>(content.size()));
     }
-    return out.good();
+    bool ok = out.good();
+    if (ok) {
+        printf("embed: write output file %s\n", path.c_str());
+    }
+    return ok;
+}
+
+static std::string path_basename(const std::string & name) {
+    const size_t p = name.rfind('/');
+    return p == std::string::npos ? name : name.substr(p + 1);
+}
+static bool str_starts_with(const std::string & s, const char * prefix) {
+    const size_t n = strlen(prefix);
+    return s.size() >= n && s.compare(0, n, prefix) == 0;
+}
+static bool str_ends_with(const std::string & s, const char * suffix) {
+    const size_t n = strlen(suffix);
+    return s.size() >= n && s.compare(s.size() - n, n, suffix) == 0;
 }
 
 static std::string fmt(const char * pattern, ...) {
@@ -128,13 +147,14 @@ int main(int argc, char ** argv) {
 
     const std::string out_cpp = argv[1];
     const std::string out_h   = argv[2];
+    const std::string in_dir  = argv[3];
 
     std::vector<asset_entry> assets;
     if (argc == 4) {
-        const std::filesystem::path dir = argv[3];
+        const std::filesystem::path dir = in_dir;
 
         std::error_code ec;
-        std::filesystem::directory_iterator it(dir, ec);
+        std::filesystem::recursive_directory_iterator it(dir, ec);
         if (ec) {
             fprintf(stderr, "embed: cannot iterate %s: %s\n", argv[3], ec.message().c_str());
             return 1;
@@ -143,7 +163,9 @@ int main(int argc, char ** argv) {
             if (!entry.is_regular_file()) {
                 continue;
             }
-            assets.push_back({ entry.path().filename().generic_string(), entry.path() });
+            // name is the relative path from dir, with forward slashes
+            const std::string name = entry.path().lexically_relative(dir).generic_string();
+            assets.push_back({ name, entry.path() });
         }
 
         // directory iteration order is unspecified; sort for reproducible output
@@ -154,18 +176,51 @@ int main(int argc, char ** argv) {
     const int n_assets = static_cast<int>(assets.size());
 
     if (n_assets > 0) {
-        bool has_index = false, has_bundle_js = false, has_bundle_css = false, has_version = false;
+        using match_fn = std::function<bool(const std::string &)>;
+        auto exact = [](const char * name) -> match_fn {
+            return [name](const std::string & base) { return base == name; };
+        };
+
+        struct required_check { const char * label; match_fn match; bool found; };
+        required_check checks[] = {
+            { "index.html",           exact("index.html"),           false },
+            { "loading.html",         exact("loading.html"),         false },
+            { "manifest.webmanifest", exact("manifest.webmanifest"), false },
+            { "sw.js",                exact("sw.js"),                false },
+            { "build.json",           exact("build.json"),           false },
+            { "version.json",         exact("version.json"),         false },
+            { "bundle[hash].js",      [](const std::string & b) {
+                return str_starts_with(b, "bundle")  && str_ends_with(b, ".js");
+            }, false },
+            { "bundle[hash].css",     [](const std::string & b) {
+                return str_starts_with(b, "bundle")  && str_ends_with(b, ".css");
+            }, false },
+            { "workbox[hash].js",     [](const std::string & b) {
+                return str_starts_with(b, "workbox") && str_ends_with(b, ".js");
+            }, false },
+        };
+
         for (const auto & a : assets) {
-            if (a.name == "index.html")   has_index      = true;
-            if (a.name == "bundle.js")    has_bundle_js  = true;
-            if (a.name == "bundle.css")   has_bundle_css = true;
-            if (a.name == "version.json") has_version    = true;
-        }
-        if (!has_index || !has_bundle_js || !has_bundle_css || !has_version) {
-            fprintf(stderr, "embed: missing required assets (need index.html, bundle.js, bundle.css, version.json); got:\n");
-            for (const auto & a : assets) {
-                fprintf(stderr, "  %s\n", a.name.c_str());
+            const std::string base = path_basename(a.name);
+            for (auto & c : checks) {
+                if (!c.found) { c.found = c.match(base); }
             }
+        }
+
+        std::vector<const char *> missing;
+        for (const auto & c : checks) {
+            if (!c.found) { missing.push_back(c.label); }
+        }
+        if (!missing.empty()) {
+            fprintf(stderr, "\ncurrent asset files:\n");
+            for (const auto & a : assets) {
+                fprintf(stderr, "    %s\n", a.name.c_str());
+            }
+            fprintf(stderr, "missing required asset(s):\n");
+            for (const char * m : missing) {
+                fprintf(stderr, "    %s\n", m);
+            }
+            fprintf(stderr, "hint: try cleaning your build directory: %s\n", in_dir.c_str());
             return 1;
         }
     }
@@ -193,6 +248,10 @@ int main(int argc, char ** argv) {
         for (int i = 0; i < n_assets; i++) {
             std::vector<unsigned char> bytes;
             if (!read_file(assets[i].path, bytes)) {
+                return 1;
+            }
+            if (bytes.empty()) {
+                fprintf(stderr, "embed: empty file: %s\n", assets[i].path.generic_string().c_str());
                 return 1;
             }
             cpp += fmt("static const unsigned char asset_%d_data[] = {", i);
