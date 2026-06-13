@@ -822,6 +822,64 @@ struct llama_model_gemma4 : public llama_model_base {
 };
 
 
+struct llama_model_diffusion_gemma : public llama_model_base {
+    llama_model_diffusion_gemma(const struct llama_model_params & params) : llama_model_base(params) {}
+    void load_arch_hparams(llama_model_loader & ml) override;
+    void load_arch_tensors(llama_model_loader & ml) override;
+
+    // canvas occupies the last canvas_length positions of the batch; everything before is the prompt
+    uint32_t canvas_length = 0;
+
+    // self-conditioning per-request state (set via llama_diffusion_set_sc before llama_decode). sc_enabled
+    // false = byte-identical to zero-SC; sc_use is a {0,1} gate (a block's first step uses 0); sc_logits_ptr
+    // is [n_vocab * C] host logits, the graph applies softmax(sc_logits * sc_temp_inv).
+    mutable const float * sc_logits_ptr = nullptr;
+    mutable float         sc_use        = 0.0f;
+    mutable float         sc_temp_inv   = 1.0f;
+    mutable bool          sc_enabled    = false;
+
+    // self-conditioning soft embedding: embed_tokens transposed to [n_vocab, n_embd] F16 in a device
+    // weights buffer (per-step matmul stays on-device). Built lazily on first use, freed in the destructor.
+    mutable ggml_tensor         * sc_embT     = nullptr;  // [n_vocab, n_embd] F16 (embed_tokens transposed)
+    mutable ggml_context        * sc_embT_ctx = nullptr;
+    mutable ggml_backend_buffer_t sc_embT_buf = nullptr;
+
+    // device-resident self-conditioning (opt-in via llama_diffusion_set_device_sc): keep the prev step's
+    // raw canvas logits in sc_dev (device) and read SC from it instead of a per-step 268 MB host upload.
+    // Bit-identical to the host path (same F32 logits); single-device, like the PKV store.
+    mutable bool                  sc_device_resident = false;
+    mutable ggml_tensor         * sc_dev      = nullptr;  // [n_vocab, sc_dev_C] F32 prev-step canvas logits
+    mutable ggml_context        * sc_dev_ctx  = nullptr;
+    mutable ggml_backend_buffer_t sc_dev_buf  = nullptr;
+    mutable int64_t               sc_dev_C    = 0;        // allocated canvas capacity (grow-only)
+
+    // prompt KV caching: the prompt's per-layer K,V are step-invariant, so compute once per block and
+    // reuse across denoising steps instead of recomputing the whole [prompt|canvas] forward.
+    //   PKV_UNIFIED : no-cache forward over [prompt|canvas] (default + safety fallback).
+    //   PKV_PREFILL : forward the prompt only; write per-layer K,V into the store.
+    //   PKV_DECODE  : forward the canvas only; read the cached prompt K,V.
+    // Store is device-resident F32 (in pkv_buf/pkv_ctx), allocated lazily by llama_diffusion_set_phase().
+    enum pkv_phase_t { PKV_UNIFIED = 0, PKV_PREFILL = 1, PKV_DECODE = 2 };
+    mutable pkv_phase_t pkv_phase = PKV_UNIFIED;
+    mutable int64_t     pkv_P     = 0;   // prompt length of the current block
+    mutable int64_t     pkv_cap   = 0;   // allocated capacity (max P) of the store
+    mutable std::vector<ggml_tensor *> pkv_k;   // per layer [n_embd_head_k(il), n_head_kv(il), pkv_cap]
+    mutable std::vector<ggml_tensor *> pkv_v;
+    mutable ggml_context        * pkv_ctx = nullptr;
+    mutable ggml_backend_buffer_t pkv_buf = nullptr;
+
+    ~llama_model_diffusion_gemma() override;
+
+    struct graph : public llm_graph_context {
+        const llama_model & model;
+
+        graph(const llama_model & model, const llm_graph_params & params);
+    };
+
+    std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
+};
+
+
 struct llama_model_gemma4_assistant : public llama_model_base {
     llama_model_gemma4_assistant(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;

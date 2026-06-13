@@ -1336,6 +1336,27 @@ class GGUFWriter:
     def add_diffusion_shift_logits(self, value: bool) -> None:
         self.add_bool(Keys.Diffusion.SHIFT_LOGITS, value)
 
+    def add_diffusion_canvas_length(self, value: int) -> None:
+        self.add_uint32(Keys.Diffusion.CANVAS_LENGTH, value)
+
+    def add_diffusion_eb_max_steps(self, value: int) -> None:
+        self.add_uint32(Keys.Diffusion.EB_MAX_STEPS, value)
+
+    def add_diffusion_eb_t_min(self, value: float) -> None:
+        self.add_float32(Keys.Diffusion.EB_T_MIN, value)
+
+    def add_diffusion_eb_t_max(self, value: float) -> None:
+        self.add_float32(Keys.Diffusion.EB_T_MAX, value)
+
+    def add_diffusion_eb_entropy_bound(self, value: float) -> None:
+        self.add_float32(Keys.Diffusion.EB_ENTROPY_BOUND, value)
+
+    def add_diffusion_eb_stability_threshold(self, value: int) -> None:
+        self.add_uint32(Keys.Diffusion.EB_STABILITY, value)
+
+    def add_diffusion_eb_confidence_threshold(self, value: float) -> None:
+        self.add_float32(Keys.Diffusion.EB_CONFIDENCE, value)
+
     def _pack(self, fmt: str, value: Any, skip_pack_prefix: bool = False) -> bytes:
         pack_prefix = ''
         if not skip_pack_prefix:

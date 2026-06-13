@@ -380,7 +380,10 @@ struct common_params_vocoder {
 
 struct common_params_diffusion {
     int32_t steps         = 128;
+    int32_t blocks        = 1;        // max block-autoregressive denoising blocks (block-diffusion models)
     bool    visual_mode   = false;
+    bool    visual_progress = false;  // show the step progress bar in visual mode (default: hidden)
+    int32_t visual_interval = 1;      // redraw the visual canvas every Nth step (all steps still computed)
 
     float   eps           = 0;        // epsilon for timesteps
     int32_t block_length  = 0;        // block length for generation
@@ -390,6 +393,18 @@ struct common_params_diffusion {
 
     float   cfg_scale     = 0;        // classifier-free guidance scale
     bool    add_gumbel_noise = false; // add gumbel noise to the logits if temp > 0.0
+
+    // entropy-bound decoder (DiffusionGemma canvas models); params default to GGUF metadata, then reference
+    int32_t eb_mode          = 0;     // 0=auto (on for canvas models), 1=force on, 2=off
+    float   eb_t_min         = -1.0f; // <0 / <=0 -> not overridden on the command line
+    float   eb_t_max         = -1.0f;
+    float   eb_entropy_bound = -1.0f;
+    int32_t eb_stability     = -1;
+    float   eb_confidence    = -1.0f;
+    int32_t eb_max_steps     = -1;
+    int32_t eb_kv_cache      = 0;     // prefix KV cache: 0=auto (on for single-GPU canvas), 1=on, 2=off
+    int32_t eb_gpu_sampling  = 0;     // device-resident SC: 0=auto (on for single-GPU canvas), 1=on, 2=off
+    int32_t eb_gpu_sample_reduce = 0; // Stage-1 device argmax/entropy/sample reduction: 0=auto (on for single-GPU), 1=on, 2=off
 };
 
 // reasoning API response format (not to be confused as chat template's reasoning format)

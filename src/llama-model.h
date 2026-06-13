@@ -497,6 +497,9 @@ struct llama_layer {
     // gemma4 layer output scale, reused for talkie embedding skip scale
     struct ggml_tensor * out_scale = nullptr;
 
+    // diffusion-gemma encoder-mode per-layer output scale (prompt positions)
+    struct ggml_tensor * enc_out_scale = nullptr;
+
     struct llama_layer_posnet posnet;
 
     struct llama_layer_convnext convnext;
@@ -551,6 +554,12 @@ struct llama_model {
     // NextN/MTP model-level projections
     struct ggml_tensor * nextn_proj_pre  = nullptr;
     struct ggml_tensor * nextn_proj_post = nullptr;
+
+    // diffusion-gemma self-conditioning gated MLP (model-level, decoder-only)
+    struct ggml_tensor * sc_pre_norm = nullptr;
+    struct ggml_tensor * sc_gate     = nullptr;
+    struct ggml_tensor * sc_up       = nullptr;
+    struct ggml_tensor * sc_down     = nullptr;
 
     // classifier
     struct ggml_tensor * cls       = nullptr;

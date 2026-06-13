@@ -51,6 +51,8 @@ TEXT_MODEL_MAP: dict[str, str] = {
     "DistilBertForMaskedLM": "bert",
     "DistilBertForSequenceClassification": "bert",
     "DistilBertModel": "bert",
+    "DiffusionGemma4ModelForBlockDiffusion": "diffusion_gemma",
+    "DiffusionGemmaForBlockDiffusion": "diffusion_gemma",
     "Dots1ForCausalLM": "dots1",
     "DotsOCRForCausalLM": "qwen",
     "DreamModel": "dream",
