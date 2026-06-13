@@ -98,6 +98,7 @@ fn init_shmem_src0(thread_id: u32, batch_offset: u32, offset_m: u32, k_outer: u3
 }
 #endif // INIT_SRC0_SHMEM_Q1_0
 
+// legacy-quants
 #if defined(INIT_SRC0_SHMEM_Q4_0) || defined(INIT_SRC0_SHMEM_Q4_1) || defined(INIT_SRC0_SHMEM_Q5_0) || defined(INIT_SRC0_SHMEM_Q5_1) || defined(INIT_SRC0_SHMEM_Q8_0) || defined(INIT_SRC0_SHMEM_Q8_1) || defined(INIT_SRC0_SHMEM_MXFP4)
 const BLOCK_SIZE = 32u;
 // the number of blocks per k-tile. Note that this currently only works if TILE_K is a multiple of BLOCK_SIZE, which may need to be rethought for larger quantized types.
@@ -124,7 +125,7 @@ fn init_shmem_src0(thread_id: u32, batch_offset: u32, offset_m: u32, k_outer: u3
         if (global_m < params.m && global_block_k < params.k / BLOCK_SIZE) {
             let src0_idx = batch_offset + global_m * params.stride_01 + global_block_k;
 
-#ifdef INIT_SRC0_SHMEM_Q4_0
+#if defined(INIT_SRC0_SHMEM_Q4_0)
             let block_byte_base = src0_idx * 18u; // BLOCK_SIZE_BYTES = 18u;
             let d = load_f16_at_src0(block_byte_base);
 
@@ -134,7 +135,9 @@ fn init_shmem_src0(thread_id: u32, batch_offset: u32, offset_m: u32, k_outer: u3
                 let q_packed = load_u32_at_src0(q_byte_offset);
                 dequant_q4_0_packed_to_shmem(q_packed, d, shmem_idx + j * BYTES_PER_INNER_LOOP);
             }
-#elif INIT_SRC0_SHMEM_Q4_1
+#endif // INIT_SRC0_SHMEM_Q4_0
+
+#if defined(INIT_SRC0_SHMEM_Q4_1)
             let block_byte_base = src0_idx * 20u; // BLOCK_SIZE_BYTES = 20u;
             let dm = unpack2x16float(load_u32_at_src0_aligned(block_byte_base));
             let d = f16(dm[0]);
@@ -153,7 +156,9 @@ fn init_shmem_src0(thread_id: u32, batch_offset: u32, offset_m: u32, k_outer: u3
                     shmem[shmem_idx + j * BYTES_PER_INNER_LOOP + k + 16u] = q_hi;
                 }
             }
-#elif INIT_SRC0_SHMEM_Q5_0
+#endif // INIT_SRC0_SHMEM_Q4_1
+
+#if defined(INIT_SRC0_SHMEM_Q5_0)
             let block_byte_base = src0_idx * 22u; // BLOCK_SIZE_BYTES = 22u;
 
             let d  = load_f16_at_src0(block_byte_base);
@@ -176,7 +181,9 @@ fn init_shmem_src0(thread_id: u32, batch_offset: u32, offset_m: u32, k_outer: u3
                     shmem[shmem_idx + j * BYTES_PER_INNER_LOOP + k + 16u] = q_hi;
                 }
             }
-#elif INIT_SRC0_SHMEM_Q5_1
+#endif // INIT_SRC0_SHMEM_Q5_0
+
+#if defined(INIT_SRC0_SHMEM_Q5_1)
             let block_byte_base = src0_idx * 24u; // BLOCK_SIZE_BYTES = 24u;
 
             let dm = unpack2x16float(load_u32_at_src0_aligned(block_byte_base));
@@ -201,7 +208,9 @@ fn init_shmem_src0(thread_id: u32, batch_offset: u32, offset_m: u32, k_outer: u3
                     shmem[shmem_idx + j * BYTES_PER_INNER_LOOP + k + 16u] = q_hi;
                 }
             }
-#elif INIT_SRC0_SHMEM_Q8_0
+#endif // INIT_SRC0_SHMEM_Q5_1
+
+#if defined(INIT_SRC0_SHMEM_Q8_0)
             let block_byte_base = src0_idx * 34u; // BLOCK_SIZE_BYTES = 34u;
             let d = load_f16_at_src0(block_byte_base);
 
@@ -211,7 +220,9 @@ fn init_shmem_src0(thread_id: u32, batch_offset: u32, offset_m: u32, k_outer: u3
                 let q_packed = load_u32_at_src0(q_byte_offset);
                 dequant_q8_0_packed_to_shmem(q_packed, d, shmem_idx + j * BYTES_PER_INNER_LOOP);
             }
-#elif INIT_SRC0_SHMEM_Q8_1
+#endif // INIT_SRC0_SHMEM_Q8_0
+
+#if defined(INIT_SRC0_SHMEM_Q8_1)
             let block_byte_base = src0_idx * 36u; // BLOCK_SIZE_BYTES = 36u;
             let dm = unpack2x16float(load_u32_at_src0_aligned(block_byte_base));
             let d = f16(dm[0]);
@@ -227,7 +238,9 @@ fn init_shmem_src0(thread_id: u32, batch_offset: u32, offset_m: u32, k_outer: u3
                     shmem[shmem_idx + j * BYTES_PER_INNER_LOOP + k] = q_val;
                 }
             }
-#elif INIT_SRC0_SHMEM_MXFP4
+#endif // INIT_SRC0_SHMEM_Q8_1
+
+#if defined(INIT_SRC0_SHMEM_MXFP4)
             let block_byte_base = src0_idx * 17u;
             let eu8 = get_byte(load_u32_at_src0_aligned(block_byte_base), block_byte_base & 3u);
             let e = ldexp(1.0, i32(eu8) - 128);
@@ -244,11 +257,11 @@ fn init_shmem_src0(thread_id: u32, batch_offset: u32, offset_m: u32, k_outer: u3
                     shmem[shmem_idx + j * BYTES_PER_INNER_LOOP + k + 16u] = f16(q_hi);
                 }
             }
-#endif
+#endif // INIT_SRC0_SHMEM_MXFP4
         }
     }
 }
-#endif
+#endif // legacy-quants
 
 // k-quants
 #if defined(INIT_SRC0_SHMEM_Q2_K) || defined(INIT_SRC0_SHMEM_Q3_K) || defined(INIT_SRC0_SHMEM_Q4_K) || defined(INIT_SRC0_SHMEM_Q5_K) || defined(INIT_SRC0_SHMEM_Q6_K)
@@ -284,7 +297,7 @@ fn init_shmem_src0(thread_id: u32, batch_offset: u32, offset_m: u32, k_outer: u3
 
         let src0_idx = batch_offset + global_m * params.stride_01 + block_k;
 
-#ifdef INIT_SRC0_SHMEM_Q2_K
+#if defined(INIT_SRC0_SHMEM_Q2_K)
         let block_byte_base  = src0_idx * 84u; // BLOCK_SIZE_BYTES =  84u;
         let scales_byte_base = block_byte_base;
         let qs_byte_base     = block_byte_base + 16u;
@@ -314,7 +327,9 @@ fn init_shmem_src0(thread_id: u32, batch_offset: u32, offset_m: u32, k_outer: u3
         let ml = dmin * f16(scale >> 4u);
 
         store_shmem_kquants(qs_vec4 * dl - ml, elem_idx);
-#elif INIT_SRC0_SHMEM_Q3_K
+#endif // INIT_SRC0_SHMEM_Q2_K
+
+#if defined(INIT_SRC0_SHMEM_Q3_K)
         let block_byte_base  = src0_idx * 110u; // BLOCK_SIZE_BYTES = 110u;
         let hmask_byte_base  = block_byte_base +  0u;
         let qs_byte_base     = block_byte_base + 32u;
@@ -355,7 +370,9 @@ fn init_shmem_src0(thread_id: u32, batch_offset: u32, offset_m: u32, k_outer: u3
         let dl         = d_all * (f16((scale_hi2 << 4u) | scale_low4) - 32.0);
 
         store_shmem_kquants(dl * q_vec4, elem_idx);
-#elif INIT_SRC0_SHMEM_Q4_K
+#endif // INIT_SRC0_SHMEM_Q3_K
+
+#if defined(INIT_SRC0_SHMEM_Q4_K)
         let block_byte_base = src0_idx * 144u; // BLOCK_SIZE_BYTES = 144u;
         let dm_byte_base    = block_byte_base +  0u;
         let scale_byte_base = block_byte_base +  4u;
@@ -399,7 +416,9 @@ fn init_shmem_src0(thread_id: u32, batch_offset: u32, offset_m: u32, k_outer: u3
         let ml = dmin * f16(mn);
 
         store_shmem_kquants(dl * qs_vec4 - vec4(ml, ml, ml, ml), elem_idx);
-#elif INIT_SRC0_SHMEM_Q5_K
+#endif // INIT_SRC0_SHMEM_Q4_K
+
+#if defined(INIT_SRC0_SHMEM_Q5_K)
         let block_byte_base = src0_idx * 176u; // BLOCK_SIZE_BYTES = 176u;
         let dm_byte_base    = block_byte_base +  0u;
         let scale_byte_base = block_byte_base +  4u;
@@ -456,7 +475,9 @@ fn init_shmem_src0(thread_id: u32, batch_offset: u32, offset_m: u32, k_outer: u3
         let ml = dmin * f16(mn);
 
         store_shmem_kquants((qh_vec4 + qs_lo4_vec4) * dl - vec4<f16>(ml, ml, ml, ml), elem_idx);
-#elif INIT_SRC0_SHMEM_Q6_K
+#endif // INIT_SRC0_SHMEM_Q5_K
+
+#if defined(INIT_SRC0_SHMEM_Q6_K)
         let block_byte_base  = src0_idx * 210u; // BLOCK_SIZE_BYTES = 210u;
         let ql_byte_base     = block_byte_base;
         let qh_byte_base     = block_byte_base + 128u;
@@ -497,13 +518,12 @@ fn init_shmem_src0(thread_id: u32, batch_offset: u32, offset_m: u32, k_outer: u3
         let scale      = get_byte_i32(scale_word, scale_byte & 3u);
 
         store_shmem_kquants(d * q_vec4 * f16(scale), elem_idx);
-#endif
+#endif // INIT_SRC0_SHMEM_Q6_K
     }
 }
 #endif // k-quants
 
-// iquants
-#ifdef INIT_SRC0_SHMEM_IQ4_NL
+#if defined(INIT_SRC0_SHMEM_IQ4_NL)
 const BLOCK_SIZE = 32u;
 const BLOCK_SIZE_BYTES = 18u;
 const NQ = 4u;
@@ -570,7 +590,9 @@ fn create_iq_gw4(dl: f32, gw: u32, shift_base: u32, delta: f32) -> vec4<f16> {
             f16(dl * (f32((bitcast<i32>(((gw >> (shift_base + 6u)) & 3u) << 30u) >> 30u)) + delta)),
         );
 }
-#elif INIT_SRC0_SHMEM_IQ4_XS
+#endif
+
+#if defined(INIT_SRC0_SHMEM_IQ4_XS)
 fn create_iq_gw4(dl: f16, qs_u32: u32, shift_phase: u32) -> vec4<f16> {
     return vec4<f16>(
             dl * f16(kvalues_iq4nl[(qs_u32 >> (4 * shift_phase +  0u)) & 0xFu]),
@@ -579,7 +601,9 @@ fn create_iq_gw4(dl: f16, qs_u32: u32, shift_phase: u32) -> vec4<f16> {
             dl * f16(kvalues_iq4nl[(qs_u32 >> (4 * shift_phase + 24u)) & 0xFu]),
         );
 }
-#elif INIT_SRC0_SHMEM_IQ2_XXS
+#endif
+
+#if defined(INIT_SRC0_SHMEM_IQ2_XXS)
 fn create_iq_gw4(ig: u32, grid_phase: u32) -> vec4<f32> {
     return vec4<f32>(
             f32(get_byte(iq2xxs_grid[(ig + grid_phase + 0u) / 4u], (ig + grid_phase + 0u) % 4u)),
@@ -588,7 +612,9 @@ fn create_iq_gw4(ig: u32, grid_phase: u32) -> vec4<f32> {
             f32(get_byte(iq2xxs_grid[(ig + grid_phase + 3u) / 4u], (ig + grid_phase + 3u) % 4u)),
         );
 }
-#elif INIT_SRC0_SHMEM_IQ2_XS
+#endif
+
+#if defined(INIT_SRC0_SHMEM_IQ2_XS)
 fn create_iq_gw4(ig: u32, grid_phase: u32) -> vec4<f32> {
     return vec4<f32>(
             f32(get_byte(iq2xs_grid[(ig + grid_phase + 0u) / 4u], (ig + grid_phase + 0u) % 4u)),
@@ -597,7 +623,9 @@ fn create_iq_gw4(ig: u32, grid_phase: u32) -> vec4<f32> {
             f32(get_byte(iq2xs_grid[(ig + grid_phase + 3u) / 4u], (ig + grid_phase + 3u) % 4u)),
         );
 }
-#elif INIT_SRC0_SHMEM_IQ2_S
+#endif
+
+#if defined(INIT_SRC0_SHMEM_IQ2_S)
 fn create_iq_gw4(ig: u32, grid_phase: u32) -> vec4<f32> {
     return vec4<f32>(
             f32(get_byte(iq2s_grid[(ig + grid_phase + 0u) / 4u], (ig + grid_phase + 0u) % 4u)),
@@ -606,7 +634,9 @@ fn create_iq_gw4(ig: u32, grid_phase: u32) -> vec4<f32> {
             f32(get_byte(iq2s_grid[(ig + grid_phase + 3u) / 4u], (ig + grid_phase + 3u) % 4u)),
         );
 }
-#elif INIT_SRC0_SHMEM_IQ3_XXS
+#endif
+
+#if defined(INIT_SRC0_SHMEM_IQ3_XXS)
 fn create_iq_gw4(ig: u32) -> vec4<f32> {
     return vec4<f32>(
             f32(get_byte(iq3xxs_grid[ig], 0)),
@@ -615,7 +645,9 @@ fn create_iq_gw4(ig: u32) -> vec4<f32> {
             f32(get_byte(iq3xxs_grid[ig], 3)),
         );
 }
-#elif INIT_SRC0_SHMEM_IQ3_S
+#endif
+
+#if defined(INIT_SRC0_SHMEM_IQ3_S)
 fn create_iq_gw4(ig: u32) -> vec4<f32> {
     return vec4<f32>(
             f32(get_byte(iq3s_grid[ig], 0)),
@@ -658,7 +690,8 @@ fn init_shmem_src0(thread_id: u32, batch_offset: u32, offset_m: u32, k_outer: u3
         let k_in_block = global_k % BLOCK_SIZE; // k_in_block % 16 == 0;
 
         let src0_idx = batch_offset + global_m * params.stride_01 + block_k;
-#ifdef INIT_SRC0_SHMEM_IQ4_XS
+
+#if defined(INIT_SRC0_SHMEM_IQ4_XS)
         let block_byte_base    = src0_idx * 136u; // BLOCK_SIZE_BYTES = 136u;
         let d_byte_base        = block_byte_base +  0u;
         let scales_l_byte_base = block_byte_base +  4u;
@@ -685,7 +718,9 @@ fn init_shmem_src0(thread_id: u32, batch_offset: u32, offset_m: u32, k_outer: u3
         store_shmem_iquants(create_iq_gw4(dl, qs_4_7_u32,   phase), elem_idx +  4u);
         store_shmem_iquants(create_iq_gw4(dl, qs_8_11_u32,  phase), elem_idx +  8u);
         store_shmem_iquants(create_iq_gw4(dl, qs_12_15_u32, phase), elem_idx + 12u);
-#elif INIT_SRC0_SHMEM_IQ1_S
+#endif // INIT_SRC0_SHMEM_IQ4_XS
+
+#if defined(INIT_SRC0_SHMEM_IQ1_S)
         let block_byte_base = src0_idx * 50u; // BLOCK_SIZE_BYTES = 50u;
         let d_byte_base     = block_byte_base +  0u;
         let qs_byte_base    = block_byte_base +  2u;
@@ -715,7 +750,9 @@ fn init_shmem_src0(thread_id: u32, batch_offset: u32, offset_m: u32, k_outer: u3
         store_shmem_iquants(create_iq_gw4(dl, gp0_gw, gp0_shift_base + 8u, delta), elem_idx +  4u);
         store_shmem_iquants(create_iq_gw4(dl, gp1_gw, gp1_shift_base + 0u, delta), elem_idx +  8u);
         store_shmem_iquants(create_iq_gw4(dl, gp1_gw, gp1_shift_base + 8u, delta), elem_idx + 12u);
-#elif INIT_SRC0_SHMEM_IQ1_M
+#endif // INIT_SRC0_SHMEM_IQ1_S
+
+#if defined(INIT_SRC0_SHMEM_IQ1_M)
         let block_byte_base  = src0_idx * 56u; // BLOCK_SIZE_BYTES = 56u;
         let qs_byte_base     = block_byte_base +  0u;
         let qh_byte_base     = block_byte_base + 32u;
@@ -755,7 +792,9 @@ fn init_shmem_src0(thread_id: u32, batch_offset: u32, offset_m: u32, k_outer: u3
         store_shmem_iquants(create_iq_gw4(dl, gp0_gw, gp0_shift_base + 8u, gp0_delta), elem_idx +  4u);
         store_shmem_iquants(create_iq_gw4(dl, gp1_gw, gp1_shift_base + 0u, gp1_delta), elem_idx +  8u);
         store_shmem_iquants(create_iq_gw4(dl, gp1_gw, gp1_shift_base + 8u, gp1_delta), elem_idx + 12u);
-#elif INIT_SRC0_SHMEM_IQ2_XXS
+#endif // INIT_SRC0_SHMEM_IQ1_M
+
+#if defined(INIT_SRC0_SHMEM_IQ2_XXS)
         let block_byte_base = src0_idx * 66u; // BLOCK_SIZE_BYTES = 66u;
         let d_byte_base     = block_byte_base +  0u;
         let qs_byte_base    = block_byte_base +  2u;
@@ -792,7 +831,9 @@ fn init_shmem_src0(thread_id: u32, batch_offset: u32, offset_m: u32, k_outer: u3
         store_shmem_iquants(vec4<f16>(db * m_4_7_val4 * gw_4_7_val4),     elem_idx +  4u);
         store_shmem_iquants(vec4<f16>(db * m_8_11_val4 * gw_8_11_val4),   elem_idx +  8u);
         store_shmem_iquants(vec4<f16>(db * m_12_15_val4 * gw_12_15_val4), elem_idx + 12u);
-#elif INIT_SRC0_SHMEM_IQ2_XS
+#endif // INIT_SRC0_SHMEM_IQ2_XXS
+
+#if defined(INIT_SRC0_SHMEM_IQ2_XS)
         let block_byte_base  = src0_idx * 74u; // BLOCK_SIZE_BYTES = 74u;
         let d_byte_base      = block_byte_base +  0u;
         let qs_byte_base     = block_byte_base +  2u;
@@ -831,7 +872,9 @@ fn init_shmem_src0(thread_id: u32, batch_offset: u32, offset_m: u32, k_outer: u3
         store_shmem_iquants(vec4<f16>(db * m_4_7_val4 * gw_4_7_val4),     elem_idx +  4u);
         store_shmem_iquants(vec4<f16>(db * m_8_11_val4 * gw_8_11_val4),   elem_idx +  8u);
         store_shmem_iquants(vec4<f16>(db * m_12_15_val4 * gw_12_15_val4), elem_idx + 12u);
-#elif INIT_SRC0_SHMEM_IQ2_S
+#endif // INIT_SRC0_SHMEM_IQ2_XS
+
+#if defined(INIT_SRC0_SHMEM_IQ2_S)
         let block_byte_base  = src0_idx * 82u; // BLOCK_SIZE_BYTES = 82u;
         let d_byte_base      = block_byte_base +  0u;
         let qs_byte_base     = block_byte_base +  2u;
@@ -870,7 +913,9 @@ fn init_shmem_src0(thread_id: u32, batch_offset: u32, offset_m: u32, k_outer: u3
         store_shmem_iquants(vec4<f16>(db * m_4_7_val4 * gw_4_7_val4),     elem_idx +  4u);
         store_shmem_iquants(vec4<f16>(db * m_8_11_val4 * gw_8_11_val4),   elem_idx +  8u);
         store_shmem_iquants(vec4<f16>(db * m_12_15_val4 * gw_12_15_val4), elem_idx + 12u);
-#elif INIT_SRC0_SHMEM_IQ3_XXS
+#endif // INIT_SRC0_SHMEM_IQ2_S
+
+#if defined(INIT_SRC0_SHMEM_IQ3_XXS)
         let block_byte_base = src0_idx * 98u; // BLOCK_SIZE_BYTES = 98u;
         let d_byte_base     = block_byte_base +  0u;
         let qs_byte_base    = block_byte_base +  2u;
@@ -909,7 +954,9 @@ fn init_shmem_src0(thread_id: u32, batch_offset: u32, offset_m: u32, k_outer: u3
         store_shmem_iquants(vec4<f16>(db * m_4_7_val4 * gw_4_7_val4),     elem_idx +  4u);
         store_shmem_iquants(vec4<f16>(db * m_8_11_val4 * gw_8_11_val4),   elem_idx +  8u);
         store_shmem_iquants(vec4<f16>(db * m_12_15_val4 * gw_12_15_val4), elem_idx + 12u);
-#elif INIT_SRC0_SHMEM_IQ3_S
+#endif // INIT_SRC0_SHMEM_IQ3_XXS
+
+#if defined(INIT_SRC0_SHMEM_IQ3_S)
         let block_byte_base  = src0_idx * 110u; // BLOCK_SIZE_BYTES = 110u;
         let d_byte_base      = block_byte_base +   0u;
         let qs_byte_base     = block_byte_base +   2u;
@@ -951,7 +998,7 @@ fn init_shmem_src0(thread_id: u32, batch_offset: u32, offset_m: u32, k_outer: u3
         store_shmem_iquants(vec4<f16>(db * m_4_7_val4 * gw_4_7_val4),     elem_idx +  4u);
         store_shmem_iquants(vec4<f16>(db * m_8_11_val4 * gw_8_11_val4),   elem_idx +  8u);
         store_shmem_iquants(vec4<f16>(db * m_12_15_val4 * gw_12_15_val4), elem_idx + 12u);
-#endif
+#endif // INIT_SRC0_SHMEM_IQ3_S
     }
 }
-#endif // i-quants
+#endif // i-quants (super block size: 256)
