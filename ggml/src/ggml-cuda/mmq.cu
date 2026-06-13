@@ -368,5 +368,15 @@ bool ggml_cuda_should_use_mmq(enum ggml_type type, int cc, int64_t ne11, int64_t
         return true;
     }
 
+    // gfx900 (Vega 10) lacks native dp4a; emulated MMQ loses to dequant + hipBLAS
+    // for dense Q4/K-quant prefill, but stays faster for Q8_0 and for all MoE
+    // matrices, where the hipBLAS path is much slower.
+    if (GGML_CUDA_CC_IS_GCN(cc) && cc < GGML_CUDA_CC_VEGA20) {
+        if (n_experts > 0 || type == GGML_TYPE_Q8_0) {
+            return true;
+        }
+        return ne11 < 32;
+    }
+
     return (!GGML_CUDA_CC_IS_CDNA(cc)) || ne11 < MMQ_DP4A_MAX_BATCH_SIZE;
 }
