@@ -121,38 +121,36 @@ struct ToolAction {
     std::string command;     // Associated command (ex: "websearch {query}")
 };
 
-// List of forbidden commands and chars (security)
-static const std::vector<std::string> FORBIDDEN_COMMANDS = {
-    "chmod", "chown", "dd", "fdisk", "fish", "format", "halt", "ifconfig", "iptables", "kill",
-    "killall", "ln", "mkfs", "nc", "netcat", "nmap", "ping", "parted",
-    "poweroff", "pkill", "reboot", "scp", "shutdown", "sudo", "ufw"
+// List of forbidden sequences (security - avoid subshell)
+static const std::vector<std::string> FORBIDDEN_SEQUENCES = {
+    ";", "&&", "||", "|", "&", ">", "<", "$(", "`", "(", ")", "{", "}", "[", "]", "!", "\\",
+    "\n", "\r", "\t",  // Control characters
+    "2>", "&>", ">>",  // Redirections
+    "$(", "${",        // Command substitution
+    "\x1B"             //  ANSI escape
 };
 
-static const std::vector<char> FORBIDDEN_CHARS = {
-    '|', '&', '>', '<', '$', '`', '(', ')', '{', '}', '[', ']', '!', '\\', '\''
-};
+
 
 // Store global tools (load_user_tools)
 static std::vector<ToolAction> global_tools;
 
-// Check if command contains forbidden elements
 static bool is_command_safe(const std::string& command) {
-    // check commands
-    for (const auto& forbidden_cmd : FORBIDDEN_COMMANDS) {
-        if (command.find(forbidden_cmd) != std::string::npos) {
+    // Check for forbidden sequences (multi-character)
+    for (const auto& seq : FORBIDDEN_SEQUENCES) {
+        if (command.find(seq) != std::string::npos) {
             return false;
         }
     }
 
-    // check chars
-    for (char forbidden_char : FORBIDDEN_CHARS) {
-        if (command.find(forbidden_char) != std::string::npos) {
-            return false;
-        }
+    // Check for environment variable expansion (e.g., $HOME, ${USER})
+    if (command.find('$') != std::string::npos) {
+        return false;
     }
 
-    // check path
-    if (command.find("/") != std::string::npos) {
+    // Check for wildcards (e.g., *, ?)
+    if (command.find('*') != std::string::npos ||
+        command.find('?') != std::string::npos) {
         return false;
     }
 
@@ -173,7 +171,7 @@ static bool is_command_safe(const std::string& command) {
 // - **summarize**: Summarize a text (command: `python summarize.py "{text}"`)
 
 struct server_tool_load_user_tools : server_tool {
-    std::vector<ToolAction> actions; // Liste des actions chargées
+    std::vector<ToolAction> actions; // List loaded tools/actions
 
     server_tool_load_user_tools() {
         name = "load_user_tools";
@@ -181,14 +179,14 @@ struct server_tool_load_user_tools : server_tool {
         permission_write = false;
     }
 
-    // Parse une ligne au format Markdown (ex: "- **web_search**: description (command: `websearch {query}`)")
-    ToolAction parse_skill_line(const std::string& line) {
+    // Parse a Markdown line (ex: "- **web_search**: description (command: `websearch {query}`)")
+    ToolAction parse_tool_line(const std::string& line) {
         ToolAction action;
-        // Regex mise à jour pour correspondre à votre format
-        std::regex skill_regex(R"(\*\*(.*?)\*\*: (.*?) \(command: `(.*?)`\))");
+        // Regex to match format
+        std::regex tool_regex(R"(\*\*(.*?)\*\*: (.*?) \(command: `(.*?)`\))");
         std::smatch matches;
 
-        if (std::regex_search(line, matches, skill_regex)) {
+        if (std::regex_search(line, matches, tool_regex)) {
             if (matches.size() == 4) {
                 action.name = matches[1].str();
                 action.description = matches[2].str();
@@ -198,20 +196,20 @@ struct server_tool_load_user_tools : server_tool {
         return action;
     }
 
-    // Charge les actions depuis un fichier Markdown
+    // Load user tool actions from a MD file
     bool load_user_tools_from_file(const std::string& path) {
         std::ifstream file(path);
         if (!file.is_open()) {
             return false;
         }
 
-        actions.clear(); // Réinitialiser la liste
+        actions.clear(); // Initialize the list
         std::string line;
         while (std::getline(file, line)) {
-            // Ignorer les lignes vides ou les titres
+            // Ignore empty lines and titles/comments
             if (line.empty() || line[0] == '#') continue;
 
-            ToolAction action = parse_skill_line(line);
+            ToolAction action = parse_tool_line(line);
             if (!action.name.empty()) {
                 actions.push_back(action);
             }
@@ -268,10 +266,10 @@ struct server_tool_load_user_tools : server_tool {
 // execute_skils: execute user-side tools
 //
 
-struct server_tool_execute_skill : server_tool {
+struct server_tool_execute_tool : server_tool {
 
-    server_tool_execute_skill() {
-        name = "execute_skill";
+    server_tool_execute_tool() {
+        name = "execute_tool";
         display_name = "Execute Skill";
         permission_write = false;
     }
@@ -281,33 +279,33 @@ struct server_tool_execute_skill : server_tool {
             {"type", "function"},
             {"function", {
                 {"name", name},
-                {"description", "Execute a skill/action loaded from TOOLS.md. "
-                    "The skill must be loaded first using the 'load_user_tools' tool. "
+                {"description", "Execute a tool/action loaded from TOOLS.md. "
+                    "The tool must be loaded first using the 'load_user_tools' tool. "
                     "Commands are validated for security before execution."},
                     {"parameters", {
                         {"type", "object"},
                         {"properties", {
-                            {"skill_name", {{"type", "string"}, {"description", "Name of the skill to execute"}}},
-                            {"args", {{"type", "object"}, {"description", "Arguments for the skill (e.g., {\"query\": \"test\"})"}}},
+                            {"tool_name", {{"type", "string"}, {"description", "Name of the tool to execute"}}},
+                            {"args", {{"type", "object"}, {"description", "Arguments for the tool (e.g., {\"query\": \"test\"})"}}},
                         }},
-                        {"required", json::array({"skill_name"})},
+                        {"required", json::array({"tool_name"})},
                     }},
             }},
         };
     }
 
     json invoke(json params) override {
-        std::string skill_name = params.at("skill_name").get<std::string>();
+        std::string tool_name = params.at("tool_name").get<std::string>();
         json args = json_value(params, "args", json::object());
 
         // Use the global tools list
         auto it = std::find_if(
             global_tools.begin(), global_tools.end(),
-                               [&skill_name](const ToolAction& action) { return action.name == skill_name; }
+                               [&tool_name](const ToolAction& action) { return action.name == tool_name; }
         );
 
         if (it == global_tools.end()) {
-            return {{"error", "Skill not found: " + skill_name}};
+            return {{"error", "Skill not found: " + tool_name}};
         }
 
         // Replace placeholders in the command
@@ -328,18 +326,23 @@ struct server_tool_execute_skill : server_tool {
         if (!is_command_safe(command)) {
             return {
                 {"error", "Command blocked for security reasons: '" + command + "' contains forbidden keywords or characters."},
-                {"forbidden_keywords", FORBIDDEN_COMMANDS},
-                {"forbidden_chars", std::string(FORBIDDEN_CHARS.begin(), FORBIDDEN_CHARS.end())}
+                {"forbidden_chars", [&]() {
+                  std::string forbidden;
+                  for (const auto& seq : FORBIDDEN_SEQUENCES) {
+                      forbidden += seq;
+                  }
+                  return forbidden;
+              }()}
             };
         }
 
         // Execute the command
         std::array<char, 128> buffer;
         std::string result;
-        std::unique_ptr<FILE, decltype(&pclose)> pipe(popen(command.c_str(), "r"), pclose);
+        std::unique_ptr<FILE, int(*)(FILE*)> pipe(popen(command.c_str(), "r"), pclose);
 
         if (!pipe) {
-            return {{"error", "Failed to execute command for skill: " + skill_name}};
+            return {{"error", "Failed to execute command for tool: " + tool_name}};
         }
 
         while (fgets(buffer.data(), buffer.size(), pipe.get()) != nullptr) {
@@ -352,7 +355,7 @@ struct server_tool_execute_skill : server_tool {
 
         return {
             {"output", result},
-            {"skill", skill_name},
+            {"tool", tool_name},
             {"command_executed", command}
         };
     }
@@ -982,8 +985,7 @@ static std::vector<std::unique_ptr<server_tool>> build_tools() {
     tools.push_back(std::make_unique<server_tool_edit_file>());
     tools.push_back(std::make_unique<server_tool_apply_diff>());
     tools.push_back(std::make_unique<server_tool_get_datetime>());
-    # tools.push_back(std::make_unique<server_tool_load_user_tools>());
-    tools.push_back(std::make_unique<server_tool_execute_skill>());
+    tools.push_back(std::make_unique<server_tool_execute_tool>());
     return tools;
 }
 
@@ -1002,6 +1004,30 @@ void server_tools::setup(const std::vector<std::string> & enabled_tools) {
         // validate that every requested tool is known
         for (const auto & name : enabled_tools) {
             if (name == "all") continue;
+            
+            // Check if the name is a valid file path
+            bool is_file = std::filesystem::exists(name) &&
+                   std::filesystem::is_regular_file(name);
+
+            if (is_file) {
+                // Create an instance of server_tool_load_user_tools
+                auto load_tool = std::make_unique<server_tool_load_user_tools>();
+                // Call invoke to load the tools from the file
+                json result = load_tool->invoke({{"path", name}});
+
+                // Check for errors in the result
+                if (result.contains("error")) {
+                    throw std::runtime_error(string_format(
+                        "failed to load tools from file: %s. Error: %s",
+                        name.c_str(),
+                        result.at("error").get<std::string>().c_str()));
+                }
+
+                // Add the tool to the list
+                tools.push_back(std::move(load_tool));
+                continue;
+            }
+    
             if (std::find(known_names.begin(), known_names.end(), name) == known_names.end()) {
                 throw std::runtime_error(string_format(
                     "unknown tool \"%s\". available tools: %s",
