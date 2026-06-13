@@ -5,6 +5,7 @@
 #include <hexagon_types.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include "hex-utils.h"
 
 #include "hex-profile.h"
 

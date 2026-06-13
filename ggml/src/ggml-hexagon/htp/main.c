@@ -554,6 +554,12 @@ static int execute_op(struct htp_ops_context * octx) {
         case HTP_OP_MUL_MAT_ID:
             return op_matmul_id(octx);
 
+        case HTP_OP_MUL_MAT_QKV:
+            return op_matmul_qkv(octx);
+
+        case HTP_OP_MUL_MAT_FFN:
+            return op_matmul_ffn(octx);
+
         case HTP_OP_MUL:
         case HTP_OP_ADD:
         case HTP_OP_SUB:
@@ -785,22 +791,39 @@ static void proc_op_req(struct htp_ops_context * octx, struct htp_tensor *tens, 
             src->ne[0], src->ne[1], src->ne[3], src->ne[3]);
     }
 
-    // Prep output tensor
-    struct htp_tensor *dst = tens + op->dst;
+    // Prep output tensors
+    for (uint32_t i = 0; i < HTP_OP_MAX_OUTPUTS; i++) {
+        uint16_t dst_idx = op->dst[i];
+        if (dst_idx == 0xffff) {
+            octx->dsts[i] = NULL;
+            continue;
+        }
+        struct htp_tensor *dst = tens + dst_idx;
+        octx->dsts[i] = dst;
 
-    octx->dst = dst;
-
-    FARF(HIGH, "prep-dst #%u: data %p size %u : %u:%u:%u:%u", op->dst, (void*) dst->data, dst->size,
-        dst->ne[0], dst->ne[1], dst->ne[3], dst->ne[3]);
+        FARF(HIGH, "prep-dst[%u] #%u: data %p size %u : %u:%u:%u:%u", i, dst_idx, (void*) dst->data, dst->size,
+            dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3]);
+    }
 
     (void) execute_op(octx);
 
-    // flush buffers on output
-    hex_l2flush((void *) dst->data, dst->size);
-    dst->flags |= HTP_TENSOR_FLUSHED;
+    octx->src0_spad.src = NULL;
+    octx->src1_spad.src = NULL;
+    octx->src2_spad.src = NULL;
+    octx->src3_spad.src = NULL;
+    octx->dst_spad.src  = NULL;
 
-    FARF(HIGH, "post-dst #%u: data %p size %u : %u:%u:%u:%u", op->dst, (void*) dst->data, dst->size,
-        dst->ne[0], dst->ne[1], dst->ne[3], dst->ne[3]);
+    // flush buffers on output
+    for (uint32_t i = 0; i < HTP_OP_MAX_OUTPUTS; i++) {
+        if (octx->dsts[i]) {
+            struct htp_tensor *dst = (struct htp_tensor *)octx->dsts[i];
+            hex_l2flush((void *) dst->data, dst->size);
+            dst->flags |= HTP_TENSOR_FLUSHED;
+
+            FARF(HIGH, "post-dst[%u] #%u: data %p size %u : %u:%u:%u:%u", i, op->dst[i], (void*) dst->data, dst->size,
+                dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3]);
+        }
+    }
 }
 
 #define DSPQUEUE_POLL_TIMEOUT_USEC 100

@@ -57,6 +57,8 @@ enum htp_op_code {
     HTP_OP_DIV = 3,
     HTP_OP_MUL_MAT,
     HTP_OP_MUL_MAT_ID,
+    HTP_OP_MUL_MAT_QKV,
+    HTP_OP_MUL_MAT_FFN,
     HTP_OP_RMS_NORM,
     HTP_OP_RMS_NORM_MUL,
     HTP_OP_UNARY_SILU,
@@ -99,6 +101,7 @@ enum htp_op_code {
 
 #define HTP_OP_MAX_DIMS    4    // aka GGML_MAX_DIMS
 #define HTP_OP_MAX_INPUTS  6    // aka GGML_MAX_SRCS
+#define HTP_OP_MAX_OUTPUTS 4
 #define HTP_OP_MAX_PARAMS  16   // aka GGML_MAX_OP_PARAMS
 
 #define HTP_OP_MAX_BUFS    16
@@ -143,7 +146,8 @@ struct htp_op_desc {
     uint32_t flags;                     // Op flags
     int32_t  params[HTP_OP_MAX_PARAMS]; // Params for the op, e.g. epsilon of RMS norm
     uint16_t src[HTP_OP_MAX_INPUTS];    // Input tensors indices
-    uint16_t dst;                       // Output tensor index
+    uint16_t dst[HTP_OP_MAX_OUTPUTS];   // Output tensor indices
+    uint16_t pad[2];                    // padding to align to 64 bits
 };
 
 #ifndef HTP_MAX_NTHREADS

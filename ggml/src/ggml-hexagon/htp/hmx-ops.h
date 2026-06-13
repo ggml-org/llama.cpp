@@ -60,7 +60,10 @@ int hmx_matmul_2d_f32(struct htp_context *ctx,
                                       int m, int k, int n,
                                       int act_stride,
                                       int weight_stride,
-                                      int weight_type);
+                                      int weight_type,
+                                      int k_valid,
+                                      int dst_stride,
+                                      int dst_cols);
 
 struct mmid_row_mapping;
 
@@ -69,6 +72,7 @@ int hmx_matmul_id_2d_f32(struct htp_context *ctx,
                                          const float *activation,
                                          const uint8_t *permuted_weight,
                                          int m, int k, int n,
+                                         int k_valid,
                                          int ne11,
                                          size_t act_nb1, size_t act_nb2,
                                          size_t dst_nb1, size_t dst_nb2,

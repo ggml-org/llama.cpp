@@ -17,12 +17,37 @@ struct htp_opnode {
 
     htp_op_code opcode = HTP_OP_INVALID;
 
+    std::vector<ggml_tensor *> extra_dsts;
+
+    htp_opnode(ggml_tensor * node = nullptr, std::vector<ggml_tensor *> fused = {}, htp_op_code opcode = HTP_OP_INVALID, std::vector<ggml_tensor *> extra_dsts = {})
+        : node(node), fused(std::move(fused)), opcode(opcode), extra_dsts(std::move(extra_dsts)) {}
+
     ggml_op op() const {
         return node->op;
     }
 
     const ggml_tensor * dst() const {
         return fused.empty() ? node : fused.back();
+    }
+
+    void add_fused(ggml_tensor * t, bool extra_dst = false) {
+        fused.push_back(t);
+        if (extra_dst) {
+            extra_dsts.push_back(t);
+        }
+    }
+
+    std::vector<const ggml_tensor *> get_outputs() const {
+        std::vector<const ggml_tensor *> res;
+        if (extra_dsts.empty()) {
+            res.push_back(dst());
+        } else {
+            res.push_back(node);
+            for (const auto * x : extra_dsts) {
+                res.push_back(x);
+            }
+        }
+        return res;
     }
 
     const ggml_tensor * src0() const {
@@ -35,10 +60,6 @@ struct htp_opnode {
 
     bool is_empty() const {
         return ggml_op_is_empty(node->op);
-    }
-
-    void add_fused(ggml_tensor * t) {
-        fused.push_back(t);
     }
 
     bool stackable() const {

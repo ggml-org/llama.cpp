@@ -305,4 +305,17 @@ static inline HVX_Vector hvx_vec_mul_f32_f32(HVX_Vector a, HVX_Vector b) {
 
 #endif // __HVX_ARCH__ < 79
 
+static inline HVX_Vector hvx_vec_load_act_tile(const uint8_t * y_q, uint32_t kt, HVX_Vector * v_act_all) {
+    if (kt % 4 == 0) {
+        *v_act_all = hvx_vmem(y_q + kt * 32);
+        return *v_act_all;
+    } else if (kt % 4 == 1) {
+        return Q6_V_vror_VR(*v_act_all, 32);
+    } else if (kt % 4 == 2) {
+        return Q6_V_vror_VR(*v_act_all, 64);
+    } else {
+        return Q6_V_vror_VR(*v_act_all, 96);
+    }
+}
+
 #endif /* HVX_BASE_H */

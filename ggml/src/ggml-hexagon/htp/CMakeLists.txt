@@ -36,21 +36,15 @@ set(HTP_HMX_VERSIONS v73 v75 v79 v81)
 list(FIND HTP_HMX_VERSIONS ${DSP_VERSION} _hmx_idx)
 
 if (_hmx_idx GREATER_EQUAL 0)
+    target_compile_options(${HTP_LIB} PRIVATE "-mhmx")
+
+    target_compile_definitions(${HTP_LIB} PRIVATE HTP_HAS_HMX=1)
+
     target_sources(${HTP_LIB} PRIVATE
         hmx-flash-attn-ops.c
         hmx-matmul-ops.c
         hmx-queue.c
     )
-
-    # -mhmx enables HMX instruction set (needed by files that include hmx-utils.h)
-    set_source_files_properties(
-        hmx-flash-attn-ops.c
-        hmx-matmul-ops.c
-        hmx-queue.c
-        PROPERTIES COMPILE_OPTIONS "-mhmx"
-    )
-
-    target_compile_definitions(${HTP_LIB} PRIVATE HTP_HAS_HMX=1)
 endif()
 
 build_idl(htp_iface.idl ${HTP_LIB})

@@ -27,7 +27,6 @@
 #include "hmx-ops.h"
 #include "hmx-utils.h"
 #include "hmx-queue.h"
-#include "hex-profile.h"
 
 #include "vtcm-utils.h"
 
@@ -436,226 +435,223 @@ typedef struct {
 // Dequantize a tile range from x4x2 weight data (already in VTCM) to tile-major FP16.
 // Input:  vtcm_src has n_cols rows of x4x2 data, each row_stride bytes.
 // Output: vtcm_dst in tile-major FP16 layout.
+static void dequantize_x4x2_weight_to_fp16_tiles_task_q4_0(
+        const x4x2_dequantize_state_t *state,
+        int start_tile, int end_tile) {
 
-#define DEFINE_DEQUANTIZE_Q4_TASK(suffix, lut_name, helper_prefix, dblk_size, scale_step)                      \
-static void dequantize_x4x2_weight_to_fp16_tiles_task_##suffix(                                                \
-        const x4x2_dequantize_state_t *state,                                                                  \
-        int start_tile, int end_tile) {                                                                        \
-                                                                                                               \
-    const int n_k_tiles = state->n_k_tiles;                                                                    \
-    const int qrow_size = (unsigned)state->k_block / 2;                                                        \
-    const struct fastdiv_values n_k_tiles_div = state->n_k_tiles_div;                                          \
-    const HVX_Vector vlut_cvt = hvx_vmem(lut_name);                                                            \
-                                                                                                               \
-    const HVX_Vector v_scat_base  = hvx_vmem(hmx_transpose_scatter_offsets);                                   \
-    const HVX_Vector v_scat_step  = Q6_V_vsplat_R(4);                                                          \
-    const HVX_VectorPred q_mask64 = Q6_Q_vsetq_R(64);                                                          \
-                                                                                                               \
-    unsigned ct = fastdiv((unsigned)start_tile, &n_k_tiles_div);                                               \
-    unsigned kt = fastmodulo((unsigned)start_tile, n_k_tiles, &n_k_tiles_div);                                 \
-                                                                                                               \
-    for (unsigned t = start_tile; t < (unsigned)end_tile; ) {                                                  \
-        if (kt >= (unsigned)n_k_tiles) { kt = 0; ct++; }                                                       \
-                                                                                                               \
-        if ((kt % 4 == 0) && (t + 4 <= (unsigned)end_tile) && (fastdiv(t + 3, &n_k_tiles_div) == ct)) {        \
-            unsigned blk_idx      = ((kt * 32) / QK_Q4_0x4x2);                                                 \
-            unsigned sub_blk_base = ((kt * 32) % QK_Q4_0x4x2) / 32;                                            \
-            bool upper            = (sub_blk_base >= 4);                                                       \
-            unsigned packed_off   = blk_idx * (QK_Q4_0x4x2 / 2);                                               \
-            unsigned scale_off    = qrow_size + blk_idx * (dblk_size) + sub_blk_base * (scale_step);           \
-                                                                                                               \
-            __fp16 *tile_bases[4];                                                                             \
-            for (unsigned g = 0; g < 4; g++) {                                                                 \
-                tile_bases[g] = state->dst + (t + g) * HMX_FP16_TILE_N_ELMS;                                   \
-            }                                                                                                  \
-                                                                                                               \
-            HVX_Vector v_off = v_scat_base;                                                                    \
-            unsigned row_offset = ct * HMX_FP16_TILE_N_COLS * state->row_stride;                               \
-                                                                                                               \
-            for (int r = 0; r < HMX_FP16_TILE_N_ROWS; r += 2) {                                                \
-                const uint8_t *r0 = state->src + row_offset; row_offset += state->row_stride;                  \
-                const uint8_t *r1 = state->src + row_offset; row_offset += state->row_stride;                  \
-                                                                                                               \
-                HVX_Vector_x2 dv0 = dequantize_x4x2_##helper_prefix##_x4groups_hvx(                            \
-                    r0 + packed_off, upper, (const __fp16 *)(r0 + scale_off), vlut_cvt);                       \
-                Q6_vscatter_RMVwV((size_t)tile_bases[0], 2 * HMX_FP16_TILE_SIZE - 1, v_off, dv0.v[0]);         \
-                Q6_vscatter_RMVwV((size_t)tile_bases[2], 2 * HMX_FP16_TILE_SIZE - 1, v_off, dv0.v[1]);         \
-                v_off = Q6_Vw_vadd_VwVw(v_off, v_scat_step);                                                   \
-                                                                                                               \
-                HVX_Vector_x2 dv1 = dequantize_x4x2_##helper_prefix##_x4groups_hvx(                            \
-                    r1 + packed_off, upper, (const __fp16 *)(r1 + scale_off), vlut_cvt);                       \
-                Q6_vscatter_RMVwV((size_t)tile_bases[0], 2 * HMX_FP16_TILE_SIZE - 1, v_off, dv1.v[0]);         \
-                Q6_vscatter_RMVwV((size_t)tile_bases[2], 2 * HMX_FP16_TILE_SIZE - 1, v_off, dv1.v[1]);         \
-                v_off = Q6_Vw_vadd_VwVw(v_off, v_scat_step);                                                   \
-            }                                                                                                  \
-                                                                                                               \
-            for (int g = 0; g < 4; g++) { (void) *(volatile HVX_Vector *)(tile_bases[g]); }                    \
-            t += 4; kt += 4;                                                                                   \
-            continue;                                                                                          \
-        }                                                                                                      \
-                                                                                                               \
-        __fp16 *tile_base = state->dst + t * HMX_FP16_TILE_N_ELMS;                                             \
-        {                                                                                                      \
-            unsigned blk_idx   = (kt * 32) / QK_Q4_0x4x2;                                                      \
-            unsigned sub_blk   = ((kt * 32) % QK_Q4_0x4x2) / 32;                                               \
-            bool upper         = (sub_blk >= 4);                                                               \
-            unsigned byte_off  = blk_idx * (QK_Q4_0x4x2 / 2) + (upper ? (sub_blk - 4) : sub_blk) * 32;         \
-            unsigned scale_off = qrow_size + blk_idx * (dblk_size) + sub_blk * (scale_step);                   \
-                                                                                                               \
-            HVX_Vector v_off = v_scat_base;                                                                    \
-            unsigned row_offset = ct * HMX_FP16_TILE_N_COLS * state->row_stride;                               \
-            unsigned row1 = ct * HMX_FP16_TILE_N_COLS + 1;                                                     \
-                                                                                                               \
-            for (int r = 0; r < HMX_FP16_TILE_N_ROWS; r += 2, row1 += 2) {                                     \
-                const uint8_t *r0 = state->src + row_offset; row_offset += state->row_stride;                  \
-                const uint8_t *r1 = state->src + row_offset; row_offset += state->row_stride;                  \
-                                                                                                               \
-                HVX_Vector v0 = dequantize_x4x2_##helper_prefix##_group_hvx(                                   \
-                    r0 + byte_off, upper, (const __fp16 *)(r0 + scale_off), vlut_cvt);                         \
-                HVX_Vector v1 = (row1 < (unsigned)state->n_cols)                                               \
-                    ? dequantize_x4x2_##helper_prefix##_group_hvx(                                             \
-                        r1 + byte_off, upper, (const __fp16 *)(r1 + scale_off), vlut_cvt)                      \
-                    : Q6_V_vzero();                                                                            \
-                                                                                                               \
-                Q6_vscatter_QRMVwV(q_mask64, (size_t)tile_base, HMX_FP16_TILE_SIZE - 1, v_off, v0);            \
-                v_off = Q6_Vw_vadd_VwVw(v_off, v_scat_step);                                                   \
-                Q6_vscatter_QRMVwV(q_mask64, (size_t)tile_base, HMX_FP16_TILE_SIZE - 1, v_off, v1);            \
-                v_off = Q6_Vw_vadd_VwVw(v_off, v_scat_step);                                                   \
-            }                                                                                                  \
-            (void) *(volatile HVX_Vector *)(tile_base);                                                        \
-        }                                                                                                      \
-        ++t; ++kt;                                                                                             \
-    }                                                                                                          \
-                                                                                                               \
-    if (start_tile < end_tile) {                                                                               \
-        (void) *(volatile HVX_Vector *)(state->dst + (end_tile - 1) * HMX_FP16_TILE_N_ELMS);                   \
-    }                                                                                                          \
-}                                                                                                              \
-                                                                                                               \
-static void dequantize_x4x2_worker_loop_##suffix(unsigned int n, unsigned int i, void *data) {                 \
-    x4x2_dequantize_state_t *state = (x4x2_dequantize_state_t *)data;                                          \
-    struct htp_thread_trace * tr = state->traces ? &state->traces[i] : NULL;                                   \
-    htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_W_DEQUANT, i);                                                 \
-    for (unsigned int task_id = i; task_id < (unsigned int)state->n_tasks; task_id += n) {                     \
-        int start = task_id * state->n_tiles_per_task;                                                         \
-        int end   = hex_smin(start + state->n_tiles_per_task, state->n_tot_tiles);                             \
-        dequantize_x4x2_weight_to_fp16_tiles_task_##suffix(state, start, end);                                 \
-    }                                                                                                          \
-    htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_W_DEQUANT, i);                                                 \
+    const size_t tile_size = 576;
+    const HVX_Vector mask_h4 = Q6_Vb_vsplat_R(0x0F);
+    const HVX_Vector i8 = Q6_Vb_vsplat_R(8);
+
+    for (int t = start_tile; t < end_tile; t++) {
+        const uint8_t * tile_src = state->src + t * tile_size;
+        __fp16 * dst_ptr = state->dst + t * HMX_FP16_TILE_N_ELMS;
+
+        HVX_Vector v_sc = hvx_vmemu(tile_src + 512);
+        HVX_Vector v_scale_duplicated = Q6_V_lo_W(Q6_W_vshuff_VVR(v_sc, v_sc, -2));
+
+        for (int g = 0; g < 4; g++) {
+            HVX_Vector vq = hvx_vmemu(tile_src + g * 128);
+
+            HVX_Vector v_lo = Q6_V_vand_VV(vq, mask_h4);
+            HVX_Vector v_hi = Q6_Vub_vlsr_VubR(vq, 4);
+
+            v_lo = Q6_Vb_vsub_VbVb(v_lo, i8);
+            v_hi = Q6_Vb_vsub_VbVb(v_hi, i8);
+
+            HVX_VectorPair vp_shuf = Q6_W_vshuff_VVR(v_hi, v_lo, -1);
+            
+            HVX_VectorPair vp_int16_lo = Q6_Wh_vunpack_Vb(Q6_V_lo_W(vp_shuf));
+            HVX_VectorPair vp_int16_hi = Q6_Wh_vunpack_Vb(Q6_V_hi_W(vp_shuf));
+
+            HVX_Vector v_grp0 = Q6_Vhf_equals_Vqf16(Q6_Vqf16_vmpy_VhfVhf(Q6_Vhf_equals_Vh(Q6_V_lo_W(vp_int16_lo)), v_scale_duplicated));
+            HVX_Vector v_grp1 = Q6_Vhf_equals_Vqf16(Q6_Vqf16_vmpy_VhfVhf(Q6_Vhf_equals_Vh(Q6_V_hi_W(vp_int16_lo)), v_scale_duplicated));
+            HVX_Vector v_grp2 = Q6_Vhf_equals_Vqf16(Q6_Vqf16_vmpy_VhfVhf(Q6_Vhf_equals_Vh(Q6_V_lo_W(vp_int16_hi)), v_scale_duplicated));
+            HVX_Vector v_grp3 = Q6_Vhf_equals_Vqf16(Q6_Vqf16_vmpy_VhfVhf(Q6_Vhf_equals_Vh(Q6_V_hi_W(vp_int16_hi)), v_scale_duplicated));
+
+            hvx_vmemu(dst_ptr + (4 * g + 0) * 64) = v_grp0;
+            hvx_vmemu(dst_ptr + (4 * g + 1) * 64) = v_grp1;
+            hvx_vmemu(dst_ptr + (4 * g + 2) * 64) = v_grp2;
+            hvx_vmemu(dst_ptr + (4 * g + 3) * 64) = v_grp3;
+        }
+    }
 }
 
-DEFINE_DEQUANTIZE_Q4_TASK(q4_0,   q4_0_to_fp16_lut,   q4_0, HMX_X4X2_DBLK_SIZE, (int)sizeof(__fp16))
-DEFINE_DEQUANTIZE_Q4_TASK(q4_1,   q4_1_to_fp16_lut,   q4_1, 32, 4)
-DEFINE_DEQUANTIZE_Q4_TASK(iq4_nl, iq4_nl_to_fp16_lut, iq4_nl, HMX_X4X2_DBLK_SIZE, (int)sizeof(__fp16))
+static void dequantize_x4x2_weight_to_fp16_tiles_task_q4_1(
+        const x4x2_dequantize_state_t *state,
+        int start_tile, int end_tile) {
+
+    const size_t tile_size = 640;
+    const HVX_Vector mask_h4 = Q6_Vb_vsplat_R(0x0F);
+
+    for (int t = start_tile; t < end_tile; t++) {
+        const uint8_t * tile_src = state->src + t * tile_size;
+        __fp16 * dst_ptr = state->dst + t * HMX_FP16_TILE_N_ELMS;
+
+        HVX_Vector vscale_offset = hvx_vmemu(tile_src + 512);
+        HVX_VectorPair dm_deal = Q6_W_vdeal_VVR(vscale_offset, vscale_offset, -2);
+        HVX_Vector vd = Q6_V_lo_W(dm_deal);
+        HVX_Vector vm = Q6_V_hi_W(dm_deal);
+
+        HVX_Vector v_scale_duplicated = Q6_V_lo_W(Q6_W_vshuff_VVR(vd, vd, -2));
+        HVX_Vector v_offset_duplicated = Q6_V_lo_W(Q6_W_vshuff_VVR(vm, vm, -2));
+
+        for (int g = 0; g < 4; g++) {
+            HVX_Vector vq = hvx_vmemu(tile_src + g * 128);
+
+            HVX_Vector v_lo = Q6_V_vand_VV(vq, mask_h4);
+            HVX_Vector v_hi = Q6_Vub_vlsr_VubR(vq, 4);
+
+            HVX_VectorPair vp_shuf = Q6_W_vshuff_VVR(v_hi, v_lo, -1);
+            
+            HVX_VectorPair vp_int16_lo = Q6_Wh_vunpack_Vb(Q6_V_lo_W(vp_shuf));
+            HVX_VectorPair vp_int16_hi = Q6_Wh_vunpack_Vb(Q6_V_hi_W(vp_shuf));
+
+            HVX_Vector v_grp0 = Q6_Vhf_equals_Vqf16(Q6_Vqf16_vadd_Vqf16Vhf(Q6_Vqf16_vmpy_VhfVhf(Q6_Vhf_equals_Vh(Q6_V_lo_W(vp_int16_lo)), v_scale_duplicated), v_offset_duplicated));
+            HVX_Vector v_grp1 = Q6_Vhf_equals_Vqf16(Q6_Vqf16_vadd_Vqf16Vhf(Q6_Vqf16_vmpy_VhfVhf(Q6_Vhf_equals_Vh(Q6_V_hi_W(vp_int16_lo)), v_scale_duplicated), v_offset_duplicated));
+            HVX_Vector v_grp2 = Q6_Vhf_equals_Vqf16(Q6_Vqf16_vadd_Vqf16Vhf(Q6_Vqf16_vmpy_VhfVhf(Q6_Vhf_equals_Vh(Q6_V_lo_W(vp_int16_hi)), v_scale_duplicated), v_offset_duplicated));
+            HVX_Vector v_grp3 = Q6_Vhf_equals_Vqf16(Q6_Vqf16_vadd_Vqf16Vhf(Q6_Vqf16_vmpy_VhfVhf(Q6_Vhf_equals_Vh(Q6_V_hi_W(vp_int16_hi)), v_scale_duplicated), v_offset_duplicated));
+
+            hvx_vmemu(dst_ptr + (4 * g + 0) * 64) = v_grp0;
+            hvx_vmemu(dst_ptr + (4 * g + 1) * 64) = v_grp1;
+            hvx_vmemu(dst_ptr + (4 * g + 2) * 64) = v_grp2;
+            hvx_vmemu(dst_ptr + (4 * g + 3) * 64) = v_grp3;
+        }
+    }
+}
+
+static void dequantize_x4x2_weight_to_fp16_tiles_task_iq4_nl(
+        const x4x2_dequantize_state_t *state,
+        int start_tile, int end_tile) {
+
+    const size_t tile_size = 576;
+    const HVX_Vector mask_h4 = Q6_Vb_vsplat_R(0x0F);
+    const HVX_Vector vlut_cvt = hvx_vmem(iq4_nl_to_fp16_lut);
+
+    for (int t = start_tile; t < end_tile; t++) {
+        const uint8_t * tile_src = state->src + t * tile_size;
+        __fp16 * dst_ptr = state->dst + t * HMX_FP16_TILE_N_ELMS;
+
+        HVX_Vector v_sc = hvx_vmemu(tile_src + 512);
+        HVX_Vector v_scale_duplicated = Q6_V_lo_W(Q6_W_vshuff_VVR(v_sc, v_sc, -2));
+
+        for (int g = 0; g < 4; g++) {
+            HVX_Vector vq = hvx_vmemu(tile_src + g * 128);
+
+            HVX_Vector v_lo = Q6_V_vand_VV(vq, mask_h4);
+            HVX_Vector v_hi = Q6_Vub_vlsr_VubR(vq, 4);
+
+            HVX_VectorPair vp_shuf = Q6_W_vshuff_VVR(v_hi, v_lo, -1);
+            
+            HVX_Vector v_q_lo = Q6_Vb_vshuff_Vb(Q6_V_lo_W(vp_shuf));
+            HVX_VectorPair vp_lo = Q6_Wh_vlut16_VbVhR(v_q_lo, vlut_cvt, 0);
+
+            HVX_Vector v_q_hi = Q6_Vb_vshuff_Vb(Q6_V_hi_W(vp_shuf));
+            HVX_VectorPair vp_hi = Q6_Wh_vlut16_VbVhR(v_q_hi, vlut_cvt, 0);
+
+            HVX_Vector v_grp0 = Q6_Vhf_equals_Vqf16(Q6_Vqf16_vmpy_VhfVhf(Q6_V_lo_W(vp_lo), v_scale_duplicated));
+            HVX_Vector v_grp1 = Q6_Vhf_equals_Vqf16(Q6_Vqf16_vmpy_VhfVhf(Q6_V_hi_W(vp_lo), v_scale_duplicated));
+            HVX_Vector v_grp2 = Q6_Vhf_equals_Vqf16(Q6_Vqf16_vmpy_VhfVhf(Q6_V_lo_W(vp_hi), v_scale_duplicated));
+            HVX_Vector v_grp3 = Q6_Vhf_equals_Vqf16(Q6_Vqf16_vmpy_VhfVhf(Q6_V_hi_W(vp_hi), v_scale_duplicated));
+
+            hvx_vmemu(dst_ptr + (4 * g + 0) * 64) = v_grp0;
+            hvx_vmemu(dst_ptr + (4 * g + 1) * 64) = v_grp1;
+            hvx_vmemu(dst_ptr + (4 * g + 2) * 64) = v_grp2;
+            hvx_vmemu(dst_ptr + (4 * g + 3) * 64) = v_grp3;
+        }
+    }
+}
+
+static void dequantize_x4x2_worker_loop_q4_0(unsigned int n, unsigned int i, void *data) {
+    x4x2_dequantize_state_t *state = (x4x2_dequantize_state_t *)data;
+
+    struct htp_thread_trace * tr = state->traces ? &state->traces[i] : NULL;
+    htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_W_DEQUANT, i);
+
+    for (unsigned int task_id = i; task_id < (unsigned int)state->n_tasks; task_id += n) {
+        int start = task_id * state->n_tiles_per_task;
+        int end   = hex_smin(start + state->n_tiles_per_task, state->n_tot_tiles);
+        dequantize_x4x2_weight_to_fp16_tiles_task_q4_0(state, start, end);
+    }
+
+    htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_W_DEQUANT, i);
+}
+
+static void dequantize_x4x2_worker_loop_q4_1(unsigned int n, unsigned int i, void *data) {
+    x4x2_dequantize_state_t *state = (x4x2_dequantize_state_t *)data;
+
+    struct htp_thread_trace * tr = state->traces ? &state->traces[i] : NULL;
+    htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_W_DEQUANT, i);
+
+    for (unsigned int task_id = i; task_id < (unsigned int)state->n_tasks; task_id += n) {
+        int start = task_id * state->n_tiles_per_task;
+        int end   = hex_smin(start + state->n_tiles_per_task, state->n_tot_tiles);
+        dequantize_x4x2_weight_to_fp16_tiles_task_q4_1(state, start, end);
+    }
+
+    htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_W_DEQUANT, i);
+}
+
+static void dequantize_x4x2_worker_loop_iq4_nl(unsigned int n, unsigned int i, void *data) {
+    x4x2_dequantize_state_t *state = (x4x2_dequantize_state_t *)data;
+
+    struct htp_thread_trace * tr = state->traces ? &state->traces[i] : NULL;
+    htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_W_DEQUANT, i);
+
+    for (unsigned int task_id = i; task_id < (unsigned int)state->n_tasks; task_id += n) {
+        int start = task_id * state->n_tiles_per_task;
+        int end   = hex_smin(start + state->n_tiles_per_task, state->n_tot_tiles);
+        dequantize_x4x2_weight_to_fp16_tiles_task_iq4_nl(state, start, end);
+    }
+
+    htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_W_DEQUANT, i);
+}
 
 static void dequantize_x4x2_weight_to_fp16_tiles_task_mxfp4(
         const x4x2_dequantize_state_t *state,
         int start_tile, int end_tile) {
 
-    const int n_k_tiles = state->n_k_tiles;
-    const int qrow_size = (unsigned)state->k_block / 2;
-    const struct fastdiv_values n_k_tiles_div = state->n_k_tiles_div;
+    const size_t tile_size = 544;
+    const HVX_Vector mask_h4 = Q6_Vb_vsplat_R(0x0F);
     const HVX_Vector vlut_cvt = hvx_vmem(mxfp4_to_fp16_lut);
 
-    const HVX_Vector v_scat_base  = hvx_vmem(hmx_transpose_scatter_offsets);
-    const HVX_Vector v_scat_step  = Q6_V_vsplat_R(4);
-    const HVX_VectorPred q_mask64 = Q6_Q_vsetq_R(64);
+    for (int t = start_tile; t < end_tile; t++) {
+        const uint8_t * tile_src = state->src + t * tile_size;
+        __fp16 * dst_ptr = state->dst + t * HMX_FP16_TILE_N_ELMS;
 
-    unsigned ct = fastdiv((unsigned)start_tile, &n_k_tiles_div);
-    unsigned kt = fastmodulo((unsigned)start_tile, n_k_tiles, &n_k_tiles_div);
+        HVX_Vector v = hvx_vmemu(tile_src + 512);
+        HVX_Vector vh = Q6_V_lo_W(Q6_Wuh_vunpack_Vub(v));
+        vh = Q6_Vh_vsub_VhVh(vh, Q6_Vh_vsplat_R(112));
+        vh = Q6_Vh_vmax_VhVh(vh, Q6_V_vzero());
+        vh = Q6_Vh_vmin_VhVh(vh, Q6_Vh_vsplat_R(30));
+        vh = Q6_Vh_vasl_VhR(vh, 10);
 
-    for (unsigned t = start_tile; t < (unsigned)end_tile; ) {
-        if (kt >= (unsigned)n_k_tiles) { kt = 0; ct++; }
+        HVX_Vector v_scale_duplicated = Q6_V_lo_W(Q6_W_vshuff_VVR(vh, vh, -2));
 
-        // Batch-4 fast path for MXFP4
-        if ((kt % 4 == 0) && (t + 4 <= (unsigned)end_tile) && (fastdiv(t + 3, &n_k_tiles_div) == ct)) {
-            int  blk_idx      = (kt * 32) / QK_MXFP4x4x2;
-            int  sub_blk_base = ((kt * 32) % QK_MXFP4x4x2) / 32;
-            bool upper        = (sub_blk_base >= 4);
-            int  packed_off   = blk_idx * (QK_MXFP4x4x2 / 2);
-            int  e8m0_blk_off = qrow_size + blk_idx * HMX_X4X2_MXFP4_EBLK_SIZE;
+        for (int g = 0; g < 4; g++) {
+            HVX_Vector vq = hvx_vmemu(tile_src + g * 128);
 
-            __fp16 * tile_bases[4];
-            for (int g = 0; g < 4; g++) {
-                tile_bases[g] = state->dst + (t + g) * HMX_FP16_TILE_N_ELMS;
-            }
+            HVX_Vector v_lo = Q6_V_vand_VV(vq, mask_h4);
+            HVX_Vector v_hi = Q6_Vub_vlsr_VubR(vq, 4);
 
-            HVX_Vector v_off = v_scat_base;
-            for (int r = 0; r < HMX_FP16_TILE_N_ROWS; r += 2) {
-                int             row0 = ct * HMX_FP16_TILE_N_COLS + r;
-                int             row1 = row0 + 1;
-                const uint8_t * r0   = state->src + row0 * state->row_stride;
-                const uint8_t * r1   = state->src + row1 * state->row_stride;
+            HVX_VectorPair vp_shuf = Q6_W_vshuff_VVR(v_hi, v_lo, -1);
+            
+            HVX_Vector v_q_lo = Q6_Vb_vshuff_Vb(Q6_V_lo_W(vp_shuf));
+            HVX_VectorPair vp_lo = Q6_Wh_vlut16_VbVhR(v_q_lo, vlut_cvt, 0);
 
-                mxfp4_scales_t r0_e8 = mxfp4_convert_scales(r0 + e8m0_blk_off);
+            HVX_Vector v_q_hi = Q6_Vb_vshuff_Vb(Q6_V_hi_W(vp_shuf));
+            HVX_VectorPair vp_hi = Q6_Wh_vlut16_VbVhR(v_q_hi, vlut_cvt, 0);
 
-                HVX_Vector_x4 dv0, dv1;
-                dv0 = dequantize_x4x2_mxfp4_x4groups_hvx(r0 + packed_off, upper, sub_blk_base, vlut_cvt, r0_e8);
-                if (row1 < state->n_cols) {
-                    mxfp4_scales_t r1_e8 = mxfp4_convert_scales(r1 + e8m0_blk_off);
-                    dv1 = dequantize_x4x2_mxfp4_x4groups_hvx(r1 + packed_off, upper, sub_blk_base, vlut_cvt, r1_e8);
-                } else {
-                    dv1.v[0] = dv1.v[1] = dv1.v[2] = dv1.v[3] = Q6_V_vzero();
-                }
+            HVX_Vector v_grp0 = Q6_Vhf_equals_Vqf16(Q6_Vqf16_vmpy_VhfVhf(Q6_V_lo_W(vp_lo), v_scale_duplicated));
+            HVX_Vector v_grp1 = Q6_Vhf_equals_Vqf16(Q6_Vqf16_vmpy_VhfVhf(Q6_V_hi_W(vp_lo), v_scale_duplicated));
+            HVX_Vector v_grp2 = Q6_Vhf_equals_Vqf16(Q6_Vqf16_vmpy_VhfVhf(Q6_V_lo_W(vp_hi), v_scale_duplicated));
+            HVX_Vector v_grp3 = Q6_Vhf_equals_Vqf16(Q6_Vqf16_vmpy_VhfVhf(Q6_V_hi_W(vp_hi), v_scale_duplicated));
 
-                for (int g = 0; g < 4; g++) {
-                    Q6_vscatter_QRMVwV(q_mask64, (size_t) tile_bases[g], HMX_FP16_TILE_SIZE - 1, v_off, dv0.v[g]);
-                }
-                v_off = Q6_Vw_vadd_VwVw(v_off, v_scat_step);
-                for (int g = 0; g < 4; g++) {
-                    Q6_vscatter_QRMVwV(q_mask64, (size_t) tile_bases[g], HMX_FP16_TILE_SIZE - 1, v_off, dv1.v[g]);
-                }
-                v_off = Q6_Vw_vadd_VwVw(v_off, v_scat_step);
-            }
-
-            for (int g = 0; g < 4; g++) {
-                (void) *(volatile HVX_Vector *) (tile_bases[g]);
-            }
-
-            t += 4; kt += 4;
-            continue;
+            hvx_vmemu(dst_ptr + (4 * g + 0) * 64) = v_grp0;
+            hvx_vmemu(dst_ptr + (4 * g + 1) * 64) = v_grp1;
+            hvx_vmemu(dst_ptr + (4 * g + 2) * 64) = v_grp2;
+            hvx_vmemu(dst_ptr + (4 * g + 3) * 64) = v_grp3;
         }
-
-        // Single-tile fallback
-        __fp16 *tile_base = state->dst + t * HMX_FP16_TILE_N_ELMS;
-        {
-            int  blk_idx      = (kt * 32) / QK_MXFP4x4x2;
-            int  sub_blk      = ((kt * 32) % QK_MXFP4x4x2) / 32;
-            bool upper        = (sub_blk >= 4);
-            int  byte_off     = blk_idx * (QK_MXFP4x4x2 / 2) + (upper ? (sub_blk - 4) : sub_blk) * 32;
-            int  e8m0_blk_off = qrow_size + blk_idx * HMX_X4X2_MXFP4_EBLK_SIZE;
-
-            HVX_Vector v_off = v_scat_base;
-            for (int r = 0; r < HMX_FP16_TILE_N_ROWS; r += 2) {
-                int row0 = ct * HMX_FP16_TILE_N_COLS + r;
-                int row1 = row0 + 1;
-
-                const uint8_t * r0 = state->src + row0 * state->row_stride;
-                const uint8_t * r1 = state->src + row1 * state->row_stride;
-
-                mxfp4_scales_t r0_e8 = mxfp4_convert_scales(r0 + e8m0_blk_off);
-
-                HVX_Vector v0 = dequantize_x4x2_mxfp4_group_hvx(r0 + byte_off, upper, sub_blk, vlut_cvt, r0_e8);
-                HVX_Vector v1;
-                if (row1 < state->n_cols) {
-                    mxfp4_scales_t r1_e8 = mxfp4_convert_scales(r1 + e8m0_blk_off);
-                    v1 = dequantize_x4x2_mxfp4_group_hvx(r1 + byte_off, upper, sub_blk, vlut_cvt, r1_e8);
-                } else {
-                    v1 = Q6_V_vzero();
-                }
-
-                Q6_vscatter_QRMVwV(q_mask64, (size_t) tile_base, HMX_FP16_TILE_SIZE - 1, v_off, v0);
-                v_off = Q6_Vw_vadd_VwVw(v_off, v_scat_step);
-                Q6_vscatter_QRMVwV(q_mask64, (size_t) tile_base, HMX_FP16_TILE_SIZE - 1, v_off, v1);
-                v_off = Q6_Vw_vadd_VwVw(v_off, v_scat_step);
-            }
-            (void) *(volatile HVX_Vector *) (tile_base);
-        }
-        ++t; ++kt;
-    }
-
-    if (start_tile < end_tile) {
-        (void) *(volatile HVX_Vector *)(state->dst + (end_tile - 1) * HMX_FP16_TILE_N_ELMS);
     }
 }
 
@@ -675,50 +671,26 @@ static void dequantize_x4x2_weight_to_fp16_tiles_task_q8_0(
         const x4x2_dequantize_state_t *state,
         int start_tile, int end_tile) {
 
-    const int n_k_tiles = state->n_k_tiles;
-    const int qrow_size = state->k_block;
-    const struct fastdiv_values n_k_tiles_div = state->n_k_tiles_div;
+    const size_t tile_size = 1088;
 
-    const HVX_Vector v_scat_base  = hvx_vmem(hmx_transpose_scatter_offsets);
-    const HVX_Vector v_scat_step  = Q6_V_vsplat_R(4);
-    const HVX_VectorPred q_mask64 = Q6_Q_vsetq_R(64);
+    for (int t = start_tile; t < end_tile; t++) {
+        const uint8_t * tile_src = state->src + t * tile_size;
+        __fp16 * dst_ptr = state->dst + t * HMX_FP16_TILE_N_ELMS;
 
-    unsigned ct = fastdiv((unsigned)start_tile, &n_k_tiles_div);
-    unsigned kt = fastmodulo((unsigned)start_tile, n_k_tiles, &n_k_tiles_div);
+        HVX_Vector v_sc = hvx_vmemu(tile_src + 1024);
+        HVX_Vector v_scale_duplicated = Q6_V_lo_W(Q6_W_vshuff_VVR(v_sc, v_sc, -2));
 
-    for (unsigned t = start_tile; t < (unsigned)end_tile; ) {
-        if (kt >= (unsigned)n_k_tiles) { kt = 0; ct++; }
+        for (int g = 0; g < 8; g++) {
+            HVX_Vector vq = hvx_vmemu(tile_src + g * 128);
 
-        __fp16 *tile_base = state->dst + t * HMX_FP16_TILE_N_ELMS;
-        {
-            int blk_idx  = (kt * 32) / QK_Q8_0x4x2;
-            int sub_blk  = ((kt * 32) % QK_Q8_0x4x2) / 32;
-            int byte_off  = blk_idx * QK_Q8_0x4x2 + sub_blk * 32;
-            int scale_off = qrow_size + blk_idx * HMX_X4X2_DBLK_SIZE + sub_blk * (int)sizeof(__fp16);
+            HVX_VectorPair vp_int16 = Q6_Wh_vunpack_Vb(vq);
 
-            HVX_Vector v_off = v_scat_base;
-            for (int r = 0; r < HMX_FP16_TILE_N_ROWS; r += 2) {
-                int row0 = ct * HMX_FP16_TILE_N_COLS + r;
-                int row1 = row0 + 1;
+            HVX_Vector v_grp0 = Q6_Vhf_equals_Vqf16(Q6_Vqf16_vmpy_VhfVhf(Q6_Vhf_equals_Vh(Q6_V_lo_W(vp_int16)), v_scale_duplicated));
+            HVX_Vector v_grp1 = Q6_Vhf_equals_Vqf16(Q6_Vqf16_vmpy_VhfVhf(Q6_Vhf_equals_Vh(Q6_V_hi_W(vp_int16)), v_scale_duplicated));
 
-                const uint8_t *r0 = state->src + row0 * state->row_stride;
-                const uint8_t *r1 = state->src + row1 * state->row_stride;
-
-                HVX_Vector v0 = dequantize_x4x2_q8_0_group_hvx((const int8_t *)(r0 + byte_off), (const __fp16 *)(r0 + scale_off));
-                HVX_Vector v1 = (row1 < state->n_cols) ? dequantize_x4x2_q8_0_group_hvx((const int8_t *)(r1 + byte_off), (const __fp16 *)(r1 + scale_off)) : Q6_V_vzero();
-
-                Q6_vscatter_QRMVwV(q_mask64, (size_t)tile_base, HMX_FP16_TILE_SIZE - 1, v_off, v0);
-                v_off = Q6_Vw_vadd_VwVw(v_off, v_scat_step);
-                Q6_vscatter_QRMVwV(q_mask64, (size_t)tile_base, HMX_FP16_TILE_SIZE - 1, v_off, v1);
-                v_off = Q6_Vw_vadd_VwVw(v_off, v_scat_step);
-            }
-            (void) *(volatile HVX_Vector *)(tile_base);
+            hvx_vmemu(dst_ptr + (2 * g + 0) * 64) = v_grp0;
+            hvx_vmemu(dst_ptr + (2 * g + 1) * 64) = v_grp1;
         }
-        ++t; ++kt;
-    }
-
-    if (start_tile < end_tile) {
-        (void) *(volatile HVX_Vector *)(state->dst + (end_tile - 1) * HMX_FP16_TILE_N_ELMS);
     }
 }
 
@@ -846,16 +818,18 @@ static void quantize_f32_weight_to_fp16_tiles_task(
 
 static void quantize_f32_worker_loop(unsigned int n, unsigned int i, void *data) {
     x4x2_dequantize_state_t *state = (x4x2_dequantize_state_t *)data;
+
     struct htp_thread_trace * tr = state->traces ? &state->traces[i] : NULL;
-    htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_W_DEQUANT, i);
+    htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_A_QUANT, i);
+
     for (unsigned int task_id = i; task_id < (unsigned int)state->n_tasks; task_id += n) {
         int start = task_id * state->n_tiles_per_task;
         int end   = hex_smin(start + state->n_tiles_per_task, state->n_tot_tiles);
         quantize_f32_weight_to_fp16_tiles_task(state, start, end);
     }
-    htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_W_DEQUANT, i);
-}
 
+    htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_A_QUANT, i);
+}
 
 static void dequantize_x4x2_weight_chunk_to_fp16_tiles(
         struct htp_context *ctx, __fp16 *vtcm_dst,
@@ -884,7 +858,7 @@ static void dequantize_x4x2_weight_chunk_to_fp16_tiles(
     state.weight_type      = weight_type;
     state.n_k_tiles        = n_k_tiles;
     state.n_k_tiles_div    = n_k_tiles_div;
-    state.traces           = ctx ? ctx->trace : NULL;
+    state.traces           = ctx->trace;
 
     if (state.n_tasks == 1 || n_threads == 1) {
         dequant_worker_fn(1, 0, &state);
@@ -964,7 +938,7 @@ static inline void hmx_matmul_job_init(hmx_matmul_job_t * job,
 
 // output : fp16 -> f32p
 
-static void transfer_output_chunk_fp16_to_fp32(float *restrict dst, const __fp16 *restrict vtcm_src, int n_rows, int n_cols, int n) {
+static void transfer_output_chunk_fp16_to_fp32(float *restrict dst, const __fp16 *restrict vtcm_src, int n_rows, int n_cols, int dst_stride, int dst_cols) {
     assert(n_cols % HMX_FP16_TILE_N_COLS == 0);
     const size_t tile_row_stride = (n_cols / HMX_FP16_TILE_N_COLS) * HMX_FP16_TILE_N_ELMS;
 
@@ -974,7 +948,7 @@ static void transfer_output_chunk_fp16_to_fp32(float *restrict dst, const __fp16
         const size_t r0 = r / HMX_FP16_TILE_N_ROWS;
         const size_t r1 = (r % HMX_FP16_TILE_N_ROWS) / 2;  // index of the row pair within the tile
         const __fp16 *row_base = vtcm_src + r0 * tile_row_stride;
-        float *output_row_base = dst + r * n;  // global memory row base for row r (and r+1)
+        float *output_row_base = dst + r * dst_stride;  // global memory row base for row r (and r+1)
 
         #pragma unroll(4)
         for (size_t c = 0; c < n_cols; c += HMX_FP16_TILE_N_COLS) {
@@ -984,11 +958,19 @@ static void transfer_output_chunk_fp16_to_fp32(float *restrict dst, const __fp16
             HVX_VectorPair vp = Q6_Wqf32_vmpy_VhfVhf(v, one);
 
             volatile HVX_Vector *pv_out0 = (volatile HVX_Vector *) (output_row_base + c + 0);
-            volatile HVX_Vector *pv_out1 = (volatile HVX_Vector *) (output_row_base + c + n);  // next row in global memory
+            volatile HVX_Vector *pv_out1 = (volatile HVX_Vector *) (output_row_base + c + dst_stride);  // next row in global memory
 
-            *pv_out0 = Q6_Vsf_equals_Vqf32(Q6_V_lo_W(vp));
-            if (r + 1 < n_rows) {
-                *pv_out1 = Q6_Vsf_equals_Vqf32(Q6_V_hi_W(vp));
+            int valid_c = dst_cols - (int)c;
+            if (valid_c >= 32) {
+                *pv_out0 = Q6_Vsf_equals_Vqf32(Q6_V_lo_W(vp));
+                if (r + 1 < n_rows) {
+                    *pv_out1 = Q6_Vsf_equals_Vqf32(Q6_V_hi_W(vp));
+                }
+            } else if (valid_c > 0) {
+                hvx_vec_store_u(output_row_base + c, valid_c * sizeof(float), Q6_Vsf_equals_Vqf32(Q6_V_lo_W(vp)));
+                if (r + 1 < n_rows) {
+                    hvx_vec_store_u(output_row_base + c + dst_stride, valid_c * sizeof(float), Q6_Vsf_equals_Vqf32(Q6_V_hi_W(vp)));
+                }
             }
         }
     }
@@ -1001,12 +983,14 @@ typedef struct {
     int            n_tot_chunks;
     int            n_chunks_per_task;
     int            n_cols;
-    int            n;  // DDR row stride (total output columns)
+    int            dst_stride;  // DDR row stride
+    int            dst_cols;    // Actual output columns
     struct htp_thread_trace * traces;
 } output_transfer_task_state_t;
 
 static void transfer_output_chunk_worker_fn(unsigned int n, unsigned int i, void *data) {
     output_transfer_task_state_t *st = (output_transfer_task_state_t *) data;
+
     struct htp_thread_trace * tr = st->traces ? &st->traces[i] : NULL;
     htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_O_PROC, i);
 
@@ -1014,15 +998,16 @@ static void transfer_output_chunk_worker_fn(unsigned int n, unsigned int i, void
         int    chunk_idx  = task_id * st->n_chunks_per_task;
         size_t chunk_size = hex_smin(st->n_tot_chunks - chunk_idx, st->n_chunks_per_task);
 
-        float        *dst      = st->dst      + chunk_idx * st->n;
+        float        *dst      = st->dst      + chunk_idx * st->dst_stride;
         const __fp16 *vtcm_src = st->vtcm_src + chunk_idx * st->n_cols;
-        transfer_output_chunk_fp16_to_fp32(dst, vtcm_src, chunk_size, st->n_cols, st->n);
+        transfer_output_chunk_fp16_to_fp32(dst, vtcm_src, chunk_size, st->n_cols, st->dst_stride, st->dst_cols);
     }
+
     htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_O_PROC, i);
 }
 
 static void transfer_output_chunk_threaded(struct htp_context *ctx, float *dst, const __fp16 *vtcm_src,
-                                              int n_rows, int n_cols, int n, int n_threads) {
+                                              int n_rows, int n_cols, int dst_stride, int dst_cols, int n_threads) {
     assert(n_cols % HMX_FP16_TILE_N_COLS == 0);
 
     size_t n_tot_chunks      = n_rows;
@@ -1035,8 +1020,9 @@ static void transfer_output_chunk_threaded(struct htp_context *ctx, float *dst, 
     state.dst               = dst;
     state.vtcm_src          = vtcm_src;
     state.n_cols            = n_cols;
-    state.n                 = n;
-    state.traces            = ctx ? ctx->trace : NULL;
+    state.dst_stride        = dst_stride;
+    state.dst_cols          = dst_cols;
+    state.traces            = ctx->trace;
 
     if (state.n_tasks == 1 || n_threads == 1) {
         transfer_output_chunk_worker_fn(1, 0, &state);
@@ -1047,7 +1033,7 @@ static void transfer_output_chunk_threaded(struct htp_context *ctx, float *dst, 
 
 // activations : fp32 -> fp16
 
-static void transfer_activation_chunk_fp32_to_fp16(__fp16 *restrict vtcm_dst, const float *restrict src, int n_rows, int k_block, int k_stride) {
+static void transfer_activation_chunk_fp32_to_fp16(__fp16 *restrict vtcm_dst, const float *restrict src, int n_rows, int k_block, int k_stride, int k_valid) {
     const int n_rows_padded = hex_align_up(n_rows, HMX_FP16_TILE_N_ROWS);
     const int n_rows_tiled  = (n_rows / HMX_FP16_TILE_N_ROWS) * HMX_FP16_TILE_N_ROWS;
 
@@ -1058,11 +1044,18 @@ static void transfer_activation_chunk_fp32_to_fp16(__fp16 *restrict vtcm_dst, co
         int r0 = r / HMX_FP16_TILE_N_ROWS;  // tile row index
         int r1 = r % HMX_FP16_TILE_N_ROWS;  // intra-tile row idx
 
-        const HVX_Vector *pv_in0 = (const HVX_Vector *) (src + (r + 0) * k_stride);
-        const HVX_Vector *pv_in1 = (const HVX_Vector *) (src + (r + 1) * k_stride);
+        const float *ptr_in0 = src + (r + 0) * k_stride;
+        const float *ptr_in1 = src + (r + 1) * k_stride;
         for (int c = 0; c < k_block; c += 32) {
-            HVX_Vector v0 = *pv_in0++;
-            HVX_Vector v1 = *pv_in1++;
+            HVX_Vector v0 = *(const HVX_Vector *)(ptr_in0 + c);
+            HVX_Vector v1 = *(const HVX_Vector *)(ptr_in1 + c);
+
+            if (c + 32 > k_valid) {
+                int rem = k_valid - c;
+                HVX_VectorPred mask = Q6_Q_vsetq2_R(rem > 0 ? rem * sizeof(float) : 0);
+                v0 = Q6_V_vmux_QVV(mask, v0, Q6_V_vzero());
+                v1 = Q6_V_vmux_QVV(mask, v1, Q6_V_vzero());
+            }
 
             HVX_Vector v_out = hvx_vec_f32_to_f16_shuff(v0, v1);
 
@@ -1082,11 +1075,20 @@ static void transfer_activation_chunk_fp32_to_fp16(__fp16 *restrict vtcm_dst, co
         const bool row0_valid = r       < n_rows;
         const bool row1_valid = (r + 1) < n_rows;
 
-        const HVX_Vector *pv_in0 = row0_valid ? (const HVX_Vector *) (src + (r + 0) * k_stride) : NULL;
-        const HVX_Vector *pv_in1 = row1_valid ? (const HVX_Vector *) (src + (r + 1) * k_stride) : NULL;
+        const float *ptr_in0 = row0_valid ? (src + (r + 0) * k_stride) : NULL;
+        const float *ptr_in1 = row1_valid ? (src + (r + 1) * k_stride) : NULL;
         for (int c = 0; c < k_block; c += 32) {
-            HVX_Vector v0 = row0_valid ? *pv_in0++ : Q6_V_vzero();
-            HVX_Vector v1 = row1_valid ? *pv_in1++ : Q6_V_vzero();
+            HVX_Vector v0 = Q6_V_vzero();
+            HVX_Vector v1 = Q6_V_vzero();
+            if (row0_valid) v0 = *(const HVX_Vector *)(ptr_in0 + c);
+            if (row1_valid) v1 = *(const HVX_Vector *)(ptr_in1 + c);
+
+            if (c + 32 > k_valid) {
+                int rem = k_valid - c;
+                HVX_VectorPred mask = Q6_Q_vsetq2_R(rem > 0 ? rem * sizeof(float) : 0);
+                v0 = Q6_V_vmux_QVV(mask, v0, Q6_V_vzero());
+                v1 = Q6_V_vmux_QVV(mask, v1, Q6_V_vzero());
+            }
 
             HVX_Vector v_out = hvx_vec_f32_to_f16_shuff(v0, v1);
 
@@ -1108,11 +1110,13 @@ typedef struct {
     int          n_chunks_per_task;
     int          k_block;
     int          k_stride;
+    int          k_valid;
     struct htp_thread_trace * traces;
 } activation_transfer_task_state_t;
 
 static void transfer_activation_chunk_worker_fn(unsigned int n, unsigned int i, void *data) {
     activation_transfer_task_state_t *st = (activation_transfer_task_state_t *) data;
+
     struct htp_thread_trace * tr = st->traces ? &st->traces[i] : NULL;
     htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_A_PREP, i);
 
@@ -1123,12 +1127,13 @@ static void transfer_activation_chunk_worker_fn(unsigned int n, unsigned int i, 
 
         __fp16      *dst = st->dst + chunk_idx * st->k_block;
         const float *src = st->src + chunk_idx * st->k_stride;
-        transfer_activation_chunk_fp32_to_fp16(dst, src, chunk_size, st->k_block, st->k_stride);
+        transfer_activation_chunk_fp32_to_fp16(dst, src, chunk_size, st->k_block, st->k_stride, st->k_valid);
     }
+
     htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_A_PREP, i);
 }
 
-static void transfer_activation_chunk_threaded(struct htp_context *ctx, __fp16 *dst, const float *src, int n_rows, int k_block, int k_stride, int n_threads) {
+static void transfer_activation_chunk_threaded(struct htp_context *ctx, __fp16 *dst, const float *src, int n_rows, int k_block, int k_stride, int n_threads, int k_valid) {
     assert(k_block % HMX_FP16_TILE_N_COLS == 0 && k_stride % HMX_FP16_TILE_N_COLS == 0);
     assert(VLEN == 32 * sizeof(float));
 
@@ -1143,7 +1148,8 @@ static void transfer_activation_chunk_threaded(struct htp_context *ctx, __fp16 *
     state.src               = src;
     state.k_block           = k_block;
     state.k_stride          = k_stride;
-    state.traces            = ctx ? ctx->trace : NULL;
+    state.k_valid           = k_valid;
+    state.traces            = ctx->trace;
 
     if (state.n_tasks == 1 || n_threads == 1) {
         transfer_activation_chunk_worker_fn(1, 0, &state);
@@ -1193,7 +1199,8 @@ static void core_mma_chunk_fp16(__fp16 *restrict c, const __fp16 *restrict a, co
 
 int hmx_matmul_2d_f32(struct htp_context *ctx, float *restrict dst, const float *restrict activation,
                                      const uint8_t *restrict permuted_weight, int m, int k, int n,
-                                     int act_stride, int weight_stride, int weight_type) {
+                                     int act_stride, int weight_stride, int weight_type, int k_valid,
+                                     int dst_stride, int dst_cols) {
     if (k % 32 != 0 || n % 32 != 0) { return -1; }
 
     if (!hex_is_aligned(dst, VLEN) || !hex_is_aligned(activation, VLEN) || !hex_is_aligned(permuted_weight, VLEN)) {
@@ -1272,8 +1279,6 @@ int hmx_matmul_2d_f32(struct htp_context *ctx, float *restrict dst, const float 
     FARF(HIGH, "hmx-mm-2d: standard : m %d k %d n %d wtype %d mc %zu nc %zu vtcm %zu/%zu",
          m, k, n, weight_type, m_chunk_n_rows, n_chunk_n_cols, vtcm_used, vtcm_budget);
 
-
-
     int n_chunk_cnt = hmx_ceil_div(n, n_chunk_n_cols);
 
     if (use_pipeline) {
@@ -1296,7 +1301,7 @@ int hmx_matmul_2d_f32(struct htp_context *ctx, float *restrict dst, const float 
 
             {
                 const float *activation_chunk = activation + mr * act_stride;
-                transfer_activation_chunk_threaded(ctx, vtcm_activation, activation_chunk, n_rows, k, act_stride, num_threads);
+                transfer_activation_chunk_threaded(ctx, vtcm_activation, activation_chunk, n_rows, k, act_stride, num_threads, k_valid);
             }
 
             // prologue: B0, A1, submit C0 (async), B1 (overlaps C0)
@@ -1355,8 +1360,11 @@ int hmx_matmul_2d_f32(struct htp_context *ctx, float *restrict dst, const float 
                 }
 
                 // D_i: store output (multi-thread HVX, parallel with C_{i+1})
-                float *output_chunk = dst + (mr * n + nc);
-                transfer_output_chunk_threaded(ctx, output_chunk, vtcm_output_bufs[i % 2], n_rows, n_cols, n, num_threads);
+                float *output_chunk = dst + (mr * dst_stride + nc);
+                int chunk_dst_cols = dst_cols - (int)nc;
+                if (chunk_dst_cols > 0) {
+                    transfer_output_chunk_threaded(ctx, output_chunk, vtcm_output_bufs[i % 2], n_rows, n_cols, dst_stride, chunk_dst_cols, num_threads);
+                }
 
                 // B_{i+2}: DMA pop + dequant (multi-thread HVX, parallel with C_{i+1})
                 if (i + 2 < n_chunk_cnt) {
@@ -1376,7 +1384,7 @@ int hmx_matmul_2d_f32(struct htp_context *ctx, float *restrict dst, const float 
 
             // Load Activation
             const float *activation_chunk = activation + mr * act_stride;
-            transfer_activation_chunk_threaded(ctx, vtcm_activation, activation_chunk, n_rows, k, act_stride, num_threads);
+            transfer_activation_chunk_threaded(ctx, vtcm_activation, activation_chunk, n_rows, k, act_stride, num_threads, k_valid);
 
             for (size_t nc = 0; nc < n; nc += n_chunk_n_cols) {
                 const size_t n_cols = hex_smin(n - nc, n_chunk_n_cols);
@@ -1391,16 +1399,17 @@ int hmx_matmul_2d_f32(struct htp_context *ctx, float *restrict dst, const float 
                 dequantize_x4x2_weight_chunk_to_fp16_tiles(ctx, vtcm_scratch0, vtcm_weight, n_cols, k, row_stride, weight_type, n_k_tiles, n_k_tiles_div, dequant_worker_fn, num_threads);
 
                 // C: HMX Compute (Synchronous)
-                {
-                    struct htp_thread_trace * tr = ctx ? &ctx->trace[HTP_MAX_NTHREADS] : NULL;
-                    htp_trace_event_start(tr, HTP_TRACE_EVT_HMX_COMP, HTP_MAX_NTHREADS);
-                    core_dot_chunk_fp16(vtcm_output, vtcm_activation, vtcm_scratch0, vtcm_scales, n_row_tiles, n_col_tiles, k / HMX_FP16_TILE_N_ROWS);
-                    htp_trace_event_stop(tr, HTP_TRACE_EVT_HMX_COMP, HTP_MAX_NTHREADS);
-                }
+                struct htp_thread_trace * tr = &ctx->trace[HTP_MAX_NTHREADS];
+                htp_trace_event_start(tr, HTP_TRACE_EVT_HMX_COMP, nc);
+                core_dot_chunk_fp16(vtcm_output, vtcm_activation, vtcm_scratch0, vtcm_scales, n_row_tiles, n_col_tiles, k / HMX_FP16_TILE_N_ROWS);
+                htp_trace_event_stop(tr, HTP_TRACE_EVT_HMX_COMP, nc);
 
                 // D: Output Store
-                float *output_chunk = dst + (mr * n + nc);
-                transfer_output_chunk_threaded(ctx, output_chunk, vtcm_output, n_rows, n_cols, n, num_threads);
+                float *output_chunk = dst + (mr * dst_stride + nc);
+                int chunk_dst_cols = dst_cols - (int)nc;
+                if (chunk_dst_cols > 0) {
+                    transfer_output_chunk_threaded(ctx, output_chunk, vtcm_output, n_rows, n_cols, dst_stride, chunk_dst_cols, num_threads);
+                }
             }
         }
         HAP_compute_res_hmx_unlock(ctx->vtcm_rctx);
@@ -1538,8 +1547,6 @@ int hmx_matmul_f16_f32_batched(struct htp_context *ctx, const hmx_matmul_f16_f32
             m_chunk_n_rows, n_chunk_n_cols,
             (size_t) (vtcm_ptr - (uint8_t *) ctx->vtcm_base), vtcm_budget);
 
-
-
     const size_t fp16_row_bytes   = (size_t) params->k * sizeof(__fp16);
     const size_t weight_row_bytes = (size_t) params->weight_stride * sizeof(__fp16);
 
@@ -1570,11 +1577,11 @@ int hmx_matmul_f16_f32_batched(struct htp_context *ctx, const hmx_matmul_f16_f32
                         dma_queue_pop(ctx->dma[0]);
                         transfer_activation_chunk_threaded(ctx, vtcm_act_g,
                                                               vtcm_f32_act, (int) n_rows,
-                                                              params->k, params->k, ctx->n_threads);
+                                                              params->k, params->k, ctx->n_threads, params->k);
                     } else {
                         transfer_activation_chunk_threaded(ctx, vtcm_act_g,
                                                               activation_chunk, (int) n_rows,
-                                                              params->k, params->act_stride, ctx->n_threads);
+                                                              params->k, params->act_stride, ctx->n_threads, params->k);
                     }
                 }
 
@@ -1610,18 +1617,21 @@ int hmx_matmul_f16_f32_batched(struct htp_context *ctx, const hmx_matmul_f16_f32
 
                     // Reuse the interleaved weight for every q_head in this GQA group
                     for (int g = 0; g < group_size; ++g) {
+                        struct htp_thread_trace * tr = &ctx->trace[HTP_MAX_NTHREADS];
+                        htp_trace_event_start(tr, HTP_TRACE_EVT_HMX_COMP, g);
                         {
                             const __fp16 * vtcm_act_g = vtcm_activation + (size_t) g * act_head_stride;
-                            struct htp_thread_trace * tr = ctx ? &ctx->trace[HTP_MAX_NTHREADS] : NULL;
-                            htp_trace_event_start(tr, HTP_TRACE_EVT_HMX_COMP, HTP_MAX_NTHREADS);
                             core_dot_chunk_fp16(vtcm_output, vtcm_act_g, vtcm_weight, vtcm_scales, n_row_tiles, n_col_tiles,
                                                 params->k / 32);
-                            htp_trace_event_stop(tr, HTP_TRACE_EVT_HMX_COMP, HTP_MAX_NTHREADS);
                         }
+                        htp_trace_event_stop(tr, HTP_TRACE_EVT_HMX_COMP, g);
 
                         {
                             float *output = hmx_matmul_dst_batch_ptr(params, b2_base + g, b3) + mr * params->dst_stride + nc;
-                            transfer_output_chunk_threaded(ctx, output, vtcm_output, (int) n_rows, (int) n_cols, params->dst_stride, ctx->n_threads);
+                            int chunk_dst_cols = params->n - (int)nc;
+                            if (chunk_dst_cols > 0) {
+                                transfer_output_chunk_threaded(ctx, output, vtcm_output, (int) n_rows, (int) n_cols, params->dst_stride, chunk_dst_cols, ctx->n_threads);
+                            }
                         }
                     }
                 }
@@ -1631,8 +1641,6 @@ int hmx_matmul_f16_f32_batched(struct htp_context *ctx, const hmx_matmul_f16_f32
 
     HAP_compute_res_hmx_unlock(ctx->vtcm_rctx);
 
-
-
     return 0;
 }
 
@@ -1641,7 +1649,7 @@ int hmx_matmul_f16_f32(struct htp_context *ctx, float *restrict dst, const float
                                 int act_stride, int weight_stride) {
     if (!dst || !activation || !permuted_weight || !m || !n || !k) { return -1; }
     return hmx_matmul_2d_f32(ctx, dst, activation, (const uint8_t *)permuted_weight, m, k, n,
-                             act_stride, weight_stride * (int)sizeof(__fp16), HTP_TYPE_F16);
+                             act_stride, weight_stride * (int)sizeof(__fp16), HTP_TYPE_F16, k, n, n);
 }
 
 struct mmid_row_mapping {
@@ -1665,6 +1673,7 @@ typedef struct {
     size_t                          nb12;
     int                             start_row;
     int                             cne1;
+    int                             k_valid;
     struct htp_thread_trace        *traces;
 } activation_transfer_gathered_task_state_t;
 
@@ -1698,7 +1707,8 @@ static void transfer_activation_chunk_fp32_to_fp16_gathered(
             const struct fastdiv_values * ne11_div,
             size_t nb11,
             size_t nb12,
-            int cne1) {
+            int cne1,
+            int k_valid) {
     const int n_rows_padded = hex_align_up(n_rows, HMX_FP16_TILE_N_ROWS);
     const int n_rows_tiled  = (n_rows / HMX_FP16_TILE_N_ROWS) * HMX_FP16_TILE_N_ROWS;
 
@@ -1721,12 +1731,16 @@ static void transfer_activation_chunk_fp32_to_fp16_gathered(
         const float *row0_ptr = (const float *) ((const uint8_t *) src + i11_0 * nb11 + mapping0.i2 * nb12);
         const float *row1_ptr = (const float *) ((const uint8_t *) src + i11_1 * nb11 + mapping1.i2 * nb12);
 
-        const HVX_Vector *pv_in0 = (const HVX_Vector *) row0_ptr;
-        const HVX_Vector *pv_in1 = (const HVX_Vector *) row1_ptr;
-
         for (int c = 0; c < k_block; c += 32) {
-            HVX_Vector v0 = *pv_in0++;
-            HVX_Vector v1 = *pv_in1++;
+            HVX_Vector v0 = *(const HVX_Vector *)(row0_ptr + c);
+            HVX_Vector v1 = *(const HVX_Vector *)(row1_ptr + c);
+
+            if (c + 32 > k_valid) {
+                int rem = k_valid - c;
+                HVX_VectorPred mask = Q6_Q_vsetq2_R(rem > 0 ? rem * sizeof(float) : 0);
+                v0 = Q6_V_vmux_QVV(mask, v0, Q6_V_vzero());
+                v1 = Q6_V_vmux_QVV(mask, v1, Q6_V_vzero());
+            }
 
             HVX_Vector v_out = hvx_vec_f32_to_f16_shuff(v0, v1);
 
@@ -1759,12 +1773,18 @@ static void transfer_activation_chunk_fp32_to_fp16_gathered(
             row1_ptr = (const float *) ((const uint8_t *) src + i11_1 * nb11 + mapping1.i2 * nb12);
         }
 
-        const HVX_Vector *pv_in0 = (const HVX_Vector *) row0_ptr;
-        const HVX_Vector *pv_in1 = (const HVX_Vector *) row1_ptr;
-
         for (int c = 0; c < k_block; c += 32) {
-            HVX_Vector v0 = row0_valid ? *pv_in0++ : Q6_V_vzero();
-            HVX_Vector v1 = row1_valid ? *pv_in1++ : Q6_V_vzero();
+            HVX_Vector v0 = Q6_V_vzero();
+            HVX_Vector v1 = Q6_V_vzero();
+            if (row0_valid) v0 = *(const HVX_Vector *)(row0_ptr + c);
+            if (row1_valid) v1 = *(const HVX_Vector *)(row1_ptr + c);
+
+            if (c + 32 > k_valid) {
+                int rem = k_valid - c;
+                HVX_VectorPred mask = Q6_Q_vsetq2_R(rem > 0 ? rem * sizeof(float) : 0);
+                v0 = Q6_V_vmux_QVV(mask, v0, Q6_V_vzero());
+                v1 = Q6_V_vmux_QVV(mask, v1, Q6_V_vzero());
+            }
 
             HVX_Vector v_out = hvx_vec_f32_to_f16_shuff(v0, v1);
 
@@ -1780,20 +1800,19 @@ static void transfer_activation_chunk_fp32_to_fp16_gathered(
 static void transfer_activation_chunk_gathered_worker_fn(unsigned int n, unsigned int i, void *data) {
     activation_transfer_gathered_task_state_t *st = data;
     struct htp_thread_trace * tr = st->traces ? &st->traces[i] : NULL;
-    htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_A_PREP, i);
-
     int chunk_idx = i;
     int chunk_size = st->n_chunks_per_task;
     int start_row = st->start_row + chunk_idx * chunk_size;
     int n_rows = hex_smin(st->cne1 - start_row, chunk_size);
     if (n_rows > 0) {
         __fp16 *dst = st->dst + (size_t)(start_row - st->start_row) * st->k_block;
+        htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_A_PREP, chunk_idx);
         transfer_activation_chunk_fp32_to_fp16_gathered(
             dst, st->src, start_row, n_rows, st->k_block,
             st->matrix_rows, st->cur_a, st->mapping_stride,
-            st->ne11, &st->ne11_div, st->nb11, st->nb12, st->cne1);
+            st->ne11, &st->ne11_div, st->nb11, st->nb12, st->cne1, st->k_valid);
+        htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_A_PREP, chunk_idx);
     }
-    htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_A_PREP, i);
 }
 
 static void transfer_activation_chunk_gathered_threaded(
@@ -1810,7 +1829,8 @@ static void transfer_activation_chunk_gathered_threaded(
             size_t nb11,
             size_t nb12,
             int cne1,
-            int n_threads) {
+            int n_threads,
+            int k_valid) {
     if (n_rows <= 0) return;
     int chunks_per_thread = hmx_ceil_div(n_rows, n_threads);
     chunks_per_thread = hex_align_up(chunks_per_thread, HMX_FP16_TILE_N_ROWS);
@@ -1833,7 +1853,8 @@ static void transfer_activation_chunk_gathered_threaded(
         .nb12              = nb12,
         .start_row         = start_row,
         .cne1              = cne1,
-        .traces            = ctx ? ctx->trace : NULL,
+        .k_valid           = k_valid,
+        .traces            = ctx->trace,
     };
 
     if (actual_threads <= 1) {
@@ -1900,20 +1921,19 @@ static void transfer_output_chunk_fp16_to_fp32_scattered(
 static void transfer_output_chunk_scattered_worker_fn(unsigned int n, unsigned int i, void *data) {
     output_transfer_scattered_task_state_t *st = data;
     struct htp_thread_trace * tr = st->traces ? &st->traces[i] : NULL;
-    htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_O_PROC, i);
-
     int chunk_idx = i;
     int chunk_size = st->n_chunks_per_task;
     int start_row = st->start_row + chunk_idx * chunk_size;
     int n_rows = hex_smin(st->cne1 - start_row, chunk_size);
     if (n_rows > 0) {
         const __fp16 *src = st->vtcm_src + (size_t)(start_row - st->start_row) * st->n_cols;
+        htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_O_PROC, chunk_idx);
         transfer_output_chunk_fp16_to_fp32_scattered(
             st->dst, src, start_row, n_rows, st->n_cols,
             st->matrix_rows, st->cur_a, st->mapping_stride,
             st->dst_nb1, st->dst_nb2, st->cne1);
+        htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_O_PROC, chunk_idx);
     }
-    htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_O_PROC, i);
 }
 
 static void transfer_output_chunk_scattered_threaded(
@@ -1950,7 +1970,7 @@ static void transfer_output_chunk_scattered_threaded(
         .dst_nb2           = dst_nb2,
         .start_row         = start_row,
         .cne1              = cne1,
-        .traces            = ctx ? ctx->trace : NULL,
+        .traces            = ctx->trace,
     };
 
     if (actual_threads <= 1) {
@@ -1965,6 +1985,7 @@ int hmx_matmul_id_2d_f32(struct htp_context *ctx,
                                          const float *activation,
                                          const uint8_t *permuted_weight,
                                          int m, int k, int n,
+                                         int k_valid,
                                          int ne11,
                                          size_t act_nb1, size_t act_nb2,
                                          size_t dst_nb1, size_t dst_nb2,
@@ -2017,7 +2038,7 @@ int hmx_matmul_id_2d_f32(struct htp_context *ctx,
                            m_padded, n,
                            /*m_block_cost=*/(size_t) n * 3,
                            /*n_block_cost=*/(size_t) m_padded * 2, &m_chunk_n_rows, &n_chunk_n_cols, &vtcm_used)) {
-        FARF(HIGH, "hmx-mm-id-2d: VTCM too small : m %d k %d n %d budget %zu", m_padded, k, n, vtcm_budget);
+        FARF(ERROR, "hmx-mm-id-2d: VTCM too small : m %d k %d n %d budget %zu", m_padded, k, n, vtcm_budget);
         return -1;
     }
 
@@ -2050,7 +2071,7 @@ int hmx_matmul_id_2d_f32(struct htp_context *ctx,
 
         transfer_activation_chunk_gathered_threaded(
             ctx, vtcm_activation, activation, (int) mr, (int) n_rows, k,
-            matrix_rows, cur_a, mapping_stride, ne11, act_nb1, act_nb2, cne1, num_threads);
+            matrix_rows, cur_a, mapping_stride, ne11, act_nb1, act_nb2, cne1, num_threads, k_valid);
 
         for (size_t nc = 0; nc < (size_t) n; nc += n_chunk_n_cols) {
             const size_t n_cols = hex_smin((size_t) n - nc, n_chunk_n_cols);
@@ -2062,15 +2083,10 @@ int hmx_matmul_id_2d_f32(struct htp_context *ctx,
 
             dequantize_x4x2_weight_chunk_to_fp16_tiles(ctx, vtcm_scratch0, vtcm_weight, n_cols, k, row_stride, weight_type, n_k_tiles, n_k_tiles_div, dequant_worker_fn, num_threads);
 
-            {
-                struct htp_thread_trace * tr = ctx ? &ctx->trace[HTP_MAX_NTHREADS] : NULL;
-                htp_trace_event_start(tr, HTP_TRACE_EVT_HMX_COMP, HTP_MAX_NTHREADS);
-                core_dot_chunk_fp16(vtcm_output, vtcm_activation, vtcm_scratch0, vtcm_scales, n_row_tiles, n_col_tiles, k / HMX_FP16_TILE_N_ROWS);
-                htp_trace_event_stop(tr, HTP_TRACE_EVT_HMX_COMP, HTP_MAX_NTHREADS);
-            }
+            core_dot_chunk_fp16(vtcm_output, vtcm_activation, vtcm_scratch0, vtcm_scales, n_row_tiles, n_col_tiles, k / HMX_FP16_TILE_N_ROWS);
 
             transfer_output_chunk_scattered_threaded(
-                ctx, dst, vtcm_output, (int) mr, (int) n_rows, (int) n_cols,
+                ctx, dst + nc, vtcm_output, (int) mr, (int) n_rows, (int) n_cols,
                 matrix_rows, cur_a, mapping_stride, dst_nb1, dst_nb2, cne1, num_threads);
         }
     }
