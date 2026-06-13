@@ -319,8 +319,26 @@ bool server_http_context::init(const common_params & params) {
             }
         } else {
 #if defined(LLAMA_UI_HAS_ASSETS)
+            static auto handle_gzip_header = [](const httplib::Request & req, httplib::Response & res) {
+                if (!llama_ui_use_gzip()) {
+                    // no gzip build, skip
+                    return true;
+                }
+                if (req.get_header_value("Accept-Encoding").find("gzip") == std::string::npos) {
+                    res.status = 415; // unsupported media type
+                    res.set_content("Error: gzip is not supported by this browser", "text/plain");
+                    return false;
+                } else {
+                    res.set_header("Content-Encoding", "gzip");
+                }
+                return true;
+            };
+
             auto serve_asset_cached = [](const std::string & name, bool isolation) {
                 return [name, isolation](const httplib::Request & req, httplib::Response & res) {
+                    if (!handle_gzip_header(req, res)) {
+                        return true; // returns error message
+                    }
                     const llama_ui_asset * a = llama_ui_find_asset(name);
                     if (!a) { res.status = 404; return false; }
                     res.set_header("ETag", a->etag);
@@ -340,7 +358,10 @@ bool server_http_context::init(const common_params & params) {
             };
 
             auto serve_asset_nocache = [](const std::string & name) {
-                return [name](const httplib::Request & /*req*/, httplib::Response & res) {
+                return [name](const httplib::Request & req, httplib::Response & res) {
+                    if (!handle_gzip_header(req, res)) {
+                        return true; // returns error message
+                    }
                     const llama_ui_asset * a = llama_ui_find_asset(name);
                     if (!a) {
                         res.status = 404;

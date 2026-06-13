@@ -16,6 +16,7 @@ set(HF_VERSION        "" CACHE STRING "Version to download (empty = resolve from
 set(HF_ENABLED        "" CACHE STRING "Whether to allow HF Bucket download (ON/OFF)")
 set(BUILD_UI          "" CACHE STRING "Build UI via npm (ON/OFF)")
 set(LLAMA_UI_EMBED    "" CACHE STRING "Path to llama-ui-embed helper")
+set(LLAMA_UI_GZIP     "" CACHE STRING "Apply gzip compress to assets to save bandwidth")
 
 set(DIST_DIR     "${UI_BINARY_DIR}/dist")
 set(SRC_DIST_DIR "${UI_SOURCE_DIR}/dist")
@@ -225,6 +226,33 @@ function(hf_download version out_var out_resolved)
 endfunction()
 
 function(emit_files dist_dir)
+    # If gzip is requested, compress every asset into a parallel _gzip/ tree
+    # the structure stays the same; for ex: /abc/def --> /_gzip/abc/def
+    # embed.cpp will check for _gzip and will pick it up
+    if(LLAMA_UI_GZIP AND EXISTS "${dist_dir}/index.html")
+        find_program(GZIP_EXECUTABLE gzip)
+        if(NOT GZIP_EXECUTABLE)
+            message(WARNING "UI: LLAMA_UI_GZIP requested but gzip not found, embedding uncompressed")
+        else()
+            set(gzip_dir "${dist_dir}/_gzip")
+            file(REMOVE_RECURSE "${gzip_dir}")
+            file(GLOB_RECURSE all_files RELATIVE "${dist_dir}" "${dist_dir}/*")
+            foreach(f ${all_files})
+                get_filename_component(dst_dir "${gzip_dir}/${f}" DIRECTORY)
+                file(MAKE_DIRECTORY "${dst_dir}")
+                execute_process(
+                    COMMAND "${GZIP_EXECUTABLE}" -c "${dist_dir}/${f}"
+                    OUTPUT_FILE "${gzip_dir}/${f}"
+                    RESULT_VARIABLE gz_rc
+                )
+                if(NOT gz_rc EQUAL 0)
+                    message(FATAL_ERROR "UI: gzip failed for ${f}")
+                endif()
+            endforeach()
+            message(STATUS "UI: gzip compression applied (${gzip_dir})")
+        endif()
+    endif()
+
     set(args "${UI_CPP}" "${UI_H}")
     if(EXISTS "${dist_dir}/index.html")
         list(APPEND args "${dist_dir}")

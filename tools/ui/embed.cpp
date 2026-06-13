@@ -1,7 +1,7 @@
 // llama-ui-embed: generate ui.cpp / ui.h that embed UI assets as C arrays.
 //
 // Usage:
-//   llama-ui-embed <out_cpp> <out_h> [<asset_dir>]
+//   llama-ui-embed <out_cpp> <out_h> <asset_dir>
 //
 // Recursively embeds every regular file under <asset_dir>.
 // Asset names are relative paths from <asset_dir> (e.g. "_app/immutable/bundle.HASH.js").
@@ -145,12 +145,15 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
-    const std::string out_cpp = argv[1];
-    const std::string out_h   = argv[2];
-    const std::string in_dir  = argv[3];
+    const std::string out_cpp   = argv[1];
+    const std::string out_h     = argv[2];
+    const std::string asset_dir = argv[3];
+
+    const bool        use_gzip = std::filesystem::exists(asset_dir + "/_gzip");
+    const std::string in_dir   = use_gzip ? (asset_dir + "/_gzip") : asset_dir;
 
     std::vector<asset_entry> assets;
-    if (argc == 4) {
+    if (!in_dir.empty()) {
         const std::filesystem::path dir = in_dir;
 
         std::error_code ec;
@@ -238,7 +241,8 @@ int main(int argc, char ** argv) {
         "    std::string           etag;\n"
         "    std::string           type;\n"
         "};\n\n"
-        "const llama_ui_asset * llama_ui_find_asset(const std::string & name);\n";
+        "const llama_ui_asset * llama_ui_find_asset(const std::string & name);\n"
+        "bool llama_ui_use_gzip();\n";
     h += fmt("const std::array<llama_ui_asset, %d> & llama_ui_get_assets();\n", n_assets);
 
     std::string cpp;
@@ -294,6 +298,7 @@ int main(int argc, char ** argv) {
             "    return empty;\n"
             "}\n";
     }
+    cpp += fmt("bool llama_ui_use_gzip() { return %s; }\n", use_gzip ? "true" : "false");
 
     bool ok = true;
     ok = write_if_different(out_h,   h)   && ok;
