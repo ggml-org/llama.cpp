@@ -538,14 +538,17 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
     const bool can_use_vector_kernel = Q->ne[0] <= 256 && Q->ne[0] % 64 == 0 && Q->ne[0] != 192 && K->ne[1] % FATTN_KQ_STRIDE == 0;
 
 #ifdef GGML_USE_HIP
-    // HIP/ROCm: the TILE/MMA/WMMA FA paths allocate unbounded f16 temp buffers
-    // for quantized KV types (K_f16, V_f16 in launch_fattn). The pool retains
-    // peak allocation size, so the temp buffer VRAM exceeds KV compression savings.
-    // This causes quantized KV to OOM before f16 on the same context length.
-    // Force VEC path which does inline dequant with zero temp buffer overhead.
-    // Trade-off: prefill is slower (sequential query processing).
+    // HIP/ROCm: the TILE/MMA/WMMA FA paths allocate large f16 temp buffers for
+    // quantized KV types (K_f16, V_f16 in launch_fattn). For SMALL batches (decode)
+    // the VEC kernel is preferred: it does inline dequant with zero temp buffer
+    // overhead, it natively supports the TurboQuant types, and it produces a
+    // HIP-graph-safe op stream (no per-call cudaMalloc/cudaFree during capture).
+    // For LARGE batches (prefill) the VEC kernel is far slower (sequential query
+    // processing), so we deliberately fall through to the TILE/MMA path which is
+    // ~3.4x faster; prefill runs eagerly (not captured) so its f16 temp buffer is
+    // allocated/freed raw in launch_fattn without violating graph-capture rules.
     // Limitation: head_dim > 256 cannot use VEC (falls through to TILE).
-    if ((ggml_is_quantized(K->type) || ggml_is_quantized(V->type)) && can_use_vector_kernel) {
+    if ((ggml_is_quantized(K->type) || ggml_is_quantized(V->type)) && can_use_vector_kernel && Q->ne[1] <= 8) {
         return BEST_FATTN_KERNEL_VEC;
     }
 #endif // GGML_USE_HIP

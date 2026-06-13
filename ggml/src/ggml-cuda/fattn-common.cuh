@@ -1298,17 +1298,48 @@ void launch_fattn(
     const int nsm = ggml_cuda_info().devices[id].nsm;
 
 #ifdef GGML_USE_HIP
-    // HIP/ROCm: bypass the memory pool for f16 temp buffers.
-    // The legacy pool (ggml_cuda_pool_leg) retains peak-sized allocations permanently.
-    // For quantized KV dequant, this means the f16 temp buffer stays allocated,
-    // consuming more VRAM than the quantized KV compression saves — causing OOM.
-    // Using raw alloc+free ensures the memory is released after the kernel completes.
+    // HIP/ROCm: the f16 dequant temp buffers for quantized KV need two strategies
+    // depending on whether the current launch is being captured into a HIP graph:
+    //
+    //  * NOT capturing (large prefill batches run eagerly): use raw cudaMalloc/cudaFree
+    //    so the (potentially multi-GB) f16 dequant buffer is released immediately. The
+    //    legacy pool (no VMM on gfx1201) would otherwise retain it at peak size and
+    //    negate the quantized-KV VRAM savings -> OOM.
+    //
+    //  * Capturing (small decode batches captured into a graph): raw cudaMalloc/cudaFree/
+    //    cudaStreamSynchronize are forbidden during capture ("operation not permitted
+    //    when stream is capturing"). Use the memory pool instead. ggml resets graph
+    //    warmup and runs eagerly whenever tensor sizes change, so the pool buffer is
+    //    always warmed at the right size before capture and alloc() reuses it without
+    //    calling cudaMalloc during capture.
+    //
+    // Small batches (Q->ne[1] <= 8) always route through the pool so the warmup run
+    // populates it; these match the decode/speculative cases that get captured.
+    //
+    // Caveat (memory, not correctness): when a captured decode cannot use VEC
+    // (head_dim == 192, or K->ne[1] not a multiple of FATTN_KQ_STRIDE) it falls
+    // through to this TILE/MMA path and pool-allocs the full f16 dequant buffer.
+    // The legacy pool then retains that buffer permanently -- these configs trade
+    // VRAM for graph compatibility. VEC-eligible head dims (e.g. Gemma) never hit
+    // this: their decode uses the VEC kernel, which does not call launch_fattn.
+    cudaStreamCaptureStatus fa_capture_status = cudaStreamCaptureStatusNone;
+    CUDA_CHECK(cudaStreamIsCapturing(main_stream, &fa_capture_status));
+    const bool fa_use_pool = (fa_capture_status != cudaStreamCaptureStatusNone) || (Q->ne[1] <= 8);
+
     struct hip_f16_alloc {
-        half * ptr = nullptr;
-        cudaStream_t stream;
-        hip_f16_alloc(cudaStream_t s) : stream(s) {}
+        half           * ptr  = nullptr;
+        ggml_cuda_pool * mem_pool = nullptr;  // non-null => allocate from the pool (graph-safe)
+        size_t           pool_size = 0;
+        cudaStream_t     stream;
+        hip_f16_alloc(cudaStream_t s, ggml_cuda_pool * p) : mem_pool(p), stream(s) {}
         ~hip_f16_alloc() {
-            if (ptr) {
+            if (!ptr) {
+                return;
+            }
+            if (mem_pool) {
+                // Pool free is plain bookkeeping (no CUDA calls) -> safe during capture.
+                mem_pool->free(ptr, pool_size);
+            } else {
                 // Cast to void: hipStreamSynchronize / hipFree are [[nodiscard]] under
                 // HIP's -Werror policy; we're in a destructor and can't propagate errors.
                 (void) cudaStreamSynchronize(stream);
@@ -1316,11 +1347,15 @@ void launch_fattn(
             }
         }
         void alloc(size_t nelements) {
-            CUDA_CHECK(cudaMalloc(&ptr, nelements * sizeof(half)));
+            if (mem_pool) {
+                ptr = (half *) mem_pool->alloc(nelements * sizeof(half), &pool_size);
+            } else {
+                CUDA_CHECK(cudaMalloc(&ptr, nelements * sizeof(half)));
+            }
         }
     };
-    hip_f16_alloc K_f16(main_stream);
-    hip_f16_alloc V_f16(main_stream);
+    hip_f16_alloc K_f16(main_stream, fa_use_pool ? &pool : nullptr);
+    hip_f16_alloc V_f16(main_stream, fa_use_pool ? &pool : nullptr);
 #else
     ggml_cuda_pool_alloc<half>   K_f16(pool);
     ggml_cuda_pool_alloc<half>   V_f16(pool);
