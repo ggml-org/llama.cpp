@@ -696,7 +696,9 @@ static bool llama_sampler_chain_backend_init(
         ggml_backend_buffer_type_t   buft) {
     auto * chain = (llama_sampler_chain *) smpl->ctx;
 
-    GGML_ASSERT(chain->is_init == false && "llama_sampler_chain_backend_init() called twice");
+    if (chain->is_init) {
+        return true;
+    }
 
     chain->is_init = true;
 
@@ -993,6 +995,7 @@ static void llama_sampler_greedy_backend_apply(
     ggml_set_name(curl, "greedy_argmax");
 
     data->sampled = curl;
+    data->logits  = nullptr;
 }
 
 static struct llama_sampler_i llama_sampler_greedy_i = {
