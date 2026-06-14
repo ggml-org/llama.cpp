@@ -703,7 +703,7 @@ llama_model_loader::llama_model_loader(
         n_tensors = gguf_get_n_tensors(metadata);
     } else {
         n_tensors = weights_map.size();
-        GGML_ASSERT(files.size() != 1 || n_tensors == static_cast<int>(gguf_get_n_tensors(metadata)));
+        GGML_ASSERT(files.size() != 1 || static_cast<int64_t>(n_tensors) == gguf_get_n_tensors(metadata));
     }
 
     fver = (enum llama_fver) gguf_get_version(metadata);
