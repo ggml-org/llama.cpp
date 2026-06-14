@@ -25,7 +25,6 @@ void test_gbnf_generation(testing &t) {
 
         assert_gbnf_equal(t, R"""(
             root ::= "hello"
-            space ::= | " " | "\n"{1,2} [ \t]{0,20}
         )""", gbnf);
     });
 
@@ -40,7 +39,6 @@ void test_gbnf_generation(testing &t) {
 
         assert_gbnf_equal(t, R"""(
             root ::= [a-z]
-            space ::= | " " | "\n"{1,2} [ \t]{0,20}
         )""", gbnf);
     });
 
@@ -55,7 +53,6 @@ void test_gbnf_generation(testing &t) {
 
         assert_gbnf_equal(t, R"""(
             root ::= "hello" " " "world"
-            space ::= | " " | "\n"{1,2} [ \t]{0,20}
         )""", gbnf);
     });
 
@@ -70,7 +67,6 @@ void test_gbnf_generation(testing &t) {
 
         assert_gbnf_equal(t, R"""(
             root ::= "cat" | "dog"
-            space ::= | " " | "\n"{1,2} [ \t]{0,20}
         )""", gbnf);
     });
 
@@ -85,7 +81,6 @@ void test_gbnf_generation(testing &t) {
 
         assert_gbnf_equal(t, R"""(
             root ::= "a"+
-            space ::= | " " | "\n"{1,2} [ \t]{0,20}
         )""", gbnf);
     });
 
@@ -100,7 +95,6 @@ void test_gbnf_generation(testing &t) {
 
         assert_gbnf_equal(t, R"""(
             root ::= "a"*
-            space ::= | " " | "\n"{1,2} [ \t]{0,20}
         )""", gbnf);
     });
 
@@ -115,7 +109,6 @@ void test_gbnf_generation(testing &t) {
 
         assert_gbnf_equal(t, R"""(
             root ::= "hello" " world"?
-            space ::= | " " | "\n"{1,2} [ \t]{0,20}
         )""", gbnf);
     });
 
@@ -130,7 +123,6 @@ void test_gbnf_generation(testing &t) {
 
         assert_gbnf_equal(t, R"""(
             root ::= ([^<] | "<" [^/] | "</" [^t] | "</t" [^a] | "</ta" [^g] | "</tag" [^>])*
-            space ::= | " " | "\n"{1,2} [ \t]{0,20}
         )""", gbnf);
     });
 
@@ -145,7 +137,6 @@ void test_gbnf_generation(testing &t) {
 
         assert_gbnf_equal(t, R"""(
             root ::= ("a" | "b")+
-            space ::= | " " | "\n"{1,2} [ \t]{0,20}
         )""", gbnf);
     });
 
@@ -162,7 +153,6 @@ void test_gbnf_generation(testing &t) {
         assert_gbnf_equal(t, R"""(
             digit ::= [0-9]
             root ::= digit+
-            space ::= | " " | "\n"{1,2} [ \t]{0,20}
         )""", gbnf);
     });
 
@@ -177,7 +167,6 @@ void test_gbnf_generation(testing &t) {
 
         assert_gbnf_equal(t, R"""(
             root ::= "hello\nworld\n!"
-            space ::= | " " | "\n"{1,2} [ \t]{0,20}
         )""", gbnf);
     });
 
@@ -209,7 +198,6 @@ void test_gbnf_generation(testing &t) {
         assert_gbnf_equal(t, R"""(
             child ::= " world"
             root ::= "hello" child
-            space ::= | " " | "\n"{1,2} [ \t]{0,20}
         )""", gbnf);
     });
 
@@ -224,7 +212,6 @@ void test_gbnf_generation(testing &t) {
 
         assert_gbnf_equal(t, R"""(
             root ::= "a" ("b" | "c")
-            space ::= | " " | "\n"{1,2} [ \t]{0,20}
         )""", gbnf);
     });
 
@@ -239,7 +226,6 @@ void test_gbnf_generation(testing &t) {
 
         assert_gbnf_equal(t, R"""(
             root ::= "a" "b" | "c"
-            space ::= | " " | "\n"{1,2} [ \t]{0,20}
         )""", gbnf);
     });
 
@@ -254,7 +240,6 @@ void test_gbnf_generation(testing &t) {
 
         assert_gbnf_equal(t, R"""(
             root ::= ("a" | "b")+
-            space ::= | " " | "\n"{1,2} [ \t]{0,20}
         )""", gbnf);
     });
 
@@ -269,7 +254,6 @@ void test_gbnf_generation(testing &t) {
 
         assert_gbnf_equal(t, R"""(
             root ::= "hello"
-            space ::= | " " | "\n"{1,2} [ \t]{0,20}
         )""", gbnf);
     });
 
@@ -284,7 +268,6 @@ void test_gbnf_generation(testing &t) {
 
         assert_gbnf_equal(t, R"""(
             root ::= "a" "d"
-            space ::= | " " | "\n"{1,2} [ \t]{0,20}
         )""", gbnf);
     });
 
@@ -299,7 +282,6 @@ void test_gbnf_generation(testing &t) {
 
         assert_gbnf_equal(t, R"""(
             root ::= "a"
-            space ::= | " " | "\n"{1,2} [ \t]{0,20}
         )""", gbnf);
     });
 
@@ -314,7 +296,6 @@ void test_gbnf_generation(testing &t) {
 
         assert_gbnf_equal(t, R"""(
             root ::= "a" [a-z]+
-            space ::= | " " | "\n"{1,2} [ \t]{0,20}
         )""", gbnf);
     });
 
@@ -329,7 +310,6 @@ void test_gbnf_generation(testing &t) {
 
         assert_gbnf_equal(t, R"""(
             root ::= "x" ("a" | "b")
-            space ::= | " " | "\n"{1,2} [ \t]{0,20}
         )""", gbnf);
     });
 
@@ -352,7 +332,6 @@ void test_gbnf_generation(testing &t) {
             rule-2 ::= "b" rule-3
             rule-3 ::= "c" rule-4
             rule-4 ::= "d"
-            space ::= | " " | "\n"{1,2} [ \t]{0,20}
         )""", gbnf);
 
         auto gbnf_lazy = build_grammar([&](const common_grammar_builder & builder) {
@@ -364,7 +343,6 @@ void test_gbnf_generation(testing &t) {
             rule-2 ::= "b" rule-3
             rule-3 ::= "c" rule-4
             rule-4 ::= "d"
-            space ::= | " " | "\n"{1,2} [ \t]{0,20}
         )""", gbnf_lazy);
     });
 }
