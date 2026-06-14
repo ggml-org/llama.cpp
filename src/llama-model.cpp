@@ -157,6 +157,8 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
             return new llama_model_command_r(params);
         case LLM_ARCH_COHERE2:
             return new llama_model_cohere2(params);
+        case LLM_ARCH_COHERE2MOE:
+            return new llama_model_cohere2moe(params);
         case LLM_ARCH_DBRX:
             return new llama_model_dbrx(params);
         case LLM_ARCH_OLMO:
@@ -287,6 +289,8 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
             return new llama_model_qwen35moe(params);
         case LLM_ARCH_MISTRAL3:
             return new llama_model_mistral3(params);
+        case LLM_ARCH_EAGLE3:
+            return new llama_model_eagle3(params);
         case LLM_ARCH_MIMO2:
             return new llama_model_mimo2(params);
         case LLM_ARCH_KIMI_LINEAR:
@@ -1465,9 +1469,12 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
     }
     ml.done_getting_tensors();
 
+    // Tied NVFP4 output is valid when no separate LM-head scale tensors are present.
+    // If sidecar scales exist, the output weight must be an actual output tensor.
     GGML_ASSERT(!(output && tok_embd &&
             strcmp(output->name, tok_embd->name) == 0 &&
-            output->type == GGML_TYPE_NVFP4));
+            output->type == GGML_TYPE_NVFP4 &&
+            (output_s || output_in_s)));
     // populate tensors_by_name
     for (auto & [_, ctx_ptr] : ml.ctx_map) {
         for (auto * cur = ggml_get_first_tensor(ctx_ptr.get()); cur != NULL; cur = ggml_get_next_tensor(ctx_ptr.get(), cur)) {
@@ -1842,6 +1849,7 @@ void llama_model::print_info() const {
         }
 
         if (arch == LLM_ARCH_MELLUM ||
+                arch == LLM_ARCH_COHERE2MOE ||
                 arch == LLM_ARCH_QWEN3MOE ||
                 arch == LLM_ARCH_OPENAI_MOE ||
                 arch == LLM_ARCH_QWEN3VLMOE ||
@@ -2238,7 +2246,7 @@ ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
     // TODO: move reranking logic here and generalize
     llm->build_dense_out(dense_2_out_layers, dense_2_out_layers_b, dense_3_out_layers);
 
-    llm->res->set_outputs();
+    llm->res->set_outputs(params);
 
     return llm->res->get_gf();
 }
@@ -2387,6 +2395,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_XVERSE:
         case LLM_ARCH_COMMAND_R:
         case LLM_ARCH_COHERE2:
+        case LLM_ARCH_COHERE2MOE:
         case LLM_ARCH_OLMO:
         case LLM_ARCH_ARCTIC:
         case LLM_ARCH_DEEPSEEK:
@@ -2406,6 +2415,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_ERNIE4_5:
         case LLM_ARCH_ERNIE4_5_MOE:
         case LLM_ARCH_MISTRAL3:
+        case LLM_ARCH_EAGLE3:
         case LLM_ARCH_MISTRAL4:
         case LLM_ARCH_LLAMA_EMBED:
         case LLM_ARCH_MAINCODER:
@@ -2600,8 +2610,9 @@ uint64_t llama_model_n_params(const llama_model * model) {
 
 bool llama_model_has_encoder(const llama_model * model) {
     switch (model->arch) {
-        case LLM_ARCH_T5:        return true;
-        case LLM_ARCH_T5ENCODER: return true;
+        case LLM_ARCH_T5:
+        case LLM_ARCH_T5ENCODER:
+        case LLM_ARCH_EAGLE3:    return true;
         default:                 return false;
     }
 }
@@ -2686,4 +2697,13 @@ void llama_model_base::create_tensor_qkv(llama_layer & layer, int bid,
         layer.wk_b = create_tensor(tn(LLM_TENSOR_ATTN_K, "bias", bid), {n_embd_k_}, TENSOR_NOT_REQUIRED);
         layer.wv_b = create_tensor(tn(LLM_TENSOR_ATTN_V, "bias", bid), {n_embd_v_}, TENSOR_NOT_REQUIRED);
     }
+}
+
+const int32_t * llama_model_target_layer_ids(const struct llama_model * model) {
+    const auto & v = model->target_layer_ids;
+    return v.empty() ? nullptr : v.data();
+}
+
+uint32_t llama_model_target_layer_ids_n(const struct llama_model * model) {
+    return (uint32_t) model->target_layer_ids.size();
 }

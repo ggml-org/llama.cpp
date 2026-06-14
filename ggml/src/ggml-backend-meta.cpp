@@ -776,8 +776,8 @@ static struct ggml_backend_meta_split_state ggml_backend_meta_get_split_state(
         GGML_ASSERT(src_ss[2].axis == GGML_BACKEND_SPLIT_AXIS_1);
         GGML_ASSERT(src_ss[3].axis == GGML_BACKEND_SPLIT_AXIS_1);
         GGML_ASSERT(src_ss[4].axis == GGML_BACKEND_SPLIT_AXIS_1);
-        // state shape is (S_v*S_v*H, K, n_seqs); the heads dim is nested inside axis 0,
-        // so a head-aligned split on the input cache reshapes to axis 0 here (not axis 2).
+        // state shape is [S_v, S_v, H_v, n_seqs] (s0 only); the heads dim is its own axis 2,
+        // so a head-aligned split on the input cache lands on axis 2 here.
         GGML_ASSERT(src_ss[5].axis == GGML_BACKEND_SPLIT_AXIS_2 || src_ss[5].axis == GGML_BACKEND_SPLIT_AXIS_1 || src_ss[5].axis == GGML_BACKEND_SPLIT_AXIS_0);
         return {GGML_BACKEND_SPLIT_AXIS_0, {0}, {1}, 1};
     };

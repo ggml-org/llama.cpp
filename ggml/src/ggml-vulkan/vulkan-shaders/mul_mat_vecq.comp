@@ -4,6 +4,7 @@
 #extension GL_EXT_integer_dot_product : require
 
 #define MMQ
+#define NEEDS_IQ1S_GRID_GPU
 #define B_TYPE block_q8_1_x4
 
 #include "mul_mat_vec_base.glsl"
