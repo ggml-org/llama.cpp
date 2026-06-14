@@ -906,8 +906,6 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
         is_mem_shared = llama_get_ctx_other(ctx_dft) == ctx_tgt;
         chain_heads   = n_mtp_layers > 1 && !is_mem_shared;
 
-        // step35-style chaining uses each trained head exactly once per draft
-        // round, so the draft length is capped at the number of heads
         if (chain_heads) {
             this->params.n_max = std::min(this->params.n_max, n_mtp_layers);
         }
@@ -1179,8 +1177,6 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
                     continue;
                 }
 
-                // chained heads: only the newly appended slot keeps its logits, so the
-                // slot we just sampled stops producing an output on the next head
                 if (chain_heads) {
                     batch.logits[i_last[seq_id]] = false;
                 }
