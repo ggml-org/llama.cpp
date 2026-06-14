@@ -74,6 +74,12 @@ struct htp_matmul_context {
     struct fastdiv_values mm_div_r3;
     struct fastdiv_values mm_div_ne11;
 
+    // Precomputed block-parallel quantization values
+    uint32_t quant_ib_first[MAX_NUM_WORKERS];
+    uint32_t quant_ib_last[MAX_NUM_WORKERS];
+    uint32_t quant_r[MAX_NUM_WORKERS];
+    uint32_t quant_c[MAX_NUM_WORKERS];
+
     // Fields for scattered mapping & HMX support in MUL_MAT_ID
     const uint32_t * matrix_row_counts;
     const struct mmid_row_mapping * matrix_rows;
@@ -2371,7 +2377,7 @@ static void quantize_f32_q8x4x2(unsigned int nth, unsigned int ith, void * data)
     uint8_t * restrict tmp_data = (uint8_t *) spad->data + (spad->size_per_thread * ith);
 
     const size_t src_row_size_padded = hex_round_up(src_row_size, QK_Q8_0x4x2 * sizeof(float));
-    memset(tmp_data, 0, src_row_size_padded);  // zero-out temp row data for padding
+    hvx_splat_f32_a(tmp_data, 0.0f, src_row_size_padded / sizeof(float));  // zero-out temp row data for padding
 
     for (uint32_t i = ir_first; i < ir_last; ++i) {
         hex_l2fetch(src_data, src_row_size, src_row_size, 2);
@@ -2421,7 +2427,7 @@ static void quantize_f32_q8_1x4x2(unsigned int nth, unsigned int ith, void * dat
     uint8_t * restrict tmp_data = (uint8_t *) spad->data + (spad->size_per_thread * ith);
 
     const size_t src_row_size_padded = hex_round_up(src_row_size, QK_Q8_0x4x2 * sizeof(float));
-    memset(tmp_data, 0, src_row_size_padded);  // zero-out temp row data for padding
+    hvx_splat_f32_a(tmp_data, 0.0f, src_row_size_padded / sizeof(float));  // zero-out temp row data for padding
 
     for (uint32_t i = ir_first; i < ir_last; ++i) {
         hex_l2fetch(src_data, src_row_size, src_row_size, 2);
@@ -2436,6 +2442,108 @@ static void quantize_f32_q8_1x4x2(unsigned int nth, unsigned int ith, void * dat
 
     FARF(HIGH, "quantize-f32-q8_1x4: %u/%u : n-rows %u (%u:%u) row-size %u -> %u usec %u\n", ith, nth, nrows, ir_first,
          ir_last, src_row_size, dst_row_size, (unsigned) HAP_perf_qtimer_count_to_us(t2 - t1));
+    htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_A_QUANT, ith);
+}
+
+static void quantize_f32_q8x4x2_block(unsigned int nth, unsigned int ith, void * data) {
+    struct htp_matmul_context * mmctx = data;
+    struct htp_ops_context * octx = mmctx->octx;
+    struct htp_thread_trace * tr = octx->ctx ? &octx->ctx->trace[ith] : NULL;
+    htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_A_QUANT, ith);
+
+    const struct htp_tensor * src = octx->src[1];
+    uint8_t * restrict dst = octx->src1_spad.data;
+    struct htp_spad * spad = &octx->src0_spad;
+
+    const uint32_t ne0 = src->ne[0];
+    const uint32_t qk = QK_Q8_0x4x2;
+    const uint32_t nb = (ne0 + qk - 1) / qk;
+
+    const uint32_t ib_first = mmctx->quant_ib_first[ith];
+    const uint32_t ib_last  = mmctx->quant_ib_last[ith];
+
+    const size_t src_row_size = src->nb[1];
+    const size_t dst_row_size = q8x4x2_row_size(ne0);
+    uint8_t * restrict tmp_data = (uint8_t *) spad->data + (spad->size_per_thread * ith);
+
+    uint32_t r = mmctx->quant_r[ith];
+    uint32_t c = mmctx->quant_c[ith];
+
+    for (uint32_t ib = ib_first; ib < ib_last; ++ib) {
+        const uint8_t * restrict src_ptr = (const uint8_t *) src->data + r * src_row_size + c * qk * sizeof(float);
+        uint8_t * restrict dst_ptr = dst + r * dst_row_size + c * 8 * 1152;
+
+        hex_l2fetch(src_ptr, qk * sizeof(float), qk * sizeof(float), 1);
+
+        if (c == nb - 1) {
+            uint32_t active_elements = ne0 - c * qk;
+            hvx_splat_f32_a(tmp_data, 0.0f, qk);
+            hvx_copy_f32_aa(tmp_data, src_ptr, active_elements);
+        } else {
+            hvx_copy_f32_aa(tmp_data, src_ptr, qk);
+        }
+
+        quantize_block_f32_q8x4((float *) tmp_data + 0, dst_ptr + 0);
+        quantize_block_f32_q8x4((float *) tmp_data + qk/2, dst_ptr + 4 * 1152);
+
+        c++;
+        if (c == nb) {
+            c = 0;
+            r++;
+        }
+    }
+
+    htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_A_QUANT, ith);
+}
+
+static void quantize_f32_q8_1x4x2_block(unsigned int nth, unsigned int ith, void * data) {
+    struct htp_matmul_context * mmctx = data;
+    struct htp_ops_context * octx = mmctx->octx;
+    struct htp_thread_trace * tr = octx->ctx ? &octx->ctx->trace[ith] : NULL;
+    htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_A_QUANT, ith);
+
+    const struct htp_tensor * src = octx->src[1];
+    uint8_t * restrict dst = octx->src1_spad.data;
+    struct htp_spad * spad = &octx->src0_spad;
+
+    const uint32_t ne0 = src->ne[0];
+    const uint32_t qk = QK_Q8_0x4x2;
+    const uint32_t nb = (ne0 + qk - 1) / qk;
+
+    const uint32_t ib_first = mmctx->quant_ib_first[ith];
+    const uint32_t ib_last  = mmctx->quant_ib_last[ith];
+
+    const size_t src_row_size = src->nb[1];
+    const size_t dst_row_size = q8_1x4x2_row_size(ne0);
+    uint8_t * restrict tmp_data = (uint8_t *) spad->data + (spad->size_per_thread * ith);
+
+    uint32_t r = mmctx->quant_r[ith];
+    uint32_t c = mmctx->quant_c[ith];
+
+    for (uint32_t ib = ib_first; ib < ib_last; ++ib) {
+        const uint8_t * restrict src_ptr = (const uint8_t *) src->data + r * src_row_size + c * qk * sizeof(float);
+        uint8_t * restrict dst_ptr = dst + r * dst_row_size + c * 8 * 1280;
+
+        hex_l2fetch(src_ptr, qk * sizeof(float), qk * sizeof(float), 1);
+
+        if (c == nb - 1) {
+            uint32_t active_elements = ne0 - c * qk;
+            hvx_splat_f32_a(tmp_data, 0.0f, qk);
+            hvx_copy_f32_aa(tmp_data, src_ptr, active_elements);
+        } else {
+            hvx_copy_f32_aa(tmp_data, src_ptr, qk);
+        }
+
+        quantize_block_f32_q8_1x1((float *) tmp_data + 0, dst_ptr + 0);
+        quantize_block_f32_q8_1x1((float *) tmp_data + qk/2, dst_ptr + 4 * 1280);
+
+        c++;
+        if (c == nb) {
+            c = 0;
+            r++;
+        }
+    }
+
     htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_A_QUANT, ith);
 }
 
@@ -2666,6 +2774,7 @@ static int op_matmul_hvx(struct htp_ops_context * octx) {
 
     worker_callback_t quant_job_func;
     worker_callback_t matmul_job_func;
+    uint32_t n_quant_jobs = 1;
     if (src1_nrows > 1) {
         if (is_repacked) {
             switch (src0->type) {
@@ -2817,13 +2926,26 @@ static int op_matmul_hvx(struct htp_ops_context * octx) {
             return HTP_STATUS_NO_SUPPORT;
         }
 
-        if (src0->type == HTP_TYPE_Q4_1) {
-            quant_job_func = quantize_f32_q8_1x4x2;
-            src1_row_size  = q8_1x4x2_row_size(ne10);
+        const uint32_t qk = QK_Q8_0x4x2;
+        const uint32_t nb = (ne10 + qk - 1) / qk;
+        const uint32_t total_nb = src1_nrows * nb;
+
+        if (src1_nrows < octx->n_threads) {
+            n_quant_jobs = MIN(total_nb, octx->n_threads);
+            quant_job_func = (src0->type == HTP_TYPE_Q4_1) ? quantize_f32_q8_1x4x2_block : quantize_f32_q8x4x2_block;
+            for (uint32_t ith = 0; ith < n_quant_jobs; ++ith) {
+                uint32_t ib_first = (total_nb * ith) / n_quant_jobs;
+                uint32_t ib_last  = (total_nb * (ith + 1)) / n_quant_jobs;
+                mmctx->quant_ib_first[ith] = ib_first;
+                mmctx->quant_ib_last[ith]  = ib_last;
+                mmctx->quant_r[ith]        = ib_first / nb;
+                mmctx->quant_c[ith]        = ib_first % nb;
+            }
         } else {
-            quant_job_func = quantize_f32_q8x4x2;
-            src1_row_size  = q8x4x2_row_size(ne10);
+            n_quant_jobs = MIN(src1_nrows, octx->n_threads);
+            quant_job_func = (src0->type == HTP_TYPE_Q4_1) ? quantize_f32_q8_1x4x2 : quantize_f32_q8x4x2;
         }
+        src1_row_size = (src0->type == HTP_TYPE_Q4_1) ? q8_1x4x2_row_size(ne10) : q8x4x2_row_size(ne10);
         htp_mminit_spad(octx, dst_row_size, src0_row_size_padded, src1_row_size, src1_nrows, 0);
 
         if (is_repacked) {
@@ -2873,7 +2995,6 @@ static int op_matmul_hvx(struct htp_ops_context * octx) {
         return HTP_STATUS_OK;
 
     if (need_quant) {
-        const uint32_t n_quant_jobs  = MIN(src1_nrows, octx->n_threads);
         mmctx->src1_nrows_per_thread = (src1_nrows + n_quant_jobs - 1) / n_quant_jobs;
         worker_pool_run_func(octx->ctx->worker_pool, quant_job_func, mmctx, n_quant_jobs);
     }
@@ -3060,13 +3181,27 @@ int op_matmul_id(struct htp_ops_context * octx) {
         return HTP_STATUS_NO_SUPPORT;
     }
 
-    if (src0->type == HTP_TYPE_Q4_1) {
-        quant_job_func = quantize_f32_q8_1x4x2;
-        src1_row_size  = q8_1x4x2_row_size(ne10);
+    const uint32_t qk = QK_Q8_0x4x2;
+    const uint32_t nb = (ne10 + qk - 1) / qk;
+    const uint32_t total_nb = src1_nrows * nb;
+
+    uint32_t n_quant_jobs = 1;
+    if (src1_nrows < octx->n_threads) {
+        n_quant_jobs = MIN(total_nb, octx->n_threads);
+        quant_job_func = (src0->type == HTP_TYPE_Q4_1) ? quantize_f32_q8_1x4x2_block : quantize_f32_q8x4x2_block;
+        for (uint32_t ith = 0; ith < n_quant_jobs; ++ith) {
+            uint32_t ib_first = (total_nb * ith) / n_quant_jobs;
+            uint32_t ib_last  = (total_nb * (ith + 1)) / n_quant_jobs;
+            mmctx->quant_ib_first[ith] = ib_first;
+            mmctx->quant_ib_last[ith]  = ib_last;
+            mmctx->quant_r[ith]        = ib_first / nb;
+            mmctx->quant_c[ith]        = ib_first % nb;
+        }
     } else {
-        quant_job_func = quantize_f32_q8x4x2;
-        src1_row_size  = q8x4x2_row_size(ne10);
+        n_quant_jobs = MIN(src1_nrows, octx->n_threads);
+        quant_job_func = (src0->type == HTP_TYPE_Q4_1) ? quantize_f32_q8_1x4x2 : quantize_f32_q8x4x2;
     }
+    src1_row_size  = (src0->type == HTP_TYPE_Q4_1) ? q8_1x4x2_row_size(ne10) : q8x4x2_row_size(ne10);
 
     const size_t src2_spad_size_per_thread = 0; // We moved the mapping to DDR!
     htp_mminit_spad(octx, 0, src0_row_size_padded, src1_row_size, src1_nrows, src2_spad_size_per_thread);
@@ -3182,7 +3317,6 @@ int op_matmul_id(struct htp_ops_context * octx) {
         return HTP_STATUS_OK;
     }
 
-    const uint32_t n_quant_jobs = MIN(src1_nrows, octx->n_threads);
     mmctx->src1_nrows_per_thread = (src1_nrows + n_quant_jobs - 1) / n_quant_jobs;
     worker_pool_run_func(octx->ctx->worker_pool, quant_job_func, mmctx, n_quant_jobs);
 
@@ -3517,16 +3651,29 @@ int op_matmul_qkv(struct htp_ops_context * octx) {
         return HTP_STATUS_NO_SUPPORT;
     }
 
+    const uint32_t qk = QK_Q8_0x4x2;
+    const uint32_t nb = (src1->ne[0] + qk - 1) / qk;
+    const uint32_t total_nb = src1_nrows * nb;
+
     worker_callback_t quant_job_func;
-    if (src0->type == HTP_TYPE_Q4_1) {
-        quant_job_func = quantize_f32_q8_1x4x2;
-        mmctx->src1_nrows_per_thread = q8_1x4x2_row_size(src1->ne[0]);
+    uint32_t n_quant_jobs = 1;
+    if (src1_nrows < octx->n_threads) {
+        n_quant_jobs = MIN(total_nb, octx->n_threads);
+        quant_job_func = (src0->type == HTP_TYPE_Q4_1) ? quantize_f32_q8_1x4x2_block : quantize_f32_q8x4x2_block;
+        for (uint32_t ith = 0; ith < n_quant_jobs; ++ith) {
+            uint32_t ib_first = (total_nb * ith) / n_quant_jobs;
+            uint32_t ib_last  = (total_nb * (ith + 1)) / n_quant_jobs;
+            mmctx->quant_ib_first[ith] = ib_first;
+            mmctx->quant_ib_last[ith]  = ib_last;
+            mmctx->quant_r[ith]        = ib_first / nb;
+            mmctx->quant_c[ith]        = ib_first % nb;
+        }
     } else {
-        quant_job_func = quantize_f32_q8x4x2;
-        mmctx->src1_nrows_per_thread = q8x4x2_row_size(src1->ne[0]);
+        n_quant_jobs = MIN(src1_nrows, octx->n_threads);
+        quant_job_func = (src0->type == HTP_TYPE_Q4_1) ? quantize_f32_q8_1x4x2 : quantize_f32_q8x4x2;
     }
 
-    size_t src1_row_size = mmctx->src1_nrows_per_thread;
+    size_t src1_row_size = (src0->type == HTP_TYPE_Q4_1) ? q8_1x4x2_row_size(src1->ne[0]) : q8x4x2_row_size(src1->ne[0]);
 
     // Set up scratchpads
     if (is_repacked) {
@@ -3592,7 +3739,6 @@ int op_matmul_qkv(struct htp_ops_context * octx) {
         return HTP_STATUS_OK;
 
     // Run quantization once
-    const uint32_t n_quant_jobs  = MIN(src1_nrows, octx->n_threads);
     mmctx->src1_nrows_per_thread = (src1_nrows + n_quant_jobs - 1) / n_quant_jobs;
     worker_pool_run_func(octx->ctx->worker_pool, quant_job_func, mmctx, n_quant_jobs);
 
@@ -3649,16 +3795,29 @@ int op_matmul_ffn(struct htp_ops_context * octx) {
         return HTP_STATUS_NO_SUPPORT;
     }
 
+    const uint32_t qk = QK_Q8_0x4x2;
+    const uint32_t nb = (src1->ne[0] + qk - 1) / qk;
+    const uint32_t total_nb = src1_nrows * nb;
+
     worker_callback_t quant_job_func;
-    if (src0->type == HTP_TYPE_Q4_1) {
-        quant_job_func = quantize_f32_q8_1x4x2;
-        mmctx->src1_nrows_per_thread = q8_1x4x2_row_size(src1->ne[0]);
+    uint32_t n_quant_jobs = 1;
+    if (src1_nrows < octx->n_threads) {
+        n_quant_jobs = MIN(total_nb, octx->n_threads);
+        quant_job_func = (src0->type == HTP_TYPE_Q4_1) ? quantize_f32_q8_1x4x2_block : quantize_f32_q8x4x2_block;
+        for (uint32_t ith = 0; ith < n_quant_jobs; ++ith) {
+            uint32_t ib_first = (total_nb * ith) / n_quant_jobs;
+            uint32_t ib_last  = (total_nb * (ith + 1)) / n_quant_jobs;
+            mmctx->quant_ib_first[ith] = ib_first;
+            mmctx->quant_ib_last[ith]  = ib_last;
+            mmctx->quant_r[ith]        = ib_first / nb;
+            mmctx->quant_c[ith]        = ib_first % nb;
+        }
     } else {
-        quant_job_func = quantize_f32_q8x4x2;
-        mmctx->src1_nrows_per_thread = q8x4x2_row_size(src1->ne[0]);
+        n_quant_jobs = MIN(src1_nrows, octx->n_threads);
+        quant_job_func = (src0->type == HTP_TYPE_Q4_1) ? quantize_f32_q8_1x4x2 : quantize_f32_q8x4x2;
     }
 
-    size_t src1_row_size = mmctx->src1_nrows_per_thread;
+    size_t src1_row_size = (src0->type == HTP_TYPE_Q4_1) ? q8_1x4x2_row_size(src1->ne[0]) : q8x4x2_row_size(src1->ne[0]);
 
     // Set up scratchpads
     if (is_repacked) {
@@ -3715,7 +3874,6 @@ int op_matmul_ffn(struct htp_ops_context * octx) {
         return HTP_STATUS_OK;
 
     // Run quantization once
-    const uint32_t n_quant_jobs  = MIN(src1_nrows, octx->n_threads);
     mmctx->src1_nrows_per_thread = (src1_nrows + n_quant_jobs - 1) / n_quant_jobs;
     worker_pool_run_func(octx->ctx->worker_pool, quant_job_func, mmctx, n_quant_jobs);
 
