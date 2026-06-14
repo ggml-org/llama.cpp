@@ -2280,7 +2280,8 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
                 clean_spaces = false;
                 ignore_merges = true;
             } else if (
-                tokenizer_pre == "tiny_aya") {
+                tokenizer_pre == "tiny_aya" ||
+                tokenizer_pre == "cohere2moe") {
                 pre_type = LLAMA_VOCAB_PRE_TYPE_TINY_AYA;
                 clean_spaces = false;
             } else if (
