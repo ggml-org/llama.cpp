@@ -31,7 +31,7 @@ jobs:
   android-ndk-snapdragon:
     runs-on: ubuntu-latest
     container:
-      image: 'ghcr.io/snapdragon-toolchain/arm64-android:v0.3'
+      image: 'ghcr.io/snapdragon-toolchain/arm64-android:v0.7'
     defaults:
       run:
         shell: bash
@@ -61,7 +61,7 @@ jobs:
   linux-iot-snapdragon:
     runs-on: ubuntu-latest
     container:
-      image: 'ghcr.io/snapdragon-toolchain/arm64-linux:v0.1'
+      image: 'ghcr.io/snapdragon-toolchain/arm64-linux:v0.7'
     defaults:
       run:
         shell: bash

@@ -14,6 +14,7 @@
 #include <mutex>
 #include <condition_variable>
 #include <cstring>
+#include <cstdlib>
 #include <atomic>
 #include <chrono>
 #include <queue>
@@ -156,6 +157,13 @@ void server_model_meta::update_args(common_preset_context & ctx_preset, std::str
     // TODO: maybe validate preset before rendering ?
     // render args
     args = preset.to_args(bin_path);
+
+    // unified binary dispatches by subcommand, re-inject it right after the
+    // binary path so the child starts as 'llama serve ...' not 'llama ...'
+    const char * app_cmd = std::getenv("LLAMA_APP_CMD");
+    if (app_cmd != nullptr && app_cmd[0] != '\0' && !bin_path.empty()) {
+        args.insert(args.begin() + 1, app_cmd);
+    }
 }
 
 void server_model_meta::update_caps() {
@@ -169,7 +177,8 @@ void server_model_meta::update_caps() {
             "LLAMA_ARG_HF_REPO",
             "LLAMA_ARG_HF_REPO_FILE",
         });
-        params.offline = true; // avoid any unwanted network call during capability detection
+        params.offline = true;
+        // params.skip_download = true; // TODO: ideally, we should validate the model here, but it takes too much time
         common_params_handle_models(params, LLAMA_EXAMPLE_SERVER);
         if (params.mmproj.path.empty()) {
             multimodal = { false, false };
@@ -360,18 +369,19 @@ void server_models::load_models() {
         // FIRST LOAD: add all models, then unlock for autoloading
         for (const auto & [name, preset] : final_presets) {
             server_model_meta meta{
-                /* preset       */ preset,
-                /* name         */ name,
-                /* aliases      */ {},
-                /* tags         */ {},
-                /* port         */ 0,
-                /* status       */ SERVER_MODEL_STATUS_UNLOADED,
-                /* last_used    */ 0,
-                /* args         */ std::vector<std::string>(),
-                /* loaded_info  */ {},
-                /* exit_code    */ 0,
-                /* stop_timeout */ DEFAULT_STOP_TIMEOUT,
-                /* multimodal   */ mtmd_caps{false, false},
+                /* preset        */ preset,
+                /* name          */ name,
+                /* aliases       */ {},
+                /* tags          */ {},
+                /* port          */ 0,
+                /* status        */ SERVER_MODEL_STATUS_UNLOADED,
+                /* last_used     */ 0,
+                /* args          */ std::vector<std::string>(),
+                /* loaded_info   */ {},
+                /* exit_code     */ 0,
+                /* stop_timeout  */ DEFAULT_STOP_TIMEOUT,
+                /* multimodal    */ mtmd_caps{false, false},
+                /* need_download */ false,
             };
             add_model(std::move(meta));
         }
@@ -513,18 +523,19 @@ void server_models::load_models() {
         for (const auto & [name, preset] : final_presets) {
             if (mapping.find(name) == mapping.end()) {
                 server_model_meta meta{
-                    /* preset       */ preset,
-                    /* name         */ name,
-                    /* aliases      */ {},
-                    /* tags         */ {},
-                    /* port         */ 0,
-                    /* status       */ SERVER_MODEL_STATUS_UNLOADED,
-                    /* last_used    */ 0,
-                    /* args         */ std::vector<std::string>(),
-                    /* loaded_info  */ {},
-                    /* exit_code    */ 0,
-                    /* stop_timeout */ DEFAULT_STOP_TIMEOUT,
-                    /* multimodal   */ mtmd_caps{false, false},
+                    /* preset        */ preset,
+                    /* name          */ name,
+                    /* aliases       */ {},
+                    /* tags          */ {},
+                    /* port          */ 0,
+                    /* status        */ SERVER_MODEL_STATUS_UNLOADED,
+                    /* last_used     */ 0,
+                    /* args          */ std::vector<std::string>(),
+                    /* loaded_info   */ {},
+                    /* exit_code     */ 0,
+                    /* stop_timeout  */ DEFAULT_STOP_TIMEOUT,
+                    /* multimodal    */ mtmd_caps{false, false},
+                    /* need_download */ false,
                 };
                 add_model(std::move(meta));
                 newly_added.push_back(name);
@@ -1203,6 +1214,7 @@ void server_models_routes::init_routes() {
                 // Deprecated: use ui_settings instead (kept for backward compat)
                 {"webui_settings",  webui_settings},
                 {"build_info",     std::string(llama_build_info())},
+                {"cors_proxy_enabled", params.ui_mcp_proxy || params.webui_mcp_proxy},
             });
             return res;
         }
@@ -1298,14 +1310,15 @@ void server_models_routes::init_routes() {
             };
 
             json model_info = json {
-                {"id",           meta.name},
-                {"aliases",      meta.aliases},
-                {"tags",         meta.tags},
-                {"object",       "model"},    // for OAI-compat
-                {"owned_by",     "llamacpp"}, // for OAI-compat
-                {"created",      t},          // for OAI-compat
-                {"status",       status},
-                {"architecture", architecture},
+                {"id",            meta.name},
+                {"aliases",       meta.aliases},
+                {"tags",          meta.tags},
+                {"object",        "model"},    // for OAI-compat
+                {"owned_by",      "llamacpp"}, // for OAI-compat
+                {"created",       t},          // for OAI-compat
+                {"status",        status},
+                {"architecture",  architecture},
+                {"need_download", meta.need_download},
                 // TODO: add other fields, may require reading GGUF metadata
             };
 

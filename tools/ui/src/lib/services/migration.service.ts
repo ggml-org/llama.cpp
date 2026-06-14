@@ -119,7 +119,8 @@ const localStorageMigration: Migration = {
 			// Only migrate if new key doesn't already exist
 			const newValue = localStorage.getItem(newKey);
 			if (newValue !== null) {
-				console.log(`[Migration] localStorage: ${newKey} already exists, skipping`);
+				if (import.meta.env.DEV && import.meta.env.VITE_DEBUG)
+					console.log(`[Migration] localStorage: ${newKey} already exists, skipping`);
 				continue;
 			}
 
@@ -127,9 +128,11 @@ const localStorageMigration: Migration = {
 			if (oldValue !== null) {
 				localStorage.setItem(newKey, oldValue);
 				// Keep old key for downgrade compatibility - DO NOT DELETE
-				console.log(
-					`[Migration] localStorage: copied ${deprecatedKey} → ${newKey} (preserved old)`
-				);
+				if (import.meta.env.DEV && import.meta.env.VITE_DEBUG) {
+					console.log(
+						`[Migration] localStorage: copied ${deprecatedKey} → ${newKey} (preserved old)`
+					);
+				}
 			}
 		}
 	}
@@ -146,7 +149,8 @@ const idxdbMigration: Migration = {
 	async run(): Promise<void> {
 		const oldDbNames = await Dexie.getDatabaseNames();
 		if (!oldDbNames.includes(DB_APP_NAME_DEPRECATED)) {
-			console.log('[Migration] IndexedDB: no old database found, skipping');
+			if (import.meta.env.DEV && import.meta.env.VITE_DEBUG)
+				console.log('[Migration] IndexedDB: no old database found, skipping');
 			return;
 		}
 
@@ -155,11 +159,13 @@ const idxdbMigration: Migration = {
 		newDb.version(1).stores(IDXDB_STORES);
 		const existingConvs = await newDb.table(IDXDB_TABLES.conversations).count();
 		if (existingConvs > 0) {
-			console.log('[Migration] IndexedDB: new database already has data, skipping');
+			if (import.meta.env.DEV && import.meta.env.VITE_DEBUG)
+				console.log('[Migration] IndexedDB: new database already has data, skipping');
 			return;
 		}
 
-		console.log('[Migration] IndexedDB: copying from', DB_APP_NAME_DEPRECATED);
+		if (import.meta.env.DEV && import.meta.env.VITE_DEBUG)
+			console.log('[Migration] IndexedDB: copying from', DB_APP_NAME_DEPRECATED);
 
 		const oldDb = new Dexie(DB_APP_NAME_DEPRECATED);
 		oldDb.version(1).stores(IDXDB_STORES);
@@ -169,15 +175,18 @@ const idxdbMigration: Migration = {
 
 		if (conversations.length > 0) {
 			await newDb.table(IDXDB_TABLES.conversations).bulkAdd(conversations);
-			console.log(`[Migration] IndexedDB: copied ${conversations.length} conversations`);
+			if (import.meta.env.DEV && import.meta.env.VITE_DEBUG)
+				console.log(`[Migration] IndexedDB: copied ${conversations.length} conversations`);
 		}
 		if (messages.length > 0) {
 			await newDb.table(IDXDB_TABLES.messages).bulkAdd(messages);
-			console.log(`[Migration] IndexedDB: copied ${messages.length} messages`);
+			if (import.meta.env.DEV && import.meta.env.VITE_DEBUG)
+				console.log(`[Migration] IndexedDB: copied ${messages.length} messages`);
 		}
 
 		// Non-destructive: DO NOT delete old database - keep for downgrade compatibility
-		console.log('[Migration] IndexedDB: preserved old database for downgrade compatibility');
+		if (import.meta.env.DEV && import.meta.env.VITE_DEBUG)
+			console.log('[Migration] IndexedDB: preserved old database for downgrade compatibility');
 	}
 };
 
@@ -419,7 +428,8 @@ const legacyMessageMigration: Migration = {
 			}
 		}
 
-		console.log(`[Migration] Legacy messages: migrated ${migratedCount} messages`);
+		if (import.meta.env.DEV && import.meta.env.VITE_DEBUG)
+			console.log(`[Migration] Legacy messages: migrated ${migratedCount} messages`);
 	}
 };
 
@@ -434,7 +444,8 @@ const themeMigration: Migration = {
 	async run(): Promise<void> {
 		const legacyTheme = localStorage.getItem('theme');
 		if (legacyTheme === null) {
-			console.log('[Migration] Theme: no legacy theme key found, skipping');
+			if (import.meta.env.DEV && import.meta.env.VITE_DEBUG)
+				console.log('[Migration] Theme: no legacy theme key found, skipping');
 			return;
 		}
 
@@ -443,7 +454,8 @@ const themeMigration: Migration = {
 		const config = configRaw ? JSON.parse(configRaw) : {};
 
 		if (SETTINGS_KEYS.THEME in config) {
-			console.log('[Migration] Theme: config already has theme, skipping');
+			if (import.meta.env.DEV && import.meta.env.VITE_DEBUG)
+				console.log('[Migration] Theme: config already has theme, skipping');
 			return;
 		}
 
@@ -451,17 +463,43 @@ const themeMigration: Migration = {
 		localStorage.setItem(CONFIG_LOCALSTORAGE_KEY, JSON.stringify(config));
 
 		// Non-destructive: DO NOT delete legacy theme key - keep for downgrade compatibility
-		console.log(`[Migration] Theme: copied standalone theme to config (preserved old key)`);
+		if (import.meta.env.DEV && import.meta.env.VITE_DEBUG)
+			console.log(`[Migration] Theme: copied standalone theme to config (preserved old key)`);
 	}
 };
 
 // Migration Registry & Runner
 
+const CUSTOM_JSON_MIGRATION_ID = 'custom-json-key-v1';
+
+const customJsonKeyMigration: Migration = {
+	id: CUSTOM_JSON_MIGRATION_ID,
+	description: 'Copy legacy custom config key to customJson (non-destructive)',
+
+	async run(): Promise<void> {
+		const configRaw = localStorage.getItem(CONFIG_LOCALSTORAGE_KEY);
+		if (configRaw === null) return;
+
+		const config = JSON.parse(configRaw);
+
+		if (!('custom' in config)) return;
+		if (SETTINGS_KEYS.CUSTOM_JSON in config) return;
+
+		config[SETTINGS_KEYS.CUSTOM_JSON] = config.custom;
+		localStorage.setItem(CONFIG_LOCALSTORAGE_KEY, JSON.stringify(config));
+
+		// Non-destructive: keep the legacy custom key for downgrade compatibility
+		if (import.meta.env.DEV && import.meta.env.VITE_DEBUG)
+			console.log(`[Migration] Custom JSON: copied custom to customJson (preserved old key)`);
+	}
+};
+
 const migrations: Migration[] = [
 	localStorageMigration,
 	idxdbMigration,
 	legacyMessageMigration,
-	themeMigration
+	themeMigration,
+	customJsonKeyMigration
 ];
 
 export const MigrationService = {
@@ -491,7 +529,8 @@ export const MigrationService = {
 	 */
 	resetState(): void {
 		localStorage.removeItem(MIGRATION_STATE_KEY);
-		console.log('[Migration] State reset - all migrations will run again');
+		if (import.meta.env.DEV && import.meta.env.VITE_DEBUG)
+			console.log('[Migration] State reset - all migrations will run again');
 	},
 
 	/**
@@ -500,25 +539,30 @@ export const MigrationService = {
 	 */
 	async runAllMigrations(): Promise<void> {
 		const state = getMigrationState();
-		console.log('[Migration] Starting migration run, state:', state);
+		if (import.meta.env.DEV && import.meta.env.VITE_DEBUG)
+			console.log('[Migration] Starting migration run, state:', state);
 
 		for (const migration of migrations) {
 			if (isMigrationCompleted(migration.id)) {
-				console.log(`[Migration] ${migration.id}: already completed, skipping`);
+				if (import.meta.env.DEV && import.meta.env.VITE_DEBUG)
+					console.log(`[Migration] ${migration.id}: already completed, skipping`);
 				continue;
 			}
 
 			try {
-				console.log(`[Migration] ${migration.id}: running...`);
+				if (import.meta.env.DEV && import.meta.env.VITE_DEBUG)
+					console.log(`[Migration] ${migration.id}: running...`);
 				await migration.run();
 				markMigrationCompleted(migration.id);
-				console.log(`[Migration] ${migration.id}: completed successfully`);
+				if (import.meta.env.DEV && import.meta.env.VITE_DEBUG)
+					console.log(`[Migration] ${migration.id}: completed successfully`);
 			} catch (error) {
 				console.error(`[Migration] ${migration.id}: failed`, error);
 				markMigrationFailed(migration.id);
 			}
 		}
 
-		console.log('[Migration] All migrations complete');
+		if (import.meta.env.DEV && import.meta.env.VITE_DEBUG)
+			console.log('[Migration] All migrations complete');
 	}
 };

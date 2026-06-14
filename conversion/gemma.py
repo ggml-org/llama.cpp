@@ -614,7 +614,7 @@ class Gemma3NModel(Gemma3Model):
         yield from super().modify_tensors(data_torch, name, bid)
 
 
-@ModelBase.register("Gemma4ForConditionalGeneration")
+@ModelBase.register("Gemma4ForConditionalGeneration", "Gemma4ForCausalLM")
 class Gemma4Model(Gemma3Model):
     model_arch = gguf.MODEL_ARCH.GEMMA4
 
@@ -789,6 +789,16 @@ class Gemma4UnifiedModel(Gemma4Model):
 class Gemma4AssistantModel(Gemma4Model):
     model_arch = gguf.MODEL_ARCH.GEMMA4_ASSISTANT
 
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, gen = item
+
+        if "masked_embedding" in name:
+            logger.debug(f"Skipping get tensor {name!r} in safetensors so that convert can end normally.")
+            return None
+
+        return super().filter_tensors(item)
+
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
         self.gguf_writer.add_embedding_length_out(self.hparams["backbone_hidden_size"])
@@ -817,14 +827,16 @@ class Gemma4VisionAudioModel(MmprojModel):
         super().set_gguf_parameters()
 
         # vision params
+        assert self.hparams_vision is not None
         self.gguf_writer.add_clip_vision_projector_type(gguf.VisionProjectorType.GEMMA4V)
-        self.gguf_writer.add_vision_attention_layernorm_eps(self.hparams.get("layer_norm_eps", 1e-6))
+        self.gguf_writer.add_vision_attention_layernorm_eps(self.hparams_vision.get("layer_norm_eps", 1e-6))
 
         # audio params
-        if self.hparams_audio:
+        if self.has_audio_encoder:
+            assert self.hparams_audio is not None
             self.gguf_writer.add_clip_audio_projector_type(gguf.VisionProjectorType.GEMMA4A)
             self.gguf_writer.add_audio_num_mel_bins(self.hparams_audio["feat_in"])
-            self.gguf_writer.add_audio_attention_layernorm_eps(1e-5)
+            self.gguf_writer.add_audio_attention_layernorm_eps(self.hparams_audio.get("layer_norm_eps", 1e-6))
 
     def is_audio_tensor(self, name: str) -> bool:
         return "audio_tower" in name or "embed_audio" in name

@@ -20,9 +20,7 @@ export default ts.config(
 	prettier,
 	...svelte.configs.prettier,
 	{
-		languageOptions: {
-			globals: { ...globals.browser, ...globals.node }
-		},
+		languageOptions: { globals: { ...globals.browser, ...globals.node } },
 		rules: {
 			// typescript-eslint strongly recommend that you do not use the no-undef lint rule on TypeScript projects.
 			// see: https://typescript-eslint.io/troubleshooting/faqs/eslint/#i-get-errors-from-the-no-undef-rule-about-global-variables-not-being-defined-even-though-there-are-no-typescript-errors
@@ -30,6 +28,7 @@ export default ts.config(
 			'svelte/no-at-html-tags': 'off',
 			// This app uses hash-based routing (#/) where resolve() from $app/paths does not apply
 			'svelte/no-navigation-without-resolve': 'off',
+
 			// Enforce empty line at end of file
 			'eol-last': 'error'
 		}
@@ -46,8 +45,15 @@ export default ts.config(
 		}
 	},
 	{
-		// Exclude Storybook files from main ESLint rules
-		ignores: ['.storybook/**/*']
+		// Exclude generated build output and Storybook files from ESLint
+		ignores: [
+			'dist/**',
+			'build/**',
+			'.svelte-kit/**',
+			'test-results/**',
+			'.storybook/**/*',
+			'src/lib/services/sandbox-worker.js'
+		]
 	},
 	storybook.configs['flat/recommended']
 );

@@ -45,6 +45,46 @@ typedef void (* fattn_kernel_t)(
 typedef float (*vec_dot_KQ_t)(
     const char * __restrict__ K_c, const void * __restrict__ Q_v, const int * __restrict__ Q_q8 , const void * __restrict__ Q_ds);
 
+struct ggml_cuda_flash_attn_ext_f16_extra_data {
+    uintptr_t K;
+    uintptr_t V;
+    uintptr_t end;
+};
+
+static inline ggml_cuda_flash_attn_ext_f16_extra_data ggml_cuda_flash_attn_ext_get_f16_extra_data(
+        const ggml_tensor * dst, const bool need_f16_K, const bool need_f16_V) {
+    GGML_ASSERT(dst->op == GGML_OP_FLASH_ATTN_EXT);
+
+    const ggml_tensor * K = dst->src[1];
+    const ggml_tensor * V = dst->src[2];
+
+    GGML_ASSERT(K != nullptr);
+    GGML_ASSERT(V != nullptr);
+
+    const bool V_is_K_view = V->view_src && (V->view_src == K || (V->view_src == K->view_src && V->view_offs == K->view_offs));
+
+    ggml_cuda_flash_attn_ext_f16_extra_data data = {};
+    data.end = (uintptr_t) dst->data + ggml_nbytes(dst);
+
+    if (need_f16_K && K->type != GGML_TYPE_F16) {
+        data.end = GGML_PAD(data.end, 128);
+        data.K   = data.end;
+        data.end += ggml_nelements(K)*ggml_type_size(GGML_TYPE_F16);
+    }
+
+    if (need_f16_V && V->type != GGML_TYPE_F16) {
+        if (V_is_K_view) {
+            data.V = data.K;
+        } else {
+            data.end = GGML_PAD(data.end, 128);
+            data.V   = data.end;
+            data.end += ggml_nelements(V)*ggml_type_size(GGML_TYPE_F16);
+        }
+    }
+
+    return data;
+}
+
 template <int D, int nthreads>
 static __device__ __forceinline__ float vec_dot_fattn_vec_KQ_f16(
     const char * __restrict__ K_c, const void * __restrict__ Q_v, const int * __restrict__ Q_q8 , const void * __restrict__ Q_ds_v) {
@@ -987,6 +1027,7 @@ static __global__ void flash_attn_mask_to_KV_max(
     if (tid < WARP_SIZE) {
         buf_iw[tid] = 1;
     }
+    ggml_cuda_pdl_sync();
     __syncthreads();
 
     int KV_max_sj = (ne30 - 1) * FATTN_KQ_STRIDE;
@@ -1028,8 +1069,8 @@ static __global__ void flash_attn_mask_to_KV_max(
 template<int D, int ncols1, int ncols2> // D == head size
 __launch_bounds__(D, 1)
 static __global__ void flash_attn_stream_k_fixup_uniform(
-        float * __restrict__ dst,
-        const float2 * __restrict__ dst_fixup,
+        float * dst_ptr,
+        const float2 * dst_fixup_ptr,
         const int ne01, const int ne02,
         const int ne12, const int nblocks_stream_k,
         const int gqa_ratio,
@@ -1038,6 +1079,9 @@ static __global__ void flash_attn_stream_k_fixup_uniform(
         const uint3 fd_iter_j_z,
         const uint3 fd_iter_j) {
     constexpr int ncols = ncols1*ncols2;
+    ggml_cuda_pdl_lc();
+    float        * GGML_CUDA_RESTRICT dst       = dst_ptr;
+    const float2 * GGML_CUDA_RESTRICT dst_fixup = dst_fixup_ptr;
 
     const int tile_idx = blockIdx.x; // One block per output tile.
     const int j        = blockIdx.y;
@@ -1069,6 +1113,7 @@ static __global__ void flash_attn_stream_k_fixup_uniform(
 
     dst += sequence*ne02*ne01*D + jt*ne02*(ncols1*D) + zt_Q*D + (j*ne02 + c)*D + tid;
 
+    ggml_cuda_pdl_sync();
     // Load the partial result that needs a fixup
     float dst_val = *dst;
     float max_val;
@@ -1108,8 +1153,8 @@ static __global__ void flash_attn_stream_k_fixup_uniform(
 template <int D, int ncols1, int ncols2> // D == head size
 __launch_bounds__(D, 1)
 static __global__ void flash_attn_stream_k_fixup_general(
-        float * __restrict__ dst,
-        const float2 * __restrict__ dst_fixup,
+        float * dst_ptr,
+        const float2 * dst_fixup_ptr,
         const int ne01, const int ne02,
         const int gqa_ratio,
         const int total_work,
@@ -1117,6 +1162,8 @@ static __global__ void flash_attn_stream_k_fixup_general(
         const uint3 fd_iter_k_j_z,
         const uint3 fd_iter_k_j,
         const uint3 fd_iter_k) {
+    float        * GGML_CUDA_RESTRICT dst       = dst_ptr;
+    const float2 * GGML_CUDA_RESTRICT dst_fixup = dst_fixup_ptr;
     constexpr int ncols = ncols1*ncols2;
 
     const int bidx0 = blockIdx.x;
@@ -1160,6 +1207,7 @@ static __global__ void flash_attn_stream_k_fixup_general(
     float dst_val = 0.0f;
     float max_val = 0.0f;
     float rowsum  = 0.0f;
+    ggml_cuda_pdl_sync();
     {
         dst_val = *dst;
 
@@ -1214,10 +1262,14 @@ static __global__ void flash_attn_stream_k_fixup_general(
 template<int D> // D == head size
 __launch_bounds__(D, 1)
 static __global__ void flash_attn_combine_results(
-        const float  * __restrict__ VKQ_parts,
-        const float2 * __restrict__ VKQ_meta,
-        float * __restrict__ dst,
+        const float  * VKQ_parts_ptr,
+        const float2 * VKQ_meta_ptr,
+        float * dst_ptr,
         const int parallel_blocks) {
+    ggml_cuda_pdl_lc();
+    const float  * GGML_CUDA_RESTRICT VKQ_parts = VKQ_parts_ptr;
+    const float2 * GGML_CUDA_RESTRICT VKQ_meta  = VKQ_meta_ptr;
+    float        * GGML_CUDA_RESTRICT dst       = dst_ptr;
     // Dimension 0: threadIdx.x
     // Dimension 1: blockIdx.x
     // Dimension 2: blockIdx.y
@@ -1241,6 +1293,7 @@ static __global__ void flash_attn_combine_results(
     __builtin_assume(tid < D);
 
     extern __shared__ float2 meta[];
+    ggml_cuda_pdl_sync();
     for (int i = tid; i < 2*parallel_blocks; i += D) {
         ((float *) meta)[i] = ((const float *)VKQ_meta) [i];
     }
@@ -1297,69 +1350,9 @@ void launch_fattn(
     const int cc  = ggml_cuda_info().devices[id].cc;
     const int nsm = ggml_cuda_info().devices[id].nsm;
 
-#ifdef GGML_USE_HIP
-    // HIP/ROCm: the f16 dequant temp buffers for quantized KV need two strategies
-    // depending on whether the current launch is being captured into a HIP graph:
-    //
-    //  * NOT capturing (large prefill batches run eagerly): use raw cudaMalloc/cudaFree
-    //    so the (potentially multi-GB) f16 dequant buffer is released immediately. The
-    //    legacy pool (no VMM on gfx1201) would otherwise retain it at peak size and
-    //    negate the quantized-KV VRAM savings -> OOM.
-    //
-    //  * Capturing (small decode batches captured into a graph): raw cudaMalloc/cudaFree/
-    //    cudaStreamSynchronize are forbidden during capture ("operation not permitted
-    //    when stream is capturing"). Use the memory pool instead. ggml resets graph
-    //    warmup and runs eagerly whenever tensor sizes change, so the pool buffer is
-    //    always warmed at the right size before capture and alloc() reuses it without
-    //    calling cudaMalloc during capture.
-    //
-    // Small batches (Q->ne[1] <= 8) always route through the pool so the warmup run
-    // populates it; these match the decode/speculative cases that get captured.
-    //
-    // Caveat (memory, not correctness): when a captured decode cannot use VEC
-    // (head_dim == 192, or K->ne[1] not a multiple of FATTN_KQ_STRIDE) it falls
-    // through to this TILE/MMA path and pool-allocs the full f16 dequant buffer.
-    // The legacy pool then retains that buffer permanently -- these configs trade
-    // VRAM for graph compatibility. VEC-eligible head dims (e.g. Gemma) never hit
-    // this: their decode uses the VEC kernel, which does not call launch_fattn.
-    cudaStreamCaptureStatus fa_capture_status = cudaStreamCaptureStatusNone;
-    CUDA_CHECK(cudaStreamIsCapturing(main_stream, &fa_capture_status));
-    const bool fa_use_pool = (fa_capture_status != cudaStreamCaptureStatusNone) || (Q->ne[1] <= 8);
+    const ggml_cuda_flash_attn_ext_f16_extra_data f16_extra =
+        ggml_cuda_flash_attn_ext_get_f16_extra_data(KQV, need_f16_K, need_f16_V);
 
-    struct hip_f16_alloc {
-        half           * ptr  = nullptr;
-        ggml_cuda_pool * mem_pool = nullptr;  // non-null => allocate from the pool (graph-safe)
-        size_t           pool_size = 0;
-        cudaStream_t     stream;
-        hip_f16_alloc(cudaStream_t s, ggml_cuda_pool * p) : mem_pool(p), stream(s) {}
-        ~hip_f16_alloc() {
-            if (!ptr) {
-                return;
-            }
-            if (mem_pool) {
-                // Pool free is plain bookkeeping (no CUDA calls) -> safe during capture.
-                mem_pool->free(ptr, pool_size);
-            } else {
-                // Cast to void: hipStreamSynchronize / hipFree are [[nodiscard]] under
-                // HIP's -Werror policy; we're in a destructor and can't propagate errors.
-                (void) cudaStreamSynchronize(stream);
-                (void) cudaFree(ptr);
-            }
-        }
-        void alloc(size_t nelements) {
-            if (mem_pool) {
-                ptr = (half *) mem_pool->alloc(nelements * sizeof(half), &pool_size);
-            } else {
-                CUDA_CHECK(cudaMalloc(&ptr, nelements * sizeof(half)));
-            }
-        }
-    };
-    hip_f16_alloc K_f16(main_stream, fa_use_pool ? &pool : nullptr);
-    hip_f16_alloc V_f16(main_stream, fa_use_pool ? &pool : nullptr);
-#else
-    ggml_cuda_pool_alloc<half>   K_f16(pool);
-    ggml_cuda_pool_alloc<half>   V_f16(pool);
-#endif
     ggml_cuda_pool_alloc<int>    KV_max(pool);
     ggml_cuda_pool_alloc<float>  dst_tmp(pool);
     ggml_cuda_pool_alloc<float2> dst_tmp_meta(pool);
@@ -1378,10 +1371,11 @@ void launch_fattn(
         const size_t bs = ggml_blck_size(K->type);
         const size_t ts = ggml_type_size(K->type);
 
-        K_f16.alloc(ggml_nelements(K));
+        GGML_ASSERT(f16_extra.K != 0);
+        half * K_f16 = (half *) f16_extra.K;
         if (ggml_is_contiguously_allocated(K)) {
             to_fp16_cuda_t to_fp16 = ggml_get_to_fp16_cuda(K->type);
-            to_fp16(K_data, K_f16.ptr, ggml_nelements(K), main_stream);
+            to_fp16(K_data, K_f16, ggml_nelements(K), main_stream);
 
             nb11 = nb11*bs*sizeof(half)/ts;
             nb12 = nb12*bs*sizeof(half)/ts;
@@ -1392,13 +1386,13 @@ void launch_fattn(
             const int64_t s01 = nb11 / ts;
             const int64_t s02 = nb12 / ts;
             const int64_t s03 = nb13 / ts;
-            to_fp16(K_data, K_f16.ptr, K->ne[0], K->ne[1], K->ne[2], K->ne[3], s01, s02, s03, main_stream);
+            to_fp16(K_data, K_f16, K->ne[0], K->ne[1], K->ne[2], K->ne[3], s01, s02, s03, main_stream);
 
             nb11 = K->ne[0] * sizeof(half);
             nb12 = K->ne[1] * nb11;
             nb13 = K->ne[2] * nb12;
         }
-        K_data = (char *) K_f16.ptr;
+        K_data = (char *) K_f16;
     }
 
     if (need_f16_V && V->type != GGML_TYPE_F16) {
@@ -1411,11 +1405,12 @@ void launch_fattn(
             const size_t bs = ggml_blck_size(V->type);
             const size_t ts = ggml_type_size(V->type);
 
-            V_f16.alloc(ggml_nelements(V));
+            GGML_ASSERT(f16_extra.V != 0);
+            half * V_f16 = (half *) f16_extra.V;
             if (ggml_is_contiguously_allocated(V)) {
                 to_fp16_cuda_t to_fp16 = ggml_get_to_fp16_cuda(V->type);
-                to_fp16(V_data, V_f16.ptr, ggml_nelements(V), main_stream);
-                V_data = (char *) V_f16.ptr;
+                to_fp16(V_data, V_f16, ggml_nelements(V), main_stream);
+                V_data = (char *) V_f16;
 
                 nb21 = nb21*bs*sizeof(half)/ts;
                 nb22 = nb22*bs*sizeof(half)/ts;
@@ -1426,13 +1421,13 @@ void launch_fattn(
                 const int64_t s01 = nb21 / ts;
                 const int64_t s02 = nb22 / ts;
                 const int64_t s03 = nb23 / ts;
-                to_fp16(V_data, V_f16.ptr, V->ne[0], V->ne[1], V->ne[2], V->ne[3], s01, s02, s03, main_stream);
+                to_fp16(V_data, V_f16, V->ne[0], V->ne[1], V->ne[2], V->ne[3], s01, s02, s03, main_stream);
 
                 nb21 = V->ne[0] * sizeof(half);
                 nb22 = V->ne[1] * nb21;
                 nb23 = V->ne[2] * nb22;
             }
-            V_data = (char *) V_f16.ptr;
+            V_data = (char *) V_f16;
         }
     }
 
@@ -1558,7 +1553,9 @@ void launch_fattn(
     const uint3 ne01 = init_fastdiv_values(Q->ne[1]);
 
     GGML_ASSERT(block_dim.x % warp_size == 0);
-    fattn_kernel<<<blocks_num, block_dim, nbytes_shared, main_stream>>>(
+
+        ggml_cuda_kernel_launch_params launch_params = ggml_cuda_kernel_launch_params(blocks_num, block_dim, nbytes_shared, main_stream);
+        ggml_cuda_kernel_launch(fattn_kernel, launch_params,
         (const char *) Q->data,
         K_data,
         V_data,
@@ -1588,9 +1585,9 @@ void launch_fattn(
             const dim3 block_dim_combine(DV, 1, 1);
             const dim3 blocks_num_combine = {(unsigned)ntiles_dst, ncols1, ncols2};
 
-            flash_attn_stream_k_fixup_uniform<DV, ncols1, ncols2>
-                <<<blocks_num_combine, block_dim_combine, 0, main_stream>>>
-                ((float *) KQV->data, dst_tmp_meta.ptr,
+            const ggml_cuda_kernel_launch_params launch_params = ggml_cuda_kernel_launch_params(blocks_num_combine, block_dim_combine, 0, main_stream);
+            ggml_cuda_kernel_launch(flash_attn_stream_k_fixup_uniform<DV, ncols1, ncols2>, launch_params,
+                (float *) KQV->data, dst_tmp_meta.ptr,
                  Q->ne[1], Q->ne[2], K->ne[2], nblocks_sk,
                  gqa_ratio, bpt, fd0, fd1, fd2);
         } else if (ntiles_dst % blocks_num.x != 0) {
@@ -1605,9 +1602,9 @@ void launch_fattn(
             const dim3 block_dim_combine(DV, 1, 1);
             const dim3 blocks_num_combine = {blocks_num.x, ncols1, ncols2};
 
-            flash_attn_stream_k_fixup_general<DV, ncols1, ncols2>
-                <<<blocks_num_combine, block_dim_combine, 0, main_stream>>>
-                ((float *) KQV->data, dst_tmp_meta.ptr,
+            const ggml_cuda_kernel_launch_params launch_params = ggml_cuda_kernel_launch_params(blocks_num_combine, block_dim_combine, 0, main_stream);
+            ggml_cuda_kernel_launch(flash_attn_stream_k_fixup_general<DV, ncols1, ncols2>, launch_params,
+                (float *) KQV->data, dst_tmp_meta.ptr,
                  Q->ne[1], Q->ne[2], gqa_ratio, total_work,
                  fd_k_j_z_ne12, fd_k_j_z, fd_k_j, fd_k);
         }
@@ -1616,9 +1613,9 @@ void launch_fattn(
         const dim3 blocks_num_combine(Q->ne[1], Q->ne[2], Q->ne[3]);
         const size_t nbytes_shared_combine = parallel_blocks*sizeof(float2);
 
-        flash_attn_combine_results<DV>
-            <<<blocks_num_combine, block_dim_combine, nbytes_shared_combine, main_stream>>>
-            (dst_tmp.ptr, dst_tmp_meta.ptr, (float *) KQV->data, parallel_blocks);
+        const ggml_cuda_kernel_launch_params launch_params = ggml_cuda_kernel_launch_params(blocks_num_combine, block_dim_combine, nbytes_shared_combine, main_stream);
+        ggml_cuda_kernel_launch(flash_attn_combine_results<DV>, launch_params,
+            dst_tmp.ptr, dst_tmp_meta.ptr, (float *) KQV->data, parallel_blocks);
     }
     CUDA_CHECK(cudaGetLastError());
 }

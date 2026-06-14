@@ -1,14 +1,31 @@
 import tailwindcss from '@tailwindcss/vite';
 import { sveltekit } from '@sveltejs/kit/vite';
+import { SvelteKitPWA } from '@vite-pwa/sveltekit';
 import { dirname, resolve } from 'path';
 import { fileURLToPath } from 'url';
 
 import { defineConfig, searchForWorkspaceRoot } from 'vite';
-import devtoolsJson from 'vite-plugin-devtools-json';
 import { storybookTest } from '@storybook/addon-vitest/vitest-plugin';
-import { llamaCppBuildPlugin } from './scripts/vite-plugin-llama-cpp-build';
+import { splashScreenPlugin } from './scripts/vite-plugin-splash-screen';
+import { buildInfoPlugin } from './scripts/vite-plugin-build-info';
+import { relativizeBasePlugin } from './scripts/vite-plugin-relativize-base';
+import { playwright } from '@vitest/browser-playwright';
+import { SVELTEKIT_PWA_OPTIONS } from './src/lib/constants/pwa';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+
+const SERVER_ORIGIN = import.meta.env?.VITE_PUBLIC_SERVER_ORIGIN || 'http://localhost:8080';
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const browserBaseConfig: any = {
+	enabled: true,
+	provider: playwright({
+		launchOptions: {
+			args: ['--no-sandbox']
+		}
+	}),
+	instances: [{ browser: 'chromium' }]
+};
 
 export default defineConfig({
 	resolve: {
@@ -23,19 +40,14 @@ export default defineConfig({
 		minify: true
 	},
 
-	css: {
-		preprocessorOptions: {
-			scss: {
-				additionalData: `
-					$use-woff2: true;
-					$use-woff: false;
-					$use-ttf: false;
-				`
-			}
-		}
-	},
-
-	plugins: [tailwindcss(), sveltekit(), devtoolsJson(), llamaCppBuildPlugin()],
+	plugins: [
+		tailwindcss(),
+		sveltekit(),
+		SvelteKitPWA(SVELTEKIT_PWA_OPTIONS),
+		splashScreenPlugin(),
+		buildInfoPlugin(),
+		relativizeBasePlugin()
+	],
 
 	test: {
 		projects: [
@@ -43,12 +55,7 @@ export default defineConfig({
 				extends: './vite.config.ts',
 				test: {
 					name: 'client',
-					environment: 'browser',
-					browser: {
-						enabled: true,
-						provider: 'playwright',
-						instances: [{ browser: 'chromium' }]
-					},
+					browser: browserBaseConfig,
 					include: ['tests/client/**/*.svelte.{test,spec}.{js,ts}'],
 					setupFiles: ['./vitest-setup-client.ts']
 				}
@@ -67,13 +74,7 @@ export default defineConfig({
 				extends: './vite.config.ts',
 				test: {
 					name: 'ui',
-					environment: 'browser',
-					browser: {
-						enabled: true,
-						provider: 'playwright',
-						instances: [{ browser: 'chromium', headless: true }]
-					},
-					include: ['tests/stories/**/*.stories.{js,ts,svelte}'],
+					browser: { ...browserBaseConfig, instances: [{ browser: 'chromium', headless: true }] },
 					setupFiles: ['./.storybook/vitest.setup.ts']
 				},
 				plugins: [
@@ -87,12 +88,12 @@ export default defineConfig({
 
 	server: {
 		proxy: {
-			'/v1': 'http://localhost:8080',
-			'/props': 'http://localhost:8080',
-			'/models': 'http://localhost:8080',
-			'/tools': 'http://localhost:8080',
-			'/slots': 'http://localhost:8080',
-			'/cors-proxy': 'http://localhost:8080'
+			'/v1': SERVER_ORIGIN,
+			'/props': SERVER_ORIGIN,
+			'/models': SERVER_ORIGIN,
+			'/tools': SERVER_ORIGIN,
+			'/slots': SERVER_ORIGIN,
+			'/cors-proxy': SERVER_ORIGIN
 		},
 		headers: {
 			'Cross-Origin-Embedder-Policy': 'require-corp',

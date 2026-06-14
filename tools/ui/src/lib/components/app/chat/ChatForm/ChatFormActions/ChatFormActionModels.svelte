@@ -1,13 +1,17 @@
 <script lang="ts">
 	import { chatStore } from '$lib/stores/chat.svelte';
-	import { modelsStore, modelOptions, selectedModelId } from '$lib/stores/models.svelte';
+	import {
+		modelsStore,
+		modelOptions,
+		selectedModelId,
+		selectedModelName
+	} from '$lib/stores/models.svelte';
 	import { isRouterMode, serverError } from '$lib/stores/server.svelte';
 	import { ModelsSelectorDropdown, ModelsSelectorSheet } from '$lib/components/app';
-	import { IsMobile } from '$lib/hooks/is-mobile.svelte';
+	import { isMobile } from '$lib/stores/viewport.svelte';
 	import { activeMessages } from '$lib/stores/conversations.svelte';
 
 	interface Props {
-		currentModel?: string;
 		disabled?: boolean;
 		forceForegroundText?: boolean;
 		hasAudioModality?: boolean;
@@ -20,7 +24,6 @@
 	}
 
 	let {
-		currentModel,
 		disabled = false,
 		forceForegroundText = false,
 		hasAudioModality = $bindable(false),
@@ -41,16 +44,38 @@
 
 	let lastSyncedConversationModel: string | null = null;
 
+	let selectorModel = $derived.by(() => {
+		const storeModel = selectedModelName();
+		if (storeModel && storeModel !== conversationModel) {
+			return storeModel;
+		}
+
+		if (conversationModel) {
+			return conversationModel;
+		}
+
+		return null;
+	});
+
 	$effect(() => {
 		if (conversationModel && conversationModel !== lastSyncedConversationModel) {
+			if (modelOptions().some((m) => m.model === conversationModel)) {
+				modelsStore.selectedModelName = conversationModel;
+				modelsStore.selectModelByName(conversationModel);
+			} else {
+				modelsStore.selectedModelName = null;
+				modelsStore.clearSelection();
+			}
 			lastSyncedConversationModel = conversationModel;
-
-			modelsStore.selectModelByName(conversationModel);
-		} else if (isRouter && !modelsStore.selectedModelId && modelsStore.loadedModelIds.length > 0) {
+		} else if (
+			isRouter &&
+			!modelsStore.selectedModelId &&
+			modelsStore.loadedModelIds.length > 0 &&
+			activeMessages().length > 0 &&
+			!conversationModel
+		) {
 			lastSyncedConversationModel = null;
-			// auto-select the first loaded model only when nothing is selected yet
 			const first = modelOptions().find((m) => modelsStore.loadedModelIds.includes(m.model));
-
 			if (first) modelsStore.selectModelById(first.id);
 		}
 	});
@@ -94,10 +119,14 @@
 	});
 
 	$effect(() => {
+		void modelPropsVersion;
+
 		hasAudioModality = activeModelId ? modelsStore.modelSupportsAudio(activeModelId) : false;
 	});
 
 	$effect(() => {
+		void modelPropsVersion;
+
 		hasVideoModality = activeModelId ? modelsStore.modelSupportsVideo(activeModelId) : false;
 	});
 
@@ -140,8 +169,6 @@
 	let selectorModelRef: ModelsSelectorDropdown | ModelsSelectorSheet | undefined =
 		$state(undefined);
 
-	let isMobile = new IsMobile();
-
 	export function open() {
 		selectorModelRef?.open();
 	}
@@ -151,7 +178,7 @@
 	<ModelsSelectorSheet
 		disabled={disabled || isOffline}
 		bind:this={selectorModelRef}
-		{currentModel}
+		currentModel={selectorModel}
 		{forceForegroundText}
 		{useGlobalSelection}
 	/>
@@ -159,7 +186,7 @@
 	<ModelsSelectorDropdown
 		disabled={disabled || isOffline}
 		bind:this={selectorModelRef}
-		{currentModel}
+		currentModel={selectorModel}
 		{forceForegroundText}
 		{useGlobalSelection}
 	/>
