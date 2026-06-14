@@ -316,9 +316,7 @@
 			onToggle={() => toggleExpanded(index, section)}
 		>
 			<div class="pt-3">
-				<div class="text-xs leading-relaxed break-words whitespace-pre-wrap">
-					{section.content}
-				</div>
+				<MarkdownContent content={section.content} attachments={message?.extra} />
 			</div>
 		</CollapsibleContentBlock>
 	{:else if section.type === AgenticSectionType.REASONING_PENDING}
@@ -336,9 +334,7 @@
 			onToggle={() => toggleExpanded(index, section)}
 		>
 			<div class="pt-3">
-				<div class="text-xs leading-relaxed break-words whitespace-pre-wrap">
-					{section.content}
-				</div>
+				<MarkdownContent content={section.content} attachments={message?.extra} />
 			</div>
 		</CollapsibleContentBlock>
 	{/if}
