@@ -2935,8 +2935,8 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     add_opt(common_arg(
         {"--tools"}, "TOOL1,TOOL2,/path/to/TOOLS.md,...",
         "experimental: whether to enable built-in tools for AI agents - do not enable in untrusted environments (default: no tools)\n"
-        "specify \"all\" to enable all tools. Specify a Markdown file to load user tools with lines \"**tool_name**: Description in free format (command: `command to execute`)\".\n"
-        "available tools: read_file, file_glob_search, grep_search, exec_shell_command, write_file, edit_file, apply_diff, get_datetime, execute_user_tool",
+        "specify \"all\" to enable all tools. Load tools from a Markdown file with lines \"**tool_name**: Description in free format with {argument} (command: `command to execute with {argument}`)\".\n"
+        "available tools: read_file, file_glob_search, grep_search, exec_shell_command, write_file, edit_file, apply_diff, get_datetime, from MD file",
         [](common_params & params, const std::string & value) {
             params.server_tools = parse_csv_row(value);
         }

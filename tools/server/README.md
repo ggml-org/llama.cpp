@@ -196,7 +196,7 @@ For the full list of features, please refer to [server's changelog](https://gith
 | `--ui-config-file PATH` | JSON file that provides default UI settings (overrides UI defaults)<br/>(env: LLAMA_ARG_UI_CONFIG_FILE) |
 | `--webui-mcp-proxy, --no-webui-mcp-proxy` | [DEPRECATED: use --ui-mcp-proxy/--no-ui-mcp-proxy] experimental: whether to enable MCP CORS proxy<br/>(env: LLAMA_ARG_WEBUI_MCP_PROXY) |
 | `--ui-mcp-proxy, --no-ui-mcp-proxy` | experimental: whether to enable MCP CORS proxy - do not enable in untrusted environments (default: disabled)<br/>(env: LLAMA_ARG_UI_MCP_PROXY) |
-| `--tools TOOL1,TOOL2,/path/to/TOOLS.md,...` | experimental: whether to enable built-in tools for AI agents - do not enable in untrusted environments (default: no tools)<br/>specify "all" to enable all tools or a Markdown file to load user tools from it.<br/>available tools: read_file, file_glob_search, grep_search, exec_shell_command, write_file, edit_file, apply_diff, get_datetime, execute_user_tool<br/>(env: LLAMA_ARG_TOOLS) |
+| `--tools TOOL1,TOOL2,/path/to/TOOLS.md,...` | experimental: whether to enable built-in tools for AI agents - do not enable in untrusted environments (default: no tools)<br/>specify "all" to enable all tools or a Markdown file to load user tools from it.<br/>available tools: read_file, file_glob_search, grep_search, exec_shell_command, write_file, edit_file, apply_diff, get_datetime, exec_user_tool<br/>(env: LLAMA_ARG_TOOLS) |
 | `--webui, --no-webui` | [DEPRECATED: use --ui/--no-ui] whether to enable the Web UI<br/>(env: LLAMA_ARG_WEBUI) |
 | `--ui, --no-ui` | whether to enable the Web UI (default: enabled)<br/>(env: LLAMA_ARG_UI) |
 | `--embedding, --embeddings` | restrict to only support embedding use case; use only with dedicated embedding models (default: disabled)<br/>(env: LLAMA_ARG_EMBEDDINGS) |
@@ -327,22 +327,22 @@ For more details, please refer to [multimodal documentation](../../docs/multimod
 
 ### Built-in tools support
 
-The server includes a set of built-in tools that enable the LLM to access the local file system directly from the Web UI.
+The server includes a set of built-in tools that enable the LLM to access the local file system directly from the Web UI. These tools are potentially insecure and should not be activated in untrusted environments.
 
 To use this feature, start the server with `--tools all`. You can also enable only specific tools by passing a comma-separated list: `--tools name1,name2,...`. Run `--help` for the full list of available tool names.
 
-The additional user tools support is handled when specifying a file name as tool, to load e.g. `--tools name1,/path/to/TOOLS.md`, and the `execute_user_tools` tool then allows execution of loaded tools. The `TOOLS.md` file defines the additional user tools as a Markdown file containing lines with format:
+When giving a Markdown file name as argument, e.g. `--tools name1,/path/to/MD_file`, additional tools are loaded at start. This file is assumed to contain lines with format:
 ```
-- **tool_name**: Description in free format (command: `command to execute`)
+- **tool_name**: Description in free format with {argument} (command: `command to execute with {argument}`)
 ```
-It is possible to use `{symbol}` in commands for further substitution from the conversation context. For security reasons, the scope of allowed commands and symbols is limited.
+It is possible to use multiple `{symbols}` in descriptions and commands for further substitution from the conversation context. 
 
-An example of `TOOLS.md` is:
+An example of Markdown tool file is:
 ```
 # Tools/Agents Definition
-- **web_search**: Search the web for a query (command: `websearch "{query}"`)
-- **read_file**: Read a file and return its content (command: `cat "{path}"`)
-- **summarize**: Summarize a text (command: `python summarize.py "{text}"`)
+
+**list_files**: List all files in given {directory} (command: `ls {directory}`)
+**grep_text**: Search for text {pattern} in {file} (command: `grep "{pattern}" {file}`)
 ```
 
 ## Build

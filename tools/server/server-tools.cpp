@@ -14,9 +14,17 @@
 
 namespace fs = std::filesystem;
 
+std::vector<std::unique_ptr<server_tool>> parse_markdown_tools(const std::string &markdown_path);
+
 //
 // internal helpers
 //
+
+// Helper function for C++17 compatibility
+static bool string_ends_with(const std::string &str, const std::string &suffix) {
+    return str.size() >= suffix.size() &&
+           str.compare(str.size() - suffix.size(), suffix.size(), suffix) == 0;
+}
 
 static std::vector<char *> to_cstr_vec(const std::vector<std::string> & v) {
     std::vector<char *> r;
@@ -33,6 +41,37 @@ struct run_proc_result {
     int  exit_code = -1;
     bool timed_out = false;
 };
+
+// List of forbidden sequences (security - avoid subshell)
+static const std::vector<std::string> FORBIDDEN_SEQUENCES = {
+    ";", "&&", "||", "|", "&", ">", "<", "$(", "`", "(", ")", "{", "}", "[", "]", "!", "\\",
+    "\n", "\r", "\t",  // Control characters
+    "2>", "&>", ">>",  // Redirections
+    "$(", "${",        // Command substitution
+    "\x1B"             //  ANSI escape
+};
+
+static bool is_command_safe(const std::string& command) {
+    // Check for forbidden sequences (multi-character)
+    for (const auto& seq : FORBIDDEN_SEQUENCES) {
+        if (command.find(seq) != std::string::npos) {
+            return false;
+        }
+    }
+
+    // Check for environment variable expansion (e.g., $HOME, ${USER})
+    if (command.find('$') != std::string::npos) {
+        return false;
+    }
+
+    // Check for wildcards (e.g., *, ?)
+    if (command.find('*') != std::string::npos ||
+        command.find('?') != std::string::npos) {
+        return false;
+    }
+
+    return true;
+}
 
 static run_proc_result run_process(
         const std::vector<std::string> & args,
@@ -113,254 +152,6 @@ json server_tool::to_json() {
         {"definition", get_definition()},
     };
 }
-
-// Structure to represent a user tool/action
-struct ToolAction {
-    std::string name;        // Name of user tool/action (ex: "web_search")
-    std::string description; // Description of user tool/action
-    std::string command;     // Associated command (ex: "websearch {query}")
-};
-
-// List of forbidden sequences (security - avoid subshell)
-static const std::vector<std::string> FORBIDDEN_SEQUENCES = {
-    ";", "&&", "||", "|", "&", ">", "<", "$(", "`", "(", ")", "{", "}", "[", "]", "!", "\\",
-    "\n", "\r", "\t",  // Control characters
-    "2>", "&>", ">>",  // Redirections
-    "$(", "${",        // Command substitution
-    "\x1B"             //  ANSI escape
-};
-
-
-
-// Store global tools (load_user_tools)
-static std::vector<ToolAction> global_tools;
-
-static bool is_command_safe(const std::string& command) {
-    // Check for forbidden sequences (multi-character)
-    for (const auto& seq : FORBIDDEN_SEQUENCES) {
-        if (command.find(seq) != std::string::npos) {
-            return false;
-        }
-    }
-
-    // Check for environment variable expansion (e.g., $HOME, ${USER})
-    if (command.find('$') != std::string::npos) {
-        return false;
-    }
-
-    // Check for wildcards (e.g., *, ?)
-    if (command.find('*') != std::string::npos ||
-        command.find('?') != std::string::npos) {
-        return false;
-    }
-
-    return true;
-}
-
-
-//
-// load_user_tools: load TOOLS.md user-side tools
-//
-
-// The TOOLS.md file should have the following syntax:
-//
-// # Tools/Agents Definition
-//
-// - **web_search**: Search the web for a query (command: `websearch "{query}"`)
-// - **read_file**: Read a file and return its content (command: `cat "{path}"`)
-// - **summarize**: Summarize a text (command: `python summarize.py "{text}"`)
-
-struct server_tool_load_user_tools : server_tool {
-    std::vector<ToolAction> actions; // List loaded tools/actions
-
-    server_tool_load_user_tools() {
-        name = "load_user_tools";
-        display_name = "Load User Tools/Agents";
-        permission_write = false;
-    }
-
-    // Parse a Markdown line (ex: "- **web_search**: description (command: `websearch {query}`)")
-    ToolAction parse_tool_line(const std::string& line) {
-        ToolAction action;
-        // Regex to match format
-        std::regex tool_regex(R"(\*\*(.*?)\*\*: (.*?) \(command: `(.*?)`\))");
-        std::smatch matches;
-
-        if (std::regex_search(line, matches, tool_regex)) {
-            if (matches.size() == 4) {
-                action.name = matches[1].str();
-                action.description = matches[2].str();
-                action.command = matches[3].str();
-            }
-        }
-        return action;
-    }
-
-    // Load user tool actions from a MD file
-    bool load_user_tools_from_file(const std::string& path) {
-        std::ifstream file(path);
-        if (!file.is_open()) {
-            return false;
-        }
-
-        actions.clear(); // Initialize the list
-        std::string line;
-        while (std::getline(file, line)) {
-            // Ignore empty lines and titles/comments
-            if (line.empty() || line[0] == '#') continue;
-
-            ToolAction action = parse_tool_line(line);
-            if (!action.name.empty()) {
-                actions.push_back(action);
-            }
-        }
-        return true;
-    }
-
-    json get_definition() override {
-        return {
-            {"type", "function"},
-            {"function", {
-                {"name", name},
-                {"description", "Load e.g. a TOOLS.md file and extract available actions. "
-                    "Commands are validated for security. Unsafe commands are skipped."},
-                    {"parameters", {
-                        {"type", "object"},
-                        {"properties", {
-                            {"path", {{"type", "string"}, {"description", "Path to the TOOLS.md file"}}},
-                        }},
-                        {"required", json::array({"path"})},
-                    }},
-            }},
-        };
-    }
-
-    json invoke(json params) override {
-        std::string path = params.at("path").get<std::string>();
-
-        if (!load_user_tools_from_file(path)) {
-            return {{"error", "Failed to open or parse file: " + path}};
-        }
-
-        // Store the loaded tools globally
-        global_tools = actions;
-
-        json actions_json = json::array();
-        for (const auto& action : actions) {
-            actions_json.push_back({
-                {"name", action.name},
-                {"description", action.description},
-                {"command", action.command}
-            });
-        }
-
-        return {
-            {"actions", actions_json},
-            {"count", actions.size()},
-            {"warning", "Unsafe commands were skipped during loading."}
-        };
-    }
-};
-
-//
-// execute_user_tool: execute user-side tools
-//
-
-struct server_tool_execute_user_tool : server_tool {
-
-    server_tool_execute_user_tool() {
-        name = "execute_user_tool";
-        display_name = "Execute User Tool";
-        permission_write = false;
-    }
-
-    json get_definition() override {
-        return {
-            {"type", "function"},
-            {"function", {
-                {"name", name},
-                {"description", "Execute a tool/action loaded from e.g. TOOLS.md. "
-                    "The tool must be loaded first using the 'load_user_tools' tool. "
-                    "Commands are validated for security before execution."},
-                    {"parameters", {
-                        {"type", "object"},
-                        {"properties", {
-                            {"tool_name", {{"type", "string"}, {"description", "Name of the tool to execute"}}},
-                            {"args", {{"type", "object"}, {"description", "Arguments for the tool (e.g., {\"query\": \"test\"})"}}},
-                        }},
-                        {"required", json::array({"tool_name"})},
-                    }},
-            }},
-        };
-    }
-
-    json invoke(json params) override {
-        std::string tool_name = params.at("tool_name").get<std::string>();
-        json args = json_value(params, "args", json::object());
-
-        // Use the global tools list
-        auto it = std::find_if(
-            global_tools.begin(), global_tools.end(),
-                               [&tool_name](const ToolAction& action) { return action.name == tool_name; }
-        );
-
-        if (it == global_tools.end()) {
-            return {{"error", "Tool not found: " + tool_name}};
-        }
-
-        // Replace placeholders in the command
-        std::string command = it->command;
-        for (auto& arg : args.items()) {
-            std::string placeholder = "{" + arg.key() + "}";
-            size_t pos = command.find(placeholder);
-            if (pos != std::string::npos) {
-                std::string arg_value = arg.value().dump();
-                if (arg_value.front() == '"' && arg_value.back() == '"') {
-                    arg_value = arg_value.substr(1, arg_value.length() - 2);
-                }
-                command.replace(pos, placeholder.length(), arg_value);
-            }
-        }
-
-        // Security validation
-        if (!is_command_safe(command)) {
-            return {
-                {"error", "Command blocked for security reasons: '" + command + "' contains forbidden characters."},
-                {"forbidden_chars", [&]() {
-                  std::string forbidden;
-                  for (const auto& seq : FORBIDDEN_SEQUENCES) {
-                      forbidden += seq;
-                  }
-                  return forbidden;
-              }()}
-            };
-        }
-
-        // Execute the command
-        std::array<char, 128> buffer;
-        std::string result;
-        std::unique_ptr<FILE, int(*)(FILE*)> pipe(popen(command.c_str(), "r"), pclose);
-
-        if (!pipe) {
-            return {{"error", "Failed to execute command for tool: " + tool_name}};
-        }
-
-        while (fgets(buffer.data(), buffer.size(), pipe.get()) != nullptr) {
-            result += buffer.data();
-        }
-
-        if (!result.empty() && result.back() == '\n') {
-            result.pop_back();
-        }
-
-        return {
-            {"output", result},
-            {"tool", tool_name},
-            {"command_executed", command}
-        };
-    }
-
-};
 
 //
 // read_file: read a file with optional line range and line-number prefix
@@ -611,7 +402,7 @@ struct server_tool_grep_search : server_tool {
 //
 
 static constexpr size_t SERVER_TOOL_EXEC_SHELL_COMMAND_MAX_OUTPUT_SIZE = 16 * 1024; // 16 KB
-static constexpr int    SERVER_TOOL_EXEC_SHELL_COMMAND_MAX_TIMEOUT     = 600;        // seconds
+static constexpr int    SERVER_TOOL_EXEC_SHELL_COMMAND_MAX_TIMEOUT     = 60;        // seconds
 
 struct server_tool_exec_shell_command : server_tool {
     server_tool_exec_shell_command() {
@@ -659,6 +450,127 @@ struct server_tool_exec_shell_command : server_tool {
         text_output += string_format("\n[exit code: %d]", res.exit_code);
         if (res.timed_out) {
             text_output += " [exit due to timed out]";
+        }
+
+        return {{"plain_text_response", text_output}};
+    }
+};
+
+
+//
+// server_tool_markdown_command: add a tool from a MD entry
+//
+// Markdown syntax, e.g. --tools TOOLS.md:
+//
+//  **list_files**: List all files in given {directory} (command: `ls {directory}`)
+//  **grep_text**: Search for text {pattern} in {file} (command: `grep "{pattern}" {file}`)
+
+
+struct server_tool_markdown_command : server_tool {
+    std::string command_template;
+    std::string description;
+
+    server_tool_markdown_command(const std::string &name, const std::string &description, const std::string &command)
+        : command_template(command), description(description) {
+        this->name = name;
+        this->display_name = name;
+        this->permission_write = true;
+    }
+
+    json get_definition() override {
+        std::regex param_regex("\\{([^}]+)\\}");
+        std::smatch matches;
+        std::vector<std::string> parameters;
+        std::string cmd = command_template;
+        while (std::regex_search(cmd, matches, param_regex)) {
+            parameters.push_back(matches[1].str());
+            cmd = matches.suffix().str();
+        }
+
+        json param_properties;
+        for (const auto &param : parameters) {
+            param_properties[param] = {{"type", "string"}, {"description", "Input parameter: " + param}};
+        }
+
+        // Add timeout and max_output_size to the parameters
+        param_properties["timeout"] = {
+            {"type", "integer"},
+            {"description", string_format("Timeout in seconds (default 10, max %d)", SERVER_TOOL_EXEC_SHELL_COMMAND_MAX_TIMEOUT)}
+        };
+        param_properties["max_output_size"] = {
+            {"type", "integer"},
+            {"description", string_format("Maximum output size in bytes (default %zu)", SERVER_TOOL_EXEC_SHELL_COMMAND_MAX_OUTPUT_SIZE)}
+        };
+
+        return {
+            {"type", "function"},
+            {"function", {
+                {"name", name},
+                {"description", description},
+                {"parameters", {
+                    {"type", "object"},
+                    {"properties", param_properties},
+                    {"required", json::array()},
+                }},
+            }},
+        };
+    }
+
+    json invoke(json params) override {
+        std::string command = command_template;
+
+        // Replace all placeholders in the command template with actual values from params
+        for (auto it = params.begin(); it != params.end(); ++it) {
+            // Skip timeout and max_output_size, as they are not placeholders
+            if (it.key() == "timeout" || it.key() == "max_output_size") {
+                continue;
+            }
+            std::string placeholder = "{" + it.key() + "}";
+            std::string value = it->get<std::string>();
+
+            // Replace all occurrences of the placeholder in the command
+            size_t pos = 0;
+            while ((pos = command.find(placeholder, pos)) != std::string::npos) {
+                command.replace(pos, placeholder.length(), value);
+                pos += value.length();
+            }
+        }
+
+        // Security validation
+        if (!is_command_safe(command)) {
+            return {
+                {"error", "Command blocked for security reasons: '" + command + "' contains forbidden characters."},
+                {"forbidden_chars", [&]() {
+                  std::string forbidden;
+                  for (const auto& seq : FORBIDDEN_SEQUENCES) {
+                      forbidden += seq;
+                  }
+                  return forbidden;
+              }()}
+            };
+        }
+
+        // Parse timeout and max_output_size
+        int timeout = json_value(params, "timeout", 10);
+        size_t max_output = (size_t)json_value(params, "max_output_size", (int)SERVER_TOOL_EXEC_SHELL_COMMAND_MAX_OUTPUT_SIZE);
+
+        // Clamp values to their respective max limits
+        timeout = std::min(timeout, SERVER_TOOL_EXEC_SHELL_COMMAND_MAX_TIMEOUT);
+        max_output = std::min(max_output, SERVER_TOOL_EXEC_SHELL_COMMAND_MAX_OUTPUT_SIZE);
+
+        // Execute the command
+        std::vector<std::string> args;
+#ifdef _WIN32
+        args = {"cmd", "/c", command};
+#else
+        args = {"sh", "-c", command};
+#endif
+        auto res = run_process(args, max_output, timeout);
+
+        std::string text_output = res.output;
+        text_output += string_format("\n[exit code: %d]", res.exit_code);
+        if (res.timed_out) {
+            text_output += " [exit due to timeout]";
         }
 
         return {{"plain_text_response", text_output}};
@@ -985,96 +897,146 @@ static std::vector<std::unique_ptr<server_tool>> build_tools() {
     tools.push_back(std::make_unique<server_tool_edit_file>());
     tools.push_back(std::make_unique<server_tool_apply_diff>());
     tools.push_back(std::make_unique<server_tool_get_datetime>());
-    tools.push_back(std::make_unique<server_tool_execute_user_tool>());
     return tools;
 }
 
-void server_tools::setup(const std::vector<std::string> & enabled_tools) {
+
+std::vector<std::unique_ptr<server_tool>> parse_markdown_tools(const std::string &markdown_path) {
+    std::vector<std::unique_ptr<server_tool>> tools;
+    std::ifstream file(markdown_path);
+    if (!file.is_open()) {
+        throw std::runtime_error("Failed to open Markdown file: " + markdown_path);
+    }
+
+    std::string line;
+    std::regex tool_regex("\\*\\*([^\\*]+)\\*\\*:\\s*(.+)\\s*\\(command:\\s*`([^`]+)`\\s*\\)");
+
+    while (std::getline(file, line)) {
+        std::smatch matches;
+        if (std::regex_search(line, matches, tool_regex)) {
+            std::string tool_name = matches[1].str();
+            std::string description = matches[2].str();
+            std::string command = matches[3].str();
+
+            tools.push_back(
+                std::make_unique<server_tool_markdown_command>(
+                    tool_name, description, command
+                )
+            );
+        }
+    }
+
+    return tools;
+}
+
+void server_tools::setup(const std::vector<std::string> &enabled_tools) {
     if (!enabled_tools.empty()) {
         std::unordered_set<std::string> enabled_set(enabled_tools.begin(), enabled_tools.end());
         auto all_tools = build_tools();
 
-        // collect all known tool names for validation
+        // Collect all known tool names (built-in only for now)
         std::vector<std::string> known_names;
         known_names.reserve(all_tools.size());
-        for (const auto & t : all_tools) {
+        for (const auto &t : all_tools) {
             known_names.push_back(t->name);
         }
 
-        // validate that every requested tool is known
-        for (const auto & name : enabled_tools) {
+        // Temporary vector to store tools loaded from Markdown files
+        std::vector<std::unique_ptr<server_tool>> markdown_tools;
+
+        // First pass: Check for Markdown files and load their tools
+        for (const auto &name : enabled_tools) {
             if (name == "all") continue;
-            
-            // Check if the name is a valid file path
-            bool is_file = std::filesystem::exists(name) &&
-                   std::filesystem::is_regular_file(name);
 
-            if (is_file) {
-                // Create an instance of server_tool_load_user_tools
-                auto load_tool = std::make_unique<server_tool_load_user_tools>();
-                // Call invoke to load the tools from the file
-                json result = load_tool->invoke({{"path", name}});
+            // Check if the name is a valid Markdown file
+            bool is_markdown_file = std::filesystem::exists(name) &&
+                                    std::filesystem::is_regular_file(name) &&
+                                    (string_ends_with(name, ".md") || string_ends_with(name, ".markdown"));
 
-                // Check for errors in the result
-                if (result.contains("error")) {
+            if (is_markdown_file) {
+                try {
+                    auto file_tools = parse_markdown_tools(name);
+                    for (auto &t : file_tools) {
+                        markdown_tools.push_back(std::move(t));
+                        known_names.push_back(markdown_tools.back()->name); // Add to known_names
+                    }
+                } catch (const std::exception &e) {
                     throw std::runtime_error(string_format(
-                        "failed to load tools from file: %s. Error: %s",
-                        name.c_str(),
-                        result.at("error").get<std::string>().c_str()));
+                        "Failed to load tools from Markdown file \"%s\": %s",
+                        name.c_str(), e.what()
+                    ));
                 }
-
-                // Add the tool to the list
-                tools.push_back(std::move(load_tool));
-                continue;
             }
-    
+        }
+
+        // Second pass: Validate all requested tools (built-in or from Markdown)
+        for (const auto &name : enabled_tools) {
+            if (name == "all") continue;
+
+            // Skip validation for Markdown files (they are already handled)
+            bool is_markdown_file = std::filesystem::exists(name) &&
+                                    std::filesystem::is_regular_file(name) &&
+                                    (string_ends_with(name, ".md") || string_ends_with(name, ".markdown"));
+            if (is_markdown_file) {
+                continue; // Skip validation for files
+            }
+
+            // Validate built-in tools
             if (std::find(known_names.begin(), known_names.end(), name) == known_names.end()) {
                 throw std::runtime_error(string_format(
                     "unknown tool \"%s\". available tools: %s",
                     name.c_str(),
-                    string_join(known_names, ", ").c_str()));
+                    string_join(known_names, ", ").c_str()
+                ));
             }
         }
 
+        // Clear the tools vector and add built-in tools
         tools.clear();
-        for (auto & t : all_tools) {
+        for (auto &t : all_tools) {
             if (enabled_set.count(t->name) > 0 || enabled_set.count("all") > 0) {
                 tools.push_back(std::move(t));
             }
         }
+
+        // Add tools from Markdown files
+        for (auto &t : markdown_tools) {
+            tools.push_back(std::move(t));
+        }
     }
 
+    // Set up HTTP handlers (unchanged)
     handle_get = [this](const server_http_req &) -> server_http_res_ptr {
         auto res = std::make_unique<server_http_res>();
         try {
             json result = json::array();
-            for (const auto & t : tools) {
+            for (const auto &t : tools) {
                 result.push_back(t->to_json());
             }
             res->data = safe_json_to_str(result);
-        } catch (const std::exception & e) {
+        } catch (const std::exception &e) {
             SRV_ERR("got exception: %s\n", e.what());
             res->status = 500;
-            res->data   = safe_json_to_str(format_error_response(e.what(), ERROR_TYPE_SERVER));
+            res->data = safe_json_to_str(format_error_response(e.what(), ERROR_TYPE_SERVER));
         }
         return res;
     };
 
-    handle_post = [this](const server_http_req & req) -> server_http_res_ptr {
+    handle_post = [this](const server_http_req &req) -> server_http_res_ptr {
         auto res = std::make_unique<server_http_res>();
         try {
             json body = json::parse(req.body);
             std::string tool_name = body.at("tool").get<std::string>();
             json params = body.value("params", json::object());
             json result = invoke(tool_name, params);
-            res->data   = safe_json_to_str(result);
-        } catch (const json::exception & e) {
+            res->data = safe_json_to_str(result);
+        } catch (const json::exception &e) {
             res->status = 400;
-            res->data   = safe_json_to_str(format_error_response(e.what(), ERROR_TYPE_INVALID_REQUEST));
-        } catch (const std::exception & e) {
+            res->data = safe_json_to_str(format_error_response(e.what(), ERROR_TYPE_INVALID_REQUEST));
+        } catch (const std::exception &e) {
             SRV_ERR("got exception: %s\n", e.what());
             res->status = 500;
-            res->data   = safe_json_to_str(format_error_response(e.what(), ERROR_TYPE_SERVER));
+            res->data = safe_json_to_str(format_error_response(e.what(), ERROR_TYPE_SERVER));
         }
         return res;
     };
