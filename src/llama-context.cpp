@@ -1156,8 +1156,8 @@ void llama_context::set_embeddings_layer_inp(uint32_t lid, bool enable) {
     sched_need_reserve = true;
 }
 
-void llama_context::set_mtp_layer_offset(int32_t offset) {
-    cparams.mtp_layer_offset = offset;
+void llama_context::set_nextn_layer_offset(int32_t offset) {
+    cparams.nextn_layer_offset = offset;
 }
 
 void llama_context::set_causal_attn(bool value) {
@@ -3703,8 +3703,8 @@ void llama_set_embeddings_layer_inp(llama_context * ctx, uint32_t lid, bool valu
     ctx->set_embeddings_layer_inp(lid, value);
 }
 
-void llama_set_mtp_layer_offset(llama_context * ctx, int32_t offset) {
-    ctx->set_mtp_layer_offset(offset);
+void llama_set_nextn_layer_offset(llama_context * ctx, int32_t offset) {
+    ctx->set_nextn_layer_offset(offset);
 }
 
 llama_memory_t llama_get_memory(const struct llama_context * ctx) {

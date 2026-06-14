@@ -368,13 +368,13 @@ llama_model_step35::graph_mtp::graph_mtp(const llama_model & model, const llm_gr
     GGML_ASSERT(hparams.n_layer_nextn > 0 && "STEP35 MTP requires n_layer_nextn > 0");
 
     // Multi-block MTP: the DECODER_MTP graph runs the MTP head selected by
-    // cparams.mtp_layer_offset (0 = first trained head). The speculative driver
+    // cparams.nextn_layer_offset (0 = first trained head). The speculative driver
     // bumps the offset per draft step to chain heads 45->46->47. offset 0 keeps
     // single-block behavior identical to before.
-    const int il = hparams.n_layer() + cparams.mtp_layer_offset;
-    GGML_ASSERT(cparams.mtp_layer_offset >= 0 &&
-                cparams.mtp_layer_offset < (int) hparams.n_layer_nextn &&
-                "mtp_layer_offset out of range [0, n_layer_nextn)");
+    const int il = hparams.n_layer() + cparams.nextn_layer_offset;
+    GGML_ASSERT(cparams.nextn_layer_offset >= 0 &&
+                cparams.nextn_layer_offset < (int) hparams.n_layer_nextn &&
+                "nextn_layer_offset out of range [0, n_layer_nextn)");
     const auto & layer = model.layers[il];
 
     GGML_ASSERT(layer.nextn.eh_proj && "MTP block missing nextn.eh_proj");

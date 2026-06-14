@@ -686,7 +686,7 @@ struct llm_graph_params {
             cparams.embeddings              == other.cparams.embeddings              &&
             cparams.embeddings_nextn        == other.cparams.embeddings_nextn        &&
             cparams.embeddings_nextn_masked == other.cparams.embeddings_nextn_masked &&
-            cparams.mtp_layer_offset        == other.cparams.mtp_layer_offset        &&
+            cparams.nextn_layer_offset      == other.cparams.nextn_layer_offset      &&
             cparams.causal_attn             == other.cparams.causal_attn             &&
             arch  == other.arch  &&
             gtype == other.gtype &&

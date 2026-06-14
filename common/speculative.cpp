@@ -1042,7 +1042,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
                         }
                         llama_memory_seq_rm(mem_dft, seq_id, batch_in.pos[i_batch_beg[seq_id]], -1);
                     }
-                    llama_set_mtp_layer_offset(ctx_dft, head);
+                    llama_set_nextn_layer_offset(ctx_dft, head);
                 }
 
                 const int32_t rc = llama_decode(ctx_dft, batch);
@@ -1055,7 +1055,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
             }
 
             if (chain_heads) {
-                llama_set_mtp_layer_offset(ctx_dft, 0); // restore default for non-draft decodes
+                llama_set_nextn_layer_offset(ctx_dft, 0); // restore default for non-draft decodes
             }
             if (!ok) {
                 return false;
@@ -1133,7 +1133,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
                         llama_memory_seq_rm(mem_dft, seq_id, dparams[seq_id].n_past, -1);
                     }
                 }
-                llama_set_mtp_layer_offset(ctx_dft, i);
+                llama_set_nextn_layer_offset(ctx_dft, i);
             }
 
             int ret = llama_decode(ctx_dft, batch);
@@ -1216,7 +1216,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
         }
 
         if (chain_heads) {
-            llama_set_mtp_layer_offset(ctx_dft, 0); // restore default for non-draft decodes
+            llama_set_nextn_layer_offset(ctx_dft, 0); // restore default for non-draft decodes
         }
 
         for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
