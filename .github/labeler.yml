@@ -12,7 +12,7 @@ SYCL:
             - ggml/src/ggml-sycl/**
             - docs/backend/SYCL.md
             - examples/sycl/**
-Nvidia GPU:
+CUDA:
     - changed-files:
         - any-glob-to-any-file:
             - ggml/include/ggml-cuda.h
