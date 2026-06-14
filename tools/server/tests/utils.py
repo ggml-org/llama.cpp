@@ -100,6 +100,7 @@ class ServerProcess:
     reasoning: Literal['on', 'off', 'auto'] | None = None
     chat_template: str | None = None
     chat_template_file: str | None = None
+    system_message_prefix: str | None = None
     server_path: str | None = None
     mmproj_url: str | None = None
     media_path: str | None = None
@@ -241,6 +242,8 @@ class ServerProcess:
             server_args.extend(["--chat-template", self.chat_template])
         if self.chat_template_file:
             server_args.extend(["--chat-template-file", self.chat_template_file])
+        if self.system_message_prefix:
+            server_args.extend(["--system-message-prefix", self.system_message_prefix])
         if self.mmproj_url:
             server_args.extend(["--mmproj-url", self.mmproj_url])
         if self.media_path:

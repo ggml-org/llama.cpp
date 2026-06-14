@@ -81,6 +81,43 @@ def test_date_inside_prompt(template_name: str, format: str, tools: list[dict]):
     assert today_str in prompt, f"Expected today's date ({today_str}) in content ({prompt})"
 
 
+@pytest.mark.parametrize("messages,expected", [
+    (
+        [
+            {"role": "system", "content": "existing"},
+            {"role": "user", "content": "hello"},
+        ],
+        "<|im_start|>system\nPREFIX:existing<|im_end|>",
+    ),
+    (
+        [
+            {"role": "system", "content": [{"type": "text", "text": "existing"}]},
+            {"role": "user", "content": "hello"},
+        ],
+        "<|im_start|>system\nPREFIX:\nexisting<|im_end|>",
+    ),
+    (
+        [
+            {"role": "user", "content": "hello"},
+        ],
+        "<|im_start|>system\nPREFIX:<|im_end|>",
+    ),
+])
+def test_system_message_prefix(messages: list[dict], expected: str):
+    global server
+    server.jinja = True
+    server.chat_template = "chatml"
+    server.system_message_prefix = '{{ "PRE" + "FIX:" }}'
+    server.start()
+
+    res = server.make_request("POST", "/apply-template", data={
+        "messages": messages,
+    })
+
+    assert res.status_code == 200
+    assert expected in res.body["prompt"]
+
+
 @pytest.mark.parametrize("add_generation_prompt", [False, True])
 @pytest.mark.parametrize("template_name,expected_generation_prompt", [
     ("meta-llama-Llama-3.3-70B-Instruct",    "<|start_header_id|>assistant<|end_header_id|>"),
