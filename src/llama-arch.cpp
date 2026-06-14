@@ -165,7 +165,8 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
     { LLM_KV_GENERAL_DESCRIPTION,              "general.description"                   },
     { LLM_KV_GENERAL_LICENSE,                  "general.license"                       },
     { LLM_KV_GENERAL_SOURCE_URL,               "general.source.url"                    },
-    { LLM_KV_GENERAL_SOURCE_HF_REPO,           "general.source.huggingface.repository" },
+    { LLM_KV_GENERAL_SOURCE_HF_REPO,              "general.source.huggingface.repository" },
+    { LLM_KV_GENERAL_QUANTIZATION_TRAINING,       "general.quantization_training"        },
 
     { LLM_KV_VOCAB_SIZE,                        "%s.vocab_size"                        },
     { LLM_KV_CONTEXT_LENGTH,                    "%s.context_length"                    },

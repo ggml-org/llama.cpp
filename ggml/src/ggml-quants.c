@@ -71,6 +71,169 @@ void quantize_row_q1_0_ref(const float * GGML_RESTRICT x, block_q1_0 * GGML_REST
     }
 }
 
+// Round float32 to nearest bfloat16 value, returning as float32
+// with the lower 16 bits zeroed. Used for recovering QAT-trained scales
+// from BF16-weight models.
+static inline float ggml_f32_to_bf16_round(float f) {
+    uint32_t bits;
+    memcpy(&bits, &f, sizeof(bits));
+    // nearest-even rounding: bias = 0x7FFF + LSB of truncated result
+    uint32_t rounding_bias = 0x7FFF + ((bits >> 16) & 1);
+    bits = (bits + rounding_bias) & 0xFFFF0000u;
+    float result;
+    memcpy(&result, &bits, sizeof(result));
+    return result;
+}
+
+// Infer the QAT-trained scale for each Q4_0 block from source weights.
+//
+// Consensus-based recovery: each weight quantized to a non-zero nibble
+// votes for a candidate BF16 scale via d = w_i / (nibble_i - 8). The
+// true QAT scale should appear as the most frequent candidate across
+// weights in the same block.
+//
+// Algorithm:
+//   1. Start with naive scale d0 = max / -8
+//   2. Assign nibbles using current scale estimate
+//   3. For each weight with nibble != 8: compute candidate d = w / (nibble-8)
+//   4. Round candidates to BF16, find the mode (most frequent)
+//   5. Update scale to the mode; repeat steps 2-4 until converged
+//   6. Fall back to naive scale if consensus is too weak (< 3 votes)
+#define QAT_CONSENSUS_MIN_VOTES 3
+#define QAT_CONSENSUS_MAX_ITERS 4
+
+void ggml_infer_q4_0_qat_scales(const float * GGML_RESTRICT src, ggml_half * GGML_RESTRICT scales, int64_t k) {
+    static const int qk = QK4_0;
+
+    assert(k % qk == 0);
+
+    const int nb = k / qk;
+
+    for (int i = 0; i < nb; i++) {
+        const float * xb = src + i*qk;
+
+        float amax = 0.0f;
+        float max  = 0.0f;
+        for (int j = 0; j < qk; j++) {
+            const float v = xb[j];
+            if (amax < fabsf(v)) {
+                amax = fabsf(v);
+                max  = v;
+            }
+        }
+
+        if (amax == 0.0f) {
+            scales[i] = 0;
+            continue;
+        }
+
+        float d = max / -8.0f;  // initial estimate
+        int   best_votes = 0;
+
+        // Iterate: assign nibbles -> collect candidate scales -> find mode
+        for (int iter = 0; iter < QAT_CONSENSUS_MAX_ITERS; iter++) {
+            const float id = d ? 1.0f/d : 0.0f;
+
+            // Collect candidate BF16 scales from non-zero nibbles
+            uint16_t candidates[QK4_0];
+            int      counts   [QK4_0];
+            int      n_cand   = 0;
+
+            for (int j = 0; j < qk; j++) {
+                // Round-half-up to match QAT training rounding
+                int n = (int)(xb[j] * id + 8.5f);
+                n = n < 0 ? 0 : (n > 15 ? 15 : n);
+                const int q = n - 8;  // -8..+7
+                if (q == 0) continue;
+
+                const float d_cand = xb[j] / (float)q;
+                // Round to BF16
+                const float d_bf16 = ggml_f32_to_bf16_round(d_cand);
+                if (d_bf16 == 0.0f) continue;
+
+                uint32_t bits;
+                memcpy(&bits, &d_bf16, sizeof(bits));
+                const uint16_t c = (uint16_t)(bits >> 16);
+
+                // Accumulate into histogram (linear scan; qk=32 is tiny)
+                int found = 0;
+                for (int a = 0; a < n_cand; a++) {
+                    if (candidates[a] == c) {
+                        counts[a]++;
+                        found = 1;
+                        break;
+                    }
+                }
+                if (!found && n_cand < QK4_0) {
+                    candidates[n_cand] = c;
+                    counts[n_cand]    = 1;
+                    n_cand++;
+                }
+            }
+
+            if (n_cand == 0) break;
+
+            // Find the mode (most frequent candidate)
+            uint16_t best_cand  = candidates[0];
+            best_votes = counts[0];
+            for (int a = 1; a < n_cand; a++) {
+                if (counts[a] > best_votes) {
+                    best_votes = counts[a];
+                    best_cand  = candidates[a];
+                }
+            }
+
+            // Convert BF16 -> F32 by shifting to upper 16 bits
+            uint32_t f32_bits = ((uint32_t)best_cand) << 16;
+            float    d_new;
+            memcpy(&d_new, &f32_bits, sizeof(d_new));
+
+            if (d_new == d) break;  // converged
+            d = d_new;
+        }
+
+        // Fall back to naive scale if consensus is too weak
+        if (best_votes < QAT_CONSENSUS_MIN_VOTES) {
+            d = max / -8.0f;
+        }
+
+        // BF16 -> F16: BF16 is a strict subset of F16, so this is exact
+        const float d_bf16 = ggml_f32_to_bf16_round(d);
+        uint32_t f32_bits;
+        memcpy(&f32_bits, &d_bf16, sizeof(f32_bits));
+        scales[i] = GGML_FP32_TO_FP16(d_bf16);
+    }
+}
+
+// Quantize a row using pre-inferred QAT scales. Uses round-half-up
+// to match the QAT training rounding convention.
+static void quantize_row_q4_0_qat(const float * GGML_RESTRICT x, block_q4_0 * GGML_RESTRICT y,
+                                   int64_t k, const ggml_half * GGML_RESTRICT scales) {
+    static const int qk = QK4_0;
+
+    assert(k % qk == 0);
+
+    const int nb = k / qk;
+
+    for (int i = 0; i < nb; i++) {
+        const float d  = GGML_FP16_TO_FP32(scales[i]);
+        const float id = d ? 1.0f/d : 0.0f;
+
+        y[i].d = scales[i];
+
+        for (int j = 0; j < qk/2; ++j) {
+            const float x0 = x[i*qk + 0    + j]*id;
+            const float x1 = x[i*qk + qk/2 + j]*id;
+
+            const uint8_t xi0 = MIN(15, (int8_t)(x0 + 8.5f));
+            const uint8_t xi1 = MIN(15, (int8_t)(x1 + 8.5f));
+
+            y[i].qs[j]  = xi0;
+            y[i].qs[j] |= xi1 << 4;
+        }
+    }
+}
+
 // reference implementation for deterministic creation of model files
 void quantize_row_q4_0_ref(const float * GGML_RESTRICT x, block_q4_0 * GGML_RESTRICT y, int64_t k) {
     static const int qk = QK4_0;
@@ -2062,6 +2225,25 @@ size_t quantize_q4_0(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, 
     char * qrow = (char *)dst;
     for (int64_t row = 0; row < nrow; ++row) {
         quantize_row_q4_0_impl(src, (block_q4_0*)qrow, n_per_row, quant_weights);
+        src += n_per_row;
+        qrow += row_size;
+    }
+    return nrow * row_size;
+}
+
+// QAT-aware batch quantization: uses pre-inferred QAT scales (via
+// ggml_infer_q4_0_qat_scales) instead of recomputing scales from scratch.
+// The caller is responsible for providing the correct number of scales
+// (nrow * n_per_row / QK4_0 entries).
+size_t quantize_q4_0_qat(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst,
+                          int64_t nrow, int64_t n_per_row,
+                          const ggml_half * GGML_RESTRICT scales) {
+    const size_t row_size = ggml_row_size(GGML_TYPE_Q4_0, n_per_row);
+    const int64_t n_blocks_per_row = n_per_row / QK4_0;
+    char * qrow = (char *)dst;
+    for (int64_t row = 0; row < nrow; ++row) {
+        quantize_row_q4_0_qat(src, (block_q4_0 *)qrow, n_per_row,
+                               scales + row * n_blocks_per_row);
         src += n_per_row;
         qrow += row_size;
     }

@@ -22,6 +22,7 @@ class Keys:
         TYPE                       = "general.type"
         ARCHITECTURE               = "general.architecture"
         QUANTIZATION_VERSION       = "general.quantization_version"
+        QUANTIZATION_TRAINING      = "general.quantization_training"
         ALIGNMENT                  = "general.alignment"
         FILE_TYPE                  = "general.file_type"
 
@@ -4572,6 +4573,7 @@ GGML_QUANT_SIZES: dict[GGMLQuantizationType, tuple[int, int]] = {
 # general
 KEY_GENERAL_ARCHITECTURE         = Keys.General.ARCHITECTURE
 KEY_GENERAL_QUANTIZATION_VERSION = Keys.General.QUANTIZATION_VERSION
+KEY_GENERAL_QUANTIZATION_TRAINING = Keys.General.QUANTIZATION_TRAINING
 KEY_GENERAL_ALIGNMENT            = Keys.General.ALIGNMENT
 KEY_GENERAL_NAME                 = Keys.General.NAME
 KEY_GENERAL_AUTHOR               = Keys.General.AUTHOR
