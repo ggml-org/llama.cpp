@@ -698,9 +698,13 @@ llama_model_loader::llama_model_loader(
         llm_kv = LLM_KV(llm_arch_from_string(arch_name));
     }
 
-    n_kv      = gguf_get_n_kv(metadata);
-    n_tensors = gguf_get_n_tensors(metadata);
-    GGML_ASSERT(files.empty() || weights_map.size() == static_cast<size_t>(n_tensors));
+    n_kv = gguf_get_n_kv(metadata);
+    if (files.empty()) {
+        n_tensors = gguf_get_n_tensors(metadata);
+    } else {
+        n_tensors = weights_map.size();
+        GGML_ASSERT(files.size() != 1 || n_tensors == static_cast<int>(gguf_get_n_tensors(metadata)));
+    }
 
     fver = (enum llama_fver) gguf_get_version(metadata);
 
@@ -1220,12 +1224,14 @@ struct ggml_tensor * llama_model_loader::create_tensor(
             type = gguf_get_tensor_type(metadata, tid);
         } else if (flags & TENSOR_SKIP_IF_VIRTUAL) {
             return nullptr;
-        } else if (no_alloc) {
+        } else {
             if (flags & TENSOR_NOT_REQUIRED) {
                 return nullptr;
             }
 
-            throw std::runtime_error(format("missing tensor '%s'", tn.str().c_str()));
+            if (no_alloc) {
+                throw std::runtime_error(format("missing tensor '%s'", tn.str().c_str()));
+            }
         }
 
         // for tensors that are not required some of the dimensions can be invalid:
