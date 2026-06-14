@@ -907,8 +907,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
         chain_heads   = n_mtp_layers > 1 && !is_mem_shared;
 
         // step35-style chaining uses each trained head exactly once per draft
-        // round, so the draft length is capped at the number of heads. Mem-shared
-        // archs (gemma4) run every head in one graph, so this clamp does not apply.
+        // round, so the draft length is capped at the number of heads
         if (chain_heads) {
             this->params.n_max = std::min(this->params.n_max, n_mtp_layers);
         }
@@ -1029,12 +1028,6 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
 
             bool ok = true;
             for (int head = 0; head < n_mtp_layers; ++head) {
-                // chain_heads == false (n_mtp_layers == 1) runs the loop once and
-                // skips seq_rm / offset — same observable decode as single-block.
-                // When chaining, reset each seq's batch region first so this head
-                // re-decodes into a clean, position-aligned slot set (find_slot
-                // stays deterministic). Lower bound = this batch's first pos for the
-                // seq (prompt-multi-ubatch safe).
                 if (chain_heads) {
                     for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
                         if (i_batch_beg[seq_id] < 0) {
@@ -1095,9 +1088,6 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
         const float * h_row = nullptr;
         const size_t row_bytes = (size_t) n_embd * sizeof(float);
 
-        // chained heads accumulate the prefix into the batch across draft
-        // steps instead of rebuilding it, so each sequence samples from its last
-        // appended slot; i_last tracks that slot.
         std::vector<int> i_last(n_seq, -1);
 
         for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
@@ -1124,8 +1114,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
         while (n_drafting > 0) {
             // chained heads: every trained head keeps its own KV, so reset
             // each sequence's draft region and select head `i` before re-decoding the
-            // accumulated prefix (head 0 sees just id_last). the single-head (qwen)
-            // and mem-shared (gemma4) paths leave their growing KV untouched.
+            // accumulated prefix.
             if (chain_heads) {
                 auto * mem_dft = llama_get_memory(ctx_dft);
                 for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
