@@ -13,6 +13,23 @@
 #define REQD_SUBGROUP_SIZE_64
 #endif
 
+// Subgroup width the q1-family kernels stripe the dot/o_acc over and reduce
+// across (sub_group_reduce_*). Defaults to the Adreno default sg (64); the host
+// overrides it with -D FA_SG=<device sg> on non-Adreno GPUs. REQD_FA_SG pins the
+// width on Intel (intel_reqd_sub_group_size), where the WG would otherwise split
+// into multiple narrower subgroups and the reduces would cover only part of it.
+// Left empty on Adreno: the qcom default sg already equals FA_SG=64 there, and
+// the explicit attribute regresses sibling kernels (see the q1_vec note below).
+#ifndef FA_SG
+#define FA_SG 64
+#endif
+#ifdef cl_intel_required_subgroup_size
+#pragma OPENCL EXTENSION cl_intel_required_subgroup_size : enable
+#define REQD_FA_SG __attribute__((intel_reqd_sub_group_size(FA_SG)))
+#else
+#define REQD_FA_SG
+#endif
+
 #ifdef cl_khr_subgroup_shuffle
 #pragma OPENCL EXTENSION cl_khr_subgroup_shuffle : enable
 #define HAS_SUBGROUP_SHUFFLE 1
@@ -38,7 +55,7 @@
 #ifndef FA_PARTIAL_FLOATS
 #define FA_PARTIAL_FLOATS (2 + DV)
 #endif
-#define Q1_WG_SIZE 64
+#define Q1_WG_SIZE FA_SG
 
 // The kernels are built with -cl-finite-math-only. On some older Adreno GPUs,
 // infinite operand can cause undefined behavior and miscompilation for exp.
@@ -625,6 +642,7 @@ __kernel void FA_TILE_NAME(
 // above; every decode kernel below is excluded so the tile compiles in its own
 // minimal program (the full program OOMs the Adreno compiler at DK=512).
 #ifndef FA_PREFILL_ONLY
+REQD_FA_SG
 __kernel void flash_attn_f32_f16_q1(
     const global void * q_void, ulong q_offset,
     const global void * k_void, ulong k_offset,
@@ -800,6 +818,13 @@ __kernel void flash_attn_f32_f16_q1(
 #define VEC_WG_SIZE      (Q1_WG_SIZE * VEC_NSG)
 #define Q1V_DV_PER_THREAD ((DV_VEC + Q1_WG_SIZE - 1) / Q1_WG_SIZE)
 
+// FA_DECODE_MINIMAL: the DK=512 (Gemma-4 global-layer) decode program drops the
+// q1_vec kernel too — its DV=512 vector arrays + REQD_SUBGROUP_SIZE_64 dominate the
+// program's shader-compiler host-memory footprint (the OOM that made DK=512 builds
+// fragile under load), and on Adreno X1 REQD_SUBGROUP_SIZE_64 routes to a slow
+// fallback variant anyway. The minimal program keeps q1 + q1_split + merge, which is
+// correct for decode at any depth; dispatch falls back from q1_vec to q1 cleanly.
+#ifndef FA_DECODE_MINIMAL
 REQD_SUBGROUP_SIZE_64
 __kernel void flash_attn_f32_f16_q1_vec(
     const global void * q_void, ulong q_offset,
@@ -984,7 +1009,9 @@ __kernel void flash_attn_f32_f16_q1_vec(
     }
 }
 
-#ifndef FA_DECODE_ONLY  // MQ / local-tile decode variants — excluded for the DK=512 decode-only program (q1 + q1_vec + q1_split + merge kept)
+#endif  // !FA_DECODE_MINIMAL (q1_vec excluded for the minimal DK=512 decode program)
+
+#ifndef FA_DECODE_ONLY  // MQ / local-tile decode variants — excluded for the DK=512 decode-only program (minimal program keeps q1 + q1_split + merge)
 // Multi-Query coalesced vec decode (KV-head-coalesced WG dispatch).
 //
 // At high GQA + DK>=256 + small n_head_kv (e.g. Gemma-3-1B: n_head=4,
