@@ -1,4 +1,5 @@
 #include "server-context.h"
+#include "jinja/parser.h"
 #include "server-chat.h"
 #include "server-common.h"
 #include "server-http.h"
@@ -1324,6 +1325,24 @@ private:
                 return false;
             }
 
+            std::unique_ptr<server_jinja_template> system_message_prefix;
+            try {
+                if (!params_base.system_message_prefix.empty()) {
+                    jinja::lexer lexer;
+                    auto lexer_res = lexer.tokenize(params_base.system_message_prefix);
+
+                    system_message_prefix = std::make_unique<server_jinja_template>(
+                        server_jinja_template {
+                            lexer_res.source,
+                            jinja::parse_from_tokens(lexer_res)
+                        }
+                    );
+                }
+            } catch (const std::exception & e) {
+                SRV_ERR("%s: system_message_prefix template parsing error: %s\n", __func__, e.what());
+                return false;
+            }
+
             // thinking is enabled if:
             // 1. It's not explicitly disabled via --reasoning off
             // 2. The chat template supports it
@@ -1336,6 +1355,7 @@ private:
                 /* prefill_assistant     */ params_base.prefill_assistant,
                 /* reasoning_format      */ params_base.reasoning_format,
                 /* chat_template_kwargs  */ params_base.default_template_kwargs,
+                /* system_message_prefix */ std::move(system_message_prefix),
                 /* tmpls                 */ std::move(chat_templates),
                 /* allow_image           */ mctx ? mtmd_support_vision(mctx) : false,
                 /* allow_audio           */ mctx ? mtmd_support_audio (mctx) : false,

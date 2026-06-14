@@ -1,5 +1,6 @@
 #include "common.h"
 #include "download.h"
+#include "jinja/runtime.h"
 #include "log.h"
 #include "llama.h"
 #include "mtmd.h"
@@ -1076,6 +1077,35 @@ json oaicompat_chat_params_parse(
             throw std::invalid_argument("Cannot use custom grammar constraints with tools.");
         }
         llama_params["parse_tool_calls"] = true;
+    }
+    if (opt.system_message_prefix) {
+        jinja::context ctx(opt.system_message_prefix->source);
+        jinja::runtime runtime(ctx);
+        const jinja::value results = runtime.execute(opt.system_message_prefix->program);
+        std::string system_message_prefix = jinja::runtime::gather_string_parts(results)->as_string().str();
+
+        bool needs_system_message = true;
+        for (auto & message : inputs.messages) {
+            if (message.role == "system") {
+                needs_system_message = false;
+                if (!message.content_parts.empty()) {
+                    message.content_parts.insert(
+                        message.content_parts.begin(),
+                        common_chat_msg_content_part{"text", system_message_prefix}
+                    );
+                } else {
+                    message.content = system_message_prefix + message.content;
+                }
+                break;
+            }
+        }
+
+        if (needs_system_message) {
+            common_chat_msg system_message;
+            system_message.role = "system";
+            system_message.content = system_message_prefix;
+            inputs.messages.insert(inputs.messages.begin(), system_message);
+        }
     }
 
     // merge the template args provided from command line with the args provided in the user request

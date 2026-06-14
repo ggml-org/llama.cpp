@@ -289,12 +289,19 @@ std::vector<server_tokens> tokenize_input_prompts(
 // OAI utils
 //
 
+// used to keep the system_message_prefix string and program together
+struct server_jinja_template {
+    std::string source;
+    jinja::program program;
+};
+
 // global server parameters for chat formatting / parsing
 struct server_chat_params {
     bool use_jinja;
     bool prefill_assistant;
     common_reasoning_format reasoning_format;
     std::map<std::string, std::string> chat_template_kwargs; // mapping key --> json value
+    std::unique_ptr<server_jinja_template> system_message_prefix;
     common_chat_templates_ptr tmpls;
     bool allow_image;
     bool allow_audio;

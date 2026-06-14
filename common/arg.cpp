@@ -3033,6 +3033,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_CHAT_TEMPLATE_KWARGS"));
     add_opt(common_arg(
+        {"--system-message-prefix"}, "STRING",
+        "a jinja-formatted string that will be set as the prefix for the first system message on each request. (if there is no system message on a request, one will be added to the beginning of that request.)",
+        [](common_params & params, const std::string & value) {
+            params.system_message_prefix = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_SYSTEM_MESSAGE_PREFIX"));
+    add_opt(common_arg(
         {"-to", "--timeout"}, "N",
         string_format("server read/write timeout in seconds (default: %d)", params.timeout_read),
         [](common_params & params, int value) {

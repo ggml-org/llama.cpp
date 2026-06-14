@@ -621,6 +621,7 @@ struct common_params {
     std::string ssl_file_cert = "";                                                                         // NOLINT
 
     std::map<std::string, std::string> default_template_kwargs;
+    std::string system_message_prefix = "";
 
     // UI configs
     bool ui = true;
