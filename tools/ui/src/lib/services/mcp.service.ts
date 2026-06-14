@@ -16,7 +16,8 @@ import {
 	DEFAULT_MCP_CONFIG,
 	DEFAULT_CLIENT_VERSION,
 	DEFAULT_IMAGE_MIME_TYPE,
-	MCP_PARTIAL_REDACT_HEADERS
+	MCP_PARTIAL_REDACT_HEADERS,
+	CORS_PROXY_ENDPOINT
 } from '$lib/constants';
 import {
 	MCPConnectionPhase,
@@ -248,7 +249,7 @@ export class MCPService {
 						const parsedRequestUrl = new URL(requestUrlStr, window.location.origin);
 						if (
 							parsedRequestUrl.origin === window.location.origin &&
-							!parsedRequestUrl.pathname.includes('/cors-proxy')
+							!parsedRequestUrl.pathname.includes(CORS_PROXY_ENDPOINT)
 						) {
 							const originalConfigUrl = new URL(config.url);
 							const realTargetUrl = new URL(
@@ -432,7 +433,7 @@ export class MCPService {
 				stopPhaseLogging: () => {}
 			};
 		}
-		
+
 		if (config.transport === MCPTransportType.SSE) {
 			const url = useProxy ? buildProxiedUrl(config.url) : new URL(config.url);
 			const { fetch: diagnosticFetch, disable: stopPhaseLogging } = this.createDiagnosticFetch(
