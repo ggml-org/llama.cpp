@@ -23,7 +23,7 @@ ARG APP_VERSION=N/A
 ARG APP_REVISION=N/A
 
 ## Build Image
-FROM ubuntu:${UBUNTU_VERSION} AS build
+FROM docker.io/ubuntu:${UBUNTU_VERSION} AS build
 
 # Pass proxy args to build stage
 ARG http_proxy
@@ -88,7 +88,7 @@ RUN mkdir -p /app/full \
     && cp .devops/tools.sh /app/full/tools.sh
 
 ## Base Runtime Image
-FROM ubuntu:${UBUNTU_VERSION} AS base
+FROM docker.io/ubuntu:${UBUNTU_VERSION} AS base
 
 # Pass proxy args to runtime stage
 ARG http_proxy

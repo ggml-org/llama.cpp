@@ -5,7 +5,7 @@ ARG APP_VERSION=N/A
 ARG APP_REVISION=N/A
 
 ### Build Llama.cpp stage
-FROM gcc:${GCC_VERSION} AS build
+FROM docker.io/gcc:${GCC_VERSION} AS build
 
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
@@ -55,7 +55,7 @@ COPY --from=build /opt/llama.cpp/conversion /llama.cpp/conversion
 
 
 ### Base image
-FROM ubuntu:${UBUNTU_VERSION} AS base
+FROM docker.io/ubuntu:${UBUNTU_VERSION} AS base
 
 ARG BUILD_DATE=N/A
 ARG APP_VERSION=N/A

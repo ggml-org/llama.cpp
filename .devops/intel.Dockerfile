@@ -5,7 +5,7 @@ ARG APP_REVISION=N/A
 
 ## Build Image
 
-FROM intel/deep-learning-essentials:$ONEAPI_VERSION AS build
+FROM docker.io/intel/deep-learning-essentials:$ONEAPI_VERSION AS build
 
 ARG GGML_SYCL_F16=OFF
 ARG LEVEL_ZERO_VERSION=1.28.2
@@ -42,7 +42,7 @@ RUN mkdir -p /app/full \
     && cp requirements.txt /app/full \
     && cp .devops/tools.sh /app/full/tools.sh
 
-FROM intel/deep-learning-essentials:$ONEAPI_VERSION AS base
+FROM docker.io/intel/deep-learning-essentials:$ONEAPI_VERSION AS base
 
 ARG BUILD_DATE=N/A
 ARG APP_VERSION=N/A
