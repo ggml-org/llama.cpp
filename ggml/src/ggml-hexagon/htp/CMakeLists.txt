@@ -40,8 +40,8 @@ if (_hmx_idx GREATER_EQUAL 0)
     target_compile_definitions(${HTP_LIB} PRIVATE HTP_HAS_HMX=1)
 
     target_sources(${HTP_LIB} PRIVATE
-        hmx-flash-attn-ops.c
         hmx-matmul-ops.c
+        hmx-flash-attn-ops.c
         hmx-queue.c
     )
 endif()
