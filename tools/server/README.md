@@ -341,8 +341,12 @@ An example of Markdown tool file is:
 ```
 # Tools/Agents Definition
 
+**datetime**:   Get the current date and time       (command: `date`)
+**exec_shell**: Execute a shell {command}           (command: `{command}`)
+**grep_text**:  Search for text {pattern} in {file} (command: `grep  "{pattern}" {file}`)
+**get_url**:    Get the content of given web {URL}  (command: `lynx -dump {URL}`)
 **list_files**: List all files in given {directory} (command: `ls {directory}`)
-**grep_text**: Search for text {pattern} in {file} (command: `grep "{pattern}" {file}`)
+**read_file**:  Get the content of a {file}         (command: `cat {file}`)
 ```
 
 ## Build
