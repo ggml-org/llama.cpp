@@ -192,6 +192,7 @@ struct llama_model_loader {
 
     // for backwards compatibility, does not support ggml-backend
     void load_data_for(struct ggml_tensor * cur) const;
+    void unmap_data_for(struct ggml_tensor * cur) const;
 
     // Returns false if cancelled by progress_callback
     bool load_all_data(

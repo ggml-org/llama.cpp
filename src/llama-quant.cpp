@@ -1298,6 +1298,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
             // write tensor data + padding
             fout.write((const char *) new_data, new_size);
             zeros(fout, GGML_PAD(new_size, align) - new_size);
+            ml.unmap_data_for(tensor);
         } // no --dry-run
     } // main loop
 

@@ -1405,6 +1405,16 @@ void llama_model_loader::load_data_for(struct ggml_tensor * cur) const {
     }
 }
 
+void llama_model_loader::unmap_data_for(struct ggml_tensor * cur) const {
+    if (!use_mmap) {
+        return;
+    }
+
+    const auto & w = require_weight(ggml_get_name(cur));
+    auto & mapping = mappings.at(w.idx);
+    mapping->unmap_fragment(w.offs, w.offs + ggml_nbytes(cur));
+}
+
 bool llama_model_loader::load_all_data(
         struct ggml_context * ctx,
         llama_buf_map & bufs,
