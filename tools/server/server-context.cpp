@@ -204,6 +204,9 @@ struct server_slot {
 
     std::function<void(int /* id_slot */)> callback_on_release;
 
+    // cancellation flag: set by cancel task, checked in update_slots()
+    std::shared_ptr<std::atomic<bool>> should_stop = std::make_shared<std::atomic<bool>>(false);
+
     // Speculative decoding stats
     int32_t n_draft_total = 0;      // Total draft tokens generated
     int32_t n_draft_accepted = 0;   // Draft tokens actually accepted
@@ -2232,6 +2235,7 @@ private:
                     // release slot linked with the task id
                     for (auto & slot : slots) {
                         if (slot.task && slot.task->id == task.id_target) {
+                            slot.should_stop->store(true);
                             slot.release();
                             break;
                         }
@@ -2591,6 +2595,13 @@ private:
             if (!slot_batched) {
                 slot_batched = &slot;
             } else if (!slot_batched->can_batch_with(slot)) {
+                continue;
+            }
+
+            if (slot.should_stop->load()) {
+                SLT_WRN(slot, "%s", "cancellation requested, releasing slot\n");
+                send_error(slot, "request cancelled by client");
+                slot.release();
                 continue;
             }
 

@@ -1492,17 +1492,21 @@ server_http_proxy::server_http_proxy(
     cli->set_write_timeout(timeout_read, 0); // reversed for cli (client) vs srv (server)
     cli->set_read_timeout(timeout_write, 0);
     this->status = 500; // to be overwritten upon response
-    this->cleanup = [pipe]() {
+    this->cleanup = [pipe, cli]() {
+        cli->stop(); // abort in-flight child request
         pipe->close_read();
         pipe->close_write();
     };
 
     // wire up the receive end of the pipe
-    this->next = [pipe, should_stop](std::string & out) -> bool {
+    this->next = [pipe, cli, should_stop](std::string & out) -> bool {
         msg_t msg;
         bool has_next = pipe->read(msg, should_stop);
         if (!msg.data.empty()) {
             out = std::move(msg.data);
+        }
+        if (!has_next && should_stop()) {
+            cli->stop(); // abort child request on disconnect
         }
         return has_next; // false if EOF or pipe broken
     };
