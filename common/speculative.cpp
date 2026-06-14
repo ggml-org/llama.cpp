@@ -846,11 +846,6 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
     std::vector<std::vector<float>> verify_h;
     std::vector<int32_t> verify_h_rows;
 
-    // Per-seq draft length from the last draft() call, used in accept() to
-    // roll back ctx_dft's recurrent state past the AR draft's redundant
-    // pre-advancement before process() mirrored the verify batch.
-    std::vector<uint16_t> last_n_drafted;
-
     common_speculative_impl_draft_mtp(const common_params_speculative & params, uint32_t n_seq)
         : common_speculative_impl(COMMON_SPECULATIVE_TYPE_DRAFT_MTP, n_seq)
         , params(params.draft)
@@ -925,8 +920,6 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
 
         verify_h.assign(n_seq, {});
         verify_h_rows.assign(n_seq, 0);
-
-        last_n_drafted.assign(n_seq, 0);
     }
 
     ~common_speculative_impl_draft_mtp() override {
@@ -1093,11 +1086,6 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
     void draft(common_speculative_draft_params_vec & dparams) override {
         auto & ctx_dft = params.ctx_dft;
 
-        if (chain_heads) {
-            draft_multi_head(dparams);
-            return;
-        }
-
         common_batch_clear(batch);
 
         // keep track of which sequences are still drafting
@@ -1106,6 +1094,11 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
 
         const float * h_row = nullptr;
         const size_t row_bytes = (size_t) n_embd * sizeof(float);
+
+        // chained heads accumulate the prefix into the batch across draft
+        // steps instead of rebuilding it, so each sequence samples from its last
+        // appended slot; i_last tracks that slot.
+        std::vector<int> i_last(n_seq, -1);
 
         for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
             auto & dp = dparams[seq_id];
@@ -1122,20 +1115,38 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
 
             h_row = pending_h[seq_id].data();
             std::memcpy(batch.embd + n_embd*(batch.n_tokens - 1), h_row, row_bytes);
-        }
 
-        int ret = llama_decode(ctx_dft, batch);
-        if (ret != 0) {
-            LOG_WRN("%s: llama_decode returned %d\n", __func__, ret);
-            return;
+            i_last[seq_id] = batch.n_tokens - 1;
         }
 
         int i = 0;
 
         while (n_drafting > 0) {
-            int i_batch = 0;
+            // chained heads: every trained head keeps its own KV, so reset
+            // each sequence's draft region and select head `i` before re-decoding the
+            // accumulated prefix (head 0 sees just id_last). the single-head (qwen)
+            // and mem-shared (gemma4) paths leave their growing KV untouched.
+            if (chain_heads) {
+                auto * mem_dft = llama_get_memory(ctx_dft);
+                for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
+                    if (drafting[seq_id]) {
+                        llama_memory_seq_rm(mem_dft, seq_id, dparams[seq_id].n_past, -1);
+                    }
+                }
+                llama_set_mtp_layer_offset(ctx_dft, i);
+            }
 
-            common_batch_clear(batch);
+            int ret = llama_decode(ctx_dft, batch);
+            if (ret != 0) {
+                LOG_WRN("%s: llama_decode[%d] returned %d\n", __func__, i, ret);
+                break;
+            }
+
+            // the growing-KV paths rebuild the batch with only the new tokens (the KV
+            // already holds the prefix); chained heads keep accumulating into it
+            if (!chain_heads) {
+                common_batch_clear(batch);
+            }
 
             for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
                 if (!drafting[seq_id]) {
@@ -1144,9 +1155,8 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
 
                 auto * smpl = smpls[seq_id].get();
 
-                common_sampler_sample(smpl, ctx_dft, i_batch, true);
-                h_row = llama_get_embeddings_nextn_ith(ctx_dft, i_batch);
-                ++i_batch;
+                common_sampler_sample(smpl, ctx_dft, i_last[seq_id], true);
+                h_row = llama_get_embeddings_nextn_ith(ctx_dft, i_last[seq_id]);
 
                 const auto * cur_p = common_sampler_get_candidates(smpl, true);
 
@@ -1180,6 +1190,12 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
                     continue;
                 }
 
+                // chained heads: only the newly appended slot keeps its logits, so the
+                // slot we just sampled stops producing an output on the next head
+                if (chain_heads) {
+                    batch.logits[i_last[seq_id]] = false;
+                }
+
                 if (is_mem_shared) {
                     // note: with shared memory (e.g. Gemma4 assistants) we use the same position for all draft tokens
                     // ref: https://github.com/huggingface/transformers/blob/effde20942e3f82a1b97449f60b3a48c5ff96145/docs/source/en/model_doc/gemma4_assistant.md?plain=1#L36-L37
@@ -1188,154 +1204,27 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
                     common_batch_add(batch, id, dp.n_past + i + 1, { seq_id }, true);
                 }
                 std::memcpy(batch.embd + n_embd*(batch.n_tokens - 1), h_row, row_bytes);
+
+                i_last[seq_id] = batch.n_tokens - 1;
             }
 
             if (batch.n_tokens == 0) {
                 break;
             }
 
-            // evaluate the drafted tokens on the draft model
-            ret = llama_decode(ctx_dft, batch);
-            if (ret != 0) {
-                LOG_WRN("%s: llama_decode[%d] returned %d\n", __func__, i, ret);
-                break;
-            }
-
             ++i;
         }
 
+        if (chain_heads) {
+            llama_set_mtp_layer_offset(ctx_dft, 0); // restore default for non-draft decodes
+        }
+
         for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
             auto & dp = dparams[seq_id];
             if (!dp.drafting) {
                 continue;
             }
 
-            if (dp.result->size() < (size_t) params.n_min) {
-                dp.result->clear();
-            }
-
-            last_n_drafted[seq_id] = (uint16_t) dp.result->size();
-        }
-    }
-
-    // Multi-head MTP draft: chain heads 0..n_mtp_layers-1. Step s runs head s on
-    // the accumulated prefix [id_last, draft_1, .., draft_s] and samples draft_{s+1}.
-    // Each slot's embd is the hidden produced by the PREVIOUS head for that token
-    // (slot 0 is always pending_h = trunk h). Per-step seq_rm keeps each head's KV
-    // on a clean, position-aligned slot set.
-    void draft_multi_head(common_speculative_draft_params_vec & dparams) {
-        auto * ctx_dft = params.ctx_dft;
-        auto * mem_dft = llama_get_memory(ctx_dft);
-        const size_t row_bytes = (size_t) n_embd * sizeof(float);
-
-        // Per-seq accumulated draft state. Positions are implicit: slot k always
-        // sits at round_start + k (the prefix is contiguous from id_last), so we
-        // don't store a parallel positions vector.
-        struct seq_state {
-            bool active = false;
-            llama_pos round_start = 0;                 // pos of id_last (slot 0)
-            std::vector<llama_token> toks;             // [id_last, draft_1, ...]
-            std::vector<std::vector<float>> slot_h;    // embd per slot (toks[k] <-> slot_h[k])
-        };
-        std::vector<seq_state> st(n_seq);
-
-        int n_drafting = 0;
-        for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
-            auto & dp = dparams[seq_id];
-            if (!dp.drafting) {
-                continue;
-            }
-            common_sampler_reset(smpls[seq_id].get());
-            st[seq_id].active      = true;
-            st[seq_id].round_start = dp.n_past;
-            st[seq_id].toks.push_back(dp.id_last);
-            st[seq_id].slot_h.push_back(pending_h[seq_id]); // slot 0 = trunk pending_h
-            n_drafting++;
-        }
-        if (n_drafting == 0) {
-            return;
-        }
-
-        const int n_steps = n_mtp_layers; // one head per step, capped at head count
-
-        for (int step = 0; step < n_steps && n_drafting > 0; ++step) {
-            // 1) per-seq KV reset for this head + select the head's layer.
-            for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
-                if (!st[seq_id].active) {
-                    continue;
-                }
-                llama_memory_seq_rm(mem_dft, seq_id, st[seq_id].round_start, -1);
-            }
-            llama_set_mtp_layer_offset(ctx_dft, step);
-
-            // 2) build accumulated batch; logits only on each seq's last slot.
-            common_batch_clear(batch);
-            std::vector<int> last_i_batch(n_seq, -1);
-            for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
-                if (!st[seq_id].active) {
-                    continue;
-                }
-                auto & s = st[seq_id];
-                const int len = (int) s.toks.size();
-                for (int k = 0; k < len; ++k) {
-                    const bool is_last = (k == len - 1);
-                    common_batch_add(batch, s.toks[k], s.round_start + k, { seq_id }, is_last);
-                    std::memcpy(batch.embd + (size_t) (batch.n_tokens - 1) * n_embd,
-                                s.slot_h[k].data(), row_bytes);
-                    if (is_last) last_i_batch[seq_id] = batch.n_tokens - 1;
-                }
-            }
-
-            const int rc = llama_decode(ctx_dft, batch);
-            if (rc != 0) {
-                LOG_WRN("%s: multi-head draft decode step=%d rc=%d\n", __func__, step, rc);
-                break;
-            }
-
-            // 3) sample next draft token per active seq; extend prefix + slot_h.
-            for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
-                if (!st[seq_id].active) {
-                    continue;
-                }
-                auto & s  = st[seq_id];
-                auto & dp = dparams[seq_id];
-                const int ib = last_i_batch[seq_id];
-
-                auto * smpl = smpls[seq_id].get();
-                common_sampler_sample(smpl, ctx_dft, ib, true);
-                const float * h_row = llama_get_embeddings_nextn_ith(ctx_dft, ib);
-                const auto  * cur_p = common_sampler_get_candidates(smpl, true);
-                const llama_token id = cur_p->data[0].id;
-
-                if (cur_p->data[0].p < params.p_min) {
-                    s.active = false;
-                    n_drafting--;
-                    continue;
-                }
-
-                common_sampler_accept(smpl, id, true);
-                dp.result->push_back(id);
-
-                if ((int) dp.result->size() >= params.n_max) {
-                    s.active = false;
-                    n_drafting--;
-                    continue;
-                }
-
-                // next slot's token + its embd (= this head's output at last slot).
-                // Its position is implicit: round_start + toks.size().
-                s.toks.push_back(id);
-                s.slot_h.emplace_back(h_row, h_row + n_embd);
-            }
-        }
-
-        llama_set_mtp_layer_offset(ctx_dft, 0); // restore default
-
-        for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
-            auto & dp = dparams[seq_id];
-            if (!dp.drafting) {
-                continue;
-            }
             if (dp.result->size() < (size_t) params.n_min) {
                 dp.result->clear();
             }
