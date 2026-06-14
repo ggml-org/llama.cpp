@@ -1,0 +1,39 @@
+{
+  "adapter_dim": 512,
+  "adapter_dropout": 0.0,
+  "architectures": [
+    "modeling_sparsetral.MistralForCausalLM"
+  ],
+  "attention_dropout": 0.0,
+  "bos_token_id": 1,
+  "eos_token_id": 2,
+  "hidden_act": "silu",
+  "hidden_size": 4096,
+  "initializer_range": 0.02,
+  "intermediate_size": 14336,
+  "max_position_embeddings": 32768,
+  "model_type": "sparsetral",
+  "moe_dtype": "bfloat16",
+  "moe_scaling": 1,
+  "num_attention_heads": 32,
+  "num_experts": 16,
+  "num_hidden_layers": 32,
+  "num_key_value_heads": 8,
+  "output_router_logits": false,
+  "pretraining_tp": 1,
+  "rms_norm_eps": 1e-05,
+  "rope_theta": 1000000.0,
+  "router_aux_loss_coef": 0.01,
+  "sliding_window": null,
+  "tie_word_embeddings": false,
+  "topk": 4,
+  "torch_dtype": "bfloat16",
+  "transformers_version": "4.37.2",
+  "use_cache": true,
+  "vocab_size": 32000,
+  "auto_map": {
+    "AutoConfig": "configuration_sparsetral.SparsetralConfig",
+    "AutoModel": "modeling_sparsetral.MistralModel",
+    "AutoModelForCausalLM": "modeling_sparsetral.MistralForCausalLM"
+  }
+}

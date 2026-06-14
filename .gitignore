@@ -71,6 +71,7 @@
 !/models/.editorconfig
 !/models/ggml-vocab-*.gguf*
 !/models/templates
+!/models/sparsetral-minimal
 
 # Zig
 
@@ -160,3 +161,5 @@ a.out.*
 
 AGENTS.local.md
 .pi/SYSTEM.md
+
+contribution_plan.md
