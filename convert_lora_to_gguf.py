@@ -397,7 +397,7 @@ if __name__ == '__main__':
 
     with torch.inference_mode():
         try:
-            model_arch = hparams.get("text_config", {}).get("architectures", hparams["architectures"])[0]
+            model_arch = (hparams.get("text_config", {}).get("architectures") or hparams["architectures"])[0]
             logger.info("Using model architecture: %s", model_arch)
             model_class = get_model_class(model_arch)
         except NotImplementedError:
