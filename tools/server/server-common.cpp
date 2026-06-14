@@ -344,6 +344,14 @@ const mtmd::input_chunk_ptr & server_tokens::find_chunk(size_t idx) const {
     throw std::runtime_error("Chunk not found");
 }
 
+std::pair<const mtmd::input_chunk_ptr *, size_t> server_tokens::find_next_media_chunk(size_t idx) const {
+    auto it = map_idx_to_media.upper_bound(idx);
+    if (it != map_idx_to_media.end()) {
+        return { &it->second, it->first };
+    }
+    return { nullptr, 0 };
+}
+
 void server_tokens::push_back(llama_token tok) {
     if (tok == LLAMA_TOKEN_NULL) {
         throw std::runtime_error("Invalid token");
@@ -701,29 +709,19 @@ size_t validate_utf8(const std::string& text) {
     return len;
 }
 
-// Computes FNV-1a hash of the data
-static std::string fnv_hash(const uint8_t * data, size_t len) {
-    const uint64_t fnv_prime = 0x100000001b3ULL;
-    uint64_t hash = 0xcbf29ce484222325ULL;
-
-    for (size_t i = 0; i < len; ++i) {
-        hash ^= data[i];
-        hash *= fnv_prime;
-    }
-    return std::to_string(hash);
-}
-
 server_tokens process_mtmd_prompt(mtmd_context * mctx, const std::string & prompt, const std::vector<raw_buffer> & files, bool is_placeholder) {
+    // these will be freed upon going out of scope
     mtmd::bitmaps bitmaps;
+    std::vector<mtmd_helper::video_ptr> videos;
     for (auto & file : files) {
-        mtmd::bitmap bmp(mtmd_helper_bitmap_init_from_buf(mctx, file.data(), file.size(), is_placeholder));
-        if (!bmp.ptr) {
+        auto out = mtmd_helper_bitmap_init_from_buf(mctx, file.data(), file.size(), is_placeholder);
+        if (!out.bitmap) {
             throw std::runtime_error("Failed to load image or audio file");
         }
-        // calculate bitmap hash (for KV caching)
-        std::string hash = fnv_hash(bmp.data(), bmp.n_bytes());
-        bmp.set_id(hash.c_str());
-        bitmaps.entries.push_back(std::move(bmp));
+        bitmaps.entries.emplace_back(out.bitmap);
+        if (out.video_ctx) {
+            videos.emplace_back(out.video_ctx);
+        }
     }
     // process prompt
     std::vector<server_tokens> inputs;
@@ -1023,6 +1021,20 @@ json oaicompat_chat_params_parse(
                 p["text"] = get_media_marker();
                 p.erase("input_audio");
 
+            } else if (type == "input_video") {
+                if (!opt.allow_video) {
+                    throw std::runtime_error("video input is not supported - hint: if this is unexpected, you may need to provide the mmproj");
+                }
+
+                json input_video  = json_value(p, "input_video", json::object());
+                std::string data  = json_value(input_video, "data", std::string());
+                auto decoded_data = base64_decode(data); // expected to be base64 encoded
+                out_files.push_back(decoded_data);
+
+                p["type"] = "media_marker";
+                p["text"] = get_media_marker();
+                p.erase("input_video");
+
             } else if (type != "text") {
                 throw std::invalid_argument("unsupported content[].type");
             }
@@ -1122,9 +1134,9 @@ json oaicompat_chat_params_parse(
 
     // Reasoning budget: pass parameters through to sampling layer
     {
-        int reasoning_budget = opt.reasoning_budget;
-        if (reasoning_budget == -1 && body.contains("thinking_budget_tokens")) {
-            reasoning_budget = json_value(body, "thinking_budget_tokens", -1);
+        int reasoning_budget = json_value(body, "thinking_budget_tokens", -1);
+        if (reasoning_budget == -1) {
+            reasoning_budget = opt.reasoning_budget;
         }
 
         if (!chat_params.thinking_end_tag.empty()) {

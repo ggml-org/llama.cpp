@@ -584,7 +584,7 @@ static void gated_delta_net_f32_pp_thread(unsigned int nth, unsigned int ith, vo
     const uint32_t H        = v->ne[1];
     const uint32_t n_tokens = v->ne[2];
     const uint32_t n_seqs   = v->ne[3];
-    const uint32_t K        = state->ne[1];
+    const uint32_t K        = octx->op_params[0];
 
     const uint32_t total_rows = H * n_seqs;
     if (ith >= total_rows) {
@@ -618,9 +618,8 @@ static void gated_delta_net_f32_pp_thread(unsigned int nth, unsigned int ith, vo
     struct fastdiv_values fd_rq3 = init_fastdiv_values(rq3);
     struct fastdiv_values fd_rk3 = init_fastdiv_values(rk3);
 
-    const uint64_t state_seq_stride = state->nb[2] / sizeof(float);
+    const uint64_t state_seq_stride = state->nb[3] / sizeof(float);
     const uint64_t state_size_per_snap = (uint64_t) S_v * S_v * H * n_seqs;
-    const int64_t shift = (int64_t) n_tokens - (int64_t) K;
 
     uint32_t ir_prefetch = ith;
     int spad_idx = 0;
@@ -630,7 +629,8 @@ static void gated_delta_net_f32_pp_thread(unsigned int nth, unsigned int ith, vo
         const uint32_t piv1 = fastmodulo(ir_prefetch, H, &fd_H);
         const uint32_t piv3 = fastdiv(ir_prefetch, &fd_H);
         const float * ps_in = state_in_base + (uint64_t) piv3 * state_seq_stride + (uint64_t) piv1 * S_v * S_v;
-        float * ps_out = state_out_base + (uint64_t) (K - 1) * state_size_per_snap + ((uint64_t) piv3 * H + piv1) * S_v * S_v;
+        // final state lands in snapshot slot 0 (most-recent-first ordering)
+        float * ps_out = state_out_base + ((uint64_t) piv3 * H + piv1) * S_v * S_v;
 
         // Push dummy write-back
         dma_queue_push(dma, dma_make_ptr(ps_out, s_work[spad_idx]),
@@ -661,7 +661,8 @@ static void gated_delta_net_f32_pp_thread(unsigned int nth, unsigned int ith, vo
         const uint32_t iq3 = fastdiv(iv3, &fd_rq3);
         const uint32_t ik3 = fastdiv(iv3, &fd_rk3);
 
-        float * s_out = state_out_base + (uint64_t) (K - 1) * state_size_per_snap + ((uint64_t) iv3 * H + iv1) * S_v * S_v;
+        // final state lands in snapshot slot 0 (most-recent-first ordering)
+        float * s_out = state_out_base + ((uint64_t) iv3 * H + iv1) * S_v * S_v;
 
         float * attn_data = dst_base + ((uint64_t) iv3 * n_tokens * H + iv1) * S_v;
 
@@ -792,7 +793,8 @@ static void gated_delta_net_f32_pp_thread(unsigned int nth, unsigned int ith, vo
             }
 
             if (K > 1) {
-                const int64_t target_slot = (int64_t) t - shift;
+                // snapshot slot mapping: slot 0 = most recent state, slot s = s tokens back.
+                const int64_t target_slot = (int64_t) n_tokens - 1 - (int64_t) t;
                 if (target_slot >= 0 && target_slot < (int64_t) K) {
                     float * curr_state_o = state_out_base + (uint64_t) target_slot * state_size_per_snap + ((uint64_t) iv3 * H + iv1) * S_v * S_v;
                     if (curr_state_o != s_out) {
@@ -844,7 +846,6 @@ static void gated_delta_net_f32_tg_thread(unsigned int nth, unsigned int ith, vo
     const uint32_t S_v      = v->ne[0];
     const uint32_t H        = v->ne[1];
     const uint32_t n_seqs   = v->ne[3];
-    const uint32_t K        = state->ne[1];
 
     const uint32_t total_rows = H * n_seqs;
     if (ith >= total_rows) {
@@ -878,8 +879,7 @@ static void gated_delta_net_f32_tg_thread(unsigned int nth, unsigned int ith, vo
     struct fastdiv_values fd_rq3 = init_fastdiv_values(rq3);
     struct fastdiv_values fd_rk3 = init_fastdiv_values(rk3);
 
-    const uint64_t state_seq_stride = state->nb[2] / sizeof(float);
-    const uint64_t state_size_per_snap = (uint64_t) S_v * S_v * H * n_seqs;
+    const uint64_t state_seq_stride = state->nb[3] / sizeof(float);
 
     uint32_t ir_prefetch = ith;
     int spad_idx = 0;
@@ -889,7 +889,8 @@ static void gated_delta_net_f32_tg_thread(unsigned int nth, unsigned int ith, vo
         const uint32_t piv1 = fastmodulo(ir_prefetch, H, &fd_H);
         const uint32_t piv3 = fastdiv(ir_prefetch, &fd_H);
         const float * ps_in = state_in_base + (uint64_t) piv3 * state_seq_stride + (uint64_t) piv1 * S_v * S_v;
-        float * ps_out = state_out_base + (uint64_t) (K - 1) * state_size_per_snap + ((uint64_t) piv3 * H + piv1) * S_v * S_v;
+        // final state lands in snapshot slot 0 (most-recent-first ordering)
+        float * ps_out = state_out_base + ((uint64_t) piv3 * H + piv1) * S_v * S_v;
 
         // Push dummy write-back
         dma_queue_push(dma, dma_make_ptr(ps_out, s_work[spad_idx]),
@@ -920,7 +921,8 @@ static void gated_delta_net_f32_tg_thread(unsigned int nth, unsigned int ith, vo
         const uint32_t iq3 = fastdiv(iv3, &fd_rq3);
         const uint32_t ik3 = fastdiv(iv3, &fd_rk3);
 
-        float * s_out = state_out_base + (uint64_t) (K - 1) * state_size_per_snap + ((uint64_t) iv3 * H + iv1) * S_v * S_v;
+        // final state lands in snapshot slot 0 (most-recent-first ordering)
+        float * s_out = state_out_base + ((uint64_t) iv3 * H + iv1) * S_v * S_v;
 
         float * attn_data = dst_base + ((uint64_t) iv3 * H + iv1) * S_v;
 
@@ -1097,7 +1099,7 @@ int op_gated_delta_net(struct htp_ops_context * octx) {
     const uint32_t H        = v->ne[1];
     const uint32_t n_tokens = v->ne[2];
     const uint32_t n_seqs   = v->ne[3];
-    const uint32_t K        = state->ne[1];
+    const uint32_t K        = octx->op_params[0];
 
     if (S_v == 0 || S_v > HTP_GDN_MAX_SV || H == 0 || n_tokens == 0 || n_seqs == 0) {
         return HTP_STATUS_NO_SUPPORT;
@@ -1110,7 +1112,8 @@ int op_gated_delta_net(struct htp_ops_context * octx) {
         (n_seqs % q->ne[3]) != 0 || (n_seqs % k->ne[3]) != 0) {
         return HTP_STATUS_NO_SUPPORT;
     }
-    if (state->ne[0] * state->ne[2] * state->ne[3] != S_v * S_v * H * n_seqs) {
+    // state holds s0 only: [S_v, S_v, H, n_seqs]
+    if (state->ne[0] != S_v || state->ne[1] != S_v || state->ne[2] != H || state->ne[3] != n_seqs) {
         return HTP_STATUS_NO_SUPPORT;
     }
     if (dst->ne[0] != S_v * H || dst->ne[1] != n_tokens * n_seqs + S_v * n_seqs * K) {

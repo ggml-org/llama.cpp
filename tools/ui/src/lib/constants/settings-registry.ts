@@ -365,6 +365,14 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 					serverKey: SETTINGS_KEYS.ALWAYS_SHOW_AGENTIC_TURNS,
 					paramType: SyncableParameterType.BOOLEAN
 				}
+			},
+			{
+				key: SETTINGS_KEYS.SHOW_BUILD_VERSION,
+				label: 'Show build version information',
+				help: 'Display the current build version in the bottom-right corner of the interface.',
+				defaultValue: false,
+				type: SettingsFieldType.CHECKBOX,
+				section: SETTINGS_SECTION_SLUGS.DISPLAY
 			}
 		]
 	},
@@ -689,6 +697,14 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 					serverKey: SETTINGS_KEYS.SHOW_RAW_OUTPUT_SWITCH,
 					paramType: SyncableParameterType.BOOLEAN
 				}
+			},
+			{
+				key: SETTINGS_KEYS.JS_SANDBOX_ENABLED,
+				label: 'JavaScript sandbox tool',
+				help: 'Expose a run_javascript tool to the model. Code runs in a Web Worker inside a sandboxed iframe with an opaque origin, isolated from the WebUI and its API, with a hard timeout.',
+				defaultValue: false,
+				type: SettingsFieldType.CHECKBOX,
+				section: SETTINGS_SECTION_SLUGS.DEVELOPER
 			},
 			{
 				key: SETTINGS_KEYS.CUSTOM_JSON,

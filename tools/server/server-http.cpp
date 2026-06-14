@@ -113,7 +113,7 @@ bool server_http_context::init(const common_params & params) {
 #endif
 
     srv->set_default_headers({{"Server", "llama.cpp"}});
-    srv->set_logger(log_server_request);
+    // srv->set_logger(log_server_request); // TODO @ngxson : this is too spamy, no very useful; improve it in the future
     srv->set_exception_handler([](const httplib::Request &, httplib::Response & res, const std::exception_ptr & ep) {
         // this is fail-safe; exceptions should already handled by `ex_wrapper`
 
@@ -173,25 +173,29 @@ bool server_http_context::init(const common_params & params) {
     // Middlewares
     //
 
-    auto middleware_validate_api_key = [api_keys = params.api_keys](const httplib::Request & req, httplib::Response & res) {
-        static const std::unordered_set<std::string> public_endpoints = {
+    // Public endpoints - API routes plus all embedded UI assets
+    static const std::unordered_set<std::string> get_public_endpoints = []() {
+        std::unordered_set<std::string> endpoints {
             "/health",
             "/v1/health",
             "/models",
             "/v1/models",
             "/",
-            "/index.html",
-            "/bundle.js",
-            "/bundle.css",
         };
+        for (const llama_ui_asset & a : llama_ui_get_assets()) {
+            endpoints.insert("/" + a.name);
+        }
+        return endpoints;
+    }();
 
+    auto middleware_validate_api_key = [api_keys = params.api_keys](const httplib::Request & req, httplib::Response & res) {
         // If API key is not set, skip validation
         if (api_keys.empty()) {
             return true;
         }
 
-        // If path is public or static file, skip validation
-        if (public_endpoints.find(req.path) != public_endpoints.end()) {
+        // If path is public or a UI asset, skip validation
+        if (get_public_endpoints.count(req.path)) {
             return true;
         }
 
@@ -315,33 +319,84 @@ bool server_http_context::init(const common_params & params) {
             }
         } else {
 #if defined(LLAMA_UI_HAS_ASSETS)
-            auto serve_asset = [](const std::string & name, const char * mime, bool with_isolation_headers) {
-                return [name, mime, with_isolation_headers](const httplib::Request & req, httplib::Response & res) {
-                    const llama_ui_asset * a = llama_ui_find_asset(name.c_str());
-                    if (!a) {
-                        res.status = 404;
-                        return false;
+            static auto handle_gzip_header = [](const httplib::Request & req, httplib::Response & res) {
+                if (!llama_ui_use_gzip()) {
+                    // no gzip build, skip
+                    return true;
+                }
+                if (req.get_header_value("Accept-Encoding").find("gzip") == std::string::npos) {
+                    res.status = 415; // unsupported media type
+                    res.set_content("Error: gzip is not supported by this browser", "text/plain");
+                    return false;
+                } else {
+                    res.set_header("Content-Encoding", "gzip");
+                }
+                return true;
+            };
+
+            auto serve_asset_cached = [](const std::string & name, bool isolation) {
+                return [name, isolation](const httplib::Request & req, httplib::Response & res) {
+                    if (!handle_gzip_header(req, res)) {
+                        return true; // returns error message
                     }
+                    const llama_ui_asset * a = llama_ui_find_asset(name);
+                    if (!a) { res.status = 404; return false; }
                     res.set_header("ETag", a->etag);
-                    // Check If-None-Match for conditional GET (304 Not Modified)
                     if (const std::string & inm = req.get_header_value("If-None-Match");
                         !inm.empty() && (inm == a->etag || inm == std::string("W/") + a->etag)) {
                         res.status = 304;
                         return false;
                     }
-                    if (with_isolation_headers) {
-                        // COEP and COOP headers, required by pyodide (python interpreter)
+                    if (isolation) {
                         res.set_header("Cross-Origin-Embedder-Policy", "require-corp");
-                        res.set_header("Cross-Origin-Opener-Policy", "same-origin");
+                        res.set_header("Cross-Origin-Opener-Policy",   "same-origin");
                     }
-                    res.set_content(reinterpret_cast<const char*>(a->data), a->size, mime);
+                    res.set_header("Cache-Control", "public, max-age=31536000, immutable");
+                    res.set_content(reinterpret_cast<const char*>(a->data), a->size, a->type.c_str());
                     return false;
                 };
             };
 
-            srv->Get(params.api_prefix + "/",           serve_asset("index.html", "text/html; charset=utf-8",              true));
-            srv->Get(params.api_prefix + "/bundle.js",  serve_asset("bundle.js",  "application/javascript; charset=utf-8", false));
-            srv->Get(params.api_prefix + "/bundle.css", serve_asset("bundle.css", "text/css; charset=utf-8",               false));
+            auto serve_asset_nocache = [](const std::string & name) {
+                return [name](const httplib::Request & req, httplib::Response & res) {
+                    if (!handle_gzip_header(req, res)) {
+                        return true; // returns error message
+                    }
+                    const llama_ui_asset * a = llama_ui_find_asset(name);
+                    if (!a) {
+                        res.status = 404;
+                        return false;
+                    }
+                    res.set_header("Cache-Control", "no-cache");
+                    res.set_content(reinterpret_cast<const char*>(a->data), a->size, a->type.c_str());
+                    return false;
+                };
+            };
+
+            // main index file
+            srv->Get(params.api_prefix + "/",           serve_asset_cached("index.html", true));
+            srv->Get(params.api_prefix + "/index.html", serve_asset_cached("index.html", true));
+
+            // All remaining assets registered directly from the embedded asset table.
+            // PWA revalidation files (sw.js, manifest, version.json) use no-cache;
+            // everything else is immutable.
+            static const std::unordered_set<std::string> no_cache_names = {
+                "sw.js",
+                "manifest.webmanifest",
+                "_app/version.json",
+                "build.json"
+            };
+
+            for (const auto & a : llama_ui_get_assets()) {
+                if (a.name == "index.html") continue;  // served at "/" and "/index.html" above
+                if (no_cache_names.count(a.name)) {
+                    SRV_DBG("serve nocache for %s\n", a.name.c_str());
+                    srv->Get(params.api_prefix + "/" + a.name, serve_asset_nocache(a.name));
+                } else {
+                    srv->Get(params.api_prefix + "/" + a.name, serve_asset_cached(a.name, false));
+                }
+            }
+
 #endif
         }
     }

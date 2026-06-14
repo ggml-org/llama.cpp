@@ -97,11 +97,18 @@ struct cli_context {
                 task.params.chat_parser_params.parser.load(chat_params.parser);
             }
 
+            // Copy the preserved tokens into the sampling params
+            const llama_vocab * vocab = llama_model_get_vocab(
+                llama_get_model(ctx_server.get_llama_context()));
+            for (const auto & token : chat_params.preserved_tokens) {
+                auto ids = common_tokenize(vocab, token, false, true);
+                if (ids.size() == 1) {
+                    task.params.sampling.preserved_tokens.insert(ids[0]);
+                }
+            }
+
             // reasoning budget sampler
             if (!chat_params.thinking_end_tag.empty()) {
-                const llama_vocab * vocab = llama_model_get_vocab(
-                    llama_get_model(ctx_server.get_llama_context()));
-
                 task.params.sampling.reasoning_budget_tokens = defaults.sampling.reasoning_budget_tokens;
                 task.params.sampling.generation_prompt = chat_params.generation_prompt;
 
@@ -128,7 +135,18 @@ struct cli_context {
         console::spinner::start();
         server_task_result_ptr result = rd.next(should_stop);
 
-        console::spinner::stop();
+        while (true) {
+            auto res_partial = dynamic_cast<server_task_result_cmpl_partial *>(result.get());
+            if (res_partial && res_partial->is_begin) {
+                // this is the "send 200 status to client" signal in streaming mode
+                // skip, do not stop the spinner
+                result = rd.next(should_stop);
+            } else {
+                console::spinner::stop();
+                break;
+            }
+        }
+
         std::string curr_content;
         bool is_thinking = false;
 
@@ -224,7 +242,7 @@ struct cli_context {
 };
 
 // TODO?: Make this reusable, enums, docs
-static const std::array<std::string_view, 7> cmds = {
+static const std::array<std::string_view, 8> cmds = {
     "/audio ",
     "/clear",
     "/exit",
@@ -232,6 +250,7 @@ static const std::array<std::string_view, 7> cmds = {
     "/image ",
     "/read ",
     "/regen",
+    "/video ",
 };
 
 static std::vector<std::pair<std::string, size_t>> auto_completion_callback(std::string_view line, size_t cursor_byte_pos) {
@@ -446,6 +465,9 @@ int llama_cli(int argc, char ** argv) {
     if (inf.has_inp_audio) {
         console::log("  /audio <file>       add an audio file\n");
     }
+    if (inf.has_inp_video) {
+        console::log("  /video <file>       add a video file\n");
+    }
     console::log("\n");
 
     // interactive loop
@@ -542,7 +564,8 @@ int llama_cli(int argc, char ** argv) {
             continue;
         } else if (
                 (string_starts_with(buffer, "/image ") && inf.has_inp_image) ||
-                (string_starts_with(buffer, "/audio ") && inf.has_inp_audio)) {
+                (string_starts_with(buffer, "/audio ") && inf.has_inp_audio) ||
+                (string_starts_with(buffer, "/video ") && inf.has_inp_video)) {
             // just in case (bad copy-paste for example), we strip all trailing/leading spaces
             std::string fname = string_strip(buffer.substr(7));
             std::string marker = ctx_cli.load_input_file(fname, true);
