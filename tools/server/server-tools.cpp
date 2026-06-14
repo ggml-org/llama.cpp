@@ -573,7 +573,7 @@ struct server_tool_markdown_command : server_tool {
             text_output += " [exit due to timeout]";
         }
 
-        return {{"plain_text_response", text_output}};
+        return {{"result", text_output}};
     }
 };
 
