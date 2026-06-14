@@ -56,6 +56,7 @@
 
 	const showToolCallInProgress = $derived(config().showToolCallInProgress as boolean);
 	const showThoughtInProgress = $derived(config().showThoughtInProgress as boolean);
+	const renderThinkingAsMarkdown = $derived(config().renderThinkingAsMarkdown as boolean);
 
 	const hasReasoningError = $derived(
 		isLastAssistantMessage ? !!agenticLastError(message.convId) : false
@@ -316,7 +317,13 @@
 			onToggle={() => toggleExpanded(index, section)}
 		>
 			<div class="pt-3">
-				<MarkdownContent content={section.content} attachments={message?.extra} />
+				{#if renderThinkingAsMarkdown}
+					<MarkdownContent content={section.content} attachments={message?.extra} />
+				{:else}
+					<div class="text-xs leading-relaxed break-words whitespace-pre-wrap">
+						{section.content}
+					</div>
+				{/if}
 			</div>
 		</CollapsibleContentBlock>
 	{:else if section.type === AgenticSectionType.REASONING_PENDING}
@@ -334,7 +341,13 @@
 			onToggle={() => toggleExpanded(index, section)}
 		>
 			<div class="pt-3">
-				<MarkdownContent content={section.content} attachments={message?.extra} />
+				{#if renderThinkingAsMarkdown}
+					<MarkdownContent content={section.content} attachments={message?.extra} />
+				{:else}
+					<div class="text-xs leading-relaxed break-words whitespace-pre-wrap">
+						{section.content}
+					</div>
+				{/if}
 			</div>
 		</CollapsibleContentBlock>
 	{/if}
