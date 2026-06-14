@@ -638,13 +638,9 @@ private:
         switch (cmd.type) {
             case RPC_QCMD_GRAPH_COMPUTE:
             case RPC_QCMD_GRAPH_RECOMPUTE: {
-                auto t0 = ms_since_start();
                 bool status = send_rpc_cmd(sock_, cmd.rpc_command,
                                            cmd.send_data.data(), cmd.send_data.size());
                 RPC_STATUS_ASSERT(status);
-                auto t1 = ms_since_start();
-                GGML_LOG_DEBUG("[T+%lld worker %s] GRAPH_COMPUTE sent (took %lld ms)\n",
-                               (long long)t1, endpoint_.c_str(), (long long)(t1 - t0));
                 break;
             }
             case RPC_QCMD_SET_TENSOR: {
@@ -681,24 +677,17 @@ private:
             case RPC_QCMD_CPY_GET: {
                 // Async copy source side: GET tensor data from server into shared buffer.
                 auto & pending = cmd.pending_copy;
-                auto t0 = ms_since_start();
                 bool status = send_rpc_cmd(sock_, cmd.rpc_command,
                                            cmd.send_data.data(), cmd.send_data.size(),
                                            pending->data.data(), pending->data.size());
                 RPC_STATUS_ASSERT(status);
-                auto t1 = ms_since_start();
-                GGML_LOG_DEBUG("[T+%lld worker %s] CPY_GET %zu bytes (started T+%lld, took %lld ms)\n",
-                               (long long)t1, endpoint_.c_str(), pending->data.size(),
-                               (long long)t0, (long long)(t1 - t0));
                 pending->signal();
                 break;
             }
             case RPC_QCMD_CPY_SET: {
                 // Async copy destination side: wait for data, then SET tensor on server.
                 auto & pending = cmd.pending_copy;
-                auto t0 = ms_since_start();
                 pending->wait();
-                auto t1 = ms_since_start();
                 // Build the SET_TENSOR payload: | rpc_tensor | offset (8 bytes) | data |
                 rpc_tensor dst_tensor;
                 memcpy(&dst_tensor, cmd.send_data.data(), sizeof(rpc_tensor));
@@ -712,10 +701,6 @@ private:
                 bool status = send_rpc_cmd(sock_, RPC_CMD_SET_TENSOR,
                                            payload.data(), payload.size());
                 RPC_STATUS_ASSERT(status);
-                auto t2 = ms_since_start();
-                GGML_LOG_DEBUG("[T+%lld worker %s] CPY_SET %zu bytes: wait=%lld ms, send=%lld ms (started T+%lld)\n",
-                               (long long)t2, endpoint_.c_str(), pending->data.size(),
-                               (long long)(t1 - t0), (long long)(t2 - t1), (long long)t0);
                 break;
             }
         }
@@ -1055,9 +1040,6 @@ static void ggml_backend_rpc_free(ggml_backend_t backend) {
 static void ggml_backend_rpc_synchronize(ggml_backend_t backend) {
     ggml_backend_rpc_context * rpc_ctx = (ggml_backend_rpc_context *)backend->context;
 
-    LOG_DBG("[T+%lld sched] SYNCHRONIZE endpoint=%s\n",
-            (long long)rpc_command_queue::ms_since_start(), rpc_ctx->endpoint.c_str());
-
     if (rpc_ctx->cmd_queue) {
         rpc_ctx->cmd_queue->synchronize();
     }
@@ -1110,20 +1092,13 @@ static enum ggml_status ggml_backend_rpc_graph_compute(ggml_backend_t backend, g
     ggml_backend_dev_t rpc_dev = ggml_backend_get_device(backend);
     ggml_backend_rpc_device_context * rpc_dev_ctx = (ggml_backend_rpc_device_context *)rpc_dev->context;
 
-    LOG_DBG("[%s] backend=%p, cgraph=%p, n_nodes=%d, endpoint=%s\n",
-            __func__, (void*)backend, (void*)cgraph, cgraph->n_nodes, rpc_ctx->endpoint.c_str());
-
     GGML_ASSERT(cgraph->n_nodes > 0);
     GGML_ASSERT(rpc_ctx->cmd_queue != nullptr);
 
     bool reuse = cgraph->uid != 0 && rpc_dev_ctx->last_graph_uid == cgraph->uid;
     if (reuse) {
-        LOG_DBG("[T+%lld sched] graph_compute RECOMPUTE endpoint=%s\n",
-                (long long)rpc_command_queue::ms_since_start(), rpc_ctx->endpoint.c_str());
         rpc_ctx->cmd_queue->submit_graph_recompute(rpc_ctx->device);
     } else {
-        LOG_DBG("[T+%lld sched] graph_compute NEW endpoint=%s n_nodes=%d\n",
-                (long long)rpc_command_queue::ms_since_start(), rpc_ctx->endpoint.c_str(), cgraph->n_nodes);
         rpc_dev_ctx->last_graph_uid = cgraph->uid;
         std::vector<uint8_t> input;
         serialize_graph(rpc_ctx->device, cgraph, input);
@@ -1137,13 +1112,11 @@ static enum ggml_status ggml_backend_rpc_graph_compute(ggml_backend_t backend, g
 // The command queue ensures that commands are processed in order; any get_tensor
 // submitted after a graph_compute will only execute after the compute completes.
 static void ggml_backend_rpc_event_record(ggml_backend_t backend, ggml_backend_event_t event) {
-    LOG_DBG("[%s] no-op (command queue ordering provides synchronization)\n", __func__);
     GGML_UNUSED(backend);
     GGML_UNUSED(event);
 }
 
 static void ggml_backend_rpc_event_wait(ggml_backend_t backend, ggml_backend_event_t event) {
-    LOG_DBG("[%s] no-op (command queue ordering provides synchronization)\n", __func__);
     GGML_UNUSED(backend);
     GGML_UNUSED(event);
 }
@@ -1193,14 +1166,11 @@ static bool ggml_backend_rpc_cpy_tensor_async(ggml_backend_t backend_src, ggml_b
         GGML_ASSERT(src->data != nullptr);
         rpc_tensor rpc_dst = serialize_tensor(dst);
         dst_ctx->cmd_queue->submit_set_tensor(rpc_dst, src->data, 0, nbytes);
-        GGML_LOG_DEBUG("[T+%lld cpy_tensor_async] host->RPC, %zu bytes\n",
-                       (long long)rpc_command_queue::ms_since_start(), nbytes);
         return true;
     }
 
     // Both src and dst must be RPC buffers from here
     if (!ggml_backend_buffer_is_rpc(src->buffer) || !ggml_backend_buffer_is_rpc(dst->buffer)) {
-        GGML_LOG_DEBUG("[cpy_tensor_async] non-RPC buffer, falling back\n");
         return false;
     }
 
@@ -1215,7 +1185,6 @@ static bool ggml_backend_rpc_cpy_tensor_async(ggml_backend_t backend_src, ggml_b
         rpc_msg_copy_tensor_rsp response;
         dst_ctx->cmd_queue->submit_rpc_sync(RPC_CMD_COPY_TENSOR, &request, sizeof(request),
                                             &response, sizeof(response));
-        GGML_LOG_DEBUG("[cpy_tensor_async] same endpoint copy, %zu bytes\n", nbytes);
         return response.result;
     }
 
@@ -1234,8 +1203,6 @@ static bool ggml_backend_rpc_cpy_tensor_async(ggml_backend_t backend_src, ggml_b
     rpc_tensor rpc_dst = serialize_tensor(dst);
     dst_ctx->cmd_queue->submit_cpy_set(rpc_dst, pending);
 
-    GGML_LOG_DEBUG("[T+%lld cpy_tensor_async] cross-endpoint copy, %zu bytes\n",
-                   (long long)rpc_command_queue::ms_since_start(), nbytes);
     return true;
 }
 
