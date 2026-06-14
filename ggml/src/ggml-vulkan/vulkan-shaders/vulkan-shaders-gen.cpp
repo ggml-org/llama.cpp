@@ -427,6 +427,7 @@ void string_to_spv(std::string name, const std::string& source, const std::map<s
     // Don't write the same dep file from multiple processes
     generate_dep_file = false;
 
+    // Clean up completed futures - don't accumulate virtual memory for completed threads' stacks.
     while (compiles.front().wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
         compiles.pop_front();
     }
