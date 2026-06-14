@@ -2645,12 +2645,12 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
     }
 
     {
-        // Cohere2-MoE (North Code) - dedicated parser.
+        // Cohere2 MoE (North Code) - dedicated parser.
         // Marker-wrapped format: <|START_THINKING|>...<|END_THINKING|> then either
         // <|START_TEXT|>...<|END_TEXT|> (content) or <|START_ACTION|>[json]<|END_ACTION|> (tools).
         // The generation prompt forces a leading <|START_THINKING|>, so model output begins inside
         // the thinking block: test inputs start with the reasoning body, not the <|START_THINKING|> tag.
-        auto tst = peg_tester("models/templates/Cohere2-MoE.jinja", detailed_debug);
+        auto tst = peg_tester("models/templates/Cohere2MoE.jinja", detailed_debug);
 
         // Content with reasoning, extracted.
         tst.test("I'm\nthinking<|END_THINKING|><|START_TEXT|>Hello, world!\nWhat's up?<|END_TEXT|>")

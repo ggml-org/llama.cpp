@@ -1979,7 +1979,7 @@ static common_chat_params common_chat_params_init_deepseek_v3_2(const common_cha
     return data;
 }
 
-// Cohere2-MoE (a.k.a. "North Code") parser.
+// Cohere2 MoE (a.k.a. "North Code") parser.
 //
 // The assistant turn is fully marker-wrapped:
 //   <|START_OF_TURN_TOKEN|><|CHATBOT_TOKEN|>
@@ -1995,7 +1995,7 @@ static common_chat_params common_chat_params_init_deepseek_v3_2(const common_cha
 // parser literal therefore only covers the stable <|START_OF_TURN_TOKEN|><|CHATBOT_TOKEN|> prefix
 // and the reasoning rule consumes the <|START_THINKING|> ... <|END_THINKING|> markers itself,
 // regardless of whether they came from the generation prompt or the generated text.
-static common_chat_params common_chat_params_init_cohere2_moe(const common_chat_template &          tmpl,
+static common_chat_params common_chat_params_init_cohere2moe(const common_chat_template &          tmpl,
                                                               const autoparser::generation_params & inputs) {
     common_chat_params data;
 
@@ -2367,13 +2367,13 @@ std::optional<common_chat_params> common_chat_try_specialized_template(
         return common_chat_params_init_kimi_k2(tmpl, params);
     }
 
-    // Cohere2-MoE / North Code - marker-wrapped format with <|START_TEXT|> content and
+    // Cohere2 MoE / North Code - marker-wrapped format with <|START_TEXT|> content and
     // <|START_ACTION|> JSON tool calls. <|START_TEXT|> is unique to this template (the older
     // Command-R templates use <|START_RESPONSE|>).
     if (src.find("<|START_TEXT|>") != std::string::npos &&
         src.find("<|START_ACTION|>") != std::string::npos) {
-        LOG_DBG("Using specialized template: Cohere2-MoE\n");
-        return common_chat_params_init_cohere2_moe(tmpl, params);
+        LOG_DBG("Using specialized template: Cohere2 MoE\n");
+        return common_chat_params_init_cohere2moe(tmpl, params);
     }
 
     if (is_lfm2_template(src)) {
