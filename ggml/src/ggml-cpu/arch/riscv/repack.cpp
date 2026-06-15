@@ -1375,12 +1375,12 @@ void ggml_gemm_q8_0_16x1_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const v
                 for (int i = 0; i < QK8_0; i++) {
                     // Load `b_ptr`.
                     const vint8mf2_t b_0 = __riscv_vle8_v_i8mf2((const int8_t *)&b_ptr[l].qs[i * 16], 16);
-                    // const vint16m1_t b_0_16 = __riscv_vwcvt_x_x_v_i16m1(b_0, 16);
+                    const vint16m1_t b_0_16 = __riscv_vwcvt_x_x_v_i16m1(b_0, 16);
 
-                    sumi_0 = __riscv_vwadd_wv_i32m2(sumi_0, __riscv_vwmul_vx_i16m1(b_0, a_ptr[l].qs[i * 4 + 0], 16), 16);
-                    sumi_1 = __riscv_vwadd_wv_i32m2(sumi_1, __riscv_vwmul_vx_i16m1(b_0, a_ptr[l].qs[i * 4 + 1], 16), 16);
-                    sumi_2 = __riscv_vwadd_wv_i32m2(sumi_2, __riscv_vwmul_vx_i16m1(b_0, a_ptr[l].qs[i * 4 + 2], 16), 16);
-                    sumi_3 = __riscv_vwadd_wv_i32m2(sumi_3, __riscv_vwmul_vx_i16m1(b_0, a_ptr[l].qs[i * 4 + 3], 16), 16);
+                    sumi_0 = __riscv_vwmacc_vx_i32m2(sumi_0, a_ptr[l].qs[i * 4 + 0], b_0_16, 16);
+                    sumi_1 = __riscv_vwmacc_vx_i32m2(sumi_1, a_ptr[l].qs[i * 4 + 1], b_0_16, 16);
+                    sumi_2 = __riscv_vwmacc_vx_i32m2(sumi_2, a_ptr[l].qs[i * 4 + 2], b_0_16, 16);
+                    sumi_3 = __riscv_vwmacc_vx_i32m2(sumi_3, a_ptr[l].qs[i * 4 + 3], b_0_16, 16);
                 }
 
                 const vfloat16m1_t b_d = __riscv_vle16_v_f16m1((const _Float16 *)b_ptr[l].d, 16);
