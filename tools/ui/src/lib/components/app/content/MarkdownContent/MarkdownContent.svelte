@@ -41,6 +41,7 @@
 		DATA_ERROR_HANDLED_ATTR,
 		BOOL_TRUE_STRING,
 		SETTINGS_KEYS,
+		CODE_BLOCK_HEADER_CLASS,
 		MERMAID_WRAPPER_CLASS,
 		MERMAID_BLOCK_CLASS,
 		MERMAID_LANGUAGE,
@@ -53,7 +54,11 @@
 		SVG_TAG_PREFIX,
 		SVG_SOURCE_ATTR,
 		SVG_RENDERED_ATTR,
-		SVG_INLINE_SHADOW_STYLE
+		SVG_INLINE_SHADOW_STYLE,
+		TOGGLE_SOURCE_BTN_CLASS,
+		DIAGRAM_VIEW_MODE_ATTR,
+		DIAGRAM_VIEW_RENDERED,
+		DIAGRAM_VIEW_SOURCE
 	} from '$lib/constants';
 	import { ColorMode, UrlProtocol } from '$lib/enums';
 	import { FileTypeText } from '$lib/enums/files.enums';
@@ -501,6 +506,23 @@
 	async function handleMermaidClick(event: MouseEvent) {
 		const target = event.target as HTMLElement;
 
+		// Toggle a diagram block between its rendered view and its source view.
+		// Shared by mermaid and svg, css drives the visibility from the wrapper mode.
+		const toggleBtn = target.closest(`.${TOGGLE_SOURCE_BTN_CLASS}`);
+		if (toggleBtn) {
+			event.preventDefault();
+			event.stopPropagation();
+
+			const wrapper = toggleBtn.closest(`.${MERMAID_WRAPPER_CLASS}, .${SVG_WRAPPER_CLASS}`);
+			if (!wrapper) return;
+
+			const isSource = wrapper.getAttribute(DIAGRAM_VIEW_MODE_ATTR) === DIAGRAM_VIEW_SOURCE;
+			const next = isSource ? DIAGRAM_VIEW_RENDERED : DIAGRAM_VIEW_SOURCE;
+			wrapper.setAttribute(DIAGRAM_VIEW_MODE_ATTR, next);
+			toggleBtn.setAttribute('aria-pressed', String(!isSource));
+			return;
+		}
+
 		// Check if clicking on copy or preview button in mermaid block
 		const copyBtn = target.closest(`.${MERMAID_WRAPPER_CLASS} .copy-code-btn`);
 		const previewBtn = target.closest(`.${MERMAID_WRAPPER_CLASS} .preview-code-btn`);
@@ -572,6 +594,11 @@
 				return;
 			}
 		}
+
+		// A click on the header chrome targets the action buttons, never the
+		// diagram. Guard so a header click can not fall through to the click to
+		// zoom branches below, whatever the scroll position or stacking.
+		if (target.closest(`.${CODE_BLOCK_HEADER_CLASS}`)) return;
 
 		// Open preview when clicking the svg block itself. A final block carries its
 		// source, a streaming block does not and is mirrored live into the dialog.
