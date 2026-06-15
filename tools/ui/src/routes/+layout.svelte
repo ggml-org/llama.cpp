@@ -312,7 +312,7 @@
 	/>
 
 	<Sidebar.Provider bind:open={sidebarOpen}>
-		<div class="flex h-screen w-full">
+		<div class="flex h-full w-full grow">
 			<Sidebar.Root variant="floating" class="h-full"
 				><SidebarNavigation bind:this={chatSidebar} /></Sidebar.Root
 			>

@@ -26,52 +26,6 @@ server_http_context::server_http_context()
 
 server_http_context::~server_http_context() = default;
 
-// transform path --> asset name ; rules:
-// delete "_app/" prefix
-// delete hash, for ex: bundle.HCjcCZFH.css --> bundle.css
-//                      workbox-12bd46aa.js --> workbox.js
-static std::string asset_name_from_path(const std::string & path) {
-    // Strip leading slash
-    std::string s = (!path.empty() && path[0] == '/') ? path.substr(1) : path;
-    // Strip _app/ prefix
-    if (s.size() > 5 && s.compare(0, 5, "_app/") == 0) {
-        s = s.substr(5);
-    }
-    // Strip hash segment from filename:
-    //   bundle.HCjcCZFH.css -> bundle.css  (name.HASH.ext)
-    //   workbox-12bd46aa.js -> workbox.js  (name-HEXHASH.ext)
-    size_t slash = s.rfind('/');
-    std::string dir  = (slash != std::string::npos) ? s.substr(0, slash + 1) : "";
-    std::string file = (slash != std::string::npos) ? s.substr(slash + 1)    : s;
-
-    auto is_alnum_hash = [](const std::string & h) {
-        if (h.size() < 6 || h.size() > 16) return false;
-        for (char c : h) { if (!isalnum((unsigned char)c)) return false; }
-        return true;
-    };
-    auto is_hex_hash = [](const std::string & h) {
-        if (h.size() < 6 || h.size() > 16) return false;
-        for (char c : h) { if (!isxdigit((unsigned char)c)) return false; }
-        return true;
-    };
-
-    size_t dot1 = file.find('.');
-    if (dot1 != std::string::npos) {
-        size_t dot2 = file.find('.', dot1 + 1);
-        if (dot2 != std::string::npos && is_alnum_hash(file.substr(dot1 + 1, dot2 - dot1 - 1))) {
-            file = file.substr(0, dot1) + file.substr(dot2);
-        } else {
-            size_t dot = file.rfind('.');
-            size_t dash = file.rfind('-', dot);
-            if (dash != std::string::npos && is_hex_hash(file.substr(dash + 1, dot - dash - 1))) {
-                file = file.substr(0, dash) + file.substr(dot);
-            }
-        }
-    }
-
-    return dir + file;
-}
-
 static void log_server_request(const httplib::Request & req, const httplib::Response & res) {
     // skip logging requests that are regularly sent, to avoid log spam
     if (req.path == "/health"
@@ -240,9 +194,8 @@ bool server_http_context::init(const common_params & params) {
             return true;
         }
 
-        // If path is public or a UI asset (including hashed paths like /_app/bundle.XXX.js),
-        // skip validation
-        if (get_public_endpoints.count("/" + asset_name_from_path(req.path))) {
+        // If path is public or a UI asset, skip validation
+        if (get_public_endpoints.count(req.path)) {
             return true;
         }
 
@@ -366,8 +319,26 @@ bool server_http_context::init(const common_params & params) {
             }
         } else {
 #if defined(LLAMA_UI_HAS_ASSETS)
+            static auto handle_gzip_header = [](const httplib::Request & req, httplib::Response & res) {
+                if (!llama_ui_use_gzip()) {
+                    // no gzip build, skip
+                    return true;
+                }
+                if (req.get_header_value("Accept-Encoding").find("gzip") == std::string::npos) {
+                    res.status = 415; // unsupported media type
+                    res.set_content("Error: gzip is not supported by this browser", "text/plain");
+                    return false;
+                } else {
+                    res.set_header("Content-Encoding", "gzip");
+                }
+                return true;
+            };
+
             auto serve_asset_cached = [](const std::string & name, bool isolation) {
                 return [name, isolation](const httplib::Request & req, httplib::Response & res) {
+                    if (!handle_gzip_header(req, res)) {
+                        return true; // returns error message
+                    }
                     const llama_ui_asset * a = llama_ui_find_asset(name);
                     if (!a) { res.status = 404; return false; }
                     res.set_header("ETag", a->etag);
@@ -387,7 +358,10 @@ bool server_http_context::init(const common_params & params) {
             };
 
             auto serve_asset_nocache = [](const std::string & name) {
-                return [name](const httplib::Request & /*req*/, httplib::Response & res) {
+                return [name](const httplib::Request & req, httplib::Response & res) {
+                    if (!handle_gzip_header(req, res)) {
+                        return true; // returns error message
+                    }
                     const llama_ui_asset * a = llama_ui_find_asset(name);
                     if (!a) {
                         res.status = 404;
@@ -399,17 +373,9 @@ bool server_http_context::init(const common_params & params) {
                 };
             };
 
-            // Hashed routes: browser requests contain the build hash, assets are stored without.
-            auto serve_hashed = [serve_asset_cached](const std::string & name) {
-                return serve_asset_cached(name, false);
-            };
-            srv->Get(params.api_prefix + R"(/_app/immutable/bundle\.[^/]+\.js)",         serve_hashed("bundle.js"));
-            srv->Get(params.api_prefix + R"(/_app/immutable/assets/bundle\.[^/]+\.css)", serve_hashed("bundle.css"));
-            srv->Get(params.api_prefix + R"(/workbox-[^/]+\.js)",                        serve_hashed("workbox.js"));
-
-            // SPA entry — also aliased at "/_app/version.json" (referenced by the service worker)
-            srv->Get(params.api_prefix + "/",                  serve_asset_cached ("index.html",   true));
-            srv->Get(params.api_prefix + "/_app/version.json", serve_asset_nocache("version.json"));
+            // main index file
+            srv->Get(params.api_prefix + "/",           serve_asset_cached("index.html", true));
+            srv->Get(params.api_prefix + "/index.html", serve_asset_cached("index.html", true));
 
             // All remaining assets registered directly from the embedded asset table.
             // PWA revalidation files (sw.js, manifest, version.json) use no-cache;
@@ -417,15 +383,14 @@ bool server_http_context::init(const common_params & params) {
             static const std::unordered_set<std::string> no_cache_names = {
                 "sw.js",
                 "manifest.webmanifest",
-                "version.json",
+                "_app/version.json",
                 "build.json"
             };
-            // index.html also accessible at /index.html (with the same isolation headers as /)
-            srv->Get(params.api_prefix + "/index.html", serve_asset_cached("index.html", true));
 
             for (const auto & a : llama_ui_get_assets()) {
                 if (a.name == "index.html") continue;  // served at "/" and "/index.html" above
                 if (no_cache_names.count(a.name)) {
+                    SRV_DBG("serve nocache for %s\n", a.name.c_str());
                     srv->Get(params.api_prefix + "/" + a.name, serve_asset_nocache(a.name));
                 } else {
                     srv->Get(params.api_prefix + "/" + a.name, serve_asset_cached(a.name, false));

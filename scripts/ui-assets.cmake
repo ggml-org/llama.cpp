@@ -16,23 +16,7 @@ set(HF_VERSION        "" CACHE STRING "Version to download (empty = resolve from
 set(HF_ENABLED        "" CACHE STRING "Whether to allow HF Bucket download (ON/OFF)")
 set(BUILD_UI          "" CACHE STRING "Build UI via npm (ON/OFF)")
 set(LLAMA_UI_EMBED    "" CACHE STRING "Path to llama-ui-embed helper")
-
-# IMPORTANT: When adding PWA assets, sync:
-#   - tools/ui/src/lib/constants/pwa.ts   (APPLE_DEVICES, PWA_MANIFEST)
-#
-# The HTTP server registers routes and public endpoints for every embedded asset.
-set(REQUIRED_ASSETS
-    index.html
-    loading.html
-    manifest.webmanifest
-    sw.js
-    build.json
-    # post-build.js flattens and dehashes these to fixed names in the dist dir
-    bundle.js
-    bundle.css
-    workbox.js
-    version.json
-)
+set(LLAMA_UI_GZIP     "" CACHE STRING "Apply gzip compress to assets to save bandwidth")
 
 set(DIST_DIR     "${UI_BINARY_DIR}/dist")
 set(SRC_DIST_DIR "${UI_SOURCE_DIR}/dist")
@@ -40,22 +24,10 @@ set(STAMP_FILE   "${UI_BINARY_DIR}/.ui-stamp")
 set(UI_CPP       "${UI_BINARY_DIR}/ui.cpp")
 set(UI_H         "${UI_BINARY_DIR}/ui.h")
 
-function(assets_present dir out_var)
-    set(present TRUE)
-    foreach(asset ${REQUIRED_ASSETS})
-        if(NOT EXISTS "${dir}/${asset}")
-            set(present FALSE)
-            break()
-        endif()
-    endforeach()
-    set(${out_var} ${present} PARENT_SCOPE)
-endfunction()
-
 function(npm_build_should_skip out_var)
     set(${out_var} FALSE PARENT_SCOPE)
 
-    assets_present("${DIST_DIR}" present)
-    if(NOT present)
+    if(NOT EXISTS "${DIST_DIR}/index.html")
         return()
     endif()
 
@@ -162,8 +134,7 @@ function(npm_build out_var)
         return()
     endif()
 
-    assets_present("${DIST_DIR}" present)
-    if(NOT present)
+    if(NOT EXISTS "${DIST_DIR}/index.html")
         message(STATUS "UI: npm build finished but assets missing in ${DIST_DIR}")
         return()
     endif()
@@ -242,8 +213,7 @@ function(hf_download version out_var out_resolved)
 
         file(ARCHIVE_EXTRACT INPUT "${archive}" DESTINATION "${DIST_DIR}")
 
-        assets_present("${DIST_DIR}" present)
-        if(NOT present)
+        if(NOT EXISTS "${DIST_DIR}/index.html")
             message(STATUS "UI: archive from ${resolved} is missing required assets")
             continue()
         endif()
@@ -256,11 +226,35 @@ function(hf_download version out_var out_resolved)
 endfunction()
 
 function(emit_files dist_dir)
-    assets_present("${dist_dir}" present)
+    # If gzip is requested, compress every asset into a parallel _gzip/ tree
+    # the structure stays the same; for ex: /abc/def --> /_gzip/abc/def
+    # embed.cpp will check for _gzip and will pick it up
+    if(LLAMA_UI_GZIP AND EXISTS "${dist_dir}/index.html")
+        find_program(GZIP_EXECUTABLE gzip)
+        if(NOT GZIP_EXECUTABLE)
+            message(WARNING "UI: LLAMA_UI_GZIP requested but gzip not found, embedding uncompressed")
+        else()
+            set(gzip_dir "${dist_dir}/_gzip")
+            file(REMOVE_RECURSE "${gzip_dir}")
+            file(GLOB_RECURSE all_files RELATIVE "${dist_dir}" "${dist_dir}/*")
+            foreach(f ${all_files})
+                get_filename_component(dst_dir "${gzip_dir}/${f}" DIRECTORY)
+                file(MAKE_DIRECTORY "${dst_dir}")
+                execute_process(
+                    COMMAND "${GZIP_EXECUTABLE}" -c "${dist_dir}/${f}"
+                    OUTPUT_FILE "${gzip_dir}/${f}"
+                    RESULT_VARIABLE gz_rc
+                )
+                if(NOT gz_rc EQUAL 0)
+                    message(FATAL_ERROR "UI: gzip failed for ${f}")
+                endif()
+            endforeach()
+            message(STATUS "UI: gzip compression applied (${gzip_dir})")
+        endif()
+    endif()
 
     set(args "${UI_CPP}" "${UI_H}")
-    if(present)
-        # llama-ui-embed embeds every top-level file in dist_dir
+    if(EXISTS "${dist_dir}/index.html")
         list(APPEND args "${dist_dir}")
     endif()
 
@@ -276,8 +270,7 @@ endfunction()
 # ---------------------------------------------------------------------------
 # 1. Priority 1: pre-built assets supplied in tools/ui/dist
 # ---------------------------------------------------------------------------
-assets_present("${SRC_DIST_DIR}" SRC_OK)
-if(SRC_OK)
+if(EXISTS "${SRC_DIST_DIR}/index.html")
     message(STATUS "UI: using pre-built assets from ${SRC_DIST_DIR}")
     emit_files("${SRC_DIST_DIR}")
     return()
@@ -312,7 +305,10 @@ if(NOT provisioned AND HF_ENABLED)
         endif()
     endif()
 
-    assets_present("${DIST_DIR}" have_assets)
+    set(have_assets FALSE)
+    if(EXISTS "${DIST_DIR}/index.html")
+        set(have_assets TRUE)
+    endif()
     if(stamp_ok AND have_assets)
         message(STATUS "UI: HF stamp '${stamped}' matches version, skipping HF fetch")
         set(provisioned TRUE)
@@ -332,8 +328,7 @@ endif()
 # 4. Fallback: warn about stale or missing assets, then emit whatever we have
 # ---------------------------------------------------------------------------
 if(NOT provisioned)
-    assets_present("${DIST_DIR}" have_assets)
-    if(have_assets)
+    if(EXISTS "${DIST_DIR}/index.html")
         message(WARNING "UI: provisioning failed; embedding stale assets from ${DIST_DIR}")
     else()
         message(WARNING "UI: no assets available - building without an embedded UI. "
