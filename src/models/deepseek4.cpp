@@ -52,11 +52,9 @@ void llama_model_deepseek4::load_arch_hparams(llama_model_loader & ml) {
     }
     ml.get_arr(dsv4_kv("attention.compress_ratios"), hparams.dsv4_compress_ratios);
 
-    std::string score_func;
-    if (ml.get_key(dsv4_kv("moe.score_func"),  score_func, false)) {
-        if (score_func != "sqrtsoftplus") {
-            throw std::runtime_error("DeepSeek-V4 loader currently expects sqrtsoftplus MoE scoring");
-        }
+    ml.get_key(LLM_KV_EXPERT_GATING_FUNC, hparams.expert_gating_func);
+    if (hparams.expert_gating_func != LLAMA_EXPERT_GATING_FUNC_TYPE_SQRT_SOFTPLUS) {
+        throw std::runtime_error("DeepSeek-V4 loader currently expects sqrtsoftplus MoE scoring");
     }
     std::string topk_method;
     if (ml.get_key(dsv4_kv("moe.topk_method"), topk_method, false)) {
@@ -1132,7 +1130,7 @@ llama_model_deepseek4::graph::graph(const llama_model & model, const llm_graph_p
                 n_expert, hparams.n_expert_used,
                 LLM_FFN_SILU, hparams.expert_weights_norm,
                 hparams.expert_weights_scale,
-                LLAMA_EXPERT_GATING_FUNC_TYPE_SQRT_SOFTPLUS,
+                (llama_expert_gating_func_type) hparams.expert_gating_func,
                 il,
                 nullptr,
                 nullptr,

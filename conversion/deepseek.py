@@ -535,39 +535,15 @@ class DeepseekV4Model(TextModel):
                 self._dsv4_f32_tensors.add(name)
 
     def set_gguf_parameters(self):
+        super().set_gguf_parameters()
         hparams = self.hparams
         arch = gguf.MODEL_ARCH_NAMES[self.model_arch]
 
-        self.gguf_writer.add_block_count(self.block_count)
-        self.gguf_writer.add_context_length(hparams["max_position_embeddings"])
-        self.gguf_writer.add_embedding_length(hparams["hidden_size"])
-        self.gguf_writer.add_vocab_size(hparams["vocab_size"])
-        self.gguf_writer.add_head_count(hparams["num_attention_heads"])
-        self.gguf_writer.add_head_count_kv(hparams["num_key_value_heads"])
-        self.gguf_writer.add_key_length(hparams["head_dim"])
-        self.gguf_writer.add_value_length(hparams["head_dim"])
         self.gguf_writer.add_rope_dimension_count(hparams["qk_rope_head_dim"])
-        self.gguf_writer.add_rope_freq_base(hparams["rope_theta"])
         self.gguf_writer.add_q_lora_rank(hparams["q_lora_rank"])
         self.gguf_writer.add_sliding_window(hparams["sliding_window"])
-        self.gguf_writer.add_layer_norm_rms_eps(hparams["rms_norm_eps"])
-
-        rope_scaling = hparams.get("rope_scaling") or {}
-        rope_type = rope_scaling.get("type", rope_scaling.get("rope_type"))
-        if rope_type == "yarn":
-            self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.YARN)
-            self.gguf_writer.add_rope_scaling_factor(rope_scaling["factor"])
-            self.gguf_writer.add_rope_scaling_orig_ctx_len(rope_scaling["original_max_position_embeddings"])
-            if (yarn_beta_fast := rope_scaling.get("beta_fast")) is not None:
-                self.gguf_writer.add_rope_scaling_yarn_beta_fast(yarn_beta_fast)
-            if (yarn_beta_slow := rope_scaling.get("beta_slow")) is not None:
-                self.gguf_writer.add_rope_scaling_yarn_beta_slow(yarn_beta_slow)
-        else:
-            self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.NONE)
 
         self.gguf_writer.add_expert_feed_forward_length(hparams["moe_intermediate_size"])
-        self.gguf_writer.add_expert_count(hparams["n_routed_experts"])
-        self.gguf_writer.add_expert_used_count(hparams["num_experts_per_tok"])
         self.gguf_writer.add_expert_shared_count(hparams["n_shared_experts"])
         self.gguf_writer.add_expert_weights_scale(hparams["routed_scaling_factor"])
         self.gguf_writer.add_expert_weights_norm(hparams["norm_topk_prob"])
@@ -586,11 +562,7 @@ class DeepseekV4Model(TextModel):
         self.gguf_writer.add_uint32(f"{arch}.hyper_connection.sinkhorn_iterations", hparams["hc_sinkhorn_iters"])
         self.gguf_writer.add_float32(f"{arch}.hyper_connection.epsilon", hparams["hc_eps"])
         self.gguf_writer.add_uint32(f"{arch}.hash_layer_count", hparams["num_hash_layers"])
-        self.gguf_writer.add_string(f"{arch}.moe.score_func", hparams["scoring_func"])
         self.gguf_writer.add_string(f"{arch}.moe.topk_method", hparams["topk_method"])
-
-        self.gguf_writer.add_file_type(self.ftype)
-        logger.info(f"gguf: file type = {self.ftype}")
 
     def dequant_model(self):
         fp8_dtypes = self._float8_dtypes()
