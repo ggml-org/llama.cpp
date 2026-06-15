@@ -620,7 +620,8 @@ static void dev2dev_memcpy(sycl::queue &q_dst, sycl::queue &q_src, void *ptr_dst
 #endif
 
     if (g_ggml_sycl_dev2dev_memcpy == DEV2DEV_MEMCPY_SYCL) {
-        if (q_dst.get_device().get_platform() == q_src.get_device().get_platform()){
+        if (q_dst.get_device().ext_oneapi_can_access_peer(q_src.get_device(),
+                                                          sycl::ext::oneapi::peer_access::access_supported)) {
             GGML_SYCL_DEBUG("[SYCL] dev2dev memcpy by SYCL\n");
             SYCL_CHECK(CHECK_TRY_ERROR(q_dst.memcpy(ptr_dst, ptr_src, size).wait()));
             return;
