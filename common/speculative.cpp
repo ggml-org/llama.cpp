@@ -1083,10 +1083,14 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
         int n_drafting = 0;
         std::vector<bool> drafting(n_seq);
 
-        const float * h_row = nullptr;
         const size_t row_bytes = (size_t) n_embd * sizeof(float);
 
         std::vector<int> i_last(n_seq, -1);
+
+        std::vector<std::vector<float>> chain_h;
+        if (chain_heads) {
+            chain_h.resize(n_seq);
+        }
 
         for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
             auto & dp = dparams[seq_id];
@@ -1100,19 +1104,21 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
             common_sampler_reset(smpls[seq_id].get());
 
             common_batch_add(batch, dp.id_last, dp.n_past, { seq_id }, true);
-
-            h_row = pending_h[seq_id].data();
-            std::memcpy(batch.embd + n_embd*(batch.n_tokens - 1), h_row, row_bytes);
+            std::memcpy(batch.embd + (size_t) (batch.n_tokens - 1) * n_embd, pending_h[seq_id].data(), row_bytes);
 
             i_last[seq_id] = batch.n_tokens - 1;
+
+            if (chain_heads) {
+                chain_h[seq_id].assign(pending_h[seq_id].begin(), pending_h[seq_id].end());
+            }
         }
 
         int i = 0;
 
         while (n_drafting > 0) {
-            // chained heads: every trained head keeps its own KV, so reset
-            // each sequence's draft region and select head `i` before re-decoding the
-            // accumulated prefix.
+            // chained heads: every trained head keeps its own KV, so reset each
+            // sequence's draft region and select head `i` before re-decoding the
+            // rebuilt prefix (head 0 sees just id_last).
             if (chain_heads) {
                 auto * mem_dft = llama_get_memory(ctx_dft);
                 for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
@@ -1129,11 +1135,10 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
                 break;
             }
 
-            // the growing-KV paths rebuild the batch with only the new tokens (the KV
-            // already holds the prefix); chained heads keep accumulating into it
-            if (!chain_heads) {
-                common_batch_clear(batch);
-            }
+            // rebuild the batch for the next step: the growing-KV paths re-add only the
+            // new token (the KV already holds the prefix), while chained heads re-add the
+            // whole prefix at the next head. dropped sequences are simply not re-added.
+            common_batch_clear(batch);
 
             for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
                 if (!drafting[seq_id]) {
@@ -1143,7 +1148,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
                 auto * smpl = smpls[seq_id].get();
 
                 common_sampler_sample(smpl, ctx_dft, i_last[seq_id], true);
-                h_row = llama_get_embeddings_nextn_ith(ctx_dft, i_last[seq_id]);
+                const float * h_row = llama_get_embeddings_nextn_ith(ctx_dft, i_last[seq_id]);
 
                 const auto * cur_p = common_sampler_get_candidates(smpl, true);
 
@@ -1178,17 +1183,24 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
                 }
 
                 if (chain_heads) {
-                    batch.logits[i_last[seq_id]] = false;
-                }
+                    chain_h[seq_id].insert(chain_h[seq_id].end(), h_row, h_row + n_embd);
 
-                if (is_mem_shared) {
+                    const int n_rows = (int) result.size() + 1; // id_last + tokens drafted so far
+                    for (int t = 0; t < n_rows; ++t) {
+                        const llama_token tok = (t == 0) ? dp.id_last : result[t - 1];
+                        common_batch_add(batch, tok, dp.n_past + t, { seq_id }, t == n_rows - 1);
+                        std::memcpy(batch.embd + (size_t) (batch.n_tokens - 1) * n_embd,
+                                    chain_h[seq_id].data() + (size_t) t * n_embd, row_bytes);
+                    }
+                } else if (is_mem_shared) {
                     // note: with shared memory (e.g. Gemma4 assistants) we use the same position for all draft tokens
                     // ref: https://github.com/huggingface/transformers/blob/effde20942e3f82a1b97449f60b3a48c5ff96145/docs/source/en/model_doc/gemma4_assistant.md?plain=1#L36-L37
                     common_batch_add(batch, id, dp.n_past, { seq_id }, true);
+                    std::memcpy(batch.embd + (size_t) (batch.n_tokens - 1) * n_embd, h_row, row_bytes);
                 } else {
                     common_batch_add(batch, id, dp.n_past + i + 1, { seq_id }, true);
+                    std::memcpy(batch.embd + (size_t) (batch.n_tokens - 1) * n_embd, h_row, row_bytes);
                 }
-                std::memcpy(batch.embd + n_embd*(batch.n_tokens - 1), h_row, row_bytes);
 
                 i_last[seq_id] = batch.n_tokens - 1;
             }
