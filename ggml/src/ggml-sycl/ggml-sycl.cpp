@@ -4393,6 +4393,16 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx,
             ggml_sycl_mul_mat(ctx, &src0_row, &src1_row, &dst_row);
         }
 
+        // The OpenCL UR adapter aborts with UR_RESULT_ERROR_OUT_OF_RESOURCES on this MoE op: it
+        // enqueues one matmul per expert (n_as up to hundreds), ggml_sycl_op_mul_mat does no host
+        // wait on a single device, and the node-submit loop never waits between ops, so without a
+        // drain here expert matmuls accumulate across ops until the next mul_mat_id's wait,
+        // exceeding the adapter's in-flight budget. One drain after the loop bounds this to a
+        // single mul_mat_id's experts. Level Zero did not hit this in our testing, so skip it there.
+        if (stream->get_backend() != sycl::backend::ext_oneapi_level_zero) {
+            SYCL_CHECK(CHECK_TRY_ERROR(stream->wait()));
+        }
+
         {
             sycl::range<3> block_dims(1, 1, std::min((unsigned int)ne0, max_work_group_size));
             sycl::range<3> grid_dims(1, 1, n_routed_rows);
