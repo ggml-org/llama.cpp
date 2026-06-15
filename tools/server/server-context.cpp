@@ -23,11 +23,33 @@
 #include <algorithm>
 #include <cstddef>
 #include <cinttypes>
+#include <cstdio>
 #include <exception>
 #include <memory>
 #include <filesystem>
 #include <utility>
 #include <fstream>
+
+// returns MemAvailable from /proc/meminfo on Linux; 0 on other platforms
+static size_t get_available_ram_bytes() {
+#if defined(__linux__)
+    FILE * f = fopen("/proc/meminfo", "r");
+    if (!f) {
+        return 0;
+    }
+    long value_kb = 0;
+    char line[256];
+    while (fgets(line, sizeof(line), f)) {
+        if (sscanf(line, "MemAvailable: %ld kB", &value_kb) == 1) {
+            break;
+        }
+    }
+    fclose(f);
+    return (size_t)value_kb * 1024;
+#else
+    return 0;
+#endif
+}
 
 // fix problem with std::min and std::max
 #if defined(_WIN32)
@@ -130,20 +152,38 @@ struct server_slot {
 
     server_prompt prompt;
 
-    bool prompt_save(server_prompt_cache & prompt_cache) const {
+    bool prompt_save(server_prompt_cache & prompt_cache) {
         if (prompt.tokens.size() == 0) {
             return false;
         }
 
         GGML_ASSERT(prompt.data.size() == 0);
 
+        // Checkpoints are session-internal (recurrent state rollback only) and are not
+        // needed for inter-session cache reuse. Free them now so their RAM is
+        // available for the KV state copy below; the next session creates its own.
+        if (!prompt.checkpoints.empty()) {
+            size_t ckpt_size = 0;
+            for (auto & ckpt : prompt.checkpoints) {
+                ckpt_size += ckpt.size();
+                ckpt.clear();
+            }
+            prompt.checkpoints.clear();
+            SRV_WRN(" - freed %.3f MiB of checkpoint data before saving\n",
+                    ckpt_size / (1024.0 * 1024.0));
+        }
+
         const size_t cur_size_tgt =           llama_state_seq_get_size_ext(ctx_tgt, id, LLAMA_STATE_SEQ_FLAGS_NONE);
         const size_t cur_size_dft = ctx_dft ? llama_state_seq_get_size_ext(ctx_dft, id, LLAMA_STATE_SEQ_FLAGS_NONE) : 0;
 
         const size_t cur_size = cur_size_tgt + cur_size_dft;
 
-        SRV_WRN(" - saving prompt with length %d, total state size = %.3f MiB (draft: %.3f MiB)\n",
-                (int) prompt.tokens.size(), cur_size / (1024.0 * 1024.0), cur_size_dft / (1024.0 * 1024.0));
+        const size_t ram_avail = get_available_ram_bytes();
+        SRV_WRN(" - saving prompt: %d tokens, %.3f MiB state (draft: %.3f MiB, RAM avail: %.3f MiB)\n",
+                (int) prompt.tokens.size(),
+                cur_size / (1024.0 * 1024.0),
+                cur_size_dft / (1024.0 * 1024.0),
+                ram_avail / (1024.0 * 1024.0));
 
         auto * cur = prompt_cache.alloc(prompt, cur_size_tgt, cur_size_dft);
         if (cur == nullptr) {
