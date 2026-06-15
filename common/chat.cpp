@@ -2678,8 +2678,8 @@ common_chat_msg common_chat_peg_parse(const common_peg_arena &          src_pars
             }
             return msg;
         }
-        throw std::runtime_error(std::string("Failed to parse input at pos ") + std::to_string(result.end) + ": " +
-                                 effective_input.substr(result.end));
+        LOG_DBG("Failure during parsing following input at position %lu: \n\n=== START ===\n%s\n=== END ===\n", result.end, effective_input.c_str());
+        throw std::runtime_error(std::string("Failed to parse input at pos ") + std::to_string(result.end) + ": " + effective_input.substr(result.end));
     }
 
     common_chat_msg msg;
