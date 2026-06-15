@@ -223,14 +223,16 @@ static void llama_tensor_dequantize_chunk_impl(
         throw std::runtime_error(format("type %s unsupported for conversion to float", ggml_type_name(tensor->type)));
     }
 
-    const size_t block_size = (size_t)ggml_blck_size(tensor->type);
+    const int64_t block_size = ggml_blck_size(tensor->type);
 
+    GGML_ASSERT(block_size > 0);
     GGML_ASSERT(start >= 0);
-    GGML_ASSERT((size_t) start % block_size == 0);
-    GGML_ASSERT(nelements % block_size == 0);
+    GGML_ASSERT(start % block_size == 0);
 
     size_t block_size_bytes = ggml_type_size(tensor->type);
-    const size_t input_offset = ((size_t) start / block_size) * block_size_bytes;
+    const size_t block_size_size = (size_t) block_size;
+    GGML_ASSERT(nelements % block_size_size == 0);
+    const size_t input_offset = ((size_t) start / block_size_size) * block_size_bytes;
     uint8_t * input_data = (uint8_t *) tensor->data + input_offset;
 
     if (nthread < 2) {
@@ -238,7 +240,7 @@ static void llama_tensor_dequantize_chunk_impl(
         return;
     }
 
-    size_t nblocks = nelements / block_size;
+    size_t nblocks = nelements / block_size_size;
     size_t blocks_per_thread = nblocks / nthread;
     size_t spare_blocks = nblocks - (blocks_per_thread * nthread); // if blocks aren't divisible by thread count
 
@@ -247,7 +249,7 @@ static void llama_tensor_dequantize_chunk_impl(
 
     for (int tnum = 0; tnum < nthread; tnum++) {
         size_t thr_blocks = blocks_per_thread + (tnum == nthread - 1 ? spare_blocks : 0); // num blocks for this thread
-        size_t thr_elems = thr_blocks * block_size; // number of elements for this thread
+        size_t thr_elems = thr_blocks * block_size_size; // number of elements for this thread
         size_t thr_block_bytes = thr_blocks * block_size_bytes; // number of input bytes for this thread
 
         auto compute = [qtype] (const uint8_t * inbuf, float * outbuf, int64_t nels) {
