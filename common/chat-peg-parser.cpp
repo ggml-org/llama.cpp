@@ -540,10 +540,11 @@ common_peg_parser common_chat_peg_builder::python_style_tool_calls(
                 auto arg_name_parser = literal(prop_name);
 
                 common_peg_parser arg_value_parser = eps();
-                auto string_value_parser = choice({
-                    literal("\"") + tool_arg_string_value(string_content('"')) + literal("\""),
-                    literal("'") + tool_arg_string_value(string_content('\'')) + literal("'")
-                });
+                // Quoted literal as a value: normalize_quotes_to_json preserves escapes.
+                auto string_value_parser = tool_arg_value(choice({
+                    literal("\"") + string_content('"') + literal("\""),
+                    literal("'") + string_content('\'') + literal("'")
+                }));
 
                 if (is_string_type) {
                     arg_value_parser = string_value_parser;
