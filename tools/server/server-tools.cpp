@@ -44,11 +44,11 @@ struct run_proc_result {
 
 // List of forbidden sequences (security - avoid subshell)
 static const std::vector<std::string> FORBIDDEN_SEQUENCES = {
-    ";", "&&", "||", "|", "&", ">", "<", "$(", "`", "(", ")", "{", "}", "[", "]", "!", "\\",
+    ";", "|", "&", ">", "<", "`", "(", ")", "{", "}", "[", "]", "!", "\\",
     "\n", "\r", "\t",  // Control characters
-    "2>", "&>", ">>",  // Redirections
-    "$(", "${",        // Command substitution
-    "\x1B"             //  ANSI escape
+    "\x1B",            // ANSI escape
+    "$",               // $variables and command substitution $() ${}
+    "*", "?"           // Wildcards 
 };
 
 static bool is_command_safe(const std::string& command) {
@@ -57,17 +57,6 @@ static bool is_command_safe(const std::string& command) {
         if (command.find(seq) != std::string::npos) {
             return false;
         }
-    }
-
-    // Check for environment variable expansion (e.g., $HOME, ${USER})
-    if (command.find('$') != std::string::npos) {
-        return false;
-    }
-
-    // Check for wildcards (e.g., *, ?)
-    if (command.find('*') != std::string::npos ||
-        command.find('?') != std::string::npos) {
-        return false;
     }
 
     return true;
