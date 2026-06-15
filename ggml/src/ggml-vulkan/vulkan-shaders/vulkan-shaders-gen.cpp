@@ -618,7 +618,7 @@ void matmul_shaders(bool fp16, MatMulIdType matmul_id_type, bool coopmat, bool c
 void process_shaders() {
     // matmul
     for (const MatMulIdType& matmul_id_type : {MatMulIdType::NONE, MatMulIdType::DEFAULT, MatMulIdType::SUBGROUP}) {
-        // No coopmats. Each scalar config is emitted twice: with the BK loop
+        // No coopmats
         for (bool unroll_bk : {true, false}) {
             // fp32
             matmul_shaders(false, matmul_id_type, false, false, false, false, unroll_bk);
