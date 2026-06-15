@@ -29,19 +29,21 @@ void llama_model_deepseek4::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_EXPERT_WEIGHTS_SCALE,        hparams.expert_weights_scale);
     ml.get_key(LLM_KV_EXPERT_WEIGHTS_NORM,         hparams.expert_weights_norm);
     ml.get_key_or_arr(LLM_KV_SWIGLU_CLAMP_EXP,     hparams.swiglu_clamp_exp,   hparams.n_layer());
-    ml.get_key_or_arr(LLM_KV_SWIGLU_CLAMP_SHEXP,   hparams.swiglu_clamp_shexp, hparams.n_layer());
+    if (!ml.get_key_or_arr(LLM_KV_SWIGLU_CLAMP_SHEXP,   hparams.swiglu_clamp_shexp, hparams.n_layer(), 0)) {
+        hparams.swiglu_clamp_shexp = hparams.swiglu_clamp_exp;
+    }
 
     ml.get_key(LLM_KV_ATTENTION_INDEXER_HEAD_COUNT, hparams.indexer_n_head);
     ml.get_key(LLM_KV_ATTENTION_INDEXER_KEY_LENGTH, hparams.indexer_head_size);
     ml.get_key(LLM_KV_ATTENTION_INDEXER_TOP_K,      hparams.indexer_top_k);
 
-    ml.get_key(dsv4_kv("attention.o_group_count"),      hparams.dsv4_o_group_count);
-    ml.get_key(dsv4_kv("attention.o_lora_rank"),        hparams.dsv4_o_lora_rank);
-    ml.get_key(dsv4_kv("attention.compress_rope.freq_base"), hparams.dsv4_compress_rope_base);
-    ml.get_key(dsv4_kv("hc.mult"),                      hparams.dsv4_hc_mult);
-    ml.get_key(dsv4_kv("hc.sinkhorn_iters"),            hparams.dsv4_hc_sinkhorn_iters);
-    ml.get_key(dsv4_kv("hc.eps"),                       hparams.dsv4_hc_eps);
-    ml.get_key(dsv4_kv("moe.hash_layer_count"),         hparams.dsv4_hash_layer_count);
+    ml.get_key(dsv4_kv("attention.output_group_count"),         hparams.dsv4_o_group_count);
+    ml.get_key(dsv4_kv("attention.output_lora_rank"),           hparams.dsv4_o_lora_rank);
+    ml.get_key(dsv4_kv("attention.compress_rope_freq_base"),    hparams.dsv4_compress_rope_base);
+    ml.get_key(dsv4_kv("hyper_connection.count"),               hparams.dsv4_hc_mult);
+    ml.get_key(dsv4_kv("hyper_connection.sinkhorn_iterations"), hparams.dsv4_hc_sinkhorn_iters);
+    ml.get_key(dsv4_kv("hyper_connection.epsilon"),             hparams.dsv4_hc_eps);
+    ml.get_key(dsv4_kv("hash_layer_count"),                     hparams.dsv4_hash_layer_count);
 
     uint32_t n_compress_ratios = 0;
     ml.get_arr_n(dsv4_kv("attention.compress_ratios"), n_compress_ratios);
@@ -51,14 +53,16 @@ void llama_model_deepseek4::load_arch_hparams(llama_model_loader & ml) {
     ml.get_arr(dsv4_kv("attention.compress_ratios"), hparams.dsv4_compress_ratios);
 
     std::string score_func;
-    std::string topk_method;
-    ml.get_key(dsv4_kv("moe.score_func"),  score_func);
-    ml.get_key(dsv4_kv("moe.topk_method"), topk_method);
-    if (score_func != "sqrtsoftplus") {
-        throw std::runtime_error("DeepSeek-V4 loader currently expects sqrtsoftplus MoE scoring");
+    if (ml.get_key(dsv4_kv("moe.score_func"),  score_func, false)) {
+        if (score_func != "sqrtsoftplus") {
+            throw std::runtime_error("DeepSeek-V4 loader currently expects sqrtsoftplus MoE scoring");
+        }
     }
-    if (topk_method != "noaux_tc") {
-        throw std::runtime_error("DeepSeek-V4 loader currently expects noaux_tc MoE top-k");
+    std::string topk_method;
+    if (ml.get_key(dsv4_kv("moe.topk_method"), topk_method, false)) {
+        if (topk_method != "noaux_tc") {
+            throw std::runtime_error("DeepSeek-V4 loader currently expects noaux_tc MoE top-k");
+        }
     }
 
     hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
@@ -89,29 +93,29 @@ void llama_model_deepseek4::load_arch_tensors(llama_model_loader &) {
     output_norm = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd}, 0);
     output      = create_tensor(tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_vocab}, 0);
 
-    hc_head_fn    = create_tensor(tn(LLM_TENSOR_HC_HEAD_FN),    {hc_dim, hc_mult}, 0);
-    hc_head_base  = create_tensor(tn(LLM_TENSOR_HC_HEAD_BASE),  {hc_mult}, 0);
-    hc_head_scale = create_tensor(tn(LLM_TENSOR_HC_HEAD_SCALE), {1}, 0);
+    hc_head_fn    = create_tensor(tn(LLM_TENSOR_HC_HEAD_FN, "weight"),    {hc_dim, hc_mult}, 0);
+    hc_head_base  = create_tensor(tn(LLM_TENSOR_HC_HEAD_BASE, "weight"),  {hc_mult}, 0);
+    hc_head_scale = create_tensor(tn(LLM_TENSOR_HC_HEAD_SCALE, "weight"), {1}, 0);
 
     for (int i = 0; i < n_layer; ++i) {
         auto & layer = layers[i];
 
         layer.attn_norm     = create_tensor(tn(LLM_TENSOR_ATTN_NORM,     "weight", i), {n_embd}, 0);
-        layer.attn_sinks    = create_tensor(tn(LLM_TENSOR_ATTN_SINKS,    nullptr,  i), {n_head}, 0);
+        layer.attn_sinks    = create_tensor(tn(LLM_TENSOR_ATTN_SINKS,    "weight", i), {n_head}, 0);
         layer.wq_a          = create_tensor(tn(LLM_TENSOR_ATTN_Q_A,      "weight", i), {n_embd, q_lora_rank}, 0);
         layer.attn_q_a_norm = create_tensor(tn(LLM_TENSOR_ATTN_Q_A_NORM, "weight", i), {q_lora_rank}, 0);
         layer.wq_b          = create_tensor(tn(LLM_TENSOR_ATTN_Q_B,      "weight", i), {q_lora_rank, n_head * n_embd_head}, 0);
         layer.wkv           = create_tensor(tn(LLM_TENSOR_ATTN_KV,       "weight", i), {n_embd, n_embd_head}, 0);
         layer.attn_kv_norm  = create_tensor(tn(LLM_TENSOR_ATTN_KV_NORM,  "weight", i), {n_embd_head}, 0);
-        layer.wo_a          = create_tensor(tn(LLM_TENSOR_ATTN_OUT_A,    "weight", i), {n_head * n_embd_head / o_groups, o_lora_rank, o_groups}, 0);
+        layer.wo_a          = create_tensor(tn(LLM_TENSOR_ATTN_OUT_A,    "weight", i), {n_head * n_embd_head / o_groups, o_lora_rank * o_groups}, 0);
         layer.wo_b          = create_tensor(tn(LLM_TENSOR_ATTN_OUT_B,    "weight", i), {o_groups * o_lora_rank, n_embd}, 0);
 
-        layer.hc_attn_fn    = create_tensor(tn(LLM_TENSOR_HC_ATTN_FN,    nullptr, i), {hc_dim, hc_mix_dim}, 0);
-        layer.hc_attn_base  = create_tensor(tn(LLM_TENSOR_HC_ATTN_BASE,  nullptr, i), {hc_mix_dim}, 0);
-        layer.hc_attn_scale = create_tensor(tn(LLM_TENSOR_HC_ATTN_SCALE, nullptr, i), {3}, 0);
-        layer.hc_ffn_fn     = create_tensor(tn(LLM_TENSOR_HC_FFN_FN,     nullptr, i), {hc_dim, hc_mix_dim}, 0);
-        layer.hc_ffn_base   = create_tensor(tn(LLM_TENSOR_HC_FFN_BASE,   nullptr, i), {hc_mix_dim}, 0);
-        layer.hc_ffn_scale  = create_tensor(tn(LLM_TENSOR_HC_FFN_SCALE,  nullptr, i), {3}, 0);
+        layer.hc_attn_fn    = create_tensor(tn(LLM_TENSOR_HC_ATTN_FN,    "weight", i), {hc_dim, hc_mix_dim}, 0);
+        layer.hc_attn_base  = create_tensor(tn(LLM_TENSOR_HC_ATTN_BASE,  "weight", i), {hc_mix_dim}, 0);
+        layer.hc_attn_scale = create_tensor(tn(LLM_TENSOR_HC_ATTN_SCALE, "weight", i), {3}, 0);
+        layer.hc_ffn_fn     = create_tensor(tn(LLM_TENSOR_HC_FFN_FN,     "weight", i), {hc_dim, hc_mix_dim}, 0);
+        layer.hc_ffn_base   = create_tensor(tn(LLM_TENSOR_HC_FFN_BASE,   "weight", i), {hc_mix_dim}, 0);
+        layer.hc_ffn_scale  = create_tensor(tn(LLM_TENSOR_HC_FFN_SCALE,  "weight", i), {3}, 0);
 
         const int64_t ratio = hparams.dsv4_compress_ratios[i];
         if (ratio != 0) {
@@ -119,7 +123,7 @@ void llama_model_deepseek4::load_arch_tensors(llama_model_loader &) {
 
             layer.attn_comp_wkv   = create_tensor(tn(LLM_TENSOR_ATTN_COMPRESSOR_WKV,   "weight", i), {n_embd, coff * n_embd_head}, 0);
             layer.attn_comp_wgate = create_tensor(tn(LLM_TENSOR_ATTN_COMPRESSOR_WGATE, "weight", i), {n_embd, coff * n_embd_head}, 0);
-            layer.attn_comp_ape   = create_tensor(tn(LLM_TENSOR_ATTN_COMPRESSOR_APE,   nullptr,  i), {coff * n_embd_head, ratio}, 0);
+            layer.attn_comp_ape   = create_tensor(tn(LLM_TENSOR_ATTN_COMPRESSOR_APE,   "weight", i), {coff * n_embd_head, ratio}, 0);
             layer.attn_comp_norm  = create_tensor(tn(LLM_TENSOR_ATTN_COMPRESSOR_NORM,  "weight", i), {n_embd_head}, 0);
 
             if (ratio == 4) {
@@ -130,7 +134,7 @@ void llama_model_deepseek4::load_arch_tensors(llama_model_loader &) {
 
                 layer.indexer_comp_wkv   = create_tensor(tn(LLM_TENSOR_INDEXER_COMPRESSOR_WKV,   "weight", i), {n_embd, 2 * n_embd_indexer}, 0);
                 layer.indexer_comp_wgate = create_tensor(tn(LLM_TENSOR_INDEXER_COMPRESSOR_WGATE, "weight", i), {n_embd, 2 * n_embd_indexer}, 0);
-                layer.indexer_comp_ape   = create_tensor(tn(LLM_TENSOR_INDEXER_COMPRESSOR_APE,   nullptr,  i), {2 * n_embd_indexer, ratio}, 0);
+                layer.indexer_comp_ape   = create_tensor(tn(LLM_TENSOR_INDEXER_COMPRESSOR_APE,   "weight", i), {2 * n_embd_indexer, ratio}, 0);
                 layer.indexer_comp_norm  = create_tensor(tn(LLM_TENSOR_INDEXER_COMPRESSOR_NORM,  "weight", i), {n_embd_indexer}, 0);
             } else if (ratio != 128) {
                 throw std::runtime_error("DeepSeek-V4 loader only supports compression ratios 0, 4, and 128");
@@ -139,7 +143,7 @@ void llama_model_deepseek4::load_arch_tensors(llama_model_loader &) {
 
         layer.ffn_gate_inp = create_tensor(tn(LLM_TENSOR_FFN_GATE_INP, "weight", i), {n_embd, n_expert}, 0);
         if ((uint32_t) i < hparams.dsv4_hash_layer_count) {
-            layer.ffn_gate_tid2eid = create_tensor(tn(LLM_TENSOR_FFN_GATE_TID2EID, nullptr, i), {n_expert_used, n_vocab}, 0);
+            layer.ffn_gate_tid2eid = create_tensor(tn(LLM_TENSOR_FFN_GATE_TID2EID, "weight", i), {n_expert_used, n_vocab}, 0);
         } else {
             layer.ffn_exp_probs_b = create_tensor(tn(LLM_TENSOR_FFN_EXP_PROBS_B, "bias", i), {n_expert}, 0);
         }
@@ -1050,7 +1054,7 @@ ggml_tensor * llama_model_deepseek4::graph::build_attention(
 
     out = ggml_reshape_3d(ctx0, out, o_group_dim, n_groups, nt);
     out = ggml_permute(ctx0, out, 0, 2, 1, 3);
-    ggml_tensor * oa = ggml_mul_mat(ctx0, layer.wo_a, out);
+    ggml_tensor * oa = ggml_mul_mat(ctx0, ggml_view_3d(ctx0, layer.wo_a, layer.wo_a->ne[0], o_lora_rank, n_groups, layer.wo_a->nb[1], layer.wo_a->nb[1]*o_lora_rank, 0), out);
     cb(oa, "attn_wo_a", il);
     oa = ggml_permute(ctx0, oa, 0, 2, 1, 3);
     oa = ggml_cont_2d(ctx0, oa, o_lora_rank*n_groups, nt);

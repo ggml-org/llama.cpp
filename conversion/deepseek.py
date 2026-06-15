@@ -578,14 +578,14 @@ class DeepseekV4Model(TextModel):
         self.gguf_writer.add_indexer_key_length(hparams["index_head_dim"])
         self.gguf_writer.add_indexer_top_k(hparams["index_topk"])
 
-        self.gguf_writer.add_uint32(f"{arch}.attention.o_group_count", hparams["o_groups"])
-        self.gguf_writer.add_uint32(f"{arch}.attention.o_lora_rank", hparams["o_lora_rank"])
+        self.gguf_writer.add_uint32(f"{arch}.attention.output_group_count", hparams["o_groups"])
+        self.gguf_writer.add_uint32(f"{arch}.attention.output_lora_rank", hparams["o_lora_rank"])
         self.gguf_writer.add_array(f"{arch}.attention.compress_ratios", hparams["compress_ratios"])
-        self.gguf_writer.add_float32(f"{arch}.attention.compress_rope.freq_base", hparams["compress_rope_theta"])
-        self.gguf_writer.add_uint32(f"{arch}.hc.mult", hparams["hc_mult"])
-        self.gguf_writer.add_uint32(f"{arch}.hc.sinkhorn_iters", hparams["hc_sinkhorn_iters"])
-        self.gguf_writer.add_float32(f"{arch}.hc.eps", hparams["hc_eps"])
-        self.gguf_writer.add_uint32(f"{arch}.moe.hash_layer_count", hparams["num_hash_layers"])
+        self.gguf_writer.add_float32(f"{arch}.attention.compress_rope_freq_base", hparams["compress_rope_theta"])
+        self.gguf_writer.add_uint32(f"{arch}.hyper_connection.count", hparams["hc_mult"])
+        self.gguf_writer.add_uint32(f"{arch}.hyper_connection.sinkhorn_iterations", hparams["hc_sinkhorn_iters"])
+        self.gguf_writer.add_float32(f"{arch}.hyper_connection.epsilon", hparams["hc_eps"])
+        self.gguf_writer.add_uint32(f"{arch}.hash_layer_count", hparams["num_hash_layers"])
         self.gguf_writer.add_string(f"{arch}.moe.score_func", hparams["scoring_func"])
         self.gguf_writer.add_string(f"{arch}.moe.topk_method", hparams["topk_method"])
 
@@ -684,7 +684,7 @@ class DeepseekV4Model(TextModel):
 
             data_torch = LazyTorchTensor.to_eager(self.model_tensors[name]())
             data = data_torch.to(torch.int32).cpu().numpy()
-            new_name = self.format_tensor_name(gguf.MODEL_TENSOR.FFN_GATE_TID2EID, bid, "")
+            new_name = self.format_tensor_name(gguf.MODEL_TENSOR.FFN_GATE_TID2EID, bid, ".weight")
             logger.info(f"{new_name}: converted hash routing table to I32, shape = {{{', '.join(str(n) for n in reversed(data.shape))}}}")
             self.gguf_writer.add_tensor(new_name, data)
             consumed.append(name)
@@ -715,9 +715,9 @@ class DeepseekV4Model(TextModel):
             "embed.weight": (gguf.MODEL_TENSOR.TOKEN_EMBD, ".weight"),
             "norm.weight": (gguf.MODEL_TENSOR.OUTPUT_NORM, ".weight"),
             "head.weight": (gguf.MODEL_TENSOR.OUTPUT, ".weight"),
-            "hc_head_fn": (gguf.MODEL_TENSOR.HC_HEAD_FN, ""),
-            "hc_head_base": (gguf.MODEL_TENSOR.HC_HEAD_BASE, ""),
-            "hc_head_scale": (gguf.MODEL_TENSOR.HC_HEAD_SCALE, ""),
+            "hc_head_fn": (gguf.MODEL_TENSOR.HC_HEAD_FN, ".weight"),
+            "hc_head_base": (gguf.MODEL_TENSOR.HC_HEAD_BASE, ".weight"),
+            "hc_head_scale": (gguf.MODEL_TENSOR.HC_HEAD_SCALE, ".weight"),
         }
         if name in root_map:
             return root_map[name]
@@ -731,13 +731,13 @@ class DeepseekV4Model(TextModel):
             raise ValueError(f"Tensor {name!r} parsed bid {bid} but layer name has {layer}")
 
         layer_map: dict[str, tuple[gguf.MODEL_TENSOR, str]] = {
-            "hc_attn_fn": (gguf.MODEL_TENSOR.HC_ATTN_FN, ""),
-            "hc_attn_base": (gguf.MODEL_TENSOR.HC_ATTN_BASE, ""),
-            "hc_attn_scale": (gguf.MODEL_TENSOR.HC_ATTN_SCALE, ""),
-            "hc_ffn_fn": (gguf.MODEL_TENSOR.HC_FFN_FN, ""),
-            "hc_ffn_base": (gguf.MODEL_TENSOR.HC_FFN_BASE, ""),
-            "hc_ffn_scale": (gguf.MODEL_TENSOR.HC_FFN_SCALE, ""),
-            "attn.attn_sink": (gguf.MODEL_TENSOR.ATTN_SINKS, ""),
+            "hc_attn_fn": (gguf.MODEL_TENSOR.HC_ATTN_FN, ".weight"),
+            "hc_attn_base": (gguf.MODEL_TENSOR.HC_ATTN_BASE, ".weight"),
+            "hc_attn_scale": (gguf.MODEL_TENSOR.HC_ATTN_SCALE, ".weight"),
+            "hc_ffn_fn": (gguf.MODEL_TENSOR.HC_FFN_FN, ".weight"),
+            "hc_ffn_base": (gguf.MODEL_TENSOR.HC_FFN_BASE, ".weight"),
+            "hc_ffn_scale": (gguf.MODEL_TENSOR.HC_FFN_SCALE, ".weight"),
+            "attn.attn_sink": (gguf.MODEL_TENSOR.ATTN_SINKS, ".weight"),
             "attn.wq_a.weight": (gguf.MODEL_TENSOR.ATTN_Q_A, ".weight"),
             "attn.wq_b.weight": (gguf.MODEL_TENSOR.ATTN_Q_B, ".weight"),
             "attn.q_norm.weight": (gguf.MODEL_TENSOR.ATTN_Q_A_NORM, ".weight"),
@@ -745,13 +745,13 @@ class DeepseekV4Model(TextModel):
             "attn.kv_norm.weight": (gguf.MODEL_TENSOR.ATTN_KV_NORM, ".weight"),
             "attn.wo_a.weight": (gguf.MODEL_TENSOR.ATTN_OUT_A, ".weight"),
             "attn.wo_b.weight": (gguf.MODEL_TENSOR.ATTN_OUT_B, ".weight"),
-            "attn.compressor.ape": (gguf.MODEL_TENSOR.ATTN_COMPRESSOR_APE, ""),
+            "attn.compressor.ape": (gguf.MODEL_TENSOR.ATTN_COMPRESSOR_APE, ".weight"),
             "attn.compressor.wkv.weight": (gguf.MODEL_TENSOR.ATTN_COMPRESSOR_WKV, ".weight"),
             "attn.compressor.wgate.weight": (gguf.MODEL_TENSOR.ATTN_COMPRESSOR_WGATE, ".weight"),
             "attn.compressor.norm.weight": (gguf.MODEL_TENSOR.ATTN_COMPRESSOR_NORM, ".weight"),
             "attn.indexer.wq_b.weight": (gguf.MODEL_TENSOR.INDEXER_ATTN_Q_B, ".weight"),
             "attn.indexer.weights_proj.weight": (gguf.MODEL_TENSOR.INDEXER_PROJ, ".weight"),
-            "attn.indexer.compressor.ape": (gguf.MODEL_TENSOR.INDEXER_COMPRESSOR_APE, ""),
+            "attn.indexer.compressor.ape": (gguf.MODEL_TENSOR.INDEXER_COMPRESSOR_APE, ".weight"),
             "attn.indexer.compressor.wkv.weight": (gguf.MODEL_TENSOR.INDEXER_COMPRESSOR_WKV, ".weight"),
             "attn.indexer.compressor.wgate.weight": (gguf.MODEL_TENSOR.INDEXER_COMPRESSOR_WGATE, ".weight"),
             "attn.indexer.compressor.norm.weight": (gguf.MODEL_TENSOR.INDEXER_COMPRESSOR_NORM, ".weight"),
@@ -759,7 +759,7 @@ class DeepseekV4Model(TextModel):
             "ffn_norm.weight": (gguf.MODEL_TENSOR.FFN_NORM, ".weight"),
             "ffn.gate.weight": (gguf.MODEL_TENSOR.FFN_GATE_INP, ".weight"),
             "ffn.gate.bias": (gguf.MODEL_TENSOR.FFN_EXP_PROBS_B, ".bias"),
-            "ffn.gate.tid2eid": (gguf.MODEL_TENSOR.FFN_GATE_TID2EID, ""),
+            "ffn.gate.tid2eid": (gguf.MODEL_TENSOR.FFN_GATE_TID2EID, ".weight"),
             "ffn.shared_experts.w1.weight": (gguf.MODEL_TENSOR.FFN_GATE_SHEXP, ".weight"),
             "ffn.shared_experts.w2.weight": (gguf.MODEL_TENSOR.FFN_DOWN_SHEXP, ".weight"),
             "ffn.shared_experts.w3.weight": (gguf.MODEL_TENSOR.FFN_UP_SHEXP, ".weight"),
@@ -770,7 +770,7 @@ class DeepseekV4Model(TextModel):
             return layer_map[tensor_name]
 
         if re.match(r"ffn\.experts\.\d+\.w[123]\.(weight|scale)$", tensor_name):
-            return gguf.MODEL_TENSOR.FFN_GATE_EXP, ""
+            return gguf.MODEL_TENSOR.FFN_GATE_EXP, ".weight"
 
         raise ValueError(f"Unsupported DeepSeek-V4 tensor {name!r}")
 
@@ -781,9 +781,6 @@ class DeepseekV4Model(TextModel):
         tensor_key, suffix = self._map_dsv4_tensor_name(name, bid)
         if tensor_key == gguf.MODEL_TENSOR.FFN_GATE_TID2EID:
             return []
-        elif tensor_key == gguf.MODEL_TENSOR.ATTN_OUT_A:
-            attn_out_a_dim = int(self.hparams["num_attention_heads"] * self.hparams["head_dim"] / self.hparams["o_groups"])
-            data_torch = data_torch.reshape(self.hparams["o_groups"], self.hparams["o_lora_rank"], attn_out_a_dim)
 
         return [(self._format_dsv4_tensor_name(tensor_key, bid, suffix), data_torch)]
 
