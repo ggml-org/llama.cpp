@@ -97,8 +97,16 @@ struct mtmd_image_tokens {
             return (nx + 1) * ny + 2;
         }
         // [QWEN_VIDEO] this logic is quite ugly, it's mostly to make qwen-vl temporal merge work, can be improved in the future
-        if (batch_f32.entries.size() == 1 || n_temporal_merge == 1) {
+        if (batch_f32.entries.size() == 1) {
             return nx * ny;
+        }
+        if (n_temporal_merge == 1) {
+            // multiple image entries (e.g. tiles, or several images batched together)
+            // without temporal merge: the encoder outputs nx*ny tokens per entry, so the
+            // total number of output tokens scales with the number of entries. Returning
+            // nx*ny here under-sizes the embedding output buffer in mtmd_encode_impl() and
+            // trips "clip.cpp: Output buffer size mismatch" (seen with Gemma-4 vision).
+            return nx * ny * (uint32_t) batch_f32.entries.size();
         }
         uint32_t nz = batch_f32.entries.size();
         // TODO: simplify this by repeating the last frame until it fits the temporal merge
