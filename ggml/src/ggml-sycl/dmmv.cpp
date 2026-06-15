@@ -256,13 +256,6 @@ static void convert_mul_mat_vec_bf16_sycl(const void *vx, const dfloat *y,
 }
 #endif
 
-/*
-DPCT1110:4: The total declared local variable size in device function
-dequantize_mul_mat_vec_q2_k exceeds 128 bytes and may cause high register
-pressure. Consult with your hardware vendor to find the total register size
-available and adjust the code, or use smaller sub-group size to avoid high
-register pressure.
-*/
 static void dequantize_mul_mat_vec_q2_k(const void *__restrict__ vx,
                                         const float *__restrict__ yy,
                                         float *__restrict__ dst,
@@ -284,19 +277,15 @@ static void dequantize_mul_mat_vec_q2_k(const void *__restrict__ vx,
 
 #if QK_K == 256
     const int tid =
-        item_ct1.get_local_id(2) / K_QUANTS_PER_ITERATION; // 0...31 or 0...15
+        item_ct1.get_local_id(2) / K_QUANTS_PER_ITERATION; // 0...7 or 0...15
     const int ix =
         item_ct1.get_local_id(2) % K_QUANTS_PER_ITERATION; // 0 or 0,1
 
     const int step = 16/K_QUANTS_PER_ITERATION;
 
-    const int im = tid/step;                             // 0 or 1. 0 computes 0..., 1 computes 128...
-    const int in = tid - step*im;                        // 0...15 or 0...7
+    const int in = tid % step;                           // 0...15 or 0...7
 
     const int l0 = K_QUANTS_PER_ITERATION*in;            // 0...15 or 0...14 in steps of 2
-    const int q_offset = 32*im + l0;
-    const int s_offset = 8*im;
-    const int y_offset = 128*im + l0;
 
     uint32_t aux[4];
     const uint8_t * d = (const uint8_t *)aux;
@@ -304,33 +293,39 @@ static void dequantize_mul_mat_vec_q2_k(const void *__restrict__ vx,
 
     for (int i = ix; i < num_blocks_per_row; i += K_QUANTS_PER_ITERATION) {
 
-        const float   * y = yy + i * QK_K + y_offset;
-        const uint8_t * q = x[i].qs + q_offset;
-
         const float dall = x[i].dm[0];
         const float dmin = x[i].dm[1];
 
-        const uint32_t * a = (const uint32_t *)(x[i].scales + s_offset);
-        aux[0] = a[0] & 0x0f0f0f0f;
-        aux[1] = a[1] & 0x0f0f0f0f;
-        aux[2] = (a[0] >> 4) & 0x0f0f0f0f;
-        aux[3] = (a[1] >> 4) & 0x0f0f0f0f;
+        for (int im = 0; im < 2; ++im) {
+            const int q_offset = 32*im + l0;
+            const int s_offset = 8*im;
+            const int y_offset = 128*im + l0;
 
-        float sum1 = 0, sum2 = 0;
-        for (int l = 0; l < K_QUANTS_PER_ITERATION; ++l) {
-            sum1 += y[l+ 0] * d[0] * ((q[l+ 0] >> 0) & 3)
-                  + y[l+32] * d[2] * ((q[l+ 0] >> 2) & 3)
-                  + y[l+64] * d[4] * ((q[l+ 0] >> 4) & 3)
-                  + y[l+96] * d[6] * ((q[l+ 0] >> 6) & 3)
-                  + y[l+16] * d[1] * ((q[l+16] >> 0) & 3)
-                  + y[l+48] * d[3] * ((q[l+16] >> 2) & 3)
-                  + y[l+80] * d[5] * ((q[l+16] >> 4) & 3)
-                  +y[l+112] * d[7] * ((q[l+16] >> 6) & 3);
-            sum2 += y[l+ 0] * m[0] + y[l+32] * m[2] + y[l+64] * m[4] + y[ l+96] * m[6]
-                  + y[l+16] * m[1] + y[l+48] * m[3] + y[l+80] * m[5] + y[l+112] * m[7];
+            const float   * y = yy + i * QK_K + y_offset;
+            const uint8_t * q = x[i].qs + q_offset;
 
+            const uint32_t * a = (const uint32_t *)(x[i].scales + s_offset);
+            aux[0] = a[0] & 0x0f0f0f0f;
+            aux[1] = a[1] & 0x0f0f0f0f;
+            aux[2] = (a[0] >> 4) & 0x0f0f0f0f;
+            aux[3] = (a[1] >> 4) & 0x0f0f0f0f;
+
+            float sum1 = 0, sum2 = 0;
+            for (int l = 0; l < K_QUANTS_PER_ITERATION; ++l) {
+                sum1 += y[l+ 0] * d[0] * ((q[l+ 0] >> 0) & 3)
+                      + y[l+32] * d[2] * ((q[l+ 0] >> 2) & 3)
+                      + y[l+64] * d[4] * ((q[l+ 0] >> 4) & 3)
+                      + y[l+96] * d[6] * ((q[l+ 0] >> 6) & 3)
+                      + y[l+16] * d[1] * ((q[l+16] >> 0) & 3)
+                      + y[l+48] * d[3] * ((q[l+16] >> 2) & 3)
+                      + y[l+80] * d[5] * ((q[l+16] >> 4) & 3)
+                      +y[l+112] * d[7] * ((q[l+16] >> 6) & 3);
+                sum2 += y[l+ 0] * m[0] + y[l+32] * m[2] + y[l+64] * m[4] + y[ l+96] * m[6]
+                      + y[l+16] * m[1] + y[l+48] * m[3] + y[l+80] * m[5] + y[l+112] * m[7];
+
+            }
+            tmp += dall * sum1 - dmin * sum2;
         }
-        tmp += dall * sum1 - dmin * sum2;
 
     }
 #else
@@ -372,7 +367,7 @@ static void dequantize_mul_mat_vec_q2_k(const void *__restrict__ vx,
 
     // sum up partial sums and write back result
 #pragma unroll
-    for (int mask = QK_WARP_SIZE / 2; mask > 0; mask >>= 1) {
+    for (int mask = WARP_SIZE / 2; mask > 0; mask >>= 1) {
         tmp +=
             dpct::permute_sub_group_by_xor(item_ct1.get_sub_group(), tmp, mask);
     }
@@ -382,13 +377,6 @@ static void dequantize_mul_mat_vec_q2_k(const void *__restrict__ vx,
     }
 }
 
-/*
-DPCT1110:5: The total declared local variable size in device function
-dequantize_mul_mat_vec_q3_k exceeds 128 bytes and may cause high register
-pressure. Consult with your hardware vendor to find the total register size
-available and adjust the code, or use smaller sub-group size to avoid high
-register pressure.
-*/
 static void dequantize_mul_mat_vec_q3_k(const void *__restrict__ vx,
                                         const float *__restrict__ yy,
                                         float *__restrict__ dst,
@@ -412,52 +400,52 @@ static void dequantize_mul_mat_vec_q3_k(const void *__restrict__ vx,
     const uint16_t kmask2 = 0x0f0f;
 
     const int tid =
-        item_ct1.get_local_id(2) / K_QUANTS_PER_ITERATION; // 0...31 or 0...16
+        item_ct1.get_local_id(2) / K_QUANTS_PER_ITERATION; // 0...7 or 0...15
     const int ix =
         item_ct1.get_local_id(2) % K_QUANTS_PER_ITERATION; // 0 or 0,1
 
     const int n  = K_QUANTS_PER_ITERATION;               // iterations in the inner loop
     const int step = 16/K_QUANTS_PER_ITERATION;
-    const int im = tid/step;                             // 0 or 1. 0 computes 0..., 1 computes 128...
-    const int in = tid - step*im;                        // 0....15 or 0...7
-
-    const uint8_t m = 1 << (4*im);
+    const int in = tid % step;                           // 0...15 or 0...7
 
     const int l0 = n*in;                                 // 0...15 or 0...14 in steps of 2
-    const int q_offset =  32*im + l0;
-    const int y_offset = 128*im + l0;
 
     uint16_t utmp[4];
     const int8_t * s = (const int8_t *)utmp;
 
-    const uint16_t s_shift = 4*im;
-
     for (int i = ix; i < num_blocks_per_row; i += K_QUANTS_PER_ITERATION) {
 
-        const float   * y  = yy + i * QK_K + y_offset;
-        const uint8_t * q = x[i].qs + q_offset;
         const uint8_t * h = x[i].hmask + l0;
-
-        const uint16_t * a = (const uint16_t *)x[i].scales;
-        utmp[0] = ((a[0] >> s_shift) & kmask2) | (((a[4] >> (s_shift + 0)) & kmask1) << 4);
-        utmp[1] = ((a[1] >> s_shift) & kmask2) | (((a[5] >> (s_shift + 0)) & kmask1) << 4);
-        utmp[2] = ((a[2] >> s_shift) & kmask2) | (((a[4] >> (s_shift + 2)) & kmask1) << 4);
-        utmp[3] = ((a[3] >> s_shift) & kmask2) | (((a[5] >> (s_shift + 2)) & kmask1) << 4);
-
         const float d = x[i].d;
 
-        float sum = 0;
-        for (int l = 0; l < n; ++l) {
-            sum += y[l+ 0] * (s[0] - 32) * (((q[l] >> 0) & 3) - (h[l] & (m << 0) ? 0 : 4))
-                 + y[l+32] * (s[2] - 32) * (((q[l] >> 2) & 3) - (h[l] & (m << 1) ? 0 : 4))
-                 + y[l+64] * (s[4] - 32) * (((q[l] >> 4) & 3) - (h[l] & (m << 2) ? 0 : 4))
-                 + y[l+96] * (s[6] - 32) * (((q[l] >> 6) & 3) - (h[l] & (m << 3) ? 0 : 4));
-            sum += y[l+16] * (s[1] - 32) * (((q[l+16] >> 0) & 3) - (h[l+16] & (m << 0) ? 0 : 4))
-                 + y[l+48] * (s[3] - 32) * (((q[l+16] >> 2) & 3) - (h[l+16] & (m << 1) ? 0 : 4))
-                 + y[l+80] * (s[5] - 32) * (((q[l+16] >> 4) & 3) - (h[l+16] & (m << 2) ? 0 : 4))
-                + y[l+112] * (s[7] - 32) * (((q[l+16] >> 6) & 3) - (h[l+16] & (m << 3) ? 0 : 4));
+        for (int im = 0; im < 2; ++im) {
+            const int q_offset =  32*im + l0;
+            const int y_offset = 128*im + l0;
+            const uint16_t s_shift = 4*im;
+            const uint8_t m = 1 << (4*im);
+
+            const float   * y  = yy + i * QK_K + y_offset;
+            const uint8_t * q = x[i].qs + q_offset;
+
+            const uint16_t * a = (const uint16_t *)x[i].scales;
+            utmp[0] = ((a[0] >> s_shift) & kmask2) | (((a[4] >> (s_shift + 0)) & kmask1) << 4);
+            utmp[1] = ((a[1] >> s_shift) & kmask2) | (((a[5] >> (s_shift + 0)) & kmask1) << 4);
+            utmp[2] = ((a[2] >> s_shift) & kmask2) | (((a[4] >> (s_shift + 2)) & kmask1) << 4);
+            utmp[3] = ((a[3] >> s_shift) & kmask2) | (((a[5] >> (s_shift + 2)) & kmask1) << 4);
+
+            float sum = 0;
+            for (int l = 0; l < n; ++l) {
+                sum += y[l+ 0] * (s[0] - 32) * (((q[l] >> 0) & 3) - (h[l] & (m << 0) ? 0 : 4))
+                     + y[l+32] * (s[2] - 32) * (((q[l] >> 2) & 3) - (h[l] & (m << 1) ? 0 : 4))
+                     + y[l+64] * (s[4] - 32) * (((q[l] >> 4) & 3) - (h[l] & (m << 2) ? 0 : 4))
+                     + y[l+96] * (s[6] - 32) * (((q[l] >> 6) & 3) - (h[l] & (m << 3) ? 0 : 4));
+                sum += y[l+16] * (s[1] - 32) * (((q[l+16] >> 0) & 3) - (h[l+16] & (m << 0) ? 0 : 4))
+                     + y[l+48] * (s[3] - 32) * (((q[l+16] >> 2) & 3) - (h[l+16] & (m << 1) ? 0 : 4))
+                     + y[l+80] * (s[5] - 32) * (((q[l+16] >> 4) & 3) - (h[l+16] & (m << 2) ? 0 : 4))
+                    + y[l+112] * (s[7] - 32) * (((q[l+16] >> 6) & 3) - (h[l+16] & (m << 3) ? 0 : 4));
+            }
+            tmp += d * sum;
         }
-        tmp += d * sum;
 
     }
 #else
@@ -491,7 +479,7 @@ static void dequantize_mul_mat_vec_q3_k(const void *__restrict__ vx,
 
     // sum up partial sums and write back result
 #pragma unroll
-    for (int mask = QK_WARP_SIZE / 2; mask > 0; mask >>= 1) {
+    for (int mask = WARP_SIZE / 2; mask > 0; mask >>= 1) {
         tmp +=
             dpct::permute_sub_group_by_xor(item_ct1.get_sub_group(), tmp, mask);
     }
@@ -530,53 +518,54 @@ static void dequantize_mul_mat_vec_q3_k_reorder(const void *__restrict__ vx,
     const uint16_t kmask2 = 0x0f0f;
 
     const int tid =
-        item_ct1.get_local_id(2) / K_QUANTS_PER_ITERATION; // 0...31 or 0...16
+        item_ct1.get_local_id(2) / K_QUANTS_PER_ITERATION; // 0...7 or 0...15
     const int ix =
         item_ct1.get_local_id(2) % K_QUANTS_PER_ITERATION; // 0 or 0,1
 
     const int n  = K_QUANTS_PER_ITERATION;               // iterations in the inner loop
     const int step = 16/K_QUANTS_PER_ITERATION;
-    const int im = tid/step;                             // 0 or 1. 0 computes 0..., 1 computes 128...
-    const int in = tid - step*im;                        // 0....15 or 0...7
-
-    const uint8_t m = 1 << (4*im);
+    const int in = tid % step;                           // 0...15 or 0...7
 
     const int l0 = n*in;                                 // 0...15 or 0...14 in steps of 2
-    const int q_offset =  32*im + l0;
-    const int y_offset = 128*im + l0;
 
     uint16_t utmp[4];
     const int8_t * s = (const int8_t *)utmp;
 
-    const uint16_t s_shift = 4*im;
-
     for (int i = ix; i < num_blocks_per_row; i += K_QUANTS_PER_ITERATION) {
         const int bi = ib0 + i;
 
-        const float   * y  = yy + i * QK_K + y_offset;
-        const uint8_t * q  = qs_base + bi * (QK_K / 4) + q_offset;
         const uint8_t * h  = hmask_base + bi * (QK_K / 8) + l0;
-
-        const uint16_t * a = (const uint16_t *)(scales_base + bi * 12);
-        utmp[0] = ((a[0] >> s_shift) & kmask2) | (((a[4] >> (s_shift + 0)) & kmask1) << 4);
-        utmp[1] = ((a[1] >> s_shift) & kmask2) | (((a[5] >> (s_shift + 0)) & kmask1) << 4);
-        utmp[2] = ((a[2] >> s_shift) & kmask2) | (((a[4] >> (s_shift + 2)) & kmask1) << 4);
-        utmp[3] = ((a[3] >> s_shift) & kmask2) | (((a[5] >> (s_shift + 2)) & kmask1) << 4);
 
         const float d = d_base[bi];
 
-        float sum = 0;
-        for (int l = 0; l < n; ++l) {
-            sum += y[l+ 0] * (s[0] - 32) * (((q[l] >> 0) & 3) - (h[l] & (m << 0) ? 0 : 4))
-                 + y[l+32] * (s[2] - 32) * (((q[l] >> 2) & 3) - (h[l] & (m << 1) ? 0 : 4))
-                 + y[l+64] * (s[4] - 32) * (((q[l] >> 4) & 3) - (h[l] & (m << 2) ? 0 : 4))
-                 + y[l+96] * (s[6] - 32) * (((q[l] >> 6) & 3) - (h[l] & (m << 3) ? 0 : 4));
-            sum += y[l+16] * (s[1] - 32) * (((q[l+16] >> 0) & 3) - (h[l+16] & (m << 0) ? 0 : 4))
-                 + y[l+48] * (s[3] - 32) * (((q[l+16] >> 2) & 3) - (h[l+16] & (m << 1) ? 0 : 4))
-                 + y[l+80] * (s[5] - 32) * (((q[l+16] >> 4) & 3) - (h[l+16] & (m << 2) ? 0 : 4))
-                + y[l+112] * (s[7] - 32) * (((q[l+16] >> 6) & 3) - (h[l+16] & (m << 3) ? 0 : 4));
+        for (int im = 0; im < 2; ++im) {
+            const int q_offset =  32*im + l0;
+            const int y_offset = 128*im + l0;
+            const uint16_t s_shift = 4*im;
+            const uint8_t m = 1 << (4*im);
+
+            const float   * y  = yy + i * QK_K + y_offset;
+            const uint8_t * q  = qs_base + bi * (QK_K / 4) + q_offset;
+
+            const uint16_t * a = (const uint16_t *)(scales_base + bi * 12);
+            utmp[0] = ((a[0] >> s_shift) & kmask2) | (((a[4] >> (s_shift + 0)) & kmask1) << 4);
+            utmp[1] = ((a[1] >> s_shift) & kmask2) | (((a[5] >> (s_shift + 0)) & kmask1) << 4);
+            utmp[2] = ((a[2] >> s_shift) & kmask2) | (((a[4] >> (s_shift + 2)) & kmask1) << 4);
+            utmp[3] = ((a[3] >> s_shift) & kmask2) | (((a[5] >> (s_shift + 2)) & kmask1) << 4);
+
+            float sum = 0;
+            for (int l = 0; l < n; ++l) {
+                sum += y[l+ 0] * (s[0] - 32) * (((q[l] >> 0) & 3) - (h[l] & (m << 0) ? 0 : 4))
+                     + y[l+32] * (s[2] - 32) * (((q[l] >> 2) & 3) - (h[l] & (m << 1) ? 0 : 4))
+                     + y[l+64] * (s[4] - 32) * (((q[l] >> 4) & 3) - (h[l] & (m << 2) ? 0 : 4))
+                     + y[l+96] * (s[6] - 32) * (((q[l] >> 6) & 3) - (h[l] & (m << 3) ? 0 : 4));
+                sum += y[l+16] * (s[1] - 32) * (((q[l+16] >> 0) & 3) - (h[l+16] & (m << 0) ? 0 : 4))
+                     + y[l+48] * (s[3] - 32) * (((q[l+16] >> 2) & 3) - (h[l+16] & (m << 1) ? 0 : 4))
+                     + y[l+80] * (s[5] - 32) * (((q[l+16] >> 4) & 3) - (h[l+16] & (m << 2) ? 0 : 4))
+                    + y[l+112] * (s[7] - 32) * (((q[l+16] >> 6) & 3) - (h[l+16] & (m << 3) ? 0 : 4));
+            }
+            tmp += d * sum;
         }
-        tmp += d * sum;
     }
 #else
     GGML_UNUSED(vx);
@@ -588,7 +577,7 @@ static void dequantize_mul_mat_vec_q3_k_reorder(const void *__restrict__ vx,
 
     // sum up partial sums and write back result
 #pragma unroll
-    for (int mask = QK_WARP_SIZE / 2; mask > 0; mask >>= 1) {
+    for (int mask = WARP_SIZE / 2; mask > 0; mask >>= 1) {
         tmp +=
             dpct::permute_sub_group_by_xor(item_ct1.get_sub_group(), tmp, mask);
     }
@@ -598,13 +587,6 @@ static void dequantize_mul_mat_vec_q3_k_reorder(const void *__restrict__ vx,
     }
 }
 
-/*
-DPCT1110:6: The total declared local variable size in device function
-dequantize_mul_mat_vec_q4_k exceeds 128 bytes and may cause high register
-pressure. Consult with your hardware vendor to find the total register size
-available and adjust the code, or use smaller sub-group size to avoid high
-register pressure.
-*/
 static void dequantize_mul_mat_vec_q4_k(const void *__restrict__ vx,
                                         const float *__restrict__ yy,
                                         float *__restrict__ dst,
@@ -625,22 +607,19 @@ static void dequantize_mul_mat_vec_q4_k(const void *__restrict__ vx,
     const uint16_t kmask3 = 0xc0c0;
 
     const int tid =
-        item_ct1.get_local_id(2) / K_QUANTS_PER_ITERATION; // 0...31 or 0...16
+        item_ct1.get_local_id(2) / K_QUANTS_PER_ITERATION; // 0...7 or 0...15
     const int ix =
         item_ct1.get_local_id(2) % K_QUANTS_PER_ITERATION; // 0 or 0,1
 
     const int step = 8/K_QUANTS_PER_ITERATION;           // 8 or 4
 
-    const int il  = tid/step;                            // 0...3
-    const int ir  = tid - step*il;                       // 0...7 or 0...3
+    const int il_base = tid/step;                        // 0 or 1 (was 0...3)
+    const int ir  = tid - step*il_base;                  // 0...7 or 0...3
     const int n   = 2 * K_QUANTS_PER_ITERATION;          // 2 or 4
 
-    const int im = il/2;  // 0 or 1. 0 computes 0,32 + 128,160, 1 computes 64,96 + 192,224
-    const int in = il%2;
+    const int in = il_base%2;
 
     const int l0 = n*(2*ir + in);
-    const int q_offset = 32*im + l0;
-    const int y_offset = 64*im + l0;
 
     uint16_t aux[4];
     const uint8_t * sc = (const uint8_t *)aux;
@@ -657,55 +636,60 @@ static void dequantize_mul_mat_vec_q4_k(const void *__restrict__ vx,
 
     for (int i = ix; i < num_blocks_per_row; i += K_QUANTS_PER_ITERATION) {
 
-        const float   * y1 = yy + i*QK_K + y_offset;
-        const float   * y2 = y1 + 128;
-
         const float dall = x[i].dm[0];
         const float dmin = x[i].dm[1];
 
-        const uint16_t * a = (const uint16_t *)x[i].scales;
-        aux[0] = a[im+0] & kmask1;
-        aux[1] = a[im+2] & kmask1;
-        aux[2] = ((a[im+4] >> 0) & kmask2) | ((a[im+0] & kmask3) >> 2);
-        aux[3] = ((a[im+4] >> 4) & kmask2) | ((a[im+2] & kmask3) >> 2);
+        for (int im = 0; im < 2; ++im) {
+            const int q_offset = 32*im + l0;
+            const int y_offset = 64*im + l0;
+
+            const float   * y1 = yy + i*QK_K + y_offset;
+            const float   * y2 = y1 + 128;
+
+            const uint16_t * a = (const uint16_t *)x[i].scales;
+            aux[0] = a[im+0] & kmask1;
+            aux[1] = a[im+2] & kmask1;
+            aux[2] = ((a[im+4] >> 0) & kmask2) | ((a[im+0] & kmask3) >> 2);
+            aux[3] = ((a[im+4] >> 4) & kmask2) | ((a[im+2] & kmask3) >> 2);
 
 #if K_QUANTS_PER_ITERATION == 2
-        const uint32_t * q1 = (const uint32_t *)(x[i].qs + q_offset);
-        const uint32_t * q2 = q1 + 16;
+            const uint32_t * q1 = (const uint32_t *)(x[i].qs + q_offset);
+            const uint32_t * q2 = q1 + 16;
 
-        q32[0] = q1[0] & 0x0f0f0f0f;
-        q32[1] = q1[0] & 0xf0f0f0f0;
-        q32[2] = q2[0] & 0x0f0f0f0f;
-        q32[3] = q2[0] & 0xf0f0f0f0;
+            q32[0] = q1[0] & 0x0f0f0f0f;
+            q32[1] = q1[0] & 0xf0f0f0f0;
+            q32[2] = q2[0] & 0x0f0f0f0f;
+            q32[3] = q2[0] & 0xf0f0f0f0;
 
-        sycl::float4 s = {0.f, 0.f, 0.f, 0.f};
-        float smin = 0;
-        for (int l = 0; l < 4; ++l) {
-            s.x() += y1[l] * q4[l + 0]; s.y() += y1[l + 32] * q4[l + 4];
-            s.z() += y2[l] * q4[l + 8]; s.w() += y2[l + 32] * q4[l + 12];
-            smin += y1[l] * sc[2] + y1[l+32] * sc[3] + y2[l] * sc[6] + y2[l+32] * sc[7];
-        }
-        tmp += dall * (s.x() * sc[0] + s.y() * sc[1] * 1.f / 16.f +
-                       s.z() * sc[4] + s.w() * sc[5] * 1.f / 16.f) -
-               dmin * smin;
+            sycl::float4 s = {0.f, 0.f, 0.f, 0.f};
+            float smin = 0;
+            for (int l = 0; l < 4; ++l) {
+                s.x() += y1[l] * q4[l + 0]; s.y() += y1[l + 32] * q4[l + 4];
+                s.z() += y2[l] * q4[l + 8]; s.w() += y2[l + 32] * q4[l + 12];
+                smin += y1[l] * sc[2] + y1[l+32] * sc[3] + y2[l] * sc[6] + y2[l+32] * sc[7];
+            }
+            tmp += dall * (s.x() * sc[0] + s.y() * sc[1] * 1.f / 16.f +
+                           s.z() * sc[4] + s.w() * sc[5] * 1.f / 16.f) -
+                   dmin * smin;
 #else
-        const uint16_t * q1 = (const uint16_t *)(x[i].qs + q_offset);
-        const uint16_t * q2 = q1 + 32;
+            const uint16_t * q1 = (const uint16_t *)(x[i].qs + q_offset);
+            const uint16_t * q2 = q1 + 32;
 
-        q16[0] = q1[0] & 0x0f0f;
-        q16[1] = q1[0] & 0xf0f0;
-        q16[2] = q2[0] & 0x0f0f;
-        q16[3] = q2[0] & 0xf0f0;
+            q16[0] = q1[0] & 0x0f0f;
+            q16[1] = q1[0] & 0xf0f0;
+            q16[2] = q2[0] & 0x0f0f;
+            q16[3] = q2[0] & 0xf0f0;
 
-        float4 s = {0.f, 0.f, 0.f, 0.f};
-        float smin = 0;
-        for (int l = 0; l < 2; ++l) {
-            s.x += y1[l] * q4[l+0]; s.y += y1[l+32] * q4[l+2];
-            s.z += y2[l] * q4[l+4]; s.w += y2[l+32] * q4[l+6];
-            smin += y1[l] * sc[2] + y1[l+32] * sc[3] + y2[l] * sc[6] + y2[l+32] * sc[7];
-        }
-        tmp += dall * (s.x * sc[0] + s.y * sc[1] * 1.f/16.f + s.z * sc[4] + s.w * sc[5] * 1.f/16.f) - dmin * smin;
+            float4 s = {0.f, 0.f, 0.f, 0.f};
+            float smin = 0;
+            for (int l = 0; l < 2; ++l) {
+                s.x += y1[l] * q4[l+0]; s.y += y1[l+32] * q4[l+2];
+                s.z += y2[l] * q4[l+4]; s.w += y2[l+32] * q4[l+6];
+                smin += y1[l] * sc[2] + y1[l+32] * sc[3] + y2[l] * sc[6] + y2[l+32] * sc[7];
+            }
+            tmp += dall * (s.x * sc[0] + s.y * sc[1] * 1.f/16.f + s.z * sc[4] + s.w * sc[5] * 1.f/16.f) - dmin * smin;
 #endif
+        }
 
     }
 #else
@@ -741,7 +725,7 @@ static void dequantize_mul_mat_vec_q4_k(const void *__restrict__ vx,
 
     // sum up partial sums and write back result
 #pragma unroll
-    for (int mask = QK_WARP_SIZE / 2; mask > 0; mask >>= 1) {
+    for (int mask = WARP_SIZE / 2; mask > 0; mask >>= 1) {
         tmp +=
             dpct::permute_sub_group_by_xor(item_ct1.get_sub_group(), tmp, mask);
     }
@@ -776,22 +760,19 @@ static void dequantize_mul_mat_vec_q4_k_reorder(const void *__restrict__ vx,
     const uint16_t kmask3 = 0xc0c0;
 
     const int tid =
-        item_ct1.get_local_id(2) / K_QUANTS_PER_ITERATION; // 0...31 or 0...16
+        item_ct1.get_local_id(2) / K_QUANTS_PER_ITERATION; // 0...7 or 0...15
     const int ix =
         item_ct1.get_local_id(2) % K_QUANTS_PER_ITERATION; // 0 or 0,1
 
     const int step = 8/K_QUANTS_PER_ITERATION;           // 8 or 4
 
-    const int il  = tid/step;                            // 0...3
-    const int ir  = tid - step*il;                       // 0...7 or 0...3
+    const int il_base = tid/step;                        // 0 or 1 (was 0...3)
+    const int ir  = tid - step*il_base;                  // 0...7 or 0...3
     const int n   = 2 * K_QUANTS_PER_ITERATION;          // 2 or 4
 
-    const int im = il/2;  // 0 or 1. 0 computes 0,32 + 128,160, 1 computes 64,96 + 192,224
-    const int in = il%2;
+    const int in = il_base%2;
 
     const int l0 = n*(2*ir + in);
-    const int q_offset = 32*im + l0;
-    const int y_offset = 64*im + l0;
 
     uint16_t aux[4];
     const uint8_t * sc = (const uint8_t *)aux;
@@ -809,56 +790,61 @@ static void dequantize_mul_mat_vec_q4_k_reorder(const void *__restrict__ vx,
     for (int i = ix; i < num_blocks_per_row; i += K_QUANTS_PER_ITERATION) {
         const int bi = ib0 + i;
 
-        const float   * y1 = yy + i*QK_K + y_offset;
-        const float   * y2 = y1 + 128;
-
         const sycl::half2 dm_val = dm_base[bi];
         const float dall = dm_val[0];
         const float dmin = dm_val[1];
 
-        const uint16_t * a = (const uint16_t *)(scales_base + bi * K_SCALE_SIZE);
-        aux[0] = a[im+0] & kmask1;
-        aux[1] = a[im+2] & kmask1;
-        aux[2] = ((a[im+4] >> 0) & kmask2) | ((a[im+0] & kmask3) >> 2);
-        aux[3] = ((a[im+4] >> 4) & kmask2) | ((a[im+2] & kmask3) >> 2);
+        for (int im = 0; im < 2; ++im) {
+            const int q_offset = 32*im + l0;
+            const int y_offset = 64*im + l0;
+
+            const float   * y1 = yy + i*QK_K + y_offset;
+            const float   * y2 = y1 + 128;
+
+            const uint16_t * a = (const uint16_t *)(scales_base + bi * K_SCALE_SIZE);
+            aux[0] = a[im+0] & kmask1;
+            aux[1] = a[im+2] & kmask1;
+            aux[2] = ((a[im+4] >> 0) & kmask2) | ((a[im+0] & kmask3) >> 2);
+            aux[3] = ((a[im+4] >> 4) & kmask2) | ((a[im+2] & kmask3) >> 2);
 
 #if K_QUANTS_PER_ITERATION == 2
-        const uint32_t * q1 = (const uint32_t *)(qs_base + bi * (QK_K / 2) + q_offset);
-        const uint32_t * q2 = q1 + 16;
+            const uint32_t * q1 = (const uint32_t *)(qs_base + bi * (QK_K / 2) + q_offset);
+            const uint32_t * q2 = q1 + 16;
 
-        q32[0] = q1[0] & 0x0f0f0f0f;
-        q32[1] = q1[0] & 0xf0f0f0f0;
-        q32[2] = q2[0] & 0x0f0f0f0f;
-        q32[3] = q2[0] & 0xf0f0f0f0;
+            q32[0] = q1[0] & 0x0f0f0f0f;
+            q32[1] = q1[0] & 0xf0f0f0f0;
+            q32[2] = q2[0] & 0x0f0f0f0f;
+            q32[3] = q2[0] & 0xf0f0f0f0;
 
-        sycl::float4 s = {0.f, 0.f, 0.f, 0.f};
-        float smin = 0;
-        for (int l = 0; l < 4; ++l) {
-            s.x() += y1[l] * q4[l + 0]; s.y() += y1[l + 32] * q4[l + 4];
-            s.z() += y2[l] * q4[l + 8]; s.w() += y2[l + 32] * q4[l + 12];
-            smin += y1[l] * sc[2] + y1[l+32] * sc[3] + y2[l] * sc[6] + y2[l+32] * sc[7];
-        }
-        tmp += dall * (s.x() * sc[0] + s.y() * sc[1] * 1.f / 16.f +
-                       s.z() * sc[4] + s.w() * sc[5] * 1.f / 16.f) -
-               dmin * smin;
+            sycl::float4 s = {0.f, 0.f, 0.f, 0.f};
+            float smin = 0;
+            for (int l = 0; l < 4; ++l) {
+                s.x() += y1[l] * q4[l + 0]; s.y() += y1[l + 32] * q4[l + 4];
+                s.z() += y2[l] * q4[l + 8]; s.w() += y2[l + 32] * q4[l + 12];
+                smin += y1[l] * sc[2] + y1[l+32] * sc[3] + y2[l] * sc[6] + y2[l+32] * sc[7];
+            }
+            tmp += dall * (s.x() * sc[0] + s.y() * sc[1] * 1.f / 16.f +
+                           s.z() * sc[4] + s.w() * sc[5] * 1.f / 16.f) -
+                   dmin * smin;
 #else
-        const uint16_t * q1 = (const uint16_t *)(qs_base + bi * (QK_K / 2) + q_offset);
-        const uint16_t * q2 = q1 + 32;
+            const uint16_t * q1 = (const uint16_t *)(qs_base + bi * (QK_K / 2) + q_offset);
+            const uint16_t * q2 = q1 + 32;
 
-        q16[0] = q1[0] & 0x0f0f;
-        q16[1] = q1[0] & 0xf0f0;
-        q16[2] = q2[0] & 0x0f0f;
-        q16[3] = q2[0] & 0xf0f0;
+            q16[0] = q1[0] & 0x0f0f;
+            q16[1] = q1[0] & 0xf0f0;
+            q16[2] = q2[0] & 0x0f0f;
+            q16[3] = q2[0] & 0xf0f0;
 
-        float4 s = {0.f, 0.f, 0.f, 0.f};
-        float smin = 0;
-        for (int l = 0; l < 2; ++l) {
-            s.x += y1[l] * q4[l+0]; s.y += y1[l+32] * q4[l+2];
-            s.z += y2[l] * q4[l+4]; s.w += y2[l+32] * q4[l+6];
-            smin += y1[l] * sc[2] + y1[l+32] * sc[3] + y2[l] * sc[6] + y2[l+32] * sc[7];
-        }
-        tmp += dall * (s.x * sc[0] + s.y * sc[1] * 1.f/16.f + s.z * sc[4] + s.w * sc[5] * 1.f/16.f) - dmin * smin;
+            float4 s = {0.f, 0.f, 0.f, 0.f};
+            float smin = 0;
+            for (int l = 0; l < 2; ++l) {
+                s.x += y1[l] * q4[l+0]; s.y += y1[l+32] * q4[l+2];
+                s.z += y2[l] * q4[l+4]; s.w += y2[l+32] * q4[l+6];
+                smin += y1[l] * sc[2] + y1[l+32] * sc[3] + y2[l] * sc[6] + y2[l+32] * sc[7];
+            }
+            tmp += dall * (s.x * sc[0] + s.y * sc[1] * 1.f/16.f + s.z * sc[4] + s.w * sc[5] * 1.f/16.f) - dmin * smin;
 #endif
+        }
 
     }
 #else
@@ -897,7 +883,7 @@ static void dequantize_mul_mat_vec_q4_k_reorder(const void *__restrict__ vx,
 
     // sum up partial sums and write back result
 #pragma unroll
-    for (int mask = QK_WARP_SIZE / 2; mask > 0; mask >>= 1) {
+    for (int mask = WARP_SIZE / 2; mask > 0; mask >>= 1) {
         tmp +=
             dpct::permute_sub_group_by_xor(item_ct1.get_sub_group(), tmp, mask);
     }
@@ -907,13 +893,6 @@ static void dequantize_mul_mat_vec_q4_k_reorder(const void *__restrict__ vx,
     }
 }
 
-/*
-DPCT1110:7: The total declared local variable size in device function
-dequantize_mul_mat_vec_q5_k exceeds 128 bytes and may cause high register
-pressure. Consult with your hardware vendor to find the total register size
-available and adjust the code, or use smaller sub-group size to avoid high
-register pressure.
-*/
 static void dequantize_mul_mat_vec_q5_k(const void *__restrict__ vx,
                                         const float *__restrict__ yy,
                                         float *__restrict__ dst,
@@ -933,22 +912,16 @@ static void dequantize_mul_mat_vec_q5_k(const void *__restrict__ vx,
     const uint16_t kmask2 = 0x0f0f;
     const uint16_t kmask3 = 0xc0c0;
 
-    const int tid = item_ct1.get_local_id(2) / 2; // 0...15
+    const int tid = item_ct1.get_local_id(2) / 2; // 0...7
     const int ix = item_ct1.get_local_id(2) % 2;
 
-    const int il  = tid/4;     // 0...3
-    const int ir  = tid - 4*il;// 0...3
+    const int il_base = tid/4;     // 0 or 1 (was 0...3)
+    const int ir  = tid - 4*il_base;// 0...3
     const int n   = 2;
 
-    const int im = il/2;  // 0 or 1. 0 computes 0,32 + 128,160, 1 computes 64,96 + 192,224
-    const int in = il%2;
+    const int in = il_base%2;
 
     const int l0 = n*(2*ir + in);
-    const int q_offset = 32*im + l0;
-    const int y_offset = 64*im + l0;
-
-    const uint8_t hm1  = 1 << (2*im);
-    const uint8_t hm2  = hm1 << 4;
 
     uint16_t aux[4];
     const uint8_t * sc = (const uint8_t *)aux;
@@ -958,51 +931,59 @@ static void dequantize_mul_mat_vec_q5_k(const void *__restrict__ vx,
 
     for (int i = ix; i < num_blocks_per_row; i += 2) {
 
-        const uint8_t * ql1 = x[i].qs + q_offset;
         const uint8_t * qh  = x[i].qh + l0;
-        const float   * y1  = yy + i*QK_K + y_offset;
-        const float   * y2  = y1 + 128;
-
         const float dall = x[i].dm[0];
         const float dmin = x[i].dm[1];
 
-        const uint16_t * a = (const uint16_t *)x[i].scales;
-        aux[0] = a[im+0] & kmask1;
-        aux[1] = a[im+2] & kmask1;
-        aux[2] = ((a[im+4] >> 0) & kmask2) | ((a[im+0] & kmask3) >> 2);
-        aux[3] = ((a[im+4] >> 4) & kmask2) | ((a[im+2] & kmask3) >> 2);
+        for (int im = 0; im < 2; ++im) {
+            const int q_offset = 32*im + l0;
+            const int y_offset = 64*im + l0;
 
-        sycl::float4 sum = {0.f, 0.f, 0.f, 0.f};
-        float smin = 0;
-        const uint16_t * q1 = (const uint16_t *)ql1;
-        const uint16_t * q2 = q1 + 32;
-        q16[0] = q1[0] & 0x0f0f;
-        q16[1] = q1[8] & 0x0f0f;
-        q16[2] = (q1[0] >> 4) & 0x0f0f;
-        q16[3] = (q1[8] >> 4) & 0x0f0f;
-        q16[4] = q2[0] & 0x0f0f;
-        q16[5] = q2[8] & 0x0f0f;
-        q16[6] = (q2[0] >> 4) & 0x0f0f;
-        q16[7] = (q2[8] >> 4) & 0x0f0f;
-        for (int l = 0; l < n; ++l) {
-            sum.x() +=
-                y1[l + 0] * (q4[l + 0] + (qh[l + 0] & (hm1 << 0) ? 16 : 0)) +
-                y1[l + 16] * (q4[l + 2] + (qh[l + 16] & (hm1 << 0) ? 16 : 0));
-            sum.y() +=
-                y1[l + 32] * (q4[l + 4] + (qh[l + 0] & (hm1 << 1) ? 16 : 0)) +
-                y1[l + 48] * (q4[l + 6] + (qh[l + 16] & (hm1 << 1) ? 16 : 0));
-            sum.z() +=
-                y2[l + 0] * (q4[l + 8] + (qh[l + 0] & (hm2 << 0) ? 16 : 0)) +
-                y2[l + 16] * (q4[l + 10] + (qh[l + 16] & (hm2 << 0) ? 16 : 0));
-            sum.w() +=
-                y2[l + 32] * (q4[l + 12] + (qh[l + 0] & (hm2 << 1) ? 16 : 0)) +
-                y2[l + 48] * (q4[l + 14] + (qh[l + 16] & (hm2 << 1) ? 16 : 0));
-            smin += (y1[l] + y1[l+16]) * sc[2] + (y1[l+32] + y1[l+48]) * sc[3]
-                  + (y2[l] + y2[l+16]) * sc[6] + (y2[l+32] + y2[l+48]) * sc[7];
+            const uint8_t hm1  = 1 << (2*im);
+            const uint8_t hm2  = hm1 << 4;
+
+            const uint8_t * ql1 = x[i].qs + q_offset;
+            const float   * y1  = yy + i*QK_K + y_offset;
+            const float   * y2  = y1 + 128;
+
+            const uint16_t * a = (const uint16_t *)x[i].scales;
+            aux[0] = a[im+0] & kmask1;
+            aux[1] = a[im+2] & kmask1;
+            aux[2] = ((a[im+4] >> 0) & kmask2) | ((a[im+0] & kmask3) >> 2);
+            aux[3] = ((a[im+4] >> 4) & kmask2) | ((a[im+2] & kmask3) >> 2);
+
+            sycl::float4 sum = {0.f, 0.f, 0.f, 0.f};
+            float smin = 0;
+            const uint16_t * q1 = (const uint16_t *)ql1;
+            const uint16_t * q2 = q1 + 32;
+            q16[0] = q1[0] & 0x0f0f;
+            q16[1] = q1[8] & 0x0f0f;
+            q16[2] = (q1[0] >> 4) & 0x0f0f;
+            q16[3] = (q1[8] >> 4) & 0x0f0f;
+            q16[4] = q2[0] & 0x0f0f;
+            q16[5] = q2[8] & 0x0f0f;
+            q16[6] = (q2[0] >> 4) & 0x0f0f;
+            q16[7] = (q2[8] >> 4) & 0x0f0f;
+            for (int l = 0; l < n; ++l) {
+                sum.x() +=
+                    y1[l + 0] * (q4[l + 0] + (qh[l + 0] & (hm1 << 0) ? 16 : 0)) +
+                    y1[l + 16] * (q4[l + 2] + (qh[l + 16] & (hm1 << 0) ? 16 : 0));
+                sum.y() +=
+                    y1[l + 32] * (q4[l + 4] + (qh[l + 0] & (hm1 << 1) ? 16 : 0)) +
+                    y1[l + 48] * (q4[l + 6] + (qh[l + 16] & (hm1 << 1) ? 16 : 0));
+                sum.z() +=
+                    y2[l + 0] * (q4[l + 8] + (qh[l + 0] & (hm2 << 0) ? 16 : 0)) +
+                    y2[l + 16] * (q4[l + 10] + (qh[l + 16] & (hm2 << 0) ? 16 : 0));
+                sum.w() +=
+                    y2[l + 32] * (q4[l + 12] + (qh[l + 0] & (hm2 << 1) ? 16 : 0)) +
+                    y2[l + 48] * (q4[l + 14] + (qh[l + 16] & (hm2 << 1) ? 16 : 0));
+                smin += (y1[l] + y1[l+16]) * sc[2] + (y1[l+32] + y1[l+48]) * sc[3]
+                      + (y2[l] + y2[l+16]) * sc[6] + (y2[l+32] + y2[l+48]) * sc[7];
+            }
+            tmp += dall * (sum.x() * sc[0] + sum.y() * sc[1] + sum.z() * sc[4] +
+                           sum.w() * sc[5]) -
+                   dmin * smin;
         }
-        tmp += dall * (sum.x() * sc[0] + sum.y() * sc[1] + sum.z() * sc[4] +
-                       sum.w() * sc[5]) -
-               dmin * smin;
     }
 
 #else
@@ -1031,7 +1012,7 @@ static void dequantize_mul_mat_vec_q5_k(const void *__restrict__ vx,
 
     // sum up partial sums and write back result
 #pragma unroll
-    for (int mask = QK_WARP_SIZE / 2; mask > 0; mask >>= 1) {
+    for (int mask = WARP_SIZE / 2; mask > 0; mask >>= 1) {
         tmp +=
             dpct::permute_sub_group_by_xor(item_ct1.get_sub_group(), tmp, mask);
     }
@@ -1058,14 +1039,13 @@ static void dequantize_mul_mat_vec_q6_k(const void * __restrict__ vx, const floa
 #if QK_K == 256
 
     const int tid =
-        item_ct1.get_local_id(2) / K_QUANTS_PER_ITERATION; // 0...31 or 0...16
+        item_ct1.get_local_id(2) / K_QUANTS_PER_ITERATION; // 0...7 or 0...15
     const int ix =
         item_ct1.get_local_id(2) % K_QUANTS_PER_ITERATION; // 0 or 0, 1
 
     const int step = 16/K_QUANTS_PER_ITERATION;          // 16 or 8
 
-    const int im = tid/step;                             // 0 or 1. 0 computes 0..., 1 computes 128...
-    const int in = tid - step*im;                        // 0...15 or 0...7
+    const int in = tid % step;                           // 0...15 or 0...7
 
 #if K_QUANTS_PER_ITERATION == 1
     const int l0 = K_QUANTS_PER_ITERATION*in;            // 0...15
@@ -1074,42 +1054,45 @@ static void dequantize_mul_mat_vec_q6_k(const void * __restrict__ vx, const floa
     const int l0 = 4 * in;                               // 0, 4, 8, ..., 28
     const int is = in / 4;
 #endif
-    const int ql_offset = 64*im + l0;
-    const int qh_offset = 32*im + l0;
-    const int s_offset  =  8*im + is;
-    const int y_offset = 128*im + l0;
 
     float tmp = 0; // partial sum for thread in warp
 
     for (int i = ix; i < num_blocks_per_row; i += K_QUANTS_PER_ITERATION) {
 
-        const float   * y  = yy + i * QK_K + y_offset;
-        const uint8_t * ql = x[i].ql + ql_offset;
-        const uint8_t * qh = x[i].qh + qh_offset;
-        const int8_t  * s  = x[i].scales + s_offset;
-
         const float d = x[i].d;
 
+        for (int im = 0; im < 2; ++im) {
+            const int ql_offset = 64*im + l0;
+            const int qh_offset = 32*im + l0;
+            const int s_offset  =  8*im + is;
+            const int y_offset = 128*im + l0;
+
+            const float   * y  = yy + i * QK_K + y_offset;
+            const uint8_t * ql = x[i].ql + ql_offset;
+            const uint8_t * qh = x[i].qh + qh_offset;
+            const int8_t  * s  = x[i].scales + s_offset;
+
 #if K_QUANTS_PER_ITERATION == 1
-        float sum = y[ 0] * s[0] * d * ((int8_t)((ql[ 0] & 0xF) | ((qh[ 0] & 0x03) << 4)) - 32)
-                  + y[16] * s[1] * d * ((int8_t)((ql[16] & 0xF) | ((qh[16] & 0x03) << 4)) - 32)
-                  + y[32] * s[2] * d * ((int8_t)((ql[32] & 0xF) | ((qh[ 0] & 0x0c) << 2)) - 32)
-                  + y[48] * s[3] * d * ((int8_t)((ql[48] & 0xF) | ((qh[16] & 0x0c) << 2)) - 32)
-                  + y[64] * s[4] * d * ((int8_t)((ql[ 0]  >> 4) | ((qh[ 0] & 0x30) >> 0)) - 32)
-                  + y[80] * s[5] * d * ((int8_t)((ql[16]  >> 4) | ((qh[16] & 0x30) >> 0)) - 32)
-                  + y[96] * s[6] * d * ((int8_t)((ql[32]  >> 4) | ((qh[ 0] & 0xc0) >> 2)) - 32)
-                  +y[112] * s[7] * d * ((int8_t)((ql[48]  >> 4) | ((qh[16] & 0xc0) >> 2)) - 32);
-        tmp += sum;
+            float sum = y[ 0] * s[0] * d * ((int8_t)((ql[ 0] & 0xF) | ((qh[ 0] & 0x03) << 4)) - 32)
+                      + y[16] * s[1] * d * ((int8_t)((ql[16] & 0xF) | ((qh[16] & 0x03) << 4)) - 32)
+                      + y[32] * s[2] * d * ((int8_t)((ql[32] & 0xF) | ((qh[ 0] & 0x0c) << 2)) - 32)
+                      + y[48] * s[3] * d * ((int8_t)((ql[48] & 0xF) | ((qh[16] & 0x0c) << 2)) - 32)
+                      + y[64] * s[4] * d * ((int8_t)((ql[ 0]  >> 4) | ((qh[ 0] & 0x30) >> 0)) - 32)
+                      + y[80] * s[5] * d * ((int8_t)((ql[16]  >> 4) | ((qh[16] & 0x30) >> 0)) - 32)
+                      + y[96] * s[6] * d * ((int8_t)((ql[32]  >> 4) | ((qh[ 0] & 0xc0) >> 2)) - 32)
+                      +y[112] * s[7] * d * ((int8_t)((ql[48]  >> 4) | ((qh[16] & 0xc0) >> 2)) - 32);
+            tmp += sum;
 #else
-        float sum = 0;
-        for (int l = 0; l < 4; ++l) {
-            sum += y[l+ 0] * s[0] * d * ((int8_t)((ql[l+ 0] & 0xF) | (((qh[l] >> 0) & 3) << 4)) - 32)
-                 + y[l+32] * s[2] * d * ((int8_t)((ql[l+32] & 0xF) | (((qh[l] >> 2) & 3) << 4)) - 32)
-                 + y[l+64] * s[4] * d * ((int8_t)((ql[l+ 0]  >> 4) | (((qh[l] >> 4) & 3) << 4)) - 32)
-                 + y[l+96] * s[6] * d * ((int8_t)((ql[l+32]  >> 4) | (((qh[l] >> 6) & 3) << 4)) - 32);
-        }
-        tmp += sum;
+            float sum = 0;
+            for (int l = 0; l < 4; ++l) {
+                sum += y[l+ 0] * s[0] * d * ((int8_t)((ql[l+ 0] & 0xF) | (((qh[l] >> 0) & 3) << 4)) - 32)
+                     + y[l+32] * s[2] * d * ((int8_t)((ql[l+32] & 0xF) | (((qh[l] >> 2) & 3) << 4)) - 32)
+                     + y[l+64] * s[4] * d * ((int8_t)((ql[l+ 0]  >> 4) | (((qh[l] >> 4) & 3) << 4)) - 32)
+                     + y[l+96] * s[6] * d * ((int8_t)((ql[l+32]  >> 4) | (((qh[l] >> 6) & 3) << 4)) - 32);
+            }
+            tmp += sum;
 #endif
+        }
 
     }
 
@@ -1146,7 +1129,7 @@ static void dequantize_mul_mat_vec_q6_k(const void * __restrict__ vx, const floa
 
     // sum up partial sums and write back result
 #pragma unroll
-    for (int mask = QK_WARP_SIZE / 2; mask > 0; mask >>= 1) {
+    for (int mask = WARP_SIZE / 2; mask > 0; mask >>= 1) {
         tmp +=
             dpct::permute_sub_group_by_xor(item_ct1.get_sub_group(), tmp, mask);
     }
@@ -1179,14 +1162,13 @@ static void dequantize_mul_mat_vec_q6_k_reorder(const void * __restrict__ vx, co
 #if QK_K == 256
 
     const int tid =
-        item_ct1.get_local_id(2) / K_QUANTS_PER_ITERATION; // 0...31 or 0...16
+        item_ct1.get_local_id(2) / K_QUANTS_PER_ITERATION; // 0...7 or 0...15
     const int ix =
         item_ct1.get_local_id(2) % K_QUANTS_PER_ITERATION; // 0 or 0, 1
 
     const int step = 16/K_QUANTS_PER_ITERATION;          // 16 or 8
 
-    const int im = tid/step;                             // 0 or 1. 0 computes 0..., 1 computes 128...
-    const int in = tid - step*im;                        // 0...15 or 0...7
+    const int in = tid % step;                           // 0...15 or 0...7
 
 #if K_QUANTS_PER_ITERATION == 1
     const int l0 = K_QUANTS_PER_ITERATION*in;            // 0...15
@@ -1195,43 +1177,46 @@ static void dequantize_mul_mat_vec_q6_k_reorder(const void * __restrict__ vx, co
     const int l0 = 4 * in;                               // 0, 4, 8, ..., 28
     const int is = in / 4;
 #endif
-    const int ql_offset = 64*im + l0;
-    const int qh_offset = 32*im + l0;
-    const int s_offset  =  8*im + is;
-    const int y_offset = 128*im + l0;
 
     float tmp = 0; // partial sum for thread in warp
 
     for (int i = ix; i < num_blocks_per_row; i += K_QUANTS_PER_ITERATION) {
         const int bi = ib0 + i;
 
-        const float   * y  = yy + i * QK_K + y_offset;
-        const uint8_t * ql = ql_base + bi * (QK_K / 2) + ql_offset;
-        const uint8_t * qh = qh_base + bi * (QK_K / 4) + qh_offset;
-        const int8_t  * s  = scales_base + bi * (QK_K / 16) + s_offset;
-
         const float d = d_base[bi];
 
+        for (int im = 0; im < 2; ++im) {
+            const int ql_offset = 64*im + l0;
+            const int qh_offset = 32*im + l0;
+            const int s_offset  =  8*im + is;
+            const int y_offset = 128*im + l0;
+
+            const float   * y  = yy + i * QK_K + y_offset;
+            const uint8_t * ql = ql_base + bi * (QK_K / 2) + ql_offset;
+            const uint8_t * qh = qh_base + bi * (QK_K / 4) + qh_offset;
+            const int8_t  * s  = scales_base + bi * (QK_K / 16) + s_offset;
+
 #if K_QUANTS_PER_ITERATION == 1
-        float sum = y[ 0] * s[0] * d * ((int8_t)((ql[ 0] & 0xF) | ((qh[ 0] & 0x03) << 4)) - 32)
-                  + y[16] * s[1] * d * ((int8_t)((ql[16] & 0xF) | ((qh[16] & 0x03) << 4)) - 32)
-                  + y[32] * s[2] * d * ((int8_t)((ql[32] & 0xF) | ((qh[ 0] & 0x0c) << 2)) - 32)
-                  + y[48] * s[3] * d * ((int8_t)((ql[48] & 0xF) | ((qh[16] & 0x0c) << 2)) - 32)
-                  + y[64] * s[4] * d * ((int8_t)((ql[ 0]  >> 4) | ((qh[ 0] & 0x30) >> 0)) - 32)
-                  + y[80] * s[5] * d * ((int8_t)((ql[16]  >> 4) | ((qh[16] & 0x30) >> 0)) - 32)
-                  + y[96] * s[6] * d * ((int8_t)((ql[32]  >> 4) | ((qh[ 0] & 0xc0) >> 2)) - 32)
-                  +y[112] * s[7] * d * ((int8_t)((ql[48]  >> 4) | ((qh[16] & 0xc0) >> 2)) - 32);
-        tmp += sum;
+            float sum = y[ 0] * s[0] * d * ((int8_t)((ql[ 0] & 0xF) | ((qh[ 0] & 0x03) << 4)) - 32)
+                      + y[16] * s[1] * d * ((int8_t)((ql[16] & 0xF) | ((qh[16] & 0x03) << 4)) - 32)
+                      + y[32] * s[2] * d * ((int8_t)((ql[32] & 0xF) | ((qh[ 0] & 0x0c) << 2)) - 32)
+                      + y[48] * s[3] * d * ((int8_t)((ql[48] & 0xF) | ((qh[16] & 0x0c) << 2)) - 32)
+                      + y[64] * s[4] * d * ((int8_t)((ql[ 0]  >> 4) | ((qh[ 0] & 0x30) >> 0)) - 32)
+                      + y[80] * s[5] * d * ((int8_t)((ql[16]  >> 4) | ((qh[16] & 0x30) >> 0)) - 32)
+                      + y[96] * s[6] * d * ((int8_t)((ql[32]  >> 4) | ((qh[ 0] & 0xc0) >> 2)) - 32)
+                      +y[112] * s[7] * d * ((int8_t)((ql[48]  >> 4) | ((qh[16] & 0xc0) >> 2)) - 32);
+            tmp += sum;
 #else
-        float sum = 0;
-        for (int l = 0; l < 4; ++l) {
-            sum += y[l+ 0] * s[0] * d * ((int8_t)((ql[l+ 0] & 0xF) | (((qh[l] >> 0) & 3) << 4)) - 32)
-                 + y[l+32] * s[2] * d * ((int8_t)((ql[l+32] & 0xF) | (((qh[l] >> 2) & 3) << 4)) - 32)
-                 + y[l+64] * s[4] * d * ((int8_t)((ql[l+ 0]  >> 4) | (((qh[l] >> 4) & 3) << 4)) - 32)
-                 + y[l+96] * s[6] * d * ((int8_t)((ql[l+32]  >> 4) | (((qh[l] >> 6) & 3) << 4)) - 32);
-        }
-        tmp += sum;
+            float sum = 0;
+            for (int l = 0; l < 4; ++l) {
+                sum += y[l+ 0] * s[0] * d * ((int8_t)((ql[l+ 0] & 0xF) | (((qh[l] >> 0) & 3) << 4)) - 32)
+                     + y[l+32] * s[2] * d * ((int8_t)((ql[l+32] & 0xF) | (((qh[l] >> 2) & 3) << 4)) - 32)
+                     + y[l+64] * s[4] * d * ((int8_t)((ql[l+ 0]  >> 4) | (((qh[l] >> 4) & 3) << 4)) - 32)
+                     + y[l+96] * s[6] * d * ((int8_t)((ql[l+32]  >> 4) | (((qh[l] >> 6) & 3) << 4)) - 32);
+            }
+            tmp += sum;
 #endif
+        }
 
     }
 
@@ -1269,7 +1254,7 @@ static void dequantize_mul_mat_vec_q6_k_reorder(const void * __restrict__ vx, co
 
     // sum up partial sums and write back result
 #pragma unroll
-    for (int mask = QK_WARP_SIZE / 2; mask > 0; mask >>= 1) {
+    for (int mask = WARP_SIZE / 2; mask > 0; mask >>= 1) {
         tmp +=
             dpct::permute_sub_group_by_xor(item_ct1.get_sub_group(), tmp, mask);
     }
@@ -1513,10 +1498,10 @@ static void dequantize_mul_mat_vec_q2_K_sycl(const void *vx, const float *y,
     const int ny = 2; // very slightly faster than 1 even when K_QUANTS_PER_ITERATION = 2
     const int block_num_y = (nrows + ny - 1) / ny;
     const sycl::range<3> block_nums(1, 1, block_num_y);
-    const sycl::range<3> block_dims(1, ny, QK_WARP_SIZE);
+    const sycl::range<3> block_dims(1, ny, WARP_SIZE);
     stream->parallel_for(
         sycl::nd_range<3>(block_nums * block_dims, block_dims),
-        [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(QK_WARP_SIZE)]] {
+        [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
             dequantize_mul_mat_vec_q2_k(vx, y, dst, ncols, nrows, item_ct1);
         });
 }
@@ -1529,10 +1514,10 @@ static void dequantize_mul_mat_vec_q3_K_sycl(const void *vx, const float *y,
     const int ny = 2 / K_QUANTS_PER_ITERATION;
     const int block_num_y = (nrows + ny - 1) / ny;
     const sycl::range<3> block_nums(1, 1, block_num_y);
-    const sycl::range<3> block_dims(1, ny, QK_WARP_SIZE);
+    const sycl::range<3> block_dims(1, ny, WARP_SIZE);
     stream->parallel_for(
         sycl::nd_range<3>(block_nums * block_dims, block_dims),
-        [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(QK_WARP_SIZE)]] {
+        [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
             dequantize_mul_mat_vec_q3_k(vx, y, dst, ncols, nrows, item_ct1);
         });
 }
@@ -1545,10 +1530,10 @@ static void dequantize_mul_mat_vec_q3_K_sycl_reorder(const void *vx, const float
     const int ny = 2 / K_QUANTS_PER_ITERATION;
     const int block_num_y = (nrows + ny - 1) / ny;
     const sycl::range<3> block_nums(1, 1, block_num_y);
-    const sycl::range<3> block_dims(1, ny, QK_WARP_SIZE);
+    const sycl::range<3> block_dims(1, ny, WARP_SIZE);
     stream->parallel_for(
         sycl::nd_range<3>(block_nums * block_dims, block_dims),
-        [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(QK_WARP_SIZE)]] {
+        [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
             dequantize_mul_mat_vec_q3_k_reorder(vx, y, dst, ncols, nrows, item_ct1);
         });
 }
@@ -1561,10 +1546,10 @@ static void dequantize_mul_mat_vec_q4_K_sycl(const void *vx, const float *y,
     const int ny = 2 / K_QUANTS_PER_ITERATION;
     const int block_num_y = (nrows + ny - 1) / ny;
     const sycl::range<3> block_nums(1, 1, block_num_y);
-    const sycl::range<3> block_dims(1, ny, QK_WARP_SIZE);
+    const sycl::range<3> block_dims(1, ny, WARP_SIZE);
     stream->parallel_for(
         sycl::nd_range<3>(block_nums * block_dims, block_dims),
-        [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(QK_WARP_SIZE)]] {
+        [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
             dequantize_mul_mat_vec_q4_k(vx, y, dst, ncols, nrows, item_ct1);
         });
 }
@@ -1574,10 +1559,10 @@ static void dequantize_mul_mat_vec_q5_K_sycl(const void *vx, const float *y,
                                              const int nrows,
                                              dpct::queue_ptr stream) {
     GGML_ASSERT(ncols % QK_K == 0);
-    const sycl::range<3> block_dims(1, 1, QK_WARP_SIZE);
+    const sycl::range<3> block_dims(1, 1, WARP_SIZE);
     stream->parallel_for(
         sycl::nd_range<3>(sycl::range<3>(1, 1, nrows) * block_dims, block_dims),
-        [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(QK_WARP_SIZE)]] {
+        [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
             dequantize_mul_mat_vec_q5_k(vx, y, dst, ncols, item_ct1);
         });
 }
@@ -1590,10 +1575,10 @@ static void dequantize_mul_mat_vec_q6_K_sycl(const void *vx, const float *y,
     const int ny = 2 / K_QUANTS_PER_ITERATION;
     const int block_num_y = (nrows + ny - 1) / ny;
     const sycl::range<3> block_nums(1, 1, block_num_y);
-    const sycl::range<3> block_dims(1, ny, QK_WARP_SIZE);
+    const sycl::range<3> block_dims(1, ny, WARP_SIZE);
     stream->parallel_for(
         sycl::nd_range<3>(block_nums * block_dims, block_dims),
-        [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(QK_WARP_SIZE)]] {
+        [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
             dequantize_mul_mat_vec_q6_k(vx, y, dst, ncols, nrows, item_ct1);
         });
 }
@@ -1606,10 +1591,10 @@ static void dequantize_mul_mat_vec_q4_K_sycl_reorder(const void *vx, const float
     const int ny = 2 / K_QUANTS_PER_ITERATION;
     const int block_num_y = (nrows + ny - 1) / ny;
     const sycl::range<3> block_nums(1, 1, block_num_y);
-    const sycl::range<3> block_dims(1, ny, QK_WARP_SIZE);
+    const sycl::range<3> block_dims(1, ny, WARP_SIZE);
     stream->parallel_for(
         sycl::nd_range<3>(block_nums * block_dims, block_dims),
-        [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(QK_WARP_SIZE)]] {
+        [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
             dequantize_mul_mat_vec_q4_k_reorder(vx, y, dst, ncols, nrows, item_ct1);
         });
 }
@@ -1622,10 +1607,10 @@ static void dequantize_mul_mat_vec_q6_K_sycl_reorder(const void *vx, const float
     const int ny = 2 / K_QUANTS_PER_ITERATION;
     const int block_num_y = (nrows + ny - 1) / ny;
     const sycl::range<3> block_nums(1, 1, block_num_y);
-    const sycl::range<3> block_dims(1, ny, QK_WARP_SIZE);
+    const sycl::range<3> block_dims(1, ny, WARP_SIZE);
     stream->parallel_for(
         sycl::nd_range<3>(block_nums * block_dims, block_dims),
-        [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(QK_WARP_SIZE)]] {
+        [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
             dequantize_mul_mat_vec_q6_k_reorder(vx, y, dst, ncols, nrows, item_ct1);
         });
 }
