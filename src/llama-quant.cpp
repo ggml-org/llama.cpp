@@ -1222,7 +1222,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
                 new_size = 0;
                 if (stream_source) {
                     static const int64_t stream_chunk_size = 32 * 1024 * 1024;
-                    const int64_t rows_per_stream_chunk = std::max<int64_t>(1, std::max(chunk_size, stream_chunk_size) / n_per_row);
+                    const int64_t rows_per_stream_chunk = std::max<int64_t>(1, stream_chunk_size / n_per_row);
 
                     for (int64_t i03 = 0; i03 < tensor->ne[2]; ++i03) {
                         void * new_data_03 = (char *)new_data + row_size * i03 * nrows;
