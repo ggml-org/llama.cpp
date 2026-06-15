@@ -2763,7 +2763,8 @@ static bool is_hmx_eligible(const ggml_tensor * t) {
     const ggml_tensor * src1 = t->src[1]; // activation
 
     // HMX weight tile requires N to be 32-aligned.
-    if (src0->ne[1] % 32 != 0) {
+    // For quantized types, N is padded to 32 during repacking, so it is always aligned.
+    if (!ggml_is_quantized(src0->type) && src0->ne[1] % 32 != 0) {
         return false;
     }
 

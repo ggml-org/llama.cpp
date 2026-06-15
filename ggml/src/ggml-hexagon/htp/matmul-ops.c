@@ -3063,7 +3063,7 @@ int op_matmul(struct htp_ops_context * octx) {
     //  is handled by HMX itself; when M < 32  fall back to HVX (except for repacked weight types).
     const int m_total = (int) src1->ne[1];
     const int m_hmx   = m_total & ~31;   // 0 when M < 32
-    if (m_total < 4) {
+    if (m_total <= 4) {
         return op_matmul_hvx(octx);
     }
 
@@ -3188,6 +3188,77 @@ int op_matmul_id(struct htp_ops_context * octx) {
         return HTP_STATUS_NO_SUPPORT;
     }
 
+    if (src1_nrows > 1) {
+        // initialize matrix_row_counts and map
+        memset(matrix_row_counts, 0, n_as * sizeof(uint32_t));
+
+        // group rows by src0 matrix
+        for (uint32_t iid1 = 0; iid1 < ids->ne[1]; ++iid1) {  // token idx
+            for (uint32_t id = 0; id < n_ids; ++id) {         // expert idx
+                const int32_t i02 = *(const int32_t *) ((const uint8_t *) ids->data + iid1 * ids->nb[1] + id * ids->nb[0]);
+
+                if (i02 < 0) {
+                    continue;
+                }
+                assert(i02 < n_as);
+
+                matrix_rows[i02 * n_ids * ids->ne[1] + matrix_row_counts[i02]] = (struct mmid_row_mapping) { id, iid1 };
+                matrix_row_counts[i02] += 1;
+            }
+        }
+    }
+
+    if (octx->flags & HTP_OPFLAGS_SKIP_COMPUTE) {
+        if (must_free_mapping) free(mapping_buf);
+        return HTP_STATUS_OK;
+    }
+
+    bool hmx_eligible = false;
+#ifdef HTP_HAS_HMX
+    if (octx->ctx->hmx_enabled && src1_nrows > 4) {
+        uint32_t wtype = src0->type;
+        if (ne01 % 32 == 0 && ne10 % 32 == 0 &&
+            (wtype == HTP_TYPE_F16 || wtype == HTP_TYPE_F32 || wtype == HTP_TYPE_Q4_0 || wtype == HTP_TYPE_Q4_1 || wtype == HTP_TYPE_Q8_0 || wtype == HTP_TYPE_IQ4_NL || wtype == HTP_TYPE_MXFP4)) {
+            if ((wtype == HTP_TYPE_F16 || wtype == HTP_TYPE_F32) && ne00 % 32 == 0) {
+                hmx_eligible = true;
+            } else if (wtype != HTP_TYPE_F16 && wtype != HTP_TYPE_F32 && ne00 % 256 == 0) {
+                hmx_eligible = true;
+            }
+        }
+    }
+#endif
+
+    mmctx->hmx_eligible = hmx_eligible;
+
+    if (hmx_eligible) {
+        for (uint32_t cur_a = 0; cur_a < n_as; ++cur_a) {
+            const int32_t cne1 = matrix_row_counts[cur_a];
+            if (cne1 == 0) continue;
+
+            int ret = hmx_matmul_id_2d_f32(octx->ctx, (float*) dst->data, (float*) src1->data,
+                                           (const uint8_t *) src0->data + cur_a * nb02,
+                                           cne1, ne00, ne01,
+                                           ne10,
+                                           ne11,
+                                           nb11, nb12,
+                                           nb1, nb2,
+                                           (int) src0->nb[1], (int) src0->type,
+                                           matrix_rows, cur_a, n_ids * ids->ne[1]);
+            if (ret != 0) {
+                FARF(ERROR, "HMX matmul failed for expert %u, error %d\n", cur_a, ret);
+                if (must_free_mapping) free(mapping_buf);
+                return HTP_STATUS_NO_SUPPORT;
+            }
+        }
+
+        // HMX has overwritten VTCM, so force dynamic quantization cache to clear
+        octx->src1_spad.src = NULL;
+
+        if (must_free_mapping) free(mapping_buf);
+        return HTP_STATUS_OK;
+    }
+
+    // --- HVX Fallback Path ---
     const uint32_t qk = QK_Q8_0_TILED;
     const uint32_t nb = (ne10 + qk - 1) / qk;
     const uint32_t total_nb = src1_nrows * nb;
@@ -3253,76 +3324,6 @@ int op_matmul_id(struct htp_ops_context * octx) {
 
     octx->src0_spad.stride = src0_row_size_padded;
     octx->src1_spad.stride = src1_row_size;
-
-    if (src1_nrows > 1) {
-        // initialize matrix_row_counts and map
-        memset(matrix_row_counts, 0, n_as * sizeof(uint32_t));
-
-        // group rows by src0 matrix
-        for (uint32_t iid1 = 0; iid1 < ids->ne[1]; ++iid1) {  // token idx
-            for (uint32_t id = 0; id < n_ids; ++id) {         // expert idx
-                const int32_t i02 = *(const int32_t *) ((const uint8_t *) ids->data + iid1 * ids->nb[1] + id * ids->nb[0]);
-
-                if (i02 < 0) {
-                    continue;
-                }
-                assert(i02 < n_as);
-
-                matrix_rows[i02 * n_ids * ids->ne[1] + matrix_row_counts[i02]] = (struct mmid_row_mapping) { id, iid1 };
-                matrix_row_counts[i02] += 1;
-            }
-        }
-    }
-
-    if (octx->flags & HTP_OPFLAGS_SKIP_COMPUTE) {
-        if (must_free_mapping) free(mapping_buf);
-        return HTP_STATUS_OK;
-    }
-
-    bool hmx_eligible = false;
-#ifdef HTP_HAS_HMX
-    if (octx->ctx->hmx_enabled && src1_nrows > 1) {
-        uint32_t wtype = src0->type;
-        if (ne01 % 32 == 0 && ne10 % 32 == 0 &&
-            (wtype == HTP_TYPE_F16 || wtype == HTP_TYPE_F32 || wtype == HTP_TYPE_Q4_0 || wtype == HTP_TYPE_Q4_1 || wtype == HTP_TYPE_Q8_0 || wtype == HTP_TYPE_IQ4_NL || wtype == HTP_TYPE_MXFP4)) {
-            if ((wtype == HTP_TYPE_F16 || wtype == HTP_TYPE_F32) && ne00 % 32 == 0) {
-                hmx_eligible = true;
-            } else if (wtype != HTP_TYPE_F16 && wtype != HTP_TYPE_F32 && ne00 % 256 == 0) {
-                hmx_eligible = true;
-            }
-        }
-    }
-#endif
-
-    mmctx->hmx_eligible = hmx_eligible;
-
-    if (hmx_eligible) {
-        for (uint32_t cur_a = 0; cur_a < n_as; ++cur_a) {
-            const int32_t cne1 = matrix_row_counts[cur_a];
-            if (cne1 == 0) continue;
-
-            int ret = hmx_matmul_id_2d_f32(octx->ctx, (float*) dst->data, (float*) src1->data,
-                                           (const uint8_t *) src0->data + cur_a * nb02,
-                                           cne1, ne00, ne01,
-                                           ne10,
-                                           ne11,
-                                           nb11, nb12,
-                                           nb1, nb2,
-                                           (int) src0->nb[1], (int) src0->type,
-                                           matrix_rows, cur_a, n_ids * ids->ne[1]);
-            if (ret != 0) {
-                FARF(ERROR, "HMX matmul failed for expert %u, error %d\n", cur_a, ret);
-                if (must_free_mapping) free(mapping_buf);
-                return HTP_STATUS_NO_SUPPORT;
-            }
-        }
-
-        // HMX has overwritten VTCM, so force dynamic quantization cache to clear
-        octx->src1_spad.src = NULL;
-
-        if (must_free_mapping) free(mapping_buf);
-        return HTP_STATUS_OK;
-    }
 
     mmctx->src1_nrows_per_thread = (src1_nrows + n_quant_jobs - 1) / n_quant_jobs;
     worker_pool_run_func(octx->ctx->worker_pool, quant_job_func, mmctx, n_quant_jobs);
