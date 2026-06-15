@@ -6250,10 +6250,8 @@ static vk_device ggml_vk_get_device(size_t idx) {
                 break;
             case VK_VENDOR_ID_INTEL: {
                 // Current Windows driver does not expose BF16 support.
-                // We only want to use l_warptile if coopmat is available and is Xe2+
-                const bool xe2_with_coopmat = device->coopmat_support && device->architecture == INTEL_XE2;
-                const bool use_l_warptile = (i == GGML_TYPE_BF16) ? (device->coopmat_bf16_support && xe2_with_coopmat) :
-                                                                    device->coopmat_support;
+                // We only want to use l_warptile if coopmat is available
+                const bool use_l_warptile = (i == GGML_TYPE_BF16) ? (device->coopmat_bf16_support && device->coopmat_support) : device->coopmat_support;
                 device->mul_mat_l[i] = use_l_warptile;
                 device->mul_mat_id_l[i] = use_l_warptile;
                 device->mul_mat_m[i] = true;
@@ -17615,7 +17613,7 @@ static bool ggml_vk_khr_cooperative_matrix_support(const vk::PhysicalDevicePrope
     switch (props.vendorID) {
     case VK_VENDOR_ID_INTEL:
         // Only allowing Xe2/Xe3 GPU and integrated Xe GPUs at the moment since older hardware (ex. Arc A770) has performance regressions.
-        return (arch == vk_device_architecture::INTEL_XE2) || 
+        return (arch == vk_device_architecture::INTEL_XE2) ||
             (arch == vk_device_architecture::INTEL_PRE_XE2 && props.deviceType == vk::PhysicalDeviceType::eIntegratedGpu);
     case VK_VENDOR_ID_AMD:
         if (driver_props.driverID == vk::DriverId::eAmdProprietary || driver_props.driverID == vk::DriverId::eAmdOpenSource) {
