@@ -1882,11 +1882,29 @@ static void test_lfm2_parser(const std::string & template_path, bool detailed_de
         .expect(simple_assist_msg("Use this format: [link text](url). Example: [Wikipedia](https://www.wikipedia.org)."))
         .run();
 
-    // Python tool with multiline code in string
+    // Python tool with multiline code in string: the \n in the literal decodes to a real
+    // newline, emitted as a JSON \n escape (not a doubled backslash).
     tst.test("<|tool_call_start|>[python(code=\"def hello():\\n    print('hey')\")]<|tool_call_end|>")
         .tools({ python_tool })
         .expect_tool_calls({
-            { "python", R"#({"code": "def hello():\\n    print('hey')"})#", "" }
+            { "python", R"#({"code": "def hello():\n    print('hey')"})#", "" }
+        })
+        .run();
+
+    // String escape sequences decode to their actual characters (newline + tab here),
+    // so a "write a two line file" style call produces real line breaks, not literal "\n".
+    tst.test("<|tool_call_start|>[python(code=\"First line\\nSecond line\\tindented\")]<|tool_call_end|>")
+        .tools({ python_tool })
+        .expect_tool_calls({
+            { "python", R"#({"code": "First line\nSecond line\tindented"})#", "" }
+        })
+        .run();
+
+    // Escaped quotes inside a string argument survive the round-trip.
+    tst.test("<|tool_call_start|>[python(code=\"print(\\\"hi\\\")\")]<|tool_call_end|>")
+        .tools({ python_tool })
+        .expect_tool_calls({
+            { "python", R"#({"code": "print(\"hi\")"})#", "" }
         })
         .run();
 
