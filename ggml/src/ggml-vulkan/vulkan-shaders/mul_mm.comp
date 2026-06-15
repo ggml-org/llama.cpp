@@ -304,7 +304,7 @@ void main() {
             }
         }
 #else
-        [[unroll]] for (uint i = 0; i < BK / BK_STEP; i++) {
+        UNROLL for (uint i = 0; i < BK / BK_STEP; i++) {
             // Load from shared into cache
             [[unroll]] for (uint wsir = 0; wsir < WMITER; wsir++) {
                 [[unroll]] for (uint j = 0; j < TM; j++) {
