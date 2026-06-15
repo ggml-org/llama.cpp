@@ -539,37 +539,6 @@ bool server_tokens::validate(const struct llama_context * ctx) const {
     return true;
 }
 
-int32_t server_tokens::process_chunk(
-            llama_context * ctx,
-            mtmd_context * mctx,
-            size_t idx,
-            llama_pos pos,
-            int32_t seq_id,
-            size_t & n_tokens_out) const {
-    const auto & chunk = find_chunk(idx);
-    const char * name = mtmd_input_chunk_get_type(chunk.get()) == MTMD_INPUT_CHUNK_TYPE_IMAGE
-                        ? "image" : "audio";
-    SRV_INF("processing %s...\n", name);
-    int32_t n_batch = llama_n_batch(ctx);
-    int64_t t0 = ggml_time_ms();
-    llama_pos new_n_past; // unused for now
-    int32_t result = mtmd_helper_eval_chunk_single(mctx, ctx,
-        chunk.get(),
-        pos,
-        seq_id,
-        n_batch,
-        true, // logits last
-        &new_n_past);
-    SRV_INF("%s processed in %" PRId64 " ms\n", name, ggml_time_ms() - t0);
-    if (result != 0) {
-        LOG_ERR("mtmd_helper_eval failed with status %d", result);
-        n_tokens_out = 0;
-        return result;
-    }
-    n_tokens_out = mtmd_input_chunk_get_n_tokens(chunk.get());
-    return 0;
-}
-
 server_tokens server_tokens::clone() const {
     server_tokens res;
     res.has_mtmd = has_mtmd;
