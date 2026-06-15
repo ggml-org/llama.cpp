@@ -327,27 +327,33 @@ For more details, please refer to [multimodal documentation](../../docs/multimod
 
 ### Built-in tools support
 
-The server includes a set of built-in tools that enable the LLM to access the local file system directly from the Web UI. These tools are potentially insecure and should not be activated in untrusted environments.
+The server includes a set of built-in tools that enable the LLM to access the local file system directly from the Web UI.
 
 To use this feature, start the server with `--tools all`. You can also enable only specific tools by passing a comma-separated list: `--tools name1,name2,...`. Run `--help` for the full list of available tool names.
 
-When giving a Markdown file name as argument, e.g. `--tools name1,/path/to/MD_file`, additional tools are loaded at start. This file is assumed to contain lines with format:
+When giving Markdown files name as argument, e.g. `--tools name1,/path/to/MD_file`, additional tools are loaded at start. These files are assumed to contain lines with format:
 ```
 - **tool_name**: Description in free format with {argument} (command: `command to execute with {argument}`)
 ```
-It is possible to use multiple `{symbols}` in descriptions and commands for further substitution from the conversation context. 
+It is possible to use multiple `{symbols}` in descriptions and commands for further substitution from the conversation context. Multiple files are possible.
 
 An example of Markdown tool file is:
 ```
-# Tools/Agents Definition
+# Tools/Agents Definition (for Linux/MacOS; adapt to Windows equivalents if needed)
 
 **datetime**:   Get the current date and time       (command: `date`)
-**exec_shell**: Execute a shell {command}           (command: `{command}`)
 **grep_text**:  Search for text {pattern} in {file} (command: `grep  "{pattern}" {file}`)
 **get_url**:    Get the content of given web {URL}  (command: `lynx -dump {URL}`)
+**git_clone**:  Get a git repository from {url}     (command: `git clone {url}`)
 **list_files**: List all files in given {directory} (command: `ls {directory}`)
 **read_file**:  Get the content of a {file}         (command: `cat {file}`)
+
+# An equivalent of the 'exec_shell_command' tool (warning: insecure)
+
+**exec_shell**: Execute a shell {command}           (command: `{command}`)
 ```
+
+:warning: The choice of enabled tools, both from the built-in ones and the Markdown files, should be carefully checked before launching the server. These tools are potentially insecure and should not be activated in untrusted environments.
 
 ## Build
 

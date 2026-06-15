@@ -568,6 +568,7 @@ struct server_tool_markdown_command : server_tool {
         auto res = run_process(args, max_output, timeout);
 
         std::string text_output = res.output;
+        text_output += "[command: "+command+"]\n";
         text_output += string_format("\n[exit code: %d]", res.exit_code);
         if (res.timed_out) {
             text_output += " [exit due to timeout]";
