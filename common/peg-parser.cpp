@@ -1507,6 +1507,7 @@ static std::string gbnf_excluding_pattern(const std::vector<std::string> & strin
     auto pieces = matcher.collect_prefix_and_next();
 
     std::string pattern;
+    std::string trailing;  // optional proper-prefix of a delimiter, allowed only at the very end
     for (size_t i = 0; i < pieces.size(); ++i) {
         if (i > 0) {
             pattern += " | ";
@@ -1522,13 +1523,32 @@ static std::string gbnf_excluding_pattern(const std::vector<std::string> & strin
         }
 
         if (!pre.empty()) {
-            pattern += gbnf_format_literal(common_unicode_cpts_to_utf8(pre)) + " [^" + cls + "]";
+            std::string pre_literal = gbnf_format_literal(common_unicode_cpts_to_utf8(pre));
+            pattern += pre_literal + " [^" + cls + "]";
+            // Each interior alternative consumes a delimiter-prefix plus a disambiguating
+            // char, so the repetition alone cannot match a value that *ends* on a proper
+            // prefix of a delimiter (e.g. a trailing "\n" when the delimiter is
+            // "\n</parameter>\n"). The runtime until() (greedy first-match) accepts such
+            // values, so without this the grammar would reject input the parser accepts.
+            // Allow the value to terminate on any proper prefix as an optional tail.
+            // This makes the grammar a slight superset of the runtime language (a value
+            // may end on the longest prefix, which greedy first-match would not itself
+            // produce); harmless for constrained generation, which only needs to admit
+            // every runtime-valid string.
+            if (!trailing.empty()) {
+                trailing += " | ";
+            }
+            trailing += pre_literal;
         } else {
             pattern += "[^" + cls + "]";
         }
     }
 
-    return "(" + pattern + ")*";
+    std::string result = "(" + pattern + ")*";
+    if (!trailing.empty()) {
+        result += " (" + trailing + ")?";
+    }
+    return result;
 }
 
 static std::unordered_set<std::string> collect_reachable_rules(
