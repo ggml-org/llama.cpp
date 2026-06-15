@@ -165,6 +165,14 @@ static std::vector<std::function<void(const common_chat_template & tmpl, autopar
               LOG_DBG(ANSI_ORANGE "[Patch: Apriel 1.6]\n" ANSI_RESET);
           }
       },
+      // template uses the JSON {name, parameters} tool instruction, emits the OpenAI function wrapper
+      [](const common_chat_template & tmpl, autoparser & analysis) -> void {
+          if (tmpl.src.find("Respond in the format {\"name\": function name") != std::string::npos &&
+              tmpl.src.find("Do not use variables.") != std::string::npos) {
+              analysis.tools.format.openai_wrapper_trigger = true;
+              LOG_DBG(ANSI_ORANGE "[Patch: JSON name/parameters tool instruction]\n" ANSI_RESET);
+          }
+      },
 
     });
 
