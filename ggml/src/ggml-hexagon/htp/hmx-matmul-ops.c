@@ -30,13 +30,6 @@
 
 #include "vtcm-utils.h"
 
-static const __fp16 q4_0_to_fp16_lut[64] __attribute__((aligned(VLEN))) = {
-    -8, 0, -7, 0, -6, 0, -5, 0, -4, 0, -3, 0, -2, 0, -1, 0, 0, 0, 1, 0, 2, 0, 3, 0, 4, 0, 5, 0, 6, 0, 7, 0,
-};
-
-static const __fp16 q4_1_to_fp16_lut[64] __attribute__((aligned(VLEN))) = {
-    0, 0, 1, 0, 2, 0, 3, 0, 4, 0, 5, 0, 6, 0, 7, 0, 8, 0, 9, 0, 10, 0, 11, 0, 12, 0, 13, 0, 14, 0, 15, 0,
-};
 
 // MXFP4 dequantization LUT: maps 4-bit index to fp16 mantissa value
 // kvalues: 0, 0.5, 1, 1.5, 2, 3, 4, 6, 0, -0.5, -1, -1.5, -2, -3, -4, -6
@@ -187,235 +180,7 @@ next_nc:
 
 // --- x4x2 format dequantizers ---
 
-// Dequantize one x4x2 Q4_0 group (32 elements from 32 packed bytes) -> 32 FP16 in first 64 bytes.
-// In x4x2, sub-blocks 0..3 use lower nibbles, sub-blocks 4..7 use upper nibbles
-// of the same 32 packed bytes.
-static inline HVX_Vector dequantize_x4x2_q4_0_group_hvx(const uint8_t *packed_32, bool upper_nibbles, const __fp16 *scale, const HVX_Vector vlut_cvt) {
-    (void)vlut_cvt;
-    HVX_Vector vq = hvx_vmemu(packed_32);
-    const HVX_Vector mask_h4 = Q6_Vb_vsplat_R(0x0F);
-    const HVX_Vector i8 = Q6_Vb_vsplat_R(8);
-    HVX_Vector v_scales = hvx_vec_repl_f16(hvx_vmemu(scale));
 
-    HVX_Vector v_quants = Q6_Vub_vlsr_VubR(vq, 4 * upper_nibbles);
-    v_quants = Q6_V_vand_VV(v_quants, mask_h4);
-
-    HVX_Vector v_int8 = Q6_Vb_vsub_VbVb(v_quants, i8);
-    HVX_Vector v0     = Q6_V_lo_W(Q6_Wh_vunpack_Vb(v_int8));
-    HVX_Vector v_hf   = Q6_Vhf_equals_Vh(v0);
-
-    return Q6_Vhf_equals_Vqf16(Q6_Vqf16_vmpy_VhfVhf(v_hf, v_scales));
-}
-
-// Batch-dequantize 4 contiguous x4x2 Q4_0 groups (4x32 = 128 packed bytes) using
-// full HVX vector width.
-// Output: vector_x2 each hold 32 FP16 values in the first 64 bytes.
-static inline HVX_Vector_x2 dequantize_x4x2_q4_0_x4groups_hvx(
-            const uint8_t *packed_128, bool upper_nibbles,
-            const __fp16 *scales_4, const HVX_Vector vlut_cvt) {
-    (void)vlut_cvt;
-    HVX_Vector vq = hvx_vmemu(packed_128);
-    const HVX_Vector mask_h4 = Q6_Vb_vsplat_R(0x0F);
-    const HVX_Vector i8 = Q6_Vb_vsplat_R(8);
-    HVX_Vector v_quants = Q6_Vub_vlsr_VubR(vq, 4 * upper_nibbles);
-    v_quants = Q6_V_vand_VV(v_quants, mask_h4);
-
-    HVX_Vector v_int8 = Q6_Vb_vsub_VbVb(v_quants, i8);
-
-    HVX_VectorPair vp_int16 = Q6_Wh_vunpack_Vb(v_int8);
-    HVX_Vector v_lo = Q6_V_lo_W(vp_int16);
-    HVX_Vector v_hi = Q6_V_hi_W(vp_int16);
-
-    v_lo = Q6_Vhf_equals_Vh(v_lo);
-    v_hi = Q6_Vhf_equals_Vh(v_hi);
-
-    HVX_Vector vscale = hvx_vmemu(scales_4);
-    HVX_Vector v_sc01 = hvx_vec_repl_2x_f16(vscale);
-    HVX_Vector v_sc23 = hvx_vec_repl_2x_f16(Q6_V_vror_VR(vscale, 4));
-
-    v_lo = Q6_Vhf_equals_Vqf16(Q6_Vqf16_vmpy_VhfVhf(v_lo, v_sc01));
-    v_hi = Q6_Vhf_equals_Vqf16(Q6_Vqf16_vmpy_VhfVhf(v_hi, v_sc23));
-
-    HVX_Vector_x2 r = { v_lo, v_hi };
-    return r;
-}
-
-static inline HVX_Vector dequantize_x4x2_q4_1_group_hvx(const uint8_t *packed_32, bool upper_nibbles, const __fp16 *scale_offset, const HVX_Vector vlut_cvt) {
-    (void)vlut_cvt;
-    HVX_Vector vq = hvx_vmemu(packed_32);
-    const HVX_Vector mask_h4 = Q6_Vb_vsplat_R(0x0F);
-    HVX_Vector v_dm = hvx_vmemu(scale_offset);
-    HVX_Vector v_scales = hvx_vec_repl_f16(v_dm);
-    HVX_Vector v_offsets = hvx_vec_repl_f16(Q6_V_vror_VR(v_dm, 2));
-
-    HVX_Vector v_quants =  Q6_Vub_vlsr_VubR(vq, 4 * upper_nibbles);
-    v_quants = Q6_V_vand_VV(v_quants, mask_h4);
-
-    HVX_Vector v0   = Q6_V_lo_W(Q6_Wh_vunpack_Vb(v_quants));
-    HVX_Vector v_hf = Q6_Vhf_equals_Vh(v0);
-
-    return Q6_Vhf_equals_Vqf16(Q6_Vqf16_vadd_Vqf16Vhf(Q6_Vqf16_vmpy_VhfVhf(v_hf, v_scales), v_offsets));
-}
-
-static inline HVX_Vector_x2 dequantize_x4x2_q4_1_x4groups_hvx(
-            const uint8_t *packed_128, bool upper_nibbles,
-            const __fp16 *scales_offsets_4, const HVX_Vector vlut_cvt) {
-    (void)vlut_cvt;
-    HVX_Vector vq = hvx_vmemu(packed_128);
-    const HVX_Vector mask_h4 = Q6_Vb_vsplat_R(0x0F);
-    HVX_Vector v_quants = Q6_Vub_vlsr_VubR(vq, 4 * upper_nibbles);
-    v_quants = Q6_V_vand_VV(v_quants, mask_h4);
-
-    HVX_VectorPair vp_int16 = Q6_Wh_vunpack_Vb(v_quants);
-    HVX_Vector v_lo = Q6_V_lo_W(vp_int16);
-    HVX_Vector v_hi = Q6_V_hi_W(vp_int16);
-
-    v_lo = Q6_Vhf_equals_Vh(v_lo);
-    v_hi = Q6_Vhf_equals_Vh(v_hi);
-
-    HVX_Vector vscale_offset = hvx_vmemu(scales_offsets_4);
-    HVX_VectorPair dm_deal = Q6_W_vdeal_VVR(vscale_offset, vscale_offset, -2);
-    HVX_Vector vd = Q6_V_lo_W(dm_deal);
-    HVX_Vector vm = Q6_V_hi_W(dm_deal);
-
-    HVX_Vector v_sc01 = hvx_vec_repl_2x_f16(vd);
-    HVX_Vector v_sc23 = hvx_vec_repl_2x_f16(Q6_V_vror_VR(vd, 4));
-
-    HVX_Vector v_os01 = hvx_vec_repl_2x_f16(vm);
-    HVX_Vector v_os23 = hvx_vec_repl_2x_f16(Q6_V_vror_VR(vm, 4));
-
-    v_lo = Q6_Vhf_equals_Vqf16(Q6_Vqf16_vadd_Vqf16Vhf(Q6_Vqf16_vmpy_VhfVhf(v_lo, v_sc01), v_os01));
-    v_hi = Q6_Vhf_equals_Vqf16(Q6_Vqf16_vadd_Vqf16Vhf(Q6_Vqf16_vmpy_VhfVhf(v_hi, v_sc23), v_os23));
-
-    HVX_Vector_x2 r = { v_lo, v_hi };
-    return r;
-}
-
-// LUT-based dequantizers for non-linear IQ4_NL format.
-static inline HVX_Vector dequantize_x4x2_iq4_nl_group_hvx(const uint8_t *packed_32, bool upper_nibbles, const __fp16 *scale, const HVX_Vector vlut_cvt) {
-    HVX_Vector vq = hvx_vmemu(packed_32);
-    const HVX_Vector mask_h4 = Q6_Vb_vsplat_R(0x0F);
-    HVX_Vector v_scales = hvx_vec_repl_f16(hvx_vmemu(scale));
-    HVX_Vector v_quants =  Q6_Vub_vlsr_VubR(vq, 4 * upper_nibbles);
-    v_quants = Q6_V_vand_VV(v_quants, mask_h4);
-    v_quants = Q6_Vb_vshuff_Vb(v_quants);
-    HVX_VectorPair vp = Q6_Wh_vlut16_VbVhR(v_quants, vlut_cvt, 0);
-    HVX_Vector v_hf = Q6_V_lo_W(vp);
-
-    return Q6_Vhf_equals_Vqf16(Q6_Vqf16_vmpy_VhfVhf(v_hf, v_scales));
-}
-
-static inline HVX_Vector_x2 dequantize_x4x2_iq4_nl_x4groups_hvx(
-            const uint8_t *packed_128, bool upper_nibbles,
-            const __fp16 *scales_4, const HVX_Vector vlut_cvt) {
-    HVX_Vector vq = hvx_vmemu(packed_128);
-    const HVX_Vector mask_h4 = Q6_Vb_vsplat_R(0x0F);
-    HVX_Vector v_quants = Q6_Vub_vlsr_VubR(vq, 4 * upper_nibbles);
-    v_quants = Q6_V_vand_VV(v_quants, mask_h4);
-
-    v_quants = Q6_Vb_vshuff_Vb(v_quants);
-
-    HVX_VectorPair vp = Q6_Wh_vlut16_VbVhR(v_quants, vlut_cvt, 0);
-    HVX_Vector v_lo = Q6_V_lo_W(vp);
-    HVX_Vector v_hi = Q6_V_hi_W(vp);
-
-    HVX_Vector vscale = hvx_vmemu(scales_4);
-    HVX_Vector v_sc01 = hvx_vec_repl_2x_f16(vscale);
-    HVX_Vector v_sc23 = hvx_vec_repl_2x_f16(Q6_V_vror_VR(vscale, 4));
-
-    v_lo = Q6_Vhf_equals_Vqf16(Q6_Vqf16_vmpy_VhfVhf(v_lo, v_sc01));
-    v_hi = Q6_Vhf_equals_Vqf16(Q6_Vqf16_vmpy_VhfVhf(v_hi, v_sc23));
-
-    HVX_Vector_x2 r = { v_lo, v_hi };
-    return r;
-}
-
-// Dequantize one x4x2 Q8_0 group (32 int8 quants) -> 32 FP16 in first 64 bytes.
-static inline HVX_Vector dequantize_x4x2_q8_0_group_hvx(const int8_t *quants_32, const __fp16 *scale) {
-    HVX_Vector vq       = hvx_vmemu(quants_32);
-    HVX_Vector v_scales = hvx_vec_repl_f16(hvx_vmemu(scale));
-    HVX_Vector v0       = Q6_V_lo_W(Q6_Wh_vunpack_Vb(vq));
-    HVX_Vector v_hf     = Q6_Vhf_equals_Vh(v0);
-    return Q6_Vhf_equals_Vqf16(Q6_Vqf16_vmpy_VhfVhf(v_hf, v_scales));
-}
-
-// --- MXFP4 E8M0 scale conversion and dequantization ---
-//
-// HVX batch-convert 8 E8M0 bytes (one x4x2 block's scales) to __fp16[8] on stack.
-// Scalar loads from the stack array execute on the scalar pipeline, in parallel
-// with HVX vlut16/vmpy/vscatter — freeing HVX slots in the hot loop.
-// Arithmetic: fp16_bits = clamp(e - 112, 0, 30) << 10
-// e=0..112 -> 0 (underflow), e=113..142 -> valid fp16, e>=143 -> clamped to 2^15.
-
-typedef struct {
-    __fp16 v[8] __attribute__((aligned(16)));
-} mxfp4_scales_t;
-
-static inline mxfp4_scales_t mxfp4_convert_scales(const uint8_t * e8m0_8) {
-    mxfp4_scales_t s;
-    HVX_Vector     v  = hvx_vmemu(e8m0_8);
-    HVX_Vector     vh = Q6_V_lo_W(Q6_Wuh_vunpack_Vub(v));
-    vh                = Q6_Vh_vsub_VhVh(vh, Q6_Vh_vsplat_R(112));
-    vh                = Q6_Vh_vmax_VhVh(vh, Q6_V_vzero());
-    vh                = Q6_Vh_vmin_VhVh(vh, Q6_Vh_vsplat_R(30));
-    vh                = Q6_Vh_vasl_VhR(vh, 10);
-    hvx_vec_store_u(s.v, 16, vh);
-    return s;
-}
-
-static inline HVX_Vector mxfp4_extract_splat(mxfp4_scales_t scales, int idx) {
-    return hvx_vec_splat_f16(scales.v[idx]);
-}
-
-// Dequantize one x4x2 MXFP4 group (32 elements from 32 packed bytes) -> 32 FP16.
-static inline HVX_Vector dequantize_x4x2_mxfp4_group_hvx(const uint8_t *  packed_32,
-                                                         bool             upper_nibbles,
-                                                         int              sub_blk,
-                                                         const HVX_Vector vlut_cvt,
-                                                         mxfp4_scales_t   scales) {
-    HVX_Vector       vq       = hvx_vmemu(packed_32);
-    const HVX_Vector mask_h4  = Q6_Vb_vsplat_R(0x0F);
-    HVX_Vector       v_quants = upper_nibbles ? Q6_Vub_vlsr_VubR(vq, 4) : vq;
-    v_quants                  = Q6_V_vand_VV(v_quants, mask_h4);
-
-    HVX_Vector v_sc = mxfp4_extract_splat(scales, sub_blk);
-
-    v_quants            = Q6_Vb_vshuff_Vb(v_quants);
-    HVX_VectorPair vp   = Q6_Wh_vlut16_VbVhR(v_quants, vlut_cvt, 0);
-    HVX_Vector     v_hf = Q6_V_lo_W(vp);
-
-    return Q6_Vhf_equals_Vqf16(Q6_Vqf16_vmpy_VhfVhf(v_hf, v_sc));
-}
-
-// Batch-dequantize 4 contiguous x4x2 MXFP4 groups (4x32 = 128 packed bytes).
-static inline HVX_Vector_x4 dequantize_x4x2_mxfp4_x4groups_hvx(const uint8_t *  packed_128,
-                                                      bool             upper_nibbles,
-                                                      int              sub_blk_base,
-                                                      const HVX_Vector vlut_cvt,
-                                                      mxfp4_scales_t   scales) {
-    HVX_Vector       vq       = hvx_vmemu(packed_128);
-    const HVX_Vector mask_h4  = Q6_Vb_vsplat_R(0x0F);
-    HVX_Vector       v_quants = upper_nibbles ? Q6_Vub_vlsr_VubR(vq, 4) : vq;
-    v_quants                  = Q6_V_vand_VV(v_quants, mask_h4);
-
-    v_quants = Q6_Vb_vshuff_Vb(v_quants);
-
-    HVX_VectorPair vp   = Q6_Wh_vlut16_VbVhR(v_quants, vlut_cvt, 0);
-    HVX_Vector     v_lo = Q6_V_lo_W(vp);
-    HVX_Vector     v_hi = Q6_V_hi_W(vp);
-
-    HVX_VectorPred q64    = Q6_Q_vsetq_R(64);
-    HVX_Vector     v_sc01 = Q6_V_vmux_QVV(q64, mxfp4_extract_splat(scales, sub_blk_base + 0),
-                                          mxfp4_extract_splat(scales, sub_blk_base + 1));
-    HVX_Vector     v_sc23 = Q6_V_vmux_QVV(q64, mxfp4_extract_splat(scales, sub_blk_base + 2),
-                                          mxfp4_extract_splat(scales, sub_blk_base + 3));
-
-    v_lo = Q6_Vhf_equals_Vqf16(Q6_Vqf16_vmpy_VhfVhf(v_lo, v_sc01));
-    v_hi = Q6_Vhf_equals_Vqf16(Q6_Vqf16_vmpy_VhfVhf(v_hi, v_sc23));
-
-    HVX_Vector_x4 r = { v_lo, Q6_V_vror_VR(v_lo, 64), v_hi, Q6_V_vror_VR(v_hi, 64) };
-    return r;
-}
 
 typedef struct {
     struct htp_context      * ctx;
@@ -862,6 +627,45 @@ static void core_dot_chunk_fp16(__fp16 *restrict output, const __fp16 *restrict 
     }
 }
 
+// C += AB
+static void core_mma_chunk_fp16(__fp16 *restrict c, const __fp16 *restrict a, const __fp16 *restrict b,
+                                const __fp16 *restrict col_scales, const __fp16 *restrict eye_tile,
+                                int n_row_tiles, int n_col_tiles, int n_dot_tiles, bool zero_init) {
+    __builtin_assume(n_row_tiles > 0);
+    __builtin_assume(n_col_tiles > 0);
+    __builtin_assume(n_dot_tiles > 0);
+
+    Q6_bias_mxmem2_A((void *)col_scales);
+
+    const size_t dot_tile_stride = n_dot_tiles * HMX_FP16_TILE_N_ELMS;
+    for (size_t i = 0; i < n_row_tiles; ++i) {
+        const __fp16 *row_base = a + i * dot_tile_stride;
+        __fp16 *res_base = c + i * n_col_tiles * HMX_FP16_TILE_N_ELMS;
+        for (size_t j = 0; j < n_col_tiles; ++j) {
+            Q6_mxclracc_hf();
+
+            const __fp16 *col_tiles = b + j * dot_tile_stride;
+            const __fp16 *row_tiles = row_base;
+            __fp16 *accum_tile = res_base + j * HMX_FP16_TILE_N_ELMS;
+            if (!zero_init) {
+                Q6_activation_hf_mxmem_RR((unsigned int)accum_tile, 2047);
+                Q6_weight_hf_mxmem_RR((unsigned int)eye_tile, 2047);
+            }
+
+            for (int k = 0, k_block; k < n_dot_tiles; k += k_block) {
+                k_block = hex_smin(n_dot_tiles - k, 32);
+                const uint32_t range = 2048u * (uint32_t)k_block - 1;
+                Q6_activation_hf_mxmem_RR_deep((unsigned int)row_tiles, range);
+                Q6_weight_hf_mxmem_RR((unsigned int)col_tiles, range);
+                row_tiles += k_block * HMX_FP16_TILE_N_ELMS;
+                col_tiles += k_block * HMX_FP16_TILE_N_ELMS;
+            }
+
+            Q6_mxmem_AR_after_hf(accum_tile, 0);
+        }
+    }
+}
+
 // --- Async HMX matmul job (for pipeline overlap) ---
 
 typedef struct {
@@ -1119,44 +923,7 @@ static void transfer_activation_chunk_threaded(struct htp_context *ctx, __fp16 *
     }
 }
 
-// C += AB
-static void core_mma_chunk_fp16(__fp16 *restrict c, const __fp16 *restrict a, const __fp16 *restrict b,
-                                const __fp16 *restrict col_scales, const __fp16 *restrict eye_tile,
-                                int n_row_tiles, int n_col_tiles, int n_dot_tiles, bool zero_init) {
-    __builtin_assume(n_row_tiles > 0);
-    __builtin_assume(n_col_tiles > 0);
-    __builtin_assume(n_dot_tiles > 0);
 
-    Q6_bias_mxmem2_A((void *)col_scales);
-
-    const size_t dot_tile_stride = n_dot_tiles * HMX_FP16_TILE_N_ELMS;
-    for (size_t i = 0; i < n_row_tiles; ++i) {
-        const __fp16 *row_base = a + i * dot_tile_stride;
-        __fp16 *res_base = c + i * n_col_tiles * HMX_FP16_TILE_N_ELMS;
-        for (size_t j = 0; j < n_col_tiles; ++j) {
-            Q6_mxclracc_hf();
-
-            const __fp16 *col_tiles = b + j * dot_tile_stride;
-            const __fp16 *row_tiles = row_base;
-            __fp16 *accum_tile = res_base + j * HMX_FP16_TILE_N_ELMS;
-            if (!zero_init) {
-                Q6_activation_hf_mxmem_RR((unsigned int)accum_tile, 2047);
-                Q6_weight_hf_mxmem_RR((unsigned int)eye_tile, 2047);
-            }
-
-            for (int k = 0, k_block; k < n_dot_tiles; k += k_block) {
-                k_block = hex_smin(n_dot_tiles - k, 32);
-                const uint32_t range = 2048u * (uint32_t)k_block - 1;
-                Q6_activation_hf_mxmem_RR_deep((unsigned int)row_tiles, range);
-                Q6_weight_hf_mxmem_RR((unsigned int)col_tiles, range);
-                row_tiles += k_block * HMX_FP16_TILE_N_ELMS;
-                col_tiles += k_block * HMX_FP16_TILE_N_ELMS;
-            }
-
-            Q6_mxmem_AR_after_hf(accum_tile, 0);
-        }
-    }
-}
 
 int hmx_matmul_2d_f32(struct htp_context *ctx, float *restrict dst, const float *restrict activation,
                                      const uint8_t *restrict weight, int m, int k, int n,
