@@ -18,6 +18,8 @@
 	import { rehypeEnhanceCodeBlocks } from './plugins/rehype/enhance-code-blocks';
 	import { rehypeEnhanceMermaidBlocks } from './plugins/rehype/enhance-mermaid-blocks';
 	import { rehypeMermaidPre } from './plugins/rehype/mermaid-pre';
+	import { rehypeSvgPre } from './plugins/rehype/svg-pre';
+	import { rehypeEnhanceSvgBlocks } from './plugins/rehype/enhance-svg-blocks';
 	import { rehypeResolveAttachmentImages } from './plugins/rehype/resolve-attachment-images';
 	import { rehypeRtlSupport } from './plugins/rehype/rehype-rtl-support';
 	import { remarkLiteralHtml } from './plugins/remark/literal-html';
@@ -38,11 +40,26 @@
 		DATA_ERROR_BOUND_ATTR,
 		DATA_ERROR_HANDLED_ATTR,
 		BOOL_TRUE_STRING,
-		SETTINGS_KEYS
+		SETTINGS_KEYS,
+		MERMAID_WRAPPER_CLASS,
+		MERMAID_BLOCK_CLASS,
+		MERMAID_LANGUAGE,
+		MERMAID_SYNTAX_ATTR,
+		MERMAID_RENDERED_ATTR,
+		SVG_WRAPPER_CLASS,
+		SVG_BLOCK_CLASS,
+		SVG_LANGUAGE,
+		XML_LANGUAGE,
+		SVG_TAG_PREFIX,
+		SVG_SOURCE_ATTR,
+		SVG_RENDERED_ATTR,
+		SVG_INLINE_SHADOW_STYLE
 	} from '$lib/constants';
 	import { ColorMode, UrlProtocol } from '$lib/enums';
 	import { FileTypeText } from '$lib/enums/files.enums';
 	import { highlightCode, detectIncompleteCodeBlock, type IncompleteCodeBlock } from '$lib/utils';
+	import { sanitizeSvg } from '$lib/utils/sanitize-svg';
+	import { mountSvgShadow } from '$lib/utils/svg-shadow';
 	import '$styles/katex-custom.scss';
 	import githubDarkCss from 'highlight.js/styles/github-dark.css?inline';
 	import githubLightCss from 'highlight.js/styles/github.css?inline';
@@ -77,11 +94,32 @@
 	let renderedBlocks = $state<MarkdownBlock[]>([]);
 	let unstableBlockHtml = $state('');
 	let incompleteCodeBlock = $state<IncompleteCodeBlock | null>(null);
+	const streamingSvgCode = $derived.by(() => {
+		const block = incompleteCodeBlock;
+		if (!block) return null;
+		if (block.language === SVG_LANGUAGE) return block.code;
+		if (block.language === XML_LANGUAGE && block.code.trimStart().startsWith(SVG_TAG_PREFIX))
+			return block.code;
+		return null;
+	});
+	const liveSvgHtml = $derived(streamingSvgCode !== null ? sanitizeSvg(streamingSvgCode) : '');
 	let previewDialogOpen = $state(false);
 	let previewCode = $state('');
 	let previewLanguage = $state('text');
 	let mermaidPreviewOpen = $state(false);
 	let mermaidPreviewSvgHtml = $state('');
+	let svgPreviewLive = $state(false);
+	let streamingSvgHost = $state<HTMLDivElement | null>(null);
+
+	// While the zoom dialog is open on a streaming svg, mirror the live render into it
+	$effect(() => {
+		if (svgPreviewLive && liveSvgHtml) mermaidPreviewSvgHtml = liveSvgHtml;
+	});
+
+	// Mount the streaming svg into its shadow host on every chunk so it renders live
+	$effect(() => {
+		if (streamingSvgHost) mountSvgShadow(streamingSvgHost, liveSvgHtml, SVG_INLINE_SHADOW_STYLE);
+	});
 
 	let streamingCodeScrollContainer = $state<HTMLDivElement>();
 
@@ -124,8 +162,10 @@
 			.use(rehypeRestoreTableHtml) // Restore limited HTML (e.g., <br>, <ul>) inside Markdown tables
 			.use(rehypeEnhanceLinks) // Add target="_blank" to links
 			.use(rehypeMermaidPre) // Convert mermaid blocks to <pre class="mermaid">
+			.use(rehypeSvgPre) // Convert svg blocks to <pre class="svg-block">
 			.use(rehypeEnhanceCodeBlocks) // Wrap code blocks with header and actions
 			.use(rehypeEnhanceMermaidBlocks) // Wrap mermaid blocks with header and actions
+			.use(rehypeEnhanceSvgBlocks) // Wrap svg blocks with header and actions
 			.use(rehypeResolveAttachmentImages, { attachments })
 			.use(rehypeRtlSupport) // Add bidirectional text support
 			.use(rehypeStringify, { allowDangerousHtml: true }); // Convert to HTML string
@@ -462,17 +502,19 @@
 		const target = event.target as HTMLElement;
 
 		// Check if clicking on copy or preview button in mermaid block
-		const copyBtn = target.closest('.mermaid-block-wrapper .copy-code-btn');
-		const previewBtn = target.closest('.mermaid-block-wrapper .preview-code-btn');
+		const copyBtn = target.closest(`.${MERMAID_WRAPPER_CLASS} .copy-code-btn`);
+		const previewBtn = target.closest(`.${MERMAID_WRAPPER_CLASS} .preview-code-btn`);
 
 		if (copyBtn || previewBtn) {
-			const wrapper = target.closest('.mermaid-block-wrapper');
+			const wrapper = target.closest(`.${MERMAID_WRAPPER_CLASS}`);
 			if (!wrapper) return;
 
-			const preElement = wrapper.querySelector<HTMLElement>('pre.mermaid[data-mermaid-syntax]');
+			const preElement = wrapper.querySelector<HTMLElement>(
+				`pre.${MERMAID_BLOCK_CLASS}[${MERMAID_SYNTAX_ATTR}]`
+			);
 			if (!preElement) return;
 
-			const mermaidSyntax = preElement.dataset.mermaidSyntax ?? '';
+			const mermaidSyntax = preElement.getAttribute(MERMAID_SYNTAX_ATTR) ?? '';
 
 			if (copyBtn) {
 				event.preventDefault();
@@ -491,19 +533,70 @@
 				const svg = preElement.querySelector('svg');
 				if (!svg) return;
 				mermaidPreviewSvgHtml = svg.outerHTML;
+				svgPreviewLive = false;
 				mermaidPreviewOpen = true;
 				return;
 			}
 		}
 
+		// Check if clicking on copy or preview button in svg block
+		const svgCopyBtn = target.closest(`.${SVG_WRAPPER_CLASS} .copy-code-btn`);
+		const svgPreviewBtn = target.closest(`.${SVG_WRAPPER_CLASS} .preview-code-btn`);
+
+		if (svgCopyBtn || svgPreviewBtn) {
+			const wrapper = target.closest(`.${SVG_WRAPPER_CLASS}`);
+			if (!wrapper) return;
+
+			const preElement = wrapper.querySelector<HTMLElement>(
+				`pre.${SVG_BLOCK_CLASS}[${SVG_SOURCE_ATTR}]`
+			);
+			if (!preElement) return;
+
+			if (svgCopyBtn) {
+				event.preventDefault();
+				event.stopPropagation();
+				try {
+					await copyToClipboard(preElement.getAttribute(SVG_SOURCE_ATTR) ?? '');
+				} catch (error) {
+					console.error('Failed to copy svg source:', error);
+				}
+				return;
+			}
+
+			if (svgPreviewBtn) {
+				event.preventDefault();
+				event.stopPropagation();
+				mermaidPreviewSvgHtml = sanitizeSvg(preElement.getAttribute(SVG_SOURCE_ATTR) ?? '');
+				svgPreviewLive = false;
+				mermaidPreviewOpen = true;
+				return;
+			}
+		}
+
+		// Open preview when clicking the svg block itself. A final block carries its
+		// source, a streaming block does not and is mirrored live into the dialog.
+		const svgEl = target.closest(`.${SVG_BLOCK_CLASS}`);
+		if (svgEl) {
+			const source = svgEl.getAttribute(SVG_SOURCE_ATTR);
+			if (source !== null) {
+				mermaidPreviewSvgHtml = sanitizeSvg(source);
+				svgPreviewLive = false;
+			} else {
+				svgPreviewLive = true;
+			}
+			mermaidPreviewOpen = true;
+			return;
+		}
+
 		// Otherwise, open preview when clicking on the mermaid diagram itself
-		const mermaidEl = target.closest('.mermaid');
+		const mermaidEl = target.closest(`.${MERMAID_BLOCK_CLASS}`);
 		if (!mermaidEl) return;
 
 		const svg = mermaidEl.querySelector('svg');
 		if (!svg) return;
 
 		mermaidPreviewSvgHtml = svg.outerHTML;
+		svgPreviewLive = false;
 		mermaidPreviewOpen = true;
 	}
 
@@ -515,6 +608,7 @@
 		mermaidPreviewOpen = open;
 		if (!open) {
 			mermaidPreviewSvgHtml = '';
+			svgPreviewLive = false;
 		}
 	}
 
@@ -527,12 +621,14 @@
 	async function renderMermaidDiagrams() {
 		if (!containerRef) return;
 
-		const nodes = containerRef.querySelectorAll('pre.mermaid:not([data-mermaid-rendered])');
+		const nodes = containerRef.querySelectorAll(
+			`pre.${MERMAID_BLOCK_CLASS}:not([${MERMAID_RENDERED_ATTR}])`
+		);
 		if (nodes.length === 0) return;
 
 		// Mark nodes immediately to prevent duplicate renders if called again during streaming.
 		// This avoids needing a guard that would block node discovery.
-		nodes.forEach((node) => node.setAttribute('data-mermaid-rendered', 'true'));
+		nodes.forEach((node) => node.setAttribute(MERMAID_RENDERED_ATTR, 'true'));
 
 		// Read mode before await so Svelte tracks it reactively.
 		const isDark = mode.current === ColorMode.DARK;
@@ -563,6 +659,34 @@
 		} catch (error) {
 			console.error('Failed to render mermaid diagram:', error);
 		}
+	}
+
+	/**
+	 * Renders svg diagrams that haven't been rendered yet.
+	 * Sanitizes the source before injecting and marks each node so it renders once.
+	 * An empty sanitize result keeps the raw source as escaped text.
+	 */
+	function renderSvgDiagrams() {
+		if (!containerRef) return;
+
+		const nodes = containerRef.querySelectorAll<HTMLElement>(
+			`pre.${SVG_BLOCK_CLASS}:not([${SVG_RENDERED_ATTR}])`
+		);
+		if (nodes.length === 0) return;
+
+		nodes.forEach((node) => {
+			node.setAttribute(SVG_RENDERED_ATTR, 'true');
+
+			const source = node.getAttribute(SVG_SOURCE_ATTR) ?? node.textContent ?? '';
+			const clean = sanitizeSvg(source);
+
+			if (clean) {
+				node.textContent = '';
+				const host = document.createElement('div');
+				node.appendChild(host);
+				mountSvgShadow(host, clean, SVG_INLINE_SHADOW_STYLE);
+			}
+		});
 	}
 
 	/**
@@ -647,6 +771,7 @@
 			setupCodeBlockActions();
 			setupImageErrorHandlers();
 			renderMermaidDiagrams();
+			renderSvgDiagrams();
 		}
 	});
 
@@ -689,7 +814,7 @@
 	{/if}
 
 	{#if incompleteCodeBlock}
-		{#if incompleteCodeBlock.language === 'mermaid'}
+		{#if incompleteCodeBlock.language === MERMAID_LANGUAGE}
 			<div class="mermaid-block-wrapper streaming-mermaid-block">
 				<div class="code-block-header">
 					<span class="code-language">mermaid</span>
@@ -704,6 +829,30 @@
 				<div class="mermaid-loading-placeholder">
 					<span class="mermaid-loading-text">Generating diagram...</span>
 				</div>
+			</div>
+		{:else if streamingSvgCode !== null}
+			<div class="svg-block-wrapper streaming-svg-block">
+				<div class="code-block-header">
+					<span class="code-language">svg</span>
+					<div class="code-block-actions">
+						<ActionIconCopyToClipboard
+							text={incompleteCodeBlock.code}
+							canCopy={false}
+							ariaLabel="Diagram incomplete"
+						/>
+					</div>
+				</div>
+				{#if liveSvgHtml}
+					<div class="svg-scroll-container">
+						<div class={SVG_BLOCK_CLASS}>
+							<div bind:this={streamingSvgHost}></div>
+						</div>
+					</div>
+				{:else}
+					<div class="mermaid-loading-placeholder">
+						<span class="mermaid-loading-text">Rendering svg...</span>
+					</div>
+				{/if}
 			</div>
 		{:else}
 			<div class="code-block-wrapper streaming-code-block relative">

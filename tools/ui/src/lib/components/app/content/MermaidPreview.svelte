@@ -1,11 +1,20 @@
 <script lang="ts">
 	import MermaidPreviewControls from './MermaidPreviewControls.svelte';
+	import { mountSvgShadow } from '$lib/utils/svg-shadow';
+	import { SVG_DIALOG_SHADOW_STYLE } from '$lib/constants';
 
 	interface Props {
 		svgHtml: string;
 	}
 
 	let { svgHtml }: Props = $props();
+
+	let svgHost = $state<HTMLDivElement | null>(null);
+
+	// Re-mount on every svgHtml change so a live streaming svg keeps rendering while zoomed
+	$effect(() => {
+		if (svgHost) mountSvgShadow(svgHost, svgHtml, SVG_DIALOG_SHADOW_STYLE);
+	});
 
 	// Zoom and pan state
 	let scale = $state(1);
@@ -99,8 +108,7 @@
 		onpointerup={handlePointerUp}
 		onpointerleave={handlePointerUp}
 	>
-		<!-- eslint-disable-next-line no-at-html-tags -->
-		{@html svgHtml}
+		<div bind:this={svgHost}></div>
 	</div>
 
 	<MermaidPreviewControls
@@ -111,16 +119,3 @@
 		onResetView={resetView}
 	/>
 </div>
-
-<style lang="postcss" scoped>
-	/* Styles for SVGs rendered via {@html} — no Tailwind class can target child elements */
-	.mermaid-preview-diagram :global(svg) {
-		min-height: min(50vh, 12rem);
-		min-width: min(80vw, 20rem);
-		max-width: none !important;
-		max-height: none !important;
-		height: auto !important;
-		width: auto !important;
-		display: block;
-	}
-</style>
