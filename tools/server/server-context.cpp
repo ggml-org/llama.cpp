@@ -102,6 +102,7 @@ struct server_slot {
 
     int32_t n_prompt_tokens_cache     = 0;
     int32_t n_prompt_tokens_processed = 0;
+    int32_t n_prompt_tokens_prefix    = -1;
 
     size_t last_nl_pos = 0;
 
@@ -206,6 +207,7 @@ struct server_slot {
         SLT_DBG(*this, "%s", "\n");
 
         n_prompt_tokens_cache = 0;
+        n_prompt_tokens_prefix = -1;
 
         last_nl_pos    = 0;
         generated_text = "";
@@ -2910,6 +2912,7 @@ private:
 
                             llama_pos pos_next = slot.prompt.tokens.pos_next(n_past);
                             const llama_pos prefix_end = pos_next;
+                            slot.n_prompt_tokens_prefix = n_past > 0 ? n_past : -1;
                             const bool is_recurrent_or_hybrid =
                                     llama_model_is_recurrent(model_tgt) ||
                                     llama_model_is_hybrid(model_tgt);
@@ -3179,6 +3182,15 @@ private:
                         // can be created after the previous messages
                         if (n_before_user_known &&
                             slot.prompt.n_tokens() == n_before_user) {
+                            break;
+                        }
+
+                        // Anchor a checkpoint at the common-prefix boundary. This avoids
+                        // re-processing the gap to the nearest prompt-end checkpoint on
+                        // subsequent requests that reuse the same prefix.
+                        if (do_checkpoint &&
+                            slot.n_prompt_tokens_prefix > 0 &&
+                            slot.prompt.n_tokens() == slot.n_prompt_tokens_prefix) {
                             break;
                         }
 
