@@ -327,7 +327,7 @@ static enum ggml_status ggml_backend_hexagon_buffer_init_tensor(ggml_backend_buf
     return GGML_STATUS_SUCCESS;
 }
 
-// ======== Q4x4x2 ====================
+// ======== Q4_0_TILED ====================
 struct x2_q4 {
     int v[2];
 };
@@ -344,8 +344,8 @@ static void dump_block_q4_0(const block_q4_0 * b, int i) {
                 GGML_FP16_TO_FP32(b->d));
 }
 
-static void dump_packed_block_q4x4x2(const uint8_t * v, unsigned int i, size_t k) {
-    static const int qk        = QK_Q4_0x4x2;
+static void dump_packed_block_q4_0_tiled(const uint8_t * v, unsigned int i, size_t k) {
+    static const int qk        = QK_Q4_0_TILED;
     const int        dblk_size = 8 * 2;   // 8x __fp16
     const int        qblk_size = qk / 2;  // int4
     const int        qrow_size = k / 2;   // int4 (not padded)
@@ -356,13 +356,13 @@ static void dump_packed_block_q4x4x2(const uint8_t * v, unsigned int i, size_t k
     const uint8_t *   q = v_q + i * qblk_size;
     const ggml_half * d = (const ggml_half *) (v_d + i * dblk_size);
 
-    HEX_VERBOSE("ggml-hex: repack q4x4x2-%d: %d %d %d %d ... %d %d %d %d ... %d %d %d %d : %.6f %.6f %.6f %.6f\n", i,
+    HEX_VERBOSE("ggml-hex: repack q4_0_tiled-%d: %d %d %d %d ... %d %d %d %d ... %d %d %d %d : %.6f %.6f %.6f %.6f\n", i,
                 unpack_q4(q[0]).v[0], unpack_q4(q[1]).v[0], unpack_q4(q[2]).v[0], unpack_q4(q[3]).v[0],
                 unpack_q4(q[60]).v[0], unpack_q4(q[61]).v[0], unpack_q4(q[62]).v[0], unpack_q4(q[63]).v[0],
                 unpack_q4(q[124]).v[0], unpack_q4(q[125]).v[0], unpack_q4(q[126]).v[0], unpack_q4(q[127]).v[0],
                 GGML_FP16_TO_FP32(d[0]), GGML_FP16_TO_FP32(d[1]), GGML_FP16_TO_FP32(d[2]), GGML_FP16_TO_FP32(d[3]));
 
-    HEX_VERBOSE("ggml-hex: repack q4x4x2-%d: %d %d %d %d ... %d %d %d %d ... %d %d %d %d : %.6f %.6f %.6f %.6f\n",
+    HEX_VERBOSE("ggml-hex: repack q4_0_tiled-%d: %d %d %d %d ... %d %d %d %d ... %d %d %d %d : %.6f %.6f %.6f %.6f\n",
                 i + 1, unpack_q4(q[0]).v[1], unpack_q4(q[1]).v[1], unpack_q4(q[2]).v[1], unpack_q4(q[3]).v[1],
                 unpack_q4(q[60]).v[1], unpack_q4(q[61]).v[1], unpack_q4(q[62]).v[1], unpack_q4(q[63]).v[1],
                 unpack_q4(q[124]).v[1], unpack_q4(q[125]).v[1], unpack_q4(q[126]).v[1], unpack_q4(q[127]).v[1],
@@ -432,8 +432,8 @@ static void pack_mxfp4_quants(block_mxfp4 * x, const uint8_t * qs, unsigned int 
     }
 }
 
-static void repack_row_q4x4x2(uint8_t * y, const block_q4_0 * x, int64_t k) {
-    static const int qk = QK_Q4_0x4x2;
+static void repack_row_q4_0_tiled(uint8_t * y, const block_q4_0 * x, int64_t k) {
+    static const int qk = QK_Q4_0_TILED;
     const int        nb = (k + qk - 1) / qk;  // number of blocks (padded)
     const int        nloe = k % qk;           // leftovers
 
@@ -459,7 +459,7 @@ static void repack_row_q4x4x2(uint8_t * y, const block_q4_0 * x, int64_t k) {
 
     // Repack the quants
     for (int i = 0; i < nb; i++) {
-        uint8_t qs[QK_Q4_0x4x2];  // unpacked quants
+        uint8_t qs[QK_Q4_0_TILED];  // unpacked quants
         unpack_q4_0_quants(qs, &x[i * 8 + 0], 0);
         unpack_q4_0_quants(qs, &x[i * 8 + 1], 1);
         unpack_q4_0_quants(qs, &x[i * 8 + 2], 2);
@@ -478,7 +478,7 @@ static void repack_row_q4x4x2(uint8_t * y, const block_q4_0 * x, int64_t k) {
     }
 
     // Repack the scales
-    // Note: Do not combine with the loop above. For tensor sizes not multiple of 256 (QK_Q4_0x4x2)
+    // Note: Do not combine with the loop above. For tensor sizes not multiple of 256 (QK_Q4_0_TILED)
     // the last block is truncated and overridden by the scales.
     for (int i = 0; i < nb; i++) {
         // Repack the scales
@@ -495,13 +495,13 @@ static void repack_row_q4x4x2(uint8_t * y, const block_q4_0 * x, int64_t k) {
 
     if (opt_verbose > 2) {
         for (int i = 0; i < nb; i++) {
-            dump_packed_block_q4x4x2(y, i, k);
+            dump_packed_block_q4_0_tiled(y, i, k);
         }
     }
 }
 
-static void unpack_row_q4x4x2(block_q4_0 * x, const uint8_t * y, int64_t k) {
-    static const int qk = QK_Q4_0x4x2;
+static void unpack_row_q4_0_tiled(block_q4_0 * x, const uint8_t * y, int64_t k) {
+    static const int qk = QK_Q4_0_TILED;
     const int        nb = (k + qk - 1) / qk;  // number of blocks (padded)
     const int        nloe = k % qk;           // leftovers
 
@@ -514,13 +514,13 @@ static void unpack_row_q4x4x2(block_q4_0 * x, const uint8_t * y, int64_t k) {
 
     if (opt_verbose > 2) {
         for (int i = 0; i < nb; i++) {
-            dump_packed_block_q4x4x2(y, i, k);
+            dump_packed_block_q4_0_tiled(y, i, k);
         }
     }
 
     // Unpack the quants
     for (int i = 0; i < nb; i++) {
-        uint8_t qs[QK_Q4_0x4x2];  // unpacked quants
+        uint8_t qs[QK_Q4_0_TILED];  // unpacked quants
 
         bool partial = (nloe && i == nb-1);
 
@@ -546,7 +546,7 @@ static void unpack_row_q4x4x2(block_q4_0 * x, const uint8_t * y, int64_t k) {
     }
 
     // Repack the scales
-    // Note: Do not combine with the loop above. For tensor sizes not multiple of 256 (QK_Q4_0x4x2)
+    // Note: Do not combine with the loop above. For tensor sizes not multiple of 256 (QK_Q4_0_TILED)
     // the last block is truncated and overridden by the scales.
     for (int i = 0; i < nb; i++) {
         // Unpack the scales
@@ -575,12 +575,12 @@ static void unpack_row_q4x4x2(block_q4_0 * x, const uint8_t * y, int64_t k) {
     }
 }
 
-static void init_row_q4x4x2(block_q4_0 * x, int64_t k) {
-    static const int qk = QK_Q4_0x4x2;
+static void init_row_q4_0_tiled(block_q4_0 * x, int64_t k) {
+    static const int qk = QK_Q4_0_TILED;
     const int        nb = (k + qk - 1) / qk;  // number of blocks (padded)
 
     // Init the quants such that they unpack into zeros
-    uint8_t qs[QK_Q4_0x4x2];  // unpacked quants
+    uint8_t qs[QK_Q4_0_TILED];  // unpacked quants
     memset(qs, 8, sizeof(qs));
 
     for (int i = 0; i < nb; i++) {
@@ -595,7 +595,7 @@ static void init_row_q4x4x2(block_q4_0 * x, int64_t k) {
     }
 
     // Init the scales
-    // Note: Do not combine with the loop above. For tensor sizes not multiple of 256 (QK_Q4_0x4x2)
+    // Note: Do not combine with the loop above. For tensor sizes not multiple of 256 (QK_Q4_0_TILED)
     // the last block is truncated and overridden by the scales.
     for (int i = 0; i < nb; i++) {
         // Unpack the scales
@@ -610,9 +610,8 @@ static void init_row_q4x4x2(block_q4_0 * x, int64_t k) {
     }
 }
 
-// repack q4_0 data into q4x4x2 tensor
-// repack q4_0 data into q4x4x2 tensor
-static void repack_q4_0_q4x4x2(ggml_tensor * t, const void * data, size_t size) {
+// repack q4_0 data into q4_0_tiled tensor
+static void repack_q4_0_tiled(ggml_tensor * t, const void * data, size_t size) {
     const block_q4_0 * src_matrix = (const block_q4_0 *) data;
     int64_t ne0 = t->ne[0];
     int64_t ne1 = t->ne[1];
@@ -662,8 +661,8 @@ static void repack_q4_0_q4x4x2(ggml_tensor * t, const void * data, size_t size) 
     }
 }
 
-// repack q4x4x2 tensor into q4_0 data
-static void repack_q4x4x2_q4_0(void * data, const ggml_tensor * t, size_t size) {
+// repack q4_0_tiled tensor into q4_0 data
+static void repack_tiled_q4_0(void * data, const ggml_tensor * t, size_t size) {
     block_q4_0 * dst_matrix = (block_q4_0 *) data;
     int64_t ne0 = t->ne[0];
     int64_t ne1 = t->ne[1];
@@ -715,8 +714,8 @@ static void repack_q4x4x2_q4_0(void * data, const ggml_tensor * t, size_t size) 
     }
 }
 
-// repack q4_1 data into q4x4x2 tensor
-static void repack_q4_1_q4x4x2(ggml_tensor * t, const void * data, size_t size) {
+// repack q4_1 data into q4_1_tiled tensor
+static void repack_q4_1_tiled(ggml_tensor * t, const void * data, size_t size) {
     const block_q4_1 * src_matrix = (const block_q4_1 *) data;
     int64_t ne0 = t->ne[0];
     int64_t ne1 = t->ne[1];
@@ -772,8 +771,8 @@ static void repack_q4_1_q4x4x2(ggml_tensor * t, const void * data, size_t size) 
     }
 }
 
-// repack q4x4x2 tensor into q4_1 data
-static void repack_q4x4x2_q4_1(void * data, const ggml_tensor * t, size_t size) {
+// repack q4_1_tiled tensor into q4_1 data
+static void repack_tiled_q4_1(void * data, const ggml_tensor * t, size_t size) {
     block_q4_1 * dst_matrix = (block_q4_1 *) data;
     int64_t ne0 = t->ne[0];
     int64_t ne1 = t->ne[1];
@@ -826,8 +825,8 @@ static void repack_q4x4x2_q4_1(void * data, const ggml_tensor * t, size_t size) 
     }
 }
 
-// repack q8_0 data into q8x4x2 tensor
-static void repack_q8_0_q8x4x2(ggml_tensor * t, const void * data, size_t size) {
+// repack q8_0 data into q8_0_tiled tensor
+static void repack_q8_0_tiled(ggml_tensor * t, const void * data, size_t size) {
     const block_q8_0 * src_matrix = (const block_q8_0 *) data;
     int64_t ne0 = t->ne[0];
     int64_t ne1 = t->ne[1];
@@ -872,8 +871,8 @@ static void repack_q8_0_q8x4x2(ggml_tensor * t, const void * data, size_t size) 
     }
 }
 
-// repack q8x4x2 tensor into q8_0 data
-static void repack_q8x4x2_q8_0(void * data, const ggml_tensor * t, size_t size) {
+// repack q8_0_tiled tensor into q8_0 data
+static void repack_tiled_q8_0(void * data, const ggml_tensor * t, size_t size) {
     block_q8_0 * dst_matrix = (block_q8_0 *) data;
     int64_t ne0 = t->ne[0];
     int64_t ne1 = t->ne[1];
@@ -922,8 +921,8 @@ static void repack_q8x4x2_q8_0(void * data, const ggml_tensor * t, size_t size) 
     }
 }
 
-// repack mxfp4 data into mxfp4x4x2 tensor
-static void repack_mxfp4_mxfp4x4x2(ggml_tensor * t, const void * data, size_t size) {
+// repack mxfp4 data into mxfp4_tiled tensor
+static void repack_mxfp4_tiled(ggml_tensor * t, const void * data, size_t size) {
     const block_mxfp4 * src_matrix = (const block_mxfp4 *) data;
     int64_t ne0 = t->ne[0];
     int64_t ne1 = t->ne[1];
@@ -973,8 +972,8 @@ static void repack_mxfp4_mxfp4x4x2(ggml_tensor * t, const void * data, size_t si
     }
 }
 
-// repack mxfp4x4x2 tensor into mxfp4 data
-static void repack_mxfp4x4x2_mxfp4(void * data, const ggml_tensor * t, size_t size) {
+// repack mxfp4_tiled tensor into mxfp4 data
+static void repack_tiled_mxfp4(void * data, const ggml_tensor * t, size_t size) {
     block_mxfp4 * dst_matrix = (block_mxfp4 *) data;
     int64_t ne0 = t->ne[0];
     int64_t ne1 = t->ne[1];
@@ -1040,32 +1039,32 @@ static void ggml_backend_hexagon_buffer_set_tensor(ggml_backend_buffer_t buffer,
         case GGML_TYPE_Q4_0:
             GGML_ASSERT(offset == 0);
             GGML_ASSERT(offset + size <= ggml_nbytes(tensor));
-            repack_q4_0_q4x4x2(tensor, data, size);
+            repack_q4_0_tiled(tensor, data, size);
             break;
 
         case GGML_TYPE_Q4_1:
             GGML_ASSERT(offset == 0);
             GGML_ASSERT(offset + size <= ggml_nbytes(tensor));
-            repack_q4_1_q4x4x2(tensor, data, size);
+            repack_q4_1_tiled(tensor, data, size);
             break;
 
         case GGML_TYPE_Q8_0:
             GGML_ASSERT(offset == 0);
             GGML_ASSERT(offset + size <= ggml_nbytes(tensor));
-            repack_q8_0_q8x4x2(tensor, data, size);
+            repack_q8_0_tiled(tensor, data, size);
             break;
 
         case GGML_TYPE_IQ4_NL:
             GGML_ASSERT(offset == 0);
             GGML_ASSERT(offset + size <= ggml_nbytes(tensor));
             // IQ4_NL has identical block layout to Q4_0 (ggml_half d + uint8_t qs[16])
-            repack_q4_0_q4x4x2(tensor, data, size);
+            repack_q4_0_tiled(tensor, data, size);
             break;
 
         case GGML_TYPE_MXFP4:
             GGML_ASSERT(offset == 0);
             GGML_ASSERT(offset + size <= ggml_nbytes(tensor));
-            repack_mxfp4_mxfp4x4x2(tensor, data, size);
+            repack_mxfp4_tiled(tensor, data, size);
             break;
 
         default:
@@ -1088,31 +1087,31 @@ static void ggml_backend_hexagon_buffer_get_tensor(ggml_backend_buffer_t buffer,
         case GGML_TYPE_Q4_0:
             GGML_ASSERT(offset == 0);
             GGML_ASSERT(offset + size <= ggml_nbytes(tensor));
-            repack_q4x4x2_q4_0(data, tensor, size);
+            repack_tiled_q4_0(data, tensor, size);
             break;
 
         case GGML_TYPE_Q4_1:
             GGML_ASSERT(offset == 0);
             GGML_ASSERT(offset + size <= ggml_nbytes(tensor));
-            repack_q4x4x2_q4_1(data, tensor, size);
+            repack_tiled_q4_1(data, tensor, size);
             break;
 
         case GGML_TYPE_Q8_0:
             GGML_ASSERT(offset == 0);
             GGML_ASSERT(offset + size <= ggml_nbytes(tensor));
-            repack_q8x4x2_q8_0(data, tensor, size);
+            repack_tiled_q8_0(data, tensor, size);
             break;
 
         case GGML_TYPE_IQ4_NL:
             GGML_ASSERT(offset == 0);
             GGML_ASSERT(offset + size <= ggml_nbytes(tensor));
-            repack_q4x4x2_q4_0(data, tensor, size);
+            repack_tiled_q4_0(data, tensor, size);
             break;
 
         case GGML_TYPE_MXFP4:
             GGML_ASSERT(offset == 0);
             GGML_ASSERT(offset + size <= ggml_nbytes(tensor));
-            repack_mxfp4x4x2_mxfp4(data, tensor, size);
+            repack_tiled_mxfp4(data, tensor, size);
             break;
 
         default:

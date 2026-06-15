@@ -115,12 +115,12 @@ static const uint8_t __attribute__((aligned(VLEN))) kvalues_mxfp4_lut[] = {
     0,    0, 0,    0, 0,    0, 0, 0, 0, 0, 0, 0, 0, 0, 0,  0, 0, 0, 0,    0, 0,    0, 0,    0,
 };
 
-static inline size_t q8x4x2_row_size(uint32_t ne) {
+static inline size_t q8_0_tiled_row_size(uint32_t ne) {
     const uint32_t nb_32 = (ne + 31) / 32;
     return nb_32 * 1152;
 }
 
-static inline size_t q8_1x4x2_row_size(uint32_t ne) {
+static inline size_t q8_1_tiled_row_size(uint32_t ne) {
     const uint32_t nb_32 = (ne + 31) / 32;
     return nb_32 * 1280;
 }
@@ -1851,7 +1851,7 @@ static void matmul_2d(unsigned int nth, unsigned int ith, void * data) {
          (unsigned) HAP_perf_qtimer_count_to_us(t2 - t1));
 }
 
-// q8x4x2 src1 tensor is already in VTCM spad
+// q8_0_tiled/q8_1_tiled src1 tensor is already in VTCM spad
 static void matvec_2d(unsigned int nth, unsigned int ith, void * data) {
     htp_matmul_preamble;
 
@@ -1977,7 +1977,7 @@ static void matmul_id(unsigned int nth, unsigned int ith, void * data) {
     const struct mmid_row_mapping * matrix_rows       = mmctx->matrix_rows;
 
     const size_t dst_row_size  = nb1;
-    const size_t src1_row_size = q8x4x2_row_size(ne10);
+    const size_t src1_row_size = q8_0_tiled_row_size(ne10);
 
     const size_t src1_stride = src1_spad->stride;
 
@@ -2073,7 +2073,7 @@ static void matvec_id(unsigned int nth, unsigned int ith, void * data) {
     assert(ne13 % ne03 == 0);
 
     const size_t dst_row_size  = nb1;
-    const size_t src1_row_size = q8x4x2_row_size(ne10);
+    const size_t src1_row_size = q8_0_tiled_row_size(ne10);
 
     const uint32_t n_aids = src2->ne[0];  // num activated experts
     const uint32_t n_ids  = ne02;         // num experts
@@ -2136,7 +2136,7 @@ static void matvec_id(unsigned int nth, unsigned int ith, void * data) {
 
 // *** dynamic quant
 
-static inline void quantize_block_f32_q8_1x1(float * restrict x, uint8_t * restrict y_block) {
+static inline void quantize_block_f32_q8_1_tiled(float * restrict x, uint8_t * restrict y_block) {
     assert((unsigned long) x % 128 == 0);
     assert((unsigned long) y_block % 128 == 0);
 
@@ -2257,7 +2257,7 @@ static inline void quantize_block_f32_q8_1x1(float * restrict x, uint8_t * restr
     }
 }
 
-static inline void quantize_block_f32_q8x4(float * restrict x, uint8_t * restrict y_block) {
+static inline void quantize_block_f32_q8_0_tiled(float * restrict x, uint8_t * restrict y_block) {
     assert((unsigned long) x % 128 == 0);
     assert((unsigned long) y_block % 128 == 0);
 
@@ -2326,33 +2326,34 @@ static inline void quantize_block_f32_q8x4(float * restrict x, uint8_t * restric
 }
 
 // Overrides input x
-static void quantize_row_f32_q8x4x2(float * restrict x, uint8_t * restrict y, uint32_t k) {
+// Overrides input x
+static void quantize_row_f32_q8_0_tiled(float * restrict x, uint8_t * restrict y, uint32_t k) {
     assert(k % 32 == 0);
-    const uint32_t qk = QK_Q8_0x4x2;
+    const uint32_t qk = QK_Q8_0_TILED;
     const uint32_t nb = (k + qk - 1) / qk;
 
     for (uint32_t i = 0; i < nb; i++) {
         uint8_t * restrict y_block0 = y + i * 8 * 1152;
         uint8_t * restrict y_block1 = y + (i * 8 + 4) * 1152;
-        quantize_block_f32_q8x4(x + (i*2 + 0) * qk/2, y_block0);
-        quantize_block_f32_q8x4(x + (i*2 + 1) * qk/2, y_block1);
+        quantize_block_f32_q8_0_tiled(x + (i*2 + 0) * qk/2, y_block0);
+        quantize_block_f32_q8_0_tiled(x + (i*2 + 1) * qk/2, y_block1);
     }
 }
 
-static void quantize_row_f32_q8_1x4x2(float * restrict x, uint8_t * restrict y, uint32_t k) {
+static void quantize_row_f32_q8_1_tiled(float * restrict x, uint8_t * restrict y, uint32_t k) {
     assert(k % 32 == 0);
-    const uint32_t qk = QK_Q8_0x4x2;
+    const uint32_t qk = QK_Q8_0_TILED;
     const uint32_t nb = (k + qk - 1) / qk;
 
     for (uint32_t i = 0; i < nb; i++) {
         uint8_t * restrict y_block0 = y + i * 8 * 1280;
         uint8_t * restrict y_block1 = y + (i * 8 + 4) * 1280;
-        quantize_block_f32_q8_1x1(x + (i*2 + 0) * qk/2, y_block0);
-        quantize_block_f32_q8_1x1(x + (i*2 + 1) * qk/2, y_block1);
+        quantize_block_f32_q8_1_tiled(x + (i*2 + 0) * qk/2, y_block0);
+        quantize_block_f32_q8_1_tiled(x + (i*2 + 1) * qk/2, y_block1);
     }
 }
 
-static void quantize_f32_q8x4x2(unsigned int nth, unsigned int ith, void * data) {
+static void quantize_f32_q8_0_tiled(unsigned int nth, unsigned int ith, void * data) {
     struct htp_matmul_context * mmctx = data;
     struct htp_ops_context * octx = mmctx->octx;
     struct htp_thread_trace * tr = octx->ctx ? &octx->ctx->trace[ith] : NULL;
@@ -2376,33 +2377,33 @@ static void quantize_f32_q8x4x2(unsigned int nth, unsigned int ith, void * data)
     const uint32_t ir_last  = MIN(ir_first + nrows_per_thread, nrows);  // last row
 
     const size_t src_row_size = src->nb[1];
-    const size_t dst_row_size = q8x4x2_row_size(ne0);
+    const size_t dst_row_size = q8_0_tiled_row_size(ne0);
 
     uint8_t * restrict src_data = (uint8_t *) src->data + (src_row_size * ir_first);
     uint8_t * restrict dst_data = (uint8_t *) dst + (dst_row_size * ir_first);
     uint8_t * restrict tmp_data = (uint8_t *) spad->data + (spad->size_per_thread * ith);
 
-    const size_t src_row_size_padded = hex_round_up(src_row_size, QK_Q8_0x4x2 * sizeof(float));
+    const size_t src_row_size_padded = hex_round_up(src_row_size, QK_Q8_0_TILED * sizeof(float));
     hvx_splat_f32_a(tmp_data, 0.0f, src_row_size_padded / sizeof(float));  // zero-out temp row data for padding
 
     for (uint32_t i = ir_first; i < ir_last; ++i) {
         hex_l2fetch(src_data, src_row_size, src_row_size, 2);
         hvx_copy_f32_aa(tmp_data, src_data, ne0);
 
-        quantize_row_f32_q8x4x2((float *) tmp_data, dst_data, ne0);
+        quantize_row_f32_q8_0_tiled((float *) tmp_data, dst_data, ne0);
         dst_data += dst_row_size;
         src_data += src_row_size;
     }
 
     uint64_t t2 = HAP_perf_get_qtimer_count();
 
-    FARF(HIGH, "quantize-f32-q8x4: %u/%u : n-rows %u (%u:%u) row-size %u -> %u usec %u\n", ith, nth, nrows, ir_first,
+    FARF(HIGH, "quantize-f32-q8_0_tiled: %u/%u : n-rows %u (%u:%u) row-size %u -> %u usec %u\n", ith, nth, nrows, ir_first,
          ir_last, src_row_size, dst_row_size, (unsigned) HAP_perf_qtimer_count_to_us(t2 - t1));
     htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_A_QUANT, ith);
 }
 
 
-static void quantize_f32_q8_1x4x2(unsigned int nth, unsigned int ith, void * data) {
+static void quantize_f32_q8_1_tiled(unsigned int nth, unsigned int ith, void * data) {
     struct htp_matmul_context * mmctx = data;
     struct htp_ops_context * octx = mmctx->octx;
     struct htp_thread_trace * tr = octx->ctx ? &octx->ctx->trace[ith] : NULL;
@@ -2426,32 +2427,32 @@ static void quantize_f32_q8_1x4x2(unsigned int nth, unsigned int ith, void * dat
     const uint32_t ir_last  = MIN(ir_first + nrows_per_thread, nrows);  // last row
 
     const size_t src_row_size = src->nb[1];
-    const size_t dst_row_size = q8_1x4x2_row_size(ne0);
+    const size_t dst_row_size = q8_1_tiled_row_size(ne0);
 
     uint8_t * restrict src_data = (uint8_t *) src->data + (src_row_size * ir_first);
     uint8_t * restrict dst_data = (uint8_t *) dst + (dst_row_size * ir_first);
     uint8_t * restrict tmp_data = (uint8_t *) spad->data + (spad->size_per_thread * ith);
 
-    const size_t src_row_size_padded = hex_round_up(src_row_size, QK_Q8_0x4x2 * sizeof(float));
+    const size_t src_row_size_padded = hex_round_up(src_row_size, QK_Q8_0_TILED * sizeof(float));
     hvx_splat_f32_a(tmp_data, 0.0f, src_row_size_padded / sizeof(float));  // zero-out temp row data for padding
 
     for (uint32_t i = ir_first; i < ir_last; ++i) {
         hex_l2fetch(src_data, src_row_size, src_row_size, 2);
         hvx_copy_f32_aa(tmp_data, src_data, ne0);
 
-        quantize_row_f32_q8_1x4x2((float *) tmp_data, dst_data, ne0);
+        quantize_row_f32_q8_1_tiled((float *) tmp_data, dst_data, ne0);
         dst_data += dst_row_size;
         src_data += src_row_size;
     }
 
     uint64_t t2 = HAP_perf_get_qtimer_count();
 
-    FARF(HIGH, "quantize-f32-q8_1x4: %u/%u : n-rows %u (%u:%u) row-size %u -> %u usec %u\n", ith, nth, nrows, ir_first,
+    FARF(HIGH, "quantize-f32-q8_1_tiled: %u/%u : n-rows %u (%u:%u) row-size %u -> %u usec %u\n", ith, nth, nrows, ir_first,
          ir_last, src_row_size, dst_row_size, (unsigned) HAP_perf_qtimer_count_to_us(t2 - t1));
     htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_A_QUANT, ith);
 }
 
-static void quantize_f32_q8x4x2_block(unsigned int nth, unsigned int ith, void * data) {
+static void quantize_f32_q8_0_tiled_block(unsigned int nth, unsigned int ith, void * data) {
     struct htp_matmul_context * mmctx = data;
     struct htp_ops_context * octx = mmctx->octx;
     struct htp_thread_trace * tr = octx->ctx ? &octx->ctx->trace[ith] : NULL;
@@ -2462,14 +2463,14 @@ static void quantize_f32_q8x4x2_block(unsigned int nth, unsigned int ith, void *
     struct htp_spad * spad = &octx->src0_spad;
 
     const uint32_t ne0 = src->ne[0];
-    const uint32_t qk = QK_Q8_0x4x2;
+    const uint32_t qk = QK_Q8_0_TILED;
     const uint32_t nb = (ne0 + qk - 1) / qk;
 
     const uint32_t ib_first = mmctx->quant_ib_first[ith];
     const uint32_t ib_last  = mmctx->quant_ib_last[ith];
 
     const size_t src_row_size = src->nb[1];
-    const size_t dst_row_size = q8x4x2_row_size(ne0);
+    const size_t dst_row_size = q8_0_tiled_row_size(ne0);
     uint8_t * restrict tmp_data = (uint8_t *) spad->data + (spad->size_per_thread * ith);
 
     uint32_t r = mmctx->quant_r[ith];
@@ -2489,8 +2490,8 @@ static void quantize_f32_q8x4x2_block(unsigned int nth, unsigned int ith, void *
             hvx_copy_f32_aa(tmp_data, src_ptr, qk);
         }
 
-        quantize_block_f32_q8x4((float *) tmp_data + 0, dst_ptr + 0);
-        quantize_block_f32_q8x4((float *) tmp_data + qk/2, dst_ptr + 4 * 1152);
+        quantize_block_f32_q8_0_tiled((float *) tmp_data + 0, dst_ptr + 0);
+        quantize_block_f32_q8_0_tiled((float *) tmp_data + qk/2, dst_ptr + 4 * 1152);
 
         c++;
         if (c == nb) {
@@ -2502,7 +2503,7 @@ static void quantize_f32_q8x4x2_block(unsigned int nth, unsigned int ith, void *
     htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_A_QUANT, ith);
 }
 
-static void quantize_f32_q8_1x4x2_block(unsigned int nth, unsigned int ith, void * data) {
+static void quantize_f32_q8_1_tiled_block(unsigned int nth, unsigned int ith, void * data) {
     struct htp_matmul_context * mmctx = data;
     struct htp_ops_context * octx = mmctx->octx;
     struct htp_thread_trace * tr = octx->ctx ? &octx->ctx->trace[ith] : NULL;
@@ -2513,14 +2514,14 @@ static void quantize_f32_q8_1x4x2_block(unsigned int nth, unsigned int ith, void
     struct htp_spad * spad = &octx->src0_spad;
 
     const uint32_t ne0 = src->ne[0];
-    const uint32_t qk = QK_Q8_0x4x2;
+    const uint32_t qk = QK_Q8_0_TILED;
     const uint32_t nb = (ne0 + qk - 1) / qk;
 
     const uint32_t ib_first = mmctx->quant_ib_first[ith];
     const uint32_t ib_last  = mmctx->quant_ib_last[ith];
 
     const size_t src_row_size = src->nb[1];
-    const size_t dst_row_size = q8_1x4x2_row_size(ne0);
+    const size_t dst_row_size = q8_1_tiled_row_size(ne0);
     uint8_t * restrict tmp_data = (uint8_t *) spad->data + (spad->size_per_thread * ith);
 
     uint32_t r = mmctx->quant_r[ith];
@@ -2540,8 +2541,8 @@ static void quantize_f32_q8_1x4x2_block(unsigned int nth, unsigned int ith, void
             hvx_copy_f32_aa(tmp_data, src_ptr, qk);
         }
 
-        quantize_block_f32_q8_1x1((float *) tmp_data + 0, dst_ptr + 0);
-        quantize_block_f32_q8_1x1((float *) tmp_data + qk/2, dst_ptr + 4 * 1280);
+        quantize_block_f32_q8_1_tiled((float *) tmp_data + 0, dst_ptr + 0);
+        quantize_block_f32_q8_1_tiled((float *) tmp_data + qk/2, dst_ptr + 4 * 1280);
 
         c++;
         if (c == nb) {
@@ -2694,27 +2695,27 @@ static inline bool htp_is_permuted(const struct htp_tensor * t) {
 static int htp_mminit_vec_dot(struct htp_matmul_context * mmctx, enum htp_data_type type) {
     switch (type) {
         case HTP_TYPE_Q4_0:
-            mmctx->type         = "q4x4x2-f32";
+            mmctx->type         = "q4_0_tiled-f32";
             mmctx->vec_dot_32x1 = tiled_vec_dot_q4_0_32x1;
             mmctx->tile_size    = 576;
             return 0;
         case HTP_TYPE_Q4_1:
-            mmctx->type         = "q4_1x4x2-f32";
+            mmctx->type         = "q4_1_tiled-f32";
             mmctx->vec_dot_32x1 = tiled_vec_dot_q4_1_32x1;
             mmctx->tile_size    = 640;
             return 0;
         case HTP_TYPE_Q8_0:
-            mmctx->type         = "q8x4x2-f32";
+            mmctx->type         = "q8_0_tiled-f32";
             mmctx->vec_dot_32x1 = tiled_vec_dot_q8_0_32x1;
             mmctx->tile_size    = 1088;
             return 0;
         case HTP_TYPE_IQ4_NL:
-            mmctx->type         = "iq4nlx4x2-f32";
+            mmctx->type         = "iq4nl_tiled-f32";
             mmctx->vec_dot_32x1 = tiled_vec_dot_iq4nl_32x1;
             mmctx->tile_size    = 576;
             return 0;
         case HTP_TYPE_MXFP4:
-            mmctx->type         = "mxfp4x4x2-f32";
+            mmctx->type         = "mxfp4_tiled-f32";
             mmctx->vec_dot_32x1 = tiled_vec_dot_mxfp4_32x1;
             mmctx->tile_size    = 544;
             return 0;
@@ -2739,7 +2740,7 @@ static void htp_mminit_spad(struct htp_ops_context * octx,
     }
 
     // src0 spad is also used in dynamic quantizer to store padded src1 rows
-    size_t src1_row_size_padded = hex_round_up(src1_row_size, QK_Q8_0x4x2 * sizeof(float));
+    size_t src1_row_size_padded = hex_round_up(src1_row_size, QK_Q8_0_TILED * sizeof(float));
     if (octx->src0_spad.size_per_thread < src1_row_size_padded) {
         octx->src0_spad.size_per_thread = src1_row_size_padded;
     }
@@ -2932,13 +2933,13 @@ static int op_matmul_hvx(struct htp_ops_context * octx) {
             return HTP_STATUS_NO_SUPPORT;
         }
 
-        const uint32_t qk = QK_Q8_0x4x2;
+        const uint32_t qk = QK_Q8_0_TILED;
         const uint32_t nb = (ne10 + qk - 1) / qk;
         const uint32_t total_nb = src1_nrows * nb;
 
         if (src1_nrows < octx->n_threads) {
             n_quant_jobs = MIN(total_nb, octx->n_threads);
-            quant_job_func = (src0->type == HTP_TYPE_Q4_1) ? quantize_f32_q8_1x4x2_block : quantize_f32_q8x4x2_block;
+            quant_job_func = (src0->type == HTP_TYPE_Q4_1) ? quantize_f32_q8_1_tiled_block : quantize_f32_q8_0_tiled_block;
             for (uint32_t ith = 0; ith < n_quant_jobs; ++ith) {
                 uint32_t ib_first = (total_nb * ith) / n_quant_jobs;
                 uint32_t ib_last  = (total_nb * (ith + 1)) / n_quant_jobs;
@@ -2949,9 +2950,9 @@ static int op_matmul_hvx(struct htp_ops_context * octx) {
             }
         } else {
             n_quant_jobs = MIN(src1_nrows, octx->n_threads);
-            quant_job_func = (src0->type == HTP_TYPE_Q4_1) ? quantize_f32_q8_1x4x2 : quantize_f32_q8x4x2;
+            quant_job_func = (src0->type == HTP_TYPE_Q4_1) ? quantize_f32_q8_1_tiled : quantize_f32_q8_0_tiled;
         }
-        src1_row_size = (src0->type == HTP_TYPE_Q4_1) ? q8_1x4x2_row_size(ne10) : q8x4x2_row_size(ne10);
+        src1_row_size = (src0->type == HTP_TYPE_Q4_1) ? q8_1_tiled_row_size(ne10) : q8_0_tiled_row_size(ne10);
         htp_mminit_spad(octx, dst_row_size, src0_row_size_padded, src1_row_size, src1_nrows, 0);
 
         if (is_repacked) {
@@ -3033,7 +3034,7 @@ int op_matmul(struct htp_ops_context * octx) {
         return op_matmul_hvx(octx);
     }
 
-    // Quantised HMX path requires K aligned to 256 (x4x2 super-block).
+    // Quantised HMX path requires K aligned to 256 (tiled super-block).
     // F16 and F32 HMX paths require K aligned to 32 (tile width).
     if (wtype != HTP_TYPE_F16 && wtype != HTP_TYPE_F32 && src0->ne[0] % 256 != 0) {
         return op_matmul_hvx(octx);
@@ -3187,14 +3188,14 @@ int op_matmul_id(struct htp_ops_context * octx) {
         return HTP_STATUS_NO_SUPPORT;
     }
 
-    const uint32_t qk = QK_Q8_0x4x2;
+    const uint32_t qk = QK_Q8_0_TILED;
     const uint32_t nb = (ne10 + qk - 1) / qk;
     const uint32_t total_nb = src1_nrows * nb;
 
     uint32_t n_quant_jobs = 1;
     if (src1_nrows < octx->n_threads) {
         n_quant_jobs = MIN(total_nb, octx->n_threads);
-        quant_job_func = (src0->type == HTP_TYPE_Q4_1) ? quantize_f32_q8_1x4x2_block : quantize_f32_q8x4x2_block;
+        quant_job_func = (src0->type == HTP_TYPE_Q4_1) ? quantize_f32_q8_1_tiled_block : quantize_f32_q8_0_tiled_block;
         for (uint32_t ith = 0; ith < n_quant_jobs; ++ith) {
             uint32_t ib_first = (total_nb * ith) / n_quant_jobs;
             uint32_t ib_last  = (total_nb * (ith + 1)) / n_quant_jobs;
@@ -3205,9 +3206,9 @@ int op_matmul_id(struct htp_ops_context * octx) {
         }
     } else {
         n_quant_jobs = MIN(src1_nrows, octx->n_threads);
-        quant_job_func = (src0->type == HTP_TYPE_Q4_1) ? quantize_f32_q8_1x4x2 : quantize_f32_q8x4x2;
+        quant_job_func = (src0->type == HTP_TYPE_Q4_1) ? quantize_f32_q8_1_tiled : quantize_f32_q8_0_tiled;
     }
-    src1_row_size  = (src0->type == HTP_TYPE_Q4_1) ? q8_1x4x2_row_size(ne10) : q8x4x2_row_size(ne10);
+    src1_row_size  = (src0->type == HTP_TYPE_Q4_1) ? q8_1_tiled_row_size(ne10) : q8_0_tiled_row_size(ne10);
 
     const size_t src2_spad_size_per_thread = 0; // We moved the mapping to DDR!
     htp_mminit_spad(octx, 0, src0_row_size_padded, src1_row_size, src1_nrows, src2_spad_size_per_thread);
@@ -3657,7 +3658,7 @@ int op_matmul_qkv(struct htp_ops_context * octx) {
         return HTP_STATUS_NO_SUPPORT;
     }
 
-    const uint32_t qk = QK_Q8_0x4x2;
+    const uint32_t qk = QK_Q8_0_TILED;
     const uint32_t nb = (src1->ne[0] + qk - 1) / qk;
     const uint32_t total_nb = src1_nrows * nb;
 
@@ -3665,7 +3666,7 @@ int op_matmul_qkv(struct htp_ops_context * octx) {
     uint32_t n_quant_jobs = 1;
     if (src1_nrows < octx->n_threads) {
         n_quant_jobs = MIN(total_nb, octx->n_threads);
-        quant_job_func = (src0->type == HTP_TYPE_Q4_1) ? quantize_f32_q8_1x4x2_block : quantize_f32_q8x4x2_block;
+        quant_job_func = (src0->type == HTP_TYPE_Q4_1) ? quantize_f32_q8_1_tiled_block : quantize_f32_q8_0_tiled_block;
         for (uint32_t ith = 0; ith < n_quant_jobs; ++ith) {
             uint32_t ib_first = (total_nb * ith) / n_quant_jobs;
             uint32_t ib_last  = (total_nb * (ith + 1)) / n_quant_jobs;
@@ -3676,10 +3677,10 @@ int op_matmul_qkv(struct htp_ops_context * octx) {
         }
     } else {
         n_quant_jobs = MIN(src1_nrows, octx->n_threads);
-        quant_job_func = (src0->type == HTP_TYPE_Q4_1) ? quantize_f32_q8_1x4x2 : quantize_f32_q8x4x2;
+        quant_job_func = (src0->type == HTP_TYPE_Q4_1) ? quantize_f32_q8_1_tiled : quantize_f32_q8_0_tiled;
     }
 
-    size_t src1_row_size = (src0->type == HTP_TYPE_Q4_1) ? q8_1x4x2_row_size(src1->ne[0]) : q8x4x2_row_size(src1->ne[0]);
+    size_t src1_row_size = (src0->type == HTP_TYPE_Q4_1) ? q8_1_tiled_row_size(src1->ne[0]) : q8_0_tiled_row_size(src1->ne[0]);
 
     // Set up scratchpads
     if (is_repacked) {
@@ -3801,7 +3802,7 @@ int op_matmul_ffn(struct htp_ops_context * octx) {
         return HTP_STATUS_NO_SUPPORT;
     }
 
-    const uint32_t qk = QK_Q8_0x4x2;
+    const uint32_t qk = QK_Q8_0_TILED;
     const uint32_t nb = (src1->ne[0] + qk - 1) / qk;
     const uint32_t total_nb = src1_nrows * nb;
 
@@ -3809,7 +3810,7 @@ int op_matmul_ffn(struct htp_ops_context * octx) {
     uint32_t n_quant_jobs = 1;
     if (src1_nrows < octx->n_threads) {
         n_quant_jobs = MIN(total_nb, octx->n_threads);
-        quant_job_func = (src0->type == HTP_TYPE_Q4_1) ? quantize_f32_q8_1x4x2_block : quantize_f32_q8x4x2_block;
+        quant_job_func = (src0->type == HTP_TYPE_Q4_1) ? quantize_f32_q8_1_tiled_block : quantize_f32_q8_0_tiled_block;
         for (uint32_t ith = 0; ith < n_quant_jobs; ++ith) {
             uint32_t ib_first = (total_nb * ith) / n_quant_jobs;
             uint32_t ib_last  = (total_nb * (ith + 1)) / n_quant_jobs;
@@ -3820,10 +3821,10 @@ int op_matmul_ffn(struct htp_ops_context * octx) {
         }
     } else {
         n_quant_jobs = MIN(src1_nrows, octx->n_threads);
-        quant_job_func = (src0->type == HTP_TYPE_Q4_1) ? quantize_f32_q8_1x4x2 : quantize_f32_q8x4x2;
+        quant_job_func = (src0->type == HTP_TYPE_Q4_1) ? quantize_f32_q8_1_tiled : quantize_f32_q8_0_tiled;
     }
 
-    size_t src1_row_size = (src0->type == HTP_TYPE_Q4_1) ? q8_1x4x2_row_size(src1->ne[0]) : q8x4x2_row_size(src1->ne[0]);
+    size_t src1_row_size = (src0->type == HTP_TYPE_Q4_1) ? q8_1_tiled_row_size(src1->ne[0]) : q8_0_tiled_row_size(src1->ne[0]);
 
     // Set up scratchpads
     if (is_repacked) {

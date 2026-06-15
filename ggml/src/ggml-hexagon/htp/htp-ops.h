@@ -28,18 +28,19 @@ enum htp_data_type {
     HTP_TYPE_MXFP4  = 39,
 
     // types used internally for repack, dyn.quant, etc
-    HTP_TYPE_Q4_0x4x2 = 200,
-    HTP_TYPE_Q4_1x4x2,
-    HTP_TYPE_Q8_0x4x2,
-    HTP_TYPE_MXFP4x4x2,
+    HTP_TYPE_Q4_0_TILED = 200,
+    HTP_TYPE_Q4_1_TILED,
+    HTP_TYPE_Q8_0_TILED,
+    HTP_TYPE_MXFP4_TILED,
 
     HTP_TYPE_INVALID
 };
 
 // Constats for internal types
-#define QK_Q4_0x4x2  256  // 4x Q4_0  blocks packed with next 4x Q4_0 blocks (size in bytes 128)
-#define QK_Q8_0x4x2  256  // 4x Q8_0  blocks concat with next 4x Q8_0 blocks
-#define QK_MXFP4x4x2 256  // 4x MXFP4 blocks concat with next 4x MXFP4 blocks
+#define QK_Q4_0_TILED  256  // 32x32 Q4_0 tiled layout
+#define QK_Q8_0_TILED  256  // 32x32 Q8_0 tiled layout
+#define QK_MXFP4_TILED 256  // 32x32 MXFP4 tiled layout
+
 
 
 // Mask to enable various stages of the Ops.

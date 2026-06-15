@@ -42,29 +42,29 @@ static const __fp16 iq4_nl_to_fp16_lut[64] __attribute__((aligned(VLEN))) = {
     1,    0, 13,   0, 25,  0, 38,  0, 53,  0, 69,  0, 89,  0, 113, 0,
 };
 
-// Scales per x4x2 logical block: 8 × sizeof(__fp16) = 16 bytes
-#define HMX_X4X2_SCALES_PER_BLK  8
-#define HMX_X4X2_DBLK_SIZE       16  // 8 * 2 bytes (fp16 scales for Q4_0/Q8_0/IQ4_NL)
-#define HMX_X4X2_MXFP4_EBLK_SIZE 8   // 8 * 1 byte  (E8M0 scales for MXFP4)
+// Scales per tiled logical block: 8 × sizeof(__fp16) = 16 bytes
+#define HMX_TILED_SCALES_PER_BLK  8
+#define HMX_TILED_DBLK_SIZE       16  // 8 * 2 bytes (fp16 scales for Q4_0/Q8_0/IQ4_NL)
+#define HMX_TILED_MXFP4_EBLK_SIZE 8   // 8 * 1 byte  (E8M0 scales for MXFP4)
 
-// Compute the byte stride of one row in x4x2 format.
+// Compute the byte stride of one row in tiled format.
 // Numerically equals ggml_row_size(type, k) when k is 256-aligned, because
-// x4x2 packing has the same density as block_q4_0 / block_q8_0.
+// tiled packing has the same density as block_q4_0 / block_q8_0.
 // Layout per row: [quants: nb*128 (Q4) or nb*256 (Q8)][scales: nb*16 bytes]
 // Total per row = nb * (128+16) = 144*nb (Q4) or nb * (256+16) = 272*nb (Q8).
 // Callers must ensure k is a multiple of 256 (enforced by proc_hmx_matmul_req).
-static inline size_t get_x4x2_row_stride(int weight_type, int k) {
-    int nb = (k + QK_Q4_0x4x2 - 1) / QK_Q4_0x4x2;
+static inline size_t get_tiled_row_stride(int weight_type, int k) {
+    int nb = (k + QK_Q4_0_TILED - 1) / QK_Q4_0_TILED;
     switch (weight_type) {
         case HTP_TYPE_Q4_0:
         case HTP_TYPE_IQ4_NL:
-            return (size_t) nb * (QK_Q4_0x4x2 / 2 + HMX_X4X2_DBLK_SIZE);         // 144 * nb
+            return (size_t) nb * (QK_Q4_0_TILED / 2 + HMX_TILED_DBLK_SIZE);         // 144 * nb
         case HTP_TYPE_Q4_1:
-            return (size_t) nb * (QK_Q4_0x4x2 / 2 + 32);                         // 160 * nb
+            return (size_t) nb * (QK_Q4_0_TILED / 2 + 32);                         // 160 * nb
         case HTP_TYPE_Q8_0:
-            return (size_t) nb * (QK_Q8_0x4x2 + HMX_X4X2_DBLK_SIZE);             // 272 * nb
+            return (size_t) nb * (QK_Q8_0_TILED + HMX_TILED_DBLK_SIZE);             // 272 * nb
         case HTP_TYPE_MXFP4:
-            return (size_t) nb * (QK_MXFP4x4x2 / 2 + HMX_X4X2_MXFP4_EBLK_SIZE);  // 136 * nb
+            return (size_t) nb * (QK_MXFP4_TILED / 2 + HMX_TILED_MXFP4_EBLK_SIZE);  // 136 * nb
         case HTP_TYPE_F16:
             return (size_t) k * sizeof(__fp16);
         case HTP_TYPE_F32:
@@ -73,6 +73,7 @@ static inline size_t get_x4x2_row_stride(int weight_type, int k) {
             return 0;
     }
 }
+
 
 // --- Overflow-safe arithmetic for VTCM budget calculation ---
 
@@ -178,7 +179,7 @@ next_nc:
     return 0;
 }
 
-// --- x4x2 format dequantizers ---
+// --- tiled format dequantizers ---
 
 
 
@@ -199,24 +200,24 @@ typedef struct {
     struct fastdiv_values     n_k_tiles_div;
     int                       tile_size;
     int                       aligned_tile_size;
-} x4x2_dequantize_state_t;
+} tiled_dequantize_state_t;
 
 #define DEQUANTIZE_WORKER_LOOP_IMPL(SUFFIX)                                                                   \
-static void dequantize_x4x2_worker_loop_##SUFFIX(unsigned int n, unsigned int i, void *data) {                \
-    x4x2_dequantize_state_t *state = (x4x2_dequantize_state_t *)data;                                         \
+static void dequantize_tiled_worker_loop_##SUFFIX(unsigned int n, unsigned int i, void *data) {               \
+    tiled_dequantize_state_t *state = (tiled_dequantize_state_t *)data;                                       \
     struct htp_thread_trace * tr = state->traces ? &state->traces[i] : NULL;                                  \
     htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_W_DEQUANT, i);                                                \
     for (unsigned int task_id = i; task_id < (unsigned int)state->n_tasks; task_id += n) {                    \
         int start = task_id * state->n_tiles_per_task;                                                        \
         int end   = hex_smin(start + state->n_tiles_per_task, state->n_tot_tiles);                            \
-        dequantize_x4x2_weight_to_fp16_tiles_task_##SUFFIX(state, start, end);                                \
+        dequantize_tiled_weight_to_fp16_tiles_task_##SUFFIX(state, start, end);                               \
     }                                                                                                         \
     htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_W_DEQUANT, i);                                                 \
 }
 
-// Dequantize a single tile from x4x2 weight data (already in VTCM) to tile-major FP16.
-static void dequantize_x4x2_weight_to_fp16_tiles_task_q4_0(
-        const x4x2_dequantize_state_t *state,
+// Dequantize a single tile from tiled weight data (already in VTCM) to tile-major FP16.
+static void dequantize_tiled_weight_to_fp16_tiles_task_q4_0(
+        const tiled_dequantize_state_t *state,
         int start_tile, int end_tile) {
 
     const HVX_Vector mask_h4 = Q6_Vb_vsplat_R(0x0F);
@@ -256,8 +257,8 @@ static void dequantize_x4x2_weight_to_fp16_tiles_task_q4_0(
     }
 }
 
-static void dequantize_x4x2_weight_to_fp16_tiles_task_q4_1(
-        const x4x2_dequantize_state_t *state,
+static void dequantize_tiled_weight_to_fp16_tiles_task_q4_1(
+        const tiled_dequantize_state_t *state,
         int start_tile, int end_tile) {
 
     const HVX_Vector mask_h4 = Q6_Vb_vsplat_R(0x0F);
@@ -298,8 +299,8 @@ static void dequantize_x4x2_weight_to_fp16_tiles_task_q4_1(
     }
 }
 
-static void dequantize_x4x2_weight_to_fp16_tiles_task_iq4_nl(
-        const x4x2_dequantize_state_t *state,
+static void dequantize_tiled_weight_to_fp16_tiles_task_iq4_nl(
+        const tiled_dequantize_state_t *state,
         int start_tile, int end_tile) {
 
     const HVX_Vector mask_h4 = Q6_Vb_vsplat_R(0x0F);
@@ -345,8 +346,8 @@ DEQUANTIZE_WORKER_LOOP_IMPL(q4_1)
 
 DEQUANTIZE_WORKER_LOOP_IMPL(iq4_nl)
 
-static void dequantize_x4x2_weight_to_fp16_tiles_task_mxfp4(
-        const x4x2_dequantize_state_t *state,
+static void dequantize_tiled_weight_to_fp16_tiles_task_mxfp4(
+        const tiled_dequantize_state_t *state,
         int start_tile, int end_tile) {
 
     const HVX_Vector mask_h4 = Q6_Vb_vsplat_R(0x0F);
@@ -394,8 +395,8 @@ static void dequantize_x4x2_weight_to_fp16_tiles_task_mxfp4(
 
 DEQUANTIZE_WORKER_LOOP_IMPL(mxfp4)
 
-static void dequantize_x4x2_weight_to_fp16_tiles_task_q8_0(
-        const x4x2_dequantize_state_t *state,
+static void dequantize_tiled_weight_to_fp16_tiles_task_q8_0(
+        const tiled_dequantize_state_t *state,
         int start_tile, int end_tile) {
 
     for (int t = start_tile; t < end_tile; t++) {
@@ -422,7 +423,7 @@ static void dequantize_x4x2_weight_to_fp16_tiles_task_q8_0(
 DEQUANTIZE_WORKER_LOOP_IMPL(q8_0)
 
 static void convert_f16_weight_to_fp16_tiles_task(
-        const x4x2_dequantize_state_t *state,
+        const tiled_dequantize_state_t *state,
         int start_tile, int end_tile) {
 
     const int n_k_tiles = state->n_k_tiles;
@@ -469,7 +470,7 @@ static void convert_f16_weight_to_fp16_tiles_task(
 }
 
 static void convert_f16_worker_loop(unsigned int n, unsigned int i, void *data) {
-    x4x2_dequantize_state_t *state = (x4x2_dequantize_state_t *)data;
+    tiled_dequantize_state_t *state = (tiled_dequantize_state_t *)data;
     struct htp_thread_trace * tr = state->traces ? &state->traces[i] : NULL;
     htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_W_DEQUANT, i);
     for (unsigned int task_id = i; task_id < (unsigned int)state->n_tasks; task_id += n) {
@@ -481,7 +482,7 @@ static void convert_f16_worker_loop(unsigned int n, unsigned int i, void *data) 
 }
 
 static void quantize_f32_weight_to_fp16_tiles_task(
-        const x4x2_dequantize_state_t *state,
+        const tiled_dequantize_state_t *state,
         int start_tile, int end_tile) {
 
     const int n_k_tiles = state->n_k_tiles;
@@ -532,7 +533,7 @@ static void quantize_f32_weight_to_fp16_tiles_task(
 }
 
 static void quantize_f32_worker_loop(unsigned int n, unsigned int i, void *data) {
-    x4x2_dequantize_state_t *state = (x4x2_dequantize_state_t *)data;
+    tiled_dequantize_state_t *state = (tiled_dequantize_state_t *)data;
 
     struct htp_thread_trace * tr = state->traces ? &state->traces[i] : NULL;
     htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_A_QUANT, i);
@@ -546,7 +547,7 @@ static void quantize_f32_worker_loop(unsigned int n, unsigned int i, void *data)
     htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_A_QUANT, i);
 }
 
-static void dequantize_x4x2_weight_chunk_to_fp16_tiles(
+static void dequantize_tiled_weight_chunk_to_fp16_tiles(
         struct htp_context *ctx, __fp16 *vtcm_dst,
         const void *weight_src_ddr,
         int n_cols, int k_block,
@@ -562,7 +563,7 @@ static void dequantize_x4x2_weight_chunk_to_fp16_tiles(
 
     size_t n_tiles_per_task = (n_threads == 1) ? n_tot_tiles : hmx_ceil_div(n_tot_tiles, n_threads);
 
-    x4x2_dequantize_state_t state;
+    tiled_dequantize_state_t state;
     state.n_tasks          = (n_tot_tiles + n_tiles_per_task - 1) / n_tiles_per_task;
     state.n_tot_tiles      = n_tot_tiles;
     state.n_tiles_per_task = n_tiles_per_task;
@@ -593,7 +594,7 @@ static void dequantize_x4x2_weight_chunk_to_fp16_tiles(
     }
 }
 
-// --- End x4x2 dequantizers ---
+// --- End tiled dequantizers ---
 
 #pragma clang diagnostic ignored "-Wbackend-plugin" // spurios warning for hmx intrinsics
 
@@ -935,18 +936,18 @@ int hmx_matmul_2d_f32(struct htp_context *ctx, float *restrict dst, const float 
         return -1;
     }
 
-    size_t row_stride = get_x4x2_row_stride(weight_type, k);
+    size_t row_stride = get_tiled_row_stride(weight_type, k);
     if (row_stride == 0) {
         return -1;
     }
 
     worker_callback_t dequant_worker_fn = NULL;
     switch (weight_type) {
-        case HTP_TYPE_Q4_0:   dequant_worker_fn = dequantize_x4x2_worker_loop_q4_0; break;
-        case HTP_TYPE_IQ4_NL: dequant_worker_fn = dequantize_x4x2_worker_loop_iq4_nl; break;
-        case HTP_TYPE_Q4_1:   dequant_worker_fn = dequantize_x4x2_worker_loop_q4_1; break;
-        case HTP_TYPE_MXFP4:  dequant_worker_fn = dequantize_x4x2_worker_loop_mxfp4; break;
-        case HTP_TYPE_Q8_0:   dequant_worker_fn = dequantize_x4x2_worker_loop_q8_0; break;
+        case HTP_TYPE_Q4_0:   dequant_worker_fn = dequantize_tiled_worker_loop_q4_0; break;
+        case HTP_TYPE_IQ4_NL: dequant_worker_fn = dequantize_tiled_worker_loop_iq4_nl; break;
+        case HTP_TYPE_Q4_1:   dequant_worker_fn = dequantize_tiled_worker_loop_q4_1; break;
+        case HTP_TYPE_MXFP4:  dequant_worker_fn = dequantize_tiled_worker_loop_mxfp4; break;
+        case HTP_TYPE_Q8_0:   dequant_worker_fn = dequantize_tiled_worker_loop_q8_0; break;
         case HTP_TYPE_F16:    dequant_worker_fn = convert_f16_worker_loop; break;
         case HTP_TYPE_F32:    dequant_worker_fn = quantize_f32_worker_loop; break;
         default:
@@ -1054,7 +1055,7 @@ int hmx_matmul_2d_f32(struct htp_context *ctx, float *restrict dst, const float 
             {
                 // B0: wait for DMA, dequant weight chunk 0
                 dma_queue_pop(ctx->dma[0]);
-                dequantize_x4x2_weight_chunk_to_fp16_tiles(
+                dequantize_tiled_weight_chunk_to_fp16_tiles(
                     ctx, vtcm_weight_bufs[0], vtcm_weight,
                     n_cols_A0, k, row_stride, weight_type,
                     n_k_tiles, n_k_tiles_div, dequant_worker_fn, num_threads
@@ -1075,12 +1076,12 @@ int hmx_matmul_2d_f32(struct htp_context *ctx, float *restrict dst, const float 
                                     (__fp16 *) vtcm_weight_bufs[0], vtcm_scales,
                                     hmx_ceil_div(n_rows, HMX_FP16_TILE_N_ROWS),
                                     hmx_ceil_div(n_cols_A0, HMX_FP16_TILE_N_COLS), k / HMX_FP16_TILE_N_ROWS);
-                hmx_queue_push(ctx->hmx_queue, hmx_queue_make_desc(hmx_matmul_worker_fn, &job_slots[0]));
+                 hmx_queue_push(ctx->hmx_queue, hmx_queue_make_desc(hmx_matmul_worker_fn, &job_slots[0]));
 
                 // B1: DMA pop + dequant (runs in parallel with C0 on HMX worker)
                 if (1 < n_chunk_cnt) {
                     dma_queue_pop(ctx->dma[0]);
-                    dequantize_x4x2_weight_chunk_to_fp16_tiles(
+                    dequantize_tiled_weight_chunk_to_fp16_tiles(
                         ctx, vtcm_weight_bufs[1], vtcm_weight,
                         n_cols_A1, k, row_stride, weight_type, 
                         n_k_tiles, n_k_tiles_div, dequant_worker_fn, num_threads
@@ -1129,7 +1130,7 @@ int hmx_matmul_2d_f32(struct htp_context *ctx, float *restrict dst, const float 
                 // B_{i+2}: DMA pop + dequant (multi-thread HVX, parallel with C_{i+1})
                 if (i + 2 < n_chunk_cnt) {
                     dma_queue_pop(ctx->dma[0]);
-                    dequantize_x4x2_weight_chunk_to_fp16_tiles(
+                    dequantize_tiled_weight_chunk_to_fp16_tiles(
                         ctx, vtcm_weight_bufs[(i + 2) % 2], vtcm_weight,
                         n_cols_p2, k, row_stride, weight_type, 
                         n_k_tiles, n_k_tiles_div, dequant_worker_fn, num_threads
@@ -1163,7 +1164,7 @@ int hmx_matmul_2d_f32(struct htp_context *ctx, float *restrict dst, const float 
                 }
                 dma_queue_pop(ctx->dma[0]);
 
-                dequantize_x4x2_weight_chunk_to_fp16_tiles(
+                dequantize_tiled_weight_chunk_to_fp16_tiles(
                     ctx, vtcm_scratch0, vtcm_weight,
                     n_cols, k, row_stride, weight_type, 
                     n_k_tiles, n_k_tiles_div, dequant_worker_fn, num_threads
@@ -1771,18 +1772,18 @@ int hmx_matmul_id_2d_f32(struct htp_context *ctx,
         return -1;
     }
 
-    size_t row_stride = get_x4x2_row_stride(weight_type, k);
+    size_t row_stride = get_tiled_row_stride(weight_type, k);
     if (row_stride == 0) {
         return -1;
     }
 
     worker_callback_t dequant_worker_fn = NULL;
     switch (weight_type) {
-        case HTP_TYPE_Q4_0:   dequant_worker_fn = dequantize_x4x2_worker_loop_q4_0; break;
-        case HTP_TYPE_IQ4_NL: dequant_worker_fn = dequantize_x4x2_worker_loop_iq4_nl; break;
-        case HTP_TYPE_Q4_1:   dequant_worker_fn = dequantize_x4x2_worker_loop_q4_1; break;
-        case HTP_TYPE_MXFP4:  dequant_worker_fn = dequantize_x4x2_worker_loop_mxfp4; break;
-        case HTP_TYPE_Q8_0:   dequant_worker_fn = dequantize_x4x2_worker_loop_q8_0; break;
+        case HTP_TYPE_Q4_0:   dequant_worker_fn = dequantize_tiled_worker_loop_q4_0; break;
+        case HTP_TYPE_IQ4_NL: dequant_worker_fn = dequantize_tiled_worker_loop_iq4_nl; break;
+        case HTP_TYPE_Q4_1:   dequant_worker_fn = dequantize_tiled_worker_loop_q4_1; break;
+        case HTP_TYPE_MXFP4:  dequant_worker_fn = dequantize_tiled_worker_loop_mxfp4; break;
+        case HTP_TYPE_Q8_0:   dequant_worker_fn = dequantize_tiled_worker_loop_q8_0; break;
         case HTP_TYPE_F16:    dequant_worker_fn = convert_f16_worker_loop; break;
         case HTP_TYPE_F32:    dequant_worker_fn = quantize_f32_worker_loop; break;
         default:
@@ -1867,7 +1868,7 @@ int hmx_matmul_id_2d_f32(struct htp_context *ctx,
             }
             dma_queue_pop(ctx->dma[0]);
 
-            dequantize_x4x2_weight_chunk_to_fp16_tiles(
+            dequantize_tiled_weight_chunk_to_fp16_tiles(
                 ctx, vtcm_scratch0, vtcm_weight,
                 n_cols, k, row_stride, weight_type, 
                 n_k_tiles, n_k_tiles_div, dequant_worker_fn, num_threads
