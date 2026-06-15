@@ -808,7 +808,7 @@ static void print_usage(int /*argc*/, char ** argv, const struct train_params * 
     fprintf(stderr, "  -h, --help                       show this help message and exit\n");
     fprintf(stderr, "  --copy-vocab-from-model FNAME    path of gguf llama model or llama2.c vocabulary from which to copy vocab (default '%s')\n", params->fn_vocab_model);
     fprintf(stderr, "  --llama2c-model FNAME            [REQUIRED] model path from which to load Karpathy's llama2.c model\n");
-    fprintf(stderr, "  --llama2c-output-model FNAME     model path to save the converted llama2.c model (default %s')\n", params->fn_llama2c_output_model);
+    fprintf(stderr, "  --llama2c-output-model FNAME     model path to save the converted llama2.c model (default '%s')\n", params->fn_llama2c_output_model);
     fprintf(stderr, "\n");
 }
 
