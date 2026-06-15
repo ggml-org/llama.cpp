@@ -209,6 +209,18 @@ struct tensor_metadata {
 // dequantization
 //
 
+static void llama_tensor_to_float_chunk(
+    ggml_type type, const ggml_type_traits * qtype, const void * input, float * output, int64_t nelements
+) {
+    if (type == GGML_TYPE_F16) {
+        ggml_fp16_to_fp32_row((const ggml_fp16_t *) input, output, nelements);
+    } else if (type == GGML_TYPE_BF16) {
+        ggml_bf16_to_fp32_row((const ggml_bf16_t *) input, output, nelements);
+    } else {
+        qtype->to_float(input, output, nelements);
+    }
+}
+
 static void llama_tensor_dequantize_chunk_impl(
     ggml_tensor * tensor, std::vector<no_init<float>> & output, std::vector<std::thread> & workers,
     const int64_t start, const size_t nelements, const int nthread
@@ -245,15 +257,7 @@ static void llama_tensor_dequantize_chunk_impl(
     uint8_t * input_data = (uint8_t *) tensor->data + input_offset;
 
     if (nthread < 2) {
-        if (tensor->type == GGML_TYPE_F16) {
-            ggml_fp16_to_fp32_row((ggml_fp16_t *) input_data, f32_output, nelements);
-        } else if (tensor->type == GGML_TYPE_BF16) {
-            ggml_bf16_to_fp32_row((ggml_bf16_t *) input_data, f32_output, nelements);
-        } else if (ggml_is_quantized(tensor->type)) {
-            qtype->to_float(input_data, f32_output, nelements);
-        } else {
-            GGML_ABORT("fatal error"); // unreachable
-        }
+        llama_tensor_to_float_chunk(tensor->type, qtype, input_data, f32_output, nelements);
         return;
     }
 
@@ -269,14 +273,8 @@ static void llama_tensor_dequantize_chunk_impl(
         size_t thr_elems = thr_blocks * block_size; // number of elements for this thread
         size_t thr_block_bytes = thr_blocks * block_size_bytes; // number of input bytes for this thread
 
-        auto compute = [qtype] (ggml_type typ, uint8_t * inbuf, float * outbuf, int64_t nels) {
-            if (typ == GGML_TYPE_F16) {
-                ggml_fp16_to_fp32_row((ggml_fp16_t *)inbuf, outbuf, nels);
-            } else if (typ == GGML_TYPE_BF16) {
-                ggml_bf16_to_fp32_row((ggml_bf16_t *)inbuf, outbuf, nels);
-            } else {
-                qtype->to_float(inbuf, outbuf, nels);
-            }
+        auto compute = [qtype] (ggml_type typ, const uint8_t * inbuf, float * outbuf, int64_t nels) {
+            llama_tensor_to_float_chunk(typ, qtype, inbuf, outbuf, nels);
         };
         workers.emplace_back(compute, tensor->type, input_data + in_buff_offs, f32_output + out_buff_offs, thr_elems);
         in_buff_offs += thr_block_bytes;
