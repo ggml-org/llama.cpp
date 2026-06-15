@@ -11,9 +11,7 @@ class common_chat_peg_mapper {
   public:
     common_chat_msg & result;
 
-    common_chat_peg_mapper(common_chat_msg & msg, bool is_partial = false) :
-        result(msg),
-        is_partial_(is_partial) {}
+    common_chat_peg_mapper(common_chat_msg & msg) : result(msg) {}
 
     virtual ~common_chat_peg_mapper() = default;
 
@@ -28,7 +26,6 @@ class common_chat_peg_mapper {
       int                                  arg_count             = 0;
       bool                                 closing_quote_pending = false;
       std::string                          args_buffer;  // Buffer to delay arguments until tool name is known
-      bool                                 is_partial_ = false;
 
       // Returns a reference to the active argument destination string.
       // Before tool_name is known, writes go to args_buffer; after, to current_tool->arguments.

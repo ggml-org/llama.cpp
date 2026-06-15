@@ -235,33 +235,6 @@ common_peg_parser common_chat_peg_builder::tag_with_safe_content(const std::stri
     return zero_or_more(choice({ p, content_chunk }));
 }
 
-static void finalize_incomplete_json_tool_args(std::string & args) {
-    if (args.empty() || args.front() != '{') {
-        return;
-    }
-    bool in_string = false;
-    bool escaped   = false;
-    for (char c : args) {
-        if (escaped) {
-            escaped = false;
-            continue;
-        }
-        if (c == '\\' && in_string) {
-            escaped = true;
-            continue;
-        }
-        if (c == '"') {
-            in_string = !in_string;
-        }
-    }
-    if (in_string) {
-        args += '"';
-    }
-    for (int d = json_brace_depth(args); d > 0; d--) {
-        args += '}';
-    }
-}
-
 std::string & common_chat_peg_mapper::args_target() {
     return (current_tool && !current_tool->name.empty()) ? current_tool->arguments : args_buffer;
 }
@@ -297,12 +270,6 @@ void common_chat_peg_mapper::from_ast(const common_peg_ast_arena &    arena,
         }
         if (all_whitespace) {
             result.reasoning_content.clear();
-        }
-    }
-
-    if (!is_partial_) {
-        for (auto & tool_call : result.tool_calls) {
-            finalize_incomplete_json_tool_args(tool_call.arguments);
         }
     }
 }
@@ -389,8 +356,7 @@ void common_chat_peg_mapper::map(const common_peg_ast_node & node) {
         ++arg_count;
 
         auto & target = args_target();
-        if (target.empty() || target == "{}") {
-            // "{}" can appear when partial parsing closes an empty arg placeholder too early.
+        if (target.empty()) {
             target = "{";
         }
         target += arg_entry;
@@ -437,12 +403,9 @@ void common_chat_peg_mapper::map(const common_peg_ast_node & node) {
             current_tool->arguments += "\"";
             closing_quote_pending = false;
         }
-        // Close any unclosed braces (accounts for nested objects).
-        // During partial parsing, keep a lone "{" open until the first arg arrives.
-        if (!(is_partial_ && arg_count == 0 && current_tool->arguments == "{")) {
-            for (int d = json_brace_depth(current_tool->arguments); d > 0; d--) {
-                current_tool->arguments += "}";
-            }
+        // Close any unclosed braces (accounts for nested objects)
+        for (int d = json_brace_depth(current_tool->arguments); d > 0; d--) {
+            current_tool->arguments += "}";
         }
         // Add tool call to results if named; otherwise discard
         if (pending_tool_call.has_value()) {
