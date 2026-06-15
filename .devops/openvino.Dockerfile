@@ -23,7 +23,7 @@ ARG APP_VERSION=N/A
 ARG APP_REVISION=N/A
 
 ## Build Image
-FROM ubuntu:${UBUNTU_VERSION} AS build
+FROM docker.io/ubuntu:${UBUNTU_VERSION} AS build
 
 # Pass proxy args to build stage
 ARG http_proxy
@@ -88,7 +88,7 @@ RUN mkdir -p /app/full \
     && cp .devops/tools.sh /app/full/tools.sh
 
 ## Base Runtime Image
-FROM ubuntu:${UBUNTU_VERSION} AS base
+FROM docker.io/ubuntu:${UBUNTU_VERSION} AS base
 
 # Pass proxy args to runtime stage
 ARG http_proxy
@@ -107,7 +107,7 @@ LABEL org.opencontainers.image.created=$BUILD_DATE \
       org.opencontainers.image.source=$IMAGE_SOURCE
 
 RUN apt-get update \
-    && apt-get install -y libgomp1 libtbb12 curl wget ocl-icd-libopencl1 \
+    && apt-get install -y libgomp1 libtbb12 curl wget ffmpeg ocl-icd-libopencl1 \
     && apt autoremove -y \
     && apt clean -y \
     && rm -rf /tmp/* /var/tmp/* \

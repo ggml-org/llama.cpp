@@ -478,7 +478,7 @@ bool set_socket_opt_time(socket_t sock, int level, int optname,
 }
 
 bool is_hex(char c, int &v) {
-  if (isdigit(c)) {
+  if (isdigit(static_cast<unsigned char>(c))) {
     v = c - '0';
     return true;
   } else if ('A' <= c && c <= 'F') {
@@ -731,7 +731,7 @@ std::string sha1(const std::string &input) {
   // Pre-processing: adding padding bits
   std::string msg = input;
   uint64_t original_bit_len = static_cast<uint64_t>(msg.size()) * 8;
-  msg.push_back(static_cast<char>(0x80));
+  msg.push_back(static_cast<char>(0x80u));
   while (msg.size() % 64 != 56) {
     msg.push_back(0);
   }
@@ -4336,7 +4336,7 @@ bool is_multipart_boundary_chars_valid(const std::string &boundary) {
   auto valid = true;
   for (size_t i = 0; i < boundary.size(); i++) {
     auto c = boundary[i];
-    if (!std::isalnum(c) && c != '-' && c != '_') {
+    if (!std::isalnum(static_cast<unsigned char>(c)) && c != '-' && c != '_') {
       valid = false;
       break;
     }
@@ -4545,6 +4545,14 @@ void coalesce_ranges(Ranges &ranges, size_t content_length) {
 
 bool range_error(Request &req, Response &res) {
   if (!req.ranges.empty() && 200 <= res.status && res.status < 300) {
+    if (res.body.empty() && res.content_provider_ && res.content_length_ == 0) {
+      req.ranges.clear();
+      if (res.status == StatusCode::PartialContent_206) {
+        res.status = StatusCode::OK_200;
+      }
+      return false;
+    }
+
     ssize_t content_len = static_cast<ssize_t>(
         res.content_length_ ? res.content_length_ : res.body.size());
 
@@ -4813,9 +4821,10 @@ private:
 namespace fields {
 
 bool is_token_char(char c) {
-  return std::isalnum(c) || c == '!' || c == '#' || c == '$' || c == '%' ||
-         c == '&' || c == '\'' || c == '*' || c == '+' || c == '-' ||
-         c == '.' || c == '^' || c == '_' || c == '`' || c == '|' || c == '~';
+  return std::isalnum(static_cast<unsigned char>(c)) || c == '!' || c == '#' ||
+         c == '$' || c == '%' || c == '&' || c == '\'' || c == '*' ||
+         c == '+' || c == '-' || c == '.' || c == '^' || c == '_' || c == '`' ||
+         c == '|' || c == '~';
 }
 
 bool is_token(const std::string &s) {
@@ -5306,41 +5315,68 @@ verify_cert_with_windows_schannel(const std::vector<unsigned char> &der_cert,
 }
 #endif // _WIN32
 
-bool setup_client_tls_session(const std::string &host, tls::ctx_t &ctx,
+// Loads CA file/dir configuration and applies the system CA policy to a
+// client TLS context. PEM data and native stores are applied to the context
+// directly at set time; has_custom_store reflects them for the Auto policy
+// decision.
+bool load_client_ca_config(tls::ctx_t ctx,
+                                  const std::string &ca_cert_file_path,
+                                  const std::string &ca_cert_dir_path,
+                                  bool has_custom_store, SystemCAMode mode,
+                                  uint64_t &backend_error) {
+  auto ret = true;
+
+  if (!ca_cert_file_path.empty()) {
+    if (!tls::load_ca_file(ctx, ca_cert_file_path.c_str())) {
+      backend_error = tls::get_error();
+      ret = false;
+    }
+  } else if (!ca_cert_dir_path.empty()) {
+    if (!tls::load_ca_dir(ctx, ca_cert_dir_path.c_str())) {
+      backend_error = tls::get_error();
+      ret = false;
+    }
+  }
+
+  auto has_custom_ca = !ca_cert_file_path.empty() ||
+                       !ca_cert_dir_path.empty() || has_custom_store;
+  if (mode == SystemCAMode::Enabled ||
+      (mode == SystemCAMode::Auto && !has_custom_ca)) {
+    if (!tls::load_system_certs(ctx)) { backend_error = tls::get_error(); }
+  }
+
+  return ret;
+}
+
+bool setup_client_tls_session(const std::string &host, tls::ctx_t ctx,
                                      tls::session_t &session, socket_t sock,
                                      bool server_certificate_verification,
-                                     const std::string &ca_cert_file_path,
-                                     tls::ca_store_t ca_cert_store,
                                      time_t timeout_sec, time_t timeout_usec) {
   using namespace tls;
 
-  ctx = create_client_context();
   if (!ctx) { return false; }
-
-  if (server_certificate_verification) {
-    if (!ca_cert_file_path.empty()) {
-      load_ca_file(ctx, ca_cert_file_path.c_str());
-    }
-    if (ca_cert_store) { set_ca_store(ctx, ca_cert_store); }
-    load_system_certs(ctx);
-  }
 
   bool is_ip = is_ip_address(host);
 
-#ifdef CPPHTTPLIB_MBEDTLS_SUPPORT
-  if (is_ip && server_certificate_verification) {
-    set_verify_client(ctx, false);
-  } else {
-    set_verify_client(ctx, server_certificate_verification);
-  }
+#if defined(CPPHTTPLIB_MBEDTLS_SUPPORT) || defined(CPPHTTPLIB_WOLFSSL_SUPPORT)
+  // Chain verification happens during the handshake even for IP hosts; the
+  // certificate identity is verified post-handshake via verify_hostname()
+  set_verify_client(ctx, server_certificate_verification);
 #endif
 
   session = create_session(ctx, sock);
   if (!session) { return false; }
 
-  // RFC 6066: SNI must not be set for IP addresses
-  if (!is_ip) { set_sni(session, host.c_str()); }
-  if (server_certificate_verification) { set_hostname(session, host.c_str()); }
+  // RFC 6066: SNI must not be set for IP addresses. On Mbed TLS and wolfSSL
+  // set_hostname also sets SNI, so it must be skipped for IP hosts as well;
+  // their identity is checked post-handshake below instead.
+  if (!is_ip) {
+    if (server_certificate_verification) {
+      set_hostname(session, host.c_str());
+    } else {
+      set_sni(session, host.c_str());
+    }
+  }
 
   if (!connect_nonblocking(session, sock, timeout_sec, timeout_usec, nullptr)) {
     return false;
@@ -5348,6 +5384,14 @@ bool setup_client_tls_session(const std::string &host, tls::ctx_t &ctx,
 
   if (server_certificate_verification) {
     if (get_verify_result(session) != 0) { return false; }
+
+    // Identity check against the peer certificate, post-handshake for all
+    // backends (same as SSLClient). For IP hosts this is the only identity
+    // verification since no hostname is bound during the handshake.
+    auto server_cert = get_peer_cert(session);
+    if (!server_cert) { return false; }
+    auto cert_guard = detail::scope_exit([&] { free_cert(server_cert); });
+    if (!verify_hostname(server_cert, host.c_str())) { return false; }
   }
 
   return true;
@@ -7194,6 +7238,11 @@ Server::set_expect_100_continue_handler(Expect100ContinueHandler handler) {
   return *this;
 }
 
+Server &Server::set_start_handler(StartHandler handler) {
+  start_handler_ = std::move(handler);
+  return *this;
+}
+
 Server &Server::set_address_family(int family) {
   address_family_ = family;
   return *this;
@@ -7889,6 +7938,8 @@ bool Server::listen_internal() {
   is_running_ = true;
   auto se = detail::scope_exit([&]() { is_running_ = false; });
 
+  if (start_handler_) { start_handler_(); }
+
   {
     std::unique_ptr<TaskQueue> task_queue(new_task_queue());
 
@@ -8032,26 +8083,26 @@ bool Server::routing(Request &req, Response &res, Stream &strm) {
       }
     }
 
-    // Read content into `req.body`
-    if (!read_content(strm, req, res)) {
-      output_error_log(Error::Read, &req);
-      return false;
-    }
+    // NOTE: `req.body` is not read here. For a regular handler the body is
+    // read inside dispatch_request(), after the route has matched and the
+    // pre-request handler has approved the request, so that a rejected
+    // request (e.g. failed authentication) never forces us to buffer a
+    // potentially large body.
   }
 
   // Regular handler
   if (req.method == "GET" || req.method == "HEAD") {
-    return dispatch_request(req, res, get_handlers_);
+    return dispatch_request(req, res, get_handlers_, strm);
   } else if (req.method == "POST") {
-    return dispatch_request(req, res, post_handlers_);
+    return dispatch_request(req, res, post_handlers_, strm);
   } else if (req.method == "PUT") {
-    return dispatch_request(req, res, put_handlers_);
+    return dispatch_request(req, res, put_handlers_, strm);
   } else if (req.method == "DELETE") {
-    return dispatch_request(req, res, delete_handlers_);
+    return dispatch_request(req, res, delete_handlers_, strm);
   } else if (req.method == "OPTIONS") {
-    return dispatch_request(req, res, options_handlers_);
+    return dispatch_request(req, res, options_handlers_, strm);
   } else if (req.method == "PATCH") {
-    return dispatch_request(req, res, patch_handlers_);
+    return dispatch_request(req, res, patch_handlers_, strm);
   }
 
   res.status = StatusCode::BadRequest_400;
@@ -8059,17 +8110,29 @@ bool Server::routing(Request &req, Response &res, Stream &strm) {
 }
 
 bool Server::dispatch_request(Request &req, Response &res,
-                                     const Handlers &handlers) const {
+                                     const Handlers &handlers, Stream &strm) {
   for (const auto &x : handlers) {
     const auto &matcher = x.first;
     const auto &handler = x.second;
 
     if (matcher->match(req)) {
       req.matched_route = matcher->pattern();
-      if (!pre_request_handler_ ||
-          pre_request_handler_(req, res) != HandlerResponse::Handled) {
-        handler(req, res);
+
+      // Run the pre-request handler before reading the body so a rejected
+      // request (e.g. failed authentication) never forces us to buffer a
+      // potentially large body. `req.matched_route` is available here.
+      if (pre_request_handler_ &&
+          pre_request_handler_(req, res) == HandlerResponse::Handled) {
+        return true;
       }
+
+      // The route matched and the request was approved; read the body now.
+      if (detail::expect_content(req) && !read_content(strm, req, res)) {
+        output_error_log(Error::Read, &req);
+        return false;
+      }
+
+      handler(req, res);
       return true;
     }
   }
@@ -8638,6 +8701,7 @@ void ClientImpl::copy_settings(const ClientImpl &rhs) {
   ca_cert_dir_path_ = rhs.ca_cert_dir_path_;
   server_certificate_verification_ = rhs.server_certificate_verification_;
   server_hostname_verification_ = rhs.server_hostname_verification_;
+  system_ca_mode_ = rhs.system_ca_mode_;
 #endif
 }
 
@@ -9420,6 +9484,7 @@ bool ClientImpl::create_redirect_client(
         server_certificate_verification_);
     redirect_client.enable_server_hostname_verification(
         server_hostname_verification_);
+    redirect_client.system_ca_mode_ = system_ca_mode_;
 
     // Transfer CA certificate to redirect client
     if (!ca_cert_pem_.empty()) {
@@ -11071,6 +11136,10 @@ void ClientImpl::enable_server_certificate_verification(bool enabled) {
 void ClientImpl::enable_server_hostname_verification(bool enabled) {
   server_hostname_verification_ = enabled;
 }
+
+void ClientImpl::enable_system_ca(bool enabled) {
+  system_ca_mode_ = enabled ? SystemCAMode::Enabled : SystemCAMode::Disabled;
+}
 #endif
 
 void ClientImpl::set_logger(Logger logger) {
@@ -12156,6 +12225,7 @@ void SSLClient::set_ca_cert_store(tls::ca_store_t ca_cert_store) {
   if (ca_cert_store && ctx_) {
     // set_ca_store takes ownership of ca_cert_store
     tls::set_ca_store(ctx_, ca_cert_store);
+    ca_cert_store_set_ = true;
   } else if (ca_cert_store) {
     tls::free_ca_store(ca_cert_store);
   }
@@ -12192,21 +12262,10 @@ bool SSLClient::load_certs() {
   std::call_once(initialize_cert_, [&]() {
     std::lock_guard<std::mutex> guard(ctx_mutex_);
 
-    if (!ca_cert_file_path_.empty()) {
-      if (!tls::load_ca_file(ctx_, ca_cert_file_path_.c_str())) {
-        last_backend_error_ = tls::get_error();
-        ret = false;
-      }
-    } else if (!ca_cert_dir_path_.empty()) {
-      if (!tls::load_ca_dir(ctx_, ca_cert_dir_path_.c_str())) {
-        last_backend_error_ = tls::get_error();
-        ret = false;
-      }
-    } else if (ca_cert_pem_.empty()) {
-      if (!tls::load_system_certs(ctx_)) {
-        last_backend_error_ = tls::get_error();
-      }
-    }
+    ret = detail::load_client_ca_config(
+        ctx_, ca_cert_file_path_, ca_cert_dir_path_,
+        !ca_cert_pem_.empty() || ca_cert_store_set_, system_ca_mode_,
+        last_backend_error_);
   });
 
   return ret;
@@ -12229,13 +12288,9 @@ bool SSLClient::initialize_ssl(Socket &socket, Error &error) {
 #if defined(CPPHTTPLIB_MBEDTLS_SUPPORT) || defined(CPPHTTPLIB_WOLFSSL_SUPPORT)
   // MbedTLS/wolfSSL need explicit verification mode (OpenSSL uses
   // SSL_VERIFY_NONE by default and performs all verification post-handshake).
-  // For IP addresses with verification enabled, use OPTIONAL mode since
-  // these backends require hostname for strict verification.
-  if (is_ip && server_certificate_verification_) {
-    set_verify_client(ctx_, false);
-  } else {
-    set_verify_client(ctx_, server_certificate_verification_);
-  }
+  // Chain verification happens during the handshake even for IP hosts; the
+  // certificate identity is verified post-handshake via verify_hostname().
+  set_verify_client(ctx_, server_certificate_verification_);
 #endif
 
   // Create TLS session
@@ -12335,9 +12390,12 @@ bool SSLClient::initialize_ssl(Socket &socket, Error &error) {
     // This provides real-time certificate validation with Windows Update
     // integration, working with both OpenSSL and MbedTLS backends.
     // Skip when a custom CA cert is specified, as the Windows certificate
-    // store would not know about user-provided CA certificates.
-    if (enable_windows_cert_verification_ && ca_cert_file_path_.empty() &&
-        ca_cert_dir_path_.empty() && ca_cert_pem_.empty()) {
+    // store would not know about user-provided CA certificates. Also skip
+    // when system CA trust is explicitly disabled.
+    if (enable_windows_cert_verification_ &&
+        system_ca_mode_ != SystemCAMode::Disabled &&
+        ca_cert_file_path_.empty() && ca_cert_dir_path_.empty() &&
+        ca_cert_pem_.empty() && !ca_cert_store_set_) {
       std::vector<unsigned char> der;
       if (get_cert_der(server_cert, der)) {
         uint64_t wincrypt_error = 0;
@@ -12376,6 +12434,10 @@ void Client::enable_server_hostname_verification(bool enabled) {
   cli_->enable_server_hostname_verification(enabled);
 }
 
+void Client::enable_system_ca(bool enabled) {
+  cli_->enable_system_ca(enabled);
+}
+
 #ifdef CPPHTTPLIB_WINDOWS_AUTOMATIC_ROOT_CERTIFICATES_UPDATE
 void Client::enable_windows_certificate_verification(bool enabled) {
   if (is_ssl_) {
@@ -12399,7 +12461,10 @@ void Client::set_ca_cert_store(tls::ca_store_t ca_cert_store) {
 }
 
 void Client::load_ca_cert_store(const char *ca_cert, std::size_t size) {
-  set_ca_cert_store(tls::create_ca_store(ca_cert, size));
+  if (is_ssl_) {
+    // Use the PEM-based path so the CA data is retained for redirect transfer
+    static_cast<SSLClient &>(*cli_).load_ca_cert_store(ca_cert, size);
+  }
 }
 
 void
@@ -13041,15 +13106,22 @@ bool set_hostname(session_t session, const char *hostname) {
 
   auto ssl = static_cast<SSL *>(session);
 
-  // Set SNI (Server Name Indication)
-  if (!set_sni(session, hostname)) { return false; }
-
   // Enable hostname verification
   auto param = SSL_get0_param(ssl);
   if (!param) return false;
 
-  X509_VERIFY_PARAM_set_hostflags(param, X509_CHECK_FLAG_NO_PARTIAL_WILDCARDS);
-  if (X509_VERIFY_PARAM_set1_host(param, hostname, 0) != 1) { return false; }
+  if (detail::is_ip_address(hostname)) {
+    // RFC 6066: SNI must not be set for IP addresses; verify against the
+    // certificate's IP SANs instead of its DNS names
+    if (X509_VERIFY_PARAM_set1_ip_asc(param, hostname) != 1) { return false; }
+  } else {
+    // Set SNI (Server Name Indication)
+    if (!set_sni(session, hostname)) { return false; }
+
+    X509_VERIFY_PARAM_set_hostflags(param,
+                                    X509_CHECK_FLAG_NO_PARTIAL_WILDCARDS);
+    if (X509_VERIFY_PARAM_set1_host(param, hostname, 0) != 1) { return false; }
+  }
 
   SSL_set_verify(ssl, SSL_VERIFY_PEER, nullptr);
   return true;
@@ -14279,6 +14351,14 @@ session_t create_session(ctx_t ctx, socket_t sock) {
     return nullptr;
   }
 
+  // Explicitly opt out of in-handshake hostname verification by default;
+  // since Mbed TLS 3.6.4 a client handshake with certificate verification
+  // fails outright when no hostname was set. set_sni() installs the real
+  // hostname for DNS hosts; for IP hosts (where SNI must not be set) the
+  // caller verifies the certificate identity post-handshake via
+  // verify_hostname().
+  mbedtls_ssl_set_hostname(&session->ssl, nullptr);
+
   // Set BIO callbacks
   mbedtls_ssl_set_bio(&session->ssl, &session->sock, impl::mbedtls_net_send_cb,
                       impl::mbedtls_net_recv_cb, nullptr);
@@ -14838,9 +14918,16 @@ bool set_ca_store(ctx_t ctx, ca_store_t store) {
   while (src != nullptr) {
     int ret = mbedtls_x509_crt_parse_der(&mbed_ctx->ca_chain, src->raw.p,
                                          src->raw.len);
-    if (ret != 0) { return false; }
+    if (ret != 0) {
+      free_ca_store(store);
+      return false;
+    }
     src = src->next;
   }
+
+  // This function takes ownership of the store; the chain was deep-copied
+  // above, so release the source
+  free_ca_store(store);
 
   // Update the SSL config to use the new CA chain
   mbedtls_ssl_conf_ca_chain(&mbed_ctx->conf, &mbed_ctx->ca_chain, nullptr);
@@ -15985,6 +16072,9 @@ bool set_ca_store(ctx_t ctx, ca_store_t store) {
       wctx->ctx, reinterpret_cast<const unsigned char *>(ca->pem_data.data()),
       static_cast<long>(ca->pem_data.size()), SSL_FILETYPE_PEM);
   if (ret == SSL_SUCCESS) { wctx->ca_pem_data_ += ca->pem_data; }
+  // This function takes ownership of the store; the PEM data was copied into
+  // the context, so release the source
+  free_ca_store(store);
   return ret == SSL_SUCCESS;
 }
 
@@ -16343,9 +16433,16 @@ WebSocketClient::WebSocketClient(
     if (!uc.port.empty() && !detail::parse_port(uc.port, port_)) { return; }
 
     path_ = std::move(uc.path);
+    if (!uc.query.empty()) { path_ += uc.query; }
 
 #ifdef CPPHTTPLIB_SSL_ENABLED
     is_ssl_ = is_ssl;
+    if (is_ssl_) {
+      // The context lives as long as the client so that CA configuration
+      // survives reconnects; sessions are created per connection.
+      tls_ctx_ = tls::create_client_context();
+      if (!tls_ctx_) { return; }
+    }
 #else
     if (is_ssl) { return; }
 #endif
@@ -16354,7 +16451,15 @@ WebSocketClient::WebSocketClient(
   }
 }
 
-WebSocketClient::~WebSocketClient() { shutdown_and_close(); }
+WebSocketClient::~WebSocketClient() {
+  shutdown_and_close();
+#ifdef CPPHTTPLIB_SSL_ENABLED
+  if (tls_ctx_) {
+    tls::free_context(tls_ctx_);
+    tls_ctx_ = nullptr;
+  }
+#endif
+}
 
 bool WebSocketClient::is_valid() const { return is_valid_; }
 
@@ -16365,10 +16470,6 @@ void WebSocketClient::shutdown_and_close() {
       tls::shutdown(tls_session_, true);
       tls::free_session(tls_session_);
       tls_session_ = nullptr;
-    }
-    if (tls_ctx_) {
-      tls::free_context(tls_ctx_);
-      tls_ctx_ = nullptr;
     }
   }
 #endif
@@ -16384,10 +16485,18 @@ void WebSocketClient::shutdown_and_close() {
 bool WebSocketClient::create_stream(std::unique_ptr<Stream> &strm) {
 #ifdef CPPHTTPLIB_SSL_ENABLED
   if (is_ssl_) {
-    if (!detail::setup_client_tls_session(
-            host_, tls_ctx_, tls_session_, sock_,
-            server_certificate_verification_, ca_cert_file_path_,
-            ca_cert_store_, read_timeout_sec_, read_timeout_usec_)) {
+    if (server_certificate_verification_ && !certs_loaded_) {
+      uint64_t backend_error = 0;
+      detail::load_client_ca_config(tls_ctx_, ca_cert_file_path_, std::string(),
+                                    custom_ca_loaded_, system_ca_mode_,
+                                    backend_error);
+      certs_loaded_ = true;
+    }
+
+    if (!detail::setup_client_tls_session(host_, tls_ctx_, tls_session_, sock_,
+                                          server_certificate_verification_,
+                                          read_timeout_sec_,
+                                          read_timeout_usec_)) {
       return false;
     }
 
@@ -16407,9 +16516,14 @@ bool WebSocketClient::connect() {
   if (!is_valid_) { return false; }
   shutdown_and_close();
 
+  // Check is custom IP specified for host_
+  std::string ip;
+  auto it = addr_map_.find(host_);
+  if (it != addr_map_.end()) { ip = it->second; }
+
   Error error;
   sock_ = detail::create_client_socket(
-      host_, std::string(), port_, address_family_, tcp_nodelay_, ipv6_v6only_,
+      host_, ip, port_, address_family_, tcp_nodelay_, ipv6_v6only_,
       socket_options_, connection_timeout_sec_, connection_timeout_usec_,
       read_timeout_sec_, read_timeout_usec_, write_timeout_sec_,
       write_timeout_usec_, interface_, error);
@@ -16504,6 +16618,11 @@ void WebSocketClient::set_interface(const std::string &intf) {
   interface_ = intf;
 }
 
+void WebSocketClient::set_hostname_addr_map(
+    std::map<std::string, std::string> addr_map) {
+  addr_map_ = std::move(addr_map);
+}
+
 #ifdef CPPHTTPLIB_SSL_ENABLED
 
 void WebSocketClient::set_ca_cert_path(const std::string &path) {
@@ -16511,12 +16630,30 @@ void WebSocketClient::set_ca_cert_path(const std::string &path) {
 }
 
 void WebSocketClient::set_ca_cert_store(tls::ca_store_t store) {
-  ca_cert_store_ = store;
+  if (store && tls_ctx_) {
+    // set_ca_store takes ownership of store
+    tls::set_ca_store(tls_ctx_, store);
+    custom_ca_loaded_ = true;
+  } else if (store) {
+    tls::free_ca_store(store);
+  }
+}
+
+void WebSocketClient::load_ca_cert_store(const char *ca_cert,
+                                                std::size_t size) {
+  if (tls_ctx_ && ca_cert && size > 0) {
+    tls::load_ca_pem(tls_ctx_, ca_cert, size);
+    custom_ca_loaded_ = true;
+  }
 }
 
 void
 WebSocketClient::enable_server_certificate_verification(bool enabled) {
   server_certificate_verification_ = enabled;
+}
+
+void WebSocketClient::enable_system_ca(bool enabled) {
+  system_ca_mode_ = enabled ? SystemCAMode::Enabled : SystemCAMode::Disabled;
 }
 
 #endif // CPPHTTPLIB_SSL_ENABLED

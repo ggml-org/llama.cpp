@@ -1,7 +1,7 @@
 #include "models.h"
 
 ggml_cgraph * clip_graph_granite_speech::build() {
-    const int n_frames     = img.nx;
+    const int n_frames     = img.nx();
     const int context_size = hparams.audio_chunk_size;
     const int ctc_layer    = n_layer / 2;
     const int conv_kernel  = hparams.audio_conv_kernel_size;
