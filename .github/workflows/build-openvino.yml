@@ -37,10 +37,6 @@ jobs:
   ubuntu-24-openvino:
     runs-on: [self-hosted, Linux, Intel, OpenVINO]
 
-    concurrency:
-      group: openvino-gpu-${{ github.head_ref || github.ref }}
-      cancel-in-progress: false
-
     env:
       # Sync versions in build-openvino.yml, build-self-hosted.yml, release.yml, build-cache.yml, .devops/openvino.Dockerfile
       OPENVINO_VERSION_MAJOR: "2026.2"

@@ -264,10 +264,6 @@ jobs:
   gpu-openvino-low-perf:
     runs-on: [self-hosted, Linux, Intel, OpenVINO]
 
-    concurrency:
-      group: openvino-gpu-${{ github.head_ref || github.ref }}
-      cancel-in-progress: false
-
     env:
       # Sync versions in build.yml, build-self-hosted.yml, release.yml, build-cache.yml, .devops/openvino.Dockerfile
       OPENVINO_VERSION_MAJOR: "2026.2"
