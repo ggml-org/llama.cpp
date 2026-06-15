@@ -3127,6 +3127,20 @@ private:
                             break;
                         }
 
+                        // Preserve the reusable prefix before entering a media chunk. Checkpoints
+                        // created after MTMD processing are not safe to restore.
+                        if (do_checkpoint && !has_mtmd) {
+                            const auto pos_min = llama_memory_seq_pos_min(llama_get_memory(ctx_tgt), slot.id);
+                            const auto pos_max = llama_memory_seq_pos_max(llama_get_memory(ctx_tgt), slot.id);
+                            const bool is_spaced =
+                                    slot.prompt.checkpoints.empty() ||
+                                    cur_token_idx > slot.prompt.checkpoints.back().n_tokens + params_base.checkpoint_min_step;
+
+                            if (pos_min >= 0 && is_spaced) {
+                                create_checkpoint(slot, 0, pos_min, pos_max);
+                            }
+                        }
+
                         // process the image
                         size_t n_tokens_out = 0;
                         int32_t res = slot.process_mtmd_chunk(cur_token_idx, n_tokens_out);
