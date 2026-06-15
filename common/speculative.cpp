@@ -2107,7 +2107,7 @@ void common_speculative_print_stats(const common_speculative * spec) {
             str_perf = "";
         }
 
-        std::string str_acceptance_stats;
+        std::string str_stats;
         if (impl->n_draft_verif_steps > 0) {
             const double mean_acceptance_length =
                 1.0 + (double) impl->n_acc_tokens / (double) impl->n_draft_verif_steps;
