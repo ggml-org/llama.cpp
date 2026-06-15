@@ -475,7 +475,7 @@ static void test_example_qwen3_coder(testing & t) {
             }
 
             common_chat_msg msg;
-            auto            mapper = common_chat_peg_mapper(msg, is_partial);
+            auto            mapper = common_chat_peg_mapper(msg);
             mapper.from_ast(ctx.ast, result);
 
             //t.log("Input: " + input);
@@ -574,7 +574,7 @@ static void test_example_qwen3_non_coder(testing & t) {
             }
 
             common_chat_msg msg;
-            auto            mapper = common_chat_peg_mapper(msg, is_partial);
+            auto            mapper = common_chat_peg_mapper(msg);
             mapper.from_ast(ctx.ast, result);
 
             //t.log("Input: " + input);
@@ -631,7 +631,7 @@ void test_command7_parser_compare(testing & t) {
         auto                     result = p.parse(ctx);
 
         common_chat_msg msg;
-        auto            mapper = common_chat_peg_mapper(msg, is_partial);
+        auto            mapper = common_chat_peg_mapper(msg);
         mapper.from_ast(ctx.ast, result);
 
         if (print_results) {
@@ -834,7 +834,7 @@ static void test_prefix_tool_names(testing & t) {
             }
 
             common_chat_msg msg;
-            auto            mapper = common_chat_peg_mapper(msg, is_partial);
+            auto            mapper = common_chat_peg_mapper(msg);
             mapper.from_ast(ctx.ast, result);
 
             // The critical check: during incremental parsing, we should never

@@ -2362,17 +2362,10 @@ static void func_args_not_string(json & messages) {
                 if (tool_call.contains("function") && tool_call["function"].contains("arguments")) {
                     auto & args = tool_call["function"]["arguments"];
                     if (args.is_string()) {
-                        const std::string args_str = args.get<std::string>();
                         try {
-                            args = json::parse(args_str);
+                            args = json::parse(args.get<std::string>());
                         } catch (const std::exception & e) {
-                            // Agent clients may replay history with truncated or malformed
-                            // tool-call JSON (e.g. partial model output). Keep the turn
-                            // alive by falling back to an empty object for Jinja templates
-                            // that expect object arguments.
-                            LOG_WRN("%s: failed to parse tool call arguments as JSON, using empty object: %s (args=%s)\n",
-                                    __func__, e.what(), args_str.c_str());
-                            args = json::object();
+                            throw std::runtime_error("Failed to parse tool call arguments as JSON: " + std::string(e.what()));
                         }
                     }
                 }
@@ -2725,7 +2718,7 @@ common_chat_msg common_chat_peg_parse(const common_peg_arena &          src_pars
             if (params.format == COMMON_CHAT_FORMAT_PEG_GEMMA4) {
                 mapper = std::make_unique<common_chat_peg_gemma4_mapper>(msg);
             } else {
-                mapper = std::make_unique<common_chat_peg_mapper>(msg, is_partial);
+                mapper = std::make_unique<common_chat_peg_mapper>(msg);
             }
             mapper->from_ast(ctx.ast, result);
 
@@ -2747,7 +2740,7 @@ common_chat_msg common_chat_peg_parse(const common_peg_arena &          src_pars
     if (params.format == COMMON_CHAT_FORMAT_PEG_GEMMA4) {
         mapper = std::make_unique<common_chat_peg_gemma4_mapper>(msg);
     } else {
-        mapper = std::make_unique<common_chat_peg_mapper>(msg, is_partial);
+        mapper = std::make_unique<common_chat_peg_mapper>(msg);
     }
     mapper->from_ast(ctx.ast, result);
 
