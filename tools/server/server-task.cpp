@@ -274,7 +274,11 @@ task_params server_task::params_from_json_cmpl(
     params.n_cache_reuse    = json_value(data,       "n_cache_reuse",      defaults.n_cache_reuse);
     //params.t_max_prompt_ms  = json_value(data,       "t_max_prompt_ms",    defaults.t_max_prompt_ms); // TODO: implement
     params.t_max_predict_ms = json_value(data,       "t_max_predict_ms",   defaults.t_max_predict_ms);
-    params.response_fields  = json_value(data,       "response_fields",    std::vector<std::string>());
+    params.response_fields  = json_value(data,       "response_fields",   std::vector<std::string>());
+    // support "requested_fields" as an alias for "response_fields"
+    if (!data.contains("response_fields") && data.contains("requested_fields")) {
+        params.response_fields = json_value(data, "requested_fields", std::vector<std::string>());
+    }
 
     params.sampling.top_k              = json_value(data, "top_k",               defaults.sampling.top_k);
     params.sampling.top_p              = json_value(data, "top_p",               defaults.sampling.top_p);
@@ -820,7 +824,7 @@ json server_task_result_cmpl_final::to_json_oaicompat() {
         res.push_back({"timings", timings.to_json()});
     }
 
-    return res;
+    return response_fields.empty() ? res : json_get_nested_values(response_fields, res);
 }
 
 json server_task_result_cmpl_final::to_json_oaicompat_chat() {
@@ -868,7 +872,7 @@ json server_task_result_cmpl_final::to_json_oaicompat_chat() {
         res.push_back({"timings", timings.to_json()});
     }
 
-    return res;
+    return response_fields.empty() ? res : json_get_nested_values(response_fields, res);
 }
 
 json server_task_result_cmpl_final::to_json_oaicompat_chat_stream() {
@@ -1004,7 +1008,7 @@ json server_task_result_cmpl_final::to_json_oaicompat_resp() {
         }},
     };
 
-    return res;
+    return response_fields.empty() ? res : json_get_nested_values(response_fields, res);
 }
 
 json server_task_result_cmpl_final::to_json_oaicompat_resp_stream() {
@@ -1197,7 +1201,7 @@ json server_task_result_cmpl_final::to_json_anthropic() {
         }}
     };
 
-    return res;
+    return response_fields.empty() ? res : json_get_nested_values(response_fields, res);
 }
 
 json server_task_result_cmpl_final::to_json_anthropic_stream() {
