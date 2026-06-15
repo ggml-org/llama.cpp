@@ -2120,13 +2120,34 @@ private:
     // n_tokens_cur: the number of tokens added to the batch for the current slot
     void create_checkpoint(server_slot & slot, const int64_t n_tokens_cur, llama_pos pos_min, llama_pos pos_max) {
         while (slot.prompt.checkpoints.size() >= (size_t) params_base.n_ctx_checkpoints) {
-            // make room for the new checkpoint, if needed
-            const auto & cur = slot.prompt.checkpoints.front();
+            // Preserve the oldest anchor and the most recent checkpoint. Removing the checkpoint
+            // from the densest interior interval keeps coverage across the full prompt history.
+            size_t erase_idx = 0;
 
-            SLT_WRN(slot, "erasing old context checkpoint (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", size = %.3f MiB)\n",
-                    cur.pos_min, cur.pos_max, cur.n_tokens, (float) cur.size() / 1024 / 1024);
+            if (slot.prompt.checkpoints.size() > 2) {
+                erase_idx = 1;
+                int64_t min_merged_span =
+                        slot.prompt.checkpoints[2].n_tokens -
+                        slot.prompt.checkpoints[0].n_tokens;
 
-            slot.prompt.checkpoints.erase(slot.prompt.checkpoints.begin());
+                for (size_t i = 2; i + 1 < slot.prompt.checkpoints.size(); ++i) {
+                    const int64_t merged_span =
+                            slot.prompt.checkpoints[i + 1].n_tokens -
+                            slot.prompt.checkpoints[i - 1].n_tokens;
+
+                    if (merged_span < min_merged_span) {
+                        erase_idx = i;
+                        min_merged_span = merged_span;
+                    }
+                }
+            }
+
+            const auto & cur = slot.prompt.checkpoints[erase_idx];
+
+            SLT_WRN(slot, "erasing redundant context checkpoint (pos_min = %d, pos_max = %d, pos_end = %d, n_tokens = %" PRId64 ", size = %.3f MiB)\n",
+                    cur.pos_min, cur.pos_max, cur.pos_end, cur.n_tokens, (float) cur.size() / 1024 / 1024);
+
+            slot.prompt.checkpoints.erase(slot.prompt.checkpoints.begin() + erase_idx);
         }
 
         auto & cur = slot.prompt.checkpoints.emplace_back();
@@ -2141,9 +2162,9 @@ private:
         cur.update_dft(ctx_dft.get(), slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
 
         SLT_INF(slot,
-                "created context checkpoint %d of %d (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", size = %.3f MiB)\n",
+                "created context checkpoint %d of %d (pos_min = %d, pos_max = %d, pos_end = %d, n_tokens = %" PRId64 ", size = %.3f MiB)\n",
                 (int) slot.prompt.checkpoints.size(), params_base.n_ctx_checkpoints, cur.pos_min,
-                cur.pos_max, cur.n_tokens, (float) cur.size() / 1024 / 1024);
+                cur.pos_max, cur.pos_end, cur.n_tokens, (float) cur.size() / 1024 / 1024);
     }
 
     void process_single_task(server_task && task) {
@@ -2884,7 +2905,7 @@ private:
                             }
 
                             llama_pos pos_next = slot.prompt.tokens.pos_next(n_past);
-                            const llama_pos prompt_end = slot.task->tokens.pos_next();
+                            const llama_pos prefix_end = pos_next;
                             const bool is_recurrent_or_hybrid =
                                     llama_model_is_recurrent(model_tgt) ||
                                     llama_model_is_hybrid(model_tgt);
@@ -2951,12 +2972,16 @@ private:
                                         slot.prompt.checkpoints.rbegin(),
                                         slot.prompt.checkpoints.rend(),
                                         [&, func_name = __func__](const auto & cur) {
-                                            if (cur.pos_end > prompt_end) {
+                                            // guarantee that a checkpoint will result in at least one token being processed [TAG_PROMPT_LOGITS]
+                                            LOG_INF("slot %12.*s: id %2d | task %d | Checking checkpoint with [%d, %d], pos_end = %d against prefix_end = %d, threshold = %d...\n", 12,
+                                                func_name, (slot).id, ((slot).task ? (slot).task->id : -1), cur.pos_min, cur.pos_max, cur.pos_end, prefix_end, pos_min_thold);
+
+                                            // A checkpoint is reusable only if the entire saved state belongs to the
+                                            // common prompt prefix. Memory ranges alone are not sufficient for recurrent
+                                            // and hybrid models because they do not necessarily cover the full prefix.
+                                            if (cur.pos_end > prefix_end) {
                                                 return false;
                                             }
-                                            // guarantee that a checkpoint will result in at least one token being processed [TAG_PROMPT_LOGITS]
-                                            LOG_INF("slot %12.*s: id %2d | task %d | Checking checkpoint with [%d, %d] against %d...\n", 12,
-                                                func_name, (slot).id, ((slot).task ? (slot).task->id : -1), cur.pos_min, cur.pos_max, pos_min_thold);
                                             // workaround for [TAG_CHECKPOINTS_FIX_POS_MIN]
                                             if (is_recurrent_or_hybrid) {
                                                 return cur.pos_max < pos_next || cur.pos_min == 0;
@@ -2977,7 +3002,7 @@ private:
 
                                         pos_next = std::min(pos_next, std::max(it->pos_min + 1, it->pos_max));
                                         n_past   = std::min(slot.prompt.tokens.size_up_to_pos(pos_next), (size_t) it->n_tokens);
-                                        SLT_WRN(slot, "restored context checkpoint (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", n_past = %d, size = %.3f MiB)\n", it->pos_min, it->pos_max, it->n_tokens, n_past, (float) it->size() / 1024 / 1024);
+                                        SLT_WRN(slot, "restored context checkpoint (pos_min = %d, pos_max = %d, pos_end = %d, n_tokens = %" PRId64 ", n_past = %d, size = %.3f MiB)\n", it->pos_min, it->pos_max, it->pos_end, it->n_tokens, n_past, (float) it->size() / 1024 / 1024);
                                     }
 
                                     if (do_reset) {
@@ -2990,11 +3015,16 @@ private:
                             }
 
                             {
-                                // erase any checkpoints with pos_max > pos_next
+                                // erase checkpoints that extend beyond the matching prefix. Dense models also
+                                // invalidate checkpoints beyond the restored memory range, but recurrent/hybrid
+                                // checkpoints can legitimately have a larger pos_max while still belonging to
+                                // the same prompt prefix.
                                 for (auto it = slot.prompt.checkpoints.begin(); it != slot.prompt.checkpoints.end();) {
                                     const auto & cur = *it;
-                                    if (cur.pos_end > prompt_end || cur.pos_max > pos_next) {
-                                        SLT_WRN(slot, "erased invalidated context checkpoint (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", n_swa = %d, pos_next = %d, size = %.3f MiB)\n", cur.pos_min, cur.pos_max, cur.n_tokens, n_swa, pos_next, (float) cur.size() / 1024 / 1024);
+                                    const bool invalid_prefix = cur.pos_end > prefix_end;
+                                    const bool invalid_memory = !is_recurrent_or_hybrid && cur.pos_max > pos_next;
+                                    if (invalid_prefix || invalid_memory) {
+                                        SLT_WRN(slot, "erased invalidated context checkpoint (pos_min = %d, pos_max = %d, pos_end = %d, n_tokens = %" PRId64 ", n_swa = %d, prefix_end = %d, pos_next = %d, size = %.3f MiB)\n", cur.pos_min, cur.pos_max, cur.pos_end, cur.n_tokens, n_swa, prefix_end, pos_next, (float) cur.size() / 1024 / 1024);
                                         it = slot.prompt.checkpoints.erase(it);
                                     } else {
                                         ++it;
