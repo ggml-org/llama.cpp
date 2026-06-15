@@ -97,11 +97,11 @@ void quantize_row_q4_0_ref(const float * GGML_RESTRICT x, block_q4_0 * GGML_REST
         y[i].d = GGML_FP32_TO_FP16(d);
 
         for (int j = 0; j < qk/2; ++j) {
-            const float x0 = x[i*qk + 0    + j]*id;
-            const float x1 = x[i*qk + qk/2 + j]*id;
+            const float x0 = x[i*qk + 0    + j]*id;	// -8 .. 8
+            const float x1 = x[i*qk + qk/2 + j]*id;	// dito
 
-            const uint8_t xi0 = MIN(15, (int8_t)(x0 + 8.5f));
-            const uint8_t xi1 = MIN(15, (int8_t)(x1 + 8.5f));
+            const uint8_t xi0 = MIN(15, (int8_t)(x0 + 8.5f));	// -> 0.5 .. 16.5
+            const uint8_t xi1 = MIN(15, (int8_t)(x1 + 8.5f));	// -> 0 .. 15 (with 0 underfilled and 15 overfilled, clipping -MAX to 7/8 of it)
 
             y[i].qs[j]  = xi0;
             y[i].qs[j] |= xi1 << 4;
@@ -240,15 +240,29 @@ void quantize_row_q8_0_ref(const float * GGML_RESTRICT x, block_q8_0 * GGML_REST
     const int nb = k / QK8_0;
 
     for (int i = 0; i < nb; i++) {
-        float amax = 0.0f; // absolute max
+        float pmax = 0.0f; // positive max
+        float nmax = 0.0f; // negative max
 
         for (int j = 0; j < QK8_0; j++) {
             const float v = x[i*QK8_0 + j];
-            amax = MAX(amax, fabsf(v));
+            pmax = MAX(pmax, v);
+            nmax = MIN(nmax, v);
         }
-
-        const float d = amax / ((1 << 7) - 1);
-        const float id = d ? 1.0f/d : 0.0f;
+        // Ensure pmax is the absolute largest by swapping if needed
+        if (fabs(pmax) < fabs(nmax)) {
+            const float tmp = pmax;
+            pmax = nmax;
+            nmax = tmp;
+        }
+        // Scale pmax to become -128 ...
+        float d = pmax/-128;
+        float id = d? 1.0f/d: 0.0f;
+        // ... except if that overflows nmax
+        // then scale nmax to be +127
+        if (roundf(nmax * id) > 127) {
+            d = nmax/127;
+            id = 1.0f/d;
+        }
 
         y[i].d = GGML_FP32_TO_FP16(d);
 
