@@ -134,7 +134,7 @@ common_peg_arena autoparser::build_parser(const generation_params & inputs, cons
             auto response_format = p.rule("response-format", p.content(p.schema(p.json(), "response-format-schema", inputs.json_schema)));
             parser = ctx.reasoning_parser + p.space() + p.choice({
                 p.literal("```json") + p.space() + response_format + p.space() + p.literal("```"),
-                response_format
+                p.space() + response_format  + p.space()
             }) + p.end();
             pure_content = false;
         } else if (has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE && jinja_caps.supports_tool_calls) {
@@ -393,8 +393,7 @@ common_peg_parser analyze_tools::build_tool_parser_tag_tagged(parser_build_conte
                            (schema_info.resolves_to_string(param_schema) ?
                                 p.tool_arg_string_value(until_suffix) :
                                 p.tool_arg_json_value(p.schema(
-                                    p.json(), "tool-" + name + "-arg-" + param_name + "-schema", param_schema, false)) +
-                                    p.space()) +
+                                    p.json(), "tool-" + name + "-arg-" + param_name + "-schema", param_schema, false))) +
                            p.tool_arg_close(p.literal(arguments.value_suffix)));
 
             auto named_arg = p.rule("tool-" + name + "-arg-" + param_name, arg);

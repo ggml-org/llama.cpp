@@ -1935,6 +1935,10 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
         }
     })";
 
+    const char * const_schema = R"({
+        "const": "42"
+    })";
+
     {
         // Qwen3.5 (basically same as Nemotron, but keeping separate tests just in case)
         auto tst = peg_tester("models/templates/Qwen3.5-4B.jinja", detailed_debug);
@@ -2017,6 +2021,25 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
         })
             .expect_tool_calls({
                 { "python", "{\"code\": \"def hello():\\n    print(\\\"Hello, world!\\\")\\n\\nhello()\"}", {} },
+            })
+            .run();
+
+        // test code that starts with indent
+        tst.test(
+               "<tool_call>\n"
+               "<function=python>\n"
+               "<parameter=code>\n"
+               "    print(\"Hello, world!\")\n"
+               "</parameter>\n"
+               "</function>\n"
+               "</tool_call>")
+            .enable_thinking(false)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({
+                python_tool
+        })
+            .expect_tool_calls({
+                { "python", "{\"code\": \"    print(\\\"Hello, world!\\\")\"}", {} },
             })
             .run();
 
@@ -3196,18 +3219,16 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
         tst.test(
                "<seed:tool_call>\n"
                "<function=edit>\n"
-               "<parameter=filename>\n"
-               "foo.cpp\n"
+               "<parameter=filename>"
+               "foo.cpp"
                "</parameter>\n"
                "<parameter=oldString>"
                "def foo(arg = \"14\"):\n"
                "    return arg + \"bar\"\n"
-               "\n"
                "</parameter>\n"
                "<parameter=newString>"
                "def foo(arg = \"15\"):\n"
                "    pass\n"
-               "\n"
                "</parameter>\n"
                "</function>\n"
                "</seed:tool_call>")
@@ -4926,6 +4947,20 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
         // Llama 3.1
         auto tst = peg_tester("models/templates/meta-llama-Llama-3.1-8B-Instruct.jinja", detailed_debug);
         tst.test("Hello, world!\nWhat's up?").tools({ special_function_tool }).expect(message_assist).expect_reconstruction().run();
+
+        tst.test(
+             "```json\n\"42\" \n```")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .json_schema(const_schema)
+            .expect_content(R"("42")")
+            .run();
+
+        tst.test(
+             "\"42\" \n")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .json_schema(const_schema)
+            .expect_content(R"("42")")
+            .run();
 
         // Continuation tests
         tst.test("world!\nWhat's up?")
