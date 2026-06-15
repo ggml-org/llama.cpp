@@ -3089,7 +3089,7 @@ int op_matmul(struct htp_ops_context * octx) {
             hmx_matmul_f16_f32_batched_params_t batch_params = {
                 .dst             = (float *) dst->data,
                 .activation      = (float *) src1->data,
-                .permuted_weight = (const __fp16 *) src0->data,
+                .weight          = (const __fp16 *) src0->data,
                 .m               = m_total,
                 .k               = k,
                 .n               = n,

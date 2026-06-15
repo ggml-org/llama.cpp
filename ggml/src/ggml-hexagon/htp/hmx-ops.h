@@ -16,7 +16,7 @@ extern "C" {
 typedef struct {
     float        *dst;
     const float  *activation;
-    const __fp16 *permuted_weight;
+    const __fp16 *weight;
     int           m;
     int           k;
     int           n;
@@ -43,7 +43,7 @@ typedef struct {
 int hmx_matmul_f16_f32(struct htp_context *ctx,
                                 float *restrict dst,
                                 const float *activation,
-                                const __fp16 *permuted_weight,
+                                const __fp16 *weight,
                                 int m, int k, int n,
                                 int act_stride,
                                 int weight_stride);
@@ -56,7 +56,7 @@ int hmx_matmul_f16_f32_batched(struct htp_context *ctx, const hmx_matmul_f16_f32
 int hmx_matmul_2d_f32(struct htp_context *ctx,
                                       float *restrict dst,
                                       const float *activation,
-                                      const uint8_t *permuted_weight,
+                                      const uint8_t *weight,
                                       int m, int k, int n,
                                       int act_stride,
                                       int weight_stride,
@@ -70,7 +70,7 @@ struct mmid_row_mapping;
 int hmx_matmul_id_2d_f32(struct htp_context *ctx,
                                          float *restrict dst,
                                          const float *activation,
-                                         const uint8_t *permuted_weight,
+                                         const uint8_t *weight,
                                          int m, int k, int n,
                                          int k_valid,
                                          int ne11,
