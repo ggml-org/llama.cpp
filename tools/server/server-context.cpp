@@ -15,11 +15,6 @@
 #include "mtmd.h"
 #include "mtmd-helper.h"
 
-#include "ggml-cpp.h"
-
-// TODO: tmp until the mtmd draft processing is refactored [TAG_MTMD_DRAFT_PROCESSING]
-#include "../../src/llama-ext.h"
-
 #include <algorithm>
 #include <cstddef>
 #include <cinttypes>
@@ -81,7 +76,6 @@ struct server_slot {
     // multimodal
     mtmd_context * mctx = nullptr;
     mtmd::batch_ptr mbatch = nullptr;
-    std::array<llama_context *, 2> mtgt = {nullptr, nullptr}; // [0] for main context, [1] for optional draft context
 
     // speculative decoding
     common_speculative * spec;
@@ -244,15 +238,6 @@ struct server_slot {
 
         // clear multimodal state
         mbatch.reset();
-        mtgt[0] = ctx_tgt;
-        mtgt[1] = nullptr;
-        if (ctx_dft && llama_get_ctx_other(ctx_dft) != ctx_tgt) {
-            // TODO: in the future, figure out how to infuse target embeddings to the images
-            //       for now, we re-decode the same chunk in both ctx_tgt and ctx_dft
-            //       maybe we simply need to call `common_speculative_process()` ?
-            //       [TAG_MTMD_DRAFT_PROCESSING]
-            mtgt[1] = ctx_dft;
-        }
     }
 
     void init_sampler() const {
@@ -598,32 +583,38 @@ struct server_slot {
     int process_mtmd_chunk(size_t idx, size_t & n_tokens_out) {
         GGML_ASSERT(mctx);
         const auto & input_tokens = task->tokens;
-        auto & chunk = input_tokens.find_chunk(idx);
+        const auto & chunk = input_tokens.find_chunk(idx);
         int32_t res = 0;
 
         auto try_decode = [&]() -> int32_t {
             if (mbatch) {
                 float * embd = mtmd_batch_get_output_embd(mbatch.get(), chunk.get());
                 if (embd) {
-                    for (auto * lctx : mtgt) {
-                        if (lctx == nullptr) {
-                            continue;
+                    void * cb_data = spec;
+                    static auto cb = [](llama_batch batch, void * user_data) {
+                        common_speculative * spec = static_cast<common_speculative *>(user_data);
+                        if (!common_speculative_process(spec, batch)) {
+                            return 1;
                         }
-                        llama_pos new_n_past; // unused for now
-                        res = mtmd_helper_decode_image_chunk(
-                            mctx,
-                            lctx,
-                            chunk.get(),
-                            embd,
-                            prompt.tokens.pos_next(),
-                            id,
-                            llama_n_batch(lctx),
-                            &new_n_past
-                        );
-                        if (res != 0) {
-                            SLT_ERR(*this, "failed to decode mtmd chunk, idx = %zu, res = %d\n", idx, res);
-                            return -1;
-                        }
+                        return 0;
+                    };
+
+                    llama_pos new_n_past; // unused for now
+                    res = mtmd_helper_decode_image_chunk(
+                        mctx,
+                        ctx_tgt,
+                        chunk.get(),
+                        embd,
+                        prompt.tokens.pos_next(),
+                        id,
+                        llama_n_batch(ctx_tgt),
+                        &new_n_past,
+                        cb,
+                        cb_data
+                    );
+                    if (res != 0) {
+                        SLT_ERR(*this, "failed to decode mtmd chunk, idx = %zu, res = %d\n", idx, res);
+                        return -1;
                     }
                     n_tokens_out = mtmd_input_chunk_get_n_tokens(chunk.get());
                     return 0; // success
@@ -636,7 +627,8 @@ struct server_slot {
         res = try_decode();
         if (res == 0) {
             return 0;
-        } else if (res < 0) {
+        }
+        if (res < 0) {
             // fatal error
             return res;
         }
@@ -3350,48 +3342,6 @@ private:
             // TODO: avoid restoring the draft context and re-evaluating the drafted tokens when not needed [TAG_SPEC_AVOID_DRAFT_REEVAL]
             //       for now, always re-evaluate for simplicity
             //       ref: https://github.com/ggml-org/llama.cpp/pull/22728#issuecomment-4400925384
-            //
-            // | spec type   | need re-eval |
-            // | ---         | ---          |
-            // | draft model | no           | because the draft model does not use embeddings from the target
-            // | MTP (std)   | yes          |
-            // | MTP Gemma4  | no           | because the KV cache is shared
-            // | Eagle3      | yes          |
-            // | DFlash      | yes          | https://github.com/ggml-org/llama.cpp/pull/22728#issuecomment-4405406982
-            //
-            // note: this logic is now moved in `common_speculative_process()`
-            //       keeping the sketch here until for a bit, until the logic is finalized
-            //
-            //if (ctx_dft) {
-            //    // TODO: update as needed for MTP, Eagle3, etc.
-            //    const bool need_tgt_embd = false;
-
-            //    if (need_tgt_embd) {
-            //        llama_synchronize(ctx_tgt);
-            //    }
-
-            //    // the logic here varies depending on the speculative decoding method
-            //    //  - some draft contexts require embeddings from the target context, others don't
-            //    //  - some draft contexts involve an encoder step to transform the target embeddings to draft embeddings
-            //    // TODO: extract this in a function ?
-            //    {
-            //        // TODO: hook the embeddings from the last target batch here
-            //        if (llama_model_has_encoder(model_dft.get())) {
-            //            //llama_encode(ctx_dft, ...);
-
-            //            GGML_ABORT("not implemented yet\n");
-            //        }
-
-            //        const int ret = llama_decode(ctx_dft.get(), batch_view);
-
-            //        if (ret != 0) {
-            //            SRV_ERR("failed to decode draft batch, ret = %d\n", ret);
-
-            //            // TODO: handle error
-            //            break;
-            //        }
-            //    }
-            //}
             if (!common_speculative_process(spec.get(), batch_view)) {
                 SRV_ERR("%s", "failed to process speculative batch\n");
 

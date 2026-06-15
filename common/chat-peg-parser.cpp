@@ -745,7 +745,8 @@ common_peg_parser common_chat_peg_builder::build_json_tools_flat_keys(
     const std::string &              effective_args_key,
     const std::string &              call_id_key,
     const std::string &              gen_call_id_key,
-    const std::vector<std::string> & parameters_order) {
+    const std::vector<std::string> & parameters_order,
+    bool                             accept_openai_wrapper) {
 
     auto tool_choices    = choice();
     auto name_key_parser = literal("\"" + effective_name_key + "\"");
@@ -807,7 +808,13 @@ common_peg_parser common_chat_peg_builder::build_json_tools_flat_keys(
                 return idx_a < idx_b;
             });
 
-        auto ordered_body = tool_open(literal("{")) + space();
+        // accept an optional leading "type": "function" field when the model emits the OpenAI wrapper
+        common_peg_parser type_field = eps();
+        if (accept_openai_wrapper) {
+            type_field = optional(literal("\"type\"") + space() + literal(":") + space() +
+                                  literal("\"function\"") + space() + literal(",") + space());
+        }
+        auto ordered_body = tool_open(literal("{")) + space() + type_field;
         for (size_t i = 0; i < parser_pairs.size(); i++) {
             ordered_body = ordered_body + parser_pairs[i].first;
             if (i < parser_pairs.size() - 1) {
@@ -870,7 +877,8 @@ common_peg_parser common_chat_peg_builder::standard_json_tools(
                                                        bool                             function_is_key,
                                                        const std::string &              call_id_key,
                                                        const std::string &              gen_call_id_key,
-                                                       const std::vector<std::string> & parameters_order) {
+                                                       const std::vector<std::string> & parameters_order,
+                                                       bool                             accept_openai_wrapper) {
     if (!tools.is_array() || tools.empty()) {
         return eps();
     }
@@ -888,7 +896,7 @@ common_peg_parser common_chat_peg_builder::standard_json_tools(
         if (!name_spec.first.empty() || !args_spec.first.empty()) {
             tool_choices = build_json_tools_nested_keys(tools, effective_name_key, effective_args_key, call_id_key, gen_call_id_key);
         } else {
-            tool_choices = build_json_tools_flat_keys(tools, effective_name_key, effective_args_key, call_id_key, gen_call_id_key, parameters_order);
+            tool_choices = build_json_tools_flat_keys(tools, effective_name_key, effective_args_key, call_id_key, gen_call_id_key, parameters_order, accept_openai_wrapper);
         }
     }
 
