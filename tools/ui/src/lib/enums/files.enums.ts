@@ -25,7 +25,9 @@ export enum FileTypeImage {
 	PNG = 'png',
 	GIF = 'gif',
 	WEBP = 'webp',
-	SVG = 'svg'
+	SVG = 'svg',
+	HEIC = 'heic',
+	HEIF = 'heif'
 }
 
 export enum FileTypeAudio {
@@ -90,7 +92,9 @@ export enum FileExtensionImage {
 	PNG = '.png',
 	GIF = '.gif',
 	WEBP = '.webp',
-	SVG = '.svg'
+	SVG = '.svg',
+	HEIC = '.heic',
+	HEIF = '.heif'
 }
 
 export enum FileExtensionAudio {
@@ -205,7 +209,9 @@ export enum MimeTypeImage {
 	WEBP = 'image/webp',
 	SVG = 'image/svg+xml',
 	ICO = 'image/x-icon',
-	ICO_MICROSOFT = 'image/vnd.microsoft.icon'
+	ICO_MICROSOFT = 'image/vnd.microsoft.icon',
+	HEIC = 'image/heic',
+	HEIF = 'image/heif'
 }
 
 export enum MimeTypeText {

@@ -344,6 +344,14 @@ const mtmd::input_chunk_ptr & server_tokens::find_chunk(size_t idx) const {
     throw std::runtime_error("Chunk not found");
 }
 
+std::pair<const mtmd::input_chunk_ptr *, size_t> server_tokens::find_next_media_chunk(size_t idx) const {
+    auto it = map_idx_to_media.upper_bound(idx);
+    if (it != map_idx_to_media.end()) {
+        return { &it->second, it->first };
+    }
+    return { nullptr, 0 };
+}
+
 void server_tokens::push_back(llama_token tok) {
     if (tok == LLAMA_TOKEN_NULL) {
         throw std::runtime_error("Invalid token");
@@ -529,37 +537,6 @@ bool server_tokens::validate(const struct llama_context * ctx) const {
         }
     }
     return true;
-}
-
-int32_t server_tokens::process_chunk(
-            llama_context * ctx,
-            mtmd_context * mctx,
-            size_t idx,
-            llama_pos pos,
-            int32_t seq_id,
-            size_t & n_tokens_out) const {
-    const auto & chunk = find_chunk(idx);
-    const char * name = mtmd_input_chunk_get_type(chunk.get()) == MTMD_INPUT_CHUNK_TYPE_IMAGE
-                        ? "image" : "audio";
-    SRV_INF("processing %s...\n", name);
-    int32_t n_batch = llama_n_batch(ctx);
-    int64_t t0 = ggml_time_ms();
-    llama_pos new_n_past; // unused for now
-    int32_t result = mtmd_helper_eval_chunk_single(mctx, ctx,
-        chunk.get(),
-        pos,
-        seq_id,
-        n_batch,
-        true, // logits last
-        &new_n_past);
-    SRV_INF("%s processed in %" PRId64 " ms\n", name, ggml_time_ms() - t0);
-    if (result != 0) {
-        LOG_ERR("mtmd_helper_eval failed with status %d", result);
-        n_tokens_out = 0;
-        return result;
-    }
-    n_tokens_out = mtmd_input_chunk_get_n_tokens(chunk.get());
-    return 0;
 }
 
 server_tokens server_tokens::clone() const {
@@ -1126,9 +1103,9 @@ json oaicompat_chat_params_parse(
 
     // Reasoning budget: pass parameters through to sampling layer
     {
-        int reasoning_budget = opt.reasoning_budget;
-        if (reasoning_budget == -1 && body.contains("thinking_budget_tokens")) {
-            reasoning_budget = json_value(body, "thinking_budget_tokens", -1);
+        int reasoning_budget = json_value(body, "thinking_budget_tokens", -1);
+        if (reasoning_budget == -1) {
+            reasoning_budget = opt.reasoning_budget;
         }
 
         if (!chat_params.thinking_end_tag.empty()) {

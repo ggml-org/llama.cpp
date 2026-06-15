@@ -1124,6 +1124,9 @@ class GGUFWriter:
     def add_normalizer_lowercase(self, value: bool) -> None:
         self.add_bool(Keys.Tokenizer.NORMALIZER_LOWERCASE, value)
 
+    def add_normalizer_strip_accents(self, value: bool) -> None:
+        self.add_bool(Keys.Tokenizer.NORMALIZER_STRIP_ACCENTS, value)
+
     def add_eot_token_id(self, id: int) -> None:
         self.add_uint32(Keys.Tokenizer.EOT_ID, id)
 

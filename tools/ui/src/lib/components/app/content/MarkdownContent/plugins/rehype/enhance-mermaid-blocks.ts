@@ -13,7 +13,14 @@
 import type { Plugin } from 'unified';
 import type { Root, Element, ElementContent } from 'hast';
 import { visit } from 'unist-util-visit';
-import { MERMAID_WRAPPER_CLASS, MERMAID_SCROLL_CONTAINER_CLASS } from '$lib/constants';
+import {
+	MERMAID_WRAPPER_CLASS,
+	MERMAID_SCROLL_CONTAINER_CLASS,
+	MERMAID_BLOCK_CLASS,
+	MERMAID_LANGUAGE,
+	MERMAID_SYNTAX_ATTR,
+	MERMAID_ID_ATTR
+} from '$lib/constants';
 import {
 	createBlockHeader,
 	createCopyButton,
@@ -43,11 +50,13 @@ export const rehypeEnhanceMermaidBlocks: Plugin<[], Root> = () => {
 			const className = node.properties?.className;
 			if (!Array.isArray(className)) return;
 
-			const isMermaid = className.some((cls) => typeof cls === 'string' && cls === 'mermaid');
+			const isMermaid = className.some(
+				(cls) => typeof cls === 'string' && cls === MERMAID_BLOCK_CLASS
+			);
 
 			if (!isMermaid) return;
 
-			const mermaidId = generateBlockId('mermaid', 'idxMermaidBlock');
+			const mermaidId = generateBlockId(MERMAID_LANGUAGE, 'idxMermaidBlock');
 
 			// Extract the mermaid syntax (text content of the pre element)
 			const diagramText = node.children
@@ -60,22 +69,22 @@ export const rehypeEnhanceMermaidBlocks: Plugin<[], Root> = () => {
 			// Store the mermaid syntax in data attribute for copy functionality
 			node.properties = {
 				...node.properties,
-				'data-mermaid-syntax': diagramText,
-				'data-mermaid-id': mermaidId
+				[MERMAID_SYNTAX_ATTR]: diagramText,
+				[MERMAID_ID_ATTR]: mermaidId
 			};
 
 			const actions = [
-				createCopyButton(mermaidId, 'data-mermaid-id', 'Copy mermaid syntax'),
-				createPreviewButton(mermaidId, 'data-mermaid-id', 'Preview diagram')
+				createCopyButton(mermaidId, MERMAID_ID_ATTR, 'Copy mermaid syntax'),
+				createPreviewButton(mermaidId, MERMAID_ID_ATTR, 'Preview diagram')
 			];
 
-			const header = createBlockHeader('mermaid', mermaidId, 'data-mermaid-id', actions);
+			const header = createBlockHeader(MERMAID_LANGUAGE, mermaidId, MERMAID_ID_ATTR, actions);
 			const wrapper = createWrapper(
 				header,
 				node,
 				MERMAID_WRAPPER_CLASS,
 				MERMAID_SCROLL_CONTAINER_CLASS,
-				{ 'data-mermaid-id': mermaidId }
+				{ [MERMAID_ID_ATTR]: mermaidId }
 			);
 
 			// Replace pre with wrapper in parent
