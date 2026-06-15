@@ -884,6 +884,12 @@ static bool mul_mat_id_requires_large_tmp(const ggml_tensor * op) {
 
 static bool is_op_unsupported_case(const ggml_tensor * op) {
     switch (op->op) {
+    case GGML_OP_CONCAT: {
+        if (op->type == GGML_TYPE_I64) {
+            return true;
+        }
+        break;
+    }
     case GGML_OP_GET_ROWS:
     case GGML_OP_SET_ROWS: {
         if (op->ne[3] != 1) {
