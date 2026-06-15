@@ -176,7 +176,10 @@ int llama_server(int argc, char ** argv) {
 
         ctx_http.post("/models/load",          ex_wrapper(models_routes->post_router_models_load));
         ctx_http.post("/models/unload",        ex_wrapper(models_routes->post_router_models_unload));
+        ctx_http.post("/models/sleep",         ex_wrapper(models_routes->post_router_models_sleep));
     }
+
+    ctx_http.post("/sleep",                    ex_wrapper(routes.post_sleep));
 
     ctx_http.get ("/health",                   ex_wrapper(routes.get_health)); // public endpoint (no API key check)
     ctx_http.get ("/v1/health",                ex_wrapper(routes.get_health)); // public endpoint (no API key check)
@@ -354,7 +357,9 @@ int llama_server(int argc, char ** argv) {
         std::thread monitor_thread;
         if (server_models::is_child_server()) {
             json model_info = routes.get_model_info();
-            monitor_thread = server_models::setup_child_server(shutdown_handler, model_info);
+            monitor_thread = server_models::setup_child_server(shutdown_handler, model_info, [&ctx_server]() {
+                ctx_server.request_sleep();
+            });
         }
 
         // this call blocks the main thread until queue_tasks.terminate() is called

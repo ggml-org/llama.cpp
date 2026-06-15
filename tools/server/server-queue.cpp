@@ -122,6 +122,12 @@ void server_queue::terminate() {
     condition_tasks.notify_all();
 }
 
+void server_queue::request_sleep() {
+    std::unique_lock<std::mutex> lock(mutex_tasks);
+    req_sleep = true;
+    condition_tasks.notify_all();
+}
+
 void server_queue::start_loop(int64_t idle_sleep_ms) {
     running = true;
     time_last_task = ggml_time_ms();
@@ -129,6 +135,9 @@ void server_queue::start_loop(int64_t idle_sleep_ms) {
     constexpr auto max_wait_time = std::chrono::seconds(1);
     auto should_sleep = [&]() -> bool {
         // caller must hold mutex_tasks
+        if (req_sleep) {
+            return true;
+        }
         if (idle_sleep_ms < 0) {
             return false;
         }
@@ -189,6 +198,7 @@ void server_queue::start_loop(int64_t idle_sleep_ms) {
                 }
                 QUE_INF("%s", "exiting sleeping state\n");
                 req_stop_sleeping = false;
+                req_sleep = false;
                 callback_sleeping_state(false);
                 sleeping = false;
                 time_last_task = ggml_time_ms();

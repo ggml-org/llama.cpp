@@ -147,6 +147,9 @@ public:
     void unload(const std::string & name);
     void unload_all();
 
+    // put model into sleep state (thread-safe)
+    void sleep(const std::string & name);
+
     // update the status of a model instance (thread-safe)
     void update_status(const std::string & name, server_model_status status, int exit_code);
     void update_loaded_info(const std::string & name, std::string & raw_info);
@@ -168,7 +171,10 @@ public:
 
     // notify the router server that a model instance is ready
     // return the monitoring thread (to be joined by the caller)
-    static std::thread setup_child_server(const std::function<void(int)> & shutdown_handler, const json & model_info);
+    // shutdown_handler is called with exit code on exit command
+    // model_info is used to notify the router of the model's info
+    // sleep_handler is called on sleep command (optional, may be nullptr)
+    static std::thread setup_child_server(const std::function<void(int)> & shutdown_handler, const json & model_info, const std::function<void()> & sleep_handler = nullptr);
 
     // notify the router server that the sleeping state has changed
     static void notify_router_sleeping_state(bool sleeping);
@@ -206,6 +212,7 @@ struct server_models_routes {
     server_http_context::handler_t get_router_models;
     server_http_context::handler_t post_router_models_load;
     server_http_context::handler_t post_router_models_unload;
+    server_http_context::handler_t post_router_models_sleep;
 };
 
 /**

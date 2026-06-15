@@ -43,6 +43,7 @@ extern char **environ;
 #define DEFAULT_STOP_TIMEOUT 10 // seconds
 
 #define CMD_ROUTER_TO_CHILD_EXIT  "cmd_router_to_child:exit"
+#define CMD_ROUTER_TO_CHILD_SLEEP "cmd_router_to_child:sleep"
 #define CMD_CHILD_TO_ROUTER_READY "cmd_child_to_router:ready" // also sent when waking up from sleep
 #define CMD_CHILD_TO_ROUTER_SLEEP "cmd_child_to_router:sleep"
 #define CMD_CHILD_TO_ROUTER_INFO  "cmd_child_to_router:info:" // followed by json string
@@ -929,6 +930,26 @@ void server_models::unload(const std::string & name) {
     }
 }
 
+void server_models::sleep(const std::string & name) {
+    std::lock_guard<std::mutex> lk(mutex);
+    auto it = mapping.find(name);
+    if (it != mapping.end()) {
+        auto & meta = it->second.meta;
+        if (meta.status == SERVER_MODEL_STATUS_LOADED) {
+            SRV_INF("sleeping model instance name=%s\n", name.c_str());
+            meta.status = SERVER_MODEL_STATUS_SLEEPING;
+            fprintf(it->second.stdin_file, "%s\n", CMD_ROUTER_TO_CHILD_SLEEP);
+            fflush(it->second.stdin_file);
+        } else if (meta.status == SERVER_MODEL_STATUS_SLEEPING) {
+            SRV_WRN("model instance name=%s is already sleeping\n", name.c_str());
+        } else if (meta.status == SERVER_MODEL_STATUS_LOADING) {
+            SRV_WRN("model instance name=%s is still loading, cannot sleep yet\n", name.c_str());
+        } else {
+            SRV_WRN("model instance name=%s is not running\n", name.c_str());
+        }
+    }
+}
+
 void server_models::unload_all() {
     std::vector<std::thread> to_join;
     {
@@ -1063,7 +1084,7 @@ bool server_models::is_child_server() {
     return router_port != nullptr;
 }
 
-std::thread server_models::setup_child_server(const std::function<void(int)> & shutdown_handler, const json & model_info) {
+std::thread server_models::setup_child_server(const std::function<void(int)> & shutdown_handler, const json & model_info, const std::function<void()> & sleep_handler) {
     // send a notification to the router server that a model instance is ready
     common_log_pause(common_log_main());
     fflush(stdout);
@@ -1074,7 +1095,7 @@ std::thread server_models::setup_child_server(const std::function<void(int)> & s
     common_log_resume(common_log_main());
 
     // setup thread for monitoring stdin
-    return std::thread([shutdown_handler]() {
+    return std::thread([shutdown_handler, sleep_handler]() {
         // wait for EOF on stdin
         SRV_INF("%s", "child server monitoring thread started, waiting for EOF on stdin...\n");
         bool eof = false;
@@ -1089,6 +1110,12 @@ std::thread server_models::setup_child_server(const std::function<void(int)> & s
                 SRV_INF("%s", "exit command received, exiting...\n");
                 shutdown_handler(0);
                 break;
+            }
+            if (line.find(CMD_ROUTER_TO_CHILD_SLEEP) != std::string::npos) {
+                SRV_INF("%s", "sleep command received, entering sleep...\n");
+                if (sleep_handler) {
+                    sleep_handler();
+                }
             }
         }
         if (eof) {
@@ -1309,6 +1336,24 @@ void server_models_routes::init_routes() {
             return res;
         }
         models.unload(model->name);
+        res_ok(res, {{"success", true}});
+        return res;
+    };
+
+    this->post_router_models_sleep = [this](const server_http_req & req) {
+        auto res = std::make_unique<server_http_res>();
+        json body = json::parse(req.body);
+        std::string name = json_value(body, "model", std::string());
+        auto model = models.get_meta(name);
+        if (!model.has_value()) {
+            res_err(res, format_error_response("model is not found", ERROR_TYPE_INVALID_REQUEST));
+            return res;
+        }
+        if (model->status != SERVER_MODEL_STATUS_LOADED && model->status != SERVER_MODEL_STATUS_SLEEPING) {
+            res_err(res, format_error_response("model is not loaded", ERROR_TYPE_INVALID_REQUEST));
+            return res;
+        }
+        models.sleep(model->name);
         res_ok(res, {{"success", true}});
         return res;
     };

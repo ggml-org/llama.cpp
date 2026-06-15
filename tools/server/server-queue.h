@@ -16,6 +16,7 @@ private:
     bool running  = false;
     bool sleeping = false;
     bool req_stop_sleeping = false;
+    bool req_sleep = false;
     int64_t time_last_task = 0;
 
     // queues
@@ -55,6 +56,9 @@ public:
         std::unique_lock<std::mutex> lock(mutex_tasks);
         return sleeping;
     }
+
+    // request entering sleeping state immediately (bypasses idle timer)
+    void request_sleep();
 
     // end the start_loop routine
     void terminate();

@@ -83,6 +83,9 @@ struct server_context {
     // register a callback to be called when sleeping state changes
     // must be set before load_model() is called
     void on_sleeping_changed(std::function<void(bool)> callback);
+
+    // request entering sleeping state immediately
+    void request_sleep();
 };
 
 
@@ -127,6 +130,7 @@ struct server_routes {
     server_http_context::handler_t post_rerank;
     server_http_context::handler_t get_lora_adapters;
     server_http_context::handler_t post_lora_adapters;
+    server_http_context::handler_t post_sleep;
 
     // to be used in router mode
     json get_model_info() const;

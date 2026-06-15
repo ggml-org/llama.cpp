@@ -3745,6 +3745,10 @@ void server_context::on_sleeping_changed(std::function<void(bool)> callback) {
     impl->queue_tasks.on_sleeping_state(std::move(callback));
 }
 
+void server_context::request_sleep() {
+    impl->queue_tasks.request_sleep();
+}
+
 // compute the number of tokens before the last user message in the prompt
 static int32_t prompt_get_n_before_user(
         const json & message_spans,
@@ -4825,6 +4829,13 @@ void server_routes::init_routes() {
 
         GGML_ASSERT(dynamic_cast<server_task_result_apply_lora*>(result.get()) != nullptr);
         res->ok(result->to_json());
+        return res;
+    };
+
+    this->post_sleep = [this](const server_http_req &) {
+        auto res = create_response(true);
+        queue_tasks.request_sleep();
+        res->ok({{"success", true}});
         return res;
     };
 }
