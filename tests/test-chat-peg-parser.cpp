@@ -498,6 +498,32 @@ static void test_example_qwen3_coder(testing & t) {
             prev = msg;
         }
     });
+
+    t.test("whitespace preservation", [&](testing & t) {
+        std::string input =
+            "<tool_call>\n"
+            "<function=search_knowledge_base>\n"
+            "<parameter=query>    def foo():\n        return bar\n</parameter>\n"
+            "<parameter=category>general</parameter>\n"
+            "</function>\n"
+            "</tool_call>";
+
+        common_peg_parse_context ctx(input);
+        auto                     result = parser.parse(ctx);
+
+        t.assert_true("success", result.success());
+
+        common_chat_msg msg;
+        auto            mapper = common_chat_peg_mapper(msg);
+        mapper.from_ast(ctx.ast, result);
+
+        t.assert_equal("tool calls count", 1u, msg.tool_calls.size());
+        if (!msg.tool_calls.empty()) {
+            t.assert_equal("tool name", "search_knowledge_base", msg.tool_calls[0].name);
+            std::string expected_args = "{\"query\":\"    def foo():\\n        return bar\",\"category\":\"general\"}";
+            t.assert_equal("tool args", expected_args, msg.tool_calls[0].arguments);
+        }
+    });
 }
 
 static void test_example_qwen3_non_coder(testing & t) {
