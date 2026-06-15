@@ -236,6 +236,10 @@ public:
     const comp_plan & get_hca_plan() const;
     const comp_plan & get_lid_plan() const;
 
+    const comp_plan & get_csa_plan(const llama_ubatch & ubatch) const;
+    const comp_plan & get_hca_plan(const llama_ubatch & ubatch) const;
+    const comp_plan & get_lid_plan(const llama_ubatch & ubatch) const;
+
 private:
     size_t i_next = 0;
 
@@ -253,6 +257,11 @@ private:
     const llama_dsv4_comp_state * csa_state = nullptr;
     const llama_dsv4_comp_state * hca_state = nullptr;
     const llama_dsv4_comp_state * lid_state = nullptr;
+
+    bool reserve_plans = false;
+    mutable comp_plan reserve_plan_csa;
+    mutable comp_plan reserve_plan_hca;
+    mutable comp_plan reserve_plan_lid;
 
     const llama_memory_status status;
 };

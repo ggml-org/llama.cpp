@@ -420,6 +420,43 @@ static std::vector<llama_kv_cache_dsv4_context::comp_plan> dsv4_build_comp_plans
     return plans;
 }
 
+static llama_kv_cache_dsv4_context::comp_plan dsv4_build_reserve_comp_plan(
+        const llama_ubatch & ubatch,
+        uint32_t ratio,
+        bool overlap,
+        uint32_t state_size,
+        uint32_t kv_size,
+        uint32_t n_stream) {
+    llama_kv_cache_dsv4_context::comp_plan plan;
+    plan.ratio = ratio;
+    plan.n_visible.resize(ubatch.n_tokens);
+    plan.n_kv = kv_size;
+
+    if (ubatch.n_tokens == 0) {
+        return plan;
+    }
+
+    const uint32_t n_seqs       = std::max<uint32_t>(1, ubatch.n_seqs);
+    const uint32_t n_seq_tokens = std::max<uint32_t>(1, ubatch.n_seq_tokens);
+    const uint64_t n_blocks_u64 = (uint64_t) n_seqs*((n_seq_tokens + ratio - 1)/ratio);
+    const size_t n_blocks = (size_t) std::max<uint64_t>(1, n_blocks_u64);
+    GGML_ASSERT((uint64_t) n_blocks == std::max<uint64_t>(1, n_blocks_u64));
+
+    const uint64_t state_rows = (uint64_t) state_size*n_stream;
+    const size_t n_persist = (size_t) std::min<uint64_t>(ubatch.n_tokens, state_rows);
+
+    plan.state_idxs.resize(ubatch.n_tokens);
+    plan.state_pos .resize(ubatch.n_tokens);
+    plan.state_persist_src_idxs.resize(n_persist);
+    plan.state_persist_dst_idxs.resize(n_persist);
+    plan.state_read_idxs .resize((overlap ? 2u : 1u)*ratio*n_blocks);
+    plan.state_write_idxs.resize(n_blocks);
+    plan.state_write_pos .resize(n_blocks);
+    plan.state_write_end .resize(n_blocks);
+
+    return plan;
+}
+
 static void dsv4_make_k_only(llama_hparams & hparams) {
     // llama_kv_cache uses hparams.is_mla() to allocate K-only storage.
     hparams.n_embd_head_k_mla_impl = hparams.n_embd_head_k();
@@ -1086,6 +1123,7 @@ llama_kv_cache_dsv4_context::llama_kv_cache_dsv4_context(
     csa_state(kv->get_csa_state()),
     hca_state(kv->get_hca_state()),
     lid_state(kv->get_lid_state()),
+    reserve_plans(true),
     status(llama_memory_status_combine(
                 llama_memory_status_combine(ctx_raw->get_status(), ctx_csa->get_status()),
                 llama_memory_status_combine(ctx_hca->get_status(), ctx_lid->get_status()))) {
@@ -1235,4 +1273,46 @@ const llama_kv_cache_dsv4_context::comp_plan & llama_kv_cache_dsv4_context::get_
     }
 
     return plans_lid[i_next];
+}
+
+const llama_kv_cache_dsv4_context::comp_plan & llama_kv_cache_dsv4_context::get_csa_plan(const llama_ubatch & ubatch) const {
+    assert(status == LLAMA_MEMORY_STATUS_SUCCESS);
+
+    if (!reserve_plans) {
+        return get_csa_plan();
+    }
+
+    reserve_plan_csa = dsv4_build_reserve_comp_plan(
+            ubatch, DSV4_CSA_RATIO, true,
+            csa_state->get_state_size(), get_csa()->get_n_kv(), csa_state->get_n_stream());
+
+    return reserve_plan_csa;
+}
+
+const llama_kv_cache_dsv4_context::comp_plan & llama_kv_cache_dsv4_context::get_hca_plan(const llama_ubatch & ubatch) const {
+    assert(status == LLAMA_MEMORY_STATUS_SUCCESS);
+
+    if (!reserve_plans) {
+        return get_hca_plan();
+    }
+
+    reserve_plan_hca = dsv4_build_reserve_comp_plan(
+            ubatch, DSV4_HCA_RATIO, false,
+            hca_state->get_state_size(), get_hca()->get_n_kv(), hca_state->get_n_stream());
+
+    return reserve_plan_hca;
+}
+
+const llama_kv_cache_dsv4_context::comp_plan & llama_kv_cache_dsv4_context::get_lid_plan(const llama_ubatch & ubatch) const {
+    assert(status == LLAMA_MEMORY_STATUS_SUCCESS);
+
+    if (!reserve_plans) {
+        return get_lid_plan();
+    }
+
+    reserve_plan_lid = dsv4_build_reserve_comp_plan(
+            ubatch, DSV4_CSA_RATIO, true,
+            lid_state->get_state_size(), get_lid()->get_n_kv(), lid_state->get_n_stream());
+
+    return reserve_plan_lid;
 }

@@ -811,9 +811,9 @@ void llm_graph_input_dsv4::set_input(const llama_ubatch * ubatch) {
     inp_raw->mctx = mctx->get_raw();
     inp_raw->set_input(ubatch);
 
-    dsv4_set_comp_inputs(inp_csa, mctx->get_csa_plan(), "csa", debug > 0, ubatch->n_tokens);
-    dsv4_set_comp_inputs(inp_hca, mctx->get_hca_plan(), "hca", debug > 0, ubatch->n_tokens);
-    dsv4_set_comp_inputs(inp_lid, mctx->get_lid_plan(), "lid", debug > 0, ubatch->n_tokens);
+    dsv4_set_comp_inputs(inp_csa, mctx->get_csa_plan(*ubatch), "csa", debug > 0, ubatch->n_tokens);
+    dsv4_set_comp_inputs(inp_hca, mctx->get_hca_plan(*ubatch), "hca", debug > 0, ubatch->n_tokens);
+    dsv4_set_comp_inputs(inp_lid, mctx->get_lid_plan(*ubatch), "lid", debug > 0, ubatch->n_tokens);
 
     if (inp_lid.k_rot && inp_lid.k_rot->buffer) {
         mctx->get_lid()->set_input_k_rot(inp_lid.k_rot);
@@ -838,9 +838,9 @@ bool llm_graph_input_dsv4::can_reuse(const llm_graph_params & params) {
         res &= can_reuse_kq_mask(inp_raw->self_kq_mask_swa, mctx->get_raw()->get_swa(), params.ubatch, params.cparams);
     }
 
-    res &= dsv4_can_reuse_comp_input(inp_csa, mctx->get_csa_plan(), params.ubatch.n_tokens);
-    res &= dsv4_can_reuse_comp_input(inp_hca, mctx->get_hca_plan(), params.ubatch.n_tokens);
-    res &= dsv4_can_reuse_comp_input(inp_lid, mctx->get_lid_plan(), params.ubatch.n_tokens);
+    res &= dsv4_can_reuse_comp_input(inp_csa, mctx->get_csa_plan(params.ubatch), params.ubatch.n_tokens);
+    res &= dsv4_can_reuse_comp_input(inp_hca, mctx->get_hca_plan(params.ubatch), params.ubatch.n_tokens);
+    res &= dsv4_can_reuse_comp_input(inp_lid, mctx->get_lid_plan(params.ubatch), params.ubatch.n_tokens);
 
     return res;
 }
@@ -3017,9 +3017,9 @@ llm_graph_input_dsv4 * llm_graph_context::build_inp_dsv4() const {
     inp_raw->self_k_rot_swa = raw_ctx->get_swa()->build_input_k_rot(ctx0);
     auto inp = std::make_unique<llm_graph_input_dsv4>(cparams, std::move(inp_raw), mctx_cur);
 
-    dsv4_build_comp_inputs(ctx0, inp->inp_csa, mctx_cur->get_csa_plan(), "csa");
-    dsv4_build_comp_inputs(ctx0, inp->inp_hca, mctx_cur->get_hca_plan(), "hca");
-    dsv4_build_comp_inputs(ctx0, inp->inp_lid, mctx_cur->get_lid_plan(), "lid");
+    dsv4_build_comp_inputs(ctx0, inp->inp_csa, mctx_cur->get_csa_plan(ubatch), "csa");
+    dsv4_build_comp_inputs(ctx0, inp->inp_hca, mctx_cur->get_hca_plan(ubatch), "hca");
+    dsv4_build_comp_inputs(ctx0, inp->inp_lid, mctx_cur->get_lid_plan(ubatch), "lid");
     inp->inp_lid.k_rot = mctx_cur->get_lid()->build_input_k_rot(ctx0);
 
     return (llm_graph_input_dsv4 *) res->add_input(std::move(inp));
