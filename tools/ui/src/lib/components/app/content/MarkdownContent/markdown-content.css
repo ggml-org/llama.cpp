@@ -654,7 +654,8 @@ div.markdown-user-content :global(.table-wrapper) {
 }
 
 /* Diagram block uses same header styling as code blocks. The header floats over
-   scrollable diagram content, so it stays opaque and layered above it. */
+   scrollable diagram content and stays transparent, so the overflow shows up to
+   the box edge. It keeps a z-index so it stays the click target above content. */
 .markdown-content :global(.mermaid-block-wrapper .code-block-header),
 .markdown-content :global(.svg-block-wrapper .code-block-header) {
 	display: flex;
@@ -667,7 +668,6 @@ div.markdown-user-content :global(.table-wrapper) {
 	left: 0;
 	right: 0;
 	z-index: 2;
-	background: var(--code-background);
 }
 
 .markdown-content :global(.mermaid-block-wrapper .code-block-actions),
