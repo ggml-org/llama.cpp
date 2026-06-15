@@ -28,7 +28,7 @@ def main(args_in: list[str] | None = None) -> None:
     parser.add_argument("--branch", type=str, help="Branch name", default="detached")
     parser.add_argument("--commit", type=str, help="Commit name", default="dirty")
     parser.add_argument("--host", type=str, help="Server listen host", default="0.0.0.0")
-    parser.add_argument("--port", type=int, help="Server listen host", default="8080")
+    parser.add_argument("--port", type=int, help="Server listen port", default="8080")
     parser.add_argument("--model-path-prefix", type=str, help="Prefix where to store the model files", default="models")
     parser.add_argument("--n-prompts", type=int,
                         help="SERVER_BENCH_N_PROMPTS: total prompts to randomly select in the benchmark", required=True)
