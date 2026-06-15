@@ -2122,32 +2122,36 @@ private:
         while (slot.prompt.checkpoints.size() >= (size_t) params_base.n_ctx_checkpoints) {
             // Preserve the oldest anchor and the most recent checkpoint. Removing the checkpoint
             // from the densest interior interval keeps coverage across the full prompt history.
-            size_t erase_idx = 0;
+            auto erase_it = slot.prompt.checkpoints.begin();
 
             if (slot.prompt.checkpoints.size() > 2) {
-                erase_idx = 1;
-                int64_t min_merged_span =
-                        slot.prompt.checkpoints[2].n_tokens -
-                        slot.prompt.checkpoints[0].n_tokens;
+                auto prev_it = slot.prompt.checkpoints.begin();
+                auto cur_it  = std::next(prev_it);
+                auto next_it = std::next(cur_it);
 
-                for (size_t i = 2; i + 1 < slot.prompt.checkpoints.size(); ++i) {
-                    const int64_t merged_span =
-                            slot.prompt.checkpoints[i + 1].n_tokens -
-                            slot.prompt.checkpoints[i - 1].n_tokens;
+                erase_it = cur_it;
+                int64_t min_merged_span = next_it->n_tokens - prev_it->n_tokens;
+
+                while (std::next(next_it) != slot.prompt.checkpoints.end()) {
+                    ++prev_it;
+                    ++cur_it;
+                    ++next_it;
+
+                    const int64_t merged_span = next_it->n_tokens - prev_it->n_tokens;
 
                     if (merged_span < min_merged_span) {
-                        erase_idx = i;
+                        erase_it = cur_it;
                         min_merged_span = merged_span;
                     }
                 }
             }
 
-            const auto & cur = slot.prompt.checkpoints[erase_idx];
+            const auto & cur = *erase_it;
 
             SLT_WRN(slot, "erasing redundant context checkpoint (pos_min = %d, pos_max = %d, pos_end = %d, n_tokens = %" PRId64 ", size = %.3f MiB)\n",
                     cur.pos_min, cur.pos_max, cur.pos_end, cur.n_tokens, (float) cur.size() / 1024 / 1024);
 
-            slot.prompt.checkpoints.erase(slot.prompt.checkpoints.begin() + erase_idx);
+            slot.prompt.checkpoints.erase(erase_it);
         }
 
         auto & cur = slot.prompt.checkpoints.emplace_back();
