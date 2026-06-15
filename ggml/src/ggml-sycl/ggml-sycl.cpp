@@ -147,11 +147,31 @@ static ggml_sycl_device_info ggml_sycl_init() {
             GGML_LOG_WARN("SYCL GPU device %d does not use Level Zero backend, disabling Level Zero memory API\n", i);
             info.ext_oneapi_level_zero = false;
         }
+
+#ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO
+        if (info.ext_oneapi_level_zero && device.is_gpu() && device.default_queue().get_backend() == sycl::backend::ext_oneapi_level_zero) {
+            ze_device_handle_t ze_dev = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(device.default_queue().get_device());
+            ze_device_properties_t props = {};
+            props.stype = ZE_STRUCTURE_TYPE_DEVICE_PROPERTIES;
+            ze_result_t r = zeDeviceGetProperties(ze_dev, &props);
+            info.devices[i].l0_discrete_gpu = r == ZE_RESULT_SUCCESS && !(props.flags & ZE_DEVICE_PROPERTY_FLAG_INTEGRATED);
+        }
+#endif
     }
 
     for (int id = 0; id < info.device_count; ++id) {
         info.default_tensor_split[id] /= total_vram;
     }
+
+#ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO
+    // Large buffers can be allocated before ggml_check_sycl() initializes other
+    // g_ggml_sycl_enable_* globals, so initialize this one as early as we can.
+    g_ggml_sycl_enable_level_zero =
+        info.ext_oneapi_level_zero && ggml_sycl_get_env("GGML_SYCL_ENABLE_LEVEL_ZERO", 1);
+#else
+    g_ggml_sycl_enable_level_zero = 0;
+#endif
+
     return info;
 }
 
@@ -236,38 +256,19 @@ void ggml_backend_sycl_print_sycl_devices() {
     print_device_opt_feature(device_count);
 }
 
-static inline int get_sycl_env(const char *env_name, int default_val) {
-    char *user_device_string = getenv(env_name);
-    int user_number = default_val;
-
-    unsigned n;
-    if (user_device_string != NULL &&
-        sscanf(user_device_string, " %u", &n) == 1) {
-        user_number = (int)n;
-    } else {
-        user_number = default_val;
-    }
-    return user_number;
-}
-
 static void ggml_check_sycl() try {
     static bool initialized = false;
 
     if (!initialized) {
-        g_ggml_sycl_debug = get_sycl_env("GGML_SYCL_DEBUG", 0);
-        g_ggml_sycl_disable_optimize = get_sycl_env("GGML_SYCL_DISABLE_OPT", 0);
-        g_ggml_sycl_disable_graph = get_sycl_env("GGML_SYCL_DISABLE_GRAPH", 1);
-        g_ggml_sycl_disable_dnn = get_sycl_env("GGML_SYCL_DISABLE_DNN", 0);
-        g_ggml_sycl_enable_vmm = get_sycl_env("GGML_SYCL_ENABLE_VMM", 1);
-        g_ggml_sycl_prioritize_dmmv = get_sycl_env("GGML_SYCL_PRIORITIZE_DMMV", 0);
-#ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO
-        g_ggml_sycl_enable_level_zero = get_sycl_env("GGML_SYCL_ENABLE_LEVEL_ZERO", ggml_sycl_info().ext_oneapi_level_zero);
-#else
-        g_ggml_sycl_enable_level_zero = 0;
-#endif
+        g_ggml_sycl_debug = ggml_sycl_get_env("GGML_SYCL_DEBUG", 0);
+        g_ggml_sycl_disable_optimize = ggml_sycl_get_env("GGML_SYCL_DISABLE_OPT", 0);
+        g_ggml_sycl_disable_graph = ggml_sycl_get_env("GGML_SYCL_DISABLE_GRAPH", 1);
+        g_ggml_sycl_disable_dnn = ggml_sycl_get_env("GGML_SYCL_DISABLE_DNN", 0);
+        g_ggml_sycl_enable_vmm = ggml_sycl_get_env("GGML_SYCL_ENABLE_VMM", 1);
+        g_ggml_sycl_prioritize_dmmv = ggml_sycl_get_env("GGML_SYCL_PRIORITIZE_DMMV", 0);
 
 #ifdef SYCL_FLASH_ATTN
-        g_ggml_sycl_enable_flash_attention = get_sycl_env("GGML_SYCL_ENABLE_FLASH_ATTN", 1);
+        g_ggml_sycl_enable_flash_attention = ggml_sycl_get_env("GGML_SYCL_ENABLE_FLASH_ATTN", 1);
 #else
         g_ggml_sycl_enable_flash_attention = 0;
 #endif
@@ -330,7 +331,7 @@ static void ggml_check_sycl() try {
         GGML_LOG_INFO("  GGML_SYCL_ENABLE_VMM: virtual memory extension is not available\n");
 #endif
         GGML_LOG_INFO("  GGML_SYCL_PRIORITIZE_DMMV: %d\n", g_ggml_sycl_prioritize_dmmv);
-        g_ggml_sycl_use_async_mem_op_requested = get_sycl_env("GGML_SYCL_USE_ASYNC_MEM_OP", 1);
+        g_ggml_sycl_use_async_mem_op_requested = ggml_sycl_get_env("GGML_SYCL_USE_ASYNC_MEM_OP", 1);
         GGML_LOG_INFO("  GGML_SYCL_USE_ASYNC_MEM_OP: %d\n", g_ggml_sycl_use_async_mem_op_requested);
 
 #ifdef SYCL_FLASH_ATTN
@@ -569,26 +570,18 @@ catch (sycl::exception const &exc) {
 }
 
 #ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO
-static bool ggml_sycl_is_l0_discrete_gpu(sycl::queue &q) {
-    if (!q.get_device().is_gpu() || q.get_backend() != sycl::backend::ext_oneapi_level_zero) {
-        return false;
-    }
-
-    ze_device_handle_t ze_dev = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(q.get_device());
-    ze_device_properties_t props = {};
-    props.stype = ZE_STRUCTURE_TYPE_DEVICE_PROPERTIES;
-    ze_result_t r = zeDeviceGetProperties(ze_dev, &props);
-    return r == ZE_RESULT_SUCCESS && !(props.flags & ZE_DEVICE_PROPERTY_FLAG_INTEGRATED);
+static bool ggml_sycl_is_l0_discrete_gpu(int device) {
+    return ggml_sycl_info().devices[device].l0_discrete_gpu;
 }
 #endif
 
-static void dev2dev_memcpy(sycl::queue &q_dst, sycl::queue &q_src, void *ptr_dst,
+static void dev2dev_memcpy(int device_dst, sycl::queue &q_dst, int device_src, sycl::queue &q_src, void *ptr_dst,
                     const void *ptr_src, size_t size) {
 #ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO
     // Use Level Zero direct copy for dGPU-to-dGPU transfers.
-    const bool l0_copy_supported =
-        ggml_sycl_is_l0_discrete_gpu(q_dst) && ggml_sycl_is_l0_discrete_gpu(q_src);
-    if (g_ggml_sycl_enable_level_zero && l0_copy_supported) {
+    const bool l0_copy_supported = g_ggml_sycl_enable_level_zero &&
+        ggml_sycl_is_l0_discrete_gpu(device_dst) && ggml_sycl_is_l0_discrete_gpu(device_src);
+    if (l0_copy_supported) {
         auto ze_ctx = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(q_dst.get_context());
         auto ze_dev = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(q_dst.get_device());
         ze_command_queue_desc_t cq_desc = {ZE_STRUCTURE_TYPE_COMMAND_QUEUE_DESC, nullptr, 0, 0,
@@ -651,7 +644,7 @@ ggml_backend_sycl_buffer_cpy_tensor(ggml_backend_buffer_t buffer,
         size_t size = ggml_nbytes(src);
 
         //todo. it's dirty solutino to walkaroud known issue:device2device cross GPUs.
-        dev2dev_memcpy(*stream_dst, *stream_src, dst->data, src->data, size);
+        dev2dev_memcpy(dst_ctx->device, *stream_dst, src_ctx->device, *stream_src, dst->data, src->data, size);
 
 //todo, it's known issue：error in device2device cross GPUs. reused when the issue is fixed. DON"T remove
 #if 0
@@ -3056,7 +3049,7 @@ static void ggml_sycl_op_mul_mat(ggml_backend_sycl_context & ctx, const ggml_ten
                             src1_ddf_i_source += (i0 * ne11 + src1_col_0) * ne10;
 
                             SYCL_CHECK(
-                                CHECK_TRY_ERROR(dev2dev_memcpy(*stream, *main_stream, src1_ddf_i, src1_ddf_i_source,
+                                CHECK_TRY_ERROR(dev2dev_memcpy(i, *stream, ctx.device, *main_stream, src1_ddf_i, src1_ddf_i_source,
                                                                src1_ncols * ne10 * sizeof(float))));
                         }
                     }
