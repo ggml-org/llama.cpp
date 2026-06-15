@@ -139,29 +139,27 @@ struct mtmd_image_preprocessor_internvl : mtmd_image_preprocessor_llava_uhd {
     bool preprocess(const clip_image_u8 & img, clip_image_f32_batch & output) override;
 };
 
+// DeepSeek-OCR (v1/v2) global view + optional local tile grid
 struct mtmd_image_preprocessor_deepseekocr : mtmd_image_preprocessor {
-    mtmd_image_preprocessor_deepseekocr(const clip_ctx * ctx) : mtmd_image_preprocessor(ctx) {}
-    bool preprocess(const clip_image_u8 & img, clip_image_f32_batch & output) override;
-};
-
-// DeepSeek-OCR-2: a 1024x1024 global view, plus InternVL-style 768x768 local
-// tiles when the image is larger than a tile in either dimension.
-struct mtmd_image_preprocessor_deepseekocr2 : mtmd_image_preprocessor {
-    static constexpr int base_size = 1024; // global view
-    static constexpr int tile_size = 768;  // local tile
-    static constexpr int min_tiles = 2;
-    static constexpr int max_tiles = 6;
-
-    mtmd_image_preprocessor_deepseekocr2(const clip_ctx * ctx) : mtmd_image_preprocessor(ctx) {}
+    mtmd_image_preprocessor_deepseekocr(const clip_ctx * ctx)
+        : mtmd_image_preprocessor(ctx),
+          base_size(hparams.image_size),
+          tile_size(hparams.preproc_tile_size),
+          min_tiles(hparams.preproc_min_tiles),
+          max_tiles(hparams.preproc_max_tiles) {}
     bool preprocess(const clip_image_u8 & img, clip_image_f32_batch & output) override;
 
 private:
-    static std::vector<clip_image_size> get_target_ratios();
-    static clip_image_size              find_closest_aspect_ratio(
-        float                                aspect_ratio,
-        const std::vector<clip_image_size> & target_ratios,
-        int                                  width,
-        int                                  height);
+    int base_size; // global view
+    int tile_size; // each tile
+    int min_tiles;
+    int max_tiles;
+
+    std::vector<clip_image_size> get_target_ratios() const;
+    clip_image_size find_closest_aspect_ratio(
+            float aspect_ratio,
+            const std::vector<clip_image_size> & target_ratios,
+            int width, int height) const;
 };
 
 // custom image preprocessing for Step3VL

@@ -612,14 +612,10 @@ struct mtmd_context {
                     image_preproc = std::make_unique<mtmd_image_preprocessor_dyn_size>(ctx_v);
                 } break;
             case PROJECTOR_TYPE_DEEPSEEKOCR:
-                {
-                    img_end = "\n"; // prevent empty batch on llama-server
-                    image_preproc = std::make_unique<mtmd_image_preprocessor_deepseekocr>(ctx_v);
-                } break;
             case PROJECTOR_TYPE_DEEPSEEKOCR2:
                 {
                     img_end = "\n"; // prevent empty batch on llama-server
-                    image_preproc = std::make_unique<mtmd_image_preprocessor_deepseekocr2>(ctx_v);
+                    image_preproc = std::make_unique<mtmd_image_preprocessor_deepseekocr>(ctx_v);
                 } break;
             case PROJECTOR_TYPE_HUNYUANVL:
                 {
@@ -1169,11 +1165,18 @@ struct mtmd_tokenizer {
             } else {
 
                 size_t n_tokens = 0;
-                for (const auto & e : batch_f32.entries) {
-                    n_tokens += clip_n_output_tokens(ctx->ctx_v, e.get());
-                    if (clip_model_n_temporal_merge(ctx->ctx_v) == 2) {
-                        // [QWEN_VIDEO] pair input is merged to the same embd, so only count as one image
-                        break;
+                if (ctx->proj_type_v() == PROJECTOR_TYPE_DEEPSEEKOCR && batch_f32.entries.size() > 1) {
+                    // v1 weaves the local tiles into a grid (one image-newline per token-row), then the global view
+                    const int h = clip_n_output_tokens_x(ctx->ctx_v, batch_f32.entries[0].get());
+                    n_tokens  = (h * batch_f32.grid_x + 1) * (h * batch_f32.grid_y);
+                    n_tokens += clip_n_output_tokens(ctx->ctx_v, batch_f32.entries.back().get());
+                } else {
+                    for (const auto & e : batch_f32.entries) {
+                        n_tokens += clip_n_output_tokens(ctx->ctx_v, e.get());
+                        if (clip_model_n_temporal_merge(ctx->ctx_v) == 2) {
+                            // [QWEN_VIDEO] pair input is merged to the same embd, so only count as one image
+                            break;
+                        }
                     }
                 }
 
@@ -1399,6 +1402,38 @@ int32_t mtmd_tokenize(mtmd_context * ctx,
     }
 }
 
+// Stitch the tiles in raw, one newline per token-row, append the overview (raw's last chunk).
+// Example, 2x2 grid of tiles A B / C D:
+//   raw = [ A B C D <overview> ]
+//   out = A.row0 B.row0 n,  A.row1 B.row1 n,  ...,  C.row0 D.row0 n,  ...,  <overview>
+static void stitch_tile_grid(clip_ctx * ctx, const clip_image_f32_batch & batch,
+                             const std::vector<float> & raw, int n_embd, float * out) {
+    const auto &  entries = batch.entries;
+    const int     n_tiles = static_cast<int>(entries.size()) - 1; // overview is last
+    GGML_ASSERT(n_tiles == batch.grid_x * batch.grid_y);
+    const int     tile_h  = clip_n_output_tokens_x(ctx, entries[0].get());
+    const size_t  row_sz  = static_cast<size_t>(tile_h) * n_embd;
+    const size_t  tile_sz = static_cast<size_t>(tile_h) * row_sz;
+    const std::vector<float> newline = clip_get_newline_embd(ctx);
+    GGML_ASSERT(!newline.empty());
+
+    for (int r = 0; r < batch.grid_y; r++) {
+        for (int pr = 0; pr < tile_h; pr++) {
+            for (int c = 0; c < batch.grid_x; c++) {
+                const float * tile = raw.data() + static_cast<size_t>(r * batch.grid_x + c) * tile_sz;
+                memcpy(out, tile + static_cast<size_t>(pr) * row_sz, row_sz * sizeof(float));
+                out += row_sz;
+            }
+            memcpy(out, newline.data(), static_cast<size_t>(n_embd) * sizeof(float));
+            out += n_embd;
+        }
+    }
+    // overview = raw's last encoded chunk; size it from the entry, not raw.size() (raw is over-allocated)
+    const size_t global_off = static_cast<size_t>(n_tiles) * tile_sz;
+    const size_t global_sz  = static_cast<size_t>(clip_n_output_tokens(ctx, entries.back().get())) * n_embd;
+    memcpy(out, raw.data() + global_off, global_sz * sizeof(float));
+}
+
 static int32_t mtmd_encode_impl(mtmd_context * ctx, const mtmd_image_tokens * image_tokens, std::vector<float> & out_embd) {
     clip_ctx * ctx_clip = ctx->ctx_v;
     if (!ctx_clip) {
@@ -1417,12 +1452,17 @@ static int32_t mtmd_encode_impl(mtmd_context * ctx, const mtmd_image_tokens * im
         || proj_type == PROJECTOR_TYPE_MINICPMV
         || proj_type == PROJECTOR_TYPE_GLM_EDGE
         || proj_type == PROJECTOR_TYPE_INTERNVL
+        || proj_type == PROJECTOR_TYPE_DEEPSEEKOCR
         || proj_type == PROJECTOR_TYPE_DEEPSEEKOCR2
         || proj_type == PROJECTOR_TYPE_GRANITE4_VISION) {
         // TODO @ngxson : llava does not support batched encoding ; this should be fixed inside clip_image_batch_encode()
         const auto & entries = image_tokens->batch_f32.entries;
         // entries may have different token counts
         // e.g., DeepSeek-OCR-2: 144 per tile views, 257 for the global view
+        // DeepSeek-OCR v1, when multi-view, weaves its tiles into a grid (see stitch_tile_grid)
+        const bool is_dsocr_mlt = proj_type == PROJECTOR_TYPE_DEEPSEEKOCR && entries.size() > 1;
+        std::vector<float> raw(is_dsocr_mlt ? static_cast<size_t>(n_embd_out) * n_tokens_out : 0);
+        float * dst = is_dsocr_mlt ? raw.data() : out_embd.data();
         size_t offset = 0;
         for (size_t i = 0; i < entries.size(); i++) {
             if (entries[i]->is_placeholder()) {
@@ -1441,8 +1481,11 @@ static int32_t mtmd_encode_impl(mtmd_context * ctx, const mtmd_image_tokens * im
                 return 1;
             }
             ok = true;
-            std::copy(tmp_embd.begin(), tmp_embd.end(), out_embd.begin() + offset);
+            std::copy(tmp_embd.begin(), tmp_embd.end(), dst + offset);
             offset += static_cast<size_t>(n_embd_out) * n_tokens_per_image;
+        }
+        if (is_dsocr_mlt) {
+            stitch_tile_grid(ctx_clip, image_tokens->batch_f32, raw, n_embd_out, out_embd.data());
         }
     } else {
         if (image_tokens->is_placeholder()) {
