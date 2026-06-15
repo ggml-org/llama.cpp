@@ -15,8 +15,33 @@
 #include <algorithm>
 #include <cstdlib>
 #include <cstring>
+#if defined(_WIN32)
+#include <malloc.h>
+#endif
 
 namespace {
+
+// Portable 64-byte-aligned allocation. MSVC has no posix_memalign and pairs
+// _aligned_malloc with _aligned_free (plain free is undefined for it).
+inline void * kapsl_aligned_alloc(size_t alignment, size_t size) {
+#if defined(_WIN32)
+    return _aligned_malloc(size, alignment);
+#else
+    void * ptr = nullptr;
+    if (posix_memalign(&ptr, alignment, size) != 0) {
+        return nullptr;
+    }
+    return ptr;
+#endif
+}
+
+inline void kapsl_aligned_free(void * ptr) {
+#if defined(_WIN32)
+    _aligned_free(ptr);
+#else
+    std::free(ptr);
+#endif
+}
 
 bool kapsl_kv_debug_log_enabled() {
     static const bool enabled = [] {
@@ -52,7 +77,7 @@ public:
         if (pool_buffer != nullptr) {
             ggml_backend_buffer_free(pool_buffer);
         }
-        std::free(dummy_block_table);
+        kapsl_aligned_free(dummy_block_table);
     }
 
     bool next() override {
@@ -332,13 +357,13 @@ private:
             return dummy_block_table;
         }
 
-        std::free(dummy_block_table);
+        kapsl_aligned_free(dummy_block_table);
         dummy_block_table = nullptr;
         dummy_block_table_bytes = 0;
 
         constexpr size_t alignment = 64;
-        void * ptr = nullptr;
-        if (posix_memalign(&ptr, alignment, block_table_bytes) != 0) {
+        void * ptr = kapsl_aligned_alloc(alignment, block_table_bytes);
+        if (ptr == nullptr) {
             GGML_ABORT("failed to allocate aligned Kapsl dummy block table");
         }
         std::memset(ptr, 0, block_table_bytes);
