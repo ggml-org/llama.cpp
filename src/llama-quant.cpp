@@ -209,10 +209,6 @@ struct tensor_metadata {
 // dequantization
 //
 
-static void llama_tensor_to_float_chunk(const ggml_type_traits * qtype, const void * input, float * output, int64_t nelements) {
-    qtype->to_float(input, output, nelements);
-}
-
 static void llama_tensor_dequantize_chunk_impl(
     ggml_tensor * tensor, std::vector<no_init<float>> & output, std::vector<std::thread> & workers,
     const int64_t start, const size_t nelements, const int nthread
@@ -238,7 +234,7 @@ static void llama_tensor_dequantize_chunk_impl(
     uint8_t * input_data = (uint8_t *) tensor->data + input_offset;
 
     if (nthread < 2) {
-        llama_tensor_to_float_chunk(qtype, input_data, f32_output, nelements);
+        qtype->to_float(input_data, f32_output, nelements);
         return;
     }
 
@@ -255,7 +251,7 @@ static void llama_tensor_dequantize_chunk_impl(
         size_t thr_block_bytes = thr_blocks * block_size_bytes; // number of input bytes for this thread
 
         auto compute = [qtype] (const uint8_t * inbuf, float * outbuf, int64_t nels) {
-            llama_tensor_to_float_chunk(qtype, inbuf, outbuf, nels);
+            qtype->to_float(inbuf, outbuf, nels);
         };
         workers.emplace_back(compute, input_data + in_buff_offs, f32_output + out_buff_offs, thr_elems);
         in_buff_offs += thr_block_bytes;
