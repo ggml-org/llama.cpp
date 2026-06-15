@@ -2111,7 +2111,7 @@ void common_speculative_print_stats(const common_speculative * spec) {
         if (impl->n_draft_verif_steps > 0) {
             const double mean =
                 1.0 + (double) impl->n_acc_tokens / (double) impl->n_draft_verif_steps;
-            std::ostringstream acceptance_rates_per_pos;
+            std::ostringstream tmp;
             acceptance_rates_per_pos << std::fixed << std::setprecision(3);
             for (size_t i = 0; i < impl->n_acc_tokens_per_pos.size(); ++i) {
                 if (i > 0) {
