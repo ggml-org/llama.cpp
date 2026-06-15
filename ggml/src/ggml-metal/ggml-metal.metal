@@ -1418,6 +1418,9 @@ typedef decltype(kernel_repeat<float>) kernel_repeat_t;
 
 template [[host_name("kernel_repeat_f32")]] kernel kernel_repeat_t kernel_repeat<float>;
 template [[host_name("kernel_repeat_f16")]] kernel kernel_repeat_t kernel_repeat<half>;
+#if defined(GGML_METAL_HAS_BF16)
+template [[host_name("kernel_repeat_bf16")]] kernel kernel_repeat_t kernel_repeat<bfloat>;
+#endif
 template [[host_name("kernel_repeat_i32")]] kernel kernel_repeat_t kernel_repeat<int>;
 template [[host_name("kernel_repeat_i16")]] kernel kernel_repeat_t kernel_repeat<short>;
 
